@@ -1,0 +1,19 @@
+node_modules/
+.next/
+.DS_Store
+.env
+.env.local
+.env.production
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+*.pyc
+.venv/
+dist/
+.codex-pet-runs/
+.playwright-cli/
+
+# 本地工具与清理产物，不入应用基线
+.claude/
+backups/
