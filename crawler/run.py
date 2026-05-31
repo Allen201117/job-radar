@@ -18,6 +18,7 @@ from adapters.baidu import BaiduAdapter
 from adapters.jd import JdAdapter
 from adapters.haier import HaierAdapter
 from adapters.siemens import SiemensAdapter
+from adapters.tencent import TencentAdapter
 
 
 ADAPTERS = {
@@ -26,6 +27,7 @@ ADAPTERS = {
     "jd": JdAdapter(),
     "haier": HaierAdapter(),
     "siemens": SiemensAdapter(),
+    "tencent": TencentAdapter(),
 }
 
 
