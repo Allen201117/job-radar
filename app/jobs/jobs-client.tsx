@@ -9,6 +9,7 @@ import {
   jobMatchesChinaKeyword,
   normalizeChinaCity,
 } from "@/lib/china-keyword-expansion";
+import { classifyCompanyOrigin } from "@/lib/company-origin";
 import type { ScoredJob } from "@/lib/types";
 
 type PrimaryAction = "saved" | "ignored" | "applied";
@@ -21,6 +22,9 @@ type Filters = {
   showIgnored: boolean;
   showApplied: boolean;
   showNewOnly: boolean;
+  sortBy: "match" | "newest";
+  capitalOrigin: string;
+  salaryOnly: boolean;
 };
 
 interface Props {
@@ -37,12 +41,15 @@ export default function JobsClient({ initialJobs, companies }: Props) {
     showIgnored: false,
     showApplied: false,
     showNewOnly: false,
+    sortBy: "match",
+    capitalOrigin: "",
+    salaryOnly: false,
   });
   const [officialJobs, setOfficialJobs] = useState<ScoredJob[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [searchInfo, setSearchInfo] = useState("");
-  const [canContinueDiscovery, setCanContinueDiscovery] = useState(false);
+  const [discoveryRound, setDiscoveryRound] = useState(0);
   const router = useRouter();
 
   // 合并本地岗位库 + 本次已知源刷新/官方源发现返回的岗位
@@ -53,7 +60,13 @@ export default function JobsClient({ initialJobs, companies }: Props) {
   }, [initialJobs, officialJobs]);
 
   const filtered = useMemo(() => {
-    return allJobs.filter((job) => jobMatchesFilters(job, filters));
+    const arr = allJobs.filter((job) => jobMatchesFilters(job, filters));
+    arr.sort((a, b) =>
+      filters.sortBy === "newest"
+        ? new Date(b.first_seen_at || 0).getTime() - new Date(a.first_seen_at || 0).getTime()
+        : (b.match_score || 0) - (a.match_score || 0),
+    );
+    return arr;
   }, [allJobs, filters]);
 
   const existingFilteredCount = useMemo(() => {
@@ -62,6 +75,7 @@ export default function JobsClient({ initialJobs, companies }: Props) {
 
   function handleExistingJobsSearch() {
     setOfficialJobs([]);
+    setDiscoveryRound(0);
     setSearchInfo(
       `仅搜索本地 jobs 表，不触发外部请求。当前命中 ${existingFilteredCount} 个岗位。`,
     );
@@ -73,20 +87,22 @@ export default function JobsClient({ initialJobs, companies }: Props) {
   }: { forceRefresh?: boolean; queryOffset?: number } = {}) {
     const query = filters.keyword;
     if (!query) {
-      setOfficialJobs([]);
-      setSearchInfo("");
-      setCanContinueDiscovery(false);
+      setSearchInfo("请先在「关键词」里输入要发现的方向（如 算法 / 产品 / 数据分析）。");
       return;
     }
 
     setDiscovering(true);
-    setSearchInfo(forceRefresh ? "正在强制刷新中国官方招聘源..." : "正在发现中国官方招聘源...");
+    setSearchInfo(
+      forceRefresh
+        ? "正在强制刷新中国官方招聘源..."
+        : `正在发现中国官方招聘源（第 ${queryOffset + 1} 次检索）...`,
+    );
     try {
       const params = new URLSearchParams({
         query,
         limit: "30",
-        jobType: filters.jobType !== "" ? filters.jobType : "",
-        city: filters.city !== "" ? filters.city : "",
+        jobType: filters.jobType || "",
+        city: filters.city || "",
         queryOffset: String(queryOffset),
       });
       if (forceRefresh) params.set("forceRefresh", "1");
@@ -94,21 +110,19 @@ export default function JobsClient({ initialJobs, companies }: Props) {
       const data = await resp.json();
 
       if (data.ok) {
-        const scored = mapApiSearchJobsToScoredJobs(
-          data.jobs || [],
-          query,
-        ) as ScoredJob[];
-
-        setOfficialJobs(scored);
+        const scored = mapApiSearchJobsToScoredJobs(data.jobs || [], query) as ScoredJob[];
+        // 累积：每次发现的岗位合并进来（按 jd_url 去重）；后端每次都已写库
+        setOfficialJobs((prev) => {
+          const seen = new Set(prev.map((j) => j.jd_url || j.id));
+          return [...prev, ...scored.filter((j) => !seen.has(j.jd_url || j.id))];
+        });
         setSearchInfo(formatDiscoveryResult(data, scored.length));
-        setCanContinueDiscovery(Boolean(data.can_continue_discovery));
+        setDiscoveryRound(queryOffset + 1); // 下次点击换下一组检索词
       } else {
         setSearchInfo(formatDiscoveryError(data));
-        setCanContinueDiscovery(false);
       }
     } catch (err) {
       setSearchInfo("中国官方源发现失败，仍显示本地岗位");
-      setCanContinueDiscovery(false);
     } finally {
       setDiscovering(false);
     }
@@ -190,18 +204,16 @@ export default function JobsClient({ initialJobs, companies }: Props) {
           {refreshing ? "刷新中..." : "刷新已知中国官网源"}
         </button>
         <button
-          onClick={() => handleOfficialDiscovery()}
+          onClick={() => handleOfficialDiscovery({ queryOffset: discoveryRound })}
           disabled={refreshing || discovering || !filters.keyword}
+          title="每点一次换一组检索词、结果累积并入库；想搜更多再点一次即可"
           className="rounded-md border border-border px-4 py-1.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
         >
-          {discovering ? "发现中..." : "发现中国官方招聘源"}
-        </button>
-        <button
-          onClick={() => handleOfficialDiscovery({ queryOffset: 1 })}
-          disabled={refreshing || discovering || !filters.keyword || !canContinueDiscovery}
-          className="rounded-md border border-border px-4 py-1.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
-        >
-          继续发现更多
+          {discovering
+            ? "发现中..."
+            : discoveryRound > 0
+              ? "再发现一批官方源"
+              : "发现中国官方招聘源"}
         </button>
         <button
           onClick={() => handleOfficialDiscovery({ forceRefresh: true })}
@@ -255,6 +267,13 @@ function jobMatchesFilters(job: ScoredJob, filters: Filters) {
   }
   if (!filters.showIgnored && job.hidden_reason === "ignored") return false;
   if (!filters.showApplied && job.hidden_reason === "applied_by_default") return false;
+  if (filters.capitalOrigin) {
+    const origin = classifyCompanyOrigin(job.company);
+    if (filters.capitalOrigin === "外企") {
+      if (origin === "中国") return false;
+    } else if (origin !== filters.capitalOrigin) return false;
+  }
+  if (filters.salaryOnly && !job.salary_text) return false;
   return true;
 }
 
