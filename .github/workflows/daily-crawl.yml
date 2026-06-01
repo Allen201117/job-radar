@@ -20,6 +20,9 @@ jobs:
       - name: Install crawler dependencies
         run: pip install -r crawler/requirements.txt
 
+      - name: Install Playwright browser (SPA browser-intercept tier)
+        run: python -m playwright install --with-deps chromium
+
       - name: Run crawler
         run: python crawler/run.py
         env:

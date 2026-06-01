@@ -19,6 +19,8 @@ from adapters.jd import JdAdapter
 from adapters.haier import HaierAdapter
 from adapters.siemens import SiemensAdapter
 from adapters.tencent import TencentAdapter
+from adapters.bytedance import BytedanceAdapter
+from adapters.feishu import NioAdapter, XpengAdapter, HorizonAdapter, XiaomiAdapter
 
 
 ADAPTERS = {
@@ -28,6 +30,11 @@ ADAPTERS = {
     "haier": HaierAdapter(),
     "siemens": SiemensAdapter(),
     "tencent": TencentAdapter(),
+    "bytedance": BytedanceAdapter(),
+    "nio_feishu": NioAdapter(),
+    "xpeng_feishu": XpengAdapter(),
+    "horizon_feishu": HorizonAdapter(),
+    "xiaomi_feishu": XiaomiAdapter(),
 }
 
 
