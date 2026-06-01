@@ -2,3 +2,4 @@ httpx>=0.27.0
 selectolax>=0.3.0
 supabase>=2.3.0
 python-dotenv>=1.0.0
+playwright>=1.52.0  # SPA 浏览器抓取层 Tier-2（CI 需 playwright install chromium）

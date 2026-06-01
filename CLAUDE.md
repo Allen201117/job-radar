@@ -131,7 +131,7 @@ Supabase Auth（邮箱登录）+ cookie session。`middleware.ts` 排除 `/api/*
 
 - 纯函数优先（scoring、live-search 格式化/校验、normalizer、quality gate、discovery budget）。
 - crawler 用 unittest，单测不打真实网络。
-- 改 schema 必须同步更新 migrations + 测试 + HANDOFF.md。
+- 改 schema 必须同步更新 migrations + 测试（schema 以 migrations 为准，需求文档以 `PRD.md` 为准）。
 
 ## 边界（Phase 1 不做）
 
