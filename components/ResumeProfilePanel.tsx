@@ -92,10 +92,10 @@ export default function ResumeProfilePanel() {
 
       <form onSubmit={handleSubmit} className="mt-4 space-y-3">
         <div>
-          <label className="text-sm font-medium">上传简历文本</label>
+          <label className="text-sm font-medium">上传简历（.txt / .md / PDF / Word / 图片）</label>
           <input
             type="file"
-            accept=".txt,.md,text/plain,text/markdown"
+            accept=".txt,.md,.pdf,.docx,.png,.jpg,.jpeg,.webp,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
             onChange={(e) => setFile(e.target.files?.[0] || null)}
             className="mt-1 block w-full rounded-md border px-3 py-2 text-sm"
           />

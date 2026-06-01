@@ -270,10 +270,22 @@ function formatKnownRefreshResult(data: any, returnedJobs: number) {
 }
 
 function formatDiscoveryResult(data: any, returnedJobs: number) {
+  const reason = data.failure_reason || data.diagnostics?.failure_reason || "";
+  const FRIENDLY_REASON: Record<string, string> = {
+    all_results_rejected:
+      "本次未发现新的官方源——搜索结果均为第三方平台 / 转载 / SEO 聚合页，已按规则过滤（这是预期的过滤行为，不是错误）。",
+    provider_no_results: "本次搜索没有返回结果，可换个关键词或稍后再试。",
+    candidates_pending: "发现了官方源候选，已记入待解析（暂无对应 parser）。",
+    parser_missing: "发现了官方源，但暂无对应解析器，已记入候选待接入。",
+    quality_gate_failed: "找到疑似岗位但未通过质量门（链接/标题校验），未入库。",
+    provider_rate_limited: "百度千帆当日额度已用尽，已停止调用——明天恢复或稍后再试。",
+  };
   const statusText =
-    data.status && data.status !== "success"
-      ? `状态 ${data.status}：${data.error_message || data.diagnostics?.failure_reason || "未写入岗位"}。`
-      : "";
+    !data.status || data.status === "success"
+      ? ""
+      : FRIENDLY_REASON[reason]
+        ? FRIENDLY_REASON[reason] + " "
+        : `发现未成功（${data.status}）：${data.error_message || reason || "未写入岗位"}。`;
   const cacheText = data.cache_hit ? `cache_hit=true，来源 ${data.cache_source || "cache"}。` : "";
   const rateLimitText = data.rate_limited ? "百度千帆 rate_limited=true，已停止继续调用千帆。" : "";
   const providers = formatProviderDiagnostics(data.diagnostics?.providers || []);
