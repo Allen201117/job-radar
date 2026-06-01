@@ -5,13 +5,15 @@ import { usePathname, useRouter } from "next/navigation";
 import { createBrowserClient } from "@/lib/supabaseClient";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { useLang, t } from "@/lib/i18n";
 
 const LINKS = [
-  { href: "/", label: "Today" },
-  { href: "/jobs", label: "Jobs" },
-  { href: "/preferences", label: "Preferences" },
-  { href: "/saved", label: "Saved" },
-  { href: "/applied", label: "Applied" },
+  { href: "/", key: "today" },
+  { href: "/jobs", key: "jobs" },
+  { href: "/preferences", key: "preferences" },
+  { href: "/me", key: "me" },
+  { href: "/saved", key: "saved" },
+  { href: "/applied", key: "applied" },
 ];
 
 export default function Navbar() {
@@ -20,13 +22,13 @@ export default function Navbar() {
   const supabase = createBrowserClient();
   const [email, setEmail] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [lang, setLang] = useLang();
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
       const user = data.user;
       setEmail(user?.email ?? null);
       if (!user) return;
-
       supabase
         .from("profiles")
         .select("role")
@@ -38,9 +40,7 @@ export default function Navbar() {
     });
   }, []);
 
-  const links = isAdmin
-    ? [...LINKS, { href: "/sources", label: "Sources" }]
-    : LINKS;
+  const links = isAdmin ? [...LINKS, { href: "/sources", key: "sources" }] : LINKS;
 
   async function handleLogout() {
     await supabase.auth.signOut();
@@ -67,20 +67,25 @@ export default function Navbar() {
                     : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                {link.label}
+                {t(link.key, lang)}
               </Link>
             ))}
           </nav>
         </div>
         <div className="flex items-center gap-3">
-          {email && (
-            <span className="text-xs text-muted-foreground">{email}</span>
-          )}
+          <button
+            onClick={() => setLang(lang === "zh" ? "en" : "zh")}
+            className="rounded-md border px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+            title="切换语言 / Switch language"
+          >
+            {lang === "zh" ? "EN" : "中"}
+          </button>
+          {email && <span className="text-xs text-muted-foreground">{email}</span>}
           <button
             onClick={handleLogout}
             className="rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
           >
-            退出
+            {t("logout", lang)}
           </button>
         </div>
       </div>
