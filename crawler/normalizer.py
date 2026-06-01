@@ -111,7 +111,7 @@ def clean_location(location: Optional[str]) -> Optional[str]:
     return normalize_city(loc)
 
 
-def clean_summary(summary: Optional[str], max_chars: int = 250) -> Optional[str]:
+def clean_summary(summary: Optional[str], max_chars: int = 400) -> Optional[str]:
     """截断摘要到 max_chars 字，在词边界截断。"""
     if not summary:
         return None

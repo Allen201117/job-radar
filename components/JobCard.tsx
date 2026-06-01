@@ -139,7 +139,7 @@ export default function JobCard({ job, onActionChange }: Props) {
             </span>
           </div>
           {job.summary && (
-            <p className="mt-2 text-sm text-muted-foreground line-clamp-2">
+            <p className="mt-2 whitespace-pre-line text-sm text-muted-foreground line-clamp-4">
               {job.summary}
             </p>
           )}

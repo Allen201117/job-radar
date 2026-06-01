@@ -40,7 +40,7 @@ class TestBytedanceAdapter(unittest.TestCase):
         self.assertIn("大语言模型", j.title)
         self.assertEqual(j.location, "上海")
         self.assertEqual(j.job_type, "研发")
-        self.assertEqual(j.jd_url, "https://jobs.bytedance.com/experienced/position/7644436900522248453")
+        self.assertEqual(j.jd_url, "https://jobs.bytedance.com/experienced/position/7644436900522248453/detail")
 
     def test_city_from_city_list_fallback(self):
         jobs = self._parse(SAMPLE)

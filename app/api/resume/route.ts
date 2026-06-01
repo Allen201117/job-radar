@@ -8,6 +8,46 @@ const {
   validateResumeUploadInput,
 } = resumeParser as any;
 
+export const runtime = "nodejs";
+
+const MAX_RESUME_FILE_BYTES = 10 * 1024 * 1024;
+
+// 服务端把 PDF / Word(.docx) / 图片 抽成纯文本，再交给原有规则解析器（不接 LLM）。
+async function extractResumeText(
+  fileName: string,
+  fileType: string,
+  buf: Buffer,
+): Promise<{ ok: boolean; text: string; kind: string }> {
+  const name = (fileName || "").toLowerCase();
+  try {
+    if (name.endsWith(".txt") || name.endsWith(".md") || fileType.startsWith("text/")) {
+      return { ok: true, text: buf.toString("utf8"), kind: "text" };
+    }
+    if (name.endsWith(".pdf") || fileType === "application/pdf") {
+      const { getDocumentProxy, extractText }: any = await import("unpdf");
+      const pdf = await getDocumentProxy(new Uint8Array(buf));
+      const { text } = await extractText(pdf, { mergePages: true });
+      return { ok: true, text: String(text || ""), kind: "pdf" };
+    }
+    if (name.endsWith(".docx") || fileType.includes("wordprocessingml")) {
+      const mammoth: any = await import("mammoth");
+      const r = await mammoth.extractRawText({ buffer: buf });
+      return { ok: true, text: String(r?.value || ""), kind: "docx" };
+    }
+    if (/\.(png|jpe?g|webp|bmp|gif)$/.test(name) || fileType.startsWith("image/")) {
+      const { createWorker }: any = await import("tesseract.js");
+      const worker = await createWorker("chi_sim+eng");
+      const { data } = await worker.recognize(buf);
+      await worker.terminate();
+      return { ok: true, text: String(data?.text || ""), kind: "image-ocr" };
+    }
+  } catch (err) {
+    console.error("[resume] 抽取失败", (err as Error).message);
+    return { ok: false, text: "", kind: "extract_error" };
+  }
+  return { ok: false, text: "", kind: "unsupported" };
+}
+
 export async function GET() {
   const supabase = await createServerSupabase();
   const {
@@ -156,26 +196,21 @@ async function readResumeInput(request: NextRequest) {
       };
     }
 
+    const buf = Buffer.from(await file.arrayBuffer());
     const fileMeta = {
       fileName: file.name,
       fileType: file.type || "application/octet-stream",
-      fileSize: file.size,
+      fileSize: buf.length,
     };
-    const metadataValidation = validateResumeUploadInput({
-      ...fileMeta,
-      text: "resume",
-    });
-    if (!metadataValidation.ok) {
-      return {
-        ...fileMeta,
-        text: "",
-        applyToPreferences,
-      };
+    if (buf.length > MAX_RESUME_FILE_BYTES) {
+      return { ...fileMeta, text: "", applyToPreferences };
     }
-
+    const extracted = await extractResumeText(file.name, fileMeta.fileType, buf);
     return {
       ...fileMeta,
-      text: await file.text(),
+      // 抽取成功 → 标为 text/plain 让下游文本校验通过；不支持/失败 → 保留原类型走 415
+      fileType: extracted.ok ? "text/plain" : fileMeta.fileType,
+      text: extracted.text,
       applyToPreferences,
     };
   }

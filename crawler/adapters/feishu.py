@@ -43,11 +43,14 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         if isinstance(jc, dict):
             job_type = jc.get("name") or ""
 
+        desc = (post.get("description") or "").strip()
+        req = (post.get("requirement") or "").strip()
+        summary = (desc + ("　【职位要求】" + req if req else "")).strip() or None
         jd_url = self.detail_template.format(id=pid)
         return RawJob(
             company=self.company_name, title=title, location=city or None,
             job_type=job_type or None, jd_url=jd_url, apply_url=jd_url,
-            summary=(post.get("description") or None),
+            summary=summary,
         )
 
 
