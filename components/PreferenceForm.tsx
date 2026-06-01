@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { createBrowserClient } from "@/lib/supabaseClient";
 import type { UserPreferences } from "@/lib/types";
+import TagInput from "./TagInput";
 
 export default function PreferenceForm() {
   const [prefs, setPrefs] = useState<UserPreferences | null>(null);
@@ -12,20 +13,12 @@ export default function PreferenceForm() {
 
   useEffect(() => {
     loadPrefs();
-
     function handleResumePreferencesUpdated() {
       loadPrefs();
     }
-
-    window.addEventListener(
-      "resume-preferences-updated",
-      handleResumePreferencesUpdated,
-    );
+    window.addEventListener("resume-preferences-updated", handleResumePreferencesUpdated);
     return () => {
-      window.removeEventListener(
-        "resume-preferences-updated",
-        handleResumePreferencesUpdated,
-      );
+      window.removeEventListener("resume-preferences-updated", handleResumePreferencesUpdated);
     };
   }, []);
 
@@ -55,7 +48,6 @@ export default function PreferenceForm() {
     e.preventDefault();
     setSaving(true);
     setMessage("");
-
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -64,119 +56,81 @@ export default function PreferenceForm() {
       setSaving(false);
       return;
     }
-
-    const { error } = await supabase
-      .from("user_preferences")
-      .upsert(
-        {
-          user_id: user.id,
-          target_locations: prefs.target_locations,
-          target_roles: prefs.target_roles,
-          target_keywords: prefs.target_keywords,
-          exclude_keywords: prefs.exclude_keywords,
-          target_companies: prefs.target_companies,
-          daily_limit: prefs.daily_limit,
-        },
-        { onConflict: "user_id" },
-      );
-
-    if (error) {
-      setMessage("保存失败: " + error.message);
-    } else {
-      setMessage("已保存");
-    }
+    const { error } = await supabase.from("user_preferences").upsert(
+      {
+        user_id: user.id,
+        target_locations: prefs.target_locations,
+        target_roles: prefs.target_roles,
+        target_keywords: prefs.target_keywords,
+        exclude_keywords: prefs.exclude_keywords,
+        target_companies: prefs.target_companies,
+        daily_limit: prefs.daily_limit,
+      },
+      { onConflict: "user_id" },
+    );
+    setMessage(error ? "保存失败: " + error.message : "已保存");
     setSaving(false);
   }
 
-  function updateField(field: keyof UserPreferences, value: string) {
+  function setArray(field: keyof UserPreferences, arr: string[]) {
     if (!prefs) return;
-    const arr = value
-      .split(/[,，、]/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    setPrefs({
-      ...prefs,
-      [field]: arr,
-    } as UserPreferences);
+    setPrefs({ ...prefs, [field]: arr } as UserPreferences);
   }
 
   if (!prefs) {
     return <p className="text-sm text-muted-foreground">加载中...</p>;
   }
 
-  const fieldClass = "mt-1 block w-full rounded-md border px-3 py-2 text-sm";
-
-  function arrayValue(field: keyof UserPreferences): string {
-    const val = prefs?.[field];
-    if (Array.isArray(val)) return val.join(", ");
-    return "";
-  }
-
   return (
     <form onSubmit={handleSave} className="space-y-4">
-      <div>
-        <label className="text-sm font-medium">目标城市</label>
-        <input
-          value={arrayValue("target_locations")}
-          onChange={(e) => updateField("target_locations", e.target.value)}
-          placeholder="北京, 上海, 深圳"
-          className={fieldClass}
+      <Field label="目标城市">
+        <TagInput
+          values={prefs.target_locations || []}
+          onChange={(v) => setArray("target_locations", v)}
+          placeholder="北京、上海、深圳…（回车或逗号添加）"
         />
-      </div>
-      <div>
-        <label className="text-sm font-medium">目标岗位方向</label>
-        <input
-          value={arrayValue("target_roles")}
-          onChange={(e) => updateField("target_roles", e.target.value)}
-          placeholder="算法, 产品经理, 数据分析"
-          className={fieldClass}
+      </Field>
+      <Field label="目标岗位方向">
+        <TagInput
+          values={prefs.target_roles || []}
+          onChange={(v) => setArray("target_roles", v)}
+          placeholder="算法、产品经理、数据分析…"
         />
-      </div>
-      <div>
-        <label className="text-sm font-medium">命中关键词</label>
-        <input
-          value={arrayValue("target_keywords")}
-          onChange={(e) => updateField("target_keywords", e.target.value)}
-          placeholder="Python, 机器学习, LLM"
-          className={fieldClass}
+      </Field>
+      <Field label="命中关键词">
+        <TagInput
+          values={prefs.target_keywords || []}
+          onChange={(v) => setArray("target_keywords", v)}
+          placeholder="Python、机器学习、LLM…"
         />
-      </div>
-      <div>
-        <label className="text-sm font-medium">排除关键词</label>
-        <input
-          value={arrayValue("exclude_keywords")}
-          onChange={(e) => updateField("exclude_keywords", e.target.value)}
-          placeholder="销售, 客服"
-          className={fieldClass}
+      </Field>
+      <Field label="排除关键词">
+        <TagInput
+          values={prefs.exclude_keywords || []}
+          onChange={(v) => setArray("exclude_keywords", v)}
+          placeholder="销售、客服…"
         />
-      </div>
-      <div>
-        <label className="text-sm font-medium">关注公司</label>
-        <input
-          value={arrayValue("target_companies")}
-          onChange={(e) => updateField("target_companies", e.target.value)}
-          placeholder="Apple, 百度, 京东"
-          className={fieldClass}
+      </Field>
+      <Field label="关注公司（可加多个）">
+        <TagInput
+          values={prefs.target_companies || []}
+          onChange={(v) => setArray("target_companies", v)}
+          placeholder="Apple、百度、京东、字节…"
         />
-      </div>
-      <div>
-        <label className="text-sm font-medium">每日展示数量</label>
+      </Field>
+      <Field label="每日展示数量">
         <input
           type="number"
           min={5}
           max={100}
           value={prefs.daily_limit}
-          onChange={(e) =>
-            setPrefs({ ...prefs, daily_limit: Number(e.target.value) || 20 })
-          }
-          className={fieldClass}
+          onChange={(e) => setPrefs({ ...prefs, daily_limit: Number(e.target.value) || 20 })}
+          className="mt-1 block w-full rounded-md border px-3 py-2 text-sm"
         />
-      </div>
+      </Field>
 
       {message && (
-        <p
-          className={`text-sm ${message.includes("失败") ? "text-destructive" : "text-primary"}`}
-        >
+        <p className={`text-sm ${message.includes("失败") ? "text-destructive" : "text-primary"}`}>
           {message}
         </p>
       )}
@@ -189,6 +143,15 @@ export default function PreferenceForm() {
         {saving ? "保存中..." : "保存偏好"}
       </button>
     </form>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="text-sm font-medium">{label}</label>
+      {children}
+    </div>
   );
 }
 
