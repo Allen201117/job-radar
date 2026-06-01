@@ -64,4 +64,4 @@ class HorizonAdapter(FeishuRecruitAdapter):
 
 
 class XiaomiAdapter(FeishuRecruitAdapter):
-    name = "xiaomi_feishu"; company_name = "小米"; host = "xiaomi.jobs.feishu.cn"
+    name = "xiaomi_feishu"; company_name = "小米"; host = "xiaomi.jobs.f.mioffice.cn"

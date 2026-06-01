@@ -31,6 +31,7 @@ class PlaywrightAdapter(BaseAdapter):
     official_hosts: tuple = ()
     wait_ms: int = 6000
     pw_timeout: int = 45000
+    max_pages: int = 4
 
     def should_skip(self, source_url: str) -> Optional[str]:
         # SPA 站 HEAD 检查无意义（首页永远 200），交给浏览器渲染判定，跳过 httpx HEAD。
@@ -64,6 +65,7 @@ class PlaywrightAdapter(BaseAdapter):
                 try:
                     page.goto(u, wait_until="domcontentloaded", timeout=self.pw_timeout)
                     page.wait_for_timeout(self.wait_ms)
+                    self._paginate(page)
                 except Exception:
                     continue
             browser.close()
@@ -74,6 +76,29 @@ class PlaywrightAdapter(BaseAdapter):
                 f"{self.name}: anti_bot_blocked — 未拦截到任何 '{self.intercept_match}' 接口响应"
             )
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
+
+    def _paginate(self, page):
+        """翻页/滚动以触发更多接口分页响应（被 on_response 持续拦截）。低频、有上限。"""
+        for _ in range(max(0, self.max_pages - 1)):
+            clicked = False
+            for sel in ('li[title="下一页"]', "text=下一页",
+                        ".ant-pagination-next:not(.ant-pagination-disabled)",
+                        '[class*="next"]:not([class*="disabled"])'):
+                try:
+                    btn = page.locator(sel).first
+                    if btn.count() > 0 and btn.is_enabled():
+                        btn.click(timeout=2500)
+                        page.wait_for_timeout(2500)
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+            if not clicked:
+                try:
+                    page.mouse.wheel(0, 5000)
+                    page.wait_for_timeout(2000)
+                except Exception:
+                    break
 
     def parse(self, html: str) -> List[RawJob]:
         try:
