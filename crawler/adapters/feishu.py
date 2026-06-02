@@ -6,6 +6,7 @@
 """
 from typing import Optional
 
+import normalizer
 from .base import RawJob
 from .playwright_base import PlaywrightAdapter
 
@@ -50,7 +51,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         return RawJob(
             company=self.company_name, title=title, location=city or None,
             job_type=job_type or None, jd_url=jd_url, apply_url=jd_url,
-            summary=summary,
+            summary=summary, posted_at=normalizer.pick_publish_date(post),
         )
 
 
