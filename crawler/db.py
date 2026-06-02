@@ -101,3 +101,25 @@ def update_source_timestamp(supabase: Client, source_id: str):
     supabase.table("sources").update({
         "last_checked_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", source_id).execute()
+
+
+def get_discovery_run(supabase: Client, run_id: str) -> Optional[dict]:
+    """读取一条 discovery_runs（按需浏览器发现）。"""
+    resp = (
+        supabase.table("discovery_runs")
+        .select("*")
+        .eq("id", run_id)
+        .limit(1)
+        .execute()
+    )
+    rows = resp.data or []
+    return rows[0] if rows else None
+
+
+def update_discovery_run(supabase: Client, run_id: str, **fields):
+    """更新一条 discovery_runs（按需浏览器发现的生命周期）。空 run_id 时跳过。"""
+    if not run_id:
+        return
+    if not fields:
+        return
+    supabase.table("discovery_runs").update(dict(fields)).eq("id", run_id).execute()
