@@ -13,7 +13,7 @@ import traceback
 import db
 import normalizer
 from robots import check_robots
-from adapters.apple import AppleAdapter
+from adapters.apple import AppleAdapter, AppleChinaAdapter
 from adapters.baidu import BaiduAdapter
 from adapters.jd import JdAdapter
 from adapters.haier import HaierAdapter
@@ -27,6 +27,7 @@ from adapters.lever import LeverAdapter
 
 ADAPTERS = {
     "apple": AppleAdapter(),
+    "apple_cn": AppleChinaAdapter(),  # Apple 在华岗位（保留全球 apple 源）
     "baidu": BaiduAdapter(),
     "jd": JdAdapter(),
     "haier": HaierAdapter(),
