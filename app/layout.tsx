@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Job Radar",
-  description: "官网岗位雷达看板",
+  title: "Job Radar | 官方岗位雷达",
+  description: "发现真实、最新、匹配的官方岗位",
 };
 
 export default function RootLayout({

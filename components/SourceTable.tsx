@@ -57,14 +57,14 @@ export default function SourceTable() {
   }
 
   if (loading) {
-    return <p className="text-sm text-muted-foreground">加载中...</p>;
+    return <p className="rounded-[1.35rem] border border-white/10 bg-white/[0.055] p-5 text-sm text-white/56">加载中...</p>;
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto rounded-[1.35rem] border border-white/10 bg-white/[0.055] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b text-left text-xs font-medium text-muted-foreground">
+          <tr className="border-b border-white/10 text-left text-xs font-medium text-white/46">
             <th className="py-2 pr-4">公司</th>
             <th className="py-2 pr-4">URL</th>
             <th className="py-2 pr-4">抓取方式</th>
@@ -78,14 +78,14 @@ export default function SourceTable() {
           {sources.map((source) => {
             const run = latestRuns[source.id];
             return (
-              <tr key={source.id} className="border-b last:border-0">
+              <tr key={source.id} className="border-b border-white/10 last:border-0">
                 <td className="py-2 pr-4 font-medium">{source.company}</td>
                 <td className="max-w-[200px] truncate py-2 pr-4">
                   <a
                     href={source.source_url}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-primary hover:underline"
+                    className="text-sky-300 hover:text-sky-200 hover:underline"
                   >
                     {source.source_url}
                   </a>
@@ -96,14 +96,14 @@ export default function SourceTable() {
                     onClick={() => toggleSource(source)}
                     className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                       source.enabled
-                        ? "bg-green-100 text-green-700"
-                        : "bg-red-100 text-red-700"
+                        ? "bg-lime-300 text-lime-950"
+                        : "bg-red-400/15 text-red-200"
                     }`}
                   >
                     {source.enabled ? "启用" : "禁用"}
                   </button>
                 </td>
-                <td className="py-2 pr-4 text-xs text-muted-foreground">
+                <td className="py-2 pr-4 text-xs text-white/46">
                   {source.last_checked_at
                     ? new Date(source.last_checked_at).toLocaleString("zh-CN")
                     : "—"}
@@ -113,20 +113,20 @@ export default function SourceTable() {
                     <span
                       className={`rounded-full px-2 py-0.5 text-xs ${
                         run.status === "success"
-                          ? "bg-green-100 text-green-700"
+                          ? "bg-lime-300 text-lime-950"
                           : run.status === "partial_success"
-                            ? "bg-yellow-100 text-yellow-700"
-                            : "bg-red-100 text-red-700"
+                            ? "bg-orange-300 text-orange-950"
+                            : "bg-red-400/15 text-red-200"
                       }`}
                     >
                       {run.status}
                       {run.jobs_found > 0 && ` (${run.jobs_found})`}
                     </span>
                   ) : (
-                    <span className="text-xs text-muted-foreground">—</span>
+                    <span className="text-xs text-white/42">—</span>
                   )}
                 </td>
-                <td className="py-2 text-xs text-muted-foreground">
+                <td className="py-2 text-xs text-white/46">
                   {source.notes || "—"}
                 </td>
               </tr>

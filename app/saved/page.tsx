@@ -1,6 +1,8 @@
 import Navbar from "@/components/Navbar";
+import { CountBadge, EmptyPanel, ProductHero, ProductPage } from "@/components/ProductChrome";
 import { createServerSupabase } from "@/lib/auth";
 import SavedClient from "./saved-client";
+import { BookmarkSimple, Briefcase } from "@phosphor-icons/react/ssr";
 
 export const dynamic = "force-dynamic";
 
@@ -10,14 +12,14 @@ export default async function SavedPage() {
 
   if (!user) {
     return (
-      <div>
+      <div className="min-h-screen bg-[#08090c]">
         <Navbar />
-        <main className="mx-auto max-w-4xl px-4 py-8">
-          <h1 className="text-2xl font-semibold tracking-tight">已收藏</h1>
-          <p className="mt-6 py-12 text-center text-muted-foreground">
-            加载中，请稍候...
-          </p>
-        </main>
+        <ProductPage maxWidth="max-w-5xl">
+          <ProductHero eyebrow="已收藏" title="待进一步比较的岗位" icon={BookmarkSimple} />
+          <div className="mt-6">
+            <EmptyPanel title="加载中，请稍候" description="正在读取你的收藏岗位。" />
+          </div>
+        </ProductPage>
       </div>
     );
   }
@@ -30,14 +32,14 @@ export default async function SavedPage() {
 
   if (!actions || actions.length === 0) {
     return (
-      <div>
+      <div className="min-h-screen bg-[#08090c]">
         <Navbar />
-        <main className="mx-auto max-w-4xl px-4 py-8">
-          <h1 className="text-2xl font-semibold tracking-tight">已收藏</h1>
-          <p className="mt-6 py-12 text-center text-muted-foreground">
-            还没有收藏任何岗位。
-          </p>
-        </main>
+        <ProductPage maxWidth="max-w-5xl">
+          <ProductHero eyebrow="已收藏" title="待进一步比较的岗位" icon={BookmarkSimple} />
+          <div className="mt-6">
+            <EmptyPanel title="还没有收藏任何岗位" description="在今日看板或岗位库里点击收藏后，岗位会出现在这里。" />
+          </div>
+        </ProductPage>
       </div>
     );
   }
@@ -46,16 +48,24 @@ export default async function SavedPage() {
   const { data: jobs } = await supabase.from("jobs").select("*").in("id", jobIds).eq("status", "active");
 
   return (
-    <div>
+    <div className="min-h-screen bg-[#08090c]">
       <Navbar />
-      <main className="mx-auto max-w-4xl px-4 py-8">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          已收藏 <span className="ml-2 text-base font-normal text-muted-foreground">({(jobs || []).length} 个)</span>
-        </h1>
-        <div className="mt-6">
+      <ProductPage maxWidth="max-w-5xl">
+        <ProductHero
+          eyebrow="已收藏"
+          title="待进一步比较的岗位"
+          icon={BookmarkSimple}
+          action={
+            <CountBadge>
+              <Briefcase size={16} weight="fill" aria-hidden="true" />
+              <span className="tabular-nums">{(jobs || []).length} 个</span>
+            </CountBadge>
+          }
+        />
+        <div className="mt-8">
           <SavedClient initialJobs={jobs || []} />
         </div>
-      </main>
+      </ProductPage>
     </div>
   );
 }

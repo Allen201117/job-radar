@@ -11,6 +11,13 @@ import {
 } from "@/lib/china-keyword-expansion";
 import { classifyCompanyOrigin } from "@/lib/company-origin";
 import type { ScoredJob } from "@/lib/types";
+import {
+  ArrowsClockwise,
+  Compass,
+  Database,
+  Lightning,
+  MagnifyingGlass,
+} from "@phosphor-icons/react";
 
 type PrimaryAction = "saved" | "ignored" | "applied";
 
@@ -187,28 +194,32 @@ export default function JobsClient({ initialJobs, companies }: Props) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <JobFilters filters={filters} onChange={setFilters} companies={companies} />
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="rounded-[1.35rem] border border-white/10 bg-white/[0.055] p-4 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+        <div className="flex flex-wrap items-center gap-3">
         <button
           onClick={handleExistingJobsSearch}
-          className="rounded-md border border-border px-4 py-1.5 text-sm font-medium hover:bg-muted"
+          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white/78 transition duration-200 hover:bg-white/16 hover:text-white active:scale-[0.98]"
         >
+          <Database size={16} weight="fill" aria-hidden="true" />
           搜索已有岗位
         </button>
         <button
           onClick={handleKnownChinaRefresh}
           disabled={refreshing || discovering || !filters.keyword}
-          className="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-4 py-2 text-sm font-semibold text-sky-950 transition duration-200 hover:bg-sky-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
         >
+          <ArrowsClockwise size={16} weight="bold" aria-hidden="true" />
           {refreshing ? "刷新中..." : "刷新已知中国官网源"}
         </button>
         <button
           onClick={() => handleOfficialDiscovery({ queryOffset: discoveryRound })}
           disabled={refreshing || discovering || !filters.keyword}
           title="每点一次换一组检索词、结果累积并入库；想搜更多再点一次即可"
-          className="rounded-md border border-border px-4 py-1.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white/78 transition duration-200 hover:bg-white/16 hover:text-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
         >
+          <Compass size={16} weight="fill" aria-hidden="true" />
           {discovering
             ? "发现中..."
             : discoveryRound > 0
@@ -218,15 +229,18 @@ export default function JobsClient({ initialJobs, companies }: Props) {
         <button
           onClick={() => handleOfficialDiscovery({ forceRefresh: true })}
           disabled={refreshing || discovering || !filters.keyword}
-          className="rounded-md border border-border px-4 py-1.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white/78 transition duration-200 hover:bg-white/16 hover:text-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
         >
+          <Lightning size={16} weight="fill" aria-hidden="true" />
           强制刷新
         </button>
         {searchInfo && (
-          <span className="text-sm text-muted-foreground">{searchInfo}</span>
+          <span className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-pretty text-sm leading-6 text-white/58">{searchInfo}</span>
         )}
+        </div>
       </div>
-      <p className="text-sm text-muted-foreground">
+      <p className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.045] px-3 py-2 text-sm leading-6 text-white/58">
+        <MagnifyingGlass size={16} weight="bold" aria-hidden="true" />
         显示 {filtered.length} 个岗位（本地岗位库 {initialJobs.length} + 本次官网刷新/发现 {officialJobs.length}）。本地搜索、已知源刷新、动态官方源发现三层分开执行。
       </p>
       <div className="space-y-3">
@@ -238,7 +252,12 @@ export default function JobsClient({ initialJobs, companies }: Props) {
           />
         ))}
         {filtered.length === 0 && (
-          <p className="py-12 text-center text-muted-foreground">没有匹配的岗位。</p>
+          <div className="rounded-[1.5rem] border border-dashed border-white/14 bg-white/[0.05] px-6 py-14 text-center">
+            <h2 className="text-lg font-semibold text-white">没有匹配的岗位</h2>
+            <p className="mx-auto mt-2 max-w-md text-pretty text-sm leading-6 text-white/56">
+              可以放宽筛选条件，或输入关键词后刷新已知官网源 / 发现新的官方招聘入口。
+            </p>
+          </div>
         )}
       </div>
     </div>
