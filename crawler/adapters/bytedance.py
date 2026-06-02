@@ -7,6 +7,7 @@ jobs.bytedance.com/experienced/position/{id}（社招）。spike 已验证可拿
 from typing import Optional
 from urllib.parse import quote
 
+import normalizer
 from .base import RawJob
 from .playwright_base import PlaywrightAdapter
 
@@ -63,4 +64,5 @@ class BytedanceAdapter(PlaywrightAdapter):
             summary=summary,
             jd_url=jd_url,
             apply_url=jd_url,
+            posted_at=normalizer.pick_publish_date(post),
         )

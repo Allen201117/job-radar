@@ -1,5 +1,6 @@
 import hashlib
 import re
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -230,6 +231,45 @@ def keep_for_china_radar(location: Optional[str]) -> bool:
     if is_remote_location(location) and not _is_overseas_pinned(location):
         return True
     return False
+
+
+# 各招聘接口里常见的"发布/更新时间"字段名（防御式：命中哪个用哪个，缺失则 None，不伪造）
+PUBLISH_TIME_FIELDS = (
+    "publish_time", "publishTime", "first_publish_time", "online_time", "onlineTime",
+    "create_time", "createTime", "update_time", "updateTime", "modify_time",
+    "publish_date", "post_time", "posted_at", "pub_time",
+)
+
+
+def coerce_iso_date(value) -> Optional[str]:
+    """把 epoch(ms/s) 或带分隔符的日期字符串归一成 ISO date（YYYY-MM-DD）；无法识别返回 None。"""
+    if value is None or value == "":
+        return None
+    try:
+        n = float(value)
+        if n > 1e12:  # 毫秒
+            n = n / 1000.0
+        if n > 1e9:   # 秒级 epoch
+            return datetime.fromtimestamp(n, tz=timezone.utc).date().isoformat()
+    except (TypeError, ValueError):
+        pass
+    m = re.search(r"(\d{4})\D{1,3}(\d{1,2})\D{1,3}(\d{1,2})", str(value))
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return None
+
+
+def pick_publish_date(post: dict) -> Optional[str]:
+    """从招聘接口 post 里挑出发布日期（防御式遍历常见字段名）。缺失返回 None。"""
+    if not isinstance(post, dict):
+        return None
+    for field in PUBLISH_TIME_FIELDS:
+        value = post.get(field)
+        if value:
+            iso = coerce_iso_date(value)
+            if iso:
+                return iso
+    return None
 
 
 def normalize_city(value: str) -> str:

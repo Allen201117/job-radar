@@ -100,5 +100,29 @@ class AppleChinaParseTest(unittest.TestCase):
         self.assertTrue(all("/details/" in j.jd_url for j in jobs))
 
 
+class PublishDateTest(unittest.TestCase):
+    def test_coerce_iso_date(self):
+        self.assertEqual(normalizer.coerce_iso_date(1700000000000), "2023-11-14")  # epoch ms
+        self.assertEqual(normalizer.coerce_iso_date(1700000000), "2023-11-14")     # epoch s
+        self.assertEqual(normalizer.coerce_iso_date("2026/05/30"), "2026-05-30")
+        self.assertEqual(normalizer.coerce_iso_date("2026年5月3日"), "2026-05-03")
+        self.assertIsNone(normalizer.coerce_iso_date(None))
+        self.assertIsNone(normalizer.coerce_iso_date(""))
+        self.assertIsNone(normalizer.coerce_iso_date("n/a"))
+
+    def test_pick_publish_date_defensive(self):
+        self.assertEqual(normalizer.pick_publish_date({"publish_time": 1700000000000}), "2023-11-14")
+        self.assertEqual(normalizer.pick_publish_date({"update_time": "2026-05-30"}), "2026-05-30")
+        self.assertIsNone(normalizer.pick_publish_date({"foo": "bar"}))  # 无时间字段 → 不伪造
+        self.assertIsNone(normalizer.pick_publish_date(None))
+
+    def test_bytedance_map_sets_posted_at(self):
+        from adapters.bytedance import BytedanceAdapter
+        job = BytedanceAdapter()._map({"id": "1", "title": "算法工程师", "publish_time": 1700000000000})
+        self.assertEqual(job.posted_at, "2023-11-14")
+        job2 = BytedanceAdapter()._map({"id": "2", "title": "x"})  # 无时间字段 → None
+        self.assertIsNone(job2.posted_at)
+
+
 if __name__ == "__main__":
     unittest.main()
