@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 import httpx
 from typing import List
 
+import normalizer
 from .base import BaseAdapter, RawJob
 
 
@@ -16,6 +17,8 @@ class AppleAdapter(BaseAdapter):
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
     )
     SEARCH_URL = "https://jobs.apple.com/en-us/search"
+    SEARCH_LOCATION = "united-states-USA"  # 子类置空 = 不限地点（全球混合，再按需过滤）
+    CHINA_ONLY = False                      # 子类置 True = parse 后只保留在华/remote 岗
 
     def fetch(self, source_url: str) -> str:
         """Fetch Apple's public search pages and return a JSON job array."""
@@ -23,7 +26,10 @@ class AppleAdapter(BaseAdapter):
         all_jobs = []
 
         for query in queries[:3]:
-            url = f"{self.SEARCH_URL}?{urlencode({'search': query, 'location': 'united-states-USA'})}"
+            params = {"search": query}
+            if self.SEARCH_LOCATION:
+                params["location"] = self.SEARCH_LOCATION
+            url = f"{self.SEARCH_URL}?{urlencode(params)}"
             resp = httpx.get(
                 url,
                 headers={
@@ -83,6 +89,8 @@ class AppleAdapter(BaseAdapter):
                     posted_at=row.get("postDateInGMT") or row.get("postingDate"),
                 )
             )
+        if self.CHINA_ONLY:
+            jobs = [j for j in jobs if normalizer.keep_for_china_radar(j.location)]
         return jobs
 
     @staticmethod
@@ -111,3 +119,15 @@ class AppleAdapter(BaseAdapter):
     def _slugify(value: str) -> str:
         slug = re.sub(r"[^a-z0-9]+", "-", (value or "").lower()).strip("-")
         return slug or "job"
+
+
+class AppleChinaAdapter(AppleAdapter):
+    """Apple 在华岗位：不固定 location（全球混合搜索）→ parse 后只保留在华/remote 岗。
+
+    Apple 的 location code 不公开稳定，因此不猜 code；改为按通用关键词全局搜索，再用
+    keep_for_china_radar 裁到在华/不绑定海外的 remote 岗。jd_url 仍是 Apple 官方 details 页。
+    """
+
+    name = "apple_cn"
+    SEARCH_LOCATION = ""     # 不限地点
+    CHINA_ONLY = True        # 只保留在华/remote

@@ -46,8 +46,8 @@ class GreenhouseAdapter(BaseAdapter):
                 continue
             loc_obj = j.get("location")
             location = loc_obj.get("name") if isinstance(loc_obj, dict) else None
-            if not normalizer.is_china_location(location):
-                continue  # 只要在华岗位
+            if not normalizer.keep_for_china_radar(location):
+                continue  # 大中华区 + 不绑定海外的 remote;排除 base 海外
             out.append(RawJob(
                 company="",  # 由 sources.company 兜底填充
                 title=title,

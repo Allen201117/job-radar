@@ -190,6 +190,48 @@ def is_china_location(location: Optional[str]) -> bool:
     return any(marker in text for marker in CHINA_LOCATION_MARKERS)
 
 
+REMOTE_MARKERS = ("remote", "anywhere", "distributed", "work from home", "wfh", "远程", "远端")
+
+# 明确绑定到海外地点的标记（用于把 "Remote - US" 这类 base 海外的 remote 排除）
+OVERSEAS_LOCATION_TOKENS = {
+    "usa", "us", "canada", "uk", "britain", "ireland", "germany", "france", "netherlands",
+    "spain", "italy", "poland", "portugal", "sweden", "switzerland", "austria", "belgium",
+    "europe", "emea", "americas", "latam", "brazil", "mexico", "argentina", "colombia",
+    "india", "japan", "korea", "singapore", "malaysia", "thailand", "vietnam", "indonesia",
+    "philippines", "australia", "nz", "uae", "dubai", "israel", "egypt", "turkey", "africa",
+}
+OVERSEAS_LOCATION_PHRASES = (
+    "united states", "united kingdom", "new zealand", "south korea", "saudi arabia",
+    "sri lanka", "costa rica", "south africa",
+)
+
+
+def is_remote_location(location: Optional[str]) -> bool:
+    if not location:
+        return False
+    return any(marker in location.lower() for marker in REMOTE_MARKERS)
+
+
+def _is_overseas_pinned(location: Optional[str]) -> bool:
+    """地点是否明确绑定到某个海外国家/地区（用于排除海外 remote）。"""
+    if not location:
+        return False
+    text = location.lower()
+    if any(phrase in text for phrase in OVERSEAS_LOCATION_PHRASES):
+        return True
+    tokens = [t for t in re.split(r"[^a-z]+", text) if t]
+    return any(t in OVERSEAS_LOCATION_TOKENS for t in tokens)
+
+
+def keep_for_china_radar(location: Optional[str]) -> bool:
+    """在华雷达保留口径：大中华区岗位 + 不绑定海外地点的 remote 岗位；排除 base 海外（含海外 remote）。"""
+    if is_china_location(location):
+        return True
+    if is_remote_location(location) and not _is_overseas_pinned(location):
+        return True
+    return False
+
+
 def normalize_city(value: str) -> str:
     key = (value or "").strip().lower()
     if key in CITY_ALIASES:
