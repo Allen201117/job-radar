@@ -173,6 +173,23 @@ def extract_job_type(title: str, summary: Optional[str] = None) -> Optional[str]
     return None
 
 
+CHINA_LOCATION_MARKERS = (
+    "china", "中国", "prc", "greater china",
+    "beijing", "shanghai", "shenzhen", "guangzhou", "hangzhou", "chengdu",
+    "nanjing", "suzhou", "wuhan", "xi'an", "xian", "foshan", "dongguan",
+    "北京", "上海", "深圳", "广州", "杭州", "成都", "南京", "苏州", "武汉", "西安", "佛山",
+    "hong kong", "香港", "macau", "macao", "澳门",
+)
+
+
+def is_china_location(location: Optional[str]) -> bool:
+    """判断地点是否属于大中华区（含港澳）。用于把外企 ATS 看板裁到在华岗位。"""
+    if not location:
+        return False
+    text = location.lower()
+    return any(marker in text for marker in CHINA_LOCATION_MARKERS)
+
+
 def normalize_city(value: str) -> str:
     key = (value or "").strip().lower()
     if key in CITY_ALIASES:

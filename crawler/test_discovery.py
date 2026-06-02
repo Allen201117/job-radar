@@ -105,10 +105,10 @@ class SourceSelectionTest(unittest.TestCase):
         allow = discovery.SpaKeywordRecipe.DISCOVERY_ADAPTERS
         sources = [
             {"adapter_name": "bytedance", "id": "1"},
-            {"adapter_name": "tencent", "id": "2"},
-            {"adapter_name": "apple", "id": "3"},       # 不在白名单
-            {"adapter_name": "greenhouse", "id": "4"},  # 未来源,暂不在白名单
-            {"adapter_name": "bytedance", "id": "5"},    # 同 adapter 第二家,应保留
+            {"adapter_name": "greenhouse", "id": "2"},   # 外企 ATS,在白名单
+            {"adapter_name": "apple", "id": "3"},        # 静态源,不在发现白名单
+            {"adapter_name": "baidu", "id": "4"},        # 静态源,不在发现白名单
+            {"adapter_name": "bytedance", "id": "5"},     # 同 adapter 第二家,应保留
         ]
         targets = discovery.select_discovery_targets(sources, allow)
         ids = {t["id"] for t in targets}

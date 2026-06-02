@@ -21,6 +21,8 @@ from adapters.siemens import SiemensAdapter
 from adapters.tencent import TencentAdapter
 from adapters.bytedance import BytedanceAdapter
 from adapters.feishu import NioAdapter, XpengAdapter, HorizonAdapter, XiaomiAdapter
+from adapters.greenhouse import GreenhouseAdapter
+from adapters.lever import LeverAdapter
 
 
 ADAPTERS = {
@@ -35,6 +37,9 @@ ADAPTERS = {
     "xpeng_feishu": XpengAdapter(),
     "horizon_feishu": HorizonAdapter(),
     "xiaomi_feishu": XiaomiAdapter(),
+    # 外企 ATS（通用适配器，按公司加 sources 行；parse 已裁到在华岗位）
+    "greenhouse": GreenhouseAdapter(),
+    "lever": LeverAdapter(),
 }
 
 

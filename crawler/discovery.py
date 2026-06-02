@@ -23,6 +23,8 @@ from adapters.base import RawJob
 from adapters.bytedance import BytedanceAdapter
 from adapters.feishu import NioAdapter, XpengAdapter, HorizonAdapter, XiaomiAdapter
 from adapters.tencent import TencentAdapter
+from adapters.greenhouse import GreenhouseAdapter
+from adapters.lever import LeverAdapter
 
 
 def _now_iso() -> str:
@@ -137,6 +139,9 @@ class SpaKeywordRecipe:
         "horizon_feishu": HorizonAdapter,
         "xiaomi_feishu": XiaomiAdapter,
         "tencent": TencentAdapter,
+        # 外企 ATS（通用适配器，多公司靠 sources 行扩展；parse 已裁到在华岗位）
+        "greenhouse": GreenhouseAdapter,
+        "lever": LeverAdapter,
     }
     discovery_max_pages = 2  # 发现限页，控制 5min 预算
 
