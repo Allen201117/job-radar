@@ -1,8 +1,10 @@
 import Navbar from "@/components/Navbar";
+import { CountBadge, ProductHero, ProductPage } from "@/components/ProductChrome";
 import { createServerSupabase } from "@/lib/auth";
 import { sortAndFilterJobs } from "@/lib/scoring";
 import type { Job, UserPreferences, JobAction, ScoredJob } from "@/lib/types";
 import JobsClient from "./jobs-client";
+import { Briefcase, Database } from "@phosphor-icons/react/ssr";
 
 export const dynamic = "force-dynamic";
 
@@ -47,19 +49,25 @@ export default async function JobsPage() {
   ) as string[];
 
   return (
-    <div>
+    <div className="min-h-screen bg-[#08090c]">
       <Navbar />
-      <main className="mx-auto max-w-5xl px-4 py-8">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          岗位库
-          <span className="ml-2 text-base font-normal text-muted-foreground">
-            ({scored.length} 个岗位)
-          </span>
-        </h1>
-        <div className="mt-6">
+      <ProductPage>
+        <ProductHero
+          eyebrow="岗位库"
+          title="官方岗位检索与发现"
+          description="从本地岗位库开始，按需刷新已知官网源，必要时再发现新的官方招聘入口。"
+          icon={Database}
+          action={
+            <CountBadge>
+              <Briefcase size={16} weight="fill" aria-hidden="true" />
+              <span className="tabular-nums">{scored.length} 个岗位</span>
+            </CountBadge>
+          }
+        />
+        <div className="mt-8">
           <JobsClient initialJobs={scored as ScoredJob[]} companies={companies} />
         </div>
-      </main>
+      </ProductPage>
     </div>
   );
 }

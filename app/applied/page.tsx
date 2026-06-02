@@ -1,5 +1,7 @@
 import Navbar from "@/components/Navbar";
+import { CountBadge, EmptyPanel, ProductHero, ProductPage } from "@/components/ProductChrome";
 import { createServerSupabase } from "@/lib/auth";
+import { ArrowSquareOut, Briefcase, CheckCircle, MapPin } from "@phosphor-icons/react/ssr";
 
 export const dynamic = "force-dynamic";
 
@@ -9,12 +11,14 @@ export default async function AppliedPage() {
 
   if (!user) {
     return (
-      <div>
+      <div className="min-h-screen bg-[#08090c]">
         <Navbar />
-        <main className="mx-auto max-w-4xl px-4 py-8">
-          <h1 className="text-2xl font-semibold tracking-tight">已投递</h1>
-          <p className="mt-6 py-12 text-center text-muted-foreground">加载中，请稍候...</p>
-        </main>
+        <ProductPage maxWidth="max-w-5xl">
+          <ProductHero eyebrow="已投递" title="已完成投递的岗位" icon={CheckCircle} />
+          <div className="mt-6">
+            <EmptyPanel title="加载中，请稍候" description="正在读取你的投递记录。" />
+          </div>
+        </ProductPage>
       </div>
     );
   }
@@ -28,12 +32,14 @@ export default async function AppliedPage() {
 
   if (!actions || actions.length === 0) {
     return (
-      <div>
+      <div className="min-h-screen bg-[#08090c]">
         <Navbar />
-        <main className="mx-auto max-w-4xl px-4 py-8">
-          <h1 className="text-2xl font-semibold tracking-tight">已投递</h1>
-          <p className="mt-6 py-12 text-center text-muted-foreground">还没有标记任何已投递岗位。</p>
-        </main>
+        <ProductPage maxWidth="max-w-5xl">
+          <ProductHero eyebrow="已投递" title="已完成投递的岗位" icon={CheckCircle} />
+          <div className="mt-6">
+            <EmptyPanel title="还没有标记任何已投递岗位" description="在岗位卡片里点击标记投递后，这里会形成你的投递记录。" />
+          </div>
+        </ProductPage>
       </div>
     );
   }
@@ -44,33 +50,47 @@ export default async function AppliedPage() {
   const { data: jobs } = await supabase.from("jobs").select("*").in("id", jobIds);
 
   return (
-    <div>
+    <div className="min-h-screen bg-[#08090c]">
       <Navbar />
-      <main className="mx-auto max-w-4xl px-4 py-8">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          已投递 <span className="ml-2 text-base font-normal text-muted-foreground">({(jobs || []).length} 个)</span>
-        </h1>
+      <ProductPage maxWidth="max-w-5xl">
+        <ProductHero
+          eyebrow="已投递"
+          title="已完成投递的岗位"
+          icon={CheckCircle}
+          action={
+            <CountBadge>
+              <Briefcase size={16} weight="fill" aria-hidden="true" />
+              <span className="tabular-nums">{(jobs || []).length} 个</span>
+            </CountBadge>
+          }
+        />
         <div className="mt-6 space-y-3">
           {(jobs || []).map((job: any) => (
-            <div key={job.id} className="rounded-lg border bg-card p-4 shadow-sm">
-              <div className="flex items-start justify-between">
+            <div key={job.id} className="rounded-[1.35rem] border border-white/10 bg-white/[0.065] p-5 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition duration-200 hover:-translate-y-0.5 hover:border-white/18 hover:bg-white/[0.085]">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <span className="text-xs font-medium text-muted-foreground">{job.company}</span>
-                  <h3 className="font-medium">{job.title}</h3>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    {job.location && <span>{job.location} · </span>}
+                  <span className="text-xs font-medium text-white/50">{job.company}</span>
+                  <h3 className="mt-1 text-lg font-semibold">{job.title}</h3>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-white/50">
+                    {job.location && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/10 px-2 py-1">
+                        <MapPin size={13} weight="fill" aria-hidden="true" />
+                        {job.location}
+                      </span>
+                    )}
                     {job.job_type && <span>{job.job_type} · </span>}
                     投递于 {appliedMap.get(job.id) ? new Date(appliedMap.get(job.id)!).toLocaleDateString("zh-CN") : "—"}
                   </div>
                 </div>
-                <a href={job.jd_url} target="_blank" rel="noreferrer" className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90">
+                <a href={job.jd_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-4 py-2 text-sm font-semibold text-sky-950 transition duration-200 hover:bg-sky-200 active:scale-[0.98]">
                   查看官网
+                  <ArrowSquareOut size={16} weight="bold" aria-hidden="true" />
                 </a>
               </div>
             </div>
           ))}
         </div>
-      </main>
+      </ProductPage>
     </div>
   );
 }
