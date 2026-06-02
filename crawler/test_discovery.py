@@ -67,6 +67,58 @@ class KeywordUrlTest(unittest.TestCase):
         self.assertIsNone(discovery.build_keyword_list_urls("bytedance", ""))
 
 
+class _FakeAdapter:
+    pass
+
+
+class KeywordInjectionTest(unittest.TestCase):
+    def test_bytedance_sets_list_urls(self):
+        a = _FakeAdapter()
+        discovery.apply_keyword_to_adapter(a, "bytedance", "算法")
+        self.assertTrue(getattr(a, "list_urls", None))
+        self.assertIn("keyword=", a.list_urls[0])
+        self.assertFalse(hasattr(a, "discovery_keyword"))
+
+    def test_tencent_sets_discovery_keyword(self):
+        a = _FakeAdapter()
+        discovery.apply_keyword_to_adapter(a, "tencent", "算法")
+        self.assertEqual(a.discovery_keyword, "算法")
+        self.assertFalse(hasattr(a, "list_urls"))
+
+    def test_feishu_no_injection(self):
+        a = _FakeAdapter()
+        discovery.apply_keyword_to_adapter(a, "nio_feishu", "算法")
+        self.assertFalse(hasattr(a, "list_urls"))
+        self.assertFalse(hasattr(a, "discovery_keyword"))
+
+    def test_empty_query_noop(self):
+        a = _FakeAdapter()
+        discovery.apply_keyword_to_adapter(a, "tencent", "")
+        self.assertFalse(hasattr(a, "discovery_keyword"))
+
+
+class SourceSelectionTest(unittest.TestCase):
+    def test_tencent_in_allowlist(self):
+        self.assertIn("tencent", discovery.SpaKeywordRecipe.DISCOVERY_ADAPTERS)
+
+    def test_select_targets_filters_and_keeps_multi_company(self):
+        allow = discovery.SpaKeywordRecipe.DISCOVERY_ADAPTERS
+        sources = [
+            {"adapter_name": "bytedance", "id": "1"},
+            {"adapter_name": "tencent", "id": "2"},
+            {"adapter_name": "apple", "id": "3"},       # 不在白名单
+            {"adapter_name": "greenhouse", "id": "4"},  # 未来源,暂不在白名单
+            {"adapter_name": "bytedance", "id": "5"},    # 同 adapter 第二家,应保留
+        ]
+        targets = discovery.select_discovery_targets(sources, allow)
+        ids = {t["id"] for t in targets}
+        self.assertEqual(ids, {"1", "2", "5"})
+
+    def test_select_targets_empty(self):
+        self.assertEqual(discovery.select_discovery_targets([], {"tencent": object}), [])
+        self.assertEqual(discovery.select_discovery_targets(None, {"tencent": object}), [])
+
+
 class FilterRawJobsTest(unittest.TestCase):
     def test_query_match_on_title_summary_type(self):
         self.assertTrue(discovery.job_matches_query(_job(title="后端工程师", summary="x", job_type="社招"), "后端"))

@@ -22,6 +22,7 @@ import normalizer
 from adapters.base import RawJob
 from adapters.bytedance import BytedanceAdapter
 from adapters.feishu import NioAdapter, XpengAdapter, HorizonAdapter, XiaomiAdapter
+from adapters.tencent import TencentAdapter
 
 
 def _now_iso() -> str:
@@ -69,6 +70,25 @@ def build_keyword_list_urls(adapter_name: str, query: str) -> Optional[List[str]
     return None
 
 
+def apply_keyword_to_adapter(adapter, adapter_name: str, query: str) -> None:
+    """把关键词注入支持服务端检索的适配器（字节=列表 URL，腾讯=API keyword）；
+    不支持的不动，靠 filter_raw_jobs 后置过滤兜底。"""
+    term = (query or "").strip()
+    if not term:
+        return
+    kw_urls = build_keyword_list_urls(adapter_name, term)
+    if kw_urls:
+        adapter.list_urls = kw_urls
+    if adapter_name == "tencent":
+        adapter.discovery_keyword = term
+
+
+def select_discovery_targets(sources, allowlist) -> list:
+    """从 sources 里挑出参与按需发现的源（adapter_name 在白名单内）。
+    保留同一 adapter 的多个公司（为 Greenhouse/Lever/ATS 等多公司单适配器铺路）。"""
+    return [s for s in (sources or []) if s.get("adapter_name") in allowlist]
+
+
 def job_matches_query(raw: RawJob, query: str) -> bool:
     """岗位是否命中关键词（标题/摘要/类型任一包含，大小写不敏感）。空 query 视为命中。"""
     term = (query or "").strip().lower()
@@ -105,16 +125,18 @@ def filter_raw_jobs(raw_jobs: List[RawJob], query: str, city: str) -> List[RawJo
 # 平台配方
 # ---------------------------------------------------------------------------
 class SpaKeywordRecipe:
-    """对已知官方 SPA 源（字节 + 飞书系）按关键词做浏览器拦截抓取并入库。"""
+    """对已知官方源（字节 + 飞书系 + 腾讯）按关键词做拦截/接口抓取并入库。"""
 
     key = "spa_keyword"
-    # adapter_name -> Adapter 类（与 run.py ADAPTERS / sources.adapter_name 对齐）
-    adapters = {
+    # adapter_name -> Adapter 类（与 run.py ADAPTERS / sources.adapter_name 对齐）。
+    # 多公司单适配器（未来 greenhouse/lever 等）也只需在此登记一次，靠 sources 行扩公司。
+    DISCOVERY_ADAPTERS = {
         "bytedance": BytedanceAdapter,
         "nio_feishu": NioAdapter,
         "xpeng_feishu": XpengAdapter,
         "horizon_feishu": HorizonAdapter,
         "xiaomi_feishu": XiaomiAdapter,
+        "tencent": TencentAdapter,
     }
     discovery_max_pages = 2  # 发现限页，控制 5min 预算
 
@@ -127,51 +149,53 @@ class SpaKeywordRecipe:
         city = params.get("city", "")
 
         sources = db.get_sources(supabase)
-        by_adapter = {s.get("adapter_name"): s for s in sources}
+        # 源驱动：遍历白名单内的每个 enabled source（支持同一 adapter 多公司）。
+        targets = select_discovery_targets(sources, self.DISCOVERY_ADAPTERS)
 
-        produced: List[str] = []
-        created = updated = 0
-        crawled_any = False
-        errors: List[str] = []
-
-        for adapter_name, adapter_cls in self.adapters.items():
-            source = by_adapter.get(adapter_name)
-            if not source:
-                continue  # 该源未入 sources 表（需 migration 010），跳过
-            crawled_any = True
-            try:
-                adapter = adapter_cls()
-                adapter.max_pages = min(getattr(adapter, "max_pages", 2), self.discovery_max_pages)
-                kw_urls = build_keyword_list_urls(adapter_name, query)
-                if kw_urls:
-                    adapter.list_urls = kw_urls
-
-                html = adapter.fetch(source["source_url"])
-                raw_jobs = adapter.parse(html)
-                matched = filter_raw_jobs(raw_jobs, query, city)
-                c, u, urls = _upsert_raw_jobs(
-                    supabase, source["id"], source["company"], source["source_url"], matched
-                )
-                created += c
-                updated += u
-                produced.extend(urls)
-                print(f"[discovery]   {adapter_name}: parsed={len(raw_jobs)} "
-                      f"matched={len(matched)} created={c} updated={u}")
-            except Exception as e:
-                errors.append(f"{adapter_name}: {type(e).__name__}: {e}")
-                print(f"[discovery]   {adapter_name}: FAILED {type(e).__name__}: {e}")
-                continue
-
-        if not crawled_any:
+        if not targets:
             return {
                 "status": "failed",
                 "failure_reason": "no_spa_sources_in_db",
-                "error_message": "No SPA source rows found; apply migration 010_seed_spa_sources.sql.",
+                "error_message": "No discovery source rows found; apply migration 010 (+ future seeds).",
                 "jobs_created": 0,
                 "jobs_updated": 0,
                 "candidates_found": 0,
                 "produced_jd_urls": [],
             }
+
+        produced: List[str] = []
+        created = updated = 0
+        errors: List[str] = []
+
+        for source in targets:
+            adapter_name = source.get("adapter_name")
+            adapter_cls = self.DISCOVERY_ADAPTERS.get(adapter_name)
+            if not adapter_cls:
+                continue
+            company = source.get("company") or adapter_name
+            try:
+                adapter = adapter_cls()
+                try:
+                    adapter.max_pages = min(getattr(adapter, "max_pages", 2), self.discovery_max_pages)
+                except Exception:
+                    pass
+                apply_keyword_to_adapter(adapter, adapter_name, query)
+
+                html = adapter.fetch(source["source_url"])
+                raw_jobs = adapter.parse(html)
+                matched = filter_raw_jobs(raw_jobs, query, city)
+                c, u, urls = _upsert_raw_jobs(
+                    supabase, source["id"], company, source["source_url"], matched
+                )
+                created += c
+                updated += u
+                produced.extend(urls)
+                print(f"[discovery]   {company}({adapter_name}): parsed={len(raw_jobs)} "
+                      f"matched={len(matched)} created={c} updated={u}")
+            except Exception as e:
+                errors.append(f"{adapter_name}: {type(e).__name__}: {e}")
+                print(f"[discovery]   {adapter_name}: FAILED {type(e).__name__}: {e}")
+                continue
 
         if produced:
             status = "success" if not errors else "partial_success"

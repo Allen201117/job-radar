@@ -38,7 +38,8 @@ class TencentAdapter(BaseAdapter):
                         "pageIndex": str(page),
                         "pageSize": str(self.PAGE_SIZE),
                         "language": "zh-cn",
-                        "keyword": "",
+                        # 默认 ""（全量，每日抓取行为不变）；按需发现时由 discovery 注入关键词做服务端检索
+                        "keyword": getattr(self, "discovery_keyword", "") or "",
                     },
                     headers=headers,
                     timeout=self.timeout,
