@@ -5,6 +5,32 @@ on:
     # UTC 00:00 = 新加坡/中国 08:00
     - cron: "0 0 * * *"
   workflow_dispatch:
+    # 手动触发 = 全量抓取；带 mode=discovery 的入参 = 按需「浏览器发现」（由 /api/discovery/dispatch 触发）。
+    inputs:
+      mode:
+        description: "discovery 时跑按需浏览器发现；留空跑全量抓取"
+        required: false
+        default: ""
+      run_id:
+        description: "discovery_runs.id（API 端已 insert 的 queued 行）"
+        required: false
+        default: ""
+      query:
+        description: "发现关键词"
+        required: false
+        default: ""
+      city:
+        description: "城市（可空）"
+        required: false
+        default: ""
+      job_type:
+        description: "岗位方向（可空）"
+        required: false
+        default: ""
+      limit:
+        description: "返回上限"
+        required: false
+        default: "30"
 
 jobs:
   crawl:
@@ -28,3 +54,10 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # 按需发现入参（schedule / 无 mode 的手动触发时为空 → 走全量抓取）
+          DISCOVERY_MODE: ${{ github.event.inputs.mode }}
+          DISCOVERY_RUN_ID: ${{ github.event.inputs.run_id }}
+          DISCOVERY_QUERY: ${{ github.event.inputs.query }}
+          DISCOVERY_CITY: ${{ github.event.inputs.city }}
+          DISCOVERY_JOB_TYPE: ${{ github.event.inputs.job_type }}
+          DISCOVERY_LIMIT: ${{ github.event.inputs.limit }}

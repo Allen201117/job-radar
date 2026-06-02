@@ -214,4 +214,11 @@ if __name__ == "__main__":
     parser.add_argument("--source", type=str, default=None,
                         help="只跑指定 adapter (apple/baidu/jd/haier/siemens)")
     args = parser.parse_args()
+
+    # 按需「浏览器发现」模式（GitHub Actions workflow_dispatch 触发，通过 DISCOVERY_* 环境变量传参）。
+    # 命中则跑发现并退出；否则走常规全量/单源抓取。
+    import discovery
+    if discovery.run_from_env():
+        sys.exit(0)
+
     run_crawl(filter_adapter=args.source)
