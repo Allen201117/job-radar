@@ -8,6 +8,7 @@ import { mapApiSearchJobsToScoredJobs } from "@/lib/client-job-mapping";
 import {
   jobMatchesChinaKeyword,
   normalizeChinaCity,
+  normalizeChinaJobType,
 } from "@/lib/china-keyword-expansion";
 import { classifyCompanyOrigin } from "@/lib/company-origin";
 import type { ScoredJob } from "@/lib/types";
@@ -96,7 +97,8 @@ export default function JobsClient({ initialJobs, companies }: Props) {
     const arr = allJobs.filter((job) => jobMatchesFilters(job, filters));
     arr.sort((a, b) =>
       filters.sortBy === "newest"
-        ? new Date(b.first_seen_at || 0).getTime() - new Date(a.first_seen_at || 0).getTime()
+        ? new Date(b.posted_at || b.first_seen_at || 0).getTime() -
+          new Date(a.posted_at || a.first_seen_at || 0).getTime()
         : (b.match_score || 0) - (a.match_score || 0),
     );
     return arr;
@@ -405,7 +407,17 @@ function jobMatchesFilters(job: ScoredJob, filters: Filters) {
       return false;
     }
   }
-  if (filters.jobType && !(job.job_type || "").includes(filters.jobType)) return false;
+  if (filters.jobType) {
+    const recruitType =
+      normalizeChinaJobType({
+        title: job.title,
+        sourceType: job.job_type,
+        summary: job.summary,
+      }) ||
+      job.job_type ||
+      "";
+    if (!recruitType.includes(filters.jobType)) return false;
+  }
   if (filters.keyword) {
     if (!jobMatchesChinaKeyword(job, filters.keyword)) return false;
   }

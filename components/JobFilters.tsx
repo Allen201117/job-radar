@@ -72,7 +72,7 @@ export default function JobFilters({ filters, onChange, companies }: Props) {
           <FilterLabel icon={SortAscending} label="排序" />
           <select value={filters.sortBy} onChange={(e) => set("sortBy", e.target.value)} className={selectClass}>
             <option value="match">按匹配度</option>
-            <option value="newest">按最新发现</option>
+            <option value="newest">按发布时间</option>
           </select>
         </div>
         <div>
