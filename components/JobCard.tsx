@@ -5,13 +5,16 @@ import {
   ArrowSquareOut,
   BookmarkSimple,
   Briefcase,
+  CalendarBlank,
   CaretDown,
   CheckCircle,
   GraduationCap,
+  Hourglass,
   MapPin,
   XCircle,
 } from "@phosphor-icons/react";
 import { createBrowserClient } from "@/lib/supabaseClient";
+import { normalizeChinaJobType } from "@/lib/china-keyword-expansion";
 import type { ScoredJob } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -25,20 +28,42 @@ type PrimaryAction = "saved" | "ignored" | "applied";
 function extractExperience(text?: string | null): string {
   if (!text) return "未知";
   const t = text.replace(/\s+/g, "");
-  if (/应届|无经验要求|经验不限|不限经验/.test(t)) return "应届/不限";
-  const m = t.match(/(\d+)[-~至](\d+)\s*年/) || t.match(/(\d+)\s*年(?:以上)?(?:工作)?经验/);
+  if (/应届|无经验要求|经验不限|不限经验|noexperience|entrylevel/i.test(t)) return "应届/不限";
+  let m = t.match(/(\d+)[-~至到](\d+)年/) || t.match(/(\d+)年(?:以上)?(?:工作)?经验/);
+  if (m) return m[2] ? `${m[1]}-${m[2]}年` : `${m[1]}年+`;
+  // 英文：3-5 years / 5+ years / 3 years experience（空格已去除）
+  m = t.match(/(\d+)[-~to]+(\d+)years?/i) || t.match(/(\d+)\+?years?(?:ofexperience)?/i);
   if (m) return m[2] ? `${m[1]}-${m[2]}年` : `${m[1]}年+`;
   return "未知";
 }
 
 function extractEducation(text?: string | null): string {
   if (!text) return "未知";
-  if (/博士/.test(text)) return "博士";
-  if (/硕士|研究生/.test(text)) return "硕士";
-  if (/本科/.test(text)) return "本科";
+  if (/博士|ph\.?d|doctora/i.test(text)) return "博士";
+  if (/硕士|研究生|master/i.test(text)) return "硕士";
+  if (/本科|学士|bachelor|undergrad/i.test(text)) return "本科";
   if (/大专|专科/.test(text)) return "大专";
   if (/学历不限|不限学历/.test(text)) return "不限";
   return "未知";
+}
+
+function extractDeadline(text?: string | null): string {
+  if (!text) return "未知";
+  if (/长期有效|长期招聘|long[\s-]?term|rolling|until filled/i.test(text)) return "长期有效";
+  const m = text.match(
+    /(?:截止|截至|申请截止|投递截止|deadline)[^0-9]{0,8}(\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2})/i,
+  );
+  if (m) return m[1].replace(/[年月]/g, "-").replace(/[./]/g, "-").replace(/-+$/, "");
+  return "未知";
+}
+
+function recruitTypeStyle(t: string): string {
+  if (/实习|intern/i.test(t)) return "border border-amber-300/25 bg-amber-300/15 text-amber-200";
+  if (/校招|管培|应届|graduate|campus|new grad/i.test(t))
+    return "border border-emerald-300/25 bg-emerald-300/15 text-emerald-200";
+  if (/社招|全职|experienced|professional/i.test(t))
+    return "border border-sky-300/25 bg-sky-300/15 text-sky-200";
+  return "border border-white/10 bg-white/10 text-white/62";
 }
 
 export default function JobCard({ job, onActionChange }: Props) {
@@ -54,6 +79,18 @@ export default function JobCard({ job, onActionChange }: Props) {
 
   const exp = useMemo(() => extractExperience(job.summary), [job.summary]);
   const edu = useMemo(() => extractEducation(job.summary), [job.summary]);
+  const deadline = useMemo(() => extractDeadline(job.summary), [job.summary]);
+  const recruitType = useMemo(
+    () =>
+      normalizeChinaJobType({
+        title: job.title,
+        sourceType: job.job_type,
+        summary: job.summary,
+      }) ||
+      job.job_type ||
+      null,
+    [job.title, job.job_type, job.summary],
+  );
 
   async function writeAction(action: PrimaryAction | null, prev: PrimaryAction | null) {
     try {
@@ -115,9 +152,9 @@ export default function JobCard({ job, onActionChange }: Props) {
   const isNew =
     job.first_seen_at &&
     (Date.now() - new Date(job.first_seen_at).getTime()) / 86400000 <= 3;
-  const seen = job.first_seen_at
-    ? new Date(job.first_seen_at).toLocaleDateString("zh-CN")
-    : "—";
+  const posted = job.posted_at
+    ? new Date(job.posted_at).toLocaleDateString("zh-CN")
+    : "未知";
 
   return (
     <article className="group rounded-[1.35rem] border border-white/10 bg-white/[0.065] p-5 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition duration-200 hover:-translate-y-0.5 hover:border-white/18 hover:bg-white/[0.085] hover:shadow-2xl hover:shadow-black/25">
@@ -125,9 +162,14 @@ export default function JobCard({ job, onActionChange }: Props) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-white/58">{job.company}</span>
-            {job.job_type && (
-              <span className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-xs font-medium text-white/62">
-                {job.job_type}
+            {recruitType && (
+              <span
+                className={cn(
+                  "rounded-full px-2.5 py-1 text-xs font-semibold",
+                  recruitTypeStyle(recruitType),
+                )}
+              >
+                {recruitType}
               </span>
             )}
             {isNew && (
@@ -161,8 +203,8 @@ export default function JobCard({ job, onActionChange }: Props) {
             <Field icon={Briefcase} label="薪资" value={job.salary_text || "官网未披露"} />
             <Field icon={GraduationCap} label="经验" value={exp} />
             <Field icon={GraduationCap} label="学历" value={edu} />
-            <Field icon={CheckCircle} label="发现" value={seen} />
-            <Field icon={Briefcase} label="截止投递" value="未知" />
+            <Field icon={CalendarBlank} label="发布" value={posted} />
+            <Field icon={Hourglass} label="截止" value={deadline} />
           </div>
 
           {job.summary && (

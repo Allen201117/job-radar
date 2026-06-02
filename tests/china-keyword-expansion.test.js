@@ -84,3 +84,19 @@ test("normalizes job fields without dropping original official URLs", () => {
   assert.equal(job.job_type, "实习");
   assert.equal(job.jd_url, "https://talent.baidu.com/jobs/detail/INTERN/abc");
 });
+
+test("bilingual: Chinese keyword matches English foreign-company jobs", () => {
+  assert.ok(jobMatchesChinaKeyword({ title: "Machine Learning Engineer", location: "Beijing" }, "人工智能"));
+  assert.ok(jobMatchesChinaKeyword({ title: "Senior Product Manager" }, "pm"));
+  assert.ok(jobMatchesChinaKeyword({ title: "Frontend Engineer" }, "前端"));
+  assert.ok(jobMatchesChinaKeyword({ title: "Backend Developer (Golang)" }, "后端"));
+  assert.ok(jobMatchesChinaKeyword({ title: "Data Scientist" }, "数据分析"));
+});
+
+test("short latin codes use word boundaries (no false positives)", () => {
+  // 'ai' should not match inside 'Maintenance'; 'go' not inside 'Google'
+  assert.equal(jobMatchesChinaKeyword({ title: "Maintenance Technician" }, "ai"), false);
+  assert.equal(jobMatchesChinaKeyword({ title: "Google Product role" }, "go"), false);
+  // but real standalone codes still match
+  assert.ok(jobMatchesChinaKeyword({ title: "AI Engineer" }, "ai"));
+});

@@ -143,7 +143,7 @@ class SpaKeywordRecipe:
         "greenhouse": GreenhouseAdapter,
         "lever": LeverAdapter,
     }
-    discovery_max_pages = 2  # 发现限页，控制 5min 预算
+    discovery_max_pages = 4  # 发现翻页（每页约 20，4 页≈80/家）；异步 CI 跑，容忍稍长
 
     def matches(self, query: str, city: str = "", company: str = "") -> bool:
         # 目前是唯一的种子配方：有关键词即适用。
