@@ -57,3 +57,18 @@ test("findCompanyProfile 全等优先于子串", () => {
   assert.equal(M.findCompanyProfile(profiles, "Microsoft (China)").company, "微软");
   assert.equal(M.findCompanyProfile(profiles, "不存在的公司"), null);
 });
+
+test("短拉丁别名不得误命中无关词（Reddit ≠ 小红书）", () => {
+  const profiles = [profile("小红书", ["RED", "Xiaohongshu", "xhs"])];
+  assert.equal(M.findCompanyProfile(profiles, "Reddit"), null);
+  assert.equal(M.companyMatches(profiles[0], "Reddit"), false);
+  // 真正的小红书写法仍命中
+  assert.equal(M.findCompanyProfile(profiles, "Xiaohongshu").company, "小红书");
+  assert.equal(M.companyMatches(profiles[0], "小红书"), true);
+});
+
+test("中文短名 + 城市后缀仍子串命中（腾讯深圳 → 腾讯）", () => {
+  const profiles = [profile("腾讯", ["Tencent"])];
+  assert.equal(M.findCompanyProfile(profiles, "腾讯（深圳）").company, "腾讯");
+  assert.equal(M.companyMatches(profiles[0], "腾讯科技（北京）"), true);
+});
