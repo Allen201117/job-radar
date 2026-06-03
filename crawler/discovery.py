@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from urllib.parse import quote
 
+import china_keyword_expansion as cke
 import db
 import normalizer
 from adapters.base import RawJob
@@ -29,6 +30,12 @@ from adapters.lever import LeverAdapter
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# 发现每源翻页默认上限（每页约 20 → 4 页≈80/家）。可被 DISCOVERY_MAX_PAGES 覆盖以按 CI 耗时权衡产出量。
+# 注意是「每源」深度而非总量上限 —— 发现的价值在广度（多官方源），故不做跨源总量截断。
+DEFAULT_DISCOVERY_MAX_PAGES = 4
+MAX_DISCOVERY_MAX_PAGES = 10
 
 
 # ---------------------------------------------------------------------------
@@ -49,12 +56,20 @@ def parse_discovery_env(env: dict) -> Optional[dict]:
         limit = 30
     limit = max(1, min(limit, 60))
 
+    pages_raw = str(env.get("DISCOVERY_MAX_PAGES") or "").strip()
+    try:
+        max_pages = int(pages_raw) if pages_raw else DEFAULT_DISCOVERY_MAX_PAGES
+    except ValueError:
+        max_pages = DEFAULT_DISCOVERY_MAX_PAGES
+    max_pages = max(1, min(max_pages, MAX_DISCOVERY_MAX_PAGES))
+
     return {
         "run_id": run_id,
         "query": query,
         "city": str(env.get("DISCOVERY_CITY") or "").strip(),
         "job_type": str(env.get("DISCOVERY_JOB_TYPE") or "").strip(),
         "limit": limit,
+        "max_pages": max_pages,
     }
 
 
@@ -92,14 +107,12 @@ def select_discovery_targets(sources, allowlist) -> list:
 
 
 def job_matches_query(raw: RawJob, query: str) -> bool:
-    """岗位是否命中关键词（标题/摘要/类型任一包含，大小写不敏感）。空 query 视为命中。"""
-    term = (query or "").strip().lower()
-    if not term:
-        return True
+    """岗位是否命中关键词。双语同义词扩展 + 短缩写词边界，搜 标题/公司/地点/类型/摘要/薪资 —
+    与前端看板 jobMatchesChinaKeyword 同口径，让中文发现词也能命中英文外企岗。空 query 视为命中。"""
     haystack = " ".join(
-        filter(None, [raw.title, raw.summary, raw.job_type])
-    ).lower()
-    return term in haystack
+        filter(None, [raw.title, raw.company, raw.location, raw.job_type, raw.summary, raw.salary_text])
+    )
+    return cke.query_matches(haystack, query)
 
 
 def job_matches_city(raw: RawJob, city: str) -> bool:
@@ -143,7 +156,7 @@ class SpaKeywordRecipe:
         "greenhouse": GreenhouseAdapter,
         "lever": LeverAdapter,
     }
-    discovery_max_pages = 4  # 发现翻页（每页约 20，4 页≈80/家）；异步 CI 跑，容忍稍长
+    discovery_max_pages = DEFAULT_DISCOVERY_MAX_PAGES  # 默认每源翻页；可被 params["max_pages"]（DISCOVERY_MAX_PAGES）覆盖
 
     def matches(self, query: str, city: str = "", company: str = "") -> bool:
         # 目前是唯一的种子配方：有关键词即适用。
@@ -152,6 +165,7 @@ class SpaKeywordRecipe:
     def run(self, supabase, params: dict) -> dict:
         query = params["query"]
         city = params.get("city", "")
+        max_pages = params.get("max_pages") or self.discovery_max_pages
 
         sources = db.get_sources(supabase)
         # 源驱动：遍历白名单内的每个 enabled source（支持同一 adapter 多公司）。
@@ -181,7 +195,7 @@ class SpaKeywordRecipe:
             try:
                 adapter = adapter_cls()
                 try:
-                    adapter.max_pages = min(getattr(adapter, "max_pages", 2), self.discovery_max_pages)
+                    adapter.max_pages = min(getattr(adapter, "max_pages", 2), max_pages)
                 except Exception:
                     pass
                 apply_keyword_to_adapter(adapter, adapter_name, query)

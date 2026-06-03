@@ -233,7 +233,10 @@ def keep_for_china_radar(location: Optional[str]) -> bool:
     return False
 
 
-# 各招聘接口里常见的"发布/更新时间"字段名（防御式：命中哪个用哪个，缺失则 None，不伪造）
+# 各招聘接口里常见的"发布/更新时间"字段名（防御式：命中哪个用哪个，缺失则 None，不伪造）。
+# 已 live 确认（2026-06-02，浏览器拦截 /api/v1/search/job/posts）：Feishu/Lark 招聘平台
+# —— 字节 jobs.bytedance.com + 飞书系 *.jobs.feishu.cn（蔚来/小鹏/地平线/小米）—— 顶层字段就叫
+# `publish_time`（epoch 毫秒），10/10 岗位均有值。其余字段名为其它平台保留的兜底候选。
 PUBLISH_TIME_FIELDS = (
     "publish_time", "publishTime", "first_publish_time", "online_time", "onlineTime",
     "create_time", "createTime", "update_time", "updateTime", "modify_time",

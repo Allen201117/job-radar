@@ -43,6 +43,17 @@ class ParseDiscoveryEnvTest(unittest.TestCase):
         self.assertEqual(discovery.parse_discovery_env({**base, "DISCOVERY_LIMIT": "nope"})["limit"], 30)
         self.assertEqual(discovery.parse_discovery_env({**base, "DISCOVERY_LIMIT": "0"})["limit"], 1)
 
+    def test_max_pages_defaults_and_clamps(self):
+        base = {"DISCOVERY_MODE": "discovery", "DISCOVERY_RUN_ID": "r", "DISCOVERY_QUERY": "x"}
+        self.assertEqual(discovery.parse_discovery_env(base)["max_pages"],
+                         discovery.DEFAULT_DISCOVERY_MAX_PAGES)  # 缺省 = 默认 4
+        self.assertEqual(discovery.parse_discovery_env({**base, "DISCOVERY_MAX_PAGES": "7"})["max_pages"], 7)
+        self.assertEqual(discovery.parse_discovery_env({**base, "DISCOVERY_MAX_PAGES": "nope"})["max_pages"],
+                         discovery.DEFAULT_DISCOVERY_MAX_PAGES)  # 非数字 → 默认
+        self.assertEqual(discovery.parse_discovery_env({**base, "DISCOVERY_MAX_PAGES": "0"})["max_pages"], 1)  # 下限
+        self.assertEqual(discovery.parse_discovery_env({**base, "DISCOVERY_MAX_PAGES": "999"})["max_pages"],
+                         discovery.MAX_DISCOVERY_MAX_PAGES)  # 上限钳制
+
 
 class ResolveRecipeTest(unittest.TestCase):
     def test_seed_recipe_matches_any_query(self):
@@ -144,6 +155,38 @@ class FilterRawJobsTest(unittest.TestCase):
         self.assertEqual(out[0].title, "算法工程师")
 
 
+def _en_job(title="Machine Learning Engineer", location="Beijing, China",
+            summary="Build recommendation models", company="Airbnb"):
+    return RawJob(company=company, title=title, location=location, job_type="Full Time",
+                  summary=summary, jd_url="https://boards.greenhouse.io/airbnb/jobs/1",
+                  apply_url="https://boards.greenhouse.io/airbnb/jobs/1")
+
+
+class BilingualKeywordMatchTest(unittest.TestCase):
+    """发现端关键词匹配与前端看板同口径：中文发现词命中英文外企岗（核心 #4）。"""
+
+    def test_chinese_query_matches_english_job(self):
+        self.assertTrue(discovery.job_matches_query(_en_job(title="Machine Learning Engineer"), "算法"))
+        self.assertTrue(discovery.job_matches_query(_en_job(title="Product Manager, Growth"), "产品"))
+
+    def test_english_query_matches_chinese_job(self):
+        self.assertTrue(discovery.job_matches_query(_job(title="后端工程师", summary="服务端开发"), "backend"))
+
+    def test_no_false_positive_via_short_abbrev(self):
+        # 「算法」扩展含 "ai"，但 maintain/maintenance 不应被命中
+        self.assertFalse(discovery.job_matches_query(
+            _en_job(title="Maintenance Technician", summary="maintain systems"), "算法"))
+
+    def test_filter_keeps_english_job_in_target_city(self):
+        jobs = [
+            _en_job(title="Machine Learning Engineer", location="Beijing, China"),
+            _en_job(title="Machine Learning Engineer", location="San Francisco"),  # 命中词但城市不符
+        ]
+        out = discovery.filter_raw_jobs(jobs, "算法", "北京")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].location, "Beijing, China")
+
+
 class RunDiscoveryLifecycleTest(unittest.TestCase):
     def _capture_updates(self):
         calls = []
@@ -203,6 +246,65 @@ class RunDiscoveryLifecycleTest(unittest.TestCase):
         self.assertEqual(summary["failure_reason"], "no_recipe_matched")
         self.assertEqual(calls[0][1].get("status"), "running")
         self.assertEqual(calls[-1][1].get("status"), "failed")
+
+
+class DiscoveryMaxPagesWiringTest(unittest.TestCase):
+    """run() 用 params["max_pages"] 钳制每源翻页（#6 发现产出量可调），不打网络。"""
+
+    def test_run_caps_adapter_max_pages_from_params(self):
+        captured = []
+
+        class _CapAdapter:
+            max_pages = 99  # adapter 自带的高默认，应被发现配方钳到 params 值
+
+            def fetch(self, url):
+                captured.append(self.max_pages)  # fetch 在钳制之后调用
+                return "{}"
+
+            def parse(self, html):
+                return []
+
+        recipe = discovery.SpaKeywordRecipe()
+        recipe.DISCOVERY_ADAPTERS = {"greenhouse": _CapAdapter}
+        orig_get_sources = discovery.db.get_sources
+        discovery.db.get_sources = lambda supabase: [
+            {"adapter_name": "greenhouse", "id": "1", "company": "X",
+             "source_url": "https://example.com/api"}
+        ]
+        try:
+            recipe.run(supabase=object(),
+                       params={"query": "算法", "city": "", "max_pages": 2})
+        finally:
+            discovery.db.get_sources = orig_get_sources
+
+        self.assertEqual(captured, [2])  # 99 -> 钳到 2
+
+    def test_run_falls_back_to_default_when_no_param(self):
+        captured = []
+
+        class _CapAdapter:
+            max_pages = 99
+
+            def fetch(self, url):
+                captured.append(self.max_pages)
+                return "{}"
+
+            def parse(self, html):
+                return []
+
+        recipe = discovery.SpaKeywordRecipe()
+        recipe.DISCOVERY_ADAPTERS = {"greenhouse": _CapAdapter}
+        orig_get_sources = discovery.db.get_sources
+        discovery.db.get_sources = lambda supabase: [
+            {"adapter_name": "greenhouse", "id": "1", "company": "X",
+             "source_url": "https://example.com/api"}
+        ]
+        try:
+            recipe.run(supabase=object(), params={"query": "算法", "city": ""})  # 无 max_pages
+        finally:
+            discovery.db.get_sources = orig_get_sources
+
+        self.assertEqual(captured, [discovery.DEFAULT_DISCOVERY_MAX_PAGES])  # 回退默认 4
 
 
 if __name__ == "__main__":

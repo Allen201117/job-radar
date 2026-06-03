@@ -31,6 +31,10 @@ on:
         description: "返回上限"
         required: false
         default: "30"
+      max_pages:
+        description: "每源翻页上限（发现产出量↔CI 耗时权衡，1-10，默认 4）"
+        required: false
+        default: "4"
 
 jobs:
   crawl:
@@ -61,3 +65,4 @@ jobs:
           DISCOVERY_CITY: ${{ github.event.inputs.city }}
           DISCOVERY_JOB_TYPE: ${{ github.event.inputs.job_type }}
           DISCOVERY_LIMIT: ${{ github.event.inputs.limit }}
+          DISCOVERY_MAX_PAGES: ${{ github.event.inputs.max_pages }}
