@@ -235,3 +235,45 @@ export interface InsightDispute {
   created_at: string;
   resolved_at: string | null;
 }
+
+// ============================================================
+// ③ 个性化职业路径（career path，确定性引擎）
+// ============================================================
+
+export type TimingStatusKind = "open" | "rolling" | "closed" | "unknown";
+
+export interface CareerTimingStatus {
+  status: TimingStatusKind;
+  label: string; // 招聘窗口期 / 全年滚动 / 可能非窗口期 / 未知
+  detail: string | null; // 对应 time_window 文本
+}
+
+export interface CareerCompanyRec {
+  company: string;
+  display_name: string | null;
+  timing: CareerTimingStatus;
+  job_count: number;
+  comp_note: string | null; // 性价比一句（来自 comp 洞察）
+  caution_note: string | null; // 温馨提示一句（来自 culture 洞察）
+  reasons: string[]; // 排在此位的理由
+}
+
+export interface CareerNote {
+  company: string;
+  title: string | null;
+  content: string;
+}
+
+export interface CareerPathReport {
+  has_profile: boolean;
+  profile_summary: {
+    target_roles: string[];
+    seniority: string | null;
+    target_locations: string[];
+  };
+  is_recommended_fallback: boolean; // true=用户未设目标公司，给出的是种子推荐
+  recommendations: CareerCompanyRec[];
+  path_notes: CareerNote[];
+  cautions: CareerNote[];
+  failure_reason: "no_profile" | "insight_unverified" | null;
+}
