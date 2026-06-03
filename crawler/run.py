@@ -151,6 +151,10 @@ def run_crawl(filter_adapter: str = None):
                 salary = normalizer.clean_salary(raw.salary_text)
                 job_type = normalizer.extract_job_type(title, summary) or raw.job_type
                 content_hash = normalizer.make_content_hash(title, location, summary)
+                # 结构化字段从**完整** raw.summary 抽取（在 clean_summary 截断之前），adapter 直填的优先
+                experience = raw.experience or normalizer.extract_experience(raw.summary)
+                education = raw.education or normalizer.extract_education(raw.summary)
+                deadline = raw.deadline or normalizer.extract_deadline(raw.summary)
 
                 job_data = {
                     "source_id": source_id,
@@ -163,6 +167,9 @@ def run_crawl(filter_adapter: str = None):
                     "apply_url": raw.apply_url,
                     "salary_text": salary,
                     "posted_at": raw.posted_at,
+                    "experience": experience,
+                    "education": education,
+                    "deadline": deadline,
                     "content_hash": content_hash,
                     "status": "active",
                 }

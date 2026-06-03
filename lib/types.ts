@@ -10,6 +10,9 @@ export interface Job {
   apply_url: string | null;
   salary_text: string | null;
   posted_at: string | null;
+  experience: string | null;
+  education: string | null;
+  deadline: string | null;
   first_seen_at: string;
   last_seen_at: string;
   status: string;
