@@ -7,11 +7,13 @@ export type Lang = "zh" | "en";
 const DICT: Record<string, { zh: string; en: string }> = {
   today: { zh: "今日看板", en: "Today" },
   jobs: { zh: "岗位库", en: "Jobs" },
+  path: { zh: "职业路径", en: "Career Path" },
   preferences: { zh: "求职偏好", en: "Preferences" },
   me: { zh: "个人主页", en: "Profile" },
   saved: { zh: "我的收藏", en: "Saved" },
   applied: { zh: "我的投递", en: "Applied" },
   sources: { zh: "源管理", en: "Sources" },
+  insightsAdmin: { zh: "洞察管理", en: "Insights Admin" },
   logout: { zh: "退出", en: "Log out" },
 };
 

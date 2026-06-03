@@ -11,14 +11,17 @@ import {
   Briefcase,
   Broadcast,
   CheckCircle,
+  Compass,
   Database,
   SlidersHorizontal,
+  Sparkle,
   UserCircle,
 } from "@phosphor-icons/react";
 
 const LINKS = [
   { href: "/today", key: "today", icon: Broadcast },
   { href: "/jobs", key: "jobs", icon: Briefcase },
+  { href: "/path", key: "path", icon: Compass },
   { href: "/preferences", key: "preferences", icon: SlidersHorizontal },
   { href: "/me", key: "me", icon: UserCircle },
   { href: "/saved", key: "saved", icon: BookmarkSimple },
@@ -49,7 +52,13 @@ export default function Navbar() {
     });
   }, []);
 
-  const links = isAdmin ? [...LINKS, { href: "/sources", key: "sources", icon: Database }] : LINKS;
+  const links = isAdmin
+    ? [
+        ...LINKS,
+        { href: "/admin/insights", key: "insightsAdmin", icon: Sparkle },
+        { href: "/sources", key: "sources", icon: Database },
+      ]
+    : LINKS;
 
   async function handleLogout() {
     await supabase.auth.signOut();

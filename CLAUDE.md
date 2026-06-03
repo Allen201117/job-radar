@@ -56,22 +56,35 @@ node --test tests/*.test.js && \
 app/                     # Next.js App Router 页面
   page.tsx / today-client.tsx     # Today 今日看板
   jobs/                  # Jobs 岗位库（jobs-client.tsx）
+  path/                  # 职业路径（模块 ③，path-client.tsx）
   preferences/ saved/ applied/    # 偏好 / 收藏 / 已投递
-  sources/               # Sources 源管理（仅管理员）
+  sources/               # Sources 源管理（仅管理员）：列表 + 「添加源」表单（SourceManager）
+  admin/insights/        # 洞察管理页（仅管理员）：列/增/改/下架洞察 + 处理申诉（InsightsAdminClient）
   login/ auth/callback/  # 登录与 OAuth 回调
   api/search|discovery|resume/route.ts   # 岗位层后端入口
+  api/sources/route.ts   # admin 加招聘源（service-role 写 sources，绕 RLS 无 INSERT 策略）
   api/insights/route.ts + insights/dispute/route.ts   # 模块 B 职业洞察读/录入/申诉
-components/              # JobCard / JobFilters / PreferenceForm / SourceTable / Navbar / ResumeProfilePanel
-                         # CompanyInsightDrawer（公司洞察抽屉，从 JobCard 打开）
+  api/insights/admin/route.ts          # admin 洞察后台：GET 列全部 / POST 增改(过校验门) / PATCH 上下架
+  api/insights/dispute/resolve/route.ts # admin 处理申诉：upheld(下架对应 item) / rejected
+  api/career-path/route.ts   # 模块 ③ 个性化职业路径（确定性引擎，无 LLM）
+components/              # JobCard / JobFilters / PreferenceForm / Navbar / ResumeProfilePanel
+                         # SourceTable（presentational，含 reloadSignal）/ SourceManager / AddSourceForm（A1）
+                         # InsightsAdminClient（洞察管理页客户端，A2）
+                         # CompanyInsightDrawer（公司洞察抽屉，从 JobCard 打开；portal 到 body 防闪烁）
 lib/                     # 工具层：supabaseClient、auth、scoring、types、utils
+                         # supabaseService（service-role 客户端工厂，admin 写库共用）
+                         # source-adapters（adapter/抓取方式白名单 + validateSourceInput 纯函数）
                          # live-search（已知源刷新格式化/校验）、official-discovery、
                          # baidu-qianfan-search、china-keyword-expansion、china-official-sources、client-job-mapping
                          # insight-verification（分级/时效/去标识/归因 纯函数）、insight-match（公司归一匹配）、insight-client（浏览器去重缓存）
+                         # insight-bundle（洞察展示门复用）、career-path（确定性职业路径引擎，无 LLM，模块 ③）
 crawler/                 # adapters/{base,apple,siemens,baidu,jd,haier}.py + run.py / db.py / normalizer.py / robots.py
 supabase/migrations/     # 001_init → 002_rls → … → 007_candidate_profile_summaries
                          # → 008_discovery_run_diagnostics → 009_discovery_async_runs → 010_seed_spa_sources
                          # → 011_seed_foreign_ats_sources → 012_seed_apple_china_source
                          # → 013_career_insights（模块 B 5 表 + RLS）→ 014_seed_career_insights（四维种子草稿）
+                         # → 015_verify_experience_sources（experience 真实来源核验）
+                         # → 016_rewrite_culture_and_experience_copy（去「避坑」+ 9 条 experience 正文改通俗）
 .github/workflows/daily-crawl.yml   # 每日 + 手动抓取
 tests/                   # node --test 单测
 ```
@@ -104,7 +117,8 @@ tests/                   # node --test 单测
 四维 `dimension`：`timing`(事实为主) / `compensation_intensity` / `path` / `culture`(做浅重免责)。
 三级 `grade`：`fact`(须带来源) / `experience`(须 sample_size≥5 且多源) / `rumor`(默认拦截)。
 展示前必过 `lib/insight-verification.ts` 的分级/时效/去标识/归因门；无可信结果返回 `insight_unverified` / `insight_outdated`。
-**数据来源 = 人工策展 seed + admin 录入，不接 LLM、不爬社区。** 014 种子为待人工核实草稿（尤其 experience 维度的 sample_size 与聚合来源 URL 为示意占位，上线前须替换核验）。
+**数据来源 = 人工策展 seed + admin 录入，不接 LLM、不爬社区。** 014 种子为待人工核实草稿；015 已用真实公开链接核验 experience 来源；016 把 culture 的「（避坑提示）」改「温馨提示」、9 条 experience 正文改通俗（去掉逐条媒体罗列，正文只留一句轻量归因「据公开讨论/据公开报道」以过 `passesAssertionLint`，统一「来源聚合·去标识」声明只在抽屉顶部 banner 出现一次）。
+**日常维护全程网页、零 SQL**：admin 在 `/admin/insights` 增/改/下架洞察、贴来源、处理申诉（走 `/api/insights/admin` + `/api/insights/dispute/resolve`，service-role 写、必过校验门）；在 `/sources` 用「添加源」表单加招聘源（走 `/api/sources`）。`adapter_name` 取值见 `lib/source-adapters.ts`（须与 `crawler/run.py` 的 ADAPTERS 对齐；greenhouse/lever 是通用 ATS，填公司名+ATS 地址即可）。
 
 ## 三层「搜索」必须区分（高频踩坑点）
 

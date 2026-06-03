@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { createBrowserClient } from "@/lib/supabaseClient";
 import type { Source, CrawlRun } from "@/lib/types";
 
-export default function SourceTable() {
+export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: number }) {
   const [sources, setSources] = useState<Source[]>([]);
   const [latestRuns, setLatestRuns] = useState<Record<string, CrawlRun>>({});
   const [loading, setLoading] = useState(true);
@@ -12,7 +12,8 @@ export default function SourceTable() {
 
   useEffect(() => {
     loadData();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadSignal]);
 
   async function loadData() {
     const { data: srcData } = await supabase
