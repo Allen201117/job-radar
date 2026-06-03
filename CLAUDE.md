@@ -59,14 +59,19 @@ app/                     # Next.js App Router 页面
   preferences/ saved/ applied/    # 偏好 / 收藏 / 已投递
   sources/               # Sources 源管理（仅管理员）
   login/ auth/callback/  # 登录与 OAuth 回调
-  api/search|discovery|resume/route.ts   # 三个后端入口
+  api/search|discovery|resume/route.ts   # 岗位层后端入口
+  api/insights/route.ts + insights/dispute/route.ts   # 模块 B 职业洞察读/录入/申诉
 components/              # JobCard / JobFilters / PreferenceForm / SourceTable / Navbar / ResumeProfilePanel
+                         # CompanyInsightDrawer（公司洞察抽屉，从 JobCard 打开）
 lib/                     # 工具层：supabaseClient、auth、scoring、types、utils
                          # live-search（已知源刷新格式化/校验）、official-discovery、
                          # baidu-qianfan-search、china-keyword-expansion、china-official-sources、client-job-mapping
+                         # insight-verification（分级/时效/去标识/归因 纯函数）、insight-match（公司归一匹配）、insight-client（浏览器去重缓存）
 crawler/                 # adapters/{base,apple,siemens,baidu,jd,haier}.py + run.py / db.py / normalizer.py / robots.py
-supabase/migrations/     # 001_init → 002_rls → 003_seed_sources → 004_update_source_urls
-                         # → 005_source_candidates → 006_resume_profiles → 007_candidate_profile_summaries
+supabase/migrations/     # 001_init → 002_rls → … → 007_candidate_profile_summaries
+                         # → 008_discovery_run_diagnostics → 009_discovery_async_runs → 010_seed_spa_sources
+                         # → 011_seed_foreign_ats_sources → 012_seed_apple_china_source
+                         # → 013_career_insights（模块 B 5 表 + RLS）→ 014_seed_career_insights（四维种子草稿）
 .github/workflows/daily-crawl.yml   # 每日 + 手动抓取
 tests/                   # node --test 单测
 ```
@@ -85,6 +90,21 @@ tests/                   # node --test 单测
 | discovery_runs | 官方源发现日志 | admin 读，service role 写 |
 
 共享 `jobs`，偏好与操作按 `user_id` 隔离（同一岗位可被 A 标投递、B 标收藏）。
+
+### 模块 B 职业洞察层（migration 013/014，与岗位层严格分离）
+
+| 表 | 用途 | 权限 |
+|---|---|---|
+| company_profiles | 公司画像（company 唯一 + aliases 对齐 jobs.company） | 所有人读，admin/service 写 |
+| insight_items | 洞察条目（dimension/grade/content/时效/payload） | 读仅 `active+deidentified`，admin/service 写 |
+| insight_sources | 溯源（链接 + 短摘要，禁整段原文） | 读仅 `deidentified`，admin/service 写 |
+| insight_item_sources | 条目↔来源 多对多 | 所有人读，admin/service 写 |
+| insight_disputes | 通知-删除申诉（§7.3） | 用户可插/读自己，admin 读全部+改状态 |
+
+四维 `dimension`：`timing`(事实为主) / `compensation_intensity` / `path` / `culture`(做浅重免责)。
+三级 `grade`：`fact`(须带来源) / `experience`(须 sample_size≥5 且多源) / `rumor`(默认拦截)。
+展示前必过 `lib/insight-verification.ts` 的分级/时效/去标识/归因门；无可信结果返回 `insight_unverified` / `insight_outdated`。
+**数据来源 = 人工策展 seed + admin 录入，不接 LLM、不爬社区。** 014 种子为待人工核实草稿（尤其 experience 维度的 sample_size 与聚合来源 URL 为示意占位，上线前须替换核验）。
 
 ## 三层「搜索」必须区分（高频踩坑点）
 

@@ -11,10 +11,13 @@ import {
   GraduationCap,
   Hourglass,
   MapPin,
+  Sparkle,
   XCircle,
 } from "@phosphor-icons/react";
 import { createBrowserClient } from "@/lib/supabaseClient";
 import { normalizeChinaJobType } from "@/lib/china-keyword-expansion";
+import CompanyInsightDrawer from "@/components/CompanyInsightDrawer";
+import { fetchCompanyInsights, getCachedInsights } from "@/lib/insight-client";
 import type { ScoredJob } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -71,11 +74,32 @@ export default function JobCard({ job, onActionChange }: Props) {
   const [currentAction, setCurrentAction] = useState(job.user_action);
   const [actionError, setActionError] = useState("");
   const [expanded, setExpanded] = useState(false);
+  const [insightOpen, setInsightOpen] = useState(false);
+  const [timingHint, setTimingHint] = useState<string | null>(null);
   const supabase = createBrowserClient();
 
   useEffect(() => {
     setCurrentAction(job.user_action);
   }, [job.user_action]);
+
+  // 懒取该公司洞察（client 层按公司去重缓存），有时机洞察则在卡片上提示
+  useEffect(() => {
+    if (!job.company) return;
+    let alive = true;
+    const apply = (res: ReturnType<typeof getCachedInsights>) => {
+      const timing = res?.dimensions?.timing?.[0];
+      if (alive && timing) setTimingHint(timing.title || timing.time_window || "查看招聘时机");
+    };
+    const cached = getCachedInsights(job.company);
+    if (cached) {
+      apply(cached);
+      return;
+    }
+    void fetchCompanyInsights(job.company).then((res) => apply(res));
+    return () => {
+      alive = false;
+    };
+  }, [job.company]);
 
   const exp = useMemo(() => extractExperience(job.summary), [job.summary]);
   const edu = useMemo(() => extractEducation(job.summary), [job.summary]);
@@ -188,6 +212,15 @@ export default function JobCard({ job, onActionChange }: Props) {
                       : ""}
               </span>
             )}
+            <button
+              type="button"
+              onClick={() => setInsightOpen(true)}
+              title="查看该公司的职业洞察（社区聚合·非官方）"
+              className="inline-flex items-center gap-1 rounded-full border border-violet-300/25 bg-violet-300/12 px-2.5 py-1 text-xs font-medium text-violet-200 transition hover:border-violet-300/40 hover:bg-violet-300/20"
+            >
+              <Sparkle size={12} weight="fill" aria-hidden="true" />
+              {timingHint ? `时机: ${timingHint}` : "职业洞察"}
+            </button>
           </div>
 
           <button
@@ -302,6 +335,12 @@ export default function JobCard({ job, onActionChange }: Props) {
           )}
         </div>
       </div>
+
+      <CompanyInsightDrawer
+        company={job.company}
+        open={insightOpen}
+        onClose={() => setInsightOpen(false)}
+      />
     </article>
   );
 }

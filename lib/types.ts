@@ -146,3 +146,89 @@ export interface ScoredJob extends Job {
   hidden_reason: string | null;
   user_action: string | null;
 }
+
+// ============================================================
+// 模块 B 职业洞察层（career insights）
+// ============================================================
+
+export type InsightDimension =
+  | "timing"
+  | "compensation_intensity"
+  | "path"
+  | "culture";
+
+export type InsightGrade = "fact" | "experience" | "rumor";
+
+export type InsightStatus = "active" | "disputed" | "retired";
+
+export type InsightSourceKind =
+  | "official_filing"
+  | "official_site"
+  | "campus_announcement"
+  | "public_aggregate"
+  | "community_deidentified";
+
+export interface CompanyProfile {
+  id: string;
+  company: string;
+  display_name: string | null;
+  aliases: string[];
+  summary: string | null;
+  last_verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InsightSource {
+  id: string;
+  url: string;
+  publisher: string | null;
+  source_kind: InsightSourceKind | null;
+  excerpt: string | null;
+  collected_at: string | null;
+  deidentified: boolean;
+  created_at: string;
+}
+
+export interface InsightItem {
+  id: string;
+  company_id: string;
+  dimension: InsightDimension;
+  grade: InsightGrade;
+  title: string | null;
+  content: string;
+  sample_size: number | null;
+  payload: Record<string, unknown>;
+  time_window: string | null;
+  valid_from: string | null;
+  valid_until: string | null;
+  last_verified_at: string;
+  deidentified: boolean;
+  status: InsightStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+// 带溯源 + 时效标记的展示态条目
+export interface InsightItemView extends InsightItem {
+  sources: InsightSource[];
+  outdated: boolean;
+}
+
+// /api/insights 按公司聚合的响应
+export interface CompanyInsightBundle {
+  company: CompanyProfile;
+  // 按 dimension 分组的展示态条目
+  dimensions: Record<InsightDimension, InsightItemView[]>;
+}
+
+export interface InsightDispute {
+  id: string;
+  item_id: string;
+  reporter_user_id: string | null;
+  reason: string | null;
+  contact: string | null;
+  status: "open" | "upheld" | "rejected";
+  created_at: string;
+  resolved_at: string | null;
+}
