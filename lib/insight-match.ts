@@ -23,6 +23,28 @@ export function normalizeCompany(input: string | null | undefined): string {
   return s;
 }
 
+function hasCJK(s: string): boolean {
+  return /[一-鿿]/.test(s);
+}
+
+// 子串匹配的资格门：含中文（公司名独特，子串安全）或长度 >= 5。
+// 防止「RED」「xhs」这类短拉丁别名误命中「reddit」等无关词。
+function eligibleForSubstring(s: string): boolean {
+  return hasCJK(s) || s.length >= 5;
+}
+
+// n、q 均为归一化后的非空串：全等，或「被包含方有资格」的子串命中
+function nameMatches(n: string, q: string): boolean {
+  if (n === q) return true;
+  if (n.includes(q) && eligibleForSubstring(q)) return true;
+  if (q.includes(n) && eligibleForSubstring(n)) return true;
+  return false;
+}
+
+function profileNames(p: Pick<CompanyProfile, "company" | "aliases">): string[] {
+  return [p.company, ...(p.aliases || [])].map(normalizeCompany).filter(Boolean);
+}
+
 // query 是否命中某个画像的 company 或任一 alias
 export function companyMatches(
   profile: Pick<CompanyProfile, "company" | "aliases">,
@@ -30,13 +52,10 @@ export function companyMatches(
 ): boolean {
   const q = normalizeCompany(query);
   if (!q) return false;
-  const names = [profile.company, ...(profile.aliases || [])]
-    .map(normalizeCompany)
-    .filter(Boolean);
-  return names.some((n) => n === q || n.includes(q) || q.includes(n));
+  return profileNames(profile).some((n) => nameMatches(n, q));
 }
 
-// 在画像列表中找最佳匹配：优先归一化全等，其次子串包含
+// 在画像列表中找最佳匹配：优先归一化全等，其次（有资格的）子串包含
 export function findCompanyProfile(
   profiles: CompanyProfile[],
   query: string,
@@ -46,9 +65,9 @@ export function findCompanyProfile(
 
   let substringHit: CompanyProfile | null = null;
   for (const p of profiles) {
-    const names = [p.company, ...(p.aliases || [])].map(normalizeCompany).filter(Boolean);
+    const names = profileNames(p);
     if (names.some((n) => n === q)) return p; // 全等优先
-    if (!substringHit && names.some((n) => n.includes(q) || q.includes(n))) {
+    if (!substringHit && names.some((n) => nameMatches(n, q))) {
       substringHit = p;
     }
   }

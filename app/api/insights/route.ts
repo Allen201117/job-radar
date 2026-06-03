@@ -2,47 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase } from "@/lib/auth";
 import { findCompanyProfile } from "@/lib/insight-match";
+import { evaluateInsight, resolveInsightFailure } from "@/lib/insight-verification";
 import {
-  evaluateInsight,
-  resolveInsightFailure,
-  type InsightEvaluation,
-} from "@/lib/insight-verification";
+  INSIGHT_DIMENSIONS,
+  ITEM_COLUMNS,
+  emptyDimensions,
+  groupGatedInsights,
+} from "@/lib/insight-bundle";
 import type {
   CompanyProfile,
   InsightDimension,
   InsightItem,
-  InsightItemView,
   InsightSource,
 } from "@/lib/types";
 
 export const runtime = "nodejs";
-
-const DIMENSIONS: InsightDimension[] = [
-  "timing",
-  "compensation_intensity",
-  "path",
-  "culture",
-];
-
-const ITEM_COLUMNS =
-  "id, company_id, dimension, grade, title, content, sample_size, payload, time_window, valid_from, valid_until, last_verified_at, deidentified, status, created_at, updated_at";
-
-// Supabase 嵌套 select 返回 { insight_sources: {...} }[]，拍平成 InsightSource[]
-function flattenSources(item: any): InsightSource[] {
-  const rows = (item?.insight_item_sources || []) as Array<{
-    insight_sources: InsightSource | null;
-  }>;
-  return rows.map((r) => r.insight_sources).filter(Boolean) as InsightSource[];
-}
-
-function emptyDimensions(): Record<InsightDimension, InsightItemView[]> {
-  return {
-    timing: [],
-    compensation_intensity: [],
-    path: [],
-    culture: [],
-  };
-}
 
 export async function GET(request: NextRequest) {
   const supabase = await createServerSupabase();
@@ -98,30 +72,8 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // 3) 逐条过校验门（grade / 去标识 / 归因 / 时效），保留可展示并标过时
-  const now = new Date();
-  const dimensions = emptyDimensions();
-  const evaluations: InsightEvaluation[] = [];
-
-  for (const raw of (items || []) as any[]) {
-    const item = raw as InsightItem;
-    const sources = flattenSources(raw);
-    const ev = evaluateInsight(item, sources, now);
-    evaluations.push(ev);
-    if (!ev.displayable) continue;
-    const view: InsightItemView = { ...item, sources, outdated: ev.outdated };
-    dimensions[item.dimension]?.push(view);
-  }
-
-  // 每个维度内：新鲜在前、过时在后，再按 last_verified_at 倒序
-  for (const dim of DIMENSIONS) {
-    dimensions[dim].sort((a, b) => {
-      if (a.outdated !== b.outdated) return a.outdated ? 1 : -1;
-      return (
-        new Date(b.last_verified_at).getTime() - new Date(a.last_verified_at).getTime()
-      );
-    });
-  }
+  // 3) 过校验门（grade / 去标识 / 归因 / 时效）+ 按维度分组（共享 insight-bundle）
+  const { dimensions, evaluations } = groupGatedInsights((items || []) as any[], new Date());
 
   return NextResponse.json({
     ok: true,
@@ -176,7 +128,7 @@ export async function POST(request: NextRequest) {
   const content = String(body.content || "").trim();
   const sources = Array.isArray(body.sources) ? body.sources : [];
 
-  if (!company || !DIMENSIONS.includes(dimension) || !content) {
+  if (!company || !INSIGHT_DIMENSIONS.includes(dimension) || !content) {
     return NextResponse.json(
       { ok: false, error: "missing_required_fields" },
       { status: 400 },
