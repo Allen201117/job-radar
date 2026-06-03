@@ -14,6 +14,9 @@ class RawJob:
     apply_url: Optional[str] = None
     salary_text: Optional[str] = None
     posted_at: Optional[str] = None
+    experience: Optional[str] = None   # 经验要求；adapter 可直填，否则由 normalizer 从全文抽取
+    education: Optional[str] = None     # 学历要求；同上
+    deadline: Optional[str] = None      # 投递截止；同上
 
 
 class BaseAdapter:

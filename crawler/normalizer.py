@@ -174,6 +174,74 @@ def extract_job_type(title: str, summary: Optional[str] = None) -> Optional[str]
     return None
 
 
+def _strip_html(text: Optional[str]) -> str:
+    """去 HTML 标签 + 折叠空白（结构化抽取的统一预处理）。"""
+    if not text:
+        return ""
+    s = re.sub(r"<[^>]+>", " ", str(text))
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _fmt_years(m) -> str:
+    """把经验正则的命中格式化成 'a-b年' 或 'a年+'。"""
+    g2 = m.group(2) if m.re.groups >= 2 else None
+    return f"{m.group(1)}-{g2}年" if g2 else f"{m.group(1)}年+"
+
+
+def extract_experience(text: Optional[str]) -> Optional[str]:
+    """从完整 JD 抽取经验要求（如 '3-5年' / '5年+' / '应届/不限'）；抽不到返回 None。
+    与前端 JobCard.extractExperience 同口径，但跑在未截断的全文上。"""
+    base = _strip_html(text)
+    if not base:
+        return None
+    t = re.sub(r"\s+", "", base)  # 去空格（中文 JD 习惯，且利于英文 '3-5 years' 匹配）
+    if re.search(r"应届|无经验要求|经验不限|不限经验|no experience|entry level|entrylevel", t, re.I):
+        return "应届/不限"
+    m = re.search(r"(\d+)[-~至到](\d+)年", t) or re.search(r"(\d+)年(?:以上)?(?:工作)?经验", t)
+    if m:
+        return _fmt_years(m)
+    m = re.search(r"(\d+)[-~to]+(\d+)years?", t, re.I) or re.search(r"(\d+)\+?years?(?:ofexperience)?", t, re.I)
+    if m:
+        return _fmt_years(m)
+    return None
+
+
+def extract_education(text: Optional[str]) -> Optional[str]:
+    """从完整 JD 抽取学历要求（博士/硕士/本科/大专/不限）；抽不到返回 None。"""
+    base = _strip_html(text)
+    if not base:
+        return None
+    if re.search(r"博士|ph\.?d|doctora", base, re.I):
+        return "博士"
+    if re.search(r"硕士|研究生|master", base, re.I):
+        return "硕士"
+    if re.search(r"本科|学士|bachelor|undergrad", base, re.I):
+        return "本科"
+    if re.search(r"大专|专科", base):
+        return "大专"
+    if re.search(r"学历不限|不限学历", base):
+        return "不限"
+    return None
+
+
+def extract_deadline(text: Optional[str]) -> Optional[str]:
+    """从完整 JD 抽取投递截止（ISO 日期 或 '长期有效'）；抽不到返回 None。"""
+    base = _strip_html(text)
+    if not base:
+        return None
+    if re.search(r"长期有效|长期招聘|long[\s-]?term|rolling|until filled", base, re.I):
+        return "长期有效"
+    m = re.search(
+        r"(?:截止|截至|申请截止|投递截止|deadline)[^0-9]{0,8}(\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2})",
+        base, re.I,
+    )
+    if m:
+        d = re.sub(r"[年月]", "-", m.group(1))
+        d = re.sub(r"[./]", "-", d)
+        return re.sub(r"-+$", "", d)
+    return None
+
+
 CHINA_LOCATION_MARKERS = (
     "china", "中国", "prc", "greater china",
     "beijing", "shanghai", "shenzhen", "guangzhou", "hangzhou", "chengdu",

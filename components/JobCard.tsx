@@ -101,9 +101,13 @@ export default function JobCard({ job, onActionChange }: Props) {
     };
   }, [job.company]);
 
-  const exp = useMemo(() => extractExperience(job.summary), [job.summary]);
-  const edu = useMemo(() => extractEducation(job.summary), [job.summary]);
-  const deadline = useMemo(() => extractDeadline(job.summary), [job.summary]);
+  // 优先用爬虫从完整 JD 抽取并入库的结构化列；列为空（历史行/未重抓）才回退旧的 summary 正则。
+  const exp = useMemo(() => job.experience || extractExperience(job.summary), [job.experience, job.summary]);
+  const edu = useMemo(() => job.education || extractEducation(job.summary), [job.education, job.summary]);
+  const deadline = useMemo(
+    () => job.deadline || extractDeadline(job.summary),
+    [job.deadline, job.summary],
+  );
   const recruitType = useMemo(
     () =>
       normalizeChinaJobType({

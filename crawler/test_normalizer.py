@@ -100,5 +100,47 @@ class JobQualityTests(unittest.TestCase):
         self.assertIn("navigation", reason)
 
 
+class StructuredFieldExtractionTests(unittest.TestCase):
+    """经验/学历/截止 从完整 JD 抽取（#1），抽不到返回 None。"""
+
+    def test_experience_chinese(self):
+        self.assertEqual(normalizer.extract_experience("要求3-5年相关工作经验"), "3-5年")
+        self.assertEqual(normalizer.extract_experience("5年以上工作经验"), "5年+")
+        self.assertEqual(normalizer.extract_experience("面向2026届应届毕业生"), "应届/不限")
+        self.assertEqual(normalizer.extract_experience("经验不限，欢迎投递"), "应届/不限")
+
+    def test_experience_english(self):
+        self.assertEqual(normalizer.extract_experience("3-5 years of experience required"), "3-5年")
+        self.assertEqual(normalizer.extract_experience("5+ years experience"), "5年+")
+        self.assertIsNone(normalizer.extract_experience("We build great products"))
+
+    def test_experience_strips_html(self):
+        self.assertEqual(normalizer.extract_experience("<p>至少 <b>3</b> 年经验</p>"), "3年+")
+
+    def test_education(self):
+        self.assertEqual(normalizer.extract_education("博士学历优先"), "博士")
+        self.assertEqual(normalizer.extract_education("硕士及以上"), "硕士")
+        self.assertEqual(normalizer.extract_education("本科及以上学历"), "本科")
+        self.assertEqual(normalizer.extract_education("Bachelor degree required"), "本科")
+        self.assertEqual(normalizer.extract_education("学历不限"), "不限")
+        self.assertIsNone(normalizer.extract_education("强沟通能力"))
+
+    def test_education_priority_phd_over_bachelor(self):
+        # 同时出现时取最高学历（博士先判定）
+        self.assertEqual(normalizer.extract_education("本科起，博士优先"), "博士")
+
+    def test_deadline(self):
+        self.assertEqual(normalizer.extract_deadline("申请截止2026-06-30"), "2026-06-30")
+        self.assertEqual(normalizer.extract_deadline("投递截止：2026年6月30日"), "2026-6-30")
+        self.assertEqual(normalizer.extract_deadline("长期有效，欢迎随时投递"), "长期有效")
+        self.assertEqual(normalizer.extract_deadline("rolling basis"), "长期有效")
+        self.assertIsNone(normalizer.extract_deadline("岗位职责：写代码"))
+
+    def test_all_none_on_empty(self):
+        for fn in (normalizer.extract_experience, normalizer.extract_education, normalizer.extract_deadline):
+            self.assertIsNone(fn(None))
+            self.assertIsNone(fn(""))
+
+
 if __name__ == "__main__":
     unittest.main()
