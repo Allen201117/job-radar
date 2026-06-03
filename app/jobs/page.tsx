@@ -8,6 +8,28 @@ import { Briefcase, Database } from "@phosphor-icons/react/ssr";
 
 export const dynamic = "force-dynamic";
 
+// PostgREST 单次查询最多返回 1000 行；分页 range 把全部 active 岗位取齐（解除旧的 500 硬上限）。
+// HARD_CAP 防止岗位量极端膨胀时 props 负载失控；渲染由前端「加载更多」分批进行。
+async function fetchAllActiveJobs(
+  supabase: Awaited<ReturnType<typeof createServerSupabase>>,
+): Promise<Job[]> {
+  const PAGE = 1000;
+  const HARD_CAP = 3000;
+  const all: Job[] = [];
+  for (let from = 0; from < HARD_CAP; from += PAGE) {
+    const { data, error } = await supabase
+      .from("jobs")
+      .select("*")
+      .eq("status", "active")
+      .order("first_seen_at", { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error || !data || data.length === 0) break;
+    all.push(...(data as Job[]));
+    if (data.length < PAGE) break;
+  }
+  return all;
+}
+
 export default async function JobsPage() {
   const supabase = await createServerSupabase();
   const { data: { user } } = await supabase.auth.getUser();
@@ -30,22 +52,17 @@ export default async function JobsPage() {
     actions = (acts as JobAction[]) || [];
   }
 
-  const { data: jobs } = await supabase
-    .from("jobs")
-    .select("*")
-    .eq("status", "active")
-    .order("first_seen_at", { ascending: false })
-    .limit(500);
+  const jobs = await fetchAllActiveJobs(supabase);
 
   const scored = sortAndFilterJobs(
-    (jobs as Job[]) || [],
+    jobs,
     preferences,
     actions,
     { showIgnored: true, showApplied: true },
   );
 
   const companies = Array.from(
-    new Set((jobs as Job[])?.map((j) => j.company).filter(Boolean)),
+    new Set(jobs.map((j) => j.company).filter(Boolean)),
   ) as string[];
 
   return (
