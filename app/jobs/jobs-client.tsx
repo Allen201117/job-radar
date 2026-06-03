@@ -36,6 +36,8 @@ type BrowserDiscoveryState = {
 
 const DISCOVERY_POLL_MS = 6000;
 const DISCOVERY_TIMEOUT_MS = 8 * 60 * 1000;
+// 每次渲染/「加载更多」的批量大小（前端分批渲染，避免一次性渲染上千张卡片卡顿）
+const JOBS_PAGE_SIZE = 60;
 
 type Filters = {
   company: string;
@@ -103,6 +105,16 @@ export default function JobsClient({ initialJobs, companies }: Props) {
     );
     return arr;
   }, [allJobs, filters]);
+
+  // 分批渲染：默认只渲染前 JOBS_PAGE_SIZE 张，「加载更多」逐批增加；筛选变化时回到第一批。
+  const [visibleCount, setVisibleCount] = useState(JOBS_PAGE_SIZE);
+  useEffect(() => {
+    setVisibleCount(JOBS_PAGE_SIZE);
+  }, [filters]);
+  const visibleJobs = useMemo(
+    () => filtered.slice(0, visibleCount),
+    [filtered, visibleCount],
+  );
 
   const existingFilteredCount = useMemo(() => {
     return initialJobs.filter((job) => jobMatchesFilters(job, filters)).length;
@@ -375,10 +387,10 @@ export default function JobsClient({ initialJobs, companies }: Props) {
       {discoveryActive && <BrowserDiscoveryProgress discovery={discovery} />}
       <p className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.045] px-3 py-2 text-sm leading-6 text-white/58">
         <MagnifyingGlass size={16} weight="bold" aria-hidden="true" />
-        显示 {filtered.length} 个岗位（本地岗位库 {initialJobs.length} + 本次官网刷新/发现 {officialJobs.length}）。本地搜索、已知源刷新、动态官方源发现三层分开执行。
+        匹配 {filtered.length} 个岗位，已展示 {Math.min(visibleCount, filtered.length)} 个（本地岗位库 {initialJobs.length} + 本次官网刷新/发现 {officialJobs.length}）。本地搜索、已知源刷新、动态官方源发现三层分开执行。
       </p>
       <div className="space-y-3">
-        {filtered.map((job) => (
+        {visibleJobs.map((job) => (
           <JobCard
             key={job.id}
             job={job}
@@ -394,6 +406,20 @@ export default function JobsClient({ initialJobs, companies }: Props) {
           </div>
         )}
       </div>
+      {filtered.length > visibleCount && (
+        <div className="flex justify-center pt-1">
+          <button
+            type="button"
+            onClick={() => setVisibleCount((n) => n + JOBS_PAGE_SIZE)}
+            className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/[0.06] px-5 py-2.5 text-sm font-medium text-white/80 transition duration-200 hover:bg-white/12 hover:text-white active:scale-[0.98]"
+          >
+            加载更多
+            <span className="tabular-nums text-white/50">
+              （还有 {filtered.length - visibleCount} 个）
+            </span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
