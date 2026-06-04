@@ -19,6 +19,7 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
   { value: "siemens", label: "西门子" },
   { value: "tencent", label: "腾讯" },
   { value: "bytedance", label: "字节跳动" },
+  { value: "bytedance_campus", label: "字节跳动 校招 / 实习" },
   { value: "nio_feishu", label: "蔚来（飞书系）" },
   { value: "xpeng_feishu", label: "小鹏（飞书系）" },
   { value: "horizon_feishu", label: "地平线（飞书系）" },

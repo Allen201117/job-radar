@@ -16,6 +16,10 @@ def _kw(term: str) -> str:
     return f"https://jobs.bytedance.com/experienced/position?keyword={quote(term)}"
 
 
+def _campus_kw(term: str) -> str:
+    return f"https://jobs.bytedance.com/campus/position?keyword={quote(term)}"
+
+
 class BytedanceAdapter(PlaywrightAdapter):
     name = "bytedance"
     company_name = "字节跳动"
@@ -66,3 +70,21 @@ class BytedanceAdapter(PlaywrightAdapter):
             apply_url=jd_url,
             posted_at=normalizer.pick_publish_date(post),
         )
+
+
+class BytedanceCampusAdapter(BytedanceAdapter):
+    """字节跳动校招 / 实习 — jobs.bytedance.com/campus。
+
+    与社招（/experienced）同一飞书系平台、同一拦截接口 /api/v1/search/job/posts，
+    仅列表/详情路径换成 /campus。job_category 决定校招/实习类型，由 normalizer 归类。
+    """
+
+    name = "bytedance_campus"
+    detail_template = "https://jobs.bytedance.com/campus/position/{id}/detail"
+    list_urls = [
+        _campus_kw("算法"),
+        _campus_kw("研发"),
+        _campus_kw("产品"),
+        _campus_kw("实习"),
+        "https://jobs.bytedance.com/campus/position",
+    ]

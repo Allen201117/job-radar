@@ -19,7 +19,7 @@ from adapters.jd import JdAdapter
 from adapters.haier import HaierAdapter
 from adapters.siemens import SiemensAdapter
 from adapters.tencent import TencentAdapter
-from adapters.bytedance import BytedanceAdapter
+from adapters.bytedance import BytedanceAdapter, BytedanceCampusAdapter
 from adapters.feishu import NioAdapter, XpengAdapter, HorizonAdapter, XiaomiAdapter
 from adapters.greenhouse import GreenhouseAdapter
 from adapters.lever import LeverAdapter
@@ -34,6 +34,7 @@ ADAPTERS = {
     "siemens": SiemensAdapter(),
     "tencent": TencentAdapter(),
     "bytedance": BytedanceAdapter(),
+    "bytedance_campus": BytedanceCampusAdapter(),  # 字节校招/实习（与社招同平台）
     "nio_feishu": NioAdapter(),
     "xpeng_feishu": XpengAdapter(),
     "horizon_feishu": HorizonAdapter(),
