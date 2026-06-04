@@ -11,6 +11,7 @@ import {
   normalizeChinaJobType,
 } from "@/lib/china-keyword-expansion";
 import { classifyCompanyOrigin } from "@/lib/company-origin";
+import { cn } from "@/lib/utils";
 import type { ScoredJob } from "@/lib/types";
 import {
   ArrowsClockwise,
@@ -21,6 +22,7 @@ import {
   Database,
   Lightning,
   MagnifyingGlass,
+  Sparkle,
 } from "@phosphor-icons/react";
 
 type PrimaryAction = "saved" | "ignored" | "applied";
@@ -38,6 +40,29 @@ const DISCOVERY_POLL_MS = 6000;
 const DISCOVERY_TIMEOUT_MS = 8 * 60 * 1000;
 // 每次渲染/「加载更多」的批量大小（前端分批渲染，避免一次性渲染上千张卡片卡顿）
 const JOBS_PAGE_SIZE = 60;
+// 后台「浏览器发现」任务跨页面持久化的 localStorage 键（切到别的页面再回来不丢任务）
+const DISCOVERY_STORAGE_KEY = "jobradar:browser-discovery";
+
+function saveDiscoveryTask(runId: string, startedAt: number, query: string) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(
+      DISCOVERY_STORAGE_KEY,
+      JSON.stringify({ runId, startedAt, query }),
+    );
+  } catch {
+    // localStorage 不可用（隐私模式等）时静默降级，不影响当前会话内轮询
+  }
+}
+
+function clearDiscoveryTask() {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(DISCOVERY_STORAGE_KEY);
+  } catch {
+    // 同上
+  }
+}
 
 type Filters = {
   company: string;
@@ -71,6 +96,8 @@ export default function JobsClient({ initialJobs, companies }: Props) {
     salaryOnly: false,
   });
   const [officialJobs, setOfficialJobs] = useState<ScoredJob[]>([]);
+  // 本次搜索/发现完成后默认只看新岗位；用户可切回「查看全部」
+  const [onlyNew, setOnlyNew] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [searchInfo, setSearchInfo] = useState("");
@@ -88,6 +115,12 @@ export default function JobsClient({ initialJobs, companies }: Props) {
 
   const discoveryActive = discovery.phase === "queued" || discovery.phase === "running";
 
+  // 本次会话内由「刷新已知源 / 发现官方源」新拿到的岗位（用于高亮 + 「只看新发现」）
+  const sessionNewKeys = useMemo(
+    () => new Set(officialJobs.map((j) => j.jd_url || j.id)),
+    [officialJobs],
+  );
+
   // 合并本地岗位库 + 本次已知源刷新/官方源发现返回的岗位
   const allJobs = useMemo(() => {
     const seen = new Set(officialJobs.map((j) => j.jd_url || j.id));
@@ -95,8 +128,14 @@ export default function JobsClient({ initialJobs, companies }: Props) {
     return [...officialJobs, ...cachedNotInLive];
   }, [initialJobs, officialJobs]);
 
+  // 「只看新发现」仅在确有本次新岗位时生效，避免误把列表清空
+  const newViewActive = onlyNew && officialJobs.length > 0;
+
   const filtered = useMemo(() => {
-    const arr = allJobs.filter((job) => jobMatchesFilters(job, filters));
+    let arr = allJobs.filter((job) => jobMatchesFilters(job, filters));
+    if (newViewActive) {
+      arr = arr.filter((job) => sessionNewKeys.has(job.jd_url || job.id));
+    }
     arr.sort((a, b) =>
       filters.sortBy === "newest"
         ? new Date(b.posted_at || b.first_seen_at || 0).getTime() -
@@ -104,13 +143,13 @@ export default function JobsClient({ initialJobs, companies }: Props) {
         : (b.match_score || 0) - (a.match_score || 0),
     );
     return arr;
-  }, [allJobs, filters]);
+  }, [allJobs, filters, newViewActive, sessionNewKeys]);
 
-  // 分批渲染：默认只渲染前 JOBS_PAGE_SIZE 张，「加载更多」逐批增加；筛选变化时回到第一批。
+  // 分批渲染：默认只渲染前 JOBS_PAGE_SIZE 张，「加载更多」逐批增加；筛选 / 切换新发现视图时回到第一批。
   const [visibleCount, setVisibleCount] = useState(JOBS_PAGE_SIZE);
   useEffect(() => {
     setVisibleCount(JOBS_PAGE_SIZE);
-  }, [filters]);
+  }, [filters, newViewActive]);
   const visibleJobs = useMemo(
     () => filtered.slice(0, visibleCount),
     [filtered, visibleCount],
@@ -122,6 +161,7 @@ export default function JobsClient({ initialJobs, companies }: Props) {
 
   function handleExistingJobsSearch() {
     setOfficialJobs([]);
+    setOnlyNew(false);
     setDiscoveryRound(0);
     setSearchInfo(
       `仅搜索本地 jobs 表，不触发外部请求。当前命中 ${existingFilteredCount} 个岗位。`,
@@ -163,6 +203,7 @@ export default function JobsClient({ initialJobs, companies }: Props) {
           const seen = new Set(prev.map((j) => j.jd_url || j.id));
           return [...prev, ...scored.filter((j) => !seen.has(j.jd_url || j.id))];
         });
+        if (scored.length) setOnlyNew(true); // 有新岗位则默认切到「只看新发现」
         setSearchInfo(formatDiscoveryResult(data, scored.length));
         setDiscoveryRound(queryOffset + 1); // 下次点击换下一组检索词
       } else {
@@ -183,10 +224,11 @@ export default function JobsClient({ initialJobs, companies }: Props) {
       return;
     }
     setSearchInfo("");
+    const startedAt = Date.now();
     setDiscovery({
       phase: "queued",
       runId: null,
-      startedAt: Date.now(),
+      startedAt,
       elapsedSec: 0,
       note: "正在触发后台浏览器抓取…",
     });
@@ -204,9 +246,12 @@ export default function JobsClient({ initialJobs, companies }: Props) {
       const data = await resp.json();
       if (!data.ok || !data.run_id) {
         setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "" });
+        clearDiscoveryTask();
         setSearchInfo(formatDispatchError(data));
         return;
       }
+      // 持久化任务：切到别的页面再回到岗位库时能恢复轮询、不丢任务
+      saveDiscoveryTask(data.run_id, startedAt, query);
       setDiscovery((prev) => ({
         ...prev,
         phase: "queued",
@@ -215,6 +260,7 @@ export default function JobsClient({ initialJobs, companies }: Props) {
       }));
     } catch {
       setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "" });
+      clearDiscoveryTask();
       setSearchInfo("按需发现触发失败，请稍后再试。");
     }
   }
@@ -229,10 +275,39 @@ export default function JobsClient({ initialJobs, companies }: Props) {
         const seen = new Set(prev.map((j) => j.jd_url || j.id));
         return [...scored.filter((j) => !seen.has(j.jd_url || j.id)), ...prev];
       });
+      setOnlyNew(true); // 发现完成有新岗位 → 默认只看本次新发现
     }
     setSearchInfo(formatBrowserDiscoveryResult(data));
     setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "" });
+    clearDiscoveryTask();
   }
+
+  // 跨页面恢复（修「点了发现后切到别的页面、任务就看不到了」的 bug）：
+  // 回到岗位库时若 localStorage 里有未超时的发现任务，恢复 runId → 下方轮询 effect 自动续上。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let saved: { runId?: string; startedAt?: number; query?: string } | null = null;
+    try {
+      const raw = localStorage.getItem(DISCOVERY_STORAGE_KEY);
+      saved = raw ? JSON.parse(raw) : null;
+    } catch {
+      saved = null;
+    }
+    if (!saved?.runId || !saved.startedAt) return;
+    const elapsed = Date.now() - saved.startedAt;
+    if (elapsed >= DISCOVERY_TIMEOUT_MS) {
+      clearDiscoveryTask();
+      return;
+    }
+    setDiscovery({
+      phase: "running",
+      runId: saved.runId,
+      startedAt: saved.startedAt,
+      elapsedSec: Math.floor(elapsed / 1000),
+      note: "已恢复后台发现任务，继续等待结果…",
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 轮询 + 计时：runId 一旦确定就开始，终态/卸载时清理。
   useEffect(() => {
@@ -272,6 +347,7 @@ export default function JobsClient({ initialJobs, companies }: Props) {
     const timeout = setTimeout(() => {
       if (stopped) return;
       setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "" });
+      clearDiscoveryTask();
       setSearchInfo("后台浏览器发现仍在运行，可稍后刷新页面查看新增岗位。");
     }, DISCOVERY_TIMEOUT_MS);
 
@@ -311,6 +387,7 @@ export default function JobsClient({ initialJobs, companies }: Props) {
         ) as ScoredJob[];
 
         setOfficialJobs(scored);
+        setOnlyNew(scored.length > 0); // 刷到新岗位则默认只看本次新发现
         setSearchInfo(formatKnownRefreshResult(data, scored.length));
       } else {
         setSearchInfo(data?.error || "已知中国官网源刷新失败，仍显示本地岗位。");
@@ -345,55 +422,102 @@ export default function JobsClient({ initialJobs, companies }: Props) {
   return (
     <div className="space-y-5">
       <JobFilters filters={filters} onChange={setFilters} companies={companies} />
-      <div className="rounded-[1.35rem] border border-white/10 bg-white/[0.055] p-4 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
-        <div className="flex flex-wrap items-center gap-3">
-        <button
-          onClick={handleExistingJobsSearch}
-          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white/78 transition duration-200 hover:bg-white/16 hover:text-white active:scale-[0.98]"
-        >
-          <Database size={16} weight="fill" aria-hidden="true" />
-          搜索已有岗位
-        </button>
-        <button
-          onClick={handleKnownChinaRefresh}
-          disabled={refreshing || discovering || discoveryActive || !filters.keyword}
-          className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-4 py-2 text-sm font-semibold text-sky-950 transition duration-200 hover:bg-sky-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <ArrowsClockwise size={16} weight="bold" aria-hidden="true" />
-          {refreshing ? "刷新中..." : "刷新已知中国官网源"}
-        </button>
-        <button
-          onClick={handleBrowserDiscovery}
-          disabled={refreshing || discovering || discoveryActive || !filters.keyword}
-          title="触发后台真实浏览器抓取官方 SPA 招聘站（字节 / 飞书系：蔚来·小鹏·地平线·小米），约 1–5 分钟，结果自动入库"
-          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white/78 transition duration-200 hover:bg-white/16 hover:text-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Compass size={16} weight="fill" aria-hidden="true" />
-          {discoveryActive ? "发现中…" : "发现中国官方招聘源"}
-        </button>
-        <button
-          onClick={() => handleOfficialDiscovery({ forceRefresh: true })}
-          disabled={refreshing || discovering || discoveryActive || !filters.keyword}
-          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white/78 transition duration-200 hover:bg-white/16 hover:text-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Lightning size={16} weight="fill" aria-hidden="true" />
-          强制刷新
-        </button>
-        {searchInfo && (
-          <span className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-pretty text-sm leading-6 text-white/58">{searchInfo}</span>
-        )}
+      <div className="rounded-[1.35rem] border border-white/10 bg-white/[0.055] p-4 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] sm:p-5">
+        <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold text-white/85">
+          <MagnifyingGlass size={16} weight="bold" aria-hidden="true" />
+          获取岗位的三种方式
+          <span className="text-xs font-normal text-white/40">（刷新 / 发现需先在上方填「关键词」）</span>
         </div>
+        <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+          <ActionTile
+            icon={Database}
+            label="搜索已有岗位"
+            hint="只查本地库，不联网"
+            accent="bg-white/14 text-white"
+            onClick={handleExistingJobsSearch}
+          />
+          <ActionTile
+            icon={ArrowsClockwise}
+            label={refreshing ? "刷新中…" : "刷新已知官网源"}
+            hint="已验证的百度 / 京东官方源"
+            accent="bg-sky-300 text-sky-950"
+            onClick={handleKnownChinaRefresh}
+            disabled={refreshing || discovering || discoveryActive || !filters.keyword}
+            busy={refreshing}
+          />
+          <ActionTile
+            icon={Compass}
+            label={discoveryActive ? "发现中…" : "发现官方招聘源"}
+            hint="真实浏览器抓 SPA，约 1–5 分钟"
+            accent="bg-violet-300 text-violet-950"
+            onClick={handleBrowserDiscovery}
+            disabled={refreshing || discovering || discoveryActive || !filters.keyword}
+            busy={discoveryActive}
+            hero
+          />
+          <ActionTile
+            icon={Lightning}
+            label="强制刷新"
+            hint="忽略缓存，重新发现"
+            accent="bg-amber-300 text-amber-950"
+            onClick={() => handleOfficialDiscovery({ forceRefresh: true })}
+            disabled={refreshing || discovering || discoveryActive || !filters.keyword}
+          />
+        </div>
+        {searchInfo && (
+          <p className="mt-3 rounded-2xl border border-white/10 bg-black/20 px-3.5 py-2.5 text-pretty text-sm leading-6 text-white/65">
+            {searchInfo}
+          </p>
+        )}
       </div>
       {discoveryActive && <BrowserDiscoveryProgress discovery={discovery} />}
+
+      {officialJobs.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-lime-300/25 bg-lime-300/[0.07] px-3.5 py-2.5 text-sm">
+          <Sparkle size={16} weight="fill" className="text-lime-300" aria-hidden="true" />
+          <span className="font-medium text-lime-100/90">
+            本次新发现 {officialJobs.length} 个岗位（绿色标记）
+          </span>
+          <div className="ml-auto flex gap-1.5">
+            <button
+              type="button"
+              onClick={() => setOnlyNew(true)}
+              className={cn(
+                "rounded-full px-3 py-1 text-xs font-medium transition",
+                newViewActive
+                  ? "bg-lime-300 text-lime-950"
+                  : "text-white/60 hover:bg-white/10 hover:text-white",
+              )}
+            >
+              只看新发现
+            </button>
+            <button
+              type="button"
+              onClick={() => setOnlyNew(false)}
+              className={cn(
+                "rounded-full px-3 py-1 text-xs font-medium transition",
+                !newViewActive
+                  ? "bg-white text-[#08090c]"
+                  : "text-white/60 hover:bg-white/10 hover:text-white",
+              )}
+            >
+              查看全部
+            </button>
+          </div>
+        </div>
+      )}
+
       <p className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.045] px-3 py-2 text-sm leading-6 text-white/58">
         <MagnifyingGlass size={16} weight="bold" aria-hidden="true" />
-        匹配 {filtered.length} 个岗位，已展示 {Math.min(visibleCount, filtered.length)} 个（本地岗位库 {initialJobs.length} + 本次官网刷新/发现 {officialJobs.length}）。本地搜索、已知源刷新、动态官方源发现三层分开执行。
+        {newViewActive ? "只看本次新发现：" : "匹配 "}
+        {filtered.length} 个岗位，已展示 {Math.min(visibleCount, filtered.length)} 个（本地岗位库 {initialJobs.length} + 本次官网刷新/发现 {officialJobs.length}）。本地搜索、已知源刷新、动态官方源发现三层分开执行。
       </p>
       <div className="space-y-3">
         {visibleJobs.map((job) => (
           <JobCard
             key={job.id}
             job={job}
+            sessionNew={sessionNewKeys.has(job.jd_url || job.id)}
             onActionChange={handleActionChange}
           />
         ))}
@@ -583,6 +707,54 @@ function formatBrowserDiscoveryResult(data: any) {
   return (
     MAP[reason] ||
     `本次发现未成功（${data?.status || "failed"}）：${data?.error_message || reason || "未写入岗位"}。`
+  );
+}
+
+// 获取岗位的动作磁贴：图标 + 标题 + 一句说明，比原来的小药丸按钮更醒目（核心功能）
+function ActionTile({
+  icon: Icon,
+  label,
+  hint,
+  accent,
+  onClick,
+  disabled,
+  busy,
+  hero,
+}: {
+  icon: typeof Database;
+  label: string;
+  hint: string;
+  accent: string;
+  onClick: () => void;
+  disabled?: boolean;
+  busy?: boolean;
+  hero?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={hint}
+      className={cn(
+        "group flex items-center gap-3 rounded-2xl border px-4 py-3 text-left transition duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45",
+        hero
+          ? "border-violet-300/35 bg-violet-300/10 hover:border-violet-300/55 hover:bg-violet-300/16"
+          : "border-white/12 bg-white/[0.05] hover:border-white/25 hover:bg-white/10",
+      )}
+    >
+      <span className={cn("grid size-9 shrink-0 place-items-center rounded-xl", accent)}>
+        {busy ? (
+          <CircleNotch size={18} weight="bold" className="animate-spin" aria-hidden="true" />
+        ) : (
+          <Icon size={18} weight="fill" aria-hidden="true" />
+        )}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-white">{label}</span>
+        <span className="block truncate text-xs text-white/45">{hint}</span>
+      </span>
+    </button>
   );
 }
 
