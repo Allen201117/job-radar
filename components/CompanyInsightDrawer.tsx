@@ -23,7 +23,16 @@ import type {
   InsightGrade,
   InsightItemView,
 } from "@/lib/types";
+import { freshnessFromVerifiedAt, type FreshnessLevel } from "@/lib/insight-verification";
 import { cn } from "@/lib/utils";
+
+// 新鲜度分级配色：越旧越偏琥珀，提示用户谨慎参考。
+const FRESHNESS_TONE: Record<FreshnessLevel, string> = {
+  fresh: "border border-emerald-300/25 bg-emerald-300/12 text-emerald-200/90",
+  recent: "border border-white/12 bg-white/[0.08] text-white/55",
+  aging: "border border-amber-300/25 bg-amber-300/12 text-amber-200/90",
+  stale: "border border-amber-400/30 bg-amber-400/15 text-amber-100",
+};
 
 interface Props {
   company: string;
@@ -234,6 +243,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
   const chip = gradeChip(item.grade, item.sample_size);
+  const freshness = freshnessFromVerifiedAt(item.last_verified_at);
 
   async function submitDispute() {
     setSending(true);
@@ -283,10 +293,15 @@ function InsightCard({ item }: { item: InsightItemView }) {
             {item.time_window}
           </span>
         )}
-        {item.last_verified_at && (
-          <span className="inline-flex items-center gap-1">
-            <ClockCounterClockwise size={13} />
-            核实于 {new Date(item.last_verified_at).toLocaleDateString("zh-CN")}
+        {item.last_verified_at && freshness && (
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full px-2 py-0.5",
+              FRESHNESS_TONE[freshness.level],
+            )}
+          >
+            <ClockCounterClockwise size={12} weight="bold" />
+            {freshness.text} · {new Date(item.last_verified_at).toLocaleDateString("zh-CN")}
           </span>
         )}
       </div>

@@ -139,3 +139,32 @@ export function resolveInsightFailure(
   if (fresh.length === 0) return "insight_outdated";
   return null;
 }
+
+// 基于核实时间的相对新鲜度，与 isOutdated（valid_until 维度）互补：
+// 即便没设 valid_until，长期未核实的条目也要让用户一眼看到新鲜度（任务 4.2 时效治理）。
+export type FreshnessLevel = "fresh" | "recent" | "aging" | "stale";
+
+export interface Freshness {
+  level: FreshnessLevel;
+  text: string;
+}
+
+const FRESHNESS_STEPS: Array<{ maxDays: number; level: FreshnessLevel; text: string }> = [
+  { maxDays: 90, level: "fresh", text: "近期核实" },
+  { maxDays: 270, level: "recent", text: "数月前核实" },
+  { maxDays: 540, level: "aging", text: "较久未更新" },
+];
+
+export function freshnessFromVerifiedAt(
+  verifiedAt: string | null | undefined,
+  now: Date = new Date(),
+): Freshness | null {
+  if (!verifiedAt) return null;
+  const t = new Date(verifiedAt).getTime();
+  if (Number.isNaN(t)) return null;
+  const days = (now.getTime() - t) / 86_400_000;
+  for (const step of FRESHNESS_STEPS) {
+    if (days <= step.maxDays) return { level: step.level, text: step.text };
+  }
+  return { level: "stale", text: "逾一年未更新" };
+}

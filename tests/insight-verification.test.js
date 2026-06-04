@@ -201,3 +201,13 @@ test("resolveInsightFailure: bundle 级决策", () => {
     null,
   );
 });
+
+test("freshnessFromVerifiedAt: 按核实时间相对分级（任务 4.2）", () => {
+  assert.equal(V.freshnessFromVerifiedAt("2026-05-01T00:00:00.000Z", NOW).level, "fresh"); // ~32 天
+  assert.equal(V.freshnessFromVerifiedAt("2026-01-01T00:00:00.000Z", NOW).level, "recent"); // ~153 天
+  assert.equal(V.freshnessFromVerifiedAt("2025-06-01T00:00:00.000Z", NOW).level, "aging"); // ~366 天
+  assert.equal(V.freshnessFromVerifiedAt("2024-06-01T00:00:00.000Z", NOW).level, "stale"); // ~731 天
+  assert.equal(V.freshnessFromVerifiedAt("2026-05-01T00:00:00.000Z", NOW).text, "近期核实");
+  assert.equal(V.freshnessFromVerifiedAt(null, NOW), null);
+  assert.equal(V.freshnessFromVerifiedAt("not-a-date", NOW), null);
+});
