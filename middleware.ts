@@ -31,8 +31,10 @@ export async function middleware(request: NextRequest) {
 
   const isLoginPage = request.nextUrl.pathname === "/login";
   const isAuthCallback = request.nextUrl.pathname.startsWith("/auth");
+  // 宣传页 `/` 对未登录访客公开，作为首次访问入口。
+  const isLanding = request.nextUrl.pathname === "/";
 
-  if (!user && !isLoginPage && !isAuthCallback) {
+  if (!user && !isLoginPage && !isAuthCallback && !isLanding) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
@@ -40,7 +42,7 @@ export async function middleware(request: NextRequest) {
 
   if (user && isLoginPage) {
     const url = request.nextUrl.clone();
-    url.pathname = "/";
+    url.pathname = "/today";
     return NextResponse.redirect(url);
   }
 
