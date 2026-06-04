@@ -8,48 +8,35 @@ module.exports = {
   ],
   theme: {
     extend: {
-      fontFamily: {
-        sans: ["var(--font-sans)"],
-        mono: ["var(--font-mono)"],
-      },
       colors: {
-        // 用 <alpha-value> 占位符，保证 bg-signal/10 这类透明度修饰符在 CSS 变量色上生效
-        border: "hsl(var(--border) / <alpha-value>)",
-        input: "hsl(var(--input) / <alpha-value>)",
-        ring: "hsl(var(--ring) / <alpha-value>)",
-        background: "hsl(var(--background) / <alpha-value>)",
-        foreground: "hsl(var(--foreground) / <alpha-value>)",
-        signal: {
-          DEFAULT: "hsl(var(--signal) / <alpha-value>)",
-          foreground: "hsl(var(--primary-foreground) / <alpha-value>)",
-        },
-        surface: {
-          DEFAULT: "hsl(var(--surface) / <alpha-value>)",
-          2: "hsl(var(--surface-2) / <alpha-value>)",
-        },
+        border: "hsl(var(--border))",
+        input: "hsl(var(--input))",
+        ring: "hsl(var(--ring))",
+        background: "hsl(var(--background))",
+        foreground: "hsl(var(--foreground))",
         primary: {
-          DEFAULT: "hsl(var(--primary) / <alpha-value>)",
-          foreground: "hsl(var(--primary-foreground) / <alpha-value>)",
+          DEFAULT: "hsl(var(--primary))",
+          foreground: "hsl(var(--primary-foreground))",
         },
         secondary: {
-          DEFAULT: "hsl(var(--secondary) / <alpha-value>)",
-          foreground: "hsl(var(--secondary-foreground) / <alpha-value>)",
+          DEFAULT: "hsl(var(--secondary))",
+          foreground: "hsl(var(--secondary-foreground))",
         },
         destructive: {
-          DEFAULT: "hsl(var(--destructive) / <alpha-value>)",
-          foreground: "hsl(var(--destructive-foreground) / <alpha-value>)",
+          DEFAULT: "hsl(var(--destructive))",
+          foreground: "hsl(var(--destructive-foreground))",
         },
         muted: {
-          DEFAULT: "hsl(var(--muted) / <alpha-value>)",
-          foreground: "hsl(var(--muted-foreground) / <alpha-value>)",
+          DEFAULT: "hsl(var(--muted))",
+          foreground: "hsl(var(--muted-foreground))",
         },
         accent: {
-          DEFAULT: "hsl(var(--accent) / <alpha-value>)",
-          foreground: "hsl(var(--accent-foreground) / <alpha-value>)",
+          DEFAULT: "hsl(var(--accent))",
+          foreground: "hsl(var(--accent-foreground))",
         },
         card: {
-          DEFAULT: "hsl(var(--card) / <alpha-value>)",
-          foreground: "hsl(var(--card-foreground) / <alpha-value>)",
+          DEFAULT: "hsl(var(--card))",
+          foreground: "hsl(var(--card-foreground))",
         },
       },
       borderRadius: {

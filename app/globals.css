@@ -4,40 +4,24 @@
 
 @layer base {
   :root {
-    /* —— 信号仪表盘暗色 tokens：全站默认底色，所有页面引用 —— */
-    --background: 222 14% 5%; /* #0B0D10 近黑（偏冷，像仪表屏） */
-    --foreground: 220 16% 96%; /* 柔白 #F1F3F6，不用纯白 */
-    --surface: 222 14% 7%; /* 抬升面板 #11141A */
-    --surface-2: 222 13% 10%; /* #161A21 */
-    --card: 222 14% 7%;
-    --card-foreground: 220 16% 96%;
-    --popover: 222 14% 7%;
-    --popover-foreground: 220 16% 96%;
-    --primary: 199 90% 60%; /* 信号电光蓝 #38BDF8（唯一强调色） */
-    --primary-foreground: 222 45% 7%;
-    --secondary: 222 13% 12%;
-    --secondary-foreground: 220 16% 96%;
-    --muted: 222 12% 13%;
-    --muted-foreground: 220 9% 62%;
-    --accent: 222 13% 12%;
-    --accent-foreground: 220 16% 96%;
-    --destructive: 0 80% 66%; /* 克制红，仅表单错误用 #ec6a6a */
+    --background: 0 0% 100%;
+    --foreground: 240 3% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 3% 12%;
+    --primary: 210 100% 40%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 7% 97%;
+    --secondary-foreground: 240 4% 14%;
+    --muted: 240 7% 97%;
+    --muted-foreground: 240 2% 42%;
+    --accent: 240 7% 97%;
+    --accent-foreground: 240 4% 14%;
+    --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 100%;
-    --border: 220 13% 16%; /* 发丝描边 #232831 */
-    --input: 220 13% 16%;
-    --ring: 199 90% 60%;
-    --signal: 199 90% 60%;
-    --radius: 0.5rem; /* 收紧圆角，偏仪器感 */
-
-    /* 缓动：不要线性，统一 out-expo / 轻微回弹 */
-    --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
-    --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
-
-    /* 字体：Latin/数字走系统等宽（仪器感），中文走系统无衬线（可读性） */
-    --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
-      "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
-    --font-mono: "SF Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo,
-      "Cascadia Code", Consolas, monospace;
+    --border: 240 7% 90%;
+    --input: 240 7% 90%;
+    --ring: 210 100% 40%;
+    --radius: 0.75rem;
   }
 }
 
@@ -52,22 +36,14 @@
 
   body {
     @apply bg-background text-foreground;
-    font-family: var(--font-sans);
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
     text-rendering: optimizeLegibility;
-    -webkit-font-smoothing: antialiased;
   }
 
   h1,
   h2,
   h3 {
-    font-family: var(--font-sans);
-  }
-
-  /* 数字 / 技术标签走等宽，做出「信号读数」质感 */
-  .tabular,
-  .nums {
-    font-family: var(--font-mono);
-    font-variant-numeric: tabular-nums;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
   }
 
   :focus-visible {
@@ -76,8 +52,7 @@
   }
 
   ::selection {
-    background: hsl(var(--signal) / 0.24);
-    color: hsl(var(--foreground));
+    background: hsl(var(--primary) / 0.14);
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -101,55 +76,5 @@
 
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
-  }
-
-  /* 雷达网格：极淡的仪表底纹，替代原来的霓虹径向光 */
-  .bg-grid {
-    background-image:
-      linear-gradient(hsl(var(--foreground) / 0.04) 1px, transparent 1px),
-      linear-gradient(90deg, hsl(var(--foreground) / 0.04) 1px, transparent 1px);
-    background-size: 56px 56px;
-  }
-
-  /* 进场：淡入上浮，配合 inline animationDelay 做错峰 */
-  .animate-rise {
-    animation: rise 0.7s var(--ease-out-expo) both;
-  }
-
-  .animate-sweep {
-    animation: sweep 6s linear infinite;
-  }
-
-  .animate-ping-slow {
-    animation: ping-slow 2.8s var(--ease-out-expo) infinite;
-  }
-}
-
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(14px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@keyframes sweep {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes ping-slow {
-  0% {
-    transform: scale(0.9);
-    opacity: 0.7;
-  }
-  70%,
-  100% {
-    transform: scale(2.2);
-    opacity: 0;
   }
 }
