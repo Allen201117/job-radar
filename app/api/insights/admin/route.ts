@@ -9,6 +9,7 @@ import {
   hasTimeWindow,
 } from "@/lib/insight-verification";
 import { INSIGHT_DIMENSIONS, ITEM_COLUMNS, flattenSources } from "@/lib/insight-bundle";
+import { normalizeIndustry } from "@/lib/industries";
 import type { InsightItem, InsightSource } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -126,7 +127,7 @@ export async function GET() {
   const service = createServiceClient();
   const [{ data: companies, error: cErr }, { data: rawItems, error: iErr }, { data: disputes, error: dErr }] =
     await Promise.all([
-      service.from("company_profiles").select("id, company, display_name, aliases").order("company"),
+      service.from("company_profiles").select("id, company, display_name, aliases, industry").order("company"),
       service
         .from("insight_items")
         .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
@@ -216,6 +217,12 @@ export async function POST(request: NextRequest) {
   };
 
   const sources = Array.isArray(body.sources) ? body.sources : [];
+
+  // 公司行业标签：提供则 upsert（仅 industry，不动 display_name/aliases；为空不改）。
+  const industry = normalizeIndustry(body.industry);
+  if (industry) {
+    await service.from("company_profiles").upsert({ company, industry }, { onConflict: "company" });
+  }
 
   if (body.id) {
     // 编辑：更新字段 + 整体替换来源（公司不变）。

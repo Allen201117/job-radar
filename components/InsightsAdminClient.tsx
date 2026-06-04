@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, PencilSimple, Trash, ArrowCounterClockwise, X, Flag, Warning } from "@phosphor-icons/react";
 import { INSIGHT_DIMENSIONS } from "@/lib/insight-bundle";
+import { INDUSTRIES } from "@/lib/industries";
 import type {
   InsightDimension,
   InsightGrade,
@@ -33,6 +34,7 @@ interface AdminCompany {
   company: string;
   display_name: string | null;
   aliases: string[];
+  industry: string | null;
 }
 interface AdminDispute {
   id: string;
@@ -78,6 +80,7 @@ type SourceDraft = {
 type FormState = {
   id: string | null;
   company: string;
+  industry: string;
   dimension: InsightDimension;
   grade: InsightGrade;
   title: string;
@@ -93,6 +96,7 @@ type FormState = {
 const EMPTY_FORM: FormState = {
   id: null,
   company: "",
+  industry: "",
   dimension: "timing",
   grade: "fact",
   title: "",
@@ -167,6 +171,40 @@ export default function InsightsAdminClient() {
     return Array.from(groups.values()).sort((a, b) => a.name.localeCompare(b.name, "zh"));
   }, [items, companyById]);
 
+  // 行业覆盖 worklist：每个行业下的公司 + 已录入洞察数（缺口一目了然，点击直接补录）
+  const industryCoverage = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const it of items) counts.set(it.company_id, (counts.get(it.company_id) || 0) + 1);
+    const byIndustry = new Map<string, { company: string; count: number }[]>();
+    for (const c of companies) {
+      const ind = c.industry || "未分类";
+      const list = byIndustry.get(ind) || [];
+      list.push({ company: c.display_name || c.company, count: counts.get(c.id) || 0 });
+      byIndustry.set(ind, list);
+    }
+    return Array.from(byIndustry.entries())
+      .map(([industry, comps]) => ({
+        industry,
+        companies: comps.sort((a, b) => b.count - a.count),
+        withInsights: comps.filter((x) => x.count > 0).length,
+        total: comps.length,
+      }))
+      .sort((a, b) => b.total - a.total);
+  }, [companies, items]);
+
+  function openCreateFor(company: string, industry: string) {
+    setForm({
+      ...EMPTY_FORM,
+      company,
+      industry: industry === "未分类" ? "" : industry,
+      sources: [{ ...EMPTY_FORM.sources[0] }],
+    });
+    setFormError("");
+    setFormGate("");
+    setFormOpen(true);
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function openCreate() {
     setForm({ ...EMPTY_FORM, sources: [{ ...EMPTY_FORM.sources[0] }] });
     setFormError("");
@@ -179,6 +217,7 @@ export default function InsightsAdminClient() {
     setForm({
       id: it.id,
       company: c?.company || "",
+      industry: c?.industry || "",
       dimension: it.dimension,
       grade: it.grade,
       title: it.title || "",
@@ -232,6 +271,7 @@ export default function InsightsAdminClient() {
       const payload = {
         id: form.id,
         company: form.company,
+        industry: form.industry,
         dimension: form.dimension,
         grade: form.grade,
         title: form.title,
@@ -408,6 +448,51 @@ export default function InsightsAdminClient() {
         </section>
       )}
 
+      {/* 行业覆盖 worklist：按行业看缺口，点公司直接补录 */}
+      {companies.length > 0 && (
+        <section>
+          <h2 className="mb-3 text-sm font-semibold text-white/80">
+            行业覆盖（{companies.length} 家公司 · 绿色=已录入，灰色=待补全，点公司直接补录）
+          </h2>
+          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+            {industryCoverage.map((g) => (
+              <div key={g.industry} className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-white/85">{g.industry}</span>
+                  <span
+                    className={cn(
+                      "shrink-0 rounded-full px-2 py-0.5 text-[11px]",
+                      g.withInsights ? "bg-emerald-300/12 text-emerald-200" : "bg-white/10 text-white/50",
+                    )}
+                  >
+                    已录入 {g.withInsights}/{g.total}
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {g.companies.map((c) => (
+                    <button
+                      key={c.company}
+                      type="button"
+                      onClick={() => openCreateFor(c.company, g.industry)}
+                      title={c.count > 0 ? `${c.count} 条洞察 · 点击新增` : "待补全 · 点击新增"}
+                      className={cn(
+                        "rounded-full border px-2 py-0.5 text-[11px] transition",
+                        c.count > 0
+                          ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-100/80 hover:bg-emerald-300/20"
+                          : "border-white/12 bg-white/[0.05] text-white/45 hover:bg-white/10 hover:text-white/70",
+                      )}
+                    >
+                      {c.company}
+                      {c.count > 0 ? ` ·${c.count}` : ""}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* 全部条目（按公司分组） */}
       <section className="space-y-6">
         {grouped.map((g) => (
@@ -567,6 +652,21 @@ function ItemForm({
           <datalist id="insight-companies">
             {companies.map((c) => (
               <option key={c.id} value={c.company} />
+            ))}
+          </datalist>
+        </FormField>
+
+        <FormField label="行业（选填，便于按行业组织 / 补全覆盖）">
+          <input
+            list="insight-industries"
+            value={form.industry}
+            onChange={(e) => setField("industry", e.target.value)}
+            placeholder="如 金融 / 制造/工业"
+            className={inputCls}
+          />
+          <datalist id="insight-industries">
+            {INDUSTRIES.map((ind) => (
+              <option key={ind} value={ind} />
             ))}
           </datalist>
         </FormField>
