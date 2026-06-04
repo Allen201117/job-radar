@@ -8,7 +8,7 @@ import { mapApiSearchJobsToScoredJobs } from "@/lib/client-job-mapping";
 import {
   jobMatchesChinaKeyword,
   normalizeChinaCity,
-  normalizeChinaJobType,
+  recruitmentCategory,
 } from "@/lib/china-keyword-expansion";
 import { classifyCompanyOrigin } from "@/lib/company-origin";
 import { cn } from "@/lib/utils";
@@ -558,15 +558,8 @@ function jobMatchesFilters(job: ScoredJob, filters: Filters) {
     }
   }
   if (filters.jobType) {
-    const recruitType =
-      normalizeChinaJobType({
-        title: job.title,
-        sourceType: job.job_type,
-        summary: job.summary,
-      }) ||
-      job.job_type ||
-      "";
-    if (!recruitType.includes(filters.jobType)) return false;
+    // 用穷尽的三桶分类（社招 / 校招 / 实习）精确匹配，避免细粒度类型（管培生 / 研究岗 / 全职等）漏桶。
+    if (recruitmentCategory(job) !== filters.jobType) return false;
   }
   if (filters.keyword) {
     if (!jobMatchesChinaKeyword(job, filters.keyword)) return false;
