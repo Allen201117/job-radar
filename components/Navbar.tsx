@@ -12,9 +12,7 @@ import {
   Broadcast,
   CheckCircle,
   Compass,
-  Database,
   SlidersHorizontal,
-  Sparkle,
   UserCircle,
 } from "@phosphor-icons/react";
 
@@ -33,32 +31,16 @@ export default function Navbar() {
   const router = useRouter();
   const supabase = createBrowserClient();
   const [email, setEmail] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [lang, setLang] = useLang();
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
-      const user = data.user;
-      setEmail(user?.email ?? null);
-      if (!user) return;
-      supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", user.id)
-        .single()
-        .then(({ data: profile }) => {
-          setIsAdmin(profile?.role === "admin");
-        });
+      setEmail(data.user?.email ?? null);
     });
   }, []);
 
-  const links = isAdmin
-    ? [
-        ...LINKS,
-        { href: "/admin/insights", key: "insightsAdmin", icon: Sparkle },
-        { href: "/sources", key: "sources", icon: Database },
-      ]
-    : LINKS;
+  // 洞察管理 / 源管理为管理员内部工具，不在导航中暴露给用户（仍可经 /admin/insights、/sources 直达）
+  const links = LINKS;
 
   async function handleLogout() {
     await supabase.auth.signOut();
@@ -76,7 +58,7 @@ export default function Navbar() {
             </span>
             Job Radar
           </Link>
-          <nav className="flex max-w-full gap-1 overflow-x-auto">
+          <nav className="scrollbar-hide flex max-w-full gap-1 overflow-x-auto">
             {links.map((link) => (
               <Link
                 key={link.href}
