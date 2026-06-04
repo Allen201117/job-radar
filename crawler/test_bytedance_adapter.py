@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import normalizer
 from adapters.base import RawJob
-from adapters.bytedance import BytedanceAdapter
+from adapters.bytedance import BytedanceAdapter, BytedanceCampusAdapter
 
 # 录制的字节 /api/v1/search/job/posts 响应片段（结构真实，内容删减）
 SAMPLE = {
@@ -69,6 +69,33 @@ class TestBytedanceAdapter(unittest.TestCase):
         bad, _ = normalizer.validate_job_quality(
             RawJob(company="字节跳动", title="算法工程师", jd_url="https://jobs.bytedance.com/"), src)
         self.assertFalse(bad)  # 首页被拒
+
+
+class TestBytedanceCampusAdapter(unittest.TestCase):
+    """字节校招/实习 adapter：复用社招解析，仅路径切到 /campus。"""
+
+    def setUp(self):
+        self.a = BytedanceCampusAdapter()
+
+    def test_routes_to_campus_paths(self):
+        self.assertEqual(self.a.name, "bytedance_campus")
+        self.assertIn("/campus/", self.a.detail_template)
+        self.assertTrue(all("/campus/" in u for u in self.a.list_urls))
+        # 不应残留社招路径
+        self.assertNotIn("/experienced/", self.a.detail_template)
+
+    def test_parse_uses_campus_detail_url(self):
+        jobs = self.a.parse(json.dumps({"_intercepted": [SAMPLE]}))
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual(jobs[0].company, "字节跳动")
+        self.assertEqual(
+            jobs[0].jd_url,
+            "https://jobs.bytedance.com/campus/position/7644436900522248453/detail",
+        )
+        ok, _ = normalizer.validate_job_quality(
+            jobs[0], "https://jobs.bytedance.com/campus/position"
+        )
+        self.assertTrue(ok)  # 校招详情页同属官方 host，质量门通过
 
 
 if __name__ == "__main__":

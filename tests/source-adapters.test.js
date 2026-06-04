@@ -29,8 +29,8 @@ const S = loadTsModule(path.join("lib", "source-adapters.ts"));
 test("adapter 白名单覆盖 crawler ADAPTERS 全部值（含通用 ATS）", () => {
   for (const v of [
     "apple", "apple_cn", "baidu", "jd", "haier", "siemens", "tencent",
-    "bytedance", "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu",
-    "greenhouse", "lever",
+    "bytedance", "bytedance_campus", "nio_feishu", "xpeng_feishu", "horizon_feishu",
+    "xiaomi_feishu", "greenhouse", "lever",
   ]) {
     assert.equal(S.isValidAdapter(v), true, `${v} 应在白名单`);
   }
