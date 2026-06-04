@@ -24,6 +24,8 @@ import { cn } from "@/lib/utils";
 interface Props {
   job: ScoredJob;
   onActionChange: (jobId: string, action: PrimaryAction | null) => void;
+  // 本次会话刷新/发现新拿到的岗位 → 绿色高亮 + 「本次新发现」标
+  sessionNew?: boolean;
 }
 
 type PrimaryAction = "saved" | "ignored" | "applied";
@@ -69,7 +71,7 @@ function recruitTypeStyle(t: string): string {
   return "border border-white/10 bg-white/10 text-white/62";
 }
 
-export default function JobCard({ job, onActionChange }: Props) {
+export default function JobCard({ job, onActionChange, sessionNew }: Props) {
   const [acting, setActing] = useState(false);
   const [currentAction, setCurrentAction] = useState(job.user_action);
   const [actionError, setActionError] = useState("");
@@ -185,7 +187,14 @@ export default function JobCard({ job, onActionChange }: Props) {
     : "未知";
 
   return (
-    <article className="group rounded-[1.35rem] border border-white/10 bg-white/[0.065] p-5 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition duration-200 hover:-translate-y-0.5 hover:border-white/18 hover:bg-white/[0.085] hover:shadow-2xl hover:shadow-black/25">
+    <article
+      className={cn(
+        "group rounded-[1.35rem] border p-5 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition duration-200 hover:-translate-y-0.5 hover:shadow-2xl hover:shadow-black/25",
+        sessionNew
+          ? "border-lime-300/45 bg-lime-300/[0.06] ring-1 ring-lime-300/25 hover:border-lime-300/60 hover:bg-lime-300/[0.09]"
+          : "border-white/10 bg-white/[0.065] hover:border-white/18 hover:bg-white/[0.085]",
+      )}
+    >
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -200,7 +209,13 @@ export default function JobCard({ job, onActionChange }: Props) {
                 {recruitType}
               </span>
             )}
-            {isNew && (
+            {sessionNew && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-lime-300 px-2.5 py-1 text-xs font-semibold text-lime-950">
+                <Sparkle size={12} weight="fill" aria-hidden="true" />
+                本次新发现
+              </span>
+            )}
+            {isNew && !sessionNew && (
               <span className="rounded-full bg-sky-300 px-2.5 py-1 text-xs font-semibold text-sky-950">
                 新发现
               </span>
