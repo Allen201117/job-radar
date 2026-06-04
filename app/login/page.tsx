@@ -5,6 +5,23 @@ import { createBrowserClient } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Broadcast, EnvelopeSimple, LockKey } from "@phosphor-icons/react";
 
+// 把 Supabase/GoTrue 的原始英文报错映射成面向用户的友好中文提示，绝不直接抛原始串。
+function mapAuthError(error: { message?: string; status?: number }): string {
+  const raw = (error?.message || "").toLowerCase();
+  if (raw.includes("invalid login credentials")) return "邮箱或密码不正确";
+  if (raw.includes("email not confirmed")) return "邮箱尚未验证，请先点击邮件里的验证链接";
+  if (raw.includes("already registered") || raw.includes("already been registered"))
+    return "该邮箱已注册，请直接登录";
+  if (raw.includes("signups not allowed")) return "注册暂未开放，请联系管理员开通";
+  if (raw.includes("password should be at least")) return "密码至少需要 6 位";
+  if (raw.includes("unable to validate email") || raw.includes("invalid format"))
+    return "邮箱格式不正确";
+  if (raw.includes("rate limit") || raw.includes("for security purposes"))
+    return "操作过于频繁，请稍后再试";
+  if (raw.includes("failed to fetch") || raw.includes("network")) return "网络异常，请检查网络后重试";
+  return "操作失败，请稍后重试";
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -14,38 +31,72 @@ export default function LoginPage() {
   const router = useRouter();
   const supabase = createBrowserClient();
 
-  async function handleSignIn(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    if (error) {
-      setError(error.message);
-    } else {
-      router.push("/today");
-      router.refresh();
-    }
-    setLoading(false);
+  // 提交前的本地校验，避免把明显无效的输入打到后端再拿英文报错。
+  function validate(): string | null {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return "请输入有效的邮箱地址";
+    if (password.length < 6) return "密码至少需要 6 位";
+    return null;
   }
 
-  async function handleSignUp(e: React.FormEvent) {
+  async function handleSignIn(e: React.FormEvent) {
     e.preventDefault();
-    setLoading(true);
     setError("");
     setMessage("");
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
-    if (error) {
-      setError(error.message);
-    } else {
-      setMessage("注册链接已发送到邮箱，请查收。");
+    const invalid = validate();
+    if (invalid) {
+      setError(invalid);
+      return;
     }
-    setLoading(false);
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (error) {
+        setError(mapAuthError(error));
+        return;
+      }
+      router.push("/today");
+      router.refresh();
+    } catch {
+      setError("网络异常，请检查网络后重试");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSignUp() {
+    setError("");
+    setMessage("");
+    const invalid = validate();
+    if (invalid) {
+      setError(invalid);
+      return;
+    }
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+      });
+      if (error) {
+        setError(mapAuthError(error));
+        return;
+      }
+      if (data.session) {
+        // 项目关闭了邮箱验证：注册即登录，直接进产品。
+        router.push("/today");
+        router.refresh();
+      } else {
+        // 项目仍开启邮箱验证：提示去邮箱激活。
+        setMessage("注册成功，请到邮箱点击验证链接后再登录。");
+      }
+    } catch {
+      setError("网络异常，请检查网络后重试");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
