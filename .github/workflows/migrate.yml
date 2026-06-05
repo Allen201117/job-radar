@@ -1,0 +1,32 @@
+name: db-migrate
+
+# push main 且改动 supabase/migrations/** 时自动应用迁移到生产库；也可手动触发。
+# 用户只需一次性配 SUPABASE_DB_URL secret（见 scripts/db-migrate.sh 头部说明），此后零手动 SQL。
+on:
+  push:
+    branches: [main]
+    paths:
+      - "supabase/migrations/**"
+      - "scripts/db-migrate.sh"
+      - ".github/workflows/migrate.yml"
+  workflow_dispatch:
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Apply pending migrations
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "::warning::SUPABASE_DB_URL secret 未配置，跳过自动迁移。"
+            echo "去 GitHub repo Settings → Secrets → Actions 添加 SUPABASE_DB_URL（Supabase 直连串）。"
+            exit 0
+          fi
+          bash scripts/db-migrate.sh

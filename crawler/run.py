@@ -44,6 +44,13 @@ ADAPTERS = {
     "lever": LeverAdapter(),
 }
 
+# 中国本土公司源（每日后台爬取高优）：本土覆盖优先级 > 外企，排在外企 ATS 前先抓。
+# 扩本土覆盖（新增本土 adapter）是当前最高优先 backlog，见 CLAUDE.md「核心产品原则#3」。
+DOMESTIC_ADAPTERS = {
+    "baidu", "jd", "bytedance", "bytedance_campus", "tencent",
+    "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier",
+}
+
 
 def run_crawl(filter_adapter: str = None):
     supabase = db.get_supabase()
@@ -59,7 +66,10 @@ def run_crawl(filter_adapter: str = None):
             print(f"[crawler] 没有匹配 adapter_name='{filter_adapter}' 的 enabled source，退出。")
             return
 
-    print(f"[crawler] 开始抓取 {len(sources)} 个源...")
+    # 本土优先：CI 时间有限时先抓中国本土公司源（高优），外企 ATS 殿后。
+    sources.sort(key=lambda s: 0 if (s.get("adapter_name") or "") in DOMESTIC_ADAPTERS else 1)
+    domestic_n = sum(1 for s in sources if (s.get("adapter_name") or "") in DOMESTIC_ADAPTERS)
+    print(f"[crawler] 开始抓取 {len(sources)} 个源（本土优先 {domestic_n} / 外企 {len(sources) - domestic_n}）...")
 
     total_created = 0
     total_updated = 0
