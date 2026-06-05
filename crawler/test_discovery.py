@@ -187,6 +187,58 @@ class BilingualKeywordMatchTest(unittest.TestCase):
         self.assertEqual(out[0].location, "Beijing, China")
 
 
+class JobTypeStrictnessTest(unittest.TestCase):
+    """按页面所选「岗位类型」严格爬取：板块选择 + 三桶分类后置过滤（修「一味爬社招」）。"""
+
+    def test_recruitment_category_buckets(self):
+        # 标题/摘要带信号
+        self.assertEqual(discovery.recruitment_category(_job(title="算法实习生", summary="日常实习")), "实习")
+        self.assertEqual(discovery.recruitment_category(_job(title="后端开发（应届）", summary="校招")), "校招")
+        # 标题无信号时落到 raw.job_type 字段（关键：板块来的岗位 job_type 已标实习/校招）
+        self.assertEqual(discovery.recruitment_category(_job(title="产品经理", summary="", job_type="实习")), "实习")
+        self.assertEqual(discovery.recruitment_category(_job(title="产品经理", summary="", job_type="校招")), "校招")
+        # 默认社招
+        self.assertEqual(discovery.recruitment_category(_job(title="算法工程师", summary="推荐", job_type="社招")), "社招")
+        self.assertEqual(discovery.recruitment_category(_job(title="算法工程师", summary="推荐", job_type="")), "社招")
+
+    def test_job_matches_type(self):
+        intern = _job(title="数据分析实习生", job_type="实习")
+        social = _job(title="数据分析师", job_type="社招")
+        self.assertTrue(discovery.job_matches_type(intern, ""))      # 空 = 不过滤
+        self.assertTrue(discovery.job_matches_type(social, ""))
+        self.assertTrue(discovery.job_matches_type(intern, "实习"))
+        self.assertFalse(discovery.job_matches_type(social, "实习"))  # 社招岗位在「实习」下被排除
+        self.assertTrue(discovery.job_matches_type(social, "社招"))
+        self.assertTrue(discovery.job_matches_type(social, "未知类型"))  # 未知类型不过滤
+
+    def test_bytedance_board_follows_job_type(self):
+        for jt in ("实习", "校招"):
+            urls = discovery.build_keyword_list_urls("bytedance", "产品", jt)
+            self.assertTrue(urls[0].startswith("https://jobs.bytedance.com/campus/position"), jt)
+        for jt in ("社招", ""):
+            urls = discovery.build_keyword_list_urls("bytedance", "产品", jt)
+            self.assertTrue(urls[0].startswith("https://jobs.bytedance.com/experienced/position"), jt)
+
+    def test_apply_keyword_switches_campus_detail_template(self):
+        a = _FakeAdapter()
+        discovery.apply_keyword_to_adapter(a, "bytedance", "产品", "实习")
+        self.assertIn("/campus/position", a.list_urls[0])
+        self.assertEqual(a.detail_template, "https://jobs.bytedance.com/campus/position/{id}/detail")
+        b = _FakeAdapter()
+        discovery.apply_keyword_to_adapter(b, "bytedance", "产品", "社招")
+        self.assertIn("/experienced/position", b.list_urls[0])
+        self.assertFalse(hasattr(b, "detail_template"))  # 社招不覆盖
+
+    def test_filter_excludes_wrong_type(self):
+        jobs = [
+            _job(title="算法实习生", location="北京", summary="日常实习", job_type="实习"),
+            _job(title="算法工程师", location="北京", summary="推荐方向", job_type="社招"),
+        ]
+        out = discovery.filter_raw_jobs(jobs, "算法", "北京", "实习")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].title, "算法实习生")
+
+
 class RunDiscoveryLifecycleTest(unittest.TestCase):
     def _capture_updates(self):
         calls = []
