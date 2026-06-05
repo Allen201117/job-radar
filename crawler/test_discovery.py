@@ -239,6 +239,39 @@ class JobTypeStrictnessTest(unittest.TestCase):
         self.assertEqual(out[0].title, "算法实习生")
 
 
+class PreferenceExcludeTest(unittest.TestCase):
+    """偏好底层逻辑：排除词命中即丢 + 入参解析（JSON / 逗号）。"""
+
+    def test_parse_str_list(self):
+        self.assertEqual(discovery._parse_str_list('["外包","驻场"]'), ["外包", "驻场"])
+        self.assertEqual(discovery._parse_str_list("外包, 驻场 ,"), ["外包", "驻场"])
+        self.assertEqual(discovery._parse_str_list(""), [])
+        self.assertEqual(discovery._parse_str_list(None), [])
+
+    def test_job_excluded(self):
+        j = _job(title="算法外包岗", summary="驻场开发")
+        self.assertFalse(discovery.job_excluded(j, []))
+        self.assertTrue(discovery.job_excluded(j, ["外包"]))
+        self.assertTrue(discovery.job_excluded(j, ["驻场"]))
+        self.assertFalse(discovery.job_excluded(_job(title="算法工程师"), ["外包"]))
+
+    def test_filter_drops_excluded(self):
+        jobs = [
+            _job(title="算法工程师", location="北京", summary="推荐"),
+            _job(title="算法外包", location="北京", summary="驻场"),
+        ]
+        out = discovery.filter_raw_jobs(jobs, "算法", "北京", "", ["外包"])
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].title, "算法工程师")
+
+    def test_parse_env_reads_exclude(self):
+        params = discovery.parse_discovery_env({
+            "DISCOVERY_MODE": "discovery", "DISCOVERY_RUN_ID": "r",
+            "DISCOVERY_QUERY": "算法", "DISCOVERY_EXCLUDE": '["外包","实习"]',
+        })
+        self.assertEqual(params["exclude"], ["外包", "实习"])
+
+
 class RunDiscoveryLifecycleTest(unittest.TestCase):
     def _capture_updates(self):
         calls = []
