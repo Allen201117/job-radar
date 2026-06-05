@@ -76,26 +76,36 @@ def parse_discovery_env(env: dict) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 # 关键词匹配 / URL 构造（纯函数，可单测）
 # ---------------------------------------------------------------------------
-def build_keyword_list_urls(adapter_name: str, query: str) -> Optional[List[str]]:
-    """为支持关键词检索的源构造关键词专用列表 URL；不支持则返回 None（用适配器默认 list_urls 再后置过滤）。"""
+def is_campus_or_intern(job_type: str) -> bool:
+    """页面所选类型是否属于「校招/实习」（决定字节走 /campus 板块而非 /experienced 社招板块）。"""
+    return (job_type or "").strip() in ("实习", "校招")
+
+
+def build_keyword_list_urls(adapter_name: str, query: str, job_type: str = "") -> Optional[List[str]]:
+    """为支持关键词检索的源构造关键词专用列表 URL；不支持则返回 None（用适配器默认 list_urls 再后置过滤）。
+    字节按页面所选类型选板块：实习/校招 → /campus，社招/全部 → /experienced（修「一味爬社招」）。"""
     term = (query or "").strip()
     if not term:
         return None
     if adapter_name == "bytedance":
-        return [f"https://jobs.bytedance.com/experienced/position?keyword={quote(term)}"]
+        board = "campus" if is_campus_or_intern(job_type) else "experienced"
+        return [f"https://jobs.bytedance.com/{board}/position?keyword={quote(term)}"]
     # 飞书系列表页的关键词参数不稳定，走默认 list_urls + 后置过滤，避免猜错参数。
     return None
 
 
-def apply_keyword_to_adapter(adapter, adapter_name: str, query: str) -> None:
+def apply_keyword_to_adapter(adapter, adapter_name: str, query: str, job_type: str = "") -> None:
     """把关键词注入支持服务端检索的适配器（字节=列表 URL，腾讯=API keyword）；
-    不支持的不动，靠 filter_raw_jobs 后置过滤兜底。"""
+    不支持的不动，靠 filter_raw_jobs 后置过滤兜底。
+    字节选 /campus 板块时，同步把 detail_template 切到 /campus，保证产出的 jd_url 指向正确详情页。"""
     term = (query or "").strip()
     if not term:
         return
-    kw_urls = build_keyword_list_urls(adapter_name, term)
+    kw_urls = build_keyword_list_urls(adapter_name, term, job_type)
     if kw_urls:
         adapter.list_urls = kw_urls
+        if adapter_name == "bytedance" and is_campus_or_intern(job_type):
+            adapter.detail_template = "https://jobs.bytedance.com/campus/position/{id}/detail"
     if adapter_name == "tencent":
         adapter.discovery_keyword = term
 
@@ -127,12 +137,46 @@ def job_matches_city(raw: RawJob, city: str) -> bool:
     return want_norm in loc_norm or want in (raw.location or "")
 
 
-def filter_raw_jobs(raw_jobs: List[RawJob], query: str, city: str) -> List[RawJob]:
-    """按关键词 + 城市过滤抓到的岗位（纯函数）。"""
+# 招聘三桶分类（与前端 lib/china-keyword-expansion.js recruitmentCategory 完全同口径）。
+# 未知信号默认社招（社招是主体）；用于按页面所选「岗位类型」严格过滤发现结果。
+_INTERN_TYPES = {"暑期实习", "日常实习", "实习"}
+_CAMPUS_TYPES = {"校招", "管培生", "留学生专项"}
+_KNOWN_CATEGORIES = {"社招", "校招", "实习"}
+
+
+def recruitment_category(raw: RawJob) -> str:
+    """把岗位归并到 社招 / 校招 / 实习 三桶之一（默认社招），与前端筛选一致。"""
+    specific = normalizer.extract_job_type(raw.title or "", raw.summary) or (raw.job_type or "")
+    if specific in _INTERN_TYPES:
+        return "实习"
+    if specific in _CAMPUS_TYPES:
+        return "校招"
+    low = specific.lower()
+    if "实习" in specific or "intern" in low:
+        return "实习"
+    if any(k in specific for k in ("校招", "校园", "应届", "毕业生", "管培", "管理培训生", "留学生")) or \
+            any(k in low for k in ("campus", "new grad", "graduate", "overseas student")):
+        return "校招"
+    return "社招"
+
+
+def job_matches_type(raw: RawJob, job_type: str) -> bool:
+    """岗位是否命中页面所选招聘类型。空 / 未知类型视为不过滤（命中）；否则按三桶精确匹配。"""
+    want = (job_type or "").strip()
+    if want not in _KNOWN_CATEGORIES:
+        return True
+    return recruitment_category(raw) == want
+
+
+def filter_raw_jobs(raw_jobs: List[RawJob], query: str, city: str, job_type: str = "") -> List[RawJob]:
+    """按关键词 + 城市 + 招聘类型严格过滤抓到的岗位（纯函数）。
+    类型过滤是所有源通用的兜底：即便板块选错/混排，也只放行页面所选类型。"""
     return [
         raw
         for raw in raw_jobs
-        if job_matches_query(raw, query) and job_matches_city(raw, city)
+        if job_matches_query(raw, query)
+        and job_matches_city(raw, city)
+        and job_matches_type(raw, job_type)
     ]
 
 
@@ -165,6 +209,7 @@ class SpaKeywordRecipe:
     def run(self, supabase, params: dict) -> dict:
         query = params["query"]
         city = params.get("city", "")
+        job_type = params.get("job_type", "")
         max_pages = params.get("max_pages") or self.discovery_max_pages
 
         sources = db.get_sources(supabase)
@@ -198,11 +243,11 @@ class SpaKeywordRecipe:
                     adapter.max_pages = min(getattr(adapter, "max_pages", 2), max_pages)
                 except Exception:
                     pass
-                apply_keyword_to_adapter(adapter, adapter_name, query)
+                apply_keyword_to_adapter(adapter, adapter_name, query, job_type)
 
                 html = adapter.fetch(source["source_url"])
                 raw_jobs = adapter.parse(html)
-                matched = filter_raw_jobs(raw_jobs, query, city)
+                matched = filter_raw_jobs(raw_jobs, query, city, job_type)
                 c, u, urls = _upsert_raw_jobs(
                     supabase, source["id"], company, source["source_url"], matched
                 )
