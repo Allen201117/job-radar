@@ -23,6 +23,7 @@ export function ProductPage({
 export function ProductHero({
   eyebrow,
   title,
+  titleClassName,
   description,
   icon: Icon = Sparkle,
   action,
@@ -30,6 +31,7 @@ export function ProductHero({
 }: {
   eyebrow: string;
   title: string;
+  titleClassName?: string;
   description?: string;
   icon?: IconComponent;
   action?: ReactNode;
@@ -44,7 +46,12 @@ export function ProductHero({
             <Icon size={16} weight="fill" className="text-[#3f7cc0]" aria-hidden="true" />
             {eyebrow}
           </p>
-          <h1 className="display-tight mt-4 text-balance text-3xl font-semibold leading-tight text-[#1a1714] sm:text-4xl lg:text-[2.9rem]">
+          <h1
+            className={cn(
+              "display-tight mt-4 text-balance text-3xl font-semibold leading-tight text-[#1a1714] sm:text-4xl lg:text-[2.9rem]",
+              titleClassName,
+            )}
+          >
             {title}
           </h1>
           {description && (

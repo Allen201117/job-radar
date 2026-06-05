@@ -156,6 +156,7 @@ export interface ScoredJob extends Job {
 
 export type InsightDimension =
   | "timing"
+  | "listing"
   | "compensation_intensity"
   | "path"
   | "culture";

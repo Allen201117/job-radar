@@ -34,6 +34,21 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     label: "Lever（通用 ATS）",
     hint: "填公司名 + Lever 招聘地址即可，无需写代码，次日爬虫自动抓",
   },
+  {
+    value: "moka",
+    label: "Moka（通用 ATS · 本土）",
+    hint: "填公司名 + Moka 招聘页地址（{公司}.mokahr.com / app.mokahr.com），浏览器拦截抓取",
+  },
+  {
+    value: "beisen",
+    label: "北森 Beisen（通用 ATS · 本土）",
+    hint: "填公司名 + 北森招聘页地址（*.zhiye.com / *.italent.cn / 自有 careers 域名），浏览器拦截抓取",
+  },
+  {
+    value: "company_spa",
+    label: "企业官网 SPA（通用 · 本土长尾）",
+    hint: "填公司名 + 官网招聘页地址，仅放行接口里带真实岗位链接的行，加源零代码",
+  },
 ];
 
 export const ADAPTER_VALUES: string[] = SOURCE_ADAPTERS.map((a) => a.value);

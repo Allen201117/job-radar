@@ -16,6 +16,7 @@ import type {
 
 export const INSIGHT_DIMENSIONS: InsightDimension[] = [
   "timing",
+  "listing",
   "compensation_intensity",
   "path",
   "culture",
@@ -25,7 +26,7 @@ export const ITEM_COLUMNS =
   "id, company_id, dimension, grade, title, content, sample_size, payload, time_window, valid_from, valid_until, last_verified_at, deidentified, status, created_at, updated_at";
 
 export function emptyDimensions(): Record<InsightDimension, InsightItemView[]> {
-  return { timing: [], compensation_intensity: [], path: [], culture: [] };
+  return { timing: [], listing: [], compensation_intensity: [], path: [], culture: [] };
 }
 
 // Supabase 嵌套 select 返回 { insight_sources: {...} }[]，拍平为 InsightSource[]

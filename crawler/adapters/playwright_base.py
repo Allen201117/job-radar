@@ -18,6 +18,31 @@ _UA = (
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
+# 岗位行常见的「标题」字段名，用于在未知 JSON 结构里识别岗位列表。
+_TITLE_KEYS = ("title", "name", "jobTitle", "positionName", "job_title",
+               "position_name", "jobName", "postName")
+
+
+def _deep_find_job_list(obj, depth: int = 0) -> list:
+    """深搜响应，返回最大的「元素是 dict 且多数含标题字段」的列表（通用站点兜底）。"""
+    if depth > 6:
+        return []
+    best: list = []
+    if isinstance(obj, list):
+        dicts = [x for x in obj if isinstance(x, dict)]
+        if dicts and sum(any(k in d for k in _TITLE_KEYS) for d in dicts) >= max(1, len(dicts) // 2):
+            best = obj
+        for x in obj:
+            cand = _deep_find_job_list(x, depth + 1)
+            if len(cand) > len(best):
+                best = cand
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            cand = _deep_find_job_list(v, depth + 1)
+            if len(cand) > len(best):
+                best = cand
+    return best
+
 
 class PlaywrightAdapter(BaseAdapter):
     name = "playwright_base"
@@ -25,8 +50,11 @@ class PlaywrightAdapter(BaseAdapter):
     # ---- 子类配置 ----
     company_name: str = ""
     list_urls: List[str] = []
-    intercept_match: str = ""           # 要拦截的接口 URL 子串
-    posts_keys = ("data.job_post_list", "data.posts", "data.list", "job_post_list", "posts", "list")
+    intercept_match: str = ""           # 要拦截的接口 URL 单个子串（向后兼容）
+    intercept_matches: tuple = ()       # 多个候选子串（任一命中即拦截）；两者皆空 = 拦截所有 JSON
+    posts_keys = ("data.job_post_list", "data.posts", "data.list", "data.data.list",
+                  "data.items", "data.records", "data.rows", "data.content",
+                  "job_post_list", "posts", "list", "items", "records", "rows", "data")
     detail_template: str = ""           # 含 {id}
     official_hosts: tuple = ()
     wait_ms: int = 6000
@@ -49,12 +77,18 @@ class PlaywrightAdapter(BaseAdapter):
             )
             page = ctx.new_page()
 
+            matchers = self.intercept_matches or (
+                (self.intercept_match,) if self.intercept_match else ()
+            )
+
             def on_response(resp):
                 try:
-                    if self.intercept_match and self.intercept_match in resp.url:
-                        ct = (resp.headers or {}).get("content-type", "").lower()
-                        if "json" in ct:
-                            collected.append(resp.json())
+                    # 两者皆空 = 拦截所有 JSON 响应（通用站点）；否则任一子串命中即拦截。
+                    if matchers and not any(m in resp.url for m in matchers):
+                        return
+                    ct = (resp.headers or {}).get("content-type", "").lower()
+                    if "json" in ct:
+                        collected.append(resp.json())
                 except Exception:
                     pass
 
@@ -73,7 +107,8 @@ class PlaywrightAdapter(BaseAdapter):
         if not collected:
             # 一条接口都没拦到 → 多半被反爬识别或站点改版；交给 run.py 记为 partial（不伪装成功）
             raise RuntimeError(
-                f"{self.name}: anti_bot_blocked — 未拦截到任何 '{self.intercept_match}' 接口响应"
+                f"{self.name}: anti_bot_blocked — 未拦截到任何岗位接口 JSON 响应 "
+                f"(matchers={matchers or 'ALL_JSON'})"
             )
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
 
@@ -129,7 +164,8 @@ class PlaywrightAdapter(BaseAdapter):
                     break
             if ok and isinstance(cur, list):
                 return cur
-        return []
+        # 兜底（通用站点未知结构）：深搜响应里「最像岗位列表」的 dict 数组。
+        return _deep_find_job_list(resp)
 
     def _host_ok(self, jd_url: str) -> bool:
         if not self.official_hosts:
