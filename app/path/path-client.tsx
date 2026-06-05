@@ -9,16 +9,15 @@ import {
   Path,
   Scales,
   ShieldWarning,
-  SlidersHorizontal,
 } from "@phosphor-icons/react";
 import type { CareerPathReport, TimingStatusKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const TIMING_STYLE: Record<TimingStatusKind, string> = {
-  open: "border border-emerald-300/25 bg-emerald-300/15 text-emerald-200",
-  rolling: "border border-sky-300/25 bg-sky-300/15 text-sky-200",
-  closed: "border border-amber-300/25 bg-amber-300/15 text-amber-200",
-  unknown: "border border-white/15 bg-white/10 text-white/55",
+  open: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a]",
+  rolling: "border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299]",
+  closed: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312]",
+  unknown: "border border-black/[0.08] bg-[#f4efe6] text-[#8a8275]",
 };
 
 export default function CareerPathClient() {
@@ -42,10 +41,10 @@ export default function CareerPathClient() {
     };
   }, []);
 
-  if (loading) return <p className="mt-8 text-sm text-white/50">正在生成职业路径…</p>;
+  if (loading) return <p className="mt-8 text-sm text-[#8a8275]">正在生成职业路径…</p>;
   if (error)
     return (
-      <p className="mt-8 rounded-xl border border-white/10 bg-white/[0.04] p-4 text-sm text-white/60">
+      <p className="mt-8 rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm text-[#5f594e]">
         {error}
       </p>
     );
@@ -54,14 +53,14 @@ export default function CareerPathClient() {
   const noData = report.recommendations.length === 0;
 
   return (
-    <div className="mt-8 space-y-8 text-white">
+    <div className="mt-8 space-y-8 text-[#1a1714]">
       {/* 画像摘要 */}
       <ProfileSummary report={report} />
 
       {report.is_recommended_fallback && report.recommendations.length > 0 && (
-        <p className="rounded-xl border border-sky-300/20 bg-sky-300/10 px-4 py-3 text-sm leading-6 text-sky-100/90">
+        <p className="rounded-xl border border-[#cfe0f5] bg-[#e8f1fc] px-4 py-3 text-sm leading-6 text-[#2f6299]">
           你还没设置目标公司，以下是按<strong>当前招聘窗口期</strong>给出的推荐。到
-          <Link href="/preferences" className="mx-1 underline underline-offset-2 hover:text-white">
+          <Link href="/preferences" className="mx-1 underline underline-offset-2 hover:text-[#1a1714]">
             偏好设置
           </Link>
           里加上目标公司，建议会更贴合你。
@@ -77,7 +76,7 @@ export default function CareerPathClient() {
             {report.recommendations.map((rec) => (
               <article
                 key={rec.company}
-                className="rounded-[1.1rem] border border-white/10 bg-white/[0.05] p-4"
+                className="surface-soft p-4"
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-base font-semibold">{rec.display_name || rec.company}</span>
@@ -87,7 +86,7 @@ export default function CareerPathClient() {
                   {rec.job_count > 0 && (
                     <Link
                       href="/jobs"
-                      className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/[0.06] px-2.5 py-1 text-xs text-white/70 transition hover:border-white/25 hover:text-white"
+                      className="inline-flex items-center gap-1 rounded-full border border-black/[0.08] bg-white/70 px-2.5 py-1 text-xs text-[#5f594e] transition hover:bg-white hover:text-[#1a1714]"
                     >
                       <Briefcase size={12} weight="bold" />
                       {rec.job_count} 个在招
@@ -95,17 +94,17 @@ export default function CareerPathClient() {
                   )}
                 </div>
                 {rec.timing.detail && (
-                  <p className="mt-1.5 text-xs text-white/45">招聘节奏：{rec.timing.detail}</p>
+                  <p className="mt-1.5 text-xs text-[#8a8275]">招聘节奏：{rec.timing.detail}</p>
                 )}
                 <div className="mt-2 grid gap-1.5 text-sm sm:grid-cols-2">
                   {rec.comp_note && (
-                    <span className="inline-flex items-center gap-1.5 text-white/70">
-                      <Scales size={14} className="text-white/40" /> {rec.comp_note}
+                    <span className="inline-flex items-center gap-1.5 text-[#5f594e]">
+                      <Scales size={14} className="text-[#a39a8c]" /> {rec.comp_note}
                     </span>
                   )}
                   {rec.caution_note && (
-                    <span className="inline-flex items-center gap-1.5 text-amber-200/80">
-                      <ShieldWarning size={14} className="text-amber-300/70" /> {rec.caution_note}
+                    <span className="inline-flex items-center gap-1.5 text-[#9a6a2a]">
+                      <ShieldWarning size={14} className="text-[#c79237]" /> {rec.caution_note}
                     </span>
                   )}
                 </div>
@@ -144,9 +143,9 @@ function ProfileSummary({ report }: { report: CareerPathReport }) {
   const { target_roles, seniority, target_locations } = report.profile_summary;
   if (!report.has_profile) {
     return (
-      <div className="rounded-xl border border-white/10 bg-white/[0.04] p-4 text-sm leading-6 text-white/60">
+      <div className="rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm leading-6 text-[#5f594e]">
         还没有你的求职画像。到
-        <Link href="/preferences" className="mx-1 underline underline-offset-2 hover:text-white">
+        <Link href="/preferences" className="mx-1 underline underline-offset-2 hover:text-[#1a1714]">
           偏好设置
         </Link>
         上传简历或填写目标岗位/城市/公司，路径建议会基于你的画像生成。
@@ -160,9 +159,9 @@ function ProfileSummary({ report }: { report: CareerPathReport }) {
   ];
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
-      <span className="text-white/45">你的画像：</span>
+      <span className="text-[#8a8275]">你的画像：</span>
       {chips.map((c) => (
-        <span key={c} className="rounded-full border border-white/10 bg-white/[0.06] px-2.5 py-1 text-xs text-white/75">
+        <span key={c} className="rounded-full border border-black/[0.06] bg-white/70 px-2.5 py-1 text-xs text-[#5f594e]">
           {c}
         </span>
       ))}
@@ -172,11 +171,11 @@ function ProfileSummary({ report }: { report: CareerPathReport }) {
 
 function EmptyState({ reason }: { reason: CareerPathReport["failure_reason"] }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.04] p-5 text-sm leading-6 text-white/65">
+    <div className="rounded-xl border border-black/[0.06] bg-white/55 p-5 text-sm leading-6 text-[#5f594e]">
       {reason === "no_profile" ? (
         <>
           先到
-          <Link href="/preferences" className="mx-1 inline-flex items-center gap-1 underline underline-offset-2 hover:text-white">
+          <Link href="/preferences" className="mx-1 inline-flex items-center gap-1 underline underline-offset-2 hover:text-[#1a1714]">
             偏好设置 <ArrowRight size={13} weight="bold" />
           </Link>
           设置目标公司或上传简历，我们再据公司洞察给出投递优先级与温馨提示。
@@ -199,11 +198,11 @@ function SectionTitle({
 }) {
   return (
     <div className="mb-3 flex items-baseline gap-2">
-      <h2 className="flex items-center gap-2 text-sm font-semibold text-white/80">
-        <Icon size={16} weight="bold" className="text-violet-300" />
+      <h2 className="flex items-center gap-2 text-sm font-semibold text-[#3f3a33]">
+        <Icon size={16} weight="bold" className="text-[#6a4fa0]" />
         {title}
       </h2>
-      {hint && <span className="text-xs text-white/40">· {hint}</span>}
+      {hint && <span className="text-xs text-[#9a9184]">· {hint}</span>}
     </div>
   );
 }
@@ -222,15 +221,15 @@ function NoteCard({
   return (
     <article
       className={cn(
-        "rounded-xl border-l-2 bg-white/[0.04] p-4 pl-3.5 text-sm",
-        caution ? "border-l-amber-300/50" : "border-l-violet-300/50",
+        "rounded-xl border border-black/[0.05] border-l-2 bg-white/55 p-4 pl-3.5 text-sm",
+        caution ? "border-l-[#e0a94e]" : "border-l-[#9a7fce]",
       )}
     >
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-white/50">{company}</span>
-        {title && <span className="text-sm font-semibold text-white/90">{title}</span>}
+        <span className="text-xs font-medium text-[#8a8275]">{company}</span>
+        {title && <span className="text-sm font-semibold text-[#1a1714]">{title}</span>}
       </div>
-      <p className="mt-1 leading-6 text-white/70">{content}</p>
+      <p className="mt-1 leading-6 text-[#5f594e]">{content}</p>
     </article>
   );
 }

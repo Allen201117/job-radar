@@ -27,17 +27,17 @@ export default function TagInput({ values, onChange, placeholder }: Props) {
   }
 
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.07] px-2 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition duration-200 focus-within:border-sky-300">
+    <div className="mt-1 flex flex-wrap items-center gap-1.5 rounded-xl border border-black/[0.09] bg-white/70 px-2 py-2 transition duration-200 focus-within:border-[#1a1714]/55 focus-within:bg-white">
       {(values || []).map((v) => (
         <span
           key={v}
-          className="flex items-center gap-1 rounded-full border border-sky-300/20 bg-sky-300/10 px-2.5 py-1 text-xs font-medium text-sky-100"
+          className="flex items-center gap-1 rounded-full border border-[#cfe0f5] bg-[#e8f1fc] px-2.5 py-1 text-xs font-medium text-[#2f6299]"
         >
           {v}
           <button
             type="button"
             onClick={() => remove(v)}
-            className="text-sky-100/56 transition-colors hover:text-red-200"
+            className="text-[#2f6299]/60 transition-colors hover:text-[#9c4a3c]"
             aria-label={`移除 ${v}`}
           >
             ×
@@ -57,7 +57,7 @@ export default function TagInput({ values, onChange, placeholder }: Props) {
         }}
         onBlur={commit}
         placeholder={(values || []).length ? "" : placeholder}
-        className="min-w-[90px] flex-1 border-0 bg-transparent px-1 py-0.5 text-sm text-white outline-none placeholder:text-white/32"
+        className="min-w-[90px] flex-1 border-0 bg-transparent px-1 py-0.5 text-sm text-[#1a1714] outline-none placeholder:text-[#a39a8c]"
       />
     </div>
   );

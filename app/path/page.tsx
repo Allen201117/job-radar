@@ -5,7 +5,7 @@ import CareerPathClient from "./path-client";
 
 export default function PathPage() {
   return (
-    <div className="min-h-screen bg-[#08090c]">
+    <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage>
         <ProductHero

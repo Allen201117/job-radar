@@ -13,7 +13,7 @@ export default async function InsightsAdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#08090c]">
+    <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero

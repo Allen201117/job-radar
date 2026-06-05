@@ -183,27 +183,27 @@ export default function ResumeProfilePanel() {
     return (
       <div>
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium text-white/76">{title}</span>
+          <span className="text-sm font-medium text-[#5f594e]">{title}</span>
           <button
             type="button"
             onClick={() => addItem(listKey, empty)}
-            className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-xs text-white/72 transition hover:bg-white/16 hover:text-white"
+            className="rounded-full border border-black/[0.08] bg-white/70 px-2.5 py-1 text-xs text-[#5f594e] transition hover:bg-white hover:text-[#1a1714]"
           >
             + 添加
           </button>
         </div>
         <div className="mt-2 space-y-2">
-          {items.length === 0 && <p className="text-xs text-white/40">（暂无，可点「添加」补充）</p>}
+          {items.length === 0 && <p className="text-xs text-[#9a9184]">（暂无，可点「添加」补充）</p>}
           {items.map((it, idx) => (
-            <div key={idx} className="rounded-xl border border-white/10 bg-white/[0.05] p-3">
+            <div key={idx} className="surface-soft p-3">
               <div className="grid gap-2 sm:grid-cols-2">
                 {fields.map(([k, label]) => (
-                  <label key={k} className="block text-xs text-white/50">
+                  <label key={k} className="block text-xs text-[#8a8275]">
                     {label}
                     <input
                       value={it[k] || ""}
                       onChange={(e) => updateItem(listKey, idx, k, e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-white/10 bg-white/[0.07] px-2.5 py-1.5 text-sm text-white outline-none transition focus:border-sky-300"
+                      className="mt-1 w-full rounded-lg border border-black/[0.09] bg-white/70 px-2.5 py-1.5 text-sm text-[#1a1714] outline-none transition focus:border-[#1a1714]/55 focus:bg-white"
                     />
                   </label>
                 ))}
@@ -211,7 +211,7 @@ export default function ResumeProfilePanel() {
               <button
                 type="button"
                 onClick={() => removeItem(listKey, idx)}
-                className="mt-2 text-xs text-white/45 transition-colors hover:text-red-200"
+                className="mt-2 text-xs text-[#9a9184] transition-colors hover:text-[#9c4a3c]"
               >
                 移除
               </button>
@@ -223,19 +223,19 @@ export default function ResumeProfilePanel() {
   }
 
   return (
-    <section className="rounded-[1.35rem] border border-white/10 bg-white/[0.055] p-5 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+    <section className="surface p-5 text-[#1a1714]">
       <div className="flex items-center gap-2">
-        <div className="grid size-9 place-items-center rounded-xl bg-lime-300 text-lime-950">
+        <div className="grid size-9 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6]">
           <IdentificationCard size={18} weight="fill" aria-hidden="true" />
         </div>
         <h2 className="text-base font-semibold">简历画像</h2>
       </div>
-      <p className="mt-2 text-sm text-white/50">
+      <p className="mt-2 text-sm text-[#8a8275]">
         上传或粘贴简历，AI 结构化抽取教育 / 实习 / 项目 / 技能；可预览、编辑后再确认保存，只写入你的账号。
       </p>
 
       {message && step === "input" && (
-        <p className={`mt-3 rounded-xl px-3 py-2 text-sm ${message.includes("失败") || message.includes("暂不") ? "bg-red-400/10 text-red-200" : "bg-sky-300/10 text-sky-200"}`}>
+        <p className={`mt-3 rounded-xl border px-3 py-2 text-sm ${message.includes("失败") || message.includes("暂不") ? "border-[#e0b4ac] bg-[#f7e6e1] text-[#9c4a3c]" : "border-[#bcd2ed] bg-[#e8f1fc] text-[#2f6299]"}`}>
           {message}
         </p>
       )}
@@ -244,7 +244,7 @@ export default function ResumeProfilePanel() {
         <>
           <form onSubmit={handleParse} className="mt-4 space-y-3">
             <div>
-              <label className="inline-flex items-center gap-1.5 text-sm font-medium text-white/76">
+              <label className="inline-flex items-center gap-1.5 text-sm font-medium text-[#5f594e]">
                 <UploadSimple size={16} weight="bold" aria-hidden="true" />
                 上传简历（.txt / .md / PDF / Word / 图片）
               </label>
@@ -252,12 +252,12 @@ export default function ResumeProfilePanel() {
                 type="file"
                 accept=".txt,.md,.pdf,.docx,.png,.jpg,.jpeg,.webp,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
                 onChange={(e) => setFile(e.target.files?.[0] || null)}
-                className="mt-1 block w-full rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-sm text-white file:mr-3 file:rounded-full file:border-0 file:bg-white file:px-3 file:py-1 file:text-xs file:font-semibold file:text-[#08090c] transition duration-200 focus:border-sky-300 focus:outline-none"
+                className="mt-1 block w-full rounded-xl border border-black/[0.09] bg-white/70 px-3 py-2 text-sm text-[#1a1714] file:mr-3 file:rounded-full file:border-0 file:bg-[#1a1714] file:px-3 file:py-1 file:text-xs file:font-semibold file:text-[#f7f1e6] transition duration-200 focus:border-[#1a1714]/55 focus:outline-none"
               />
             </div>
 
             <div>
-              <label className="inline-flex items-center gap-1.5 text-sm font-medium text-white/76">
+              <label className="inline-flex items-center gap-1.5 text-sm font-medium text-[#5f594e]">
                 <FileText size={16} weight="bold" aria-hidden="true" />
                 或粘贴简历内容
               </label>
@@ -266,60 +266,60 @@ export default function ResumeProfilePanel() {
                 onChange={(e) => setResumeText(e.target.value)}
                 placeholder="粘贴教育经历、实习经历、项目经历、技能等"
                 rows={6}
-                className="mt-1 block w-full rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-sm text-white transition duration-200 placeholder:text-white/32 focus:border-sky-300 focus:outline-none"
+                className="mt-1 field-soft"
               />
             </div>
 
             {llmReady === false && (
-              <p className="rounded-xl bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+              <p className="rounded-xl border border-[#e7c98a] bg-[#fbf2d8] px-3 py-2 text-xs text-[#8a6312]">
                 未检测到 SILICONFLOW_API_KEY，AI 解析会降级为规则草稿。请在 Vercel → Settings →
                 Environment Variables 添加（勾 Production，禁加 NEXT_PUBLIC_ 前缀），保存后 Redeploy。
               </p>
             )}
             {llmReady === true && (
-              <p className="text-xs text-white/40">AI 解析已就绪{llmModel ? `（模型 ${llmModel}）` : ""}。</p>
+              <p className="text-xs text-[#8a8275]">AI 解析已就绪{llmModel ? `（模型 ${llmModel}）` : ""}。</p>
             )}
 
             <button
               type="submit"
               disabled={parsing || (!file && !resumeText.trim())}
-              className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-5 py-2 text-sm font-semibold text-sky-950 transition duration-200 hover:bg-sky-200 active:scale-[0.98] disabled:opacity-50"
+              className="btn-ink"
             >
               <Sparkle size={16} weight="fill" aria-hidden="true" />
               {parsing ? "AI 解析中…" : "AI 解析简历"}
             </button>
           </form>
 
-          <div className="mt-5 border-t border-white/10 pt-4">
+          <div className="mt-5 border-t border-black/[0.06] pt-4">
             {loadingSaved ? (
-              <p className="text-sm text-white/50">加载画像中…</p>
+              <p className="text-sm text-[#8a8275]">加载画像中…</p>
             ) : saved ? (
               <SavedSummary profile={saved} />
             ) : (
-              <p className="text-sm text-white/50">还没有简历画像，先上传或粘贴简历开始。</p>
+              <p className="text-sm text-[#8a8275]">还没有简历画像，先上传或粘贴简历开始。</p>
             )}
           </div>
         </>
       ) : (
         <div className="mt-4 space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block text-sm text-white/76">
+            <label className="block text-sm text-[#5f594e]">
               一句话定位
               <input
                 value={draft.headline}
                 onChange={(e) => setField("headline", e.target.value)}
-                className="mt-1 w-full rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300"
+                className="mt-1 field-soft"
               />
             </label>
-            <label className="block text-sm text-white/76">
+            <label className="block text-sm text-[#5f594e]">
               求职阶段
               <select
                 value={draft.experience_stage}
                 onChange={(e) => setField("experience_stage", e.target.value)}
-                className="mt-1 w-full rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300"
+                className="mt-1 w-full rounded-xl border border-black/[0.09] bg-white px-3 py-2.5 text-sm text-[#1a1714] outline-none transition focus:border-[#1a1714]/55"
               >
                 {STAGES.map((s) => (
-                  <option key={s} value={s} className="bg-[#15161a]">
+                  <option key={s} value={s}>
                     {s || "未判断"}
                   </option>
                 ))}
@@ -328,47 +328,47 @@ export default function ResumeProfilePanel() {
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3">
-            <label className="block text-sm text-white/76">
+            <label className="block text-sm text-[#5f594e]">
               姓名
               <input
                 value={draft.basic_info.name}
                 onChange={(e) => setBasic("name", e.target.value)}
-                className="mt-1 w-full rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300"
+                className="mt-1 field-soft"
               />
             </label>
-            <label className="block text-sm text-white/76">
+            <label className="block text-sm text-[#5f594e]">
               城市
               <input
                 value={draft.basic_info.city}
                 onChange={(e) => setBasic("city", e.target.value)}
-                className="mt-1 w-full rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300"
+                className="mt-1 field-soft"
               />
             </label>
-            <label className="block text-sm text-white/76">
+            <label className="block text-sm text-[#5f594e]">
               联系方式（已脱敏）
               <input
                 value={draft.basic_info.contact}
                 onChange={(e) => setBasic("contact", e.target.value)}
-                className="mt-1 w-full rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-sm text-white outline-none transition focus:border-sky-300"
+                className="mt-1 field-soft"
               />
             </label>
           </div>
 
           <div className="space-y-3">
             <div>
-              <span className="text-sm font-medium text-white/76">目标岗位方向</span>
+              <span className="text-sm font-medium text-[#5f594e]">目标岗位方向</span>
               <TagInput values={draft.target_roles} onChange={(v) => setField("target_roles", v)} placeholder="回车添加，如 数据分析" />
             </div>
             <div>
-              <span className="text-sm font-medium text-white/76">期望城市</span>
+              <span className="text-sm font-medium text-[#5f594e]">期望城市</span>
               <TagInput values={draft.target_locations} onChange={(v) => setField("target_locations", v)} placeholder="如 上海" />
             </div>
             <div>
-              <span className="text-sm font-medium text-white/76">技能标签</span>
+              <span className="text-sm font-medium text-[#5f594e]">技能标签</span>
               <TagInput values={draft.skills} onChange={(v) => setField("skills", v)} placeholder="如 Python、SQL" />
             </div>
             <div>
-              <span className="text-sm font-medium text-white/76">行业</span>
+              <span className="text-sm font-medium text-[#5f594e]">行业</span>
               <TagInput values={draft.industries} onChange={(v) => setField("industries", v)} placeholder="如 互联网、金融" />
             </div>
           </div>
@@ -377,13 +377,13 @@ export default function ResumeProfilePanel() {
           {renderList("实习经历", "internships", [["company", "公司"], ["role", "岗位"], ["start", "开始"], ["end", "结束"], ["summary", "职责 / 成果"]], EMPTY_INTERN)}
           {renderList("工作 / 项目经历", "projects", [["name", "项目"], ["role", "角色"], ["stack", "技术栈"], ["outcome", "成果"]], EMPTY_PROJECT)}
 
-          <label className="flex cursor-pointer items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-2 text-sm text-white/74 transition duration-200 hover:bg-white/16 hover:text-white">
-            <input type="checkbox" checked={applyToPreferences} onChange={(e) => setApplyToPreferences(e.target.checked)} />
+          <label className="flex cursor-pointer items-center gap-2 rounded-full border border-black/[0.08] bg-white/70 px-3 py-2 text-sm text-[#5f594e] transition duration-200 hover:bg-white hover:text-[#1a1714]">
+            <input type="checkbox" checked={applyToPreferences} onChange={(e) => setApplyToPreferences(e.target.checked)} className="accent-[#1a1714]" />
             同步到求职偏好（方向 / 城市 / 技能）
           </label>
 
           {message && (
-            <p className={`rounded-xl px-3 py-2 text-sm ${message.includes("失败") || message.includes("暂不") ? "bg-red-400/10 text-red-200" : "bg-sky-300/10 text-sky-200"}`}>
+            <p className={`rounded-xl border px-3 py-2 text-sm ${message.includes("失败") || message.includes("暂不") ? "border-[#e0b4ac] bg-[#f7e6e1] text-[#9c4a3c]" : "border-[#bcd2ed] bg-[#e8f1fc] text-[#2f6299]"}`}>
               {message}
             </p>
           )}
@@ -392,7 +392,7 @@ export default function ResumeProfilePanel() {
               type="button"
               onClick={handleSave}
               disabled={saving}
-              className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-5 py-2 text-sm font-semibold text-sky-950 transition duration-200 hover:bg-sky-200 active:scale-[0.98] disabled:opacity-50"
+              className="btn-ink"
             >
               <FloppyDisk size={16} weight="bold" aria-hidden="true" />
               {saving ? "保存中…" : "确认保存"}
@@ -403,7 +403,7 @@ export default function ResumeProfilePanel() {
                 setStep("input");
                 setMessage("");
               }}
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-5 py-2 text-sm font-medium text-white/78 transition duration-200 hover:bg-white/16 hover:text-white active:scale-[0.98]"
+              className="btn-soft px-5 py-2.5 text-sm"
             >
               <ArrowCounterClockwise size={16} weight="bold" aria-hidden="true" />
               重新上传
@@ -422,18 +422,18 @@ function SavedSummary({ profile }: { profile: any }) {
   return (
     <div className="space-y-3">
       <div>
-        <div className="text-xs text-white/42">当前画像</div>
-        <div className="mt-1 text-sm font-medium text-white">{profile.headline || "未命名画像"}</div>
+        <div className="text-xs text-[#8a8275]">当前画像</div>
+        <div className="mt-1 text-sm font-medium text-[#1a1714]">{profile.headline || "未命名画像"}</div>
       </div>
       <ChipGroup label="方向" values={profile.target_roles || []} />
       <ChipGroup label="城市" values={profile.target_locations || []} />
       <ChipGroup label="技能" values={profile.skills || []} />
-      <div className="flex flex-wrap gap-2 text-xs text-white/50">
-        <span className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1">教育 {eduCount}</span>
-        <span className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1">实习 {internCount}</span>
-        <span className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1">项目 {projectCount}</span>
+      <div className="flex flex-wrap gap-2 text-xs text-[#5f594e]">
+        <span className="rounded-full border border-black/[0.06] bg-[#f4efe6] px-2.5 py-1">教育 {eduCount}</span>
+        <span className="rounded-full border border-black/[0.06] bg-[#f4efe6] px-2.5 py-1">实习 {internCount}</span>
+        <span className="rounded-full border border-black/[0.06] bg-[#f4efe6] px-2.5 py-1">项目 {projectCount}</span>
         {(profile.experience_stage || profile.seniority) && (
-          <span className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1">
+          <span className="rounded-full border border-black/[0.06] bg-[#f4efe6] px-2.5 py-1">
             阶段 {profile.experience_stage || profile.seniority}
           </span>
         )}
@@ -446,12 +446,12 @@ function ChipGroup({ label, values }: { label: string; values: string[] }) {
   if (!values.length) return null;
   return (
     <div>
-      <div className="text-xs text-white/42">{label}</div>
+      <div className="text-xs text-[#8a8275]">{label}</div>
       <div className="mt-1 flex flex-wrap gap-1.5">
         {values.map((value) => (
           <span
             key={value}
-            className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-xs font-medium text-white/76"
+            className="rounded-full border border-black/[0.06] bg-[#f4efe6] px-2.5 py-1 text-xs font-medium text-[#5f594e]"
           >
             {value}
           </span>

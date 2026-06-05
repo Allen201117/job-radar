@@ -24,24 +24,24 @@ export const dynamic = "force-dynamic";
 
 // —— 卖点①：官方岗位雷达 ——
 const pipeline = [
-  { title: "本地 jobs 库", text: "先查已经沉淀的真实岗位，不卡在外部搜索。", icon: Database, tone: "bg-sky-400 text-sky-950" },
-  { title: "已验证官网源", text: "刷新 Apple、百度、京东、Siemens 等官方入口。", icon: ShieldCheck, tone: "bg-lime-300 text-lime-950" },
-  { title: "低频发现新源", text: "只在需要时调用 search provider，沉淀候选源。", icon: Binoculars, tone: "bg-orange-300 text-orange-950" },
+  { title: "本地 jobs 库", text: "先查已经沉淀的真实岗位，不卡在外部搜索。", icon: Database, dot: "bg-[#7fb2e8]" },
+  { title: "已验证官网源", text: "刷新 Apple、百度、京东、Siemens 等官方入口。", icon: ShieldCheck, dot: "bg-[#b6da7e]" },
+  { title: "低频发现新源", text: "只在需要时调用 search provider，沉淀候选源。", icon: Binoculars, dot: "bg-[#e7b27e]" },
 ];
 
 const proofTiles = [
-  { icon: Funnel, title: "第三方平台过滤", text: "BOSS、猎聘、智联、转载页先出局。", mark: "🧹" },
-  { icon: GlobeHemisphereEast, title: "官网详情页", text: "保留可点击的官方岗位详情链接。", mark: "🌐" },
-  { icon: UserFocus, title: "按用户隔离", text: "收藏、忽略、投递只写入当前用户。", mark: "🔐" },
-  { icon: BellRinging, title: "失败有原因", text: "rate limit、parser missing、pending 都说清楚。", mark: "📡" },
+  { icon: Funnel, title: "第三方平台过滤", text: "BOSS、猎聘、智联、转载页先出局。" },
+  { icon: GlobeHemisphereEast, title: "官网详情页", text: "保留可点击的官方岗位详情链接。" },
+  { icon: UserFocus, title: "按用户隔离", text: "收藏、忽略、投递只写入当前用户。" },
+  { icon: BellRinging, title: "失败有原因", text: "rate limit、parser missing、pending 都说清楚。" },
 ];
 
 // —— 卖点②：AI 职业洞察与路径 ——
 const insightDims = [
-  { icon: Lightning, title: "时机", text: "招聘节奏与放岗周期，什么时候投更有戏。", tone: "bg-sky-400 text-sky-950" },
-  { icon: ChartLineUp, title: "薪酬强度", text: "公开渠道的薪酬与强度对比参考。", tone: "bg-lime-300 text-lime-950" },
-  { icon: Compass, title: "路径", text: "典型跳槽与晋升路径，怎么走更顺。", tone: "bg-orange-300 text-orange-950" },
-  { icon: UserFocus, title: "文化", text: "团队风格的轻量提示，做浅、重免责。", tone: "bg-white text-[#15161a]" },
+  { icon: Lightning, title: "时机", text: "招聘节奏与放岗周期，什么时候投更有戏。", dot: "bg-[#7fb2e8]" },
+  { icon: ChartLineUp, title: "薪酬强度", text: "公开渠道的薪酬与强度对比参考。", dot: "bg-[#b6da7e]" },
+  { icon: Compass, title: "路径", text: "典型跳槽与晋升路径，怎么走更顺。", dot: "bg-[#e7b27e]" },
+  { icon: UserFocus, title: "文化", text: "团队风格的轻量提示，做浅、重免责。", dot: "bg-[#cfc6b6]" },
 ];
 
 const insightGuards = [
@@ -73,263 +73,290 @@ export default async function LandingPage() {
   const navCta = user ? "进入产品" : "登录 / 注册";
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-[#0c0d10] text-white">
-      <header className="sticky top-0 z-40 border-b border-white/10 bg-[#0c0d10]/82 backdrop-blur-xl">
-        <nav className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <Link href="/" className="inline-flex items-center gap-2 text-sm font-semibold">
-            <span className="grid size-7 place-items-center rounded-xl bg-white text-[#0c0d10]">
-              <Broadcast size={17} weight="fill" aria-hidden="true" />
+    <main className="bg-editorial grain relative min-h-screen overflow-x-hidden text-[#1a1714]">
+      {/* ——— 顶部导航 ——— */}
+      <header className="sticky top-0 z-40 border-b border-black/[0.06] bg-[#f4efe6]/80 backdrop-blur-xl">
+        <nav className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 lg:px-8">
+          <Link href="/" className="inline-flex items-center gap-2.5">
+            <span className="grid size-8 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6]">
+              <Broadcast size={18} weight="fill" aria-hidden="true" />
             </span>
-            Job Radar
+            <span className="display-tight text-lg font-medium tracking-tight">Job Radar</span>
           </Link>
-          <div className="hidden items-center gap-7 text-sm text-white/64 md:flex">
-            <a href="#radar" className="transition-colors hover:text-white">官方岗位雷达</a>
-            <a href="#insight" className="transition-colors hover:text-white">职业洞察</a>
-            <a href="#who" className="transition-colors hover:text-white">适用人群</a>
+          <div className="hidden items-center gap-8 text-[14px] text-[#5f594e] md:flex">
+            <a href="#radar" className="transition-colors hover:text-[#1a1714]">官方岗位雷达</a>
+            <a href="#insight" className="transition-colors hover:text-[#1a1714]">职业洞察</a>
+            <a href="#who" className="transition-colors hover:text-[#1a1714]">适用人群</a>
           </div>
           <Link
             href={primaryHref}
-            className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-[#0c0d10] transition duration-200 hover:bg-sky-200 active:scale-[0.98]"
+            className="inline-flex items-center gap-1.5 rounded-full bg-[#1a1714] px-4 py-2 text-[13px] font-medium text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-95"
           >
             {navCta}
-            <ArrowRight size={15} weight="bold" aria-hidden="true" />
+            <ArrowRight size={14} weight="bold" aria-hidden="true" />
           </Link>
         </nav>
       </header>
 
-      {/* ——— Hero（覆盖两大卖点）——— */}
-      <section className="relative mx-auto grid min-h-[calc(100dvh-3.5rem)] max-w-7xl items-center gap-10 px-4 py-14 sm:px-6 lg:grid-cols-[0.9fr_1.1fr] lg:px-8">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_12%,rgba(56,189,248,0.22),transparent_32%),radial-gradient(circle_at_8%_18%,rgba(251,191,36,0.14),transparent_26%),radial-gradient(circle_at_50%_100%,rgba(163,230,53,0.12),transparent_35%)]" />
-        <div className="relative">
-          <div className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/8 px-3 py-1.5 text-sm text-white/72 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
-            <Sparkle size={16} weight="fill" className="text-lime-300" aria-hidden="true" />
-            官方岗位雷达 · AI 职业洞察
-          </div>
-          <h1 className="mt-6 max-w-4xl text-balance text-5xl font-semibold leading-[1.04] sm:text-6xl">
-            官网岗位，加上能信的职业内幕。
-          </h1>
-          <p className="mt-6 max-w-2xl text-pretty text-lg leading-8 text-white/68">
-            求职雷达聚合企业官方招聘源、过滤第三方水货岗位；再把公开的招聘节奏、薪酬与跳槽路径，聚合成分级、标时间的职业洞察。每天打开一次，只看真正值得看的。
-          </p>
-          <div className="mt-8 flex flex-wrap items-center gap-3">
-            <Link
-              href={primaryHref}
-              className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-6 py-3 text-base font-semibold text-sky-950 transition duration-200 hover:bg-sky-200 active:scale-[0.98]"
-            >
-              🚀 {primaryLabel}
-              <ArrowRight size={18} weight="bold" aria-hidden="true" />
-            </Link>
-            <a
-              href="#radar"
-              className="inline-flex items-center gap-2 rounded-full border border-white/14 bg-white/8 px-6 py-3 text-base font-semibold text-white transition duration-200 hover:bg-white/14 active:scale-[0.98]"
-            >
-              了解功能
-              <Briefcase size={18} weight="fill" aria-hidden="true" />
-            </a>
-          </div>
-        </div>
-
-        <div className="relative">
-          <div className="rounded-[1.35rem] border border-white/12 bg-white/10 p-3 shadow-[0_28px_90px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur">
-            <div className="rounded-2xl bg-[#f7f8fb] p-4 text-[#15161a]">
-              <div className="flex flex-wrap items-start justify-between gap-4 border-b border-black/6 pb-4">
-                <div>
-                  <div className="inline-flex items-center gap-2 rounded-full bg-[#15161a] px-3 py-1 text-xs font-semibold text-white">
-                    <Broadcast size={14} weight="fill" aria-hidden="true" />
-                    今日官方岗位
-                  </div>
-                  <p className="mt-3 text-3xl font-semibold tabular-nums">24 个官方岗位</p>
-                  <p className="mt-1 text-sm text-[#6f7280]">今天优先处理 11 个高匹配岗位</p>
-                </div>
-                <div className="rounded-2xl bg-sky-100 px-4 py-3 text-center">
-                  <p className="text-xs font-medium text-sky-800">匹配峰值</p>
-                  <p className="tabular-nums text-3xl font-semibold text-sky-950">82</p>
-                </div>
-              </div>
-
-              <div className="mt-4 space-y-3">
-                {jobPreview.map((job) => (
-                  <div key={job.role} className="grid gap-3 rounded-2xl bg-white p-4 shadow-[0_8px_30px_rgba(15,23,42,0.06)] sm:grid-cols-[1fr_auto] sm:items-center">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2 text-sm text-[#707481]">
-                        <span>{job.company}</span>
-                        <span>·</span>
-                        <MapPin size={14} weight="fill" aria-hidden="true" />
-                        <span>{job.city}</span>
-                      </div>
-                      <p className="mt-1 truncate text-lg font-semibold">{job.role}</p>
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {job.tags.map((tag) => (
-                          <span key={tag} className="rounded-full bg-[#eef0f5] px-2.5 py-1 text-xs font-medium text-[#404350]">
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="rounded-2xl bg-[#15161a] px-4 py-3 text-center text-white">
-                      <p className="text-[11px] text-white/62">MATCH</p>
-                      <p className="tabular-nums text-2xl font-semibold">{job.score}</p>
-                    </div>
-                  </div>
-                ))}
+      {/* ——— Hero：编辑部大标题 + 漂浮的产品碎片 ——— */}
+      <section className="relative mx-auto max-w-6xl px-5 pb-20 pt-16 sm:pt-20 lg:px-8 lg:pb-28 lg:pt-24">
+        {/* 漂浮产品「拍立得」——绝对定位在标题四角，移动端隐藏 */}
+        <figure className="float-soft absolute left-0 top-10 z-10 hidden xl:block" style={{ animationDelay: "0s" }}>
+          <div className="polaroid w-[196px] -rotate-[6deg] transition-transform duration-300 ease-out hover:-translate-y-1.5 hover:rotate-0">
+            <div className="rounded-[0.8rem] bg-[#f6f3ec] p-4">
+              <p className="text-[11px] font-medium text-[#8a8275]">今日官方岗位</p>
+              <p className="mt-1 text-[2rem] font-semibold leading-none tabular-nums text-[#1a1714]">24</p>
+              <p className="mt-1.5 text-[12px] text-[#8a8275]">11 个高匹配待处理</p>
+              <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/[0.06]">
+                <div className="h-full w-[46%] rounded-full bg-[#7fb2e8]" />
               </div>
             </div>
           </div>
+          <figcaption className="mt-2 pl-1 text-[12px] text-[#9a9184]">今日看板</figcaption>
+        </figure>
 
-          <div className="absolute -bottom-5 -left-3 hidden rounded-2xl border border-white/12 bg-lime-300 px-4 py-3 text-sm font-semibold text-lime-950 shadow-[0_20px_50px_rgba(0,0,0,0.28)] md:block">
-            ✅ 第三方结果已过滤
+        <figure className="float-soft absolute right-0 top-4 z-10 hidden xl:block" style={{ animationDelay: "1.3s" }}>
+          <div className="polaroid w-[238px] rotate-[5deg] transition-transform duration-300 ease-out hover:-translate-y-1.5 hover:rotate-0">
+            <div className="rounded-[0.8rem] bg-white p-4">
+              <div className="flex items-center gap-1.5 text-[12px] text-[#8a8275]">
+                <span className="font-medium text-[#1a1714]">Apple</span>
+                <span>·</span>
+                <MapPin size={12} weight="fill" aria-hidden="true" />
+                <span>上海</span>
+              </div>
+              <p className="mt-1.5 text-[15px] font-semibold leading-snug text-[#1a1714]">
+                Machine Learning Engineer
+              </p>
+              <div className="mt-3 flex items-center justify-between">
+                <div className="flex gap-1.5">
+                  <span className="rounded-full bg-[#eef0f5] px-2 py-0.5 text-[11px] font-medium text-[#4a4d57]">外企</span>
+                  <span className="rounded-full bg-[#eef0f5] px-2 py-0.5 text-[11px] font-medium text-[#4a4d57]">AI</span>
+                </div>
+                <div className="rounded-xl bg-[#1a1714] px-2.5 py-1 text-white">
+                  <span className="text-[15px] font-semibold tabular-nums">82</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <figcaption className="mt-2 pr-1 text-right text-[12px] text-[#9a9184]">官方岗位卡</figcaption>
+        </figure>
+
+        <figure className="float-soft absolute bottom-8 left-2 z-10 hidden xl:block" style={{ animationDelay: "0.7s" }}>
+          <div className="polaroid w-[214px] rotate-[3deg] transition-transform duration-300 ease-out hover:-translate-y-1.5 hover:rotate-0">
+            <div className="rounded-[0.8rem] bg-white p-4">
+              <p className="text-[11px] font-medium text-[#8a8275]">职业洞察 · 分级标时间</p>
+              <ul className="mt-2.5 grid grid-cols-2 gap-2 text-[12px] text-[#3f3a33]">
+                <li className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-[#7fb2e8]" />时机</li>
+                <li className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-[#b6da7e]" />薪酬强度</li>
+                <li className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-[#e7b27e]" />路径</li>
+                <li className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-[#cfc6b6]" />文化</li>
+              </ul>
+            </div>
+          </div>
+          <figcaption className="mt-2 pl-1 text-[12px] text-[#9a9184]">职业洞察</figcaption>
+        </figure>
+
+        <figure className="float-soft absolute bottom-12 right-4 z-10 hidden xl:block" style={{ animationDelay: "2s" }}>
+          <div className="polaroid w-[200px] -rotate-[4deg] transition-transform duration-300 ease-out hover:-translate-y-1.5 hover:rotate-0">
+            <div className="flex items-center gap-2.5 rounded-[0.8rem] bg-[#1a1714] p-4 text-[#f7f1e6]">
+              <CheckCircle size={26} weight="fill" className="shrink-0 text-[#b6da7e]" aria-hidden="true" />
+              <p className="text-[13px] font-medium leading-snug">第三方结果<br />已过滤</p>
+            </div>
+          </div>
+          <figcaption className="mt-2 pr-1 text-right text-[12px] text-[#9a9184]">质量门</figcaption>
+        </figure>
+
+        {/* 居中文案 */}
+        <div className="relative z-20 mx-auto max-w-3xl text-center">
+          <p className="rise inline-flex items-center gap-2 rounded-full border border-black/[0.08] bg-white/60 px-3.5 py-1.5 text-[13px] font-medium text-[#5f594e]">
+            <Sparkle size={15} weight="fill" className="text-[#e7a24e]" aria-hidden="true" />
+            官方岗位雷达 · AI 职业洞察
+          </p>
+          <h1 className="display-tight rise mt-7 text-balance text-[2.9rem] font-medium leading-[1.1] text-[#1a1714] sm:text-[3.6rem] lg:text-[4.1rem]">
+            只看{" "}
+            <span className="relative -top-1 mx-1 inline-flex items-center gap-1.5 rounded-full bg-[#1a1714] px-4 py-1.5 align-middle text-[0.42em] font-medium text-[#f7f1e6]">
+              <Broadcast size={16} weight="fill" className="text-[#7fb2e8]" aria-hidden="true" />
+              官方源
+            </span>{" "}
+            在招的岗位，
+            <br />
+            加上能信的职业内幕。
+          </h1>
+          <p className="rise mx-auto mt-7 max-w-xl text-pretty text-[16px] leading-7 text-[#5f594e]">
+            求职雷达聚合企业官方招聘源、过滤第三方水货岗位；再把公开的招聘节奏、薪酬与跳槽路径，聚合成分级、标时间的职业洞察。每天打开一次，只看真正值得看的。
+          </p>
+          <div className="rise mt-9 flex flex-wrap items-center justify-center gap-3">
+            <Link href={primaryHref} className="btn-ink text-base">
+              {primaryLabel}
+              <ArrowRight size={18} weight="bold" aria-hidden="true" />
+            </Link>
+            <a href="#radar" className="btn-ghost text-base">了解功能</a>
           </div>
         </div>
       </section>
 
       {/* ——— 卖点①：官方岗位雷达 ——— */}
-      <section id="radar" className="relative border-y border-white/10 bg-white/[0.035] py-20">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="max-w-3xl">
-            <span className="text-sm font-semibold text-sky-300">卖点 ①</span>
-            <h2 className="mt-2 text-balance text-4xl font-semibold leading-tight sm:text-5xl">
-              检索不是一次搜索，是一条可控链路。
-            </h2>
-            <p className="mt-5 text-pretty text-lg leading-8 text-white/64">
-              只收企业官方渠道的岗位，第三方转载与聚合页直接出局。Job Radar 像一个小型任务控制台，先利用已有岗位，再按需刷新和发现。
-            </p>
-          </div>
-          <div className="mt-10 grid gap-4 lg:grid-cols-[1.25fr_0.8fr_0.95fr]">
-            {pipeline.map((item, index) => (
-              <article
-                key={item.title}
-                className="group rounded-[1.25rem] border border-white/10 bg-white/[0.07] p-5 transition duration-200 hover:-translate-y-1 hover:bg-white/[0.10]"
-              >
-                <div className={["grid size-12 place-items-center rounded-2xl", item.tone].join(" ")}>
-                  <item.icon size={25} weight="fill" aria-hidden="true" />
-                </div>
-                <p className="mt-8 text-sm font-semibold text-white/45">Step {index + 1}</p>
-                <h3 className="mt-2 text-2xl font-semibold">{item.title}</h3>
-                <p className="mt-3 text-pretty text-sm leading-6 text-white/62">{item.text}</p>
-              </article>
-            ))}
-          </div>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {proofTiles.map((item) => (
-              <article key={item.title} className="rounded-[1.25rem] border border-white/10 bg-white/[0.07] p-5">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="grid size-11 place-items-center rounded-2xl bg-white text-[#15161a]">
-                    <item.icon size={24} weight="fill" aria-hidden="true" />
-                  </div>
-                  <span className="text-2xl" aria-hidden="true">{item.mark}</span>
-                </div>
-                <h3 className="mt-7 text-xl font-semibold">{item.title}</h3>
-                <p className="mt-2 text-pretty text-sm leading-6 text-white/62">{item.text}</p>
-              </article>
-            ))}
-          </div>
+      <section id="radar" className="relative mx-auto max-w-6xl px-5 py-20 lg:px-8">
+        <div className="max-w-2xl">
+          <span className="text-[13px] font-semibold tracking-[0.14em] text-[#a08a5e]">卖点 ①</span>
+          <h2 className="display-tight mt-3 text-balance text-[2.2rem] font-medium leading-[1.12] text-[#1a1714] sm:text-[2.8rem]">
+            检索不是一次搜索，
+            <br className="hidden sm:block" />
+            是一条可控链路。
+          </h2>
+          <p className="mt-5 text-pretty text-[16px] leading-7 text-[#5f594e]">
+            只收企业官方渠道的岗位，第三方转载与聚合页直接出局。Job Radar 像一个小型任务控制台，先利用已有岗位，再按需刷新和发现。
+          </p>
+        </div>
+
+        <div className="mt-12 grid gap-4 lg:grid-cols-3">
+          {pipeline.map((item, index) => (
+            <article
+              key={item.title}
+              className="group rounded-[1.4rem] border border-black/[0.06] bg-white/70 p-6 shadow-[0_18px_44px_-26px_rgba(40,34,28,0.35)] transition duration-200 hover:-translate-y-1 hover:bg-white"
+            >
+              <div className="flex items-center justify-between">
+                <span className="grid size-11 place-items-center rounded-2xl bg-[#f4efe6] text-[#1a1714]">
+                  <item.icon size={22} weight="fill" aria-hidden="true" />
+                </span>
+                <span className={["size-2.5 rounded-full", item.dot].join(" ")} aria-hidden="true" />
+              </div>
+              <p className="mt-7 text-[12px] font-semibold tracking-wide text-[#a39a8c]">STEP {index + 1}</p>
+              <h3 className="display-tight mt-1.5 text-[1.5rem] font-medium text-[#1a1714]">{item.title}</h3>
+              <p className="mt-2.5 text-pretty text-[14px] leading-6 text-[#5f594e]">{item.text}</p>
+            </article>
+          ))}
+        </div>
+
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {proofTiles.map((item) => (
+            <article key={item.title} className="rounded-[1.4rem] border border-black/[0.06] bg-white/55 p-5">
+              <span className="grid size-10 place-items-center rounded-2xl bg-[#1a1714] text-[#f7f1e6]">
+                <item.icon size={20} weight="fill" aria-hidden="true" />
+              </span>
+              <h3 className="mt-5 text-[16px] font-semibold text-[#1a1714]">{item.title}</h3>
+              <p className="mt-1.5 text-pretty text-[13px] leading-6 text-[#6b655a]">{item.text}</p>
+            </article>
+          ))}
         </div>
       </section>
 
-      {/* ——— 卖点②：AI 职业洞察与路径 ——— */}
-      <section id="insight" className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
-        <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
-          <div className="rounded-[1.25rem] bg-sky-300 p-7 text-sky-950">
-            <Stack size={34} weight="fill" aria-hidden="true" />
-            <span className="mt-8 block text-sm font-semibold text-sky-950/70">卖点 ②</span>
-            <h2 className="mt-2 text-balance text-4xl font-semibold leading-tight">
-              把分散的内幕，聚合成能信的洞察。
+      {/* ——— 卖点②：AI 职业洞察（近黑编辑带，制造明暗节奏）——— */}
+      <section id="insight" className="mx-auto max-w-6xl px-5 py-12 lg:px-8">
+        <div className="overflow-hidden rounded-[2rem] bg-[#1a1714] px-6 py-12 text-[#f7f1e6] sm:px-10 lg:px-14 lg:py-16">
+          <div className="max-w-2xl">
+            <span className="text-[13px] font-semibold tracking-[0.14em] text-[#cdbf9b]">卖点 ②</span>
+            <h2 className="display-tight mt-3 text-balance text-[2.2rem] font-medium leading-[1.12] text-[#f7f1e6] sm:text-[2.8rem]">
+              把分散的内幕，
+              <br className="hidden sm:block" />
+              聚合成能信的洞察。
             </h2>
-            <p className="mt-5 text-pretty text-base leading-7 text-sky-950/72">
+            <p className="mt-5 text-pretty text-[16px] leading-7 text-[#cfc6b6]">
               招聘节奏、薪酬对比、跳槽路径——不做单点指名的断言，只做聚合归因、分级标注、标注时间。
             </p>
-            <ul className="mt-6 space-y-3">
-              {insightGuards.map((g) => (
-                <li key={g.title} className="flex items-start gap-2.5">
-                  <g.icon size={20} weight="fill" className="mt-0.5 shrink-0" aria-hidden="true" />
-                  <span className="text-sm leading-6 text-sky-950/82">
-                    <span className="font-semibold">{g.title}</span>：{g.text}
-                  </span>
-                </li>
-              ))}
-            </ul>
           </div>
-          <div className="grid gap-4 sm:grid-cols-2">
+
+          <div className="mt-11 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {insightDims.map((item) => (
               <article
                 key={item.title}
-                className="group rounded-[1.25rem] border border-white/10 bg-white/[0.07] p-5 transition duration-200 hover:-translate-y-1 hover:bg-white/[0.10]"
+                className="rounded-[1.3rem] border border-white/10 bg-white/[0.05] p-5 transition duration-200 hover:-translate-y-1 hover:bg-white/[0.08]"
               >
-                <div className={["grid size-11 place-items-center rounded-2xl", item.tone].join(" ")}>
-                  <item.icon size={23} weight="fill" aria-hidden="true" />
+                <div className="flex items-center justify-between">
+                  <span className="grid size-10 place-items-center rounded-2xl bg-white/10 text-[#f7f1e6]">
+                    <item.icon size={20} weight="fill" aria-hidden="true" />
+                  </span>
+                  <span className={["size-2.5 rounded-full", item.dot].join(" ")} aria-hidden="true" />
                 </div>
-                <h3 className="mt-6 text-xl font-semibold">{item.title}</h3>
-                <p className="mt-2 text-pretty text-sm leading-6 text-white/62">{item.text}</p>
+                <h3 className="display-tight mt-5 text-[1.35rem] font-medium text-[#f7f1e6]">{item.title}</h3>
+                <p className="mt-2 text-pretty text-[13px] leading-6 text-[#b3aa9b]">{item.text}</p>
               </article>
             ))}
           </div>
+
+          <ul className="mt-8 grid gap-x-8 gap-y-3 border-t border-white/10 pt-8 sm:grid-cols-3">
+            {insightGuards.map((g) => (
+              <li key={g.title} className="flex items-start gap-2.5">
+                <g.icon size={19} weight="fill" className="mt-0.5 shrink-0 text-[#b6da7e]" aria-hidden="true" />
+                <span className="text-[13px] leading-6 text-[#cfc6b6]">
+                  <span className="font-semibold text-[#f7f1e6]">{g.title}</span>：{g.text}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       </section>
 
       {/* ——— 适用人群 ——— */}
-      <section id="who" className="relative border-y border-white/10 bg-white/[0.035] py-20">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="max-w-3xl">
-            <h2 className="text-balance text-4xl font-semibold leading-tight sm:text-5xl">
-              校招、实习、社招都覆盖。
-            </h2>
-            <p className="mt-5 text-pretty text-lg leading-8 text-white/64">
-              不管你在求职的哪个阶段，雷达只给你官方、最新、匹配的信号。
-            </p>
-          </div>
-          <div className="mt-10 grid gap-4 sm:grid-cols-3">
-            {audiences.map((a) => (
-              <article key={a.tag} className="rounded-[1.25rem] border border-white/10 bg-white/[0.07] p-6">
-                <div className="flex items-center gap-3">
-                  <div className="grid size-11 place-items-center rounded-2xl bg-white text-[#15161a]">
-                    <a.icon size={23} weight="fill" aria-hidden="true" />
-                  </div>
-                  <span className="text-xl font-semibold">{a.tag}</span>
-                </div>
-                <p className="mt-5 text-pretty text-sm leading-6 text-white/62">{a.text}</p>
-              </article>
-            ))}
-          </div>
+      <section id="who" className="mx-auto max-w-6xl px-5 py-20 lg:px-8">
+        <div className="max-w-2xl">
+          <h2 className="display-tight text-balance text-[2.2rem] font-medium leading-[1.12] text-[#1a1714] sm:text-[2.8rem]">
+            校招、实习、社招，
+            <br className="hidden sm:block" />
+            都覆盖。
+          </h2>
+          <p className="mt-5 text-pretty text-[16px] leading-7 text-[#5f594e]">
+            不管你在求职的哪个阶段，雷达只给你官方、最新、匹配的信号。
+          </p>
+        </div>
+
+        <div className="mt-12 grid gap-4 sm:grid-cols-3">
+          {audiences.map((a) => (
+            <article
+              key={a.tag}
+              className="rounded-[1.4rem] border border-black/[0.06] bg-white/70 p-7 shadow-[0_18px_44px_-26px_rgba(40,34,28,0.32)] transition duration-200 hover:-translate-y-1 hover:bg-white"
+            >
+              <div className="flex items-center gap-3">
+                <span className="grid size-11 place-items-center rounded-2xl bg-[#f4efe6] text-[#1a1714]">
+                  <a.icon size={22} weight="fill" aria-hidden="true" />
+                </span>
+                <span className="display-tight text-[1.4rem] font-medium text-[#1a1714]">{a.tag}</span>
+              </div>
+              <p className="mt-5 text-pretty text-[14px] leading-6 text-[#5f594e]">{a.text}</p>
+            </article>
+          ))}
         </div>
       </section>
 
       {/* ——— 底部 CTA ——— */}
-      <section id="launch" className="px-4 py-20 sm:px-6 lg:px-8">
-        <div className="mx-auto grid max-w-7xl gap-6 rounded-[1.5rem] bg-[#f7f8fb] p-6 text-[#15161a] lg:grid-cols-[1fr_auto] lg:items-end lg:p-8">
-          <div>
-            <div className="inline-flex items-center gap-2 rounded-full bg-[#15161a] px-3 py-1.5 text-sm font-semibold text-white">
-              <Lightning size={16} weight="fill" className="text-orange-300" aria-hidden="true" />
+      <section className="mx-auto max-w-6xl px-5 pb-24 lg:px-8">
+        <div className="relative overflow-hidden rounded-[2rem] border border-black/[0.06] bg-white/70 px-6 py-12 text-center shadow-[0_30px_70px_-34px_rgba(40,34,28,0.4)] sm:px-10 lg:py-16">
+          <div className="grain absolute inset-0" aria-hidden="true" />
+          <div className="relative">
+            <p className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-3.5 py-1.5 text-[13px] font-medium text-[#f7f1e6]">
+              <Lightning size={15} weight="fill" className="text-[#e7a24e]" aria-hidden="true" />
               今天就开始
-            </div>
-            <h2 className="mt-5 max-w-3xl text-balance text-4xl font-semibold leading-tight sm:text-5xl">
-              官方源岗位 + 分级职业洞察，几分钟跑通第一次扫描。
+            </p>
+            <h2 className="display-tight mx-auto mt-6 max-w-2xl text-balance text-[2.1rem] font-medium leading-[1.14] text-[#1a1714] sm:text-[2.7rem]">
+              官方源岗位 + 分级职业洞察，
+              <br className="hidden sm:block" />
+              几分钟跑通第一次扫描。
             </h2>
-            <div className="mt-5 flex flex-wrap gap-2 text-sm font-medium text-[#565a66]">
-              <span className="rounded-full bg-white px-3 py-2">📍 城市匹配</span>
-              <span className="rounded-full bg-white px-3 py-2">🧠 简历画像</span>
-              <span className="rounded-full bg-white px-3 py-2">🛡️ 官方源校验</span>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-2 text-[13px] font-medium text-[#6b655a]">
+              <span className="rounded-full border border-black/[0.07] bg-white px-3.5 py-1.5">城市匹配</span>
+              <span className="rounded-full border border-black/[0.07] bg-white px-3.5 py-1.5">简历画像</span>
+              <span className="rounded-full border border-black/[0.07] bg-white px-3.5 py-1.5">官方源校验</span>
+            </div>
+            <div className="mt-9 flex justify-center">
+              <Link href={primaryHref} className="btn-ink text-base">
+                {primaryLabel}
+                <ChartLineUp size={18} weight="fill" aria-hidden="true" />
+              </Link>
             </div>
           </div>
-          <Link
-            href={primaryHref}
-            className="inline-flex items-center justify-center gap-2 rounded-full bg-[#15161a] px-6 py-3 text-base font-semibold text-white transition duration-200 hover:bg-sky-700 active:scale-[0.98]"
-          >
-            {primaryLabel}
-            <ChartLineUp size={19} weight="fill" aria-hidden="true" />
-          </Link>
         </div>
       </section>
 
       {/* ——— 页脚 ——— */}
-      <footer className="border-t border-white/10">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-10 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
-          <Link href="/" className="inline-flex items-center gap-2 text-sm font-semibold">
-            <span className="grid size-6 place-items-center rounded-lg bg-white text-[#0c0d10]">
-              <Broadcast size={13} weight="fill" aria-hidden="true" />
+      <footer className="border-t border-black/[0.06]">
+        <div className="mx-auto flex max-w-6xl flex-col gap-4 px-5 py-10 sm:flex-row sm:items-center sm:justify-between lg:px-8">
+          <Link href="/" className="inline-flex items-center gap-2">
+            <span className="grid size-7 place-items-center rounded-lg bg-[#1a1714] text-[#f7f1e6]">
+              <Broadcast size={14} weight="fill" aria-hidden="true" />
             </span>
-            Job Radar
+            <span className="display-tight text-[15px] font-medium">Job Radar</span>
           </Link>
-          <p className="max-w-xl text-xs leading-5 text-white/45">
+          <p className="max-w-xl text-[12px] leading-5 text-[#9a9184]">
             职业洞察以聚合形式呈现、来源去标识，支持通知-删除；岗位仅来自企业官方公开渠道。Private Beta。
           </p>
         </div>

@@ -28,10 +28,10 @@ import { cn } from "@/lib/utils";
 
 // 新鲜度分级配色：越旧越偏琥珀，提示用户谨慎参考。
 const FRESHNESS_TONE: Record<FreshnessLevel, string> = {
-  fresh: "border border-emerald-300/25 bg-emerald-300/12 text-emerald-200/90",
-  recent: "border border-white/12 bg-white/[0.08] text-white/55",
-  aging: "border border-amber-300/25 bg-amber-300/12 text-amber-200/90",
-  stale: "border border-amber-400/30 bg-amber-400/15 text-amber-100",
+  fresh: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a]",
+  recent: "border border-black/[0.08] bg-[#f4efe6] text-[#8a8275]",
+  aging: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312]",
+  stale: "border border-[#e0a94e] bg-[#fbe6c4] text-[#8a5a12]",
 };
 
 interface Props {
@@ -48,27 +48,27 @@ const DIMENSION_META: Record<
   timing: {
     label: "招聘时机",
     icon: CalendarBlank,
-    accent: "border-sky-300/25 bg-sky-300/12",
-    iconText: "text-sky-200",
+    accent: "border-[#b7d2ee] bg-[#dceafa]",
+    iconText: "text-[#2f6299]",
   },
   compensation_intensity: {
     label: "薪资 / 强度",
     icon: Scales,
-    accent: "border-amber-300/25 bg-amber-300/12",
-    iconText: "text-amber-200",
+    accent: "border-[#e7c98a] bg-[#fbeecb]",
+    iconText: "text-[#8a6312]",
   },
   path: {
     label: "进入路径",
     icon: Path,
-    accent: "border-violet-300/25 bg-violet-300/12",
-    iconText: "text-violet-200",
+    accent: "border-[#cfc0e6] bg-[#efe9f8]",
+    iconText: "text-[#6a4fa0]",
   },
   // 文化维度：合规上不用「避坑」字样，统一改为「温馨提示」
   culture: {
     label: "公司文化 / 温馨提示",
     icon: UsersThree,
-    accent: "border-rose-300/25 bg-rose-300/12",
-    iconText: "text-rose-200",
+    accent: "border-[#e6bcc4] bg-[#f8e6ea]",
+    iconText: "text-[#a84f63]",
   },
 };
 
@@ -86,12 +86,12 @@ function gradeChip(grade: InsightGrade, sampleSize: number | null): {
   if (grade === "fact") {
     return {
       text: "事实 · 公开来源",
-      cls: "border border-emerald-300/25 bg-emerald-300/15 text-emerald-200",
+      cls: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a]",
     };
   }
   return {
     text: sampleSize ? `经验 · 据约 ${sampleSize} 条反馈` : "经验 · 群体反馈",
-    cls: "border border-amber-300/25 bg-amber-300/15 text-amber-200",
+    cls: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312]",
   };
 }
 
@@ -145,20 +145,20 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
         type="button"
         aria-label="关闭"
         onClick={onClose}
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-[#1a1714]/40 backdrop-blur-sm"
       />
       <aside
         role="dialog"
         aria-modal="true"
         aria-label="公司职业洞察"
-        className="relative flex h-full w-full flex-col border-l border-white/12 bg-[#0c0e13] text-white shadow-2xl sm:max-w-xl lg:max-w-2xl"
+        className="relative flex h-full w-full flex-col border-l border-black/[0.08] bg-[#f4efe6] text-[#1a1714] shadow-2xl sm:max-w-xl lg:max-w-2xl"
       >
         {/* 头部：明确「社区聚合·非官方」，与官方岗位数据视觉区分 */}
-        <div className="border-b border-white/10 bg-gradient-to-b from-white/[0.06] to-transparent px-6 pb-5 pt-6">
+        <div className="border-b border-black/[0.06] bg-gradient-to-b from-white/60 to-transparent px-6 pb-5 pt-6">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-sm text-white/55">
-                <Sparkle size={16} weight="fill" className="text-violet-300" />
+              <div className="flex items-center gap-2 text-sm text-[#8a8275]">
+                <Sparkle size={16} weight="fill" className="text-[#6a4fa0]" />
                 公司职业洞察
               </div>
               <h2 className="mt-1.5 truncate text-2xl font-semibold leading-tight">
@@ -168,14 +168,14 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
             <button
               type="button"
               onClick={onClose}
-              className="shrink-0 rounded-full bg-white/10 p-2 text-white/70 transition hover:bg-white/16 hover:text-white"
+              className="shrink-0 rounded-full bg-black/[0.05] p-2 text-[#5f594e] transition hover:bg-black/[0.08] hover:text-[#1a1714]"
             >
               <X size={18} weight="bold" />
             </button>
           </div>
           {/* 唯一一次「来源聚合·去标识」统一声明（每条卡片正文不再重复罗列媒体名） */}
-          <p className="mt-4 flex gap-2.5 rounded-xl border border-violet-300/20 bg-violet-300/10 px-3.5 py-3 text-[13px] leading-6 text-violet-100/90">
-            <ShieldCheck size={18} weight="fill" className="mt-0.5 shrink-0 text-violet-300" />
+          <p className="mt-4 flex gap-2.5 rounded-xl border border-[#cfc0e6] bg-[#efe9f8] px-3.5 py-3 text-[13px] leading-6 text-[#5a4a78]">
+            <ShieldCheck size={18} weight="fill" className="mt-0.5 shrink-0 text-[#6a4fa0]" />
             <span>
               下列内容均来自<strong>公开报道与网络讨论的聚合</strong>、并经<strong>去标识化</strong>处理，属社区参考、非官方信息，也不针对任何个人。每条结论的具体出处见卡片下方「来源」，<strong>仅供参考</strong>，请结合官方岗位信息与面试沟通自行判断。
             </span>
@@ -183,10 +183,10 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-6">
-          {loading && <p className="text-sm text-white/50">正在加载洞察…</p>}
+          {loading && <p className="text-sm text-[#8a8275]">正在加载洞察…</p>}
 
           {!loading && totalItems === 0 && (
-            <div className="rounded-xl border border-white/10 bg-white/[0.04] p-5 text-[15px] leading-7 text-white/65">
+            <div className="rounded-xl border border-black/[0.06] bg-white/55 p-5 text-[15px] leading-7 text-[#5f594e]">
               {failureMessage(data?.failure_reason)}
             </div>
           )}
@@ -208,8 +208,8 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
                       >
                         <Meta.icon size={17} weight="bold" className={Meta.iconText} />
                       </span>
-                      <h3 className="text-base font-semibold text-white/90">{Meta.label}</h3>
-                      <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs font-medium text-white/55">
+                      <h3 className="text-base font-semibold text-[#1a1714]">{Meta.label}</h3>
+                      <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-xs font-medium text-[#8a8275]">
                         {items.length}
                       </span>
                     </header>
@@ -267,8 +267,8 @@ function InsightCard({ item }: { item: InsightItemView }) {
   return (
     <article
       className={cn(
-        "rounded-xl border border-white/8 border-l-2 bg-white/[0.045] p-5 pl-4 text-[15px]",
-        item.grade === "fact" ? "border-l-emerald-300/50" : "border-l-amber-300/50",
+        "rounded-xl border border-black/[0.06] border-l-2 bg-white/60 p-5 pl-4 text-[15px]",
+        item.grade === "fact" ? "border-l-[#6f9a3a]" : "border-l-[#e0a94e]",
         item.outdated && "opacity-70",
       )}
     >
@@ -277,16 +277,16 @@ function InsightCard({ item }: { item: InsightItemView }) {
           {chip.text}
         </span>
         {item.outdated && (
-          <span className="rounded-full border border-white/15 bg-white/10 px-2 py-0.5 text-[11px] text-white/60">
+          <span className="rounded-full border border-black/[0.08] bg-[#f4efe6] px-2 py-0.5 text-[11px] text-[#8a8275]">
             可能已过时
           </span>
         )}
       </div>
 
-      {item.title && <p className="mt-2.5 text-base font-semibold text-white/90">{item.title}</p>}
-      <p className="mt-1.5 leading-7 text-white/75">{item.content}</p>
+      {item.title && <p className="mt-2.5 text-base font-semibold text-[#1a1714]">{item.title}</p>}
+      <p className="mt-1.5 leading-7 text-[#3f3a33]">{item.content}</p>
 
-      <div className="mt-3.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-white/45">
+      <div className="mt-3.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#8a8275]">
         {item.time_window && (
           <span className="inline-flex items-center gap-1">
             <CalendarBlank size={13} />
@@ -314,7 +314,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
               href={s.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[11px] text-white/55 transition hover:border-white/20 hover:text-white/80"
+              className="inline-flex items-center gap-1 rounded-md border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e] transition hover:bg-white hover:text-[#1a1714]"
             >
               {s.publisher || "来源"}
               <ArrowSquareOut size={11} weight="bold" />
@@ -323,9 +323,9 @@ function InsightCard({ item }: { item: InsightItemView }) {
         </div>
       )}
 
-      <div className="mt-3.5 border-t border-white/8 pt-2.5">
+      <div className="mt-3.5 border-t border-black/[0.06] pt-2.5">
         {sent ? (
-          <span className="text-[11px] text-emerald-200/80">已收到反馈，我们会尽快核实。</span>
+          <span className="text-[11px] text-[#4f6f2a]">已收到反馈，我们会尽快核实。</span>
         ) : disputing ? (
           <div className="space-y-2">
             <textarea
@@ -333,21 +333,21 @@ function InsightCard({ item }: { item: InsightItemView }) {
               onChange={(e) => setReason(e.target.value)}
               placeholder="说明哪里有误（选填）"
               rows={2}
-              className="w-full rounded-lg border border-white/12 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white/80 outline-none placeholder:text-white/30 focus:border-white/25"
+              className="w-full rounded-lg border border-black/[0.09] bg-white/70 px-2.5 py-1.5 text-xs text-[#1a1714] outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white"
             />
             <div className="flex gap-2">
               <button
                 type="button"
                 disabled={sending}
                 onClick={submitDispute}
-                className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-[#08090c] transition hover:bg-white/85 disabled:opacity-50"
+                className="rounded-full bg-[#1a1714] px-3 py-1 text-[11px] font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] disabled:opacity-50"
               >
                 提交
               </button>
               <button
                 type="button"
                 onClick={() => setDisputing(false)}
-                className="rounded-full px-3 py-1 text-[11px] text-white/50 hover:text-white/80"
+                className="rounded-full px-3 py-1 text-[11px] text-[#8a8275] hover:text-[#1a1714]"
               >
                 取消
               </button>
@@ -357,7 +357,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
           <button
             type="button"
             onClick={() => setDisputing(true)}
-            className="inline-flex items-center gap-1 text-[11px] text-white/40 transition hover:text-white/70"
+            className="inline-flex items-center gap-1 text-[11px] text-[#9a9184] transition hover:text-[#1a1714]"
           >
             <Flag size={12} />
             这条有误?
