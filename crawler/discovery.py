@@ -12,6 +12,7 @@
 可靠性思路：发现 = 对**已知官方 SPA 源**按关键词做浏览器拦截抓取（和每日全量抓 500 条同一套
 Playwright 机制），再按 query/city 过滤 + 质量门校验 + 入共享 jobs 库。不去硬刚通用网搜。
 """
+import json
 import os
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -68,9 +69,25 @@ def parse_discovery_env(env: dict) -> Optional[dict]:
         "query": query,
         "city": str(env.get("DISCOVERY_CITY") or "").strip(),
         "job_type": str(env.get("DISCOVERY_JOB_TYPE") or "").strip(),
+        # 偏好底层逻辑：排除词（命中即丢弃）。城市/类型已在 API 端按「手动优先、否则偏好」解析好。
+        "exclude": _parse_str_list(env.get("DISCOVERY_EXCLUDE")),
         "limit": limit,
         "max_pages": max_pages,
     }
+
+
+def _parse_str_list(value) -> List[str]:
+    """解析 JSON 数组或逗号分隔字符串为去空白字符串列表。"""
+    s = str(value or "").strip()
+    if not s:
+        return []
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, list):
+            return [str(x).strip() for x in parsed if str(x).strip()]
+    except (ValueError, TypeError):
+        pass
+    return [p.strip() for p in s.split(",") if p.strip()]
 
 
 # ---------------------------------------------------------------------------
@@ -168,15 +185,31 @@ def job_matches_type(raw: RawJob, job_type: str) -> bool:
     return recruitment_category(raw) == want
 
 
-def filter_raw_jobs(raw_jobs: List[RawJob], query: str, city: str, job_type: str = "") -> List[RawJob]:
-    """按关键词 + 城市 + 招聘类型严格过滤抓到的岗位（纯函数）。
-    类型过滤是所有源通用的兜底：即便板块选错/混排，也只放行页面所选类型。"""
+def job_excluded(raw: RawJob, exclude: Optional[List[str]]) -> bool:
+    """命中用户偏好里的排除词则丢弃（子串小写匹配，搜 标题/公司/地点/类型/摘要/薪资）。空列表=不排除。"""
+    terms = [str(t).strip().lower() for t in (exclude or []) if str(t).strip()]
+    if not terms:
+        return False
+    hay = " ".join(
+        filter(None, [raw.title, raw.company, raw.location, raw.job_type, raw.summary, raw.salary_text])
+    ).lower()
+    return any(t in hay for t in terms)
+
+
+def filter_raw_jobs(
+    raw_jobs: List[RawJob], query: str, city: str, job_type: str = "",
+    exclude: Optional[List[str]] = None,
+) -> List[RawJob]:
+    """按关键词 + 城市 + 招聘类型 + 偏好排除词严格过滤抓到的岗位（纯函数）。
+    类型过滤是所有源通用的兜底：即便板块选错/混排，也只放行页面所选类型；
+    exclude 来自用户偏好 exclude_keywords，命中即丢，保证不抓与用户背景无关/不想要的岗位。"""
     return [
         raw
         for raw in raw_jobs
         if job_matches_query(raw, query)
         and job_matches_city(raw, city)
         and job_matches_type(raw, job_type)
+        and not job_excluded(raw, exclude)
     ]
 
 
@@ -210,6 +243,7 @@ class SpaKeywordRecipe:
         query = params["query"]
         city = params.get("city", "")
         job_type = params.get("job_type", "")
+        exclude = params.get("exclude") or []
         max_pages = params.get("max_pages") or self.discovery_max_pages
 
         sources = db.get_sources(supabase)
@@ -247,7 +281,7 @@ class SpaKeywordRecipe:
 
                 html = adapter.fetch(source["source_url"])
                 raw_jobs = adapter.parse(html)
-                matched = filter_raw_jobs(raw_jobs, query, city, job_type)
+                matched = filter_raw_jobs(raw_jobs, query, city, job_type, exclude)
                 c, u, urls = _upsert_raw_jobs(
                     supabase, source["id"], company, source["source_url"], matched
                 )

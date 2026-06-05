@@ -52,6 +52,12 @@ export async function POST(request: NextRequest) {
   }
   const { query, city, company, jobType, limit } = validation.normalized;
 
+  // 偏好底层逻辑：手动筛选项优先；未填的城市/类型默认用用户已保存偏好；排除词始终生效。
+  const prefs = await loadUserPreferences(supabase, user.id);
+  const effCity = city || prefs.city;
+  const effJobType = jobType || prefs.experienceStage;
+  const excludeKeywords = prefs.excludeKeywords;
+
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
     return NextResponse.json(
       { ok: false, error: "Missing SUPABASE_SERVICE_ROLE_KEY", mode: "browser_discovery" },
@@ -82,9 +88,9 @@ export async function POST(request: NextRequest) {
     runId,
     userId: user.id,
     query,
-    city,
+    city: effCity,
     company,
-    jobType,
+    jobType: effJobType,
     startedAt,
   });
 
@@ -115,8 +121,9 @@ export async function POST(request: NextRequest) {
         mode: "discovery",
         run_id: runId,
         query,
-        city,
-        job_type: jobType,
+        city: effCity,
+        job_type: effJobType,
+        exclude: JSON.stringify(excludeKeywords),
         limit,
       },
     });
@@ -165,9 +172,15 @@ export async function POST(request: NextRequest) {
     run_id: runId,
     status: "queued",
     query,
-    city,
+    city: effCity,
     company,
-    job_type: jobType,
+    job_type: effJobType,
+    // 让前端可提示「城市/类型未填，已用你的求职偏好默认」。
+    preference_defaults: {
+      city_from_pref: !city && Boolean(effCity),
+      job_type_from_pref: !jobType && Boolean(effJobType),
+      exclude_count: excludeKeywords.length,
+    },
     limit,
     dispatch_http_status: dispatchHttpStatus,
     poll: `/api/discovery/status?runId=${runId}`,
@@ -185,4 +198,45 @@ function createServiceClient(): SupabaseClient {
   return createClient(supabaseUrl, serviceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+}
+
+// 读取用户已保存的求职偏好（简历画像 + 偏好表），用于「未手动配置则默认按偏好」。
+async function loadUserPreferences(
+  supabase: Awaited<ReturnType<typeof createServerSupabase>>,
+  userId: string,
+): Promise<{ city: string; experienceStage: string; excludeKeywords: string[] }> {
+  const empty = { city: "", experienceStage: "", excludeKeywords: [] as string[] };
+  try {
+    const [cpRes, upRes] = await Promise.all([
+      supabase
+        .from("candidate_profiles")
+        .select("experience_stage, target_locations")
+        .eq("user_id", userId)
+        .maybeSingle(),
+      supabase
+        .from("user_preferences")
+        .select("target_locations, exclude_keywords")
+        .eq("user_id", userId)
+        .maybeSingle(),
+    ]);
+    const cp = cpRes.data as any;
+    const up = upRes.data as any;
+    const clean = (arr: any): string[] =>
+      Array.from(
+        new Set(
+          (Array.isArray(arr) ? arr : [])
+            .map((s: any) => String(s || "").trim())
+            .filter(Boolean),
+        ),
+      );
+    const cities = clean([...(cp?.target_locations || []), ...(up?.target_locations || [])]);
+    return {
+      city: cities[0] || "",
+      experienceStage: String(cp?.experience_stage || "").trim(),
+      excludeKeywords: clean(up?.exclude_keywords),
+    };
+  } catch (err) {
+    console.error("[dispatch] 读取用户偏好失败", (err as Error).message);
+    return empty;
+  }
 }
