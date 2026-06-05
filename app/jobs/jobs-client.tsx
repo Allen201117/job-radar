@@ -159,6 +159,19 @@ export default function JobsClient({ initialJobs, companies }: Props) {
     return initialJobs.filter((job) => jobMatchesFilters(job, filters)).length;
   }, [initialJobs, filters]);
 
+  // 本次发现的岗位中，严格符合当前筛选（城市/类型/关键词）的数量——诚实显示「发现 N，符合 M」，
+  // 避免「发现 47 却 0 展示」的误导。
+  const newMatching = useMemo(
+    () => officialJobs.filter((job) => jobMatchesFilters(job, filters)),
+    [officialJobs, filters],
+  );
+
+  // 一键放宽城市 + 岗位类型（保留关键词），让本次发现的岗位可见。
+  function relaxLocationAndType() {
+    setFilters((f) => ({ ...f, city: "", jobType: "" }));
+    setOnlyNew(true);
+  }
+
   function handleExistingJobsSearch() {
     setOfficialJobs([]);
     setOnlyNew(false);
@@ -476,7 +489,11 @@ export default function JobsClient({ initialJobs, companies }: Props) {
         <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-lime-300/25 bg-lime-300/[0.07] px-3.5 py-2.5 text-sm">
           <Sparkle size={16} weight="fill" className="text-lime-300" aria-hidden="true" />
           <span className="font-medium text-lime-100/90">
-            本次新发现 {officialJobs.length} 个岗位（绿色标记）
+            本次新发现 {officialJobs.length} 个岗位
+            {(filters.city || filters.jobType || filters.keyword) &&
+            newMatching.length !== officialJobs.length
+              ? `（符合当前筛选 ${newMatching.length} 个）`
+              : "（绿色标记）"}
           </span>
           <div className="ml-auto flex gap-1.5">
             <button
@@ -521,14 +538,34 @@ export default function JobsClient({ initialJobs, companies }: Props) {
             onActionChange={handleActionChange}
           />
         ))}
-        {filtered.length === 0 && (
-          <div className="rounded-[1.5rem] border border-dashed border-white/14 bg-white/[0.05] px-6 py-14 text-center">
-            <h2 className="text-lg font-semibold text-white">没有匹配的岗位</h2>
-            <p className="mx-auto mt-2 max-w-md text-pretty text-sm leading-6 text-white/56">
-              可以放宽筛选条件，或输入关键词后刷新已知官网源 / 发现新的官方招聘入口。
-            </p>
-          </div>
-        )}
+        {filtered.length === 0 &&
+          (officialJobs.length > 0 && (filters.city || filters.jobType) ? (
+            <div className="rounded-[1.5rem] border border-dashed border-amber-300/30 bg-amber-300/[0.06] px-6 py-10 text-center">
+              <h2 className="text-lg font-semibold text-white">
+                本次发现 {officialJobs.length} 个岗位，但 0 个符合当前筛选
+              </h2>
+              <p className="mx-auto mt-2 max-w-md text-pretty text-sm leading-6 text-white/60">
+                发现的岗位未同时满足
+                {filters.city ? ` 城市『${filters.city}』` : ""}
+                {filters.jobType ? ` 类型『${filters.jobType}』` : ""}
+                ——它们可能属于其它城市，或为社招 / 校招。放宽这两项即可查看本次发现的全部岗位。
+              </p>
+              <button
+                type="button"
+                onClick={relaxLocationAndType}
+                className="mt-4 inline-flex items-center gap-2 rounded-full bg-amber-300 px-5 py-2 text-sm font-semibold text-amber-950 transition duration-200 hover:bg-amber-200 active:scale-[0.98]"
+              >
+                放宽城市 / 类型，查看全部 {officialJobs.length} 个发现
+              </button>
+            </div>
+          ) : (
+            <div className="rounded-[1.5rem] border border-dashed border-white/14 bg-white/[0.05] px-6 py-14 text-center">
+              <h2 className="text-lg font-semibold text-white">没有匹配的岗位</h2>
+              <p className="mx-auto mt-2 max-w-md text-pretty text-sm leading-6 text-white/56">
+                可以放宽筛选条件，或输入关键词后刷新已知官网源 / 发现新的官方招聘入口。
+              </p>
+            </div>
+          ))}
       </div>
       {filtered.length > visibleCount && (
         <div className="flex justify-center pt-1">
