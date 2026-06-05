@@ -74,6 +74,8 @@ export default function ResumeProfilePanel() {
   const [resumeId, setResumeId] = useState<string | null>(null);
   const [saved, setSaved] = useState<any | null>(null);
   const [loadingSaved, setLoadingSaved] = useState(true);
+  const [llmReady, setLlmReady] = useState<boolean | null>(null);
+  const [llmModel, setLlmModel] = useState("");
 
   useEffect(() => {
     loadSaved();
@@ -85,6 +87,10 @@ export default function ResumeProfilePanel() {
       const resp = await fetch("/api/resume");
       const data = await resp.json();
       if (data.ok && data.profile) setSaved(data.profile);
+      if (data.llm) {
+        setLlmReady(Boolean(data.llm.configured));
+        setLlmModel(data.llm.model || "");
+      }
     } catch {
       /* 静默 */
     } finally {
@@ -113,7 +119,7 @@ export default function ResumeProfilePanel() {
       setStep("preview");
       setMessage(
         data.source === "rule"
-          ? "AI 解析暂不可用，已用规则给出草稿，请核对补全后再保存。"
+          ? `AI 解析暂不可用（原因：${data.llm_error || "未知"}${data.llm_detail ? "｜" + data.llm_detail : ""}），已用规则给出草稿，请核对补全后再保存。`
           : "AI 已解析，请核对 / 编辑后点「确认保存」。",
       );
     } catch {
@@ -263,6 +269,16 @@ export default function ResumeProfilePanel() {
                 className="mt-1 block w-full rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-sm text-white transition duration-200 placeholder:text-white/32 focus:border-sky-300 focus:outline-none"
               />
             </div>
+
+            {llmReady === false && (
+              <p className="rounded-xl bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+                未检测到 SILICONFLOW_API_KEY，AI 解析会降级为规则草稿。请在 Vercel → Settings →
+                Environment Variables 添加（勾 Production，禁加 NEXT_PUBLIC_ 前缀），保存后 Redeploy。
+              </p>
+            )}
+            {llmReady === true && (
+              <p className="text-xs text-white/40">AI 解析已就绪{llmModel ? `（模型 ${llmModel}）` : ""}。</p>
+            )}
 
             <button
               type="submit"

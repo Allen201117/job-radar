@@ -9,7 +9,7 @@ const {
   parseResumeText,
   validateResumeUploadInput,
 } = resumeParser as any;
-const { chatJSON } = llm as any;
+const { chatJSON, llmConfig } = llm as any;
 const { buildResumeMessages, normalizeResumeProfile } = resumeExtract as any;
 
 export const runtime = "nodejs";
@@ -72,7 +72,13 @@ export async function GET() {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true, profile: data || null });
+  // 暴露 LLM 配置状态（仅布尔 + 模型名，绝不含 key），供前端做「AI 是否就绪」自检。
+  const cfg = llmConfig();
+  return NextResponse.json({
+    ok: true,
+    profile: data || null,
+    llm: { configured: Boolean(cfg.configured), model: cfg.model },
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -116,14 +122,18 @@ async function parseResume(
   let profile: any;
   let source = "llm";
   let llmError: string | null = null;
+  let llmDetail: string | null = null;
   try {
     const raw = await chatJSON(buildResumeMessages(input.text), { maxTokens: 2048 });
     profile = normalizeResumeProfile(raw);
     if (!profileHasContent(profile)) throw new Error("llm_empty");
   } catch (err: any) {
     source = "rule";
-    llmError = err?.code || err?.message || "llm_failed";
-    console.error("[resume] LLM 抽取失败，降级规则解析:", llmError);
+    const code = err?.code || err?.message || "llm_failed";
+    // 带上 HTTP status（401/402/400…）方便区分 key 失效 / 余额不足 / 模型不支持。
+    llmError = err?.status ? `${code}:${err.status}` : code;
+    llmDetail = err?.detail ? String(err.detail).slice(0, 200) : null;
+    console.error("[resume] LLM 抽取失败，降级规则解析:", llmError, llmDetail || "");
     profile = normalizeResumeProfile(ruleToStructured(parseResumeText(input.text)));
   }
 
@@ -152,6 +162,7 @@ async function parseResume(
     profile,
     source,
     llm_error: llmError,
+    llm_detail: llmDetail,
   });
 }
 
