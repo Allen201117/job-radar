@@ -63,12 +63,12 @@ function extractDeadline(text?: string | null): string {
 }
 
 function recruitTypeStyle(t: string): string {
-  if (/实习|intern/i.test(t)) return "border border-amber-300/25 bg-amber-300/15 text-amber-200";
+  if (/实习|intern/i.test(t)) return "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312]";
   if (/校招|管培|应届|graduate|campus|new grad/i.test(t))
-    return "border border-emerald-300/25 bg-emerald-300/15 text-emerald-200";
+    return "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a]";
   if (/社招|全职|experienced|professional/i.test(t))
-    return "border border-sky-300/25 bg-sky-300/15 text-sky-200";
-  return "border border-white/10 bg-white/10 text-white/62";
+    return "border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299]";
+  return "border border-black/[0.07] bg-[#f4efe6] text-[#6b655a]";
 }
 
 export default function JobCard({ job, onActionChange, sessionNew }: Props) {
@@ -189,16 +189,16 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
   return (
     <article
       className={cn(
-        "group rounded-[1.35rem] border p-5 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition duration-200 hover:-translate-y-0.5 hover:shadow-2xl hover:shadow-black/25",
+        "group rounded-[1.35rem] border p-5 text-[#1a1714] transition duration-200 hover:-translate-y-0.5",
         sessionNew
-          ? "border-lime-300/45 bg-lime-300/[0.06] ring-1 ring-lime-300/25 hover:border-lime-300/60 hover:bg-lime-300/[0.09]"
-          : "border-white/10 bg-white/[0.065] hover:border-white/18 hover:bg-white/[0.085]",
+          ? "border-[#bcdcae] bg-[#eef6e0] ring-1 ring-[#cfe6b0] hover:bg-[#e8f3d6]"
+          : "border-black/[0.06] bg-white/70 shadow-[0_18px_44px_-30px_rgba(40,34,28,0.32)] hover:border-black/[0.1] hover:bg-white",
       )}
     >
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium text-white/58">{job.company}</span>
+            <span className="text-sm font-medium text-[#8a8275]">{job.company}</span>
             {recruitType && (
               <span
                 className={cn(
@@ -210,18 +210,18 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
               </span>
             )}
             {sessionNew && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-lime-300 px-2.5 py-1 text-xs font-semibold text-lime-950">
+              <span className="inline-flex items-center gap-1 rounded-full bg-[#dcefb4] px-2.5 py-1 text-xs font-semibold text-[#4f6f2a]">
                 <Sparkle size={12} weight="fill" aria-hidden="true" />
                 本次新发现
               </span>
             )}
             {isNew && !sessionNew && (
-              <span className="rounded-full bg-sky-300 px-2.5 py-1 text-xs font-semibold text-sky-950">
+              <span className="rounded-full bg-[#cfe2f8] px-2.5 py-1 text-xs font-semibold text-[#2f6299]">
                 新发现
               </span>
             )}
             {currentAction && (
-              <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-[#08090c]">
+              <span className="rounded-full bg-[#1a1714] px-2.5 py-1 text-xs font-semibold text-[#f7f1e6]">
                 {currentAction === "saved"
                   ? "已收藏"
                   : currentAction === "applied"
@@ -235,7 +235,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
               type="button"
               onClick={() => setInsightOpen(true)}
               title="查看该公司的职业洞察（社区聚合·非官方）"
-              className="inline-flex items-center gap-1 rounded-full border border-violet-300/25 bg-violet-300/12 px-2.5 py-1 text-xs font-medium text-violet-200 transition hover:border-violet-300/40 hover:bg-violet-300/20"
+              className="inline-flex items-center gap-1 rounded-full border border-[#cfc0e6] bg-[#efe9f8] px-2.5 py-1 text-xs font-medium text-[#6a4fa0] transition hover:border-[#bba9dd] hover:bg-[#e7def4]"
             >
               <Sparkle size={12} weight="fill" aria-hidden="true" />
               {timingHint ? `时机: ${timingHint}` : "职业洞察"}
@@ -245,7 +245,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
           <button
             type="button"
             onClick={handleView}
-            className="mt-2 block max-w-full text-left text-xl font-semibold leading-snug text-white transition-colors hover:text-sky-200"
+            className="mt-2 block max-w-full text-left text-xl font-semibold leading-snug text-[#1a1714] transition-colors hover:text-[#3f7cc0]"
           >
             <span className="text-balance">{job.title}</span>
           </button>
@@ -263,7 +263,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
             <div className="mt-4">
               <p
                 className={cn(
-                  "whitespace-pre-line text-pretty text-sm leading-6 text-white/56",
+                  "whitespace-pre-line text-pretty text-sm leading-6 text-[#5f594e]",
                   !expanded && "line-clamp-3",
                 )}
               >
@@ -273,7 +273,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
                 <button
                   type="button"
                   onClick={() => setExpanded((v) => !v)}
-                  className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-sky-300 transition-colors hover:text-sky-200"
+                  className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-[#3f7cc0] transition-colors hover:text-[#2f6299]"
                 >
                   {expanded ? "收起" : "展开全文"}
                   <CaretDown
@@ -290,7 +290,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
               {job.matched_keywords.map((kw) => (
                 <span
                   key={kw}
-                  className="rounded-full border border-sky-300/20 bg-sky-300/10 px-2.5 py-1 text-xs font-medium text-sky-200"
+                  className="rounded-full border border-[#cfe0f5] bg-[#e8f1fc] px-2.5 py-1 text-xs font-medium text-[#2f6299]"
                 >
                   {kw}
                 </span>
@@ -304,13 +304,13 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
             <div
               title="根据你的求职偏好与简历画像计算的匹配度（越高越契合）"
               className={cn(
-                "rounded-xl px-3 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]",
+                "rounded-xl px-3 py-2 text-center",
                 job.match_score >= 50
-                  ? "bg-white text-[#08090c]"
-                  : "bg-white/10 text-white",
+                  ? "bg-[#1a1714] text-[#f7f1e6]"
+                  : "border border-black/[0.06] bg-[#f4efe6] text-[#1a1714]",
               )}
             >
-              <span className="block text-xs opacity-80">匹配度</span>
+              <span className="block text-xs opacity-70">匹配度</span>
               <span className="tabular-nums text-2xl font-semibold leading-none">
                 {job.match_score}
               </span>
@@ -320,7 +320,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
           <button
             type="button"
             onClick={handleView}
-            className="inline-flex items-center justify-center gap-2 rounded-full bg-sky-300 px-4 py-2 text-sm font-semibold text-sky-950 transition duration-200 hover:bg-sky-200 active:scale-[0.98]"
+            className="inline-flex items-center justify-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98]"
           >
             官网详情
             <ArrowSquareOut size={16} weight="bold" aria-hidden="true" />
@@ -348,7 +348,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
             label={currentAction === "ignored" ? "已忽略" : "忽略"}
           />
           {actionError && (
-            <span className="rounded-lg bg-red-400/10 px-2 py-1 text-right text-xs text-red-200">
+            <span className="rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-2 py-1 text-right text-xs text-[#9c4a3c]">
               {actionError}
             </span>
           )}
@@ -374,11 +374,11 @@ function Field({
   value: string;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2">
-      <Icon size={16} className="shrink-0 text-white/42" aria-hidden="true" />
+    <div className="flex min-w-0 items-center gap-2 rounded-xl border border-black/[0.06] bg-white/55 px-3 py-2">
+      <Icon size={16} className="shrink-0 text-[#a39a8c]" aria-hidden="true" />
       <div className="min-w-0">
-        <span className="mr-1 text-white/42">{label}</span>
-        <span className="truncate font-medium text-white/82">{value}</span>
+        <span className="mr-1 text-[#9a9184]">{label}</span>
+        <span className="truncate font-medium text-[#3f3a33]">{value}</span>
       </div>
     </div>
   );
@@ -407,10 +407,10 @@ function ActionButton({
       className={cn(
         "inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50",
         active
-          ? "bg-white text-[#08090c]"
+          ? "bg-[#1a1714] text-[#f7f1e6]"
           : muted
-            ? "text-white/52 hover:bg-white/10 hover:text-white"
-            : "bg-white/10 text-white/78 hover:bg-white/16 hover:text-white",
+            ? "text-[#8a8275] hover:bg-black/[0.05] hover:text-[#1a1714]"
+            : "border border-black/[0.07] bg-white/70 text-[#3f3a33] hover:bg-white",
       )}
     >
       <Icon size={16} weight={active ? "fill" : "regular"} aria-hidden="true" />

@@ -58,14 +58,14 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
   }
 
   if (loading) {
-    return <p className="rounded-[1.35rem] border border-white/10 bg-white/[0.055] p-5 text-sm text-white/56">加载中...</p>;
+    return <p className="surface p-5 text-sm text-[#5f594e]">加载中...</p>;
   }
 
   return (
-    <div className="overflow-x-auto rounded-[1.35rem] border border-white/10 bg-white/[0.055] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+    <div className="surface overflow-x-auto px-4 text-[#1a1714]">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-white/10 text-left text-xs font-medium text-white/46">
+          <tr className="border-b border-black/[0.06] text-left text-xs font-medium text-[#8a8275]">
             <th className="py-2 pr-4">公司</th>
             <th className="py-2 pr-4">URL</th>
             <th className="py-2 pr-4">抓取方式</th>
@@ -79,14 +79,14 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
           {sources.map((source) => {
             const run = latestRuns[source.id];
             return (
-              <tr key={source.id} className="border-b border-white/10 last:border-0">
+              <tr key={source.id} className="border-b border-black/[0.06] last:border-0">
                 <td className="py-2 pr-4 font-medium">{source.company}</td>
                 <td className="max-w-[200px] truncate py-2 pr-4">
                   <a
                     href={source.source_url}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-sky-300 hover:text-sky-200 hover:underline"
+                    className="text-[#3f7cc0] hover:text-[#2f6299] hover:underline"
                   >
                     {source.source_url}
                   </a>
@@ -97,14 +97,14 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
                     onClick={() => toggleSource(source)}
                     className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                       source.enabled
-                        ? "bg-lime-300 text-lime-950"
-                        : "bg-red-400/15 text-red-200"
+                        ? "bg-[#cde8a0] text-[#3f5a1c]"
+                        : "bg-[#f3d9d2] text-[#9c4a3c]"
                     }`}
                   >
                     {source.enabled ? "启用" : "禁用"}
                   </button>
                 </td>
-                <td className="py-2 pr-4 text-xs text-white/46">
+                <td className="py-2 pr-4 text-xs text-[#8a8275]">
                   {source.last_checked_at
                     ? new Date(source.last_checked_at).toLocaleString("zh-CN")
                     : "—"}
@@ -114,20 +114,20 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
                     <span
                       className={`rounded-full px-2 py-0.5 text-xs ${
                         run.status === "success"
-                          ? "bg-lime-300 text-lime-950"
+                          ? "bg-[#cde8a0] text-[#3f5a1c]"
                           : run.status === "partial_success"
-                            ? "bg-orange-300 text-orange-950"
-                            : "bg-red-400/15 text-red-200"
+                            ? "bg-[#f6d6a8] text-[#8a5a12]"
+                            : "bg-[#f3d9d2] text-[#9c4a3c]"
                       }`}
                     >
                       {run.status}
                       {run.jobs_found > 0 && ` (${run.jobs_found})`}
                     </span>
                   ) : (
-                    <span className="text-xs text-white/42">—</span>
+                    <span className="text-xs text-[#9a9184]">—</span>
                   )}
                 </td>
-                <td className="py-2 text-xs text-white/46">
+                <td className="py-2 text-xs text-[#8a8275]">
                   {source.notes || "—"}
                 </td>
               </tr>

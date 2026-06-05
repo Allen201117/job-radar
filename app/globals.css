@@ -78,3 +78,188 @@
     display: none;
   }
 }
+
+/* ───────────────────────────────────────────────────────────────
+   暖光编辑部 / Warm Editorial — 仅供登录页与宣传页使用。
+   纯系统字体栈（无 webfont：规避国内 Google Fonts 封锁、离线构建不挂）。
+   不改动 :root 设计 token，不影响深色看板页。
+   ─────────────────────────────────────────────────────────────── */
+@layer base {
+  :root {
+    /* 全产品统一字体：与看板一致的无衬线显示栈（Mac 上中文回落 PingFang SC） */
+    --font-display: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+      "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+  }
+}
+
+@layer components {
+  /* 统一显示标题：与看板同一套无衬线，紧字距（替代旧的衬线大标题） */
+  .display-tight {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ——— 按钮系统（baseline）——— */
+  /* 主操作：墨黑实心胶囊，唯一的「点我」信号 */
+  .btn-ink {
+    @apply inline-flex select-none items-center justify-center gap-2 rounded-full
+      bg-[#1a1714] px-6 py-3 text-[15px] font-medium leading-none text-[#f7f1e6]
+      transition duration-200 ease-out;
+    box-shadow: 0 1px 2px rgba(26, 23, 20, 0.22), 0 12px 28px -12px rgba(26, 23, 20, 0.5);
+  }
+  .btn-ink:hover {
+    @apply bg-[#2b2520];
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(26, 23, 20, 0.22), 0 18px 36px -14px rgba(26, 23, 20, 0.55);
+  }
+  .btn-ink:active {
+    transform: translateY(0) scale(0.97);
+  }
+  .btn-ink:disabled {
+    @apply cursor-not-allowed opacity-50;
+    transform: none;
+  }
+
+  /* 次操作：描边幽灵胶囊 */
+  .btn-ghost {
+    @apply inline-flex select-none items-center justify-center gap-2 rounded-full
+      border border-[#1a1714]/20 bg-white/40 px-6 py-3 text-[15px] font-medium
+      leading-none text-[#1a1714] transition duration-200 ease-out;
+  }
+  .btn-ghost:hover {
+    @apply border-[#1a1714]/40 bg-white/70;
+    transform: translateY(-1px);
+  }
+  .btn-ghost:active {
+    transform: scale(0.97);
+  }
+  .btn-ghost:disabled {
+    @apply cursor-not-allowed opacity-50;
+    transform: none;
+  }
+
+  /* 产品「拍立得」卡：宣传页 / 登录页里漂浮的真实产品碎片 */
+  .polaroid {
+    @apply rounded-[1.15rem] border border-black/[0.05] bg-white p-2.5;
+    box-shadow: 0 1px 1px rgba(40, 34, 28, 0.05), 0 22px 48px -20px rgba(40, 34, 28, 0.32);
+  }
+
+  /* 编辑部输入框：暖白、细描边、聚焦时墨色环 */
+  .field-editorial {
+    @apply block w-full rounded-2xl border border-black/[0.09] bg-white/70 px-4 py-3
+      text-[15px] text-[#1a1714] transition duration-200 ease-out
+      placeholder:text-[#a39a8c];
+  }
+  .field-editorial:focus {
+    @apply border-[#1a1714]/55 bg-white outline-none;
+    box-shadow: 0 0 0 4px rgba(26, 23, 20, 0.08);
+  }
+}
+
+@layer utilities {
+  /* 暖纸 + 三点柔和粉彩晕染（呼应参考图的渐变，换成品牌天蓝/柠檬/暖橘） */
+  .bg-editorial {
+    background-color: #f4efe6;
+    background-image:
+      radial-gradient(58% 50% at 84% 2%, rgba(150, 182, 226, 0.30), transparent 62%),
+      radial-gradient(52% 46% at 2% 92%, rgba(196, 228, 150, 0.22), transparent 60%),
+      radial-gradient(54% 50% at 100% 96%, rgba(236, 198, 176, 0.30), transparent 60%);
+  }
+
+  /* 极淡纸面颗粒，给暖纸一点质感 */
+  .grain::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.04;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* 漂浮（仅位移，不旋转——旋转交给内层卡片，避免 transform 互相覆盖） */
+  @keyframes editorial-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-12px); }
+  }
+  .float-soft {
+    animation: editorial-float 8s ease-in-out infinite;
+  }
+
+  /* 入场上浮渐显 */
+  @keyframes editorial-rise {
+    from { opacity: 0; transform: translateY(18px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .rise {
+    animation: editorial-rise 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .float-soft,
+    .rise {
+      animation: none;
+    }
+  }
+}
+
+/* ───────────────────────────────────────────────────────────────
+   暖光产品页通用面 — 登录后整个产品共用（看板 / 岗位 / 路径 / 偏好…）
+   ─────────────────────────────────────────────────────────────── */
+@layer components {
+  /* 主卡片面：暖白、细描边、柔和落影 */
+  .surface {
+    @apply rounded-[1.4rem] border border-black/[0.06] bg-white/70;
+    box-shadow: 0 18px 44px -28px rgba(40, 34, 28, 0.32);
+  }
+  /* 次卡片面：更轻，用于网格内小卡 / 行 */
+  .surface-soft {
+    @apply rounded-[1.25rem] border border-black/[0.05] bg-white/55;
+  }
+  /* 可悬浮的卡片：上浮 + 提亮 */
+  .surface-hover {
+    @apply transition duration-200 ease-out hover:-translate-y-0.5 hover:bg-white;
+  }
+
+  /* 信息小标签 / 状态 chip */
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-black/[0.06]
+      bg-[#f4efe6] px-2.5 py-1 text-[12px] font-medium text-[#5f594e];
+  }
+  /* 段首眼眉标签 */
+  .eyebrow {
+    @apply inline-flex items-center gap-2 rounded-full border border-black/[0.08]
+      bg-white/60 px-3 py-1.5 text-[13px] font-medium text-[#5f594e];
+  }
+
+  /* 小号墨黑主按钮（卡内 / 行内操作） */
+  .btn-ink-sm {
+    @apply inline-flex select-none items-center justify-center gap-1.5 rounded-full
+      bg-[#1a1714] px-4 py-2 text-[13px] font-medium leading-none text-[#f7f1e6]
+      transition duration-200 ease-out;
+  }
+  .btn-ink-sm:hover { @apply bg-[#2b2520]; }
+  .btn-ink-sm:active { transform: scale(0.96); }
+  .btn-ink-sm:disabled { @apply cursor-not-allowed opacity-50; }
+
+  /* 小号软底次按钮（暖白） */
+  .btn-soft {
+    @apply inline-flex select-none items-center justify-center gap-1.5 rounded-full
+      border border-black/[0.08] bg-white/70 px-4 py-2 text-[13px] font-medium
+      leading-none text-[#3f3a33] transition duration-200 ease-out;
+  }
+  .btn-soft:hover { @apply bg-white; transform: translateY(-1px); }
+  .btn-soft:active { transform: scale(0.96); }
+  .btn-soft:disabled { @apply cursor-not-allowed opacity-50; }
+
+  /* 输入框（与 .field-editorial 同语言，供产品页表单复用） */
+  .field-soft {
+    @apply block w-full rounded-xl border border-black/[0.09] bg-white/70 px-3.5 py-2.5
+      text-[14px] text-[#1a1714] transition duration-200 ease-out placeholder:text-[#a39a8c];
+  }
+  .field-soft:focus {
+    @apply border-[#1a1714]/55 bg-white outline-none;
+    box-shadow: 0 0 0 4px rgba(26, 23, 20, 0.08);
+  }
+}

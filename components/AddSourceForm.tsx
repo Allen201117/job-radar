@@ -79,7 +79,7 @@ export default function AddSourceForm({ onAdded }: Props) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-4 py-2 text-sm font-semibold text-sky-950 transition duration-200 hover:bg-sky-200 active:scale-[0.98]"
+        className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98]"
       >
         <Plus size={16} weight="bold" aria-hidden="true" />
         添加源
@@ -90,7 +90,7 @@ export default function AddSourceForm({ onAdded }: Props) {
   return (
     <form
       onSubmit={submit}
-      className="rounded-[1.35rem] border border-white/10 bg-white/[0.055] p-5 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+      className="surface p-5 text-[#1a1714]"
     >
       <div className="flex items-center justify-between">
         <h3 className="text-base font-semibold">添加招聘源</h3>
@@ -100,7 +100,7 @@ export default function AddSourceForm({ onAdded }: Props) {
             reset();
             setOpen(false);
           }}
-          className="rounded-full bg-white/10 p-1.5 text-white/70 transition hover:bg-white/16 hover:text-white"
+          className="rounded-full bg-black/[0.05] p-1.5 text-[#5f594e] transition hover:bg-black/[0.08] hover:text-[#1a1714]"
         >
           <X size={16} weight="bold" />
         </button>
@@ -155,12 +155,12 @@ export default function AddSourceForm({ onAdded }: Props) {
         </Field>
 
         <Field label="启用">
-          <label className="inline-flex items-center gap-2 text-sm text-white/75">
+          <label className="inline-flex items-center gap-2 text-sm text-[#5f594e]">
             <input
               type="checkbox"
               checked={form.enabled}
               onChange={(e) => set("enabled", e.target.checked)}
-              className="size-4 accent-sky-300"
+              className="size-4 accent-[#1a1714]"
             />
             创建后立即启用（次日抓取生效）
           </label>
@@ -177,20 +177,20 @@ export default function AddSourceForm({ onAdded }: Props) {
       </div>
 
       {selectedAdapter?.hint && (
-        <p className="mt-3 rounded-lg border border-sky-300/20 bg-sky-300/10 px-3 py-2 text-xs leading-5 text-sky-100/85">
+        <p className="mt-3 rounded-lg border border-[#bcd2ed] bg-[#e8f1fc] px-3 py-2 text-xs leading-5 text-[#2f6299]">
           {selectedAdapter.hint}
         </p>
       )}
 
       {error && (
-        <p className="mt-3 rounded-lg bg-red-400/10 px-3 py-2 text-sm text-red-200">{error}</p>
+        <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c]">{error}</p>
       )}
 
       <div className="mt-4 flex gap-2">
         <button
           type="submit"
           disabled={submitting}
-          className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-[#08090c] transition hover:bg-white/85 active:scale-[0.98] disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] active:scale-[0.98] disabled:opacity-50"
         >
           {submitting ? "保存中…" : "保存源"}
         </button>
@@ -200,7 +200,7 @@ export default function AddSourceForm({ onAdded }: Props) {
             reset();
             setOpen(false);
           }}
-          className="rounded-full px-4 py-2 text-sm font-medium text-white/55 transition hover:bg-white/10 hover:text-white"
+          className="rounded-full px-4 py-2 text-sm font-medium text-[#8a8275] transition hover:bg-black/[0.05] hover:text-[#1a1714]"
         >
           取消
         </button>
@@ -210,7 +210,7 @@ export default function AddSourceForm({ onAdded }: Props) {
 }
 
 const inputCls =
-  "w-full rounded-lg border border-white/12 bg-white/[0.04] px-3 py-2 text-sm text-white/85 outline-none placeholder:text-white/30 focus:border-white/25";
+  "w-full rounded-lg border border-black/[0.09] bg-white/70 px-3 py-2 text-sm text-[#1a1714] outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white";
 
 function Field({
   label,
@@ -225,9 +225,9 @@ function Field({
 }) {
   return (
     <div className={className}>
-      <label className="mb-1.5 block text-xs font-medium text-white/50">{label}</label>
+      <label className="mb-1.5 block text-xs font-medium text-[#8a8275]">{label}</label>
       {children}
-      {error && <p className="mt-1 text-xs text-red-200">{error}</p>}
+      {error && <p className="mt-1 text-xs text-[#9c4a3c]">{error}</p>}
     </div>
   );
 }

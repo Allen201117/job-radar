@@ -69,16 +69,16 @@ export default async function TodayPage() {
   const ignoredCount = allScored.filter((j) => j.user_action === "ignored").length;
 
   return (
-    <div className="min-h-screen bg-[#08090c]">
+    <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage>
         <ProductHero
           eyebrow="今日看板"
-          title="官方岗位的每日优先队列 ✨"
+          title="官方岗位的每日优先队列"
           description="根据你的偏好和简历画像排序，隐藏已忽略和已投递岗位，把今天最值得看的官方机会放在前面。"
           icon={Broadcast}
           action={
-            <div className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm text-white/72 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+            <div className="rounded-2xl border border-black/[0.07] bg-white/70 px-4 py-3 text-[14px] font-medium text-[#5f594e]">
               显示上限 {preferences?.daily_limit || 20} 个岗位
             </div>
           }

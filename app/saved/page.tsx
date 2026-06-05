@@ -12,7 +12,7 @@ export default async function SavedPage() {
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-[#08090c]">
+      <div className="min-h-screen bg-editorial">
         <Navbar />
         <ProductPage maxWidth="max-w-5xl">
           <ProductHero eyebrow="已收藏" title="待进一步比较的岗位" icon={BookmarkSimple} />
@@ -32,7 +32,7 @@ export default async function SavedPage() {
 
   if (!actions || actions.length === 0) {
     return (
-      <div className="min-h-screen bg-[#08090c]">
+      <div className="min-h-screen bg-editorial">
         <Navbar />
         <ProductPage maxWidth="max-w-5xl">
           <ProductHero eyebrow="已收藏" title="待进一步比较的岗位" icon={BookmarkSimple} />
@@ -48,7 +48,7 @@ export default async function SavedPage() {
   const { data: jobs } = await supabase.from("jobs").select("*").in("id", jobIds).eq("status", "active");
 
   return (
-    <div className="min-h-screen bg-[#08090c]">
+    <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero

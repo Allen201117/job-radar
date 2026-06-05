@@ -36,11 +36,11 @@ export default function JobFilters({ filters, onChange, companies }: Props) {
     onChange({ ...filters, [key]: value });
   }
 
-  const inputClass = "mt-1 w-full rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-sm text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition duration-200 placeholder:text-white/32 focus:border-sky-300 focus:outline-none";
-  const selectClass = "mt-1 w-full rounded-xl border border-white/10 bg-[#17191f] px-3 py-2 text-sm text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition duration-200 focus:border-sky-300 focus:outline-none";
+  const inputClass = "mt-1 w-full rounded-xl border border-black/[0.09] bg-white/70 px-3 py-2 text-sm text-[#1a1714] transition duration-200 placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white focus:outline-none";
+  const selectClass = "mt-1 w-full rounded-xl border border-black/[0.09] bg-white px-3 py-2 text-sm text-[#1a1714] transition duration-200 focus:border-[#1a1714]/55 focus:outline-none";
 
   return (
-    <div className="space-y-5 rounded-[1.35rem] border border-white/10 bg-white/[0.055] p-4 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] sm:p-5">
+    <div className="surface space-y-5 p-4 text-[#1a1714] sm:p-5">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <FilterLabel icon={Buildings} label="公司" />
@@ -100,12 +100,12 @@ export default function JobFilters({ filters, onChange, companies }: Props) {
 
 function Check({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
-    <label className="flex cursor-pointer items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-2 text-sm text-white/76 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition duration-200 hover:bg-white/16 hover:text-white active:scale-[0.98]">
+    <label className="flex cursor-pointer items-center gap-2 rounded-full border border-black/[0.08] bg-white/70 px-3 py-2 text-sm text-[#5f594e] transition duration-200 hover:bg-white hover:text-[#1a1714] active:scale-[0.98]">
       <input
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="size-4 rounded border-white/20 bg-white/10 text-sky-300"
+        className="size-4 rounded border-black/20 accent-[#1a1714]"
       />
       {label}
     </label>
@@ -120,7 +120,7 @@ function FilterLabel({
   label: string;
 }) {
   return (
-    <label className="inline-flex items-center gap-1.5 text-xs font-medium text-white/50">
+    <label className="inline-flex items-center gap-1.5 text-xs font-medium text-[#8a8275]">
       <Icon size={14} weight="fill" aria-hidden="true" />
       {label}
     </label>

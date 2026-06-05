@@ -110,7 +110,7 @@ const EMPTY_FORM: FormState = {
 };
 
 const inputCls =
-  "w-full rounded-lg border border-white/12 bg-white/[0.04] px-3 py-2 text-sm text-white/85 outline-none placeholder:text-white/30 focus:border-white/25";
+  "w-full rounded-lg border border-black/[0.09] bg-white/70 px-3 py-2 text-sm text-[#1a1714] outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white";
 
 export default function InsightsAdminClient() {
   const [loading, setLoading] = useState(true);
@@ -351,27 +351,27 @@ export default function InsightsAdminClient() {
     }
   }
 
-  if (loading) return <p className="mt-8 text-sm text-white/50">正在加载洞察后台…</p>;
+  if (loading) return <p className="mt-8 text-sm text-[#8a8275]">正在加载洞察后台…</p>;
   if (error)
     return (
-      <p className="mt-8 rounded-xl border border-white/10 bg-white/[0.04] p-4 text-sm text-white/60">
+      <p className="mt-8 rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm text-[#5f594e]">
         {error}
       </p>
     );
 
   return (
-    <div className="mt-8 space-y-8 text-white">
+    <div className="mt-8 space-y-8 text-[#1a1714]">
       <div className="flex flex-wrap items-center gap-3">
         {!formOpen && (
           <button
             type="button"
             onClick={openCreate}
-            className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-4 py-2 text-sm font-semibold text-sky-950 transition hover:bg-sky-200 active:scale-[0.98]"
+            className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] active:scale-[0.98]"
           >
             <Plus size={16} weight="bold" /> 新增洞察条目
           </button>
         )}
-        <span className="text-sm text-white/45">
+        <span className="text-sm text-[#8a8275]">
           共 {items.length} 条洞察 · {companies.length} 家公司 · {disputes.length} 条待处理申诉
         </span>
       </div>
@@ -395,7 +395,7 @@ export default function InsightsAdminClient() {
       {/* 待处理申诉 */}
       {disputes.length > 0 && (
         <section>
-          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-amber-200/90">
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#9a6a2a]">
             <Flag size={16} weight="fill" /> 待处理申诉（{disputes.length}）
           </h2>
           <div className="space-y-3">
@@ -404,9 +404,9 @@ export default function InsightsAdminClient() {
               return (
                 <article
                   key={d.id}
-                  className="rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-4 text-sm"
+                  className="rounded-xl border border-[#e7c98a] bg-[#fbf2d8] p-4 text-sm"
                 >
-                  <p className="text-white/85">
+                  <p className="text-[#1a1714]">
                     {it ? (
                       <>
                         <span className="font-medium">
@@ -416,11 +416,11 @@ export default function InsightsAdminClient() {
                         · {DIM_LABELS[it.dimension]} · {it.title || it.content.slice(0, 24)}
                       </>
                     ) : (
-                      <span className="text-white/50">条目已不存在（item_id: {d.item_id.slice(0, 8)}）</span>
+                      <span className="text-[#8a8275]">条目已不存在（item_id: {d.item_id.slice(0, 8)}）</span>
                     )}
                   </p>
-                  {it && <p className="mt-1 leading-6 text-white/60">{it.content}</p>}
-                  <p className="mt-2 text-xs text-white/50">
+                  {it && <p className="mt-1 leading-6 text-[#5f594e]">{it.content}</p>}
+                  <p className="mt-2 text-xs text-[#8a8275]">
                     申诉理由：{d.reason || "（未填写）"} · {new Date(d.created_at).toLocaleString("zh-CN")}
                   </p>
                   <div className="mt-3 flex gap-2">
@@ -428,7 +428,7 @@ export default function InsightsAdminClient() {
                       type="button"
                       disabled={busyId === d.id}
                       onClick={() => resolveDispute(d, "upheld")}
-                      className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-[#08090c] transition hover:bg-white/85 disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 rounded-full bg-[#1a1714] px-3 py-1.5 text-xs font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] disabled:opacity-50"
                     >
                       <Trash size={13} weight="bold" /> 成立并下架
                     </button>
@@ -436,7 +436,7 @@ export default function InsightsAdminClient() {
                       type="button"
                       disabled={busyId === d.id}
                       onClick={() => resolveDispute(d, "rejected")}
-                      className="rounded-full border border-white/15 px-3 py-1.5 text-xs font-medium text-white/70 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
+                      className="rounded-full border border-black/[0.1] px-3 py-1.5 text-xs font-medium text-[#5f594e] transition hover:bg-black/[0.05] hover:text-[#1a1714] disabled:opacity-50"
                     >
                       驳回
                     </button>
@@ -451,18 +451,18 @@ export default function InsightsAdminClient() {
       {/* 行业覆盖 worklist：按行业看缺口，点公司直接补录 */}
       {companies.length > 0 && (
         <section>
-          <h2 className="mb-3 text-sm font-semibold text-white/80">
+          <h2 className="mb-3 text-sm font-semibold text-[#3f3a33]">
             行业覆盖（{companies.length} 家公司 · 绿色=已录入，灰色=待补全，点公司直接补录）
           </h2>
           <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
             {industryCoverage.map((g) => (
-              <div key={g.industry} className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
+              <div key={g.industry} className="surface-soft p-3">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-white/85">{g.industry}</span>
+                  <span className="text-sm font-medium text-[#1a1714]">{g.industry}</span>
                   <span
                     className={cn(
                       "shrink-0 rounded-full px-2 py-0.5 text-[11px]",
-                      g.withInsights ? "bg-emerald-300/12 text-emerald-200" : "bg-white/10 text-white/50",
+                      g.withInsights ? "bg-[#e6f2d6] text-[#4f6f2a]" : "bg-[#f4efe6] text-[#8a8275]",
                     )}
                   >
                     已录入 {g.withInsights}/{g.total}
@@ -478,8 +478,8 @@ export default function InsightsAdminClient() {
                       className={cn(
                         "rounded-full border px-2 py-0.5 text-[11px] transition",
                         c.count > 0
-                          ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-100/80 hover:bg-emerald-300/20"
-                          : "border-white/12 bg-white/[0.05] text-white/45 hover:bg-white/10 hover:text-white/70",
+                          ? "border-[#cfe6b0] bg-[#eef6e0] text-[#4f6f2a] hover:bg-[#e2efce]"
+                          : "border-black/[0.08] bg-white/60 text-[#8a8275] hover:bg-white hover:text-[#1a1714]",
                       )}
                     >
                       {c.company}
@@ -497,7 +497,7 @@ export default function InsightsAdminClient() {
       <section className="space-y-6">
         {grouped.map((g) => (
           <div key={g.name}>
-            <h3 className="mb-2 text-sm font-semibold text-white/80">{g.name}</h3>
+            <h3 className="mb-2 text-sm font-semibold text-[#3f3a33]">{g.name}</h3>
             <div className="space-y-2.5">
               {g.items.map((it) => (
                 <ItemRow
@@ -513,7 +513,7 @@ export default function InsightsAdminClient() {
           </div>
         ))}
         {grouped.length === 0 && (
-          <p className="rounded-xl border border-white/10 bg-white/[0.04] p-4 text-sm text-white/55">
+          <p className="rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm text-[#5f594e]">
             还没有任何洞察条目。点「新增洞察条目」开始录入。
           </p>
         )}
@@ -523,9 +523,9 @@ export default function InsightsAdminClient() {
 }
 
 function statusChip(status: string) {
-  if (status === "active") return "border-emerald-300/25 bg-emerald-300/12 text-emerald-200";
-  if (status === "disputed") return "border-amber-300/25 bg-amber-300/12 text-amber-200";
-  return "border-white/15 bg-white/10 text-white/55";
+  if (status === "active") return "border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a]";
+  if (status === "disputed") return "border-[#e7c98a] bg-[#fbeecb] text-[#8a6312]";
+  return "border-black/[0.08] bg-[#f4efe6] text-[#8a8275]";
 }
 
 function ItemRow({
@@ -542,19 +542,19 @@ function ItemRow({
   onActivate: () => void;
 }) {
   return (
-    <article className="rounded-xl border border-white/10 bg-white/[0.04] p-4 text-sm">
+    <article className="surface-soft p-4 text-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-full border border-white/12 bg-white/[0.06] px-2 py-0.5 text-[11px] text-white/65">
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e]">
           {DIM_LABELS[item.dimension]}
         </span>
-        <span className="rounded-full border border-white/12 bg-white/[0.06] px-2 py-0.5 text-[11px] text-white/65">
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e]">
           {GRADE_LABELS[item.grade]}
         </span>
         <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", statusChip(item.status))}>
           {STATUS_LABELS[item.status] || item.status}
         </span>
         {!item.deidentified && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-red-400/25 bg-red-400/10 px-2 py-0.5 text-[11px] text-red-200">
+          <span className="inline-flex items-center gap-1 rounded-full border border-[#e0b4ac] bg-[#f7e6e1] px-2 py-0.5 text-[11px] text-[#9c4a3c]">
             <Warning size={11} weight="fill" /> 未去标识
           </span>
         )}
@@ -562,7 +562,7 @@ function ItemRow({
           <button
             type="button"
             onClick={onEdit}
-            className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-white/60 transition hover:bg-white/10 hover:text-white"
+            className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#5f594e] transition hover:bg-black/[0.05] hover:text-[#1a1714]"
           >
             <PencilSimple size={13} /> 编辑
           </button>
@@ -571,7 +571,7 @@ function ItemRow({
               type="button"
               disabled={busy}
               onClick={onRetire}
-              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-white/60 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#5f594e] transition hover:bg-black/[0.05] hover:text-[#1a1714] disabled:opacity-50"
             >
               <Trash size={13} /> 下架
             </button>
@@ -580,16 +580,16 @@ function ItemRow({
               type="button"
               disabled={busy}
               onClick={onActivate}
-              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-emerald-200/80 transition hover:bg-white/10 hover:text-emerald-200 disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#4f6f2a] transition hover:bg-black/[0.05] hover:text-[#3f5a1c] disabled:opacity-50"
             >
               <ArrowCounterClockwise size={13} /> 上架
             </button>
           )}
         </div>
       </div>
-      {item.title && <p className="mt-2 font-semibold text-white/90">{item.title}</p>}
-      <p className="mt-1 leading-6 text-white/70">{item.content}</p>
-      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-white/45">
+      {item.title && <p className="mt-2 font-semibold text-[#1a1714]">{item.title}</p>}
+      <p className="mt-1 leading-6 text-[#3f3a33]">{item.content}</p>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[#8a8275]">
         {item.sample_size != null && <span>样本 {item.sample_size}</span>}
         {item.time_window && <span>{item.time_window}</span>}
         {item.valid_until && <span>有效期至 {item.valid_until}</span>}
@@ -627,14 +627,14 @@ function ItemForm({
   return (
     <form
       onSubmit={onSubmit}
-      className="rounded-[1.35rem] border border-white/10 bg-white/[0.055] p-5 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+      className="surface p-5 text-[#1a1714]"
     >
       <div className="flex items-center justify-between">
         <h3 className="text-base font-semibold">{form.id ? "编辑洞察条目" : "新增洞察条目"}</h3>
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-full bg-white/10 p-1.5 text-white/70 transition hover:bg-white/16 hover:text-white"
+          className="rounded-full bg-black/[0.05] p-1.5 text-[#5f594e] transition hover:bg-black/[0.08] hover:text-[#1a1714]"
         >
           <X size={16} weight="bold" />
         </button>
@@ -735,12 +735,12 @@ function ItemForm({
         </FormField>
 
         <FormField label="去标识">
-          <label className="inline-flex items-center gap-2 text-sm text-white/75">
+          <label className="inline-flex items-center gap-2 text-sm text-[#5f594e]">
             <input
               type="checkbox"
               checked={form.deidentified}
               onChange={(e) => setField("deidentified", e.target.checked)}
-              className="size-4 accent-sky-300"
+              className="size-4 accent-[#1a1714]"
             />
             内容已去标识，不指向具体个人
           </label>
@@ -750,14 +750,14 @@ function ItemForm({
       {/* 来源 */}
       <div className="mt-5">
         <div className="mb-2 flex items-center justify-between">
-          <span className="text-xs font-medium text-white/50">来源（链接 + 短摘要，禁整段原文）</span>
-          <button type="button" onClick={addSource} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-sky-200 transition hover:bg-white/10">
+          <span className="text-xs font-medium text-[#8a8275]">来源（链接 + 短摘要，禁整段原文）</span>
+          <button type="button" onClick={addSource} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#2f6299] transition hover:bg-black/[0.05]">
             <Plus size={12} weight="bold" /> 加一条来源
           </button>
         </div>
         <div className="space-y-3">
           {form.sources.map((s, i) => (
-            <div key={i} className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+            <div key={i} className="rounded-lg border border-black/[0.06] bg-white/55 p-3">
               <div className="grid gap-2.5 sm:grid-cols-2">
                 <input value={s.url} onChange={(e) => setSource(i, { url: e.target.value })} placeholder="https://…" className={inputCls} />
                 <input value={s.publisher} onChange={(e) => setSource(i, { publisher: e.target.value })} placeholder="来源名，如「界面新闻」" className={inputCls} />
@@ -771,12 +771,12 @@ function ItemForm({
                 <input value={s.excerpt} onChange={(e) => setSource(i, { excerpt: e.target.value })} placeholder="短摘要（选填）" className={inputCls} />
               </div>
               <div className="mt-2 flex items-center justify-between">
-                <label className="inline-flex items-center gap-2 text-xs text-white/65">
-                  <input type="checkbox" checked={s.deidentified} onChange={(e) => setSource(i, { deidentified: e.target.checked })} className="size-3.5 accent-sky-300" />
+                <label className="inline-flex items-center gap-2 text-xs text-[#5f594e]">
+                  <input type="checkbox" checked={s.deidentified} onChange={(e) => setSource(i, { deidentified: e.target.checked })} className="size-3.5 accent-[#1a1714]" />
                   已去标识
                 </label>
                 {form.sources.length > 1 && (
-                  <button type="button" onClick={() => removeSource(i)} className="text-[11px] text-white/40 transition hover:text-red-200">
+                  <button type="button" onClick={() => removeSource(i)} className="text-[11px] text-[#9a9184] transition hover:text-[#9c4a3c]">
                     删除
                   </button>
                 )}
@@ -787,23 +787,23 @@ function ItemForm({
       </div>
 
       {formGate && (
-        <p className="mt-4 rounded-lg border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-xs leading-5 text-amber-100/90">
+        <p className="mt-4 rounded-lg border border-[#e7c98a] bg-[#fbf2d8] px-3 py-2 text-xs leading-5 text-[#8a6312]">
           {formGate}
         </p>
       )}
       {formError && (
-        <p className="mt-3 rounded-lg bg-red-400/10 px-3 py-2 text-sm text-red-200">{formError}</p>
+        <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c]">{formError}</p>
       )}
 
       <div className="mt-4 flex gap-2">
         <button
           type="submit"
           disabled={saving}
-          className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-[#08090c] transition hover:bg-white/85 active:scale-[0.98] disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] active:scale-[0.98] disabled:opacity-50"
         >
           {saving ? "保存中…" : form.id ? "保存修改" : "创建条目"}
         </button>
-        <button type="button" onClick={onCancel} className="rounded-full px-4 py-2 text-sm font-medium text-white/55 transition hover:bg-white/10 hover:text-white">
+        <button type="button" onClick={onCancel} className="rounded-full px-4 py-2 text-sm font-medium text-[#8a8275] transition hover:bg-black/[0.05] hover:text-[#1a1714]">
           取消
         </button>
       </div>
@@ -822,7 +822,7 @@ function FormField({
 }) {
   return (
     <div className={className}>
-      <label className="mb-1.5 block text-xs font-medium text-white/50">{label}</label>
+      <label className="mb-1.5 block text-xs font-medium text-[#8a8275]">{label}</label>
       {children}
     </div>
   );

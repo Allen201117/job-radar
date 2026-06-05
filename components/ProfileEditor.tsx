@@ -52,9 +52,9 @@ export default function ProfileEditor({ email }: { email?: string }) {
   }
 
   return (
-    <section className="rounded-[1.35rem] border border-white/10 bg-white/[0.055] p-5 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+    <section className="surface p-5 text-[#1a1714]">
       <div className="flex items-center gap-2">
-        <div className="grid size-9 place-items-center rounded-xl bg-sky-300 text-sky-950">
+        <div className="grid size-9 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6]">
           <UserCircle size={18} weight="fill" aria-hidden="true" />
         </div>
         <h2 className="text-base font-semibold">个人资料</h2>
@@ -62,7 +62,7 @@ export default function ProfileEditor({ email }: { email?: string }) {
 
       <form onSubmit={save} className="mt-4 space-y-3">
         <div>
-          <label htmlFor="display_name" className="inline-flex items-center gap-1.5 text-sm font-medium text-white/76">
+          <label htmlFor="display_name" className="inline-flex items-center gap-1.5 text-sm font-medium text-[#5f594e]">
             <IdentificationBadge size={16} weight="bold" aria-hidden="true" />
             昵称
           </label>
@@ -72,12 +72,12 @@ export default function ProfileEditor({ email }: { email?: string }) {
             onChange={(e) => setDisplayName(e.target.value)}
             maxLength={40}
             placeholder={loading ? "加载中…" : "给自己起个昵称"}
-            className="mt-1 block w-full rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-sm text-white transition duration-200 placeholder:text-white/32 focus:border-sky-300 focus:outline-none"
+            className="mt-1 field-soft"
           />
         </div>
 
         <div>
-          <label htmlFor="bio" className="text-sm font-medium text-white/76">
+          <label htmlFor="bio" className="text-sm font-medium text-[#5f594e]">
             个性签名
           </label>
           <textarea
@@ -86,17 +86,17 @@ export default function ProfileEditor({ email }: { email?: string }) {
             onChange={(e) => setBio(e.target.value.slice(0, MAX_BIO))}
             rows={2}
             placeholder="一句话介绍自己（选填）"
-            className="mt-1 block w-full rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-sm text-white transition duration-200 placeholder:text-white/32 focus:border-sky-300 focus:outline-none"
+            className="mt-1 field-soft"
           />
-          <div className="mt-1 text-right text-xs text-white/35">
+          <div className="mt-1 text-right text-xs text-[#a39a8c]">
             {bio.length}/{MAX_BIO}
           </div>
         </div>
 
-        {email && <p className="text-xs text-white/40">登录邮箱：{email}</p>}
+        {email && <p className="text-xs text-[#8a8275]">登录邮箱：{email}</p>}
 
         {message && (
-          <p className={`rounded-full px-3 py-2 text-sm ${message.includes("失败") ? "bg-red-400/10 text-red-200" : "bg-sky-300/10 text-sky-200"}`}>
+          <p className={`rounded-full border px-3 py-2 text-sm ${message.includes("失败") ? "border-[#e0b4ac] bg-[#f7e6e1] text-[#9c4a3c]" : "border-[#bcd2ed] bg-[#e8f1fc] text-[#2f6299]"}`}>
             {message}
           </p>
         )}
@@ -104,7 +104,7 @@ export default function ProfileEditor({ email }: { email?: string }) {
         <button
           type="submit"
           disabled={saving}
-          className="inline-flex items-center gap-2 rounded-full bg-sky-300 px-5 py-2 text-sm font-semibold text-sky-950 transition duration-200 hover:bg-sky-200 active:scale-[0.98] disabled:opacity-50"
+          className="btn-ink"
         >
           <FloppyDisk size={16} weight="bold" aria-hidden="true" />
           {saving ? "保存中…" : "保存资料"}

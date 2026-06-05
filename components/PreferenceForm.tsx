@@ -80,21 +80,21 @@ export default function PreferenceForm() {
 
   if (!prefs) {
     return (
-      <div className="rounded-[1.35rem] border border-white/10 bg-white/[0.055] p-5 text-sm text-white/56">
+      <div className="surface p-5 text-sm text-[#5f594e]">
         加载中...
       </div>
     );
   }
 
   return (
-    <form onSubmit={handleSave} className="space-y-5 rounded-[1.35rem] border border-white/10 bg-white/[0.055] p-5 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+    <form onSubmit={handleSave} className="surface space-y-5 p-5 text-[#1a1714]">
       <div className="flex items-center gap-2">
-        <div className="grid size-9 place-items-center rounded-xl bg-sky-300 text-sky-950">
+        <div className="grid size-9 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6]">
           <SlidersHorizontal size={18} weight="fill" aria-hidden="true" />
         </div>
         <div>
           <h2 className="text-base font-semibold">求职偏好</h2>
-          <p className="text-sm text-white/46">这些信号会影响每日队列排序。</p>
+          <p className="text-sm text-[#8a8275]">这些信号会影响每日队列排序。</p>
         </div>
       </div>
       <Field label="目标城市">
@@ -139,22 +139,18 @@ export default function PreferenceForm() {
           max={100}
           value={prefs.daily_limit}
           onChange={(e) => setPrefs({ ...prefs, daily_limit: Number(e.target.value) || 20 })}
-          className="mt-1 block w-full rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-sm text-white transition duration-200 focus:border-sky-300 focus:outline-none"
+          className="mt-1 field-soft"
         />
       </Field>
 
       {message && (
-        <p className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm ${message.includes("失败") ? "bg-red-400/10 text-red-200" : "bg-sky-300/10 text-sky-200"}`}>
+        <p className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm ${message.includes("失败") ? "border-[#e0b4ac] bg-[#f7e6e1] text-[#9c4a3c]" : "border-[#bcd2ed] bg-[#e8f1fc] text-[#2f6299]"}`}>
           {!message.includes("失败") && <CheckCircle size={16} weight="fill" aria-hidden="true" />}
           {message}
         </p>
       )}
 
-      <button
-        type="submit"
-        disabled={saving}
-        className="inline-flex items-center justify-center rounded-full bg-sky-300 px-6 py-2 text-sm font-semibold text-sky-950 transition duration-200 hover:bg-sky-200 active:scale-[0.98] disabled:opacity-50"
-      >
+      <button type="submit" disabled={saving} className="btn-ink">
         {saving ? "保存中..." : "保存偏好"}
       </button>
     </form>
@@ -164,7 +160,7 @@ export default function PreferenceForm() {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="text-sm font-medium text-white/76">{label}</label>
+      <label className="text-sm font-medium text-[#5f594e]">{label}</label>
       {children}
     </div>
   );
