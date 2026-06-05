@@ -207,7 +207,11 @@ async function saveConfirmedProfile(
     .single();
 
   if (profileError) {
-    return NextResponse.json({ ok: false, error: profileError.message }, { status: 500 });
+    // 缺列/schema 不同步多半是生产库没跑迁移 019（basic_info/internships/projects），给出可执行提示。
+    const hint = /column|schema cache/i.test(profileError.message)
+      ? "（疑似生产库缺列：请在 Supabase 应用迁移 019_profile_and_structured_resume.sql 后重试）"
+      : "";
+    return NextResponse.json({ ok: false, error: profileError.message + hint }, { status: 500 });
   }
 
   let preferencesApplied = false;

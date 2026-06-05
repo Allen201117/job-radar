@@ -140,7 +140,7 @@ export default function ResumeProfilePanel() {
       });
       const data = await resp.json();
       if (!data.ok) {
-        setMessage("保存失败，请重试。");
+        setMessage(`保存失败：${data.error || "请重试"}`);
         return;
       }
       setSaved(data.profile);
@@ -234,7 +234,7 @@ export default function ResumeProfilePanel() {
         上传或粘贴简历，AI 结构化抽取教育 / 实习 / 项目 / 技能；可预览、编辑后再确认保存，只写入你的账号。
       </p>
 
-      {message && (
+      {message && step === "input" && (
         <p className={`mt-3 rounded-xl px-3 py-2 text-sm ${message.includes("失败") || message.includes("暂不") ? "bg-red-400/10 text-red-200" : "bg-sky-300/10 text-sky-200"}`}>
           {message}
         </p>
@@ -382,6 +382,11 @@ export default function ResumeProfilePanel() {
             同步到求职偏好（方向 / 城市 / 技能）
           </label>
 
+          {message && (
+            <p className={`rounded-xl px-3 py-2 text-sm ${message.includes("失败") || message.includes("暂不") ? "bg-red-400/10 text-red-200" : "bg-sky-300/10 text-sky-200"}`}>
+              {message}
+            </p>
+          )}
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
