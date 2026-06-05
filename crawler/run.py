@@ -23,6 +23,7 @@ from adapters.bytedance import BytedanceAdapter, BytedanceCampusAdapter
 from adapters.feishu import NioAdapter, XpengAdapter, HorizonAdapter, XiaomiAdapter
 from adapters.greenhouse import GreenhouseAdapter
 from adapters.lever import LeverAdapter
+from adapters.china_ats import MokaAdapter, BeisenAdapter, CompanySpaAdapter
 
 
 ADAPTERS = {
@@ -42,6 +43,10 @@ ADAPTERS = {
     # 外企 ATS（通用适配器，按公司加 sources 行；parse 已裁到在华岗位）
     "greenhouse": GreenhouseAdapter(),
     "lever": LeverAdapter(),
+    # 中国本土 ATS / 企业官网 SPA（通用适配器，按公司加 sources 行；host 从 source_url 动态解析）
+    "moka": MokaAdapter(),
+    "beisen": BeisenAdapter(),
+    "company_spa": CompanySpaAdapter(),
 }
 
 # 中国本土公司源（每日后台爬取高优）：本土覆盖优先级 > 外企，排在外企 ATS 前先抓。
@@ -49,6 +54,7 @@ ADAPTERS = {
 DOMESTIC_ADAPTERS = {
     "baidu", "jd", "bytedance", "bytedance_campus", "tencent",
     "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier",
+    "moka", "beisen", "company_spa",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
 }
 
 

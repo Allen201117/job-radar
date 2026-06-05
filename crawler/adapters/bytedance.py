@@ -27,12 +27,18 @@ class BytedanceAdapter(PlaywrightAdapter):
     intercept_match = "/api/v1/search/job/posts"
     detail_template = "https://jobs.bytedance.com/experienced/position/{id}/detail"
     posts_keys = ("data.job_post_list", "job_post_list", "data.posts", "posts")
-    # 广度抓取：几个高频方向关键词 + 一个空 query，覆盖更广岗位灌入共享库
+    # 广度抓取：多个高频方向关键词 + 一个空 query，覆盖更广岗位灌入共享库（每日量目标 ≥50）
     list_urls = [
         _kw("算法"),
         _kw("工程"),
         _kw("产品"),
         _kw("运营"),
+        _kw("数据"),
+        _kw("设计"),
+        _kw("测试"),
+        _kw("销售"),
+        _kw("市场"),
+        _kw("财务"),
         "https://jobs.bytedance.com/experienced/position",
     ]
 
@@ -86,5 +92,8 @@ class BytedanceCampusAdapter(BytedanceAdapter):
         _campus_kw("研发"),
         _campus_kw("产品"),
         _campus_kw("实习"),
+        _campus_kw("数据"),
+        _campus_kw("设计"),
+        _campus_kw("运营"),
         "https://jobs.bytedance.com/campus/position",
     ]

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, PencilSimple, Trash, ArrowCounterClockwise, X, Flag, Warning } from "@phosphor-icons/react";
+import { Plus, PencilSimple, Trash, ArrowCounterClockwise, X, Flag, Warning, Sparkle } from "@phosphor-icons/react";
 import { INSIGHT_DIMENSIONS } from "@/lib/insight-bundle";
 import { INDUSTRIES } from "@/lib/industries";
 import type {
@@ -47,6 +47,7 @@ interface AdminDispute {
 
 const DIM_LABELS: Record<InsightDimension, string> = {
   timing: "招聘时机",
+  listing: "上市 / 股票",
   compensation_intensity: "薪资 / 强度",
   path: "进入路径",
   culture: "公司文化 / 温馨提示",
@@ -91,6 +92,11 @@ type FormState = {
   deidentified: boolean;
   status: InsightStatus;
   sources: SourceDraft[];
+  // listing 维度专属：上市状态 + 交易所 + 代码 + 行情页链接（写进 payload）
+  listing_status: string;
+  exchange: string;
+  ticker: string;
+  quote_url: string;
 };
 
 const EMPTY_FORM: FormState = {
@@ -107,10 +113,20 @@ const EMPTY_FORM: FormState = {
   deidentified: true,
   status: "active",
   sources: [{ url: "", publisher: "", source_kind: "official_site", excerpt: "", deidentified: true }],
+  listing_status: "listed",
+  exchange: "",
+  ticker: "",
+  quote_url: "",
 };
 
 const inputCls =
   "w-full rounded-lg border border-black/[0.09] bg-white/70 px-3 py-2 text-sm text-[#1a1714] outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white";
+
+// 从 payload 安全取字符串字段
+function pstr(payload: Record<string, unknown> | null | undefined, key: string): string {
+  const v = payload?.[key];
+  return typeof v === "string" ? v : "";
+}
 
 export default function InsightsAdminClient() {
   const [loading, setLoading] = useState(true);
@@ -124,6 +140,7 @@ export default function InsightsAdminClient() {
   const [formError, setFormError] = useState("");
   const [formGate, setFormGate] = useState("");
   const [saving, setSaving] = useState(false);
+  const [aiDrafting, setAiDrafting] = useState(false);
   const [busyId, setBusyId] = useState("");
 
   async function load() {
@@ -236,6 +253,10 @@ export default function InsightsAdminClient() {
             deidentified: s.deidentified,
           }))
         : [{ ...EMPTY_FORM.sources[0] }],
+      listing_status: pstr(it.payload, "status") || "listed",
+      exchange: pstr(it.payload, "exchange"),
+      ticker: pstr(it.payload, "ticker"),
+      quote_url: pstr(it.payload, "quote_url"),
     });
     setFormError("");
     setFormGate("");
@@ -268,6 +289,18 @@ export default function InsightsAdminClient() {
     setFormError("");
     setFormGate("");
     try {
+      // listing 维度：把上市状态/交易所/代码/行情页拼进 insight payload（其他维度不带）
+      const insightPayload: Record<string, string> =
+        form.dimension === "listing"
+          ? Object.fromEntries(
+              Object.entries({
+                status: form.listing_status.trim(),
+                exchange: form.exchange.trim(),
+                ticker: form.ticker.trim(),
+                quote_url: form.quote_url.trim(),
+              }).filter(([, v]) => v),
+            )
+          : {};
       const payload = {
         id: form.id,
         company: form.company,
@@ -281,6 +314,7 @@ export default function InsightsAdminClient() {
         valid_until: form.valid_until,
         deidentified: form.deidentified,
         status: form.status,
+        payload: insightPayload,
         sources: form.sources.filter((s) => s.url.trim()),
       };
       const res = await fetch("/api/insights/admin", {
@@ -306,6 +340,54 @@ export default function InsightsAdminClient() {
       setFormError((err as Error).message || "保存失败");
     } finally {
       setSaving(false);
+    }
+  }
+
+  // AI 起草：用 company + dimension 让模型出草稿回填表单。仅辅助，必须人工核对 + 补真实来源后才能展示，
+  // 故强制 status=retired（草稿态，不过校验门）。账单走 admin 手动点击、单次调用。
+  async function aiDraft() {
+    if (!form.company.trim()) {
+      setFormError("请先填公司名再用 AI 起草。");
+      return;
+    }
+    setAiDrafting(true);
+    setFormError("");
+    try {
+      const res = await fetch("/api/insights/admin/ai-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ company: form.company, dimension: form.dimension }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        setFormError(
+          data.error === "llm_not_configured"
+            ? "未配置 SILICONFLOW_API_KEY，无法用 AI 起草。"
+            : `AI 起草失败：${data.error || res.status}`,
+        );
+        return;
+      }
+      const d = data.draft || {};
+      const listing = d.listing && typeof d.listing === "object" ? d.listing : {};
+      setForm((prev) => ({
+        ...prev,
+        title: typeof d.title === "string" ? d.title : prev.title,
+        content: typeof d.content === "string" ? d.content : prev.content,
+        grade: d.grade === "experience" ? "experience" : d.grade === "fact" ? "fact" : prev.grade,
+        time_window: typeof d.time_window === "string" ? d.time_window : prev.time_window,
+        sample_size:
+          d.sample_size === "" || d.sample_size == null ? prev.sample_size : String(d.sample_size),
+        listing_status: typeof listing.status === "string" ? listing.status : prev.listing_status,
+        exchange: typeof listing.exchange === "string" ? listing.exchange : prev.exchange,
+        ticker: typeof listing.ticker === "string" ? listing.ticker : prev.ticker,
+        // 草稿态：必须人工核对 + 补真实来源后再改 active
+        status: "retired",
+      }));
+      setFormError("已生成 AI 草稿，请核对正文、补充真实来源，确认无误后把状态改为「展示中」再保存。");
+    } catch (err) {
+      setFormError(`AI 起草失败：${(err as Error).message}`);
+    } finally {
+      setAiDrafting(false);
     }
   }
 
@@ -383,11 +465,13 @@ export default function InsightsAdminClient() {
           formError={formError}
           formGate={formGate}
           saving={saving}
+          aiDrafting={aiDrafting}
           setField={setField}
           setSource={setSource}
           addSource={addSource}
           removeSource={removeSource}
           onSubmit={save}
+          onAiDraft={aiDraft}
           onCancel={() => setFormOpen(false)}
         />
       )}
@@ -605,11 +689,13 @@ function ItemForm({
   formError,
   formGate,
   saving,
+  aiDrafting,
   setField,
   setSource,
   addSource,
   removeSource,
   onSubmit,
+  onAiDraft,
   onCancel,
 }: {
   form: FormState;
@@ -617,11 +703,13 @@ function ItemForm({
   formError: string;
   formGate: string;
   saving: boolean;
+  aiDrafting: boolean;
   setField: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
   setSource: (i: number, patch: Partial<SourceDraft>) => void;
   addSource: () => void;
   removeSource: (i: number) => void;
   onSubmit: (e: React.FormEvent) => void;
+  onAiDraft: () => void;
   onCancel: () => void;
 }) {
   return (
@@ -629,15 +717,27 @@ function ItemForm({
       onSubmit={onSubmit}
       className="surface p-5 text-[#1a1714]"
     >
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h3 className="text-base font-semibold">{form.id ? "编辑洞察条目" : "新增洞察条目"}</h3>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded-full bg-black/[0.05] p-1.5 text-[#5f594e] transition hover:bg-black/[0.08] hover:text-[#1a1714]"
-        >
-          <X size={16} weight="bold" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onAiDraft}
+            disabled={aiDrafting}
+            title="用 AI 按公司+维度生成草稿（仅辅助，需人工核对+补来源）"
+            className="inline-flex items-center gap-1.5 rounded-full border border-[#b7d2ee] bg-[#dceafa] px-3 py-1.5 text-[12px] font-semibold text-[#2f6299] transition hover:bg-[#cfe2f7] disabled:opacity-50"
+          >
+            <Sparkle size={13} weight="fill" />
+            {aiDrafting ? "AI 起草中…" : "AI 起草"}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-full bg-black/[0.05] p-1.5 text-[#5f594e] transition hover:bg-black/[0.08] hover:text-[#1a1714]"
+          >
+            <X size={16} weight="bold" />
+          </button>
+        </div>
       </div>
 
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -745,6 +845,32 @@ function ItemForm({
             内容已去标识，不指向具体个人
           </label>
         </FormField>
+
+        {form.dimension === "listing" && (
+          <>
+            <FormField label="上市状态">
+              <select
+                value={form.listing_status}
+                onChange={(e) => setField("listing_status", e.target.value)}
+                className={inputCls}
+              >
+                <option value="listed">已上市</option>
+                <option value="filed">已递交招股书</option>
+                <option value="pre_ipo">筹备上市</option>
+                <option value="private">未上市（暂无计划）</option>
+              </select>
+            </FormField>
+            <FormField label="交易所（如 港交所 / 纳斯达克）">
+              <input value={form.exchange} onChange={(e) => setField("exchange", e.target.value)} placeholder="港交所" className={inputCls} />
+            </FormField>
+            <FormField label="股票代码（如 0700.HK）">
+              <input value={form.ticker} onChange={(e) => setField("ticker", e.target.value)} placeholder="0700.HK" className={inputCls} />
+            </FormField>
+            <FormField label="行情页链接（公开，易变数据不落库为数字）">
+              <input value={form.quote_url} onChange={(e) => setField("quote_url", e.target.value)} placeholder="https://…（雪球 / 交易所行情页）" className={inputCls} />
+            </FormField>
+          </>
+        )}
       </div>
 
       {/* 来源 */}

@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import {
   ArrowSquareOut,
   CalendarBlank,
+  ChartLineUp,
   ClockCounterClockwise,
   Flag,
   Path,
@@ -51,6 +52,12 @@ const DIMENSION_META: Record<
     accent: "border-[#b7d2ee] bg-[#dceafa]",
     iconText: "text-[#2f6299]",
   },
+  listing: {
+    label: "上市 / 股票",
+    icon: ChartLineUp,
+    accent: "border-[#a9d8c4] bg-[#dcf2e8]",
+    iconText: "text-[#2f8a63]",
+  },
   compensation_intensity: {
     label: "薪资 / 强度",
     icon: Scales,
@@ -74,6 +81,7 @@ const DIMENSION_META: Record<
 
 const DIMENSION_ORDER: InsightDimension[] = [
   "timing",
+  "listing",
   "compensation_intensity",
   "path",
   "culture",
@@ -237,6 +245,27 @@ function failureMessage(reason: string | null | undefined): string {
   return "该公司暂无经核实的职业洞察信息。我们只展示通过分级与时效校验的内容，宁缺毋滥。";
 }
 
+// 上市维度的「近期行情」：易变数据不落库为数字，只给一个公开行情页链接（payload.quote_url）。
+function QuoteLink({ payload }: { payload: Record<string, unknown> }) {
+  const quoteUrl = typeof payload?.quote_url === "string" ? payload.quote_url : "";
+  if (!quoteUrl || !/^https?:\/\//i.test(quoteUrl)) return null;
+  const exchange = typeof payload?.exchange === "string" ? payload.exchange : "";
+  const ticker = typeof payload?.ticker === "string" ? payload.ticker : "";
+  const label = [exchange, ticker].filter(Boolean).join(" ") || "公开行情";
+  return (
+    <a
+      href={quoteUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-1 text-[12px] font-medium text-[#2f8a63] transition hover:bg-[#cdebde]"
+    >
+      <ChartLineUp size={13} weight="bold" />
+      近期行情 · {label}
+      <ArrowSquareOut size={11} weight="bold" />
+    </a>
+  );
+}
+
 function InsightCard({ item }: { item: InsightItemView }) {
   const [disputing, setDisputing] = useState(false);
   const [reason, setReason] = useState("");
@@ -285,6 +314,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
 
       {item.title && <p className="mt-2.5 text-base font-semibold text-[#1a1714]">{item.title}</p>}
       <p className="mt-1.5 leading-7 text-[#3f3a33]">{item.content}</p>
+      <QuoteLink payload={item.payload} />
 
       <div className="mt-3.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#8a8275]">
         {item.time_window && (
