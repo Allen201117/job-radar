@@ -44,7 +44,16 @@
 3. **持续大规模扩源（高优，长期卡点）**
    各行各业公司覆盖面是硬指标，当前太少。持续扩源是高优任务：优先加**可 live 验证**的官方源（greenhouse/lever ATS 探活 slug、字节/飞书系/腾讯 SPA、百度/京东已知源）。
    - 只加质量门能过、有稳定逐岗 `jd_url` 的源；加源必须 live 探活确认返回真实岗位（禁止猜 slug 入库）。
-   - 中国本土公司大规模覆盖需要新增 adapter，是扩源的主攻方向。
+   - **中国本土覆盖优先级 > 外企**：每日后台爬取已设本土源优先（`crawler/run.py` 的 `DOMESTIC_ADAPTERS` 排在外企 ATS 前先抓）。
+   - 新增中国本土 adapter（北森 / Moka / 各公司官网站）= 当前**最高优 backlog**，是大规模扩覆盖的主攻方向。
+
+## 数据库迁移（已自动化，勿再手动跑 Supabase）
+
+迁移**不需要再手动进 Supabase SQL Editor 跑**。机制：push 到 `main` 且改动 `supabase/migrations/**` 时，
+`.github/workflows/migrate.yml` 自动用 `scripts/db-migrate.sh` 把未应用的迁移 apply 到生产库（`schema_migrations` 表记录版本，前缀 ≤ BASELINE 仅登记不重跑）。
+- **一次性设置**：GitHub repo → Settings → Secrets → Actions 加 `SUPABASE_DB_URL`（Supabase → Settings → Database → 直连串，端口 5432，含密码）。配一次，此后零手动 SQL。
+- 新迁移文件继续放 `supabase/migrations/`，前缀按序递增（如 `023_xxx.sql`），push 即自动应用。
+- 加新迁移后若 BASELINE 已过期，更新 `scripts/db-migrate.sh` 的 `BASELINE`。
 
 ## 常用命令
 

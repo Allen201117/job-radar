@@ -8,6 +8,24 @@ import { Briefcase, Database } from "@phosphor-icons/react/ssr";
 
 export const dynamic = "force-dynamic";
 
+// 从用户已保存偏好（简历画像 + 偏好表）算筛选器初值：城市/类型/关键词。
+function buildInitialFilters(prefs: any, cp: any): { city: string; jobType: string; keyword: string } {
+  const STAGES = ["实习", "校招", "社招"];
+  const first = (...arrs: any[]): string => {
+    for (const a of arrs) {
+      const v = (Array.isArray(a) ? a : []).map((s: any) => String(s || "").trim()).find(Boolean);
+      if (v) return v;
+    }
+    return "";
+  };
+  const stage = String(cp?.experience_stage || "").trim();
+  return {
+    city: first(cp?.target_locations, prefs?.target_locations),
+    jobType: STAGES.includes(stage) ? stage : "",
+    keyword: first(prefs?.target_keywords, cp?.target_roles, prefs?.target_roles),
+  };
+}
+
 // PostgREST 单次查询最多返回 1000 行；分页 range 把全部 active 岗位取齐（解除旧的 500 硬上限）。
 // HARD_CAP 防止岗位量极端膨胀时 props 负载失控；渲染由前端「加载更多」分批进行。
 async function fetchAllActiveJobs(
@@ -36,6 +54,7 @@ export default async function JobsPage() {
 
   let preferences: UserPreferences | null = null;
   let actions: JobAction[] = [];
+  let candidate: any = null;
 
   if (user) {
     const { data: prefs } = await supabase
@@ -50,7 +69,18 @@ export default async function JobsPage() {
       .select("*")
       .eq("user_id", user.id);
     actions = (acts as JobAction[]) || [];
+
+    // 简历画像（偏好底层逻辑来源之一）：用于把筛选器从用户保存的偏好预填。
+    const { data: cp } = await supabase
+      .from("candidate_profiles")
+      .select("experience_stage, target_locations, target_roles")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    candidate = cp;
   }
+
+  // 默认按用户已保存偏好预填筛选器（城市/类型/关键词）；用户手动改即覆盖。
+  const initialFilters = buildInitialFilters(preferences, candidate);
 
   const jobs = await fetchAllActiveJobs(supabase);
 
@@ -66,7 +96,7 @@ export default async function JobsPage() {
   ) as string[];
 
   return (
-    <div className="min-h-screen bg-[#08090c]">
+    <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage>
         <ProductHero
@@ -82,7 +112,11 @@ export default async function JobsPage() {
           }
         />
         <div className="mt-8">
-          <JobsClient initialJobs={scored as ScoredJob[]} companies={companies} />
+          <JobsClient
+            initialJobs={scored as ScoredJob[]}
+            companies={companies}
+            initialFilters={initialFilters}
+          />
         </div>
       </ProductPage>
     </div>
