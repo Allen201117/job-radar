@@ -20,7 +20,7 @@ _UA = (
 
 # 岗位行常见的「标题」字段名，用于在未知 JSON 结构里识别岗位列表。
 _TITLE_KEYS = ("title", "name", "jobTitle", "positionName", "job_title",
-               "position_name", "jobName", "postName")
+               "position_name", "jobName", "postName", "JobAdName")
 
 
 def _deep_find_job_list(obj, depth: int = 0) -> list:
@@ -54,7 +54,8 @@ class PlaywrightAdapter(BaseAdapter):
     intercept_matches: tuple = ()       # 多个候选子串（任一命中即拦截）；两者皆空 = 拦截所有 JSON
     posts_keys = ("data.job_post_list", "data.posts", "data.list", "data.data.list",
                   "data.items", "data.records", "data.rows", "data.content",
-                  "job_post_list", "posts", "list", "items", "records", "rows", "data")
+                  "job_post_list", "posts", "list", "items", "records", "rows", "data",
+                  "Data", "Data.Posts", "Data.List", "Data.Rows")  # 北森 GetJobAdPageList: 顶层 Data 列表
     detail_template: str = ""           # 含 {id}
     official_hosts: tuple = ()
     wait_ms: int = 6000

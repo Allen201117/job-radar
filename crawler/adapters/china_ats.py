@@ -34,7 +34,7 @@ def _first_str(post: dict, keys) -> str:
 
 def _city_of(post: dict) -> str:
     for k in ("cityName", "city", "workCity", "location", "workPlace", "address",
-              "city_name", "work_city", "locationName"):
+              "city_name", "work_city", "locationName", "LocNames", "LocName", "Location"):
         v = post.get(k)
         if isinstance(v, str) and v.strip():
             return v.strip()
@@ -61,10 +61,13 @@ class ChinaSpaAdapter(PlaywrightAdapter):
     company_name = ""  # 由 sources.company 兜底填充
 
     def fetch(self, source_url: str) -> str:
-        # 记录本次源的 origin / host，供 _map 拼接相对链接与详情模板。
+        # 记录本次源的 origin / host / 门户前缀，供 _map 拼接相对链接与详情路由。
         parsed = urlparse(source_url)
         self._origin = f"{parsed.scheme}://{parsed.netloc}"
         self._host = parsed.netloc
+        # 门户前缀 = 列表页路径去掉最后一段（section）。北森详情路由 = {origin}{prefix}/zwxq?jobAdId=
+        segs = [s for s in (parsed.path or "").split("/") if s]
+        self._portal_prefix = ("/" + "/".join(segs[:-1])) if len(segs) > 1 else ""
         if not self.list_urls:
             self.list_urls = [source_url]
         return super().fetch(source_url)
@@ -86,9 +89,9 @@ class ChinaSpaAdapter(PlaywrightAdapter):
         if not isinstance(post, dict):
             return None
         job_id = _first_str(post, ("id", "jobId", "positionId", "code", "postId",
-                                   "job_id", "position_id", "uuid"))
+                                   "job_id", "position_id", "uuid", "Id", "JobAdId"))
         title = _first_str(post, ("title", "name", "jobTitle", "positionName",
-                                  "job_title", "position_name", "jobName"))
+                                  "job_title", "position_name", "jobName", "JobAdName"))
         if not title:
             return None
         jd_url = self._resolve_url(post, job_id)
@@ -127,13 +130,29 @@ class MokaAdapter(ChinaSpaAdapter):
 class BeisenAdapter(ChinaSpaAdapter):
     """北森招聘（*.zhiye.com / *.italent.cn / 自有 careers 域名，由北森承载）。
 
-    source_url 填某公司北森招聘页。北森 host 形态不固定，按岗位接口路径关键字拦截；
-    详情优先用接口返回链接，无模板兜底（host 不可预测，避免猜链接）。
+    source_url 填某公司北森招聘页（如 https://chinalife.zhiye.com/custom/intern）。
+    北森列表接口 GetJobAdPageList 不含 per-job URL；详情页为北森标准路由
+    `{origin}{portal_prefix}/zwxq?jobAdId={Id}`（zwxq=职位详情，Id 为岗位 UUID）。
+    已 live 验证（chinalife）：构造 URL 渲染对应岗位且 job-specific（A 在、B 不在）。
+    portal_prefix 由列表页路径去掉最后一段（section）推导，覆盖 /custom/intern、/summer 等门户形态。
     """
 
     name = "beisen"
-    intercept_matches = ("Position", "position", "Recruit", "recruit", "/api/")
-    detail_template = ""  # host 不可预测，不拼模板，只接受接口给的真实链接
+    intercept_matches = ("GetJobAdPageList", "JobAd", "Position", "position", "Recruit", "recruit", "/api/")
+    detail_template = ""  # 用 _resolve_url 动态构造北森标准详情路由（见下）
+
+    def _resolve_url(self, post: dict, job_id: str) -> str:
+        # 1) 接口若直接给了 per-job 链接，仍优先用（最可靠）。
+        raw = super()._resolve_url(post, job_id)
+        if raw:
+            return raw
+        # 2) 北森标准详情路由：{origin}{portal_prefix}/zwxq?jobAdId={UUID}。优先用 Id（UUID）。
+        uuid = _first_str(post, ("Id", "id", "jobAdId", "JobAdId"))
+        if not uuid:
+            return ""
+        origin = getattr(self, "_origin", "")
+        prefix = getattr(self, "_portal_prefix", "")
+        return f"{origin}{prefix}/zwxq?jobAdId={uuid}"
 
 
 class CompanySpaAdapter(ChinaSpaAdapter):
