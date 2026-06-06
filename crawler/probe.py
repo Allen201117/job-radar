@@ -7,10 +7,11 @@
 
 用法（需在用户本机，有网络；.env.local 非必须，本脚本只读公开页）：
   cd crawler
-  python3 probe.py                       # 只探 httpx 类（greenhouse/lever），打印结果
-  python3 probe.py --all                 # 连 playwright 类（moka/beisen/company_spa）一起探（需装 playwright）
-  python3 probe.py --emit 026            # 探活通过的写进 ../supabase/migrations/026_seed_probed_sources.sql
+  python3 probe.py                       # 只探内置精选 httpx 候选（greenhouse/lever/ashby/smartrecruiters）
+  python3 probe.py --discover            # 发现模式：对内置跨行业公司名 × ATS × slug 变体自动猜 + live 验证（外企扩源主力）
+  python3 probe.py --discover --emit 026 # 发现并把通过的写进 ../supabase/migrations/026_seed_probed_sources.sql
                                          # （023/024/025 已被上市维度占用，新前缀从 026 起递增）
+  python3 probe.py --all                 # 连 playwright 类（moka/beisen/company_spa）一起探（需装 playwright）
   python3 probe.py --candidates my.json  # 用自定义候选清单（JSON 数组，字段同 CANDIDATES）
 
 候选 JSON 字段：{company, adapter, url, industry?}
@@ -26,20 +27,24 @@ import normalizer  # noqa: E402
 from run import ADAPTERS  # noqa: E402
 
 # httpx 类（无需浏览器，探活便宜）
-_HTTPX_ADAPTERS = {"greenhouse", "lever", "apple", "apple_cn", "baidu", "jd", "siemens", "haier"}
+_HTTPX_ADAPTERS = {
+    "greenhouse", "lever", "ashby", "smartrecruiters",
+    "apple", "apple_cn", "baidu", "jd", "siemens", "haier",
+}
+
+# 通用 ATS 的 URL 模板：给定 slug 即可拼出公开 JSON 接口地址。
+# discover 模式据此对每个公司名 × 每个平台 × 若干 slug 变体生成候选，再 live 验证、只留真返回岗位的。
+_ATS_URL = {
+    "greenhouse": lambda s: f"https://boards-api.greenhouse.io/v1/boards/{s}/jobs?content=true",
+    "lever": lambda s: f"https://api.lever.co/v0/postings/{s}?mode=json",
+    "ashby": lambda s: f"https://api.ashbyhq.com/posting-api/job-board/{s}?includeCompensation=true",
+    "smartrecruiters": lambda s: f"https://api.smartrecruiters.com/v1/companies/{s}/postings?limit=100",
+}
 
 # 待探活候选（跨行业，刻意分散覆盖面，对标「外企100强 + 跨行业龙头」）。
 # greenhouse/lever 用公开 boards-api，探活只需 httpx。
 # 注意：这里全部是**候选**，live 探活通过才入库。slug 探不到 / 结构不符的会被自动丢弃，不污染生产。
 # 用 `python3 probe.py --emit 026` 在你本机一次性 live 验证 + 生成迁移，只有真返回岗位的才入库。
-def _gh(slug):
-    return f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
-
-
-def _lever(slug):
-    return f"https://api.lever.co/v0/postings/{slug}?mode=json"
-
-
 # (company, slug, adapter, industry)，按行业分散，对标外企/跨国龙头各行各业覆盖。
 _FOREIGN = [
     # —— 消费 / 零售 / 运动 / 餐饮 ——
@@ -94,10 +99,27 @@ _FOREIGN = [
     # —— lever 系 ——
     ("Canva", "canva", "lever", "设计·SaaS"),
     ("Netflix", "netflix", "lever", "流媒体"),
+    # —— SmartRecruiters 系（外企100强主力：大量在华跨国制造/消费/金融用此 ATS）——
+    ("Bosch 博世", "BoschGroup", "smartrecruiters", "汽车·工业"),
+    ("Visa", "Visa", "smartrecruiters", "金融·支付"),
+    ("Ubisoft 育碧", "Ubisoft", "smartrecruiters", "游戏"),
+    ("Schneider Electric 施耐德", "SchneiderElectric", "smartrecruiters", "能源·工业"),
+    ("LVMH", "LVMH", "smartrecruiters", "奢侈品·消费"),
+    ("Equinix", "Equinix", "smartrecruiters", "数据中心"),
+    ("Avery Dennison", "AveryDennison", "smartrecruiters", "材料·制造"),
+    ("Skechers", "skechers", "smartrecruiters", "消费·运动"),
+    ("Biogen", "Biogen", "smartrecruiters", "生物医药"),
+    ("McDonald's 麦当劳", "McDonalds", "smartrecruiters", "消费·餐饮"),
+    # —— Ashby 系 ——
+    ("Notion", "notion", "ashby", "协作 SaaS"),
+    ("Linear", "linear", "ashby", "开发者工具"),
+    ("Ramp", "ramp", "ashby", "金融科技"),
+    ("Vanta", "vanta", "ashby", "安全合规"),
 ]
 
+# 通用 URL 拼装：ATS 平台 → slug → 公开接口地址；非 ATS（apple/baidu…）保留原 url。
 CANDIDATES = [
-    {"company": c, "adapter": a, "industry": ind, "url": (_gh(s) if a == "greenhouse" else _lever(s))}
+    {"company": c, "adapter": a, "industry": ind, "url": _ATS_URL[a](s)}
     for (c, s, a, ind) in _FOREIGN
 ]
 
@@ -115,6 +137,83 @@ _DOMESTIC = [
     # 在此追加已 live 验证可打开的本土招聘页（adapter ∈ moka/beisen/company_spa）。
 ]
 CANDIDATES += _DOMESTIC
+
+
+# ───────────────────────── discover：按公司名自动找 ATS + slug ─────────────────────────
+# 「最高效扩源」引擎：给一串公司名，机器对每个名 × 每个单 host 的 ATS 平台 × 若干 slug 变体
+# 生成候选 URL，再 live 验证，只把**真返回岗位**的写入迁移。slug 是机器猜的，但探不到就丢弃，
+# 不会污染生产（符合 CLAUDE.md「禁止猜 slug 入库」——入库的前提永远是 live 验证通过）。
+# 注意：仅适用于「单 host + slug」型 ATS（greenhouse/lever/ashby/smartrecruiters）。
+# 本土 moka/beisen 是「每公司独立子域」，host 无法由公司名稳定推断，仍需在 _DOMESTIC 填真实 URL。
+_DISCOVER_PLATFORMS = ["greenhouse", "lever", "ashby", "smartrecruiters"]
+
+
+def slugify(name: str):
+    """公司名 → 若干 slug 变体（紧凑 / 连字符 / 去常见后缀）。仅取拉丁部分（slug 不含中文）。"""
+    import re
+
+    latin = re.sub(r"[^a-zA-Z0-9 &-]+", " ", name)        # 去中文与符号，留拉丁+空格+&-
+    latin = latin.replace("&", " and ").strip().lower()
+    if not latin:
+        return []
+    words = [w for w in re.split(r"[^a-z0-9]+", latin) if w]
+    # 去掉公司后缀噪声，让 slug 更可能命中
+    stop = {"inc", "ltd", "co", "corp", "corporation", "group", "the", "limited", "plc", "llc"}
+    core = [w for w in words if w not in stop] or words
+    compact = "".join(core)
+    hyphen = "-".join(core)
+    variants = []
+    for v in (compact, hyphen, "".join(words)):
+        if v and v not in variants:
+            variants.append(v)
+    return variants
+
+
+# 跨行业「外企100强 / 跨国龙头」发现种子（仅名字；slug 由机器猜 + live 验证）。
+# 刻意覆盖各行业，避免只剩互联网。能否入库由 live 探活决定，列在这里零风险。
+_DISCOVER_NAMES = [
+    # 汽车 / 工业 / 能源
+    "Bosch", "Siemens", "Schneider Electric", "ABB", "Honeywell", "Caterpillar",
+    "Cummins", "Emerson", "Continental", "Valeo", "Tesla",
+    # 消费 / 零售 / 餐饮 / 奢侈
+    "Nike", "Adidas", "lululemon", "Starbucks", "McDonald's", "Nestle", "Unilever",
+    "Procter & Gamble", "L'Oreal", "LVMH", "Estee Lauder", "Coca-Cola", "PepsiCo",
+    "IKEA", "Decathlon", "Skechers",
+    # 金融 / 支付 / 保险
+    "Visa", "Mastercard", "JPMorgan", "HSBC", "Citi", "Standard Chartered",
+    "Allianz", "AIA", "BlackRock", "Stripe", "PayPal",
+    # 医药 / 生物 / 医疗器械
+    "Pfizer", "Roche", "Novartis", "AstraZeneca", "Merck", "Johnson & Johnson",
+    "Medtronic", "Sanofi", "Biogen", "GSK",
+    # 半导体 / 硬件 / 电子
+    "Intel", "NVIDIA", "AMD", "Qualcomm", "Texas Instruments", "Applied Materials",
+    "ASML", "Micron", "Samsung", "Sony",
+    # 软件 / 云 / SaaS / AI
+    "Microsoft", "SAP", "Oracle", "Salesforce", "ServiceNow", "Adobe", "Atlassian",
+    "Databricks", "Snowflake", "OpenAI", "Anthropic", "Notion", "Linear",
+    # 互联网 / 平台 / 游戏 / 娱乐
+    "Airbnb", "Booking", "Uber", "Spotify", "Netflix", "Electronic Arts", "Ubisoft",
+    "Riot Games", "Roblox",
+    # 物流 / 航空 / 工程
+    "DHL", "Maersk", "FedEx", "UPS", "Airbus",
+    # 数据中心 / 通信
+    "Equinix", "Cloudflare", "Cisco", "Ericsson", "Nokia",
+]
+
+
+def build_discover_candidates():
+    """对每个发现名 × 平台 × slug 变体生成候选（httpx 平台，探活便宜）。"""
+    cands = []
+    seen = set()
+    for name in _DISCOVER_NAMES:
+        for platform in _DISCOVER_PLATFORMS:
+            for slug in slugify(name):
+                url = _ATS_URL[platform](slug)
+                if url in seen:
+                    continue
+                seen.add(url)
+                cands.append({"company": name, "adapter": platform, "industry": "discover", "url": url})
+    return cands
 
 
 def probe_one(cand: dict):
@@ -160,7 +259,9 @@ def emit_sql(prefix: str, passed: list):
 def main():
     ap = argparse.ArgumentParser(description="扩源探活器")
     ap.add_argument("--all", action="store_true", help="连 playwright 类一起探（需装 playwright）")
-    ap.add_argument("--emit", type=str, default=None, help="探活通过的写迁移，传前缀如 023")
+    ap.add_argument("--discover", action="store_true",
+                    help="发现模式：对内置跨行业公司名 × ATS 平台 × slug 变体自动生成候选并 live 验证（外企扩源主力）")
+    ap.add_argument("--emit", type=str, default=None, help="探活通过的写迁移，传前缀如 026")
     ap.add_argument("--candidates", type=str, default=None, help="自定义候选 JSON 文件")
     args = ap.parse_args()
 
@@ -168,6 +269,17 @@ def main():
     if args.candidates:
         with open(args.candidates, encoding="utf-8") as f:
             cands = json.load(f)
+    elif args.discover:
+        # 发现模式：内置精选候选 + 自动猜 slug 候选（去重）。命中靠 live 验证，未命中自动丢弃。
+        cands = CANDIDATES + build_discover_candidates()
+        seen_urls = set()
+        deduped = []
+        for c in cands:
+            if c["url"] in seen_urls:
+                continue
+            seen_urls.add(c["url"])
+            deduped.append(c)
+        cands = deduped
 
     if not args.all:
         cands = [c for c in cands if c["adapter"] in _HTTPX_ADAPTERS]
