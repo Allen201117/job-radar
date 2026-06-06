@@ -442,4 +442,9 @@ def validate_job_quality(raw: RawJob, source_url: str) -> tuple[bool, str]:
 def _url_key(parsed) -> str:
     host = (parsed.netloc or "").lower()
     path = (parsed.path or "/").rstrip("/") or "/"
+    # SPA hash 路由（如 Moka 的 {base}#/job/{id}）per-job 与列表页同 host+path，仅 fragment 不同；
+    # 纳入 fragment 才能区分二者（非 SPA 源无 fragment，key 不变，零影响）。
+    frag = (parsed.fragment or "").strip()
+    if frag:
+        return f"{host}{path}#{frag}"
     return f"{host}{path}"

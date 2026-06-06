@@ -8,22 +8,24 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import normalizer
 from adapters.base import RawJob
-from adapters.china_ats import MokaAdapter, BeisenAdapter, CompanySpaAdapter
+from adapters.china_ats import MokaAdapter, BeisenAdapter, CompanySpaAdapter, _parse_moka_card
 
-# Moka 常见响应形态（字段名做了多样化，验证启发式抽取的鲁棒性）
-MOKA_SAMPLE = {
-    "data": {
-        "list": [
-            {"id": "10086", "name": "高级前端工程师", "cityName": "深圳",
-             "categoryName": "研发", "description": "负责 C 端页面"},
-            {"jobId": "10087", "title": "品牌市场经理",
-             "city": {"name": "上海"}, "detailUrl": "/jobs/10087"},
-            {"id": "10088", "title": "供应链管培生", "workCity": "杭州",
-             "url": "https://demo.mokahr.com/social/position/10088"},
-            {"id": "", "title": "无 id 但有真实链接", "link": "https://demo.mokahr.com/jobs/x1"},
-            {"id": "10090", "name": ""},  # 无 title 丢弃
-        ]
-    }
+# Moka 渲染后 DOM 岗位卡（接口加密，只能解析渲染后 a[href*='#/job/{uuid}']）。
+# cards = [{href, text}]，text 是岗位卡 innerText（含换行），各租户排版样本见下。
+MOKA_CARDS = {
+    "_base": "https://app.mokahr.com/apply/shein/2933",
+    "cards": [
+        # SHEIN：角标「急」单独成行 → 标题取次行；城市在带「市」的短行
+        {"href": "#/job/aaa", "text": "急\n全栈开发工程师\n发布于 2026-06-05\n全职\n|\n信息技术类\n|\n上海市\n立即投递"},
+        # 雪球：角标「急」粘连标题；城市「上海市·黄浦区」
+        {"href": "#/job/bbb", "text": "急上市公司服务-客户总监（华东）\n商业化部销售类\n上海市·黄浦区\n发布时间：2023-07-21"},
+        # 非岗位链接（筛选）→ 丢弃
+        {"href": "#/jobs?zhineng=1", "text": "职位筛选"},
+        # 空文本 → 丢弃
+        {"href": "#/job/ccc", "text": "   "},
+        # 重复 url → 去重
+        {"href": "#/job/aaa", "text": "急\n全栈开发工程师\n发布于 2026-06-05"},
+    ],
 }
 
 # 北森常见响应形态（host 不可预测 → 必须接口自带链接）
@@ -38,49 +40,57 @@ BEISEN_SAMPLE = {
 }
 
 
+class TestMokaCardParse(unittest.TestCase):
+    """_parse_moka_card：从各租户岗位卡 innerText 解析 (location, title)。"""
+
+    def test_flag_on_own_line(self):  # SHEIN
+        loc, title = _parse_moka_card("急\n全栈开发工程师\n发布于 2026-06-05\n全职\n|\n上海市\n立即投递")
+        self.assertEqual(title, "全栈开发工程师")
+        self.assertEqual(loc, "上海市")
+
+    def test_glued_flag(self):  # 雪球
+        loc, title = _parse_moka_card("急上市公司服务-客户总监（华东）\n商业化部销售类\n上海市·黄浦区\n发布时间：2023-07-21")
+        self.assertEqual(title, "上市公司服务-客户总监（华东）")
+        self.assertEqual(loc, "上海市·黄浦区")
+
+    def test_glued_flag_wps(self):  # WPS
+        loc, title = _parse_moka_card("急客户端c++研发\n全职技术类\n广东·珠海市\n发布时间：2026-05-20")
+        self.assertEqual(title, "客户端c++研发")
+        self.assertEqual(loc, "广东·珠海市")
+
+    def test_hot_recruit_flag(self):  # 好未来
+        loc, title = _parse_moka_card("火热招聘\n中学学习教练(C)-北京分校-26校招\n教师\n|\n北京市")
+        self.assertEqual(title, "中学学习教练(C)-北京分校-26校招")
+        self.assertEqual(loc, "北京市")
+
+    def test_empty(self):
+        self.assertEqual(_parse_moka_card(""), (None, ""))
+
+
 class TestMokaAdapter(unittest.TestCase):
-    def setUp(self):
-        self.a = MokaAdapter()
-        # fetch() 通常设置 _origin/_host；单测里手动设置（模拟 demo.mokahr.com 租户）
-        self.a._origin = "https://demo.mokahr.com"
-        self.a._host = "demo.mokahr.com"
+    def _parse(self, payload):
+        return MokaAdapter().parse(json.dumps(payload))
 
-    def _parse(self, *responses):
-        return self.a.parse(json.dumps({"_intercepted": list(responses)}))
-
-    def test_heuristic_extraction_and_template_fallback(self):
-        jobs = self._parse(MOKA_SAMPLE)
-        # 5 条：无 title 丢 1 条 → 4 条
-        self.assertEqual(len(jobs), 4)
+    def test_parses_cards_builds_hash_route_url(self):
+        jobs = self._parse(MOKA_CARDS)
+        # 5 cards：筛选链接丢、空文本丢、重复 url 去重 → 2 条
+        self.assertEqual(len(jobs), 2)
         by_title = {j.title: j for j in jobs}
-
-        # 无链接 → 用模板 https://{host}/jobs/{id}
-        self.assertEqual(by_title["高级前端工程师"].jd_url, "https://demo.mokahr.com/jobs/10086")
-        self.assertEqual(by_title["高级前端工程师"].location, "深圳")
-        self.assertEqual(by_title["高级前端工程师"].job_type, "研发")
-        # 相对链接 → 拼 origin
-        self.assertEqual(by_title["品牌市场经理"].jd_url, "https://demo.mokahr.com/jobs/10087")
-        self.assertEqual(by_title["品牌市场经理"].location, "上海")
-        # 绝对链接 → 原样
-        self.assertEqual(by_title["供应链管培生"].jd_url, "https://demo.mokahr.com/social/position/10088")
-        # 无 id 但接口自带真实链接 → 仍放行
-        self.assertEqual(by_title["无 id 但有真实链接"].jd_url, "https://demo.mokahr.com/jobs/x1")
-
-    def test_company_filled_from_source(self):
-        jobs = self._parse(MOKA_SAMPLE)
-        # adapter 留空 company，由 run.py 用 sources.company 兜底
-        self.assertTrue(all(j.company == "" for j in jobs))
+        self.assertEqual(by_title["全栈开发工程师"].jd_url,
+                         "https://app.mokahr.com/apply/shein/2933#/job/aaa")
+        self.assertEqual(by_title["全栈开发工程师"].location, "上海市")
+        self.assertEqual(by_title["全栈开发工程师"].company, "")  # 由 sources.company 兜底
+        self.assertIn("上市公司服务-客户总监（华东）", by_title)
 
     def test_quality_gate_passes(self):
-        jobs = self._parse(MOKA_SAMPLE)
-        for j in jobs:
+        for j in self._parse(MOKA_CARDS):
             j.company = "示例公司"
-            ok, reason = normalizer.validate_job_quality(j, "https://demo.mokahr.com/social/home")
+            ok, reason = normalizer.validate_job_quality(j, "https://app.mokahr.com/apply/x/1")
             self.assertTrue(ok, f"{j.title} 被质量门拒: {reason}")
 
     def test_empty_inputs(self):
-        self.assertEqual(self.a.parse(json.dumps({"_intercepted": []})), [])
-        self.assertEqual(self.a.parse("not json"), [])
+        self.assertEqual(self._parse({"_base": "https://x", "cards": []}), [])
+        self.assertEqual(MokaAdapter().parse("not json"), [])
 
 
 class TestBeisenAdapter(unittest.TestCase):
