@@ -89,13 +89,37 @@ class TestBeisenAdapter(unittest.TestCase):
         self.a._origin = "https://group.zhiye.com"
         self.a._host = "group.zhiye.com"
 
-    def test_only_keeps_rows_with_real_url(self):
+    def test_interface_url_still_preferred(self):
         jobs = self.a.parse(json.dumps({"_intercepted": [BEISEN_SAMPLE]}))
-        # 北森无模板兜底：无链接的行被丢，只剩 1 条
+        # 接口自带 per-job 链接的行仍优先用该链接
+        kept = {j.title: j for j in jobs}
+        self.assertEqual(kept["财务分析师"].jd_url, "https://group.zhiye.com/job/P1")
+        self.assertEqual(kept["财务分析师"].location, "北京")
+
+    def test_jobad_pagelist_builds_zwxq_url(self):
+        # 北森真实 GetJobAdPageList 形态：顶层 Data 列表，JobAdName/Id/LocNames，无 per-job URL。
+        # 详情路由 = {origin}{portal_prefix}/zwxq?jobAdId={Id}（live 验证 chinalife 渲染对应岗位）。
+        self.a._portal_prefix = "/custom"
+        sample = {"Code": 0, "Data": [
+            {"Id": "uuid-a", "JobAdId": 270940723, "JobAdName": "综合管理实习生", "LocNames": "上海市"},
+            {"Id": "uuid-b", "JobAdName": "财务实习生", "LocNames": "黑龙江省·哈尔滨市"},
+        ]}
+        jobs = self.a.parse(json.dumps({"_intercepted": [sample]}))
+        self.assertEqual(len(jobs), 2)
+        by = {j.title: j for j in jobs}
+        self.assertEqual(by["综合管理实习生"].jd_url,
+                         "https://group.zhiye.com/custom/zwxq?jobAdId=uuid-a")
+        self.assertEqual(by["综合管理实习生"].location, "上海市")
+        self.assertEqual(by["财务实习生"].jd_url,
+                         "https://group.zhiye.com/custom/zwxq?jobAdId=uuid-b")
+
+    def test_zwxq_url_root_portal(self):
+        # 列表页在根门户（如 /summer）→ portal_prefix 为空 → 详情 {origin}/zwxq?jobAdId=
+        self.a._portal_prefix = ""
+        sample = {"Data": [{"Id": "x9", "JobAdName": "投行分析师", "LocNames": "北京"}]}
+        jobs = self.a.parse(json.dumps({"_intercepted": [sample]}))
         self.assertEqual(len(jobs), 1)
-        self.assertEqual(jobs[0].title, "财务分析师")
-        self.assertEqual(jobs[0].jd_url, "https://group.zhiye.com/job/P1")
-        self.assertEqual(jobs[0].location, "北京")
+        self.assertEqual(jobs[0].jd_url, "https://group.zhiye.com/zwxq?jobAdId=x9")
 
 
 class TestCompanySpaAdapter(unittest.TestCase):

@@ -162,8 +162,10 @@ def slugify(name: str):
     core = [w for w in words if w not in stop] or words
     compact = "".join(core)
     hyphen = "-".join(core)
+    # CamelCase 紧凑变体：SmartRecruiters 的 identifier 多为大小写敏感（Visa/Ubisoft/SchneiderElectric…）
+    camel = "".join(w.capitalize() for w in core)
     variants = []
-    for v in (compact, hyphen, "".join(words)):
+    for v in (compact, hyphen, "".join(words), camel):
         if v and v not in variants:
             variants.append(v)
     return variants
@@ -216,27 +218,46 @@ def build_discover_candidates():
     return cands
 
 
-def probe_one(cand: dict):
+# 外企单 host ATS：必须有**真实在华岗位**（is_china_location）才入库，否则只是全球/远程看板的噪声，
+# 不符合「在华外企」雷达定位。本土 adapter（moka/beisen/company_spa）按构造即在华，只看 valid。
+_FOREIGN_ATS = {"greenhouse", "lever", "ashby", "smartrecruiters"}
+
+
+def probe_one(cand: dict, timeout: int = 15):
     adapter = ADAPTERS.get(cand["adapter"])
     if adapter is None:
-        return {"ok": False, "valid": 0, "reason": f"unknown adapter {cand['adapter']}"}
+        return {"ok": False, "valid": 0, "china": 0, "reason": f"unknown adapter {cand['adapter']}"}
+    # 探活用较短超时，避免个别 host 挂起拖死整批（httpx 类适配器读 self.timeout）。
+    try:
+        adapter.timeout = timeout
+    except Exception:
+        pass
     try:
         html = adapter.fetch(cand["url"])
         raw_jobs = adapter.parse(html)
     except Exception as e:  # 探活失败（网络/反爬/结构不符）→ 丢弃，不入库
-        return {"ok": False, "valid": 0, "reason": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "valid": 0, "china": 0, "reason": f"{type(e).__name__}: {e}"}
 
     valid = 0
+    china = 0
     sample = None
     for raw in raw_jobs:
         if not raw.company:
             raw.company = cand["company"]
         is_valid, _ = normalizer.validate_job_quality(raw, cand["url"])
-        if is_valid:
-            valid += 1
-            if sample is None:
+        if not is_valid:
+            continue
+        valid += 1
+        if normalizer.is_china_location(raw.location):
+            china += 1
+            if china == 1:  # 优先用在华岗位做 sample
                 sample = raw.jd_url
-    return {"ok": valid > 0, "valid": valid, "parsed": len(raw_jobs), "sample": sample}
+        elif sample is None:
+            sample = raw.jd_url
+
+    # 外企看板要求真实在华岗位；本土看板按构造即在华，valid 即可。
+    ok = china > 0 if cand["adapter"] in _FOREIGN_ATS else valid > 0
+    return {"ok": ok, "valid": valid, "china": china, "parsed": len(raw_jobs), "sample": sample}
 
 
 def emit_sql(prefix: str, passed: list):
@@ -245,7 +266,9 @@ def emit_sql(prefix: str, passed: list):
         "-- Idempotent: guarded by source_url.\n",
     ]
     for c in passed:
-        notes = f"{c['company']}（{c.get('industry', '')}，probe live 探活 {c['_valid']} 岗）"
+        cn = c.get("_china", 0)
+        cn_txt = f"在华 {cn} 岗" if cn else f"{c['_valid']} 岗"
+        notes = f"{c['company']}（{c.get('industry', '')}，probe live 探活 {cn_txt}）"
         url = c["url"].replace("'", "''")
         lines.append(
             "insert into sources (company, source_url, source_type, adapter_name, crawl_method, notes)\n"
@@ -289,11 +312,11 @@ def main():
     for c in cands:
         r = probe_one(c)
         flag = "✓" if r["ok"] else "✗"
-        detail = (f"valid={r['valid']} parsed={r.get('parsed', '-')} {r.get('sample', '')}"
+        detail = (f"在华={r.get('china', 0)} valid={r['valid']} parsed={r.get('parsed', '-')} {r.get('sample', '')}"
                   if r["ok"] else r.get("reason", ""))
-        print(f"  {flag} [{c['adapter']:11}] {c['company']:22} {detail}")
+        print(f"  {flag} [{c['adapter']:15}] {c['company']:22} {detail}")
         if r["ok"]:
-            c = {**c, "_valid": r["valid"]}
+            c = {**c, "_valid": r["valid"], "_china": r.get("china", 0)}
             passed.append(c)
 
     print(f"\n[probe] 通过 {len(passed)}/{len(cands)}。")
