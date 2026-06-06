@@ -14,6 +14,8 @@
 host / tenant 从每个 source 的 source_url 动态解析，因此**同一 adapter 覆盖任意租户公司**。
 playwright 仅在 fetch() 内惰性导入。
 """
+import json
+import re
 from typing import List, Optional
 from urllib.parse import urljoin, urlparse
 
@@ -115,16 +117,115 @@ class ChinaSpaAdapter(PlaywrightAdapter):
         )
 
 
-class MokaAdapter(ChinaSpaAdapter):
-    """Moka 招聘（{tenant}.mokahr.com / app.mokahr.com）。
+_MOKA_FLAGS = ("火热招聘", "急", "热", "新", "HOT", "NEW", "hot", "new")
+_MOKA_NOISE = ("全职", "兼职", "实习", "|", "立即投递", "在招职位", "分享")
+_MOKA_CITY_RE = re.compile(r"[一-龥]{2,}(?:省|市|区)")
 
-    source_url 填某公司 Moka 公开招聘页（社招/校招列表页）。拦截 mokahr.com 下的 JSON 接口，
-    岗位详情优先用接口返回链接；否则按 Moka 常见形态 /jobs/{id} 兜底（需 live 探活确认）。
+
+def _parse_moka_card(text: str):
+    """从 Moka 岗位卡 innerText（含换行）解析 (location, title)。
+
+    各租户卡片排版不一，但统一规律：标题在首行（首行若是「急/火热招聘」等角标则取次行，
+    或角标粘连在标题前时剥掉）；城市是后续带 省/市/区 的短行（'上海市'/'广东·珠海市'/'上海市·黄浦区'）。
+    """
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        return None, ""
+    # 标题：首行；首行是纯角标时取次行
+    if lines[0] in _MOKA_FLAGS:
+        title = lines[1] if len(lines) > 1 else ""
+        rest = lines[2:]
+    else:
+        title = lines[0]
+        rest = lines[1:]
+    # 剥掉粘连在标题前的角标（如 '急客户端c++研发' / '火热招聘中学…'）
+    for f in ("火热招聘", "急", "热", "新"):
+        if title.startswith(f) and len(title) > len(f):
+            title = title[len(f):].strip()
+            break
+    # 城市：后续行里首个「带 省/市/区 的短行」（跳过日期/类型/噪声）
+    location = None
+    for ln in rest:
+        if ln.startswith("发布") or ln in _MOKA_NOISE:
+            continue
+        if len(ln) <= 12 and _MOKA_CITY_RE.search(ln):
+            location = ln
+            break
+    return location, title
+
+
+class MokaAdapter(PlaywrightAdapter):
+    """Moka 招聘（{tenant}.mokahr.com / app.mokahr.com）—— 大量消费/互联网/游戏私企在用。
+
+    Moka 列表接口的数据是**加密的**（响应体 data 为密文 + necromancer，反爬），拦截 JSON 拿不到岗位明文；
+    故改为**渲染后解析 DOM**：页面 JS 解密后岗位卡渲染为 `a[href*='#/job/{uuid}']`，
+    per-job 详情链接 = `{base}#/job/{uuid}`（hash 路由，可直达岗位）。
+    source_url 填某公司 Moka 公开招聘页（如 https://app.mokahr.com/apply/shein/2933）。
     """
 
     name = "moka"
-    intercept_matches = ("mokahr.com",)
-    detail_template = "https://{host}/jobs/{id}"
+    company_name = ""  # 由 sources.company 兜底
+    wait_ms = 5500
+    # 不同 Moka 页岗位列表挂在不同 hash 子路由，逐个试取岗位最多的
+    _routes = ("#/jobs", "", "#/campus/jobs", "#/positions")
+
+    def fetch(self, source_url: str) -> str:
+        from playwright.sync_api import sync_playwright
+
+        base = source_url.split("#")[0]
+        best: List[dict] = []
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_context(user_agent=self.user_agent, locale="zh-CN").new_page()
+            try:
+                for route in self._routes:
+                    try:
+                        page.goto(base + route, wait_until="networkidle", timeout=35000)
+                        page.wait_for_timeout(self.wait_ms)
+                        cards = page.eval_on_selector_all(
+                            "a[href*='#/job/']",
+                            "els => els.map(e => ({href: e.getAttribute('href'),"
+                            " text: (e.innerText || '').trim()}))")
+                        if len(cards) > len(best):
+                            best = cards
+                        if len(best) >= 3:
+                            break
+                    except Exception:
+                        continue
+            finally:
+                browser.close()
+        return json.dumps({"_base": base, "cards": best}, ensure_ascii=False)
+
+    def parse(self, html: str) -> List[RawJob]:
+        try:
+            data = json.loads(html)
+        except (ValueError, TypeError):
+            return []
+        base = data.get("_base", "")
+        out: List[RawJob] = []
+        seen = set()
+        for c in data.get("cards", []):
+            m = re.search(r"#/job/([\w-]+)", c.get("href") or "")
+            if not m:
+                continue
+            location, title = _parse_moka_card(c.get("text", ""))
+            if not title:
+                continue
+            jd_url = f"{base}#/job/{m.group(1)}"
+            if jd_url in seen:
+                continue
+            seen.add(jd_url)
+            out.append(RawJob(
+                company=self.company_name or "",
+                title=title,
+                location=location,
+                job_type=None,
+                summary=None,
+                jd_url=jd_url,
+                apply_url=jd_url,
+                posted_at=None,
+            ))
+        return out
 
 
 # 北森详情路由按租户缓存（host → 详情页 base，如 https://chinalife.zhiye.com/custom/zwxq）。
