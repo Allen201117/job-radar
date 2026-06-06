@@ -9,8 +9,8 @@
   cd crawler
   python3 probe.py                       # 只探 httpx 类（greenhouse/lever），打印结果
   python3 probe.py --all                 # 连 playwright 类（moka/beisen/company_spa）一起探（需装 playwright）
-  python3 probe.py --emit 025            # 探活通过的写进 ../supabase/migrations/025_seed_probed_sources.sql
-                                         # （023/024 已被上市维度占用，新前缀从 025 起递增）
+  python3 probe.py --emit 026            # 探活通过的写进 ../supabase/migrations/026_seed_probed_sources.sql
+                                         # （023/024/025 已被上市维度占用，新前缀从 026 起递增）
   python3 probe.py --candidates my.json  # 用自定义候选清单（JSON 数组，字段同 CANDIDATES）
 
 候选 JSON 字段：{company, adapter, url, industry?}
@@ -28,46 +28,93 @@ from run import ADAPTERS  # noqa: E402
 # httpx 类（无需浏览器，探活便宜）
 _HTTPX_ADAPTERS = {"greenhouse", "lever", "apple", "apple_cn", "baidu", "jd", "siemens", "haier"}
 
-# 待探活候选（跨行业，刻意分散覆盖面）。greenhouse/lever 用公开 boards-api，探活只需 httpx。
-# 注意：这里全部是**候选**，live 探活通过才入库。slug 探不到的会被自动丢弃，不会污染生产。
-CANDIDATES = [
-    # —— 消费 / 零售 / 餐饮 ——
-    {"company": "Nike", "adapter": "greenhouse", "industry": "消费·运动",
-     "url": "https://boards-api.greenhouse.io/v1/boards/nike/jobs?content=true"},
-    {"company": "lululemon", "adapter": "greenhouse", "industry": "消费·运动",
-     "url": "https://boards-api.greenhouse.io/v1/boards/lululemon/jobs?content=true"},
-    # —— 互联网 / SaaS ——
-    {"company": "Airbnb", "adapter": "greenhouse", "industry": "互联网·旅行",
-     "url": "https://boards-api.greenhouse.io/v1/boards/airbnb/jobs?content=true"},
-    {"company": "Stripe", "adapter": "greenhouse", "industry": "金融科技",
-     "url": "https://boards-api.greenhouse.io/v1/boards/stripe/jobs?content=true"},
-    {"company": "Databricks", "adapter": "greenhouse", "industry": "数据·AI",
-     "url": "https://boards-api.greenhouse.io/v1/boards/databricks/jobs?content=true"},
-    {"company": "Canva", "adapter": "lever", "industry": "设计·SaaS",
-     "url": "https://api.lever.co/v0/postings/canva?mode=json"},
+# 待探活候选（跨行业，刻意分散覆盖面，对标「外企100强 + 跨行业龙头」）。
+# greenhouse/lever 用公开 boards-api，探活只需 httpx。
+# 注意：这里全部是**候选**，live 探活通过才入库。slug 探不到 / 结构不符的会被自动丢弃，不污染生产。
+# 用 `python3 probe.py --emit 026` 在你本机一次性 live 验证 + 生成迁移，只有真返回岗位的才入库。
+def _gh(slug):
+    return f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
+
+
+def _lever(slug):
+    return f"https://api.lever.co/v0/postings/{slug}?mode=json"
+
+
+# (company, slug, adapter, industry)，按行业分散，对标外企/跨国龙头各行各业覆盖。
+_FOREIGN = [
+    # —— 消费 / 零售 / 运动 / 餐饮 ——
+    ("Nike", "nike", "greenhouse", "消费·运动"),
+    ("lululemon", "lululemon", "greenhouse", "消费·运动"),
+    ("Sweetgreen", "sweetgreen", "greenhouse", "消费·餐饮"),
+    ("Warby Parker", "warbyparker", "greenhouse", "消费·零售"),
+    ("Faire", "faire", "greenhouse", "消费·批发"),
+    # —— 互联网 / 平台 / 旅行 ——
+    ("Airbnb", "airbnb", "greenhouse", "互联网·旅行"),
+    ("DoorDash", "doordash", "greenhouse", "互联网·本地"),
+    ("Instacart", "instacart", "greenhouse", "互联网·零售"),
+    ("Reddit", "reddit", "greenhouse", "互联网·社区"),
+    ("Pinterest", "pinterest", "greenhouse", "互联网·社区"),
+    ("Lyft", "lyft", "greenhouse", "互联网·出行"),
+    # —— 企业 SaaS / 开发者工具 ——
+    ("Stripe", "stripe", "greenhouse", "金融科技"),
+    ("Databricks", "databricks", "greenhouse", "数据·AI"),
+    ("Snowflake", "snowflake", "greenhouse", "数据"),
+    ("HashiCorp", "hashicorp", "greenhouse", "云基础设施"),
+    ("GitLab", "gitlab", "greenhouse", "开发者工具"),
+    ("Cloudflare", "cloudflare", "greenhouse", "云·安全"),
+    ("Datadog", "datadog", "greenhouse", "可观测性"),
+    ("Twilio", "twilio", "greenhouse", "通信云"),
+    ("Asana", "asana", "greenhouse", "协作 SaaS"),
+    ("Dropbox", "dropbox", "greenhouse", "云存储"),
+    ("Samsara", "samsara", "greenhouse", "物联网 SaaS"),
+    ("Retool", "retool", "greenhouse", "开发者工具"),
+    ("Benchling", "benchling", "greenhouse", "生物科技 SaaS"),
+    # —— AI ——
+    ("OpenAI", "openai", "greenhouse", "AI"),
+    ("Anthropic", "anthropic", "greenhouse", "AI"),
+    ("Scale AI", "scaleai", "greenhouse", "AI·数据标注"),
+    # —— 金融科技 / 加密 / 量化 ——
+    ("Coinbase", "coinbase", "greenhouse", "加密金融"),
+    ("Robinhood", "robinhood", "greenhouse", "金融科技"),
+    ("Brex", "brex", "greenhouse", "金融科技"),
+    ("Plaid", "plaid", "greenhouse", "金融科技"),
+    ("Affirm", "affirm", "greenhouse", "金融科技"),
+    ("Ramp", "ramp", "greenhouse", "金融科技"),
+    ("Chime", "chime", "greenhouse", "金融科技"),
+    ("Citadel", "citadel", "greenhouse", "对冲基金·量化"),
+    ("IMC Trading", "imc", "greenhouse", "量化"),
     # —— 半导体 / 硬件 ——
-    {"company": "NVIDIA", "adapter": "greenhouse", "industry": "半导体·AI",
-     "url": "https://boards-api.greenhouse.io/v1/boards/nvidia/jobs?content=true"},
-    {"company": "AMD", "adapter": "greenhouse", "industry": "半导体",
-     "url": "https://boards-api.greenhouse.io/v1/boards/amd/jobs?content=true"},
+    ("NVIDIA", "nvidia", "greenhouse", "半导体·AI"),
+    ("AMD", "amd", "greenhouse", "半导体"),
     # —— 医药 / 生物 ——
-    {"company": "BeiGene 百济神州", "adapter": "greenhouse", "industry": "生物医药",
-     "url": "https://boards-api.greenhouse.io/v1/boards/beigene/jobs?content=true"},
-    # —— 金融 / 量化 ——
-    {"company": "Citadel", "adapter": "greenhouse", "industry": "对冲基金·量化",
-     "url": "https://boards-api.greenhouse.io/v1/boards/citadel/jobs?content=true"},
-    {"company": "IMC Trading", "adapter": "greenhouse", "industry": "量化",
-     "url": "https://boards-api.greenhouse.io/v1/boards/imc/jobs?content=true"},
-    # —— 游戏 ——
-    {"company": "Riot Games", "adapter": "greenhouse", "industry": "游戏",
-     "url": "https://boards-api.greenhouse.io/v1/boards/riotgames/jobs?content=true"},
-    # —— 本土 Moka / 北森 候选（playwright，--all 才探）——
-    # 这些是示例占位：填上你确认存在的某公司 Moka/北森公开招聘页地址即可被探活。
-    # {"company": "某公司", "adapter": "moka", "industry": "...",
-    #  "url": "https://xxx.mokahr.com/social-recruitment/campus/xxx"},
-    # {"company": "某集团", "adapter": "beisen", "industry": "...",
-    #  "url": "https://xxx.zhiye.com/..."},
+    ("BeiGene 百济神州", "beigene", "greenhouse", "生物医药"),
+    # —— 游戏 / 娱乐 ——
+    ("Riot Games", "riotgames", "greenhouse", "游戏"),
+    ("Discord", "discord", "greenhouse", "社交·游戏"),
+    # —— lever 系 ——
+    ("Canva", "canva", "lever", "设计·SaaS"),
+    ("Netflix", "netflix", "lever", "流媒体"),
 ]
+
+CANDIDATES = [
+    {"company": c, "adapter": a, "industry": ind, "url": (_gh(s) if a == "greenhouse" else _lever(s))}
+    for (c, s, a, ind) in _FOREIGN
+]
+
+# —— 本土 Moka / 北森 / 企业官网 SPA 候选（playwright，--all 才探）——
+# 中国 500 强多数用自建 SPA 或 moka(mokahr.com) / 北森(zhiye.com)；子域因公司而异，不可猜测（猜错=乱爬）。
+# 填上你**确认存在**的公开招聘页地址（浏览器能打开、能看到岗位列表的那个 URL）即可被 live 探活后入库。
+# 例：
+#   {"company": "某集团", "adapter": "moka", "industry": "制造",
+#    "url": "https://xxx.mokahr.com/social-recruitment/campus/xxx"},
+#   {"company": "某银行", "adapter": "beisen", "industry": "金融",
+#    "url": "https://xxx.zhiye.com/..."},
+#   {"company": "某公司", "adapter": "company_spa", "industry": "...",
+#    "url": "https://careers.example.com/..."},
+_DOMESTIC = [
+    # 在此追加已 live 验证可打开的本土招聘页（adapter ∈ moka/beisen/company_spa）。
+]
+CANDIDATES += _DOMESTIC
 
 
 def probe_one(cand: dict):

@@ -217,9 +217,27 @@
   .surface-soft {
     @apply rounded-[1.25rem] border border-black/[0.05] bg-white/55;
   }
-  /* 可悬浮的卡片：上浮 + 提亮 */
+  /* 可悬浮的卡片：上浮 + 提亮 + 落影加深（与登录页三张漂浮卡同一交互语言）。
+     用 will-change + cubic-bezier 让 hover 更跟手、有「托起」的实体感。 */
   .surface-hover {
-    @apply transition duration-200 ease-out hover:-translate-y-0.5 hover:bg-white;
+    transition:
+      transform 0.3s cubic-bezier(0.2, 0.7, 0.2, 1),
+      box-shadow 0.3s cubic-bezier(0.2, 0.7, 0.2, 1),
+      background-color 0.3s ease-out;
+    will-change: transform;
+  }
+  .surface-hover:hover {
+    transform: translateY(-4px);
+    background-color: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 26px 56px -26px rgba(40, 34, 28, 0.42);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .surface-hover {
+      transition: background-color 0.2s ease-out;
+    }
+    .surface-hover:hover {
+      transform: none;
+    }
   }
 
   /* 信息小标签 / 状态 chip */

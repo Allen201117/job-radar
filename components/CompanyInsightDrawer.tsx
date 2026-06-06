@@ -245,6 +245,53 @@ function failureMessage(reason: string | null | undefined): string {
   return "该公司暂无经核实的职业洞察信息。我们只展示通过分级与时效校验的内容，宁缺毋滥。";
 }
 
+// 上市维度的「投递视角」：把上市状态翻成对求职者的股权含金量提示（行业通行的判断，非投资建议）。
+// 不落库易变行情，建议文案由 status + unicorn 标志在前端确定性生成。
+const EQUITY_ANGLE: Record<
+  string,
+  { tone: string; label: string; text: string }
+> = {
+  listed: {
+    tone: "border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63]",
+    label: "投递视角 · 股权可估值",
+    text: "已上市：期权/RSU 可按公开股价估值，含金量较透明。结合下方近期行情自行判断——行情向好通常意味着手中股权更值钱。",
+  },
+  filed: {
+    tone: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299]",
+    label: "投递视角 · 临近上市",
+    text: "已递交招股书：临近上市，期权有潜在流动性预期，是较好的进入窗口；留意行权价、锁定期与上市不确定性。",
+  },
+  pre_ipo: {
+    tone: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299]",
+    label: "投递视角 · 筹备上市",
+    text: "筹备上市：股权有上市后变现预期，适合看好者提前进入；上市时间表未定，存在不确定性。",
+  },
+  unicorn: {
+    tone: "border-[#cfc0e6] bg-[#efe9f8] text-[#6a4fa0]",
+    label: "投递视角 · 独角兽股权",
+    text: "未上市独角兽：估值高、市场看好，股权激励潜在含金量高，常是值得投递的标的；但短期不可变现、依赖后续融资或上市兑现。",
+  },
+  private: {
+    tone: "border-black/[0.08] bg-[#f4efe6] text-[#8a8275]",
+    label: "投递视角 · 重看现金",
+    text: "未上市且暂无明确上市计划：股权短期难变现，评估 offer 时建议以现金薪酬为主、股权为辅。",
+  },
+};
+
+function EquityAngle({ payload }: { payload: Record<string, unknown> }) {
+  const status = typeof payload?.status === "string" ? payload.status : "";
+  if (!status) return null;
+  const key = status === "private" && payload?.unicorn === true ? "unicorn" : status;
+  const angle = EQUITY_ANGLE[key];
+  if (!angle) return null;
+  return (
+    <div className={cn("mt-2.5 rounded-xl border px-3.5 py-2.5 text-[13px] leading-6", angle.tone)}>
+      <span className="font-semibold">{angle.label}</span>
+      <span className="mt-0.5 block opacity-90">{angle.text}</span>
+    </div>
+  );
+}
+
 // 上市维度的「近期行情」：易变数据不落库为数字，只给一个公开行情页链接（payload.quote_url）。
 function QuoteLink({ payload }: { payload: Record<string, unknown> }) {
   const quoteUrl = typeof payload?.quote_url === "string" ? payload.quote_url : "";
@@ -314,6 +361,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
 
       {item.title && <p className="mt-2.5 text-base font-semibold text-[#1a1714]">{item.title}</p>}
       <p className="mt-1.5 leading-7 text-[#3f3a33]">{item.content}</p>
+      <EquityAngle payload={item.payload} />
       <QuoteLink payload={item.payload} />
 
       <div className="mt-3.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#8a8275]">
