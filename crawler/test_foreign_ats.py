@@ -7,6 +7,7 @@ from adapters.greenhouse import GreenhouseAdapter
 from adapters.lever import LeverAdapter
 from adapters.ashby import AshbyAdapter
 from adapters.smartrecruiters import SmartRecruitersAdapter
+from adapters.workday import WorkdayAdapter
 from adapters.apple import AppleChinaAdapter
 
 
@@ -187,6 +188,57 @@ class SmartRecruitersParseTest(unittest.TestCase):
 
     def test_bad_json(self):
         self.assertEqual(SmartRecruitersAdapter().parse("[]"), [])
+
+
+class WorkdayParseTest(unittest.TestCase):
+    def test_builds_detail_url_and_location_from_path(self):
+        payload = json.dumps({
+            "_host": "https://nvidia.wd5.myworkdayjobs.com",
+            "_site": "NVIDIAExternalCareerSite",
+            "_china_filtered": True,
+            "posts": [
+                {"title": "AI Engineer", "externalPath": "/job/China-Beijing/AI-Engineer_JR1",
+                 "locationsText": "2 Locations"},
+                {"title": "No Path"},  # 无 externalPath → 丢
+            ],
+        })
+        jobs = WorkdayAdapter().parse(payload)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].title, "AI Engineer")
+        self.assertEqual(
+            jobs[0].jd_url,
+            "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/China-Beijing/AI-Engineer_JR1")
+        self.assertEqual(jobs[0].location, "China, Beijing")
+        self.assertEqual(jobs[0].company, "")
+
+    def test_no_facet_falls_back_to_location_filter(self):
+        # 未匹配到 China facet 时按 location 文本兜底过滤：在华留、海外丢
+        payload = json.dumps({
+            "_host": "https://x.wd1.myworkdayjobs.com", "_site": "S", "_china_filtered": False,
+            "posts": [
+                {"title": "Shanghai Role", "externalPath": "/job/China-Shanghai/Shanghai-Role_JR2"},
+                {"title": "US Role", "externalPath": "/job/USA-California/US-Role_JR3"},
+            ],
+        })
+        jobs = WorkdayAdapter().parse(payload)
+        self.assertEqual({j.title for j in jobs}, {"Shanghai Role"})
+
+    def test_china_facets_finds_country_excludes_city(self):
+        facets = [{"facetParameter": "locationMainGroup", "values": [
+            {"facetParameter": "locationHierarchy1", "descriptor": "Locations", "values": [
+                {"id": "cn-id", "descriptor": "China"},
+                {"id": "us-id", "descriptor": "United States"},
+                {"id": "tw-id", "descriptor": "Taiwan"},
+            ]},
+            {"facetParameter": "locations", "descriptor": "Sites", "values": [
+                {"id": "city-id", "descriptor": "China, Beijing"},  # 城市级，应被排除
+            ]},
+        ]}]
+        found = WorkdayAdapter._china_facets(facets)
+        self.assertEqual(found, {"locationHierarchy1": ["cn-id"]})
+
+    def test_bad_json(self):
+        self.assertEqual(WorkdayAdapter().parse("nope"), [])
 
 
 class SlugifyTest(unittest.TestCase):
