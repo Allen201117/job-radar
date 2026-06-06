@@ -252,6 +252,14 @@ class WorkdayParseTest(unittest.TestCase):
         self.assertFalse(_is_china_facet("United States"))
         self.assertFalse(_is_china_facet(""))
 
+    def test_loc_from_path_normalizes_cn_abbrev(self):
+        f = WorkdayAdapter._loc_from_path
+        self.assertEqual(f("/job/China-Beijing/T_JR1"), "China, Beijing")
+        self.assertEqual(f("/job/XiamenCHN/T_JR2"), "Xiamen, China")      # 粘连
+        self.assertEqual(f("/job/Sanshui-CHN/T_JR3"), "Sanshui, China")   # 连字符→逗号后独立词
+        self.assertEqual(f("/job/Dalian-Liaoning-China/T_JR4"), "Dalian, Liaoning, China")
+        self.assertEqual(f("/job/Munich-Germany/T_JR5"), "Munich, Germany")  # 不误伤
+
     def test_bad_json(self):
         self.assertEqual(WorkdayAdapter().parse("nope"), [])
 

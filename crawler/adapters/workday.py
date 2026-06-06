@@ -10,6 +10,7 @@ source_url = https://{host}/wday/cxs/{tenant}/{site}/jobs   （host 形如 {tena
 jd_url = {host}/{site}{externalPath}（Workday 托管的稳定 per-job 页，已 live 验证渲染对应岗位）。
 """
 import json
+import re
 from typing import List, Optional
 from urllib.parse import urlparse
 
@@ -169,5 +170,19 @@ class WorkdayAdapter(BaseAdapter):
         parts = [x for x in ep.split("/") if x]
         if len(parts) >= 2 and parts[0].lower() == "job":
             seg = parts[1].replace("-", ", ").strip()
-            return seg or None
+            return _normalize_cn_country(seg) or None
         return None
+
+
+def _normalize_cn_country(seg: str) -> str:
+    """把 Workday externalPath 地点段里的 CHN/CN 国家缩写归一为 China。
+    Workday 不同租户写法不一：'Xiamen, CHN' / 'XiamenCHN'（粘连）/ 'Sanshui, CN'。归一后地点展示更干净，
+    且 facet=False 回退时 is_china_location 能正确识别为在华。仅匹配独立词或粘连城市尾的国家码，
+    避免误伤含 'chn' 的词（如 München→munchen 实为 'chen' 不含 'chn'，且此处只动 CHN/CN 词边界）。"""
+    if not seg:
+        return seg
+    # 粘连：XiamenCHN → Xiamen, China（城市小写尾 + 大写国家码 + 串尾）
+    seg = re.sub(r"(?<=[a-z])(CHN|CN)$", r", China", seg)
+    # 独立词：'Sanshui, CHN' / 'CN, Shanghai' → China
+    seg = re.sub(r"(?i)\b(?:CHN|CN)\b", "China", seg)
+    return seg.strip()
