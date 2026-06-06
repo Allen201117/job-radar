@@ -25,6 +25,7 @@ from adapters.greenhouse import GreenhouseAdapter
 from adapters.lever import LeverAdapter
 from adapters.ashby import AshbyAdapter
 from adapters.smartrecruiters import SmartRecruitersAdapter
+from adapters.workday import WorkdayAdapter
 from adapters.china_ats import MokaAdapter, BeisenAdapter, CompanySpaAdapter
 
 
@@ -47,6 +48,7 @@ ADAPTERS = {
     "lever": LeverAdapter(),
     "ashby": AshbyAdapter(),
     "smartrecruiters": SmartRecruitersAdapter(),  # 大量在华跨国企业用此 ATS（外企100强主力）
+    "workday": WorkdayAdapter(),  # 外企100强主力：CXS API + location facet 服务端过滤到在华
     # 中国本土 ATS / 企业官网 SPA（通用适配器，按公司加 sources 行；host 从 source_url 动态解析）
     "moka": MokaAdapter(),
     "beisen": BeisenAdapter(),

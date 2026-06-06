@@ -28,7 +28,7 @@ from run import ADAPTERS  # noqa: E402
 
 # httpx 类（无需浏览器，探活便宜）
 _HTTPX_ADAPTERS = {
-    "greenhouse", "lever", "ashby", "smartrecruiters",
+    "greenhouse", "lever", "ashby", "smartrecruiters", "workday",
     "apple", "apple_cn", "baidu", "jd", "siemens", "haier",
 }
 
@@ -138,6 +138,20 @@ _DOMESTIC = [
 ]
 CANDIDATES += _DOMESTIC
 
+# —— Workday 系（外企100强主力；CXS 端点 = {host}/wday/cxs/{tenant}/{site}/jobs）——
+# host 的 wd{N} 与 site 名不可猜，均来自公开检索确认；adapter 用 location facet 服务端过滤在华。
+# 已 live 验证在华岗位 > 0（probe china-gate 会再校验一次）。
+_WORKDAY = [
+    ("NVIDIA", "半导体·AI", "https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs"),
+    ("Pfizer 辉瑞", "医药", "https://pfizer.wd1.myworkdayjobs.com/wday/cxs/pfizer/PfizerCareers/jobs"),
+    ("Citi 花旗", "金融", "https://citi.wd5.myworkdayjobs.com/wday/cxs/citi/2/jobs"),
+    ("MSD 默沙东", "医药", "https://msd.wd5.myworkdayjobs.com/wday/cxs/msd/SearchJobs/jobs"),
+    ("Mastercard 万事达", "金融·支付", "https://mastercard.wd1.myworkdayjobs.com/wday/cxs/mastercard/CorporateCareers/jobs"),
+]
+CANDIDATES += [
+    {"company": c, "adapter": "workday", "industry": ind, "url": url} for (c, ind, url) in _WORKDAY
+]
+
 
 # ───────────────────────── discover：按公司名自动找 ATS + slug ─────────────────────────
 # 「最高效扩源」引擎：给一串公司名，机器对每个名 × 每个单 host 的 ATS 平台 × 若干 slug 变体
@@ -220,7 +234,7 @@ def build_discover_candidates():
 
 # 外企单 host ATS：必须有**真实在华岗位**（is_china_location）才入库，否则只是全球/远程看板的噪声，
 # 不符合「在华外企」雷达定位。本土 adapter（moka/beisen/company_spa）按构造即在华，只看 valid。
-_FOREIGN_ATS = {"greenhouse", "lever", "ashby", "smartrecruiters"}
+_FOREIGN_ATS = {"greenhouse", "lever", "ashby", "smartrecruiters", "workday"}
 
 
 def probe_one(cand: dict, timeout: int = 15):
