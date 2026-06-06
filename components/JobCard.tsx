@@ -15,9 +15,11 @@ import {
   XCircle,
 } from "@phosphor-icons/react";
 import { createBrowserClient } from "@/lib/supabaseClient";
-import { normalizeChinaJobType } from "@/lib/china-keyword-expansion";
+import {
+  classifyJobFunction,
+  recruitmentCategory,
+} from "@/lib/china-keyword-expansion";
 import CompanyInsightDrawer from "@/components/CompanyInsightDrawer";
-import { fetchCompanyInsights, getCachedInsights } from "@/lib/insight-client";
 import type { ScoredJob } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -62,14 +64,15 @@ function extractDeadline(text?: string | null): string {
   return "未知";
 }
 
+// 招聘类型（实习/校招/社招）= 强特征，三色区分，每张卡片必显示。
 function recruitTypeStyle(t: string): string {
-  if (/实习|intern/i.test(t)) return "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312]";
-  if (/校招|管培|应届|graduate|campus|new grad/i.test(t))
-    return "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a]";
-  if (/社招|全职|experienced|professional/i.test(t))
-    return "border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299]";
-  return "border border-black/[0.07] bg-[#f4efe6] text-[#6b655a]";
+  if (t === "实习") return "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312]";
+  if (t === "校招") return "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a]";
+  return "border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299]"; // 社招
 }
+
+// 岗位职能（产品/研发/…）= 次强特征，统一中性配色，每张卡片必显示。
+const FUNCTION_STYLE = "border border-black/[0.08] bg-[#f0ece2] text-[#6b655a]";
 
 export default function JobCard({ job, onActionChange, sessionNew }: Props) {
   const [acting, setActing] = useState(false);
@@ -77,31 +80,11 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
   const [actionError, setActionError] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [insightOpen, setInsightOpen] = useState(false);
-  const [timingHint, setTimingHint] = useState<string | null>(null);
   const supabase = createBrowserClient();
 
   useEffect(() => {
     setCurrentAction(job.user_action);
   }, [job.user_action]);
-
-  // 懒取该公司洞察（client 层按公司去重缓存），有时机洞察则在卡片上提示
-  useEffect(() => {
-    if (!job.company) return;
-    let alive = true;
-    const apply = (res: ReturnType<typeof getCachedInsights>) => {
-      const timing = res?.dimensions?.timing?.[0];
-      if (alive && timing) setTimingHint(timing.title || timing.time_window || "查看招聘时机");
-    };
-    const cached = getCachedInsights(job.company);
-    if (cached) {
-      apply(cached);
-      return;
-    }
-    void fetchCompanyInsights(job.company).then((res) => apply(res));
-    return () => {
-      alive = false;
-    };
-  }, [job.company]);
 
   // 优先用爬虫从完整 JD 抽取并入库的结构化列；列为空（历史行/未重抓）才回退旧的 summary 正则。
   const exp = useMemo(() => job.experience || extractExperience(job.summary), [job.experience, job.summary]);
@@ -110,15 +93,13 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
     () => job.deadline || extractDeadline(job.summary),
     [job.deadline, job.summary],
   );
+  // 强特征标签：招聘类型穷尽落到 实习/校招/社招 之一（必显示）；职能粗分到 产品/研发/… （必显示）。
   const recruitType = useMemo(
-    () =>
-      normalizeChinaJobType({
-        title: job.title,
-        sourceType: job.job_type,
-        summary: job.summary,
-      }) ||
-      job.job_type ||
-      null,
+    () => recruitmentCategory({ title: job.title, job_type: job.job_type, summary: job.summary, jd_url: job.jd_url }),
+    [job.title, job.job_type, job.summary, job.jd_url],
+  );
+  const jobFunction = useMemo(
+    () => classifyJobFunction({ title: job.title, job_type: job.job_type, summary: job.summary }),
     [job.title, job.job_type, job.summary],
   );
 
@@ -189,26 +170,27 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
   return (
     <article
       className={cn(
-        "group rounded-[1.35rem] border p-5 text-[#1a1714] transition duration-200 hover:-translate-y-0.5",
+        "group rounded-[1.35rem] border p-5 text-[#1a1714] transition duration-300 ease-out will-change-transform hover:-translate-y-1 motion-reduce:hover:translate-y-0",
         sessionNew
-          ? "border-[#bcdcae] bg-[#eef6e0] ring-1 ring-[#cfe6b0] hover:bg-[#e8f3d6]"
-          : "border-black/[0.06] bg-white/70 shadow-[0_18px_44px_-30px_rgba(40,34,28,0.32)] hover:border-black/[0.1] hover:bg-white",
+          ? "border-[#bcdcae] bg-[#eef6e0] ring-1 ring-[#cfe6b0] hover:bg-[#e8f3d6] hover:shadow-[0_26px_56px_-28px_rgba(60,90,30,0.4)]"
+          : "border-black/[0.06] bg-white/70 shadow-[0_18px_44px_-30px_rgba(40,34,28,0.32)] hover:border-black/[0.1] hover:bg-white hover:shadow-[0_26px_56px_-26px_rgba(40,34,28,0.42)]",
       )}
     >
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-[#8a8275]">{job.company}</span>
-            {recruitType && (
-              <span
-                className={cn(
-                  "rounded-full px-2.5 py-1 text-xs font-semibold",
-                  recruitTypeStyle(recruitType),
-                )}
-              >
-                {recruitType}
-              </span>
-            )}
+            <span
+              className={cn(
+                "rounded-full px-2.5 py-1 text-xs font-semibold",
+                recruitTypeStyle(recruitType),
+              )}
+            >
+              {recruitType}
+            </span>
+            <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", FUNCTION_STYLE)}>
+              {jobFunction}
+            </span>
             {sessionNew && (
               <span className="inline-flex items-center gap-1 rounded-full bg-[#dcefb4] px-2.5 py-1 text-xs font-semibold text-[#4f6f2a]">
                 <Sparkle size={12} weight="fill" aria-hidden="true" />
@@ -234,11 +216,11 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
             <button
               type="button"
               onClick={() => setInsightOpen(true)}
-              title="查看该公司的职业洞察（社区聚合·非官方）"
+              title="查看该公司的职业洞察（时机/上市/薪酬/路径/文化，社区聚合·非官方）"
               className="inline-flex items-center gap-1 rounded-full border border-[#cfc0e6] bg-[#efe9f8] px-2.5 py-1 text-xs font-medium text-[#6a4fa0] transition hover:border-[#bba9dd] hover:bg-[#e7def4]"
             >
               <Sparkle size={12} weight="fill" aria-hidden="true" />
-              {timingHint ? `时机: ${timingHint}` : "职业洞察"}
+              职业洞察
             </button>
           </div>
 
