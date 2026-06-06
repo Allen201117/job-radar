@@ -142,5 +142,24 @@ class StructuredFieldExtractionTests(unittest.TestCase):
             self.assertIsNone(fn(""))
 
 
+class CleanSummaryTest(unittest.TestCase):
+    def test_decodes_entities_then_strips_tags(self):
+        # greenhouse content 是实体编码 HTML：不解码会原样显示 &lt;p&gt; 乱码
+        self.assertEqual(normalizer.clean_summary("&lt;p&gt;-&lt;/p&gt;"), "-")
+        out = normalizer.clean_summary(
+            '&lt;div class=&quot;intro&quot;&gt;&lt;h2&gt;About&lt;/h2&gt;&lt;p&gt;Hello world&lt;/p&gt;')
+        self.assertNotIn("&lt;", out)
+        self.assertNotIn("<", out)
+        self.assertIn("About", out)
+        self.assertIn("Hello world", out)
+
+    def test_plain_and_real_tags(self):
+        self.assertEqual(normalizer.clean_summary("plain text stays"), "plain text stays")
+        self.assertEqual(normalizer.clean_summary("<p>hi</p>"), "hi")
+
+    def test_none(self):
+        self.assertIsNone(normalizer.clean_summary(None))
+
+
 if __name__ == "__main__":
     unittest.main()

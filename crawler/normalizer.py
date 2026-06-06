@@ -1,4 +1,5 @@
 import hashlib
+import html
 import re
 from datetime import datetime, timezone
 from typing import Optional
@@ -117,8 +118,12 @@ def clean_summary(summary: Optional[str], max_chars: int = 400) -> Optional[str]
     if not summary:
         return None
     s = summary.strip()
+    # 先解 HTML 实体（greenhouse 等接口 content 是实体编码的 &lt;p&gt;…，不解码会原样显示乱码）。
+    # 解两遍兜底双重编码（&amp;lt; → &lt; → <）。
+    s = html.unescape(html.unescape(s))
+    s = re.sub(r"<(script|style)[\s\S]*?</\1>", " ", s, flags=re.IGNORECASE)  # 去脚本/样式块
     s = re.sub(r"<[^>]+>", " ", s)  # 去 HTML 标签
-    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
     if len(s) <= max_chars:
         return s
     # 在词边界截断

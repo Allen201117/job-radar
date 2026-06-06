@@ -21,7 +21,7 @@ import {
 } from "@/lib/china-keyword-expansion";
 import CompanyInsightDrawer from "@/components/CompanyInsightDrawer";
 import type { ScoredJob } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cleanSummary, cn } from "@/lib/utils";
 
 interface Props {
   job: ScoredJob;
@@ -86,21 +86,23 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
     setCurrentAction(job.user_action);
   }, [job.user_action]);
 
+  // 展示用 summary：解 HTML 实体 + 去标签（历史 greenhouse 行存的是实体编码 HTML，否则显示乱码）。
+  const summary = useMemo(() => cleanSummary(job.summary), [job.summary]);
   // 优先用爬虫从完整 JD 抽取并入库的结构化列；列为空（历史行/未重抓）才回退旧的 summary 正则。
-  const exp = useMemo(() => job.experience || extractExperience(job.summary), [job.experience, job.summary]);
-  const edu = useMemo(() => job.education || extractEducation(job.summary), [job.education, job.summary]);
+  const exp = useMemo(() => job.experience || extractExperience(summary), [job.experience, summary]);
+  const edu = useMemo(() => job.education || extractEducation(summary), [job.education, summary]);
   const deadline = useMemo(
-    () => job.deadline || extractDeadline(job.summary),
-    [job.deadline, job.summary],
+    () => job.deadline || extractDeadline(summary),
+    [job.deadline, summary],
   );
   // 强特征标签：招聘类型穷尽落到 实习/校招/社招 之一（必显示）；职能粗分到 产品/研发/… （必显示）。
   const recruitType = useMemo(
-    () => recruitmentCategory({ title: job.title, job_type: job.job_type, summary: job.summary, jd_url: job.jd_url }),
-    [job.title, job.job_type, job.summary, job.jd_url],
+    () => recruitmentCategory({ title: job.title, job_type: job.job_type, summary, jd_url: job.jd_url }),
+    [job.title, job.job_type, summary, job.jd_url],
   );
   const jobFunction = useMemo(
-    () => classifyJobFunction({ title: job.title, job_type: job.job_type, summary: job.summary }),
-    [job.title, job.job_type, job.summary],
+    () => classifyJobFunction({ title: job.title, job_type: job.job_type, summary }),
+    [job.title, job.job_type, summary],
   );
 
   async function writeAction(action: PrimaryAction | null, prev: PrimaryAction | null) {
@@ -241,7 +243,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
             <Field icon={Hourglass} label="截止" value={deadline} />
           </div>
 
-          {job.summary && (
+          {summary && (
             <div className="mt-4">
               <p
                 className={cn(
@@ -249,9 +251,9 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
                   !expanded && "line-clamp-3",
                 )}
               >
-                {job.summary}
+                {summary}
               </p>
-              {job.summary.length > 80 && (
+              {summary.length > 80 && (
                 <button
                   type="button"
                   onClick={() => setExpanded((v) => !v)}
