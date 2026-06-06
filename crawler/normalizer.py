@@ -249,9 +249,22 @@ def extract_deadline(text: Optional[str]) -> Optional[str]:
 
 CHINA_LOCATION_MARKERS = (
     "china", "中国", "prc", "greater china",
+    # 一/新一线 + 主要工业城市（外企 ATS 地点常只给城市/省名，不带 "China"）
     "beijing", "shanghai", "shenzhen", "guangzhou", "hangzhou", "chengdu",
     "nanjing", "suzhou", "wuhan", "xi'an", "xian", "foshan", "dongguan",
+    "tianjin", "chongqing", "wuxi", "ningbo", "qingdao", "dalian", "xiamen",
+    "hefei", "changsha", "zhengzhou", "jinan", "kunming", "shijiazhuang",
+    "changchun", "harbin", "shenyang", "nanchang", "fuzhou", "nanning",
+    "guiyang", "lanzhou", "taiyuan", "wenzhou", "zhuhai", "yantai", "xuzhou",
+    "changzhou", "nantong", "weifang", "luoyang", "huizhou",
+    # 省 / 自治区（pinyin，独立 token，无歧义）
+    "jiangsu", "zhejiang", "guangdong", "sichuan", "shandong", "henan",
+    "hebei", "hunan", "hubei", "anhui", "fujian", "jiangxi", "liaoning",
+    "shaanxi", "shanxi", "yunnan", "guizhou", "gansu", "hainan", "jilin",
+    "heilongjiang", "qinghai", "ningxia", "xinjiang", "guangxi",
+    "nei mongol", "inner mongolia",
     "北京", "上海", "深圳", "广州", "杭州", "成都", "南京", "苏州", "武汉", "西安", "佛山",
+    "天津", "重庆", "无锡", "宁波", "青岛", "大连", "厦门", "合肥", "长沙", "郑州",
     "hong kong", "香港", "macau", "macao", "澳门",
 )
 
