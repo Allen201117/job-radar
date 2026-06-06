@@ -50,6 +50,11 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填公司名 + CXS 地址（{tenant}.wdN.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs），服务端按 location facet 过滤在华",
   },
   {
+    value: "eightfold",
+    label: "Eightfold（通用 ATS · 外企）",
+    hint: "填公司名 + 接口地址（{tenant}.eightfold.ai/api/apply/v2/jobs?domain={domain}），服务端按 location 收窄在华",
+  },
+  {
     value: "moka",
     label: "Moka（通用 ATS · 本土）",
     hint: "填公司名 + Moka 招聘页地址（{公司}.mokahr.com / app.mokahr.com），浏览器拦截抓取",

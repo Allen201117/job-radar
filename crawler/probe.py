@@ -28,7 +28,7 @@ from run import ADAPTERS  # noqa: E402
 
 # httpx 类（无需浏览器，探活便宜）
 _HTTPX_ADAPTERS = {
-    "greenhouse", "lever", "ashby", "smartrecruiters", "workday",
+    "greenhouse", "lever", "ashby", "smartrecruiters", "workday", "eightfold",
     "apple", "apple_cn", "baidu", "jd", "siemens", "haier",
 }
 
@@ -234,7 +234,7 @@ def build_discover_candidates():
 
 # 外企单 host ATS：必须有**真实在华岗位**（is_china_location）才入库，否则只是全球/远程看板的噪声，
 # 不符合「在华外企」雷达定位。本土 adapter（moka/beisen/company_spa）按构造即在华，只看 valid。
-_FOREIGN_ATS = {"greenhouse", "lever", "ashby", "smartrecruiters", "workday"}
+_FOREIGN_ATS = {"greenhouse", "lever", "ashby", "smartrecruiters", "workday", "eightfold"}
 
 
 def probe_one(cand: dict, timeout: int = 15):
