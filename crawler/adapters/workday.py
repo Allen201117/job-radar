@@ -18,21 +18,24 @@ import httpx
 import normalizer
 from .base import BaseAdapter, RawJob
 
-# 大中华区国家级 facet 关键词（China / Mainland China / Greater China / Hong Kong / Macau…）
+# 大中华区 facet 关键词（China / Mainland China / Greater China / Hong Kong / Macau…）
 _GREATER_CHINA = ("china", "中国", "hong kong", "香港", "macau", "macao", "澳门")
+# 台湾不属本雷达「在华」口径，排除
+_TAIWAN = ("taiwan", "台湾", "台灣", "chinese taipei")
 
 
-def _is_china_country(desc: str) -> bool:
-    """是否大中华区**国家级** facet 项：含关键词、排除含逗号的城市级项（China, Beijing）与台湾。"""
+def _is_china_facet(desc: str) -> bool:
+    """是否大中华区 facet 项：含 China/HK/Macau 关键词、排除台湾。
+    允许城市级（'China, Beijing'）—— 不同租户把可选叶子放在国家级或城市级 param，按 param 分组后逐组试探。"""
     d = str(desc or "").strip().lower()
-    if not d or "," in d or "taiwan" in d or "台湾" in d or "台灣" in d:
+    if not d or any(t in d for t in _TAIWAN):
         return False
     return any(k in d for k in _GREATER_CHINA)
 
 
 class WorkdayAdapter(BaseAdapter):
     name = "workday"
-    max_pages = 8  # 每页 20 → 单源最多约 160 岗
+    max_pages = 25  # 每页 20 → 单源最多约 500 在华岗（容纳 AstraZeneca 等大租户，避免静默截断；分页 <20 即停）
 
     def should_skip(self, source_url: str):
         return None  # 公开 JSON API，跳过 HEAD 预检
@@ -55,13 +58,15 @@ class WorkdayAdapter(BaseAdapter):
             "Content-Type": "application/json",
             "User-Agent": self.user_agent,
         }
-        # 1) 取 facets，找大中华区 location facet（param + ids）
+        # 1) 取 facets，按 param 分组收集大中华区候选 id
         r = httpx.post(source_url, json={"appliedFacets": {}, "limit": 1, "offset": 0, "searchText": ""},
                        headers=headers, timeout=self.timeout)
         r.raise_for_status()
-        applied = self._china_facets(r.json().get("facets", []))
+        candidates = self._china_facet_candidates(r.json().get("facets", []))
+        # 2) 逐 param-group 试探命中数，取最多的**单组**应用（不跨 param 混用，否则 AND 坍缩成交集）
+        applied = self._pick_best_facet(source_url, headers, candidates)
 
-        # 2) 分页抓在华岗位（有 facet 则服务端已过滤；无 facet 则全量、parse 再按 location 兜底过滤）
+        # 3) 分页抓在华岗位（有 facet 则服务端已过滤；无 facet 则全量、parse 再按 location 兜底过滤）
         collected: List[dict] = []
         for page in range(self.max_pages):
             body = {"appliedFacets": applied, "limit": 20, "offset": page * 20, "searchText": ""}
@@ -79,16 +84,21 @@ class WorkdayAdapter(BaseAdapter):
         }, ensure_ascii=False)
 
     @staticmethod
-    def _china_facets(facets) -> dict:
-        """深搜 facets，返回 {facetParameter: [大中华区国家项 id...]}（精确匹配国家级描述）。"""
-        found: dict = {}
+    def _china_facet_candidates(facets) -> dict:
+        """深搜 facets，按 facetParameter 分组收集大中华区相关叶子 id（含 'China, City' 城市级）。
+        返回 {param: [id...]}。**不跨 param 合并** —— 不同租户的可选叶子放在 locationHierarchy1 /
+        locationCountry / locations 等不同 param，且 locationCountry 的国家聚合项常不可直接选（应用返回 0）。
+        因此分组后由 _pick_best_facet 逐组试探、取命中最多的单组，自适应各租户 facet 结构。"""
+        groups: dict = {}
 
         def walk(node):
             if isinstance(node, dict):
                 param = node.get("facetParameter")
                 for v in node.get("values", []) or []:
-                    if param and v.get("id") and _is_china_country(v.get("descriptor", "")):
-                        found.setdefault(param, []).append(v["id"])
+                    if param and v.get("id") and _is_china_facet(v.get("descriptor", "")):
+                        ids = groups.setdefault(param, [])
+                        if v["id"] not in ids:
+                            ids.append(v["id"])
                 for v in node.get("values", []) or []:
                     walk(v)
             elif isinstance(node, list):
@@ -97,7 +107,25 @@ class WorkdayAdapter(BaseAdapter):
 
         for f in facets:
             walk(f)
-        return found
+        return groups
+
+    def _pick_best_facet(self, source_url: str, headers: dict, candidates: dict) -> dict:
+        """逐 param-group 试探 total，返回命中最多的**单组** {param:[ids]}；全 0 则 {} 兜底（parse 再按 location 过滤）。"""
+        best: dict = {}
+        best_total = 0
+        for param, ids in candidates.items():
+            if not ids:
+                continue
+            try:
+                resp = httpx.post(
+                    source_url, json={"appliedFacets": {param: ids}, "limit": 1, "offset": 0, "searchText": ""},
+                    headers=headers, timeout=self.timeout)
+                total = resp.json().get("total") or 0
+            except (httpx.HTTPError, ValueError, TypeError):
+                total = 0
+            if total > best_total:
+                best, best_total = {param: ids}, total
+        return best
 
     def parse(self, html: str) -> List[RawJob]:
         try:
