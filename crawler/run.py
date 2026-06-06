@@ -23,6 +23,8 @@ from adapters.bytedance import BytedanceAdapter, BytedanceCampusAdapter
 from adapters.feishu import NioAdapter, XpengAdapter, HorizonAdapter, XiaomiAdapter
 from adapters.greenhouse import GreenhouseAdapter
 from adapters.lever import LeverAdapter
+from adapters.ashby import AshbyAdapter
+from adapters.smartrecruiters import SmartRecruitersAdapter
 from adapters.china_ats import MokaAdapter, BeisenAdapter, CompanySpaAdapter
 
 
@@ -43,6 +45,8 @@ ADAPTERS = {
     # 外企 ATS（通用适配器，按公司加 sources 行；parse 已裁到在华岗位）
     "greenhouse": GreenhouseAdapter(),
     "lever": LeverAdapter(),
+    "ashby": AshbyAdapter(),
+    "smartrecruiters": SmartRecruitersAdapter(),  # 大量在华跨国企业用此 ATS（外企100强主力）
     # 中国本土 ATS / 企业官网 SPA（通用适配器，按公司加 sources 行；host 从 source_url 动态解析）
     "moka": MokaAdapter(),
     "beisen": BeisenAdapter(),

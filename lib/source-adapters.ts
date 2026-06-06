@@ -35,6 +35,16 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填公司名 + Lever 招聘地址即可，无需写代码，次日爬虫自动抓",
   },
   {
+    value: "ashby",
+    label: "Ashby（通用 ATS）",
+    hint: "填公司名 + Ashby 看板地址（api.ashbyhq.com/posting-api/job-board/{slug}），无需写代码",
+  },
+  {
+    value: "smartrecruiters",
+    label: "SmartRecruiters（通用 ATS · 外企主力）",
+    hint: "填公司名 + 地址（api.smartrecruiters.com/v1/companies/{slug}/postings），在华跨国企业常用",
+  },
+  {
     value: "moka",
     label: "Moka（通用 ATS · 本土）",
     hint: "填公司名 + Moka 招聘页地址（{公司}.mokahr.com / app.mokahr.com），浏览器拦截抓取",

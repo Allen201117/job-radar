@@ -5,6 +5,8 @@ import unittest
 import normalizer
 from adapters.greenhouse import GreenhouseAdapter
 from adapters.lever import LeverAdapter
+from adapters.ashby import AshbyAdapter
+from adapters.smartrecruiters import SmartRecruitersAdapter
 from adapters.apple import AppleChinaAdapter
 
 
@@ -122,6 +124,89 @@ class PublishDateTest(unittest.TestCase):
         self.assertEqual(job.posted_at, "2023-11-14")
         job2 = BytedanceAdapter()._map({"id": "2", "title": "x"})  # 无时间字段 → None
         self.assertIsNone(job2.posted_at)
+
+
+class AshbyParseTest(unittest.TestCase):
+    def test_keeps_china_and_flexible_remote(self):
+        payload = json.dumps({"jobs": [
+            {"title": "AI Engineer", "location": "Shanghai, China",
+             "jobUrl": "https://jobs.ashbyhq.com/notion/abc", "employmentType": "FullTime",
+             "publishedAt": "2026-05-01T00:00:00Z", "descriptionPlain": "do stuff", "isListed": True},
+            {"title": "Remote PM", "location": "Remote",
+             "jobUrl": "https://jobs.ashbyhq.com/notion/rem"},                  # 保留
+            {"title": "US SWE", "location": "New York",
+             "jobUrl": "https://jobs.ashbyhq.com/notion/us"},                   # 海外 -> 过滤
+            {"title": "Hidden", "location": "Beijing", "isListed": False,
+             "jobUrl": "https://jobs.ashbyhq.com/notion/hid"},                  # 未挂出 -> 过滤
+            {"title": "No Url", "location": "Beijing"},                         # 无 jobUrl -> 过滤
+        ]})
+        jobs = AshbyAdapter().parse(payload)
+        titles = {j.title for j in jobs}
+        self.assertEqual(titles, {"AI Engineer", "Remote PM"})
+        sh = next(j for j in jobs if j.title == "AI Engineer")
+        self.assertEqual(sh.jd_url, "https://jobs.ashbyhq.com/notion/abc")
+        self.assertEqual(sh.posted_at, "2026-05-01")
+        self.assertEqual(sh.company, "")  # 由 sources.company 兜底
+
+    def test_address_fallback_location(self):
+        payload = json.dumps({"jobs": [
+            {"title": "Eng", "jobUrl": "https://jobs.ashbyhq.com/x/1",
+             "address": {"postalAddress": {"addressLocality": "Beijing", "addressCountry": "China"}}},
+        ]})
+        jobs = AshbyAdapter().parse(payload)
+        self.assertEqual(len(jobs), 1)
+        self.assertIn("Beijing", jobs[0].location)
+
+    def test_bad_json(self):
+        self.assertEqual(AshbyAdapter().parse("nope"), [])
+
+
+class SmartRecruitersParseTest(unittest.TestCase):
+    def test_keeps_china_builds_stable_url(self):
+        payload = json.dumps({"content": [
+            {"name": "Data Scientist", "id": "744000",
+             "company": {"identifier": "Bosch"},
+             "location": {"city": "Shanghai", "country": "China", "remote": False},
+             "releasedDate": "2026-05-10T00:00:00.000Z"},
+            {"name": "Remote Role", "id": "744001",
+             "company": {"identifier": "Bosch"},
+             "location": {"remote": True, "country": "China"}},                 # remote 不绑海外 -> 保留
+            {"name": "Germany Role", "id": "744002",
+             "company": {"identifier": "Bosch"},
+             "location": {"city": "Stuttgart", "country": "Germany"}},          # 海外 -> 过滤
+            {"name": "No Identifier", "id": "744003",
+             "location": {"city": "Beijing", "country": "China"}},              # 无 identifier -> 过滤
+        ]})
+        jobs = SmartRecruitersAdapter().parse(payload)
+        titles = {j.title for j in jobs}
+        self.assertEqual(titles, {"Data Scientist", "Remote Role"})
+        ds = next(j for j in jobs if j.title == "Data Scientist")
+        self.assertEqual(ds.jd_url, "https://jobs.smartrecruiters.com/Bosch/744000")
+        self.assertEqual(ds.posted_at, "2026-05-10")
+        self.assertEqual(ds.company, "")
+
+    def test_bad_json(self):
+        self.assertEqual(SmartRecruitersAdapter().parse("[]"), [])
+
+
+class SlugifyTest(unittest.TestCase):
+    def test_variants(self):
+        import probe
+        self.assertIn("procterandgamble", probe.slugify("Procter & Gamble"))
+        self.assertIn("schneiderelectric", probe.slugify("Schneider Electric"))
+        self.assertIn("schneider-electric", probe.slugify("Schneider Electric"))
+        # 去公司后缀噪声
+        self.assertIn("acme", probe.slugify("Acme Inc"))
+        # 纯中文名无拉丁 slug
+        self.assertEqual(probe.slugify("字节跳动"), [])
+
+    def test_discover_candidates_only_single_host_ats(self):
+        import probe
+        cands = probe.build_discover_candidates()
+        self.assertTrue(len(cands) > 0)
+        self.assertTrue(all(c["adapter"] in probe._DISCOVER_PLATFORMS for c in cands))
+        # URL 去重
+        self.assertEqual(len({c["url"] for c in cands}), len(cands))
 
 
 if __name__ == "__main__":
