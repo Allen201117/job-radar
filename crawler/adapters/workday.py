@@ -145,8 +145,10 @@ class WorkdayAdapter(BaseAdapter):
             if not title or not ep:
                 continue
             location = self._loc_from_path(ep) or (p.get("locationsText") or None)
-            # facet 已服务端过滤则全部在华；否则按 location 文本兜底（host 不同租户 facet 名异常时）
-            if not china_filtered and not normalizer.keep_for_china_radar(location):
+            # facet 已服务端过滤则全部在华；否则按 location 严格判定在华（大陆/港/澳）。
+            # 外企 Workday 的 "Remote" 多指母国远程而非中国，故用 is_china_location 而非 keep_for_china_radar，
+            # 避免无 facet 时泄漏非华岗（如 "Remote - Delhi"）。
+            if not china_filtered and not normalizer.is_china_location(location):
                 continue
             jd_url = f"{host}/{site}{ep}"
             out.append(RawJob(
