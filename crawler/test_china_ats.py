@@ -96,10 +96,10 @@ class TestBeisenAdapter(unittest.TestCase):
         self.assertEqual(kept["财务分析师"].jd_url, "https://group.zhiye.com/job/P1")
         self.assertEqual(kept["财务分析师"].location, "北京")
 
-    def test_jobad_pagelist_builds_zwxq_url(self):
+    def test_jobad_pagelist_builds_detail_url(self):
         # 北森真实 GetJobAdPageList 形态：顶层 Data 列表，JobAdName/Id/LocNames，无 per-job URL。
-        # 详情路由 = {origin}{portal_prefix}/zwxq?jobAdId={Id}（live 验证 chinalife 渲染对应岗位）。
-        self.a._portal_prefix = "/custom"
+        # 详情路由 query 恒为 ?jobAdId={Id}，path 由 fetch 时逐租户探测得到（此处模拟已探测结果）。
+        self.a._detail_base = "https://group.zhiye.com/custom/zwxq"
         sample = {"Code": 0, "Data": [
             {"Id": "uuid-a", "JobAdId": 270940723, "JobAdName": "综合管理实习生", "LocNames": "上海市"},
             {"Id": "uuid-b", "JobAdName": "财务实习生", "LocNames": "黑龙江省·哈尔滨市"},
@@ -113,13 +113,20 @@ class TestBeisenAdapter(unittest.TestCase):
         self.assertEqual(by["财务实习生"].jd_url,
                          "https://group.zhiye.com/custom/zwxq?jobAdId=uuid-b")
 
-    def test_zwxq_url_root_portal(self):
-        # 列表页在根门户（如 /summer）→ portal_prefix 为空 → 详情 {origin}/zwxq?jobAdId=
-        self.a._portal_prefix = ""
+    def test_other_tenant_detail_route(self):
+        # 不同租户详情页名不同（如横店 /campus/detail）：用探测到的 _detail_base 拼。
+        self.a._detail_base = "https://group.zhiye.com/campus/detail"
         sample = {"Data": [{"Id": "x9", "JobAdName": "投行分析师", "LocNames": "北京"}]}
         jobs = self.a.parse(json.dumps({"_intercepted": [sample]}))
         self.assertEqual(len(jobs), 1)
-        self.assertEqual(jobs[0].jd_url, "https://group.zhiye.com/zwxq?jobAdId=x9")
+        self.assertEqual(jobs[0].jd_url, "https://group.zhiye.com/campus/detail?jobAdId=x9")
+
+    def test_no_detail_route_drops_jobs(self):
+        # 探不到详情路由（_detail_base=None）→ 不拼坏链，丢弃无接口链接的行。
+        self.a._detail_base = None
+        sample = {"Data": [{"Id": "x9", "JobAdName": "投行分析师", "LocNames": "北京"}]}
+        jobs = self.a.parse(json.dumps({"_intercepted": [sample]}))
+        self.assertEqual(jobs, [])
 
 
 class TestCompanySpaAdapter(unittest.TestCase):
