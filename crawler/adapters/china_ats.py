@@ -127,32 +127,114 @@ class MokaAdapter(ChinaSpaAdapter):
     detail_template = "https://{host}/jobs/{id}"
 
 
+# 北森详情路由按租户缓存（host → 详情页 base，如 https://chinalife.zhiye.com/custom/zwxq）。
+# 启动时从 crawler/beisen_routes.json 预载（onboarding/probe 探测后落盘提交）→ 每日爬取直接读，不再现场探测。
+# 未命中缓存的 host 才现场 render-verify 探测一次（慢，仅新源），结果写回内存缓存。
+import json as _json
+import os as _os
+
+_BEISEN_ROUTES_FILE = _os.path.join(_os.path.dirname(__file__), "..", "beisen_routes.json")
+
+
+def _load_beisen_routes() -> dict:
+    try:
+        with open(_BEISEN_ROUTES_FILE, encoding="utf-8") as f:
+            return {k: v for k, v in _json.load(f).items()}
+    except (OSError, ValueError):
+        return {}
+
+
+_BEISEN_ROUTE_CACHE: dict = _load_beisen_routes()
+# 北森详情页常见路由名（zwxq=职位详情拼音；不同租户配置不同：chinalife=zwxq、横店/杰瑞=detail…）
+_BEISEN_DETAIL_NAMES = ("zwxq", "detail", "jobdetail", "positiondetail", "jobDetail")
+
+
 class BeisenAdapter(ChinaSpaAdapter):
     """北森招聘（*.zhiye.com / *.italent.cn / 自有 careers 域名，由北森承载）。
 
     source_url 填某公司北森招聘页（如 https://chinalife.zhiye.com/custom/intern）。
-    北森列表接口 GetJobAdPageList 不含 per-job URL；详情页为北森标准路由
-    `{origin}{portal_prefix}/zwxq?jobAdId={Id}`（zwxq=职位详情，Id 为岗位 UUID）。
-    已 live 验证（chinalife）：构造 URL 渲染对应岗位且 job-specific（A 在、B 不在）。
-    portal_prefix 由列表页路径去掉最后一段（section）推导，覆盖 /custom/intern、/summer 等门户形态。
+    北森列表接口 GetJobAdPageList 不含 per-job URL；详情页 query 恒为 `?jobAdId={Id}`，但 **path 因租户而异**
+    （chinalife=/custom/zwxq、横店=/campus/detail…）。因此 fetch 时**逐租户自动探测**详情路由：
+    用首个岗位 render-verify 候选 path（替换末段 / 追加 × 常见详情页名），命中「渲染该岗且 job-specific」
+    者即为真路由，按 host 缓存。探不到则不拼 URL（丢弃，杜绝坏链）。
     """
 
     name = "beisen"
     intercept_matches = ("GetJobAdPageList", "JobAd", "Position", "position", "Recruit", "recruit", "/api/")
-    detail_template = ""  # 用 _resolve_url 动态构造北森标准详情路由（见下）
+    detail_template = ""
+
+    def fetch(self, source_url: str) -> str:
+        list_json = super().fetch(source_url)  # 浏览器①：拦截 GetJobAdPageList 等列表接口
+        self._detail_base = _BEISEN_ROUTE_CACHE.get(self._host)
+        if self._detail_base is None and self._host not in _BEISEN_ROUTE_CACHE:
+            self._detail_base = self._discover_detail_route(source_url, list_json)
+            _BEISEN_ROUTE_CACHE[self._host] = self._detail_base  # 命中或 None 都缓存，避免重复探测
+        return list_json
+
+    def _discover_detail_route(self, source_url: str, list_json: str):
+        """用首个岗位 render-verify 候选详情 path，返回命中的完整 detail base（origin+path，无 query）或 None。"""
+        try:
+            data = __import__("json").loads(list_json)
+        except (ValueError, TypeError):
+            return None
+        posts = []
+        for resp in data.get("_intercepted", []) or []:
+            posts.extend(pp for pp in self._extract_posts(resp) if isinstance(pp, dict))
+        jobs = [(_first_str(p, ("Id", "id", "jobAdId", "JobAdId")),
+                 _first_str(p, ("JobAdName", "title", "name", "jobTitle"))) for p in posts]
+        jobs = [(i, n) for i, n in jobs if i and n]
+        if not jobs:
+            return None
+        a_id, a_name = jobs[0]
+        b_name = next((n for i, n in jobs[1:] if n and n != a_name), None)
+
+        parsed = urlparse(source_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        segs = [s for s in (parsed.path or "").split("/") if s]
+        bases = []
+        if segs:
+            bases.append("/" + "/".join(segs[:-1]))  # 替换末段（chinalife /custom/intern → /custom）
+        bases.append("/" + "/".join(segs))            # 追加（横店 /campus/jobs → /campus/jobs?... 否则 /campus/detail）
+        # 去重 + 生成候选 path
+        seen, cand_paths = set(), []
+        for base in bases:
+            for nm in _BEISEN_DETAIL_NAMES:
+                path = (base.rstrip("/") + "/" + nm) if base.strip("/") else "/" + nm
+                if path not in seen:
+                    seen.add(path)
+                    cand_paths.append(path)
+
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_context(
+                user_agent=PlaywrightAdapter.user_agent, locale="zh-CN").new_page()
+            try:
+                for path in cand_paths:
+                    url = f"{origin}{path}?jobAdId={a_id}"
+                    try:
+                        page.goto(url, wait_until="domcontentloaded", timeout=12000)
+                        page.wait_for_timeout(2500)
+                        content = page.content()
+                        if a_name in content and not (b_name and b_name in content):
+                            return f"{origin}{path}"  # 真详情路由（渲染该岗且 job-specific）
+                    except Exception:
+                        continue
+            finally:
+                browser.close()
+        return None
 
     def _resolve_url(self, post: dict, job_id: str) -> str:
-        # 1) 接口若直接给了 per-job 链接，仍优先用（最可靠）。
+        # 1) 接口若直接给了 per-job 链接，优先用（最可靠）。
         raw = super()._resolve_url(post, job_id)
         if raw:
             return raw
-        # 2) 北森标准详情路由：{origin}{portal_prefix}/zwxq?jobAdId={UUID}。优先用 Id（UUID）。
+        # 2) 用本租户探测到的详情路由：{detail_base}?jobAdId={UUID}。探不到则不拼（丢弃）。
+        detail_base = getattr(self, "_detail_base", None)
         uuid = _first_str(post, ("Id", "id", "jobAdId", "JobAdId"))
-        if not uuid:
+        if not detail_base or not uuid:
             return ""
-        origin = getattr(self, "_origin", "")
-        prefix = getattr(self, "_portal_prefix", "")
-        return f"{origin}{prefix}/zwxq?jobAdId={uuid}"
+        return f"{detail_base}?jobAdId={uuid}"
 
 
 class CompanySpaAdapter(ChinaSpaAdapter):
