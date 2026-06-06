@@ -7,7 +7,7 @@ from adapters.greenhouse import GreenhouseAdapter
 from adapters.lever import LeverAdapter
 from adapters.ashby import AshbyAdapter
 from adapters.smartrecruiters import SmartRecruitersAdapter
-from adapters.workday import WorkdayAdapter
+from adapters.workday import WorkdayAdapter, _is_china_facet
 from adapters.apple import AppleChinaAdapter
 
 
@@ -223,19 +223,34 @@ class WorkdayParseTest(unittest.TestCase):
         jobs = WorkdayAdapter().parse(payload)
         self.assertEqual({j.title for j in jobs}, {"Shanghai Role"})
 
-    def test_china_facets_finds_country_excludes_city(self):
+    def test_china_facet_candidates_groups_by_param(self):
+        # 按 param 分组收集大中华区叶子；排除非华(US)与台湾；城市级 'China, Beijing' 保留（归 locations 组）
         facets = [{"facetParameter": "locationMainGroup", "values": [
             {"facetParameter": "locationHierarchy1", "descriptor": "Locations", "values": [
                 {"id": "cn-id", "descriptor": "China"},
+                {"id": "hk-id", "descriptor": "Hong Kong"},
                 {"id": "us-id", "descriptor": "United States"},
                 {"id": "tw-id", "descriptor": "Taiwan"},
             ]},
             {"facetParameter": "locations", "descriptor": "Sites", "values": [
-                {"id": "city-id", "descriptor": "China, Beijing"},  # 城市级，应被排除
+                {"id": "city-id", "descriptor": "China, Beijing"},
+                {"id": "tw-city", "descriptor": "Taiwan, Taipei"},  # 台湾城市级，排除
             ]},
         ]}]
-        found = WorkdayAdapter._china_facets(facets)
-        self.assertEqual(found, {"locationHierarchy1": ["cn-id"]})
+        groups = WorkdayAdapter._china_facet_candidates(facets)
+        self.assertEqual(groups, {
+            "locationHierarchy1": ["cn-id", "hk-id"],
+            "locations": ["city-id"],
+        })
+
+    def test_china_facet_excludes_taiwan_includes_hk_macau(self):
+        self.assertTrue(_is_china_facet("China"))
+        self.assertTrue(_is_china_facet("China, Beijing"))
+        self.assertTrue(_is_china_facet("Hong Kong"))
+        self.assertTrue(_is_china_facet("Macau"))
+        self.assertFalse(_is_china_facet("Taiwan"))
+        self.assertFalse(_is_china_facet("United States"))
+        self.assertFalse(_is_china_facet(""))
 
     def test_bad_json(self):
         self.assertEqual(WorkdayAdapter().parse("nope"), [])
