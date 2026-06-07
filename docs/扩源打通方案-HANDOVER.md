@@ -16,7 +16,14 @@
 - 北森(beisen)：`miniso.zhiye.com`(名创优品) `gongniu.zhiye.com`(公牛) `360campus.zhiye.com`(360) `xdf.zhiye.com`(新东方) `cnnc.zhiye.com`(中核·央企) `shenyejituan.zhiye.com`(深业·国企) `coamc.zhiye.com`(中国信达·国企) `siic.zhiye.com`(上实·国企)。列表页试 `/campus/jobs`、`/social/jobs`、`/campus`；探活方式见 §6。央企国企记 `segment='soe'`。
 - 飞书(feishu)：`/s/分享页`入口的（月之暗面 `moonshot`、小马智行 `ponyai`、Momenta `momenta`）—— 标准 `/index/position` 拦不到，需给 feishu 适配器补 `/s/` 入口处理（小代码项）。
 
+**🧭 北森(zhiye) 租户三类（实测，决定能否当场打通）**：
+- **A 自动加载型**（列表页直接出岗，`/social/jobs`或`/campus/jobs` 触发 `GetJobAdPageList`）：✅ 现适配器直接通。例：迈瑞/汇川/长安/名创/泡泡玛特/chinalife。新增=填列表URL探活（偶发时序失败，重试即可）。
+- **B 筛选表单优先型**（默认页是空筛选器「请筛选工作地点及职位类型」，要先**选筛选项**才出 `GetJobAdPageList`）：⚠️当前抓不到。例：新东方(`xdf.zhiye.com/social`)。**注意：单纯点「搜索职位」按钮无效，且会把 A 型租户的已加载列表清空（实测把迈瑞 80→0）——已回退该尝试，勿重试**。正解：需 playwright 程序化「选一个地点/类型筛选项 → 再点搜索」，且只对 B 型生效（要先判断是否 A 型，避免破坏 A）。
+- **C 真老版 SSR 型**（无 `GetJobAdPageList`，详情 `?jobId={数字}` + `details2021/overseadetail/szzwxq` 路径，根页无 job API）：⚠️需渲染 HTML 解析。例：公牛/中核/深业/信达/上实/BOE校招。
+- 上面 §「立即可探活」里的 8 个 host 多属 B/C 型（名创=A 已收，其余待 B/C 专项）。
+
 **🔨 待写代码的平台（高价值）**：
+0. **北森 B 型（筛选优先）支持**：fetch 先检测列表是否自动出岗；若否且页面是筛选表单，则程序化选首个地点/类型项再触发搜索。务必不影响 A 型（A 型禁止点搜索）。
 1. **大易 dayee.com 适配器**：隆基绿能(签约大易)、TCL、比亚迪(job.byd.com)、美的(careers.midea.com) 等 500 强用大易/自建门户。先抓包定位大易公开岗位 JSON 接口，建 `adapters/dayee.py`。
 2. **北森老版 SSR / 异构**：联影(`united-imaging.zhiye.com` 无 GetJobAdPageList)、蒙牛(`mengniu.zhiye.com`)、BOE(校招 `boe.zhiye.com/details2021?adId=` 老版、社招已迁 `career.boe.com`)。需渲染 HTML 解析路径或 career.* 自建站走 company_spa。
 3. **自建大厂 company_spa**：华为 career.huawei.com、阿里 talent.alibaba.com、比亚迪 job.byd.com、美的 careers.midea.com、OPPO careers.oppo.com、商汤 sensetime.com、哈啰 careers.hellobike.com 等（逐家）。
