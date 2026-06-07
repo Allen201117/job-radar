@@ -55,6 +55,11 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填公司名 + 接口地址（{tenant}.eightfold.ai/api/apply/v2/jobs?domain={domain}），服务端按 location 收窄在华",
   },
   {
+    value: "oracle",
+    label: "Oracle 招聘云（通用 ATS · 外企自建门户主力）",
+    hint: "填公司名 + CE 接口（{tenant}.fa.{region}.oraclecloud.com/hcmRestApi/resources/latest/recruitingCEJobRequisitions?finder=findReqs;siteNumber=CX_xxxx），服务端按 locationsFacet 过滤在华",
+  },
+  {
     value: "moka",
     label: "Moka（通用 ATS · 本土）",
     hint: "填公司名 + Moka 招聘页地址（{公司}.mokahr.com / app.mokahr.com），浏览器拦截抓取",
