@@ -70,6 +70,11 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填公司名 + 北森招聘页地址（*.zhiye.com / *.italent.cn / 自有 careers 域名），浏览器拦截抓取",
   },
   {
+    value: "feishu",
+    label: "飞书招聘（通用 ATS · 本土，国内版 Workday）",
+    hint: "填公司名 + 飞书招聘页地址（{公司}.jobs.feishu.cn/index/position），浏览器拦截 /api/v1/search/job/posts",
+  },
+  {
     value: "company_spa",
     label: "企业官网 SPA（通用 · 本土长尾）",
     hint: "填公司名 + 官网招聘页地址，仅放行接口里带真实岗位链接的行，加源零代码",

@@ -20,7 +20,7 @@ from adapters.haier import HaierAdapter
 from adapters.siemens import SiemensAdapter
 from adapters.tencent import TencentAdapter
 from adapters.bytedance import BytedanceAdapter, BytedanceCampusAdapter
-from adapters.feishu import NioAdapter, XpengAdapter, HorizonAdapter, XiaomiAdapter
+from adapters.feishu import NioAdapter, XpengAdapter, HorizonAdapter, XiaomiAdapter, FeishuGenericAdapter
 from adapters.greenhouse import GreenhouseAdapter
 from adapters.lever import LeverAdapter
 from adapters.ashby import AshbyAdapter
@@ -57,6 +57,7 @@ ADAPTERS = {
     "moka": MokaAdapter(),
     "beisen": BeisenAdapter(),
     "company_spa": CompanySpaAdapter(),
+    "feishu": FeishuGenericAdapter(),  # 飞书招聘数据驱动通用层（国内版 Workday）：host 从 source_url 解析
 }
 
 # 中国本土公司源（每日后台爬取高优）：本土覆盖优先级 > 外企，排在外企 ATS 前先抓。
@@ -64,7 +65,7 @@ ADAPTERS = {
 DOMESTIC_ADAPTERS = {
     "baidu", "jd", "bytedance", "bytedance_campus", "tencent",
     "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier",
-    "moka", "beisen", "company_spa",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
+    "moka", "beisen", "company_spa", "feishu",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
 }
 
 
