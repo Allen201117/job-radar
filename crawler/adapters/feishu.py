@@ -5,6 +5,7 @@
 详情页 https://{host}/index/position/{id}/detail。一套适配覆盖蔚来/小鹏/地平线/小米。
 """
 from typing import Optional
+from urllib.parse import urlparse
 
 import normalizer
 from .base import RawJob
@@ -53,6 +54,33 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
             job_type=job_type or None, jd_url=jd_url, apply_url=jd_url,
             summary=summary, posted_at=normalizer.pick_publish_date(post),
         )
+
+
+class FeishuGenericAdapter(FeishuRecruitAdapter):
+    """飞书招聘**数据驱动**通用适配器（国内版 Workday）：host 从 source_url 动态解析，不再每家硬编码子类。
+    一套覆盖所有用飞书招聘的公司（造车新势力 / 大量互联网与科技中企）。
+    onboard = 加一行 sources，source_url 填该公司飞书招聘页（如 https://{tenant}.jobs.feishu.cn/index/position）。
+    company 由 sources.company 兜底；岗位接口/字段/详情页格式复用 FeishuRecruitAdapter。"""
+    name = "feishu"
+    company_name = ""  # 由 sources.company 兜底
+
+    def __init__(self):
+        # 不在 init 固定 host —— 留到 fetch 时按 source_url 解析（见 _bind_host）。
+        self.official_hosts = ()
+        self.detail_template = ""
+        self.list_urls = []
+
+    def _bind_host(self, source_url: str):
+        host = urlparse(source_url).netloc
+        self.official_hosts = (host,)
+        self.detail_template = f"https://{host}/index/position/{{id}}/detail"
+        # 优先抓岗位列表页（触发 /api/v1/search/job/posts），兜底落到 source_url 本身。
+        self.list_urls = [f"https://{host}/index/position", source_url]
+        return host
+
+    def fetch(self, source_url: str) -> str:
+        self._bind_host(source_url)
+        return super().fetch(source_url)
 
 
 class NioAdapter(FeishuRecruitAdapter):

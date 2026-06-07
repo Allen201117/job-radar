@@ -161,5 +161,32 @@ class TestCompanySpaAdapter(unittest.TestCase):
         self.assertEqual(self.a.intercept_matches, ())  # 拦截所有 JSON
 
 
+class FeishuGenericTest(unittest.TestCase):
+    """飞书泛化适配器：host 从 source_url 解析（不再每家硬编码子类）。"""
+
+    def test_host_bound_from_source_url(self):
+        from adapters.feishu import FeishuGenericAdapter
+        a = FeishuGenericAdapter()
+        self.assertEqual(a.detail_template, "")  # init 不固定 host
+        host = a._bind_host("https://lixiang.jobs.feishu.cn/index/position")
+        self.assertEqual(host, "lixiang.jobs.feishu.cn")
+        self.assertEqual(a.official_hosts, ("lixiang.jobs.feishu.cn",))
+        self.assertEqual(
+            a.detail_template, "https://lixiang.jobs.feishu.cn/index/position/{id}/detail")
+        self.assertIn("https://lixiang.jobs.feishu.cn/index/position", a.list_urls)
+
+    def test_map_uses_bound_template(self):
+        from adapters.feishu import FeishuGenericAdapter
+        a = FeishuGenericAdapter()
+        a._bind_host("https://dewu.jobs.feishu.cn/index/position")
+        job = a._map({"id": "777", "title": "算法工程师",
+                      "city_info": {"name": "上海"}, "job_category": {"name": "技术"}})
+        self.assertEqual(job.title, "算法工程师")
+        self.assertEqual(job.location, "上海")
+        self.assertEqual(job.company, "")  # 由 sources.company 兜底
+        self.assertEqual(
+            job.jd_url, "https://dewu.jobs.feishu.cn/index/position/777/detail")
+
+
 if __name__ == "__main__":
     unittest.main()
