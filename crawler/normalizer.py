@@ -284,7 +284,12 @@ def is_china_location(location: Optional[str]) -> bool:
     text = location.lower()
     if any(marker in text for marker in _CJK_MARKERS):
         return True
-    return bool(_LATIN_MARKER_RE.search(text))
+    if _LATIN_MARKER_RE.search(text):
+        return True
+    # 归一逗号/连字符/多空白为单空格，让 "Hong, Kong"、"Hong-Kong"（路径拆分产物）也能被
+    # "hong kong" 词边界正则命中。不影响 'Humacao' 误判（单词无分隔符，词边界仍拦得住）。
+    norm = re.sub(r"[\s,\-/]+", " ", text)
+    return bool(_LATIN_MARKER_RE.search(norm))
 
 
 REMOTE_MARKERS = ("remote", "anywhere", "distributed", "work from home", "wfh", "远程", "远端")

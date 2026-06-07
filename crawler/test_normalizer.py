@@ -167,6 +167,12 @@ class IsChinaLocationTests(unittest.TestCase):
                     "Macau", "Suzhou", "Xi'an", "China - Remote", "Greater China"):
             self.assertTrue(normalizer.is_china_location(loc), loc)
 
+    def test_comma_and_hyphen_split_hong_kong(self):
+        # Workday externalPath 把 'Hong-Kong' 拆成 'Hong, Kong'/'Hong Kong'，逗号/连字符不应破坏识别
+        for loc in ("Hong, Kong", "Hong-Kong", "Asia, Pacific, Hong, Kong, Mongkok",
+                    "Asia-Pacific-China-Beijing"):
+            self.assertTrue(normalizer.is_china_location(loc), loc)
+
     def test_substring_false_positives_excluded(self):
         # 'macao'(澳门) 不应命中 'Humacao'（波多黎各）；非华地点一律 False
         for loc in ("USA, PR, Humacao", "Mumbai, India", "Remote - Delhi",

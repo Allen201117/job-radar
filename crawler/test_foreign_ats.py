@@ -223,6 +223,24 @@ class WorkdayParseTest(unittest.TestCase):
         jobs = WorkdayAdapter().parse(payload)
         self.assertEqual({j.title for j in jobs}, {"Shanghai Role"})
 
+    def test_new_shape_trusted_kept_text_filtered_deduped(self):
+        # 新形态：trusted_posts(facet 已过滤)全收；text_posts(searchText)按 location 过滤；按 jd_url 去重
+        payload = json.dumps({
+            "_host": "https://gehc.wd5.myworkdayjobs.com", "_site": "GEHC_ExternalSite",
+            "trusted_posts": [
+                {"title": "HK Sales", "externalPath": "/job/Hong-Kong/HK-Sales_R1"},  # 逗号拆分地点也保留
+            ],
+            "text_posts": [
+                {"title": "Shanghai PM", "externalPath": "/job/Shanghai/Shanghai-PM_R2"},   # 在华 → 留
+                {"title": "Haifa Eng", "externalPath": "/job/Haifa/Haifa-Eng_R3"},          # 非华 → 丢
+                {"title": "HK Sales", "externalPath": "/job/Hong-Kong/HK-Sales_R1"},        # 与 trusted 重复 → 去重
+            ],
+        })
+        jobs = WorkdayAdapter().parse(payload)
+        self.assertEqual({j.title for j in jobs}, {"HK Sales", "Shanghai PM"})
+        # jd_url 唯一（HK 只出现一次）
+        self.assertEqual(len({j.jd_url for j in jobs}), 2)
+
     def test_china_facet_candidates_groups_by_param(self):
         # 按 param 分组收集大中华区叶子；排除非华(US)与台湾；城市级 'China, Beijing' 保留（归 locations 组）
         facets = [{"facetParameter": "locationMainGroup", "values": [
