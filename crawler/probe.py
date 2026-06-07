@@ -161,6 +161,18 @@ CANDIDATES += [
 # 本土 moka/beisen 是「每公司独立子域」，host 无法由公司名稳定推断，仍需在 _DOMESTIC 填真实 URL。
 _DISCOVER_PLATFORMS = ["greenhouse", "lever", "ashby", "smartrecruiters"]
 
+# eightfold 自动猜：{tenant}.eightfold.ai/api/apply/v2/jobs?domain={domain}
+# tenant=compact slug；domain 默认 {slug}.com，少数公司域名特殊用 _EF_DOMAINS 覆盖。
+_EF_DOMAINS = {
+    "stmicroelectronics": "stmicroelectronics.com", "hsbc": "hsbc.com",
+    "schneiderelectric": "se.com", "procterandgamble": "pg.com", "loreal": "loreal.com",
+    "jpmorgan": "jpmorganchase.com", "texasinstruments": "ti.com",
+}
+
+
+def _eightfold_url(tenant: str, domain: str) -> str:
+    return f"https://{tenant}.eightfold.ai/api/apply/v2/jobs?domain={domain}"
+
 
 def slugify(name: str):
     """公司名 → 若干 slug 变体（紧凑 / 连字符 / 去常见后缀）。仅取拉丁部分（slug 不含中文）。"""
@@ -214,21 +226,68 @@ _DISCOVER_NAMES = [
     "DHL", "Maersk", "FedEx", "UPS", "Airbus",
     # 数据中心 / 通信
     "Equinix", "Cloudflare", "Cisco", "Ericsson", "Nokia",
+    # —— 扩：外企100强补全（各行业龙头，机器猜 slug/eightfold + live 验证）——
+    # 医药 / 医疗器械 / 生物
+    "Eli Lilly", "Bristol Myers Squibb", "Takeda", "Bayer", "Boehringer Ingelheim",
+    "Abbott", "Abbvie", "Amgen", "Gilead", "Moderna", "BD Becton Dickinson",
+    "Stryker", "Boston Scientific", "Thermo Fisher", "Danaher", "Baxter", "Zoetis",
+    # 半导体 / 电子 / 硬件
+    "Broadcom", "Marvell", "NXP", "Infineon", "Analog Devices", "Lam Research",
+    "KLA", "Skyworks", "Western Digital", "Seagate", "Keysight", "Arista Networks",
+    "Dell Technologies", "HP", "HPE", "Logitech",
+    # 汽车 / 零部件
+    "Ford", "General Motors", "Stellantis", "Aptiv", "BorgWarner", "Magna",
+    "ZF", "Michelin", "Goodyear", "Cummins", "PACCAR", "Garrett Motion",
+    # 工业 / 能源 / 化工
+    "General Electric", "GE Vernova", "GE HealthCare", "Johnson Controls",
+    "Rockwell Automation", "Parker Hannifin", "Eaton", "Dover", "Illinois Tool Works",
+    "Trane Technologies", "Carrier", "Otis", "Air Products", "Linde", "Dow",
+    "DuPont", "Celanese", "Ecolab", "PPG", "Sherwin Williams", "Corning",
+    "TE Connectivity", "Amphenol", "Schlumberger", "Halliburton", "Baker Hughes",
+    # 消费 / 零售 / 食品 / 餐饮 / 奢侈
+    "Mondelez", "Mars", "Kraft Heinz", "Kellanova", "General Mills", "Colgate Palmolive",
+    "Kimberly Clark", "Mattel", "Hasbro", "VF Corporation", "Ralph Lauren", "Tapestry",
+    "Levi Strauss", "Crocs", "Yum Brands", "Yum China", "Domino's", "Marriott",
+    "Hilton", "Hyatt", "Booking Holdings", "Expedia",
+    # 金融 / 支付 / 保险 / 评级
+    "Goldman Sachs", "Morgan Stanley", "Bank of America", "Wells Fargo", "American Express",
+    "BlackRock", "Blackstone", "KKR", "Apollo", "S&P Global", "Moody's", "MSCI",
+    "Nasdaq", "CME Group", "Marsh McLennan", "Aon", "Prudential Financial", "MetLife",
+    "Chubb", "Manulife", "Sun Life", "PayPal", "Block", "Fiserv", "Fidelity",
+    # 软件 / 云 / SaaS / 数据 / AI / 安全
+    "Workday", "Autodesk", "Intuit", "VMware", "Palo Alto Networks", "CrowdStrike",
+    "Zscaler", "Okta", "MongoDB", "Confluent", "Elastic", "GitHub", "DocuSign",
+    "Twilio", "Zoom", "Unity", "Roblox", "Pinterest", "Snap", "DoorDash", "Instacart",
+    "Coinbase", "Robinhood", "Affirm", "Plaid", "Brex", "Ramp", "Rippling", "Figma",
+    # 物流 / 航运 / 航空 / 工程
+    "DSV", "Kuehne Nagel", "Expeditors", "CH Robinson", "Flexport", "Boeing",
+    "GE Aerospace", "Honeywell Aerospace", "Raytheon", "Collins Aerospace",
+    # 咨询 / 专业服务
+    "Accenture", "Capgemini", "Cognizant", "Genpact", "Thomson Reuters", "RELX",
 ]
 
 
 def build_discover_candidates():
-    """对每个发现名 × 平台 × slug 变体生成候选（httpx 平台，探活便宜）。"""
+    """对每个发现名自动生成候选：slug-ATS（greenhouse/lever/ashby/SR）+ eightfold（tenant+域名）。
+    全部 live 验证，未命中自动丢弃（符合「禁止猜 slug 入库」——入库前提永远是 live 通过）。"""
     cands = []
     seen = set()
+
+    def add(company, adapter, url, industry="discover"):
+        if url in seen:
+            return
+        seen.add(url)
+        cands.append({"company": company, "adapter": adapter, "industry": industry, "url": url})
+
     for name in _DISCOVER_NAMES:
+        slugs = slugify(name)
         for platform in _DISCOVER_PLATFORMS:
-            for slug in slugify(name):
-                url = _ATS_URL[platform](slug)
-                if url in seen:
-                    continue
-                seen.add(url)
-                cands.append({"company": name, "adapter": platform, "industry": "discover", "url": url})
+            for slug in slugs:
+                add(name, platform, _ATS_URL[platform](slug))
+        # eightfold：compact slug 作 tenant，域名默认 {slug}.com（可被 _EF_DOMAINS 覆盖）
+        compact = next((s for s in slugs if s.isalnum()), None)
+        if compact:
+            add(name, "eightfold", _eightfold_url(compact, _EF_DOMAINS.get(compact, f"{compact}.com")))
     return cands
 
 
@@ -277,17 +336,22 @@ def probe_one(cand: dict, timeout: int = 15):
 def emit_sql(prefix: str, passed: list):
     lines = [
         f"-- {prefix} — 扩源（探活器 probe.py live 探活通过，仅含真返回岗位的源）",
-        "-- Idempotent: guarded by source_url.\n",
+        "-- 带 segment(模块)+industry(行业)。Idempotent: guarded by source_url.\n",
     ]
     for c in passed:
         cn = c.get("_china", 0)
         cn_txt = f"在华 {cn} 岗" if cn else f"{c['_valid']} 岗"
-        notes = f"{c['company']}（{c.get('industry', '')}，probe live 探活 {cn_txt}）"
+        industry = c.get("industry", "") or ""
+        # segment：外企 ATS → foreign；本土 adapter 用候选自带 segment（默认 private）
+        segment = "foreign" if c["adapter"] in _FOREIGN_ATS else c.get("segment", "private")
+        notes = f"{c['company']}（{industry}，probe live 探活 {cn_txt}）".replace("'", "''")
+        method = "http" if c["adapter"] in _HTTPX_ADAPTERS else "playwright"
         url = c["url"].replace("'", "''")
+        company = c["company"].replace("'", "''")
         lines.append(
-            "insert into sources (company, source_url, source_type, adapter_name, crawl_method, notes)\n"
-            f"select '{c['company']}', '{url}', 'official', '{c['adapter']}', "
-            f"'{'http' if c['adapter'] in _HTTPX_ADAPTERS else 'playwright'}', '{notes}'\n"
+            "insert into sources (company, source_url, source_type, adapter_name, crawl_method, segment, industry, notes)\n"
+            f"select '{company}', '{url}', 'official', '{c['adapter']}', '{method}', "
+            f"'{segment}', '{industry}', '{notes}'\n"
             f"where not exists (select 1 from sources where source_url = '{url}');\n"
         )
     return "\n".join(lines)
@@ -322,14 +386,16 @@ def main():
         cands = [c for c in cands if c["adapter"] in _HTTPX_ADAPTERS]
 
     passed = []
-    print(f"[probe] 探活 {len(cands)} 个候选源...\n")
+    print(f"[probe] 探活 {len(cands)} 个候选源...\n", flush=True)
+    # discover 模式候选多，用较短超时控制总时长（探不到快速丢弃）
+    probe_timeout = 8 if args.discover else 15
     for c in cands:
-        r = probe_one(c)
+        r = probe_one(c, timeout=probe_timeout)
         flag = "✓" if r["ok"] else "✗"
         detail = (f"在华={r.get('china', 0)} valid={r['valid']} parsed={r.get('parsed', '-')} {r.get('sample', '')}"
                   if r["ok"] else r.get("reason", ""))
-        print(f"  {flag} [{c['adapter']:15}] {c['company']:22} {detail}")
         if r["ok"]:
+            print(f"  {flag} [{c['adapter']:15}] {c['company']:22} {detail}", flush=True)
             c = {**c, "_valid": r["valid"], "_china": r.get("china", 0)}
             passed.append(c)
 

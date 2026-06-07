@@ -275,11 +275,14 @@ class SlugifyTest(unittest.TestCase):
         # 纯中文名无拉丁 slug
         self.assertEqual(probe.slugify("字节跳动"), [])
 
-    def test_discover_candidates_only_single_host_ats(self):
+    def test_discover_candidates_slug_and_eightfold(self):
         import probe
         cands = probe.build_discover_candidates()
         self.assertTrue(len(cands) > 0)
-        self.assertTrue(all(c["adapter"] in probe._DISCOVER_PLATFORMS for c in cands))
+        # 自动发现含 slug-ATS（greenhouse/lever/ashby/SR）+ eightfold（tenant+域名猜）
+        allowed = set(probe._DISCOVER_PLATFORMS) | {"eightfold"}
+        self.assertTrue(all(c["adapter"] in allowed for c in cands))
+        self.assertTrue(any(c["adapter"] == "eightfold" for c in cands))
         # URL 去重
         self.assertEqual(len({c["url"] for c in cands}), len(cands))
 

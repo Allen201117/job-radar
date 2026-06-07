@@ -161,5 +161,22 @@ class CleanSummaryTest(unittest.TestCase):
         self.assertIsNone(normalizer.clean_summary(None))
 
 
+class IsChinaLocationTests(unittest.TestCase):
+    def test_real_china_locations(self):
+        for loc in ("Shanghai, China", "China, Beijing", "广东·深圳市", "Hong Kong",
+                    "Macau", "Suzhou", "Xi'an", "China - Remote", "Greater China"):
+            self.assertTrue(normalizer.is_china_location(loc), loc)
+
+    def test_substring_false_positives_excluded(self):
+        # 'macao'(澳门) 不应命中 'Humacao'（波多黎各）；非华地点一律 False
+        for loc in ("USA, PR, Humacao", "Mumbai, India", "Remote - Delhi",
+                    "New York, United States", "London, UK", "Singapore"):
+            self.assertFalse(normalizer.is_china_location(loc), loc)
+
+    def test_empty(self):
+        self.assertFalse(normalizer.is_china_location(None))
+        self.assertFalse(normalizer.is_china_location(""))
+
+
 if __name__ == "__main__":
     unittest.main()

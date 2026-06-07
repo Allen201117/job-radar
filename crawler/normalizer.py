@@ -269,12 +269,22 @@ CHINA_LOCATION_MARKERS = (
 )
 
 
+# latin marker 用词边界匹配，避免子串误命中（如 'macao' 命中 'Humacao' 波多黎各、'xian' 命中别词）；
+# CJK marker 无词边界概念，用子串。
+_CJK_MARKERS = tuple(m for m in CHINA_LOCATION_MARKERS if any("一" <= ch <= "鿿" for ch in m))
+_LATIN_MARKERS = tuple(m for m in CHINA_LOCATION_MARKERS if m not in _CJK_MARKERS)
+_LATIN_MARKER_RE = re.compile(r"\b(?:" + "|".join(re.escape(m) for m in _LATIN_MARKERS) + r")\b")
+
+
 def is_china_location(location: Optional[str]) -> bool:
-    """判断地点是否属于大中华区（含港澳）。用于把外企 ATS 看板裁到在华岗位。"""
+    """判断地点是否属于大中华区（含港澳）。用于把外企 ATS 看板裁到在华岗位。
+    latin 关键词用词边界（防 'macao'→'Humacao' 等子串误命中），中文关键词用子串。"""
     if not location:
         return False
     text = location.lower()
-    return any(marker in text for marker in CHINA_LOCATION_MARKERS)
+    if any(marker in text for marker in _CJK_MARKERS):
+        return True
+    return bool(_LATIN_MARKER_RE.search(text))
 
 
 REMOTE_MARKERS = ("remote", "anywhere", "distributed", "work from home", "wfh", "远程", "远端")
