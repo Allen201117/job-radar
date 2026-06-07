@@ -8,6 +8,7 @@ from adapters.lever import LeverAdapter
 from adapters.ashby import AshbyAdapter
 from adapters.smartrecruiters import SmartRecruitersAdapter
 from adapters.workday import WorkdayAdapter, _is_china_facet
+from adapters.oracle import OracleAdapter
 from adapters.apple import AppleChinaAdapter
 
 
@@ -280,6 +281,38 @@ class WorkdayParseTest(unittest.TestCase):
 
     def test_bad_json(self):
         self.assertEqual(WorkdayAdapter().parse("nope"), [])
+
+
+class OracleParseTest(unittest.TestCase):
+    def test_builds_ce_url_trusted_and_text_filtered_deduped(self):
+        payload = json.dumps({
+            "_host": "https://hdjq.fa.us2.oraclecloud.com", "_site": "CX_1001",
+            "trusted_jobs": [
+                {"Id": "26005910", "Title": "Engineer", "PrimaryLocation": "Tianjin, China"},
+                {"Id": "no-title"},  # 无 Title → 丢
+            ],
+            "text_jobs": [
+                {"Id": "99", "Title": "SH Role", "PrimaryLocation": "Shanghai, China"},   # 在华 → 留
+                {"Id": "100", "Title": "US Role", "PrimaryLocation": "TX, United States"},  # 非华 → 丢
+                {"Id": "26005910", "Title": "Engineer", "PrimaryLocation": "Tianjin, China"},  # 与 trusted 重复 → 去重
+            ],
+        })
+        jobs = OracleAdapter().parse(payload)
+        self.assertEqual({j.title for j in jobs}, {"Engineer", "SH Role"})
+        self.assertEqual(
+            jobs[0].jd_url,
+            "https://hdjq.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/job/26005910")
+        self.assertEqual(len({j.jd_url for j in jobs}), 2)
+
+    def test_parse_endpoint_extracts_host_and_site(self):
+        a = OracleAdapter()
+        a._parse_endpoint("https://egug.fa.us2.oraclecloud.com/hcmRestApi/resources/latest/"
+                          "recruitingCEJobRequisitions?finder=findReqs;siteNumber=CX_1")
+        self.assertEqual(a._host, "https://egug.fa.us2.oraclecloud.com")
+        self.assertEqual(a._site, "CX_1")
+
+    def test_bad_json(self):
+        self.assertEqual(OracleAdapter().parse("nope"), [])
 
 
 class SlugifyTest(unittest.TestCase):
