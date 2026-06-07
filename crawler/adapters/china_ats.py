@@ -264,39 +264,114 @@ class BeisenAdapter(ChinaSpaAdapter):
     intercept_matches = ("GetJobAdPageList", "JobAd", "Position", "position", "Recruit", "recruit", "/api/")
     detail_template = ""
 
+    _ID_FIELDS = ("Id", "id", "jobAdId", "JobAdId", "code")
+
     def fetch(self, source_url: str) -> str:
         list_json = super().fetch(source_url)  # 浏览器①：拦截 GetJobAdPageList 等列表接口
-        self._detail_base = _BEISEN_ROUTE_CACHE.get(self._host)
-        if self._detail_base is None and self._host not in _BEISEN_ROUTE_CACHE:
-            self._detail_base = self._discover_detail_route(source_url, list_json)
-            _BEISEN_ROUTE_CACHE[self._host] = self._detail_base  # 命中或 None 都缓存，避免重复探测
+        self._detail_route = _BEISEN_ROUTE_CACHE.get(self._host)
+        if self._detail_route is None and self._host not in _BEISEN_ROUTE_CACHE:
+            self._detail_route = self._discover_detail_route(source_url, list_json)
+            _BEISEN_ROUTE_CACHE[self._host] = self._detail_route  # 命中或 None 都缓存，避免重复探测
         return list_json
 
-    def _discover_detail_route(self, source_url: str, list_json: str):
-        """用首个岗位 render-verify 候选详情 path，返回命中的完整 detail base（origin+path，无 query）或 None。"""
+    def _list_posts(self, list_json: str):
         try:
             data = __import__("json").loads(list_json)
         except (ValueError, TypeError):
-            return None
+            return []
         posts = []
         for resp in data.get("_intercepted", []) or []:
             posts.extend(pp for pp in self._extract_posts(resp) if isinstance(pp, dict))
-        jobs = [(_first_str(p, ("Id", "id", "jobAdId", "JobAdId")),
-                 _first_str(p, ("JobAdName", "title", "name", "jobTitle"))) for p in posts]
-        jobs = [(i, n) for i, n in jobs if i and n]
-        if not jobs:
-            return None
-        a_id, a_name = jobs[0]
-        b_name = next((n for i, n in jobs[1:] if n and n != a_name), None)
+        return posts
 
+    def _discover_detail_route(self, source_url: str, list_json: str):
+        """探测本租户的详情路由（**单浏览器会话**，避免多会话连打同一 host 触发反爬）。
+        策略①（主，最可靠）：渲染列表页 → 点击首个岗位卡 → 捕获跳转 URL → 把 id 值替换为 {id} 得到模板
+          （适配 jobAdId/jobId × Id/JobAdId 各种约定，且对无 href 的 React 卡片也有效）。
+        策略②（兜底）：在同一会话内猜常见详情 path × render-verify（返回 base 字符串，按 ?jobAdId={Id} 兜底）。
+        返回 dict{template,idfield} / str(base) / None。"""
+        posts = self._list_posts(list_json)
+        if not posts:
+            return None
+        post0 = posts[0]
+        a_name = _first_str(post0, ("JobAdName", "title", "name", "jobTitle"))
+        id_vals = [(f, _first_str(post0, (f,))) for f in self._ID_FIELDS]
+        id_vals = [(f, v) for f, v in id_vals if v]
+        if not a_name or not id_vals:
+            return None
+        b_name = next((_first_str(p, ("JobAdName", "title", "name", "jobTitle")) for p in posts[1:]
+                       if _first_str(p, ("JobAdName", "title", "name", "jobTitle")) != a_name), None)
+
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            ctx = browser.new_context(user_agent=PlaywrightAdapter.user_agent, locale="zh-CN")
+            page = ctx.new_page()
+            try:
+                page.goto(source_url, wait_until="networkidle", timeout=30000)
+                page.wait_for_timeout(4000)
+                # ① 猜测式（proven，对 chinalife/popmart/横店等直达详情 URL 可渲染的租户最稳，不回退）
+                guessed = self._guess_route(page, source_url, id_vals[0][1], a_name, b_name)
+                if guessed:
+                    return guessed
+                # ② 点击捕获兜底（救 React 详情页直达不渲染、需从列表点入的租户，如迈瑞）
+                page.goto(source_url, wait_until="networkidle", timeout=30000)
+                page.wait_for_timeout(4000)
+                el = self._first_job_element(page, a_name)
+                if el is None:
+                    return None
+                before = page.url
+                captured = None
+                try:  # 多数北森详情在新标签打开
+                    with ctx.expect_page(timeout=7000) as np:
+                        el.click()
+                    newp = np.value
+                    newp.wait_for_load_state("domcontentloaded", timeout=7000)
+                    captured = newp.url
+                except Exception:  # 同标签内路由跳转
+                    try:
+                        page.wait_for_timeout(2500)
+                        captured = page.url
+                    except Exception:
+                        captured = None
+                if captured and captured != before:
+                    for field, val in id_vals:
+                        if val and val in captured:
+                            return {"template": captured.replace(val, "{id}"), "idfield": field}
+                return None
+            except Exception:
+                return None
+            finally:
+                browser.close()
+
+    @staticmethod
+    def _first_job_element(page, a_name: str):
+        """定位首个岗位卡可点击元素：优先按岗位名文本匹配，兜底按北森常见 class。"""
+        try:
+            loc = page.get_by_text(a_name[:12], exact=False).first
+            if loc and loc.count() > 0:
+                return loc
+        except Exception:
+            pass
+        for sel in ("div[class*=JobTitle]", "div[class*=TitleSection]", "div[class*=jobName]",
+                    "a[class*=job]", ".job-name", ".position-name", "li[class*=job] a"):
+            try:
+                el = page.query_selector(sel)
+                if el:
+                    return el
+            except Exception:
+                continue
+        return None
+
+    def _guess_route(self, page, source_url: str, a_id: str, a_name: str, b_name):
+        """同会话内猜常见详情 path × render-verify，返回命中的 detail base（origin+path，无 query）或 None。"""
         parsed = urlparse(source_url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
         segs = [s for s in (parsed.path or "").split("/") if s]
         bases = []
         if segs:
-            bases.append("/" + "/".join(segs[:-1]))  # 替换末段（chinalife /custom/intern → /custom）
-        bases.append("/" + "/".join(segs))            # 追加（横店 /campus/jobs → /campus/jobs?... 否则 /campus/detail）
-        # 去重 + 生成候选 path
+            bases.append("/" + "/".join(segs[:-1]))
+        bases.append("/" + "/".join(segs))
         seen, cand_paths = set(), []
         for base in bases:
             for nm in _BEISEN_DETAIL_NAMES:
@@ -304,25 +379,16 @@ class BeisenAdapter(ChinaSpaAdapter):
                 if path not in seen:
                     seen.add(path)
                     cand_paths.append(path)
-
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_context(
-                user_agent=PlaywrightAdapter.user_agent, locale="zh-CN").new_page()
+        for path in cand_paths:
+            url = f"{origin}{path}?jobAdId={a_id}"
             try:
-                for path in cand_paths:
-                    url = f"{origin}{path}?jobAdId={a_id}"
-                    try:
-                        page.goto(url, wait_until="domcontentloaded", timeout=12000)
-                        page.wait_for_timeout(2500)
-                        content = page.content()
-                        if a_name in content and not (b_name and b_name in content):
-                            return f"{origin}{path}"  # 真详情路由（渲染该岗且 job-specific）
-                    except Exception:
-                        continue
-            finally:
-                browser.close()
+                page.goto(url, wait_until="domcontentloaded", timeout=12000)
+                page.wait_for_timeout(3500)
+                content = page.content()
+                if a_name in content and not (b_name and b_name in content):
+                    return f"{origin}{path}"
+            except Exception:
+                continue
         return None
 
     def _resolve_url(self, post: dict, job_id: str) -> str:
@@ -330,12 +396,15 @@ class BeisenAdapter(ChinaSpaAdapter):
         raw = super()._resolve_url(post, job_id)
         if raw:
             return raw
-        # 2) 用本租户探测到的详情路由：{detail_base}?jobAdId={UUID}。探不到则不拼（丢弃）。
-        detail_base = getattr(self, "_detail_base", None)
-        uuid = _first_str(post, ("Id", "id", "jobAdId", "JobAdId"))
-        if not detail_base or not uuid:
-            return ""
-        return f"{detail_base}?jobAdId={uuid}"
+        # 2) 用本租户探测到的详情路由。探不到则不拼（丢弃，杜绝坏链）。
+        route = getattr(self, "_detail_route", None)
+        if isinstance(route, dict):  # 点击捕获：{template, idfield}
+            idval = _first_str(post, (route.get("idfield", "Id"),))
+            return route["template"].format(id=idval) if idval and "{id}" in route.get("template", "") else ""
+        if isinstance(route, str):  # 旧缓存：detail base 字符串，按 ?jobAdId={Id} 兜底
+            uuid = _first_str(post, ("Id", "id", "jobAdId", "JobAdId"))
+            return f"{route}?jobAdId={uuid}" if uuid else ""
+        return ""
 
 
 class CompanySpaAdapter(ChinaSpaAdapter):

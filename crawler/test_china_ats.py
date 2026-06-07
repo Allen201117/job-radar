@@ -109,7 +109,7 @@ class TestBeisenAdapter(unittest.TestCase):
     def test_jobad_pagelist_builds_detail_url(self):
         # 北森真实 GetJobAdPageList 形态：顶层 Data 列表，JobAdName/Id/LocNames，无 per-job URL。
         # 详情路由 query 恒为 ?jobAdId={Id}，path 由 fetch 时逐租户探测得到（此处模拟已探测结果）。
-        self.a._detail_base = "https://group.zhiye.com/custom/zwxq"
+        self.a._detail_route = "https://group.zhiye.com/custom/zwxq"
         sample = {"Code": 0, "Data": [
             {"Id": "uuid-a", "JobAdId": 270940723, "JobAdName": "综合管理实习生", "LocNames": "上海市"},
             {"Id": "uuid-b", "JobAdName": "财务实习生", "LocNames": "黑龙江省·哈尔滨市"},
@@ -125,18 +125,35 @@ class TestBeisenAdapter(unittest.TestCase):
 
     def test_other_tenant_detail_route(self):
         # 不同租户详情页名不同（如横店 /campus/detail）：用探测到的 _detail_base 拼。
-        self.a._detail_base = "https://group.zhiye.com/campus/detail"
+        self.a._detail_route = "https://group.zhiye.com/campus/detail"
         sample = {"Data": [{"Id": "x9", "JobAdName": "投行分析师", "LocNames": "北京"}]}
         jobs = self.a.parse(json.dumps({"_intercepted": [sample]}))
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0].jd_url, "https://group.zhiye.com/campus/detail?jobAdId=x9")
 
     def test_no_detail_route_drops_jobs(self):
-        # 探不到详情路由（_detail_base=None）→ 不拼坏链，丢弃无接口链接的行。
-        self.a._detail_base = None
+        # 探不到详情路由（_detail_route=None）→ 不拼坏链，丢弃无接口链接的行。
+        self.a._detail_route = None
         sample = {"Data": [{"Id": "x9", "JobAdName": "投行分析师", "LocNames": "北京"}]}
         jobs = self.a.parse(json.dumps({"_intercepted": [sample]}))
         self.assertEqual(jobs, [])
+
+    def test_click_captured_dict_route(self):
+        # 点击捕获式路由 {template, idfield}：按 idfield 取值填模板（适配 jobId/jobAdId × Id/JobAdId）。
+        self.a._detail_route = {
+            "template": "https://group.zhiye.com/social/detail?jobAdId={id}", "idfield": "Id"}
+        sample = {"Data": [{"Id": "uuid-z", "JobAdId": 999, "JobAdName": "算法专家", "LocNames": "深圳"}]}
+        jobs = self.a.parse(json.dumps({"_intercepted": [sample]}))
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].jd_url, "https://group.zhiye.com/social/detail?jobAdId=uuid-z")
+
+    def test_click_captured_dict_route_numeric_jobid(self):
+        # 另一约定：?jobId={JobAdId 数字}。idfield=JobAdId。
+        self.a._detail_route = {
+            "template": "https://x.zhiye.com/campusxq?jobId={id}", "idfield": "JobAdId"}
+        sample = {"Data": [{"Id": "uuid-q", "JobAdId": 230859284, "JobAdName": "运营", "LocNames": "北京"}]}
+        jobs = self.a.parse(json.dumps({"_intercepted": [sample]}))
+        self.assertEqual(jobs[0].jd_url, "https://x.zhiye.com/campusxq?jobId=230859284")
 
 
 class TestCompanySpaAdapter(unittest.TestCase):
