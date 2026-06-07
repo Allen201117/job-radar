@@ -64,24 +64,56 @@ class WorkdayAdapter(BaseAdapter):
                        headers=headers, timeout=self.timeout)
         r.raise_for_status()
         candidates = self._china_facet_candidates(r.json().get("facets", []))
-        # 2) 逐 param-group 试探命中数，取最多的**单组**应用（不跨 param 混用，否则 AND 坍缩成交集）
-        applied = self._pick_best_facet(source_url, headers, candidates)
 
-        # 3) 分页抓在华岗位（有 facet 则服务端已过滤；无 facet 则全量、parse 再按 location 兜底过滤）
-        collected: List[dict] = []
-        for page in range(self.max_pages):
-            body = {"appliedFacets": applied, "limit": 20, "offset": page * 20, "searchText": ""}
-            rr = httpx.post(source_url, json=body, headers=headers, timeout=self.timeout)
-            rr.raise_for_status()
-            posts = rr.json().get("jobPostings", []) or []
-            if not posts:
-                break
-            collected.extend(posts)
-            if len(posts) < 20:
-                break
+        # 2) facet 路径：把**每个**大中华区 facet 组各自分页、并集去重。
+        # 不靠 Workday 的 `total` 字段选「最佳单组」—— 实测该字段极不可靠（NVIDIA 报 total=180 实际可翻 600+），
+        # 靠它选组/比较会误判。改为「所有 china facet 组并集」：每组都是合法在华过滤，OR 起来即全部在华岗，
+        # 这些是**可信在华**岗（parse 不再过滤）。同 param 多 id 一次 OR 提交；不同 param 分别提交后并集。
+        trusted: List[dict] = []
+        seen = set()
+        for param, ids in candidates.items():
+            if not ids:
+                continue
+            for page in range(self.max_pages):
+                body = {"appliedFacets": {param: ids}, "limit": 20, "offset": page * 20, "searchText": ""}
+                rr = httpx.post(source_url, json=body, headers=headers, timeout=self.timeout)
+                rr.raise_for_status()
+                posts = rr.json().get("jobPostings", []) or []
+                if not posts:
+                    break
+                for p in posts:
+                    key = p.get("externalPath") or p.get("title")
+                    if key and key not in seen:
+                        seen.add(key)
+                        trusted.append(p)
+                if len(posts) < 20:
+                    break
+
+        # 3) searchText 文本补充：部分租户的在华地点埋在**嵌套/截断**的 location facet 里，facet 只露出
+        # 部分叶子（如 GE HealthCare 的 locationMainGroup 只有 Hong Kong、漏掉上海 22 岗）。facet 取到的太少
+        # （<25，或压根没 facet）就用 Workday searchText 按 'China'/'Hong Kong'/'Macau' 文本召回把漏的捞回；
+        # 这些是**待过滤**岗（searchText 会带入母国/描述含 China 的非华岗），由 parse 按 is_china_location 严格过滤。
+        # facet 已足够多（NVIDIA/BMS 数百岗）则跳过补充：补充只增不减、out ⊇ trusted，绝不回退召回。
+        text_posts: List[dict] = []
+        if len(trusted) < 25:
+            for q in ("China", "Hong Kong", "Macau"):
+                for page in range(self.max_pages):
+                    body = {"appliedFacets": {}, "limit": 20, "offset": page * 20, "searchText": q}
+                    rr = httpx.post(source_url, json=body, headers=headers, timeout=self.timeout)
+                    rr.raise_for_status()
+                    posts = rr.json().get("jobPostings", []) or []
+                    if not posts:
+                        break
+                    for p in posts:
+                        key = p.get("externalPath") or p.get("title")
+                        if key and key not in seen:
+                            seen.add(key)
+                            text_posts.append(p)
+                    if len(posts) < 20:
+                        break
         return json.dumps({
             "_host": self._host, "_site": self._site,
-            "_china_filtered": bool(applied), "posts": collected,
+            "trusted_posts": trusted, "text_posts": text_posts,
         }, ensure_ascii=False)
 
     @staticmethod
@@ -110,24 +142,6 @@ class WorkdayAdapter(BaseAdapter):
             walk(f)
         return groups
 
-    def _pick_best_facet(self, source_url: str, headers: dict, candidates: dict) -> dict:
-        """逐 param-group 试探 total，返回命中最多的**单组** {param:[ids]}；全 0 则 {} 兜底（parse 再按 location 过滤）。"""
-        best: dict = {}
-        best_total = 0
-        for param, ids in candidates.items():
-            if not ids:
-                continue
-            try:
-                resp = httpx.post(
-                    source_url, json={"appliedFacets": {param: ids}, "limit": 1, "offset": 0, "searchText": ""},
-                    headers=headers, timeout=self.timeout)
-                total = resp.json().get("total") or 0
-            except (httpx.HTTPError, ValueError, TypeError):
-                total = 0
-            if total > best_total:
-                best, best_total = {param: ids}, total
-        return best
-
     def parse(self, html: str) -> List[RawJob]:
         try:
             data = json.loads(html)
@@ -135,23 +149,27 @@ class WorkdayAdapter(BaseAdapter):
             return []
         host = data.get("_host", "")
         site = data.get("_site", "")
-        china_filtered = data.get("_china_filtered")
 
         out: List[RawJob] = []
-        for p in data.get("posts", []):
+        seen_urls = set()
+
+        def emit(p, trusted):
             if not isinstance(p, dict):
-                continue
+                return
             title = (p.get("title") or "").strip()
             ep = (p.get("externalPath") or "").strip()
             if not title or not ep:
-                continue
+                return
             location = self._loc_from_path(ep) or (p.get("locationsText") or None)
-            # facet 已服务端过滤则全部在华；否则按 location 严格判定在华（大陆/港/澳）。
-            # 外企 Workday 的 "Remote" 多指母国远程而非中国，故用 is_china_location 而非 keep_for_china_radar，
-            # 避免无 facet 时泄漏非华岗（如 "Remote - Delhi"）。
-            if not china_filtered and not normalizer.is_china_location(location):
-                continue
+            # trusted（facet 已服务端过滤）全部在华直接收；text_posts（searchText 文本召回）按 location 严格
+            # 判定在华（大陆/港/澳）—— 外企 Workday 的 "Remote" 多指母国远程而非中国，故用 is_china_location，
+            # 避免泄漏非华岗（如 "Remote - Delhi" / Haifa）。
+            if not trusted and not normalizer.is_china_location(location):
+                return
             jd_url = f"{host}/{site}{ep}"
+            if jd_url in seen_urls:
+                return
+            seen_urls.add(jd_url)
             out.append(RawJob(
                 company="",  # 由 sources.company 兜底
                 title=title,
@@ -162,6 +180,17 @@ class WorkdayAdapter(BaseAdapter):
                 apply_url=jd_url,
                 posted_at=None,  # postedOn 是相对文案（"Posted Yesterday"），不伪造日期
             ))
+
+        # 向后兼容：旧形态 {"posts", "_china_filtered"}；新形态 {"trusted_posts","text_posts"}
+        if "posts" in data:
+            cf = data.get("_china_filtered")
+            for p in data.get("posts", []):
+                emit(p, trusted=bool(cf))
+        else:
+            for p in data.get("trusted_posts", []):
+                emit(p, trusted=True)
+            for p in data.get("text_posts", []):
+                emit(p, trusted=False)
         return out
 
     @staticmethod
