@@ -1,7 +1,27 @@
 # 求职雷达 · 扩源打通方案 HANDOVER
 
 > 本文是「把各公司岗位爬取通道一家家打通」的完整作战方案，供任何接手的 agent 直接照做。
-> 读完本文 + `CLAUDE.md` 即可独立推进，无需上下文。最后更新：本轮会话（148 条通道时）。
+> 读完本文 + `CLAUDE.md` 即可独立推进，无需上下文。
+
+---
+
+## 🔥 接手即用：当前进度 + 立即可做的 backlog（每次更新）
+
+**已新增能力（本系列会话）**：
+- `oracle` 适配器（外企自建门户主力，§4①已落地）。
+- `feishu` 飞书招聘**泛化**适配器（国内版 Workday，加一家=填一行 `{tenant}.jobs.feishu.cn/index/position`）。
+- `beisen` 北森**详情路由发现增强**（3500ms render-verify + 点击捕获兜底 + jobId/jobAdId×Id/JobAdId 双约定）。
+
+**⚡ 立即可探活入库的已确认 host（搜索已确认真实，因 zhiye.com 单会话反爬限流未当场入库 —— 换干净会话/慢速重探即可，禁止未验证直接入库）**：
+- 北森(beisen)：`miniso.zhiye.com`(名创优品) `gongniu.zhiye.com`(公牛) `360campus.zhiye.com`(360) `xdf.zhiye.com`(新东方) `cnnc.zhiye.com`(中核·央企) `shenyejituan.zhiye.com`(深业·国企) `coamc.zhiye.com`(中国信达·国企) `siic.zhiye.com`(上实·国企)。列表页试 `/campus/jobs`、`/social/jobs`、`/campus`；探活方式见 §6。央企国企记 `segment='soe'`。
+- 飞书(feishu)：`/s/分享页`入口的（月之暗面 `moonshot`、小马智行 `ponyai`、Momenta `momenta`）—— 标准 `/index/position` 拦不到，需给 feishu 适配器补 `/s/` 入口处理（小代码项）。
+
+**🔨 待写代码的平台（高价值）**：
+1. **大易 dayee.com 适配器**：隆基绿能(签约大易)、TCL、比亚迪(job.byd.com)、美的(careers.midea.com) 等 500 强用大易/自建门户。先抓包定位大易公开岗位 JSON 接口，建 `adapters/dayee.py`。
+2. **北森老版 SSR / 异构**：联影(`united-imaging.zhiye.com` 无 GetJobAdPageList)、蒙牛(`mengniu.zhiye.com`)、BOE(校招 `boe.zhiye.com/details2021?adId=` 老版、社招已迁 `career.boe.com`)。需渲染 HTML 解析路径或 career.* 自建站走 company_spa。
+3. **自建大厂 company_spa**：华为 career.huawei.com、阿里 talent.alibaba.com、比亚迪 job.byd.com、美的 careers.midea.com、OPPO careers.oppo.com、商汤 sensetime.com、哈啰 careers.hellobike.com 等（逐家）。
+
+**已 live 验证打通（本系列）**：外企 Oracle(Emerson/霍尼韦尔/美国运通/纽约梅隆)；国内飞书(理想/得物/深言/道旅/智谱/MiniMax/元气森林/MetaApp/VAST/智元机器人/影石/xTool/安克/懂车帝)、Moka(完美世界/远景/搜狐畅游/作业帮/知乎/猿辅导/文远知行/唯品会)、北森(泡泡玛特/迈瑞/汇川/长安)。
 
 ---
 
