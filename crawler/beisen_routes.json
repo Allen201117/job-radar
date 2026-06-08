@@ -17,6 +17,7 @@
   "dahua.zhiye.com": "https://dahua.zhiye.com/social/detail",
   "chery.zhiye.com": "https://chery.zhiye.com/social/detail",
   "fosunpharma.zhiye.com": {"ssr_path": "campusxq", "ssr_param": "jobId"},
+  "boe.zhiye.com": {"ssr_path": "zwxq", "ssr_param": "jobId"},
   "wuxiapptec.zhiye.com": "https://wuxiapptec.zhiye.com/social/detail",
   "tongwei.zhiye.com": "https://tongwei.zhiye.com/social/detail",
   "maxscend.zhiye.com": "https://maxscend.zhiye.com/social/detail",
@@ -35,5 +36,7 @@
   "jac.zhiye.com": "https://jac.zhiye.com/social/detail",
   "jmc.zhiye.com": "https://jmc.zhiye.com/social/detail",
   "leadchina.zhiye.com": "https://leadchina.zhiye.com/social/detail",
-  "bozhon.zhiye.com": "https://bozhon.zhiye.com/social/detail"
+  "bozhon.zhiye.com": "https://bozhon.zhiye.com/social/detail",
+  "cmhk.zhiye.com": "https://cmhk.zhiye.com/social/detail",
+  "ghsmc.zhiye.com": "https://ghsmc.zhiye.com/campus/detail"
 }
