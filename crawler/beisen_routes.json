@@ -16,5 +16,9 @@
   "mengniu.zhiye.com": "https://mengniu.zhiye.com/social/detail",
   "dahua.zhiye.com": "https://dahua.zhiye.com/social/detail",
   "chery.zhiye.com": "https://chery.zhiye.com/social/detail",
-  "fosunpharma.zhiye.com": {"ssr_path": "campusxq", "ssr_param": "jobId"}
+  "fosunpharma.zhiye.com": {"ssr_path": "campusxq", "ssr_param": "jobId"},
+  "wuxiapptec.zhiye.com": "https://wuxiapptec.zhiye.com/social/detail",
+  "tongwei.zhiye.com": "https://tongwei.zhiye.com/social/detail",
+  "maxscend.zhiye.com": "https://maxscend.zhiye.com/social/detail",
+  "transsion.zhiye.com": "https://transsion.zhiye.com/social/detail"
 }
