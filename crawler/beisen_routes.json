@@ -5,5 +5,11 @@
   "jereh.zhiye.com": "https://jereh.zhiye.com/campus/detail",
   "sany.zhiye.com": "https://sany.zhiye.com/campus/detail",
   "streamax.zhiye.com": "https://streamax.zhiye.com/Campus/detail",
-  "weichai.zhiye.com": "https://weichai.zhiye.com/custom/detail"
+  "weichai.zhiye.com": "https://weichai.zhiye.com/custom/detail",
+  "gongniu.zhiye.com": "https://gongniu.zhiye.com/social/detail",
+  "360campus.zhiye.com": "https://360campus.zhiye.com/campus/detail",
+  "shenyejituan.zhiye.com": "https://shenyejituan.zhiye.com/campus/detail",
+  "coamc.zhiye.com": "https://coamc.zhiye.com/social/detail",
+  "siic.zhiye.com": "https://siic.zhiye.com/campus/detail",
+  "cnnc.zhiye.com": {"ssr_path": "szxq", "ssr_param": "jobId"}
 }

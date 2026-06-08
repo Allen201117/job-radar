@@ -70,8 +70,9 @@ class ChinaSpaAdapter(PlaywrightAdapter):
         # 门户前缀 = 列表页路径去掉最后一段（section）。北森详情路由 = {origin}{prefix}/zwxq?jobAdId=
         segs = [s for s in (parsed.path or "").split("/") if s]
         self._portal_prefix = ("/" + "/".join(segs[:-1])) if len(segs) > 1 else ""
-        if not self.list_urls:
-            self.list_urls = [source_url]
+        # 必须每次绑定到当前 source_url：本类实例在 run.py/probe.py 是**共享单例**，
+        # 用 `if not self.list_urls` 会让首个源的 URL 粘住，后续源全去抓首个源 → 张冠李戴（B 公司入了 A 的岗位）。
+        self.list_urls = [source_url]
         return super().fetch(source_url)
 
     def _resolve_url(self, post: dict, job_id: str) -> str:
@@ -249,6 +250,30 @@ _BEISEN_ROUTE_CACHE: dict = _load_beisen_routes()
 # 北森详情页常见路由名（zwxq=职位详情拼音；不同租户配置不同：chinalife=zwxq、横店/杰瑞=detail…）
 _BEISEN_DETAIL_NAMES = ("zwxq", "detail", "jobdetail", "positiondetail", "jobDetail")
 
+# —— 老版 SSR（C 型）专用：列表页 HTML 直出 per-job 锚点，无 JSON 接口可拦 ——
+# 详情页路径因租户而异（中核=szxq、BOE 校招=details2021…），param 多为 jobId(数字)/adId。
+_BEISEN_SSR_DETAIL_PATHS = ("szxq", "szzwxq", "xzxq", "campusxq", "zwxq", "details2021",
+                            "overseadetail", "detail", "jobdetail", "szzp", "xq", "positiondetail")
+_BEISEN_SSR_PARAMS = ("jobId", "adId", "jobAdId")
+# 从 SSR 列表页抽取 per-job 锚点（jobId/adId/jobAdId=数字 + 标题文本），去重。
+_BEISEN_SSR_ANCHOR_JS = r"""
+() => {
+  const out=[], seen=new Set();
+  for (const a of document.querySelectorAll(
+        "a[href*='jobId='],a[href*='adId='],a[href*='jobAdId=']")) {
+    const href=a.getAttribute('href')||'';
+    const m=href.match(/(?:jobId|jobAdId|adId)=(\d+)/i);
+    if(!m) continue;
+    const id=m[1];
+    const name=(a.innerText||a.textContent||'').trim();
+    if(!name || name.length<3 || name.length>60) continue;  // 跳过登录/注册等短文本
+    if(seen.has(id)) continue; seen.add(id);
+    out.push({id, name});
+  }
+  return out.slice(0,120);
+}
+"""
+
 
 class BeisenAdapter(ChinaSpaAdapter):
     """北森招聘（*.zhiye.com / *.italent.cn / 自有 careers 域名，由北森承载）。
@@ -267,12 +292,91 @@ class BeisenAdapter(ChinaSpaAdapter):
     _ID_FIELDS = ("Id", "id", "jobAdId", "JobAdId", "code")
 
     def fetch(self, source_url: str) -> str:
-        list_json = super().fetch(source_url)  # 浏览器①：拦截 GetJobAdPageList 等列表接口
+        try:
+            list_json = super().fetch(source_url)  # 浏览器①：拦截 GetJobAdPageList 等列表接口（新版）
+        except RuntimeError:
+            # 新版无 JSON 可拦 → 试老版 SSR（C 型）：列表页 HTML 直出 jobId 锚点。
+            return self._fetch_ssr(source_url)
         self._detail_route = _BEISEN_ROUTE_CACHE.get(self._host)
         if self._detail_route is None and self._host not in _BEISEN_ROUTE_CACHE:
             self._detail_route = self._discover_detail_route(source_url, list_json)
             _BEISEN_ROUTE_CACHE[self._host] = self._detail_route  # 命中或 None 都缓存，避免重复探测
         return list_json
+
+    def _fetch_ssr(self, source_url: str) -> str:
+        """老版 SSR（C 型）：列表页 HTML 直出 per-job 锚点（无 JSON 接口）。
+        渲染列表页 → 抽 jobId 锚点 → 探测本租户详情路径（render-verify，按 host 缓存）→ 拼 jd_url。
+        探不到详情路径则 raise（记 partial_success，不入坏链）。"""
+        from playwright.sync_api import sync_playwright
+
+        origin = getattr(self, "_origin", "")
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_context(user_agent=PlaywrightAdapter.user_agent, locale="zh-CN").new_page()
+            try:
+                page.goto(source_url, wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(4500)
+                anchors = [a for a in (page.evaluate(_BEISEN_SSR_ANCHOR_JS) or [])
+                           if a.get("id") and a.get("name")]
+                if not anchors:
+                    raise RuntimeError(
+                        f"beisen: SSR 列表页无 jobId 锚点（非老版 SSR 或被反爬）host={self._host}")
+                route = _BEISEN_ROUTE_CACHE.get(self._host)
+                if not (isinstance(route, dict) and route.get("ssr_path")):
+                    route = self._discover_ssr_route(page, origin, anchors)
+                    if route:
+                        _BEISEN_ROUTE_CACHE[self._host] = route
+                if not (isinstance(route, dict) and route.get("ssr_path")):
+                    raise RuntimeError(f"beisen: SSR 详情路径探测失败 host={self._host}")
+                path, param = route["ssr_path"], route["ssr_param"]
+                jobs, seen = [], set()
+                for a in anchors:
+                    jd = f"{origin}/{path}?{param}={a['id']}"
+                    if jd in seen:
+                        continue
+                    seen.add(jd)
+                    jobs.append({"title": a["name"], "jd_url": jd, "location": a.get("location")})
+                return json.dumps({"_ssr_jobs": jobs}, ensure_ascii=False)
+            finally:
+                browser.close()
+
+    def _discover_ssr_route(self, page, origin: str, anchors: list):
+        """老版 SSR 详情路径探测：用首个锚点 id × 候选 path/param render-verify，命中即 {ssr_path,ssr_param}。"""
+        a_id = str(anchors[0]["id"])
+        a_name = anchors[0]["name"]
+        b_name = next((x["name"] for x in anchors[1:] if x["name"] != a_name), None)
+        for path in _BEISEN_SSR_DETAIL_PATHS:
+            for param in _BEISEN_SSR_PARAMS:
+                url = f"{origin}/{path}?{param}={a_id}"
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=12000)
+                    t = (page.title() or "")
+                    if "not found" in t.lower() or t.strip() in ("404", "404 Not Found"):
+                        continue  # 路径不存在 → 跳过昂贵的渲染等待
+                    page.wait_for_timeout(3000)
+                    if self._is_job_detail(page, a_name, b_name):
+                        return {"ssr_path": path, "ssr_param": param}
+                except Exception:
+                    continue
+        return None
+
+    def parse(self, html: str):
+        try:
+            data = json.loads(html)
+        except (ValueError, TypeError):
+            return []
+        if isinstance(data, dict) and "_ssr_jobs" in data:  # 老版 SSR 产物
+            out, seen = [], set()
+            for j in data["_ssr_jobs"]:
+                jd, title = j.get("jd_url"), j.get("title")
+                if not (jd and title) or jd in seen:
+                    continue
+                seen.add(jd)
+                out.append(RawJob(company=self.company_name or "", title=title,
+                                  location=j.get("location"), job_type=None, summary=None,
+                                  jd_url=jd, apply_url=jd, posted_at=None))
+            return out
+        return super().parse(html)  # 新版 JSON 拦截路径
 
     def _list_posts(self, list_json: str):
         try:
@@ -293,14 +397,25 @@ class BeisenAdapter(ChinaSpaAdapter):
         posts = self._list_posts(list_json)
         if not posts:
             return None
-        post0 = posts[0]
-        a_name = _first_str(post0, ("JobAdName", "title", "name", "jobTitle"))
-        id_vals = [(f, _first_str(post0, (f,))) for f in self._ID_FIELDS]
-        id_vals = [(f, v) for f, v in id_vals if v]
-        if not a_name or not id_vals:
+        # `/api/` 宽匹配会把搜索条件 / 地区树 / 推荐岗等非岗位列表也拦进来，posts[0] 可能不是真岗位
+        # （无 JobAdName/Id），甚至地区树节点也带 name+id 会被误判。北森真岗位恒有 JobAdName，
+        # 故优先按 JobAdName 取真岗位；仅当无任何 JobAdName 时才退回通用 title/name（兼容异构租户）。
+        def _collect(name_keys):
+            out = []  # [(name, [(idfield, idval), ...])]
+            for p in posts:
+                nm = _first_str(p, name_keys)
+                if not nm:
+                    continue
+                ids = [(f, v) for f, v in ((f, _first_str(p, (f,))) for f in self._ID_FIELDS) if v]
+                if ids:
+                    out.append((nm, ids))
+            return out
+
+        real = _collect(("JobAdName",)) or _collect(("title", "name", "jobTitle"))
+        if not real:
             return None
-        b_name = next((_first_str(p, ("JobAdName", "title", "name", "jobTitle")) for p in posts[1:]
-                       if _first_str(p, ("JobAdName", "title", "name", "jobTitle")) != a_name), None)
+        a_name, id_vals = real[0]
+        b_name = next((nm for nm, _ in real[1:] if nm != a_name), None)
 
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
@@ -308,14 +423,16 @@ class BeisenAdapter(ChinaSpaAdapter):
             ctx = browser.new_context(user_agent=PlaywrightAdapter.user_agent, locale="zh-CN")
             page = ctx.new_page()
             try:
-                page.goto(source_url, wait_until="networkidle", timeout=30000)
+                # 北森 SPA 持续轮询（tara-frontend 日志 / AI 机器人），networkidle 永不静默 → 30s 超时
+                # → 整个探测被外层 except 吞成 None（NO-DETAIL-ROUTE）。改 domcontentloaded（与主 fetch 一致）。
+                page.goto(source_url, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(4000)
                 # ① 猜测式（proven，对 chinalife/popmart/横店等直达详情 URL 可渲染的租户最稳，不回退）
                 guessed = self._guess_route(page, source_url, id_vals[0][1], a_name, b_name)
                 if guessed:
                     return guessed
                 # ② 点击捕获兜底（救 React 详情页直达不渲染、需从列表点入的租户，如迈瑞）
-                page.goto(source_url, wait_until="networkidle", timeout=30000)
+                page.goto(source_url, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(4000)
                 el = self._first_job_element(page, a_name)
                 if el is None:
@@ -384,12 +501,29 @@ class BeisenAdapter(ChinaSpaAdapter):
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=12000)
                 page.wait_for_timeout(3500)
-                content = page.content()
-                if a_name in content and not (b_name and b_name in content):
+                if self._is_job_detail(page, a_name, b_name):
                     return f"{origin}{path}"
             except Exception:
                 continue
         return None
+
+    @staticmethod
+    def _is_job_detail(page, a_name: str, b_name) -> bool:
+        """判断当前页是否为「岗位 a_name 的详情页」（而非列表页/无关页）。
+        强信号：页面主标题（h1/jobName 类）含本岗位名 → 即使侧栏有「推荐职位」露出 b_name 也算命中。
+        弱信号兜底：本岗位名在正文 且 列表里另一岗位名 b_name 不在正文（无并列岗位=非列表页）。"""
+        content = page.content()
+        if not a_name or a_name not in content:
+            return False
+        heading = page.evaluate(
+            "()=>{const sels=['h1','[class*=jobName]','[class*=JobName]','[class*=positionName]',"
+            "'[class*=PositionName]','[class*=job-title]','[class*=jobTitle]','[class*=JobTitle]'];"
+            "for(const s of sels){const e=document.querySelector(s);"
+            "const t=e&&(e.innerText||'').trim();if(t)return t;}return '';}") or ""
+        core = a_name.split("（")[0].split("(")[0].strip()[:10]
+        if core and core in heading:        # 主标题就是本岗位 → 详情页
+            return True
+        return not (b_name and b_name in content)  # 无并列岗位 → 非列表页
 
     def _resolve_url(self, post: dict, job_id: str) -> str:
         # 1) 接口若直接给了 per-job 链接，优先用（最可靠）。
