@@ -156,6 +156,46 @@ class TestBeisenAdapter(unittest.TestCase):
         self.assertEqual(jobs[0].jd_url, "https://x.zhiye.com/campusxq?jobId=230859284")
 
 
+class TestBeisenSsrParse(unittest.TestCase):
+    """老版 SSR（C 型，如中核 cnnc）：列表页 HTML 直出 jobId 锚点，_fetch_ssr 产出 _ssr_jobs 信封。
+    parse 把信封转 RawJob（jd_url 已在 fetch 拼好），按 jd_url 去重，缺 title/jd_url 丢弃。"""
+
+    def setUp(self):
+        self.a = BeisenAdapter()
+        self.a.company_name = "中核集团"
+
+    def test_ssr_envelope_builds_jobs(self):
+        env = {"_ssr_jobs": [
+            {"title": "品牌推广岗(J28524)", "jd_url": "https://cnnc.zhiye.com/szxq?jobId=561260654",
+             "location": None},
+            {"title": "渠道与运营支持岗(J28527)", "jd_url": "https://cnnc.zhiye.com/szxq?jobId=561260650"},
+            {"title": "品牌推广岗(J28524)", "jd_url": "https://cnnc.zhiye.com/szxq?jobId=561260654"},  # 重复 → 去重
+            {"title": "", "jd_url": "https://cnnc.zhiye.com/szxq?jobId=1"},  # 缺标题 → 丢
+            {"title": "缺链接岗", "jd_url": ""},  # 缺链接 → 丢
+        ]}
+        jobs = self.a.parse(json.dumps(env))
+        self.assertEqual(len(jobs), 2)
+        urls = {j.jd_url for j in jobs}
+        self.assertIn("https://cnnc.zhiye.com/szxq?jobId=561260654", urls)
+        self.assertIn("https://cnnc.zhiye.com/szxq?jobId=561260650", urls)
+        self.assertEqual(jobs[0].company, "中核集团")  # 由 sources.company 兜底
+
+    def test_ssr_jobs_pass_quality_gate(self):
+        env = {"_ssr_jobs": [
+            {"title": "市场营销中心专员(J29221)",
+             "jd_url": "https://cnnc.zhiye.com/szxq?jobId=561260569"}]}
+        for j in self.a.parse(json.dumps(env)):
+            ok, reason = normalizer.validate_job_quality(j, "https://cnnc.zhiye.com/social/jobs")
+            self.assertTrue(ok, f"{j.title} 被质量门拒: {reason}")
+
+    def test_ssr_route_dict_distinct_from_clickcapture(self):
+        # SSR 缓存形态 {ssr_path, ssr_param} 不应被新版 _resolve_url 误用（无 template → 返回空）。
+        self.a._detail_route = {"ssr_path": "szxq", "ssr_param": "jobId"}
+        sample = {"Data": [{"Id": "x", "JobAdName": "岗", "LocNames": "北京"}]}
+        # 走新版 _intercepted 路径时，SSR dict 不含 template → 该行无 jd_url 被丢，不产坏链。
+        self.assertEqual(self.a.parse(json.dumps({"_intercepted": [sample]})), [])
+
+
 class TestCompanySpaAdapter(unittest.TestCase):
     """通用企业官网：拦截所有 JSON，仅放行带真实 per-job 链接的行，绝不拼/猜 URL。"""
 
