@@ -11,5 +11,10 @@
   "shenyejituan.zhiye.com": "https://shenyejituan.zhiye.com/campus/detail",
   "coamc.zhiye.com": "https://coamc.zhiye.com/social/detail",
   "siic.zhiye.com": "https://siic.zhiye.com/campus/detail",
-  "cnnc.zhiye.com": {"ssr_path": "szxq", "ssr_param": "jobId"}
+  "cnnc.zhiye.com": {"ssr_path": "szxq", "ssr_param": "jobId"},
+  "united-imaging.zhiye.com": "https://united-imaging.zhiye.com/social/detail",
+  "mengniu.zhiye.com": "https://mengniu.zhiye.com/social/detail",
+  "dahua.zhiye.com": "https://dahua.zhiye.com/social/detail",
+  "chery.zhiye.com": "https://chery.zhiye.com/social/detail",
+  "fosunpharma.zhiye.com": {"ssr_path": "campusxq", "ssr_param": "jobId"}
 }
