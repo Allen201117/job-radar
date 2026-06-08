@@ -24,10 +24,14 @@
 2. 候选 host = 公司英文/拼音 slug + `.zhiye.com`，先批量抓 title 过滤（脚本思路见会话 `/tmp/verify_beisen_titles.py`），**只保留 title 命中公司名的**（防张冠李戴，handover 曾把 `coamc`=中国东方资产 误标中国信达）。
 3. 过滤后跑 `BeisenAdapter` 确认出岗 + 抽样 jd_url，再 `probe.py --all --candidates ... --emit 0NN`。
 
-**本系列已入北森（live 探活，migration 062/063/064）**：
-- soe 国企央企：中核 cnnc / 深业 shenyejituan / 中国东方资产 coamc / 上实 siic。
-- 私企新版：公牛 gongniu / 360 / 联影 united-imaging / 蒙牛 mengniu / 大华 dahua / 奇瑞 chery / 药明康德 wuxiapptec / 通威 tongwei / 卓胜微 maxscend / 传音 transsion。
-- C 型 SSR：中核 cnnc(`szxq`) / 复星医药 fosunpharma(`campusxq`)。
+**本系列已入（live 探活，migration 062–067，北森 30 家 + 飞书 2 家）**：
+- 北森 soe 国企央企：中核 cnnc / 深业 shenyejituan / 中国东方资产 coamc / 上实 siic / 江淮 jac / 江铃 jmc。
+- 北森 私企新版（`?jobAdId={GUID}`）：公牛 / 360 / 联影 united-imaging / 蒙牛 / 大华 dahua / 奇瑞 chery / 药明康德 wuxiapptec / 通威 tongwei / 卓胜微 maxscend / 传音 transsion / 零跑 leapmotor / 欣旺达 sunwoda / 国轩 gotion / 双汇 shuanghui / 周大福 ctf / 科大讯飞 iflytek / 维达 vinda / 东鹏 dongpeng / 东山精密 dsbj / 蜂巢能源 svolt / 新东方 xdf / 先导智能 leadchina / 博众精工 bozhon。
+- 北森 C 型 SSR：中核 cnnc(`szxq`) / 复星医药 fosunpharma(`campusxq`)。
+- 飞书：零一万物 01ai / 鹰角 hypergryph。
+- 北森详情路由已落 `beisen_routes.json`（37 条）。北森 slug-sweep 命中率约 12–18%（多数大国企/互联网不在北森，返回 `Not Found`）。
+
+**⚠️ 飞书批量 sweep 会触发反爬**：连打 ~34 个 `{tenant}.jobs.feishu.cn` 后大面积 `anti_bot_blocked`（deepseek/mihoyo/weride 等真租户被误杀）。正解=**小批 + 间隔**重探（每批 ≤5、隔几分钟），或单家慢探。已确认存在但被反爬挡的真飞书租户值得换干净会话重试。
 
 **🔨 仍待做（按价值）**：
 0. **北森老校招异构 SSR**（`details2021?adId={GUID}` 类，**非数字 jobId**）：BOE `boe.zhiye.com`、中国建筑 `cscec.zhiye.com` —— 当前 `_BEISEN_SSR_ANCHOR_JS` 只抓数字 id 锚点，这两家无数字 jobId 锚点。需扩锚点正则到 `adId={GUID}` + 探 `details2021/campusxq` 路径。
