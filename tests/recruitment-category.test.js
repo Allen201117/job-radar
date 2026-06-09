@@ -26,3 +26,15 @@ test("recruitmentCategory 三桶穷尽分类（实习 / 校招 / 社招）", () 
 test("recruitmentCategory 实习优先于校园字样", () => {
   assert.equal(recruitmentCategory({ title: "2025 暑期实习 · 校园招聘" }), "实习");
 });
+
+test("P1-D: url 拼音路径 + 源名信号补全校招/实习（治 59% 空 job_type 误堆社招）", () => {
+  // jd_url 拼音路径（/shixi /xiaozhao），标题本身无招聘类型字样
+  assert.equal(recruitmentCategory({ title: "研发工程师", jd_url: "https://x.com/zp/shixi/123" }), "实习");
+  assert.equal(recruitmentCategory({ title: "电气工程师", jd_url: "https://x.com/zp/xiaozhao/9" }), "校招");
+  // jd_url 英文路径（已支持，回归确认）
+  assert.equal(recruitmentCategory({ title: "软件工程师", jd_url: "https://x.com/campus/job/1" }), "校招");
+  // 源/公司名显式标注（如库里的"华润电力 CR Power 校招"）
+  assert.equal(recruitmentCategory({ title: "电气工程师", company: "华润电力 CR Power 校招" }), "校招");
+  // 回归：普通公司/岗位不被误判
+  assert.equal(recruitmentCategory({ title: "后端开发", company: "字节跳动" }), "社招");
+});
