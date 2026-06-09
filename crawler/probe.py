@@ -30,6 +30,7 @@ from run import ADAPTERS  # noqa: E402
 _HTTPX_ADAPTERS = {
     "greenhouse", "lever", "ashby", "smartrecruiters", "workday", "eightfold", "oracle",
     "apple", "apple_cn", "baidu", "jd", "siemens", "haier",
+    "hotjob",  # 本土 wecruit：直连 listPosition 接口，无浏览器（详见 adapters/hotjob.py）
 }
 
 # 通用 ATS 的 URL 模板：给定 slug 即可拼出公开 JSON 接口地址。

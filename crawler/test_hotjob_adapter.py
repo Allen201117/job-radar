@@ -63,6 +63,23 @@ class TestHotJobAdapter(unittest.TestCase):
             "https://wecruit.hotjob.cn/SU64893571bef57c16d356b99e/pb/posDetail.html?postId={id}&postType=intern",
         )
 
+    def test_bind_source_sets_recruit_type_per_channel(self):
+        # recruitType 数值经各页 JS bundle 核实：society=2 / campus=1 / intern=12（直连接口的渠道选择子）。
+        a = HotJobAdapter()
+        a._bind_source("https://crrc.hotjob.cn/SU64d47c466202cc36e27a52d4/pb/social.html")
+        self.assertEqual(a._recruit_type, 2)
+        self.assertEqual(a._origin, "https://crrc.hotjob.cn")
+        a._bind_source("https://crrc.hotjob.cn/SU64d47c466202cc36e27a52d4/pb/school.html")
+        self.assertEqual(a._recruit_type, 1)
+        a._bind_source("https://crrc.hotjob.cn/SU64d47c466202cc36e27a52d4/pb/interns.html")
+        self.assertEqual(a._recruit_type, 12)
+
+    def test_bind_source_defaults_to_society_when_page_missing(self):
+        a = HotJobAdapter()
+        a._bind_source("https://wecruit.hotjob.cn/SU64893571bef57c16d356b99e")
+        self.assertEqual(a._recruit_type, 2)
+        self.assertTrue(a.detail_template.endswith("postType=society"))
+
     def test_parse_list_position_builds_detail_jobs(self):
         jobs = self.a.parse(json.dumps({"_intercepted": [TCL_LIST_RESPONSE]}))
         self.assertEqual(len(jobs), 1)

@@ -41,8 +41,8 @@ class HotJobAdapter(PlaywrightAdapter):
         "interns.html": ("intern", 12),
     }
     _LIST_API = "/wecruit/positionInfo/listPosition/"
-    api_page_size = 20
-    api_max_pages = 6  # 每渠道最多翻页数（直连快，但有上限防库膨胀；按 totalPage 提前停）
+    api_page_size = 20   # 接口服务端硬上限 = 20/页（pageSize 调更大也只回 20）
+    api_max_pages = 10   # 每渠道最多翻页数（10×20=200 岗封顶，防库膨胀；按 totalPage 提前停）
 
     def __init__(self):
         self.official_hosts = ()
@@ -82,12 +82,13 @@ class HotJobAdapter(PlaywrightAdapter):
             "Referer": self.list_urls[0],
             "Origin": self._origin,
         }
+        # 翻页参数是 currentPage（pageIndex/pageNo 均被忽略，恒回第 1 页）；pageSize 服务端封顶 20。
         collected: List[dict] = []
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
-            for page_index in range(1, self.api_max_pages + 1):
+            for current_page in range(1, self.api_max_pages + 1):
                 resp = client.post(api, data={
                     "recruitType": self._recruit_type,
-                    "pageIndex": page_index,
+                    "currentPage": current_page,
                     "pageSize": self.api_page_size,
                 })
                 resp.raise_for_status()
@@ -96,7 +97,7 @@ class HotJobAdapter(PlaywrightAdapter):
                 page_form = (payload.get("data") or {}).get("pageForm") or {}
                 rows = page_form.get("pageData") or []
                 total_page = page_form.get("totalPage") or 0
-                if not rows or page_index >= total_page:
+                if not rows or current_page >= total_page:
                     break
         if not collected:
             raise RuntimeError(f"hotjob: empty response from listPosition (suiteKey={self._suite_key})")
