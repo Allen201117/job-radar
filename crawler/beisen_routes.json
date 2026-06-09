@@ -11,13 +11,22 @@
   "shenyejituan.zhiye.com": "https://shenyejituan.zhiye.com/campus/detail",
   "coamc.zhiye.com": "https://coamc.zhiye.com/social/detail",
   "siic.zhiye.com": "https://siic.zhiye.com/campus/detail",
-  "cnnc.zhiye.com": {"ssr_path": "szxq", "ssr_param": "jobId"},
+  "cnnc.zhiye.com": {
+    "ssr_path": "szxq",
+    "ssr_param": "jobId"
+  },
   "united-imaging.zhiye.com": "https://united-imaging.zhiye.com/social/detail",
   "mengniu.zhiye.com": "https://mengniu.zhiye.com/social/detail",
   "dahua.zhiye.com": "https://dahua.zhiye.com/social/detail",
   "chery.zhiye.com": "https://chery.zhiye.com/social/detail",
-  "fosunpharma.zhiye.com": {"ssr_path": "campusxq", "ssr_param": "jobId"},
-  "boe.zhiye.com": {"ssr_path": "zwxq", "ssr_param": "jobId"},
+  "fosunpharma.zhiye.com": {
+    "ssr_path": "campusxq",
+    "ssr_param": "jobId"
+  },
+  "boe.zhiye.com": {
+    "ssr_path": "zwxq",
+    "ssr_param": "jobId"
+  },
   "wuxiapptec.zhiye.com": "https://wuxiapptec.zhiye.com/social/detail",
   "tongwei.zhiye.com": "https://tongwei.zhiye.com/social/detail",
   "maxscend.zhiye.com": "https://maxscend.zhiye.com/social/detail",
@@ -39,5 +48,13 @@
   "bozhon.zhiye.com": "https://bozhon.zhiye.com/social/detail",
   "cmhk.zhiye.com": "https://cmhk.zhiye.com/social/detail",
   "ghsmc.zhiye.com": "https://ghsmc.zhiye.com/campus/detail",
-  "gangyan.zhiye.com": "https://gangyan.zhiye.com/campus/detail"
+  "gangyan.zhiye.com": "https://gangyan.zhiye.com/campus/detail",
+  "genertec.zhiye.com": "https://genertec.zhiye.com/social/detail",
+  "ccccltd.zhiye.com": "https://ccccltd.zhiye.com/social/detail",
+  "picc.zhiye.com": "https://picc.zhiye.com/social/detail",
+  "haitian.zhiye.com": "https://haitian.zhiye.com/social/detail",
+  "sinotrans.zhiye.com": "https://sinotrans.zhiye.com/social/detail",
+  "sugon.zhiye.com": "https://sugon.zhiye.com/social/detail",
+  "goldwind.zhiye.com": "https://goldwind.zhiye.com/social/detail",
+  "unicom.zhiye.com": "https://unicom.zhiye.com/social/detail"
 }
