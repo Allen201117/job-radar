@@ -46,20 +46,23 @@ export async function GET(request: NextRequest) {
   const city = (params.get("city") || "").trim();
   const startTime = Date.now();
 
-  const [cached, liveBaidu, liveJd] = await Promise.all([
+  // P2：on-demand 定向刷新已知源——从 baidu/jd 扩到也刷 Apple 在华（既有但此前未接线的 fetcher）。
+  // 三源并行，Promise.all 不叠加墙钟；各自 query+city 过滤 + 质量门 + upsert。
+  const [cached, liveBaidu, liveJd, liveApple] = await Promise.all([
     fetchCached(supabase, query, functionFilter, city, limit),
     query ? fetchBaiduLiveAndUpsert(query, limit, city) : Promise.resolve([]),
     query ? fetchJdLiveAndUpsert(query, limit, city) : Promise.resolve([]),
+    query ? fetchAppleLiveAndUpsert(query, limit, city) : Promise.resolve([]),
   ]);
 
-  const live = interleaveJobsBySource([...liveBaidu, ...liveJd]);
+  const live = interleaveJobsBySource([...liveBaidu, ...liveJd, ...liveApple]);
   const merged = mergeJobsByUrl(
     query ? live : cached,
     query ? cached : live,
   ).slice(0, limit);
   const jobsCreated = live.filter((job: any) => job.__action === "created").length;
   const jobsUpdated = live.filter((job: any) => job.__action === "updated").length;
-  const knownSourceCount = [liveBaidu, liveJd].filter((jobs) => jobs.length > 0).length;
+  const knownSourceCount = [liveBaidu, liveJd, liveApple].filter((jobs) => jobs.length > 0).length;
 
   return NextResponse.json({
     ok: true,
@@ -71,6 +74,7 @@ export async function GET(request: NextRequest) {
     refreshedSources: [
       { adapter_name: "baidu", jobs_returned: liveBaidu.length },
       { adapter_name: "jd", jobs_returned: liveJd.length },
+      { adapter_name: "apple", jobs_returned: liveApple.length },
     ],
     jobs_created: jobsCreated,
     jobs_updated: jobsUpdated,
