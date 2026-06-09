@@ -290,10 +290,15 @@ class BeisenAdapter(ChinaSpaAdapter):
     detail_template = ""
 
     _ID_FIELDS = ("Id", "id", "jobAdId", "JobAdId", "code")
+    # GetJobAdPageList 分页：北森列表页只发**一次** count-probe 请求拿总数（多数租户 PageSize=1，
+    # 个别 PageSize=10），渲染时不会自己翻页到底。我们捕获该 POST、用站点自己的 PortalId+session
+    # **服务端重放**并翻页到收齐 Count 条（接口实测支持 PageSize=50）。
+    _PAGE_SIZE = 50      # 单页拉取数（接口实测 50 稳定返回）
+    _MAX_JOBS = 600      # 单租户上限（防超大央企一次拉爆；600=12 页足够覆盖绝大多数）
 
     def fetch(self, source_url: str) -> str:
         try:
-            list_json = super().fetch(source_url)  # 浏览器①：拦截 GetJobAdPageList 等列表接口（新版）
+            list_json = self._fetch_paginated(source_url)  # 浏览器①：捕获 GetJobAdPageList POST → 服务端翻页重放
         except RuntimeError:
             # 新版无 JSON 可拦 → 试老版 SSR（C 型）：列表页 HTML 直出 jobId 锚点。
             return self._fetch_ssr(source_url)
@@ -302,6 +307,102 @@ class BeisenAdapter(ChinaSpaAdapter):
             self._detail_route = self._discover_detail_route(source_url, list_json)
             _BEISEN_ROUTE_CACHE[self._host] = self._detail_route  # 命中或 None 都缓存，避免重复探测
         return list_json
+
+    def _fetch_paginated(self, source_url: str) -> str:
+        """渲染列表页，捕获其 GetJobAdPageList POST 请求，然后用站点自身 session 服务端翻页重放，
+        把全部岗位收齐成单个合成响应 {"_intercepted":[{"Data":[...all...],"Count":N}]}（下游 shape 不变）。
+
+        为何不复用 super().fetch()：列表页**只发一次** count-probe（PageSize 常为 1），被动拦截只能拿到 1 条。
+        这里主动重放才是收全岗位的正解；捕获到 POST 即翻页，捕获不到（GET 式/异构租户）则回退被动拦截 (super)。
+
+        命中规则：仅当真捕获到 GetJobAdPageList 的 POST 且至少重放出 1 条岗位才返回合成响应；
+        否则回退 super().fetch()（保留原拦截链），再不行由 fetch() 落到 SSR。"""
+        # ChinaSpaAdapter.fetch 会绑定 _origin/_host/_portal_prefix/list_urls，这里手动复刻同样绑定。
+        parsed = urlparse(source_url)
+        self._origin = f"{parsed.scheme}://{parsed.netloc}"
+        self._host = parsed.netloc
+        segs = [s for s in (parsed.path or "").split("/") if s]
+        self._portal_prefix = ("/" + "/".join(segs[:-1])) if len(segs) > 1 else ""
+        self.list_urls = [source_url]
+
+        from playwright.sync_api import sync_playwright
+
+        captured: dict = {}
+        passive: List[dict] = []
+        matchers = self.intercept_matches
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            ctx = browser.new_context(
+                user_agent=PlaywrightAdapter.user_agent,
+                viewport={"width": 1366, "height": 900}, locale="zh-CN")
+            page = ctx.new_page()
+
+            def on_request(req):
+                # 捕获列表页自己发的 GetJobAdPageList POST（含 PortalId/Category/DisplayFields），供重放。
+                if "GetJobAdPageList" in req.url and req.method == "POST" and not captured:
+                    try:
+                        captured["url"] = req.url
+                        captured["body"] = json.loads(req.post_data or "{}")
+                        captured["ct"] = (req.headers or {}).get("content-type", "application/json")
+                    except Exception:
+                        pass
+
+            def on_response(resp):
+                # 被动拦截兜底（与 PlaywrightAdapter.fetch 同口径）：捕获不到 POST 时仍有数据可用。
+                try:
+                    if matchers and not any(m in resp.url for m in matchers):
+                        return
+                    if "json" in (resp.headers or {}).get("content-type", "").lower():
+                        passive.append(resp.json())
+                except Exception:
+                    pass
+
+            page.on("request", on_request)
+            page.on("response", on_response)
+            try:
+                page.goto(source_url, wait_until="domcontentloaded", timeout=self.pw_timeout)
+                page.wait_for_timeout(self.wait_ms)
+            except Exception:
+                pass
+
+            rows: List[dict] = []
+            total = None
+            if captured.get("url") and isinstance(captured.get("body"), dict):
+                body = dict(captured["body"])
+                hdrs = {"content-type": captured.get("ct") or "application/json"}
+                index = 0
+                while len(rows) < self._MAX_JOBS:
+                    body["PageSize"] = self._PAGE_SIZE
+                    body["PageIndex"] = index
+                    try:
+                        r = page.request.post(captured["url"], data=json.dumps(body), headers=hdrs)
+                        jj = r.json()
+                    except Exception:
+                        break
+                    if not isinstance(jj, dict):
+                        break
+                    if total is None:
+                        total = jj.get("Count") or jj.get("Total") or 0
+                    chunk = jj.get("Data") or []
+                    if not isinstance(chunk, list) or not chunk:
+                        break
+                    rows.extend(chunk)
+                    if total and len(rows) >= total:
+                        break
+                    if len(chunk) < self._PAGE_SIZE:  # 末页不足一页 → 收完了
+                        break
+                    index += 1
+            browser.close()
+
+        if rows:
+            return json.dumps({"_intercepted": [{"Data": rows, "Count": total or len(rows)}]},
+                              ensure_ascii=False)
+        if passive:  # 没捕获到 POST/重放为空 → 回退被动拦截链（异构租户兼容）
+            return json.dumps({"_intercepted": passive}, ensure_ascii=False)
+        # 啥都没有 → 交给 fetch() 落到 SSR 分支
+        raise RuntimeError(
+            f"{self.name}: anti_bot_blocked — 未捕获 GetJobAdPageList POST 也无被动拦截 host={self._host}")
 
     def _fetch_ssr(self, source_url: str) -> str:
         """老版 SSR（C 型）：列表页 HTML 直出 per-job 锚点（无 JSON 接口）。
