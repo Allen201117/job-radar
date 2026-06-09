@@ -4,7 +4,9 @@ import { createServerSupabase } from "@/lib/auth";
 import liveSearch from "@/lib/live-search";
 
 const {
-  LIVE_ATS_SOURCES,
+  selectRelevantSources,
+  resolveInlineAtsSource,
+  keepForChinaRadar,
   extractAppleSearchResultsFromHtml,
   extractBaiduInitialDataFromHtml,
   filterJobsByQueryAndCity,
@@ -27,7 +29,8 @@ const JD_JOB_LIST_URL = "https://zhaopin.jd.com/web/job/job_list";
 const JD_REFERER_URL = "https://zhaopin.jd.com/web/job/job_info_list/3";
 const TIMEOUT = 15000;
 const ATS_TIMEOUT = 8000;
-const ATS_SOURCE_LIMIT = Number(process.env.LIVE_ATS_SOURCE_LIMIT || 3);
+// on-demand 内联刷新的 greenhouse/lever 源上限（每个源一次 JSON 拉全量，再客户端按 query/city 收窄）。
+const INLINE_ATS_CAP = Number(process.env.LIVE_ATS_SOURCE_LIMIT || 8);
 
 export async function GET(request: NextRequest) {
   const supabase = await createServerSupabase();
@@ -44,25 +47,30 @@ export async function GET(request: NextRequest) {
   const limit = Math.min(Number(params.get("limit") || 30), 60);
   const functionFilter = params.get("function") || "all";
   const city = (params.get("city") || "").trim();
+  const company = (params.get("company") || "").trim();
   const startTime = Date.now();
 
-  // P2：on-demand 定向刷新已知源——从 baidu/jd 扩到也刷 Apple 在华（既有但此前未接线的 fetcher）。
-  // 三源并行，Promise.all 不叠加墙钟；各自 query+city 过滤 + 质量门 + upsert。
-  const [cached, liveBaidu, liveJd, liveApple] = await Promise.all([
+  // P2：on-demand 定向刷新已知源——除 baidu/jd/apple 三个专用源外，再按用户筛选项从真实 sources 表
+  // 挑相关的 greenhouse/lever 外企 ATS（公开 JSON API，Vercel serverless 秒回），只放行在华岗位。
+  // 全部并行，Promise.all 不叠加墙钟；各自 在华过滤 + query/city 过滤 + 质量门 + upsert。
+  const [cached, liveBaidu, liveJd, liveApple, liveAts] = await Promise.all([
     fetchCached(supabase, query, functionFilter, city, limit),
     query ? fetchBaiduLiveAndUpsert(query, limit, city) : Promise.resolve([]),
     query ? fetchJdLiveAndUpsert(query, limit, city) : Promise.resolve([]),
     query ? fetchAppleLiveAndUpsert(query, limit, city) : Promise.resolve([]),
+    query ? fetchRelevantAtsLiveAndUpsert(query, city, company, limit) : Promise.resolve([]),
   ]);
 
-  const live = interleaveJobsBySource([...liveBaidu, ...liveJd, ...liveApple]);
+  const live = interleaveJobsBySource([...liveBaidu, ...liveJd, ...liveApple, ...liveAts]);
   const merged = mergeJobsByUrl(
     query ? live : cached,
     query ? cached : live,
   ).slice(0, limit);
   const jobsCreated = live.filter((job: any) => job.__action === "created").length;
   const jobsUpdated = live.filter((job: any) => job.__action === "updated").length;
-  const knownSourceCount = [liveBaidu, liveJd, liveApple].filter((jobs) => jobs.length > 0).length;
+  const atsSourceCount = new Set(liveAts.map((job: any) => job.__sourceKey)).size;
+  const knownSourceCount =
+    [liveBaidu, liveJd, liveApple].filter((jobs) => jobs.length > 0).length + atsSourceCount;
 
   return NextResponse.json({
     ok: true,
@@ -70,16 +78,17 @@ export async function GET(request: NextRequest) {
     jobs: merged.map((job: any) => toApiJob(job, job.__live ? 55 : 35)),
     total: merged.length,
     knownSources: knownSourceCount,
-    chinaKnownSources: knownSourceCount,
+    chinaKnownSources: [liveBaidu, liveJd, liveApple].filter((jobs) => jobs.length > 0).length,
     refreshedSources: [
       { adapter_name: "baidu", jobs_returned: liveBaidu.length },
       { adapter_name: "jd", jobs_returned: liveJd.length },
       { adapter_name: "apple", jobs_returned: liveApple.length },
+      { adapter_name: "greenhouse+lever", jobs_returned: liveAts.length },
     ],
     jobs_created: jobsCreated,
     jobs_updated: jobsUpdated,
-    atsSupplementSources: 0,
-    priority: "仅刷新已确认中国官方源；动态扩源请使用 /api/discovery",
+    atsSupplementSources: atsSourceCount,
+    priority: "刷新已确认中国官方源 + 按筛选项命中的在华外企 ATS；浏览器源动态扩源请用 /api/discovery",
     searchedAt: new Date().toISOString(),
     latencyMs: Date.now() - startTime,
   });
@@ -189,17 +198,41 @@ async function fetchJdLiveAndUpsert(query: string, limit: number, city: string) 
   return upserted;
 }
 
-async function fetchGenericAtsLiveAndUpsert(query: string, limit: number, city: string) {
+// on-demand 定向刷新已知外企 ATS：从真实 sources 表取 enabled 的 greenhouse/lever，
+// 按用户筛选项挑相关源，每源直连公开 JSON API 拉全量 → 在华过滤 → query/city 过滤 → 质量门 → upsert。
+async function fetchRelevantAtsLiveAndUpsert(
+  query: string,
+  city: string,
+  company: string,
+  limit: number,
+) {
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
     console.error("[search] missing SUPABASE_SERVICE_ROLE_KEY");
     return [];
   }
 
-  const selectedSources = LIVE_ATS_SOURCES.slice(0, ATS_SOURCE_LIMIT);
-  const perSourceLimit = Math.max(2, Math.ceil(limit / 8));
+  const service = createServiceClient();
+  const { data: sources, error } = await service
+    .from("sources")
+    .select("id, company, adapter_name, source_url, industry, segment")
+    .eq("enabled", true)
+    .in("adapter_name", ["greenhouse", "lever"]);
+  if (error) {
+    console.error("[search] ats sources lookup failed", error.message);
+    return [];
+  }
+  if (!sources || sources.length === 0) return [];
+
+  // 按用户筛选项（公司/关键词→行业/segment）挑相关源，cap 控制单次 on-demand 的外呼数。
+  const selected = selectRelevantSources(
+    sources,
+    { keyword: query, company },
+    { cap: INLINE_ATS_CAP },
+  );
+  const perSourceLimit = Math.max(3, Math.ceil(limit / 3));
 
   const settled = await Promise.allSettled(
-    selectedSources.map((source: any) =>
+    selected.map(({ source }: any) =>
       fetchOneAtsSourceAndUpsert(source, query, city, perSourceLimit),
     ),
   );
@@ -215,27 +248,24 @@ async function fetchOneAtsSourceAndUpsert(
   city: string,
   limit: number,
 ) {
-  const rawJobs =
-    source.provider === "greenhouse"
-      ? await searchGreenhouseLive(source)
-      : await searchLeverLive(source);
+  const resolved = resolveInlineAtsSource(source);
+  if (!resolved) return [];
+
+  const rawJobs = await searchAtsLiveByUrl(resolved, source);
   const filtered = filterJobsByQueryAndCity(rawJobs, query, city)
-    .filter((job: any) => isHighQualityJdUrl(job.jd_url, source.provider))
+    .filter((job: any) => isHighQualityJdUrl(job.jd_url, resolved.provider))
     .slice(0, limit);
 
   if (filtered.length === 0) return [];
 
-  const sourceRow = await getApprovedLiveSource(source);
-  if (!sourceRow) return [];
-
   const upserted = [];
   for (const job of filtered) {
-    const row = await upsertLiveJob({ ...job, source_id: sourceRow.id });
+    const row = await upsertLiveJob({ ...job, source_id: source.id });
     if (row) {
       upserted.push({
         ...row,
         __live: true,
-        __sourceKey: `${source.provider}:${source.slug}`,
+        __sourceKey: `${resolved.provider}:${source.company}`,
       });
     }
   }
@@ -282,14 +312,15 @@ async function searchAppleLive(query: string, limit: number) {
   return jobs.slice(0, limit);
 }
 
-async function searchGreenhouseLive(source: any) {
-  const url = new URL(
-    `https://boards-api.greenhouse.io/v1/boards/${source.slug}/jobs`,
-  );
-  url.searchParams.set("content", "true");
-
+// 直连真实源 source_url（已由 resolveInlineAtsSource 校验 host + 补 content/mode 参数）。
+// 在华过滤放在原始行级别（greenhouse=location.name / lever=categories.location），逐字对齐 crawler，
+// 避免格式化后 normalizeChinaLocation 改写地点导致与抓取端口径漂移。
+async function searchAtsLiveByUrl(
+  resolved: { provider: string; url: string },
+  source: any,
+) {
   try {
-    const response = await fetch(url, {
+    const response = await fetch(resolved.url, {
       method: "GET",
       headers: {
         Accept: "application/json",
@@ -301,37 +332,18 @@ async function searchGreenhouseLive(source: any) {
     if (!response.ok) return [];
 
     const data = await response.json();
-    return Array.isArray(data.jobs)
-      ? data.jobs.map((row: any) => formatGreenhouseJob(row, source))
-      : [];
+    if (resolved.provider === "greenhouse") {
+      const rows = Array.isArray(data?.jobs) ? data.jobs : [];
+      return rows
+        .filter((row: any) => keepForChinaRadar(row?.location?.name))
+        .map((row: any) => formatGreenhouseJob(row, source));
+    }
+    const rows = Array.isArray(data) ? data : [];
+    return rows
+      .filter((row: any) => keepForChinaRadar(row?.categories?.location))
+      .map((row: any) => formatLeverPosting(row, source));
   } catch (error) {
-    console.error(`[search] greenhouse ${source.slug} query failed`, error);
-    return [];
-  }
-}
-
-async function searchLeverLive(source: any) {
-  const url = new URL(`https://api.lever.co/v0/postings/${source.slug}`);
-  url.searchParams.set("mode", "json");
-
-  try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        "User-Agent": USER_AGENT,
-      },
-      signal: AbortSignal.timeout(ATS_TIMEOUT),
-    });
-
-    if (!response.ok) return [];
-
-    const data = await response.json();
-    return Array.isArray(data)
-      ? data.map((row: any) => formatLeverPosting(row, source))
-      : [];
-  } catch (error) {
-    console.error(`[search] lever ${source.slug} query failed`, error);
+    console.error(`[search] ats ${source.company} fetch failed`, error);
     return [];
   }
 }
@@ -398,35 +410,6 @@ async function searchJdLive(query: string, limit: number) {
     console.error("[search] jd live query failed", error);
     return [];
   }
-}
-
-async function getApprovedLiveSource(source: any) {
-  const service = createServiceClient();
-  const sourceUrl =
-    source.provider === "greenhouse"
-      ? `https://boards-api.greenhouse.io/v1/boards/${source.slug}/jobs`
-      : `https://api.lever.co/v0/postings/${source.slug}`;
-
-  const { data: existing, error: existingError } = await service
-    .from("sources")
-    .select("id")
-    .eq("company", source.company)
-    .eq("source_url", sourceUrl)
-    .eq("enabled", true)
-    .limit(1)
-    .maybeSingle();
-
-  if (existingError) {
-    console.error(`[search] ${source.company} source lookup failed`, existingError.message);
-    return null;
-  }
-
-  if (existing) return existing;
-
-  console.warn(
-    `[search] skipped ${source.company}; ${source.provider} board is not an approved enabled source`,
-  );
-  return null;
 }
 
 async function getSource(adapterName: string) {
