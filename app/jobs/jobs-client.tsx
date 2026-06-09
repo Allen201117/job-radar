@@ -79,12 +79,13 @@ type Filters = {
 
 interface Props {
   initialJobs: ScoredJob[];
-  companies: string[];
+  // 活跃岗位总数（SSR 查得）；前端据此后台分块拉完剩余岗位（解除展示硬上限）。
+  initialTotal: number;
   // 从用户已保存偏好预填的筛选初值（城市/类型/关键词）；用户手动改即覆盖。
   initialFilters?: { city?: string; jobType?: string; keyword?: string };
 }
 
-export default function JobsClient({ initialJobs, companies, initialFilters }: Props) {
+export default function JobsClient({ initialJobs, initialTotal, initialFilters }: Props) {
   const [filters, setFilters] = useState<Filters>({
     company: "",
     city: initialFilters?.city || "",
@@ -98,6 +99,10 @@ export default function JobsClient({ initialJobs, companies, initialFilters }: P
     salaryOnly: false,
   });
   const [officialJobs, setOfficialJobs] = useState<ScoredJob[]>([]);
+  // 后台分块把岗位库剩余岗位拉完（解除展示硬上限）：SSR 只给第一页，这里补齐到 initialTotal。
+  const [extraJobs, setExtraJobs] = useState<ScoredJob[]>([]);
+  const [libLoading, setLibLoading] = useState(false);
+  const fillRef = useRef(false);
   // 本次搜索/发现完成后默认只看新岗位；用户可切回「查看全部」
   const [onlyNew, setOnlyNew] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -117,6 +122,53 @@ export default function JobsClient({ initialJobs, companies, initialFilters }: P
 
   const discoveryActive = discovery.phase === "queued" || discovery.phase === "running";
 
+  // —— 后台拉全量岗位库（无展示硬上限）——
+  // SSR 只渲染第一页；挂载后从第一页之后按 1000 一块拉到 initialTotal，合并进内存库。
+  // 现有筛选 / 三桶 / 关键词扩展 / 排序全部在内存全量上跑，故需把全量拉进来（只是不再一次性塞 props）。
+  useEffect(() => {
+    if (fillRef.current) return;
+    if (initialJobs.length >= initialTotal) return;
+    fillRef.current = true;
+    let cancelled = false;
+    (async () => {
+      setLibLoading(true);
+      let offset = initialJobs.length;
+      const LIMIT = 1000;
+      for (let i = 0; i < 500 && !cancelled; i++) {
+        try {
+          const resp = await fetch(`/api/jobs/list?offset=${offset}&limit=${LIMIT}`);
+          const data = await resp.json();
+          const batch: ScoredJob[] = Array.isArray(data?.jobs) ? data.jobs : [];
+          if (!data?.ok || batch.length === 0) break;
+          if (cancelled) break;
+          setExtraJobs((prev) => [...prev, ...batch]);
+          offset += batch.length;
+          if (batch.length < LIMIT) break;
+        } catch {
+          break;
+        }
+      }
+      if (!cancelled) setLibLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 内存库 = SSR 第一页 + 后台补齐的剩余页（按 id 去重）。
+  const localJobs = useMemo(() => {
+    if (extraJobs.length === 0) return initialJobs;
+    const seen = new Set(initialJobs.map((j) => j.id));
+    return [...initialJobs, ...extraJobs.filter((j) => !seen.has(j.id))];
+  }, [initialJobs, extraJobs]);
+
+  // 公司下拉项从内存库实时派生（随后台拉取增长）。
+  const companies = useMemo(
+    () => Array.from(new Set(localJobs.map((j) => j.company).filter(Boolean))) as string[],
+    [localJobs],
+  );
+
   // 本次会话内由「刷新已知源 / 发现官方源」新拿到的岗位（用于高亮 + 「只看新发现」）
   const sessionNewKeys = useMemo(
     () => new Set(officialJobs.map((j) => j.jd_url || j.id)),
@@ -126,9 +178,9 @@ export default function JobsClient({ initialJobs, companies, initialFilters }: P
   // 合并本地岗位库 + 本次已知源刷新/官方源发现返回的岗位
   const allJobs = useMemo(() => {
     const seen = new Set(officialJobs.map((j) => j.jd_url || j.id));
-    const cachedNotInLive = initialJobs.filter((j) => !seen.has(j.jd_url || j.id));
+    const cachedNotInLive = localJobs.filter((j) => !seen.has(j.jd_url || j.id));
     return [...officialJobs, ...cachedNotInLive];
-  }, [initialJobs, officialJobs]);
+  }, [localJobs, officialJobs]);
 
   // 「只看新发现」仅在确有本次新岗位时生效，避免误把列表清空
   const newViewActive = onlyNew && officialJobs.length > 0;
@@ -158,8 +210,8 @@ export default function JobsClient({ initialJobs, companies, initialFilters }: P
   );
 
   const existingFilteredCount = useMemo(() => {
-    return initialJobs.filter((job) => jobMatchesFilters(job, filters)).length;
-  }, [initialJobs, filters]);
+    return localJobs.filter((job) => jobMatchesFilters(job, filters)).length;
+  }, [localJobs, filters]);
 
   // 本次发现的岗位中，严格符合当前筛选（城市/类型/关键词）的数量——诚实显示「发现 N，符合 M」，
   // 避免「发现 47 却 0 展示」的误导。
@@ -529,7 +581,7 @@ export default function JobsClient({ initialJobs, companies, initialFilters }: P
       <p className="inline-flex items-center gap-2 rounded-full border border-black/[0.06] bg-white/55 px-3 py-2 text-sm leading-6 text-[#5f594e]">
         <MagnifyingGlass size={16} weight="bold" aria-hidden="true" />
         {newViewActive ? "只看本次新发现：" : "匹配 "}
-        {filtered.length} 个岗位，已展示 {Math.min(visibleCount, filtered.length)} 个（本地岗位库 {initialJobs.length} + 本次官网刷新/发现 {officialJobs.length}）。本地搜索、已知源刷新、动态官方源发现三层分开执行。
+        {filtered.length} 个岗位，已展示 {Math.min(visibleCount, filtered.length)} 个（本地岗位库 {localJobs.length}{libLoading ? ` / 共 ${initialTotal}，载入中…` : ""} + 本次官网刷新/发现 {officialJobs.length}）。本地搜索、已知源刷新、动态官方源发现三层分开执行。
       </p>
       <div className="space-y-3">
         {visibleJobs.map((job) => (
