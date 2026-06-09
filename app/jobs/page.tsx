@@ -28,11 +28,13 @@ function buildInitialFilters(prefs: any, cp: any): { city: string; jobType: stri
 
 // PostgREST 单次查询最多返回 1000 行；分页 range 把全部 active 岗位取齐（解除旧的 500 硬上限）。
 // HARD_CAP 防止岗位量极端膨胀时 props 负载失控；渲染由前端「加载更多」分批进行。
+// 取最新（first_seen_at desc）的 HARD_CAP 条：新爬的外企岗 first_seen_at 最新 → 必在前列展示。
+// 注：当前把全部岗位塞进页面 props，单页负载随上限线性增长；若长期远超此值，正解是改服务端分页。
 async function fetchAllActiveJobs(
   supabase: Awaited<ReturnType<typeof createServerSupabase>>,
 ): Promise<Job[]> {
   const PAGE = 1000;
-  const HARD_CAP = 3000;
+  const HARD_CAP = 8000;
   const all: Job[] = [];
   for (let from = 0; from < HARD_CAP; from += PAGE) {
     const { data, error } = await supabase
