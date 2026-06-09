@@ -3,19 +3,28 @@
 
 与字节同平台：拦截 /api/v1/search/job/posts，岗位在 data.job_post_list，
 详情页 https://{host}/index/position/{id}/detail。一套适配覆盖蔚来/小鹏/地平线/小米。
+
+分页（与北森同思路）：列表页只发**一次** offset=0&limit=10 的 POST，被动拦截 + 滚动翻页
+最多 max_pages 页 → 恰好截断在 ~40 条（实测 ponyai 实有 93、ecoflow 实有 209）。
+data.count 给出真实总数。修复：捕获该 POST，用站点自身 session（含 _signature，实测签名
+**不绑定** offset/limit，可复用）服务端翻页重放 limit=50 直到收齐 count，合成同 shape 响应。
+捕获不到 POST 则回退被动拦截（super().fetch）。复用站点请求、不破签名、低频。
 """
-from typing import Optional
+import json
+from typing import List, Optional
 from urllib.parse import urlparse
 
 import normalizer
 from .base import RawJob
-from .playwright_base import PlaywrightAdapter
+from .playwright_base import PlaywrightAdapter, _UA
 
 
 class FeishuRecruitAdapter(PlaywrightAdapter):
     host = ""  # 子类设置，如 nio.jobs.feishu.cn
     intercept_match = "/api/v1/search/job/posts"
     posts_keys = ("data.job_post_list", "job_post_list")
+    _PAGE_SIZE = 50    # 单页拉取数（接口实测 limit=50 稳定返回，远超站点默认 10）
+    _MAX_JOBS = 600    # 单租户上限（防超大公司一次拉爆）
 
     def __init__(self):
         self.official_hosts = (self.host,)
@@ -24,6 +33,106 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
             "https://" + self.host + "/index/position",
             "https://" + self.host + "/",
         ]
+
+    def fetch(self, source_url: str) -> str:
+        """捕获列表页自己发的 posts POST → 用站点 session 服务端翻页重放收齐 count；
+        捕获不到（站点改版/反爬）则回退被动拦截链 super().fetch（与原行为一致，零回归）。"""
+        from playwright.sync_api import sync_playwright
+
+        captured: dict = {}
+        passive: List[dict] = []
+        urls = self.list_urls or [source_url]
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            # 必须用真实浏览器 UA（与 PlaywrightAdapter.fetch 一致）：飞书 API 对默认 bot UA
+            # 的 page.request 重放返回 405；真实 Chrome UA 才放行（站点 JS 生成的 _signature 同此 UA 上下文）。
+            ctx = browser.new_context(
+                user_agent=_UA,
+                viewport={"width": 1366, "height": 900}, locale="zh-CN")
+            page = ctx.new_page()
+
+            def on_request(req):
+                # 捕获列表页自己发的 posts POST（含 _signature query + offset/limit body），供重放。
+                if self.intercept_match in req.url and req.method == "POST" and not captured:
+                    try:
+                        captured["url"] = req.url
+                        captured["body"] = json.loads(req.post_data or "{}")
+                    except Exception:
+                        pass
+
+            def on_response(resp):
+                # 被动拦截兜底（与 PlaywrightAdapter.fetch 同口径）：捕获不到 POST 时仍有数据可用。
+                try:
+                    if self.intercept_match not in resp.url:
+                        return
+                    if "json" in (resp.headers or {}).get("content-type", "").lower():
+                        passive.append(resp.json())
+                except Exception:
+                    pass
+
+            page.on("request", on_request)
+            page.on("response", on_response)
+            for u in urls:
+                try:
+                    page.goto(u, wait_until="domcontentloaded", timeout=self.pw_timeout)
+                    page.wait_for_timeout(self.wait_ms)
+                except Exception:
+                    continue
+                if captured.get("url"):
+                    break  # 首个列表页就抓到 POST，无需再开其它入口
+
+            rows: List[dict] = []
+            total = None
+            if captured.get("url") and isinstance(captured.get("body"), dict):
+                rows, total = self._replay_paginated(page, captured["url"], dict(captured["body"]))
+            browser.close()
+
+        if rows:
+            # 合成下游同 shape 响应：parse() 走 posts_keys=data.job_post_list 抽取，逻辑不变。
+            return json.dumps(
+                {"_intercepted": [{"data": {"job_post_list": rows, "count": total or len(rows)}}]},
+                ensure_ascii=False)
+        if passive:  # 没捕获到 POST/重放为空 → 回退被动拦截链
+            return json.dumps({"_intercepted": passive}, ensure_ascii=False)
+        raise RuntimeError(
+            f"{self.name}: anti_bot_blocked — 未捕获 posts POST 也无被动拦截 "
+            f"(match={self.intercept_match})")
+
+    def _replay_paginated(self, page, url: str, body: dict):
+        """用站点 session 翻页重放 url（沿用其 _signature），limit=_PAGE_SIZE，收齐 data.count。
+        返回 (rows, total)。任一步异常即停，已收的照常返回（不丢已拿到的岗位）。"""
+        rows: List[dict] = []
+        seen: set = set()
+        total = None
+        offset = 0
+        hdrs = {"content-type": "application/json"}
+        while len(rows) < self._MAX_JOBS:
+            body["offset"] = offset
+            body["limit"] = self._PAGE_SIZE
+            try:
+                r = page.request.post(url, data=json.dumps(body), headers=hdrs)
+                jj = r.json()
+            except Exception:
+                break
+            data = (jj or {}).get("data") if isinstance(jj, dict) else None
+            if not isinstance(data, dict):
+                break
+            if total is None:
+                total = data.get("count") or 0
+            chunk = data.get("job_post_list") or []
+            if not isinstance(chunk, list) or not chunk:
+                break
+            for post in chunk:
+                pid = str((post or {}).get("id") or "")
+                if pid and pid not in seen:
+                    seen.add(pid)
+                    rows.append(post)
+            if total and len(rows) >= total:
+                break
+            if len(chunk) < self._PAGE_SIZE:  # 末页不足一页 → 收完
+                break
+            offset += self._PAGE_SIZE
+        return rows, total
 
     def _map(self, post: dict) -> Optional[RawJob]:
         pid = str(post.get("id") or post.get("code") or "").strip()

@@ -169,6 +169,45 @@ class MokaAdapter(PlaywrightAdapter):
     wait_ms = 5500
     # 不同 Moka 页岗位列表挂在不同 hash 子路由，逐个试取岗位最多的
     _routes = ("#/jobs", "", "#/campus/jobs", "#/positions")
+    # Moka 列表每页仅渲染 ~30 个岗位卡，其余在「sd-Pagination」分页组件后面（非 ant，非滚动加载）。
+    # 不翻页只能拿首页，岗位多的租户被截断（如李宁 32/176、SHEIN 34/747）。逐页点「下一页」累加全量。
+    _page_cap = 60  # 30/页 → 封顶约 1800 岗，足够覆盖最大租户（SHEIN ~25 页）且防失控
+    # Moka 自有分页「下一页」按钮：class 前缀稳定（带 build hash 后缀），末页加 disabled 属性。
+    _next_sel = "button[class*='sd-Pagination-forward']"
+    _cards_js = ("els => els.map(e => ({href: e.getAttribute('href'),"
+                 " text: (e.innerText || '').trim()}))")
+
+    def _collect_all_pages(self, page) -> List[dict]:
+        """从当前已渲染的列表路由翻页累加全量岗位卡，按 href 去重。
+
+        逐次点「sd-Pagination 下一页」直到：无该按钮（单页租户不渲染分页器）/
+        按钮 disabled（末页）/ 连续无新卡 / 触达页数封顶。
+        """
+        union: dict = {}
+        no_growth = 0
+        for _ in range(self._page_cap):
+            cards = page.eval_on_selector_all("a[href*='#/job/']", self._cards_js)
+            before = len(union)
+            for c in cards:
+                href = c.get("href") or ""
+                if href and href not in union:
+                    union[href] = c
+            no_growth = no_growth + 1 if len(union) == before else 0
+            if no_growth >= 2:  # 连续两页零新增 → 停（防呆）
+                break
+            nxt = page.query_selector(self._next_sel)
+            if nxt is None:
+                break  # 单页租户：Moka 不渲染分页器
+            cls = (nxt.get_attribute("class") or "").lower()
+            if "disabled" in cls or nxt.get_attribute("disabled") is not None:
+                break  # 末页：下一页按钮 disabled
+            try:
+                nxt.scroll_into_view_if_needed(timeout=2000)
+                nxt.click(timeout=2500)
+                page.wait_for_timeout(1800)  # 等下一页岗位卡渲染
+            except Exception:
+                break
+        return list(union.values())
 
     def fetch(self, source_url: str) -> str:
         from playwright.sync_api import sync_playwright
@@ -179,20 +218,28 @@ class MokaAdapter(PlaywrightAdapter):
             browser = p.chromium.launch(headless=True)
             page = browser.new_context(user_agent=self.user_agent, locale="zh-CN").new_page()
             try:
+                # 先按首页岗位数挑出正确的列表路由（不同 Moka 页挂不同 hash 子路由），
+                # 再在该路由上翻页累加全量（多数租户岗位都在 #/jobs，空路由很快返回单页）。
+                best_route = None
+                best_first = -1
                 for route in self._routes:
                     try:
                         page.goto(base + route, wait_until="networkidle", timeout=35000)
                         page.wait_for_timeout(self.wait_ms)
-                        cards = page.eval_on_selector_all(
-                            "a[href*='#/job/']",
-                            "els => els.map(e => ({href: e.getAttribute('href'),"
-                            " text: (e.innerText || '').trim()}))")
-                        if len(cards) > len(best):
-                            best = cards
-                        if len(best) >= 3:
-                            break
+                        first = page.eval_on_selector_all("a[href*='#/job/']", self._cards_js)
+                        if len(first) > best_first:
+                            best_first, best_route = len(first), route
+                        if best_first >= 3:
+                            break  # 命中有岗位的路由即可，无需续试空路由
                     except Exception:
                         continue
+                if best_route is not None:
+                    try:
+                        page.goto(base + best_route, wait_until="networkidle", timeout=35000)
+                        page.wait_for_timeout(self.wait_ms)
+                        best = self._collect_all_pages(page)
+                    except Exception:
+                        best = []
             finally:
                 browser.close()
         return json.dumps({"_base": base, "cards": best}, ensure_ascii=False)
