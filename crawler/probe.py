@@ -30,6 +30,7 @@ from run import ADAPTERS  # noqa: E402
 _HTTPX_ADAPTERS = {
     "greenhouse", "lever", "ashby", "smartrecruiters", "workday", "eightfold", "oracle",
     "amazon",  # 外企自建：Amazon.jobs search.json
+    "phenom",  # 外企自建：Phenom /api/jobs
     "apple", "apple_cn", "baidu", "jd", "siemens", "haier",
     "hotjob",  # 本土 wecruit：直连 listPosition 接口，无浏览器（详见 adapters/hotjob.py）
 }
@@ -295,7 +296,7 @@ def build_discover_candidates():
 
 # 外企单 host ATS：必须有**真实在华岗位**（is_china_location）才入库，否则只是全球/远程看板的噪声，
 # 不符合「在华外企」雷达定位。本土 adapter（moka/beisen/company_spa）按构造即在华，只看 valid。
-_FOREIGN_ATS = {"greenhouse", "lever", "ashby", "smartrecruiters", "workday", "eightfold", "oracle", "amazon"}
+_FOREIGN_ATS = {"greenhouse", "lever", "ashby", "smartrecruiters", "workday", "eightfold", "oracle", "amazon", "phenom"}
 
 
 def probe_one(cand: dict, timeout: int = 15):

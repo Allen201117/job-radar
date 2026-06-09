@@ -89,6 +89,11 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     label: "Amazon（自建 · 外企）",
     hint: "填公司名 + Amazon.jobs 搜索接口（www.amazon.jobs/en/search.json?normalized_country_code[]=CHN&result_limit=100）",
   },
+  {
+    value: "phenom",
+    label: "Phenom（自建门户 · 外企）",
+    hint: "填公司名 + Phenom 接口（{careers域名}/api/jobs，如 careers.amd.com/api/jobs），适配 AMD/L'Oréal 等自建门户",
+  },
 ];
 
 export const ADAPTER_VALUES: string[] = SOURCE_ADAPTERS.map((a) => a.value);
