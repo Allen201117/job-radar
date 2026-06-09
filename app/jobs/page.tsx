@@ -26,29 +26,26 @@ function buildInitialFilters(prefs: any, cp: any): { city: string; jobType: stri
   };
 }
 
-// PostgREST 单次查询最多返回 1000 行；分页 range 把全部 active 岗位取齐（解除旧的 500 硬上限）。
-// HARD_CAP 防止岗位量极端膨胀时 props 负载失控；渲染由前端「加载更多」分批进行。
-// 取最新（first_seen_at desc）的 HARD_CAP 条：新爬的外企岗 first_seen_at 最新 → 必在前列展示。
-// 当前库已 ~11k 活跃岗（"3000" 只是旧 cap 把展示焊死，非真实库存）；提到 12000 覆盖当前全库 + 余量。
-// 注：当前把全部岗位塞进页面 props，单页负载随上限线性增长；若长期远超此值，正解是改服务端分页（API 增量拉取）。
-async function fetchAllActiveJobs(
+// 岗位库已不设展示硬上限。SSR 只取第一页（最新 PAGE1 条）让首屏快出，并查活跃总数；
+// 其余由前端挂载后调 /api/jobs/list 后台分块拉完合并进内存库 → 展示实时全量，单页 props 负载恒定。
+const PAGE1 = 1000;
+
+async function fetchFirstPageAndTotal(
   supabase: Awaited<ReturnType<typeof createServerSupabase>>,
-): Promise<Job[]> {
-  const PAGE = 1000;
-  const HARD_CAP = 12000;
-  const all: Job[] = [];
-  for (let from = 0; from < HARD_CAP; from += PAGE) {
-    const { data, error } = await supabase
+): Promise<{ jobs: Job[]; total: number }> {
+  const [page, head] = await Promise.all([
+    supabase
       .from("jobs")
       .select("*")
       .eq("status", "active")
       .order("first_seen_at", { ascending: false })
-      .range(from, from + PAGE - 1);
-    if (error || !data || data.length === 0) break;
-    all.push(...(data as Job[]));
-    if (data.length < PAGE) break;
-  }
-  return all;
+      .range(0, PAGE1 - 1),
+    supabase
+      .from("jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "active"),
+  ]);
+  return { jobs: (page.data as Job[]) || [], total: head.count ?? 0 };
 }
 
 export default async function JobsPage() {
@@ -85,7 +82,7 @@ export default async function JobsPage() {
   // 默认按用户已保存偏好预填筛选器（城市/类型/关键词）；用户手动改即覆盖。
   const initialFilters = buildInitialFilters(preferences, candidate);
 
-  const jobs = await fetchAllActiveJobs(supabase);
+  const { jobs, total } = await fetchFirstPageAndTotal(supabase);
 
   const scored = sortAndFilterJobs(
     jobs,
@@ -93,10 +90,6 @@ export default async function JobsPage() {
     actions,
     { showIgnored: true, showApplied: true },
   );
-
-  const companies = Array.from(
-    new Set(jobs.map((j) => j.company).filter(Boolean)),
-  ) as string[];
 
   return (
     <div className="min-h-screen bg-editorial">
@@ -110,14 +103,14 @@ export default async function JobsPage() {
           action={
             <CountBadge>
               <Briefcase size={16} weight="fill" aria-hidden="true" />
-              <span className="tabular-nums">{scored.length} 个岗位</span>
+              <span className="tabular-nums">{total} 个岗位</span>
             </CountBadge>
           }
         />
         <div className="mt-8">
           <JobsClient
             initialJobs={scored as ScoredJob[]}
-            companies={companies}
+            initialTotal={total}
             initialFilters={initialFilters}
           />
         </div>
