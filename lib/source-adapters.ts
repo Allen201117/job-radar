@@ -77,7 +77,7 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
   {
     value: "hotjob",
     label: "HotJob / wecruit（通用 ATS · 本土）",
-    hint: "填公司名 + HotJob 招聘页地址（wecruit.hotjob.cn/{suiteKey}/pb/social.html 等），浏览器拦截 listPosition",
+    hint: "填公司名 + 招聘页地址（{子域}.hotjob.cn/{suiteKey}/pb/social.html｜school.html｜interns.html，社招/校招/实习三渠道各登记一条），直连 listPosition 接口，crawl_method 选 http",
   },
   {
     value: "company_spa",
