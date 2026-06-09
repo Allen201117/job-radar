@@ -80,6 +80,11 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填公司名 + 招聘页地址（{子域}.hotjob.cn/{suiteKey}/pb/social.html｜school.html｜interns.html，社招/校招/实习三渠道各登记一条），直连 listPosition 接口，crawl_method 选 http",
   },
   {
+    value: "wt",
+    label: "WinTalent / wt（通用 ATS · 本土老版）",
+    hint: "填公司名 + wt 入口地址（{子域}.hotjob.cn/wt/{BRAND}/web/index，伊利/中广核/中国电信/现代等），直连 position/list JSON，crawl_method 选 http",
+  },
+  {
     value: "company_spa",
     label: "企业官网 SPA（通用 · 本土长尾）",
     hint: "填公司名 + 官网招聘页地址，仅放行接口里带真实岗位链接的行，加源零代码",
