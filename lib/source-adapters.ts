@@ -99,6 +99,11 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     label: "Microsoft（自建 · 外企）",
     hint: "填公司名 + MS pcsx 接口（apply.careers.microsoft.com/api/pcsx/search?domain=microsoft.com），httpx 按大中华区城市并集抓在华",
   },
+  {
+    value: "google",
+    label: "Google（自建 · 外企 · 浏览器 DOM）",
+    hint: "填公司名 + Google 结果页（www.google.com/about/careers/applications/jobs/results/?location=China），crawl_method 选 playwright，读岗位卡 DOM",
+  },
 ];
 
 export const ADAPTER_VALUES: string[] = SOURCE_ADAPTERS.map((a) => a.value);

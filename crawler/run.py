@@ -33,6 +33,7 @@ from adapters.hotjob import HotJobAdapter
 from adapters.amazon import AmazonAdapter
 from adapters.phenom import PhenomAdapter
 from adapters.microsoft import MicrosoftAdapter
+from adapters.google import GoogleAdapter
 
 
 ADAPTERS = {
@@ -59,7 +60,8 @@ ADAPTERS = {
     "oracle": OracleAdapter(),  # 外企自建门户主力：Oracle 招聘云 CE API + locationsFacet 过滤到在华
     "amazon": AmazonAdapter(),  # 外企自建巨头：Amazon.jobs 公开 search.json 按国家码筛在华
     "phenom": PhenomAdapter(),  # 外企自建巨头：Phenom People 公开 /api/jobs（AMD/L'Oréal 等）
-    "microsoft": MicrosoftAdapter(),  # 外企自建巨头：MS careers 浏览器拦截 gcsservices（Akamai 挡 httpx）
+    "microsoft": MicrosoftAdapter(),  # 外企自建巨头：MS pcsx httpx（apply.careers 子域绕 Akamai）
+    "google": GoogleAdapter(),  # 外企自建巨头：Google careers 无头浏览器 DOM 抓取
     # 中国本土 ATS / 企业官网 SPA（通用适配器，按公司加 sources 行；host 从 source_url 动态解析）
     "moka": MokaAdapter(),
     "beisen": BeisenAdapter(),
