@@ -47,8 +47,14 @@ class GoogleAdapter(BaseAdapter):
             page = ctx.new_page()
             for pg in range(1, self.max_pages + 1):
                 try:
-                    page.goto(_RESULTS.format(pg=pg), wait_until="networkidle", timeout=45000)
-                    page.wait_for_timeout(3500)
+                    # 不用 networkidle：google.com 遥测/分析让网络永不空闲，会每页耗满超时。
+                    # 改 domcontentloaded + 等岗位卡出现（SSR 渲染），快且稳。
+                    page.goto(_RESULTS.format(pg=pg), wait_until="domcontentloaded", timeout=30000)
+                    try:
+                        page.wait_for_selector("a[href*='jobs/results/']", timeout=8000)
+                    except Exception:
+                        pass
+                    page.wait_for_timeout(800)
                     rows = page.eval_on_selector_all("a[href*='jobs/results/']", _EXTRACT_JS)
                 except Exception:
                     break
