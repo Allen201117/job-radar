@@ -84,6 +84,11 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     label: "企业官网 SPA（通用 · 本土长尾）",
     hint: "填公司名 + 官网招聘页地址，仅放行接口里带真实岗位链接的行，加源零代码",
   },
+  {
+    value: "amazon",
+    label: "Amazon（自建 · 外企）",
+    hint: "填公司名 + Amazon.jobs 搜索接口（www.amazon.jobs/en/search.json?normalized_country_code[]=CHN&result_limit=100）",
+  },
 ];
 
 export const ADAPTER_VALUES: string[] = SOURCE_ADAPTERS.map((a) => a.value);
