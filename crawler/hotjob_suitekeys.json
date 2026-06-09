@@ -1,0 +1,13 @@
+{
+  "_comment": "HotJob/wecruit suiteKey 注册表（防再次丢失）。URL=https://wecruit.hotjob.cn/{suiteKey}/pb/{social,school,interns}.html。每个 key 均经 redirect 或岗位内容 title-verify 确认归属，杜绝张冠李戴。新恢复一家就登记一家。",
+  "TCL": "SU64893571bef57c16d356b99e",
+  "招商证券 CMS": "SU629dbc0c0dcad452299bc0f7",
+  "华润电力 CR Power": "SU6149ff530dcad47003d01511",
+  "云南白药 YNBY": "SU6136b970bef57c3b638162c4",
+  "迪卡侬中国 Decathlon": "SU64631fe6bef57c0907f133c4",
+  "_pending_verify": {
+    "_note": "未确认归属，勿入库（张冠李戴风险）",
+    "华泰证券 候选A": "SU6419745cbef57c635fe10142",
+    "华泰证券 候选B": "SU6013d14e5d83dc11e4a8ae4d"
+  }
+}
