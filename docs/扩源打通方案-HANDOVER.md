@@ -28,7 +28,9 @@
 3. 过滤后跑 `BeisenAdapter` 确认出岗 + 抽样 jd_url，再 `probe.py --all --candidates ... --emit 0NN`。
 
 **🚀 高 ROI 扩源最有效打法 = WebSearch 取真实 URL/slug（远胜盲猜）**：
-- **Moka 必须搜**：`app.mokahr.com/{apply|campus_apply}/{tenant}/{orgId}` 的 orgId 不可猜 → WebSearch `app.mokahr.com/apply 社会招聘 <行业>` 直接出带 orgId 的真实 URL，命中率高（本系列 Moka 入 14 家全靠搜）。腾讯系用 `app-tc.mokahr.com`。
+- **Moka 必须搜**：`app.mokahr.com/{apply|campus_apply}/{tenant}/{orgId}` 的 orgId 不可猜 → WebSearch `app.mokahr.com/apply 社会招聘 <行业>` 直接出带 orgId 的真实 URL，命中率高（本系列 Moka 入 44+ 家全靠搜）。腾讯系/部分用 `app-tc.mokahr.com`（host 从 source_url 动态解析，已支持）。
+- **⭐社招 URL 优先于校招**（075-081 续作实测教训）：`apply`/`social-recruitment`（社招）全年在招、命中率高；`campus_apply`（校招）年中(6月)淡季常 0 岗过不了质量门（携程/天马/开立/万泰/三七 campus 全因 0 岗失败）。同一公司**优先搜社招 orgId**。两个易错点：①orgId 会失效（bilibili/1022→404、快手 2283、CATL 46594 探时已变）→**必 probe 验证**；②URL 无 orgId（如 `apply/chineseall`）解析不出 list API→丢弃。
+- **飞书默认路径 `/{tenant}.jobs.feishu.cn/index/position` 命中率最高**（小鹏/蔚来/理想/元气森林/MiniMax/智谱 各 40 岗一把过）；自定义路径会失败（ponyai=`/ponyai`、dedao=`/shezhao`、智谱 campus=`/zhipucampus`，但社招仍走 `/index/position`）。**同一公司飞书失败可转 Moka 社招**（月之暗面 feishu `/index/position`✗ → Moka `apply/moonshot/148506`✓）。
 - **飞书 slug 要搜准**：盲猜常错（莉莉丝 `lilith`✗→`lilithgames`✓、米哈游不在飞书=自建 jobs.mihoyo.com）；且**批量连打触发反爬**，务必小批(≤5)。
 - **北森 slug**：`<公司> zhiye.com` 搜，或 `zhiye.com 社会招聘 <行业>`；zhiye 通配 200，靠 title≠`Not Found` 判真伪。
 - 老 SSR/项目入口（BOE social2021、启德 eic `/social?r=`、中国船舶 cssc 网申、cscec 考试入口）= 非标准锚点，留专项。
@@ -41,6 +43,14 @@
 - 飞书：零一万物 01ai / 鹰角 hypergryph / 小马智行 ponyai(`/ponyai`) / Momenta(`/talent`)。
 - HotJob/wecruit：TCL 社招/校招/实习（`wecruit.hotjob.cn/SU64893571.../pb/{social,school,interns}.html`）；云南白药社招、华夏银行校招、华润电力社招、先声药业校招、领益智造校招、上海宝冶校招、中煤矿建校招、润华汽车校招（migration 072）；华润三九校招、宜人智科校招、上海瑞金医院社招、开源证券校招、中国铁建高新装备社招、招商证券校招、南京高速齿轮社招/校招/实习（migration 073）；北京联东校招、国投证券校招、华泰证券社招、广州市规划院校招、顶点软件校招、永青集团校招、海兴电力校招、迪卡侬中国校招（migration 074）。
 - 北森详情路由已落 `beisen_routes.json`（38 条）。北森 slug-sweep 命中率约 12–18%（多数大国企/互联网不在北森，返回 `Not Found`）。
+
+**🆕 075–081 续作已入（live 探活，+36 家：Moka +30 / 飞书 +6；北森本轮 0，smics/weimai/anta 多路径重探未解析，暂搁）**：
+- 飞书（`/index/position` 默认路径）：小鹏 xiaopeng / 蔚来 nio / 理想汽车 li / 元气森林 k11pnjpvz1 / MiniMax vrfi1sk8a0 / 智谱 zhipu-ai。
+- Moka 075：知乎 / 第四范式 / 灵感游戏 / 博乐 / 向日葵Oray / 三只松鼠 / 雪球 / Shopee / 远景科技 / 幻方量化 / 光子跳动 / Meshy。
+- Moka 077：途游 tuyoogame / 驭势科技 yushi / 奇安信 qianxin / 中电信人工智能 chinatelecomai / 悠星 yostar / 鹏景 pengwin / 见山 jianshankeji。
+- Moka 078：SHEIN / 好未来 tal / 搜狐 sohu / 虎牙 huya / 乐元素 leyuansu / 搜狐畅游 cyou-inc。
+- Moka 080-081：紫光同芯 tsinghuaic(社招) / 芯粤能 ascenpower / 唯品会 vipshophr(app-tc) / 月之暗面 Kimi moonshot(社招) / 斗鱼 douyu(社招)。
+- ⏭️ 待重探（orgId 失效或淡季）：快手 kuaishou/2283、CATL catlhr/46594、携程 trip(校招淡季)、三七 37、最右、HKACO；飞书自定义路径 dedao/`shezhao`、叠纸/银河通用。下轮换社招 orgId 或正确路径重试。
 
 **⚠️ 飞书批量 sweep 会触发反爬**：连打 ~34 个 `{tenant}.jobs.feishu.cn` 后大面积 `anti_bot_blocked`（deepseek/mihoyo/weride 等真租户被误杀）。正解=**小批 + 间隔**重探（每批 ≤5、隔几分钟），或单家慢探。已确认存在但被反爬挡的真飞书租户值得换干净会话重试。
 
