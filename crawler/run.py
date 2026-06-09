@@ -30,6 +30,7 @@ from adapters.eightfold import EightfoldAdapter
 from adapters.oracle import OracleAdapter
 from adapters.china_ats import MokaAdapter, BeisenAdapter, CompanySpaAdapter
 from adapters.hotjob import HotJobAdapter
+from adapters.amazon import AmazonAdapter
 
 
 ADAPTERS = {
@@ -54,6 +55,7 @@ ADAPTERS = {
     "workday": WorkdayAdapter(),  # 外企100强主力：CXS API + location facet 服务端过滤到在华
     "eightfold": EightfoldAdapter(),  # 外企 ATS：eightfold.ai 公开接口 + location 服务端收窄到在华
     "oracle": OracleAdapter(),  # 外企自建门户主力：Oracle 招聘云 CE API + locationsFacet 过滤到在华
+    "amazon": AmazonAdapter(),  # 外企自建巨头：Amazon.jobs 公开 search.json 按国家码筛在华
     # 中国本土 ATS / 企业官网 SPA（通用适配器，按公司加 sources 行；host 从 source_url 动态解析）
     "moka": MokaAdapter(),
     "beisen": BeisenAdapter(),
