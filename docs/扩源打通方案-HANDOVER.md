@@ -41,7 +41,7 @@
 - 北森 C 型 SSR：中核 cnnc(`szxq`) / 复星医药 fosunpharma(`campusxq`)。
 - 北森 old-SSR/2021：BOE 京东方 boe(`zwxq`)。
 - 飞书：零一万物 01ai / 鹰角 hypergryph / 小马智行 ponyai(`/ponyai`) / Momenta(`/talent`)。
-- HotJob/wecruit：TCL 社招/校招/实习（`wecruit.hotjob.cn/SU64893571.../pb/{social,school,interns}.html`）；云南白药社招、华夏银行校招、华润电力社招、先声药业校招、领益智造校招、上海宝冶校招、中煤矿建校招、润华汽车校招（migration 072）；华润三九校招、宜人智科校招、上海瑞金医院社招、开源证券校招、中国铁建高新装备社招、招商证券校招、南京高速齿轮社招/校招/实习（migration 073）；北京联东校招、国投证券校招、华泰证券社招、广州市规划院校招、顶点软件校招、永青集团校招、海兴电力校招、迪卡侬中国校招（migration 074）。
+- ⚠️**HotJob/wecruit（本段曾严重失实，已核实订正）**：经 grep 全部 migration **无任何 hotjob insert**；072–074 实为北森/moka/飞书（中国钢研/BIGO/满帮/后摩/流利说/AMEC）。下列 hotjob 公司**从未真正入库**——TCL 已于 **migration 084 用残留 suiteKey 恢复**（社招48/校招48/实习48）；其余 ~23 家（云南白药/华夏银行/华润电力/先声药业/领益/上海宝冶/中煤矿建/润华汽车/华润三九/宜人智科/瑞金医院/开源证券/中国铁建高新装备/招商证券/南京高速齿轮/北京联东/国投证券/**华泰证券**/广州市规划院/顶点软件/永青/海兴电力/**迪卡侬中国**）**suiteKey 已丢失，需逐家 WebSearch `<公司> wecruit.hotjob.cn` 取真实 suiteKey 后 `probe.py --all` 重探**（hotjob URL=`wecruit.hotjob.cn/{suiteKey}/pb/{social,school,interns}.html`，详情 `posDetail.html?postId=..&postType={society,campus,intern}`）。这批含多家 500 强（华泰/招商/迪卡侬/华润系），是**高价值待恢复 backlog**。
 - 北森详情路由已落 `beisen_routes.json`（38 条）。北森 slug-sweep 命中率约 12–18%（多数大国企/互联网不在北森，返回 `Not Found`）。
 
 **🆕 075–081 续作已入（live 探活，+36 家：Moka +30 / 飞书 +6；北森本轮 0，smics/weimai/anta 多路径重探未解析，暂搁）**：
@@ -50,6 +50,7 @@
 - Moka 077：途游 tuyoogame / 驭势科技 yushi / 奇安信 qianxin / 中电信人工智能 chinatelecomai / 悠星 yostar / 鹏景 pengwin / 见山 jianshankeji。
 - Moka 078：SHEIN / 好未来 tal / 搜狐 sohu / 虎牙 huya / 乐元素 leyuansu / 搜狐畅游 cyou-inc。
 - Moka 080-081：紫光同芯 tsinghuaic(社招) / 芯粤能 ascenpower / 唯品会 vipshophr(app-tc) / 月之暗面 Kimi moonshot(社招) / 斗鱼 douyu(社招)。
+- 飞书 083：得物 poizon(`/index/position` 40岗)。hotjob 084：TCL 社招/校招/实习恢复。共 +40 家（075–084）。
 - ⏭️ 待重探（orgId 失效或淡季）：快手 kuaishou/2283、CATL catlhr/46594、携程 trip(校招淡季)、三七 37、最右、HKACO；飞书自定义路径 dedao/`shezhao`、叠纸/银河通用。下轮换社招 orgId 或正确路径重试。
 
 **⚠️ 飞书批量 sweep 会触发反爬**：连打 ~34 个 `{tenant}.jobs.feishu.cn` 后大面积 `anti_bot_blocked`（deepseek/mihoyo/weride 等真租户被误杀）。正解=**小批 + 间隔**重探（每批 ≤5、隔几分钟），或单家慢探。已确认存在但被反爬挡的真飞书租户值得换干净会话重试。
