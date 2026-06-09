@@ -31,7 +31,7 @@ test("adapter 白名单覆盖 crawler ADAPTERS 全部值（含通用 ATS）", ()
     "apple", "apple_cn", "baidu", "jd", "haier", "siemens", "tencent",
     "bytedance", "bytedance_campus", "nio_feishu", "xpeng_feishu", "horizon_feishu",
     "xiaomi_feishu", "greenhouse", "lever", "ashby", "smartrecruiters", "workday",
-    "moka", "beisen", "company_spa", "feishu", "hotjob", "eightfold", "oracle", "amazon", "phenom",
+    "moka", "beisen", "company_spa", "feishu", "hotjob", "eightfold", "oracle", "amazon", "phenom", "microsoft",
   ]) {
     assert.equal(S.isValidAdapter(v), true, `${v} 应在白名单`);
   }
