@@ -79,14 +79,17 @@ def main():
             elif r:
                 passed.append(r)
 
-    # moka：playwright 串行（app.mokahr.com 可达；逐家确认，避免并发开太多浏览器）
-    print(f"[emit-disc] moka 确认 {len(moka_items)} (playwright) ...", flush=True)
-    for i in moka_items:
-        r = _confirm_moka(i)
-        flag = "✓" if r else "✗"
-        print(f"  {flag} moka {i.get('company')}", flush=True)
-        if r:
-            passed.append(r)
+    # moka：playwright 多进程并发（app.mokahr.com 沙箱可达；进程隔离避免 sync_playwright 冲突）
+    print(f"[emit-disc] moka 确认 {len(moka_items)} (playwright, 多进程) ...", flush=True)
+    if moka_items:
+        from multiprocessing import Pool
+        with Pool(5) as p:
+            moka_results = p.map(_confirm_moka, moka_items)
+        for i, r in zip(moka_items, moka_results):
+            print(f"  {'✓' if r else '✗'} moka {i.get('company')}"
+                  f"{(' '+str(r['_valid'])+'岗') if r else ''}", flush=True)
+            if r:
+                passed.append(r)
 
     # 撞车复核
     from collections import defaultdict
