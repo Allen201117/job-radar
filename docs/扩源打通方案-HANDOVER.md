@@ -15,6 +15,9 @@
   2. **取真岗位探测**：`intercept_matches` 含 `"/api/"` 宽匹配会混入搜索条件/地区树/推荐岗，`posts[0]` 常非真岗位（无 JobAdName/Id）→ 探测必失败。改优先取首个有 `JobAdName` 的真岗位。
   3. **render-verify 加主标题强信号**（`_is_job_detail`）：详情页侧栏「推荐职位」露出他岗时不再误判为列表页。
 - `beisen` **C 型老版 SSR 解析器**（`_fetch_ssr`）：真无 `GetJobAdPageList` 时（如中核），渲染列表页 HTML → 抽 `a[href*=jobId=]` 锚点 → render-verify 探详情路径（中核=`/szxq?jobId=`、复星=`/campusxq?jobId=`）→ 拼 jd_url。
+- `beisen` 老版 SSR 锚点已支持 `adId/jobAdId` 的完整参数值（数字或 GUID），不再只截数字；BOE `social2021` 已 live 打通。
+- `feishu` 泛化适配器已支持自定义 portal slug（如 `/{portal}/position/{id}/detail`），不再只拼 `/index/position/{id}/detail`；Pony.ai `/ponyai`、Momenta `/talent` 已 live 打通。
+- `hotjob` / wecruit 通用适配器已新增（`wecruit.hotjob.cn/{suiteKey}/pb/{social|school|interns}.html` → 拦截 `positionInfo/listPosition` → `posDetail.html?postId=...&postType=...`）；TCL 社招/校招/实习，以及云南白药/华夏银行/华润电力/先声药业/领益智造/上海宝冶/中煤矿建/润华汽车/华润三九/宜人智科/瑞金医院/开源证券/中国铁建高新装备/招商证券/南京高速齿轮/北京联东/国投证券/华泰证券/广州市规划院/顶点软件/永青集团/海兴电力/迪卡侬中国已 live 打通。
 - **🐞 修了致命 bug**：`ChinaSpaAdapter.fetch` 原 `if not self.list_urls` 绑定，但 beisen/company_spa 实例在 run.py/probe.py 是**共享单例**→ 首个源 URL 粘住→后续源全抓首个源→**B 公司入了 A 公司岗位（jd_url 指向 A host）**。改每次绑定当前 source_url。**扩多个北森源前必须有此修复**。
 
 **🗂️ 北森详情路由已落盘**：`crawler/beisen_routes.json`（host→详情 base 字符串/SSR dict `{ssr_path,ssr_param}`）。探到的新路由记得加进去，每日 cron 免重探、避反爬。
@@ -24,21 +27,43 @@
 2. 候选 host = 公司英文/拼音 slug + `.zhiye.com`，先批量抓 title 过滤（脚本思路见会话 `/tmp/verify_beisen_titles.py`），**只保留 title 命中公司名的**（防张冠李戴，handover 曾把 `coamc`=中国东方资产 误标中国信达）。
 3. 过滤后跑 `BeisenAdapter` 确认出岗 + 抽样 jd_url，再 `probe.py --all --candidates ... --emit 0NN`。
 
-**本系列已入（live 探活，migration 062–067，北森 30 家 + 飞书 2 家）**：
+**🚀 高 ROI 扩源最有效打法 = WebSearch 取真实 URL/slug（远胜盲猜）**：
+- **Moka 必须搜**：`app.mokahr.com/{apply|campus_apply}/{tenant}/{orgId}` 的 orgId 不可猜 → WebSearch `app.mokahr.com/apply 社会招聘 <行业>` 直接出带 orgId 的真实 URL，命中率高（本系列 Moka 入 14 家全靠搜）。腾讯系用 `app-tc.mokahr.com`。
+- **飞书 slug 要搜准**：盲猜常错（莉莉丝 `lilith`✗→`lilithgames`✓、米哈游不在飞书=自建 jobs.mihoyo.com）；且**批量连打触发反爬**，务必小批(≤5)。
+- **北森 slug**：`<公司> zhiye.com` 搜，或 `zhiye.com 社会招聘 <行业>`；zhiye 通配 200，靠 title≠`Not Found` 判真伪。
+- 老 SSR/项目入口（BOE social2021、启德 eic `/social?r=`、中国船舶 cssc 网申、cscec 考试入口）= 非标准锚点，留专项。
+
+**本系列已入（live 探活，migration 062–072，北森 33 + Moka 14 + 飞书 4 = 51 家）**：
 - 北森 soe 国企央企：中核 cnnc / 深业 shenyejituan / 中国东方资产 coamc / 上实 siic / 江淮 jac / 江铃 jmc。
 - 北森 私企新版（`?jobAdId={GUID}`）：公牛 / 360 / 联影 united-imaging / 蒙牛 / 大华 dahua / 奇瑞 chery / 药明康德 wuxiapptec / 通威 tongwei / 卓胜微 maxscend / 传音 transsion / 零跑 leapmotor / 欣旺达 sunwoda / 国轩 gotion / 双汇 shuanghui / 周大福 ctf / 科大讯飞 iflytek / 维达 vinda / 东鹏 dongpeng / 东山精密 dsbj / 蜂巢能源 svolt / 新东方 xdf / 先导智能 leadchina / 博众精工 bozhon。
 - 北森 C 型 SSR：中核 cnnc(`szxq`) / 复星医药 fosunpharma(`campusxq`)。
-- 飞书：零一万物 01ai / 鹰角 hypergryph。
-- 北森详情路由已落 `beisen_routes.json`（37 条）。北森 slug-sweep 命中率约 12–18%（多数大国企/互联网不在北森，返回 `Not Found`）。
+- 北森 old-SSR/2021：BOE 京东方 boe(`zwxq`)。
+- 飞书：零一万物 01ai / 鹰角 hypergryph / 小马智行 ponyai(`/ponyai`) / Momenta(`/talent`)。
+- HotJob/wecruit：TCL 社招/校招/实习（`wecruit.hotjob.cn/SU64893571.../pb/{social,school,interns}.html`）；云南白药社招、华夏银行校招、华润电力社招、先声药业校招、领益智造校招、上海宝冶校招、中煤矿建校招、润华汽车校招（migration 072）；华润三九校招、宜人智科校招、上海瑞金医院社招、开源证券校招、中国铁建高新装备社招、招商证券校招、南京高速齿轮社招/校招/实习（migration 073）；北京联东校招、国投证券校招、华泰证券社招、广州市规划院校招、顶点软件校招、永青集团校招、海兴电力校招、迪卡侬中国校招（migration 074）。
+- 北森详情路由已落 `beisen_routes.json`（38 条）。北森 slug-sweep 命中率约 12–18%（多数大国企/互联网不在北森，返回 `Not Found`）。
 
 **⚠️ 飞书批量 sweep 会触发反爬**：连打 ~34 个 `{tenant}.jobs.feishu.cn` 后大面积 `anti_bot_blocked`（deepseek/mihoyo/weride 等真租户被误杀）。正解=**小批 + 间隔**重探（每批 ≤5、隔几分钟），或单家慢探。已确认存在但被反爬挡的真飞书租户值得换干净会话重试。
 
 **🔨 仍待做（按价值）**：
-0. **北森老校招异构 SSR**（`details2021?adId={GUID}` 类，**非数字 jobId**）：BOE `boe.zhiye.com`、中国建筑 `cscec.zhiye.com` —— 当前 `_BEISEN_SSR_ANCHOR_JS` 只抓数字 id 锚点，这两家无数字 jobId 锚点。需扩锚点正则到 `adId={GUID}` + 探 `details2021/campusxq` 路径。
+0. **北森老校招异构 SSR**（`details2021?adId={GUID}` 类，**非数字 jobId**）：BOE `boe.zhiye.com` 已打通（migration 068）；中国建筑 `cscec.zhiye.com` 当前真租户页有标题，但 `/campus` 未拦到岗位 JSON、未暴露 `jobId/adId` 逐岗锚点，暂不入库，需继续定位真实岗位接口/可深链详情。
 1. **北森 B 型（筛选优先）**：`vivo.zhiye.com`(拦到 JSON 但 0 岗)、新东方 `xdf.zhiye.com`。默认空筛选器，要程序化选首个地点/类型项再触发搜索，**且只对 B 型生效（A 型点搜索会清空列表，勿误伤）**。脆弱、优先级最低。
-2. **飞书 `/s/分享页`入口**：月之暗面 `moonshot`、小马智行 `ponyai`、Momenta `momenta` —— 标准 `/index/position` 拦不到，需补 `/s/` 入口处理。
-3. **大易 dayee.com 适配器**：隆基/TCL/比亚迪等。先抓包定位公开岗位 JSON。
+2. **飞书非标准 portal 入口**：小马智行 `ponyai.jobs.feishu.cn/ponyai`、Momenta `momenta.jobs.feishu.cn/talent` 已打通（migration 069）；月之暗面 `moonshot.jobs.feishu.cn/social` 当前可触发岗位 API 但页面显示 0 职位，暂不入库。后续遇到 `{tenant}.jobs.feishu.cn/{portal}` 可直接用通用 `feishu` adapter。
+3. **大易 dayee.com 适配器**：隆基/TCL/比亚迪等。已复核：TCL 实际落 HotJob/wecruit，已用 `hotjob` 打通社招/校招/实习；隆基官网 career 当前只是品牌页，未定位到公开岗位 JSON；比亚迪为自建 `job.byd.com` API，不是 Dayee。Dayee 仍需继续找真实客户招聘页后再建。
 4. **自建大厂**（最硬，放最后）：⚠️ **美的 careers/recruit.midea.com 已验证不可行**——`recruit.midea.com/backend/rec/home/out/official/position/new` 是干净公开 GET（620 社招岗+完整 JD），**但 detail 页无公开稳定 jd_url**（ihr SPA 忽略 positionId 深链、`/position` 重定向 `/index`、疑登录墙）→ 按 #1 铁律不能入。**自建巨头务必先验证「详情页是否公开可深链」再投入**（深链不了=没有合格 jd_url=不做）。华为 reccampportal、比亚迪 job.byd.com(hash-SPA) 待逐家验证详情页可深链性。
+
+**2026-06-08 本轮 HotJob 续扩（migration 072）**：
+- 通过并已 emit：云南白药社招 `valid=48/在华=7`，华夏银行校招 `valid=3/在华=2`，华润电力社招 `valid=60/在华=34`，先声药业校招 `valid=60/在华=40`，领益智造校招 `valid=38/在华=22`，上海宝冶校招 `valid=14/在华=9`，中煤矿建校招 `valid=48/在华=15`，润华汽车校招 `valid=4/在华=4`。
+- 详情页抽样已逐个用 Playwright 打开验证：样本 `posDetail.html?postId=...&postType={society|campus}` 均渲染具体岗位标题/JD，不是加载页或列表页。
+- 未入库：华夏幸福 `SU641d3c5a.../pb/school.html` 本次 probe 未通过（无 valid 输出/未写入迁移），后续若要做需单独定位真实项目参数或有效入口。
+
+**2026-06-08 本轮 HotJob 续扩（migration 073）**：
+- 通过并已 emit：华润三九校招 `valid=41/在华=32`，宜人智科校招 `valid=10/在华=10`，上海瑞金医院社招 `valid=29/在华=29`，开源证券校招 `valid=1/在华=1`，中国铁建高新装备社招 `valid=5`（本土源按 `valid>0` 入），招商证券校招 `valid=13/在华=10`，南京高速齿轮社招 `valid=23/在华=19`、校招 `valid=5/在华=3`、实习 `valid=1/在华=1`。
+- 详情页抽样已逐个用 Playwright 打开验证：`postType=society/campus/intern` 均渲染具体岗位标题/JD；南高齿实习样本 `postType=intern` 不再卡加载页。
+
+**2026-06-08 本轮 HotJob 续扩（migration 074）**：
+- 通过并已 emit：北京联东投资集团校招 `valid=2/在华=2`，国投证券校招 `valid=3/在华=3`，华泰证券社招 `valid=60/在华=59`，广州市规划院校招 `valid=10/在华=10`，顶点软件校招 `valid=7/在华=5`，永青集团校招 `valid=22`（岗位地点含印度尼西亚，本土源按 `valid>0` 入），海兴电力校招 `valid=3/在华=3`，迪卡侬中国校招 `valid=60/在华=34`。
+- 详情页抽样已逐个用 Playwright 打开验证：样本均渲染具体岗位标题/JD，且公司/导航文本与候选归属一致；华泰证券社招、迪卡侬中国校招等大源均不是加载页或列表页。
+- 未入库：海光信息 `SU66a9aaa5.../pb/school.html`、新毅东 `SU67a415fc.../pb/school.html`、西南证券 `SU61d3efea.../pb/school.html` 本次 probe 未通过（无 valid 输出/未写入迁移），后续需重新定位有效入口或确认是否已下线/空岗。
 
 **已 live 验证打通（往期）**：外企 Oracle(Emerson/霍尼韦尔/美国运通/纽约梅隆)；国内飞书(理想/得物/深言/道旅/智谱/MiniMax/元气森林/MetaApp/VAST/智元机器人/影石/xTool/安克/懂车帝)、Moka(完美世界/远景/搜狐畅游/作业帮/知乎/猿辅导/文远知行/唯品会)、北森(泡泡玛特/迈瑞/汇川/长安/名创)。
 
@@ -85,7 +110,8 @@
 | `apple`/`apple_cn`/`siemens` | 自建 | 外企 | 专用 | ✅ |
 | `moka` | Moka mokahr.com | 国内私企 | **playwright 渲染 DOM**（API 加密） | ✅（15+家） |
 | `beisen` | 北森 zhiye.com | 国内/国企 | playwright 拦截 JSON | ✅ 新版模板；⚠️老版 SSR 待做 |
-| `*_feishu`（nio/xpeng/horizon/xiaomi） | 飞书招聘 | 国内私企 | playwright 拦截 `/api/v1/search/job/posts` | ✅ 但**每家硬编码子类**，待泛化 |
+| `feishu` / `*_feishu` | 飞书招聘 | 国内私企 | playwright 拦截 `/api/v1/search/job/posts` | ✅ 通用层支持标准 `/index/position` 与自定义 portal |
+| `hotjob` | HotJob / wecruit | 国内私企 | playwright 拦截 `/wecruit/positionInfo/listPosition/` | ✅ TCL 社招/校招/实习已验证；详情页必须带正确 `postType` |
 | `bytedance`/`tencent`/`baidu`/`jd`/`haier` | 各自官网 SPA | 国内私企 | playwright/专用 | ✅ |
 | `company_spa` | 通用自建站 | 国内/国企 | playwright 拦截站点 JSON | ✅（逐家） |
 
@@ -198,6 +224,7 @@ cd crawler; set -a; source ../.env.local; set +a; python3 coverage.py
 | Moka `mokahr.com` | 消费/互联网/游戏/制造私企（SHEIN/Shopee/宁德/携程/虎牙/高途/WPS/雪球/好未来…） | `https://app.mokahr.com/{apply\|campus_apply\|...}/{tenant}/{id}` 或 `{tenant}.mokahr.com/...` | **playwright 渲染 DOM**（list API 加密 `necromancer`），jd_url=`{base}#/job/{uuid}` |
 | 北森 `zhiye.com` | 大型国企/集团（中国人寿/三一/潍柴/横店…） | `https://{tenant}.zhiye.com/...` | playwright 拦截 JSON（**新版**模板） |
 | 飞书招聘 `jobs.feishu.cn` | 造车新势力/科技（蔚来/小鹏/地平线/小米…字节系） | `https://{tenant}.jobs.feishu.cn/...` | playwright 拦截 `/api/v1/search/job/posts` |
+| HotJob `wecruit.hotjob.cn` | TCL 等本土集团 | `https://wecruit.hotjob.cn/{suiteKey}/pb/{social|school|interns}.html` | playwright 拦截 `positionInfo/listPosition`，详情页 `postType=society/campus/intern` |
 | company_spa / 各官网 | BAT/京东/海尔 | 各自 | 逐家 |
 
 ### 🔨 待建（高优 backlog）
@@ -222,7 +249,7 @@ cd crawler; set -a; source ../.env.local; set +a; python3 coverage.py
 - **国央企最难**（自建门户多、结构各异），放最后；优先用北森老版能覆盖的那批。
 
 ### 国内平台识别速查（搜公司官网招聘页落地到哪个域名）
-`mokahr.com`→moka｜`zhiye.com`/`italent.cn`→北森｜`jobs.feishu.cn`→飞书｜`dayee.com`→大易｜`myworkdayjobs.com`→workday｜自有域名 SPA→company_spa。
+`mokahr.com`→moka｜`zhiye.com`/`italent.cn`→北森｜`jobs.feishu.cn`→飞书｜`wecruit.hotjob.cn`→hotjob｜`dayee.com`→大易｜`myworkdayjobs.com`→workday｜自有域名 SPA→company_spa。
 
 ---
 
@@ -250,7 +277,7 @@ cd crawler; set -a; source ../.env.local; set +a; python3 coverage.py
 **国内**（按收益排序）：
 1. [ ] **飞书招聘泛化**为数据驱动 `feishu` 适配器（§5①）→ 理想等一批飞书系公司。
 2. [ ] 北森**老版 SSR** 渲染解析路径（§5②）→ BOE/中车/航天等国企一批。
-3. [ ] 大易 `dayee` 验证 + 建适配器（§5③）。
+3. [ ] 大易 `dayee` 继续验证真实客户页；TCL 已改走 HotJob，隆基/比亚迪本轮未证明 Dayee。
 4. [ ] Moka/北森**新版**继续加候选（搜更多 mokahr.com/zhiye.com 用户）。
 5. [ ] 自建大厂逐家 `company_spa`（华为/阿里/美的/比亚迪…）；国央企门户最后。
 
