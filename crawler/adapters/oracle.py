@@ -106,10 +106,51 @@ class OracleAdapter(BaseAdapter):
                     if len(reqs) < 20:
                         break
 
+        # 4) 逐岗 detail 抓职位描述 —— 列表接口不含正文，外企卡片 JD 因此全空。
+        #    recruitingCEJobRequisitionDetails?finder=ById;Id="{jid}" → ExternalDescriptionStr(+Responsibilities)。
+        #    只抓将保留的在华岗（trusted 全保留；text 取在华的），单源封顶；失败该岗无摘要、不影响入库。
+        self._enrich_descriptions(trusted, china_only=False)
+        self._enrich_descriptions(text_jobs, china_only=True)
+
         return json.dumps({
             "_host": self._host, "_site": self._site,
             "trusted_jobs": trusted, "text_jobs": text_jobs,
         }, ensure_ascii=False)
+
+    _DETAIL_CAP = 300  # 单源逐岗 detail 抓取上限，避免拖垮夜间全量
+
+    def _enrich_descriptions(self, jobs: List[dict], china_only: bool):
+        """对将保留的岗位逐个调 detail 端点，把职位正文挂到 job['_jd']（供 parse 取作 summary）。"""
+        detail_api = f"{self._host}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails"
+        headers = {"Accept": "application/json", "User-Agent": self.user_agent}
+        n = 0
+        for j in jobs:
+            if n >= self._DETAIL_CAP:
+                break
+            if not isinstance(j, dict):
+                continue
+            jid = str(j.get("Id") or "").strip()
+            if not jid:
+                continue
+            if china_only and not normalizer.is_china_location((j.get("PrimaryLocation") or "")):
+                continue
+            try:
+                url = (f'{detail_api}?onlyData=true&expand=all'
+                       f'&finder=ById;Id="{jid}",siteNumber={self._site}')
+                r = httpx.get(url, headers=headers, timeout=self.timeout)
+                if r.status_code < 300:
+                    items = r.json().get("items", []) or []
+                    if items:
+                        it = items[0]
+                        parts = [it.get("ExternalDescriptionStr") or it.get("ShortDescriptionStr"),
+                                 it.get("ExternalResponsibilitiesStr"),
+                                 it.get("ExternalQualificationsStr")]
+                        body = " ".join(x for x in parts if x)
+                        if body.strip():
+                            j["_jd"] = body
+                        n += 1
+            except Exception:
+                continue
 
     def parse(self, html: str) -> List[RawJob]:
         try:
@@ -140,8 +181,8 @@ class OracleAdapter(BaseAdapter):
                 company="",  # 由 sources.company 兜底
                 title=title,
                 location=location,
-                job_type=None,
-                summary=None,
+                job_type=None,  # run.py 用 extract_job_type(title, summary) 从正文推断
+                summary=j.get("_jd"),  # detail 端点抓到的职位正文；run.py clean_summary 去标签
                 jd_url=jd_url,
                 apply_url=jd_url,
                 posted_at=None,
