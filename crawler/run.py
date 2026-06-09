@@ -7,8 +7,10 @@ Job Radar Crawler — 主入口。
   python run.py --source apple   # 只跑指定 source（按 adapter_name）
 """
 import argparse
+import os
 import sys
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 import db
 import normalizer
@@ -81,6 +83,182 @@ DOMESTIC_ADAPTERS = {
 }
 
 
+# ── P4 并发提速：按 adapter 抓取方式分档 ──────────────────────────────────────────
+# httpx-safe = 纯 httpx 抓取、不起浏览器，线程安全可并发。故意用「白名单」而非「黑名单」：
+# 未知 / 浏览器 adapter 一律落串行档（fail-safe），杜绝把 Playwright（sync API，非线程安全）
+# 的 adapter 误并发跑崩夜间 cron。新增 httpx adapter 时显式加进来才享受并发。
+_HTTPX_SAFE_ADAPTERS = {
+    "apple", "apple_cn", "baidu", "jd", "haier", "siemens", "tencent",
+    "greenhouse", "lever", "ashby", "smartrecruiters", "workday", "eightfold",
+    "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
+}
+
+
+def _is_httpx_safe(adapter_name) -> bool:
+    return (adapter_name or "") in _HTTPX_SAFE_ADAPTERS
+
+
+def _partition_by_tier(sources):
+    """拆成 (并发档 httpx-safe, 串行档 浏览器/未知)，各自保持原顺序（本土优先排序不被打乱）。"""
+    concurrent, serial = [], []
+    for s in sources:
+        (concurrent if _is_httpx_safe(s.get("adapter_name") or "") else serial).append(s)
+    return concurrent, serial
+
+
+def _process_one_source(source, supabase) -> dict:
+    """处理单个源：robots → should_skip → fetch → parse → 质量门 → upsert。
+    返回 {status, created, updated}；**永不抛异常**（并发档 ex.map 迭代结果时不会炸整批）。
+    status：success/partial_success=有效入库；empty/no_valid=无可入库岗；skipped=robots/预检跳过；failed=未知 adapter/异常。"""
+    company = source["company"]
+    adapter_name = source.get("adapter_name") or ""
+    source_url = source["source_url"]
+    source_id = source["id"]
+
+    adapter = ADAPTERS.get(adapter_name)
+    if not adapter:
+        print(f"  [skip] {company}: 未找到 adapter '{adapter_name}'")
+        run_id = db.create_crawl_run(supabase, source_id)
+        db.update_crawl_run(supabase, run_id, "failed",
+                            error_message=f"Unknown adapter: {adapter_name}")
+        return {"status": "failed", "created": 0, "updated": 0}
+
+    print(f"  [{adapter_name}] {company} ({source_url})")
+    run_id = db.create_crawl_run(supabase, source_id)
+
+    try:
+        # 1. robots check
+        robots_result = check_robots(source_url)
+        if not robots_result["allowed"]:
+            print(f"    robots blocked: {robots_result['reason']}")
+            db.update_crawl_run(supabase, run_id, "skipped",
+                                error_message=f"robots.txt: {robots_result['reason']}")
+            return {"status": "skipped", "created": 0, "updated": 0}
+
+        # 2. pre-check
+        skip_reason = adapter.should_skip(source_url)
+        if skip_reason:
+            print(f"    skip: {skip_reason}")
+            db.update_crawl_run(supabase, run_id, "skipped",
+                                error_message=skip_reason)
+            return {"status": "skipped", "created": 0, "updated": 0}
+
+        # 3. fetch
+        print(f"    fetching...")
+        html = adapter.fetch(source_url)
+
+        # 4. parse
+        raw_jobs = adapter.parse(html)
+        print(f"    parsed {len(raw_jobs)} jobs")
+
+        if not raw_jobs:
+            db.update_crawl_run(supabase, run_id, "success",
+                                jobs_found=0)
+            return {"status": "empty", "created": 0, "updated": 0}
+
+        valid_jobs = []
+        invalid_reasons = {}
+        for raw in raw_jobs:
+            is_valid, reason = normalizer.validate_job_quality(raw, source_url)
+            if is_valid:
+                valid_jobs.append(raw)
+            else:
+                invalid_reasons[reason] = invalid_reasons.get(reason, 0) + 1
+
+        if not valid_jobs:
+            reason_text = ", ".join(
+                f"{reason}: {count}" for reason, count in invalid_reasons.items()
+            )
+            print(f"    no high-quality jobs: {reason_text}")
+            db.update_source_timestamp(supabase, source_id)
+            db.update_crawl_run(
+                supabase,
+                run_id,
+                "partial_success",
+                jobs_found=len(raw_jobs),
+                error_message=(
+                    "Parsed rows, but none had high-quality job detail URLs. "
+                    f"{reason_text}"
+                ),
+            )
+            return {"status": "no_valid", "created": 0, "updated": 0}
+
+        # 5. normalize & upsert
+        created = 0
+        updated = 0
+        for raw in valid_jobs:
+            title = normalizer.clean_title(raw.title)
+            location = normalizer.clean_location(raw.location)
+            summary = normalizer.clean_summary(raw.summary)
+            salary = normalizer.clean_salary(raw.salary_text)
+            job_type = normalizer.extract_job_type(title, summary) or raw.job_type
+            content_hash = normalizer.make_content_hash(title, location, summary)
+            # 结构化字段从**完整** raw.summary 抽取（在 clean_summary 截断之前），adapter 直填的优先
+            experience = raw.experience or normalizer.extract_experience(raw.summary)
+            education = raw.education or normalizer.extract_education(raw.summary)
+            deadline = raw.deadline or normalizer.extract_deadline(raw.summary)
+
+            job_data = {
+                "source_id": source_id,
+                "company": raw.company or company,
+                "title": title,
+                "location": location,
+                "job_type": job_type,
+                "summary": summary,
+                "jd_url": raw.jd_url,
+                "apply_url": raw.apply_url,
+                "salary_text": salary,
+                "posted_at": raw.posted_at,
+                "experience": experience,
+                "education": education,
+                "deadline": deadline,
+                "content_hash": content_hash,
+                "status": "active",
+            }
+
+            result = db.upsert_job(supabase, job_data)
+            if result == "created":
+                created += 1
+            else:
+                updated += 1
+
+        # 6. update source timestamp
+        db.update_source_timestamp(supabase, source_id)
+
+        # 7. update crawl_run
+        db.update_crawl_run(
+            supabase,
+            run_id,
+            "partial_success" if invalid_reasons else "success",
+            jobs_found=len(valid_jobs),
+            jobs_created=created,
+            jobs_updated=updated,
+            error_message=(
+                "Skipped low-quality rows: "
+                + ", ".join(
+                    f"{reason}: {count}"
+                    for reason, count in invalid_reasons.items()
+                )
+                if invalid_reasons
+                else None
+            ),
+        )
+
+        if invalid_reasons:
+            print(f"    skipped invalid rows: {invalid_reasons}")
+        print(f"    created={created}, updated={updated}")
+        return {"status": "partial_success" if invalid_reasons else "success",
+                "created": created, "updated": updated}
+
+    except Exception as e:
+        error_msg = f"{type(e).__name__}: {e}"
+        print(f"    FAILED: {error_msg}")
+        traceback.print_exc()
+        db.update_crawl_run(supabase, run_id, "failed",
+                            error_message=error_msg[:1000])
+        return {"status": "failed", "created": 0, "updated": 0}
+
+
 def run_crawl(filter_adapter: str = None):
     supabase = db.get_supabase()
     sources = db.get_sources(supabase)
@@ -98,168 +276,32 @@ def run_crawl(filter_adapter: str = None):
     # 本土优先：CI 时间有限时先抓中国本土公司源（高优），外企 ATS 殿后。
     sources.sort(key=lambda s: 0 if (s.get("adapter_name") or "") in DOMESTIC_ADAPTERS else 1)
     domestic_n = sum(1 for s in sources if (s.get("adapter_name") or "") in DOMESTIC_ADAPTERS)
-    print(f"[crawler] 开始抓取 {len(sources)} 个源（本土优先 {domestic_n} / 外企 {len(sources) - domestic_n}）...")
+    # P4 分档：httpx-safe 源并发抓（线程池，墙钟不再逐个叠加），浏览器(Playwright 非线程安全)/未知源串行抓。
+    concurrent_sources, serial_sources = _partition_by_tier(sources)
+    workers = max(1, int(os.environ.get("CRAWL_CONCURRENCY", "6") or "6"))
+    print(f"[crawler] 开始抓取 {len(sources)} 个源（本土优先 {domestic_n} / 外企 {len(sources) - domestic_n}）"
+          f"；并发档 {len(concurrent_sources)} 源 × {workers} 线程 / 串行档 {len(serial_sources)} 源（浏览器）...")
 
-    total_created = 0
-    total_updated = 0
-    success_count = 0
-    fail_count = 0
+    results = []
+    # 并发档先跑（httpx 快，CI 即便超时也先把这批收完）；workers=1 时退化为串行（安全阀，可用 CRAWL_CONCURRENCY=1 回退）。
+    if concurrent_sources and workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            results.extend(ex.map(lambda s: _process_one_source(s, supabase), concurrent_sources))
+    else:
+        results.extend(_process_one_source(s, supabase) for s in concurrent_sources)
+    # 串行档：浏览器源逐个跑（domestic-browser 已被本土优先排序排在前，优先抓）。
+    for s in serial_sources:
+        results.append(_process_one_source(s, supabase))
 
-    for source in sources:
-        company = source["company"]
-        adapter_name = source.get("adapter_name") or ""
-        source_url = source["source_url"]
-        source_id = source["id"]
-
-        adapter = ADAPTERS.get(adapter_name)
-        if not adapter:
-            print(f"  [skip] {company}: 未找到 adapter '{adapter_name}'")
-            run_id = db.create_crawl_run(supabase, source_id)
-            db.update_crawl_run(supabase, run_id, "failed",
-                                error_message=f"Unknown adapter: {adapter_name}")
-            fail_count += 1
-            continue
-
-        print(f"  [{adapter_name}] {company} ({source_url})")
-
-        run_id = db.create_crawl_run(supabase, source_id)
-
-        try:
-            # 1. robots check
-            robots_result = check_robots(source_url)
-            if not robots_result["allowed"]:
-                print(f"    robots blocked: {robots_result['reason']}")
-                db.update_crawl_run(supabase, run_id, "skipped",
-                                    error_message=f"robots.txt: {robots_result['reason']}")
-                continue
-
-            # 2. pre-check
-            skip_reason = adapter.should_skip(source_url)
-            if skip_reason:
-                print(f"    skip: {skip_reason}")
-                db.update_crawl_run(supabase, run_id, "skipped",
-                                    error_message=skip_reason)
-                continue
-
-            # 3. fetch
-            print(f"    fetching...")
-            html = adapter.fetch(source_url)
-
-            # 4. parse
-            raw_jobs = adapter.parse(html)
-            print(f"    parsed {len(raw_jobs)} jobs")
-
-            if not raw_jobs:
-                db.update_crawl_run(supabase, run_id, "success",
-                                    jobs_found=0)
-                continue
-
-            valid_jobs = []
-            invalid_reasons = {}
-            for raw in raw_jobs:
-                is_valid, reason = normalizer.validate_job_quality(raw, source_url)
-                if is_valid:
-                    valid_jobs.append(raw)
-                else:
-                    invalid_reasons[reason] = invalid_reasons.get(reason, 0) + 1
-
-            if not valid_jobs:
-                reason_text = ", ".join(
-                    f"{reason}: {count}" for reason, count in invalid_reasons.items()
-                )
-                print(f"    no high-quality jobs: {reason_text}")
-                db.update_source_timestamp(supabase, source_id)
-                db.update_crawl_run(
-                    supabase,
-                    run_id,
-                    "partial_success",
-                    jobs_found=len(raw_jobs),
-                    error_message=(
-                        "Parsed rows, but none had high-quality job detail URLs. "
-                        f"{reason_text}"
-                    ),
-                )
-                continue
-
-            # 5. normalize & upsert
-            created = 0
-            updated = 0
-            for raw in valid_jobs:
-                title = normalizer.clean_title(raw.title)
-                location = normalizer.clean_location(raw.location)
-                summary = normalizer.clean_summary(raw.summary)
-                salary = normalizer.clean_salary(raw.salary_text)
-                job_type = normalizer.extract_job_type(title, summary) or raw.job_type
-                content_hash = normalizer.make_content_hash(title, location, summary)
-                # 结构化字段从**完整** raw.summary 抽取（在 clean_summary 截断之前），adapter 直填的优先
-                experience = raw.experience or normalizer.extract_experience(raw.summary)
-                education = raw.education or normalizer.extract_education(raw.summary)
-                deadline = raw.deadline or normalizer.extract_deadline(raw.summary)
-
-                job_data = {
-                    "source_id": source_id,
-                    "company": raw.company or company,
-                    "title": title,
-                    "location": location,
-                    "job_type": job_type,
-                    "summary": summary,
-                    "jd_url": raw.jd_url,
-                    "apply_url": raw.apply_url,
-                    "salary_text": salary,
-                    "posted_at": raw.posted_at,
-                    "experience": experience,
-                    "education": education,
-                    "deadline": deadline,
-                    "content_hash": content_hash,
-                    "status": "active",
-                }
-
-                result = db.upsert_job(supabase, job_data)
-                if result == "created":
-                    created += 1
-                else:
-                    updated += 1
-
-            total_created += created
-            total_updated += updated
-
-            # 6. update source timestamp
-            db.update_source_timestamp(supabase, source_id)
-
-            # 7. update crawl_run
-            db.update_crawl_run(
-                supabase,
-                run_id,
-                "partial_success" if invalid_reasons else "success",
-                jobs_found=len(valid_jobs),
-                jobs_created=created,
-                jobs_updated=updated,
-                error_message=(
-                    "Skipped low-quality rows: "
-                    + ", ".join(
-                        f"{reason}: {count}"
-                        for reason, count in invalid_reasons.items()
-                    )
-                    if invalid_reasons
-                    else None
-                ),
-            )
-
-            if invalid_reasons:
-                print(f"    skipped invalid rows: {invalid_reasons}")
-            print(f"    created={created}, updated={updated}")
-            success_count += 1
-
-        except Exception as e:
-            error_msg = f"{type(e).__name__}: {e}"
-            print(f"    FAILED: {error_msg}")
-            traceback.print_exc()
-            db.update_crawl_run(supabase, run_id, "failed",
-                                error_message=error_msg[:1000])
-            fail_count += 1
+    total_created = sum(r["created"] for r in results)
+    total_updated = sum(r["updated"] for r in results)
+    success_count = sum(1 for r in results if r["status"] in ("success", "partial_success"))
+    fail_count = sum(1 for r in results if r["status"] == "failed")
 
     print(f"\n[crawler] 完成: {success_count} 成功, {fail_count} 失败, "
           f"created={total_created}, updated={total_updated}")
+    return {"created": total_created, "updated": total_updated,
+            "success": success_count, "failed": fail_count}
 
 
 if __name__ == "__main__":
