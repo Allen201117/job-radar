@@ -255,16 +255,16 @@ _BEISEN_DETAIL_NAMES = ("zwxq", "detail", "jobdetail", "positiondetail", "jobDet
 _BEISEN_SSR_DETAIL_PATHS = ("szxq", "szzwxq", "xzxq", "campusxq", "zwxq", "details2021",
                             "overseadetail", "detail", "jobdetail", "szzp", "xq", "positiondetail")
 _BEISEN_SSR_PARAMS = ("jobId", "adId", "jobAdId")
-# 从 SSR 列表页抽取 per-job 锚点（jobId/adId/jobAdId=数字 + 标题文本），去重。
+# 从 SSR 列表页抽取 per-job 锚点（jobId/adId/jobAdId=数字或 GUID + 标题文本），去重。
 _BEISEN_SSR_ANCHOR_JS = r"""
 () => {
   const out=[], seen=new Set();
   for (const a of document.querySelectorAll(
         "a[href*='jobId='],a[href*='adId='],a[href*='jobAdId=']")) {
     const href=a.getAttribute('href')||'';
-    const m=href.match(/(?:jobId|jobAdId|adId)=(\d+)/i);
+    const m=href.match(/(?:jobId|jobAdId|adId)=([^&#]+)/i);
     if(!m) continue;
-    const id=m[1];
+    const id=decodeURIComponent(m[1]);
     const name=(a.innerText||a.textContent||'').trim();
     if(!name || name.length<3 || name.length>60) continue;  // 跳过登录/注册等短文本
     if(seen.has(id)) continue; seen.add(id);
@@ -320,7 +320,7 @@ class BeisenAdapter(ChinaSpaAdapter):
                            if a.get("id") and a.get("name")]
                 if not anchors:
                     raise RuntimeError(
-                        f"beisen: SSR 列表页无 jobId 锚点（非老版 SSR 或被反爬）host={self._host}")
+                        f"beisen: SSR 列表页无 jobId/adId 锚点（非老版 SSR 或被反爬）host={self._host}")
                 route = _BEISEN_ROUTE_CACHE.get(self._host)
                 if not (isinstance(route, dict) and route.get("ssr_path")):
                     route = self._discover_ssr_route(page, origin, anchors)
