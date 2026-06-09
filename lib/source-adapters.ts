@@ -94,6 +94,11 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     label: "Phenom（自建门户 · 外企）",
     hint: "填公司名 + Phenom 接口（{careers域名}/api/jobs，如 careers.amd.com/api/jobs），适配 AMD/L'Oréal 等自建门户",
   },
+  {
+    value: "microsoft",
+    label: "Microsoft（自建 · 外企）",
+    hint: "填公司名 + MS pcsx 接口（apply.careers.microsoft.com/api/pcsx/search?domain=microsoft.com），httpx 按大中华区城市并集抓在华",
+  },
 ];
 
 export const ADAPTER_VALUES: string[] = SOURCE_ADAPTERS.map((a) => a.value);
