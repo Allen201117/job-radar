@@ -71,11 +71,21 @@ class FeishuGenericAdapter(FeishuRecruitAdapter):
         self.list_urls = []
 
     def _bind_host(self, source_url: str):
-        host = urlparse(source_url).netloc
+        parsed = urlparse(source_url)
+        host = parsed.netloc
+        path = (parsed.path or "").strip("/")
+        if path and path != "index/position":
+            portal_base = "/" + path.split("/")[0]
+        else:
+            portal_base = "/index"
         self.official_hosts = (host,)
-        self.detail_template = f"https://{host}/index/position/{{id}}/detail"
-        # 优先抓岗位列表页（触发 /api/v1/search/job/posts），兜底落到 source_url 本身。
-        self.list_urls = [f"https://{host}/index/position", source_url]
+        self.detail_template = f"https://{host}{portal_base}/position/{{id}}/detail"
+        standard_url = f"https://{host}/index/position"
+        # 自定义 portal slug（如 /ponyai、/talent、/social）优先打开传入入口；标准入口保持原行为。
+        if path and path != "index/position":
+            self.list_urls = [f"https://{host}{portal_base}", standard_url]
+        else:
+            self.list_urls = [standard_url, source_url]
         return host
 
     def fetch(self, source_url: str) -> str:

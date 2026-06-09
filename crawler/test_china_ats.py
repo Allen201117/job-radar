@@ -1,6 +1,7 @@
 """中国本土 ATS / 企业官网 SPA 通用 adapter 单测 — 用构造的接口响应 fixture，不打真实网络。"""
 import json
 import os
+import subprocess
 import sys
 import unittest
 
@@ -8,7 +9,13 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import normalizer
 from adapters.base import RawJob
-from adapters.china_ats import MokaAdapter, BeisenAdapter, CompanySpaAdapter, _parse_moka_card
+from adapters.china_ats import (
+    MokaAdapter,
+    BeisenAdapter,
+    CompanySpaAdapter,
+    _BEISEN_SSR_ANCHOR_JS,
+    _parse_moka_card,
+)
 
 # Moka 渲染后 DOM 岗位卡（接口加密，只能解析渲染后 a[href*='#/job/{uuid}']）。
 # cards = [{href, text}]，text 是岗位卡 innerText（含换行），各租户排版样本见下。
@@ -195,6 +202,31 @@ class TestBeisenSsrParse(unittest.TestCase):
         # 走新版 _intercepted 路径时，SSR dict 不含 template → 该行无 jd_url 被丢，不产坏链。
         self.assertEqual(self.a.parse(json.dumps({"_intercepted": [sample]})), [])
 
+    def test_ssr_anchor_js_keeps_guid_adid_anchors(self):
+        # BOE / 中国建筑这类老校招 SSR 使用 details2021?adId={GUID}，不能只接收数字 jobId。
+        script = f"""
+const fn = eval({json.dumps(_BEISEN_SSR_ANCHOR_JS)});
+const anchors = [
+  {{
+    getAttribute: () => '/social/details2021?adId=7f8c4f7a-8858-4df9-a8f8-31bbad6dbf28',
+    innerText: '研发工程师(J12345)',
+    textContent: '研发工程师(J12345)'
+  }},
+  {{
+    getAttribute: () => '/social/details2021?adId=7f8c4f7a-8858-4df9-a8f8-31bbad6dbf28',
+    innerText: '研发工程师(J12345)',
+    textContent: '研发工程师(J12345)'
+  }}
+];
+global.document = {{ querySelectorAll: () => anchors }};
+process.stdout.write(JSON.stringify(fn()));
+"""
+        result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+        self.assertEqual(json.loads(result.stdout), [{
+            "id": "7f8c4f7a-8858-4df9-a8f8-31bbad6dbf28",
+            "name": "研发工程师(J12345)",
+        }])
+
 
 class TestCompanySpaAdapter(unittest.TestCase):
     """通用企业官网：拦截所有 JSON，仅放行带真实 per-job 链接的行，绝不拼/猜 URL。"""
@@ -232,6 +264,16 @@ class FeishuGenericTest(unittest.TestCase):
             a.detail_template, "https://lixiang.jobs.feishu.cn/index/position/{id}/detail")
         self.assertIn("https://lixiang.jobs.feishu.cn/index/position", a.list_urls)
 
+    def test_portal_slug_bound_from_source_url(self):
+        from adapters.feishu import FeishuGenericAdapter
+        a = FeishuGenericAdapter()
+        host = a._bind_host("https://ponyai.jobs.feishu.cn/ponyai")
+        self.assertEqual(host, "ponyai.jobs.feishu.cn")
+        self.assertEqual(
+            a.detail_template, "https://ponyai.jobs.feishu.cn/ponyai/position/{id}/detail")
+        self.assertEqual(a.list_urls[0], "https://ponyai.jobs.feishu.cn/ponyai")
+        self.assertIn("https://ponyai.jobs.feishu.cn/index/position", a.list_urls)
+
     def test_map_uses_bound_template(self):
         from adapters.feishu import FeishuGenericAdapter
         a = FeishuGenericAdapter()
@@ -243,6 +285,15 @@ class FeishuGenericTest(unittest.TestCase):
         self.assertEqual(job.company, "")  # 由 sources.company 兜底
         self.assertEqual(
             job.jd_url, "https://dewu.jobs.feishu.cn/index/position/777/detail")
+
+    def test_map_uses_portal_slug_template(self):
+        from adapters.feishu import FeishuGenericAdapter
+        a = FeishuGenericAdapter()
+        a._bind_host("https://momenta.jobs.feishu.cn/talent")
+        job = a._map({"id": "888", "title": "感知算法工程师",
+                      "city_info": {"name": "苏州"}, "job_category": {"name": "研发"}})
+        self.assertEqual(
+            job.jd_url, "https://momenta.jobs.feishu.cn/talent/position/888/detail")
 
 
 if __name__ == "__main__":

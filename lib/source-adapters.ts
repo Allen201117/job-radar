@@ -72,7 +72,12 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
   {
     value: "feishu",
     label: "飞书招聘（通用 ATS · 本土，国内版 Workday）",
-    hint: "填公司名 + 飞书招聘页地址（{公司}.jobs.feishu.cn/index/position），浏览器拦截 /api/v1/search/job/posts",
+    hint: "填公司名 + 飞书招聘页地址（{公司}.jobs.feishu.cn/index/position 或 /{portal}），浏览器拦截 /api/v1/search/job/posts",
+  },
+  {
+    value: "hotjob",
+    label: "HotJob / wecruit（通用 ATS · 本土）",
+    hint: "填公司名 + HotJob 招聘页地址（wecruit.hotjob.cn/{suiteKey}/pb/social.html 等），浏览器拦截 listPosition",
   },
   {
     value: "company_spa",
