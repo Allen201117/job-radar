@@ -34,38 +34,62 @@ def check_robots(source_url: str) -> dict:
         return {"allowed": True, "reason": f"robots.txt error: {e}"}
 
 
+_ME_AGENTS = ("jobradarbot", "jobradar")
+
+
 def _parse_robots(text: str, path: str) -> dict:
-    """解析 robots.txt 内容，检查是否有 disallow 规则覆盖目标路径。"""
-    lines = text.split("\n")
-    current_agents = []
-    disallowed = []
+    """解析 robots.txt，按标准语义判定目标路径是否可抓。
 
-    for line in lines:
-        line = line.strip().lower()
-
-        if line.startswith("user-agent:"):
-            agent = line.split(":", 1)[1].strip()
-            current_agents.append(agent)
-
-        elif line.startswith("disallow:") and current_agents:
-            rule = line.split(":", 1)[1].strip()
-            if any(a in ("*", "jobradarbot", "jobradar") for a in current_agents):
-                disallowed.append(rule)
-            current_agents = []
-
-        elif not line or line.startswith("#"):
+    关键点（修正旧版只看 Disallow、无视 Allow 的 bug）：
+    - 同时收集 Allow 与 Disallow 规则；
+    - **最长匹配优先**：匹配目标路径的规则里，路径前缀最长者生效；长度相同则 Allow 胜
+      （Google robots 规范）。例：`Disallow: /` + `Allow: /api/pcsx` → `/api/pcsx/search` 允许。
+    - user-agent 组优先：若有针对本 bot 具名的组则只用该组，否则用 `*` 组；
+    - 末尾 `$` 视为路径结束锚点（精确匹配）。
+    """
+    groups: list = []  # [{"agents": set[str], "rules": [(is_allow, rule)]}]
+    cur = None
+    for raw in text.split("\n"):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
             continue
+        low = line.lower()
+        if low.startswith("user-agent:"):
+            agent = low.split(":", 1)[1].strip()
+            # 连续 user-agent 行属于同一组；规则出现后再遇 user-agent 开新组。
+            if cur is None or cur["rules"]:
+                cur = {"agents": set(), "rules": []}
+                groups.append(cur)
+            cur["agents"].add(agent)
+        elif low.startswith("allow:") or low.startswith("disallow:"):
+            if cur is None:
+                continue
+            is_allow = low.startswith("allow:")
+            rule = line.split(":", 1)[1].strip()  # 路径大小写敏感，统一小写比较
+            cur["rules"].append((is_allow, rule))
+        # sitemap/crawl-delay 等其它字段忽略（不影响分组归属）
+
+    named = [g for g in groups if any(a in _ME_AGENTS for a in g["agents"])]
+    star = [g for g in groups if "*" in g["agents"]]
+    applicable = named if named else star
+    rules = [r for g in applicable for r in g["rules"]]
+
+    path_l = (path or "/").lower()
+    best = None  # (specificity, is_allow, rule)
+    for is_allow, rule in rules:
+        rl = rule.lower()
+        if not rl:
+            continue  # 空 Disallow = 允许全部，不构成匹配
+        if rl.endswith("$"):
+            pat = rl[:-1]
+            matched = path_l == pat
+            spec = len(pat)
         else:
-            current_agents = []
+            matched = path_l.startswith(rl)
+            spec = len(rl)
+        if matched and (best is None or spec > best[0] or (spec == best[0] and is_allow)):
+            best = (spec, is_allow, rule)
 
-    # 检查是否有完全禁止
-    if "/" in disallowed and not any(d.startswith("/") and d != "/" for d in disallowed):
-        return {"allowed": False, "reason": "robots.txt disallows /"}
-
-    # 检查是否有规则覆盖目标路径
-    path_lower = path.lower()
-    for rule in disallowed:
-        if rule and path_lower.startswith(rule):
-            return {"allowed": False, "reason": f"robots.txt disallows {rule}"}
-
-    return {"allowed": True, "reason": ""}
+    if best is None or best[1]:
+        return {"allowed": True, "reason": ""}
+    return {"allowed": False, "reason": f"robots.txt disallows {best[2]}"}
