@@ -44,6 +44,8 @@ class WorkdayAdapter(BaseAdapter):
     def _parse_endpoint(self, source_url: str):
         p = urlparse(source_url)
         self._host = f"{p.scheme}://{p.netloc}"
+        # CXS detail 端点 = {host}/wday/cxs/{tenant}/{site}{externalPath}（= source_url 去掉尾部 /jobs）。
+        self._cxs_base = re.sub(r"/jobs/?$", "", source_url)
         parts = [x for x in (p.path or "").split("/") if x]
         # 期望 ['wday','cxs',{tenant},{site},'jobs'] → site 是 cxs 后第 2 段
         try:
@@ -111,10 +113,45 @@ class WorkdayAdapter(BaseAdapter):
                             text_posts.append(p)
                     if len(posts) < 20:
                         break
+
+        # 4) 逐岗 detail 抓 jobDescription —— list 接口不含描述，外企卡片 JD 因此全空。
+        #    GET {host}{externalPath} → jobPostingInfo.jobDescription（HTML；run.py 的 clean_summary 去标签解实体，
+        #    且 summary 有正文后 extract_job_type/experience/education 能从中推断）。只抓将保留的在华岗
+        #    （trusted 全保留；text_posts 取在华的），单源封顶防夜间全量被拖垮；失败该岗无摘要、不影响入库。
+        self._enrich_descriptions(trusted, headers, china_only=False)
+        self._enrich_descriptions(text_posts, headers, china_only=True)
+
         return json.dumps({
             "_host": self._host, "_site": self._site,
             "trusted_posts": trusted, "text_posts": text_posts,
         }, ensure_ascii=False)
+
+    _DETAIL_CAP = 300  # 单源逐岗 detail 抓取上限：覆盖绝大多数源；超大租户部分覆盖，避免拖垮夜间全量
+
+    def _enrich_descriptions(self, posts: List[dict], headers: dict, china_only: bool):
+        """对将保留的岗位逐个 GET detail 端点，把 jobDescription 挂到 post['_jd']（供 parse 取作 summary）。"""
+        n = 0
+        for p in posts:
+            if n >= self._DETAIL_CAP:
+                break
+            if not isinstance(p, dict):
+                continue
+            ep = (p.get("externalPath") or "").strip()
+            if not ep:
+                continue
+            if china_only:
+                loc = self._loc_from_path(ep) or p.get("locationsText")
+                if not normalizer.is_china_location(loc):
+                    continue
+            try:
+                d = httpx.get(f"{self._cxs_base}{ep}", headers=headers, timeout=self.timeout)
+                if d.status_code < 300:
+                    desc = (d.json().get("jobPostingInfo", {}) or {}).get("jobDescription")
+                    if desc:
+                        p["_jd"] = desc
+                    n += 1
+            except Exception:
+                continue
 
     @staticmethod
     def _china_facet_candidates(facets) -> dict:
@@ -174,8 +211,8 @@ class WorkdayAdapter(BaseAdapter):
                 company="",  # 由 sources.company 兜底
                 title=title,
                 location=location,
-                job_type=None,
-                summary=None,
+                job_type=None,  # run.py 会用 extract_job_type(title, summary) 从正文推断
+                summary=p.get("_jd"),  # detail 端点抓到的 jobDescription（HTML）；run.py clean_summary 去标签
                 jd_url=jd_url,
                 apply_url=jd_url,
                 posted_at=None,  # postedOn 是相对文案（"Posted Yesterday"），不伪造日期
