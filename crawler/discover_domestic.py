@@ -162,6 +162,31 @@ def _wt_count_and_sample(origin: str, brand: str, recruit_type: int):
         return 0, []
 
 
+def wt_probe(brand: str, cn: str):
+    """wt(老版 WinTalent) 直连发现 oracle（getSLD 对 wt 返 HTML 不可用，改直接探 list API）。
+    host={brand}.hotjob.cn，BRAND 大小写因租户而异（yili 小写 / CGN/CT/HMGC 大写）→ 试两种。
+    命中即同时拿到岗位数（自带 job-confirm）。"""
+    host = f"{brand}.hotjob.cn"
+    for wb in (brand, brand.upper()):
+        try:
+            with _client() as cli:
+                r = cli.get(f"https://{host}/wt/{wb}/web/json/position/list",
+                            params={"brandCode": 1, "recruitType": 2, "page": 1})
+                if r.status_code != 200:
+                    continue
+                j = r.json()
+        except Exception:
+            continue
+        posts = j.get("postList") or []
+        cnt = int(j.get("rowCount") or len(posts))
+        if cnt > 0:
+            origin = f"https://{host}"
+            titles = [str(p.get("postName") or "") for p in posts[:5]]
+            return {"platform": "wt", "origin": origin, "host": host, "wt_brand": wb,
+                    "count": cnt, "titles": titles, "verified": True}
+    return None
+
+
 def hotjob_probe(brand: str, cn: str):
     link = _getsld(brand)
     if not link:
@@ -231,7 +256,7 @@ def _probe_company(t, platforms):
                 r.update(company=company, cn=cn, industry=industry, slug=slug)
                 out.append(r); found.add("feishu")
         if "hotjob" in platforms and not ({"wecruit", "wt"} & found):
-            r = hotjob_probe(slug, cn)
+            r = hotjob_probe(slug, cn) or wt_probe(slug, cn)  # getSLD 漏 wt → wt 直连 list 兜底
             if r and r.get("count", 0) > 0:
                 r.update(company=company, cn=cn, industry=industry, slug=slug)
                 out.append(r); found.add(r["platform"])
@@ -336,12 +361,25 @@ def main():
     if rej:
         print(f"[discover] ✗未过 title-verify（人工复核，疑张冠李戴）: {', '.join(rej)}")
 
-    # beisen 候选写文件，交 probe.py --all 逐家 playwright job-confirm
-    bpath = os.path.join(os.path.dirname(__file__), "beisen_candidates.json")
-    with open(bpath, "w", encoding="utf-8") as f:
-        json.dump(beisen_cands, f, ensure_ascii=False, indent=1)
-    print(f"[discover] beisen 候选已写 {os.path.relpath(bpath)} → 跑: "
-          f"python3 probe.py --all --candidates beisen_candidates.json --emit <NNN>")
+    # 跨公司 URL 撞车检测：同一 source_url 被多个不同公司名认领 = slug 撞了别家 → 必人工复核
+    # （wt/wecruit 按域名 verified，挡不住「我猜的 slug 恰是另一家的 brand」，如 yutong=宇通≠宇瞳光学）
+    from collections import defaultdict
+    url_companies = defaultdict(set)
+    for p in passed:
+        url_companies[p["url"]].add(p["company"])
+    collisions = {u: cs for u, cs in url_companies.items() if len(cs) > 1}
+    if collisions:
+        print("[discover] ⚠️  URL 撞车（必人工复核，同名/同集团可留，异公司=张冠李戴需删）:")
+        for u, cs in sorted(collisions.items()):
+            print(f"      {u} ← {', '.join(sorted(cs))}")
+
+    # beisen 候选写文件，交 probe.py --all 逐家 playwright job-confirm（仅当本次探了 beisen，避免清空旧候选）
+    if "beisen" in platforms:
+        bpath = os.path.join(os.path.dirname(__file__), "beisen_candidates.json")
+        with open(bpath, "w", encoding="utf-8") as f:
+            json.dump(beisen_cands, f, ensure_ascii=False, indent=1)
+        print(f"[discover] beisen 候选已写 {os.path.relpath(bpath)} → 跑: "
+              f"python3 confirm_beisen_parallel.py beisen_candidates.json <NNN> 6")
 
     if args.emit and passed:
         path = os.path.join(os.path.dirname(__file__), "..", "supabase", "migrations",
