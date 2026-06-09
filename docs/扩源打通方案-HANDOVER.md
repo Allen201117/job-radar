@@ -51,6 +51,12 @@
 - Moka 078：SHEIN / 好未来 tal / 搜狐 sohu / 虎牙 huya / 乐元素 leyuansu / 搜狐畅游 cyou-inc。
 - Moka 080-081：紫光同芯 tsinghuaic(社招) / 芯粤能 ascenpower / 唯品会 vipshophr(app-tc) / 月之暗面 Kimi moonshot(社招) / 斗鱼 douyu(社招)。
 - 飞书 083：得物 poizon(`/index/position` 40岗)。hotjob 084：TCL 社招/校招/实习恢复。共 +40 家（075–084）。
+
+**🎯 核心目标（用户 06-09 更新）= 打通「中国500强 + 外企100强」的 社招/校招/实习【三渠道都要】，稳定返回可靠岗位。**
+- **三渠道是独立入口**：hotjob `social/school/interns.html`（同 suiteKey 换 page）；moka `apply` vs `campus_apply`（不同 orgId）；北森 `/social` vs `/campus`；飞书 `/index` vs 校招子站（`/campus` 常镜像 `/index`→按 postId 去重）。**前端 recruitmentCategory 已按 jd_url 的 campus/intern 标记归桶**，所以采集到带标记的渠道即自动分桶。
+- **hotjob 085-089 已恢复 13 家 500强（每家社招+校招+实习三渠道，suiteKey 注册表 `crawler/hotjob_suitekeys.json`）**：TCL/招商证券/华润电力/云南白药/迪卡侬/华夏银行/先声药业/领益智造/国投证券/地平线/华润三九/开源证券/瑞金医院。校招11+实习9 已 emit(088/089)，约 +665 校招/实习岗。
+- ⚠️ **hotjob 两种形态**：`wecruit.hotjob.cn/{suiteKey}/pb/`（适配器支持）vs **老 `{brand}.hotjob.cn/wt/{BRAND}/`（wintalent，适配器不支持）**——中国中车 crrc、银河证券 Chinastock 是 wt 形态，需**扩展适配器**才能入（中车/SOE 多用 wt，是高价值待办）。
+- **🌍 外企100强 = Workday 主矿脉（090/091 已入 9 家 ~800 在华岗）**：URL=`https://{tenant}.wd{N}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs`（site 名从 careers 页 URL 路径取，如 Careers/External/{Tenant}Careers/Search）。适配器 china-facet 服务端过滤在华，一个源含全类型。**已入**：AstraZeneca 436！/Sanofi 164/应用材料 84/KLA 37/Morgan Stanley 44/Intel 17/Micron 11/Novartis/GSK（+既有 nvidia/pfizer/citi）。**规律**：tech/pharma/半导体/finance 外企（有中国研发/HK）= 全球 Workday 暴露数百在华岗，**高产**；**消费/工业外企（Unilever/P&G/Schneider）全球站≈0 在华岗**（中国走本地渠道招）→ 别浪费在它们身上。下一批 workday 候选：Roche/Merck MSD/Takeda/AbbVie/Bayer/AMD/Lam/TI/HSBC/StanChart/SAP/Cisco（逐个搜 `{公司} myworkdayjobs wday cxs` 取 site 名）。
 - ⏭️ 待重探（orgId 失效或淡季）：快手 kuaishou/2283、CATL catlhr/46594、携程 trip(校招淡季)、三七 37、最右、HKACO；飞书自定义路径 dedao/`shezhao`、叠纸/银河通用。下轮换社招 orgId 或正确路径重试。
 
 **⚠️ 飞书批量 sweep 会触发反爬**：连打 ~34 个 `{tenant}.jobs.feishu.cn` 后大面积 `anti_bot_blocked`（deepseek/mihoyo/weride 等真租户被误杀）。正解=**小批 + 间隔**重探（每批 ≤5、隔几分钟），或单家慢探。已确认存在但被反爬挡的真飞书租户值得换干净会话重试。
