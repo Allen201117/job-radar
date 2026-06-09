@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import JobCard from "@/components/JobCard";
 import JobFilters from "@/components/JobFilters";
 import { mapApiSearchJobsToScoredJobs } from "@/lib/client-job-mapping";
 import {
-  jobMatchesChinaKeyword,
+  keywordMatchTier,
   normalizeChinaCity,
   recruitmentCategory,
 } from "@/lib/china-keyword-expansion";
@@ -186,17 +186,28 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
   const newViewActive = onlyNew && officialJobs.length > 0;
 
   const filtered = useMemo(() => {
-    let arr = allJobs.filter((job) => jobMatchesFilters(job, filters));
-    if (newViewActive) {
-      arr = arr.filter((job) => sessionNewKeys.has(job.jd_url || job.id));
-    }
-    arr.sort((a, b) =>
+    // 两层匹配：每个岗位算出档位（exact/related）；精确层在上、相关层在下，本次新发现置顶。
+    const tierRank = (t: string) => (t === "exact" ? 0 : 1);
+    const sortVal = (j: ScoredJob) =>
       filters.sortBy === "newest"
-        ? new Date(b.posted_at || b.first_seen_at || 0).getTime() -
-          new Date(a.posted_at || a.first_seen_at || 0).getTime()
-        : (b.match_score || 0) - (a.match_score || 0),
-    );
-    return arr;
+        ? new Date(j.posted_at || j.first_seen_at || 0).getTime()
+        : j.match_score || 0;
+    let arr = allJobs
+      .map((job) => ({ job, tier: jobFilterTier(job, filters) }))
+      .filter(
+        (x): x is { job: ScoredJob; tier: "exact" | "related" } => x.tier !== null,
+      );
+    if (newViewActive) {
+      arr = arr.filter((x) => sessionNewKeys.has(x.job.jd_url || x.job.id));
+    }
+    arr.sort((a, b) => {
+      if (tierRank(a.tier) !== tierRank(b.tier)) return tierRank(a.tier) - tierRank(b.tier);
+      const an = sessionNewKeys.has(a.job.jd_url || a.job.id) ? 0 : 1;
+      const bn = sessionNewKeys.has(b.job.jd_url || b.job.id) ? 0 : 1;
+      if (an !== bn) return an - bn; // 本次新发现置顶（同档内）
+      return sortVal(b.job) - sortVal(a.job);
+    });
+    return arr.map((x) => ({ ...x.job, __tier: x.tier }));
   }, [allJobs, filters, newViewActive, sessionNewKeys]);
 
   // 分批渲染：默认只渲染前 JOBS_PAGE_SIZE 张，「加载更多」逐批增加；筛选 / 切换新发现视图时回到第一批。
@@ -207,6 +218,11 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
   const visibleJobs = useMemo(
     () => filtered.slice(0, visibleCount),
     [filtered, visibleCount],
+  );
+  // 精确层数量（用于诚实展示「精确 E + 相关 R」），相关层 = filtered.length - exactCount。
+  const exactCount = useMemo(
+    () => filtered.reduce((n, j) => n + ((j as any).__tier === "exact" ? 1 : 0), 0),
+    [filtered],
   );
 
   const existingFilteredCount = useMemo(() => {
@@ -270,7 +286,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
           const seen = new Set(prev.map((j) => j.jd_url || j.id));
           return [...prev, ...scored.filter((j) => !seen.has(j.jd_url || j.id))];
         });
-        if (scored.length) setOnlyNew(true); // 有新岗位则默认切到「只看新发现」
+        // P1-C：不再自动切「只看新发现」（曾把整个 23k 库藏起来）；新岗位已高亮置顶进完整列表，库始终可见。
         setSearchInfo(formatDiscoveryResult(data, scored.length));
         setDiscoveryRound(queryOffset + 1); // 下次点击换下一组检索词
       } else {
@@ -342,7 +358,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
         const seen = new Set(prev.map((j) => j.jd_url || j.id));
         return [...scored.filter((j) => !seen.has(j.jd_url || j.id)), ...prev];
       });
-      setOnlyNew(true); // 发现完成有新岗位 → 默认只看本次新发现
+      // P1-C：不再自动切「只看新发现」；新发现岗位已高亮置顶进完整列表，库始终可见。
     }
     setSearchInfo(formatBrowserDiscoveryResult(data));
     setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "" });
@@ -581,17 +597,33 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
       <p className="inline-flex items-center gap-2 rounded-full border border-black/[0.06] bg-white/55 px-3 py-2 text-sm leading-6 text-[#5f594e]">
         <MagnifyingGlass size={16} weight="bold" aria-hidden="true" />
         {newViewActive ? "只看本次新发现：" : "匹配 "}
-        {filtered.length} 个岗位，已展示 {Math.min(visibleCount, filtered.length)} 个（本地岗位库 {localJobs.length}{libLoading ? ` / 共 ${initialTotal}，载入中…` : ""} + 本次官网刷新/发现 {officialJobs.length}）。本地搜索、已知源刷新、动态官方源发现三层分开执行。
+        {filtered.length} 个岗位{filters.keyword ? `（精确 ${exactCount} + 相关 ${filtered.length - exactCount}）` : ""}，已展示 {Math.min(visibleCount, filtered.length)} 个（本地岗位库 {localJobs.length}{libLoading ? ` / 共 ${initialTotal}，载入中…` : ""} + 本次官网刷新/发现 {officialJobs.length}）。本地搜索、已知源刷新、动态官方源发现三层分开执行。
       </p>
       <div className="space-y-3">
-        {visibleJobs.map((job) => (
-          <JobCard
-            key={job.id}
-            job={job}
-            sessionNew={sessionNewKeys.has(job.jd_url || job.id)}
-            onActionChange={handleActionChange}
-          />
-        ))}
+        {visibleJobs.map((job, i) => {
+          const tier = (job as any).__tier as "exact" | "related";
+          const prevTier = i > 0 ? ((visibleJobs[i - 1] as any).__tier as string) : null;
+          const showDivider =
+            Boolean(filters.keyword) && tier === "related" && prevTier !== "related";
+          return (
+            <Fragment key={job.id}>
+              {showDivider && (
+                <div className="flex items-center gap-3 pt-4 pb-1" role="separator">
+                  <span className="h-px flex-1 bg-black/[0.08]" />
+                  <span className="whitespace-nowrap text-xs font-medium text-[#8a8275]">
+                    相关岗位 · 同职能（标题未直接含「{filters.keyword}」）
+                  </span>
+                  <span className="h-px flex-1 bg-black/[0.08]" />
+                </div>
+              )}
+              <JobCard
+                job={job}
+                sessionNew={sessionNewKeys.has(job.jd_url || job.id)}
+                onActionChange={handleActionChange}
+              />
+            </Fragment>
+          );
+        })}
         {filtered.length === 0 &&
           (officialJobs.length > 0 && (filters.city || filters.jobType) ? (
             <div className="rounded-[1.5rem] border border-dashed border-[#e7c98a] bg-[#fbf2d8] px-6 py-10 text-center">
@@ -639,39 +671,42 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
   );
 }
 
-function jobMatchesFilters(job: ScoredJob, filters: Filters) {
-  if (filters.company && job.company !== filters.company) return false;
+// 返回岗位通过当前筛选的匹配档："exact"（精确）/ "related"（同职能相关）/ null（不匹配）。
+// 非关键词项（城市/类型/公司/资本/薪资/新发现/隐藏）仍硬 AND；关键词改两层匹配，治 88% 空摘要的召回崩。
+function jobFilterTier(job: ScoredJob, filters: Filters): "exact" | "related" | null {
+  if (filters.company && job.company !== filters.company) return null;
   if (filters.city) {
     const normalizedCity = normalizeChinaCity(filters.city);
     const location = job.location || "";
     if (!location.includes(filters.city) && !location.includes(normalizedCity)) {
-      return false;
+      return null;
     }
   }
   if (filters.jobType) {
     // 用穷尽的三桶分类（社招 / 校招 / 实习）精确匹配，避免细粒度类型（管培生 / 研究岗 / 全职等）漏桶。
-    if (recruitmentCategory(job) !== filters.jobType) return false;
-  }
-  if (filters.keyword) {
-    if (!jobMatchesChinaKeyword(job, filters.keyword)) return false;
+    if (recruitmentCategory(job) !== filters.jobType) return null;
   }
   if (filters.showNewOnly) {
-    if (!job.first_seen_at) return false;
-    const days = job.first_seen_at
-      ? (Date.now() - new Date(job.first_seen_at).getTime()) / 86400000
-      : 999;
-    if (days > 3) return false;
+    if (!job.first_seen_at) return null;
+    const days = (Date.now() - new Date(job.first_seen_at).getTime()) / 86400000;
+    if (days > 3) return null;
   }
-  if (!filters.showIgnored && job.hidden_reason === "ignored") return false;
-  if (!filters.showApplied && job.hidden_reason === "applied_by_default") return false;
+  if (!filters.showIgnored && job.hidden_reason === "ignored") return null;
+  if (!filters.showApplied && job.hidden_reason === "applied_by_default") return null;
   if (filters.capitalOrigin) {
     const origin = classifyCompanyOrigin(job.company);
     if (filters.capitalOrigin === "外企") {
-      if (origin === "中国") return false;
-    } else if (origin !== filters.capitalOrigin) return false;
+      if (origin === "中国") return null;
+    } else if (origin !== filters.capitalOrigin) return null;
   }
-  if (filters.salaryOnly && !job.salary_text) return false;
-  return true;
+  if (filters.salaryOnly && !job.salary_text) return null;
+  // 关键词两层：无关键词 → 全放行(exact)；否则 精确 / 相关 / 不匹配(null)。
+  if (!filters.keyword) return "exact";
+  return keywordMatchTier(job, filters.keyword);
+}
+
+function jobMatchesFilters(job: ScoredJob, filters: Filters) {
+  return jobFilterTier(job, filters) !== null;
 }
 
 function formatKnownRefreshResult(data: any, returnedJobs: number) {
