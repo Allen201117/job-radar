@@ -95,6 +95,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "apple", "apple_cn", "baidu", "jd", "haier", "siemens", "tencent",
     "greenhouse", "lever", "ashby", "smartrecruiters", "workday", "eightfold",
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
+    "netease", "oppo",  # PlaywrightAdapter 子类但自带 httpx fetch、无 super().fetch（已逐一核实）
 }
 
 

@@ -14,7 +14,8 @@ from adapters.base import RawJob
 class IsHttpxSafeTest(unittest.TestCase):
     def test_httpx_adapters_true(self):
         for a in ("greenhouse", "lever", "workday", "oracle", "hotjob", "wt",
-                  "tencent", "baidu", "jd", "apple", "amazon", "microsoft"):
+                  "tencent", "baidu", "jd", "apple", "amazon", "microsoft",
+                  "netease", "oppo"):  # netease/oppo: PlaywrightAdapter 子类但自带 httpx fetch（同 hotjob/wt）
             self.assertTrue(run._is_httpx_safe(a), a)
 
     def test_browser_and_unknown_false(self):
