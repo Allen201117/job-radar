@@ -32,6 +32,119 @@ class IsHttpxSafeTest(unittest.TestCase):
             self.assertNotIn(a, run._HTTPX_SAFE_ADAPTERS, a)
 
 
+class GroupByHostTest(unittest.TestCase):
+    """并发档按主机分队：同主机串行（礼貌爬取，防单服务器被并发打爆——2026-06-10 实锤
+    wecruit.hotjob.cn 上 102 源被 4 并发轰出 Errno 35 限流），跨主机并行。"""
+
+    def test_same_host_one_queue_order_kept(self):
+        sources = [
+            {"id": "1", "source_url": "https://wecruit.hotjob.cn/SU1/pb/social.html"},
+            {"id": "2", "source_url": "https://atl.hotjob.cn/SU2/pb/social.html"},
+            {"id": "3", "source_url": "https://wecruit.hotjob.cn/SU3/pb/school.html"},
+            {"id": "4", "source_url": "https://boards-api.greenhouse.io/v1/boards/x/jobs"},
+        ]
+        queues = run._group_by_host(sources)
+        self.assertEqual(len(queues), 3)  # wecruit / atl / greenhouse 三台主机
+        self.assertEqual([s["id"] for s in queues[0]], ["1", "3"])  # 同主机进同队、保序
+        self.assertEqual([s["id"] for s in queues[1]], ["2"])
+        self.assertEqual([s["id"] for s in queues[2]], ["4"])
+
+    def test_bad_url_gets_own_queue(self):
+        queues = run._group_by_host([{"id": "x", "source_url": "not a url"}])
+        self.assertEqual(len(queues), 1)
+
+
+class UpsertRaceTest(unittest.TestCase):
+    """db.upsert_job 先查后插非原子：并发下两线程同时插同一岗 → 23505 唯一键冲突。
+    修法：insert 撞唯一键时回退为按 jd_url 重查并 update（幂等），不再向上抛。"""
+
+    def _fake_sb(self, select_rounds, insert_raises):
+        """极简 supabase 假件：select 按轮次返回 select_rounds 的下一项；insert 可抛 23505。"""
+        calls = {"updates": 0}
+
+        class R:  # execute() 结果
+            def __init__(self, data):
+                self.data = data
+
+        class Q:
+            def __init__(self, mode):
+                self.mode = mode
+
+            def select(self, *a):
+                return self
+
+            def eq(self, *a):
+                return self
+
+            def limit(self, *a):
+                return self
+
+            def update(self, *a):
+                self.mode = "update"
+                return self
+
+            def insert(self, *a):
+                self.mode = "insert"
+                return self
+
+            def execute(self):
+                if self.mode == "select":
+                    return R(select_rounds.pop(0) if select_rounds else [])
+                if self.mode == "insert":
+                    if insert_raises:
+                        raise Exception(
+                            'duplicate key value violates unique constraint '
+                            '"jobs_company_title_location_jd_url_key" (23505)')
+                    return R([])
+                calls["updates"] += 1
+                return R([])
+
+        class SB:
+            def table(self, name):
+                return Q("select")
+
+        return SB(), calls
+
+    def test_insert_conflict_falls_back_to_update(self):
+        import db as dbmod
+        # 第一轮 select（按 source_id+jd_url）查不到 → 走 insert → 撞 23505 →
+        # 重查（按 jd_url）查到别的线程刚插的行 → update。
+        sb, calls = self._fake_sb(select_rounds=[[], [{"id": "j1"}]], insert_raises=True)
+        result = dbmod.upsert_job(sb, {"source_id": "s", "jd_url": "https://x/1", "title": "t"})
+        self.assertEqual(result, "updated")
+        self.assertEqual(calls["updates"], 1)
+
+    def test_non_duplicate_insert_error_still_raises(self):
+        import db as dbmod
+
+        class SB:
+            def table(self, name):
+                class Q:
+                    def select(self, *a):
+                        return self
+
+                    def eq(self, *a):
+                        return self
+
+                    def insert(self, *a):
+                        self.mode = "insert"
+                        return self
+
+                    def execute(self):
+                        if getattr(self, "mode", "") == "insert":
+                            raise Exception("network down")
+
+                        class R:
+                            data = []
+
+                        return R()
+
+                return Q()
+
+        with self.assertRaises(Exception):
+            dbmod.upsert_job(SB(), {"source_id": "s", "jd_url": "https://x/2", "title": "t"})
+
+
 class PartitionByTierTest(unittest.TestCase):
     def test_split_and_order_preserved(self):
         sources = [

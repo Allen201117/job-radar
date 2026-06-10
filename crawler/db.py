@@ -92,7 +92,26 @@ def upsert_job(supabase: Client, job: dict) -> str:
         job["id"] = str(uuid.uuid4())
         job["first_seen_at"] = datetime.now(timezone.utc).isoformat()
         job["last_seen_at"] = datetime.now(timezone.utc).isoformat()
-        supabase.table("jobs").insert(job).execute()
+        try:
+            supabase.table("jobs").insert(job).execute()
+        except Exception as e:
+            # 先查后插非原子：并发抓取下两线程/两渠道源同时插同一岗会撞唯一键（23505）。
+            # 回退为按 jd_url 重查（撞键行可能挂在别的 source_id 下）并 update，幂等不上抛。
+            msg = str(e)
+            if "23505" not in msg and "duplicate key" not in msg:
+                raise
+            again = (
+                supabase.table("jobs")
+                .select("id")
+                .eq("jd_url", job["jd_url"])
+                .limit(1)
+                .execute()
+            )
+            if not again.data:
+                raise  # 撞键却查不到（极端情况）→ 如实上抛，由调用方记 failed
+            update_payload = {k: v for k, v in job.items() if k not in ("id", "first_seen_at")}
+            supabase.table("jobs").update(update_payload).eq("id", again.data[0]["id"]).execute()
+            return "updated"
         return "created"
 
 

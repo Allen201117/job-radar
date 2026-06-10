@@ -111,6 +111,26 @@ def _partition_by_tier(sources):
     return concurrent, serial
 
 
+def _group_by_host(sources):
+    """并发档按主机分队：同主机一队（队内串行=礼貌爬取），跨主机并行。
+    动机（2026-06-10 实锤）：102 个 hotjob 源几乎全在 wecruit.hotjob.cn 一台主机上，
+    源级并发=对单服务器并发轰炸 → 对端限流，56 源 Errno 35 全灭。按主机分队后同主机
+    请求天然串行，跨主机才吃并发，既礼貌又不触发限流。队序按首现顺序（保本土优先）。"""
+    from urllib.parse import urlparse
+
+    queues, index = [], {}
+    for s in sources:
+        try:
+            host = urlparse(s.get("source_url") or "").netloc or f"_bad_{len(queues)}"
+        except Exception:
+            host = f"_bad_{len(queues)}"
+        if host not in index:
+            index[host] = len(queues)
+            queues.append([])
+        queues[index[host]].append(s)
+    return queues
+
+
 def _process_one_source(source, supabase) -> dict:
     """处理单个源：robots → should_skip → fetch → parse → 质量门 → upsert。
     返回 {status, created, updated}；**永不抛异常**（并发档 ex.map 迭代结果时不会炸整批）。
@@ -299,9 +319,14 @@ def run_crawl(filter_adapter: str = None):
 
     results = []
     # 并发档先跑（httpx 快，CI 即便超时也先把这批收完）；workers=1 时退化为串行（安全阀，可用 CRAWL_CONCURRENCY=1 回退）。
+    # 并发单位 = 主机队列（同主机串行防把单服务器打爆，跨主机并行吃满 workers）。
     if concurrent_sources and workers > 1:
+        host_queues = _group_by_host(concurrent_sources)
+        print(f"[crawler] 并发档按主机分 {len(host_queues)} 队（同主机串行、跨主机并行）")
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            results.extend(ex.map(lambda s: _process_one_source(s, supabase), concurrent_sources))
+            for queue_results in ex.map(
+                    lambda q: [_process_one_source(s, supabase) for s in q], host_queues):
+                results.extend(queue_results)
     else:
         results.extend(_process_one_source(s, supabase) for s in concurrent_sources)
     # 串行档：浏览器源逐个跑（domestic-browser 已被本土优先排序排在前，优先抓）。
