@@ -1,0 +1,184 @@
+[
+ {
+  "company": "理想汽车",
+  "adapter": "feishu",
+  "url": "https://li.jobs.feishu.cn/index/position",
+  "industry": "汽车",
+  "segment": "private"
+ },
+ {
+  "company": "海澜之家",
+  "adapter": "wt",
+  "url": "https://www.hotjob.cn/wt/HLA/web/index",
+  "industry": "服装",
+  "segment": "private"
+ },
+ {
+  "company": "海信集团",
+  "adapter": "beisen",
+  "url": "https://hisense.zhiye.com/social",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "海信集团",
+  "adapter": "beisen",
+  "url": "https://hisense.zhiye.com/campus",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "京东方",
+  "adapter": "beisen",
+  "url": "https://boe.zhiye.com/social",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "京东方",
+  "adapter": "beisen",
+  "url": "https://boe.zhiye.com/campus",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "长安汽车",
+  "adapter": "beisen",
+  "url": "https://changan.zhiye.com/social",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "长安汽车",
+  "adapter": "beisen",
+  "url": "https://changan.zhiye.com/campus",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "奇瑞汽车",
+  "adapter": "beisen",
+  "url": "https://chery.zhiye.com/social",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "奇瑞汽车",
+  "adapter": "beisen",
+  "url": "https://chery.zhiye.com/campus",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "恒生电子",
+  "adapter": "beisen",
+  "url": "https://hundsun.zhiye.com/social",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "恒生电子",
+  "adapter": "beisen",
+  "url": "https://hundsun.zhiye.com/campus",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "新希望",
+  "adapter": "beisen",
+  "url": "https://newhope.zhiye.com/social",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "新希望",
+  "adapter": "beisen",
+  "url": "https://newhope.zhiye.com/campus",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "德邦快递",
+  "adapter": "beisen",
+  "url": "https://deppon.zhiye.com/social",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "德邦快递",
+  "adapter": "beisen",
+  "url": "https://deppon.zhiye.com/campus",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "中通快递",
+  "adapter": "beisen",
+  "url": "https://zto.zhiye.com/social",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "中通快递",
+  "adapter": "beisen",
+  "url": "https://zto.zhiye.com/campus",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "汇顶科技",
+  "adapter": "beisen",
+  "url": "https://goodix.zhiye.com/social",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "汇顶科技",
+  "adapter": "beisen",
+  "url": "https://goodix.zhiye.com/campus",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "兆易创新",
+  "adapter": "moka",
+  "url": "https://app.mokahr.com/apply/gigadevice/92215",
+  "industry": "半导体",
+  "segment": "private"
+ },
+ {
+  "company": "兆易创新",
+  "adapter": "moka",
+  "url": "https://app.mokahr.com/campus_apply/gigadevice/92215",
+  "industry": "半导体",
+  "segment": "private"
+ },
+ {
+  "company": "宁德时代",
+  "adapter": "moka",
+  "url": "https://talent.catl.com/",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "盒马",
+  "adapter": "moka",
+  "url": "https://hire.freshippo.com/",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "申通快递",
+  "adapter": "moka",
+  "url": "https://hr.sto.cn/",
+  "industry": "知名私企",
+  "segment": "private"
+ },
+ {
+  "company": "吉利汽车",
+  "adapter": "moka",
+  "url": "https://campus.geely.com/",
+  "industry": "知名私企",
+  "segment": "private"
+ }
+]
