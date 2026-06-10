@@ -9,6 +9,7 @@ Job Radar Crawler — 主入口。
 import argparse
 import os
 import sys
+import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
@@ -39,6 +40,7 @@ from adapters.microsoft import MicrosoftAdapter
 from adapters.google import GoogleAdapter
 from adapters.netease import NeteaseAdapter
 from adapters.oppo import OppoAdapter
+from adapters.xiaohongshu import XiaohongshuAdapter
 
 
 ADAPTERS = {
@@ -76,6 +78,7 @@ ADAPTERS = {
     "wt": WtAdapter(),  # 老版 WinTalent：伊利/中广核/中国电信/现代等,直连 position/list JSON,零浏览器
     "netease": NeteaseAdapter(),  # 网易自建门户：hr.163.com queryPage 公开接口,零浏览器
     "oppo": OppoAdapter(),  # OPPO 校招门户：careers.oppo.com openapi 公开接口,零浏览器
+    "xiaohongshu": XiaohongshuAdapter(),  # 小红书自建门户：job.xiaohongshu.com pageQueryPosition,零浏览器
 }
 
 # 中国本土公司源（每日后台爬取高优）：本土覆盖优先级 > 外企，排在外企 ATS 前先抓。
@@ -83,7 +86,7 @@ ADAPTERS = {
 DOMESTIC_ADAPTERS = {
     "baidu", "jd", "bytedance", "bytedance_campus", "tencent",
     "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier",
-    "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
+    "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo", "xiaohongshu",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
 }
 
 
@@ -95,7 +98,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "apple", "apple_cn", "baidu", "jd", "haier", "siemens", "tencent",
     "greenhouse", "lever", "ashby", "smartrecruiters", "workday", "eightfold",
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
-    "netease", "oppo",  # PlaywrightAdapter 子类但自带 httpx fetch、无 super().fetch（已逐一核实）
+    "netease", "oppo", "xiaohongshu",  # PlaywrightAdapter 子类但自带 httpx fetch、无 super().fetch（已逐一核实）
 }
 
 
@@ -109,6 +112,19 @@ def _partition_by_tier(sources):
     for s in sources:
         (concurrent if _is_httpx_safe(s.get("adapter_name") or "") else serial).append(s)
     return concurrent, serial
+
+
+# 并发档每线程独立 supabase 客户端。根因（2026-06-10 实锤，traceback 指向
+# httpcore/_sync/http2.py + postgrest）：supabase-py 客户端走 HTTP/2 单连接多路复用，
+# 被多个 worker 线程共享时并发读同一 socket → Errno 35（Resource temporarily unavailable）
+# 大面积失败（hotjob 89/102 源全灭）。每线程一个客户端 = 每线程自己的连接，根治。
+_TLS = threading.local()
+
+
+def _get_thread_supabase():
+    if not hasattr(_TLS, "sb"):
+        _TLS.sb = db.get_supabase()
+    return _TLS.sb
 
 
 def _group_by_host(sources):
@@ -324,8 +340,10 @@ def run_crawl(filter_adapter: str = None):
         host_queues = _group_by_host(concurrent_sources)
         print(f"[crawler] 并发档按主机分 {len(host_queues)} 队（同主机串行、跨主机并行）")
         with ThreadPoolExecutor(max_workers=workers) as ex:
+            # 注意每线程用 _get_thread_supabase()（线程局部客户端），不共享主线程的 supabase。
             for queue_results in ex.map(
-                    lambda q: [_process_one_source(s, supabase) for s in q], host_queues):
+                    lambda q: [_process_one_source(s, _get_thread_supabase()) for s in q],
+                    host_queues):
                 results.extend(queue_results)
     else:
         results.extend(_process_one_source(s, supabase) for s in concurrent_sources)

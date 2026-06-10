@@ -100,6 +100,11 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填「OPPO」+ https://careers.oppo.com/university/oppo/campus/post?recruitType=Graduate，直连 openapi/position/pageNew，crawl_method 选 http",
   },
   {
+    value: "xiaohongshu",
+    label: "小红书（自建门户 · 本土）",
+    hint: "填「小红书」+ https://job.xiaohongshu.com/，直连 pageQueryPosition 公开接口（社招/校招/实习三渠道），crawl_method 选 http",
+  },
+  {
     value: "amazon",
     label: "Amazon（自建 · 外企）",
     hint: "填公司名 + Amazon.jobs 搜索接口（www.amazon.jobs/en/search.json?normalized_country_code[]=CHN&result_limit=100）",
