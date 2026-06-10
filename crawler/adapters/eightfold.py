@@ -54,7 +54,40 @@ class EightfoldAdapter(BaseAdapter):
                     collected.append(pos)
                 if len(positions) < 10:
                     break
+
+        # 逐岗 detail 抓正文 —— 列表接口的 job_description 恒为空（已 live 验证），外企卡片 JD 因此全空。
+        # GET {origin}{path}/{id}?domain={domain} → 顶层 job_description（HTML）；run.py 的 clean_summary 去标签解实体，
+        # summary 有正文后 extract_job_type 也能从中推断类型。只补将保留的在华岗，单源封顶防夜间全量被拖垮。
+        self._enrich_descriptions(origin, path, domain, collected, headers)
         return json.dumps({"_origin": origin, "positions": collected}, ensure_ascii=False)
+
+    _DETAIL_CAP = 300  # 单源逐岗 detail 抓取上限，避免拖垮夜间全量
+
+    def _enrich_descriptions(self, origin: str, path: str, domain: str,
+                             positions: List[dict], headers: dict):
+        """逐岗 GET detail 端点把 job_description 挂到 position['_jd']（供 parse 取作 summary）。"""
+        n = 0
+        for p in positions:
+            if n >= self._DETAIL_CAP:
+                break
+            if not isinstance(p, dict):
+                continue
+            # 与 parse 同口径：只补在华岗（服务端已按 location 收窄，这里再兜一层，省掉少数串入的非华岗 detail 调用）
+            if not normalizer.is_china_location(p.get("location")):
+                continue
+            pid = p.get("id")
+            if not pid:
+                continue
+            try:
+                d = httpx.get(f"{origin}{path}/{pid}", params={"domain": domain},
+                              headers=headers, timeout=self.timeout)
+                if d.status_code < 300:
+                    desc = d.json().get("job_description")
+                    if desc:
+                        p["_jd"] = desc
+                    n += 1
+            except Exception:
+                continue
 
     def parse(self, html: str) -> List[RawJob]:
         try:
@@ -87,8 +120,8 @@ class EightfoldAdapter(BaseAdapter):
                 company="",  # 由 sources.company 兜底
                 title=title,
                 location=location,
-                job_type=None,
-                summary=None,  # job_description 是长 HTML，详情点链接看；此处不灌库
+                job_type=None,  # run.py 用 extract_job_type(title, summary) 从正文推断
+                summary=p.get("_jd"),  # detail 端点抓到的 job_description（HTML）；run.py clean_summary 去标签
                 jd_url=jd_url,
                 apply_url=jd_url,
                 posted_at=None,

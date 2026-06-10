@@ -27,7 +27,48 @@ class SmartRecruitersAdapter(BaseAdapter):
         headers = {"User-Agent": self.user_agent, "Accept": "application/json"}
         resp = httpx.get(source_url, headers=headers, timeout=self.timeout, follow_redirects=True)
         resp.raise_for_status()
-        return resp.text
+        # 逐岗 detail 抓正文 —— 列表接口（/postings）无正文，外企卡片 JD 因此全空。
+        # GET /companies/{slug}/postings/{id} → jobAd.sections.{jobDescription,responsibilities,qualifications}.text
+        # （HTML；run.py 的 clean_summary 去标签解实体，summary 有正文后 extract_job_type 也能从中推断类型）。
+        # 只补将保留的在华岗，单源封顶防夜间全量被拖垮；失败该岗无摘要、不影响入库。
+        try:
+            data = json.loads(resp.text)
+        except (json.JSONDecodeError, TypeError):
+            return resp.text
+        rows = data.get("content", []) if isinstance(data, dict) else []
+        self._enrich_descriptions(rows, headers)
+        return json.dumps(data, ensure_ascii=False)
+
+    _DETAIL_CAP = 300  # 单源逐岗 detail 抓取上限，避免拖垮夜间全量
+
+    def _enrich_descriptions(self, rows: List[dict], headers: dict):
+        """对将保留的在华岗逐个调 detail 端点，把 jobAd 各 section 文本拼成正文挂到 row['_jd']。"""
+        n = 0
+        for j in rows:
+            if n >= self._DETAIL_CAP:
+                break
+            if not isinstance(j, dict):
+                continue
+            if not normalizer.keep_for_china_radar(_location_str(j.get("location"))):
+                continue
+            pid = str(j.get("id") or j.get("uuid") or "").strip()
+            identifier = ((j.get("company") or {}).get("identifier") or "").strip()
+            if not pid or not identifier:
+                continue
+            try:
+                d = httpx.get(
+                    f"https://api.smartrecruiters.com/v1/companies/{identifier}/postings/{pid}",
+                    headers=headers, timeout=self.timeout)
+                if d.status_code < 300:
+                    secs = (d.json().get("jobAd") or {}).get("sections") or {}
+                    parts = [(secs.get(k) or {}).get("text")
+                             for k in ("jobDescription", "responsibilities", "qualifications")]
+                    body = " ".join(x for x in parts if x)
+                    if body.strip():
+                        j["_jd"] = body
+                    n += 1
+            except Exception:
+                continue
 
     def parse(self, html: str) -> List[RawJob]:
         try:
@@ -54,7 +95,7 @@ class SmartRecruitersAdapter(BaseAdapter):
                 title=title,
                 location=location,
                 job_type=(j.get("typeOfEmployment") or {}).get("label") if isinstance(j.get("typeOfEmployment"), dict) else None,
-                summary=None,  # 列表接口无正文；normalizer 不强制 summary
+                summary=j.get("_jd"),  # detail 端点抓到的 jobAd 正文（HTML）；run.py clean_summary 去标签
                 jd_url=jd_url,
                 apply_url=jd_url,
                 posted_at=(j.get("releasedDate") or "")[:10] or None,
