@@ -32,6 +32,34 @@ class IsHttpxSafeTest(unittest.TestCase):
             self.assertNotIn(a, run._HTTPX_SAFE_ADAPTERS, a)
 
 
+class ThreadLocalSupabaseTest(unittest.TestCase):
+    """并发档每线程独立 supabase 客户端。根因（2026-06-10 实锤，traceback 指向
+    httpcore/_sync/http2.py + postgrest）：supabase-py 客户端走 HTTP/2 单连接多路复用，
+    被 4 个 worker 线程共享时并发读同一 socket → Errno 35 大面积失败（89/102 源）。"""
+
+    def test_same_thread_same_client_diff_thread_diff_client(self):
+        import threading
+        created = []
+        orig = run.db.get_supabase
+        run.db.get_supabase = lambda: created.append(object()) or created[-1]
+        try:
+            run._TLS.__dict__.clear()  # 清线程局部缓存，避免别的测试污染
+            a1 = run._get_thread_supabase()
+            a2 = run._get_thread_supabase()
+            self.assertIs(a1, a2)  # 同线程复用同一客户端
+
+            box = {}
+            def worker():
+                box["b"] = run._get_thread_supabase()
+            t = threading.Thread(target=worker)
+            t.start(); t.join()
+            self.assertIsNot(box["b"], a1)  # 不同线程各自独立客户端
+            self.assertEqual(len(created), 2)
+        finally:
+            run.db.get_supabase = orig
+            run._TLS.__dict__.clear()
+
+
 class GroupByHostTest(unittest.TestCase):
     """并发档按主机分队：同主机串行（礼貌爬取，防单服务器被并发打爆——2026-06-10 实锤
     wecruit.hotjob.cn 上 102 源被 4 并发轰出 Errno 35 限流），跨主机并行。"""
