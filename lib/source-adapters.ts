@@ -110,6 +110,11 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填 BU 公司名 + 该 BU 域列表页（{BU域}/off-campus/position-list?lang=zh，如 talent.taotian.com 淘天 / careers.aliyun.com 阿里云），直连 position/search，crawl_method 选 http",
   },
   {
+    value: "huawei",
+    label: "华为（自建门户 · 本土）",
+    hint: "填「华为」+ https://career.huawei.com/reccampportal/portal5/social-recruitment.html，直连 getJob 公开接口（社招/校招/实习三渠道，零鉴权），crawl_method 选 http",
+  },
+  {
     value: "amazon",
     label: "Amazon（自建 · 外企）",
     hint: "填公司名 + Amazon.jobs 搜索接口（www.amazon.jobs/en/search.json?normalized_country_code[]=CHN&result_limit=100）",
