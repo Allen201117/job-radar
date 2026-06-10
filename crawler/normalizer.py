@@ -428,6 +428,13 @@ def validate_job_quality(raw: RawJob, source_url: str) -> tuple[bool, str]:
         return False, "navigation title"
 
     path = (parsed.path or "/").rstrip("/") or "/"
+    # SPA hash 路由（path 为 '/'，真实岗位路由在 fragment，如携程
+    # careers.ctrip.com/#/experienced/job-detail/{id}）：用 fragment 当有效路径参与
+    # homepage/navigation 判断，否则 path='/' 会把 hash 详情页误判成首页拦掉。
+    # 非 hash 源 path 非空（含 moka /apply/{slug}/{orgId}）→ 此分支不触发、零影响。
+    frag = (parsed.fragment or "").strip()
+    if path == "/" and frag:
+        path = ("/" + frag.lstrip("#/")).rstrip("/") or "/"
     path_lower = path.lower()
     if path == "/":
         return False, "homepage is not a job detail"
