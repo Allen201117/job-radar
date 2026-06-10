@@ -122,15 +122,21 @@ def _process_one_source(source, supabase) -> dict:
     adapter = ADAPTERS.get(adapter_name)
     if not adapter:
         print(f"  [skip] {company}: 未找到 adapter '{adapter_name}'")
-        run_id = db.create_crawl_run(supabase, source_id)
-        db.update_crawl_run(supabase, run_id, "failed",
-                            error_message=f"Unknown adapter: {adapter_name}")
+        try:
+            run_id = db.create_crawl_run(supabase, source_id)
+            db.update_crawl_run(supabase, run_id, "failed",
+                                error_message=f"Unknown adapter: {adapter_name}")
+        except Exception as e:  # DB 瞬时错误（如 Errno 35）也不许炸穿
+            print(f"    crawl_run 记录失败: {e}")
         return {"status": "failed", "created": 0, "updated": 0}
 
     print(f"  [{adapter_name}] {company} ({source_url})")
-    run_id = db.create_crawl_run(supabase, source_id)
+    # run_id 的创建必须在 try 内：高负载下 Supabase 偶发 Errno 35（实锤于 2026-06-10 hotjob 全量
+    # 并发跑），在 try 外抛出会炸穿「永不抛异常」约定 → ex.map 迭代时掀翻整批并发档。
+    run_id = None
 
     try:
+        run_id = db.create_crawl_run(supabase, source_id)
         # 1. robots check
         robots_result = check_robots(source_url)
         if not robots_result["allowed"]:
@@ -258,8 +264,12 @@ def _process_one_source(source, supabase) -> dict:
         error_msg = f"{type(e).__name__}: {e}"
         print(f"    FAILED: {error_msg}")
         traceback.print_exc()
-        db.update_crawl_run(supabase, run_id, "failed",
-                            error_message=error_msg[:1000])
+        try:
+            if run_id is not None:
+                db.update_crawl_run(supabase, run_id, "failed",
+                                    error_message=error_msg[:1000])
+        except Exception as e2:  # 失败路径里 DB 再抛（同类瞬时错误）也不许炸穿
+            print(f"    crawl_run 记录失败: {e2}")
         return {"status": "failed", "created": 0, "updated": 0}
 
 
