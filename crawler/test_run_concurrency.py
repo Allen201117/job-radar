@@ -103,6 +103,34 @@ class ProcessOneSourceTest(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["created"], 0)
 
+    def test_db_create_crawl_run_raises_not_propagate(self):
+        # 高负载实锤 bug（2026-06-10 hotjob 全量并发跑崩）：db.create_crawl_run 在 try 外，
+        # Supabase 瞬时错误(Errno 35)抛穿「永不抛异常」约定 → ex.map 炸整批。必须吞掉返回 failed。
+        def boom(sb, sid):
+            raise OSError(35, "Resource temporarily unavailable")
+        run.db.create_crawl_run = boom
+        source = {"adapter_name": "_fake_httpx", "company": "测试公司",
+                  "source_url": "https://example.com/list", "id": "s3"}
+        result = run._process_one_source(source, supabase=None)
+        self.assertEqual(result["status"], "failed")
+
+    def test_db_update_crawl_run_raises_in_failure_path_not_propagate(self):
+        # 失败路径里 update_crawl_run 自己也可能抛（同样的瞬时 DB 错误）→ 也不能炸穿。
+        class _BoomAdapter(_FakeAdapter):
+            def fetch(self, url):
+                raise RuntimeError("fetch 炸了")
+        def boom_update(*a, **k):
+            raise OSError(35, "Resource temporarily unavailable")
+        run.ADAPTERS["_fake_boom"] = _BoomAdapter()
+        run.db.update_crawl_run = boom_update
+        try:
+            source = {"adapter_name": "_fake_boom", "company": "X",
+                      "source_url": "https://x.com/list", "id": "s4"}
+            result = run._process_one_source(source, supabase=None)
+            self.assertEqual(result["status"], "failed")
+        finally:
+            run.ADAPTERS.pop("_fake_boom", None)
+
 
 class _FakeBrowserAdapter(_FakeAdapter):
     """串行档假 adapter：parse 出一个不同 jd_url 的岗（区分并发档）。"""
