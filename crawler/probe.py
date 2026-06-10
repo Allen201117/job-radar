@@ -38,6 +38,7 @@ _HTTPX_ADAPTERS = {
     "netease",  # 网易自建：hr.163.com queryPage httpx 直连（详见 adapters/netease.py）
     "oppo",  # OPPO 校招门户：careers.oppo.com openapi httpx 直连（详见 adapters/oppo.py）
     "xiaohongshu",  # 小红书自建：job.xiaohongshu.com pageQueryPosition httpx 直连（详见 adapters/xiaohongshu.py）
+    "alibaba",  # 阿里集团 BU 门户：position/search httpx 直连，host 动态解析（详见 adapters/alibaba.py）
 }
 
 # 通用 ATS 的 URL 模板：给定 slug 即可拼出公开 JSON 接口地址。

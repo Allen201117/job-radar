@@ -41,6 +41,7 @@ from adapters.google import GoogleAdapter
 from adapters.netease import NeteaseAdapter
 from adapters.oppo import OppoAdapter
 from adapters.xiaohongshu import XiaohongshuAdapter
+from adapters.alibaba import AlibabaAdapter
 
 
 ADAPTERS = {
@@ -79,6 +80,7 @@ ADAPTERS = {
     "netease": NeteaseAdapter(),  # 网易自建门户：hr.163.com queryPage 公开接口,零浏览器
     "oppo": OppoAdapter(),  # OPPO 校招门户：careers.oppo.com openapi 公开接口,零浏览器
     "xiaohongshu": XiaohongshuAdapter(),  # 小红书自建门户：job.xiaohongshu.com pageQueryPosition,零浏览器
+    "alibaba": AlibabaAdapter(),  # 阿里集团 BU 门户通用层：position/search 公开接口,host 动态解析,零浏览器
 }
 
 # 中国本土公司源（每日后台爬取高优）：本土覆盖优先级 > 外企，排在外企 ATS 前先抓。
@@ -86,7 +88,7 @@ ADAPTERS = {
 DOMESTIC_ADAPTERS = {
     "baidu", "jd", "bytedance", "bytedance_campus", "tencent",
     "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier",
-    "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo", "xiaohongshu",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
+    "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo", "xiaohongshu", "alibaba",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
 }
 
 
@@ -98,7 +100,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "apple", "apple_cn", "baidu", "jd", "haier", "siemens", "tencent",
     "greenhouse", "lever", "ashby", "smartrecruiters", "workday", "eightfold",
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
-    "netease", "oppo", "xiaohongshu",  # PlaywrightAdapter 子类但自带 httpx fetch、无 super().fetch（已逐一核实）
+    "netease", "oppo", "xiaohongshu", "alibaba",  # PlaywrightAdapter 子类但自带 httpx fetch、无 super().fetch（已逐一核实）
 }
 
 
