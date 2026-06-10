@@ -104,5 +104,76 @@ class TestHotJobAdapter(unittest.TestCase):
         self.assertTrue(ok, reason)
 
 
+class _FakeResp:
+    def __init__(self, payload):
+        self._p = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._p
+
+
+class _FakeClient:
+    """假 httpx client：按 postId 返回 listPositionDetail 响应，记录调用。"""
+
+    def __init__(self, by_postid):
+        self.by = by_postid
+        self.calls = []
+
+    def post(self, url, data=None, **kwargs):
+        self.calls.append((url, data))
+        pid = (data or {}).get("postId")
+        return _FakeResp(self.by.get(pid, {"data": {}}))
+
+
+class TestHotJobDetailEnrich(unittest.TestCase):
+    """P3 富化：列表无 JD 正文，逐岗 listPositionDetail 补 workContent/serviceCondition → summary。"""
+
+    def setUp(self):
+        self.a = HotJobAdapter()
+        self.a._bind_source("https://wecruit.hotjob.cn/SU64893571bef57c16d356b99e/pb/social.html")
+
+    def test_enrich_fills_jd_fields_then_map_builds_summary(self):
+        posts = [
+            {"postId": "p1", "postName": "后端工程师", "workPlaceStr": "上海市"},
+            {"postId": "p2", "postName": "前端工程师", "workPlaceStr": "北京市"},
+        ]
+        client = _FakeClient({
+            "p1": {"data": {"workContent": "负责服务端开发", "serviceCondition": "本科及以上"}},
+            "p2": {"data": {"workContent": "负责前端开发"}},
+        })
+        self.a._enrich_details(client, posts)
+        # 详情 API 路径 = /wecruit/positionInfo/listPositionDetail/{suiteKey}，body 带 postId+recruitType
+        self.assertTrue(client.calls[0][0].endswith(
+            "/wecruit/positionInfo/listPositionDetail/SU64893571bef57c16d356b99e"))
+        self.assertEqual(client.calls[0][1]["postId"], "p1")
+        self.assertIn("recruitType", client.calls[0][1])
+        # 补回岗位字段 → _map 产出 summary
+        self.assertEqual(posts[0]["workContent"], "负责服务端开发")
+        job = self.a._map(posts[0])
+        self.assertIn("负责服务端开发", job.summary)
+        self.assertIn("本科及以上", job.summary)
+
+    def test_enrich_respects_cap_and_skips_missing_postid(self):
+        posts = [{"postId": f"p{i}", "postName": "X"} for i in range(50)]
+        posts.append({"postName": "无id岗"})  # 无 postId → 跳过，不计入 cap
+        client = _FakeClient({f"p{i}": {"data": {"workContent": "j"}} for i in range(50)})
+        self.a._DETAIL_CAP = 5
+        self.a._enrich_details(client, posts)
+        self.assertEqual(len(client.calls), 5)
+
+    def test_enrich_tolerates_detail_failure(self):
+        class _Boom:
+            def post(self, *a, **k):
+                raise RuntimeError("anti-bot 403")
+        posts = [{"postId": "p1", "postName": "X"}]
+        # 详情失败不抛、不污染：summary 保持 None，岗位仍可入库
+        self.a._enrich_details(_Boom(), posts)
+        self.assertNotIn("workContent", posts[0])
+        self.assertIsNone(self.a._map(posts[0]).summary)
+
+
 if __name__ == "__main__":
     unittest.main()
