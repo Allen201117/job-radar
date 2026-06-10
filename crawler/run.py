@@ -37,6 +37,7 @@ from adapters.amazon import AmazonAdapter
 from adapters.phenom import PhenomAdapter
 from adapters.microsoft import MicrosoftAdapter
 from adapters.google import GoogleAdapter
+from adapters.netease import NeteaseAdapter
 
 
 ADAPTERS = {
@@ -72,6 +73,7 @@ ADAPTERS = {
     "feishu": FeishuGenericAdapter(),  # 飞书招聘数据驱动通用层（国内版 Workday）：host 从 source_url 解析
     "hotjob": HotJobAdapter(),  # HotJob / wecruit 通用层：TCL 等国内企业公开招聘站
     "wt": WtAdapter(),  # 老版 WinTalent：伊利/中广核/中国电信/现代等,直连 position/list JSON,零浏览器
+    "netease": NeteaseAdapter(),  # 网易自建门户：hr.163.com queryPage 公开接口,零浏览器
 }
 
 # 中国本土公司源（每日后台爬取高优）：本土覆盖优先级 > 外企，排在外企 ATS 前先抓。
@@ -79,7 +81,7 @@ ADAPTERS = {
 DOMESTIC_ADAPTERS = {
     "baidu", "jd", "bytedance", "bytedance_campus", "tencent",
     "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier",
-    "moka", "beisen", "company_spa", "feishu", "hotjob", "wt",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
+    "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
 }
 
 
