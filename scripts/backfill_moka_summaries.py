@@ -2,20 +2,23 @@
 """Moka 岗位 summary 回填器（浏览器逐岗渲染抓 JD）。
 
 为何独立脚本而非接入 run.py：Moka 列表 JSON 加密、JD 只在 `{base}#/job/{uuid}` 详情页 DOM 里，
-补 summary 必须**逐岗浏览器渲染**（~5s/岗）。把 5.8k 岗渲染塞进每日 cron 会拖垮夜爬（数小时），
+补 summary 必须**逐岗浏览器渲染**（~2-5s/岗）。把 5.8k 岗渲染塞进每日 cron 会拖垮夜爬（数小时），
 故拆成独立、可限量、幂等的回填器——按需/周期（如每周一次 GitHub Action）跑，只补 summary 为空的 Moka 岗。
 
 用法（本机/CI，需 .env.local 的 SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY）：
   set -a; source ../.env.local; set +a
-  python3 scripts/backfill_moka_summaries.py --limit 50        # 补 50 个
+  python3 scripts/backfill_moka_summaries.py --limit 50              # 补 50 个
   python3 scripts/backfill_moka_summaries.py --limit 5 --dry-run
+  # 全量并行（6 进程分片，互不重叠；每片自己起一个 Chromium）：
+  for k in 0 1 2 3 4 5; do python3 scripts/backfill_moka_summaries.py --shard $k/6 --limit 2000 & done
 
 只读 + 只更新 summary 字段（不碰 jd_url/title 等），幂等（只取 summary 为空的 Moka 岗）。
-Beisen 不在此脚本：其详情页冷渲染近乎空壳（反爬需先访列表暖 session），属另一套机制。
+Beisen 不在此脚本：其列表接口本就带 Duty/Require 正文（china_ats._map 已修），跑每日爬取即回填。
 """
 import argparse
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "crawler"))
 import db  # noqa: E402
@@ -43,28 +46,51 @@ def _scrape_jd(page) -> str:
     return best
 
 
+def _fetch_targets(sb, limit: int):
+    """分页取全部 summary 为空的 active Moka 岗（id 升序稳定排序，供 shard 切片）。"""
+    rows, page = [], 1000
+    for offset in range(0, 20000, page):
+        chunk = (
+            sb.table("jobs")
+            .select("id,jd_url,title")
+            .like("jd_url", "%mokahr%")
+            .is_("summary", "null")
+            .eq("status", "active")
+            .order("id")
+            .range(offset, offset + page - 1)
+            .execute()
+            .data
+        ) or []
+        rows.extend(chunk)
+        if len(chunk) < page or len(rows) >= limit * 3:  # 多取一些，shard 切片后仍够 limit
+            break
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser(description="Moka summary 回填器")
-    ap.add_argument("--limit", type=int, default=50, help="本次最多回填多少岗（控时长）")
+    ap.add_argument("--limit", type=int, default=50, help="本片最多回填多少岗（控时长）")
+    ap.add_argument("--shard", type=str, default="0/1",
+                    help="分片 k/n：按 id 排序后取第 k 片（多进程并行互不重叠），默认 0/1=全量")
     ap.add_argument("--dry-run", action="store_true", help="只抓取打印，不写库")
     args = ap.parse_args()
+
+    try:
+        k, n = (int(x) for x in args.shard.split("/"))
+        assert 0 <= k < n
+    except Exception:
+        print(f"✗ 非法 --shard '{args.shard}'（应为 k/n 且 0<=k<n）")
+        sys.exit(1)
 
     if not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SERVICE_ROLE_KEY")):
         print("✗ 缺少 SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY，先 source .env.local")
         sys.exit(1)
 
     sb = db.get_supabase()
-    rows = (
-        sb.table("jobs")
-        .select("id,jd_url,title")
-        .like("jd_url", "%mokahr%")
-        .is_("summary", "null")
-        .eq("status", "active")
-        .limit(args.limit)
-        .execute()
-        .data
-    ) or []
-    print(f"待回填 Moka 空 summary 岗：{len(rows)}（limit={args.limit}）")
+    all_rows = _fetch_targets(sb, args.limit * n)
+    rows = [r for i, r in enumerate(all_rows) if i % n == k][: args.limit]
+    tag = f"[shard {k}/{n}]"
+    print(f"{tag} 全部待回填 {len(all_rows)}，本片认领 {len(rows)}（limit={args.limit}）")
     if not rows:
         return
 
@@ -72,6 +98,7 @@ def main():
 
     filled = 0
     failed = 0
+    t0 = time.time()
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_context(
@@ -84,30 +111,38 @@ def main():
                 continue
             try:
                 page.goto(jd_url, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(4500)
+                # 智能等待：JD 容器出现即走（多数 ~1-2s），最多 9s；比固定 4.5s 快一倍。
+                try:
+                    page.wait_for_selector(_JD_SELECTORS[0], timeout=9000)
+                    page.wait_for_timeout(700)  # 容器出现后给渲染一点稳定时间
+                except Exception:
+                    page.wait_for_timeout(2500)  # 容器名不匹配的租户：退回短等待再兜底抓
                 jd = _scrape_jd(page)
             except Exception as e:
-                print(f"  [{i}] render 失败 {row.get('title')}: {str(e)[:60]}")
                 failed += 1
+                print(f"{tag} [{i}] render 失败 {row.get('title')}: {str(e)[:60]}")
                 continue
             summary = normalizer.clean_summary(jd) if jd else None
             if not summary:
-                print(f"  [{i}] 无 JD：{row.get('title')}")
                 failed += 1
                 continue
             if args.dry_run:
-                print(f"  [{i}] {row.get('title')} → {summary[:60]}…")
+                print(f"{tag} [{i}] {row.get('title')} → {summary[:50]}…")
+                filled += 1
             else:
                 try:
                     sb.table("jobs").update({"summary": summary}).eq("id", row["id"]).execute()
-                    print(f"  [{i}] ✔ {row.get('title')} → {summary[:50]}…")
                     filled += 1
                 except Exception as e:
-                    print(f"  [{i}] 写库失败 {row.get('title')}: {str(e)[:60]}")
                     failed += 1
+                    print(f"{tag} [{i}] 写库失败 {row.get('title')}: {str(e)[:60]}")
+            if i % 25 == 0:
+                rate = (time.time() - t0) / i
+                print(f"{tag} 进度 {i}/{len(rows)}  回填 {filled}  失败 {failed}  {rate:.1f}s/岗")
         browser.close()
 
-    print(f"\n完成：回填 {filled}，失败/无JD {failed}{'（dry-run 未写库）' if args.dry_run else ''}")
+    print(f"\n{tag} 完成：回填 {filled}，失败/无JD {failed}，"
+          f"耗时 {(time.time()-t0)/60:.1f} 分钟{'（dry-run 未写库）' if args.dry_run else ''}")
 
 
 if __name__ == "__main__":
