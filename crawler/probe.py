@@ -35,6 +35,7 @@ _HTTPX_ADAPTERS = {
     "apple", "apple_cn", "baidu", "jd", "siemens", "haier",
     "hotjob",  # 本土 wecruit：直连 listPosition 接口，无浏览器（详见 adapters/hotjob.py）
     "wt",  # 本土老版 WinTalent：直连 position/list JSON，无浏览器（详见 adapters/wt.py）
+    "netease",  # 网易自建：hr.163.com queryPage httpx 直连（详见 adapters/netease.py）
 }
 
 # 通用 ATS 的 URL 模板：给定 slug 即可拼出公开 JSON 接口地址。

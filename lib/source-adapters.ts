@@ -90,6 +90,11 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填公司名 + 官网招聘页地址，仅放行接口里带真实岗位链接的行，加源零代码",
   },
   {
+    value: "netease",
+    label: "网易（自建门户 · 本土）",
+    hint: "填「网易」+ https://hr.163.com/job-list.html，直连 queryPage 公开接口（hr.163.com/job-detail.html?id=），crawl_method 选 http",
+  },
+  {
     value: "amazon",
     label: "Amazon（自建 · 外企）",
     hint: "填公司名 + Amazon.jobs 搜索接口（www.amazon.jobs/en/search.json?normalized_country_code[]=CHN&result_limit=100）",
