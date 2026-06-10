@@ -43,6 +43,31 @@ class JobQualityTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("navigation", reason)
 
+    def test_accepts_spa_hash_route_job_detail(self):
+        # 携程等纯 hash 路由 SPA：domain/#/...，path 为空(→'/')但真实岗位在 fragment。
+        # 质量门用 fragment 当有效路径，不得误判为首页。
+        job = RawJob(
+            company="携程",
+            title="服务产品经理",
+            jd_url="https://careers.ctrip.com/#/experienced/job-detail/MJ035500",
+        )
+
+        ok, reason = normalizer.validate_job_quality(job, "https://careers.ctrip.com/")
+
+        self.assertTrue(ok, reason)
+
+    def test_rejects_spa_hash_homepage(self):
+        # hash 首页/导航(#/home、#/searchJobs)即使 path='/' 也必须拦截。
+        for frag in ("#/home", "#/searchJobs"):
+            job = RawJob(
+                company="携程",
+                title="工程师",
+                jd_url=f"https://careers.ctrip.com/{frag}",
+            )
+            ok, reason = normalizer.validate_job_quality(job, "https://x.com/")
+            self.assertFalse(ok, f"{frag} 应被拦")
+            self.assertIn("navigation", reason)
+
     def test_rejects_source_search_page_as_job_detail(self):
         job = RawJob(
             company="海尔",
