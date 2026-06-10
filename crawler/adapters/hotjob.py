@@ -41,6 +41,10 @@ class HotJobAdapter(PlaywrightAdapter):
         "interns.html": ("intern", 12),
     }
     _LIST_API = "/wecruit/positionInfo/listPosition/"
+    # 逐岗详情接口：列表 listPosition 不含 JD 正文，详情 listPositionDetail 才有 workContent/serviceCondition。
+    # 接口路径 + 字段经 posDetail.js bundle 核实，POST body = postId + recruitType。
+    _DETAIL_API = "/wecruit/positionInfo/listPositionDetail/"
+    _DETAIL_CAP = 150    # 单源逐岗 detail 补摘要上限（覆盖绝大多数源；超大源部分覆盖，避免拖垮夜间全量）
     api_page_size = 20   # 接口服务端硬上限 = 20/页（pageSize 调更大也只回 20）
     api_max_pages = 10   # 每渠道最多翻页数（10×20=200 岗封顶，防库膨胀；按 totalPage 提前停）
 
@@ -99,9 +103,44 @@ class HotJobAdapter(PlaywrightAdapter):
                 total_page = page_form.get("totalPage") or 0
                 if not rows or current_page >= total_page:
                     break
+            # 列表无 JD 正文（workContent/serviceCondition 全空 → summary 空）；逐岗调 listPositionDetail
+            # 补正文（复用同一带 Referer/Origin 的 client）。capped；单岗失败该岗无摘要、不影响入库。
+            posts = [
+                p
+                for payload in collected
+                for p in (((payload.get("data") or {}).get("pageForm") or {}).get("pageData") or [])
+                if isinstance(p, dict)
+            ]
+            self._enrich_details(client, posts)
         if not collected:
             raise RuntimeError(f"hotjob: empty response from listPosition (suiteKey={self._suite_key})")
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
+
+    def _enrich_details(self, client, posts):
+        """逐岗 POST listPositionDetail 补 workContent/serviceCondition（列表接口没有，详情才有），
+        就地写回 post（parse→_map 直接读这两字段拼 summary）。capped + 单岗失败即跳过（不抛、不污染）。"""
+        api = f"{self._origin}{self._DETAIL_API}{self._suite_key}"
+        n = 0
+        for p in posts:
+            if n >= self._DETAIL_CAP:
+                break
+            if not isinstance(p, dict):
+                continue
+            pid = str(p.get("postId") or p.get("id") or "").strip()
+            if not pid:
+                continue
+            try:
+                resp = client.post(api, data={"postId": pid, "recruitType": self._recruit_type})
+                resp.raise_for_status()
+                data = resp.json().get("data") or {}
+                if isinstance(data, dict):
+                    if data.get("workContent"):
+                        p["workContent"] = data["workContent"]
+                    if data.get("serviceCondition"):
+                        p["serviceCondition"] = data["serviceCondition"]
+                n += 1
+            except Exception:
+                continue
 
     def _map(self, post: dict) -> Optional[RawJob]:
         if not isinstance(post, dict):
