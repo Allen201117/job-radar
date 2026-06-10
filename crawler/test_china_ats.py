@@ -162,6 +162,32 @@ class TestBeisenAdapter(unittest.TestCase):
         jobs = self.a.parse(json.dumps({"_intercepted": [sample]}))
         self.assertEqual(jobs[0].jd_url, "https://x.zhiye.com/campusxq?jobId=230859284")
 
+    def test_duty_require_salary_mapped(self):
+        # 北森 GetJobAdPageList 行自带 JD 正文：Duty(职责)/Require(要求)/Salary（live 实测 2026-06-10，
+        # 欣旺达 451 岗全有 Duty）。此前 _map 只认小写 duty/requirement → 大小写不匹配，10.4k 岗 summary 全空。
+        self.a._detail_route = "https://group.zhiye.com/custom/zwxq"
+        sample = {"Data": [{
+            "Id": "uuid-d", "JobAdName": "项目经理", "LocNames": "深圳",
+            "Duty": "1、项目团队建立以及项目进度跟进；2、FATP工厂对接。",
+            "Require": "1、本科及以上；2、3年项目管理经验。",
+            "Salary": "15-25K",
+        }]}
+        jobs = self.a.parse(json.dumps({"_intercepted": [sample]}))
+        self.assertEqual(len(jobs), 1)
+        self.assertIn("项目团队建立", jobs[0].summary)
+        self.assertIn("任职要求", jobs[0].summary)
+        self.assertIn("本科及以上", jobs[0].summary)
+        self.assertEqual(jobs[0].salary_text, "15-25K")
+
+    def test_duty_only_no_require(self):
+        # 只有 Duty 没有 Require：summary 取 Duty，不拼空的要求段。
+        self.a._detail_route = "https://group.zhiye.com/custom/zwxq"
+        sample = {"Data": [{"Id": "u1", "JobAdName": "运营", "LocNames": "北京",
+                            "Duty": "负责社群运营与活动策划。"}]}
+        jobs = self.a.parse(json.dumps({"_intercepted": [sample]}))
+        self.assertEqual(jobs[0].summary, "负责社群运营与活动策划。")
+        self.assertNotIn("任职要求", jobs[0].summary)
+
 
 class TestBeisenSsrParse(unittest.TestCase):
     """老版 SSR（C 型，如中核 cnnc）：列表页 HTML 直出 jobId 锚点，_fetch_ssr 产出 _ssr_jobs 信封。

@@ -104,6 +104,12 @@ class ChinaSpaAdapter(PlaywrightAdapter):
         summary = _first_str(post, ("description", "jobDescription", "responsibility",
                                     "requirement", "duty", "jobDesc", "content",
                                     "job_description")) or None
+        if not summary:
+            # 北森 GetJobAdPageList 用大写 Duty(职责)/Require(要求)（live 实测 2026-06-10），
+            # 此前因大小写不匹配整体丢弃 → beisen 万级岗位 summary 全空。两段拼接（同 feishu/hotjob 口径）。
+            duty = _first_str(post, ("Duty",))
+            require = _first_str(post, ("Require", "Requirement"))
+            summary = (duty + ("\n【任职要求】\n" + require if require else "")).strip() or None
         job_type = _first_str(post, ("jobType", "recruitType", "categoryName",
                                      "positionType", "type")) or None
         return RawJob(
@@ -114,6 +120,7 @@ class ChinaSpaAdapter(PlaywrightAdapter):
             summary=summary,
             jd_url=jd_url,
             apply_url=jd_url,
+            salary_text=_first_str(post, ("Salary", "salary", "salaryText", "salaryName")) or None,
             posted_at=normalizer.pick_publish_date(post),
         )
 
