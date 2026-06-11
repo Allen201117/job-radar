@@ -11,6 +11,7 @@ const {
   formatLeverPosting,
   formatAppleSearchResult,
   filterJobsByQueryAndCity,
+  excludeJobs,
   isHighQualityJdUrl,
   mergeJobsByUrl,
 } = require("../lib/live-search");
@@ -235,6 +236,42 @@ test("filters generic ATS jobs by query and city before upsert", () => {
   assert.deepEqual(
     filterJobsByQueryAndCity(jobs, "data", "new").map((job) => job.title),
     ["Data Engineer"],
+  );
+});
+
+test("excludeJobs is a no-op when the exclude list is empty", () => {
+  const jobs = [
+    { title: "Sales Lead", company: "Acme", location: "Beijing" },
+    { title: "Data Engineer", company: "Beta", location: "Shanghai" },
+  ];
+  assert.deepEqual(excludeJobs(jobs, []), jobs);
+  assert.deepEqual(excludeJobs(jobs, ["  ", null, undefined]), jobs);
+});
+
+test("excludeJobs drops jobs matching an exclude keyword across all fields, case-insensitive", () => {
+  const jobs = [
+    { title: "Sales Manager", company: "Acme", location: "Beijing", job_type: "社招", summary: "lead the team", salary_text: "" },
+    { title: "Data Engineer", company: "BeijingSalesCo", location: "Shanghai", job_type: "社招", summary: "pipelines" },
+    { title: "Backend Engineer", company: "Beta", location: "Guangzhou", job_type: "校招", summary: "build APIs" },
+    { title: "Marketing Specialist", company: "Gamma", location: "Hangzhou", job_type: "实习", summary: "outreach", salary_text: "20-30万" },
+  ];
+
+  // 大小写不敏感 + 命中 title/company 任一字段即剔除（"sales" 命中前两条）。
+  assert.deepEqual(
+    excludeJobs(jobs, ["SALES"]).map((j) => j.title),
+    ["Backend Engineer", "Marketing Specialist"],
+  );
+
+  // 多个排除词 OR 语义：命中任一即丢（summary "outreach" + location "guangzhou"）。
+  assert.deepEqual(
+    excludeJobs(jobs, ["outreach", "guangzhou"]).map((j) => j.title),
+    ["Sales Manager", "Data Engineer"],
+  );
+
+  // 命中 salary_text 字段也剔除。
+  assert.deepEqual(
+    excludeJobs(jobs, ["20-30万"]).map((j) => j.title),
+    ["Sales Manager", "Data Engineer", "Backend Engineer"],
   );
 });
 
