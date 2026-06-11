@@ -8,6 +8,7 @@ on:
     paths:
       - "supabase/migrations/**"
       - "scripts/db-migrate.sh"
+      - "scripts/check-migrations.sh"
       - ".github/workflows/migrate.yml"
   workflow_dispatch:
 
@@ -16,6 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # 前缀校验门：纯数字 + 无新增重复前缀。失败则不 apply（fail-fast，不必装 psql）。
+      - name: Check migration prefixes
+        run: bash scripts/check-migrations.sh
 
       - name: Install psql client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
