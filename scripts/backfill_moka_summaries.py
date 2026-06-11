@@ -47,15 +47,16 @@ def _scrape_jd(page) -> str:
 
 
 def _fetch_targets(sb, limit: int):
-    """分页取全部 summary 为空的 active Moka 岗（id 升序稳定排序，供 shard 切片）。"""
+    """分页取 summary 为空 + 未超死信的 active Moka 岗（id 升序稳定排序，供 shard 切片）。"""
     rows, page = [], 1000
     for offset in range(0, 20000, page):
         chunk = (
             sb.table("jobs")
-            .select("id,jd_url,title")
+            .select("id,jd_url,title,enrich_fail_count")
             .like("jd_url", "%mokahr%")
             .is_("summary", "null")
             .eq("status", "active")
+            .lt("enrich_fail_count", 3)  # 死信：渲染连败 3 次不再重试（避免每轮反复渲染没 JD 的岗）
             .order("id")
             .range(offset, offset + page - 1)
             .execute()
@@ -65,6 +66,17 @@ def _fetch_targets(sb, limit: int):
         if len(chunk) < page or len(rows) >= limit * 3:  # 多取一些，shard 切片后仍够 limit
             break
     return rows
+
+
+def _mark_fail(sb, row, dry_run):
+    """渲染失败/无 JD → enrich_fail_count+1（死信老化）。dry-run 不写；写库失败静默（下轮重试）。"""
+    if dry_run:
+        return
+    try:
+        sb.table("jobs").update({"enrich_fail_count": (row.get("enrich_fail_count") or 0) + 1}) \
+            .eq("id", row["id"]).execute()
+    except Exception:
+        pass
 
 
 def main():
@@ -121,10 +133,12 @@ def main():
             except Exception as e:
                 failed += 1
                 print(f"{tag} [{i}] render 失败 {row.get('title')}: {str(e)[:60]}")
+                _mark_fail(sb, row, args.dry_run)
                 continue
             summary = normalizer.clean_summary(jd) if jd else None
             if not summary:
                 failed += 1
+                _mark_fail(sb, row, args.dry_run)
                 continue
             if args.dry_run:
                 print(f"{tag} [{i}] {row.get('title')} → {summary[:50]}…")

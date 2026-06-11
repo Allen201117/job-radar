@@ -1,0 +1,46 @@
+name: enrich-backlog-browser
+# JD summary backlog drain（P2，browser-detail 类）：moka 列表 JSON 加密、JD 只在
+# {base}#/job/{uuid} 详情 DOM → 必须逐岗浏览器渲染（~2-5s/岗）。装 chromium、分片并行。
+# 死信：enrich_fail_count≥3 不再渲染（backfill_moka_summaries.py 内）。
+# 注：beisen/feishu 列表本就带 JD（china_ats/feishu adapter）→ 由 enrich-crawl.yml 列表爬回填，不在此。
+
+on:
+  schedule:
+    - cron: "0 19 * * *"   # 每日 UTC 19:00，与 httpx drain(每3h)/快档(0:00)/enrich-crawl(18:00) 错开
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "单 shard 本轮最多渲染多少岗（控时长，~3s/岗）"
+        required: false
+        default: "1500"
+
+jobs:
+  drain-moka:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90   # 渲染慢；1500 岗 × ~3s ≈ 75min，留余量。远低于 6h
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0/6", "1/6", "2/6", "3/6", "4/6", "5/6"]   # 6 片并行、互不重叠
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      - name: Install Playwright chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Drain moka summary backlog (shard ${{ matrix.shard }})
+        run: |
+          python3 scripts/backfill_moka_summaries.py \
+            --shard "${{ matrix.shard }}" \
+            --limit "${{ github.event.inputs.limit || '1500' }}"
