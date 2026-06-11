@@ -153,6 +153,19 @@ class DrainRowTest(unittest.TestCase):
         self.assertEqual(res, "miss")
         self.assertEqual(sb.updates["j3"]["enrich_fail_count"], 1)
 
+    def test_write_failure_returns_err_not_raise(self):
+        # Errno35 等写库瞬时错误：enrich_row 返回 "err"（不抛），该行留队列下轮重试，不掀整批。
+        class RaiseSB:
+            def table(self, n): return self
+            def update(self, p): return self
+            def eq(self, c, v): return self
+            def execute(self): raise RuntimeError("[Errno 35] Resource temporarily unavailable")
+        row = {"id": "j5", "source_id": "s", "title": "x", "jd_url": "u", "enrich_fail_count": 0}
+        src = {"adapter_name": "hotjob", "source_url": "x"}
+        with mock.patch.object(enrich_backlog.enrich, "enrich_one", lambda a, r, s: "足够长的真实职位描述正文内容"):
+            res = enrich_backlog.enrich_row(RaiseSB(), row, src)
+        self.assertEqual(res, "err")
+
     def test_dry_run_does_not_write(self):
         sb = _FakeSB()
         row = {"id": "j4", "source_id": "s", "title": "x", "jd_url": "u", "enrich_fail_count": 0}

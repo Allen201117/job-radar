@@ -16,7 +16,7 @@ on:
       workers:
         description: "并发线程数"
         required: false
-        default: "12"
+        default: "8"
 
 jobs:
   drain:
@@ -46,4 +46,4 @@ jobs:
           python crawler/enrich_backlog.py \
             --adapter "${{ matrix.adapter }}" \
             --limit "${{ github.event.inputs.limit || '20000' }}" \
-            --workers "${{ github.event.inputs.workers || '12' }}"
+            --workers "${{ github.event.inputs.workers || '8' }}"
