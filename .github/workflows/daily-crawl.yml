@@ -44,8 +44,8 @@ on:
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    # 整体安全网：远低于 GitHub Actions 6h 硬杀。快档 httpx 实测 ~20-30min；按需 discovery 低频有界。
-    timeout-minutes: 60
+    # 整体安全网：远低于 GitHub Actions 6h 硬杀。快档 httpx step 50min(瓶颈=逐岗 upsert)；按需 discovery 55min。
+    timeout-minutes: 75
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -65,13 +65,16 @@ jobs:
         if: ${{ github.event.inputs.mode == 'discovery' }}
         run: python -m playwright install --with-deps chromium
 
-      # 快档：schedule / 无 mode 手动触发 → 只跑 httpx 并发档 + 跳过逐岗富化(CRAWL_DETAIL_CAP=0) → 20-30min。
+      # 快档：schedule / 无 mode 手动触发 → 只跑 httpx 并发档 + 跳过逐岗富化(CRAWL_DETAIL_CAP=0)。
+      # 瓶颈非解析，是 db.upsert_job 每岗 2 次 Supabase REST(先查后写)，全量数万岗 → 6-10万往返。
+      # 公开仓库分钟无限，硬上限是单 job 6h；50min ≪ 6h，留足余量。并发 6→10 提速(更高易触 Errno 35)。
       - name: Run crawler (fast httpx tier)
         if: ${{ github.event.inputs.mode != 'discovery' }}
-        timeout-minutes: 30
+        timeout-minutes: 50
         run: python crawler/run.py --tier httpx
         env:
           CRAWL_DETAIL_CAP: "0"
+          CRAWL_CONCURRENCY: "10"
 
       # 按需「浏览器发现」：保持原行为（DISCOVERY_* 触发 discovery.run_from_env，跑完即退）。
       - name: Run on-demand discovery (browser)
