@@ -28,6 +28,14 @@ class JobClosedError(Exception):
     """
 
 
+def _raise_if_gone(r):
+    """通用撤岗约定：任何 ATS 的 detail 端点返回 404/410 = 岗位已下架 → JobClosedError。
+    每个 fetcher 拿到响应后调一行即继承该约定，杜绝逐源遗漏（统一底座）。
+    仅 404/410（明确 Gone）；5xx/429 等瞬时错误放行（调用方走 miss 重试，绝不误判为撤岗）。"""
+    if r.status_code in (404, 410):
+        raise JobClosedError(f"detail gone (HTTP {r.status_code})")
+
+
 # --- 外企四家族：搬 scripts/backfill_foreign_summaries.py（已 live 验证，全是公开 JSON API） ---
 def _detail_workday(row, src):
     # jd_url = {host}/{site}{ep}；detail = source_url 去尾部 /jobs 再拼 {ep}（ep 从 /job/ 起）
@@ -36,9 +44,7 @@ def _detail_workday(row, src):
         return ""
     cxs_base = re.sub(r"/jobs/?$", "", src["source_url"])
     r = httpx.get(f"{cxs_base}{m.group(1)}", headers=UA, timeout=TIMEOUT)
-    if r.status_code == 404:
-        # 岗位下架后 cxs 的 /job/{path} 返回 404 = 撤岗信号（仅 404，不含 5xx/429 瞬时错误）。
-        raise JobClosedError(f"workday job gone (404): {m.group(1)}")
+    _raise_if_gone(r)  # cxs /job/{path} 404 = 岗位下架
     if r.status_code >= 300:
         return ""
     return (r.json().get("jobPostingInfo", {}) or {}).get("jobDescription") or ""
@@ -53,8 +59,7 @@ def _detail_oracle(row, src):
     url = (f"{p.scheme}://{p.netloc}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails"
            f'?onlyData=true&expand=all&finder=ById;Id="{m.group(2)}",siteNumber={m.group(1)}')
     r = httpx.get(url, headers=UA, timeout=TIMEOUT)
-    if r.status_code == 404:
-        raise JobClosedError(f"oracle requisition gone (404): {m.group(2)}")
+    _raise_if_gone(r)  # REST 端点 404 = requisition 已撤
     if r.status_code >= 300:
         return ""
     items = r.json().get("items", []) or []
@@ -78,6 +83,7 @@ def _detail_eightfold(row, src):
     domain = (parse_qs(sp.query).get("domain") or [""])[0]
     url = f"{sp.scheme}://{sp.netloc}{sp.path}/{m.group(1)}"
     r = httpx.get(url, params={"domain": domain}, headers=UA, timeout=TIMEOUT)
+    _raise_if_gone(r)  # position 详情 404 = 岗位下架
     if r.status_code >= 300:
         return ""
     return r.json().get("job_description") or ""
@@ -91,6 +97,7 @@ def _detail_smartrecruiters(row, src):
     identifier, pid = parts[0], parts[1]
     r = httpx.get(f"https://api.smartrecruiters.com/v1/companies/{identifier}/postings/{pid}",
                   headers=UA, timeout=TIMEOUT)
+    _raise_if_gone(r)  # posting 404 = 岗位已撤/下架
     if r.status_code >= 300:
         return ""
     secs = (r.json().get("jobAd") or {}).get("sections") or {}
@@ -120,6 +127,7 @@ def _detail_hotjob(row, src):
     r = httpx.post(f"{origin}/wecruit/positionInfo/listPositionDetail/{suite}",
                    data={"postId": post_id, "recruitType": _HOTJOB_RECRUIT.get(post_type, 2)},
                    headers=headers, timeout=TIMEOUT)
+    _raise_if_gone(r)  # detail 端点 404/410（state=1017 在下方另判）
     if r.status_code >= 300:
         return ""
     j = r.json() or {}

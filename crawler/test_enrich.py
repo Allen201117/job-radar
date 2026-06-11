@@ -145,6 +145,47 @@ class OracleDetailTest(unittest.TestCase):
         self.assertEqual(enrich.ENRICH_REGISTRY["oracle"](row, src), "")
 
 
+class EightfoldDetailTest(unittest.TestCase):
+    _JD = "https://acme.com/careers/job/123456789"
+    _SRC = {"source_url": "https://acme.eightfold.ai/api/apply/v2/jobs?domain=acme.com",
+            "adapter_name": "eightfold"}
+
+    def test_404_raises_jobclosed(self):
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=404)):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich.ENRICH_REGISTRY["eightfold"]({"jd_url": self._JD}, self._SRC)
+
+    def test_transient_5xx_returns_empty_not_closed(self):
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=502)):
+            self.assertEqual(enrich.ENRICH_REGISTRY["eightfold"]({"jd_url": self._JD}, self._SRC), "")
+
+
+class SmartRecruitersDetailTest(unittest.TestCase):
+    _JD = "https://jobs.smartrecruiters.com/Acme/123456"
+    _SRC = {"source_url": "x", "adapter_name": "smartrecruiters"}
+
+    def test_404_raises_jobclosed(self):
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=404)):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich.ENRICH_REGISTRY["smartrecruiters"]({"jd_url": self._JD}, self._SRC)
+
+    def test_transient_5xx_returns_empty_not_closed(self):
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=503)):
+            self.assertEqual(enrich.ENRICH_REGISTRY["smartrecruiters"]({"jd_url": self._JD}, self._SRC), "")
+
+
+class GoneHelperTest(unittest.TestCase):
+    """通用撤岗约定：任何 fetcher 的 detail 端点 404/410 都判撤岗（杜绝逐源遗漏）。"""
+    def test_raise_if_gone_404_410(self):
+        for code in (404, 410):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich._raise_if_gone(_Resp({}, status=code))
+
+    def test_raise_if_gone_passes_through_others(self):
+        for code in (200, 429, 500, 502, 503):
+            enrich._raise_if_gone(_Resp({}, status=code))  # 不抛 = 通过
+
+
 class RegistryTest(unittest.TestCase):
     def test_httpx_adapters_registered(self):
         for a in ("workday", "oracle", "eightfold", "smartrecruiters", "hotjob"):
