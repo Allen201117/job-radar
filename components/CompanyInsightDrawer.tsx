@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowSquareOut,
+  Buildings,
   CalendarBlank,
   ChartLineUp,
   ClockCounterClockwise,
@@ -52,6 +53,12 @@ const DIMENSION_META: Record<
     accent: "border-[#b7d2ee] bg-[#dceafa]",
     iconText: "text-[#2f6299]",
   },
+  hiring: {
+    label: "招聘动态",
+    icon: Buildings,
+    accent: "border-[#a9cfd8] bg-[#dcf0f2]",
+    iconText: "text-[#2f7d8a]",
+  },
   listing: {
     label: "上市 / 股票",
     icon: ChartLineUp,
@@ -81,6 +88,7 @@ const DIMENSION_META: Record<
 
 const DIMENSION_ORDER: InsightDimension[] = [
   "timing",
+  "hiring",
   "listing",
   "compensation_intensity",
   "path",
@@ -185,7 +193,7 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
           <p className="mt-4 flex gap-2.5 rounded-xl border border-[#cfc0e6] bg-[#efe9f8] px-3.5 py-3 text-[13px] leading-6 text-[#5a4a78]">
             <ShieldCheck size={18} weight="fill" className="mt-0.5 shrink-0 text-[#6a4fa0]" />
             <span>
-              下列内容均来自<strong>公开报道与网络讨论的聚合</strong>、并经<strong>去标识化</strong>处理，属社区参考、非官方信息，也不针对任何个人。每条结论的具体出处见卡片下方「来源」，<strong>仅供参考</strong>，请结合官方岗位信息与面试沟通自行判断。
+              下列内容部分来自<strong>本平台在招岗位的聚合统计</strong>（带「本平台岗位聚合」标记，属事实数据），部分来自<strong>公开报道与网络讨论的聚合</strong>并经<strong>去标识化</strong>处理（属社区参考、非官方，也不针对任何个人）。每条结论的依据见卡片下方，<strong>仅供参考</strong>，请结合官方岗位信息与面试沟通自行判断。
             </span>
           </p>
         </div>
@@ -318,7 +326,9 @@ function InsightCard({ item }: { item: InsightItemView }) {
   const [reason, setReason] = useState("");
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
-  const chip = gradeChip(item.grade, item.sample_size);
+  const chip = item.derived
+    ? { text: "本平台岗位聚合", cls: "border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299]" }
+    : gradeChip(item.grade, item.sample_size);
   const freshness = freshnessFromVerifiedAt(item.last_verified_at);
 
   async function submitDispute() {
@@ -401,6 +411,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
         </div>
       )}
 
+      {!item.derived && (
       <div className="mt-3.5 border-t border-black/[0.06] pt-2.5">
         {sent ? (
           <span className="text-[11px] text-[#4f6f2a]">已收到反馈，我们会尽快核实。</span>
@@ -442,6 +453,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
           </button>
         )}
       </div>
+      )}
     </article>
   );
 }
