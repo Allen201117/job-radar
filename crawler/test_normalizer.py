@@ -124,6 +124,39 @@ class JobQualityTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("navigation", reason)
 
+    def test_accepts_workday_searchjobs_site_job_detail(self):
+        # Workday 站名常叫 "SearchJobs"（如 MSD 默沙东），其岗位**详情**路径形如
+        # /SearchJobs/job/{loc}/{title}_{reqid}，含真实 /job/ 段。旧逻辑把 /searchjobs 当子串
+        # 一律拦截，会把这些真详情页全误杀（本轮已入源质量验证揪出 MSD 20 岗被误拒）。
+        job = RawJob(
+            company="MSD 默沙东",
+            title="Associate Therapeutic Development Manager",
+            jd_url="https://msd.wd5.myworkdayjobs.com/SearchJobs/job/"
+                   "HKG---Hong-Kong-Island---Hong-Kong-Lee-Garden-Two/"
+                   "Associate-Therapeutic-Development-Manager_R400021",
+        )
+
+        ok, reason = normalizer.validate_job_quality(
+            job, "https://msd.wd5.myworkdayjobs.com/wday/cxs/msd/SearchJobs/jobs"
+        )
+
+        self.assertTrue(ok, reason)
+
+    def test_rejects_workday_searchjobs_landing(self):
+        # 但 SearchJobs **搜索落地页**（无 /job/ 详情段）仍须拦截，不能因放宽而漏过。
+        job = RawJob(
+            company="MSD 默沙东",
+            title="Search Jobs",
+            jd_url="https://msd.wd5.myworkdayjobs.com/SearchJobs",
+        )
+
+        ok, reason = normalizer.validate_job_quality(
+            job, "https://msd.wd5.myworkdayjobs.com/wday/cxs/msd/SearchJobs/jobs"
+        )
+
+        self.assertFalse(ok)
+        self.assertIn("navigation", reason)
+
 
 class StructuredFieldExtractionTests(unittest.TestCase):
     """经验/学历/截止 从完整 JD 抽取（#1），抽不到返回 None。"""
