@@ -4,15 +4,11 @@ import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import JobCard from "@/components/JobCard";
 import JobFilters from "@/components/JobFilters";
-import { mapApiSearchJobsToScoredJobs } from "@/lib/client-job-mapping";
-import {
-  keywordMatchTier,
-  normalizeChinaCity,
-  recruitmentCategory,
-} from "@/lib/china-keyword-expansion";
-import { classifyCompanyOrigin } from "@/lib/company-origin";
+import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
 import type { ScoredJob } from "@/lib/types";
+import { useJobFilters, JOBS_PAGE_SIZE } from "@/hooks/useJobFilters";
+import { useDiscoveryPoll, type BrowserDiscoveryState } from "@/hooks/useDiscoveryPoll";
 import {
   ArrowsClockwise,
   CheckCircle,
@@ -26,62 +22,6 @@ import {
 
 type PrimaryAction = "saved" | "ignored" | "applied";
 
-type DiscoveryPhase = "idle" | "queued" | "running" | "done" | "failed";
-type BrowserDiscoveryState = {
-  phase: DiscoveryPhase;
-  runId: string | null;
-  startedAt: number | null;
-  elapsedSec: number;
-  note: string;
-  // 「刷新公司库」流式：真实进度 X/N 家公司（浏览器发现时为 null，进度条退化为阶段近似）
-  progress?: { done: number; total: number } | null;
-  // 任务类型：refresh=刷新已收录公司库 / discovery=发现新公司（影响进度条文案）
-  kind?: "refresh" | "discovery";
-};
-
-const DISCOVERY_POLL_MS = 6000;
-// 给到 20min 硬上限（> 典型刷新 1–5min；卡死由 status 端读时 staleness 15min 兜底终态）。
-// 关键防丢数据靠「流式每轮并入 officialJobs」——即便超时，已入列的新岗位不清空。
-const DISCOVERY_TIMEOUT_MS = 20 * 60 * 1000;
-// 每次渲染/「加载更多」的批量大小（前端分批渲染，避免一次性渲染上千张卡片卡顿）
-const JOBS_PAGE_SIZE = 60;
-// 后台「浏览器发现」任务跨页面持久化的 localStorage 键（切到别的页面再回来不丢任务）
-const DISCOVERY_STORAGE_KEY = "jobradar:browser-discovery";
-
-function saveDiscoveryTask(runId: string, startedAt: number, query: string) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(
-      DISCOVERY_STORAGE_KEY,
-      JSON.stringify({ runId, startedAt, query }),
-    );
-  } catch {
-    // localStorage 不可用（隐私模式等）时静默降级，不影响当前会话内轮询
-  }
-}
-
-function clearDiscoveryTask() {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.removeItem(DISCOVERY_STORAGE_KEY);
-  } catch {
-    // 同上
-  }
-}
-
-type Filters = {
-  company: string;
-  city: string;
-  jobType: string;
-  keyword: string;
-  showIgnored: boolean;
-  showApplied: boolean;
-  showNewOnly: boolean;
-  sortBy: "match" | "newest";
-  capitalOrigin: string;
-  salaryOnly: boolean;
-};
-
 interface Props {
   initialJobs: ScoredJob[];
   // 活跃岗位总数（SSR 查得）；前端据此后台分块拉完剩余岗位（解除展示硬上限）。
@@ -91,18 +31,6 @@ interface Props {
 }
 
 export default function JobsClient({ initialJobs, initialTotal, initialFilters }: Props) {
-  const [filters, setFilters] = useState<Filters>({
-    company: "",
-    city: initialFilters?.city || "",
-    jobType: initialFilters?.jobType || "",
-    keyword: initialFilters?.keyword || "",
-    showIgnored: false,
-    showApplied: false,
-    showNewOnly: false,
-    sortBy: "match",
-    capitalOrigin: "",
-    salaryOnly: false,
-  });
   const [officialJobs, setOfficialJobs] = useState<ScoredJob[]>([]);
   // 后台分块把岗位库剩余岗位拉完（解除展示硬上限）：SSR 只给第一页，这里补齐到 initialTotal。
   const [extraJobs, setExtraJobs] = useState<ScoredJob[]>([]);
@@ -110,20 +38,8 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
   const fillRef = useRef(false);
   // 本次搜索/发现完成后默认只看新岗位；用户可切回「查看全部」
   const [onlyNew, setOnlyNew] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const [searchInfo, setSearchInfo] = useState("");
-  const [discovery, setDiscovery] = useState<BrowserDiscoveryState>({
-    phase: "idle",
-    runId: null,
-    startedAt: null,
-    elapsedSec: 0,
-    note: "",
-  });
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const router = useRouter();
-
-  const discoveryActive = discovery.phase === "queued" || discovery.phase === "running";
 
   // —— 后台拉全量岗位库（无展示硬上限）——
   // SSR 只渲染第一页；挂载后从第一页之后按 1000 一块拉到 initialTotal，合并进内存库。
@@ -172,56 +88,24 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     [localJobs],
   );
 
-  // 本次会话内由「刷新已知源 / 发现官方源」新拿到的岗位（用于高亮 + 「只看新发现」）
-  const sessionNewKeys = useMemo(
-    () => new Set(officialJobs.map((j) => j.jd_url || j.id)),
-    [officialJobs],
-  );
+  // 筛选 state + 派生过滤链（useMemo 链整体在 hook 内）。
+  const {
+    filters,
+    setFilters,
+    sessionNewKeys,
+    newViewActive,
+    filtered,
+    visibleCount,
+    setVisibleCount,
+    visibleJobs,
+    exactCount,
+    existingFilteredCount,
+    newMatching,
+  } = useJobFilters({ localJobs, officialJobs, onlyNew, initialFilters });
 
-  // 合并本地岗位库 + 本次已知源刷新/官方源发现返回的岗位
-  const allJobs = useMemo(() => {
-    const seen = new Set(officialJobs.map((j) => j.jd_url || j.id));
-    const cachedNotInLive = localJobs.filter((j) => !seen.has(j.jd_url || j.id));
-    return [...officialJobs, ...cachedNotInLive];
-  }, [localJobs, officialJobs]);
-
-  // 「只看新发现」仅在确有本次新岗位时生效，避免误把列表清空
-  const newViewActive = onlyNew && officialJobs.length > 0;
-
-  const filtered = useMemo(() => {
-    // 两层匹配：每个岗位算出档位（exact/related）；精确层在上、相关层在下，本次新发现置顶。
-    const tierRank = (t: string) => (t === "exact" ? 0 : 1);
-    const sortVal = (j: ScoredJob) =>
-      filters.sortBy === "newest"
-        ? new Date(j.posted_at || j.first_seen_at || 0).getTime()
-        : j.match_score || 0;
-    let arr = allJobs
-      .map((job) => ({ job, tier: jobFilterTier(job, filters) }))
-      .filter(
-        (x): x is { job: ScoredJob; tier: "exact" | "related" } => x.tier !== null,
-      );
-    if (newViewActive) {
-      arr = arr.filter((x) => sessionNewKeys.has(x.job.jd_url || x.job.id));
-    }
-    arr.sort((a, b) => {
-      if (tierRank(a.tier) !== tierRank(b.tier)) return tierRank(a.tier) - tierRank(b.tier);
-      const an = sessionNewKeys.has(a.job.jd_url || a.job.id) ? 0 : 1;
-      const bn = sessionNewKeys.has(b.job.jd_url || b.job.id) ? 0 : 1;
-      if (an !== bn) return an - bn; // 本次新发现置顶（同档内）
-      return sortVal(b.job) - sortVal(a.job);
-    });
-    return arr.map((x) => ({ ...x.job, __tier: x.tier }));
-  }, [allJobs, filters, newViewActive, sessionNewKeys]);
-
-  // 分批渲染：默认只渲染前 JOBS_PAGE_SIZE 张，「加载更多」逐批增加；筛选 / 切换新发现视图时回到第一批。
-  const [visibleCount, setVisibleCount] = useState(JOBS_PAGE_SIZE);
-  useEffect(() => {
-    setVisibleCount(JOBS_PAGE_SIZE);
-  }, [filters, newViewActive]);
-  const visibleJobs = useMemo(
-    () => filtered.slice(0, visibleCount),
-    [filtered, visibleCount],
-  );
+  // 「刷新公司库 / 联网爬新公司」状态机 + 轮询 + 持久化 + 超时（整体在 hook 内）。
+  const { discovery, refreshing, discoveryActive, startDiscovery, startRefresh } =
+    useDiscoveryPoll({ filters, setOfficialJobs, setSearchInfo });
 
   // P3 on-demand 富化：给用户当下看到的薄卡（无 summary）即时补 JD 正文。
   // 只发 jd_url，服务端只补简单 httpx 源（workday/hotjob）；其余/浏览器源留给后台 drain。
@@ -262,22 +146,6 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleJobs]);
-  // 精确层数量（用于诚实展示「精确 E + 相关 R」），相关层 = filtered.length - exactCount。
-  const exactCount = useMemo(
-    () => filtered.reduce((n, j) => n + ((j as any).__tier === "exact" ? 1 : 0), 0),
-    [filtered],
-  );
-
-  const existingFilteredCount = useMemo(() => {
-    return localJobs.filter((job) => jobMatchesFilters(job, filters)).length;
-  }, [localJobs, filters]);
-
-  // 本次发现的岗位中，严格符合当前筛选（城市/类型/关键词）的数量——诚实显示「发现 N，符合 M」，
-  // 避免「发现 47 却 0 展示」的误导。
-  const newMatching = useMemo(
-    () => officialJobs.filter((job) => jobMatchesFilters(job, filters)),
-    [officialJobs, filters],
-  );
 
   // 一键放宽城市 + 岗位类型（保留关键词），让本次发现的岗位可见。
   function relaxLocationAndType() {
@@ -286,212 +154,12 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
   }
 
   function handleExistingJobsSearch() {
+    track("search", { keyword: filters.keyword || "" });
     setOfficialJobs([]);
     setOnlyNew(false);
     setSearchInfo(
       `仅搜索本地岗位库，不触发外部请求。当前命中 ${existingFilteredCount} 个岗位。`,
     );
-  }
-
-  // 按需「浏览器发现」：触发后台 Playwright 抓取官方 SPA 招聘站，前端轮询状态。
-  async function handleBrowserDiscovery() {
-    const query = filters.keyword;
-    if (!query) {
-      setSearchInfo("请先在「关键词」里输入要发现的方向（如 算法 / 产品 / 数据分析）。");
-      return;
-    }
-    setSearchInfo("");
-    const startedAt = Date.now();
-    setDiscovery({
-      phase: "queued",
-      runId: null,
-      startedAt,
-      elapsedSec: 0,
-      note: "正在触发后台浏览器抓取…",
-    });
-    try {
-      const resp = await fetch("/api/discovery/dispatch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query,
-          city: filters.city || "",
-          jobType: filters.jobType || "",
-          limit: 30,
-        }),
-      });
-      const data = await resp.json();
-      if (!data.ok || !data.run_id) {
-        setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "" });
-        clearDiscoveryTask();
-        setSearchInfo(formatDispatchError(data));
-        return;
-      }
-      // 持久化任务：切到别的页面再回到岗位库时能恢复轮询、不丢任务
-      saveDiscoveryTask(data.run_id, startedAt, query);
-      setDiscovery((prev) => ({
-        ...prev,
-        phase: "queued",
-        runId: data.run_id,
-        note: "已进入后台队列，等待浏览器抓取…",
-      }));
-    } catch {
-      setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "" });
-      clearDiscoveryTask();
-      setSearchInfo("按需发现触发失败，请稍后再试。");
-    }
-  }
-
-  // 流式并入：把本次轮询已产出的岗位增量并进列表（去重）。刷新/发现共用，每轮调用 →
-  // 即便前端超时也不丢已入列的新岗位（修对抗审查 blocker 2「8min 超时 vs 55min CI 静默丢数据」）。
-  function mergeStreamedJobs(data: any) {
-    const scored = mapApiSearchJobsToScoredJobs(
-      data.jobs || [],
-      data.query || filters.keyword,
-    ) as ScoredJob[];
-    // 用户主动触发：只并入有职位描述的可靠岗位（宁缺毋滥，request 1）
-    const reliable = scored.filter(hasReliableSummary);
-    if (!reliable.length) return;
-    setOfficialJobs((prev) => {
-      const seen = new Set(prev.map((j) => j.jd_url || j.id));
-      const fresh = reliable.filter((j) => !seen.has(j.jd_url || j.id));
-      return fresh.length ? [...fresh, ...prev] : prev;
-    });
-  }
-
-  function finishBrowserDiscovery(data: any) {
-    mergeStreamedJobs(data); // 终态兜底再并一次
-    setSearchInfo(formatBrowserDiscoveryResult(data));
-    setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "", progress: null });
-    clearDiscoveryTask();
-  }
-
-  // 跨页面恢复（修「点了发现后切到别的页面、任务就看不到了」的 bug）：
-  // 回到岗位库时若 localStorage 里有未超时的发现任务，恢复 runId → 下方轮询 effect 自动续上。
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    let saved: { runId?: string; startedAt?: number; query?: string } | null = null;
-    try {
-      const raw = localStorage.getItem(DISCOVERY_STORAGE_KEY);
-      saved = raw ? JSON.parse(raw) : null;
-    } catch {
-      saved = null;
-    }
-    if (!saved?.runId || !saved.startedAt) return;
-    const elapsed = Date.now() - saved.startedAt;
-    if (elapsed >= DISCOVERY_TIMEOUT_MS) {
-      clearDiscoveryTask();
-      return;
-    }
-    setDiscovery({
-      phase: "running",
-      runId: saved.runId,
-      startedAt: saved.startedAt,
-      elapsedSec: Math.floor(elapsed / 1000),
-      note: "已恢复后台发现任务，继续等待结果…",
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // 轮询 + 计时：runId 一旦确定就开始，终态/卸载时清理。
-  useEffect(() => {
-    if (!discovery.runId) return;
-    const runId = discovery.runId;
-    let stopped = false;
-
-    tickRef.current = setInterval(() => {
-      setDiscovery((prev) =>
-        prev.startedAt
-          ? { ...prev, elapsedSec: Math.floor((Date.now() - prev.startedAt) / 1000) }
-          : prev,
-      );
-    }, 1000);
-
-    async function poll() {
-      try {
-        const resp = await fetch(`/api/discovery/status?runId=${runId}`);
-        const data = await resp.json();
-        if (stopped) return;
-        if (!data.ok) return; // 暂时性错误，下次轮询再试
-        mergeStreamedJobs(data); // 流式：每轮把已产出岗位增量并入列表
-        if (data.is_terminal) {
-          finishBrowserDiscovery(data);
-          return;
-        }
-        // 进度条用真实 X/N（status 端返回 diagnostics.progress）。
-        setDiscovery((prev) =>
-          prev.runId === runId
-            ? { ...prev, phase: "running", progress: data.progress || prev.progress }
-            : prev,
-        );
-      } catch {
-        // 网络抖动忽略，等下次轮询
-      }
-    }
-
-    pollRef.current = setInterval(poll, DISCOVERY_POLL_MS);
-    poll();
-
-    const timeout = setTimeout(() => {
-      if (stopped) return;
-      // 不清空已流式入列的新岗位；仅收起进度并提示后台可能仍在补充。
-      setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "", progress: null });
-      clearDiscoveryTask();
-      setSearchInfo("后台仍在刷新，已入库的新岗位见列表；可稍后刷新页面查看其余。");
-    }, DISCOVERY_TIMEOUT_MS);
-
-    return () => {
-      stopped = true;
-      if (pollRef.current) clearInterval(pollRef.current);
-      if (tickRef.current) clearInterval(tickRef.current);
-      clearTimeout(timeout);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [discovery.runId]);
-
-  // 「刷新公司库」（全异步·流式）：触发后台 CI 刷新用户范围内全部公司源（含飞书/北森/Moka 等浏览器源），
-  // 复用 discovery 轮询轨道，结果实时流式并入列表。取代只覆盖少数源(~11)的旧同步 /api/search。
-  async function handleCompanyRefresh() {
-    if (refreshing || discoveryActive) return; // 进行中不重复触发（后端另有节流/幂等兜底）
-    setRefreshing(true);
-    setSearchInfo("正在触发刷新你的公司库…");
-    const startedAt = Date.now();
-    try {
-      const resp = await fetch("/api/refresh", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          company: filters.company || "",
-          keyword: filters.keyword || "",
-          city: filters.city || "",
-          jobType: filters.jobType || "",
-        }),
-      });
-      const data = await resp.json();
-      if (resp.status === 429) {
-        setSearchInfo(data?.hint || `刚刷过，约 ${data?.retry_after_sec ?? 60} 秒后可再刷。`);
-        return;
-      }
-      if (!data.ok || !data.run_id) {
-        setSearchInfo(data?.hint || data?.error || "刷新触发失败，请稍后再试。");
-        return;
-      }
-      const total = Number(data.scope?.total || 0);
-      saveDiscoveryTask(data.run_id, startedAt, filters.keyword || "");
-      setDiscovery({
-        phase: "queued",
-        runId: data.run_id,
-        startedAt,
-        elapsedSec: 0,
-        note: data.reused ? "已有一次刷新在进行中，继续等待…" : `已排队，正在刷新 ${total} 家公司…`,
-        progress: { done: 0, total },
-        kind: "refresh",
-      });
-    } catch {
-      setSearchInfo("刷新触发失败，请稍后再试。");
-    } finally {
-      setRefreshing(false);
-    }
   }
 
   function handleActionChange(jobId: string, action: PrimaryAction | null) {
@@ -538,7 +206,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
             hint="刷你关注的全部公司 · 约 1–5 分钟"
             tooltip="后台用真爬虫刷新你筛选/偏好命中的全部公司源（含飞书 / 北森 / Moka 等浏览器源，按相关性取前若干家），新岗位实时流式并入列表。未填筛选时按你保存的求职偏好（目标公司等）刷。约 1–5 分钟。"
             accent="bg-[#dbe9fa] text-[#2f6299]"
-            onClick={handleCompanyRefresh}
+            onClick={startRefresh}
             disabled={refreshing || discoveryActive}
             busy={refreshing}
           />
@@ -548,7 +216,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
             hint="真浏览器抓官网 · 补全描述 · 约 1–5 分钟"
             tooltip="用真实浏览器联网抓取尚未收录的公司官方招聘站，逐岗补全职位描述，保证返回有 summary 的可靠卡片，约 1–5 分钟。"
             accent="bg-[#e7def4] text-[#6a4fa0]"
-            onClick={handleBrowserDiscovery}
+            onClick={startDiscovery}
             disabled={refreshing || discoveryActive || !filters.keyword}
             busy={discoveryActive}
             hero
@@ -682,96 +350,11 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
   );
 }
 
-// 返回岗位通过当前筛选的匹配档："exact"（精确）/ "related"（同职能相关）/ null（不匹配）。
-// 非关键词项（城市/类型/公司/资本/薪资/新发现/隐藏）仍硬 AND；关键词改两层匹配，治 88% 空摘要的召回崩。
-function jobFilterTier(job: ScoredJob, filters: Filters): "exact" | "related" | null {
-  if (filters.company) {
-    // 大小写不敏感子串匹配：可输入"字节"命中"字节跳动"、"bytedance"命中"ByteDance"。
-    const want = filters.company.trim().toLowerCase();
-    if (want && !(job.company || "").toLowerCase().includes(want)) return null;
-  }
-  if (filters.city) {
-    const normalizedCity = normalizeChinaCity(filters.city);
-    const location = job.location || "";
-    if (!location.includes(filters.city) && !location.includes(normalizedCity)) {
-      return null;
-    }
-  }
-  if (filters.jobType) {
-    // 用穷尽的三桶分类（社招 / 校招 / 实习）精确匹配，避免细粒度类型（管培生 / 研究岗 / 全职等）漏桶。
-    if (recruitmentCategory(job) !== filters.jobType) return null;
-  }
-  if (filters.showNewOnly) {
-    if (!job.first_seen_at) return null;
-    const days = (Date.now() - new Date(job.first_seen_at).getTime()) / 86400000;
-    if (days > 3) return null;
-  }
-  if (!filters.showIgnored && job.hidden_reason === "ignored") return null;
-  if (!filters.showApplied && job.hidden_reason === "applied_by_default") return null;
-  if (filters.capitalOrigin) {
-    const origin = classifyCompanyOrigin(job.company);
-    if (filters.capitalOrigin === "外企") {
-      if (origin === "中国") return null;
-    } else if (origin !== filters.capitalOrigin) return null;
-  }
-  if (filters.salaryOnly && !job.salary_text) return null;
-  // 关键词两层：无关键词 → 全放行(exact)；否则 精确 / 相关 / 不匹配(null)。
-  if (!filters.keyword) return "exact";
-  return keywordMatchTier(job, filters.keyword);
-}
-
-function jobMatchesFilters(job: ScoredJob, filters: Filters) {
-  return jobFilterTier(job, filters) !== null;
-}
-
-// 用户主动触发的爬取必须返回有职位描述的可靠卡片（request 1）：过滤 summary 为空/过短的岗位。
-function hasReliableSummary(job: ScoredJob) {
-  return (job.summary ?? "").trim().length >= 10;
-}
-
 function formatElapsed(sec: number) {
   const s = Math.max(0, Math.floor(sec));
   const m = Math.floor(s / 60);
   const r = s % 60;
   return `${m}:${String(r).padStart(2, "0")}`;
-}
-
-function formatDispatchError(data: any) {
-  const MAP: Record<string, string> = {
-    dispatch_not_configured:
-      "按需「浏览器发现」未启用：服务端缺少 GITHUB_DISPATCH_TOKEN / GITHUB_DISPATCH_REPO 配置。",
-    run_insert_failed: "发现任务创建失败：请确认已应用数据库迁移 009（discovery_runs 异步列）。",
-    dispatch_failed: `触发后台抓取失败：${data?.detail || ""}`,
-    invalid_input: "入参不合法，请检查关键词后重试。",
-    Unauthorized: "未登录或会话已过期，请重新登录后再试。",
-  };
-  return MAP[data?.error] || data?.error_message || data?.error || "按需发现触发失败，请稍后再试。";
-}
-
-function formatBrowserDiscoveryResult(data: any) {
-  const isDone =
-    data?.phase === "done" || data?.status === "success" || data?.status === "partial_success";
-  if (isDone) {
-    const created = data?.jobs_created ?? 0;
-    const updated = data?.jobs_updated ?? 0;
-    const shown = data?.total ?? 0;
-    if (created > 0 || updated > 0 || shown > 0) {
-      return `浏览器发现完成：新增 ${created} / 更新 ${updated} 个官方岗位，本次展示 ${shown} 个（已入共享库）。`;
-    }
-    return "浏览器发现完成，但本次没有命中该关键词的官方岗位——换个关键词或去掉城市再试。";
-  }
-  const MAP: Record<string, string> = {
-    no_recipe_matched: "暂无匹配的平台配方（当前覆盖字节 / 飞书系：蔚来·小鹏·地平线·小米）。",
-    no_spa_sources_in_db: "未找到可抓取的官方源——请先应用迁移 010（seed SPA 源）。",
-    no_jobs_passed_quality: "抓到岗位但未通过质量门 / 未命中关键词，未入库。",
-    dispatch_failed: "后台抓取触发失败。",
-    discovery_exception: `后台抓取异常：${data?.error_message || ""}`,
-  };
-  const reason = data?.failure_reason || "";
-  return (
-    MAP[reason] ||
-    `本次发现未成功（${data?.status || "failed"}）：${data?.error_message || reason || "未写入岗位"}。`
-  );
 }
 
 // 获取岗位的动作磁贴：大图标 + 标题 + 一句说明，鼠标悬浮显示完整功能解释（核心功能，放大更醒目）
