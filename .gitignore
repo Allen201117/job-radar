@@ -17,3 +17,15 @@ dist/
 # 本地工具与清理产物，不入应用基线
 .claude/
 backups/
+
+# 实验产物 / 扩源中间文件（不入基线，保留本地）；! 例外保留已跟踪的真实资产
+*.tsbuildinfo
+crawler/verify_*
+!crawler/verify_sources.py
+crawler/targets_*
+!crawler/targets_private500.json
+!crawler/targets_private500_full.json
+!crawler/targets_soe500.json
+crawler/*_candidates.json
+!crawler/famous_candidates.json
+moka_custom.json
