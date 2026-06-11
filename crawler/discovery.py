@@ -145,12 +145,13 @@ def select_discovery_targets(sources, allowlist) -> list:
 
 
 def job_matches_query(raw: RawJob, query: str) -> bool:
-    """岗位是否命中关键词。双语同义词扩展 + 短缩写词边界，搜 标题/公司/地点/类型/摘要/薪资 —
-    与前端看板 jobMatchesChinaKeyword 同口径，让中文发现词也能命中英文外企岗。空 query 视为命中。"""
-    haystack = " ".join(
-        filter(None, [raw.title, raw.company, raw.location, raw.job_type, raw.summary, raw.salary_text])
+    """岗位是否命中关键词。字段感知 + 职能门——与前端看板 jobMatchesChinaKeyword 同口径：
+    标题命中始终算，正文（公司/地点/类型/摘要/薪资）命中须过职能门（治"pm→算法"跨职能误召）。
+    双语同义词扩展 + 短缩写词边界，让中文发现词也能命中英文外企岗。空 query 视为命中。"""
+    body = " ".join(
+        filter(None, [raw.company, raw.location, raw.job_type, raw.summary, raw.salary_text])
     )
-    return cke.query_matches(haystack, query)
+    return cke.job_matches(raw.title or "", body, query)
 
 
 def job_matches_city(raw: RawJob, city: str) -> bool:

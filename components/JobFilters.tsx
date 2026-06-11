@@ -44,12 +44,19 @@ export default function JobFilters({ filters, onChange, companies }: Props) {
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <FilterLabel icon={Buildings} label="公司" />
-          <select value={filters.company} onChange={(e) => set("company", e.target.value)} className={selectClass}>
-            <option value="">全部</option>
+          {/* 可输入 combobox：自由输入 + 已知公司自动补全（datalist）；匹配走大小写不敏感子串。 */}
+          <input
+            value={filters.company}
+            onChange={(e) => set("company", e.target.value)}
+            list="job-company-options"
+            placeholder="输入或选择，如 字节"
+            className={inputClass}
+          />
+          <datalist id="job-company-options">
             {companies.map((c) => (
-              <option key={c} value={c}>{c}</option>
+              <option key={c} value={c} />
             ))}
-          </select>
+          </datalist>
         </div>
         <div>
           <FilterLabel icon={MapPin} label="城市" />

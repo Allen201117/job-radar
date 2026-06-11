@@ -69,6 +69,51 @@ class ParityWithFrontendTest(unittest.TestCase):
         # 与 lib/china-keyword-expansion.js 的 21 组保持一致
         self.assertEqual(len(cke.CHINA_KEYWORD_GROUPS), 21)
 
+    def test_group_functions_aligned(self):
+        self.assertEqual(len(cke.KEYWORD_GROUP_FUNCTIONS), len(cke.CHINA_KEYWORD_GROUPS))
+
+
+class ClassifyJobFunctionTest(unittest.TestCase):
+    def test_buckets(self):
+        self.assertEqual(cke.classify_job_function("AI 产品经理"), "产品")
+        self.assertEqual(cke.classify_job_function("推荐算法工程师"), "研发")
+        self.assertEqual(cke.classify_job_function("视觉设计师"), "设计")
+        self.assertEqual(cke.classify_job_function("数据分析师"), "数据")
+        self.assertEqual(cke.classify_job_function(""), "其他")
+
+    def test_product_precedes_algorithm(self):
+        self.assertEqual(cke.classify_job_function("AI 产品经理", "", "了解算法"), "产品")
+
+
+class JobMatchesTest(unittest.TestCase):
+    """字段感知 + 职能门：发现端（刷新公司库 / 联网发现）精准过滤的核心，与前端看板同口径。"""
+
+    def test_cross_function_precision_pm_not_algo(self):  # 用户原始痛点
+        algo = ("推荐算法工程师", "负责推荐产品的算法模型，机器学习")
+        data = ("数据分析师", "SQL 业务分析，支撑产品决策")
+        self.assertFalse(cke.job_matches(algo[0], algo[1], "pm"), "正文含'产品'的算法岗不应命中 pm")
+        self.assertFalse(cke.job_matches(data[0], data[1], "pm"), "正文含'产品'的数据岗不应命中 pm")
+
+    def test_cross_function_precision_reverse(self):
+        pm = ("产品经理", "了解算法优先，负责需求管理")
+        self.assertFalse(cke.job_matches(pm[0], pm[1], "算法"), "PM 岗正文提'算法'不应命中'算法'")
+
+    def test_body_recall_same_function(self):
+        # 标题没体现、正文具体词点明角色 + 同职能 → 仍命中（保留召回）
+        self.assertTrue(cke.job_matches("2024 届校园招聘", "产品经理方向，负责需求管理", "pm"))
+        self.assertTrue(cke.job_matches("资深工程师", "负责推荐算法与模型训练", "算法"))
+
+    def test_real_jobs_match_via_title(self):
+        self.assertTrue(cke.job_matches("策略产品经理", "", "pm"))
+        self.assertTrue(cke.job_matches("Senior Product Manager", "", "pm"))
+
+    def test_scattered_company_token_matches_body(self):
+        self.assertTrue(cke.job_matches("前端工程师", "字节跳动", "前端 字节"))
+        self.assertFalse(cke.job_matches("前端工程师", "字节跳动", "前端 腾讯"))
+
+    def test_empty_query_matches_all(self):
+        self.assertTrue(cke.job_matches("任意岗位", "任意正文", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

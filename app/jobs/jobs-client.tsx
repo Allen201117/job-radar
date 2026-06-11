@@ -685,7 +685,11 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
 // 返回岗位通过当前筛选的匹配档："exact"（精确）/ "related"（同职能相关）/ null（不匹配）。
 // 非关键词项（城市/类型/公司/资本/薪资/新发现/隐藏）仍硬 AND；关键词改两层匹配，治 88% 空摘要的召回崩。
 function jobFilterTier(job: ScoredJob, filters: Filters): "exact" | "related" | null {
-  if (filters.company && job.company !== filters.company) return null;
+  if (filters.company) {
+    // 大小写不敏感子串匹配：可输入"字节"命中"字节跳动"、"bytedance"命中"ByteDance"。
+    const want = filters.company.trim().toLowerCase();
+    if (want && !(job.company || "").toLowerCase().includes(want)) return null;
+  }
   if (filters.city) {
     const normalizedCity = normalizeChinaCity(filters.city);
     const location = job.location || "";
