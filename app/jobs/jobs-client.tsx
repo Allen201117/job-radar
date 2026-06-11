@@ -216,6 +216,46 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     () => filtered.slice(0, visibleCount),
     [filtered, visibleCount],
   );
+
+  // P3 on-demand 富化：给用户当下看到的薄卡（无 summary）即时补 JD 正文。
+  // 只发 jd_url，服务端只补简单 httpx 源（workday/hotjob）；其余/浏览器源留给后台 drain。
+  // overlay 覆盖式打补丁（不改各 job 列表），requested ref 防重复请求/死循环。
+  const [summaryOverlay, setSummaryOverlay] = useState<Record<string, string>>({});
+  const enrichRequested = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const need = visibleJobs
+      .filter(
+        (j) =>
+          j.jd_url &&
+          !j.summary &&
+          !summaryOverlay[j.jd_url] &&
+          !enrichRequested.current.has(j.jd_url),
+      )
+      .map((j) => j.jd_url as string)
+      .slice(0, 30);
+    if (need.length === 0) return;
+    need.forEach((u) => enrichRequested.current.add(u));
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await fetch("/api/enrich", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jd_urls: need }),
+        });
+        const data = await resp.json();
+        if (!cancelled && data?.ok && data.filled && Object.keys(data.filled).length) {
+          setSummaryOverlay((prev) => ({ ...prev, ...data.filled }));
+        }
+      } catch {
+        // 静默降级：补不到就保持薄卡，后台 drain 兜
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleJobs]);
   // 精确层数量（用于诚实展示「精确 E + 相关 R」），相关层 = filtered.length - exactCount。
   const exactCount = useMemo(
     () => filtered.reduce((n, j) => n + ((j as any).__tier === "exact" ? 1 : 0), 0),
@@ -564,7 +604,11 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
                 </div>
               )}
               <JobCard
-                job={job}
+                job={
+                  job.jd_url && summaryOverlay[job.jd_url]
+                    ? { ...job, summary: summaryOverlay[job.jd_url] }
+                    : job
+                }
                 sessionNew={sessionNewKeys.has(job.jd_url || job.id)}
                 onActionChange={handleActionChange}
               />
