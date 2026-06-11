@@ -16,7 +16,7 @@ from urllib.parse import urlparse, parse_qs
 import httpx
 
 import normalizer
-from .base import BaseAdapter, RawJob
+from .base import BaseAdapter, RawJob, resolve_detail_cap
 
 _GREATER_CHINA = ("china", "中国", "hong kong", "香港", "macau", "macao", "澳门")
 _TAIWAN = ("taiwan", "台湾", "台灣", "chinese taipei")
@@ -125,7 +125,7 @@ class OracleAdapter(BaseAdapter):
         headers = {"Accept": "application/json", "User-Agent": self.user_agent}
         n = 0
         for j in jobs:
-            if n >= self._DETAIL_CAP:
+            if n >= resolve_detail_cap(self._DETAIL_CAP):
                 break
             if not isinstance(j, dict):
                 continue

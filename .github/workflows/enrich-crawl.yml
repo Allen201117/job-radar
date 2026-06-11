@@ -1,0 +1,64 @@
+name: enrichment-crawl
+# 重档「逐岗富化」：浏览器源(beisen/moka/feishu/google/bytedance/tencent) + 全量逐岗 summary 详情。
+# 按天 1/7 轮转（date -u +%w → shard 0-6），一周覆盖全部源；单跑墙钟远低于 GitHub Actions 6h 硬杀。
+# 快档 daily-crawl.yml 只抓 httpx 列表、跳过富化（CRAWL_DETAIL_CAP=0）；逐岗富化与浏览器源全压在这里分摊。
+# tier=all（默认）会把 httpx 富化器（hotjob/workday/oracle/eightfold/smartrecruiters，快档跳过其富化）也按轮转补 summary。
+
+on:
+  schedule:
+    # UTC 18:00 = 中国/新加坡 02:00；与快档(UTC 00:00)错开 18h，避免同时写库。
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+    inputs:
+      shard_index:
+        description: "跑第几片源（0-based；留空=按星期几 date -u +%w 自动轮转 0-6）"
+        required: false
+        default: ""
+      shard_count:
+        description: "共分几片（默认 7=按天 1/7 轮转覆盖全量；单跑仍逼近 6h 可调大到 14 加密轮转）"
+        required: false
+        default: "7"
+      tier:
+        description: "all=全量富化(默认，含 httpx 富化器) | browser=只跑浏览器档 | httpx=只跑并发档"
+        required: false
+        default: "all"
+
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+    # 硬上限 < GitHub Actions 6h 硬杀(360)：分片后单跑应远小于此；触顶=提前失败留日志而非被静默 cancel。
+    timeout-minutes: 330
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      CRAWL_CONCURRENCY: "6"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      - name: Install Playwright browser (SPA browser-intercept tier)
+        run: python -m playwright install --with-deps chromium
+
+      # 分片序号：手动传入优先；否则按星期几 date -u +%w（0=周日..6=周六），一周 7 天恰好覆盖 0-6 全部分片。
+      - name: Compute shard index
+        id: shard
+        run: |
+          if [ -n "${{ github.event.inputs.shard_index }}" ]; then
+            echo "idx=${{ github.event.inputs.shard_index }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "idx=$(date -u +%w)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run enrichment crawl (sharded, full per-job detail)
+        run: |
+          python crawler/run.py \
+            --tier "${{ github.event.inputs.tier || 'all' }}" \
+            --shard-index "${{ steps.shard.outputs.idx }}" \
+            --shard-count "${{ github.event.inputs.shard_count || '7' }}"

@@ -14,7 +14,7 @@ from typing import List, Optional
 import httpx
 
 import normalizer
-from .base import BaseAdapter, RawJob
+from .base import BaseAdapter, RawJob, resolve_detail_cap
 
 
 class SmartRecruitersAdapter(BaseAdapter):
@@ -45,7 +45,7 @@ class SmartRecruitersAdapter(BaseAdapter):
         """对将保留的在华岗逐个调 detail 端点，把 jobAd 各 section 文本拼成正文挂到 row['_jd']。"""
         n = 0
         for j in rows:
-            if n >= self._DETAIL_CAP:
+            if n >= resolve_detail_cap(self._DETAIL_CAP):
                 break
             if not isinstance(j, dict):
                 continue

@@ -5,7 +5,8 @@ on:
     # UTC 00:00 = 新加坡/中国 08:00
     - cron: "0 0 * * *"
   workflow_dispatch:
-    # 手动触发 = 全量抓取；带 mode=discovery 的入参 = 按需「浏览器发现」（由 /api/discovery/dispatch 触发）。
+    # 手动触发(无 mode) = 快档 httpx 抓取（不开浏览器、不逐岗富化）；带 mode=discovery 的入参 = 按需「浏览器发现」（由 /api/discovery/dispatch 触发）。
+    # 全量逐岗富化 + 浏览器源（beisen/moka/feishu/google/bytedance/tencent）由 enrich-crawl.yml（按天 1/7 轮转）负责。
     inputs:
       mode:
         description: "discovery 时跑按需浏览器发现；留空跑全量抓取"
@@ -43,6 +44,11 @@ on:
 jobs:
   crawl:
     runs-on: ubuntu-latest
+    # 整体安全网：远低于 GitHub Actions 6h 硬杀。快档 httpx 实测 ~20-30min；按需 discovery 低频有界。
+    timeout-minutes: 60
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
     steps:
       - uses: actions/checkout@v4
@@ -54,15 +60,25 @@ jobs:
       - name: Install crawler dependencies
         run: pip install -r crawler/requirements.txt
 
-      - name: Install Playwright browser (SPA browser-intercept tier)
+      # Playwright 仅按需「浏览器发现」需要；快档 httpx 跳过此步省 1-2min 安装。
+      - name: Install Playwright browser (discovery only)
+        if: ${{ github.event.inputs.mode == 'discovery' }}
         run: python -m playwright install --with-deps chromium
 
-      - name: Run crawler
+      # 快档：schedule / 无 mode 手动触发 → 只跑 httpx 并发档 + 跳过逐岗富化(CRAWL_DETAIL_CAP=0) → 20-30min。
+      - name: Run crawler (fast httpx tier)
+        if: ${{ github.event.inputs.mode != 'discovery' }}
+        timeout-minutes: 30
+        run: python crawler/run.py --tier httpx
+        env:
+          CRAWL_DETAIL_CAP: "0"
+
+      # 按需「浏览器发现」：保持原行为（DISCOVERY_* 触发 discovery.run_from_env，跑完即退）。
+      - name: Run on-demand discovery (browser)
+        if: ${{ github.event.inputs.mode == 'discovery' }}
+        timeout-minutes: 55
         run: python crawler/run.py
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          # 按需发现入参（schedule / 无 mode 的手动触发时为空 → 走全量抓取）
           DISCOVERY_MODE: ${{ github.event.inputs.mode }}
           DISCOVERY_RUN_ID: ${{ github.event.inputs.run_id }}
           DISCOVERY_QUERY: ${{ github.event.inputs.query }}

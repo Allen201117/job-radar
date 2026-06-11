@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import httpx
 
 import normalizer
-from .base import BaseAdapter, RawJob
+from .base import BaseAdapter, RawJob, resolve_detail_cap
 
 # 大中华区 facet 关键词（China / Mainland China / Greater China / Hong Kong / Macau…）
 _GREATER_CHINA = ("china", "中国", "hong kong", "香港", "macau", "macao", "澳门")
@@ -132,7 +132,7 @@ class WorkdayAdapter(BaseAdapter):
         """对将保留的岗位逐个 GET detail 端点，把 jobDescription 挂到 post['_jd']（供 parse 取作 summary）。"""
         n = 0
         for p in posts:
-            if n >= self._DETAIL_CAP:
+            if n >= resolve_detail_cap(self._DETAIL_CAP):
                 break
             if not isinstance(p, dict):
                 continue

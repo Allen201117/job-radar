@@ -316,7 +316,8 @@ def _process_one_source(source, supabase) -> dict:
         return {"status": "failed", "created": 0, "updated": 0}
 
 
-def run_crawl(filter_adapter: str = None):
+def run_crawl(filter_adapter: str = None, tier: str = "all",
+              shard_index: int = 0, shard_count: int = 1):
     supabase = db.get_supabase()
     sources = db.get_sources(supabase)
 
@@ -335,8 +336,21 @@ def run_crawl(filter_adapter: str = None):
     domestic_n = sum(1 for s in sources if (s.get("adapter_name") or "") in DOMESTIC_ADAPTERS)
     # P4 分档：httpx-safe 源并发抓（线程池，墙钟不再逐个叠加），浏览器(Playwright 非线程安全)/未知源串行抓。
     concurrent_sources, serial_sources = _partition_by_tier(sources)
+    # 分档：快档 daily 只跑 httpx 并发档；重档 enrichment 跑 browser 串行档（或 all 全量）。默认 all=两档都跑（向后兼容）。
+    if tier == "httpx":
+        serial_sources = []
+    elif tier == "browser":
+        concurrent_sources = []
+    # 源分片轮转：重档按天 1/shard_count（round-robin 每 shard_count 取第 shard_index 个），
+    # 一周覆盖全量，单跑墙钟压到 GitHub Actions 6h 硬杀以下。默认 shard_count=1 = 不分片。
+    if shard_count > 1:
+        shard_index %= shard_count
+        concurrent_sources = concurrent_sources[shard_index::shard_count]
+        serial_sources = serial_sources[shard_index::shard_count]
     workers = max(1, int(os.environ.get("CRAWL_CONCURRENCY", "6") or "6"))
-    print(f"[crawler] 开始抓取 {len(sources)} 个源（本土优先 {domestic_n} / 外企 {len(sources) - domestic_n}）"
+    active_n = len(concurrent_sources) + len(serial_sources)
+    print(f"[crawler] tier={tier} shard={shard_index}/{shard_count}；本次抓取 {active_n}/{len(sources)} 源"
+          f"（本土优先 {domestic_n} / 外企 {len(sources) - domestic_n}）"
           f"；并发档 {len(concurrent_sources)} 源 × {workers} 线程 / 串行档 {len(serial_sources)} 源（浏览器）...")
 
     results = []
@@ -372,12 +386,23 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Job Radar Crawler")
     parser.add_argument("--source", type=str, default=None,
                         help="只跑指定 adapter (apple/baidu/jd/haier/siemens)")
+    parser.add_argument("--tier", choices=["all", "httpx", "browser"],
+                        default=(os.environ.get("CRAWL_TIER") or "all"),
+                        help="all=两档都跑(默认/全量) | httpx=只跑并发档(快档 daily) | browser=只跑浏览器串行档(重档)")
+    parser.add_argument("--shard-index", type=int,
+                        default=int(os.environ.get("CRAWL_SHARD_INDEX", "0") or "0"),
+                        help="源分片轮转：本次跑第 index 片（0-based；重档按星期几传 0-6）")
+    parser.add_argument("--shard-count", type=int,
+                        default=int(os.environ.get("CRAWL_SHARD_COUNT", "1") or "1"),
+                        help="源分片轮转：共分几片（重档按天 1/7 轮转传 7；默认 1=不分片）")
     args = parser.parse_args()
 
     # 按需「浏览器发现」模式（GitHub Actions workflow_dispatch 触发，通过 DISCOVERY_* 环境变量传参）。
-    # 命中则跑发现并退出；否则走常规全量/单源抓取。
+    # 命中则跑发现并退出；否则走常规全量/单源抓取（受 --tier / --shard-* 收窄）。
     import discovery
     if discovery.run_from_env():
         sys.exit(0)
 
-    run_crawl(filter_adapter=args.source)
+    run_crawl(filter_adapter=args.source, tier=args.tier,
+              shard_index=max(0, args.shard_index),
+              shard_count=max(1, args.shard_count))

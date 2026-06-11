@@ -17,7 +17,7 @@ from urllib.parse import urlparse, parse_qs
 import httpx
 
 import normalizer
-from .base import BaseAdapter, RawJob
+from .base import BaseAdapter, RawJob, resolve_detail_cap
 
 
 class EightfoldAdapter(BaseAdapter):
@@ -68,7 +68,7 @@ class EightfoldAdapter(BaseAdapter):
         """逐岗 GET detail 端点把 job_description 挂到 position['_jd']（供 parse 取作 summary）。"""
         n = 0
         for p in positions:
-            if n >= self._DETAIL_CAP:
+            if n >= resolve_detail_cap(self._DETAIL_CAP):
                 break
             if not isinstance(p, dict):
                 continue
