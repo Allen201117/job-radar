@@ -71,9 +71,12 @@ export async function GET(request: NextRequest) {
   ]);
 
   const live = interleaveJobsBySource([...liveBaidu, ...liveJd, ...liveApple, ...liveAts]);
+  // 缓存命中也走与 live / 看板同一套智能匹配器（词分级 + 组合意图），
+  // 消除 fetchCached 宽 SQL（summary.ilike）把正文含关键词的无关岗也带回的泄漏。
+  const cachedFiltered = query ? filterJobsByQueryAndCity(cached, query, "") : cached;
   const merged = mergeJobsByUrl(
-    query ? live : cached,
-    query ? cached : live,
+    query ? live : cachedFiltered,
+    query ? cachedFiltered : live,
   ).slice(0, limit);
   const jobsCreated = live.filter((job: any) => job.__action === "created").length;
   const jobsUpdated = live.filter((job: any) => job.__action === "updated").length;
