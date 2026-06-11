@@ -90,6 +90,17 @@ def _parse_str_list(value) -> List[str]:
     return [p.strip() for p in s.split(",") if p.strip()]
 
 
+def parse_company_refresh_env(env: dict) -> Optional[dict]:
+    """解析「刷新公司库」入参。非该模式（缺 mode/run_id）返回 None。
+    scope（source_ids）+ filters 太长放不进 workflow input，故存在 discovery_runs.diagnostics，
+    CI 端按 run_id 读 DB 取（见 run_company_refresh）。"""
+    mode = str(env.get("DISCOVERY_MODE") or "").strip().lower()
+    run_id = str(env.get("DISCOVERY_RUN_ID") or "").strip()
+    if mode != "company_refresh" or not run_id:
+        return None
+    return {"run_id": run_id}
+
+
 # ---------------------------------------------------------------------------
 # 关键词匹配 / URL 构造（纯函数，可单测）
 # ---------------------------------------------------------------------------
@@ -359,6 +370,152 @@ def _upsert_raw_jobs(supabase, source_id, company, source_url, raw_jobs):
     return created, updated, urls
 
 
+def _safe_update_run(supabase, run_id, **fields):
+    """增量心跳写入：失败只记日志不抛——漏一次心跳不致命（下个源会补），
+    绝不让瞬时写失败炸掉整轮抓取（已 upsert 的岗位不丢可见性）。"""
+    try:
+        db.update_discovery_run(supabase, run_id, **fields)
+    except Exception as e:  # noqa: BLE001
+        print(f"[refresh]   (heartbeat write failed, ignored: {type(e).__name__}: {e})")
+
+
+class CompanyRefreshRecipe:
+    """「刷新公司库」配方：按 scope 选定的 source_ids 跨双 tier 刷新——httpx 源先跑（约 1min 出结果）、
+    浏览器源后跑（chromium 渲染 2-5min）；每抓完一个源就增量回写 discovery_runs（产出 + 进度 + 心跳），
+    支撑前端流式展示。串行单 worker → 无并发写 diagnostics，故「内存累加器整体回写」即原子，无需 RPC。"""
+
+    key = "company_refresh"
+
+    def run(self, supabase, run_id: str, source_ids: List[str], filters: dict, base_diag: dict) -> dict:
+        import run as runmod  # 延迟导入避免与 run.py 循环依赖；复用全量 ADAPTERS 注册表 + httpx 分档
+
+        query = filters.get("query") or filters.get("keyword") or ""
+        city = filters.get("city") or ""
+        job_type = filters.get("job_type") or filters.get("jobType") or ""
+        exclude = filters.get("exclude") or []
+
+        rows = db.get_sources_by_ids(supabase, source_ids)
+        # httpx 源先、浏览器源后（让秒级 httpx 结果先流式冒出来，慢的浏览器源随后补）。
+        rows.sort(key=lambda s: 0 if runmod._is_httpx_safe(s.get("adapter_name")) else 1)
+        total = len(rows)
+
+        seen = set()
+        produced: List[str] = []
+        created = updated = 0
+        errors: List[str] = []
+
+        for i, source in enumerate(rows, 1):
+            adapter_name = source.get("adapter_name")
+            company = source.get("company") or adapter_name
+            adapter = runmod.ADAPTERS.get(adapter_name)
+            if adapter is None:
+                errors.append(f"{adapter_name}: unknown_adapter")
+            else:
+                try:
+                    html = adapter.fetch(source["source_url"])
+                    raw_jobs = adapter.parse(html)
+                    # 逐岗按用户 关键词/城市/类型/排除词 过滤（CLAUDE.md #1/#2）后再入库 + 流式。
+                    matched = filter_raw_jobs(raw_jobs, query, city, job_type, exclude)
+                    c, u, urls = _upsert_raw_jobs(
+                        supabase, source["id"], company, source["source_url"], matched
+                    )
+                    created += c
+                    updated += u
+                    for url in urls:  # 跨源去重，避免同一 jd_url 流式时重复成卡片
+                        if url and url not in seen:
+                            seen.add(url)
+                            produced.append(url)
+                    print(f"[refresh]   {company}({adapter_name}): parsed={len(raw_jobs)} "
+                          f"matched={len(matched)} created={c} updated={u}")
+                except Exception as e:  # noqa: BLE001 —— 单源失败不炸整轮（run.py 同约定）
+                    errors.append(f"{adapter_name}: {type(e).__name__}: {e}")
+                    print(f"[refresh]   {adapter_name}: FAILED {type(e).__name__}: {e}")
+
+            # 增量心跳：每源后整体回写 diagnostics（含 last_update_at，兼作卡死检测心跳）。
+            _safe_update_run(
+                supabase, run_id,
+                status="running",
+                jobs_created=created, jobs_updated=updated, candidates_found=len(produced),
+                diagnostics={**base_diag, "produced_jd_urls": produced[:200],
+                             "progress": {"done": i, "total": total},
+                             "last_update_at": _now_iso(), "recipe": self.key},
+            )
+
+        if produced:
+            status = "success" if not errors else "partial_success"
+            failure_reason = None
+        elif errors:
+            status = "failed"
+            failure_reason = "all_sources_failed"
+        else:
+            status = "success"  # 跑完无匹配新岗 = 成功(0 新增)，不是失败
+            failure_reason = None
+
+        return {
+            "status": status,
+            "failure_reason": failure_reason,
+            "error_message": ("; ".join(errors)[:1000] if errors else None),
+            "jobs_created": created,
+            "jobs_updated": updated,
+            "produced_jd_urls": produced,
+            "progress": {"done": total, "total": total},
+        }
+
+
+def run_company_refresh(params: dict, supabase=None) -> dict:
+    """执行一次「刷新公司库」：认领守卫 → 读 scope/filters → 跑配方（增量回写）→ 终态回写。"""
+    supabase = supabase or db.get_supabase()
+    run_id = params["run_id"]
+
+    # 1. 状态认领守卫：queued→running（仅当前 status='queued'）；已被认领则退出，防双 worker 抢同一 run。
+    if not db.claim_discovery_run(supabase, run_id):
+        print(f"[refresh] run {run_id[:8]} not claimable (already running/terminal), exit")
+        return {"status": "skipped", "reason": "already_claimed"}
+
+    # 2. 读 scope + filters（dispatch 端已存入 diagnostics）。
+    run_row = db.get_discovery_run(supabase, run_id)
+    diag = (run_row or {}).get("diagnostics") or {}
+    source_ids = [str(x) for x in (diag.get("source_ids") or []) if str(x).strip()]
+    filters = diag.get("filters") or {}
+    base_diag = {"source_ids": source_ids, "filters": filters, "click_time": diag.get("click_time")}
+
+    if not source_ids:
+        db.update_discovery_run(
+            supabase, run_id, status="failed", failure_reason="empty_scope",
+            error_message="No source_ids in run diagnostics.", finished_at=_now_iso(),
+            diagnostics={**base_diag, "produced_jd_urls": [], "progress": {"done": 0, "total": 0},
+                         "last_update_at": _now_iso(), "recipe": CompanyRefreshRecipe.key},
+        )
+        print(f"[refresh] run {run_id[:8]} -> failed (empty_scope)")
+        return {"status": "failed", "failure_reason": "empty_scope"}
+
+    print(f"[refresh] run {run_id[:8]} running: {len(source_ids)} sources filters={filters}")
+
+    # 3. 跑配方（增量回写在 recipe 内逐源进行）。
+    recipe = CompanyRefreshRecipe()
+    result = recipe.run(supabase, run_id, source_ids, filters, base_diag)
+    produced = result.get("produced_jd_urls", [])
+
+    # 4. 终态回写（保留 source_ids/filters，附最终 produced + progress）。
+    db.update_discovery_run(
+        supabase, run_id,
+        status=result["status"],
+        failure_reason=result.get("failure_reason"),
+        error_message=result.get("error_message"),
+        jobs_created=result.get("jobs_created", 0),
+        jobs_updated=result.get("jobs_updated", 0),
+        candidates_found=len(produced),
+        finished_at=_now_iso(),
+        diagnostics={**base_diag, "produced_jd_urls": produced[:200],
+                     "progress": result.get("progress", {"done": 0, "total": 0}),
+                     "last_update_at": _now_iso(), "recipe": CompanyRefreshRecipe.key},
+    )
+    print(f"[refresh] run {run_id[:8]} -> {result['status']} "
+          f"(created={result.get('jobs_created', 0)}, updated={result.get('jobs_updated', 0)}, "
+          f"produced={len(produced)})")
+    return result
+
+
 # 平台配方注册表：key -> recipe 实例。
 RECIPES: dict = {SpaKeywordRecipe.key: SpaKeywordRecipe()}
 
@@ -437,25 +594,36 @@ def run_discovery(params: dict, supabase=None) -> dict:
     return result
 
 
+def _mark_run_failed(run_id: str, reason: str, exc: Exception) -> None:
+    """异常兜底：把 run 落终态 failed，否则前端永远卡在 running。"""
+    try:
+        db.update_discovery_run(
+            db.get_supabase(), run_id, status="failed", failure_reason=reason,
+            error_message=f"{type(exc).__name__}: {exc}"[:1000], finished_at=_now_iso(),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def run_from_env() -> bool:
-    """run.py 入口：若处于发现模式则执行并返回 True；否则返回 False（让 run.py 走全量抓取）。"""
+    """run.py 入口：处于「刷新公司库」或「浏览器发现」模式则执行并返回 True；否则 False（让 run.py 走全量抓取）。"""
+    # 「刷新公司库」模式优先（mode=company_refresh）。
+    refresh = parse_company_refresh_env(os.environ)
+    if refresh:
+        try:
+            run_company_refresh(refresh)
+        except Exception as e:  # 失败也要落终态，否则前端永远卡 running
+            _mark_run_failed(refresh["run_id"], "refresh_exception", e)
+            raise
+        return True
+
+    # 「按需浏览器发现」模式（mode=discovery）。
     params = parse_discovery_env(os.environ)
     if not params:
         return False
     try:
         run_discovery(params)
-    except Exception as e:  # 失败也要把行落终态，否则前端永远卡在 running
-        run_id = params["run_id"]
-        try:
-            db.update_discovery_run(
-                db.get_supabase(),
-                run_id,
-                status="failed",
-                failure_reason="discovery_exception",
-                error_message=f"{type(e).__name__}: {e}"[:1000],
-                finished_at=_now_iso(),
-            )
-        except Exception:
-            pass
+    except Exception as e:  # 失败也要落终态，否则前端永远卡 running
+        _mark_run_failed(params["run_id"], "discovery_exception", e)
         raise
     return True

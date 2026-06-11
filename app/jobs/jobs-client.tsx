@@ -33,10 +33,16 @@ type BrowserDiscoveryState = {
   startedAt: number | null;
   elapsedSec: number;
   note: string;
+  // 「刷新公司库」流式：真实进度 X/N 家公司（浏览器发现时为 null，进度条退化为阶段近似）
+  progress?: { done: number; total: number } | null;
+  // 任务类型：refresh=刷新已收录公司库 / discovery=发现新公司（影响进度条文案）
+  kind?: "refresh" | "discovery";
 };
 
 const DISCOVERY_POLL_MS = 6000;
-const DISCOVERY_TIMEOUT_MS = 8 * 60 * 1000;
+// 给到 20min 硬上限（> 典型刷新 1–5min；卡死由 status 端读时 staleness 15min 兜底终态）。
+// 关键防丢数据靠「流式每轮并入 officialJobs」——即便超时，已入列的新岗位不清空。
+const DISCOVERY_TIMEOUT_MS = 20 * 60 * 1000;
 // 每次渲染/「加载更多」的批量大小（前端分批渲染，避免一次性渲染上千张卡片卡顿）
 const JOBS_PAGE_SIZE = 60;
 // 后台「浏览器发现」任务跨页面持久化的 localStorage 键（切到别的页面再回来不丢任务）
@@ -336,22 +342,27 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     }
   }
 
-  function finishBrowserDiscovery(data: any) {
+  // 流式并入：把本次轮询已产出的岗位增量并进列表（去重）。刷新/发现共用，每轮调用 →
+  // 即便前端超时也不丢已入列的新岗位（修对抗审查 blocker 2「8min 超时 vs 55min CI 静默丢数据」）。
+  function mergeStreamedJobs(data: any) {
     const scored = mapApiSearchJobsToScoredJobs(
       data.jobs || [],
       data.query || filters.keyword,
     ) as ScoredJob[];
-    // 用户主动触发的联网爬：只并入有职位描述的可靠岗位（宁缺毋滥，request 1）
+    // 用户主动触发：只并入有职位描述的可靠岗位（宁缺毋滥，request 1）
     const reliable = scored.filter(hasReliableSummary);
-    if (reliable.length) {
-      setOfficialJobs((prev) => {
-        const seen = new Set(prev.map((j) => j.jd_url || j.id));
-        return [...reliable.filter((j) => !seen.has(j.jd_url || j.id)), ...prev];
-      });
-      // P1-C：不再自动切「只看新发现」；新发现岗位已高亮置顶进完整列表，库始终可见。
-    }
+    if (!reliable.length) return;
+    setOfficialJobs((prev) => {
+      const seen = new Set(prev.map((j) => j.jd_url || j.id));
+      const fresh = reliable.filter((j) => !seen.has(j.jd_url || j.id));
+      return fresh.length ? [...fresh, ...prev] : prev;
+    });
+  }
+
+  function finishBrowserDiscovery(data: any) {
+    mergeStreamedJobs(data); // 终态兜底再并一次
     setSearchInfo(formatBrowserDiscoveryResult(data));
-    setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "" });
+    setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "", progress: null });
     clearDiscoveryTask();
   }
 
@@ -402,13 +413,17 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
         const data = await resp.json();
         if (stopped) return;
         if (!data.ok) return; // 暂时性错误，下次轮询再试
+        mergeStreamedJobs(data); // 流式：每轮把已产出岗位增量并入列表
         if (data.is_terminal) {
           finishBrowserDiscovery(data);
           return;
         }
-        if (data.phase === "running") {
-          setDiscovery((prev) => (prev.phase === "running" ? prev : { ...prev, phase: "running" }));
-        }
+        // 进度条用真实 X/N（status 端返回 diagnostics.progress）。
+        setDiscovery((prev) =>
+          prev.runId === runId
+            ? { ...prev, phase: "running", progress: data.progress || prev.progress }
+            : prev,
+        );
       } catch {
         // 网络抖动忽略，等下次轮询
       }
@@ -419,9 +434,10 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
 
     const timeout = setTimeout(() => {
       if (stopped) return;
-      setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "" });
+      // 不清空已流式入列的新岗位；仅收起进度并提示后台可能仍在补充。
+      setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "", progress: null });
       clearDiscoveryTask();
-      setSearchInfo("后台浏览器发现仍在运行，可稍后刷新页面查看新增岗位。");
+      setSearchInfo("后台仍在刷新，已入库的新岗位见列表；可稍后刷新页面查看其余。");
     }, DISCOVERY_TIMEOUT_MS);
 
     return () => {
@@ -433,42 +449,46 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [discovery.runId]);
 
-  async function handleKnownChinaRefresh() {
-    const query = filters.keyword;
-    if (!query) {
-      setOfficialJobs([]);
-      setSearchInfo("");
-      return;
-    }
-
+  // 「刷新公司库」（全异步·流式）：触发后台 CI 刷新用户范围内全部公司源（含飞书/北森/Moka 等浏览器源），
+  // 复用 discovery 轮询轨道，结果实时流式并入列表。取代只覆盖少数源(~11)的旧同步 /api/search。
+  async function handleCompanyRefresh() {
+    if (refreshing || discoveryActive) return; // 进行中不重复触发（后端另有节流/幂等兜底）
     setRefreshing(true);
-    setSearchInfo("正在刷新已知中国官网源...");
+    setSearchInfo("正在触发刷新你的公司库…");
+    const startedAt = Date.now();
     try {
-      const params = new URLSearchParams({
-        query,
-        limit: "30",
-        function: filters.jobType !== "" ? filters.jobType : "all",
-        city: filters.city !== "" ? filters.city : "",
+      const resp = await fetch("/api/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company: filters.company || "",
+          keyword: filters.keyword || "",
+          city: filters.city || "",
+          jobType: filters.jobType || "",
+        }),
       });
-      const resp = await fetch(`/api/search?${params}`);
       const data = await resp.json();
-
-      if (data.ok) {
-        const scored = mapApiSearchJobsToScoredJobs(
-          data.jobs || [],
-          query,
-        ) as ScoredJob[];
-        // 用户主动触发的刷新：只展示有职位描述的可靠卡片（宁缺毋滥，request 1）
-        const reliable = scored.filter(hasReliableSummary);
-
-        setOfficialJobs(reliable);
-        setOnlyNew(reliable.length > 0); // 刷到新岗位则默认只看本次新发现
-        setSearchInfo(formatKnownRefreshResult(data, reliable.length, scored.length));
-      } else {
-        setSearchInfo(data?.error || "已知中国官网源刷新失败，仍显示本地岗位。");
+      if (resp.status === 429) {
+        setSearchInfo(data?.hint || `刚刷过，约 ${data?.retry_after_sec ?? 60} 秒后可再刷。`);
+        return;
       }
-    } catch (err) {
-      setSearchInfo("已知中国官网源刷新失败，仍显示本地岗位。");
+      if (!data.ok || !data.run_id) {
+        setSearchInfo(data?.hint || data?.error || "刷新触发失败，请稍后再试。");
+        return;
+      }
+      const total = Number(data.scope?.total || 0);
+      saveDiscoveryTask(data.run_id, startedAt, filters.keyword || "");
+      setDiscovery({
+        phase: "queued",
+        runId: data.run_id,
+        startedAt,
+        elapsedSec: 0,
+        note: data.reused ? "已有一次刷新在进行中，继续等待…" : `已排队，正在刷新 ${total} 家公司…`,
+        progress: { done: 0, total },
+        kind: "refresh",
+      });
+    } catch {
+      setSearchInfo("刷新触发失败，请稍后再试。");
     } finally {
       setRefreshing(false);
     }
@@ -501,7 +521,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
         <div className="mb-3.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold text-[#3f3a33]">
           <MagnifyingGlass size={16} weight="bold" aria-hidden="true" />
           获取岗位的三种方式
-          <span className="text-xs font-normal text-[#9a9184]">（刷新公司库 / 联网爬 需先在上方填「关键词」）</span>
+          <span className="text-xs font-normal text-[#9a9184]">（刷新公司库 = 刷你关注的公司，免填关键词；联网爬新公司 需先填「关键词」）</span>
         </div>
         <div className="grid gap-3 sm:grid-cols-3">
           <ActionTile
@@ -515,11 +535,11 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
           <ActionTile
             icon={ArrowsClockwise}
             label={refreshing ? "刷新中…" : "刷新公司库新岗位"}
-            hint="已收录公司官网 · 拉本次新岗"
-            tooltip="访问已收录公司的官方招聘源（百度 / 京东等），拉取符合筛选的最新岗位并入库。只展示带职位描述的可靠卡片，无描述的不展示。"
+            hint="刷你关注的全部公司 · 约 1–5 分钟"
+            tooltip="后台用真爬虫刷新你筛选/偏好命中的全部公司源（含飞书 / 北森 / Moka 等浏览器源，按相关性取前若干家），新岗位实时流式并入列表。未填筛选时按你保存的求职偏好（目标公司等）刷。约 1–5 分钟。"
             accent="bg-[#dbe9fa] text-[#2f6299]"
-            onClick={handleKnownChinaRefresh}
-            disabled={refreshing || discoveryActive || !filters.keyword}
+            onClick={handleCompanyRefresh}
+            disabled={refreshing || discoveryActive}
             busy={refreshing}
           />
           <ActionTile
@@ -705,21 +725,6 @@ function hasReliableSummary(job: ScoredJob) {
   return (job.summary ?? "").trim().length >= 10;
 }
 
-function formatKnownRefreshResult(data: any, returnedJobs: number, rawCount?: number) {
-  const dropped =
-    typeof rawCount === "number" && rawCount > returnedJobs
-      ? `（已过滤 ${rawCount - returnedJobs} 个无职位描述的岗位）`
-      : "";
-  return [
-    `已刷新公司库，返回 ${returnedJobs} 个可靠岗位${dropped}。`,
-    `公司官方源命中 ${data.chinaKnownSources ?? 0}，入库 ${data.jobs_created ?? 0} / 更新 ${data.jobs_updated ?? 0}。`,
-    data.priority || "",
-    `耗时 ${data.latencyMs || 0}ms。`,
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
-
 function formatElapsed(sec: number) {
   const s = Math.max(0, Math.floor(sec));
   const m = Math.floor(s / 60);
@@ -824,20 +829,26 @@ function ActionTile({
 }
 
 function BrowserDiscoveryProgress({ discovery }: { discovery: BrowserDiscoveryState }) {
-  const stages = [
-    "触发后台浏览器抓取",
-    "加载官网 · 拦截官方接口 · 质量门入库",
-  ];
+  const isRefresh = discovery.kind === "refresh";
+  const prog = discovery.progress;
+  const hasProg = !!prog && prog.total > 0;
+  const pct = hasProg
+    ? Math.max(4, Math.min(100, Math.round((prog!.done / prog!.total) * 100)))
+    : discovery.phase === "queued"
+      ? 8
+      : 30;
+  const stages = isRefresh
+    ? ["排队 · 触发后台抓取", "逐家公司刷新 · 新岗位实时入库"]
+    : ["触发后台浏览器抓取", "加载官网 · 拦截官方接口 · 质量门入库"];
   const activeIndex = discovery.phase === "queued" ? 0 : 1;
-  const pct = discovery.phase === "queued" ? 18 : 64;
 
   return (
     <div className="surface p-4 text-[#1a1714]">
       <div className="flex items-center gap-2.5">
         <CircleNotch size={18} weight="bold" className="animate-spin text-[#3f7cc0]" aria-hidden="true" />
-        <span className="text-sm font-semibold">正在发现官方招聘源…</span>
+        <span className="text-sm font-semibold">{isRefresh ? "正在刷新你的公司库…" : "正在发现官方招聘源…"}</span>
         <span className="ml-auto text-xs tabular-nums text-[#8a8275]">
-          已用时 {formatElapsed(discovery.elapsedSec)} · 预计 1–5 分钟
+          {hasProg ? `已刷 ${prog!.done}/${prog!.total} 家 · ` : ""}已用时 {formatElapsed(discovery.elapsedSec)}
         </span>
       </div>
       <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-black/[0.08]">
@@ -874,7 +885,7 @@ function BrowserDiscoveryProgress({ discovery }: { discovery: BrowserDiscoverySt
         })}
       </ol>
       <p className="mt-3 text-pretty text-xs leading-5 text-[#8a8275]">
-        可离开本页，发现完成后结果会自动进岗位库；回到本页或刷新即可看到新增岗位。
+        可离开本页，{isRefresh ? "刷新" : "发现"}完成后结果会自动进岗位库；回到本页或刷新即可看到新增岗位。
       </p>
     </div>
   );

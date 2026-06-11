@@ -228,3 +228,38 @@ def update_discovery_run(supabase: Client, run_id: str, **fields):
     if not fields:
         return
     supabase.table("discovery_runs").update(dict(fields)).eq("id", run_id).execute()
+
+
+def get_discovery_run(supabase: Client, run_id: str) -> Optional[dict]:
+    """按 id 取一条 discovery_runs（用于读 diagnostics.source_ids / filters）。不存在返回 None。"""
+    if not run_id:
+        return None
+    resp = (
+        supabase.table("discovery_runs").select("*").eq("id", run_id).limit(1).execute()
+    )
+    rows = resp.data or []
+    return rows[0] if rows else None
+
+
+def claim_discovery_run(supabase: Client, run_id: str) -> bool:
+    """状态认领守卫：条件更新 queued→running（仅当当前 status='queued'）。
+    返回 True=本 worker 成功认领；False=已被其它 worker 认领或非 queued（应直接退出，防双 worker 抢同一 run）。"""
+    if not run_id:
+        return False
+    resp = (
+        supabase.table("discovery_runs")
+        .update({"status": "running"})
+        .eq("id", run_id)
+        .eq("status", "queued")
+        .execute()
+    )
+    return bool(resp.data)
+
+
+def get_sources_by_ids(supabase: Client, ids: list) -> list[dict]:
+    """按 id 列表取 sources 行（company_refresh 按 scope 选定的源）。空列表返回 []。"""
+    clean = [str(x) for x in (ids or []) if str(x).strip()]
+    if not clean:
+        return []
+    resp = supabase.table("sources").select("*").in_("id", clean).execute()
+    return resp.data or []
