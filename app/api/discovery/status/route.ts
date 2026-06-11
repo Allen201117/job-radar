@@ -67,28 +67,50 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const summary = summarizeDiscoveryRunStatus(run);
+  let summary = summarizeDiscoveryRunStatus(run);
+  const diag = (run.diagnostics || {}) as any;
 
-  let jobs: any[] = [];
-  if (summary.isTerminal) {
-    const urls = extractProducedJdUrls(run);
-    if (urls.length > 0) {
-      const { data: jobRows } = await service
-        .from("jobs")
-        .select("*")
-        .in("jd_url", urls)
-        .eq("status", "active");
-      jobs = jobRows || [];
-    }
+  // 读时 staleness 自愈：running 但心跳(diagnostics.last_update_at)超 15min → CI 已死（SIGKILL 时
+  // Python except 不触发，run 会永卡 running）。无 cron，读时判定最省；并尽力回写 failed 让节流也解封。
+  const STALE_MS = 15 * 60 * 1000;
+  const lastBeat = Date.parse(
+    String(diag.last_update_at || run.started_at || run.created_at || ""),
+  );
+  if (summary.status === "running" && Number.isFinite(lastBeat) && Date.now() - lastBeat > STALE_MS) {
+    summary = { ...summary, status: "failed", phase: "failed", isTerminal: true, failureReason: "stale_no_heartbeat" };
+    service
+      .from("discovery_runs")
+      .update({ status: "failed", failure_reason: "stale_no_heartbeat", finished_at: new Date().toISOString() })
+      .eq("id", runId)
+      .eq("status", "running")
+      .then(undefined, () => {}); // best-effort，不阻塞响应
   }
+
+  // 流式：每次轮询都按 diagnostics.produced_jd_urls 回查已入库岗位（不再只在终态），让结果边跑边冒。
+  let jobs: any[] = [];
+  const urls = extractProducedJdUrls(run);
+  if (urls.length > 0) {
+    const { data: jobRows } = await service
+      .from("jobs")
+      .select("*")
+      .in("jd_url", urls)
+      .eq("status", "active");
+    jobs = jobRows || [];
+  }
+
+  const progress =
+    diag.progress && typeof diag.progress === "object"
+      ? { done: Number(diag.progress.done || 0), total: Number(diag.progress.total || 0) }
+      : null;
 
   return NextResponse.json({
     ok: true,
-    mode: "browser_discovery",
+    mode: run.mode || "browser_discovery",
     run_id: runId,
     status: summary.status,
     phase: summary.phase,
     is_terminal: summary.isTerminal,
+    progress, // { done, total } —— 前端真实进度条（替代硬编码）
     query: run.query,
     city: run.city,
     company: run.company,

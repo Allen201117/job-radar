@@ -60,25 +60,27 @@ jobs:
       - name: Install crawler dependencies
         run: pip install -r crawler/requirements.txt
 
-      # Playwright 仅按需「浏览器发现」需要；快档 httpx 跳过此步省 1-2min 安装。
-      - name: Install Playwright browser (discovery only)
-        if: ${{ github.event.inputs.mode == 'discovery' }}
+      # Playwright 仅按需「浏览器发现」/「刷新公司库」需要（含浏览器源）；快档 httpx 跳过此步省 1-2min。
+      - name: Install Playwright browser (discovery / company_refresh)
+        if: ${{ github.event.inputs.mode == 'discovery' || github.event.inputs.mode == 'company_refresh' }}
         run: python -m playwright install --with-deps chromium
 
       # 快档：schedule / 无 mode 手动触发 → 只跑 httpx 并发档 + 跳过逐岗富化(CRAWL_DETAIL_CAP=0)。
       # 瓶颈非解析，是 db.upsert_job 每岗 2 次 Supabase REST(先查后写)，全量数万岗 → 6-10万往返。
       # 公开仓库分钟无限，硬上限是单 job 6h；50min ≪ 6h，留足余量。并发 6→10 提速(更高易触 Errno 35)。
       - name: Run crawler (fast httpx tier)
-        if: ${{ github.event.inputs.mode != 'discovery' }}
+        if: ${{ github.event.inputs.mode != 'discovery' && github.event.inputs.mode != 'company_refresh' }}
         timeout-minutes: 50
         run: python crawler/run.py --tier httpx
         env:
           CRAWL_DETAIL_CAP: "0"
           CRAWL_CONCURRENCY: "10"
 
-      # 按需「浏览器发现」：保持原行为（DISCOVERY_* 触发 discovery.run_from_env，跑完即退）。
-      - name: Run on-demand discovery (browser)
-        if: ${{ github.event.inputs.mode == 'discovery' }}
+      # 按需「浏览器发现」/「刷新公司库」：DISCOVERY_* 触发 discovery.run_from_env（按 mode 路由到
+      # run_discovery / run_company_refresh），跑完即退。company_refresh 的 scope 走 DB diagnostics，
+      # 故只需 DISCOVERY_MODE + DISCOVERY_RUN_ID（其余入参为空不影响）。
+      - name: Run on-demand discovery / company refresh (browser)
+        if: ${{ github.event.inputs.mode == 'discovery' || github.event.inputs.mode == 'company_refresh' }}
         timeout-minutes: 55
         run: python crawler/run.py
         env:
