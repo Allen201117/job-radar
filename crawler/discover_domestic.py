@@ -244,6 +244,35 @@ def beisen_probe(slug: str, cn: str):
             "count": None}  # 岗位确认走 playwright，由 --confirm-beisen 或 daily-crawl 兜底
 
 
+# ───────────────────────── moka ─────────────────────────
+def moka_probe(slug: str, cn: str):
+    """moka slug-only 自动发现 oracle：GET app.mokahr.com/social-recruitment/{slug}（无 orgId）
+    → moka 自动 302 重定向到带 orgId 的完整 URL（catlhr→/catlhr/98098）。非客户 title=
+    '您访问的页面不存在'、final 无数字 orgId 段。httpx 直接拿 <title> 做 title-verify
+    （moka 页 title 含公司名，如 '宁德时代招聘 - CATL'）→ 发现阶段即可核张冠李戴。
+    岗位数走 confirm（MokaAdapter playwright），只把真有岗位的入库。"""
+    # moka 租户 slug 常带后缀（catl→catlhr / xxx→xxxrecruit）→ 试 base + 常见后缀变体。
+    # base 优先（避免误命中别家的 hr 变体）；title-verify 兜底张冠李戴。
+    for sv in (slug, f"{slug}hr", f"{slug}-hr", f"{slug}recruit", f"{slug}career", f"{slug}careers", f"{slug}job"):
+        try:
+            with _client() as cli:
+                r = cli.get(f"https://app.mokahr.com/social-recruitment/{sv}")
+                final = str(r.url)
+                title = _title(r.text)
+        except Exception:
+            continue
+        parts = final.rstrip("/").split("/")
+        org_id = parts[-1] if (parts and parts[-1].isdigit()) else None
+        if not org_id or not title:
+            continue  # 非 moka 客户（无 orgId 重定向）
+        if "不存在" in title or title.lower() in ("not found", "404"):
+            continue
+        verified = _verify(title, cn)
+        return {"platform": "moka", "host": "app.mokahr.com", "title": title, "url": final,
+                "org_id": org_id, "verified": verified, "slug_hit": sv, "count": None}
+    return None
+
+
 # ───────────────────────── sweep（并发） ─────────────────────────
 def _probe_company(t, platforms):
     """单公司：逐 slug 探各平台，每平台命中即止。返回该公司的 hits 列表。"""
@@ -269,6 +298,11 @@ def _probe_company(t, platforms):
             if r:
                 r.update(company=company, cn=cn, industry=industry, slug=slug)
                 out.append(r); found.add("beisen")
+        if "moka" in platforms and "moka" not in found:
+            r = moka_probe(slug, cn)
+            if r:
+                r.update(company=company, cn=cn, industry=industry, slug=slug)
+                out.append(r); found.add("moka")
     return out
 
 
@@ -329,6 +363,19 @@ def to_beisen_candidates(hits):
     return cands
 
 
+def to_moka_candidates(hits):
+    """moka tenant+title-verified 命中 → confirm 候选（adapter=moka，url 含 orgId）。
+    交 confirm_beisen_parallel.py(any-adapter) 用 MokaAdapter playwright 抓岗位确认，
+    只 emit 真有岗位的（质量门）。verified=False(title 不含公司名,疑张冠李戴)的不入候选。"""
+    cands = []
+    for h in hits:
+        if h.get("platform") != "moka" or not h.get("verified"):
+            continue
+        cands.append({"company": h["company"], "adapter": "moka", "url": h["url"],
+                      "industry": h.get("industry", ""), "segment": "private"})
+    return cands
+
+
 def main():
     ap = argparse.ArgumentParser(description="本土 ATS 批量发现引擎")
     ap.add_argument("--targets", required=True, help="目标 JSON 文件")
@@ -384,6 +431,15 @@ def main():
             json.dump(beisen_cands, f, ensure_ascii=False, indent=1)
         print(f"[discover] beisen 候选已写 {os.path.relpath(bpath)} → 跑: "
               f"python3 confirm_beisen_parallel.py beisen_candidates.json <NNN> 6")
+
+    if "moka" in platforms:
+        moka_cands = to_moka_candidates(hits)
+        if moka_cands:
+            mpath = os.path.join(os.path.dirname(__file__), "moka_candidates.json")
+            with open(mpath, "w", encoding="utf-8") as f:
+                json.dump(moka_cands, f, ensure_ascii=False, indent=1)
+            print(f"[discover] moka 候选已写 {os.path.relpath(mpath)}（{len(moka_cands)} 家）→ 跑: "
+                  f"python3 confirm_beisen_parallel.py moka_candidates.json <NNN> 6")
 
     if args.emit and passed:
         path = os.path.join(os.path.dirname(__file__), "..", "supabase", "migrations",
