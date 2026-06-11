@@ -20,6 +20,14 @@ UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit
 TIMEOUT = 25
 
 
+class JobClosedError(Exception):
+    """源站明确告知该岗位已撤下/招聘已关闭（如 hotjob detail 返回 state=1017）。
+
+    与「无正文」(fetcher 返回 "") 区分：这类岗永远补不到 summary 且应置 status='expired'，
+    不是死信。**只在明确关闭信号时抛**——网络错误/限流仍走普通异常（调用方计 miss 重试），不得 expired。
+    """
+
+
 # --- 外企四家族：搬 scripts/backfill_foreign_summaries.py（已 live 验证，全是公开 JSON API） ---
 def _detail_workday(row, src):
     # jd_url = {host}/{site}{ep}；detail = source_url 去尾部 /jobs 再拼 {ep}（ep 从 /job/ 起）
@@ -107,7 +115,12 @@ def _detail_hotjob(row, src):
                    headers=headers, timeout=TIMEOUT)
     if r.status_code >= 300:
         return ""
-    d = r.json().get("data") or {}
+    j = r.json() or {}
+    # 已撤岗：HTTP 200 + {"state":"1017","msg":"...招聘已经关闭...","type":"warning"}，无 data。
+    # 这是明确的过期信号（≠ 无正文），上抛由调用方置 status='expired'。
+    if str(j.get("state")) == "1017":
+        raise JobClosedError(f"hotjob postId={post_id} closed: {j.get('msg') or 'state=1017'}")
+    d = j.get("data") or {}
     return " ".join(x for x in (d.get("workContent"), d.get("serviceCondition")) if x)
 
 
