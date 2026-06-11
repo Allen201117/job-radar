@@ -104,5 +104,44 @@ class TestWorker(unittest.TestCase):
         self.assertTrue(any(f.get("id") == "existing-1" for f, _ in item_updates))
 
 
+import qianfan_search as qf
+import insight_engine as E
+
+
+class TestT3(unittest.TestCase):
+    def setUp(self):
+        self._search, self._consume, self._pipeline = qf.search, qf.budget_consume, E.run_pipeline
+        qf.budget_consume = lambda sb, n=1: 1
+
+    def tearDown(self):
+        qf.search, qf.budget_consume, E.run_pipeline = self._search, self._consume, self._pipeline
+
+    def test_enrich_company_t3_writes_culture(self):
+        qf.search = lambda q, **k: [
+            {"title": "t1", "url": "https://a.com/1", "snippet": "加班偏多", "publisher": "a.com"},
+            {"title": "t2", "url": "https://b.com/2", "snippet": "氛围不错", "publisher": "b.com"},
+        ]
+        E.run_pipeline = lambda c, d, s, client=None: [{
+            "claim": {"content": "据公开讨论该公司强度偏大", "grade": "experience",
+                      "source_idx": 0, "sample_size": "6", "quote": "加班偏多"},
+            "judge": {"verdict": "entailment", "confidence": 0.8}, "status": "active",
+        }]
+        store = {}
+        res = B.enrich_company_t3(FakeSB(store), {"id": "c1", "company": "X", "aliases": []})
+        self.assertEqual(res, "wrote")
+        items = store.get("insight_items", [])
+        self.assertTrue(any(op == "insert" and r["dimension"] == "culture" and r["origin"] == "public_web"
+                            for op, r in items))
+        self.assertTrue(store.get("insight_sources"))   # 多来源已附（过共识门）
+        self.assertTrue(any("t3_checked_at" in p for _, p in store.get("company_profiles_updates", [])))
+
+    def test_enrich_company_t3_empty_search(self):
+        qf.search = lambda q, **k: []
+        store = {}
+        res = B.enrich_company_t3(FakeSB(store), {"id": "c2", "company": "Y", "aliases": []})
+        self.assertEqual(res, "empty")
+        self.assertTrue(any("t3_checked_at" in p for _, p in store.get("company_profiles_updates", [])))
+
+
 if __name__ == "__main__":
     unittest.main()
