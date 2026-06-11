@@ -55,6 +55,17 @@ class HotjobDetailTest(unittest.TestCase):
         src = {"source_url": "https://wecruit.hotjob.cn/SUx/pb/social.html", "adapter_name": "hotjob"}
         self.assertEqual(enrich.ENRICH_REGISTRY["hotjob"](row, src), "")
 
+    def test_closed_signal_raises_jobclosed(self):
+        # 源站已撤岗：HTTP 200 + {"state":"1017","msg":"...已经关闭..."}，无 data/workContent。
+        # 必须区别于「无正文」(返回"")——这是 expired 信号，不是死信。
+        row = {"jd_url": "https://wecruit.hotjob.cn/SU1/pb/posDetail.html?postId=P1&postType=society"}
+        src = {"source_url": "https://wecruit.hotjob.cn/SU1/pb/social.html", "adapter_name": "hotjob"}
+        closed = {"msg": "该职位招聘已经关闭，请查看其他职位", "state": "1017", "type": "warning"}
+        with mock.patch.object(enrich.httpx, "post",
+                               lambda url, data=None, headers=None, timeout=None: _Resp(closed)):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich.ENRICH_REGISTRY["hotjob"](row, src)
+
 
 class WorkdayDetailTest(unittest.TestCase):
     def test_reverses_to_cxs_endpoint(self):
@@ -165,6 +176,24 @@ class DrainRowTest(unittest.TestCase):
         with mock.patch.object(enrich_backlog.enrich, "enrich_one", lambda a, r, s: "足够长的真实职位描述正文内容"):
             res = enrich_backlog.enrich_row(RaiseSB(), row, src)
         self.assertEqual(res, "err")
+
+    def test_closed_signal_sets_expired_not_failcount(self):
+        # fetcher 报源站已关闭（JobClosedError）→ status='expired'，不当死信、不动 summary/fail_count。
+        sb = _FakeSB()
+        row = {"id": "j6", "source_id": "s", "title": "x", "jd_url": "u", "enrich_fail_count": 1}
+        src = {"adapter_name": "hotjob", "source_url": "x"}
+
+        def closed(a, r, s):
+            raise enrich.JobClosedError("hotjob state=1017")
+
+        with mock.patch.object(enrich_backlog.enrich, "enrich_one", closed):
+            res = enrich_backlog.enrich_row(sb, row, src)
+        self.assertEqual(res, "expired")
+        patch = sb.updates["j6"]
+        self.assertEqual(patch["status"], "expired")
+        self.assertNotIn("enrich_fail_count", patch)
+        self.assertNotIn("summary", patch)
+        self.assertIn("enrich_checked_at", patch)
 
     def test_dry_run_does_not_write(self):
         sb = _FakeSB()

@@ -87,24 +87,35 @@ def fetch_queue(sb, adapters, limit=0):
 
 
 def enrich_row(sb, row, src, dry_run=False):
-    """富化单行并回写。返回 'filled' | 'miss'（无果/死信+1）。永不抛（异常 → miss）。"""
+    """富化单行并回写。返回 'filled' | 'miss' | 'expired' | 'err'。永不抛。
+    - 'expired'：fetcher 报源站已撤岗（JobClosedError，如 hotjob state=1017）→ 置 status='expired'，
+      不再当死信富化（这类「假 active」岗永远补不到 summary 且污染岗位库）。
+    - 'miss'：无正文 / 网络异常 → enrich_fail_count+1（网络错误走重试，不 expired）。"""
     adapter = (src or {}).get("adapter_name") or ""
+    closed = False
     try:
         body = enrich.enrich_one(adapter, row, src)
+    except enrich.JobClosedError:
+        closed = True
+        body = ""
     except Exception:
         body = ""
-    summary = normalizer.clean_summary(body) if body else None
-    if summary:
-        patch = {"summary": summary, "enrich_checked_at": _now()}
-        if not row.get("job_type"):
-            jt = normalizer.extract_job_type(row.get("title") or "", summary)
-            if jt:
-                patch["job_type"] = jt
-        result = "filled"
+    if closed:
+        patch = {"status": "expired", "enrich_checked_at": _now()}
+        result = "expired"
     else:
-        patch = {"enrich_fail_count": (row.get("enrich_fail_count") or 0) + 1,
-                 "enrich_checked_at": _now()}
-        result = "miss"
+        summary = normalizer.clean_summary(body) if body else None
+        if summary:
+            patch = {"summary": summary, "enrich_checked_at": _now()}
+            if not row.get("job_type"):
+                jt = normalizer.extract_job_type(row.get("title") or "", summary)
+                if jt:
+                    patch["job_type"] = jt
+            result = "filled"
+        else:
+            patch = {"enrich_fail_count": (row.get("enrich_fail_count") or 0) + 1,
+                     "enrich_checked_at": _now()}
+            result = "miss"
     if dry_run:
         return result
     try:
@@ -122,14 +133,14 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
     rows, smap = fetch_queue(sb, adapters, limit)
     print(f"队列待富化（httpx 类，adapter={adapter or '全部'}）：{len(rows)}")
     if not rows:
-        return {"filled": 0, "miss": 0, "err": 0}
+        return {"filled": 0, "miss": 0, "expired": 0, "err": 0}
     # 按 source 轮转交错，避免并发线程集中打同一租户
     by_src = {}
     for r in rows:
         by_src.setdefault(r["source_id"], []).append(r)
     rows = [r for tup in zip_longest(*by_src.values()) for r in tup if r]
 
-    stat = {"filled": 0, "miss": 0, "err": 0}
+    stat = {"filled": 0, "miss": 0, "expired": 0, "err": 0}
     lock = threading.Lock()
 
     def work(row):
@@ -142,15 +153,16 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
             res = "err"  # 兜底：任何意外都不许炸穿 ex.map（否则掀翻整批，本 drain 实锤过）
         with lock:
             stat[res] += 1
-            done = stat["filled"] + stat["miss"] + stat["err"]
+            done = stat["filled"] + stat["miss"] + stat["expired"] + stat["err"]
             if done % 200 == 0:
-                print(f"  …{done}/{len(rows)}  filled={stat['filled']} miss={stat['miss']} err={stat['err']}")
+                print(f"  …{done}/{len(rows)}  filled={stat['filled']} miss={stat['miss']} "
+                      f"expired={stat['expired']} err={stat['err']}")
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         list(ex.map(work, rows))
 
-    print(f"完成：填充 {stat['filled']}，无果/死信+1 {stat['miss']}，写库错(留队列重试) {stat['err']}"
-          f"{'（dry-run 未写库）' if dry_run else ''}")
+    print(f"完成：填充 {stat['filled']}，无果/死信+1 {stat['miss']}，源站撤岗→expired {stat['expired']}，"
+          f"写库错(留队列重试) {stat['err']}{'（dry-run 未写库）' if dry_run else ''}")
     return stat
 
 
