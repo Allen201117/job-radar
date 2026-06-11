@@ -1,0 +1,39 @@
+name: insight-enrich-t3
+# 职业洞察 T3 经验层：百度千帆检索 → 验证引擎（writer 抽取 → judge entailment → 共识）→ culture 洞察。
+# 受千帆 50/日额度：qianfan_usage 持久计数自封顶（QIANFAN_DAILY_CAP，默认 40，留 ~10 给 /api/discovery）。
+# 依赖：迁移 137 已应用；**需在 repo Settings→Secrets 加 BAIDU_QIANFAN_API_KEY + SILICONFLOW_API_KEY**（T2 不需要这俩）。
+# 与 T2(insight-enrich 20:30)/enrich-* cron 错开。
+
+on:
+  schedule:
+    - cron: "30 21 * * *"   # 每日 UTC 21:30
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "本轮最多富化多少公司（0=吃满当日剩余额度）"
+        required: false
+        default: "0"
+
+jobs:
+  enrich-t3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      BAIDU_QIANFAN_API_KEY: ${{ secrets.BAIDU_QIANFAN_API_KEY }}
+      SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      - name: Drain T3 experience backlog (Qianfan + engine)
+        working-directory: crawler
+        run: python3 insight_backlog.py --t3 --limit "${{ github.event.inputs.limit || '0' }}"
