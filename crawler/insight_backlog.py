@@ -19,6 +19,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 
 import db
+import insight_engine as E
+import qianfan_search as qf
 import wikidata
 
 MAX_FAIL = 3        # 死信阈值：连续失败 ≥ 此值不再入队
@@ -159,11 +161,125 @@ def drain(sb, limit=0, workers=4, make_sb=None):
     return stat
 
 
+# ============================================================
+# T3 经验层：百度千帆检索 → 验证引擎（接地→判官→共识）→ 写 active/pending_review
+# 千帆受 50/日额度：drain_t3 串行 + qianfan_usage 持久预算守门，绝不冲破。设计 §6/§16。
+# ============================================================
+T3_TTL_DAYS = 180  # 经验类复核更慢
+T3_QUERY = "{c} 工作体验 加班 文化 薪资 待遇 怎么样"
+
+
+def _pick_sources(results, claim, max_n=3):
+    """给条目选附来源：被引用那条 + 其它不同 publisher 的，凑 ≥2 个不同 publisher 以过共识门。"""
+    idx = claim.get("source_idx")
+    chosen, seen = [], set()
+    if isinstance(idx, int) and 0 <= idx < len(results):
+        chosen.append(results[idx]); seen.add(results[idx].get("publisher"))
+    for r in results:
+        if len(chosen) >= max_n:
+            break
+        if r in chosen or r.get("publisher") in seen:
+            continue
+        chosen.append(r); seen.add(r.get("publisher"))
+    return chosen
+
+
+def write_experience(sb, company_id, claim, sources, judge, status):
+    """写一条 T3 经验条目（dimension=culture, origin=public_web）+ 多来源（去标识、仅短 excerpt，禁整段 UGC）。"""
+    item_id = str(uuid.uuid4())
+    sb.table("insight_items").insert({
+        "id": item_id, "company_id": company_id, "dimension": "culture",
+        "grade": claim.get("grade") or "experience",
+        "title": claim.get("title") or "公开讨论 · 群体印象",
+        "content": claim.get("content"),
+        "sample_size": int(claim["sample_size"]) if str(claim.get("sample_size") or "").isdigit() else None,
+        "payload": {}, "origin": "public_web", "deidentified": True, "status": status,
+        "time_window": claim.get("time_window") or f"{datetime.now(timezone.utc).year} 观察",
+        "verification": {"verdict": judge.get("verdict"), "confidence": judge.get("confidence")},
+        "last_verified_at": _now(),
+    }).execute()
+    for s in sources:
+        sid = str(uuid.uuid4())
+        sb.table("insight_sources").insert({
+            "id": sid, "url": s["url"], "publisher": s.get("publisher"),
+            "source_kind": "community_deidentified",
+            "excerpt": (claim.get("quote") or s.get("snippet") or "")[:200],
+            "deidentified": True,
+        }).execute()
+        sb.table("insight_item_sources").insert({"item_id": item_id, "source_id": sid}).execute()
+
+
+def fetch_t3_queue(sb, limit):
+    """T3 队列：notable（已 T2 富化、founded_year 非空）+ t3 待处理/超期 + 未超死信。"""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=T3_TTL_DAYS)).isoformat()
+    q = (sb.table("company_profiles").select("id,company,aliases,t3_fail_count")
+         .lt("t3_fail_count", MAX_FAIL)
+         .not_.is_("founded_year", "null")
+         .or_(f"t3_checked_at.is.null,t3_checked_at.lt.{cutoff}"))
+    if limit:
+        q = q.limit(limit)
+    return (q.execute().data) or []
+
+
+def enrich_company_t3(sb, profile):
+    """单公司 T3：千帆检索 → run_pipeline(culture) → 写。返回 'wrote' | 'empty' | 'err'。永不抛。"""
+    try:
+        results = qf.search(T3_QUERY.format(c=profile["company"]))
+        qf.budget_consume(sb, 1)  # 本次检索消耗 1 额度（无论结果多少）
+    except Exception:
+        results = []
+    if not results:
+        try:
+            sb.table("company_profiles").update({"t3_checked_at": _now()}).eq("id", profile["id"]).execute()
+        except Exception:
+            return "err"
+        return "empty"
+    try:
+        for entry in E.run_pipeline(profile["company"], "culture", results):
+            if entry["status"] == "drop":
+                continue
+            write_experience(sb, profile["id"], entry["claim"],
+                             _pick_sources(results, entry["claim"]), entry.get("judge") or {}, entry["status"])
+        sb.table("company_profiles").update({"t3_checked_at": _now()}).eq("id", profile["id"]).execute()
+        return "wrote"
+    except Exception:
+        try:
+            sb.table("company_profiles").update({
+                "t3_fail_count": (profile.get("t3_fail_count") or 0) + 1, "t3_checked_at": _now(),
+            }).eq("id", profile["id"]).execute()
+        except Exception:
+            pass
+        return "err"
+
+
+def drain_t3(sb, limit=0):
+    """T3 drain（千帆受额度 → 串行 + 预算守门，绝不冲破 50/日）。"""
+    if not qf.is_configured():
+        print("✗ 千帆未配置或被 BAIDU_QIANFAN_SEARCH_DISABLED 熔断 → 跳过 T3")
+        return {"wrote": 0, "empty": 0, "err": 0, "budget_left": 0}
+    remaining = qf.budget_remaining(sb)
+    print(f"千帆当日剩余额度：{remaining}（cap={qf.DAILY_CAP}）")
+    if remaining <= 0:
+        return {"wrote": 0, "empty": 0, "err": 0, "budget_left": 0}
+    cap = remaining if not limit else min(remaining, limit)
+    rows = fetch_t3_queue(sb, cap)
+    print(f"T3 队列（notable·待富化）取 {len(rows)} 家（额度封顶 {cap}）")
+    stat = {"wrote": 0, "empty": 0, "err": 0}
+    for p in rows:
+        if qf.budget_remaining(sb) <= 0:
+            print("额度用尽，停"); break
+        stat[enrich_company_t3(sb, p)] += 1
+    stat["budget_left"] = qf.budget_remaining(sb)
+    print(f"T3 完成：{stat}")
+    return stat
+
+
 def main():
-    ap = argparse.ArgumentParser(description="职业洞察 T2 Wikidata 富化 drain")
+    ap = argparse.ArgumentParser(description="职业洞察富化 drain（T2 Wikidata 默认 / --t3 经验层）")
     ap.add_argument("--seed-from-sources", action="store_true", help="先给所有源公司建画像占位")
-    ap.add_argument("--limit", type=int, default=0, help="本次最多富化多少公司（0=全部待处理）")
-    ap.add_argument("--workers", type=int, default=4, help="并发线程数（对 Wikidata 保持礼貌，建议 ≤6）")
+    ap.add_argument("--t3", action="store_true", help="跑 T3 经验层（千帆检索，受 50/日额度）而非 T2")
+    ap.add_argument("--limit", type=int, default=0, help="本次最多处理多少公司（0=全部/额度上限）")
+    ap.add_argument("--workers", type=int, default=4, help="T2 并发线程数（对 Wikidata 礼貌，建议 ≤6）")
     args = ap.parse_args()
 
     if not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SERVICE_ROLE_KEY")):
@@ -171,6 +287,9 @@ def main():
         sys.exit(1)
 
     sb = db.get_supabase()
+    if args.t3:
+        drain_t3(sb, limit=args.limit)
+        return
     if args.seed_from_sources:
         seed_from_sources(sb)
     drain(sb, limit=args.limit, workers=args.workers)
