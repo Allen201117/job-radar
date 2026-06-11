@@ -182,6 +182,12 @@ export interface CompanyProfile {
   last_verified_at: string | null;
   created_at: string;
   updated_at: string;
+  // 021 行业 + 135 官方事实（T2 Wikidata 回填，均可选）
+  industry?: string | null;
+  founded_year?: number | null;
+  headcount_band?: string | null;
+  funding_stage?: string | null;
+  hq_location?: string | null;
 }
 
 export interface InsightSource {
