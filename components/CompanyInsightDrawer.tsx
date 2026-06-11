@@ -26,6 +26,7 @@ import type {
   InsightItemView,
 } from "@/lib/types";
 import { freshnessFromVerifiedAt, type FreshnessLevel } from "@/lib/insight-verification";
+import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
 
 // 新鲜度分级配色：越旧越偏琥珀，提示用户谨慎参考。
@@ -117,6 +118,7 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
 
   useEffect(() => {
     if (!open) return;
+    track("insight_drawer_open", { company });
     let alive = true;
     setLoading(true);
     fetchCompanyInsights(company)
