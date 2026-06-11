@@ -173,6 +173,124 @@ class UpsertRaceTest(unittest.TestCase):
             dbmod.upsert_job(SB(), {"source_id": "s", "jd_url": "https://x/2", "title": "t"})
 
 
+class BatchUpsertTest(unittest.TestCase):
+    """db.upsert_jobs_batch：批量 upsert 打回快档 <30min（替代逐岗 2 次 REST）。
+    验证 created/updated 计数、既有走主键 upsert、批内去重 last-wins、23505 退回逐行兜底。"""
+
+    def _sb(self, select_rounds, insert_raises=False):
+        rec = {"inserted": [], "upserted": [], "updated": 0}
+
+        class R:
+            def __init__(self, data):
+                self.data = data
+
+        class Q:
+            def __init__(self):
+                self.mode = None
+                self.payload = None
+
+            def select(self, *a):
+                self.mode = "select"
+                return self
+
+            def in_(self, *a):
+                return self
+
+            def eq(self, *a):
+                return self
+
+            def limit(self, *a):
+                return self
+
+            def insert(self, payload):
+                self.mode = "insert"
+                self.payload = payload
+                return self
+
+            def upsert(self, payload, on_conflict=None):
+                self.mode = "upsert"
+                self.payload = payload
+                return self
+
+            def update(self, payload):
+                self.mode = "update"
+                self.payload = payload
+                return self
+
+            def execute(self):
+                if self.mode == "select":
+                    return R(select_rounds.pop(0) if select_rounds else [])
+                if self.mode == "insert":
+                    if insert_raises:
+                        raise Exception('duplicate key value violates unique constraint '
+                                        '"jobs_company_title_location_jd_url_key" (23505)')
+                    rec["inserted"].append(self.payload)
+                    return R([])
+                if self.mode == "upsert":
+                    rec["upserted"].append(self.payload)
+                    return R([])
+                rec["updated"] += 1
+                return R([])
+
+        class SB:
+            def table(self, name):
+                return Q()
+
+        return SB(), rec
+
+    def test_all_new_batch_inserted(self):
+        import db as dbmod
+        sb, rec = self._sb(select_rounds=[[]])  # 批量 select 查不到 → 全 new
+        jobs = [
+            {"source_id": "s", "jd_url": "https://x/1", "company": "C", "title": "t1"},
+            {"source_id": "s", "jd_url": "https://x/2", "company": "C", "title": "t2"},
+        ]
+        created, updated = dbmod.upsert_jobs_batch(sb, jobs)
+        self.assertEqual((created, updated), (2, 0))
+        self.assertEqual(len(rec["inserted"]), 1)     # 一次批量 insert（非逐行）
+        self.assertEqual(len(rec["inserted"][0]), 2)  # 含 2 行
+        self.assertEqual(rec["upserted"], [])
+
+    def test_existing_go_through_pk_upsert(self):
+        import db as dbmod
+        sb, rec = self._sb(select_rounds=[[
+            {"id": "j1", "source_id": "s", "jd_url": "https://x/1"},
+            {"id": "j2", "source_id": "s", "jd_url": "https://x/2"},
+        ]])
+        jobs = [
+            {"source_id": "s", "jd_url": "https://x/1", "company": "C", "title": "t1"},
+            {"source_id": "s", "jd_url": "https://x/2", "company": "C", "title": "t2"},
+        ]
+        created, updated = dbmod.upsert_jobs_batch(sb, jobs)
+        self.assertEqual((created, updated), (0, 2))
+        self.assertEqual(len(rec["upserted"]), 1)            # 一次批量 upsert
+        self.assertEqual(rec["upserted"][0][0]["id"], "j1")  # 带既有主键 id
+        self.assertEqual(rec["inserted"], [])
+
+    def test_intra_batch_dedup_last_wins(self):
+        import db as dbmod
+        sb, rec = self._sb(select_rounds=[[]])
+        jobs = [  # 同 (source_id, jd_url) 两次 → 去重成 1 行，last-wins
+            {"source_id": "s", "jd_url": "https://x/1", "company": "C", "title": "旧"},
+            {"source_id": "s", "jd_url": "https://x/1", "company": "C", "title": "新"},
+            {"source_id": "s", "jd_url": "https://x/2", "company": "C", "title": "t2"},
+        ]
+        created, updated = dbmod.upsert_jobs_batch(sb, jobs)
+        self.assertEqual((created, updated), (2, 0))
+        self.assertEqual(len(rec["inserted"][0]), 2)
+        titles = {r["title"] for r in rec["inserted"][0]}
+        self.assertIn("新", titles)
+        self.assertNotIn("旧", titles)
+
+    def test_insert_23505_falls_back_to_rowwise(self):
+        import db as dbmod
+        # 批量 insert 撞 23505 → 退回逐行 upsert_job：其按 jd_url 重查命中别 worker 刚插的行 → update。
+        sb, rec = self._sb(select_rounds=[[], [{"id": "jX"}]], insert_raises=True)
+        jobs = [{"source_id": "s", "jd_url": "https://x/1", "company": "C", "title": "t1"}]
+        created, updated = dbmod.upsert_jobs_batch(sb, jobs)
+        self.assertEqual((created, updated), (0, 1))  # 兜底走 update
+
+
 class PartitionByTierTest(unittest.TestCase):
     def test_split_and_order_preserved(self):
         sources = [
@@ -211,13 +329,13 @@ class ProcessOneSourceTest(unittest.TestCase):
         self._orig = {
             "create": run.db.create_crawl_run,
             "update": run.db.update_crawl_run,
-            "upsert": run.db.upsert_job,
+            "upsert_batch": run.db.upsert_jobs_batch,
             "ts": run.db.update_source_timestamp,
             "robots": run.check_robots,
         }
         run.db.create_crawl_run = lambda sb, sid: "run-1"
         run.db.update_crawl_run = lambda *a, **k: None
-        run.db.upsert_job = lambda sb, data: "created"
+        run.db.upsert_jobs_batch = lambda sb, jobs: (len(jobs), 0)
         run.db.update_source_timestamp = lambda sb, sid: None
         run.check_robots = lambda url: {"allowed": True, "reason": ""}
         run.ADAPTERS["_fake_httpx"] = _FakeAdapter()
@@ -225,7 +343,7 @@ class ProcessOneSourceTest(unittest.TestCase):
     def tearDown(self):
         run.db.create_crawl_run = self._orig["create"]
         run.db.update_crawl_run = self._orig["update"]
-        run.db.upsert_job = self._orig["upsert"]
+        run.db.upsert_jobs_batch = self._orig["upsert_batch"]
         run.db.update_source_timestamp = self._orig["ts"]
         run.check_robots = self._orig["robots"]
         run.ADAPTERS.pop("_fake_httpx", None)
@@ -294,7 +412,7 @@ class RunCrawlIntegrationTest(unittest.TestCase):
         self._orig = {
             "get_sb": run.db.get_supabase, "get_src": run.db.get_sources,
             "create": run.db.create_crawl_run, "update": run.db.update_crawl_run,
-            "upsert": run.db.upsert_job, "ts": run.db.update_source_timestamp,
+            "upsert_batch": run.db.upsert_jobs_batch, "ts": run.db.update_source_timestamp,
             "robots": run.check_robots,
         }
         run._HTTPX_SAFE_ADAPTERS.add("_fake_httpx")  # 让假 httpx 源进并发档
@@ -306,7 +424,7 @@ class RunCrawlIntegrationTest(unittest.TestCase):
         ]
         run.db.create_crawl_run = lambda sb, sid: f"run-{sid}"
         run.db.update_crawl_run = lambda *a, **k: None
-        run.db.upsert_job = lambda sb, data: "created"
+        run.db.upsert_jobs_batch = lambda sb, jobs: (len(jobs), 0)
         run.db.update_source_timestamp = lambda sb, sid: None
         run.check_robots = lambda url: {"allowed": True, "reason": ""}
         run.ADAPTERS["_fake_httpx"] = _FakeAdapter()
@@ -319,7 +437,7 @@ class RunCrawlIntegrationTest(unittest.TestCase):
         run.db.get_sources = self._orig["get_src"]
         run.db.create_crawl_run = self._orig["create"]
         run.db.update_crawl_run = self._orig["update"]
-        run.db.upsert_job = self._orig["upsert"]
+        run.db.upsert_jobs_batch = self._orig["upsert_batch"]
         run.db.update_source_timestamp = self._orig["ts"]
         run.check_robots = self._orig["robots"]
         run.ADAPTERS.pop("_fake_httpx", None)

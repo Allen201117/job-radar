@@ -236,9 +236,10 @@ def _process_one_source(source, supabase) -> dict:
             )
             return {"status": "no_valid", "created": 0, "updated": 0}
 
-        # 5. normalize & upsert
-        created = 0
-        updated = 0
+        # 5. normalize & 批量 upsert
+        #    逐岗 upsert 每岗 2 次 Supabase REST（先查后写）是快档 ~30min 瓶颈（全量数万岗→6-10万往返）。
+        #    整源攒成一批，db.upsert_jobs_batch 压成「1 次批量 select + 分块 upsert/insert」。
+        job_batch = []
         for raw in valid_jobs:
             title = normalizer.clean_title(raw.title)
             location = normalizer.clean_location(raw.location)
@@ -269,11 +270,9 @@ def _process_one_source(source, supabase) -> dict:
                 "status": "active",
             }
 
-            result = db.upsert_job(supabase, job_data)
-            if result == "created":
-                created += 1
-            else:
-                updated += 1
+            job_batch.append(job_data)
+
+        created, updated = db.upsert_jobs_batch(supabase, job_batch)
 
         # 6. update source timestamp
         db.update_source_timestamp(supabase, source_id)
