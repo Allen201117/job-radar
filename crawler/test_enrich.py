@@ -82,12 +82,67 @@ class WorkdayDetailTest(unittest.TestCase):
         self.assertEqual(cap["url"], "https://co.wd1.myworkdayjobs.com/wday/cxs/co/Careers/job/Beijing/Eng_R-1")
         self.assertIn("do things", body)
 
-    def test_404_returns_empty(self):
+    def test_404_raises_jobclosed(self):
+        # Workday cxs：岗位下架后 /job/{path} 返回 404 = 撤岗信号 → expired（≠ 无正文）。
         row = {"jd_url": "https://co.wd1.myworkdayjobs.com/en-US/Careers/job/X/R-2"}
         src = {"source_url": "https://co.wd1.myworkdayjobs.com/wday/cxs/co/Careers/jobs"}
-        with mock.patch.object(enrich.httpx, "get",
-                               lambda *a, **k: _Resp({}, status=404)):
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=404)):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich.ENRICH_REGISTRY["workday"](row, src)
+
+    def test_transient_5xx_returns_empty_not_closed(self):
+        # 5xx/限流 = 瞬时错误，必须走 miss 重试，绝不能 expired（否则误杀活岗）。
+        row = {"jd_url": "https://co.wd1.myworkdayjobs.com/en-US/Careers/job/X/R-2"}
+        src = {"source_url": "https://co.wd1.myworkdayjobs.com/wday/cxs/co/Careers/jobs"}
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=503)):
             self.assertEqual(enrich.ENRICH_REGISTRY["workday"](row, src), "")
+
+
+class OracleDetailTest(unittest.TestCase):
+    _JD = "https://co.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/12345"
+
+    def test_reverses_to_rest_endpoint(self):
+        row = {"jd_url": self._JD}
+        src = {"source_url": "x", "adapter_name": "oracle"}
+        cap = {}
+
+        def fake_get(url, headers=None, timeout=None, params=None):
+            cap["url"] = url
+            return _Resp({"items": [{"ExternalDescriptionStr": "做 oracle 的事"}]})
+
+        with mock.patch.object(enrich.httpx, "get", fake_get):
+            body = enrich.ENRICH_REGISTRY["oracle"](row, src)
+        self.assertIn("recruitingCEJobRequisitionDetails", cap["url"])
+        self.assertIn('Id="12345"', cap["url"])
+        self.assertIn("siteNumber=CX_1", cap["url"])
+        self.assertIn("做 oracle 的事", body)
+
+    def test_empty_items_raises_jobclosed(self):
+        # finder by Id 返回 HTTP 200 + items:[] = 该 requisition 已撤 → expired。
+        row = {"jd_url": self._JD}
+        src = {"source_url": "x", "adapter_name": "oracle"}
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({"items": []})):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich.ENRICH_REGISTRY["oracle"](row, src)
+
+    def test_404_raises_jobclosed(self):
+        row = {"jd_url": self._JD}
+        src = {"source_url": "x", "adapter_name": "oracle"}
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=404)):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich.ENRICH_REGISTRY["oracle"](row, src)
+
+    def test_transient_5xx_returns_empty_not_closed(self):
+        row = {"jd_url": self._JD}
+        src = {"source_url": "x", "adapter_name": "oracle"}
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=503)):
+            self.assertEqual(enrich.ENRICH_REGISTRY["oracle"](row, src), "")
+
+    def test_unmatched_jd_url_returns_empty_not_closed(self):
+        # jd_url 反推不出 site/job（解析失败）→ 返回 ""（miss），不得当撤岗 expired。
+        row = {"jd_url": "https://co.fa.us2.oraclecloud.com/some/other/path"}
+        src = {"source_url": "x", "adapter_name": "oracle"}
+        self.assertEqual(enrich.ENRICH_REGISTRY["oracle"](row, src), "")
 
 
 class RegistryTest(unittest.TestCase):
