@@ -106,6 +106,38 @@ def _detail_smartrecruiters(row, src):
     return " ".join(x for x in parts if x)
 
 
+def _detail_greenhouse(row, src):
+    # board token 取自 source_url(.../boards/{token}/jobs)，job id 取自 jd_url(.../jobs/{id})；
+    # detail = 公开 boards-api（无鉴权）。撤岗 → 404（_raise_if_gone）。content 为 HTML 实体，clean_summary 解码。
+    board = re.search(r"/boards/([^/]+)/jobs", src.get("source_url") or "")
+    jid = re.search(r"/jobs/(\d+)", row["jd_url"])
+    if not (board and jid):
+        return ""
+    r = httpx.get(f"https://boards-api.greenhouse.io/v1/boards/{board.group(1)}/jobs/{jid.group(1)}",
+                  headers=UA, timeout=TIMEOUT)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    return r.json().get("content") or ""
+
+
+def _detail_lever(row, src):
+    # site 取自 source_url(.../postings/{site})，id = jd_url(jobs.lever.co/{site}/{id}) 末段；
+    # detail = 公开 postings API（无鉴权）。撤岗 → 404。正文 = description + lists 各段 content + additional。
+    site = re.search(r"/postings/([^/?]+)", src.get("source_url") or "")
+    segs = [x for x in urlparse(row["jd_url"]).path.split("/") if x]
+    if not (site and segs):
+        return ""
+    r = httpx.get(f"https://api.lever.co/v0/postings/{site.group(1)}/{segs[-1]}",
+                  headers=UA, timeout=TIMEOUT)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    d = r.json() or {}
+    lists = " ".join((x.get("content") or "") for x in (d.get("lists") or []))
+    return " ".join(x for x in (d.get("description"), lists, d.get("additional")) if x)
+
+
 # --- hotjob：jd_url = {origin}/{suite}/pb/posDetail.html?postId=&postType= ---
 # 详情接口 = {origin}/wecruit/positionInfo/listPositionDetail/{suite}，POST postId + recruitType。
 # recruitType 由 postType 推回（与 adapters/hotjob.py 的 _CHANNEL_BY_PAGE 同口径）。
@@ -145,6 +177,8 @@ ENRICH_REGISTRY = {
     "oracle": _detail_oracle,
     "eightfold": _detail_eightfold,
     "smartrecruiters": _detail_smartrecruiters,
+    "greenhouse": _detail_greenhouse,
+    "lever": _detail_lever,
     "hotjob": _detail_hotjob,
 }
 

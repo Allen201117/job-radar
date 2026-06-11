@@ -174,6 +174,63 @@ class SmartRecruitersDetailTest(unittest.TestCase):
             self.assertEqual(enrich.ENRICH_REGISTRY["smartrecruiters"]({"jd_url": self._JD}, self._SRC), "")
 
 
+class GreenhouseDetailTest(unittest.TestCase):
+    _ROW = {"jd_url": "https://boards.greenhouse.io/acme/jobs/4567890"}
+    _SRC = {"source_url": "https://boards-api.greenhouse.io/v1/boards/acme/jobs?content=true",
+            "adapter_name": "greenhouse"}
+
+    def test_reverses_to_boards_api(self):
+        cap = {}
+
+        def fake_get(url, headers=None, timeout=None, params=None):
+            cap["url"] = url
+            return _Resp({"content": "&lt;p&gt;Build things&lt;/p&gt;"})
+
+        with mock.patch.object(enrich.httpx, "get", fake_get):
+            body = enrich.ENRICH_REGISTRY["greenhouse"](self._ROW, self._SRC)
+        self.assertEqual(cap["url"], "https://boards-api.greenhouse.io/v1/boards/acme/jobs/4567890")
+        self.assertIn("Build things", body)
+
+    def test_404_raises_jobclosed(self):
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=404)):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich.ENRICH_REGISTRY["greenhouse"](self._ROW, self._SRC)
+
+    def test_transient_5xx_returns_empty_not_closed(self):
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=503)):
+            self.assertEqual(enrich.ENRICH_REGISTRY["greenhouse"](self._ROW, self._SRC), "")
+
+
+class LeverDetailTest(unittest.TestCase):
+    _ROW = {"jd_url": "https://jobs.lever.co/acme/a1b2c3d4-1111-2222-3333-444455556666"}
+    _SRC = {"source_url": "https://api.lever.co/v0/postings/acme?mode=json", "adapter_name": "lever"}
+
+    def test_reverses_to_postings_api(self):
+        cap = {}
+
+        def fake_get(url, headers=None, timeout=None, params=None):
+            cap["url"] = url
+            return _Resp({"description": "<p>do work</p>",
+                          "lists": [{"text": "Reqs", "content": "<li>python</li>"}],
+                          "additional": "<p>perks</p>"})
+
+        with mock.patch.object(enrich.httpx, "get", fake_get):
+            body = enrich.ENRICH_REGISTRY["lever"](self._ROW, self._SRC)
+        self.assertEqual(cap["url"],
+                         "https://api.lever.co/v0/postings/acme/a1b2c3d4-1111-2222-3333-444455556666")
+        self.assertIn("do work", body)
+        self.assertIn("python", body)
+
+    def test_404_raises_jobclosed(self):
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=404)):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich.ENRICH_REGISTRY["lever"](self._ROW, self._SRC)
+
+    def test_transient_5xx_returns_empty_not_closed(self):
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=502)):
+            self.assertEqual(enrich.ENRICH_REGISTRY["lever"](self._ROW, self._SRC), "")
+
+
 class GoneHelperTest(unittest.TestCase):
     """通用撤岗约定：任何 fetcher 的 detail 端点 404/410 都判撤岗（杜绝逐源遗漏）。"""
     def test_raise_if_gone_404_410(self):
