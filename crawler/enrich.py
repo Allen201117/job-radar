@@ -36,6 +36,9 @@ def _detail_workday(row, src):
         return ""
     cxs_base = re.sub(r"/jobs/?$", "", src["source_url"])
     r = httpx.get(f"{cxs_base}{m.group(1)}", headers=UA, timeout=TIMEOUT)
+    if r.status_code == 404:
+        # 岗位下架后 cxs 的 /job/{path} 返回 404 = 撤岗信号（仅 404，不含 5xx/429 瞬时错误）。
+        raise JobClosedError(f"workday job gone (404): {m.group(1)}")
     if r.status_code >= 300:
         return ""
     return (r.json().get("jobPostingInfo", {}) or {}).get("jobDescription") or ""
@@ -50,11 +53,15 @@ def _detail_oracle(row, src):
     url = (f"{p.scheme}://{p.netloc}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails"
            f'?onlyData=true&expand=all&finder=ById;Id="{m.group(2)}",siteNumber={m.group(1)}')
     r = httpx.get(url, headers=UA, timeout=TIMEOUT)
+    if r.status_code == 404:
+        raise JobClosedError(f"oracle requisition gone (404): {m.group(2)}")
     if r.status_code >= 300:
         return ""
     items = r.json().get("items", []) or []
     if not items:
-        return ""
+        # finder by Id 返回 200 + items:[] = 该 requisition 已从 CE 撤下 = 撤岗信号。
+        # （此处必是 2xx：非 2xx 已在上面拦截走 miss 重试，不会误判瞬时错误为撤岗。）
+        raise JobClosedError(f"oracle requisition gone (items=0): {m.group(2)}")
     it = items[0]
     parts = [it.get("ExternalDescriptionStr") or it.get("ShortDescriptionStr"),
              it.get("ExternalResponsibilitiesStr"), it.get("ExternalQualificationsStr")]
