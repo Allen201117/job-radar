@@ -17,89 +17,18 @@
 """
 import argparse
 import os
-import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from itertools import zip_longest
-from urllib.parse import urlparse, parse_qs
-
-import httpx
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "crawler"))
 import db  # noqa: E402
+import enrich  # noqa: E402
 import normalizer  # noqa: E402
 
 ADAPTERS = ("workday", "oracle", "eightfold", "smartrecruiters")
-UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-      "Accept": "application/json"}
-TIMEOUT = 25
-
-
-def _detail_workday(row, src) -> str:
-    # jd_url = {host}/{site}{ep}，detail = source_url 去掉尾部 /jobs 再拼 {ep}（ep 从 /job/ 起）
-    m = re.search(r"(/job/.+)$", urlparse(row["jd_url"]).path)
-    if not m:
-        return ""
-    cxs_base = re.sub(r"/jobs/?$", "", src["source_url"])
-    r = httpx.get(f"{cxs_base}{m.group(1)}", headers=UA, timeout=TIMEOUT)
-    if r.status_code >= 300:
-        return ""
-    return (r.json().get("jobPostingInfo", {}) or {}).get("jobDescription") or ""
-
-
-def _detail_oracle(row, src) -> str:
-    # jd_url = {host}/hcmUI/CandidateExperience/en/sites/{site}/job/{jid}
-    m = re.search(r"/sites/([^/]+)/job/(\w+)", row["jd_url"])
-    if not m:
-        return ""
-    p = urlparse(row["jd_url"])
-    url = (f"{p.scheme}://{p.netloc}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails"
-           f'?onlyData=true&expand=all&finder=ById;Id="{m.group(2)}",siteNumber={m.group(1)}')
-    r = httpx.get(url, headers=UA, timeout=TIMEOUT)
-    if r.status_code >= 300:
-        return ""
-    items = r.json().get("items", []) or []
-    if not items:
-        return ""
-    it = items[0]
-    parts = [it.get("ExternalDescriptionStr") or it.get("ShortDescriptionStr"),
-             it.get("ExternalResponsibilitiesStr"), it.get("ExternalQualificationsStr")]
-    return " ".join(x for x in parts if x)
-
-
-def _detail_eightfold(row, src) -> str:
-    # jd_url 是公司自有域名的 canonicalPositionUrl，position id = 路径里的长数字段；
-    # detail 端点在 eightfold 租户域上（source_url 的 origin + ?domain=）
-    m = re.search(r"/(\d{9,})(?:[/?#]|$)", row["jd_url"])
-    if not m:
-        return ""
-    sp = urlparse(src["source_url"])
-    domain = (parse_qs(sp.query).get("domain") or [""])[0]
-    url = f"{sp.scheme}://{sp.netloc}{sp.path}/{m.group(1)}"
-    r = httpx.get(url, params={"domain": domain}, headers=UA, timeout=TIMEOUT)
-    if r.status_code >= 300:
-        return ""
-    return r.json().get("job_description") or ""
-
-
-def _detail_smartrecruiters(row, src) -> str:
-    # jd_url = https://jobs.smartrecruiters.com/{identifier}/{postingId}
-    parts = [x for x in urlparse(row["jd_url"]).path.split("/") if x]
-    if len(parts) < 2:
-        return ""
-    identifier, pid = parts[0], parts[1]
-    r = httpx.get(f"https://api.smartrecruiters.com/v1/companies/{identifier}/postings/{pid}",
-                  headers=UA, timeout=TIMEOUT)
-    if r.status_code >= 300:
-        return ""
-    secs = (r.json().get("jobAd") or {}).get("sections") or {}
-    parts = [(secs.get(k) or {}).get("text")
-             for k in ("jobDescription", "responsibilities", "qualifications")]
-    return " ".join(x for x in parts if x)
-
-
-FETCHERS = {"workday": _detail_workday, "oracle": _detail_oracle,
-            "eightfold": _detail_eightfold, "smartrecruiters": _detail_smartrecruiters}
+# detail 反推逻辑统一住在 crawler/enrich.py（DRY）；本脚本只做「全量扫空 summary → 富化」一次性回填。
+FETCHERS = {a: enrich.ENRICH_REGISTRY[a] for a in ADAPTERS}
 
 
 def main():
