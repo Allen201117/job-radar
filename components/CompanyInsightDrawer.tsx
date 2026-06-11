@@ -154,6 +154,16 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
   const totalItems = dims
     ? DIMENSION_ORDER.reduce((n, d) => n + (dims[d]?.length || 0), 0)
     : 0;
+  // 公司概况（T2 官方事实回填，存在才显示）
+  const cp = data?.company;
+  const firmoBits = cp
+    ? [
+        cp.founded_year ? `成立 ${cp.founded_year}` : null,
+        cp.headcount_band ? `规模 ${cp.headcount_band}` : null,
+        cp.hq_location ? `总部 ${cp.hq_location}` : null,
+        cp.industry || null,
+      ].filter(Boolean)
+    : [];
 
   return createPortal(
     <div className="fixed inset-0 z-[60] flex justify-end">
@@ -180,6 +190,9 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
               <h2 className="mt-1.5 truncate text-2xl font-semibold leading-tight">
                 {data?.company?.display_name || data?.company?.company || company}
               </h2>
+              {firmoBits.length > 0 && (
+                <p className="mt-1 text-xs text-[#8a8275]">{firmoBits.join(" · ")}</p>
+              )}
             </div>
             <button
               type="button"

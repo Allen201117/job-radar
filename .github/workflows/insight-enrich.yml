@@ -1,0 +1,41 @@
+name: insight-enrich
+# 职业洞察 T2 富化（Wikidata 官方事实层）：扫 company_profiles 队列（insight_checked_at 空/超 TTL），
+# 查 Wikidata 免费端点 → 回写 listing 洞察 + 公司画像字段（成立年/规模/总部/上市）。无浏览器、无 LLM。
+# 死信：insight_fail_count≥3 不再入队（迁移 135）。与 daily-crawl/enrich-* 解耦，cron 错开。
+# 依赖：迁移 135 已应用（push 后 migrate.yml 自动）；Wikidata 在 CI 直连（本机受代理路由限制）。
+
+on:
+  schedule:
+    - cron: "30 20 * * *"   # 每日 UTC 20:30，与 enrich-crawl(18:00)/browser(19:00)/httpx(每3h) 错开
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "本轮最多富化多少公司（0=全部待处理）"
+        required: false
+        default: "0"
+
+jobs:
+  enrich-insights:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      - name: Drain career-insight T2 backlog (Wikidata)
+        working-directory: crawler
+        run: |
+          python3 insight_backlog.py \
+            --seed-from-sources \
+            --limit "${{ github.event.inputs.limit || '0' }}" \
+            --workers 4

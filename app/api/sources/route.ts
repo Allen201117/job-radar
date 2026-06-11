@@ -50,5 +50,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
+  // 同步给该公司建 / 标记画像占位 → 入职业洞察 T2 富化队列（insight_checked_at=null，CI worker 会查 Wikidata 回填）。
+  // best-effort：失败不阻断加源（洞察是增益层，不能拖累核心加源流程）。
+  const companyName = (result.value as { company?: string }).company;
+  if (companyName) {
+    const { error: profErr } = await service
+      .from("company_profiles")
+      .upsert({ company: companyName, insight_checked_at: null }, { onConflict: "company" });
+    if (profErr) console.error("[sources] 洞察入队失败(忽略)", profErr.message);
+  }
+
   return NextResponse.json({ ok: true, source: row });
 }
