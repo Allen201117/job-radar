@@ -19,6 +19,7 @@ import {
   classifyJobFunction,
   recruitmentCategory,
 } from "@/lib/china-keyword-expansion";
+import { matchTier } from "@/lib/scoring";
 import CompanyInsightDrawer from "@/components/CompanyInsightDrawer";
 import type { ScoredJob } from "@/lib/types";
 import { cleanSummary, cn, freshnessLabel } from "@/lib/utils";
@@ -170,6 +171,8 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
   const posted = job.posted_at
     ? new Date(job.posted_at).toLocaleDateString("zh-CN")
     : "未知";
+  // 无量纲匹配分 → 可解释三档徽标（阈值在 lib/scoring.ts，前端只消费）。
+  const tier = matchTier(job.match_score);
 
   return (
     <article
@@ -282,9 +285,22 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
             </div>
           )}
 
-          {job.matched_keywords.length > 0 && (
-            <div className="mt-4 flex flex-wrap gap-1.5">
-              {job.matched_keywords.map((kw) => (
+          {(tier.label || job.matched_keywords.length > 0) && (
+            <div className="mt-4 flex flex-wrap items-center gap-1.5">
+              {tier.label && (
+                <span
+                  title="根据你的求职偏好与简历画像评估的匹配档位"
+                  className={cn(
+                    "rounded-full px-2.5 py-1 text-xs font-semibold",
+                    tier.level === "high"
+                      ? "bg-[#1a1714] text-[#f7f1e6]"
+                      : "border border-black/[0.08] bg-[#f0ece2] text-[#6b655a]",
+                  )}
+                >
+                  {tier.label}
+                </span>
+              )}
+              {job.matched_keywords.slice(0, 3).map((kw) => (
                 <span
                   key={kw}
                   className="rounded-full border border-[#cfe0f5] bg-[#e8f1fc] px-2.5 py-1 text-xs font-medium text-[#2f6299]"
@@ -297,23 +313,6 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
         </div>
 
         <div className="flex shrink-0 flex-col gap-2 lg:w-36">
-          {job.match_score > 0 && (
-            <div
-              title="根据你的求职偏好与简历画像计算的匹配度（越高越契合）"
-              className={cn(
-                "rounded-xl px-3 py-2 text-center",
-                job.match_score >= 50
-                  ? "bg-[#1a1714] text-[#f7f1e6]"
-                  : "border border-black/[0.06] bg-[#f4efe6] text-[#1a1714]",
-              )}
-            >
-              <span className="block text-xs opacity-70">匹配度</span>
-              <span className="tabular-nums text-2xl font-semibold leading-none">
-                {job.match_score}
-              </span>
-            </div>
-          )}
-
           <button
             type="button"
             onClick={handleView}
