@@ -1,6 +1,20 @@
+import os
 from dataclasses import dataclass, field
 from typing import Optional, List
 import httpx
+
+
+def resolve_detail_cap(default: int) -> int:
+    """逐岗 detail 富化上限。env CRAWL_DETAIL_CAP 覆盖各 adapter 的 _DETAIL_CAP：
+    快档 daily 设 0 = 跳过逐岗富化（只抓列表，墙钟压到 20-30min）；
+    重档 enrichment 不设此 env = 用 adapter 默认（逐岗补 summary）。非法值回退默认。"""
+    raw = os.environ.get("CRAWL_DETAIL_CAP")
+    if raw not in (None, ""):
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    return default
 
 
 @dataclass

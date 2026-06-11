@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 import httpx
 
 import normalizer
-from .base import RawJob
+from .base import RawJob, resolve_detail_cap
 from .playwright_base import PlaywrightAdapter
 
 
@@ -122,7 +122,7 @@ class HotJobAdapter(PlaywrightAdapter):
         api = f"{self._origin}{self._DETAIL_API}{self._suite_key}"
         n = 0
         for p in posts:
-            if n >= self._DETAIL_CAP:
+            if n >= resolve_detail_cap(self._DETAIL_CAP):
                 break
             if not isinstance(p, dict):
                 continue

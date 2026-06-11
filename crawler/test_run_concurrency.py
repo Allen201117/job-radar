@@ -332,6 +332,34 @@ class RunCrawlIntegrationTest(unittest.TestCase):
         self.assertEqual(summary["success"], 3)
         self.assertEqual(summary["failed"], 0)
 
+    def test_tier_httpx_runs_only_concurrent(self):
+        # 快档 daily：tier=httpx 只跑并发档(2 个 _fake_httpx)，浏览器串行档被跳过。
+        summary = run.run_crawl(tier="httpx")
+        self.assertEqual(summary["created"], 2)
+        self.assertEqual(summary["success"], 2)
+        self.assertEqual(summary["failed"], 0)
+
+    def test_tier_browser_runs_only_serial(self):
+        # 重档 browser：只跑串行浏览器档(1 个 _fake_browser)，httpx 并发档被跳过。
+        summary = run.run_crawl(tier="browser")
+        self.assertEqual(summary["created"], 1)
+        self.assertEqual(summary["success"], 1)
+        self.assertEqual(summary["failed"], 0)
+
+    def test_shard_round_robin_covers_all_without_overlap(self):
+        # 源分片轮转 1/2：片 0 = 并发[0::2]=[a] + 串行[0::2]=[c] → 2 源；片 1 = 并发[1::2]=[b] + 串行[]→ 1 源。
+        # 两片并集 = 全量 3 源（无重复、无遗漏），即 1/shard_count 轮转一周覆盖全量。
+        s0 = run.run_crawl(shard_index=0, shard_count=2)
+        s1 = run.run_crawl(shard_index=1, shard_count=2)
+        self.assertEqual(s0["created"], 2)
+        self.assertEqual(s1["created"], 1)
+        self.assertEqual(s0["created"] + s1["created"], 3)
+
+    def test_shard_index_wraps_modulo_count(self):
+        # shard_index 越界(=shard_count)按模回绕到 0，不至于取到空片（重档按星期几 %w 传 0-6，配 7 片不越界，此为兜底）。
+        wrapped = run.run_crawl(shard_index=2, shard_count=2)   # 2 % 2 == 0 → 同片 0
+        self.assertEqual(wrapped["created"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()
