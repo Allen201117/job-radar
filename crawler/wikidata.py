@@ -105,7 +105,7 @@ def parse_company_facts(entity: dict, label_map: dict) -> dict:
     """把一个 Wikidata entity + 引用 QID→中文 label 表，解析为结构化事实 dict。纯函数。"""
     qid = entity.get("id")
     labels = entity.get("labels", {}) or {}
-    label = (labels.get("zh") or labels.get("zh-hans") or labels.get("en") or {}).get("value") or qid
+    label = (labels.get("zh-hans") or labels.get("zh") or labels.get("en") or {}).get("value") or qid
 
     instance_of = _claim_items(entity, "P31")
     exchange_qids = _claim_items(entity, "P414")
@@ -117,7 +117,7 @@ def parse_company_facts(entity: dict, label_map: dict) -> dict:
 
     listed = bool(exchange_qids) or any(q in _PUBLIC_COMPANY_QIDS for q in instance_of)
     exchanges = [_EXCHANGE_NAMES.get(q) or label_map.get(q) for q in exchange_qids]
-    exchanges = [e for e in exchanges if e]
+    exchanges = list(dict.fromkeys(e for e in exchanges if e))  # 去重保序（多 QID 映射同交易所，如港交所有多个 QID）
     hq = next((label_map.get(q) for q in hq_qids if label_map.get(q)), None)
     industry = next((label_map.get(q) for q in industry_qids if label_map.get(q)), None)
 
@@ -233,7 +233,7 @@ def get_company_facts(name: str, aliases: Optional[list] = None,
                              "props": "labels", "languages": "zh|zh-hans|en"}, own)
             for q, e in (lbl_data.get("entities") or {}).items():
                 lbs = e.get("labels", {}) or {}
-                label_map[q] = (lbs.get("zh") or lbs.get("zh-hans") or lbs.get("en") or {}).get("value")
+                label_map[q] = (lbs.get("zh-hans") or lbs.get("zh") or lbs.get("en") or {}).get("value")
         facts = parse_company_facts(entity, label_map)
         facts.pop("_ref_qids", None)
         return facts
