@@ -102,7 +102,8 @@ def enrich_company(sb, profile):
     """富化单家公司并回写。返回 'ok' | 'noface'（Wikidata 查无）| 'err'。永不抛。"""
     try:
         facts = wikidata.get_company_facts(profile["company"], profile.get("aliases"))
-    except Exception:
+    except Exception as e:
+        print(f"  [wd-err] {profile['company']}: {type(e).__name__}: {str(e)[:140]}")
         facts = None
     if not facts:
         # 查无也记一轮 checked_at（避免每次重试查无的公司）；不算硬失败
