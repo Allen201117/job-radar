@@ -1,0 +1,49 @@
+name: enrich-backlog
+# JD summary backlog drain（P1，httpx-detail 类）：从 Postgres 队列取空 summary 的 active 岗，
+# 按 jd_url 反推官方 detail 端点富化（crawler/enrich.py），httpx 并发回写。无浏览器 → 不装 chromium。
+# 与 daily-crawl(抓列表) / enrich-crawl(浏览器源+轮转) 解耦；按 adapter 分片，shard 间不重叠。
+# 死信：enrich_fail_count≥3 的行不再入队（迁移 133）。browser 类(beisen/moka/feishu)P2 另开 shard。
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"   # 每 3 小时一轮（公开仓库分钟无限）
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "单 shard 本轮最多富化多少岗"
+        required: false
+        default: "20000"
+      workers:
+        description: "并发线程数"
+        required: false
+        default: "12"
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50   # 远低于 6h 硬杀；httpx 富化快，单 shard 应分钟级
+    strategy:
+      fail-fast: false
+      # 按 adapter 一片，shard 间互不重叠（各 drain 自己 adapter 的 backlog）。
+      matrix:
+        adapter: [hotjob, workday, oracle, eightfold, smartrecruiters]
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      - name: Drain summary backlog (${{ matrix.adapter }})
+        run: |
+          python crawler/enrich_backlog.py \
+            --adapter "${{ matrix.adapter }}" \
+            --limit "${{ github.event.inputs.limit || '20000' }}" \
+            --workers "${{ github.event.inputs.workers || '12' }}"
