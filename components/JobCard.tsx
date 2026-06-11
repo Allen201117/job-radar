@@ -21,7 +21,7 @@ import {
 } from "@/lib/china-keyword-expansion";
 import CompanyInsightDrawer from "@/components/CompanyInsightDrawer";
 import type { ScoredJob } from "@/lib/types";
-import { cleanSummary, cn } from "@/lib/utils";
+import { cleanSummary, cn, freshnessLabel } from "@/lib/utils";
 
 interface Props {
   job: ScoredJob;
@@ -104,6 +104,8 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
     () => classifyJobFunction({ title: job.title, job_type: job.job_type, summary }),
     [job.title, job.job_type, summary],
   );
+  // 新鲜度信任信号：last_seen_at 距今多久 → 「今天/X 天前确认在招」；>14 天转暖橙告警「可能已下线」。
+  const freshness = useMemo(() => freshnessLabel(job.last_seen_at), [job.last_seen_at]);
 
   async function writeAction(action: PrimaryAction | null, prev: PrimaryAction | null) {
     try {
@@ -242,6 +244,17 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
             <Field icon={CalendarBlank} label="发布" value={posted} />
             <Field icon={Hourglass} label="截止" value={deadline} />
           </div>
+
+          {freshness.label && (
+            <p
+              className={cn(
+                "mt-2 text-xs font-medium",
+                freshness.stale ? "text-[#9a6a2a]" : "text-[#8a8275]",
+              )}
+            >
+              {freshness.label}
+            </p>
+          )}
 
           {summary && (
             <div className="mt-4">
