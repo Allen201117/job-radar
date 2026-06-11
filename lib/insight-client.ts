@@ -22,6 +22,7 @@ export interface CompanyInsightResponse {
 
 const EMPTY_DIMENSIONS = (): Record<InsightDimension, InsightItemView[]> => ({
   timing: [],
+  hiring: [],
   listing: [],
   compensation_intensity: [],
   path: [],

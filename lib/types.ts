@@ -156,6 +156,7 @@ export interface ScoredJob extends Job {
 
 export type InsightDimension =
   | "timing"
+  | "hiring"
   | "listing"
   | "compensation_intensity"
   | "path"
@@ -217,6 +218,8 @@ export interface InsightItem {
 export interface InsightItemView extends InsightItem {
   sources: InsightSource[];
   outdated: boolean;
+  // T1 派生层标记：true = 由自有 jobs 数据算出的事实聚合（非策展/非社区），前端用不同芯片呈现
+  derived?: boolean;
 }
 
 // /api/insights 按公司聚合的响应

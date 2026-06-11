@@ -9,11 +9,13 @@ import {
   emptyDimensions,
   groupGatedInsights,
 } from "@/lib/insight-bundle";
+import { deriveCompanyInsights } from "@/lib/insight-derive";
 import type {
   CompanyProfile,
   InsightDimension,
   InsightItem,
   InsightSource,
+  Job,
 } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -35,7 +37,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // 1) 取全部公司画像，归一化匹配（苹果↔Apple、字节↔ByteDance）
+  // 1) 取全部公司画像，归一化匹配（苹果↔Apple、字节↔ByteDance）。可能无画像（95% 公司）。
   const { data: profiles, error: profileError } = await supabase
     .from("company_profiles")
     .select("*");
@@ -46,41 +48,63 @@ export async function GET(request: NextRequest) {
       { status: 500 },
     );
   }
-
   const profile = findCompanyProfile((profiles || []) as CompanyProfile[], company);
-  if (!profile) {
-    return NextResponse.json({
-      ok: true,
-      company: null,
-      query: company,
-      dimensions: emptyDimensions(),
-      failure_reason: "insight_unverified",
-    });
+
+  // 2) Tier1 派生：从自有 jobs 直接算事实洞察（无需画像，保证 100% 覆盖）。
+  //    匹配候选 = 查询词 + 画像 company/aliases；限 active，cap 3000 行足够代表性聚合。
+  const candidates = Array.from(
+    new Set(
+      profile ? [profile.company, ...(profile.aliases || []), company] : [company],
+    ),
+  );
+  const { data: jobRows, error: jobError } = await supabase
+    .from("jobs")
+    .select(
+      "company,title,location,job_type,salary_text,posted_at,first_seen_at,last_seen_at,status",
+    )
+    .in("company", candidates)
+    .eq("status", "active")
+    .limit(3000);
+  if (jobError) {
+    console.error("[insights] 读取 jobs（派生）失败", jobError.message);
+  }
+  const derived = deriveCompanyInsights((jobRows || []) as Job[], new Date());
+
+  // 3) 存储型洞察（仅当有画像）：过校验门 + 分组（共享 insight-bundle）。
+  let storedDims = emptyDimensions();
+  let evaluations: ReturnType<typeof groupGatedInsights>["evaluations"] = [];
+  if (profile) {
+    const { data: items, error: itemError } = await supabase
+      .from("insight_items")
+      .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
+      .eq("company_id", profile.id)
+      .eq("status", "active");
+    if (itemError) {
+      console.error("[insights] 读取 insight_items 失败", itemError.message);
+      return NextResponse.json(
+        { ok: false, error: itemError.message },
+        { status: 500 },
+      );
+    }
+    const grouped = groupGatedInsights((items || []) as any[], new Date());
+    storedDims = grouped.dimensions;
+    evaluations = grouped.evaluations;
   }
 
-  // 2) 取该公司 active 洞察 + 溯源（RLS 已限定 active + deidentified）
-  const { data: items, error: itemError } = await supabase
-    .from("insight_items")
-    .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
-    .eq("company_id", profile.id)
-    .eq("status", "active");
-  if (itemError) {
-    console.error("[insights] 读取 insight_items 失败", itemError.message);
-    return NextResponse.json(
-      { ok: false, error: itemError.message },
-      { status: 500 },
-    );
+  // 4) 合并：每维度「派生在前、存储在后」。
+  const dimensions = emptyDimensions();
+  for (const dim of INSIGHT_DIMENSIONS) {
+    dimensions[dim] = [...(derived[dim] || []), ...storedDims[dim]];
   }
-
-  // 3) 过校验门（grade / 去标识 / 归因 / 时效）+ 按维度分组（共享 insight-bundle）
-  const { dimensions, evaluations } = groupGatedInsights((items || []) as any[], new Date());
+  const hasAny = INSIGHT_DIMENSIONS.some((dim) => dimensions[dim].length > 0);
 
   return NextResponse.json({
     ok: true,
     company: profile,
     query: company,
     dimensions,
-    failure_reason: resolveInsightFailure(evaluations),
+    // 有任何可展示条目（含派生）→ 无失败；否则沿用存储项的 bundle 级判定
+    failure_reason: hasAny ? null : resolveInsightFailure(evaluations),
   });
 }
 

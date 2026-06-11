@@ -47,11 +47,14 @@ interface AdminDispute {
 
 const DIM_LABELS: Record<InsightDimension, string> = {
   timing: "招聘时机",
+  hiring: "招聘动态",
   listing: "上市 / 股票",
   compensation_intensity: "薪资 / 强度",
   path: "进入路径",
   culture: "公司文化 / 温馨提示",
 };
+// hiring 是 T1 派生维度（由岗位数据读时算出），不走人工录入
+const ADMIN_CREATABLE_DIMENSIONS = INSIGHT_DIMENSIONS.filter((d) => d !== "hiring");
 const GRADE_LABELS: Record<InsightGrade, string> = {
   fact: "事实",
   experience: "经验",
@@ -773,7 +776,7 @@ function ItemForm({
 
         <FormField label="维度">
           <select value={form.dimension} onChange={(e) => setField("dimension", e.target.value as InsightDimension)} className={inputCls}>
-            {INSIGHT_DIMENSIONS.map((d) => (
+            {ADMIN_CREATABLE_DIMENSIONS.map((d) => (
               <option key={d} value={d}>
                 {DIM_LABELS[d]}
               </option>
