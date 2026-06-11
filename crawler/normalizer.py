@@ -441,7 +441,6 @@ def validate_job_quality(raw: RawJob, source_url: str) -> tuple[bool, str]:
 
     navigation_paths = (
         "/home",
-        "/searchjobs",
         "/airecommendations",
         "/web/static/",
         "/static/index.html",
@@ -456,6 +455,13 @@ def validate_job_quality(raw: RawJob, source_url: str) -> tuple[bool, str]:
         "/company/jobs/faq.html",
     )
     if any(marker in path_lower for marker in navigation_paths):
+        return False, "navigation url"
+
+    # Workday 站名常叫 "SearchJobs"（如 MSD 默沙东），其岗位**详情**路径形如
+    # /searchjobs/job/{loc}/{title}_{reqid}，含真实 /job/ 段。把 /searchjobs 当子串一律拦截
+    # 会误杀这些真详情页（已入源质量验证揪出 MSD 20 岗被全误拒）；仅当它是**搜索落地页**
+    # （无 /job/ 详情段，含 SPA hash 的 #/searchJobs）才判导航。
+    if "/searchjobs" in path_lower and "/job/" not in path_lower:
         return False, "navigation url"
 
     return True, ""
