@@ -55,6 +55,7 @@
 - **一次性设置**：GitHub repo → Settings → Secrets → Actions 加 `SUPABASE_DB_URL`（Supabase → Settings → Database → 直连串，端口 5432，含密码）。配一次，此后零手动 SQL。
 - 新迁移文件继续放 `supabase/migrations/`，前缀按序递增（如 `023_xxx.sql`），push 即自动应用。
 - 加新迁移后若 BASELINE 已过期，更新 `scripts/db-migrate.sh` 的 `BASELINE`。
+- **命名规约**：seed 类迁移（纯 `insert` sources 数据）文件名必须带 `_seed_` 标识；新前缀必须先 `ls supabase/migrations` 确认未被占用。前缀「纯数字 + 无新增重复」由 `scripts/check-migrations.sh` 在 CI apply 前硬校验（历史重复前缀已在脚本 GRANDFATHERED 白名单豁免，勿改名已应用文件）。
 
 ## 常用命令
 
@@ -202,7 +203,7 @@ Supabase Auth（邮箱登录）+ cookie session。`middleware.ts` 排除 `/api/*
 
 - 纯函数优先（scoring、live-search 格式化/校验、normalizer、quality gate、discovery budget）。
 - crawler 用 unittest，单测不打真实网络。
-- 改 schema 必须同步更新 migrations + 测试（schema 以 migrations 为准，需求文档以 `PRD.md` 为准）。
+- 改 schema 必须同步更新 migrations + 测试（schema 以 migrations 为准，需求文档以 `求职雷达_PRD_v2.md` 为准）。
 
 ## 边界（Phase 1 不做）
 
