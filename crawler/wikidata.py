@@ -7,13 +7,16 @@
 httpx 默认 trust_env=True → 自动走 HTTPS_PROXY 环境变量（本机经 Clash 验证，CI 直连）。
 """
 import re
+import time
 from typing import Optional
 
 import httpx
 
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
-UA = {"User-Agent": "JobRadar/1.0 (career-insights enrichment; contact: jobradar)"}
+# Wikimedia UA 政策要求带可联系的 URL/邮箱，否则数据中心 IP 易被 403/429（CI 实测全 noface 的根因排查）。
+UA = {"User-Agent": "JobRadar/1.0 (https://github.com/Allen201117/job-radar; career-insights enrichment)"}
 TIMEOUT = 25
+POLITE_DELAY = 0.2  # 每请求后小憩，对 Wikimedia 礼貌 + 降低被限流概率
 
 # instance-of（P31）里代表「上市公司」的 QID（命中即视为已上市，与有无交易所互为佐证）
 _PUBLIC_COMPANY_QIDS = {"Q891723"}  # public company
@@ -186,6 +189,7 @@ def _get(params: dict, client: httpx.Client) -> dict:
     p = {"format": "json", **params}
     r = client.get(WIKIDATA_API, params=p, headers=UA, timeout=TIMEOUT)
     r.raise_for_status()
+    time.sleep(POLITE_DELAY)
     return r.json()
 
 
@@ -213,6 +217,7 @@ def get_company_facts(name: str, aliases: Optional[list] = None,
             if qid:
                 break
         if not qid:
+            print(f"  [wd-noqid] {name}")
             return None
         ent_data = _get({"action": "wbgetentities", "ids": qid,
                          "props": "claims|labels", "languages": "zh|zh-hans|en"}, own)
