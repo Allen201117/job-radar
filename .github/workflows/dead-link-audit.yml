@@ -1,0 +1,58 @@
+name: dead-link-audit
+
+# 死链长期治理：定期用无头浏览器审计 active 岗位的 jd_url，识别 SPA「软404」(返200但渲染'职位不存在/已下线')，
+# 把高置信失效岗(渲染出失效标记)自动置 status='expired'。补 enrich detail-fetcher 覆盖不到的 SPA 源(飞书/智阅/Moka…)。
+#   · 定时(每周)= 抽样审计 --apply：每次跨 host 抽样下架确认 dead，长期保持干净。
+#   · 手动 workflow_dispatch 填 sweep=<source_url子串(如 agirobot)> = 对该源全量逐岗审计下架(整治某个已知坏源)。
+# ATS 源(workday/oracle/greenhouse/lever/hotjob…)的撤岗由 enrich 的 httpx detail-fetcher(404→expired)负责，本工作流默认跳过。
+
+on:
+  schedule:
+    - cron: "0 18 * * 5"   # 每周五 18:00 UTC = 周六 02:00 新加坡/中国，错开 daily-crawl(00:00)
+  workflow_dispatch:
+    inputs:
+      sweep:
+        description: "全量逐岗审计某源(source_url 子串,如 agirobot)；留空=跨 host 抽样审计"
+        required: false
+        default: ""
+      per_host:
+        description: "抽样模式：每 host 取样数"
+        required: false
+        default: "12"
+      max:
+        description: "抽样模式：总渲染上限(控 CI 时长)"
+        required: false
+        default: "600"
+      apply:
+        description: "true=下架确认 dead；false=只报告(dry-run)"
+        required: false
+        default: "true"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75   # 抽样 600 个 ~35min；远低于 GH 6h 硬杀
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install -r crawler/requirements.txt
+      - name: Install chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Run dead-link audit
+        working-directory: crawler
+        run: |
+          ARGS=""
+          if [ "${{ inputs.apply }}" != "false" ]; then ARGS="$ARGS --apply"; fi
+          if [ -n "${{ inputs.sweep }}" ]; then
+            ARGS="$ARGS --sweep ${{ inputs.sweep }}"
+          else
+            ARGS="$ARGS --per-host ${{ inputs.per_host || '12' }} --max ${{ inputs.max || '600' }}"
+          fi
+          echo "audit args:$ARGS"
+          python3 audit_dead_links.py $ARGS
