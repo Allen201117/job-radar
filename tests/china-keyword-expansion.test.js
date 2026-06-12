@@ -3,6 +3,7 @@ const test = require("node:test");
 
 const {
   expandChinaKeywordTerms,
+  ftsCandidateTerms,
   normalizeChinaCity,
   normalizeChinaJobFields,
   normalizeChinaJobType,
@@ -99,4 +100,20 @@ test("short latin codes use word boundaries (no false positives)", () => {
   assert.equal(jobMatchesChinaKeyword({ title: "Google Product role" }, "go"), false);
   // but real standalone codes still match
   assert.ok(jobMatchesChinaKeyword({ title: "AI Engineer" }, "ai"));
+});
+
+test("ftsCandidateTerms: 同义词 + 同职能候选，且全部 >=2 字（供 bigram FTS 预筛）", () => {
+  const pm = ftsCandidateTerms("产品");
+  // 精确层同义词
+  assert.ok(pm.includes("产品"));
+  assert.ok(pm.includes("产品经理"));
+  assert.ok(pm.includes("product manager") || pm.includes("product"));
+  // 全部 >=2 字（1 字无法生成 bigram）
+  assert.ok(pm.every((t) => t.length >= 2));
+  // 前端查询应纳入「同职能(研发)」的兄弟组词（相关层候选），如后端/算法之一
+  const fe = ftsCandidateTerms("前端");
+  assert.ok(fe.includes("前端"));
+  assert.ok(fe.some((t) => ["后端", "算法", "测试", "工程师", "java", "golang"].includes(t)));
+  // 空查询 → 空
+  assert.deepEqual(ftsCandidateTerms(""), []);
 });
