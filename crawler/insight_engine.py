@@ -143,6 +143,8 @@ def extract_claims(company: str, dimension: str, sources: list,
     out = chat_json([{"role": "system", "content": _WRITER_SYS},
                      {"role": "user", "content": user}], temperature=0.2, max_tokens=900, client=client)
     claims = out.get("claims") if isinstance(out, dict) else None
+    if not (isinstance(claims, list) and claims):  # 排查 writer 抽空：打印模型原始返回
+        print(f"  [t3-writer] {company}/{dimension}: 0 claims; out={str(out)[:260]}")
     return claims if isinstance(claims, list) else []
 
 
