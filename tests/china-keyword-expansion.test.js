@@ -102,18 +102,16 @@ test("short latin codes use word boundaries (no false positives)", () => {
   assert.ok(jobMatchesChinaKeyword({ title: "AI Engineer" }, "ai"));
 });
 
-test("ftsCandidateTerms: 同义词 + 同职能候选，且全部 >=2 字（供 bigram FTS 预筛）", () => {
+test("ftsCandidateTerms: 命中组的跨语言同义词，全部 >=2 字，不并入同职能兄弟组（供 FTS 收窄预筛）", () => {
   const pm = ftsCandidateTerms("产品");
-  // 精确层同义词
   assert.ok(pm.includes("产品"));
   assert.ok(pm.includes("产品经理"));
-  assert.ok(pm.includes("product manager") || pm.includes("product"));
-  // 全部 >=2 字（1 字无法生成 bigram）
-  assert.ok(pm.every((t) => t.length >= 2));
-  // 前端查询应纳入「同职能(研发)」的兄弟组词（相关层候选），如后端/算法之一
+  assert.ok(pm.includes("product manager") || pm.includes("product")); // 跨语言：命中英文标题
+  assert.ok(pm.every((t) => t.length >= 2)); // 1 字过滤掉
+  // 「前端」只取前端组(含跨语言 react/frontend)，**不**拉同职能(研发)的后端/算法等兄弟组 → 候选紧、搜索快且精准
   const fe = ftsCandidateTerms("前端");
   assert.ok(fe.includes("前端"));
-  assert.ok(fe.some((t) => ["后端", "算法", "测试", "工程师", "java", "golang"].includes(t)));
-  // 空查询 → 空
+  assert.ok(fe.some((t) => ["frontend", "react", "vue", "front end"].includes(t)));
+  assert.ok(!fe.includes("后端") && !fe.includes("算法"));
   assert.deepEqual(ftsCandidateTerms(""), []);
 });
