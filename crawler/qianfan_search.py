@@ -88,9 +88,11 @@ def search(query, top_k=DEFAULT_TOP_K, client=None):
     try:
         r = own.post(WEB_SEARCH_URL, json=body, headers=headers, timeout=TIMEOUT)
         if r.status_code >= 300:
+            print(f"  [qf-err] HTTP {r.status_code}: {r.text[:160]}")
             return []
         data = r.json()
-    except Exception:
+    except Exception as e:
+        print(f"  [qf-err] {type(e).__name__}: {str(e)[:160]}")
         return []
     finally:
         if client is None:
@@ -105,4 +107,7 @@ def search(query, top_k=DEFAULT_TOP_K, client=None):
         if title and url:
             out.append({"title": title, "url": url, "snippet": snip,
                         "publisher": urlparse(url).netloc or "web"})
+    if not out:  # 200 但无可用结果：打印响应形状，便于辨别鉴权/限流/响应结构问题
+        keys = list(data.keys())[:6] if isinstance(data, dict) else type(data).__name__
+        print(f"  [qf-empty] rows={len(_rows(data))} top_keys={keys} body={str(data)[:160]}")
     return out
