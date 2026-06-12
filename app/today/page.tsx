@@ -171,7 +171,7 @@ export default async function TodayPage() {
             </div>
           }
         >
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
             <MetricTile icon={Sparkle} label="今日新增" value={newCount} tone="sky" />
             <MetricTile icon={Crosshair} label="高匹配" value={highMatchCount} tone="lime" />
             <MetricTile icon={BookmarkSimple} label="已收藏" value={savedCount} tone="white" />

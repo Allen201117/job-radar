@@ -38,7 +38,7 @@ export function ProductHero({
   children?: ReactNode;
 }) {
   return (
-    <section className="surface relative overflow-hidden px-5 py-7 sm:px-7 lg:px-8">
+    <section className="surface relative overflow-hidden px-5 py-6 sm:px-7 sm:py-7 lg:px-8">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_88%_8%,rgba(150,182,226,0.18),transparent_42%),radial-gradient(circle_at_4%_120%,rgba(196,228,150,0.16),transparent_38%)]" />
       <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div className="max-w-3xl">
@@ -62,7 +62,7 @@ export function ProductHero({
         </div>
         {action}
       </div>
-      {children && <div className="relative mt-7">{children}</div>}
+      {children && <div className="relative mt-6 sm:mt-7">{children}</div>}
     </section>
   );
 }
@@ -87,14 +87,17 @@ export function MetricTile({
   }[tone];
 
   return (
-    <div className="surface-soft px-4 py-4">
-      <div className={cn("grid size-9 place-items-center rounded-xl", toneClass)}>
+    // 移动端：横向紧凑（图标在左、数字+标签在右），少占竖向空间；sm+ 恢复竖向卡片。
+    <div className="surface-soft flex items-center gap-3 px-3.5 py-3 sm:flex-col sm:items-start sm:gap-0 sm:px-4 sm:py-4">
+      <div className={cn("grid size-9 shrink-0 place-items-center rounded-xl", toneClass)}>
         <Icon size={19} weight="fill" aria-hidden="true" />
       </div>
-      <div className="mt-5 tabular-nums text-3xl font-semibold leading-none text-[#1a1714]">
-        {value}
+      <div className="min-w-0">
+        <div className="tabular-nums text-2xl font-semibold leading-none text-[#1a1714] sm:mt-5 sm:text-3xl">
+          {value}
+        </div>
+        <div className="mt-1 text-[12px] text-[#8a8275] sm:mt-2 sm:text-[13px]">{label}</div>
       </div>
-      <div className="mt-2 text-[13px] text-[#8a8275]">{label}</div>
     </div>
   );
 }

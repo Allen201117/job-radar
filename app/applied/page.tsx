@@ -82,7 +82,7 @@ export default async function AppliedPage() {
                     投递于 {appliedMap.get(job.id) ? new Date(appliedMap.get(job.id)!).toLocaleDateString("zh-CN") : "—"}
                   </div>
                 </div>
-                <a href={job.jd_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98]">
+                <a href={job.jd_url} target="_blank" rel="noreferrer" className="inline-flex w-full shrink-0 items-center justify-center gap-2 rounded-full bg-[#1a1714] px-4 py-2.5 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98] sm:w-auto sm:py-2">
                   查看官网
                   <ArrowSquareOut size={16} weight="bold" aria-hidden="true" />
                 </a>

@@ -242,7 +242,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
             <span className="text-balance">{job.title}</span>
           </button>
 
-          <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">
+          <div className="mt-4 grid grid-cols-2 gap-2 text-sm xl:grid-cols-3">
             <Field icon={MapPin} label="城市" value={job.location || "未知"} />
             <Field icon={Briefcase} label="薪资" value={job.salary_text || "官网未披露"} />
             <Field icon={GraduationCap} label="经验" value={exp} />
@@ -315,39 +315,42 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
           )}
         </div>
 
+        {/* 移动端：官网详情整宽 + 三个操作并排一行；桌面端（lg）回到右侧竖排。 */}
         <div className="flex shrink-0 flex-col gap-2 lg:w-36">
           <button
             type="button"
             onClick={handleView}
-            className="inline-flex items-center justify-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98]"
+            className="inline-flex items-center justify-center gap-2 rounded-full bg-[#1a1714] px-4 py-2.5 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98] lg:py-2"
           >
             官网详情
             <ArrowSquareOut size={16} weight="bold" aria-hidden="true" />
           </button>
-          <ActionButton
-            active={currentAction === "saved"}
-            disabled={acting}
-            onClick={() => handleAction("saved")}
-            icon={BookmarkSimple}
-            label={currentAction === "saved" ? "已收藏" : "收藏"}
-          />
-          <ActionButton
-            active={currentAction === "applied"}
-            disabled={acting}
-            onClick={() => handleAction("applied")}
-            icon={CheckCircle}
-            label={currentAction === "applied" ? "已投递" : "标记投递"}
-          />
-          <ActionButton
-            muted
-            active={currentAction === "ignored"}
-            disabled={acting}
-            onClick={() => handleAction("ignored")}
-            icon={XCircle}
-            label={currentAction === "ignored" ? "已忽略" : "忽略"}
-          />
+          <div className="grid grid-cols-3 gap-2 lg:grid-cols-1">
+            <ActionButton
+              active={currentAction === "saved"}
+              disabled={acting}
+              onClick={() => handleAction("saved")}
+              icon={BookmarkSimple}
+              label={currentAction === "saved" ? "已收藏" : "收藏"}
+            />
+            <ActionButton
+              active={currentAction === "applied"}
+              disabled={acting}
+              onClick={() => handleAction("applied")}
+              icon={CheckCircle}
+              label={currentAction === "applied" ? "已投递" : "标记投递"}
+            />
+            <ActionButton
+              muted
+              active={currentAction === "ignored"}
+              disabled={acting}
+              onClick={() => handleAction("ignored")}
+              icon={XCircle}
+              label={currentAction === "ignored" ? "已忽略" : "忽略"}
+            />
+          </div>
           {actionError && (
-            <span className="rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-2 py-1 text-right text-xs text-[#9c4a3c]">
+            <span className="rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-2 py-1 text-xs text-[#9c4a3c] lg:text-right">
               {actionError}
             </span>
           )}
@@ -404,7 +407,7 @@ function ActionButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex items-center justify-center gap-1 rounded-full px-2 py-2 text-[12px] font-medium transition duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-4 sm:text-sm",
         active
           ? "bg-[#1a1714] text-[#f7f1e6]"
           : muted
@@ -412,7 +415,7 @@ function ActionButton({
             : "border border-black/[0.07] bg-white/70 text-[#3f3a33] hover:bg-white",
       )}
     >
-      <Icon size={16} weight={active ? "fill" : "regular"} aria-hidden="true" />
+      <Icon size={16} weight={active ? "fill" : "regular"} className="shrink-0" aria-hidden="true" />
       {label}
     </button>
   );
