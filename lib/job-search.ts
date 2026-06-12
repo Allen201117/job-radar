@@ -16,7 +16,7 @@ import {
 } from "@/lib/job-filter";
 import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 // china-keyword-expansion 为 CommonJS，沿用 hooks 的 import 习惯。
-import { ftsCandidateTerms } from "@/lib/china-keyword-expansion";
+import { ftsCandidateTerms, normalizeChinaCity } from "@/lib/china-keyword-expansion";
 
 const DB_PAGE = 1000;
 // 扫描路径：逐批增大的并行扫描页数（累计 4/12/28 页）。
@@ -62,11 +62,17 @@ function termClause(term: string): string | null {
   return `(${bg.join(" & ")})`;
 }
 
+const hasCJK = (t: string) => /[一-鿿㐀-䶿]/.test(t);
+
 // 构造 bigram tsquery：关键词候选词「组内 OR」，再与 城市/公司 等「过滤词 AND」。全空返回 null（→走浏览/扫描）。
+// 关键：中文 2 字 bigram 选择性好(快)，但**纯拉丁词的 2 字 bigram(pr/od/uc…)posting list 巨大、拖慢 4 倍**。
+// 故候选词里**只要有中文词就只用中文词**(中文搜索的常态，召回足够)；纯英文关键词(如 python)才退回用拉丁词。
 function buildBigramTsquery(keywordTerms: string[], andTerms: string[]): string | null {
   const clauses: string[] = [];
 
-  const kwClauses = keywordTerms.map(termClause).filter((c): c is string => !!c);
+  const cjkTerms = keywordTerms.filter(hasCJK);
+  const effectiveKw = cjkTerms.length ? cjkTerms : keywordTerms;
+  const kwClauses = effectiveKw.map(termClause).filter((c): c is string => !!c);
   if (kwClauses.length) clauses.push(`(${kwClauses.join(" | ")})`);
 
   for (const t of andTerms) {
@@ -101,28 +107,34 @@ async function searchViaFTS(
   tsquery: string,
 ): Promise<SearchResult> {
   const company = filters.company.trim();
-  const rows: any[] = [];
+  // 关键：**不要 order by**。加 order(id/first_seen) 会让 planner 改走那个索引扫描 + 逐行 @@ 过滤(扫全表，6-8s)；
+  // 不排序时 planner 用 GIN bitmap 只取命中行(~1s)。排序交给下面 JS 的 filterAndRankJobs(本就要重排)。
+  // 无 SQL 排序 → 分页顺序非严格保证，故用 Map 按 id 去重兜底重叠。
+  const byId = new Map<string, any>();
   for (let off = 0; off < FTS_CAP; off += DB_PAGE) {
     let q = supabase
       .from("jobs")
       .select("*")
       .eq("status", "active")
       .textSearch("search_bigrams", tsquery, { config: "simple" });
+    // 精确收紧（在 GIN 命中集上 recheck，便宜）：bigram 的城市/公司会匹配到摘要里的提及，
+    // 加 location/company 的 ilike 把候选缩到真正同城/同公司，少拉很多行。JS 仍做最终精筛。
+    const city = filters.city.trim();
+    if (city) q = q.ilike("location", `%${normalizeChinaCity(city) || city}%`);
     if (company) q = q.ilike("company", `%${company}%`);
-    // 按主键 id 取（稳定分页；@@ 选择性高，planner 走 GIN bitmap 后排序，避免扫全表）。
-    const { data, error } = await q.order("id", { ascending: true }).range(off, off + DB_PAGE - 1);
+    const { data, error } = await q.range(off, off + DB_PAGE - 1);
     if (error) throw new Error(error.message); // 列未就绪/异常 → 调用方降级到扫描路径
     if (!data || data.length === 0) break;
-    rows.push(...data);
+    for (const j of data) byId.set(j.id, j);
     if (data.length < DB_PAGE) break;
   }
 
-  const ranked = annotateAndRank(rows, filters, prefs, actions);
+  const ranked = annotateAndRank(Array.from(byId.values()), filters, prefs, actions);
   return {
     jobs: ranked.slice(offset, offset + limit),
     total: ranked.length,
     exactCount: countExact(ranked),
-    capped: rows.length >= FTS_CAP,
+    capped: byId.size >= FTS_CAP,
     offset,
     limit,
   };
