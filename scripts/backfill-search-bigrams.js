@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * 回填 jobs.search_bigrams（迁移 140 的中文 bigram 全文检索列）存量行。
- * 循环调 backfill_search_bigrams(batch) RPC（行级锁 + skip locked，不挡读），直到返回 0。
+ * 循环调 backfill_search_doc(batch) RPC（行级锁 + skip locked，不挡读），直到返回 0。
  * 用法：set -a; source .env.local; set +a; node scripts/backfill-search-bigrams.js
  * 只写 search_bigrams 列（由 SQL 函数按现有字段计算），不改业务字段；可随时中断后重跑（幂等：只填 NULL 的）。
  */
@@ -21,7 +21,7 @@ const BATCH = Number(process.argv[2] || 2000);
   let fails = 0;
   for (;;) {
     const t = Date.now();
-    const { data, error } = await sb.rpc("backfill_search_bigrams", { batch: BATCH });
+    const { data, error } = await sb.rpc("backfill_search_doc", { batch: BATCH });
     if (error) {
       fails += 1;
       console.error(`! 第 ${round + 1} 批失败(${fails}/5): ${error.message} — 重试`);
