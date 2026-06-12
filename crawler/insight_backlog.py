@@ -235,7 +235,11 @@ def enrich_company_t3(sb, profile):
             return "err"
         return "empty"
     try:
-        for entry in E.run_pipeline(profile["company"], "culture", results):
+        pipeline = E.run_pipeline(profile["company"], "culture", results)
+        pubs = len({r.get("publisher") for r in results if r.get("publisher")})
+        print(f"  [t3] {profile['company']}: 千帆 {len(results)} 条/{pubs} 域 → "
+              f"claims {len(pipeline)} → {[e['status'] for e in pipeline]}")
+        for entry in pipeline:
             if entry["status"] == "drop":
                 continue
             write_experience(sb, profile["id"], entry["claim"],
