@@ -127,26 +127,54 @@ def main():
         sample, n_hosts = fetch_sample(sb, per_host, max_total, host_filter, include_ats)
     print(f"抽样 {len(sample)} 条，覆盖 {n_hosts} 个 host；模式={'APPLY(写expired)' if apply else 'DRY-RUN(只报告)'}\n")
 
-    agg = defaultdict(lambda: {"dead": 0, "alive": 0, "suspect": 0, "unsure": 0, "ids_dead": []})
+    apply_ok = [0]
+    agg = defaultdict(lambda: {"dead": 0, "alive": 0, "suspect": 0, "unsure": 0})
+    RESTART_EVERY = 40  # 每渲染这么多个重启浏览器，规避长跑内存泄漏/崩溃（智元 613 一次跑崩过）
+
+    def expire(jid):
+        try:
+            sb.table("jobs").update({"status": "expired"}).eq("id", jid).execute()
+            apply_ok[0] += 1
+        except Exception as e:
+            sys.stderr.write(f"\n  写失败 {jid}: {str(e)[:60]}\n")
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context(user_agent=UA, viewport={"width": 1280, "height": 900})
-        page = ctx.new_page()
+        hold = {"b": None, "pg": None}
+
+        def fresh():
+            try:
+                if hold["b"]:
+                    hold["b"].close()
+            except Exception:
+                pass
+            hold["b"] = p.chromium.launch(headless=True)
+            hold["pg"] = hold["b"].new_context(
+                user_agent=UA, viewport={"width": 1280, "height": 900}).new_page()
+
+        fresh()
         for i, j in enumerate(sample, 1):
+            if i > 1 and i % RESTART_EVERY == 1:
+                fresh()
             h = host_of(j["jd_url"])
             verdict, why = "unsure", "nav-fail"
             try:
-                page.goto(j["jd_url"], wait_until="domcontentloaded", timeout=20000)
-                page.wait_for_timeout(2500)  # 给 SPA 渲染时间
-                verdict, why = classify(page, j.get("title"))
+                hold["pg"].goto(j["jd_url"], wait_until="domcontentloaded", timeout=20000)
+                hold["pg"].wait_for_timeout(2500)  # 给 SPA 渲染时间
+                verdict, why = classify(hold["pg"], j.get("title"))
             except Exception as e:
                 verdict, why = "unsure", type(e).__name__
-            a = agg[h]
-            a[verdict] += 1
-            if verdict == "dead":
-                a["ids_dead"].append(j["id"])
-            sys.stderr.write(f"\r  {i}/{len(sample)}  {verdict:7s} {h[:32]:32s} {why[:18]}")
-        browser.close()
+                try:
+                    fresh()  # 可能浏览器崩了 → 重建后继续
+                except Exception:
+                    pass
+            agg[h][verdict] += 1
+            if verdict == "dead" and apply:
+                expire(j["id"])  # 增量下架：边扫边写，中途崩了也不丢已清的
+            sys.stderr.write(f"\r  {i}/{len(sample)} {verdict:7s} {h[:28]:28s} {why[:14]} exp={apply_ok[0]}")
+        try:
+            hold["b"].close()
+        except Exception:
+            pass
     sys.stderr.write("\n\n")
 
     rows = sorted(agg.items(), key=lambda kv: -(kv[1]["dead"] + kv[1]["suspect"]))
@@ -162,20 +190,10 @@ def main():
     print(f"\n合计 {N}: dead {tot['dead']}({tot['dead']*100//N}%) suspect {tot['suspect']}({tot['suspect']*100//N}%) "
           f"alive {tot['alive']}({tot['alive']*100//N}%) unsure {tot['unsure']}({tot['unsure']*100//N}%)")
     print("解读: dead=渲染出'职位不存在'类标记(高置信失效); suspect=渲染了但无标题(疑似/反爬,需人工); unsure=空/被拦(不下架)")
-
     if apply:
-        dead_ids = [i for a in agg.values() for i in a["ids_dead"]]
-        print(f"\n[APPLY] 将 {len(dead_ids)} 条 marker 确认 dead 的岗位置 status='expired' …")
-        ok = 0
-        for jid in dead_ids:
-            try:
-                sb.table("jobs").update({"status": "expired"}).eq("id", jid).execute()
-                ok += 1
-            except Exception as e:
-                print("  写失败", jid, str(e)[:80])
-        print(f"[APPLY] 完成，置 expired {ok} 条。")
+        print(f"\n[APPLY] 边扫边下架，共置 expired {apply_ok[0]} 条。")
     else:
-        print("\n（DRY-RUN：未写库。确认无误后加 --apply 下架 dead 项。suspect 项默认不动。）")
+        print("\n（DRY-RUN：未写库。加 --apply 增量下架 dead 项；suspect 默认不动。）")
 
 
 if __name__ == "__main__":
