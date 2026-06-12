@@ -105,7 +105,8 @@ def search(query, top_k=DEFAULT_TOP_K, client=None):
         url = _first(row, "url", "link", "website")
         snip = _first(row, "snippet", "content", "summary", "description")
         if title and url:
-            out.append({"title": title, "url": url, "snippet": snip,
+            # 引擎契约要 source 带 "text"（writer 抽取 + judge 核对都读它）；千帆字段叫 snippet → 同时给 text 别名
+            out.append({"title": title, "url": url, "snippet": snip, "text": snip,
                         "publisher": urlparse(url).netloc or "web"})
     if not out:  # 200 但无可用结果：打印响应形状，便于辨别鉴权/限流/响应结构问题
         keys = list(data.keys())[:6] if isinstance(data, dict) else type(data).__name__
