@@ -252,7 +252,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
             {!newViewActive && filters.keyword
               ? `（精确 ${exactCount} + 相关 ${Math.max(0, total - exactCount)}）`
               : ""}
-            {!newViewActive && capped ? "+（已纳入最新 15000 条内匹配）" : ""}
+            {!newViewActive && capped ? "+（已扫描最新岗位，可加载更多继续）" : ""}
             ，已展示 {displayJobs.length} 个（本次官网刷新/发现 {officialJobs.length}）。服务端筛选；已知源刷新、动态官方源发现三层分开执行。
           </>
         )}
