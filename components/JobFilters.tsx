@@ -1,8 +1,12 @@
 "use client";
 
+import { useState } from "react";
+import { cn } from "@/lib/utils";
 import {
   Buildings,
   Briefcase,
+  CaretDown,
+  Funnel,
   GlobeHemisphereEast,
   MapPin,
   MagnifyingGlass,
@@ -32,15 +36,57 @@ interface Props {
 const ORIGINS = ["全部", "中国", "外企", "美企", "德企", "日企", "欧企"];
 
 export default function JobFilters({ filters, onChange, companies }: Props) {
+  // 移动端默认收起筛选，先让用户看到岗位；点击「筛选」条展开。桌面端（lg+）始终展开。
+  const [open, setOpen] = useState(false);
+
   function set(key: keyof Filters, value: string | boolean) {
     onChange({ ...filters, [key]: value });
   }
+
+  // 收起态在「筛选」条上回显当前生效的筛选，避免折叠后看不出筛了什么。
+  const activeBits = [
+    filters.company,
+    filters.city,
+    filters.jobType,
+    filters.keyword,
+    filters.capitalOrigin,
+    filters.showNewOnly ? "仅新岗位" : "",
+    filters.salaryOnly ? "仅薪资公开" : "",
+    filters.showIgnored ? "含已忽略" : "",
+    filters.showApplied ? "含已投递" : "",
+  ].filter(Boolean) as string[];
 
   const inputClass = "mt-1 w-full rounded-xl border border-black/[0.09] bg-white/70 px-3 py-2 text-sm text-[#1a1714] transition duration-200 placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white focus:outline-none";
   const selectClass = "mt-1 w-full rounded-xl border border-black/[0.09] bg-white px-3 py-2 text-sm text-[#1a1714] transition duration-200 focus:border-[#1a1714]/55 focus:outline-none";
 
   return (
-    <div className="surface space-y-5 p-4 text-[#1a1714] sm:p-5">
+    <div className="surface p-4 text-[#1a1714] sm:p-5">
+      {/* 移动端折叠开关（lg 以下） */}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="-m-1 flex w-full items-center gap-2 rounded-xl p-1 text-left lg:hidden"
+      >
+        <Funnel size={18} weight="fill" className="shrink-0 text-[#5f594e]" aria-hidden="true" />
+        <span className="shrink-0 text-sm font-semibold text-[#3f3a33]">筛选</span>
+        {activeBits.length > 0 && (
+          <span className="grid size-5 shrink-0 place-items-center rounded-full bg-[#1a1714] text-[11px] font-semibold tabular-nums text-[#f7f1e6]">
+            {activeBits.length}
+          </span>
+        )}
+        <span className="min-w-0 flex-1 truncate text-xs text-[#9a9184]">
+          {activeBits.length > 0 ? activeBits.join(" · ") : "全部岗位"}
+        </span>
+        <CaretDown
+          size={16}
+          weight="bold"
+          className={cn("shrink-0 text-[#8a8275] transition-transform", open && "rotate-180")}
+          aria-hidden="true"
+        />
+      </button>
+
+      <div className={cn("space-y-5", open ? "block pt-4" : "hidden", "lg:block lg:pt-0")}>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <FilterLabel icon={Buildings} label="公司" />
@@ -100,6 +146,7 @@ export default function JobFilters({ filters, onChange, companies }: Props) {
         <Check label="仅薪资公开" checked={filters.salaryOnly} onChange={(v) => set("salaryOnly", v)} />
         <Check label="显示已忽略" checked={filters.showIgnored} onChange={(v) => set("showIgnored", v)} />
         <Check label="显示已投递" checked={filters.showApplied} onChange={(v) => set("showApplied", v)} />
+      </div>
       </div>
     </div>
   );
