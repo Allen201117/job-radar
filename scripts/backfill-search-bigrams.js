@@ -18,17 +18,26 @@ const BATCH = Number(process.argv[2] || 2000);
   const sb = createClient(SUPA_URL, KEY, { auth: { persistSession: false } });
   let total = 0;
   let round = 0;
+  let fails = 0;
   for (;;) {
     const t = Date.now();
     const { data, error } = await sb.rpc("backfill_search_bigrams", { batch: BATCH });
     if (error) {
-      console.error("✗ RPC backfill_search_bigrams 失败:", error.message);
-      process.exit(1);
+      fails += 1;
+      console.error(`! 第 ${round + 1} 批失败(${fails}/5): ${error.message} — 重试`);
+      if (fails >= 5) {
+        console.error("✗ 连续失败过多，停止。可降低 batch 后重跑（幂等，只填 NULL）。");
+        process.exit(1);
+      }
+      continue; // 同批重试（未提交→仍是 NULL，幂等）
     }
+    fails = 0;
     const n = Number(data || 0);
     total += n;
     round += 1;
-    console.log(`round ${round}: +${n}（累计 ${total}）${Date.now() - t}ms`);
+    if (round % 10 === 0 || n === 0) {
+      console.log(`round ${round}: +${n}（累计 ${total}）${Date.now() - t}ms`);
+    }
     if (n === 0) break;
   }
   console.log(`✓ 回填完成，共 ${total} 行。`);
