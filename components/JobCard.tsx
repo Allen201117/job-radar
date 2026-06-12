@@ -21,6 +21,7 @@ import {
 } from "@/lib/china-keyword-expansion";
 import { matchTier } from "@/lib/scoring";
 import CompanyInsightDrawer from "@/components/CompanyInsightDrawer";
+import { track } from "@/lib/track";
 import type { ScoredJob } from "@/lib/types";
 import { cleanSummary, cn, freshnessLabel } from "@/lib/utils";
 
@@ -146,6 +147,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
     setActionError("");
     const prev = currentAction as PrimaryAction | null;
     const next = prev === action ? null : action;
+    if (next) track("job_action", { action: next, job_id: job.id });
     setCurrentAction(next);
     onActionChange(job.id, next);
     setActing(true);
@@ -154,6 +156,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
 
   function handleView() {
     window.open(job.jd_url, "_blank", "noopener,noreferrer");
+    track("job_click", { job_id: job.id, company: job.company });
     supabase.auth.getSession().then(({ data: { session } }) => {
       const uid = session?.user?.id;
       if (uid) {
