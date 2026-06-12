@@ -5,29 +5,31 @@ export const dynamic = "force-dynamic";
 
 // 「有活跃岗位的公司」全量去重列表，供岗位库筛选器的公司下拉(datalist)使用。
 // 服务端筛选后公司项不能再从浏览器已加载岗位派生（会只剩几家）——这里一次取全 ~500+ 家。
-// 进程内缓存 10 分钟（低频、对所有用户相同），避免每次进页都全表聚合。
-let cache: { at: number; companies: string[] } | null = null;
-const TTL_MS = 10 * 60 * 1000;
+// 进程内缓存：RPC 全量结果缓存 10 分钟；兜底(不全)只缓存 30 秒，让其尽快重试 RPC 拿全量。
+let cache: { until: number; companies: string[] } | null = null;
+const TTL_FULL_MS = 10 * 60 * 1000;
+const TTL_FALLBACK_MS = 30 * 1000;
 
 export async function GET() {
-  if (cache && Date.now() - cache.at < TTL_MS) {
+  if (cache && Date.now() < cache.until) {
     return NextResponse.json({ ok: true, companies: cache.companies, cached: true });
   }
 
-  // jobs 公开可读；用 service-role 绕 anon 角色的 statement_timeout（未建索引时全表聚合/排序会超时）。
+  // jobs 公开可读；用 service-role 绕 anon 角色的 statement_timeout。
   const supabase = createServiceClient();
 
-  // 首选 active_companies() RPC（迁移 138，单次 group by，最全最快）。
+  // 首选 active_companies() RPC（迁移 138，单次 group by，最全）。
+  // 注意：迁移刚应用时 PostgREST schema 缓存可能尚未收录该函数 → rpc 报错，走兜底，几十秒后自愈。
   let companies: string[] | null = null;
+  let fromRpc = false;
   const rpc = await supabase.rpc("active_companies");
   if (!rpc.error && Array.isArray(rpc.data)) {
-    companies = (rpc.data as Array<{ company: string }>)
-      .map((r) => r.company)
-      .filter(Boolean);
+    companies = (rpc.data as Array<{ company: string }>).map((r) => r.company).filter(Boolean);
+    fromRpc = true;
   } else {
-    // 兜底（RPC 未就绪时，如本地未应用迁移）：取最近窗口的 company 列去重。
+    // 兜底（RPC 未就绪）：扫全库 company 列（仅一列，轻量）去重，仍给出尽量完整的列表。
     const seen = new Set<string>();
-    for (let off = 0; off < 12000; off += 1000) {
+    for (let off = 0; off < 110000; off += 1000) {
       const { data, error } = await supabase
         .from("jobs")
         .select("company")
@@ -43,6 +45,9 @@ export async function GET() {
     companies = Array.from(seen).sort((a, b) => a.localeCompare(b, "zh"));
   }
 
-  cache = { at: Date.now(), companies: companies || [] };
+  cache = {
+    until: Date.now() + (fromRpc ? TTL_FULL_MS : TTL_FALLBACK_MS),
+    companies: companies || [],
+  };
   return NextResponse.json({ ok: true, companies: cache.companies });
 }
