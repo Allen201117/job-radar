@@ -242,7 +242,11 @@ def enrich_company_t3(sb, profile):
         for entry in pipeline:
             if entry["status"] == "drop":
                 continue
-            write_experience(sb, profile["id"], entry["claim"],
+            claim = dict(entry["claim"])
+            # 经验类样本量 = 千帆检索到的公开讨论篇数（每条结果=一篇讨论；诚实满足读时门 ≥5 + 来源 ≥2 publisher）
+            if not str(claim.get("sample_size") or "").isdigit():
+                claim["sample_size"] = len(results)
+            write_experience(sb, profile["id"], claim,
                              _pick_sources(results, entry["claim"]), entry.get("judge") or {}, entry["status"])
         sb.table("company_profiles").update({"t3_checked_at": _now()}).eq("id", profile["id"]).execute()
         return "wrote"
