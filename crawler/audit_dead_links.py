@@ -105,8 +105,26 @@ def main():
     host_filter = arg("--host")
 
     include_ats = "--include-ats" in sys.argv
+    sweep_kw = arg("--sweep")  # 对「source_url 含 kw 的源」做全量逐岗审计(不抽样)，配 --apply 精确下架其失效岗
     sb = db.get_supabase()
-    sample, n_hosts = fetch_sample(sb, per_host, max_total, host_filter, include_ats)
+    if sweep_kw:
+        srcs = sb.table("sources").select("id,company").ilike("source_url", "%" + sweep_kw + "%").execute().data or []
+        sample = []
+        for s in srcs:
+            off = 0
+            while True:
+                rows = (sb.table("jobs").select("id,title,company,jd_url")
+                        .eq("status", "active").eq("source_id", s["id"]).range(off, off + 999).execute().data or [])
+                if not rows:
+                    break
+                sample.extend(rows)
+                if len(rows) < 1000:
+                    break
+                off += 1000
+        n_hosts = len(srcs)
+        print(f"[SWEEP] 源含「{sweep_kw}」共 {len(srcs)} 个，全量逐岗 {len(sample)} 条")
+    else:
+        sample, n_hosts = fetch_sample(sb, per_host, max_total, host_filter, include_ats)
     print(f"抽样 {len(sample)} 条，覆盖 {n_hosts} 个 host；模式={'APPLY(写expired)' if apply else 'DRY-RUN(只报告)'}\n")
 
     agg = defaultdict(lambda: {"dead": 0, "alive": 0, "suspect": 0, "unsure": 0, "ids_dead": []})
