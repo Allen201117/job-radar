@@ -26,9 +26,9 @@ function buildInitialFilters(prefs: any, cp: any): { city: string; jobType: stri
   };
 }
 
-// 岗位库已不设展示硬上限。SSR 只取第一页（最新 PAGE1 条）让首屏快出，并查活跃总数；
-// 其余由前端挂载后调 /api/jobs/list 后台分块拉完合并进内存库 → 展示实时全量，单页 props 负载恒定。
-const PAGE1 = 1000;
+// 服务端筛选版：SSR 只取最新一屏作「即时首屏种子」，并查活跃总数；
+// 真正的筛选/分页由前端挂载后调 /api/jobs/search 在服务端跑（库 10万+，不再前端全量加载）。
+const PAGE1 = 60;
 
 async function fetchFirstPageAndTotal(
   supabase: Awaited<ReturnType<typeof createServerSupabase>>,

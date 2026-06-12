@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef, Fragment } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import JobCard from "@/components/JobCard";
 import JobFilters from "@/components/JobFilters";
 import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
 import type { ScoredJob } from "@/lib/types";
-import { useJobFilters, JOBS_PAGE_SIZE } from "@/hooks/useJobFilters";
+import { useJobFilters } from "@/hooks/useJobFilters";
 import { useDiscoveryPoll, type BrowserDiscoveryState } from "@/hooks/useDiscoveryPoll";
 import {
   ArrowsClockwise,
@@ -32,76 +32,49 @@ interface Props {
 
 export default function JobsClient({ initialJobs, initialTotal, initialFilters }: Props) {
   const [officialJobs, setOfficialJobs] = useState<ScoredJob[]>([]);
-  // 后台分块把岗位库剩余岗位拉完（解除展示硬上限）：SSR 只给第一页，这里补齐到 initialTotal。
-  const [extraJobs, setExtraJobs] = useState<ScoredJob[]>([]);
-  const [libLoading, setLibLoading] = useState(false);
-  const fillRef = useRef(false);
   // 本次搜索/发现完成后默认只看新岗位；用户可切回「查看全部」
   const [onlyNew, setOnlyNew] = useState(false);
   const [searchInfo, setSearchInfo] = useState("");
+  // 公司下拉项：服务端筛选后不能再从「已加载岗位」派生（会只剩几家），改从专用接口取全量 ~500+ 家。
+  const [companies, setCompanies] = useState<string[]>([]);
   const router = useRouter();
 
-  // —— 后台拉全量岗位库（无展示硬上限）——
-  // SSR 只渲染第一页；挂载后从第一页之后按 1000 一块拉到 initialTotal，合并进内存库。
-  // 现有筛选 / 三桶 / 关键词扩展 / 排序全部在内存全量上跑，故需把全量拉进来（只是不再一次性塞 props）。
   useEffect(() => {
-    if (fillRef.current) return;
-    if (initialJobs.length >= initialTotal) return;
-    fillRef.current = true;
     let cancelled = false;
     (async () => {
-      setLibLoading(true);
-      let offset = initialJobs.length;
-      const LIMIT = 1000;
-      for (let i = 0; i < 500 && !cancelled; i++) {
-        try {
-          const resp = await fetch(`/api/jobs/list?offset=${offset}&limit=${LIMIT}`);
-          const data = await resp.json();
-          const batch: ScoredJob[] = Array.isArray(data?.jobs) ? data.jobs : [];
-          if (!data?.ok || batch.length === 0) break;
-          if (cancelled) break;
-          setExtraJobs((prev) => [...prev, ...batch]);
-          offset += batch.length;
-          if (batch.length < LIMIT) break;
-        } catch {
-          break;
+      try {
+        const resp = await fetch("/api/jobs/companies");
+        const data = await resp.json();
+        if (!cancelled && data?.ok && Array.isArray(data.companies)) {
+          setCompanies(data.companies);
         }
+      } catch {
+        // 取不到就保持空 datalist——公司框仍可自由输入子串
       }
-      if (!cancelled) setLibLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 内存库 = SSR 第一页 + 后台补齐的剩余页（按 id 去重）。
-  const localJobs = useMemo(() => {
-    if (extraJobs.length === 0) return initialJobs;
-    const seen = new Set(initialJobs.map((j) => j.id));
-    return [...initialJobs, ...extraJobs.filter((j) => !seen.has(j.id))];
-  }, [initialJobs, extraJobs]);
-
-  // 公司下拉项从内存库实时派生（随后台拉取增长）。
-  const companies = useMemo(
-    () => Array.from(new Set(localJobs.map((j) => j.company).filter(Boolean))) as string[],
-    [localJobs],
-  );
-
-  // 筛选 state + 派生过滤链（useMemo 链整体在 hook 内）。
+  // 筛选 + 分页改由服务端 /api/jobs/search 跑（库已 10万+，前端不再全量加载）；匹配逻辑复用 lib/job-filter。
   const {
     filters,
     setFilters,
     sessionNewKeys,
     newViewActive,
-    filtered,
-    visibleCount,
-    setVisibleCount,
-    visibleJobs,
+    displayJobs,
+    total,
     exactCount,
-    existingFilteredCount,
+    capped,
+    loading,
+    loadingMore,
+    error,
+    hasMore,
+    loadMore,
+    refresh,
     newMatching,
-  } = useJobFilters({ localJobs, officialJobs, onlyNew, initialFilters });
+  } = useJobFilters({ officialJobs, onlyNew, initialFilters, initialJobs, initialTotal });
 
   // 「刷新公司库 / 联网爬新公司」状态机 + 轮询 + 持久化 + 超时（整体在 hook 内）。
   const { discovery, refreshing, discoveryActive, startDiscovery, startRefresh } =
@@ -113,7 +86,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
   const [summaryOverlay, setSummaryOverlay] = useState<Record<string, string>>({});
   const enrichRequested = useRef<Set<string>>(new Set());
   useEffect(() => {
-    const need = visibleJobs
+    const need = displayJobs
       .filter(
         (j) =>
           j.jd_url &&
@@ -145,7 +118,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleJobs]);
+  }, [displayJobs]);
 
   // 一键放宽城市 + 岗位类型（保留关键词），让本次发现的岗位可见。
   function relaxLocationAndType() {
@@ -157,9 +130,8 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     track("search", { keyword: filters.keyword || "" });
     setOfficialJobs([]);
     setOnlyNew(false);
-    setSearchInfo(
-      `仅搜索本地岗位库，不触发外部请求。当前命中 ${existingFilteredCount} 个岗位。`,
-    );
+    setSearchInfo("仅搜索本地岗位库，不触发外部请求。结果即下方列表。");
+    refresh();
   }
 
   function handleActionChange(jobId: string, action: PrimaryAction | null) {
@@ -271,13 +243,29 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
 
       <p className="inline-flex items-center gap-2 rounded-full border border-black/[0.06] bg-white/55 px-3 py-2 text-sm leading-6 text-[#5f594e]">
         <MagnifyingGlass size={16} weight="bold" aria-hidden="true" />
-        {newViewActive ? "只看本次新发现：" : "匹配 "}
-        {filtered.length} 个岗位{filters.keyword ? `（精确 ${exactCount} + 相关 ${filtered.length - exactCount}）` : ""}，已展示 {Math.min(visibleCount, filtered.length)} 个（本地岗位库 {localJobs.length}{libLoading ? ` / 共 ${initialTotal}，载入中…` : ""} + 本次官网刷新/发现 {officialJobs.length}）。本地搜索、已知源刷新、动态官方源发现三层分开执行。
+        {loading ? (
+          "正在搜索岗位库…"
+        ) : (
+          <>
+            {newViewActive ? "只看本次新发现：" : "匹配 "}
+            {newViewActive ? newMatching.length : total} 个岗位
+            {!newViewActive && filters.keyword
+              ? `（精确 ${exactCount} + 相关 ${Math.max(0, total - exactCount)}）`
+              : ""}
+            {!newViewActive && capped ? "+（已纳入最新 15000 条内匹配）" : ""}
+            ，已展示 {displayJobs.length} 个（本次官网刷新/发现 {officialJobs.length}）。服务端筛选；已知源刷新、动态官方源发现三层分开执行。
+          </>
+        )}
       </p>
+      {error && (
+        <p className="rounded-2xl border border-[#e7b4a0] bg-[#fbe9e2] px-3.5 py-2.5 text-sm text-[#9a4a32]">
+          {error}
+        </p>
+      )}
       <div className="space-y-3">
-        {visibleJobs.map((job, i) => {
+        {displayJobs.map((job, i) => {
           const tier = (job as any).__tier as "exact" | "related";
-          const prevTier = i > 0 ? ((visibleJobs[i - 1] as any).__tier as string) : null;
+          const prevTier = i > 0 ? ((displayJobs[i - 1] as any).__tier as string) : null;
           const showDivider =
             Boolean(filters.keyword) && tier === "related" && prevTier !== "related";
           return (
@@ -303,7 +291,13 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
             </Fragment>
           );
         })}
-        {filtered.length === 0 &&
+        {loading && displayJobs.length === 0 && (
+          <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] bg-white/45 px-6 py-14 text-center">
+            <CircleNotch size={22} weight="bold" className="mx-auto animate-spin text-[#8a8275]" aria-hidden="true" />
+            <p className="mt-3 text-sm text-[#6b655a]">正在搜索岗位库…</p>
+          </div>
+        )}
+        {!loading && displayJobs.length === 0 &&
           (officialJobs.length > 0 && (filters.city || filters.jobType) ? (
             <div className="rounded-[1.5rem] border border-dashed border-[#e7c98a] bg-[#fbf2d8] px-6 py-10 text-center">
               <h2 className="text-lg font-semibold text-[#1a1714]">
@@ -332,17 +326,25 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
             </div>
           ))}
       </div>
-      {filtered.length > visibleCount && (
+      {hasMore && (
         <div className="flex justify-center pt-1">
           <button
             type="button"
-            onClick={() => setVisibleCount((n) => n + JOBS_PAGE_SIZE)}
-            className="inline-flex items-center gap-2 rounded-full border border-black/[0.08] bg-white/70 px-5 py-2.5 text-sm font-medium text-[#3f3a33] transition duration-200 hover:bg-white active:scale-[0.98]"
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="inline-flex items-center gap-2 rounded-full border border-black/[0.08] bg-white/70 px-5 py-2.5 text-sm font-medium text-[#3f3a33] transition duration-200 hover:bg-white active:scale-[0.98] disabled:opacity-50"
           >
-            加载更多
-            <span className="tabular-nums text-[#9a9184]">
-              （还有 {filtered.length - visibleCount} 个）
-            </span>
+            {loadingMore ? (
+              <>
+                <CircleNotch size={16} weight="bold" className="animate-spin" aria-hidden="true" />
+                加载中…
+              </>
+            ) : (
+              <>
+                加载更多
+                <span className="tabular-nums text-[#9a9184]">（还有 {total - displayJobs.length} 个）</span>
+              </>
+            )}
           </button>
         </div>
       )}
