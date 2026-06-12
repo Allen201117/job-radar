@@ -36,15 +36,17 @@ export type SearchResult = {
   limit: number;
 };
 
-// 与 SQL chinese_bigrams 同口径：小写→按空白切词→每词相邻双字（单字词原样）。
-// 仅保留「纯字母/数字/CJK」的 2 字元（或单字），避免标点把 tsquery 语法搞坏。
-function bigramsOf(term: string): string[] {
+// 与 SQL search_tokens 同口径：纯拉丁/数字词→整词（英文标题选择性好、不爆）；含 CJK 的词→相邻双字（中文子串）。
+function queryTokens(term: string): string[] {
   const out: string[] = [];
   for (const tok of String(term || "").toLowerCase().split(/\s+/)) {
     if (!tok) continue;
-    // 纯字母/数字/中日韩(BMP) 才保留；不用 \p{}/u 标志（项目 TS target < es6）。
+    if (/^[a-z0-9]+$/.test(tok)) {
+      out.push(tok); // 纯拉丁/数字：整词
+      continue;
+    }
     if (tok.length === 1) {
-      if (/^[a-z0-9㐀-䶿一-鿿]$/.test(tok)) out.push(tok);
+      if (/^[㐀-䶿一-鿿]$/.test(tok)) out.push(tok);
       continue;
     }
     for (let i = 0; i < tok.length - 1; i++) {
@@ -55,24 +57,19 @@ function bigramsOf(term: string): string[] {
   return out;
 }
 
-// 一个词 → 「其全部 bigram 的 AND」子句（命中该词≈其 bigram 全在文档中）。无有效 bigram 返回 null。
+// 一个词 → 「其全部 token 的 AND」子句（命中该词≈其 token 全在文档中）。无有效 token 返回 null。
 function termClause(term: string): string | null {
-  const bg = bigramsOf(term);
-  if (!bg.length) return null;
-  return `(${bg.join(" & ")})`;
+  const toks = queryTokens(term);
+  if (!toks.length) return null;
+  return `(${toks.join(" & ")})`;
 }
 
-const hasCJK = (t: string) => /[一-鿿㐀-䶿]/.test(t);
-
-// 构造 bigram tsquery：关键词候选词「组内 OR」，再与 城市/公司 等「过滤词 AND」。全空返回 null（→走浏览/扫描）。
-// 关键：中文 2 字 bigram 选择性好(快)，但**纯拉丁词的 2 字 bigram(pr/od/uc…)posting list 巨大、拖慢 4 倍**。
-// 故候选词里**只要有中文词就只用中文词**(中文搜索的常态，召回足够)；纯英文关键词(如 python)才退回用拉丁词。
-function buildBigramTsquery(keywordTerms: string[], andTerms: string[]): string | null {
+// 构造 tsquery：关键词候选词「组内 OR」，再与 城市/公司 等「过滤词 AND」。全空返回 null（→走浏览/扫描）。
+// 中文出 bigram、英文出整词，两者选择性都好 → 中英文标题同时命中且快（v2，title 锚定，不再丢英文）。
+function buildTsquery(keywordTerms: string[], andTerms: string[]): string | null {
   const clauses: string[] = [];
 
-  const cjkTerms = keywordTerms.filter(hasCJK);
-  const effectiveKw = cjkTerms.length ? cjkTerms : keywordTerms;
-  const kwClauses = effectiveKw.map(termClause).filter((c): c is string => !!c);
+  const kwClauses = keywordTerms.map(termClause).filter((c): c is string => !!c);
   if (kwClauses.length) clauses.push(`(${kwClauses.join(" | ")})`);
 
   for (const t of andTerms) {
@@ -116,7 +113,7 @@ async function searchViaFTS(
       .from("jobs")
       .select("*")
       .eq("status", "active")
-      .textSearch("search_bigrams", tsquery, { config: "simple" });
+      .textSearch("search_doc", tsquery, { config: "simple" });
     // 精确收紧（在 GIN 命中集上 recheck，便宜）：bigram 的城市/公司会匹配到摘要里的提及，
     // 加 location/company 的 ilike 把候选缩到真正同城/同公司，少拉很多行。JS 仍做最终精筛。
     const city = filters.city.trim();
@@ -213,7 +210,7 @@ export async function searchJobs(
   // 有关键词/城市/公司 → FTS 路径（快且全召回）；其中关键词用 ftsCandidateTerms 取「精确+同职能」候选词。
   const keywordTerms = keyword ? ftsCandidateTerms(keyword) : [];
   const andTerms = [city, company].filter(Boolean);
-  const tsquery = buildBigramTsquery(keywordTerms, andTerms);
+  const tsquery = buildTsquery(keywordTerms, andTerms);
 
   if (tsquery) {
     try {
