@@ -62,14 +62,7 @@ job-radar-private-beta/
     normalizer.py         # 字段标准化
     robots.py             # robots.txt 检查
     requirements.txt
-  supabase/migrations/
-    001_init.sql          # 建表
-    002_rls.sql           # RLS 策略
-    003_seed_sources.sql   # 首批源数据
-    004_update_source_urls.sql # 已验证源 URL 修正
-    005_source_candidates.sql # 官方源发现候选隔离与日志
-    006_resume_profiles.sql # 简历上传与用户画像
-    007_candidate_profile_summaries.sql # 画像摘要字段
+  supabase/migrations/    # 数字前缀递增的迁移文件（001 建表 / 002 RLS / … 持续新增）
   .github/workflows/
     daily-crawl.yml       # 每日抓取 + 手动触发
 ```
@@ -105,7 +98,7 @@ job-radar-private-beta/
 - 动态官方源发现走 `/api/discovery`，主 provider 是百度千帆 Web Search；默认只调用 1 个 generated query，用户点击“继续发现更多”才调用第 2 个 query。
 - 相同 user/query/city/job_type 的 discovery 结果 45 分钟内复用缓存，响应 diagnostics 会显示 `cache_hit`。
 - `jobs` 写入质量门不变：只有 parser 验证过的官方岗位详情页，且 `company/title/jd_url` 非空、HTTP 200、页面包含标题或核心片段，才写入 `jobs`。
-- 简历文本、`.txt`、`.md` 可以生成 candidate profile；用户确认后可同步 `user_preferences`，用于 Jobs 排序。
+- 简历文本，以及 `.txt` / `.md` / PDF / Word(`.docx`) / 图片 上传，都可以生成 candidate profile；用户确认后可同步 `user_preferences`，用于 Jobs 排序。
 
 ## 百度千帆额度与限流
 
@@ -139,11 +132,9 @@ BAIDU_QIANFAN_SEARCH_DISABLED=false
 
 ### 1. 初始化 Supabase
 
-在 Supabase 项目中依次执行 `supabase/migrations/` 下的 SQL 文件：
+按数字前缀从小到大依次执行 `supabase/migrations/` 目录下的全部 SQL 文件（`001_init.sql` 起，后续按前缀递增，以目录实际内容为准）。
 
-```
-001_init.sql → 002_rls.sql → 003_seed_sources.sql → 004_update_source_urls.sql → 005_source_candidates.sql → 006_resume_profiles.sql → 007_candidate_profile_summaries.sql
-```
+> 生产库已自动化：push 到 `main` 且改动 `supabase/migrations/**` 时由 `.github/workflows/migrate.yml` 自动 apply，无需手动进 Supabase SQL Editor。
 
 ### 2. 配置环境变量
 
@@ -200,8 +191,8 @@ python3 crawler/run.py --source jd
 回归项：
 
 1. 粘贴简历文本；
-2. `.txt` / `.md` 上传；
-3. PDF/DOCX 返回 `415 unsupported_file_type`；
+2. `.txt` / `.md` / PDF / Word(`.docx`) / 图片 上传均可解析（服务端抽取文本后交 LLM 结构化，失败降级规则解析）；
+3. 不支持的文件类型（如 `.doc` / `.pages`）返回 `415 unsupported_file_type`；
 4. 空文本返回 `400 empty_resume_text`；
 5. 无偏好信号文本不覆盖 preferences；
 6. 写入 `resume_uploads`；
@@ -255,7 +246,7 @@ python3 crawler/run.py --source jd
 4. 不同用户操作互不影响
 5. 岗位卡片可点击跳转官网
 6. Jobs 页可区分本地 jobs 表搜索与官方源发现；官方源发现只把有准确岗位详情页的岗位 upsert 到 jobs
-7. 简历文本或 `.txt/.md` 可解析为 candidate profile，用户确认后同步 preferences；PDF/DOCX 暂不支持
+7. 简历文本，以及 `.txt/.md`/PDF/Word(`.docx`)/图片 上传，均可解析为 candidate profile，用户确认后同步 preferences
 
 ## 下一步路线
 
@@ -270,7 +261,6 @@ python3 crawler/run.py --source jd
 - 自动投递
 - 第三方招聘平台抓取
 - LLM 摘要或匹配
-- PDF/DOCX 简历复杂解析
 - 邮件/飞书/微信推送
 - 商业化付费
 
