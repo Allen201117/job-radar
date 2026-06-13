@@ -90,7 +90,7 @@ export function useDiscoveryPoll({
       runId: null,
       startedAt,
       elapsedSec: 0,
-      note: "正在触发后台浏览器抓取…",
+      note: "正在准备扩大搜索…",
     });
     try {
       const resp = await fetch("/api/discovery/dispatch", {
@@ -116,12 +116,12 @@ export function useDiscoveryPoll({
         ...prev,
         phase: "queued",
         runId: data.run_id,
-        note: "已进入后台队列，等待浏览器抓取…",
+        note: "已排队，正在去官网搜索…",
       }));
     } catch {
       setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "" });
       clearDiscoveryTask();
-      setSearchInfo("按需发现触发失败，请稍后再试。");
+      setSearchInfo("扩大搜索触发失败，请稍后再试。");
     }
   }
 
@@ -220,7 +220,7 @@ export function useDiscoveryPoll({
       // 不清空已流式入列的新岗位；仅收起进度并提示后台可能仍在补充。
       setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "", progress: null });
       clearDiscoveryTask();
-      setSearchInfo("后台仍在刷新，已入库的新岗位见列表；可稍后刷新页面查看其余。");
+      setSearchInfo("后台仍在更新，已找到的新岗位见列表；可稍后重开页面查看其余。");
     }, DISCOVERY_TIMEOUT_MS);
 
     return () => {
@@ -238,7 +238,7 @@ export function useDiscoveryPoll({
     if (refreshing || discoveryActive) return; // 进行中不重复触发（后端另有节流/幂等兜底）
     track("refresh_click");
     setRefreshing(true);
-    setSearchInfo("正在触发刷新你的公司库…");
+    setSearchInfo("正在更新你关注的公司…");
     const startedAt = Date.now();
     try {
       const resp = await fetch("/api/refresh", {
@@ -253,11 +253,11 @@ export function useDiscoveryPoll({
       });
       const data = await resp.json();
       if (resp.status === 429) {
-        setSearchInfo(data?.hint || `刚刷过，约 ${data?.retry_after_sec ?? 60} 秒后可再刷。`);
+        setSearchInfo(data?.hint || `刚更新过，约 ${data?.retry_after_sec ?? 60} 秒后可再试。`);
         return;
       }
       if (!data.ok || !data.run_id) {
-        setSearchInfo(data?.hint || data?.error || "刷新触发失败，请稍后再试。");
+        setSearchInfo(data?.hint || friendlyFailure(data?.error, "更新触发失败，请稍后再试。"));
         return;
       }
       const total = Number(data.scope?.total || 0);
@@ -267,12 +267,12 @@ export function useDiscoveryPoll({
         runId: data.run_id,
         startedAt,
         elapsedSec: 0,
-        note: data.reused ? "已有一次刷新在进行中，继续等待…" : `已排队，正在刷新 ${total} 家公司…`,
+        note: data.reused ? "已有一次更新在进行中，继续等待…" : `已排队，正在更新 ${total} 家公司…`,
         progress: { done: 0, total },
         kind: "refresh",
       });
     } catch {
-      setSearchInfo("刷新触发失败，请稍后再试。");
+      setSearchInfo("更新触发失败，请稍后再试。");
     } finally {
       setRefreshing(false);
     }
@@ -286,16 +286,34 @@ function hasReliableSummary(job: ScoredJob) {
   return (job.summary ?? "").trim().length >= 10;
 }
 
+// 失败原因 → 给用户看的人话。后端真实 code（dispatch error / failure_reason）一律翻成普通话，
+// 绝不把 parser_missing / provider_rate_limited 这类原始代码、迁移号或环境变量名直接抛给用户。
+const FRIENDLY_FAILURE: Record<string, string> = {
+  parser_missing: "该招聘站暂未支持解析（已记录，会逐步覆盖）。",
+  provider_rate_limited: "外部查询达到今日上限，明天再试。",
+  rate_limited: "外部查询达到今日上限，明天再试。",
+  daily_search_budget_exhausted: "今日官方搜索额度已用完，明天再试。",
+  cooldown_active: "刚查过，请稍等一会儿再试。",
+  empty_scope: "没有可更新的公司——先在上方选公司或城市，或在偏好里设置目标公司。",
+  sources_lookup_failed: "读取公司源失败，请稍后再试。",
+  no_recipe_matched: "这个方向暂时没有可联网抓取的官方站点。",
+  no_spa_sources_in_db: "暂时没有可联网抓取的官方源。",
+  no_jobs_passed_quality: "抓到一些岗位但没有可靠的职位描述，已跳过。",
+  dispatch_not_configured: "扩大搜索暂时不可用（服务未配置），请稍后再试。",
+  dispatch_failed: "扩大搜索触发失败，请稍后再试。",
+  run_insert_failed: "任务创建失败，请稍后再试。",
+  discovery_exception: "扩大搜索时后台出错了，请稍后再试。",
+  invalid_input: "输入有误，请检查关键词后重试。",
+  Unauthorized: "登录已过期，请重新登录后再试。",
+};
+
+function friendlyFailure(code: string | null | undefined, fallback: string): string {
+  if (!code) return fallback;
+  return FRIENDLY_FAILURE[code] || fallback;
+}
+
 function formatDispatchError(data: any) {
-  const MAP: Record<string, string> = {
-    dispatch_not_configured:
-      "按需「浏览器发现」未启用：服务端缺少 GITHUB_DISPATCH_TOKEN / GITHUB_DISPATCH_REPO 配置。",
-    run_insert_failed: "发现任务创建失败：请确认已应用数据库迁移 009（discovery_runs 异步列）。",
-    dispatch_failed: `触发后台抓取失败：${data?.detail || ""}`,
-    invalid_input: "入参不合法，请检查关键词后重试。",
-    Unauthorized: "未登录或会话已过期，请重新登录后再试。",
-  };
-  return MAP[data?.error] || data?.error_message || data?.error || "按需发现触发失败，请稍后再试。";
+  return friendlyFailure(data?.error, "扩大搜索触发失败，请稍后再试。");
 }
 
 function formatBrowserDiscoveryResult(data: any) {
@@ -306,20 +324,12 @@ function formatBrowserDiscoveryResult(data: any) {
     const updated = data?.jobs_updated ?? 0;
     const shown = data?.total ?? 0;
     if (created > 0 || updated > 0 || shown > 0) {
-      return `浏览器发现完成：新增 ${created} / 更新 ${updated} 个官方岗位，本次展示 ${shown} 个（已入共享库）。`;
+      return `扩大搜索完成：新增 ${created} / 更新 ${updated} 个官方岗位，本次展示 ${shown} 个。`;
     }
-    return "浏览器发现完成，但本次没有命中该关键词的官方岗位——换个关键词或去掉城市再试。";
+    return "扩大搜索完成，但这次没找到符合该关键词的官方岗位——换个关键词或去掉城市再试。";
   }
-  const MAP: Record<string, string> = {
-    no_recipe_matched: "暂无匹配的平台配方（当前覆盖字节 / 飞书系：蔚来·小鹏·地平线·小米）。",
-    no_spa_sources_in_db: "未找到可抓取的官方源——请先应用迁移 010（seed SPA 源）。",
-    no_jobs_passed_quality: "抓到岗位但未通过质量门 / 未命中关键词，未入库。",
-    dispatch_failed: "后台抓取触发失败。",
-    discovery_exception: `后台抓取异常：${data?.error_message || ""}`,
-  };
-  const reason = data?.failure_reason || "";
-  return (
-    MAP[reason] ||
-    `本次发现未成功（${data?.status || "failed"}）：${data?.error_message || reason || "未写入岗位"}。`
+  return friendlyFailure(
+    data?.failure_reason,
+    "这次扩大搜索没有结果，可换个关键词或稍后再试。",
   );
 }

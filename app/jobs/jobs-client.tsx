@@ -11,6 +11,7 @@ import { useJobFilters } from "@/hooks/useJobFilters";
 import { useDiscoveryPoll, type BrowserDiscoveryState } from "@/hooks/useDiscoveryPoll";
 import {
   ArrowsClockwise,
+  CaretRight,
   CheckCircle,
   Circle,
   CircleNotch,
@@ -76,7 +77,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     newMatching,
   } = useJobFilters({ officialJobs, onlyNew, initialFilters, initialJobs, initialTotal });
 
-  // 「刷新公司库 / 联网爬新公司」状态机 + 轮询 + 持久化 + 超时（整体在 hook 内）。
+  // 「更新关注公司 / 扩大官方搜索范围」状态机 + 轮询 + 持久化 + 超时（整体在 hook 内）。
   const { discovery, refreshing, discoveryActive, startDiscovery, startRefresh } =
     useDiscoveryPoll({ filters, setOfficialJobs, setSearchInfo });
 
@@ -130,7 +131,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     track("search", { keyword: filters.keyword || "" });
     setOfficialJobs([]);
     setOnlyNew(false);
-    setSearchInfo("仅搜索本地岗位库，不触发外部请求。结果即下方列表。");
+    setSearchInfo("已在收录的岗位里查好，结果见下方列表。");
     refresh();
   }
 
@@ -158,42 +159,63 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     <div className="space-y-5">
       <JobFilters filters={filters} onChange={setFilters} companies={companies} />
       <div className="surface p-4 text-[#1a1714] sm:p-5">
-        <div className="mb-3.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold text-[#3f3a33]">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold text-[#3f3a33]">
           <MagnifyingGlass size={16} weight="bold" aria-hidden="true" />
-          获取岗位的三种方式
-          <span className="text-xs font-normal text-[#9a9184]">（刷新公司库 = 刷你关注的公司，免填关键词；联网爬新公司 需先填「关键词」）</span>
+          找岗位
         </div>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <p className="mt-1.5 text-xs leading-5 text-[#9a9184]">
+          已用你保存的求职偏好作为默认搜索范围；改上方筛选条件即可调整。
+        </p>
+        {/* 主操作：在已收录岗位里即时检索（秒出、不联网）——默认就用这个 */}
+        <div className="mt-3">
           <ActionTile
             icon={Database}
-            label="搜索岗位库现有岗位"
-            hint="只查本地库 · 不联网 · 秒出"
-            tooltip="在已抓取入库的岗位里，按上方筛选条件即时检索，不发起任何联网请求，瞬时返回。"
-            accent="bg-[#ece7dd] text-[#3f3a33]"
+            label="查已有岗位"
+            hint="在已收录的岗位里即时检索 · 不联网 · 秒出"
+            tooltip="在已经收录入库的岗位里，按上方筛选条件即时检索，不发起任何联网请求，瞬时返回。"
+            accent="bg-[#1a1714] text-[#f7f1e6]"
             onClick={handleExistingJobsSearch}
           />
-          <ActionTile
-            icon={ArrowsClockwise}
-            label={refreshing ? "刷新中…" : "刷新公司库新岗位"}
-            hint="刷你关注的全部公司 · 约 1–5 分钟"
-            tooltip="后台用真爬虫刷新你筛选/偏好命中的全部公司源（含飞书 / 北森 / Moka 等浏览器源，按相关性取前若干家），新岗位实时流式并入列表。未填筛选时按你保存的求职偏好（目标公司等）刷。约 1–5 分钟。"
-            accent="bg-[#dbe9fa] text-[#2f6299]"
-            onClick={startRefresh}
-            disabled={refreshing || discoveryActive}
-            busy={refreshing}
-          />
-          <ActionTile
-            icon={Compass}
-            label={discoveryActive ? "联网爬取中…" : "联网爬新公司新岗位"}
-            hint="真浏览器抓官网 · 补全描述 · 约 1–5 分钟"
-            tooltip="用真实浏览器联网抓取尚未收录的公司官方招聘站，逐岗补全职位描述，保证返回有 summary 的可靠卡片，约 1–5 分钟。"
-            accent="bg-[#e7def4] text-[#6a4fa0]"
-            onClick={startDiscovery}
-            disabled={refreshing || discoveryActive || !filters.keyword}
-            busy={discoveryActive}
-            hero
-          />
         </div>
+        {/* 进阶：没有满意结果时再扩大范围（联网、较慢），默认折叠 */}
+        <details className="group/adv mt-3">
+          <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl px-1 py-2 text-sm font-medium text-[#6b655a] transition hover:text-[#1a1714] [&::-webkit-details-marker]:hidden">
+            <CaretRight
+              size={14}
+              weight="bold"
+              className="transition-transform duration-200 group-open/adv:rotate-90"
+              aria-hidden="true"
+            />
+            没有满意的结果？扩大搜索范围
+          </summary>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <ActionTile
+              icon={ArrowsClockwise}
+              label={refreshing ? "更新中…" : "更新关注公司"}
+              hint="重新抓你关注的公司找新岗位 · 约 1–5 分钟"
+              tooltip="在后台重新抓取你筛选/偏好命中的公司官方招聘页（含需要浏览器的源），有新岗位会自动出现在列表里。未填筛选时按你保存的求职偏好来。约 1–5 分钟。"
+              accent="bg-[#dbe9fa] text-[#2f6299]"
+              onClick={startRefresh}
+              disabled={refreshing || discoveryActive}
+              busy={refreshing}
+            />
+            <ActionTile
+              icon={Compass}
+              label={discoveryActive ? "搜索中…" : "扩大官方搜索范围"}
+              hint="去官网找还没收录的公司 · 约 1–5 分钟"
+              tooltip="用浏览器去抓还没收录的公司官方招聘站，并补全职位描述。需要先填上方「关键词」。约 1–5 分钟。"
+              accent="bg-[#e7def4] text-[#6a4fa0]"
+              onClick={startDiscovery}
+              disabled={refreshing || discoveryActive || !filters.keyword}
+              busy={discoveryActive}
+            />
+          </div>
+          {!filters.keyword && (
+            <p className="mt-2 px-1 text-xs leading-5 text-[#9a9184]">
+              「扩大官方搜索范围」需先在上方填「关键词」。
+            </p>
+          )}
+        </details>
         {searchInfo && (
           <p className="mt-3 rounded-2xl border border-black/[0.06] bg-[#f6f3ec] px-3.5 py-2.5 text-pretty text-sm leading-6 text-[#5f594e]">
             {searchInfo}
@@ -252,8 +274,8 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
             {!newViewActive && filters.keyword
               ? `（精确 ${exactCount} + 相关 ${Math.max(0, total - exactCount)}）`
               : ""}
-            {!newViewActive && capped ? "+（已扫描最新岗位，可加载更多继续）" : ""}
-            ，已展示 {displayJobs.length} 个（本次官网刷新/发现 {officialJobs.length}）。服务端筛选；已知源刷新、动态官方源发现三层分开执行。
+            {!newViewActive && capped ? "+（已显示最新一批，可加载更多继续）" : ""}
+            ，已展示 {displayJobs.length} 个（本次新找到 {officialJobs.length}）。
           </>
         )}
       </p>
@@ -427,17 +449,17 @@ function BrowserDiscoveryProgress({ discovery }: { discovery: BrowserDiscoverySt
       ? 8
       : 30;
   const stages = isRefresh
-    ? ["排队 · 触发后台抓取", "逐家公司刷新 · 新岗位实时入库"]
-    : ["触发后台浏览器抓取", "加载官网 · 拦截官方接口 · 质量门入库"];
+    ? ["排队中", "逐家公司更新 · 新岗位实时出现"]
+    : ["排队中", "在官网逐站搜索 · 补全职位描述"];
   const activeIndex = discovery.phase === "queued" ? 0 : 1;
 
   return (
     <div className="surface p-4 text-[#1a1714]">
       <div className="flex items-center gap-2.5">
         <CircleNotch size={18} weight="bold" className="animate-spin text-[#3f7cc0]" aria-hidden="true" />
-        <span className="text-sm font-semibold">{isRefresh ? "正在刷新你的公司库…" : "正在发现官方招聘源…"}</span>
+        <span className="text-sm font-semibold">{isRefresh ? "正在更新你关注的公司…" : "正在扩大官方搜索范围…"}</span>
         <span className="ml-auto text-xs tabular-nums text-[#8a8275]">
-          {hasProg ? `已刷 ${prog!.done}/${prog!.total} 家 · ` : ""}已用时 {formatElapsed(discovery.elapsedSec)}
+          {hasProg ? `已更新 ${prog!.done}/${prog!.total} 家 · ` : ""}已用时 {formatElapsed(discovery.elapsedSec)}
         </span>
       </div>
       <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-black/[0.08]">
