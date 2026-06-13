@@ -180,7 +180,7 @@ export default async function LandingPage() {
             </span>{" "}
             在招的岗位，
             <br />
-            加上能信的职业内幕。
+            加上能信的求职决策信号。
           </h1>
           <p className="rise mx-auto mt-7 max-w-xl text-pretty text-[16px] leading-7 text-[#5f594e]">
             求职雷达聚合企业官方招聘源、过滤第三方水货岗位；再把公开的招聘节奏、薪酬与跳槽路径，聚合成分级、标时间的职业洞察。每天打开一次，只看真正值得看的。
@@ -247,7 +247,7 @@ export default async function LandingPage() {
           <div className="max-w-2xl">
             <span className="text-[13px] font-semibold tracking-[0.14em] text-[#cdbf9b]">卖点 ②</span>
             <h2 className="display-tight mt-3 text-balance text-[2.2rem] font-medium leading-[1.12] text-[#f7f1e6] sm:text-[2.8rem]">
-              把分散的内幕，
+              把分散的公开信息差，
               <br className="hidden sm:block" />
               聚合成能信的洞察。
             </h2>
