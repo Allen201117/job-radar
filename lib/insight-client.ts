@@ -91,3 +91,80 @@ export async function fetchCompanyInsights(
   inflight.set(key, promise);
   return promise;
 }
+
+// ============================================================
+// 洞察「可用性」预告（按钮点击前的状态）：real=实录条数 / derived=是否有岗位聚合派生。
+// 微批：同一渲染 tick 内多张卡的公司合并成一次 /api/insights/availability 请求，避免请求风暴。
+// ============================================================
+
+export interface InsightAvailability {
+  real: number;
+  derived: boolean;
+}
+
+const availCache = new Map<string, InsightAvailability>();
+let availQueue = new Set<string>();
+let availTimer: ReturnType<typeof setTimeout> | null = null;
+const availSubs = new Set<() => void>();
+
+export function getCachedAvailability(company: string): InsightAvailability | null {
+  return availCache.get(keyOf(company)) ?? null;
+}
+
+export function subscribeAvailability(fn: () => void): () => void {
+  availSubs.add(fn);
+  return () => {
+    availSubs.delete(fn);
+  };
+}
+
+// 把公司加入下一批可用性查询（已缓存/已排队则跳过）。一个渲染 tick 攒一批，再合并发一次请求。
+export function requestInsightAvailability(company: string): void {
+  const key = keyOf(company);
+  if (!key || availCache.has(key) || availQueue.has(company)) return;
+  availQueue.add(company);
+  if (!availTimer) availTimer = setTimeout(flushAvailability, 16);
+}
+
+// 单请求公司数上限（与 /api/insights/availability 服务端 slice 对齐）；超出则分块多请求，不静默丢。
+const AVAIL_CHUNK = 80;
+
+async function fetchAvailabilityChunk(chunk: string[]): Promise<void> {
+  try {
+    const qs = encodeURIComponent(chunk.join("|"));
+    const res = await fetch(`/api/insights/availability?companies=${qs}`);
+    const data = await res.json();
+    const map = (data?.availability || {}) as Record<string, InsightAvailability>;
+    for (const company of chunk) {
+      const a = map[company];
+      availCache.set(
+        keyOf(company),
+        a && typeof a.real === "number"
+          ? { real: a.real, derived: Boolean(a.derived) }
+          : { real: 0, derived: false },
+      );
+    }
+  } catch (e) {
+    console.error("[insight-client] 可用性拉取失败", (e as Error).message);
+    // 失败也写入兜底，避免反复重试同一批
+    for (const company of chunk) {
+      if (!availCache.has(keyOf(company))) {
+        availCache.set(keyOf(company), { real: 0, derived: false });
+      }
+    }
+  }
+}
+
+async function flushAvailability(): Promise<void> {
+  availTimer = null;
+  const batch = Array.from(availQueue);
+  availQueue = new Set();
+  if (batch.length === 0) return;
+  const chunks: string[][] = [];
+  for (let i = 0; i < batch.length; i += AVAIL_CHUNK) chunks.push(batch.slice(i, i + AVAIL_CHUNK));
+  try {
+    await Promise.all(chunks.map((c) => fetchAvailabilityChunk(c)));
+  } finally {
+    availSubs.forEach((fn) => fn());
+  }
+}
