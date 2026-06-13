@@ -49,22 +49,26 @@ export async function GET() {
 
   // 3) 批量取洞察 + jobs 在招计数
   const ids = chosen.map((p) => p.id);
-  const [{ data: items, error: itemErr }, { data: jobRows, error: jobErr }] = await Promise.all([
-    supabase
-      .from("insight_items")
-      .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
-      .in("company_id", ids)
-      .eq("status", "active"),
-    supabase.from("jobs").select("company").eq("status", "active"),
-  ]);
+  // 在招计数走 DB 侧聚合（active_job_counts_by_company RPC，按 company group by），
+  // 不再全量拉 jobs.company 进内存；公司别名归一仍在 JS（companyMatches）对小集合做 sum。
+  const [{ data: items, error: itemErr }, { data: companyCounts, error: countErr }] =
+    await Promise.all([
+      supabase
+        .from("insight_items")
+        .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
+        .in("company_id", ids)
+        .eq("status", "active"),
+      supabase.rpc("active_job_counts_by_company"),
+    ]);
   if (itemErr) {
     console.error("[career-path] 读取 insight_items 失败", itemErr.message);
     return NextResponse.json({ ok: false, error: itemErr.message }, { status: 500 });
   }
-  if (jobErr) {
-    console.error("[career-path] 读取 jobs 失败", jobErr.message);
-    return NextResponse.json({ ok: false, error: jobErr.message }, { status: 500 });
+  if (countErr) {
+    console.error("[career-path] 读取在招计数失败", countErr.message);
+    return NextResponse.json({ ok: false, error: countErr.message }, { status: 500 });
   }
+  const counts = (companyCounts || []) as Array<{ company: string; job_count: number }>;
 
   const byCompany = new Map<string, any[]>();
   for (const it of (items || []) as any[]) {
@@ -76,7 +80,10 @@ export async function GET() {
   const now = new Date();
   const companies: CareerCompanyInput[] = chosen.map((p) => {
     const { dimensions } = groupGatedInsights(byCompany.get(p.id) || [], now);
-    const job_count = (jobRows || []).filter((j: any) => companyMatches(p, j.company)).length;
+    // 按 company 分组求和（命中 companyMatches 的公司计数累加）== 改造前「逐行 filter 计数」。
+    const job_count = counts
+      .filter((row) => companyMatches(p, row.company))
+      .reduce((sum, row) => sum + (row.job_count || 0), 0);
     return { company: p.company, display_name: p.display_name, job_count, dimensions };
   });
 
