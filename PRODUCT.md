@@ -24,10 +24,10 @@ Avoid generic AI SaaS pages, purple-blue gradient marketing, three equal feature
 
 1. Show the official-source loop clearly: local jobs, verified source refresh, and controlled source discovery should feel like distinct, understandable layers.
 2. Keep the product surface task-first: users should scan jobs, compare match signals, and act without decorative friction.
-3. Use Apple-inspired restraint: strong hierarchy, generous whitespace, precise type, one blue action color, and careful motion.
+3. Use warm-editorial restraint: a warm-paper canvas, strong hierarchy, generous whitespace, precise system type, **one ink-black action color** as the single CTA signal, quiet pastel accents, and careful motion. (See `DESIGN.md`; `app/globals.css` is the source of truth. Blue is only the focus ring, not the action color.)
 4. Preserve trust through copy and states: failures, empty results, cached results, and pending parsers should be explained near the action that caused them.
 5. Let data breathe: counts, match scores, and source diagnostics should use tabular figures and compact structure, not noisy cards.
 
 ## Accessibility & Inclusion
 
-Target WCAG AA contrast, visible focus states, keyboard-reachable controls, reduced-motion-safe transitions, responsive layouts for mobile job scanning, and clear Chinese copy with existing English language support preserved.
+Target WCAG AA contrast, visible focus states, keyboard-reachable controls, reduced-motion-safe transitions, responsive layouts for mobile job scanning, and clear Chinese-first copy. Lightweight i18n scaffolding (`lib/i18n.ts`) is retained but the language switch is hidden until key pages are translated, to avoid a half-translated illusion.
