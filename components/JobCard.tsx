@@ -7,6 +7,7 @@ import {
   Briefcase,
   CalendarBlank,
   CaretDown,
+  ChartBar,
   CheckCircle,
   GraduationCap,
   Hourglass,
@@ -21,6 +22,12 @@ import {
 } from "@/lib/china-keyword-expansion";
 import { matchTier } from "@/lib/scoring";
 import CompanyInsightDrawer from "@/components/CompanyInsightDrawer";
+import {
+  getCachedAvailability,
+  requestInsightAvailability,
+  subscribeAvailability,
+  type InsightAvailability,
+} from "@/lib/insight-client";
 import { track } from "@/lib/track";
 import type { ScoredJob } from "@/lib/types";
 import { cleanSummary, cn, freshnessLabel } from "@/lib/utils";
@@ -76,17 +83,69 @@ function recruitTypeStyle(t: string): string {
 // 岗位职能（产品/研发/…）= 次强特征，统一中性配色，每张卡片必显示。
 const FUNCTION_STYLE = "border border-black/[0.08] bg-[#f0ece2] text-[#6b655a]";
 
+// 洞察按钮的点击前预告：实录(紫·有数量) / 岗位聚合派生(蓝·与抽屉派生标记同色) / 暂无(灰) / 加载中(中性紫)。
+// 让用户点击前就知道有没有内容、是实录还是聚合，降低空抽屉点击。
+function insightBadge(avail: InsightAvailability | null): {
+  label: string;
+  title: string;
+  cls: string;
+  derived: boolean;
+} {
+  if (!avail) {
+    return {
+      label: "职业洞察",
+      title: "查看该公司的职业洞察",
+      cls: "border-[#cfc0e6] bg-[#efe9f8] text-[#6a4fa0] hover:border-[#bba9dd] hover:bg-[#e7def4]",
+      derived: false,
+    };
+  }
+  if (avail.real > 0) {
+    return {
+      label: `洞察 ${avail.real}`,
+      title: `查看该公司的 ${avail.real} 条职业洞察（实录·已核验）`,
+      cls: "border-[#cfc0e6] bg-[#efe9f8] text-[#6a4fa0] hover:border-[#bba9dd] hover:bg-[#e7def4]",
+      derived: false,
+    };
+  }
+  if (avail.derived) {
+    return {
+      label: "岗位聚合",
+      title: "查看据本平台在招岗位聚合出的洞察（暂无实录条目）",
+      cls: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] hover:border-[#9cc3ea] hover:bg-[#cfe0f5]",
+      derived: true,
+    };
+  }
+  return {
+    label: "暂无洞察",
+    title: "该公司暂无可展示的职业洞察（点击查看说明）",
+    cls: "border-black/[0.08] bg-[#f0ece2] text-[#9a9184] hover:text-[#6b655a]",
+    derived: false,
+  };
+}
+
 export default function JobCard({ job, onActionChange, sessionNew }: Props) {
   const [acting, setActing] = useState(false);
   const [currentAction, setCurrentAction] = useState(job.user_action);
   const [actionError, setActionError] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [insightOpen, setInsightOpen] = useState(false);
+  // 洞察按钮点击前预告状态：null=未知/加载中，real>0=有实录，derived=有岗位聚合派生。
+  const [insightAvail, setInsightAvail] = useState<InsightAvailability | null>(() =>
+    getCachedAvailability(job.company),
+  );
   const supabase = createBrowserClient();
 
   useEffect(() => {
     setCurrentAction(job.user_action);
   }, [job.user_action]);
+
+  // 微批拉取该公司洞察可用性（同一列表的多张卡合并成一次请求），用于按钮上预告「洞察 N / 岗位聚合 / 暂无」。
+  useEffect(() => {
+    requestInsightAvailability(job.company);
+    const update = () => setInsightAvail(getCachedAvailability(job.company));
+    update();
+    return subscribeAvailability(update);
+  }, [job.company]);
 
   // 展示用 summary：解 HTML 实体 + 去标签（历史 greenhouse 行存的是实体编码 HTML，否则显示乱码）。
   const summary = useMemo(() => cleanSummary(job.summary), [job.summary]);
@@ -223,15 +282,27 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
                       : ""}
               </span>
             )}
-            <button
-              type="button"
-              onClick={() => setInsightOpen(true)}
-              title="查看该公司的职业洞察（时机/上市/薪酬/路径/文化，社区聚合·非官方）"
-              className="inline-flex items-center gap-1 rounded-full border border-[#cfc0e6] bg-[#efe9f8] px-2.5 py-1 text-xs font-medium text-[#6a4fa0] transition hover:border-[#bba9dd] hover:bg-[#e7def4]"
-            >
-              <Sparkle size={12} weight="fill" aria-hidden="true" />
-              职业洞察
-            </button>
+            {(() => {
+              const badge = insightBadge(insightAvail);
+              return (
+                <button
+                  type="button"
+                  onClick={() => setInsightOpen(true)}
+                  title={badge.title}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition",
+                    badge.cls,
+                  )}
+                >
+                  {badge.derived ? (
+                    <ChartBar size={12} weight="fill" aria-hidden="true" />
+                  ) : (
+                    <Sparkle size={12} weight="fill" aria-hidden="true" />
+                  )}
+                  {badge.label}
+                </button>
+              );
+            })()}
           </div>
 
           <button
