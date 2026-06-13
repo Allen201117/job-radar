@@ -7,6 +7,8 @@ from typing import Optional
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
+from normalizer import canonicalize_jd_url
+
 
 def load_environment(project_root: Optional[Path] = None):
     """Load root .env.local so local crawler commands work without inline env."""
@@ -64,55 +66,60 @@ def update_crawl_run(
     supabase.table("crawl_runs").update(data).eq("id", run_id).execute()
 
 
-def upsert_job(supabase: Client, job: dict) -> str:
-    """
-    Upsert 岗位。
-    使用 (source_id, jd_url) 作为稳定键，避免 location 为 NULL 时重复插入。
-    返回 "created" 或 "updated"。
-    """
-    # 先按唯一键查找
-    existing = (
+def _find_existing_id_by_canonical(supabase: Client, canon: str):
+    """按 canonical_jd_url 跨状态查既有行 id；多行时优先 active。
+
+    冲突键 = canonical_jd_url（DB 层 active partial unique index 同口径，迁移 144）。跨状态查
+    （不加 status 过滤）是为了让重新上架的 removed/expired 岗能命中既有行复活，而非误插新行。
+    同 canonical 可能并存一 active + 若干 removed（迁移 dedup 的产物）→ 必须优先返回 active 行，
+    否则去 update removed 行复活会撞 active 唯一约束。无既有行返回 None。"""
+    resp = (
         supabase.table("jobs")
-        .select("id")
-        .eq("source_id", job["source_id"])
-        .eq("jd_url", job["jd_url"])
+        .select("id, status")
+        .eq("canonical_jd_url", canon)
         .execute()
     )
+    rows = resp.data or []
+    if not rows:
+        return None
+    for row in rows:
+        if row.get("status") == "active":
+            return row["id"]
+    return rows[0]["id"]
 
-    if existing.data:
-        # 更新
-        job_id = existing.data[0]["id"]
+
+def upsert_job(supabase: Client, job: dict) -> str:
+    """Upsert 岗位，以 canonical_jd_url 为冲突键（迁移 144 起 DB 层有 active 唯一约束）。
+
+    canonical_jd_url 列由 DB 触发器从 jd_url 自动维护，写入端无需带；这里只需用同口径的
+    canonicalize_jd_url 算出键来查既有行。返回 "created" 或 "updated"。"""
+    canon = canonicalize_jd_url(job["jd_url"])
+    existing_id = _find_existing_id_by_canonical(supabase, canon)
+    if existing_id:
         supabase.table("jobs").update({
             **job,
             "last_seen_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", job_id).execute()
+        }).eq("id", existing_id).execute()
         return "updated"
-    else:
-        # 新增
-        job["id"] = str(uuid.uuid4())
-        job["first_seen_at"] = datetime.now(timezone.utc).isoformat()
-        job["last_seen_at"] = datetime.now(timezone.utc).isoformat()
-        try:
-            supabase.table("jobs").insert(job).execute()
-        except Exception as e:
-            # 先查后插非原子：并发抓取下两线程/两渠道源同时插同一岗会撞唯一键（23505）。
-            # 回退为按 jd_url 重查（撞键行可能挂在别的 source_id 下）并 update，幂等不上抛。
-            msg = str(e)
-            if "23505" not in msg and "duplicate key" not in msg:
-                raise
-            again = (
-                supabase.table("jobs")
-                .select("id")
-                .eq("jd_url", job["jd_url"])
-                .limit(1)
-                .execute()
-            )
-            if not again.data:
-                raise  # 撞键却查不到（极端情况）→ 如实上抛，由调用方记 failed
-            update_payload = {k: v for k, v in job.items() if k not in ("id", "first_seen_at")}
-            supabase.table("jobs").update(update_payload).eq("id", again.data[0]["id"]).execute()
-            return "updated"
-        return "created"
+
+    job["id"] = str(uuid.uuid4())
+    job["first_seen_at"] = datetime.now(timezone.utc).isoformat()
+    job["last_seen_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        supabase.table("jobs").insert(job).execute()
+    except Exception as e:
+        # 先查后插非原子：并发抓取下两线程/两渠道源同时插同一岗会撞唯一键（23505）。
+        # 回退为按 canonical 重查并 update，幂等不上抛。
+        msg = str(e)
+        if "23505" not in msg and "duplicate key" not in msg:
+            raise
+        again_id = _find_existing_id_by_canonical(supabase, canon)
+        if not again_id:
+            raise  # 撞键却查不到（极端情况）→ 如实上抛，由调用方记 failed
+        update_payload = {k: v for k, v in job.items() if k not in ("id", "first_seen_at")}
+        supabase.table("jobs").update(update_payload).eq("id", again_id).execute()
+        return "updated"
+    return "created"
 
 
 def upsert_jobs_batch(supabase: Client, jobs: list[dict], chunk_size: int = 200) -> tuple[int, int]:
@@ -121,44 +128,40 @@ def upsert_jobs_batch(supabase: Client, jobs: list[dict], chunk_size: int = 200)
     打回快档 <30min 的核心修法：逐岗 upsert_job 每岗 2 次 REST（先查后写），全量数万岗
     → 6-10 万次往返。本函数把同一批（通常同 source）压成「1 次批量 select + 分块 upsert/insert」。
 
-    为何不用 PostgREST 的 on_conflict=(source_id,jd_url)：jobs 表唯一约束只有
-    unique(company,title,location,jd_url)（001_init.sql），且 location 可空（Postgres 里
-    NULL≠NULL，该约束对空 location 不去重）——这正是原 upsert_job 走应用层 select
-    (source_id,jd_url) 而非靠 DB 约束的原因。没有可直接 on_conflict 的 (source_id,jd_url)/jd_url
-    唯一索引，故：existing 行用主键 id 做 upsert(on_conflict=id) 批量更新；new 行批量 insert，
-    撞 4 元组唯一键(23505)时退回逐行 upsert_job（已正确处理 23505→按 jd_url 重查 update）。
+    冲突键 = canonical_jd_url（迁移 144 起 DB 层有 active partial unique index + jobs_canonical_jd_url_idx）。
+    canonical_jd_url 列由 DB 触发器自动维护，故 existing 行用主键 id 做 upsert(on_conflict=id) 批量更新；
+    new 行批量 insert，撞唯一键(23505) 退回逐行 upsert_job（已正确处理 23505→按 canonical 重查 update）。
 
-    去重语义与原逐行一致：① 主键 (source_id, jd_url)；② 跨 source 撞 jd_url（同一岗挂在别的
-    source_id 下，如 hotjob school/social、wt 三渠道）回退按 jd_url 命中既有行 update；
-    ③ 批内同 (source_id, jd_url) 去重，last-wins（镜像顺序 select-then-write）。"""
+    去重语义：① 冲突键 canonical_jd_url（跨 source/同岗链接变体都收敛到一把键，如 hotjob school/social、
+    wt 三渠道、utm 变体）；② 同 canonical 既有多行优先命中 active 行（迁移 dedup 后另存 removed 历史行）；
+    ③ 批内同 canonical 去重，last-wins（一次性 select 在所有写之前，必须先显式去重）。"""
     if not jobs:
         return (0, 0)
 
-    # ③ 批内按 (source_id, jd_url) 去重，last-wins（原逐行靠「插入 A 后 A' select 命中 A」隐式去重，
-    #    本函数一次性 select 在所有写之前，故必须先显式去重，否则空 location 的同岗会被重复 insert）。
+    # ③ 批内按 canonical 去重，last-wins（一次性 select 在所有写之前，否则同岗链接变体会被重复 insert）。
     deduped: dict = {}
     for job in jobs:
-        deduped[(job.get("source_id"), job.get("jd_url"))] = job
+        deduped[canonicalize_jd_url(job.get("jd_url"))] = job
     jobs = list(deduped.values())
 
-    # 1. 一次性批量 select 既有行（按 jd_url，分块防 URL 过长）；建 (source_id,jd_url)→id 与 jd_url→id 两张表
-    jd_urls = sorted({j["jd_url"] for j in jobs if j.get("jd_url")})
-    existing_by_src: dict = {}
-    existing_by_jd: dict = {}
-    for i in range(0, len(jd_urls), chunk_size):
-        chunk = jd_urls[i:i + chunk_size]
-        resp = supabase.table("jobs").select("id, source_id, jd_url").in_("jd_url", chunk).execute()
+    # 1. 一次性批量 select 既有行（按 canonical，分块防 URL 过长）；建 canonical→id（多行优先 active）。
+    canons = sorted({canonicalize_jd_url(j.get("jd_url")) for j in jobs if j.get("jd_url")})
+    existing_by_canon: dict = {}
+    for i in range(0, len(canons), chunk_size):
+        chunk = canons[i:i + chunk_size]
+        resp = supabase.table("jobs").select("id, canonical_jd_url, status").in_("canonical_jd_url", chunk).execute()
         for row in (resp.data or []):
-            key = (row.get("source_id"), row.get("jd_url"))
-            existing_by_src.setdefault(key, row.get("id"))
-            existing_by_jd.setdefault(row.get("jd_url"), row.get("id"))
+            canon = row.get("canonical_jd_url")
+            if not canon:
+                continue
+            if canon not in existing_by_canon or row.get("status") == "active":
+                existing_by_canon[canon] = row.get("id")
 
     now = datetime.now(timezone.utc).isoformat()
     to_update: list = []  # 命中既有 → 带 id 走主键 upsert
     to_insert: list = []  # 全新 → 批量 insert
     for job in jobs:
-        existing_id = existing_by_src.get((job.get("source_id"), job.get("jd_url"))) \
-            or existing_by_jd.get(job.get("jd_url"))
+        existing_id = existing_by_canon.get(canonicalize_jd_url(job.get("jd_url")))
         if existing_id:
             payload = {k: v for k, v in job.items() if k not in ("id", "first_seen_at")}
             payload["id"] = existing_id

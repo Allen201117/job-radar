@@ -476,3 +476,43 @@ def _url_key(parsed) -> str:
     if frag:
         return f"{host}{path}#{frag}"
     return f"{host}{path}"
+
+
+# canonical_jd_url tracking 参数（小写比较）——只收纯统计/广告参数，绝不收 from/source/ref/channel
+# 这类可能是 ATS 深链业务参数的词，避免把两个不同岗位误并成一个。
+_TRACKING_PARAM_KEYS = {
+    "spm", "scm", "bd_vid", "gclid", "fbclid", "msclkid", "yclid",
+    "hmsr", "hmpl", "hmcu", "hmkw", "hmci", "_ga", "gio_link_id",
+}
+
+
+def _is_tracking_key(key: str) -> bool:
+    k = key.lower()
+    return k.startswith("utm_") or k in _TRACKING_PARAM_KEYS
+
+
+def canonicalize_jd_url(url):
+    """把同一岗位的链接变体（tracking 参数 / 尾斜杠）归一到同一把冲突键。
+
+    保守规则：含 '#'(SPA hash 路由 Moka/北森/飞书/携程) → 整串原样返回，绝不动 fragment
+    （这些源的岗位身份就在 fragment 里）。否则去 query 里的 tracking 参数 + 规范化尾斜杠。
+    ⚠️ 与 lib/canonical-url.js 的 canonicalizeJdUrl 与 supabase/migrations 的 SQL
+    canonicalize_jd_url() 逐字一致；改规则三处同改、tests/canonical-url.test.js +
+    本仓 test_canonical.py 两套测试同步补。"""
+    if url is None:
+        return None
+    s = str(url).strip()
+    if not s:
+        return s
+    if "#" in s:
+        return s
+    qpos = s.find("?")
+    if qpos >= 0:
+        base, query = s[:qpos], s[qpos + 1:]
+    else:
+        base, query = s, ""
+    if query:
+        kept = [p for p in query.split("&") if p and not _is_tracking_key(p.split("=", 1)[0])]
+        query = "&".join(kept)
+    base = re.sub(r"/+$", "", base)
+    return base + "?" + query if query else base

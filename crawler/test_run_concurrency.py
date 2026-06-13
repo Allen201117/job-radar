@@ -84,7 +84,7 @@ class GroupByHostTest(unittest.TestCase):
 
 class UpsertRaceTest(unittest.TestCase):
     """db.upsert_job 先查后插非原子：并发下两线程同时插同一岗 → 23505 唯一键冲突。
-    修法：insert 撞唯一键时回退为按 jd_url 重查并 update（幂等），不再向上抛。"""
+    修法：insert 撞唯一键时回退为按 canonical_jd_url 重查并 update（幂等），不再向上抛。"""
 
     def _fake_sb(self, select_rounds, insert_raises):
         """极简 supabase 假件：select 按轮次返回 select_rounds 的下一项；insert 可抛 23505。"""
@@ -135,8 +135,8 @@ class UpsertRaceTest(unittest.TestCase):
 
     def test_insert_conflict_falls_back_to_update(self):
         import db as dbmod
-        # 第一轮 select（按 source_id+jd_url）查不到 → 走 insert → 撞 23505 →
-        # 重查（按 jd_url）查到别的线程刚插的行 → update。
+        # 第一轮 select（按 canonical_jd_url）查不到 → 走 insert → 撞 23505 →
+        # 重查（按 canonical_jd_url）查到别的线程刚插的行 → update。
         sb, calls = self._fake_sb(select_rounds=[[], [{"id": "j1"}]], insert_raises=True)
         result = dbmod.upsert_job(sb, {"source_id": "s", "jd_url": "https://x/1", "title": "t"})
         self.assertEqual(result, "updated")
@@ -254,8 +254,8 @@ class BatchUpsertTest(unittest.TestCase):
     def test_existing_go_through_pk_upsert(self):
         import db as dbmod
         sb, rec = self._sb(select_rounds=[[
-            {"id": "j1", "source_id": "s", "jd_url": "https://x/1"},
-            {"id": "j2", "source_id": "s", "jd_url": "https://x/2"},
+            {"id": "j1", "canonical_jd_url": "https://x/1", "status": "active"},
+            {"id": "j2", "canonical_jd_url": "https://x/2", "status": "active"},
         ]])
         jobs = [
             {"source_id": "s", "jd_url": "https://x/1", "company": "C", "title": "t1"},
@@ -266,6 +266,32 @@ class BatchUpsertTest(unittest.TestCase):
         self.assertEqual(len(rec["upserted"]), 1)            # 一次批量 upsert
         self.assertEqual(rec["upserted"][0][0]["id"], "j1")  # 带既有主键 id
         self.assertEqual(rec["inserted"], [])
+
+    def test_matches_existing_by_canonical_not_raw_jd_url(self):
+        import db as dbmod
+        # 既有行 canonical 是干净链接；新抓到的同岗带了 utm tracking 参数。
+        # 冲突键 = canonical_jd_url（非原样 jd_url）→ 归一后命中既有行 → update，不会误插成新岗。
+        sb, rec = self._sb(select_rounds=[[
+            {"id": "j1", "canonical_jd_url": "https://x/1", "status": "active"},
+        ]])
+        jobs = [{"source_id": "s", "jd_url": "https://x/1?utm_source=li", "company": "C", "title": "t"}]
+        created, updated = dbmod.upsert_jobs_batch(sb, jobs)
+        self.assertEqual((created, updated), (0, 1))
+        self.assertEqual(rec["upserted"][0][0]["id"], "j1")
+        self.assertEqual(rec["inserted"], [])
+
+    def test_prefers_active_row_among_same_canonical(self):
+        import db as dbmod
+        # 同 canonical 既有 active + removed 历史行（迁移 dedup 的产物）→ 命中 active 那行 update，
+        # 不去复活 removed 行（否则会撞 active partial unique index）。
+        sb, rec = self._sb(select_rounds=[[
+            {"id": "old_removed", "canonical_jd_url": "https://x/1", "status": "removed"},
+            {"id": "live", "canonical_jd_url": "https://x/1", "status": "active"},
+        ]])
+        jobs = [{"source_id": "s", "jd_url": "https://x/1", "company": "C", "title": "t"}]
+        created, updated = dbmod.upsert_jobs_batch(sb, jobs)
+        self.assertEqual((created, updated), (0, 1))
+        self.assertEqual(rec["upserted"][0][0]["id"], "live")
 
     def test_intra_batch_dedup_last_wins(self):
         import db as dbmod
