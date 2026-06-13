@@ -17,6 +17,11 @@
 --
 -- 全程单事务（db-migrate.sh 用 -1 应用）：任一步失败整体回滚，不会留半成品。幂等；push 自动应用。
 
+-- 0) 抬高本事务 statement_timeout：全表回填(2b 对每行调函数)+dedup+建唯一索引在 10万级 jobs 上
+--    会超过 Supabase 默认 statement_timeout(实测 ~2min 被强杀)。set local 仅本迁移事务内生效，
+--    提交即恢复，不影响全局/其他会话。
+set local statement_timeout = '1800s';
+
 -- 1) 归一函数（immutable，供回填/触发器/审计同口径）。
 create or replace function canonicalize_jd_url(u text) returns text as $$
 declare
