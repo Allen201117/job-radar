@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { createBrowserClient } from "@/lib/supabaseClient";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
-import { useLang, t } from "@/lib/i18n";
+import { t } from "@/lib/i18n";
 import {
   BookmarkSimple,
   Briefcase,
@@ -34,7 +34,9 @@ export default function Navbar() {
   const router = useRouter();
   const supabase = createBrowserClient();
   const [email, setEmail] = useState<string | null>(null);
-  const [lang, setLang] = useLang();
+  // i18n 暂收口：lib/i18n 字典目前只覆盖导航，正文全中文，切到 EN 多数内容不变 = 误导。
+  // 先隐藏语言切换入口、导航固定中文，待关键页 i18n 补齐再放开（i18n 基础设施保留在 lib/i18n.ts）。
+  const lang = "zh" as const;
   // 移动端汉堡菜单展开态（桌面端 lg+ 不使用）
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -102,13 +104,6 @@ export default function Navbar() {
           </nav>
         </div>
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-          <button
-            onClick={() => setLang(lang === "zh" ? "en" : "zh")}
-            className="rounded-full border border-black/[0.08] px-3 py-1.5 text-xs font-medium text-[#5f594e] transition duration-200 hover:bg-black/[0.05] hover:text-[#1a1714] active:scale-[0.98]"
-            title="切换语言 / Switch language"
-          >
-            {lang === "zh" ? "EN" : "中"}
-          </button>
           {email && <span className="hidden max-w-48 truncate text-xs text-[#9a9184] md:block">{email}</span>}
           {/* 桌面端退出（移动端移入汉堡菜单） */}
           <button
