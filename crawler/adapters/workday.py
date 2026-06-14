@@ -7,7 +7,9 @@ source_url = https://{host}/wday/cxs/{tenant}/{site}/jobs   （host 形如 {tena
 
 服务「在华外企」：用 Workday 的 location facet **服务端**过滤到大中华区（China/Hong Kong/Macau），
 只抓在华岗位，避免全球岗位灌入（list 接口 locationsText 常是「N Locations」不可靠，故用 facet）。
-jd_url = {host}/{site}{externalPath}（Workday 托管的稳定 per-job 页，已 live 验证渲染对应岗位）。
+public jd_url = {host}/en-US/{site}/details/{slug}
+where slug is the final segment of CXS externalPath.
+CXS detail enrichment still uses {cxs_base}{externalPath}.
 """
 import json
 import re
@@ -203,7 +205,8 @@ class WorkdayAdapter(BaseAdapter):
             # 避免泄漏非华岗（如 "Remote - Delhi" / Haifa）。
             if not trusted and not normalizer.is_china_location(location):
                 return
-            jd_url = f"{host}/{site}{ep}"
+            slug = ep.rsplit("/", 1)[-1]
+            jd_url = f"{host}/en-US/{site}/details/{slug}"
             if jd_url in seen_urls:
                 return
             seen_urls.add(jd_url)
