@@ -46,6 +46,21 @@ from adapters.huawei import HuaweiAdapter
 from adapters.ctrip import CtripAdapter
 
 
+SUMMARY_STORAGE_LIMIT = int(os.environ.get("JOB_SUMMARY_STORAGE_LIMIT", "500") or "500")
+
+
+def cap_summary_for_storage(summary):
+    """Keep jobs.summary small enough for the hot database table."""
+    if summary is None:
+        return None
+    text = str(summary).strip()
+    if not text:
+        return None
+    if len(text) <= SUMMARY_STORAGE_LIMIT:
+        return text
+    return text[: max(0, SUMMARY_STORAGE_LIMIT - 3)].rstrip() + "..."
+
+
 ADAPTERS = {
     "apple": AppleAdapter(),
     "apple_cn": AppleChinaAdapter(),  # Apple 在华岗位（保留全球 apple 源）
@@ -243,10 +258,11 @@ def _process_one_source(source, supabase) -> dict:
         for raw in valid_jobs:
             title = normalizer.clean_title(raw.title)
             location = normalizer.clean_location(raw.location)
-            summary = normalizer.clean_summary(raw.summary)
+            full_summary = normalizer.clean_summary(raw.summary)
+            summary = cap_summary_for_storage(full_summary)
             salary = normalizer.clean_salary(raw.salary_text)
-            job_type = normalizer.extract_job_type(title, summary) or raw.job_type
-            content_hash = normalizer.make_content_hash(title, location, summary)
+            job_type = normalizer.extract_job_type(title, full_summary) or raw.job_type
+            content_hash = normalizer.make_content_hash(title, location, full_summary)
             # 结构化字段从**完整** raw.summary 抽取（在 clean_summary 截断之前），adapter 直填的优先
             experience = raw.experience or normalizer.extract_experience(raw.summary)
             education = raw.education or normalizer.extract_education(raw.summary)
