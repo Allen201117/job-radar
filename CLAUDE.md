@@ -223,12 +223,11 @@ Supabase Auth（邮箱登录）+ cookie session。`middleware.ts` 排除 `/api/*
 
 ## 项目特殊注意事项
 
-1. **⚠️ 仓库零提交**：真实代码大量未 `git add`（`app/api/`、`lib/live-search.js`、`lib/china-*.js`、`components/ResumeProfilePanel.tsx`、`crawler/test_*.py` 等仍是 untracked）。需要一个干净 baseline commit（征得用户同意后再做）。
-2. **⚠️ 运行前提 = .env.local**：必须有 `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`，并在 Supabase 依次跑 `001→007`。无凭证时闭环无法真正运行。绝不提交 / 读取 / 打印这些值。
-3. **⚠️ 父级 CLAUDE.md 混淆**：家目录 `/Users/bytedance/CLAUDE.md` 描述的是另一个项目（余声/YuSheng），会被当作父级上下文加载。本项目是求职雷达，与 YuSheng 无关，冲突时以本文件为准。
-4. **build 与 dev 不要同时**：dev server 运行期间跑 `npm run build` 会改写 `.next`，导致旧 dev server 静态资源 404；build 后要重启 `npm run dev` 再做浏览器验证。
-5. **沙箱限制**：环境可能禁止监听端口 / 阻断网络（Supabase / 百度 / 京东 live）。这类 live 验证需用户本机执行，不能用本地单测冒充 live 验证。
-6. **Vercel 实时 upsert**：必须把 `SUPABASE_SERVICE_ROLE_KEY` 配为服务端环境变量，绝不暴露给浏览器。
+1. **⚠️ 运行前提 = .env.local**：必须有 `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`。数据库迁移由 CI 自动 apply（见上文「数据库迁移（已自动化…）」），无需手动跑 SQL。绝不提交 / 读取 / 打印这些密钥值。
+2. **⚠️ 父级 CLAUDE.md 混淆**：家目录 `/Users/bytedance/CLAUDE.md` 描述的是另一个项目（余声/YuSheng），会被当作父级上下文加载。本项目是求职雷达，与 YuSheng 无关，冲突时以本文件为准。
+3. **build 与 dev 不要同时**：dev server 运行期间跑 `npm run build` 会改写 `.next`，导致旧 dev server 静态资源 404；build 后要重启 `npm run dev` 再做浏览器验证。
+4. **沙箱限制**：环境可能禁止监听端口 / 阻断网络（Supabase / 百度 / 京东 live）；`git push`、live SQL / 链接验证也需用户本机执行，不能用本地单测冒充 live 验证。
+5. **Vercel 实时 upsert**：必须把 `SUPABASE_SERVICE_ROLE_KEY` 配为服务端环境变量，绝不暴露给浏览器。
 
 ## 测试账号（需先在 Supabase 建好）
 
