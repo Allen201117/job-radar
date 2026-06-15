@@ -86,8 +86,41 @@ def fetch_queue(sb, adapters, limit=0):
     return rows, smap
 
 
+def fetch_liveness_queue(sb, adapters, limit=0):
+    """死活巡检队列：这些 adapter 下**所有** active 岗（不限空 summary），按 enrich_checked_at 最旧优先
+    （从未复检的 NULL 最先）轮转复检——逐岗 detail 探活，撤岗信号 → expired。返回 (rows, smap)。
+
+    与 fetch_queue（只取空 summary 的富化 backlog）区别：巡检覆盖**已有正文**的存量岗，
+    这些岗 fetch_queue 永远碰不到，正是「岗位关闭后没人下架」的死角（尤以 wt/hotjob 量大）。
+
+    刻意 NOT 过滤 enrich_fail_count（不同于 fetch_queue 的 <MAX_FAIL）：backlog 放弃富化的高失败岗
+    （补不到正文）恰是最可疑的「假 active」，必须仍纳入巡检才有机会被撤岗下架。每岗每轮只查一次
+    （enrich_checked_at 轮转封顶单轮成本），死岗一旦 expired 即离开 active 集，集合自清。"""
+    srcs = (sb.table("sources").select("id,company,source_url,adapter_name")
+            .in_("adapter_name", list(adapters)).execute().data) or []
+    smap = {s["id"]: s for s in srcs}
+    if not smap:
+        return [], smap
+    rows = []
+    page = 0
+    while True:
+        batch = (sb.table("jobs")
+                 .select("id,source_id,title,jd_url,job_type,summary,enrich_fail_count")
+                 .in_("source_id", list(smap.keys()))
+                 .eq("status", "active")
+                 .order("enrich_checked_at", desc=False, nullsfirst=True)
+                 .range(page * 1000, page * 1000 + 999).execute().data) or []
+        rows.extend(batch)
+        if limit and len(rows) >= limit:
+            return rows[:limit], smap
+        if len(batch) < 1000:
+            break
+        page += 1
+    return rows, smap
+
+
 def enrich_row(sb, row, src, dry_run=False):
-    """富化单行并回写。返回 'filled' | 'miss' | 'expired' | 'err'。永不抛。
+    """富化单行并回写。返回 'filled' | 'alive' | 'miss' | 'expired' | 'err'。永不抛。
     - 'expired'：fetcher 报源站已撤岗（JobClosedError，如 hotjob state=1017）→ 置 status='expired'，
       不再当死信富化（这类「假 active」岗永远补不到 summary 且污染岗位库）。
     - 'miss'：无正文 / 网络异常 → enrich_fail_count+1（网络错误走重试，不 expired）。"""
@@ -105,13 +138,18 @@ def enrich_row(sb, row, src, dry_run=False):
         result = "expired"
     else:
         summary = normalizer.clean_summary(body) if body else None
-        if summary:
+        if summary and not row.get("summary"):
             patch = {"summary": summary, "enrich_checked_at": _now()}
             if not row.get("job_type"):
                 jt = normalizer.extract_job_type(row.get("title") or "", summary)
                 if jt:
                     patch["job_type"] = jt
             result = "filled"
+        elif row.get("summary"):
+            # 巡检专属分支：仍在招、已有正文 → 只盖复检时间戳（不重写 summary，省写入、不扰动正文）。
+            # backlog 路径 fetch_queue 不 select summary → row.get("summary") 恒 None，永不进此分支（行为不变）。
+            patch = {"enrich_checked_at": _now()}
+            result = "alive"
         else:
             patch = {"enrich_fail_count": (row.get("enrich_fail_count") or 0) + 1,
                      "enrich_checked_at": _now()}
@@ -125,22 +163,25 @@ def enrich_row(sb, row, src, dry_run=False):
     return result
 
 
-def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, per_host=PER_HOST):
+def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, per_host=PER_HOST, sweep=False):
     """sb 用于单线程取队列；写库走每线程独立客户端（make_sb 工厂，默认 db.get_supabase）防 Errno35。
-    per_host = 单 host 并发上限（防限流，hotjob 等单 host 源关键）。"""
+    per_host = 单 host 并发上限（防限流，hotjob 等单 host 源关键）。
+    sweep=True：死活巡检（复检所有 active 岗、撤岗置 expired）；否则只富化空 summary 的 backlog。
+    巡检仅覆盖 HTTPX_ADAPTERS（含 wt/hotjob）；browser 类（beisen/moka/feishu）的死活检测为 P2 未实现。
+    每岗任一结果（filled/alive/miss/expired）都推进 enrich_checked_at → 轮转复检，杜绝失败岗卡队首阻塞巡检。"""
     make_sb = make_sb or db.get_supabase
     adapters = (adapter,) if adapter else HTTPX_ADAPTERS
-    rows, smap = fetch_queue(sb, adapters, limit)
-    print(f"队列待富化（httpx 类，adapter={adapter or '全部'}）：{len(rows)}")
+    rows, smap = (fetch_liveness_queue if sweep else fetch_queue)(sb, adapters, limit)
+    print(f"{'死活巡检' if sweep else '富化队列'}（httpx 类，adapter={adapter or '全部'}）：{len(rows)}")
     if not rows:
-        return {"filled": 0, "miss": 0, "expired": 0, "err": 0}
+        return {"filled": 0, "alive": 0, "miss": 0, "expired": 0, "err": 0}
     # 按 source 轮转交错，避免并发线程集中打同一租户
     by_src = {}
     for r in rows:
         by_src.setdefault(r["source_id"], []).append(r)
     rows = [r for tup in zip_longest(*by_src.values()) for r in tup if r]
 
-    stat = {"filled": 0, "miss": 0, "expired": 0, "err": 0}
+    stat = {"filled": 0, "alive": 0, "miss": 0, "expired": 0, "err": 0}
     lock = threading.Lock()
 
     def work(row):
@@ -153,16 +194,17 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
             res = "err"  # 兜底：任何意外都不许炸穿 ex.map（否则掀翻整批，本 drain 实锤过）
         with lock:
             stat[res] += 1
-            done = stat["filled"] + stat["miss"] + stat["expired"] + stat["err"]
+            done = stat["filled"] + stat["alive"] + stat["miss"] + stat["expired"] + stat["err"]
             if done % 200 == 0:
-                print(f"  …{done}/{len(rows)}  filled={stat['filled']} miss={stat['miss']} "
-                      f"expired={stat['expired']} err={stat['err']}")
+                print(f"  …{done}/{len(rows)}  filled={stat['filled']} alive={stat['alive']} "
+                      f"miss={stat['miss']} expired={stat['expired']} err={stat['err']}")
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         list(ex.map(work, rows))
 
-    print(f"完成：填充 {stat['filled']}，无果/死信+1 {stat['miss']}，源站撤岗→expired {stat['expired']}，"
-          f"写库错(留队列重试) {stat['err']}{'（dry-run 未写库）' if dry_run else ''}")
+    print(f"完成：填充 {stat['filled']}，仍在招 {stat['alive']}，无果/死信+1 {stat['miss']}，"
+          f"源站撤岗→expired {stat['expired']}，写库错(留队列重试) {stat['err']}"
+          f"{'（dry-run 未写库）' if dry_run else ''}")
     return stat
 
 
@@ -172,6 +214,8 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="本次最多富化多少岗（0=全部）")
     ap.add_argument("--workers", type=int, default=10, help="并发线程数")
     ap.add_argument("--dry-run", action="store_true", help="抓取打印但不写库")
+    ap.add_argument("--sweep", action="store_true",
+                    help="死活巡检：复检所有 active 岗（不限空 summary），撤岗置 expired（按 enrich_checked_at 最旧轮转）")
     args = ap.parse_args()
 
     if not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SERVICE_ROLE_KEY")):
@@ -179,7 +223,7 @@ def main():
         sys.exit(1)
 
     sb = db.get_supabase()
-    drain(sb, adapter=args.adapter, limit=args.limit, workers=args.workers, dry_run=args.dry_run)
+    drain(sb, adapter=args.adapter, limit=args.limit, workers=args.workers, dry_run=args.dry_run, sweep=args.sweep)
 
 
 if __name__ == "__main__":
