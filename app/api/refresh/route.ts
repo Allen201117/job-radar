@@ -6,7 +6,7 @@ import discoveryDispatch from "@/lib/discovery-dispatch";
 import { resolveRefreshScope } from "@/lib/refresh-scope";
 import { evaluateRefreshThrottle } from "@/lib/refresh-throttle";
 import { jobMatchesFilters, DEFAULT_FILTERS } from "@/lib/job-filter";
-import { CITY_ALIASES, normalizeChinaCity } from "@/lib/china-keyword-expansion";
+import { searchJobs } from "@/lib/job-search";
 
 export const runtime = "nodejs";
 
@@ -313,27 +313,17 @@ async function resolveProvenCompanies(
   const empty = { provenCompanies: [], provenExactCompanies: [] };
   if (!city || !keyword) return empty;
   try {
-    // 城市预筛用全部别名（中/英/带"市"后缀），避免漏掉 location 存英文（如 "Shenzhen"）的源——
-    // 否则像 OPPO 这种英文地点的雇主会被预筛挡在 proven 之外。逐岗精筛仍由 jobMatchesFilters 兜底。
-    const norm = normalizeChinaCity(city);
-    const aliasKeys = Array.from((CITY_ALIASES as Map<string, string>).entries())
-      .filter(([, v]) => v === norm)
-      .map(([k]) => k);
-    const aliases = Array.from(
-      new Set(
-        [city, norm, ...aliasKeys]
-          .map((s) => String(s || "").trim())
-          .filter((s) => s.length >= 2),
-      ),
+    // 候选取自与 Jobs 页同一套服务端搜索（lib/job-search）：先用关键词 bigram GIN 索引收窄命中集，
+    // 再在小集合上 recheck 城市。**绝不能**对 location 全表 ilike 取候选——那会 statement_timeout 并
+    // 截断成任意 8000 行，曾把「深圳·产品经理」真有实习岗的 OPPO 整个漏掉，导致结果坍缩。
+    const { jobs: cityJobs } = await searchJobs(
+      service,
+      { ...DEFAULT_FILTERS, city, keyword },
+      null,
+      [],
+      0,
+      8000,
     );
-    const orFilter = aliases.map((a) => `location.ilike.%${a}%`).join(",");
-    const { data: cityJobs } = await service
-      .from("jobs")
-      // 注意：jobs 表无 hidden_reason 列（它是读时按 job_actions 派生的）；选它会整条 query 报错→proven 静默失效。
-      .select("company, title, location, job_type, summary, salary_text, first_seen_at, posted_at")
-      .eq("status", "active")
-      .or(orFilter)
-      .limit(8000);
     const baseF = { ...DEFAULT_FILTERS, city, keyword } as any;
     const exactF = { ...baseF, jobType } as any;
     const rel = new Set<string>();
