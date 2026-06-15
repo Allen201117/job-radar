@@ -7,6 +7,15 @@ import type { ScoredJob } from "@/lib/types";
 import type { Filters } from "./useJobFilters";
 
 export type DiscoveryPhase = "idle" | "queued" | "running" | "done" | "failed";
+// 三个检索（本地查库 / 更新关注公司 / 扩大官方搜索）完成后的「显式完成提示」载荷。
+export type RetrievalKind = "local" | "refresh" | "discovery";
+export type RetrievalResult = {
+  kind: RetrievalKind;
+  // success=有结果（绿色）；empty=完成但本轮无新结果（中性）。失败仍走 searchInfo 错误文案，不进此处。
+  tone: "success" | "empty";
+  title: string;
+  detail: string;
+};
 export type BrowserDiscoveryState = {
   phase: DiscoveryPhase;
   runId: string | null;
@@ -52,8 +61,10 @@ type UseDiscoveryPollArgs = {
   filters: Filters;
   // 把流式产出的新岗位并入会话列表（调用方持有 officialJobs 状态）
   setOfficialJobs: Dispatch<SetStateAction<ScoredJob[]>>;
-  // 触发/完成/失败/超时时的提示文案出口
+  // 触发/进行中/失败/超时时的过程文案出口（不再承载「完成」语义，完成走 setResult）
   setSearchInfo: Dispatch<SetStateAction<string>>;
+  // 终态显式「完成提示」出口：成功/空结果时写入，失败置空保留 searchInfo 错误文案
+  setResult: Dispatch<SetStateAction<RetrievalResult | null>>;
 };
 
 // BrowserDiscovery 状态机 + 轮询 setInterval + localStorage 任务持久化 + 超时/staleness 处理。
@@ -62,8 +73,11 @@ export function useDiscoveryPoll({
   filters,
   setOfficialJobs,
   setSearchInfo,
+  setResult,
 }: UseDiscoveryPollArgs) {
   const [refreshing, setRefreshing] = useState(false);
+  // 当前在跑的检索类型：finish 时据此给出对应文案（poll 闭包读不到最新 discovery.kind，用 ref 兜稳）。
+  const kindRef = useRef<"refresh" | "discovery">("discovery");
   const [discovery, setDiscovery] = useState<BrowserDiscoveryState>({
     phase: "idle",
     runId: null,
@@ -84,6 +98,8 @@ export function useDiscoveryPoll({
       return;
     }
     setSearchInfo("");
+    setResult(null); // 清掉上一轮的完成提示
+    kindRef.current = "discovery";
     const startedAt = Date.now();
     setDiscovery({
       phase: "queued",
@@ -144,7 +160,20 @@ export function useDiscoveryPoll({
 
   function finishBrowserDiscovery(data: any) {
     mergeStreamedJobs(data); // 终态兜底再并一次
-    setSearchInfo(formatBrowserDiscoveryResult(data));
+    // 优先用 status 返回的真实 mode（跨页恢复时 kindRef 会丢失），兜底用本地 kindRef。
+    const kind =
+      data?.mode === "company_refresh"
+        ? "refresh"
+        : data?.mode === "browser_discovery"
+          ? "discovery"
+          : kindRef.current;
+    const done = buildCompletion(data, kind);
+    if (done) {
+      setResult(done); // 显式「完成」提示（成功 / 空结果）
+      setSearchInfo(""); // 清掉「正在更新…」过程文案，避免与完成提示重复
+    } else {
+      setSearchInfo(formatBrowserDiscoveryResult(data)); // 失败：保留错误文案
+    }
     setDiscovery({ phase: "idle", runId: null, startedAt: null, elapsedSec: 0, note: "", progress: null });
     clearDiscoveryTask();
   }
@@ -238,6 +267,8 @@ export function useDiscoveryPoll({
     if (refreshing || discoveryActive) return; // 进行中不重复触发（后端另有节流/幂等兜底）
     track("refresh_click");
     setRefreshing(true);
+    setResult(null); // 清掉上一轮的完成提示
+    kindRef.current = "refresh";
     setSearchInfo("正在更新你关注的公司…");
     const startedAt = Date.now();
     try {
@@ -314,6 +345,56 @@ function friendlyFailure(code: string | null | undefined, fallback: string): str
 
 function formatDispatchError(data: any) {
   return friendlyFailure(data?.error, "扩大搜索触发失败，请稍后再试。");
+}
+
+// 终态结果 → 显式「完成」提示载荷（成功 / 空结果）。失败返回 null（仍交给 searchInfo 错误文案）。
+function buildCompletion(
+  data: any,
+  kind: "refresh" | "discovery",
+): RetrievalResult | null {
+  const isDone =
+    data?.phase === "done" ||
+    data?.status === "success" ||
+    data?.status === "partial_success";
+  if (!isDone) return null;
+  const created = Number(data?.jobs_created ?? 0);
+  const updated = Number(data?.jobs_updated ?? 0);
+  const shown = Number(data?.total ?? 0);
+  const got = created + updated;
+  if (kind === "refresh") {
+    if (got > 0) {
+      return {
+        kind: "refresh",
+        tone: "success",
+        title: "更新关注公司 · 完成",
+        detail: `本轮新增 ${created} · 更新 ${updated} 个官方岗位${
+          shown ? `，已并入列表 ${shown} 个` : ""
+        }。`,
+      };
+    }
+    return {
+      kind: "refresh",
+      tone: "empty",
+      title: "更新关注公司 · 完成",
+      detail: "本轮没有抓到新岗位，关注的公司暂无更新；可换个筛选条件或稍后再试。",
+    };
+  }
+  if (got > 0 || shown > 0) {
+    return {
+      kind: "discovery",
+      tone: "success",
+      title: "扩大官方搜索 · 完成",
+      detail: `本轮新增 ${created} · 更新 ${updated} 个官方岗位${
+        shown ? `，已并入列表 ${shown} 个` : ""
+      }。`,
+    };
+  }
+  return {
+    kind: "discovery",
+    tone: "empty",
+    title: "扩大官方搜索 · 完成",
+    detail: "本轮没找到符合该关键词的官方岗位——换个关键词或去掉城市再试。",
+  };
 }
 
 function formatBrowserDiscoveryResult(data: any) {
