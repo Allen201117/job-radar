@@ -63,6 +63,18 @@ test("可调冷却窗口", () => {
   assert.equal(evaluateRefreshThrottle(runs, NOW, { cooldownMs: 60 * 1000 }).action, "cooldown");
 });
 
+test("冷却=0（不限制主动爬取次数）：刚结束也立即放行", () => {
+  const runs = [{ id: "just", status: "success", created_at: ago(1 * 1000) }];
+  assert.equal(evaluateRefreshThrottle(runs, NOW, { cooldownMs: 0 }).action, "dispatch");
+});
+
+test("冷却=0 仍保留在飞幂等：进行中的 run 复用而非重复 dispatch", () => {
+  const runs = [{ id: "live", status: "running", created_at: ago(10 * 1000) }];
+  const res = evaluateRefreshThrottle(runs, NOW, { cooldownMs: 0 });
+  assert.equal(res.action, "reuse");
+  assert.equal(res.run.id, "live");
+});
+
 test("坏时间戳被忽略，不炸", () => {
   const runs = [{ id: "bad", status: "running", created_at: "not-a-date" }];
   assert.equal(evaluateRefreshThrottle(runs, NOW).action, "dispatch");

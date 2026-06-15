@@ -111,6 +111,7 @@ export async function GET(request: NextRequest) {
     phase: summary.phase,
     is_terminal: summary.isTerminal,
     progress, // { done, total } —— 前端真实进度条（替代硬编码）
+    scope_companies: diag.scope_companies ?? null, // 本轮抓取的 distinct 公司数（漏斗透明化）
     query: run.query,
     city: run.city,
     company: run.company,
