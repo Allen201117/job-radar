@@ -48,7 +48,7 @@
    - **保可靠稳定**：只留能过质量门、稳定逐岗 `jd_url`、且能被现有抓取链路**可持续抓到**的源——别加 daily 抓不过来的源（浏览器源串行单个 2–5min，daily CI 预算有限）。头部高价值源 daily 抓，长尾降频 / 按需（「更新关注公司」接长尾）。
    - **扩源后置且定向**：确需加源时只**定向补缺失的目标公司**（如比亚迪 / vivo / 顺丰 / 荣耀 / 货拉拉 / 微众 等科技消费大厂），必须 live 探活确认稳定产出真实岗位后才留（禁止猜 slug 入库）；不再随机铺量、不再把「新增 adapter」当最高优 backlog。
    - 「中国本土 > 外企」「私企500强 > 国企央企」的**相对偏好仍然成立**（用于排序与定向补源的取舍），但服从于上面的「精 > 量」总原则——**不是再去大规模铺本土源**。
-   - **列表抓取夹带已关闭岗（精度待办，2026-06-15 查实）**：wt / hotjob 的列表端口会返回**已结束的校招/实习批次岗**（2026 春招/暑期实习收尾期尤甚，wt 52% / hotjob 71% 抓进来即被 sweep 判死）。现状靠 daily liveness sweep（`enrich_backlog.py --sweep` + `enrich.py` 逐岗 detail 探活，**已验证工作正常、勿动**）当天清掉；但中间有「短暂显示假 active」的窗口 + 浪费一半抓取。**改进方向 = 列表端就过滤掉已关闭/已结束批次**（抓取时按 list 的状态字段剔除），从源头少抓死岗，而不是抓进来再清。
+   - **列表抓取夹带已关闭岗（2026-06-15 查实；结论：靠 sweep，list 端过滤做不到）**：wt / hotjob 的列表接口会返回**已关闭的岗**（wt 52% / hotjob 71% 抓进来即被 sweep 判死，2026 春招/暑期实习收尾期尤甚）。**已 live 验证 list 端没有可靠的「关闭」字段可过滤**：hotjob `canDelivery=false` 在「在招」岗上也为 false（华夏银行 live 岗 15/15 都是 false）→ 不可用；wt 列表里夹带的已关闭岗与在招岗**除身份字段（postId/postName/workPlace）外无任何区别**（endDate 仍是未来日期）。唯一可靠的关闭信号是逐岗 detail（hotjob state=1017 / wt req_state=9501），这正是 daily liveness sweep（`enrich_backlog.py --sweep` + `enrich.py`，**已验证工作正常、勿动**）在做的；且它优先复检 `enrich_checked_at=NULL` 的新岗，「假 active」窗口已很小。**所以保持 sweep、不要去做 list 端过滤（技术上做不到）**；减少 churn 只能靠 detail 探活，成本=sweep 本身。
 
 ## 数据库迁移（已自动化，勿再手动跑 Supabase）
 
