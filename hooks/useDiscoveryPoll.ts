@@ -332,6 +332,7 @@ const FRIENDLY_FAILURE: Record<string, string> = {
   no_jobs_passed_quality: "抓到一些岗位但没有可靠的职位描述，已跳过。",
   dispatch_not_configured: "扩大搜索暂时不可用（服务未配置），请稍后再试。",
   dispatch_failed: "扩大搜索触发失败，请稍后再试。",
+  dispatch_rate_limited: "GitHub Actions 平台限流（非每日额度），稍等几分钟再试。",
   run_insert_failed: "任务创建失败，请稍后再试。",
   discovery_exception: "扩大搜索时后台出错了，请稍后再试。",
   invalid_input: "输入有误，请检查关键词后重试。",
@@ -361,22 +362,32 @@ function buildCompletion(
   const updated = Number(data?.jobs_updated ?? 0);
   const shown = Number(data?.total ?? 0);
   const got = created + updated;
+  // 透明化漏斗：抓了多少家公司（scope）→ 实际命中筛选的有几家（产出岗位的 distinct 公司）。
+  const scopeCompanies = Number(data?.scope_companies || 0);
+  const producing = new Set(
+    (Array.isArray(data?.jobs) ? data.jobs : [])
+      .map((j: any) => String(j?.company || "").trim())
+      .filter(Boolean),
+  ).size;
+  const count = shown || got;
   if (kind === "refresh") {
     if (got > 0) {
       return {
         kind: "refresh",
         tone: "success",
         title: "更新关注公司 · 完成",
-        detail: `本轮新增 ${created} · 更新 ${updated} 个官方岗位${
-          shown ? `，已并入列表 ${shown} 个` : ""
-        }。`,
+        detail: scopeCompanies
+          ? `本轮抓取 ${scopeCompanies} 家公司，命中你筛选条件的有 ${producing} 家、共 ${count} 个岗位。`
+          : `本轮新增 ${created} · 更新 ${updated} 个官方岗位${count ? `，来自 ${producing} 家公司` : ""}。`,
       };
     }
     return {
       kind: "refresh",
       tone: "empty",
       title: "更新关注公司 · 完成",
-      detail: "本轮没有抓到新岗位，关注的公司暂无更新；可换个筛选条件或稍后再试。",
+      detail: scopeCompanies
+        ? `本轮抓取了 ${scopeCompanies} 家公司，但没有同时满足 城市+类型+关键词 的新岗位——可放宽筛选，或这些方向的官方在招本就稀少。`
+        : "本轮没有抓到新岗位，关注的公司暂无更新；可换个筛选条件或稍后再试。",
     };
   }
   if (got > 0 || shown > 0) {
@@ -385,7 +396,7 @@ function buildCompletion(
       tone: "success",
       title: "扩大官方搜索 · 完成",
       detail: `本轮新增 ${created} · 更新 ${updated} 个官方岗位${
-        shown ? `，已并入列表 ${shown} 个` : ""
+        count ? `，来自 ${producing} 家公司` : ""
       }。`,
     };
   }

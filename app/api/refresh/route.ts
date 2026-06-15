@@ -13,7 +13,10 @@ const { buildWorkflowDispatchRequest, resolveDispatchConfig, isDispatchAccepted 
 
 const DISPATCH_TIMEOUT_MS = 20000; // 抬到 20s（原 discovery 10s 偏紧），靠读时 staleness 兜底卡死
 const SCOPE_CAP = Number(process.env.REFRESH_SCOPE_CAP || 25);
-const COOLDOWN_MS = Number(process.env.REFRESH_COOLDOWN_MIN || 10) * 60 * 1000;
+// 主动刷新不设每日/冷却上限（用户诉求：别限制主动爬取次数）。默认 0=关闭冷却；
+// 并发由下方 in-flight「reuse」幂等守卫挡住（同一时刻只跑一个，避免重复 dispatch），不算次数限制。
+// 真要重新限流可设 REFRESH_COOLDOWN_MIN>0。外部限流（GitHub/百度）仍如实反馈给用户。
+const COOLDOWN_MS = Number(process.env.REFRESH_COOLDOWN_MIN || 0) * 60 * 1000;
 
 /**
  * POST /api/refresh —— on-demand「刷新公司库」（全异步·流式）。
@@ -78,6 +81,11 @@ export async function POST(request: NextRequest) {
     },
     { cap: SCOPE_CAP },
   );
+
+  // scope 内 distinct 公司数（透明化「本轮抓了多少家公司」用，区别于 source 行数）。
+  const scopeCompanies = new Set(
+    (scope.sources || []).map((s: any) => String(s.company || "").trim()).filter(Boolean),
+  ).size;
 
   if (scope.sourceIds.length === 0) {
     return NextResponse.json(
@@ -169,6 +177,7 @@ export async function POST(request: NextRequest) {
     failure_reason: null,
     diagnostics: {
       source_ids: scope.sourceIds,
+      scope_companies: scopeCompanies, // 本轮抓取的 distinct 公司数（前端透明化漏斗）
       filters: effFilters,
       click_time: startedAt,
       progress: { done: 0, total: scope.sourceIds.length },
@@ -217,11 +226,14 @@ export async function POST(request: NextRequest) {
   }
 
   if (dispatchError) {
+    // 平台限流（GitHub Actions 403/429）单独标记，如实反馈给用户（区别于一般触发失败）。
+    const rateLimited = dispatchHttpStatus === 403 || dispatchHttpStatus === 429;
+    const errorCode = rateLimited ? "dispatch_rate_limited" : "dispatch_failed";
     await service
       .from("discovery_runs")
       .update({
         status: "failed",
-        failure_reason: "dispatch_failed",
+        failure_reason: errorCode,
         error_message: dispatchError.slice(0, 1000),
         finished_at: new Date().toISOString(),
       })
@@ -229,12 +241,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         ok: false,
-        error: "dispatch_failed",
+        error: errorCode,
         detail: dispatchError,
         run_id: runId,
         mode: "company_refresh",
+        ...(rateLimited
+          ? { hint: "GitHub Actions 平台限流（非每日额度），稍等几分钟再试。" }
+          : {}),
       },
-      { status: 502 },
+      { status: rateLimited ? 429 : 502 },
     );
   }
 
