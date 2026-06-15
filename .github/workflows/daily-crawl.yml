@@ -40,12 +40,17 @@ on:
         description: "每源翻页上限（发现产出量↔CI 耗时权衡，1-10，默认 4）"
         required: false
         default: "4"
+      sweep_limit:
+        description: "死活巡检本次复检岗位数上限（手动加速清死岗用；留空=每日默认 12000）"
+        required: false
+        default: "12000"
 
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    # 整体安全网：远低于 GitHub Actions 6h 硬杀。快档 httpx step 50min(瓶颈=逐岗 upsert)；按需 discovery 55min。
-    timeout-minutes: 75
+    # 整体安全网：远低于 GitHub Actions 6h 硬杀。快档 httpx step 50min(瓶颈=逐岗 upsert)；按需 discovery 55min；
+    # 巡检 step 最长 65min（手动大清扫）→ 抓取 ~5min + 巡检 65min < 90min。
+    timeout-minutes: 90
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -82,9 +87,9 @@ jobs:
       # 监控：看本 step 日志的 expired/miss/err 比例；若 miss 偏高（hotjob 单 host 限流）再调 workers/per-host。
       - name: Liveness sweep (expire dead jobs)
         if: ${{ github.event.inputs.mode != 'discovery' && github.event.inputs.mode != 'company_refresh' }}
-        timeout-minutes: 20
+        timeout-minutes: 65
         working-directory: crawler
-        run: python enrich_backlog.py --sweep --limit 12000 --workers 8
+        run: python enrich_backlog.py --sweep --limit ${{ github.event.inputs.sweep_limit || '12000' }} --workers 8
         continue-on-error: true
 
       # 按需「浏览器发现」/「刷新公司库」：DISCOVERY_* 触发 discovery.run_from_env（按 mode 路由到
