@@ -88,7 +88,7 @@ export function MetricTile({
 
   return (
     // 移动端：横向紧凑（图标在左、数字+标签在右），少占竖向空间；sm+ 恢复竖向卡片。
-    <div className="surface-soft flex items-center gap-3 px-3.5 py-3 sm:flex-col sm:items-start sm:gap-0 sm:px-4 sm:py-4">
+    <div className="surface-soft bento-glow flex items-center gap-3 px-3.5 py-3 sm:flex-col sm:items-start sm:gap-0 sm:px-4 sm:py-4">
       <div className={cn("grid size-9 shrink-0 place-items-center rounded-xl", toneClass)}>
         <Icon size={19} weight="fill" aria-hidden="true" />
       </div>
