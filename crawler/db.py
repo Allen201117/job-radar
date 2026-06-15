@@ -122,6 +122,29 @@ def upsert_job(supabase: Client, job: dict) -> str:
     return "created"
 
 
+# 单次 .in_("canonical_jd_url", …) select 的 URL 累计长度预算。GET 查询串过长会撞 Supabase 网关
+# URI 上限（~8KB）→ 整源 select 报 400（明文 Bad Request，非 PostgREST JSON 错）。长 query 串 jd_url
+# （wt/hotjob 形如 ?brandCode=1&safe=Y&recruitType=2&postIdsAry=…，编码后约 1.7×）在固定 200 条/块时
+# URI 达 ~28KB → 400。3500 原始字符 → 编码后 ~6KB，稳在 8KB 内（短链源仍能打满、不增往返）。
+_SELECT_URI_BUDGET_CHARS = 3500
+
+
+def _chunk_by_uri_budget(values, max_chars: int = _SELECT_URI_BUDGET_CHARS, max_count: int = 200):
+    """按 URL 累计长度切块：单块总长 ≤ max_chars 且条数 ≤ max_count。单条超预算时自成一块（绝不丢弃）。
+    供 upsert_jobs_batch 的 canonical select 防 GET URI 过长用——按条数固定分块会让长 query 串源撞网关 400。"""
+    chunk: list = []
+    size = 0
+    for v in values:
+        vlen = len(v) + 4  # 引号/逗号/编码余量
+        if chunk and (size + vlen > max_chars or len(chunk) >= max_count):
+            yield chunk
+            chunk, size = [], 0
+        chunk.append(v)
+        size += vlen
+    if chunk:
+        yield chunk
+
+
 def upsert_jobs_batch(supabase: Client, jobs: list[dict], chunk_size: int = 200) -> tuple[int, int]:
     """批量 upsert 一批岗位，返回 (created, updated)。
 
@@ -144,11 +167,10 @@ def upsert_jobs_batch(supabase: Client, jobs: list[dict], chunk_size: int = 200)
         deduped[canonicalize_jd_url(job.get("jd_url"))] = job
     jobs = list(deduped.values())
 
-    # 1. 一次性批量 select 既有行（按 canonical，分块防 URL 过长）；建 canonical→id（多行优先 active）。
+    # 1. 一次性批量 select 既有行（按 canonical，按 URL 累计长度分块防 GET URI 撞网关上限）；建 canonical→id（多行优先 active）。
     canons = sorted({canonicalize_jd_url(j.get("jd_url")) for j in jobs if j.get("jd_url")})
     existing_by_canon: dict = {}
-    for i in range(0, len(canons), chunk_size):
-        chunk = canons[i:i + chunk_size]
+    for chunk in _chunk_by_uri_budget(canons):
         resp = supabase.table("jobs").select("id, canonical_jd_url, status").in_("canonical_jd_url", chunk).execute()
         for row in (resp.data or []):
             canon = row.get("canonical_jd_url")
