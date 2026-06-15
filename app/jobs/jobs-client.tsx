@@ -8,7 +8,11 @@ import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
 import type { ScoredJob } from "@/lib/types";
 import { useJobFilters } from "@/hooks/useJobFilters";
-import { useDiscoveryPoll, type BrowserDiscoveryState } from "@/hooks/useDiscoveryPoll";
+import {
+  useDiscoveryPoll,
+  type BrowserDiscoveryState,
+  type RetrievalResult,
+} from "@/hooks/useDiscoveryPoll";
 import {
   ArrowsClockwise,
   CheckCircle,
@@ -18,6 +22,7 @@ import {
   Database,
   MagnifyingGlass,
   Sparkle,
+  X,
 } from "@phosphor-icons/react";
 
 type PrimaryAction = "saved" | "ignored" | "applied";
@@ -40,6 +45,10 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
   // 「查已有岗位」点击加载态：即使秒出也显式可见（最短展示一段时间），与另两个检索一致。
   const [existingBusy, setExistingBusy] = useState(false);
   const existingBusyUntil = useRef(0);
+  // 三个检索的「显式完成提示」：完成后弹一条带本轮结果概要的横幅（可手动关闭）。
+  const [result, setResult] = useState<RetrievalResult | null>(null);
+  // 标记本次 loading 结束源于用户点「查已有岗位」（而非筛选防抖自动搜），只为它弹完成提示。
+  const pendingLocalResult = useRef(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -81,7 +90,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
 
   // 「更新关注公司 / 扩大官方搜索范围」状态机 + 轮询 + 持久化 + 超时（整体在 hook 内）。
   const { discovery, refreshing, discoveryActive, startDiscovery, startRefresh } =
-    useDiscoveryPoll({ filters, setOfficialJobs, setSearchInfo });
+    useDiscoveryPoll({ filters, setOfficialJobs, setSearchInfo, setResult });
 
   // 收起「查已有岗位」加载态：底层搜索结束且最短可见时间已到才停 spinner。
   useEffect(() => {
@@ -90,6 +99,33 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     const t = setTimeout(() => setExistingBusy(false), remain);
     return () => clearTimeout(t);
   }, [existingBusy, loading]);
+
+  // 「查已有岗位」完成提示：仅当本次 loading 结束源于用户点击（pendingLocalResult）时弹，
+  // 不打扰筛选防抖触发的后台自动搜。读结束时的 total/exactCount 概要本轮结果。
+  useEffect(() => {
+    if (!pendingLocalResult.current || loading) return;
+    pendingLocalResult.current = false;
+    const related = Math.max(0, total - exactCount);
+    setResult(
+      total > 0
+        ? {
+            kind: "local",
+            tone: "success",
+            title: "查已有岗位 · 完成",
+            detail: `在已收录岗位里匹配到 ${total} 个${
+              filters.keyword ? `（精确 ${exactCount} · 相关 ${related}）` : ""
+            }，已展示 ${displayJobs.length} 个。`,
+          }
+        : {
+            kind: "local",
+            tone: "empty",
+            title: "查已有岗位 · 完成",
+            detail:
+              "当前筛选没有命中已收录岗位；可放宽条件，或用下方「扩大搜索范围」联网去官网找。",
+          },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
 
   // P3 on-demand 富化：给用户当下看到的薄卡（无 summary）即时补 JD 正文。
   // 只发 jd_url，服务端只补简单 httpx 源（workday/hotjob）；其余/浏览器源留给后台 drain。
@@ -141,7 +177,9 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     track("search", { keyword: filters.keyword || "" });
     setOfficialJobs([]);
     setOnlyNew(false);
-    setSearchInfo("已在收录的岗位里查好，结果见下方列表。");
+    setSearchInfo("");
+    setResult(null); // 清掉上一轮完成提示
+    pendingLocalResult.current = true; // 本次搜索结束后弹「查已有岗位 · 完成」
     existingBusyUntil.current = Date.now() + 600; // 最短可见 600ms：秒出也有显式加载态
     setExistingBusy(true);
     refresh();
@@ -229,6 +267,9 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
           </p>
         )}
       </div>
+      {result && (
+        <RetrievalDoneBanner result={result} onDismiss={() => setResult(null)} />
+      )}
       {discoveryActive && <BrowserDiscoveryProgress discovery={discovery} />}
 
       {officialJobs.length > 0 && (
@@ -442,6 +483,66 @@ function ActionTile({
       >
         {tooltip}
       </span>
+    </div>
+  );
+}
+
+// 三个检索完成后的显式提示横幅：成功=暖绿，空结果=中性纸色；与全站 warm-editorial 风格一致。
+function RetrievalDoneBanner({
+  result,
+  onDismiss,
+}: {
+  result: RetrievalResult;
+  onDismiss: () => void;
+}) {
+  const success = result.tone === "success";
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "flex items-start gap-3 rounded-2xl border px-4 py-3.5",
+        success ? "border-[#cfe6b0] bg-[#eef6e0]" : "border-black/[0.07] bg-[#f6f3ec]",
+      )}
+    >
+      <span
+        className={cn(
+          "mt-0.5 grid size-7 shrink-0 place-items-center rounded-full",
+          success ? "bg-[#dcecbf] text-[#5b7d2c]" : "bg-black/[0.06] text-[#8a8275]",
+        )}
+      >
+        {success ? (
+          <CheckCircle size={18} weight="fill" aria-hidden="true" />
+        ) : (
+          <MagnifyingGlass size={16} weight="bold" aria-hidden="true" />
+        )}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p
+          className={cn(
+            "text-sm font-semibold",
+            success ? "text-[#3f5a1c]" : "text-[#3f3a33]",
+          )}
+        >
+          {result.title}
+        </p>
+        <p
+          className={cn(
+            "mt-0.5 text-pretty text-sm leading-6",
+            success ? "text-[#557029]" : "text-[#6b655a]",
+          )}
+        >
+          {result.detail}
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="关闭完成提示"
+        className="-mr-1 -mt-1 shrink-0 rounded-full p-1.5 text-[#8a8275] transition hover:bg-black/[0.06] hover:text-[#1a1714]"
+      >
+        <X size={15} weight="bold" aria-hidden="true" />
+      </button>
     </div>
   );
 }
