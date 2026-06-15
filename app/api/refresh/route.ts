@@ -5,6 +5,8 @@ import { createServerSupabase } from "@/lib/auth";
 import discoveryDispatch from "@/lib/discovery-dispatch";
 import { resolveRefreshScope } from "@/lib/refresh-scope";
 import { evaluateRefreshThrottle } from "@/lib/refresh-throttle";
+import { jobMatchesFilters, DEFAULT_FILTERS } from "@/lib/job-filter";
+import { CITY_ALIASES, normalizeChinaCity } from "@/lib/china-keyword-expansion";
 
 export const runtime = "nodejs";
 
@@ -60,7 +62,7 @@ export async function POST(request: NextRequest) {
   // 1) 解析 scope（手动筛选优先；未配用偏好兜底；按相关性 + 每平台多样性 cap 前 N）。
   const { data: sources, error: srcErr } = await service
     .from("sources")
-    .select("id, company, adapter_name, source_url, industry, segment, enabled")
+    .select("id, company, adapter_name, source_url, industry, segment, enabled, notes")
     .eq("enabled", true);
   if (srcErr) {
     return NextResponse.json(
@@ -68,6 +70,17 @@ export async function POST(request: NextRequest) {
       { status: 500 },
     );
   }
+
+  // 「已收录公司」最强相关信号：用 jobs 表反查「真有命中 城市+关键词(+类型) 岗位」的公司，
+  // 交给 scope 置顶重爬。修根因：metadata/notes 选源选不到真有该岗位的公司（深圳·产品经理曾 0/33 命中）。
+  // 仅在「无显式公司筛选 + 有城市」时启用：显式公司时尊重用户点名；无城市时全表 ilike 太重。
+  const { provenCompanies, provenExactCompanies } = await resolveProvenCompanies(
+    service,
+    filters.company ? "" : filters.city || prefs.city,
+    filters.keyword,
+    filters.jobType || prefs.experienceStage,
+  );
+
   const scope = resolveRefreshScope(
     {
       filters,
@@ -76,7 +89,10 @@ export async function POST(request: NextRequest) {
         targetKeywords: prefs.targetKeywords,
         targetRoles: prefs.targetRoles,
         excludeKeywords: prefs.excludeKeywords,
+        city: prefs.city, // 未填城市时用偏好城市兜底（海外意图判定 + notes 城市信号）
       },
+      provenCompanies,
+      provenExactCompanies,
       sources: sources || [],
     },
     { cap: SCOPE_CAP },
@@ -284,6 +300,55 @@ function createServiceClient(): SupabaseClient {
   return createClient(supabaseUrl, serviceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+}
+
+// 反查「已收录里真有命中该筛选岗位」的公司：按城市 ilike 取候选，再用与本地搜索同一份匹配器
+// （jobMatchesFilters）按 城市+关键词(+类型) 精筛 → distinct 公司名。空城市/空关键词时返回空（不全表扫）。
+async function resolveProvenCompanies(
+  service: SupabaseClient,
+  city: string,
+  keyword: string,
+  jobType: string,
+): Promise<{ provenCompanies: string[]; provenExactCompanies: string[] }> {
+  const empty = { provenCompanies: [], provenExactCompanies: [] };
+  if (!city || !keyword) return empty;
+  try {
+    // 城市预筛用全部别名（中/英/带"市"后缀），避免漏掉 location 存英文（如 "Shenzhen"）的源——
+    // 否则像 OPPO 这种英文地点的雇主会被预筛挡在 proven 之外。逐岗精筛仍由 jobMatchesFilters 兜底。
+    const norm = normalizeChinaCity(city);
+    const aliasKeys = Array.from((CITY_ALIASES as Map<string, string>).entries())
+      .filter(([, v]) => v === norm)
+      .map(([k]) => k);
+    const aliases = Array.from(
+      new Set(
+        [city, norm, ...aliasKeys]
+          .map((s) => String(s || "").trim())
+          .filter((s) => s.length >= 2),
+      ),
+    );
+    const orFilter = aliases.map((a) => `location.ilike.%${a}%`).join(",");
+    const { data: cityJobs } = await service
+      .from("jobs")
+      // 注意：jobs 表无 hidden_reason 列（它是读时按 job_actions 派生的）；选它会整条 query 报错→proven 静默失效。
+      .select("company, title, location, job_type, summary, salary_text, first_seen_at, posted_at")
+      .eq("status", "active")
+      .or(orFilter)
+      .limit(8000);
+    const baseF = { ...DEFAULT_FILTERS, city, keyword } as any;
+    const exactF = { ...baseF, jobType } as any;
+    const rel = new Set<string>();
+    const exact = new Set<string>();
+    for (const j of cityJobs || []) {
+      const company = String((j as any).company || "").trim();
+      if (!company) continue;
+      if (jobMatchesFilters(j as any, baseF)) rel.add(company);
+      if (jobType && jobMatchesFilters(j as any, exactF)) exact.add(company);
+    }
+    return { provenCompanies: Array.from(rel), provenExactCompanies: Array.from(exact) };
+  } catch (err) {
+    console.error("[refresh] proven-company lookup failed", (err as Error).message);
+    return empty;
+  }
 }
 
 // 读用户偏好：scope 用 target_companies/keywords/roles；逐岗过滤兜底用 city/experience_stage/exclude。
