@@ -31,13 +31,103 @@ test("未配公司 → 用偏好 target_companies 兜底", () => {
   assert.deepEqual(new Set(r.sourceIds), new Set(["b", "c"]));
 });
 
-test("关键词命中 industry/segment 的源入选", () => {
+test("关键词命中 industry/segment 的源排在最前（本土均可入选兜底）", () => {
   const sources = [
     src("a", "某游戏公司", "moka", { industry: "游戏" }),
     src("b", "某银行", "beisen", { industry: "金融" }),
   ];
   const r = resolveRefreshScope({ filters: { keyword: "游戏" }, preferences: {}, sources }, {});
-  assert.deepEqual(r.sourceIds, ["a"]);
+  // 关键词命中行业的本土源（a）排第一；b 也是本土源、靠基础分兜底入选（逐岗过滤再保证只放行命中岗）。
+  assert.equal(r.sourceIds[0], "a");
+  assert.deepEqual(new Set(r.sourceIds), new Set(["a", "b"]));
+});
+
+test("中文/国内城市查询：本土 adapter 排在外企 ATS 前", () => {
+  const sources = [
+    src("g1", "WorldQuant", "greenhouse", { segment: "foreign", industry: "量化" }),
+    src("g2", "Cloudflare", "greenhouse", { segment: "foreign", industry: "互联网" }),
+    src("d1", "某本土科技", "moka", { segment: "private", industry: "互联网" }),
+    src("d2", "某本土制造", "beisen", { segment: "private", industry: "制造" }),
+  ];
+  const r = resolveRefreshScope(
+    { filters: { keyword: "产品经理", city: "深圳", jobType: "实习" }, preferences: {}, sources },
+    {},
+  );
+  // 本土源（d1/d2）必须全部排在任何外企源之前。
+  const domestic = ["d1", "d2"];
+  const rankOfLastDomestic = Math.max(...domestic.map((id) => r.sourceIds.indexOf(id)));
+  const foreignRanks = ["g1", "g2"]
+    .map((id) => r.sourceIds.indexOf(id))
+    .filter((i) => i >= 0);
+  for (const fr of foreignRanks) {
+    assert.ok(rankOfLastDomestic < fr, "外企源不得排在本土源之前");
+  }
+  // 外企无显式公司/关键词命中时（产品经理不命中其行业）应被本土挤出，不占 N 槽。
+  assert.ok(r.sourceIds.indexOf("d1") >= 0 && r.sourceIds.indexOf("d2") >= 0);
+});
+
+test("notes 提到所查城市的源获得城市/HQ 加成、排在同类本土源前", () => {
+  const sources = [
+    src("near", "深圳公司", "moka", { industry: "互联网", notes: "深圳科技园 in-house 招聘" }),
+    src("far", "成都公司", "moka", { industry: "互联网", notes: "成都高新区" }),
+  ];
+  const r = resolveRefreshScope(
+    { filters: { keyword: "产品", city: "深圳" }, preferences: {}, sources },
+    {},
+  );
+  assert.equal(r.sourceIds[0], "near"); // 深圳 notes 命中 → 城市信号加成排第一
+});
+
+test("海外/港澳意图（城市=香港）：不做本土优先压制，外企量化源照常命中", () => {
+  const sources = [
+    src("g1", "IMC Trading", "greenhouse", { segment: "foreign", industry: "量化" }),
+    src("d1", "某本土制造", "beisen", { segment: "private", industry: "制造" }),
+  ];
+  const r = resolveRefreshScope(
+    { filters: { keyword: "量化", city: "香港" }, preferences: {}, sources },
+    {},
+  );
+  // 香港=海外意图 → 不给本土基础分；外企关键词命中（量化）入选，本土无关键词命中则不入选。
+  assert.ok(r.sourceIds.includes("g1"));
+  assert.ok(!r.sourceIds.includes("d1"));
+});
+
+test("proven：已收录里真有该岗位的公司优先于一切 metadata 信号（根治选错公司→坍缩）", () => {
+  const sources = [
+    src("dom", "某本土公司", "moka", { industry: "互联网" }), // 本土基础分 +100
+    src("prov", "迈瑞医疗", "beisen"), // proven（库里真有 城市+关键词 岗位）
+    src("exact", "OPPO", "oppo"), // proven exact（还命中类型）
+  ];
+  const r = resolveRefreshScope(
+    {
+      filters: { keyword: "产品经理", city: "深圳", jobType: "实习" },
+      preferences: {},
+      provenCompanies: ["迈瑞医疗", "OPPO"],
+      provenExactCompanies: ["OPPO"],
+      sources,
+    },
+    {},
+  );
+  assert.equal(r.sourceIds[0], "exact"); // exact(+5000) 第一
+  assert.equal(r.sourceIds[1], "prov"); // related(+3000) 第二
+  assert.ok(r.sourceIds.indexOf("exact") < r.sourceIds.indexOf("dom")); // 都在本土 metadata 源之前
+});
+
+test("proven：外企 adapter 上的 proven 公司也优先（信号来自真实库存岗位，不看平台）", () => {
+  const sources = [
+    src("dom", "某本土公司", "moka"), // 本土 +100
+    src("foreignProven", "飞利浦 Philips", "workday"), // 外企但 proven +3000
+  ];
+  const r = resolveRefreshScope(
+    {
+      filters: { keyword: "产品经理", city: "深圳" },
+      preferences: {},
+      provenCompanies: ["飞利浦 Philips"],
+      sources,
+    },
+    {},
+  );
+  assert.equal(r.sourceIds[0], "foreignProven");
 });
 
 test("exclude_keywords 命中公司名的源被剔除", () => {
