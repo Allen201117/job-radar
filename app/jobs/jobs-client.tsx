@@ -11,7 +11,6 @@ import { useJobFilters } from "@/hooks/useJobFilters";
 import { useDiscoveryPoll, type BrowserDiscoveryState } from "@/hooks/useDiscoveryPoll";
 import {
   ArrowsClockwise,
-  CaretRight,
   CheckCircle,
   Circle,
   CircleNotch,
@@ -38,6 +37,9 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
   const [searchInfo, setSearchInfo] = useState("");
   // 公司下拉项：服务端筛选后不能再从「已加载岗位」派生（会只剩几家），改从专用接口取全量 ~500+ 家。
   const [companies, setCompanies] = useState<string[]>([]);
+  // 「查已有岗位」点击加载态：即使秒出也显式可见（最短展示一段时间），与另两个检索一致。
+  const [existingBusy, setExistingBusy] = useState(false);
+  const existingBusyUntil = useRef(0);
   const router = useRouter();
 
   useEffect(() => {
@@ -80,6 +82,14 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
   // 「更新关注公司 / 扩大官方搜索范围」状态机 + 轮询 + 持久化 + 超时（整体在 hook 内）。
   const { discovery, refreshing, discoveryActive, startDiscovery, startRefresh } =
     useDiscoveryPoll({ filters, setOfficialJobs, setSearchInfo });
+
+  // 收起「查已有岗位」加载态：底层搜索结束且最短可见时间已到才停 spinner。
+  useEffect(() => {
+    if (!existingBusy || loading) return;
+    const remain = Math.max(0, existingBusyUntil.current - Date.now());
+    const t = setTimeout(() => setExistingBusy(false), remain);
+    return () => clearTimeout(t);
+  }, [existingBusy, loading]);
 
   // P3 on-demand 富化：给用户当下看到的薄卡（无 summary）即时补 JD 正文。
   // 只发 jd_url，服务端只补简单 httpx 源（workday/hotjob）；其余/浏览器源留给后台 drain。
@@ -132,6 +142,8 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     setOfficialJobs([]);
     setOnlyNew(false);
     setSearchInfo("已在收录的岗位里查好，结果见下方列表。");
+    existingBusyUntil.current = Date.now() + 600; // 最短可见 600ms：秒出也有显式加载态
+    setExistingBusy(true);
     refresh();
   }
 
@@ -170,24 +182,19 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
         <div className="mt-3">
           <ActionTile
             icon={Database}
-            label="查已有岗位"
+            label={existingBusy ? "查找中…" : "查已有岗位"}
             hint="在已收录的岗位里即时检索 · 不联网 · 秒出"
             tooltip="在已经收录入库的岗位里，按上方筛选条件即时检索，不发起任何联网请求，瞬时返回。"
             accent="bg-[#1a1714] text-[#f7f1e6]"
             onClick={handleExistingJobsSearch}
+            busy={existingBusy}
           />
         </div>
-        {/* 进阶：没有满意结果时再扩大范围（联网、较慢），默认折叠 */}
-        <details className="group/adv mt-3">
-          <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl px-1 py-2 text-sm font-medium text-[#6b655a] transition hover:text-[#1a1714] [&::-webkit-details-marker]:hidden">
-            <CaretRight
-              size={14}
-              weight="bold"
-              className="transition-transform duration-200 group-open/adv:rotate-90"
-              aria-hidden="true"
-            />
-            没有满意的结果？扩大搜索范围
-          </summary>
+        {/* 三个检索全部显式可见（不再折叠）：扩大范围=联网较慢操作。 */}
+        <div className="mt-4">
+          <p className="px-1 text-sm font-medium text-[#6b655a]">
+            没有满意的结果？扩大搜索范围（联网，约 1–5 分钟）
+          </p>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <ActionTile
               icon={ArrowsClockwise}
@@ -215,7 +222,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
               「扩大官方搜索范围」需先在上方填「关键词」。
             </p>
           )}
-        </details>
+        </div>
         {searchInfo && (
           <p className="mt-3 rounded-2xl border border-black/[0.06] bg-[#f6f3ec] px-3.5 py-2.5 text-pretty text-sm leading-6 text-[#5f594e]">
             {searchInfo}
