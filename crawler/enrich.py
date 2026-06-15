@@ -171,6 +171,39 @@ def _detail_hotjob(row, src):
     return " ".join(x for x in (d.get("workContent"), d.get("serviceCondition")) if x)
 
 
+# --- wt（老版 WinTalent）：jd_url = {origin}/wt/{brand}/mobweb/position/detail?...&recruitType=&postIdsAry= ---
+# 撤岗信号：{origin}/wt/{brand}/web/json/position/detail?postId= 返回 {"req_state":9501,
+# "req_msg":"该职位招聘已经关闭…"}（无 postInfo）；在招返回 req_state=9200 + postInfo
+# （workContent/serviceCondition=正文）。镜像 hotjob 的 state=1017（live 验证 feihe+yili：9200 在招 / 9501 撤岗）。
+def _detail_wt(row, src):
+    p = urlparse(row["jd_url"])
+    parts = [x for x in (p.path or "").split("/") if x]
+    if len(parts) < 2 or parts[0] != "wt":
+        return ""
+    brand = parts[1]
+    q = parse_qs(p.query)
+    post_id = (q.get("postIdsAry") or q.get("postId") or [""])[0]
+    rt = (q.get("recruitType") or ["2"])[0]
+    if not post_id:
+        return ""
+    origin = f"{p.scheme}://{p.netloc}"
+    headers = {**UA, "Accept": "application/json, text/plain, */*",
+               "Referer": f"{origin}/wt/{brand}/web/index", "Origin": origin}
+    r = httpx.get(f"{origin}/wt/{brand}/web/json/position/detail",
+                  params={"brandCode": 1, "recruitType": rt, "postId": post_id},
+                  headers=headers, timeout=TIMEOUT)
+    _raise_if_gone(r)  # detail 端点 404/410（req_state=9501 在下方另判）
+    if r.status_code >= 300:
+        return ""
+    j = r.json() or {}
+    # 已撤岗：req_state=9501 + "招聘已经关闭"（无 postInfo）= expired 信号（≠ 无正文）。
+    # 保守：只认 9501；其它/未知 req_state 一律落回 ""(miss)，绝不误判活岗为撤岗（安全不变量）。
+    if str(j.get("req_state")) == "9501":
+        raise JobClosedError(f"wt postId={post_id} closed: {j.get('req_msg') or 'req_state=9501'}")
+    pi = j.get("postInfo") or {}
+    return " ".join(x for x in (pi.get("workContent"), pi.get("serviceCondition")) if x)
+
+
 # adapter_name -> fetcher（httpx 类，P1）
 ENRICH_REGISTRY = {
     "workday": _detail_workday,
@@ -180,6 +213,7 @@ ENRICH_REGISTRY = {
     "greenhouse": _detail_greenhouse,
     "lever": _detail_lever,
     "hotjob": _detail_hotjob,
+    "wt": _detail_wt,
 }
 
 # 需渲染、低并发，P2 实现（仅占位以便 detail_class 分流）

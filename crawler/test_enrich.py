@@ -67,6 +67,49 @@ class HotjobDetailTest(unittest.TestCase):
                 enrich.ENRICH_REGISTRY["hotjob"](row, src)
 
 
+class WtDetailTest(unittest.TestCase):
+    _ROW = {"jd_url": "https://feihe.hotjob.cn/wt/feihe/mobweb/position/detail"
+                      "?brandCode=1&safe=Y&recruitType=1&postIdsAry=153001"}
+    _SRC = {"source_url": "https://feihe.hotjob.cn/wt/feihe/web/index", "adapter_name": "wt"}
+
+    def test_reverses_to_json_detail_and_extracts_summary(self):
+        cap = {}
+
+        def fake_get(url, headers=None, timeout=None, params=None):
+            cap["url"] = url
+            cap["params"] = params
+            return _Resp({"req_state": 9200,
+                          "postInfo": {"workContent": "负责生产实训", "serviceCondition": "本科以上学历"}})
+
+        with mock.patch.object(enrich.httpx, "get", fake_get):
+            body = enrich.ENRICH_REGISTRY["wt"](self._ROW, self._SRC)
+        self.assertEqual(cap["url"], "https://feihe.hotjob.cn/wt/feihe/web/json/position/detail")
+        self.assertEqual(cap["params"]["postId"], "153001")
+        self.assertEqual(str(cap["params"]["recruitType"]), "1")
+        self.assertIn("负责生产实训", body)
+        self.assertIn("本科以上学历", body)
+
+    def test_closed_req_state_9501_raises_jobclosed(self):
+        # 源站撤岗：HTTP 200 + {"req_state":9501,"req_msg":"…招聘已经关闭…"}，无 postInfo。
+        closed = {"req_state": 9501, "req_msg": "该职位招聘已经关闭，请关注其他职位，谢谢!"}
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp(closed)):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich.ENRICH_REGISTRY["wt"](self._ROW, self._SRC)
+
+    def test_404_raises_jobclosed(self):
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=404)):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich.ENRICH_REGISTRY["wt"](self._ROW, self._SRC)
+
+    def test_transient_5xx_returns_empty_not_closed(self):
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=503)):
+            self.assertEqual(enrich.ENRICH_REGISTRY["wt"](self._ROW, self._SRC), "")
+
+    def test_missing_postid_returns_empty(self):
+        row = {"jd_url": "https://feihe.hotjob.cn/wt/feihe/mobweb/position/detail?recruitType=1"}
+        self.assertEqual(enrich.ENRICH_REGISTRY["wt"](row, self._SRC), "")
+
+
 class WorkdayDetailTest(unittest.TestCase):
     def test_reverses_to_cxs_endpoint(self):
         row = {"jd_url": "https://co.wd1.myworkdayjobs.com/en-US/Careers/job/Beijing/Eng_R-1"}
@@ -245,11 +288,12 @@ class GoneHelperTest(unittest.TestCase):
 
 class RegistryTest(unittest.TestCase):
     def test_httpx_adapters_registered(self):
-        for a in ("workday", "oracle", "eightfold", "smartrecruiters", "hotjob"):
+        for a in ("workday", "oracle", "eightfold", "smartrecruiters", "hotjob", "wt"):
             self.assertIn(a, enrich.ENRICH_REGISTRY)
 
     def test_detail_class(self):
         self.assertEqual(enrich.detail_class("hotjob"), "httpx")
+        self.assertEqual(enrich.detail_class("wt"), "httpx")
         self.assertEqual(enrich.detail_class("workday"), "httpx")
         self.assertEqual(enrich.detail_class("beisen"), "browser")
         self.assertIsNone(enrich.detail_class("不存在的源"))
@@ -347,6 +391,35 @@ class DrainRowTest(unittest.TestCase):
         self.assertNotIn("enrich_fail_count", patch)
         self.assertNotIn("summary", patch)
         self.assertIn("enrich_checked_at", patch)
+
+    def test_sweep_alive_job_with_summary_only_bumps_checked_at(self):
+        # 巡检：仍在招、已有正文 → 只更新 enrich_checked_at，不重写 summary、不计死信。
+        sb = _FakeSB()
+        row = {"id": "j7", "source_id": "s", "title": "x", "jd_url": "u",
+               "summary": "已有的职位正文", "enrich_fail_count": 0}
+        src = {"adapter_name": "wt", "source_url": "x"}
+        with mock.patch.object(enrich_backlog.enrich, "enrich_one", lambda a, r, s: "重新抓到的正文也够长足够"):
+            res = enrich_backlog.enrich_row(sb, row, src)
+        self.assertEqual(res, "alive")
+        patch = sb.updates["j7"]
+        self.assertEqual(list(patch.keys()), ["enrich_checked_at"])
+        self.assertNotIn("summary", patch)
+        self.assertNotIn("enrich_fail_count", patch)
+
+    def test_sweep_closed_job_with_summary_expires(self):
+        # 核心修复：已有正文但源站已撤岗的存量岗（fetch_queue 永远碰不到）→ 巡检置 expired。
+        sb = _FakeSB()
+        row = {"id": "j8", "source_id": "s", "title": "x", "jd_url": "u",
+               "summary": "旧的职位正文", "enrich_fail_count": 0}
+        src = {"adapter_name": "wt", "source_url": "x"}
+
+        def closed(a, r, s):
+            raise enrich.JobClosedError("wt req_state=9501")
+
+        with mock.patch.object(enrich_backlog.enrich, "enrich_one", closed):
+            res = enrich_backlog.enrich_row(sb, row, src)
+        self.assertEqual(res, "expired")
+        self.assertEqual(sb.updates["j8"]["status"], "expired")
 
     def test_dry_run_does_not_write(self):
         sb = _FakeSB()
