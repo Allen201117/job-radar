@@ -239,10 +239,12 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
   return (
     <article
       className={cn(
-        "group cursor-target bento-glow rounded-[1.35rem] border p-5 text-[#1a1714] transition duration-300 ease-out will-change-transform hover:-translate-y-1 motion-reduce:hover:translate-y-0",
+        // cv-auto = content-visibility 性能护栏；glass-card = 暖光液态玻璃；
+        // 去掉常驻 will-change-transform（几百张卡片各自占一个 GPU 层会撑爆显存→崩页），hover 位移交给 transition。
+        "group cursor-target bento-glow cv-auto glass-card rounded-[1.35rem] border p-5 text-[#1a1714] transition duration-300 ease-out hover:-translate-y-1 motion-reduce:hover:translate-y-0",
         sessionNew
-          ? "border-[#bcdcae] bg-[#eef6e0] ring-1 ring-[#cfe6b0] hover:bg-[#e8f3d6] hover:shadow-[0_26px_56px_-28px_rgba(60,90,30,0.4)]"
-          : "border-black/[0.06] bg-white/70 shadow-[0_18px_44px_-30px_rgba(40,34,28,0.32)] hover:border-black/[0.1] hover:bg-white hover:shadow-[0_26px_56px_-26px_rgba(40,34,28,0.42)]",
+          ? "border-[#bcdcae] bg-[#eef6e0]/75 ring-1 ring-[#cfe6b0] hover:bg-[#eef6e0]/90 hover:shadow-[0_26px_56px_-28px_rgba(60,90,30,0.4)]"
+          : "border-black/[0.06] bg-white/55 shadow-[0_18px_44px_-30px_rgba(40,34,28,0.32)] hover:border-black/[0.1] hover:bg-white/80 hover:shadow-[0_26px_56px_-26px_rgba(40,34,28,0.42)]",
       )}
     >
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">

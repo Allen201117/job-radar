@@ -1,10 +1,11 @@
 import Navbar from "@/components/Navbar";
-import { CountBadge, ProductHero, ProductPage } from "@/components/ProductChrome";
+import { ProductHero, ProductPage } from "@/components/ProductChrome";
+import JobLibraryStat from "@/components/JobLibraryStat";
 import { createServerSupabase } from "@/lib/auth";
 import { sortAndFilterJobs } from "@/lib/scoring";
 import type { Job, UserPreferences, JobAction, ScoredJob } from "@/lib/types";
 import JobsClient from "./jobs-client";
-import { Briefcase, Database } from "@phosphor-icons/react/ssr";
+import { Database } from "@phosphor-icons/react/ssr";
 
 export const dynamic = "force-dynamic";
 
@@ -101,10 +102,10 @@ export default async function JobsPage() {
           description="从本地岗位库开始，按需刷新已知官网源，必要时再发现新的官方招聘入口。"
           icon={Database}
           action={
-            <CountBadge>
-              <Briefcase size={16} weight="fill" aria-hidden="true" />
-              <span className="tabular-nums">{total} 个岗位</span>
-            </CountBadge>
+            <div className="w-full sm:w-[340px] lg:w-[360px]">
+              {/* 实时翻动的岗位库总数（连后端真实数据） */}
+              <JobLibraryStat initialTotal={total} />
+            </div>
           }
         />
         <div className="mt-8">

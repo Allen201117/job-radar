@@ -1,5 +1,6 @@
 import type { ComponentType, ReactNode } from "react";
 import { ArrowRight, Sparkle } from "@phosphor-icons/react/ssr";
+import { AnimatedStat } from "@/components/ui/animated-stat";
 import { cn } from "@/lib/utils";
 
 type IconComponent = ComponentType<any>;
@@ -94,7 +95,8 @@ export function MetricTile({
       </div>
       <div className="min-w-0">
         <div className="tabular-nums text-2xl font-semibold leading-none text-[#1a1714] sm:mt-5 sm:text-3xl">
-          {value}
+          {/* 数字值翻动入场 / 实时翻动；非数字（如「私有」）原样展示 */}
+          {typeof value === "number" ? <AnimatedStat value={value} /> : value}
         </div>
         <div className="mt-1 text-[12px] text-[#8a8275] sm:mt-2 sm:text-[13px]">{label}</div>
       </div>

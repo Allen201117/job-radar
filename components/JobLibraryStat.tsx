@@ -1,0 +1,159 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import {
+  ArrowsClockwise,
+  Broadcast,
+  ClockCounterClockwise,
+} from "@phosphor-icons/react";
+import { createBrowserClient } from "@/lib/supabaseClient";
+import { AnimateNumber } from "@/components/ui/animated-blur-number";
+import { AnimatedStat } from "@/components/ui/animated-stat";
+import { cn } from "@/lib/utils";
+
+// 岗位库「实时翻动」总数卡（暖光浅色版）。
+// - 真数据：直接 count(jobs where status=active) 等三项（RLS：jobs / sources 所有人可读，匿名也行）。
+// - 实时：入场从 0 翻到 SSR 已知的真实总数（无需等网络），之后每 12s 轮询一次，数字变化即翻动。
+// - 首屏不闪：initialTotal 由服务端 SSR 传入，挂载即有真实值。
+interface Props {
+  initialTotal: number;
+}
+
+export default function JobLibraryStat({ initialTotal }: Props) {
+  const [activeJobs, setActiveJobs] = useState(0);
+  const [sources, setSources] = useState<number | null>(null);
+  const [recent, setRecent] = useState<number | null>(null);
+  const [status, setStatus] = useState<"live" | "syncing" | "stale">("live");
+  const [syncedAt, setSyncedAt] = useState<Date | null>(null);
+
+  // 入场翻动：下一帧把 0 推到 SSR 已知的真实总数。
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setActiveJobs(initialTotal));
+    return () => cancelAnimationFrame(id);
+  }, [initialTotal]);
+
+  const refresh = useCallback(async () => {
+    setStatus("syncing");
+    const supabase = createBrowserClient();
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    try {
+      const [jobs, src, rec] = await Promise.all([
+        supabase.from("jobs").select("id", { count: "exact", head: true }).eq("status", "active"),
+        supabase.from("sources").select("id", { count: "exact", head: true }).eq("enabled", true),
+        supabase
+          .from("jobs")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "active")
+          .gte("last_seen_at", dayAgo),
+      ]);
+      if (jobs.error || src.error || rec.error) throw jobs.error || src.error || rec.error;
+      if (typeof jobs.count === "number") setActiveJobs(jobs.count);
+      if (typeof src.count === "number") setSources(src.count);
+      if (typeof rec.count === "number") setRecent(rec.count);
+      setSyncedAt(new Date());
+      setStatus("live");
+    } catch {
+      setStatus("stale");
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const iv = window.setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, 12000);
+    return () => window.clearInterval(iv);
+  }, [refresh]);
+
+  const syncLabel = syncedAt
+    ? `${syncedAt.toLocaleTimeString("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      })} 已同步`
+    : "首屏服务端计数";
+
+  const statusText =
+    status === "stale" ? "连接暂不可用" : status === "syncing" ? "正在刷新" : "实时刷新";
+
+  return (
+    <section className="surface bento-glow relative overflow-hidden p-5 text-[#1a1714] sm:p-6">
+      <div
+        className="pointer-events-none absolute -right-16 -top-20 size-52 rounded-full bg-[#96b6e2]/20 blur-3xl"
+        aria-hidden="true"
+      />
+      <div className="relative flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="chip">
+            <span
+              className={cn(
+                "size-2 rounded-full",
+                status === "stale"
+                  ? "bg-[#d08a4a]"
+                  : status === "syncing"
+                    ? "animate-pulse bg-[#3f7cc0]"
+                    : "bg-[#3fae6a]",
+              )}
+              aria-hidden="true"
+            />
+            {statusText}
+          </div>
+          <p className="mt-3.5 text-sm text-[#8a8275]">岗位库 · 活跃岗位</p>
+          <div className="mt-1 flex items-baseline gap-2">
+            <AnimateNumber
+              value={activeJobs}
+              duration={700}
+              blur={14}
+              className="text-[3rem] font-semibold leading-none tracking-[-0.04em] text-[#1a1714] sm:text-[4rem]"
+            />
+            <span className="pb-1 text-lg font-medium text-[#9a9184]">个</span>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={refresh}
+          className="grid size-10 shrink-0 place-items-center rounded-full border border-black/[0.08] bg-white/70 text-[#3f3a33] transition duration-200 hover:-translate-y-0.5 hover:bg-white active:scale-[0.96]"
+          aria-label="立即刷新岗位库计数"
+        >
+          <ArrowsClockwise
+            size={18}
+            weight="bold"
+            className={cn(status === "syncing" && "animate-spin")}
+            aria-hidden="true"
+          />
+        </button>
+      </div>
+
+      <div className="relative mt-5 grid grid-cols-2 gap-2.5">
+        <SubStat icon={Broadcast} label="官方源" value={sources} />
+        <SubStat icon={ClockCounterClockwise} label="24h 确认在招" value={recent} />
+      </div>
+
+      <div className="relative mt-4 flex items-center justify-between gap-3 border-t border-black/[0.06] pt-3.5">
+        <p className="text-xs leading-5 text-[#9a9184]">{syncLabel}</p>
+        <p className="text-xs font-medium text-[#3f7cc0]">轮询间隔 12s</p>
+      </div>
+    </section>
+  );
+}
+
+function SubStat({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof Broadcast;
+  label: string;
+  value: number | null;
+}) {
+  return (
+    <div className="surface-soft bento-glow px-3.5 py-3">
+      <Icon size={16} weight="fill" className="text-[#3f7cc0]" aria-hidden="true" />
+      <p className="mt-2 text-[11px] text-[#9a9184]">{label}</p>
+      <p className="mt-0.5 text-lg font-semibold tabular-nums text-[#1a1714]">
+        {value === null ? <span className="text-[#c4bdb0]">—</span> : <AnimatedStat value={value} />}
+      </p>
+    </div>
+  );
+}
