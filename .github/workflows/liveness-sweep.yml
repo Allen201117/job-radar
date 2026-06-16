@@ -1,0 +1,45 @@
+name: liveness-sweep
+
+# 失活清扫（质量方针）：对全部带 closure detector 的 httpx 源逐岗 detail 探活，源站撤岗信号
+#   （hotjob state=1017 / wt req_state=9501 / workday·oracle·eightfold·smartrecruiters 404…）→ status='expired'。
+# 与 daily-crawl 内置 sweep 的区别：**本工作流只探活、不抓列表**，故不会重新灌入「已关闭但列表仍返回」的假 active
+#   （wt~52% / hotjob~71% 列表夹带已关闭岗）——纯挤干失活，不回潮。
+# 按 adapter 分片并行（各 shard 只 drain 自己 adapter，互不重叠）；按 enrich_checked_at 最旧轮转
+#   （从未探活的 NULL 最先）→ 优先打掉新灌入的假 active。可反复手动跑直到 expired 增量趋零。
+# 浏览器源（beisen/moka/feishu）的 SPA 软 404 走 dead-link-audit.yml，不在此列。
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "单 adapter 本轮最多探活多少岗（0=全部）"
+        required: false
+        default: "50000"
+      workers:
+        description: "并发线程数"
+        required: false
+        default: "10"
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter: [wt, hotjob, workday, oracle, eightfold, smartrecruiters, greenhouse, lever]
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+      - name: Liveness sweep (${{ matrix.adapter }})
+        run: |
+          python crawler/enrich_backlog.py --sweep \
+            --adapter "${{ matrix.adapter }}" \
+            --limit "${{ github.event.inputs.limit || '50000' }}" \
+            --workers "${{ github.event.inputs.workers || '10' }}"

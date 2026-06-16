@@ -1,0 +1,47 @@
+name: db-report
+
+# 一次性诊断：岗位质量审计。打印 status 分布 / active 有效率（有 JD 正文 vs 薄卡）/ 失活未探活比例 /
+# 分 adapter 的 active 与有效分布。供「质量方针整治」定口径、决定砍哪些源用。复用 db-migrate 的
+# SUPABASE_DB_URL secret（直连 5432），只读、不改库。
+on:
+  workflow_dispatch:
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Job-quality audit
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "::error::SUPABASE_DB_URL secret 未配置（与 db-migrate 同一个）。"
+            exit 1
+          fi
+          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -P pager=off <<'SQL'
+          set statement_timeout = '600s';
+          \echo '=== 1. status 分布 ==='
+          select status, count(*) from jobs group by status order by count(*) desc;
+          \echo '=== 2. active 质量分布 ==='
+          select
+            count(*)                                                                              as active_total,
+            count(*) filter (where summary is not null and char_length(btrim(summary)) >= 60)     as active_with_jd,
+            count(*) filter (where summary is null or char_length(btrim(coalesce(summary,''))) < 60) as active_thin,
+            count(*) filter (where enrich_checked_at is null)                                     as never_liveness_checked,
+            count(*) filter (where last_seen_at >= now() - interval '24 hours')                   as seen_24h
+          from jobs where status = 'active';
+          \echo '=== 3. active 分 adapter（top 25，含有效率）==='
+          select s.adapter_name,
+            count(*)                                                                                as active_jobs,
+            count(*) filter (where j.summary is not null and char_length(btrim(j.summary)) >= 60)   as with_jd,
+            count(*) filter (where j.enrich_checked_at is null)                                     as never_checked
+          from jobs j join sources s on s.id = j.source_id
+          where j.status = 'active'
+          group by s.adapter_name
+          order by active_jobs desc
+          limit 25;
+          SQL
+          echo "[db-report] done."
