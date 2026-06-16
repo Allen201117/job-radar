@@ -54,8 +54,12 @@ def host_of(u):
 
 def fetch_sample(sb, per_host, max_total, host_filter, include_ats):
     """跨全库分散窗口抽样，按 host 分桶，每 host 最多 per_host 条。默认跳过 ATS_SKIP(无头读不准/有enrich兜)。"""
-    head = sb.table("jobs").select("id", count="exact", head=True).eq("status", "active").execute()
-    n = head.count or 0
+    # 不用 count(exact)(13 万 active 行会撞 service_role ~8s statement_timeout=57014，整个 audit 崩)。
+    # 抽样窗口只需一个近似规模 → 用 count_valid_active_jobs() RPC（部分索引、亚秒）；失败再退保守常数。
+    try:
+        n = sb.rpc("count_valid_active_jobs").execute().data or 0
+    except Exception:
+        n = 100000
     windows = [int(f * max(0, n - 1000)) for f in
                (0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)]
     by_host = defaultdict(list)
