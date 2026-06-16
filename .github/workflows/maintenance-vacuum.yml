@@ -1,0 +1,32 @@
+name: maintenance-vacuum
+
+# 手动维护：对 jobs 表跑 VACUUM (ANALYZE)。
+#
+# 为什么需要：销毁式重建 / 大批量回填后，表的「可见性图」(visibility map) 与规划器统计会陈旧。
+#   此时 index-only scan 会退化为全堆回查 → 聚合/计数类查询（active_job_counts_by_company、
+#   active_companies、搜索）扫 ~600MB 宽行堆 → 撞 statement_timeout（实测 RPC ~10s 超时）。
+#   VACUUM (ANALYZE) 设置 VM + 刷新统计，让部分索引（147 jobs_active_company_idx）真正走 index-only。
+#   非破坏性、可反复跑、不阻塞读写（仅 ShareUpdateExclusive 轻锁）。
+#
+# 为什么不放进迁移：VACUUM 不能在事务块里跑，而 db-migrate.sh 用 `psql -1`（单事务）应用迁移。
+# 故单独做成手动 workflow_dispatch；复用 migrate 已配的 SUPABASE_DB_URL secret，零额外配置。
+on:
+  workflow_dispatch:
+
+jobs:
+  vacuum:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: VACUUM ANALYZE jobs
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "::error::SUPABASE_DB_URL secret 未配置（与 db-migrate 同一个）。"
+            exit 1
+          fi
+          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -c "vacuum (analyze, verbose) jobs;"
+          echo "[maintenance-vacuum] done."
