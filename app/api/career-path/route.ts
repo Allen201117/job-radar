@@ -64,11 +64,12 @@ export async function GET() {
     console.error("[career-path] 读取 insight_items 失败", itemErr.message);
     return NextResponse.json({ ok: false, error: itemErr.message }, { status: 500 });
   }
+  // 在招计数只用于「N 个在招岗位」徽标 + 排序次键，不是核心内容。即使聚合慢/超时也不应整页 500——
+  // 记录后降级为「不显示计数」，洞察（时机/路径/文化）照常返回。
   if (countErr) {
-    console.error("[career-path] 读取在招计数失败", countErr.message);
-    return NextResponse.json({ ok: false, error: countErr.message }, { status: 500 });
+    console.error("[career-path] 读取在招计数失败（降级为不显示计数）", countErr.message);
   }
-  const counts = (companyCounts || []) as Array<{ company: string; job_count: number }>;
+  const counts = (countErr ? [] : companyCounts || []) as Array<{ company: string; job_count: number }>;
 
   const byCompany = new Map<string, any[]>();
   for (const it of (items || []) as any[]) {
