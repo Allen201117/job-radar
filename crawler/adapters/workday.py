@@ -7,9 +7,11 @@ source_url = https://{host}/wday/cxs/{tenant}/{site}/jobs   （host 形如 {tena
 
 服务「在华外企」：用 Workday 的 location facet **服务端**过滤到大中华区（China/Hong Kong/Macau），
 只抓在华岗位，避免全球岗位灌入（list 接口 locationsText 常是「N Locations」不可靠，故用 facet）。
-public jd_url = {host}/en-US/{site}/details/{slug}
-where slug is the final segment of CXS externalPath.
-CXS detail enrichment still uses {cxs_base}{externalPath}.
+public jd_url = {host}/en-US/{site}{externalPath}
+  （Workday 公开站 SPA 路由 = origin + /{locale}/{site} + externalPath；externalPath 形如
+   /job/{location}/{title}_{JR-id}，必须保留**全路径**、只补 en-US locale 前缀。曾误改为
+   /details/{slug}（丢掉 /job/{location}/ 段）→ 公开站清一色 404「岗位不存在」，已修回，存量坏链由迁移 148 清。）
+CXS detail enrichment 仍用 {cxs_base}{externalPath}（enrich.py:_detail_workday 靠 jd_url 里的 /job/ 段反推端点）。
 """
 import json
 import re
@@ -205,8 +207,9 @@ class WorkdayAdapter(BaseAdapter):
             # 避免泄漏非华岗（如 "Remote - Delhi" / Haifa）。
             if not trusted and not normalizer.is_china_location(location):
                 return
-            slug = ep.rsplit("/", 1)[-1]
-            jd_url = f"{host}/en-US/{site}/details/{slug}"
+            # 保留 CXS externalPath 全路径（/job/{location}/{title}_{id}），只补 locale 前缀 —— 这是
+            # Workday 公开站的真实 SPA 路由。截成 /details/{slug} 会丢 location 段导致公开站 404。
+            jd_url = f"{host}/en-US/{site}{ep}"
             if jd_url in seen_urls:
                 return
             seen_urls.add(jd_url)

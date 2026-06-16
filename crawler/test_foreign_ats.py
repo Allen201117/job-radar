@@ -208,7 +208,7 @@ class WorkdayParseTest(unittest.TestCase):
         self.assertEqual(jobs[0].title, "AI Engineer")
         self.assertEqual(
             jobs[0].jd_url,
-            "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/details/AI-Engineer_JR1")
+            "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/China-Beijing/AI-Engineer_JR1")
         self.assertEqual(jobs[0].location, "China, Beijing")
         self.assertEqual(jobs[0].company, "")
 
