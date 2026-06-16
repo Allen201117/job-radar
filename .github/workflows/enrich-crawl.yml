@@ -1,6 +1,7 @@
 name: enrichment-crawl
 # 重档「逐岗富化」：浏览器源(beisen/moka/feishu/google/bytedance/tencent) + 全量逐岗 summary 详情。
-# 按天 1/7 轮转（date -u +%w → shard 0-6），一周覆盖全部源；单跑墙钟远低于 GitHub Actions 6h 硬杀。
+# 按天 1/3 轮转（date -u +%w → shard, run.py 内 %shard_count），每源每 ~3 天刷一次保鲜（旧 1/7=每周一次太陈）。
+# 实测：全量浏览器档单跑 267min < 330min 预算（run 27535738881），故有富余把轮转从 1/7 提到 1/3。
 # 快档 daily-crawl.yml 只抓 httpx 列表、跳过富化（CRAWL_DETAIL_CAP=0）；逐岗富化与浏览器源全压在这里分摊。
 # tier=all（默认）会把 httpx 富化器（hotjob/workday/oracle/eightfold/smartrecruiters，快档跳过其富化）也按轮转补 summary。
 
@@ -15,9 +16,9 @@ on:
         required: false
         default: ""
       shard_count:
-        description: "共分几片（默认 7=按天 1/7 轮转覆盖全量；单跑仍逼近 6h 可调大到 14 加密轮转）"
+        description: "共分几片（默认 3=按天 1/3 轮转，每源每 ~3 天刷一次；实测全量浏览器档 267min<330min 预算，故从旧 1/7 提频。调大=降频省 CI）"
         required: false
-        default: "7"
+        default: "3"
       tier:
         description: "all=全量富化(默认，含 httpx 富化器) | browser=只跑浏览器档 | httpx=只跑并发档"
         required: false
@@ -61,4 +62,4 @@ jobs:
           python crawler/run.py \
             --tier "${{ github.event.inputs.tier || 'all' }}" \
             --shard-index "${{ steps.shard.outputs.idx }}" \
-            --shard-count "${{ github.event.inputs.shard_count || '7' }}"
+            --shard-count "${{ github.event.inputs.shard_count || '3' }}"
