@@ -5,7 +5,7 @@ from adapters.workday import WorkdayAdapter
 
 
 class WorkdayAdapterUrlTest(unittest.TestCase):
-    def test_public_jd_url_uses_locale_site_details_and_slug(self):
+    def test_public_jd_url_uses_locale_site_and_full_external_path(self):
         adapter = WorkdayAdapter()
         payload = {
             "_host": "https://workday.wd5.myworkdayjobs.com",
@@ -25,7 +25,7 @@ class WorkdayAdapterUrlTest(unittest.TestCase):
         self.assertEqual(len(jobs), 1)
         self.assertEqual(
             jobs[0].jd_url,
-            "https://workday.wd5.myworkdayjobs.com/en-US/Workday/details/Senior-Cybersecurity-Data-Engineer_JR-0107814",
+            "https://workday.wd5.myworkdayjobs.com/en-US/Workday/job/Hong-Kong/Senior-Cybersecurity-Data-Engineer_JR-0107814",
         )
         self.assertEqual(jobs[0].apply_url, jobs[0].jd_url)
 
