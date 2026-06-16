@@ -24,8 +24,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "crawler"))
 import db  # noqa: E402
 import normalizer  # noqa: E402
 
-# 实测可抓到 JD 正文的容器（class 含 description/Description）；兜底用 body 文本。
-_JD_SELECTORS = ("[class*=escription]", "[class*=jobDetail]", "[class*=detail-content]")
+# JD 正文容器候选（moka 不同租户 class 不一）。取所有命中里**文本最长**的一个，比单一固定 class 稳。
+_JD_SELECTORS = (
+    "[class*=escription]", "[class*=jobDetail]", "[class*=job-detail]",
+    "[class*=detail-content]", "[class*=position-detail]", "[class*=job-content]",
+    "[class*=jobContent]", "article", "main",
+)
 _NOISE = ("我知道了", "立即投递", "在招职位", "分享", "收藏")
 
 
@@ -33,31 +37,63 @@ def _scrape_jd(page) -> str:
     best = ""
     for sel in _JD_SELECTORS:
         try:
-            el = page.query_selector(sel)
-            if el:
+            for el in page.query_selector_all(sel):  # 同 class 可能多个，全扫取最长
                 t = (el.inner_text() or "").strip()
                 if len(t) > len(best):
                     best = t
         except Exception:
             continue
-    # 过滤明显的非 JD 噪声短文本
+    # 过滤明显的非 JD 噪声短文本（不退回裸 body：含导航/页脚噪声 → 低质量 summary）
     if best and len(best) < 20 and any(n in best for n in _NOISE):
         return ""
     return best
 
 
+def _probe_dom(page) -> str:
+    """诊断：打印该详情页真实 DOM 结构，供经验性定位 JD 容器 + 关闭标记（--probe 用，不写库）。"""
+    out = []
+    try:
+        out.append(f"title={page.title()!r}")
+    except Exception:
+        pass
+    try:
+        body = (page.query_selector("body").inner_text() or "").strip()
+        out.append(f"body_len={len(body)} body_head={body[:300]!r}")
+    except Exception:
+        out.append("body=<none>")
+    for sel in _JD_SELECTORS:
+        try:
+            els = page.query_selector_all(sel)
+            if els:
+                lens = sorted((len((e.inner_text() or "").strip()) for e in els), reverse=True)[:3]
+                out.append(f"  {sel}: n={len(els)} top_lens={lens}")
+        except Exception:
+            continue
+    return "\n".join(out)
+
+
 def _fetch_targets(sb, limit: int):
-    """分页取 summary 为空 + 未超死信的 active Moka 岗（id 升序稳定排序，供 shard 切片）。"""
+    """分页取 summary 为空 + 未超死信的 active Moka 岗，供 shard 切片。
+
+    ⚠️ 不能用 `jd_url LIKE '%mokahr%'`（前导通配 → 无法走索引 → 13 万 active 全表扫撞
+    service_role ~8s statement_timeout=57014，整个 drain 崩；实测 enrich-backlog-browser 连败）。
+    改为先取 moka 源 id、再 `source_id IN(...)` + 排序键以 source_id 打头，吃 migration 150 的
+    (source_id, first_seen_at desc) WHERE active+空summary+fail<3 部分索引（同 fetch_queue 8c90896）。"""
+    src_ids = [s["id"] for s in
+               ((sb.table("sources").select("id").eq("adapter_name", "moka").execute().data) or [])]
+    if not src_ids:
+        return []
     rows, page = [], 1000
-    for offset in range(0, 20000, page):
+    for offset in range(0, 40000, page):
         chunk = (
             sb.table("jobs")
             .select("id,jd_url,title,enrich_fail_count")
-            .like("jd_url", "%mokahr%")
+            .in_("source_id", src_ids)
             .is_("summary", "null")
             .eq("status", "active")
             .lt("enrich_fail_count", 3)  # 死信：渲染连败 3 次不再重试（避免每轮反复渲染没 JD 的岗）
-            .order("id")
+            # 排序键以 source_id 打头吃 150 索引；再按 id 稳定排序供 shard 切片互不重叠。
+            .order("source_id").order("id")
             .range(offset, offset + page - 1)
             .execute()
             .data
@@ -85,6 +121,8 @@ def main():
     ap.add_argument("--shard", type=str, default="0/1",
                     help="分片 k/n：按 id 排序后取第 k 片（多进程并行互不重叠），默认 0/1=全量")
     ap.add_argument("--dry-run", action="store_true", help="只抓取打印，不写库")
+    ap.add_argument("--probe", action="store_true",
+                    help="诊断模式：渲染后打印每个详情页的真实 DOM 结构（定位 JD 容器/关闭标记），不写库")
     args = ap.parse_args()
 
     try:
@@ -129,6 +167,9 @@ def main():
                     page.wait_for_timeout(700)  # 容器出现后给渲染一点稳定时间
                 except Exception:
                     page.wait_for_timeout(2500)  # 容器名不匹配的租户：退回短等待再兜底抓
+                if args.probe:
+                    print(f"{tag} [{i}] {row.get('title')}  {jd_url}\n{_probe_dom(page)}\n")
+                    continue
                 jd = _scrape_jd(page)
             except Exception as e:
                 failed += 1
