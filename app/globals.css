@@ -429,3 +429,12 @@
     display: none;
   }
 }
+
+/* 卡片「选中态」持续绿光 — 全站任意卡片/选项处于选中/激活态时加 .bento-selected。
+   纯 CSS、不依赖指针，与 .bento-glow 的悬停跟随光叠加；触摸端也保留（它是状态指示，非特效）。 */
+.bento-selected {
+  box-shadow:
+    0 0 0 1.5px rgba(0, 230, 118, 0.65),
+    0 0 24px -6px rgba(0, 230, 118, 0.55) !important;
+  border-color: rgba(0, 230, 118, 0.5) !important;
+}

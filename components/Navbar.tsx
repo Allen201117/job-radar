@@ -93,7 +93,7 @@ export default function Navbar() {
                 className={cn(
                   "inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium transition duration-200",
                   pathname === link.href
-                    ? "bg-[#1a1714] text-[#f7f1e6]"
+                    ? "bento-selected bg-[#1a1714] text-[#f7f1e6]"
                     : "text-[#5f594e] hover:bg-black/[0.05] hover:text-[#1a1714] active:scale-[0.98]",
                 )}
               >
@@ -145,7 +145,7 @@ export default function Navbar() {
                   className={cn(
                     "flex items-center gap-3 rounded-2xl px-3.5 py-3 text-[15px] font-medium transition duration-200",
                     active
-                      ? "bg-[#1a1714] text-[#f7f1e6]"
+                      ? "bento-selected bg-[#1a1714] text-[#f7f1e6]"
                       : "text-[#3f3a33] hover:bg-black/[0.05] active:scale-[0.99]",
                   )}
                 >
