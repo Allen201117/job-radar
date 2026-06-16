@@ -49,6 +49,8 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
   const [result, setResult] = useState<RetrievalResult | null>(null);
   // 标记本次 loading 结束源于用户点「查已有岗位」（而非筛选防抖自动搜），只为它弹完成提示。
   const pendingLocalResult = useRef(false);
+  // 当前激活的检索方式：用于三个搜索入口的绿色「选中态」。
+  const [activeSearch, setActiveSearch] = useState<"local" | "known" | "discover" | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -216,51 +218,56 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
         <p className="mt-1.5 text-xs leading-5 text-[#9a9184]">
           已用你保存的求职偏好作为默认搜索范围；改上方筛选条件即可调整。
         </p>
-        {/* 主操作：在已收录岗位里即时检索（秒出、不联网）——默认就用这个 */}
-        <div className="mt-3">
+        {/* 三个搜索入口平行排列；当前激活的那个亮绿色「选中态」。
+            查已有=秒出不联网（默认）；另两个=联网约 1–5 分钟。 */}
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
           <ActionTile
             icon={Database}
             label={existingBusy ? "查找中…" : "查已有岗位"}
-            hint="在已收录的岗位里即时检索 · 不联网 · 秒出"
+            hint="已收录岗位里即时检索 · 不联网 · 秒出"
             tooltip="在已经收录入库的岗位里，按上方筛选条件即时检索，不发起任何联网请求，瞬时返回。"
             accent="bg-[#1a1714] text-[#f7f1e6]"
-            onClick={handleExistingJobsSearch}
+            onClick={() => {
+              setActiveSearch("local");
+              handleExistingJobsSearch();
+            }}
             busy={existingBusy}
+            selected={activeSearch === "local"}
+          />
+          <ActionTile
+            icon={ArrowsClockwise}
+            label={refreshing ? "更新中…" : "更新关注公司"}
+            hint="重新抓你关注的公司找新岗位 · 约 1–5 分钟"
+            tooltip="在后台重新抓取你筛选/偏好命中的公司官方招聘页（含需要浏览器的源），有新岗位会自动出现在列表里。未填筛选时按你保存的求职偏好来。约 1–5 分钟。"
+            accent="bg-[#dbe9fa] text-[#2f6299]"
+            onClick={() => {
+              setActiveSearch("known");
+              startRefresh();
+            }}
+            disabled={refreshing || discoveryActive}
+            busy={refreshing}
+            selected={activeSearch === "known"}
+          />
+          <ActionTile
+            icon={Compass}
+            label={discoveryActive ? "搜索中…" : "扩大官方搜索范围"}
+            hint="去官网找还没收录的公司 · 约 1–5 分钟"
+            tooltip="用浏览器去抓还没收录的公司官方招聘站，并补全职位描述。需要先填上方「关键词」。约 1–5 分钟。"
+            accent="bg-[#e7def4] text-[#6a4fa0]"
+            onClick={() => {
+              setActiveSearch("discover");
+              startDiscovery();
+            }}
+            disabled={refreshing || discoveryActive || !filters.keyword}
+            busy={discoveryActive}
+            selected={activeSearch === "discover"}
           />
         </div>
-        {/* 三个检索全部显式可见（不再折叠）：扩大范围=联网较慢操作。 */}
-        <div className="mt-4">
-          <p className="px-1 text-sm font-medium text-[#6b655a]">
-            没有满意的结果？扩大搜索范围（联网，约 1–5 分钟）
+        {!filters.keyword && (
+          <p className="mt-2 px-1 text-xs leading-5 text-[#9a9184]">
+            「扩大官方搜索范围」需先在上方填「关键词」。
           </p>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <ActionTile
-              icon={ArrowsClockwise}
-              label={refreshing ? "更新中…" : "更新关注公司"}
-              hint="重新抓你关注的公司找新岗位 · 约 1–5 分钟"
-              tooltip="在后台重新抓取你筛选/偏好命中的公司官方招聘页（含需要浏览器的源），有新岗位会自动出现在列表里。未填筛选时按你保存的求职偏好来。约 1–5 分钟。"
-              accent="bg-[#dbe9fa] text-[#2f6299]"
-              onClick={startRefresh}
-              disabled={refreshing || discoveryActive}
-              busy={refreshing}
-            />
-            <ActionTile
-              icon={Compass}
-              label={discoveryActive ? "搜索中…" : "扩大官方搜索范围"}
-              hint="去官网找还没收录的公司 · 约 1–5 分钟"
-              tooltip="用浏览器去抓还没收录的公司官方招聘站，并补全职位描述。需要先填上方「关键词」。约 1–5 分钟。"
-              accent="bg-[#e7def4] text-[#6a4fa0]"
-              onClick={startDiscovery}
-              disabled={refreshing || discoveryActive || !filters.keyword}
-              busy={discoveryActive}
-            />
-          </div>
-          {!filters.keyword && (
-            <p className="mt-2 px-1 text-xs leading-5 text-[#9a9184]">
-              「扩大官方搜索范围」需先在上方填「关键词」。
-            </p>
-          )}
-        </div>
+        )}
         {searchInfo && (
           <p className="mt-3 rounded-2xl border border-black/[0.06] bg-[#f6f3ec] px-3.5 py-2.5 text-pretty text-sm leading-6 text-[#5f594e]">
             {searchInfo}
@@ -440,6 +447,7 @@ function ActionTile({
   disabled,
   busy,
   hero,
+  selected,
 }: {
   icon: typeof Database;
   label: string;
@@ -450,6 +458,7 @@ function ActionTile({
   disabled?: boolean;
   busy?: boolean;
   hero?: boolean;
+  selected?: boolean;
 }) {
   return (
     <div className="group relative">
@@ -459,7 +468,8 @@ function ActionTile({
         disabled={disabled}
         aria-label={`${label}：${tooltip}`}
         className={cn(
-          "flex w-full flex-col items-start gap-3 rounded-2xl border p-5 text-left transition duration-200 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45",
+          "bento-glow flex w-full flex-col items-start gap-3 rounded-2xl border p-5 text-left transition duration-200 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45",
+          selected && "bento-selected",
           hero
             ? "border-[#cfc0e6] bg-[#efe9f8] hover:border-[#bba9dd] hover:bg-[#e7def4]"
             : "border-black/[0.07] bg-white/60 hover:border-black/[0.12] hover:bg-white",

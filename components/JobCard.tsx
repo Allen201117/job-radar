@@ -480,7 +480,7 @@ function ActionButton({
       className={cn(
         "inline-flex items-center justify-center gap-1 rounded-full px-2 py-2 text-[12px] font-medium transition duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-4 sm:text-sm",
         active
-          ? "bg-[#1a1714] text-[#f7f1e6]"
+          ? "bento-selected bg-[#1a1714] text-[#f7f1e6]"
           : muted
             ? "text-[#8a8275] hover:bg-black/[0.05] hover:text-[#1a1714]"
             : "border border-black/[0.07] bg-white/70 text-[#3f3a33] hover:bg-white",
