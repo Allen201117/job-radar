@@ -13,6 +13,10 @@ on:
         description: "单 shard 本轮最多渲染多少岗（控时长，~3s/岗）"
         required: false
         default: "1500"
+      probe:
+        description: "true=诊断模式：渲染后打印详情页真实 DOM 结构（定位 JD 容器），不写库、限 6 岗"
+        required: false
+        default: "false"
 
 jobs:
   drain-moka:
@@ -41,6 +45,10 @@ jobs:
 
       - name: Drain moka summary backlog (shard ${{ matrix.shard }})
         run: |
-          python3 scripts/backfill_moka_summaries.py \
-            --shard "${{ matrix.shard }}" \
-            --limit "${{ github.event.inputs.limit || '1500' }}"
+          if [ "${{ github.event.inputs.probe }}" = "true" ]; then
+            python3 scripts/backfill_moka_summaries.py --shard "${{ matrix.shard }}" --limit 6 --probe
+          else
+            python3 scripts/backfill_moka_summaries.py \
+              --shard "${{ matrix.shard }}" \
+              --limit "${{ github.event.inputs.limit || '1500' }}"
+          fi
