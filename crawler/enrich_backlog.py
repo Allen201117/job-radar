@@ -114,7 +114,11 @@ def fetch_liveness_queue(sb, adapters, limit=0):
                  .select("id,source_id,title,jd_url,job_type,summary,enrich_fail_count")
                  .in_("source_id", list(smap.keys()))
                  .eq("status", "active")
-                 .order("enrich_checked_at", desc=False, nullsfirst=True)
+                 # 同 fetch_queue（8c90896）：排序键以 source_id 打头，才吃得到 migration 151 的
+                 # (source_id, enrich_checked_at nulls first) WHERE active 部分索引。裸 ORDER BY
+                 # enrich_checked_at + source_id IN(本 adapter 上百源) 会被 PostgREST 通用计划带去全表扫
+                 # → 57014（wt/hotjob 分片实锤超时）。源内仍 NULL/最旧优先，轮转语义不变。
+                 .order("source_id").order("enrich_checked_at", desc=False, nullsfirst=True)
                  .range(page * 1000, page * 1000 + 999).execute().data) or []
         rows.extend(batch)
         if limit and len(rows) >= limit:
