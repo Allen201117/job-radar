@@ -438,3 +438,54 @@
     0 0 24px -6px rgba(0, 230, 118, 0.55) !important;
   border-color: rgba(0, 230, 118, 0.5) !important;
 }
+
+/* ───────────────────────────────────────────────────────────────
+   液态玻璃卡片（Apple liquid glass，暖光浅色版）+ content-visibility 性能护栏。
+   写成原生 CSS（不进 @layer / 不依赖 Tailwind 生成 utility），避免被 purge——类名只在
+   组件 className 字符串里静态出现，Tailwind 不会为它生成规则。
+   ─────────────────────────────────────────────────────────────── */
+
+/* 背景模糊 + 提饱和，折射出底层暖纸与彩晕；必须配合 .cv-auto 使用（见下），
+   否则几百张卡片同时做背景采样合成会拖垮渲染。 */
+.glass-card {
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  backdrop-filter: blur(16px) saturate(180%);
+}
+
+/* 顶部柔光 + 玻璃折射亮边：z-index:-1 落在「卡片自身半透明底色之上、内容之下」
+   （backdrop-filter 已让卡片成为独立层叠上下文，负 z 子层只相对自身底色排序，永远在
+   被模糊的背景之上）。亮边只在卡片 padding 边缘可见，不会盖住文字。 */
+.glass-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    160deg,
+    rgba(255, 255, 255, 0.4) 0%,
+    rgba(255, 255, 255, 0.08) 38%,
+    rgba(255, 255, 255, 0) 70%
+  );
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.72),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+/* content-visibility：屏幕外卡片跳过布局 / 绘制（仍在 DOM，滚动条 / Ctrl+F / 锚点不受影响）。
+   contain-intrinsic-size 用 auto + 估高占位：浏览器记住每张卡实测高度，卡片高度可变也稳。
+   这是「展开几百张卡片不卡不崩」的核心——把渲染成本从「全部卡片」收敛到「可视区那十来张」，
+   也为可视区的液态玻璃腾出合成预算。 */
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 340px;
+}
+
+/* 触摸端关掉玻璃模糊（移动端 backdrop-filter 代价更高、收益更低），回退为不透明底色由组件给。 */
+@media (hover: none), (pointer: coarse) {
+  .glass-card {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}

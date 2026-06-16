@@ -17,11 +17,6 @@ const createParticleElement = (x: number, y: number, color: string): HTMLDivElem
   return el;
 };
 
-const calculateSpotlightValues = (radius: number) => ({
-  proximity: radius * 0.5,
-  fadeDistance: radius * 0.75,
-});
-
 const updateCardGlow = (
   card: HTMLElement,
   mouseX: number,
@@ -157,9 +152,8 @@ const MagicBentoFX = ({
 
     const tick = () => {
       pending = false;
-      const cards = Array.from(document.querySelectorAll<HTMLElement>(targetSelector));
 
-      // 当前指针下的卡片（不依赖事件 target，rAF 里用 elementFromPoint）
+      // 当前指针下的卡片（rAF 里用 elementFromPoint 单次命中，O(1)，不再遍历全部卡片）
       const under = document.elementFromPoint(mouseX, mouseY) as Element | null;
       const cardUnder = (under?.closest(targetSelector) as HTMLElement | null) ?? null;
       if (cardUnder !== activeCard) {
@@ -168,37 +162,22 @@ const MagicBentoFX = ({
         activeCard = cardUnder;
       }
 
-      // 描边发光：按指针到各卡的距离算强度
-      if (enableBorderGlow || enableSpotlight) {
-        const { proximity, fadeDistance } = calculateSpotlightValues(spotlightRadius);
-        let minDistance = Infinity;
-        cards.forEach((card) => {
-          const r = card.getBoundingClientRect();
-          const cx = r.left + r.width / 2;
-          const cy = r.top + r.height / 2;
-          const distance = Math.hypot(mouseX - cx, mouseY - cy) - Math.max(r.width, r.height) / 2;
-          const eff = Math.max(0, distance);
-          minDistance = Math.min(minDistance, eff);
-          let glow = 0;
-          if (eff <= proximity) glow = 1;
-          else if (eff <= fadeDistance) glow = (fadeDistance - eff) / (fadeDistance - proximity);
-          if (enableBorderGlow) updateCardGlow(card, mouseX, mouseY, glow, spotlightRadius);
-        });
+      // 描边发光只点亮指针正下方那张卡片 —— 与页面卡片总数无关。
+      // （旧实现每帧遍历所有 .bento-glow：N 次 getBoundingClientRect 强制回流 + N 次写 CSS
+      //  变量触发径向渐变重绘，几百张卡片时直接掉帧/卡顿，这里收敛为 O(1)；邻卡的氛围光交给
+      //  下面这一个全局光晕渲染。）
+      if (enableBorderGlow && activeCard) {
+        updateCardGlow(activeCard, mouseX, mouseY, 1, spotlightRadius);
+      }
 
-        if (spotlight) {
-          gsap.to(spotlight, { left: mouseX, top: mouseY, duration: 0.1, ease: "power2.out" });
-          const targetOpacity =
-            minDistance <= proximity
-              ? 0.8
-              : minDistance <= fadeDistance
-                ? ((fadeDistance - minDistance) / (fadeDistance - proximity)) * 0.8
-                : 0;
-          gsap.to(spotlight, {
-            opacity: targetOpacity,
-            duration: targetOpacity > 0 ? 0.2 : 0.5,
-            ease: "power2.out",
-          });
-        }
+      // 全局指针光晕（单个固定元素）：始终跟随指针，悬停到卡片上时提亮。
+      if (spotlight) {
+        gsap.to(spotlight, { left: mouseX, top: mouseY, duration: 0.1, ease: "power2.out" });
+        gsap.to(spotlight, {
+          opacity: cardUnder ? 0.8 : 0.18,
+          duration: 0.25,
+          ease: "power2.out",
+        });
       }
 
       // 磁吸 / 倾斜：仅对指针下的卡片
