@@ -1,37 +1,39 @@
 name: dead-link-audit
 
-# 死链长期治理：定期用无头浏览器审计 active 岗位的 jd_url，识别 SPA「软404」(返200但渲染'职位不存在/已下线')，
-# 把高置信失效岗(渲染出失效标记)自动置 status='expired'。补 enrich detail-fetcher 覆盖不到的 SPA 源(飞书/智阅/Moka…)。
-#   · 定时(每周)= 抽样审计 --apply：每次跨 host 抽样下架确认 dead，长期保持干净。
-#   · 手动 workflow_dispatch 填 sweep=<source_url子串(如 agirobot)> = 对该源全量逐岗审计下架(整治某个已知坏源)。
-# ATS 源(workday/oracle/greenhouse/lever/hotjob…)的撤岗由 enrich 的 httpx detail-fetcher(404→expired)负责，本工作流默认跳过。
+# 浏览器源(moka/beisen/feishu 等 SPA)死活巡检：无头渲染 active 岗的 jd_url，识别软404
+# (返200但JS渲染'职位不存在/已下线')→ status='expired'。补 enrich httpx detail-fetcher 覆盖不到的 SPA 源。
+#   · 选岗按 enrich_checked_at 最旧优先**轮转**（取代旧「全库深翻页抽样」：抽样随机、深 OFFSET 撞超时、
+#     每轮重复检同一批、不记录已检）；每探一岗盖时间戳 → 下轮取下一批 → 全量滚动覆盖、持续保鲜。
+#   · 定时(每日)= 6 分片并行 --apply：持续把失活浏览器源岗下架，~7 天覆盖全量后维持新鲜。
+#   · 手动 workflow_dispatch 填 sweep=<source_url 子串> = 对该源全量逐岗审计(整治某个已知坏源，仅 shard 0/6 跑)。
+# ATS 源(workday/oracle/...)的撤岗由 enrich httpx detail-fetcher(404→expired) + liveness-sweep 负责，不在此。
 
 on:
   schedule:
-    - cron: "0 18 * * 5"   # 每周五 18:00 UTC = 周六 02:00 新加坡/中国，错开 daily-crawl(00:00)
+    - cron: "0 21 * * *"   # 每日 UTC 21:00，错开 daily-crawl(0:00)/enrich-crawl(18:00)/browser-drain(19:00)
   workflow_dispatch:
     inputs:
       sweep:
-        description: "全量逐岗审计某源(source_url 子串,如 agirobot)；留空=跨 host 抽样审计"
+        description: "全量逐岗审计某源(source_url 子串,如 agirobot)；留空=浏览器源轮转巡检"
         required: false
         default: ""
-      per_host:
-        description: "抽样模式：每 host 取样数"
+      limit:
+        description: "轮转模式：单 shard 本轮渲染上限(控 CI 时长，~3s/岗)"
         required: false
-        default: "12"
-      max:
-        description: "抽样模式：总渲染上限(控 CI 时长)"
-        required: false
-        default: "600"
+        default: "1500"
       apply:
-        description: "true=下架确认 dead；false=只报告(dry-run)"
+        description: "true=下架确认 dead + 盖巡检时间戳；false=只报告(dry-run)"
         required: false
         default: "true"
 
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 75   # 抽样 600 个 ~35min；远低于 GH 6h 硬杀
+    timeout-minutes: 90   # 1500 岗 × ~3s ≈ 75min；远低于 GH 6h 硬杀
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0/6", "1/6", "2/6", "3/6", "4/6", "5/6"]   # 6 片并行轮转、互不重叠
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -44,15 +46,19 @@ jobs:
         run: pip install -r crawler/requirements.txt
       - name: Install chromium
         run: python -m playwright install --with-deps chromium
-      - name: Run dead-link audit
+      - name: Run dead-link audit (shard ${{ matrix.shard }})
         working-directory: crawler
         run: |
+          # sweep 模式是全量逐岗（不分片）→ 只在 shard 0/6 跑一次，其余分片跳过避免 6× 重复。
+          if [ -n "${{ inputs.sweep }}" ] && [ "${{ matrix.shard }}" != "0/6" ]; then
+            echo "sweep 模式仅 shard 0/6 执行，跳过 ${{ matrix.shard }}"; exit 0
+          fi
           ARGS=""
           if [ "${{ inputs.apply }}" != "false" ]; then ARGS="$ARGS --apply"; fi
           if [ -n "${{ inputs.sweep }}" ]; then
             ARGS="$ARGS --sweep ${{ inputs.sweep }}"
           else
-            ARGS="$ARGS --per-host ${{ inputs.per_host || '12' }} --max ${{ inputs.max || '600' }}"
+            ARGS="$ARGS --shard ${{ matrix.shard }} --limit ${{ inputs.limit || '1500' }}"
           fi
           echo "audit args:$ARGS"
           python3 audit_dead_links.py $ARGS

@@ -10,19 +10,32 @@
   · 渲染出实质内容但无标题、无标记 → suspect（疑似，需人工复核，不自动下架）
   · 文本过短/疑似被反爬拦 → unsure（不下架）
 
+选岗：浏览器源(moka/beisen/feishu) active 岗，按 enrich_checked_at 最旧优先轮转（取代旧深翻页抽样）；
+每探一岗盖 enrich_checked_at 时间戳，下轮自动取下一批 → 全量滚动覆盖、持续保鲜。
 用法：set -a; source ../.env.local; set +a
-  python3 audit_dead_links.py                 # 抽样 dry-run，按 host 报告软404率
-  python3 audit_dead_links.py --per-host 6 --max 200
-  python3 audit_dead_links.py --host zhiye    # 只审某类 host(子串)
-  python3 audit_dead_links.py --apply         # 把 marker 确认 dead 的岗位置 status='expired'
-只读为主；仅 --apply 写 status。绝不打印密钥。
+  python3 audit_dead_links.py                          # 轮转 dry-run，按 host 报告软404率
+  python3 audit_dead_links.py --apply --limit 1500     # dead→expired + 盖时间戳轮转（生产用）
+  python3 audit_dead_links.py --shard 0/6 --apply      # 多进程并行分片，互不重叠
+  python3 audit_dead_links.py --host zhiye             # 只审某类 host(子串)
+  python3 audit_dead_links.py --sweep agirobot --apply # 全量逐岗审计某源(source_url 子串)
+只读为主；仅 --apply 写 status / enrich_checked_at。绝不打印密钥。
 """
 import sys
 from collections import defaultdict
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import db
 from playwright.sync_api import sync_playwright
+
+
+def _now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+# 需渲染判活的浏览器/SPA 源（JD 在 list 自带或详情 DOM；httpx detail-fetcher 覆盖不到）。
+# 死活巡检按 adapter 精确锁定这些源，取代旧 fetch_sample 的「全库深翻页抽样」。
+_BROWSER_ADAPTERS = ("moka", "beisen", "feishu")
 
 DEAD_MARKERS = [
     "职位不存在", "岗位不存在", "该职位不存在", "职位已下线", "已下线", "职位已关闭",
@@ -52,37 +65,34 @@ def host_of(u):
         return None
 
 
-def fetch_sample(sb, per_host, max_total, host_filter, include_ats):
-    """跨全库分散窗口抽样，按 host 分桶，每 host 最多 per_host 条。默认跳过 ATS_SKIP(无头读不准/有enrich兜)。"""
-    # 不用 count(exact)(13 万 active 行会撞 service_role ~8s statement_timeout=57014，整个 audit 崩)。
-    # 抽样窗口只需一个近似规模 → 用 count_valid_active_jobs() RPC（部分索引、亚秒）；失败再退保守常数。
-    try:
-        n = sb.rpc("count_valid_active_jobs").execute().data or 0
-    except Exception:
-        n = 100000
-    windows = [int(f * max(0, n - 1000)) for f in
-               (0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)]
-    by_host = defaultdict(list)
-    seen_off = set()
-    for off in windows:
-        if off in seen_off:
-            continue
-        seen_off.add(off)
-        rows = (sb.table("jobs").select("id,title,company,jd_url")
-                .eq("status", "active").order("first_seen_at", desc=True)
-                .range(off, off + 999).execute().data or [])
-        for j in rows:
-            h = host_of(j.get("jd_url"))
-            if not h:
-                continue
-            if host_filter and host_filter not in h:
-                continue
-            if not include_ats and any(s in h for s in ATS_SKIP):
-                continue
-            if len(by_host[h]) < per_host:
-                by_host[h].append(j)
-    sample = [j for arr in by_host.values() for j in arr]
-    return sample[:max_total], len(by_host)
+def fetch_browser_liveness(sb, limit, shard="0/1", host_filter=None):
+    """死活巡检队列（取代旧「全库深翻页抽样」fetch_sample）。
+
+    旧法弊端：count(exact)+10 个 0~90% 偏移窗口抽样 → 深 OFFSET(0.9×13万)在大表上撞 statement_timeout、
+    抽样随机且每轮重复检同一批、不记录已检（无滚动覆盖）。
+    新法：只锁定浏览器源(adapter ∈ _BROWSER_ADAPTERS)的 active 岗，按 enrich_checked_at NULLS FIRST
+    （从未探活的最先）取 limit 个；source_id 打头排序吃 migration 151 部分索引、脱离 statement_timeout。
+    main() 每探一岗即盖 enrich_checked_at 时间戳 → 下轮自动取下一批，全量 ~N 轮滚动覆盖且持续保持新鲜，
+    死岗一旦 expired 即离开 active 集、不再被取。shard=k/n 多进程并行互不重叠。"""
+    k, n = (int(x) for x in shard.split("/"))
+    src_ids = [s["id"] for s in
+               ((sb.table("sources").select("id").in_("adapter_name", list(_BROWSER_ADAPTERS)).execute().data) or [])]
+    if not src_ids:
+        return []
+    rows, page = [], 1000
+    want = limit * n + 100  # 多取一些，shard 切片后仍够 limit
+    for offset in range(0, 60000, page):
+        chunk = (sb.table("jobs").select("id,title,company,jd_url")
+                 .in_("source_id", src_ids).eq("status", "active")
+                 # source_id 打头吃 151 (source_id, enrich_checked_at nulls first) WHERE active 索引（同 sweep）。
+                 .order("source_id").order("enrich_checked_at", desc=False, nullsfirst=True)
+                 .range(offset, offset + page - 1).execute().data) or []
+        if host_filter:
+            chunk = [r for r in chunk if host_filter in (host_of(r.get("jd_url")) or "")]
+        rows.extend(chunk)
+        if len(chunk) < page or len(rows) >= want:
+            break
+    return [r for i, r in enumerate(rows) if i % n == k][:limit]
 
 
 def classify(page, title):
@@ -104,12 +114,10 @@ def classify(page, title):
 
 def main():
     apply = "--apply" in sys.argv
-    per_host = int(arg("--per-host", "5"))
-    max_total = int(arg("--max", "180"))
     host_filter = arg("--host")
-
-    include_ats = "--include-ats" in sys.argv
-    sweep_kw = arg("--sweep")  # 对「source_url 含 kw 的源」做全量逐岗审计(不抽样)，配 --apply 精确下架其失效岗
+    limit = int(arg("--limit", "1500"))   # 单 shard 单轮渲染上限，控 CI 时长（~3s/岗）
+    shard = arg("--shard", "0/1")          # k/n 多进程并行互不重叠
+    sweep_kw = arg("--sweep")  # 对「source_url 含 kw 的源」做全量逐岗审计，配 --apply 精确下架其失效岗
     sb = db.get_supabase()
     if sweep_kw:
         srcs = sb.table("sources").select("id,company").ilike("source_url", "%" + sweep_kw + "%").execute().data or []
@@ -125,20 +133,27 @@ def main():
                 if len(rows) < 1000:
                     break
                 off += 1000
-        n_hosts = len(srcs)
         print(f"[SWEEP] 源含「{sweep_kw}」共 {len(srcs)} 个，全量逐岗 {len(sample)} 条")
     else:
-        sample, n_hosts = fetch_sample(sb, per_host, max_total, host_filter, include_ats)
-    print(f"抽样 {len(sample)} 条，覆盖 {n_hosts} 个 host；模式={'APPLY(写expired)' if apply else 'DRY-RUN(只报告)'}\n")
+        # 默认=浏览器源死活巡检轮转（enrich_checked_at 最旧优先，取代旧深翻页抽样）。
+        sample = fetch_browser_liveness(sb, limit, shard, host_filter)
+        print(f"[巡检] 浏览器源({'/'.join(_BROWSER_ADAPTERS)}) shard {shard} 认领 {len(sample)}（limit={limit}）")
+    print(f"待渲染 {len(sample)} 条；模式={'APPLY(dead→expired + 盖巡检时间戳)' if apply else 'DRY-RUN(只报告)'}\n")
 
     apply_ok = [0]
     agg = defaultdict(lambda: {"dead": 0, "alive": 0, "suspect": 0, "unsure": 0})
     RESTART_EVERY = 40  # 每渲染这么多个重启浏览器，规避长跑内存泄漏/崩溃（智元 613 一次跑崩过）
 
-    def expire(jid):
+    def mark(jid, dead):
+        """探活后回写：dead→status='expired'；非 dead→只盖 enrich_checked_at（轮转，下轮取下一批）。
+        非 apply 不写库（dry-run 只报告，不滚动）。"""
+        patch = {"enrich_checked_at": _now()}
+        if dead:
+            patch["status"] = "expired"
         try:
-            sb.table("jobs").update({"status": "expired"}).eq("id", jid).execute()
-            apply_ok[0] += 1
+            sb.table("jobs").update(patch).eq("id", jid).execute()
+            if dead:
+                apply_ok[0] += 1
         except Exception as e:
             sys.stderr.write(f"\n  写失败 {jid}: {str(e)[:60]}\n")
 
@@ -172,8 +187,8 @@ def main():
                 except Exception:
                     pass
             agg[h][verdict] += 1
-            if verdict == "dead" and apply:
-                expire(j["id"])  # 增量下架：边扫边写，中途崩了也不丢已清的
+            if apply:
+                mark(j["id"], verdict == "dead")  # dead→下架；其余盖巡检时间戳轮转。边扫边写，中途崩了不丢
             sys.stderr.write(f"\r  {i}/{len(sample)} {verdict:7s} {h[:28]:28s} {why[:14]} exp={apply_ok[0]}")
         try:
             hold["b"].close()
