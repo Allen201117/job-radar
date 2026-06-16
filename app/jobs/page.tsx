@@ -34,19 +34,18 @@ const PAGE1 = 60;
 async function fetchFirstPageAndTotal(
   supabase: Awaited<ReturnType<typeof createServerSupabase>>,
 ): Promise<{ jobs: Job[]; total: number }> {
-  const [page, head] = await Promise.all([
+  const [page, validCount] = await Promise.all([
     supabase
       .from("jobs")
       .select("*")
       .eq("status", "active")
       .order("first_seen_at", { ascending: false })
       .range(0, PAGE1 - 1),
-    supabase
-      .from("jobs")
-      .select("id", { count: "exact", head: true })
-      .eq("status", "active"),
+    // 首屏计数 = 「有效在招」(active + 有 JD 正文)，不用裸 count(active)（含薄卡/失活会虚高）。
+    supabase.rpc("count_valid_active_jobs"),
   ]);
-  return { jobs: (page.data as Job[]) || [], total: head.count ?? 0 };
+  const total = typeof validCount.data === "number" ? validCount.data : 0;
+  return { jobs: (page.data as Job[]) || [], total };
 }
 
 export default async function JobsPage() {

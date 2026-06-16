@@ -12,7 +12,8 @@ import { AnimatedStat } from "@/components/ui/animated-stat";
 import { cn } from "@/lib/utils";
 
 // 岗位库「实时翻动」总数卡（暖光浅色版）。
-// - 真数据：直接 count(jobs where status=active) 等三项（RLS：jobs / sources 所有人可读，匿名也行）。
+// - 真数据：主数 = count_valid_active_jobs() RPC（有效在招 = active + 有 JD 正文，杜绝薄卡/失活虚高）；
+//   官方源 = count(sources enabled)；24h 确认在招 = count(active 且 last_seen 24h 内)（RLS：所有人可读，匿名也行）。
 // - 实时：入场从 0 翻到 SSR 已知的真实总数（无需等网络），之后每 12s 轮询一次，数字变化即翻动。
 // - 首屏不闪：initialTotal 由服务端 SSR 传入，挂载即有真实值。
 interface Props {
@@ -38,7 +39,8 @@ export default function JobLibraryStat({ initialTotal }: Props) {
     const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     try {
       const [jobs, src, rec] = await Promise.all([
-        supabase.from("jobs").select("id", { count: "exact", head: true }).eq("status", "active"),
+        // 「有效在招」(active + 有 JD 正文)，非裸 count(active)（含薄卡/失活会虚高）。
+        supabase.rpc("count_valid_active_jobs"),
         supabase.from("sources").select("id", { count: "exact", head: true }).eq("enabled", true),
         supabase
           .from("jobs")
@@ -47,7 +49,7 @@ export default function JobLibraryStat({ initialTotal }: Props) {
           .gte("last_seen_at", dayAgo),
       ]);
       if (jobs.error || src.error || rec.error) throw jobs.error || src.error || rec.error;
-      if (typeof jobs.count === "number") setActiveJobs(jobs.count);
+      if (typeof jobs.data === "number") setActiveJobs(jobs.data);
       if (typeof src.count === "number") setSources(src.count);
       if (typeof rec.count === "number") setRecent(rec.count);
       setSyncedAt(new Date());
@@ -99,7 +101,7 @@ export default function JobLibraryStat({ initialTotal }: Props) {
             />
             {statusText}
           </div>
-          <p className="mt-3.5 text-sm text-[#8a8275]">岗位库 · 活跃岗位</p>
+          <p className="mt-3.5 text-sm text-[#8a8275]">岗位库 · 有效在招</p>
           <div className="mt-1 flex items-baseline gap-2">
             <AnimateNumber
               value={activeJobs}
