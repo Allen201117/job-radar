@@ -75,7 +75,13 @@ def fetch_queue(sb, adapters, limit=0):
                  .in_("source_id", list(smap.keys()))
                  .is_("summary", "null").eq("status", "active")
                  .lt("enrich_fail_count", MAX_FAIL)
-                 .order("first_seen_at", desc=True)
+                 # 排序键必须以 source_id 打头，才吃得到 migration 150 的
+                 # (source_id, first_seen_at desc) WHERE active+空 summary+fail<MAX 部分索引。
+                 # 裸 ORDER BY first_seen_at DESC + source_id IN(本 adapter 上百个源) 会被
+                 # PostgREST 的通用(generic)预编译计划带去走日期索引、扫全表找稀疏的本 adapter 行
+                 # → statement_timeout(57014)。hotjob 分片实锤：裸 first_seen 偶发 4s+/超时，
+                 # 改 (source_id, first_seen) 后 30 连发 max 0.6s、零尖刺。源内仍按最新优先。
+                 .order("source_id").order("first_seen_at", desc=True)
                  .range(page * 1000, page * 1000 + 999).execute().data) or []
         rows.extend(batch)
         if limit and len(rows) >= limit:
