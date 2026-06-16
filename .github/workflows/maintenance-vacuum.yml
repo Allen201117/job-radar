@@ -10,8 +10,20 @@ name: maintenance-vacuum
 #
 # 为什么不放进迁移：VACUUM 不能在事务块里跑，而 db-migrate.sh 用 `psql -1`（单事务）应用迁移。
 # 故单独做成手动 workflow_dispatch；复用 migrate 已配的 SUPABASE_DB_URL secret，零额外配置。
+#
+# full 入参：
+#   false（默认）= VACUUM (ANALYZE) —— 仅刷 VM/统计、把死元组回收进表内空闲列表「止涨」，
+#     **不缩 Supabase 报的 db_size**；轻锁、可反复跑、安全。日常维护用这个。
+#   true = VACUUM FULL —— 重写表、把磁盘空间真正还给系统、db_size 缩小；但全程 ACCESS EXCLUSIVE
+#     锁表（期间 Jobs 页查询会阻塞）、需 ≈ 表大小的临时空间（接近 500MB 上限时可能 No space 失败，
+#     失败原子回滚、表不受损）。仅在删过大批死行后做一次性瘦身时手动开。
 on:
   workflow_dispatch:
+    inputs:
+      full:
+        description: "true=VACUUM FULL（缩 db_size、锁表、需≈表大小临时空间）；false=普通 VACUUM ANALYZE（止涨不缩）"
+        required: false
+        default: "false"
 
 jobs:
   vacuum:
@@ -20,13 +32,25 @@ jobs:
       - name: Install psql client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
-      - name: VACUUM ANALYZE jobs
+      - name: VACUUM jobs
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          FULL: ${{ github.event.inputs.full }}
         run: |
           if [ -z "${SUPABASE_DB_URL:-}" ]; then
             echo "::error::SUPABASE_DB_URL secret 未配置（与 db-migrate 同一个）。"
             exit 1
           fi
-          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -c "vacuum (analyze, verbose) jobs;"
-          echo "[maintenance-vacuum] done."
+          size_sql="select pg_size_pretty(pg_database_size(current_database())) as db_size, pg_size_pretty(pg_total_relation_size('jobs')) as jobs_total;"
+          echo "=== before ==="
+          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -c "$size_sql"
+          if [ "${FULL:-false}" = "true" ]; then
+            echo "=== VACUUM FULL jobs（锁表、回收磁盘、缩 db_size）==="
+            psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -c "vacuum (full, analyze, verbose) jobs;"
+          else
+            echo "=== VACUUM ANALYZE jobs（普通、止涨不缩）==="
+            psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -c "vacuum (analyze, verbose) jobs;"
+          fi
+          echo "=== after ==="
+          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -c "$size_sql"
+          echo "[maintenance-vacuum] done (full=${FULL:-false})."
