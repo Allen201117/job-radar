@@ -1,6 +1,7 @@
 name: dump-jobs-schema
 
-# 一次性（Phase 1 迁库用）：从 Supabase(PG17) 导出 jobs 表精确 DDL，在自建香港 Postgres 忠实重建。只读。
+# 一次性（Phase 1 迁库用）：从 Supabase(PG17) 导出 jobs 表精确 DDL + 触发器函数体 + 扩展清单，
+# 在自建香港 Postgres 忠实重建。只读。复用 db-migrate 的 SUPABASE_DB_URL。
 on:
   workflow_dispatch:
 
@@ -15,15 +16,18 @@ jobs:
           sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
           echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update && sudo apt-get install -y postgresql-client-17
-      - name: Dump jobs schema
+      - name: Dump jobs schema + functions + extensions
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           if [ -z "${SUPABASE_DB_URL:-}" ]; then echo "::error::SUPABASE_DB_URL 未配置"; exit 1; fi
-          echo "========== CREATE TABLE jobs (+indexes/triggers) =========="
-          /usr/lib/postgresql/17/bin/pg_dump --schema-only --no-owner --no-privileges -t public.jobs "$SUPABASE_DB_URL"
-          echo "========== function bodies =========="
-          /usr/lib/postgresql/17/bin/psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -P pager=off \
-            -c "\sf canonicalize_jd_url" \
-            -c "\sf count_valid_active_jobs" 2>&1 || true
+          P=/usr/lib/postgresql/17/bin
+          echo "========== installed extensions =========="
+          $P/psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -P pager=off -c "\dx"
+          echo "========== trigger + helper function bodies =========="
+          $P/psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -P pager=off \
+            -c "\sf jobs_set_canonical_jd_url" \
+            -c "\sf jobs_set_search_doc" 2>&1 || true
+          echo "========== text search configs referenced =========="
+          $P/psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -P pager=off -c "\dF" 2>&1 || true
           echo "[dump-jobs-schema] done."
