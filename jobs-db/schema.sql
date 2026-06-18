@@ -2,9 +2,9 @@
 -- 从 Supabase 生产库(PG17.6) pg_dump 忠实重建：列 / 约束 / canonical 触发器 / count 函数 / btree 索引
 -- 全部与线上一致。crawler 继续从 Supabase 读 sources/写 crawl_runs，只把 **jobs 读写** 切到这里。
 --
--- 搜索：v1 用 pg_trgm 的 GIN 索引做 ILIKE 子串检索（自足、够快），**不搬**自定义 bigram FTS
---   (search_doc / search_tokens / jobs_set_search_doc / jobs_search_doc_gin) —— 那套留作后置性能 pass。
---   search_doc 列保留（faithful，v1 不填）。对齐 docs/superpowers/plans/2026-06-14-jobs-database-refactor.md。
+-- 搜索：忠实复刻生产的**中文 bigram FTS**（search_doc + search_tokens + jobs_set_search_doc 触发器 +
+--   jobs_search_doc_gin），与 lib/job-search.ts 同口径，零召回回归；另留 pg_trgm GIN 辅助 ad-hoc ILIKE。
+--   search_doc 值已随数据迁移带过来（163k 行已填充），新写入由触发器维护。
 --
 -- 幂等：全部 IF NOT EXISTS / OR REPLACE，可重复 apply（jobs-db-migrate.yml）。
 -- gen_random_uuid() 是 PG13+ 核心函数，无需扩展。
@@ -108,6 +108,52 @@ create trigger jobs_canonical_jd_url_trg
   before insert or update of jd_url on jobs
   for each row execute function jobs_set_canonical_jd_url();
 
+-- ── 中文 bigram 全文检索（search_doc）：从生产忠实重建，与 lib/job-search.ts 的 queryTokens 同口径。
+--   迁移已带过 search_doc 值（163k 行已填充）；这里补 tokenizer + 触发器（新写入维护）+ GIN 索引。
+create or replace function search_tokens(t text)
+returns text language plpgsql immutable as $function$
+declare
+  tok text;
+  res text := '';
+  i int;
+  n int;
+begin
+  foreach tok in array regexp_split_to_array(left(lower(coalesce(t, '')), 4000), '\s+')
+  loop
+    n := char_length(tok);
+    if n = 0 then
+      continue;
+    elsif tok ~ '^[a-z0-9]+$' then
+      res := res || ' ' || tok;          -- 纯拉丁/数字：整词
+    elsif n = 1 then
+      res := res || ' ' || tok;
+    else
+      for i in 1 .. n - 1 loop
+        res := res || ' ' || substr(tok, i, 2);  -- 含 CJK：相邻双字
+      end loop;
+    end if;
+  end loop;
+  return btrim(res);
+end;
+$function$;
+
+create or replace function jobs_set_search_doc()
+returns trigger language plpgsql as $function$
+begin
+  -- schema 限定 public.search_tokens：COPY/迁移时 search_path 可能为空。
+  new.search_doc := to_tsvector('simple', public.search_tokens(
+    coalesce(new.title,'') || ' ' || coalesce(new.company,'') || ' ' ||
+    coalesce(new.location,'') || ' ' || coalesce(new.job_type,'')
+  ));
+  return new;
+end;
+$function$;
+
+drop trigger if exists jobs_search_doc_trg on jobs;
+create trigger jobs_search_doc_trg
+  before insert or update of title, company, location, job_type on jobs
+  for each row execute function jobs_set_search_doc();
+
 -- ── 「有效在招」诚实计数（active + 有 JD 正文 ≥60 字）──
 create or replace function count_valid_active_jobs()
 returns bigint language sql stable as $function$
@@ -152,6 +198,9 @@ create index if not exists jobs_source_id_idx               on jobs (source_id);
 create index if not exists jobs_status_first_seen_idx       on jobs (status, first_seen_at desc);
 create index if not exists jobs_valid_active_idx            on jobs (id) where status = 'active' and summary is not null and char_length(btrim(summary)) >= 60;
 
--- ── v1 搜索：pg_trgm GIN（title/company 快速 ILIKE 子串检索，替代 bigram FTS）──
+-- ── 中文 bigram 全文检索 GIN（search_doc）：app 搜索主路径（lib/jobs-store/search.ts 的 textSearch）──
+create index if not exists jobs_search_doc_gin on jobs using gin (search_doc);
+
+-- ── 辅助：pg_trgm GIN（title/company 快速 ILIKE 子串，用于 recheck/ad-hoc 过滤）──
 create index if not exists jobs_title_trgm_idx   on jobs using gin (title gin_trgm_ops);
 create index if not exists jobs_company_trgm_idx on jobs using gin (company gin_trgm_ops);
