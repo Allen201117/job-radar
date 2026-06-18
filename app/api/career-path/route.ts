@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
+import { jobsStoreEnabled, activeJobCountsByCompany } from "@/lib/jobs-store/read";
 import { companyMatches, findCompanyProfile } from "@/lib/insight-match";
 import { ITEM_COLUMNS, groupGatedInsights } from "@/lib/insight-bundle";
 import { buildCareerPath, type CareerCompanyInput } from "@/lib/career-path";
@@ -51,6 +52,12 @@ export async function GET() {
   const ids = chosen.map((p) => p.id);
   // 在招计数走 DB 侧聚合（active_job_counts_by_company RPC，按 company group by），
   // 不再全量拉 jobs.company 进内存；公司别名归一仍在 JS（companyMatches）对小集合做 sum。
+  // 在招计数：配了 env 走 jobs-store(香港库 active_job_counts_by_company)；否则 Supabase RPC。
+  const countsPromise = jobsStoreEnabled()
+    ? activeJobCountsByCompany()
+        .then((data) => ({ data, error: null as any }))
+        .catch((error) => ({ data: null, error }))
+    : supabase.rpc("active_job_counts_by_company");
   const [{ data: items, error: itemErr }, { data: companyCounts, error: countErr }] =
     await Promise.all([
       supabase
@@ -58,7 +65,7 @@ export async function GET() {
         .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
         .in("company_id", ids)
         .eq("status", "active"),
-      supabase.rpc("active_job_counts_by_company"),
+      countsPromise,
     ]);
   if (itemErr) {
     console.error("[career-path] 读取 insight_items 失败", itemErr.message);

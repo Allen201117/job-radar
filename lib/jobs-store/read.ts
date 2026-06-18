@@ -34,6 +34,31 @@ export async function activeJobCountsByCompany(): Promise<Array<{ company: strin
   return jobsQuery("select company, job_count from active_job_counts_by_company()");
 }
 
+/** Today 两段召回：location 命中任一城市 AND title 命中任一职位词，最新优先（无信号时调用方走 listLatestActive）。 */
+export async function recallByPrefs(locTerms: string[], titleTerms: string[], limit: number): Promise<any[]> {
+  const conds = ["status = 'active'"];
+  const params: unknown[] = [];
+  if (locTerms.length) {
+    const ors = locTerms.map((t) => {
+      params.push(`%${t}%`);
+      return `location ilike $${params.length}`;
+    });
+    conds.push(`(${ors.join(" or ")})`);
+  }
+  if (titleTerms.length) {
+    const ors = titleTerms.map((t) => {
+      params.push(`%${t}%`);
+      return `title ilike $${params.length}`;
+    });
+    conds.push(`(${ors.join(" or ")})`);
+  }
+  params.push(limit);
+  return jobsQuery(
+    `select ${JOB_COLUMNS} from jobs where ${conds.join(" and ")} order by first_seen_at desc limit $${params.length}`,
+    params,
+  );
+}
+
 /** 按 id 批量取岗（saved/applied：job_actions 在 Supabase，岗位在香港库）。 */
 export async function jobsByIds(ids: string[], activeOnly = false): Promise<any[]> {
   if (!ids.length) return [];

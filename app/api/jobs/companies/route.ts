@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabaseService";
+import { jobsStoreEnabled, activeCompanies } from "@/lib/jobs-store/read";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,17 @@ const TTL_FALLBACK_MS = 30 * 1000;
 export async function GET() {
   if (cache && Date.now() < cache.until) {
     return NextResponse.json({ ok: true, companies: cache.companies, cached: true });
+  }
+
+  // jobs 已迁自建香港 PG：配了 env 走 jobs-store 的 active_companies()；异常落到下面 Supabase 兜底。
+  if (jobsStoreEnabled()) {
+    try {
+      const companies = await activeCompanies();
+      cache = { until: Date.now() + TTL_FULL_MS, companies };
+      return NextResponse.json({ ok: true, companies });
+    } catch {
+      /* 香港库异常 → 走 Supabase 兜底 */
+    }
   }
 
   // jobs 公开可读；用 service-role 绕 anon 角色的 statement_timeout。

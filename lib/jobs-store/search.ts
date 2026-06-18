@@ -73,7 +73,7 @@ async function searchViaScan(
   let off = 0;
   let exhausted = false;
   while (matched.length <= need && !exhausted && off < SCAN_BUDGET) {
-    const rows = await jobsQuery(
+    const rows: any[] = await jobsQuery(
       `select ${JOB_COLUMNS} from jobs where status='active' order by first_seen_at desc limit ${DB_PAGE} offset ${off}`,
     );
     if (!rows.length) {

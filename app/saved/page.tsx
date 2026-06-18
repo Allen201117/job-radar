@@ -1,6 +1,7 @@
 import Navbar from "@/components/Navbar";
 import { CountBadge, EmptyPanel, ProductHero, ProductPage } from "@/components/ProductChrome";
 import { createServerSupabase } from "@/lib/auth";
+import { jobsStoreEnabled, jobsByIds } from "@/lib/jobs-store/read";
 import SavedClient from "./saved-client";
 import { BookmarkSimple, Briefcase } from "@phosphor-icons/react/ssr";
 
@@ -45,7 +46,9 @@ export default async function SavedPage() {
   }
 
   const jobIds = actions.map((a: { job_id: string }) => a.job_id);
-  const { data: jobs } = await supabase.from("jobs").select("*").in("id", jobIds).eq("status", "active");
+  const jobs = jobsStoreEnabled()
+    ? await jobsByIds(jobIds, true)
+    : (await supabase.from("jobs").select("*").in("id", jobIds).eq("status", "active")).data ?? [];
 
   return (
     <div className="min-h-screen bg-editorial">

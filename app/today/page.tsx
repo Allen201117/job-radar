@@ -1,6 +1,7 @@
 import Navbar from "@/components/Navbar";
 import { EmptyPanel, MetricTile, ProductHero, ProductPage } from "@/components/ProductChrome";
 import { createServerSupabase } from "@/lib/auth";
+import { jobsStoreEnabled, listLatestActive, recallByPrefs } from "@/lib/jobs-store/read";
 import { matchTier, sortAndFilterJobs } from "@/lib/scoring";
 import { mergeRecallJobs } from "@/lib/today-recall";
 import type { Job, UserPreferences, JobAction, ScoredJob } from "@/lib/types";
@@ -29,6 +30,13 @@ function escapeLike(value: string) {
 
 // 最新 active 岗位（未登录 / 无偏好 / 预筛失败 / 预筛不足时的兜底来源）
 async function fetchLatestActive(supabase: ServerSupabase): Promise<Job[]> {
+  if (jobsStoreEnabled()) {
+    try {
+      return (await listLatestActive(200)) as Job[];
+    } catch {
+      /* 香港库异常 → Supabase 兜底 */
+    }
+  }
   const { data } = await supabase
     .from("jobs")
     .select(JOB_COLUMNS)
@@ -67,27 +75,32 @@ async function recallTodayJobs(
   }
 
   try {
-    let builder = supabase
-      .from("jobs")
-      .select(JOB_COLUMNS)
-      .eq("status", "active");
-    // 两次 .or() 在 PostgREST 中按 AND 组合 →（命中任一城市）AND（命中任一职位词）
-    if (locTerms.length) {
-      builder = builder.or(
-        locTerms.map((t) => `location.ilike.%${t}%`).join(","),
-      );
+    let preferred: Job[];
+    if (jobsStoreEnabled()) {
+      // 香港库：location 命中任一城市 AND title 命中任一职位词（与下面 PostgREST 双 or 同口径）。
+      preferred = (await recallByPrefs(locTerms, titleTerms, 200)) as Job[];
+    } else {
+      let builder = supabase
+        .from("jobs")
+        .select(JOB_COLUMNS)
+        .eq("status", "active");
+      // 两次 .or() 在 PostgREST 中按 AND 组合 →（命中任一城市）AND（命中任一职位词）
+      if (locTerms.length) {
+        builder = builder.or(
+          locTerms.map((t) => `location.ilike.%${t}%`).join(","),
+        );
+      }
+      if (titleTerms.length) {
+        builder = builder.or(
+          titleTerms.map((t) => `title.ilike.%${t}%`).join(","),
+        );
+      }
+      const { data, error } = await builder
+        .order("first_seen_at", { ascending: false })
+        .limit(200);
+      if (error) throw error;
+      preferred = (data as Job[]) || [];
     }
-    if (titleTerms.length) {
-      builder = builder.or(
-        titleTerms.map((t) => `title.ilike.%${t}%`).join(","),
-      );
-    }
-    const { data, error } = await builder
-      .order("first_seen_at", { ascending: false })
-      .limit(200);
-    if (error) throw error;
-
-    const preferred = (data as Job[]) || [];
     // 预筛不足 50 条才补一段最新 active 兜底；多取的兜底由合并函数去重 + 截断
     const fallback =
       preferred.length < 50 ? await fetchLatestActive(supabase) : [];
