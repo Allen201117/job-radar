@@ -6,7 +6,7 @@ name: purge-expired
 #   · job_actions.job_id ON DELETE CASCADE 连带删（用户对已撤岗的收藏本就无意义）。
 #   · DELETE + 普通 VACUUM(ANALYZE)：释放行空间进表内空闲列表供新岗复用 + 刷新统计；**不每日 VACUUM FULL**
 #     （避免每日锁表）。db_size 真正还盘缩小由 maintenance-vacuum -f full=true 按需手动跑（删大批后）。
-# 复用 db-migrate 的 SUPABASE_DB_URL secret（直连 5432，psql 自动逐句提交故 VACUUM 可跑）。
+# 用 JOBS_DATABASE_URL secret（自建香港 jobs 库；jobs 已迁过去，expired 死岗在那儿）。psql 自动逐句提交故 VACUUM 可跑。
 
 on:
   schedule:
@@ -22,13 +22,13 @@ jobs:
 
       - name: Purge expired jobs + vacuum
         env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
         run: |
-          if [ -z "${SUPABASE_DB_URL:-}" ]; then
-            echo "::error::SUPABASE_DB_URL secret 未配置（与 db-migrate 同一个）。"
+          if [ -z "${JOBS_DATABASE_URL:-}" ]; then
+            echo "::error::JOBS_DATABASE_URL secret 未配置（与 db-migrate 同一个）。"
             exit 1
           fi
-          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -P pager=off <<'SQL'
+          psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off <<'SQL'
           set statement_timeout = '1800s';
           \echo '=== 删除前 expired 计数 ==='
           select count(*) as expired_before from jobs where status = 'expired';

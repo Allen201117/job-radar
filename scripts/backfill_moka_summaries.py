@@ -22,6 +22,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "crawler"))
 import db  # noqa: E402
+import jobs_db  # noqa: E402
 import normalizer  # noqa: E402
 
 # JD 正文容器候选（moka 不同租户 class 不一）。取所有命中里**文本最长**的一个，比单一固定 class 稳。
@@ -72,7 +73,7 @@ def _probe_dom(page) -> str:
     return "\n".join(out)
 
 
-def _fetch_targets(sb, limit: int):
+def _fetch_targets(sb, limit: int, jobs_conn=None):
     """分页取 summary 为空 + 未超死信的 active Moka 岗，供 shard 切片。
 
     ⚠️ 不能用 `jd_url LIKE '%mokahr%'`（前导通配 → 无法走索引 → 13 万 active 全表扫撞
@@ -83,6 +84,14 @@ def _fetch_targets(sb, limit: int):
                ((sb.table("sources").select("id").eq("adapter_name", "moka").execute().data) or [])]
     if not src_ids:
         return []
+    # jobs 已迁香港库：jobs_conn 给定时直连查；否则 Supabase 分页。
+    if jobs_conn is not None:
+        return jobs_db.fetch_all(
+            jobs_conn,
+            "select id, jd_url, title, enrich_fail_count from jobs where source_id = any(%s::uuid[]) "
+            "and summary is null and status='active' and enrich_fail_count < 3 "
+            "order by source_id, id limit %s",
+            (src_ids, limit * 3))
     rows, page = [], 1000
     for offset in range(0, 40000, page):
         chunk = (
@@ -104,13 +113,17 @@ def _fetch_targets(sb, limit: int):
     return rows
 
 
-def _mark_fail(sb, row, dry_run):
+def _mark_fail(sb, row, dry_run, jobs_conn=None):
     """渲染失败/无 JD → enrich_fail_count+1（死信老化）。dry-run 不写；写库失败静默（下轮重试）。"""
     if dry_run:
         return
     try:
-        sb.table("jobs").update({"enrich_fail_count": (row.get("enrich_fail_count") or 0) + 1}) \
-            .eq("id", row["id"]).execute()
+        if jobs_conn is not None:
+            jobs_db.execute(jobs_conn, "update jobs set enrich_fail_count = %s where id = %s::uuid",
+                            [(row.get("enrich_fail_count") or 0) + 1, row["id"]])
+        else:
+            sb.table("jobs").update({"enrich_fail_count": (row.get("enrich_fail_count") or 0) + 1}) \
+                .eq("id", row["id"]).execute()
     except Exception:
         pass
 
@@ -136,8 +149,9 @@ def main():
         print("✗ 缺少 SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY，先 source .env.local")
         sys.exit(1)
 
-    sb = db.get_supabase()
-    all_rows = _fetch_targets(sb, args.limit * n)
+    sb = db.get_supabase()                                        # sources 走 Supabase
+    jobs_conn = jobs_db.get_conn() if jobs_db.enabled() else None  # jobs 读写走香港库（Phase 1）
+    all_rows = _fetch_targets(sb, args.limit * n, jobs_conn)
     rows = [r for i, r in enumerate(all_rows) if i % n == k][: args.limit]
     tag = f"[shard {k}/{n}]"
     print(f"{tag} 全部待回填 {len(all_rows)}，本片认领 {len(rows)}（limit={args.limit}）")
@@ -174,19 +188,23 @@ def main():
             except Exception as e:
                 failed += 1
                 print(f"{tag} [{i}] render 失败 {row.get('title')}: {str(e)[:60]}")
-                _mark_fail(sb, row, args.dry_run)
+                _mark_fail(sb, row, args.dry_run, jobs_conn)
                 continue
             summary = normalizer.clean_summary(jd) if jd else None
             if not summary:
                 failed += 1
-                _mark_fail(sb, row, args.dry_run)
+                _mark_fail(sb, row, args.dry_run, jobs_conn)
                 continue
             if args.dry_run:
                 print(f"{tag} [{i}] {row.get('title')} → {summary[:50]}…")
                 filled += 1
             else:
                 try:
-                    sb.table("jobs").update({"summary": summary}).eq("id", row["id"]).execute()
+                    if jobs_conn is not None:
+                        jobs_db.execute(jobs_conn, "update jobs set summary = %s where id = %s::uuid",
+                                        [summary, row["id"]])
+                    else:
+                        sb.table("jobs").update({"summary": summary}).eq("id", row["id"]).execute()
                     filled += 1
                 except Exception as e:
                     failed += 1
