@@ -1,7 +1,5 @@
 // 服务端专用：自建香港 jobs 库的 PostgreSQL 连接池（Phase 1，jobs-store 边界）。
 // 仅 server（API route / RSC / server action）用 —— 绝不能进客户端 bundle（含 JOBS_DATABASE_URL）。
-// app 的 jobs 读取从 supabase-js 迁到这里：jobs 已搬到自建香港 PG（无 PostgREST），用直连 SQL。
-// sources / auth / 用户小表仍走 Supabase（lib/supabaseClient）。
 import "server-only";
 import { Pool, type QueryResultRow } from "pg";
 
@@ -9,18 +7,25 @@ import { Pool, type QueryResultRow } from "pg";
 const globalForPool = globalThis as unknown as { __jobsPool?: Pool };
 
 function makePool(): Pool {
-  const connectionString = process.env.JOBS_DATABASE_URL;
-  if (!connectionString) {
+  const url = process.env.JOBS_DATABASE_URL;
+  if (!url) {
     throw new Error("JOBS_DATABASE_URL 未配置（自建香港 jobs 库连接串）");
   }
+  // ⚠️ 不能直接传 connectionString：node-pg 的 pg-connection-string 把 URL 里的 sslmode=require 当成
+  //   verify-full（校验 CA）→ 拒掉自建库的自签证书（"self-signed certificate"），覆盖掉 ssl 选项。
+  //   故解析成显式字段 + 显式 ssl:{rejectUnauthorized:false}（加密但不校验，自签库正确做法）。
+  const u = new URL(url);
   return new Pool({
-    connectionString,
-    // 自建库用自签 SSL（连接串 sslmode=require）：加密但不校验 CA → rejectUnauthorized:false。
+    host: u.hostname,
+    port: u.port ? Number(u.port) : 5432,
+    user: decodeURIComponent(u.username),
+    password: decodeURIComponent(u.password),
+    database: u.pathname.replace(/^\//, "") || "jobradar_jobs",
     ssl: { rejectUnauthorized: false },
-    max: 5, // serverless 小池
+    max: 5,
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 8_000,
-    statement_timeout: 15_000, // 单查询保护（香港库专供 jobs，重活已建索引）
+    statement_timeout: 15_000,
   });
 }
 
@@ -31,7 +36,7 @@ export function jobsPool(): Pool {
   return globalForPool.__jobsPool;
 }
 
-/** 跑一条参数化 SQL，返回行数组。统一入口，方便加日志/超时/重试。 */
+/** 跑一条参数化 SQL，返回行数组。 */
 export async function jobsQuery<T extends QueryResultRow = QueryResultRow>(
   sql: string,
   params: unknown[] = [],
@@ -46,5 +51,5 @@ export async function jobsScalar<T = unknown>(sql: string, params: unknown[] = [
   if (!rows.length) return null;
   const first = rows[0] as Record<string, unknown>;
   const keys = Object.keys(first);
-  return (keys.length ? (first[keys[0]] as T) : null);
+  return keys.length ? (first[keys[0]] as T) : null;
 }
