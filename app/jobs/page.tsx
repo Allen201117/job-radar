@@ -2,6 +2,7 @@ import Navbar from "@/components/Navbar";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import JobLibraryStat from "@/components/JobLibraryStat";
 import { createServerSupabase } from "@/lib/auth";
+import { jobsStoreEnabled, listLatestActive, countValidActive } from "@/lib/jobs-store/read";
 import { sortAndFilterJobs } from "@/lib/scoring";
 import type { Job, UserPreferences, JobAction, ScoredJob } from "@/lib/types";
 import JobsClient from "./jobs-client";
@@ -34,6 +35,11 @@ const PAGE1 = 60;
 async function fetchFirstPageAndTotal(
   supabase: Awaited<ReturnType<typeof createServerSupabase>>,
 ): Promise<{ jobs: Job[]; total: number }> {
+  // jobs 已迁自建香港 PG（Phase 1）：配了 JOBS_DATABASE_URL 走 jobs-store；否则回退 Supabase。
+  if (jobsStoreEnabled()) {
+    const [jobs, total] = await Promise.all([listLatestActive(PAGE1), countValidActive()]);
+    return { jobs: (jobs as Job[]) || [], total };
+  }
   const [page, validCount] = await Promise.all([
     supabase
       .from("jobs")

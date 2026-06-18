@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabaseService";
 import { searchJobs } from "@/lib/job-search";
+import { searchJobsStore } from "@/lib/jobs-store/search";
 import { DEFAULT_FILTERS, type Filters } from "@/lib/job-filter";
 import type { JobAction, UserPreferences } from "@/lib/types";
 
@@ -54,10 +55,11 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // jobs 是公开可读表；用 service-role 客户端做大候选读，绕开 anon/authenticated 角色的
-    // statement_timeout（未建索引时全库 ilike/排序会超该超时而失败）。打分用的 prefs/actions 已在上面按用户取。
-    const db = createServiceClient();
-    const result = await searchJobs(db, filters, preferences, actions, offset, limit);
+    // jobs 已迁到自建香港 PG（Phase 1）：配了 JOBS_DATABASE_URL 走 jobs-store（直连香港库，同 FTS/同精筛）；
+    // 否则回退 Supabase service-role 读（本地无 env / 迁移回滚时仍可用）。prefs/actions 仍来自 Supabase。
+    const result = process.env.JOBS_DATABASE_URL
+      ? await searchJobsStore(filters, preferences, actions, offset, limit)
+      : await searchJobs(createServiceClient(), filters, preferences, actions, offset, limit);
     return NextResponse.json({ ok: true, ...result });
   } catch (e: any) {
     return NextResponse.json(
