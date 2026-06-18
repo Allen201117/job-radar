@@ -20,6 +20,7 @@ from urllib.parse import quote
 
 import china_keyword_expansion as cke
 import db
+import jobs_db
 import normalizer
 from adapters.base import RawJob
 from adapters.bytedance import BytedanceAdapter
@@ -325,8 +326,22 @@ class SpaKeywordRecipe:
         }
 
 
+import threading as _threading
+_disc_tls = _threading.local()
+
+
+def _jobs_conn():
+    """Phase 1：每线程独立香港 jobs 库连接（httpx 分档并发时每 worker 一个）。"""
+    c = getattr(_disc_tls, "conn", None)
+    if c is None:
+        c = jobs_db.get_conn()
+        _disc_tls.conn = c
+    return c
+
+
 def _upsert_raw_jobs(supabase, source_id, company, source_url, raw_jobs):
-    """质量门校验 + 归一化 + upsert（镜像 run.py 的入库逻辑）。返回 (created, updated, jd_urls)。"""
+    """质量门校验 + 归一化 + upsert（镜像 run.py 的入库逻辑）。返回 (created, updated, jd_urls)。
+    jobs 写入：配了 JOBS_DATABASE_URL 写香港库（每线程独立连接），否则 Supabase。"""
     created = updated = 0
     urls: List[str] = []
     for raw in raw_jobs:
@@ -362,7 +377,7 @@ def _upsert_raw_jobs(supabase, source_id, company, source_url, raw_jobs):
             "content_hash": content_hash,
             "status": "active",
         }
-        result = db.upsert_job(supabase, job_data)
+        result = jobs_db.upsert_job(_jobs_conn(), job_data) if jobs_db.enabled() else db.upsert_job(supabase, job_data)
         if result == "created":
             created += 1
         else:
