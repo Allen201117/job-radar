@@ -1,48 +1,75 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createBrowserClient } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Broadcast, CheckCircle, MapPin } from "@phosphor-icons/react";
+import { ArrowLeft, ArrowRight, Broadcast, CheckCircle, MapPin } from "@phosphor-icons/react";
+import {
+  mapAuthError,
+  validateEmail,
+  validateOtp,
+  validatePassword,
+} from "@/lib/auth-validation";
 
-// 把 Supabase/GoTrue 的原始英文报错映射成面向用户的友好中文提示，绝不直接抛原始串。
-function mapAuthError(error: { message?: string; status?: number }): string {
-  const raw = (error?.message || "").toLowerCase();
-  if (raw.includes("invalid login credentials")) return "邮箱或密码不正确";
-  if (raw.includes("email not confirmed")) return "邮箱尚未验证，请先点击邮件里的验证链接";
-  if (raw.includes("already registered") || raw.includes("already been registered"))
-    return "该邮箱已注册，请直接登录";
-  if (raw.includes("signups not allowed")) return "注册暂未开放，请联系管理员开通";
-  if (raw.includes("password should be at least")) return "密码至少需要 6 位";
-  if (raw.includes("unable to validate email") || raw.includes("invalid format"))
-    return "邮箱格式不正确";
-  if (raw.includes("rate limit") || raw.includes("for security purposes"))
-    return "操作过于频繁，请稍后再试";
-  if (raw.includes("failed to fetch") || raw.includes("network")) return "网络异常，请检查网络后重试";
-  return "操作失败，请稍后重试";
-}
+// 登录页是一个状态机：邮箱+密码登录之外，新增「验证码注册激活」与「验证码重置密码」两条流程，
+// 全部在本页内走完（不点邮件链接、不跳单独落地页）。校验与报错映射复用 lib/auth-validation.js。
+type Mode =
+  | "signin" // 邮箱+密码登录（默认）
+  | "signup" // 邮箱+密码注册 → 触发发码
+  | "verify-signup" // 输入注册验证码激活
+  | "forgot-email" // 输入邮箱，请求重置验证码
+  | "forgot-code" // 输入重置验证码
+  | "forgot-password"; // 设置新密码
+
+const COPY: Record<Mode, { title: string; subtitle: string }> = {
+  signin: { title: "登录 / 注册", subtitle: "使用邮箱进入今日看板" },
+  signup: { title: "注册账号", subtitle: "用邮箱注册，下一步收取验证码" },
+  "verify-signup": { title: "输入验证码", subtitle: "查收邮箱里的 6 位验证码" },
+  "forgot-email": { title: "找回密码", subtitle: "输入注册邮箱，我们发验证码给你" },
+  "forgot-code": { title: "输入验证码", subtitle: "查收邮箱里的 6 位验证码" },
+  "forgot-password": { title: "设置新密码", subtitle: "为账号设置一个新密码" },
+};
 
 export default function LoginPage() {
+  const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [cooldown, setCooldown] = useState(0); // 重发验证码冷却（秒）
   const router = useRouter();
   const supabase = createBrowserClient();
 
-  // 提交前的本地校验，避免把明显无效的输入打到后端再拿英文报错。
-  function validate(): string | null {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return "请输入有效的邮箱地址";
-    if (password.length < 6) return "密码至少需要 6 位";
-    return null;
+  // 重发冷却倒计时：避免狂点重发撞 Supabase 发信限流。
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = setInterval(() => {
+      setCooldown((c) => (c <= 1 ? 0 : c - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cooldown]);
+
+  // UI 按钮导航切 mode 时清掉残留的提示 + 跨流程瞬态字段（验证码 / 新密码），避免串场：
+  // code 被 verify-signup 与 forgot-code 共用，newPassword/confirmPassword 是敏感字段，
+  // 不清会预填到下一条流程的输入框里。注意「重发」不走 goMode，不受影响。
+  function goMode(next: Mode) {
+    setMode(next);
+    setError("");
+    setMessage("");
+    setCode("");
+    setNewPassword("");
+    setConfirmPassword("");
   }
 
   async function handleSignIn(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setMessage("");
-    const invalid = validate();
+    const invalid = validateEmail(email) || validatePassword(password);
     if (invalid) {
       setError(invalid);
       return;
@@ -54,22 +81,46 @@ export default function LoginPage() {
         password,
       });
       if (error) {
+        // 邮箱未验证 → 转入验证码激活步骤。仅在冷却结束时自动补发一次码（受同一 60s 冷却约束，
+        // 避免「登录失败反复重试」被用来绕过冷却刷信）；真正的发信频率上限靠 Supabase 服务端兜底。
+        if ((error.message || "").toLowerCase().includes("email not confirmed")) {
+          setCode("");
+          if (cooldown > 0) {
+            setMessage("邮箱尚未验证，请输入此前收到的验证码，或用下方「重新发送」。");
+          } else {
+            const { error: resendErr } = await supabase.auth.resend({
+              type: "signup",
+              email: email.trim(),
+            });
+            if (resendErr) {
+              console.error("[auth] signin auto-resend", resendErr);
+              setMessage("邮箱尚未验证。上次验证码可能仍有效，请查收邮箱或稍后用「重新发送」。");
+            } else {
+              setCooldown(60);
+              setMessage("邮箱尚未验证，已重新发送验证码，请查收邮箱。");
+            }
+          }
+          setMode("verify-signup");
+          return;
+        }
         setError(mapAuthError(error));
         return;
       }
       router.push("/today");
       router.refresh();
-    } catch {
+    } catch (err) {
+      console.error("[auth] signin", err);
       setError("网络异常，请检查网络后重试");
     } finally {
       setLoading(false);
     }
   }
 
-  async function handleSignUp() {
+  async function handleSignUp(e: React.FormEvent) {
+    e.preventDefault();
     setError("");
     setMessage("");
-    const invalid = validate();
+    const invalid = validateEmail(email) || validatePassword(password);
     if (invalid) {
       setError(invalid);
       return;
@@ -84,20 +135,207 @@ export default function LoginPage() {
         setError(mapAuthError(error));
         return;
       }
+      // Confirm email 开启时，对「已注册邮箱」GoTrue 返回混淆用户（identities 为空）且不发码 →
+      // 主动识别，提示去登录，避免用户死等一封永远不会到的验证码。
+      if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+        setError("该邮箱已注册，请直接登录");
+        setMode("signin");
+        return;
+      }
       if (data.session) {
-        // 项目关闭了邮箱验证：注册即登录，直接进产品。
+        // Confirm email 关闭：注册即登录（向后兼容旧行为）。
         router.push("/today");
         router.refresh();
-      } else {
-        // 项目仍开启邮箱验证：提示去邮箱激活。
-        setMessage("注册成功，请到邮箱点击验证链接后再登录。");
+        return;
       }
-    } catch {
+      // Confirm email 开启：signUp 已自动发码 → 进输码步骤。
+      setCooldown(60);
+      setMessage("验证码已发送到你的邮箱，请查收（也看看垃圾箱）。");
+      setMode("verify-signup");
+    } catch (err) {
+      console.error("[auth] signup", err);
       setError("网络异常，请检查网络后重试");
     } finally {
       setLoading(false);
     }
   }
+
+  async function handleVerifySignup(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+    const invalid = validateOtp(code);
+    if (invalid) {
+      setError(invalid);
+      return;
+    }
+    setLoading(true);
+    try {
+      // type:'email' 是 SDK 当前推荐、且对 signUp 未确认邮箱 OTP 与 'signup' 等价的校验类型
+      //（'signup' 已被 auth-js 标 deprecated）。重发仍用 resend({type:'signup'})，职责不同。
+      const { error } = await supabase.auth.verifyOtp({
+        email: email.trim(),
+        token: code.trim(),
+        type: "email",
+      });
+      if (error) {
+        setError(mapAuthError(error));
+        return;
+      }
+      router.push("/today");
+      router.refresh();
+    } catch (err) {
+      console.error("[auth] verify-signup", err);
+      setError("网络异常，请检查网络后重试");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleForgotEmail(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+    const invalid = validateEmail(email);
+    if (invalid) {
+      setError(invalid);
+      return;
+    }
+    setLoading(true);
+    try {
+      // 防枚举：对不存在的邮箱 resetPasswordForEmail 也返回成功 → 一律进入输码步骤。
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+      if (error) {
+        setError(mapAuthError(error));
+        return;
+      }
+      setCooldown(60);
+      setMessage("如果该邮箱已注册，验证码已发送，请查收。");
+      setMode("forgot-code");
+    } catch (err) {
+      console.error("[auth] forgot-email", err);
+      setError("网络异常，请检查网络后重试");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleForgotCode(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+    const invalid = validateOtp(code);
+    if (invalid) {
+      setError(invalid);
+      return;
+    }
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.verifyOtp({
+        email: email.trim(),
+        token: code.trim(),
+        type: "recovery",
+      });
+      if (error) {
+        setError(mapAuthError(error));
+        return;
+      }
+      // verifyOtp(recovery) 成功即建立 recovery session，可直接改密码。
+      setMode("forgot-password");
+    } catch (err) {
+      console.error("[auth] forgot-code", err);
+      setError("网络异常，请检查网络后重试");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleResetPassword(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+    const invalid = validatePassword(newPassword);
+    if (invalid) {
+      setError(invalid);
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError("两次输入的密码不一致");
+      return;
+    }
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) {
+        setError(mapAuthError(error));
+        return;
+      }
+      router.push("/today");
+      router.refresh();
+    } catch (err) {
+      console.error("[auth] reset-password", err);
+      setError("网络异常，请检查网络后重试");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // 重发验证码：注册流用 resend(signup)，重置流用 resetPasswordForEmail。
+  async function handleResend() {
+    if (cooldown > 0 || loading) return;
+    setError("");
+    setMessage("");
+    setLoading(true);
+    try {
+      const { error } =
+        mode === "verify-signup"
+          ? await supabase.auth.resend({ type: "signup", email: email.trim() })
+          : await supabase.auth.resetPasswordForEmail(email.trim());
+      if (error) {
+        setError(mapAuthError(error));
+        return;
+      }
+      setCooldown(60);
+      setMessage("验证码已重新发送。");
+    } catch (err) {
+      console.error("[auth] resend", err);
+      setError("网络异常，请检查网络后重试");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const copy = COPY[mode];
+  const alerts = (
+    <>
+      {error && (
+        <p className="rounded-2xl border border-[#e0b4ac] bg-[#f7e6e1] px-4 py-2.5 text-[13px] text-[#9c4a3c]">
+          {error}
+        </p>
+      )}
+      {message && (
+        <p className="rounded-2xl border border-[#b9cfb0] bg-[#eef4e8] px-4 py-2.5 text-[13px] text-[#4a6b3c]">
+          {message}
+        </p>
+      )}
+    </>
+  );
+
+  // 验证码步骤共用的「发往哪个邮箱 + 重发」尾部。
+  const codeFooter = (
+    <p className="text-center text-[12px] text-[#9a9184]">
+      验证码已发至 <span className="font-medium text-[#5f594e]">{email || "你的邮箱"}</span>
+      {" · "}
+      <button
+        type="button"
+        onClick={handleResend}
+        disabled={cooldown > 0 || loading}
+        className="font-medium text-[#1a1714] underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:text-[#b8b1a4] disabled:no-underline"
+      >
+        {cooldown > 0 ? `重新发送 (${cooldown}s)` : "重新发送"}
+      </button>
+    </p>
+  );
 
   return (
     <main className="bg-editorial grain relative min-h-screen overflow-hidden text-[#1a1714]">
@@ -222,72 +460,266 @@ export default function LoginPage() {
               </span>
             </div>
             <h2 className="mt-6 text-[1.45rem] font-semibold leading-tight text-[#1a1714]">
-              登录 / 注册
+              {copy.title}
             </h2>
-            <p className="mt-1.5 text-[14px] text-[#8a8275]">使用邮箱进入今日看板</p>
+            <p className="mt-1.5 text-[14px] text-[#8a8275]">{copy.subtitle}</p>
 
-            <form className="mt-6 space-y-4" onSubmit={handleSignIn}>
-              <div>
-                <label
-                  htmlFor="email"
-                  className="mb-1.5 block text-[13px] font-medium text-[#5f594e]"
-                >
-                  邮箱
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="field-editorial"
-                  placeholder="you@example.com"
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="password"
-                  className="mb-1.5 block text-[13px] font-medium text-[#5f594e]"
-                >
-                  密码
-                </label>
-                <input
-                  id="password"
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="field-editorial"
-                  placeholder="至少 6 位"
-                />
-              </div>
+            {/* —— 登录 —— */}
+            {mode === "signin" && (
+              <form className="mt-6 space-y-4" onSubmit={handleSignIn}>
+                <div>
+                  <label htmlFor="email" className="mb-1.5 block text-[13px] font-medium text-[#5f594e]">
+                    邮箱
+                  </label>
+                  <input
+                    id="email"
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="field-editorial"
+                    placeholder="you@example.com"
+                  />
+                </div>
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <label htmlFor="password" className="block text-[13px] font-medium text-[#5f594e]">
+                      密码
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => goMode("forgot-email")}
+                      className="text-[12px] font-medium text-[#8a8275] hover:text-[#1a1714]"
+                    >
+                      忘记密码？
+                    </button>
+                  </div>
+                  <input
+                    id="password"
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="field-editorial"
+                    placeholder="至少 6 位"
+                  />
+                </div>
+                {alerts}
+                <div className="flex gap-2.5 pt-1">
+                  <button type="submit" disabled={loading} className="btn-ink flex-1">
+                    {loading ? "登录中…" : "登录"}
+                    <ArrowRight size={16} weight="bold" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => goMode("signup")}
+                    className="btn-ghost"
+                  >
+                    注册
+                  </button>
+                </div>
+              </form>
+            )}
 
-              {error && (
-                <p className="rounded-2xl border border-[#e0b4ac] bg-[#f7e6e1] px-4 py-2.5 text-[13px] text-[#9c4a3c]">
-                  {error}
-                </p>
-              )}
-              {message && (
-                <p className="rounded-2xl border border-[#b9cfb0] bg-[#eef4e8] px-4 py-2.5 text-[13px] text-[#4a6b3c]">
-                  {message}
-                </p>
-              )}
-
-              <div className="flex gap-2.5 pt-1">
-                <button type="submit" disabled={loading} className="btn-ink flex-1">
-                  {loading ? "登录中…" : "登录"}
+            {/* —— 注册 —— */}
+            {mode === "signup" && (
+              <form className="mt-6 space-y-4" onSubmit={handleSignUp}>
+                <div>
+                  <label htmlFor="signup-email" className="mb-1.5 block text-[13px] font-medium text-[#5f594e]">
+                    邮箱
+                  </label>
+                  <input
+                    id="signup-email"
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="field-editorial"
+                    placeholder="you@example.com"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="signup-password" className="mb-1.5 block text-[13px] font-medium text-[#5f594e]">
+                    设置密码
+                  </label>
+                  <input
+                    id="signup-password"
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="field-editorial"
+                    placeholder="至少 6 位"
+                  />
+                </div>
+                {alerts}
+                <button type="submit" disabled={loading} className="btn-ink w-full">
+                  {loading ? "发送中…" : "注册并获取验证码"}
                   <ArrowRight size={16} weight="bold" aria-hidden="true" />
                 </button>
                 <button
                   type="button"
-                  disabled={loading}
-                  onClick={handleSignUp}
-                  className="btn-ghost"
+                  onClick={() => goMode("signin")}
+                  className="flex w-full items-center justify-center gap-1 text-[13px] text-[#8a8275] hover:text-[#1a1714]"
                 >
-                  注册
+                  <ArrowLeft size={14} weight="bold" aria-hidden="true" />
+                  返回登录
                 </button>
-              </div>
-            </form>
+              </form>
+            )}
+
+            {/* —— 注册验证码 —— */}
+            {mode === "verify-signup" && (
+              <form className="mt-6 space-y-4" onSubmit={handleVerifySignup}>
+                <div>
+                  <label htmlFor="signup-code" className="mb-1.5 block text-[13px] font-medium text-[#5f594e]">
+                    6 位验证码
+                  </label>
+                  <input
+                    id="signup-code"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    required
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                    className="field-editorial text-center text-lg tracking-[0.5em]"
+                    placeholder="______"
+                  />
+                </div>
+                {alerts}
+                <button type="submit" disabled={loading} className="btn-ink w-full">
+                  {loading ? "验证中…" : "验证并登录"}
+                  <ArrowRight size={16} weight="bold" aria-hidden="true" />
+                </button>
+                {codeFooter}
+                <button
+                  type="button"
+                  onClick={() => goMode("signin")}
+                  className="flex w-full items-center justify-center gap-1 text-[13px] text-[#8a8275] hover:text-[#1a1714]"
+                >
+                  <ArrowLeft size={14} weight="bold" aria-hidden="true" />
+                  返回登录
+                </button>
+              </form>
+            )}
+
+            {/* —— 忘记密码：输邮箱 —— */}
+            {mode === "forgot-email" && (
+              <form className="mt-6 space-y-4" onSubmit={handleForgotEmail}>
+                <div>
+                  <label htmlFor="forgot-email" className="mb-1.5 block text-[13px] font-medium text-[#5f594e]">
+                    注册邮箱
+                  </label>
+                  <input
+                    id="forgot-email"
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="field-editorial"
+                    placeholder="you@example.com"
+                  />
+                </div>
+                {alerts}
+                <button type="submit" disabled={loading} className="btn-ink w-full">
+                  {loading ? "发送中…" : "发送验证码"}
+                  <ArrowRight size={16} weight="bold" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => goMode("signin")}
+                  className="flex w-full items-center justify-center gap-1 text-[13px] text-[#8a8275] hover:text-[#1a1714]"
+                >
+                  <ArrowLeft size={14} weight="bold" aria-hidden="true" />
+                  返回登录
+                </button>
+              </form>
+            )}
+
+            {/* —— 忘记密码：输验证码 —— */}
+            {mode === "forgot-code" && (
+              <form className="mt-6 space-y-4" onSubmit={handleForgotCode}>
+                <div>
+                  <label htmlFor="forgot-code" className="mb-1.5 block text-[13px] font-medium text-[#5f594e]">
+                    6 位验证码
+                  </label>
+                  <input
+                    id="forgot-code"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    required
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                    className="field-editorial text-center text-lg tracking-[0.5em]"
+                    placeholder="______"
+                  />
+                </div>
+                {alerts}
+                <button type="submit" disabled={loading} className="btn-ink w-full">
+                  {loading ? "验证中…" : "下一步"}
+                  <ArrowRight size={16} weight="bold" aria-hidden="true" />
+                </button>
+                {codeFooter}
+                <button
+                  type="button"
+                  onClick={() => goMode("signin")}
+                  className="flex w-full items-center justify-center gap-1 text-[13px] text-[#8a8275] hover:text-[#1a1714]"
+                >
+                  <ArrowLeft size={14} weight="bold" aria-hidden="true" />
+                  返回登录
+                </button>
+              </form>
+            )}
+
+            {/* —— 忘记密码：设新密码 —— */}
+            {mode === "forgot-password" && (
+              <form className="mt-6 space-y-4" onSubmit={handleResetPassword}>
+                <div>
+                  <label htmlFor="new-password" className="mb-1.5 block text-[13px] font-medium text-[#5f594e]">
+                    新密码
+                  </label>
+                  <input
+                    id="new-password"
+                    type="password"
+                    required
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="field-editorial"
+                    placeholder="至少 6 位"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="confirm-password" className="mb-1.5 block text-[13px] font-medium text-[#5f594e]">
+                    确认新密码
+                  </label>
+                  <input
+                    id="confirm-password"
+                    type="password"
+                    required
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="field-editorial"
+                    placeholder="再输一次"
+                  />
+                </div>
+                {alerts}
+                <button type="submit" disabled={loading} className="btn-ink w-full">
+                  {loading ? "保存中…" : "设置新密码并登录"}
+                  <ArrowRight size={16} weight="bold" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => goMode("signin")}
+                  className="flex w-full items-center justify-center gap-1 text-[13px] text-[#8a8275] hover:text-[#1a1714]"
+                >
+                  <ArrowLeft size={14} weight="bold" aria-hidden="true" />
+                  返回登录
+                </button>
+              </form>
+            )}
           </div>
 
           <p className="mt-5 flex items-center justify-center gap-1.5 text-center text-[12px] leading-5 text-[#9a9184]">
