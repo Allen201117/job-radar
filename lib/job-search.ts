@@ -66,7 +66,7 @@ function termClause(term: string): string | null {
 
 // 构造 tsquery：关键词候选词「组内 OR」，再与 城市/公司 等「过滤词 AND」。全空返回 null（→走浏览/扫描）。
 // 中文出 bigram、英文出整词，两者选择性都好 → 中英文标题同时命中且快（v2，title 锚定，不再丢英文）。
-function buildTsquery(keywordTerms: string[], andTerms: string[]): string | null {
+export function buildTsquery(keywordTerms: string[], andTerms: string[]): string | null {
   const clauses: string[] = [];
 
   const kwClauses = keywordTerms.map(termClause).filter((c): c is string => !!c);
@@ -80,7 +80,7 @@ function buildTsquery(keywordTerms: string[], andTerms: string[]): string | null
   return clauses.length ? clauses.join(" & ") : null;
 }
 
-function annotateAndRank(
+export function annotateAndRank(
   rows: any[],
   filters: Filters,
   prefs: UserPreferences | null,
