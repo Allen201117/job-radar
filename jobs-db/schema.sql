@@ -118,6 +118,26 @@ returns bigint language sql stable as $function$
     and char_length(btrim(summary)) >= 60;
 $function$;
 
+-- ── 搜索/公司面板读用 RPC（从生产忠实重建；app jobs-store 用 select * from fn() 调）──
+create or replace function active_companies()
+returns table(company text) language sql stable
+set search_path to 'public' as $function$
+  select j.company
+  from public.jobs j
+  where j.status = 'active' and j.company is not null and j.company <> ''
+  group by j.company
+  order by j.company
+$function$;
+
+create or replace function active_job_counts_by_company()
+returns table(company text, job_count integer) language sql stable
+set search_path to 'public' as $function$
+  select j.company, count(*)::int as job_count
+  from public.jobs j
+  where j.status = 'active' and j.company is not null and j.company <> ''
+  group by j.company
+$function$;
+
 -- ── 索引（btree，从生产忠实重建）──
 create index if not exists idx_jobs_company                 on jobs (company);
 create index if not exists idx_jobs_enrich_queue            on jobs (first_seen_at desc) where status = 'active' and summary is null and enrich_fail_count < 3;
