@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 
 import db
 import enrich
+import jobs_db
 import normalizer
 
 # P1 = httpx 类（无浏览器、可高并发）。browser 类（beisen/moka/feishu）P2 单独 shard。
@@ -55,18 +56,32 @@ def _thread_sb(make_sb):
     return sb
 
 
+def _thread_jobs_conn(make_jobs_conn):
+    """Phase 1：每线程独立香港 jobs 库连接（psycopg2 连接非线程安全）。"""
+    conn = getattr(_TLS, "jobs_conn", None)
+    if conn is None:
+        conn = make_jobs_conn()
+        _TLS.jobs_conn = conn
+    return conn
+
+
 def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def fetch_queue(sb, adapters, limit=0):
+def fetch_queue(sb, adapters, limit=0, jobs_conn=None):
     """取队列：这些 adapter 下 active + 空 summary + enrich_fail_count<MAX_FAIL 的岗，按最新优先。
-    返回 (rows, smap)。"""
+    返回 (rows, smap)。sources 永远走 Supabase；jobs 在 jobs_conn(香港库) 给定时直连查，否则 Supabase。"""
     srcs = (sb.table("sources").select("id,company,source_url,adapter_name")
             .in_("adapter_name", list(adapters)).execute().data) or []
     smap = {s["id"]: s for s in srcs}
     if not smap:
         return [], smap
+    if jobs_conn is not None:
+        sql = ("select id, source_id, title, jd_url, job_type, enrich_fail_count from jobs "
+               "where source_id = any(%s::uuid[]) and summary is null and status='active' and enrich_fail_count < %s "
+               "order by source_id, first_seen_at desc" + (f" limit {int(limit)}" if limit else ""))
+        return jobs_db.fetch_all(jobs_conn, sql, (list(smap.keys()), MAX_FAIL)), smap
     rows = []
     page = 0
     while True:
@@ -92,9 +107,10 @@ def fetch_queue(sb, adapters, limit=0):
     return rows, smap
 
 
-def fetch_liveness_queue(sb, adapters, limit=0):
+def fetch_liveness_queue(sb, adapters, limit=0, jobs_conn=None):
     """死活巡检队列：这些 adapter 下**所有** active 岗（不限空 summary），按 enrich_checked_at 最旧优先
     （从未复检的 NULL 最先）轮转复检——逐岗 detail 探活，撤岗信号 → expired。返回 (rows, smap)。
+    sources 走 Supabase；jobs 在 jobs_conn(香港库) 给定时直连查，否则 Supabase。
 
     与 fetch_queue（只取空 summary 的富化 backlog）区别：巡检覆盖**已有正文**的存量岗，
     这些岗 fetch_queue 永远碰不到，正是「岗位关闭后没人下架」的死角（尤以 wt/hotjob 量大）。
@@ -107,6 +123,11 @@ def fetch_liveness_queue(sb, adapters, limit=0):
     smap = {s["id"]: s for s in srcs}
     if not smap:
         return [], smap
+    if jobs_conn is not None:
+        sql = ("select id, source_id, title, jd_url, job_type, summary, enrich_fail_count from jobs "
+               "where source_id = any(%s::uuid[]) and status='active' "
+               "order by source_id, enrich_checked_at asc nulls first" + (f" limit {int(limit)}" if limit else ""))
+        return jobs_db.fetch_all(jobs_conn, sql, (list(smap.keys()),)), smap
     rows = []
     page = 0
     while True:
@@ -129,8 +150,9 @@ def fetch_liveness_queue(sb, adapters, limit=0):
     return rows, smap
 
 
-def enrich_row(sb, row, src, dry_run=False):
+def enrich_row(sb, row, src, dry_run=False, jobs_conn=None):
     """富化单行并回写。返回 'filled' | 'alive' | 'miss' | 'expired' | 'err'。永不抛。
+    jobs_conn 给定时写库走香港 PG（jobs_db），否则走 Supabase（sb）。
     - 'expired'：fetcher 报源站已撤岗（JobClosedError，如 hotjob state=1017）→ 置 status='expired'，
       不再当死信富化（这类「假 active」岗永远补不到 summary 且污染岗位库）。
     - 'miss'：无正文 / 网络异常 → enrich_fail_count+1（网络错误走重试，不 expired）。"""
@@ -167,21 +189,29 @@ def enrich_row(sb, row, src, dry_run=False):
     if dry_run:
         return result
     try:
-        sb.table("jobs").update(patch).eq("id", row["id"]).execute()
+        if jobs_conn is not None:
+            cols = list(patch.keys())
+            set_clause = ", ".join(f"{c} = %s" for c in cols)
+            jobs_db.execute(jobs_conn, f"update jobs set {set_clause} where id = %s",
+                            [patch[c] for c in cols] + [row["id"]])
+        else:
+            sb.table("jobs").update(patch).eq("id", row["id"]).execute()
     except Exception:
         return "err"  # 写库失败（Errno35 等瞬时错误）→ 不抛，该行留队列下轮重试
     return result
 
 
-def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, per_host=PER_HOST, sweep=False):
-    """sb 用于单线程取队列；写库走每线程独立客户端（make_sb 工厂，默认 db.get_supabase）防 Errno35。
-    per_host = 单 host 并发上限（防限流，hotjob 等单 host 源关键）。
+def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, per_host=PER_HOST, sweep=False, make_jobs_conn=None):
+    """sb：取 sources（Supabase）。jobs 读写：配了 JOBS_DATABASE_URL 走香港 PG（每线程独立连接防并发），
+    否则走 Supabase（每线程独立 sb 防 Errno35）。per_host=单 host 并发上限（防限流，hotjob 等单 host 关键）。
     sweep=True：死活巡检（复检所有 active 岗、撤岗置 expired）；否则只富化空 summary 的 backlog。
-    巡检仅覆盖 HTTPX_ADAPTERS（含 wt/hotjob）；browser 类（beisen/moka/feishu）的死活检测为 P2 未实现。
-    每岗任一结果（filled/alive/miss/expired）都推进 enrich_checked_at → 轮转复检，杜绝失败岗卡队首阻塞巡检。"""
+    巡检仅覆盖 HTTPX_ADAPTERS（含 wt/hotjob）。每岗任一结果都推进 enrich_checked_at → 轮转复检。"""
     make_sb = make_sb or db.get_supabase
+    use_jobs = jobs_db.enabled()
+    make_jobs_conn = make_jobs_conn or (jobs_db.get_conn if use_jobs else None)
+    fetch_conn = make_jobs_conn() if use_jobs else None  # 单线程取队列用的香港库连接
     adapters = (adapter,) if adapter else HTTPX_ADAPTERS
-    rows, smap = (fetch_liveness_queue if sweep else fetch_queue)(sb, adapters, limit)
+    rows, smap = (fetch_liveness_queue if sweep else fetch_queue)(sb, adapters, limit, jobs_conn=fetch_conn)
     print(f"{'死活巡检' if sweep else '富化队列'}（httpx 类，adapter={adapter or '全部'}）：{len(rows)}")
     if not rows:
         return {"filled": 0, "alive": 0, "miss": 0, "expired": 0, "err": 0}
@@ -199,7 +229,10 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
         host = urlparse((src or {}).get("source_url") or "").netloc
         try:
             with _host_sem(host, per_host):  # 按 host 限并发，防单 host 被打到限流
-                res = enrich_row(_thread_sb(make_sb), row, src, dry_run)
+                if use_jobs:
+                    res = enrich_row(None, row, src, dry_run, jobs_conn=_thread_jobs_conn(make_jobs_conn))
+                else:
+                    res = enrich_row(_thread_sb(make_sb), row, src, dry_run)
         except Exception:
             res = "err"  # 兜底：任何意外都不许炸穿 ex.map（否则掀翻整批，本 drain 实锤过）
         with lock:
