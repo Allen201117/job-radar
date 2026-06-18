@@ -1,0 +1,47 @@
+name: jobs-db-data-migrate
+
+# Phase 1（一次性）：把 Supabase 的 jobs 表全部数据迁到自建香港库（pg_dump --data-only | psql）。
+# 前提：jobs-db-migrate 已建好空表 schema。两库同为 PG17。canonical 触发器在 COPY 时会重算（同值，无害）。
+# 不幂等（重复跑会撞主键/唯一键）→ 重跑请勾 truncate_first。
+on:
+  workflow_dispatch:
+    inputs:
+      truncate_first:
+        description: "迁移前先 TRUNCATE 香港 jobs（重跑用；首次填 false）"
+        required: false
+        default: "false"
+
+jobs:
+  migrate-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Install pg client 17 (PGDG)
+        run: |
+          sudo apt-get update && sudo apt-get install -y curl ca-certificates
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update && sudo apt-get install -y postgresql-client-17
+      - name: Dump Supabase jobs → load into HK
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+        run: |
+          if [ -z "${SUPABASE_DB_URL:-}" ] || [ -z "${JOBS_DATABASE_URL:-}" ]; then
+            echo "::error::缺 SUPABASE_DB_URL 或 JOBS_DATABASE_URL secret。"; exit 1
+          fi
+          P=/usr/lib/postgresql/17/bin
+          if [ "${{ github.event.inputs.truncate_first }}" = "true" ]; then
+            echo "=== TRUNCATE 香港 jobs（重跑）==="
+            $P/psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -c "truncate table jobs;"
+          fi
+          echo "=== 源(Supabase) rowcount ==="; $P/psql "$SUPABASE_DB_URL" -tAc "select count(*) from jobs;"
+          echo "=== dump --data-only jobs | 灌入香港库 ==="
+          $P/pg_dump --data-only --no-owner -t public.jobs "$SUPABASE_DB_URL" | $P/psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 --single-transaction
+          echo "=== 香港库迁移后 rowcount + 分布 ==="
+          $P/psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off \
+            -c "select count(*) as total from jobs;" \
+            -c "select status, count(*) from jobs group by status order by count(*) desc;" \
+            -c "select count(*) filter (where canonical_jd_url is not null) as has_canonical from jobs;"
+          echo "[jobs-db-data-migrate] done."
