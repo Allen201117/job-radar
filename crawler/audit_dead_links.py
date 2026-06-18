@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import db
+import jobs_db
 from playwright.sync_api import sync_playwright
 
 
@@ -65,7 +66,7 @@ def host_of(u):
         return None
 
 
-def fetch_browser_liveness(sb, limit, shard="0/1", host_filter=None):
+def fetch_browser_liveness(sb, limit, shard="0/1", host_filter=None, jobs_conn=None):
     """死活巡检队列（取代旧「全库深翻页抽样」fetch_sample）。
 
     旧法弊端：count(exact)+10 个 0~90% 偏移窗口抽样 → 深 OFFSET(0.9×13万)在大表上撞 statement_timeout、
@@ -79,8 +80,19 @@ def fetch_browser_liveness(sb, limit, shard="0/1", host_filter=None):
                ((sb.table("sources").select("id").in_("adapter_name", list(_BROWSER_ADAPTERS)).execute().data) or [])]
     if not src_ids:
         return []
-    rows, page = [], 1000
     want = limit * n + 100  # 多取一些，shard 切片后仍够 limit
+    # jobs 已迁香港库：jobs_conn 给定时直连查；否则 Supabase 分页。
+    if jobs_conn is not None:
+        rows = jobs_db.fetch_all(
+            jobs_conn,
+            "select id, title, company, jd_url from jobs where source_id = any(%s::uuid[]) and status='active' "
+            "order by source_id, enrich_checked_at asc nulls first limit %s",
+            (src_ids, want),
+        )
+        if host_filter:
+            rows = [r for r in rows if host_filter in (host_of(r.get("jd_url")) or "")]
+        return [r for i, r in enumerate(rows) if i % n == k][:limit]
+    rows, page = [], 1000
     for offset in range(0, 60000, page):
         chunk = (sb.table("jobs").select("id,title,company,jd_url")
                  .in_("source_id", src_ids).eq("status", "active")
@@ -118,11 +130,18 @@ def main():
     limit = int(arg("--limit", "1500"))   # 单 shard 单轮渲染上限，控 CI 时长（~3s/岗）
     shard = arg("--shard", "0/1")          # k/n 多进程并行互不重叠
     sweep_kw = arg("--sweep")  # 对「source_url 含 kw 的源」做全量逐岗审计，配 --apply 精确下架其失效岗
-    sb = db.get_supabase()
+    sb = db.get_supabase()                                       # sources 走 Supabase
+    jobs_conn = jobs_db.get_conn() if jobs_db.enabled() else None  # jobs 读写走香港库（Phase 1）
     if sweep_kw:
         srcs = sb.table("sources").select("id,company").ilike("source_url", "%" + sweep_kw + "%").execute().data or []
         sample = []
         for s in srcs:
+            if jobs_conn is not None:
+                sample.extend(jobs_db.fetch_all(
+                    jobs_conn,
+                    "select id, title, company, jd_url from jobs where status='active' and source_id = %s::uuid",
+                    (s["id"],)))
+                continue
             off = 0
             while True:
                 rows = (sb.table("jobs").select("id,title,company,jd_url")
@@ -136,7 +155,7 @@ def main():
         print(f"[SWEEP] 源含「{sweep_kw}」共 {len(srcs)} 个，全量逐岗 {len(sample)} 条")
     else:
         # 默认=浏览器源死活巡检轮转（enrich_checked_at 最旧优先，取代旧深翻页抽样）。
-        sample = fetch_browser_liveness(sb, limit, shard, host_filter)
+        sample = fetch_browser_liveness(sb, limit, shard, host_filter, jobs_conn=jobs_conn)
         print(f"[巡检] 浏览器源({'/'.join(_BROWSER_ADAPTERS)}) shard {shard} 认领 {len(sample)}（limit={limit}）")
     print(f"待渲染 {len(sample)} 条；模式={'APPLY(dead→expired + 盖巡检时间戳)' if apply else 'DRY-RUN(只报告)'}\n")
 
@@ -151,7 +170,13 @@ def main():
         if dead:
             patch["status"] = "expired"
         try:
-            sb.table("jobs").update(patch).eq("id", jid).execute()
+            if jobs_conn is not None:
+                cols = list(patch.keys())
+                set_clause = ", ".join(f"{c} = %s" for c in cols)
+                jobs_db.execute(jobs_conn, f"update jobs set {set_clause} where id = %s::uuid",
+                                [patch[c] for c in cols] + [jid])
+            else:
+                sb.table("jobs").update(patch).eq("id", jid).execute()
             if dead:
                 apply_ok[0] += 1
         except Exception as e:
