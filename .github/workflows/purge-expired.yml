@@ -1,0 +1,41 @@
+name: purge-expired
+
+# 方针（2026-06-18 定）：expired 死岗 = sweep/dead-link-audit 逐岗探活**确认撤岗**（404 / hotjob state=1017 /
+# wt req_state=9501 / SPA dead marker）→ **永久删除、不保留**，持续回收空间，防 expired 物理累积把库撑过 500MB。
+#   · 只删 status='expired'（确认死）；status='removed'（抓取漏看、可复活）保留不动。
+#   · job_actions.job_id ON DELETE CASCADE 连带删（用户对已撤岗的收藏本就无意义）。
+#   · DELETE + 普通 VACUUM(ANALYZE)：释放行空间进表内空闲列表供新岗复用 + 刷新统计；**不每日 VACUUM FULL**
+#     （避免每日锁表）。db_size 真正还盘缩小由 maintenance-vacuum -f full=true 按需手动跑（删大批后）。
+# 复用 db-migrate 的 SUPABASE_DB_URL secret（直连 5432，psql 自动逐句提交故 VACUUM 可跑）。
+
+on:
+  schedule:
+    - cron: "30 2 * * *"   # 每日 UTC 02:30，错开 daily-crawl(0:00)/purge 与抓取/巡检
+  workflow_dispatch:
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Purge expired jobs + vacuum
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "::error::SUPABASE_DB_URL secret 未配置（与 db-migrate 同一个）。"
+            exit 1
+          fi
+          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -P pager=off <<'SQL'
+          set statement_timeout = '1800s';
+          \echo '=== 删除前 expired 计数 ==='
+          select count(*) as expired_before from jobs where status = 'expired';
+          delete from jobs where status = 'expired';
+          \echo '=== VACUUM (ANALYZE) jobs（释放行空间供复用，非 FULL 不缩 db_size）==='
+          vacuum (analyze) jobs;
+          \echo '=== 剩余 status 分布 ==='
+          select status, count(*) from jobs group by status order by count(*) desc;
+          SQL
+          echo "[purge-expired] done."
