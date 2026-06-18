@@ -49,6 +49,26 @@ def get_conn():
     return conn
 
 
+def enabled() -> bool:
+    """配了 JOBS_DATABASE_URL 即用自建香港库；否则各 consumer 回退 Supabase。"""
+    _load_env()
+    return bool(os.environ.get("JOBS_DATABASE_URL"))
+
+
+def fetch_all(conn, sql, params=None) -> list:
+    """只读查询 → dict 行列表（供爬虫各 consumer 写自己的 jobs SQL；sources/crawl_runs 仍走 Supabase）。"""
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(sql, params or ())
+        return [dict(r) for r in cur.fetchall()]
+
+
+def execute(conn, sql, params=None) -> int:
+    """写语句 → 受影响行数。"""
+    with conn.cursor() as cur:
+        cur.execute(sql, params or ())
+        return cur.rowcount
+
+
 def _now():
     return datetime.now(timezone.utc)
 

@@ -14,6 +14,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 import db
+import jobs_db
 import normalizer
 from robots import check_robots
 from adapters.apple import AppleAdapter, AppleChinaAdapter
@@ -146,6 +147,13 @@ def _get_thread_supabase():
     if not hasattr(_TLS, "sb"):
         _TLS.sb = db.get_supabase()
     return _TLS.sb
+
+
+def _get_thread_jobs_conn():
+    """Phase 1：每线程独立的自建香港 jobs 库连接（psycopg2 连接非线程安全，须每线程一个）。"""
+    if not hasattr(_TLS, "jobs_conn"):
+        _TLS.jobs_conn = jobs_db.get_conn()
+    return _TLS.jobs_conn
 
 
 def _group_by_host(sources):
@@ -288,7 +296,11 @@ def _process_one_source(source, supabase) -> dict:
 
             job_batch.append(job_data)
 
-        created, updated = db.upsert_jobs_batch(supabase, job_batch)
+        # jobs 已迁自建香港 PG（Phase 1）：配了 JOBS_DATABASE_URL 写香港库；否则写 Supabase。
+        if jobs_db.enabled():
+            created, updated = jobs_db.upsert_jobs_batch(_get_thread_jobs_conn(), job_batch)
+        else:
+            created, updated = db.upsert_jobs_batch(supabase, job_batch)
 
         # 6. update source timestamp
         db.update_source_timestamp(supabase, source_id)
