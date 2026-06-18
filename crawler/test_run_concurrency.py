@@ -10,6 +10,21 @@ import unittest
 import run
 from adapters.base import RawJob
 
+# Phase 1：本文件的并发/分片测试全打 db(Supabase) mock 路径，强制 jobs_db 关闭——否则 .env.local 的
+# JOBS_DATABASE_URL 会让 run.py 走香港库真连，破坏 mock。jobs_db 写层本身有独立 smoke 验证。
+_orig_jobs_enabled = None
+
+
+def setUpModule():
+    global _orig_jobs_enabled
+    _orig_jobs_enabled = run.jobs_db.enabled
+    run.jobs_db.enabled = lambda: False
+
+
+def tearDownModule():
+    if _orig_jobs_enabled is not None:
+        run.jobs_db.enabled = _orig_jobs_enabled
+
 
 class IsHttpxSafeTest(unittest.TestCase):
     def test_httpx_adapters_true(self):
