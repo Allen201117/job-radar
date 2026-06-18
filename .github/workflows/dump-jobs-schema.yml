@@ -1,7 +1,6 @@
 name: dump-jobs-schema
 
-# 一次性（Phase 1 迁库用）：从 Supabase 导出 jobs 表的精确 DDL（列/索引/触发器），
-# 用于在自建香港 Postgres 上忠实重建。只读、不改库。复用 db-migrate 的 SUPABASE_DB_URL。
+# 一次性（Phase 1 迁库用）：从 Supabase(PG17) 导出 jobs 表精确 DDL，在自建香港 Postgres 忠实重建。只读。
 on:
   workflow_dispatch:
 
@@ -9,17 +8,22 @@ jobs:
   dump:
     runs-on: ubuntu-latest
     steps:
-      - name: Install pg client 16
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Install pg client 17 (PGDG)
+        run: |
+          sudo apt-get update && sudo apt-get install -y curl ca-certificates
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update && sudo apt-get install -y postgresql-client-17
       - name: Dump jobs schema
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           if [ -z "${SUPABASE_DB_URL:-}" ]; then echo "::error::SUPABASE_DB_URL 未配置"; exit 1; fi
           echo "========== CREATE TABLE jobs (+indexes/triggers) =========="
-          pg_dump --schema-only --no-owner --no-privileges -t public.jobs "$SUPABASE_DB_URL"
+          /usr/lib/postgresql/17/bin/pg_dump --schema-only --no-owner --no-privileges -t public.jobs "$SUPABASE_DB_URL"
           echo "========== function bodies =========="
-          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -P pager=off \
+          /usr/lib/postgresql/17/bin/psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -P pager=off \
             -c "\sf canonicalize_jd_url" \
             -c "\sf count_valid_active_jobs" 2>&1 || true
           echo "[dump-jobs-schema] done."
