@@ -23,6 +23,10 @@ jobs:
           fi
           psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -P pager=off <<'SQL'
           set statement_timeout = '600s';
+          \echo '=== 0. 库容量（Supabase Free 上限 500MB）==='
+          select pg_size_pretty(pg_database_size(current_database())) as db_size,
+                 pg_size_pretty(pg_total_relation_size('jobs'))       as jobs_total,
+                 pg_size_pretty(pg_relation_size('jobs'))             as jobs_heap;
           \echo '=== 1. status 分布 ==='
           select status, count(*) from jobs group by status order by count(*) desc;
           \echo '=== 2. active 质量分布 ==='
