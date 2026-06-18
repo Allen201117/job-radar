@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
+import { jobsStoreEnabled, listLatestActive } from "@/lib/jobs-store/read";
 import { sortAndFilterJobs } from "@/lib/scoring";
 import type { Job, UserPreferences, JobAction } from "@/lib/types";
 
@@ -36,15 +37,17 @@ export async function GET(request: NextRequest) {
     actions = (acts as JobAction[]) || [];
   }
 
-  const { data, error } = await supabase
-    .from("jobs")
-    .select("*")
-    .eq("status", "active")
-    .order("first_seen_at", { ascending: false })
-    .range(offset, offset + limit - 1);
-
-  if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+  // jobs 已迁自建香港 PG：配了 env 走 jobs-store；否则 Supabase。异常统一 500。
+  let data: Job[] = [];
+  try {
+    data = jobsStoreEnabled()
+      ? ((await listLatestActive(limit, offset)) as Job[])
+      : (((await supabase
+          .from("jobs").select("*").eq("status", "active")
+          .order("first_seen_at", { ascending: false })
+          .range(offset, offset + limit - 1)).data as Job[] | null) ?? []);
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message || "list_failed" }, { status: 500 });
   }
 
   // showIgnored/showApplied=true：本接口不做隐藏过滤，隐藏交给前端筛选器（保持与 SSR 同口径）。

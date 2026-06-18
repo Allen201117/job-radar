@@ -1,6 +1,7 @@
 import Navbar from "@/components/Navbar";
 import { CountBadge, EmptyPanel, ProductHero, ProductPage } from "@/components/ProductChrome";
 import { createServerSupabase } from "@/lib/auth";
+import { jobsStoreEnabled, jobsByIds } from "@/lib/jobs-store/read";
 import { ArrowSquareOut, Briefcase, CheckCircle, MapPin } from "@phosphor-icons/react/ssr";
 
 export const dynamic = "force-dynamic";
@@ -47,7 +48,9 @@ export default async function AppliedPage() {
   const jobIds = actions.map((a: { job_id: string }) => a.job_id);
   const appliedMap = new Map(actions.map((a: { job_id: string; created_at: string }) => [a.job_id, a.created_at]));
 
-  const { data: jobs } = await supabase.from("jobs").select("*").in("id", jobIds);
+  const jobs = jobsStoreEnabled()
+    ? await jobsByIds(jobIds, false)
+    : (await supabase.from("jobs").select("*").in("id", jobIds)).data ?? [];
 
   return (
     <div className="min-h-screen bg-editorial">
