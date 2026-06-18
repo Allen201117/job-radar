@@ -1,0 +1,21 @@
+# 本地/自建 jobs 库运行时（Phase 1）。生产用香港 VPS 上的 Postgres；本文件供本地 PoC / 联调用。
+services:
+  jobs-db:
+    image: postgres:17
+    container_name: job-radar-jobs-db
+    environment:
+      POSTGRES_USER: jobradar
+      POSTGRES_PASSWORD: jobradar_local_password
+      POSTGRES_DB: jobradar_jobs
+    ports:
+      - "54329:5432"
+    volumes:
+      - jobs_db_data:/var/lib/postgresql/data
+      - ./jobs-db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobradar -d jobradar_jobs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+volumes:
+  jobs_db_data:

@@ -1,0 +1,37 @@
+name: jobs-db-migrate
+
+# Phase 1：把 jobs-db/schema.sql 应用到自建香港 Postgres（JOBS_DATABASE_URL secret）。幂等、可重复跑。
+# 与 Supabase 的 db-migrate 解耦——这条只管自建 jobs 库的 schema。
+on:
+  workflow_dispatch:
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pg client 17 (PGDG)
+        run: |
+          sudo apt-get update && sudo apt-get install -y curl ca-certificates
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update && sudo apt-get install -y postgresql-client-17
+      - name: Apply schema + verify
+        env:
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+        run: |
+          if [ -z "${JOBS_DATABASE_URL:-}" ]; then
+            echo "::error::JOBS_DATABASE_URL secret 未配置（自建香港 Postgres 连接串）。"
+            exit 1
+          fi
+          P=/usr/lib/postgresql/17/bin
+          $P/psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -f jobs-db/schema.sql
+          echo "========== verify: columns =========="
+          $P/psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off -c "\d jobs"
+          echo "========== verify: indexes count + rowcount =========="
+          $P/psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off \
+            -c "select count(*) as index_count from pg_indexes where tablename='jobs';" \
+            -c "select count(*) as job_rows from jobs;" \
+            -c "select canonicalize_jd_url('https://x.com/a/?utm_source=z&id=1#frag');"
+          echo "[jobs-db-migrate] done."
