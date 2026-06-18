@@ -97,7 +97,8 @@ $function$;
 create or replace function jobs_set_canonical_jd_url()
 returns trigger language plpgsql as $function$
 begin
-  new.canonical_jd_url := canonicalize_jd_url(new.jd_url);
+  -- schema 限定：数据迁移(pg_dump 把 search_path 置空)时 COPY 触发本函数，非限定调用会找不到函数。
+  new.canonical_jd_url := public.canonicalize_jd_url(new.jd_url);
   return new;
 end;
 $function$;
@@ -111,7 +112,7 @@ create trigger jobs_canonical_jd_url_trg
 create or replace function count_valid_active_jobs()
 returns bigint language sql stable as $function$
   select count(*)::bigint
-  from jobs
+  from public.jobs
   where status = 'active'
     and summary is not null
     and char_length(btrim(summary)) >= 60;

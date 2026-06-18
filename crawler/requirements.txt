@@ -3,3 +3,4 @@ selectolax>=0.3.0
 supabase>=2.3.0
 python-dotenv>=1.0.0
 playwright>=1.52.0  # SPA 浏览器抓取层 Tier-2（CI 需 playwright install chromium）
+psycopg2-binary>=2.9.9  # Phase1：jobs 热表直连自建香港 PostgreSQL（crawler/jobs_db.py）
