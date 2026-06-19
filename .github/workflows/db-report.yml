@@ -1,8 +1,9 @@
 name: db-report
 
 # 一次性诊断：岗位质量审计。打印 status 分布 / active 有效率（有 JD 正文 vs 薄卡）/ 失活未探活比例 /
-# 分 adapter 的 active 与有效分布。供「质量方针整治」定口径、决定砍哪些源用。复用 db-migrate 的
-# SUPABASE_DB_URL secret（直连 5432），只读、不改库。
+# 分 adapter 的 active 与有效分布。供「质量方针整治」定口径、决定砍哪些源用。只读、不改库。
+# Phase 1 后 jobs 热表在自建香港 PG（JOBS_DATABASE_URL）；sources 仍在 Supabase（SUPABASE_DB_URL）→
+#   第 0/1/2 段查香港库；第 3 段 adapter 维度跨两库，单条 psql 做不了 join，改 shell 内 awk 汇总。
 on:
   workflow_dispatch:
 
@@ -15,15 +16,18 @@ jobs:
 
       - name: Job-quality audit
         env:
+          # Phase 1 后 jobs 热表在自建香港 PG；sources 仍留 Supabase（第 3 段 adapter 映射要跨库）。
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
-          if [ -z "${SUPABASE_DB_URL:-}" ]; then
-            echo "::error::SUPABASE_DB_URL secret 未配置（与 db-migrate 同一个）。"
+          if [ -z "${JOBS_DATABASE_URL:-}" ]; then
+            echo "::error::JOBS_DATABASE_URL secret 未配置（Phase 1 后 jobs 在自建香港 PG）。"
             exit 1
           fi
-          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -P pager=off <<'SQL'
+          # 第 0/1/2 段：纯 jobs 查询 → 走香港库。
+          psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off <<'SQL'
           set statement_timeout = '600s';
-          \echo '=== 0. 库容量（Supabase Free 上限 500MB）==='
+          \echo '=== 0. 库容量（自建香港 PG · 腾讯云轻量 40GB 磁盘，非 Supabase 500MB）==='
           select pg_size_pretty(pg_database_size(current_database())) as db_size,
                  pg_size_pretty(pg_total_relation_size('jobs'))       as jobs_total,
                  pg_size_pretty(pg_relation_size('jobs'))             as jobs_heap;
@@ -37,15 +41,21 @@ jobs:
             count(*) filter (where enrich_checked_at is null)                                     as never_liveness_checked,
             count(*) filter (where last_seen_at >= now() - interval '24 hours')                   as seen_24h
           from jobs where status = 'active';
-          \echo '=== 3. active 分 adapter（top 25，含有效率）==='
-          select s.adapter_name,
-            count(*)                                                                                as active_jobs,
-            count(*) filter (where j.summary is not null and char_length(btrim(j.summary)) >= 60)   as with_jd,
-            count(*) filter (where j.enrich_checked_at is null)                                     as never_checked
-          from jobs j join sources s on s.id = j.source_id
-          where j.status = 'active'
-          group by s.adapter_name
-          order by active_jobs desc
-          limit 25;
           SQL
+          # 第 3 段：adapter 维度跨库（jobs 在香港库 / sources 在 Supabase，单条 psql 做不了 join）。
+          #   香港库按 source_id 出计数 + Supabase 出 id→adapter_name 映射，shell 内 awk 按 adapter 汇总。
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "::warning::SUPABASE_DB_URL 未配置 → 跳过第 3 段（adapter 维度需查 Supabase sources）。"
+          else
+            echo '=== 3. active 分 adapter（top 25，含有效率；jobs(HK) ⨝ sources(Supabase) shell 汇总）==='
+            src_map="$(psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -At -F $'\t' -c "select id, coalesce(adapter_name,'(null)') from sources")"
+            job_counts="$(psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -At -F $'\t' -c "select source_id, count(*), count(*) filter (where summary is not null and char_length(btrim(summary)) >= 60), count(*) filter (where enrich_checked_at is null) from jobs where status='active' group by source_id")"
+            printf "%-22s %10s %10s %12s\n" adapter active with_jd never_chk
+            awk -F'\t' '
+              NR==FNR { map[$1]=$2; next }
+              { a=map[$1]; if(a=="") a="(unknown)"; act[a]+=$2; wj[a]+=$3; nc[a]+=$4 }
+              END { for (k in act) printf "%-22s %10d %10d %12d\n", k, act[k], wj[k], nc[k] }
+            ' <(printf '%s\n' "$src_map") <(printf '%s\n' "$job_counts") \
+              | sort -k2 -nr | awk 'NR<=25'
+          fi
           echo "[db-report] done."
