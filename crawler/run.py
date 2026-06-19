@@ -45,6 +45,12 @@ from adapters.xiaohongshu import XiaohongshuAdapter
 from adapters.alibaba import AlibabaAdapter
 from adapters.huawei import HuaweiAdapter
 from adapters.ctrip import CtripAdapter
+from adapters.meituan import MeituanAdapter
+from adapters.kuaishou import KuaishouAdapter
+from adapters.bilibili import BilibiliAdapter
+from adapters.pinduoduo import PinduoduoAdapter
+from adapters.vivo import VivoAdapter
+from adapters.byd import BydAdapter
 
 
 SUMMARY_STORAGE_LIMIT = int(os.environ.get("JOB_SUMMARY_STORAGE_LIMIT", "500") or "500")
@@ -101,6 +107,12 @@ ADAPTERS = {
     "alibaba": AlibabaAdapter(),  # 阿里集团 BU 门户通用层：position/search 公开接口,host 动态解析,零浏览器
     "huawei": HuaweiAdapter(),  # 华为自建门户：career.huawei.com getJob 公开接口,零鉴权零浏览器
     "ctrip": CtripAdapter(),  # 携程自建门户：careers.ctrip.com getJobAd 公开接口,零浏览器
+    "meituan": MeituanAdapter(),  # 美团自建门户：getJobList 公开接口,零浏览器
+    "kuaishou": KuaishouAdapter(),  # 快手自建门户：页面 JS 签名,Playwright 拦截 open positions
+    "bilibili": BilibiliAdapter(),  # B站自建门户：匿名 CSRF + positionList 公开接口,零浏览器
+    "pinduoduo": PinduoduoAdapter(),  # 拼多多校招门户：position/list 公开接口,零浏览器
+    "vivo": VivoAdapter(),  # vivo 社招门户：portal/page 公开接口,零浏览器
+    "byd": BydAdapter(),  # 比亚迪社招：浏览器捕获前端生成的加密详情 URL
 }
 
 # 中国本土公司源（每日后台爬取高优）：本土覆盖优先级 > 外企，排在外企 ATS 前先抓。
@@ -108,7 +120,8 @@ ADAPTERS = {
 DOMESTIC_ADAPTERS = {
     "baidu", "jd", "bytedance", "bytedance_campus", "tencent",
     "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier",
-    "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo", "xiaohongshu", "alibaba", "huawei", "ctrip",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
+    "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo", "xiaohongshu", "alibaba", "huawei", "ctrip",
+    "meituan", "kuaishou", "bilibili", "pinduoduo", "vivo", "byd",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
 }
 
 
@@ -120,7 +133,8 @@ _HTTPX_SAFE_ADAPTERS = {
     "apple", "apple_cn", "baidu", "jd", "haier", "siemens", "tencent",
     "greenhouse", "lever", "ashby", "smartrecruiters", "workday", "eightfold",
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
-    "netease", "oppo", "xiaohongshu", "alibaba", "huawei", "ctrip",  # PlaywrightAdapter 子类但自带 httpx fetch、无 super().fetch（已逐一核实）
+    "netease", "oppo", "xiaohongshu", "alibaba", "huawei", "ctrip",
+    "meituan", "bilibili", "pinduoduo", "vivo",  # PlaywrightAdapter 子类但自带 httpx fetch、无 super().fetch（已逐一核实）
 }
 
 

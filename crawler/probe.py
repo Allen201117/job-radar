@@ -41,6 +41,10 @@ _HTTPX_ADAPTERS = {
     "alibaba",  # 阿里集团 BU 门户：position/search httpx 直连，host 动态解析（详见 adapters/alibaba.py）
     "huawei",  # 华为自建：career.huawei.com getJob httpx 直连，零鉴权（详见 adapters/huawei.py）
     "ctrip",  # 携程自建：careers.ctrip.com getJobAd httpx 直连（详见 adapters/ctrip.py）
+    "meituan",  # 美团自建：getJobList 公开接口,零浏览器
+    "bilibili",  # B站自建：匿名 CSRF + positionList 公开接口,零浏览器
+    "pinduoduo",  # 拼多多校招：position/list 公开接口,零浏览器
+    "vivo",  # vivo 社招：portal/page 公开接口,零浏览器
 }
 
 # 通用 ATS 的 URL 模板：给定 slug 即可拼出公开 JSON 接口地址。

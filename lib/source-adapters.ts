@@ -120,6 +120,36 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填「携程」+ https://careers.ctrip.com/，直连 getJobAd 公开接口（社招/校招/实习，hash 路由详情页），crawl_method 选 http",
   },
   {
+    value: "meituan",
+    label: "美团（自建门户 · 本土）",
+    hint: "填「美团」+ https://zhaopin.meituan.com/web/position，直连 getJobList 公开接口，crawl_method 选 http",
+  },
+  {
+    value: "kuaishou",
+    label: "快手（自建门户 · 本土）",
+    hint: "填「快手」+ 社招列表页，页面 JS 生成请求签名并由浏览器拦截岗位，crawl_method 选 playwright",
+  },
+  {
+    value: "bilibili",
+    label: "哔哩哔哩（自建门户 · 本土）",
+    hint: "填「哔哩哔哩」+ https://jobs.bilibili.com/social/positions，匿名 CSRF 后直连岗位 API，crawl_method 选 http",
+  },
+  {
+    value: "pinduoduo",
+    label: "拼多多（自建门户 · 本土 · 校招）",
+    hint: "填「拼多多」+ https://careers.pddglobalhr.com/campus/grad，直连 position/list 公开接口，crawl_method 选 http",
+  },
+  {
+    value: "vivo",
+    label: "vivo（自建门户 · 本土）",
+    hint: "填「vivo」+ https://hr.vivo.com/jobs，直连 portal/page 公开接口，crawl_method 选 http",
+  },
+  {
+    value: "byd",
+    label: "比亚迪（自建门户 · 本土）",
+    hint: "填「比亚迪」+ 社招列表页，浏览器点击岗位捕获前端生成的加密详情 URL，crawl_method 选 playwright",
+  },
+  {
     value: "amazon",
     label: "Amazon（自建 · 外企）",
     hint: "填公司名 + Amazon.jobs 搜索接口（www.amazon.jobs/en/search.json?normalized_country_code[]=CHN&result_limit=100）",
