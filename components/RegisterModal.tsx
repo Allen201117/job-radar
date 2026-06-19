@@ -124,14 +124,18 @@ export default function RegisterModal({
         setError(mapAuthError(error));
         return;
       }
-      // 已注册邮箱：GoTrue 返回混淆用户（identities 为空）且不发码 → 提示去登录。
-      if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
-        setError("该邮箱已注册，请直接登录");
+      if (data.session) {
+        // Confirm email 被关（注册即登录）→ 跳过验证码，直接去设密码。
+        setStep("password");
         return;
       }
-      if (data.session) {
-        // 兜底：万一 Confirm email 被关（注册即登录），跳过验证码直接去设密码。
-        setStep("password");
+      // 无 session 时区分「真发了验证码」与「邮箱已注册被反枚举混淆」：
+      //   新用户 / 未验证老用户 → data.user.identities 至少含一个身份（已发/重发验证码）。
+      //   已注册（已验证）→ GoTrue 反枚举：data.user 可能为 null，或 identities 为空，且不发码。
+      // 只认「拿到有效身份」为真正发了码；否则一律按已注册处理，避免用户傻等收不到的码。
+      const codeSent = !!(data.user?.identities && data.user.identities.length > 0);
+      if (!codeSent) {
+        setError("该邮箱已注册，请直接登录（忘了密码可在登录页用「忘记密码？」找回）。");
         return;
       }
       setCooldown(60);
