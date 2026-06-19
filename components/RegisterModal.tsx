@@ -353,13 +353,13 @@ export default function RegisterModal({
                   id="reg-code"
                   inputMode="numeric"
                   autoComplete="one-time-code"
-                  maxLength={6}
+                  maxLength={8}
                   required
                   autoFocus
                   value={code}
                   onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-                  className="field-editorial text-center text-xl font-semibold tracking-[0.6em]"
-                  placeholder="______"
+                  className="field-editorial text-center text-xl font-semibold tracking-[0.4em]"
+                  placeholder="········"
                 />
                 {error && <Banner kind="error">{error}</Banner>}
                 {message && !error && <Banner kind="ok">{message}</Banner>}

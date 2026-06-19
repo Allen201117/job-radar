@@ -470,18 +470,18 @@ export default function LoginPage() {
               <form className="mt-6 space-y-4" onSubmit={handleForgotCode}>
                 <div>
                   <label htmlFor="forgot-code" className="mb-1.5 block text-[13px] font-medium text-[#5f594e]">
-                    6 位验证码
+                    验证码
                   </label>
                   <input
                     id="forgot-code"
                     inputMode="numeric"
                     autoComplete="one-time-code"
-                    maxLength={6}
+                    maxLength={8}
                     required
                     value={code}
                     onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-                    className="field-editorial text-center text-lg tracking-[0.5em]"
-                    placeholder="______"
+                    className="field-editorial text-center text-lg tracking-[0.4em]"
+                    placeholder="········"
                   />
                 </div>
                 {alerts}
