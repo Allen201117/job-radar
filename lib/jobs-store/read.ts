@@ -15,6 +15,15 @@ export async function countValidActive(): Promise<number> {
   return Number(n ?? 0);
 }
 
+/** 近 24h 内仍被确认在招的岗位数（计数卡「24h 确认在招」；sinceIso 由调用方算好）。 */
+export async function countRecentActive(sinceIso: string): Promise<number> {
+  const n = await jobsScalar<string | number>(
+    "select count(*) as n from jobs where status = 'active' and last_seen_at >= $1",
+    [sinceIso],
+  );
+  return Number(n ?? 0);
+}
+
 /** 最新 active 一页（jobs 页 SSR 首屏种子 / list 路由）。 */
 export async function listLatestActive(limit: number, offset = 0): Promise<any[]> {
   return jobsQuery(

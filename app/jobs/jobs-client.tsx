@@ -15,6 +15,7 @@ import {
 } from "@/hooks/useDiscoveryPoll";
 import {
   ArrowsClockwise,
+  ArrowUpRight,
   CheckCircle,
   Circle,
   CircleNotch,
@@ -468,14 +469,19 @@ function ActionTile({
         disabled={disabled}
         aria-label={`${label}：${tooltip}`}
         className={cn(
-          "bento-glow flex w-full flex-col items-start gap-3 rounded-2xl border p-5 text-left transition duration-200 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45",
+          "bento-glow group/tile relative flex w-full flex-col items-start gap-3 rounded-2xl border p-5 text-left transition-all duration-300 ease-out hover:-translate-y-1 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0 disabled:hover:shadow-none",
           selected && "bento-selected",
           hero
-            ? "border-[#cfc0e6] dark:border-[#b9a3e0]/[0.30] bg-[#efe9f8] dark:bg-[#b9a3e0]/[0.10] hover:border-[#bba9dd] dark:hover:border-[#b9a3e0]/[0.45] hover:bg-[#e7def4] dark:hover:bg-[#b9a3e0]/[0.20]"
-            : "border-black/[0.07] dark:border-white/[0.1] bg-white/60 dark:bg-white/[0.05] hover:border-black/[0.12] dark:hover:border-white/20 hover:bg-white dark:hover:bg-[#1e1a15]",
+            ? "border-[#cfc0e6] dark:border-[#b9a3e0]/[0.30] bg-[#efe9f8] dark:bg-[#b9a3e0]/[0.10] hover:border-[#bba9dd] dark:hover:border-[#b9a3e0]/[0.45] hover:bg-[#e7def4] dark:hover:bg-[#b9a3e0]/[0.20] hover:shadow-[0_18px_40px_-22px_rgba(106,79,160,0.5)]"
+            : "border-black/[0.07] dark:border-white/[0.1] bg-white/60 dark:bg-white/[0.05] hover:border-black/[0.12] dark:hover:border-white/20 hover:bg-white dark:hover:bg-[#1e1a15] hover:shadow-[0_18px_40px_-24px_rgba(40,34,28,0.45)]",
         )}
       >
-        <span className={cn("grid size-12 shrink-0 place-items-center rounded-2xl", accent)}>
+        <span
+          className={cn(
+            "grid size-12 shrink-0 place-items-center rounded-2xl transition-transform duration-300 ease-out group-hover/tile:scale-[1.08] group-hover/tile:-rotate-3",
+            accent,
+          )}
+        >
           {busy ? (
             <CircleNotch size={24} weight="bold" className="animate-spin" aria-hidden="true" />
           ) : (
@@ -486,6 +492,13 @@ function ActionTile({
           <span className="block text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{label}</span>
           <span className="mt-1 block text-[13px] leading-5 text-[#8a8275] dark:text-[#9a9184]">{hint}</span>
         </span>
+        {/* 悬浮时右上角箭头滑入，提示「可点击的动作」（动态特效，与全站卡片悬浮一致）。 */}
+        <ArrowUpRight
+          size={18}
+          weight="bold"
+          aria-hidden="true"
+          className="pointer-events-none absolute right-4 top-4 -translate-x-1 translate-y-1 text-[#8a8275] opacity-0 transition-all duration-300 ease-out group-hover/tile:translate-x-0 group-hover/tile:translate-y-0 group-hover/tile:opacity-100 dark:text-[#9a9184]"
+        />
       </button>
       <span
         role="tooltip"

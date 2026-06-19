@@ -282,76 +282,6 @@
   }
 }
 
-/* ───────────────────────────────────────────────────────────────
-   TargetCursor（React Bits）— 自定义鼠标指针。
-   纯白 + mix-blend-mode: difference：在暖纸亮底上反相成深墨、在近黑区（卖点②/洞察抽屉）
-   反相成亮色，自动适配明暗。仅桌面生效；触摸设备隐藏；reduced-motion 由组件层返回 null。
-   类名为运行时由组件渲染的元素所用，写成原生 CSS（不进 @layer，避免被 purge）。
-   ─────────────────────────────────────────────────────────────── */
-.target-cursor-wrapper {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 0;
-  height: 0;
-  pointer-events: none;
-  z-index: 9999;
-  mix-blend-mode: difference;
-  transform: translate(-50%, -50%);
-}
-
-.target-cursor-dot {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 4px;
-  height: 4px;
-  background: #fff;
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  will-change: transform;
-}
-
-.target-cursor-corner {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 12px;
-  height: 12px;
-  border: 3px solid #fff;
-  will-change: transform;
-}
-
-.corner-tl {
-  transform: translate(-150%, -150%);
-  border-right: none;
-  border-bottom: none;
-}
-
-.corner-tr {
-  transform: translate(50%, -150%);
-  border-left: none;
-  border-bottom: none;
-}
-
-.corner-br {
-  transform: translate(50%, 50%);
-  border-left: none;
-  border-top: none;
-}
-
-.corner-bl {
-  transform: translate(-150%, 50%);
-  border-right: none;
-  border-top: none;
-}
-
-/* 触摸 / 无悬停设备兜底隐藏（组件层也已 return null） */
-@media (hover: none), (pointer: coarse) {
-  .target-cursor-wrapper {
-    display: none;
-  }
-}
 
 /* ───────────────────────────────────────────────────────────────
    MagicBento 悬浮光效（React Bits）— 雷达绿。
@@ -641,13 +571,6 @@
   transition-delay: var(--d, 0s);
 }
 .lp-reveal.in { opacity: 1; transform: none; }
-
-/* 卡片 3D 倾斜（指针驱动，JS 写 --rx/--ry）*/
-.lp-tilt {
-  transform: perspective(900px) rotateX(var(--rx, 0)) rotateY(var(--ry, 0));
-  transform-style: preserve-3d;
-  transition: transform 0.3s cubic-bezier(0.2, 0.7, 0.2, 1), box-shadow 0.3s ease, background-color 0.3s ease;
-}
 
 /* 漂浮产品卡：鼠标视差（--mx/--my 由 JS 写在 hero 上）+ 随屏宽自动缩小，紧贴四角不压标题 */
 .lp-float {
