@@ -7,6 +7,8 @@ import { resolveRefreshScope } from "@/lib/refresh-scope";
 import { evaluateRefreshThrottle } from "@/lib/refresh-throttle";
 import { jobMatchesFilters, DEFAULT_FILTERS } from "@/lib/job-filter";
 import { searchJobs } from "@/lib/job-search";
+import { searchJobsStore } from "@/lib/jobs-store/search";
+import { jobsStoreEnabled } from "@/lib/jobs-store/read";
 
 export const runtime = "nodejs";
 
@@ -316,14 +318,10 @@ async function resolveProvenCompanies(
     // 候选取自与 Jobs 页同一套服务端搜索（lib/job-search）：先用关键词 bigram GIN 索引收窄命中集，
     // 再在小集合上 recheck 城市。**绝不能**对 location 全表 ilike 取候选——那会 statement_timeout 并
     // 截断成任意 8000 行，曾把「深圳·产品经理」真有实习岗的 OPPO 整个漏掉，导致结果坍缩。
-    const { jobs: cityJobs } = await searchJobs(
-      service,
-      { ...DEFAULT_FILTERS, city, keyword },
-      null,
-      [],
-      0,
-      8000,
-    );
+    // jobs 已迁自建香港 PG：配了 env 走 jobs-store 的 FTS（与 Jobs 页同口径），否则 Supabase 兜底。
+    const { jobs: cityJobs } = jobsStoreEnabled()
+      ? await searchJobsStore({ ...DEFAULT_FILTERS, city, keyword }, null, [], 0, 8000)
+      : await searchJobs(service, { ...DEFAULT_FILTERS, city, keyword }, null, [], 0, 8000);
     const baseF = { ...DEFAULT_FILTERS, city, keyword } as any;
     const exactF = { ...baseF, jobType } as any;
     const rel = new Set<string>();
