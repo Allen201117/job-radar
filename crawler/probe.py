@@ -45,6 +45,7 @@ _HTTPX_ADAPTERS = {
     "bilibili",  # B站自建：匿名 CSRF + positionList 公开接口,零浏览器
     "pinduoduo",  # 拼多多校招：position/list 公开接口,零浏览器
     "vivo",  # vivo 社招：portal/page 公开接口,零浏览器
+    "sf_express",  # 顺丰社招：SearchJob.do 公开接口，最近 50 页低频顺序抓取
 }
 
 # 通用 ATS 的 URL 模板：给定 slug 即可拼出公开 JSON 接口地址。

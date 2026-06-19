@@ -51,6 +51,7 @@ from adapters.bilibili import BilibiliAdapter
 from adapters.pinduoduo import PinduoduoAdapter
 from adapters.vivo import VivoAdapter
 from adapters.byd import BydAdapter
+from adapters.sf_express import SfExpressAdapter
 
 
 SUMMARY_STORAGE_LIMIT = int(os.environ.get("JOB_SUMMARY_STORAGE_LIMIT", "500") or "500")
@@ -112,7 +113,8 @@ ADAPTERS = {
     "bilibili": BilibiliAdapter(),  # B站自建门户：匿名 CSRF + positionList 公开接口,零浏览器
     "pinduoduo": PinduoduoAdapter(),  # 拼多多校招门户：position/list 公开接口,零浏览器
     "vivo": VivoAdapter(),  # vivo 社招门户：portal/page 公开接口,零浏览器
-    "byd": BydAdapter(),  # 比亚迪社招：浏览器捕获前端生成的加密详情 URL
+    "byd": BydAdapter(),  # 比亚迪社招：公开列表 + 浏览器批量生成前端加密详情 URL
+    "sf_express": SfExpressAdapter(),  # 顺丰社招：SearchJob.do 公开接口,零浏览器
 }
 
 # 中国本土公司源（每日后台爬取高优）：本土覆盖优先级 > 外企，排在外企 ATS 前先抓。
@@ -121,7 +123,7 @@ DOMESTIC_ADAPTERS = {
     "baidu", "jd", "bytedance", "bytedance_campus", "tencent",
     "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier",
     "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo", "xiaohongshu", "alibaba", "huawei", "ctrip",
-    "meituan", "kuaishou", "bilibili", "pinduoduo", "vivo", "byd",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
+    "meituan", "kuaishou", "bilibili", "pinduoduo", "vivo", "byd", "sf_express",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
 }
 
 
@@ -134,7 +136,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "greenhouse", "lever", "ashby", "smartrecruiters", "workday", "eightfold",
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
     "netease", "oppo", "xiaohongshu", "alibaba", "huawei", "ctrip",
-    "meituan", "bilibili", "pinduoduo", "vivo",  # PlaywrightAdapter 子类但自带 httpx fetch、无 super().fetch（已逐一核实）
+    "meituan", "bilibili", "pinduoduo", "vivo", "sf_express",  # 已逐一核实为纯 httpx fetch
 }
 
 
