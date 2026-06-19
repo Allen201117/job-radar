@@ -572,16 +572,26 @@
 }
 .lp-reveal.in { opacity: 1; transform: none; }
 
+/* 卡片 3D 倾斜（指针驱动，JS 写 --rx/--ry）*/
+.lp-tilt {
+  transform: perspective(900px) rotateX(var(--rx, 0)) rotateY(var(--ry, 0));
+  transform-style: preserve-3d;
+  transition: transform 0.3s cubic-bezier(0.2, 0.7, 0.2, 1), box-shadow 0.3s ease, background-color 0.3s ease;
+}
+
 /* 漂浮产品卡：鼠标视差（--mx/--my 由 JS 写在 hero 上）+ 随屏宽自动缩小，紧贴四角不压标题 */
 .lp-float {
   transform: translate3d(calc(var(--mx, 0) * var(--fd, 30) * 1px), calc(var(--my, 0) * var(--fd, 30) * 1px), 0) scale(var(--cs, 1));
   transition: transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 /* 漂浮卡内层：默认带倾角（--rot），悬停回正 + 托起（与登录页拍立得卡同一交互）。
-   倾角走 CSS 变量而非 inline transform，hover 才能覆盖它。 */
+   倾角走 CSS 变量而非 inline transform，hover 才能覆盖它。
+   pointer-events:auto —— 外层 .lp-floats 是 pointer-events:none（不挡 hero 文案/CTA），
+   这里给卡片本体重新开启，hover 上抬特效才会触发（否则这 4 张漂浮卡完全没有悬浮反馈）。 */
 .lp-fcard {
   transform: rotate(var(--rot, 0deg));
   transition: transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1), box-shadow 0.3s ease;
+  pointer-events: auto;
 }
 .lp-fcard:hover {
   transform: rotate(0deg) translateY(-6px) scale(1.03);
