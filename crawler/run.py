@@ -196,6 +196,13 @@ def _process_one_source(source, supabase) -> dict:
             print(f"    crawl_run 记录失败: {e}")
         return {"status": "failed", "created": 0, "updated": 0}
 
+    # 每源独立 adapter 实例 —— 并发正确性根治。adapter 实例持有 per-source 可变状态（workday/oracle
+    # 在 fetch 里按 source_url 设 self._host/_site/_cxs_base，末尾把 self._host 打进返回 payload）。
+    # 并发档按主机多线程**共享 ADAPTERS 单例**时，线程间互相覆写这些字段 → 岗位被打上别家租户的 host →
+    # jd_url 张冠李戴、公开站清一色 404（实测曾 98.8% Workday 在库岗位中招）。每源 type()() 新建独立
+    # 实例隔离状态：adapter 均无自定义 __init__、浏览器在 fetch 内才起，构造开销可忽略。
+    adapter = type(adapter)()
+
     print(f"  [{adapter_name}] {company} ({source_url})")
     # run_id 的创建必须在 try 内：高负载下 Supabase 偶发 Errno 35（实锤于 2026-06-10 hotjob 全量
     # 并发跑），在 try 外抛出会炸穿「永不抛异常」约定 → ex.map 迭代时掀翻整批并发档。

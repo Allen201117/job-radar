@@ -433,6 +433,85 @@ class ProcessOneSourceTest(unittest.TestCase):
             run.ADAPTERS.pop("_fake_boom", None)
 
 
+class AdapterInstanceIsolationTest(unittest.TestCase):
+    """并发正确性回归（治 Workday/Oracle jd_url「张冠李戴」清一色 404）。
+
+    根因：adapter 实例持有 per-source 可变状态——workday/oracle 在 fetch 里按 source_url 设
+    self._host/_site/_cxs_base，末尾把 self._host 打进返回 payload。并发档按主机多线程**共享同一
+    ADAPTERS 单例**时，线程间互相覆写 self._host → A 源的岗位被打上 B 租户的 host → jd_url 指向
+    别家租户不存在的路径 → 公开站 404（实测 98.8% Workday 在库岗位中招、清一色打不开）。
+
+    修法：_process_one_source 每源 new 一个独立 adapter 实例（type(proto)()），隔离 per-source 状态。
+    本测试用「在 A 的 fetch 中途插入 B 源的完整处理」**确定性**复现覆写（无需真线程/计时）：
+    共享单例时 B.fetch 会把单例 self._host 改成 B 的 host，A.fetch 末尾读回的就是 B 的 host。"""
+
+    def setUp(self):
+        self.captured = []
+        self._orig = {
+            "create": run.db.create_crawl_run, "update": run.db.update_crawl_run,
+            "upsert_batch": run.db.upsert_jobs_batch, "ts": run.db.update_source_timestamp,
+            "robots": run.check_robots,
+        }
+        run.db.create_crawl_run = lambda sb, sid: "run-1"
+        run.db.update_crawl_run = lambda *a, **k: None
+        run.db.update_source_timestamp = lambda sb, sid: None
+        run.check_robots = lambda url: {"allowed": True, "reason": ""}
+
+        def _capture(sb, jobs):
+            self.captured.extend(jobs)
+            return (len(jobs), 0)
+        run.db.upsert_jobs_batch = _capture
+
+    def tearDown(self):
+        run.db.create_crawl_run = self._orig["create"]
+        run.db.update_crawl_run = self._orig["update"]
+        run.db.upsert_jobs_batch = self._orig["upsert_batch"]
+        run.db.update_source_timestamp = self._orig["ts"]
+        run.check_robots = self._orig["robots"]
+        run.ADAPTERS.pop("_hoststate", None)
+
+    def test_source_host_not_clobbered_by_concurrently_processed_source(self):
+        from urllib.parse import urlparse
+
+        class _HostStateful:
+            """模拟 workday：fetch 按 url 把 host 存到 self、末尾返回 self._host（= payload._host）；
+            parse 用收到的 host 拼 jd_url（mirror workday：parse 读 payload 而非 self）。"""
+            _interleaved = False
+
+            def should_skip(self, url):
+                return None
+
+            def fetch(self, url):
+                self._host = urlparse(url).netloc
+                # 模拟「另一源（B）的 worker 线程」在本次 fetch 中途插进来跑完整处理（仅插一次，防递归）。
+                if not _HostStateful._interleaved:
+                    _HostStateful._interleaved = True
+                    run._process_one_source(
+                        {"adapter_name": "_hoststate", "company": "B",
+                         "source_url": "https://b-tenant.example.com/list", "id": "sB"},
+                        supabase=None)
+                return self._host  # workday 在 fetch 末尾读 self._host 打进 payload
+
+            def parse(self, host):
+                return [RawJob(
+                    company="测试公司", title="后端工程师", location="上海", job_type=None,
+                    summary="负责后端服务开发",
+                    jd_url=f"https://{host}/job/1", apply_url=f"https://{host}/job/1",
+                    posted_at=None)]
+
+        run.ADAPTERS["_hoststate"] = _HostStateful()
+        run._process_one_source(
+            {"adapter_name": "_hoststate", "company": "A",
+             "source_url": "https://a-tenant.example.com/list", "id": "sA"},
+            supabase=None)
+
+        by_src = {j["source_id"]: j["jd_url"] for j in self.captured}
+        # A 源的岗位 jd_url 必须用 A 自己的 host；共享单例时会被中途插入的 B 覆写成 b-tenant。
+        self.assertIn("a-tenant.example.com", by_src.get("sA", ""),
+                      f"A 源 jd_url 被并发源污染：{by_src.get('sA')}")
+        self.assertIn("b-tenant.example.com", by_src.get("sB", ""))
+
+
 class _FakeBrowserAdapter(_FakeAdapter):
     """串行档假 adapter：parse 出一个不同 jd_url 的岗（区分并发档）。"""
 
