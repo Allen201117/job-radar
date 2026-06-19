@@ -76,3 +76,12 @@ export async function jobsByUrls(urls: string[], activeOnly = false): Promise<an
     [urls],
   );
 }
+
+/** 按 company 批量取 active 岗（insights Tier1 派生：聚合某公司在招岗算事实洞察）。 */
+export async function activeJobsByCompanies(companies: string[], limit: number): Promise<any[]> {
+  if (!companies.length) return [];
+  return jobsQuery(
+    `select ${JOB_COLUMNS} from jobs where status = 'active' and company = any($1::text[]) limit $2`,
+    [companies, limit],
+  );
+}

@@ -10,6 +10,7 @@ import {
   groupGatedInsights,
 } from "@/lib/insight-bundle";
 import { deriveCompanyInsights } from "@/lib/insight-derive";
+import { jobsStoreEnabled, activeJobsByCompanies } from "@/lib/jobs-store/read";
 import type {
   CompanyProfile,
   InsightDimension,
@@ -57,16 +58,29 @@ export async function GET(request: NextRequest) {
       profile ? [profile.company, ...(profile.aliases || []), company] : [company],
     ),
   );
-  const { data: jobRows, error: jobError } = await supabase
-    .from("jobs")
-    .select(
-      "company,title,location,job_type,salary_text,posted_at,first_seen_at,last_seen_at,status",
-    )
-    .in("company", candidates)
-    .eq("status", "active")
-    .limit(3000);
-  if (jobError) {
-    console.error("[insights] 读取 jobs（派生）失败", jobError.message);
+  // jobs 已迁自建香港 PG：配了 env 走 jobs-store（按 company 取 active），否则 Supabase 兜底。
+  let jobRows: any[] | null = null;
+  if (jobsStoreEnabled()) {
+    try {
+      jobRows = await activeJobsByCompanies(candidates, 3000);
+    } catch (e) {
+      console.error("[insights] 读取香港库 jobs（派生）失败", (e as Error).message);
+      jobRows = null; // 异常 → Supabase 兜底
+    }
+  }
+  if (jobRows === null) {
+    const { data, error: jobError } = await supabase
+      .from("jobs")
+      .select(
+        "company,title,location,job_type,salary_text,posted_at,first_seen_at,last_seen_at,status",
+      )
+      .in("company", candidates)
+      .eq("status", "active")
+      .limit(3000);
+    if (jobError) {
+      console.error("[insights] 读取 jobs（派生）失败", jobError.message);
+    }
+    jobRows = data || [];
   }
   const derived = deriveCompanyInsights((jobRows || []) as Job[], new Date());
 
