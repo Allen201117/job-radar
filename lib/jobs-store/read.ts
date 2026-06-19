@@ -67,3 +67,12 @@ export async function jobsByIds(ids: string[], activeOnly = false): Promise<any[
     [ids],
   );
 }
+
+/** 按 jd_url 批量取岗（discovery 缓存/进度回查、enrich 薄卡回查：按产出/薄卡 jd_url 找香港库行）。 */
+export async function jobsByUrls(urls: string[], activeOnly = false): Promise<any[]> {
+  if (!urls.length) return [];
+  return jobsQuery(
+    `select ${JOB_COLUMNS} from jobs where jd_url = any($1::text[])${activeOnly ? " and status = 'active'" : ""}`,
+    [urls],
+  );
+}

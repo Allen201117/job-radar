@@ -34,6 +34,12 @@ class CompanyRefreshRecipeTests(unittest.TestCase):
         p1.start(); self.addCleanup(p1.stop)
         p2 = mock.patch.object(discovery.db, "upsert_job", return_value="created")
         p2.start(); self.addCleanup(p2.stop)
+        # Phase 1：CompanyRefreshRecipe 写入已 gated 到自建香港库（discovery.py:380 jobs_db.upsert_job）。
+        # 单测须 hermetic：jobs_db._load_env() 会读 .env.local，本机有 JOBS_DATABASE_URL 时 enabled()=True
+        # → 连真库（fake source_id 触发 uuid 错）。强制 enabled=False 走上面已 mock 的 db.upsert_job 分支
+        # （与 test_run_concurrency.py 同款做法）。
+        p2b = mock.patch.object(discovery.jobs_db, "enabled", return_value=False)
+        p2b.start(); self.addCleanup(p2b.stop)
         p3 = mock.patch.object(
             discovery.normalizer, "validate_job_quality", return_value=(True, ""),
         )
