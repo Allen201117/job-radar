@@ -4,19 +4,20 @@ name: maintenance-vacuum
 #
 # 为什么需要：销毁式重建 / 大批量回填后，表的「可见性图」(visibility map) 与规划器统计会陈旧。
 #   此时 index-only scan 会退化为全堆回查 → 聚合/计数类查询（active_job_counts_by_company、
-#   active_companies、搜索）扫 ~600MB 宽行堆 → 撞 statement_timeout（实测 RPC ~10s 超时）。
+#   active_companies、搜索）扫 ~500MB 宽行堆 → 变慢甚至撞 statement_timeout。
 #   VACUUM (ANALYZE) 设置 VM + 刷新统计，让部分索引（147 jobs_active_company_idx）真正走 index-only。
 #   非破坏性、可反复跑、不阻塞读写（仅 ShareUpdateExclusive 轻锁）。
 #
 # 为什么不放进迁移：VACUUM 不能在事务块里跑，而 db-migrate.sh 用 `psql -1`（单事务）应用迁移。
-# 故单独做成手动 workflow_dispatch；复用 migrate 已配的 SUPABASE_DB_URL secret，零额外配置。
+# 故单独做成手动 workflow_dispatch。Phase 1 后 jobs 在自建香港 PG → 用 JOBS_DATABASE_URL secret
+#   （与 6 个爬虫 workflow 写库同源），不再走 Supabase 的 SUPABASE_DB_URL。
 #
 # full 入参：
 #   false（默认）= VACUUM (ANALYZE) —— 仅刷 VM/统计、把死元组回收进表内空闲列表「止涨」，
-#     **不缩 Supabase 报的 db_size**；轻锁、可反复跑、安全。日常维护用这个。
+#     **不缩 db_size（pg_database_size）**；轻锁、可反复跑、安全。日常维护用这个。
 #   true = VACUUM FULL —— 重写表、把磁盘空间真正还给系统、db_size 缩小；但全程 ACCESS EXCLUSIVE
-#     锁表（期间 Jobs 页查询会阻塞）、需 ≈ 表大小的临时空间（接近 500MB 上限时可能 No space 失败，
-#     失败原子回滚、表不受损）。仅在删过大批死行后做一次性瘦身时手动开。
+#     锁表（期间 Jobs 页查询会阻塞）、需 ≈ 表大小的临时磁盘（香港库 40GB 余量充足）。
+#     仅在删过大批死行后做一次性瘦身时手动开。
 on:
   workflow_dispatch:
     inputs:
@@ -34,23 +35,24 @@ jobs:
 
       - name: VACUUM jobs
         env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          # Phase 1 后 jobs 在自建香港 PG；vacuum 只动 jobs → 全部走 JOBS_DATABASE_URL。
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
           FULL: ${{ github.event.inputs.full }}
         run: |
-          if [ -z "${SUPABASE_DB_URL:-}" ]; then
-            echo "::error::SUPABASE_DB_URL secret 未配置（与 db-migrate 同一个）。"
+          if [ -z "${JOBS_DATABASE_URL:-}" ]; then
+            echo "::error::JOBS_DATABASE_URL secret 未配置（Phase 1 后 jobs 在自建香港 PG）。"
             exit 1
           fi
           size_sql="select pg_size_pretty(pg_database_size(current_database())) as db_size, pg_size_pretty(pg_total_relation_size('jobs')) as jobs_total;"
           echo "=== before ==="
-          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -c "$size_sql"
+          psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -c "$size_sql"
           if [ "${FULL:-false}" = "true" ]; then
             echo "=== VACUUM FULL jobs（锁表、回收磁盘、缩 db_size）==="
-            psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -c "vacuum (full, analyze, verbose) jobs;"
+            psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -c "vacuum (full, analyze, verbose) jobs;"
           else
             echo "=== VACUUM ANALYZE jobs（普通、止涨不缩）==="
-            psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -c "vacuum (analyze, verbose) jobs;"
+            psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -c "vacuum (analyze, verbose) jobs;"
           fi
           echo "=== after ==="
-          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -c "$size_sql"
+          psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -c "$size_sql"
           echo "[maintenance-vacuum] done (full=${FULL:-false})."
