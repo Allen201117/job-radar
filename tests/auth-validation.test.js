@@ -31,13 +31,14 @@ test("validatePassword：≥6 位通过，<6 位拦截", () => {
   assert.equal(validatePassword(null), "密码至少需要 6 位");
 });
 
-test("validateOtp：恰好 6 位数字通过，其余拦截", () => {
-  assert.equal(validateOtp("123456"), null);
-  assert.equal(validateOtp("  123456  "), null); // trim 后判断
-  for (const bad of ["", "12345", "1234567", "12a456", "abcdef", "12 456"]) {
-    assert.equal(validateOtp(bad), "请输入 6 位数字验证码", `应判非法: ${JSON.stringify(bad)}`);
+test("validateOtp：6–8 位数字通过，其余拦截", () => {
+  for (const ok of ["123456", "1234567", "12345678", "  12345678  "]) {
+    assert.equal(validateOtp(ok), null, `应通过: ${JSON.stringify(ok)}`);
   }
-  assert.equal(validateOtp(null), "请输入 6 位数字验证码");
+  for (const bad of ["", "12345", "123456789", "12a456", "abcdef", "12 456"]) {
+    assert.equal(validateOtp(bad), "请输入验证码（6–8 位数字）", `应判非法: ${JSON.stringify(bad)}`);
+  }
+  assert.equal(validateOtp(null), "请输入验证码（6–8 位数字）");
 });
 
 test("mapAuthError：覆盖各关键分支", () => {
