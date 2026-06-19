@@ -31,6 +31,15 @@ def _norm_loc(loc: Optional[str]) -> Optional[str]:
     return s or None
 
 
+def _job_summary(j: dict) -> Optional[str]:
+    """从 search.json 列表项直接组装 JD 正文（已 live 验证含完整 description ~3k 字 + 任职要求）。
+    无需逐岗 detail（amazon.jobs 逐岗 .json 被 Akamai 拦 406），列表自带正文即够 ≥60 字门。
+    HTML 标签/实体由 run.py 的 normalizer.clean_summary 统一清洗+截断。"""
+    parts = [j.get("description"), j.get("basic_qualifications"), j.get("preferred_qualifications")]
+    text = "\n".join(p.strip() for p in parts if isinstance(p, str) and p.strip())
+    return text or None
+
+
 class AmazonAdapter(BaseAdapter):
     name = "amazon"
     max_pages = 30  # result_limit=100/页 → 最多 3000 岗（覆盖在华全量，<100 即停）
@@ -93,7 +102,7 @@ class AmazonAdapter(BaseAdapter):
                 title=title,
                 location=location,
                 job_type=None,  # 由 normalizer 从标题抽取社招/校招/实习
-                summary=None,
+                summary=_job_summary(j),  # 列表自带完整 JD 正文 → 直接入库，治 0% 覆盖薄卡
                 jd_url=jd_url,
                 apply_url=jd_url,
                 posted_at=(j.get("posted_date") or None),

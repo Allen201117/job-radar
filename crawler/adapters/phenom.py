@@ -17,6 +17,15 @@ import httpx
 import normalizer
 from .base import BaseAdapter, RawJob
 
+
+def _job_summary(d: dict) -> Optional[str]:
+    """从 Phenom /api/jobs 列表项的 data 直接组装 JD 正文（已 live 验证含完整 description ~4k 字
+    + responsibilities + qualifications）。无需逐岗 detail（Phenom 逐岗页是 SPA 壳、httpx 拿不到正文），
+    列表自带正文即够 ≥60 字门。HTML 由 run.py 的 normalizer.clean_summary 统一清洗+截断。"""
+    parts = [d.get("description"), d.get("responsibilities"), d.get("qualifications")]
+    text = "\n".join(p.strip() for p in parts if isinstance(p, str) and p.strip())
+    return text or None
+
 # Phenom 站点常由 Akamai/CDN 前置，用常见浏览器 UA 更稳。
 _BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -86,7 +95,7 @@ class PhenomAdapter(BaseAdapter):
                 title=title,
                 location=loc,
                 job_type=None,  # 由 normalizer 从标题抽取社招/校招/实习
-                summary=None,
+                summary=_job_summary(d),  # 列表自带完整 JD 正文 → 直接入库，治 0% 覆盖薄卡
                 jd_url=jd_url,
                 apply_url=jd_url,
                 posted_at=(d.get("posted_date") or None),

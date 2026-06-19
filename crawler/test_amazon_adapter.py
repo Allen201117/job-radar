@@ -45,6 +45,25 @@ class TestAmazonAdapter(unittest.TestCase):
         self.assertEqual(_norm_loc("Beijing, CHN"), "Beijing, China")
         self.assertIsNone(_norm_loc(""))
 
+    def test_summary_populated_from_list_description_and_qualifications(self):
+        # search.json 列表项自带完整 JD 正文（live 验证）→ summary 非空，治 0% 覆盖薄卡。
+        payload = json.dumps({"jobs": [{
+            "title": "Sr. SDE", "normalized_location": "Shenzhen, CHN", "job_path": "/en/jobs/1/sde",
+            "description": "Build large-scale distributed systems for Amazon Devices.",
+            "basic_qualifications": "- 5+ years experience<br/>- Bachelor's degree",
+            "preferred_qualifications": "- Master's degree",
+        }]})
+        job = AmazonAdapter().parse(payload)[0]
+        self.assertIsNotNone(job.summary)
+        self.assertIn("distributed systems", job.summary)
+        self.assertIn("5+ years", job.summary)
+
+    def test_summary_none_when_list_has_no_description(self):
+        payload = json.dumps({"jobs": [
+            {"title": "Sr. SDE", "normalized_location": "Shenzhen, CHN", "job_path": "/en/jobs/2/x"},
+        ]})
+        self.assertIsNone(AmazonAdapter().parse(payload)[0].summary)
+
 
 if __name__ == "__main__":
     unittest.main()
