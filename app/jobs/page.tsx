@@ -1,7 +1,7 @@
 import Navbar from "@/components/Navbar";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import JobLibraryStat from "@/components/JobLibraryStat";
-import { createServerSupabase } from "@/lib/auth";
+import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { jobsStoreEnabled, listLatestActive, countValidActive } from "@/lib/jobs-store/read";
 import { sortAndFilterJobs } from "@/lib/scoring";
 import type { Job, UserPreferences, JobAction, ScoredJob } from "@/lib/types";
@@ -56,39 +56,33 @@ async function fetchFirstPageAndTotal(
 
 export default async function JobsPage() {
   const supabase = await createServerSupabase();
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getRequestUser();
 
-  let preferences: UserPreferences | null = null;
-  let actions: JobAction[] = [];
-  let candidate: any = null;
+  // 用户三表（prefs/actions/candidate 互不依赖）与首屏岗位（与用户无关）全部并行，
+  // 取代原来逐个 await 串行叠加 RTT——冷启动下每个查询都含一次网络往返，串行最伤。
+  const [userData, firstPage] = await Promise.all([
+    user
+      ? Promise.all([
+          supabase.from("user_preferences").select("*").eq("user_id", user.id).single(),
+          supabase.from("job_actions").select("*").eq("user_id", user.id),
+          supabase
+            .from("candidate_profiles")
+            .select("experience_stage, target_locations, target_roles")
+            .eq("user_id", user.id)
+            .maybeSingle(),
+        ])
+      : null,
+    fetchFirstPageAndTotal(supabase),
+  ]);
 
-  if (user) {
-    const { data: prefs } = await supabase
-      .from("user_preferences")
-      .select("*")
-      .eq("user_id", user.id)
-      .single();
-    preferences = prefs as UserPreferences | null;
-
-    const { data: acts } = await supabase
-      .from("job_actions")
-      .select("*")
-      .eq("user_id", user.id);
-    actions = (acts as JobAction[]) || [];
-
-    // 简历画像（偏好底层逻辑来源之一）：用于把筛选器从用户保存的偏好预填。
-    const { data: cp } = await supabase
-      .from("candidate_profiles")
-      .select("experience_stage, target_locations, target_roles")
-      .eq("user_id", user.id)
-      .maybeSingle();
-    candidate = cp;
-  }
+  const preferences = (userData?.[0].data as UserPreferences | null) ?? null;
+  const actions = (userData?.[1].data as JobAction[] | null) ?? [];
+  const candidate = userData?.[2].data ?? null;
 
   // 默认按用户已保存偏好预填筛选器（城市/类型/关键词）；用户手动改即覆盖。
   const initialFilters = buildInitialFilters(preferences, candidate);
 
-  const { jobs, total } = await fetchFirstPageAndTotal(supabase);
+  const { jobs, total } = firstPage;
 
   const scored = sortAndFilterJobs(
     jobs,

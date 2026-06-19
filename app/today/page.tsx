@@ -1,6 +1,6 @@
 import Navbar from "@/components/Navbar";
 import { EmptyPanel, MetricTile, ProductHero, ProductPage } from "@/components/ProductChrome";
-import { createServerSupabase } from "@/lib/auth";
+import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { jobsStoreEnabled, listLatestActive, recallByPrefs } from "@/lib/jobs-store/read";
 import { matchTier, sortAndFilterJobs } from "@/lib/scoring";
 import { mergeRecallJobs } from "@/lib/today-recall";
@@ -119,24 +119,19 @@ async function recallTodayJobs(
 
 export default async function TodayPage() {
   const supabase = await createServerSupabase();
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getRequestUser();
 
   let preferences: UserPreferences | null = null;
   let actions: JobAction[] = [];
 
   if (user) {
-    const { data: prefs } = await supabase
-      .from("user_preferences")
-      .select("*")
-      .eq("user_id", user.id)
-      .single();
-    preferences = prefs as UserPreferences | null;
-
-    const { data: acts } = await supabase
-      .from("job_actions")
-      .select("*")
-      .eq("user_id", user.id);
-    actions = (acts as JobAction[]) || [];
+    // prefs 与 actions 互不依赖 → 并行，砍掉一次串行 RTT（recall 依赖 prefs，仍排其后）。
+    const [prefsRes, actsRes] = await Promise.all([
+      supabase.from("user_preferences").select("*").eq("user_id", user.id).single(),
+      supabase.from("job_actions").select("*").eq("user_id", user.id),
+    ]);
+    preferences = prefsRes.data as UserPreferences | null;
+    actions = (actsRes.data as JobAction[]) || [];
   }
 
   // 偏好预筛 + 最新兜底两段召回（取代旧的盲取最新 200 条，详见 recallTodayJobs）。
