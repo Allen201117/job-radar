@@ -1,10 +1,24 @@
 import json
 import unittest
 
-from adapters.kuaishou import KuaishouAdapter
+from adapters.kuaishou import KuaishouAdapter, _pagination_click_budget
 
 
 class KuaishouAdapterTest(unittest.TestCase):
+    def test_pagination_budget_reaches_all_pages_with_hard_cap(self):
+        self.assertEqual(
+            _pagination_click_budget(current_page=1, total_pages=149, max_pages=160),
+            148,
+        )
+        self.assertEqual(
+            _pagination_click_budget(current_page=1, total_pages=300, max_pages=160),
+            159,
+        )
+        self.assertEqual(
+            _pagination_click_budget(current_page=149, total_pages=149, max_pages=160),
+            0,
+        )
+
     def test_parse_maps_signed_browser_response_to_detail_url(self):
         payload = {
             "_intercepted": [{
