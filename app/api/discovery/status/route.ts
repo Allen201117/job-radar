@@ -3,6 +3,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase } from "@/lib/auth";
 import liveSearch from "@/lib/live-search";
 import discoveryDispatch from "@/lib/discovery-dispatch";
+import { jobsStoreEnabled, jobsByUrls } from "@/lib/jobs-store/read";
 
 export const runtime = "nodejs";
 
@@ -87,15 +88,27 @@ export async function GET(request: NextRequest) {
   }
 
   // 流式：每次轮询都按 diagnostics.produced_jd_urls 回查已入库岗位（不再只在终态），让结果边跑边冒。
+  // jobs 已迁自建香港 PG（刷新公司库的 crawler 也写香港库）：配了 env 走 jobs-store；异常落回 Supabase 兜底。
   let jobs: any[] = [];
   const urls = extractProducedJdUrls(run);
   if (urls.length > 0) {
-    const { data: jobRows } = await service
-      .from("jobs")
-      .select("*")
-      .in("jd_url", urls)
-      .eq("status", "active");
-    jobs = jobRows || [];
+    let fetched = false;
+    if (jobsStoreEnabled()) {
+      try {
+        jobs = await jobsByUrls(urls, true);
+        fetched = true;
+      } catch {
+        /* 香港库异常 → 走 Supabase 兜底 */
+      }
+    }
+    if (!fetched) {
+      const { data: jobRows } = await service
+        .from("jobs")
+        .select("*")
+        .in("jd_url", urls)
+        .eq("status", "active");
+      jobs = jobRows || [];
+    }
   }
 
   const progress =

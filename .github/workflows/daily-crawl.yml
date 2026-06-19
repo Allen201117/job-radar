@@ -54,6 +54,9 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # Phase 1：jobs 热表已迁自建香港 PG。crawler/jobs_db.py gated on JOBS_DATABASE_URL——
+      # 不注入则 enabled()=False、jobs 写读回退到（已清空的）Supabase。run.py 抓新岗 + 死活巡检都靠它落香港库。
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
 
     steps:
       - uses: actions/checkout@v4

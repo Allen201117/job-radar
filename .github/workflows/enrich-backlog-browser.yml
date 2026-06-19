@@ -29,6 +29,8 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # Phase 1：jobs 在自建香港 PG；不注入则 crawler/jobs_db.py 回退空 Supabase（见 daily-crawl.yml 注释）。
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
 
     steps:
       - uses: actions/checkout@v4

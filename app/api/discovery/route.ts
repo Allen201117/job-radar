@@ -4,6 +4,7 @@ import { createServerSupabase } from "@/lib/auth";
 import liveSearch from "@/lib/live-search";
 import officialDiscovery from "@/lib/official-discovery";
 import baiduQianfanSearch from "@/lib/baidu-qianfan-search";
+import { jobsStoreEnabled, jobsByUrls } from "@/lib/jobs-store/read";
 
 const {
   searchBaiduQianfanWeb,
@@ -626,14 +627,26 @@ async function readRecentDiscoveryCache(
   const parsedUrls = candidateRows
     .filter((candidate: any) => candidate.status === "parsed" && candidate.url)
     .map((candidate: any) => candidate.url);
+  // jobs 已迁自建香港 PG：缓存命中的岗位回查走 jobs-store；异常落回 Supabase 兜底。
   let jobs: any[] = [];
   if (parsedUrls.length > 0) {
-    const { data: cachedJobs } = await service
-      .from("jobs")
-      .select("*")
-      .in("jd_url", parsedUrls)
-      .eq("status", "active");
-    jobs = cachedJobs || [];
+    let fetched = false;
+    if (jobsStoreEnabled()) {
+      try {
+        jobs = await jobsByUrls(parsedUrls, true);
+        fetched = true;
+      } catch {
+        /* 香港库异常 → 走 Supabase 兜底 */
+      }
+    }
+    if (!fetched) {
+      const { data: cachedJobs } = await service
+        .from("jobs")
+        .select("*")
+        .in("jd_url", parsedUrls)
+        .eq("status", "active");
+      jobs = cachedJobs || [];
+    }
   }
 
   return {
