@@ -239,7 +239,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
             label={refreshing ? "更新中…" : "更新关注公司"}
             hint="重新抓你关注的公司找新岗位 · 约 1–5 分钟"
             tooltip="在后台重新抓取你筛选/偏好命中的公司官方招聘页（含需要浏览器的源），有新岗位会自动出现在列表里。未填筛选时按你保存的求职偏好来。约 1–5 分钟。"
-            accent="bg-[#dbe9fa] text-[#2f6299] dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8]"
+            accent="bg-[#dbe9fa] text-[#2f6299] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]"
             onClick={() => {
               setActiveSearch("known");
               startRefresh();
@@ -253,7 +253,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
             label={discoveryActive ? "搜索中…" : "扩大官方搜索范围"}
             hint="去官网找还没收录的公司 · 约 1–5 分钟"
             tooltip="用浏览器去抓还没收录的公司官方招聘站，并补全职位描述。需要先填上方「关键词」。约 1–5 分钟。"
-            accent="bg-[#e7def4] text-[#6a4fa0] dark:bg-[#b9a3e0]/15 dark:text-[#b9a3e0]"
+            accent="bg-[#e7def4] text-[#6a4fa0] dark:bg-[#b9a3e0]/[0.15] dark:text-[#b9a3e0]"
             onClick={() => {
               setActiveSearch("discover");
               startDiscovery();
@@ -280,7 +280,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
       {discoveryActive && <BrowserDiscoveryProgress discovery={discovery} />}
 
       {officialJobs.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-[#cfe6b0] dark:border-[#a3d06a]/30 bg-[#eef6e0] dark:bg-[#a3d06a]/15 px-3.5 py-2.5 text-sm">
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-[#cfe6b0] dark:border-[#a3d06a]/[0.30] bg-[#eef6e0] dark:bg-[#a3d06a]/[0.15] px-3.5 py-2.5 text-sm">
           <Sparkle size={16} weight="fill" className="text-[#6f9a3a] dark:text-[#a3d06a]" aria-hidden="true" />
           <span className="font-medium text-[#4f6f2a] dark:text-[#a3d06a]">
             本次新发现 {officialJobs.length} 个岗位
@@ -296,7 +296,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
               className={cn(
                 "rounded-full px-3 py-1 text-xs font-medium transition",
                 newViewActive
-                  ? "bg-[#cde8a0] text-[#3f5a1c] dark:bg-[#a3d06a]/25 dark:text-[#a3d06a]"
+                  ? "bg-[#cde8a0] text-[#3f5a1c] dark:bg-[#a3d06a]/[0.25] dark:text-[#a3d06a]"
                   : "text-[#8a8275] dark:text-[#9a9184] hover:bg-black/[0.05] dark:hover:bg-white/[0.05] hover:text-[#1a1714] dark:hover:text-[#f3ecdf]",
               )}
             >
@@ -335,7 +335,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
         )}
       </p>
       {error && (
-        <p className="rounded-2xl border border-[#e7b4a0] dark:border-[#7a392e]/60 bg-[#fbe9e2] dark:bg-[#3a201a] px-3.5 py-2.5 text-sm text-[#9a4a32] dark:text-[#e6a99f]">
+        <p className="rounded-2xl border border-[#e7b4a0] dark:border-[#7a392e]/[0.60] bg-[#fbe9e2] dark:bg-[#3a201a] px-3.5 py-2.5 text-sm text-[#9a4a32] dark:text-[#e6a99f]">
           {error}
         </p>
       )}
@@ -376,7 +376,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
         )}
         {!loading && displayJobs.length === 0 &&
           (officialJobs.length > 0 && (filters.city || filters.jobType) ? (
-            <div className="rounded-[1.5rem] border border-dashed border-[#e7c98a] dark:border-[#e0b15a]/30 bg-[#fbf2d8] dark:bg-[#e0b15a]/15 px-6 py-10 text-center">
+            <div className="rounded-[1.5rem] border border-dashed border-[#e7c98a] dark:border-[#e0b15a]/[0.30] bg-[#fbf2d8] dark:bg-[#e0b15a]/[0.15] px-6 py-10 text-center">
               <h2 className="text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">
                 本次发现 {officialJobs.length} 个岗位，但 0 个符合当前筛选
               </h2>
@@ -471,7 +471,7 @@ function ActionTile({
           "bento-glow flex w-full flex-col items-start gap-3 rounded-2xl border p-5 text-left transition duration-200 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45",
           selected && "bento-selected",
           hero
-            ? "border-[#cfc0e6] dark:border-[#b9a3e0]/30 bg-[#efe9f8] dark:bg-[#b9a3e0]/10 hover:border-[#bba9dd] dark:hover:border-[#b9a3e0]/45 hover:bg-[#e7def4] dark:hover:bg-[#b9a3e0]/20"
+            ? "border-[#cfc0e6] dark:border-[#b9a3e0]/[0.30] bg-[#efe9f8] dark:bg-[#b9a3e0]/[0.10] hover:border-[#bba9dd] dark:hover:border-[#b9a3e0]/[0.45] hover:bg-[#e7def4] dark:hover:bg-[#b9a3e0]/[0.20]"
             : "border-black/[0.07] dark:border-white/[0.1] bg-white/60 dark:bg-white/[0.05] hover:border-black/[0.12] dark:hover:border-white/20 hover:bg-white dark:hover:bg-[#1e1a15]",
         )}
       >
@@ -512,13 +512,13 @@ function RetrievalDoneBanner({
       aria-live="polite"
       className={cn(
         "flex items-start gap-3 rounded-2xl border px-4 py-3.5",
-        success ? "border-[#cfe6b0] dark:border-[#a3d06a]/30 bg-[#eef6e0] dark:bg-[#a3d06a]/15" : "border-black/[0.07] dark:border-white/[0.1] bg-[#f6f3ec] dark:bg-[#1c1813]",
+        success ? "border-[#cfe6b0] dark:border-[#a3d06a]/[0.30] bg-[#eef6e0] dark:bg-[#a3d06a]/[0.15]" : "border-black/[0.07] dark:border-white/[0.1] bg-[#f6f3ec] dark:bg-[#1c1813]",
       )}
     >
       <span
         className={cn(
           "mt-0.5 grid size-7 shrink-0 place-items-center rounded-full",
-          success ? "bg-[#dcecbf] dark:bg-[#a3d06a]/20 text-[#5b7d2c] dark:text-[#a3d06a]" : "bg-black/[0.06] dark:bg-white/[0.05] text-[#8a8275] dark:text-[#9a9184]",
+          success ? "bg-[#dcecbf] dark:bg-[#a3d06a]/[0.20] text-[#5b7d2c] dark:text-[#a3d06a]" : "bg-black/[0.06] dark:bg-white/[0.05] text-[#8a8275] dark:text-[#9a9184]",
         )}
       >
         {success ? (

@@ -80,7 +80,7 @@ export default function JobLibraryStat({ initialTotal }: Props) {
     status === "stale" ? "连接暂不可用" : status === "syncing" ? "正在刷新" : "实时刷新";
 
   return (
-    <section className="surface bento-glow relative overflow-hidden p-5 text-[#1a1714] dark:text-[#f3ecdf] sm:p-6">
+    <section className="surface bento-glow relative overflow-hidden p-4 text-[#1a1714] dark:text-[#f3ecdf] sm:p-5">
       <div
         className="pointer-events-none absolute -right-16 -top-20 size-52 rounded-full bg-[#96b6e2]/20 blur-3xl"
         aria-hidden="true"
@@ -101,15 +101,15 @@ export default function JobLibraryStat({ initialTotal }: Props) {
             />
             {statusText}
           </div>
-          <p className="mt-3.5 text-sm text-[#8a8275] dark:text-[#9a9184]">岗位库 · 有效在招</p>
+          <p className="mt-3 text-[13px] text-[#8a8275] dark:text-[#9a9184]">岗位库 · 有效在招</p>
           <div className="mt-1 flex items-baseline gap-2">
             <AnimateNumber
               value={activeJobs}
               duration={700}
               blur={14}
-              className="text-[3rem] font-semibold leading-none tracking-[-0.04em] text-[#1a1714] dark:text-[#f3ecdf] sm:text-[4rem]"
+              className="text-[2.1rem] font-semibold leading-none tracking-[-0.03em] text-[#1a1714] dark:text-[#f3ecdf] sm:text-[2.5rem]"
             />
-            <span className="pb-1 text-lg font-medium text-[#9a9184] dark:text-[#837c70]">个</span>
+            <span className="pb-0.5 text-base font-medium text-[#9a9184] dark:text-[#837c70]">个</span>
           </div>
         </div>
         <button
@@ -127,12 +127,12 @@ export default function JobLibraryStat({ initialTotal }: Props) {
         </button>
       </div>
 
-      <div className="relative mt-5 grid grid-cols-2 gap-2.5">
+      <div className="relative mt-4 grid grid-cols-2 gap-2.5">
         <SubStat icon={Broadcast} label="官方源" value={sources} />
         <SubStat icon={ClockCounterClockwise} label="24h 确认在招" value={recent} />
       </div>
 
-      <div className="relative mt-4 flex items-center justify-between gap-3 border-t border-black/[0.06] dark:border-white/[0.1] pt-3.5">
+      <div className="relative mt-3.5 flex items-center justify-between gap-3 border-t border-black/[0.06] dark:border-white/[0.1] pt-3">
         <p className="text-xs leading-5 text-[#9a9184] dark:text-[#837c70]">{syncLabel}</p>
         <p className="text-xs font-medium text-[#3f7cc0] dark:text-[#7fb2e8]">轮询间隔 12s</p>
       </div>

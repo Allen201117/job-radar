@@ -177,13 +177,13 @@ export default function AddSourceForm({ onAdded }: Props) {
       </div>
 
       {selectedAdapter?.hint && (
-        <p className="mt-3 rounded-lg border border-[#bcd2ed] bg-[#e8f1fc] px-3 py-2 text-xs leading-5 text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8]">
+        <p className="mt-3 rounded-lg border border-[#bcd2ed] bg-[#e8f1fc] px-3 py-2 text-xs leading-5 text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
           {selectedAdapter.hint}
         </p>
       )}
 
       {error && (
-        <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c] dark:border-[#7a392e]/60 dark:bg-[#3a201a] dark:text-[#e6a99f]">{error}</p>
+        <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c] dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]">{error}</p>
       )}
 
       <div className="mt-4 flex gap-2">

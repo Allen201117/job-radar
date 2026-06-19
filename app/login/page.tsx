@@ -216,12 +216,12 @@ export default function LoginPage() {
   const alerts = (
     <>
       {error && (
-        <p className="rounded-2xl border border-[#e0b4ac] dark:border-[#7a392e]/60 bg-[#f7e6e1] dark:bg-[#3a201a] px-4 py-2.5 text-[13px] text-[#9c4a3c] dark:text-[#e6a99f]">
+        <p className="rounded-2xl border border-[#e0b4ac] dark:border-[#7a392e]/[0.60] bg-[#f7e6e1] dark:bg-[#3a201a] px-4 py-2.5 text-[13px] text-[#9c4a3c] dark:text-[#e6a99f]">
           {error}
         </p>
       )}
       {message && (
-        <p className="rounded-2xl border border-[#b9cfb0] dark:border-[#3f5a2e]/60 bg-[#eef4e8] dark:bg-[#1e2a17] px-4 py-2.5 text-[13px] text-[#4a6b3c] dark:text-[#a3d06a]">
+        <p className="rounded-2xl border border-[#b9cfb0] dark:border-[#3f5a2e]/[0.60] bg-[#eef4e8] dark:bg-[#1e2a17] px-4 py-2.5 text-[13px] text-[#4a6b3c] dark:text-[#a3d06a]">
           {message}
         </p>
       )}

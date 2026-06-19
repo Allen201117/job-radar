@@ -35,6 +35,23 @@ export async function GET() {
 
   // 2) 目标公司 → 匹配画像；为空则 fallback 推荐全部种子（引擎按窗口期排序后截断）
   const targetCompanies: string[] = (prefs?.target_companies || []).filter(Boolean);
+
+  // 新用户：未上传简历画像 + 未设目标公司 → 不跑「全量种子公司窗口期 fallback」
+  // （对全部公司做 .in 查询易 400，且对没画像的用户意义不大）。直接返回友好的「去上传简历」态，
+  // 前端据 has_profile=false / failure_reason=no_profile 展示上传引导，而不是报错。
+  const hasProfileContent = Boolean(
+    profile &&
+      ((profile.target_roles || []).filter(Boolean).length ||
+        profile.seniority ||
+        (profile.target_locations || []).filter(Boolean).length),
+  );
+  if (!hasProfileContent && targetCompanies.length === 0) {
+    return NextResponse.json({
+      ok: true,
+      report: buildCareerPath(profile, [], false, new Date()),
+    });
+  }
+
   const matchedMap = new Map<string, CompanyProfile>();
   for (const name of targetCompanies) {
     const p = findCompanyProfile(allProfiles, name);
@@ -68,8 +85,9 @@ export async function GET() {
       countsPromise,
     ]);
   if (itemErr) {
-    console.error("[career-path] 读取 insight_items 失败", itemErr.message);
-    return NextResponse.json({ ok: false, error: itemErr.message }, { status: 500 });
+    // 洞察条目读取失败（如批量 .in 过大或瞬时错误）→ 降级为「无洞察条目」而非整页报错；
+    // 时机/在招计数仍可用，至少给出窗口期推荐。items 为 null 时下方 (items || []) 自然成空。
+    console.error("[career-path] 读取 insight_items 失败（降级为无条目）", itemErr.message);
   }
   // 在招计数只用于「N 个在招岗位」徽标 + 排序次键，不是核心内容。即使聚合慢/超时也不应整页 500——
   // 记录后降级为「不显示计数」，洞察（时机/路径/文化）照常返回。

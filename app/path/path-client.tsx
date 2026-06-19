@@ -6,6 +6,7 @@ import {
   ArrowRight,
   Briefcase,
   CalendarBlank,
+  FileArrowUp,
   Path,
   Scales,
   ShieldWarning,
@@ -14,9 +15,9 @@ import type { CareerPathReport, TimingStatusKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const TIMING_STYLE: Record<TimingStatusKind, string> = {
-  open: "border border-[#bcdcae] dark:border-[#a3d06a]/30 bg-[#e6f2d6] dark:bg-[#a3d06a]/15 text-[#4f6f2a] dark:text-[#a3d06a]",
-  rolling: "border border-[#b7d2ee] dark:border-[#7fb2e8]/30 bg-[#dceafa] dark:bg-[#7fb2e8]/15 text-[#2f6299] dark:text-[#7fb2e8]",
-  closed: "border border-[#e7c98a] dark:border-[#e0b15a]/30 bg-[#fbeecb] dark:bg-[#e0b15a]/15 text-[#8a6312] dark:text-[#e0b15a]",
+  open: "border border-[#bcdcae] dark:border-[#a3d06a]/[0.30] bg-[#e6f2d6] dark:bg-[#a3d06a]/[0.15] text-[#4f6f2a] dark:text-[#a3d06a]",
+  rolling: "border border-[#b7d2ee] dark:border-[#7fb2e8]/[0.30] bg-[#dceafa] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]",
+  closed: "border border-[#e7c98a] dark:border-[#e0b15a]/[0.30] bg-[#fbeecb] dark:bg-[#e0b15a]/[0.15] text-[#8a6312] dark:text-[#e0b15a]",
   unknown: "border border-black/[0.08] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] text-[#8a8275] dark:text-[#9a9184]",
 };
 
@@ -58,7 +59,7 @@ export default function CareerPathClient() {
       <ProfileSummary report={report} />
 
       {report.is_recommended_fallback && report.recommendations.length > 0 && (
-        <p className="rounded-xl border border-[#cfe0f5] dark:border-[#7fb2e8]/30 bg-[#e8f1fc] dark:bg-[#7fb2e8]/15 px-4 py-3 text-sm leading-6 text-[#2f6299] dark:text-[#7fb2e8]">
+        <p className="rounded-xl border border-[#cfe0f5] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] px-4 py-3 text-sm leading-6 text-[#2f6299] dark:text-[#7fb2e8]">
           你还没设置目标公司，以下是按<strong>当前招聘窗口期</strong>给出的推荐。到
           <Link href="/preferences" className="mx-1 underline underline-offset-2 hover:text-[#1a1714] dark:hover:text-[#f3ecdf]">
             偏好设置
@@ -141,17 +142,8 @@ export default function CareerPathClient() {
 
 function ProfileSummary({ report }: { report: CareerPathReport }) {
   const { target_roles, seniority, target_locations } = report.profile_summary;
-  if (!report.has_profile) {
-    return (
-      <div className="rounded-xl border border-black/[0.06] dark:border-white/[0.1] bg-white/55 dark:bg-white/[0.05] p-4 text-sm leading-6 text-[#5f594e] dark:text-[#b6ad9d]">
-        还没有你的求职画像。到
-        <Link href="/preferences" className="mx-1 underline underline-offset-2 hover:text-[#1a1714] dark:hover:text-[#f3ecdf]">
-          偏好设置
-        </Link>
-        上传简历或填写目标岗位/城市/公司，路径建议会基于你的画像生成。
-      </div>
-    );
-  }
+  // 无画像时不在这里出提示框，交给下方单一的 EmptyState（上传引导卡），避免两个相似的框重复。
+  if (!report.has_profile) return null;
   const chips = [
     ...(seniority ? [seniority] : []),
     ...target_roles,
@@ -170,19 +162,29 @@ function ProfileSummary({ report }: { report: CareerPathReport }) {
 }
 
 function EmptyState({ reason }: { reason: CareerPathReport["failure_reason"] }) {
+  if (reason === "no_profile") {
+    return (
+      <div className="rounded-2xl border border-dashed border-black/[0.12] dark:border-white/[0.12] bg-white/45 dark:bg-white/[0.04] px-6 py-12 text-center">
+        <div className="mx-auto grid size-12 place-items-center rounded-2xl bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
+          <FileArrowUp size={22} weight="bold" aria-hidden="true" />
+        </div>
+        <h3 className="mt-4 text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">先上传简历，解锁你的职业路径</h3>
+        <p className="mx-auto mt-2 max-w-md text-pretty text-sm leading-6 text-[#5f594e] dark:text-[#b6ad9d]">
+          上传简历或填写目标岗位 / 城市 / 公司后，我们会结合公司洞察（时机 / 性价比 / 路径 / 文化）给出投递优先级与温馨提示。
+        </p>
+        <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+          <Link href="/me" className="btn-ink">
+            上传简历
+            <ArrowRight size={16} weight="bold" aria-hidden="true" />
+          </Link>
+          <Link href="/preferences" className="btn-soft">填写求职偏好</Link>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="rounded-xl border border-black/[0.06] dark:border-white/[0.1] bg-white/55 dark:bg-white/[0.05] p-5 text-sm leading-6 text-[#5f594e] dark:text-[#b6ad9d]">
-      {reason === "no_profile" ? (
-        <>
-          先到
-          <Link href="/preferences" className="mx-1 inline-flex items-center gap-1 underline underline-offset-2 hover:text-[#1a1714] dark:hover:text-[#f3ecdf]">
-            偏好设置 <ArrowRight size={13} weight="bold" />
-          </Link>
-          设置目标公司或上传简历，我们再据公司洞察给出投递优先级与温馨提示。
-        </>
-      ) : (
-        "你的目标公司暂无经核实的洞察信息。我们只展示通过分级与时效校验的内容，宁缺毋滥。"
-      )}
+      你的目标公司暂无经核实的洞察信息。我们只展示通过分级与时效校验的内容，宁缺毋滥。
     </div>
   );
 }

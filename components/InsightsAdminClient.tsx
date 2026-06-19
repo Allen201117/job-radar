@@ -491,7 +491,7 @@ export default function InsightsAdminClient() {
               return (
                 <article
                   key={d.id}
-                  className="rounded-xl border border-[#e7c98a] bg-[#fbf2d8] p-4 text-sm dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/15"
+                  className="rounded-xl border border-[#e7c98a] bg-[#fbf2d8] p-4 text-sm dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15]"
                 >
                   <p className="text-[#1a1714] dark:text-[#f3ecdf]">
                     {it ? (
@@ -549,7 +549,7 @@ export default function InsightsAdminClient() {
                   <span
                     className={cn(
                       "shrink-0 rounded-full px-2 py-0.5 text-[11px]",
-                      g.withInsights ? "bg-[#e6f2d6] text-[#4f6f2a] dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]" : "bg-[#f4efe6] text-[#8a8275] dark:bg-white/[0.08] dark:text-[#9a9184]",
+                      g.withInsights ? "bg-[#e6f2d6] text-[#4f6f2a] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]" : "bg-[#f4efe6] text-[#8a8275] dark:bg-white/[0.08] dark:text-[#9a9184]",
                     )}
                   >
                     已录入 {g.withInsights}/{g.total}
@@ -565,7 +565,7 @@ export default function InsightsAdminClient() {
                       className={cn(
                         "rounded-full border px-2 py-0.5 text-[11px] transition",
                         c.count > 0
-                          ? "border-[#cfe6b0] bg-[#eef6e0] text-[#4f6f2a] hover:bg-[#e2efce] dark:border-[#a3d06a]/30 dark:bg-[#a3d06a]/15 dark:text-[#a3d06a] dark:hover:bg-[#a3d06a]/25"
+                          ? "border-[#cfe6b0] bg-[#eef6e0] text-[#4f6f2a] hover:bg-[#e2efce] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a] dark:hover:bg-[#a3d06a]/[0.25]"
                           : "border-black/[0.08] bg-white/60 text-[#8a8275] hover:bg-white hover:text-[#1a1714] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#9a9184] dark:hover:bg-[#1e1a15] dark:hover:text-[#f3ecdf]",
                       )}
                     >
@@ -610,8 +610,8 @@ export default function InsightsAdminClient() {
 }
 
 function statusChip(status: string) {
-  if (status === "active") return "border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/30 dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]";
-  if (status === "disputed") return "border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/15 dark:text-[#e0b15a]";
+  if (status === "active") return "border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]";
+  if (status === "disputed") return "border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]";
   return "border-black/[0.08] bg-[#f4efe6] text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#9a9184]";
 }
 
@@ -641,7 +641,7 @@ function ItemRow({
           {STATUS_LABELS[item.status] || item.status}
         </span>
         {!item.deidentified && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-[#e0b4ac] bg-[#f7e6e1] px-2 py-0.5 text-[11px] text-[#9c4a3c] dark:border-[#7a392e]/60 dark:bg-[#3a201a] dark:text-[#e6a99f]">
+          <span className="inline-flex items-center gap-1 rounded-full border border-[#e0b4ac] bg-[#f7e6e1] px-2 py-0.5 text-[11px] text-[#9c4a3c] dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]">
             <Warning size={11} weight="fill" /> 未去标识
           </span>
         )}
@@ -728,7 +728,7 @@ function ItemForm({
             onClick={onAiDraft}
             disabled={aiDrafting}
             title="用 AI 按公司+维度生成草稿（仅辅助，需人工核对+补来源）"
-            className="inline-flex items-center gap-1.5 rounded-full border border-[#b7d2ee] bg-[#dceafa] px-3 py-1.5 text-[12px] font-semibold text-[#2f6299] transition hover:bg-[#cfe2f7] disabled:opacity-50 dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8] dark:hover:bg-[#7fb2e8]/25"
+            className="inline-flex items-center gap-1.5 rounded-full border border-[#b7d2ee] bg-[#dceafa] px-3 py-1.5 text-[12px] font-semibold text-[#2f6299] transition hover:bg-[#cfe2f7] disabled:opacity-50 dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8] dark:hover:bg-[#7fb2e8]/[0.25]"
           >
             <Sparkle size={13} weight="fill" />
             {aiDrafting ? "AI 起草中…" : "AI 起草"}
@@ -916,12 +916,12 @@ function ItemForm({
       </div>
 
       {formGate && (
-        <p className="mt-4 rounded-lg border border-[#e7c98a] bg-[#fbf2d8] px-3 py-2 text-xs leading-5 text-[#8a6312] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/15 dark:text-[#e0b15a]">
+        <p className="mt-4 rounded-lg border border-[#e7c98a] bg-[#fbf2d8] px-3 py-2 text-xs leading-5 text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]">
           {formGate}
         </p>
       )}
       {formError && (
-        <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c] dark:border-[#7a392e]/60 dark:bg-[#3a201a] dark:text-[#e6a99f]">{formError}</p>
+        <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c] dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]">{formError}</p>
       )}
 
       <div className="mt-4 flex gap-2">
