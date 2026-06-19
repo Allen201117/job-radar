@@ -202,12 +202,12 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 | 百度 | 可用 | `talent.baidu.com/jobs/detail/{recruitType}/{postId}` |
 | 京东 | 可用 | `zhaopin.jd.com/web/job-info-detail?requementId=...` |
 | 美团 | 可用（httpx） | `zhaopin.meituan.com/web/position/detail?jobUnionId=...` |
-| 快手 | 可用（Playwright 签名拦截） | `zhaopin.kuaishou.cn/#/official/social/job-info/{id}` |
+| 快手 | 可用（Playwright 签名拦截 + 全分页） | `zhaopin.kuaishou.cn/#/official/social/job-info/{id}` |
 | 哔哩哔哩 | 可用（匿名 CSRF + httpx） | `jobs.bilibili.com/social/positions/{id}` |
 | 拼多多 | 可用（httpx，校招） | `careers.pddglobalhr.com/campus/grad/detail?positionId=...` |
 | vivo | 可用（httpx） | `hr.vivo.com/job-detail?_irjc=...&_irjid=...` |
-| 比亚迪 | 可用（Playwright 捕获加密 URL） | `job.byd.com/portal/pc/#/social/socialPositionDetails?...` |
-| 顺丰 | **暂不可用** | 校招短信登录；旧社招域超时；`job.sf-express.com` TLS/HTTP2 失败 |
+| 比亚迪 | 可用（公开全列表 + Playwright 批量加密 URL） | `job.byd.com/portal/pc/#/social/socialPositionDetails?...` |
+| 顺丰 | 可用（httpx，最近 50 页诚实 cap） | `hr.sf-express.com/JobSearchById/{id},{positionType}` |
 | 海尔 | **暂不可用** | 只解析到入口页，保持 `partial_success` |
 
 ## 百度千帆额度

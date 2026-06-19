@@ -147,7 +147,12 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
   {
     value: "byd",
     label: "比亚迪（自建门户 · 本土）",
-    hint: "填「比亚迪」+ 社招列表页，浏览器点击岗位捕获前端生成的加密详情 URL，crawl_method 选 playwright",
+    hint: "填「比亚迪」+ 社招列表页，公开列表后由浏览器批量生成前端加密详情 URL，crawl_method 选 playwright",
+  },
+  {
+    value: "sf_express",
+    label: "顺丰（自建门户 · 本土）",
+    hint: "填「顺丰」+ https://hr.sf-express.com/jobMainHandler/main/9999，直连 SearchJob.do 社招接口，crawl_method 选 http",
   },
   {
     value: "amazon",
