@@ -31,10 +31,10 @@ import { cn } from "@/lib/utils";
 
 // 新鲜度分级配色：越旧越偏琥珀，提示用户谨慎参考。
 const FRESHNESS_TONE: Record<FreshnessLevel, string> = {
-  fresh: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a]",
-  recent: "border border-black/[0.08] bg-[#f4efe6] text-[#8a8275]",
-  aging: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312]",
-  stale: "border border-[#e0a94e] bg-[#fbe6c4] text-[#8a5a12]",
+  fresh: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/30 dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]",
+  recent: "border border-black/[0.08] bg-[#f4efe6] text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#9a9184]",
+  aging: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/15 dark:text-[#e0b15a]",
+  stale: "border border-[#e0a94e] bg-[#fbe6c4] text-[#8a5a12] dark:border-[#e0b15a]/40 dark:bg-[#e0b15a]/20 dark:text-[#e8bf72]",
 };
 
 interface Props {
@@ -51,39 +51,39 @@ const DIMENSION_META: Record<
   timing: {
     label: "招聘时机",
     icon: CalendarBlank,
-    accent: "border-[#b7d2ee] bg-[#dceafa]",
-    iconText: "text-[#2f6299]",
+    accent: "border-[#b7d2ee] bg-[#dceafa] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/15",
+    iconText: "text-[#2f6299] dark:text-[#7fb2e8]",
   },
   hiring: {
     label: "招聘动态",
     icon: Buildings,
-    accent: "border-[#a9cfd8] bg-[#dcf0f2]",
-    iconText: "text-[#2f7d8a]",
+    accent: "border-[#a9cfd8] bg-[#dcf0f2] dark:border-[#6cc0cf]/30 dark:bg-[#6cc0cf]/15",
+    iconText: "text-[#2f7d8a] dark:text-[#6cc0cf]",
   },
   listing: {
     label: "上市 / 股票",
     icon: ChartLineUp,
-    accent: "border-[#a9d8c4] bg-[#dcf2e8]",
-    iconText: "text-[#2f8a63]",
+    accent: "border-[#a9d8c4] bg-[#dcf2e8] dark:border-[#6cc99e]/30 dark:bg-[#6cc99e]/15",
+    iconText: "text-[#2f8a63] dark:text-[#6cc99e]",
   },
   compensation_intensity: {
     label: "薪资 / 强度",
     icon: Scales,
-    accent: "border-[#e7c98a] bg-[#fbeecb]",
-    iconText: "text-[#8a6312]",
+    accent: "border-[#e7c98a] bg-[#fbeecb] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/15",
+    iconText: "text-[#8a6312] dark:text-[#e0b15a]",
   },
   path: {
     label: "进入路径",
     icon: Path,
-    accent: "border-[#cfc0e6] bg-[#efe9f8]",
-    iconText: "text-[#6a4fa0]",
+    accent: "border-[#cfc0e6] bg-[#efe9f8] dark:border-[#c3b1e6]/30 dark:bg-[#c3b1e6]/15",
+    iconText: "text-[#6a4fa0] dark:text-[#c3b1e6]",
   },
   // 文化维度：合规上不用「避坑」字样，统一改为「温馨提示」
   culture: {
     label: "公司文化 / 温馨提示",
     icon: UsersThree,
-    accent: "border-[#e6bcc4] bg-[#f8e6ea]",
-    iconText: "text-[#a84f63]",
+    accent: "border-[#e6bcc4] bg-[#f8e6ea] dark:border-[#e09aa9]/30 dark:bg-[#e09aa9]/15",
+    iconText: "text-[#a84f63] dark:text-[#e09aa9]",
   },
 };
 
@@ -103,12 +103,12 @@ function gradeChip(grade: InsightGrade, sampleSize: number | null): {
   if (grade === "fact") {
     return {
       text: "事实 · 公开来源",
-      cls: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a]",
+      cls: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/30 dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]",
     };
   }
   return {
     text: sampleSize ? `经验 · 据约 ${sampleSize} 条反馈` : "经验 · 群体反馈",
-    cls: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312]",
+    cls: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/15 dark:text-[#e0b15a]",
   };
 }
 
@@ -173,40 +173,40 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
         type="button"
         aria-label="关闭"
         onClick={onClose}
-        className="absolute inset-0 bg-[#1a1714]/40 backdrop-blur-sm"
+        className="absolute inset-0 bg-[#1a1714]/40 backdrop-blur-sm dark:bg-black/60"
       />
       <aside
         role="dialog"
         aria-modal="true"
         aria-label="公司职业洞察"
-        className="relative flex h-full w-full flex-col border-l border-black/[0.08] bg-[#f4efe6] text-[#1a1714] shadow-2xl sm:max-w-xl lg:max-w-2xl"
+        className="relative flex h-full w-full flex-col border-l border-black/[0.08] bg-[#f4efe6] text-[#1a1714] shadow-2xl sm:max-w-xl lg:max-w-2xl dark:border-white/[0.1] dark:bg-[#16130f] dark:text-[#f3ecdf]"
       >
         {/* 头部：明确「社区聚合·非官方」，与官方岗位数据视觉区分 */}
-        <div className="border-b border-black/[0.06] bg-gradient-to-b from-white/60 to-transparent px-6 pb-5 pt-6">
+        <div className="border-b border-black/[0.06] bg-gradient-to-b from-white/60 to-transparent px-6 pb-5 pt-6 dark:border-white/[0.1] dark:from-white/[0.05]">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-sm text-[#8a8275]">
-                <Sparkle size={16} weight="fill" className="text-[#6a4fa0]" />
+              <div className="flex items-center gap-2 text-sm text-[#8a8275] dark:text-[#9a9184]">
+                <Sparkle size={16} weight="fill" className="text-[#6a4fa0] dark:text-[#c3b1e6]" />
                 公司职业洞察
               </div>
               <h2 className="mt-1.5 truncate text-2xl font-semibold leading-tight">
                 {data?.company?.display_name || data?.company?.company || company}
               </h2>
               {firmoBits.length > 0 && (
-                <p className="mt-1 text-xs text-[#8a8275]">{firmoBits.join(" · ")}</p>
+                <p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">{firmoBits.join(" · ")}</p>
               )}
             </div>
             <button
               type="button"
               onClick={onClose}
-              className="shrink-0 rounded-full bg-black/[0.05] p-2 text-[#5f594e] transition hover:bg-black/[0.08] hover:text-[#1a1714]"
+              className="shrink-0 rounded-full bg-black/[0.05] p-2 text-[#5f594e] transition hover:bg-black/[0.08] hover:text-[#1a1714] dark:bg-white/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.08] dark:hover:text-[#f3ecdf]"
             >
               <X size={18} weight="bold" />
             </button>
           </div>
           {/* 唯一一次「来源聚合·去标识」统一声明（每条卡片正文不再重复罗列媒体名） */}
-          <p className="mt-4 flex gap-2.5 rounded-xl border border-[#cfc0e6] bg-[#efe9f8] px-3.5 py-3 text-[13px] leading-6 text-[#5a4a78]">
-            <ShieldCheck size={18} weight="fill" className="mt-0.5 shrink-0 text-[#6a4fa0]" />
+          <p className="mt-4 flex gap-2.5 rounded-xl border border-[#cfc0e6] bg-[#efe9f8] px-3.5 py-3 text-[13px] leading-6 text-[#5a4a78] dark:border-[#c3b1e6]/30 dark:bg-[#c3b1e6]/12 dark:text-[#c3b1e6]">
+            <ShieldCheck size={18} weight="fill" className="mt-0.5 shrink-0 text-[#6a4fa0] dark:text-[#c3b1e6]" />
             <span>
               下列内容部分来自<strong>本平台在招岗位的聚合统计</strong>（带「本平台岗位聚合」标记，属事实数据），部分来自<strong>公开报道与网络讨论的聚合</strong>并经<strong>去标识化</strong>处理（属社区参考、非官方，也不针对任何个人）。每条结论的依据见卡片下方，<strong>仅供参考</strong>，请结合官方岗位信息与面试沟通自行判断。
             </span>
@@ -214,10 +214,10 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-6">
-          {loading && <p className="text-sm text-[#8a8275]">正在加载洞察…</p>}
+          {loading && <p className="text-sm text-[#8a8275] dark:text-[#9a9184]">正在加载洞察…</p>}
 
           {!loading && totalItems === 0 && (
-            <div className="rounded-xl border border-black/[0.06] bg-white/55 p-5 text-[15px] leading-7 text-[#5f594e]">
+            <div className="rounded-xl border border-black/[0.06] bg-white/55 p-5 text-[15px] leading-7 text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
               {failureMessage(data?.failure_reason)}
             </div>
           )}
@@ -239,8 +239,8 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
                       >
                         <Meta.icon size={17} weight="bold" className={Meta.iconText} />
                       </span>
-                      <h3 className="text-base font-semibold text-[#1a1714]">{Meta.label}</h3>
-                      <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-xs font-medium text-[#8a8275]">
+                      <h3 className="text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{Meta.label}</h3>
+                      <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-xs font-medium text-[#8a8275] dark:bg-white/[0.08] dark:text-[#9a9184]">
                         {items.length}
                       </span>
                     </header>
@@ -275,27 +275,27 @@ const EQUITY_ANGLE: Record<
   { tone: string; label: string; text: string }
 > = {
   listed: {
-    tone: "border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63]",
+    tone: "border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63] dark:border-[#6cc99e]/30 dark:bg-[#6cc99e]/15 dark:text-[#6cc99e]",
     label: "投递视角 · 股权可估值",
     text: "已上市：期权/RSU 可按公开股价估值，含金量较透明。结合下方近期行情自行判断——行情向好通常意味着手中股权更值钱。",
   },
   filed: {
-    tone: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299]",
+    tone: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8]",
     label: "投递视角 · 临近上市",
     text: "已递交招股书：临近上市，期权有潜在流动性预期，是较好的进入窗口；留意行权价、锁定期与上市不确定性。",
   },
   pre_ipo: {
-    tone: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299]",
+    tone: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8]",
     label: "投递视角 · 筹备上市",
     text: "筹备上市：股权有上市后变现预期，适合看好者提前进入；上市时间表未定，存在不确定性。",
   },
   unicorn: {
-    tone: "border-[#cfc0e6] bg-[#efe9f8] text-[#6a4fa0]",
+    tone: "border-[#cfc0e6] bg-[#efe9f8] text-[#6a4fa0] dark:border-[#c3b1e6]/30 dark:bg-[#c3b1e6]/15 dark:text-[#c3b1e6]",
     label: "投递视角 · 独角兽股权",
     text: "未上市独角兽：估值高、市场看好，股权激励潜在含金量高，常是值得投递的标的；但短期不可变现、依赖后续融资或上市兑现。",
   },
   private: {
-    tone: "border-black/[0.08] bg-[#f4efe6] text-[#8a8275]",
+    tone: "border-black/[0.08] bg-[#f4efe6] text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#9a9184]",
     label: "投递视角 · 重看现金",
     text: "未上市且暂无明确上市计划：股权短期难变现，评估 offer 时建议以现金薪酬为主、股权为辅。",
   },
@@ -327,7 +327,7 @@ function QuoteLink({ payload }: { payload: Record<string, unknown> }) {
       href={quoteUrl}
       target="_blank"
       rel="noopener noreferrer"
-      className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-1 text-[12px] font-medium text-[#2f8a63] transition hover:bg-[#cdebde]"
+      className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-1 text-[12px] font-medium text-[#2f8a63] transition hover:bg-[#cdebde] dark:border-[#6cc99e]/30 dark:bg-[#6cc99e]/15 dark:text-[#6cc99e] dark:hover:bg-[#6cc99e]/[0.22]"
     >
       <ChartLineUp size={13} weight="bold" />
       近期行情 · {label}
@@ -342,7 +342,10 @@ function InsightCard({ item }: { item: InsightItemView }) {
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
   const chip = item.derived
-    ? { text: "本平台岗位聚合", cls: "border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299]" }
+    ? {
+        text: "本平台岗位聚合",
+        cls: "border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8]",
+      }
     : gradeChip(item.grade, item.sample_size);
   const freshness = freshnessFromVerifiedAt(item.last_verified_at);
 
@@ -368,8 +371,8 @@ function InsightCard({ item }: { item: InsightItemView }) {
   return (
     <article
       className={cn(
-        "rounded-xl border border-black/[0.06] border-l-2 bg-white/60 p-5 pl-4 text-[15px]",
-        item.grade === "fact" ? "border-l-[#6f9a3a]" : "border-l-[#e0a94e]",
+        "rounded-xl border border-black/[0.06] border-l-2 bg-white/60 p-5 pl-4 text-[15px] dark:border-white/[0.1] dark:bg-white/[0.05]",
+        item.grade === "fact" ? "border-l-[#6f9a3a] dark:border-l-[#a3d06a]" : "border-l-[#e0a94e] dark:border-l-[#e0b15a]",
         item.outdated && "opacity-70",
       )}
     >
@@ -378,18 +381,18 @@ function InsightCard({ item }: { item: InsightItemView }) {
           {chip.text}
         </span>
         {item.outdated && (
-          <span className="rounded-full border border-black/[0.08] bg-[#f4efe6] px-2 py-0.5 text-[11px] text-[#8a8275]">
+          <span className="rounded-full border border-black/[0.08] bg-[#f4efe6] px-2 py-0.5 text-[11px] text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#9a9184]">
             可能已过时
           </span>
         )}
       </div>
 
-      {item.title && <p className="mt-2.5 text-base font-semibold text-[#1a1714]">{item.title}</p>}
-      <p className="mt-1.5 leading-7 text-[#3f3a33]">{item.content}</p>
+      {item.title && <p className="mt-2.5 text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{item.title}</p>}
+      <p className="mt-1.5 leading-7 text-[#3f3a33] dark:text-[#d9d0c2]">{item.content}</p>
       <EquityAngle payload={item.payload} />
       <QuoteLink payload={item.payload} />
 
-      <div className="mt-3.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#8a8275]">
+      <div className="mt-3.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#8a8275] dark:text-[#9a9184]">
         {item.time_window && (
           <span className="inline-flex items-center gap-1">
             <CalendarBlank size={13} />
@@ -417,7 +420,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
               href={s.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 rounded-md border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e] transition hover:bg-white hover:text-[#1a1714]"
+              className="inline-flex items-center gap-1 rounded-md border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e] transition hover:bg-white hover:text-[#1a1714] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.08] dark:hover:text-[#f3ecdf]"
             >
               {s.publisher || "来源"}
               <ArrowSquareOut size={11} weight="bold" />
@@ -427,9 +430,9 @@ function InsightCard({ item }: { item: InsightItemView }) {
       )}
 
       {!item.derived && (
-      <div className="mt-3.5 border-t border-black/[0.06] pt-2.5">
+      <div className="mt-3.5 border-t border-black/[0.06] pt-2.5 dark:border-white/[0.1]">
         {sent ? (
-          <span className="text-[11px] text-[#4f6f2a]">已收到反馈，我们会尽快核实。</span>
+          <span className="text-[11px] text-[#4f6f2a] dark:text-[#a3d06a]">已收到反馈，我们会尽快核实。</span>
         ) : disputing ? (
           <div className="space-y-2">
             <textarea
@@ -437,21 +440,21 @@ function InsightCard({ item }: { item: InsightItemView }) {
               onChange={(e) => setReason(e.target.value)}
               placeholder="说明哪里有误（选填）"
               rows={2}
-              className="w-full rounded-lg border border-black/[0.09] bg-white/70 px-2.5 py-1.5 text-xs text-[#1a1714] outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white"
+              className="w-full rounded-lg border border-black/[0.09] bg-white/70 px-2.5 py-1.5 text-xs text-[#1a1714] outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#f3ecdf] dark:placeholder:text-[#8b8478] dark:focus:border-white/40 dark:focus:bg-white/[0.08]"
             />
             <div className="flex gap-2">
               <button
                 type="button"
                 disabled={sending}
                 onClick={submitDispute}
-                className="rounded-full bg-[#1a1714] px-3 py-1 text-[11px] font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] disabled:opacity-50"
+                className="rounded-full bg-[#1a1714] px-3 py-1 text-[11px] font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
               >
                 提交
               </button>
               <button
                 type="button"
                 onClick={() => setDisputing(false)}
-                className="rounded-full px-3 py-1 text-[11px] text-[#8a8275] hover:text-[#1a1714]"
+                className="rounded-full px-3 py-1 text-[11px] text-[#8a8275] hover:text-[#1a1714] dark:text-[#9a9184] dark:hover:text-[#f3ecdf]"
               >
                 取消
               </button>
@@ -461,7 +464,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
           <button
             type="button"
             onClick={() => setDisputing(true)}
-            className="inline-flex items-center gap-1 text-[11px] text-[#9a9184] transition hover:text-[#1a1714]"
+            className="inline-flex items-center gap-1 text-[11px] text-[#9a9184] transition hover:text-[#1a1714] dark:text-[#837c70] dark:hover:text-[#f3ecdf]"
           >
             <Flag size={12} />
             这条有误?

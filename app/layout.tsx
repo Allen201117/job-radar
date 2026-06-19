@@ -4,9 +4,12 @@ import TargetCursor from "@/components/TargetCursor";
 import MagicBentoFX from "@/components/MagicBentoFX";
 
 export const metadata: Metadata = {
-  title: "Job Radar | 官方岗位雷达",
-  description: "发现真实、最新、匹配的官方岗位",
+  title: "职达 JobRadar | 官方岗位雷达",
+  description: "只看企业官网还在招的真岗位，再帮你判断值不值得投。",
 };
+
+// no-flash：首帧绘制前按 localStorage 还原主题（默认浅色，仅用户手动切过深色才加 .dark）
+const THEME_SCRIPT = `(function(){try{if(localStorage.getItem('jr-theme')==='dark')document.documentElement.classList.add('dark');}catch(e){}})();`;
 
 export default function RootLayout({
   children,
@@ -14,8 +17,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="zh-CN">
+    <html lang="zh-CN" suppressHydrationWarning>
       <body className="min-h-screen bg-background antialiased">
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
         {children}
         {/* 全站自定义鼠标指针：旋转准星 + 锁定 a/button/.cursor-target（仅桌面生效） */}
         <TargetCursor

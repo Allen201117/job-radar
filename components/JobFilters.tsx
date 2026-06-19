@@ -56,11 +56,11 @@ export default function JobFilters({ filters, onChange, companies }: Props) {
     filters.showApplied ? "含已投递" : "",
   ].filter(Boolean) as string[];
 
-  const inputClass = "mt-1 w-full rounded-xl border border-black/[0.09] bg-white/70 px-3 py-2 text-sm text-[#1a1714] transition duration-200 placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white focus:outline-none";
-  const selectClass = "mt-1 w-full rounded-xl border border-black/[0.09] bg-white px-3 py-2 text-sm text-[#1a1714] transition duration-200 focus:border-[#1a1714]/55 focus:outline-none";
+  const inputClass = "mt-1 w-full rounded-xl border border-black/[0.09] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm text-[#1a1714] dark:text-[#f3ecdf] transition duration-200 placeholder:text-[#a39a8c] dark:placeholder:text-[#8b8478] focus:border-[#1a1714]/55 dark:focus:border-white/55 focus:bg-white dark:focus:bg-[#1e1a15] focus:outline-none";
+  const selectClass = "mt-1 w-full rounded-xl border border-black/[0.09] dark:border-white/[0.1] bg-white dark:bg-[#1e1a15] px-3 py-2 text-sm text-[#1a1714] dark:text-[#f3ecdf] transition duration-200 focus:border-[#1a1714]/55 dark:focus:border-white/55 focus:outline-none";
 
   return (
-    <div className="surface p-4 text-[#1a1714] sm:p-5">
+    <div className="surface p-4 text-[#1a1714] dark:text-[#f3ecdf] sm:p-5">
       {/* 移动端折叠开关（lg 以下） */}
       <button
         type="button"
@@ -68,20 +68,20 @@ export default function JobFilters({ filters, onChange, companies }: Props) {
         aria-expanded={open}
         className="-m-1 flex w-full items-center gap-2 rounded-xl p-1 text-left lg:hidden"
       >
-        <Funnel size={18} weight="fill" className="shrink-0 text-[#5f594e]" aria-hidden="true" />
-        <span className="shrink-0 text-sm font-semibold text-[#3f3a33]">筛选</span>
+        <Funnel size={18} weight="fill" className="shrink-0 text-[#5f594e] dark:text-[#b6ad9d]" aria-hidden="true" />
+        <span className="shrink-0 text-sm font-semibold text-[#3f3a33] dark:text-[#d9d0c2]">筛选</span>
         {activeBits.length > 0 && (
-          <span className="grid size-5 shrink-0 place-items-center rounded-full bg-[#1a1714] text-[11px] font-semibold tabular-nums text-[#f7f1e6]">
+          <span className="grid size-5 shrink-0 place-items-center rounded-full bg-[#1a1714] dark:bg-[#f3ecdf] text-[11px] font-semibold tabular-nums text-[#f7f1e6] dark:text-[#16130f]">
             {activeBits.length}
           </span>
         )}
-        <span className="min-w-0 flex-1 truncate text-xs text-[#9a9184]">
+        <span className="min-w-0 flex-1 truncate text-xs text-[#9a9184] dark:text-[#837c70]">
           {activeBits.length > 0 ? activeBits.join(" · ") : "全部岗位"}
         </span>
         <CaretDown
           size={16}
           weight="bold"
-          className={cn("shrink-0 text-[#8a8275] transition-transform", open && "rotate-180")}
+          className={cn("shrink-0 text-[#8a8275] dark:text-[#9a9184] transition-transform", open && "rotate-180")}
           aria-hidden="true"
         />
       </button>
@@ -154,12 +154,12 @@ export default function JobFilters({ filters, onChange, companies }: Props) {
 
 function Check({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
-    <label className="flex cursor-pointer items-center gap-2 rounded-full border border-black/[0.08] bg-white/70 px-3 py-2 text-sm text-[#5f594e] transition duration-200 hover:bg-white hover:text-[#1a1714] active:scale-[0.98]">
+    <label className="flex cursor-pointer items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm text-[#5f594e] dark:text-[#b6ad9d] transition duration-200 hover:bg-white dark:hover:bg-[#1e1a15] hover:text-[#1a1714] dark:hover:text-[#f3ecdf] active:scale-[0.98]">
       <input
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="size-4 rounded border-black/20 accent-[#1a1714]"
+        className="size-4 rounded border-black/20 dark:border-white/20 accent-[#1a1714] dark:accent-[#f3ecdf]"
       />
       {label}
     </label>
@@ -174,7 +174,7 @@ function FilterLabel({
   label: string;
 }) {
   return (
-    <label className="inline-flex items-center gap-1.5 text-xs font-medium text-[#8a8275]">
+    <label className="inline-flex items-center gap-1.5 text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">
       <Icon size={14} weight="fill" aria-hidden="true" />
       {label}
     </label>

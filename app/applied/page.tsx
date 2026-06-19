@@ -69,14 +69,14 @@ export default async function AppliedPage() {
         />
         <div className="mt-6 space-y-3">
           {(jobs || []).map((job: any) => (
-            <div key={job.id} className="surface surface-hover p-5 text-[#1a1714]">
+            <div key={job.id} className="surface surface-hover p-5 text-[#1a1714] dark:text-[#f3ecdf]">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <span className="text-xs font-medium text-[#8a8275]">{job.company}</span>
+                  <span className="text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">{job.company}</span>
                   <h3 className="mt-1 text-lg font-semibold">{job.title}</h3>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#8a8275]">
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#8a8275] dark:text-[#9a9184]">
                     {job.location && (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-black/[0.06] bg-[#f4efe6] px-2 py-1">
+                      <span className="inline-flex items-center gap-1 rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2 py-1">
                         <MapPin size={13} weight="fill" aria-hidden="true" />
                         {job.location}
                       </span>
@@ -85,7 +85,7 @@ export default async function AppliedPage() {
                     投递于 {appliedMap.get(job.id) ? new Date(appliedMap.get(job.id)!).toLocaleDateString("zh-CN") : "—"}
                   </div>
                 </div>
-                <a href={job.jd_url} target="_blank" rel="noreferrer" className="inline-flex w-full shrink-0 items-center justify-center gap-2 rounded-full bg-[#1a1714] px-4 py-2.5 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98] sm:w-auto sm:py-2">
+                <a href={job.jd_url} target="_blank" rel="noreferrer" className="inline-flex w-full shrink-0 items-center justify-center gap-2 rounded-full bg-[#1a1714] dark:bg-[#f3ecdf] px-4 py-2.5 text-sm font-semibold text-[#f7f1e6] dark:text-[#16130f] transition duration-200 hover:bg-[#2b2520] dark:hover:bg-[#e8ddca] active:scale-[0.98] sm:w-auto sm:py-2">
                   查看官网
                   <ArrowSquareOut size={16} weight="bold" aria-hidden="true" />
                 </a>
