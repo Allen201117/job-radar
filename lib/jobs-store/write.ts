@@ -25,6 +25,9 @@ const INSERT_DATA_COLS = [
 const UPDATE_DATA_COLS = [
   "company", "title", "location", "job_type", "summary", "apply_url", "salary_text", "posted_at", "content_hash",
 ] as const;
+// 这些富化字段在 UPDATE 时新值为空则保留旧值（COALESCE(NULLIF(...))），与 crawler/jobs_db._PRESERVE_IF_EMPTY 同口径：
+// app 的 discovery/search 刷新多只带列表骨架（无 JD 正文）→ 不得把浏览器/httpx 富化补好的 summary 抹成 NULL。
+const PRESERVE_IF_EMPTY = new Set<string>(["summary", "job_type"]);
 
 export type UpsertResult = { row: any; action: "created" | "updated" };
 
@@ -40,7 +43,8 @@ async function findIdByCanonical(canon: string | null): Promise<string | null> {
 }
 
 async function updateById(id: string, job: Record<string, any>): Promise<any | null> {
-  const setParts = UPDATE_DATA_COLS.map((c, i) => `${c} = $${i + 1}`);
+  const setParts = UPDATE_DATA_COLS.map((c, i) =>
+    PRESERVE_IF_EMPTY.has(c) ? `${c} = COALESCE(NULLIF($${i + 1}, ''), ${c})` : `${c} = $${i + 1}`);
   setParts.push("status = 'active'", "last_seen_at = now()");
   const sql =
     `update jobs set ${setParts.join(", ")} where id = $${UPDATE_DATA_COLS.length + 1}::uuid returning ${JOB_COLUMNS}`;

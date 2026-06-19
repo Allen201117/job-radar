@@ -31,6 +31,21 @@ _INSERT_COLS = (
 # update 时不动主键 id 与首见时间 first_seen_at
 _UPDATE_COLS = tuple(c for c in _INSERT_COLS if c not in ("id", "first_seen_at"))
 
+# 富化/抽取得到、但「列表重抓」常缺的内容字段：UPDATE 时新值为空则**保留旧值**，杜绝
+# 「浏览器逐岗富化补好的 summary 被下一次列表重抓的空值抹掉」——moka 1% 覆盖根因（2026-06-20 查实：
+# 每晚 backfill 补 ~8800 条，次日列表重爬 summary=None 全抹回 NULL，count_valid_active_jobs 永远上不去）。
+# 仅当新值非空才覆盖（fresh 数据仍优先，如 beisen 列表自带 Duty/Require、httpx 大厂内联正文）。
+_PRESERVE_IF_EMPTY = ("summary", "job_type", "experience", "education", "deadline")
+
+
+def _update_set_clause(cols=_UPDATE_COLS) -> str:
+    """构造 UPDATE 的 SET 子句：保留型字段用 COALESCE(NULLIF(%s,''), 列) 防空值抹掉既有内容，
+    其余字段直接 %s 覆盖。占位符顺序与 _row_tuple(job, cols) 一致（每列仍恰好消费一个 %s）。"""
+    return ", ".join(
+        f"{c} = COALESCE(NULLIF(%s, ''), {c})" if c in _PRESERVE_IF_EMPTY else f"{c} = %s"
+        for c in cols
+    )
+
 
 def _load_env():
     root = Path(__file__).resolve().parents[1]
@@ -101,7 +116,7 @@ def upsert_job(conn, job: dict) -> str:
     with conn.cursor() as cur:
         existing_id = _find_existing_id_by_canonical(cur, canon)
         if existing_id:
-            sets = ", ".join(f"{c} = %s" for c in _UPDATE_COLS)
+            sets = _update_set_clause()
             vals = _row_tuple(job, _UPDATE_COLS, last_seen_at=now)
             cur.execute(f"update jobs set {sets} where id = %s", (*vals, existing_id))
             return "updated"
@@ -117,7 +132,7 @@ def upsert_job(conn, job: dict) -> str:
             again = _find_existing_id_by_canonical(cur, canon)
             if not again:
                 raise
-            sets = ", ".join(f"{c} = %s" for c in _UPDATE_COLS)
+            sets = _update_set_clause()
             vals = _row_tuple(job, _UPDATE_COLS, last_seen_at=now)
             cur.execute(f"update jobs set {sets} where id = %s", (*vals, again))
             return "updated"
@@ -161,7 +176,7 @@ def upsert_jobs_batch(conn, jobs: list, page_size: int = 500) -> tuple:
 
         # ③a 既有行批量 UPDATE（execute_batch 合并往返，psycopg2 自动类型适配）
         if to_update:
-            sets = ", ".join(f"{c} = %s" for c in _UPDATE_COLS)
+            sets = _update_set_clause()
             psycopg2.extras.execute_batch(
                 cur, f"update jobs set {sets} where id = %s", to_update, page_size=page_size)
             updated = len(to_update)
