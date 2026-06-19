@@ -1,6 +1,6 @@
 import Navbar from "@/components/Navbar";
 import { CountBadge, EmptyPanel, ProductHero, ProductPage } from "@/components/ProductChrome";
-import { createServerSupabase } from "@/lib/auth";
+import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { jobsStoreEnabled, jobsByIds } from "@/lib/jobs-store/read";
 import { ArrowSquareOut, Briefcase, CheckCircle, MapPin } from "@phosphor-icons/react/ssr";
 
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 export default async function AppliedPage() {
   const supabase = await createServerSupabase();
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getRequestUser();
 
   if (!user) {
     return (

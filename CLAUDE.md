@@ -210,6 +210,10 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 
 Supabase Auth（邮箱登录）+ cookie session。`middleware.ts` 排除 `/api/*`，API 未登录返回 `401 application/json`，不被页面重定向拦截。Sources 页仅管理员。
 
+**页面取当前用户走 `lib/auth.getRequestUser()`，别在页面里再调 `supabase.auth.getUser()`（性能）**：middleware 已对每个页面请求做过 `getUser()`（安全级验证 + 会话刷新 + 未登录重定向），并把验证后的 `user.id/email` 注入转发请求头 `x-user-id`/`x-user-email`（仅服务端可见、入口先 delete 防伪造）；页面用 `getRequestUser()` 零网络读取，省掉每次导航重复一次 auth 网络往返。注意：① `/api/*` 不经 middleware，仍各自 `getUser()`/`requireUser()`；② 改 middleware 的请求头转发时，cookie 头须在 `getUser()` 之后用刷新过的 `request.cookies` 重写，否则 token 刷新那一拍页面会拿到过期 cookie。
+
+**冷启动 / tab 切换不卡**：每个数据页路由配 `loading.tsx`（复用 `components/Skeletons.tsx` 暖纸骨架 + 真实页头），force-dynamic 路由没有 loading 边界会「点 tab 冻屏 + prefetch 失效」；页面内互不依赖的服务端 `await` 用 `Promise.all` 并行。详见记忆 `job-radar-cold-start-tab-latency`。
+
 ## 简历画像
 
 粘贴文本 / `.txt` / `.md` → candidate profile → 用户确认后同步 `user_preferences`（只服务排序，不替代检索）。PDF/DOCX 返回 `415 unsupported_file_type`，空文本返回 `400 empty_resume_text`。

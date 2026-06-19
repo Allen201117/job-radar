@@ -1,7 +1,7 @@
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import { MetricTile, ProductHero, ProductPage } from "@/components/ProductChrome";
-import { createServerSupabase } from "@/lib/auth";
+import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import ResumeProfilePanel from "@/components/ResumeProfilePanel";
 import ProfileEditor from "@/components/ProfileEditor";
 import { BookmarkSimple, CheckCircle, EyeSlash, UserCircle } from "@phosphor-icons/react/ssr";
@@ -10,9 +10,7 @@ export const dynamic = "force-dynamic";
 
 export default async function MePage() {
   const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getRequestUser();
 
   let savedCount = 0;
   let appliedCount = 0;

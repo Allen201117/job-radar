@@ -1,5 +1,5 @@
 import { createServerClient } from "@supabase/ssr";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 
 export async function createServerSupabase() {
   const cookieStore = await cookies();
@@ -20,6 +20,17 @@ export async function createServerSupabase() {
       },
     },
   );
+}
+
+// 读取「中间件已验证」的当前用户（零网络）。middleware 用 getUser() 验证后把 id/email 注入请求头，
+// 受保护页面直接读，省掉每次导航重复的 getUser 网络往返。
+// 仅在 middleware 覆盖的「页面路由」可用——/api/* 不经 middleware，仍需自行 getUser()/requireUser()。
+// 安全性：伪造的同名请求头在 middleware 入口被删除、只由验证结果回填；DB 侧 RLS 用已验证 JWT 二次兜底。
+export async function getRequestUser(): Promise<{ id: string; email: string | undefined } | null> {
+  const h = await headers();
+  const id = h.get("x-user-id");
+  if (!id) return null;
+  return { id, email: h.get("x-user-email") ?? undefined };
 }
 
 export async function getSession() {
