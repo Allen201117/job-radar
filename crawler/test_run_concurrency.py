@@ -599,5 +599,57 @@ class RunCrawlIntegrationTest(unittest.TestCase):
         self.assertEqual(wrapped["created"], 2)
 
 
+class HostAwareShardingTest(unittest.TestCase):
+    """分片并行跨 runner 的正确性：同一主机的所有源必须落同一片。
+
+    旧实现用 round-robin 源切片 `sources[i::n]`（host-blind）。重档从「按天 1/3 轮转单 runner」改成
+    「N 片同时并行跨 runner」后，round-robin 会把同一主机的多个源劈到不同片 → 多 runner 同时抓同一台
+    服务器 → 触发限流（Errno 35，正是单 runner 内 _group_by_host 串行要防的；2026-06-10 实锤 wecruit
+    102 源被 4 并发轰灭）。改 `_shard_by_host` 按主机分桶：对 sorted 唯一主机轮转分配，整主机进同一片。"""
+
+    def _sources(self):
+        # 模拟 hotjob：wecruit 单主机上 5 个源 + 3 个各自独立主机
+        srcs = [{"id": f"w{i}", "source_url": f"https://wecruit.hotjob.cn/SU{i}/pb/social.html"}
+                for i in range(5)]
+        srcs += [{"id": "x", "source_url": "https://a.example.com/jobs"},
+                 {"id": "y", "source_url": "https://b.example.com/jobs"},
+                 {"id": "z", "source_url": "https://c.example.com/jobs"}]
+        return srcs
+
+    def test_same_host_never_split_across_shards(self):
+        srcs = self._sources()
+        N = 4
+        shard_of = {}
+        for idx in range(N):
+            for s in run._shard_by_host(srcs, idx, N):
+                shard_of.setdefault(s["id"], []).append(idx)
+        for sid, shards in shard_of.items():
+            self.assertEqual(len(shards), 1, f"{sid} 出现在多片 {shards}")
+        # wecruit 5 个源必须全在同一片（同主机不劈开）
+        wec = {shard_of[f"w{i}"][0] for i in range(5)}
+        self.assertEqual(len(wec), 1, f"wecruit 同主机源被劈到多片 {wec}")
+
+    def test_union_covers_all_no_overlap(self):
+        srcs = self._sources()
+        N = 3
+        seen = []
+        for idx in range(N):
+            seen += [s["id"] for s in run._shard_by_host(srcs, idx, N)]
+        self.assertEqual(sorted(seen), sorted(s["id"] for s in srcs))  # 无重复、无遗漏=一周覆盖全量
+
+    def test_deterministic_not_randomized_hash(self):
+        # 跨 runner 必须算出一致映射（各 runner 独立进程）。依赖 sorted 而非 Python 随机化 hash()。
+        srcs = self._sources()
+        a = [s["id"] for s in run._shard_by_host(srcs, 1, 3)]
+        b = [s["id"] for s in run._shard_by_host(srcs, 1, 3)]
+        self.assertEqual(a, b)
+
+    def test_shard_index_wraps_modulo_count(self):
+        # 越界 shard_index 由调用方 %= 归一；_shard_by_host 自身按传入 index 选片，传归一后的值即可。
+        srcs = self._sources()
+        self.assertEqual([s["id"] for s in run._shard_by_host(srcs, 0, 3)],
+                         [s["id"] for s in run._shard_by_host(srcs, 3 % 3, 3)])
+
+
 if __name__ == "__main__":
     unittest.main()

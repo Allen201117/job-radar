@@ -136,6 +136,29 @@ def _partition_by_tier(sources):
     return concurrent, serial
 
 
+def _shard_host_of(s):
+    from urllib.parse import urlparse
+    try:
+        return urlparse(s.get("source_url") or "").netloc or ""
+    except Exception:
+        return ""
+
+
+def _shard_by_host(sources, shard_index, shard_count):
+    """按主机分桶分片（替代旧 round-robin 源切片 `sources[i::n]`）。
+
+    重档从「按天 1/shard_count 轮转单 runner」改为「N 片同时并行跨 runner」后，必须保证
+    **同一主机的所有源落同一片** —— 否则同主机源被切到不同 runner → 多 runner 并发抓同一台服务器
+    → 触发限流（Errno 35，正是单 runner 内 _group_by_host 串行要防的；2026-06-10 实锤 wecruit 102 源）。
+    做法：对 sorted 唯一主机轮转分配（i % shard_count）。**用 sorted 而非 Python 随机化 hash()**——
+    各 runner 是独立进程，hash() 加盐每进程不同会导致主机→片映射不一致（漏抓/重抓）；sorted 确定性一致。
+    主机数（而非源数）在各片间均衡；超大单主机（hotjob/wecruit）整体落一片，但其为 httpx 快源、可接受。
+    保持各源原顺序（本土优先不被打乱）。shard_index 须由调用方先 %= shard_count 归一。"""
+    hosts = sorted({_shard_host_of(s) for s in sources})
+    host_shard = {h: i % shard_count for i, h in enumerate(hosts)}
+    return [s for s in sources if host_shard.get(_shard_host_of(s)) == shard_index]
+
+
 # 并发档每线程独立 supabase 客户端。根因（2026-06-10 实锤，traceback 指向
 # httpcore/_sync/http2.py + postgrest）：supabase-py 客户端走 HTTP/2 单连接多路复用，
 # 被多个 worker 线程共享时并发读同一 socket → Errno 35（Resource temporarily unavailable）
@@ -375,12 +398,13 @@ def run_crawl(filter_adapter: str = None, tier: str = "all",
         serial_sources = []
     elif tier == "browser":
         concurrent_sources = []
-    # 源分片轮转：重档按天 1/shard_count（round-robin 每 shard_count 取第 shard_index 个），
-    # 一周覆盖全量，单跑墙钟压到 GitHub Actions 6h 硬杀以下。默认 shard_count=1 = 不分片。
+    # 源分片：按主机分桶（_shard_by_host），同主机源落同一片。重档现为「N 片并行跨 runner」（matrix），
+    # 全量一次覆盖；旧「按天 1/shard_count 轮转单 runner」也兼容（仍是合法分片）。默认 shard_count=1 = 不分片。
+    # 注意：按主机分桶（非源 round-robin）是并行跨 runner 的正确性前提——防同主机被多 runner 并发轰致限流。
     if shard_count > 1:
         shard_index %= shard_count
-        concurrent_sources = concurrent_sources[shard_index::shard_count]
-        serial_sources = serial_sources[shard_index::shard_count]
+        concurrent_sources = _shard_by_host(concurrent_sources, shard_index, shard_count)
+        serial_sources = _shard_by_host(serial_sources, shard_index, shard_count)
     workers = max(1, int(os.environ.get("CRAWL_CONCURRENCY", "6") or "6"))
     active_n = len(concurrent_sources) + len(serial_sources)
     print(f"[crawler] tier={tier} shard={shard_index}/{shard_count}；本次抓取 {active_n}/{len(sources)} 源"
