@@ -10,21 +10,18 @@ import {
   validateOtp,
   validatePassword,
 } from "@/lib/auth-validation";
+import RegisterModal from "@/components/RegisterModal";
 
-// 登录页是一个状态机：邮箱+密码登录之外，新增「验证码注册激活」与「验证码重置密码」两条流程，
-// 全部在本页内走完（不点邮件链接、不跳单独落地页）。校验与报错映射复用 lib/auth-validation.js。
+// 登录页是一个状态机：邮箱+密码登录、验证码重置密码两条流程在本页内走完；
+// 「注册」改为独立的分步引导弹窗（RegisterModal）。校验与报错映射复用 lib/auth-validation.js。
 type Mode =
   | "signin" // 邮箱+密码登录（默认）
-  | "signup" // 邮箱+密码注册 → 触发发码
-  | "verify-signup" // 输入注册验证码激活
   | "forgot-email" // 输入邮箱，请求重置验证码
   | "forgot-code" // 输入重置验证码
   | "forgot-password"; // 设置新密码
 
 const COPY: Record<Mode, { title: string; subtitle: string }> = {
   signin: { title: "登录 / 注册", subtitle: "使用邮箱进入今日看板" },
-  signup: { title: "注册账号", subtitle: "用邮箱注册，下一步收取验证码" },
-  "verify-signup": { title: "输入验证码", subtitle: "查收邮箱里的 6 位验证码" },
   "forgot-email": { title: "找回密码", subtitle: "输入注册邮箱，我们发验证码给你" },
   "forgot-code": { title: "输入验证码", subtitle: "查收邮箱里的 6 位验证码" },
   "forgot-password": { title: "设置新密码", subtitle: "为账号设置一个新密码" },
@@ -41,6 +38,9 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [cooldown, setCooldown] = useState(0); // 重发验证码冷却（秒）
+  const [showRegister, setShowRegister] = useState(false); // 注册弹窗
+  const [registerEmail, setRegisterEmail] = useState(""); // 弹窗预填邮箱（如登录遇未验证账号）
+  const [registerAtCode, setRegisterAtCode] = useState(false); // 弹窗是否直接从验证码步骤开始
   const router = useRouter();
   const supabase = createBrowserClient();
 
@@ -81,26 +81,11 @@ export default function LoginPage() {
         password,
       });
       if (error) {
-        // 邮箱未验证 → 转入验证码激活步骤。仅在冷却结束时自动补发一次码（受同一 60s 冷却约束，
-        // 避免「登录失败反复重试」被用来绕过冷却刷信）；真正的发信频率上限靠 Supabase 服务端兜底。
+        // 邮箱未验证（历史遗留账号）→ 打开注册弹窗并定位到「验证码」步骤，邮箱预填，让用户补完验证。
         if ((error.message || "").toLowerCase().includes("email not confirmed")) {
-          setCode("");
-          if (cooldown > 0) {
-            setMessage("邮箱尚未验证，请输入此前收到的验证码，或用下方「重新发送」。");
-          } else {
-            const { error: resendErr } = await supabase.auth.resend({
-              type: "signup",
-              email: email.trim(),
-            });
-            if (resendErr) {
-              console.error("[auth] signin auto-resend", resendErr);
-              setMessage("邮箱尚未验证。上次验证码可能仍有效，请查收邮箱或稍后用「重新发送」。");
-            } else {
-              setCooldown(60);
-              setMessage("邮箱尚未验证，已重新发送验证码，请查收邮箱。");
-            }
-          }
-          setMode("verify-signup");
+          setRegisterEmail(email.trim());
+          setRegisterAtCode(true);
+          setShowRegister(true);
           return;
         }
         setError(mapAuthError(error));
@@ -110,82 +95,6 @@ export default function LoginPage() {
       router.refresh();
     } catch (err) {
       console.error("[auth] signin", err);
-      setError("网络异常，请检查网络后重试");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleSignUp(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
-    setMessage("");
-    const invalid = validateEmail(email) || validatePassword(password);
-    if (invalid) {
-      setError(invalid);
-      return;
-    }
-    setLoading(true);
-    try {
-      const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
-        password,
-      });
-      if (error) {
-        setError(mapAuthError(error));
-        return;
-      }
-      // Confirm email 开启时，对「已注册邮箱」GoTrue 返回混淆用户（identities 为空）且不发码 →
-      // 主动识别，提示去登录，避免用户死等一封永远不会到的验证码。
-      if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
-        setError("该邮箱已注册，请直接登录");
-        setMode("signin");
-        return;
-      }
-      if (data.session) {
-        // Confirm email 关闭：注册即登录（向后兼容旧行为）。
-        router.push("/today");
-        router.refresh();
-        return;
-      }
-      // Confirm email 开启：signUp 已自动发码 → 进输码步骤。
-      setCooldown(60);
-      setMessage("验证码已发送到你的邮箱，请查收（也看看垃圾箱）。");
-      setMode("verify-signup");
-    } catch (err) {
-      console.error("[auth] signup", err);
-      setError("网络异常，请检查网络后重试");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleVerifySignup(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
-    setMessage("");
-    const invalid = validateOtp(code);
-    if (invalid) {
-      setError(invalid);
-      return;
-    }
-    setLoading(true);
-    try {
-      // type:'email' 是 SDK 当前推荐、且对 signUp 未确认邮箱 OTP 与 'signup' 等价的校验类型
-      //（'signup' 已被 auth-js 标 deprecated）。重发仍用 resend({type:'signup'})，职责不同。
-      const { error } = await supabase.auth.verifyOtp({
-        email: email.trim(),
-        token: code.trim(),
-        type: "email",
-      });
-      if (error) {
-        setError(mapAuthError(error));
-        return;
-      }
-      router.push("/today");
-      router.refresh();
-    } catch (err) {
-      console.error("[auth] verify-signup", err);
       setError("网络异常，请检查网络后重试");
     } finally {
       setLoading(false);
@@ -280,17 +189,14 @@ export default function LoginPage() {
     }
   }
 
-  // 重发验证码：注册流用 resend(signup)，重置流用 resetPasswordForEmail。
+  // 重发重置验证码（forgot-code 步骤用）。注册流的重发在 RegisterModal 内部。
   async function handleResend() {
     if (cooldown > 0 || loading) return;
     setError("");
     setMessage("");
     setLoading(true);
     try {
-      const { error } =
-        mode === "verify-signup"
-          ? await supabase.auth.resend({ type: "signup", email: email.trim() })
-          : await supabase.auth.resetPasswordForEmail(email.trim());
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
       if (error) {
         setError(mapAuthError(error));
         return;
@@ -513,95 +419,16 @@ export default function LoginPage() {
                   <button
                     type="button"
                     disabled={loading}
-                    onClick={() => goMode("signup")}
+                    onClick={() => {
+                      setRegisterEmail("");
+                      setRegisterAtCode(false);
+                      setShowRegister(true);
+                    }}
                     className="btn-ghost"
                   >
                     注册
                   </button>
                 </div>
-              </form>
-            )}
-
-            {/* —— 注册 —— */}
-            {mode === "signup" && (
-              <form className="mt-6 space-y-4" onSubmit={handleSignUp}>
-                <div>
-                  <label htmlFor="signup-email" className="mb-1.5 block text-[13px] font-medium text-[#5f594e]">
-                    邮箱
-                  </label>
-                  <input
-                    id="signup-email"
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="field-editorial"
-                    placeholder="you@example.com"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="signup-password" className="mb-1.5 block text-[13px] font-medium text-[#5f594e]">
-                    设置密码
-                  </label>
-                  <input
-                    id="signup-password"
-                    type="password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="field-editorial"
-                    placeholder="至少 6 位"
-                  />
-                </div>
-                {alerts}
-                <button type="submit" disabled={loading} className="btn-ink w-full">
-                  {loading ? "发送中…" : "注册并获取验证码"}
-                  <ArrowRight size={16} weight="bold" aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => goMode("signin")}
-                  className="flex w-full items-center justify-center gap-1 text-[13px] text-[#8a8275] hover:text-[#1a1714]"
-                >
-                  <ArrowLeft size={14} weight="bold" aria-hidden="true" />
-                  返回登录
-                </button>
-              </form>
-            )}
-
-            {/* —— 注册验证码 —— */}
-            {mode === "verify-signup" && (
-              <form className="mt-6 space-y-4" onSubmit={handleVerifySignup}>
-                <div>
-                  <label htmlFor="signup-code" className="mb-1.5 block text-[13px] font-medium text-[#5f594e]">
-                    6 位验证码
-                  </label>
-                  <input
-                    id="signup-code"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    maxLength={6}
-                    required
-                    value={code}
-                    onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-                    className="field-editorial text-center text-lg tracking-[0.5em]"
-                    placeholder="______"
-                  />
-                </div>
-                {alerts}
-                <button type="submit" disabled={loading} className="btn-ink w-full">
-                  {loading ? "验证中…" : "验证并登录"}
-                  <ArrowRight size={16} weight="bold" aria-hidden="true" />
-                </button>
-                {codeFooter}
-                <button
-                  type="button"
-                  onClick={() => goMode("signin")}
-                  className="flex w-full items-center justify-center gap-1 text-[13px] text-[#8a8275] hover:text-[#1a1714]"
-                >
-                  <ArrowLeft size={14} weight="bold" aria-hidden="true" />
-                  返回登录
-                </button>
               </form>
             )}
 
@@ -728,6 +555,13 @@ export default function LoginPage() {
           </p>
         </section>
       </div>
+
+      <RegisterModal
+        open={showRegister}
+        onClose={() => setShowRegister(false)}
+        initialEmail={registerEmail}
+        startAtCode={registerAtCode}
+      />
     </main>
   );
 }
