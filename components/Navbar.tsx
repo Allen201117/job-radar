@@ -6,6 +6,8 @@ import { createBrowserClient } from "@/lib/supabaseClient";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
+import BrandMark from "@/components/BrandMark";
+import ThemeToggle from "@/components/ThemeToggle";
 import {
   BookmarkSimple,
   Briefcase,
@@ -75,14 +77,11 @@ export default function Navbar() {
   }
 
   return (
-    <header className="sticky top-0 z-40 w-full border-b border-black/[0.06] bg-[#f4efe6]/80 text-[#1a1714] backdrop-blur-xl supports-[backdrop-filter]:bg-[#f4efe6]/70">
+    <header className="sticky top-0 z-40 w-full border-b border-black/[0.06] bg-[#f4efe6]/80 text-[#1a1714] backdrop-blur-xl supports-[backdrop-filter]:bg-[#f4efe6]/70 dark:border-white/[0.08] dark:bg-[#16130f]/85 dark:text-[#f3ecdf] dark:supports-[backdrop-filter]:bg-[#16130f]/70">
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6 lg:gap-6 lg:px-8">
         <div className="flex min-w-0 items-center gap-7">
-          <Link href="/" className="inline-flex shrink-0 items-center gap-2 text-[#1a1714] transition-opacity hover:opacity-70">
-            <span className="grid size-7 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6]">
-              <Broadcast size={16} weight="fill" aria-hidden="true" />
-            </span>
-            <span className="display-tight text-[15px] font-semibold">Job Radar</span>
+          <Link href="/" className="inline-flex shrink-0 items-center transition-opacity hover:opacity-70">
+            <BrandMark tile={28} icon={18} wordSize={15} />
           </Link>
           {/* 桌面端：内联导航胶囊（lg 以下交给汉堡菜单） */}
           <nav className="hidden gap-1 lg:flex">
@@ -93,8 +92,8 @@ export default function Navbar() {
                 className={cn(
                   "inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium transition duration-200",
                   pathname === link.href
-                    ? "bento-selected bg-[#1a1714] text-[#f7f1e6]"
-                    : "text-[#5f594e] hover:bg-black/[0.05] hover:text-[#1a1714] active:scale-[0.98]",
+                    ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                    : "text-[#5f594e] hover:bg-black/[0.05] hover:text-[#1a1714] active:scale-[0.98] dark:text-[#b6ad9d] dark:hover:bg-white/[0.06] dark:hover:text-[#f3ecdf]",
                 )}
               >
                 <link.icon size={16} weight={pathname === link.href ? "fill" : "regular"} aria-hidden="true" />
@@ -104,11 +103,12 @@ export default function Navbar() {
           </nav>
         </div>
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-          {email && <span className="hidden max-w-48 truncate text-xs text-[#9a9184] md:block">{email}</span>}
+          {email && <span className="hidden max-w-48 truncate text-xs text-[#9a9184] md:block dark:text-[#837c70]">{email}</span>}
+          <ThemeToggle />
           {/* 桌面端退出（移动端移入汉堡菜单） */}
           <button
             onClick={handleLogout}
-            className="hidden rounded-full px-3 py-1.5 text-xs font-medium text-[#5f594e] transition duration-200 hover:bg-black/[0.05] hover:text-[#1a1714] active:scale-[0.98] lg:inline-flex"
+            className="hidden rounded-full px-3 py-1.5 text-xs font-medium text-[#5f594e] transition duration-200 hover:bg-black/[0.05] hover:text-[#1a1714] active:scale-[0.98] lg:inline-flex dark:text-[#b6ad9d] dark:hover:bg-white/[0.06] dark:hover:text-[#f3ecdf]"
           >
             {t("logout", lang)}
           </button>
@@ -118,7 +118,7 @@ export default function Navbar() {
             onClick={() => setMenuOpen((v) => !v)}
             aria-label={menuOpen ? "关闭菜单" : "打开菜单"}
             aria-expanded={menuOpen}
-            className="grid size-9 place-items-center rounded-full border border-black/[0.08] text-[#3f3a33] transition duration-200 hover:bg-black/[0.05] active:scale-[0.96] lg:hidden"
+            className="grid size-9 place-items-center rounded-full border border-black/[0.08] text-[#3f3a33] transition duration-200 hover:bg-black/[0.05] active:scale-[0.96] lg:hidden dark:border-white/[0.12] dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"
           >
             {menuOpen ? <X size={18} weight="bold" aria-hidden="true" /> : <List size={18} weight="bold" aria-hidden="true" />}
           </button>
@@ -132,9 +132,9 @@ export default function Navbar() {
             type="button"
             aria-label="关闭菜单"
             onClick={() => setMenuOpen(false)}
-            className="fixed inset-0 top-14 z-30 bg-[#1a1714]/20 backdrop-blur-sm lg:hidden"
+            className="fixed inset-0 top-14 z-30 bg-[#1a1714]/20 backdrop-blur-sm lg:hidden dark:bg-black/50"
           />
-          <nav className="relative z-40 border-t border-black/[0.06] bg-[#f4efe6]/95 px-4 pb-4 pt-2 backdrop-blur-xl lg:hidden">
+          <nav className="relative z-40 border-t border-black/[0.06] bg-[#f4efe6]/95 px-4 pb-4 pt-2 backdrop-blur-xl lg:hidden dark:border-white/[0.08] dark:bg-[#16130f]/95">
             {links.map((link) => {
               const active = pathname === link.href;
               return (
@@ -145,8 +145,8 @@ export default function Navbar() {
                   className={cn(
                     "flex items-center gap-3 rounded-2xl px-3.5 py-3 text-[15px] font-medium transition duration-200",
                     active
-                      ? "bento-selected bg-[#1a1714] text-[#f7f1e6]"
-                      : "text-[#3f3a33] hover:bg-black/[0.05] active:scale-[0.99]",
+                      ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                      : "text-[#3f3a33] hover:bg-black/[0.05] active:scale-[0.99] dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]",
                   )}
                 >
                   <link.icon size={20} weight={active ? "fill" : "regular"} aria-hidden="true" />
@@ -154,11 +154,11 @@ export default function Navbar() {
                 </Link>
               );
             })}
-            <div className="mt-2 flex items-center justify-between gap-3 border-t border-black/[0.06] pt-3">
-              {email && <span className="min-w-0 flex-1 truncate text-xs text-[#9a9184]">{email}</span>}
+            <div className="mt-2 flex items-center justify-between gap-3 border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
+              {email && <span className="min-w-0 flex-1 truncate text-xs text-[#9a9184] dark:text-[#837c70]">{email}</span>}
               <button
                 onClick={handleLogout}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-4 py-2 text-[13px] font-medium text-[#3f3a33] transition duration-200 hover:bg-white active:scale-[0.98]"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-4 py-2 text-[13px] font-medium text-[#3f3a33] transition duration-200 hover:bg-white active:scale-[0.98] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-[#d9d0c2] dark:hover:bg-white/[0.12]"
               >
                 <SignOut size={16} weight="bold" aria-hidden="true" />
                 {t("logout", lang)}

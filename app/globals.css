@@ -489,3 +489,177 @@
     backdrop-filter: none;
   }
 }
+
+/* ───────────────────────────────────────────────────────────────
+   深色模式（暖夜）— 整站统一主题。`.dark` 由 ThemeProvider 加到 <html>。
+   作为「非分层」规则放在文件最后：层级高于 @layer 内的暖光默认值与 Tailwind 工具类，
+   因此能可靠翻转集中式语义类（.surface / .btn-* / .chip / .field-* / .bg-editorial）。
+   组件里写死的 bg-[#..] / text-[#..] 由各自的 dark: 变体处理，不在这里兜。
+   ─────────────────────────────────────────────────────────────── */
+.dark {
+  /* Tailwind 语义 token：bg-background / text-foreground / bg-card / border-border 等自动翻转 */
+  --background: 30 18% 7%;
+  --foreground: 40 33% 91%;
+  --card: 30 14% 11%;
+  --card-foreground: 40 33% 91%;
+  --primary: 153 96% 45%;
+  --primary-foreground: 30 18% 7%;
+  --secondary: 36 9% 16%;
+  --secondary-foreground: 40 22% 88%;
+  --muted: 36 9% 16%;
+  --muted-foreground: 38 9% 64%;
+  --accent: 36 9% 16%;
+  --accent-foreground: 40 22% 88%;
+  --destructive: 6 62% 56%;
+  --destructive-foreground: 40 33% 95%;
+  --border: 36 10% 22%;
+  --input: 36 10% 24%;
+  --ring: 153 100% 45%;
+  color-scheme: dark;
+}
+
+/* 暖夜底纹（替代暖纸 + 彩晕，亮度调暗）*/
+.dark .bg-editorial {
+  background-color: #16130f;
+  background-image:
+    radial-gradient(58% 50% at 84% 2%, rgba(120, 150, 205, 0.18), transparent 62%),
+    radial-gradient(52% 46% at 2% 92%, rgba(150, 190, 110, 0.12), transparent 60%),
+    radial-gradient(54% 50% at 100% 96%, rgba(205, 150, 100, 0.16), transparent 60%);
+}
+
+/* 卡片面 */
+.dark .surface {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 18px 44px -28px rgba(0, 0, 0, 0.6);
+}
+.dark .surface-soft {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.dark .surface-hover:hover {
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: 0 26px 56px -26px rgba(0, 0, 0, 0.7);
+}
+
+/* 主操作：暖夜里反相为亮胶囊（仍是唯一「点我」信号）*/
+.dark .btn-ink,
+.dark .btn-ink-sm {
+  background: #f3ecdf;
+  color: #16130f;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 28px -12px rgba(0, 0, 0, 0.6);
+}
+.dark .btn-ink:hover,
+.dark .btn-ink-sm:hover {
+  background: #e8ddca;
+}
+
+/* 次操作 / 软按钮 */
+.dark .btn-ghost {
+  background: rgba(255, 255, 255, 0.05);
+  color: #f3ecdf;
+  border-color: rgba(243, 236, 223, 0.22);
+}
+.dark .btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(243, 236, 223, 0.4);
+}
+.dark .btn-soft {
+  background: rgba(255, 255, 255, 0.06);
+  color: #e7dfd0;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+.dark .btn-soft:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* chip / eyebrow */
+.dark .chip {
+  background: rgba(255, 255, 255, 0.06);
+  color: #b6ad9d;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.dark .eyebrow {
+  background: rgba(255, 255, 255, 0.05);
+  color: #b6ad9d;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* 输入框 */
+.dark .field-editorial,
+.dark .field-soft {
+  background: rgba(255, 255, 255, 0.05);
+  color: #f3ecdf;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+.dark .field-editorial::placeholder,
+.dark .field-soft::placeholder {
+  color: #8b8478;
+}
+.dark .field-editorial:focus,
+.dark .field-soft:focus {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(243, 236, 223, 0.5);
+  box-shadow: 0 0 0 4px rgba(243, 236, 223, 0.1);
+}
+
+/* polaroid（宣传 / 登录里的产品漂浮卡）*/
+.dark .polaroid {
+  background: #1e1a15;
+  border-color: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.4), 0 22px 48px -20px rgba(0, 0, 0, 0.6);
+}
+
+.dark ::selection {
+  background: rgba(0, 230, 118, 0.22);
+}
+
+/* ───────────────────────────────────────────────────────────────
+   落地页（app/page.tsx）专用动效与布局工具类。
+   ─────────────────────────────────────────────────────────────── */
+/* 雷达同心环（标题背后缓慢扩散）*/
+@keyframes lp-expand {
+  0% { width: 120px; height: 120px; opacity: 0.6; }
+  100% { width: 760px; height: 760px; opacity: 0; }
+}
+.lp-ring {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  border: 1px solid rgba(26, 23, 20, 0.07); border-radius: 50%;
+  animation: lp-expand 4s ease-out infinite;
+}
+.dark .lp-ring { border-color: rgba(255, 255, 255, 0.07); }
+
+/* 公司胶囊无缝滚动 */
+@keyframes lp-marquee { to { transform: translateX(-50%); } }
+.lp-marquee-track { display: flex; width: max-content; animation: lp-marquee 46s linear infinite; }
+.lp-marquee:hover .lp-marquee-track { animation-play-state: paused; }
+
+/* 滚动揭示 */
+.lp-reveal {
+  opacity: 0; transform: translateY(22px);
+  transition: opacity 0.7s cubic-bezier(0.2, 0.7, 0.2, 1), transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition-delay: var(--d, 0s);
+}
+.lp-reveal.in { opacity: 1; transform: none; }
+
+/* 卡片 3D 倾斜（指针驱动，JS 写 --rx/--ry）*/
+.lp-tilt {
+  transform: perspective(900px) rotateX(var(--rx, 0)) rotateY(var(--ry, 0));
+  transform-style: preserve-3d;
+  transition: transform 0.3s cubic-bezier(0.2, 0.7, 0.2, 1), box-shadow 0.3s ease, background-color 0.3s ease;
+}
+
+/* 漂浮产品卡：鼠标视差（--mx/--my 由 JS 写在 hero 上）+ 随屏宽自动缩小，紧贴四角不压标题 */
+.lp-float {
+  transform: translate3d(calc(var(--mx, 0) * var(--fd, 30) * 1px), calc(var(--my, 0) * var(--fd, 30) * 1px), 0) scale(var(--cs, 1));
+  transition: transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+@media (max-width: 1080px) { .lp-floats { --cs: 0.8; } }
+@media (max-width: 920px) { .lp-floats { --cs: 0.72; } }
+@media (max-width: 780px) { .lp-floats { --cs: 0.64; } }
+@media (max-width: 600px) { .lp-floats { display: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-ring, .lp-marquee-track { animation: none; }
+  .lp-reveal { opacity: 1; transform: none; }
+}

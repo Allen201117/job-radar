@@ -79,7 +79,7 @@ export default function AddSourceForm({ onAdded }: Props) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98]"
+        className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98] dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
       >
         <Plus size={16} weight="bold" aria-hidden="true" />
         添加源
@@ -90,7 +90,7 @@ export default function AddSourceForm({ onAdded }: Props) {
   return (
     <form
       onSubmit={submit}
-      className="surface p-5 text-[#1a1714]"
+      className="surface p-5 text-[#1a1714] dark:text-[#f3ecdf]"
     >
       <div className="flex items-center justify-between">
         <h3 className="text-base font-semibold">添加招聘源</h3>
@@ -100,7 +100,7 @@ export default function AddSourceForm({ onAdded }: Props) {
             reset();
             setOpen(false);
           }}
-          className="rounded-full bg-black/[0.05] p-1.5 text-[#5f594e] transition hover:bg-black/[0.08] hover:text-[#1a1714]"
+          className="rounded-full bg-black/[0.05] p-1.5 text-[#5f594e] transition hover:bg-black/[0.08] hover:text-[#1a1714] dark:bg-white/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.08] dark:hover:text-[#f3ecdf]"
         >
           <X size={16} weight="bold" />
         </button>
@@ -155,7 +155,7 @@ export default function AddSourceForm({ onAdded }: Props) {
         </Field>
 
         <Field label="启用">
-          <label className="inline-flex items-center gap-2 text-sm text-[#5f594e]">
+          <label className="inline-flex items-center gap-2 text-sm text-[#5f594e] dark:text-[#b6ad9d]">
             <input
               type="checkbox"
               checked={form.enabled}
@@ -177,20 +177,20 @@ export default function AddSourceForm({ onAdded }: Props) {
       </div>
 
       {selectedAdapter?.hint && (
-        <p className="mt-3 rounded-lg border border-[#bcd2ed] bg-[#e8f1fc] px-3 py-2 text-xs leading-5 text-[#2f6299]">
+        <p className="mt-3 rounded-lg border border-[#bcd2ed] bg-[#e8f1fc] px-3 py-2 text-xs leading-5 text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8]">
           {selectedAdapter.hint}
         </p>
       )}
 
       {error && (
-        <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c]">{error}</p>
+        <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c] dark:border-[#7a392e]/60 dark:bg-[#3a201a] dark:text-[#e6a99f]">{error}</p>
       )}
 
       <div className="mt-4 flex gap-2">
         <button
           type="submit"
           disabled={submitting}
-          className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] active:scale-[0.98] disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] active:scale-[0.98] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
         >
           {submitting ? "保存中…" : "保存源"}
         </button>
@@ -200,7 +200,7 @@ export default function AddSourceForm({ onAdded }: Props) {
             reset();
             setOpen(false);
           }}
-          className="rounded-full px-4 py-2 text-sm font-medium text-[#8a8275] transition hover:bg-black/[0.05] hover:text-[#1a1714]"
+          className="rounded-full px-4 py-2 text-sm font-medium text-[#8a8275] transition hover:bg-black/[0.05] hover:text-[#1a1714] dark:text-[#9a9184] dark:hover:bg-white/[0.05] dark:hover:text-[#f3ecdf]"
         >
           取消
         </button>
@@ -210,7 +210,7 @@ export default function AddSourceForm({ onAdded }: Props) {
 }
 
 const inputCls =
-  "w-full rounded-lg border border-black/[0.09] bg-white/70 px-3 py-2 text-sm text-[#1a1714] outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white";
+  "w-full rounded-lg border border-black/[0.09] bg-white/70 px-3 py-2 text-sm text-[#1a1714] outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#f3ecdf] dark:placeholder:text-[#8b8478] dark:focus:border-white/40 dark:focus:bg-[#1e1a15]";
 
 function Field({
   label,
@@ -225,9 +225,9 @@ function Field({
 }) {
   return (
     <div className={className}>
-      <label className="mb-1.5 block text-xs font-medium text-[#8a8275]">{label}</label>
+      <label className="mb-1.5 block text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">{label}</label>
       {children}
-      {error && <p className="mt-1 text-xs text-[#9c4a3c]">{error}</p>}
+      {error && <p className="mt-1 text-xs text-[#9c4a3c] dark:text-[#e6a99f]">{error}</p>}
     </div>
   );
 }

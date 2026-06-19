@@ -75,13 +75,16 @@ function extractDeadline(text?: string | null): string {
 
 // 招聘类型（实习/校招/社招）= 强特征，三色区分，每张卡片必显示。
 function recruitTypeStyle(t: string): string {
-  if (t === "实习") return "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312]";
-  if (t === "校招") return "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a]";
-  return "border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299]"; // 社招
+  if (t === "实习")
+    return "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/15 dark:text-[#e0b15a]";
+  if (t === "校招")
+    return "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/30 dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]";
+  return "border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8]"; // 社招
 }
 
 // 岗位职能（产品/研发/…）= 次强特征，统一中性配色，每张卡片必显示。
-const FUNCTION_STYLE = "border border-black/[0.08] bg-[#f0ece2] text-[#6b655a]";
+const FUNCTION_STYLE =
+  "border border-black/[0.08] bg-[#f0ece2] text-[#6b655a] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#b6ad9d]";
 
 // 洞察按钮的点击前预告：实录(紫·有数量) / 岗位聚合派生(蓝·与抽屉派生标记同色) / 暂无(灰) / 加载中(中性紫)。
 // 让用户点击前就知道有没有内容、是实录还是聚合，降低空抽屉点击。
@@ -95,7 +98,7 @@ function insightBadge(avail: InsightAvailability | null): {
     return {
       label: "职业洞察",
       title: "查看该公司的职业洞察",
-      cls: "border-[#cfc0e6] bg-[#efe9f8] text-[#6a4fa0] hover:border-[#bba9dd] hover:bg-[#e7def4]",
+      cls: "border-[#cfc0e6] bg-[#efe9f8] text-[#6a4fa0] hover:border-[#bba9dd] hover:bg-[#e7def4] dark:border-[#c3b1e6]/30 dark:bg-[#c3b1e6]/15 dark:text-[#c3b1e6] dark:hover:border-[#c3b1e6]/45 dark:hover:bg-[#c3b1e6]/[0.22]",
       derived: false,
     };
   }
@@ -103,7 +106,7 @@ function insightBadge(avail: InsightAvailability | null): {
     return {
       label: `洞察 ${avail.real}`,
       title: `查看该公司的 ${avail.real} 条职业洞察（实录·已核验）`,
-      cls: "border-[#cfc0e6] bg-[#efe9f8] text-[#6a4fa0] hover:border-[#bba9dd] hover:bg-[#e7def4]",
+      cls: "border-[#cfc0e6] bg-[#efe9f8] text-[#6a4fa0] hover:border-[#bba9dd] hover:bg-[#e7def4] dark:border-[#c3b1e6]/30 dark:bg-[#c3b1e6]/15 dark:text-[#c3b1e6] dark:hover:border-[#c3b1e6]/45 dark:hover:bg-[#c3b1e6]/[0.22]",
       derived: false,
     };
   }
@@ -111,14 +114,14 @@ function insightBadge(avail: InsightAvailability | null): {
     return {
       label: "岗位聚合",
       title: "查看据本平台在招岗位聚合出的洞察（暂无实录条目）",
-      cls: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] hover:border-[#9cc3ea] hover:bg-[#cfe0f5]",
+      cls: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] hover:border-[#9cc3ea] hover:bg-[#cfe0f5] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8] dark:hover:border-[#7fb2e8]/45 dark:hover:bg-[#7fb2e8]/[0.22]",
       derived: true,
     };
   }
   return {
     label: "暂无洞察",
     title: "该公司暂无可展示的职业洞察（点击查看说明）",
-    cls: "border-black/[0.08] bg-[#f0ece2] text-[#9a9184] hover:text-[#6b655a]",
+    cls: "border-black/[0.08] bg-[#f0ece2] text-[#9a9184] hover:text-[#6b655a] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#837c70] dark:hover:text-[#b6ad9d]",
     derived: false,
   };
 }
@@ -241,16 +244,16 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
       className={cn(
         // cv-auto = content-visibility 性能护栏；glass-card = 暖光液态玻璃；
         // 去掉常驻 will-change-transform（几百张卡片各自占一个 GPU 层会撑爆显存→崩页），hover 位移交给 transition。
-        "group cursor-target bento-glow cv-auto glass-card rounded-[1.35rem] border p-5 text-[#1a1714] transition duration-300 ease-out hover:-translate-y-1 motion-reduce:hover:translate-y-0",
+        "group cursor-target bento-glow cv-auto glass-card rounded-[1.35rem] border p-5 text-[#1a1714] transition duration-300 ease-out hover:-translate-y-1 motion-reduce:hover:translate-y-0 dark:text-[#f3ecdf]",
         sessionNew
-          ? "border-[#bcdcae] bg-[#eef6e0]/75 ring-1 ring-[#cfe6b0] hover:bg-[#eef6e0]/90 hover:shadow-[0_26px_56px_-28px_rgba(60,90,30,0.4)]"
-          : "border-black/[0.06] bg-white/55 shadow-[0_18px_44px_-30px_rgba(40,34,28,0.32)] hover:border-black/[0.1] hover:bg-white/80 hover:shadow-[0_26px_56px_-26px_rgba(40,34,28,0.42)]",
+          ? "border-[#bcdcae] bg-[#eef6e0]/75 ring-1 ring-[#cfe6b0] hover:bg-[#eef6e0]/90 hover:shadow-[0_26px_56px_-28px_rgba(60,90,30,0.4)] dark:border-[#a3d06a]/30 dark:bg-[#a3d06a]/[0.08] dark:ring-[#a3d06a]/25 dark:hover:bg-[#a3d06a]/[0.12]"
+          : "border-black/[0.06] bg-white/55 shadow-[0_18px_44px_-30px_rgba(40,34,28,0.32)] hover:border-black/[0.1] hover:bg-white/80 hover:shadow-[0_26px_56px_-26px_rgba(40,34,28,0.42)] dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:border-white/20 dark:hover:bg-white/[0.08]",
       )}
     >
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium text-[#8a8275]">{job.company}</span>
+            <span className="text-sm font-medium text-[#8a8275] dark:text-[#9a9184]">{job.company}</span>
             <span
               className={cn(
                 "rounded-full px-2.5 py-1 text-xs font-semibold",
@@ -263,18 +266,18 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
               {jobFunction}
             </span>
             {sessionNew && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-[#dcefb4] px-2.5 py-1 text-xs font-semibold text-[#4f6f2a]">
+              <span className="inline-flex items-center gap-1 rounded-full bg-[#dcefb4] px-2.5 py-1 text-xs font-semibold text-[#4f6f2a] dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]">
                 <Sparkle size={12} weight="fill" aria-hidden="true" />
                 本次新发现
               </span>
             )}
             {isNew && !sessionNew && (
-              <span className="rounded-full bg-[#cfe2f8] px-2.5 py-1 text-xs font-semibold text-[#2f6299]">
+              <span className="rounded-full bg-[#cfe2f8] px-2.5 py-1 text-xs font-semibold text-[#2f6299] dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8]">
                 新发现
               </span>
             )}
             {currentAction && (
-              <span className="rounded-full bg-[#1a1714] px-2.5 py-1 text-xs font-semibold text-[#f7f1e6]">
+              <span className="rounded-full bg-[#1a1714] px-2.5 py-1 text-xs font-semibold text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
                 {currentAction === "saved"
                   ? "已收藏"
                   : currentAction === "applied"
@@ -310,7 +313,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
           <button
             type="button"
             onClick={handleView}
-            className="mt-2 block max-w-full text-left text-xl font-semibold leading-snug text-[#1a1714] transition-colors hover:text-[#3f7cc0]"
+            className="mt-2 block max-w-full text-left text-xl font-semibold leading-snug text-[#1a1714] transition-colors hover:text-[#3f7cc0] dark:text-[#f3ecdf] dark:hover:text-[#7fb2e8]"
           >
             <span className="text-balance">{job.title}</span>
           </button>
@@ -328,7 +331,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
             <p
               className={cn(
                 "mt-2 text-xs font-medium",
-                freshness.stale ? "text-[#9a6a2a]" : "text-[#8a8275]",
+                freshness.stale ? "text-[#9a6a2a] dark:text-[#e0b15a]" : "text-[#8a8275] dark:text-[#9a9184]",
               )}
             >
               {freshness.label}
@@ -339,7 +342,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
             <div className="mt-4">
               <p
                 className={cn(
-                  "whitespace-pre-line text-pretty text-sm leading-6 text-[#5f594e]",
+                  "whitespace-pre-line text-pretty text-sm leading-6 text-[#5f594e] dark:text-[#b6ad9d]",
                   !expanded && "line-clamp-3",
                 )}
               >
@@ -349,7 +352,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
                 <button
                   type="button"
                   onClick={() => setExpanded((v) => !v)}
-                  className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-[#3f7cc0] transition-colors hover:text-[#2f6299]"
+                  className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-[#3f7cc0] transition-colors hover:text-[#2f6299] dark:text-[#7fb2e8] dark:hover:text-[#a8cdf0]"
                 >
                   {expanded ? "收起" : "展开全文"}
                   <CaretDown
@@ -369,8 +372,8 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
                   className={cn(
                     "rounded-full px-2.5 py-1 text-xs font-semibold",
                     tier.level === "high"
-                      ? "bg-[#1a1714] text-[#f7f1e6]"
-                      : "border border-black/[0.08] bg-[#f0ece2] text-[#6b655a]",
+                      ? "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                      : "border border-black/[0.08] bg-[#f0ece2] text-[#6b655a] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#b6ad9d]",
                   )}
                 >
                   {tier.label}
@@ -379,7 +382,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
               {job.matched_keywords.slice(0, 3).map((kw) => (
                 <span
                   key={kw}
-                  className="rounded-full border border-[#cfe0f5] bg-[#e8f1fc] px-2.5 py-1 text-xs font-medium text-[#2f6299]"
+                  className="rounded-full border border-[#cfe0f5] bg-[#e8f1fc] px-2.5 py-1 text-xs font-medium text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/12 dark:text-[#7fb2e8]"
                 >
                   {kw}
                 </span>
@@ -393,7 +396,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
           <button
             type="button"
             onClick={handleView}
-            className="inline-flex items-center justify-center gap-2 rounded-full bg-[#1a1714] px-4 py-2.5 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98] lg:py-2"
+            className="inline-flex items-center justify-center gap-2 rounded-full bg-[#1a1714] px-4 py-2.5 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98] lg:py-2 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
           >
             官网详情
             <ArrowSquareOut size={16} weight="bold" aria-hidden="true" />
@@ -423,7 +426,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
             />
           </div>
           {actionError && (
-            <span className="rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-2 py-1 text-xs text-[#9c4a3c] lg:text-right">
+            <span className="rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-2 py-1 text-xs text-[#9c4a3c] lg:text-right dark:border-[#7a392e]/60 dark:bg-[#3a201a] dark:text-[#e6a99f]">
               {actionError}
             </span>
           )}
@@ -449,11 +452,11 @@ function Field({
   value: string;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 rounded-xl border border-black/[0.06] bg-white/55 px-3 py-2">
-      <Icon size={16} className="shrink-0 text-[#a39a8c]" aria-hidden="true" />
+    <div className="flex min-w-0 items-center gap-2 rounded-xl border border-black/[0.06] bg-white/55 px-3 py-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
+      <Icon size={16} className="shrink-0 text-[#a39a8c] dark:text-[#8b8478]" aria-hidden="true" />
       <div className="min-w-0">
-        <span className="mr-1 text-[#9a9184]">{label}</span>
-        <span className="truncate font-medium text-[#3f3a33]">{value}</span>
+        <span className="mr-1 text-[#9a9184] dark:text-[#837c70]">{label}</span>
+        <span className="truncate font-medium text-[#3f3a33] dark:text-[#d9d0c2]">{value}</span>
       </div>
     </div>
   );
@@ -482,10 +485,10 @@ function ActionButton({
       className={cn(
         "inline-flex items-center justify-center gap-1 rounded-full px-2 py-2 text-[12px] font-medium transition duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-4 sm:text-sm",
         active
-          ? "bento-selected bg-[#1a1714] text-[#f7f1e6]"
+          ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
           : muted
-            ? "text-[#8a8275] hover:bg-black/[0.05] hover:text-[#1a1714]"
-            : "border border-black/[0.07] bg-white/70 text-[#3f3a33] hover:bg-white",
+            ? "text-[#8a8275] hover:bg-black/[0.05] hover:text-[#1a1714] dark:text-[#9a9184] dark:hover:bg-white/[0.05] dark:hover:text-[#f3ecdf]"
+            : "border border-black/[0.07] bg-white/70 text-[#3f3a33] hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]",
       )}
     >
       <Icon size={16} weight={active ? "fill" : "regular"} className="shrink-0" aria-hidden="true" />

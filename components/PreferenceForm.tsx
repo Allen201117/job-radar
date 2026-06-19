@@ -80,21 +80,21 @@ export default function PreferenceForm() {
 
   if (!prefs) {
     return (
-      <div className="surface p-5 text-sm text-[#5f594e]">
+      <div className="surface p-5 text-sm text-[#5f594e] dark:text-[#b6ad9d]">
         加载中...
       </div>
     );
   }
 
   return (
-    <form onSubmit={handleSave} className="surface space-y-5 p-5 text-[#1a1714]">
+    <form onSubmit={handleSave} className="surface space-y-5 p-5 text-[#1a1714] dark:text-[#f3ecdf]">
       <div className="flex items-center gap-2">
-        <div className="grid size-9 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6]">
+        <div className="grid size-9 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
           <SlidersHorizontal size={18} weight="fill" aria-hidden="true" />
         </div>
         <div>
           <h2 className="text-base font-semibold">求职偏好</h2>
-          <p className="text-sm text-[#8a8275]">这些信号会影响每日队列排序。</p>
+          <p className="text-sm text-[#8a8275] dark:text-[#9a9184]">这些信号会影响每日队列排序。</p>
         </div>
       </div>
       <Field label="目标城市">
@@ -144,7 +144,7 @@ export default function PreferenceForm() {
       </Field>
 
       {message && (
-        <p className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm ${message.includes("失败") ? "border-[#e0b4ac] bg-[#f7e6e1] text-[#9c4a3c]" : "border-[#bcd2ed] bg-[#e8f1fc] text-[#2f6299]"}`}>
+        <p className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm ${message.includes("失败") ? "border-[#e0b4ac] dark:border-[#7a392e]/60 bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]" : "border-[#bcd2ed] dark:border-[#7fb2e8]/30 bg-[#e8f1fc] dark:bg-[#7fb2e8]/15 text-[#2f6299] dark:text-[#7fb2e8]"}`}>
           {!message.includes("失败") && <CheckCircle size={16} weight="fill" aria-hidden="true" />}
           {message}
         </p>
@@ -160,7 +160,7 @@ export default function PreferenceForm() {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="text-sm font-medium text-[#5f594e]">{label}</label>
+      <label className="text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">{label}</label>
       {children}
     </div>
   );

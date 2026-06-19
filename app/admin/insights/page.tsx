@@ -47,29 +47,29 @@ export default async function InsightsAdminPage() {
           icon={Sparkle}
         />
 
-        <section className="surface mb-6 p-5 text-[#1a1714] sm:p-6">
+        <section className="surface mb-6 p-5 text-[#1a1714] dark:text-[#f3ecdf] sm:p-6">
           <h2 className="text-base font-semibold">近 7 天事件计数</h2>
-          <p className="mt-1 text-xs text-[#8a8275]">
+          <p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">
             自有最小埋点（无第三方分析 SDK）。用于判断职业洞察 / 岗位点击 / 刷新等功能是否有人用。
           </p>
           {stats.error ? (
-            <p className="mt-4 rounded-xl border border-[#e0b4ac] bg-[#f7e6e1] px-3.5 py-2.5 text-sm text-[#9c4a3c]">
+            <p className="mt-4 rounded-xl border border-[#e0b4ac] bg-[#f7e6e1] px-3.5 py-2.5 text-sm text-[#9c4a3c] dark:border-[#7a392e]/60 dark:bg-[#3a201a] dark:text-[#e6a99f]">
               统计暂不可用：{stats.error}
             </p>
           ) : stats.rows.length === 0 ? (
-            <p className="mt-4 text-sm text-[#8a8275]">近 7 天暂无事件。</p>
+            <p className="mt-4 text-sm text-[#8a8275] dark:text-[#9a9184]">近 7 天暂无事件。</p>
           ) : (
             <table className="mt-4 w-full max-w-md text-sm">
               <thead>
-                <tr className="border-b border-black/[0.08] text-left text-xs text-[#8a8275]">
+                <tr className="border-b border-black/[0.08] text-left text-xs text-[#8a8275] dark:border-white/[0.1] dark:text-[#9a9184]">
                   <th className="py-2 font-medium">事件</th>
                   <th className="py-2 text-right font-medium">近 7 天次数</th>
                 </tr>
               </thead>
               <tbody>
                 {stats.rows.map((r) => (
-                  <tr key={r.event} className="border-b border-black/[0.05]">
-                    <td className="py-2 font-mono text-[#3f3a33]">{r.event}</td>
+                  <tr key={r.event} className="border-b border-black/[0.05] dark:border-white/[0.1]">
+                    <td className="py-2 font-mono text-[#3f3a33] dark:text-[#d9d0c2]">{r.event}</td>
                     <td className="py-2 text-right font-semibold tabular-nums">{r.count}</td>
                   </tr>
                 ))}

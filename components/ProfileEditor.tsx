@@ -52,9 +52,9 @@ export default function ProfileEditor({ email }: { email?: string }) {
   }
 
   return (
-    <section className="surface p-5 text-[#1a1714]">
+    <section className="surface p-5 text-[#1a1714] dark:text-[#f3ecdf]">
       <div className="flex items-center gap-2">
-        <div className="grid size-9 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6]">
+        <div className="grid size-9 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
           <UserCircle size={18} weight="fill" aria-hidden="true" />
         </div>
         <h2 className="text-base font-semibold">个人资料</h2>
@@ -62,7 +62,7 @@ export default function ProfileEditor({ email }: { email?: string }) {
 
       <form onSubmit={save} className="mt-4 space-y-3">
         <div>
-          <label htmlFor="display_name" className="inline-flex items-center gap-1.5 text-sm font-medium text-[#5f594e]">
+          <label htmlFor="display_name" className="inline-flex items-center gap-1.5 text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">
             <IdentificationBadge size={16} weight="bold" aria-hidden="true" />
             昵称
           </label>
@@ -77,7 +77,7 @@ export default function ProfileEditor({ email }: { email?: string }) {
         </div>
 
         <div>
-          <label htmlFor="bio" className="text-sm font-medium text-[#5f594e]">
+          <label htmlFor="bio" className="text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">
             个性签名
           </label>
           <textarea
@@ -88,15 +88,15 @@ export default function ProfileEditor({ email }: { email?: string }) {
             placeholder="一句话介绍自己（选填）"
             className="mt-1 field-soft"
           />
-          <div className="mt-1 text-right text-xs text-[#a39a8c]">
+          <div className="mt-1 text-right text-xs text-[#a39a8c] dark:text-[#8b8478]">
             {bio.length}/{MAX_BIO}
           </div>
         </div>
 
-        {email && <p className="text-xs text-[#8a8275]">登录邮箱：{email}</p>}
+        {email && <p className="text-xs text-[#8a8275] dark:text-[#9a9184]">登录邮箱：{email}</p>}
 
         {message && (
-          <p className={`rounded-full border px-3 py-2 text-sm ${message.includes("失败") ? "border-[#e0b4ac] bg-[#f7e6e1] text-[#9c4a3c]" : "border-[#bcd2ed] bg-[#e8f1fc] text-[#2f6299]"}`}>
+          <p className={`rounded-full border px-3 py-2 text-sm ${message.includes("失败") ? "border-[#e0b4ac] dark:border-[#7a392e]/60 bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]" : "border-[#bcd2ed] dark:border-[#7fb2e8]/30 bg-[#e8f1fc] dark:bg-[#7fb2e8]/15 text-[#2f6299] dark:text-[#7fb2e8]"}`}>
             {message}
           </p>
         )}

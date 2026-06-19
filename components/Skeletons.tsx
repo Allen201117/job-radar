@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 
 // 单条占位骨条
 function Bar({ className }: { className?: string }) {
-  return <div className={cn("rounded-md bg-black/[0.06]", className)} aria-hidden="true" />;
+  return <div className={cn("rounded-md bg-black/[0.06] dark:bg-white/[0.06]", className)} aria-hidden="true" />;
 }
 
 // 单张岗位卡骨架（对齐 JobCard 的 .surface 卡片：公司 / 标题 / 标签 / 操作）

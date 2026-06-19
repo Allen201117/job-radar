@@ -123,7 +123,7 @@ const EMPTY_FORM: FormState = {
 };
 
 const inputCls =
-  "w-full rounded-lg border border-black/[0.09] bg-white/70 px-3 py-2 text-sm text-[#1a1714] outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white";
+  "w-full rounded-lg border border-black/[0.09] bg-white/70 px-3 py-2 text-sm text-[#1a1714] outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#f3ecdf] dark:placeholder:text-[#8b8478] dark:focus:border-white/40 dark:focus:bg-[#1e1a15]";
 
 // 从 payload 安全取字符串字段
 function pstr(payload: Record<string, unknown> | null | undefined, key: string): string {
@@ -436,27 +436,27 @@ export default function InsightsAdminClient() {
     }
   }
 
-  if (loading) return <p className="mt-8 text-sm text-[#8a8275]">正在加载洞察后台…</p>;
+  if (loading) return <p className="mt-8 text-sm text-[#8a8275] dark:text-[#9a9184]">正在加载洞察后台…</p>;
   if (error)
     return (
-      <p className="mt-8 rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm text-[#5f594e]">
+      <p className="mt-8 rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
         {error}
       </p>
     );
 
   return (
-    <div className="mt-8 space-y-8 text-[#1a1714]">
+    <div className="mt-8 space-y-8 text-[#1a1714] dark:text-[#f3ecdf]">
       <div className="flex flex-wrap items-center gap-3">
         {!formOpen && (
           <button
             type="button"
             onClick={openCreate}
-            className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] active:scale-[0.98]"
+            className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] active:scale-[0.98] dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
           >
             <Plus size={16} weight="bold" /> 新增洞察条目
           </button>
         )}
-        <span className="text-sm text-[#8a8275]">
+        <span className="text-sm text-[#8a8275] dark:text-[#9a9184]">
           共 {items.length} 条洞察 · {companies.length} 家公司 · {disputes.length} 条待处理申诉
         </span>
       </div>
@@ -482,7 +482,7 @@ export default function InsightsAdminClient() {
       {/* 待处理申诉 */}
       {disputes.length > 0 && (
         <section>
-          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#9a6a2a]">
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#9a6a2a] dark:text-[#e0b15a]">
             <Flag size={16} weight="fill" /> 待处理申诉（{disputes.length}）
           </h2>
           <div className="space-y-3">
@@ -491,9 +491,9 @@ export default function InsightsAdminClient() {
               return (
                 <article
                   key={d.id}
-                  className="rounded-xl border border-[#e7c98a] bg-[#fbf2d8] p-4 text-sm"
+                  className="rounded-xl border border-[#e7c98a] bg-[#fbf2d8] p-4 text-sm dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/15"
                 >
-                  <p className="text-[#1a1714]">
+                  <p className="text-[#1a1714] dark:text-[#f3ecdf]">
                     {it ? (
                       <>
                         <span className="font-medium">
@@ -503,11 +503,11 @@ export default function InsightsAdminClient() {
                         · {DIM_LABELS[it.dimension]} · {it.title || it.content.slice(0, 24)}
                       </>
                     ) : (
-                      <span className="text-[#8a8275]">条目已不存在（item_id: {d.item_id.slice(0, 8)}）</span>
+                      <span className="text-[#8a8275] dark:text-[#9a9184]">条目已不存在（item_id: {d.item_id.slice(0, 8)}）</span>
                     )}
                   </p>
-                  {it && <p className="mt-1 leading-6 text-[#5f594e]">{it.content}</p>}
-                  <p className="mt-2 text-xs text-[#8a8275]">
+                  {it && <p className="mt-1 leading-6 text-[#5f594e] dark:text-[#b6ad9d]">{it.content}</p>}
+                  <p className="mt-2 text-xs text-[#8a8275] dark:text-[#9a9184]">
                     申诉理由：{d.reason || "（未填写）"} · {new Date(d.created_at).toLocaleString("zh-CN")}
                   </p>
                   <div className="mt-3 flex gap-2">
@@ -515,7 +515,7 @@ export default function InsightsAdminClient() {
                       type="button"
                       disabled={busyId === d.id}
                       onClick={() => resolveDispute(d, "upheld")}
-                      className="inline-flex items-center gap-1.5 rounded-full bg-[#1a1714] px-3 py-1.5 text-xs font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 rounded-full bg-[#1a1714] px-3 py-1.5 text-xs font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
                     >
                       <Trash size={13} weight="bold" /> 成立并下架
                     </button>
@@ -523,7 +523,7 @@ export default function InsightsAdminClient() {
                       type="button"
                       disabled={busyId === d.id}
                       onClick={() => resolveDispute(d, "rejected")}
-                      className="rounded-full border border-black/[0.1] px-3 py-1.5 text-xs font-medium text-[#5f594e] transition hover:bg-black/[0.05] hover:text-[#1a1714] disabled:opacity-50"
+                      className="rounded-full border border-black/[0.1] px-3 py-1.5 text-xs font-medium text-[#5f594e] transition hover:bg-black/[0.05] hover:text-[#1a1714] disabled:opacity-50 dark:border-white/[0.1] dark:text-[#b6ad9d] dark:hover:bg-white/[0.05] dark:hover:text-[#f3ecdf]"
                     >
                       驳回
                     </button>
@@ -538,18 +538,18 @@ export default function InsightsAdminClient() {
       {/* 行业覆盖 worklist：按行业看缺口，点公司直接补录 */}
       {companies.length > 0 && (
         <section>
-          <h2 className="mb-3 text-sm font-semibold text-[#3f3a33]">
+          <h2 className="mb-3 text-sm font-semibold text-[#3f3a33] dark:text-[#d9d0c2]">
             行业覆盖（{companies.length} 家公司 · 绿色=已录入，灰色=待补全，点公司直接补录）
           </h2>
           <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
             {industryCoverage.map((g) => (
               <div key={g.industry} className="surface-soft p-3">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-[#1a1714]">{g.industry}</span>
+                  <span className="text-sm font-medium text-[#1a1714] dark:text-[#f3ecdf]">{g.industry}</span>
                   <span
                     className={cn(
                       "shrink-0 rounded-full px-2 py-0.5 text-[11px]",
-                      g.withInsights ? "bg-[#e6f2d6] text-[#4f6f2a]" : "bg-[#f4efe6] text-[#8a8275]",
+                      g.withInsights ? "bg-[#e6f2d6] text-[#4f6f2a] dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]" : "bg-[#f4efe6] text-[#8a8275] dark:bg-white/[0.08] dark:text-[#9a9184]",
                     )}
                   >
                     已录入 {g.withInsights}/{g.total}
@@ -565,8 +565,8 @@ export default function InsightsAdminClient() {
                       className={cn(
                         "rounded-full border px-2 py-0.5 text-[11px] transition",
                         c.count > 0
-                          ? "border-[#cfe6b0] bg-[#eef6e0] text-[#4f6f2a] hover:bg-[#e2efce]"
-                          : "border-black/[0.08] bg-white/60 text-[#8a8275] hover:bg-white hover:text-[#1a1714]",
+                          ? "border-[#cfe6b0] bg-[#eef6e0] text-[#4f6f2a] hover:bg-[#e2efce] dark:border-[#a3d06a]/30 dark:bg-[#a3d06a]/15 dark:text-[#a3d06a] dark:hover:bg-[#a3d06a]/25"
+                          : "border-black/[0.08] bg-white/60 text-[#8a8275] hover:bg-white hover:text-[#1a1714] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#9a9184] dark:hover:bg-[#1e1a15] dark:hover:text-[#f3ecdf]",
                       )}
                     >
                       {c.company}
@@ -584,7 +584,7 @@ export default function InsightsAdminClient() {
       <section className="space-y-6">
         {grouped.map((g) => (
           <div key={g.name}>
-            <h3 className="mb-2 text-sm font-semibold text-[#3f3a33]">{g.name}</h3>
+            <h3 className="mb-2 text-sm font-semibold text-[#3f3a33] dark:text-[#d9d0c2]">{g.name}</h3>
             <div className="space-y-2.5">
               {g.items.map((it) => (
                 <ItemRow
@@ -600,7 +600,7 @@ export default function InsightsAdminClient() {
           </div>
         ))}
         {grouped.length === 0 && (
-          <p className="rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm text-[#5f594e]">
+          <p className="rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
             还没有任何洞察条目。点「新增洞察条目」开始录入。
           </p>
         )}
@@ -610,9 +610,9 @@ export default function InsightsAdminClient() {
 }
 
 function statusChip(status: string) {
-  if (status === "active") return "border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a]";
-  if (status === "disputed") return "border-[#e7c98a] bg-[#fbeecb] text-[#8a6312]";
-  return "border-black/[0.08] bg-[#f4efe6] text-[#8a8275]";
+  if (status === "active") return "border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/30 dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]";
+  if (status === "disputed") return "border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/15 dark:text-[#e0b15a]";
+  return "border-black/[0.08] bg-[#f4efe6] text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#9a9184]";
 }
 
 function ItemRow({
@@ -631,17 +631,17 @@ function ItemRow({
   return (
     <article className="surface-soft p-4 text-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e]">
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
           {DIM_LABELS[item.dimension]}
         </span>
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e]">
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
           {GRADE_LABELS[item.grade]}
         </span>
         <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", statusChip(item.status))}>
           {STATUS_LABELS[item.status] || item.status}
         </span>
         {!item.deidentified && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-[#e0b4ac] bg-[#f7e6e1] px-2 py-0.5 text-[11px] text-[#9c4a3c]">
+          <span className="inline-flex items-center gap-1 rounded-full border border-[#e0b4ac] bg-[#f7e6e1] px-2 py-0.5 text-[11px] text-[#9c4a3c] dark:border-[#7a392e]/60 dark:bg-[#3a201a] dark:text-[#e6a99f]">
             <Warning size={11} weight="fill" /> 未去标识
           </span>
         )}
@@ -649,7 +649,7 @@ function ItemRow({
           <button
             type="button"
             onClick={onEdit}
-            className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#5f594e] transition hover:bg-black/[0.05] hover:text-[#1a1714]"
+            className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#5f594e] transition hover:bg-black/[0.05] hover:text-[#1a1714] dark:text-[#b6ad9d] dark:hover:bg-white/[0.05] dark:hover:text-[#f3ecdf]"
           >
             <PencilSimple size={13} /> 编辑
           </button>
@@ -658,7 +658,7 @@ function ItemRow({
               type="button"
               disabled={busy}
               onClick={onRetire}
-              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#5f594e] transition hover:bg-black/[0.05] hover:text-[#1a1714] disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#5f594e] transition hover:bg-black/[0.05] hover:text-[#1a1714] disabled:opacity-50 dark:text-[#b6ad9d] dark:hover:bg-white/[0.05] dark:hover:text-[#f3ecdf]"
             >
               <Trash size={13} /> 下架
             </button>
@@ -667,16 +667,16 @@ function ItemRow({
               type="button"
               disabled={busy}
               onClick={onActivate}
-              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#4f6f2a] transition hover:bg-black/[0.05] hover:text-[#3f5a1c] disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#4f6f2a] transition hover:bg-black/[0.05] hover:text-[#3f5a1c] disabled:opacity-50 dark:text-[#a3d06a] dark:hover:bg-white/[0.05] dark:hover:text-[#b8dd85]"
             >
               <ArrowCounterClockwise size={13} /> 上架
             </button>
           )}
         </div>
       </div>
-      {item.title && <p className="mt-2 font-semibold text-[#1a1714]">{item.title}</p>}
-      <p className="mt-1 leading-6 text-[#3f3a33]">{item.content}</p>
-      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[#8a8275]">
+      {item.title && <p className="mt-2 font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{item.title}</p>}
+      <p className="mt-1 leading-6 text-[#3f3a33] dark:text-[#d9d0c2]">{item.content}</p>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[#8a8275] dark:text-[#9a9184]">
         {item.sample_size != null && <span>样本 {item.sample_size}</span>}
         {item.time_window && <span>{item.time_window}</span>}
         {item.valid_until && <span>有效期至 {item.valid_until}</span>}
@@ -718,7 +718,7 @@ function ItemForm({
   return (
     <form
       onSubmit={onSubmit}
-      className="surface p-5 text-[#1a1714]"
+      className="surface p-5 text-[#1a1714] dark:text-[#f3ecdf]"
     >
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-base font-semibold">{form.id ? "编辑洞察条目" : "新增洞察条目"}</h3>
@@ -728,7 +728,7 @@ function ItemForm({
             onClick={onAiDraft}
             disabled={aiDrafting}
             title="用 AI 按公司+维度生成草稿（仅辅助，需人工核对+补来源）"
-            className="inline-flex items-center gap-1.5 rounded-full border border-[#b7d2ee] bg-[#dceafa] px-3 py-1.5 text-[12px] font-semibold text-[#2f6299] transition hover:bg-[#cfe2f7] disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-full border border-[#b7d2ee] bg-[#dceafa] px-3 py-1.5 text-[12px] font-semibold text-[#2f6299] transition hover:bg-[#cfe2f7] disabled:opacity-50 dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8] dark:hover:bg-[#7fb2e8]/25"
           >
             <Sparkle size={13} weight="fill" />
             {aiDrafting ? "AI 起草中…" : "AI 起草"}
@@ -736,7 +736,7 @@ function ItemForm({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-full bg-black/[0.05] p-1.5 text-[#5f594e] transition hover:bg-black/[0.08] hover:text-[#1a1714]"
+            className="rounded-full bg-black/[0.05] p-1.5 text-[#5f594e] transition hover:bg-black/[0.08] hover:text-[#1a1714] dark:bg-white/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.08] dark:hover:text-[#f3ecdf]"
           >
             <X size={16} weight="bold" />
           </button>
@@ -838,7 +838,7 @@ function ItemForm({
         </FormField>
 
         <FormField label="去标识">
-          <label className="inline-flex items-center gap-2 text-sm text-[#5f594e]">
+          <label className="inline-flex items-center gap-2 text-sm text-[#5f594e] dark:text-[#b6ad9d]">
             <input
               type="checkbox"
               checked={form.deidentified}
@@ -879,14 +879,14 @@ function ItemForm({
       {/* 来源 */}
       <div className="mt-5">
         <div className="mb-2 flex items-center justify-between">
-          <span className="text-xs font-medium text-[#8a8275]">来源（链接 + 短摘要，禁整段原文）</span>
-          <button type="button" onClick={addSource} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#2f6299] transition hover:bg-black/[0.05]">
+          <span className="text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">来源（链接 + 短摘要，禁整段原文）</span>
+          <button type="button" onClick={addSource} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#2f6299] transition hover:bg-black/[0.05] dark:text-[#7fb2e8] dark:hover:bg-white/[0.05]">
             <Plus size={12} weight="bold" /> 加一条来源
           </button>
         </div>
         <div className="space-y-3">
           {form.sources.map((s, i) => (
-            <div key={i} className="rounded-lg border border-black/[0.06] bg-white/55 p-3">
+            <div key={i} className="rounded-lg border border-black/[0.06] bg-white/55 p-3 dark:border-white/[0.1] dark:bg-white/[0.05]">
               <div className="grid gap-2.5 sm:grid-cols-2">
                 <input value={s.url} onChange={(e) => setSource(i, { url: e.target.value })} placeholder="https://…" className={inputCls} />
                 <input value={s.publisher} onChange={(e) => setSource(i, { publisher: e.target.value })} placeholder="来源名，如「界面新闻」" className={inputCls} />
@@ -900,12 +900,12 @@ function ItemForm({
                 <input value={s.excerpt} onChange={(e) => setSource(i, { excerpt: e.target.value })} placeholder="短摘要（选填）" className={inputCls} />
               </div>
               <div className="mt-2 flex items-center justify-between">
-                <label className="inline-flex items-center gap-2 text-xs text-[#5f594e]">
+                <label className="inline-flex items-center gap-2 text-xs text-[#5f594e] dark:text-[#b6ad9d]">
                   <input type="checkbox" checked={s.deidentified} onChange={(e) => setSource(i, { deidentified: e.target.checked })} className="size-3.5 accent-[#1a1714]" />
                   已去标识
                 </label>
                 {form.sources.length > 1 && (
-                  <button type="button" onClick={() => removeSource(i)} className="text-[11px] text-[#9a9184] transition hover:text-[#9c4a3c]">
+                  <button type="button" onClick={() => removeSource(i)} className="text-[11px] text-[#9a9184] transition hover:text-[#9c4a3c] dark:text-[#837c70] dark:hover:text-[#e6a99f]">
                     删除
                   </button>
                 )}
@@ -916,23 +916,23 @@ function ItemForm({
       </div>
 
       {formGate && (
-        <p className="mt-4 rounded-lg border border-[#e7c98a] bg-[#fbf2d8] px-3 py-2 text-xs leading-5 text-[#8a6312]">
+        <p className="mt-4 rounded-lg border border-[#e7c98a] bg-[#fbf2d8] px-3 py-2 text-xs leading-5 text-[#8a6312] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/15 dark:text-[#e0b15a]">
           {formGate}
         </p>
       )}
       {formError && (
-        <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c]">{formError}</p>
+        <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c] dark:border-[#7a392e]/60 dark:bg-[#3a201a] dark:text-[#e6a99f]">{formError}</p>
       )}
 
       <div className="mt-4 flex gap-2">
         <button
           type="submit"
           disabled={saving}
-          className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] active:scale-[0.98] disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] active:scale-[0.98] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
         >
           {saving ? "保存中…" : form.id ? "保存修改" : "创建条目"}
         </button>
-        <button type="button" onClick={onCancel} className="rounded-full px-4 py-2 text-sm font-medium text-[#8a8275] transition hover:bg-black/[0.05] hover:text-[#1a1714]">
+        <button type="button" onClick={onCancel} className="rounded-full px-4 py-2 text-sm font-medium text-[#8a8275] transition hover:bg-black/[0.05] hover:text-[#1a1714] dark:text-[#9a9184] dark:hover:bg-white/[0.05] dark:hover:text-[#f3ecdf]">
           取消
         </button>
       </div>
@@ -951,7 +951,7 @@ function FormField({
 }) {
   return (
     <div className={className}>
-      <label className="mb-1.5 block text-xs font-medium text-[#8a8275]">{label}</label>
+      <label className="mb-1.5 block text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">{label}</label>
       {children}
     </div>
   );

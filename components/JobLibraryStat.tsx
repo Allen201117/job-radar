@@ -80,7 +80,7 @@ export default function JobLibraryStat({ initialTotal }: Props) {
     status === "stale" ? "连接暂不可用" : status === "syncing" ? "正在刷新" : "实时刷新";
 
   return (
-    <section className="surface bento-glow relative overflow-hidden p-5 text-[#1a1714] sm:p-6">
+    <section className="surface bento-glow relative overflow-hidden p-5 text-[#1a1714] dark:text-[#f3ecdf] sm:p-6">
       <div
         className="pointer-events-none absolute -right-16 -top-20 size-52 rounded-full bg-[#96b6e2]/20 blur-3xl"
         aria-hidden="true"
@@ -101,21 +101,21 @@ export default function JobLibraryStat({ initialTotal }: Props) {
             />
             {statusText}
           </div>
-          <p className="mt-3.5 text-sm text-[#8a8275]">岗位库 · 有效在招</p>
+          <p className="mt-3.5 text-sm text-[#8a8275] dark:text-[#9a9184]">岗位库 · 有效在招</p>
           <div className="mt-1 flex items-baseline gap-2">
             <AnimateNumber
               value={activeJobs}
               duration={700}
               blur={14}
-              className="text-[3rem] font-semibold leading-none tracking-[-0.04em] text-[#1a1714] sm:text-[4rem]"
+              className="text-[3rem] font-semibold leading-none tracking-[-0.04em] text-[#1a1714] dark:text-[#f3ecdf] sm:text-[4rem]"
             />
-            <span className="pb-1 text-lg font-medium text-[#9a9184]">个</span>
+            <span className="pb-1 text-lg font-medium text-[#9a9184] dark:text-[#837c70]">个</span>
           </div>
         </div>
         <button
           type="button"
           onClick={refresh}
-          className="grid size-10 shrink-0 place-items-center rounded-full border border-black/[0.08] bg-white/70 text-[#3f3a33] transition duration-200 hover:-translate-y-0.5 hover:bg-white active:scale-[0.96]"
+          className="grid size-10 shrink-0 place-items-center rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] text-[#3f3a33] dark:text-[#d9d0c2] transition duration-200 hover:-translate-y-0.5 hover:bg-white dark:hover:bg-[#1e1a15] active:scale-[0.96]"
           aria-label="立即刷新岗位库计数"
         >
           <ArrowsClockwise
@@ -132,9 +132,9 @@ export default function JobLibraryStat({ initialTotal }: Props) {
         <SubStat icon={ClockCounterClockwise} label="24h 确认在招" value={recent} />
       </div>
 
-      <div className="relative mt-4 flex items-center justify-between gap-3 border-t border-black/[0.06] pt-3.5">
-        <p className="text-xs leading-5 text-[#9a9184]">{syncLabel}</p>
-        <p className="text-xs font-medium text-[#3f7cc0]">轮询间隔 12s</p>
+      <div className="relative mt-4 flex items-center justify-between gap-3 border-t border-black/[0.06] dark:border-white/[0.1] pt-3.5">
+        <p className="text-xs leading-5 text-[#9a9184] dark:text-[#837c70]">{syncLabel}</p>
+        <p className="text-xs font-medium text-[#3f7cc0] dark:text-[#7fb2e8]">轮询间隔 12s</p>
       </div>
     </section>
   );
@@ -151,10 +151,10 @@ function SubStat({
 }) {
   return (
     <div className="surface-soft bento-glow px-3.5 py-3">
-      <Icon size={16} weight="fill" className="text-[#3f7cc0]" aria-hidden="true" />
-      <p className="mt-2 text-[11px] text-[#9a9184]">{label}</p>
-      <p className="mt-0.5 text-lg font-semibold tabular-nums text-[#1a1714]">
-        {value === null ? <span className="text-[#c4bdb0]">—</span> : <AnimatedStat value={value} />}
+      <Icon size={16} weight="fill" className="text-[#3f7cc0] dark:text-[#7fb2e8]" aria-hidden="true" />
+      <p className="mt-2 text-[11px] text-[#9a9184] dark:text-[#837c70]">{label}</p>
+      <p className="mt-0.5 text-lg font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">
+        {value === null ? <span className="text-[#c4bdb0] dark:text-[#6f685e]">—</span> : <AnimatedStat value={value} />}
       </p>
     </div>
   );

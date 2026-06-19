@@ -174,7 +174,7 @@ export default async function TodayPage() {
           description="根据你的偏好和简历画像排序，隐藏已忽略和已投递岗位，把今天最值得看的官方机会放在前面。"
           icon={Broadcast}
           action={
-            <div className="rounded-2xl border border-black/[0.07] bg-white/70 px-4 py-3 text-[14px] font-medium text-[#5f594e]">
+            <div className="rounded-2xl border border-black/[0.07] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-4 py-3 text-[14px] font-medium text-[#5f594e] dark:text-[#b6ad9d]">
               显示上限 {preferences?.daily_limit || 20} 个岗位
             </div>
           }

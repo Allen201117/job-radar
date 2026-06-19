@@ -36,7 +36,7 @@ export default async function MePage() {
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
           eyebrow="个人主页"
-          title="你的求职雷达状态"
+          title="你的职达状态"
           description={user?.email || "查看收藏、投递与简历画像状态。"}
           icon={UserCircle}
         >
