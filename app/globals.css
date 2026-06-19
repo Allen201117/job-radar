@@ -688,3 +688,22 @@
   100% { transform: scale(1); opacity: 1; }
 }
 .save-check { animation: save-check 0.42s cubic-bezier(0.2, 0.8, 0.2, 1) 0.04s both; }
+
+/* ───────────────────────────────────────────────────────────────
+   品牌雷达 logo 动效（BrandMark / RadarMark）：扫描扇形持续旋转 + 命中点呼吸。
+   全站 logo 位置（导航 / 页脚 / 登录 / 注册）共用同一动态效果。reduced-motion 下静止。
+   旋转用 transform-box:view-box，使 transform-origin 落在 viewBox 的雷达圆心 (24,24)。
+   ─────────────────────────────────────────────────────────────── */
+.radar-sweep {
+  transform-box: view-box;
+  transform-origin: 24px 24px;
+  animation: radar-sweep 3.6s linear infinite;
+}
+@keyframes radar-sweep { to { transform: rotate(360deg); } }
+
+.radar-blip { animation: radar-blip 2.2s ease-in-out infinite; }
+@keyframes radar-blip { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .radar-sweep, .radar-blip { animation: none; }
+}

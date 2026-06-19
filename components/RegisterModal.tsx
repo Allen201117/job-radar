@@ -19,9 +19,9 @@ import {
   Eye,
   EyeSlash,
   Lock,
-  ShieldCheck,
   X,
 } from "@phosphor-icons/react";
+import { RadarMark } from "@/components/BrandMark";
 
 // 分步引导式注册弹窗：① 填邮箱 → ② 收 6 位验证码 → ③ 设密码 → ✓ 成功进站。
 // 实现顺序「先验证邮箱、最后设密码」：signUp(临时随机密码) 触发发码（复用已配好的
@@ -258,7 +258,7 @@ export default function RegisterModal({
           {/* 头部 */}
           <div className="flex items-center gap-2.5">
             <span className="grid size-9 place-items-center rounded-xl bg-[#1a1714] dark:bg-[#f3ecdf] text-[#f7f1e6] dark:text-[#16130f]">
-              <ShieldCheck size={19} weight="fill" aria-hidden="true" />
+              <RadarMark size={20} />
             </span>
             <span className="display-tight text-lg font-medium tracking-tight text-[#1a1714] dark:text-[#f3ecdf]">
               注册职达

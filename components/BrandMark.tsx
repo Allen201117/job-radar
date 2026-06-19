@@ -15,9 +15,9 @@ export function RadarMark({ size = 18, className }: { size?: number; className?:
       aria-hidden="true"
     >
       <circle cx="24" cy="24" r="16" stroke="currentColor" strokeWidth="3" opacity="0.42" />
-      <path d="M24 24V8a16 16 0 0 1 13.9 8Z" fill="#00e676" opacity="0.9" />
+      <path className="radar-sweep" d="M24 24V8a16 16 0 0 1 13.9 8Z" fill="#00e676" opacity="0.9" />
       <circle cx="24" cy="24" r="3" fill="currentColor" />
-      <circle cx="34" cy="16" r="2.6" fill="#00e676" />
+      <circle className="radar-blip" cx="34" cy="16" r="2.6" fill="#00e676" />
     </svg>
   );
 }
