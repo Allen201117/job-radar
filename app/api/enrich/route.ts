@@ -3,6 +3,7 @@ import { createServerSupabase } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabaseService";
 import enrichClient from "@/lib/enrich-client";
 import { jobsStoreEnabled, jobsByUrls } from "@/lib/jobs-store/read";
+import { updateJobSummaryById } from "@/lib/jobs-store/write";
 
 const { enrichOneClient, enrichClientClass } = enrichClient as {
   enrichOneClient: (adapter: string, input: { jd_url: string; source_url: string }) => Promise<string | null>;
@@ -38,12 +39,10 @@ export async function POST(request: NextRequest) {
   }
 
   const service = createServiceClient();
-  // jobs 已迁自建香港 PG：薄卡(空 summary)回查走 jobs-store；异常落回 Supabase 兜底。
-  // 注：下方富化结果写回(update summary)仍走 Supabase——app 端暂无 jobs-store 写层（已知遗留）。
-  // 香港库该行的正文由后台 drain(crawler enrich_backlog → 香港库)补；本路由的 `filled` 响应已让用户
-  // 当下看到的卡片即时拿到正文，故 Supabase 写回是无害空操作。
+  const useStore = jobsStoreEnabled();
+  // jobs 已迁自建香港 PG：薄卡(空 summary)回查 + 富化结果写回都 gated 走 jobs-store；异常落回 Supabase 兜底。
   let jobs: any[] | null = null;
-  if (jobsStoreEnabled()) {
+  if (useStore) {
     try {
       jobs = await jobsByUrls(jdUrls, true);
     } catch {
@@ -92,10 +91,14 @@ export async function POST(request: NextRequest) {
       });
       if (!summary) continue;
       try {
-        await service
-          .from("jobs")
-          .update({ summary, enrich_checked_at: new Date().toISOString() })
-          .eq("id", t.row.id);
+        if (useStore) {
+          await updateJobSummaryById(t.row.id, summary);
+        } else {
+          await service
+            .from("jobs")
+            .update({ summary, enrich_checked_at: new Date().toISOString() })
+            .eq("id", t.row.id);
+        }
         filled[t.row.jd_url] = summary;
       } catch {
         // 写库失败静默：后台 drain 会兜

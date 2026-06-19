@@ -5,6 +5,7 @@ import liveSearch from "@/lib/live-search";
 import officialDiscovery from "@/lib/official-discovery";
 import baiduQianfanSearch from "@/lib/baidu-qianfan-search";
 import { jobsStoreEnabled, jobsByUrls } from "@/lib/jobs-store/read";
+import { upsertJob as upsertJobToStore } from "@/lib/jobs-store/write";
 
 const {
   searchBaiduQianfanWeb,
@@ -2083,6 +2084,16 @@ async function searchLeverLive(source: any) {
 }
 
 async function upsertDiscoveredJob(service: SupabaseClient, job: any) {
+  // jobs 已迁自建香港 PG：配了 env 写香港库（canonical upsert，复活语义同爬虫）。写入端不回退 Supabase——
+  // 避免往已清空的 Supabase 写孤儿数据；本岗 upsert 失败只返回 null（不炸整轮 discovery）。
+  if (jobsStoreEnabled()) {
+    try {
+      return await upsertJobToStore({ ...job, source_id: null });
+    } catch (e: any) {
+      console.error("[discovery] HK upsert failed", e?.message || e);
+      return null;
+    }
+  }
   const now = new Date().toISOString();
   const { data: existing, error: existingError } = await service
     .from("jobs")

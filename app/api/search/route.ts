@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { createServerSupabase } from "@/lib/auth";
 import liveSearch from "@/lib/live-search";
+import { jobsStoreEnabled } from "@/lib/jobs-store/read";
+import { upsertJob as upsertJobToStore } from "@/lib/jobs-store/write";
 
 const {
   selectRelevantSources,
@@ -499,6 +501,17 @@ async function getSource(adapterName: string) {
 }
 
 async function upsertLiveJob(job: any) {
+  // jobs 已迁自建香港 PG：配了 env 写香港库（canonical upsert，复活语义同爬虫）。写入端不回退 Supabase
+  //（避免写孤儿数据）；本岗失败返回 null，不炸整轮刷新。job 带真实 source_id（getSource），原样传入。
+  if (jobsStoreEnabled()) {
+    try {
+      const r = await upsertJobToStore(job);
+      return r ? { ...r.row, __action: r.action } : null;
+    } catch (e: any) {
+      console.error("[search] HK upsert failed", e?.message || e);
+      return null;
+    }
+  }
   const service = createServiceClient();
   const now = new Date().toISOString();
   const { data: existing, error: existingError } = await service
