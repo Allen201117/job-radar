@@ -39,6 +39,23 @@ class TestPhenomAdapter(unittest.TestCase):
     def test_parse_garbage_returns_empty(self):
         self.assertEqual(PhenomAdapter().parse("not json"), [])
 
+    def test_summary_populated_from_list_description(self):
+        # /api/jobs 列表 data 自带完整 JD 正文（live 验证）→ summary 非空，治 0% 覆盖薄卡。
+        payload = _wrap([{
+            "slug": "86972", "title": "BD Senior Manager", "city": "Shanghai", "country": "China",
+            "description": "WHAT YOU DO AT AMD CHANGES EVERYTHING. Build great products.",
+            "responsibilities": "THE ROLE: work with ODMs to develop business.",
+            "qualifications": "10+ years of relevant experience.",
+        }])
+        job = PhenomAdapter().parse(payload)[0]
+        self.assertIsNotNone(job.summary)
+        self.assertIn("CHANGES EVERYTHING", job.summary)
+        self.assertIn("ODMs", job.summary)
+
+    def test_summary_none_when_list_has_no_description(self):
+        payload = _wrap([{"slug": "1", "title": "Role", "city": "Beijing", "country": "China"}])
+        self.assertIsNone(PhenomAdapter().parse(payload)[0].summary)
+
 
 if __name__ == "__main__":
     unittest.main()
