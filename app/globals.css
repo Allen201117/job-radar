@@ -654,6 +654,15 @@
   transform: translate3d(calc(var(--mx, 0) * var(--fd, 30) * 1px), calc(var(--my, 0) * var(--fd, 30) * 1px), 0) scale(var(--cs, 1));
   transition: transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
+/* 漂浮卡内层：默认带倾角（--rot），悬停回正 + 托起（与登录页拍立得卡同一交互）。
+   倾角走 CSS 变量而非 inline transform，hover 才能覆盖它。 */
+.lp-fcard {
+  transform: rotate(var(--rot, 0deg));
+  transition: transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1), box-shadow 0.3s ease;
+}
+.lp-fcard:hover {
+  transform: rotate(0deg) translateY(-6px) scale(1.03);
+}
 @media (max-width: 1080px) { .lp-floats { --cs: 0.8; } }
 @media (max-width: 920px) { .lp-floats { --cs: 0.72; } }
 @media (max-width: 780px) { .lp-floats { --cs: 0.64; } }
@@ -663,3 +672,19 @@
   .lp-ring, .lp-marquee-track { animation: none; }
   .lp-reveal { opacity: 1; transform: none; }
 }
+
+/* ───────────────────────────────────────────────────────────────
+   保存状态弹窗卡片（SaveToast）动效：卡片入场 + 对勾弹动。
+   ─────────────────────────────────────────────────────────────── */
+@keyframes save-pop {
+  from { opacity: 0; transform: scale(0.92) translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+.save-pop { animation: save-pop 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+@keyframes save-check {
+  0% { transform: scale(0); opacity: 0; }
+  60% { transform: scale(1.12); }
+  100% { transform: scale(1); opacity: 1; }
+}
+.save-check { animation: save-check 0.42s cubic-bezier(0.2, 0.8, 0.2, 1) 0.04s both; }

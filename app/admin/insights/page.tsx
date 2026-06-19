@@ -53,7 +53,7 @@ export default async function InsightsAdminPage() {
             自有最小埋点（无第三方分析 SDK）。用于判断职业洞察 / 岗位点击 / 刷新等功能是否有人用。
           </p>
           {stats.error ? (
-            <p className="mt-4 rounded-xl border border-[#e0b4ac] bg-[#f7e6e1] px-3.5 py-2.5 text-sm text-[#9c4a3c] dark:border-[#7a392e]/60 dark:bg-[#3a201a] dark:text-[#e6a99f]">
+            <p className="mt-4 rounded-xl border border-[#e0b4ac] bg-[#f7e6e1] px-3.5 py-2.5 text-sm text-[#9c4a3c] dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]">
               统计暂不可用：{stats.error}
             </p>
           ) : stats.rows.length === 0 ? (

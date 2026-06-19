@@ -31,13 +31,13 @@ export default function TagInput({ values, onChange, placeholder }: Props) {
       {(values || []).map((v) => (
         <span
           key={v}
-          className="flex items-center gap-1 rounded-full border border-[#cfe0f5] dark:border-[#7fb2e8]/30 bg-[#e8f1fc] dark:bg-[#7fb2e8]/15 px-2.5 py-1 text-xs font-medium text-[#2f6299] dark:text-[#7fb2e8]"
+          className="flex items-center gap-1 rounded-full border border-[#cfe0f5] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] px-2.5 py-1 text-xs font-medium text-[#2f6299] dark:text-[#7fb2e8]"
         >
           {v}
           <button
             type="button"
             onClick={() => remove(v)}
-            className="text-[#2f6299]/60 dark:text-[#7fb2e8]/60 transition-colors hover:text-[#9c4a3c] dark:hover:text-[#e6a99f]"
+            className="text-[#2f6299]/60 dark:text-[#7fb2e8]/[0.60] transition-colors hover:text-[#9c4a3c] dark:hover:text-[#e6a99f]"
             aria-label={`移除 ${v}`}
           >
             ×

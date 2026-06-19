@@ -97,7 +97,7 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
                     onClick={() => toggleSource(source)}
                     className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                       source.enabled
-                        ? "bg-[#cde8a0] text-[#3f5a1c] dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]"
+                        ? "bg-[#cde8a0] text-[#3f5a1c] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]"
                         : "bg-[#f3d9d2] text-[#9c4a3c] dark:bg-[#3a201a] dark:text-[#e6a99f]"
                     }`}
                   >
@@ -114,9 +114,9 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
                     <span
                       className={`rounded-full px-2 py-0.5 text-xs ${
                         run.status === "success"
-                          ? "bg-[#cde8a0] text-[#3f5a1c] dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]"
+                          ? "bg-[#cde8a0] text-[#3f5a1c] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]"
                           : run.status === "partial_success"
-                            ? "bg-[#f6d6a8] text-[#8a5a12] dark:bg-[#e0b15a]/15 dark:text-[#e0b15a]"
+                            ? "bg-[#f6d6a8] text-[#8a5a12] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]"
                             : "bg-[#f3d9d2] text-[#9c4a3c] dark:bg-[#3a201a] dark:text-[#e6a99f]"
                       }`}
                     >

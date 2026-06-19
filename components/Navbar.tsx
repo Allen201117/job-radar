@@ -77,7 +77,7 @@ export default function Navbar() {
   }
 
   return (
-    <header className="sticky top-0 z-40 w-full border-b border-black/[0.06] bg-[#f4efe6]/80 text-[#1a1714] backdrop-blur-xl supports-[backdrop-filter]:bg-[#f4efe6]/70 dark:border-white/[0.08] dark:bg-[#16130f]/85 dark:text-[#f3ecdf] dark:supports-[backdrop-filter]:bg-[#16130f]/70">
+    <header className="sticky top-0 z-40 w-full border-b border-black/[0.06] bg-[#f4efe6]/80 text-[#1a1714] backdrop-blur-xl supports-[backdrop-filter]:bg-[#f4efe6]/70 dark:border-white/[0.08] dark:bg-[#16130f]/[0.85] dark:text-[#f3ecdf] dark:supports-[backdrop-filter]:bg-[#16130f]/[0.70]">
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6 lg:gap-6 lg:px-8">
         <div className="flex min-w-0 items-center gap-7">
           <Link href="/" className="inline-flex shrink-0 items-center transition-opacity hover:opacity-70">
@@ -134,7 +134,7 @@ export default function Navbar() {
             onClick={() => setMenuOpen(false)}
             className="fixed inset-0 top-14 z-30 bg-[#1a1714]/20 backdrop-blur-sm lg:hidden dark:bg-black/50"
           />
-          <nav className="relative z-40 border-t border-black/[0.06] bg-[#f4efe6]/95 px-4 pb-4 pt-2 backdrop-blur-xl lg:hidden dark:border-white/[0.08] dark:bg-[#16130f]/95">
+          <nav className="relative z-40 border-t border-black/[0.06] bg-[#f4efe6]/95 px-4 pb-4 pt-2 backdrop-blur-xl lg:hidden dark:border-white/[0.08] dark:bg-[#16130f]/[0.95]">
             {links.map((link) => {
               const active = pathname === link.href;
               return (

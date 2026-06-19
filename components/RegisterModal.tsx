@@ -279,7 +279,7 @@ export default function RegisterModal({
                         done
                           ? "bg-[#1a1714] dark:bg-[#f3ecdf] text-[#f7f1e6] dark:text-[#16130f]"
                           : active
-                            ? "bg-[#1a1714] dark:bg-[#f3ecdf] text-[#f7f1e6] dark:text-[#16130f] ring-4 ring-[#1a1714]/10 dark:ring-[#f3ecdf]/20"
+                            ? "bg-[#1a1714] dark:bg-[#f3ecdf] text-[#f7f1e6] dark:text-[#16130f] ring-4 ring-[#1a1714]/10 dark:ring-[#f3ecdf]/[0.20]"
                             : "bg-black/[0.06] dark:bg-white/[0.06] text-[#9a9184] dark:text-[#837c70]",
                       ].join(" ")}
                     >
@@ -478,8 +478,8 @@ export default function RegisterModal({
 function Banner({ kind, children }: { kind: "error" | "ok"; children: React.ReactNode }) {
   const cls =
     kind === "error"
-      ? "border-[#e0b4ac] dark:border-[#7a392e]/60 bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]"
-      : "border-[#b9cfb0] dark:border-[#3f5a2e]/60 bg-[#eef4e8] dark:bg-[#1e2a17] text-[#4a6b3c] dark:text-[#a3d06a]";
+      ? "border-[#e0b4ac] dark:border-[#7a392e]/[0.60] bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]"
+      : "border-[#b9cfb0] dark:border-[#3f5a2e]/[0.60] bg-[#eef4e8] dark:bg-[#1e2a17] text-[#4a6b3c] dark:text-[#a3d06a]";
   return (
     <p className={`rounded-2xl border px-4 py-2.5 text-[13px] ${cls}`}>{children}</p>
   );

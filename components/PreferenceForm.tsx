@@ -4,12 +4,14 @@ import { useState, useEffect } from "react";
 import { createBrowserClient } from "@/lib/supabaseClient";
 import type { UserPreferences } from "@/lib/types";
 import TagInput from "./TagInput";
+import SaveToast, { type SaveState } from "@/components/SaveToast";
 import { CheckCircle, SlidersHorizontal } from "@phosphor-icons/react";
 
 export default function PreferenceForm() {
   const [prefs, setPrefs] = useState<UserPreferences | null>(null);
-  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [saveErr, setSaveErr] = useState("");
   const supabase = createBrowserClient();
 
   useEffect(() => {
@@ -47,14 +49,13 @@ export default function PreferenceForm() {
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
-    setMessage("");
+    setSaveState("saving");
     const {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user || !prefs) {
-      setMessage("请先登录。");
-      setSaving(false);
+      setSaveErr("请先登录。");
+      setSaveState("error");
       return;
     }
     const { error } = await supabase.from("user_preferences").upsert(
@@ -69,8 +70,12 @@ export default function PreferenceForm() {
       },
       { onConflict: "user_id" },
     );
-    setMessage(error ? "保存失败: " + error.message : "已保存");
-    setSaving(false);
+    if (error) {
+      setSaveErr("保存失败：" + error.message);
+      setSaveState("error");
+    } else {
+      setSaveState("done");
+    }
   }
 
   function setArray(field: keyof UserPreferences, arr: string[]) {
@@ -144,15 +149,22 @@ export default function PreferenceForm() {
       </Field>
 
       {message && (
-        <p className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm ${message.includes("失败") ? "border-[#e0b4ac] dark:border-[#7a392e]/60 bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]" : "border-[#bcd2ed] dark:border-[#7fb2e8]/30 bg-[#e8f1fc] dark:bg-[#7fb2e8]/15 text-[#2f6299] dark:text-[#7fb2e8]"}`}>
+        <p className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm ${message.includes("失败") ? "border-[#e0b4ac] dark:border-[#7a392e]/[0.60] bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]" : "border-[#bcd2ed] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]"}`}>
           {!message.includes("失败") && <CheckCircle size={16} weight="fill" aria-hidden="true" />}
           {message}
         </p>
       )}
 
-      <button type="submit" disabled={saving} className="btn-ink">
-        {saving ? "保存中..." : "保存偏好"}
+      <button type="submit" disabled={saveState === "saving"} className="btn-ink">
+        {saveState === "saving" ? "保存中..." : "保存偏好"}
       </button>
+
+      <SaveToast
+        state={saveState}
+        doneText="已保存偏好"
+        errorText={saveErr || "保存失败"}
+        onDismiss={() => setSaveState("idle")}
+      />
     </form>
   );
 }

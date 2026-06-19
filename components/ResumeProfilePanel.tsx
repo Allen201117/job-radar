@@ -235,7 +235,7 @@ export default function ResumeProfilePanel() {
       </p>
 
       {message && step === "input" && (
-        <p className={`mt-3 rounded-xl border px-3 py-2 text-sm ${message.includes("失败") || message.includes("暂不") ? "border-[#e0b4ac] dark:border-[#7a392e]/60 bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]" : "border-[#bcd2ed] dark:border-[#7fb2e8]/30 bg-[#e8f1fc] dark:bg-[#7fb2e8]/15 text-[#2f6299] dark:text-[#7fb2e8]"}`}>
+        <p className={`mt-3 rounded-xl border px-3 py-2 text-sm ${message.includes("失败") || message.includes("暂不") ? "border-[#e0b4ac] dark:border-[#7a392e]/[0.60] bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]" : "border-[#bcd2ed] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]"}`}>
           {message}
         </p>
       )}
@@ -271,7 +271,7 @@ export default function ResumeProfilePanel() {
             </div>
 
             {llmReady === false && (
-              <p className="rounded-xl border border-[#e7c98a] dark:border-[#e0b15a]/40 bg-[#fbf2d8] dark:bg-[#e0b15a]/15 px-3 py-2 text-xs text-[#8a6312] dark:text-[#e0b15a]">
+              <p className="rounded-xl border border-[#e7c98a] dark:border-[#e0b15a]/[0.40] bg-[#fbf2d8] dark:bg-[#e0b15a]/[0.15] px-3 py-2 text-xs text-[#8a6312] dark:text-[#e0b15a]">
                 未检测到 SILICONFLOW_API_KEY，AI 解析会降级为规则草稿。请在 Vercel → Settings →
                 Environment Variables 添加（勾 Production，禁加 NEXT_PUBLIC_ 前缀），保存后 Redeploy。
               </p>
@@ -383,7 +383,7 @@ export default function ResumeProfilePanel() {
           </label>
 
           {message && (
-            <p className={`rounded-xl border px-3 py-2 text-sm ${message.includes("失败") || message.includes("暂不") ? "border-[#e0b4ac] dark:border-[#7a392e]/60 bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]" : "border-[#bcd2ed] dark:border-[#7fb2e8]/30 bg-[#e8f1fc] dark:bg-[#7fb2e8]/15 text-[#2f6299] dark:text-[#7fb2e8]"}`}>
+            <p className={`rounded-xl border px-3 py-2 text-sm ${message.includes("失败") || message.includes("暂不") ? "border-[#e0b4ac] dark:border-[#7a392e]/[0.60] bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]" : "border-[#bcd2ed] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]"}`}>
               {message}
             </p>
           )}

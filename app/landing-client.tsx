@@ -54,7 +54,7 @@ const AUDIENCES = [
 ];
 
 const cardBase =
-  "rounded-[18px] border border-black/[0.05] bg-white text-[#1a1714] shadow-[0_1px_1px_rgba(40,34,28,0.05),0_22px_48px_-20px_rgba(40,34,28,0.32)] transition-shadow duration-300 hover:shadow-[0_30px_60px_-24px_rgba(40,34,28,0.45)] dark:border-white/[0.06] dark:bg-[#1e1a15] dark:text-[#f3ecdf] dark:shadow-[0_22px_48px_-20px_rgba(0,0,0,0.6)]";
+  "rounded-[18px] border border-black/[0.05] bg-white text-[#1a1714] shadow-[0_1px_1px_rgba(40,34,28,0.05),0_22px_48px_-20px_rgba(40,34,28,0.32)] hover:shadow-[0_30px_60px_-24px_rgba(40,34,28,0.45)] dark:border-white/[0.06] dark:bg-[#1e1a15] dark:text-[#f3ecdf] dark:shadow-[0_22px_48px_-20px_rgba(0,0,0,0.6)]";
 
 export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
   const primaryHref = loggedIn ? "/today" : "/login";
@@ -151,7 +151,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
     <main className="bg-editorial grain relative min-h-screen overflow-x-hidden text-[#1a1714] dark:text-[#f3ecdf]">
       {/* ——— 导航 ——— */}
       <header className="sticky top-3 z-50 px-4">
-        <nav className="mx-auto flex max-w-6xl items-center justify-between rounded-full border border-black/[0.07] bg-[#f4efe6]/70 px-3 py-2.5 pl-4 backdrop-blur-xl dark:border-white/[0.08] dark:bg-[#16130f]/72">
+        <nav className="mx-auto flex max-w-6xl items-center justify-between rounded-full border border-black/[0.07] bg-[#f4efe6]/80 px-3 py-2.5 pl-4 shadow-[0_10px_30px_-22px_rgba(40,34,28,0.5)] backdrop-blur-xl dark:border-white/[0.1] dark:bg-[#191510]/[0.92] dark:shadow-[0_16px_36px_-22px_rgba(0,0,0,0.85)]">
           <Link href="/" className="transition-opacity hover:opacity-70">
             <BrandMark tile={32} icon={20} wordSize={17} />
           </Link>
@@ -183,7 +183,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
         <div className="lp-floats pointer-events-none absolute inset-0 z-10">
           <figure className="lp-float absolute left-[-12px] top-[54px]" style={{ ["--fd" as string]: 42 } as CSSProperties}>
             <div className="float-soft">
-              <div className={`${cardBase} w-[200px] p-3.5`} style={{ transform: "rotate(-6deg)" }}>
+              <div className={`lp-fcard ${cardBase} w-[200px] p-3.5`} style={{ ["--rot" as string]: "-6deg" } as CSSProperties}>
                 <p className="m-0 text-[11px] font-semibold text-[#8a8275] dark:text-[#9a9184]">今日官方岗位</p>
                 <p className="mb-0 mt-1.5 text-[2.1rem] font-extrabold leading-none tabular-nums" data-count="24">0</p>
                 <p className="mb-0 mt-1.5 text-[12px] text-[#8a8275] dark:text-[#9a9184]"><span className="tabular-nums" data-count="11">0</span> 个高匹配待处理</p>
@@ -195,7 +195,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
 
           <figure className="lp-float absolute right-[-16px] top-[30px]" style={{ ["--fd" as string]: 30 } as CSSProperties}>
             <div className="float-soft" style={{ animationDelay: "1.3s" }}>
-              <div className={`${cardBase} w-[236px] p-4`} style={{ transform: "rotate(5deg)" }}>
+              <div className={`lp-fcard ${cardBase} w-[236px] p-4`} style={{ ["--rot" as string]: "5deg" } as CSSProperties}>
                 <div className="flex items-center gap-1.5 text-[12px] text-[#8a8275] dark:text-[#9a9184]"><b className="text-[#1a1714] dark:text-[#f3ecdf]">Apple</b>·上海</div>
                 <p className="mb-0 mt-2 text-[15px] font-bold leading-snug">Machine Learning Engineer</p>
                 <div className="mt-3.5 flex items-center justify-between">
@@ -212,7 +212,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
 
           <figure className="lp-float absolute bottom-[-26px] left-[6px]" style={{ ["--fd" as string]: 24 } as CSSProperties}>
             <div className="float-soft" style={{ animationDelay: "0.7s" }}>
-              <div className={`${cardBase} w-[218px] p-4`} style={{ transform: "rotate(3deg)" }}>
+              <div className={`lp-fcard ${cardBase} w-[218px] p-4`} style={{ ["--rot" as string]: "3deg" } as CSSProperties}>
                 <p className="m-0 text-[11px] font-semibold text-[#8a8275] dark:text-[#9a9184]">职业洞察 · 分级标时间</p>
                 <ul className="m-0 mt-3 grid list-none grid-cols-2 gap-2.5 p-0 text-[12px] text-[#5f594e] dark:text-[#b6ad9d]">
                   <li className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-[#7fb2e8]" />时机</li>
@@ -227,7 +227,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
 
           <figure className="lp-float absolute bottom-[-14px] right-[8px]" style={{ ["--fd" as string]: 38 } as CSSProperties}>
             <div className="float-soft" style={{ animationDelay: "2s" }}>
-              <div className="flex w-[206px] items-center gap-2.5 rounded-[18px] bg-[#1a1714] p-4 shadow-[0_22px_48px_-20px_rgba(40,34,28,0.4)] transition-shadow duration-300 hover:shadow-[0_30px_60px_-24px_rgba(40,34,28,0.5)] dark:bg-[#211b14]" style={{ transform: "rotate(-4deg)" }}>
+              <div className="lp-fcard flex w-[206px] items-center gap-2.5 rounded-[18px] bg-[#1a1714] p-4 shadow-[0_22px_48px_-20px_rgba(40,34,28,0.4)] hover:shadow-[0_30px_60px_-24px_rgba(40,34,28,0.5)] dark:bg-[#211b14]" style={{ ["--rot" as string]: "-4deg" } as CSSProperties}>
                 <CheckCircle size={26} weight="fill" className="shrink-0 text-[#9ad36a]" aria-hidden="true" />
                 <p className="m-0 text-[13px] font-semibold leading-snug text-[#f7f1e6]">招聘平台的<br />水货岗已过滤</p>
               </div>

@@ -101,7 +101,7 @@ export default async function JobsPage() {
           description="从本地岗位库开始，按需刷新已知官网源，必要时再发现新的官方招聘入口。"
           icon={Database}
           action={
-            <div className="w-full sm:w-[340px] lg:w-[360px]">
+            <div className="w-full sm:w-[300px] lg:w-[320px]">
               {/* 实时翻动的岗位库总数（连后端真实数据） */}
               <JobLibraryStat initialTotal={total} />
             </div>

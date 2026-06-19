@@ -31,10 +31,10 @@ import { cn } from "@/lib/utils";
 
 // 新鲜度分级配色：越旧越偏琥珀，提示用户谨慎参考。
 const FRESHNESS_TONE: Record<FreshnessLevel, string> = {
-  fresh: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/30 dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]",
+  fresh: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]",
   recent: "border border-black/[0.08] bg-[#f4efe6] text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#9a9184]",
-  aging: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/15 dark:text-[#e0b15a]",
-  stale: "border border-[#e0a94e] bg-[#fbe6c4] text-[#8a5a12] dark:border-[#e0b15a]/40 dark:bg-[#e0b15a]/20 dark:text-[#e8bf72]",
+  aging: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]",
+  stale: "border border-[#e0a94e] bg-[#fbe6c4] text-[#8a5a12] dark:border-[#e0b15a]/[0.40] dark:bg-[#e0b15a]/[0.20] dark:text-[#e8bf72]",
 };
 
 interface Props {
@@ -51,38 +51,38 @@ const DIMENSION_META: Record<
   timing: {
     label: "招聘时机",
     icon: CalendarBlank,
-    accent: "border-[#b7d2ee] bg-[#dceafa] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/15",
+    accent: "border-[#b7d2ee] bg-[#dceafa] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15]",
     iconText: "text-[#2f6299] dark:text-[#7fb2e8]",
   },
   hiring: {
     label: "招聘动态",
     icon: Buildings,
-    accent: "border-[#a9cfd8] bg-[#dcf0f2] dark:border-[#6cc0cf]/30 dark:bg-[#6cc0cf]/15",
+    accent: "border-[#a9cfd8] bg-[#dcf0f2] dark:border-[#6cc0cf]/[0.30] dark:bg-[#6cc0cf]/[0.15]",
     iconText: "text-[#2f7d8a] dark:text-[#6cc0cf]",
   },
   listing: {
     label: "上市 / 股票",
     icon: ChartLineUp,
-    accent: "border-[#a9d8c4] bg-[#dcf2e8] dark:border-[#6cc99e]/30 dark:bg-[#6cc99e]/15",
+    accent: "border-[#a9d8c4] bg-[#dcf2e8] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15]",
     iconText: "text-[#2f8a63] dark:text-[#6cc99e]",
   },
   compensation_intensity: {
     label: "薪资 / 强度",
     icon: Scales,
-    accent: "border-[#e7c98a] bg-[#fbeecb] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/15",
+    accent: "border-[#e7c98a] bg-[#fbeecb] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15]",
     iconText: "text-[#8a6312] dark:text-[#e0b15a]",
   },
   path: {
     label: "进入路径",
     icon: Path,
-    accent: "border-[#cfc0e6] bg-[#efe9f8] dark:border-[#c3b1e6]/30 dark:bg-[#c3b1e6]/15",
+    accent: "border-[#cfc0e6] bg-[#efe9f8] dark:border-[#c3b1e6]/[0.30] dark:bg-[#c3b1e6]/[0.15]",
     iconText: "text-[#6a4fa0] dark:text-[#c3b1e6]",
   },
   // 文化维度：合规上不用「避坑」字样，统一改为「温馨提示」
   culture: {
     label: "公司文化 / 温馨提示",
     icon: UsersThree,
-    accent: "border-[#e6bcc4] bg-[#f8e6ea] dark:border-[#e09aa9]/30 dark:bg-[#e09aa9]/15",
+    accent: "border-[#e6bcc4] bg-[#f8e6ea] dark:border-[#e09aa9]/[0.30] dark:bg-[#e09aa9]/[0.15]",
     iconText: "text-[#a84f63] dark:text-[#e09aa9]",
   },
 };
@@ -103,12 +103,12 @@ function gradeChip(grade: InsightGrade, sampleSize: number | null): {
   if (grade === "fact") {
     return {
       text: "事实 · 公开来源",
-      cls: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/30 dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]",
+      cls: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]",
     };
   }
   return {
     text: sampleSize ? `经验 · 据约 ${sampleSize} 条反馈` : "经验 · 群体反馈",
-    cls: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/15 dark:text-[#e0b15a]",
+    cls: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]",
   };
 }
 
@@ -205,7 +205,7 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
             </button>
           </div>
           {/* 唯一一次「来源聚合·去标识」统一声明（每条卡片正文不再重复罗列媒体名） */}
-          <p className="mt-4 flex gap-2.5 rounded-xl border border-[#cfc0e6] bg-[#efe9f8] px-3.5 py-3 text-[13px] leading-6 text-[#5a4a78] dark:border-[#c3b1e6]/30 dark:bg-[#c3b1e6]/12 dark:text-[#c3b1e6]">
+          <p className="mt-4 flex gap-2.5 rounded-xl border border-[#cfc0e6] bg-[#efe9f8] px-3.5 py-3 text-[13px] leading-6 text-[#5a4a78] dark:border-[#c3b1e6]/[0.30] dark:bg-[#c3b1e6]/[0.12] dark:text-[#c3b1e6]">
             <ShieldCheck size={18} weight="fill" className="mt-0.5 shrink-0 text-[#6a4fa0] dark:text-[#c3b1e6]" />
             <span>
               下列内容部分来自<strong>本平台在招岗位的聚合统计</strong>（带「本平台岗位聚合」标记，属事实数据），部分来自<strong>公开报道与网络讨论的聚合</strong>并经<strong>去标识化</strong>处理（属社区参考、非官方，也不针对任何个人）。每条结论的依据见卡片下方，<strong>仅供参考</strong>，请结合官方岗位信息与面试沟通自行判断。
@@ -275,22 +275,22 @@ const EQUITY_ANGLE: Record<
   { tone: string; label: string; text: string }
 > = {
   listed: {
-    tone: "border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63] dark:border-[#6cc99e]/30 dark:bg-[#6cc99e]/15 dark:text-[#6cc99e]",
+    tone: "border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]",
     label: "投递视角 · 股权可估值",
     text: "已上市：期权/RSU 可按公开股价估值，含金量较透明。结合下方近期行情自行判断——行情向好通常意味着手中股权更值钱。",
   },
   filed: {
-    tone: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8]",
+    tone: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]",
     label: "投递视角 · 临近上市",
     text: "已递交招股书：临近上市，期权有潜在流动性预期，是较好的进入窗口；留意行权价、锁定期与上市不确定性。",
   },
   pre_ipo: {
-    tone: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8]",
+    tone: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]",
     label: "投递视角 · 筹备上市",
     text: "筹备上市：股权有上市后变现预期，适合看好者提前进入；上市时间表未定，存在不确定性。",
   },
   unicorn: {
-    tone: "border-[#cfc0e6] bg-[#efe9f8] text-[#6a4fa0] dark:border-[#c3b1e6]/30 dark:bg-[#c3b1e6]/15 dark:text-[#c3b1e6]",
+    tone: "border-[#cfc0e6] bg-[#efe9f8] text-[#6a4fa0] dark:border-[#c3b1e6]/[0.30] dark:bg-[#c3b1e6]/[0.15] dark:text-[#c3b1e6]",
     label: "投递视角 · 独角兽股权",
     text: "未上市独角兽：估值高、市场看好，股权激励潜在含金量高，常是值得投递的标的；但短期不可变现、依赖后续融资或上市兑现。",
   },
@@ -327,7 +327,7 @@ function QuoteLink({ payload }: { payload: Record<string, unknown> }) {
       href={quoteUrl}
       target="_blank"
       rel="noopener noreferrer"
-      className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-1 text-[12px] font-medium text-[#2f8a63] transition hover:bg-[#cdebde] dark:border-[#6cc99e]/30 dark:bg-[#6cc99e]/15 dark:text-[#6cc99e] dark:hover:bg-[#6cc99e]/[0.22]"
+      className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-1 text-[12px] font-medium text-[#2f8a63] transition hover:bg-[#cdebde] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e] dark:hover:bg-[#6cc99e]/[0.22]"
     >
       <ChartLineUp size={13} weight="bold" />
       近期行情 · {label}
@@ -344,7 +344,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
   const chip = item.derived
     ? {
         text: "本平台岗位聚合",
-        cls: "border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8]",
+        cls: "border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]",
       }
     : gradeChip(item.grade, item.sample_size);
   const freshness = freshnessFromVerifiedAt(item.last_verified_at);

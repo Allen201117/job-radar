@@ -80,10 +80,10 @@ export function MetricTile({
   tone?: "sky" | "lime" | "white" | "orange" | "muted";
 }) {
   const toneClass = {
-    sky: "bg-[#dbe9fa] text-[#2f6299] dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8]",
-    lime: "bg-[#e6f2d3] text-[#5a7a2f] dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]",
+    sky: "bg-[#dbe9fa] text-[#2f6299] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]",
+    lime: "bg-[#e6f2d3] text-[#5a7a2f] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]",
     white: "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]",
-    orange: "bg-[#fbe6d1] text-[#9a6326] dark:bg-[#e0b15a]/15 dark:text-[#e0b15a]",
+    orange: "bg-[#fbe6d1] text-[#9a6326] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]",
     muted: "bg-[#ece7dd] text-[#6b655a] dark:bg-white/[0.08] dark:text-[#b6ad9d]",
   }[tone];
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { FloppyDisk, IdentificationBadge, UserCircle } from "@phosphor-icons/react";
+import SaveToast, { type SaveState } from "@/components/SaveToast";
 
 const MAX_BIO = 200;
 
@@ -9,8 +10,7 @@ export default function ProfileEditor({ email }: { email?: string }) {
   const [displayName, setDisplayName] = useState("");
   const [bio, setBio] = useState("");
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
+  const [saveState, setSaveState] = useState<SaveState>("idle");
 
   useEffect(() => {
     load();
@@ -34,8 +34,7 @@ export default function ProfileEditor({ email }: { email?: string }) {
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
-    setMessage("");
+    setSaveState("saving");
     try {
       const resp = await fetch("/api/profile", {
         method: "PUT",
@@ -43,11 +42,9 @@ export default function ProfileEditor({ email }: { email?: string }) {
         body: JSON.stringify({ display_name: displayName, bio }),
       });
       const data = await resp.json();
-      setMessage(data.ok ? "已保存。" : "保存失败，请重试。");
+      setSaveState(data.ok ? "done" : "error");
     } catch {
-      setMessage("保存失败，请重试。");
-    } finally {
-      setSaving(false);
+      setSaveState("error");
     }
   }
 
@@ -95,20 +92,21 @@ export default function ProfileEditor({ email }: { email?: string }) {
 
         {email && <p className="text-xs text-[#8a8275] dark:text-[#9a9184]">登录邮箱：{email}</p>}
 
-        {message && (
-          <p className={`rounded-full border px-3 py-2 text-sm ${message.includes("失败") ? "border-[#e0b4ac] dark:border-[#7a392e]/60 bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]" : "border-[#bcd2ed] dark:border-[#7fb2e8]/30 bg-[#e8f1fc] dark:bg-[#7fb2e8]/15 text-[#2f6299] dark:text-[#7fb2e8]"}`}>
-            {message}
-          </p>
-        )}
-
         <button
           type="submit"
-          disabled={saving}
+          disabled={saveState === "saving"}
           className="btn-ink"
         >
           <FloppyDisk size={16} weight="bold" aria-hidden="true" />
-          {saving ? "保存中…" : "保存资料"}
+          {saveState === "saving" ? "保存中…" : "保存资料"}
         </button>
+
+        <SaveToast
+          state={saveState}
+          doneText="已保存资料"
+          errorText="保存失败，请重试。"
+          onDismiss={() => setSaveState("idle")}
+        />
       </form>
     </section>
   );
