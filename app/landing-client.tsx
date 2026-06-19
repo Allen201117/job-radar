@@ -114,36 +114,11 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
     hero?.addEventListener("pointermove", onHeroMove, { passive: true });
     hero?.addEventListener("pointerleave", onHeroLeave);
 
-    // 卡片 3D 倾斜
-    const tilts = Array.from(document.querySelectorAll<HTMLElement>(".lp-tilt"));
-    const onTilt = (card: HTMLElement) => (e: PointerEvent) => {
-      const r = card.getBoundingClientRect();
-      const px = (e.clientX - r.left) / r.width - 0.5;
-      const py = (e.clientY - r.top) / r.height - 0.5;
-      card.style.setProperty("--rx", `${-py * 7}deg`);
-      card.style.setProperty("--ry", `${px * 7}deg`);
-    };
-    const onTiltLeave = (card: HTMLElement) => () => {
-      card.style.setProperty("--rx", "0deg");
-      card.style.setProperty("--ry", "0deg");
-    };
-    const tiltHandlers = tilts.map((card) => {
-      const move = onTilt(card);
-      const leave = onTiltLeave(card);
-      card.addEventListener("pointermove", move);
-      card.addEventListener("pointerleave", leave);
-      return { card, move, leave };
-    });
-
     return () => {
       io.disconnect();
       window.clearTimeout(t);
       hero?.removeEventListener("pointermove", onHeroMove);
       hero?.removeEventListener("pointerleave", onHeroLeave);
-      tiltHandlers.forEach(({ card, move, leave }) => {
-        card.removeEventListener("pointermove", move);
-        card.removeEventListener("pointerleave", leave);
-      });
     };
   }, []);
 
@@ -302,11 +277,11 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
           {PILLARS.map((p, i) => (
             <article
               key={p.title}
-              className="lp-tilt lp-reveal bento-glow cursor-target rounded-[22px] border border-black/[0.06] bg-white/70 p-6 hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.04] dark:hover:bg-white/[0.07]"
+              className="lp-reveal bento-glow group rounded-[22px] border border-black/[0.06] bg-white/70 p-6 transition duration-300 hover:-translate-y-1.5 hover:bg-white hover:shadow-[0_24px_50px_-26px_rgba(40,34,28,0.4)] dark:border-white/[0.08] dark:bg-white/[0.04] dark:hover:bg-white/[0.07]"
               style={{ ["--d" as string]: `${i * 0.08}s` } as CSSProperties}
             >
               <div className="flex items-center justify-between">
-                <span className="grid size-11 place-items-center rounded-[14px] bg-[#f4efe6] text-[#1a1714] dark:bg-white/[0.08] dark:text-[#f3ecdf]">
+                <span className="grid size-11 place-items-center rounded-[14px] bg-[#f4efe6] text-[#1a1714] transition-transform duration-300 group-hover:-rotate-6 dark:bg-white/[0.08] dark:text-[#f3ecdf]">
                   <p.icon size={22} weight="fill" aria-hidden="true" />
                 </span>
                 <span className="size-2.5 rounded-full" style={{ background: p.dot }} />

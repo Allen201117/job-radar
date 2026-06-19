@@ -6,6 +6,11 @@ interface ScoreResult {
   matched_keywords: string[];
   hidden_reason: string | null;
   user_action: string | null;
+  // 相关性门信号（Today 看板硬过滤用，不参与计分/展示）：
+  // content_matched = 命中任一 target_role/target_keyword/target_company（「做什么 / 哪家」）；
+  // location_matched = 命中任一 target_location（「在哪座城市」）。
+  content_matched: boolean;
+  location_matched: boolean;
 }
 
 export type MatchTierLevel = "high" | "related" | "none";
@@ -32,6 +37,8 @@ export function scoreJob(
   const matched_keywords: string[] = [];
   let hidden_reason: string | null = null;
   let user_action: string | null = null;
+  let content_matched = false;
+  let location_matched = false;
 
   const title = (job.title || "").toLowerCase();
   const summary = (job.summary || "").toLowerCase();
@@ -40,7 +47,14 @@ export function scoreJob(
   const text = `${title} ${summary}`;
 
   if (!preferences) {
-    return { score: 0, matched_keywords: [], hidden_reason: null, user_action: null };
+    return {
+      score: 0,
+      matched_keywords: [],
+      hidden_reason: null,
+      user_action: null,
+      content_matched: false,
+      location_matched: false,
+    };
   }
 
   // target_roles 命中：用 keywordMatchTier 跨语言召回（与 Jobs 页 jobs-client 同口径），
@@ -49,6 +63,7 @@ export function scoreJob(
     if (keywordMatchTier(job, role)) {
       score += 30;
       matched_keywords.push(role);
+      content_matched = true;
       break; // 只加一次
     }
   }
@@ -58,6 +73,7 @@ export function scoreJob(
     if (location.includes(loc.toLowerCase())) {
       score += 20;
       matched_keywords.push(loc);
+      location_matched = true;
       break;
     }
   }
@@ -67,6 +83,7 @@ export function scoreJob(
     if (company.includes(c.toLowerCase())) {
       score += 15;
       matched_keywords.push(c);
+      content_matched = true;
       break;
     }
   }
@@ -76,6 +93,7 @@ export function scoreJob(
     if (keywordMatchTier(job, kw)) {
       score += 5;
       matched_keywords.push(kw);
+      content_matched = true;
     }
   }
 
@@ -119,7 +137,14 @@ export function scoreJob(
     }
   }
 
-  return { score, matched_keywords, hidden_reason, user_action };
+  return {
+    score,
+    matched_keywords,
+    hidden_reason,
+    user_action,
+    content_matched,
+    location_matched,
+  };
 }
 
 export function sortAndFilterJobs(
@@ -130,33 +155,54 @@ export function sortAndFilterJobs(
     showIgnored?: boolean;
     showApplied?: boolean;
     limit?: number;
+    // 相关性硬门（Today 看板用）：用户填了职位/关键词/公司 → 必须命中其一；填了城市 → 必须命中城市。
+    // 杜绝「偏好预筛不足时盲取最新岗位兜底、却只排序不过滤」导致看板被无关岗位刷屏（PRD 核心：精准 > 规模）。
+    requireRelevance?: boolean;
   } = {},
 ) {
+  const hasContentSignal =
+    !!preferences &&
+    (preferences.target_roles || []).length +
+      (preferences.target_keywords || []).length +
+      (preferences.target_companies || []).length >
+      0;
+  const hasLocSignal =
+    !!preferences && (preferences.target_locations || []).length > 0;
+
   const scored = jobs.map((job) => {
     const result = scoreJob(job, preferences, actions);
     return {
-      ...job,
-      match_score: result.score,
-      matched_keywords: result.matched_keywords,
-      hidden_reason: result.hidden_reason,
-      user_action: result.user_action,
+      job: {
+        ...job,
+        match_score: result.score,
+        matched_keywords: result.matched_keywords,
+        hidden_reason: result.hidden_reason,
+        user_action: result.user_action,
+      },
+      content_matched: result.content_matched,
+      location_matched: result.location_matched,
     };
   });
 
-  const filtered = scored.filter((job) => {
+  const filtered = scored.filter(({ job, content_matched, location_matched }) => {
     // exclude_keywords 命中 = 硬过滤，永远剔除，不受 showIgnored/showApplied 开关影响（PRD 硬规则）。
     if (job.hidden_reason === "excluded") return false;
     if (!options.showIgnored && job.hidden_reason === "ignored") return false;
     if (!options.showApplied && job.hidden_reason === "applied_by_default")
       return false;
+    // 相关性门：仅当显式开启且用户有相应偏好信号时生效（城市 + 职能/关键词/公司双向治污）。
+    if (options.requireRelevance) {
+      if (hasContentSignal && !content_matched) return false;
+      if (hasLocSignal && !location_matched) return false;
+    }
     return true;
   });
 
-  filtered.sort((a, b) => b.match_score - a.match_score);
+  filtered.sort((a, b) => b.job.match_score - a.job.match_score);
 
+  const out = filtered.map((x) => x.job);
   if (options.limit) {
-    return filtered.slice(0, options.limit);
+    return out.slice(0, options.limit);
   }
-
-  return filtered;
+  return out;
 }

@@ -118,15 +118,92 @@ test("exclude_keywords hit hard-filters the job regardless of showIgnored/showAp
   assert.ok(!forced.some((job) => job.id === "job-drop"));
 });
 
-function makeJob(id, title) {
+test("requireRelevance drops jobs with no role/keyword/company match when user has content signal", () => {
+  const jobs = [
+    makeJob("hit", "数据分析师"), // 标题命中 role「数据分析」
+    makeJob("miss", "行政专员", "上海", "负责日常行政事务"), // 标题/正文都不含查询职能
+  ];
+  const prefs = {
+    ...makePreferences(),
+    target_locations: [], // 隔离到「内容门」这一项
+    target_roles: ["数据分析"],
+    target_keywords: [],
+    target_companies: [],
+    exclude_keywords: [],
+  };
+
+  const shown = sortAndFilterJobs(jobs, prefs, [], { requireRelevance: true });
+  assert.ok(shown.some((job) => job.id === "hit"));
+  assert.ok(!shown.some((job) => job.id === "miss"));
+
+  // 默认不开门 → 两者都在（回归保护：旧行为是只排序不过滤）。
+  const all = sortAndFilterJobs(jobs, prefs, [], { requireRelevance: false });
+  assert.equal(all.length, 2);
+});
+
+test("requireRelevance drops wrong-city jobs when user has a location signal", () => {
+  const jobs = [
+    makeJob("sh", "数据分析师", "上海"),
+    makeJob("bj", "数据分析师", "北京"),
+  ];
+  const prefs = {
+    ...makePreferences(),
+    target_locations: ["上海"],
+    target_roles: ["数据分析"],
+    target_keywords: [],
+    target_companies: [],
+    exclude_keywords: [],
+  };
+
+  const shown = sortAndFilterJobs(jobs, prefs, [], { requireRelevance: true });
+  assert.ok(shown.some((job) => job.id === "sh"));
+  assert.ok(!shown.some((job) => job.id === "bj"));
+});
+
+test("requireRelevance keeps cross-language role matches (Chinese role, English title)", () => {
+  const jobs = [makeJob("en", "Product Manager", "上海")];
+  const prefs = {
+    ...makePreferences(),
+    target_locations: ["上海"],
+    target_roles: ["产品经理"],
+    target_keywords: [],
+    target_companies: [],
+    exclude_keywords: [],
+  };
+
+  const shown = sortAndFilterJobs(jobs, prefs, [], { requireRelevance: true });
+  assert.equal(shown.length, 1);
+  assert.equal(shown[0].id, "en");
+});
+
+test("requireRelevance with only a location signal keeps any role in that city", () => {
+  const jobs = [
+    makeJob("sh", "随便什么岗位", "上海", "无关描述"),
+    makeJob("bj", "随便什么岗位", "北京", "无关描述"),
+  ];
+  const prefs = {
+    ...makePreferences(),
+    target_locations: ["上海"],
+    target_roles: [],
+    target_keywords: [],
+    target_companies: [],
+    exclude_keywords: [],
+  };
+
+  const shown = sortAndFilterJobs(jobs, prefs, [], { requireRelevance: true });
+  assert.ok(shown.some((job) => job.id === "sh"));
+  assert.ok(!shown.some((job) => job.id === "bj"));
+});
+
+function makeJob(id, title, location = "上海", summary = "Python SQL 数据分析") {
   return {
     id,
     source_id: null,
     company: "测试公司",
     title,
-    location: "上海",
+    location,
     job_type: "实习",
-    summary: "Python SQL 数据分析",
+    summary,
     jd_url: `https://example.com/jobs/${id}`,
     apply_url: `https://example.com/jobs/${id}`,
     salary_text: null,

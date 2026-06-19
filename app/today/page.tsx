@@ -48,7 +48,9 @@ async function fetchLatestActive(supabase: ServerSupabase): Promise<Job[]> {
 
 // 两段召回：① 按偏好 SQL 预筛——location 命中任一 target_location 且 title 命中任一
 // target_role/target_keyword（中文直接子串，无需分词），status='active'，最新 200 条；
-// ② 预筛不足 50 条再补「最新 active」兜底（去重在 mergeRecallJobs 内完成）。
+// ② 始终补「最新 active」兜底填满候选池（200，去重在 mergeRecallJobs 内完成）——交给
+// sortAndFilterJobs 的相关性门（城市 + 职能/关键词/公司）精筛：既杜绝无关岗位入榜，
+// 又能召回裸 title ilike 预筛漏掉的跨语言 / 正文命中相关岗。
 // 无偏好信号或查询失败一律回退最新 200，绝不让页面 500。
 async function recallTodayJobs(
   supabase: ServerSupabase,
@@ -101,12 +103,14 @@ async function recallTodayJobs(
       if (error) throw error;
       preferred = (data as Job[]) || [];
     }
-    // 预筛不足 50 条才补一段最新 active 兜底；多取的兜底由合并函数去重 + 截断
+    // 偏好预筛后用「最新 active」兜底把候选池填满（target 200），再由 sortAndFilterJobs 的相关性门
+    // 精筛——给硬门足够候选去召回跨语言 / 正文命中的相关岗，同时硬门保证无关岗位不入榜。
+    // 预筛已满 200 则无需再取兜底（minPreferred=target → merge 也不会用到）。
     const fallback =
-      preferred.length < 50 ? await fetchLatestActive(supabase) : [];
+      preferred.length < 200 ? await fetchLatestActive(supabase) : [];
     return mergeRecallJobs(preferred, fallback, {
       target: 200,
-      minPreferred: 50,
+      minPreferred: 200,
     });
   } catch (err) {
     console.error(
@@ -138,24 +142,39 @@ export default async function TodayPage() {
   // 偏好此前只参与排序、未参与召回，导致看板被最后爬完的大厂批量岗位刷屏。
   const jobs = await recallTodayJobs(supabase, preferences);
 
+  // 用户填了任一偏好信号（城市 / 职位 / 关键词 / 公司）→ 开启相关性硬门，把无关兜底岗剔出看板。
+  const hasPrefSignal =
+    !!preferences &&
+    (preferences.target_roles || []).length +
+      (preferences.target_keywords || []).length +
+      (preferences.target_companies || []).length +
+      (preferences.target_locations || []).length >
+      0;
+
   const scored = sortAndFilterJobs(
     (jobs as Job[]) || [],
     preferences,
     actions,
-    { showIgnored: false, showApplied: false, limit: preferences?.daily_limit || 20 },
+    {
+      showIgnored: false,
+      showApplied: false,
+      limit: preferences?.daily_limit || 20,
+      requireRelevance: hasPrefSignal,
+    },
   );
 
   const allScored = sortAndFilterJobs(
     (jobs as Job[]) || [],
     preferences,
     actions,
-    { showIgnored: true, showApplied: true },
+    { showIgnored: true, showApplied: true, requireRelevance: hasPrefSignal },
   );
 
-  const newCount = (jobs as Job[])?.filter((j) => {
+  // 「今日新增」从已过相关性门的集合里数，避免兜底里的无关新岗把这个指标刷虚高。
+  const newCount = allScored.filter((j) => {
     if (!j.first_seen_at) return false;
     return (Date.now() - new Date(j.first_seen_at).getTime()) / 86400000 <= 3;
-  }).length || 0;
+  }).length;
 
   const highMatchCount = scored.filter(
     (j) => matchTier(j.match_score).level === "high",

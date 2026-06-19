@@ -28,6 +28,7 @@ export function ProductHero({
   description,
   icon: Icon = Sparkle,
   action,
+  align = "end",
   children,
 }: {
   eyebrow: string;
@@ -36,12 +37,19 @@ export function ProductHero({
   description?: string;
   icon?: IconComponent;
   action?: ReactNode;
+  // 标题块与 action 在 lg 下的纵向对齐：默认 end（底对齐）；start = 标题上提（action 较高时更省空间）。
+  align?: "start" | "center" | "end";
   children?: ReactNode;
 }) {
+  const alignClass = {
+    start: "lg:items-start",
+    center: "lg:items-center",
+    end: "lg:items-end",
+  }[align];
   return (
     <section className="surface relative overflow-hidden px-5 py-6 sm:px-7 sm:py-7 lg:px-8">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_88%_8%,rgba(150,182,226,0.18),transparent_42%),radial-gradient(circle_at_4%_120%,rgba(196,228,150,0.16),transparent_38%)]" />
-      <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+      <div className={cn("relative flex flex-col gap-6 lg:flex-row lg:justify-between", alignClass)}>
         <div className="max-w-3xl">
           <p className="eyebrow">
             <Icon size={16} weight="fill" className="text-[#3f7cc0] dark:text-[#7fb2e8]" aria-hidden="true" />
