@@ -104,23 +104,31 @@ class TestWorker(unittest.TestCase):
         self.assertTrue(any(f.get("id") == "existing-1" for f, _ in item_updates))
 
 
-import qianfan_search as qf
 import insight_engine as E
+
+
+class _FakeRouter:
+    """替换 B._ROUTER：mock 多源检索结果，隔离 LLM pipeline 与 DB（不打网络）。"""
+
+    def __init__(self, results):
+        self._results = results
+
+    def search(self, sb, query, top_k=8, client=None):
+        return list(self._results)
 
 
 class TestT3(unittest.TestCase):
     def setUp(self):
-        self._search, self._consume, self._pipeline = qf.search, qf.budget_consume, E.run_pipeline
-        qf.budget_consume = lambda sb, n=1: 1
+        self._orig_router, self._pipeline = B._ROUTER, E.run_pipeline
 
     def tearDown(self):
-        qf.search, qf.budget_consume, E.run_pipeline = self._search, self._consume, self._pipeline
+        B._ROUTER, E.run_pipeline = self._orig_router, self._pipeline
 
     def test_enrich_company_t3_writes_culture(self):
-        qf.search = lambda q, **k: [
-            {"title": "t1", "url": "https://a.com/1", "snippet": "加班偏多", "publisher": "a.com"},
-            {"title": "t2", "url": "https://b.com/2", "snippet": "氛围不错", "publisher": "b.com"},
-        ]
+        B._ROUTER = _FakeRouter([
+            {"title": "t1", "url": "https://a.com/1", "snippet": "加班偏多", "text": "加班偏多", "publisher": "a.com"},
+            {"title": "t2", "url": "https://b.com/2", "snippet": "氛围不错", "text": "氛围不错", "publisher": "b.com"},
+        ])
         E.run_pipeline = lambda c, d, s, client=None: [{
             "claim": {"content": "据公开讨论该公司强度偏大", "grade": "experience",
                       "source_idx": 0, "sample_size": "6", "quote": "加班偏多"},
@@ -136,7 +144,7 @@ class TestT3(unittest.TestCase):
         self.assertTrue(any("t3_checked_at" in p for _, p in store.get("company_profiles_updates", [])))
 
     def test_enrich_company_t3_empty_search(self):
-        qf.search = lambda q, **k: []
+        B._ROUTER = _FakeRouter([])
         store = {}
         res = B.enrich_company_t3(FakeSB(store), {"id": "c2", "company": "Y", "aliases": []})
         self.assertEqual(res, "empty")
