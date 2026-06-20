@@ -185,16 +185,17 @@ set search_path to 'public' as $function$
 $function$;
 
 -- ── 索引（btree，从生产忠实重建）──
+-- 注：原 idx_jobs_enrich_queue(first_seen 前导) / idx_jobs_first_seen(裸) / jobs_source_id_idx(裸) 已于
+-- 2026-06-20 下架——生产实测 0 次 idx_scan，分别被 jobs_enrich_queue_by_source_idx(source_id 前导,
+-- 迁移150)/ jobs_status_first_seen_idx(status,first_seen 复合)/ 部分 source 前导索引完全覆盖（裸索引列序更差，
+-- planner 不选）。省每次 upsert 的索引维护。若查询形态变化可按需重建。
 create index if not exists idx_jobs_company                 on jobs (company);
-create index if not exists idx_jobs_enrich_queue            on jobs (first_seen_at desc) where status = 'active' and summary is null and enrich_fail_count < 3;
-create index if not exists idx_jobs_first_seen              on jobs (first_seen_at desc);
 create index if not exists idx_jobs_status                  on jobs (status);
 create index if not exists jobs_active_company_idx          on jobs (company) where status = 'active';
 create index if not exists jobs_active_liveness_by_source_idx on jobs (source_id, enrich_checked_at nulls first) where status = 'active';
 create index if not exists jobs_canonical_jd_url_idx        on jobs (canonical_jd_url);
 create unique index if not exists jobs_canonical_jd_url_active_uniq on jobs (canonical_jd_url) where status = 'active';
 create index if not exists jobs_enrich_queue_by_source_idx  on jobs (source_id, first_seen_at desc) where status = 'active' and summary is null and enrich_fail_count < 3;
-create index if not exists jobs_source_id_idx               on jobs (source_id);
 create index if not exists jobs_status_first_seen_idx       on jobs (status, first_seen_at desc);
 create index if not exists jobs_valid_active_idx            on jobs (id) where status = 'active' and summary is not null and char_length(btrim(summary)) >= 60;
 
