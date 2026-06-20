@@ -129,28 +129,18 @@ export default function RegisterModal({
         setStep("password");
         return;
       }
-      // 无 session 时判断验证码到底发没发出去。GoTrue 反枚举：只要邮箱已存在，signUp 一律
-      // 返回空 identities（data.user 也可能为 null）——关键是「已存在」包含「之前发起过注册但
-      // 还没验证完的半拉子账号」，对它再 signUp 同样是空 identities。所以空 identities 有两种：
-      //   ① 真·已注册并已验证的账号 → 应引导去登录；
-      //   ② 没验证完的半拉子账号（用户没收到码点「改邮箱」/重开弹窗/重发，对同一邮箱二次 signUp）
-      //      → 这是新用户的正常重试，必须放行，否则会被误判「已注册」卡死。
-      // 仅凭 identities 无法分辨两者，于是用 resend(signup) 补发验证码来探：
-      //   能补发（无 error）→ 是未验证账号，继续验证流程；
-      //   补发报错（已验证账号 GoTrue 会拒绝补发）→ 才是真·已注册，引导去登录。
-      const codeSent = !!(data.user?.identities && data.user.identities.length > 0);
-      if (!codeSent) {
-        const { error: resendError } = await supabase.auth.resend({
-          type: "signup",
-          email: email.trim(),
-        });
-        if (resendError) {
-          setError("该邮箱已注册，请直接登录（忘了密码可在登录页用「忘记密码？」找回）。");
-          return;
-        }
-      }
+      // ⚠️ 开启「邮箱枚举保护」(Email enumeration protection，本项目实测为开) 后，signUp 对
+      // 【新邮箱】和【已存在邮箱】返回完全一样的混淆响应：data.user.identities 一律为空、也不报错，
+      // 客户端【无法】区分新老用户。之前靠 identities 判「已注册」会把所有新用户都误判成已注册
+      // （实测全新 qq 邮箱也中招）；而该发的验证码其实照常发给了新/未验证用户，只是响应被抹掉。
+      // 故不再做「已注册」判定：signUp 成功(无 error、无 session)即视为已发码，直接进验证码步骤——
+      //   新用户 / 未验证用户 → 收到 signUp 发的码，正常继续；
+      //   已验证的老账号 → GoTrue 不会再发注册码、用户收不到 → 按下方提示返回去用密码登录。
+      // 真·已注册（已验证）邮箱在枚举保护【关闭】时才会走上面的 error 分支报 user_already_exists。
       setCooldown(60);
-      setMessage("验证码已发送到邮箱，请查收（也看看垃圾箱）。");
+      setMessage(
+        "验证码已发送到邮箱，请查收（也看看垃圾箱）。如果你之前已注册过、一直收不到码，请返回用密码登录。",
+      );
       setStep("code");
     } catch (err) {
       console.error("[register] email", err);
