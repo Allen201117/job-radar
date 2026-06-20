@@ -58,7 +58,8 @@ class PlaywrightAdapter(BaseAdapter):
                   "Data", "Data.Posts", "Data.List", "Data.Rows")  # 北森 GetJobAdPageList: 顶层 Data 列表
     detail_template: str = ""           # 含 {id}
     official_hosts: tuple = ()
-    wait_ms: int = 6000
+    wait_ms: int = 6000              # 等待列表接口响应的上限（智能等待命中后提前返回，绝不超此值）
+    quiet_after_capture_ms: int = 1800  # 命中拦截后需连续静默这么久才算「列表加载停当」（兜住紧随的二次 XHR）
     pw_timeout: int = 45000
     max_pages: int = 4
 
@@ -99,7 +100,7 @@ class PlaywrightAdapter(BaseAdapter):
             for u in urls:
                 try:
                     page.goto(u, wait_until="domcontentloaded", timeout=self.pw_timeout)
-                    page.wait_for_timeout(self.wait_ms)
+                    self._await_list_capture(page, collected, matchers)
                     self._paginate(page)
                 except Exception:
                     continue
@@ -112,6 +113,33 @@ class PlaywrightAdapter(BaseAdapter):
                 f"(matchers={matchers or 'ALL_JSON'})"
             )
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
+
+    def _await_list_capture(self, page, collected, matchers) -> None:
+        """智能等待岗位接口响应：命中拦截（collected 增长）后再静默 quiet_after_capture_ms（兜住紧随的
+        二次 XHR）即返回，**上限仍是 wait_ms**。比固定 wait_ms 死等快，且绝不少等/丢数据——命中前一直等、
+        命中后留静默窗口、未命中则等满 wait_ms（与旧行为完全一致）。
+
+        仅在配了**具体 matchers**（命中即可靠判定「岗位接口已回」）时启用；matchers 为空=拦截所有 JSON
+        时无法区分岗位接口与统计/配置请求 → 退回固定 wait_ms（不冒提前返回丢岗位的风险）。"""
+        if not matchers:
+            page.wait_for_timeout(self.wait_ms)
+            return
+        step = 300
+        waited = 0
+        last = len(collected)
+        quiet = 0
+        while waited < self.wait_ms:
+            page.wait_for_timeout(step)  # sync API 在等待期间仍会派发 on_response（拦截照常累积）
+            waited += step
+            cur = len(collected)
+            if cur > last:        # 有新拦截响应 → 重置静默计时（仍在加载，继续等）
+                last = cur
+                quiet = 0
+            elif last > 0:        # 已命中过且本轮无新响应 → 累计静默；够久即判定加载停当，提前返回
+                quiet += step
+                if quiet >= self.quiet_after_capture_ms:
+                    return
+        # 未命中 / 一直有新响应 → 等满 wait_ms（绝不少等）
 
     def _paginate(self, page):
         """翻页/滚动以触发更多接口分页响应（被 on_response 持续拦截）。低频、有上限。"""
