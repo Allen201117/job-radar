@@ -1,0 +1,30 @@
+name: insight-staleness-sweep
+# 职业洞察过期下架：valid_until 已过的 active 条目 → retired（保鲜，治"又旧"；设计 2026-06-20 供给升级 spec Phase 3）。
+# 只读 + 轻量 update，无外部 key；与 T2(insight-enrich 20:30)/T3(insight-enrich-t3 21:30) 错开（本任务 19:30 先跑）。
+
+on:
+  schedule:
+    - cron: "30 19 * * *"   # 每日 UTC 19:30
+  workflow_dispatch:
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      - name: Sweep expired insights → retired
+        working-directory: crawler
+        run: python3 insight_sweep.py

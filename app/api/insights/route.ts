@@ -112,6 +112,19 @@ export async function GET(request: NextRequest) {
   }
   const hasAny = INSIGHT_DIMENSIONS.some((dim) => dimensions[dim].length > 0);
 
+  // 5) 现查触发（即时性）：用户点开、有真实在招岗位、但还没画像的公司 → 建占位入队，
+  //    下次富化 drain（insight_checked_at NULL 优先）即补 Wikidata/EDGAR + 经验洞察。
+  //    幂等 onConflict + 仅 !profile 时写一次 → 零 churn、不重复触发已富化/已查空的公司、无成本失控。
+  if (!profile && (jobRows?.length || 0) > 0) {
+    try {
+      await createServiceClient()
+        .from("company_profiles")
+        .upsert({ company }, { onConflict: "company" });
+    } catch (e) {
+      console.error("[insights] 现查入队失败（不影响展示）", (e as Error).message);
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     company: profile,
