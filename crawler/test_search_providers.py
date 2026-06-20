@@ -5,6 +5,7 @@
 """
 import os
 import unittest
+from datetime import datetime, timezone
 
 import search_base
 import search_bocha
@@ -54,6 +55,19 @@ class TestDomainOf(unittest.TestCase):
     def test_blank_url_returns_web(self):
         self.assertEqual(search_base.domain_of(""), "web")
         self.assertEqual(search_base.domain_of(None), "web")
+
+
+class TestRecency(unittest.TestCase):
+    NOW = datetime(2026, 6, 20, tzinfo=timezone.utc)
+
+    def test_iso_three_years_back(self):
+        self.assertEqual(search_base.recency_start_iso(3, self.NOW), "2023-06-21")
+
+    def test_us_three_years_back(self):
+        self.assertEqual(search_base.recency_start_us(3, self.NOW), "06/21/2023")
+
+    def test_zero_years_is_today(self):
+        self.assertEqual(search_base.recency_start_us(0, self.NOW), "06/20/2026")
 
 
 class TestBochaParse(unittest.TestCase):
@@ -184,6 +198,7 @@ class TestBuildRequest(unittest.TestCase):
         self.assertEqual(body["api_key"], "KEY")
         self.assertEqual(body["query"], "q")
         self.assertEqual(body["max_results"], 5)
+        self.assertRegex(body["start_date"], r"^\d{4}-\d{2}-\d{2}$")  # 近 3 年时间窗
 
     def test_serper_puts_key_in_header(self):
         url, headers, body = search_serper.build_request("KEY", "q", 5)
@@ -191,6 +206,8 @@ class TestBuildRequest(unittest.TestCase):
         self.assertEqual(headers["X-API-KEY"], "KEY")
         self.assertEqual(body["q"], "q")
         self.assertEqual(body["num"], 5)
+        self.assertIn("cdr:1", body["tbs"])      # 近 3 年自定义时间窗
+        self.assertIn("cd_min:", body["tbs"])
 
 
 class TestHttpProviderConfig(unittest.TestCase):
