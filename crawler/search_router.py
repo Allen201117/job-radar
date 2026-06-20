@@ -59,12 +59,15 @@ def default_router():
     import search_tavily
     from search_provider_http import HttpSearchProvider
 
+    # 默认日顶按各家免费额度保守设，**绝不一次性用完**（可在 repo Variables *_DAILY_CAP 上调）：
+    #   tavily 30/日 ≈ 900/月（< 1000 免费/月）；serper 20/日（2500 一次性总额 → 约 4 个月）；
+    #   bocha 50/日（付费，保守）；千帆走自身 QIANFAN_DAILY_CAP=40/日（每日重置、免费、是常驻主力）。
     return SearchRouter([
         HttpSearchProvider("bocha", "BOCHA_API_KEY", search_bocha.parse_response,
-                           search_bocha.build_request, "BOCHA_DAILY_CAP", 200),
+                           search_bocha.build_request, "BOCHA_DAILY_CAP", 50),
         HttpSearchProvider("tavily", "TAVILY_API_KEY", search_tavily.parse_response,
-                           search_tavily.build_request, "TAVILY_DAILY_CAP", 300),
+                           search_tavily.build_request, "TAVILY_DAILY_CAP", 30),
         HttpSearchProvider("serper", "SERPER_API_KEY", search_serper.parse_response,
-                           search_serper.build_request, "SERPER_DAILY_CAP", 200),
+                           search_serper.build_request, "SERPER_DAILY_CAP", 20),
         search_qianfan.QianfanProvider(),
     ])
