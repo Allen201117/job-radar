@@ -129,14 +129,25 @@ export default function RegisterModal({
         setStep("password");
         return;
       }
-      // 无 session 时区分「真发了验证码」与「邮箱已注册被反枚举混淆」：
-      //   新用户 / 未验证老用户 → data.user.identities 至少含一个身份（已发/重发验证码）。
-      //   已注册（已验证）→ GoTrue 反枚举：data.user 可能为 null，或 identities 为空，且不发码。
-      // 只认「拿到有效身份」为真正发了码；否则一律按已注册处理，避免用户傻等收不到的码。
+      // 无 session 时判断验证码到底发没发出去。GoTrue 反枚举：只要邮箱已存在，signUp 一律
+      // 返回空 identities（data.user 也可能为 null）——关键是「已存在」包含「之前发起过注册但
+      // 还没验证完的半拉子账号」，对它再 signUp 同样是空 identities。所以空 identities 有两种：
+      //   ① 真·已注册并已验证的账号 → 应引导去登录；
+      //   ② 没验证完的半拉子账号（用户没收到码点「改邮箱」/重开弹窗/重发，对同一邮箱二次 signUp）
+      //      → 这是新用户的正常重试，必须放行，否则会被误判「已注册」卡死。
+      // 仅凭 identities 无法分辨两者，于是用 resend(signup) 补发验证码来探：
+      //   能补发（无 error）→ 是未验证账号，继续验证流程；
+      //   补发报错（已验证账号 GoTrue 会拒绝补发）→ 才是真·已注册，引导去登录。
       const codeSent = !!(data.user?.identities && data.user.identities.length > 0);
       if (!codeSent) {
-        setError("该邮箱已注册，请直接登录（忘了密码可在登录页用「忘记密码？」找回）。");
-        return;
+        const { error: resendError } = await supabase.auth.resend({
+          type: "signup",
+          email: email.trim(),
+        });
+        if (resendError) {
+          setError("该邮箱已注册，请直接登录（忘了密码可在登录页用「忘记密码？」找回）。");
+          return;
+        }
       }
       setCooldown(60);
       setMessage("验证码已发送到邮箱，请查收（也看看垃圾箱）。");
