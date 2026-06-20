@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { createServerSupabase } from "@/lib/auth";
+import { assertOwnership, requireUser } from "@/lib/apiAuth";
+import { createServiceClient } from "@/lib/supabaseService";
 import liveSearch from "@/lib/live-search";
 import discoveryDispatch from "@/lib/discovery-dispatch";
 import { jobsStoreEnabled, jobsByUrls } from "@/lib/jobs-store/read";
@@ -17,13 +17,9 @@ const { summarizeDiscoveryRunStatus, extractProducedJdUrls } = discoveryDispatch
  * 终态时附带本次产出的岗位（按 diagnostics.produced_jd_urls 回查 jobs）。
  */
 export async function GET(request: NextRequest) {
-  const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser();
+  if (auth.error) return auth.error;
+  const { user } = auth;
 
   const params = request.nextUrl.searchParams;
   const runId = (params.get("runId") || params.get("run_id") || "").trim();
@@ -60,13 +56,9 @@ export async function GET(request: NextRequest) {
       { status: 404 },
     );
   }
-  // Scope to the requesting user (service client bypasses RLS, so check manually).
-  if (run.user_id && run.user_id !== user.id) {
-    return NextResponse.json(
-      { ok: false, error: "forbidden", run_id: runId, mode: "browser_discovery" },
-      { status: 403 },
-    );
-  }
+  // service-role 绕过 RLS：按 id 查到行后必须显式复核归属。
+  const ownershipError = assertOwnership(run, user.id);
+  if (ownershipError) return ownershipError;
 
   let summary = summarizeDiscoveryRunStatus(run);
   const diag = (run.diagnostics || {}) as any;
@@ -83,6 +75,7 @@ export async function GET(request: NextRequest) {
       .from("discovery_runs")
       .update({ status: "failed", failure_reason: "stale_no_heartbeat", finished_at: new Date().toISOString() })
       .eq("id", runId)
+      .eq("user_id", user.id)
       .eq("status", "running")
       .then(undefined, () => {}); // best-effort，不阻塞响应
   }
@@ -138,16 +131,5 @@ export async function GET(request: NextRequest) {
     finished_at: summary.finishedAt,
     jobs: jobs.map((job: any) => toApiJob(job, 60)),
     total: jobs.length,
-  });
-}
-
-function createServiceClient(): SupabaseClient {
-  const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !serviceKey) {
-    throw new Error("Missing Supabase service credentials");
-  }
-  return createClient(supabaseUrl, serviceKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
   });
 }

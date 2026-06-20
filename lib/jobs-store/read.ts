@@ -24,6 +24,76 @@ export async function countRecentActive(sinceIso: string): Promise<number> {
   return Number(n ?? 0);
 }
 
+export type JobsHealthSnapshot = {
+  validActive: number;
+  todayNew: number;
+  todayUpdated: number;
+  activeTotal: number;
+  thinActive: number;
+  expired: number;
+  removed: number;
+  total: number;
+  neverChecked: number;
+};
+
+/**
+ * 管理员健康面板的 jobs 聚合。
+ * 一条 SQL 只返回一行；「有效在招」严格复用 count_valid_active_jobs()，不拉岗位明细到 JS。
+ * 今日口径固定为 Asia/Shanghai 当日 00:00。
+ */
+export async function getJobsHealthSnapshot(): Promise<JobsHealthSnapshot> {
+  const rows = await jobsQuery<{
+    valid_active: string | number;
+    today_new: string | number;
+    today_updated: string | number;
+    active_total: string | number;
+    expired: string | number;
+    removed: string | number;
+    total: string | number;
+    never_checked: string | number;
+  }>(`
+    with bounds as (
+      select date_trunc('day', now() at time zone 'Asia/Shanghai')
+        at time zone 'Asia/Shanghai' as today_start
+    )
+    select
+      count_valid_active_jobs() as valid_active,
+      count(*) filter (where first_seen_at >= bounds.today_start) as today_new,
+      count(*) filter (
+        where last_seen_at >= bounds.today_start
+          and first_seen_at < bounds.today_start
+      ) as today_updated,
+      count(*) filter (where status = 'active') as active_total,
+      count(*) filter (where status = 'expired') as expired,
+      count(*) filter (where status = 'removed') as removed,
+      count(*) as total,
+      count(*) filter (
+        where status = 'active' and enrich_checked_at is null
+      ) as never_checked
+    from jobs
+    cross join bounds
+  `);
+  const row = rows[0];
+  if (!row) {
+    throw new Error("jobs health query returned no rows");
+  }
+  const validActive = Number(row.valid_active || 0);
+  const activeTotal = Number(row.active_total || 0);
+  const expired = Number(row.expired || 0);
+  const removed = Number(row.removed || 0);
+  return {
+    validActive,
+    todayNew: Number(row.today_new || 0),
+    todayUpdated: Number(row.today_updated || 0),
+    activeTotal,
+    thinActive: Math.max(0, activeTotal - validActive),
+    expired,
+    removed,
+    total: Number(row.total || 0),
+    neverChecked: Number(row.never_checked || 0),
+  };
+}
+
 /** 最新 active 一页（jobs 页 SSR 首屏种子 / list 路由）。 */
 export async function listLatestActive(limit: number, offset = 0): Promise<any[]> {
   return jobsQuery(

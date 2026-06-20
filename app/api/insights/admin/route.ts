@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabase } from "@/lib/auth";
+import { requireAdmin } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
 import {
   evaluateInsight,
@@ -16,24 +16,6 @@ export const runtime = "nodejs";
 
 const GRADES = ["fact", "experience", "rumor"];
 const STATUSES = ["active", "disputed", "retired"];
-
-// 统一 admin 守卫：未登录 401 / 非 admin 403 / 否则放行。
-async function requireAdmin() {
-  const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 }) };
-  const { data: profileRow } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .maybeSingle();
-  if (profileRow?.role !== "admin") {
-    return { error: NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 }) };
-  }
-  return { supabase, user };
-}
 
 // 把表单里的 sources 数组写成 insight_sources + 关联 insight_item_sources。
 async function attachSources(service: any, itemId: string, sources: any[]) {

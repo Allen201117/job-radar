@@ -4,7 +4,7 @@
 
 **目标**：每天自动监控一批企业招聘官网，把公开岗位信息整理到共享岗位库，每个用户根据自己的偏好看到不同排序。
 
-**技术栈**：Next.js 14 + Tailwind + Supabase Auth/Postgres + Python Crawler + GitHub Actions。
+**技术栈**：Next.js 14 + Tailwind + Supabase（Auth / sources / runs / 用户数据）+ 独立 PostgreSQL 岗位库 + Python Crawler + GitHub Actions。
 
 ## 架构
 
@@ -15,9 +15,10 @@ GitHub Actions 定时 / 手动触发
         ↓
 Python Crawler（httpx + selectolax）
         ↓
-Supabase Postgres
+sources / crawl_runs 等 → Supabase Postgres
+jobs 岗位热表          → PostgreSQL（JOBS_DATABASE_URL）
         ↑
-Next.js API（已知源刷新 + 官方源发现候选）
+Next.js API（岗位搜索 + 公司库刷新 + 官方源发现）
         ↓
 Next.js 看板（Vercel 部署）
         ↓
@@ -28,53 +29,34 @@ Next.js 看板（Vercel 部署）
 
 ```
 job-radar-private-beta/
-  app/                    # Next.js App Router 页面
-    page.tsx              # Today — 今日看板
-    jobs/page.tsx         # Jobs — 岗位库
-    preferences/page.tsx  # Preferences — 偏好设置
-    saved/page.tsx        # Saved — 已收藏
-    applied/page.tsx      # Applied — 已投递
-    sources/page.tsx      # Sources — 源管理（管理员）
+  app/                    # Next.js App Router 页面与 API
   components/             # React 组件
-    Navbar.tsx
-    JobCard.tsx
-    JobFilters.tsx
-    PreferenceForm.tsx
-    SourceTable.tsx
-  lib/                    # 工具
-    supabaseClient.ts     # 浏览器端 Supabase client
-    auth.ts               # 服务端 Supabase client + 认证
-    live-search.js        # 已知源刷新格式化与链接校验
-    official-discovery.js # 官方招聘源发现 URL 分类与搜索 query 构造
-    scoring.ts            # 规则打分算法
-    types.ts              # TypeScript 类型
-    utils.ts              # 工具函数
-  crawler/                # Python 抓取器
-    adapters/             # 源适配器
-      base.py             # BaseAdapter 基类
-      apple.py            # Apple public careers search page
-      baidu.py            # 百度
-      jd.py               # 京东
-      haier.py            # 海尔
-      siemens.py          # Siemens
-    run.py                # 主入口
-    db.py                 # Supabase 写入
-    normalizer.py         # 字段标准化
-    robots.py             # robots.txt 检查
-    requirements.txt
-  supabase/migrations/    # 数字前缀递增的迁移文件（001 建表 / 002 RLS / … 持续新增）
+  lib/
+    jobs-store/           # 独立 PostgreSQL 岗位库读写边界
+    source-adapters.ts    # adapter 白名单与录入校验
+  crawler/
+    adapters/             # Python 源适配器；以目录实际内容为准
+    run.py                # crawler 主入口
+    db.py                 # Supabase 元数据写入
+    jobs_db.py            # jobs PostgreSQL 读写
+  supabase/migrations/    # Supabase 迁移；明细以目录实际内容为准
+  jobs-db/schema.sql      # 独立 jobs 库 schema
   .github/workflows/
+    migrate.yml           # Supabase 迁移自动 apply
+    jobs-db-migrate.yml   # jobs 库 schema apply
     daily-crawl.yml       # 每日抓取 + 手动触发
 ```
 
-## 数据库表
+## 核心数据表（非完整清单）
+
+Supabase 完整 schema 以 `supabase/migrations/` 为准，独立岗位库 schema 以 `jobs-db/schema.sql` 为准。
 
 | 表 | 用途 | 权限 |
 |---|---|---|
 | profiles | 用户扩展信息 | 自己读写 |
 | sources | 企业招聘源 | 所有人读，crawler 写 |
 | source_candidates | 官方源发现候选 | admin 读，service role 写 |
-| jobs | 共享岗位库 | 所有人读，crawler 写 |
+| jobs | 共享岗位库（独立 PostgreSQL） | app / crawler 经 jobs-store 边界读写 |
 | user_preferences | 用户偏好 | 自己读写 |
 | job_actions | 用户操作（收藏/忽略/投递） | 自己读写 |
 | crawl_runs | 抓取日志 | admin 读，crawler 写 |
@@ -82,19 +64,12 @@ job-radar-private-beta/
 
 ## 当前 Source 状态
 
-| Source | 状态 | 说明 |
-|---|---|---|
-| Apple | 可用 | crawler + 已知源刷新，详情页为 `jobs.apple.com/en-us/details/...` |
-| Siemens | 可用 | crawler 已验证，详情页为 `jobs.siemens.com/en_US/externaljobs/JobDetail/...` |
-| 百度 | 可用 | 解析官方列表，详情页为 `talent.baidu.com/jobs/detail/{recruitType}/{postId}`；重复运行更新不重复插入 |
-| 京东 | 可用 | 使用公开岗位列表接口，详情页为 `zhaopin.jd.com/web/job-info-detail?requementId=...`；重复运行更新不重复插入 |
-| 百度千帆 Web Search | 低频动态发现 | 只用于用户触发的“发现中国官方招聘源”；免费百度搜索额度为每日 50 次，额度耗尽时设置 `BAIDU_QIANFAN_SEARCH_DISABLED=true`，不要频繁跑 dynamic discovery 验证 |
-| 海尔 | 暂不可用 | 当前只能解析到专题/入口页，记录为 `partial_success` |
+adapter 实现覆盖以 `crawler/adapters/` 为准，允许录入的 adapter 与抓取方式以 `lib/source-adapters.ts` 为准；两者必须与 `crawler/run.py` 的 `ADAPTERS` 保持一致。当前主力源、质量门和维护优先级见 `CLAUDE.md`，不要从 README 中维护一份容易漂移的缩略源表。
 
 ## 当前可用能力
 
-- Jobs 页分为三层：搜索已有岗位、刷新已知中国官网源、发现中国官方招聘源。
-- 已知中国官网源刷新走 `/api/search`，只访问已验证的百度 / 京东官方公开源，不消耗百度千帆额度。
+- 岗位链路分为四层：本地 `jobs` 搜索、`/api/refresh` 刷新公司库、保留的旧同步 `/api/search` 已知源刷新、`/api/discovery` 官方源发现；四层不可混为一谈。
+- Jobs 页当前主刷新入口走 `/api/refresh`：按用户筛选与偏好选取相关公司源，异步触发 crawler 并轮询进度；`/api/search` 仅保留为窄范围旧同步 API。
 - 动态官方源发现走 `/api/discovery`，主 provider 是百度千帆 Web Search；默认只调用 1 个 generated query，用户点击“继续发现更多”才调用第 2 个 query。
 - 相同 user/query/city/job_type 的 discovery 结果 45 分钟内复用缓存，响应 diagnostics 会显示 `cache_hit`。
 - `jobs` 写入质量门不变：只有 parser 验证过的官方岗位详情页，且 `company/title/jd_url` 非空、HTTP 200、页面包含标题或核心片段，才写入 `jobs`。
@@ -128,13 +103,20 @@ BAIDU_QIANFAN_SEARCH_DISABLED=false
 
 - Node.js 18+
 - Python 3.11+
-- Supabase 项目（免费档即可）
+- Supabase 项目
+- 独立 PostgreSQL 岗位库（生产环境通过 `JOBS_DATABASE_URL` 连接）
 
-### 1. 初始化 Supabase
+### 1. 数据库迁移
 
-按数字前缀从小到大依次执行 `supabase/migrations/` 目录下的全部 SQL 文件（`001_init.sql` 起，后续按前缀递增，以目录实际内容为准）。
+Supabase 迁移由 CI 自动 apply：push 到 `main` 且改动 `supabase/migrations/**` 时，`.github/workflows/migrate.yml` 会执行前缀校验并应用尚未执行的迁移，不要再按 README 逐条手动运行 SQL。
 
-> 生产库已自动化：push 到 `main` 且改动 `supabase/migrations/**` 时由 `.github/workflows/migrate.yml` 自动 apply，无需手动进 Supabase SQL Editor。
+当前仓库共有 **162** 个 Supabase SQL 迁移；明细与顺序以 `supabase/migrations/` 为准。计数命令：
+
+```bash
+ls supabase/migrations/*.sql | wc -l
+```
+
+独立岗位库 schema 位于 `jobs-db/schema.sql`，由 `.github/workflows/jobs-db-migrate.yml` 应用。
 
 ### 2. 配置环境变量
 
@@ -142,7 +124,7 @@ BAIDU_QIANFAN_SEARCH_DISABLED=false
 cp .env.example .env.local
 ```
 
-编辑 `.env.local`，填入 Supabase 项目的 URL、anon key 和 service role key。
+编辑 `.env.local`，填入 Supabase 的 URL、anon key、service role key；连接当前独立岗位库时还需配置 `JOBS_DATABASE_URL`。
 
 ### 3. 启动前端
 
@@ -211,6 +193,7 @@ python3 crawler/run.py --source jd
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
+   - `JOBS_DATABASE_URL`
 3. 部署
 
 ### Crawler — GitHub Actions
@@ -218,6 +201,8 @@ python3 crawler/run.py --source jd
 1. 在 GitHub 仓库 Settings → Secrets 中添加：
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
+   - `SUPABASE_DB_URL`（Supabase 迁移）
+   - `JOBS_DATABASE_URL`（岗位库读写）
 2. 手动触发：Actions → daily-job-crawl → Run workflow
 3. 定时触发：每天 UTC 00:00（北京时间 08:00）自动运行
 
@@ -233,9 +218,9 @@ python3 crawler/run.py --source jd
 
 ### 数据验收
 
-1. Apple / Siemens 能抓取成功并写入真实岗位详情页
+1. 从当前 enabled sources 中按 adapter 抽样，能抓取并写入真实官方岗位详情页
 2. 重复运行同一 source 不会重复插入相同岗位
-3. 百度 / 京东 adapter 能生成真实官方详情页，重复运行不重复插入
+3. 抽样覆盖 `crawler/adapters/` 中的主力 adapter，并核对其生成的 `jd_url`
 4. 低质量 source 不写入 active jobs，并在 `crawl_runs` 记录 `partial_success`
 
 ### 功能验收
@@ -248,25 +233,24 @@ python3 crawler/run.py --source jd
 6. Jobs 页可区分本地 jobs 表搜索与官方源发现；官方源发现只把有准确岗位详情页的岗位 upsert 到 jobs
 7. 简历文本，以及 `.txt/.md`/PDF/Word(`.docx`)/图片 上传，均可解析为 candidate profile，用户确认后同步 preferences
 
-## 下一步路线
+## 当前维护方向
 
-1. 额度恢复后，用 2 个 query 低频串行验证百度千帆 raw results、`source_candidates` 和 failure_reason。
-2. 基于已有 `source_candidates` 优先补 parser：非高校转载、非第三方平台、非 SPA hash-only 且可 HTTP 200 验证标题的官方详情页优先。
-3. Moka 继续保持候选隔离；只有能拿到用户可打开、服务端可验证标题的详情 URL 后，才允许写入 `jobs`。
-4. 继续扩展已知官方源时，先证明真实详情 URL，再写 parser，不降低 `jd_url` 质量门。
+1. MVP 阶段优先保证精准、可靠、稳定，不再以 source 或 adapter 数量作为成功指标。
+2. 关注目标相关的有效产出：真实官方详情页、稳定 `jd_url`、足够的 JD 正文，并持续通过 liveness / quality gate。
+3. 只在目标公司明显缺失时定向补源；新增源必须 live 探活并证明能持续产出真实岗位。
+4. 任何发现候选或 parser 结果都不能绕过 `jd_url` 质量门写入 active jobs。
 
 ## 边界
 
 当前 Phase 1 **不做**：
 - 自动投递
+- 登录企业招聘系统或绕验证码
 - 第三方招聘平台抓取
-- LLM 摘要或匹配
 - 邮件/飞书/微信推送
-- 商业化付费
+- Redis / Celery / K8s 等重型基础设施
+
+LLM 已用于简历结构化和洞察辅助草稿，但不是岗位写入质量门的替代品。
 
 ## 成本
 
-Phase 1 目标 0–100 元/月：
-- Vercel 免费档：0 元
-- Supabase 免费档：0 元
-- GitHub Actions 免费额度：0 元
+当前部署同时依赖 Vercel、Supabase、GitHub Actions 与独立 PostgreSQL 主机，已不是“全免费栈”；实际费用以各部署账户和用量为准。

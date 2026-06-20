@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { createServerSupabase } from "@/lib/auth";
+import { requireAdmin, requireUser } from "@/lib/apiAuth";
+import { createServiceClient } from "@/lib/supabaseService";
 import { findCompanyProfile } from "@/lib/insight-match";
 import { evaluateInsight, resolveInsightFailure } from "@/lib/insight-verification";
 import {
@@ -22,13 +22,9 @@ import type {
 export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
-  const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser();
+  if (auth.error) return auth.error;
+  const { supabase } = auth;
 
   const company = (request.nextUrl.searchParams.get("company") || "").trim();
   if (!company) {
@@ -135,36 +131,9 @@ export async function GET(request: NextRequest) {
   });
 }
 
-// ============================================================
-// admin 录入（走校验门，不过门则拒绝）。日常策展用；首批数据走 seed migration。
-// ============================================================
-function createServiceClient(): SupabaseClient {
-  const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !serviceKey) {
-    throw new Error("Missing Supabase service credentials");
-  }
-  return createClient(supabaseUrl, serviceKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
-}
-
 export async function POST(request: NextRequest) {
-  const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
-  const { data: profileRow } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .maybeSingle();
-  if (profileRow?.role !== "admin") {
-    return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
-  }
+  const auth = await requireAdmin();
+  if (auth.error) return auth.error;
 
   let body: any;
   try {

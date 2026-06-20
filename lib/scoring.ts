@@ -1,9 +1,15 @@
-import type { Job, UserPreferences, JobAction } from "./types";
+import type {
+  Job,
+  UserPreferences,
+  JobAction,
+  MatchReason,
+} from "./types";
 import { keywordMatchTier } from "./china-keyword-expansion";
 
 interface ScoreResult {
   score: number;
   matched_keywords: string[];
+  match_reasons: MatchReason[];
   hidden_reason: string | null;
   user_action: string | null;
   // 相关性门信号（Today 看板硬过滤用，不参与计分/展示）：
@@ -35,6 +41,7 @@ export function scoreJob(
 ): ScoreResult {
   let score = 0;
   const matched_keywords: string[] = [];
+  const match_reasons: MatchReason[] = [];
   let hidden_reason: string | null = null;
   let user_action: string | null = null;
   let content_matched = false;
@@ -50,6 +57,7 @@ export function scoreJob(
     return {
       score: 0,
       matched_keywords: [],
+      match_reasons: [],
       hidden_reason: null,
       user_action: null,
       content_matched: false,
@@ -63,6 +71,7 @@ export function scoreJob(
     if (keywordMatchTier(job, role)) {
       score += 30;
       matched_keywords.push(role);
+      match_reasons.push({ type: "role", value: role });
       content_matched = true;
       break; // 只加一次
     }
@@ -73,6 +82,7 @@ export function scoreJob(
     if (location.includes(loc.toLowerCase())) {
       score += 20;
       matched_keywords.push(loc);
+      match_reasons.push({ type: "location", value: loc });
       location_matched = true;
       break;
     }
@@ -83,6 +93,7 @@ export function scoreJob(
     if (company.includes(c.toLowerCase())) {
       score += 15;
       matched_keywords.push(c);
+      match_reasons.push({ type: "company", value: c });
       content_matched = true;
       break;
     }
@@ -93,6 +104,7 @@ export function scoreJob(
     if (keywordMatchTier(job, kw)) {
       score += 5;
       matched_keywords.push(kw);
+      match_reasons.push({ type: "keyword", value: kw });
       content_matched = true;
     }
   }
@@ -103,6 +115,7 @@ export function scoreJob(
       (Date.now() - new Date(job.first_seen_at).getTime()) / 86400000;
     if (daysSinceFirstSeen <= 7) {
       score += 10;
+      match_reasons.push({ type: "freshness", value: "近 7 天新增" });
     }
   }
 
@@ -140,6 +153,7 @@ export function scoreJob(
   return {
     score,
     matched_keywords,
+    match_reasons,
     hidden_reason,
     user_action,
     content_matched,
@@ -176,6 +190,7 @@ export function sortAndFilterJobs(
         ...job,
         match_score: result.score,
         matched_keywords: result.matched_keywords,
+        match_reasons: result.match_reasons,
         hidden_reason: result.hidden_reason,
         user_action: result.user_action,
       },

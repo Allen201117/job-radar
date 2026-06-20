@@ -72,6 +72,7 @@ export default function ResumeProfilePanel() {
   const [message, setMessage] = useState("");
   const [draft, setDraft] = useState<StructuredProfile>(EMPTY);
   const [resumeId, setResumeId] = useState<string | null>(null);
+  const [parseDiagnostics, setParseDiagnostics] = useState<Record<string, unknown> | null>(null);
   const [saved, setSaved] = useState<any | null>(null);
   const [loadingSaved, setLoadingSaved] = useState(true);
   const [llmReady, setLlmReady] = useState<boolean | null>(null);
@@ -116,6 +117,7 @@ export default function ResumeProfilePanel() {
       }
       setDraft(coerce(data.profile));
       setResumeId(data.resume_id || null);
+      setParseDiagnostics(data.diagnostics || null);
       setStep("preview");
       setMessage(
         data.source === "rule"
@@ -136,7 +138,13 @@ export default function ResumeProfilePanel() {
       const resp = await fetch("/api/resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ intent: "save", profile: draft, resumeId, applyToPreferences }),
+        body: JSON.stringify({
+          intent: "save",
+          profile: draft,
+          resumeId,
+          applyToPreferences,
+          parseDiagnostics,
+        }),
       });
       const data = await resp.json();
       if (!data.ok) {
@@ -147,6 +155,7 @@ export default function ResumeProfilePanel() {
       setStep("input");
       setFile(null);
       setResumeText("");
+      setParseDiagnostics(null);
       setMessage(data.preferences_applied ? "已保存画像并回填求职偏好。" : "已保存画像。");
       if (data.preferences_applied) {
         window.dispatchEvent(new Event("resume-preferences-updated"));

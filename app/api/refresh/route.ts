@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { createServerSupabase } from "@/lib/auth";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { assertOwnership, requireUser } from "@/lib/apiAuth";
+import { createServiceClient } from "@/lib/supabaseService";
 import discoveryDispatch from "@/lib/discovery-dispatch";
 import { resolveRefreshScope } from "@/lib/refresh-scope";
 import { evaluateRefreshThrottle } from "@/lib/refresh-throttle";
@@ -30,13 +31,9 @@ const COOLDOWN_MS = Number(process.env.REFRESH_COOLDOWN_MIN || 0) * 60 * 1000;
  * 前端用 /api/discovery/status?runId= 轮询，结果按 produced_jd_urls 流式回灌。
  */
 export async function POST(request: NextRequest) {
-  const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser();
+  if (auth.error) return auth.error;
+  const { user } = auth;
 
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
     return NextResponse.json(
@@ -59,7 +56,9 @@ export async function POST(request: NextRequest) {
   };
 
   const service = createServiceClient();
-  const prefs = await loadRefreshPrefs(service, user.id);
+  const prefsResult = await loadRefreshPrefs(service, user.id);
+  if (prefsResult.error) return prefsResult.error;
+  const prefs = prefsResult.value;
 
   // 1) 解析 scope（手动筛选优先；未配用偏好兜底；按相关性 + 每平台多样性 cap 前 N）。
   const { data: sources, error: srcErr } = await service
@@ -121,12 +120,16 @@ export async function POST(request: NextRequest) {
   const sinceIso = new Date(Date.now() - COOLDOWN_MS).toISOString();
   const { data: recentRuns } = await service
     .from("discovery_runs")
-    .select("id, status, created_at, started_at")
+    .select("id, user_id, status, created_at, started_at")
     .eq("user_id", user.id)
     .eq("mode", "company_refresh")
     .gte("created_at", sinceIso)
     .order("created_at", { ascending: false })
     .limit(10);
+  for (const run of recentRuns || []) {
+    const ownershipError = assertOwnership(run, user.id);
+    if (ownershipError) return ownershipError;
+  }
 
   const decision = evaluateRefreshThrottle(recentRuns || [], Date.now(), { cooldownMs: COOLDOWN_MS });
   if (decision.action === "reuse") {
@@ -255,7 +258,8 @@ export async function POST(request: NextRequest) {
         error_message: dispatchError.slice(0, 1000),
         finished_at: new Date().toISOString(),
       })
-      .eq("id", runId);
+      .eq("id", runId)
+      .eq("user_id", user.id);
     return NextResponse.json(
       {
         ok: false,
@@ -290,17 +294,6 @@ export async function POST(request: NextRequest) {
     poll: `/api/discovery/status?runId=${runId}`,
     estimated_seconds: { min: 60, max: 300 },
     started_at: startedAt,
-  });
-}
-
-function createServiceClient(): SupabaseClient {
-  const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !serviceKey) {
-    throw new Error("Missing Supabase service credentials");
-  }
-  return createClient(supabaseUrl, serviceKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
   });
 }
 
@@ -344,12 +337,15 @@ async function loadRefreshPrefs(
   service: SupabaseClient,
   userId: string,
 ): Promise<{
-  targetCompanies: string[];
-  targetKeywords: string[];
-  targetRoles: string[];
-  city: string;
-  experienceStage: string;
-  excludeKeywords: string[];
+  value: {
+    targetCompanies: string[];
+    targetKeywords: string[];
+    targetRoles: string[];
+    city: string;
+    experienceStage: string;
+    excludeKeywords: string[];
+  };
+  error: NextResponse | null;
 }> {
   const empty = {
     targetCompanies: [] as string[],
@@ -363,32 +359,43 @@ async function loadRefreshPrefs(
     const [cpRes, upRes] = await Promise.all([
       service
         .from("candidate_profiles")
-        .select("experience_stage, target_locations, target_roles")
+        .select("user_id, experience_stage, target_locations, target_roles")
         .eq("user_id", userId)
         .maybeSingle(),
       service
         .from("user_preferences")
-        .select("target_companies, target_keywords, target_roles, target_locations, exclude_keywords")
+        .select("user_id, target_companies, target_keywords, target_roles, target_locations, exclude_keywords")
         .eq("user_id", userId)
         .maybeSingle(),
     ]);
     const cp = (cpRes.data || {}) as any;
     const up = (upRes.data || {}) as any;
+    if (cpRes.data) {
+      const ownershipError = assertOwnership(cp, userId);
+      if (ownershipError) return { value: empty, error: ownershipError };
+    }
+    if (upRes.data) {
+      const ownershipError = assertOwnership(up, userId);
+      if (ownershipError) return { value: empty, error: ownershipError };
+    }
     const clean = (arr: any): string[] =>
       Array.from(
         new Set((Array.isArray(arr) ? arr : []).map((s: any) => String(s || "").trim()).filter(Boolean)),
       );
     const cities = clean([...(cp.target_locations || []), ...(up.target_locations || [])]);
     return {
-      targetCompanies: clean(up.target_companies),
-      targetKeywords: clean(up.target_keywords),
-      targetRoles: clean([...(up.target_roles || []), ...(cp.target_roles || [])]),
-      city: cities[0] || "",
-      experienceStage: String(cp.experience_stage || "").trim(),
-      excludeKeywords: clean(up.exclude_keywords),
+      value: {
+        targetCompanies: clean(up.target_companies),
+        targetKeywords: clean(up.target_keywords),
+        targetRoles: clean([...(up.target_roles || []), ...(cp.target_roles || [])]),
+        city: cities[0] || "",
+        experienceStage: String(cp.experience_stage || "").trim(),
+        excludeKeywords: clean(up.exclude_keywords),
+      },
+      error: null,
     };
   } catch (err) {
     console.error("[refresh] 读取用户偏好失败", (err as Error).message);
-    return empty;
+    return { value: empty, error: null };
   }
 }

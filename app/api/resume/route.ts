@@ -3,6 +3,14 @@ import { createServerSupabase } from "@/lib/auth";
 import resumeParser from "@/lib/resume-parser";
 import llm from "@/lib/llm";
 import resumeExtract from "@/lib/resume-extract";
+import {
+  RESUME_RULE_MODEL,
+  bucketLatency,
+  buildResumeDiagnostics,
+  countExtractedResumeFields,
+  normalizeResumeErrorCode,
+  trackResumeEvent,
+} from "@/lib/track";
 
 const {
   buildPreferencesFromResumeProfile,
@@ -119,22 +127,50 @@ async function parseResume(
     );
   }
 
+  const cfg = llmConfig();
+  await trackResumeEvent(supabase, userId, "resume_parse_started", {
+    source: "llm",
+    model: cfg.model,
+    latency_bucket: "pending",
+    error_code: null,
+    extracted_field_count: 0,
+  });
+  const parseStartedAt = Date.now();
+
   let profile: any;
-  let source = "llm";
+  let source: "llm" | "rule" = "llm";
+  let model = cfg.model;
   let llmError: string | null = null;
   let llmDetail: string | null = null;
+  let errorCode: string | null = null;
+  let usedRuleFallback = false;
   try {
     const raw = await chatJSON(buildResumeMessages(input.text), { maxTokens: 2048 });
     profile = normalizeResumeProfile(raw);
     if (!profileHasContent(profile)) throw new Error("llm_empty");
   } catch (err: any) {
     source = "rule";
+    model = RESUME_RULE_MODEL;
+    usedRuleFallback = true;
     const code = err?.code || err?.message || "llm_failed";
+    errorCode = normalizeResumeErrorCode(err);
     // 带上 HTTP status（401/402/400…）方便区分 key 失效 / 余额不足 / 模型不支持。
     llmError = err?.status ? `${code}:${err.status}` : code;
     llmDetail = err?.detail ? String(err.detail).slice(0, 200) : null;
-    console.error("[resume] LLM 抽取失败，降级规则解析:", llmError, llmDetail || "");
+    // detail 可能包含模型回显的简历字段，日志只保留安全错误码。
+    console.error("[resume] LLM 抽取失败，降级规则解析:", llmError);
     profile = normalizeResumeProfile(ruleToStructured(parseResumeText(input.text)));
+  }
+
+  const diagnostics = buildResumeDiagnostics({
+    source,
+    model,
+    latency_bucket: bucketLatency(Date.now() - parseStartedAt),
+    error_code: errorCode,
+    extracted_field_count: countExtractedResumeFields(profile),
+  });
+  if (usedRuleFallback) {
+    await trackResumeEvent(supabase, userId, "resume_parse_fallback_rule", diagnostics);
   }
 
   // 记录一次上传（含原文与解析结果），供保存时关联；画像本身等用户确认再写。
@@ -156,6 +192,8 @@ async function parseResume(
     return NextResponse.json({ ok: false, error: resumeError.message }, { status: 500 });
   }
 
+  await trackResumeEvent(supabase, userId, "resume_parse_succeeded", diagnostics);
+
   return NextResponse.json({
     ok: true,
     resume_id: resume.id,
@@ -163,6 +201,7 @@ async function parseResume(
     source,
     llm_error: llmError,
     llm_detail: llmDetail,
+    diagnostics,
   });
 }
 
@@ -171,6 +210,7 @@ async function saveConfirmedProfile(
   userId: string,
   input: ResumeInput,
 ) {
+  const saveStartedAt = Date.now();
   if (!input.profile || typeof input.profile !== "object") {
     return NextResponse.json({ ok: false, error: "missing_profile" }, { status: 400 });
   }
@@ -214,14 +254,28 @@ async function saveConfirmedProfile(
     return NextResponse.json({ ok: false, error: profileError.message + hint }, { status: 500 });
   }
 
+  const parseDiagnostics = buildResumeDiagnostics(input.parseDiagnostics);
+  const extractedFieldCount = countExtractedResumeFields(profile);
+  await trackResumeEvent(supabase, userId, "resume_profile_saved", {
+    ...parseDiagnostics,
+    latency_bucket: bucketLatency(Date.now() - saveStartedAt),
+    extracted_field_count: extractedFieldCount,
+  });
+
   let preferencesApplied = false;
   const preferences = buildPreferencesFromResumeProfile(profile);
   if (input.applyToPreferences && hasPreferenceSignal(preferences)) {
+    const preferencesStartedAt = Date.now();
     const { error: prefsError } = await upsertMergedPreferences(supabase, userId, preferences);
     if (prefsError) {
       return NextResponse.json({ ok: false, error: prefsError.message }, { status: 500 });
     }
     preferencesApplied = true;
+    await trackResumeEvent(supabase, userId, "resume_preferences_applied", {
+      ...parseDiagnostics,
+      latency_bucket: bucketLatency(Date.now() - preferencesStartedAt),
+      extracted_field_count: extractedFieldCount,
+    });
   }
 
   return NextResponse.json({
@@ -268,6 +322,7 @@ type ResumeInput = {
   applyToPreferences: boolean;
   profile?: any;
   resumeId?: string | null;
+  parseDiagnostics?: unknown;
 };
 
 async function readResumeInput(request: NextRequest): Promise<ResumeInput> {
@@ -320,6 +375,7 @@ async function readResumeInput(request: NextRequest): Promise<ResumeInput> {
     applyToPreferences: Boolean(body.applyToPreferences),
     profile: body.profile,
     resumeId: body.resumeId || null,
+    parseDiagnostics: body.parseDiagnostics,
   };
 }
 

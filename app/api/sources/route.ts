@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabase } from "@/lib/auth";
+import { requireAdmin } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
 import { validateSourceInput } from "@/lib/source-adapters";
 
@@ -8,21 +8,8 @@ export const runtime = "nodejs";
 // admin 网页添加招聘源。002_rls 只给了 sources 的 admin UPDATE 策略、没有 INSERT，
 // 浏览器 anon 直接 insert 会被 RLS 拦，所以必须走 service-role 写入。
 export async function POST(request: NextRequest) {
-  const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
-  const { data: profileRow } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .maybeSingle();
-  if (profileRow?.role !== "admin") {
-    return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
-  }
+  const auth = await requireAdmin();
+  if (auth.error) return auth.error;
 
   let body: unknown;
   try {

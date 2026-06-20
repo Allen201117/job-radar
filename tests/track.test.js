@@ -66,6 +66,71 @@ test("sanitizePayload rejects oversized payloads", () => {
   assert.deepEqual(T.sanitizePayload(big), {});
 });
 
+// ---------- resume diagnostics ----------
+test("bucketLatency groups milliseconds into stable health-dashboard buckets", () => {
+  assert.equal(T.bucketLatency(0), "lt_500ms");
+  assert.equal(T.bucketLatency(499), "lt_500ms");
+  assert.equal(T.bucketLatency(500), "500_1499ms");
+  assert.equal(T.bucketLatency(1500), "1500_2999ms");
+  assert.equal(T.bucketLatency(3000), "3000_9999ms");
+  assert.equal(T.bucketLatency(10000), "gte_10000ms");
+});
+
+test("normalizeResumeErrorCode maps provider failures without retaining error detail", () => {
+  assert.equal(T.normalizeResumeErrorCode({ code: "llm_not_configured" }), "llm_not_configured");
+  assert.equal(T.normalizeResumeErrorCode({ code: "llm_bad_json" }), "llm_bad_json");
+  assert.equal(
+    T.normalizeResumeErrorCode({
+      code: "llm_http_error",
+      status: 402,
+      detail: "余额不足 private@example.com",
+    }),
+    "llm_insufficient_balance",
+  );
+  assert.equal(T.normalizeResumeErrorCode(new Error("unexpected private data")), "llm_failed");
+});
+
+test("buildResumeDiagnostics keeps only non-sensitive allowlisted metadata", () => {
+  assert.deepEqual(
+    T.buildResumeDiagnostics({
+      source: "rule",
+      model: "rule-v1",
+      latency_bucket: "500_1499ms",
+      error_code: "llm_bad_json",
+      extracted_field_count: 9,
+      name: "张三",
+      email: "private@example.com",
+      phone: "13800138000",
+      raw_text: "完整简历",
+      profile: { basic_info: { contact: "private@example.com" } },
+    }),
+    {
+      source: "rule",
+      model: "rule-v1",
+      latency_bucket: "500_1499ms",
+      error_code: "llm_bad_json",
+      extracted_field_count: 9,
+    },
+  );
+});
+
+test("countExtractedResumeFields counts populated leaves without returning their values", () => {
+  assert.equal(
+    T.countExtractedResumeFields({
+      headline: "数据分析",
+      basic_info: { name: "张三", city: "上海", contact: "private@example.com" },
+      target_roles: ["数据分析"],
+      target_locations: ["上海"],
+      skills: ["SQL", "Python"],
+      experience_stage: "实习",
+      education: [{ school: "某大学", degree: "本科", major: "" }],
+      internships: [],
+      projects: [],
+    }),
+    11,
+  );
+});
+
 // ---------- parseEventInput (server-side body validation) ----------
 test("parseEventInput accepts a well-formed body and sanitizes payload", () => {
   assert.deepEqual(

@@ -1,17 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabase } from "@/lib/auth";
+import { requireUser } from "@/lib/apiAuth";
 
 export const runtime = "nodejs";
 
 // 通知-删除通道（PRD §7.3）：任意登录用户对某条洞察提异议，admin 后续处理下架。
 export async function POST(request: NextRequest) {
-  const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser();
+  if (auth.error) return auth.error;
+  const { user, supabase } = auth;
 
   let body: any;
   try {
