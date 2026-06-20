@@ -2,6 +2,7 @@
 import unittest
 
 import insight_backlog as B
+import official_edgar as OE
 import wikidata as W
 
 
@@ -67,9 +68,12 @@ FACTS = {
 class TestWorker(unittest.TestCase):
     def setUp(self):
         self._orig = W.get_company_facts
+        self._orig_edgar = OE.get_listing_by_ticker
+        OE.get_listing_by_ticker = lambda t, **k: None  # 默认不命中 EDGAR → 测 Wikidata 路径
 
     def tearDown(self):
         W.get_company_facts = self._orig
+        OE.get_listing_by_ticker = self._orig_edgar
 
     def test_enrich_writes_listing_and_profile(self):
         store = {"_canned_insight_items": []}  # 无既有 wikidata listing → 走 insert
@@ -85,6 +89,23 @@ class TestWorker(unittest.TestCase):
         # 画像回填含 founded_year + insight_checked_at
         ups = store.get("company_profiles_updates", [])
         self.assertTrue(any("founded_year" in p and "insight_checked_at" in p for _, p in ups))
+
+    def test_edgar_listing_preferred_over_wikidata(self):
+        store = {"_canned_insight_items": []}  # 无既有 listing → insert
+        W.get_company_facts = lambda c, a=None: FACTS  # facts 带 ticker → 触发 EDGAR
+        OE.get_listing_by_ticker = lambda t, **k: {
+            "dimension": "listing", "grade": "fact", "title": "上市状态 · SEC 官方披露",
+            "content": "据 SEC EDGAR 官方披露，测试集团 持续申报…", "origin": "official",
+            "payload": {"status": "listed", "ticker": t, "latest_filing_date": "2026-03-20"},
+            "source_url": "https://www.sec.gov/x", "source_publisher": "SEC EDGAR",
+        }
+        res = B.enrich_company(FakeSB(store), {"id": "c9", "company": "测试集团", "aliases": []})
+        self.assertEqual(res, "ok")
+        items = store.get("insight_items", [])
+        self.assertTrue(any(op == "insert" and r["dimension"] == "listing" and r["origin"] == "official"
+                            for op, r in items))  # 官方源覆盖，origin=official
+        self.assertTrue(any(r.get("publisher") == "SEC EDGAR"
+                            for op, r in store.get("insight_sources", [])))  # 溯源记 SEC EDGAR
 
     def test_noface_marks_checked(self):
         store = {}

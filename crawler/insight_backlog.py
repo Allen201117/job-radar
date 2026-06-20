@@ -20,6 +20,7 @@ from datetime import datetime, timezone, timedelta
 
 import db
 import insight_engine as E
+import official_edgar as EDG
 import search_router
 import wikidata
 
@@ -69,23 +70,24 @@ def fetch_queue(sb, limit=0):
     return (q.execute().data) or []
 
 
-def _existing_wikidata_listing(sb, company_id):
+def _existing_listing(sb, company_id):
+    """该公司 listing 条目（任意 origin）；wikidata/official 共用一行，官方源就地升级覆盖，避免重复卡片。"""
     rows = (sb.table("insight_items").select("id")
-            .eq("company_id", company_id).eq("dimension", "listing").eq("origin", "wikidata")
+            .eq("company_id", company_id).eq("dimension", "listing")
             .limit(1).execute().data) or []
     return rows[0]["id"] if rows else None
 
 
 def write_listing(sb, company_id, li):
-    """写 / 更新 Wikidata listing 洞察 + 溯源（仅新建时建一次来源）。li = wikidata.facts_to_listing。"""
+    """写 / 更新 listing 洞察 + 溯源（仅新建时建一次来源）。li = wikidata.facts_to_listing 或 official_edgar 同形。"""
     item = {
         "company_id": company_id, "dimension": "listing", "grade": "fact",
         "title": li["title"], "content": li["content"], "payload": li["payload"],
-        "origin": "wikidata", "deidentified": True, "status": "active",
+        "origin": li.get("origin", "wikidata"), "deidentified": True, "status": "active",
         "time_window": f"上市状态截至 {datetime.now(timezone.utc).year} 年",
         "last_verified_at": _now(),
     }
-    existing = _existing_wikidata_listing(sb, company_id)
+    existing = _existing_listing(sb, company_id)
     if existing:
         sb.table("insight_items").update(item).eq("id", existing).execute()
         return existing
@@ -115,7 +117,10 @@ def enrich_company(sb, profile):
             return "err"
         return "noface"
     try:
-        li = wikidata.facts_to_listing(facts)
+        # 官方披露优先：有 ticker 先查 SEC EDGAR（更权威 + 带最新申报新鲜度），查无再回落 Wikidata
+        li = EDG.get_listing_by_ticker(facts.get("ticker")) if facts.get("ticker") else None
+        if not li:
+            li = wikidata.facts_to_listing(facts)
         if li:
             write_listing(sb, profile["id"], li)
         prof = wikidata.facts_to_profile(facts)
