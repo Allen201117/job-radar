@@ -18,6 +18,7 @@ recruitType 数值映射经各页 JS bundle（social.js / school.js / interns.js
 POST /wecruit/common/getSLD（sld={host}）解析出 linkData.link 再取，sources 直接登记带 suiteKey 的 pb 页。
 """
 import json
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 from urllib.parse import urlparse
 
@@ -45,6 +46,9 @@ class HotJobAdapter(PlaywrightAdapter):
     # 接口路径 + 字段经 posDetail.js bundle 核实，POST body = postId + recruitType。
     _DETAIL_API = "/wecruit/positionInfo/listPositionDetail/"
     _DETAIL_CAP = 150    # 单源逐岗 detail 补摘要上限（覆盖绝大多数源；超大源部分覆盖，避免拖垮夜间全量）
+    # 逐岗 detail 并发数：wecruit 单 host 对并发敏感（enrich_backlog 实测 8 worker 被限流、PER_HOST=3 才恢复）
+    # → 保守 4（≈ 已验证安全上限，串行 150 岗 ~20s → ~5s）。若 CI 见限流(miss) 降回 3。
+    _DETAIL_WORKERS = 4
     api_page_size = 20   # 接口服务端硬上限 = 20/页（pageSize 调更大也只回 20）
     api_max_pages = 10   # 每渠道最多翻页数（10×20=200 岗封顶，防库膨胀；按 totalPage 提前停）
 
@@ -118,29 +122,35 @@ class HotJobAdapter(PlaywrightAdapter):
 
     def _enrich_details(self, client, posts):
         """逐岗 POST listPositionDetail 补 workContent/serviceCondition（列表接口没有，详情才有），
-        就地写回 post（parse→_map 直接读这两字段拼 summary）。capped + 单岗失败即跳过（不抛、不污染）。"""
+        就地写回 post（parse→_map 直接读这两字段拼 summary）。前 cap 个带 postId 的岗**并发**补全
+        （_DETAIL_WORKERS 线程，单 host 限并发防限流）；单岗失败即跳过（不抛、不污染）。"""
         api = f"{self._origin}{self._DETAIL_API}{self._suite_key}"
-        n = 0
+        cap = resolve_detail_cap(self._DETAIL_CAP)
+        targets = []
         for p in posts:
-            if n >= resolve_detail_cap(self._DETAIL_CAP):
+            if len(targets) >= cap:
                 break
-            if not isinstance(p, dict):
-                continue
-            pid = str(p.get("postId") or p.get("id") or "").strip()
-            if not pid:
-                continue
-            try:
-                resp = client.post(api, data={"postId": pid, "recruitType": self._recruit_type})
-                resp.raise_for_status()
-                data = resp.json().get("data") or {}
-                if isinstance(data, dict):
-                    if data.get("workContent"):
-                        p["workContent"] = data["workContent"]
-                    if data.get("serviceCondition"):
-                        p["serviceCondition"] = data["serviceCondition"]
-                n += 1
-            except Exception:
-                continue
+            if isinstance(p, dict) and str(p.get("postId") or p.get("id") or "").strip():
+                targets.append(p)
+        if not targets:
+            return
+        with ThreadPoolExecutor(max_workers=self._DETAIL_WORKERS) as ex:
+            list(ex.map(lambda p: self._enrich_one(client, api, p), targets))
+
+    def _enrich_one(self, client, api, p):
+        """单岗 detail 补 workContent/serviceCondition；网络/解析错误静默跳过（不阻断整批）。"""
+        pid = str(p.get("postId") or p.get("id") or "").strip()
+        try:
+            resp = client.post(api, data={"postId": pid, "recruitType": self._recruit_type})
+            resp.raise_for_status()
+            data = resp.json().get("data") or {}
+        except Exception:
+            return
+        if isinstance(data, dict):
+            if data.get("workContent"):
+                p["workContent"] = data["workContent"]
+            if data.get("serviceCondition"):
+                p["serviceCondition"] = data["serviceCondition"]
 
     def _map(self, post: dict) -> Optional[RawJob]:
         if not isinstance(post, dict):

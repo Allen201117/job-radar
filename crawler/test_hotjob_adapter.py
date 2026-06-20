@@ -145,11 +145,12 @@ class TestHotJobDetailEnrich(unittest.TestCase):
             "p2": {"data": {"workContent": "负责前端开发"}},
         })
         self.a._enrich_details(client, posts)
-        # 详情 API 路径 = /wecruit/positionInfo/listPositionDetail/{suiteKey}，body 带 postId+recruitType
-        self.assertTrue(client.calls[0][0].endswith(
-            "/wecruit/positionInfo/listPositionDetail/SU64893571bef57c16d356b99e"))
-        self.assertEqual(client.calls[0][1]["postId"], "p1")
-        self.assertIn("recruitType", client.calls[0][1])
+        # 并发补全 → 调用顺序不确定，按集合校验（详情 API 路径 + 覆盖到 p1/p2，body 带 recruitType）
+        self.assertTrue(all(url.endswith(
+            "/wecruit/positionInfo/listPositionDetail/SU64893571bef57c16d356b99e")
+            for url, _ in client.calls))
+        self.assertEqual({d["postId"] for _, d in client.calls}, {"p1", "p2"})
+        self.assertTrue(all("recruitType" in d for _, d in client.calls))
         # 补回岗位字段 → _map 产出 summary
         self.assertEqual(posts[0]["workContent"], "负责服务端开发")
         job = self.a._map(posts[0])
