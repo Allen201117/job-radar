@@ -1,7 +1,8 @@
 name: insight-enrich-t3
-# 职业洞察 T3 经验层：百度千帆检索 → 验证引擎（writer 抽取 → judge entailment → 共识）→ culture 洞察。
-# 受千帆 50/日额度：qianfan_usage 持久计数自封顶（QIANFAN_DAILY_CAP，默认 40，留 ~10 给 /api/discovery）。
-# 依赖：迁移 137 已应用；**需在 repo Settings→Secrets 加 BAIDU_QIANFAN_API_KEY + SILICONFLOW_API_KEY**（T2 不需要这俩）。
+# 职业洞察 T3 经验层：多源搜索（博查/Tavily/Serper/千帆，search_router）→ 验证引擎（writer 抽取 → judge entailment → 共识）→ culture 洞察。
+# 各源受每日额度：search_usage/qianfan_usage 持久计数自封顶（*_DAILY_CAP env，默认值见 search_router.default_router）。
+# 依赖：迁移 137+156 已应用；**需在 repo Settings→Secrets 加 SILICONFLOW_API_KEY + 至少一个搜索源 key**
+#   （BOCHA_API_KEY / TAVILY_API_KEY / SERPER_API_KEY / BAIDU_QIANFAN_API_KEY，配哪个用哪个、未配的自动跳过）。
 # 与 T2(insight-enrich 20:30)/enrich-* cron 错开。
 
 on:
@@ -21,8 +22,16 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      BAIDU_QIANFAN_API_KEY: ${{ secrets.BAIDU_QIANFAN_API_KEY }}
       SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+      # 搜索源 key：配哪个用哪个，未配的 router 自动跳过（先用免费额度验证灵活性）
+      BOCHA_API_KEY: ${{ secrets.BOCHA_API_KEY }}
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+      BAIDU_QIANFAN_API_KEY: ${{ secrets.BAIDU_QIANFAN_API_KEY }}
+      # 每源每日额度上限（可选，不配则用 search_router 代码默认值）；按月度预算调
+      BOCHA_DAILY_CAP: ${{ vars.BOCHA_DAILY_CAP }}
+      TAVILY_DAILY_CAP: ${{ vars.TAVILY_DAILY_CAP }}
+      SERPER_DAILY_CAP: ${{ vars.SERPER_DAILY_CAP }}
 
     steps:
       - uses: actions/checkout@v4

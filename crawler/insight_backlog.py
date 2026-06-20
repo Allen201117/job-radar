@@ -20,7 +20,7 @@ from datetime import datetime, timezone, timedelta
 
 import db
 import insight_engine as E
-import qianfan_search as qf
+import search_router
 import wikidata
 
 MAX_FAIL = 3        # 死信阈值：连续失败 ≥ 此值不再入队
@@ -162,11 +162,13 @@ def drain(sb, limit=0, workers=4, make_sb=None):
 
 
 # ============================================================
-# T3 经验层：百度千帆检索 → 验证引擎（接地→判官→共识）→ 写 active/pending_review
-# 千帆受 50/日额度：drain_t3 串行 + qianfan_usage 持久预算守门，绝不冲破。设计 §6/§16。
+# T3 经验层：多源搜索（博查/Tavily/Serper/千帆，search_router）→ 验证引擎（接地→判官→共识）→ 写 active/pending_review
+# 各源受每日额度：drain_t3 串行 + search_usage/qianfan_usage 持久预算守门，绝不冲破各自日顶。
+# 见 docs/superpowers/specs/2026-06-20-career-insights-supply-upgrade-design.md。
 # ============================================================
 T3_TTL_DAYS = 180  # 经验类复核更慢
 T3_QUERY = "{c} 工作体验 加班 文化 薪资 待遇 怎么样"
+_ROUTER = search_router.default_router()  # 多源搜索；未配 key 的源自动跳过（配哪个用哪个）
 
 
 def _pick_sources(results, claim, max_n=3):
@@ -224,8 +226,8 @@ def fetch_t3_queue(sb, limit):
 def enrich_company_t3(sb, profile):
     """单公司 T3：千帆检索 → run_pipeline(culture) → 写。返回 'wrote' | 'empty' | 'err'。永不抛。"""
     try:
-        results = qf.search(T3_QUERY.format(c=profile["company"]))
-        qf.budget_consume(sb, 1)  # 本次检索消耗 1 额度（无论结果多少）
+        results = _ROUTER.search(sb, T3_QUERY.format(c=profile["company"]))
+        # 额度由 router 在各 provider 内部按次记账，勿在此重复 consume
     except Exception:
         results = []
     if not results:
@@ -261,12 +263,12 @@ def enrich_company_t3(sb, profile):
 
 
 def drain_t3(sb, limit=0):
-    """T3 drain（千帆受额度 → 串行 + 预算守门，绝不冲破 50/日）。"""
-    if not qf.is_configured():
-        print("✗ 千帆未配置或被 BAIDU_QIANFAN_SEARCH_DISABLED 熔断 → 跳过 T3")
+    """T3 drain（多源搜索，各源受每日额度 → 串行 + 预算守门，绝不冲破各自日顶）。"""
+    if not _ROUTER.is_configured():
+        print("✗ 无搜索源配置（BOCHA/TAVILY/SERPER/千帆 key 全缺或熔断）→ 跳过 T3")
         return {"wrote": 0, "empty": 0, "err": 0, "budget_left": 0}
-    remaining = qf.budget_remaining(sb)
-    print(f"千帆当日剩余额度：{remaining}（cap={qf.DAILY_CAP}）")
+    remaining = _ROUTER.remaining(sb)
+    print(f"搜索源当日剩余总额度：{remaining}")
     if remaining <= 0:
         return {"wrote": 0, "empty": 0, "err": 0, "budget_left": 0}
     cap = remaining if not limit else min(remaining, limit)
@@ -274,10 +276,10 @@ def drain_t3(sb, limit=0):
     print(f"T3 队列（notable·待富化）取 {len(rows)} 家（额度封顶 {cap}）")
     stat = {"wrote": 0, "empty": 0, "err": 0}
     for p in rows:
-        if qf.budget_remaining(sb) <= 0:
+        if _ROUTER.remaining(sb) <= 0:
             print("额度用尽，停"); break
         stat[enrich_company_t3(sb, p)] += 1
-    stat["budget_left"] = qf.budget_remaining(sb)
+    stat["budget_left"] = _ROUTER.remaining(sb)
     print(f"T3 完成：{stat}")
     return stat
 
