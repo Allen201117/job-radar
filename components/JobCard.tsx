@@ -229,7 +229,9 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
   }
 
   function handleView() {
-    window.open(job.jd_url, "_blank", "noopener,noreferrer");
+    // 走点击时校验门：服务端先探死活，活则跳官网/死则拦下提示（见 app/api/jobs/go）。
+    // 拿不准/SPA 源/超时一律放行，体验与直跳一致、绝不更差。
+    window.open(`/api/jobs/go?id=${encodeURIComponent(job.id)}`, "_blank", "noopener,noreferrer");
     track("job_click", { job_id: job.id, company: job.company });
     supabase.auth.getSession().then(({ data: { session } }) => {
       const uid = session?.user?.id;

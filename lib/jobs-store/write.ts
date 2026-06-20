@@ -100,3 +100,21 @@ export async function updateJobSummaryById(id: string, summary: string): Promise
   );
   return rows.length > 0;
 }
+
+/** 点击时校验门：探活确认撤岗 → 置 expired + 盖探活戳（仅当前还是 active 才动；幂等）。返回是否命中。 */
+export async function markJobExpiredById(id: string): Promise<boolean> {
+  const rows = await jobsQuery(
+    "update jobs set status = 'expired', enrich_checked_at = now() where id = $1::uuid and status = 'active' returning id",
+    [id],
+  );
+  return rows.length > 0;
+}
+
+/** 点击时校验门：探活确认仍在招 → 只盖探活戳（不动 status/summary），让后台轮转少走一遍。 */
+export async function touchJobCheckedById(id: string): Promise<boolean> {
+  const rows = await jobsQuery(
+    "update jobs set enrich_checked_at = now() where id = $1::uuid returning id",
+    [id],
+  );
+  return rows.length > 0;
+}
