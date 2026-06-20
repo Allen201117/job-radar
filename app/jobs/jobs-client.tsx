@@ -319,21 +319,25 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
         </div>
       )}
 
-      <p className="inline-flex items-center gap-2 rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-white/55 dark:bg-white/[0.05] px-3 py-2 text-sm leading-6 text-[#5f594e] dark:text-[#b6ad9d]">
-        <MagnifyingGlass size={16} weight="bold" aria-hidden="true" />
-        {loading ? (
-          "正在搜索岗位库…"
-        ) : (
-          <>
-            {newViewActive ? "只看本次新发现：" : "匹配 "}
-            {newViewActive ? newMatching.length : total} 个岗位
-            {!newViewActive && filters.keyword
-              ? `（精确 ${exactCount} + 相关 ${Math.max(0, total - exactCount)}）`
-              : ""}
-            {!newViewActive && capped ? "+（已显示最新一批，可加载更多继续）" : ""}
-            ，已展示 {displayJobs.length} 个（本次新找到 {officialJobs.length}）。
-          </>
-        )}
+      {/* 信息行：移动端长句会折成多行 → 用 flex items-start + rounded-2xl（而非 inline-flex rounded-full，
+          否则多行文字会被撑成丑陋的胶囊形），图标顶对齐随首行。 */}
+      <p className="flex items-start gap-2 rounded-2xl border border-black/[0.06] dark:border-white/[0.1] bg-white/55 dark:bg-white/[0.05] px-3.5 py-2.5 text-sm leading-6 text-[#5f594e] dark:text-[#b6ad9d]">
+        <MagnifyingGlass size={16} weight="bold" className="mt-0.5 shrink-0" aria-hidden="true" />
+        <span>
+          {loading ? (
+            "正在搜索岗位库…"
+          ) : (
+            <>
+              {newViewActive ? "只看本次新发现：" : "匹配 "}
+              {newViewActive ? newMatching.length : total} 个岗位
+              {!newViewActive && filters.keyword
+                ? `（精确 ${exactCount} + 相关 ${Math.max(0, total - exactCount)}）`
+                : ""}
+              {!newViewActive && capped ? "+（已显示最新一批，可加载更多继续）" : ""}
+              ，已展示 {displayJobs.length} 个（本次新找到 {officialJobs.length}）。
+            </>
+          )}
+        </span>
       </p>
       {error && (
         <p className="rounded-2xl border border-[#e7b4a0] dark:border-[#7a392e]/[0.60] bg-[#fbe9e2] dark:bg-[#3a201a] px-3.5 py-2.5 text-sm text-[#9a4a32] dark:text-[#e6a99f]">
