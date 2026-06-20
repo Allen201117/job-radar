@@ -23,16 +23,17 @@ import {
 } from "@phosphor-icons/react";
 import { RadarMark } from "@/components/BrandMark";
 
-// 分步引导式注册弹窗：① 填邮箱 → ② 收 6 位验证码 → ③ 设密码 → ✓ 成功进站。
-// 实现顺序「先验证邮箱、最后设密码」：signUp(临时随机密码) 触发发码（复用已配好的
-// Confirm signup 模板）→ verifyOtp 激活并建立 session → updateUser 写入用户真正设置的密码。
-// 这样无需再在 Supabase 配「Magic Link」模板，沿用现成的注册验证模板即可。
+// 分步引导式注册弹窗：① 填邮箱 → ② 设密码 → ③ 收 6 位验证码 → ✓ 成功进站。
+// 顺序「先设密码、最后验证邮箱」：邮箱步只校验格式；设密码步用「用户真正的密码」signUp 触发发码
+// （复用已配好的 Confirm signup 模板）；验证码步 verifyOtp 激活并建立 session 即完成（密码已落库）。
+// 账号一建立就带着用户自己的密码——用户在任何一步关闭弹窗都不会留下「已确认但密码未知」的半成品账号
+// （旧「先验邮箱、最后设密码」顺序在 verifyOtp 后、updateUser 前关闭会把人锁在门外，只能走「忘记密码」）。
 type Step = "email" | "code" | "password" | "success";
 
 const STEPS: { key: Step; label: string }[] = [
   { key: "email", label: "邮箱" },
-  { key: "code", label: "验证码" },
   { key: "password", label: "设密码" },
+  { key: "code", label: "验证码" },
 ];
 
 function stepIndex(step: Step): number {
@@ -103,8 +104,20 @@ export default function RegisterModal({
     return () => clearInterval(timer);
   }, [cooldown]);
 
-  // ① 邮箱 → 发码。用一个临时随机密码 signUp，触发 Confirm signup 验证码邮件；真正的密码第 ③ 步再设。
-  async function handleEmail(e: React.FormEvent) {
+  // 注册完成：建立 session 后停留约 1.2s 让用户看到「注册成功」，再进站。
+  // verifyOtp 成功、或 Confirm email 被关时 signUp 直接返回 session，都汇到这里。
+  function finish() {
+    setStep("success");
+    setTimeout(() => {
+      router.push("/today");
+      router.refresh();
+    }, 1200);
+  }
+
+  // ① 邮箱 → 只校验格式、不发任何请求，直接进「设密码」步。
+  // 真正的 signUp + 发码放到设密码步：账号一建立就带着用户自己的密码，从根上消除
+  // 「邮箱已确认但密码是未知临时值」的中间态——用户在设密码前关弹窗也不会建出半成品账号。
+  function handleEmail(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setMessage("");
@@ -113,44 +126,56 @@ export default function RegisterModal({
       setError(invalid);
       return;
     }
+    setStep("password");
+  }
+
+  // ② 设密码 → 用「用户真正的密码」signUp，触发 Confirm signup 验证码邮件；无 session 则进验证码步。
+  async function handlePassword(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+    const invalid = validatePassword(password);
+    if (invalid) {
+      setError(invalid);
+      return;
+    }
     setLoading(true);
     try {
-      const tempPassword = `${crypto.randomUUID()}Aa1!`;
       const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
-        password: tempPassword,
+        password,
       });
       if (error) {
         setError(mapAuthError(error));
         return;
       }
       if (data.session) {
-        // Confirm email 被关（注册即登录）→ 跳过验证码，直接去设密码。
-        setStep("password");
+        // Confirm email 被关（注册即登录）→ 已建立 session，直接进站。
+        finish();
         return;
       }
       // ⚠️ 开启「邮箱枚举保护」(Email enumeration protection，本项目实测为开) 后，signUp 对
       // 【新邮箱】和【已存在邮箱】返回完全一样的混淆响应：data.user.identities 一律为空、也不报错，
-      // 客户端【无法】区分新老用户。之前靠 identities 判「已注册」会把所有新用户都误判成已注册
-      // （实测全新 qq 邮箱也中招）；而该发的验证码其实照常发给了新/未验证用户，只是响应被抹掉。
-      // 故不再做「已注册」判定：signUp 成功(无 error、无 session)即视为已发码，直接进验证码步骤——
+      // 客户端【无法】区分新老用户。故不做「已注册」判定：signUp 成功(无 error、无 session)即视为已发码，
+      // 进验证码步——
       //   新用户 / 未验证用户 → 收到 signUp 发的码，正常继续；
       //   已验证的老账号 → GoTrue 不会再发注册码、用户收不到 → 按下方提示返回去用密码登录。
-      // 真·已注册（已验证）邮箱在枚举保护【关闭】时才会走上面的 error 分支报 user_already_exists。
+      // 真·已注册（已验证）邮箱仅在枚举保护【关闭】时才会走上面的 error 分支报 user_already_exists。
       setCooldown(60);
       setMessage(
         "验证码已发送到邮箱，请查收（也看看垃圾箱）。如果你之前已注册过、一直收不到码，请返回用密码登录。",
       );
       setStep("code");
     } catch (err) {
-      console.error("[register] email", err);
+      console.error("[register] password", err);
       setError("网络异常，请检查网络后重试");
     } finally {
       setLoading(false);
     }
   }
 
-  // ② 验证码 → 激活。
+  // ③ 验证码 → 激活并建立 session 即完成注册（密码已在第 ② 步 signUp 落库，无需再 updateUser）。
+  // startAtCode 路径也走这里：账号已有真实密码，verifyOtp 确认后 session 建立即可进站、后续可正常密码登录。
   async function handleCode(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -171,40 +196,9 @@ export default function RegisterModal({
         setError(mapAuthError(error));
         return;
       }
-      setStep("password");
+      finish();
     } catch (err) {
       console.error("[register] code", err);
-      setError("网络异常，请检查网络后重试");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // ③ 设密码 → 写入用户真正的密码，完成。
-  async function handlePassword(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
-    setMessage("");
-    const invalid = validatePassword(password);
-    if (invalid) {
-      setError(invalid);
-      return;
-    }
-    setLoading(true);
-    try {
-      const { error } = await supabase.auth.updateUser({ password });
-      if (error) {
-        setError(mapAuthError(error));
-        return;
-      }
-      setStep("success");
-      // 成功态停留约 1.2s 让用户看到反馈，再进站。
-      setTimeout(() => {
-        router.push("/today");
-        router.refresh();
-      }, 1200);
-    } catch (err) {
-      console.error("[register] password", err);
       setError("网络异常，请检查网络后重试");
     } finally {
       setLoading(false);
@@ -314,7 +308,7 @@ export default function RegisterModal({
               <form className="space-y-4" onSubmit={handleEmail}>
                 <div>
                   <h3 className="text-[1.15rem] font-semibold text-[#1a1714] dark:text-[#f3ecdf]">填写你的邮箱</h3>
-                  <p className="mt-1 text-[13px] text-[#8a8275] dark:text-[#9a9184]">我们会发一个 6 位验证码到这个邮箱</p>
+                  <p className="mt-1 text-[13px] text-[#8a8275] dark:text-[#9a9184]">先填邮箱，下一步设置登录密码</p>
                 </div>
                 <div>
                   <label htmlFor="reg-email" className="mb-1.5 block text-[13px] font-medium text-[#5f594e] dark:text-[#b6ad9d]">
@@ -339,61 +333,10 @@ export default function RegisterModal({
                   </div>
                 </div>
                 {error && <Banner kind="error">{error}</Banner>}
-                <button type="submit" disabled={loading} className="btn-ink w-full">
-                  {loading ? "发送中…" : "发送验证码"}
+                <button type="submit" className="btn-ink w-full">
+                  下一步
                   <ArrowRight size={16} weight="bold" aria-hidden="true" />
                 </button>
-              </form>
-            )}
-
-            {step === "code" && (
-              <form className="space-y-4" onSubmit={handleCode}>
-                <div>
-                  <h3 className="text-[1.15rem] font-semibold text-[#1a1714] dark:text-[#f3ecdf]">输入验证码</h3>
-                  <p className="mt-1 text-[13px] text-[#8a8275] dark:text-[#9a9184]">
-                    已发送至 <span className="font-medium text-[#5f594e] dark:text-[#b6ad9d]">{email}</span>
-                  </p>
-                </div>
-                <input
-                  id="reg-code"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  maxLength={8}
-                  required
-                  autoFocus
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-                  className="field-editorial text-center text-xl font-semibold tracking-[0.4em]"
-                  placeholder="········"
-                />
-                {error && <Banner kind="error">{error}</Banner>}
-                {message && !error && <Banner kind="ok">{message}</Banner>}
-                <button type="submit" disabled={loading} className="btn-ink w-full">
-                  {loading ? "验证中…" : "验证并继续"}
-                  <ArrowRight size={16} weight="bold" aria-hidden="true" />
-                </button>
-                <div className="flex items-center justify-between text-[12px]">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setError("");
-                      setMessage("");
-                      setStep("email");
-                    }}
-                    className="flex items-center gap-1 text-[#8a8275] dark:text-[#9a9184] hover:text-[#1a1714] dark:hover:text-[#f3ecdf]"
-                  >
-                    <ArrowLeft size={13} weight="bold" aria-hidden="true" />
-                    改邮箱
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleResend}
-                    disabled={cooldown > 0 || loading}
-                    className="font-medium text-[#1a1714] dark:text-[#f3ecdf] underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:text-[#b8b1a4] dark:disabled:text-[#6b655a] disabled:no-underline"
-                  >
-                    {cooldown > 0 ? `重新发送 (${cooldown}s)` : "重新发送"}
-                  </button>
-                </div>
               </form>
             )}
 
@@ -401,7 +344,7 @@ export default function RegisterModal({
               <form className="space-y-4" onSubmit={handlePassword}>
                 <div>
                   <h3 className="text-[1.15rem] font-semibold text-[#1a1714] dark:text-[#f3ecdf]">设置登录密码</h3>
-                  <p className="mt-1 text-[13px] text-[#8a8275] dark:text-[#9a9184]">下次用这个邮箱 + 密码就能登录</p>
+                  <p className="mt-1 text-[13px] text-[#8a8275] dark:text-[#9a9184]">下一步我们会发验证码到你的邮箱完成验证</p>
                 </div>
                 <div>
                   <label htmlFor="reg-password" className="mb-1.5 block text-[13px] font-medium text-[#5f594e] dark:text-[#b6ad9d]">
@@ -439,9 +382,60 @@ export default function RegisterModal({
                 </div>
                 {error && <Banner kind="error">{error}</Banner>}
                 <button type="submit" disabled={loading} className="btn-ink w-full">
-                  {loading ? "创建中…" : "完成注册"}
+                  {loading ? "发送中…" : "发送验证码"}
                   <ArrowRight size={16} weight="bold" aria-hidden="true" />
                 </button>
+              </form>
+            )}
+
+            {step === "code" && (
+              <form className="space-y-4" onSubmit={handleCode}>
+                <div>
+                  <h3 className="text-[1.15rem] font-semibold text-[#1a1714] dark:text-[#f3ecdf]">输入验证码</h3>
+                  <p className="mt-1 text-[13px] text-[#8a8275] dark:text-[#9a9184]">
+                    已发送至 <span className="font-medium text-[#5f594e] dark:text-[#b6ad9d]">{email}</span>
+                  </p>
+                </div>
+                <input
+                  id="reg-code"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={8}
+                  required
+                  autoFocus
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                  className="field-editorial text-center text-xl font-semibold tracking-[0.4em]"
+                  placeholder="········"
+                />
+                {error && <Banner kind="error">{error}</Banner>}
+                {message && !error && <Banner kind="ok">{message}</Banner>}
+                <button type="submit" disabled={loading} className="btn-ink w-full">
+                  {loading ? "验证中…" : "完成注册"}
+                  <ArrowRight size={16} weight="bold" aria-hidden="true" />
+                </button>
+                <div className="flex items-center justify-between text-[12px]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setError("");
+                      setMessage("");
+                      setStep("email");
+                    }}
+                    className="flex items-center gap-1 text-[#8a8275] dark:text-[#9a9184] hover:text-[#1a1714] dark:hover:text-[#f3ecdf]"
+                  >
+                    <ArrowLeft size={13} weight="bold" aria-hidden="true" />
+                    改邮箱
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResend}
+                    disabled={cooldown > 0 || loading}
+                    className="font-medium text-[#1a1714] dark:text-[#f3ecdf] underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:text-[#b8b1a4] dark:disabled:text-[#6b655a] disabled:no-underline"
+                  >
+                    {cooldown > 0 ? `重新发送 (${cooldown}s)` : "重新发送"}
+                  </button>
+                </div>
               </form>
             )}
 
