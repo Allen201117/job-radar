@@ -34,9 +34,18 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-# 需渲染判活的浏览器/SPA 源（JD 在 list 自带或详情 DOM；httpx detail-fetcher 覆盖不到）。
+# 需渲染判活的浏览器/SPA 源（JD 在 list 自带或详情 DOM；httpx detail-fetcher 覆盖不到、liveness-sweep 也管不了）。
 # 死活巡检按 adapter 精确锁定这些源，取代旧 fetch_sample 的「全库深翻页抽样」。
-_BROWSER_ADAPTERS = ("moka", "beisen", "feishu")
+# classify() 仅在命中 DEAD_MARKERS 才判 dead→下架（保守，不会误杀活岗）→ 多纳入 SPA 源是安全的纯增益。
+# 注：wt/hotjob 有 httpx 撤岗检测（req_state=9501 / state=1017，走 liveness-sweep），故不在此列（无头慢且冗余）。
+_BROWSER_ADAPTERS = (
+    "moka", "beisen", "feishu",
+    # 飞书同源变体（同一套 SPA，闭站标记与 feishu 一致）——之前漏配、零 liveness 覆盖。
+    "nio_feishu", "xiaomi_feishu", "xpeng_feishu",
+    # 自建/大厂 SPA 详情页：既无 httpx 撤岗检测、又不在 liveness-sweep → 此前完全无 liveness。
+    # 闭站标记未逐站核实（best-effort）；命中 DEAD_MARKERS 才下架，不中也只是盖时间戳轮转，无副作用。
+    "kuaishou", "byd", "bytedance", "bytedance_campus", "google",
+)
 
 DEAD_MARKERS = [
     "职位不存在", "岗位不存在", "该职位不存在", "职位已下线", "已下线", "职位已关闭",

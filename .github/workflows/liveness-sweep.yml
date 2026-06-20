@@ -5,9 +5,13 @@ name: liveness-sweep
 # 与 daily-crawl 内置 sweep 的区别：**本工作流只探活、不抓列表**，故不会重新灌入「已关闭但列表仍返回」的假 active
 #   （wt~52% / hotjob~71% 列表夹带已关闭岗）——纯挤干失活，不回潮。
 # 按 adapter 分片并行（各 shard 只 drain 自己 adapter，互不重叠）；按 enrich_checked_at 最旧轮转
-#   （从未探活的 NULL 最先）→ 优先打掉新灌入的假 active。可反复手动跑直到 expired 增量趋零。
-# 浏览器源（beisen/moka/feishu）的 SPA 软 404 走 dead-link-audit.yml，不在此列。
+#   （从未探活的 NULL 最先）→ 优先打掉新灌入的假 active。每日 08:00 UTC 定时自动跑 + 可手动加速直到增量趋零。
+# 浏览器源（beisen/moka/feishu 及变体、自建大厂 SPA）的软 404 走 dead-link-audit.yml，不在此列。
 on:
+  # 每日 UTC 08:00（北京 16:00）定时重扫：避开 daily-crawl(00:00)/purge(02:30)/晚间重档(18–22:00)。
+  # 持续挤干「从未探活」积压（实测 14 万）+ 维持失活新鲜——daily-crawl 内置 12k sweep 之外的加速档。
+  schedule:
+    - cron: "0 8 * * *"
   workflow_dispatch:
     inputs:
       limit:
@@ -15,9 +19,9 @@ on:
         required: false
         default: "50000"
       workers:
-        description: "并发线程数"
+        description: "并发线程数（默认 6，配合 max-parallel:4 → 峰值 ~28 HK 连接，无人值守定时也安全；有人盯可手动调高）"
         required: false
-        default: "10"
+        default: "6"
 
 jobs:
   sweep:
@@ -25,6 +29,10 @@ jobs:
     timeout-minutes: 330
     strategy:
       fail-fast: false
+      # max-parallel:4 = 同时只 4 个分片在跑 → 峰值 ~4×(workers+1) 连接，护住香港库 max_connections=100
+      #（app pool ~10 + 每 3h 的 enrich-backlog 突发 ~45 连接叠加也不挤爆）。小源先跑完释放槽位，
+      # 大源（wt/hotjob/workday）很快拿到并发槽，关键路径不被拖慢。
+      max-parallel: 4
       matrix:
         adapter: [wt, hotjob, workday, oracle, eightfold, smartrecruiters, greenhouse, lever]
     env:
