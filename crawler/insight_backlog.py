@@ -207,6 +207,8 @@ def write_experience(sb, company_id, claim, sources, judge, status):
         "time_window": claim.get("time_window") or f"{datetime.now(timezone.utc).year} 观察",
         "verification": {"verdict": judge.get("verdict"), "confidence": judge.get("confidence")},
         "last_verified_at": _now(),
+        # 保鲜：1 年后过期 → 过期下架巡检(insight_sweep)自动退役；180 天复核会续期。不长期滞留老聚合。
+        "valid_until": (datetime.now(timezone.utc) + timedelta(days=365)).date().isoformat(),
     }).execute()
     for s in sources:
         sid = str(uuid.uuid4())
@@ -249,15 +251,24 @@ def enrich_company_t3(sb, profile):
         pubs = len({r.get("publisher") for r in results if r.get("publisher")})
         print(f"  [t3] {profile['company']}: 多源检索 {len(results)} 条/{pubs} 域 → "
               f"claims {len(pipeline)} → {[e['status'] for e in pipeline]}")
+        run_start = _now()
+        wrote_any = False
         for entry in pipeline:
             if entry["status"] == "drop":
                 continue
             claim = dict(entry["claim"])
-            # 经验类样本量 = 千帆检索到的公开讨论篇数（每条结果=一篇讨论；诚实满足读时门 ≥5 + 来源 ≥2 publisher）
+            # 经验类样本量 = 检索到的公开讨论篇数（每条结果=一篇讨论；诚实满足读时门 ≥5 + 来源 ≥2 publisher）
             if not str(claim.get("sample_size") or "").isdigit():
                 claim["sample_size"] = len(results)
             write_experience(sb, profile["id"], claim,
                              _pick_sources(results, entry["claim"]), entry.get("judge") or {}, entry["status"])
+            wrote_any = True
+        if wrote_any:
+            # 替换旧代：退役本次之前写入的 public_web culture，避免新旧聚合堆积 / 老内容滞留（保即时性）
+            sb.table("insight_items").update({"status": "retired"}) \
+                .eq("company_id", profile["id"]).eq("origin", "public_web") \
+                .eq("dimension", "culture").eq("status", "active") \
+                .lt("last_verified_at", run_start).execute()
         sb.table("company_profiles").update({"t3_checked_at": _now()}).eq("id", profile["id"]).execute()
         return "wrote"
     except Exception:

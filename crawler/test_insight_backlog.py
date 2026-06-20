@@ -188,7 +188,10 @@ class TestT3(unittest.TestCase):
         items = store.get("insight_items", [])
         self.assertTrue(any(op == "insert" and r["dimension"] == "culture" and r["origin"] == "public_web"
                             for op, r in items))
+        self.assertTrue(any(op == "insert" and r.get("valid_until") for op, r in items))  # 带过期日(保鲜)
         self.assertTrue(store.get("insight_sources"))   # 多来源已附（过共识门）
+        self.assertTrue(any(p.get("status") == "retired"
+                            for _f, p in store.get("insight_items_updates", [])))  # 替换旧代退役
         self.assertTrue(any("t3_checked_at" in p for _, p in store.get("company_profiles_updates", [])))
 
     def test_enrich_company_t3_empty_search(self):

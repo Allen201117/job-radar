@@ -23,9 +23,11 @@ def parse_response(data):
 
 
 def build_request(key, query, top_k):
-    """(url, headers, json_body)。Serper 把 key 放 X-API-KEY 头；gl/hl 收中文区。"""
+    """(url, headers, json_body)。Serper 把 key 放 X-API-KEY 头；gl/hl 收中文区；
+    tbs 自定义日期窗限近 RECENCY_YEARS 年（保即时性）。"""
+    tbs = f"cdr:1,cd_min:{search_base.recency_start_us()},cd_max:{search_base.recency_start_us(0)}"
     return (
         "https://google.serper.dev/search",
         {"X-API-KEY": key, "Content-Type": "application/json"},
-        {"q": str(query or "").strip(), "num": top_k, "gl": "cn", "hl": "zh-cn"},
+        {"q": str(query or "").strip(), "num": top_k, "gl": "cn", "hl": "zh-cn", "tbs": tbs},
     )

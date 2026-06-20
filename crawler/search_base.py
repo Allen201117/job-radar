@@ -5,7 +5,27 @@
 - text     = 喂给 writer/judge 的正文（必填，下游读它做抽取+核对）；缺省回落 snippet
 - publisher = 站点名或域名（共识门按不同 publisher 计数）
 """
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
+
+# 信息即时性：聚合只取近 N 年内容，保证不引入过时信息（用户定 ≥近三年）。
+RECENCY_YEARS = 3
+
+
+def recency_start(years=RECENCY_YEARS, now=None):
+    """近 N 年的起始日期（date）。years=0 即今天。"""
+    now = now or datetime.now(timezone.utc)
+    return (now - timedelta(days=365 * years)).date()
+
+
+def recency_start_iso(years=RECENCY_YEARS, now=None):
+    """YYYY-MM-DD（Tavily start_date 格式）。"""
+    return recency_start(years, now).isoformat()
+
+
+def recency_start_us(years=RECENCY_YEARS, now=None):
+    """MM/DD/YYYY（Serper tbs 自定义日期格式）。"""
+    return recency_start(years, now).strftime("%m/%d/%Y")
 
 
 def domain_of(url):

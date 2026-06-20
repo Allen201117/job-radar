@@ -23,10 +23,12 @@ def parse_response(data):
 
 
 def build_request(key, query, top_k):
-    """(url, headers, json_body)。Tavily 把 api_key 放 body；basic 深度省额度。"""
+    """(url, headers, json_body)。Tavily 把 api_key 放 body；basic 深度省额度；
+    start_date 限近 RECENCY_YEARS 年（保即时性，不聚合过时信息）。"""
     return (
         "https://api.tavily.com/search",
         {"Content-Type": "application/json"},
         {"api_key": key, "query": str(query or "").strip()[:400], "max_results": top_k,
-         "search_depth": "basic", "topic": "general"},
+         "search_depth": "basic", "topic": "general",
+         "start_date": search_base.recency_start_iso()},
     )
