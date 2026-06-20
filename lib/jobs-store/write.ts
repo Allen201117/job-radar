@@ -2,7 +2,8 @@
 //（discovery 官方源发现 / search 已知源刷新 / enrich 按需富化）；爬虫端写入走 crawler/jobs_db.py。
 //
 // 镜像 crawler/jobs_db.upsert_job 的 canonical-based upsert：按 canonical_jd_url 跨状态查既有行
-//（多行优先 active）→ 命中即按同一行 id update（复活 removed/expired，保住 job_actions 外键引用）、
+//（多行优先 active）→ 命中即按同一行 id update（复活 removed 漏看岗、保住 job_actions 外键引用；
+//  expired=detail 探活确认撤岗，重抓不复活它 → 见 updateById 的 status CASE）、
 // 否则 insert；撞 active-canonical 部分唯一键（jobs-db/schema.sql）退回重查 update（并发幂等兜底）。
 // canonical_jd_url / search_doc 由 HK 触发器自动维护，写入端不带——这里只用同口径 canonicalizeJdUrl
 // 算 canon 来**查**既有行（与 crawler/normalizer.py + schema.sql 的 SQL 函数字节一致）。
@@ -45,7 +46,9 @@ async function findIdByCanonical(canon: string | null): Promise<string | null> {
 async function updateById(id: string, job: Record<string, any>): Promise<any | null> {
   const setParts = UPDATE_DATA_COLS.map((c, i) =>
     PRESERVE_IF_EMPTY.has(c) ? `${c} = COALESCE(NULLIF($${i + 1}, ''), ${c})` : `${c} = $${i + 1}`);
-  setParts.push("status = 'active'", "last_seen_at = now()");
+  // expired = detail 探活确认撤岗的强信号；列表/发现重抓不得复活它（否则点开 404/已下线）。
+  // 与 crawler/jobs_db._update_set_clause 的 status CASE 同口径：expired 黏住，removed/active 仍刷 active。
+  setParts.push("status = CASE WHEN jobs.status = 'expired' THEN 'expired' ELSE 'active' END", "last_seen_at = now()");
   const sql =
     `update jobs set ${setParts.join(", ")} where id = $${UPDATE_DATA_COLS.length + 1}::uuid returning ${JOB_COLUMNS}`;
   const vals = [...UPDATE_DATA_COLS.map((c) => job[c] ?? null), id];
