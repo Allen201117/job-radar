@@ -6,7 +6,8 @@ name: enrich-backlog-browser
 
 on:
   schedule:
-    - cron: "0 19 * * *"   # 每日 UTC 19:00，与 httpx drain(每3h)/快档(0:00)/enrich-crawl(18:00) 错开
+    - cron: "0 20 * * *"   # 每日 UTC 20:00。三个 6-shard 重档串行不叠加（峰值连接/同 host 限流）：
+    #                        enrich-crawl(18:00,~1h)→本 browser-drain(20:00,~50min)→dead-link-audit(22:00)。
   workflow_dispatch:
     inputs:
       limit:

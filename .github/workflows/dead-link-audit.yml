@@ -10,7 +10,8 @@ name: dead-link-audit
 
 on:
   schedule:
-    - cron: "0 21 * * *"   # 每日 UTC 21:00，错开 daily-crawl(0:00)/enrich-crawl(18:00)/browser-drain(19:00)
+    - cron: "0 22 * * *"   # 每日 UTC 22:00。排在 browser-drain(20:00,~50min) 之后，三个 6-shard 重档
+    #                        串行不叠加：enrich-crawl(18:00)→browser-drain(20:00)→本 dead-link-audit(22:00)。
   workflow_dispatch:
     inputs:
       sweep:
