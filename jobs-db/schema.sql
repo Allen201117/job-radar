@@ -201,6 +201,6 @@ create index if not exists jobs_valid_active_idx            on jobs (id) where s
 -- ── 中文 bigram 全文检索 GIN（search_doc）：app 搜索主路径（lib/jobs-store/search.ts 的 textSearch）──
 create index if not exists jobs_search_doc_gin on jobs using gin (search_doc);
 
--- ── 辅助：pg_trgm GIN（title/company 快速 ILIKE 子串，用于 recheck/ad-hoc 过滤）──
-create index if not exists jobs_title_trgm_idx   on jobs using gin (title gin_trgm_ops);
-create index if not exists jobs_company_trgm_idx on jobs using gin (company gin_trgm_ops);
+-- 注：原 jobs_title_trgm_idx / jobs_company_trgm_idx（pg_trgm GIN，title/company ILIKE 辅助）已于
+-- 2026-06-20 下架——生产实测 5 天 0 次 idx_scan（搜索的 ilike 都在 FTS 收窄后的小集合上过滤、用不到它们），
+-- 白吃每次 upsert 的 GIN 维护开销 + 36MB 缓存。pg_trgm 扩展保留；若未来有全表 ILIKE 热查询可按需重建。
