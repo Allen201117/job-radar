@@ -2,6 +2,7 @@
 import unittest
 
 import insight_backlog as B
+import official_cninfo as CN
 import official_edgar as OE
 import wikidata as W
 
@@ -69,11 +70,16 @@ class TestWorker(unittest.TestCase):
     def setUp(self):
         self._orig = W.get_company_facts
         self._orig_edgar = OE.get_listing_by_ticker
-        OE.get_listing_by_ticker = lambda t, **k: None  # 默认不命中 EDGAR → 测 Wikidata 路径
+        self._orig_cn_enabled = CN.enabled
+        self._orig_cn_get = CN.get_listing_by_name
+        OE.get_listing_by_ticker = lambda t, **k: None  # 默认不命中 EDGAR
+        CN.enabled = lambda: False                       # 默认关巨潮 → 测 Wikidata 路径
 
     def tearDown(self):
         W.get_company_facts = self._orig
         OE.get_listing_by_ticker = self._orig_edgar
+        CN.enabled = self._orig_cn_enabled
+        CN.get_listing_by_name = self._orig_cn_get
 
     def test_enrich_writes_listing_and_profile(self):
         store = {"_canned_insight_items": []}  # 无既有 wikidata listing → 走 insert
@@ -106,6 +112,27 @@ class TestWorker(unittest.TestCase):
                             for op, r in items))  # 官方源覆盖，origin=official
         self.assertTrue(any(r.get("publisher") == "SEC EDGAR"
                             for op, r in store.get("insight_sources", [])))  # 溯源记 SEC EDGAR
+
+    def test_cninfo_listing_when_enabled_and_edgar_misses(self):
+        store = {"_canned_insight_items": []}
+        # facts 无 ticker → 不触发 EDGAR；巨潮启用 → 走巨潮官方源
+        W.get_company_facts = lambda c, a=None: {
+            "label": "比亚迪", "ticker": None, "founded_year": 1995, "listed": True, "exchanges": []}
+        CN.enabled = lambda: True
+        CN.get_listing_by_name = lambda name, aliases=None, **k: {
+            "dimension": "listing", "grade": "fact", "title": "上市状态 · 巨潮资讯（官方披露）",
+            "content": "据巨潮资讯网，比亚迪 为 A 股上市公司，股票代码 002594（深交所）。",
+            "payload": {"status": "listed", "exchange": "深交所", "ticker": "002594"},
+            "origin": "official", "source_url": "http://www.cninfo.com.cn/x?stockCode=002594",
+            "source_publisher": "巨潮资讯",
+        }
+        res = B.enrich_company(FakeSB(store), {"id": "cn1", "company": "比亚迪", "aliases": []})
+        self.assertEqual(res, "ok")
+        items = store.get("insight_items", [])
+        self.assertTrue(any(op == "insert" and r["dimension"] == "listing" and r["origin"] == "official"
+                            for op, r in items))
+        self.assertTrue(any(r.get("publisher") == "巨潮资讯"
+                            for op, r in store.get("insight_sources", [])))
 
     def test_noface_marks_checked(self):
         store = {}

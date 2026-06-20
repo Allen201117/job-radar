@@ -20,6 +20,7 @@ from datetime import datetime, timezone, timedelta
 
 import db
 import insight_engine as E
+import official_cninfo as CN
 import official_edgar as EDG
 import search_router
 import wikidata
@@ -117,8 +118,10 @@ def enrich_company(sb, profile):
             return "err"
         return "noface"
     try:
-        # 官方披露优先：有 ticker 先查 SEC EDGAR（更权威 + 带最新申报新鲜度），查无再回落 Wikidata
+        # 官方披露优先：EDGAR(美股·ticker，更权威+最新申报) → 巨潮(A股·名，默认关，须 INSIGHT_CNINFO_ENABLED) → Wikidata 回落
         li = EDG.get_listing_by_ticker(facts.get("ticker")) if facts.get("ticker") else None
+        if not li and CN.enabled():
+            li = CN.get_listing_by_name(profile["company"], profile.get("aliases"))
         if not li:
             li = wikidata.facts_to_listing(facts)
         if li:

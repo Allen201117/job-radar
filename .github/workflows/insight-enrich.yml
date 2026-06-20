@@ -1,8 +1,8 @@
 name: insight-enrich
-# 职业洞察 T2 富化（Wikidata 官方事实层）：扫 company_profiles 队列（insight_checked_at 空/超 TTL），
-# 查 Wikidata 免费端点 → 回写 listing 洞察 + 公司画像字段（成立年/规模/总部/上市）。无浏览器、无 LLM。
+# 职业洞察 T2 富化（官方事实层）：扫 company_profiles 队列（insight_checked_at 空/超 TTL），
+# 查 Wikidata 免费端点 + SEC EDGAR(美股 ticker) + 巨潮(A股名，默认关) → 回写 listing 洞察 + 公司画像字段。无浏览器、无 LLM。
 # 死信：insight_fail_count≥3 不再入队（迁移 135）。与 daily-crawl/enrich-* 解耦，cron 错开。
-# 依赖：迁移 135 已应用（push 后 migrate.yml 自动）；Wikidata 在 CI 直连（本机受代理路由限制）。
+# 依赖：迁移 135 已应用；Wikidata/EDGAR 在 CI 直连。巨潮须 live 验证返回格式后置 repo Variable INSIGHT_CNINFO_ENABLED=true 开启。
 
 on:
   schedule:
@@ -21,6 +21,8 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # 巨潮(A股)官方源默认关；live 验证返回格式正确后，在 repo Variables 置 INSIGHT_CNINFO_ENABLED=true 开启（无需改代码）
+      INSIGHT_CNINFO_ENABLED: ${{ vars.INSIGHT_CNINFO_ENABLED }}
 
     steps:
       - uses: actions/checkout@v4

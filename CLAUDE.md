@@ -131,7 +131,7 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #   china_ats.py = 本土通用 ATS（moka / beisen / company_spa；host 从 source_url 动态解析，浏览器拦截 SPA）
                          # run.py / db.py / normalizer.py / robots.py / discovery.py
                          # probe.py = 扩源探活器：批量 live 探活候选源，仅把「真返回岗位」的写进迁移（本机跑 python3 probe.py --all --emit 025）
-                         # 洞察供给：insight_backlog.py(T2 Wikidata+EDGAR/T3 经验 drain) / insight_engine.py(接地→判官→共识) / wikidata.py / official_edgar.py(SEC 官方上市) / insight_sweep.py(过期下架巡检)
+                         # 洞察供给：insight_backlog.py(T2 Wikidata+EDGAR+巨潮/T3 经验 drain) / insight_engine.py(接地→判官→共识) / wikidata.py / official_edgar.py(SEC 美股) / official_cninfo.py(巨潮 A股,默认关需 INSIGHT_CNINFO_ENABLED) / insight_sweep.py(过期下架)
                          # search_router.py = T3 多源搜索路由：search_{bocha,tavily,serper,qianfan} provider + search_budget(每源日顶 search_usage 表)；配哪个 key 用哪个、未配跳过、多源并取喂≥2 publisher 共识门
 supabase/migrations/     # 001_init → 002_rls → … → 007_candidate_profile_summaries
                          # → 008_discovery_run_diagnostics → 009_discovery_async_runs → 010_seed_spa_sources
