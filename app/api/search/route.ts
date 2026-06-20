@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { createServerSupabase } from "@/lib/auth";
+import { createServiceClient } from "@/lib/supabaseService";
 import liveSearch from "@/lib/live-search";
 import { jobsStoreEnabled } from "@/lib/jobs-store/read";
 import { upsertJob as upsertJobToStore } from "@/lib/jobs-store/write";
@@ -569,19 +569,6 @@ async function upsertLiveJob(job: any) {
     return null;
   }
   return { ...data, __action: "created" };
-}
-
-function createServiceClient() {
-  return createClient(
-    process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
-    },
-  );
 }
 
 function escapePostgrestLike(value: string) {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { createServerSupabase } from "@/lib/auth";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { assertOwnership, requireUser } from "@/lib/apiAuth";
+import { createServiceClient } from "@/lib/supabaseService";
 import liveSearch from "@/lib/live-search";
 import officialDiscovery from "@/lib/official-discovery";
 import baiduQianfanSearch from "@/lib/baidu-qianfan-search";
@@ -159,14 +160,9 @@ type ProviderDiagnostic = {
 };
 
 export async function GET(request: NextRequest) {
-  const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser();
+  if (auth.error) return auth.error;
+  const { user } = auth;
 
   const params = request.nextUrl.searchParams;
   const query = (params.get("query") || "").trim();
@@ -217,6 +213,7 @@ export async function GET(request: NextRequest) {
   if (!forceRefresh && cachedMemoryResponse) {
     const response = markCachedDiscoveryResponse(cachedMemoryResponse, "memory");
     await writeCacheHitDiscoveryRun(service, {
+      userId: user.id,
       query,
       city,
       company,
@@ -230,6 +227,7 @@ export async function GET(request: NextRequest) {
   const cachedDiscovery = forceRefresh
     ? null
     : await readRecentDiscoveryCache(service, {
+      userId: user.id,
       query,
       city,
       company,
@@ -249,6 +247,7 @@ export async function GET(request: NextRequest) {
       startedAt,
     });
     await writeCacheHitDiscoveryRun(service, {
+      userId: user.id,
       query,
       city,
       company,
@@ -272,6 +271,7 @@ export async function GET(request: NextRequest) {
   if (!dailyBudget.allowed) {
     const responseBody = await buildBudgetExhaustedResponse({
       service,
+      userId: user.id,
       query,
       city,
       company,
@@ -461,6 +461,7 @@ export async function GET(request: NextRequest) {
   };
 
   const discoveryRun = await writeDiscoveryRun(service, {
+    userId: user.id,
     query,
     city,
     company,
@@ -576,6 +577,7 @@ export async function GET(request: NextRequest) {
 async function readRecentDiscoveryCache(
   service: SupabaseClient,
   {
+    userId,
     query,
     city,
     company,
@@ -583,6 +585,7 @@ async function readRecentDiscoveryCache(
     discoveryQueries,
     queryBatch,
   }: {
+    userId: string;
     query: string;
     city: string;
     company: string;
@@ -595,6 +598,7 @@ async function readRecentDiscoveryCache(
   let runQuery: any = service
     .from("discovery_runs")
     .select("*")
+    .eq("user_id", userId)
     .eq("query", query)
     .gte("created_at", cutoff)
     .order("created_at", { ascending: false })
@@ -606,6 +610,7 @@ async function readRecentDiscoveryCache(
 
   const { data: run, error: runError } = await runQuery.maybeSingle();
   if (runError || !run) return null;
+  if (assertOwnership(run, userId)) return null;
 
   const { data: candidates, error: candidatesError } = await service
     .from("source_candidates")
@@ -868,6 +873,7 @@ async function readDailySearchBudgetStatus(service: SupabaseClient) {
 
 async function buildBudgetExhaustedResponse({
   service,
+  userId,
   query,
   city,
   company,
@@ -879,6 +885,7 @@ async function buildBudgetExhaustedResponse({
   dailyBudget,
 }: {
   service: SupabaseClient;
+  userId: string;
   query: string;
   city: string;
   company: string;
@@ -952,6 +959,7 @@ async function buildBudgetExhaustedResponse({
   };
 
   const discoveryRun = await writeDiscoveryRun(service, {
+    userId,
     query,
     city,
     company,
@@ -1144,6 +1152,7 @@ function markCachedDiscoveryResponse(response: any, cacheSource: string) {
 async function writeCacheHitDiscoveryRun(
   service: SupabaseClient,
   {
+    userId,
     query,
     city,
     company,
@@ -1151,6 +1160,7 @@ async function writeCacheHitDiscoveryRun(
     response,
     startedAt,
   }: {
+    userId: string;
     query: string;
     city: string;
     company: string;
@@ -1200,6 +1210,7 @@ async function writeCacheHitDiscoveryRun(
   };
 
   const cacheRun = await writeDiscoveryRun(service, {
+    userId,
     query,
     city,
     company,
@@ -2240,6 +2251,7 @@ async function updateSourceCandidateStatus(
 async function writeDiscoveryRun(
   service: SupabaseClient,
   report: {
+    userId: string;
     query: string;
     city: string;
     company: string;
@@ -2265,6 +2277,7 @@ async function writeDiscoveryRun(
   },
 ) {
   const baseRecord = {
+    user_id: report.userId,
     query: report.query,
     city: report.city || null,
     company: report.company || null,
@@ -2328,20 +2341,4 @@ function matchesJobType(job: any, jobType: string) {
     .join(" ")
     .toLowerCase()
     .includes(needle);
-}
-
-function createServiceClient() {
-  const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!supabaseUrl || !serviceKey) {
-    throw new Error("Missing Supabase service credentials");
-  }
-
-  return createClient(supabaseUrl, serviceKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
 }

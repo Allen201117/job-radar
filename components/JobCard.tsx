@@ -29,7 +29,7 @@ import {
   type InsightAvailability,
 } from "@/lib/insight-client";
 import { track } from "@/lib/track";
-import type { ScoredJob } from "@/lib/types";
+import type { MatchReason, ScoredJob } from "@/lib/types";
 import { cleanSummary, cn, freshnessLabel } from "@/lib/utils";
 
 interface Props {
@@ -40,6 +40,18 @@ interface Props {
 }
 
 type PrimaryAction = "saved" | "ignored" | "applied";
+
+const MATCH_REASON_LABELS = {
+  role: "命中目标方向",
+  location: "命中城市",
+  keyword: "命中技能",
+  company: "命中目标公司",
+} satisfies Record<Exclude<MatchReason["type"], "freshness">, string>;
+
+function matchReasonText(reason: MatchReason): string {
+  if (reason.type === "freshness") return reason.value;
+  return `${MATCH_REASON_LABELS[reason.type]}：${reason.value}`;
+}
 
 function extractExperience(text?: string | null): string {
   if (!text) return "未知";
@@ -238,6 +250,7 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
     : "未知";
   // 无量纲匹配分 → 可解释三档徽标（阈值在 lib/scoring.ts，前端只消费）。
   const tier = matchTier(job.match_score);
+  const matchReasons = job.match_reasons || [];
 
   return (
     <article
@@ -388,6 +401,35 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
                 </span>
               ))}
             </div>
+          )}
+
+          {tier.level !== "none" && matchReasons.length > 0 && (
+            <details className="mt-3 rounded-xl border border-black/[0.07] bg-white/45 px-3.5 py-2.5 open:bg-white/65 [&[open]_.match-reason-caret]:rotate-180 dark:border-white/[0.1] dark:bg-white/[0.04] dark:open:bg-white/[0.07]">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-[#5f594e] transition-colors hover:text-[#1a1714] [&::-webkit-details-marker]:hidden dark:text-[#b6ad9d] dark:hover:text-[#f3ecdf]">
+                <span className="inline-flex items-center gap-1.5">
+                  <Sparkle size={14} weight="fill" aria-hidden="true" />
+                  为什么推荐
+                </span>
+                <CaretDown
+                  className="match-reason-caret size-4 shrink-0 transition-transform"
+                  aria-hidden="true"
+                />
+              </summary>
+              <ul className="mt-2.5 space-y-1.5 border-t border-black/[0.06] pt-2.5 text-sm text-[#5f594e] dark:border-white/[0.08] dark:text-[#b6ad9d]">
+                {matchReasons.map((reason, index) => (
+                  <li
+                    key={`${reason.type}:${reason.value}:${index}`}
+                    className="flex items-start gap-2"
+                  >
+                    <span
+                      className="mt-[0.45rem] size-1.5 shrink-0 rounded-full bg-[#7aa84b] dark:bg-[#a3d06a]"
+                      aria-hidden="true"
+                    />
+                    <span>{matchReasonText(reason)}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
           )}
         </div>
 

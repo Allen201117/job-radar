@@ -45,12 +45,6 @@ export async function getUser() {
   return data.user;
 }
 
-export async function requireUser() {
-  const user = await getUser();
-  if (!user) throw new Error("Unauthorized");
-  return user;
-}
-
 export async function getProfile() {
   const user = await getUser();
   if (!user) return null;

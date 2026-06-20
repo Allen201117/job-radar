@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabase } from "@/lib/auth";
+import { requireUser } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
 import enrichClient from "@/lib/enrich-client";
 import { jobsStoreEnabled, jobsByUrls } from "@/lib/jobs-store/read";
@@ -17,13 +17,8 @@ const MAX_URLS = 30;
 const CONCURRENCY = 8;
 
 export async function POST(request: NextRequest) {
-  const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser();
+  if (auth.error) return auth.error;
 
   let body: any;
   try {

@@ -143,9 +143,22 @@ export interface DiscoveryRun {
   created_at: string;
 }
 
+export type MatchReasonType =
+  | "role"
+  | "location"
+  | "keyword"
+  | "company"
+  | "freshness";
+
+export interface MatchReason {
+  type: MatchReasonType;
+  value: string;
+}
+
 export interface ScoredJob extends Job {
   match_score: number;
   matched_keywords: string[];
+  match_reasons?: MatchReason[];
   hidden_reason: string | null;
   user_action: string | null;
 }

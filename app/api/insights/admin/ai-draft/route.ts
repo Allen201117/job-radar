@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabase } from "@/lib/auth";
+import { requireAdmin } from "@/lib/apiAuth";
 import { INSIGHT_DIMENSIONS } from "@/lib/insight-bundle";
 import llm from "@/lib/llm";
 
@@ -21,23 +21,6 @@ const DIM_GUIDE: Record<string, string> = {
   path: "进入路径：常见进入通道（校招/社招/内推/外包转正等）的公开观察。grade 视证据用 fact 或 experience。",
   culture: "公司文化：公开讨论里的文化/节奏群体性印象，措辞中性、温馨提示口吻。grade 用 experience。",
 };
-
-async function requireAdmin() {
-  const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 }) };
-  const { data: profileRow } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .maybeSingle();
-  if (profileRow?.role !== "admin") {
-    return { error: NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 }) };
-  }
-  return { user };
-}
 
 export async function POST(request: NextRequest) {
   const guard = await requireAdmin();

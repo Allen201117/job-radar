@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { createServerSupabase } from "@/lib/auth";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { requireUser } from "@/lib/apiAuth";
+import { createServiceClient } from "@/lib/supabaseService";
 import discoveryDispatch from "@/lib/discovery-dispatch";
 
 export const runtime = "nodejs";
@@ -23,13 +24,9 @@ const DISPATCH_TIMEOUT_MS = 10000;
  * workflow_dispatch 跑 Playwright 拦截，立即返回 run_id；前端用 /api/discovery/status 轮询。
  */
 export async function POST(request: NextRequest) {
-  const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser();
+  if (auth.error) return auth.error;
+  const { user, supabase } = auth;
 
   let body: any = {};
   try {
@@ -152,7 +149,8 @@ export async function POST(request: NextRequest) {
         error_message: dispatchError.slice(0, 1000),
         finished_at: new Date().toISOString(),
       })
-      .eq("id", runId);
+      .eq("id", runId)
+      .eq("user_id", user.id);
     return NextResponse.json(
       {
         ok: false,
@@ -189,20 +187,9 @@ export async function POST(request: NextRequest) {
   });
 }
 
-function createServiceClient(): SupabaseClient {
-  const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !serviceKey) {
-    throw new Error("Missing Supabase service credentials");
-  }
-  return createClient(supabaseUrl, serviceKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
-}
-
 // 读取用户已保存的求职偏好（简历画像 + 偏好表），用于「未手动配置则默认按偏好」。
 async function loadUserPreferences(
-  supabase: Awaited<ReturnType<typeof createServerSupabase>>,
+  supabase: SupabaseClient,
   userId: string,
 ): Promise<{ city: string; experienceStage: string; excludeKeywords: string[] }> {
   const empty = { city: "", experienceStage: "", excludeKeywords: [] as string[] };

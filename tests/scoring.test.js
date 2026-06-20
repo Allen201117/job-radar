@@ -90,6 +90,52 @@ test("scores a cross-language role hit: Chinese preference role matches English 
   assert.ok(scored.matched_keywords.includes("产品经理"));
 });
 
+test("returns structured match reasons without changing the existing score", () => {
+  const job = {
+    ...makeJob("job-reasons", "Product Manager", "上海", "负责用户研究与产品规划"),
+    company: "字节跳动",
+    first_seen_at: new Date(Date.now() - 3 * 86400000).toISOString(),
+  };
+  const prefs = {
+    ...makePreferences(),
+    target_roles: ["产品经理"],
+    target_locations: ["上海"],
+    target_companies: ["字节跳动"],
+    target_keywords: ["用户研究"],
+    exclude_keywords: [],
+  };
+
+  const result = scoreJob(job, prefs, []);
+
+  assert.equal(result.score, 80);
+  assert.deepEqual(result.match_reasons, [
+    { type: "role", value: "产品经理" },
+    { type: "location", value: "上海" },
+    { type: "company", value: "字节跳动" },
+    { type: "keyword", value: "用户研究" },
+    { type: "freshness", value: "近 7 天新增" },
+  ]);
+
+  const [scored] = sortAndFilterJobs([job], prefs, []);
+  assert.equal(scored.match_score, 80);
+  assert.deepEqual(scored.match_reasons, result.match_reasons);
+});
+
+test("returns no structured reasons when preferences or matches are absent", () => {
+  const job = makeJob("job-no-reasons", "行政专员", "北京", "负责行政事务");
+  const emptyPrefs = {
+    ...makePreferences(),
+    target_roles: [],
+    target_locations: [],
+    target_companies: [],
+    target_keywords: [],
+    exclude_keywords: [],
+  };
+
+  assert.deepEqual(scoreJob(job, null, []).match_reasons, []);
+  assert.deepEqual(scoreJob(job, emptyPrefs, []).match_reasons, []);
+});
+
 test("exclude_keywords hit hard-filters the job regardless of showIgnored/showApplied", () => {
   const jobs = [
     makeJob("job-keep", "数据分析师"),
