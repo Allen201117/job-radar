@@ -37,12 +37,15 @@ class SearchRouter:
                 print(f"  [search-router] {getattr(p, 'name', '?')} 兜底跳过: "
                       f"{type(e).__name__}: {str(e)[:120]}")
                 continue
+            new = 0
             for r in results:
                 url = (r or {}).get("url")
                 if not url or url in seen:
                     continue
                 seen.add(url)
                 out.append(r)
+                new += 1
+            print(f"  [search] {p.name}: 返回 {len(results)} 条 / 去重后新增 {new} 条")
         return out
 
 
