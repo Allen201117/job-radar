@@ -22,6 +22,7 @@ import db
 import insight_engine as E
 import official_cninfo as CN
 import official_edgar as EDG
+import ops_runs
 import search_router
 import wikidata
 
@@ -316,12 +317,43 @@ def main():
         sys.exit(1)
 
     sb = db.get_supabase()
+    started_at = _now()
     if args.t3:
-        drain_t3(sb, limit=args.limit)
+        stat = drain_t3(sb, limit=args.limit)
+        checked = stat["wrote"] + stat["empty"] + stat["err"]
+        ops_runs.record_ops_run(
+            sb,
+            "insight_backlog",
+            {
+                "checked": checked,
+                "companies_enriched": stat["wrote"],
+                "failed": stat["err"],
+                "mode": "experience",
+            },
+            status=ops_runs.status_from_counts(checked, stat["err"]),
+            started_at=started_at,
+            finished_at=_now(),
+        )
         return
+    seeded = 0
     if args.seed_from_sources:
-        seed_from_sources(sb)
-    drain(sb, limit=args.limit, workers=args.workers)
+        seeded = seed_from_sources(sb)
+    stat = drain(sb, limit=args.limit, workers=args.workers)
+    checked = stat["ok"] + stat["noface"] + stat["err"]
+    ops_runs.record_ops_run(
+        sb,
+        "insight_backlog",
+        {
+            "checked": checked,
+            "companies_enriched": stat["ok"],
+            "failed": stat["err"],
+            "seeded": seeded,
+            "mode": "official_facts",
+        },
+        status=ops_runs.status_from_counts(checked, stat["err"]),
+        started_at=started_at,
+        finished_at=_now(),
+    )
 
 
 if __name__ == "__main__":

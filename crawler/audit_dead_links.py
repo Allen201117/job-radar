@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 
 import db
 import jobs_db
+import ops_runs
 from playwright.sync_api import sync_playwright
 
 
@@ -134,6 +135,7 @@ def classify(page, title):
 
 
 def main():
+    started_at = _now()
     apply = "--apply" in sys.argv
     host_filter = arg("--host")
     limit = int(arg("--limit", "1500"))   # 单 shard 单轮渲染上限，控 CI 时长（~3s/岗）
@@ -169,6 +171,7 @@ def main():
     print(f"待渲染 {len(sample)} 条；模式={'APPLY(dead→expired + 盖巡检时间戳)' if apply else 'DRY-RUN(只报告)'}\n")
 
     apply_ok = [0]
+    write_fail = [0]
     agg = defaultdict(lambda: {"dead": 0, "alive": 0, "suspect": 0, "unsure": 0})
     RESTART_EVERY = 40  # 每渲染这么多个重启浏览器，规避长跑内存泄漏/崩溃（智元 613 一次跑崩过）
 
@@ -189,6 +192,7 @@ def main():
             if dead:
                 apply_ok[0] += 1
         except Exception as e:
+            write_fail[0] += 1
             sys.stderr.write(f"\n  写失败 {jid}: {str(e)[:60]}\n")
 
     with sync_playwright() as p:
@@ -239,12 +243,28 @@ def main():
             tot[k] += a[k]
         flag = " ⚠" if a["dead"] or a["suspect"] else ""
         print(f"  {h:40s} 共{n}  dead{a['dead']} suspect{a['suspect']} alive{a['alive']} unsure{a['unsure']}{flag}")
-    N = sum(tot.values()) or 1
+    checked = sum(tot.values())
+    N = checked or 1
     print(f"\n合计 {N}: dead {tot['dead']}({tot['dead']*100//N}%) suspect {tot['suspect']}({tot['suspect']*100//N}%) "
           f"alive {tot['alive']}({tot['alive']*100//N}%) unsure {tot['unsure']}({tot['unsure']*100//N}%)")
     print("解读: dead=渲染出'职位不存在'类标记(高置信失效); suspect=渲染了但无标题(疑似/反爬,需人工); unsure=空/被拦(不下架)")
     if apply:
         print(f"\n[APPLY] 边扫边下架，共置 expired {apply_ok[0]} 条。")
+        ops_runs.record_ops_run(
+            sb,
+            "dead_link_audit",
+            {
+                "checked": checked,
+                "expired": apply_ok[0],
+                "alive": tot["alive"],
+                "suspect": tot["suspect"],
+                "unsure": tot["unsure"],
+                "failed": write_fail[0],
+            },
+            status=ops_runs.status_from_counts(checked, write_fail[0]),
+            started_at=started_at,
+            finished_at=_now(),
+        )
     else:
         print("\n（DRY-RUN：未写库。加 --apply 增量下架 dead 项；suspect 默认不动。）")
 

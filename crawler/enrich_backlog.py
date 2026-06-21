@@ -24,6 +24,7 @@ import db
 import enrich
 import jobs_db
 import normalizer
+import ops_runs
 
 # P1 = httpx 类（无浏览器、可高并发）。browser 类（beisen/moka/feishu）P2 单独 shard。
 HTTPX_ADAPTERS = tuple(a for a in enrich.ENRICH_REGISTRY)
@@ -266,7 +267,33 @@ def main():
         sys.exit(1)
 
     sb = db.get_supabase()
-    drain(sb, adapter=args.adapter, limit=args.limit, workers=args.workers, dry_run=args.dry_run, sweep=args.sweep)
+    started_at = _now()
+    stat = drain(
+        sb,
+        adapter=args.adapter,
+        limit=args.limit,
+        workers=args.workers,
+        dry_run=args.dry_run,
+        sweep=args.sweep,
+    )
+    if not args.dry_run:
+        checked = sum(stat.values())
+        ops_runs.record_ops_run(
+            sb,
+            "liveness_sweep" if args.sweep else "enrich_backlog",
+            {
+                "checked": checked,
+                "enriched": stat["filled"],
+                "alive": stat["alive"],
+                "expired": stat["expired"],
+                "miss": stat["miss"],
+                "failed": stat["err"],
+                "adapter": args.adapter or "all",
+            },
+            status=ops_runs.status_from_counts(checked, stat["err"]),
+            started_at=started_at,
+            finished_at=_now(),
+        )
 
 
 if __name__ == "__main__":

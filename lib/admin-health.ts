@@ -11,18 +11,6 @@ export function formatPercent(numerator: Numeric, denominator: Numeric): string 
   return `${((toNumber(numerator) / total) * 100).toFixed(1)}%`;
 }
 
-export function formatDuration(seconds: Numeric): string {
-  if (seconds == null || seconds === "") return "—";
-  const value = Number(seconds);
-  if (!Number.isFinite(value) || value < 0) return "—";
-  if (value < 1) return "<1 秒";
-  const rounded = Math.round(value);
-  if (rounded < 60) return `${rounded} 秒`;
-  const minutes = Math.floor(rounded / 60);
-  const rest = rounded % 60;
-  return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分`;
-}
-
 export type CrawlSourceRow = {
   source_id?: string | null;
   company?: string | null;
@@ -64,92 +52,250 @@ export function normalizeCrawlSources(rows: CrawlSourceRow[] | null | undefined)
   });
 }
 
-export type DiscoveryModeRow = {
-  mode?: string | null;
+export type TodayCrawlRow = {
   runs?: Numeric;
-  completed_runs?: Numeric;
-  avg_duration_seconds?: Numeric;
+  jobs_found?: Numeric;
+  jobs_created?: Numeric;
+  jobs_updated?: Numeric;
+  failed_runs?: Numeric;
+  failed_sources?: Numeric;
+  last_run_at?: string | null;
 };
 
-export type DiscoveryFailureRow = {
-  mode?: string | null;
-  reason?: string | null;
-  count?: Numeric;
+export type TodayDiscoveryRow = {
+  runs?: Numeric;
+  jobs_created?: Numeric;
+  jobs_updated?: Numeric;
+  failed_runs?: Numeric;
+  last_run_at?: string | null;
 };
 
-const DISCOVERY_LABELS: Record<string, string> = {
-  company_refresh: "公司库刷新",
-  official_job_discovery: "官方源发现",
-  web_search: "官方源发现",
-  browser_discovery: "浏览器发现",
-  discovery: "浏览器发现",
+export type OpsRunAggregateRow = {
+  module?: string | null;
+  runs?: Numeric;
+  success?: Numeric;
+  partial?: Numeric;
+  failed?: Numeric;
+  checked?: Numeric;
+  expired?: Numeric;
+  deleted?: Numeric;
+  enriched?: Numeric;
+  companies_enriched?: Numeric;
+  retired?: Numeric;
+  last_run_at?: string | null;
 };
 
-export type DiscoveryModeMetric = {
-  mode: string;
-  label: string;
-  runs: number;
-  completedRuns: number;
-  averageDuration: string;
-  failures: Array<{ reason: string; count: number }>;
+export type DailyReportStatus = "success" | "idle" | "failed";
+
+export type DailyReport = {
+  key: "crawl" | "enrichment" | "dead_jobs" | "insights" | "discovery";
+  title: string;
+  description: string;
+  status: DailyReportStatus;
+  statusLabel: string;
+  lastRunAt: string | null;
+  metrics: Array<{ label: string; value: number | null }>;
 };
 
-export function normalizeDiscoveryModes(
-  modes: DiscoveryModeRow[] | null | undefined,
-  failures: DiscoveryFailureRow[] | null | undefined,
-): DiscoveryModeMetric[] {
-  return (modes || []).map((row) => {
-    const mode = String(row.mode || "unknown");
-    return {
-      mode,
-      label: DISCOVERY_LABELS[mode] || mode,
-      runs: toNumber(row.runs),
-      completedRuns: toNumber(row.completed_runs),
-      averageDuration: formatDuration(row.avg_duration_seconds),
-      failures: (failures || [])
-        .filter((failure) => String(failure.mode || "unknown") === mode)
-        .map((failure) => ({
-          reason: String(failure.reason || "unknown"),
-          count: toNumber(failure.count),
-        })),
-    };
-  });
+type DailyReportInput = {
+  crawl?: TodayCrawlRow | null;
+  discovery?: TodayDiscoveryRow | null;
+  insight?: { today_created?: Numeric } | null;
+  opsRuns?: OpsRunAggregateRow[] | null;
+};
+
+const OPERATIONAL_TERMS: Record<string, string> = {
+  active: "在招",
+  expired: "已确认撤岗",
+  removed: "暂时下线",
+  success: "完成",
+  partial: "部分完成",
+  partial_success: "部分完成",
+  failed: "失败",
+  skipped: "未执行",
+  queued: "等待运行",
+  running: "运行中",
+};
+
+export function translateOperationalTerm(value: string | null | undefined): string {
+  return OPERATIONAL_TERMS[String(value || "")] || "未知状态";
 }
 
-export type InsightDimensionRow = {
-  dimension?: string | null;
-  count?: Numeric;
+function latestTimestamp(values: Array<string | null | undefined>): string | null {
+  const valid = values.filter((value): value is string => Boolean(value));
+  if (!valid.length) return null;
+  return valid.sort((a, b) => Date.parse(b) - Date.parse(a))[0] || null;
+}
+
+function summarizeOps(rows: OpsRunAggregateRow[], modules: string[]) {
+  const selected = rows.filter((row) => modules.includes(String(row.module || "")));
+  if (!selected.length) {
+    return {
+      available: false,
+      runs: 0,
+      failed: 0,
+      checked: 0,
+      expired: 0,
+      deleted: 0,
+      enriched: 0,
+      companiesEnriched: 0,
+      retired: 0,
+      lastRunAt: null as string | null,
+    };
+  }
+  return {
+    available: true,
+    runs: selected.reduce((sum, row) => sum + toNumber(row.runs), 0),
+    failed: selected.reduce((sum, row) => sum + toNumber(row.failed), 0),
+    checked: selected.reduce((sum, row) => sum + toNumber(row.checked), 0),
+    expired: selected.reduce((sum, row) => sum + toNumber(row.expired), 0),
+    deleted: selected.reduce((sum, row) => sum + toNumber(row.deleted), 0),
+    enriched: selected.reduce((sum, row) => sum + toNumber(row.enriched), 0),
+    companiesEnriched: selected.reduce((sum, row) => sum + toNumber(row.companies_enriched), 0),
+    retired: selected.reduce((sum, row) => sum + toNumber(row.retired), 0),
+    lastRunAt: latestTimestamp(selected.map((row) => row.last_run_at)),
+  };
+}
+
+function reportStatus(runs: number, failed: number): DailyReportStatus {
+  if (runs <= 0) return "idle";
+  if (failed >= runs) return "failed";
+  return "success";
+}
+
+function statusLabel(status: DailyReportStatus): string {
+  if (status === "success") return "今天已运行";
+  if (status === "failed") return "运行失败";
+  return "今天没记录";
+}
+
+export function buildDailyReports(input: DailyReportInput): DailyReport[] {
+  const opsRows = input.opsRuns || [];
+  const enrichment = summarizeOps(opsRows, ["enrich_backlog"]);
+  const liveness = summarizeOps(opsRows, ["liveness_sweep", "dead_link_audit"]);
+  const purge = summarizeOps(opsRows, ["purge_expired"]);
+  const insights = summarizeOps(opsRows, ["insight_backlog"]);
+  const staleness = summarizeOps(opsRows, ["insight_staleness"]);
+
+  const crawlRuns = toNumber(input.crawl?.runs);
+  const crawlFailed = toNumber(input.crawl?.failed_runs);
+  const discoveryRuns = toNumber(input.discovery?.runs);
+  const discoveryFailed = toNumber(input.discovery?.failed_runs);
+  const enrichmentStatus = reportStatus(enrichment.runs, enrichment.failed);
+  const deadRuns = liveness.runs + purge.runs;
+  const deadFailed = liveness.failed + purge.failed;
+  const deadStatus = reportStatus(deadRuns, deadFailed);
+  const insightRuns = insights.runs + staleness.runs;
+  const insightFailed = insights.failed + staleness.failed;
+  const insightStatus = reportStatus(insightRuns, insightFailed);
+  const crawlStatus = reportStatus(crawlRuns, crawlFailed);
+  const discoveryStatus = reportStatus(discoveryRuns, discoveryFailed);
+
+  return [
+    {
+      key: "crawl",
+      title: "岗位抓取",
+      description: "每天去各企业官网抓新发布的岗位",
+      status: crawlStatus,
+      statusLabel: statusLabel(crawlStatus),
+      lastRunAt: input.crawl?.last_run_at || null,
+      metrics: [
+        { label: "运行次数", value: input.crawl ? crawlRuns : null },
+        { label: "抓到岗位", value: input.crawl ? toNumber(input.crawl.jobs_found) : null },
+        { label: "新增岗位", value: input.crawl ? toNumber(input.crawl.jobs_created) : null },
+        { label: "失败来源", value: input.crawl ? toNumber(input.crawl.failed_sources) : null },
+      ],
+    },
+    {
+      key: "enrichment",
+      title: "详情补全",
+      description: "给只有标题的空壳岗补上职位描述正文",
+      status: enrichmentStatus,
+      statusLabel: statusLabel(enrichmentStatus),
+      lastRunAt: enrichment.lastRunAt,
+      metrics: [
+        { label: "检查岗位", value: enrichment.available ? enrichment.checked : null },
+        { label: "补全正文", value: enrichment.available ? enrichment.enriched : null },
+      ],
+    },
+    {
+      key: "dead_jobs",
+      title: "死岗治理",
+      description: "核查岗位还在不在招，撤掉的清理回收",
+      status: deadStatus,
+      statusLabel: statusLabel(deadStatus),
+      lastRunAt: latestTimestamp([liveness.lastRunAt, purge.lastRunAt]),
+      metrics: [
+        { label: "核查", value: liveness.available ? liveness.checked : null },
+        { label: "判死", value: liveness.available ? liveness.expired : null },
+        { label: "清除", value: purge.available ? purge.deleted : null },
+      ],
+    },
+    {
+      key: "insights",
+      title: "职业洞察",
+      description: "给公司补职业洞察，过期的自动下架",
+      status: insightStatus,
+      statusLabel: statusLabel(insightStatus),
+      lastRunAt: latestTimestamp([insights.lastRunAt, staleness.lastRunAt]),
+      metrics: [
+        { label: "新增洞察", value: toNumber(input.insight?.today_created) },
+        { label: "富化公司", value: insights.available ? insights.companiesEnriched : null },
+        { label: "过期下架", value: staleness.available ? staleness.retired : null },
+      ],
+    },
+    {
+      key: "discovery",
+      title: "刷新 / 发现",
+      description: "用户点按钮临时找新公司、新岗位",
+      status: discoveryStatus,
+      statusLabel: statusLabel(discoveryStatus),
+      lastRunAt: input.discovery?.last_run_at || null,
+      metrics: [
+        { label: "运行次数", value: input.discovery ? discoveryRuns : null },
+        {
+          label: "产出岗位",
+          value: input.discovery
+            ? toNumber(input.discovery.jobs_created) + toNumber(input.discovery.jobs_updated)
+            : null,
+        },
+      ],
+    },
+  ];
+}
+
+export type TodayHealth = {
+  level: "healthy" | "warning" | "critical";
+  label: "健康" | "注意" | "出事";
+  message: string;
 };
 
-const INSIGHT_DIMENSIONS = [
-  ["timing", "时机"],
-  ["hiring", "招聘热度"],
-  ["listing", "上市信息"],
-  ["compensation_intensity", "薪酬强度"],
-  ["path", "路径"],
-  ["culture", "文化"],
-] as const;
+export function evaluateTodayHealth(input: {
+  validActive: Numeric;
+  crawlRuns: Numeric;
+  crawlFailedRuns: Numeric;
+  previousValidActive?: Numeric;
+}): TodayHealth {
+  const validActive = toNumber(input.validActive);
+  const crawlRuns = toNumber(input.crawlRuns);
+  const failedRuns = toNumber(input.crawlFailedRuns);
+  const previous = input.previousValidActive == null ? null : toNumber(input.previousValidActive);
 
-const INSIGHT_LABELS = Object.fromEntries(INSIGHT_DIMENSIONS) as Record<string, string>;
-const INSIGHT_ORDER = new Map<string, number>(
-  INSIGHT_DIMENSIONS.map(([dimension], index) => [dimension, index]),
-);
-
-export function normalizeInsightDimensions(
-  rows: InsightDimensionRow[] | null | undefined,
-): Array<{ dimension: string; label: string; count: number }> {
-  return (rows || [])
-    .map((row) => {
-      const dimension = String(row.dimension || "unknown");
-      return {
-        dimension,
-        label: INSIGHT_LABELS[dimension] || dimension,
-        count: toNumber(row.count),
-      };
-    })
-    .sort((a, b) => {
-      const ai = INSIGHT_ORDER.get(a.dimension) ?? Number.MAX_SAFE_INTEGER;
-      const bi = INSIGHT_ORDER.get(b.dimension) ?? Number.MAX_SAFE_INTEGER;
-      return ai - bi || a.dimension.localeCompare(b.dimension);
-    });
+  if (validActive <= 0) {
+    return { level: "critical", label: "出事", message: "当前没有可确认能投的岗位，请立即检查岗位库。" };
+  }
+  if (crawlRuns > 0 && failedRuns >= crawlRuns) {
+    return { level: "critical", label: "出事", message: "今天的岗位抓取全部失败，请立即检查。" };
+  }
+  if (crawlRuns <= 0) {
+    return { level: "warning", label: "注意", message: "今天还没有岗位抓取记录，请确认定时任务是否已到运行时间。" };
+  }
+  if (previous && previous > 0 && validActive / previous < 0.8) {
+    return { level: "warning", label: "注意", message: "能投岗位较历史基线明显下降，请检查下架和抓取情况。" };
+  }
+  return {
+    level: "healthy",
+    label: "健康",
+    message: "今天抓取已运行，当前有可投岗位；历史波动基线仍在积累。",
+  };
 }

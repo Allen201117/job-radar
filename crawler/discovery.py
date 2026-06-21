@@ -22,6 +22,7 @@ import china_keyword_expansion as cke
 import db
 import jobs_db
 import normalizer
+import ops_runs
 from adapters.base import RawJob
 from adapters.bytedance import BytedanceAdapter
 from adapters.feishu import NioAdapter, XpengAdapter, HorizonAdapter, XiaomiAdapter
@@ -621,15 +622,41 @@ def _mark_run_failed(run_id: str, reason: str, exc: Exception) -> None:
         pass
 
 
+def _record_discovery_ops(result: dict, started_at: str, mode: str) -> None:
+    if result.get("status") == "skipped":
+        return
+    status = result.get("status")
+    ledger_status = "failed" if status == "failed" else ("partial" if status == "partial_success" else "success")
+    created = int(result.get("jobs_created") or 0)
+    updated = int(result.get("jobs_updated") or 0)
+    ops_runs.record_ops_run(
+        db.get_supabase(),
+        "discovery",
+        {
+            "checked": 1,
+            "jobs_created": created,
+            "jobs_updated": updated,
+            "produced": created + updated,
+            "mode": mode,
+        },
+        status=ledger_status,
+        started_at=started_at,
+        finished_at=_now_iso(),
+    )
+
+
 def run_from_env() -> bool:
     """run.py 入口：处于「刷新公司库」或「浏览器发现」模式则执行并返回 True；否则 False（让 run.py 走全量抓取）。"""
     # 「刷新公司库」模式优先（mode=company_refresh）。
     refresh = parse_company_refresh_env(os.environ)
     if refresh:
+        started_at = _now_iso()
         try:
-            run_company_refresh(refresh)
+            result = run_company_refresh(refresh)
+            _record_discovery_ops(result, started_at, "company_refresh")
         except Exception as e:  # 失败也要落终态，否则前端永远卡 running
             _mark_run_failed(refresh["run_id"], "refresh_exception", e)
+            _record_discovery_ops({"status": "failed"}, started_at, "company_refresh")
             raise
         return True
 
@@ -637,9 +664,12 @@ def run_from_env() -> bool:
     params = parse_discovery_env(os.environ)
     if not params:
         return False
+    started_at = _now_iso()
     try:
-        run_discovery(params)
+        result = run_discovery(params)
+        _record_discovery_ops(result, started_at, "discovery")
     except Exception as e:  # 失败也要落终态，否则前端永远卡 running
         _mark_run_failed(params["run_id"], "discovery_exception", e)
+        _record_discovery_ops({"status": "failed"}, started_at, "discovery")
         raise
     return True

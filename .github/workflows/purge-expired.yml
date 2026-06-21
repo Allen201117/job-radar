@@ -23,19 +23,62 @@ jobs:
       - name: Purge expired jobs + vacuum
         env:
           JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           if [ -z "${JOBS_DATABASE_URL:-}" ]; then
             echo "::error::JOBS_DATABASE_URL secret 未配置（与 db-migrate 同一个）。"
             exit 1
           fi
+          started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          deleted_count="$(
+            PGOPTIONS="-c statement_timeout=1800000" \
+            psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -qAt -c \
+              "with deleted as (delete from jobs where status = 'expired' returning 1) select count(*) from deleted"
+          )"
+          echo "=== 本轮精确删除量 ==="
+          echo "$deleted_count"
           psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off <<'SQL'
           set statement_timeout = '1800s';
-          \echo '=== 删除前 expired 计数 ==='
-          select count(*) as expired_before from jobs where status = 'expired';
-          delete from jobs where status = 'expired';
           \echo '=== VACUUM (ANALYZE) jobs（释放行空间供复用，非 FULL 不缩 db_size）==='
           vacuum (analyze) jobs;
           \echo '=== 剩余 status 分布 ==='
           select status, count(*) from jobs group by status order by count(*) desc;
           SQL
           echo "[purge-expired] done."
+          export OPS_STARTED_AT="$started_at"
+          export OPS_DELETED_COUNT="$deleted_count"
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.request
+          from datetime import datetime, timezone
+
+          try:
+              base = os.environ["SUPABASE_URL"].rstrip("/")
+              key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+              body = json.dumps({
+                  "module": "purge_expired",
+                  "metrics": {"deleted": int(os.environ.get("OPS_DELETED_COUNT", "0"))},
+                  "status": "success",
+                  "started_at": os.environ["OPS_STARTED_AT"],
+                  "finished_at": datetime.now(timezone.utc).isoformat(),
+              }).encode()
+              req = urllib.request.Request(
+                  base + "/rest/v1/ops_runs",
+                  data=body,
+                  method="POST",
+                  headers={
+                      "apikey": key,
+                      "Authorization": "Bearer " + key,
+                      "Content-Type": "application/json",
+                      "Prefer": "return=minimal",
+                  },
+              )
+              urllib.request.urlopen(req, timeout=15).read()
+          except Exception as exc:
+              sys.stderr.write(
+                  f"[ops-runs] purge_expired 台账写入失败（清理已完成，不受影响）: {type(exc).__name__}\n"
+              )
+          PY
