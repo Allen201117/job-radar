@@ -4,7 +4,7 @@
 // 非阻塞：前端异步调，看板先渲染、死的随后消失（镜像 /api/enrich 读时富化）。顺带给在招岗盖探活戳，
 // 让"被浏览的热门岗"自然获得 liveness 覆盖、减少后台重复探。
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "@/lib/apiAuth";
+import { hasSessionCookie } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
 import { jobsStoreEnabled, jobsByIds } from "@/lib/jobs-store/read";
 import { markJobExpiredById, touchJobCheckedById } from "@/lib/jobs-store/write";
@@ -25,8 +25,8 @@ const CONCURRENCY = 6;
 const FRESH_MS = 24 * 60 * 60 * 1000; // 24h 内探活过 → 跳过
 
 export async function POST(request: NextRequest) {
-  const auth = await requireUser();
-  if (auth.error) return auth.error;
+  // 廉价登录态判断（不联网）：背景批量探活只读 + 标 expired/盖戳，不碰用户数据。匿名→空响应、不探不写。
+  if (!hasSessionCookie(request)) return NextResponse.json({ ok: true, dead: [] });
 
   let body: any;
   try {
