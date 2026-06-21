@@ -229,9 +229,9 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
   }
 
   function handleView() {
-    // 走点击时校验门：服务端先探死活，活则跳官网/死则拦下提示（见 app/api/jobs/go）。
-    // 拿不准/SPA 源/超时一律放行，体验与直跳一致、绝不更差。
-    window.open(`/api/jobs/go?id=${encodeURIComponent(job.id)}`, "_blank", "noopener,noreferrer");
+    // 直接跳官网，瞬间打开——质量校验不放在点击路径（云函数冷启动+跨区探活会拖到数秒）。
+    // 死岗由后台定时探活(③) + 看板加载时的展示校验(②，非阻塞)挤掉，不挡用户这一下。
+    window.open(job.jd_url, "_blank", "noopener,noreferrer");
     track("job_click", { job_id: job.id, company: job.company });
     supabase.auth.getSession().then(({ data: { session } }) => {
       const uid = session?.user?.id;
