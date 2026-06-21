@@ -170,6 +170,43 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayJobs]);
 
+  // 展示时校验（②层）：给当下看到的岗位异步探活，死的当场从看板隐藏（不等用户点）。
+  // 只探可探的源(wt/hotjob/workday)，服务端跳过 24h 内刚探过的；requested ref 防重复请求。
+  const [deadIds, setDeadIds] = useState<Set<string>>(new Set());
+  const livenessRequested = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const ids = displayJobs
+      .filter((j) => j.id && !livenessRequested.current.has(j.id) && !deadIds.has(j.id))
+      .map((j) => j.id)
+      .slice(0, 25);
+    if (ids.length === 0) return;
+    ids.forEach((id) => livenessRequested.current.add(id));
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await fetch("/api/jobs/liveness-check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }),
+        });
+        const data = await resp.json();
+        if (!cancelled && data?.ok && Array.isArray(data.dead) && data.dead.length) {
+          setDeadIds((prev) => {
+            const next = new Set(prev);
+            (data.dead as string[]).forEach((id) => next.add(id));
+            return next;
+          });
+        }
+      } catch {
+        // 静默：探不动就不动，点击门 + 后台扫兜底
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayJobs]);
+
   // 一键放宽城市 + 岗位类型（保留关键词），让本次发现的岗位可见。
   function relaxLocationAndType() {
     setFilters((f) => ({ ...f, city: "", jobType: "" }));
@@ -345,9 +382,9 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
         </p>
       )}
       <div className="space-y-3">
-        {displayJobs.map((job, i) => {
+        {displayJobs.filter((job) => !deadIds.has(job.id)).map((job, i, arr) => {
           const tier = (job as any).__tier as "exact" | "related";
-          const prevTier = i > 0 ? ((displayJobs[i - 1] as any).__tier as string) : null;
+          const prevTier = i > 0 ? ((arr[i - 1] as any).__tier as string) : null;
           const showDivider =
             Boolean(filters.keyword) && tier === "related" && prevTier !== "related";
           return (
