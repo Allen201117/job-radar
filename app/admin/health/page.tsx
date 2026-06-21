@@ -1,41 +1,69 @@
 import Navbar from "@/components/Navbar";
 import { MetricTile, ProductHero, ProductPage } from "@/components/ProductChrome";
 import {
+  buildDailyReports,
+  evaluateTodayHealth,
   formatPercent,
   normalizeCrawlSources,
-  normalizeDiscoveryModes,
-  normalizeInsightDimensions,
   type CrawlSourceRow,
-  type DiscoveryFailureRow,
-  type DiscoveryModeRow,
-  type InsightDimensionRow,
+  type DailyReport,
+  type OpsRunAggregateRow,
+  type TodayCrawlRow,
+  type TodayDiscoveryRow,
 } from "@/lib/admin-health";
 import { isAdmin } from "@/lib/auth";
 import { getJobsHealthSnapshot } from "@/lib/jobs-store/read";
 import { createServiceClient } from "@/lib/supabaseService";
 import {
-  ArrowsClockwise,
   Briefcase,
+  Bug,
+  ChartBar,
+  CheckCircle,
+  Clock,
+  Compass,
   Database,
   FileText,
+  Heartbeat,
+  MagnifyingGlass,
+  PaperPlaneTilt,
   Pulse,
   ShieldCheck,
+  UserCircle,
+  Users,
 } from "@phosphor-icons/react/ssr";
 import { redirect } from "next/navigation";
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 
 export const dynamic = "force-dynamic";
 
 type SupabaseHealthSnapshot = {
   window_days?: number;
   crawl_sources?: CrawlSourceRow[];
-  discovery_modes?: DiscoveryModeRow[];
-  discovery_failures?: DiscoveryFailureRow[];
   insight?: {
     active_total?: number;
-    dimensions?: InsightDimensionRow[];
     disputes_total?: number;
     disputes_open?: number;
+    today_created?: number;
+  };
+  today?: {
+    crawl?: TodayCrawlRow;
+    discovery?: TodayDiscoveryRow;
+    ops_runs?: OpsRunAggregateRow[];
+    users?: {
+      total_users?: number;
+      today_users?: number;
+      users_with_preferences?: number;
+      saved_total?: number;
+      saved_today?: number;
+      applied_total?: number;
+      applied_today?: number;
+    };
+    resume?: {
+      started?: number;
+      succeeded?: number;
+      llm?: number;
+      rule?: number;
+    };
   };
 };
 
@@ -58,7 +86,7 @@ function Section({
   return (
     <section className="surface p-5 sm:p-6">
       <div className="mb-5">
-        <h2 className="text-balance text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{title}</h2>
+        <h2 className="text-balance text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{title}</h2>
         <p className="mt-1 text-pretty text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">{description}</p>
       </div>
       {children}
@@ -74,6 +102,83 @@ function ErrorPanel({ label }: { label: string }) {
     >
       {label}暂不可用。其他数据区仍可正常查看，请稍后重试。
     </div>
+  );
+}
+
+function formatCount(value: number | null | undefined): string {
+  return Number(value || 0).toLocaleString("zh-CN");
+}
+
+function formatRunTime(value: string | null): string {
+  if (!value) return "今日暂无记录";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "今日暂无记录";
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+const REPORT_ICONS: Record<DailyReport["key"], ComponentType<any>> = {
+  crawl: Bug,
+  enrichment: FileText,
+  dead_jobs: Heartbeat,
+  insights: Compass,
+  discovery: MagnifyingGlass,
+};
+
+function OperationCard({ report }: { report: DailyReport }) {
+  const Icon = REPORT_ICONS[report.key];
+  const statusClass = {
+    success: "bg-[#e6f2d3] text-[#5a7a2f] dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]",
+    idle: "bg-[#ece7dd] text-[#6b655a] dark:bg-white/[0.08] dark:text-[#b6ad9d]",
+    failed: "bg-[#f7e6e1] text-[#9c4a3c] dark:bg-[#7a392e]/30 dark:text-[#e6a99f]",
+  }[report.status];
+
+  return (
+    <article className="surface-soft flex h-full flex-col p-4 sm:p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 gap-3">
+          <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
+            <Icon size={20} weight="fill" aria-hidden="true" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{report.title}</h3>
+            <p className="mt-1 text-pretty text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
+              {report.description}
+            </p>
+          </div>
+        </div>
+        <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${statusClass}`}>
+          {report.statusLabel}
+        </span>
+      </div>
+
+      <div className={`mt-5 grid gap-2 ${report.metrics.length >= 3 ? "grid-cols-3" : "grid-cols-2"}`}>
+        {report.metrics.map((metric) => (
+          <div
+            key={metric.label}
+            className="rounded-xl border border-black/[0.06] bg-white/55 px-3 py-3 dark:border-white/[0.08] dark:bg-white/[0.04]"
+          >
+            <p className="text-[11px] text-[#8a8275] dark:text-[#9a9184]">{metric.label}</p>
+            <p className="mt-1 text-lg font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">
+              {metric.value == null ? (
+                <span className="text-sm font-medium text-[#8a8275] dark:text-[#9a9184]">积累中</span>
+              ) : (
+                formatCount(metric.value)
+              )}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <p className="mt-auto flex items-center gap-1.5 pt-4 text-xs text-[#8a8275] dark:text-[#9a9184]">
+        <Clock size={14} aria-hidden="true" />
+        上次运行：{formatRunTime(report.lastRunAt)}
+      </p>
+    </article>
   );
 }
 
@@ -107,7 +212,30 @@ function RatioCard({
   );
 }
 
-function PendingMetric({ title, description }: { title: string; description: string }) {
+function BusinessMetric({
+  label,
+  value,
+  detail,
+  icon: Icon,
+}: {
+  label: string;
+  value: number | string;
+  detail: string;
+  icon: ComponentType<any>;
+}) {
+  return (
+    <div className="surface-soft p-4">
+      <div className="flex items-center gap-2 text-[#6b655a] dark:text-[#b6ad9d]">
+        <Icon size={17} weight="fill" aria-hidden="true" />
+        <p className="text-xs font-medium">{label}</p>
+      </div>
+      <p className="mt-3 text-2xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">{value}</p>
+      <p className="mt-2 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">{detail}</p>
+    </div>
+  );
+}
+
+function AccumulatingMetric({ title, description }: { title: string; description: string }) {
   return (
     <div className="rounded-2xl border border-dashed border-black/10 bg-white/35 p-4 dark:border-white/10 dark:bg-white/[0.03]">
       <div className="flex items-start justify-between gap-3">
@@ -116,15 +244,11 @@ function PendingMetric({ title, description }: { title: string; description: str
           <p className="mt-2 text-pretty text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">{description}</p>
         </div>
         <span className="shrink-0 rounded-full bg-[#ece7dd] px-2.5 py-1 text-[11px] font-semibold text-[#6b655a] dark:bg-white/[0.08] dark:text-[#b6ad9d]">
-          待埋点
+          积累中
         </span>
       </div>
     </div>
   );
-}
-
-function formatCount(value: number | undefined): string {
-  return Number(value || 0).toLocaleString("zh-CN");
 }
 
 export default async function AdminHealthPage() {
@@ -147,11 +271,23 @@ export default async function AdminHealthPage() {
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
   const crawlSources = normalizeCrawlSources(operations?.crawl_sources);
-  const discoveryModes = normalizeDiscoveryModes(
-    operations?.discovery_modes,
-    operations?.discovery_failures,
-  );
-  const insightDimensions = normalizeInsightDimensions(operations?.insight?.dimensions);
+  const reports = buildDailyReports({
+    crawl: operations?.today?.crawl || null,
+    discovery: operations?.today?.discovery || null,
+    insight: { today_created: operations?.insight?.today_created },
+    opsRuns: operations?.today?.ops_runs || [],
+  });
+  const deadReport = reports.find((report) => report.key === "dead_jobs");
+  const todayRemoved = deadReport?.metrics.find((metric) => metric.label === "判死")?.value ?? null;
+  const health = jobs
+    ? evaluateTodayHealth({
+        validActive: jobs.validActive,
+        crawlRuns: operations?.today?.crawl?.runs,
+        crawlFailedRuns: operations?.today?.crawl?.failed_runs,
+      })
+    : null;
+  const users = operations?.today?.users || null;
+  const resume = operations?.today?.resume || null;
   const refreshedAt = new Intl.DateTimeFormat("zh-CN", {
     timeZone: "Asia/Shanghai",
     month: "2-digit",
@@ -161,14 +297,20 @@ export default async function AdminHealthPage() {
     hour12: false,
   }).format(new Date());
 
+  const healthTone = health?.level === "critical"
+    ? "border-[#e0b4ac] bg-[#f7e6e1] text-[#9c4a3c] dark:border-[#7a392e]/60 dark:bg-[#3a201a] dark:text-[#e6a99f]"
+    : health?.level === "warning"
+      ? "border-[#edc995] bg-[#fbecd7] text-[#8f6225] dark:border-[#825d28]/60 dark:bg-[#392a17] dark:text-[#e0b15a]"
+      : "border-[#c8dda9] bg-[#edf6df] text-[#55752e] dark:border-[#5d793d]/60 dark:bg-[#203018] dark:text-[#a3d06a]";
+
   return (
     <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage maxWidth="max-w-6xl">
         <ProductHero
-          eyebrow="系统健康"
-          title="今天的数据健康吗？"
-          description="聚合岗位库、抓取、失活、刷新发现与职业洞察。岗位指标来自香港 PostgreSQL，运营日志与洞察来自 Supabase。"
+          eyebrow="今日健康"
+          title="今天运营得怎么样？"
+          description="先看今天有没有正常跑，再看岗位库质量和用户使用情况。所有数字都来自真实数据库；没有可靠来源的项目会明确标为积累中。"
           icon={Pulse}
           action={
             <div className="surface-soft min-w-44 px-4 py-3 text-right">
@@ -176,22 +318,40 @@ export default async function AdminHealthPage() {
               <p className="mt-1 text-sm font-semibold tabular-nums text-[#3f3a33] dark:text-[#d9d0c2]">
                 {refreshedAt}
               </p>
-              <p className="mt-0.5 text-[11px] text-[#9a9184] dark:text-[#837c70]">Asia/Shanghai</p>
+              <p className="mt-0.5 text-[11px] text-[#9a9184] dark:text-[#837c70]">北京时间</p>
             </div>
           }
         >
           {jobs ? (
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <MetricTile label="有效在招" value={jobs.validActive} icon={Briefcase} tone="white" />
-              <MetricTile label="今日新增" value={jobs.todayNew} icon={Database} tone="lime" />
-              <MetricTile label="今日更新" value={jobs.todayUpdated} icon={ArrowsClockwise} tone="sky" />
-              <MetricTile
-                label="薄卡占 active"
-                value={formatPercent(jobs.thinActive, jobs.activeTotal)}
-                icon={FileText}
-                tone="orange"
-              />
-            </div>
+            <>
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <MetricTile label="能投岗位" value={jobs.validActive} icon={Briefcase} tone="white" />
+                <MetricTile label="今日新进" value={jobs.todayNew} icon={Database} tone="lime" />
+                <MetricTile
+                  label="今日下架"
+                  value={todayRemoved == null ? "积累中" : todayRemoved}
+                  icon={Heartbeat}
+                  tone="orange"
+                />
+                <MetricTile
+                  label="有效率"
+                  value={formatPercent(jobs.validActive, jobs.activeTotal)}
+                  icon={CheckCircle}
+                  tone="sky"
+                />
+              </div>
+              {health && (
+                <div className={`mt-4 flex items-start gap-3 rounded-2xl border px-4 py-3 ${healthTone}`}>
+                  <span className="text-lg" aria-hidden="true">
+                    {health.level === "critical" ? "🔴" : health.level === "warning" ? "⚠️" : "✅"}
+                  </span>
+                  <div>
+                    <p className="text-sm font-semibold">今日判断：{health.label}</p>
+                    <p className="mt-1 text-xs leading-5 opacity-90">{health.message}</p>
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             <ErrorPanel label="岗位库统计" />
           )}
@@ -199,206 +359,202 @@ export default async function AdminHealthPage() {
 
         <div className="mt-6 grid gap-6">
           <Section
-            title="岗位质量与失活"
-            description="有效岗位按 JD 正文不少于 60 字计算；今日更新指今天再次抓到、且不是今天首次发现的岗位。"
-          >
-            {jobs ? (
-              <div className="grid gap-3 sm:grid-cols-3">
-                <RatioCard
-                  label="expired 占全库"
-                  value={formatPercent(jobs.expired, jobs.total)}
-                  detail={`${formatCount(jobs.expired)} 条已确认撤岗；按现行策略会由清理任务永久删除。`}
-                  warning={jobs.expired > 0}
-                />
-                <RatioCard
-                  label="removed 占全库"
-                  value={formatPercent(jobs.removed, jobs.total)}
-                  detail={`${formatCount(jobs.removed)} 条抓取漏看，可在后续重抓时恢复 active。`}
-                  warning={jobs.removed > 0}
-                />
-                <RatioCard
-                  label="active 从未探活"
-                  value={formatPercent(jobs.neverChecked, jobs.activeTotal)}
-                  detail={`${formatCount(jobs.neverChecked)} 条 enrich_checked_at 仍为空，应随巡检轮转持续下降。`}
-                  warning={jobs.neverChecked > 0}
-                />
-              </div>
-            ) : (
-              <ErrorPanel label="岗位失活统计" />
-            )}
-          </Section>
-
-          <Section
-            title={`抓取健康 · 近 ${operations?.window_days || 7} 天`}
-            description="成功率与 partial 比例的分母为 success + partial_success + failed；skipped 单独展示，不混入成功率。无运行记录的启用源显示“—”。"
+            title="各模块每日战报"
+            description="每张卡只回答三件事：今天处理了多少、有没有跑、上次什么时候跑。"
           >
             {!operations ? (
-              <ErrorPanel label="抓取统计" />
-            ) : crawlSources.length === 0 ? (
-              <p className="text-sm text-[#8a8275] dark:text-[#9a9184]">暂无启用 source。</p>
-            ) : (
-              <div className="max-h-[34rem] overflow-auto rounded-2xl border border-black/[0.07] dark:border-white/[0.1]">
-                <table className="w-full min-w-[720px] text-left text-sm">
-                  <thead className="sticky top-0 z-10 bg-[#f4efe6] text-xs text-[#8a8275] dark:bg-[#1c1813] dark:text-[#9a9184]">
-                    <tr>
-                      <th className="px-4 py-3 font-medium">Source</th>
-                      <th className="px-4 py-3 font-medium">Adapter</th>
-                      <th className="px-4 py-3 text-right font-medium">运行</th>
-                      <th className="px-4 py-3 text-right font-medium">成功率</th>
-                      <th className="px-4 py-3 text-right font-medium">Partial</th>
-                      <th className="px-4 py-3 text-right font-medium">失败 / 跳过</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {crawlSources.map((source) => (
-                      <tr
-                        key={source.sourceId}
-                        className="border-t border-black/[0.05] text-[#3f3a33] dark:border-white/[0.08] dark:text-[#d9d0c2]"
-                      >
-                        <td className="max-w-72 truncate px-4 py-3 font-medium">{source.company}</td>
-                        <td className="px-4 py-3 font-mono text-xs text-[#6b655a] dark:text-[#b6ad9d]">
-                          {source.adapterName}
-                        </td>
-                        <td className="px-4 py-3 text-right tabular-nums">{source.runs}</td>
-                        <td className="px-4 py-3 text-right font-semibold tabular-nums">{source.successRate}</td>
-                        <td className="px-4 py-3 text-right tabular-nums">{source.partialRate}</td>
-                        <td className="px-4 py-3 text-right tabular-nums">
-                          <span className={source.failed > 0 ? "font-semibold text-[#9c4a3c] dark:text-[#e6a99f]" : ""}>
-                            {source.failed}
-                          </span>
-                          <span className="text-[#9a9184] dark:text-[#837c70]"> / {source.skipped}</span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Section>
-
-          <Section
-            title={`刷新与发现 · 近 ${operations?.window_days || 7} 天`}
-            description="平均耗时只计算有完整 started_at / finished_at 的运行；失败原因包含 failed 与 partial_success。"
-          >
-            {!operations ? (
-              <ErrorPanel label="刷新与发现统计" />
-            ) : discoveryModes.length === 0 ? (
-              <p className="text-sm text-[#8a8275] dark:text-[#9a9184]">近 7 天暂无刷新或发现运行。</p>
+              <ErrorPanel label="每日战报" />
             ) : (
               <div className="grid gap-3 lg:grid-cols-2">
-                {discoveryModes.map((mode) => (
-                  <div key={mode.mode} className="surface-soft p-4">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <p className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{mode.label}</p>
-                        <p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">
-                          {mode.runs} 次运行 · {mode.completedRuns} 次有完整耗时
-                        </p>
-                      </div>
-                      <div className="rounded-xl bg-[#dbe9fa] px-3 py-2 text-right dark:bg-[#7fb2e8]/15">
-                        <p className="text-[11px] text-[#5f7893] dark:text-[#9fc5ed]">平均耗时</p>
-                        <p className="mt-0.5 font-semibold tabular-nums text-[#2f6299] dark:text-[#7fb2e8]">
-                          {mode.averageDuration}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="mt-4 border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
-                      <p className="text-xs font-medium text-[#6b655a] dark:text-[#b6ad9d]">失败原因</p>
-                      {mode.failures.length ? (
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {mode.failures.map((failure) => (
-                            <span
-                              key={failure.reason}
-                              className="rounded-full bg-[#f7e6e1] px-2.5 py-1 text-xs text-[#9c4a3c] dark:bg-[#7a392e]/30 dark:text-[#e6a99f]"
-                            >
-                              <span className="font-mono">{failure.reason}</span>
-                              <span className="ml-1.5 font-semibold tabular-nums">× {failure.count}</span>
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="mt-2 text-xs text-[#8a8275] dark:text-[#9a9184]">暂无失败原因记录。</p>
-                      )}
-                    </div>
-                  </div>
+                {reports.map((report) => (
+                  <OperationCard key={report.key} report={report} />
                 ))}
               </div>
             )}
           </Section>
 
           <Section
-            title="职业洞察"
-            description="统计当前 active 洞察及申诉队列；维度按洞察表真实枚举展示。"
+            title="岗位库体检"
+            description="看岗位构成、空壳岗和待核查量；招聘源按近 7 天实际运行结果计算成功率。"
           >
-            {!operations ? (
-              <ErrorPanel label="洞察统计" />
+            {!jobs ? (
+              <ErrorPanel label="岗位库体检" />
             ) : (
-              <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-                <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
-                  <RatioCard
-                    label="Active 洞察"
-                    value={formatCount(operations.insight?.active_total)}
-                    detail="当前对用户可用的 active 条目。"
-                  />
-                  <RatioCard
-                    label="全部申诉"
-                    value={formatCount(operations.insight?.disputes_total)}
-                    detail="历史累计提交的申诉。"
-                  />
-                  <RatioCard
-                    label="待处理申诉"
-                    value={formatCount(operations.insight?.disputes_open)}
-                    detail="status=open，需管理员处理。"
-                    warning={Number(operations.insight?.disputes_open || 0) > 0}
-                  />
-                </div>
-                <div className="surface-soft p-4">
-                  <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">Active 洞察按维度</p>
-                  {insightDimensions.length ? (
-                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                      {insightDimensions.map((item) => (
-                        <div
-                          key={item.dimension}
-                          className="rounded-xl border border-black/[0.06] bg-white/55 px-3 py-3 dark:border-white/[0.08] dark:bg-white/[0.04]"
-                        >
-                          <p className="text-xs text-[#8a8275] dark:text-[#9a9184]">{item.label}</p>
-                          <p className="mt-1 text-xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">
-                            {formatCount(item.count)}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="mt-3 text-sm text-[#8a8275] dark:text-[#9a9184]">暂无 active 洞察。</p>
-                  )}
-                </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <RatioCard
+                  label="在招岗位"
+                  value={formatPercent(jobs.activeTotal, jobs.total)}
+                  detail={`${formatCount(jobs.activeTotal)} 条当前在招。首页“能投岗位”只取其中有完整职位描述的高质量岗位。`}
+                />
+                <RatioCard
+                  label="已确认撤岗"
+                  value={formatPercent(jobs.expired, jobs.total)}
+                  detail={`${formatCount(jobs.expired)} 条已确认撤岗，等待清理任务回收。`}
+                  warning={jobs.expired > 0}
+                />
+                <RatioCard
+                  label="暂时下线"
+                  value={formatPercent(jobs.removed, jobs.total)}
+                  detail={`${formatCount(jobs.removed)} 条本轮没抓到，后续再次出现时可以恢复。`}
+                  warning={jobs.removed > 0}
+                />
+                <RatioCard
+                  label="空壳岗占在招"
+                  value={formatPercent(jobs.thinActive, jobs.activeTotal)}
+                  detail={`${formatCount(jobs.thinActive)} 条职位描述不足 60 字，不计入“能投岗位”。`}
+                  warning={jobs.thinActive > 0}
+                />
+                <RatioCard
+                  label="待核查占在招"
+                  value={formatPercent(jobs.neverChecked, jobs.activeTotal)}
+                  detail={`${formatCount(jobs.neverChecked)} 条还没有完成过在招核查，应随每日治理持续下降。`}
+                  warning={jobs.neverChecked > 0}
+                />
               </div>
             )}
+
+            <div className="mt-5 border-t border-black/[0.06] pt-5 dark:border-white/[0.08]">
+              <div className="mb-3">
+                <h3 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">招聘源近 7 天表现</h3>
+                <p className="mt-1 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
+                  成功率按完成、部分完成、失败三类运行计算；没运行过的招聘源显示“—”。
+                </p>
+              </div>
+              {!operations ? (
+                <ErrorPanel label="招聘源统计" />
+              ) : crawlSources.length === 0 ? (
+                <p className="text-sm text-[#8a8275] dark:text-[#9a9184]">暂无启用的招聘源。</p>
+              ) : (
+                <div className="max-h-[34rem] overflow-auto rounded-2xl border border-black/[0.07] dark:border-white/[0.1]">
+                  <table className="w-full min-w-[620px] text-left text-sm">
+                    <thead className="sticky top-0 z-10 bg-[#f4efe6] text-xs text-[#8a8275] dark:bg-[#1c1813] dark:text-[#9a9184]">
+                      <tr>
+                        <th className="px-4 py-3 font-medium">公司</th>
+                        <th className="px-4 py-3 text-right font-medium">运行次数</th>
+                        <th className="px-4 py-3 text-right font-medium">成功率</th>
+                        <th className="px-4 py-3 text-right font-medium">部分完成</th>
+                        <th className="px-4 py-3 text-right font-medium">失败 / 跳过</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {crawlSources.map((source) => (
+                        <tr
+                          key={source.sourceId}
+                          className="border-t border-black/[0.05] text-[#3f3a33] dark:border-white/[0.08] dark:text-[#d9d0c2]"
+                        >
+                          <td className="max-w-80 px-4 py-3">
+                            <p className="truncate font-medium">{source.company}</p>
+                            <p className="mt-0.5 truncate text-[11px] text-[#9a9184] dark:text-[#837c70]">
+                              {source.adapterName}
+                            </p>
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">{source.runs}</td>
+                          <td className="px-4 py-3 text-right font-semibold tabular-nums">{source.successRate}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{source.partialRate}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            <span className={source.failed > 0 ? "font-semibold text-[#9c4a3c] dark:text-[#e6a99f]" : ""}>
+                              {source.failed}
+                            </span>
+                            <span className="text-[#9a9184] dark:text-[#837c70]"> / {source.skipped}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </Section>
 
           <Section
-            title="产品使用指标"
-            description="以下指标没有可靠数据来源，不用现有日志勉强推算；任务 4 埋点接入后再替换为真实数字。"
+            title="用户与业务"
+            description="用户、求职偏好、收藏投递、简历解析和职业洞察均使用现有真实数据。"
           >
-            <div className="grid gap-3 sm:grid-cols-3">
-              <PendingMetric
-                title="零结果搜索率"
-                description="需要记录搜索提交、结果数和筛选上下文。"
-              />
-              <PendingMetric
-                title="洞察抽屉打开率"
-                description="需要关联岗位卡曝光与洞察抽屉打开事件。"
-              />
-              <PendingMetric
-                title="简历解析成功率"
-                description="需要记录解析请求、成功、失败类型与文件格式。"
-              />
-            </div>
+            {!operations ? (
+              <ErrorPanel label="用户与业务统计" />
+            ) : (
+              <>
+                {users ? (
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <BusinessMetric
+                      label="总用户数"
+                      value={formatCount(users.total_users)}
+                      detail={`今日新注册 ${formatCount(users.today_users)} 人`}
+                      icon={Users}
+                    />
+                    <BusinessMetric
+                      label="设了求职偏好"
+                      value={formatCount(users.users_with_preferences)}
+                      detail="已保存目标岗位、城市或关键词的用户"
+                      icon={UserCircle}
+                    />
+                    <BusinessMetric
+                      label="收藏岗位"
+                      value={formatCount(users.saved_total)}
+                      detail={`今日新增 ${formatCount(users.saved_today)} 次`}
+                      icon={ChartBar}
+                    />
+                    <BusinessMetric
+                      label="投递记录"
+                      value={formatCount(users.applied_total)}
+                      detail={`今日新增 ${formatCount(users.applied_today)} 次`}
+                      icon={PaperPlaneTilt}
+                    />
+                  </div>
+                ) : (
+                  <ErrorPanel label="用户与操作统计" />
+                )}
+
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {resume ? (
+                    <>
+                      <BusinessMetric
+                        label="今日简历解析"
+                        value={formatCount(resume.started)}
+                        detail={`成功率 ${formatPercent(resume.succeeded, resume.started)}`}
+                        icon={FileText}
+                      />
+                      <BusinessMetric
+                        label="简历解析方式"
+                        value={`${formatCount(resume.llm)} / ${formatCount(resume.rule)}`}
+                        detail="智能解析 / 规则解析"
+                        icon={CheckCircle}
+                      />
+                    </>
+                  ) : (
+                    <ErrorPanel label="简历解析统计" />
+                  )}
+                  <BusinessMetric
+                    label="可用职业洞察"
+                    value={formatCount(operations.insight?.active_total)}
+                    detail={`今日新增 ${formatCount(operations.insight?.today_created)} 条`}
+                    icon={Compass}
+                  />
+                  <BusinessMetric
+                    label="待处理申诉"
+                    value={formatCount(operations.insight?.disputes_open)}
+                    detail={`历史累计 ${formatCount(operations.insight?.disputes_total)} 条`}
+                    icon={ShieldCheck}
+                  />
+                </div>
+
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <AccumulatingMetric
+                    title="洞察抽屉打开率"
+                    description="需要先持续记录岗位卡曝光和洞察打开事件，数据稳定后再展示。"
+                  />
+                  <AccumulatingMetric
+                    title="零结果搜索率"
+                    description="需要先持续记录搜索提交、筛选条件和返回结果数，暂不拿别的日志代替。"
+                  />
+                </div>
+              </>
+            )}
           </Section>
 
           <div className="flex items-center gap-2 px-1 text-xs text-[#8a8275] dark:text-[#9a9184]">
             <ShieldCheck size={15} weight="fill" aria-hidden="true" />
-            该页面仅管理员可访问；数据查询在服务端执行。
+            该页面仅管理员可访问；两套数据库分别读取，任一侧异常时另一侧仍可显示。
           </div>
         </div>
       </ProductPage>

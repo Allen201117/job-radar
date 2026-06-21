@@ -38,10 +38,21 @@ def sweep(sb, now=None):
 
 def main():
     import db
+    import ops_runs
     if not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SERVICE_ROLE_KEY")):
         print("✗ 缺少 SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY，先 source .env.local")
         sys.exit(1)
-    sweep(db.get_supabase())
+    sb = db.get_supabase()
+    started_at = datetime.now(timezone.utc).isoformat()
+    retired = sweep(sb)
+    ops_runs.record_ops_run(
+        sb,
+        "insight_staleness",
+        {"retired": retired},
+        status="success",
+        started_at=started_at,
+        finished_at=datetime.now(timezone.utc).isoformat(),
+    )
 
 
 if __name__ == "__main__":

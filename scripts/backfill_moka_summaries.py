@@ -19,11 +19,13 @@ import argparse
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "crawler"))
 import db  # noqa: E402
 import jobs_db  # noqa: E402
 import normalizer  # noqa: E402
+import ops_runs  # noqa: E402
 
 # JD 正文容器候选（moka 不同租户 class 不一）。取所有命中里**文本最长**的一个，比单一固定 class 稳。
 _JD_SELECTORS = (
@@ -129,6 +131,7 @@ def _mark_fail(sb, row, dry_run, jobs_conn=None):
 
 
 def main():
+    started_at = datetime.now(timezone.utc).isoformat()
     ap = argparse.ArgumentParser(description="Moka summary 回填器")
     ap.add_argument("--limit", type=int, default=50, help="本片最多回填多少岗（控时长）")
     ap.add_argument("--shard", type=str, default="0/1",
@@ -156,6 +159,13 @@ def main():
     tag = f"[shard {k}/{n}]"
     print(f"{tag} 全部待回填 {len(all_rows)}，本片认领 {len(rows)}（limit={args.limit}）")
     if not rows:
+        if not args.dry_run and not args.probe:
+            ops_runs.record_ops_run(
+                sb,
+                "enrich_backlog",
+                {"checked": 0, "enriched": 0, "failed": 0, "adapter": "moka"},
+                started_at=started_at,
+            )
         return
 
     from playwright.sync_api import sync_playwright
@@ -216,6 +226,19 @@ def main():
 
     print(f"\n{tag} 完成：回填 {filled}，失败/无JD {failed}，"
           f"耗时 {(time.time()-t0)/60:.1f} 分钟{'（dry-run 未写库）' if args.dry_run else ''}")
+    if not args.dry_run and not args.probe:
+        ops_runs.record_ops_run(
+            sb,
+            "enrich_backlog",
+            {
+                "checked": len(rows),
+                "enriched": filled,
+                "failed": failed,
+                "adapter": "moka",
+            },
+            status=ops_runs.status_from_counts(len(rows), failed),
+            started_at=started_at,
+        )
 
 
 if __name__ == "__main__":
