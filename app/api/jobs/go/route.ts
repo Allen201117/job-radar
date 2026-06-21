@@ -6,7 +6,7 @@
 //   · 实时探到撤岗 → 标记下架 + 「已关闭」提示页；探到在招 → 盖探活戳后放行。
 // 安全：探测的目标 URL 取自库里已存的 jd_url（非用户传入）→ 无 SSRF；门仅认证用户可用（从认证看板打开）。
 import { NextRequest, NextResponse } from "next/server";
-import { requireUser } from "@/lib/apiAuth";
+import { hasSessionCookie } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
 import { jobsStoreEnabled, jobsByIds } from "@/lib/jobs-store/read";
 import { markJobExpiredById, touchJobCheckedById } from "@/lib/jobs-store/write";
@@ -53,11 +53,10 @@ text-decoration:none;font-weight:600}</style></head>
 }
 
 export async function GET(request: NextRequest) {
-  const auth = await requireUser();
-  if (auth.error) return auth.error; // 未登录 401（门只从认证看板打开）
-
   const id = request.nextUrl.searchParams.get("id") || "";
   if (!id) return NextResponse.redirect(new URL("/jobs", request.url), 302);
+  // 廉价登录态判断（不联网）——门只跳转/标 expired，不碰用户数据，省掉 getUser() ~0.3s 往返。
+  const loggedIn = hasSessionCookie(request);
 
   const useStore = jobsStoreEnabled();
   const service = createServiceClient();
@@ -89,6 +88,9 @@ export async function GET(request: NextRequest) {
   if (Number.isFinite(checkedAt) && Date.now() - checkedAt < FRESH_MS) {
     return toJob(request, job.jd_url);
   }
+
+  // 匿名请求（无会话 cookie）：只跳转、不花一次探测（防滥用 + 省时）；已知死岗/最近探活的上面已处理。
+  if (!loggedIn) return toJob(request, job.jd_url);
 
   // 4. 取源 adapter + source_url（sources 永远在 Supabase）
   const { data: src } = await service
