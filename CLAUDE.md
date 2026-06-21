@@ -112,6 +112,7 @@ app/                     # Next.js App Router 页面
   preferences/ saved/ applied/    # 偏好 / 收藏 / 已投递
   sources/               # Sources 源管理（仅管理员）：列表 + 「添加源」表单（SourceManager）
   admin/insights/        # 洞察管理页（仅管理员）：列/增/改/下架洞察 + 处理申诉（InsightsAdminClient）
+  admin/health/          # 运营数据看板（仅管理员）：今日健康 + 各模块每日战报 + 岗位库体检 + 用户业务（去黑话 + 数据准确）
   login/ auth/callback/  # 登录与 OAuth 回调
   api/search|discovery|resume/route.ts   # 岗位层后端入口
   api/sources/route.ts   # admin 加招聘源（service-role 写 sources，绕 RLS 无 INSERT 策略）
@@ -125,6 +126,8 @@ components/              # JobCard / JobFilters / PreferenceForm / Navbar / Resu
                          # CompanyInsightDrawer（公司洞察抽屉，从 JobCard 打开；portal 到 body 防闪烁）
 lib/                     # 工具层：supabaseClient、auth、scoring、types、utils
                          # supabaseService（service-role 客户端工厂，admin 写库共用）
+                         # apiAuth（requireUser/requireAdmin/assertOwnership 统一鉴权，service-role 路由共用）
+                         # track（自有埋点：简历解析质量等去标识 diagnostics 白名单写 events）、admin-health（运营看板聚合纯函数 + 术语→人话映射）
                          # source-adapters（adapter/抓取方式白名单 + validateSourceInput 纯函数）
                          # live-search（已知源刷新格式化/校验）、official-discovery、
                          # baidu-qianfan-search、china-keyword-expansion、china-official-sources、client-job-mapping
@@ -134,6 +137,7 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #   meituan,kuaishou,bilibili,pinduoduo,vivo,byd}.py
                          #   china_ats.py = 本土通用 ATS（moka / beisen / company_spa；host 从 source_url 动态解析，浏览器拦截 SPA）
                          # run.py / db.py / normalizer.py / robots.py / discovery.py
+                         # ops_runs.py = 后台任务每日台账旁路写入（写 ops_runs 表，失败不阻断主任务；运营看板②每日战报数据源）
                          # probe.py = 扩源探活器：批量 live 探活候选源，仅把「真返回岗位」的写进迁移（本机跑 python3 probe.py --all --emit 025）
                          # 洞察供给：insight_backlog.py(T2 Wikidata+EDGAR+巨潮/T3 经验 drain) / insight_engine.py(接地→判官→共识) / wikidata.py / official_edgar.py(SEC 美股) / official_cninfo.py(巨潮 A股,默认关需 INSIGHT_CNINFO_ENABLED) / insight_sweep.py(过期下架)
                          # search_router.py = T3 多源搜索路由：search_{bocha,tavily,serper,qianfan} provider + search_budget(每源日顶 search_usage 表)；配哪个 key 用哪个、未配跳过、多源并取喂≥2 publisher 共识门
@@ -143,22 +147,25 @@ supabase/migrations/     # 001_init → 002_rls → … → 007_candidate_profil
                          # → 013_career_insights（模块 B 5 表 + RLS）→ 014_seed_career_insights（四维种子草稿）
                          # → 015_verify_experience_sources（experience 真实来源核验）
                          # → 016_rewrite_culture_and_experience_copy（去「避坑」+ 9 条 experience 正文改通俗）
+                         # → …（前缀递增，详见目录）→ 158_admin_health_snapshot → 159_admin_ops_dashboard（ops_runs 台账表 + 运营看板聚合函数）
 .github/workflows/daily-crawl.yml   # 每日 + 手动抓取
 tests/                   # node --test 单测
 ```
 
-## 数据库表（8 张，权限见 002_rls.sql）
+## 数据库表（核心表，权限见 002_rls.sql）
 
 | 表 | 用途 | 权限 |
 |---|---|---|
-| profiles | 用户扩展信息 | 自己读写 |
+| profiles | 用户扩展信息（含 `role`，管理员判定靠它） | 自己读写 |
 | sources | 企业招聘源 | 所有人读，crawler 写 |
 | source_candidates | 官方源发现候选 | admin 读，service role 写 |
-| jobs | 共享岗位库 | 所有人读，crawler 写 |
+| jobs | 共享岗位库（已迁自建香港 PG，见核心产品原则 §4） | 所有人读，crawler 写 |
 | user_preferences | 用户偏好 | 自己读写 |
 | job_actions | 收藏/忽略/投递 | 自己读写 |
 | crawl_runs | 抓取日志 | admin 读，crawler 写 |
 | discovery_runs | 官方源发现日志 | admin 读，service role 写 |
+| events | 自有埋点（简历解析质量等去标识 diagnostics） | 自己写，admin 聚合 |
+| ops_runs | 后台任务每日台账（运营看板②每日战报来源，迁移 159） | service_role 读写 |
 
 共享 `jobs`，偏好与操作按 `user_id` 隔离（同一岗位可被 A 标投递、B 标收藏）。
 
@@ -226,6 +233,8 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 ## 认证
 
 Supabase Auth（邮箱登录）+ cookie session。`middleware.ts` 排除 `/api/*`，API 未登录返回 `401 application/json`，不被页面重定向拦截。Sources 页仅管理员。
+
+**管理员判定**：页面 `lib/auth.isAdmin()` = `profiles.role === 'admin'`（开管理员 = 把该用户 `profiles.role` 改成 `'admin'`，不是环境变量）；`/admin/insights`、`/admin/health` 都用它做门。
 
 **页面取当前用户走 `lib/auth.getRequestUser()`，别在页面里再调 `supabase.auth.getUser()`（性能）**：middleware 已对每个页面请求做过 `getUser()`（安全级验证 + 会话刷新 + 未登录重定向），并把验证后的 `user.id/email` 注入转发请求头 `x-user-id`/`x-user-email`（仅服务端可见、入口先 delete 防伪造）；页面用 `getRequestUser()` 零网络读取，省掉每次导航重复一次 auth 网络往返。注意：① `/api/*` 不经 middleware，仍各自 `getUser()`/`requireUser()`；② 改 middleware 的请求头转发时，cookie 头须在 `getUser()` 之后用刷新过的 `request.cookies` 重写，否则 token 刷新那一拍页面会拿到过期 cookie。
 
