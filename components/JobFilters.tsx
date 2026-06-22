@@ -8,6 +8,7 @@ import {
   CaretDown,
   Funnel,
   GlobeHemisphereEast,
+  GraduationCap,
   MapPin,
   MagnifyingGlass,
   SortAscending,
@@ -25,6 +26,7 @@ interface Filters {
   sortBy: "match" | "newest";
   capitalOrigin: string;
   salaryOnly: boolean;
+  education: string;
 }
 
 interface Props {
@@ -48,6 +50,7 @@ export default function JobFilters({ filters, onChange, companies }: Props) {
     filters.company,
     filters.city,
     filters.jobType,
+    filters.education,
     filters.keyword,
     filters.capitalOrigin,
     filters.showNewOnly ? "仅新岗位" : "",
@@ -115,6 +118,17 @@ export default function JobFilters({ filters, onChange, companies }: Props) {
             <option value="校招">校招</option>
             <option value="社招">社招</option>
             <option value="实习">实习</option>
+          </select>
+        </div>
+        <div>
+          <FilterLabel icon={GraduationCap} label="学历" />
+          {/* 门槛语义：选某学历=显示「该学历及以下要求」的岗位（用户够格投）；要求更高的筛掉。"学历不限"=不筛。 */}
+          <select value={filters.education} onChange={(e) => set("education", e.target.value)} className={selectClass}>
+            <option value="">学历不限</option>
+            <option value="博士">博士</option>
+            <option value="硕士">硕士</option>
+            <option value="本科">本科</option>
+            <option value="大专">大专</option>
           </select>
         </div>
         <div>
