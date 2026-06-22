@@ -269,7 +269,7 @@ export function useDiscoveryPoll({
     setRefreshing(true);
     setResult(null); // 清掉上一轮的完成提示
     kindRef.current = "refresh";
-    setSearchInfo("正在更新你关注的公司…");
+    setSearchInfo("正在刷新对口公司…");
     const startedAt = Date.now();
     try {
       const resp = await fetch("/api/refresh", {
@@ -369,42 +369,44 @@ function buildCompletion(
       .map((j: any) => String(j?.company || "").trim())
       .filter(Boolean),
   ).size;
-  const count = shown || got;
   if (kind === "refresh") {
     if (got > 0) {
+      const fresh =
+        created > 0
+          ? `新增 ${created} 个新岗位${producing ? `，来自 ${producing} 家公司` : ""}`
+          : "暂无新岗位（已有岗位已刷到最新）";
       return {
         kind: "refresh",
         tone: "success",
-        title: "更新关注公司 · 完成",
-        detail: scopeCompanies
-          ? `本轮抓取 ${scopeCompanies} 家公司，命中你筛选条件的有 ${producing} 家、共 ${count} 个岗位。`
-          : `本轮新增 ${created} · 更新 ${updated} 个官方岗位${count ? `，来自 ${producing} 家公司` : ""}。`,
+        title: "刷新对口公司 · 完成",
+        detail: scopeCompanies ? `刷新了 ${scopeCompanies} 家对口公司，${fresh}。` : `${fresh}。`,
       };
     }
     return {
       kind: "refresh",
       tone: "empty",
-      title: "更新关注公司 · 完成",
+      title: "刷新对口公司 · 完成",
       detail: scopeCompanies
-        ? `本轮抓取了 ${scopeCompanies} 家公司，但没有同时满足 城市+类型+关键词 的新岗位——可放宽筛选，或这些方向的官方在招本就稀少。`
-        : "本轮没有抓到新岗位，关注的公司暂无更新；可换个筛选条件或稍后再试。",
+        ? `刷新了 ${scopeCompanies} 家对口公司，但没有同时满足 城市+类型+关键词 的新岗位——可放宽筛选，或这些方向的官方在招本就稀少。`
+        : "这次没抓到新岗位，对口公司暂无更新；可换个筛选条件或稍后再试。",
     };
   }
   if (got > 0 || shown > 0) {
     return {
       kind: "discovery",
       tone: "success",
-      title: "扩大官方搜索 · 完成",
-      detail: `本轮新增 ${created} · 更新 ${updated} 个官方岗位${
-        count ? `，来自 ${producing} 家公司` : ""
-      }。`,
+      title: "发掘新公司 · 完成",
+      detail:
+        created > 0
+          ? `新增 ${created} 个新岗位${producing ? `，来自 ${producing} 家公司` : ""}。`
+          : "这些公司的在招岗位已在库里，没有新增。",
     };
   }
   return {
     kind: "discovery",
     tone: "empty",
-    title: "扩大官方搜索 · 完成",
-    detail: "本轮没找到符合该关键词的官方岗位——换个关键词或去掉城市再试。",
+    title: "发掘新公司 · 完成",
+    detail: "这次没找到符合该关键词的新公司岗位——换个关键词或去掉城市再试。",
   };
 }
 
@@ -416,9 +418,9 @@ function formatBrowserDiscoveryResult(data: any) {
     const updated = data?.jobs_updated ?? 0;
     const shown = data?.total ?? 0;
     if (created > 0 || updated > 0 || shown > 0) {
-      return `扩大搜索完成：新增 ${created} / 更新 ${updated} 个官方岗位，本次展示 ${shown} 个。`;
+      return `发掘完成：新增 ${created} 个新岗位，本次展示 ${shown} 个。`;
     }
-    return "扩大搜索完成，但这次没找到符合该关键词的官方岗位——换个关键词或去掉城市再试。";
+    return "发掘完成，但这次没找到符合该关键词的新公司岗位——换个关键词或去掉城市再试。";
   }
   return friendlyFailure(
     data?.failure_reason,
