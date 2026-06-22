@@ -84,6 +84,15 @@ class ClassifyJobFunctionTest(unittest.TestCase):
     def test_product_precedes_algorithm(self):
         self.assertEqual(cke.classify_job_function("AI 产品经理", "", "了解算法"), "产品")
 
+    def test_non_software_engineering_not_rd(self):
+        # 机械/工艺/化工等非软件工程岗仅靠泛词落入研发 → 归「其他」，不被「算法/AI/数据」类查询误召。
+        self.assertEqual(cke.classify_job_function("工艺技术开发（机械/自动化）"), "其他")
+        self.assertEqual(cke.classify_job_function("机械工程师"), "其他")
+        self.assertEqual(cke.classify_job_function("化工工艺开发"), "其他")
+        # 带软件信号的交叉岗仍判研发（保守降级，不误伤机器人/嵌入式）。
+        self.assertEqual(cke.classify_job_function("机械臂算法工程师"), "研发")
+        self.assertEqual(cke.classify_job_function("汽车嵌入式软件工程师"), "研发")
+
 
 class JobMatchesTest(unittest.TestCase):
     """字段感知 + 职能门：发现端（刷新公司库 / 联网发现）精准过滤的核心，与前端看板同口径。"""

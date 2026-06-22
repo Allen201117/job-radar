@@ -146,6 +146,26 @@ _JOB_FUNCTION_RULES = [
 TITLE_ONLY_ANCHORS = {normalize_for_match(t) for t in
                       ["工程师", "engineer", "研发", "developer", "软件", "software"]}
 
+# 非软件「工程/工业」领域硬标记（与 JS NON_SOFTWARE_ENG_DOMAIN 同口径）：机械/工艺/化工/材料/土木…
+# 这些岗常含「开发/技术/工程师」等泛词，会被研发规则吃进「软件研发」桶，但属制造/工业工程领域，
+# 不是软件研发。不隔离则被「算法/AI/数据」等映射到研发职能的查询经职能门/相关层误召。
+_NON_SOFTWARE_ENG_DOMAIN = re.compile(
+    r"机械|机电|机加|钣金|工艺|化工|化学|材料|冶金|铸造|锻造|焊接|焊工|模具|注塑|液压|气动|数控|机床|刀具|"
+    r"工装|夹具|热处理|土木|结构工程|岩土|暖通|给排水|管道|强电|工业工程|生产工艺|制造工艺|工艺技术|纺织|"
+    r"印染|涂装|总装|冲压|车身|底盘|发动机|动力总成|整车|工业自动化|机械自动化"
+)
+# 软件/IT/算法信号（与 JS SOFTWARE_ENG_SIGNAL 同口径）：命中其一则即使带工业标记仍判软件研发
+#（机器人/自动驾驶/嵌入式软件等交叉岗）。故意排除泛词 研发/开发/技术/工程师 及过常见的「数据」。
+_SOFTWARE_ENG_SIGNAL = re.compile(
+    r"软件|software|算法|algorithm|前端|frontend|front[\s-]?end|后端|backend|back[\s-]?end|全栈|"
+    r"full[\s-]?stack|客户端|服务端|嵌入式|固件|firmware|测试开发|自动化测试|sdet|运维|sre|devops|"
+    r"架构师|代码|编程|程序员|programmer|\bjava\b|python|golang|c\+\+|c#|\.net|javascript|typescript|"
+    r"\breact\b|\bvue\b|机器学习|machine\s*learning|深度学习|deep\s*learning|\bml\b|\bnlp\b|大模型|"
+    r"\bllm\b|\bai\b|人工智能|计算机视觉|\bcv\b|系统开发|平台开发|web|\bapp\b|小程序|数据库|database|"
+    r"\bsql\b|云计算|区块链",
+    re.I,
+)
+
 
 def classify_job_function(title="", job_type="", summary="") -> str:
     text = normalize_for_match(" ".join(str(x) for x in (title, job_type, summary) if x))
@@ -153,6 +173,12 @@ def classify_job_function(title="", job_type="", summary="") -> str:
         return "其他"
     for name, rule in _JOB_FUNCTION_RULES:
         if rule.search(text):
+            # 领域降级门：仅靠泛词落入「研发」、却带非软件工业领域硬标记、且无软件信号 → 归「其他」，
+            # 不塌进软件研发桶（杜绝「算法/AI/数据」类查询经职能门误召，与 JS 同口径）。
+            if (name == "研发"
+                    and _NON_SOFTWARE_ENG_DOMAIN.search(text)
+                    and not _SOFTWARE_ENG_SIGNAL.search(text)):
+                continue
             return name
     return "其他"
 

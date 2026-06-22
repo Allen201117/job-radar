@@ -164,6 +164,37 @@ test("exclude_keywords hit hard-filters the job regardless of showIgnored/showAp
   assert.ok(!forced.some((job) => job.id === "job-drop"));
 });
 
+test("不把非软件工程岗误判为命中目标方向（用户实锤：机械工艺岗 ✗ AI 数据产品经理）", () => {
+  // 「工艺技术开发（机械/自动化）」与目标「AI 数据产品经理」毫不相干，
+  // 旧逻辑经相关层把它判成命中 role + 高匹配。修复后不应再产生 role 命中理由。
+  const job = {
+    ...makeJob("proc-eng", "工艺技术开发（机械/自动化）", "杭州", ""),
+    company: "农夫山泉 养生堂",
+    first_seen_at: new Date(Date.now() - 6 * 86400000).toISOString(),
+  };
+  const prefs = {
+    ...makePreferences(),
+    target_roles: ["AI 数据产品经理"],
+    target_locations: ["杭州"],
+    target_keywords: [],
+    target_companies: [],
+    exclude_keywords: [],
+  };
+
+  const result = scoreJob(job, prefs, []);
+  assert.ok(
+    !result.match_reasons.some((r) => r.type === "role"),
+    "机械工艺岗不应出现「命中目标方向」理由",
+  );
+  assert.equal(result.content_matched, false, "无内容信号命中");
+  // 仅命中城市(+20)+新鲜(+10)=30 < 40 → 不应是「高匹配」。
+  assert.ok(result.score < 40, "不应到达高匹配阈值");
+
+  // Today 看板相关性门：有 role 信号但内容不命中 → 应被过滤掉，不刷屏。
+  const shown = sortAndFilterJobs([job], prefs, [], { requireRelevance: true });
+  assert.equal(shown.length, 0, "机械工艺岗应被相关性门过滤出 Today 看板");
+});
+
 test("requireRelevance drops jobs with no role/keyword/company match when user has content signal", () => {
   const jobs = [
     makeJob("hit", "数据分析师"), // 标题命中 role「数据分析」
