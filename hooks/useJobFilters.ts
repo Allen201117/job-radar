@@ -157,8 +157,11 @@ export function useJobFilters({
     () => new Set(officialJobs.map((j) => j.jd_url || j.id)),
     [officialJobs],
   );
+  // 本次刷新/发掘带回的岗位，后端已按当前 keyword 抓取过滤（job_matches_query 用【完整】岗位描述匹配）。
+  // 入库后描述被截断/清空，前端再用残缺数据跑 keyword 匹配会把后端已命中的误杀（曾「带回 22、0 合筛选」）。
+  // → 信任后端关键词过滤：本次结果不再重筛 keyword，仅按城市/类型（字段未丢、缺失放行）软筛 + 排序。
   const newMatching = useMemo(
-    () => filterAndRankJobs(officialJobs as ScoredJob[], filters, sessionNewKeys),
+    () => filterAndRankJobs(officialJobs as ScoredJob[], { ...filters, keyword: "" }, sessionNewKeys),
     [officialJobs, filters, sessionNewKeys],
   );
   const newViewActive = onlyNew && officialJobs.length > 0;
