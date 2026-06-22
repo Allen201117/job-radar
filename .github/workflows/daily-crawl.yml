@@ -2,8 +2,11 @@ name: daily-job-crawl
 
 on:
   schedule:
-    # UTC 00:00 = 新加坡/中国 08:00
-    - cron: "0 0 * * *"
+    # 每日 4 次（UTC 1/7/13/17 ≈ 中国 9/15/21/次日1点），快档 httpx 轻量抓取，让库全天保持新鲜，
+    # 减轻用户对「主动刷新」的依赖（主动刷新慢且真新增少）。选这 4 个时段：避开 enrich-backlog(每 3h 整点)
+    # 与 18-23 UTC 的富化/巡检密集区，不挤占重档资源。公开仓库 Actions 分钟无限、httpx 档并发数分钟即完，
+    # 提频成本低。原为每日 1 次(UTC 0:00)。
+    - cron: "0 1,7,13,17 * * *"
   workflow_dispatch:
     # 手动触发(无 mode) = 快档 httpx 抓取（不开浏览器、不逐岗富化）；带 mode=discovery 的入参 = 按需「浏览器发现」（由 /api/discovery/dispatch 触发）。
     # 全量逐岗富化 + 浏览器源（beisen/moka/feishu/google/bytedance/tencent）由 enrich-crawl.yml（按天 1/7 轮转）负责。
