@@ -164,6 +164,9 @@ class _FakeRouter:
     def search(self, sb, query, top_k=8, client=None):
         return list(self._results)
 
+    def remaining(self, sb):
+        return 999  # 充足额度，让查询包跑满
+
 
 class TestT3(unittest.TestCase):
     def setUp(self):
@@ -188,6 +191,9 @@ class TestT3(unittest.TestCase):
         items = store.get("insight_items", [])
         self.assertTrue(any(op == "insert" and r["dimension"] == "culture" and r["origin"] == "public_web"
                             for op, r in items))
+        # 多维查询包：年终奖→comp、晋升→path、面试难度→hiring 都该写到对应维度
+        dims = {r["dimension"] for op, r in items if op == "insert"}
+        self.assertTrue({"compensation_intensity", "path", "hiring"} <= dims, f"应覆盖多维，实得 {dims}")
         self.assertTrue(any(op == "insert" and r.get("valid_until") for op, r in items))  # 带过期日(保鲜)
         self.assertTrue(store.get("insight_sources"))   # 多来源已附（过共识门）
         self.assertTrue(any(p.get("status") == "retired"

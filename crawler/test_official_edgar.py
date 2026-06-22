@@ -62,5 +62,50 @@ class TestSubmissionsToListing(unittest.TestCase):
         self.assertIsNone(E.submissions_to_listing(None, "X"))
 
 
+class TestFinancials(unittest.TestCase):
+    FACTS = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {"units": {"USD": [
+                    {"end": "2023-12-31", "val": 1000, "fy": 2023, "fp": "FY", "form": "10-K"},
+                    {"end": "2024-12-31", "val": 1200, "fy": 2024, "fp": "FY", "form": "10-K"},
+                ]}},
+                "NetIncomeLoss": {"units": {"USD": [
+                    {"end": "2024-12-31", "val": 150, "fy": 2024, "fp": "FY", "form": "10-K"},
+                ]}},
+            },
+            "dei": {"EntityNumberOfEmployees": {"units": {"pure": [
+                {"end": "2024-12-31", "val": 5000, "fy": 2024, "fp": "FY", "form": "10-K"},
+            ]}}},
+        },
+    }
+
+    def test_extracts_latest_annual_with_yoy(self):
+        fin = E.financials_from_companyfacts(self.FACTS)
+        self.assertEqual(fin["fy"], 2024)
+        self.assertEqual(fin["revenue"], 1200)        # 取最新财年
+        self.assertEqual(fin["net_income"], 150)
+        self.assertEqual(fin["revenue_yoy_pct"], 20)  # (1200-1000)/1000
+        self.assertEqual(fin["employees"], 5000)
+
+    def test_alt_revenue_concept(self):
+        facts = {"facts": {"us-gaap": {"RevenueFromContractWithCustomerExcludingAssessedTax": {"units": {"USD": [
+            {"end": "2024-12-31", "val": 999, "fy": 2024, "fp": "FY", "form": "10-K"}]}}}}}
+        self.assertEqual(E.financials_from_companyfacts(facts)["revenue"], 999)
+
+    def test_empty_or_no_annual_returns_none(self):
+        self.assertIsNone(E.financials_from_companyfacts({}))
+        self.assertIsNone(E.financials_from_companyfacts(None))
+        self.assertIsNone(E.financials_from_companyfacts({"facts": {"us-gaap": {}}}))
+
+    def test_sentence_formats_human(self):
+        s = E.financials_sentence({"fy": 2024, "revenue": 1_200_000_000, "net_income": 150_000_000,
+                                   "revenue_yoy_pct": 20, "employees": 5000})
+        self.assertIn("营收", s)
+        self.assertIn("同比", s)
+        self.assertIn("员工", s)
+        self.assertIn("FY2024", s)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,10 @@ TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 EDGAR_COMPANY_URL = ("https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
                      "&CIK={cik}&type=&dateb=&owner=include&count=40")
+COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+# 营收 concept 名随 GAAP 版本变 → 依次尝试取首个有年度值的
+_REVENUE_CONCEPTS = ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"]
+_ANNUAL_FORMS = ("10-K", "20-F", "40-F")
 UA = {"User-Agent": os.environ.get(
     "SEC_EDGAR_UA",
     "JobRadar/1.0 (https://github.com/Allen201117/job-radar; career-insights enrichment)")}
@@ -77,6 +81,91 @@ def submissions_to_listing(subs: dict, ticker: str) -> Optional[dict]:
     }
 
 
+# ---------- 业绩（XBRL companyfacts）：营收/净利/同比/员工 ----------
+
+def _annual_series(facts: dict, concept: str, unit: str = "USD"):
+    """某 concept 的年度(FY/10-K等)值序列 [(fy, val, end)]，按 end 升序。纯函数。"""
+    try:
+        units = facts["facts"]["us-gaap"][concept]["units"][unit]
+    except (KeyError, TypeError):
+        return []
+    out = []
+    for it in units:
+        if (it.get("fp") == "FY" and it.get("form") in _ANNUAL_FORMS
+                and isinstance(it.get("val"), (int, float)) and it.get("end")):
+            out.append((it.get("fy"), it["val"], it["end"]))
+    out.sort(key=lambda x: x[2])
+    return out
+
+
+def _latest_employees(facts: dict) -> Optional[int]:
+    try:
+        units = facts["facts"]["dei"]["EntityNumberOfEmployees"]["units"]["pure"]
+    except (KeyError, TypeError):
+        return None
+    vals = [(it["end"], it["val"]) for it in units
+            if isinstance(it.get("val"), (int, float)) and it.get("end")]
+    if not vals:
+        return None
+    vals.sort()
+    return int(vals[-1][1])
+
+
+def financials_from_companyfacts(facts) -> Optional[dict]:
+    """EDGAR companyfacts JSON → 最近财年 营收/净利/营收同比/员工。无可用值返回 None。纯函数。"""
+    if not isinstance(facts, dict):
+        return None
+    rev_series = []
+    for c in _REVENUE_CONCEPTS:
+        rev_series = _annual_series(facts, c)
+        if rev_series:
+            break
+    ni_series = _annual_series(facts, "NetIncomeLoss")
+    emp = _latest_employees(facts)
+    if not rev_series and not ni_series and emp is None:
+        return None
+    rev = rev_series[-1] if rev_series else None
+    rev_prev = rev_series[-2] if len(rev_series) >= 2 else None
+    yoy = (round((rev[1] - rev_prev[1]) / abs(rev_prev[1]) * 100)
+           if rev and rev_prev and rev_prev[1] else None)
+    ni = ni_series[-1] if ni_series else None
+    return {
+        "fy": rev[0] if rev else (ni[0] if ni else None),
+        "revenue": rev[1] if rev else None,
+        "net_income": ni[1] if ni else None,
+        "revenue_yoy_pct": yoy,
+        "employees": emp,
+    }
+
+
+def _fmt_usd(v) -> Optional[str]:
+    if v is None:
+        return None
+    a = abs(v)
+    if a >= 1e9:
+        return f"{v / 1e9:.1f}B 美元"
+    if a >= 1e6:
+        return f"{v / 1e6:.0f}M 美元"
+    return f"{v:.0f} 美元"
+
+
+def financials_sentence(fin: dict) -> str:
+    """业绩事实正文（追加到 listing item）。无可用字段返回空串。"""
+    parts = []
+    if fin.get("revenue") is not None:
+        parts.append(f"营收约 {_fmt_usd(fin['revenue'])}")
+    if fin.get("net_income") is not None:
+        parts.append(f"净利 {_fmt_usd(fin['net_income'])}")
+    if fin.get("revenue_yoy_pct") is not None:
+        parts.append(f"营收同比 {fin['revenue_yoy_pct']:+d}%")
+    if fin.get("employees"):
+        parts.append(f"员工约 {fin['employees']} 人")
+    if not parts:
+        return ""
+    fy = f"FY{fin['fy']} " if fin.get("fy") else ""
+    return f"据 SEC 财报（{fy}）：{'，'.join(parts)}。"
+
+
 def get_listing_by_ticker(ticker: str, client: Optional[httpx.Client] = None) -> Optional[dict]:
     """ticker → CIK → submissions → listing 事实。失败/查无返回 None（静默，与 wikidata 同口径）。"""
     t = _norm_ticker(ticker)
@@ -91,7 +180,20 @@ def get_listing_by_ticker(ticker: str, client: Optional[httpx.Client] = None) ->
             return None
         r2 = own.get(SUBMISSIONS_URL.format(cik=cik), headers=UA, timeout=TIMEOUT)
         r2.raise_for_status()
-        return submissions_to_listing(r2.json(), t)
+        li = submissions_to_listing(r2.json(), t)
+        if li:
+            try:  # 业绩（companyfacts）：失败不影响上市事实本身，折进同一 listing 卡片
+                r3 = own.get(COMPANYFACTS_URL.format(cik=cik), headers=UA, timeout=TIMEOUT)
+                if r3.status_code < 300:
+                    fin = financials_from_companyfacts(r3.json())
+                    if fin:
+                        li["payload"]["financials"] = fin
+                        sent = financials_sentence(fin)
+                        if sent:
+                            li["content"] = li["content"] + " " + sent
+            except Exception as e:
+                print(f"  [edgar-fin-err] {t}: {type(e).__name__}: {str(e)[:120]}")
+        return li
     except Exception as e:
         print(f"  [edgar-err] {t}: {type(e).__name__}: {str(e)[:140]}")
         return None
