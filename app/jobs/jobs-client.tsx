@@ -92,7 +92,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
   } = useJobFilters({ officialJobs, onlyNew, initialFilters, initialJobs, initialTotal });
 
   // 「更新关注公司 / 扩大官方搜索范围」状态机 + 轮询 + 持久化 + 超时（整体在 hook 内）。
-  const { discovery, refreshing, discoveryActive, startDiscovery, startRefresh } =
+  const { discovery, refreshing, discoveryActive, refreshActive, discoverActive, startDiscovery, startRefresh } =
     useDiscoveryPoll({ filters, setOfficialJobs, setSearchInfo, setResult });
 
   // 收起「查已有岗位」加载态：底层搜索结束且最短可见时间已到才停 spinner。
@@ -274,7 +274,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
           />
           <ActionTile
             icon={ArrowsClockwise}
-            label={refreshing ? "刷新中…" : "刷新对口公司"}
+            label={refreshing || refreshActive ? "刷新中…" : "刷新对口公司"}
             hint="去和你对口的公司官网重抓新岗位 · 约 1–5 分钟"
             tooltip="后台重新抓取「和你偏好/筛选对口的公司」官方招聘页（含需要浏览器的源），有新岗位会自动进列表。没填筛选时按你保存的求职偏好来。约 1–5 分钟。"
             accent="bg-[#dbe9fa] text-[#2f6299] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]"
@@ -283,12 +283,12 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
               startRefresh();
             }}
             disabled={refreshing || discoveryActive}
-            busy={refreshing}
+            busy={refreshing || refreshActive}
             selected={activeSearch === "known"}
           />
           <ActionTile
             icon={Compass}
-            label={discoveryActive ? "发掘中…" : "发掘新公司"}
+            label={discoverActive ? "发掘中…" : "发掘新公司"}
             hint="去库里还没有的公司官网找岗位（需关键词）· 约 1–5 分钟"
             tooltip="用浏览器去抓「库里还没收录的新公司」官方招聘站，并补全职位描述。需要先在上方填「关键词」。约 1–5 分钟。"
             accent="bg-[#e7def4] text-[#6a4fa0] dark:bg-[#b9a3e0]/[0.15] dark:text-[#b9a3e0]"
@@ -297,7 +297,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
               startDiscovery();
             }}
             disabled={refreshing || discoveryActive || !filters.keyword}
-            busy={discoveryActive}
+            busy={discoverActive}
             selected={activeSearch === "discover"}
           />
         </div>
