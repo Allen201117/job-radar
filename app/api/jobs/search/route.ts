@@ -27,6 +27,7 @@ export async function GET(request: NextRequest) {
     jobType: p.get("jobType") || "",
     keyword: p.get("keyword") || "",
     capitalOrigin: p.get("capitalOrigin") || "",
+    education: p.get("education") || "",
     salaryOnly: bool("salaryOnly"),
     showIgnored: bool("showIgnored"),
     showApplied: bool("showApplied"),

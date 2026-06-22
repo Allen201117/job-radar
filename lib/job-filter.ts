@@ -8,6 +8,7 @@ import {
   recruitmentCategory,
 } from "@/lib/china-keyword-expansion";
 import { classifyCompanyOriginWithSource } from "@/lib/company-origin";
+import { educationMatch } from "@/lib/education-rank";
 import type { ScoredJob } from "@/lib/types";
 
 export type Filters = {
@@ -21,6 +22,7 @@ export type Filters = {
   sortBy: "match" | "newest";
   capitalOrigin: string;
   salaryOnly: boolean;
+  education: string; // 用户所选学历（博士/硕士/本科/大专）；""=学历不限（不筛）
 };
 
 export const DEFAULT_FILTERS: Filters = {
@@ -34,6 +36,7 @@ export const DEFAULT_FILTERS: Filters = {
   sortBy: "match",
   capitalOrigin: "",
   salaryOnly: false,
+  education: "",
 };
 
 // 返回岗位通过当前筛选的匹配档："exact"（精确）/ "related"（同职能相关）/ null（不匹配）。
@@ -71,6 +74,13 @@ export function jobFilterTier(
     } else {
       degraded = true; // 类型未知 → 不淘汰，降级排后。
     }
+  }
+  if (filters.education) {
+    // 学历门槛/资格语义（用户拍板）+「信息缺失不淘汰」，全部封装在 educationMatch（纯函数·有单测）：
+    // reject=要求高于用户学历，够不着 → 淘汰；degrade=要求缺失/解析不出 → 不一刀切，降级排后。
+    const verdict = educationMatch(job.education, filters.education);
+    if (verdict === "reject") return null;
+    if (verdict === "degrade") degraded = true;
   }
   if (filters.showNewOnly) {
     if (!job.first_seen_at) return null;
