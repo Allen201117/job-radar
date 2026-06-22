@@ -397,14 +397,17 @@ def _safe_update_run(supabase, run_id, **fields):
 
 
 class CompanyRefreshRecipe:
-    """「刷新公司库」配方：按 scope 选定的 source_ids 跨双 tier 刷新——httpx 源先跑（约 1min 出结果）、
-    浏览器源后跑（chromium 渲染 2-5min）；每抓完一个源就增量回写 discovery_runs（产出 + 进度 + 心跳），
-    支撑前端流式展示。串行单 worker → 无并发写 diagnostics，故「内存累加器整体回写」即原子，无需 RPC。"""
+    """「刷新公司库」配方：httpx 源【并发】先跑（按主机分队、跨主机并行，秒级出结果流式冒头）、
+    浏览器源后置串行（chromium 渲染 2-5min，此时前端已先看到 httpx 结果，不再干等 10 分钟）；每抓完
+    一个源就增量回写 discovery_runs（产出+进度+心跳）支撑前端流式。并发线程安全：jobs 连接(_jobs_conn)
+    与 supabase(_get_thread_supabase) 均 thread-local，adapter 每源独立实例（防 per-source 状态串台，
+    见 run.py:238），累加器与心跳回写用锁串行化（回写同一 run 行须互斥，避免并发覆盖丢更新）。"""
 
     key = "company_refresh"
 
     def run(self, supabase, run_id: str, source_ids: List[str], filters: dict, base_diag: dict) -> dict:
-        import run as runmod  # 延迟导入避免与 run.py 循环依赖；复用全量 ADAPTERS 注册表 + httpx 分档
+        import run as runmod  # 延迟导入避免与 run.py 循环依赖；复用 ADAPTERS + httpx 分档 + 并发基建
+        from concurrent.futures import ThreadPoolExecutor
 
         query = filters.get("query") or filters.get("keyword") or ""
         city = filters.get("city") or ""
@@ -412,51 +415,76 @@ class CompanyRefreshRecipe:
         exclude = filters.get("exclude") or []
 
         rows = db.get_sources_by_ids(supabase, source_ids)
-        # httpx 源先、浏览器源后（让秒级 httpx 结果先流式冒出来，慢的浏览器源随后补）。
-        rows.sort(key=lambda s: 0 if runmod._is_httpx_safe(s.get("adapter_name")) else 1)
         total = len(rows)
+        # 分档：httpx 源并发抓（秒级），浏览器源后置串行（每个 chromium 渲染 2-5min）。
+        httpx_rows = [s for s in rows if runmod._is_httpx_safe(s.get("adapter_name"))]
+        browser_rows = [s for s in rows if not runmod._is_httpx_safe(s.get("adapter_name"))]
 
-        seen = set()
+        lock = _threading.Lock()
+        seen: set = set()
         produced: List[str] = []
-        created = updated = 0
+        acc = {"created": 0, "updated": 0, "done": 0}
         errors: List[str] = []
 
-        for i, source in enumerate(rows, 1):
+        def _fetch_one(source, sb):
+            """抓单源 → 逐岗过滤 → upsert → 锁内累加 + 增量心跳。永不抛（单源失败不炸整批，对齐 run.py 约定）。"""
             adapter_name = source.get("adapter_name")
             company = source.get("company") or adapter_name
-            adapter = runmod.ADAPTERS.get(adapter_name)
-            if adapter is None:
-                errors.append(f"{adapter_name}: unknown_adapter")
+            registered = runmod.ADAPTERS.get(adapter_name)
+            c = u = 0
+            new_urls: List[str] = []
+            err = None
+            if registered is None:
+                err = f"{adapter_name}: unknown_adapter"
             else:
                 try:
+                    # 每源独立实例：adapter 持 per-source 可变状态（workday/oracle 在 fetch 里按 url 设
+                    # self._host 等），并发共享单例会互相覆写 → 岗位张冠李戴（run.py:238-243 实锤）。
+                    adapter = type(registered)()
                     html = adapter.fetch(source["source_url"])
                     raw_jobs = adapter.parse(html)
                     # 逐岗按用户 关键词/城市/类型/排除词 过滤（CLAUDE.md #1/#2）后再入库 + 流式。
                     matched = filter_raw_jobs(raw_jobs, query, city, job_type, exclude)
-                    c, u, urls = _upsert_raw_jobs(
-                        supabase, source["id"], company, source["source_url"], matched
-                    )
-                    created += c
-                    updated += u
-                    for url in urls:  # 跨源去重，避免同一 jd_url 流式时重复成卡片
-                        if url and url not in seen:
-                            seen.add(url)
-                            produced.append(url)
+                    c, u, new_urls = _upsert_raw_jobs(sb, source["id"], company, source["source_url"], matched)
                     print(f"[refresh]   {company}({adapter_name}): parsed={len(raw_jobs)} "
                           f"matched={len(matched)} created={c} updated={u}")
-                except Exception as e:  # noqa: BLE001 —— 单源失败不炸整轮（run.py 同约定）
-                    errors.append(f"{adapter_name}: {type(e).__name__}: {e}")
+                except Exception as e:  # noqa: BLE001 —— 单源失败不炸整批
+                    err = f"{adapter_name}: {type(e).__name__}: {e}"
                     print(f"[refresh]   {adapter_name}: FAILED {type(e).__name__}: {e}")
+            # 锁内：累加 + 跨源去重 + 增量心跳（回写同一 run 行须互斥）。
+            with lock:
+                acc["created"] += c
+                acc["updated"] += u
+                for url in new_urls:  # 跨源去重，避免同一 jd_url 流式时重复成卡片
+                    if url and url not in seen:
+                        seen.add(url)
+                        produced.append(url)
+                if err:
+                    errors.append(err)
+                acc["done"] += 1
+                _safe_update_run(
+                    supabase, run_id,
+                    status="running",
+                    jobs_created=acc["created"], jobs_updated=acc["updated"],
+                    candidates_found=len(produced),
+                    diagnostics={**base_diag, "produced_jd_urls": produced[:200],
+                                 "progress": {"done": acc["done"], "total": total},
+                                 "last_update_at": _now_iso(), "recipe": self.key},
+                )
 
-            # 增量心跳：每源后整体回写 diagnostics（含 last_update_at，兼作卡死检测心跳）。
-            _safe_update_run(
-                supabase, run_id,
-                status="running",
-                jobs_created=created, jobs_updated=updated, candidates_found=len(produced),
-                diagnostics={**base_diag, "produced_jd_urls": produced[:200],
-                             "progress": {"done": i, "total": total},
-                             "last_update_at": _now_iso(), "recipe": self.key},
-            )
+        workers = max(1, int(os.environ.get("CRAWL_CONCURRENCY", "6") or "6"))
+        # 阶段 1：httpx 源并发（按主机分队——同主机串行防限流、跨主机并行；每线程独立 supabase）。
+        if httpx_rows and workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                list(ex.map(
+                    lambda q: [_fetch_one(s, runmod._get_thread_supabase()) for s in q],
+                    runmod._group_by_host(httpx_rows)))
+        else:
+            for s in httpx_rows:
+                _fetch_one(s, supabase)
+        # 阶段 2：浏览器源串行后置（chromium 非线程安全，逐个跑；前端此时已先有 httpx 结果可看）。
+        for s in browser_rows:
+            _fetch_one(s, supabase)
 
         if produced:
             status = "success" if not errors else "partial_success"
@@ -472,8 +500,8 @@ class CompanyRefreshRecipe:
             "status": status,
             "failure_reason": failure_reason,
             "error_message": ("; ".join(errors)[:1000] if errors else None),
-            "jobs_created": created,
-            "jobs_updated": updated,
+            "jobs_created": acc["created"],
+            "jobs_updated": acc["updated"],
             "produced_jd_urls": produced,
             "progress": {"done": total, "total": total},
         }

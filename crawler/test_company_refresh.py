@@ -10,18 +10,22 @@ def _raw(jd_url, title="工程师", company="X"):
     return RawJob(company=company, title=title, location="北京", jd_url=jd_url)
 
 
-class FakeAdapter:
-    def __init__(self, jobs, raise_exc=None):
-        self._jobs = jobs
-        self._raise = raise_exc
+def FakeAdapter(jobs, raise_exc=None):
+    """Mock adapter 工厂：数据存类属性，使生产代码每源 type(adapter)() 重建实例时仍能复现
+    （并发档对每个源新建独立实例隔离状态，见 discovery.py CompanyRefreshRecipe._fetch_one）。"""
+    class _FA:
+        _jobs = list(jobs)
+        _raise = raise_exc
 
-    def fetch(self, url):
-        if self._raise:
-            raise self._raise
-        return "html"
+        def fetch(self, url):
+            if type(self)._raise:
+                raise type(self)._raise
+            return "html"
 
-    def parse(self, html):
-        return list(self._jobs)
+        def parse(self, html):
+            return list(type(self)._jobs)
+
+    return _FA()
 
 
 class CompanyRefreshRecipeTests(unittest.TestCase):
@@ -48,6 +52,7 @@ class CompanyRefreshRecipeTests(unittest.TestCase):
     def _run(self, rows, adapters):
         import run as runmod
         with mock.patch.object(discovery.db, "get_sources_by_ids", return_value=rows), \
+                mock.patch.object(runmod, "_get_thread_supabase", return_value=None), \
                 mock.patch.dict(runmod.ADAPTERS, adapters, clear=False):
             recipe = discovery.CompanyRefreshRecipe()
             return recipe.run(
@@ -111,6 +116,32 @@ class CompanyRefreshRecipeTests(unittest.TestCase):
         result = self._run(rows, adapters)
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["failure_reason"], "all_sources_failed")
+
+    def test_httpx_sources_concurrent_all_fetched_and_deduped(self):
+        import run as runmod
+        rows = [
+            {"id": "s1", "adapter_name": "workday", "company": "A", "source_url": "https://a.wd.com/j"},
+            {"id": "s2", "adapter_name": "greenhouse", "company": "B", "source_url": "https://b.gh.io/j"},
+            {"id": "s3", "adapter_name": "lever", "company": "C", "source_url": "https://c.lever.co/j"},
+        ]
+        adapters = {
+            "workday": FakeAdapter([_raw("https://a/1"), _raw("https://dup/x")]),
+            "greenhouse": FakeAdapter([_raw("https://b/1"), _raw("https://dup/x")]),
+            "lever": FakeAdapter([_raw("https://c/1")]),
+        }
+        # 强制三源都走 httpx 并发档（不依赖真实白名单），验证并发抓取：全抓到 + 跨源去重 + 心跳 done 递增。
+        with mock.patch.object(runmod, "_is_httpx_safe", side_effect=lambda n: True):
+            result = self._run(rows, adapters)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(
+            set(result["produced_jd_urls"]),
+            {"https://a/1", "https://b/1", "https://c/1", "https://dup/x"},
+        )
+        self.assertEqual(len(result["produced_jd_urls"]), 4)  # dup/x 跨源去重只一次
+        self.assertEqual(result["jobs_created"], 5)  # 2+2+1，各源独立 upsert 计数
+        running = [u for u in self.updates if u.get("status") == "running"]
+        self.assertEqual(len(running), 3)
+        self.assertEqual(sorted(u["diagnostics"]["progress"]["done"] for u in running), [1, 2, 3])
 
 
 if __name__ == "__main__":
