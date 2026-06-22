@@ -6,7 +6,7 @@ import { jobsQuery } from "./client";
 import { JOB_COLUMNS } from "./types";
 import { sortAndFilterJobs } from "@/lib/scoring";
 import { filterAndRankJobs, jobFilterTier, countExact, type Filters } from "@/lib/job-filter";
-import { buildTsquery, annotateAndRank } from "@/lib/job-search";
+import { buildTsquery, annotateAndRank, annotateSourceAdapter } from "@/lib/job-search";
 import { ftsCandidateTerms, normalizeChinaCity } from "@/lib/china-keyword-expansion";
 import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 
@@ -31,6 +31,7 @@ async function searchViaFTS(
   offset: number,
   limit: number,
   tsquery: string,
+  adapterBySource?: Map<string, string | null> | null,
 ): Promise<SearchResult> {
   // 不加 order by：让 planner 用 GIN bitmap 只取命中行；排序交给 JS filterAndRankJobs。
   const conds = ["status = 'active'", "search_doc @@ to_tsquery('simple', $1)"];
@@ -45,9 +46,12 @@ async function searchViaFTS(
     params.push(`%${company}%`);
     conds.push(`company ilike $${params.length}`);
   }
-  const rows = await jobsQuery(
-    `select ${JOB_COLUMNS} from jobs where ${conds.join(" and ")} limit ${FTS_CAP}`,
-    params,
+  const rows = annotateSourceAdapter(
+    await jobsQuery(
+      `select ${JOB_COLUMNS} from jobs where ${conds.join(" and ")} limit ${FTS_CAP}`,
+      params,
+    ),
+    adapterBySource,
   );
   const ranked = annotateAndRank(rows, filters, prefs, actions);
   return {
@@ -67,14 +71,18 @@ async function searchViaScan(
   actions: JobAction[],
   offset: number,
   limit: number,
+  adapterBySource?: Map<string, string | null> | null,
 ): Promise<SearchResult> {
   const need = offset + limit;
   const matched: ScoredJob[] = [];
   let off = 0;
   let exhausted = false;
   while (matched.length <= need && !exhausted && off < SCAN_BUDGET) {
-    const rows: any[] = await jobsQuery(
-      `select ${JOB_COLUMNS} from jobs where status='active' order by first_seen_at desc limit ${DB_PAGE} offset ${off}`,
+    const rows: any[] = annotateSourceAdapter(
+      await jobsQuery(
+        `select ${JOB_COLUMNS} from jobs where status='active' order by first_seen_at desc limit ${DB_PAGE} offset ${off}`,
+      ),
+      adapterBySource,
     );
     if (!rows.length) {
       exhausted = true;
@@ -108,6 +116,7 @@ export async function searchJobsStore(
   actions: JobAction[],
   offset: number,
   limit: number,
+  adapterBySource?: Map<string, string | null> | null,
 ): Promise<SearchResult> {
   const keyword = filters.keyword.trim();
   const keywordTerms = keyword ? ftsCandidateTerms(keyword) : [];
@@ -116,10 +125,10 @@ export async function searchJobsStore(
 
   if (tsquery) {
     try {
-      return await searchViaFTS(filters, prefs, actions, offset, limit, tsquery);
+      return await searchViaFTS(filters, prefs, actions, offset, limit, tsquery, adapterBySource);
     } catch {
       // FTS 异常 → 降级扫描，保证搜索永不挂
     }
   }
-  return await searchViaScan(filters, prefs, actions, offset, limit);
+  return await searchViaScan(filters, prefs, actions, offset, limit, adapterBySource);
 }

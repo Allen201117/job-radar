@@ -1,4 +1,6 @@
 // 公司 → 资本来源 分类（用于按外企/美企/德企/日企/欧企筛选）。
+import { isForeignAtsAdapter } from "./domestic-adapters";
+
 const COMPANY_ORIGIN: Record<string, string> = {
   // 中国
   字节跳动: "中国", 腾讯: "中国", 阿里巴巴: "中国", 百度: "中国", 京东: "中国",
@@ -28,4 +30,21 @@ export function classifyCompanyOrigin(company: string | null | undefined): strin
     if (c.includes(kl) || kl.includes(c)) return v;
   }
   return "其它";
+}
+
+// 综合判定资本来源（治本「外企筛选漏放中国公司」）：
+//  1. 公司名名单优先 —— 能判出具体国别（中国/美企/德企/日企/欧企）就信它，名单准且能细分。
+//  2. 名单判不出（"其它"）时看来源：外企 ATS / 外企自建源 → "外企"（笼统，adapter 判不出具体国别）。
+//  3. 其余一律默认 "中国" —— 库里岗位绝大多数为本土，「公司名没收录 + 不是外企源」的几乎都是
+//     未收录的本土公司；默认中国，"外企" 筛选（踢掉 origin==="中国"）才能把它们挡住。
+// 这样选「外企」不会再混入中国公司；代价是选「中国」时极少数「名单未收录 + 走非外企源」的小外企
+// 可能混入（远比旧 bug 轻）。adapter 缺失（前端无源信息）时按规则 3 默认中国，与服务端口径一致。
+export function classifyCompanyOriginWithSource(
+  company: string | null | undefined,
+  adapterName: string | null | undefined,
+): string {
+  const byName = classifyCompanyOrigin(company);
+  if (byName !== "其它") return byName;
+  if (isForeignAtsAdapter(adapterName)) return "外企";
+  return "中国";
 }

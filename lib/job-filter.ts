@@ -6,7 +6,7 @@ import {
   normalizeChinaCity,
   recruitmentCategory,
 } from "@/lib/china-keyword-expansion";
-import { classifyCompanyOrigin } from "@/lib/company-origin";
+import { classifyCompanyOriginWithSource } from "@/lib/company-origin";
 import type { ScoredJob } from "@/lib/types";
 
 export type Filters = {
@@ -65,7 +65,9 @@ export function jobFilterTier(
   if (!filters.showIgnored && job.hidden_reason === "ignored") return null;
   if (!filters.showApplied && job.hidden_reason === "applied_by_default") return null;
   if (filters.capitalOrigin) {
-    const origin = classifyCompanyOrigin(job.company);
+    // 资本来源用「公司名名单 + 来源 adapter 兜底」综合判定：名单外的本土公司靠来源认出，
+    // "外企" 才能正确踢掉它们（job.source_adapter 由服务端搜索标注；前端无则退化为纯名单）。
+    const origin = classifyCompanyOriginWithSource(job.company, job.source_adapter);
     if (filters.capitalOrigin === "外企") {
       if (origin === "中国") return null;
     } else if (origin !== filters.capitalOrigin) return null;
