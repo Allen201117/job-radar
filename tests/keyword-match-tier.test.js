@@ -70,6 +70,23 @@ test("真岗位仍精确命中（标题命中）", () => {
   assert.equal(keywordMatchTier({ title: "Senior Product Manager" }, "pm"), "exact");
 });
 
+test("非软件工程岗不被「AI/数据/产品」类查询经相关层误召（用户实锤）", () => {
+  // 「工艺技术开发（机械/自动化）」职能=其他（非软件研发）→ 不与映射到研发职能的查询相关。
+  const proc = {
+    title: "工艺技术开发（机械/自动化）",
+    company: "农夫山泉 养生堂",
+    location: "杭州",
+  };
+  assert.equal(keywordMatchTier(proc, "AI 数据产品经理"), null, "机械工艺岗不应命中 AI 数据产品经理");
+  assert.equal(keywordMatchTier(proc, "算法"), null);
+  assert.equal(keywordMatchTier(proc, "后端"), null);
+});
+
+test("回归：标题泛而无摘要的真·数据产品岗仍进相关层（不误伤召回）", () => {
+  // 同职能（产品）、标题没把 AI/数据 全写出 → 相关层仍应召回，证明修复只砍误召不伤真召。
+  assert.equal(keywordMatchTier({ title: "数据产品经理" }, "AI 数据产品经理"), "related");
+});
+
 test("function=null 泛组（工程师/软件）只匹配标题，不撞正文", () => {
   // 标题无"工程师/engineer"、仅正文顺带提到 → 不应命中（否则"与 engineer 协作"全中）。
   assert.equal(
