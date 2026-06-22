@@ -100,3 +100,23 @@ test("validateSourceInput: enabled 默认 true，显式 false 保留；notes 空
   assert.equal(r2.value.enabled, true); // 默认启用
   assert.equal(r2.value.crawl_method, "http"); // 默认 http
 });
+
+test("每个 adapter 必标 origin（外企/本土），FOREIGN_ATS_ADAPTERS 由此自动派生", () => {
+  for (const a of S.SOURCE_ADAPTERS) {
+    assert.ok(
+      a.origin === "foreign" || a.origin === "domestic",
+      `${a.value} 缺少合法 origin（foreign/domestic）`,
+    );
+  }
+  // 外企判定名单 = 标 foreign 的 adapter 自动派生；与已知外企集合比对，改 origin 标注 → 此处需同步（drift 可见）。
+  assert.deepEqual(
+    [...S.FOREIGN_ATS_ADAPTERS].sort(),
+    [
+      "amazon", "apple", "apple_cn", "ashby", "eightfold", "google", "greenhouse",
+      "lever", "microsoft", "oracle", "phenom", "siemens", "smartrecruiters", "workday",
+    ].sort(),
+  );
+  assert.equal(S.isForeignAtsAdapter("greenhouse"), true);
+  assert.equal(S.isForeignAtsAdapter("moka"), false);
+  assert.equal(S.isForeignAtsAdapter(null), false);
+});

@@ -1,5 +1,5 @@
 // 公司 → 资本来源 分类（用于按外企/美企/德企/日企/欧企筛选）。
-import { isForeignAtsAdapter } from "./domestic-adapters";
+import { isForeignAtsAdapter } from "./source-adapters";
 
 const COMPANY_ORIGIN: Record<string, string> = {
   // 中国
