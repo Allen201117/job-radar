@@ -2,181 +2,228 @@
 // 招聘源 adapter / 抓取方式的白名单 + 录入校验（纯函数，可单测）
 // adapter 值必须与 crawler/run.py 的 ADAPTERS 字典对齐，否则次日爬虫找不到 adapter。
 // greenhouse / lever 是通用 ATS：只需填公司名 + ATS 地址，无需写代码。
+//
+// origin（外企/本土）是每个 adapter 的必填属性：资本来源筛选的「外企」判定名单
+// FOREIGN_ATS_ADAPTERS 由它自动派生（见文件末尾）→ 加新 adapter 时标一次 origin 即自动生效，
+// 单一数据源、零 drift；漏标 origin 会因类型必填而编译报错。
 // ============================================================
 
 export interface AdapterOption {
   value: string;
   label: string;
+  // 资本来源：foreign=外企（外企判定名单从此派生）；domestic=本土。新增 adapter 必填。
+  origin: "foreign" | "domestic";
   hint?: string;
 }
 
 export const SOURCE_ADAPTERS: AdapterOption[] = [
-  { value: "apple", label: "Apple（全球官网）" },
-  { value: "apple_cn", label: "Apple 中国" },
-  { value: "baidu", label: "百度" },
-  { value: "jd", label: "京东" },
-  { value: "haier", label: "海尔" },
-  { value: "siemens", label: "西门子" },
-  { value: "tencent", label: "腾讯" },
-  { value: "bytedance", label: "字节跳动" },
-  { value: "bytedance_campus", label: "字节跳动 校招 / 实习" },
-  { value: "nio_feishu", label: "蔚来（飞书系）" },
-  { value: "xpeng_feishu", label: "小鹏（飞书系）" },
-  { value: "horizon_feishu", label: "地平线（飞书系）" },
-  { value: "xiaomi_feishu", label: "小米（飞书系）" },
+  { value: "apple", label: "Apple（全球官网）", origin: "foreign" },
+  { value: "apple_cn", label: "Apple 中国", origin: "foreign" },
+  { value: "baidu", label: "百度", origin: "domestic" },
+  { value: "jd", label: "京东", origin: "domestic" },
+  { value: "haier", label: "海尔", origin: "domestic" },
+  { value: "siemens", label: "西门子", origin: "foreign" },
+  { value: "tencent", label: "腾讯", origin: "domestic" },
+  { value: "bytedance", label: "字节跳动", origin: "domestic" },
+  { value: "bytedance_campus", label: "字节跳动 校招 / 实习", origin: "domestic" },
+  { value: "nio_feishu", label: "蔚来（飞书系）", origin: "domestic" },
+  { value: "xpeng_feishu", label: "小鹏（飞书系）", origin: "domestic" },
+  { value: "horizon_feishu", label: "地平线（飞书系）", origin: "domestic" },
+  { value: "xiaomi_feishu", label: "小米（飞书系）", origin: "domestic" },
   {
     value: "greenhouse",
     label: "Greenhouse（通用 ATS）",
+    origin: "foreign",
     hint: "填公司名 + Greenhouse 招聘地址即可，无需写代码，次日爬虫自动抓",
   },
   {
     value: "lever",
     label: "Lever（通用 ATS）",
+    origin: "foreign",
     hint: "填公司名 + Lever 招聘地址即可，无需写代码，次日爬虫自动抓",
   },
   {
     value: "ashby",
     label: "Ashby（通用 ATS）",
+    origin: "foreign",
     hint: "填公司名 + Ashby 看板地址（api.ashbyhq.com/posting-api/job-board/{slug}），无需写代码",
   },
   {
     value: "smartrecruiters",
     label: "SmartRecruiters（通用 ATS · 外企主力）",
+    origin: "foreign",
     hint: "填公司名 + 地址（api.smartrecruiters.com/v1/companies/{slug}/postings），在华跨国企业常用",
   },
   {
     value: "workday",
     label: "Workday（通用 ATS · 外企100强主力）",
+    origin: "foreign",
     hint: "填公司名 + CXS 地址（{tenant}.wdN.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs），服务端按 location facet 过滤在华",
   },
   {
     value: "eightfold",
     label: "Eightfold（通用 ATS · 外企）",
+    origin: "foreign",
     hint: "填公司名 + 接口地址（{tenant}.eightfold.ai/api/apply/v2/jobs?domain={domain}），服务端按 location 收窄在华",
   },
   {
     value: "oracle",
     label: "Oracle 招聘云（通用 ATS · 外企自建门户主力）",
+    origin: "foreign",
     hint: "填公司名 + CE 接口（{tenant}.fa.{region}.oraclecloud.com/hcmRestApi/resources/latest/recruitingCEJobRequisitions?finder=findReqs;siteNumber=CX_xxxx），服务端按 locationsFacet 过滤在华",
   },
   {
     value: "moka",
     label: "Moka（通用 ATS · 本土）",
+    origin: "domestic",
     hint: "填公司名 + Moka 招聘页地址（{公司}.mokahr.com / app.mokahr.com），浏览器拦截抓取",
   },
   {
     value: "beisen",
     label: "北森 Beisen（通用 ATS · 本土）",
+    origin: "domestic",
     hint: "填公司名 + 北森招聘页地址（*.zhiye.com / *.italent.cn / 自有 careers 域名），浏览器拦截抓取",
   },
   {
     value: "feishu",
     label: "飞书招聘（通用 ATS · 本土，国内版 Workday）",
+    origin: "domestic",
     hint: "填公司名 + 飞书招聘页地址（{公司}.jobs.feishu.cn/index/position 或 /{portal}），浏览器拦截 /api/v1/search/job/posts",
   },
   {
     value: "hotjob",
     label: "HotJob / wecruit（通用 ATS · 本土）",
+    origin: "domestic",
     hint: "填公司名 + 招聘页地址（{子域}.hotjob.cn/{suiteKey}/pb/social.html｜school.html｜interns.html，社招/校招/实习三渠道各登记一条），直连 listPosition 接口，crawl_method 选 http",
   },
   {
     value: "wt",
     label: "WinTalent / wt（通用 ATS · 本土老版）",
+    origin: "domestic",
     hint: "填公司名 + wt 入口地址（{子域}.hotjob.cn/wt/{BRAND}/web/index，伊利/中广核/中国电信/现代等），直连 position/list JSON，crawl_method 选 http",
   },
   {
     value: "company_spa",
     label: "企业官网 SPA（通用 · 本土长尾）",
+    origin: "domestic",
     hint: "填公司名 + 官网招聘页地址，仅放行接口里带真实岗位链接的行，加源零代码",
   },
   {
     value: "netease",
     label: "网易（自建门户 · 本土）",
+    origin: "domestic",
     hint: "填「网易」+ https://hr.163.com/job-list.html，直连 queryPage 公开接口（hr.163.com/job-detail.html?id=），crawl_method 选 http",
   },
   {
     value: "oppo",
     label: "OPPO（自建门户 · 本土 · 校招/实习）",
+    origin: "domestic",
     hint: "填「OPPO」+ https://careers.oppo.com/university/oppo/campus/post?recruitType=Graduate，直连 openapi/position/pageNew，crawl_method 选 http",
   },
   {
     value: "xiaohongshu",
     label: "小红书（自建门户 · 本土）",
+    origin: "domestic",
     hint: "填「小红书」+ https://job.xiaohongshu.com/，直连 pageQueryPosition 公开接口（社招/校招/实习三渠道），crawl_method 选 http",
   },
   {
     value: "alibaba",
     label: "阿里巴巴集团 BU 门户（通用 · 本土）",
+    origin: "domestic",
     hint: "填 BU 公司名 + 该 BU 域列表页（{BU域}/off-campus/position-list?lang=zh，如 talent.taotian.com 淘天 / careers.aliyun.com 阿里云），直连 position/search，crawl_method 选 http",
   },
   {
     value: "huawei",
     label: "华为（自建门户 · 本土）",
+    origin: "domestic",
     hint: "填「华为」+ https://career.huawei.com/reccampportal/portal5/social-recruitment.html，直连 getJob 公开接口（社招/校招/实习三渠道，零鉴权），crawl_method 选 http",
   },
   {
     value: "ctrip",
     label: "携程（自建门户 · 本土）",
+    origin: "domestic",
     hint: "填「携程」+ https://careers.ctrip.com/，直连 getJobAd 公开接口（社招/校招/实习，hash 路由详情页），crawl_method 选 http",
   },
   {
     value: "meituan",
     label: "美团（自建门户 · 本土）",
+    origin: "domestic",
     hint: "填「美团」+ https://zhaopin.meituan.com/web/position，直连 getJobList 公开接口，crawl_method 选 http",
   },
   {
     value: "kuaishou",
     label: "快手（自建门户 · 本土）",
+    origin: "domestic",
     hint: "填「快手」+ 社招列表页，页面 JS 生成请求签名并由浏览器拦截岗位，crawl_method 选 playwright",
   },
   {
     value: "bilibili",
     label: "哔哩哔哩（自建门户 · 本土）",
+    origin: "domestic",
     hint: "填「哔哩哔哩」+ https://jobs.bilibili.com/social/positions，匿名 CSRF 后直连岗位 API，crawl_method 选 http",
   },
   {
     value: "pinduoduo",
     label: "拼多多（自建门户 · 本土 · 校招）",
+    origin: "domestic",
     hint: "填「拼多多」+ https://careers.pddglobalhr.com/campus/grad，直连 position/list 公开接口，crawl_method 选 http",
   },
   {
     value: "vivo",
     label: "vivo（自建门户 · 本土）",
+    origin: "domestic",
     hint: "填「vivo」+ https://hr.vivo.com/jobs，直连 portal/page 公开接口，crawl_method 选 http",
   },
   {
     value: "byd",
     label: "比亚迪（自建门户 · 本土）",
+    origin: "domestic",
     hint: "填「比亚迪」+ 社招列表页，公开列表后由浏览器批量生成前端加密详情 URL，crawl_method 选 playwright",
   },
   {
     value: "sf_express",
     label: "顺丰（自建门户 · 本土）",
+    origin: "domestic",
     hint: "填「顺丰」+ https://hr.sf-express.com/jobMainHandler/main/9999，直连 SearchJob.do 社招接口，crawl_method 选 http",
   },
   {
     value: "amazon",
     label: "Amazon（自建 · 外企）",
+    origin: "foreign",
     hint: "填公司名 + Amazon.jobs 搜索接口（www.amazon.jobs/en/search.json?normalized_country_code[]=CHN&result_limit=100）",
   },
   {
     value: "phenom",
     label: "Phenom（自建门户 · 外企）",
+    origin: "foreign",
     hint: "填公司名 + Phenom 接口（{careers域名}/api/jobs，如 careers.amd.com/api/jobs），适配 AMD/L'Oréal 等自建门户",
   },
   {
     value: "microsoft",
     label: "Microsoft（自建 · 外企）",
+    origin: "foreign",
     hint: "填公司名 + MS pcsx 接口（apply.careers.microsoft.com/api/pcsx/search?domain=microsoft.com），httpx 按大中华区城市并集抓在华",
   },
   {
     value: "google",
     label: "Google（自建 · 外企 · 浏览器 DOM）",
+    origin: "foreign",
     hint: "填公司名 + Google 结果页（www.google.com/about/careers/applications/jobs/results/?location=China），crawl_method 选 playwright，读岗位卡 DOM",
   },
 ];
 
 export const ADAPTER_VALUES: string[] = SOURCE_ADAPTERS.map((a) => a.value);
+
+// 外企招聘源 adapter 名单 —— 从 SOURCE_ADAPTERS 的 origin 字段「自动派生」，单一数据源、零 drift。
+// 用途：lib/company-origin 资本来源「外企」判定。加新 adapter 时在上方标 origin 即自动进/不进此名单；
+// 漏标 origin 会因 AdapterOption.origin 必填而编译报错。
+export const FOREIGN_ATS_ADAPTERS: Set<string> = new Set(
+  SOURCE_ADAPTERS.filter((a) => a.origin === "foreign").map((a) => a.value),
+);
+
+export function isForeignAtsAdapter(name: unknown): boolean {
+  return typeof name === "string" && FOREIGN_ATS_ADAPTERS.has(name.trim());
+}
 
 export const CRAWL_METHODS = ["http", "playwright", "manual"] as const;
 export type CrawlMethod = (typeof CRAWL_METHODS)[number];

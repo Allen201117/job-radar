@@ -1,10 +1,28 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const test = require("node:test");
+const ts = require("typescript");
 const { loadTsModule } = require("./route-test-utils");
-const { isDomesticAdapter, isForeignAtsAdapter } = require("../lib/domestic-adapters");
+const { isDomesticAdapter } = require("../lib/domestic-adapters");
+
+// company-origin.ts 现在 import 了 source-adapters.ts（.ts 依赖）。node --test 每个测试文件独立进程，
+// 这里注册一个仅作用于本进程的 .ts require 钩子，让 loadTsModule 能解析 .ts → .ts 依赖链。
+if (!require.extensions[".ts"]) {
+  require.extensions[".ts"] = (module, filename) => {
+    const out = ts.transpileModule(fs.readFileSync(filename, "utf8"), {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2020,
+        esModuleInterop: true,
+      },
+    }).outputText;
+    module._compile(out, filename);
+  };
+}
 
 const { classifyCompanyOrigin, classifyCompanyOriginWithSource } =
   loadTsModule("lib/company-origin.ts");
+const { isForeignAtsAdapter } = loadTsModule("lib/source-adapters.ts");
 
 test("classifyCompanyOrigin: 名单内精确命中具体国别", () => {
   assert.equal(classifyCompanyOrigin("字节跳动"), "中国");
