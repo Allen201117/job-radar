@@ -176,7 +176,15 @@ def drain(sb, limit=0, workers=4, make_sb=None):
 # 见 docs/superpowers/specs/2026-06-20-career-insights-supply-upgrade-design.md。
 # ============================================================
 T3_TTL_DAYS = 180  # 经验类复核更慢
-T3_QUERY = "{c} 工作体验 加班 文化 薪资 待遇 怎么样"
+# 多维查询包：每条定向检索一个主题、路由到对应**已有**维度（不新增 dimension）。
+# 成本：N 条查询/公司 × 多源 → 受免费额度，每天约处理 总额度/(N×活跃源数) 家；深度优先、长尾慢铺。
+T3_QUERY_PACK = [
+    {"topic": "加班文化", "query": "{c} 加班 工作强度 文化 996 节奏 怎么样", "dimension": "culture"},
+    {"topic": "实习体验", "query": "{c} 实习 实习生 体验 待遇 转正 怎么样", "dimension": "culture"},
+    {"topic": "年终奖", "query": "{c} 年终奖 发几个月 奖金 调薪 福利", "dimension": "compensation_intensity"},
+    {"topic": "晋升发展", "query": "{c} 晋升 涨薪 职级 发展 机会 天花板", "dimension": "path"},
+    {"topic": "面试难度", "query": "{c} 面试 难度 流程 几轮 体验 通过", "dimension": "hiring"},
+]
 _ROUTER = search_router.default_router()  # 多源搜索；未配 key 的源自动跳过（配哪个用哪个）
 
 
@@ -195,13 +203,15 @@ def _pick_sources(results, claim, max_n=3):
     return chosen
 
 
-def write_experience(sb, company_id, claim, sources, judge, status):
-    """写一条 T3 经验条目（dimension=culture, origin=public_web）+ 多来源（去标识、仅短 excerpt，禁整段 UGC）。"""
+def write_experience(sb, company_id, claim, sources, judge, status, dimension="culture", topic=None):
+    """写一条 T3 经验条目（origin=public_web）+ 多来源（去标识、仅短 excerpt，禁整段 UGC）。
+    dimension/topic 由查询包指定：路由到对应已有维度，title 带主题（如「年终奖 · 群体印象」）。"""
     item_id = str(uuid.uuid4())
+    title = claim.get("title") or (f"{topic} · 群体印象" if topic else "公开讨论 · 群体印象")
     sb.table("insight_items").insert({
-        "id": item_id, "company_id": company_id, "dimension": "culture",
+        "id": item_id, "company_id": company_id, "dimension": dimension,
         "grade": claim.get("grade") or "experience",
-        "title": claim.get("title") or "公开讨论 · 群体印象",
+        "title": title,
         "content": claim.get("content"),
         "sample_size": int(claim["sample_size"]) if str(claim.get("sample_size") or "").isdigit() else None,
         "payload": {}, "origin": "public_web", "deidentified": True, "status": status,
@@ -235,43 +245,43 @@ def fetch_t3_queue(sb, limit):
 
 
 def enrich_company_t3(sb, profile):
-    """单公司 T3：千帆检索 → run_pipeline(culture) → 写。返回 'wrote' | 'empty' | 'err'。永不抛。"""
-    try:
-        results = _ROUTER.search(sb, T3_QUERY.format(c=profile["company"]))
-        # 额度由 router 在各 provider 内部按次记账，勿在此重复 consume
-    except Exception:
-        results = []
-    if not results:
+    """单公司 T3：按多维查询包逐主题检索 → run_pipeline(对应维度) → 写。返回 'wrote' | 'empty' | 'err'。永不抛。
+    额度由 router 在各 provider 内部按次记账；单查询失败不拖垮整包。
+    替换旧代：本轮写完后退役本次之前的 public_web active（跨维度），不堆积老聚合（保即时性）。"""
+    run_start = _now()
+    wrote_any = False
+    for pack in T3_QUERY_PACK:
+        if _ROUTER.remaining(sb) <= 0:
+            break  # 额度用尽 → 剩余主题留到下轮
         try:
-            sb.table("company_profiles").update({"t3_checked_at": _now()}).eq("id", profile["id"]).execute()
-        except Exception:
-            return "err"
-        return "empty"
-    try:
-        pipeline = E.run_pipeline(profile["company"], "culture", results)
-        pubs = len({r.get("publisher") for r in results if r.get("publisher")})
-        print(f"  [t3] {profile['company']}: 多源检索 {len(results)} 条/{pubs} 域 → "
-              f"claims {len(pipeline)} → {[e['status'] for e in pipeline]}")
-        run_start = _now()
-        wrote_any = False
-        for entry in pipeline:
-            if entry["status"] == "drop":
+            results = _ROUTER.search(sb, pack["query"].format(c=profile["company"]))
+            if not results:
                 continue
-            claim = dict(entry["claim"])
-            # 经验类样本量 = 检索到的公开讨论篇数（每条结果=一篇讨论；诚实满足读时门 ≥5 + 来源 ≥2 publisher）
-            if not str(claim.get("sample_size") or "").isdigit():
-                claim["sample_size"] = len(results)
-            write_experience(sb, profile["id"], claim,
-                             _pick_sources(results, entry["claim"]), entry.get("judge") or {}, entry["status"])
-            wrote_any = True
+            pipeline = E.run_pipeline(profile["company"], pack["dimension"], results)
+            pubs = len({r.get("publisher") for r in results if r.get("publisher")})
+            print(f"  [t3] {profile['company']}/{pack['topic']}: 多源 {len(results)} 条/{pubs} 域 → "
+                  f"{[e['status'] for e in pipeline]}")
+            for entry in pipeline:
+                if entry["status"] == "drop":
+                    continue
+                claim = dict(entry["claim"])
+                # 样本量 = 检索到的公开讨论篇数（诚实满足读时门 ≥5 + 来源 ≥2 publisher）
+                if not str(claim.get("sample_size") or "").isdigit():
+                    claim["sample_size"] = len(results)
+                write_experience(sb, profile["id"], claim, _pick_sources(results, entry["claim"]),
+                                 entry.get("judge") or {}, entry["status"],
+                                 dimension=pack["dimension"], topic=pack["topic"])
+                wrote_any = True
+        except Exception as e:
+            print(f"  [t3-err] {profile['company']}/{pack['topic']}: {type(e).__name__}: {str(e)[:120]}")
+            continue
+    try:
         if wrote_any:
-            # 替换旧代：退役本次之前写入的 public_web culture，避免新旧聚合堆积 / 老内容滞留（保即时性）
+            # 退役本次之前的 public_web active（跨维度），换最新一代
             sb.table("insight_items").update({"status": "retired"}) \
-                .eq("company_id", profile["id"]).eq("origin", "public_web") \
-                .eq("dimension", "culture").eq("status", "active") \
+                .eq("company_id", profile["id"]).eq("origin", "public_web").eq("status", "active") \
                 .lt("last_verified_at", run_start).execute()
         sb.table("company_profiles").update({"t3_checked_at": _now()}).eq("id", profile["id"]).execute()
-        return "wrote"
     except Exception:
         try:
             sb.table("company_profiles").update({
@@ -280,6 +290,7 @@ def enrich_company_t3(sb, profile):
         except Exception:
             pass
         return "err"
+    return "wrote" if wrote_any else "empty"
 
 
 def drain_t3(sb, limit=0):
