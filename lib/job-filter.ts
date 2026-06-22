@@ -2,6 +2,7 @@
 // 抽到 lib 层后，浏览器端筛选钩子(useJobFilters) 与 服务端搜索(lib/job-search → /api/jobs/search)
 // 复用同一份匹配逻辑 → 服务端筛选结果与原前端筛选「逐字段一致」，全部既有测试照常通过。
 import {
+  hasExplicitRecruitmentType,
   keywordMatchTier,
   normalizeChinaCity,
   recruitmentCategory,
@@ -36,26 +37,40 @@ export const DEFAULT_FILTERS: Filters = {
 };
 
 // 返回岗位通过当前筛选的匹配档："exact"（精确）/ "related"（同职能相关）/ null（不匹配）。
-// 非关键词项（城市/类型/公司/资本/薪资/新发现/隐藏）仍硬 AND；关键词改两层匹配，治 88% 空摘要的召回崩。
+// 城市/类型按「信息缺失不淘汰」处理：字段为空(信息未知)→ 放行但降级为 related（排序沉到精确匹配之后），
+// 仅当字段【有值且明确不符】才淘汰 → 治「爬来的岗位 location/job_type 大面积为空、被硬 AND 一刀切成 0 个」。
+// 公司/资本/薪资/新发现/隐藏是用户主动施加的硬条件，保持硬 AND；关键词走两层匹配，治 88% 空摘要的召回崩。
 export function jobFilterTier(
   job: ScoredJob,
   filters: Filters,
 ): "exact" | "related" | null {
+  // 因「字段缺失」而放行（非精确匹配）→ 整体降级为 related，靠排序沉到精确匹配之后。
+  let degraded = false;
+
   if (filters.company) {
     // 大小写不敏感子串匹配：可输入"字节"命中"字节跳动"、"bytedance"命中"ByteDance"。
     const want = filters.company.trim().toLowerCase();
     if (want && !(job.company || "").toLowerCase().includes(want)) return null;
   }
   if (filters.city) {
-    const normalizedCity = normalizeChinaCity(filters.city);
     const location = job.location || "";
-    if (!location.includes(filters.city) && !location.includes(normalizedCity)) {
-      return null;
+    if (!location) {
+      degraded = true; // 城市未知（信息缺失 ≠ 不符合）→ 不淘汰，降级排后。
+    } else {
+      const normalizedCity = normalizeChinaCity(filters.city);
+      if (!location.includes(filters.city) && !location.includes(normalizedCity)) {
+        return null; // 明确写了别的城市 → 淘汰。
+      }
     }
   }
   if (filters.jobType) {
-    // 用穷尽的三桶分类（社招 / 校招 / 实习）精确匹配，避免细粒度类型（管培生 / 研究岗 / 全职等）漏桶。
-    if (recruitmentCategory(job) !== filters.jobType) return null;
+    // 三桶分类（社招 / 校招 / 实习）精确匹配。但无类型信号的岗位会被 recruitmentCategory
+    // 兜底成「社招」，据此硬筛会误杀「类型未知」岗 → 有明确信号才参与过滤，否则放行降级。
+    if (hasExplicitRecruitmentType(job)) {
+      if (recruitmentCategory(job) !== filters.jobType) return null; // 明确类型不符 → 淘汰。
+    } else {
+      degraded = true; // 类型未知 → 不淘汰，降级排后。
+    }
   }
   if (filters.showNewOnly) {
     if (!job.first_seen_at) return null;
@@ -73,9 +88,12 @@ export function jobFilterTier(
     } else if (origin !== filters.capitalOrigin) return null;
   }
   if (filters.salaryOnly && !job.salary_text) return null;
-  // 关键词两层：无关键词 → 全放行(exact)；否则 精确 / 相关 / 不匹配(null)。
-  if (!filters.keyword) return "exact";
-  return keywordMatchTier(job, filters.keyword);
+  // 关键词两层：无关键词 → 放行；否则 精确 / 相关 / 不匹配(null)。
+  // 任一字段靠「缺失放行」→ 整体压到 related，排序沉底（精确匹配优先展示）。
+  if (!filters.keyword) return degraded ? "related" : "exact";
+  const tier = keywordMatchTier(job, filters.keyword);
+  if (tier === null) return null;
+  return degraded ? "related" : tier;
 }
 
 export function jobMatchesFilters(job: ScoredJob, filters: Filters): boolean {

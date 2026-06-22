@@ -124,7 +124,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
             tone: "empty",
             title: "查已有岗位 · 完成",
             detail:
-              "当前筛选没有命中已收录岗位；可放宽条件，或用下方「扩大搜索范围」联网去官网找。",
+              "当前筛选没有命中已收录岗位；可放宽条件，或用下方「发掘新公司」联网去官网找。",
           },
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -274,9 +274,9 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
           />
           <ActionTile
             icon={ArrowsClockwise}
-            label={refreshing ? "更新中…" : "更新关注公司"}
-            hint="重新抓你关注的公司找新岗位 · 约 1–5 分钟"
-            tooltip="在后台重新抓取你筛选/偏好命中的公司官方招聘页（含需要浏览器的源），有新岗位会自动出现在列表里。未填筛选时按你保存的求职偏好来。约 1–5 分钟。"
+            label={refreshing ? "刷新中…" : "刷新对口公司"}
+            hint="去和你对口的公司官网重抓新岗位 · 约 1–5 分钟"
+            tooltip="后台重新抓取「和你偏好/筛选对口的公司」官方招聘页（含需要浏览器的源），有新岗位会自动进列表。没填筛选时按你保存的求职偏好来。约 1–5 分钟。"
             accent="bg-[#dbe9fa] text-[#2f6299] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]"
             onClick={() => {
               setActiveSearch("known");
@@ -288,9 +288,9 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
           />
           <ActionTile
             icon={Compass}
-            label={discoveryActive ? "搜索中…" : "扩大官方搜索范围"}
-            hint="去官网找还没收录的公司 · 约 1–5 分钟"
-            tooltip="用浏览器去抓还没收录的公司官方招聘站，并补全职位描述。需要先填上方「关键词」。约 1–5 分钟。"
+            label={discoveryActive ? "发掘中…" : "发掘新公司"}
+            hint="去库里还没有的公司官网找岗位（需关键词）· 约 1–5 分钟"
+            tooltip="用浏览器去抓「库里还没收录的新公司」官方招聘站，并补全职位描述。需要先在上方填「关键词」。约 1–5 分钟。"
             accent="bg-[#e7def4] text-[#6a4fa0] dark:bg-[#b9a3e0]/[0.15] dark:text-[#b9a3e0]"
             onClick={() => {
               setActiveSearch("discover");
@@ -303,7 +303,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
         </div>
         {!filters.keyword && (
           <p className="mt-2 px-1 text-xs leading-5 text-[#9a9184] dark:text-[#837c70]">
-            「扩大官方搜索范围」需先在上方填「关键词」。
+            「发掘新公司」需先在上方填「关键词」。
           </p>
         )}
         {searchInfo && (
@@ -321,10 +321,10 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
         <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-[#cfe6b0] dark:border-[#a3d06a]/[0.30] bg-[#eef6e0] dark:bg-[#a3d06a]/[0.15] px-3.5 py-2.5 text-sm">
           <Sparkle size={16} weight="fill" className="text-[#6f9a3a] dark:text-[#a3d06a]" aria-hidden="true" />
           <span className="font-medium text-[#4f6f2a] dark:text-[#a3d06a]">
-            本次新发现 {officialJobs.length} 个岗位
+            本次带回 {officialJobs.length} 个岗位
             {(filters.city || filters.jobType || filters.keyword) &&
             newMatching.length !== officialJobs.length
-              ? `（符合当前筛选 ${newMatching.length} 个）`
+              ? `，其中 ${newMatching.length} 个合你当前筛选`
               : "（绿色标记）"}
           </span>
           <div className="ml-auto flex gap-1.5">
@@ -365,13 +365,13 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
             "正在搜索岗位库…"
           ) : (
             <>
-              {newViewActive ? "只看本次新发现：" : "匹配 "}
+              {newViewActive ? "只看本次带回：" : "库里匹配你筛选的 "}
               {newViewActive ? newMatching.length : total} 个岗位
               {!newViewActive && filters.keyword
                 ? `（精确 ${exactCount} + 相关 ${Math.max(0, total - exactCount)}）`
                 : ""}
-              {!newViewActive && capped ? "+（已显示最新一批，可加载更多继续）" : ""}
-              ，已展示 {displayJobs.length} 个（本次新找到 {officialJobs.length}）。
+              {!newViewActive && capped ? "，可加载更多" : ""}
+              ，已展示 {displayJobs.length} 个。
             </>
           )}
         </span>
@@ -440,7 +440,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
             <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] dark:border-white/[0.1] bg-white/45 dark:bg-white/[0.05] px-6 py-14 text-center">
               <h2 className="text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">没有匹配的岗位</h2>
               <p className="mx-auto mt-2 max-w-md text-pretty text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">
-                可以放宽筛选条件，或输入关键词后刷新已知官网源 / 发现新的官方招聘入口。
+                可以放宽筛选条件，或填关键词后用「刷新对口公司 / 发掘新公司」联网去找。
               </p>
             </div>
           ))}
@@ -629,7 +629,7 @@ function BrowserDiscoveryProgress({ discovery }: { discovery: BrowserDiscoverySt
     <div className="surface p-4 text-[#1a1714] dark:text-[#f3ecdf]">
       <div className="flex items-center gap-2.5">
         <CircleNotch size={18} weight="bold" className="animate-spin text-[#3f7cc0] dark:text-[#7fb2e8]" aria-hidden="true" />
-        <span className="text-sm font-semibold">{isRefresh ? "正在更新你关注的公司…" : "正在扩大官方搜索范围…"}</span>
+        <span className="text-sm font-semibold">{isRefresh ? "正在刷新对口公司…" : "正在发掘新公司…"}</span>
         <span className="ml-auto text-xs tabular-nums text-[#8a8275] dark:text-[#9a9184]">
           {hasProg ? `已更新 ${prog!.done}/${prog!.total} 家 · ` : ""}已用时 {formatElapsed(discovery.elapsedSec)}
         </span>
