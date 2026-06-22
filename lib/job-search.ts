@@ -80,6 +80,22 @@ export function buildTsquery(keywordTerms: string[], andTerms: string[]): string
   return clauses.length ? clauses.join(" & ") : null;
 }
 
+// 给候选 jobs 行标注 source_adapter（资本来源筛选按来源判国籍用）。jobs 在香港库、sources 在 Supabase，
+// 跨库无法 SQL join：调用方（route）查好 source_id→adapter_name 映射传入，这里 in-place 标注。
+// 映射缺省（未选资本来源 / 查不到）时原样返回，scoring 的 {...job} 会把该字段透传给 job-filter 消费。
+export function annotateSourceAdapter(
+  rows: any[],
+  adapterBySource?: Map<string, string | null> | null,
+): any[] {
+  if (!adapterBySource || !rows || !rows.length) return rows || [];
+  for (const r of rows) {
+    if (r && r.source_id != null) {
+      r.source_adapter = adapterBySource.get(r.source_id) ?? null;
+    }
+  }
+  return rows;
+}
+
 export function annotateAndRank(
   rows: any[],
   filters: Filters,
@@ -102,6 +118,7 @@ async function searchViaFTS(
   offset: number,
   limit: number,
   tsquery: string,
+  adapterBySource?: Map<string, string | null> | null,
 ): Promise<SearchResult> {
   const company = filters.company.trim();
   // 关键：**不要 order by**。加 order(id/first_seen) 会让 planner 改走那个索引扫描 + 逐行 @@ 过滤(扫全表，6-8s)；
@@ -126,7 +143,8 @@ async function searchViaFTS(
     if (data.length < DB_PAGE) break;
   }
 
-  const ranked = annotateAndRank(Array.from(byId.values()), filters, prefs, actions);
+  const rows = annotateSourceAdapter(Array.from(byId.values()), adapterBySource);
+  const ranked = annotateAndRank(rows, filters, prefs, actions);
   return {
     jobs: ranked.slice(offset, offset + limit),
     total: ranked.length,
@@ -145,6 +163,7 @@ async function searchViaScan(
   actions: JobAction[],
   offset: number,
   limit: number,
+  adapterBySource?: Map<string, string | null> | null,
 ): Promise<SearchResult> {
   const need = offset + limit;
   const page = (off: number) =>
@@ -168,7 +187,7 @@ async function searchViaScan(
     const res = await Promise.all(offsets.map((o) => page(o)));
     for (const r of res) {
       if (r.error) throw new Error(r.error.message);
-      const rows: any[] = r.data || [];
+      const rows: any[] = annotateSourceAdapter(r.data || [], adapterBySource);
       if (rows.length === 0) {
         exhausted = true;
         continue;
@@ -202,6 +221,7 @@ export async function searchJobs(
   actions: JobAction[],
   offset: number,
   limit: number,
+  adapterBySource?: Map<string, string | null> | null,
 ): Promise<SearchResult> {
   const keyword = filters.keyword.trim();
   const city = filters.city.trim();
@@ -214,10 +234,10 @@ export async function searchJobs(
 
   if (tsquery) {
     try {
-      return await searchViaFTS(supabase, filters, prefs, actions, offset, limit, tsquery);
+      return await searchViaFTS(supabase, filters, prefs, actions, offset, limit, tsquery, adapterBySource);
     } catch {
       // search_bigrams 列未就绪（迁移/回填窗口）或 FTS 异常 → 降级扫描路径，保证搜索可用。
     }
   }
-  return await searchViaScan(supabase, filters, prefs, actions, offset, limit);
+  return await searchViaScan(supabase, filters, prefs, actions, offset, limit, adapterBySource);
 }

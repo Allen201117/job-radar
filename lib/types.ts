@@ -161,6 +161,9 @@ export interface ScoredJob extends Job {
   match_reasons?: MatchReason[];
   hidden_reason: string | null;
   user_action: string | null;
+  // 资本来源筛选用：岗位来源 adapter（搜索时由 source_id→sources.adapter_name 标注；
+  // jobs/sources 跨库无法 SQL join，故在应用层注入）。缺省时国籍判定退化为纯公司名名单。
+  source_adapter?: string | null;
 }
 
 // ============================================================
