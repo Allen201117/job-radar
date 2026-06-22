@@ -19,6 +19,7 @@ from typing import List, Optional
 from urllib.parse import quote
 
 import china_keyword_expansion as cke
+import company_industry as comp_ind
 import db
 import jobs_db
 import normalizer
@@ -73,6 +74,9 @@ def parse_discovery_env(env: dict) -> Optional[dict]:
         "job_type": str(env.get("DISCOVERY_JOB_TYPE") or "").strip(),
         # 偏好底层逻辑：排除词（命中即丢弃）。城市/类型已在 API 端按「手动优先、否则偏好」解析好。
         "exclude": _parse_str_list(env.get("DISCOVERY_EXCLUDE")),
+        # 跨行业门：用户目标行业 + 豁免公司（手动指名，不挡）。API 端解析好，空则不设门。
+        "industries": _parse_str_list(env.get("DISCOVERY_INDUSTRIES")),
+        "industry_exempt": _parse_str_list(env.get("DISCOVERY_INDUSTRY_EXEMPT")),
         "limit": limit,
         "max_pages": max_pages,
     }
@@ -210,6 +214,17 @@ def job_excluded(raw: RawJob, exclude: Optional[List[str]]) -> bool:
     return any(t in hay for t in terms)
 
 
+def source_industry_ok(company, industries, exempt=None) -> bool:
+    """源级跨行业门（爬虫端「行业-公司-岗位」）：源公司的行业与用户目标行业相容则放行。
+    放行当：用户没填可识别行业 / 公司行业判不出 / 行业 ∈ 用户目标；额外——
+    手动指名的公司（exempt = 用户 target_companies + 当前筛选 company，substring）一律豁免，
+    与 lib/scoring.ts「公司命中不受跨行业门约束」同口径。整源同公司 → 判一次即可，省去抓取。"""
+    cl = str(company or "").lower()
+    if any(e and str(e).strip().lower() in cl for e in (exempt or [])):
+        return True
+    return comp_ind.job_industry_allowed(company, industries)
+
+
 def filter_raw_jobs(
     raw_jobs: List[RawJob], query: str, city: str, job_type: str = "",
     exclude: Optional[List[str]] = None,
@@ -258,11 +273,17 @@ class SpaKeywordRecipe:
         city = params.get("city", "")
         job_type = params.get("job_type", "")
         exclude = params.get("exclude") or []
+        industries = params.get("industries") or []
+        industry_exempt = params.get("industry_exempt") or []
         max_pages = params.get("max_pages") or self.discovery_max_pages
 
         sources = db.get_sources(supabase)
         # 源驱动：遍历白名单内的每个 enabled source（支持同一 adapter 多公司）。
         targets = select_discovery_targets(sources, self.DISCOVERY_ADAPTERS)
+        # 跨行业门（爬虫端）：丢弃行业与用户目标不符的源（手动指名公司豁免）。
+        if industries:
+            targets = [t for t in targets
+                       if source_industry_ok(t.get("company") or t.get("adapter_name"), industries, industry_exempt)]
 
         if not targets:
             return {
@@ -415,8 +436,17 @@ class CompanyRefreshRecipe:
         city = filters.get("city") or ""
         job_type = filters.get("job_type") or filters.get("jobType") or ""
         exclude = filters.get("exclude") or []
+        industries = filters.get("industries") or []
+        industry_exempt = filters.get("industry_exempt") or []
 
         rows = db.get_sources_by_ids(supabase, source_ids)
+        # 跨行业门（爬虫端）：丢弃「公司行业与用户目标行业不符」的源（手动指名公司豁免）。整源同公司 → 源级判一次，省抓取。
+        if industries:
+            kept = [s for s in rows
+                    if source_industry_ok(s.get("company") or s.get("adapter_name"), industries, industry_exempt)]
+            if len(kept) != len(rows):
+                print(f"[refresh] 跨行业门跳过 {len(rows) - len(kept)}/{len(rows)} 源（用户目标行业 {industries}）")
+            rows = kept
         total = len(rows)
         # 分档：httpx 源并发抓（秒级），浏览器源后置串行（每个 chromium 渲染 2-5min）。
         httpx_rows = [s for s in rows if runmod._is_httpx_safe(s.get("adapter_name"))]

@@ -157,11 +157,17 @@ export async function POST(request: NextRequest) {
   }
 
   // 3) 有效过滤条件（手动优先、未配用偏好；exclude 始终生效）—— 存进 diagnostics 供 CI 逐岗过滤。
+  // industries = 用户目标行业（爬虫端源级跨行业门）；industry_exempt = 手动指名公司（saved target_companies +
+  // 当前筛选 company）→ 这些公司不受行业门约束，与 lib/scoring.ts「公司命中不挡」同口径。
   const effFilters = {
     query: filters.keyword,
     city: filters.city || prefs.city,
     job_type: filters.jobType || prefs.experienceStage,
     exclude: prefs.excludeKeywords,
+    industries: prefs.targetIndustries,
+    industry_exempt: Array.from(
+      new Set([...prefs.targetCompanies, String(filters.company || "").trim()].filter(Boolean)),
+    ),
   };
 
   const config = resolveDispatchConfig(process.env);
@@ -341,6 +347,7 @@ async function loadRefreshPrefs(
     targetCompanies: string[];
     targetKeywords: string[];
     targetRoles: string[];
+    targetIndustries: string[];
     city: string;
     experienceStage: string;
     excludeKeywords: string[];
@@ -351,6 +358,7 @@ async function loadRefreshPrefs(
     targetCompanies: [] as string[],
     targetKeywords: [] as string[],
     targetRoles: [] as string[],
+    targetIndustries: [] as string[],
     city: "",
     experienceStage: "",
     excludeKeywords: [] as string[],
@@ -359,12 +367,12 @@ async function loadRefreshPrefs(
     const [cpRes, upRes] = await Promise.all([
       service
         .from("candidate_profiles")
-        .select("user_id, experience_stage, target_locations, target_roles")
+        .select("user_id, experience_stage, target_locations, target_roles, industries")
         .eq("user_id", userId)
         .maybeSingle(),
       service
         .from("user_preferences")
-        .select("user_id, target_companies, target_keywords, target_roles, target_locations, exclude_keywords")
+        .select("user_id, target_companies, target_keywords, target_roles, target_locations, exclude_keywords, target_industries")
         .eq("user_id", userId)
         .maybeSingle(),
     ]);
@@ -388,6 +396,7 @@ async function loadRefreshPrefs(
         targetCompanies: clean(up.target_companies),
         targetKeywords: clean(up.target_keywords),
         targetRoles: clean([...(up.target_roles || []), ...(cp.target_roles || [])]),
+        targetIndustries: clean([...(up.target_industries || []), ...(cp.industries || [])]),
         city: cities[0] || "",
         experienceStage: String(cp.experience_stage || "").trim(),
         excludeKeywords: clean(up.exclude_keywords),
