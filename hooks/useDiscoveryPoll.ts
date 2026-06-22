@@ -89,6 +89,10 @@ export function useDiscoveryPoll({
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const discoveryActive = discovery.phase === "queued" || discovery.phase === "running";
+  // 按任务类型区分进行态：刷新进行时只「刷新对口公司」转圈、发掘进行时只「发掘新公司」转圈。
+  // 治 bug：discoveryActive 不分 kind，导致点「刷新对口公司」时转圈错误地显示在第 3 个「发掘」按钮上。
+  const refreshActive = discoveryActive && discovery.kind === "refresh";
+  const discoverActive = discoveryActive && discovery.kind !== "refresh";
 
   // 按需「浏览器发现」：触发后台 Playwright 抓取官方 SPA 招聘站，前端轮询状态。
   async function startDiscovery() {
@@ -106,7 +110,8 @@ export function useDiscoveryPoll({
       runId: null,
       startedAt,
       elapsedSec: 0,
-      note: "正在准备扩大搜索…",
+      note: "正在准备发掘…",
+      kind: "discovery",
     });
     try {
       const resp = await fetch("/api/discovery/dispatch", {
@@ -309,7 +314,7 @@ export function useDiscoveryPoll({
     }
   }
 
-  return { discovery, refreshing, discoveryActive, startDiscovery, startRefresh };
+  return { discovery, refreshing, discoveryActive, refreshActive, discoverActive, startDiscovery, startRefresh };
 }
 
 // 用户主动触发的爬取必须返回有职位描述的可靠卡片（request 1）：过滤 summary 为空/过短的岗位。
