@@ -63,6 +63,9 @@ export interface UserPreferences {
   target_keywords: string[];
   exclude_keywords: string[];
   target_companies: string[];
+  // 目标行业（跨行业门用，从简历 candidate_profiles.industries 同步而来，迁移 160）。
+  // 可选：历史行/未同步用户为空，scoring 读取处一律 `|| []` 兜底。
+  target_industries?: string[];
   daily_limit: number;
 }
 

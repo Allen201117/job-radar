@@ -386,6 +386,7 @@ async function upsertMergedPreferences(
     target_locations: string[];
     target_roles: string[];
     target_keywords: string[];
+    industries: string[];
   },
 ) {
   const { data: existing, error: readError } = await supabase
@@ -402,6 +403,8 @@ async function upsertMergedPreferences(
       target_locations: mergeUnique(existing?.target_locations, parsedPreferences.target_locations),
       target_roles: mergeUnique(existing?.target_roles, parsedPreferences.target_roles),
       target_keywords: mergeUnique(existing?.target_keywords, parsedPreferences.target_keywords),
+      // 跨行业门用：简历解析出的行业并入既有目标行业（与其它字段同口径 merge，不覆盖用户已填）。
+      target_industries: mergeUnique(existing?.target_industries, parsedPreferences.industries),
       exclude_keywords: existing?.exclude_keywords || [],
       target_companies: existing?.target_companies || [],
       daily_limit: existing?.daily_limit || 20,

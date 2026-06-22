@@ -164,6 +164,54 @@ test("exclude_keywords hit hard-filters the job regardless of showIgnored/showAp
   assert.ok(!forced.some((job) => job.id === "job-drop"));
 });
 
+test("跨行业门（硬门）：同职能跨行业岗不算命中目标方向（互联网用户 ✗ 消费业产品经理）", () => {
+  // 农夫山泉=消费/零售；用户目标行业=互联网 → 即便职能都是产品经理，也不应算命中 role。
+  const job = { ...makeJob("fmcg-pm", "产品经理", "杭州", ""), company: "农夫山泉 养生堂" };
+  const prefs = {
+    ...makePreferences(),
+    target_roles: ["产品经理"],
+    target_keywords: [],
+    target_locations: ["杭州"],
+    target_companies: [],
+    target_industries: ["互联网"],
+  };
+
+  const blocked = scoreJob(job, prefs, []);
+  assert.ok(!blocked.match_reasons.some((r) => r.type === "role"), "跨行业不应出现命中目标方向");
+  assert.equal(blocked.content_matched, false, "跨行业 → 内容不命中");
+
+  // 同岗，用户目标行业=消费 → 行业相容，role 正常命中（证明门只拦跨行业、不误伤同行业）。
+  const allowed = scoreJob(job, { ...prefs, target_industries: ["消费"] }, []);
+  assert.ok(allowed.match_reasons.some((r) => r.type === "role" && r.value === "产品经理"), "同行业应命中 role");
+  assert.equal(allowed.content_matched, true);
+});
+
+test("跨行业门保守放行：岗位行业判不出 / 用户没填行业 → 不误杀", () => {
+  const job = { ...makeJob("unknown-co", "产品经理", "杭州", ""), company: "某某集团" };
+  // 用户填了行业，但公司行业判不出 → 放行，role 仍命中。
+  const prefs1 = { ...makePreferences(), target_roles: ["产品经理"], target_keywords: [], target_industries: ["互联网"] };
+  assert.ok(scoreJob(job, prefs1, []).match_reasons.some((r) => r.type === "role"), "行业判不出 → 放行");
+  // 用户没填行业 → 门不生效，role 命中（已知公司也放行）。
+  const job2 = { ...makeJob("fmcg2", "产品经理", "杭州", ""), company: "农夫山泉" };
+  const prefs2 = { ...makePreferences(), target_roles: ["产品经理"], target_keywords: [], target_industries: [] };
+  assert.ok(scoreJob(job2, prefs2, []).match_reasons.some((r) => r.type === "role"), "用户没填行业 → 放行");
+});
+
+test("跨行业门不挡公司命中：用户指名的公司，行业无关", () => {
+  // 用户把农夫山泉列进 target_companies → 即便行业=消费而用户行业=互联网，公司命中仍算数。
+  const job = { ...makeJob("named-co", "产品经理", "杭州", ""), company: "农夫山泉" };
+  const prefs = {
+    ...makePreferences(),
+    target_roles: [],
+    target_keywords: [],
+    target_companies: ["农夫山泉"],
+    target_industries: ["互联网"],
+  };
+  const r = scoreJob(job, prefs, []);
+  assert.ok(r.match_reasons.some((x) => x.type === "company"), "指名公司应命中，不被跨行业门挡");
+  assert.equal(r.content_matched, true);
+});
+
 test("不把非软件工程岗误判为命中目标方向（用户实锤：机械工艺岗 ✗ AI 数据产品经理）", () => {
   // 「工艺技术开发（机械/自动化）」与目标「AI 数据产品经理」毫不相干，
   // 旧逻辑经相关层把它判成命中 role + 高匹配。修复后不应再产生 role 命中理由。
@@ -302,6 +350,7 @@ function makePreferences() {
     target_keywords: ["Python", "SQL"],
     exclude_keywords: [],
     target_companies: [],
+    target_industries: [], // 默认空 → 跨行业门放行，旧用例不受影响
     daily_limit: 20,
   };
 }
