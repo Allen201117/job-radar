@@ -143,6 +143,22 @@ class CompanyRefreshRecipeTests(unittest.TestCase):
         self.assertEqual(len(running), 3)
         self.assertEqual(sorted(u["diagnostics"]["progress"]["done"] for u in running), [1, 2, 3])
 
+    def test_produced_only_includes_created_not_updated(self):
+        # 「刷新对口公司」只把【真新增(created)】岗位算进「带回」(produced)，重抓到的旧岗位(updated)不充数
+        # ——治用户痛点：等半天「带回 199」、实际真新增才 2。
+        rows = [{"id": "s1", "adapter_name": "workday", "company": "A", "source_url": "https://a.wd.com/j"}]
+        adapters = {"workday": FakeAdapter([_raw("https://new/1"), _raw("https://old/1")])}
+
+        def fake_upsert(_sb, job):
+            return "created" if "new" in (job.get("jd_url") or "") else "updated"
+
+        with mock.patch.object(discovery.db, "upsert_job", side_effect=fake_upsert):
+            result = self._run(rows, adapters)
+        # produced 只含真新增 new/1，不含重抓的 old/1
+        self.assertEqual(result["produced_jd_urls"], ["https://new/1"])
+        self.assertEqual(result["jobs_created"], 1)
+        self.assertEqual(result["jobs_updated"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

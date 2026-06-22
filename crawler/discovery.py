@@ -341,8 +341,10 @@ def _jobs_conn():
 
 
 def _upsert_raw_jobs(supabase, source_id, company, source_url, raw_jobs):
-    """质量门校验 + 归一化 + upsert（镜像 run.py 的入库逻辑）。返回 (created, updated, jd_urls)。
-    jobs 写入：配了 JOBS_DATABASE_URL 写香港库（每线程独立连接），否则 Supabase。"""
+    """质量门校验 + 归一化 + upsert（镜像 run.py 的入库逻辑）。返回 (created, updated, created_jd_urls)。
+    jobs 写入：配了 JOBS_DATABASE_URL 写香港库（每线程独立连接），否则 Supabase。
+    ⚠ 第三个返回值【只含真新增(created)的 jd_url】——刷新/发掘据此流式「带回」，绝不把重抓到的
+    旧岗位(updated)混进带回充数（治用户痛点：刷新等半天「带回 199」、实际真新增才 2）。"""
     created = updated = 0
     urls: List[str] = []
     for raw in raw_jobs:
@@ -381,9 +383,9 @@ def _upsert_raw_jobs(supabase, source_id, company, source_url, raw_jobs):
         result = jobs_db.upsert_job(_jobs_conn(), job_data) if jobs_db.enabled() else db.upsert_job(supabase, job_data)
         if result == "created":
             created += 1
+            urls.append(raw.jd_url)  # 只收真新增；重抓到的旧岗位(updated)不进「带回」，不充数
         else:
             updated += 1
-        urls.append(raw.jd_url)
     return created, updated, urls
 
 
