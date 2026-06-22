@@ -120,6 +120,30 @@ test("deriveHiring 不足阈值返回 null", () => {
   assert.equal(D.deriveHiring([j(), j()], NOW_ISO), null);
 });
 
+// ---- 招聘大小年 / HC 强度信号 ----
+test("classifyHiringSignal 趋势分级 expanding/steady/tightening", () => {
+  assert.equal(D.classifyHiringSignal(100, 30).momentum, "expanding");
+  assert.equal(D.classifyHiringSignal(100, -30).momentum, "tightening");
+  assert.equal(D.classifyHiringSignal(100, 5).momentum, "steady");
+  assert.equal(D.classifyHiringSignal(100, null).momentum, "steady"); // 无趋势→平稳
+});
+
+test("classifyHiringSignal 相对规模强度（需 headcountBand）", () => {
+  assert.equal(D.classifyHiringSignal(200, 0, "5000-1万").intensity, "high"); // ≈0.027
+  assert.equal(D.classifyHiringSignal(50, 0, "5000-1万").intensity, "mid"); // ≈0.0067
+  assert.equal(D.classifyHiringSignal(20, 0, "5000-1万").intensity, "low"); // ≈0.0027
+  assert.equal(D.classifyHiringSignal(200, 0).intensity, undefined); // 无规模档→不给强度
+  assert.equal(D.classifyHiringSignal(200, 0, "未知档").intensity, undefined);
+});
+
+test("deriveHiring 带 hiring_signal + 信号写进正文", () => {
+  const jobs = [1, 2, 3, 4, 5, 6, 7, 8].map(() => j({ status: "active" }));
+  const v = D.deriveHiring(jobs, NOW_ISO, { headcountBand: "5000-1万" });
+  assert.ok(v.payload.hiring_signal, "payload 带 hiring_signal");
+  assert.equal(typeof v.payload.hiring_signal.momentum, "string");
+  assert.match(v.content, /招聘信号/);
+});
+
 test("deriveCompanyInsights 只返回算得出的维度", () => {
   const jobs = [1, 2, 3, 4, 5, 6].map((i) =>
     j({ status: "active", salary_text: "15-25K", job_type: "社招", title: "后端工程师",

@@ -78,7 +78,9 @@ export async function GET(request: NextRequest) {
     }
     jobRows = data || [];
   }
-  const derived = deriveCompanyInsights((jobRows || []) as Job[], new Date());
+  const derived = deriveCompanyInsights((jobRows || []) as Job[], new Date(), {
+    headcountBand: profile?.headcount_band ?? null,
+  });
 
   // 3) 存储型洞察（仅当有画像）：过校验门 + 分组（共享 insight-bundle）。
   let storedDims = emptyDimensions();

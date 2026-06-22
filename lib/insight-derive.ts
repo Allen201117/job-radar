@@ -223,8 +223,60 @@ function trendPct(jobs: Job[], nowIso: string): number | null {
   return Math.round(((recent - prior) / prior) * 100);
 }
 
-// 招聘动态（hiring, fact）：在招规模 + 热门城市/方向 + 校社占比 + 新增趋势。
-export function deriveHiring(jobs: Job[], nowIso: string): InsightItemView | null {
+// 公司规模档（wikidata headcount_band）→ 约数员工，用于「相对规模」招聘强度。启发式、抗小幅变动。
+const HEADCOUNT_APPROX: Record<string, number> = {
+  "1-100": 50, "100-500": 300, "500-1000": 750, "1000-5000": 3000,
+  "5000-1万": 7500, "1万-5万": 30000, "5万-10万": 75000, "10万+": 150000,
+};
+
+export type HiringSignal = {
+  momentum: "expanding" | "steady" | "tightening";
+  intensity?: "high" | "mid" | "low";
+  trend: number | null;
+  active_count: number;
+};
+
+// 招聘「大小年 / HC 强度」信号：趋势(扩张/平稳/收紧) + 相对公司规模的强度(需 headcountBand)。
+// 诚实边界：这是「当前窗口」信号(自有发岗数据现算)，非年度周期对比——真年度大小年需累积 ≥1 年历史 + 官方员工数同比(业绩维度)。
+export function classifyHiringSignal(
+  activeCount: number,
+  trend: number | null,
+  headcountBand?: string | null,
+): HiringSignal {
+  let momentum: HiringSignal["momentum"] = "steady";
+  if (typeof trend === "number") {
+    if (trend >= 25) momentum = "expanding";
+    else if (trend <= -25) momentum = "tightening";
+  }
+  const emp = headcountBand ? HEADCOUNT_APPROX[headcountBand] : undefined;
+  let intensity: HiringSignal["intensity"];
+  if (emp && emp > 0 && activeCount > 0) {
+    const ratio = activeCount / emp;
+    intensity = ratio >= 0.015 ? "high" : ratio >= 0.004 ? "mid" : "low";
+  }
+  return { momentum, intensity, trend, active_count: activeCount };
+}
+
+const _MOM_CN = { expanding: "近月招聘明显扩张", steady: "近月招聘平稳", tightening: "近月招聘收紧" };
+const _INT_CN = { high: "高", mid: "中", low: "低" };
+
+function hiringSignalSentence(sig: HiringSignal): string {
+  const intens = sig.intensity ? `，相对其规模属${_INT_CN[sig.intensity]}强度招聘` : "";
+  const read =
+    sig.momentum === "expanding" && (sig.intensity === "high" || sig.intensity === "mid")
+      ? "（HC 较充足、进入窗口相对宽）"
+      : sig.momentum === "tightening"
+        ? "（HC 偏紧、竞争或更激烈）"
+        : "";
+  return `招聘信号：${_MOM_CN[sig.momentum]}${intens}${read}`;
+}
+
+// 招聘动态（hiring, fact）：在招规模 + 热门城市/方向 + 校社占比 + 新增趋势 + 大小年/HC 强度信号。
+export function deriveHiring(
+  jobs: Job[],
+  nowIso: string,
+  opts: { headcountBand?: string | null } = {},
+): InsightItemView | null {
   const active = jobs.filter((jb) => jb.status === "active");
   if (active.length < HIRING_MIN_SAMPLE) return null;
 
@@ -241,18 +293,22 @@ export function deriveHiring(jobs: Job[], nowIso: string): InsightItemView | nul
   const mix = { campus: 0, intern: 0, social: 0, unknown: 0 };
   for (const jb of active) mix[classifyRecruitment(jb.job_type, jb.title)]++;
   const trend = trendPct(active, nowIso);
+  const signal = classifyHiringSignal(active.length, trend, opts.headcountBand);
 
   const cityStr = cities.length ? `主要在 ${cities.map((c) => c.key).join("、")}` : "";
   const fnStr = functions.length ? `热门方向 ${functions.map((f) => f.key).join("、")}` : "";
   const trendStr = trend !== null ? `近一月新增岗位环比 ${trend > 0 ? "+" : ""}${trend}%` : "";
   const tail = [cityStr, fnStr, trendStr].filter(Boolean).join("，");
-  const content = `当前在招约 ${active.length} 个岗位${tail ? "，" + tail : ""}。`;
+  const content = `当前在招约 ${active.length} 个岗位${tail ? "，" + tail : ""}。${hiringSignalSentence(signal)}。`;
 
   return makeDerivedView({
     dimension: "hiring",
     title: "招聘动态 · 据在招岗位",
     content,
-    payload: { active_count: active.length, top_cities: cities, top_functions: functions, mix, trend },
+    payload: {
+      active_count: active.length, top_cities: cities, top_functions: functions, mix, trend,
+      hiring_signal: signal,
+    },
     time_window: `截至 ${yyyymm(nowIso)}`,
     nowIso,
   });
@@ -263,12 +319,13 @@ export function deriveHiring(jobs: Job[], nowIso: string): InsightItemView | nul
 export function deriveCompanyInsights(
   jobs: Job[],
   now: Date = new Date(),
+  opts: { headcountBand?: string | null } = {},
 ): Partial<Record<InsightDimension, InsightItemView[]>> {
   const nowIso = now.toISOString();
   const out: Partial<Record<InsightDimension, InsightItemView[]>> = {};
   const timing = deriveTiming(jobs, nowIso);
   if (timing) out.timing = [timing];
-  const hiring = deriveHiring(jobs, nowIso);
+  const hiring = deriveHiring(jobs, nowIso, opts);
   if (hiring) out.hiring = [hiring];
   const salary = deriveSalaryBand(jobs, nowIso);
   if (salary) out.compensation_intensity = [salary];
