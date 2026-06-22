@@ -40,6 +40,7 @@ test("builds user preferences from a resume profile without noisy fields", () =>
     target_locations: ["北京"],
     target_roles: ["产品经理"],
     target_keywords: ["SQL", "Figma", "Python", "AI 产品", "用户研究", "数据分析"],
+    industries: ["AI"], // 行业带入偏好（跨行业门用）；此处由 matchIndustries 命中「AI」
   });
 });
 

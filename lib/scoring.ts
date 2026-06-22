@@ -5,6 +5,7 @@ import type {
   MatchReason,
 } from "./types";
 import { keywordMatchTier } from "./china-keyword-expansion";
+import { jobIndustryAllowed } from "./company-industry";
 
 interface ScoreResult {
   score: number;
@@ -65,10 +66,16 @@ export function scoreJob(
     };
   }
 
+  // 跨行业门（硬门）：用户填了目标行业、且本岗行业（公司→行业，lib/company-industry）判得出、
+  // 两者不符 → 视为「职位/关键词不命中」（不给 role/keyword 命中与分），治「同职能跨行业误命中」
+  // （互联网产品经理 ✗ 生物医药/消费产品经理）。行业判不出或用户没填 → 放行（不误杀）。
+  // 注：公司命中（target_companies）不受此门约束——用户亲手指名的公司，行业无关紧要。
+  const industryAllowed = jobIndustryAllowed(job.company, preferences.target_industries || []);
+
   // target_roles 命中：用 keywordMatchTier 跨语言召回（与 Jobs 页 jobs-client 同口径），
   // 替换裸 includes——偏好填「产品经理」也能命中英文 "Product Manager" 标题，且带职能门防跨职能误召。
   for (const role of preferences.target_roles || []) {
-    if (keywordMatchTier(job, role)) {
+    if (industryAllowed && keywordMatchTier(job, role)) {
       score += 30;
       matched_keywords.push(role);
       match_reasons.push({ type: "role", value: role });
@@ -100,8 +107,9 @@ export function scoreJob(
   }
 
   // target_keywords 命中：同走 keywordMatchTier 跨语言召回（与 Jobs 页同口径），替换裸 includes。
+  // 同样过跨行业门（与 role 一致）：跨行业岗的关键词命中不算数。
   for (const kw of preferences.target_keywords || []) {
-    if (keywordMatchTier(job, kw)) {
+    if (industryAllowed && keywordMatchTier(job, kw)) {
       score += 5;
       matched_keywords.push(kw);
       match_reasons.push({ type: "keyword", value: kw });
