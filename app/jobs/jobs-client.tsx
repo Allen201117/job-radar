@@ -321,7 +321,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
         <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-[#cfe6b0] dark:border-[#a3d06a]/[0.30] bg-[#eef6e0] dark:bg-[#a3d06a]/[0.15] px-3.5 py-2.5 text-sm">
           <Sparkle size={16} weight="fill" className="text-[#6f9a3a] dark:text-[#a3d06a]" aria-hidden="true" />
           <span className="font-medium text-[#4f6f2a] dark:text-[#a3d06a]">
-            本次带回 {officialJobs.length} 个岗位
+            本次新增 {officialJobs.length} 个新岗位
             {(filters.city || filters.jobType || filters.keyword) &&
             newMatching.length !== officialJobs.length
               ? `，其中 ${newMatching.length} 个合你当前筛选`
@@ -365,7 +365,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
             "正在搜索岗位库…"
           ) : (
             <>
-              {newViewActive ? "只看本次带回：" : "库里匹配你筛选的 "}
+              {newViewActive ? "只看本次新增：" : "库里匹配你筛选的 "}
               {newViewActive ? newMatching.length : total} 个岗位
               {!newViewActive && filters.keyword
                 ? `（精确 ${exactCount} + 相关 ${Math.max(0, total - exactCount)}）`
