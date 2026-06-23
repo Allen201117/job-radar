@@ -63,13 +63,12 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
   useEffect(() => {
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    // 滚动揭示 + 数字滚动
+    // 滚动揭示（静态产品示意，不再有业务数字动画）
     const io = new IntersectionObserver(
       (entries) => {
         entries.forEach((en) => {
           if (!en.isIntersecting) return;
           en.target.classList.add("in");
-          en.target.querySelectorAll<HTMLElement>("[data-count]").forEach((n) => countUp(n, reduce));
           io.unobserve(en.target);
         });
       },
@@ -77,27 +76,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
     );
     document.querySelectorAll(".lp-reveal").forEach((el) => io.observe(el));
 
-    // hero 里的数字立即触发（不在 reveal 容器内）
-    const heroNums = document.querySelectorAll<HTMLElement>(".lp-hero [data-count]");
-    const t = window.setTimeout(() => heroNums.forEach((n) => countUp(n, reduce)), 450);
-
-    function countUp(el: HTMLElement, skip: boolean) {
-      if (el.dataset.done) return;
-      el.dataset.done = "1";
-      const target = Number(el.dataset.count || "0");
-      if (skip) { el.textContent = String(target); return; }
-      const dur = 1300;
-      let start: number | null = null;
-      const step = (ts: number) => {
-        if (start === null) start = ts;
-        const p = Math.min((ts - start) / dur, 1);
-        el.textContent = String(Math.round(target * (1 - Math.pow(1 - p, 3))));
-        if (p < 1) requestAnimationFrame(step);
-      };
-      requestAnimationFrame(step);
-    }
-
-    if (reduce) return () => { io.disconnect(); window.clearTimeout(t); };
+    if (reduce) return () => { io.disconnect(); };
 
     // hero 鼠标视差
     const hero = document.querySelector<HTMLElement>(".lp-hero");
@@ -137,7 +116,6 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
 
     return () => {
       io.disconnect();
-      window.clearTimeout(t);
       hero?.removeEventListener("pointermove", onHeroMove);
       hero?.removeEventListener("pointerleave", onHeroLeave);
       tiltHandlers.forEach(({ card, move, leave }) => {
@@ -184,9 +162,9 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
           <figure className="lp-float absolute left-[-12px] top-[54px]" style={{ ["--fd" as string]: 42 } as CSSProperties}>
             <div className="float-soft">
               <div className={`lp-fcard ${cardBase} w-[200px] p-3.5`} style={{ ["--rot" as string]: "-6deg" } as CSSProperties}>
-                <p className="m-0 text-[11px] font-semibold text-[#8a8275] dark:text-[#9a9184]">今日官方岗位</p>
-                <p className="mb-0 mt-1.5 text-[2.1rem] font-extrabold leading-none tabular-nums" data-count="24">0</p>
-                <p className="mb-0 mt-1.5 text-[12px] text-[#8a8275] dark:text-[#9a9184]"><span className="tabular-nums" data-count="11">0</span> 个高匹配待处理</p>
+                <p className="m-0 text-[11px] font-semibold text-[#8a8275] dark:text-[#9a9184]">今日机会</p>
+                <p className="mb-0 mt-1.5 text-[1.45rem] font-extrabold leading-tight">少量今日机会</p>
+                <p className="mb-0 mt-1.5 text-[12px] text-[#8a8275] dark:text-[#9a9184]">高匹配待处理</p>
                 <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/[0.07] dark:bg-white/[0.08]"><div className="h-full w-[46%] rounded-full bg-[#7fb2e8]" /></div>
               </div>
             </div>
@@ -203,11 +181,11 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
                     <span className="rounded-full bg-black/[0.06] px-2.5 py-0.5 text-[11px] font-semibold dark:bg-white/[0.08]">外企</span>
                     <span className="rounded-full bg-black/[0.06] px-2.5 py-0.5 text-[11px] font-semibold dark:bg-white/[0.08]">AI</span>
                   </div>
-                  <div className="rounded-[11px] bg-[#00b85f] px-2.5 py-1 text-[15px] font-extrabold text-white tabular-nums" data-count="82">0</div>
+                  <span className="rounded-[11px] bg-[#00b85f] px-2.5 py-1 text-[12px] font-extrabold text-white">高匹配</span>
                 </div>
               </div>
             </div>
-            <figcaption className="mt-2 text-right text-[12px] text-[#9a9184] dark:text-[#837c70]">官方岗位卡 · 匹配分</figcaption>
+            <figcaption className="mt-2 text-right text-[12px] text-[#9a9184] dark:text-[#837c70]">官方岗位详情</figcaption>
           </figure>
 
           <figure className="lp-float absolute bottom-[-26px] left-[6px]" style={{ ["--fd" as string]: 24 } as CSSProperties}>

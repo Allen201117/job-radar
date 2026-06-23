@@ -59,8 +59,11 @@ export async function middleware(request: NextRequest) {
   const isLanding = request.nextUrl.pathname === "/";
 
   if (!user && !isLoginPage && !isAuthCallback && !isLanding) {
+    // 保留原始受保护路径（pathname + query），登录成功后回跳。next 只存站内相对路径。
     const url = request.nextUrl.clone();
     url.pathname = "/login";
+    url.search = "";
+    url.searchParams.set("next", request.nextUrl.pathname + request.nextUrl.search);
     return withCookies(NextResponse.redirect(url));
   }
 
