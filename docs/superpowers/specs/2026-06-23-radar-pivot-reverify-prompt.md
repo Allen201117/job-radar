@@ -88,3 +88,20 @@ git diff --check                     # 干净
 
 给结论，含：① 自动化门复跑结果；② 每个缺陷 🟢/🔵 项的 通过/失败/未验(原因)；③ 性能脚本实测每分支与总耗时 + 是否达标(+不达标的 EXPLAIN)；④ 是否应用了测试迁移、哪些 live 流程真过；⑤ 仍未验项与原因；⑥ 残留缺陷(根因+复现+实际vs期望，分必须改/建议改)；⑦ git status --short。
 **不得只回"已完成/测试通过"，不得引用旧结果，不得 push。**
+
+---
+
+## 5. 复验轮 2 — 你上轮 6 个阻断项的处置（commit `308291e`，HEAD 仍未 push）
+
+> 自动化门已复跑：node --test **453** / crawler 409 / tsc 0 / build / check-migrations 168 / git diff --check 全绿。
+
+| # | 你上轮阻断项 | 处置 | 复验方式 |
+|---|---|---|---|
+| 1 | 真库性能门失败（company 110 行 22s、服务端仅 4ms） | 🟡 **代码已改**：三并行分支（最多 3 次跨区 SSL 握手）→ **合并成一条 `search_doc` OR 查询（同一 GIN BitmapOr）= 单连接单往返**，直击「服务端快但连接/跨区慢」的真因。`lib/jobs-store/opportunities.ts` recallViaStore。 | 🔵 **必须你复验**：正常网络/部署路径跑 `verify-opportunity-recall.ts`，确认 ≤2.5/5/8s。沙箱对 HK 限速测不准，我无法判定真实达标；若仍超标，多半是 Vercel↔HK 跨区延迟的基础设施问题（超本 Spec 范围，需用户定 region/连接池）。 |
+| 2 | 线上迁移 161–163 未应用（PGRST205） | ⚪ **非代码缺陷**：因未 push，迁移没自动应用。 | 🔵 需用户授权：push（自动 apply）或在测试库手动 apply 161/162/163，再按手册 §5 走写类。 |
+| 3 | 行业门未复用权威 `jobIndustryAllowed()` | 🟢 **已修**：`eligibility.ts industryState` 拒绝判定改为直接调 `jobIndustryAllowed()`；allowed 后才用同源 `classifyCompanyIndustry` 细分 match/unknown（仅供打分/degrade，不改拒绝口径）。 | 🟢 读 `eligibility.ts`（约 line 74）确认调用 jobIndustryAllowed；node --test opportunity-eligibility 全绿。 |
+| 4 | 动作埋点在 API 成功前发 + acting 防不住连点 | 🟢 **已修**：`JobCard.tsx callActionApi` 把 `track()` 移到 **fetch 成功之后**；新增 `actingRef`（useRef）在入口同步去重，挡同一渲染周期重复请求。 | 🟢 读 `JobCard.tsx`（callActionApi）确认 track 在 try 成功分支内、actingRef 守卫；🔵 live 时连点/断网复测不重复发、不记成功。 |
+| 5 | `coverage_schema_unavailable` 漏判 PGRST205 | 🟢 **已修**：抽 `lib/opportunities/schema-errors.ts`（`isMissingRelation` 认 PGRST205/42P01、`isMissingFunction` 认 PGRST202/42883 + 文本兜底），preferences/radar/job-actions 三路由统一复用；**新增 `tests/schema-errors.test.js`(5 例)**。 | 🟢 跑 `node --test tests/schema-errors.test.js`；读三路由确认复用同一 helper。🔵 live：缺表时 PUT /api/preferences 返回 `coverage_schema_unavailable`（非 coverage_sync_failed）。 |
+| 6 | `candidate_capped` 截断恰好时误判 false | 🟢 **已修**：合并查询后 `capped = rows.length >= limit`（命中 limit 即截断=true）；Supabase 回退同口径（branchCapped）。 | 🟢 读 `opportunities.ts` recallViaStore 末行；🔵 live：用极宽画像命中 4000 行确认 candidate_capped=true。 |
+
+仍未由我 live 验证（同 §3）：性能真实达标、全部写类流程（迁移未应用 + 沙箱断网）。请在真实环境补齐后再判通过/不通过。
