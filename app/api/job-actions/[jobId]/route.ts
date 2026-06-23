@@ -59,7 +59,15 @@ export async function PUT(request: NextRequest, { params }: { params: { jobId: s
     p_job_snapshot: snapshot,
   });
   if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    // 迁移 162 未应用（RPC/列不存在）→ 稳定 schema 码（§9），前端可诚实提示「功能暂不可用」
+    const schemaMissing =
+      error.code === "42883" ||
+      error.code === "PGRST202" ||
+      /set_job_primary_action|could not find the function|does not exist|schema cache/i.test(error.message || "");
+    return NextResponse.json(
+      { ok: false, error: schemaMissing ? "action_schema_unavailable" : error.message },
+      { status: schemaMissing ? 503 : 500 },
+    );
   }
   return NextResponse.json({ ok: true, action: (data as string | null) ?? null });
 }

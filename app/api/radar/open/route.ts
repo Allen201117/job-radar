@@ -29,7 +29,12 @@ export async function POST(request: NextRequest) {
     { onConflict: "user_id" },
   );
   if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    // 迁移 161 未应用（user_radar_state 不存在）→ 稳定 schema 码（§9）
+    const schemaMissing = error.code === "42P01" || /user_radar_state|does not exist|schema cache/i.test(error.message || "");
+    return NextResponse.json(
+      { ok: false, error: schemaMissing ? "radar_schema_unavailable" : error.message },
+      { status: schemaMissing ? 503 : 500 },
+    );
   }
   return new NextResponse(null, { status: 204 });
 }
