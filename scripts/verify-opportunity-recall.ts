@@ -1,7 +1,9 @@
-// 只读性能验证：用真实 JOBS_DATABASE_URL + 固定画像，量「机会召回」三分支与合并的耗时。
+// 只读性能验证：用真实 JOBS_DATABASE_URL + 固定画像，量「机会召回」的真实往返耗时（含行传输）。
 // 跑：JOBS_DATABASE_URL 已在环境（set -a; source .env.local; set +a）后 `npx tsx scripts/verify-opportunity-recall.ts`
-// 不打印连接串/密码。复刻 lib/jobs-store/opportunities.ts 的召回 SQL（截断 summary + GIN + 并行 + order by + cap 4000），
-// 量真实往返（含行传输）——这是 EXPLAIN 测不到、却是 P0-1 真正瓶颈的部分。
+// 不打印连接串/密码。
+//
+// ⚠️ 必须与 lib/jobs-store/opportunities.ts 的 recallViaStore 同口径：P0-1 第二轮已把「三并行分支」
+//    合并成**一条** search_doc OR 查询（单连接单往返）——本脚本随之改为量这条合并查询，否则测的是旧设计。
 import { Pool } from "pg";
 // china-keyword-expansion 为 CommonJS（.js），含 ftsCandidateTerms。
 import { ftsCandidateTerms } from "../lib/china-keyword-expansion";
@@ -33,16 +35,11 @@ const PROFILE = {
   targetCompanies: ["字节跳动", "示例新公司XYZ"],
 };
 const SUMMARY_TRUNC = 500;
+// 与 RECALL_COLUMNS 同步（opportunities.ts）
 const COLS =
   `id, source_id, company, title, location, job_type, left(btrim(summary), ${SUMMARY_TRUNC}) as summary, ` +
   "jd_url, apply_url, salary_text, posted_at, first_seen_at, last_seen_at, status, content_hash, created_at, " +
   "experience, education, deadline, enrich_fail_count, enrich_checked_at, canonical_jd_url";
-
-function branchSql(recentToo: boolean): string {
-  let where = "status='active' and last_seen_at >= now() - interval '7 days' and summary is not null and char_length(btrim(summary)) >= 60 and search_doc @@ to_tsquery('simple', $1)";
-  if (recentToo) where += " and first_seen_at >= now() - interval '7 days'";
-  return `select ${COLS} from jobs where ${where} order by first_seen_at desc limit 4000`;
-}
 
 async function main() {
   const url = process.env.JOBS_DATABASE_URL;
@@ -60,37 +57,39 @@ async function main() {
   const cityTs = buildTsquery(PROFILE.targetLocations, []);
   const companyTs = buildTsquery(PROFILE.targetCompanies, []);
 
-  const run = async (label: string, sql: string, ts: string) => {
-    const t0 = Date.now();
-    const r = await pool.query(sql, [ts]);
-    const ms = Date.now() - t0;
-    console.log(`  ${label.padEnd(10)} ${String(ms).padStart(6)}ms  rows=${r.rowCount}`);
-    return { ms, rows: r.rows };
-  };
+  // 复刻 recallViaStore：role OR company OR (city AND 近7天)，单条查询、单连接。
+  const params: unknown[] = [];
+  const ors: string[] = [];
+  if (roleTs) { params.push(roleTs); ors.push(`search_doc @@ to_tsquery('simple', $${params.length})`); }
+  if (companyTs) { params.push(companyTs); ors.push(`search_doc @@ to_tsquery('simple', $${params.length})`); }
+  if (cityTs) { params.push(cityTs); ors.push(`(search_doc @@ to_tsquery('simple', $${params.length}) and first_seen_at >= now() - interval '7 days')`); }
+  const sql =
+    `select ${COLS} from jobs where status='active' and last_seen_at >= now() - interval '7 days' ` +
+    `and summary is not null and char_length(btrim(summary)) >= 60 and (${ors.join(" or ")}) ` +
+    `order by first_seen_at desc limit 4000`;
 
   try {
-    console.log("画像：算法 / 上海 / 字节跳动+示例新公司XYZ / 互联网 / daily 5");
-    console.log(`roleTs ${roleTs ? roleTs.length : 0} 字符\n分支耗时（含行传输）：`);
-    const t0 = Date.now();
-    const [role, company, city] = await Promise.all([
-      run("role", branchSql(false), roleTs!),
-      run("company", branchSql(false), companyTs!),
-      run("city", branchSql(true), cityTs!),
-    ]);
-    const recallMs = Date.now() - t0;
-    const byId = new Map<string, any>();
-    for (const set of [role.rows, company.rows, city.rows]) for (const r of set) if (!byId.has(r.id)) byId.set(r.id, r);
-    const merged = byId.size;
-    const capped = merged > 4000;
-    const slowest = Math.max(role.ms, company.ms, city.ms);
-
-    console.log(`\n合并候选：${Math.min(merged, 4000)}（去重前 ${merged}，candidate_capped=${capped}）`);
-    console.log(`并行 recall 总耗时：${recallMs}ms`);
+    console.log("画像：算法 / 上海 / 字节跳动+示例新公司XYZ");
+    console.log("召回 = 单条合并 search_doc OR 查询（单连接单往返）\n");
+    // 先 warm 一次连接（排除冷池 SSL 握手对单次测量的污染），再正式量 3 次取中位。
+    await pool.query("select 1");
+    const samples: number[] = [];
+    let lastRows = 0;
+    for (let i = 0; i < 3; i++) {
+      const t0 = Date.now();
+      const r = await pool.query(sql, params);
+      samples.push(Date.now() - t0);
+      lastRows = r.rowCount ?? 0;
+    }
+    samples.sort((a, b) => a - b);
+    const median = samples[1];
+    const capped = lastRows >= 4000;
+    console.log(`三次耗时(ms)：${samples.join(" / ")}  中位 ${median}ms  rows=${lastRows}  candidate_capped=${capped}`);
     console.log("\n门槛检查：");
-    console.log(`  单条 ≤2500ms：${slowest <= 2500 ? "PASS" : "FAIL"}（最慢 ${slowest}ms）`);
-    console.log(`  recall ≤5000ms：${recallMs <= 5000 ? "PASS" : "FAIL"}（${recallMs}ms）`);
-    if (slowest > 2500 || recallMs > 5000) {
-      console.log("  ⚠️ 未达标：贴上 EXPLAIN(ANALYZE) 看是 plan 还是传输，再决定优化；不要靠抬 timeout 蒙混。");
+    console.log(`  合并召回 ≤5000ms：${median <= 5000 ? "PASS" : "FAIL"}（中位 ${median}ms）`);
+    console.log("  （/today SSR ≤8s 由此 + 引擎纯 JS 推断；引擎对数千行通常 <1s + 一次 sources 批查）");
+    if (median > 5000) {
+      console.log("  ⚠️ 未达标：贴 EXPLAIN(ANALYZE) 看 plan vs 传输——plan 快而总慢=跨区延迟(基础设施层，需定 region/连接池)，不要靠抬 timeout 蒙混。");
     }
   } finally {
     await pool.end();

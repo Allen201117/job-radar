@@ -105,3 +105,34 @@ git diff --check                     # 干净
 | 6 | `candidate_capped` 截断恰好时误判 false | 🟢 **已修**：合并查询后 `capped = rows.length >= limit`（命中 limit 即截断=true）；Supabase 回退同口径（branchCapped）。 | 🟢 读 `opportunities.ts` recallViaStore 末行；🔵 live：用极宽画像命中 4000 行确认 candidate_capped=true。 |
 
 仍未由我 live 验证（同 §3）：性能真实达标、全部写类流程（迁移未应用 + 沙箱断网）。请在真实环境补齐后再判通过/不通过。
+
+---
+
+## 6. 测试库验收路径（用户已拍板：不 push，用测试库验）
+
+> 两条独立验证，互不依赖。在**正常网络**机器上做（不要在受限沙箱里量性能）。
+
+### 6A. 性能（不需要任何迁移）
+召回打的是**香港 jobs 库**（与 Supabase 用户表无关），所以只要 `JOBS_DATABASE_URL` + 正常网络即可：
+```bash
+cd <worktree>; set -a; source .env.local; set +a
+npx tsx scripts/verify-opportunity-recall.ts
+```
+- 脚本已与最新实现同口径（**单条合并 search_doc OR 查询**，warm-up 后取 3 次中位）。门槛：合并召回中位 **≤5000ms**（据此 + 引擎纯 JS 推断 /today SSR ≤8s）。
+- 若仍 FAIL：贴 `EXPLAIN (ANALYZE)`。**plan 快但总慢 = 跨区传输/延迟**（本机→香港 与 Vercel→香港 都受此影响）→ 属基础设施层（定 Vercel region / 上连接池 pgBouncer-Supavisor），超本 Spec 代码范围，回报给用户定夺，不要在代码里抬 timeout 蒙混。
+- ⚠️ 注意：本机→香港 的延迟**未必等于** Vercel→香港；本机 PASS 不完全代表生产 PASS，但本机 FAIL 基本能定位是 plan 还是传输。
+
+### 6B. 写类（需要一套带全 schema 的测试 Supabase）
+写类（值得投/不适合/撤销/关注公司覆盖/radar state）写 **Supabase 用户表**，需要把迁移应用上去：
+1. 备一套**测试 Supabase**（不要用生产）。取其直连串（端口 5432，含密码）。
+2. 应用**全部**迁移（不只 161-163；测试库要有完整 schema 才能跑）——用仓库脚本一把过：
+   ```bash
+   SUPABASE_DB_URL="<测试库直连串>" bash scripts/db-migrate.sh
+   ```
+   （脚本按序 apply 001→163，幂等；161/162/163 即本轮新表/列/RPC。）
+3. 在 worktree `.env.local` 把 `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`/`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` 指向**测试 Supabase**；`JOBS_DATABASE_URL` **保持指向香港库**（岗位用真实数据，动作 API 会拿真岗校验存在性后把 job_actions 写进测试 Supabase）。
+4. 在测试 Supabase Auth 建测试账号 `test@jobradar.local / test123456`。
+5. `npm run dev` → `localhost:3000` 登录，按 §5 的 🔵 项（C 动作闭环 / E 关注公司 / §5.3 越权）逐条走，并抽查 `events` 表无 PII。
+6. 复验本单 §5 表里 P0-4/5/6 的 🔵：动作失败不记成功事件、缺表前各路由返回对应 `*_schema_unavailable`、极宽画像命中 4000 行时 candidate_capped=true。
+
+应用迁移后，§2.1 说的「写类未验」即可全部转为真实结论。回报仍按 §4。
