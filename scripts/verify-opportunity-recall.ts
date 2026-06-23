@@ -35,11 +35,10 @@ const PROFILE = {
   targetCompanies: ["字节跳动", "示例新公司XYZ"],
 };
 const SUMMARY_TRUNC = 500;
-// 与 RECALL_COLUMNS 同步（opportunities.ts）
+// 与 RECALL_COLUMNS 同步（opportunities.ts，P0-1 已缩到硬门/打分必需列）
 const COLS =
   `id, source_id, company, title, location, job_type, left(btrim(summary), ${SUMMARY_TRUNC}) as summary, ` +
-  "jd_url, apply_url, salary_text, posted_at, first_seen_at, last_seen_at, status, content_hash, created_at, " +
-  "experience, education, deadline, enrich_fail_count, enrich_checked_at, canonical_jd_url";
+  "jd_url, salary_text, first_seen_at, last_seen_at, status, education";
 
 async function main() {
   const url = process.env.JOBS_DATABASE_URL;
@@ -75,16 +74,18 @@ async function main() {
     await pool.query("select 1");
     const samples: number[] = [];
     let lastRows = 0;
+    let lastPayloadBytes = 0;
     for (let i = 0; i < 3; i++) {
       const t0 = Date.now();
       const r = await pool.query(sql, params);
       samples.push(Date.now() - t0);
       lastRows = r.rowCount ?? 0;
+      lastPayloadBytes = Buffer.byteLength(JSON.stringify(r.rows), "utf8"); // 仅量大小，不打印行内容
     }
     samples.sort((a, b) => a - b);
     const median = samples[1];
     const capped = lastRows >= 4000;
-    console.log(`三次耗时(ms)：${samples.join(" / ")}  中位 ${median}ms  rows=${lastRows}  candidate_capped=${capped}`);
+    console.log(`三次耗时(ms)：${samples.join(" / ")}  中位 ${median}ms  rows=${lastRows}  payload_bytes=${lastPayloadBytes}  candidate_capped=${capped}`);
     console.log("\n门槛检查：");
     console.log(`  合并召回 ≤5000ms：${median <= 5000 ? "PASS" : "FAIL"}（中位 ${median}ms）`);
     console.log("  （/today SSR ≤8s 由此 + 引擎纯 JS 推断；引擎对数千行通常 <1s + 一次 sources 批查）");
