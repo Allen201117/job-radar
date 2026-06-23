@@ -1,5 +1,6 @@
-// 偏好读写 + 关注公司覆盖同步（§4.4 / §10.3）。取代 PreferenceForm 直连 Supabase 的写法。
-// 偏好本体走用户上下文 supabase（RLS 限本人）；覆盖请求 company_watch_requests 走 service role 代写（客户端无写策略）。
+// 偏好读写 + 关注公司覆盖同步（§4.4 / §10.3）。取代 PreferenceForm 直连 Supabase。
+// 偏好本体走用户上下文 supabase（RLS 限本人）；覆盖请求 company_watch_requests 走 service role 代写。
+// P0-2：coverage 必须**真实写入 + read-back 成功**才算成功；任一 DB 操作出错 → 诚实部分成功，绝不内存伪造 badge。
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
@@ -12,7 +13,6 @@ export const runtime = "nodejs";
 const MAX_ITEMS = 30;
 const MAX_LEN = 80;
 
-// trim、去空、单项 ≤80、大小写不敏感去重、≤30 项
 function cleanArray(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   const seen = new Set<string>();
@@ -35,21 +35,40 @@ function clampDailyLimit(v: unknown): number {
   return Math.max(5, Math.min(30, n));
 }
 
-type Coverage = { company: string; status: string; matched_sources: number };
+type Coverage = { company: string; status: string; matched_sources: number; resolution_note: string | null };
 
-// §10.3：按 normalized company 比对 enabled sources，命中→covered；未命中→保留管理员态(researching/unsupported)否则 queued；
-// 删除不再 target 的请求。覆盖写用 service role。
+class CoverageError extends Error {
+  code: string;
+  constructor(code: string) {
+    super(code);
+    this.code = code;
+  }
+}
+
+// 表/函数不存在 → 迁移未应用，返回稳定 schema 码（§9）
+function isSchemaMissing(err: { code?: string; message?: string } | null | undefined): boolean {
+  if (!err) return false;
+  if (err.code === "42P01") return true; // undefined_table
+  const m = String(err.message || "");
+  return /does not exist/i.test(m) && /company_watch_requests/i.test(m);
+}
+
+// §10.3：按 normalized company 比对 enabled sources；命中→covered，否则保留管理员态或 queued；删不再 target 的。
+// 仅在所有写入 + read-back 成功后返回；任一出错 throw CoverageError（区分 schema 缺失 vs 其它）。
 async function syncCoverage(userId: string, targetCompanies: string[]): Promise<Coverage[]> {
   const service = createServiceClient();
 
-  const [{ data: sources }, { data: existing }] = await Promise.all([
-    service.from("sources").select("id, company").eq("enabled", true),
-    service.from("company_watch_requests").select("normalized_company, status").eq("user_id", userId),
-  ]);
+  const sourcesRes = await service.from("sources").select("id, company").eq("enabled", true);
+  if (sourcesRes.error) throw new CoverageError("coverage_sync_failed");
+  const existingRes = await service
+    .from("company_watch_requests")
+    .select("normalized_company, status")
+    .eq("user_id", userId);
+  if (existingRes.error)
+    throw new CoverageError(isSchemaMissing(existingRes.error) ? "coverage_schema_unavailable" : "coverage_sync_failed");
 
-  // normalized source company → source ids
   const sourceMap = new Map<string, string[]>();
-  for (const s of sources || []) {
+  for (const s of sourcesRes.data || []) {
     const norm = normalizeCompany(s.company);
     if (!norm) continue;
     const arr = sourceMap.get(norm) || [];
@@ -57,11 +76,10 @@ async function syncCoverage(userId: string, targetCompanies: string[]): Promise<
     sourceMap.set(norm, arr);
   }
   const existingStatus = new Map<string, string>();
-  for (const e of existing || []) existingStatus.set(e.normalized_company, e.status);
+  for (const e of existingRes.data || []) existingStatus.set(e.normalized_company, e.status);
 
   const keptNorms = new Set<string>();
   const rows: any[] = [];
-  const coverage: Coverage[] = [];
   for (const company of targetCompanies) {
     const norm = normalizeCompany(company);
     if (!norm || keptNorms.has(norm)) continue;
@@ -81,23 +99,41 @@ async function syncCoverage(userId: string, targetCompanies: string[]): Promise<
       matched_source_ids: matched,
       updated_at: new Date().toISOString(),
     });
-    coverage.push({ company, status, matched_sources: matched.length });
   }
 
   if (rows.length) {
-    await service.from("company_watch_requests").upsert(rows, { onConflict: "user_id,normalized_company" });
+    const up = await service
+      .from("company_watch_requests")
+      .upsert(rows, { onConflict: "user_id,normalized_company" });
+    if (up.error)
+      throw new CoverageError(isSchemaMissing(up.error) ? "coverage_schema_unavailable" : "coverage_sync_failed");
   }
-  // 删除不再 target 的请求
-  const { data: all } = await service
+
+  // 删不再 target 的请求
+  const allRes = await service
     .from("company_watch_requests")
     .select("id, normalized_company")
     .eq("user_id", userId);
-  const stale = (all || []).filter((r: any) => !keptNorms.has(r.normalized_company)).map((r: any) => r.id);
+  if (allRes.error) throw new CoverageError("coverage_sync_failed");
+  const stale = (allRes.data || []).filter((r: any) => !keptNorms.has(r.normalized_company)).map((r: any) => r.id);
   if (stale.length) {
-    await service.from("company_watch_requests").delete().in("id", stale);
+    const del = await service.from("company_watch_requests").delete().in("id", stale);
+    if (del.error) throw new CoverageError("coverage_sync_failed");
   }
 
-  return coverage;
+  // 权威 coverage 来自 read-back（不是内存计算）
+  const back = await service
+    .from("company_watch_requests")
+    .select("company, status, matched_source_ids, resolution_note")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true });
+  if (back.error) throw new CoverageError("coverage_sync_failed");
+  return (back.data || []).map((r: any) => ({
+    company: r.company,
+    status: r.status,
+    matched_sources: (r.matched_source_ids || []).length,
+    resolution_note: r.resolution_note ?? null,
+  }));
 }
 
 export async function GET() {
@@ -110,7 +146,7 @@ export async function GET() {
     supabase.from("candidate_profiles").select("*").eq("user_id", user.id).maybeSingle(),
     supabase
       .from("company_watch_requests")
-      .select("company, status, matched_source_ids")
+      .select("company, status, matched_source_ids, resolution_note")
       .eq("user_id", user.id)
       .order("created_at", { ascending: true }),
   ]);
@@ -120,10 +156,23 @@ export async function GET() {
     prefsRes.data as UserPreferences | null,
     candRes.data as CandidateProfile | null,
   );
+
+  // coverage 查询失败（如迁移未应用）→ 不返回空数组假装"无关注公司"，标 coverage_available=false（§P0-2.5）
+  if (watchRes.error) {
+    return NextResponse.json({
+      ok: true,
+      preferences: prefsRes.data || null,
+      profile_ready: profileReadiness(profile).ready,
+      coverage: [],
+      coverage_available: false,
+    });
+  }
+
   const coverage: Coverage[] = (watchRes.data || []).map((r: any) => ({
     company: r.company,
     status: r.status,
     matched_sources: (r.matched_source_ids || []).length,
+    resolution_note: r.resolution_note ?? null,
   }));
 
   return NextResponse.json({
@@ -131,6 +180,7 @@ export async function GET() {
     preferences: prefsRes.data || null,
     profile_ready: profileReadiness(profile).ready,
     coverage,
+    coverage_available: true,
   });
 }
 
@@ -157,28 +207,30 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ ok: false, error: upErr.message }, { status: 500 });
   }
 
-  let coverage: Coverage[] = [];
-  try {
-    coverage = await syncCoverage(user.id, prefs.target_companies);
-  } catch (e) {
-    console.error("[preferences] coverage sync failed:", (e as Error).message);
-  }
-
   const { data: cand } = await supabase
     .from("candidate_profiles")
     .select("*")
     .eq("user_id", user.id)
     .maybeSingle();
-  const profile = buildRadarProfile(
-    user.id,
-    { user_id: user.id, ...prefs } as UserPreferences,
-    cand as CandidateProfile | null,
-  );
+  const profile_ready = profileReadiness(
+    buildRadarProfile(user.id, { user_id: user.id, ...prefs } as UserPreferences, cand as CandidateProfile | null),
+  ).ready;
 
-  return NextResponse.json({
-    ok: true,
-    preferences: prefs,
-    profile_ready: profileReadiness(profile).ready,
-    coverage,
-  });
+  // 覆盖同步：成功才返回 coverage；失败返回诚实部分成功（偏好已存、coverage 未同步），前端不得显示成功 badge。
+  let coverage: Coverage[];
+  try {
+    coverage = await syncCoverage(user.id, prefs.target_companies);
+  } catch (e) {
+    const code = e instanceof CoverageError ? e.code : "coverage_sync_failed";
+    console.error("[preferences] coverage sync failed:", code, (e as Error).message);
+    return NextResponse.json({
+      ok: false,
+      preferences_saved: true,
+      coverage_synced: false,
+      error: code,
+      profile_ready,
+    });
+  }
+
+  return NextResponse.json({ ok: true, preferences: prefs, profile_ready, coverage, coverage_synced: true });
 }

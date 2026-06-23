@@ -8,7 +8,7 @@ import TagInput from "./TagInput";
 import SaveToast, { type SaveState } from "@/components/SaveToast";
 import { Buildings, CheckCircle, SlidersHorizontal } from "@phosphor-icons/react";
 
-type Coverage = { company: string; status: string; matched_sources: number };
+type Coverage = { company: string; status: string; matched_sources: number; resolution_note?: string | null };
 
 // §10.1 覆盖状态文案（不暴露 adapter/parser/source URL/抓取细节）
 const COVERAGE_LABEL: Record<string, { label: string; tone: string }> = {
@@ -21,6 +21,7 @@ const COVERAGE_LABEL: Record<string, { label: string; tone: string }> = {
 export default function PreferenceForm() {
   const [prefs, setPrefs] = useState<UserPreferences | null>(null);
   const [coverage, setCoverage] = useState<Coverage[]>([]);
+  const [coverageAvailable, setCoverageAvailable] = useState(true);
   const [message, setMessage] = useState("");
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveErr, setSaveErr] = useState("");
@@ -47,6 +48,7 @@ export default function PreferenceForm() {
       if (data?.ok) {
         setPrefs(data.preferences ? withDefaults(data.preferences) : createEmptyPrefs());
         setCoverage(Array.isArray(data.coverage) ? data.coverage : []);
+        setCoverageAvailable(data.coverage_available !== false);
       } else {
         setMessage("加载失败：" + (data?.error || "未知错误"));
       }
@@ -75,12 +77,22 @@ export default function PreferenceForm() {
         }),
       });
       const data = await resp.json();
-      if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
-      const newCoverage: Coverage[] = data.coverage || [];
-      setCoverage(newCoverage);
+      // 偏好本体都没存（5xx / 非部分成功）→ 真失败
+      if (!data?.ok && !data?.preferences_saved) {
+        throw new Error(data?.error || `HTTP ${resp.status}`);
+      }
       if (data.preferences) setPrefs(withDefaults({ ...prefs, ...data.preferences }));
-      emitWatchEvents(prevCompanies, newCoverage);
-      setSaveState("done");
+      if (data.ok) {
+        const newCoverage: Coverage[] = data.coverage || [];
+        setCoverage(newCoverage);
+        setCoverageAvailable(true);
+        emitWatchEvents(prevCompanies, newCoverage);
+        setSaveState("done");
+      } else {
+        // 偏好已存、关注公司覆盖同步失败 → 诚实部分成功，不显示成功 badge、不伪造 coverage
+        setSaveErr("求职目标已保存，但关注公司状态同步失败，请重试。");
+        setSaveState("error");
+      }
     } catch (err) {
       setSaveErr("保存失败：" + (err as Error).message);
       setSaveState("error");
@@ -191,14 +203,24 @@ export default function PreferenceForm() {
             placeholder="Apple、百度、京东、字节…"
           />
         </div>
-        {coverage.length > 0 && (
+        {!coverageAvailable && (
+          <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-xs text-[#9c4a3c] dark:border-[#7a392e]/[0.6] dark:bg-[#3a201a] dark:text-[#e6a99f]">
+            关注公司状态暂时无法获取，请稍后刷新。
+          </p>
+        )}
+        {coverageAvailable && coverage.length > 0 && (
           <ul className="mt-3 space-y-1.5">
             {coverage.map((c) => {
               const meta = COVERAGE_LABEL[c.status] || COVERAGE_LABEL.queued;
               return (
-                <li key={c.company} className="flex items-center justify-between gap-3 text-sm">
-                  <span className="min-w-0 truncate font-medium text-[#3f3a33] dark:text-[#d9d0c2]">{c.company}</span>
-                  <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${meta.tone}`}>{meta.label}</span>
+                <li key={c.company} className="text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="min-w-0 truncate font-medium text-[#3f3a33] dark:text-[#d9d0c2]">{c.company}</span>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${meta.tone}`}>{meta.label}</span>
+                  </div>
+                  {c.resolution_note && (
+                    <p className="mt-1 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">{c.resolution_note}</p>
+                  )}
                 </li>
               );
             })}

@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
+import { normalizeCompany } from "@/lib/company-normalize";
 
 export const runtime = "nodejs";
 
@@ -73,13 +74,46 @@ export async function PATCH(request: NextRequest) {
   const note = typeof body.resolution_note === "string" ? body.resolution_note.trim().slice(0, 300) || null : null;
 
   const service = createServiceClient();
+
+  // covered 必须关联真实 enabled source（§10.4 / P0-2.7）：优先用传入的 matched_source_ids（校验存在且 enabled），
+  // 否则按归一公司名自动关联 enabled sources；一个都没有 → 拒绝，不能空标 covered。
+  let matchedSourceIds: string[] = [];
+  if (status === "covered") {
+    const provided = Array.isArray(body.matched_source_ids)
+      ? body.matched_source_ids.filter((s: unknown): s is string => typeof s === "string")
+      : [];
+    if (provided.length) {
+      const { data: srcs, error: srcErr } = await service.from("sources").select("id, enabled").in("id", provided);
+      if (srcErr) return NextResponse.json({ ok: false, error: srcErr.message }, { status: 500 });
+      const validEnabled = new Set((srcs || []).filter((s: any) => s.enabled).map((s: any) => s.id));
+      if (provided.some((id: string) => !validEnabled.has(id))) {
+        return NextResponse.json({ ok: false, error: "invalid_source_ids" }, { status: 400 });
+      }
+      matchedSourceIds = provided;
+    } else {
+      const { data: srcs, error: srcErr } = await service.from("sources").select("id, company").eq("enabled", true);
+      if (srcErr) return NextResponse.json({ ok: false, error: srcErr.message }, { status: 500 });
+      matchedSourceIds = (srcs || []).filter((s: any) => normalizeCompany(s.company) === normalized).map((s: any) => s.id);
+    }
+    if (!matchedSourceIds.length) {
+      return NextResponse.json({ ok: false, error: "covered_requires_source" }, { status: 400 });
+    }
+  }
+
+  const patch: Record<string, unknown> = {
+    status,
+    resolution_note: note,
+    matched_source_ids: matchedSourceIds, // covered 写真实 source；非 covered 清空
+    updated_at: new Date().toISOString(),
+  };
+
   // 批量更新同 normalized_company 的所有用户请求（§10.4）
   const { error } = await service
     .from("company_watch_requests")
-    .update({ status, resolution_note: note, updated_at: new Date().toISOString() })
+    .update(patch)
     .eq("normalized_company", normalized);
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, matched_sources: matchedSourceIds.length });
 }
