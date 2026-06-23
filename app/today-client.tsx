@@ -1,27 +1,137 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import JobCard from "@/components/JobCard";
+import { track } from "@/lib/track";
 import type { ScoredJob } from "@/lib/types";
+import type { Opportunity, OpportunityFeed } from "@/lib/opportunities/types";
 
 type PrimaryAction = "saved" | "ignored" | "applied";
+type SectionKey = "new" | "priority" | "explore" | "aging";
 
-export default function TodayClient({
-  initialJobs,
+const SECTION_META: Record<SectionKey, { title: string; subtitle?: string }> = {
+  new: { title: "新出现", subtitle: "自上次查看以来新发现、且仍在招的对口岗位。" },
+  priority: { title: "高匹配待处理", subtitle: "和你目标最贴合、还没处理的官方岗位。" },
+  explore: { title: "可以拓展看看", subtitle: "相关方向或你关注的公司，匹配度稍低，按需查看。" },
+  aging: {
+    title: "等待再次确认",
+    subtitle: "以下岗位最近一次确认已超过常规更新周期，可能需要你再核实在招状态。",
+  },
+};
+
+const ACTION_LABEL: Record<PrimaryAction, string> = {
+  saved: "已加入「值得投」",
+  applied: "已记为「已投递」",
+  ignored: "已标记不适合",
+};
+
+// Opportunity → JobCard 需要的 ScoredJob 形（match_* 字段仅为类型兼容，opportunity 变体不读它们）
+function toScoredJob(opp: Opportunity): ScoredJob {
+  return {
+    ...(opp.job as ScoredJob),
+    match_score: opp.score,
+    matched_keywords: [],
+    match_reasons: [],
+    hidden_reason: null,
+    user_action: opp.userAction,
+  };
+}
+
+// 画像不完整空状态（§4.3）：只引导设目标，不展示任何随机岗位。
+export function OnboardingPanel({
+  missingContent,
+  missingLocation,
 }: {
-  initialJobs: ScoredJob[];
+  missingContent: boolean;
+  missingLocation: boolean;
 }) {
-  const [jobs, setJobs] = useState(initialJobs);
-  const router = useRouter();
-
-  // 展示时校验（②层）：给今日看板的岗位异步探活，死的当场隐藏（同 Jobs 页，复用 /api/jobs/liveness-check）。
-  const [deadIds, setDeadIds] = useState<Set<string>>(new Set());
-  const livenessRequested = useRef<Set<string>>(new Set());
+  const firedRef = useRef(false);
   useEffect(() => {
-    const ids = jobs
-      .filter((j) => j.id && !livenessRequested.current.has(j.id) && !deadIds.has(j.id))
-      .map((j) => j.id)
+    if (firedRef.current) return;
+    firedRef.current = true;
+    track("radar_onboarding_required", {
+      missing_roles: missingContent,
+      missing_locations: missingLocation,
+    });
+  }, [missingContent, missingLocation]);
+
+  return (
+    <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] bg-white/45 px-6 py-14 text-center dark:border-white/[0.1] dark:bg-white/[0.05]">
+      <h2 className="text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">先告诉我们你想找什么</h2>
+      <p className="mx-auto mt-2 max-w-md text-pretty text-[14px] leading-6 text-[#6b655a] dark:text-[#b6ad9d]">
+        设置目标岗位和城市后，系统会每天从企业官网中筛出值得处理的机会。
+      </p>
+      <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
+        <Link
+          href="/preferences"
+          className="inline-flex items-center justify-center rounded-full bg-[#1a1714] px-5 py-2.5 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+        >
+          设置求职目标
+        </Link>
+        <Link
+          href="/preferences#resume"
+          className="inline-flex items-center justify-center rounded-full border border-black/[0.1] bg-white/70 px-5 py-2.5 text-sm font-semibold text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
+        >
+          上传简历生成画像
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function EmptyQueue() {
+  return (
+    <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] bg-white/45 px-6 py-14 text-center dark:border-white/[0.1] dark:bg-white/[0.05]">
+      <h2 className="text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">今天暂时没有新的对口机会</h2>
+      <p className="mx-auto mt-2 max-w-md text-pretty text-[14px] leading-6 text-[#6b655a] dark:text-[#b6ad9d]">
+        系统持续在监控你关注的官方招聘源，有新机会会第一时间出现在这里。你也可以：
+      </p>
+      <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
+        <Link href="/preferences" className="rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]">
+          调整求职目标
+        </Link>
+        <Link href="/jobs" className="rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]">
+          搜索完整岗位库
+        </Link>
+        <Link href="/preferences" className="rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]">
+          添加关注公司
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
+  const [sections, setSections] = useState(feed.sections);
+  const [deadIds, setDeadIds] = useState<Set<string>>(new Set());
+  const [toast, setToast] = useState<{ jobId: string; action: PrimaryAction } | null>(null);
+
+  const removedRef = useRef<Map<string, { opp: Opportunity; key: SectionKey }>>(new Map());
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openedRef = useRef(false);
+  const livenessRequested = useRef<Set<string>>(new Set());
+
+  // 首次渲染后记录「上次打开」+ radar_open 埋点（Strict Mode 下 ref 去重）。
+  useEffect(() => {
+    if (openedRef.current) return;
+    openedRef.current = true;
+    const mainCount = feed.sections.new.length + feed.sections.priority.length + feed.sections.explore.length;
+    const source = new URLSearchParams(window.location.search).get("source") || "direct";
+    track("radar_open", { counts: feed.counts, source });
+    void fetch("/api/radar/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ generated_at: feed.generated_at, feed_count: Math.min(30, mainCount) }),
+    }).catch(() => {});
+  }, [feed]);
+
+  // 展示时校验（②层）：异步探活可见岗位，死的当场隐藏（复用 /api/jobs/liveness-check）。
+  useEffect(() => {
+    const visible = (["new", "priority", "explore", "aging"] as SectionKey[]).flatMap((k) => sections[k]);
+    const ids = visible
+      .map((o) => o.job.id)
+      .filter((id) => id && !livenessRequested.current.has(id) && !deadIds.has(id))
       .slice(0, 25);
     if (ids.length === 0) return;
     ids.forEach((id) => livenessRequested.current.add(id));
@@ -42,46 +152,143 @@ export default function TodayClient({
           });
         }
       } catch {
-        // 静默：探不动就不动，点击门 + 后台扫兜底
+        /* 静默：探不动就不动，后台 sweep 兜底 */
       }
     })();
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobs]);
+  }, [sections]);
 
+  function captureAndRemove(jobId: string): { opp: Opportunity; key: SectionKey } | null {
+    let found: { opp: Opportunity; key: SectionKey } | null = null;
+    setSections((prev) => {
+      const next = { ...prev };
+      for (const key of ["new", "priority", "explore", "aging"] as SectionKey[]) {
+        const idx = next[key].findIndex((o) => o.job.id === jobId);
+        if (idx >= 0) {
+          found = { opp: next[key][idx], key };
+          next[key] = next[key].filter((_, i) => i !== idx);
+          break;
+        }
+      }
+      return next;
+    });
+    return found;
+  }
+
+  function restore(opp: Opportunity, key: SectionKey) {
+    setSections((prev) => ({ ...prev, [key]: [opp, ...prev[key]] }));
+  }
+
+  function clearToast() {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = null;
+    setToast(null);
+  }
+
+  // JobCard 乐观回调：非空动作 → 移出队列并弹可撤销 toast；null（API 失败回滚）→ 还原。
   function handleActionChange(jobId: string, action: PrimaryAction | null) {
-    setJobs((items) =>
-      items.map((job) =>
-        job.id === jobId
-          ? {
-              ...job,
-              user_action: action,
-              hidden_reason:
-                action === "ignored"
-                  ? "ignored"
-                  : action === "applied"
-                    ? "applied_by_default"
-                    : null,
-            }
-          : job,
-      ),
-    );
-    router.refresh();
+    if (action !== null) {
+      if (removedRef.current.has(jobId)) return;
+      const captured = captureAndRemove(jobId);
+      if (!captured) return;
+      removedRef.current.set(jobId, captured);
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      setToast({ jobId, action });
+      toastTimer.current = setTimeout(() => {
+        removedRef.current.delete(jobId);
+        setToast(null);
+      }, 5000);
+    } else {
+      const captured = removedRef.current.get(jobId);
+      if (captured) {
+        removedRef.current.delete(jobId);
+        restore(captured.opp, captured.key);
+      }
+      if (toast?.jobId === jobId) clearToast();
+    }
+  }
+
+  async function undo() {
+    if (!toast) return;
+    const { jobId, action } = toast;
+    const captured = removedRef.current.get(jobId);
+    clearToast();
+    removedRef.current.delete(jobId);
+    if (captured) restore(captured.opp, captured.key);
+    track("opportunity_undo", { previous_action: action, surface: "today" });
+    try {
+      await fetch(`/api/job-actions/${jobId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: null }),
+      });
+    } catch {
+      /* 撤销失败也只是 DB 仍记着该动作，下次 feed 会反映；不打断用户 */
+    }
+  }
+
+  const mainSections: SectionKey[] = ["new", "priority", "explore"];
+  const mainCount = mainSections.reduce(
+    (n, k) => n + sections[k].filter((o) => !deadIds.has(o.job.id)).length,
+    0,
+  );
+  const agingVisible = sections.aging.filter((o) => !deadIds.has(o.job.id));
+
+  if (mainCount === 0 && agingVisible.length === 0) {
+    return <EmptyQueue />;
   }
 
   return (
-    <>
-      {jobs
-        .filter((job) => !deadIds.has(job.id))
-        .map((job) => (
-          <JobCard
-            key={job.id}
-            job={job}
-            onActionChange={handleActionChange}
-          />
-        ))}
-    </>
+    <div className="space-y-10">
+      {(["new", "priority", "explore", "aging"] as SectionKey[]).map((key) => {
+        const items = sections[key].filter((o) => !deadIds.has(o.job.id));
+        if (items.length === 0) return null;
+        const meta = SECTION_META[key];
+        return (
+          <section key={key}>
+            <div className="mb-3">
+              <h2 className="text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">
+                {meta.title}
+                <span className="ml-2 text-sm font-normal text-[#8a8275] dark:text-[#9a9184]">{items.length}</span>
+              </h2>
+              {meta.subtitle && (
+                <p className="mt-1 text-[13px] leading-5 text-[#8a8275] dark:text-[#9a9184]">{meta.subtitle}</p>
+              )}
+            </div>
+            <div className="space-y-3">
+              {items.map((opp) => (
+                <JobCard
+                  key={opp.job.id}
+                  job={toScoredJob(opp)}
+                  variant="opportunity"
+                  opportunityTier={opp.tier}
+                  opportunityReasons={opp.reasons}
+                  freshnessState={opp.freshness}
+                  onActionChange={handleActionChange}
+                />
+              ))}
+            </div>
+          </section>
+        );
+      })}
+
+      {toast && (
+        <div className="fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
+          <div className="flex items-center gap-3 rounded-full border border-black/[0.1] bg-[#1a1714] px-4 py-2.5 text-sm text-[#f7f1e6] shadow-lg dark:bg-[#f3ecdf] dark:text-[#16130f]">
+            <span>{ACTION_LABEL[toast.action]}</span>
+            <button
+              type="button"
+              onClick={undo}
+              className="font-semibold underline underline-offset-2 hover:opacity-80"
+            >
+              撤销
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
