@@ -1,0 +1,182 @@
+// 匹配事实计算（computeMatchFacts）+ 硬门（checkEligibility），§6.5。
+// computeMatchFacts 一次性算好所有维度，被 eligibility / scoring / 原因生成共用，杜绝口径漂移。
+// 严格复用既有 matcher（keywordMatchTier / recruitmentCategory / hasExplicitRecruitmentType /
+// educationMatch / jobIndustryAllowed 同源 classify / normalizeChinaCity / excludeJobs），不另造近似规则。
+import type { Job } from "../types";
+import type {
+  RadarProfile,
+  MatchFacts,
+  SourceMeta,
+  EligibilityResult,
+  DegradedDimension,
+  RejectReason,
+  TriState,
+  EducationLabel,
+} from "./types";
+import { freshnessState } from "./freshness";
+import {
+  keywordMatchTier,
+  recruitmentCategory,
+  hasExplicitRecruitmentType,
+  normalizeChinaCity,
+} from "../china-keyword-expansion";
+import { classifyCompanyIndustry, userTargetIndustryCategories } from "../company-industry";
+import { educationMatch } from "../education-rank";
+import { excludeJobs } from "../live-search";
+
+export interface ActionState {
+  primary: "saved" | "ignored" | "applied" | null;
+  viewed: boolean;
+}
+
+// role+keyword 跨查询取最优 tier；exact 立即胜出，否则首个 related。
+function bestRoleTier(job: Job, queries: string[]): { tier: "exact" | "related" | null; label: string | null } {
+  let label: string | null = null;
+  for (const q of queries) {
+    const t = keywordMatchTier(job, q);
+    if (t === "exact") return { tier: "exact", label: q };
+    if (t === "related" && label === null) label = q;
+  }
+  return { tier: label ? "related" : null, label };
+}
+
+// 城市三态（多目标城市，逐字对齐 job-filter.ts 的 includes 口径）
+function locationState(job: Job, targets: string[]): { state: TriState; name: string | null } {
+  if (targets.length === 0) return { state: "na", name: null };
+  const loc = String(job.location || "");
+  if (!loc) return { state: "unknown", name: null };
+  for (const t of targets) {
+    const norm = normalizeChinaCity(t);
+    if (loc.includes(t) || (norm && loc.includes(norm))) return { state: "match", name: norm || t };
+  }
+  return { state: "mismatch", name: null };
+}
+
+// 招聘阶段三态：仅在用户设了阶段时参与；岗位无明确类型信号 → unknown（不一刀切）
+function stageState(
+  job: Job,
+  userStage: string
+): { state: TriState; label: "实习" | "校招" | "社招" | null } {
+  if (!userStage) return { state: "na", label: null };
+  if (!hasExplicitRecruitmentType(job)) return { state: "unknown", label: null };
+  const cat = recruitmentCategory(job) as "实习" | "校招" | "社招";
+  return cat === userStage ? { state: "match", label: cat } : { state: "mismatch", label: cat };
+}
+
+// 学历三态：educationMatch pass/degrade/reject → match/unknown/mismatch；用户无学历 → na
+function educationState(job: Job, highest: EducationLabel): TriState {
+  if (!highest) return "na";
+  const v = educationMatch(job.education, highest);
+  return v === "pass" ? "match" : v === "degrade" ? "unknown" : "mismatch";
+}
+
+// 行业三态：用户无目标行业 → na；公司行业判不出 → unknown；∈ 目标 → match；否则 mismatch
+function industryState(job: Job, targetIndustries: string[]): { state: TriState; name: string | null } {
+  const targets = userTargetIndustryCategories(targetIndustries) as Set<string>;
+  if (targets.size === 0) return { state: "na", name: null };
+  const cat = classifyCompanyIndustry(job.company) as string | null;
+  if (!cat) return { state: "unknown", name: null };
+  return targets.has(cat) ? { state: "match", name: cat } : { state: "mismatch", name: null };
+}
+
+// 目标公司命中（子串口径同 job-filter：用户输入"字节"命中"字节跳动"）
+function companyHit(job: Job, targetCompanies: string[]): { hit: boolean; name: string | null } {
+  const comp = String(job.company || "").toLowerCase();
+  for (const t of targetCompanies) {
+    const want = t.trim().toLowerCase();
+    if (want && comp.includes(want)) return { hit: true, name: job.company };
+  }
+  return { hit: false, name: null };
+}
+
+function skillsHit(job: Job, skills: string[]): string[] {
+  const hay = `${job.title || ""} ${job.summary || ""}`.toLowerCase();
+  const out: string[] = [];
+  for (const s of skills) {
+    const k = s.trim().toLowerCase();
+    if (k && hay.includes(k)) out.push(s);
+  }
+  return out;
+}
+
+export function computeMatchFacts(
+  job: Job,
+  profile: RadarProfile,
+  sourceMeta: SourceMeta | undefined,
+  action: ActionState,
+  now: Date
+): MatchFacts {
+  const roleQueries = [...profile.targetRoles, ...profile.targetKeywords];
+  const roleConstrained = roleQueries.length > 0;
+  const role = roleConstrained ? bestRoleTier(job, roleQueries) : { tier: null as null, label: null };
+
+  const loc = locationState(job, profile.targetLocations);
+  const stage = stageState(job, profile.experienceStage);
+  const ind = industryState(job, profile.targetIndustries);
+  const company = companyHit(job, profile.targetCompanies);
+
+  let noveltyHours: number | null = null;
+  if (job.first_seen_at) {
+    const t = new Date(job.first_seen_at).getTime();
+    if (!Number.isNaN(t)) noveltyHours = (now.getTime() - t) / 3_600_000;
+  }
+
+  return {
+    active: job.status === "active",
+    summaryOk: String(job.summary || "").trim().length >= 60,
+    summaryLong: String(job.summary || "").trim().length >= 200,
+    sourceDisabled: sourceMeta != null && sourceMeta.enabled === false,
+    excluded: excludeJobs([job], profile.excludeKeywords).length === 0,
+    freshness: freshnessState(job.last_seen_at, sourceMeta?.crawl_method ?? null, now),
+    roleTier: role.tier,
+    roleConstrained,
+    roleMatchLabel: role.label,
+    companyHit: company.hit,
+    companyName: company.name,
+    location: loc.state,
+    locationName: loc.name,
+    stage: stage.state,
+    stageLabel: stage.label,
+    education: educationState(job, profile.highestEducation),
+    industry: ind.state,
+    industryName: ind.name,
+    skillsHit: skillsHit(job, profile.skills),
+    noveltyHours,
+    userAction: action.primary,
+    viewed: action.viewed,
+  };
+}
+
+function reject(reason: RejectReason): EligibilityResult {
+  return { eligible: false, reason };
+}
+
+// 硬门：按 §6.5 顺序返回第一个拒绝原因；unknown 维度累积为 degraded（放行但 scoring 轻罚）。
+export function checkEligibility(f: MatchFacts): EligibilityResult {
+  if (!f.active) return reject("inactive");
+  if (!f.summaryOk) return reject("thin_summary");
+  if (f.sourceDisabled) return reject("source_disabled");
+  if (f.freshness === "stale" || f.freshness === "unknown") return reject("stale");
+  if (f.excluded) return reject("excluded");
+  if (f.userAction) return reject("already_actioned");
+  if (f.roleConstrained && f.roleTier === null) return reject("role_mismatch");
+
+  const degraded: DegradedDimension[] = [];
+
+  if (f.location === "mismatch") return reject("location_mismatch");
+  if (f.location === "unknown") degraded.push("location");
+
+  if (f.stage === "mismatch") return reject("stage_mismatch");
+  if (f.stage === "unknown") degraded.push("stage");
+
+  if (f.education === "mismatch") return reject("education_mismatch");
+  if (f.education === "unknown") degraded.push("education");
+
+  // 命中目标公司 → 不执行行业拒绝、也不计行业 degrade（用户明确想要这家）
+  if (!f.companyHit) {
+    if (f.industry === "mismatch") return reject("industry_mismatch");
+    if (f.industry === "unknown") degraded.push("industry");
+  }
+
+  return { eligible: true, degraded };
+}
