@@ -281,7 +281,7 @@ export default function JobCard({
     window.open(job.jd_url, "_blank", "noopener,noreferrer");
     if (isOpportunity)
       track("opportunity_click", { job_id: job.id, tier: opportunityTier ?? null, surface: "today" });
-    else track("job_click", { job_id: job.id, company: job.company });
+    else track("job_click", { job_id: job.id });
     void fetch(`/api/job-actions/${job.id}/view`, { method: "POST" }).catch(() => {});
   }
 
