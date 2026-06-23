@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/apiAuth";
 import { jobsByIds, jobsStoreEnabled } from "@/lib/jobs-store/read";
 import { parseActionInput } from "@/lib/opportunities/action-input";
+import { isMissingFunction } from "@/lib/opportunities/schema-errors";
 
 export const runtime = "nodejs";
 
@@ -60,10 +61,7 @@ export async function PUT(request: NextRequest, { params }: { params: { jobId: s
   });
   if (error) {
     // 迁移 162 未应用（RPC/列不存在）→ 稳定 schema 码（§9），前端可诚实提示「功能暂不可用」
-    const schemaMissing =
-      error.code === "42883" ||
-      error.code === "PGRST202" ||
-      /set_job_primary_action|could not find the function|does not exist|schema cache/i.test(error.message || "");
+    const schemaMissing = isMissingFunction(error);
     return NextResponse.json(
       { ok: false, error: schemaMissing ? "action_schema_unavailable" : error.message },
       { status: schemaMissing ? 503 : 500 },

@@ -6,6 +6,7 @@ import { requireUser } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
 import { buildRadarProfile, profileReadiness } from "@/lib/opportunities/profile";
 import { normalizeCompany } from "@/lib/company-normalize";
+import { isMissingRelation } from "@/lib/opportunities/schema-errors";
 import type { CandidateProfile, UserPreferences } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -45,14 +46,6 @@ class CoverageError extends Error {
   }
 }
 
-// 表/函数不存在 → 迁移未应用，返回稳定 schema 码（§9）
-function isSchemaMissing(err: { code?: string; message?: string } | null | undefined): boolean {
-  if (!err) return false;
-  if (err.code === "42P01") return true; // undefined_table
-  const m = String(err.message || "");
-  return /does not exist/i.test(m) && /company_watch_requests/i.test(m);
-}
-
 // §10.3：按 normalized company 比对 enabled sources；命中→covered，否则保留管理员态或 queued；删不再 target 的。
 // 仅在所有写入 + read-back 成功后返回；任一出错 throw CoverageError（区分 schema 缺失 vs 其它）。
 async function syncCoverage(userId: string, targetCompanies: string[]): Promise<Coverage[]> {
@@ -65,7 +58,7 @@ async function syncCoverage(userId: string, targetCompanies: string[]): Promise<
     .select("normalized_company, status")
     .eq("user_id", userId);
   if (existingRes.error)
-    throw new CoverageError(isSchemaMissing(existingRes.error) ? "coverage_schema_unavailable" : "coverage_sync_failed");
+    throw new CoverageError(isMissingRelation(existingRes.error) ? "coverage_schema_unavailable" : "coverage_sync_failed");
 
   const sourceMap = new Map<string, string[]>();
   for (const s of sourcesRes.data || []) {
@@ -106,7 +99,7 @@ async function syncCoverage(userId: string, targetCompanies: string[]): Promise<
       .from("company_watch_requests")
       .upsert(rows, { onConflict: "user_id,normalized_company" });
     if (up.error)
-      throw new CoverageError(isSchemaMissing(up.error) ? "coverage_schema_unavailable" : "coverage_sync_failed");
+      throw new CoverageError(isMissingRelation(up.error) ? "coverage_schema_unavailable" : "coverage_sync_failed");
   }
 
   // 删不再 target 的请求
