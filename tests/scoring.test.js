@@ -164,6 +164,55 @@ test("exclude_keywords hit hard-filters the job regardless of showIgnored/showAp
   assert.ok(!forced.some((job) => job.id === "job-drop"));
 });
 
+test("岗位职能门（硬门）：产品经理用户不被推研发/数据岗（用户实锤）", () => {
+  // 用户=产品经理（target_roles 判出职能=产品）。蔚来「AI Agent算法评测工程师」=研发、
+  // B站「数据科学家」=数据 → 即便共享 AI/数据/SQL/Python 关键词，也不应算「命中目标方向」。
+  const prefs = {
+    ...makePreferences(),
+    target_roles: ["AI 数据产品经理", "AI Agent"], // AI 数据产品经理→产品；AI Agent→其他不计 → 目标职能={产品}
+    target_keywords: ["SQL", "Python", "数据埋点"],
+    target_locations: [],
+    target_companies: [],
+    target_industries: [],
+  };
+
+  const engineer = makeJob("nio-eng", "AI Agent算法评测工程师", "上海", "自动化评测Pipeline，LLM-as-a-Judge，SQL Python");
+  const dataSci = {
+    ...makeJob("bili-ds", "商业化-数据科学家（AI Agent 开发方向）", "上海", "Agent 能力开发，SQL，Python，数据埋点"),
+    job_type: "产品运营类", // B站把数据科学家挂产品运营部门下——不得据此误判产品
+  };
+  const pm = makeJob("real-pm", "AI 数据产品经理", "上海", "负责 AI 数据产品规划，SQL Python");
+
+  const eng = scoreJob(engineer, prefs, []);
+  const ds = scoreJob(dataSci, prefs, []);
+  const product = scoreJob(pm, prefs, []);
+
+  assert.ok(!eng.match_reasons.some((r) => r.type === "role" || r.type === "keyword"), "研发岗不应有 role/技能命中");
+  assert.equal(eng.content_matched, false, "研发岗职能不符 → 内容不命中");
+  assert.ok(!ds.match_reasons.some((r) => r.type === "role" || r.type === "keyword"), "数据科学家(挂产品运营类)不应命中");
+  assert.equal(ds.content_matched, false, "数据岗职能不符 → 内容不命中");
+  // 真·产品岗：职能=产品 ∈ 用户职能 → 正常命中（证明门只拦跨职能、不误伤本职能）。
+  assert.ok(product.match_reasons.some((r) => r.type === "role"), "真产品岗应命中 role");
+  assert.equal(product.content_matched, true);
+
+  // Today 看板相关性门：研发/数据岗被过滤出榜，只留产品岗。
+  const shown = sortAndFilterJobs([engineer, dataSci, pm], prefs, [], { requireRelevance: true });
+  assert.deepEqual(shown.map((j) => j.id), ["real-pm"], "看板只留产品岗");
+});
+
+test("岗位职能门保守放行：用户无可判职能 / 岗位职能判不出 → 不误杀", () => {
+  const eng = makeJob("eng2", "AI Agent工程师", "上海", ""); // 研发岗，精确命中 role「AI Agent」
+  // (a) 用户 roles 全是纯领域词（AI Agent→其他，判不出职能）→ 不设职能门，研发岗也放行。
+  const prefs1 = { ...makePreferences(), target_roles: ["AI Agent"], target_keywords: [], target_industries: [] };
+  assert.ok(scoreJob(eng, prefs1, []).match_reasons.some((r) => r.type === "role"), "用户无可判职能 → 放行");
+  // 对照：用户=产品经理（职能=产品）→ 同一研发岗被职能门拦（证明门确实在起作用）。
+  const prefs2 = { ...makePreferences(), target_roles: ["产品经理", "AI Agent"], target_keywords: [], target_industries: [] };
+  assert.ok(!scoreJob(eng, prefs2, []).match_reasons.some((r) => r.type === "role"), "产品用户 → 研发岗被职能门拦");
+  // (b) 岗位职能判不出（其他）但匹配到 role → 放行不误杀。
+  const other = makeJob("other", "AI Agent 专家顾问", "上海", "");
+  assert.ok(scoreJob(other, prefs2, []).match_reasons.some((r) => r.type === "role"), "岗位职能其他 → 放行");
+});
+
 test("跨行业门（硬门）：同职能跨行业岗不算命中目标方向（互联网用户 ✗ 消费业产品经理）", () => {
   // 农夫山泉=消费/零售；用户目标行业=互联网 → 即便职能都是产品经理，也不应算命中 role。
   const job = { ...makeJob("fmcg-pm", "产品经理", "杭州", ""), company: "农夫山泉 养生堂" };
