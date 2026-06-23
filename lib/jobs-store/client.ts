@@ -15,7 +15,7 @@ function makePool(): Pool {
   //   verify-full（校验 CA）→ 拒掉自建库的自签证书（"self-signed certificate"），覆盖掉 ssl 选项。
   //   故解析成显式字段 + 显式 ssl:{rejectUnauthorized:false}（加密但不校验，自签库正确做法）。
   const u = new URL(url);
-  return new Pool({
+  const pool = new Pool({
     host: u.hostname,
     port: u.port ? Number(u.port) : 5432,
     user: decodeURIComponent(u.username),
@@ -27,6 +27,12 @@ function makePool(): Pool {
     connectionTimeoutMillis: 8_000,
     statement_timeout: 15_000,
   });
+  // 失效连接（ETIMEDOUT / Connection terminated unexpectedly）会触发 idle client error。
+  // 挂 handler：pg 会驱逐这条坏连接、进程不崩，避免坏连接长期留在池里导致后续请求持续失败（P0-1 §7）。
+  pool.on("error", (err) => {
+    console.warn("[jobs-pool] idle client error (connection evicted):", err.message);
+  });
+  return pool;
 }
 
 export function jobsPool(): Pool {

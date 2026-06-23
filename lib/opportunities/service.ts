@@ -7,6 +7,7 @@ import type {
   Opportunity,
   OpportunityFeed,
   OpportunityFeedOptions,
+  FeedSections,
   SourceMeta,
 } from "./types";
 import { isProfileReady } from "./profile";
@@ -14,6 +15,7 @@ import { computeMatchFacts, checkEligibility, type ActionState } from "./eligibi
 import { scoreOpportunity } from "./scoring";
 import { groupOpportunities, resolveNoveltySince } from "./grouping";
 import { recallOpportunityCandidates } from "@/lib/jobs-store/opportunities";
+import { jobsByIds, jobsStoreEnabled } from "@/lib/jobs-store/read";
 
 type SupabaseLike = { from: (table: string) => any };
 
@@ -50,6 +52,25 @@ async function fetchSourceMeta(supabase: SupabaseLike, sourceIds: string[]): Pro
     console.warn("[opportunities] source metadata query threw:", (e as Error).message);
   }
   return map;
+}
+
+// recall 为省跨区传输只回截断 summary（≤500）；展示的 ≤约33 张卡在这里回填完整 summary（小查询）。
+// 回退路径（Supabase）本就是完整 summary，跳过。
+async function hydrateFullSummaries(sections: FeedSections): Promise<void> {
+  if (!jobsStoreEnabled()) return;
+  const all = [...sections.new, ...sections.priority, ...sections.explore, ...sections.aging];
+  const ids = all.map((o) => o.job.id).filter(Boolean);
+  if (!ids.length) return;
+  try {
+    const rows = await jobsByIds(ids, false);
+    const fullById = new Map<string, string | null>(rows.map((r: any) => [r.id, r.summary]));
+    for (const o of all) {
+      const full = fullById.get(o.job.id);
+      if (full != null) o.job.summary = full;
+    }
+  } catch (e) {
+    console.warn("[opportunities] full-summary hydrate failed:", (e as Error).message);
+  }
 }
 
 export async function buildOpportunityFeed(
@@ -107,6 +128,7 @@ export async function buildOpportunityFeed(
   const noveltySince = resolveNoveltySince(overrideProvided ? options.noveltySinceOverride! : lastOpenedAt, now);
 
   const { sections, counts } = groupOpportunities(opps, profile.dailyLimit, noveltySince);
+  await hydrateFullSummaries(sections);
 
   return {
     generated_at: now.toISOString(),
