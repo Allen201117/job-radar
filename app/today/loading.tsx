@@ -10,12 +10,12 @@ export default function Loading() {
       <Navbar />
       <ProductPage>
         <ProductHero
-          eyebrow="今日看板"
-          title="官方岗位的每日优先队列"
-          description="根据你的偏好和简历画像排序，隐藏已忽略和已投递岗位，把今天最值得看的官方机会放在前面。"
+          eyebrow="今日机会"
+          title="今天值得处理的官方岗位"
+          description="系统已按你的目标、简历和岗位新鲜度完成筛选。先处理最相关的，再决定是否扩大搜索。"
           icon={Broadcast}
         >
-          <MetricTilesSkeleton count={5} />
+          <MetricTilesSkeleton count={3} />
         </ProductHero>
         <section className="mt-8">
           <JobListSkeleton count={6} />

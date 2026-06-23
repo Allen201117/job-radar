@@ -42,7 +42,7 @@ export default async function MePage() {
         >
           <div className="grid gap-3 sm:grid-cols-3">
             <Link href="/saved" className="block transition duration-200 hover:-translate-y-0.5">
-              <MetricTile icon={BookmarkSimple} label="我的收藏 →" value={savedCount} tone="white" />
+              <MetricTile icon={BookmarkSimple} label="值得投 →" value={savedCount} tone="white" />
             </Link>
             <Link href="/applied" className="block transition duration-200 hover:-translate-y-0.5">
               <MetricTile icon={CheckCircle} label="我的投递 →" value={appliedCount} tone="orange" />
