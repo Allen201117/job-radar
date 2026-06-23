@@ -16,6 +16,7 @@ import { scoreOpportunity } from "./scoring";
 import { groupOpportunities, resolveNoveltySince } from "./grouping";
 import { recallOpportunityCandidates } from "@/lib/jobs-store/opportunities";
 import { jobsByIds, jobsStoreEnabled } from "@/lib/jobs-store/read";
+import { hydrateOpportunityJobs } from "./hydration";
 
 type SupabaseLike = { from: (table: string) => any };
 
@@ -54,22 +55,18 @@ async function fetchSourceMeta(supabase: SupabaseLike, sourceIds: string[]): Pro
   return map;
 }
 
-// recall 为省跨区传输只回截断 summary（≤500）；展示的 ≤约33 张卡在这里回填完整 summary（小查询）。
-// 回退路径（Supabase）本就是完整 summary，跳过。
-async function hydrateFullSummaries(sections: FeedSections): Promise<void> {
+// recall 为省跨区传输只回硬门/打分必需列（截断 summary）；展示的 ≤约33 张卡在这里按 id 用**完整行**回填
+// （完整 summary + apply_url/posted_at/experience/deadline 等展示字段）。回退路径（Supabase）本就完整，跳过。
+async function hydrateDisplayJobs(sections: FeedSections): Promise<void> {
   if (!jobsStoreEnabled()) return;
   const all = [...sections.new, ...sections.priority, ...sections.explore, ...sections.aging];
   const ids = all.map((o) => o.job.id).filter(Boolean);
   if (!ids.length) return;
   try {
     const rows = await jobsByIds(ids, false);
-    const fullById = new Map<string, string | null>(rows.map((r: any) => [r.id, r.summary]));
-    for (const o of all) {
-      const full = fullById.get(o.job.id);
-      if (full != null) o.job.summary = full;
-    }
+    hydrateOpportunityJobs(sections, rows);
   } catch (e) {
-    console.warn("[opportunities] full-summary hydrate failed:", (e as Error).message);
+    console.warn("[opportunities] display-job hydrate failed:", (e as Error).message);
   }
 }
 
@@ -128,7 +125,7 @@ export async function buildOpportunityFeed(
   const noveltySince = resolveNoveltySince(overrideProvided ? options.noveltySinceOverride! : lastOpenedAt, now);
 
   const { sections, counts } = groupOpportunities(opps, profile.dailyLimit, noveltySince);
-  await hydrateFullSummaries(sections);
+  await hydrateDisplayJobs(sections);
 
   return {
     generated_at: now.toISOString(),
