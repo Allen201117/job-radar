@@ -28,10 +28,10 @@ const COMPANIES = [
 ];
 
 const PILLARS = [
-  { icon: House, dot: "#7fb2e8", title: "官网直发", text: "岗位只来自企业官方招聘页，不是招聘平台的转载，也不是中介代发。来源干净，信息才可信。" },
-  { icon: ShieldCheck, dot: "#b6da7e", title: "都还在招", text: "撤下的岗位会自动下架。你点开的每个链接，都是仍然有效的官方详情页，不再扑空。" },
-  { icon: MagnifyingGlass, dot: "#e7b27e", title: "按你来排", text: "按你的城市、岗位方向和简历自动匹配，越合适的越靠前。不配的方向，连看都不用看。" },
-  { icon: ChartLineUp, dot: "#cfc6b6", title: "能信的洞察", text: "招聘节奏、薪酬区间、跳槽路径、团队风格——分级、标好时间，帮你判断这一票值不值得投。" },
+  { icon: House, dot: "#7fb2e8", title: "企业官网直达", text: "岗位只来自企业官方招聘页，不是招聘平台的转载，也不是中介代发。点开就是官网详情页。" },
+  { icon: ShieldCheck, dot: "#b6da7e", title: "持续确认仍在招", text: "系统持续探活，撤下的岗位自动下架。留在你面前的，都是仍然有效、还能投的机会。" },
+  { icon: MagnifyingGlass, dot: "#e7b27e", title: "按你的目标筛选", text: "按你的城市、岗位方向、行业和简历自动筛选，不对路的方向直接挡掉，不用你一条条翻。" },
+  { icon: ChartLineUp, dot: "#cfc6b6", title: "每天只给少量机会", text: "不堆数量。每天只留下真正值得你今天处理的少数机会，五分钟看完，专注行动。" },
 ];
 
 const INSIGHT_DIMS = [
@@ -58,7 +58,7 @@ const cardBase =
 
 export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
   const primaryHref = loggedIn ? "/today" : "/login";
-  const primaryLabel = loggedIn ? "进入今日看板" : "登录 / 注册";
+  const primaryLabel = loggedIn ? "查看今日机会" : "开始设置我的雷达";
 
   useEffect(() => {
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -190,7 +190,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
                 <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/[0.07] dark:bg-white/[0.08]"><div className="h-full w-[46%] rounded-full bg-[#7fb2e8]" /></div>
               </div>
             </div>
-            <figcaption className="mt-2 text-[12px] text-[#9a9184] dark:text-[#837c70]">今日看板</figcaption>
+            <figcaption className="mt-2 text-[12px] text-[#9a9184] dark:text-[#837c70]">今日机会</figcaption>
           </figure>
 
           <figure className="lp-float absolute right-[-16px] top-[30px]" style={{ ["--fd" as string]: 30 } as CSSProperties}>
@@ -243,18 +243,19 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
               <span className="absolute inline-flex size-full animate-ping rounded-full bg-[#00e676] opacity-70" />
               <span className="relative inline-flex size-2 rounded-full bg-[#00e676]" />
             </span>
-            官方岗位雷达 · 每天更新
+            个人机会雷达 · 持续更新
           </span>
-          <h1 className="display-tight lp-reveal mt-6 text-balance text-[clamp(2.9rem,7.6vw,6rem)] font-black leading-[1.14] tracking-[-0.035em]">
-            官方在招，<br />
+          <h1 className="display-tight lp-reveal mt-6 text-balance text-[clamp(2.6rem,6.6vw,5.2rem)] font-black leading-[1.16] tracking-[-0.035em]">
+            每天替你看官网，<br />
+            只留下
             <span className="relative whitespace-nowrap">
-              值得才投
+              值得行动
               <span className="absolute inset-x-[-6px] bottom-[0.1em] -z-10 h-[0.32em] rounded-[0.2em] bg-[#00e676]/35" aria-hidden="true" />
             </span>
-            。
+            的机会。
           </h1>
           <p className="lp-reveal mx-auto mt-6 max-w-[600px] text-pretty text-[17px] leading-[1.75] text-[#5f594e] dark:text-[#b6ad9d]">
-            职达只抓企业官方招聘页，过滤掉招聘平台的转载和过期岗；再按你的城市、方向和简历排序，并附上招聘节奏、薪酬和跳槽路径的参考。每天打开一次，只看真正值得看的。
+            设置一次目标，系统持续监控企业官方招聘页，过滤失效和不相关岗位，告诉你今天真正值得看的机会。
           </p>
           <div className="lp-reveal mt-8 flex flex-wrap items-center justify-center gap-3">
             <Link href={primaryHref} className="btn-ink cursor-target text-base">
@@ -264,7 +265,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
             <a href="#why" className="btn-ghost cursor-target text-base">看看怎么用</a>
           </div>
           <p className="lp-reveal mt-5 text-[13px] text-[#9a9184] dark:text-[#837c70]">
-            已接入 Apple · 字节 · 腾讯 · 京东 · 微软 等 800+ 官方招聘源，每日更新
+            覆盖 Apple · 字节 · 腾讯 · 京东 · 微软 等主流企业官方招聘源，持续更新
           </p>
         </div>
       </section>
