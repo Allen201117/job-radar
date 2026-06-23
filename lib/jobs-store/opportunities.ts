@@ -1,13 +1,16 @@
-// 个人机会雷达候选召回（§6.3）。返回「可能匹配的超集」，由 Opportunity Engine（eligibility/scoring）精筛。
-// 召回集合 = 三查询并集（按 id 去重）：① role+keyword 的 FTS OR；② 目标公司（≤30，子串）；③ 目标城市（≤10）+ 近7天新增。
-// 共同窗口：status=active、last_seen_at≥now-7d、summary 去空白≥60。超过 limit 按 first_seen desc 截断并标 capped。
-// gated：配了 JOBS_DATABASE_URL 用香港 pg，否则回退 Supabase（本地/回滚；prod 该表已空）。形状一致（snake_case 行）。
+// 个人机会雷达候选召回（§6.3 + P0-1 性能修复）。返回「可能匹配的超集」，由引擎精筛。
+//
+// P0-1 实测根因：plan 很快（EXPLAIN 22–188ms），慢在**把数千行的完整 summary 文本跨区传输**（FTS 分支
+// 取 4000 行 × full summary × 3 分支 → 实测整页 >30s）。修法（不抬 timeout、不降 4000 cap、不加 first_seen 硬窗）：
+//   ① recall 只回**截断 summary**（left 500）+ 排除词在 SQL 应用 → 单行载荷砍数倍；展示的 ≤约33 张卡由 service 再回填完整 summary。
+//   ② 三类召回**并行**（Promise.all），城市/公司都走 **search_doc GIN**（location/company 已在 search_doc 内），不再 ILIKE 全表扫。
+//   ③ 保留 order by first_seen desc（实测 plan 仍走 GIN+sort，31ms）+ limit 4000，按 id 去重、candidate_capped 诚实。
+// companyHit 的权威判定用 normalizeCompany() exact（见 eligibility.ts），此处公司分支只做超集召回。
 import "server-only";
 import { jobsQuery } from "./client";
 import { jobsStoreEnabled } from "./read";
-import { JOB_COLUMNS } from "./types";
 import { buildTsquery } from "@/lib/job-search";
-import { ftsCandidateTerms, normalizeChinaCity } from "@/lib/china-keyword-expansion";
+import { ftsCandidateTerms } from "@/lib/china-keyword-expansion";
 import type { RadarProfile } from "@/lib/opportunities/types";
 
 type SupabaseLike = { from: (table: string) => any };
@@ -18,27 +21,20 @@ export interface RecallResult {
 }
 
 const SEVEN_DAYS_MS = 7 * 86_400_000;
-const MIN_SUMMARY = 60;
+const SUMMARY_TRUNC = 500;
+const BRANCH_LIMIT = 4000;
 
-function roleQueryTsquery(profile: RadarProfile): string | null {
+// recall 列：summary 截断为 ≤500 字，砍跨区传输；展示卡由 service 回填完整 summary。
+const RECALL_COLUMNS =
+  "id, source_id, company, title, location, job_type, " +
+  `left(btrim(summary), ${SUMMARY_TRUNC}) as summary, ` +
+  "jd_url, apply_url, salary_text, posted_at, first_seen_at, last_seen_at, status, content_hash, " +
+  "created_at, experience, education, deadline, enrich_fail_count, enrich_checked_at, canonical_jd_url";
+
+function roleTsquery(profile: RadarProfile): string | null {
   const terms = [...profile.targetRoles, ...profile.targetKeywords];
   if (!terms.length) return null;
-  const ftsTerms = terms.flatMap((t) => ftsCandidateTerms(t));
-  return buildTsquery(ftsTerms, []); // 组内 OR：命中任一目标词即召回
-}
-
-function cityPatterns(profile: RadarProfile): string[] {
-  const out = new Set<string>();
-  for (const c of profile.targetLocations.slice(0, 10)) {
-    if (c) out.add(`%${c}%`);
-    const n = normalizeChinaCity(c);
-    if (n && n !== c) out.add(`%${n}%`);
-  }
-  return Array.from(out);
-}
-
-function companyPatterns(profile: RadarProfile): string[] {
-  return profile.targetCompanies.slice(0, 30).map((c) => `%${c}%`);
+  return buildTsquery(terms.flatMap((t) => ftsCandidateTerms(t)), []);
 }
 
 function mergeById(target: Map<string, any>, rows: any[] | null | undefined): void {
@@ -54,48 +50,57 @@ function finalize(byId: Map<string, any>, limit: number): RecallResult {
   return { jobs: jobs.slice(0, limit), capped: jobs.length > limit };
 }
 
-// ---- 香港 pg 路径 ----
+// ---- 香港 pg 路径：三分支均走 search_doc GIN，并行 ----
+function excludePatterns(profile: RadarProfile): string[] {
+  return profile.excludeKeywords
+    .map((k) => String(k || "").trim().toLowerCase())
+    .filter(Boolean)
+    .map((k) => `%${k}%`);
+}
+
+// 构造一条「公共门 + FTS + 可选 first_seen 近窗」召回 SQL（参数化），跑并取行。
+function runBranch(tsquery: string, sinceIso: string, excl: string[], recentToo: boolean): Promise<any[]> {
+  const params: unknown[] = [];
+  params.push(sinceIso);
+  let where = `status = 'active' and last_seen_at >= $${params.length} and summary is not null and char_length(btrim(summary)) >= 60`;
+  if (excl.length) {
+    params.push(excl);
+    // 排除词在 SQL 用完整 summary 比对（不受 left 截断影响），逐字对齐 crawler jobExcluded 的字段集
+    where += ` and not (lower(concat_ws(' ', title, company, location, job_type, summary, salary_text)) like any($${params.length}::text[]))`;
+  }
+  params.push(tsquery);
+  where += ` and search_doc @@ to_tsquery('simple', $${params.length})`;
+  if (recentToo) {
+    params.push(sinceIso);
+    where += ` and first_seen_at >= $${params.length}`;
+  }
+  params.push(BRANCH_LIMIT);
+  const sql = `select ${RECALL_COLUMNS} from jobs where ${where} order by first_seen_at desc limit $${params.length}`;
+  return jobsQuery(sql, params);
+}
+
 async function recallViaStore(profile: RadarProfile, sinceIso: string, limit: number): Promise<RecallResult> {
+  const excl = excludePatterns(profile);
+  const roleTs = roleTsquery(profile);
+  const companyTs = profile.targetCompanies.length
+    ? buildTsquery(profile.targetCompanies.slice(0, 30), [])
+    : null;
+  const cityTs = profile.targetLocations.length
+    ? buildTsquery(profile.targetLocations.slice(0, 10), [])
+    : null;
+
+  const branches: Promise<any[]>[] = [];
+  if (roleTs) branches.push(runBranch(roleTs, sinceIso, excl, false));
+  if (companyTs) branches.push(runBranch(companyTs, sinceIso, excl, false));
+  if (cityTs) branches.push(runBranch(cityTs, sinceIso, excl, true)); // 城市 + 近7天新增
+
+  const results = await Promise.all(branches);
   const byId = new Map<string, any>();
-  const COMMON = `status = 'active' and last_seen_at >= $1 and char_length(btrim(coalesce(summary, ''))) >= ${MIN_SUMMARY}`;
-
-  const tsquery = roleQueryTsquery(profile);
-  if (tsquery) {
-    mergeById(
-      byId,
-      await jobsQuery(
-        `select ${JOB_COLUMNS} from jobs where ${COMMON} and search_doc @@ to_tsquery('simple', $2) order by first_seen_at desc limit $3`,
-        [sinceIso, tsquery, limit],
-      ),
-    );
-  }
-
-  const companies = companyPatterns(profile);
-  if (companies.length) {
-    mergeById(
-      byId,
-      await jobsQuery(
-        `select ${JOB_COLUMNS} from jobs where ${COMMON} and company ilike any($2::text[]) order by first_seen_at desc limit $3`,
-        [sinceIso, companies, limit],
-      ),
-    );
-  }
-
-  const cities = cityPatterns(profile);
-  if (cities.length) {
-    mergeById(
-      byId,
-      await jobsQuery(
-        `select ${JOB_COLUMNS} from jobs where ${COMMON} and location ilike any($2::text[]) and first_seen_at >= $1 order by first_seen_at desc limit $3`,
-        [sinceIso, cities, limit],
-      ),
-    );
-  }
-
+  for (const rows of results) mergeById(byId, rows);
   return finalize(byId, limit);
 }
 
-// ---- Supabase 回退（本地/回滚；prod jobs 表已空）----
+// ---- Supabase 回退（本地/回滚；prod jobs 表已空，非性能关键路径）----
 async function recallViaSupabase(
   profile: RadarProfile,
   sinceIso: string,
@@ -103,20 +108,19 @@ async function recallViaSupabase(
   limit: number,
 ): Promise<RecallResult> {
   const byId = new Map<string, any>();
-  const summaryOk = (j: any) => String(j?.summary || "").trim().length >= MIN_SUMMARY;
+  const summaryOk = (j: any) => String(j?.summary || "").trim().length >= 60;
 
-  const tsquery = roleQueryTsquery(profile);
-  if (tsquery) {
+  const roleTs = roleTsquery(profile);
+  if (roleTs) {
     const { data } = await supabase
       .from("jobs")
       .select("*")
       .eq("status", "active")
       .gte("last_seen_at", sinceIso)
-      .textSearch("search_doc", tsquery, { config: "simple" })
+      .textSearch("search_doc", roleTs, { config: "simple" })
       .limit(limit);
     mergeById(byId, (data || []).filter(summaryOk));
   }
-
   const companies = profile.targetCompanies.slice(0, 30);
   if (companies.length) {
     const { data } = await supabase
@@ -128,26 +132,20 @@ async function recallViaSupabase(
       .limit(limit);
     mergeById(byId, (data || []).filter(summaryOk));
   }
-
-  const cities = profile.targetLocations.slice(0, 10);
-  if (cities.length) {
-    const ors: string[] = [];
-    for (const c of cities) {
-      ors.push(`location.ilike.%${c}%`);
-      const n = normalizeChinaCity(c);
-      if (n && n !== c) ors.push(`location.ilike.%${n}%`);
-    }
+  const cityTs = profile.targetLocations.length
+    ? buildTsquery(profile.targetLocations.slice(0, 10), [])
+    : null;
+  if (cityTs) {
     const { data } = await supabase
       .from("jobs")
       .select("*")
       .eq("status", "active")
       .gte("last_seen_at", sinceIso)
       .gte("first_seen_at", sinceIso)
-      .or(ors.join(","))
+      .textSearch("search_doc", cityTs, { config: "simple" })
       .limit(limit);
     mergeById(byId, (data || []).filter(summaryOk));
   }
-
   return finalize(byId, limit);
 }
 
@@ -155,7 +153,7 @@ export async function recallOpportunityCandidates(
   profile: RadarProfile,
   now: Date,
   supabaseFallback: SupabaseLike | null,
-  limit = 4000,
+  limit = BRANCH_LIMIT,
 ): Promise<RecallResult> {
   const sinceIso = new Date(now.getTime() - SEVEN_DAYS_MS).toISOString();
   if (jobsStoreEnabled()) {

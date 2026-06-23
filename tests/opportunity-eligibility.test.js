@@ -216,6 +216,24 @@ test("computeMatchFacts: sourceDisabled / active / novelty / 公司命中", () =
   assert.equal(f.companyName, "字节跳动");
 });
 
+test("computeMatchFacts: 公司命中用 normalizeCompany exact（剥尾缀命中、子串不误命中）", () => {
+  // 剥「有限公司」尾缀后命中
+  assert.equal(
+    computeMatchFacts(job({ company: "字节跳动有限公司" }), rprofile({ targetCompanies: ["字节跳动"] }), undefined, noAction, NOW).companyHit,
+    true,
+  );
+  // 子串不再误命中：目标"字节" ≠ 岗位"字节跳动"
+  assert.equal(
+    computeMatchFacts(job({ company: "字节跳动" }), rprofile({ targetCompanies: ["字节"] }), undefined, noAction, NOW).companyHit,
+    false,
+  );
+  // 不同公司不合并
+  assert.equal(
+    computeMatchFacts(job({ company: "腾讯" }), rprofile({ targetCompanies: ["字节跳动"] }), undefined, noAction, NOW).companyHit,
+    false,
+  );
+});
+
 test("computeMatchFacts: 主动作 + viewed 透传", () => {
   const f = computeMatchFacts(job(), rprofile(), undefined, { primary: "saved", viewed: true }, NOW);
   assert.equal(f.userAction, "saved");

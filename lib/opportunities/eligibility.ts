@@ -23,6 +23,7 @@ import {
 import { classifyCompanyIndustry, userTargetIndustryCategories } from "../company-industry";
 import { educationMatch } from "../education-rank";
 import { excludeJobs } from "../live-search";
+import { normalizeCompany } from "../company-normalize";
 
 export interface ActionState {
   primary: "saved" | "ignored" | "applied" | null;
@@ -79,12 +80,13 @@ function industryState(job: Job, targetIndustries: string[]): { state: TriState;
   return targets.has(cat) ? { state: "match", name: cat } : { state: "mismatch", name: null };
 }
 
-// 目标公司命中（子串口径同 job-filter：用户输入"字节"命中"字节跳动"）
+// 目标公司命中（§10.2 normalizeCompany 后 exact equality；不再用子串把"字节"误当"字节跳动"）。
+// 归一会剥「有限公司/集团/中国」等尾缀 → "字节跳动有限公司" 命中 "字节跳动"；"字节" ≠ "字节跳动" 不命中。
 function companyHit(job: Job, targetCompanies: string[]): { hit: boolean; name: string | null } {
-  const comp = String(job.company || "").toLowerCase();
+  const comp = normalizeCompany(job.company);
+  if (!comp) return { hit: false, name: null };
   for (const t of targetCompanies) {
-    const want = t.trim().toLowerCase();
-    if (want && comp.includes(want)) return { hit: true, name: job.company };
+    if (normalizeCompany(t) === comp) return { hit: true, name: job.company };
   }
   return { hit: false, name: null };
 }
