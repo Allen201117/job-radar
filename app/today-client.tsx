@@ -201,7 +201,6 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
     const jobId = t.jobId;
     clearTimer(jobId);
     dispatch({ type: "undoOptimistic", jobId });
-    track("opportunity_undo", { previous_action: t.action, surface: "today" });
     try {
       const resp = await fetch(`/api/job-actions/${jobId}`, {
         method: "PUT",
@@ -210,6 +209,8 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       dispatch({ type: "undoCommit", jobId });
+      // 撤销成功后才记事件（失败不记成功，P0-4 同口径）
+      track("opportunity_undo", { previous_action: t.action, surface: "today" });
     } catch {
       // 撤销 API 失败 → 重新移出 + 提示，不让 UI 与数据库长期相反
       dispatch({ type: "undoRollback", jobId });
