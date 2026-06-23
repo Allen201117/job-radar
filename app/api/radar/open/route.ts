@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/apiAuth";
 import { parseRadarOpenInput } from "@/lib/opportunities/action-input";
+import { isMissingRelation } from "@/lib/opportunities/schema-errors";
 
 export const runtime = "nodejs";
 
@@ -30,7 +31,7 @@ export async function POST(request: NextRequest) {
   );
   if (error) {
     // 迁移 161 未应用（user_radar_state 不存在）→ 稳定 schema 码（§9）
-    const schemaMissing = error.code === "42P01" || /user_radar_state|does not exist|schema cache/i.test(error.message || "");
+    const schemaMissing = isMissingRelation(error);
     return NextResponse.json(
       { ok: false, error: schemaMissing ? "radar_schema_unavailable" : error.message },
       { status: schemaMissing ? 503 : 500 },

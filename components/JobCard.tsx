@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareOut,
   BookmarkSimple,
@@ -161,6 +161,8 @@ export default function JobCard({
 }: Props) {
   const isOpportunity = variant === "opportunity";
   const [acting, setActing] = useState(false);
+  // 同步去重锁：state 是异步的，同一渲染周期内的连点会同时通过 `if (acting)`；用 ref 在调用入口同步挡住。
+  const actingRef = useRef(false);
   const [currentAction, setCurrentAction] = useState(job.user_action);
   const [actionError, setActionError] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -206,27 +208,18 @@ export default function JobCard({
   const freshness = useMemo(() => freshnessLabel(job.last_seen_at), [job.last_seen_at]);
 
   // 主动作走服务端 API（§8.1）：乐观更新 + 失败回滚；不再前端直连 Supabase。
+  // 埋点改到 **API 成功后** 才发（失败不记成功，P0-4）；actingRef 同步去重，挡同一渲染周期内的重复请求。
   async function callActionApi(
     next: PrimaryAction | null,
     prev: PrimaryAction | null,
     reasonCode?: string,
   ) {
+    if (actingRef.current) return;
+    actingRef.current = true;
     setActionError("");
     setCurrentAction(next);
     onActionChange(job.id, next);
     setActing(true);
-    if (isOpportunity) {
-      if (next)
-        track("opportunity_feedback", {
-          action: next,
-          reason_code: reasonCode ?? null,
-          tier: opportunityTier ?? null,
-          surface: "today",
-        });
-      else track("opportunity_undo", { previous_action: prev, surface: "today" });
-    } else if (next) {
-      track("job_action", { action: next, job_id: job.id });
-    }
     try {
       const resp = await fetch(`/api/job-actions/${job.id}`, {
         method: "PUT",
@@ -235,6 +228,19 @@ export default function JobCard({
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+      // 成功后才发埋点
+      if (isOpportunity) {
+        if (next)
+          track("opportunity_feedback", {
+            action: next,
+            reason_code: reasonCode ?? null,
+            tier: opportunityTier ?? null,
+            surface: "today",
+          });
+        else track("opportunity_undo", { previous_action: prev, surface: "today" });
+      } else if (next) {
+        track("job_action", { action: next, job_id: job.id });
+      }
     } catch (e) {
       console.error("[job-card] action failed", e);
       setCurrentAction(prev);
@@ -243,6 +249,7 @@ export default function JobCard({
       setTimeout(() => setActionError(""), 2500);
     } finally {
       setActing(false);
+      actingRef.current = false;
     }
   }
 

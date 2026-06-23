@@ -58,27 +58,10 @@ function excludePatterns(profile: RadarProfile): string[] {
     .map((k) => `%${k}%`);
 }
 
-// 构造一条「公共门 + FTS + 可选 first_seen 近窗」召回 SQL（参数化），跑并取行。
-function runBranch(tsquery: string, sinceIso: string, excl: string[], recentToo: boolean): Promise<any[]> {
-  const params: unknown[] = [];
-  params.push(sinceIso);
-  let where = `status = 'active' and last_seen_at >= $${params.length} and summary is not null and char_length(btrim(summary)) >= 60`;
-  if (excl.length) {
-    params.push(excl);
-    // 排除词在 SQL 用完整 summary 比对（不受 left 截断影响），逐字对齐 crawler jobExcluded 的字段集
-    where += ` and not (lower(concat_ws(' ', title, company, location, job_type, summary, salary_text)) like any($${params.length}::text[]))`;
-  }
-  params.push(tsquery);
-  where += ` and search_doc @@ to_tsquery('simple', $${params.length})`;
-  if (recentToo) {
-    params.push(sinceIso);
-    where += ` and first_seen_at >= $${params.length}`;
-  }
-  params.push(BRANCH_LIMIT);
-  const sql = `select ${RECALL_COLUMNS} from jobs where ${where} order by first_seen_at desc limit $${params.length}`;
-  return jobsQuery(sql, params);
-}
-
+// 三类召回（role/keyword、目标公司、城市近7天）合并成**一条** SQL：三个 search_doc @@ 用 OR，
+// 走同一 GIN 索引的 BitmapOr → 单连接、单次跨区往返。
+// P0-1 复验真因 = 连接/跨区往返开销（服务端 plan 4ms、110 行仍 22s 并连接超时），不是 plan 也不是行数；
+// 3 个并行分支 = serverless 冷池下最多 3 次 SSL 握手 → 合并为 1 连接最稳。不抬 timeout、不降 cap、不加无关硬窗。
 async function recallViaStore(profile: RadarProfile, sinceIso: string, limit: number): Promise<RecallResult> {
   const excl = excludePatterns(profile);
   const roleTs = roleTsquery(profile);
@@ -89,15 +72,36 @@ async function recallViaStore(profile: RadarProfile, sinceIso: string, limit: nu
     ? buildTsquery(profile.targetLocations.slice(0, 10), [])
     : null;
 
-  const branches: Promise<any[]>[] = [];
-  if (roleTs) branches.push(runBranch(roleTs, sinceIso, excl, false));
-  if (companyTs) branches.push(runBranch(companyTs, sinceIso, excl, false));
-  if (cityTs) branches.push(runBranch(cityTs, sinceIso, excl, true)); // 城市 + 近7天新增
+  const params: unknown[] = [sinceIso];
+  let where = `status = 'active' and last_seen_at >= $1 and summary is not null and char_length(btrim(summary)) >= 60`;
+  if (excl.length) {
+    params.push(excl);
+    // 排除词用完整 summary 比对（不受 left 截断影响），逐字对齐 crawler jobExcluded 的字段集
+    where += ` and not (lower(concat_ws(' ', title, company, location, job_type, summary, salary_text)) like any($${params.length}::text[]))`;
+  }
 
-  const results = await Promise.all(branches);
-  const byId = new Map<string, any>();
-  for (const rows of results) mergeById(byId, rows);
-  return finalize(byId, limit);
+  const ors: string[] = [];
+  if (roleTs) {
+    params.push(roleTs);
+    ors.push(`search_doc @@ to_tsquery('simple', $${params.length})`);
+  }
+  if (companyTs) {
+    params.push(companyTs);
+    ors.push(`search_doc @@ to_tsquery('simple', $${params.length})`);
+  }
+  if (cityTs) {
+    params.push(cityTs);
+    // 城市分支额外要求「近 7 天新增」（first_seen_at >= sinceIso，复用 $1）
+    ors.push(`(search_doc @@ to_tsquery('simple', $${params.length}) and first_seen_at >= $1)`);
+  }
+  if (ors.length === 0) return { jobs: [], capped: false }; // profile_ready 应保证至少一项；防御性返回
+  where += ` and (${ors.join(" or ")})`;
+
+  params.push(limit);
+  const sql = `select ${RECALL_COLUMNS} from jobs where ${where} order by first_seen_at desc limit $${params.length}`;
+  const rows = await jobsQuery(sql, params);
+  // 命中 limit = 发生截断 → capped 诚实为 true（修 P0-6：旧逻辑用「去重后数量 > limit」，恰好截断到 limit 时误判 false）
+  return { jobs: rows, capped: rows.length >= limit };
 }
 
 // ---- Supabase 回退（本地/回滚；prod jobs 表已空，非性能关键路径）----
@@ -108,7 +112,13 @@ async function recallViaSupabase(
   limit: number,
 ): Promise<RecallResult> {
   const byId = new Map<string, any>();
+  let branchCapped = false;
   const summaryOk = (j: any) => String(j?.summary || "").trim().length >= 60;
+  const take = (data: any[] | null | undefined) => {
+    const rows = data || [];
+    if (rows.length >= limit) branchCapped = true; // 分支命中 limit = 截断
+    mergeById(byId, rows.filter(summaryOk));
+  };
 
   const roleTs = roleTsquery(profile);
   if (roleTs) {
@@ -119,7 +129,7 @@ async function recallViaSupabase(
       .gte("last_seen_at", sinceIso)
       .textSearch("search_doc", roleTs, { config: "simple" })
       .limit(limit);
-    mergeById(byId, (data || []).filter(summaryOk));
+    take(data);
   }
   const companies = profile.targetCompanies.slice(0, 30);
   if (companies.length) {
@@ -130,7 +140,7 @@ async function recallViaSupabase(
       .gte("last_seen_at", sinceIso)
       .or(companies.map((c) => `company.ilike.%${c}%`).join(","))
       .limit(limit);
-    mergeById(byId, (data || []).filter(summaryOk));
+    take(data);
   }
   const cityTs = profile.targetLocations.length
     ? buildTsquery(profile.targetLocations.slice(0, 10), [])
@@ -144,9 +154,10 @@ async function recallViaSupabase(
       .gte("first_seen_at", sinceIso)
       .textSearch("search_doc", cityTs, { config: "simple" })
       .limit(limit);
-    mergeById(byId, (data || []).filter(summaryOk));
+    take(data);
   }
-  return finalize(byId, limit);
+  const r = finalize(byId, limit);
+  return { jobs: r.jobs, capped: branchCapped || r.capped };
 }
 
 export async function recallOpportunityCandidates(

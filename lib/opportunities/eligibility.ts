@@ -20,7 +20,7 @@ import {
   hasExplicitRecruitmentType,
   normalizeChinaCity,
 } from "../china-keyword-expansion";
-import { classifyCompanyIndustry, userTargetIndustryCategories } from "../company-industry";
+import { classifyCompanyIndustry, userTargetIndustryCategories, jobIndustryAllowed } from "../company-industry";
 import { educationMatch } from "../education-rank";
 import { excludeJobs } from "../live-search";
 import { normalizeCompany } from "../company-normalize";
@@ -71,13 +71,17 @@ function educationState(job: Job, highest: EducationLabel): TriState {
   return v === "pass" ? "match" : v === "degrade" ? "unknown" : "mismatch";
 }
 
-// 行业三态：用户无目标行业 → na；公司行业判不出 → unknown；∈ 目标 → match；否则 mismatch
+// 行业三态：拒绝判定**复用权威 jobIndustryAllowed**（不另造近似拒绝逻辑）。
+// jobIndustryAllowed=false 仅当「用户有目标行业 且 公司行业已知 且 不在目标内」→ mismatch（拒绝）。
+// allowed 时再用同源 classify 细分 match（已知∈目标，计 +10）vs unknown（判不出，degrade）vs na（用户没填）——
+// 这三者 jobIndustryAllowed 都返回 true（都不拒绝），细分只用于打分/degrade，不改变拒绝口径。
 function industryState(job: Job, targetIndustries: string[]): { state: TriState; name: string | null } {
   const targets = userTargetIndustryCategories(targetIndustries) as Set<string>;
   if (targets.size === 0) return { state: "na", name: null };
+  if (!jobIndustryAllowed(job.company, targetIndustries)) return { state: "mismatch", name: null };
   const cat = classifyCompanyIndustry(job.company) as string | null;
   if (!cat) return { state: "unknown", name: null };
-  return targets.has(cat) ? { state: "match", name: cat } : { state: "mismatch", name: null };
+  return { state: "match", name: cat };
 }
 
 // 目标公司命中（§10.2 normalizeCompany 后 exact equality；不再用子串把"字节"误当"字节跳动"）。
