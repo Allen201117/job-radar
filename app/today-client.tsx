@@ -1,14 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import Link from "next/link";
 import JobCard from "@/components/JobCard";
 import { track } from "@/lib/track";
 import type { ScoredJob } from "@/lib/types";
 import type { Opportunity, OpportunityFeed } from "@/lib/opportunities/types";
-
-type PrimaryAction = "saved" | "ignored" | "applied";
-type SectionKey = "new" | "priority" | "explore" | "aging";
+import {
+  todayReducer,
+  initTodayState,
+  type PrimaryAction,
+  type SectionKey,
+} from "@/lib/opportunities/today-reducer";
 
 const SECTION_META: Record<SectionKey, { title: string; subtitle?: string }> = {
   new: { title: "新出现", subtitle: "自上次查看以来新发现、且仍在招的对口岗位。" },
@@ -26,7 +29,7 @@ const ACTION_LABEL: Record<PrimaryAction, string> = {
   ignored: "已标记不适合",
 };
 
-// Opportunity → JobCard 需要的 ScoredJob 形（match_* 字段仅为类型兼容，opportunity 变体不读它们）
+// Opportunity → JobCard 需要的 ScoredJob 形（match_* 仅为类型兼容，opportunity 变体不读它们）
 function toScoredJob(opp: Opportunity): ScoredJob {
   return {
     ...(opp.job as ScoredJob),
@@ -50,10 +53,7 @@ export function OnboardingPanel({
   useEffect(() => {
     if (firedRef.current) return;
     firedRef.current = true;
-    track("radar_onboarding_required", {
-      missing_roles: missingContent,
-      missing_locations: missingLocation,
-    });
+    track("radar_onboarding_required", { missing_roles: missingContent, missing_locations: missingLocation });
   }, [missingContent, missingLocation]);
 
   return (
@@ -102,17 +102,33 @@ function EmptyQueue() {
   );
 }
 
-export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
-  const [sections, setSections] = useState(feed.sections);
-  const [deadIds, setDeadIds] = useState<Set<string>>(new Set());
-  const [toast, setToast] = useState<{ jobId: string; action: PrimaryAction } | null>(null);
+const TOAST_MS = 5000;
 
-  const removedRef = useRef<Map<string, { opp: Opportunity; key: SectionKey }>>(new Map());
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
+  const [state, dispatch] = useReducer(todayReducer, feed.sections, initTodayState);
+  const [deadIds, setDeadIds] = useState<Set<string>>(new Set());
+
+  const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const openedRef = useRef(false);
   const livenessRequested = useRef<Set<string>>(new Set());
 
-  // 首次渲染后记录「上次打开」+ radar_open 埋点（Strict Mode 下 ref 去重）。
+  function clearTimer(jobId: string) {
+    const t = timers.current.get(jobId);
+    if (t) {
+      clearTimeout(t);
+      timers.current.delete(jobId);
+    }
+  }
+  // 清理所有计时器
+  useEffect(() => {
+    const map = timers.current;
+    return () => {
+      for (const t of Array.from(map.values())) clearTimeout(t);
+      map.clear();
+    };
+  }, []);
+
+  // 首渲后记录「上次打开」+ radar_open（Strict Mode 下 ref 去重）
   useEffect(() => {
     if (openedRef.current) return;
     openedRef.current = true;
@@ -126,9 +142,9 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
     }).catch(() => {});
   }, [feed]);
 
-  // 展示时校验（②层）：异步探活可见岗位，死的当场隐藏（复用 /api/jobs/liveness-check）。
+  // 展示时校验（②层）：异步探活可见岗位，死的当场隐藏（复用 /api/jobs/liveness-check）
   useEffect(() => {
-    const visible = (["new", "priority", "explore", "aging"] as SectionKey[]).flatMap((k) => sections[k]);
+    const visible = (["new", "priority", "explore", "aging"] as SectionKey[]).flatMap((k) => state.sections[k]);
     const ids = visible
       .map((o) => o.job.id)
       .filter((id) => id && !livenessRequested.current.has(id) && !deadIds.has(id))
@@ -152,99 +168,67 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
           });
         }
       } catch {
-        /* 静默：探不动就不动，后台 sweep 兜底 */
+        /* 静默：后台 sweep 兜底 */
       }
     })();
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sections]);
+  }, [state.sections]);
 
-  function captureAndRemove(jobId: string): { opp: Opportunity; key: SectionKey } | null {
-    let found: { opp: Opportunity; key: SectionKey } | null = null;
-    setSections((prev) => {
-      const next = { ...prev };
-      for (const key of ["new", "priority", "explore", "aging"] as SectionKey[]) {
-        const idx = next[key].findIndex((o) => o.job.id === jobId);
-        if (idx >= 0) {
-          found = { opp: next[key][idx], key };
-          next[key] = next[key].filter((_, i) => i !== idx);
-          break;
-        }
-      }
-      return next;
-    });
-    return found;
-  }
-
-  function restore(opp: Opportunity, key: SectionKey) {
-    setSections((prev) => ({ ...prev, [key]: [opp, ...prev[key]] }));
-  }
-
-  function clearToast() {
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = null;
-    setToast(null);
-  }
-
-  // JobCard 乐观回调：非空动作 → 移出队列并弹可撤销 toast；null（API 失败回滚）→ 还原。
+  // JobCard 乐观回调：非空动作 → 乐观移除 + 5s 后落定；null（正向 API 失败）→ 还原（reducer 保证可靠移除/还原）
   function handleActionChange(jobId: string, action: PrimaryAction | null) {
     if (action !== null) {
-      if (removedRef.current.has(jobId)) return;
-      const captured = captureAndRemove(jobId);
-      if (!captured) return;
-      removedRef.current.set(jobId, captured);
-      if (toastTimer.current) clearTimeout(toastTimer.current);
-      setToast({ jobId, action });
-      toastTimer.current = setTimeout(() => {
-        removedRef.current.delete(jobId);
-        setToast(null);
-      }, 5000);
+      dispatch({ type: "removeOptimistic", jobId, action });
+      clearTimer(jobId);
+      timers.current.set(
+        jobId,
+        setTimeout(() => {
+          timers.current.delete(jobId);
+          dispatch({ type: "finalizeRemove", jobId });
+        }, TOAST_MS),
+      );
     } else {
-      const captured = removedRef.current.get(jobId);
-      if (captured) {
-        removedRef.current.delete(jobId);
-        restore(captured.opp, captured.key);
-      }
-      if (toast?.jobId === jobId) clearToast();
+      clearTimer(jobId);
+      dispatch({ type: "removeRollback", jobId });
     }
   }
 
   async function undo() {
-    if (!toast) return;
-    const { jobId, action } = toast;
-    const captured = removedRef.current.get(jobId);
-    clearToast();
-    removedRef.current.delete(jobId);
-    if (captured) restore(captured.opp, captured.key);
-    track("opportunity_undo", { previous_action: action, surface: "today" });
+    const t = state.toast;
+    if (!t || t.undoFailed) return;
+    const jobId = t.jobId;
+    clearTimer(jobId);
+    dispatch({ type: "undoOptimistic", jobId });
+    track("opportunity_undo", { previous_action: t.action, surface: "today" });
     try {
-      await fetch(`/api/job-actions/${jobId}`, {
+      const resp = await fetch(`/api/job-actions/${jobId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: null }),
       });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      dispatch({ type: "undoCommit", jobId });
     } catch {
-      /* 撤销失败也只是 DB 仍记着该动作，下次 feed 会反映；不打断用户 */
+      // 撤销 API 失败 → 重新移出 + 提示，不让 UI 与数据库长期相反
+      dispatch({ type: "undoRollback", jobId });
+      setTimeout(() => dispatch({ type: "dismissToast" }), TOAST_MS);
     }
   }
 
-  const mainSections: SectionKey[] = ["new", "priority", "explore"];
-  const mainCount = mainSections.reduce(
-    (n, k) => n + sections[k].filter((o) => !deadIds.has(o.job.id)).length,
-    0,
-  );
-  const agingVisible = sections.aging.filter((o) => !deadIds.has(o.job.id));
+  const order: SectionKey[] = ["new", "priority", "explore", "aging"];
+  const visibleCounts = order.map((k) => state.sections[k].filter((o) => !deadIds.has(o.job.id)).length);
+  const total = visibleCounts.reduce((a, b) => a + b, 0);
 
-  if (mainCount === 0 && agingVisible.length === 0) {
+  if (total === 0) {
     return <EmptyQueue />;
   }
 
   return (
     <div className="space-y-10">
-      {(["new", "priority", "explore", "aging"] as SectionKey[]).map((key) => {
-        const items = sections[key].filter((o) => !deadIds.has(o.job.id));
+      {order.map((key) => {
+        const items = state.sections[key].filter((o) => !deadIds.has(o.job.id));
         if (items.length === 0) return null;
         const meta = SECTION_META[key];
         return (
@@ -275,17 +259,19 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
         );
       })}
 
-      {toast && (
+      {state.toast && (
         <div className="fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
           <div className="flex items-center gap-3 rounded-full border border-black/[0.1] bg-[#1a1714] px-4 py-2.5 text-sm text-[#f7f1e6] shadow-lg dark:bg-[#f3ecdf] dark:text-[#16130f]">
-            <span>{ACTION_LABEL[toast.action]}</span>
-            <button
-              type="button"
-              onClick={undo}
-              className="font-semibold underline underline-offset-2 hover:opacity-80"
-            >
-              撤销
-            </button>
+            {state.toast.undoFailed ? (
+              <span>撤销失败，已重新移出</span>
+            ) : (
+              <>
+                <span>{state.toast.action ? ACTION_LABEL[state.toast.action] : "已处理"}</span>
+                <button type="button" onClick={undo} className="font-semibold underline underline-offset-2 hover:opacity-80">
+                  撤销
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
