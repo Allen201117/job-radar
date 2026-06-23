@@ -118,7 +118,7 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
 
   useEffect(() => {
     if (!open) return;
-    track("insight_drawer_open", { company });
+    track("insight_drawer_open");
     let alive = true;
     setLoading(true);
     fetchCompanyInsights(company)

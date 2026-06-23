@@ -41,11 +41,36 @@ test("normalizeEventName rejects empty, non-string, and over-length names", () =
 });
 
 // ---------- sanitizePayload ----------
-test("sanitizePayload returns a JSON-serializable plain object", () => {
-  assert.deepEqual(T.sanitizePayload({ job_id: "j1", company: "字节" }), {
+test("sanitizePayload returns a JSON-serializable plain object and strips forbidden keys", () => {
+  // company 属 §13.1 禁用字段 → 剔除；安全字段保留
+  assert.deepEqual(T.sanitizePayload({ job_id: "j1", company: "字节", tier: "high" }), {
     job_id: "j1",
-    company: "字节",
+    tier: "high",
   });
+});
+
+test("sanitizePayload strips forbidden event fields recursively", () => {
+  assert.deepEqual(
+    T.sanitizePayload({
+      job_id: "job-1",
+      company: "敏感公司名",
+      title: "敏感岗位名",
+      jd_url: "https://example.com/job/1",
+      reason_text: "自由文本",
+      email: "person@example.com",
+      user_email: "person@example.com",
+      skills: ["secret"],
+      nested: {
+        resume_text: "resume body",
+        job_title: "nested title",
+        safe_count: 2,
+      },
+    }),
+    {
+      job_id: "job-1",
+      nested: { safe_count: 2 },
+    },
+  );
 });
 
 test("sanitizePayload coerces non-object / array / null to empty object", () => {
