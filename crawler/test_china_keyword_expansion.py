@@ -84,6 +84,21 @@ class ClassifyJobFunctionTest(unittest.TestCase):
     def test_product_precedes_algorithm(self):
         self.assertEqual(cke.classify_job_function("AI 产品经理", "", "了解算法"), "产品")
 
+    def test_title_first_not_misled_by_job_type(self):
+        # 标题优先：job_type/summary 不带偏标题已明确的职能（与 JS 同口径）。
+        # 实锤：B站「数据科学家」挂部门 job_type=「产品运营类」下，仍应判数据。
+        self.assertEqual(
+            cke.classify_job_function("商业化-数据科学家（AI Agent 开发方向）", "产品运营类"), "数据"
+        )
+        self.assertEqual(
+            cke.classify_job_function("算法工程师", "产品技术", "与产品经理协作"), "研发"
+        )
+        # 「职能」例外：招聘活动标签标题退回看正文真实角色。
+        self.assertEqual(
+            cke.classify_job_function("2024 届校园招聘", "", "产品经理方向，负责需求管理"), "产品"
+        )
+        self.assertEqual(cke.classify_job_function("招聘专员", "", "负责候选人寻访"), "职能")
+
     def test_non_software_engineering_not_rd(self):
         # 机械/工艺/化工等非软件工程岗仅靠泛词落入研发 → 归「其他」，不被「算法/AI/数据」类查询误召。
         self.assertEqual(cke.classify_job_function("工艺技术开发（机械/自动化）"), "其他")
