@@ -101,13 +101,26 @@ export interface CandidateProfile {
   updated_at: string;
 }
 
+// 岗位被物理清理后仍保留的最小快照（服务端在写 action 时从权威 jobs 行生成；迁移 162）。
+export interface JobSnapshot {
+  company?: string | null;
+  title?: string | null;
+  location?: string | null;
+  jd_url?: string | null;
+}
+
 export interface JobAction {
   id: string;
   user_id: string;
   job_id: string;
   action: "viewed" | "saved" | "ignored" | "applied";
   note: string | null;
+  // 迁移 162 新增：结构化负反馈 + 下线岗快照 + 更新时间
+  reason_code: string | null;
+  reason_text: string | null;
+  job_snapshot: JobSnapshot;
   created_at: string;
+  updated_at: string | null;
 }
 
 export interface Profile {
