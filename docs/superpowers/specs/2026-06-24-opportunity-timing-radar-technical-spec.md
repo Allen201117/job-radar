@@ -440,7 +440,74 @@ JOB_REAPPEARED_INTERNAL:${job_id}:${yyyy-mm-dd}
 - content hash 变化内部记录即可，不要触发用户侧提醒；
 - `JOB_REAPPEARED_INTERNAL` 仅从 `removed -> active` 产生；`expired -> active` 当前不应由列表重抓复活。
 
-### 3.4 不新增的东西
+### 3.4 字段契约总表
+
+实现 agent 必须按本表核对字段，不能只看 SQL 片段。
+
+#### `user_preferences` 新增字段
+
+| 字段 | 类型 | 必填 | 默认值 | 合法值 | 写入者 | 用途 |
+|---|---|---:|---|---|---|---|
+| `radar_mode` | `text` | 是 | `'sprint'` | `sprint` / `watch` / `campus` | `/api/preferences` | 决定 profile readiness、feed 阈值、分区和通知默认值 |
+| `radar_mode_confirmed_at` | `timestamptz` | 否 | `null` | 合法时间 | `/api/preferences` | 区分系统默认模式和用户已确认模式 |
+
+#### `user_opportunity_deliveries`
+
+| 字段 | 类型 | 必填 | 默认值 | 合法值 / 约束 | 写入者 | 用途 |
+|---|---|---:|---|---|---|---|
+| `id` | `uuid` | 是 | `gen_random_uuid()` | primary key | DB | 行标识 |
+| `user_id` | `uuid` | 是 | 无 | references `auth.users(id)` | service API | 用户隔离 |
+| `job_id` | `uuid` | 否 | `null` | job-level signal 必填；company momentum 可空 | service API | 关联岗位 |
+| `company` | `text` | 否 | `null` | momentum 必填；job-level 可取 job.company | service API | 公司级信号展示和去重 |
+| `signal_type` | `text` | 是 | 无 | 五类用户侧 signal | service API | 用户收到的机会变化类型 |
+| `delivery_key` | `text` | 是 | 无 | 同一用户同一 surface 幂等 | service API | 防重复展示/邮件 |
+| `surface` | `text` | 是 | 无 | `today` / `email` | service API | 投递面 |
+| `radar_mode` | `text` | 是 | 无 | `sprint` / `watch` / `campus` | service API | 审计当时模式 |
+| `score` | `integer` | 否 | `null` | 0–100 | service API | 审计排序，不向用户展示 |
+| `tier` | `text` | 否 | `null` | `high` / `related` / `explore` | service API | 审计档位 |
+| `delivered_at` | `timestamptz` | 是 | `now()` | 合法时间 | DB/API | 首次投递时间 |
+| `consumed_at` | `timestamptz` | 否 | `null` | 合法时间 | `/api/radar/open` 或 action API | 用户已看/已消费 |
+| `dismissed_at` | `timestamptz` | 否 | `null` | 合法时间 | action API | 用户关闭或忽略该提醒 |
+| `payload` | `jsonb` | 是 | `{}` | 不含 PII；见隐私规则 | service API | 保存 signal evidence |
+
+唯一约束：
+
+```text
+unique (user_id, delivery_key, surface)
+```
+
+job-level `delivery_key` 必须包含日期桶，避免长期机会永远不再出现：
+
+| signal | date bucket |
+|---|---|
+| `NEW_MATCH` | `yyyy-mm-dd(first_seen_at)` |
+| `STILL_OPEN_PRIORITY` | `yyyy-mm-dd(last_seen_at)` |
+| `DEADLINE_SOON` | `yyyy-mm-dd(deadlineAt)` |
+| `CLOSED_OR_STALE` | `yyyy-mm-dd(now)`，同一 job 7 天内只能一条 |
+| `COMPANY_MOMENTUM` | `window_start:window_end` |
+
+#### `job_events`
+
+| 字段 | 类型 | 必填 | 默认值 | 合法值 / 约束 | 写入者 | 用途 |
+|---|---|---:|---|---|---|---|
+| `id` | `uuid` | 是 | `gen_random_uuid()` | primary key | DB | 行标识 |
+| `event_key` | `text` | 是 | 无 | unique | crawler / app writer | 事件幂等 |
+| `job_id` | `uuid` | 是 | 无 | references `jobs(id)` | crawler / app writer | 关联岗位 |
+| `source_id` | `uuid` | 否 | `null` | source id | crawler / app writer | 关联来源 |
+| `event_type` | `text` | 是 | 无 | 五类内部 job event | crawler / app writer | 岗位事实变化类型 |
+| `occurred_at` | `timestamptz` | 是 | `now()` | 事实发生时间 | crawler / app writer | 排序和追溯 |
+| `observed_at` | `timestamptz` | 是 | `now()` | 系统观察时间 | crawler / app writer | 观测延迟 |
+| `old_status` | `text` | 否 | `null` | active/removed/expired/error | crawler / app writer | 状态变化证据 |
+| `new_status` | `text` | 否 | `null` | active/removed/expired/error | crawler / app writer | 状态变化证据 |
+| `old_content_hash` | `text` | 否 | `null` | hash | crawler / app writer | 内部内容变化证据 |
+| `new_content_hash` | `text` | 否 | `null` | hash | crawler / app writer | 内部内容变化证据 |
+| `changed_fields` | `text[]` | 是 | `{}` | V1 通常为空 | crawler / app writer | 未来字段级 diff |
+| `confidence` | `text` | 是 | `observed` | `observed` / `derived` / `low` | crawler / app writer | 事实置信度 |
+| `payload` | `jsonb` | 是 | `{}` | 不含 PII | crawler / app writer | 额外证据 |
+
+`job_events` 不做 RLS，因为它位于 jobs PostgreSQL，不直接给客户端读。客户端只读 `/api/opportunities` 生成后的用户侧 signal。
+
+### 3.5 不新增的东西
 
 本轮不新增：
 
@@ -520,11 +587,14 @@ function isProfileReady(profile: RadarProfile): boolean {
 |---|---:|---:|
 | http | 18h | 36h |
 | playwright | 36h | 72h |
-| manual / unknown | 72h | 144h |
+| manual，或 source 行存在但 `crawl_method` 为空 | 72h | 144h |
 
 规则：
 
 - `last_seen_at` 缺失或非法 → `unknown`；
+- source metadata 查询整体失败 → 本次 feed 返回 503 `feed_unavailable`，不得猜测 freshness；
+- 单个岗位的 `source_id` 为空，或 `source_id` 在 metadata 查询结果中找不到 → 该岗位 freshness=`unknown`；
+- source 行存在但 `crawl_method` 为空 → 按 manual SLA；
 - `age <= verified` → `verified`；
 - `verified < age <= aging` → `aging`；
 - `age > aging` → `stale`。
@@ -873,7 +943,70 @@ export const MODE_CONFIG = {
 
 ## 11. API 规格
 
+### 11.0 通用 API 契约
+
+所有 JSON API 必须使用统一响应形态。
+
+成功：
+
+```json
+{
+  "ok": true
+}
+```
+
+失败：
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "validation_failed",
+    "message": "请求参数不合法",
+    "fields": {
+      "radar_mode": "must be sprint, watch, or campus"
+    },
+    "request_id": "optional-server-request-id"
+  }
+}
+```
+
+错误对象规则：
+
+- `code` 必填，使用 snake_case；
+- `message` 必填，面向用户或 agent 可理解；
+- `fields` 可选，仅用于 400/422 字段错误；
+- 不返回堆栈；
+- 不返回 service role error 原文；
+- 不返回用户邮箱、简历、完整 JD、reason_text 或带 token 的 URL。
+
+状态码矩阵：
+
+| HTTP | code | 适用场景 |
+|---:|---|---|
+| 400 | `invalid_json` | body 不是合法 JSON |
+| 400 | `validation_failed` | 字段类型、枚举、长度、数组上限不合法 |
+| 401 | `unauthorized` | 未登录 |
+| 403 | `forbidden` | 已登录但无权访问 admin 或他人资源 |
+| 404 | `job_not_found` | action/view 的 jobId 在权威 jobs 库不存在 |
+| 409 | `conflict` | 并发写入或唯一约束冲突且无法自动幂等恢复 |
+| 422 | `profile_not_ready` | 调用需要完整画像的写入/生成动作但画像不满足 mode 条件 |
+| 503 | `feed_unavailable` | jobs store 失败、source metadata 查询整体失败、delivery 写入失败或 Opportunity Engine 异常 |
+
+鉴权规则：
+
+- 用户相关 API 必须调用 `requireUser()`；
+- admin API 必须调用 `requireAdmin()`；
+- 请求体中的 `user_id` 一律拒绝或忽略，但行为必须在测试中固定：推荐返回 400 `validation_failed`；
+- 所有写入使用服务端当前用户 id。
+
 ### 11.1 `GET /api/preferences`
+
+请求：
+
+```http
+GET /api/preferences
+```
 
 返回：
 
@@ -897,6 +1030,14 @@ export const MODE_CONFIG = {
   "notification_settings": {}
 }
 ```
+
+状态码：
+
+| HTTP | code | 条件 |
+|---:|---|---|
+| 200 | 无 | 成功；即使没有 preference 行也返回默认值 |
+| 401 | `unauthorized` | 未登录 |
+| 503 | `preferences_unavailable` | Supabase 查询失败 |
 
 ### 11.2 `PUT /api/preferences`
 
@@ -924,6 +1065,37 @@ export const MODE_CONFIG = {
 - daily_limit 按 mode clamp；
 - 不接受 `user_id`；
 - 保存 target_companies 后同步 `company_watch_requests`。
+
+响应：
+
+```json
+{
+  "ok": true,
+  "preferences": {
+    "radar_mode": "watch",
+    "daily_limit": 8
+  },
+  "profile_ready": true,
+  "profile_ready_missing": [],
+  "coverage": [
+    {
+      "company": "字节跳动",
+      "status": "covered",
+      "matched_sources": 2
+    }
+  ]
+}
+```
+
+状态码：
+
+| HTTP | code | 条件 |
+|---:|---|---|
+| 200 | 无 | 保存成功 |
+| 400 | `invalid_json` | body 非 JSON |
+| 400 | `validation_failed` | 包含 `user_id`、非法 mode、数组过长、单项过长、类型错误 |
+| 401 | `unauthorized` | 未登录 |
+| 503 | `preferences_unavailable` | Supabase 写入失败 |
 
 ### 11.3 `GET /api/opportunities`
 
@@ -962,6 +1134,24 @@ export const MODE_CONFIG = {
 - 如果 profile 不 ready，返回 `profile_ready=false` 和空 sections；
 - 如果 feed 失败，返回 503，不返回 mock 数据。
 
+状态码：
+
+| HTTP | code | 条件 |
+|---:|---|---|
+| 200 | 无 | 成功；profile 不完整也返回 200 + 空 feed |
+| 401 | `unauthorized` | 未登录 |
+| 503 | `feed_unavailable` | 权威 jobs 读取失败、source metadata 查询整体失败、delivery 写入失败、engine 异常 |
+
+`profile_ready=false` 不是错误；不得返回 422。它是前台 onboarding 状态。
+
+delivery 写入规则：
+
+- `surface='today'`；
+- 对每个返回 opportunity 的每个 signal upsert 一条 delivery；
+- 使用 `(user_id, delivery_key, surface)` 幂等；
+- delivery 写入失败时，本次 feed 返回 503，不允许“feed 成功但去重台账失败”，否则会造成重复提醒；
+- 如果实现方选择 Phase A 暂不写 delivery，必须在交付说明标注“delivery ledger 未接入”，且 acceptance 中相关用例不得宣称通过。
+
 ### 11.4 `POST /api/radar/open`
 
 作用：
@@ -986,7 +1176,35 @@ export const MODE_CONFIG = {
 - `last_feed_generated_at=generated_at`；
 - `last_feed_count` 使用服务端最近 feed count 或请求中安全字段，不信任客户端完整 feed。
 
+响应：
+
+```json
+{
+  "ok": true,
+  "last_opened_at": "2026-06-24T08:30:00.000Z"
+}
+```
+
+状态码：
+
+| HTTP | code | 条件 |
+|---:|---|---|
+| 200 | 无 | 更新成功 |
+| 400 | `validation_failed` | `surface` 非 today/email，`generated_at` 非 ISO 时间，包含 `user_id` |
+| 401 | `unauthorized` | 未登录 |
+| 503 | `radar_state_unavailable` | Supabase upsert 失败 |
+
 ### 11.5 `POST /api/job-actions/[jobId]`
+
+请求：
+
+```json
+{
+  "action": "ignored",
+  "reason_code": "location_mismatch",
+  "reason_text": "可选，最长 200 字"
+}
+```
 
 要求：
 
@@ -998,7 +1216,35 @@ export const MODE_CONFIG = {
 - action 成功后记录 event；
 - action 失败时前端不得乐观永久改变。
 
+响应：
+
+```json
+{
+  "ok": true,
+  "action": "ignored",
+  "job_id": "00000000-0000-0000-0000-000000000000"
+}
+```
+
+状态码：
+
+| HTTP | code | 条件 |
+|---:|---|---|
+| 200 | 无 | 写入成功 |
+| 400 | `invalid_json` | body 非 JSON |
+| 400 | `validation_failed` | action 非法；ignored 缺 reason_code；reason_code 不在白名单；reason_text 超长；客户端传 job_snapshot/user_id |
+| 401 | `unauthorized` | 未登录 |
+| 404 | `job_not_found` | jobs 权威库查不到 jobId |
+| 409 | `conflict` | 原子主动作 RPC 冲突且无法恢复 |
+| 503 | `job_action_unavailable` | jobs 查询或 Supabase 写入失败 |
+
 ### 11.6 `POST /api/job-actions/[jobId]/view`
+
+请求：
+
+```json
+{}
+```
 
 作用：
 
@@ -1006,6 +1252,15 @@ export const MODE_CONFIG = {
 - 幂等；
 - 不改变主动作；
 - 不代表投递。
+
+状态码：
+
+| HTTP | code | 条件 |
+|---:|---|---|
+| 200 | 无 | 成功或已存在 viewed |
+| 401 | `unauthorized` | 未登录 |
+| 404 | `job_not_found` | jobs 权威库查不到 jobId |
+| 503 | `job_view_unavailable` | 写入失败 |
 
 ---
 
@@ -1325,4 +1580,3 @@ bash scripts/check-migrations.sh
 - 所有 RLS 策略幂等。
 
 jobs-db migration 命名按当前项目 jobs-db 习惯；如果没有 migrations 目录，可将 append-only schema 写入 `jobs-db/schema.sql` 并提供单独 apply SQL 文档，但不得破坏现有 jobs schema。
-

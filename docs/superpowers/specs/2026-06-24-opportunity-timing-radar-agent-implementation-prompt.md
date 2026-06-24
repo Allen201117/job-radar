@@ -291,6 +291,14 @@ sections[]
 - daily_limit 按 mode clamp；
 - 所有数组 trim/去空/去重/限长。
 
+错误契约：
+
+- 所有失败响应必须是 `{ ok:false, error:{ code, message, fields? } }`；
+- body 带 `user_id` 返回 400 `validation_failed`；
+- 非法 mode 返回 400 `validation_failed`；
+- 未登录返回 401 `unauthorized`；
+- Supabase 失败返回 503，不要吞错后假成功。
+
 ### 3.2 `/api/opportunities`
 
 必须：
@@ -301,6 +309,14 @@ sections[]
 - GET 不更新 last_opened_at；
 - 生成 delivery ledger，幂等；
 - feed 失败返回 503，不返回 mock。
+
+假成功防线：
+
+- profile 不 ready 返回空 feed，不返回最新岗位兜底；
+- jobs store 或 engine 抛错时返回 503 `feed_unavailable`；
+- 如果 delivery ledger 写入失败，本次 feed 也返回 503；
+- 每个 opportunity 的 `job.id` 必须能从权威 jobs 库读回；
+- 每个 opportunity 的 `signals.length >= 1`。
 
 ### 3.3 `/api/radar/open`
 
@@ -321,6 +337,14 @@ sections[]
 - 服务端生成 job_snapshot；
 - saved/applied 清空 reason；
 - action 失败前端不得永久改变。
+
+错误契约：
+
+- ignored 无 reason_code 返回 400 `validation_failed`；
+- job 不存在返回 404 `job_not_found`；
+- 客户端传 `job_snapshot` 或 `user_id` 返回 400；
+- 写入失败返回 503；
+- 不得先写 UI 成功再忽略 API 失败。
 
 ---
 
@@ -436,6 +460,11 @@ crawler/test_jobs_db_events.py
 - ignored 无 reason 返回 400；
 - saved/ignored/applied 不进主推荐；
 - 普通用户不显示主动爬取入口。
+- jobs store 故障时 opportunities 返回 503；
+- API 返回 opportunity 后 delivery 表能读回；
+- 第二次生成同一 feed 不重复写 delivery；
+- action API 失败时前端回滚；
+- job.id 必须来自真实 jobs 库，不能是 mock 常量。
 
 ---
 
@@ -502,4 +531,3 @@ bash scripts/check-migrations.sh
 - action API 接受 user_id；
 - 使用 mock 数据冒充真实成功；
 - 测试未跑却写通过。
-
