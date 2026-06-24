@@ -22,7 +22,7 @@
 """
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 import db
@@ -76,7 +76,7 @@ def host_of(u):
         return None
 
 
-def fetch_browser_liveness(sb, limit, shard="0/1", host_filter=None, jobs_conn=None):
+def fetch_browser_liveness(sb, limit, shard="0/1", host_filter=None, jobs_conn=None, prioritize_new=False):
     """死活巡检队列（取代旧「全库深翻页抽样」fetch_sample）。
 
     旧法弊端：count(exact)+10 个 0~90% 偏移窗口抽样 → 深 OFFSET(0.9×13万)在大表上撞 statement_timeout、
@@ -84,7 +84,10 @@ def fetch_browser_liveness(sb, limit, shard="0/1", host_filter=None, jobs_conn=N
     新法：只锁定浏览器源(adapter ∈ _BROWSER_ADAPTERS)的 active 岗，按 enrich_checked_at NULLS FIRST
     （从未探活的最先）取 limit 个；source_id 打头排序吃 migration 151 部分索引、脱离 statement_timeout。
     main() 每探一岗即盖 enrich_checked_at 时间戳 → 下轮自动取下一批，全量 ~N 轮滚动覆盖且持续保持新鲜，
-    死岗一旦 expired 即离开 active 集、不再被取。shard=k/n 多进程并行互不重叠。"""
+    死岗一旦 expired 即离开 active 集、不再被取。shard=k/n 多进程并行互不重叠。
+
+    prioritize_new（01 spec §3.1，消灭 7 天盲区）：只取**近 48h 新增且从未核验**的 SPA 岗（enrich_checked_at
+    IS NULL 且 first_seen_at >= now()-48h），按 first_seen_at desc → 新灌入的坏岗高频小批先清，不必等 6 分片轮转一遍。"""
     k, n = (int(x) for x in shard.split("/"))
     src_ids = [s["id"] for s in
                ((sb.table("sources").select("id").in_("adapter_name", list(_BROWSER_ADAPTERS)).execute().data) or [])]
@@ -93,22 +96,36 @@ def fetch_browser_liveness(sb, limit, shard="0/1", host_filter=None, jobs_conn=N
     want = limit * n + 100  # 多取一些，shard 切片后仍够 limit
     # jobs 已迁香港库：jobs_conn 给定时直连查；否则 Supabase 分页。
     if jobs_conn is not None:
-        rows = jobs_db.fetch_all(
-            jobs_conn,
-            "select id, title, company, jd_url from jobs where source_id = any(%s::uuid[]) and status='active' "
-            "order by source_id, enrich_checked_at asc nulls first limit %s",
-            (src_ids, want),
-        )
+        if prioritize_new:
+            rows = jobs_db.fetch_all(
+                jobs_conn,
+                "select id, title, company, jd_url from jobs where source_id = any(%s::uuid[]) and status='active' "
+                "and enrich_checked_at is null and first_seen_at >= now() - interval '48 hours' "
+                "order by first_seen_at desc limit %s",
+                (src_ids, want),
+            )
+        else:
+            rows = jobs_db.fetch_all(
+                jobs_conn,
+                "select id, title, company, jd_url from jobs where source_id = any(%s::uuid[]) and status='active' "
+                "order by source_id, enrich_checked_at asc nulls first limit %s",
+                (src_ids, want),
+            )
         if host_filter:
             rows = [r for r in rows if host_filter in (host_of(r.get("jd_url")) or "")]
         return [r for i, r in enumerate(rows) if i % n == k][:limit]
     rows, page = [], 1000
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat() if prioritize_new else None
     for offset in range(0, 60000, page):
-        chunk = (sb.table("jobs").select("id,title,company,jd_url")
-                 .in_("source_id", src_ids).eq("status", "active")
-                 # source_id 打头吃 151 (source_id, enrich_checked_at nulls first) WHERE active 索引（同 sweep）。
-                 .order("source_id").order("enrich_checked_at", desc=False, nullsfirst=True)
-                 .range(offset, offset + page - 1).execute().data) or []
+        q = (sb.table("jobs").select("id,title,company,jd_url")
+             .in_("source_id", src_ids).eq("status", "active"))
+        if prioritize_new:
+            # 近 48h 新增且从未核验，新者优先。
+            q = q.is_("enrich_checked_at", "null").gte("first_seen_at", cutoff_iso).order("first_seen_at", desc=True)
+        else:
+            # source_id 打头吃 151 (source_id, enrich_checked_at nulls first) WHERE active 索引（同 sweep）。
+            q = q.order("source_id").order("enrich_checked_at", desc=False, nullsfirst=True)
+        chunk = (q.range(offset, offset + page - 1).execute().data) or []
         if host_filter:
             chunk = [r for r in chunk if host_filter in (host_of(r.get("jd_url")) or "")]
         rows.extend(chunk)
@@ -141,6 +158,7 @@ def main():
     limit = int(arg("--limit", "1500"))   # 单 shard 单轮渲染上限，控 CI 时长（~3s/岗）
     shard = arg("--shard", "0/1")          # k/n 多进程并行互不重叠
     sweep_kw = arg("--sweep")  # 对「source_url 含 kw 的源」做全量逐岗审计，配 --apply 精确下架其失效岗
+    prioritize_new = "--prioritize-new" in sys.argv  # 01 spec §3.1：只清近 48h 新增未核验 SPA 岗（高频小批，消灭 7 天盲区）
     sb = db.get_supabase()                                       # sources 走 Supabase
     jobs_conn = jobs_db.get_conn() if jobs_db.enabled() else None  # jobs 读写走香港库（Phase 1）
     if sweep_kw:
@@ -166,8 +184,10 @@ def main():
         print(f"[SWEEP] 源含「{sweep_kw}」共 {len(srcs)} 个，全量逐岗 {len(sample)} 条")
     else:
         # 默认=浏览器源死活巡检轮转（enrich_checked_at 最旧优先，取代旧深翻页抽样）。
-        sample = fetch_browser_liveness(sb, limit, shard, host_filter, jobs_conn=jobs_conn)
-        print(f"[巡检] 浏览器源({'/'.join(_BROWSER_ADAPTERS)}) shard {shard} 认领 {len(sample)}（limit={limit}）")
+        # --prioritize-new：只取近 48h 新增未核验岗，高频小批清新岗（01 spec §3.1）。
+        sample = fetch_browser_liveness(sb, limit, shard, host_filter, jobs_conn=jobs_conn, prioritize_new=prioritize_new)
+        mode_tag = "新岗优先(48h未核验)" if prioritize_new else "轮转"
+        print(f"[巡检-{mode_tag}] 浏览器源({'/'.join(_BROWSER_ADAPTERS)}) shard {shard} 认领 {len(sample)}（limit={limit}）")
     print(f"待渲染 {len(sample)} 条；模式={'APPLY(dead→expired + 盖巡检时间戳)' if apply else 'DRY-RUN(只报告)'}\n")
 
     apply_ok = [0]

@@ -299,11 +299,21 @@ export default function JobCard({
   }
 
   function handleView() {
-    // 直接跳官网，瞬间打开——质量校验不放在点击路径。viewed 埋点 fire-and-forget，不阻塞跳转。
+    // 直接跳官网，瞬间打开——质量校验**不放在点击路径**（历史教训：同步核验门已废）。
     window.open(job.jd_url, "_blank", "noopener,noreferrer");
-    if (isOpportunity)
+    if (isOpportunity) {
       track("opportunity_click", { job_id: job.id, tier: opportunityTier ?? null, surface: "today" });
-    else track("job_click", { job_id: job.id });
+      // 点击有效率埋点（01 spec §5）：记录点开那刻的核验年龄/新鲜度。
+      track("opportunity_official_opened", {
+        job_id: job.id,
+        adapter: job.source_adapter ?? null,
+        checked_age_hours: opportunityCheckedAgeHours ?? null,
+        freshness: freshnessState ?? null,
+        surface: "today",
+      });
+      // 背景单岗核验（非阻塞、封顶 2.5s）：判死标 expired + 服务端顺带打 job_liveness_at_click（分母）。
+      void fetch(`/api/jobs/${job.id}/liveness`, { method: "POST", keepalive: true }).catch(() => {});
+    } else track("job_click", { job_id: job.id });
     void fetch(`/api/job-actions/${job.id}/view`, { method: "POST" }).catch(() => {});
   }
 

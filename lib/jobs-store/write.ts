@@ -101,10 +101,10 @@ export async function updateJobSummaryById(id: string, summary: string): Promise
   return rows.length > 0;
 }
 
-/** 点击时校验门：探活确认撤岗 → 置 expired + 盖探活戳（仅当前还是 active 才动；幂等）。返回是否命中。 */
+/** 点击时校验门：探活确认撤岗 → 置 expired + 盖探活戳 + 记确认下架时刻（仅当前还是 active 才动；幂等）。 */
 export async function markJobExpiredById(id: string): Promise<boolean> {
   const rows = await jobsQuery(
-    "update jobs set status = 'expired', enrich_checked_at = now() where id = $1::uuid and status = 'active' returning id",
+    "update jobs set status = 'expired', enrich_checked_at = now(), confirmed_closed_at = now() where id = $1::uuid and status = 'active' returning id",
     [id],
   );
   return rows.length > 0;

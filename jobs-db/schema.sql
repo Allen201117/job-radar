@@ -33,10 +33,37 @@ create table if not exists jobs (
   deadline          text,
   enrich_fail_count integer not null default 0,
   enrich_checked_at timestamptz,
+  confirmed_closed_at timestamptz,   -- 我们确认下架的时刻（判死时写，best-effort；v3 时间记真 02 §4.1）
   search_doc        tsvector,   -- 保留列；v1 不填（FTS 后置 pass 再启用）
   canonical_jd_url  text,
   constraint jobs_company_title_location_jd_url_key unique (company, title, location, jd_url)
 );
+
+-- 增量列（既有库 create-if-not-exists 不会补列 → 显式幂等 alter）。
+alter table jobs add column if not exists confirmed_closed_at timestamptz;
+
+-- ── 岗位生命周期事件（append-only 里程碑；02 spec §5.1）──
+-- 只记里程碑，不记心跳：每岗一辈子 ~2–4 条（首见/拿到官方发布/若干天确认/下架）。
+-- event_key 幂等去重（FIRST_SEEN/OFFICIAL_POSTED 一辈子一条；CONFIRMED_OPEN/CLOSED/REAPPEARED 按天）。
+-- 不做 RLS（在 jobs-db，不直供客户端读）；expired→active 不产生 REAPPEARED（保 expired sticky）。
+create table if not exists job_events (
+  id            uuid primary key default gen_random_uuid(),
+  event_key     text not null unique,
+  job_id        uuid not null references jobs(id) on delete cascade,
+  source_id     uuid,
+  event_type    text not null check (event_type in (
+                  'FIRST_SEEN',
+                  'OFFICIAL_POSTED',
+                  'CONFIRMED_OPEN',
+                  'CLOSED',
+                  'REAPPEARED'
+                )),
+  occurred_at   timestamptz not null default now(),
+  observed_at   timestamptz not null default now(),
+  payload       jsonb not null default '{}'::jsonb
+);
+create index if not exists idx_job_events_job_time on job_events (job_id, occurred_at desc);
+create index if not exists idx_job_events_type_time on job_events (event_type, occurred_at desc);
 
 -- ── canonical_jd_url 归一（与 lib/canonical-url.js / crawler/normalizer.py / 迁移144 字节级一致；改一处必同改）──
 create or replace function canonicalize_jd_url(u text)
