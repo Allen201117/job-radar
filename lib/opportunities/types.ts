@@ -35,6 +35,35 @@ export interface RadarProfile {
 // 岗位新鲜度状态（由 source SLA + last_seen_at 推出）
 export type FreshnessState = "verified" | "aging" | "stale" | "unknown";
 
+// 雷达强度（v3）：手动初值 + 行为自调。只调日常推荐的量/频/门槛，不卡 readiness、不压关键提醒。
+export type RadarIntensity = "active" | "passive";
+
+// 分层核验场景（01 spec §2）：逐岗 enrich_checked_at 年龄的 SLA 叠加在 source 抓取新鲜度之上。
+export type VerifyTier = "today" | "search" | "admin";
+
+// 信号当「标签」（03/04 spec），不是入选唯一理由。
+export type OpportunitySignalType =
+  | "STILL_OPEN" // 最近确认仍在招（护城河外显，主力）
+  | "DEADLINE_SOON" // 快截止
+  | "CLOSED_OR_STALE" // 收藏/关注对象关闭或陈旧（关键提醒）
+  | "CAMPUS_WINDOW" // 校招通道开放（校招季强化）
+  | "NEWLY_DISCOVERED" // 我们新发现（需官方 posted_at；first_seen 污染下不可用）
+  | "COMPANY_MOMENTUM"; // 公司动量（B 端/admin，不上 C 端「猛招」）
+
+export interface OpportunitySignal {
+  type: OpportunitySignalType;
+  label: string; // 展示文案（受 03 spec 文案约束）
+  priority: number;
+  isCritical: boolean; // true=关键提醒（不受强度压制）
+  evidence: {
+    lastCheckedAt?: string | null; // = jobs.enrich_checked_at
+    officialPostedAt?: string | null; // = jobs.posted_at（官方发布；可空）
+    deadlineAt?: string | null;
+    status?: string | null;
+    freshness?: FreshnessState;
+  };
+}
+
 // 单源元信息（从 Supabase sources 批量取，freshness/eligibility 用；不访问网络）
 export interface SourceMeta {
   id: string;
@@ -139,6 +168,12 @@ export interface Opportunity {
   viewed: boolean;
   isNew: boolean; // first_seen_at > 有效上次访问时间（由 grouping 计算填充）
   exploreEligible: boolean; // 是否够格进「拓展机会」（related 职能 或 命中目标公司），由 service 据 facts 算
+  // v3：信号当标签（≥1）、强度、展示用的核验/官方发布/截止时间。由 service 据 signals 派生填充。
+  signals: OpportunitySignal[];
+  intensity: RadarIntensity;
+  lastCheckedAt: string | null; // = jobs.enrich_checked_at
+  officialPostedAt: string | null; // = jobs.posted_at（官方发布；可空）
+  deadlineAt: string | null; // parseDeadline 出的明确截止日（可空）
 }
 
 export type FeedSurface = "today" | "email";
