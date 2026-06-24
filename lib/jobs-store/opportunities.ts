@@ -27,10 +27,11 @@ const BRANCH_LIMIT = 4000;
 // recall 列：summary 截断为 ≤500 字，砍跨区传输；展示卡由 service 回填完整 summary。
 // 只取硬门 + 打分必需列 + 截断 summary：把 4000 行候选的跨区载荷压到最小（P0-1）。
 // apply_url/posted_at/experience/deadline/content_hash/... 等展示字段不在此，由 service 对最终少量入选卡片回填完整行。
+// enrich_checked_at 是分层核验 SLA（today 24h 硬门）的判定输入，必须随召回带回（单 timestamptz，载荷可忽略）。
 const RECALL_COLUMNS =
   "id, source_id, company, title, location, job_type, " +
   `left(btrim(summary), ${SUMMARY_TRUNC}) as summary, ` +
-  "jd_url, salary_text, first_seen_at, last_seen_at, status, education";
+  "jd_url, salary_text, first_seen_at, last_seen_at, enrich_checked_at, status, education";
 
 function roleTsquery(profile: RadarProfile): string | null {
   const terms = [...profile.targetRoles, ...profile.targetKeywords];

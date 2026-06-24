@@ -15,6 +15,10 @@ export interface Job {
   deadline: string | null;
   first_seen_at: string;
   last_seen_at: string;
+  // 最近一次逐岗核验（富化/巡检/实时核验写；列表重抓不覆盖）。分层核验 SLA 的判定输入。
+  enrich_checked_at?: string | null;
+  // 我们确认下架的时刻（判死时写，best-effort）。
+  confirmed_closed_at?: string | null;
   status: string;
   content_hash: string | null;
   created_at: string;

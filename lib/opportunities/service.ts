@@ -117,6 +117,12 @@ export async function buildOpportunityFeed(
       viewed: facts.viewed,
       isNew: false, // grouping 据 noveltySince 填充
       exploreEligible: facts.roleTier === "related" || facts.companyHit,
+      // v3 字段：signals/intensity 由后续分区/信号派生回填（Phase 2/3）；此处填可直接取到的核验/时间字段。
+      signals: [],
+      intensity: "active",
+      lastCheckedAt: (job.enrich_checked_at as string | null) ?? null,
+      officialPostedAt: job.posted_at ?? null,
+      deadlineAt: null,
     });
   }
 
