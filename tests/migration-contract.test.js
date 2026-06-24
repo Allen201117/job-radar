@@ -39,3 +39,14 @@ test("163 建立 company_watch_requests + 唯一约束 + RLS", () => {
   assert.ok(s.includes("for select"));
   assert.ok(!/for (insert|update|delete)/.test(s));
 });
+
+test("164 加雷达强度三列（active/passive + source + updated_at）幂等；无 radar_mode", () => {
+  const s = norm("164_radar_intensity.sql");
+  assert.ok(s.includes("add column if not exists radar_intensity text"));
+  assert.ok(s.includes("radar_intensity in ('active', 'passive')"));
+  assert.ok(s.includes("add column if not exists radar_intensity_source text"));
+  assert.ok(s.includes("radar_intensity_source in ('default', 'user', 'auto')"));
+  assert.ok(s.includes("add column if not exists radar_intensity_updated_at timestamptz"));
+  // 反向：不得引入 radar_mode（v3 不走三模式老路）
+  assert.ok(!s.includes("radar_mode"));
+});
