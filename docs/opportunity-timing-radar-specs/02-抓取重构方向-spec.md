@@ -168,7 +168,7 @@ REAPPEARED:{job_id}:{yyyy-mm-dd}
 
 ## 6. 验收口径
 
-1. **结构化数据**：对至少 N 个带 JSON-LD JobPosting 的源，`extract_jobposting_ld` 能抽出 `datePosted`/`validThrough` 并写入 `posted_at`/`deadline`（给 live 样例）。
+1. **结构化数据**：先做一次"源能力盘点"（哪些源详情页带 JSON-LD JobPosting），数量以盘点结果为准、不预设；对**盘点出的、确有 JSON-LD 的源全部**，`extract_jobposting_ld` 能抽出 `datePosted`/`validThrough` 并写入 `posted_at`/`deadline`（每个给 1 条 live 样例）。
 2. **便宜优先核验**：至少把 1–2 个原本只能渲染判死的 SPA 源，改成"接口级"可判（给 live 样例：在招 vs 已关闭返回可区分字段）。
 3. **发现/保鲜分流**：`daily-crawl.yml` 不再背 sweep；保鲜由独立 workflow 按 SLA 调频跑（给 workflow diff）。
 4. **时间记真**：构造一个能拿到官方 `posted_at` 的岗 vs 只有 `first_seen_at` 的岗，证明前者可判"官网近期发布"、后者不可。
