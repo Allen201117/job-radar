@@ -181,6 +181,26 @@ profile_ready =
 
 所有 feed 卡片必须至少命中一个 `signal_type`。不能只因为“匹配分高”就进入“今日机会”。
 
+### 3.0 阈值总表
+
+本表是产品侧唯一阈值总览。实现时以 technical spec 中的公式为准，但不得偏离本表的用户语义。
+
+| 信号 | sprint | watch | campus | 必要证据 | 不满足时 |
+|---|---:|---:|---:|---|---|
+| `NEW_MATCH` | score >=45，`first_seen_at > novelty_since` | score >=70 或关注公司命中，`first_seen_at > novelty_since` | score >=45，`first_seen_at > novelty_since` | active、summary 有效、freshness verified、通过硬门 | 不展示为新机会 |
+| `STILL_OPEN_PRIORITY` | score >=70，非新机会 | score >=85 或关注公司命中，非新机会 | score >=65，非新机会 | active、freshness verified、source metadata 可用 | 不写“最近确认仍在招” |
+| `DEADLINE_SOON` | 截止 <=7 天 | 截止 <=7 天，仅 saved 或关注公司 | 截止 <=14 天 | deadline 可解析为日期，active，freshness verified/aging | 不显示截止标签 |
+| `COMPANY_MOMENTUM` | 近14天 >=3 且比前14天 +2，或前14天 <3 且近14天 >=5 | 仅关注公司或高匹配公司，其他同 sprint | 同 sprint，优先校招/实习阶段 | 代表岗位 >=2，verified 比例 >=50%，7天内未重复提醒 | 不展示动量 |
+| `CLOSED_OR_STALE` | saved/viewed/已提醒岗位 status 异常或 stale | saved/关注公司 status 异常或 stale | saved/校招窗口岗位 status 异常或 stale | status in expired/removed/error 或 freshness stale | 不进入主推荐，只作为状态提示 |
+
+全局规则：
+
+- `unknown` freshness 不得触发 `NEW_MATCH`、`STILL_OPEN_PRIORITY` 或 `DEADLINE_SOON`；
+- `aging` 只允许进入 `DEADLINE_SOON` 或“等待再次确认”，不得伪装成最近确认；
+- `content_hash` 变化不产生用户侧 signal；
+- `score` 只用于排序和阈值，不向用户展示数字；
+- signal 不足时宁可少展示，不用无关岗位补齐 daily_limit。
+
 ### 3.1 `NEW_MATCH` 新机会
 
 用户问题：
@@ -825,4 +845,3 @@ weekly_processed_valid_opportunities_per_active_user
 8. momentum 有样本门槛；
 9. source freshness 无法确认时不伪装成 verified；
 10. 空状态不展示随机岗位。
-
