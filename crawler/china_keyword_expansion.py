@@ -167,8 +167,8 @@ _SOFTWARE_ENG_SIGNAL = re.compile(
 )
 
 
-def classify_job_function(title="", job_type="", summary="") -> str:
-    text = normalize_for_match(" ".join(str(x) for x in (title, job_type, summary) if x))
+def _classify_function_text(text) -> str:
+    """对一段已 normalize 的文本跑职能规则（含非软件工业领域降级门）。判不出返回 "其他"。"""
     if not text:
         return "其他"
     for name, rule in _JOB_FUNCTION_RULES:
@@ -181,6 +181,19 @@ def classify_job_function(title="", job_type="", summary="") -> str:
                 continue
             return name
     return "其他"
+
+
+def classify_job_function(title="", job_type="", summary="") -> str:
+    # 标题权威优先（与 JS 同口径）：标题判出干净职能就用它，避免被 job_type/summary 带偏
+    #（实锤：B站「数据科学家」挂部门 job_type=「产品运营类」下，拼全文会误判「产品」）。刻意不含 job_type。
+    # 「职能」例外：标题「2024 校园招聘」这类是招聘活动标签而非 HR 岗 → 退回看 标题+摘要 的真实角色。
+    title_fn = _classify_function_text(normalize_for_match(title))
+    if title_fn not in ("其他", "职能"):
+        return title_fn
+    full = _classify_function_text(
+        normalize_for_match(" ".join(str(x) for x in (title, summary) if x))
+    )
+    return full if full != "其他" else title_fn
 
 
 def _matched_group_indexes(query) -> List[int]:
