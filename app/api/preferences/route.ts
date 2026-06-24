@@ -5,36 +5,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
 import { buildRadarProfile, profileReadiness } from "@/lib/opportunities/profile";
+import { parsePreferencesInput } from "@/lib/opportunities/preferences-input";
 import { normalizeCompany } from "@/lib/company-normalize";
 import { isMissingRelation } from "@/lib/opportunities/schema-errors";
 import type { CandidateProfile, UserPreferences } from "@/lib/types";
 
 export const runtime = "nodejs";
-
-const MAX_ITEMS = 30;
-const MAX_LEN = 80;
-
-function cleanArray(v: unknown): string[] {
-  if (!Array.isArray(v)) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of v) {
-    if (typeof raw !== "string") continue;
-    const t = raw.trim().slice(0, MAX_LEN);
-    if (!t) continue;
-    const k = t.toLowerCase();
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(t);
-    if (out.length >= MAX_ITEMS) break;
-  }
-  return out;
-}
-
-function clampDailyLimit(v: unknown): number {
-  const n = typeof v === "number" && Number.isFinite(v) ? Math.round(v) : 20;
-  return Math.max(5, Math.min(30, n));
-}
 
 type Coverage = { company: string; status: string; matched_sources: number; resolution_note: string | null };
 
@@ -182,22 +158,26 @@ export async function PUT(request: NextRequest) {
   if (auth.error) return auth.error;
   const { supabase, user } = auth;
 
-  const body = await request.json().catch(() => ({}));
-  const prefs = {
-    target_locations: cleanArray(body.target_locations),
-    target_roles: cleanArray(body.target_roles),
-    target_keywords: cleanArray(body.target_keywords),
-    exclude_keywords: cleanArray(body.exclude_keywords),
-    target_companies: cleanArray(body.target_companies),
-    target_industries: cleanArray(body.target_industries),
-    daily_limit: clampDailyLimit(body.daily_limit),
-  };
+  const INVALID = Symbol("invalid_json");
+  const rawBody = await request.json().catch(() => INVALID);
+  const parsed = parsePreferencesInput(rawBody === INVALID ? null : rawBody);
+  if (!parsed.ok) {
+    return NextResponse.json({ ok: false, error: parsed.error }, { status: 400 });
+  }
+  const { prefs, intensity } = parsed.value;
+
+  // 强度本次有改 → 写值 + source='user' + updated_at（手动覆盖，行为自调要尊重一段时间，见 intensity.ts）。
+  const intensityWrite =
+    intensity === null
+      ? {}
+      : { radar_intensity: intensity, radar_intensity_source: "user", radar_intensity_updated_at: new Date().toISOString() };
 
   const { error: upErr } = await supabase
     .from("user_preferences")
-    .upsert({ user_id: user.id, ...prefs }, { onConflict: "user_id" });
+    .upsert({ user_id: user.id, ...prefs, ...intensityWrite }, { onConflict: "user_id" });
   if (upErr) {
-    return NextResponse.json({ ok: false, error: upErr.message }, { status: 500 });
+    console.error("[preferences] upsert failed:", upErr.message);
+    return NextResponse.json({ ok: false, error: "preferences_unavailable" }, { status: 503 });
   }
 
   const { data: cand } = await supabase
@@ -225,5 +205,11 @@ export async function PUT(request: NextRequest) {
     });
   }
 
-  return NextResponse.json({ ok: true, preferences: prefs, profile_ready, coverage, coverage_synced: true });
+  return NextResponse.json({
+    ok: true,
+    preferences: { ...prefs, ...intensityWrite },
+    profile_ready,
+    coverage,
+    coverage_synced: true,
+  });
 }

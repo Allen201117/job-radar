@@ -71,6 +71,10 @@ export interface UserPreferences {
   // 可选：历史行/未同步用户为空，scoring 读取处一律 `|| []` 兜底。
   target_industries?: string[];
   daily_limit: number;
+  // 雷达强度（迁移 164）：active/passive；source = default|user|auto。历史行可能缺，读取处 `|| 'active'`/`|| 'default'` 兜底。
+  radar_intensity?: "active" | "passive";
+  radar_intensity_source?: "default" | "user" | "auto";
+  radar_intensity_updated_at?: string | null;
 }
 
 export interface ResumeUpload {

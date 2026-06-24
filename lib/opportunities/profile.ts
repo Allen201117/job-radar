@@ -85,7 +85,10 @@ export function buildRadarProfile(
   };
 }
 
-// §4.2 画像完整度：content(roles|keywords|companies) AND location
+// 画像完整度（v3 §4 必改）：ready = content(roles|keywords|companies)。
+// ⚠️ 城市**不再是硬门**——服务「只盯几家公司、没指定城市」的观望用户：缺城市照样 ready，
+// 只是不按城市过滤、卡片标「城市未限定」。missingLocation 仅供「建议补城市」软提示、不阻断。
+// 身份、强度都不参与 readiness（身份只在有岗位时做资格过滤；强度只调推荐量）。
 export function profileReadiness(profile: RadarProfile): {
   ready: boolean;
   missingContent: boolean;
@@ -97,7 +100,7 @@ export function profileReadiness(profile: RadarProfile): {
     profile.targetCompanies.length > 0;
   const hasLocation = profile.targetLocations.length > 0;
   return {
-    ready: hasContent && hasLocation,
+    ready: hasContent,
     missingContent: !hasContent,
     missingLocation: !hasLocation,
   };

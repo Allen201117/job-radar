@@ -118,19 +118,26 @@ test("数组大小写不敏感去重，保留首次出现", () => {
   assert.deepEqual(p.targetKeywords, ["AI", "数据"]);
 });
 
-test("profile_ready = content(roles|keywords|companies) AND location", () => {
+test("profile_ready = content(roles|keywords|companies)；城市非硬门（v3 必改）", () => {
   assert.equal(isProfileReady(buildRadarProfile("u", prefs({ target_roles: ["x"], target_locations: ["上海"] }), null)), true);
   // 仅 target_companies 也算 content signal
   assert.equal(isProfileReady(buildRadarProfile("u", prefs({ target_companies: ["字节"], target_locations: ["上海"] }), null)), true);
-  assert.equal(isProfileReady(buildRadarProfile("u", prefs({ target_roles: ["x"] }), null)), false); // 缺城市
-  assert.equal(isProfileReady(buildRadarProfile("u", prefs({ target_locations: ["上海"] }), null)), false); // 缺 content
+  // v3：只填 role、无城市 → 照样 ready（与旧「content AND location」相反）
+  assert.equal(isProfileReady(buildRadarProfile("u", prefs({ target_roles: ["x"] }), null)), true);
+  assert.equal(isProfileReady(buildRadarProfile("u", prefs({ target_locations: ["上海"] }), null)), false); // 缺 content 仍 false
 });
 
-test("profileReadiness 暴露缺失维度", () => {
-  const r = profileReadiness(buildRadarProfile("u", prefs({ target_locations: ["上海"] }), null));
-  assert.equal(r.ready, false);
-  assert.equal(r.missingContent, true);
-  assert.equal(r.missingLocation, false);
+test("profileReadiness：缺 content → not ready；缺城市只作软提示不阻断", () => {
+  // 缺 content（只填城市）→ not ready
+  const noContent = profileReadiness(buildRadarProfile("u", prefs({ target_locations: ["上海"] }), null));
+  assert.equal(noContent.ready, false);
+  assert.equal(noContent.missingContent, true);
+  assert.equal(noContent.missingLocation, false);
+  // 有 content、缺城市 → ready=true，但 missingLocation=true（软提示「建议补城市」）
+  const noCity = profileReadiness(buildRadarProfile("u", prefs({ target_roles: ["产品经理"] }), null));
+  assert.equal(noCity.ready, true);
+  assert.equal(noCity.missingContent, false);
+  assert.equal(noCity.missingLocation, true);
 });
 
 test("null 偏好 + 历史 null 字段不崩", () => {
