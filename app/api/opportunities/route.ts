@@ -3,6 +3,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/apiAuth";
 import { buildRadarProfile } from "@/lib/opportunities/profile";
+import { resolveIntensityForUser } from "@/lib/opportunities/intensity";
 import { buildOpportunityFeed } from "@/lib/opportunities/service";
 import type { UserPreferences, CandidateProfile, JobAction } from "@/lib/types";
 
@@ -27,9 +28,17 @@ export async function GET() {
   );
   const actions = (actsRes.data as JobAction[]) || [];
   const radarState = (stateRes.data as { last_opened_at: string | null } | null) ?? null;
+  const now = new Date();
+  const { intensity } = resolveIntensityForUser(
+    prefsRes.data as UserPreferences | null,
+    radarState,
+    actions,
+    profile.targetCompanies.length > 0,
+    now,
+  );
 
   try {
-    const feed = await buildOpportunityFeed(supabase, profile, actions, radarState, { surface: "today" });
+    const feed = await buildOpportunityFeed(supabase, profile, actions, radarState, { surface: "today", intensity, now });
     return NextResponse.json({ ok: true, ...feed });
   } catch (e) {
     console.error("[opportunities] feed build failed:", (e as Error).message);

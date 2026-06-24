@@ -3,6 +3,7 @@ import Navbar from "@/components/Navbar";
 import { EmptyPanel, MetricTile, ProductHero, ProductPage } from "@/components/ProductChrome";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { buildRadarProfile, profileReadiness } from "@/lib/opportunities/profile";
+import { resolveIntensityForUser } from "@/lib/opportunities/intensity";
 import { buildOpportunityFeed } from "@/lib/opportunities/service";
 import type { OpportunityFeed } from "@/lib/opportunities/types";
 import type { CandidateProfile, JobAction, UserPreferences } from "@/lib/types";
@@ -53,15 +54,20 @@ export default async function TodayPage() {
   }
 
   // 画像就绪 → SSR 构建机会 Feed（先渲染，radar/open 由客户端首渲后异步记录，不提前清零当次新增）
+  const now = new Date();
+  const actions = (actsRes.data as JobAction[]) || [];
+  const radarState = (stateRes.data as { last_opened_at: string | null } | null) ?? null;
+  const { intensity } = resolveIntensityForUser(
+    prefsRes.data as UserPreferences | null,
+    radarState,
+    actions,
+    profile.targetCompanies.length > 0,
+    now,
+  );
+
   let feed: OpportunityFeed | null = null;
   try {
-    feed = await buildOpportunityFeed(
-      supabase,
-      profile,
-      (actsRes.data as JobAction[]) || [],
-      (stateRes.data as { last_opened_at: string | null } | null) ?? null,
-      { surface: "today" },
-    );
+    feed = await buildOpportunityFeed(supabase, profile, actions, radarState, { surface: "today", intensity, now });
   } catch (e) {
     console.error("[today] feed build failed:", (e as Error).message);
   }
@@ -73,9 +79,14 @@ export default async function TodayPage() {
         <ProductHero eyebrow={HERO.eyebrow} title={HERO.title} description={HERO.description} icon={Broadcast}>
           {feed && (
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-              <MetricTile icon={Sparkle} label="自上次查看新增" value={feed.counts.new_since_last_open} tone="sky" />
-              <MetricTile icon={Crosshair} label="高匹配待处理" value={feed.counts.high_match} tone="lime" />
-              <MetricTile icon={CheckCircle} label="今天确认仍在招" value={feed.counts.verified} tone="white" />
+              <MetricTile icon={Sparkle} label="关键提醒" value={feed.counts.critical} tone="sky" />
+              <MetricTile icon={Crosshair} label="对口机会" value={feed.counts.main} tone="lime" />
+              <MetricTile
+                icon={CheckCircle}
+                label="最近确认仍在招"
+                value={feed.counts.by_signal.STILL_OPEN ?? 0}
+                tone="white"
+              />
             </div>
           )}
         </ProductHero>

@@ -1,27 +1,32 @@
-// Opportunity Engine 编排（§6.1 / §7）：读画像 → 召回 → 逐岗算事实/硬门/打分 → 分区 → 组装 OpportunityFeed。
-// 纯逻辑（facts/eligibility/scoring/grouping）已各自单测；本文件只做 DB 编排与组装，不重写匹配规则。
+// Opportunity Engine 编排（§6.1 / §7 + v3）：读画像 → 召回 → 逐岗算事实/硬门/打分/派生信号 → 关键提醒(saved)
+// → 按身份×强度分区 → 组装 OpportunityFeed。纯逻辑（facts/eligibility/scoring/signals/grouping）各自单测；
+// 本文件只做 DB 编排与组装，不重写匹配/信号规则。
 import "server-only";
-import type { JobAction } from "../types";
+import type { JobAction, Job } from "../types";
 import type {
   RadarProfile,
   Opportunity,
   OpportunityFeed,
   OpportunityFeedOptions,
   FeedSections,
+  FeedCounts,
   SourceMeta,
+  RadarIntensity,
 } from "./types";
 import { isProfileReady } from "./profile";
 import { computeMatchFacts, checkEligibility, type ActionState } from "./eligibility";
 import { scoreOpportunity } from "./scoring";
 import { groupOpportunities, resolveNoveltySince } from "./grouping";
+import { deriveOpportunitySignals } from "./signals";
+import { parseDeadline } from "./deadline";
 import { recallOpportunityCandidates } from "@/lib/jobs-store/opportunities";
 import { jobsByIds, jobsStoreEnabled } from "@/lib/jobs-store/read";
 import { hydrateOpportunityJobs } from "./hydration";
 
 type SupabaseLike = { from: (table: string) => any };
 
-const EMPTY_COUNTS = { new_since_last_open: 0, high_match: 0, verified: 0, aging: 0 };
-const EMPTY_SECTIONS = { new: [], priority: [], explore: [], aging: [] };
+const EMPTY_COUNTS: FeedCounts = { total: 0, critical: 0, main: 0, by_signal: {} };
+const EMPTY_SECTIONS: FeedSections = { critical: [], main: [], explore: [], momentum: [], waiting: [] };
 
 // 把 job_actions 折叠成每岗位的 {primary, viewed}
 function buildActionMap(actions: JobAction[]): Map<string, ActionState> {
@@ -55,11 +60,10 @@ async function fetchSourceMeta(supabase: SupabaseLike, sourceIds: string[]): Pro
   return map;
 }
 
-// recall 为省跨区传输只回硬门/打分必需列（截断 summary）；展示的 ≤约33 张卡在这里按 id 用**完整行**回填
-// （完整 summary + apply_url/posted_at/experience/deadline 等展示字段）。回退路径（Supabase）本就完整，跳过。
+// recall 为省跨区传输只回硬门/打分必需列（截断 summary）；展示卡在这里按 id 用**完整行**回填。
 async function hydrateDisplayJobs(sections: FeedSections): Promise<void> {
   if (!jobsStoreEnabled()) return;
-  const all = [...sections.new, ...sections.priority, ...sections.explore, ...sections.aging];
+  const all = Object.values(sections).flat();
   const ids = all.map((o) => o.job.id).filter(Boolean);
   if (!ids.length) return;
   try {
@@ -70,6 +74,67 @@ async function hydrateDisplayJobs(sections: FeedSections): Promise<void> {
   }
 }
 
+// 关键提醒（§3 / §4.4）：用户 saved/applied 的岗位若关闭/陈旧/快截止 → 进关键提醒区（不受强度压制）。
+// saved 岗被 eligibility 的 already_actioned 排除出主召回，所以这里单独取当前库状态派生。
+async function buildCriticalAlerts(
+  actions: JobAction[],
+  profile: RadarProfile,
+  intensity: RadarIntensity,
+  now: Date
+): Promise<Opportunity[]> {
+  const watched = (actions || []).filter((a) => a.action === "saved" || a.action === "applied");
+  const ids = Array.from(new Set(watched.map((a) => a.job_id).filter(Boolean))).slice(0, 50);
+  if (!ids.length || !jobsStoreEnabled()) return [];
+
+  let rows: Job[] = [];
+  try {
+    rows = await jobsByIds(ids, false);
+  } catch (e) {
+    console.warn("[opportunities] critical-alert lookup failed:", (e as Error).message);
+    return [];
+  }
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const actionById = new Map<string, "saved" | "applied">();
+  for (const a of watched) if (a.action === "saved" || a.action === "applied") actionById.set(a.job_id, a.action);
+
+  const out: Opportunity[] = [];
+  for (const id of ids) {
+    const job = byId.get(id);
+    if (!job) continue;
+    const signals = deriveOpportunitySignals(
+      job,
+      { freshness: "unknown", stageLabel: null },
+      profile,
+      now,
+      { isWatched: true }
+    );
+    // 被关注岗：关闭与快截止都是关键提醒（即便社招 deadline 也对 saved 岗升级为关键）。
+    for (const s of signals) {
+      if (s.type === "CLOSED_OR_STALE" || s.type === "DEADLINE_SOON") s.isCritical = true;
+    }
+    if (!signals.some((s) => s.isCritical)) continue; // 仍在招且无快截止 → 不打扰（留在 /saved）
+    out.push({
+      job,
+      score: 100,
+      tier: "high",
+      reasons: [{ type: "company", label: `你保存的岗位 ${job.company}` }],
+      freshness: "unknown",
+      firstSeenAt: job.first_seen_at ?? null,
+      lastSeenAt: job.last_seen_at ?? null,
+      userAction: actionById.get(id) ?? "saved",
+      viewed: false,
+      isNew: false,
+      exploreEligible: false,
+      signals,
+      intensity,
+      lastCheckedAt: job.enrich_checked_at ?? null,
+      officialPostedAt: job.posted_at ?? null,
+      deadlineAt: parseDeadline(job.deadline, now)?.date ?? null,
+    });
+  }
+  return out;
+}
+
 export async function buildOpportunityFeed(
   supabase: SupabaseLike,
   profile: RadarProfile,
@@ -78,6 +143,7 @@ export async function buildOpportunityFeed(
   options: OpportunityFeedOptions,
 ): Promise<OpportunityFeed> {
   const now = options.now ?? new Date();
+  const intensity: RadarIntensity = options.intensity ?? "active";
   const lastOpenedAt = radarState?.last_opened_at ?? null;
 
   if (!isProfileReady(profile)) {
@@ -86,8 +152,10 @@ export async function buildOpportunityFeed(
       profile_ready: false,
       candidate_capped: false,
       last_opened_at: lastOpenedAt,
+      stage: profile.experienceStage,
+      intensity,
       counts: { ...EMPTY_COUNTS },
-      sections: { ...EMPTY_SECTIONS },
+      sections: { critical: [], main: [], explore: [], momentum: [], waiting: [] },
     };
   }
 
@@ -105,6 +173,8 @@ export async function buildOpportunityFeed(
     if (!elig.eligible) continue;
     const { score, tier, reasons } = scoreOpportunity(facts, elig.degraded);
     if (tier === null) continue; // score < 30，不展示
+    const parsed = parseDeadline(job.deadline ?? null, now);
+    const signals = deriveOpportunitySignals(job, facts, profile, now, { isWatched: false, parsedDeadline: parsed });
     opps.push({
       job,
       score,
@@ -117,20 +187,35 @@ export async function buildOpportunityFeed(
       viewed: facts.viewed,
       isNew: false, // grouping 据 noveltySince 填充
       exploreEligible: facts.roleTier === "related" || facts.companyHit,
-      // v3 字段：signals/intensity 由后续分区/信号派生回填（Phase 2/3）；此处填可直接取到的核验/时间字段。
-      signals: [],
-      intensity: "active",
+      signals,
+      intensity,
       lastCheckedAt: (job.enrich_checked_at as string | null) ?? null,
       officialPostedAt: job.posted_at ?? null,
-      deadlineAt: null,
+      deadlineAt: parsed?.date ?? null,
     });
   }
 
-  // 新增窗口：Today 用 last_opened_at；Email 传 noveltySinceOverride=max(last_sent,last_opened)；首访 → now-72h
+  // 关键提醒（saved 岗关闭/快截止）单独取，置顶不受强度压制。
+  const critical = await buildCriticalAlerts(actions, profile, intensity, now);
+
   const overrideProvided = options.noveltySinceOverride !== undefined && options.noveltySinceOverride !== null;
   const noveltySince = resolveNoveltySince(overrideProvided ? options.noveltySinceOverride! : lastOpenedAt, now);
 
-  const { sections, counts } = groupOpportunities(opps, profile.dailyLimit, noveltySince);
+  const { sections, counts } = groupOpportunities(opps, { dailyLimit: profile.dailyLimit, intensity, noveltySince, now });
+
+  // 关键提醒并入 critical 区前置；同岗去重（saved 岗本就不在主召回，防御性再去一次）。
+  if (critical.length) {
+    const seen = new Set(Object.values(sections).flat().map((o) => o.job.id));
+    const freshCritical = critical.filter((o) => !seen.has(o.job.id));
+    sections.critical = [...freshCritical, ...sections.critical];
+    counts.critical = sections.critical.length;
+    counts.total += freshCritical.length;
+    for (const o of freshCritical) {
+      const p = o.signals[0];
+      if (p) counts.by_signal[p.type] = (counts.by_signal[p.type] ?? 0) + 1;
+    }
+  }
+
   await hydrateDisplayJobs(sections);
 
   return {
@@ -138,6 +223,8 @@ export async function buildOpportunityFeed(
     profile_ready: true,
     candidate_capped: recall.capped,
     last_opened_at: lastOpenedAt,
+    stage: profile.experienceStage,
+    intensity,
     counts,
     sections,
   };

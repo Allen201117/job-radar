@@ -14,20 +14,31 @@ import {
 } from "@/lib/opportunities/today-reducer";
 
 const SECTION_META: Record<SectionKey, { title: string; subtitle?: string }> = {
-  new: { title: "新出现", subtitle: "自上次查看以来新发现、且仍在招的对口岗位。" },
-  priority: { title: "高匹配待处理", subtitle: "和你目标最贴合、还没处理的官方岗位。" },
+  critical: { title: "关键提醒", subtitle: "和你已表达的关注强相关：收藏岗位的截止或关闭、需要尽快处理的机会。" },
+  main: { title: "刚核验仍在招的对口机会", subtitle: "最近确认仍在招、和你目标贴合的官方岗位。" },
   explore: { title: "可以拓展看看", subtitle: "相关方向或你关注的公司，匹配度稍低，按需查看。" },
-  aging: {
+  momentum: { title: "本周招聘动量", subtitle: "这些公司近期在持续放岗。" },
+  waiting: {
     title: "等待再次确认",
-    subtitle: "以下岗位最近一次确认已超过常规更新周期，可能需要你再核实在招状态。",
+    subtitle: "以下岗位距上次核验已超过常规时限，建议以官网状态为准。",
   },
 };
+
+const ORDER: SectionKey[] = ["critical", "main", "explore", "momentum", "waiting"];
 
 const ACTION_LABEL: Record<PrimaryAction, string> = {
   saved: "已加入「值得投」",
   applied: "已记为「已投递」",
   ignored: "已标记不适合",
 };
+
+// 距上次核验小时数（点击有效率埋点用）；null=从未核验。
+function checkedAgeHours(lastCheckedAt: string | null): number | null {
+  if (!lastCheckedAt) return null;
+  const t = new Date(lastCheckedAt).getTime();
+  if (Number.isNaN(t)) return null;
+  return Math.round((Date.now() - t) / 3_600_000);
+}
 
 // Opportunity → JobCard 需要的 ScoredJob 形（match_* 仅为类型兼容，opportunity 变体不读它们）
 function toScoredJob(opp: Opportunity): ScoredJob {
@@ -132,7 +143,7 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
   useEffect(() => {
     if (openedRef.current) return;
     openedRef.current = true;
-    const mainCount = feed.sections.new.length + feed.sections.priority.length + feed.sections.explore.length;
+    const mainCount = feed.sections.critical.length + feed.sections.main.length + feed.sections.explore.length;
     const source = new URLSearchParams(window.location.search).get("source") || "direct";
     track("radar_open", { counts: feed.counts, source });
     void fetch("/api/radar/open", {
@@ -144,7 +155,7 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
 
   // 展示时校验（②层）：异步探活可见岗位，死的当场隐藏（复用 /api/jobs/liveness-check）
   useEffect(() => {
-    const visible = (["new", "priority", "explore", "aging"] as SectionKey[]).flatMap((k) => state.sections[k]);
+    const visible = ORDER.flatMap((k) => state.sections[k]);
     const ids = visible
       .map((o) => o.job.id)
       .filter((id) => id && !livenessRequested.current.has(id) && !deadIds.has(id))
@@ -218,8 +229,7 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
     }
   }
 
-  const order: SectionKey[] = ["new", "priority", "explore", "aging"];
-  const visibleCounts = order.map((k) => state.sections[k].filter((o) => !deadIds.has(o.job.id)).length);
+  const visibleCounts = ORDER.map((k) => state.sections[k].filter((o) => !deadIds.has(o.job.id)).length);
   const total = visibleCounts.reduce((a, b) => a + b, 0);
 
   if (total === 0) {
@@ -228,7 +238,7 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
 
   return (
     <div className="space-y-10">
-      {order.map((key) => {
+      {ORDER.map((key) => {
         const items = state.sections[key].filter((o) => !deadIds.has(o.job.id));
         if (items.length === 0) return null;
         const meta = SECTION_META[key];
@@ -252,6 +262,8 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
                   opportunityTier={opp.tier}
                   opportunityReasons={opp.reasons}
                   freshnessState={opp.freshness}
+                  opportunitySignals={opp.signals}
+                  opportunityCheckedAgeHours={checkedAgeHours(opp.lastCheckedAt)}
                   onActionChange={handleActionChange}
                 />
               ))}

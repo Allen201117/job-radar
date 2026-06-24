@@ -29,7 +29,13 @@ import {
 } from "@/lib/insight-client";
 import { track } from "@/lib/track";
 import type { MatchReason, ScoredJob } from "@/lib/types";
-import type { OpportunityReason, OpportunityTier, FreshnessState } from "@/lib/opportunities/types";
+import type {
+  OpportunityReason,
+  OpportunityTier,
+  FreshnessState,
+  OpportunitySignal,
+  OpportunitySignalType,
+} from "@/lib/opportunities/types";
 import { IGNORE_REASONS } from "@/lib/opportunities/feedback";
 import { cleanSummary, cn, freshnessLabel } from "@/lib/utils";
 
@@ -44,7 +50,20 @@ interface Props {
   opportunityTier?: OpportunityTier;
   opportunityReasons?: OpportunityReason[];
   freshnessState?: FreshnessState;
+  // v3：信号标签（≥1，护城河外显）+ 点击有效率埋点用的核验年龄。
+  opportunitySignals?: OpportunitySignal[];
+  opportunityCheckedAgeHours?: number | null;
 }
+
+// 信号 chip 配色：关键提醒醒目（暖橙），STILL_OPEN 绿（仍在招），CLOSED_OR_STALE 灰。
+const SIGNAL_STYLE: Record<OpportunitySignalType, string> = {
+  STILL_OPEN: "border-[#bcdcae] bg-[#eef6e0] text-[#4d6b2f] dark:border-[#a3d06a]/30 dark:bg-[#a3d06a]/12 dark:text-[#a3d06a]",
+  DEADLINE_SOON: "border-[#f0d9a8] bg-[#fbf1de] text-[#9a6a1f] dark:border-[#e8b87f]/30 dark:bg-[#e8b87f]/12 dark:text-[#e8b87f]",
+  CLOSED_OR_STALE: "border-black/[0.08] bg-[#f0ece2] text-[#6b655a] dark:border-white/10 dark:bg-white/[0.08] dark:text-[#b6ad9d]",
+  CAMPUS_WINDOW: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/12 dark:text-[#7fb2e8]",
+  NEWLY_DISCOVERED: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/12 dark:text-[#7fb2e8]",
+  COMPANY_MOMENTUM: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/12 dark:text-[#7fb2e8]",
+};
 
 const OPPORTUNITY_TIER_LABEL: Record<OpportunityTier, string> = {
   high: "高匹配",
@@ -158,6 +177,9 @@ export default function JobCard({
   variant = "library",
   opportunityTier,
   opportunityReasons,
+  freshnessState,
+  opportunitySignals,
+  opportunityCheckedAgeHours,
 }: Props) {
   const isOpportunity = variant === "opportunity";
   const [acting, setActing] = useState(false);
@@ -422,8 +444,21 @@ export default function JobCard({
 
           {isOpportunity ? (
             <>
-              {opportunityTier && (
+              {opportunitySignals && opportunitySignals.length > 0 && (
                 <div className="mt-4 flex flex-wrap items-center gap-1.5">
+                  {opportunitySignals.map((s, i) => (
+                    <span
+                      key={`${s.type}:${i}`}
+                      className={cn("rounded-full border px-2.5 py-1 text-xs font-semibold", SIGNAL_STYLE[s.type])}
+                    >
+                      {s.isCritical ? "● " : ""}
+                      {s.label}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {opportunityTier && (
+                <div className="mt-3 flex flex-wrap items-center gap-1.5">
                   <span
                     title="按你的目标、简历与岗位新鲜度评估的匹配档位"
                     className={cn(

@@ -1,11 +1,11 @@
 // 今日机会队列的纯状态机（§P1-1）。把「乐观移除 / API 失败回滚 / 撤销乐观恢复 / 撤销提交 / 撤销失败重移除」
 // 抽成纯 reducer，不依赖 setState updater 的同步副作用（原 captureAndRemove 从 updater 返回局部变量不可靠）。
 // 分区/顺序用原始 index 还原，不漂移；pending/undoing 按 jobId 隔离，多岗并发互不影响。
-import type { Opportunity, FeedSections } from "./types";
+import type { Opportunity, FeedSections, SectionKey } from "./types";
 
 export type PrimaryAction = "saved" | "ignored" | "applied";
-export type SectionKey = "new" | "priority" | "explore" | "aging";
-const KEYS: SectionKey[] = ["new", "priority", "explore", "aging"];
+export type { SectionKey };
+const KEYS: SectionKey[] = ["critical", "main", "explore", "momentum", "waiting"];
 
 interface Pending {
   opp: Opportunity;
@@ -35,7 +35,7 @@ export type TodayEvent =
   | { type: "dismissToast" }; // 关闭 toast（撤销失败提示等自动消失）
 
 function cloneSections(s: FeedSections): FeedSections {
-  return { new: [...s.new], priority: [...s.priority], explore: [...s.explore], aging: [...s.aging] };
+  return { critical: [...s.critical], main: [...s.main], explore: [...s.explore], momentum: [...s.momentum], waiting: [...s.waiting] };
 }
 
 export function initTodayState(sections: FeedSections): TodayState {

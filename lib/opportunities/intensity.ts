@@ -1,6 +1,7 @@
 // 强度推导（04 spec §3）：手动近期优先 > 行为自调 > 默认 active（蜜月期）。纯函数，可测。
 // 强度只影响 daily_limit / 分区取舍 / 推送频率 / 入选门槛，**不影响 profile_ready、不裁剪关键提醒**。
 import type { RadarIntensity } from "./types";
+import type { UserPreferences, JobAction } from "../types";
 
 // 手动设置的尊重窗口（天）：窗口内用手动值，超出转行为自调。
 const MANUAL_HONOR_DAYS = 30;
@@ -44,4 +45,35 @@ export function resolveIntensity(
 
   // 3. 无任何信号（新用户）→ 默认 active（蜜月期）
   return { intensity: "active", source: "default" };
+}
+
+// 从 DB 行装配 resolveIntensity 入参（today/page 与 /api/opportunities 共用，避免两处口径漂移）。
+// 手动值仅当 source='user' 才参与；行为信号 = 近 14 天非 viewed 动作数 + last_opened_at。
+export function resolveIntensityForUser(
+  prefs: Pick<UserPreferences, "radar_intensity" | "radar_intensity_source" | "radar_intensity_updated_at"> | null,
+  radarState: { last_opened_at: string | null } | null,
+  actions: JobAction[],
+  hasTargetCompanies: boolean,
+  now: Date
+): { intensity: RadarIntensity; source: "user" | "auto" | "default" } {
+  const manual = prefs?.radar_intensity_source === "user" ? (prefs.radar_intensity ?? null) : null;
+  let manualAgeDays: number | null = null;
+  if (prefs?.radar_intensity_updated_at) {
+    const t = new Date(prefs.radar_intensity_updated_at).getTime();
+    if (!Number.isNaN(t)) manualAgeDays = (now.getTime() - t) / 86_400_000;
+  }
+  const cutoff = now.getTime() - 14 * 86_400_000;
+  const recentActionCount14d = (actions || []).filter((a) => {
+    if (a.action === "viewed") return false;
+    const ts = new Date(a.updated_at ?? a.created_at).getTime();
+    return !Number.isNaN(ts) && ts >= cutoff;
+  }).length;
+  return resolveIntensity({
+    manual,
+    manualAgeDays,
+    lastOpenedAt: radarState?.last_opened_at ?? null,
+    recentActionCount14d,
+    hasTargetCompanies,
+    now,
+  });
 }

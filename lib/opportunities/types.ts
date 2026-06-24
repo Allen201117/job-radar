@@ -182,28 +182,37 @@ export interface OpportunityFeedOptions {
   now?: Date;
   noveltySinceOverride?: string | null;
   surface: FeedSurface;
+  // 由调用方(route)按 resolveIntensity 算好传入；缺省 active。强度只调日常推荐，不压关键提醒。
+  intensity?: RadarIntensity;
 }
 
+// v3 动态分区（按身份×强度×已触发信号生成；不是固定三模式布局）。
+// 渲染顺序固定 critical→main→explore→momentum→waiting，空区不渲染 = 不同身份/强度天然不同布局。
+export type SectionKey = "critical" | "main" | "explore" | "momentum" | "waiting";
+
 export interface FeedSections {
-  new: Opportunity[];
-  priority: Opportunity[];
-  explore: Opportunity[];
-  aging: Opportunity[];
+  critical: Opportunity[]; // 关键提醒（永远置顶、不受强度压制、不被截断）
+  main: Opportunity[]; // 刚核验仍在招的对口机会（STILL_OPEN 主力）
+  explore: Opportunity[]; // 拓展看看（仅 active 强度）
+  momentum: Opportunity[]; // 招聘动量（仅数据可信；job_events 前恒空，不上 C 端「猛招」）
+  waiting: Opportunity[]; // 等待再次确认（超 today 核验时限 / aging）
 }
 
 export interface FeedCounts {
-  new_since_last_open: number;
-  high_match: number;
-  verified: number;
-  aging: number;
+  total: number; // 全部展示卡数
+  critical: number; // 关键提醒数
+  main: number; // 主清单数
+  by_signal: Partial<Record<OpportunitySignalType, number>>; // 按 primary signal 计数
 }
 
-// /api/opportunities 响应体（§7.1）
+// /api/opportunities 响应体（§7.1 + v3 §8.2）
 export interface OpportunityFeed {
   generated_at: string;
   profile_ready: boolean;
   candidate_capped: boolean;
   last_opened_at: string | null;
+  stage: ExperienceStage; // 身份（资格 + 信号侧重）
+  intensity: RadarIntensity; // 强度（日常推荐的量/频/门槛）
   counts: FeedCounts;
   sections: FeedSections;
 }
