@@ -1,3 +1,5 @@
+> ⚠️ **已被取代（2026-06-24）**：本文为早期三模式版，已被 `06-实现入口-agent-prompt-v3.md` 取代（见 `README.md`）。仅作背景参考。
+
 # Agent Implementation Prompt：个人机会时效雷达
 
 > 用途：把本文件完整粘给实现 agent。  
