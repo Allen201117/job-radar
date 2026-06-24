@@ -1,5 +1,6 @@
 import hashlib
 import html
+import json
 import re
 from datetime import datetime, timezone
 from typing import Optional
@@ -374,6 +375,53 @@ def pick_publish_date(post: dict) -> Optional[str]:
             if iso:
                 return iso
     return None
+
+
+def _iter_ld_nodes(data):
+    """递归遍历 JSON-LD：dict 自身 + 其 @graph；list 逐项。"""
+    if isinstance(data, list):
+        for item in data:
+            yield from _iter_ld_nodes(item)
+    elif isinstance(data, dict):
+        yield data
+        graph = data.get("@graph")
+        if isinstance(graph, list):
+            for item in graph:
+                yield from _iter_ld_nodes(item)
+
+
+def extract_jobposting_ld(html_text: Optional[str]) -> dict:
+    """解析详情页 <script type="application/ld+json"> 中的 schema.org JobPosting（02 spec §3.2）：
+    datePosted → posted_at（官方发布时间）、validThrough → deadline。均归一为 ISO date。
+    这是「拿官方时间」的主抓手：官方结构化数据 > adapter 直填 > 正文正则。
+    容忍 @graph 数组 / 对象数组 / 单对象 / @type 为数组；找不到或解析失败 → {posted_at:None, deadline:None}。"""
+    out = {"posted_at": None, "deadline": None}
+    if not html_text:
+        return out
+    for m in re.finditer(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html_text, re.I | re.S
+    ):
+        block = m.group(1).strip()
+        if not block:
+            continue
+        try:
+            data = json.loads(block)
+        except (ValueError, TypeError):
+            continue
+        for node in _iter_ld_nodes(data):
+            if not isinstance(node, dict):
+                continue
+            t = node.get("@type")
+            types = t if isinstance(t, list) else [t]
+            if "JobPosting" not in types:
+                continue
+            if not out["posted_at"]:
+                out["posted_at"] = coerce_iso_date(node.get("datePosted"))
+            if not out["deadline"]:
+                out["deadline"] = coerce_iso_date(node.get("validThrough"))
+            if out["posted_at"] and out["deadline"]:
+                return out
+    return out
 
 
 def normalize_city(value: str) -> str:
