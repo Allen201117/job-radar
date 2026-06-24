@@ -24,13 +24,16 @@
 ## 实现基线（先看清楚再动手）
 
 ```bash
+git worktree list                              # 关键：pivot 代码在独立 worktree，不一定在当前目录
 git status --short
 git branch --show-current
-ls supabase/migrations | sort | tail -8        # 主分支止于 159
+ls supabase/migrations | sort | tail -8        # 当前/主分支止于 159
+ls lib/opportunities 2>/dev/null || echo "缺 lib/opportunities → 你不在 pivot 工作区，先切过去"
 ```
 
-- **6/23 pivot 产物在 `draft/radar-pivot-0623` 分支**：已含 `lib/opportunities/`（types/service/eligibility/scoring/grouping/profile/freshness/...）、`/api/opportunities|preferences|radar/open|company-watch|job-actions/[jobId]`、迁移 160–163、`classifyRecruitment`（`lib/insight-derive.ts`）、`company-industry.js`。
-- **基于该分支扩展，不要重写**。身份已用 `experience_stage`、已无三模式——与 v3 一致。
+- ⚠️ **6/23 pivot 产物在分支 `draft/radar-pivot-0623`，且通常 checkout 在独立 worktree（实测路径 `/Users/bytedance/Desktop/求职雷达-wt-radar-pivot-0623`）——当前目录不一定有 `lib/opportunities/`。** 动手前先 `git worktree list` 定位，进入该 worktree 或 `git checkout draft/radar-pivot-0623`。
+- 该分支已含 `lib/opportunities/`（types/service/eligibility/scoring/grouping/profile/freshness…）、`/api/opportunities|preferences|radar/open|company-watch|job-actions/[jobId]`、迁移 160–163、招聘类型分类（`eligibility.ts` 的 `recruitmentCategory`/`hasExplicitRecruitmentType` + `lib/insight-derive.ts`）、`company-industry.js`。
+- **基于该分支扩展，严禁从头重写**：若 `ls lib/opportunities` 为空，说明站错了目录——先切到对的分支/worktree，不要在空目录里重新发明这些模块。
 - 新 Supabase 迁移从 **164** 起；jobs-db 改动走 `jobs-db/schema.sql` + `gh workflow run jobs-db-migrate`。
 
 ---

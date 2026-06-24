@@ -1,4 +1,4 @@
-> ⚠️ **已被取代（2026-06-24）**：本文为早期三模式版，已被 `06-实现入口-agent-prompt-v3.md` 取代（见 `README.md`）。仅作背景参考。
+> 🚫 **ARCHIVED — 请勿执行（DO NOT EXECUTE）**：本文为早期三模式版，已被 `06-实现入口-agent-prompt-v3.md` 取代（见 `README.md`）。**正文仍写"以旧文档为权威""必须做三模式"，均已作废**；实现一律以 `06` + v3 系列为准，勿据本文实现。
 
 # Agent Implementation Prompt：个人机会时效雷达
 

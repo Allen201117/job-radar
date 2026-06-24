@@ -60,7 +60,7 @@
 |---|---|---|
 | **今日机会 / 邮件推荐** | `enrich_checked_at` 必须在 **24h** 内 | 不进主推荐；可降级到"待确认"区或不展示 |
 | **搜索结果 / 公司页** | `enrich_checked_at` 在 **72h** 内 | 仍可展示，但标 `待确认`，不写"最近确认仍在招" |
-| **用户点官网链接前** | 若距上次核验 > 24h → **临门轻核验**（见 §4） | 可探源探，死则提示不跳；不可探源直接跳 |
+| **用户点官网链接前** | 若距上次核验 > 24h → **临门轻核验**（见 §4） | 可探源探，**判死则提示确认（默认仍可打开、不强拦）**；不可探源直接跳 |
 | **后台 / admin 全库浏览** | 无时限 | 可展示，但**禁止**写"刚确认/仍在招"字样 |
 
 ### 2.2 实现位置
@@ -76,7 +76,7 @@
   };
   ```
 - `enrich_checked_at` 为 NULL（从未核验）的岗：在 `today` tier **一律不进主推荐**（不能假装 verified）。
-- 现有 `deduceFreshnessState()`（按 source SLA + `last_seen_at`）继续用于"源侧抓取新鲜度"；本 SLA 是叠加在它之上的"逐岗核验新鲜度"，两者都要满足。
+- 现有 `freshnessState(lastSeenAt, crawlMethod, now)`（`lib/opportunities/freshness.ts`，按 crawl_method 的 SLA + `last_seen_at` → verified/aging/stale/unknown）继续用于"源侧抓取新鲜度"；本 SLA 是叠加在它之上的"逐岗核验新鲜度"，两者都要满足。
 
 ### 2.3 与现有引擎对接
 
@@ -131,13 +131,26 @@
 - 只有便宜信号判不出来的，才留给后台无头渲染审计。
 - 这条同时服务 §3 和 §6（抓取重构里的"先便宜后昂贵"）。
 
+### 4.4 点击核验 API 契约（新增，区别于批量展示核验）
+
+现有 `/api/jobs/liveness-check` 是**批量展示核验**，只返回该批的 dead id（用于看板隐藏），**不返回单岗 alive/dead/unknown**，不能直接用于点击。点击核验需要一个**单岗**端点：
+
+`POST /api/jobs/[jobId]/liveness`（幂等）
+- 鉴权：廉价 cookie 判登录态（同批量端点，不走 getUser）；
+- 服务端：取该岗 adapter，`livenessSupported(adapter)` 为真才探，调 `checkLiveness()`，**封顶 2.5s**；
+- 返回：`{ ok: true, result: "alive" | "dead" | "unknown" }`；不可探源直接返回 `result:"unknown"`；
+- 副作用：判死 → `markJobExpiredById` + 写 `confirmed_closed_at`；判活 → `touchJobCheckedById`；顺带打 `job_liveness_at_click` 事件（见 §5）；
+- 失败/超时 → 返回 `result:"unknown"`（**绝不因为探不动就判死**），前端据此直接放行打开。
+
+前端点击 handler：`livenessSupported(adapter)` 为真才调此端点并 race 2.5s，否则直接 `window.open`。**默认放行，判死只提示不强拦**（与 §2.1 表、方向 v3 §2.2 同口径）。
+
 ---
 
 ## 5. 点击有效率埋点（补缺口 B，核心指标的前提）
 
 ### 5.1 为什么必须做
 
-v3 定的信任护栏指标 = "用户点开官网后岗位仍在招的比例 ≥99%"。现在**量不了**（只有 `enrich_checked_at`，没有"点开那刻是否还活"的回收）。不补这个，99% 无法验收。
+v3 定的信任护栏指标 = "**可探源**点击有效率 ≥99%"（外加覆盖率 / unknown% / SPA 抽检三护栏，见 §5.3）。现在**量不了**（只有 `enrich_checked_at`，没有"点开那刻是否还活"的回收）。不补这个，指标无法验收。
 
 ### 5.2 埋点设计
 
@@ -158,12 +171,15 @@ job_liveness_at_click         # 点击后即时核验结果（仅可探源，bes
 ### 5.3 指标口径
 
 ```text
-点击有效率 = job_liveness_at_click(result=alive) / job_liveness_at_click(result ∈ alive+dead)
+可探源点击有效率 = job_liveness_at_click(result=alive) / job_liveness_at_click(result ∈ alive+dead)
 ```
 
-- 只在"可探源"上算（wt/hotjob/workday 等），分母排除 `unknown`。
-- 在 admin/health 看板新增此指标 + 按 adapter 拆分（定位哪个源最容易踩空）。
-- 目标 ≥99%；低于阈值的 adapter 触发告警（见 §7）。
+- 只在"可探源"上算（wt/hotjob/workday 等），分母排除 `unknown`。目标 ≥99%；低于阈值的 adapter 触发告警（见 §7）。
+- ⚠️ **"可探源 ≥99%" 会偷窄分母**（最难的 SPA 死岗不进分母）。所以**必须同时报三个护栏，缺一不可**：
+  - **点击核验覆盖率** = 有核验结果(alive/dead)的点击 / 总点击（太低说明 99% 没代表性）；
+  - **unknown 占比** = result=unknown / 总核验（越高说明越多源探不动）；
+  - **SPA 源死岗抽检率** = 定期人工/审计抽样 SPA 源岗位、实测死岗比例（盯住"不可探源"的真实健康）。
+- admin/health 看板四个数一起展示 + 按 adapter 拆分。
 
 ---
 
