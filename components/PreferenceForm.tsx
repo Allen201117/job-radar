@@ -74,6 +74,7 @@ export default function PreferenceForm() {
           target_companies: prefs.target_companies,
           target_industries: prefs.target_industries || [],
           daily_limit: prefs.daily_limit,
+          radar_intensity: prefs.radar_intensity ?? "active",
         }),
       });
       const data = await resp.json();
@@ -176,6 +177,37 @@ export default function PreferenceForm() {
           placeholder="销售、客服…"
         />
       </Field>
+      <Field label="雷达强度">
+        <div className="mt-1 flex gap-2">
+          {([
+            { v: "active", label: "积极找", hint: "每天多推、含拓展" },
+            { v: "passive", label: "先看看", hint: "只推高价值与大事" },
+          ] as const).map((opt) => {
+            const selected = (prefs.radar_intensity ?? "active") === opt.v;
+            return (
+              <button
+                key={opt.v}
+                type="button"
+                onClick={() => setPrefs({ ...prefs, radar_intensity: opt.v })}
+                aria-pressed={selected}
+                className={
+                  selected
+                    ? "flex-1 rounded-xl border border-[#1a1714] bg-[#1a1714] px-3 py-2 text-left text-sm font-semibold text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                    : "flex-1 rounded-xl border border-black/[0.1] bg-white/55 px-3 py-2 text-left text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]"
+                }
+              >
+                {opt.label}
+                <span className={`mt-0.5 block text-[11px] font-normal ${selected ? "opacity-80" : "text-[#8a8275] dark:text-[#9a9184]"}`}>
+                  {opt.hint}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-1.5 text-[11px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
+          强度只调日常推荐的多少与频率；关键提醒（收藏岗截止/关闭）始终会提醒你。系统也会按你的活跃度自动校准。
+        </p>
+      </Field>
       <Field label="每日机会上限">
         <input
           type="number"
@@ -269,6 +301,9 @@ function withDefaults(p: Partial<UserPreferences>): UserPreferences {
     target_companies: p.target_companies ?? [],
     target_industries: p.target_industries ?? [],
     daily_limit: p.daily_limit ?? 20,
+    radar_intensity: p.radar_intensity ?? "active",
+    radar_intensity_source: p.radar_intensity_source,
+    radar_intensity_updated_at: p.radar_intensity_updated_at,
   };
 }
 
