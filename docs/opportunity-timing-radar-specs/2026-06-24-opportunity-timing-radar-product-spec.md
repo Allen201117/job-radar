@@ -1,10 +1,10 @@
 # 个人机会时效雷达 Product Spec
 
-> 日期：2026-06-24  
-> 状态：新版产品规格，供实现 agent 直接执行  
-> 对应战略文档：`docs/产品转型方案-个人机会时效雷达.md`  
-> 技术规格：`docs/superpowers/specs/2026-06-24-opportunity-timing-radar-technical-spec.md`  
-> 验收规格：`docs/superpowers/specs/2026-06-24-opportunity-timing-radar-acceptance-spec.md`
+> 日期：2026-06-24
+> 状态：新版产品规格，供实现 agent 直接执行
+> 对应战略文档：`docs/opportunity-timing-radar-specs/产品转型方案-个人机会时效雷达.md`
+> 技术规格：`docs/opportunity-timing-radar-specs/2026-06-24-opportunity-timing-radar-technical-spec.md`
+> 验收规格：`docs/opportunity-timing-radar-specs/2026-06-24-opportunity-timing-radar-acceptance-spec.md`
 
 ---
 

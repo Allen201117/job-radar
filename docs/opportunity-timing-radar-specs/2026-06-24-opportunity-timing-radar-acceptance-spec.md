@@ -1,9 +1,9 @@
 # 个人机会时效雷达 Acceptance Spec
 
-> 日期：2026-06-24  
-> 状态：验收规格，供实现 agent 和验收 agent 共用  
-> 产品规格：`docs/superpowers/specs/2026-06-24-opportunity-timing-radar-product-spec.md`  
-> 技术规格：`docs/superpowers/specs/2026-06-24-opportunity-timing-radar-technical-spec.md`
+> 日期：2026-06-24
+> 状态：验收规格，供实现 agent 和验收 agent 共用
+> 产品规格：`docs/opportunity-timing-radar-specs/2026-06-24-opportunity-timing-radar-product-spec.md`
+> 技术规格：`docs/opportunity-timing-radar-specs/2026-06-24-opportunity-timing-radar-technical-spec.md`
 
 ---
 

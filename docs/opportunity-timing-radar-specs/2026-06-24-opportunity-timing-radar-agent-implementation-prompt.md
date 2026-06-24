@@ -16,10 +16,10 @@
 
 你必须先阅读以下文档，并以它们为权威：
 
-1. `docs/产品转型方案-个人机会时效雷达.md`
-2. `docs/superpowers/specs/2026-06-24-opportunity-timing-radar-product-spec.md`
-3. `docs/superpowers/specs/2026-06-24-opportunity-timing-radar-technical-spec.md`
-4. `docs/superpowers/specs/2026-06-24-opportunity-timing-radar-acceptance-spec.md`
+1. `docs/opportunity-timing-radar-specs/产品转型方案-个人机会时效雷达.md`
+2. `docs/opportunity-timing-radar-specs/2026-06-24-opportunity-timing-radar-product-spec.md`
+3. `docs/opportunity-timing-radar-specs/2026-06-24-opportunity-timing-radar-technical-spec.md`
+4. `docs/opportunity-timing-radar-specs/2026-06-24-opportunity-timing-radar-acceptance-spec.md`
 
 旧文档只能作为背景，不得覆盖 2026-06-24 新文档。
 

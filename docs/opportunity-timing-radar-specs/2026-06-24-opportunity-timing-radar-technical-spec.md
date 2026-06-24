@@ -1,10 +1,10 @@
 # 个人机会时效雷达 Technical Spec
 
-> 日期：2026-06-24  
-> 状态：新版技术规格，供实现 agent 执行  
-> 产品规格：`docs/superpowers/specs/2026-06-24-opportunity-timing-radar-product-spec.md`  
-> 战略文档：`docs/产品转型方案-个人机会时效雷达.md`  
-> 验收规格：`docs/superpowers/specs/2026-06-24-opportunity-timing-radar-acceptance-spec.md`
+> 日期：2026-06-24
+> 状态：新版技术规格，供实现 agent 执行
+> 产品规格：`docs/opportunity-timing-radar-specs/2026-06-24-opportunity-timing-radar-product-spec.md`
+> 战略文档：`docs/opportunity-timing-radar-specs/产品转型方案-个人机会时效雷达.md`
+> 验收规格：`docs/opportunity-timing-radar-specs/2026-06-24-opportunity-timing-radar-acceptance-spec.md`
 
 ---
 
@@ -12,10 +12,10 @@
 
 个人机会时效雷达在技术上可行，但必须分清两层：
 
-1. **V1 可立即兑现的用户价值**  
+1. **V1 可立即兑现的用户价值**
    用现有 `jobs` current-state 表和用户动作表，可靠展示新机会、最近确认仍在招、截止临近、短期招聘动量、关闭/陈旧。
 
-2. **长期必须补齐的系统能力**  
+2. **长期必须补齐的系统能力**
    增加 append-only 事件台账和 per-user delivery ledger，避免“机会变化”被临时从 current state 推导，支撑去重、摘要、追溯和数据质量审计。
 
 V1 不需要先完成复杂的岗位内容 diff；内容 hash 变化只作为后台内部事件，不进入用户体验。
