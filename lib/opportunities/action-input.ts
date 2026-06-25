@@ -16,6 +16,12 @@ export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string
 export function parseActionInput(jobId: string, body: any): ParseResult<ActionInput> {
   if (!UUID_RE.test(jobId)) return { ok: false, error: "invalid_job_id" };
 
+  // §3.4：客户端不得自带 job_snapshot / user_id —— snapshot 由服务端从权威岗位行生成、归属由 auth.uid() 定。
+  // 与 /api/preferences 同口径（preferences-input 拒 user_id），明确 400 而非静默忽略。
+  if (body && typeof body === "object" && ("job_snapshot" in body || "user_id" in body)) {
+    return { ok: false, error: "validation_failed" };
+  }
+
   const action = body?.action ?? null;
   if (action !== null && !PRIMARY.has(action)) return { ok: false, error: "invalid_action" };
 

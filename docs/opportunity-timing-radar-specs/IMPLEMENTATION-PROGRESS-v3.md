@@ -8,7 +8,13 @@
 - [x] 1.2 `Job.enrich_checked_at`/`confirmed_closed_at` 入类型；recall payload 带 `enrich_checked_at`
 - [x] 1.3 today 主清单硬门（service 派生 STILL_OPEN 需 ≤24h 核验，否则落 waiting）
 - [x] 1.4 单岗点击核验 API `POST /api/jobs/[jobId]/liveness`（封顶 2.5s、三态、判死写 expired+confirmed_closed_at）
-- [ ] 1.5 `lib/liveness-client.js` SPA 轻量信号扩展（**未做**：现仍只 wt/hotjob/workday，SPA 接口级探活属 02 §3.1 延期项）
+- [~] 1.5 `lib/liveness-client.js` 扩展：2026-06-25 已加 C 类 7 大厂 httpx 探活器（amazon/apple/meituan/
+      microsoft/sf_express/tencent/vivo，与 enrich 同口径）→ 不再"只 wt/hotjob/workday"。**仍延期**：
+      飞书/Moka/北森 等纯 SPA 的接口级探活（02 §3.1 延期项，现走 audit_dead_links 浏览器审计兜底）。
+- [x] 1.10 **验收补全（2026-06-25，审计发现的 2 处字面缺口）**：
+      ① `/api/radar/open` 写 `radar_feed_opened` 事件（§3.3/§8.3，trackServerEvent 去标识埋点，best-effort 不阻塞 204）；
+      ② `/api/job-actions/[jobId]` 客户端传 `job_snapshot`/`user_id` → 400 `validation_failed`（§3.4，与 preferences 同口径）。
+      测试：opportunity-api-security +2。
 - [x] 1.6 前端点击 handler：瞬开 + `opportunity_official_opened` + 背景核验（服务端打 `job_liveness_at_click`）
 - [x] 1.7 点击有效率四护栏聚合 + admin/health 展示
 - [x] 1.8 `audit_dead_links.py --prioritize-new`
