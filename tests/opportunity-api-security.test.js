@@ -49,6 +49,18 @@ test("parseActionInput: reason_text 超 200 → reason_text_too_long", () => {
   assert.equal(r.error, "reason_text_too_long");
 });
 
+test("parseActionInput: §3.4 客户端传 job_snapshot → validation_failed(400)", () => {
+  const r = parseActionInput(UUID, { action: "saved", job_snapshot: { company: "伪造" } });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, "validation_failed");
+});
+
+test("parseActionInput: §3.4 客户端传 user_id → validation_failed(400)", () => {
+  const r = parseActionInput(UUID, { action: "saved", user_id: "11111111-1111-1111-1111-111111111111" });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, "validation_failed");
+});
+
 test("parseActionInput: saved 清空 reason；action=null 允许", () => {
   const s = parseActionInput(UUID, { action: "saved", reason_code: "role_mismatch" });
   assert.equal(s.value.reasonCode, null);

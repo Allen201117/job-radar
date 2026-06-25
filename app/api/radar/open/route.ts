@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/apiAuth";
 import { parseRadarOpenInput } from "@/lib/opportunities/action-input";
 import { isMissingRelation } from "@/lib/opportunities/schema-errors";
+import { trackServerEvent } from "@/lib/track";
 
 export const runtime = "nodejs";
 
@@ -37,5 +38,10 @@ export async function POST(request: NextRequest) {
       { status: schemaMissing ? 503 : 500 },
     );
   }
+  // §3.3 / §8.3：写 radar_feed_opened 事件（去标识埋点，payload 经 sanitize 剔除 PII；
+  // best-effort：trackServerEvent 永不抛、失败仅 console.warn，不影响幂等的 204）。
+  await trackServerEvent(auth.supabase, auth.user.id, "radar_feed_opened", {
+    feed_count: parsed.value.feedCount,
+  });
   return new NextResponse(null, { status: 204 });
 }
