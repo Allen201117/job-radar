@@ -101,6 +101,64 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+# ── 岗位生命周期事件（job_events，02 spec §5）──────────────────────────────
+# append-only 里程碑：只记关键转折，不记心跳。事件 best-effort——写失败只 warning，绝不影响 jobs upsert。
+# event_key 幂等去重（FIRST_SEEN/OFFICIAL_POSTED 一辈子一条；CONFIRMED_OPEN/CLOSED/REAPPEARED 按天）。
+
+def _day(now=None):
+    return (now or _now()).date().isoformat()
+
+
+def plan_upsert_events(*, job_id, source_id, old_status, old_posted_at, new_status, new_posted_at, day):
+    """纯函数：据 list upsert 前后状态算应记的里程碑（FIRST_SEEN/OFFICIAL_POSTED/REAPPEARED）。
+    old_status=None ⇒ 本次是 insert（新岗）。返回 [(event_key, event_type, job_id, source_id, payload)]。
+    规则（02 spec §5.1）：
+      · insert → FIRST_SEEN（一辈子一条）；若已拿到官方发布时间 → OFFICIAL_POSTED。
+      · update 且旧无 posted_at、新有 → OFFICIAL_POSTED（一辈子一条）。
+      · update 且 old_status=='removed' 且 new_status=='active' → REAPPEARED（按天）。
+        ⚠️ old_status=='expired' 一律不产生 REAPPEARED（保 expired sticky 不变量）。"""
+    events = []
+    if old_status is None:
+        events.append((f"FIRST_SEEN:{job_id}", "FIRST_SEEN", job_id, source_id, {}))
+        if new_posted_at:
+            events.append((f"OFFICIAL_POSTED:{job_id}", "OFFICIAL_POSTED", job_id, source_id, {}))
+        return events
+    if (not old_posted_at) and new_posted_at:
+        events.append((f"OFFICIAL_POSTED:{job_id}", "OFFICIAL_POSTED", job_id, source_id, {}))
+    if old_status == "removed" and new_status == "active":
+        events.append((f"REAPPEARED:{job_id}:{day}", "REAPPEARED", job_id, source_id, {}))
+    return events
+
+
+def plan_close_event(job_id, source_id, day):
+    """探活/巡检确认撤岗 → CLOSED（按天，一次下架一条）。"""
+    return (f"CLOSED:{job_id}:{day}", "CLOSED", job_id, source_id, {})
+
+
+def plan_confirm_event(job_id, source_id, day):
+    """逐岗核验确认仍在招 → CONFIRMED_OPEN（按天去重，不每次心跳都写）。"""
+    return (f"CONFIRMED_OPEN:{job_id}:{day}", "CONFIRMED_OPEN", job_id, source_id, {})
+
+
+def record_job_events(conn, events) -> int:
+    """best-effort 批量插 job_events（event_key 幂等 → on conflict do nothing）。
+    写失败只 warning、返回 0，**绝不抛**（事件失败不许影响 jobs upsert，02 spec §5.3）。"""
+    if not events:
+        return 0
+    try:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                "insert into job_events (event_key, event_type, job_id, source_id, payload) values %s "
+                "on conflict (event_key) do nothing",
+                [(k, t, jid, sid, psycopg2.extras.Json(p or {})) for (k, t, jid, sid, p) in events],
+            )
+        return len(events)
+    except Exception as e:  # noqa: BLE001 — 事件 best-effort，任何错都不许炸穿 upsert
+        print(f"  [job_events] 写入失败(忽略,不影响 upsert): {e}")
+        return 0
+
+
 def _find_existing_id_by_canonical(cur, canon):
     """按 canonical_jd_url 跨状态查既有行 id；多行优先 active（同旧 db.py，保复活语义）。"""
     cur.execute("select id, status from jobs where canonical_jd_url = %s", (canon,))
@@ -166,26 +224,42 @@ def upsert_jobs_batch(conn, jobs: list, page_size: int = 500) -> tuple:
     items = list(deduped.items())  # [(canon, job)]
     now = _now()
 
+    day = _day(now)
+    update_events, insert_events = [], []
+
     with conn.cursor() as cur:
-        # ② 一次查全批既有行
+        # ② 一次查全批既有行（带 status/posted_at 供事件判定：REAPPEARED 看 status、OFFICIAL_POSTED 看旧 posted_at）
         canons = [c for c, _ in items if c is not None]
         existing = {}
         if canons:
-            cur.execute("select id, canonical_jd_url, status from jobs where canonical_jd_url = any(%s)", (canons,))
-            for jid, canon, status in cur.fetchall():
+            cur.execute(
+                "select id, canonical_jd_url, status, posted_at from jobs where canonical_jd_url = any(%s)", (canons,))
+            for jid, canon, status, posted_at in cur.fetchall():
                 if canon not in existing or status == "active":
-                    existing[canon] = jid
+                    existing[canon] = {"id": jid, "status": status, "posted_at": posted_at}
 
         to_insert, to_update = [], []
         for canon, job in items:
-            jid = existing.get(canon)
-            if jid:
+            ex = existing.get(canon)
+            if ex:
+                jid = ex["id"]
                 to_update.append(_row_tuple(job, _UPDATE_COLS, last_seen_at=now) + (jid,))
+                # 有效新状态：expired 黏住（不复活）、其余刷 active——与 _update_set_clause 同口径。
+                eff_status = "expired" if ex["status"] == "expired" else "active"
+                update_events += plan_upsert_events(
+                    job_id=jid, source_id=job.get("source_id"),
+                    old_status=ex["status"], old_posted_at=ex.get("posted_at"),
+                    new_status=eff_status, new_posted_at=job.get("posted_at"), day=day)
             else:
-                to_insert.append(_row_tuple(job, _INSERT_COLS, id=str(uuid.uuid4()),
-                                            first_seen_at=now, last_seen_at=now))
+                jid = str(uuid.uuid4())
+                to_insert.append(_row_tuple(job, _INSERT_COLS, id=jid, first_seen_at=now, last_seen_at=now))
+                insert_events += plan_upsert_events(
+                    job_id=jid, source_id=job.get("source_id"),
+                    old_status=None, old_posted_at=None,
+                    new_status="active", new_posted_at=job.get("posted_at"), day=day)
 
         created = updated = 0
+        insert_ok = False
 
         # ③a 既有行批量 UPDATE（execute_batch 合并往返，psycopg2 自动类型适配）
         if to_update:
@@ -201,10 +275,13 @@ def upsert_jobs_batch(conn, jobs: list, page_size: int = 500) -> tuple:
                 psycopg2.extras.execute_values(
                     cur, f"insert into jobs ({cols}) values %s", to_insert, page_size=page_size)
                 created = len(to_insert)
+                insert_ok = True
             except psycopg2.errors.UniqueViolation:
                 # 极少见（并发插同一新 canonical / 撞 4 元组唯一键）→ 逐行 upsert_job 兜底（幂等：
                 # 已提交的页重查命中转 update，不会重插）。autocommit 下失败语句自身已回滚。
+                # 此分支生成的新 uuid 未真正落库 → 丢弃 insert_events（避免 FK 违例；事件 best-effort 可缺）。
                 created = 0
+                insert_events = []
                 for _canon, job in items:
                     if existing.get(_canon):
                         continue  # 这些走 UPDATE 分支，已计入 updated
@@ -212,5 +289,12 @@ def upsert_jobs_batch(conn, jobs: list, page_size: int = 500) -> tuple:
                         created += 1
                     else:
                         updated += 1
+
+    # 事件 best-effort 落库（jobs 已 autocommit 提交；事件失败只 warning，不影响计数/返回）。
+    # 仅记 job_id 确实已落库的事件：update_events（既有 id）+ insert_events（仅 bulk insert 成功时）。
+    events = list(update_events)
+    if insert_ok:
+        events += insert_events
+    record_job_events(conn, events)
 
     return (created, updated)
