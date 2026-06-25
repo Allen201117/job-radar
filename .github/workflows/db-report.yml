@@ -41,20 +41,28 @@ jobs:
             count(*) filter (where enrich_checked_at is null)                                     as never_liveness_checked,
             count(*) filter (where last_seen_at >= now() - interval '24 hours')                   as seen_24h
           from jobs where status = 'active';
+          \echo '=== 2b. 核验覆盖率（enrich_checked_at 年龄分布；today SLA≤24h / search≤72h，累计桶）==='
+          select
+            count(*)                                                                  as active_total,
+            count(*) filter (where enrich_checked_at >= now() - interval '24 hours')  as checked_24h,
+            count(*) filter (where enrich_checked_at >= now() - interval '72 hours')  as checked_72h,
+            count(*) filter (where enrich_checked_at >= now() - interval '7 days')    as checked_7d,
+            count(*) filter (where enrich_checked_at is null)                         as never_checked
+          from jobs where status = 'active';
           SQL
           # 第 3 段：adapter 维度跨库（jobs 在香港库 / sources 在 Supabase，单条 psql 做不了 join）。
           #   香港库按 source_id 出计数 + Supabase 出 id→adapter_name 映射，shell 内 awk 按 adapter 汇总。
           if [ -z "${SUPABASE_DB_URL:-}" ]; then
             echo "::warning::SUPABASE_DB_URL 未配置 → 跳过第 3 段（adapter 维度需查 Supabase sources）。"
           else
-            echo '=== 3. active 分 adapter（top 25，含有效率；jobs(HK) ⨝ sources(Supabase) shell 汇总）==='
+            echo '=== 3. active 分 adapter（top 25，含有效率 + 核验覆盖；jobs(HK) ⨝ sources(Supabase) shell 汇总）==='
             src_map="$(psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -At -F $'\t' -c "select id, coalesce(adapter_name,'(null)') from sources")"
-            job_counts="$(psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -At -F $'\t' -c "select source_id, count(*), count(*) filter (where summary is not null and char_length(btrim(summary)) >= 60), count(*) filter (where enrich_checked_at is null) from jobs where status='active' group by source_id")"
-            printf "%-22s %10s %10s %12s\n" adapter active with_jd never_chk
+            job_counts="$(psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -At -F $'\t' -c "select source_id, count(*), count(*) filter (where summary is not null and char_length(btrim(summary)) >= 60), count(*) filter (where enrich_checked_at is null), count(*) filter (where enrich_checked_at >= now() - interval '24 hours') from jobs where status='active' group by source_id")"
+            printf "%-22s %10s %10s %12s %12s\n" adapter active with_jd never_chk checked_24h
             awk -F'\t' '
               NR==FNR { map[$1]=$2; next }
-              { a=map[$1]; if(a=="") a="(unknown)"; act[a]+=$2; wj[a]+=$3; nc[a]+=$4 }
-              END { for (k in act) printf "%-22s %10d %10d %12d\n", k, act[k], wj[k], nc[k] }
+              { a=map[$1]; if(a=="") a="(unknown)"; act[a]+=$2; wj[a]+=$3; nc[a]+=$4; c24[a]+=$5 }
+              END { for (k in act) printf "%-22s %10d %10d %12d %12d\n", k, act[k], wj[k], nc[k], c24[k] }
             ' <(printf '%s\n' "$src_map") <(printf '%s\n' "$job_counts") \
               | sort -k2 -nr | awk 'NR<=25'
           fi

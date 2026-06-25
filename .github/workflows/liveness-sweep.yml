@@ -8,10 +8,12 @@ name: liveness-sweep
 #   （从未探活的 NULL 最先）→ 优先打掉新灌入的假 active。每日 08:00 UTC 定时自动跑 + 可手动加速直到增量趋零。
 # 浏览器源（beisen/moka/feishu 及变体、自建大厂 SPA）的软 404 走 dead-link-audit.yml，不在此列。
 on:
-  # 每日 UTC 08:00（北京 16:00）定时重扫：避开 daily-crawl(00:00)/purge(02:30)/晚间重档(18–22:00)。
-  # 持续挤干「从未探活」积压（实测 14 万）+ 维持失活新鲜——daily-crawl 内置 12k sweep 之外的加速档。
+  # 发现/保鲜分流后（02 spec §2）：daily-crawl 不再背内联 sweep，保鲜由本工作流独立承担。
+  # 提频到每日 3 次（UTC 4/12/20，北京 12/20/次日4 点）补偿原 daily 内联 4×/day 的撤岗节拍，
+  # 维持 today 24h / search 72h 核验 SLA；避开 daily-crawl(1/7/13/17)/purge(02:30)/晚间重档(18–22)。
+  # 频率是可调旋钮：SLA 紧→提频，CI 预算紧→降频。
   schedule:
-    - cron: "0 8 * * *"
+    - cron: "0 4,12,20 * * *"
   workflow_dispatch:
     inputs:
       limit:

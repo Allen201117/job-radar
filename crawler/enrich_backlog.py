@@ -202,6 +202,21 @@ def enrich_row(sb, row, src, dry_run=False, jobs_conn=None):
     return result
 
 
+# 源级失败自适应（01 spec §6.1）：某 adapter 本轮 miss 率异常高（疑似被限流）→ 跳过该 adapter 本轮剩余岗
+# + 记 warning（不默默失败）。被跳过岗不盖 enrich_checked_at → 留队列下轮（限流冷却后）重试。
+# 阈值保守：必须先有足够样本（min_sample）且 miss 占比超线（miss_ratio）才熔断，避免对「天生难探」的源误杀。
+ADAPTIVE_MIN_SAMPLE = int(os.environ.get("ENRICH_ADAPTIVE_MIN_SAMPLE", "50"))
+ADAPTIVE_MISS_RATIO = float(os.environ.get("ENRICH_ADAPTIVE_MISS_RATIO", "0.7"))
+
+
+def should_trip_adapter(checked, miss, min_sample=ADAPTIVE_MIN_SAMPLE, miss_ratio=ADAPTIVE_MISS_RATIO):
+    """纯函数：本轮该 adapter 已检 checked 个、其中 miss 个无果 → 是否应熔断跳过剩余。
+    样本不足（< min_sample）一律不熔断；达样本且 miss/checked >= miss_ratio 才熔断。"""
+    if checked < min_sample or checked <= 0:
+        return False
+    return (miss / checked) >= miss_ratio
+
+
 def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, per_host=PER_HOST, sweep=False, make_jobs_conn=None):
     """sb：取 sources（Supabase）。jobs 读写：配了 JOBS_DATABASE_URL 走香港 PG（每线程独立连接防并发），
     否则走 Supabase（每线程独立 sb 防 Errno35）。per_host=单 host 并发上限（防限流，hotjob 等单 host 关键）。
@@ -215,18 +230,28 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
     rows, smap = (fetch_liveness_queue if sweep else fetch_queue)(sb, adapters, limit, jobs_conn=fetch_conn)
     print(f"{'死活巡检' if sweep else '富化队列'}（httpx 类，adapter={adapter or '全部'}）：{len(rows)}")
     if not rows:
-        return {"filled": 0, "alive": 0, "miss": 0, "expired": 0, "err": 0}
+        return {"filled": 0, "alive": 0, "miss": 0, "expired": 0, "err": 0, "skipped": 0}
     # 按 source 轮转交错，避免并发线程集中打同一租户
     by_src = {}
     for r in rows:
         by_src.setdefault(r["source_id"], []).append(r)
     rows = [r for tup in zip_longest(*by_src.values()) for r in tup if r]
 
-    stat = {"filled": 0, "alive": 0, "miss": 0, "expired": 0, "err": 0}
+    stat = {"filled": 0, "alive": 0, "miss": 0, "expired": 0, "err": 0, "skipped": 0}
     lock = threading.Lock()
+    per_adapter = {}          # adapter -> {"checked", "miss"}（源级自适应统计）
+    tripped = set()           # 已熔断（本轮跳过剩余）的 adapter
+
+    def adapter_of(src):
+        return (src or {}).get("adapter_name") or "(unknown)"
 
     def work(row):
         src = smap.get(row["source_id"])
+        adp = adapter_of(src)
+        with lock:
+            if adp in tripped:    # 该 adapter 本轮已熔断 → 跳过，不探不写（留队列下轮重试）
+                stat["skipped"] += 1
+                return
         host = urlparse((src or {}).get("source_url") or "").netloc
         try:
             with _host_sem(host, per_host):  # 按 host 限并发，防单 host 被打到限流
@@ -238,17 +263,29 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
             res = "err"  # 兜底：任何意外都不许炸穿 ex.map（否则掀翻整批，本 drain 实锤过）
         with lock:
             stat[res] += 1
-            done = stat["filled"] + stat["alive"] + stat["miss"] + stat["expired"] + stat["err"]
+            a = per_adapter.setdefault(adp, {"checked": 0, "miss": 0})
+            a["checked"] += 1
+            if res == "miss":
+                a["miss"] += 1
+            # 源级自适应：miss 率异常高 → 熔断该 adapter 本轮剩余（一次性 warning，不默默失败）
+            if adp not in tripped and should_trip_adapter(a["checked"], a["miss"]):
+                tripped.add(adp)
+                print(f"⚠️ [自适应] adapter={adp} 本轮 miss {a['miss']}/{a['checked']} 过高（疑似被限流），"
+                      f"跳过本轮剩余 {adp} 岗（不盖时间戳，下轮重试）")
+            done = stat["filled"] + stat["alive"] + stat["miss"] + stat["expired"] + stat["err"] + stat["skipped"]
             if done % 200 == 0:
                 print(f"  …{done}/{len(rows)}  filled={stat['filled']} alive={stat['alive']} "
-                      f"miss={stat['miss']} expired={stat['expired']} err={stat['err']}")
+                      f"miss={stat['miss']} expired={stat['expired']} err={stat['err']} skipped={stat['skipped']}")
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         list(ex.map(work, rows))
 
     print(f"完成：填充 {stat['filled']}，仍在招 {stat['alive']}，无果/死信+1 {stat['miss']}，"
-          f"源站撤岗→expired {stat['expired']}，写库错(留队列重试) {stat['err']}"
+          f"源站撤岗→expired {stat['expired']}，写库错(留队列重试) {stat['err']}，"
+          f"限流跳过(下轮重试) {stat['skipped']}"
           f"{'（dry-run 未写库）' if dry_run else ''}")
+    if tripped:
+        print(f"⚠️ 本轮熔断 adapter：{', '.join(sorted(tripped))}（疑似限流，已跳过其剩余岗）")
     return stat
 
 
@@ -277,7 +314,8 @@ def main():
         sweep=args.sweep,
     )
     if not args.dry_run:
-        checked = sum(stat.values())
+        # checked = 真正探了的（不含限流跳过的 skipped）
+        checked = stat["filled"] + stat["alive"] + stat["miss"] + stat["expired"] + stat["err"]
         ops_runs.record_ops_run(
             sb,
             "liveness_sweep" if args.sweep else "enrich_backlog",
@@ -288,6 +326,7 @@ def main():
                 "expired": stat["expired"],
                 "miss": stat["miss"],
                 "failed": stat["err"],
+                "skipped": stat.get("skipped", 0),
                 "adapter": args.adapter or "all",
             },
             status=ops_runs.status_from_counts(checked, stat["err"]),
