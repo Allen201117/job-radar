@@ -204,6 +204,129 @@ def _detail_wt(row, src):
     return " ".join(x for x in (pi.get("workContent"), pi.get("serviceCondition")) if x)
 
 
+# --- C 类大厂自建门户：逐岗撤岗探活器（2026-06-25 逐源 live 摸到关闭信号，禁猜；§1 红线：
+# 只在明确关闭信号判死，bogus/网络错/限流一律走 miss 重试，绝不误判活岗为死）。
+# 多数 liveness-only（正文已由列表自带，detail 只用来探死活）；tencent/vivo 顺带返回正文。
+# 关闭信号 live 实测见记忆 job-radar-cclass-liveness-signals。 ---
+
+def _detail_amazon(row, src):
+    # amazon.jobs 逐岗 .json 被 Akamai 拦（404/406）；但 HTML 逐岗页 httpx 可直连：
+    # 在招→200，撤岗/不存在→404（live 验证 bogus id 直接 404）。liveness-only（正文由列表自带）。
+    r = httpx.get(row["jd_url"], headers={**UA, "Accept": "text/html,application/xhtml+xml"}, timeout=TIMEOUT)
+    _raise_if_gone(r)  # 404/410 = 岗位已撤
+    return ""
+
+
+def _detail_apple(row, src):
+    # jobNumber = jd_url 路径 /details/{jobNumber}/；detail = 公开 jobDetails JSON。
+    # 撤岗→404 {"error":"jobsite.general.serviceError"}（live 验证 4/30 真实撤岗岗 = 404）；在招→200 {res}。
+    m = re.search(r"/details/([^/?]+)", urlparse(row["jd_url"]).path)
+    if not m:
+        return ""
+    r = httpx.get(f"https://jobs.apple.com/api/v1/jobDetails/{m.group(1)}",
+                  headers={**UA, "Referer": "https://jobs.apple.com/"}, timeout=TIMEOUT)
+    _raise_if_gone(r)  # 404 = 岗位已撤
+    return ""
+
+
+def _detail_meituan(row, src):
+    # detail POST {jobUnionId}；撤岗/不存在→200 {"data":null,"status":0,"message":"职位已下线或不存在！"}；
+    # 在招→status=1 + data。liveness-only（正文由列表 jobDuty/jobRequirement 自带；detail.desc 恒空）。
+    # ⚠️ jobStatus 000/001 都是活岗（红鲱鱼，别拿来判死）；唯一关闭信号 = status==0 且无 data。
+    jid = (parse_qs(urlparse(row["jd_url"]).query).get("jobUnionId") or [""])[0]
+    if not jid:
+        return ""
+    headers = {**UA, "Referer": "https://zhaopin.meituan.com/web/position",
+               "Origin": "https://zhaopin.meituan.com", "Content-Type": "application/json"}
+    r = httpx.post("https://zhaopin.meituan.com/api/official/job/getJobDetail",
+                   json={"jobUnionId": jid}, headers=headers, timeout=TIMEOUT)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    j = r.json() or {}
+    if not j.get("data") and str(j.get("status")) == "0":
+        raise JobClosedError(f"meituan jobUnionId={jid} closed: {j.get('message') or 'status=0'}")
+    return ""
+
+
+def _detail_microsoft(row, src):
+    # MS pcsx 无逐岗 detail 端点；用 search?query={displayJobId} 探活：在招→positions 含精确 displayJobId（n=1）；
+    # 撤岗→0 命中（live 验证：在招精确命中、bogus n=0）。displayJobId = jd_url 路径 /job/{id}。liveness-only。
+    m = re.search(r"/job/([^/?#]+)", urlparse(row["jd_url"]).path)
+    if not m:
+        return ""
+    jid = m.group(1)
+    r = httpx.get("https://apply.careers.microsoft.com/api/pcsx/search",
+                  params={"domain": "microsoft.com", "query": jid, "start": 0, "num": 20},
+                  headers={**UA, "Referer": "https://jobs.careers.microsoft.com/"}, timeout=TIMEOUT)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    positions = (r.json().get("data", {}) or {}).get("positions", []) or []
+    if any(str(p.get("displayJobId") or p.get("id")) == jid for p in positions):
+        return ""  # 精确命中 = 在招
+    if not positions:
+        # HTTP 200 + 0 命中 = 撤岗（与 bogus 同信号；限流/错误已在上面 >=300 拦走 miss）。
+        raise JobClosedError(f"microsoft displayJobId={jid} closed (search 0 hit)")
+    return ""  # n>0 但无精确命中 → 拿不准，不判死
+
+
+def _detail_sf_express(row, src):
+    # JobSearchById 逐岗 HTML 页：在招→<title>顺丰人才招聘系统-社会招聘-{岗位名}；
+    # 撤岗/不存在→<title>顺丰人才招聘系统-404（live 验证：30 oldest 全 404 标题 / 8 recent 全社招标题）。liveness-only。
+    r = httpx.get(row["jd_url"], headers={**UA, "Accept": "text/html"}, timeout=TIMEOUT)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    m = re.search(r"<title>(.*?)</title>", r.text, re.S)
+    title = (m.group(1).strip() if m else "")
+    if title == "顺丰人才招聘系统-404":
+        raise JobClosedError(f"sf_express closed (404 page): {row['jd_url']}")
+    return ""
+
+
+def _detail_tencent(row, src):
+    # postId = jd_url 查询参数；detail = 公开 ByPostId JSON。撤岗→HTTP500 {Code:500,Data:"E1005"}（3 真实撤岗）；
+    # 在招→{Code:200,Data:{Responsibility/Requirement=正文}}。⚠️ E1003=bogus 入参错，不判死。
+    pid = (parse_qs(urlparse(row["jd_url"]).query).get("postId") or [""])[0]
+    if not pid:
+        return ""
+    r = httpx.get("https://careers.tencent.com/tencentcareer/api/post/ByPostId",
+                  params={"postId": pid}, headers={**UA, "Referer": "https://careers.tencent.com/"}, timeout=TIMEOUT)
+    _raise_if_gone(r)  # tencent 撤岗实际走 500+E1005（在下方判），此处仅继承 404/410 通用约定
+    try:
+        j = r.json() or {}
+    except Exception:
+        return ""  # 非 JSON（真 5xx/限流）→ miss，不判死
+    if str(j.get("Code")) == "500" and str(j.get("Data")) == "E1005":
+        raise JobClosedError(f"tencent postId={pid} closed (E1005)")
+    data = j.get("Data")
+    if str(j.get("Code")) == "200" and isinstance(data, dict):
+        return " ".join(x for x in (data.get("Responsibility"), data.get("Requirement")) if x)
+    return ""
+
+
+def _detail_vivo(row, src):
+    # job_id = jd_url 查询参数 _irjid；detail POST {job_id}；撤岗→{code:105002,"官网职位未发布"}（13/40 真实撤岗）；
+    # 在招→{code:0,data:{job_desc=正文}}。⚠️ code=100000=服务器错(bogus 入参)，不判死。
+    jid = (parse_qs(urlparse(row["jd_url"]).query).get("_irjid") or [""])[0]
+    if not jid:
+        return ""
+    headers = {**UA, "Referer": "https://hr.vivo.com/jobs",
+               "Origin": "https://hr.vivo.com", "Content-Type": "application/json"}
+    r = httpx.post("https://hr.vivo.com/api/social/webSite/portal/job/detail",
+                   json={"job_id": jid}, headers=headers, timeout=TIMEOUT)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    j = r.json() or {}
+    if str(j.get("code")) == "105002":
+        raise JobClosedError(f"vivo job_id={jid} closed: {j.get('message') or 'code=105002'}")
+    if str(j.get("code")) == "0":
+        return (j.get("data") or {}).get("job_desc") or ""
+    return ""
+
+
 # adapter_name -> fetcher（httpx 类，P1）
 ENRICH_REGISTRY = {
     "workday": _detail_workday,
@@ -214,9 +337,18 @@ ENRICH_REGISTRY = {
     "lever": _detail_lever,
     "hotjob": _detail_hotjob,
     "wt": _detail_wt,
+    # C 类大厂自建门户（2026-06-25，live 验证关闭信号）：
+    "amazon": _detail_amazon,
+    "apple": _detail_apple,
+    "meituan": _detail_meituan,
+    "microsoft": _detail_microsoft,
+    "sf_express": _detail_sf_express,
+    "tencent": _detail_tencent,
+    "vivo": _detail_vivo,
 }
 
-# 需渲染、低并发，P2 实现（仅占位以便 detail_class 分流）
+# 需渲染、低并发：SPA 壳详情页无 httpx 关闭信号，走 audit_dead_links 浏览器审计兜底。
+# bilibili（detail 需 ajSessionId cookie）、phenom（jd_url→SPA 壳，careers.amd.com/pepsicojobs.com）同类。
 _BROWSER_ADAPTERS = {"beisen", "moka", "feishu"}
 
 
