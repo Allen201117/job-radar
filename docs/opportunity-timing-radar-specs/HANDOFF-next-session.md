@@ -1,7 +1,21 @@
 # 交接：v3 实现下一个 session 从这里开始
 
-> 写于 2026-06-25。基线分支 `draft/radar-pivot-0623`（远程已同步，tip = `75ec9d7`）。
-> 权威 spec：本目录 `01`~`06`。总进度清单：`IMPLEMENTATION-PROGRESS-v3.md`。
+> 写于 2026-06-25。基线分支 `draft/radar-pivot-0623`。权威 spec：本目录 `01`~`06`。总进度：`IMPLEMENTATION-PROGRESS-v3.md`。
+
+## ✅ 已完成（2026-06-25 续做，commit ee93792 + 7efc272，全绿 + live 验证）
+- **C 类 9 大厂逐岗撤岗探活（原"下一步主线"）已做完**：7 源 clean httpx detector（amazon/apple/meituan/
+  microsoft/sf_express/tencent/vivo，关闭信号逐源 live 实测、13/13 集成实测通过）接进 `enrich.ENRICH_REGISTRY`
+  + `lib/liveness-client.js` LIVENESS + `liveness-sweep.yml` matrix；bilibili 入 `audit_dead_links._BROWSER_ADAPTERS`
+  浏览器审计兜底；phenom（SPA 壳 + AMD/百事低相关）诚实延后。信号详表见记忆 `job-radar-cclass-liveness-signals`。
+- **3.3 JSON-LD**：抽取器 + 优先级合并器 `normalizer.resolve_official_times` 就绪+测好；**源能力 live 盘点**见
+  `source-jsonld-capability.md`（服务端 JSON-LD 只在 Workday 外站 HTML + HSBC，国内 SPA 全 JS 渲染抓不到）。
+  逐源 HTML 抓取接线暂缓（workday 富化抓 cxs JSON 非 HTML + 消费方 NEWLY_DISCOVERED 未上 → 热路径零收益不加抓取）。
+- 回归：node 517 / crawler 459 / tsc 0 全绿。**未 push**（等用户指令；本 session worktree 分支 claude/radar-cclass-0625）。
+- ⚠️ 上线后须 live 盯首轮 `liveness-sweep`（新增 7 adapter 分片）是否正常挤干 C 类大厂死岗（amazon/sf html 抓量大、
+  Akamai/限流命中落 miss 不误判死 = 安全，但覆盖看 db-report 的 checked_24h 是否升）。
+
+---
+（以下为原始交接；C 类 / 3.3 已如上完成，其余延后项仍有效）
 
 ## 现在是什么状态（全绿、已 push）
 - **Phase 1 护城河 / Phase 2 强度 / Phase 3 信号+时间核心 / Phase 4 分流+硬化 + 3.5 job_events** 全部完成并 push 到 `origin/draft/radar-pivot-0623`。
