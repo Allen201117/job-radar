@@ -27,7 +27,12 @@
 ## Phase 3 — 时间记真 + 信号标签（02/04 spec）部分
 - [x] 3.1 `deadline.ts` `parseDeadline`
 - [x] 3.2 `signals.ts` `deriveOpportunitySignals`（STILL_OPEN/DEADLINE_SOON/CLOSED_OR_STALE；NEWLY_DISCOVERED/MOMENTUM 暂不上）
-- [ ] 3.3 `normalizer.extract_jobposting_ld`（**未做**）
+- [~] 3.3 JSON-LD 接线（2026-06-25）：抽取器 `extract_jobposting_ld` + 优先级合并器 `resolve_official_times`
+      （**官方 JSON-LD > adapter 直填 > 正文正则**；posted_at 刻意不取正文正则=§4 官方 only）已就绪+测好。
+      **逐源能力 live 盘点**见 `source-jsonld-capability.md`：服务端 JSON-LD 实测**只在 Workday 外站 HTML + HSBC**，
+      国内 SPA 源（moka/zhiye/hotjob/feishu/byd/meituan/vivo/163/ctrip…）全 JS 渲染抓不到、greenhouse 板页亦转 JS。
+      ⏸️ **逐源 HTML 抓取接线暂缓**：唯一有 JSON-LD 的 workday 富化抓的是 cxs JSON 非 HTML，要 JSON-LD 得额外抓 HTML；
+      而消费方 `NEWLY_DISCOVERED` 未上 C 端（热路径零收益加抓取不划算）→ 待其激活时按能力表给 workday 接线。
 - [x] 3.4 jobs-db schema `confirmed_closed_at` + `job_events` 表（建表/列已加，待 jobs-db-migrate 应用）
 - [x] 3.5 job_events 写入：`jobs_db.py` 纯 planner（plan_upsert_events/plan_close_event/plan_confirm_event）+ best-effort
       record_job_events + 接进 upsert_jobs_batch（FIRST_SEEN/OFFICIAL_POSTED/REAPPEARED，expired 不复活、按天去重、写失败不影响 upsert）；

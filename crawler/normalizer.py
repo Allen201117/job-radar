@@ -424,6 +424,24 @@ def extract_jobposting_ld(html_text: Optional[str]) -> dict:
     return out
 
 
+def resolve_official_times(detail_html=None, adapter_posted=None, adapter_deadline=None, body_text=None):
+    """按 02 spec §3.2 优先级合并官方时间：**官方结构化(JSON-LD) > adapter 直填 > 正文正则**。
+
+    - `posted_at`（官方发布时间，高可信）：JSON-LD `datePosted` > adapter 直填；**刻意不取正文正则**——
+      §4 规定 posted_at 须来自官方/结构化，拿不到即 NULL，否则会污染「官网近期发布」(NEWLY_DISCOVERED) 判定。
+    - `deadline`（截止时间，低风险）：JSON-LD `validThrough` > adapter 直填 > 正文正则。
+
+    `detail_html` 缺失或无 JobPosting → 自然回退 adapter/正文（纯增益，offline 可接）。源能力（哪些源详情页带
+    JSON-LD）见 docs/opportunity-timing-radar-specs/source-jsonld-capability.md：仅 Workday 外站 HTML + 个别
+    bespoke ATS 带服务端 JSON-LD；国内 SPA 源（moka/zhiye/hotjob/feishu/byd…）全 JS 渲染、抓不到。"""
+    ld = extract_jobposting_ld(detail_html) if detail_html else {"posted_at": None, "deadline": None}
+    posted = ld["posted_at"] or (coerce_iso_date(adapter_posted) if adapter_posted else None)
+    deadline = (ld["deadline"]
+                or (coerce_iso_date(adapter_deadline) if adapter_deadline else None)
+                or extract_deadline(body_text))
+    return {"posted_at": posted, "deadline": deadline}
+
+
 def normalize_city(value: str) -> str:
     key = (value or "").strip().lower()
     if key in CITY_ALIASES:
