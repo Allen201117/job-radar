@@ -33,10 +33,13 @@
 - [ ] 3.6 防假动量守则（**未做**；MOMENTUM 未上 C 端，无紧迫）
 - [x] 3.7 测试：opportunity-deadline / opportunity-signals（jobposting_ld/jobs_db_events/momentum_guard 待 3.3/3.5/3.6）
 
-## Phase 4 — 发现/保鲜分流 + 运维硬化（01/02 spec）未做
-- [ ] 4.1 `daily-crawl.yml` 卸内联 sweep；保鲜交独立 workflow
-- [ ] 4.2 enrich_backlog 源级失败自适应
-- [ ] 4.3 db-report 加核验覆盖率（按 adapter enrich 年龄分布）
+## Phase 4 — 发现/保鲜分流 + 运维硬化（01/02 spec）✅ 完成（待 live 验证 CI 跑通）
+- [x] 4.1 `daily-crawl.yml` 卸内联 12k sweep；保鲜交 `liveness-sweep.yml`（提频到 4/12/20 UTC 3×/日）
+      + 新增 `dead-link-audit-new.yml`（SPA 新岗 `--prioritize-new` 每 6h 小批，01 §3.1）
+- [x] 4.2 enrich_backlog 源级自适应：`should_trip_adapter`（miss 率超线熔断该 adapter 本轮剩余 + warning，不默默失败）
+- [x] 4.3 db-report 加核验覆盖率：2b 段（enrich_checked_at 年龄累计桶 24h/72h/7d/never）+ 第 3 段每 adapter `checked_24h`
+- 测试：test_enrich_adaptive（5 例）；4 个 workflow YAML 已 ruby 校验解析通过
+- ⚠️ CI workflow 改动沙箱无法 live 跑通——push 后须盯首轮 run（频率是可调旋钮，见各 yaml 注释）
 
 ## 其它已满足（A–E 既有，复核通过）
 - 普通用户主动爬取入口已 `MANUAL_CRAWL_UI_ENABLED` 门控（jobs-client）。
