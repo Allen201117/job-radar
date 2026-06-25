@@ -49,6 +49,9 @@ _BROWSER_ADAPTERS = (
     # 2026-06-25 补：db-report 实测 24h 覆盖=0 的大厂 SPA（alibaba 3789/netease 1177/ctrip 772/huawei 445 岗，
     # 之前不在任何保鲜流）。均为浏览器渲染详情页 → 纳入审计渲染探活（同上：命中 DEAD_MARKERS 才下架，否则只轮转盖戳）。
     "alibaba", "netease", "ctrip", "huawei",
+    # 2026-06-25 补：bilibili（detail 端点需 ajSessionId cookie，httpx 拿不到 → 无快速撤岗信号）
+    # → 走浏览器渲染探活兜底（社招深链 SPA，命中 DEAD_MARKERS 才下架）。phenom(AMD/百事)仍延后(SPA 壳+低相关)。
+    "bilibili",
 )
 
 DEAD_MARKERS = [

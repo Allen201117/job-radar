@@ -43,6 +43,13 @@
 - [x] 4.3 db-report 加核验覆盖率：2b 段（enrich_checked_at 年龄累计桶 24h/72h/7d/never）+ 第 3 段每 adapter `checked_24h`
 - 测试：test_enrich_adaptive（5 例）；4 个 workflow YAML 已 ruby 校验解析通过
 - ⚠️ CI workflow 改动沙箱无法 live 跑通——push 后须盯首轮 run（频率是可调旋钮，见各 yaml 注释）
+- [x] 4.4 **C 类大厂保鲜覆盖（2026-06-25）**：7 源 clean httpx 逐岗撤岗探活器（关闭信号逐源 live 实测、禁猜）
+      → `enrich.py` ENRICH_REGISTRY + `lib/liveness-client.js` LIVENESS + `liveness-sweep.yml` matrix（+7 adapter）：
+      amazon(html 404)/apple(jobDetails 404)/meituan(status=0)/microsoft(pcsx search 0 命中)/sf_express(标题-404)/
+      tencent(Code500/E1005)/vivo(code105002)。tencent/vivo 顺带返回正文。bilibili(detail 需 ajSessionId、SPA 壳)
+      → `audit_dead_links._BROWSER_ADAPTERS` 浏览器审计兜底；phenom(SPA 壳+AMD/百事低相关) 诚实延后。
+      测试：`crawler/test_cclass_liveness.py`(20 例) + `tests/liveness-client.test.js`(+8 golden)；
+      **13/13 live 集成实测通过**（真 active 岗 alive、真撤岗岗 raise JobClosedError）。信号详见记忆 job-radar-cclass-liveness-signals。
 
 ## 其它已满足（A–E 既有，复核通过）
 - 普通用户主动爬取入口已 `MANUAL_CRAWL_UI_ENABLED` 门控（jobs-client）。
