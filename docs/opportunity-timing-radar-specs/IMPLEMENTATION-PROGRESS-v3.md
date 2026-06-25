@@ -31,8 +31,8 @@
 - [x] 3.4 jobs-db schema `confirmed_closed_at` + `job_events` 表（建表/列已加，待 jobs-db-migrate 应用）
 - [x] 3.5 job_events 写入：`jobs_db.py` 纯 planner（plan_upsert_events/plan_close_event/plan_confirm_event）+ best-effort
       record_job_events + 接进 upsert_jobs_batch（FIRST_SEEN/OFFICIAL_POSTED/REAPPEARED，expired 不复活、按天去重、写失败不影响 upsert）；
-      `write.ts` markJobExpiredById 记 CLOSED（点击/看板核验撤岗→里程碑）。
-      ⏳ 仍缺：crawler 探活路径 CONFIRMED_OPEN/CLOSED（enrich/audit）、write.ts upsert 路径 FIRST_SEEN 等（planner 已就绪、口径一致，thin wiring）。
+      `write.ts` markJobExpiredById 记 CLOSED；`enrich_backlog.drain()` 巡检撤岗 → 批量记 CLOSED（best-effort，expired-only 低量）。
+      ⏳ 仍缺：CONFIRMED_OPEN（每日 sweep 按天会 1 条/活岗 → 量大且无消费方，待 momentum 上线再开）、write.ts upsert 路径 FIRST_SEEN/REAPPEARED（planner 口径一致，thin wiring）。
 - [ ] 3.6 防假动量守则（**未做**；MOMENTUM/NEWLY_DISCOVERED 未上 C 端，无紧迫）
 - [x] 3.7 测试：opportunity-deadline / opportunity-signals / test_jobposting_ld / test_jobs_db_events（momentum_guard 待 3.6）
 

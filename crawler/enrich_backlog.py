@@ -241,6 +241,8 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
     lock = threading.Lock()
     per_adapter = {}          # adapter -> {"checked", "miss"}（源级自适应统计）
     tripped = set()           # 已熔断（本轮跳过剩余）的 adapter
+    close_events = []         # 巡检确认撤岗 → CLOSED 里程碑（02 spec §5；批量末尾 best-effort 落库）
+    day = jobs_db._day()
 
     def adapter_of(src):
         return (src or {}).get("adapter_name") or "(unknown)"
@@ -267,6 +269,8 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
             a["checked"] += 1
             if res == "miss":
                 a["miss"] += 1
+            if res == "expired":  # 巡检确认撤岗 → 收集 CLOSED（批量末尾一次性落库，避免每岗一次往返）
+                close_events.append(jobs_db.plan_close_event(row["id"], row.get("source_id"), day))
             # 源级自适应：miss 率异常高 → 熔断该 adapter 本轮剩余（一次性 warning，不默默失败）
             if adp not in tripped and should_trip_adapter(a["checked"], a["miss"]):
                 tripped.add(adp)
@@ -279,6 +283,11 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         list(ex.map(work, rows))
+
+    # CLOSED 里程碑 best-effort 批量落库（仅香港库、非 dry-run）；失败只 warning，不影响巡检结果。
+    if close_events and not dry_run and use_jobs:
+        rec_conn = fetch_conn or make_jobs_conn()
+        jobs_db.record_job_events(rec_conn, close_events)
 
     print(f"完成：填充 {stat['filled']}，仍在招 {stat['alive']}，无果/死信+1 {stat['miss']}，"
           f"源站撤岗→expired {stat['expired']}，写库错(留队列重试) {stat['err']}，"
