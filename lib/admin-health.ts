@@ -11,6 +11,94 @@ export function formatPercent(numerator: Numeric, denominator: Numeric): string 
   return `${((toNumber(numerator) / total) * 100).toFixed(1)}%`;
 }
 
+// ── 点击有效率四护栏（01 spec §5.3 / 05 §5.3）──────────────────────────────
+// ⚠️「可探源点击有效率 ≥99%」会偷窄分母（最难的 SPA 不进分母）。所以**四个数一起报**，缺一不可：
+//   ① 可探源点击有效率 = alive / (alive+dead)，只在可探源上算（分母排除 unknown）；
+//   ② 点击核验覆盖率   = (alive+dead) / 总点击数（太低说明 ① 没代表性）；
+//   ③ unknown 占比     = unknown / 总核验数（越高说明越多源探不动）；
+//   ④ SPA 死岗抽检率   = 审计抽样，不来自这两个事件，admin 单独展示。
+// 事件：opportunity_official_opened（总点击）+ job_liveness_at_click（payload.result ∈ alive/dead/unknown, payload.adapter）。
+export type ClickEventRow = { event?: unknown; payload?: unknown };
+
+export interface ClickValidityAdapter {
+  adapter: string;
+  alive: number;
+  dead: number;
+  unknown: number;
+  validityRate: number | null; // alive/(alive+dead)，分母 0 → null
+}
+
+export interface ClickValidityMetrics {
+  totalOpens: number; // opportunity_official_opened 数
+  livenessTotal: number; // job_liveness_at_click 数（含 unknown）
+  alive: number;
+  dead: number;
+  unknown: number;
+  probeValidityRate: number | null; // ① alive/(alive+dead)
+  coverageRate: number | null; // ② (alive+dead)/totalOpens
+  unknownRate: number | null; // ③ unknown/livenessTotal
+  byAdapter: ClickValidityAdapter[]; // 按 adapter 拆分（①）
+}
+
+function ratio(num: number, den: number): number | null {
+  return den > 0 ? num / den : null;
+}
+
+export function computeClickValidityMetrics(rows: ClickEventRow[] | null | undefined): ClickValidityMetrics {
+  let totalOpens = 0;
+  let alive = 0;
+  let dead = 0;
+  let unknown = 0;
+  const perAdapter = new Map<string, { alive: number; dead: number; unknown: number }>();
+
+  for (const row of rows || []) {
+    const event = typeof row?.event === "string" ? row.event : "";
+    if (event === "opportunity_official_opened") {
+      totalOpens += 1;
+      continue;
+    }
+    if (event !== "job_liveness_at_click") continue;
+    const payload = row?.payload && typeof row.payload === "object" ? (row.payload as Record<string, unknown>) : {};
+    const result = payload.result;
+    const adapter = typeof payload.adapter === "string" && payload.adapter ? payload.adapter : "unknown";
+    const bucket = perAdapter.get(adapter) || { alive: 0, dead: 0, unknown: 0 };
+    if (result === "alive") {
+      alive += 1;
+      bucket.alive += 1;
+    } else if (result === "dead") {
+      dead += 1;
+      bucket.dead += 1;
+    } else {
+      unknown += 1;
+      bucket.unknown += 1;
+    }
+    perAdapter.set(adapter, bucket);
+  }
+
+  const livenessTotal = alive + dead + unknown;
+  const byAdapter: ClickValidityAdapter[] = Array.from(perAdapter.entries())
+    .map(([adapter, b]) => ({
+      adapter,
+      alive: b.alive,
+      dead: b.dead,
+      unknown: b.unknown,
+      validityRate: ratio(b.alive, b.alive + b.dead),
+    }))
+    .sort((a, b) => b.alive + b.dead + b.unknown - (a.alive + a.dead + a.unknown) || a.adapter.localeCompare(b.adapter));
+
+  return {
+    totalOpens,
+    livenessTotal,
+    alive,
+    dead,
+    unknown,
+    probeValidityRate: ratio(alive, alive + dead),
+    coverageRate: ratio(alive + dead, totalOpens),
+    unknownRate: ratio(unknown, livenessTotal),
+    byAdapter,
+  };
+}
+
 export type CrawlSourceRow = {
   source_id?: string | null;
   company?: string | null;

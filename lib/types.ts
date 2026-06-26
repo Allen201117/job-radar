@@ -15,6 +15,10 @@ export interface Job {
   deadline: string | null;
   first_seen_at: string;
   last_seen_at: string;
+  // 最近一次逐岗核验（富化/巡检/实时核验写；列表重抓不覆盖）。分层核验 SLA 的判定输入。
+  enrich_checked_at?: string | null;
+  // 我们确认下架的时刻（判死时写，best-effort）。
+  confirmed_closed_at?: string | null;
   status: string;
   content_hash: string | null;
   created_at: string;
@@ -67,6 +71,10 @@ export interface UserPreferences {
   // 可选：历史行/未同步用户为空，scoring 读取处一律 `|| []` 兜底。
   target_industries?: string[];
   daily_limit: number;
+  // 雷达强度（迁移 164）：active/passive；source = default|user|auto。历史行可能缺，读取处 `|| 'active'`/`|| 'default'` 兜底。
+  radar_intensity?: "active" | "passive";
+  radar_intensity_source?: "default" | "user" | "auto";
+  radar_intensity_updated_at?: string | null;
 }
 
 export interface ResumeUpload {
@@ -101,13 +109,26 @@ export interface CandidateProfile {
   updated_at: string;
 }
 
+// 岗位被物理清理后仍保留的最小快照（服务端在写 action 时从权威 jobs 行生成；迁移 162）。
+export interface JobSnapshot {
+  company?: string | null;
+  title?: string | null;
+  location?: string | null;
+  jd_url?: string | null;
+}
+
 export interface JobAction {
   id: string;
   user_id: string;
   job_id: string;
   action: "viewed" | "saved" | "ignored" | "applied";
   note: string | null;
+  // 迁移 162 新增：结构化负反馈 + 下线岗快照 + 更新时间
+  reason_code: string | null;
+  reason_text: string | null;
+  job_snapshot: JobSnapshot;
   created_at: string;
+  updated_at: string | null;
 }
 
 export interface Profile {

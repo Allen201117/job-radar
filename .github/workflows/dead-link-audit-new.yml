@@ -1,0 +1,47 @@
+name: dead-link-audit-new
+
+# 新岗高频小批核验（01 spec §3.1，消灭 SPA 源 7 天盲区）：
+# dead-link-audit.yml 的 6 分片轮转一遍约 7 天 → 刚灌入的坏 SPA 岗最长等 7 天才首检。
+# 本工作流只取**近 48h 新增、从未核验**的浏览器源岗（--prioritize-new，按 first_seen_at desc），
+# 高频小批清新岗、不动底盘轮转。每 6h 跑一次；原 6 分片全量轮转(dead-link-audit.yml)保留做底盘。
+# 频率/批量是可调旋钮：新岗多→提频或加 limit；CI 紧→降频。
+
+on:
+  schedule:
+    - cron: "0 1,7,13,19 * * *"   # 每 6h（UTC）。错开 dead-link-audit(22:00) 全量轮转。
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "本轮渲染上限（新岗小批，~3s/岗）"
+        required: false
+        default: "300"
+      apply:
+        description: "true=下架确认 dead + 盖时间戳；false=只报告(dry-run)"
+        required: false
+        default: "true"
+
+jobs:
+  audit-new:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40   # 300 岗 × ~3s ≈ 15min；远低于 GH 6h
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # Phase 1：jobs 在自建香港 PG；不注入则 crawler/jobs_db.py 回退空 Supabase。
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install -r crawler/requirements.txt
+      - name: Install chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Audit newly-ingested SPA jobs (prioritize-new)
+        working-directory: crawler
+        run: |
+          ARGS="--prioritize-new --limit ${{ inputs.limit || '300' }}"
+          if [ "${{ inputs.apply }}" != "false" ]; then ARGS="$ARGS --apply"; fi
+          echo "audit args:$ARGS"
+          python3 audit_dead_links.py $ARGS

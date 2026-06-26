@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { createBrowserClient } from "@/lib/supabaseClient";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, ArrowRight, CheckCircle, MapPin } from "@phosphor-icons/react";
 import {
   mapAuthError,
@@ -10,6 +10,7 @@ import {
   validateOtp,
   validatePassword,
 } from "@/lib/auth-validation";
+import { safeNextPath } from "@/lib/safe-next";
 import RegisterModal from "@/components/RegisterModal";
 import BrandMark from "@/components/BrandMark";
 
@@ -28,7 +29,7 @@ const COPY: Record<Mode, { title: string; subtitle: string }> = {
   "forgot-password": { title: "设置新密码", subtitle: "为账号设置一个新密码" },
 };
 
-export default function LoginPage() {
+function LoginForm() {
   const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -43,7 +44,10 @@ export default function LoginPage() {
   const [registerEmail, setRegisterEmail] = useState(""); // 弹窗预填邮箱（如登录遇未验证账号）
   const [registerAtCode, setRegisterAtCode] = useState(false); // 弹窗是否直接从验证码步骤开始
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createBrowserClient();
+  // 登录成功后回跳目标：只接受站内单斜杠相对路径，非法值回退 /today。
+  const nextPath = safeNextPath(searchParams.get("next"));
 
   // 重发冷却倒计时：避免狂点重发撞 Supabase 发信限流。
   useEffect(() => {
@@ -92,7 +96,7 @@ export default function LoginPage() {
         setError(mapAuthError(error));
         return;
       }
-      router.push("/today");
+      router.push(nextPath);
       router.refresh();
     } catch (err) {
       console.error("[auth] signin", err);
@@ -180,7 +184,7 @@ export default function LoginPage() {
         setError(mapAuthError(error));
         return;
       }
-      router.push("/today");
+      router.push(nextPath);
       router.refresh();
     } catch (err) {
       console.error("[auth] reset-password", err);
@@ -269,15 +273,15 @@ export default function LoginPage() {
             <figure className="float-soft absolute left-0 top-2" style={{ animationDelay: "0s" }}>
               <div className="polaroid w-[208px] -rotate-[5deg] transition-transform duration-300 ease-out hover:-translate-y-1.5 hover:rotate-0">
                 <div className="rounded-[0.8rem] bg-[#f6f3ec] dark:bg-[#1c1813] p-4">
-                  <p className="text-[11px] font-medium text-[#8a8275] dark:text-[#9a9184]">今日官方岗位</p>
-                  <p className="mt-1 text-3xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">24</p>
-                  <p className="mt-1 text-[12px] text-[#8a8275] dark:text-[#9a9184]">11 个高匹配待处理</p>
+                  <p className="text-[11px] font-medium text-[#8a8275] dark:text-[#9a9184]">今日机会</p>
+                  <p className="mt-1 text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">少量今日机会</p>
+                  <p className="mt-1 text-[12px] text-[#8a8275] dark:text-[#9a9184]">高匹配待处理</p>
                   <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/[0.06] dark:bg-white/[0.05]">
                     <div className="h-full w-[46%] rounded-full bg-[#7fb2e8]" />
                   </div>
                 </div>
               </div>
-              <figcaption className="mt-2 pl-1 text-[12px] text-[#9a9184] dark:text-[#837c70]">今日看板</figcaption>
+              <figcaption className="mt-2 pl-1 text-[12px] text-[#9a9184] dark:text-[#837c70]">今日机会</figcaption>
             </figure>
 
             {/* 官方岗位卡（沿用真实示例数据） */}
@@ -306,13 +310,13 @@ export default function LoginPage() {
                       </span>
                     </div>
                     <div className="rounded-xl bg-[#1a1714] dark:bg-[#f3ecdf] px-2.5 py-1 text-center text-white dark:text-[#16130f]">
-                      <span className="text-[15px] font-semibold tabular-nums">82</span>
+                      <span className="text-[12px] font-semibold">高匹配</span>
                     </div>
                   </div>
                 </div>
               </div>
               <figcaption className="mt-2 pr-1 text-right text-[12px] text-[#9a9184] dark:text-[#837c70]">
-                官方岗位卡
+                官方岗位详情
               </figcaption>
             </figure>
 
@@ -559,5 +563,14 @@ export default function LoginPage() {
         startAtCode={registerAtCode}
       />
     </main>
+  );
+}
+
+// useSearchParams 需要 Suspense 边界（否则 next build 会报错 / 整页退化为 CSR）。
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="bg-editorial grain min-h-screen" />}>
+      <LoginForm />
+    </Suspense>
   );
 }

@@ -1,222 +1,107 @@
+import { redirect } from "next/navigation";
 import Navbar from "@/components/Navbar";
 import { EmptyPanel, MetricTile, ProductHero, ProductPage } from "@/components/ProductChrome";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
-import { jobsStoreEnabled, listLatestActive, recallByPrefs } from "@/lib/jobs-store/read";
-import { matchTier, sortAndFilterJobs } from "@/lib/scoring";
-import { mergeRecallJobs } from "@/lib/today-recall";
-import type { Job, UserPreferences, JobAction, ScoredJob } from "@/lib/types";
-import TodayClient from "../today-client";
-import {
-  BookmarkSimple,
-  Broadcast,
-  CheckCircle,
-  Crosshair,
-  EyeSlash,
-  Sparkle,
-} from "@phosphor-icons/react/ssr";
+import { buildRadarProfile, profileReadiness } from "@/lib/opportunities/profile";
+import { resolveIntensityForUser } from "@/lib/opportunities/intensity";
+import { buildOpportunityFeed } from "@/lib/opportunities/service";
+import type { OpportunityFeed } from "@/lib/opportunities/types";
+import type { CandidateProfile, JobAction, UserPreferences } from "@/lib/types";
+import TodayClient, { OnboardingPanel } from "../today-client";
+import { Broadcast, CheckCircle, Crosshair, Sparkle } from "@phosphor-icons/react/ssr";
 
 export const dynamic = "force-dynamic";
+// 须 ≥ jobs 池 statement_timeout(25s)：否则慢的跨区召回会先撞函数时限被杀（平台 504、不被页面 catch），
+// 用户看到的就不是「机会队列暂时无法更新」而是白屏错误页。给足余量到 30s（plan 支持，见 /api/jobs/search=60）。
+export const maxDuration = 30;
 
-type ServerSupabase = Awaited<ReturnType<typeof createServerSupabase>>;
-
-// 页面与 JobCard 实际渲染用到的列（从 select * 收窄）
-const JOB_COLUMNS =
-  "id,company,title,location,job_type,summary,jd_url,salary_text,posted_at,experience,education,deadline,first_seen_at";
-
-// or/ilike 过滤串里的保留字符（% , ( )）替换为空格，避免破坏 PostgREST 过滤语法
-function escapeLike(value: string) {
-  return value.replace(/[%,()]/g, " ").trim();
-}
-
-// 最新 active 岗位（未登录 / 无偏好 / 预筛失败 / 预筛不足时的兜底来源）
-async function fetchLatestActive(supabase: ServerSupabase): Promise<Job[]> {
-  if (jobsStoreEnabled()) {
-    try {
-      return (await listLatestActive(200)) as Job[];
-    } catch {
-      /* 香港库异常 → Supabase 兜底 */
-    }
-  }
-  const { data } = await supabase
-    .from("jobs")
-    .select(JOB_COLUMNS)
-    .eq("status", "active")
-    .order("first_seen_at", { ascending: false })
-    .limit(200);
-  return (data as Job[]) || [];
-}
-
-// 两段召回：① 按偏好 SQL 预筛——location 命中任一 target_location 且 title 命中任一
-// target_role/target_keyword（中文直接子串，无需分词），status='active'，最新 200 条；
-// ② 始终补「最新 active」兜底填满候选池（200，去重在 mergeRecallJobs 内完成）——交给
-// sortAndFilterJobs 的相关性门（城市 + 职能/关键词/公司）精筛：既杜绝无关岗位入榜，
-// 又能召回裸 title ilike 预筛漏掉的跨语言 / 正文命中相关岗。
-// 无偏好信号或查询失败一律回退最新 200，绝不让页面 500。
-async function recallTodayJobs(
-  supabase: ServerSupabase,
-  preferences: UserPreferences | null,
-): Promise<Job[]> {
-  const locTerms = (preferences?.target_locations || [])
-    .map(escapeLike)
-    .filter(Boolean)
-    .slice(0, 10);
-  // 偏好关键词条数多时只取前 10，规避 supabase or/ilike 组合的 URL 长度限制
-  const titleTerms = Array.from(
-    new Set([
-      ...(preferences?.target_roles || []),
-      ...(preferences?.target_keywords || []),
-    ]),
-  )
-    .map(escapeLike)
-    .filter(Boolean)
-    .slice(0, 10);
-
-  // 没有任何可用于预筛的偏好信号 → 维持现状（最新 200）
-  if (!locTerms.length && !titleTerms.length) {
-    return fetchLatestActive(supabase);
-  }
-
-  try {
-    let preferred: Job[];
-    if (jobsStoreEnabled()) {
-      // 香港库：location 命中任一城市 AND title 命中任一职位词（与下面 PostgREST 双 or 同口径）。
-      preferred = (await recallByPrefs(locTerms, titleTerms, 200)) as Job[];
-    } else {
-      let builder = supabase
-        .from("jobs")
-        .select(JOB_COLUMNS)
-        .eq("status", "active");
-      // 两次 .or() 在 PostgREST 中按 AND 组合 →（命中任一城市）AND（命中任一职位词）
-      if (locTerms.length) {
-        builder = builder.or(
-          locTerms.map((t) => `location.ilike.%${t}%`).join(","),
-        );
-      }
-      if (titleTerms.length) {
-        builder = builder.or(
-          titleTerms.map((t) => `title.ilike.%${t}%`).join(","),
-        );
-      }
-      const { data, error } = await builder
-        .order("first_seen_at", { ascending: false })
-        .limit(200);
-      if (error) throw error;
-      preferred = (data as Job[]) || [];
-    }
-    // 偏好预筛后用「最新 active」兜底把候选池填满（target 200），再由 sortAndFilterJobs 的相关性门
-    // 精筛——给硬门足够候选去召回跨语言 / 正文命中的相关岗，同时硬门保证无关岗位不入榜。
-    // 预筛已满 200 则无需再取兜底（minPreferred=target → merge 也不会用到）。
-    const fallback =
-      preferred.length < 200 ? await fetchLatestActive(supabase) : [];
-    return mergeRecallJobs(preferred, fallback, {
-      target: 200,
-      minPreferred: 200,
-    });
-  } catch (err) {
-    console.error(
-      "[today] 偏好预筛失败，回退最新 200 条",
-      (err as Error).message,
-    );
-    return fetchLatestActive(supabase);
-  }
-}
+const HERO = {
+  eyebrow: "今日机会",
+  title: "今天值得处理的官方岗位",
+  description:
+    "系统已按你的目标、简历和岗位新鲜度完成筛选。先处理最相关的，再决定是否扩大搜索。",
+};
 
 export default async function TodayPage() {
-  const supabase = await createServerSupabase();
   const user = await getRequestUser();
+  if (!user) redirect("/login?next=/today");
 
-  let preferences: UserPreferences | null = null;
-  let actions: JobAction[] = [];
+  const supabase = await createServerSupabase();
+  const [prefsRes, candRes, actsRes, stateRes] = await Promise.all([
+    supabase.from("user_preferences").select("*").eq("user_id", user.id).maybeSingle(),
+    supabase.from("candidate_profiles").select("*").eq("user_id", user.id).maybeSingle(),
+    supabase.from("job_actions").select("*").eq("user_id", user.id),
+    supabase.from("user_radar_state").select("last_opened_at").eq("user_id", user.id).maybeSingle(),
+  ]);
 
-  if (user) {
-    // prefs 与 actions 互不依赖 → 并行，砍掉一次串行 RTT（recall 依赖 prefs，仍排其后）。
-    const [prefsRes, actsRes] = await Promise.all([
-      supabase.from("user_preferences").select("*").eq("user_id", user.id).single(),
-      supabase.from("job_actions").select("*").eq("user_id", user.id),
-    ]);
-    preferences = prefsRes.data as UserPreferences | null;
-    actions = (actsRes.data as JobAction[]) || [];
+  const profile = buildRadarProfile(
+    user.id,
+    prefsRes.data as UserPreferences | null,
+    candRes.data as CandidateProfile | null,
+  );
+  const readiness = profileReadiness(profile);
+
+  // 画像不完整 → onboarding（不展示任何岗位）
+  if (!readiness.ready) {
+    return (
+      <div className="min-h-screen bg-editorial">
+        <Navbar />
+        <ProductPage>
+          <ProductHero eyebrow={HERO.eyebrow} title={HERO.title} description={HERO.description} icon={Broadcast} />
+          <section className="mt-8">
+            <OnboardingPanel missingContent={readiness.missingContent} missingLocation={readiness.missingLocation} />
+          </section>
+        </ProductPage>
+      </div>
+    );
   }
 
-  // 偏好预筛 + 最新兜底两段召回（取代旧的盲取最新 200 条，详见 recallTodayJobs）。
-  // 偏好此前只参与排序、未参与召回，导致看板被最后爬完的大厂批量岗位刷屏。
-  const jobs = await recallTodayJobs(supabase, preferences);
-
-  // 用户填了任一偏好信号（城市 / 职位 / 关键词 / 公司）→ 开启相关性硬门，把无关兜底岗剔出看板。
-  const hasPrefSignal =
-    !!preferences &&
-    (preferences.target_roles || []).length +
-      (preferences.target_keywords || []).length +
-      (preferences.target_companies || []).length +
-      (preferences.target_locations || []).length >
-      0;
-
-  const scored = sortAndFilterJobs(
-    (jobs as Job[]) || [],
-    preferences,
+  // 画像就绪 → SSR 构建机会 Feed（先渲染，radar/open 由客户端首渲后异步记录，不提前清零当次新增）
+  const now = new Date();
+  const actions = (actsRes.data as JobAction[]) || [];
+  const radarState = (stateRes.data as { last_opened_at: string | null } | null) ?? null;
+  const { intensity } = resolveIntensityForUser(
+    prefsRes.data as UserPreferences | null,
+    radarState,
     actions,
-    {
-      showIgnored: false,
-      showApplied: false,
-      limit: preferences?.daily_limit || 20,
-      requireRelevance: hasPrefSignal,
-    },
+    profile.targetCompanies.length > 0,
+    now,
   );
 
-  const allScored = sortAndFilterJobs(
-    (jobs as Job[]) || [],
-    preferences,
-    actions,
-    { showIgnored: true, showApplied: true, requireRelevance: hasPrefSignal },
-  );
-
-  // 「今日新增」从已过相关性门的集合里数，避免兜底里的无关新岗把这个指标刷虚高。
-  const newCount = allScored.filter((j) => {
-    if (!j.first_seen_at) return false;
-    return (Date.now() - new Date(j.first_seen_at).getTime()) / 86400000 <= 3;
-  }).length;
-
-  const highMatchCount = scored.filter(
-    (j) => matchTier(j.match_score).level === "high",
-  ).length;
-  const savedCount = allScored.filter((j) => j.user_action === "saved").length;
-  const appliedCount = allScored.filter((j) => j.user_action === "applied").length;
-  const ignoredCount = allScored.filter((j) => j.user_action === "ignored").length;
+  let feed: OpportunityFeed | null = null;
+  try {
+    feed = await buildOpportunityFeed(supabase, profile, actions, radarState, { surface: "today", intensity, now });
+  } catch (e) {
+    console.error("[today] feed build failed:", (e as Error).message);
+  }
 
   return (
     <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage>
-        <ProductHero
-          eyebrow="今日看板"
-          title="官方岗位的每日优先队列"
-          description="根据你的偏好和简历画像排序，隐藏已忽略和已投递岗位，把今天最值得看的官方机会放在前面。"
-          icon={Broadcast}
-          action={
-            <div className="rounded-2xl border border-black/[0.07] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-4 py-3 text-[14px] font-medium text-[#5f594e] dark:text-[#b6ad9d]">
-              显示上限 {preferences?.daily_limit || 20} 个岗位
+        <ProductHero eyebrow={HERO.eyebrow} title={HERO.title} description={HERO.description} icon={Broadcast}>
+          {feed && (
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+              <MetricTile icon={Sparkle} label="关键提醒" value={feed.counts.critical} tone="sky" />
+              <MetricTile icon={Crosshair} label="对口机会" value={feed.counts.main} tone="lime" />
+              <MetricTile
+                icon={CheckCircle}
+                label="最近确认仍在招"
+                value={feed.counts.by_signal.STILL_OPEN ?? 0}
+                tone="white"
+              />
             </div>
-          }
-        >
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-            <MetricTile icon={Sparkle} label="今日新增" value={newCount} tone="sky" />
-            <MetricTile icon={Crosshair} label="高匹配" value={highMatchCount} tone="lime" />
-            <MetricTile icon={BookmarkSimple} label="已收藏" value={savedCount} tone="white" />
-            <MetricTile icon={CheckCircle} label="已投递" value={appliedCount} tone="orange" />
-            <MetricTile icon={EyeSlash} label="已忽略" value={ignoredCount} tone="muted" />
-          </div>
+          )}
         </ProductHero>
 
         <section className="mt-8">
-          {scored.length === 0 ? (
+          {!feed ? (
             <EmptyPanel
-              title="暂无可展示岗位"
-              description="等待 crawler 抓取新岗位，或检查偏好设置是否过窄。你也可以到岗位库刷新已知官方源。"
+              title="机会队列暂时无法更新"
+              description="机会队列暂时无法更新，请稍后重试。你的偏好和历史操作没有丢失。"
             />
           ) : (
-            <div className="space-y-3">
-              <TodayClient initialJobs={scored as ScoredJob[]} />
-            </div>
+            <TodayClient feed={feed} />
           )}
         </section>
       </ProductPage>

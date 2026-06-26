@@ -87,16 +87,11 @@ jobs:
           CRAWL_DETAIL_CAP: "0"
           CRAWL_CONCURRENCY: "10"
 
-      # 死活巡检：与每日抓新岗同步跑——复检 active 岗，源站撤岗(404/410 / hotjob state=1017 / wt req_state=9501)
-      # → status='expired'。httpx 类、按 enrich_checked_at 最旧轮转、限量（~5 天轮转完整库一遍），
-      # 治「岗位关闭后没人下架→点开页面不存在」。失败不阻断抓取（continue-on-error）。
-      # 监控：看本 step 日志的 expired/miss/err 比例；若 miss 偏高（hotjob 单 host 限流）再调 workers/per-host。
-      - name: Liveness sweep (expire dead jobs)
-        if: ${{ github.event.inputs.mode != 'discovery' && github.event.inputs.mode != 'company_refresh' }}
-        timeout-minutes: 65
-        working-directory: crawler
-        run: python enrich_backlog.py --sweep --limit ${{ github.event.inputs.sweep_limit || '12000' }} --workers 8
-        continue-on-error: true
+      # 发现/保鲜分流（02 spec §2）：daily-crawl 只管「发现」（抓列表/更新字段），**不再背内联 sweep**。
+      # 保鲜（逐岗核验撤岗→expired）由独立工作流按 SLA 调频承担、与发现解耦、互不挤预算：
+      #   · httpx 源 → liveness-sweep.yml（独立定时，按 adapter 分片、max-parallel 护连接）
+      #   · SPA 浏览器源 → dead-link-audit.yml（6 分片轮转底盘）+ dead-link-audit-new.yml（新岗高频小批 --prioritize-new）
+      # 二者通过 jobs 表解耦，不新增队列系统。
 
       # 按需「浏览器发现」/「刷新公司库」：DISCOVERY_* 触发 discovery.run_from_env（按 mode 路由到
       # run_discovery / run_company_refresh），跑完即退。company_refresh 的 scope 走 DB diagnostics，
