@@ -21,12 +21,10 @@ export interface RecallResult {
 }
 
 const SEVEN_DAYS_MS = 7 * 86_400_000;
-// ⚠️ 生产事故修复（2026-06-26）：宽画像用户（多 role/keyword + 同义词扩展 → 命中超集撞 limit）的召回
-// 把 4000 行 × 500 字 summary（CJK 多字节 ≈ 9MB）**跨区**（Vercel→香港库）传输 >15s，撞 pg 池
-// statement_timeout(15s) → 「canceling statement due to statement timeout」→ buildOpportunityFeed 抛 →
-// today 页 feed=null → 「机会队列暂时无法更新」。查询本身 150ms（EXPLAIN 实测），慢在跨区**传输载荷**。
-// 修：进一步压载荷（summary 300 + 行数 1500 ≈ 2.7MB，~3.3x 缩量）。匹配仍看 title + 前 300 字（FTS 已全文预筛）；
-// 候选取「近 7 天最新 1500」对填 ~30 张卡绰绰有余，capped 诚实。配合 client.ts statement_timeout 抬到 25s 兜底。
+// 召回载荷调优（2026-06-26）：summary 截 300 + 行数 1500（≈ 2.7MB）。**注**：这只是性能优化，不是 503 事故的根因——
+// 真因是 node-pg 时间列返回 Date 对象打挂 Feed 排序（见 jobs-store/client.ts type parser），跟载荷无关
+// （生产实测召回 1500 行仅 3s）。但小载荷让 today SSR 更快、跨区更稳，故保留：匹配仍看 title + 前 300 字
+// （search_doc 已全文 FTS 预筛，关键词必在全文）；候选取「近 7 天最新 1500」对填 ~30 张卡绰绰有余，capped 诚实。
 const SUMMARY_TRUNC = 300;
 const BRANCH_LIMIT = 1500;
 

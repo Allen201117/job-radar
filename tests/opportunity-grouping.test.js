@@ -38,6 +38,22 @@ test("STILL_OPEN 高分进 main", () => {
   assert.equal(sections.critical.length, 0);
 });
 
+test("回归：firstSeenAt 为 Date 对象（node-pg 时间列）不打挂排序（2026-06-26 事故）", () => {
+  // 生产 node-pg 把 timestamptz 解析成 Date 对象 → 旧 cmpFirstSeenDesc 直接 .localeCompare 抛 TypeError。
+  // 现 String() 兜底（+ client.ts type parser 根治）→ 同分按时间倒序，不抛。
+  const opps = [
+    opp({ id: "old", score: 80, firstSeenAt: new Date("2026-05-01T00:00:00Z") }),
+    opp({ id: "new", score: 80, firstSeenAt: new Date("2026-06-20T00:00:00Z") }),
+  ];
+  let sections;
+  assert.doesNotThrow(() => {
+    ({ sections } = groupOpportunities(opps, { dailyLimit: 20, intensity: "active" }));
+  });
+  // 同分 → firstSeenAt 倒序：新的在前
+  assert.equal(sections.main[0].job.id, "new");
+  assert.equal(sections.main[1].job.id, "old");
+});
+
 test("关键提醒：isCritical 进 critical 区，不被 main 截断、置顶", () => {
   const crits = Array.from({ length: 12 }, () =>
     opp({ signal: "CLOSED_OR_STALE", critical: true, score: 100 })
