@@ -29,7 +29,10 @@ function primaryOf(o: Opportunity): OpportunitySignal | null {
   return o.signals.length ? o.signals[0] : null;
 }
 function cmpFirstSeenDesc(a: Opportunity, b: Opportunity): number {
-  return (b.firstSeenAt || "").localeCompare(a.firstSeenAt || "");
+  // String() 兜底：firstSeenAt 正常是 ISO 字符串，但若上游传来 Date 对象（node-pg 时间列默认解析）
+  // 直接 .localeCompare 会抛 TypeError（2026-06-26 事故）。根因已在 jobs-store/client.ts 用 type parser 修，
+  // 这里再裹一层 String 作防御，杜绝任何时间列类型漂移把整个 Feed 排序打挂。
+  return String(b.firstSeenAt || "").localeCompare(String(a.firstSeenAt || ""));
 }
 function byScore(a: Opportunity, b: Opportunity): number {
   return b.score - a.score || cmpFirstSeenDesc(a, b);
