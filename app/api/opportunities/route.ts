@@ -8,6 +8,8 @@ import { buildOpportunityFeed } from "@/lib/opportunities/service";
 import type { UserPreferences, CandidateProfile, JobAction } from "@/lib/types";
 
 export const runtime = "nodejs";
+// 须 ≥ jobs 池 statement_timeout(25s)，同 today 页：慢召回要能以 503 feed_unavailable 返回，而非函数被杀。
+export const maxDuration = 30;
 
 export async function GET() {
   const auth = await requireUser();

@@ -25,7 +25,10 @@ function makePool(): Pool {
     max: 5,
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 8_000,
-    statement_timeout: 15_000,
+    // 跨区（Vercel→香港）大结果集传输会占 statement_timeout（服务器发送被慢客户端阻塞也计时）。
+    // 15s 对宽画像召回的跨区传输偏紧（2026-06-26 生产事故根因）→ 抬到 25s 兜底；主修是压召回载荷
+    // （opportunities.ts 已把 4000×500→1500×300）。消费方页/路由 maxDuration 须 ≥ 此值，否则函数先被杀、错误不被 catch。
+    statement_timeout: 25_000,
   });
   // 失效连接（ETIMEDOUT / Connection terminated unexpectedly）会触发 idle client error。
   // 挂 handler：pg 会驱逐这条坏连接、进程不崩，避免坏连接长期留在池里导致后续请求持续失败（P0-1 §7）。
