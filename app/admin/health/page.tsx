@@ -2,9 +2,11 @@ import Navbar from "@/components/Navbar";
 import { MetricTile, ProductHero, ProductPage } from "@/components/ProductChrome";
 import {
   buildDailyReports,
+  computeClickValidityMetrics,
   evaluateTodayHealth,
   formatPercent,
   normalizeCrawlSources,
+  type ClickValidityMetrics,
   type CrawlSourceRow,
   type DailyReport,
   type OpsRunAggregateRow,
@@ -72,6 +74,24 @@ async function loadSupabaseHealth(): Promise<SupabaseHealthSnapshot> {
   const { data, error } = await service.rpc("admin_health_snapshot", { p_window: "7 days" });
   if (error) throw new Error(error.message);
   return (data || {}) as SupabaseHealthSnapshot;
+}
+
+// 点击有效率四护栏（01 spec §5）：近 7 天 opportunity_official_opened + job_liveness_at_click 聚合。
+async function loadClickValidity(): Promise<ClickValidityMetrics> {
+  const service = createServiceClient();
+  const since = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+  const { data, error } = await service
+    .from("events")
+    .select("event, payload")
+    .in("event", ["opportunity_official_opened", "job_liveness_at_click"])
+    .gte("created_at", since)
+    .limit(10000);
+  if (error) throw new Error(error.message);
+  return computeClickValidityMetrics((data || []) as Array<{ event?: unknown; payload?: unknown }>);
+}
+
+function formatRate(rate: number | null): string {
+  return rate == null ? "—" : `${(rate * 100).toFixed(1)}%`;
 }
 
 function Section({
@@ -256,9 +276,10 @@ export default async function AdminHealthPage() {
     redirect("/");
   }
 
-  const [jobsResult, supabaseResult] = await Promise.allSettled([
+  const [jobsResult, supabaseResult, clickResult] = await Promise.allSettled([
     getJobsHealthSnapshot(),
     loadSupabaseHealth(),
+    loadClickValidity(),
   ]);
 
   if (jobsResult.status === "rejected") {
@@ -267,9 +288,13 @@ export default async function AdminHealthPage() {
   if (supabaseResult.status === "rejected") {
     console.error("[admin-health] supabase snapshot failed:", supabaseResult.reason);
   }
+  if (clickResult.status === "rejected") {
+    console.error("[admin-health] click validity failed:", clickResult.reason);
+  }
 
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
+  const clickValidity = clickResult.status === "fulfilled" ? clickResult.value : null;
   const crawlSources = normalizeCrawlSources(operations?.crawl_sources);
   const reports = buildDailyReports({
     crawl: operations?.today?.crawl || null,
@@ -464,6 +489,77 @@ export default async function AdminHealthPage() {
                 </div>
               )}
             </div>
+          </Section>
+
+          <Section
+            title="点击有效率（护城河指标）"
+            description="用户点开官网那刻，岗位是否还在招。四个数必须一起看——只报「可探源 99%」会偷窄分母（最难的 SPA 不进分母）。"
+          >
+            {!clickValidity ? (
+              <ErrorPanel label="点击有效率" />
+            ) : clickValidity.totalOpens === 0 && clickValidity.livenessTotal === 0 ? (
+              <AccumulatingMetric
+                title="点击有效率"
+                description="需要先持续记录用户点开官网（opportunity_official_opened）和点击核验（job_liveness_at_click）事件，数据稳定后展示。"
+              />
+            ) : (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <RatioCard
+                    label="可探源点击有效率"
+                    value={formatRate(clickValidity.probeValidityRate)}
+                    detail={`点开后岗位仍在招的比例（仅 wt/hotjob/workday 等可探源；分母排除 unknown）。目标 ≥99%。样本 ${formatCount(clickValidity.alive + clickValidity.dead)}。`}
+                    warning={clickValidity.probeValidityRate != null && clickValidity.probeValidityRate < 0.99}
+                  />
+                  <RatioCard
+                    label="点击核验覆盖率"
+                    value={formatRate(clickValidity.coverageRate)}
+                    detail={`有核验结果的点击 / 总点击 ${formatCount(clickValidity.totalOpens)}。太低说明上面的 99% 没代表性。`}
+                    warning={clickValidity.coverageRate != null && clickValidity.coverageRate < 0.5}
+                  />
+                  <RatioCard
+                    label="unknown 占比"
+                    value={formatRate(clickValidity.unknownRate)}
+                    detail={`探不动（unknown）/ 总核验 ${formatCount(clickValidity.livenessTotal)}。越高说明越多源探不动，靠后台审计兜底。`}
+                    warning={clickValidity.unknownRate != null && clickValidity.unknownRate > 0.3}
+                  />
+                  <RatioCard
+                    label="SPA 源死岗抽检率"
+                    value="—"
+                    detail="不可探源（飞书/Moka/北森等）的真实死岗比例，来自审计抽样，非点击事件——待审计流水线接入。"
+                  />
+                </div>
+                {clickValidity.byAdapter.length > 0 && (
+                  <div className="mt-5 overflow-auto rounded-2xl border border-black/[0.07] dark:border-white/[0.1]">
+                    <table className="w-full min-w-[480px] text-left text-sm">
+                      <thead className="bg-[#f4efe6] text-xs text-[#8a8275] dark:bg-[#1c1813] dark:text-[#9a9184]">
+                        <tr>
+                          <th className="px-4 py-3 font-medium">来源</th>
+                          <th className="px-4 py-3 text-right font-medium">仍在招</th>
+                          <th className="px-4 py-3 text-right font-medium">已关闭</th>
+                          <th className="px-4 py-3 text-right font-medium">探不动</th>
+                          <th className="px-4 py-3 text-right font-medium">有效率</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {clickValidity.byAdapter.map((a) => (
+                          <tr
+                            key={a.adapter}
+                            className="border-t border-black/[0.05] text-[#3f3a33] dark:border-white/[0.08] dark:text-[#d9d0c2]"
+                          >
+                            <td className="px-4 py-3 font-medium">{a.adapter}</td>
+                            <td className="px-4 py-3 text-right tabular-nums">{a.alive}</td>
+                            <td className="px-4 py-3 text-right tabular-nums">{a.dead}</td>
+                            <td className="px-4 py-3 text-right tabular-nums">{a.unknown}</td>
+                            <td className="px-4 py-3 text-right font-semibold tabular-nums">{formatRate(a.validityRate)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
           </Section>
 
           <Section

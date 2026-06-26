@@ -96,9 +96,9 @@ export default async function JobsPage() {
       <Navbar />
       <ProductPage>
         <ProductHero
-          eyebrow="岗位库"
-          title="官方岗位检索与发现"
-          description="从本地岗位库开始，按需刷新已知官网源，必要时再发现新的官方招聘入口。"
+          eyebrow="搜索岗位"
+          title="探索完整官方岗位库"
+          description="按公司、城市、岗位方向和条件主动搜索。每日推荐请回到「今日机会」。"
           icon={Database}
           align="start"
           action={

@@ -101,13 +101,40 @@ export async function updateJobSummaryById(id: string, summary: string): Promise
   return rows.length > 0;
 }
 
-/** 点击时校验门：探活确认撤岗 → 置 expired + 盖探活戳（仅当前还是 active 才动；幂等）。返回是否命中。 */
+// job_events best-effort 写入（与 crawler/jobs_db.record_job_events 同口径；02 spec §5/§9）：
+// append-only 里程碑，event_key 幂等去重；写失败只 warning，**绝不影响主写入**。
+async function recordJobEvent(
+  eventKey: string,
+  eventType: string,
+  jobId: string,
+  sourceId: string | null,
+): Promise<void> {
+  try {
+    await jobsQuery(
+      "insert into job_events (event_key, event_type, job_id, source_id, payload) " +
+        "values ($1, $2, $3::uuid, $4, '{}'::jsonb) on conflict (event_key) do nothing",
+      [eventKey, eventType, jobId, sourceId],
+    );
+  } catch (e) {
+    console.warn("[job_events] insert failed (ignored):", (e as Error).message);
+  }
+}
+
+function utcDay(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** 点击时校验门：探活确认撤岗 → 置 expired + 盖探活戳 + 记确认下架时刻（仅当前还是 active 才动；幂等）。 */
 export async function markJobExpiredById(id: string): Promise<boolean> {
-  const rows = await jobsQuery(
-    "update jobs set status = 'expired', enrich_checked_at = now() where id = $1::uuid and status = 'active' returning id",
+  const rows = await jobsQuery<{ id: string; source_id: string | null }>(
+    "update jobs set status = 'expired', enrich_checked_at = now(), confirmed_closed_at = now() " +
+      "where id = $1::uuid and status = 'active' returning id, source_id",
     [id],
   );
-  return rows.length > 0;
+  if (!rows.length) return false;
+  // 确认下架 → CLOSED 里程碑（按天去重）。best-effort，不阻塞、不影响 expire 结果。
+  await recordJobEvent(`CLOSED:${id}:${utcDay()}`, "CLOSED", id, rows[0].source_id ?? null);
+  return true;
 }
 
 /** 点击时校验门：探活确认仍在招 → 只盖探活戳（不动 status/summary），让后台轮转少走一遍。 */

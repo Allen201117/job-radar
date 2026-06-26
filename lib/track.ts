@@ -56,22 +56,51 @@ export function normalizeEventName(event: unknown): string | null {
   return trimmed;
 }
 
-// 把任意 payload 收敛成可 JSON 序列化的纯对象：
-// 非对象/数组/null → {}；丢弃不可序列化值；超 MAX_PAYLOAD_BYTES → {}（防滥用）。
+// Spec §13.1 禁止进入 events payload 的字段（PII / 可识别内容）。在**入库边界**统一递归剔除，
+// 即便调用方误传、或 /api/events 收到任意 key，也不会落库。键名做归一（去空白、小写、-/空格→_）后比对。
+const FORBIDDEN_EVENT_PAYLOAD_KEYS = new Set([
+  "email",
+  "user_email",
+  "contact_email",
+  "resume",
+  "resume_text",
+  "raw_resume",
+  "reason_text",
+  "title",
+  "job_title",
+  "company",
+  "company_name",
+  "jd_url",
+  "skills",
+]);
+
+function stripForbiddenPayloadFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripForbiddenPayloadFields);
+  if (value == null || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    const normalized = key.trim().toLowerCase().replace(/[\s-]+/g, "_");
+    if (FORBIDDEN_EVENT_PAYLOAD_KEYS.has(normalized)) continue;
+    out[key] = stripForbiddenPayloadFields(item);
+  }
+  return out;
+}
+
+// 把任意 payload 收敛成可 JSON 序列化的纯对象：非对象/数组/null → {}；
+// 先序列化(丢不可序列化值) → **递归剔除禁用字段** → 超 MAX_PAYLOAD_BYTES → {}（防滥用）。
 export function sanitizePayload(payload: unknown): Record<string, unknown> {
   if (payload == null || typeof payload !== "object" || Array.isArray(payload)) {
     return {};
   }
-  let safe: unknown;
   try {
-    const serialized = JSON.stringify(payload);
-    if (serialized.length > MAX_PAYLOAD_BYTES) return {};
-    safe = JSON.parse(serialized);
+    const serializable = JSON.parse(JSON.stringify(payload));
+    const safe = stripForbiddenPayloadFields(serializable);
+    if (safe == null || typeof safe !== "object" || Array.isArray(safe)) return {};
+    if (JSON.stringify(safe).length > MAX_PAYLOAD_BYTES) return {};
+    return safe as Record<string, unknown>;
   } catch {
     return {};
   }
-  if (safe == null || typeof safe !== "object" || Array.isArray(safe)) return {};
-  return safe as Record<string, unknown>;
 }
 
 export function bucketLatency(milliseconds: number): ResumeDiagnostics["latency_bucket"] {

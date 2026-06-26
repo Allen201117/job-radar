@@ -2,10 +2,12 @@
 
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import JobCard from "@/components/JobCard";
 import JobFilters from "@/components/JobFilters";
 import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
+import { MANUAL_CRAWL_UI_ENABLED } from "@/lib/product-flags";
 import type { ScoredJob } from "@/lib/types";
 import { useJobFilters } from "@/hooks/useJobFilters";
 import {
@@ -30,28 +32,15 @@ type PrimaryAction = "saved" | "ignored" | "applied";
 
 interface Props {
   initialJobs: ScoredJob[];
-  // 活跃岗位总数（SSR 查得）；前端据此后台分块拉完剩余岗位（解除展示硬上限）。
   initialTotal: number;
-  // 从用户已保存偏好预填的筛选初值（城市/类型/关键词）；用户手动改即覆盖。
   initialFilters?: { city?: string; jobType?: string; keyword?: string };
 }
 
 export default function JobsClient({ initialJobs, initialTotal, initialFilters }: Props) {
+  // officialJobs = 高级工具「刷新/发掘」带回的新岗位（默认 UI 隐藏时恒为空）；仍参与 useJobFilters 合并。
   const [officialJobs, setOfficialJobs] = useState<ScoredJob[]>([]);
-  // 本次搜索/发现完成后默认只看新岗位；用户可切回「查看全部」
   const [onlyNew, setOnlyNew] = useState(false);
-  const [searchInfo, setSearchInfo] = useState("");
-  // 公司下拉项：服务端筛选后不能再从「已加载岗位」派生（会只剩几家），改从专用接口取全量 ~500+ 家。
   const [companies, setCompanies] = useState<string[]>([]);
-  // 「查已有岗位」点击加载态：即使秒出也显式可见（最短展示一段时间），与另两个检索一致。
-  const [existingBusy, setExistingBusy] = useState(false);
-  const existingBusyUntil = useRef(0);
-  // 三个检索的「显式完成提示」：完成后弹一条带本轮结果概要的横幅（可手动关闭）。
-  const [result, setResult] = useState<RetrievalResult | null>(null);
-  // 标记本次 loading 结束源于用户点「查已有岗位」（而非筛选防抖自动搜），只为它弹完成提示。
-  const pendingLocalResult = useRef(false);
-  // 当前激活的检索方式：用于三个搜索入口的绿色「选中态」。
-  const [activeSearch, setActiveSearch] = useState<"local" | "known" | "discover" | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -72,7 +61,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     };
   }, []);
 
-  // 筛选 + 分页改由服务端 /api/jobs/search 跑（库已 10万+，前端不再全量加载）；匹配逻辑复用 lib/job-filter。
+  // 筛选 + 分页由服务端 /api/jobs/search 跑；匹配逻辑复用 lib/job-filter。
   const {
     filters,
     setFilters,
@@ -91,48 +80,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     newMatching,
   } = useJobFilters({ officialJobs, onlyNew, initialFilters, initialJobs, initialTotal });
 
-  // 「更新关注公司 / 扩大官方搜索范围」状态机 + 轮询 + 持久化 + 超时（整体在 hook 内）。
-  const { discovery, refreshing, discoveryActive, refreshActive, discoverActive, startDiscovery, startRefresh } =
-    useDiscoveryPoll({ filters, setOfficialJobs, setSearchInfo, setResult });
-
-  // 收起「查已有岗位」加载态：底层搜索结束且最短可见时间已到才停 spinner。
-  useEffect(() => {
-    if (!existingBusy || loading) return;
-    const remain = Math.max(0, existingBusyUntil.current - Date.now());
-    const t = setTimeout(() => setExistingBusy(false), remain);
-    return () => clearTimeout(t);
-  }, [existingBusy, loading]);
-
-  // 「查已有岗位」完成提示：仅当本次 loading 结束源于用户点击（pendingLocalResult）时弹，
-  // 不打扰筛选防抖触发的后台自动搜。读结束时的 total/exactCount 概要本轮结果。
-  useEffect(() => {
-    if (!pendingLocalResult.current || loading) return;
-    pendingLocalResult.current = false;
-    const related = Math.max(0, total - exactCount);
-    setResult(
-      total > 0
-        ? {
-            kind: "local",
-            tone: "success",
-            title: "查已有岗位 · 完成",
-            detail: `在已收录岗位里匹配到 ${total} 个${
-              filters.keyword ? `（精确 ${exactCount} · 相关 ${related}）` : ""
-            }，已展示 ${displayJobs.length} 个。`,
-          }
-        : {
-            kind: "local",
-            tone: "empty",
-            title: "查已有岗位 · 完成",
-            detail:
-              "当前筛选没有命中已收录岗位；可放宽条件，或用下方「发掘新公司」联网去官网找。",
-          },
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading]);
-
-  // P3 on-demand 富化：给用户当下看到的薄卡（无 summary）即时补 JD 正文。
-  // 只发 jd_url，服务端只补简单 httpx 源（workday/hotjob）；其余/浏览器源留给后台 drain。
-  // overlay 覆盖式打补丁（不改各 job 列表），requested ref 防重复请求/死循环。
+  // P3 on-demand 富化：给当下看到的薄卡即时补 JD 正文。
   const [summaryOverlay, setSummaryOverlay] = useState<Record<string, string>>({});
   const enrichRequested = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -170,8 +118,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayJobs]);
 
-  // 展示时校验（②层）：给当下看到的岗位异步探活，死的当场从看板隐藏（不等用户点）。
-  // 只探可探的源(wt/hotjob/workday)，服务端跳过 24h 内刚探过的；requested ref 防重复请求。
+  // 展示时校验（②层）：给当下看到的岗位异步探活，死的当场隐藏。
   const [deadIds, setDeadIds] = useState<Set<string>>(new Set());
   const livenessRequested = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -198,7 +145,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
           });
         }
       } catch {
-        // 静默：探不动就不动，点击门 + 后台扫兜底
+        // 静默：探不动就不动，后台扫兜底
       }
     })();
     return () => {
@@ -207,22 +154,15 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayJobs]);
 
-  // 一键放宽城市 + 岗位类型（保留关键词），让本次发现的岗位可见。
+  // 一键放宽城市 + 岗位类型（保留关键词）
   function relaxLocationAndType() {
     setFilters((f) => ({ ...f, city: "", jobType: "" }));
     setOnlyNew(true);
   }
 
-  function handleExistingJobsSearch() {
-    track("search", { keyword: filters.keyword || "" });
-    setOfficialJobs([]);
+  function broadenFilters() {
+    setFilters((f) => ({ ...f, city: "", jobType: "", keyword: "" }));
     setOnlyNew(false);
-    setSearchInfo("");
-    setResult(null); // 清掉上一轮完成提示
-    pendingLocalResult.current = true; // 本次搜索结束后弹「查已有岗位 · 完成」
-    existingBusyUntil.current = Date.now() + 600; // 最短可见 600ms：秒出也有显式加载态
-    setExistingBusy(true);
-    refresh();
   }
 
   function handleActionChange(jobId: string, action: PrimaryAction | null) {
@@ -233,11 +173,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
               ...job,
               user_action: action,
               hidden_reason:
-                action === "ignored"
-                  ? "ignored"
-                  : action === "applied"
-                    ? "applied_by_default"
-                    : null,
+                action === "ignored" ? "ignored" : action === "applied" ? "applied_by_default" : null,
             }
           : job,
       ),
@@ -248,82 +184,42 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
   return (
     <div className="space-y-5">
       <JobFilters filters={filters} onChange={setFilters} companies={companies} />
-      <div className="surface p-4 text-[#1a1714] dark:text-[#f3ecdf] sm:p-5">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold text-[#3f3a33] dark:text-[#d9d0c2]">
-          <MagnifyingGlass size={16} weight="bold" aria-hidden="true" />
-          找岗位
-        </div>
-        <p className="mt-1.5 text-xs leading-5 text-[#9a9184] dark:text-[#837c70]">
-          已用你保存的求职偏好作为默认搜索范围；改上方筛选条件即可调整。
-        </p>
-        {/* 三个搜索入口平行排列；当前激活的那个亮绿色「选中态」。
-            查已有=秒出不联网（默认）；另两个=联网约 1–5 分钟。 */}
-        <div className="mt-3 grid gap-3 sm:grid-cols-3">
-          <ActionTile
-            icon={Database}
-            label={existingBusy ? "查找中…" : "查已有岗位"}
-            hint="已收录岗位里即时检索 · 不联网 · 秒出"
-            tooltip="在已经收录入库的岗位里，按上方筛选条件即时检索，不发起任何联网请求，瞬时返回。"
-            accent="bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-            onClick={() => {
-              setActiveSearch("local");
-              handleExistingJobsSearch();
-            }}
-            busy={existingBusy}
-            selected={activeSearch === "local"}
-          />
-          <ActionTile
-            icon={ArrowsClockwise}
-            label={refreshing || refreshActive ? "刷新中…" : "刷新对口公司"}
-            hint="去和你对口的公司官网重抓新岗位 · 约 1–5 分钟"
-            tooltip="后台重新抓取「和你偏好/筛选对口的公司」官方招聘页（含需要浏览器的源），有新岗位会自动进列表。没填筛选时按你保存的求职偏好来。约 1–5 分钟。"
-            accent="bg-[#dbe9fa] text-[#2f6299] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]"
-            onClick={() => {
-              setActiveSearch("known");
-              startRefresh();
-            }}
-            disabled={refreshing || discoveryActive}
-            busy={refreshing || refreshActive}
-            selected={activeSearch === "known"}
-          />
-          <ActionTile
-            icon={Compass}
-            label={discoverActive ? "发掘中…" : "发掘新公司"}
-            hint="去库里还没有的公司官网找岗位（需关键词）· 约 1–5 分钟"
-            tooltip="用浏览器去抓「库里还没收录的新公司」官方招聘站，并补全职位描述。需要先在上方填「关键词」。约 1–5 分钟。"
-            accent="bg-[#e7def4] text-[#6a4fa0] dark:bg-[#b9a3e0]/[0.15] dark:text-[#b9a3e0]"
-            onClick={() => {
-              setActiveSearch("discover");
-              startDiscovery();
-            }}
-            disabled={refreshing || discoveryActive || !filters.keyword}
-            busy={discoverActive}
-            selected={activeSearch === "discover"}
-          />
-        </div>
-        {!filters.keyword && (
-          <p className="mt-2 px-1 text-xs leading-5 text-[#9a9184] dark:text-[#837c70]">
-            「发掘新公司」需先在上方填「关键词」。
-          </p>
-        )}
-        {searchInfo && (
-          <p className="mt-3 rounded-2xl border border-black/[0.06] dark:border-white/[0.1] bg-[#f6f3ec] dark:bg-[#1c1813] px-3.5 py-2.5 text-pretty text-sm leading-6 text-[#5f594e] dark:text-[#b6ad9d]">
-            {searchInfo}
-          </p>
-        )}
-      </div>
-      {result && (
-        <RetrievalDoneBanner result={result} onDismiss={() => setResult(null)} />
-      )}
-      {discoveryActive && <BrowserDiscoveryProgress discovery={discovery} />}
 
+      {/* 搜索说明 + 手动搜索按钮（取代旧三磁贴；筛选变化已自动搜，这里手动重试）。 */}
+      <div className="flex flex-col gap-3 surface p-4 text-[#1a1714] dark:text-[#f3ecdf] sm:flex-row sm:items-center sm:justify-between sm:p-5">
+        <p className="text-xs leading-5 text-[#9a9184] dark:text-[#837c70]">
+          已用你保存的求职偏好作为默认搜索范围；改上方筛选条件即可调整。每日推荐请回到「今日机会」。
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            track("search", { keyword: filters.keyword || "" });
+            refresh();
+          }}
+          disabled={loading}
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full bg-[#1a1714] px-5 py-2.5 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+        >
+          {loading ? (
+            <CircleNotch size={16} weight="bold" className="animate-spin" aria-hidden="true" />
+          ) : (
+            <MagnifyingGlass size={16} weight="bold" aria-hidden="true" />
+          )}
+          搜索
+        </button>
+      </div>
+
+      {/* 故障回滚专用：高级手动抓取工具（默认隐藏，NEXT_PUBLIC_MANUAL_CRAWL_UI=true 才渲染）。 */}
+      {MANUAL_CRAWL_UI_ENABLED && (
+        <AdvancedCrawlTools filters={filters} setOfficialJobs={setOfficialJobs} />
+      )}
+
+      {/* 高级工具带回的新增岗位提示（默认 UI 下 officialJobs 恒空，不渲染）。 */}
       {officialJobs.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-[#cfe6b0] dark:border-[#a3d06a]/[0.30] bg-[#eef6e0] dark:bg-[#a3d06a]/[0.15] px-3.5 py-2.5 text-sm">
           <Sparkle size={16} weight="fill" className="text-[#6f9a3a] dark:text-[#a3d06a]" aria-hidden="true" />
           <span className="font-medium text-[#4f6f2a] dark:text-[#a3d06a]">
             本次新增 {officialJobs.length} 个新岗位
-            {(filters.city || filters.jobType || filters.keyword) &&
-            newMatching.length !== officialJobs.length
+            {(filters.city || filters.jobType || filters.keyword) && newMatching.length !== officialJobs.length
               ? `，其中 ${newMatching.length} 个合你当前筛选`
               : "（绿色标记）"}
           </span>
@@ -356,8 +252,6 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
         </div>
       )}
 
-      {/* 信息行：移动端长句会折成多行 → 用 flex items-start + rounded-2xl（而非 inline-flex rounded-full，
-          否则多行文字会被撑成丑陋的胶囊形），图标顶对齐随首行。 */}
       <p className="flex items-start gap-2 rounded-2xl border border-black/[0.06] dark:border-white/[0.1] bg-white/55 dark:bg-white/[0.05] px-3.5 py-2.5 text-sm leading-6 text-[#5f594e] dark:text-[#b6ad9d]">
         <MagnifyingGlass size={16} weight="bold" className="mt-0.5 shrink-0" aria-hidden="true" />
         <span>
@@ -385,8 +279,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
         {displayJobs.filter((job) => !deadIds.has(job.id)).map((job, i, arr) => {
           const tier = (job as any).__tier as "exact" | "related";
           const prevTier = i > 0 ? ((arr[i - 1] as any).__tier as string) : null;
-          const showDivider =
-            Boolean(filters.keyword) && tier === "related" && prevTier !== "related";
+          const showDivider = Boolean(filters.keyword) && tier === "related" && prevTier !== "related";
           return (
             <Fragment key={job.id}>
               {showDivider && (
@@ -440,8 +333,23 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
             <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] dark:border-white/[0.1] bg-white/45 dark:bg-white/[0.05] px-6 py-14 text-center">
               <h2 className="text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">没有匹配的岗位</h2>
               <p className="mx-auto mt-2 max-w-md text-pretty text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">
-                可以放宽筛选条件，或填关键词后用「刷新对口公司 / 发掘新公司」联网去找。
+                可以放宽筛选条件，或把目标公司加入关注，让系统持续替你监控它的官方招聘页。
               </p>
+              <div className="mt-5 flex flex-col items-center justify-center gap-3 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={broadenFilters}
+                  className="rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]"
+                >
+                  放宽筛选条件
+                </button>
+                <Link
+                  href="/preferences"
+                  className="rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]"
+                >
+                  添加关注公司
+                </Link>
+              </div>
             </div>
           ))}
       </div>
@@ -471,6 +379,62 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
   );
 }
 
+// 高级手动抓取工具（§9.3 feature flag）：只在 NEXT_PUBLIC_MANUAL_CRAWL_UI=true 时渲染。
+// useDiscoveryPoll 只在此组件内调用 —— 普通 JobsClient 不触发任何联网抓取。
+function AdvancedCrawlTools({
+  filters,
+  setOfficialJobs,
+}: {
+  filters: ReturnType<typeof useJobFilters>["filters"];
+  setOfficialJobs: React.Dispatch<React.SetStateAction<ScoredJob[]>>;
+}) {
+  const [searchInfo, setSearchInfo] = useState("");
+  const [result, setResult] = useState<RetrievalResult | null>(null);
+  const { discovery, refreshing, discoveryActive, refreshActive, discoverActive, startDiscovery, startRefresh } =
+    useDiscoveryPoll({ filters, setOfficialJobs, setSearchInfo, setResult });
+
+  return (
+    <details className="surface p-4 text-[#1a1714] dark:text-[#f3ecdf] sm:p-5">
+      <summary className="cursor-pointer text-sm font-semibold text-[#3f3a33] dark:text-[#d9d0c2]">
+        高级工具 · 手动抓取（联网，约 1–5 分钟）
+      </summary>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <ActionTile
+          icon={ArrowsClockwise}
+          label={refreshing || refreshActive ? "刷新中…" : "刷新对口公司"}
+          hint="去和你对口的公司官网重抓新岗位"
+          tooltip="后台重新抓取「和你偏好/筛选对口的公司」官方招聘页（含需要浏览器的源），有新岗位会自动进列表。"
+          accent="bg-[#dbe9fa] text-[#2f6299] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]"
+          onClick={() => startRefresh()}
+          disabled={refreshing || discoveryActive}
+          busy={refreshing || refreshActive}
+        />
+        <ActionTile
+          icon={Compass}
+          label={discoverActive ? "发掘中…" : "发掘新公司"}
+          hint="去库里还没有的公司官网找岗位（需关键词）"
+          tooltip="用浏览器去抓「库里还没收录的新公司」官方招聘站，并补全职位描述。需要先在上方填「关键词」。"
+          accent="bg-[#e7def4] text-[#6a4fa0] dark:bg-[#b9a3e0]/[0.15] dark:text-[#b9a3e0]"
+          onClick={() => startDiscovery()}
+          disabled={refreshing || discoveryActive || !filters.keyword}
+          busy={discoverActive}
+        />
+      </div>
+      {searchInfo && (
+        <p className="mt-3 rounded-2xl border border-black/[0.06] dark:border-white/[0.1] bg-[#f6f3ec] dark:bg-[#1c1813] px-3.5 py-2.5 text-pretty text-sm leading-6 text-[#5f594e] dark:text-[#b6ad9d]">
+          {searchInfo}
+        </p>
+      )}
+      {result && <RetrievalDoneBanner result={result} onDismiss={() => setResult(null)} />}
+      {discoveryActive && (
+        <div className="mt-3">
+          <BrowserDiscoveryProgress discovery={discovery} />
+        </div>
+      )}
+    </details>
+  );
+}
+
 function formatElapsed(sec: number) {
   const s = Math.max(0, Math.floor(sec));
   const m = Math.floor(s / 60);
@@ -478,7 +442,6 @@ function formatElapsed(sec: number) {
   return `${m}:${String(r).padStart(2, "0")}`;
 }
 
-// 获取岗位的动作磁贴：大图标 + 标题 + 一句说明，鼠标悬浮显示完整功能解释（核心功能，放大更醒目）
 function ActionTile({
   icon: Icon,
   label,
@@ -488,8 +451,6 @@ function ActionTile({
   onClick,
   disabled,
   busy,
-  hero,
-  selected,
 }: {
   icon: typeof Database;
   label: string;
@@ -499,8 +460,6 @@ function ActionTile({
   onClick: () => void;
   disabled?: boolean;
   busy?: boolean;
-  hero?: boolean;
-  selected?: boolean;
 }) {
   return (
     <div className="group relative">
@@ -511,10 +470,7 @@ function ActionTile({
         aria-label={`${label}：${tooltip}`}
         className={cn(
           "bento-glow group/tile relative flex w-full flex-col items-start gap-3 rounded-2xl border p-5 text-left transition-all duration-300 ease-out hover:-translate-y-1 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0 disabled:hover:shadow-none",
-          selected && "bento-selected",
-          hero
-            ? "border-[#cfc0e6] dark:border-[#b9a3e0]/[0.30] bg-[#efe9f8] dark:bg-[#b9a3e0]/[0.10] hover:border-[#bba9dd] dark:hover:border-[#b9a3e0]/[0.45] hover:bg-[#e7def4] dark:hover:bg-[#b9a3e0]/[0.20] hover:shadow-[0_18px_40px_-22px_rgba(106,79,160,0.5)]"
-            : "border-black/[0.07] dark:border-white/[0.1] bg-white/60 dark:bg-white/[0.05] hover:border-black/[0.12] dark:hover:border-white/20 hover:bg-white dark:hover:bg-[#1e1a15] hover:shadow-[0_18px_40px_-24px_rgba(40,34,28,0.45)]",
+          "border-black/[0.07] dark:border-white/[0.1] bg-white/60 dark:bg-white/[0.05] hover:border-black/[0.12] dark:hover:border-white/20 hover:bg-white dark:hover:bg-[#1e1a15] hover:shadow-[0_18px_40px_-24px_rgba(40,34,28,0.45)]",
         )}
       >
         <span
@@ -533,7 +489,6 @@ function ActionTile({
           <span className="block text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{label}</span>
           <span className="mt-1 block text-[13px] leading-5 text-[#8a8275] dark:text-[#9a9184]">{hint}</span>
         </span>
-        {/* 悬浮时右上角箭头滑入，提示「可点击的动作」（动态特效，与全站卡片悬浮一致）。 */}
         <ArrowUpRight
           size={18}
           weight="bold"
@@ -551,7 +506,6 @@ function ActionTile({
   );
 }
 
-// 三个检索完成后的显式提示横幅：成功=暖绿，空结果=中性纸色；与全站 warm-editorial 风格一致。
 function RetrievalDoneBanner({
   result,
   onDismiss,
@@ -565,7 +519,7 @@ function RetrievalDoneBanner({
       role="status"
       aria-live="polite"
       className={cn(
-        "flex items-start gap-3 rounded-2xl border px-4 py-3.5",
+        "mt-3 flex items-start gap-3 rounded-2xl border px-4 py-3.5",
         success ? "border-[#cfe6b0] dark:border-[#a3d06a]/[0.30] bg-[#eef6e0] dark:bg-[#a3d06a]/[0.15]" : "border-black/[0.07] dark:border-white/[0.1] bg-[#f6f3ec] dark:bg-[#1c1813]",
       )}
     >
@@ -582,20 +536,10 @@ function RetrievalDoneBanner({
         )}
       </span>
       <div className="min-w-0 flex-1">
-        <p
-          className={cn(
-            "text-sm font-semibold",
-            success ? "text-[#3f5a1c] dark:text-[#a3d06a]" : "text-[#3f3a33] dark:text-[#d9d0c2]",
-          )}
-        >
+        <p className={cn("text-sm font-semibold", success ? "text-[#3f5a1c] dark:text-[#a3d06a]" : "text-[#3f3a33] dark:text-[#d9d0c2]")}>
           {result.title}
         </p>
-        <p
-          className={cn(
-            "mt-0.5 text-pretty text-sm leading-6",
-            success ? "text-[#557029] dark:text-[#a3d06a]" : "text-[#6b655a] dark:text-[#b6ad9d]",
-          )}
-        >
+        <p className={cn("mt-0.5 text-pretty text-sm leading-6", success ? "text-[#557029] dark:text-[#a3d06a]" : "text-[#6b655a] dark:text-[#b6ad9d]")}>
           {result.detail}
         </p>
       </div>
@@ -635,10 +579,7 @@ function BrowserDiscoveryProgress({ discovery }: { discovery: BrowserDiscoverySt
         </span>
       </div>
       <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-black/[0.08] dark:bg-white/[0.1]">
-        <div
-          className="h-full rounded-full bg-[#3f7cc0] dark:bg-[#7fb2e8] transition-all duration-700"
-          style={{ width: `${pct}%` }}
-        />
+        <div className="h-full rounded-full bg-[#3f7cc0] dark:bg-[#7fb2e8] transition-all duration-700" style={{ width: `${pct}%` }} />
       </div>
       <ol className="mt-3 space-y-1.5">
         {stages.map((label, i) => {

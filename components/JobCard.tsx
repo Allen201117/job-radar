@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareOut,
   BookmarkSimple,
@@ -15,7 +15,6 @@ import {
   Sparkle,
   XCircle,
 } from "@phosphor-icons/react";
-import { createBrowserClient } from "@/lib/supabaseClient";
 import {
   classifyJobFunction,
   recruitmentCategory,
@@ -30,6 +29,14 @@ import {
 } from "@/lib/insight-client";
 import { track } from "@/lib/track";
 import type { MatchReason, ScoredJob } from "@/lib/types";
+import type {
+  OpportunityReason,
+  OpportunityTier,
+  FreshnessState,
+  OpportunitySignal,
+  OpportunitySignalType,
+} from "@/lib/opportunities/types";
+import { IGNORE_REASONS } from "@/lib/opportunities/feedback";
 import { cleanSummary, cn, freshnessLabel } from "@/lib/utils";
 
 interface Props {
@@ -37,7 +44,32 @@ interface Props {
   onActionChange: (jobId: string, action: PrimaryAction | null) => void;
   // 本次会话刷新/发现新拿到的岗位 → 绿色高亮 + 「本次新发现」标
   sessionNew?: boolean;
+  // 'opportunity' = 今日机会卡（档位/原因来自引擎，按钮=值得投/不适合/已投递）；
+  // 'library'（默认）= 岗位库卡（matchTier 徽标 + match_reasons，按钮=收藏/标记投递/忽略）。
+  variant?: "library" | "opportunity";
+  opportunityTier?: OpportunityTier;
+  opportunityReasons?: OpportunityReason[];
+  freshnessState?: FreshnessState;
+  // v3：信号标签（≥1，护城河外显）+ 点击有效率埋点用的核验年龄。
+  opportunitySignals?: OpportunitySignal[];
+  opportunityCheckedAgeHours?: number | null;
 }
+
+// 信号 chip 配色：关键提醒醒目（暖橙），STILL_OPEN 绿（仍在招），CLOSED_OR_STALE 灰。
+const SIGNAL_STYLE: Record<OpportunitySignalType, string> = {
+  STILL_OPEN: "border-[#bcdcae] bg-[#eef6e0] text-[#4d6b2f] dark:border-[#a3d06a]/30 dark:bg-[#a3d06a]/12 dark:text-[#a3d06a]",
+  DEADLINE_SOON: "border-[#f0d9a8] bg-[#fbf1de] text-[#9a6a1f] dark:border-[#e8b87f]/30 dark:bg-[#e8b87f]/12 dark:text-[#e8b87f]",
+  CLOSED_OR_STALE: "border-black/[0.08] bg-[#f0ece2] text-[#6b655a] dark:border-white/10 dark:bg-white/[0.08] dark:text-[#b6ad9d]",
+  CAMPUS_WINDOW: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/12 dark:text-[#7fb2e8]",
+  NEWLY_DISCOVERED: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/12 dark:text-[#7fb2e8]",
+  COMPANY_MOMENTUM: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/12 dark:text-[#7fb2e8]",
+};
+
+const OPPORTUNITY_TIER_LABEL: Record<OpportunityTier, string> = {
+  high: "高匹配",
+  related: "相关机会",
+  explore: "拓展机会",
+};
 
 type PrimaryAction = "saved" | "ignored" | "applied";
 
@@ -138,17 +170,31 @@ function insightBadge(avail: InsightAvailability | null): {
   };
 }
 
-export default function JobCard({ job, onActionChange, sessionNew }: Props) {
+export default function JobCard({
+  job,
+  onActionChange,
+  sessionNew,
+  variant = "library",
+  opportunityTier,
+  opportunityReasons,
+  freshnessState,
+  opportunitySignals,
+  opportunityCheckedAgeHours,
+}: Props) {
+  const isOpportunity = variant === "opportunity";
   const [acting, setActing] = useState(false);
+  // 同步去重锁：state 是异步的，同一渲染周期内的连点会同时通过 `if (acting)`；用 ref 在调用入口同步挡住。
+  const actingRef = useRef(false);
   const [currentAction, setCurrentAction] = useState(job.user_action);
   const [actionError, setActionError] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [insightOpen, setInsightOpen] = useState(false);
+  // 「不适合 / 忽略」原因面板（§8.2）：ignored 必须选一个原因才写入。
+  const [reasonOpen, setReasonOpen] = useState(false);
   // 洞察按钮点击前预告状态：null=未知/加载中，real>0=有实录，derived=有岗位聚合派生。
   const [insightAvail, setInsightAvail] = useState<InsightAvailability | null>(() =>
     getCachedAvailability(job.company),
   );
-  const supabase = createBrowserClient();
 
   useEffect(() => {
     setCurrentAction(job.user_action);
@@ -183,65 +229,92 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
   // 新鲜度信任信号：last_seen_at 距今多久 → 「今天/X 天前确认在招」；>14 天转暖橙告警「可能已下线」。
   const freshness = useMemo(() => freshnessLabel(job.last_seen_at), [job.last_seen_at]);
 
-  async function writeAction(action: PrimaryAction | null, prev: PrimaryAction | null) {
+  // 主动作走服务端 API（§8.1）：乐观更新 + 失败回滚；不再前端直连 Supabase。
+  // 埋点改到 **API 成功后** 才发（失败不记成功，P0-4）；actingRef 同步去重，挡同一渲染周期内的重复请求。
+  async function callActionApi(
+    next: PrimaryAction | null,
+    prev: PrimaryAction | null,
+    reasonCode?: string,
+  ) {
+    if (actingRef.current) return;
+    actingRef.current = true;
+    setActionError("");
+    setCurrentAction(next);
+    onActionChange(job.id, next);
+    setActing(true);
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const uid = session?.user?.id;
-      if (!uid) throw new Error("未登录");
-      await supabase
-        .from("job_actions")
-        .delete()
-        .eq("user_id", uid)
-        .eq("job_id", job.id)
-        .neq("action", "viewed");
-      if (action) {
-        const { error } = await supabase
-          .from("job_actions")
-          .upsert(
-            { user_id: uid, job_id: job.id, action },
-            { onConflict: "user_id,job_id,action" },
-          );
-        if (error) throw error;
+      const resp = await fetch(`/api/job-actions/${job.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: next, reason_code: reasonCode ?? null }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+      // 成功后才发埋点
+      if (isOpportunity) {
+        if (next)
+          track("opportunity_feedback", {
+            action: next,
+            reason_code: reasonCode ?? null,
+            tier: opportunityTier ?? null,
+            surface: "today",
+          });
+        else track("opportunity_undo", { previous_action: prev, surface: "today" });
+      } else if (next) {
+        track("job_action", { action: next, job_id: job.id });
       }
     } catch (e) {
       console.error("[job-card] action failed", e);
       setCurrentAction(prev);
       onActionChange(job.id, prev);
-      setActionError("操作失败，已回退");
+      setActionError("操作失败，已恢复原状态");
       setTimeout(() => setActionError(""), 2500);
     } finally {
       setActing(false);
+      actingRef.current = false;
     }
   }
 
-  function handleAction(action: PrimaryAction) {
+  // 值得投 / 已投递：点已选则取消（action=null）
+  function handlePrimary(action: "saved" | "applied") {
     if (acting) return;
-    setActionError("");
     const prev = currentAction as PrimaryAction | null;
-    const next = prev === action ? null : action;
-    if (next) track("job_action", { action: next, job_id: job.id });
-    setCurrentAction(next);
-    onActionChange(job.id, next);
-    setActing(true);
-    void writeAction(next, prev);
+    void callActionApi(prev === action ? null : action, prev);
+  }
+
+  // 不适合 / 忽略：已选则取消；否则先开原因面板（ignored 必须带原因）
+  function handleIgnore() {
+    if (acting) return;
+    if (currentAction === "ignored") {
+      void callActionApi(null, "ignored");
+      return;
+    }
+    setReasonOpen(true);
+  }
+
+  function pickReason(code: string) {
+    setReasonOpen(false);
+    const prev = currentAction as PrimaryAction | null;
+    void callActionApi("ignored", prev, code);
   }
 
   function handleView() {
-    // 直接跳官网，瞬间打开——质量校验不放在点击路径（云函数冷启动+跨区探活会拖到数秒）。
-    // 死岗由后台定时探活(③) + 看板加载时的展示校验(②，非阻塞)挤掉，不挡用户这一下。
+    // 直接跳官网，瞬间打开——质量校验**不放在点击路径**（历史教训：同步核验门已废）。
     window.open(job.jd_url, "_blank", "noopener,noreferrer");
-    track("job_click", { job_id: job.id, company: job.company });
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      const uid = session?.user?.id;
-      if (uid) {
-        void supabase.from("job_actions").upsert(
-          { user_id: uid, job_id: job.id, action: "viewed" },
-          { onConflict: "user_id,job_id,action" },
-        );
-      }
-    });
+    if (isOpportunity) {
+      track("opportunity_click", { job_id: job.id, tier: opportunityTier ?? null, surface: "today" });
+      // 点击有效率埋点（01 spec §5）：记录点开那刻的核验年龄/新鲜度。
+      track("opportunity_official_opened", {
+        job_id: job.id,
+        adapter: job.source_adapter ?? null,
+        checked_age_hours: opportunityCheckedAgeHours ?? null,
+        freshness: freshnessState ?? null,
+        surface: "today",
+      });
+      // 背景单岗核验（非阻塞、封顶 2.5s）：判死标 expired + 服务端顺带打 job_liveness_at_click（分母）。
+      void fetch(`/api/jobs/${job.id}/liveness`, { method: "POST", keepalive: true }).catch(() => {});
+    } else track("job_click", { job_id: job.id });
+    void fetch(`/api/job-actions/${job.id}/view`, { method: "POST" }).catch(() => {});
   }
 
   const isNew =
@@ -379,59 +452,107 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
             </div>
           )}
 
-          {(tier.label || job.matched_keywords.length > 0) && (
-            <div className="mt-4 flex flex-wrap items-center gap-1.5">
-              {tier.label && (
-                <span
-                  title="根据你的求职偏好与简历画像评估的匹配档位"
-                  className={cn(
-                    "rounded-full px-2.5 py-1 text-xs font-semibold",
-                    tier.level === "high"
-                      ? "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                      : "border border-black/[0.08] bg-[#f0ece2] text-[#6b655a] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#b6ad9d]",
-                  )}
-                >
-                  {tier.label}
-                </span>
-              )}
-              {job.matched_keywords.slice(0, 3).map((kw) => (
-                <span
-                  key={kw}
-                  className="rounded-full border border-[#cfe0f5] bg-[#e8f1fc] px-2.5 py-1 text-xs font-medium text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.12] dark:text-[#7fb2e8]"
-                >
-                  {kw}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {tier.level !== "none" && matchReasons.length > 0 && (
-            <details className="mt-3 rounded-xl border border-black/[0.07] bg-white/45 px-3.5 py-2.5 open:bg-white/65 [&[open]_.match-reason-caret]:rotate-180 dark:border-white/[0.1] dark:bg-white/[0.04] dark:open:bg-white/[0.07]">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-[#5f594e] transition-colors hover:text-[#1a1714] [&::-webkit-details-marker]:hidden dark:text-[#b6ad9d] dark:hover:text-[#f3ecdf]">
-                <span className="inline-flex items-center gap-1.5">
-                  <Sparkle size={14} weight="fill" aria-hidden="true" />
-                  为什么推荐
-                </span>
-                <CaretDown
-                  className="match-reason-caret size-4 shrink-0 transition-transform"
-                  aria-hidden="true"
-                />
-              </summary>
-              <ul className="mt-2.5 space-y-1.5 border-t border-black/[0.06] pt-2.5 text-sm text-[#5f594e] dark:border-white/[0.08] dark:text-[#b6ad9d]">
-                {matchReasons.map((reason, index) => (
-                  <li
-                    key={`${reason.type}:${reason.value}:${index}`}
-                    className="flex items-start gap-2"
-                  >
+          {isOpportunity ? (
+            <>
+              {opportunitySignals && opportunitySignals.length > 0 && (
+                <div className="mt-4 flex flex-wrap items-center gap-1.5">
+                  {opportunitySignals.map((s, i) => (
                     <span
-                      className="mt-[0.45rem] size-1.5 shrink-0 rounded-full bg-[#7aa84b] dark:bg-[#a3d06a]"
+                      key={`${s.type}:${i}`}
+                      className={cn("rounded-full border px-2.5 py-1 text-xs font-semibold", SIGNAL_STYLE[s.type])}
+                    >
+                      {s.isCritical ? "● " : ""}
+                      {s.label}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {opportunityTier && (
+                <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                  <span
+                    title="按你的目标、简历与岗位新鲜度评估的匹配档位"
+                    className={cn(
+                      "rounded-full px-2.5 py-1 text-xs font-semibold",
+                      opportunityTier === "high"
+                        ? "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                        : "border border-black/[0.08] bg-[#f0ece2] text-[#6b655a] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#b6ad9d]",
+                    )}
+                  >
+                    {OPPORTUNITY_TIER_LABEL[opportunityTier]}
+                  </span>
+                </div>
+              )}
+              {opportunityReasons && opportunityReasons.length > 0 && (
+                <ul className="mt-3 flex flex-wrap gap-1.5">
+                  {opportunityReasons.map((r, i) => (
+                    <li
+                      key={`${r.type}:${i}`}
+                      className="inline-flex items-center gap-1 rounded-full border border-[#cfe0f5] bg-[#e8f1fc] px-2.5 py-1 text-xs font-medium text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.12] dark:text-[#7fb2e8]"
+                    >
+                      <Sparkle size={11} weight="fill" aria-hidden="true" />
+                      {r.label}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          ) : (
+            <>
+              {(tier.label || job.matched_keywords.length > 0) && (
+                <div className="mt-4 flex flex-wrap items-center gap-1.5">
+                  {tier.label && (
+                    <span
+                      title="根据你的求职偏好与简历画像评估的匹配档位"
+                      className={cn(
+                        "rounded-full px-2.5 py-1 text-xs font-semibold",
+                        tier.level === "high"
+                          ? "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                          : "border border-black/[0.08] bg-[#f0ece2] text-[#6b655a] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#b6ad9d]",
+                      )}
+                    >
+                      {tier.label}
+                    </span>
+                  )}
+                  {job.matched_keywords.slice(0, 3).map((kw) => (
+                    <span
+                      key={kw}
+                      className="rounded-full border border-[#cfe0f5] bg-[#e8f1fc] px-2.5 py-1 text-xs font-medium text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.12] dark:text-[#7fb2e8]"
+                    >
+                      {kw}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {tier.level !== "none" && matchReasons.length > 0 && (
+                <details className="mt-3 rounded-xl border border-black/[0.07] bg-white/45 px-3.5 py-2.5 open:bg-white/65 [&[open]_.match-reason-caret]:rotate-180 dark:border-white/[0.1] dark:bg-white/[0.04] dark:open:bg-white/[0.07]">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-[#5f594e] transition-colors hover:text-[#1a1714] [&::-webkit-details-marker]:hidden dark:text-[#b6ad9d] dark:hover:text-[#f3ecdf]">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Sparkle size={14} weight="fill" aria-hidden="true" />
+                      为什么推荐
+                    </span>
+                    <CaretDown
+                      className="match-reason-caret size-4 shrink-0 transition-transform"
                       aria-hidden="true"
                     />
-                    <span>{matchReasonText(reason)}</span>
-                  </li>
-                ))}
-              </ul>
-            </details>
+                  </summary>
+                  <ul className="mt-2.5 space-y-1.5 border-t border-black/[0.06] pt-2.5 text-sm text-[#5f594e] dark:border-white/[0.08] dark:text-[#b6ad9d]">
+                    {matchReasons.map((reason, index) => (
+                      <li
+                        key={`${reason.type}:${reason.value}:${index}`}
+                        className="flex items-start gap-2"
+                      >
+                        <span
+                          className="mt-[0.45rem] size-1.5 shrink-0 rounded-full bg-[#7aa84b] dark:bg-[#a3d06a]"
+                          aria-hidden="true"
+                        />
+                        <span>{matchReasonText(reason)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </>
           )}
         </div>
 
@@ -449,14 +570,14 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
             <ActionButton
               active={currentAction === "saved"}
               disabled={acting}
-              onClick={() => handleAction("saved")}
+              onClick={() => handlePrimary("saved")}
               icon={BookmarkSimple}
-              label={currentAction === "saved" ? "已收藏" : "收藏"}
+              label={currentAction === "saved" ? "已收藏" : isOpportunity ? "值得投" : "收藏"}
             />
             <ActionButton
               active={currentAction === "applied"}
               disabled={acting}
-              onClick={() => handleAction("applied")}
+              onClick={() => handlePrimary("applied")}
               icon={CheckCircle}
               label={currentAction === "applied" ? "已投递" : "标记投递"}
             />
@@ -464,11 +585,38 @@ export default function JobCard({ job, onActionChange, sessionNew }: Props) {
               muted
               active={currentAction === "ignored"}
               disabled={acting}
-              onClick={() => handleAction("ignored")}
+              onClick={handleIgnore}
               icon={XCircle}
-              label={currentAction === "ignored" ? "已忽略" : "忽略"}
+              label={currentAction === "ignored" ? "已忽略" : isOpportunity ? "不适合" : "忽略"}
             />
           </div>
+
+          {reasonOpen && (
+            <div className="rounded-xl border border-black/[0.08] bg-white/95 p-2 shadow-lg dark:border-white/[0.12] dark:bg-[#16130f]/95">
+              <p className="px-1 pb-1 text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">
+                为什么不适合？
+              </p>
+              <div className="flex flex-col gap-0.5">
+                {IGNORE_REASONS.map((r) => (
+                  <button
+                    key={r.code}
+                    type="button"
+                    onClick={() => pickReason(r.code)}
+                    className="rounded-lg px-2 py-1.5 text-left text-xs text-[#3f3a33] transition hover:bg-black/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"
+                  >
+                    {r.label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setReasonOpen(false)}
+                  className="mt-0.5 rounded-lg px-2 py-1.5 text-left text-xs font-medium text-[#8a8275] transition hover:bg-black/[0.05] dark:text-[#9a9184] dark:hover:bg-white/[0.06]"
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
           {actionError && (
             <span className="rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-2 py-1 text-xs text-[#9c4a3c] lg:text-right dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]">
               {actionError}

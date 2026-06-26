@@ -13,7 +13,6 @@ import {
   Briefcase,
   Broadcast,
   CheckCircle,
-  Compass,
   List,
   SignOut,
   SlidersHorizontal,
@@ -21,12 +20,12 @@ import {
   X,
 } from "@phosphor-icons/react";
 
+// 一级导航（§3.1）：今日机会 / 搜索岗位 / 关注与偏好 / 值得投 / 已投递。
+// /path、/me 不在一级导航：/path 路由保留但不暴露；/me 移入账号菜单。/sources、/admin/* 仅管理员直达。
 const LINKS = [
   { href: "/today", key: "today", icon: Broadcast },
   { href: "/jobs", key: "jobs", icon: Briefcase },
-  { href: "/path", key: "path", icon: Compass },
   { href: "/preferences", key: "preferences", icon: SlidersHorizontal },
-  { href: "/me", key: "me", icon: UserCircle },
   { href: "/saved", key: "saved", icon: BookmarkSimple },
   { href: "/applied", key: "applied", icon: CheckCircle },
 ];
@@ -36,11 +35,10 @@ export default function Navbar() {
   const router = useRouter();
   const supabase = createBrowserClient();
   const [email, setEmail] = useState<string | null>(null);
-  // i18n 暂收口：lib/i18n 字典目前只覆盖导航，正文全中文，切到 EN 多数内容不变 = 误导。
-  // 先隐藏语言切换入口、导航固定中文，待关键页 i18n 补齐再放开（i18n 基础设施保留在 lib/i18n.ts）。
+  // i18n 暂收口：导航固定中文，不放开语言切换（基础设施保留在 lib/i18n.ts）。
   const lang = "zh" as const;
-  // 移动端汉堡菜单展开态（桌面端 lg+ 不使用）
   const [menuOpen, setMenuOpen] = useState(false);
+  const [acctOpen, setAcctOpen] = useState(false);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -48,9 +46,9 @@ export default function Navbar() {
     });
   }, []);
 
-  // 路由切换或视口拉宽到桌面时收起菜单；展开时锁滚动 + 支持 Esc 关闭
   useEffect(() => {
     setMenuOpen(false);
+    setAcctOpen(false);
   }, [pathname]);
 
   useEffect(() => {
@@ -67,9 +65,6 @@ export default function Navbar() {
     };
   }, [menuOpen]);
 
-  // 洞察管理 / 源管理为管理员内部工具，不在导航中暴露给用户（仍可经 /admin/insights、/sources 直达）
-  const links = LINKS;
-
   async function handleLogout() {
     await supabase.auth.signOut();
     router.push("/login");
@@ -80,12 +75,16 @@ export default function Navbar() {
     <header className="sticky top-0 z-40 w-full border-b border-black/[0.06] bg-[#f4efe6]/80 text-[#1a1714] backdrop-blur-xl supports-[backdrop-filter]:bg-[#f4efe6]/70 dark:border-white/[0.08] dark:bg-[#16130f]/[0.85] dark:text-[#f3ecdf] dark:supports-[backdrop-filter]:bg-[#16130f]/[0.70]">
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6 lg:gap-6 lg:px-8">
         <div className="flex min-w-0 items-center gap-7">
-          <Link href="/" className="inline-flex shrink-0 items-center transition-opacity hover:opacity-70">
+          {/* 登录后 Logo 跳今日机会；未登录跳公开 Landing */}
+          <Link
+            href={email ? "/today" : "/"}
+            className="inline-flex shrink-0 items-center transition-opacity hover:opacity-70"
+          >
             <BrandMark tile={28} icon={18} wordSize={15} />
           </Link>
           {/* 桌面端：内联导航胶囊（lg 以下交给汉堡菜单） */}
           <nav className="hidden gap-1 lg:flex">
-            {links.map((link) => (
+            {LINKS.map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
@@ -103,15 +102,49 @@ export default function Navbar() {
           </nav>
         </div>
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-          {email && <span className="hidden max-w-48 truncate text-xs text-[#9a9184] md:block dark:text-[#837c70]">{email}</span>}
           <ThemeToggle />
-          {/* 桌面端退出（移动端移入汉堡菜单） */}
-          <button
-            onClick={handleLogout}
-            className="hidden rounded-full px-3 py-1.5 text-xs font-medium text-[#5f594e] transition duration-200 hover:bg-black/[0.05] hover:text-[#1a1714] active:scale-[0.98] lg:inline-flex dark:text-[#b6ad9d] dark:hover:bg-white/[0.06] dark:hover:text-[#f3ecdf]"
-          >
-            {t("logout", lang)}
-          </button>
+          {/* 桌面端账号菜单：个人主页 + 退出（/me 不再占一级导航） */}
+          {email && (
+            <div className="relative hidden lg:block">
+              <button
+                type="button"
+                onClick={() => setAcctOpen((v) => !v)}
+                aria-expanded={acctOpen}
+                className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.08] px-3 py-1.5 text-xs font-medium text-[#5f594e] transition duration-200 hover:bg-black/[0.05] hover:text-[#1a1714] active:scale-[0.98] dark:border-white/[0.12] dark:text-[#b6ad9d] dark:hover:bg-white/[0.06] dark:hover:text-[#f3ecdf]"
+              >
+                <UserCircle size={16} weight={acctOpen ? "fill" : "regular"} aria-hidden="true" />
+                <span className="max-w-32 truncate">{email}</span>
+              </button>
+              {acctOpen && (
+                <>
+                  <button
+                    type="button"
+                    aria-label="关闭账号菜单"
+                    onClick={() => setAcctOpen(false)}
+                    className="fixed inset-0 z-30 cursor-default"
+                  />
+                  <div className="absolute right-0 z-40 mt-2 w-44 rounded-2xl border border-black/[0.08] bg-[#f4efe6]/98 p-1 shadow-lg backdrop-blur-xl dark:border-white/[0.12] dark:bg-[#16130f]/[0.98]">
+                    <Link
+                      href="/me"
+                      onClick={() => setAcctOpen(false)}
+                      className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-[#3f3a33] transition hover:bg-black/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"
+                    >
+                      <UserCircle size={16} aria-hidden="true" />
+                      个人主页
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={handleLogout}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-[#3f3a33] transition hover:bg-black/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"
+                    >
+                      <SignOut size={16} aria-hidden="true" />
+                      {t("logout", lang)}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           {/* 移动端：汉堡按钮 */}
           <button
             type="button"
@@ -135,7 +168,7 @@ export default function Navbar() {
             className="fixed inset-0 top-14 z-30 bg-[#1a1714]/20 backdrop-blur-sm lg:hidden dark:bg-black/50"
           />
           <nav className="relative z-40 border-t border-black/[0.06] bg-[#f4efe6]/95 px-4 pb-4 pt-2 backdrop-blur-xl lg:hidden dark:border-white/[0.08] dark:bg-[#16130f]/[0.95]">
-            {links.map((link) => {
+            {LINKS.map((link) => {
               const active = pathname === link.href;
               return (
                 <Link
@@ -154,6 +187,21 @@ export default function Navbar() {
                 </Link>
               );
             })}
+            {email && (
+              <Link
+                href="/me"
+                onClick={() => setMenuOpen(false)}
+                className={cn(
+                  "flex items-center gap-3 rounded-2xl px-3.5 py-3 text-[15px] font-medium transition duration-200",
+                  pathname === "/me"
+                    ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                    : "text-[#3f3a33] hover:bg-black/[0.05] active:scale-[0.99] dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]",
+                )}
+              >
+                <UserCircle size={20} weight={pathname === "/me" ? "fill" : "regular"} aria-hidden="true" />
+                {t("me", lang)}
+              </Link>
+            )}
             <div className="mt-2 flex items-center justify-between gap-3 border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
               {email && <span className="min-w-0 flex-1 truncate text-xs text-[#9a9184] dark:text-[#837c70]">{email}</span>}
               <button
