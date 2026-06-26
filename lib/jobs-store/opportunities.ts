@@ -21,8 +21,14 @@ export interface RecallResult {
 }
 
 const SEVEN_DAYS_MS = 7 * 86_400_000;
-const SUMMARY_TRUNC = 500;
-const BRANCH_LIMIT = 4000;
+// ⚠️ 生产事故修复（2026-06-26）：宽画像用户（多 role/keyword + 同义词扩展 → 命中超集撞 limit）的召回
+// 把 4000 行 × 500 字 summary（CJK 多字节 ≈ 9MB）**跨区**（Vercel→香港库）传输 >15s，撞 pg 池
+// statement_timeout(15s) → 「canceling statement due to statement timeout」→ buildOpportunityFeed 抛 →
+// today 页 feed=null → 「机会队列暂时无法更新」。查询本身 150ms（EXPLAIN 实测），慢在跨区**传输载荷**。
+// 修：进一步压载荷（summary 300 + 行数 1500 ≈ 2.7MB，~3.3x 缩量）。匹配仍看 title + 前 300 字（FTS 已全文预筛）；
+// 候选取「近 7 天最新 1500」对填 ~30 张卡绰绰有余，capped 诚实。配合 client.ts statement_timeout 抬到 25s 兜底。
+const SUMMARY_TRUNC = 300;
+const BRANCH_LIMIT = 1500;
 
 // recall 列：summary 截断为 ≤500 字，砍跨区传输；展示卡由 service 回填完整 summary。
 // 只取硬门 + 打分必需列 + 截断 summary：把 4000 行候选的跨区载荷压到最小（P0-1）。

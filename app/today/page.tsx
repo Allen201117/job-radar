@@ -11,6 +11,9 @@ import TodayClient, { OnboardingPanel } from "../today-client";
 import { Broadcast, CheckCircle, Crosshair, Sparkle } from "@phosphor-icons/react/ssr";
 
 export const dynamic = "force-dynamic";
+// 须 ≥ jobs 池 statement_timeout(25s)：否则慢的跨区召回会先撞函数时限被杀（平台 504、不被页面 catch），
+// 用户看到的就不是「机会队列暂时无法更新」而是白屏错误页。给足余量到 30s（plan 支持，见 /api/jobs/search=60）。
+export const maxDuration = 30;
 
 const HERO = {
   eyebrow: "今日机会",
