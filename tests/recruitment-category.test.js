@@ -27,6 +27,22 @@ test("recruitmentCategory 实习优先于校园字样", () => {
   assert.equal(recruitmentCategory({ title: "2025 暑期实习 · 校园招聘" }), "实习");
 });
 
+test("英文 intern/graduate 词边界：internal/international/internet/undergraduate 不误判（治全职岗被标实习/校招）", () => {
+  // 本次线上真因：Intel 全职高级工程师 JD 含 "internal" 被标实习
+  assert.equal(
+    recruitmentCategory({ title: "Senior Gen AI Software Solutions Engineer", summary: "Works with internal engineering teams and external partners to deliver AI." }),
+    "社招",
+  );
+  assert.equal(recruitmentCategory({ title: "Business Manager", summary: "Lead international expansion." }), "社招");
+  assert.equal(recruitmentCategory({ title: "Backend Engineer", summary: "Build internet-scale services." }), "社招");
+  assert.equal(recruitmentCategory({ title: "Software Engineer", summary: "Undergraduate degree required, 5 yrs experience." }), "社招");
+  // 真·实习/校招仍判得出（不过度修正）
+  assert.equal(recruitmentCategory({ title: "Software Engineering Intern" }), "实习");
+  assert.equal(recruitmentCategory({ title: "Summer Internship Program 2026" }), "实习");
+  assert.equal(recruitmentCategory({ title: "Research Interns wanted" }), "实习");
+  assert.equal(recruitmentCategory({ title: "Software Engineer", summary: "Open to new grads and recent graduates." }), "校招");
+});
+
 test("P1-D: url 拼音路径 + 源名信号补全校招/实习（治 59% 空 job_type 误堆社招）", () => {
   // jd_url 拼音路径（/shixi /xiaozhao），标题本身无招聘类型字样
   assert.equal(recruitmentCategory({ title: "研发工程师", jd_url: "https://x.com/zp/shixi/123" }), "实习");
