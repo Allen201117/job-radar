@@ -1,6 +1,7 @@
 # 爬虫吞吐 & 编排改造设计（有效性 + 新鲜度）
 
-> 状态：设计已确认（2026-06-28），分阶段实施中。
+> 状态：设计已确认（2026-06-28）。**阶段 A 已实现 + 测试 + 真机验证 + 本地 commit（未 push）**；阶段 B/C 已排定。
+> 实施记录见文末 §9。
 > 作者：Claude（应用户「岗位库新增慢 + 今日机会不够新」诉求脑暴）。
 > 基线分支：`claude/dreamy-carson-1f0739`（worktree）。
 
@@ -86,8 +87,13 @@
 - 写库：复用 `markJobExpiredById` 同口径，写 `status=expired` + `confirmed_closed_at` + `job_events.CLOSED`。
 - 在 `crawler/run.py` 抓取每源后调用（只对声明 `supports_absence_liveness=True` 且 complete 的源）。feishu + 6 个漏网 httpx 源先用它。
 
-**A3. 新鲜信号接 job_events**
-- 雷达/今日机会 feed 的「新发现/新鲜」判定改读 `job_events.FIRST_SEEN.occurred_at`（`lib/jobs-store/` 读层 + feed 组装处），`first_seen_at` 仅作 job_events 缺失时的降级且不加权「新」。
+**A3. 新鲜信号接 job_events（本轮核查结论：保持现状，不强行开启）**
+- 核查发现代码**已正确处理**：`NEWLY_DISCOVERED` / `COMPANY_MOMENTUM` 信号在 `lib/opportunities/signals.ts:3` /
+  `types.ts:50`（「first_seen 污染下不可用」）/ `grouping.ts:9`（「momentum 恒空，job_events 前不上」）**已被显式 gate**。
+- 这是项目按 Phase 3 正确的时序决策：依赖 `job_events`（FIRST_SEEN 2026-06-25 起 append-only）攒够干净数据
+  + 6/15 重建污染随 7 天窗自然消退。**现在强行翻开 = 拿没攒够的数据上 C 端「猛招/新发现」，反而误导。**
+- 故本轮**不改**：到时（job_events 攒够 + 污染清）翻 gate 即可，无需新代码。`opportunities.ts` 的
+  `first_seen_at >= sinceIso` 近 7 天窗，6/28 已离 6/15 污染 13 天、窗口移出污染区，自愈。
 
 **A4. 6 个漏网 httpx 源进探活**
 - alibaba/netease/ctrip/xiaohongshu/huawei/jd：优先 list-absence（A2）；若其 daily 抓取被封顶截断不可用 absence，则建逐岗 httpx 检测器（Phase C 再说）。
@@ -136,3 +142,24 @@
 ## 8. 交付边界（本轮）
 - 本轮交付 **完整 spec（本文件）+ 阶段 A 实现 + 测试 + 真机验证 + 本地 commit**（草稿分支，**不 push**，待用户「上线」指令）。
 - 阶段 B/C 在本 spec 完整排定；B 的 spike 为其第一步任务。
+
+## 9. 实施记录（2026-06-28）
+
+### 已完成（commit 在草稿分支 claude/dreamy-carson-1f0739，未 push）
+- **feishu 家族 httpx-first**（`crawler/adapters/feishu.py`）：httpx 直拉 posts API + 浏览器回退 + `fetch_complete` 标记；
+  加入 `crawler/run.py` `_HTTPX_SAFE_ADAPTERS` → 进 daily-crawl 并发档 4×/天。
+- **list-absence 探活**（`crawler/jobs_db.py` `plan_absence_sweep` 纯函数 + `sweep_absent_jobs`）：占比安全闸 +
+  env `LIVENESS_ABSENCE_APPLY` 默认 dry-run；`run.py` 抓全后调用。
+- **测试**：`crawler/test_feishu_httpx.py`(8) + `crawler/test_absence_sweep.py`(10) 全绿；`test_run_concurrency.py`
+  同步 feishu→httpx。回归 crawler 477 / node 520 全绿（本轮仅改 crawler Python，不涉 TS，build 不受影响）。
+- **真机验证**（2026-06-28，自建香港库）：
+  - httpx 抓取：智谱 237/237 全岗带正文 fetch_complete=True；xtool/zhipu/minimax 三租户 created/updated 正常。
+  - **list-absence dry-run 实测**：xTool active=289、本次列表 279 → absent=10（3.5%，真实已关闭岗），远低于 50% 安全闸
+    → 翻 `LIVENESS_ABSENCE_APPLY=true` 即会正确下架这 10 个、不误伤 279 活岗。智谱/MiniMax absent=0。**机制安全、可开启。**
+
+### 下一步（按本 spec）
+1. **开启 feishu 探活落库**：线上观察几日 daily-crawl 的 `[absence]` dry-run 日志占比稳定后，给 `daily-crawl.yml`
+   env 加 `LIVENESS_ABSENCE_APPLY: "true"`（push 即生效）。
+2. **从 enrich-crawl/dead-link-audit 摘除 feishu**（httpx 稳定数日后），让浏览器车道缩小（阶段 C 一部分）。
+3. **阶段 B**：beisen spike（PortalId 已证在 HTML；需一次浏览器抓包定位 GetJobAdPageList 真实端点 → httpx 重放）。
+4. **阶段 C**：浏览器车道收尾（moka 等）+ §4 诚实计数 + 大源页数封顶调参。
