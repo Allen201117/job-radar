@@ -137,6 +137,9 @@ _HTTPX_SAFE_ADAPTERS = {
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
     "netease", "oppo", "xiaohongshu", "alibaba", "huawei", "ctrip",
     "meituan", "bilibili", "pinduoduo", "vivo", "sf_express",  # 已逐一核实为纯 httpx fetch
+    # feishu 家族：posts API 冷 httpx 直出岗位+正文（2026-06-28 实测 generic/nio/xpeng/xiaomi/zhipu/xtool
+    # 全可达），httpx-first + 浏览器回退见 adapters/feishu.py；进 daily-crawl 4×/天（原仅 enrich-crawl 1×/天）。
+    "feishu", "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu",
 }
 
 
@@ -266,6 +269,9 @@ def _process_one_source(source, supabase) -> dict:
             return {"status": "skipped", "created": 0, "updated": 0}
 
         # 3. fetch
+        #    cutoff = 开抓前时刻：本次再见到的岗 upsert 会把 last_seen_at 刷成 > cutoff，
+        #    故抓全后 last_seen_at < cutoff 的 active 岗 = 本次列表缺席 = 下架（list-absence 探活）。
+        cutoff = jobs_db._now() if jobs_db.enabled() else None
         print(f"    fetching...")
         html = adapter.fetch(source_url)
 
@@ -347,6 +353,19 @@ def _process_one_source(source, supabase) -> dict:
             created, updated = jobs_db.upsert_jobs_batch(_get_thread_jobs_conn(), job_batch)
         else:
             created, updated = db.upsert_jobs_batch(supabase, job_batch)
+
+        # 5b. list-absence 探活（仅 HK 库 + adapter 抓全 + 显式支持）：本次全量列表缺席的 active 岗 → 下架。
+        #     默认 dry-run（只数不改），env LIVENESS_ABSENCE_APPLY=true 才落库（先线上 dry-run 验证占比再开）。
+        if (cutoff is not None and getattr(adapter, "supports_absence_liveness", False)
+                and getattr(adapter, "fetch_complete", False)):
+            try:
+                apply_absence = os.environ.get("LIVENESS_ABSENCE_APPLY", "").lower() in ("1", "true", "yes")
+                ab = jobs_db.sweep_absent_jobs(_get_thread_jobs_conn(), source_id, cutoff, apply=apply_absence)
+                if ab["candidates"]:
+                    print(f"    [absence] active={ab['active']} absent={ab['candidates']} "
+                          f"expired={ab['expired']} action={ab['action']}")
+            except Exception as e:  # 探活失败绝不影响抓取主流程
+                print(f"    [absence] 跳过(异常不阻断): {type(e).__name__}: {e}")
 
         # 6. update source timestamp
         db.update_source_timestamp(supabase, source_id)

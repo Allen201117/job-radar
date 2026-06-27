@@ -11,8 +11,10 @@ data.count 给出真实总数。修复：捕获该 POST，用站点自身 sessio
 捕获不到 POST 则回退被动拦截（super().fetch）。复用站点请求、不破签名、低频。
 """
 import json
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from urllib.parse import urlparse
+
+import httpx
 
 import normalizer
 from .base import RawJob
@@ -25,6 +27,12 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
     posts_keys = ("data.job_post_list", "job_post_list")
     _PAGE_SIZE = 50    # 单页拉取数（接口实测 limit=50 稳定返回，远超站点默认 10）
     _MAX_JOBS = 600    # 单租户上限（防超大公司一次拉爆）
+    _HTTPX_TIMEOUT = 20
+
+    # list-absence 探活：feishu posts API 返**全量在招岗**（非夹带已关闭岗），且本类按 count 翻全；
+    # 故抓全时「上次在、这次没了」可判下架。仅 fetch_complete=True 时生效（见 run.py 兜底）。
+    supports_absence_liveness = True
+    fetch_complete = False  # 每次 fetch 末尾置位：是否抓到完整列表（翻到 count、未撞 _MAX_JOBS 上限）
 
     def __init__(self):
         self.official_hosts = (self.host,)
@@ -33,10 +41,80 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
             "https://" + self.host + "/index/position",
             "https://" + self.host + "/",
         ]
+        self.fetch_complete = False
+
+    def _resolve_host(self, source_url: str) -> str:
+        """httpx 直拉用的 host：子类有 self.host；通用类 fetch 前已 _bind_host → official_hosts[0]。"""
+        if self.official_hosts and self.official_hosts[0]:
+            return self.official_hosts[0]
+        return urlparse(source_url).netloc
+
+    def _httpx_fetch(self, host: str) -> Tuple[List[dict], Optional[int], bool]:
+        """纯 httpx 直拉 posts API（feishu_probe 已实证冷启动可达：真实 Chrome UA、无签名、无 cookie）。
+        翻页到 data.count，返回 (rows, total, reached)。reached=至少一次拿到合法 data dict（用于区分
+        '真 0 岗' 与 'httpx 没打通'——前者照常返回空、后者回退浏览器）。daily-crawl 无 Playwright 也能跑。"""
+        rows: List[dict] = []
+        seen: set = set()
+        total: Optional[int] = None
+        reached = False
+        offset = 0
+        headers = {"User-Agent": _UA, "Accept-Language": "zh-CN,en;q=0.9",
+                   "Content-Type": "application/json",
+                   "Referer": f"https://{host}/index/position"}
+        try:
+            with httpx.Client(timeout=self._HTTPX_TIMEOUT, follow_redirects=True, headers=headers) as cli:
+                while len(rows) < self._MAX_JOBS:
+                    body = {"keyword": "", "limit": self._PAGE_SIZE, "offset": offset,
+                            "job_category_id_list": [], "tag_id_list": [], "location_code_list": [],
+                            "subject_id_list": [], "recruitment_id_list": [], "portal_type": 2,
+                            "job_function_id_list": [], "storefront_id": ""}
+                    try:
+                        r = cli.post(f"https://{host}/api/v1/search/job/posts", json=body)
+                        jj = r.json()
+                    except Exception:
+                        break
+                    data = (jj or {}).get("data") if isinstance(jj, dict) else None
+                    if not isinstance(data, dict):
+                        break
+                    reached = True
+                    if total is None:
+                        total = data.get("count") or 0
+                    chunk = data.get("job_post_list") or []
+                    if not isinstance(chunk, list) or not chunk:
+                        break
+                    for post in chunk:
+                        pid = str((post or {}).get("id") or "")
+                        if pid and pid not in seen:
+                            seen.add(pid)
+                            rows.append(post)
+                    if total and len(rows) >= total:
+                        break
+                    if len(chunk) < self._PAGE_SIZE:  # 末页不足一页 → 收完
+                        break
+                    offset += self._PAGE_SIZE
+        except Exception:
+            return rows, total, reached
+        return rows, total, reached
 
     def fetch(self, source_url: str) -> str:
+        """httpx-first：冷启动直拉 posts API（无浏览器，daily-crawl 4×/天可跑）；httpx 未打通才回退
+        浏览器抓包链（仅 Playwright 可用环境如 enrich-crawl）。"""
+        self.fetch_complete = False
+        host = self._resolve_host(source_url)
+        if host:
+            rows, total, reached = self._httpx_fetch(host)
+            if reached:
+                # httpx 打通（含真 0 岗）→ 直接用，不再开浏览器。complete=翻全（含 0 岗）。
+                self.fetch_complete = (total is not None and len(rows) >= (total or 0))
+                return json.dumps(
+                    {"_intercepted": [{"data": {"job_post_list": rows, "count": total if total is not None else len(rows)}}]},
+                    ensure_ascii=False)
+        # httpx 没打通（reached=False）→ 回退浏览器抓包（无 Playwright 环境会抛 → 上层记 failed，不写空）
+        return self._browser_fetch(source_url)
+
+    def _browser_fetch(self, source_url: str) -> str:
         """捕获列表页自己发的 posts POST → 用站点 session 服务端翻页重放收齐 count；
-        捕获不到（站点改版/反爬）则回退被动拦截链 super().fetch（与原行为一致，零回归）。"""
+        捕获不到（站点改版/反爬）则回退被动拦截链（与原行为一致，零回归）。"""
         from playwright.sync_api import sync_playwright
 
         captured: dict = {}
@@ -88,6 +166,8 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
             browser.close()
 
         if rows:
+            # 浏览器抓全判定（与 httpx 同口径）：翻到 total 且未撞 _MAX_JOBS → complete，供 list-absence。
+            self.fetch_complete = (total is not None and len(rows) >= (total or 0))
             # 合成下游同 shape 响应：parse() 走 posts_keys=data.job_post_list 抽取，逻辑不变。
             return json.dumps(
                 {"_intercepted": [{"data": {"job_post_list": rows, "count": total or len(rows)}}]},

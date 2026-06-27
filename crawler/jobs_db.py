@@ -140,6 +140,54 @@ def plan_confirm_event(job_id, source_id, day):
     return (f"CONFIRMED_OPEN:{job_id}:{day}", "CONFIRMED_OPEN", job_id, source_id, {})
 
 
+# ── list-absence 探活（02 spec / 2026-06-28 编排改造 §4 A2）────────────────────
+# 思路：某源本次**抓全**(adapter.fetch_complete=True)后，仍 active 但 last_seen_at < 本次开抓时刻 cutoff
+# 的岗 = 本次全量列表里没出现 = 已下架。比逐岗 detail 探活省（一次列表抓取顺带探活），但**只对返全量
+# 在招岗、且确实翻到底的源安全**（截断/夹带已关闭岗的源会误杀 → 见 §5 不变量1、记忆 job-radar-job-
+# expiry-closed-detection「通用 staleness sweep 不可行」）。故双闸：① adapter 显式 supports_absence_
+# liveness 且 fetch_complete ② 占比安全闸（plan_absence_sweep）③ env LIVENESS_ABSENCE_APPLY 默认 dry-run。
+
+def plan_absence_sweep(active_count, candidate_count, *, apply, max_expire_fraction=0.5, min_active_floor=8):
+    """纯函数：据「本源 active 总数 / 拟下架(列表缺席)数 / 是否落库」决定这轮怎么走。
+    返回 (action, reason)，action ∈ {'noop','skip','dry_run','apply'}。
+    安全闸：拟下架占比 > max_expire_fraction 且 active 可观(≥min_active_floor) → 'skip'
+    （防 httpx 偶发空/半量数据把整源误判下架；宁可这轮不动，下次抓全再说）。"""
+    if candidate_count <= 0:
+        return ("noop", "no_absent")
+    if active_count >= min_active_floor and candidate_count > active_count * max_expire_fraction:
+        return ("skip", f"too_many:{candidate_count}/{active_count}")
+    return (("apply" if apply else "dry_run"), "ok")
+
+
+def sweep_absent_jobs(conn, source_id, cutoff, *, apply=True, max_expire_fraction=0.5):
+    """list-absence 探活：active 且 last_seen_at < cutoff（本源开抓前时刻）的岗 → expired + CLOSED 事件。
+    本次 upsert 把所有再见到的岗 last_seen_at 刷成 > cutoff，故 < cutoff 的即「本次列表缺席」。
+    仅 run.py 在 adapter.fetch_complete 时调用；apply=False 为 dry-run（只数不改）。
+    返回 {'active','candidates','expired','action'}。"""
+    sid = str(source_id)
+    with conn.cursor() as cur:
+        cur.execute("select count(*) from jobs where source_id = %s and status = 'active'", (sid,))
+        active = cur.fetchone()[0]
+        cur.execute(
+            "select id from jobs where source_id = %s and status = 'active' and last_seen_at < %s",
+            (sid, cutoff))
+        cand_ids = [str(r[0]) for r in cur.fetchall()]
+    action, _reason = plan_absence_sweep(
+        active, len(cand_ids), apply=apply, max_expire_fraction=max_expire_fraction)
+    result = {"active": active, "candidates": len(cand_ids), "expired": 0, "action": action}
+    if action != "apply":
+        return result
+    now = _now()
+    day = _day(now)
+    with conn.cursor() as cur:
+        cur.execute(
+            "update jobs set status = 'expired', confirmed_closed_at = %s "
+            "where id = any(%s::uuid[]) and status = 'active'", (now, cand_ids))
+        result["expired"] = cur.rowcount
+    record_job_events(conn, [plan_close_event(jid, source_id, day) for jid in cand_ids])
+    return result
+
+
 def record_job_events(conn, events) -> int:
     """best-effort 批量插 job_events（event_key 幂等 → on conflict do nothing）。
     写失败只 warning、返回 0，**绝不抛**（事件失败不许影响 jobs upsert，02 spec §5.3）。"""
