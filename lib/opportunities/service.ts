@@ -41,14 +41,14 @@ function buildActionMap(actions: JobAction[]): Map<string, ActionState> {
 }
 
 // 批量取 source 元信息（sources 永远在 Supabase）；失败不抛，freshness 退化为 manual SLA（§14.2）。
-async function fetchSourceMeta(supabase: SupabaseLike, sourceIds: string[]): Promise<Map<string, SourceMeta>> {
+// 取**全部** source 元信息（sources 是小表 ~800 行）。一次性取全表 = 可与召回并行（不再依赖召回回来的 source_ids，
+// 省掉一条串行跨区往返）；失败不抛，freshness 退化为 manual SLA（§14.2）。
+async function fetchSourceMeta(supabase: SupabaseLike): Promise<Map<string, SourceMeta>> {
   const map = new Map<string, SourceMeta>();
-  if (!sourceIds.length) return map;
   try {
     const { data, error } = await supabase
       .from("sources")
-      .select("id, company, adapter_name, crawl_method, last_checked_at, enabled")
-      .in("id", sourceIds);
+      .select("id, company, adapter_name, crawl_method, last_checked_at, enabled");
     if (error) {
       console.warn("[opportunities] source metadata query failed:", error.message);
       return map;
@@ -159,11 +159,15 @@ export async function buildOpportunityFeed(
     };
   }
 
-  const recall = await recallOpportunityCandidates(profile, now, supabase);
   const actionMap = buildActionMap(actions);
-
-  const sourceIds = Array.from(new Set(recall.jobs.map((j) => j.source_id).filter(Boolean) as string[]));
-  const sourceMeta = await fetchSourceMeta(supabase, sourceIds);
+  // 三条互相独立的 I/O 并行（旧实现是 recall→sourceMeta→…→critical 顺序 await，跨区往返串行叠加）：
+  //   ① 岗位召回（香港库）② source 元信息（Supabase 全表）③ 关键提醒（香港库，按 saved/applied 岗）。
+  // 并行后 today SSR 只吃最慢一条，而非三条之和。
+  const [recall, sourceMeta, critical] = await Promise.all([
+    recallOpportunityCandidates(profile, now, supabase),
+    fetchSourceMeta(supabase),
+    buildCriticalAlerts(actions, profile, intensity, now),
+  ]);
 
   const opps: Opportunity[] = [];
   for (const job of recall.jobs) {
@@ -195,9 +199,7 @@ export async function buildOpportunityFeed(
     });
   }
 
-  // 关键提醒（saved 岗关闭/快截止）单独取，置顶不受强度压制。
-  const critical = await buildCriticalAlerts(actions, profile, intensity, now);
-
+  // 关键提醒（saved 岗关闭/快截止）已在上面与召回并行取好，置顶不受强度压制。
   const overrideProvided = options.noveltySinceOverride !== undefined && options.noveltySinceOverride !== null;
   const noveltySince = resolveNoveltySince(overrideProvided ? options.noveltySinceOverride! : lastOpenedAt, now);
 

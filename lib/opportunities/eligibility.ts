@@ -19,6 +19,7 @@ import {
   recruitmentCategory,
   hasExplicitRecruitmentType,
   normalizeChinaCity,
+  classifyJobFunction,
 } from "../china-keyword-expansion";
 import { classifyCompanyIndustry, userTargetIndustryCategories, jobIndustryAllowed } from "../company-industry";
 import { educationMatch } from "../education-rank";
@@ -28,6 +29,18 @@ import { normalizeCompany } from "../company-normalize";
 export interface ActionState {
   primary: "saved" | "ignored" | "applied" | null;
   viewed: boolean;
+}
+
+// 用户「方向」职能集（筛选准确性核心）：只从**目标岗位**逐条整体分类，**不含关键词**——
+// 关键词里的 "SQL/Python/数据埋点" 会把方向污染成 研发/数据，让后端/算法岗误判为方向匹配。
+// 与 lib/scoring.ts 搜索路径同口径（classifyJobFunction({title: role})，跳过判不出的「其他」）。
+function userTargetFunctions(profile: RadarProfile): Set<string> {
+  const out = new Set<string>();
+  for (const role of profile.targetRoles) {
+    const fn = classifyJobFunction({ title: role });
+    if (fn && fn !== "其他") out.add(fn);
+  }
+  return out;
 }
 
 // role+keyword 跨查询取最优 tier；exact 立即胜出，否则首个 related。
@@ -114,7 +127,13 @@ export function computeMatchFacts(
 ): MatchFacts {
   const roleQueries = [...profile.targetRoles, ...profile.targetKeywords];
   const roleConstrained = roleQueries.length > 0;
-  const role = roleConstrained ? bestRoleTier(job, roleQueries) : { tier: null as null, label: null };
+  // 职能门：岗位职能判得出且不在用户方向集内 → 不认作方向匹配（roleTier=null → checkEligibility 按 role_mismatch 拒掉）。
+  // 这样「后端/算法开发(研发)」不会因 JD 里含 AI/产品 被误标 方向匹配/高匹配。判不出(其他)或用户没填方向 → 放行（不误杀）。
+  const userFns = userTargetFunctions(profile);
+  const jobFn = classifyJobFunction(job);
+  const functionAllowed = userFns.size === 0 || jobFn === "其他" || userFns.has(jobFn);
+  const role =
+    roleConstrained && functionAllowed ? bestRoleTier(job, roleQueries) : { tier: null as null, label: null };
 
   const loc = locationState(job, profile.targetLocations);
   const stage = stageState(job, profile.experienceStage);
