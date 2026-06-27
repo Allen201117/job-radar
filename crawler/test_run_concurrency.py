@@ -30,19 +30,20 @@ class IsHttpxSafeTest(unittest.TestCase):
     def test_httpx_adapters_true(self):
         for a in ("greenhouse", "lever", "workday", "oracle", "hotjob", "wt",
                   "tencent", "baidu", "jd", "apple", "amazon", "microsoft",
-                  "netease", "oppo"):  # netease/oppo: PlaywrightAdapter 子类但自带 httpx fetch（同 hotjob/wt）
+                  "netease", "oppo",  # netease/oppo: PlaywrightAdapter 子类但自带 httpx fetch（同 hotjob/wt）
+                  # feishu 家族（2026-06-28）：httpx-first（posts API 冷可达），浏览器仅做回退 → 进并发档
+                  "feishu", "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu"):
             self.assertTrue(run._is_httpx_safe(a), a)
 
     def test_browser_and_unknown_false(self):
-        # 浏览器 adapter（Playwright，非线程安全）+ 未知/空 → 必须落串行档（fail-safe）
-        for a in ("moka", "beisen", "company_spa", "feishu", "nio_feishu",
+        # 真浏览器 adapter（fetch 主路径起 Playwright，非线程安全）+ 未知/空 → 必须落串行档（fail-safe）
+        for a in ("moka", "beisen", "company_spa",
                   "bytedance", "bytedance_campus", "google", "", "未来新增的源", None):
             self.assertFalse(run._is_httpx_safe(a), a)
 
     def test_every_known_browser_adapter_is_serial(self):
-        # 兜底铁律：凡 fetch 路径会起 sync_playwright 的 adapter，绝不能进并发档。
-        for a in ("moka", "beisen", "company_spa", "feishu", "nio_feishu",
-                  "xpeng_feishu", "horizon_feishu", "xiaomi_feishu",
+        # 兜底铁律：fetch **主路径**会起 sync_playwright 的 adapter，绝不能进并发档（feishu 主路径已是 httpx，故不在此列）。
+        for a in ("moka", "beisen", "company_spa",
                   "bytedance", "bytedance_campus", "google"):
             self.assertNotIn(a, run._HTTPX_SAFE_ADAPTERS, a)
 
@@ -339,12 +340,12 @@ class PartitionByTierTest(unittest.TestCase):
             {"adapter_name": "moka", "id": "2"},       # 串行
             {"adapter_name": "workday", "id": "3"},    # 并发
             {"adapter_name": "beisen", "id": "4"},     # 串行
-            {"adapter_name": "feishu", "id": "5"},     # 串行
+            {"adapter_name": "feishu", "id": "5"},     # 并发（2026-06-28 起 httpx-first）
             {"adapter_name": "hotjob", "id": "6"},     # 并发（PlaywrightAdapter 子类但 httpx fetch）
         ]
         concurrent, serial = run._partition_by_tier(sources)
-        self.assertEqual([s["id"] for s in concurrent], ["1", "3", "6"])
-        self.assertEqual([s["id"] for s in serial], ["2", "4", "5"])
+        self.assertEqual([s["id"] for s in concurrent], ["1", "3", "5", "6"])
+        self.assertEqual([s["id"] for s in serial], ["2", "4"])
 
 
 class _FakeAdapter:
