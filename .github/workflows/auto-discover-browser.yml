@@ -1,0 +1,41 @@
+name: auto-discover-sources-browser
+
+# 每日定向自动扩源（浏览器变体）：补 httpx 探不到的 beisen/moka 传统大厂缺口。
+# httpx 廉价探一批 tenant（标题核验）→ 只对前 CONFIRM_CAP 家开真 adapter(Playwright)确认真产岗 → 只入库产岗的。
+# §3 精>量：不铺量/不猜slug入库。三道闸：dry-run默认 / source_url去重 / 每日上限。详见 crawler/auto_discover_browser.py。
+on:
+  schedule:
+    - cron: "0 21 * * *"   # UTC 21（北京 5:00），低峰；与 enrich/audit 浏览器档错开，新源赶下次 daily-crawl
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "true=真入库；留空=dry-run 只数不插"
+        required: false
+        default: ""
+      confirm_cap:
+        description: "本次最多浏览器确认多少家（慢，默认 10）"
+        required: false
+        default: "10"
+
+jobs:
+  discover-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      AUTO_DISCOVER_BROWSER_CONFIRM_CAP: ${{ github.event.inputs.confirm_cap || '10' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+      - name: Install Playwright chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Auto-discover (browser) + confirm + insert beisen/moka sources
+        run: python crawler/auto_discover_browser.py
+        env:
+          # 定时跑(schedule)→真入库 'true'；手动(workflow_dispatch)→按 apply 入参，留空=dry-run。
+          AUTO_DISCOVER_APPLY: ${{ github.event_name == 'schedule' && 'true' || github.event.inputs.apply }}
