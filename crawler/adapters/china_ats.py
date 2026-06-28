@@ -19,6 +19,8 @@ import re
 from typing import List, Optional
 from urllib.parse import urljoin, urlparse
 
+import httpx
+
 import normalizer
 from .base import RawJob
 from .playwright_base import PlaywrightAdapter
@@ -350,17 +352,96 @@ class BeisenAdapter(ChinaSpaAdapter):
     _PAGE_SIZE = 50      # 单页拉取数（接口实测 50 稳定返回）
     _MAX_JOBS = 600      # 单租户上限（防超大央企一次拉爆；600=12 页足够覆盖绝大多数）
 
+    # list-absence 探活：beisen GetJobAdPageList 返全量在招岗 + 本类翻全 → 抓全时列表缺席=下架（同 feishu）。
+    supports_absence_liveness = True
+    fetch_complete = False
+
     def fetch(self, source_url: str) -> str:
+        """httpx-first（2026-06-28 实测 6/6 租户冷 httpx 可达）：HTML 抽 PortalId → GetJobAdPageList 翻页，
+        **零浏览器**。但 jd_url 需本租户详情路由（点击捕获，按 host 缓存到 beisen_routes.json）——故仅当
+        **route 已缓存**时走 httpx（能拼 jd_url）；route 未缓存的租户回退浏览器（顺带探+缓存 route，由
+        harvest_beisen_routes.py 持久化）。daily-crawl 无 Playwright → httpx 路径自给，回退浏览器会抛由上层记 failed。"""
+        self.fetch_complete = False
+        parsed = urlparse(source_url)
+        self._origin = f"{parsed.scheme}://{parsed.netloc}"
+        self._host = parsed.netloc
+        segs = [s for s in (parsed.path or "").split("/") if s]
+        self._portal_prefix = ("/" + "/".join(segs[:-1])) if len(segs) > 1 else ""
+        self.list_urls = [source_url]
+
+        route = _BEISEN_ROUTE_CACHE.get(self._host)
+        if route:  # route 已缓存 → 尝试纯 httpx（拿到列表即能拼 jd_url，不开浏览器）
+            try:
+                j = self._httpx_fetch(source_url)
+            except Exception:
+                j = None
+            if j:
+                self._detail_route = route
+                return j
+
+        # route 未缓存 / httpx 没打通 → 回退浏览器（探+缓存 route），再不行落 SSR
         try:
-            list_json = self._fetch_paginated(source_url)  # 浏览器①：捕获 GetJobAdPageList POST → 服务端翻页重放
+            list_json = self._fetch_paginated(source_url)
         except RuntimeError:
-            # 新版无 JSON 可拦 → 试老版 SSR（C 型）：列表页 HTML 直出 jobId 锚点。
             return self._fetch_ssr(source_url)
         self._detail_route = _BEISEN_ROUTE_CACHE.get(self._host)
         if self._detail_route is None and self._host not in _BEISEN_ROUTE_CACHE:
             self._detail_route = self._discover_detail_route(source_url, list_json)
             _BEISEN_ROUTE_CACHE[self._host] = self._detail_route  # 命中或 None 都缓存，避免重复探测
         return list_json
+
+    def _httpx_fetch(self, source_url: str) -> Optional[str]:
+        """纯 httpx 抓 beisen 列表（无浏览器）：GET 列表页 HTML 抽 PortalId → POST GetJobAdPageList 翻全。
+        Category 由 url 路径判（campus/intern→校招"2"，否则社招"1"）；端点大小写两试（/api/Jobad/ 与 /api/JobAd/）。
+        返回 {"_intercepted":[{"Data":[...],"Count":N}]}（与浏览器路径同 shape，parse/_map 不变）或 None（没打通）。"""
+        parsed = urlparse(source_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        path = (parsed.path or "").lower()
+        category = "2" if any(k in path for k in ("campus", "intern", "grad", "school", "xiaozhao")) else "1"
+        ua = PlaywrightAdapter.user_agent
+        rows: List[dict] = []
+        total: Optional[int] = None
+        endpoints = (f"{origin}/api/Jobad/GetJobAdPageList", f"{origin}/api/JobAd/GetJobAdPageList")
+        ep_ok = None
+        with httpx.Client(timeout=20, follow_redirects=True, headers={"User-Agent": ua}) as cli:
+            try:
+                html = cli.get(source_url).text
+            except Exception:
+                return None
+            m = re.search(r'PortalId"\s*:\s*"([0-9a-fA-F-]+)"', html or "")
+            portal_id = m.group(1) if m else ""
+            index = 0
+            while len(rows) < self._MAX_JOBS:
+                body = {"PageIndex": index, "PageSize": self._PAGE_SIZE, "Category": [category],
+                        "KeyWords": "", "SpecialType": 0, "PortalId": portal_id,
+                        "DisplayFields": ["Category", "Kind", "LocId", "PostDate", "WorkWeChatQrCode"]}
+                jj = None
+                for ep in ((ep_ok,) if ep_ok else endpoints):
+                    try:
+                        resp = cli.post(ep, json=body, headers={"Content-Type": "application/json"})
+                        cand = resp.json()
+                    except Exception:
+                        continue
+                    if isinstance(cand, dict) and isinstance(cand.get("Data"), list):
+                        jj, ep_ok = cand, ep
+                        break
+                if not isinstance(jj, dict):
+                    break
+                if total is None:
+                    total = jj.get("Count") or jj.get("Total") or 0
+                chunk = jj.get("Data") or []
+                if not isinstance(chunk, list) or not chunk:
+                    break
+                rows.extend(chunk)
+                if total and len(rows) >= total:
+                    break
+                if len(chunk) < self._PAGE_SIZE:
+                    break
+                index += 1
+        if not rows:
+            return None
+        self.fetch_complete = (total is not None and len(rows) >= (total or 0))
+        return json.dumps({"_intercepted": [{"Data": rows, "Count": total or len(rows)}]}, ensure_ascii=False)
 
     def _fetch_paginated(self, source_url: str) -> str:
         """渲染列表页，捕获其 GetJobAdPageList POST 请求，然后用站点自身 session 服务端翻页重放，
