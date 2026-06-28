@@ -1,0 +1,41 @@
+name: auto-discover-sources
+
+# 每日定向自动扩源（§3 精>量：不铺量、不猜slug入库）。
+# 从精选目标公司清单 + 用户 target_companies 里取**库里没有的**公司 → httpx live 探活验证
+# （feishu/hotjob/wt）→ 只把 verified+真产岗+标题核验通过的源入库。三道闸：dry-run 默认 / source_url
+# 去重 / 每日上限。详见 crawler/auto_discover.py。新源由下一次 daily-crawl 自动开抓。
+on:
+  schedule:
+    - cron: "0 23 * * *"   # UTC 23（北京 7:00），赶在 UTC 1 的 daily-crawl 前把新源备好
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "true=真入库；留空=dry-run 只数不插"
+        required: false
+        default: ""
+      target_cap:
+        description: "本次最多 probe 多少家缺失公司"
+        required: false
+        default: "30"
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      AUTO_DISCOVER_TARGET_CAP: ${{ github.event.inputs.target_cap || '30' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+      - name: Auto-discover + verify + insert sources (httpx only)
+        run: python crawler/auto_discover.py
+        env:
+          # 定时跑(schedule)→真入库 'true'；手动(workflow_dispatch)→按 apply 入参，留空=dry-run。
+          # 安全靠 auto_discover.py 三道闸：探活验证门(只入 verified+真产岗+标题核验) + source_url 去重 + 每日上限。
+          AUTO_DISCOVER_APPLY: ${{ github.event_name == 'schedule' && 'true' || github.event.inputs.apply }}
