@@ -57,7 +57,7 @@ interface Props {
 
 // 信号 chip 配色：关键提醒醒目（暖橙），STILL_OPEN 绿（仍在招），CLOSED_OR_STALE 灰。
 const SIGNAL_STYLE: Record<OpportunitySignalType, string> = {
-  STILL_OPEN: "border-[#bcdcae] bg-[#eef6e0] text-[#4d6b2f] dark:border-[#a3d06a]/30 dark:bg-[#a3d06a]/12 dark:text-[#a3d06a]",
+  STILL_OPEN: "border-[#bcdcae] bg-[#eef6e0] text-[#4d6b2f] dark:border-[#a3d06a]/45 dark:bg-[#a3d06a]/20 dark:text-[#d2f0ad]",
   DEADLINE_SOON: "border-[#f0d9a8] bg-[#fbf1de] text-[#9a6a1f] dark:border-[#e8b87f]/30 dark:bg-[#e8b87f]/12 dark:text-[#e8b87f]",
   CLOSED_OR_STALE: "border-black/[0.08] bg-[#f0ece2] text-[#6b655a] dark:border-white/10 dark:bg-white/[0.08] dark:text-[#b6ad9d]",
   CAMPUS_WINDOW: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/12 dark:text-[#7fb2e8]",

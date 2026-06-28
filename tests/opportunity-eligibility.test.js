@@ -183,6 +183,37 @@ test("computeMatchFacts: 不同职能 → roleTier null", () => {
   assert.equal(f.roleTier, null);
 });
 
+// 职能门回归（治本次线上误标）：研发岗 JD 里含目标关键词(AI/产品/支付)，但用户方向是产品经理 →
+// 不得被算作「方向匹配/高匹配」，应按 role_mismatch 拒掉。userFns 仅取目标岗位整体分类(产品)，不被关键词污染。
+test("computeMatchFacts: 后端(研发)岗 JD 含 AI/产品，方向是产品经理 → 职能门拦截 roleTier null", () => {
+  const devJob = job({
+    title: "后端开发实习生（后端架构方向）-国际支付",
+    summary: "负责国际支付产品线的后端架构，使用 AI、大模型能力建设支付系统。" + "x".repeat(40),
+  });
+  const f = computeMatchFacts(
+    devJob,
+    rprofile({ targetRoles: ["AI 产品经理"], targetKeywords: ["AI", "产品", "支付", "Python"] }),
+    undefined,
+    noAction,
+    NOW,
+  );
+  assert.equal(f.roleTier, null, "研发岗不应被算作 产品 方向的匹配");
+  assert.deepEqual(checkEligibility(f), { eligible: false, reason: "role_mismatch" });
+});
+
+test("computeMatchFacts: 同方向(产品)岗位仍 exact 放行（职能门不误杀）", () => {
+  const pmJob = job({ title: "AI 产品经理", summary: "负责 AI 产品的需求与规划。" + "x".repeat(60) });
+  const f = computeMatchFacts(
+    pmJob,
+    rprofile({ targetRoles: ["AI 产品经理"], targetKeywords: ["AI", "产品"] }),
+    undefined,
+    noAction,
+    NOW,
+  );
+  assert.equal(f.roleTier, "exact");
+  assert.equal(checkEligibility(f).eligible, true);
+});
+
 test("computeMatchFacts: 排除词命中（逐字对齐 crawler）", () => {
   const f = computeMatchFacts(job({ title: "销售经理" }), rprofile({ excludeKeywords: ["销售"] }), undefined, noAction, NOW);
   assert.equal(f.excluded, true);
