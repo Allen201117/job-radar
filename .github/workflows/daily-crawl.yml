@@ -86,6 +86,10 @@ jobs:
         env:
           CRAWL_DETAIL_CAP: "0"
           CRAWL_CONCURRENCY: "10"
+          # list-absence 探活落库：抓全的源(当前仅 feishu 家族 supports_absence_liveness)本次列表缺席的
+          # active 岗 → expired。生产 dry-run 已验证全规模安全(占比 3-11%，远低于 50% 安全闸)，2026-06-28 开启。
+          # 双安全闸仍在：仅 fetch_complete 的源 + 单源占比>50% 自动跳过。见 crawler/jobs_db.sweep_absent_jobs。
+          LIVENESS_ABSENCE_APPLY: "true"
 
       # 发现/保鲜分流（02 spec §2）：daily-crawl 只管「发现」（抓列表/更新字段），**不再背内联 sweep**。
       # 保鲜（逐岗核验撤岗→expired）由独立工作流按 SLA 调频承担、与发现解耦、互不挤预算：

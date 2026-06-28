@@ -233,12 +233,17 @@ def write_experience(sb, company_id, claim, sources, judge, status, dimension="c
 
 
 def fetch_t3_queue(sb, limit):
-    """T3 队列：notable（已 T2 富化、founded_year 非空）+ t3 待处理/超期 + 未超死信。"""
+    """T3 队列：所有已建画像的公司（= 我们在抓的源公司，需求对齐）+ t3 待处理/超期 + 未超死信。
+    2026-06-28 放宽：原硬门 `founded_year 非空` 只放 64 家 notable，把 707 家「Wikidata 查无成立年份但
+    我们确实在抓」的目标公司全挡在外 → T3 队列长期为空、洞察停更（最后 6/20）。改为 demand-driven：
+    凡有画像即可入 T3 队列。安全/温和靠 drain_t3 的搜索额度封顶（~90/天）+ 判官 ≥2 源共识门自动 abstain
+    低信号公司，不会爆预算。notable 优先（founded_year desc）先花额度在信号好的公司上。"""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=T3_TTL_DAYS)).isoformat()
     q = (sb.table("company_profiles").select("id,company,aliases,t3_fail_count")
          .lt("t3_fail_count", MAX_FAIL)
-         .not_.is_("founded_year", "null")
-         .or_(f"t3_checked_at.is.null,t3_checked_at.lt.{cutoff}"))
+         .or_(f"t3_checked_at.is.null,t3_checked_at.lt.{cutoff}")
+         .order("founded_year", desc=True, nullsfirst=False)
+         .order("t3_checked_at", desc=False, nullsfirst=True))
     if limit:
         q = q.limit(limit)
     return (q.execute().data) or []
