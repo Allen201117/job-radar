@@ -1,0 +1,49 @@
+name: harvest-beisen-routes
+
+# 浏览器逐家探出 beisen 各租户详情路由 → 落盘 crawler/beisen_routes.json → commit 回仓。
+# 覆盖到(近)全部 enabled beisen 租户后，beisen 即可进 daily-crawl httpx 快车道。每晚一批，几晚覆盖全。
+# 详见 crawler/harvest_beisen_routes.py。注：本工作流会 commit beisen_routes.json 回 main（不是迁移、不触发DB）。
+on:
+  schedule:
+    - cron: "0 19 * * *"   # UTC 19（北京 3:00），低峰；与其他浏览器档错开
+  workflow_dispatch:
+    inputs:
+      cap:
+        description: "本次最多探多少家未缓存租户（浏览器慢，默认 40）"
+        required: false
+        default: "40"
+
+permissions:
+  contents: write   # 需要把更新后的 beisen_routes.json push 回仓
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      HARVEST_BEISEN_CAP: ${{ github.event.inputs.cap || '40' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+      - name: Install Playwright chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Harvest beisen detail routes
+        run: python crawler/harvest_beisen_routes.py
+      - name: Commit updated routes if changed
+        run: |
+          if ! git diff --quiet -- crawler/beisen_routes.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add crawler/beisen_routes.json
+            git commit -m "chore(crawler): 增量持久化 beisen 详情路由 [skip ci]"
+            git push origin HEAD:main
+            echo "routes committed."
+          else
+            echo "no new routes."
+          fi
