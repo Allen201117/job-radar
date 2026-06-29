@@ -6,8 +6,10 @@
   3. _process_one_source 抽取后行为不变：质量门通过的岗位被 upsert，返回聚合计数。
 """
 import unittest
+from unittest import mock
 
 import run
+from adapters import china_ats
 from adapters.base import RawJob
 
 # Phase 1：本文件的并发/分片测试全打 db(Supabase) mock 路径，强制 jobs_db 关闭——否则 .env.local 的
@@ -331,6 +333,24 @@ class BatchUpsertTest(unittest.TestCase):
         jobs = [{"source_id": "s", "jd_url": "https://x/1", "company": "C", "title": "t1"}]
         created, updated = dbmod.upsert_jobs_batch(sb, jobs)
         self.assertEqual((created, updated), (0, 1))  # 兜底走 update
+
+
+class BeisenPerSourceTierTest(unittest.TestCase):
+    """beisen 是 per-source：route 已缓存的租户进 httpx 并发档，未缓存的（老版SSR/异构）留浏览器串行档。"""
+    def test_cached_route_beisen_is_concurrent_uncached_serial(self):
+        with mock.patch.dict(china_ats._BEISEN_ROUTE_CACHE,
+                             {"cached.zhiye.com": "https://cached.zhiye.com/social/detail"}, clear=False):
+            sources = [
+                {"adapter_name": "beisen", "id": "cached", "source_url": "https://cached.zhiye.com/social/jobs"},
+                {"adapter_name": "beisen", "id": "uncached", "source_url": "https://nope.zhiye.com/social/jobs"},
+            ]
+            concurrent, serial = run._partition_by_tier(sources)
+        self.assertEqual([s["id"] for s in concurrent], ["cached"])   # route 已缓存 → httpx 快车道
+        self.assertEqual([s["id"] for s in serial], ["uncached"])     # 没缓存 → 留浏览器（不漏抓 SSR/异构）
+
+    def test_beisen_not_unconditionally_httpx_safe(self):
+        # 仍不能整体把 beisen 加进 _HTTPX_SAFE_ADAPTERS（否则未缓存租户被误判 httpx → 漏抓）
+        self.assertFalse(run._is_httpx_safe("beisen"))
 
 
 class PartitionByTierTest(unittest.TestCase):
