@@ -147,11 +147,21 @@ def _is_httpx_safe(adapter_name) -> bool:
     return (adapter_name or "") in _HTTPX_SAFE_ADAPTERS
 
 
+def _source_is_httpx_safe(s) -> bool:
+    """单源是否 httpx-safe。beisen 是 **per-source**：详情路由已缓存的租户能纯 httpx（进快车道），
+    未缓存的（含老版 SSR/异构，无 JSON API）必须留浏览器档——故不能整体把 beisen 加进 _HTTPX_SAFE_ADAPTERS。"""
+    adapter = s.get("adapter_name") or ""
+    if adapter == "beisen":
+        from adapters.china_ats import beisen_httpx_ready
+        return beisen_httpx_ready(s.get("source_url") or "")
+    return _is_httpx_safe(adapter)
+
+
 def _partition_by_tier(sources):
     """拆成 (并发档 httpx-safe, 串行档 浏览器/未知)，各自保持原顺序（本土优先排序不被打乱）。"""
     concurrent, serial = [], []
     for s in sources:
-        (concurrent if _is_httpx_safe(s.get("adapter_name") or "") else serial).append(s)
+        (concurrent if _source_is_httpx_safe(s) else serial).append(s)
     return concurrent, serial
 
 
@@ -355,11 +365,14 @@ def _process_one_source(source, supabase) -> dict:
             created, updated = db.upsert_jobs_batch(supabase, job_batch)
 
         # 5b. list-absence 探活（仅 HK 库 + adapter 抓全 + 显式支持）：本次全量列表缺席的 active 岗 → 下架。
-        #     默认 dry-run（只数不改），env LIVENESS_ABSENCE_APPLY=true 才落库（先线上 dry-run 验证占比再开）。
+        #     env LIVENESS_ABSENCE_APPLY=true 才落库；但 LIVENESS_ABSENCE_OBSERVE 里的 adapter 强制 dry-run
+        #     （新接入的源先观察占比，确认列表只返在招岗、不误杀，再从 observe 名单移除开 apply）。默认 beisen 观察。
         if (cutoff is not None and getattr(adapter, "supports_absence_liveness", False)
                 and getattr(adapter, "fetch_complete", False)):
             try:
-                apply_absence = os.environ.get("LIVENESS_ABSENCE_APPLY", "").lower() in ("1", "true", "yes")
+                _observe = {x.strip() for x in os.environ.get("LIVENESS_ABSENCE_OBSERVE", "beisen").split(",") if x.strip()}
+                apply_absence = (os.environ.get("LIVENESS_ABSENCE_APPLY", "").lower() in ("1", "true", "yes")
+                                 and adapter_name not in _observe)
                 ab = jobs_db.sweep_absent_jobs(_get_thread_jobs_conn(), source_id, cutoff, apply=apply_absence)
                 if ab["candidates"]:
                     print(f"    [absence] active={ab['active']} absent={ab['candidates']} "

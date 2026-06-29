@@ -303,6 +303,17 @@ def _load_beisen_routes() -> dict:
 
 
 _BEISEN_ROUTE_CACHE: dict = _load_beisen_routes()
+
+
+def beisen_httpx_ready(source_url: str) -> bool:
+    """该 beisen 源能否走纯 httpx（= 详情路由已缓存，能拼 jd_url 不开浏览器）。
+    未缓存（含老版 SSR / 异构租户，无 GetJobAdPageList JSON）→ False → 必须留浏览器档。
+    run.py `_partition_by_tier` 用它做 **per-source** 分档：缓存了的 beisen 进 httpx 快车道，没缓存的留浏览器。"""
+    try:
+        host = urlparse(source_url or "").netloc
+    except Exception:
+        return False
+    return bool(host) and bool(_BEISEN_ROUTE_CACHE.get(host))
 # 北森详情页常见路由名（zwxq=职位详情拼音；不同租户配置不同：chinalife=zwxq、横店/杰瑞=detail…）
 _BEISEN_DETAIL_NAMES = ("zwxq", "detail", "jobdetail", "positiondetail", "jobDetail")
 
