@@ -100,16 +100,24 @@
 
 **A 阶段验收**：`db-report` 探活覆盖率 SQL 改造前后对比（never_checked% 下降、checked_24h% 上升）；feishu httpx 真机抓取确认 created>0；回归四件套全绿。
 
-### 阶段 B — beisen httpx 化（最大奖，先 spike）
-**B1. Spike（先做，gate 后续）**
-- 取 ~10–15 个代表 beisen 租户（覆盖 social/campus、新版/老版）。
-- 步骤：① httpx GET 列表页 HTML 抽 `PortalId`（已证可行）② 用现有浏览器适配器抓一次包，记录确切 `GetJobAdPageList` 端点 host/path ③ 用该端点 + HTML 抽的 PortalId 冷 httpx 重放，确认返回真实岗位。
-- **过线阈值**：≥70% 代表租户冷 httpx 可达 → 建 httpx 适配器；否则 beisen 留浏览器车道，止于此。
-- **同时验证**：beisen 列表是否只返「在招」岗（list-absence 安全前提）；若夹带已关闭岗 → list-absence 对 beisen 禁用，改逐岗 detail 探活。
+### 阶段 B — beisen httpx 化（最大奖）✅ spike 通过 + adapter 已建
 
-**B2.（spike 过线才做）beisen httpx 适配器**
-- `crawler/adapters/china_ats.py` `BeisenAdapter`：httpx-first（HTML 抽 PortalId → httpx 翻页 GetJobAdPageList），失败回退现有浏览器抓包 + SSR 链。
-- 加入 `_HTTPX_SAFE_ADAPTERS` 进 daily-crawl 4×/天 + list-absence 探活。老 SSR / httpx 不可达租户继续浏览器车道（按租户回退，不一刀切）。
+**B1. Spike（2026-06-28 完成，6/6 租户冷 httpx 可达 = 100%，远超 70% 阈值）**
+- 实测端点 = `{origin}/api/Jobad/GetJobAdPageList`（**同 host**，非另一 API host；sany 用大写 `/api/JobAd/` → 适配器两试）。
+- body = `{PageIndex,PageSize,Category,KeyWords,SpecialType,PortalId,DisplayFields}`；`Category=["1"]`社招/`["2"]`校招（由 source_url 路径判）；`PortalId` 冷 httpx 从列表页 HTML 正则直取。
+- 响应 Data item **自带 `JobAdName`(标题)/`Duty`+`Require`(正文)/`Salary`/`LocNames`** → httpx beisen 岗**直接有正文**（同 feishu，免单独富化）。实测 sunwoda 454/leapmotor 829/sany 199/inovance 131/popmart 214/youzan 6 岗全冷 httpx 拿到。
+- **jd_url 是唯一额外约束**：Data item **无** per-job URL → jd_url = `{route}?jobAdId={Id}`，route 因租户而异、需浏览器点击探测，按 host 缓存在 `beisen_routes.json`（当前仅 50/261 持久化）。
+
+**B2. beisen httpx 适配器（已建并 commit）**
+- `crawler/adapters/china_ats.BeisenAdapter`：**httpx-first 仅当 route 已缓存**（能拼 jd_url 不开浏览器）→ `_httpx_fetch`；route 未缓存 → 回退现有浏览器（探+缓存 route）。加 `supports_absence_liveness`+`fetch_complete`。
+- live 验证 aimer（已缓存）httpx 31 岗全带 jd_url+正文、fetch_complete=True；test_beisen_httpx(5) + 回归 490 全绿。**零风险**：beisen 仍留浏览器 tier（未 flip），仅缓存租户改走 httpx。
+
+**B3. 路由收割（解锁全量 httpx 的前置）**
+- `crawler/harvest_beisen_routes.py` + `.github/workflows/harvest-beisen-routes.yml`（每晚 UTC19，浏览器逐家探路由→落盘 `beisen_routes.json`→commit 回仓，cap 一批，几晚覆盖全 261）。
+
+**B4. tier-flip（B3 覆盖率够后做，最终落地的 freshness/有效性 win）**
+- `beisen_routes.json` 覆盖到(近)全部 enabled beisen 租户后 → 把 `beisen` 加进 `crawler/run.py` `_HTTPX_SAFE_ADAPTERS` → 进 daily-crawl httpx 快车道（4×/天）+ list-absence 探活。届时 40714 个 beisen 岗从慢浏览器车道整体搬入快车道（新鲜度+探活一起好），且浏览器自动扩源变体能确认+入库这批"adapter 此前抽不出"的 beisen 大厂源。
+- **list-absence 安全前提**（B1 待补验）：确认 beisen 列表只返在招岗；若夹带已关闭岗 → 对 beisen 关 absence，靠逐岗/sweep。
 
 ### 阶段 C — 浏览器车道收尾 + 诚实计数
 - enrich-crawl / dead-link-audit 重新圈定到**只剩真浏览器源**（moka + beisen-old + byd/快手/google/bytedance）；enrich-crawl 1×→2×/天。
