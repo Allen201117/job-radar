@@ -1,7 +1,8 @@
 """beisen 列表 httpx-first 抓取单测（mock httpx，不打真网络）。
 
-覆盖：① Category 由 url 路径判（campus→校招"2" / social→社招"1"）② 翻页收齐 Count + 抓全判定
-③ 端点大小写两试（/api/Jobad/ 与 /api/JobAd/）④ 仅 route 已缓存才走 httpx（否则回退浏览器，本测不触发）。
+覆盖：① 翻页收齐 Count + 抓全判定 ② 端点大小写两试（/api/Jobad/ 与 /api/JobAd/）
+③ 仅 route 已缓存才走 httpx（否则回退浏览器，本测不触发）。
+注：Category 固定取 []（全部招聘类别），不再按 url 路径猜社招/校招——单类别会漏抓另一类别导致 list-absence 误杀。
 红线：抓不全(撞上限)绝不让 fetch_complete=True 误导 list-absence。
 """
 import json

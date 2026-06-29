@@ -407,8 +407,10 @@ class BeisenAdapter(ChinaSpaAdapter):
         返回 {"_intercepted":[{"Data":[...],"Count":N}]}（与浏览器路径同 shape，parse/_map 不变）或 None（没打通）。"""
         parsed = urlparse(source_url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
-        path = (parsed.path or "").lower()
-        category = "2" if any(k in path for k in ("campus", "intern", "grad", "school", "xiaozhao")) else "1"
+        # Category=[] = 不按招聘类别过滤 = 返该租户**全部**岗（社招+校招+实习+内部）。2026-06-29 实测：单类别
+        # （由 url 路径猜社招/校招）会漏抓另一类别 → 那些 live 岗在 list-absence 里被误判「缺席」=误杀活岗
+        # （changan 社招[1]=185 但全部[]=204、leapmotor [1]=829 vs []=921）。取全部 → live 是 DB 的超集 →
+        # absence 只判真正撤掉的岗，绝不误杀；freshness 也更全。dedup 靠 canonical_jd_url（同岗一行）。
         ua = PlaywrightAdapter.user_agent
         rows: List[dict] = []
         total: Optional[int] = None
@@ -423,7 +425,7 @@ class BeisenAdapter(ChinaSpaAdapter):
             portal_id = m.group(1) if m else ""
             index = 0
             while len(rows) < self._MAX_JOBS:
-                body = {"PageIndex": index, "PageSize": self._PAGE_SIZE, "Category": [category],
+                body = {"PageIndex": index, "PageSize": self._PAGE_SIZE, "Category": [],
                         "KeyWords": "", "SpecialType": 0, "PortalId": portal_id,
                         "DisplayFields": ["Category", "Kind", "LocId", "PostDate", "WorkWeChatQrCode"]}
                 jj = None
