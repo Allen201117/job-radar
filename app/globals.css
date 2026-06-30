@@ -547,17 +547,21 @@
 /* ───────────────────────────────────────────────────────────────
    落地页（app/page.tsx）专用动效与布局工具类。
    ─────────────────────────────────────────────────────────────── */
-/* 雷达同心环（标题背后缓慢扩散）*/
+/* 雷达同心环（标题背后缓慢扩散）—— 雷达绿，深浅色各自调透明度，比原先更显眼 */
 @keyframes lp-expand {
-  0% { width: 120px; height: 120px; opacity: 0.6; }
+  0% { width: 120px; height: 120px; opacity: 0.8; }
   100% { width: 760px; height: 760px; opacity: 0; }
 }
 .lp-ring {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  border: 1px solid rgba(26, 23, 20, 0.07); border-radius: 50%;
+  border: 1.5px solid rgba(var(--radar-green), 0.42); border-radius: 50%;
+  box-shadow: 0 0 24px -6px rgba(var(--radar-green), 0.3);
   animation: lp-expand 4s ease-out infinite;
 }
-.dark .lp-ring { border-color: rgba(255, 255, 255, 0.07); }
+.dark .lp-ring {
+  border-color: rgba(var(--radar-green), 0.52);
+  box-shadow: 0 0 28px -6px rgba(var(--radar-green), 0.42);
+}
 
 /* 公司胶囊无缝滚动 */
 @keyframes lp-marquee { to { transform: translateX(-50%); } }
