@@ -150,13 +150,8 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
       </header>
 
       {/* ——— HERO ——— */}
+      {/* 雷达同心环已泛化为全站 <RadarRings/>（app/layout.tsx），不再在 hero 单独渲染，避免重合 */}
       <section className="lp-hero relative mx-auto max-w-6xl px-6 pb-12 pt-[4.5rem] text-center">
-        <div className="pointer-events-none absolute left-1/2 top-[46%] z-0 -translate-x-1/2 -translate-y-1/2" aria-hidden="true">
-          <span className="lp-ring" style={{ animationDelay: "0s" }} />
-          <span className="lp-ring" style={{ animationDelay: "1.3s" }} />
-          <span className="lp-ring" style={{ animationDelay: "2.6s" }} />
-        </div>
-
         {/* 漂浮产品卡 */}
         <div className="lp-floats pointer-events-none absolute inset-0 z-10">
           <figure className="lp-float absolute left-[-12px] top-[54px]" style={{ ["--fd" as string]: 42 } as CSSProperties}>

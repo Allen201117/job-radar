@@ -35,7 +35,15 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
+    /* 暖纸底纹搬到 body：让全站雷达波纹层（fixed, z-index:-1）能落在暖纸之上、页面内容之下。
+       isolation:isolate 把 body 变成层叠上下文，负 z 的波纹层只相对 body 自身排序（在暖纸底之上）。*/
+    background-color: #f4efe6;
+    background-image:
+      radial-gradient(58% 50% at 84% 2%, rgba(150, 182, 226, 0.30), transparent 62%),
+      radial-gradient(52% 46% at 2% 92%, rgba(196, 228, 150, 0.22), transparent 60%),
+      radial-gradient(54% 50% at 100% 96%, rgba(236, 198, 176, 0.30), transparent 60%);
+    isolation: isolate;
     font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
     text-rendering: optimizeLegibility;
   }
@@ -158,40 +166,10 @@
 }
 
 @layer utilities {
-  /* 暖纸 + 三点柔和粉彩晕染（呼应参考图的渐变，换成品牌天蓝/柠檬/暖橘） */
+  /* 暖纸底纹已搬到 body（见 @layer base 的 body 规则），页面外壳 .bg-editorial 保持透明，
+     好让 body 上的暖纸 + 全站雷达波纹层透出来；类名保留以兼容各页面外壳引用。 */
   .bg-editorial {
-    background-color: #f4efe6;
-    background-image:
-      radial-gradient(58% 50% at 84% 2%, rgba(150, 182, 226, 0.30), transparent 62%),
-      radial-gradient(52% 46% at 2% 92%, rgba(196, 228, 150, 0.22), transparent 60%),
-      radial-gradient(54% 50% at 100% 96%, rgba(236, 198, 176, 0.30), transparent 60%);
-    /* z-index:0 建栈上下文，让 ::before 雷达层(负 z)落在暖纸底之上、页面内容之下 */
-    position: relative;
-    z-index: 0;
-  }
-
-  /* 全站雷达波纹（雷达绿）：固定视口、持续向外扩散的同心环，落在所有 .bg-editorial 页面背后。
-     pointer-events:none + z-index:-1 → 只做氛围底纹，不挡内容、不接事件。深浅色各自调透明度。 */
-  .bg-editorial::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: -1;
-    pointer-events: none;
-    transform-origin: 50% 38%;
-    background-image: repeating-radial-gradient(
-      circle at 50% 38%,
-      transparent 0 66px,
-      rgba(var(--radar-green), 0.16) 72px,
-      transparent 78px 138px
-    );
-    animation: radar-field-pulse 7s ease-out infinite;
-  }
-
-  @keyframes radar-field-pulse {
-    0% { transform: scale(0.55); opacity: 0; }
-    16% { opacity: 1; }
-    100% { transform: scale(1.45); opacity: 0; }
+    background: transparent;
   }
 
   /* 极淡纸面颗粒，给暖纸一点质感 */
@@ -450,7 +428,7 @@
 /* ───────────────────────────────────────────────────────────────
    深色模式（暖夜）— 整站统一主题。`.dark` 由 ThemeProvider 加到 <html>。
    作为「非分层」规则放在文件最后：层级高于 @layer 内的暖光默认值与 Tailwind 工具类，
-   因此能可靠翻转集中式语义类（.surface / .btn-* / .chip / .field-* / .bg-editorial）。
+   因此能可靠翻转集中式语义类（.surface / .btn-* / .chip / .field-* / body 暖纸底纹）。
    组件里写死的 bg-[#..] / text-[#..] 由各自的 dark: 变体处理，不在这里兜。
    ─────────────────────────────────────────────────────────────── */
 .dark {
@@ -475,23 +453,13 @@
   color-scheme: dark;
 }
 
-/* 暖夜底纹（替代暖纸 + 彩晕，亮度调暗）*/
-.dark .bg-editorial {
+/* 暖夜底纹（替代暖纸 + 彩晕，亮度调暗）——同样搬到 body */
+.dark body {
   background-color: #16130f;
   background-image:
     radial-gradient(58% 50% at 84% 2%, rgba(120, 150, 205, 0.18), transparent 62%),
     radial-gradient(52% 46% at 2% 92%, rgba(150, 190, 110, 0.12), transparent 60%),
     radial-gradient(54% 50% at 100% 96%, rgba(205, 150, 100, 0.16), transparent 60%);
-}
-
-/* 暖夜下雷达绿在深底上更跳，且卡片半透明会透出，透明度比浅色略提即可 */
-.dark .bg-editorial::before {
-  background-image: repeating-radial-gradient(
-    circle at 50% 38%,
-    transparent 0 66px,
-    rgba(var(--radar-green), 0.2) 72px,
-    transparent 78px 138px
-  );
 }
 
 /* 卡片面 */
@@ -582,20 +550,28 @@
 }
 
 /* ───────────────────────────────────────────────────────────────
-   落地页（app/page.tsx）专用动效与布局工具类。
+   全站雷达波纹：原落地页 hero 的同心环（缓慢向外扩散）泛化到所有页面。
+   由 <RadarRings/>（components/RadarRings.tsx，挂在 app/layout.tsx 的 body 里）渲染，
+   固定视口居中、内容背后（z-index:-1）、不接事件。雷达绿，深浅色各自调透明度。
    ─────────────────────────────────────────────────────────────── */
-/* 雷达同心环（标题背后缓慢扩散）—— 雷达绿，深浅色各自调透明度，比原先更显眼 */
 @keyframes lp-expand {
   0% { width: 120px; height: 120px; opacity: 0.8; }
   100% { width: 760px; height: 760px; opacity: 0; }
 }
-.lp-ring {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+.radar-rings {
+  position: fixed;
+  inset: 0;
+  z-index: -1;            /* body 暖纸底之上、页面内容之下（body 已 isolation:isolate 兜住）*/
+  pointer-events: none;
+  overflow: hidden;
+}
+.radar-ring {
+  position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%);
   border: 1.5px solid rgba(var(--radar-green), 0.42); border-radius: 50%;
   box-shadow: 0 0 24px -6px rgba(var(--radar-green), 0.3);
   animation: lp-expand 4s ease-out infinite;
 }
-.dark .lp-ring {
+.dark .radar-ring {
   border-color: rgba(var(--radar-green), 0.52);
   box-shadow: 0 0 28px -6px rgba(var(--radar-green), 0.42);
 }
@@ -643,7 +619,7 @@
 @media (max-width: 600px) { .lp-floats { display: none; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .lp-ring, .lp-marquee-track, .bg-editorial::before { animation: none; }
+  .radar-ring, .lp-marquee-track { animation: none; }
   .lp-reveal { opacity: 1; transform: none; }
 }
 
