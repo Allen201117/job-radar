@@ -285,7 +285,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
               {showDivider && (
                 <div className="flex items-center gap-3 pt-4 pb-1" role="separator">
                   <span className="h-px flex-1 bg-black/[0.08] dark:bg-white/[0.1]" />
-                  <span className="whitespace-nowrap text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">
+                  <span className="min-w-0 text-center text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">
                     相关岗位 · 同职能（标题未直接含「{filters.keyword}」）
                   </span>
                   <span className="h-px flex-1 bg-black/[0.08] dark:bg-white/[0.1]" />

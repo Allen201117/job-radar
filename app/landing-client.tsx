@@ -141,8 +141,10 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
           </div>
           <div className="flex items-center gap-2">
             <ThemeToggle />
-            <Link href={primaryHref} className="btn-ink-sm cursor-target">
-              {primaryLabel}
+            <Link href={primaryHref} className="btn-ink-sm cursor-target whitespace-nowrap">
+              {/* 移动端用短标，避免与 logo+主题切换挤在一行时折成两行 */}
+              <span className="sm:hidden">{loggedIn ? "今日机会" : "设置雷达"}</span>
+              <span className="hidden sm:inline">{primaryLabel}</span>
               <ArrowRight size={14} weight="bold" aria-hidden="true" />
             </Link>
           </div>
