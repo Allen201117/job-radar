@@ -675,7 +675,7 @@ function ActionButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "inline-flex items-center justify-center gap-1 rounded-full px-2 py-2 text-[12px] font-medium transition duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-4 sm:text-sm",
+        "inline-flex items-center justify-center gap-1 rounded-full px-2 py-2.5 text-[12px] font-medium transition duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-4 sm:py-2 sm:text-sm",
         active
           ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
           : muted
