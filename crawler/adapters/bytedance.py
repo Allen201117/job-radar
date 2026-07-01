@@ -22,6 +22,9 @@ def _campus_kw(term: str) -> str:
 
 class BytedanceAdapter(PlaywrightAdapter):
     name = "bytedance"
+    # 招聘类型由**路由变体**决定（/experienced=社招），比 job_category(职能:研发/市场) 可靠。
+    # 校招变体覆盖为"校招"；/campus 里的实习岗靠读取端"标题实习"信号盖成实习，故此处给"校招"即可。
+    recruit_type = "社招"
     company_name = "字节跳动"
     official_hosts = ("jobs.bytedance.com",)
     intercept_match = "/api/v1/search/job/posts"
@@ -70,7 +73,7 @@ class BytedanceAdapter(PlaywrightAdapter):
             company="字节跳动",
             title=title,
             location=city or None,
-            job_type=job_type or None,
+            job_type=self.recruit_type or job_type or None,
             summary=summary,
             jd_url=jd_url,
             apply_url=jd_url,
@@ -82,10 +85,12 @@ class BytedanceCampusAdapter(BytedanceAdapter):
     """字节跳动校招 / 实习 — jobs.bytedance.com/campus。
 
     与社招（/experienced）同一飞书系平台、同一拦截接口 /api/v1/search/job/posts，
-    仅列表/详情路径换成 /campus。job_category 决定校招/实习类型，由 normalizer 归类。
+    仅列表/详情路径换成 /campus。全部为校招/实习：job_type 直给"校招"，其中的实习岗由读取端
+    "标题实习"信号盖成实习（recruitmentCategory 层1 优先于校招）。
     """
 
     name = "bytedance_campus"
+    recruit_type = "校招"
     detail_template = "https://jobs.bytedance.com/campus/position/{id}/detail"
     list_urls = [
         _campus_kw("算法"),
