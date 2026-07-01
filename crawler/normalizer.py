@@ -162,7 +162,9 @@ def extract_job_type(title: str, summary: Optional[str] = None) -> Optional[str]
         return "管培生"
     if any(w in text for w in ("留学生", "海外学生", "overseas student", "returnee")):
         return "留学生专项"
-    if any(w in text for w in ("校招", "校园招聘", "应届", "campus", "graduate", "new grad")):
+    # 校招只认强标记；砍掉弱词 "graduate"(=硕士学历) / "campus"(=办公园区/智慧校园) —— 它们在整段
+    # JD 正文里高频误命中，把要经验的社招岗写成校招（与前端 normalizeChinaJobType 同款收紧）。
+    if any(w in text for w in ("校招", "校园招聘", "应届", "new grad")):
         return "校招"
     if any(w in text for w in ("实习", "intern", "internship")):
         return "实习"
@@ -178,6 +180,25 @@ def extract_job_type(title: str, summary: Optional[str] = None) -> Optional[str]
     if "全职" in text:
         return "全职"
     return None
+
+
+# adapter 直填的 job_type 到底是「真招聘类型」(社招/校招/实习…)还是「职能/类别名」(研发/业务类/编码)？
+# 用途：run.py 据此决定信任 adapter 直填(真类型来自来源 recruitType/渠道，最可信)还是退回正文推断
+# (adapter 把职能名塞进 job_type 时，如 feishu/bytedance 的 job_category)。与前端 sourceDeclaredCategory 同口径。
+# 刻意不含"全职/兼职"(=用工模式而非招聘类型) —— 让它们退回正文推断，便于被正文里的"应届"等细化。
+_RECRUIT_TYPE_WORDS = (
+    "实习", "intern", "校招", "校园招聘", "应届", "管培", "管理培训生", "留学生", "毕业生",
+    "社招", "社会招聘", "社会招募", "campus", "new grad", "graduate program",
+    "experienced", "professional", "研究岗", "投研",
+)
+
+
+def is_recruitment_type(value: Optional[str]) -> bool:
+    """value 是否为可识别的招聘类型取值（用于判断能否信任 adapter 直填的 job_type）。"""
+    if not value:
+        return False
+    t = str(value).strip().lower()
+    return any(w in t for w in _RECRUIT_TYPE_WORDS)
 
 
 def _strip_html(text: Optional[str]) -> str:
