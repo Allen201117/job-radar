@@ -119,6 +119,40 @@ test("硬门不过度修正：真实校招/实习 + 无 ≥2 年经验硬要求 
   );
 });
 
+test("弱词不再误判校招：毕业生/graduate/校园 在正文里 → 保持社招（精度优先）", () => {
+  // "985毕业生优先" 是社招常见语，不该判校招
+  assert.equal(
+    recruitmentCategory({ title: "后端开发工程师", summary: "重点院校毕业生优先，扎实的算法功底。" }),
+    "社招",
+  );
+  // "graduate degree"=硕士学历，不是校招
+  assert.equal(
+    recruitmentCategory({ title: "Data Scientist", summary: "Graduate degree in CS or related field." }),
+    "社招",
+  );
+  // "智慧校园" 产品里的"校园" 不是校招
+  assert.equal(
+    recruitmentCategory({ title: "解决方案经理", summary: "负责智慧校园产品在高校的推广落地。" }),
+    "社招",
+  );
+});
+
+test("信任来源自报 job_type：不被正文杂词污染", () => {
+  // 源渠道=社会招聘，正文顺带提"可转正实习/毕业生" → 仍社招（信任源头，实习标记只认标题/url）
+  assert.equal(
+    recruitmentCategory({
+      title: "供应链经理",
+      job_type: "社会招聘",
+      summary: "团队接收优秀应届毕业生与实习生，本岗面向社会招聘。",
+    }),
+    "社招",
+  );
+  // 源渠道=校招 且无经验硬要求 → 尊重来源判校招
+  assert.equal(recruitmentCategory({ title: "研发工程师", job_type: "校招" }), "校招");
+  // job_type 是"职能类别"（非招聘类型）→ 不误当类型，走后续信号/兜底
+  assert.equal(recruitmentCategory({ title: "算法工程师", job_type: "研发" }), "社招");
+});
+
 test("hasExplicitRecruitmentType：≥2 年经验硬要求算『明确类型』（让校招筛选能真正踢掉它）", () => {
   // 空 job_type + 正文含毕业生字样，但要 3 年经验 → 视为明确（社招），筛校招时应被淘汰
   assert.equal(
