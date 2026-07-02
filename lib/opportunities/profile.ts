@@ -10,6 +10,7 @@
 import type { UserPreferences, CandidateProfile } from "../types";
 import type { RadarProfile, ExperienceStage, EducationLabel } from "./types";
 import { educationRank } from "../education-rank";
+import { effectiveJobScope, effectiveTargetRegions } from "../job-scope";
 
 // trim、去空、大小写不敏感去重（保留首次出现的原始大小写）
 function uniqStrings(list: unknown): string[] {
@@ -68,16 +69,27 @@ export function buildRadarProfile(
   prefs: UserPreferences | null,
   candidate: CandidateProfile | null
 ): RadarProfile {
+  const jobScope = effectiveJobScope(prefs);
+  const useEnglishProfile = (jobScope === "overseas" || jobScope === "all") && candidate?.has_en_resume === true;
+  const cnRoles = preferOrFallback(prefs?.target_roles, candidate?.target_roles);
+  const cnKeywords = uniqStrings(prefs?.target_keywords);
+  const cnSkills = uniqStrings(candidate?.skills);
+  const enRoles = preferOrFallback(candidate?.en_target_roles, cnRoles);
+  const enKeywords = preferOrFallback(candidate?.en_target_keywords, cnKeywords);
+  const enSkills = preferOrFallback(candidate?.en_skills, cnSkills);
+
   return {
     userId,
-    targetRoles: preferOrFallback(prefs?.target_roles, candidate?.target_roles),
-    targetKeywords: uniqStrings(prefs?.target_keywords),
+    jobScope,
+    targetRegions: effectiveTargetRegions(prefs),
+    targetRoles: useEnglishProfile ? enRoles : cnRoles,
+    targetKeywords: useEnglishProfile ? enKeywords : cnKeywords,
     excludeKeywords: uniqStrings(prefs?.exclude_keywords),
     targetLocations: preferOrFallback(prefs?.target_locations, candidate?.target_locations),
     targetCompanies: uniqStrings(prefs?.target_companies),
     // 唯一合并字段：偏好 ∪ 简历
     targetIndustries: uniqStrings([...(prefs?.target_industries ?? []), ...(candidate?.industries ?? [])]),
-    skills: uniqStrings(candidate?.skills),
+    skills: useEnglishProfile ? enSkills : cnSkills,
     experienceStage: mapStage(candidate?.experience_stage),
     seniority: candidate?.seniority ?? null,
     highestEducation: deriveHighestEducation(candidate),

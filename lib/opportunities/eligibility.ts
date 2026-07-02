@@ -25,6 +25,7 @@ import { classifyCompanyIndustry, userTargetIndustryCategories, jobIndustryAllow
 import { educationMatch } from "../education-rank";
 import { excludeJobs } from "../live-search";
 import { normalizeCompany } from "../company-normalize";
+import { jobMatchesRegion } from "../job-scope";
 
 export interface ActionState {
   primary: "saved" | "ignored" | "applied" | null;
@@ -44,18 +45,41 @@ function userTargetFunctions(profile: RadarProfile): Set<string> {
 }
 
 // role+keyword 跨查询取最优 tier；exact 立即胜出，否则首个 related。
-function bestRoleTier(job: Job, queries: string[]): { tier: "exact" | "related" | null; label: string | null } {
+function bestRoleTier(
+  job: Job,
+  queries: string[],
+  options: { includeOverseasLexicon?: boolean } = {},
+): { tier: "exact" | "related" | null; label: string | null } {
   let label: string | null = null;
   for (const q of queries) {
-    const t = keywordMatchTier(job, q);
+    const t = keywordMatchTier(job, q, options);
     if (t === "exact") return { tier: "exact", label: q };
     if (t === "related" && label === null) label = q;
   }
   return { tier: label ? "related" : null, label };
 }
 
-// 城市三态（多目标城市，逐字对齐 job-filter.ts 的 includes 口径）
-function locationState(job: Job, targets: string[]): { state: TriState; name: string | null } {
+function usesOverseasScope(profile: RadarProfile, job: Job): boolean {
+  if (profile.jobScope === "overseas") return true;
+  return profile.jobScope === "all" && job.job_scope === "overseas";
+}
+
+// 位置三态：domestic 保持旧城市 includes 口径；overseas/all 的海外岗走 country_code/targetRegions。
+function locationState(job: Job, profile: RadarProfile): { state: TriState; name: string | null } {
+  if (usesOverseasScope(profile, job)) {
+    const regions = profile.targetRegions || [];
+    if (regions.length === 0) return { state: "na", name: null };
+    for (const region of regions) {
+      if (jobMatchesRegion(job, region)) return { state: "match", name: region };
+    }
+    return { state: "mismatch", name: null };
+  }
+
+  if ((profile.jobScope || "domestic") === "domestic" && job.job_scope === "overseas") {
+    return { state: "mismatch", name: null };
+  }
+
+  const targets = profile.targetLocations;
   if (targets.length === 0) return { state: "na", name: null };
   const loc = String(job.location || "");
   if (!loc) return { state: "unknown", name: null };
@@ -132,10 +156,11 @@ export function computeMatchFacts(
   const userFns = userTargetFunctions(profile);
   const jobFn = classifyJobFunction(job);
   const functionAllowed = userFns.size === 0 || jobFn === "其他" || userFns.has(jobFn);
+  const keywordOptions = usesOverseasScope(profile, job) ? { includeOverseasLexicon: true } : {};
   const role =
-    roleConstrained && functionAllowed ? bestRoleTier(job, roleQueries) : { tier: null as null, label: null };
+    roleConstrained && functionAllowed ? bestRoleTier(job, roleQueries, keywordOptions) : { tier: null as null, label: null };
 
-  const loc = locationState(job, profile.targetLocations);
+  const loc = locationState(job, profile);
   const stage = stageState(job, profile.experienceStage);
   const ind = industryState(job, profile.targetIndustries);
   const company = companyHit(job, profile.targetCompanies);

@@ -155,6 +155,8 @@ function job(over = {}) {
 function rprofile(over = {}) {
   return {
     userId: "u",
+    jobScope: "domestic",
+    targetRegions: [],
     targetRoles: [],
     targetKeywords: [],
     excludeKeywords: [],
@@ -230,6 +232,52 @@ test("computeMatchFacts: location 三态 + na", () => {
   assert.equal(computeMatchFacts(job({ location: null }), rprofile({ targetLocations: ["上海"] }), undefined, noAction, NOW).location, "unknown");
   assert.equal(computeMatchFacts(job({ location: "北京" }), rprofile({ targetLocations: ["上海"] }), undefined, noAction, NOW).location, "mismatch");
   assert.equal(computeMatchFacts(job({ location: "北京" }), rprofile({ targetLocations: [] }), undefined, noAction, NOW).location, "na");
+});
+
+test("computeMatchFacts: overseas scope uses country_code / targetRegions for location", () => {
+  assert.equal(
+    computeMatchFacts(
+      job({ location: "Seattle, WA", country_code: "US", job_scope: "overseas" }),
+      rprofile({ jobScope: "overseas", targetRegions: ["US"], targetLocations: ["北京"] }),
+      undefined,
+      noAction,
+      NOW,
+    ).location,
+    "match",
+  );
+  assert.equal(
+    computeMatchFacts(
+      job({ location: "Singapore", country_code: "SG", job_scope: "overseas" }),
+      rprofile({ jobScope: "overseas", targetRegions: ["US"] }),
+      undefined,
+      noAction,
+      NOW,
+    ).location,
+    "mismatch",
+  );
+});
+
+test("computeMatchFacts: domestic scope still rejects overseas jobs by location", () => {
+  assert.equal(
+    computeMatchFacts(
+      job({ location: "北京", job_scope: "domestic" }),
+      rprofile({ jobScope: "domestic", targetLocations: ["北京"] }),
+      undefined,
+      noAction,
+      NOW,
+    ).location,
+    "match",
+  );
+  assert.equal(
+    computeMatchFacts(
+      job({ location: "New York", country_code: "US", job_scope: "overseas" }),
+      rprofile({ jobScope: "domestic", targetLocations: ["北京"] }),
+      undefined,
+      noAction,
+      NOW,
+    ).location,
+    "mismatch",
+  );
 });
 
 test("computeMatchFacts: freshness 接 source crawl_method + last_seen", () => {
