@@ -4,7 +4,11 @@ import type {
   JobAction,
   MatchReason,
 } from "./types";
-import { keywordMatchTier, classifyJobFunction } from "./china-keyword-expansion";
+import {
+  keywordMatchTier,
+  classifyJobFunction,
+  normalizeChinaCity,
+} from "./china-keyword-expansion";
 import { jobIndustryAllowed } from "./company-industry";
 
 interface ScoreResult {
@@ -71,13 +75,17 @@ export function scoreJob(
   // （互联网产品经理 ✗ 生物医药/消费产品经理）。行业判不出或用户没填 → 放行（不误杀）。
   // 注：公司命中（target_companies）不受此门约束——用户亲手指名的公司，行业无关紧要。
   const industryAllowed = jobIndustryAllowed(job.company, preferences.target_industries || []);
+  const overseasProfile = shouldUseOverseasProfile(job, preferences);
+  const keywordOptions = overseasProfile ? { includeOverseasLexicon: true } : undefined;
+  const targetRoles = scoringTargetRoles(preferences, overseasProfile);
+  const targetKeywords = scoringTargetKeywords(preferences, overseasProfile);
 
   // 岗位职能门（硬门）：用户目标职能 = 从 target_roles 里判得出的干净职能（"AI 数据产品经理"→产品；
   // 纯领域词如 "AI Agent"→其他 不计）。岗位职能判得出且不属于用户职能 → 不算命中，治「产品经理被推
   // 数据科学家 / 算法工程师」——岗位「岗位」层不符（行业-公司-岗位 三层认知的「岗位」维度）。
   // 保守放行：用户无可判职能 / 岗位职能判不出（其他）→ 不设门（不误杀）。公司命中同样豁免（见下）。
   const userFunctions = new Set<string>();
-  for (const role of preferences.target_roles || []) {
+  for (const role of targetRoles) {
     const fn = classifyJobFunction({ title: role });
     if (fn && fn !== "其他") userFunctions.add(fn);
   }
@@ -87,8 +95,8 @@ export function scoreJob(
 
   // target_roles 命中：用 keywordMatchTier 跨语言召回（与 Jobs 页 jobs-client 同口径），
   // 替换裸 includes——偏好填「产品经理」也能命中英文 "Product Manager" 标题，且带职能门防跨职能误召。
-  for (const role of preferences.target_roles || []) {
-    if (industryAllowed && functionAllowed && keywordMatchTier(job, role)) {
+  for (const role of targetRoles) {
+    if (industryAllowed && functionAllowed && keywordMatchTier(job, role, keywordOptions)) {
       score += 30;
       matched_keywords.push(role);
       match_reasons.push({ type: "role", value: role });
@@ -99,7 +107,7 @@ export function scoreJob(
 
   // location 命中 target_locations
   for (const loc of preferences.target_locations || []) {
-    if (location.includes(loc.toLowerCase())) {
+    if (locationMatchesTarget(job.location, loc)) {
       score += 20;
       matched_keywords.push(loc);
       match_reasons.push({ type: "location", value: loc });
@@ -122,8 +130,8 @@ export function scoreJob(
   // target_keywords 命中：同走 keywordMatchTier 跨语言召回（与 Jobs 页同口径），替换裸 includes。
   // 同样过跨行业门 + 职能门（与 role 一致）：跨行业 / 跨职能岗的技能命中不算数
   // （否则 PM 的 SQL/Python 会命中一切数据/研发岗，把工程师岗刷成高匹配）。
-  for (const kw of preferences.target_keywords || []) {
-    if (industryAllowed && functionAllowed && keywordMatchTier(job, kw)) {
+  for (const kw of targetKeywords) {
+    if (industryAllowed && functionAllowed && keywordMatchTier(job, kw, keywordOptions)) {
       score += 5;
       matched_keywords.push(kw);
       match_reasons.push({ type: "keyword", value: kw });
@@ -200,6 +208,9 @@ export function sortAndFilterJobs(
     !!preferences &&
     (preferences.target_roles || []).length +
       (preferences.target_keywords || []).length +
+      (preferences.en_target_roles || []).length +
+      (preferences.en_target_keywords || []).length +
+      (preferences.en_skills || []).length +
       (preferences.target_companies || []).length >
       0;
   const hasLocSignal =
@@ -240,6 +251,54 @@ export function sortAndFilterJobs(
   const out = filtered.map((x) => x.job);
   if (options.limit) {
     return out.slice(0, options.limit);
+  }
+  return out;
+}
+
+function shouldUseOverseasProfile(job: Job, preferences: UserPreferences): boolean {
+  const scope = preferences.job_scope || "domestic";
+  if (scope === "overseas") return true;
+  if (scope === "all") return job.job_scope === "overseas";
+  return false;
+}
+
+function scoringTargetRoles(preferences: UserPreferences, overseasProfile: boolean): string[] {
+  const base = preferences.target_roles || [];
+  if (!overseasProfile) return base;
+  return uniqueStrings([...(preferences.en_target_roles || []), ...base]);
+}
+
+function scoringTargetKeywords(preferences: UserPreferences, overseasProfile: boolean): string[] {
+  const base = preferences.target_keywords || [];
+  if (!overseasProfile) return base;
+  return uniqueStrings([
+    ...(preferences.en_target_keywords || []),
+    ...(preferences.en_skills || []),
+    ...base,
+  ]);
+}
+
+function locationMatchesTarget(jobLocation: string | null | undefined, target: string): boolean {
+  const rawLocation = String(jobLocation || "").trim();
+  const rawTarget = String(target || "").trim();
+  if (!rawLocation || !rawTarget) return false;
+  if (rawLocation.toLowerCase().includes(rawTarget.toLowerCase())) return true;
+
+  const normalizedLocation = normalizeChinaCity(rawLocation).toLowerCase();
+  const normalizedTarget = normalizeChinaCity(rawTarget).toLowerCase();
+  return Boolean(normalizedLocation && normalizedTarget && normalizedLocation === normalizedTarget);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const clean = String(value || "").trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(clean);
   }
   return out;
 }
