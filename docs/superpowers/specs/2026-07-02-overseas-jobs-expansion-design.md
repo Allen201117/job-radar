@@ -306,4 +306,21 @@
 
 ## 15. 实施记录（Codex 回填）
 
-_（待实施）_
+### 2026-07-02 Codex 本地实施收口
+
+已完成：
+- Phase 0 地基：新增 `crawler/geo.py` 与 `lib/geo.js`，派生 `country_code/job_scope`，`sources.regions` 默认 `{CN}`；`jobs` 热表加入 `country_code/job_scope/sponsorship_signal`，用户偏好与简历档案加入 `job_scope/target_regions/en_*`；Workday 多租户 `_host` 隔离与台湾边界均有测试兜底。
+- Phase 1 放闸：adapter 按 `source.regions` 参数化，crawler/app 写层同口径写入 `country_code/job_scope`；迁移 `169_seed_overseas_regions.sql` 只放开已验证 enabled http 外企 ATS 源到 `{CN,US,SG,Remote}`，浏览器源未一次性放开。
+- Phase 2 标签与匹配：教育、经验、招聘类型、职能补英文识别，sponsorship 信号接入卡片；海外城市别名仅用于匹配，不改写官方地点；中英岗位/技能词典 opt-in 接入海外范围，domestic 默认路径保持不启用。
+- Phase 3 产品面：`user_preferences.job_scope/target_regions` 读写、Navbar 全局开关、Jobs 列表/搜索 scope-aware、首页岗位库计数保持合并总数、英文简历 variant 写入 `en_*`，今日机会召回/地点闸/英文档案选择按求职范围分流。
+
+本地验证：
+- `node --test tests/*.test.js`：600 pass。
+- `crawler/.venv/bin/python -m unittest discover -s crawler -t crawler -p 'test_*.py'`：537 pass（失败路径测试会打印预期 traceback，最终 OK）。
+- `./node_modules/.bin/tsc --noEmit --pretty false`：通过。
+- `npm run build`：通过；仍有既有非阻断 ESLint plugin conflict 提示。
+- `git diff --check`：通过。
+
+剩余风险 / live-gated：
+- Phase 1.5 的真实海外入库、`jd_url` HTTP 200、JD 正文 ≥60 字、海外有效数与 sweep/audit 真跑，需要迁移和 workflow 在生产/预发真实执行后验证，不能用本地单测替代。
+- 台湾边界按 spec 明确维持不抓；当前已有 Python/JS 测试锁定其不归入 domestic 或 overseas。

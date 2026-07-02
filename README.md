@@ -54,10 +54,11 @@ Supabase 完整 schema 以 `supabase/migrations/` 为准，独立岗位库 schem
 | 表 | 用途 | 权限 |
 |---|---|---|
 | profiles | 用户扩展信息 | 自己读写 |
-| sources | 企业招聘源 | 所有人读，crawler 写 |
+| sources | 企业招聘源（含 `regions` 抓取地区，默认 `{CN}`） | 所有人读，crawler 写 |
 | source_candidates | 官方源发现候选 | admin 读，service role 写 |
-| jobs | 共享岗位库（独立 PostgreSQL） | app / crawler 经 jobs-store 边界读写 |
-| user_preferences | 用户偏好 | 自己读写 |
+| jobs | 共享岗位库（独立 PostgreSQL，含 `country_code` / `job_scope`） | app / crawler 经 jobs-store 边界读写 |
+| user_preferences | 用户偏好（含 `job_scope` / `target_regions` 求职范围） | 自己读写 |
+| candidate_profiles | 简历档案（含英文侧 `en_*` 字段） | 自己读写 |
 | job_actions | 用户操作（收藏/忽略/投递） | 自己读写 |
 | crawl_runs | 抓取日志 | admin 读，crawler 写 |
 | discovery_runs | 官方源发现日志 | admin 读，service role 写 |
@@ -73,7 +74,8 @@ adapter 实现覆盖以 `crawler/adapters/` 为准，允许录入的 adapter 与
 - 动态官方源发现走 `/api/discovery`，主 provider 是百度千帆 Web Search；默认只调用 1 个 generated query，用户点击“继续发现更多”才调用第 2 个 query。
 - 相同 user/query/city/job_type 的 discovery 结果 45 分钟内复用缓存，响应 diagnostics 会显示 `cache_hit`。
 - `jobs` 写入质量门不变：只有 parser 验证过的官方岗位详情页，且 `company/title/jd_url` 非空、HTTP 200、页面包含标题或核心片段，才写入 `jobs`。
-- 简历文本，以及 `.txt` / `.md` / PDF / Word(`.docx`) / 图片 上传，都可以生成 candidate profile；用户确认后可同步 `user_preferences`，用于 Jobs 排序。
+- 全局求职范围支持 `domestic` / `overseas` / `all`，默认国内；岗位库和今日机会列表按 `job_scope` + `target_regions` 过滤，首页岗位库计数保持国内+海外合并总数。
+- 简历文本，以及 `.txt` / `.md` / PDF / Word(`.docx`) / 图片 上传，都可以生成 candidate profile；英文简历可选写入 `en_*` 档案，用户确认后可同步 `user_preferences`，用于 Jobs 排序和海外匹配。
 
 ## 百度千帆额度与限流
 
@@ -110,7 +112,7 @@ BAIDU_QIANFAN_SEARCH_DISABLED=false
 
 Supabase 迁移由 CI 自动 apply：push 到 `main` 且改动 `supabase/migrations/**` 时，`.github/workflows/migrate.yml` 会执行前缀校验并应用尚未执行的迁移，不要再按 README 逐条手动运行 SQL。
 
-当前仓库共有 **162** 个 Supabase SQL 迁移；明细与顺序以 `supabase/migrations/` 为准。计数命令：
+当前仓库共有 **174** 个 Supabase SQL 迁移；明细与顺序以 `supabase/migrations/` 为准。计数命令：
 
 ```bash
 ls supabase/migrations/*.sql | wc -l
@@ -181,7 +183,8 @@ python3 crawler/run.py --source jd
 7. 写入 `candidate_profiles`；
 8. 用户确认后同步 `user_preferences`；
 9. Jobs 排序受到偏好变化影响；
-10. A/B 用户 profile 和 job_actions 隔离。
+10. 英文简历写入 `candidate_profiles.en_*`，不覆盖中文简历档案；
+11. A/B 用户 profile 和 job_actions 隔离。
 
 ## 部署
 
