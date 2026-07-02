@@ -9,6 +9,7 @@ import {
 } from "@/lib/china-keyword-expansion";
 import { classifyCompanyOriginWithSource } from "@/lib/company-origin";
 import { educationMatch } from "@/lib/education-rank";
+import { jobMatchesRegion } from "@/lib/job-scope";
 import type { ScoredJob } from "@/lib/types";
 
 export type Filters = {
@@ -21,6 +22,7 @@ export type Filters = {
   showNewOnly: boolean;
   sortBy: "match" | "newest";
   capitalOrigin: string;
+  region: string;
   salaryOnly: boolean;
   sponsorshipOnly: boolean;
   education: string; // 用户所选学历（博士/硕士/本科/大专）；""=学历不限（不筛）
@@ -36,6 +38,7 @@ export const DEFAULT_FILTERS: Filters = {
   showNewOnly: false,
   sortBy: "match",
   capitalOrigin: "",
+  region: "",
   salaryOnly: false,
   sponsorshipOnly: false,
   education: "",
@@ -99,6 +102,7 @@ export function jobFilterTier(
       if (origin === "中国") return null;
     } else if (origin !== filters.capitalOrigin) return null;
   }
+  if (filters.region && !jobMatchesRegion(job, filters.region)) return null;
   if (filters.salaryOnly && !job.salary_text) return null;
   if (filters.sponsorshipOnly && job.sponsorship_signal !== "available") return null;
   // 关键词两层：无关键词 → 放行；否则 精确 / 相关 / 不匹配(null)。

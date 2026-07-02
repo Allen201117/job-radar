@@ -2,7 +2,7 @@ import Navbar from "@/components/Navbar";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import JobLibraryStat from "@/components/JobLibraryStat";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
-import { jobsStoreEnabled, listLatestActive, countValidActive } from "@/lib/jobs-store/read";
+import { jobsStoreEnabled, listLatestActive, countActiveForScope, countValidActive } from "@/lib/jobs-store/read";
 import { sortAndFilterJobs } from "@/lib/scoring";
 import type { Job, UserPreferences, JobAction, ScoredJob } from "@/lib/types";
 import JobsClient from "./jobs-client";
@@ -34,11 +34,16 @@ const PAGE1 = 60;
 
 async function fetchFirstPageAndTotal(
   supabase: Awaited<ReturnType<typeof createServerSupabase>>,
-): Promise<{ jobs: Job[]; total: number }> {
+  preferences: UserPreferences | null,
+): Promise<{ jobs: Job[]; total: number; libraryTotal: number }> {
   // jobs 已迁自建香港 PG（Phase 1）：配了 JOBS_DATABASE_URL 走 jobs-store；否则回退 Supabase。
   if (jobsStoreEnabled()) {
-    const [jobs, total] = await Promise.all([listLatestActive(PAGE1), countValidActive()]);
-    return { jobs: (jobs as Job[]) || [], total };
+    const [jobs, total, libraryTotal] = await Promise.all([
+      listLatestActive(PAGE1, 0, preferences),
+      countActiveForScope(preferences),
+      countValidActive(),
+    ]);
+    return { jobs: (jobs as Job[]) || [], total, libraryTotal };
   }
   const [page, validCount] = await Promise.all([
     supabase
@@ -51,38 +56,35 @@ async function fetchFirstPageAndTotal(
     supabase.rpc("count_valid_active_jobs"),
   ]);
   const total = typeof validCount.data === "number" ? validCount.data : 0;
-  return { jobs: (page.data as Job[]) || [], total };
+  return { jobs: (page.data as Job[]) || [], total, libraryTotal: total };
 }
 
 export default async function JobsPage() {
   const supabase = await createServerSupabase();
   const user = await getRequestUser();
 
-  // 用户三表（prefs/actions/candidate 互不依赖）与首屏岗位（与用户无关）全部并行，
-  // 取代原来逐个 await 串行叠加 RTT——冷启动下每个查询都含一次网络往返，串行最伤。
-  const [userData, firstPage] = await Promise.all([
-    user
-      ? Promise.all([
-          supabase.from("user_preferences").select("*").eq("user_id", user.id).single(),
-          supabase.from("job_actions").select("*").eq("user_id", user.id),
-          supabase
-            .from("candidate_profiles")
-            .select("experience_stage, target_locations, target_roles")
-            .eq("user_id", user.id)
-            .maybeSingle(),
-        ])
-      : null,
-    fetchFirstPageAndTotal(supabase),
-  ]);
+  // 首屏岗位需要先拿到用户求职范围，避免海外/国内切换后 SSR 种子混入错误 scope。
+  const userData = user
+    ? await Promise.all([
+        supabase.from("user_preferences").select("*").eq("user_id", user.id).single(),
+        supabase.from("job_actions").select("*").eq("user_id", user.id),
+        supabase
+          .from("candidate_profiles")
+          .select("experience_stage, target_locations, target_roles")
+          .eq("user_id", user.id)
+          .maybeSingle(),
+      ])
+    : null;
 
   const preferences = (userData?.[0].data as UserPreferences | null) ?? null;
   const actions = (userData?.[1].data as JobAction[] | null) ?? [];
   const candidate = userData?.[2].data ?? null;
+  const firstPage = await fetchFirstPageAndTotal(supabase, preferences);
 
   // 默认按用户已保存偏好预填筛选器（城市/类型/关键词）；用户手动改即覆盖。
   const initialFilters = buildInitialFilters(preferences, candidate);
 
-  const { jobs, total } = firstPage;
+  const { jobs, total, libraryTotal } = firstPage;
 
   const scored = sortAndFilterJobs(
     jobs,
@@ -104,7 +106,7 @@ export default async function JobsPage() {
           action={
             <div className="w-full sm:w-[260px] lg:w-[280px]">
               {/* 实时翻动的岗位库总数（连后端真实数据，走 /api/jobs/stats 读香港库） */}
-              <JobLibraryStat initialTotal={total} />
+              <JobLibraryStat initialTotal={libraryTotal} />
             </div>
           }
         />
@@ -113,6 +115,7 @@ export default async function JobsPage() {
             initialJobs={scored as ScoredJob[]}
             initialTotal={total}
             initialFilters={initialFilters}
+            jobScope={preferences?.job_scope ?? "domestic"}
           />
         </div>
       </ProductPage>
