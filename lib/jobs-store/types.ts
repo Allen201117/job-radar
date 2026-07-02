@@ -8,8 +8,11 @@ export interface JobRow {
   company: string;
   title: string;
   location: string | null;
+  country_code: string | null;
+  job_scope: string;
   job_type: string | null;
   summary: string | null;
+  sponsorship_signal: string | null;
   jd_url: string;
   apply_url: string | null;
   salary_text: string | null;
@@ -29,6 +32,6 @@ export interface JobRow {
 
 // jobs 表全部可读列（select 用，避免 select *）。
 export const JOB_COLUMNS =
-  "id, source_id, company, title, location, job_type, summary, jd_url, apply_url, salary_text, " +
+  "id, source_id, company, title, location, country_code, job_scope, job_type, summary, sponsorship_signal, jd_url, apply_url, salary_text, " +
   "posted_at, first_seen_at, last_seen_at, status, content_hash, created_at, experience, " +
   "education, deadline, enrich_fail_count, enrich_checked_at, canonical_jd_url";

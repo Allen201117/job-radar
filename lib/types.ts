@@ -4,8 +4,11 @@ export interface Job {
   company: string;
   title: string;
   location: string | null;
+  country_code?: string | null;
+  job_scope?: string | null;
   job_type: string | null;
   summary: string | null;
+  sponsorship_signal?: "available" | "none" | "unknown" | string | null;
   jd_url: string;
   apply_url: string | null;
   salary_text: string | null;

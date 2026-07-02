@@ -26,6 +26,7 @@ interface Filters {
   sortBy: "match" | "newest";
   capitalOrigin: string;
   salaryOnly: boolean;
+  sponsorshipOnly: boolean;
   education: string;
 }
 
@@ -55,6 +56,7 @@ export default function JobFilters({ filters, onChange, companies }: Props) {
     filters.capitalOrigin,
     filters.showNewOnly ? "仅新岗位" : "",
     filters.salaryOnly ? "仅薪资公开" : "",
+    filters.sponsorshipOnly ? "仅 Sponsorship" : "",
     filters.showIgnored ? "含已忽略" : "",
     filters.showApplied ? "含已投递" : "",
   ].filter(Boolean) as string[];
@@ -158,6 +160,7 @@ export default function JobFilters({ filters, onChange, companies }: Props) {
       <div className="flex flex-wrap gap-2">
         <Check label="仅新岗位" checked={filters.showNewOnly} onChange={(v) => set("showNewOnly", v)} />
         <Check label="仅薪资公开" checked={filters.salaryOnly} onChange={(v) => set("salaryOnly", v)} />
+        <Check label="只看提供 Sponsorship" checked={filters.sponsorshipOnly} onChange={(v) => set("sponsorshipOnly", v)} />
         <Check label="显示已忽略" checked={filters.showIgnored} onChange={(v) => set("showIgnored", v)} />
         <Check label="显示已投递" checked={filters.showApplied} onChange={(v) => set("showApplied", v)} />
       </div>
