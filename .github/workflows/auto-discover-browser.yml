@@ -13,9 +13,9 @@ on:
         required: false
         default: ""
       confirm_cap:
-        description: "本次最多浏览器确认多少家（慢，默认 10）"
+        description: "本次最多浏览器确认多少家（慢，默认 15）"
         required: false
-        default: "10"
+        default: "15"
 
 jobs:
   discover-browser:
@@ -24,7 +24,10 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      AUTO_DISCOVER_BROWSER_CONFIRM_CAP: ${{ github.event.inputs.confirm_cap || '10' }}
+      AUTO_DISCOVER_BROWSER_CONFIRM_CAP: ${{ github.event.inputs.confirm_cap || '15' }}
+      # 持续喂清单：每日 LLM 生成一批「库里没有的」新目标公司（走同一探活验证门，编造/猜错自动丢）。
+      AUTO_DISCOVER_LLM: "true"
+      SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

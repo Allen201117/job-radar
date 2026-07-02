@@ -176,7 +176,7 @@ export type OpsRunAggregateRow = {
 export type DailyReportStatus = "success" | "idle" | "failed";
 
 export type DailyReport = {
-  key: "crawl" | "enrichment" | "dead_jobs" | "insights" | "discovery";
+  key: "crawl" | "enrichment" | "dead_jobs" | "insights" | "auto_discover" | "discovery";
   title: string;
   description: string;
   status: DailyReportStatus;
@@ -264,6 +264,7 @@ export function buildDailyReports(input: DailyReportInput): DailyReport[] {
   const purge = summarizeOps(opsRows, ["purge_expired"]);
   const insights = summarizeOps(opsRows, ["insight_backlog"]);
   const staleness = summarizeOps(opsRows, ["insight_staleness"]);
+  const autoDiscover = summarizeOps(opsRows, ["auto_discover", "auto_discover_browser"]);
 
   const crawlRuns = toNumber(input.crawl?.runs);
   const crawlFailed = toNumber(input.crawl?.failed_runs);
@@ -278,6 +279,7 @@ export function buildDailyReports(input: DailyReportInput): DailyReport[] {
   const insightStatus = reportStatus(insightRuns, insightFailed);
   const crawlStatus = reportStatus(crawlRuns, crawlFailed);
   const discoveryStatus = reportStatus(discoveryRuns, discoveryFailed);
+  const autoDiscoverStatus = reportStatus(autoDiscover.runs, autoDiscover.failed);
 
   return [
     {
@@ -330,6 +332,18 @@ export function buildDailyReports(input: DailyReportInput): DailyReport[] {
         { label: "新增洞察", value: toNumber(input.insight?.today_created) },
         { label: "富化公司", value: insights.available ? insights.companiesEnriched : null },
         { label: "过期下架", value: staleness.available ? staleness.retired : null },
+      ],
+    },
+    {
+      key: "auto_discover",
+      title: "自动扩源",
+      description: "每天自动探查目标公司（含 AI 每日新生成的候选），验证通过、真有在招岗才加成新招聘源",
+      status: autoDiscoverStatus,
+      statusLabel: statusLabel(autoDiscoverStatus),
+      lastRunAt: autoDiscover.lastRunAt,
+      metrics: [
+        { label: "探查公司", value: autoDiscover.available ? autoDiscover.checked : null },
+        { label: "新增源", value: autoDiscover.available ? autoDiscover.companiesEnriched : null },
       ],
     },
     {
