@@ -69,6 +69,19 @@ def cap_summary_for_storage(summary):
     return text[: max(0, SUMMARY_STORAGE_LIMIT - 3)].rstrip() + "..."
 
 
+def _source_regions(source):
+    raw = source.get("regions") if isinstance(source, dict) else None
+    if not raw:
+        return {"CN"}
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.startswith("{") and text.endswith("}"):
+            raw = text[1:-1].split(",")
+        else:
+            raw = text.split(",")
+    return {str(r).strip() for r in raw if str(r).strip()} or {"CN"}
+
+
 ADAPTERS = {
     "apple": AppleAdapter(),
     "apple_cn": AppleChinaAdapter(),  # Apple 在华岗位（保留全球 apple 源）
@@ -254,6 +267,7 @@ def _process_one_source(source, supabase) -> dict:
     # jd_url 张冠李戴、公开站清一色 404（实测曾 98.8% Workday 在库岗位中招）。每源 type()() 新建独立
     # 实例隔离状态：adapter 均无自定义 __init__、浏览器在 fetch 内才起，构造开销可忽略。
     adapter = type(adapter)()
+    adapter.regions = _source_regions(source)
 
     print(f"  [{adapter_name}] {company} ({source_url})")
     # run_id 的创建必须在 try 内：高负载下 Supabase 偶发 Errno 35（实锤于 2026-06-10 hotjob 全量
