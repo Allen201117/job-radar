@@ -27,6 +27,7 @@ crawler/targets_*
 !crawler/targets_private500_full.json
 !crawler/targets_soe500.json
 !crawler/targets_tech_consumer.json
+!crawler/targets_overseas_f500.json
 crawler/*_candidates.json
 !crawler/famous_candidates.json
 moka_custom.json
