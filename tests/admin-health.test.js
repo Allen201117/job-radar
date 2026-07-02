@@ -60,7 +60,7 @@ test("normalizeCrawlSources derives success and partial rates from terminal non-
   );
 });
 
-test("buildDailyReports merges technical runs into five human-facing operation cards", () => {
+test("buildDailyReports merges technical runs into six human-facing operation cards", () => {
   assert.equal(typeof H.buildDailyReports, "function");
   const reports = H.buildDailyReports({
     crawl: {
@@ -164,6 +164,34 @@ test("buildDailyReports merges technical runs into five human-facing operation c
         retired: 5,
         last_run_at: "2026-06-22T08:00:00Z",
       },
+      {
+        module: "auto_discover",
+        runs: 1,
+        success: 1,
+        partial: 0,
+        failed: 0,
+        checked: 30,
+        expired: 0,
+        deleted: 0,
+        enriched: 0,
+        companies_enriched: 1,
+        retired: 0,
+        last_run_at: "2026-06-22T09:00:00Z",
+      },
+      {
+        module: "auto_discover_browser",
+        runs: 1,
+        success: 1,
+        partial: 0,
+        failed: 0,
+        checked: 60,
+        expired: 0,
+        deleted: 0,
+        enriched: 0,
+        companies_enriched: 2,
+        retired: 0,
+        last_run_at: "2026-06-22T09:30:00Z",
+      },
     ],
   });
 
@@ -172,8 +200,14 @@ test("buildDailyReports merges technical runs into five human-facing operation c
     "详情补全",
     "死岗治理",
     "职业洞察",
+    "自动扩源",
     "刷新 / 发现",
   ]);
+  assert.deepEqual(
+    reports.find((report) => report.key === "auto_discover").metrics.map((metric) => [metric.label, metric.value]),
+    [["探查公司", 90], ["新增源", 3]],
+  );
+  assert.equal(reports.find((report) => report.key === "auto_discover").status, "success");
   assert.deepEqual(
     reports.find((report) => report.key === "dead_jobs").metrics.map((metric) => [metric.label, metric.value]),
     [["核查", 120], ["判死", 11], ["清除", 7]],
