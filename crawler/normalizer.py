@@ -13,6 +13,8 @@ from geo import (
     OVERSEAS_LOCATION_TOKENS,
     REMOTE_MARKERS,
     _is_overseas_pinned,
+    derive_country_code,
+    derive_job_scope,
     is_china_location,
     is_remote_location,
     keep_for_china_radar,
@@ -173,6 +175,42 @@ def make_content_hash(title: str, location: Optional[str], summary: Optional[str
     """生成岗位内容 hash，用于判断是否变化。"""
     raw = f"{title}|{location or ''}|{summary or ''}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def normalize(raw: RawJob, *, source_id: str, company: str) -> dict:
+    title = clean_title(raw.title)
+    location = clean_location(raw.location)
+    full_summary = clean_summary(raw.summary)
+    salary = clean_salary(raw.salary_text)
+    job_type = (
+        raw.job_type
+        if is_recruitment_type(raw.job_type)
+        else (extract_job_type(title, full_summary) or raw.job_type)
+    )
+    content_hash = make_content_hash(title, location, full_summary)
+    experience = raw.experience or extract_experience(raw.summary)
+    education = raw.education or extract_education(raw.summary)
+    deadline = raw.deadline or extract_deadline(raw.summary)
+
+    return {
+        "source_id": source_id,
+        "company": raw.company or company,
+        "title": title,
+        "location": location,
+        "country_code": derive_country_code(location),
+        "job_scope": derive_job_scope(location),
+        "job_type": job_type,
+        "summary": full_summary,
+        "jd_url": raw.jd_url,
+        "apply_url": raw.apply_url,
+        "salary_text": salary,
+        "posted_at": raw.posted_at,
+        "experience": experience,
+        "education": education,
+        "deadline": deadline,
+        "content_hash": content_hash,
+        "status": "active",
+    }
 
 
 def extract_job_type(title: str, summary: Optional[str] = None) -> Optional[str]:

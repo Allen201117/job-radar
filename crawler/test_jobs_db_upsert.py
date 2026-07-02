@@ -16,9 +16,15 @@ class UpdateSetClauseTests(unittest.TestCase):
         clause = jobs_db._update_set_clause()
         # 标题/公司/链接等列表每次都带的字段：直接覆盖，不走保留逻辑。
         # （status 不在此列——它走「expired 黏住」的 CASE，见 test_status_keeps_expired_on_recrawl。）
-        for col in ("company", "title", "location", "jd_url", "last_seen_at"):
+        for col in ("company", "title", "location", "country_code", "job_scope", "jd_url", "last_seen_at"):
             self.assertIn(f"{col} = %s", clause)
             self.assertNotIn(f"COALESCE(NULLIF(%s, ''), {col})", clause)
+
+    def test_geo_fields_are_written_but_not_preserved(self):
+        for col in ("country_code", "job_scope"):
+            self.assertIn(col, jobs_db._INSERT_COLS)
+            self.assertIn(col, jobs_db._UPDATE_COLS)
+            self.assertNotIn(col, jobs_db._PRESERVE_IF_EMPTY)
 
     def test_status_keeps_expired_on_recrawl(self):
         # 列表重抓**不得复活** detail 探活确认撤岗的 expired 岗：wt~52%/hotjob~71% 的列表仍夹带
