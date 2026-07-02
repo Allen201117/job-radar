@@ -91,6 +91,7 @@
 ### ☐ W7. 第一方「给-取」众包（大·护城河·建议单独立项）
 
 - **战略意义**：这是「想要社区高赞帖价值」的**合规终极答案 = 自己当社区**（Glassdoor/Levels.fyi/Blind/脉脉皆此模式：用户主动交、给-取解锁）。见记忆 `job-radar-insights-crowdsourcing-deferred`。
+- **📋 详细实施计划（2026-07-02，build-ready）**：`docs/superpowers/plans/2026-07-02-insights-crowdsourcing-w7-plan.md`——含 3 个关键设计决策（展示粒度/给-取门/审核）+ 合规清单 + schema/RLS/API/纯函数/组件 + 分 P1（提交→审核→展示）/P2（给-取+删除权）/P3（验证/反刷）。**建议单开专注会话执行，勿在长会话里赶工**（合规敏感）。
 - **设计**（Codex 需完整实现，建议分阶段）：
   - **数据**：新迁移 `insight_submissions`（用户匿名提交：company / dimension / grade / 结构化字段[评分+短文本] / status[pending|approved|rejected] / user_id / created_at）；审核通过后转成 `insight_items`（`origin='first_party'`）入现有展示池，过 `insight-verification` 门（去标识、聚合 ≥N 条才展示防单点偏见）。
   - **提交 UI**：`CompanyInsightDrawer` 加「我来贡献」结构化表单——维度选择（实习体验/入职体验/年终奖/面试难度/文化/晋升）+ 评分 + 短文本，匿名；登录用户，可选在职/邮箱验证。
