@@ -10,6 +10,7 @@
 -- gen_random_uuid() 是 PG13+ 核心函数，无需扩展。
 
 create extension if not exists pg_trgm;
+set statement_timeout = '1800s';
 
 create table if not exists jobs (
   id                uuid primary key default gen_random_uuid(),
@@ -17,6 +18,8 @@ create table if not exists jobs (
   company           text not null,
   title             text not null,
   location          text,
+  country_code      text,
+  job_scope         text not null default 'domestic',
   job_type          text,
   summary           text,
   jd_url            text not null,
@@ -34,6 +37,7 @@ create table if not exists jobs (
   enrich_fail_count integer not null default 0,
   enrich_checked_at timestamptz,
   confirmed_closed_at timestamptz,   -- 我们确认下架的时刻（判死时写，best-effort；v3 时间记真 02 §4.1）
+  sponsorship_signal text,
   search_doc        tsvector,   -- 保留列；v1 不填（FTS 后置 pass 再启用）
   canonical_jd_url  text,
   constraint jobs_company_title_location_jd_url_key unique (company, title, location, jd_url)
@@ -41,6 +45,12 @@ create table if not exists jobs (
 
 -- 增量列（既有库 create-if-not-exists 不会补列 → 显式幂等 alter）。
 alter table jobs add column if not exists confirmed_closed_at timestamptz;
+alter table jobs add column if not exists country_code text;
+alter table jobs add column if not exists job_scope text;
+alter table jobs alter column job_scope set default 'domestic';
+update jobs set job_scope = 'domestic' where job_scope is null;
+alter table jobs alter column job_scope set not null;
+alter table jobs add column if not exists sponsorship_signal text;
 
 -- ── 岗位生命周期事件（append-only 里程碑；02 spec §5.1）──
 -- 只记里程碑，不记心跳：每岗一辈子 ~2–4 条（首见/拿到官方发布/若干天确认/下架）。
@@ -223,6 +233,7 @@ create index if not exists jobs_active_liveness_by_source_idx on jobs (source_id
 create index if not exists jobs_canonical_jd_url_idx        on jobs (canonical_jd_url);
 create unique index if not exists jobs_canonical_jd_url_active_uniq on jobs (canonical_jd_url) where status = 'active';
 create index if not exists jobs_enrich_queue_by_source_idx  on jobs (source_id, first_seen_at desc) where status = 'active' and summary is null and enrich_fail_count < 3;
+create index if not exists jobs_job_scope_status_idx        on jobs (job_scope, status) where status = 'active';
 create index if not exists jobs_status_first_seen_idx       on jobs (status, first_seen_at desc);
 create index if not exists jobs_valid_active_idx            on jobs (id) where status = 'active' and summary is not null and char_length(btrim(summary)) >= 60;
 
