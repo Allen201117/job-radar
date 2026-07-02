@@ -7,6 +7,16 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from adapters.base import RawJob
+from geo import (
+    CHINA_LOCATION_MARKERS,
+    OVERSEAS_LOCATION_PHRASES,
+    OVERSEAS_LOCATION_TOKENS,
+    REMOTE_MARKERS,
+    _is_overseas_pinned,
+    is_china_location,
+    is_remote_location,
+    keep_for_china_radar,
+)
 
 
 NAVIGATION_TITLES = {
@@ -267,93 +277,6 @@ def extract_deadline(text: Optional[str]) -> Optional[str]:
         d = re.sub(r"[./]", "-", d)
         return re.sub(r"-+$", "", d)
     return None
-
-
-CHINA_LOCATION_MARKERS = (
-    "china", "中国", "prc", "greater china",
-    # 一/新一线 + 主要工业城市（外企 ATS 地点常只给城市/省名，不带 "China"）
-    "beijing", "shanghai", "shenzhen", "guangzhou", "hangzhou", "chengdu",
-    "nanjing", "suzhou", "wuhan", "xi'an", "xian", "foshan", "dongguan",
-    "tianjin", "chongqing", "wuxi", "ningbo", "qingdao", "dalian", "xiamen",
-    "hefei", "changsha", "zhengzhou", "jinan", "kunming", "shijiazhuang",
-    "changchun", "harbin", "shenyang", "nanchang", "fuzhou", "nanning",
-    "guiyang", "lanzhou", "taiyuan", "wenzhou", "zhuhai", "yantai", "xuzhou",
-    "changzhou", "nantong", "weifang", "luoyang", "huizhou",
-    # 省 / 自治区（pinyin，独立 token，无歧义）
-    "jiangsu", "zhejiang", "guangdong", "sichuan", "shandong", "henan",
-    "hebei", "hunan", "hubei", "anhui", "fujian", "jiangxi", "liaoning",
-    "shaanxi", "shanxi", "yunnan", "guizhou", "gansu", "hainan", "jilin",
-    "heilongjiang", "qinghai", "ningxia", "xinjiang", "guangxi",
-    "nei mongol", "inner mongolia",
-    "北京", "上海", "深圳", "广州", "杭州", "成都", "南京", "苏州", "武汉", "西安", "佛山",
-    "天津", "重庆", "无锡", "宁波", "青岛", "大连", "厦门", "合肥", "长沙", "郑州",
-    "hong kong", "香港", "macau", "macao", "澳门",
-)
-
-
-# latin marker 用词边界匹配，避免子串误命中（如 'macao' 命中 'Humacao' 波多黎各、'xian' 命中别词）；
-# CJK marker 无词边界概念，用子串。
-_CJK_MARKERS = tuple(m for m in CHINA_LOCATION_MARKERS if any("一" <= ch <= "鿿" for ch in m))
-_LATIN_MARKERS = tuple(m for m in CHINA_LOCATION_MARKERS if m not in _CJK_MARKERS)
-_LATIN_MARKER_RE = re.compile(r"\b(?:" + "|".join(re.escape(m) for m in _LATIN_MARKERS) + r")\b")
-
-
-def is_china_location(location: Optional[str]) -> bool:
-    """判断地点是否属于大中华区（含港澳）。用于把外企 ATS 看板裁到在华岗位。
-    latin 关键词用词边界（防 'macao'→'Humacao' 等子串误命中），中文关键词用子串。"""
-    if not location:
-        return False
-    text = location.lower()
-    if any(marker in text for marker in _CJK_MARKERS):
-        return True
-    if _LATIN_MARKER_RE.search(text):
-        return True
-    # 归一逗号/连字符/多空白为单空格，让 "Hong, Kong"、"Hong-Kong"（路径拆分产物）也能被
-    # "hong kong" 词边界正则命中。不影响 'Humacao' 误判（单词无分隔符，词边界仍拦得住）。
-    norm = re.sub(r"[\s,\-/]+", " ", text)
-    return bool(_LATIN_MARKER_RE.search(norm))
-
-
-REMOTE_MARKERS = ("remote", "anywhere", "distributed", "work from home", "wfh", "远程", "远端")
-
-# 明确绑定到海外地点的标记（用于把 "Remote - US" 这类 base 海外的 remote 排除）
-OVERSEAS_LOCATION_TOKENS = {
-    "usa", "us", "canada", "uk", "britain", "ireland", "germany", "france", "netherlands",
-    "spain", "italy", "poland", "portugal", "sweden", "switzerland", "austria", "belgium",
-    "europe", "emea", "americas", "latam", "brazil", "mexico", "argentina", "colombia",
-    "india", "japan", "korea", "singapore", "malaysia", "thailand", "vietnam", "indonesia",
-    "philippines", "australia", "nz", "uae", "dubai", "israel", "egypt", "turkey", "africa",
-}
-OVERSEAS_LOCATION_PHRASES = (
-    "united states", "united kingdom", "new zealand", "south korea", "saudi arabia",
-    "sri lanka", "costa rica", "south africa",
-)
-
-
-def is_remote_location(location: Optional[str]) -> bool:
-    if not location:
-        return False
-    return any(marker in location.lower() for marker in REMOTE_MARKERS)
-
-
-def _is_overseas_pinned(location: Optional[str]) -> bool:
-    """地点是否明确绑定到某个海外国家/地区（用于排除海外 remote）。"""
-    if not location:
-        return False
-    text = location.lower()
-    if any(phrase in text for phrase in OVERSEAS_LOCATION_PHRASES):
-        return True
-    tokens = [t for t in re.split(r"[^a-z]+", text) if t]
-    return any(t in OVERSEAS_LOCATION_TOKENS for t in tokens)
-
-
-def keep_for_china_radar(location: Optional[str]) -> bool:
-    """在华雷达保留口径：大中华区岗位 + 不绑定海外地点的 remote 岗位；排除 base 海外（含海外 remote）。"""
-    if is_china_location(location):
-        return True
-    if is_remote_location(location) and not _is_overseas_pinned(location):
-        return True
-    return False
 
 
 # 各招聘接口里常见的"发布/更新时间"字段名（防御式：命中哪个用哪个，缺失则 None，不伪造）。
