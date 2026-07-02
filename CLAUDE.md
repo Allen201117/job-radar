@@ -61,7 +61,7 @@
    - **expired 死岗 = 永久删除回收空间（2026-06-18 定方针）**：expired 是 sweep/dead-link-audit 逐岗探活**确认撤岗**，不保留 → `purge-expired.yml`（每日 UTC 02:30）`DELETE … WHERE status='expired'` + 普通 VACUUM 持续清。`removed`（抓取漏看可复活）不动。db_size 真正缩小（还盘）由 `maintenance-vacuum -f full=true` 删大批后手动跑。**库再逼近 500MB 上限 → 走 `docs/superpowers/plans/2026-06-14-jobs-database-refactor.md` 的 Phase 1：jobs 热表迁到自建 PostgreSQL（jobs-store 边界），Supabase 只留 Auth/sources/crawl_runs/用户小表。**
      - **⚠️ Phase 1 已切（2026-06-19）：`jobs` 热表现在在自建香港 Postgres 17 上，不在 Supabase。** 腾讯云轻量 2C2G/40GB（IP REDACTED-SERVER-IP），免备案。连接串只存 **`JOBS_DATABASE_URL` secret**（GitHub Actions + Vercel）+ 本地 `.env.local`；**仓库公开，host/账号/密码一律不入库、不提交**。Supabase 现只管 Auth / `sources` / `crawl_runs` / `discovery_runs` / 用户小表 / 洞察表。
        - **边界层**：app 读+写都走 `lib/jobs-store/`（`client.ts` pg 连接池 / `search.ts` 复刻 FTS / `read.ts` 读：list/count/companies/byIds/byUrls/byCompanies/recallByPrefs / `write.ts` 写：canonical upsert + updateJobSummaryById，镜像 crawler/jobs_db），爬虫写走 `crawler/jobs_db.py`（psycopg2）。两端都 **gated**：配了 `JOBS_DATABASE_URL` 用香港库，否则回退 Supabase（本地无 env / 回滚安全）；**写入端 HK 报错不回退 Supabase**（避免写空库孤儿数据）。**sources/crawl_runs 永远走 Supabase**（jobs_db 只管 jobs）。
-       - **schema 在 `jobs-db/schema.sql`**（从生产 `pg_dump` 忠实重建：表 + canonical 触发器 + bigram FTS(search_doc/search_tokens/GIN) + count_valid_active_jobs/active_companies/active_job_counts_by_company + 全索引 + pg_trgm）。改 schema → `gh workflow run jobs-db-migrate`（幂等 apply 到 `JOBS_DATABASE_URL`）。
+       - **schema 在 `jobs-db/schema.sql`**（从生产 `pg_dump` 忠实重建：表 + canonical 触发器 + bigram FTS(search_doc/search_tokens/GIN) + count_valid_active_jobs/active_companies/active_job_counts_by_company + 全索引 + pg_trgm）。2026-07-02 海外扩展新增 `jobs.country_code`、`jobs.job_scope`（默认 `domestic`）与 `jobs.sponsorship_signal`；`job_scope=domestic` 只覆盖大陆+香港+澳门，`overseas` 覆盖本期放开的 US/SG/Remote，台湾维持不抓、不归入任一范围。改 schema → `gh workflow run jobs-db-migrate`（幂等 apply 到 `JOBS_DATABASE_URL`）。
        - **沙箱直连香港库验证**：见 [[job-radar-live-db-access-from-sandbox]]（dangerouslyDisableSandbox + source .env.local + 用户 Homebrew psql）。
        - **改 jobs 列/索引/canonical**：三处仍要同步（lib/canonical-url.js / crawler/normalizer.py / **jobs-db/schema.sql 的 SQL 函数**，不再是 supabase migration 144）。
        - **app 端 jobs 读+写已全部落香港库（2026-06-19，commit 6d814c8/57c9f44）**：原「discovery/enrich 读仍在 Supabase」遗留已清。新增 app 写层 `lib/jobs-store/write.ts`（canonical upsert + updateJobSummaryById，镜像 crawler/jobs_db）；discovery/search 的 upsert、enrich 写回、refresh 选区、insights Tier1 派生全 gated 走香港库（11 个 `.from("jobs")` 文件全 gated，写入端失败不回退 Supabase 避免孤儿数据）。Supabase `jobs` 已是空表（TRUNCATE 过，~17MB）；gated 兜底仅在未配 `JOBS_DATABASE_URL`（本地/回滚）时回退它。**移除 gated 兜底前仍请线上确认稳定**（见 docs runbook）。详见记忆 [[job-radar-phase1-ci-jobs-db-wiring]]。
@@ -114,7 +114,7 @@ app/                     # Next.js App Router 页面
   admin/insights/        # 洞察管理页（仅管理员）：列/增/改/下架洞察 + 处理申诉（InsightsAdminClient）
   admin/health/          # 运营数据看板（仅管理员）：今日健康 + 各模块每日战报 + 岗位库体检 + 用户业务（去黑话 + 数据准确）
   login/ auth/callback/  # 登录与 OAuth 回调
-  api/search|discovery|resume/route.ts   # 岗位层后端入口
+  api/search|discovery|resume|preferences/route.ts   # 岗位层后端入口 + 简历/偏好写入
   api/sources/route.ts   # admin 加招聘源（service-role 写 sources，绕 RLS 无 INSERT 策略）
   api/insights/route.ts + insights/dispute/route.ts   # 模块 B 职业洞察读/录入/申诉
   api/insights/admin/route.ts          # admin 洞察后台：GET 列全部 / POST 增改(过校验门) / PATCH 上下架
@@ -131,6 +131,7 @@ lib/                     # 工具层：supabaseClient、auth、scoring、types�
                          # source-adapters（adapter/抓取方式白名单 + validateSourceInput 纯函数）
                          # live-search（已知源刷新格式化/校验）、official-discovery、
                          # baidu-qianfan-search、china-keyword-expansion、china-official-sources、client-job-mapping
+                         # geo / job-scope / role-lexicon-en = 海外地理归属、求职范围过滤、中英岗位词典
                          # insight-verification（分级/时效/去标识/归因 纯函数）、insight-match（公司归一匹配）、insight-client（浏览器去重缓存）
                          # insight-bundle（洞察展示门复用）、insight-chip-format（抽屉 hiring/financials 芯片格式）、insight-enrich-now（现查快车道节流/台账纯函数）、career-path（确定性职业路径引擎，无 LLM，模块 ③）
 crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd,haier,tencent,bytedance,feishu,greenhouse,lever,china_ats,
@@ -140,6 +141,7 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          # ops_runs.py = 后台任务每日台账旁路写入（写 ops_runs 表，失败不阻断主任务；运营看板②每日战报数据源）
                          # probe.py = 扩源探活器：批量 live 探活候选源，仅把「真返回岗位」的写进迁移（本机跑 python3 probe.py --all --emit 025）
                          # 洞察供给：insight_backlog.py(T2 Wikidata+EDGAR+巨潮 / T3 多维查询包 drain：加班文化/实习体验/年终奖/晋升/面试难度→各维度；支持 --company 单公司现查；EDGAR 财报员工数会覆盖 headcount_band) / insight_engine.py(接地→判官→共识) / wikidata.py / official_edgar.py(SEC 美股上市+业绩 XBRL companyfacts) / official_cninfo.py(巨潮 A股,默认关需 INSIGHT_CNINFO_ENABLED；2026-07-02 live 验过 stockList 结构与比亚迪/顺丰匹配，但 repo Variable 仍需有效 GitHub 凭据启用) / insight_sweep.py(过期下架)
+                         # geo.py / sponsorship.py = country_code/job_scope/地区过滤 + visa/sponsorship 信号派生
                          # search_router.py = T3 多源搜索路由：search_{bocha,tavily,serper,qianfan} provider + search_budget(每源日顶 search_usage 表)；配哪个 key 用哪个、未配跳过、多源并取喂≥2 publisher 共识门
 supabase/migrations/     # 001_init → 002_rls → … → 007_candidate_profile_summaries
                          # → 008_discovery_run_diagnostics → 009_discovery_async_runs → 010_seed_spa_sources
@@ -148,6 +150,7 @@ supabase/migrations/     # 001_init → 002_rls → … → 007_candidate_profil
                          # → 015_verify_experience_sources（experience 真实来源核验）
                          # → 016_rewrite_culture_and_experience_copy（去「避坑」+ 9 条 experience 正文改通俗）
                          # → …（前缀递增，详见目录）→ 158_admin_health_snapshot → 159_admin_ops_dashboard（ops_runs 台账表 + 运营看板聚合函数）→ 165_insight_enrich_now_and_hiring_monthly
+                         # → 166_insight_submissions → 167_overseas_prefs → 168_sources_regions → 169_seed_overseas_regions
 .github/workflows/daily-crawl.yml   # 每日 + 手动抓取
 tests/                   # node --test 单测
 ```
@@ -157,10 +160,11 @@ tests/                   # node --test 单测
 | 表 | 用途 | 权限 |
 |---|---|---|
 | profiles | 用户扩展信息（含 `role`，管理员判定靠它） | 自己读写 |
-| sources | 企业招聘源 | 所有人读，crawler 写 |
+| sources | 企业招聘源（含 `regions` 抓取地区，默认 `{CN}`） | 所有人读，crawler 写 |
 | source_candidates | 官方源发现候选 | admin 读，service role 写 |
-| jobs | 共享岗位库（已迁自建香港 PG，见核心产品原则 §4） | 所有人读，crawler 写 |
-| user_preferences | 用户偏好 | 自己读写 |
+| jobs | 共享岗位库（已迁自建香港 PG，含 `country_code`/`job_scope`/`sponsorship_signal`，见核心产品原则 §4） | 所有人读，crawler 写 |
+| user_preferences | 用户偏好（含 `job_scope`/`target_regions` 求职范围） | 自己读写 |
+| candidate_profiles | 简历档案（含英文侧 `en_*` 与 `has_en_resume`） | 自己读写 |
 | job_actions | 收藏/忽略/投递 | 自己读写 |
 | crawl_runs | 抓取日志 | admin 读，crawler 写 |
 | discovery_runs | 官方源发现日志 | admin 读，service role 写 |
@@ -210,6 +214,8 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 
 ## 当前 source 状态
 
+2026-07-02 海外扩展：`sources.regions` 默认 `{CN}`，迁移 `169_seed_overseas_regions.sql` 仅把已验证且 enabled 的 http 外企 ATS 源保守放开到 `{CN,US,SG,Remote}`；浏览器/Playwright 源暂不一次性放开，需单独评估容量。台湾不在 seed 范围内，normalizer 继续拒收台湾地点。
+
 | Source | 状态 | 详情链接格式 |
 |---|---|---|
 | Apple | 可用（crawler + 已知源刷新） | `jobs.apple.com/en-us/details/...` |
@@ -243,7 +249,7 @@ Supabase Auth（邮箱登录）+ cookie session。`middleware.ts` 排除 `/api/*
 
 ## 简历画像
 
-粘贴文本 / `.txt` / `.md` → candidate profile → 用户确认后同步 `user_preferences`（只服务排序，不替代检索）。PDF/DOCX 返回 `415 unsupported_file_type`，空文本返回 `400 empty_resume_text`。
+粘贴文本 / `.txt` / `.md` / PDF / Word(`.docx`) / 图片 → candidate profile → 用户确认后同步 `user_preferences`（只服务排序，不替代检索）。英文简历作为可选 variant 写入 `candidate_profiles.en_target_roles/en_skills/en_target_keywords/has_en_resume`，仅在求职范围为海外或全都要时优先用于海外匹配；国内范围继续走中文档案。空文本返回 `400 empty_resume_text`。
 
 ## 开发规范
 
