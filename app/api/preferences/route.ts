@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
 import { buildRadarProfile, profileReadiness } from "@/lib/opportunities/profile";
-import { parsePreferencesInput } from "@/lib/opportunities/preferences-input";
+import { parsePreferenceScopeInput, parsePreferencesInput } from "@/lib/opportunities/preferences-input";
 import { normalizeCompany } from "@/lib/company-normalize";
 import { isMissingRelation } from "@/lib/opportunities/schema-errors";
 import type { CandidateProfile, UserPreferences } from "@/lib/types";
@@ -212,4 +212,27 @@ export async function PUT(request: NextRequest) {
     coverage,
     coverage_synced: true,
   });
+}
+
+export async function PATCH(request: NextRequest) {
+  const auth = await requireUser();
+  if (auth.error) return auth.error;
+  const { supabase, user } = auth;
+
+  const INVALID = Symbol("invalid_json");
+  const rawBody = await request.json().catch(() => INVALID);
+  const parsed = parsePreferenceScopeInput(rawBody === INVALID ? null : rawBody);
+  if (!parsed.ok) {
+    return NextResponse.json({ ok: false, error: parsed.error }, { status: 400 });
+  }
+
+  const { error } = await supabase
+    .from("user_preferences")
+    .upsert({ user_id: user.id, ...parsed.value }, { onConflict: "user_id" });
+  if (error) {
+    console.error("[preferences] scope upsert failed:", error.message);
+    return NextResponse.json({ ok: false, error: "preferences_unavailable" }, { status: 503 });
+  }
+
+  return NextResponse.json({ ok: true, preferences: parsed.value });
 }

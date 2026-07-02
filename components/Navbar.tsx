@@ -30,6 +30,14 @@ const LINKS = [
   { href: "/applied", key: "applied", icon: CheckCircle },
 ];
 
+type JobScope = "domestic" | "overseas" | "all";
+
+const JOB_SCOPE_OPTIONS: { value: JobScope; label: string }[] = [
+  { value: "domestic", label: "国内" },
+  { value: "overseas", label: "海外" },
+  { value: "all", label: "全都要" },
+];
+
 export default function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -39,12 +47,29 @@ export default function Navbar() {
   const lang = "zh" as const;
   const [menuOpen, setMenuOpen] = useState(false);
   const [acctOpen, setAcctOpen] = useState(false);
+  const [jobScope, setJobScope] = useState<JobScope>("domestic");
+  const [scopeSaving, setScopeSaving] = useState(false);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
       setEmail(data.user?.email ?? null);
     });
   }, []);
+
+  useEffect(() => {
+    if (!email) return;
+    let cancelled = false;
+    fetch("/api/preferences")
+      .then((resp) => (resp.ok ? resp.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        setJobScope(normalizeJobScope(data?.preferences?.job_scope));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [email]);
 
   useEffect(() => {
     setMenuOpen(false);
@@ -69,6 +94,30 @@ export default function Navbar() {
     await supabase.auth.signOut();
     router.push("/login");
     router.refresh();
+  }
+
+  async function handleScopeChange(next: JobScope) {
+    if (next === jobScope || scopeSaving) return;
+    const previous = jobScope;
+    setJobScope(next);
+    setScopeSaving(true);
+    try {
+      const resp = await fetch("/api/preferences", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_scope: next }),
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+      setJobScope(normalizeJobScope(data.preferences?.job_scope));
+      window.dispatchEvent(new Event("preferences-scope-updated"));
+      router.refresh();
+    } catch (e) {
+      console.error("[navbar] failed to update job scope:", (e as Error).message);
+      setJobScope(previous);
+    } finally {
+      setScopeSaving(false);
+    }
   }
 
   return (
@@ -102,6 +151,14 @@ export default function Navbar() {
           </nav>
         </div>
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+          {email && (
+            <JobScopeSwitch
+              value={jobScope}
+              saving={scopeSaving}
+              onChange={handleScopeChange}
+              className="hidden lg:flex"
+            />
+          )}
           <ThemeToggle />
           {/* 桌面端账号菜单：个人主页 + 退出（/me 不再占一级导航） */}
           {email && (
@@ -188,6 +245,17 @@ export default function Navbar() {
               );
             })}
             {email && (
+              <div className="mb-2 border-b border-black/[0.06] pb-3 dark:border-white/[0.08]">
+                <JobScopeSwitch
+                  value={jobScope}
+                  saving={scopeSaving}
+                  onChange={handleScopeChange}
+                  className="flex"
+                  mobile
+                />
+              </div>
+            )}
+            {email && (
               <Link
                 href="/me"
                 onClick={() => setMenuOpen(false)}
@@ -216,5 +284,53 @@ export default function Navbar() {
         </>
       )}
     </header>
+  );
+}
+
+function normalizeJobScope(value: unknown): JobScope {
+  return value === "overseas" || value === "all" ? value : "domestic";
+}
+
+function JobScopeSwitch({
+  value,
+  saving,
+  onChange,
+  className,
+  mobile = false,
+}: {
+  value: JobScope;
+  saving: boolean;
+  onChange: (value: JobScope) => void;
+  className?: string;
+  mobile?: boolean;
+}) {
+  return (
+    <div className={cn("items-center gap-2", className)}>
+      <span className={cn("shrink-0 text-xs font-medium text-[#8a8275] dark:text-[#9a9184]", mobile ? "w-16" : "")}>
+        求职范围
+      </span>
+      <div className="grid grid-cols-3 rounded-full border border-black/[0.08] bg-white/55 p-0.5 dark:border-white/[0.12] dark:bg-white/[0.05]">
+        {JOB_SCOPE_OPTIONS.map((opt) => {
+          const selected = value === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              disabled={saving}
+              aria-pressed={selected}
+              onClick={() => onChange(opt.value)}
+              className={cn(
+                "h-7 min-w-14 rounded-full px-2 text-xs font-semibold transition duration-200 disabled:cursor-wait disabled:opacity-70",
+                selected
+                  ? "bg-[#1a1714] text-[#f7f1e6] shadow-sm dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                  : "text-[#5f594e] hover:bg-black/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.06]",
+              )}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }

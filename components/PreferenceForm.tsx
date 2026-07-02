@@ -28,12 +28,14 @@ export default function PreferenceForm() {
 
   useEffect(() => {
     loadPrefs();
-    function handleResumePreferencesUpdated() {
+    function handlePreferencesUpdated() {
       loadPrefs();
     }
-    window.addEventListener("resume-preferences-updated", handleResumePreferencesUpdated);
+    window.addEventListener("resume-preferences-updated", handlePreferencesUpdated);
+    window.addEventListener("preferences-scope-updated", handlePreferencesUpdated);
     return () => {
-      window.removeEventListener("resume-preferences-updated", handleResumePreferencesUpdated);
+      window.removeEventListener("resume-preferences-updated", handlePreferencesUpdated);
+      window.removeEventListener("preferences-scope-updated", handlePreferencesUpdated);
     };
   }, []);
 
@@ -73,6 +75,8 @@ export default function PreferenceForm() {
           exclude_keywords: prefs.exclude_keywords,
           target_companies: prefs.target_companies,
           target_industries: prefs.target_industries || [],
+          job_scope: prefs.job_scope ?? "domestic",
+          target_regions: prefs.target_regions ?? [],
           daily_limit: prefs.daily_limit,
           radar_intensity: prefs.radar_intensity ?? "active",
         }),
@@ -300,6 +304,12 @@ function withDefaults(p: Partial<UserPreferences>): UserPreferences {
     exclude_keywords: p.exclude_keywords ?? [],
     target_companies: p.target_companies ?? [],
     target_industries: p.target_industries ?? [],
+    job_scope: p.job_scope ?? "domestic",
+    target_regions: p.target_regions ?? [],
+    en_target_roles: p.en_target_roles ?? [],
+    en_skills: p.en_skills ?? [],
+    en_target_keywords: p.en_target_keywords ?? [],
+    has_en_resume: p.has_en_resume ?? false,
     daily_limit: p.daily_limit ?? 20,
     radar_intensity: p.radar_intensity ?? "active",
     radar_intensity_source: p.radar_intensity_source,
