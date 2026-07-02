@@ -19,6 +19,8 @@ export type EducationLabel = "博士" | "硕士" | "本科" | "大专" | null;
 // 合并规则见 profile.ts：手工偏好优先，简历只补 skills/education/seniority 与缺失字段。
 export interface RadarProfile {
   userId: string;
+  jobScope: "domestic" | "overseas" | "all";
+  targetRegions: string[];
   targetRoles: string[];
   targetKeywords: string[];
   excludeKeywords: string[];

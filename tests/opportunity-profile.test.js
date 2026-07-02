@@ -1,28 +1,8 @@
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 const test = require("node:test");
-const ts = require("typescript");
-const Module = require("node:module");
+const { loadOpp } = require("./_load-ts");
 
-function loadModule(rel) {
-  const sourcePath = path.join(__dirname, "..", "lib", "opportunities", rel);
-  const source = fs.readFileSync(sourcePath, "utf8");
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2020,
-      esModuleInterop: true,
-    },
-  }).outputText;
-  const mod = { exports: {} };
-  const scopedRequire = Module.createRequire(sourcePath);
-  const fn = new Function("exports", "require", "module", "__filename", "__dirname", compiled);
-  fn(mod.exports, scopedRequire, mod, sourcePath, path.dirname(sourcePath));
-  return mod.exports;
-}
-
-const { buildRadarProfile, isProfileReady, profileReadiness } = loadModule("profile.ts");
+const { buildRadarProfile, isProfileReady, profileReadiness } = loadOpp("profile");
 
 function prefs(over = {}) {
   return {
@@ -83,6 +63,27 @@ test("偏好缺失时用简历兜底 roles/locations", () => {
 test("简历补 skills（偏好无此字段）", () => {
   const p = buildRadarProfile("u", prefs(), cand({ skills: ["Python", "SQL"] }));
   assert.deepEqual(p.skills, ["Python", "SQL"]);
+});
+
+test("海外范围优先使用英文简历档案字段", () => {
+  const p = buildRadarProfile(
+    "u",
+    prefs({ job_scope: "overseas", target_regions: ["US"], target_roles: ["算法"], target_keywords: ["推荐系统"] }),
+    cand({
+      has_en_resume: true,
+      en_target_roles: ["Machine Learning Engineer"],
+      en_target_keywords: ["Recommender Systems"],
+      en_skills: ["Python", "TensorFlow"],
+      target_roles: ["数据分析"],
+      skills: ["SQL"],
+    }),
+  );
+
+  assert.equal(p.jobScope, "overseas");
+  assert.deepEqual(p.targetRegions, ["US"]);
+  assert.deepEqual(p.targetRoles, ["Machine Learning Engineer"]);
+  assert.deepEqual(p.targetKeywords, ["Recommender Systems"]);
+  assert.deepEqual(p.skills, ["Python", "TensorFlow"]);
 });
 
 test("target industries 合并（偏好 ∪ 简历）", () => {

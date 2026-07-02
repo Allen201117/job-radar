@@ -11,6 +11,7 @@ import { jobsQuery } from "./client";
 import { jobsStoreEnabled } from "./read";
 import { buildTsquery } from "@/lib/job-search";
 import { ftsCandidateTerms } from "@/lib/china-keyword-expansion";
+import { appendJobScopeWhere, jobMatchesScope } from "@/lib/job-scope";
 import type { RadarProfile } from "@/lib/opportunities/types";
 
 type SupabaseLike = { from: (table: string) => any };
@@ -34,14 +35,15 @@ const BRANCH_LIMIT = 1500;
 // enrich_checked_at（分层核验 today 硬门）+ posted_at/deadline（信号派生：STILL_OPEN/DEADLINE_SOON，在回填前算）
 // 必须随召回带回——均为短字段/时间戳，载荷可忽略（P0-1 的重载荷是长 summary，已截断）。
 const RECALL_COLUMNS =
-  "id, source_id, company, title, location, job_type, " +
+  "id, source_id, company, title, location, country_code, job_scope, job_type, " +
   `left(btrim(summary), ${SUMMARY_TRUNC}) as summary, ` +
   "jd_url, salary_text, posted_at, deadline, first_seen_at, last_seen_at, enrich_checked_at, status, education";
 
 function roleTsquery(profile: RadarProfile): string | null {
   const terms = [...profile.targetRoles, ...profile.targetKeywords];
   if (!terms.length) return null;
-  return buildTsquery(terms.flatMap((t) => ftsCandidateTerms(t)), []);
+  const includeOverseasLexicon = profile.jobScope !== "domestic";
+  return buildTsquery(terms.flatMap((t) => ftsCandidateTerms(t, { includeOverseasLexicon })), []);
 }
 
 function mergeById(target: Map<string, any>, rows: any[] | null | undefined): void {
@@ -80,12 +82,18 @@ async function recallViaStore(profile: RadarProfile, sinceIso: string, limit: nu
     : null;
 
   const params: unknown[] = [sinceIso];
-  let where = `status = 'active' and last_seen_at >= $1 and summary is not null and char_length(btrim(summary)) >= 60`;
+  const conds = [
+    "status = 'active'",
+    "last_seen_at >= $1",
+    "summary is not null",
+    "char_length(btrim(summary)) >= 60",
+  ];
   if (excl.length) {
     params.push(excl);
     // 排除词用完整 summary 比对（不受 left 截断影响），逐字对齐 crawler jobExcluded 的字段集
-    where += ` and not (lower(concat_ws(' ', title, company, location, job_type, summary, salary_text)) like any($${params.length}::text[]))`;
+    conds.push(`not (lower(concat_ws(' ', title, company, location, job_type, summary, salary_text)) like any($${params.length}::text[]))`);
   }
+  appendJobScopeWhere(conds, params, { job_scope: profile.jobScope, target_regions: profile.targetRegions });
 
   const ors: string[] = [];
   if (roleTs) {
@@ -102,9 +110,10 @@ async function recallViaStore(profile: RadarProfile, sinceIso: string, limit: nu
     ors.push(`(search_doc @@ to_tsquery('simple', $${params.length}) and first_seen_at >= $1)`);
   }
   if (ors.length === 0) return { jobs: [], capped: false }; // profile_ready 应保证至少一项；防御性返回
-  where += ` and (${ors.join(" or ")})`;
+  conds.push(`(${ors.join(" or ")})`);
 
   params.push(limit);
+  const where = conds.join(" and ");
   const sql = `select ${RECALL_COLUMNS} from jobs where ${where} order by first_seen_at desc limit $${params.length}`;
   const rows = await jobsQuery(sql, params);
   // 命中 limit = 发生截断 → capped 诚实为 true（修 P0-6：旧逻辑用「去重后数量 > limit」，恰好截断到 limit 时误判 false）
@@ -124,7 +133,7 @@ async function recallViaSupabase(
   const take = (data: any[] | null | undefined) => {
     const rows = data || [];
     if (rows.length >= limit) branchCapped = true; // 分支命中 limit = 截断
-    mergeById(byId, rows.filter(summaryOk));
+    mergeById(byId, rows.filter((j) => summaryOk(j) && jobMatchesScope(j, { job_scope: profile.jobScope, target_regions: profile.targetRegions })));
   };
 
   const roleTs = roleTsquery(profile);

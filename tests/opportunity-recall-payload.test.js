@@ -22,6 +22,8 @@ test("opportunity recall transfers only engine-required candidate fields", () =>
     "company",
     "title",
     "location",
+    "country_code",
+    "job_scope",
     "job_type",
     "summary",
     "jd_url",
