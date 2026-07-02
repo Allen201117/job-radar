@@ -105,7 +105,12 @@ export interface CandidateProfile {
   headline: string | null;
   target_roles: string[];
   target_locations: string[];
+  target_regions?: string[];
   skills: string[];
+  en_target_roles?: string[];
+  en_skills?: string[];
+  en_target_keywords?: string[];
+  has_en_resume?: boolean | null;
   industries: string[];
   seniority: string | null;
   experience_stage: string | null;

@@ -46,6 +46,11 @@ const EMPTY_INTERN: InternItem = { company: "", role: "", start: "", end: "", su
 const EMPTY_PROJECT: ProjectItem = { name: "", role: "", stack: "", outcome: "" };
 
 const STAGES = ["", "实习", "校招", "社招"];
+const RESUME_VARIANTS = [
+  { value: "cn", label: "中文简历" },
+  { value: "en", label: "英文简历" },
+] as const;
+type ResumeVariant = (typeof RESUME_VARIANTS)[number]["value"];
 
 function coerce(p: any): StructuredProfile {
   return {
@@ -64,6 +69,7 @@ function coerce(p: any): StructuredProfile {
 
 export default function ResumeProfilePanel() {
   const [step, setStep] = useState<"input" | "preview">("input");
+  const [variant, setVariant] = useState<ResumeVariant>("cn");
   const [resumeText, setResumeText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [applyToPreferences, setApplyToPreferences] = useState(false);
@@ -106,6 +112,7 @@ export default function ResumeProfilePanel() {
     try {
       const form = new FormData();
       form.set("intent", "parse");
+      form.set("variant", variant);
       if (file) form.set("resume", file);
       else form.set("resumeText", resumeText);
 
@@ -140,6 +147,7 @@ export default function ResumeProfilePanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           intent: "save",
+          variant,
           profile: draft,
           resumeId,
           applyToPreferences,
@@ -156,7 +164,13 @@ export default function ResumeProfilePanel() {
       setFile(null);
       setResumeText("");
       setParseDiagnostics(null);
-      setMessage(data.preferences_applied ? "已保存画像并回填求职偏好。" : "已保存画像。");
+      setMessage(
+        data.english_profile_applied
+          ? "已保存英文简历画像，海外匹配已启用。"
+          : data.preferences_applied
+            ? "已保存画像并回填求职偏好。"
+            : "已保存画像。",
+      );
       if (data.preferences_applied) {
         window.dispatchEvent(new Event("resume-preferences-updated"));
       }
@@ -253,9 +267,31 @@ export default function ResumeProfilePanel() {
         <>
           <form onSubmit={handleParse} className="mt-4 space-y-3">
             <div>
+              <div className="grid w-full max-w-sm grid-cols-2 rounded-full border border-black/[0.08] bg-white/55 p-0.5 dark:border-white/[0.12] dark:bg-white/[0.05]">
+                {RESUME_VARIANTS.map((opt) => {
+                  const selected = variant === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => setVariant(opt.value)}
+                      className={
+                        selected
+                          ? "h-8 rounded-full bg-[#1a1714] px-3 text-sm font-semibold text-[#f7f1e6] shadow-sm dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                          : "h-8 rounded-full px-3 text-sm font-medium text-[#5f594e] transition hover:bg-black/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.06]"
+                      }
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div>
               <label className="inline-flex items-center gap-1.5 text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">
                 <UploadSimple size={16} weight="bold" aria-hidden="true" />
-                上传简历（.txt / .md / PDF / Word / 图片）
+                {variant === "en" ? "上传英文简历（可选）" : "上传简历（.txt / .md / PDF / Word / 图片）"}
               </label>
               <input
                 type="file"
@@ -273,7 +309,7 @@ export default function ResumeProfilePanel() {
               <textarea
                 value={resumeText}
                 onChange={(e) => setResumeText(e.target.value)}
-                placeholder="粘贴教育经历、实习经历、项目经历、技能等"
+                placeholder={variant === "en" ? "Paste your English resume for overseas matching" : "粘贴教育经历、实习经历、项目经历、技能等"}
                 rows={6}
                 className="mt-1 field-soft"
               />
@@ -295,7 +331,7 @@ export default function ResumeProfilePanel() {
               className="btn-ink"
             >
               <Sparkle size={16} weight="fill" aria-hidden="true" />
-              {parsing ? "AI 解析中…" : "AI 解析简历"}
+              {parsing ? "AI 解析中…" : variant === "en" ? "AI 解析英文简历" : "AI 解析简历"}
             </button>
           </form>
 
@@ -386,10 +422,16 @@ export default function ResumeProfilePanel() {
           {renderList("实习经历", "internships", [["company", "公司"], ["role", "岗位"], ["start", "开始"], ["end", "结束"], ["summary", "职责 / 成果"]], EMPTY_INTERN)}
           {renderList("工作 / 项目经历", "projects", [["name", "项目"], ["role", "角色"], ["stack", "技术栈"], ["outcome", "成果"]], EMPTY_PROJECT)}
 
-          <label className="flex cursor-pointer items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm text-[#5f594e] dark:text-[#b6ad9d] transition duration-200 hover:bg-white dark:hover:bg-white/[0.08] hover:text-[#1a1714] dark:hover:text-[#f3ecdf]">
-            <input type="checkbox" checked={applyToPreferences} onChange={(e) => setApplyToPreferences(e.target.checked)} className="accent-[#1a1714] dark:accent-[#f3ecdf]" />
-            同步到求职偏好（方向 / 城市 / 技能）
-          </label>
+          {variant === "cn" ? (
+            <label className="flex cursor-pointer items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm text-[#5f594e] dark:text-[#b6ad9d] transition duration-200 hover:bg-white dark:hover:bg-white/[0.08] hover:text-[#1a1714] dark:hover:text-[#f3ecdf]">
+              <input type="checkbox" checked={applyToPreferences} onChange={(e) => setApplyToPreferences(e.target.checked)} className="accent-[#1a1714] dark:accent-[#f3ecdf]" />
+              同步到求职偏好（方向 / 城市 / 技能）
+            </label>
+          ) : (
+            <p className="rounded-xl border border-[#bcd2ed] bg-[#e8f1fc] px-3 py-2 text-sm text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
+              英文简历会保存为海外匹配档案，不覆盖中文画像。
+            </p>
+          )}
 
           {message && (
             <p className={`rounded-xl border px-3 py-2 text-sm ${message.includes("失败") || message.includes("暂不") ? "border-[#e0b4ac] dark:border-[#7a392e]/[0.60] bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]" : "border-[#bcd2ed] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]"}`}>
@@ -444,6 +486,11 @@ function SavedSummary({ profile }: { profile: any }) {
         {(profile.experience_stage || profile.seniority) && (
           <span className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1">
             阶段 {profile.experience_stage || profile.seniority}
+          </span>
+        )}
+        {profile.has_en_resume && (
+          <span className="rounded-full border border-[#bcd2ed] bg-[#e8f1fc] px-2.5 py-1 text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
+            英文匹配已启用
           </span>
         )}
       </div>

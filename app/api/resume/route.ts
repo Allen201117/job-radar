@@ -3,6 +3,7 @@ import { createServerSupabase } from "@/lib/auth";
 import resumeParser from "@/lib/resume-parser";
 import llm from "@/lib/llm";
 import resumeExtract from "@/lib/resume-extract";
+import resumeEnProfile from "@/lib/resume-en-profile";
 import {
   RESUME_RULE_MODEL,
   bucketLatency,
@@ -19,6 +20,7 @@ const {
 } = resumeParser as any;
 const { chatJSON, llmConfig } = llm as any;
 const { buildResumeMessages, normalizeResumeProfile } = resumeExtract as any;
+const { mapResumeProfileToEnglishProfile } = resumeEnProfile as any;
 
 export const runtime = "nodejs";
 
@@ -198,6 +200,7 @@ async function parseResume(
     ok: true,
     resume_id: resume.id,
     profile,
+    variant: input.variant,
     source,
     llm_error: llmError,
     llm_detail: llmDetail,
@@ -217,6 +220,9 @@ async function saveConfirmedProfile(
 
   // 再归一化一遍：即使前端被改动，落库前也强制脱敏与裁剪。
   const profile = normalizeResumeProfile(input.profile);
+  if (input.variant === "en") {
+    return saveEnglishProfile(supabase, userId, input, profile, saveStartedAt);
+  }
 
   const { data: saved, error: profileError } = await supabase
     .from("candidate_profiles")
@@ -315,6 +321,7 @@ function profileHasContent(profile: any): boolean {
 
 type ResumeInput = {
   intent: "parse" | "save";
+  variant: "cn" | "en";
   fileName: string;
   fileType: string;
   fileSize: number;
@@ -333,9 +340,11 @@ async function readResumeInput(request: NextRequest): Promise<ResumeInput> {
     const file = form.get("resume");
     const applyToPreferences = form.get("applyToPreferences") === "true";
     const intent = (String(form.get("intent") || "parse") as "parse" | "save");
+    const variant = form.get("variant") === "en" ? "en" : "cn";
     if (!(file instanceof File)) {
       return {
         intent,
+        variant,
         fileName: "pasted-resume.txt",
         fileType: "text/plain",
         fileSize: 0,
@@ -351,11 +360,12 @@ async function readResumeInput(request: NextRequest): Promise<ResumeInput> {
       fileSize: buf.length,
     };
     if (buf.length > MAX_RESUME_FILE_BYTES) {
-      return { intent, ...fileMeta, text: "", applyToPreferences };
+      return { intent, variant, ...fileMeta, text: "", applyToPreferences };
     }
     const extracted = await extractResumeText(file.name, fileMeta.fileType, buf);
     return {
       intent,
+      variant,
       ...fileMeta,
       // 抽取成功 → 标为 text/plain 让下游文本校验通过；不支持/失败 → 保留原类型走 415
       fileType: extracted.ok ? "text/plain" : fileMeta.fileType,
@@ -368,6 +378,7 @@ async function readResumeInput(request: NextRequest): Promise<ResumeInput> {
   const text = String(body.resumeText || body.text || "");
   return {
     intent: body.intent === "save" ? "save" : "parse",
+    variant: body.variant === "en" ? "en" : "cn",
     fileName: body.fileName || "pasted-resume.txt",
     fileType: body.fileType || "text/plain",
     fileSize: Buffer.byteLength(text, "utf8"),
@@ -377,6 +388,50 @@ async function readResumeInput(request: NextRequest): Promise<ResumeInput> {
     resumeId: body.resumeId || null,
     parseDiagnostics: body.parseDiagnostics,
   };
+}
+
+async function saveEnglishProfile(
+  supabase: Awaited<ReturnType<typeof createServerSupabase>>,
+  userId: string,
+  input: ResumeInput,
+  profile: any,
+  saveStartedAt: number,
+) {
+  const enProfile = mapResumeProfileToEnglishProfile(profile);
+  const { data: saved, error: profileError } = await supabase
+    .from("candidate_profiles")
+    .upsert(
+      {
+        user_id: userId,
+        resume_id: input.resumeId || null,
+        ...enProfile,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id" },
+    )
+    .select("*")
+    .single();
+
+  if (profileError) {
+    const hint = /column|schema cache/i.test(profileError.message)
+      ? "（疑似生产库缺列：请应用海外偏好迁移，包含 en_target_roles/en_skills/en_target_keywords/has_en_resume 后重试）"
+      : "";
+    return NextResponse.json({ ok: false, error: profileError.message + hint }, { status: 500 });
+  }
+
+  const parseDiagnostics = buildResumeDiagnostics(input.parseDiagnostics);
+  await trackResumeEvent(supabase, userId, "resume_profile_saved", {
+    ...parseDiagnostics,
+    latency_bucket: bucketLatency(Date.now() - saveStartedAt),
+    extracted_field_count: countExtractedResumeFields(profile),
+  });
+
+  return NextResponse.json({
+    ok: true,
+    profile: saved,
+    preferences_applied: false,
+    english_profile_applied: true,
+  });
 }
 
 async function upsertMergedPreferences(
