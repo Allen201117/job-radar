@@ -292,6 +292,16 @@ def extract_experience(text: Optional[str]) -> Optional[str]:
     m = re.search(r"(\d+)[-~to]+(\d+)years?", t, re.I) or re.search(r"(\d+)\+?years?(?:ofexperience)?", t, re.I)
     if m:
         return _fmt_years(m)
+    if re.search(r"\b(principal|distinguished)\b", base, re.I):
+        return "12年+"
+    if re.search(r"\b(staff|lead)\b", base, re.I):
+        return "8年+"
+    if re.search(r"\bsenior\b", base, re.I):
+        return "5年+"
+    if re.search(r"\b(mid[-\s]?level|intermediate)\b", base, re.I):
+        return "3年+"
+    if re.search(r"\bjunior\b", base, re.I):
+        return "应届/不限"
     return None
 
 
