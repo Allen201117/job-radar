@@ -146,6 +146,7 @@ const REPORT_ICONS: Record<DailyReport["key"], ComponentType<any>> = {
   enrichment: FileText,
   dead_jobs: Heartbeat,
   insights: Compass,
+  auto_discover: Database,
   discovery: MagnifyingGlass,
 };
 
