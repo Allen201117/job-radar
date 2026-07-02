@@ -340,42 +340,8 @@ def _process_one_source(source, supabase) -> dict:
         #    整源攒成一批，db.upsert_jobs_batch 压成「1 次批量 select + 分块 upsert/insert」。
         job_batch = []
         for raw in valid_jobs:
-            title = normalizer.clean_title(raw.title)
-            location = normalizer.clean_location(raw.location)
-            full_summary = normalizer.clean_summary(raw.summary)
-            summary = cap_summary_for_storage(full_summary)
-            salary = normalizer.clean_salary(raw.salary_text)
-            # adapter 从来源 recruitType/渠道直填的**真招聘类型**最可信 → 优先信任，别被正文推断覆盖
-            # (hotjob/wt/华为/小红书等已正确直填)。若 adapter 把职能名塞进 job_type(feishu/bytedance 的
-            # job_category)或留空 → 退回正文推断。修此前是「正文推断 or 直填」，反把好数据覆盖了(见审计)。
-            job_type = (
-                raw.job_type
-                if normalizer.is_recruitment_type(raw.job_type)
-                else (normalizer.extract_job_type(title, full_summary) or raw.job_type)
-            )
-            content_hash = normalizer.make_content_hash(title, location, full_summary)
-            # 结构化字段从**完整** raw.summary 抽取（在 clean_summary 截断之前），adapter 直填的优先
-            experience = raw.experience or normalizer.extract_experience(raw.summary)
-            education = raw.education or normalizer.extract_education(raw.summary)
-            deadline = raw.deadline or normalizer.extract_deadline(raw.summary)
-
-            job_data = {
-                "source_id": source_id,
-                "company": raw.company or company,
-                "title": title,
-                "location": location,
-                "job_type": job_type,
-                "summary": summary,
-                "jd_url": raw.jd_url,
-                "apply_url": raw.apply_url,
-                "salary_text": salary,
-                "posted_at": raw.posted_at,
-                "experience": experience,
-                "education": education,
-                "deadline": deadline,
-                "content_hash": content_hash,
-                "status": "active",
-            }
+            job_data = normalizer.normalize(raw, source_id=source_id, company=company)
+            job_data["summary"] = cap_summary_for_storage(job_data.get("summary"))
 
             job_batch.append(job_data)
 
