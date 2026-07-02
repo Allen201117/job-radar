@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, PencilSimple, Trash, ArrowCounterClockwise, X, Flag, Warning, Sparkle } from "@phosphor-icons/react";
+import { Plus, PencilSimple, Trash, ArrowCounterClockwise, X, Flag, Warning, Sparkle, CheckCircle, XCircle } from "@phosphor-icons/react";
 import { INSIGHT_DIMENSIONS } from "@/lib/insight-bundle";
 import { INDUSTRIES } from "@/lib/industries";
 import type {
@@ -44,6 +44,22 @@ interface AdminDispute {
   status: string;
   created_at: string;
 }
+interface AdminSubmission {
+  id: string;
+  company: string;
+  company_id: string | null;
+  user_id: string;
+  dimension: InsightDimension;
+  topic: string;
+  rating: number | null;
+  content: string;
+  payload: Record<string, unknown>;
+  status: "pending" | "approved" | "rejected" | "retired";
+  moderation: Record<string, unknown>;
+  employment_verified: boolean;
+  created_at: string;
+  updated_at: string;
+}
 
 const DIM_LABELS: Record<InsightDimension, string> = {
   timing: "招聘时机",
@@ -64,6 +80,14 @@ const STATUS_LABELS: Record<string, string> = {
   active: "展示中",
   retired: "已下架",
   disputed: "争议中",
+};
+const SUBMISSION_TOPIC_LABELS: Record<string, string> = {
+  internship: "实习体验",
+  onboarding: "入职体验",
+  bonus: "年终奖",
+  interview: "面试难度",
+  promotion: "晋升",
+  culture: "文化",
 };
 const GATE_HELP: Record<string, string> = {
   deidentified: "去标识门未过：请勾选「已去标识」，且每个来源也必须勾选「已去标识」。",
@@ -137,6 +161,7 @@ export default function InsightsAdminClient() {
   const [companies, setCompanies] = useState<AdminCompany[]>([]);
   const [items, setItems] = useState<AdminItem[]>([]);
   const [disputes, setDisputes] = useState<AdminDispute[]>([]);
+  const [submissions, setSubmissions] = useState<AdminSubmission[]>([]);
 
   const [form, setForm] = useState<FormState>({ ...EMPTY_FORM });
   const [formOpen, setFormOpen] = useState(false);
@@ -149,12 +174,20 @@ export default function InsightsAdminClient() {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch("/api/insights/admin");
+      const [res, submissionsRes] = await Promise.all([
+        fetch("/api/insights/admin"),
+        fetch("/api/insights/admin/submissions"),
+      ]);
       const data = await res.json();
+      const submissionsData = await submissionsRes.json();
       if (!res.ok || !data.ok) throw new Error(data.error || "加载失败");
+      if (!submissionsRes.ok || !submissionsData.ok) {
+        throw new Error(submissionsData.error || "待审提交加载失败");
+      }
       setCompanies(data.companies || []);
       setItems(data.items || []);
       setDisputes(data.disputes || []);
+      setSubmissions(submissionsData.submissions || []);
       setError("");
     } catch (e) {
       setError((e as Error).message);
@@ -436,6 +469,25 @@ export default function InsightsAdminClient() {
     }
   }
 
+  async function reviewSubmission(submission: AdminSubmission, status: "approved" | "rejected") {
+    setBusyId(submission.id);
+    try {
+      const res = await fetch("/api/insights/admin/submissions", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: submission.id, status }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        alert(data.error || "操作失败");
+        return;
+      }
+      await load();
+    } finally {
+      setBusyId("");
+    }
+  }
+
   if (loading) return <p className="mt-8 text-sm text-[#8a8275] dark:text-[#9a9184]">正在加载洞察后台…</p>;
   if (error)
     return (
@@ -457,7 +509,7 @@ export default function InsightsAdminClient() {
           </button>
         )}
         <span className="text-sm text-[#8a8275] dark:text-[#9a9184]">
-          共 {items.length} 条洞察 · {companies.length} 家公司 · {disputes.length} 条待处理申诉
+          共 {items.length} 条洞察 · {companies.length} 家公司 · {submissions.length} 条待审提交 · {disputes.length} 条待处理申诉
         </span>
       </div>
 
@@ -477,6 +529,26 @@ export default function InsightsAdminClient() {
           onAiDraft={aiDraft}
           onCancel={() => setFormOpen(false)}
         />
+      )}
+
+      {/* 待审第一方提交 */}
+      {submissions.length > 0 && (
+        <section>
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#2f8a63] dark:text-[#6cc99e]">
+            <CheckCircle size={16} weight="fill" /> 待审提交（{submissions.length}）
+          </h2>
+          <div className="space-y-3">
+            {submissions.map((submission) => (
+              <SubmissionRow
+                key={submission.id}
+                submission={submission}
+                busy={busyId === submission.id}
+                onApprove={() => reviewSubmission(submission, "approved")}
+                onReject={() => reviewSubmission(submission, "rejected")}
+              />
+            ))}
+          </div>
+        </section>
       )}
 
       {/* 待处理申诉 */}
@@ -606,6 +678,59 @@ export default function InsightsAdminClient() {
         )}
       </section>
     </div>
+  );
+}
+
+function SubmissionRow({
+  submission,
+  busy,
+  onApprove,
+  onReject,
+}: {
+  submission: AdminSubmission;
+  busy: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  return (
+    <article className="rounded-xl border border-[#a9d8c4] bg-[#dcf2e8] p-4 text-sm dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15]">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{submission.company}</span>
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
+          {DIM_LABELS[submission.dimension]}
+        </span>
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
+          {SUBMISSION_TOPIC_LABELS[submission.topic] || submission.topic}
+        </span>
+        {submission.rating != null && (
+          <span className="rounded-full border border-[#e7c98a] bg-[#fbeecb] px-2 py-0.5 text-[11px] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]">
+            {submission.rating}/5
+          </span>
+        )}
+        <span className="ml-auto text-[11px] text-[#8a8275] dark:text-[#9a9184]">
+          {new Date(submission.created_at).toLocaleString("zh-CN")}
+        </span>
+      </div>
+      <p className="mt-2 leading-6 text-[#3f3a33] dark:text-[#d9d0c2]">{submission.content}</p>
+      <div className="mt-3 flex gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onApprove}
+          className="inline-flex items-center gap-1.5 rounded-full bg-[#1a1714] px-3 py-1.5 text-xs font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+        >
+          <CheckCircle size={13} weight="bold" /> 通过
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onReject}
+          className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.1] px-3 py-1.5 text-xs font-medium text-[#5f594e] transition hover:bg-black/[0.05] hover:text-[#1a1714] disabled:opacity-50 dark:border-white/[0.1] dark:text-[#b6ad9d] dark:hover:bg-white/[0.05] dark:hover:text-[#f3ecdf]"
+        >
+          <XCircle size={13} weight="bold" /> 拒绝
+        </button>
+      </div>
+    </article>
   );
 }
 
