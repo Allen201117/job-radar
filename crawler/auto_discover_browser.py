@@ -24,8 +24,8 @@ import discover_domestic as dd
 import auto_discover as ad
 
 BROWSER_PLATFORMS = {"beisen", "moka"}
-TARGET_CAP = int(os.environ.get("AUTO_DISCOVER_BROWSER_TARGET_CAP", "60"))    # httpx 廉价探多少家 tenant
-CONFIRM_CAP = int(os.environ.get("AUTO_DISCOVER_BROWSER_CONFIRM_CAP", "10"))  # 浏览器确认封顶（慢，每日小批）
+TARGET_CAP = int(os.environ.get("AUTO_DISCOVER_BROWSER_TARGET_CAP", "120"))   # httpx 廉价探多少家 tenant
+CONFIRM_CAP = int(os.environ.get("AUTO_DISCOVER_BROWSER_CONFIRM_CAP", "15"))  # 浏览器确认封顶（慢~1-3min/家，CI 50min 预算内）
 CONFIRM_TIMEOUT = int(os.environ.get("AUTO_DISCOVER_BROWSER_TIMEOUT", "45"))
 
 
@@ -55,9 +55,9 @@ def main():
     apply = os.environ.get("AUTO_DISCOVER_APPLY", "").lower() in ("1", "true", "yes")
     started = _now_iso()
     sb = db.get_supabase()
-    curated = ad.load_curated_targets()
     user_wanted = ad.load_user_wanted_companies(sb)
     existing_companies, existing_urls = ad.existing_source_keys(sb)
+    curated = ad.load_targets(existing_companies)
     seed = int(datetime.now(timezone.utc).strftime("%Y%m%d"))
     targets = ad.plan_targets(curated, user_wanted, existing_companies, TARGET_CAP, seed=seed)
     print(f"[auto_discover_browser] curated={len(curated)} user_wanted={len(user_wanted)} "

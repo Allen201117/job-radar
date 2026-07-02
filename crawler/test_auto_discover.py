@@ -43,6 +43,30 @@ class PlanTargetsTest(unittest.TestCase):
         out = ad.plan_targets([{"company": ""}, _t("X")], set(), set(), cap=10, seed=0)
         self.assertEqual([t["company"] for t in out], ["X"])
 
+    def test_priority_targets_before_rest(self):
+        # 科技/新经济/消费(_priority) 排在传统清单之前（对齐目标用户，别被制造业淹没）
+        curated = [_t("Old1"), _t("Old2"), {**_t("Tech1"), "_priority": True},
+                   {**_t("Tech2"), "_priority": True}]
+        out = [t["company"] for t in ad.plan_targets(curated, set(), set(), cap=10, seed=5)]
+        self.assertLess(max(out.index("Tech1"), out.index("Tech2")),
+                        min(out.index("Old1"), out.index("Old2")))
+
+    def test_user_wanted_beats_priority(self):
+        curated = [{**_t("Tech1"), "_priority": True}, _t("Old1")]
+        out = ad.plan_targets(curated, {"Old1"}, set(), cap=10, seed=1)
+        self.assertEqual(out[0]["company"], "Old1")   # 用户点名 > 科技/消费优先清单
+
+
+class CuratedTargetsFileTest(unittest.TestCase):
+    def test_tech_consumer_file_loaded_and_prioritized(self):
+        targets = ad.load_curated_targets()
+        techs = [t for t in targets if t.get("_priority")]
+        self.assertGreaterEqual(len(techs), 100)      # 科技/消费清单已并入并标优先
+        for t in techs:
+            self.assertTrue(t.get("company") and t.get("cn") and t.get("slugs"))
+        names = [t["company"] for t in targets]
+        self.assertEqual(len(names), len(set(names)))  # 跨全部清单公司名去重（不重复劳动）
+
 
 class PlanInsertsTest(unittest.TestCase):
     def _p(self, company, url):
