@@ -61,3 +61,20 @@ test("165 建立洞察现查台账索引 + 月度招聘聚合表", () => {
   assert.ok(s.includes("create index if not exists idx_discovery_runs_insight_enrich_recent"));
   assert.ok(s.includes("where mode = 'insight_enrich'"));
 });
+
+test("166 建立第一方洞察提交表 + RLS + admin/service 写权限", () => {
+  const s = norm("166_insight_submissions.sql");
+  assert.ok(s.includes("create table if not exists insight_submissions"));
+  assert.ok(s.includes("company_id uuid references company_profiles(id)"));
+  assert.ok(s.includes("user_id uuid not null references auth.users(id) on delete cascade"));
+  assert.ok(s.includes("dimension in ('culture', 'compensation_intensity', 'path', 'hiring')"));
+  assert.ok(s.includes("status in ('pending', 'approved', 'rejected', 'retired')"));
+  assert.ok(s.includes("char_length(content) <= 200"));
+  assert.ok(s.includes("enable row level security"));
+  assert.ok(s.includes("for select using (user_id = auth.uid())"));
+  assert.ok(s.includes("for insert with check (user_id = auth.uid())"));
+  assert.ok(s.includes("for delete using (user_id = auth.uid())"));
+  assert.ok(s.includes("profiles where id = auth.uid() and role = 'admin'"));
+  assert.ok(s.includes("revoke all on table insight_submissions from public, anon"));
+  assert.ok(s.includes("grant select, insert, update, delete on table insight_submissions to service_role"));
+});

@@ -10,12 +10,14 @@ import type {
   InsightDimension,
   InsightItemView,
 } from "./types";
+import type { FirstPartyAggregate } from "./insight-submission";
 
 export interface CompanyInsightResponse {
   ok: boolean;
   company: CompanyProfile | null;
   query: string;
   dimensions: Record<InsightDimension, InsightItemView[]>;
+  first_party: FirstPartyAggregate;
   failure_reason: string | null;
   error?: string;
 }
@@ -27,6 +29,12 @@ const EMPTY_DIMENSIONS = (): Record<InsightDimension, InsightItemView[]> => ({
   compensation_intensity: [],
   path: [],
   culture: [],
+});
+
+const EMPTY_FIRST_PARTY = (): FirstPartyAggregate => ({
+  visible: false,
+  summary: { count: 0, average_rating: null },
+  items: [],
 });
 
 const cache = new Map<string, CompanyInsightResponse>();
@@ -50,6 +58,7 @@ export async function fetchCompanyInsights(
       company: null,
       query: company,
       dimensions: EMPTY_DIMENSIONS(),
+      first_party: EMPTY_FIRST_PARTY(),
       failure_reason: "insight_unverified",
     };
   }
@@ -68,6 +77,7 @@ export async function fetchCompanyInsights(
         company: data.company ?? null,
         query: data.query ?? company,
         dimensions: { ...EMPTY_DIMENSIONS(), ...(data.dimensions || {}) },
+        first_party: data.first_party || EMPTY_FIRST_PARTY(),
         failure_reason: data.failure_reason ?? null,
         error: data.error,
       };
@@ -80,6 +90,7 @@ export async function fetchCompanyInsights(
         company: null,
         query: company,
         dimensions: EMPTY_DIMENSIONS(),
+        first_party: EMPTY_FIRST_PARTY(),
         failure_reason: "insight_unverified",
         error: (e as Error).message,
       };

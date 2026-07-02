@@ -13,6 +13,12 @@ import {
   groupGatedInsights,
 } from "@/lib/insight-bundle";
 import { deriveCompanyInsights } from "@/lib/insight-derive";
+import {
+  aggregateFirstParty,
+  FIRST_PARTY_MIN_COUNT,
+  type FirstPartyAggregate,
+  type InsightSubmissionRow,
+} from "@/lib/insight-submission";
 import { jobsStoreEnabled, activeJobsByCompanies } from "@/lib/jobs-store/read";
 import type {
   CompanyProfile,
@@ -39,6 +45,10 @@ function numberEnv(name: string, fallback: number): number {
 
 const ENRICH_NOW_COOLDOWN_HOURS = numberEnv("INSIGHT_ENRICH_COOLDOWN_HOURS", 6);
 const ENRICH_NOW_HOURLY_CAP = numberEnv("INSIGHT_ENRICH_HOURLY_CAP", 5);
+const FIRST_PARTY_DISPLAY_MIN_COUNT = numberEnv(
+  "INSIGHT_FIRST_PARTY_MIN_COUNT",
+  FIRST_PARTY_MIN_COUNT,
+);
 const ENRICH_DISPATCH_TIMEOUT_MS = 10000;
 
 export async function GET(request: NextRequest) {
@@ -138,6 +148,7 @@ export async function GET(request: NextRequest) {
     jobCount: jobRows?.length || 0,
     storedHasAny,
   });
+  const firstParty = await loadFirstPartyInsights(candidates);
 
   return NextResponse.json({
     ok: true,
@@ -147,6 +158,44 @@ export async function GET(request: NextRequest) {
     // 有任何可展示条目（含派生）→ 无失败；否则沿用存储项的 bundle 级判定
     failure_reason: hasAny ? null : resolveInsightFailure(evaluations),
     enrich_now: enrichNow,
+    first_party: firstParty,
+  });
+}
+
+function emptyFirstParty(): FirstPartyAggregate {
+  return {
+    visible: false,
+    summary: { count: 0, average_rating: null },
+    items: [],
+  };
+}
+
+async function loadFirstPartyInsights(candidates: string[]): Promise<FirstPartyAggregate> {
+  if (candidates.length === 0) return emptyFirstParty();
+
+  let service: ReturnType<typeof createServiceClient>;
+  try {
+    service = createServiceClient();
+  } catch {
+    return emptyFirstParty();
+  }
+
+  const { data, error } = await service
+    .from("insight_submissions")
+    .select(
+      "id,company,company_id,dimension,topic,rating,content,payload,status,employment_verified,created_at,updated_at",
+    )
+    .in("company", candidates)
+    .eq("status", "approved")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("[insights] 读取 first_party submissions 失败", error.message);
+    return emptyFirstParty();
+  }
+
+  return aggregateFirstParty((data || []) as InsightSubmissionRow[], {
+    minCount: FIRST_PARTY_DISPLAY_MIN_COUNT,
   });
 }
 

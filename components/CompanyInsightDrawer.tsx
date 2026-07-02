@@ -6,6 +6,7 @@ import {
   ArrowSquareOut,
   Buildings,
   CalendarBlank,
+  ChatCircleText,
   ChartLineUp,
   ClockCounterClockwise,
   Flag,
@@ -13,9 +14,11 @@ import {
   Scales,
   ShieldCheck,
   Sparkle,
+  Star,
   UsersThree,
   X,
 } from "@phosphor-icons/react";
+import InsightSubmitForm from "@/components/InsightSubmitForm";
 import {
   fetchCompanyInsights,
   type CompanyInsightResponse,
@@ -30,6 +33,7 @@ import type {
   InsightGrade,
   InsightItemView,
 } from "@/lib/types";
+import type { FirstPartyAggregate, FirstPartyInsightItem } from "@/lib/insight-submission";
 import { freshnessFromVerifiedAt, type FreshnessLevel } from "@/lib/insight-verification";
 import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
@@ -126,6 +130,7 @@ function gradeChip(grade: InsightGrade, sampleSize: number | null): {
 export default function CompanyInsightDrawer({ company, open, onClose }: Props) {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<CompanyInsightResponse | null>(null);
+  const [submitOpen, setSubmitOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -164,8 +169,11 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
   if (!open || typeof document === "undefined") return null;
 
   const dims = data?.dimensions;
+  const firstParty = data?.first_party;
+  const firstPartyVisible = Boolean(firstParty?.visible && firstParty.items.length > 0);
   const totalItems = dims
-    ? DIMENSION_ORDER.reduce((n, d) => n + (dims[d]?.length || 0), 0)
+    ? DIMENSION_ORDER.reduce((n, d) => n + (dims[d]?.length || 0), 0) +
+      (firstPartyVisible ? firstParty?.items.length || 0 : 0)
     : 0;
   // 公司概况（T2 官方事实回填，存在才显示）
   const cp = data?.company;
@@ -233,6 +241,16 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
             </div>
           )}
 
+          {!loading && data && (
+            <FirstPartySection
+              company={data?.company?.display_name || data?.company?.company || company}
+              aggregate={data.first_party}
+              submitOpen={submitOpen}
+              onToggleSubmit={() => setSubmitOpen((v) => !v)}
+              onSubmitted={() => setSubmitOpen(false)}
+            />
+          )}
+
           {!loading && totalItems > 0 && (
             <div className="space-y-8">
               {DIMENSION_ORDER.map((dim) => {
@@ -269,6 +287,94 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
       </aside>
     </div>,
     document.body,
+  );
+}
+
+function FirstPartySection({
+  company,
+  aggregate,
+  submitOpen,
+  onToggleSubmit,
+  onSubmitted,
+}: {
+  company: string;
+  aggregate: FirstPartyAggregate;
+  submitOpen: boolean;
+  onToggleSubmit: () => void;
+  onSubmitted: () => void;
+}) {
+  const count = aggregate?.summary?.count || 0;
+  const visible = Boolean(aggregate?.visible && aggregate.items.length > 0);
+  return (
+    <section className="mb-8">
+      <header className="mb-3 flex flex-wrap items-center gap-2.5">
+        <span className="grid size-8 place-items-center rounded-xl border border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]">
+          <ChatCircleText size={17} weight="bold" />
+        </span>
+        <h3 className="text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">员工自愿分享</h3>
+        {visible && (
+          <span className="inline-flex items-center gap-1 rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-2 py-0.5 text-xs font-medium text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]">
+            <Star size={12} weight="fill" />
+            {aggregate.summary.average_rating ?? "-"} · {count} 条
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onToggleSubmit}
+          className="ml-auto rounded-full border border-black/[0.08] bg-white/70 px-3 py-1.5 text-xs font-semibold text-[#3f3a33] transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
+        >
+          {submitOpen ? "收起" : "贡献一条"}
+        </button>
+      </header>
+
+      {visible ? (
+        <div className="space-y-3.5">
+          {aggregate.items.map((item) => (
+            <FirstPartyCard key={item.id} item={item} />
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm leading-6 text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
+          已审核 {count} 条，达到展示门槛后会匿名展示。
+        </div>
+      )}
+
+      {submitOpen && (
+        <div className="mt-3.5">
+          <InsightSubmitForm company={company} onSubmitted={onSubmitted} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function FirstPartyCard({ item }: { item: FirstPartyInsightItem }) {
+  return (
+    <article className="rounded-xl border border-black/[0.06] border-l-2 border-l-[#6cc99e] bg-white/60 p-5 pl-4 text-[15px] dark:border-white/[0.1] dark:border-l-[#6cc99e] dark:bg-white/[0.05]">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-0.5 text-[11px] font-semibold text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]">
+          员工自愿分享 · 已审核
+        </span>
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
+          匿名 · {item.topic_label}
+        </span>
+        {item.rating != null && (
+          <span className="inline-flex items-center gap-1 rounded-full border border-[#e7c98a] bg-[#fbeecb] px-2 py-0.5 text-[11px] font-medium text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]">
+            <Star size={11} weight="fill" />
+            {item.rating}/5
+          </span>
+        )}
+      </div>
+      <p className="mt-2.5 leading-7 text-[#3f3a33] dark:text-[#d9d0c2]">{item.content}</p>
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#8a8275] dark:text-[#9a9184]">
+        {item.created_month && (
+          <span className="inline-flex items-center gap-1">
+            <CalendarBlank size={13} />
+            {item.created_month}
+          </span>
+        )}
+      </div>
+    </article>
   );
 }
 
