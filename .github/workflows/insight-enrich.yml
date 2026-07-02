@@ -13,6 +13,14 @@ on:
         description: "本轮最多富化多少公司（0=全部待处理）"
         required: false
         default: "0"
+      company:
+        description: "只富化单家公司（现查快车道；留空=队列 drain）"
+        required: false
+        default: ""
+      run_id:
+        description: "可选 discovery_runs.id（API 端现查台账）"
+        required: false
+        default: ""
 
 jobs:
   enrich-insights:
@@ -23,6 +31,14 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       # 巨潮(A股)官方源默认关；live 验证返回格式正确后，在 repo Variables 置 INSIGHT_CNINFO_ENABLED=true 开启（无需改代码）
       INSIGHT_CNINFO_ENABLED: ${{ vars.INSIGHT_CNINFO_ENABLED }}
+      SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+      BOCHA_API_KEY: ${{ secrets.BOCHA_API_KEY }}
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+      BAIDU_QIANFAN_API_KEY: ${{ secrets.BAIDU_QIANFAN_API_KEY }}
+      BOCHA_DAILY_CAP: ${{ vars.BOCHA_DAILY_CAP }}
+      TAVILY_DAILY_CAP: ${{ vars.TAVILY_DAILY_CAP }}
+      SERPER_DAILY_CAP: ${{ vars.SERPER_DAILY_CAP }}
 
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +53,18 @@ jobs:
       - name: Drain career-insight T2 backlog (Wikidata)
         working-directory: crawler
         run: |
-          python3 insight_backlog.py \
-            --seed-from-sources \
-            --limit "${{ github.event.inputs.limit || '0' }}" \
-            --workers 4
+          if [ -n "${{ github.event.inputs.company }}" ]; then
+            python3 insight_backlog.py \
+              --company "${{ github.event.inputs.company }}" \
+              --workers 1
+          else
+            python3 insight_backlog.py \
+              --seed-from-sources \
+              --limit "${{ github.event.inputs.limit || '0' }}" \
+              --workers 4
+          fi
+
+      - name: Enrich single-company T3 experience layer
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.company != '' }}
+        working-directory: crawler
+        run: python3 insight_backlog.py --t3 --company "${{ github.event.inputs.company }}"

@@ -20,6 +20,11 @@ import {
   fetchCompanyInsights,
   type CompanyInsightResponse,
 } from "@/lib/insight-client";
+import {
+  formatFinancialChips,
+  formatHiringSignalChip,
+  type InsightChipTone,
+} from "@/lib/insight-chip-format";
 import type {
   InsightDimension,
   InsightGrade,
@@ -35,6 +40,12 @@ const FRESHNESS_TONE: Record<FreshnessLevel, string> = {
   recent: "border border-black/[0.08] bg-[#f4efe6] text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#9a9184]",
   aging: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]",
   stale: "border border-[#e0a94e] bg-[#fbe6c4] text-[#8a5a12] dark:border-[#e0b15a]/[0.40] dark:bg-[#e0b15a]/[0.20] dark:text-[#e8bf72]",
+};
+
+const PAYLOAD_CHIP_TONE: Record<InsightChipTone, string> = {
+  positive: "border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]",
+  warning: "border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]",
+  neutral: "border-black/[0.08] bg-[#f4efe6] text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#9a9184]",
 };
 
 interface Props {
@@ -336,6 +347,41 @@ function QuoteLink({ payload }: { payload: Record<string, unknown> }) {
   );
 }
 
+function PayloadChips({ item }: { item: InsightItemView }) {
+  const payload = item.payload || {};
+  const chips =
+    item.dimension === "hiring"
+      ? (() => {
+          const chip = formatHiringSignalChip(payload.hiring_signal as Record<string, unknown> | null | undefined);
+          return chip ? [{ ...chip, icon: Buildings }] : [];
+        })()
+      : item.dimension === "listing"
+        ? formatFinancialChips(payload.financials as Record<string, unknown> | null | undefined)
+            .map((chip) => ({ ...chip, icon: ChartLineUp }))
+        : [];
+
+  if (chips.length === 0) return null;
+  return (
+    <div className="mt-2.5 flex flex-wrap gap-1.5">
+      {chips.map((chip) => {
+        const Icon = chip.icon;
+        return (
+          <span
+            key={chip.text}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[12px] font-medium",
+              PAYLOAD_CHIP_TONE[chip.tone],
+            )}
+          >
+            <Icon size={13} weight="bold" />
+            {chip.text}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function InsightCard({ item }: { item: InsightItemView }) {
   const [disputing, setDisputing] = useState(false);
   const [reason, setReason] = useState("");
@@ -389,6 +435,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
 
       {item.title && <p className="mt-2.5 text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{item.title}</p>}
       <p className="mt-1.5 leading-7 text-[#3f3a33] dark:text-[#d9d0c2]">{item.content}</p>
+      <PayloadChips item={item} />
       <EquityAngle payload={item.payload} />
       <QuoteLink payload={item.payload} />
 

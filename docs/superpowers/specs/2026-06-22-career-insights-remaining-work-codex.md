@@ -30,13 +30,14 @@
 
 ## 2. 工作项（按优先级；每项独立可做、独立 commit）
 
-### ☐ W1. 抽屉渲染 hiring_signal + financials 芯片（小·快赢·先做）
+### ☑ W1. 抽屉渲染 hiring_signal + financials 芯片（小·快赢·先做）
 
 - **目标**：让已产出的「大小年信号」和「业绩」在 UI 显眼可见（现在只在正文文本里）。
 - **现状**：大小年在 `payload.hiring_signal = {momentum: expanding|steady|tightening, intensity?: high|mid|low, trend, active_count}`；业绩在 listing item 的 `payload.financials = {fy, revenue, net_income, revenue_yoy_pct, employees}`。抽屉只渲染 `content` 文本、无专门芯片。
 - **做法**：`components/CompanyInsightDrawer.tsx` 里，hiring 维度卡渲染 hiring_signal 芯片（扩张=绿/收紧=橙/平稳=灰 + 强度标）；listing 维度卡渲染 financials 芯片（营收/同比±%/员工数）。**照抄现有 listing 的 `QuoteLink` / equity-angle chip 渲染模式**（同文件内已有）。芯片文案短、金额用 B/M 缩写（参考 `official_edgar._fmt_usd`）。
 - **测试**：前端展示为主，不强制单测；`npx tsc --noEmit` + `npm run build` 绿。
 - **验收**：真机抽屉里，招聘动态卡有大小年芯片、上市卡有业绩芯片。
+- **Codex 2026-07-02 结果**：已新增 `lib/insight-chip-format.ts` + `tests/insight-chip-format.test.js`，`CompanyInsightDrawer` 对 hiring/listing payload 渲染对应芯片。最终验证见本轮回归输出。
 
 ### ☐ W2. 巨潮 A 股源 live 验证 + 启用（小·需 live 网络）
 
@@ -45,8 +46,9 @@
 - **做法**：① live 拉 `http://www.cninfo.com.cn/new/data/szse_stock.json` 确认结构含 `stockList:[{code,zwjc,orgId}]`；② 跑 `find_stock` 验证匹配正确（比亚迪→002594 深交所、顺丰控股→002352）；③ 结构相符 → 在 repo Variables 置 `INSIGHT_CNINFO_ENABLED=true`（`insight-enrich.yml` 已映射）；④ 结构不符 → 修 parser（**保持严格匹配防误配**：exact zwjc 或去后缀相等）。
 - **验收**：dispatch `insight-enrich` 后，A 股公司出正确 listing 官方事实（`source_publisher=巨潮资讯`）。
 - **注**：Codex 若无 live 网络 → 标注「需人工 live 验证后启用」，勿盲开。
+- **Codex 2026-07-02 结果**：live 读取 `http://www.cninfo.com.cn/new/data/szse_stock.json` 成功，结构含 `stockList:[{code,zwjc,orgId,...}]`；本地 parser 真网验证：比亚迪→`002594` 深交所、顺丰控股→`002352` 深交所。**未启用 repo Variable**：本机 `gh auth status` 显示 Allen201117 token invalid，无法安全写 GitHub repo Variables；仍需用有效 GitHub 凭据把 `INSIGHT_CNINFO_ENABLED=true` 置到 repo Variables 后 dispatch 验收。
 
-### ☐ W3. 真·年度大小年（中·部分依赖数据累积）
+### ◐ W3. 真·年度大小年（中·部分依赖数据累积）
 
 - **目标**：把「当前窗口」招聘信号升级为「今年 vs 往年」年度大小年。
 - **现状**：`classifyHiringSignal(activeCount, trend, headcountBand?)` 只给「近月扩张/收缩 + 相对规模强度」，非年度周期（诚实边界已在代码注释里）。
@@ -57,8 +59,9 @@
 - **测试**：`classifyHiringSignal` YoY 分支纯函数单测（tests/insight-derive.test.js，用 `loadTsModule`）；月度聚合纯函数单测。
 - **验收**：有 ≥1 年历史的公司显示「今年 HC 较去年 +/−N%」；不足一年的仍显示当前窗口信号。
 - **注**：短期只交付 a + 搭 b 的表；b 的年度判定等历史攒够再激活（避免假 YoY）。
+- **Codex 2026-07-02 结果**：已交付短期边界：EDGAR `payload.financials.employees` 会用 `wikidata.headcount_band(n)` 覆盖 `company_profiles.headcount_band`，并新增 `company_hiring_monthly(company, ym, posted_count)` 结构。**未激活 YoY 判定/每日 crawl 累加**：历史不足一年，避免把当前窗口假装成年度大小年。
 
-### ☐ W4. 现查快车道②（中·成本敏感）
+### ☑ W4. 现查快车道②（中·成本敏感）
 
 - **目标**：用户点开无洞察的公司，几分钟内出洞察（而非等到明天 cron）。
 - **现状**：Phase 3 只做了「队列提前」（`app/api/insights` GET 对有岗无画像的公司建占位入队，等每日 drain）；快车道②（单公司即时 dispatch）延期。
@@ -66,6 +69,7 @@
 - **测试**：节流/幂等纯函数单测（是否该 dispatch 的判定）。
 - **验收**：点开新公司 → 数分钟内洞察出现；重复点击不重复 dispatch；每小时不超上限。
 - **注**：**别每次点击都 dispatch**——成本敏感，节流是硬要求。
+- **Codex 2026-07-02 结果**：`/api/insights` GET 对有 active jobs 且无新鲜存储型洞察的公司，非阻塞触发 `insight-enrich.yml` 单公司 dispatch；`lib/insight-enrich-now.js` 负责同公司 cooldown + 全局 hourly cap，台账写 `discovery_runs(mode='insight_enrich')`。workflow 已支持 `company` 输入并跑 T2 + T3 单公司。缺 service role/GitHub dispatch 配置时只返回 `enrich_now.skipped`，不影响现有抽屉展示。
 
 ### ☐ W5. 港交所（HKEX）港股官方源（中·先研究端点·可能不做）
 
