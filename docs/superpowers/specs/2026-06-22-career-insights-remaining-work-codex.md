@@ -71,19 +71,22 @@
 - **注**：**别每次点击都 dispatch**——成本敏感，节流是硬要求。
 - **Codex 2026-07-02 结果**：`/api/insights` GET 对有 active jobs 且无新鲜存储型洞察的公司，非阻塞触发 `insight-enrich.yml` 单公司 dispatch；`lib/insight-enrich-now.js` 负责同公司 cooldown + 全局 hourly cap，台账写 `discovery_runs(mode='insight_enrich')`。workflow 已支持 `company` 输入并跑 T2 + T3 单公司。缺 service role/GitHub dispatch 配置时只返回 `enrich_now.skipped`，不影响现有抽屉展示。
 
-### ☐ W5. 港交所（HKEX）港股官方源（中·先研究端点·可能不做）
+### ☒ W5. 港交所（HKEX）港股官方源（2026-07-02 研究后决定：不做）
 
 - **目标**：补港股上市官方确认（比亚迪/众多中概港股）。
 - **现状**：延期。官方「List of Securities」是 xlsx / 不稳定 AJAX，需新依赖；且 Wikidata 已覆盖多数港股 listing。
 - **做法**：先研究 HKEX 是否有**稳定 JSON 端点**拿「港股代码 + 名称」。有 → 仿 `official_cninfo` 做 `crawler/official_hkex.py`（名→港股 5 位代码→listing official），接进 `enrich_company` 顺序（EDGAR→巨潮→HKEX→Wikidata），**gated 默认关**待 live 验证。无稳定端点/需重依赖 → **不做**，维持 Wikidata 兜底，并在本项标注「不做及原因」。
 - **注**：禁猜入库；不引重型依赖（别为 xlsx 引 openpyxl，除非确无 JSON 途径且用户批准）。
+- **决定（2026-07-02，不做）**：研究确认 HKEX **无稳定、免 token 的 JSON 端点**——官方 List of Securities 是 xlsx（需 openpyxl 重依赖，禁止）；`hkexwidget` 类端点需轮换 token + JSONP（脆弱，违反稳定端点/禁猜入库）。且 `wikidata.py`（`_EXCHANGE_NAMES` 含港交所 QID + 给 ticker/交易所）**已覆盖港股 listing**（`facts_to_listing` 产出「挂牌于 港交所 0xxxx」）。边际价值低、不值引重依赖或脆弱爬虫（违反精>量）→ 维持 Wikidata 兜底。若后期确需，走付费/授权数据源，勿爬。
 
-### ☐ W6. A 股业绩（巨潮财务·中·需 live 验证）
+### ◐ W6. A 股业绩（巨潮财务）— 2026-07-02 研究后：卡在需用户提供巨潮 webapi token
 
 - **目标**：给 A 股公司也补业绩（营收/净利/员工），对齐 EDGAR 美股业绩。
 - **现状**：业绩只做了 EDGAR（美股）。
-- **做法**：研究巨潮/交易所是否有 A 股财务数据接口 → `official_cninfo` 加财务解析，折进 A 股 listing item 的 content + `payload.financials`（**照 EDGAR 折进 listing 的同一模式**）。随 `INSIGHT_CNINFO_ENABLED` gated。
-- **注**：端点格式必须 live 验证；禁猜入库。
+- **做法**：`official_cninfo` 加财务解析，折进 A 股 listing item 的 content + `payload.financials`（照 EDGAR 同模式），随 `INSIGHT_CNINFO_ENABLED` gated。
+- **研究结论（live 探测）**：巨潮**无免 token 的公开财务 JSON**——`www.cninfo.com.cn/data20/financialData/*` 返回 **404**；官方结构化财务在 `webapi.cninfo.com.cn/api/stock/*`，返回 **`401 未经授权·notoken`**（需在 webapi.cninfo.com.cn **注册拿 token**）。非官方聚合源（东财/新浪）有干净 JSON 但**违反「官方源=fact」原则**，不采用。
+- **待办（阻塞项）**：用户去 webapi.cninfo.com.cn 注册 → 提供 token（env，如 `CNINFO_WEBAPI_TOKEN`）→ 才能 live 验证响应格式后建 parser（**禁猜入库，无 token 不盲写**）。拿到 token 后：仿 `official_edgar.financials_from_companyfacts` 做 `official_cninfo.financials_from_webapi`，折进 A 股 listing。
+- **注**：端点格式必须 live 验证；禁猜入库；不采用非官方源当 fact。
 
 ### ☐ W7. 第一方「给-取」众包（大·护城河·建议单独立项）
 
