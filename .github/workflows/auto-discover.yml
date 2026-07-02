@@ -16,7 +16,7 @@ on:
       target_cap:
         description: "本次最多 probe 多少家缺失公司"
         required: false
-        default: "30"
+        default: "80"
 
 jobs:
   discover:
@@ -25,7 +25,7 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      AUTO_DISCOVER_TARGET_CAP: ${{ github.event.inputs.target_cap || '30' }}
+      AUTO_DISCOVER_TARGET_CAP: ${{ github.event.inputs.target_cap || '80' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

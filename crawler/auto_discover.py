@@ -25,10 +25,14 @@ import db
 import ops_runs
 import discover_domestic as dd
 
-DAILY_TARGET_CAP = int(os.environ.get("AUTO_DISCOVER_TARGET_CAP", "30"))   # 每日最多 probe 多少家缺失公司
-DAILY_INSERT_CAP = int(os.environ.get("AUTO_DISCOVER_INSERT_CAP", "20"))   # 每日最多入库多少源
+DAILY_TARGET_CAP = int(os.environ.get("AUTO_DISCOVER_TARGET_CAP", "80"))   # 每日最多 probe 多少家缺失公司
+DAILY_INSERT_CAP = int(os.environ.get("AUTO_DISCOVER_INSERT_CAP", "40"))   # 每日最多入库多少源
 PLATFORMS = {"feishu", "hotjob"}   # httpx-safe（hotjob 内含 wt/wecruit）；beisen/moka 需浏览器，留后置
-_CURATED_FILES = ("targets_private500_full.json", "targets_private500.json", "targets_soe500.json")
+# 科技/新经济/消费清单排最前 → load 时标 _priority，plan_targets 里优先探（对齐目标用户，见 CLAUDE.md §3
+# 「保精度逐步扩量」：民营500强 76% 是传统制造，与目标用户错配，别让它淹没科技/消费候选）。
+_CURATED_FILES = ("targets_tech_consumer.json", "targets_private500_full.json",
+                  "targets_private500.json", "targets_soe500.json")
+_PRIORITY_FILES = {"targets_tech_consumer.json"}
 
 
 def _now_iso():
@@ -43,12 +47,13 @@ def load_curated_targets():
         p = base / fn
         if not p.exists():
             continue
+        priority = fn in _PRIORITY_FILES
         try:
             for t in (json.loads(p.read_text(encoding="utf-8")) or []):
                 c = (t.get("company") or "").strip()
                 if c and c not in seen:
                     seen.add(c)
-                    out.append(t)
+                    out.append({**t, "_priority": True} if priority else t)
         except Exception:
             pass
     return out
@@ -77,14 +82,18 @@ def existing_source_keys(sb):
 
 
 def plan_targets(curated, user_wanted, existing_companies, cap, seed=0):
-    """纯函数：本轮要 probe 的目标 = 库里没有的精选目标公司；用户点名想要的**优先**，其余按 seed 随机轮转
-    （避免每天死磕同一批失败目标，让覆盖随天数滚动），封顶 cap。"""
+    """纯函数：本轮要 probe 的目标 = 库里没有的精选目标公司。排序 = 用户点名 > 科技/新经济/消费(_priority)
+    > 其余；各梯队内按 seed 随机轮转（避免每天死磕同一批失败目标，让覆盖随天数滚动），封顶 cap。"""
     missing = [t for t in curated if (t.get("company") or "").strip()
                and (t.get("company") or "").strip() not in existing_companies]
     wanted_first = [t for t in missing if (t.get("company") or "").strip() in user_wanted]
-    rest = [t for t in missing if (t.get("company") or "").strip() not in user_wanted]
-    random.Random(seed).shuffle(rest)
-    return (wanted_first + rest)[:cap]
+    others = [t for t in missing if (t.get("company") or "").strip() not in user_wanted]
+    priority = [t for t in others if t.get("_priority")]
+    rest = [t for t in others if not t.get("_priority")]
+    rng = random.Random(seed)
+    rng.shuffle(priority)
+    rng.shuffle(rest)
+    return (wanted_first + priority + rest)[:cap]
 
 
 def plan_inserts(passed, existing_urls, cap):
