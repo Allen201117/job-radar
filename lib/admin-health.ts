@@ -337,7 +337,7 @@ export function buildDailyReports(input: DailyReportInput): DailyReport[] {
     {
       key: "auto_discover",
       title: "自动扩源",
-      description: "每天自动探查目标公司清单里还没入库的，验证通过、真有在招岗才加成新招聘源",
+      description: "每天自动探查目标公司（含 AI 每日新生成的候选），验证通过、真有在招岗才加成新招聘源",
       status: autoDiscoverStatus,
       statusLabel: statusLabel(autoDiscoverStatus),
       lastRunAt: autoDiscover.lastRunAt,

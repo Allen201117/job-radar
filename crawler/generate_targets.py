@@ -1,0 +1,95 @@
+"""crawler/generate_targets.py — LLM 定期生成「库里没有的」目标公司候选，喂给 auto_discover 的安全验证流水线。
+
+为何：静态清单会烧完（targets_tech_consumer.json 149 家几天探完就没了）；要「持续保速度」必须**持续产新候选**。
+本工具用已配的 SiliconFlow（复用 insight_engine.chat_json）**每天生成一批真实存在、正在招聘的中国科技/新经济/
+消费公司**（含 slug 猜测），按行业主题按日轮转，覆盖面滚动铺开。
+
+红线不变（安全全靠下游，本工具不入库、不绕验证门）：
+  · 生成的候选只是**探测输入**，一律走 discover_domestic 的 sweep → to_passed（探活通过 + 真有在招岗 +
+    标题核验防张冠李戴）才入库；LLM 若编造公司/猜错 slug → 探活不过 → 自动丢弃，绝不污染库。
+  · 排除已在库公司（不重复劳动）。
+  · env `AUTO_DISCOVER_LLM` 默认关；无 SILICONFLOW_API_KEY 直接返回 []（回退纯静态清单，安全）。
+
+诚实边界：LLM 的「真实公司」宇宙有限（几千家量级），能把库从 ~900 持续喂到几千、撑很久，但不是无限高速；
+主题轮转 + 排除已有维持新鲜度，失败候选可能偶尔重复生成（探测廉价，可接受；持久化台账留后期）。
+"""
+import datetime
+import os
+
+# 行业主题（按日轮转，覆盖目标用户关心的全部方向；配合 targets_tech_consumer.json 的分类口径）
+_THEMES = [
+    ("互联网/生活服务", "本地生活、社区内容、电商、出行、在线旅游、招聘、社交等互联网公司"),
+    ("人工智能/大模型", "大模型、AIGC、机器视觉、语音、AI 基础设施、AI 应用公司"),
+    ("游戏", "游戏研发与发行公司（端游 / 手游 / 出海）"),
+    ("新消费/品牌", "新茶饮、餐饮连锁、美妆个护、食品饮料、潮玩、服饰鞋包、零售品牌"),
+    ("智能硬件/机器人", "消费电子、智能家居、清洁电器、可穿戴、无人机、服务机器人公司"),
+    ("新能源/智能车", "新能源整车、动力电池、充换电、汽车芯片、激光雷达、智能驾驶 Tier1"),
+    ("企业服务/SaaS", "CRM、HR、财税、协同办公、数据分析、低代码、网络安全等 To B 软件公司"),
+    ("金融科技/物流", "支付、券商、保险科技、消费金融、快递、供应链、跨境物流公司"),
+    ("半导体/硬科技", "芯片设计、半导体设备 / 材料、光电显示、通信设备公司"),
+    ("医疗健康/生物", "创新药、医疗器械、CXO、互联网医疗、基因与生命科学公司"),
+]
+
+_SYS = (
+    "你是中国招聘市场数据专家。只输出**真实存在**的中国公司（含在华外企），严禁编造公司名。"
+    "只输出 JSON，格式：{\"companies\":[{\"company\":\"常用名\",\"cn\":\"常用名\","
+    "\"slugs\":[\"英文或拼音slug\"],\"industry\":\"行业\"}]}。"
+    "company/cn 用公司**常用品牌名 / 简称**（如「迈瑞医疗」而非「深圳迈瑞生物医疗电子股份有限公司」），便于去重与展示。"
+    "slugs 给该公司招聘门户最可能用的英文品牌名 / 拼音（2-4 个，全小写、无空格），"
+    "用于探测 feishu/moka/beisen/hotjob 的公司子域，例如小红书=[\"xiaohongshu\",\"xhs\"]。"
+)
+
+
+def theme_for(date):
+    """按日期轮转主题，覆盖各行业不重样。"""
+    return _THEMES[date.toordinal() % len(_THEMES)]
+
+
+def build_messages(theme_name, theme_desc, exclude_names, n):
+    ex = "、".join(list(exclude_names)[:150])
+    user = (
+        f"列出 {n} 家【{theme_name}】领域、真实存在且当前在招聘的中国公司（{theme_desc}）。"
+        f"优先中大型 / 知名 / 在招岗位多的公司。**必须排除以下已收录公司**：{ex}。只输出 JSON。"
+    )
+    return [{"role": "system", "content": _SYS}, {"role": "user", "content": user}]
+
+
+def parse_generated(data, existing_names):
+    """纯函数：从 LLM 返回的（已解析）JSON dict 提取合法候选。
+    去重（库里已有 / 批内重复）、清洗 slug（去空、去带空格的）、标 _priority/_llm。"""
+    existing = {str(x).strip() for x in (existing_names or set())}
+    out, seen = [], set()
+    for c in ((data or {}).get("companies") or []):
+        if not isinstance(c, dict):
+            continue
+        name = (c.get("company") or "").strip()
+        cn = (c.get("cn") or name).strip()
+        slugs = [str(s).strip() for s in (c.get("slugs") or [])
+                 if str(s).strip() and " " not in str(s).strip()]
+        industry = (c.get("industry") or "").strip()
+        if not name or not slugs:
+            continue
+        if name in existing or name in seen:
+            continue
+        seen.add(name)
+        out.append({"company": name, "cn": cn, "slugs": slugs[:4],
+                    "industry": industry, "_priority": True, "_llm": True})
+    return out
+
+
+def llm_generate(existing_names, n=50, date=None):
+    """网络：调 LLM 生成一批「库里没有的」目标公司候选。无 key / 失败 → 返回 []（安全回退）。"""
+    if not os.environ.get("SILICONFLOW_API_KEY"):
+        return []
+    date = date or datetime.datetime.now(datetime.timezone.utc).date()
+    tname, tdesc = theme_for(date)
+    try:
+        import insight_engine as ie  # 复用现成 SiliconFlow 客户端（config + json_object + loose parse）
+        data = ie.chat_json(build_messages(tname, tdesc, existing_names, n),
+                            temperature=0.5, max_tokens=3000)
+    except Exception as e:
+        print(f"[generate_targets] LLM 失败，跳过（回退静态清单）: {type(e).__name__}: {str(e)[:80]}")
+        return []
+    cands = parse_generated(data, existing_names)
+    print(f"[generate_targets] 主题【{tname}】LLM 生成 {len(cands)} 家「库里没有的」新候选")
+    return cands
