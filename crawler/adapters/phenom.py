@@ -35,6 +35,11 @@ class PhenomAdapter(BaseAdapter):
     name = "phenom"
     max_pages = 20                              # 100/页 → 单地点最多 2000 岗
     china_locations = ("China", "Hong Kong")    # 服务端按地点收窄到大中华区
+    overseas_locations = {
+        "US": ("United States",),
+        "SG": ("Singapore",),
+        "Remote": ("Remote",),
+    }
 
     def should_skip(self, source_url: str):
         return None  # 公开 JSON API，跳过 HEAD 预检
@@ -46,7 +51,7 @@ class PhenomAdapter(BaseAdapter):
         headers = {"User-Agent": _BROWSER_UA, "Accept": "application/json"}
         collected: List[dict] = []
         seen = set()
-        for loc in self.china_locations:
+        for loc in self._locations_for_regions():
             for page in range(self.max_pages):
                 params = {"location": loc, "limit": 100, "offset": page * 100}
                 r = httpx.get(api, params=params, headers=headers, timeout=self.timeout)
@@ -83,8 +88,8 @@ class PhenomAdapter(BaseAdapter):
                 continue
             loc = ", ".join(x for x in (d.get("city"), d.get("state"), d.get("country")) if x) \
                 or (d.get("location_name") or None)
-            # 服务端已按地点收窄，这里用 is_china_location 兜底（排除 location=China 模糊召回的非华岗）
-            if not normalizer.is_china_location(loc):
+            # 服务端已按地点收窄，这里按 regions 兜底（排除 location 模糊召回的串入岗）
+            if not normalizer.location_in_source_regions(loc, getattr(self, "regions", None)):
                 continue
             jd_url = f"{host}/jobs/{slug}"
             if jd_url in seen_urls:
@@ -101,3 +106,14 @@ class PhenomAdapter(BaseAdapter):
                 posted_at=(d.get("posted_date") or None),
             ))
         return out
+
+    def _locations_for_regions(self):
+        regions = normalizer.source_regions(getattr(self, "regions", None))
+        if regions == {"CN"}:
+            return self.china_locations
+        out = []
+        if "CN" in regions:
+            out.extend(self.china_locations)
+        for region in sorted(regions):
+            out.extend(self.overseas_locations.get(region, ()))
+        return tuple(dict.fromkeys(out)) or self.china_locations

@@ -37,6 +37,7 @@ class BaseAdapter:
     """抓取适配器基类。每个企业源继承此类实现 fetch + parse。"""
 
     name: str = "base"
+    regions = frozenset({"CN"})
     user_agent: str = (
         "JobRadarBot/0.1 (+https://github.com/job-radar; compliance@example.com)"
     )

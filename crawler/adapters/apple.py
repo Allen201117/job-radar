@@ -90,7 +90,10 @@ class AppleAdapter(BaseAdapter):
                 )
             )
         if self.CHINA_ONLY:
-            jobs = [j for j in jobs if normalizer.keep_for_china_radar(j.location)]
+            jobs = [
+                j for j in jobs
+                if normalizer.location_in_source_regions(j.location, getattr(self, "regions", None))
+            ]
         return jobs
 
     @staticmethod

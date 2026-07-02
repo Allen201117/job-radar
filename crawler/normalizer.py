@@ -16,6 +16,7 @@ from geo import (
     is_china_location,
     is_remote_location,
     keep_for_china_radar,
+    location_in_scope,
 )
 
 
@@ -153,6 +154,19 @@ def clean_salary(salary_text: Optional[str]) -> Optional[str]:
     if s.lower() in ("competitive", "negotiable", "面议", "薪资面议", ""):
         return s
     return s
+
+
+def source_regions(regions=None) -> set[str]:
+    if not regions:
+        return {"CN"}
+    if isinstance(regions, str):
+        text = regions.strip()
+        regions = text[1:-1].split(",") if text.startswith("{") and text.endswith("}") else text.split(",")
+    return {str(r).strip() for r in regions if str(r).strip()} or {"CN"}
+
+
+def location_in_source_regions(location: Optional[str], regions=None) -> bool:
+    return location_in_scope(location, source_regions(regions))
 
 
 def make_content_hash(title: str, location: Optional[str], summary: Optional[str]) -> str:

@@ -66,7 +66,11 @@ def _norm(text: Optional[str]) -> str:
 def _contains_token(text: str, token: str) -> bool:
     if any("一" <= ch <= "鿿" for ch in token) or token.startswith(","):
         return token in text
-    return bool(re.search(r"(?<![a-z0-9])" + re.escape(token) + r"(?![a-z0-9])", text))
+    parts = [re.escape(p) for p in re.split(r"[^a-z0-9]+", token.lower()) if p]
+    if not parts:
+        return False
+    pattern = r"[\s,\-/]+".join(parts)
+    return bool(re.search(r"(?<![a-z0-9])" + pattern + r"(?![a-z0-9])", text))
 
 
 def is_china_location(location: Optional[str]) -> bool:

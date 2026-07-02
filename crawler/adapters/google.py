@@ -10,6 +10,7 @@ jd_url = https://www.google.com/about/careers/applications/{href去掉query}。
 import json
 import re
 from typing import List, Optional
+from urllib.parse import urlencode
 
 import normalizer
 from .base import BaseAdapter, RawJob
@@ -18,6 +19,11 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 _APP_BASE = "https://www.google.com/about/careers/applications/"
 _RESULTS = _APP_BASE + "jobs/results/?location=China&page={pg}"
+_OVERSEAS_LOCATIONS = {
+    "US": ("United States",),
+    "SG": ("Singapore",),
+    "Remote": ("Remote",),
+}
 # 读每张岗位卡：链接 href + 卡内标题(h3/h2) + 卡整段文本(含 "place | 城市, China")。
 _EXTRACT_JS = (
     "els=>els.map(e=>{const li=e.closest('li')||e.parentElement;"
@@ -26,6 +32,24 @@ _EXTRACT_JS = (
     "title:(h?h.innerText:'').trim(),"
     "text:(li?li.innerText:'').replace(/\\s+/g,' ').trim()}})"
 )
+
+
+def _locations_for_regions(regions):
+    regions = normalizer.source_regions(regions)
+    if regions == {"CN"}:
+        return ("China",)
+    out = []
+    if "CN" in regions:
+        out.append("China")
+    for region in sorted(regions):
+        out.extend(_OVERSEAS_LOCATIONS.get(region, ()))
+    return tuple(dict.fromkeys(out)) or ("China",)
+
+
+def _results_url(location: str, page: int) -> str:
+    if location == "China":
+        return _RESULTS.format(pg=page)
+    return _APP_BASE + "jobs/results/?" + urlencode({"location": location, "page": page})
 
 
 class GoogleAdapter(BaseAdapter):
@@ -45,27 +69,28 @@ class GoogleAdapter(BaseAdapter):
             ctx = browser.new_context(user_agent=_UA, locale="en-US",
                                       viewport={"width": 1366, "height": 900})
             page = ctx.new_page()
-            for pg in range(1, self.max_pages + 1):
-                try:
-                    # 不用 networkidle：google.com 遥测/分析让网络永不空闲，会每页耗满超时。
-                    # 改 domcontentloaded + 等岗位卡出现（SSR 渲染），快且稳。
-                    page.goto(_RESULTS.format(pg=pg), wait_until="domcontentloaded", timeout=30000)
+            for loc in _locations_for_regions(getattr(self, "regions", None)):
+                for pg in range(1, self.max_pages + 1):
                     try:
-                        page.wait_for_selector("a[href*='jobs/results/']", timeout=8000)
+                        # 不用 networkidle：google.com 遥测/分析让网络永不空闲，会每页耗满超时。
+                        # 改 domcontentloaded + 等岗位卡出现（SSR 渲染），快且稳。
+                        page.goto(_results_url(loc, pg), wait_until="domcontentloaded", timeout=30000)
+                        try:
+                            page.wait_for_selector("a[href*='jobs/results/']", timeout=8000)
+                        except Exception:
+                            pass
+                        page.wait_for_timeout(800)
+                        rows = page.eval_on_selector_all("a[href*='jobs/results/']", _EXTRACT_JS)
                     except Exception:
-                        pass
-                    page.wait_for_timeout(800)
-                    rows = page.eval_on_selector_all("a[href*='jobs/results/']", _EXTRACT_JS)
-                except Exception:
-                    break
-                if not rows:
-                    break
-                # 翻过末页后 Google 会回放同一页 → hrefs 重复就停
-                key = tuple(r.get("href") for r in rows)
-                if key in seen_pages:
-                    break
-                seen_pages.add(key)
-                cards.extend(rows)
+                        break
+                    if not rows:
+                        break
+                    # 翻过末页后 Google 会回放同一页 → hrefs 重复就停
+                    key = (loc, tuple(r.get("href") for r in rows))
+                    if key in seen_pages:
+                        break
+                    seen_pages.add(key)
+                    cards.extend(rows)
             browser.close()
 
         if not cards:
@@ -92,7 +117,7 @@ class GoogleAdapter(BaseAdapter):
             m = re.search(r"place\s*\|?\s*([^|]+?)(?:\s*\||$)", text)
             if m:
                 loc = m.group(1).strip()
-            if not normalizer.is_china_location(loc or text):
+            if not normalizer.location_in_source_regions(loc or text, getattr(self, "regions", None)):
                 continue
             jid = href.split("?")[0].lstrip("/")  # jobs/results/{id-slug}
             jd_url = _APP_BASE + jid

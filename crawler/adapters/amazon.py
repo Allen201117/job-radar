@@ -21,14 +21,40 @@ from .base import BaseAdapter, RawJob
 # Amazon.jobs 由 Akamai 前置，需常见浏览器 UA 才稳定返回 JSON（JobRadarBot UA 会被静默拦）。
 _BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+_COUNTRY_CODES_BY_REGION = {
+    "CN": ("CHN",),
+    "HK": ("HKG",),
+    "MO": ("MAC",),
+    "US": ("USA",),
+    "SG": ("SGP",),
+}
+_LOCATION_CODE_LABELS = {
+    "CHN": "China",
+    "HKG": "Hong Kong",
+    "MAC": "Macau",
+    "USA": "United States",
+    "SGP": "Singapore",
+}
 
 
 def _norm_loc(loc: Optional[str]) -> Optional[str]:
-    """Amazon 地点 'Shenzhen, CHN' → 'Shenzhen, China'（CHN 国家码归一，便于 is_china_location 识别）。"""
+    """Amazon 地点 'Shenzhen, CHN' → 'Shenzhen, China'（国家码归一，便于 scope 识别）。"""
     if not loc:
         return None
-    s = re.sub(r"(?i),?\s*\bCHN\b", ", China", str(loc)).strip().strip(",").strip()
+    s = str(loc)
+    for code, label in _LOCATION_CODE_LABELS.items():
+        s = re.sub(rf"(?i),?\s*\b{re.escape(code)}\b", f", {label}", s)
+    s = s.strip().strip(",").strip()
     return s or None
+
+
+def _country_codes_for_regions(regions) -> List[str]:
+    out: List[str] = []
+    for region in sorted(normalizer.source_regions(regions)):
+        for code in _COUNTRY_CODES_BY_REGION.get(region, ()):
+            if code not in out:
+                out.append(code)
+    return out
 
 
 def _job_summary(j: dict) -> Optional[str]:
@@ -51,6 +77,13 @@ class AmazonAdapter(BaseAdapter):
         p = urlparse(source_url)
         base = f"{p.scheme}://{p.netloc}{p.path}"
         params = {k: list(v) for k, v in parse_qs(p.query, keep_blank_values=True).items()}
+        regions = normalizer.source_regions(getattr(self, "regions", None))
+        if regions != {"CN"}:
+            for key in ("normalized_country_code[]", "normalized_country_code"):
+                params.pop(key, None)
+            country_codes = _country_codes_for_regions(regions)
+            if country_codes:
+                params["normalized_country_code[]"] = country_codes
         headers = {"User-Agent": _BROWSER_UA, "Accept": "application/json",
                    "Accept-Language": "en-US,en;q=0.9"}
         limit = 100
@@ -93,8 +126,8 @@ class AmazonAdapter(BaseAdapter):
             if jd_url in seen_urls:
                 continue
             location = _norm_loc(j.get("normalized_location") or j.get("location"))
-            # source_url 已按 CHN 服务端筛；这里再用 is_china_location 兜底（排除偶发非华/母国远程岗）
-            if not normalizer.is_china_location(location):
+            # source_url 已按 regions 服务端筛；这里再按 location 兜底（排除偶发串入）。
+            if not normalizer.location_in_source_regions(location, getattr(self, "regions", None)):
                 continue
             seen_urls.add(jd_url)
             out.append(RawJob(
