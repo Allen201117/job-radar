@@ -17,7 +17,7 @@ class JobQualityTests(unittest.TestCase):
 
     def test_job_type_drops_weak_campus_words(self):
         # 弱词 graduate(=硕士学历) / campus(=办公园区) 不再误判校招（社招岗被误标校招的写入端源头）
-        self.assertIsNone(normalizer.extract_job_type("Senior Engineer", "requires a graduate degree, 5+ years"))
+        self.assertIsNone(normalizer.extract_job_type("Software Engineer", "requires a graduate degree"))
         self.assertIsNone(normalizer.extract_job_type("Sales Manager", "based at our Shanghai campus"))
         # 真校招强标记仍判得出
         self.assertEqual(normalizer.extract_job_type("2026校园招聘-算法"), "校招")
