@@ -113,6 +113,27 @@ class TestWorker(unittest.TestCase):
         self.assertTrue(any(r.get("publisher") == "SEC EDGAR"
                             for op, r in store.get("insight_sources", [])))  # 溯源记 SEC EDGAR
 
+    def test_edgar_financial_employees_override_profile_headcount_band(self):
+        store = {"_canned_insight_items": []}
+        W.get_company_facts = lambda c, a=None: FACTS  # Wikidata 规模档是 10万+
+        OE.get_listing_by_ticker = lambda t, **k: {
+            "dimension": "listing", "grade": "fact", "title": "上市状态 · SEC 官方披露",
+            "content": "据 SEC EDGAR 官方披露，测试集团 持续申报…", "origin": "official",
+            "payload": {
+                "status": "listed",
+                "ticker": t,
+                "financials": {"fy": 2025, "employees": 4200},
+            },
+            "source_url": "https://www.sec.gov/x", "source_publisher": "SEC EDGAR",
+        }
+        res = B.enrich_company(FakeSB(store), {"id": "c9", "company": "测试集团", "aliases": []})
+        self.assertEqual(res, "ok")
+        ups = store.get("company_profiles_updates", [])
+        self.assertTrue(
+            any(p.get("headcount_band") == "1000-5000" for _, p in ups),
+            f"官方员工数应覆盖 Wikidata 规模档，实际 updates={ups}",
+        )
+
     def test_cninfo_listing_when_enabled_and_edgar_misses(self):
         store = {"_canned_insight_items": []}
         # facts 无 ticker → 不触发 EDGAR；巨潮启用 → 走巨潮官方源

@@ -104,6 +104,19 @@ def write_listing(sb, company_id, li):
     return item["id"]
 
 
+def _official_headcount_band(li):
+    """官方财报员工数 → company_profiles.headcount_band；无财报员工数时不覆盖 Wikidata。"""
+    try:
+        employees = ((li.get("payload") or {}).get("financials") or {}).get("employees")
+    except AttributeError:
+        return None
+    try:
+        employees = int(employees)
+    except (TypeError, ValueError):
+        return None
+    return wikidata.headcount_band(employees)
+
+
 def enrich_company(sb, profile):
     """富化单家公司并回写。返回 'ok' | 'noface'（Wikidata 查无）| 'err'。永不抛。"""
     try:
@@ -128,6 +141,10 @@ def enrich_company(sb, profile):
         if li:
             write_listing(sb, profile["id"], li)
         prof = wikidata.facts_to_profile(facts)
+        # EDGAR/后续官方财报里的员工数比 Wikidata 更接近披露口径；只在有官方 employees 时覆盖规模档。
+        official_band = _official_headcount_band(li) if li else None
+        if official_band:
+            prof["headcount_band"] = official_band
         prof["insight_checked_at"] = _now()
         prof["last_verified_at"] = _now()
         sb.table("company_profiles").update(prof).eq("id", profile["id"]).execute()
@@ -168,6 +185,36 @@ def drain(sb, limit=0, workers=4, make_sb=None):
         list(ex.map(work, rows))
     print(f"完成：{stat}")
     return stat
+
+
+def fetch_one_company(sb, company):
+    """单公司现查：确保 company_profiles 占位存在，然后取富化所需字段。"""
+    name = (company or "").strip()
+    if not name:
+        return None
+    cols = "id,company,aliases,insight_fail_count,t3_fail_count"
+    rows = (sb.table("company_profiles").select(cols).eq("company", name).limit(1).execute().data) or []
+    if rows:
+        return rows[0]
+    sb.table("company_profiles").upsert({"company": name}, on_conflict="company").execute()
+    rows = (sb.table("company_profiles").select(cols).eq("company", name).limit(1).execute().data) or []
+    return rows[0] if rows else None
+
+
+def drain_one_company(sb, company, t3=False):
+    """单公司富化入口，供 workflow_dispatch 快车道复用。"""
+    profile = fetch_one_company(sb, company)
+    if not profile:
+        return {"ok": 0, "noface": 0, "err": 1} if not t3 else {"wrote": 0, "empty": 0, "err": 1}
+    if t3:
+        res = enrich_company_t3(sb, profile)
+        return {"wrote": 1 if res == "wrote" else 0,
+                "empty": 1 if res == "empty" else 0,
+                "err": 1 if res == "err" else 0}
+    res = enrich_company(sb, profile)
+    return {"ok": 1 if res == "ok" else 0,
+            "noface": 1 if res == "noface" else 0,
+            "err": 1 if res == "err" else 0}
 
 
 # ============================================================
@@ -324,6 +371,7 @@ def main():
     ap = argparse.ArgumentParser(description="职业洞察富化 drain（T2 Wikidata 默认 / --t3 经验层）")
     ap.add_argument("--seed-from-sources", action="store_true", help="先给所有源公司建画像占位")
     ap.add_argument("--t3", action="store_true", help="跑 T3 经验层（千帆检索，受 50/日额度）而非 T2")
+    ap.add_argument("--company", default="", help="只富化单家公司（现查快车道用）")
     ap.add_argument("--limit", type=int, default=0, help="本次最多处理多少公司（0=全部/额度上限）")
     ap.add_argument("--workers", type=int, default=4, help="T2 并发线程数（对 Wikidata 礼貌，建议 ≤6）")
     args = ap.parse_args()
@@ -335,7 +383,7 @@ def main():
     sb = db.get_supabase()
     started_at = _now()
     if args.t3:
-        stat = drain_t3(sb, limit=args.limit)
+        stat = drain_one_company(sb, args.company, t3=True) if args.company else drain_t3(sb, limit=args.limit)
         checked = stat["wrote"] + stat["empty"] + stat["err"]
         ops_runs.record_ops_run(
             sb,
@@ -352,9 +400,9 @@ def main():
         )
         return
     seeded = 0
-    if args.seed_from_sources:
+    if args.seed_from_sources and not args.company:
         seeded = seed_from_sources(sb)
-    stat = drain(sb, limit=args.limit, workers=args.workers)
+    stat = drain_one_company(sb, args.company, t3=False) if args.company else drain(sb, limit=args.limit, workers=args.workers)
     checked = stat["ok"] + stat["noface"] + stat["err"]
     ops_runs.record_ops_run(
         sb,

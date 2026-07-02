@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import { requireAdmin, requireUser } from "@/lib/apiAuth";
+import discoveryDispatch from "@/lib/discovery-dispatch";
+import insightEnrichNow from "@/lib/insight-enrich-now";
 import { createServiceClient } from "@/lib/supabaseService";
 import { findCompanyProfile } from "@/lib/insight-match";
 import { evaluateInsight, resolveInsightFailure } from "@/lib/insight-verification";
@@ -21,10 +24,27 @@ import type {
 
 export const runtime = "nodejs";
 
+const { buildWorkflowDispatchRequest, resolveDispatchConfig, isDispatchAccepted } =
+  discoveryDispatch as any;
+const {
+  buildInsightEnrichRunRecord,
+  buildInsightWorkflowInputs,
+  evaluateInsightEnrichDispatch,
+} = insightEnrichNow as any;
+
+function numberEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+const ENRICH_NOW_COOLDOWN_HOURS = numberEnv("INSIGHT_ENRICH_COOLDOWN_HOURS", 6);
+const ENRICH_NOW_HOURLY_CAP = numberEnv("INSIGHT_ENRICH_HOURLY_CAP", 5);
+const ENRICH_DISPATCH_TIMEOUT_MS = 10000;
+
 export async function GET(request: NextRequest) {
   const auth = await requireUser();
   if (auth.error) return auth.error;
-  const { supabase } = auth;
+  const { supabase, user } = auth;
 
   const company = (request.nextUrl.searchParams.get("company") || "").trim();
   if (!company) {
@@ -102,6 +122,7 @@ export async function GET(request: NextRequest) {
     storedDims = grouped.dimensions;
     evaluations = grouped.evaluations;
   }
+  const storedHasAny = INSIGHT_DIMENSIONS.some((dim) => storedDims[dim].length > 0);
 
   // 4) 合并：每维度「派生在前、存储在后」。
   const dimensions = emptyDimensions();
@@ -110,18 +131,13 @@ export async function GET(request: NextRequest) {
   }
   const hasAny = INSIGHT_DIMENSIONS.some((dim) => dimensions[dim].length > 0);
 
-  // 5) 现查触发（即时性）：用户点开、有真实在招岗位、但还没画像的公司 → 建占位入队，
-  //    下次富化 drain（insight_checked_at NULL 优先）即补 Wikidata/EDGAR + 经验洞察。
-  //    幂等 onConflict + 仅 !profile 时写一次 → 零 churn、不重复触发已富化/已查空的公司、无成本失控。
-  if (!profile && (jobRows?.length || 0) > 0) {
-    try {
-      await createServiceClient()
-        .from("company_profiles")
-        .upsert({ company }, { onConflict: "company" });
-    } catch (e) {
-      console.error("[insights] 现查入队失败（不影响展示）", (e as Error).message);
-    }
-  }
+  // 5) 现查快车道：用户主动点开、有真实在招岗位、但没有新鲜存储型洞察时，非阻塞触发单公司富化。
+  const enrichNow = await maybeDispatchInsightEnrich({
+    userId: user.id,
+    company,
+    jobCount: jobRows?.length || 0,
+    storedHasAny,
+  });
 
   return NextResponse.json({
     ok: true,
@@ -130,7 +146,133 @@ export async function GET(request: NextRequest) {
     dimensions,
     // 有任何可展示条目（含派生）→ 无失败；否则沿用存储项的 bundle 级判定
     failure_reason: hasAny ? null : resolveInsightFailure(evaluations),
+    enrich_now: enrichNow,
   });
+}
+
+async function maybeDispatchInsightEnrich({
+  userId,
+  company,
+  jobCount,
+  storedHasAny,
+}: {
+  userId: string;
+  company: string;
+  jobCount: number;
+  storedHasAny: boolean;
+}) {
+  if (jobCount <= 0 || storedHasAny) return null;
+
+  let service: ReturnType<typeof createServiceClient>;
+  try {
+    service = createServiceClient();
+  } catch (e) {
+    return { status: "skipped", reason: "service_not_configured" };
+  }
+
+  try {
+    await service
+      .from("company_profiles")
+      .upsert({ company, insight_checked_at: null }, { onConflict: "company" });
+  } catch (e) {
+    console.error("[insights] 现查画像占位失败（不影响展示）", (e as Error).message);
+  }
+
+  const nowMs = Date.now();
+  const lookbackHours = Math.max(1, ENRICH_NOW_COOLDOWN_HOURS);
+  const sinceIso = new Date(nowMs - lookbackHours * 60 * 60 * 1000).toISOString();
+  const { data: recentRuns, error: recentError } = await service
+    .from("discovery_runs")
+    .select("id,status,created_at,started_at,company,query,diagnostics")
+    .eq("mode", "insight_enrich")
+    .gte("created_at", sinceIso)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (recentError) {
+    console.error("[insights] 读取现查节流台账失败", recentError.message);
+    return { status: "skipped", reason: "ledger_unavailable" };
+  }
+
+  const decision = evaluateInsightEnrichDispatch(recentRuns || [], company, nowMs, {
+    cooldownHours: ENRICH_NOW_COOLDOWN_HOURS,
+    hourlyCap: ENRICH_NOW_HOURLY_CAP,
+  });
+  if (decision.action === "reuse") {
+    return { status: "reused", run_id: decision.run.id };
+  }
+  if (decision.action === "cooldown" || decision.action === "global_cap") {
+    return {
+      status: "throttled",
+      reason: decision.action,
+      retry_after_sec: decision.retryAfterSec,
+    };
+  }
+  if (decision.action !== "dispatch") {
+    return { status: "skipped", reason: decision.reason || decision.action };
+  }
+
+  const config = resolveDispatchConfig({
+    ...process.env,
+    GITHUB_DISPATCH_WORKFLOW: process.env.INSIGHT_ENRICH_WORKFLOW || "insight-enrich.yml",
+  });
+  if (!config.configured) {
+    return { status: "skipped", reason: "dispatch_not_configured", missing_env: config.missing };
+  }
+
+  const runId = randomUUID();
+  const startedAt = new Date(nowMs).toISOString();
+  const record = buildInsightEnrichRunRecord({ runId, userId, company, startedAt });
+  const { error: insertError } = await service.from("discovery_runs").insert(record);
+  if (insertError) {
+    console.error("[insights] 写入现查台账失败", insertError.message);
+    return { status: "skipped", reason: "ledger_insert_failed" };
+  }
+
+  let dispatchHttpStatus: number | null = null;
+  let dispatchError: string | null = null;
+  try {
+    const req = buildWorkflowDispatchRequest({
+      slug: config.slug,
+      workflowFile: config.workflowFile,
+      ref: config.ref,
+      token: config.token,
+      inputs: buildInsightWorkflowInputs({ company, runId }),
+      userAgent: "job-radar-insight-enrich",
+    });
+    const resp = await fetch(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: req.body,
+      signal: AbortSignal.timeout(ENRICH_DISPATCH_TIMEOUT_MS),
+    });
+    dispatchHttpStatus = resp.status;
+    if (!isDispatchAccepted(resp.status)) {
+      const text = await resp.text().catch(() => "");
+      dispatchError = `GitHub workflow_dispatch HTTP ${resp.status}${text ? `: ${text.slice(0, 300)}` : ""}`;
+    }
+  } catch (err) {
+    dispatchError = err instanceof Error ? err.message : String(err);
+  }
+
+  if (dispatchError) {
+    await service
+      .from("discovery_runs")
+      .update({
+        status: "failed",
+        failure_reason: "dispatch_failed",
+        error_message: dispatchError.slice(0, 1000),
+        finished_at: new Date().toISOString(),
+      })
+      .eq("id", runId);
+    return {
+      status: "failed",
+      reason: "dispatch_failed",
+      run_id: runId,
+      dispatch_http_status: dispatchHttpStatus,
+    };
+  }
+
+  return { status: "queued", run_id: runId, dispatch_http_status: dispatchHttpStatus };
 }
 
 export async function POST(request: NextRequest) {
