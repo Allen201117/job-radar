@@ -216,7 +216,7 @@ def normalize(raw: RawJob, *, source_id: str, company: str) -> dict:
 def extract_job_type(title: str, summary: Optional[str] = None) -> Optional[str]:
     """从标题和摘要中推断岗位类型。"""
     text = f"{title} {summary or ''}".lower()
-    if any(w in text for w in ("暑期实习", "summer intern", "summer internship")):
+    if "暑期实习" in text or re.search(r"summer(?:\s+\d{4})?\s+intern(ship)?s?\b", text, re.I):
         return "暑期实习"
     if any(w in text for w in ("日常实习", "daily intern", "off-cycle intern")):
         return "日常实习"
@@ -228,6 +228,8 @@ def extract_job_type(title: str, summary: Optional[str] = None) -> Optional[str]
     # JD 正文里高频误命中，把要经验的社招岗写成校招（与前端 normalizeChinaJobType 同款收紧）。
     if any(w in text for w in ("校招", "校园招聘", "应届", "new grad")):
         return "校招"
+    if re.search(r"\b(university\s+graduate|entry[-\s]?level)\b", text, re.I):
+        return "校招"
     if any(w in text for w in ("实习", "intern", "internship")):
         return "实习"
     if any(
@@ -238,6 +240,8 @@ def extract_job_type(title: str, summary: Optional[str] = None) -> Optional[str]
     if any(w in text for w in ("兼职", "part time", "part-time")):
         return "兼职"
     if any(w in text for w in ("社招", "社会招聘", "experienced", "professional")):
+        return "社招"
+    if re.search(r"\b(senior|staff|principal|lead|distinguished)\b", text, re.I):
         return "社招"
     if "全职" in text:
         return "全职"
