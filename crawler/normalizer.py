@@ -300,13 +300,14 @@ def extract_education(text: Optional[str]) -> Optional[str]:
     base = _strip_html(text)
     if not base:
         return None
-    if re.search(r"博士|ph\.?d|doctora", base, re.I):
+    t = re.sub(r"\s+", "", base)
+    if re.search(r"博士|ph\.?d|doctorofphilosophy|doctora", t, re.I):
         return "博士"
-    if re.search(r"硕士|研究生|master", base, re.I):
+    if re.search(r"硕士|研究生|master'?s?|m\.?s\.?|m\.?eng|m\.?sc", t, re.I):
         return "硕士"
-    if re.search(r"本科|学士|bachelor|undergrad", base, re.I):
+    if re.search(r"本科|学士|bachelor'?s?|b\.?s\.?|b\.?a\.?|b\.?sc|undergrad", t, re.I):
         return "本科"
-    if re.search(r"大专|专科", base):
+    if re.search(r"大专|专科|associate('?s)?degree", t, re.I):
         return "大专"
     if re.search(r"学历不限|不限学历", base):
         return "不限"
