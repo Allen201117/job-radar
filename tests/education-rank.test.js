@@ -48,6 +48,17 @@ test("educationRank：英文学历", () => {
   assert.equal(educationRank("Ph.D. preferred"), 6);
 });
 
+test("educationRank：海外 JD 常见英文缩写和 Associate 档位", () => {
+  assert.equal(educationRank("Bachelor's degree required"), 4);
+  assert.equal(educationRank("B.S. in Computer Science"), 4);
+  assert.equal(educationRank("B.A. or equivalent experience"), 4);
+  assert.equal(educationRank("Master's degree"), 5);
+  assert.equal(educationRank("M.S. or equivalent"), 5);
+  assert.equal(educationRank("MSc in Statistics"), 5);
+  assert.equal(educationRank("Ph.D. in Machine Learning"), 6);
+  assert.equal(educationRank("Associate degree"), 3);
+});
+
 test("educationRank：无学历语义 → null（交给调用方降级，不当成不限误放精确层）", () => {
   assert.equal(educationRank("其他"), null);
   assert.equal(educationRank("其它"), null);
