@@ -55,9 +55,9 @@ def main():
     apply = os.environ.get("AUTO_DISCOVER_APPLY", "").lower() in ("1", "true", "yes")
     started = _now_iso()
     sb = db.get_supabase()
-    curated = ad.load_curated_targets()
     user_wanted = ad.load_user_wanted_companies(sb)
     existing_companies, existing_urls = ad.existing_source_keys(sb)
+    curated = ad.load_targets(existing_companies)
     seed = int(datetime.now(timezone.utc).strftime("%Y%m%d"))
     targets = ad.plan_targets(curated, user_wanted, existing_companies, TARGET_CAP, seed=seed)
     print(f"[auto_discover_browser] curated={len(curated)} user_wanted={len(user_wanted)} "

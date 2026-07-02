@@ -59,6 +59,23 @@ def load_curated_targets():
     return out
 
 
+def load_targets(existing_companies):
+    """静态精选清单 (+ 可选 LLM 每日生成的新候选，标 _priority 优先探)。
+    LLM 生成 gated on env AUTO_DISCOVER_LLM，默认关；生成的候选一样走后续探活验证门，编造/猜错自动丢。
+    「持续喂清单」= 静态清单会烧完，靠 generate_targets 每天补新候选维持扩源速度。"""
+    targets = load_curated_targets()
+    if os.environ.get("AUTO_DISCOVER_LLM", "").lower() in ("1", "true", "yes"):
+        try:
+            import generate_targets as gt
+            n = int(os.environ.get("AUTO_DISCOVER_LLM_N", "50"))
+            llm = gt.llm_generate(existing_companies, n=n)
+            known = {(t.get("company") or "").strip() for t in targets}
+            targets = [c for c in llm if c["company"] not in known] + targets  # LLM 新候选排最前
+        except Exception as e:
+            print(f"[auto_discover] LLM 生成清单跳过（回退静态）: {type(e).__name__}: {e}")
+    return targets
+
+
 def load_user_wanted_companies(sb):
     """用户需求信号：user_preferences.target_companies 里所有公司（去重）。"""
     try:
@@ -130,9 +147,9 @@ def main():
     apply = os.environ.get("AUTO_DISCOVER_APPLY", "").lower() in ("1", "true", "yes")
     started = _now_iso()
     sb = db.get_supabase()
-    curated = load_curated_targets()
     user_wanted = load_user_wanted_companies(sb)
     existing_companies, existing_urls = existing_source_keys(sb)
+    curated = load_targets(existing_companies)
     seed = int(datetime.now(timezone.utc).strftime("%Y%m%d"))
     targets = plan_targets(curated, user_wanted, existing_companies, DAILY_TARGET_CAP, seed=seed)
     print(f"[auto_discover] curated={len(curated)} user_wanted={len(user_wanted)} "
