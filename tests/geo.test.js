@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 
-const { deriveCountryCode, deriveJobScope } = require("../lib/geo.js");
+const { deriveCountryCode, deriveJobScope, locationInScope } = require("../lib/geo.js");
 
 test("deriveCountryCode: greater china", () => {
   assert.equal(deriveCountryCode("Beijing, China"), "CN");
@@ -25,4 +25,12 @@ test("deriveJobScope: domestic vs overseas", () => {
   assert.equal(deriveJobScope("New York"), "overseas");
   assert.equal(deriveJobScope("Singapore"), "overseas");
   assert.equal(deriveJobScope("Remote"), "domestic");
+});
+
+test("locationInScope: Taiwan is not in domestic or overseas launch scopes", () => {
+  for (const loc of ["Taiwan", "Taipei, Taiwan", "台北, 台湾"]) {
+    assert.equal(locationInScope(loc, ["CN"]), false, loc);
+    assert.equal(locationInScope(loc, ["US", "SG", "Remote"]), false, loc);
+    assert.equal(locationInScope(loc, ["CN", "US", "SG", "Remote"]), false, loc);
+  }
 });

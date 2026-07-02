@@ -33,6 +33,12 @@ test("海外地点 → 丢弃", () => {
   }
 });
 
+test("台湾地点 → 维持不抓，不归入国内或海外范围", () => {
+  for (const loc of ["Taiwan", "Taipei, Taiwan", "台北, 台湾"]) {
+    assert.equal(keepForChinaRadar(loc), false, loc);
+  }
+});
+
 test("子串陷阱：Humacao(波多黎各) 不被 macao 词边界误命中", () => {
   assert.equal(keepForChinaRadar("Humacao, Puerto Rico"), false);
 });

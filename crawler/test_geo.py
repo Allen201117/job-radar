@@ -66,6 +66,13 @@ class TestLocationInScope(unittest.TestCase):
         self.assertTrue(location_in_scope("Beijing", {"CN", "US", "SG"}))
         self.assertTrue(location_in_scope("Singapore", {"CN", "US", "SG"}))
 
+    def test_taiwan_is_not_in_any_active_scope(self):
+        for loc in ("Taiwan", "Taipei, Taiwan", "台北, 台湾"):
+            with self.subTest(loc=loc):
+                self.assertFalse(location_in_scope(loc, {"CN"}))
+                self.assertFalse(location_in_scope(loc, {"US", "SG", "Remote"}))
+                self.assertFalse(location_in_scope(loc, {"CN", "US", "SG", "Remote"}))
+
 
 if __name__ == "__main__":
     unittest.main()
