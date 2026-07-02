@@ -18,6 +18,8 @@ class BaiduAdapter(BaseAdapter):
 
     name = "baidu"
     DEFAULT_URL = "https://talent.baidu.com/jobs/social-list"
+    # recruitType 是百度自带的**招聘类型**（拼详情 URL 也用它），比 postType(岗位类别)可靠。
+    _RECRUIT_TYPE = {"SOCIAL": "社招", "CAMPUS": "校招", "INTERN": "实习"}
 
     def fetch(self, source_url: str) -> str:
         """请求百度官方招聘列表页 HTML。"""
@@ -99,7 +101,10 @@ class BaiduAdapter(BaseAdapter):
                     company="百度",
                     title=title,
                     location=row.get("workPlace"),
-                    job_type=row.get("postType") or row.get("projectType"),
+                    # 招聘类型优先用来源 recruitType 映射（社招/校招/实习），postType 只是岗位类别兜底。
+                    job_type=self._RECRUIT_TYPE.get(str(row_recruit_type).upper())
+                    or row.get("postType")
+                    or row.get("projectType"),
                     summary=row.get("workContent") or row.get("serviceCondition"),
                     jd_url=jd_url,
                     apply_url=jd_url,

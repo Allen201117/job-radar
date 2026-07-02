@@ -1,6 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { recruitmentCategory } = require("../lib/china-keyword-expansion");
+const {
+  recruitmentCategory,
+  hasExplicitRecruitmentType,
+} = require("../lib/china-keyword-expansion");
 
 test("recruitmentCategory 三桶穷尽分类（实习 / 校招 / 社招）", () => {
   // 实习
@@ -53,4 +56,131 @@ test("P1-D: url 拼音路径 + 源名信号补全校招/实习（治 59% 空 job
   assert.equal(recruitmentCategory({ title: "电气工程师", company: "华润电力 CR Power 校招" }), "校招");
   // 回归：普通公司/岗位不被误判
   assert.equal(recruitmentCategory({ title: "后端开发", company: "字节跳动" }), "社招");
+});
+
+test("硬门：明确要求 ≥2 年经验 → 强制社招（治『社招要3年经验却被标校招』）", () => {
+  // ① summary/JD 正文里的『毕业生/应届/graduate』字样污染 → 被经验门纠正回社招
+  assert.equal(
+    recruitmentCategory({
+      title: "高级算法工程师",
+      summary: "3年以上相关工作经验，985/211高校毕业生优先，硕士学历。",
+    }),
+    "社招",
+  );
+  assert.equal(
+    recruitmentCategory({
+      title: "智慧校园解决方案专家",
+      summary: "本科及以上学历，5年以上教育行业、智慧校园 ToB/ToG 工作经验。",
+    }),
+    "社招",
+  );
+  assert.equal(
+    recruitmentCategory({
+      title: "Software Engineer",
+      summary: "Graduate degree preferred. 5+ years of experience building services.",
+    }),
+    "社招",
+  );
+  // ② 源 job_type 本身把资深岗错标成校招 → 被经验门纠正回社招
+  assert.equal(
+    recruitmentCategory({
+      title: "光刻工艺资深/主任工程师",
+      job_type: "校招",
+      summary: "负责光刻工艺研发，8年以上半导体制造经验。",
+    }),
+    "社招",
+  );
+  // 数字范围写法（3-5年）下限 ≥2 也纠正
+  assert.equal(
+    recruitmentCategory({ title: "产品经理", summary: "3-5年经验，应届生亦可培养。" }),
+    "社招",
+  );
+});
+
+test("硬门不过度修正：真实校招/实习 + 无 ≥2 年经验硬要求 → 保持原判", () => {
+  // 真校招（应届、无年限要求）保持校招
+  assert.equal(
+    recruitmentCategory({ title: "2025届校园招聘 算法工程师", summary: "面向应届毕业生。" }),
+    "校招",
+  );
+  // “毕业2年内 / 0-2年 / 1-3年” 下限 <2，不触发硬门（不把校招误纠成社招）
+  assert.equal(
+    recruitmentCategory({ title: "管培生", summary: "面向毕业2年内的应届及往届生。" }),
+    "校招",
+  );
+  assert.equal(
+    recruitmentCategory({ title: "校园招聘 后端", summary: "0-2年经验，欢迎应届。" }),
+    "校招",
+  );
+  // 真实习保持实习（哪怕正文提到团队多年经验）
+  assert.equal(
+    recruitmentCategory({ title: "算法实习生", summary: "在校生，随团队3年+资深工程师学习。" }),
+    "实习",
+  );
+});
+
+test("弱词不再误判校招：毕业生/graduate/校园 在正文里 → 保持社招（精度优先）", () => {
+  // "985毕业生优先" 是社招常见语，不该判校招
+  assert.equal(
+    recruitmentCategory({ title: "后端开发工程师", summary: "重点院校毕业生优先，扎实的算法功底。" }),
+    "社招",
+  );
+  // "graduate degree"=硕士学历，不是校招
+  assert.equal(
+    recruitmentCategory({ title: "Data Scientist", summary: "Graduate degree in CS or related field." }),
+    "社招",
+  );
+  // "智慧校园" 产品里的"校园" 不是校招
+  assert.equal(
+    recruitmentCategory({ title: "解决方案经理", summary: "负责智慧校园产品在高校的推广落地。" }),
+    "社招",
+  );
+});
+
+test("ATS 门户路径对称：/social 门户里正文写『应届亦可』仍判社招（治 beisen ~3000 岗误判）", () => {
+  // 北森 /social 门户 = 社会招聘，正文的"应届亦可"不该把它翻成校招
+  assert.equal(
+    recruitmentCategory({
+      title: "工艺技术员",
+      jd_url: "https://hoshine.zhiye.com/social/detail?jobAdId=abc",
+      summary: "负责生产工艺控制；本科及以上，应届亦可。",
+    }),
+    "社招",
+  );
+  // /campus 门户仍判校招（对称，回归）
+  assert.equal(
+    recruitmentCategory({ title: "电修管理员", jd_url: "https://xiangyu.zhiye.com/campus/detail?jobAdId=x" }),
+    "校招",
+  );
+  // /experienced 门户判社招
+  assert.equal(
+    recruitmentCategory({ title: "算法工程师", jd_url: "https://jobs.bytedance.com/experienced/position/1/detail" }),
+    "社招",
+  );
+});
+
+test("信任来源自报 job_type：不被正文杂词污染", () => {
+  // 源渠道=社会招聘，正文顺带提"可转正实习/毕业生" → 仍社招（信任源头，实习标记只认标题/url）
+  assert.equal(
+    recruitmentCategory({
+      title: "供应链经理",
+      job_type: "社会招聘",
+      summary: "团队接收优秀应届毕业生与实习生，本岗面向社会招聘。",
+    }),
+    "社招",
+  );
+  // 源渠道=校招 且无经验硬要求 → 尊重来源判校招
+  assert.equal(recruitmentCategory({ title: "研发工程师", job_type: "校招" }), "校招");
+  // job_type 是"职能类别"（非招聘类型）→ 不误当类型，走后续信号/兜底
+  assert.equal(recruitmentCategory({ title: "算法工程师", job_type: "研发" }), "社招");
+});
+
+test("hasExplicitRecruitmentType：≥2 年经验硬要求算『明确类型』（让校招筛选能真正踢掉它）", () => {
+  // 空 job_type + 正文含毕业生字样，但要 3 年经验 → 视为明确（社招），筛校招时应被淘汰
+  assert.equal(
+    hasExplicitRecruitmentType({ title: "数据工程师", summary: "3年以上经验，重点院校毕业生优先。" }),
+    true,
+  );
+  // 纯信息不足（无类型、无年限）仍是『类型未知』→ 筛选时放行降级，不误杀
+  assert.equal(hasExplicitRecruitmentType({ title: "后端开发工程师" }), false);
 });
