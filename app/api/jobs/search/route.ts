@@ -29,6 +29,7 @@ export async function GET(request: NextRequest) {
     capitalOrigin: p.get("capitalOrigin") || "",
     education: p.get("education") || "",
     salaryOnly: bool("salaryOnly"),
+    sponsorshipOnly: bool("sponsorshipOnly"),
     showIgnored: bool("showIgnored"),
     showApplied: bool("showApplied"),
     showNewOnly: bool("showNewOnly"),

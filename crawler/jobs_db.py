@@ -28,7 +28,7 @@ _INSERT_COLS = (
     "id", "source_id", "company", "title", "location", "country_code", "job_scope",
     "job_type", "summary", "jd_url", "apply_url", "salary_text", "posted_at",
     "first_seen_at", "last_seen_at", "status", "content_hash", "experience", "education",
-    "deadline", "enrich_fail_count", "enrich_checked_at",
+    "deadline", "sponsorship_signal", "enrich_fail_count", "enrich_checked_at",
 )
 # update 时不动：主键 id / 首见时间 first_seen_at / enrich 子系统独占的 enrich_checked_at·enrich_fail_count。
 # 后两者由 enrich_backlog 死活巡检+富化**直接 UPDATE**（非本 upsert）：列表重抓若把 enrich_checked_at 抹回

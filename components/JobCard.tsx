@@ -353,6 +353,18 @@ export default function JobCard({
             <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", FUNCTION_STYLE)}>
               {jobFunction}
             </span>
+            {job.sponsorship_signal === "available" && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-[#bcdcae] bg-[#eef6e0] px-2.5 py-1 text-xs font-semibold text-[#4d6b2f] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#d2f0ad]">
+                <CheckCircle size={12} weight="fill" aria-hidden="true" />
+                提供 Sponsorship
+              </span>
+            )}
+            {job.sponsorship_signal === "none" && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-[#f0d9a8] bg-[#fbf1de] px-2.5 py-1 text-xs font-semibold text-[#9a6a1f] dark:border-[#e8b87f]/[0.30] dark:bg-[#e8b87f]/[0.15] dark:text-[#e8b87f]">
+                <XCircle size={12} weight="fill" aria-hidden="true" />
+                不提供 Sponsorship
+              </span>
+            )}
             {sessionNew && (
               <span className="inline-flex items-center gap-1 rounded-full bg-[#dcefb4] px-2.5 py-1 text-xs font-semibold text-[#4f6f2a] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]">
                 <Sparkle size={12} weight="fill" aria-hidden="true" />

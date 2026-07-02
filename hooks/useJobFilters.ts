@@ -24,6 +24,7 @@ function filtersToParams(f: Filters, offset: number, limit: number): string {
   if (f.capitalOrigin) p.set("capitalOrigin", f.capitalOrigin);
   if (f.education) p.set("education", f.education);
   if (f.salaryOnly) p.set("salaryOnly", "1");
+  if (f.sponsorshipOnly) p.set("sponsorshipOnly", "1");
   if (f.showIgnored) p.set("showIgnored", "1");
   if (f.showApplied) p.set("showApplied", "1");
   if (f.showNewOnly) p.set("showNewOnly", "1");

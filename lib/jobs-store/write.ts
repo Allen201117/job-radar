@@ -12,6 +12,7 @@ import { jobsQuery } from "./client";
 import { JOB_COLUMNS } from "./types";
 import canonicalUrl from "@/lib/canonical-url";
 import geo from "@/lib/geo";
+import sponsorship from "@/lib/sponsorship";
 
 const { canonicalizeJdUrl } = canonicalUrl as {
   canonicalizeJdUrl: (u: string | null | undefined) => string | null;
@@ -20,17 +21,20 @@ const { deriveCountryCode, deriveJobScope } = geo as {
   deriveCountryCode: (location: string | null | undefined) => string | null;
   deriveJobScope: (location: string | null | undefined) => "domestic" | "overseas";
 };
+const { sponsorshipSignal } = sponsorship as {
+  sponsorshipSignal: (text: string | null | undefined) => "available" | "none" | "unknown";
+};
 
 // insert 数据列（值取自 job，缺省 null）；canonical_jd_url/search_doc 由触发器维护、id/时间/状态/计数走字面量。
 const INSERT_DATA_COLS = [
   "source_id", "company", "title", "location", "country_code", "job_scope", "job_type", "summary", "jd_url",
-  "apply_url", "salary_text", "posted_at", "content_hash", "experience", "education", "deadline",
+  "apply_url", "salary_text", "posted_at", "content_hash", "experience", "education", "deadline", "sponsorship_signal",
 ] as const;
 // update 数据列：刷新 live 重抓提供的基础字段 + location 派生 geo 字段；不碰 source_id / jd_url /
 // experience / education / deadline / first_seen_at，避免把爬虫/富化已填字段清空。
 const UPDATE_DATA_COLS = [
   "company", "title", "location", "country_code", "job_scope", "job_type", "summary",
-  "apply_url", "salary_text", "posted_at", "content_hash",
+  "apply_url", "salary_text", "posted_at", "content_hash", "sponsorship_signal",
 ] as const;
 // 这些富化字段在 UPDATE 时新值为空则保留旧值（COALESCE(NULLIF(...))），与 crawler/jobs_db._PRESERVE_IF_EMPTY 同口径：
 // app 的 discovery/search 刷新多只带列表骨架（无 JD 正文）→ 不得把浏览器/httpx 富化补好的 summary 抹成 NULL。
@@ -38,11 +42,13 @@ const PRESERVE_IF_EMPTY = new Set<string>(["summary", "job_type"]);
 
 export type UpsertResult = { row: any; action: "created" | "updated" };
 
-function withGeoFields(job: Record<string, any>): Record<string, any> {
+function withDerivedFields(job: Record<string, any>): Record<string, any> {
   return {
     ...job,
     country_code: job.country_code ?? deriveCountryCode(job.location),
     job_scope: job.job_scope ?? deriveJobScope(job.location),
+    sponsorship_signal:
+      job.sponsorship_signal ?? sponsorshipSignal([job.title, job.summary].filter(Boolean).join(" ")),
   };
 }
 
@@ -84,7 +90,7 @@ async function insertNew(job: Record<string, any>): Promise<any | null> {
 
 /** 单条 upsert 到香港库（canonical 冲突键，复活语义同 crawler）。返回写后整行 + created/updated；失败返回 null。 */
 export async function upsertJob(job: Record<string, any>): Promise<UpsertResult | null> {
-  job = withGeoFields(job);
+  job = withDerivedFields(job);
   const canon = canonicalizeJdUrl(job.jd_url);
   const existingId = await findIdByCanonical(canon);
   if (existingId) {

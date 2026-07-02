@@ -21,7 +21,7 @@ class UpdateSetClauseTests(unittest.TestCase):
             self.assertNotIn(f"COALESCE(NULLIF(%s, ''), {col})", clause)
 
     def test_geo_fields_are_written_but_not_preserved(self):
-        for col in ("country_code", "job_scope"):
+        for col in ("country_code", "job_scope", "sponsorship_signal"):
             self.assertIn(col, jobs_db._INSERT_COLS)
             self.assertIn(col, jobs_db._UPDATE_COLS)
             self.assertNotIn(col, jobs_db._PRESERVE_IF_EMPTY)

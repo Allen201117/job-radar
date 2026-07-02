@@ -22,6 +22,7 @@ export type Filters = {
   sortBy: "match" | "newest";
   capitalOrigin: string;
   salaryOnly: boolean;
+  sponsorshipOnly: boolean;
   education: string; // 用户所选学历（博士/硕士/本科/大专）；""=学历不限（不筛）
 };
 
@@ -36,6 +37,7 @@ export const DEFAULT_FILTERS: Filters = {
   sortBy: "match",
   capitalOrigin: "",
   salaryOnly: false,
+  sponsorshipOnly: false,
   education: "",
 };
 
@@ -98,6 +100,7 @@ export function jobFilterTier(
     } else if (origin !== filters.capitalOrigin) return null;
   }
   if (filters.salaryOnly && !job.salary_text) return null;
+  if (filters.sponsorshipOnly && job.sponsorship_signal !== "available") return null;
   // 关键词两层：无关键词 → 放行；否则 精确 / 相关 / 不匹配(null)。
   // 任一字段靠「缺失放行」→ 整体压到 related，排序沉底（精确匹配优先展示）。
   if (!filters.keyword) return degraded ? "related" : "exact";

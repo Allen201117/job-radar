@@ -20,6 +20,7 @@ from geo import (
     keep_for_china_radar,
     location_in_scope,
 )
+from sponsorship import sponsorship_signal
 
 
 NAVIGATION_TITLES = {
@@ -201,6 +202,7 @@ def normalize(raw: RawJob, *, source_id: str, company: str) -> dict:
         "job_scope": derive_job_scope(location),
         "job_type": job_type,
         "summary": full_summary,
+        "sponsorship_signal": sponsorship_signal(" ".join(x for x in (raw.title, full_summary) if x)),
         "jd_url": raw.jd_url,
         "apply_url": raw.apply_url,
         "salary_text": salary,
