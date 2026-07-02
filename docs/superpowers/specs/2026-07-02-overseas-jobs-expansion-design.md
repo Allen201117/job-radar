@@ -25,7 +25,7 @@
 |---|---|---|---|
 | 1 | 目标用户 | **两者都要**（国内出海 + 海外就地） | 不做全站英文；市场覆盖两类人群去向 |
 | 2 | 优先地区 | **美国 + 新加坡 + 香港 + 全球远程** | 严格锁这几个，防岗位量爆炸 |
-| 3 | 国内/海外隔离 | **全局「求职范围」开关**（国内 / 海外 / 全都要），默认国内 | 老用户零感知；雷达/岗位库/计数全尊重它 |
+| 3 | 国内/海外隔离 | **全局「求职范围」开关**（国内 / 海外 / 全都要），默认国内 | 老用户零感知；雷达/岗位库**列表**尊重它；**首页计数保持合并总数**（见 §8.3） |
 | 4 | 简历匹配 | **可选上传英文简历** + 确定性中英桥兜底 | 精准匹配靠英文简历；不传也有基础匹配 |
 | 5 | 香港归属 | **归国内**（大中华区） | `job_scope`：国内=大陆+港澳；净新增海外=美/新/远程 |
 | 6 | 签证 sponsorship | **这期做**（JD 关键词识别，零 LLM） | 打「给/不给 sponsorship」标签 |
@@ -114,7 +114,7 @@
 
 ### 4.3 schema（香港自建库）—— 加结构化列
 - `jobs` 加 `country_code text`、`job_scope text default 'domestic'`（回填存量为 domestic）。
-- 计数函数出 scope-aware 变体：`count_valid_active_jobs(scope)` / 按 scope 的公司数与分公司计数（或新增 `p_scope` 参数）。
+- **首页计数用现有 `count_valid_active_jobs()` 全量（合并总数，不 scope-aware）**——国内+海外都过 JD 正文≥60 字质量门，故合并总数依然诚实。scope-aware 计数**非首页所需**，仅在需要「海外岗有效数」内部核验（如 Phase 1 验收）时按 scope 过滤，不影响首页展示。
 - 唯一约束**不动**（仍 company+title+location+jd_url + canonical）——location 已含地区信息，不引入新去重维度。
 - 触点：`jobs-db/schema.sql`（改列 + 函数）→ 走 `gh workflow run jobs-db-migrate` 幂等 apply。
 - ⚠️ **canonical 三处同步铁律不变**：改任何 canonical/归一逻辑必须 `lib/canonical-url.js` + `crawler/normalizer.py` + `jobs-db/schema.sql` SQL 函数三处字节级一致（本期若不改 canonical 规则则无需动，但加 country_code/job_scope 派生要在 crawler 与 app 写层口径一致）。
@@ -145,7 +145,7 @@
 - **全局「求职范围」开关**：放 Navbar（或 Today/Jobs 顶部），持久化到 `user_preferences.job_scope`。默认国内。
 - **Jobs 筛选器加「地区/国家」筛选**（区别于现有「资方属地」——那是公司国籍，这是岗位所在地）：美国 / 新加坡 / 远程 / 全部海外；国内范围下隐藏或置灰。
 - 城市输入框接受海外城市（走扩展后的别名表）。
-- 首页计数按当前范围显示（`count_valid_active_jobs(scope)`），不拿海外岗虚高国内数字。
+- **首页计数永远显示合并总数**（国内+海外，`count_valid_active_jobs()` 全量），**不随求职范围开关变化**。因两者都过 ≥60 字质量门，合并总数仍是「真实可投的高质量岗」，不违反指标诚实。
 - 触点：`components/Navbar.tsx`、`components/JobFilters.tsx`、`app/today-client.tsx`、`app/jobs/jobs-client.tsx`、首页计数组件。
 
 ---
@@ -207,7 +207,7 @@
 
 ### 8.3 计数诚实
 - 海外岗同过 JD 正文≥60 字质量门。
-- 首页计数 `count_valid_active_jobs(scope)` 按范围显示，海外/国内分开算，不混淆虚高。
+- **首页计数 = 合并总数**（`count_valid_active_jobs()` 全量，国内+海外，不随开关变）。诚实性由「全部过 ≥60 字质量门」保证，而非靠拆分范围——所有计入的都是真实可投高质量岗。
 
 ### 8.4 LLM 预算（硬约束落地）
 - 爬虫打标签（职能/招聘类型/教育/经验/城市/sponsorship）**100% 确定性规则，零 LLM**。
@@ -251,7 +251,7 @@
 - **验收**：抽检真实英文 JD，招聘类型/教育/经验/职能标签正确率达标；中文简历用户在海外范围能召回相关英文岗。
 
 ### Phase 3 — 求职范围开关 + 地区筛选 UI + 可选英文简历 + 雷达 scope-aware
-- 全局开关 + 地区筛选 + 计数 scope-aware；可选英文简历上传→`en_*` 档案；雷达/今日机会 scope-aware。
+- 全局开关 + 地区筛选；**首页计数保持合并总数（不 scope-aware）**；可选英文简历上传→`en_*` 档案；雷达/今日机会 scope-aware。
 - **验收**：切「海外」后今日机会 + 岗位库出现美/新/远程 F500 岗；传英文简历后海外匹配精度明显提升；切回国内零变化。
 
 ### Phase 4（后置，非本期核心）— 定向补 F500 大厂
