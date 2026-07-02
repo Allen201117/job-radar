@@ -39,7 +39,8 @@ class TestBytedanceAdapter(unittest.TestCase):
         self.assertEqual(j.company, "字节跳动")
         self.assertIn("大语言模型", j.title)
         self.assertEqual(j.location, "上海")
-        self.assertEqual(j.job_type, "研发")
+        # 招聘类型取路由变体"社招"（而非把职能"研发"误当 job_type）
+        self.assertEqual(j.job_type, "社招")
         self.assertEqual(j.jd_url, "https://jobs.bytedance.com/experienced/position/7644436900522248453/detail")
 
     def test_city_from_city_list_fallback(self):
@@ -83,6 +84,10 @@ class TestBytedanceCampusAdapter(unittest.TestCase):
         self.assertTrue(all("/campus/" in u for u in self.a.list_urls))
         # 不应残留社招路径
         self.assertNotIn("/experienced/", self.a.detail_template)
+
+    def test_campus_variant_job_type_is_xiaozhao(self):
+        jobs = self.a.parse(json.dumps({"_intercepted": [SAMPLE]}))
+        self.assertTrue(all(j.job_type == "校招" for j in jobs))  # /campus 变体 → 校招（实习岗由读取端盖）
 
     def test_parse_uses_campus_detail_url(self):
         jobs = self.a.parse(json.dumps({"_intercepted": [SAMPLE]}))

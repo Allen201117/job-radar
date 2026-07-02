@@ -331,7 +331,14 @@ def _process_one_source(source, supabase) -> dict:
             full_summary = normalizer.clean_summary(raw.summary)
             summary = cap_summary_for_storage(full_summary)
             salary = normalizer.clean_salary(raw.salary_text)
-            job_type = normalizer.extract_job_type(title, full_summary) or raw.job_type
+            # adapter 从来源 recruitType/渠道直填的**真招聘类型**最可信 → 优先信任，别被正文推断覆盖
+            # (hotjob/wt/华为/小红书等已正确直填)。若 adapter 把职能名塞进 job_type(feishu/bytedance 的
+            # job_category)或留空 → 退回正文推断。修此前是「正文推断 or 直填」，反把好数据覆盖了(见审计)。
+            job_type = (
+                raw.job_type
+                if normalizer.is_recruitment_type(raw.job_type)
+                else (normalizer.extract_job_type(title, full_summary) or raw.job_type)
+            )
             content_hash = normalizer.make_content_hash(title, location, full_summary)
             # 结构化字段从**完整** raw.summary 抽取（在 clean_summary 截断之前），adapter 直填的优先
             experience = raw.experience or normalizer.extract_experience(raw.summary)

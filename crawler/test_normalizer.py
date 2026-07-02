@@ -15,6 +15,22 @@ class JobQualityTests(unittest.TestCase):
         self.assertEqual(normalizer.extract_job_type("管理培训生", "graduate program"), "管培生")
         self.assertEqual(normalizer.extract_job_type("投研研究员", "行业研究"), "研究岗")
 
+    def test_job_type_drops_weak_campus_words(self):
+        # 弱词 graduate(=硕士学历) / campus(=办公园区) 不再误判校招（社招岗被误标校招的写入端源头）
+        self.assertIsNone(normalizer.extract_job_type("Senior Engineer", "requires a graduate degree, 5+ years"))
+        self.assertIsNone(normalizer.extract_job_type("Sales Manager", "based at our Shanghai campus"))
+        # 真校招强标记仍判得出
+        self.assertEqual(normalizer.extract_job_type("2026校园招聘-算法"), "校招")
+        self.assertEqual(normalizer.extract_job_type("Software Engineer", "open to new grad"), "校招")
+
+    def test_is_recruitment_type_gates_adapter_jobtype(self):
+        # 真招聘类型 → True（run.py 信任 adapter 直填，不被正文推断覆盖）
+        for v in ("社会招聘", "社招", "校招", "校园招聘", "应届生", "实习", "实习生", "管培生", "留学生专项"):
+            self.assertTrue(normalizer.is_recruitment_type(v), v)
+        # 职能/类别名 / 空 / 用工模式 → False（退回正文推断）
+        for v in ("研发", "业务类", "工程管理序列", "技术", "全职", "兼职", "", None):
+            self.assertFalse(normalizer.is_recruitment_type(v), repr(v))
+
     def test_accepts_real_apple_detail_url(self):
         job = RawJob(
             company="Apple",
