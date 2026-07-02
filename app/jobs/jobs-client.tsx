@@ -34,9 +34,10 @@ interface Props {
   initialJobs: ScoredJob[];
   initialTotal: number;
   initialFilters?: { city?: string; jobType?: string; keyword?: string };
+  jobScope?: string | null;
 }
 
-export default function JobsClient({ initialJobs, initialTotal, initialFilters }: Props) {
+export default function JobsClient({ initialJobs, initialTotal, initialFilters, jobScope = "domestic" }: Props) {
   // officialJobs = 高级工具「刷新/发掘」带回的新岗位（默认 UI 隐藏时恒为空）；仍参与 useJobFilters 合并。
   const [officialJobs, setOfficialJobs] = useState<ScoredJob[]>([]);
   const [onlyNew, setOnlyNew] = useState(false);
@@ -79,6 +80,11 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
     refresh,
     newMatching,
   } = useJobFilters({ officialJobs, onlyNew, initialFilters, initialJobs, initialTotal });
+
+  useEffect(() => {
+    if (jobScope !== "domestic") return;
+    setFilters((f) => (f.region ? { ...f, region: "" } : f));
+  }, [jobScope, setFilters]);
 
   // P3 on-demand 富化：给当下看到的薄卡即时补 JD 正文。
   const [summaryOverlay, setSummaryOverlay] = useState<Record<string, string>>({});
@@ -183,7 +189,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters }
 
   return (
     <div className="space-y-5">
-      <JobFilters filters={filters} onChange={setFilters} companies={companies} />
+      <JobFilters filters={filters} onChange={setFilters} companies={companies} jobScope={jobScope} />
 
       {/* 搜索说明 + 手动搜索按钮（取代旧三磁贴；筛选变化已自动搜，这里手动重试）。 */}
       <div className="flex flex-col gap-3 surface p-4 text-[#1a1714] dark:text-[#f3ecdf] sm:flex-row sm:items-center sm:justify-between sm:p-5">

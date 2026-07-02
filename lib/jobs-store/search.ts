@@ -8,6 +8,7 @@ import { sortAndFilterJobs } from "@/lib/scoring";
 import { filterAndRankJobs, jobFilterTier, countExact, type Filters } from "@/lib/job-filter";
 import { buildTsquery, annotateAndRank, annotateSourceAdapter } from "@/lib/job-search";
 import { ftsCandidateTerms, normalizeChinaCity } from "@/lib/china-keyword-expansion";
+import { appendJobScopeWhere, effectiveJobScope } from "@/lib/job-scope";
 import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 
 const FTS_CAP = 8000;
@@ -36,6 +37,7 @@ async function searchViaFTS(
   // 不加 order by：让 planner 用 GIN bitmap 只取命中行；排序交给 JS filterAndRankJobs。
   const conds = ["status = 'active'", "search_doc @@ to_tsquery('simple', $1)"];
   const params: unknown[] = [tsquery];
+  appendJobScopeWhere(conds, params, prefs, filters);
   const city = filters.city.trim();
   if (city) {
     params.push(`%${normalizeChinaCity(city) || city}%`);
@@ -77,10 +79,14 @@ async function searchViaScan(
   const matched: ScoredJob[] = [];
   let off = 0;
   let exhausted = false;
+  const conds = ["status = 'active'"];
+  const params: unknown[] = [];
+  appendJobScopeWhere(conds, params, prefs, filters);
   while (matched.length <= need && !exhausted && off < SCAN_BUDGET) {
     const rows: any[] = annotateSourceAdapter(
       await jobsQuery(
-        `select ${JOB_COLUMNS} from jobs where status='active' order by first_seen_at desc limit ${DB_PAGE} offset ${off}`,
+        `select ${JOB_COLUMNS} from jobs where ${conds.join(" and ")} order by first_seen_at desc limit $${params.length + 1} offset $${params.length + 2}`,
+        [...params, DB_PAGE, off],
       ),
       adapterBySource,
     );
@@ -119,7 +125,8 @@ export async function searchJobsStore(
   adapterBySource?: Map<string, string | null> | null,
 ): Promise<SearchResult> {
   const keyword = filters.keyword.trim();
-  const keywordTerms = keyword ? ftsCandidateTerms(keyword) : [];
+  const includeOverseasLexicon = effectiveJobScope(prefs) !== "domestic";
+  const keywordTerms = keyword ? ftsCandidateTerms(keyword, { includeOverseasLexicon }) : [];
   const andTerms = [filters.city.trim(), filters.company.trim()].filter(Boolean);
   const tsquery = buildTsquery(keywordTerms, andTerms);
 

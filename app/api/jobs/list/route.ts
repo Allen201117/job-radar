@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
   let data: Job[] = [];
   try {
     data = jobsStoreEnabled()
-      ? ((await listLatestActive(limit, offset)) as Job[])
+      ? ((await listLatestActive(limit, offset, preferences)) as Job[])
       : (((await supabase
           .from("jobs").select("*").eq("status", "active")
           .order("first_seen_at", { ascending: false })

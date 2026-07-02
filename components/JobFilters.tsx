@@ -25,6 +25,7 @@ interface Filters {
   showNewOnly: boolean;
   sortBy: "match" | "newest";
   capitalOrigin: string;
+  region: string;
   salaryOnly: boolean;
   sponsorshipOnly: boolean;
   education: string;
@@ -34,11 +35,18 @@ interface Props {
   filters: Filters;
   onChange: (filters: Filters) => void;
   companies: string[];
+  jobScope?: string | null;
 }
 
 const ORIGINS = ["全部", "中国", "外企", "美企", "德企", "日企", "欧企"];
+const REGIONS = [
+  { value: "", label: "全部海外" },
+  { value: "US", label: "美国" },
+  { value: "SG", label: "新加坡" },
+  { value: "Remote", label: "远程" },
+];
 
-export default function JobFilters({ filters, onChange, companies }: Props) {
+export default function JobFilters({ filters, onChange, companies, jobScope = "domestic" }: Props) {
   // 移动端默认收起筛选，先让用户看到岗位；点击「筛选」条展开。桌面端（lg+）始终展开。
   const [open, setOpen] = useState(false);
 
@@ -53,6 +61,7 @@ export default function JobFilters({ filters, onChange, companies }: Props) {
     filters.jobType,
     filters.education,
     filters.keyword,
+    jobScope !== "domestic" ? filters.region : "",
     filters.capitalOrigin,
     filters.showNewOnly ? "仅新岗位" : "",
     filters.salaryOnly ? "仅薪资公开" : "",
@@ -156,6 +165,20 @@ export default function JobFilters({ filters, onChange, companies }: Props) {
             ))}
           </select>
         </div>
+        {jobScope !== "domestic" && (
+          <div>
+            <FilterLabel icon={MapPin} label="地区" />
+            <select
+              value={filters.region || ""}
+              onChange={(e) => set("region", e.target.value)}
+              className={selectClass}
+            >
+              {REGIONS.map((r) => (
+                <option key={r.value || "all"} value={r.value}>{r.label}</option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
       <div className="flex flex-wrap gap-2">
         <Check label="仅新岗位" checked={filters.showNewOnly} onChange={(v) => set("showNewOnly", v)} />

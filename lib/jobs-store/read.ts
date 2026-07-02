@@ -3,6 +3,8 @@
 import "server-only";
 import { jobsQuery, jobsScalar } from "./client";
 import { JOB_COLUMNS } from "./types";
+import { appendJobScopeWhere } from "@/lib/job-scope";
+import type { UserPreferences } from "@/lib/types";
 
 /** 是否启用自建香港库（配了连接串即用；否则各路由回退 Supabase）。 */
 export function jobsStoreEnabled(): boolean {
@@ -95,11 +97,35 @@ export async function getJobsHealthSnapshot(): Promise<JobsHealthSnapshot> {
 }
 
 /** 最新 active 一页（jobs 页 SSR 首屏种子 / list 路由）。 */
-export async function listLatestActive(limit: number, offset = 0): Promise<any[]> {
+export async function listLatestActive(
+  limit: number,
+  offset = 0,
+  preferences: UserPreferences | null = null,
+  filters: { region?: string | null } = {},
+): Promise<any[]> {
+  const conds = ["status = 'active'"];
+  const params: unknown[] = [];
+  appendJobScopeWhere(conds, params, preferences, filters);
+  params.push(limit, offset);
   return jobsQuery(
-    `select ${JOB_COLUMNS} from jobs where status = 'active' order by first_seen_at desc limit $1 offset $2`,
-    [limit, offset],
+    `select ${JOB_COLUMNS} from jobs where ${conds.join(" and ")} order by first_seen_at desc limit $${params.length - 1} offset $${params.length}`,
+    params,
   );
+}
+
+/** 岗位库列表用 scoped active 计数；首页统计仍使用 countValidActive() 合并总数。 */
+export async function countActiveForScope(
+  preferences: UserPreferences | null = null,
+  filters: { region?: string | null } = {},
+): Promise<number> {
+  const conds = ["status = 'active'"];
+  const params: unknown[] = [];
+  appendJobScopeWhere(conds, params, preferences, filters);
+  const n = await jobsScalar<string | number>(
+    `select count(*) as n from jobs where ${conds.join(" and ")}`,
+    params,
+  );
+  return Number(n ?? 0);
 }
 
 /** 在招公司清单（companies 面板，distinct company）。 */

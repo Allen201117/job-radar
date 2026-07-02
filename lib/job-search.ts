@@ -15,6 +15,7 @@ import {
   type Filters,
 } from "@/lib/job-filter";
 import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
+import { effectiveJobScope, jobMatchesScope } from "@/lib/job-scope";
 // china-keyword-expansion 为 CommonJS，沿用 hooks 的 import 习惯。
 import { ftsCandidateTerms, normalizeChinaCity } from "@/lib/china-keyword-expansion";
 
@@ -139,7 +140,9 @@ async function searchViaFTS(
     const { data, error } = await q.range(off, off + DB_PAGE - 1);
     if (error) throw new Error(error.message); // 列未就绪/异常 → 调用方降级到扫描路径
     if (!data || data.length === 0) break;
-    for (const j of data) byId.set(j.id, j);
+    for (const j of data) {
+      if (jobMatchesScope(j, prefs, filters.region)) byId.set(j.id, j);
+    }
     if (data.length < DB_PAGE) break;
   }
 
@@ -187,11 +190,15 @@ async function searchViaScan(
     const res = await Promise.all(offsets.map((o) => page(o)));
     for (const r of res) {
       if (r.error) throw new Error(r.error.message);
-      const rows: any[] = annotateSourceAdapter(r.data || [], adapterBySource);
-      if (rows.length === 0) {
+      const rawRows: any[] = r.data || [];
+      if (rawRows.length === 0) {
         exhausted = true;
         continue;
       }
+      const rows: any[] = annotateSourceAdapter(
+        rawRows.filter((j: any) => jobMatchesScope(j, prefs, filters.region)),
+        adapterBySource,
+      );
       const scored = sortAndFilterJobs(rows, prefs, actions, {
         showIgnored: true,
         showApplied: true,
@@ -199,7 +206,7 @@ async function searchViaScan(
       for (const j of scored) {
         if (jobFilterTier(j, filters) !== null) matched.push(j);
       }
-      if (rows.length < DB_PAGE) exhausted = true;
+      if (rawRows.length < DB_PAGE) exhausted = true;
     }
   }
 
@@ -228,7 +235,8 @@ export async function searchJobs(
   const company = filters.company.trim();
 
   // 有关键词/城市/公司 → FTS 路径（快且全召回）；其中关键词用 ftsCandidateTerms 取「精确+同职能」候选词。
-  const keywordTerms = keyword ? ftsCandidateTerms(keyword) : [];
+  const includeOverseasLexicon = effectiveJobScope(prefs) !== "domestic";
+  const keywordTerms = keyword ? ftsCandidateTerms(keyword, { includeOverseasLexicon }) : [];
   const andTerms = [city, company].filter(Boolean);
   const tsquery = buildTsquery(keywordTerms, andTerms);
 
