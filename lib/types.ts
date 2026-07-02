@@ -70,6 +70,12 @@ export interface UserPreferences {
   target_keywords: string[];
   exclude_keywords: string[];
   target_companies: string[];
+  job_scope?: "domestic" | "overseas" | "all" | string | null;
+  target_regions?: string[];
+  en_target_roles?: string[];
+  en_skills?: string[];
+  en_target_keywords?: string[];
+  has_en_resume?: boolean | null;
   // 目标行业（跨行业门用，从简历 candidate_profiles.industries 同步而来，迁移 160）。
   // 可选：历史行/未同步用户为空，scoring 读取处一律 `|| []` 兜底。
   target_industries?: string[];
