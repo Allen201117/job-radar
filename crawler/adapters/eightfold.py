@@ -24,6 +24,11 @@ class EightfoldAdapter(BaseAdapter):
     name = "eightfold"
     max_pages = 25          # num=10/页 → 每个地点最多约 250 在华岗（打通通道足够，非全量）
     china_locations = ("China", "Hong Kong")  # 服务端按地点收窄到大中华区
+    overseas_locations = {
+        "US": ("United States",),
+        "SG": ("Singapore",),
+        "Remote": ("Remote",),
+    }
 
     def should_skip(self, source_url: str):
         return None  # 公开 JSON API，跳过 HEAD 预检
@@ -37,7 +42,7 @@ class EightfoldAdapter(BaseAdapter):
 
         collected: List[dict] = []
         seen_ids = set()
-        for loc in self.china_locations:
+        for loc in self._locations_for_regions():
             for page in range(self.max_pages):
                 params = {"domain": domain, "location": loc,
                           "start": page * 10, "num": 10, "sort_by": "relevance"}
@@ -73,7 +78,7 @@ class EightfoldAdapter(BaseAdapter):
             if not isinstance(p, dict):
                 continue
             # 与 parse 同口径：只补在华岗（服务端已按 location 收窄，这里再兜一层，省掉少数串入的非华岗 detail 调用）
-            if not normalizer.is_china_location(p.get("location")):
+            if not normalizer.location_in_source_regions(p.get("location"), getattr(self, "regions", None)):
                 continue
             pid = p.get("id")
             if not pid:
@@ -104,8 +109,8 @@ class EightfoldAdapter(BaseAdapter):
             location = p.get("location") or None
             if not title:
                 continue
-            # 服务端已按地点收窄，这里再用 is_china_location 兜一层（排除少数串到的非华岗）
-            if not normalizer.is_china_location(location):
+            # 服务端已按地点收窄，这里再按 regions 兜一层（排除少数串到的非目标地区岗）
+            if not normalizer.location_in_source_regions(location, getattr(self, "regions", None)):
                 continue
             jd_url = (p.get("canonicalPositionUrl") or "").strip()
             if not jd_url:
@@ -127,3 +132,14 @@ class EightfoldAdapter(BaseAdapter):
                 posted_at=None,
             ))
         return out
+
+    def _locations_for_regions(self):
+        regions = normalizer.source_regions(getattr(self, "regions", None))
+        if regions == {"CN"}:
+            return self.china_locations
+        out = []
+        if "CN" in regions:
+            out.extend(self.china_locations)
+        for region in sorted(regions):
+            out.extend(self.overseas_locations.get(region, ()))
+        return tuple(dict.fromkeys(out)) or self.china_locations

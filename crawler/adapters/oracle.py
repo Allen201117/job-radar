@@ -10,6 +10,7 @@ greenhouse/workday 抓不到。一套适配覆盖任意 Oracle 租户 —— 新
 避免全球岗灌入。jd_url = {host}/hcmUI/CandidateExperience/en/sites/{site}/job/{Id}（Oracle 托管的稳定逐岗页，已 live 验证）。
 """
 import json
+import re
 from typing import List, Optional
 from urllib.parse import urlparse, parse_qs
 
@@ -20,6 +21,17 @@ from .base import BaseAdapter, RawJob, resolve_detail_cap
 
 _GREATER_CHINA = ("china", "中国", "hong kong", "香港", "macau", "macao", "澳门")
 _TAIWAN = ("taiwan", "台湾", "台灣", "chinese taipei")
+_REGION_FACET_KEYWORDS = {
+    "US": ("united states", "usa", "u.s.", "u.s.a."),
+    "SG": ("singapore", "新加坡"),
+    "Remote": ("remote", "anywhere", "distributed"),
+}
+_SEARCH_TEXT_BY_REGION = {
+    "CN": ("China", "Hong Kong"),
+    "US": ("United States", "USA"),
+    "SG": ("Singapore",),
+    "Remote": ("Remote",),
+}
 
 
 def _is_china_facet(name: str) -> bool:
@@ -27,6 +39,36 @@ def _is_china_facet(name: str) -> bool:
     if not n or any(t in n for t in _TAIWAN):
         return False
     return any(k in n for k in _GREATER_CHINA)
+
+
+def _contains_facet_keyword(name: str, keyword: str) -> bool:
+    if any("一" <= ch <= "鿿" for ch in keyword):
+        return keyword in name
+    parts = [re.escape(p) for p in re.split(r"[^a-z0-9]+", keyword.lower()) if p]
+    if not parts:
+        return False
+    pattern = r"[\s,\-/]+".join(parts)
+    return bool(re.search(r"(?<![a-z0-9])" + pattern + r"(?![a-z0-9])", name))
+
+
+def _is_facet_in_regions(name: str, regions) -> bool:
+    n = str(name or "").strip().lower()
+    if not n or any(t in n for t in _TAIWAN):
+        return False
+    regions = normalizer.source_regions(regions)
+    if "CN" in regions and _is_china_facet(n):
+        return True
+    for region in regions:
+        if any(_contains_facet_keyword(n, kw) for kw in _REGION_FACET_KEYWORDS.get(region, ())):
+            return True
+    return False
+
+
+def _search_texts_for_regions(regions):
+    out = []
+    for region in sorted(normalizer.source_regions(regions)):
+        out.extend(_SEARCH_TEXT_BY_REGION.get(region, ()))
+    return tuple(dict.fromkeys(out)) or _SEARCH_TEXT_BY_REGION["CN"]
 
 
 class OracleAdapter(BaseAdapter):
@@ -65,16 +107,17 @@ class OracleAdapter(BaseAdapter):
 
     def fetch(self, source_url: str) -> str:
         self._parse_endpoint(source_url)
+        regions = normalizer.source_regions(getattr(self, "regions", None))
         # 1) 取 locationsFacet，挑大中华区 facet Id（扁平列表，含国家级 'China' 与城市级 'Shanghai, China'）。
         first = self._get(",limit=5")
         facets = first.get("locationsFacet", []) or []
-        china_ids = [str(f.get("Id")) for f in facets if f.get("Id") and _is_china_facet(f.get("Name"))]
+        region_ids = [str(f.get("Id")) for f in facets if f.get("Id") and _is_facet_in_regions(f.get("Name"), regions)]
 
         trusted: List[dict] = []
         seen = set()
-        if china_ids:
+        if region_ids:
             # 2) 服务端 facet 过滤分页（这些是**可信在华**岗，parse 不再过滤）。
-            facet_param = f",selectedLocationsFacet={','.join(china_ids)}"
+            facet_param = f",selectedLocationsFacet={','.join(region_ids)}"
             for page in range(self.max_pages):
                 top = self._get(f"{facet_param},limit=20,offset={page * 20}")
                 reqs = top.get("requisitionList", []) or []
@@ -92,7 +135,7 @@ class OracleAdapter(BaseAdapter):
         # parse 再按 is_china_location 严格过滤。trusted 已有则跳过（facet 可信、零额外开销）。
         text_jobs: List[dict] = []
         if not trusted:
-            for kw in ("China", "Hong Kong"):
+            for kw in _search_texts_for_regions(regions):
                 for page in range(self.max_pages):
                     top = self._get(f",keyword={kw},limit=20,offset={page * 20}")
                     reqs = top.get("requisitionList", []) or []
@@ -109,8 +152,8 @@ class OracleAdapter(BaseAdapter):
         # 4) 逐岗 detail 抓职位描述 —— 列表接口不含正文，外企卡片 JD 因此全空。
         #    recruitingCEJobRequisitionDetails?finder=ById;Id="{jid}" → ExternalDescriptionStr(+Responsibilities)。
         #    只抓将保留的在华岗（trusted 全保留；text 取在华的），单源封顶；失败该岗无摘要、不影响入库。
-        self._enrich_descriptions(trusted, china_only=False)
-        self._enrich_descriptions(text_jobs, china_only=True)
+        self._enrich_descriptions(trusted, filter_by_regions=False, regions=regions)
+        self._enrich_descriptions(text_jobs, filter_by_regions=True, regions=regions)
 
         return json.dumps({
             "_host": self._host, "_site": self._site,
@@ -119,7 +162,7 @@ class OracleAdapter(BaseAdapter):
 
     _DETAIL_CAP = 300  # 单源逐岗 detail 抓取上限，避免拖垮夜间全量
 
-    def _enrich_descriptions(self, jobs: List[dict], china_only: bool):
+    def _enrich_descriptions(self, jobs: List[dict], filter_by_regions: bool, regions=None):
         """对将保留的岗位逐个调 detail 端点，把职位正文挂到 job['_jd']（供 parse 取作 summary）。"""
         detail_api = f"{self._host}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails"
         headers = {"Accept": "application/json", "User-Agent": self.user_agent}
@@ -132,7 +175,9 @@ class OracleAdapter(BaseAdapter):
             jid = str(j.get("Id") or "").strip()
             if not jid:
                 continue
-            if china_only and not normalizer.is_china_location((j.get("PrimaryLocation") or "")):
+            if filter_by_regions and not normalizer.location_in_source_regions(
+                (j.get("PrimaryLocation") or ""), regions
+            ):
                 continue
             try:
                 url = (f'{detail_api}?onlyData=true&expand=all'
@@ -171,7 +216,9 @@ class OracleAdapter(BaseAdapter):
                 return
             location = (j.get("PrimaryLocation") or "").strip() or None
             # trusted（facet 已服务端过滤）全部在华直接收；text（keyword 召回）按 location 严格判定在华。
-            if not trusted and not normalizer.is_china_location(location):
+            if not trusted and not normalizer.location_in_source_regions(
+                location, getattr(self, "regions", None)
+            ):
                 return
             jd_url = f"{host}/hcmUI/CandidateExperience/en/sites/{site}/job/{jid}"
             if jd_url in seen_urls:

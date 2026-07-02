@@ -46,7 +46,7 @@ class AshbyAdapter(BaseAdapter):
             if not title or not jd_url:
                 continue
             location = j.get("location") or _address_location(j.get("address"))
-            if not normalizer.keep_for_china_radar(location):
+            if not normalizer.location_in_source_regions(location, getattr(self, "regions", None)):
                 continue
             job_type = j.get("employmentType") or j.get("department") or j.get("team")
             out.append(RawJob(

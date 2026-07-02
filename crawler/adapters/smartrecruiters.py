@@ -49,7 +49,9 @@ class SmartRecruitersAdapter(BaseAdapter):
                 break
             if not isinstance(j, dict):
                 continue
-            if not normalizer.keep_for_china_radar(_location_str(j.get("location"))):
+            if not normalizer.location_in_source_regions(
+                _location_str(j.get("location")), getattr(self, "regions", None)
+            ):
                 continue
             pid = str(j.get("id") or j.get("uuid") or "").strip()
             identifier = ((j.get("company") or {}).get("identifier") or "").strip()
@@ -88,7 +90,7 @@ class SmartRecruitersAdapter(BaseAdapter):
                 continue
             jd_url = f"https://jobs.smartrecruiters.com/{identifier}/{posting_id}"
             location = _location_str(j.get("location"))
-            if not normalizer.keep_for_china_radar(location):
+            if not normalizer.location_in_source_regions(location, getattr(self, "regions", None)):
                 continue
             out.append(RawJob(
                 company="",  # 由 sources.company 兜底填充

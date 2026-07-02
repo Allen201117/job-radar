@@ -21,7 +21,24 @@ _API = "https://apply.careers.microsoft.com/api/pcsx/search"
 # 大中华区地点关键词（含主要研发城市）；pcsx location 文本匹配，逐个查后按 id 并集。
 _CN_LOCS = ("China", "Hong Kong", "Shanghai", "Beijing", "Suzhou", "Shenzhen", "Guangzhou",
             "Chengdu", "Wuhan", "Xi'an", "Dalian", "Hangzhou", "Nanjing", "Tianjin")
+_OVERSEAS_LOCS = {
+    "US": ("United States", "Redmond", "Seattle", "New York", "San Francisco", "Austin", "Atlanta"),
+    "SG": ("Singapore",),
+    "Remote": ("Remote",),
+}
 _JD = "https://jobs.careers.microsoft.com/global/en/job/{id}"
+
+
+def _locations_for_regions(regions):
+    regions = normalizer.source_regions(regions)
+    if regions == {"CN"}:
+        return _CN_LOCS
+    out = []
+    if "CN" in regions:
+        out.extend(_CN_LOCS)
+    for region in sorted(regions):
+        out.extend(_OVERSEAS_LOCS.get(region, ()))
+    return tuple(dict.fromkeys(out)) or _CN_LOCS
 
 
 class MicrosoftAdapter(BaseAdapter):
@@ -34,7 +51,7 @@ class MicrosoftAdapter(BaseAdapter):
     def fetch(self, source_url: str) -> str:
         headers = {"User-Agent": _BROWSER_UA, "Accept": "application/json"}
         collected: dict = {}  # id -> position（按 id 并集去重）
-        for loc in _CN_LOCS:
+        for loc in _locations_for_regions(getattr(self, "regions", None)):
             for page in range(self.max_pages):
                 params = {"domain": "microsoft.com", "query": "", "location": loc,
                           "start": page * 20, "num": 20}
@@ -71,8 +88,8 @@ class MicrosoftAdapter(BaseAdapter):
                 continue
             locs = p.get("locations")
             loc = locs[0] if isinstance(locs, list) and locs and isinstance(locs[0], str) else None
-            # pcsx location 是文本匹配，可能串入同名海外城市 → is_china_location 严格兜底
-            if not normalizer.is_china_location(loc):
+            # pcsx location 是文本匹配，可能串入同名城市 → 按 source.regions 严格兜底
+            if not normalizer.location_in_source_regions(loc, getattr(self, "regions", None)):
                 continue
             jd = _JD.format(id=jid)
             if jd in seen:

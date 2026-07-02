@@ -47,8 +47,8 @@ class LeverAdapter(BaseAdapter):
                 continue
             categories = j.get("categories") or {}
             location = categories.get("location")
-            if not normalizer.keep_for_china_radar(location):
-                continue  # 大中华区 + 不绑定海外的 remote;排除 base 海外
+            if not normalizer.location_in_source_regions(location, getattr(self, "regions", None)):
+                continue  # 默认大中华区 + 不绑定海外的 remote;海外源按 regions 放行
             out.append(RawJob(
                 company="",  # 由 sources.company 兜底填充
                 title=title,
