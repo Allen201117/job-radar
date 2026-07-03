@@ -54,7 +54,7 @@ _COUNTRY_TOKENS = {
         "washington", "atlanta", "denver", "dallas", "houston", "san diego",
         "redmond", "menlo park", ", ca", ", ny", ", wa", ", tx", ", ma",
     ],
-    "SG": ["singapore", "新加坡"],
+    "SG": ["singapore", "sg", "新加坡"],
 }
 _GREATER_CHINA = {"CN", "HK", "MO"}
 
@@ -69,7 +69,7 @@ def _contains_token(text: str, token: str) -> bool:
     parts = [re.escape(p) for p in re.split(r"[^a-z0-9]+", token.lower()) if p]
     if not parts:
         return False
-    pattern = r"[\s,\-/]+".join(parts)
+    pattern = r"[^a-z0-9]+".join(parts)
     return bool(re.search(r"(?<![a-z0-9])" + pattern + r"(?![a-z0-9])", text))
 
 
