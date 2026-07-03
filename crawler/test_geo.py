@@ -18,7 +18,29 @@ class TestDeriveCountryCode(unittest.TestCase):
         self.assertEqual(derive_country_code("Singapore"), "SG")
 
     def test_remote_with_country(self):
-        self.assertEqual(derive_country_code("Remote - US"), "US")
+        cases = (
+            ("Remote - US", "US"),
+            ("Remote, US", "US"),
+            ("US - Remote", "US"),
+            ("US Remote", "US"),
+            ("Remote (USA)", "US"),
+            ("Remote - United States", "US"),
+            ("Remote, USA", "US"),
+            ("Remote (US)", "US"),
+            ("Remote (U.S.)", "US"),
+            ("Remote - Singapore", "SG"),
+            ("Remote, SG", "SG"),
+            ("Singapore - Remote", "SG"),
+            ("Remote (Singapore)", "SG"),
+        )
+        for location, expected in cases:
+            with self.subTest(location=location):
+                self.assertEqual(derive_country_code(location), expected)
+
+    def test_country_code_tokens_do_not_match_substrings(self):
+        self.assertEqual(derive_country_code("Business Analyst, Beijing"), "CN")
+        self.assertEqual(derive_country_code("Focus Group, Shanghai"), "CN")
+        self.assertIsNone(derive_country_code("Belarus"))
 
     def test_bare_remote_unknown(self):
         self.assertIsNone(derive_country_code("Remote"))
@@ -37,7 +59,9 @@ class TestDeriveJobScope(unittest.TestCase):
     def test_overseas(self):
         self.assertEqual(derive_job_scope("New York, NY"), "overseas")
         self.assertEqual(derive_job_scope("Singapore"), "overseas")
-        self.assertEqual(derive_job_scope("Remote - US"), "overseas")
+        for location in ("Remote - US", "US Remote", "Remote (USA)", "Remote - Singapore"):
+            with self.subTest(location=location):
+                self.assertEqual(derive_job_scope(location), "overseas")
 
     def test_bare_remote_defaults_domestic(self):
         self.assertEqual(derive_job_scope("Remote"), "domestic")
