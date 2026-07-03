@@ -38,7 +38,7 @@ const UPDATE_DATA_COLS = [
 ] as const;
 // 这些富化字段在 UPDATE 时新值为空则保留旧值（COALESCE(NULLIF(...))），与 crawler/jobs_db._PRESERVE_IF_EMPTY 同口径：
 // app 的 discovery/search 刷新多只带列表骨架（无 JD 正文）→ 不得把浏览器/httpx 富化补好的 summary 抹成 NULL。
-const PRESERVE_IF_EMPTY = new Set<string>(["summary", "job_type"]);
+const PRESERVE_IF_EMPTY = new Set<string>(["summary", "job_type", "salary_text"]);
 
 export type UpsertResult = { row: any; action: "created" | "updated" };
 

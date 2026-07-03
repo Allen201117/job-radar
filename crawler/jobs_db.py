@@ -42,7 +42,7 @@ _UPDATE_COLS = tuple(
 # 「浏览器逐岗富化补好的 summary 被下一次列表重抓的空值抹掉」——moka 1% 覆盖根因（2026-06-20 查实：
 # 每晚 backfill 补 ~8800 条，次日列表重爬 summary=None 全抹回 NULL，count_valid_active_jobs 永远上不去）。
 # 仅当新值非空才覆盖（fresh 数据仍优先，如 beisen 列表自带 Duty/Require、httpx 大厂内联正文）。
-_PRESERVE_IF_EMPTY = ("summary", "job_type", "experience", "education", "deadline")
+_PRESERVE_IF_EMPTY = ("summary", "job_type", "experience", "education", "deadline", "salary_text")
 
 
 def _update_set_clause(cols=_UPDATE_COLS) -> str:

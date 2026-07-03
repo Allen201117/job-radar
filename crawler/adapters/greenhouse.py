@@ -13,6 +13,7 @@ from typing import List
 import httpx
 
 import normalizer
+from salary import extract_salary_text
 from .base import BaseAdapter, RawJob
 
 
@@ -57,5 +58,6 @@ class GreenhouseAdapter(BaseAdapter):
                 jd_url=jd_url,
                 apply_url=jd_url,
                 posted_at=(j.get("updated_at") or "")[:10] or None,
+                salary_text=extract_salary_text(j.get("content")),  # 部分公司(如 Affirm)正文含薪资区间
             ))
         return out
