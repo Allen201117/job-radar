@@ -64,8 +64,7 @@ export default function JobFilters({ filters, onChange, companies, jobScope = "d
     jobScope !== "domestic" ? filters.region : "",
     filters.capitalOrigin,
     filters.showNewOnly ? "仅新岗位" : "",
-    filters.salaryOnly ? "仅薪资公开" : "",
-    filters.sponsorshipOnly ? "仅 Sponsorship" : "",
+    filters.sponsorshipOnly ? "排除无 Sponsorship" : "",
     filters.showIgnored ? "含已忽略" : "",
     filters.showApplied ? "含已投递" : "",
   ].filter(Boolean) as string[];
@@ -182,8 +181,10 @@ export default function JobFilters({ filters, onChange, companies, jobScope = "d
       </div>
       <div className="flex flex-wrap gap-2">
         <Check label="仅新岗位" checked={filters.showNewOnly} onChange={(v) => set("showNewOnly", v)} />
-        <Check label="仅薪资公开" checked={filters.salaryOnly} onChange={(v) => set("salaryOnly", v)} />
-        <Check label="只看提供 Sponsorship" checked={filters.sponsorshipOnly} onChange={(v) => set("sponsorshipOnly", v)} />
+        {/* 「仅薪资公开」暂隐藏：爬虫尚未抓薪资字段(salary_text 全库近乎为空)，放出来必得 0；待海外薪资提取上线再放。 */}
+        {jobScope !== "domestic" && (
+          <Check label="排除不提供 Sponsorship 的岗" checked={filters.sponsorshipOnly} onChange={(v) => set("sponsorshipOnly", v)} />
+        )}
         <Check label="显示已忽略" checked={filters.showIgnored} onChange={(v) => set("showIgnored", v)} />
         <Check label="显示已投递" checked={filters.showApplied} onChange={(v) => set("showApplied", v)} />
       </div>

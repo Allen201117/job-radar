@@ -104,7 +104,10 @@ export function jobFilterTier(
   }
   if (filters.region && !jobMatchesRegion(job, filters.region)) return null;
   if (filters.salaryOnly && !job.salary_text) return null;
-  if (filters.sponsorshipOnly && job.sponsorship_signal !== "available") return null;
+  // 「排除明确不提供 Sponsorship 的岗」：只滤掉 sponsorship_signal='none'（JD 明说不 sponsor），
+  // 保留 available + unknown。因为绝大多数 JD 不会主动写「我们提供 sponsorship」(available 天然极少)，
+  // 若只留 available 会把「可能给」的岗(unknown)全滤掉 → 结果恒为 0（踩过这个坑）。
+  if (filters.sponsorshipOnly && job.sponsorship_signal === "none") return null;
   // 关键词两层：无关键词 → 放行；否则 精确 / 相关 / 不匹配(null)。
   // 任一字段靠「缺失放行」→ 整体压到 related，排序沉底（精确匹配优先展示）。
   if (!filters.keyword) return degraded ? "related" : "exact";
