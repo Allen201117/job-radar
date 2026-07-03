@@ -14,6 +14,7 @@ from typing import List, Optional
 import httpx
 
 import normalizer
+from salary import extract_salary_text
 from .base import BaseAdapter, RawJob
 
 
@@ -58,6 +59,7 @@ class LeverAdapter(BaseAdapter):
                 jd_url=jd_url,
                 apply_url=jd_url,
                 posted_at=_epoch_ms_to_date(j.get("createdAt")),
+                salary_text=extract_salary_text(j.get("descriptionPlain") or j.get("description")),
             ))
         return out
 

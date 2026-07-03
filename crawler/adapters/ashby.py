@@ -13,6 +13,7 @@ from typing import List
 import httpx
 
 import normalizer
+from salary import salary_from_ashby
 from .base import BaseAdapter, RawJob
 
 
@@ -58,6 +59,7 @@ class AshbyAdapter(BaseAdapter):
                 jd_url=jd_url,
                 apply_url=(j.get("applyUrl") or jd_url),
                 posted_at=(j.get("publishedAt") or "")[:10] or None,
+                salary_text=salary_from_ashby(j.get("compensation")),  # Ashby 结构化薪资
             ))
         return out
 

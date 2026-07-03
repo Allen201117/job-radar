@@ -143,10 +143,13 @@ def main():
                     help="写 <PREFIX>_seed_overseas_f500.sql（如 170）")
     ap.add_argument("--min-overseas", type=int, default=5)
     ap.add_argument("--limit", type=int, default=0, help="只探前 N 个候选（调试）")
+    ap.add_argument("--adapter", default=None, help="只探某 adapter 的候选（如 ashby），迁移也只含它")
     args = ap.parse_args()
 
     with open(_TARGETS, encoding="utf-8") as f:
         cands = json.load(f)
+    if args.adapter:
+        cands = [c for c in cands if c.get("adapter") == args.adapter]
     if args.limit:
         cands = cands[: args.limit]
 
