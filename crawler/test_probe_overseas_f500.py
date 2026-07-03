@@ -17,6 +17,12 @@ class TestBuildSourceUrl(unittest.TestCase):
             "https://api.lever.co/v0/postings/kraken?mode=json",
         )
 
+    def test_ashby(self):
+        self.assertEqual(
+            build_source_url("ashby", "openai"),
+            "https://api.ashbyhq.com/posting-api/job-board/openai?includeCompensation=true",
+        )
+
     def test_unsupported_raises(self):
         with self.assertRaises(ValueError):
             build_source_url("workday", "acme")

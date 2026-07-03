@@ -18,6 +18,7 @@ from collections import Counter
 
 import httpx
 
+from adapters.ashby import AshbyAdapter
 from adapters.greenhouse import GreenhouseAdapter
 from adapters.lever import LeverAdapter
 
@@ -39,6 +40,8 @@ def build_source_url(adapter: str, token: str) -> str:
         return f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true"
     if adapter == "lever":
         return f"https://api.lever.co/v0/postings/{token}?mode=json"
+    if adapter == "ashby":
+        return f"https://api.ashbyhq.com/posting-api/job-board/{token}?includeCompensation=true"
     raise ValueError(f"unsupported adapter for probe: {adapter!r}")
 
 
@@ -95,6 +98,8 @@ def _adapter_for(adapter: str):
         return GreenhouseAdapter()
     if adapter == "lever":
         return LeverAdapter()
+    if adapter == "ashby":
+        return AshbyAdapter()
     raise ValueError(f"unsupported adapter: {adapter!r}")
 
 
