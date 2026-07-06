@@ -2,7 +2,8 @@ import Navbar from "@/components/Navbar";
 import { CountBadge, EmptyPanel, ProductHero, ProductPage } from "@/components/ProductChrome";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { jobsStoreEnabled, jobsByIds } from "@/lib/jobs-store/read";
-import type { Job, JobSnapshot } from "@/lib/types";
+import { scoreJob } from "@/lib/scoring";
+import type { Job, JobSnapshot, ScoredJob, UserPreferences } from "@/lib/types";
 import SavedClient, { type DeletedSaved } from "./saved-client";
 import { BookmarkSimple, Briefcase } from "@phosphor-icons/react/ssr";
 
@@ -26,12 +27,17 @@ export default async function SavedPage() {
     );
   }
 
-  const { data: actions } = await supabase
-    .from("job_actions")
-    .select("job_id, created_at, job_snapshot")
-    .eq("user_id", user.id)
-    .eq("action", "saved")
-    .order("created_at", { ascending: false });
+  const [actionsRes, prefsRes] = await Promise.all([
+    supabase
+      .from("job_actions")
+      .select("job_id, created_at, job_snapshot")
+      .eq("user_id", user.id)
+      .eq("action", "saved")
+      .order("created_at", { ascending: false }),
+    supabase.from("user_preferences").select("*").eq("user_id", user.id).maybeSingle(),
+  ]);
+  const actions = actionsRes.data;
+  const preferences = prefsRes.data as UserPreferences | null;
 
   if (!actions || actions.length === 0) {
     return (
@@ -54,12 +60,20 @@ export default async function SavedPage() {
     : (await supabase.from("jobs").select("*").in("id", jobIds)).data ?? [];
   const liveMap = new Map((liveJobs || []).map((j: any) => [j.id, j as Job]));
 
-  const live: Job[] = [];
+  const live: ScoredJob[] = [];
   const deleted: DeletedSaved[] = [];
   for (const a of actions as { job_id: string; created_at: string; job_snapshot: JobSnapshot | null }[]) {
     const row = liveMap.get(a.job_id);
     if (row) {
-      live.push(row);
+      const result = scoreJob(row, preferences, []);
+      live.push({
+        ...row,
+        match_score: result.score,
+        matched_keywords: result.matched_keywords,
+        match_reasons: result.match_reasons,
+        hidden_reason: result.hidden_reason,
+        user_action: "saved",
+      });
     } else {
       const snap = a.job_snapshot || {};
       deleted.push({
@@ -88,7 +102,7 @@ export default async function SavedPage() {
           }
         />
         <div className="mt-8">
-          <SavedClient initialJobs={live} deletedSaved={deleted} />
+          <SavedClient initialJobs={live} deletedSaved={deleted} hasPreferences={Boolean(preferences)} />
         </div>
       </ProductPage>
     </div>
