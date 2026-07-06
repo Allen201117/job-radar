@@ -90,16 +90,32 @@ export function OnboardingPanel({
           上传简历生成画像
         </Link>
       </div>
+      {/* 给「先随便逛逛」的新用户留出口：不设目标也能看岗位库，别把首次访问堵死在表单前 */}
+      <p className="mt-4 text-[13px] text-[#8a8275] dark:text-[#9a9184]">
+        还没想好？
+        <Link href="/jobs" className="ml-1 font-medium underline underline-offset-2 hover:opacity-80">
+          先去岗位库随便逛逛
+        </Link>
+      </p>
     </div>
   );
 }
 
-function EmptyQueue() {
+// 空队列要回答「为什么是 0」：有过滤数据时明说考察了多少、各被什么原因剔除——是「宁缺毋滥」，不是「系统没干活」。
+function EmptyQueue({ counts }: { counts?: OpportunityFeed["counts"] }) {
+  const f = counts?.filtered;
+  const screened = counts?.screened ?? 0;
+  const explain =
+    screened > 0 && f
+      ? `今天系统考察了 ${screened.toLocaleString()} 个在库岗位：已失效 ${f.inactive.toLocaleString()} 个、不对口 ${(
+          f.mismatch + f.low_score
+        ).toLocaleString()} 个、信息不全 ${f.thin.toLocaleString()} 个——没有一条达到推荐门槛。我们宁可空着，也不硬凑。你可以：`
+      : "系统持续在监控你关注的官方招聘源，有新机会会第一时间出现在这里。你也可以：";
   return (
     <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] bg-white/45 px-6 py-14 text-center dark:border-white/[0.1] dark:bg-white/[0.05]">
       <h2 className="text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">今天暂时没有新的对口机会</h2>
       <p className="mx-auto mt-2 max-w-md text-pretty text-[14px] leading-6 text-[#6b655a] dark:text-[#b6ad9d]">
-        系统持续在监控你关注的官方招聘源，有新机会会第一时间出现在这里。你也可以：
+        {explain}
       </p>
       <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
         <Link href="/preferences" className="rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]">
@@ -236,11 +252,16 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
   const total = visibleCounts.reduce((a, b) => a + b, 0);
 
   if (total === 0) {
-    return <EmptyQueue />;
+    return <EmptyQueue counts={feed.counts} />;
   }
 
   return (
     <div className="space-y-10">
+      {deadIds.size > 0 && (
+        <p className="rounded-full border border-black/[0.08] bg-white/60 px-4 py-2 text-[13px] leading-5 text-[#6b655a] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
+          刚刚实时复核发现 {deadIds.size} 个岗位已失效，已自动为你隐藏，帮你省一次白点。
+        </p>
+      )}
       {ORDER.map((key) => {
         const items = state.sections[key].filter((o) => !deadIds.has(o.job.id));
         if (items.length === 0) return null;

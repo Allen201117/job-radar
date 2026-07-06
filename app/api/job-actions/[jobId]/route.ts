@@ -69,3 +69,38 @@ export async function PUT(request: NextRequest, { params }: { params: { jobId: s
   }
   return NextResponse.json({ ok: true, action: (data as string | null) ?? null });
 }
+
+// 投递阶段白名单（迁移 173 check 同口径）；null = 清除回「已投递」初始态
+const STAGES = new Set(["applied", "assessment", "interview", "offer", "closed"]);
+
+// PATCH：更新已投递岗位的进展阶段（漏斗中段最小版）。只动 action='applied' 的自有行（RLS 双保险）。
+export async function PATCH(request: NextRequest, { params }: { params: { jobId: string } }) {
+  const auth = await requireUser();
+  if (auth.error) return auth.error;
+
+  const body = await request.json().catch(() => ({}));
+  const stage = body?.stage ?? null;
+  if (stage !== null && (typeof stage !== "string" || !STAGES.has(stage))) {
+    return NextResponse.json({ ok: false, error: "invalid_stage" }, { status: 400 });
+  }
+
+  const { data, error } = await auth.supabase
+    .from("job_actions")
+    .update({ stage, stage_updated_at: new Date().toISOString() })
+    .eq("user_id", auth.user.id)
+    .eq("job_id", params.jobId)
+    .eq("action", "applied")
+    .select("job_id");
+  if (error) {
+    // 迁移 173 未应用（列不存在）→ 与主动作同套路给稳定 schema 码
+    const schemaMissing = /column .* does not exist|42703/i.test(error.message || "");
+    return NextResponse.json(
+      { ok: false, error: schemaMissing ? "stage_schema_unavailable" : error.message },
+      { status: schemaMissing ? 503 : 500 },
+    );
+  }
+  if (!data || data.length === 0) {
+    return NextResponse.json({ ok: false, error: "applied_action_not_found" }, { status: 404 });
+  }
+  return NextResponse.json({ ok: true, stage });
+}

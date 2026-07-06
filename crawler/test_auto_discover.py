@@ -63,6 +63,82 @@ class PlanTargetsTest(unittest.TestCase):
         out = ad.plan_targets(curated, {"Old1"}, set(), cap=10, seed=1)
         self.assertEqual(out[0]["company"], "Old1")   # 用户点名 > 科技/消费优先清单
 
+    def test_user_wanted_matches_by_normalized_name(self):
+        # 用户写带后缀的变体、清单写简称 → 归一后仍要命中优先（旧实现全等匹配空转）
+        # 注意 norm_company 只剥后缀不剥城市前缀（防误并），所以「北京字节跳动」≠「字节跳动」是预期行为
+        curated = [{**_t("Tech1"), "_priority": True}, _t("字节跳动")]
+        out = ad.plan_targets(curated, {"字节跳动科技公司"}, set(), cap=10, seed=1)
+        self.assertEqual(out[0]["company"], "字节跳动")
+
+    def test_user_wanted_matches_cn_field(self):
+        # 清单 company 是全称、cn 是常用名，用户按常用名点名也要命中
+        curated = [{**_t("Tech1"), "_priority": True},
+                   {"company": "贝壳控股", "cn": "贝壳", "slugs": ["beike"], "industry": "互联网"}]
+        out = ad.plan_targets(curated, {"贝壳"}, set(), cap=10, seed=1)
+        self.assertEqual(out[0]["company"], "贝壳控股")
+
+
+class _FakeQuery:
+    def __init__(self, table):
+        self.table = table
+        self._update = None
+
+    def select(self, *_):
+        return self
+
+    def in_(self, *_):
+        return self
+
+    def update(self, payload):
+        self._update = payload
+        return self
+
+    def eq(self, _col, row_id):
+        for r in self.table.rows:
+            if r["id"] == row_id and self._update:
+                r.update(self._update)
+        return self
+
+    def execute(self):
+        class R:
+            pass
+        r = R()
+        r.data = list(self.table.rows)
+        return r
+
+
+class _FakeTable:
+    def __init__(self, rows):
+        self.rows = rows
+
+
+class _FakeSb:
+    def __init__(self, watch_rows):
+        self.tables = {"company_watch_requests": _FakeTable(watch_rows)}
+
+    def table(self, name):
+        return _FakeQuery(self.tables[name])
+
+
+class ResolveWatchRequestsTest(unittest.TestCase):
+    """扩源成功 → 用户「关注公司」请求闭环回写 covered（norm_company 双侧归一匹配）。"""
+
+    def test_marks_matching_requests_covered(self):
+        sb = _FakeSb([
+            {"id": "w1", "company": "字节跳动科技", "normalized_company": "bytedance", "matched_source_ids": []},
+            {"id": "w2", "company": "美团", "normalized_company": "meituan", "matched_source_ids": []},
+        ])
+        n = ad.resolve_watch_requests(sb, "字节跳动", "src-1")
+        self.assertEqual(n, 1)
+        rows = sb.tables["company_watch_requests"].rows
+        self.assertEqual(rows[0]["status"], "covered")
+        self.assertIn("src-1", rows[0]["matched_source_ids"])
+        self.assertNotIn("status", rows[1])           # 不相干请求不动
+
+    def test_no_match_returns_zero(self):
+        sb = _FakeSb([{"id": "w1", "company": "美团", "normalized_company": "美团", "matched_source_ids": []}])
+        self.assertEqual(ad.resolve_watch_requests(sb, "字节跳动", "src-1"), 0)
+
 
 class CuratedTargetsFileTest(unittest.TestCase):
     def test_tech_consumer_file_loaded_and_prioritized(self):

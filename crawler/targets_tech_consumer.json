@@ -1,4 +1,5 @@
 [
+  {"company": "腾讯音乐", "cn": "腾讯音乐", "slugs": ["tencentmusic", "tme", "tencent-music", "tmusic"], "industry": "互联网"},
   {"company": "小红书", "cn": "小红书", "slugs": ["xiaohongshu", "xhs", "hongshu", "xingin"], "industry": "互联网"},
   {"company": "得物", "cn": "得物", "slugs": ["dewu", "poizon", "duapp", "shizhuang"], "industry": "互联网"},
   {"company": "Soul", "cn": "Soul", "slugs": ["soulapp", "soul", "soulgate"], "industry": "互联网"},

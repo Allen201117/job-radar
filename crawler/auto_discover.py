@@ -101,17 +101,29 @@ def existing_source_keys(sb):
 
 def plan_targets(curated, user_wanted, existing_companies, cap, seed=0):
     """纯函数：本轮要 probe 的目标 = 库里没有的精选目标公司。排序 = 用户点名 > 科技/新经济/消费(_priority)
-    > 其余；各梯队内按 seed 随机轮转（避免每天死磕同一批失败目标，让覆盖随天数滚动），封顶 cap。"""
+    > 其余；各梯队内按 seed 随机轮转（避免每天死磕同一批失败目标，让覆盖随天数滚动），封顶 cap。
+    用户点名按 norm_company 归一后匹配 company/cn 两个字段——用户写「北京字节跳动科技有限公司」、
+    清单写「字节跳动」也要命中（旧实现字符串全等，用户信号经常空转）。"""
     existing = {str(x).strip() for x in (existing_companies or set()) if str(x).strip()}
     existing_norm = {norm_company(x) for x in existing if norm_company(x)}
+    raw_wanted = {str(w).strip() for w in (user_wanted or set()) if str(w).strip()}
+    wanted_norm = {norm_company(w) for w in raw_wanted if norm_company(w)}
+
+    def _is_wanted(t):
+        for key in ("company", "cn"):
+            v = (t.get(key) or "").strip()
+            if v and (v in raw_wanted or (norm_company(v) and norm_company(v) in wanted_norm)):
+                return True
+        return False
+
     missing = []
     for t in curated:
         name = (t.get("company") or "").strip()
         nname = norm_company(name)
         if name and name not in existing and (not nname or nname not in existing_norm):
             missing.append(t)
-    wanted_first = [t for t in missing if (t.get("company") or "").strip() in user_wanted]
-    others = [t for t in missing if (t.get("company") or "").strip() not in user_wanted]
+    wanted_first = [t for t in missing if _is_wanted(t)]
+    others = [t for t in missing if not _is_wanted(t)]
     priority = [t for t in others if t.get("_priority")]
     rest = [t for t in others if not t.get("_priority")]
     rng = random.Random(seed)
@@ -135,14 +147,55 @@ def plan_inserts(passed, existing_urls, cap):
     return out
 
 
+def resolve_watch_requests(sb, company, source_id):
+    """扩源成功后的闭环回写：匹配的「关注公司」请求 → covered。
+    没有这步，用户在偏好页看到的覆盖状态永远停在「待接入」、只能等人工运营处理——
+    机器听见了用户点名、也接入了，却不告诉用户。匹配用 norm_company 双侧归一（app 端
+    normalized_company 的归一口径与 crawler 不同，不能直接比对）。失败不阻断主流程。"""
+    try:
+        target = norm_company(company)
+        if not target:
+            return 0
+        rows = (sb.table("company_watch_requests")
+                .select("id,company,normalized_company,matched_source_ids")
+                .in_("status", ["queued", "researching"]).execute().data or [])
+        n = 0
+        for r in rows:
+            cands = {norm_company(r.get("company") or ""), norm_company(r.get("normalized_company") or "")}
+            if target not in cands:
+                continue
+            ids = [x for x in (r.get("matched_source_ids") or []) if x]
+            if source_id and source_id not in ids:
+                ids.append(source_id)
+            sb.table("company_watch_requests").update({
+                "status": "covered", "matched_source_ids": ids,
+                "resolution_note": "每日自动扩源已接入（live 探活确认在招）",
+                "updated_at": _now_iso(),
+            }).eq("id", r["id"]).execute()
+            n += 1
+        if n:
+            print(f"    ↳ 关注公司闭环: {company} 覆盖 {n} 条用户请求 → covered")
+        return n
+    except Exception as e:
+        print(f"    watch 回写失败(不阻断): {type(e).__name__}: {e}")
+        return 0
+
+
 def insert_source(sb, row):
-    """入库一条已验证源（service-role，与 app/api/sources 同字段口径），并给新公司排队职业洞察。"""
-    sb.table("sources").insert({
+    """入库一条已验证源（service-role，与 app/api/sources 同字段口径），并给新公司排队职业洞察
+    + 闭环回写用户「关注公司」请求（browser 变体复用本函数，两条扩源道同享闭环）。"""
+    res = sb.table("sources").insert({
         "company": row["company"], "source_url": row["url"], "source_type": "official",
         "adapter_name": row["adapter"], "crawl_method": "http",
         "segment": row.get("segment") or "private", "industry": row.get("industry"),
         "notes": f"auto_discover: live探活 {row.get('_valid', '?')} 岗", "enabled": True,
     }).execute()
+    source_id = None
+    try:
+        source_id = ((res.data or [{}])[0] or {}).get("id")
+    except Exception:
+        pass
+    resolve_watch_requests(sb, row["company"], source_id)
     try:
         sb.table("company_profiles").upsert(
             {"company": row["company"], "insight_checked_at": None}, on_conflict="company").execute()
