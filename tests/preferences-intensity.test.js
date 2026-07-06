@@ -29,6 +29,20 @@ test("未带 radar_intensity → ok 且 intensity=null（不动既有强度）",
   assert.equal(r.value.intensity, null);
 });
 
+test("experience_stage 只接受空/实习/校招/社招，非法值归一为空", () => {
+  const intern = parsePreferencesInput({ experience_stage: "实习" });
+  assert.equal(intern.ok, true);
+  assert.equal(intern.value.prefs.experience_stage, "实习");
+
+  const none = parsePreferencesInput({ experience_stage: "" });
+  assert.equal(none.ok, true);
+  assert.equal(none.value.prefs.experience_stage, null);
+
+  const bad = parsePreferencesInput({ experience_stage: "高级" });
+  assert.equal(bad.ok, true);
+  assert.equal(bad.value.prefs.experience_stage, null);
+});
+
 test("非对象 body → invalid_json", () => {
   assert.equal(parsePreferencesInput(null).error, "invalid_json");
   assert.equal(parsePreferencesInput("oops").error, "invalid_json");

@@ -19,8 +19,8 @@ import { scoreOpportunity } from "./scoring";
 import { groupOpportunities, resolveNoveltySince } from "./grouping";
 import { deriveOpportunitySignals } from "./signals";
 import { parseDeadline } from "./deadline";
-import { recallOpportunityCandidates } from "@/lib/jobs-store/opportunities";
-import { jobsByIds, jobsStoreEnabled } from "@/lib/jobs-store/read";
+import { recallOpportunityCandidates } from "../jobs-store/opportunities";
+import { jobsByIds, jobsStoreEnabled } from "../jobs-store/read";
 import { hydrateOpportunityJobs } from "./hydration";
 
 type SupabaseLike = { from: (table: string) => any };

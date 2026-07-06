@@ -63,11 +63,30 @@ test("关键提醒：isCritical 进 critical 区，不被 main 截断、置顶",
   assert.equal(counts.critical, 12);
 });
 
-test("CLOSED_OR_STALE 非关键（长时间未确认）进 waiting，封顶 8", () => {
+test("CLOSED_OR_STALE 非关键进 waiting，封顶 8", () => {
   const stale = Array.from({ length: 15 }, () => opp({ signal: "CLOSED_OR_STALE", critical: false }));
   const { sections } = groupOpportunities(stale, { dailyLimit: 30, intensity: "active" });
   assert.equal(sections.main.length, 0);
   assert.equal(sections.waiting.length, 8);
+});
+
+test("OPEN_UNVERIFIED 高分进 main，不进 waiting", () => {
+  const { sections, counts } = groupOpportunities([opp({ signal: "OPEN_UNVERIFIED", score: 80 })], {
+    dailyLimit: 20,
+    intensity: "active",
+  });
+  assert.equal(sections.main.length, 1);
+  assert.equal(sections.waiting.length, 0);
+  assert.equal(counts.by_signal.OPEN_UNVERIFIED, 1);
+});
+
+test("OPEN_UNVERIFIED 分数 30–门槛 + exploreEligible → explore", () => {
+  const { sections } = groupOpportunities(
+    [opp({ signal: "OPEN_UNVERIFIED", score: 40, exploreEligible: true })],
+    { dailyLimit: 20, intensity: "active" },
+  );
+  assert.equal(sections.main.length, 0);
+  assert.equal(sections.explore.length, 1);
 });
 
 test("active：score 30–门槛 + exploreEligible → explore（最多 5）", () => {

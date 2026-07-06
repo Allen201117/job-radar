@@ -95,6 +95,22 @@ test("target industries 合并（偏好 ∪ 简历）", () => {
   assert.deepEqual([...p.targetIndustries].sort(), ["互联网", "金融"].sort());
 });
 
+test("experience_stage 偏好优先于简历，简历只作兜底", () => {
+  const preferred = buildRadarProfile(
+    "u",
+    prefs({ experience_stage: "实习" }),
+    cand({ experience_stage: "社招" }),
+  );
+  assert.equal(preferred.experienceStage, "实习");
+
+  const fallback = buildRadarProfile(
+    "u",
+    prefs({ experience_stage: null }),
+    cand({ experience_stage: "校招" }),
+  );
+  assert.equal(fallback.experienceStage, "校招");
+});
+
 test("最高学历从简历 education/summary 推导（取最高档）", () => {
   assert.equal(
     buildRadarProfile("u", prefs(), cand({ education_summary: "硕士 清华大学" })).highestEducation,

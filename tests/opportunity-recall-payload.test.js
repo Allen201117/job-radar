@@ -52,3 +52,14 @@ test("opportunity recall transfers only engine-required candidate fields", () =>
     assert.ok(!columns.includes(displayOnly), `recall still transfers display field: ${displayOnly}`);
   }
 });
+
+test("stage recall uses parameterized internship and campus supersets", () => {
+  assert.match(source, /function stageRecallPatterns/);
+  assert.match(source, /profile\.experienceStage === "实习"/);
+  assert.match(source, /profile\.experienceStage === "校招"/);
+  assert.match(source, /like any\(\$\$\{params\.length\}::text\[\]\)/);
+  assert.ok(source.includes("%intern%"));
+  assert.ok(source.includes("%shixi%"));
+  assert.ok(source.includes("%campus%"));
+  assert.ok(source.includes("%graduate%"));
+});

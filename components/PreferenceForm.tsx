@@ -79,6 +79,7 @@ export default function PreferenceForm() {
           target_regions: prefs.target_regions ?? [],
           daily_limit: prefs.daily_limit,
           radar_intensity: prefs.radar_intensity ?? "active",
+          experience_stage: prefs.experience_stage ?? "",
         }),
       });
       const data = await resp.json();
@@ -166,6 +167,33 @@ export default function PreferenceForm() {
           onChange={(v) => setArray("target_keywords", v)}
           placeholder="Python、机器学习、LLM…"
         />
+      </Field>
+      <Field label="求职阶段">
+        <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {([
+            { v: "", label: "不限" },
+            { v: "实习", label: "实习" },
+            { v: "校招", label: "校招" },
+            { v: "社招", label: "社招" },
+          ] as const).map((opt) => {
+            const selected = (prefs.experience_stage ?? "") === opt.v;
+            return (
+              <button
+                key={opt.v || "all"}
+                type="button"
+                onClick={() => setPrefs({ ...prefs, experience_stage: opt.v })}
+                aria-pressed={selected}
+                className={
+                  selected
+                    ? "rounded-xl border border-[#1a1714] bg-[#1a1714] px-3 py-2 text-sm font-semibold text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                    : "rounded-xl border border-black/[0.1] bg-white/55 px-3 py-2 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]"
+                }
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
       </Field>
       <Field label="目标行业">
         <TagInput
@@ -304,6 +332,7 @@ function withDefaults(p: Partial<UserPreferences>): UserPreferences {
     exclude_keywords: p.exclude_keywords ?? [],
     target_companies: p.target_companies ?? [],
     target_industries: p.target_industries ?? [],
+    experience_stage: p.experience_stage ?? null,
     job_scope: p.job_scope ?? "domestic",
     target_regions: p.target_regions ?? [],
     en_target_roles: p.en_target_roles ?? [],

@@ -46,6 +46,7 @@ export type VerifyTier = "today" | "search" | "admin";
 // 信号当「标签」（03/04 spec），不是入选唯一理由。
 export type OpportunitySignalType =
   | "STILL_OPEN" // 最近确认仍在招（护城河外显，主力）
+  | "OPEN_UNVERIFIED" // 在招·待确认；active 但超 today 核验时限/从未核验，照常进主清单，靠展示时异步探活隐藏真死岗
   | "DEADLINE_SOON" // 快截止
   | "CLOSED_OR_STALE" // 收藏/关注对象关闭或陈旧（关键提醒）
   | "CAMPUS_WINDOW" // 校招通道开放（校招季强化）
@@ -194,10 +195,10 @@ export type SectionKey = "critical" | "main" | "explore" | "momentum" | "waiting
 
 export interface FeedSections {
   critical: Opportunity[]; // 关键提醒（永远置顶、不受强度压制、不被截断）
-  main: Opportunity[]; // 刚核验仍在招的对口机会（STILL_OPEN 主力）
+  main: Opportunity[]; // 对口机会（最近核验仍在招 + 在招待确认）
   explore: Opportunity[]; // 拓展看看（仅 active 强度）
   momentum: Opportunity[]; // 招聘动量（仅数据可信；job_events 前恒空，不上 C 端「猛招」）
-  waiting: Opportunity[]; // 等待再次确认（超 today 核验时限 / aging）
+  waiting: Opportunity[]; // 等待再次确认（非 active 的关闭/陈旧告知；active 待确认不再落这里）
 }
 
 export interface FeedCounts {

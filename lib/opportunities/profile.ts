@@ -90,7 +90,7 @@ export function buildRadarProfile(
     // 唯一合并字段：偏好 ∪ 简历
     targetIndustries: uniqStrings([...(prefs?.target_industries ?? []), ...(candidate?.industries ?? [])]),
     skills: useEnglishProfile ? enSkills : cnSkills,
-    experienceStage: mapStage(candidate?.experience_stage),
+    experienceStage: mapStage((prefs?.experience_stage ?? candidate?.experience_stage) as any),
     seniority: candidate?.seniority ?? null,
     highestEducation: deriveHighestEducation(candidate),
     dailyLimit: clampDailyLimit(prefs?.daily_limit),
