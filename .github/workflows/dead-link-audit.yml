@@ -12,6 +12,7 @@ on:
   schedule:
     - cron: "0 22 * * *"   # 每日 UTC 22:00。排在 browser-drain(20:00,~50min) 之后，三个 6-shard 重档
     #                        串行不叠加：enrich-crawl(18:00)→browser-drain(20:00)→本 dead-link-audit(22:00)。
+    - cron: "30 3,15 * * *" # 每日 UTC 03:30/15:30。必投清单轻量保鲜，避开 daily-crawl/liveness-sweep/purge 重档。
   workflow_dispatch:
     inputs:
       sweep:
@@ -29,6 +30,7 @@ on:
 
 jobs:
   audit:
+    if: github.event_name != 'schedule' || github.event.schedule == '0 22 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 90   # 1500 岗 × ~3s ≈ 75min；远低于 GH 6h 硬杀
     strategy:
@@ -61,7 +63,40 @@ jobs:
           if [ -n "${{ inputs.sweep }}" ]; then
             ARGS="$ARGS --sweep ${{ inputs.sweep }}"
           else
-            ARGS="$ARGS --shard ${{ matrix.shard }} --limit ${{ inputs.limit || '1500' }}"
+            # 必投优先只改候选分配：最多 50% 分片容量先保头部公司，剩余仍按原轮转补满。
+            ARGS="$ARGS --shard ${{ matrix.shard }} --limit ${{ inputs.limit || '1500' }} --must-apply-first"
           fi
+          echo "audit args:$ARGS"
+          python3 audit_dead_links.py $ARGS
+
+  must_apply_audit:
+    if: github.event_name == 'schedule' && github.event.schedule == '30 3,15 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45   # 400 岗 × ~3s ≈ 20min；给浏览器安装和网络抖动留余量
+    strategy:
+      fail-fast: false
+      # max-parallel:2 = 同时只 2 个轻量分片在跑 → 峰值约 2 条香港库 jobs 连接，护住 max_connections=100。
+      #（app pool + liveness-sweep/enrich-backlog 突发叠加也不挤爆）。两片跑完即释放槽位，专门保头部公司新鲜度。
+      max-parallel: 2
+      matrix:
+        shard: ["0/2", "1/2"]   # 2 片轻量轮转、互不重叠
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # Phase 1：jobs 在自建香港 PG；不注入则 crawler/jobs_db.py 回退空 Supabase（见 daily-crawl.yml 注释）。
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install -r crawler/requirements.txt
+      - name: Install chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Run must-apply dead-link audit (shard ${{ matrix.shard }})
+        working-directory: crawler
+        run: |
+          ARGS="--apply --shard ${{ matrix.shard }} --must-apply-only --limit 400"
           echo "audit args:$ARGS"
           python3 audit_dead_links.py $ARGS
