@@ -45,7 +45,8 @@ interface Props {
   // 本次会话刷新/发现新拿到的岗位 → 绿色高亮 + 「本次新发现」标
   sessionNew?: boolean;
   // 'opportunity' = 今日机会卡（档位/原因来自引擎，按钮=值得投/不适合/已投递）；
-  // 'library'（默认）= 岗位库卡（matchTier 徽标 + match_reasons，按钮=收藏/标记投递/忽略）。
+  // 'library'（默认）= 岗位库卡（matchTier 徽标 + match_reasons，按钮=值得投/标记投递/忽略）。
+  // 命名统一：saved 动作全站统一叫「值得投」（与导航/saved 页同名），不再出现「收藏」双名。
   variant?: "library" | "opportunity";
   opportunityTier?: OpportunityTier;
   opportunityReasons?: OpportunityReason[];
@@ -380,7 +381,7 @@ export default function JobCard({
             {currentAction && (
               <span className="rounded-full bg-[#1a1714] px-2.5 py-1 text-xs font-semibold text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
                 {currentAction === "saved"
-                  ? "已收藏"
+                  ? "已加入值得投"
                   : currentAction === "applied"
                     ? "已投递"
                     : currentAction === "ignored"
@@ -585,7 +586,7 @@ export default function JobCard({
               disabled={acting}
               onClick={() => handlePrimary("saved")}
               icon={BookmarkSimple}
-              label={currentAction === "saved" ? "已收藏" : isOpportunity ? "值得投" : "收藏"}
+              label={currentAction === "saved" ? "已加入值得投" : "值得投"}
             />
             <ActionButton
               active={currentAction === "applied"}
