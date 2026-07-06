@@ -3,10 +3,22 @@
 红线：LLM 产物只是探测输入，本层负责清洗/去重/防脏 slug；真正入库门在下游探活验证。
 """
 import datetime
+import httpx
 import os
 import unittest
 
 import generate_targets as gt
+import insight_engine as ie
+
+
+class NormCompanyTest(unittest.TestCase):
+    def test_normalizes_suffixes_whitespace_case_and_china_markers(self):
+        self.assertEqual(gt.norm_company("  美 图 股份有限公司  "), "美图")
+        self.assertEqual(gt.norm_company("ACME（中国）科技有限公司"), "acme")
+        self.assertEqual(gt.norm_company("酷玩控股集团"), "酷玩")
+
+    def test_does_not_merge_substrings(self):
+        self.assertNotEqual(gt.norm_company("字节"), gt.norm_company("字节跳动"))
 
 
 class ParseGeneratedTest(unittest.TestCase):
@@ -27,6 +39,14 @@ class ParseGeneratedTest(unittest.TestCase):
         ]}
         out = gt.parse_generated(data, {"美团"})
         self.assertEqual([c["company"] for c in out], ["得物"])   # 库里已有 → 不重复
+
+    def test_dedups_against_existing_companies_by_normalized_name(self):
+        data = {"companies": [
+            {"company": "美图公司", "slugs": ["meitu"], "industry": "x"},
+            {"company": "得物", "slugs": ["dewu"], "industry": "x"},
+        ]}
+        out = gt.parse_generated(data, {"美图"})
+        self.assertEqual([c["company"] for c in out], ["得物"])   # 后缀变体已在库 → 不重复
 
     def test_dedups_within_batch(self):
         data = {"companies": [
@@ -72,6 +92,62 @@ class ThemeAndGuardTest(unittest.TestCase):
         finally:
             if old is not None:
                 os.environ["SILICONFLOW_API_KEY"] = old
+
+    def test_build_messages_excludes_up_to_250_existing_names(self):
+        names = [f"C{i}" for i in range(300)]
+        messages = gt.build_messages("主题", "描述", names, 50)
+        user = messages[1]["content"]
+        self.assertIn("C249", user)
+        self.assertNotIn("C250", user)
+
+
+class LlmGenerateTest(unittest.TestCase):
+    def setUp(self):
+        self._api_key = os.environ.get("SILICONFLOW_API_KEY")
+        os.environ["SILICONFLOW_API_KEY"] = "test-key"
+        self._chat_json = ie.chat_json
+        self._sleep = getattr(getattr(gt, "time", None), "sleep", None)
+        if self._sleep:
+            gt.time.sleep = lambda _seconds: None
+
+    def tearDown(self):
+        ie.chat_json = self._chat_json
+        if self._sleep:
+            gt.time.sleep = self._sleep
+        if self._api_key is None:
+            os.environ.pop("SILICONFLOW_API_KEY", None)
+        else:
+            os.environ["SILICONFLOW_API_KEY"] = self._api_key
+
+    def test_retries_once_on_timeout_with_long_timeout_and_lower_token_budget(self):
+        calls = []
+
+        def fake_chat_json(_messages, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise httpx.ReadTimeout("slow generation")
+            return {"companies": [{"company": "得物", "slugs": ["dewu"], "industry": "互联网"}]}
+
+        ie.chat_json = fake_chat_json
+        out = gt.llm_generate(set(), n=1, date=datetime.date(2026, 7, 6))
+
+        self.assertEqual([c["company"] for c in out], ["得物"])
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(c["timeout"] == 90 for c in calls))
+        self.assertTrue(all(c["max_tokens"] == 2000 for c in calls))
+
+    def test_returns_empty_after_two_timeouts(self):
+        calls = []
+
+        def fake_chat_json(_messages, **kwargs):
+            calls.append(kwargs)
+            raise httpx.TimeoutException("still slow")
+
+        ie.chat_json = fake_chat_json
+        out = gt.llm_generate(set(), n=1, date=datetime.date(2026, 7, 6))
+
+        self.assertEqual(out, [])
+        self.assertEqual(len(calls), 2)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,25 @@ import unittest
 import insight_engine as E
 
 
+class _FakeResponse:
+    status_code = 200
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"choices": [{"message": {"content": "{\"ok\": true}"}}]}
+
+
+class _FakeClient:
+    def __init__(self):
+        self.timeouts = []
+
+    def post(self, _url, json=None, headers=None, timeout=None):
+        self.timeouts.append(timeout)
+        return _FakeResponse()
+
+
 class TestEngineDecision(unittest.TestCase):
     def test_decide_status(self):
         self.assertEqual(E.decide_status("entailment", 0.9), "active")
@@ -32,6 +51,31 @@ class TestEngineDecision(unittest.TestCase):
         self.assertEqual(E.parse_json_loose('啰嗦 {"a":2} 收尾')["a"], 2)
         with self.assertRaises(ValueError):
             E.parse_json_loose("no json here")
+
+
+class TestChatJsonTimeout(unittest.TestCase):
+    def setUp(self):
+        self._api_key = E.os.environ.get("SILICONFLOW_API_KEY")
+        E.os.environ["SILICONFLOW_API_KEY"] = "test-key"
+
+    def tearDown(self):
+        if self._api_key is None:
+            E.os.environ.pop("SILICONFLOW_API_KEY", None)
+        else:
+            E.os.environ["SILICONFLOW_API_KEY"] = self._api_key
+
+    def test_chat_json_defaults_to_existing_timeout(self):
+        client = _FakeClient()
+        self.assertEqual(E.chat_json([{"role": "user", "content": "x"}], client=client), {"ok": True})
+        self.assertEqual(client.timeouts, [E.TIMEOUT])
+
+    def test_chat_json_accepts_custom_timeout(self):
+        client = _FakeClient()
+        self.assertEqual(
+            E.chat_json([{"role": "user", "content": "x"}], client=client, timeout=90),
+            {"ok": True},
+        )
+        self.assertEqual(client.timeouts, [90])
 
 
 class TestPipeline(unittest.TestCase):

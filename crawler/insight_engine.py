@@ -46,7 +46,7 @@ def parse_json_loose(text: str) -> dict:
 
 
 def chat_json(messages: list, temperature: float = 0.1, max_tokens: int = 1024,
-              client: Optional[httpx.Client] = None) -> dict:
+              client: Optional[httpx.Client] = None, timeout: float = TIMEOUT) -> dict:
     """单次 SiliconFlow chat completion，返回解析后的 JSON。未配置 / 网络 / HTTP 错误均抛异常。"""
     cfg = llm_config()
     if not cfg["configured"]:
@@ -59,7 +59,7 @@ def chat_json(messages: list, temperature: float = 0.1, max_tokens: int = 1024,
         if use_json_format:
             body["response_format"] = {"type": "json_object"}
         return own.post(f"{cfg['base_url']}/chat/completions", json=body,
-                        headers={"Authorization": f"Bearer {cfg['api_key']}"}, timeout=TIMEOUT)
+                        headers={"Authorization": f"Bearer {cfg['api_key']}"}, timeout=timeout)
 
     try:
         resp = call(True)
