@@ -96,6 +96,59 @@ export async function getJobsHealthSnapshot(): Promise<JobsHealthSnapshot> {
   };
 }
 
+export type MustApplyCoverageRow = {
+  name: string;
+  activeTotal: number;
+  healthy: number;
+  new7d: number;
+  checked72h: number;
+};
+
+/**
+ * 北极星指标：「必投清单健康覆盖」逐家统计（admin 运营看板）。
+ * healthy 谓词与 count_valid_active_jobs() 字节级同口径（active + btrim(summary)≥60）。
+ * 一条 SQL 30 个 ILIKE 分组扫 active 岗，实测秒级；只在 admin 页调用，不进用户路径。
+ */
+export async function getMustApplyCoverage(
+  list: Array<{ name: string; pattern: string }>,
+): Promise<MustApplyCoverageRow[]> {
+  const names = list.map((c) => c.name);
+  const pats = list.map((c) => c.pattern);
+  const rows = await jobsQuery<{
+    name: string;
+    active_total: string | number;
+    healthy: string | number;
+    new_7d: string | number;
+    checked_72h: string | number;
+  }>(
+    `
+    select t.name,
+      count(j.id) as active_total,
+      count(j.id) filter (
+        where j.summary is not null and char_length(btrim(j.summary)) >= 60
+      ) as healthy,
+      count(j.id) filter (where j.first_seen_at > now() - interval '7 days') as new_7d,
+      count(j.id) filter (where j.enrich_checked_at > now() - interval '72 hours') as checked_72h
+    from unnest($1::text[], $2::text[]) as t(name, pat)
+    left join jobs j on j.status = 'active' and j.company ilike t.pat
+    group by t.name
+    `,
+    [names, pats],
+  );
+  const byName = new Map(rows.map((r) => [r.name, r]));
+  // 按清单原始顺序返回（SQL group by 不保序）
+  return list.map((c) => {
+    const r = byName.get(c.name);
+    return {
+      name: c.name,
+      activeTotal: Number(r?.active_total || 0),
+      healthy: Number(r?.healthy || 0),
+      new7d: Number(r?.new_7d || 0),
+      checked72h: Number(r?.checked_72h || 0),
+    };
+  });
+}
+
 /** 最新 active 一页（jobs 页 SSR 首屏种子 / list 路由）。 */
 export async function listLatestActive(
   limit: number,
