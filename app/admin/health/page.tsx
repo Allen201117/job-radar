@@ -14,7 +14,8 @@ import {
   type TodayDiscoveryRow,
 } from "@/lib/admin-health";
 import { isAdmin } from "@/lib/auth";
-import { getJobsHealthSnapshot } from "@/lib/jobs-store/read";
+import { getJobsHealthSnapshot, getMustApplyCoverage, type MustApplyCoverageRow } from "@/lib/jobs-store/read";
+import { MUST_APPLY_LIST } from "@/lib/must-apply-list";
 import { createServiceClient } from "@/lib/supabaseService";
 import {
   Briefcase,
@@ -74,6 +75,27 @@ async function loadSupabaseHealth(): Promise<SupabaseHealthSnapshot> {
   const { data, error } = await service.rpc("admin_health_snapshot", { p_window: "7 days" });
   if (error) throw new Error(error.message);
   return (data || {}) as SupabaseHealthSnapshot;
+}
+
+// 北极星：必投清单健康覆盖。jobs 在香港库、sources 在 Supabase，无法单条 SQL join → Node 层按公司名 needle 合并。
+type MustApplyRow = MustApplyCoverageRow & { hasSource: boolean; sourceEnabled: boolean };
+
+async function loadMustApplyCoverage(): Promise<MustApplyRow[]> {
+  const [coverage, sourcesRes] = await Promise.all([
+    getMustApplyCoverage(MUST_APPLY_LIST),
+    createServiceClient().from("sources").select("company, enabled"),
+  ]);
+  if (sourcesRes.error) throw new Error(sourcesRes.error.message);
+  const sources = (sourcesRes.data || []) as Array<{ company: string | null; enabled: boolean }>;
+  return MUST_APPLY_LIST.map((c, i) => {
+    const needle = c.pattern.replace(/%/g, "").toLowerCase();
+    const matched = sources.filter((s) => (s.company || "").toLowerCase().includes(needle));
+    return {
+      ...coverage[i],
+      hasSource: matched.length > 0,
+      sourceEnabled: matched.some((s) => s.enabled),
+    };
+  });
 }
 
 // 点击有效率四护栏（01 spec §5）：近 7 天 opportunity_official_opened + job_liveness_at_click 聚合。
@@ -272,15 +294,113 @@ function AccumulatingMetric({ title, description }: { title: string; description
   );
 }
 
+// 北极星卡：必投清单健康覆盖。回答「目标用户最想投的头部公司，我们到底罩住了几家」——
+// 这是产品对用户承诺的真实覆盖率，掉了要优先修它，别被库存总量的大数字安慰。
+function MustApplySection({ rows }: { rows: MustApplyRow[] | null }) {
+  if (!rows) {
+    return (
+      <Section title="北极星 · 必投清单健康覆盖" description="目标用户最常投的头部公司逐家对账。">
+        <ErrorPanel label="必投清单覆盖" />
+      </Section>
+    );
+  }
+  const n = rows.length;
+  const healthyCount = rows.filter((r) => r.healthy > 0).length;
+  const freshCount = rows.filter((r) => r.new7d > 0).length;
+  const checkedCount = rows.filter((r) => r.checked72h > 0).length;
+  const gaps = rows.filter((r) => r.healthy === 0);
+  const blind = rows.filter((r) => r.healthy > 0 && r.checked72h === 0);
+  return (
+    <Section
+      title="北极星 · 必投清单健康覆盖"
+      description={`目标用户最常投的 ${n} 家头部公司逐家对账：有没有健康岗、近 7 天有没有新岗、72 小时内有没有核验。这是对用户承诺的真实覆盖率——掉了先修它，不看库存总量。清单口径在 lib/must-apply-list.ts。`}
+    >
+      <div className="grid gap-3 sm:grid-cols-3">
+        <RatioCard
+          label="有健康岗的公司"
+          value={`${healthyCount}/${n}`}
+          detail="active 且 JD 正文完整（与首页「能投岗位」同口径）。为 0 的 = 用户想投但我们完全没货。"
+          warning={healthyCount < n * 0.8}
+        />
+        <RatioCard
+          label="近 7 天有新岗"
+          value={`${freshCount}/${n}`}
+          detail="7 天内有新岗入库——覆盖是活水还是存量。"
+          warning={freshCount < n * 0.7}
+        />
+        <RatioCard
+          label="72h 内核验过"
+          value={`${checkedCount}/${n}`}
+          detail="3 天内至少一个岗被探活复核——「仍在招」承诺的底气；为 0 的属探活盲区。"
+          warning={checkedCount < n * 0.7}
+        />
+      </div>
+      {(gaps.length > 0 || blind.length > 0) && (
+        <div className="mt-4 space-y-2 text-sm leading-6">
+          {gaps.length > 0 && (
+            <p className="rounded-2xl border border-[#e0b4ac] bg-[#f7e6e1] px-3.5 py-2.5 text-[#9c4a3c] dark:border-[#7a392e]/60 dark:bg-[#3a201a] dark:text-[#e6a99f]">
+              零健康岗：{gaps.map((r) => `${r.name}${r.hasSource ? (r.sourceEnabled ? "（有源不产出）" : "（源已禁用）") : "（从未接入）"}`).join("、")}
+            </p>
+          )}
+          {blind.length > 0 && (
+            <p className="rounded-2xl border border-[#edc995] bg-[#fbecd7] px-3.5 py-2.5 text-[#8f6225] dark:border-[#825d28]/60 dark:bg-[#392a17] dark:text-[#e0b15a]">
+              探活盲区（有岗但 72h 未核验）：{blind.map((r) => r.name).join("、")}
+            </p>
+          )}
+        </div>
+      )}
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full min-w-[560px] text-sm">
+          <thead>
+            <tr className="border-b border-black/[0.08] text-left text-xs text-[#8a8275] dark:border-white/[0.1] dark:text-[#9a9184]">
+              <th className="py-2 pr-3 font-medium">公司</th>
+              <th className="py-2 pr-3 font-medium">健康岗</th>
+              <th className="py-2 pr-3 font-medium">近 7 天新岗</th>
+              <th className="py-2 pr-3 font-medium">72h 核验岗</th>
+              <th className="py-2 font-medium">源状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.name} className="border-b border-black/[0.04] dark:border-white/[0.06]">
+                <td className="py-2 pr-3 font-medium text-[#1a1714] dark:text-[#f3ecdf]">{r.name}</td>
+                <td className={`py-2 pr-3 tabular-nums ${r.healthy === 0 ? "font-semibold text-[#9c4a3c] dark:text-[#e6a99f]" : "text-[#3f3a33] dark:text-[#d9d0c2]"}`}>
+                  {formatCount(r.healthy)}
+                </td>
+                <td className="py-2 pr-3 tabular-nums text-[#3f3a33] dark:text-[#d9d0c2]">{formatCount(r.new7d)}</td>
+                <td className={`py-2 pr-3 tabular-nums ${r.healthy > 0 && r.checked72h === 0 ? "font-semibold text-[#8f6225] dark:text-[#e0b15a]" : "text-[#3f3a33] dark:text-[#d9d0c2]"}`}>
+                  {formatCount(r.checked72h)}
+                </td>
+                <td className="py-2 text-xs">
+                  {r.hasSource ? (
+                    r.sourceEnabled ? (
+                      <span className="text-[#5a7a2f] dark:text-[#a3d06a]">已接入</span>
+                    ) : (
+                      <span className="text-[#9c4a3c] dark:text-[#e6a99f]">源已禁用</span>
+                    )
+                  ) : (
+                    <span className="text-[#9c4a3c] dark:text-[#e6a99f]">从未接入</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Section>
+  );
+}
+
 export default async function AdminHealthPage() {
   if (!(await isAdmin())) {
     redirect("/");
   }
 
-  const [jobsResult, supabaseResult, clickResult] = await Promise.allSettled([
+  const [jobsResult, supabaseResult, clickResult, mustApplyResult] = await Promise.allSettled([
     getJobsHealthSnapshot(),
     loadSupabaseHealth(),
     loadClickValidity(),
+    loadMustApplyCoverage(),
   ]);
 
   if (jobsResult.status === "rejected") {
@@ -292,10 +412,14 @@ export default async function AdminHealthPage() {
   if (clickResult.status === "rejected") {
     console.error("[admin-health] click validity failed:", clickResult.reason);
   }
+  if (mustApplyResult.status === "rejected") {
+    console.error("[admin-health] must-apply coverage failed:", mustApplyResult.reason);
+  }
 
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
   const clickValidity = clickResult.status === "fulfilled" ? clickResult.value : null;
+  const mustApply = mustApplyResult.status === "fulfilled" ? mustApplyResult.value : null;
   const crawlSources = normalizeCrawlSources(operations?.crawl_sources);
   const reports = buildDailyReports({
     crawl: operations?.today?.crawl || null,
@@ -384,6 +508,8 @@ export default async function AdminHealthPage() {
         </ProductHero>
 
         <div className="mt-6 grid gap-6">
+          <MustApplySection rows={mustApply} />
+
           <Section
             title="各模块每日战报"
             description="每张卡只回答三件事：今天处理了多少、有没有跑、上次什么时候跑。"
