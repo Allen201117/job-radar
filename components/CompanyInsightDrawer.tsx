@@ -33,7 +33,7 @@ import type {
   InsightGrade,
   InsightItemView,
 } from "@/lib/types";
-import type { FirstPartyAggregate, FirstPartyInsightItem } from "@/lib/insight-submission";
+import { FIRST_PARTY_MIN_COUNT, type FirstPartyAggregate, type FirstPartyInsightItem } from "@/lib/insight-submission";
 import { freshnessFromVerifiedAt, type FreshnessLevel } from "@/lib/insight-verification";
 import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
@@ -335,7 +335,7 @@ function FirstPartySection({
         </div>
       ) : (
         <div className="rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm leading-6 text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
-          已审核 {count} 条，达到展示门槛后会匿名展示。
+          已审核 {count} 条，满 {FIRST_PARTY_MIN_COUNT} 条后才会匿名聚合展示（人数太少容易被认出来，保护每位分享者）。
         </div>
       )}
 
