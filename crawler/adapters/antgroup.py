@@ -8,6 +8,9 @@ pageSize 实测 ≤30 稳定（50 返回空）。列表行自带 description+req
 逐岗详情页（live 验证可渲染标题+JD）：
   - 社招：talent.antgroup.com/off-campus-position?positionId={id}
   - 校招：talent.antgroup.com/campus-position?positionId={id}
+⚠️ source_url 必须用根路径 https://talent.antgroup.com/（迁移 175）：社招详情页与列表页
+/off-campus-position 同 host+path、仅差 ?positionId=，normalizer _url_key 忽略 query →
+用列表页作 source_url 会把全部社招岗误判「jd_url equals source url」拦掉。
 """
 import json
 from typing import List, Optional

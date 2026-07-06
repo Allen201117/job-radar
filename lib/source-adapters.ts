@@ -196,7 +196,7 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     value: "antgroup",
     label: "蚂蚁集团（自建门户 · 本土）",
     origin: "domestic",
-    hint: "填「蚂蚁集团」+ https://talent.antgroup.com/off-campus-position，直连 hrcareersweb position/search 公开接口（社招+校招一次抓全），crawl_method 选 http",
+    hint: "填「蚂蚁集团」+ https://talent.antgroup.com/（须根路径：社招详情页与 /off-campus-position 同 path 仅差 query，用列表页作源会撞质量门），直连 hrcareersweb position/search 公开接口（社招+校招一次抓全），crawl_method 选 http",
   },
   {
     value: "mihoyo",
