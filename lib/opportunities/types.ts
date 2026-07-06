@@ -201,11 +201,21 @@ export interface FeedSections {
   waiting: Opportunity[]; // 等待再次确认（非 active 的关闭/陈旧告知；active 待确认不再落这里）
 }
 
+// 计分板置换：把「召回→过滤」这段隐形劳动外显给用户（不含 already_actioned——那是用户自己的操作，不算系统劳动）。
+export interface FilteredCounts {
+  inactive: number; // 已失效 / 来源失效 / 长期未核验（inactive+stale+source_disabled）
+  mismatch: number; // 明确不对口（role/location/stage/education/industry mismatch + exclude 命中）
+  low_score: number; // 综合匹配度不足（score<30 不展示）
+  thin: number; // 岗位信息太薄（JD 正文不足）
+}
+
 export interface FeedCounts {
   total: number; // 全部展示卡数
   critical: number; // 关键提醒数
   main: number; // 主清单数
   by_signal: Partial<Record<OpportunitySignalType, number>>; // 按 primary signal 计数
+  screened?: number; // 本次考察的召回候选数（价值叙事用；由 service 填充）
+  filtered?: FilteredCounts; // 被剔除分桶（价值叙事用；由 service 填充）
 }
 
 // /api/opportunities 响应体（§7.1 + v3 §8.2）
