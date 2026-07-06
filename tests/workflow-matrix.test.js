@@ -66,3 +66,19 @@ test("liveness-sweep covers overseas httpx closure-capable adapters", () => {
   assert.equal(adapters.has("phenom"), false);
   assert.equal(adapters.has("google"), false);
 });
+
+test("dead-link-audit main rotation reserves capacity for must-apply companies", () => {
+  const text = workflow("dead-link-audit.yml");
+
+  assert.match(text, /--must-apply-first/);
+});
+
+test("dead-link-audit has lightweight must-apply-only schedule", () => {
+  const text = workflow("dead-link-audit.yml");
+
+  assert.match(text, /cron:\s*"30 3,15 \* \* \*"/);
+  assert.match(text, /must_apply_audit:/);
+  assert.match(text, /max-parallel:\s*2/);
+  assert.match(text, /shard:\s*\["0\/2", "1\/2"\]/);
+  assert.match(text, /--must-apply-only --limit 400/);
+});
