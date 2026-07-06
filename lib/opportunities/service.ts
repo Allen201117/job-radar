@@ -170,13 +170,24 @@ export async function buildOpportunityFeed(
   ]);
 
   const opps: Opportunity[] = [];
+  // 计分板置换：统计每一次静默 continue（用户看不见的过滤劳动），随 feed 外显。
+  // already_actioned 不计——那是用户自己处理过的，不是系统替他挡的。
+  const filtered = { inactive: 0, mismatch: 0, low_score: 0, thin: 0 };
   for (const job of recall.jobs) {
     const action = actionMap.get(job.id) || { primary: null, viewed: false };
     const facts = computeMatchFacts(job, profile, job.source_id ? sourceMeta.get(job.source_id) : undefined, action, now);
     const elig = checkEligibility(facts);
-    if (!elig.eligible) continue;
+    if (!elig.eligible) {
+      if (elig.reason === "inactive" || elig.reason === "stale" || elig.reason === "source_disabled") filtered.inactive += 1;
+      else if (elig.reason === "thin_summary") filtered.thin += 1;
+      else if (elig.reason !== "already_actioned") filtered.mismatch += 1;
+      continue;
+    }
     const { score, tier, reasons } = scoreOpportunity(facts, elig.degraded);
-    if (tier === null) continue; // score < 30，不展示
+    if (tier === null) {
+      filtered.low_score += 1;
+      continue; // score < 30，不展示
+    }
     const parsed = parseDeadline(job.deadline ?? null, now);
     const signals = deriveOpportunitySignals(job, facts, profile, now, { isWatched: false, parsedDeadline: parsed });
     opps.push({
@@ -204,6 +215,8 @@ export async function buildOpportunityFeed(
   const noveltySince = resolveNoveltySince(overrideProvided ? options.noveltySinceOverride! : lastOpenedAt, now);
 
   const { sections, counts } = groupOpportunities(opps, { dailyLimit: profile.dailyLimit, intensity, noveltySince, now });
+  counts.screened = recall.jobs.length;
+  counts.filtered = filtered;
 
   // 关键提醒并入 critical 区前置；同岗去重（saved 岗本就不在主召回，防御性再去一次）。
   if (critical.length) {
