@@ -73,12 +73,12 @@ test("dead-link-audit main rotation reserves capacity for must-apply companies",
   assert.match(text, /--must-apply-first/);
 });
 
+// 只断言结构性事实（job 存在 + 用了 --must-apply-only + 有并发上限），
+// 不锁死 cron 时间/分片数/limit 具体值——那些是运维可调参数，调参不该报红。
 test("dead-link-audit has lightweight must-apply-only schedule", () => {
   const text = workflow("dead-link-audit.yml");
 
-  assert.match(text, /cron:\s*"30 3,15 \* \* \*"/);
   assert.match(text, /must_apply_audit:/);
-  assert.match(text, /max-parallel:\s*2/);
-  assert.match(text, /shard:\s*\["0\/2", "1\/2"\]/);
-  assert.match(text, /--must-apply-only --limit 400/);
+  assert.match(text, /--must-apply-only/);
+  assert.match(text, /max-parallel:\s*\d+/);
 });

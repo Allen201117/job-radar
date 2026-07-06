@@ -127,11 +127,14 @@ components/              # JobCard / JobFilters / PreferenceForm / Navbar / Resu
                          # SourceTable（presentational，含 reloadSignal）/ SourceManager / AddSourceForm（A1）
                          # InsightsAdminClient（洞察管理页客户端，A2）
                          # CompanyInsightDrawer（公司洞察抽屉，从 JobCard 打开；portal 到 body 防闪烁）
+                         # SavedCompare（值得投页对比决策桌：勾选2~4岗并排比匹配/要求/新鲜度/洞察芯片；portal 同上）
 lib/                     # 工具层：supabaseClient、auth、scoring、types、utils
                          # supabaseService（service-role 客户端工厂，admin 写库共用）
                          # apiAuth（requireUser/requireAdmin/assertOwnership 统一鉴权，service-role 路由共用）
                          # track（自有埋点：简历解析质量等去标识 diagnostics 白名单写 events）、admin-health（运营看板聚合纯函数 + 术语→人话映射）
-                         # must-apply-list（北极星指标口径：必投清单 30 家头部公司 + ILIKE 模式；改清单=改口径）
+                         # must-apply-list（北极星指标口径：必投清单 30 家头部公司 + ILIKE 模式；改清单=改口径。
+                         #   数据本体在 lib/must-apply-list.json——TS 与 crawler/must_apply.py 共读同一份，杜绝两端漂移）
+                         # job-fields（经验/学历/截止 正则兜底纯函数，JobCard 与 SavedCompare 共用）
                          # source-adapters（adapter/抓取方式白名单 + validateSourceInput 纯函数）
                          # live-search（已知源刷新格式化/校验）、official-discovery、
                          # baidu-qianfan-search、china-keyword-expansion、china-official-sources、client-job-mapping
