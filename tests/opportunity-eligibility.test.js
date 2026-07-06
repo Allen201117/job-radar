@@ -234,6 +234,46 @@ test("computeMatchFacts: location 三态 + na", () => {
   assert.equal(computeMatchFacts(job({ location: "北京" }), rprofile({ targetLocations: [] }), undefined, noAction, NOW).location, "na");
 });
 
+test("computeMatchFacts: userStage=实习 时，无明确阶段信号的默认社招岗被 stage 门拒绝", () => {
+  const f = computeMatchFacts(job({ title: "产品经理" }), rprofile({ experienceStage: "实习" }), undefined, noAction, NOW);
+  assert.equal(f.stage, "mismatch");
+  assert.equal(f.stageLabel, "社招");
+  assert.deepEqual(checkEligibility(f), { eligible: false, reason: "stage_mismatch" });
+});
+
+test("computeMatchFacts: userStage=实习 时，明确社招岗被 stage 门拒绝，明确实习岗放行", () => {
+  const social = computeMatchFacts(
+    job({ title: "产品经理", job_type: "社会招聘" }),
+    rprofile({ experienceStage: "实习" }),
+    undefined,
+    noAction,
+    NOW,
+  );
+  assert.equal(social.stage, "mismatch");
+  assert.equal(social.stageLabel, "社招");
+  assert.deepEqual(checkEligibility(social), { eligible: false, reason: "stage_mismatch" });
+
+  const intern = computeMatchFacts(
+    job({ title: "产品经理实习生", job_type: "实习" }),
+    rprofile({ experienceStage: "实习" }),
+    undefined,
+    noAction,
+    NOW,
+  );
+  assert.equal(intern.stage, "match");
+  assert.equal(intern.stageLabel, "实习");
+  assert.equal(checkEligibility(intern).eligible, true);
+});
+
+test("computeMatchFacts: userStage=社招 时，无明确阶段信号仍 unknown 放行轻罚", () => {
+  const f = computeMatchFacts(job({ title: "产品经理" }), rprofile({ experienceStage: "社招" }), undefined, noAction, NOW);
+  assert.equal(f.stage, "unknown");
+  assert.equal(f.stageLabel, null);
+  const r = checkEligibility(f);
+  assert.equal(r.eligible, true);
+  assert.ok(r.degraded.includes("stage"));
+});
+
 test("computeMatchFacts: overseas scope uses country_code / targetRegions for location", () => {
   assert.equal(
     computeMatchFacts(

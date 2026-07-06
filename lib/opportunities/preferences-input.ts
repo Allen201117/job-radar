@@ -5,6 +5,7 @@ import type { RadarIntensity } from "./types";
 const MAX_ITEMS = 30;
 const MAX_LEN = 80;
 const VALID_JOB_SCOPES = new Set(["domestic", "overseas", "all"]);
+const VALID_EXPERIENCE_STAGES = new Set(["", "实习", "校招", "社招"]);
 const SUPPORTED_OVERSEAS_REGIONS = ["US", "SG", "Remote"];
 const REGION_ALIASES: Record<string, string> = {
   us: "US",
@@ -50,6 +51,7 @@ export interface ParsedPreferences {
     exclude_keywords: string[];
     target_companies: string[];
     target_industries: string[];
+    experience_stage: string | null;
     job_scope: JobScopePreference;
     target_regions: string[];
     daily_limit: number;
@@ -84,6 +86,12 @@ export function cleanTargetRegions(v: unknown): string[] {
     out.push(region);
   }
   return out;
+}
+
+function cleanExperienceStage(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  return VALID_EXPERIENCE_STAGES.has(t) && t ? t : null;
 }
 
 export function parsePreferenceScopeInput(
@@ -134,6 +142,7 @@ export function parsePreferencesInput(
         exclude_keywords: cleanArray(b.exclude_keywords),
         target_companies: cleanArray(b.target_companies),
         target_industries: cleanArray(b.target_industries),
+        experience_stage: cleanExperienceStage(b.experience_stage),
         job_scope: scope.value.job_scope,
         target_regions: scope.value.target_regions,
         daily_limit: clampDailyLimit(b.daily_limit),

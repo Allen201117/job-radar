@@ -67,6 +67,60 @@ function excludePatterns(profile: RadarProfile): string[] {
     .map((k) => `%${k}%`);
 }
 
+function stageRecallPatterns(profile: RadarProfile): { text: string[]; url: string[] } | null {
+  if (profile.experienceStage === "实习") {
+    return { text: ["%实习%", "%intern%"], url: ["%shixi%", "%intern%"] };
+  }
+  if (profile.experienceStage === "校招") {
+    return {
+      text: ["%校招%", "%校园%", "%应届%", "%campus%", "%graduate%"],
+      url: ["%campus%"],
+    };
+  }
+  return null;
+}
+
+function appendStageRecallWhere(profile: RadarProfile, conds: string[], params: unknown[]): void {
+  const patterns = stageRecallPatterns(profile);
+  if (!patterns) return;
+  params.push(patterns.text);
+  conds.push(
+    `(lower(title) like any($${params.length}::text[]) or ` +
+      `lower(coalesce(job_type,'')) like any($${params.length}::text[]) or ` +
+      `lower(coalesce(jd_url,'')) like any($${params.length + 1}::text[]))`,
+  );
+  params.push(patterns.url);
+}
+
+function stageRecallOr(profile: RadarProfile): string | null {
+  const patterns = stageRecallPatterns(profile);
+  if (!patterns) return null;
+  const clauses = [
+    ...patterns.text.flatMap((p) => [`title.ilike.${p}`, `job_type.ilike.${p}`]),
+    ...patterns.url.map((p) => `jd_url.ilike.${p}`),
+  ];
+  return clauses.join(",");
+}
+
+function applyStageRecallFilter(query: any, profile: RadarProfile): any {
+  const stageOr = stageRecallOr(profile);
+  return stageOr ? query.or(stageOr) : query;
+}
+
+function patternMatches(value: unknown, pattern: string): boolean {
+  const needle = pattern.replace(/%/g, "").toLowerCase();
+  return Boolean(needle) && String(value || "").toLowerCase().includes(needle);
+}
+
+function jobMatchesStageRecall(job: any, profile: RadarProfile): boolean {
+  const patterns = stageRecallPatterns(profile);
+  if (!patterns) return true;
+  return (
+    patterns.text.some((p) => patternMatches(job.title, p) || patternMatches(job.job_type, p)) ||
+    patterns.url.some((p) => patternMatches(job.jd_url, p))
+  );
+}
+
 // 三类召回（role/keyword、目标公司、城市近7天）合并成**一条** SQL：三个 search_doc @@ 用 OR，
 // 走同一 GIN 索引的 BitmapOr → 单连接、单次跨区往返。
 // P0-1 复验真因 = 连接/跨区往返开销（服务端 plan 4ms、110 行仍 22s 并连接超时），不是 plan 也不是行数；
@@ -94,6 +148,7 @@ async function recallViaStore(profile: RadarProfile, sinceIso: string, limit: nu
     conds.push(`not (lower(concat_ws(' ', title, company, location, job_type, summary, salary_text)) like any($${params.length}::text[]))`);
   }
   appendJobScopeWhere(conds, params, { job_scope: profile.jobScope, target_regions: profile.targetRegions });
+  appendStageRecallWhere(profile, conds, params);
 
   const ors: string[] = [];
   if (roleTs) {
@@ -133,43 +188,61 @@ async function recallViaSupabase(
   const take = (data: any[] | null | undefined) => {
     const rows = data || [];
     if (rows.length >= limit) branchCapped = true; // 分支命中 limit = 截断
-    mergeById(byId, rows.filter((j) => summaryOk(j) && jobMatchesScope(j, { job_scope: profile.jobScope, target_regions: profile.targetRegions })));
+    mergeById(
+      byId,
+      rows.filter(
+        (j) =>
+          summaryOk(j) &&
+          jobMatchesScope(j, { job_scope: profile.jobScope, target_regions: profile.targetRegions }) &&
+          jobMatchesStageRecall(j, profile),
+      ),
+    );
   };
 
   const roleTs = roleTsquery(profile);
   if (roleTs) {
-    const { data } = await supabase
-      .from("jobs")
-      .select("*")
-      .eq("status", "active")
-      .gte("last_seen_at", sinceIso)
-      .textSearch("search_doc", roleTs, { config: "simple" })
-      .limit(limit);
+    const query = applyStageRecallFilter(
+      supabase
+        .from("jobs")
+        .select("*")
+        .eq("status", "active")
+        .gte("last_seen_at", sinceIso)
+        .textSearch("search_doc", roleTs, { config: "simple" }),
+      profile,
+    );
+    const { data } = await query.limit(limit);
     take(data);
   }
   const companies = profile.targetCompanies.slice(0, 30);
-  if (companies.length) {
-    const { data } = await supabase
-      .from("jobs")
-      .select("*")
-      .eq("status", "active")
-      .gte("last_seen_at", sinceIso)
-      .or(companies.map((c) => `company.ilike.%${c}%`).join(","))
-      .limit(limit);
+  const companyTs = companies.length ? buildTsquery(companies, []) : null;
+  if (companyTs) {
+    const query = applyStageRecallFilter(
+      supabase
+        .from("jobs")
+        .select("*")
+        .eq("status", "active")
+        .gte("last_seen_at", sinceIso)
+        .textSearch("search_doc", companyTs, { config: "simple" }),
+      profile,
+    );
+    const { data } = await query.limit(limit);
     take(data);
   }
   const cityTs = profile.targetLocations.length
     ? buildTsquery(profile.targetLocations.slice(0, 10), [])
     : null;
   if (cityTs) {
-    const { data } = await supabase
-      .from("jobs")
-      .select("*")
-      .eq("status", "active")
-      .gte("last_seen_at", sinceIso)
-      .gte("first_seen_at", sinceIso)
-      .textSearch("search_doc", cityTs, { config: "simple" })
-      .limit(limit);
+    const query = applyStageRecallFilter(
+      supabase
+        .from("jobs")
+        .select("*")
+        .eq("status", "active")
+        .gte("last_seen_at", sinceIso)
+        .gte("first_seen_at", sinceIso)
+        .textSearch("search_doc", cityTs, { config: "simple" }),
+      profile,
+    );
+    const { data } = await query.limit(limit);
     take(data);
   }
   const r = finalize(byId, limit);

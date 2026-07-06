@@ -26,18 +26,19 @@ test("active + ≤24h 核验 → STILL_OPEN（最近确认仍在招）", () => {
   assert.equal(primarySignal(sigs).label, "最近确认仍在招");
 });
 
-test("从未核验（enrich_checked_at=null）→ 不出 STILL_OPEN，出 CLOSED_OR_STALE「长时间未确认」", () => {
+test("从未核验（enrich_checked_at=null）→ 不出 STILL_OPEN，出 OPEN_UNVERIFIED「在招·待确认」", () => {
   const sigs = deriveOpportunitySignals(job({ enrich_checked_at: null }), FACTS, PROFILE, NOW);
   assert.ok(!types(sigs).includes("STILL_OPEN"));
-  assert.equal(primarySignal(sigs).type, "CLOSED_OR_STALE");
-  assert.equal(primarySignal(sigs).label, "长时间未确认");
+  assert.equal(primarySignal(sigs).type, "OPEN_UNVERIFIED");
+  assert.equal(primarySignal(sigs).label, "在招·待确认");
   assert.equal(primarySignal(sigs).isCritical, false);
 });
 
-test("超 24h 核验（26h）→ 不 STILL_OPEN，长时间未确认", () => {
+test("超 24h 核验（26h）→ 不 STILL_OPEN，出 OPEN_UNVERIFIED", () => {
   const sigs = deriveOpportunitySignals(job({ enrich_checked_at: checkedHoursAgo(26) }), FACTS, PROFILE, NOW);
   assert.ok(!types(sigs).includes("STILL_OPEN"));
-  assert.ok(types(sigs).includes("CLOSED_OR_STALE"));
+  assert.ok(types(sigs).includes("OPEN_UNVERIFIED"));
+  assert.ok(!types(sigs).includes("CLOSED_OR_STALE"));
 });
 
 test("status=expired + 被关注 → CLOSED_OR_STALE「可能已关闭」isCritical=true", () => {

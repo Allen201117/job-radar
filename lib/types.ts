@@ -79,6 +79,7 @@ export interface UserPreferences {
   // 目标行业（跨行业门用，从简历 candidate_profiles.industries 同步而来，迁移 160）。
   // 可选：历史行/未同步用户为空，scoring 读取处一律 `|| []` 兜底。
   target_industries?: string[];
+  experience_stage?: string | null;
   daily_limit: number;
   // 雷达强度（迁移 164）：active/passive；source = default|user|auto。历史行可能缺，读取处 `|| 'active'`/`|| 'default'` 兜底。
   radar_intensity?: "active" | "passive";

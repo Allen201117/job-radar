@@ -90,14 +90,19 @@ function locationState(job: Job, profile: RadarProfile): { state: TriState; name
   return { state: "mismatch", name: null };
 }
 
-// 招聘阶段三态：仅在用户设了阶段时参与；岗位无明确类型信号 → unknown（不一刀切）
+// 招聘阶段三态：实习/校招用户只接受明确匹配；社招保持默认宽松。
 function stageState(
   job: Job,
   userStage: string
 ): { state: TriState; label: "实习" | "校招" | "社招" | null } {
   if (!userStage) return { state: "na", label: null };
-  if (!hasExplicitRecruitmentType(job)) return { state: "unknown", label: null };
   const cat = recruitmentCategory(job) as "实习" | "校招" | "社招";
+  // 实习/校招会自报家门：这两类求职者只接受明确匹配的岗，无明确信号(默认社招)一律排除
+  if (userStage === "实习" || userStage === "校招") {
+    return cat === userStage ? { state: "match", label: cat } : { state: "mismatch", label: cat };
+  }
+  // 社招是默认态：无明确信号的岗 unknown(放行轻罚)，避免误杀 94% 无 job_type 的岗
+  if (!hasExplicitRecruitmentType(job)) return { state: "unknown", label: null };
   return cat === userStage ? { state: "match", label: cat } : { state: "mismatch", label: cat };
 }
 

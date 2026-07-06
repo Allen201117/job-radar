@@ -1,11 +1,11 @@
 // 信号派生（04 spec §6）：信号是「标签」，不是入选唯一理由。返回按优先级排序的 OpportunitySignal[]（≥1）。
-// 当前上线：STILL_OPEN（主力）/ DEADLINE_SOON / CLOSED_OR_STALE / CAMPUS_WINDOW(简单)。
+// 当前上线：STILL_OPEN（主力）/ OPEN_UNVERIFIED / DEADLINE_SOON / CLOSED_OR_STALE / CAMPUS_WINDOW(简单)。
 // 暂不上：NEWLY_DISCOVERED / COMPANY_MOMENTUM —— 依赖官方 posted_at + job_events（Phase 3，见 04 §11.1）。
 //
 // 约束：
 //  - enrich_checked_at 缺失 → 不产生 STILL_OPEN（meetsVerifyTier 兜底）；
 //  - content_hash 变化不产生任何用户侧 signal（此处根本不读 content_hash）；
-//  - 每个进 today 的 opportunity signals.length ≥ 1（active 岗必得 STILL_OPEN 或 CLOSED_OR_STALE 之一）。
+//  - 每个进 today 的 opportunity signals.length ≥ 1（active 岗必得 STILL_OPEN 或 OPEN_UNVERIFIED 之一）。
 import type { Job } from "../types";
 import type { MatchFacts, RadarProfile, OpportunitySignal, OpportunitySignalType } from "./types";
 import { meetsVerifyTier } from "./freshness";
@@ -16,9 +16,10 @@ const PRIORITY: Record<OpportunitySignalType, number> = {
   CLOSED_OR_STALE: 1,
   DEADLINE_SOON: 2,
   STILL_OPEN: 3,
-  CAMPUS_WINDOW: 4,
-  NEWLY_DISCOVERED: 5,
-  COMPANY_MOMENTUM: 6,
+  OPEN_UNVERIFIED: 4,
+  CAMPUS_WINDOW: 5,
+  NEWLY_DISCOVERED: 6,
+  COMPANY_MOMENTUM: 7,
 };
 
 const CLOSED_STATUSES = new Set(["expired", "removed", "error"]);
@@ -50,7 +51,7 @@ export function deriveOpportunitySignals(
 
   const parsed = ctx.parsedDeadline !== undefined ? ctx.parsedDeadline : parseDeadline(job.deadline, now);
 
-  // 1. CLOSED_OR_STALE —— 关闭（status 非 active）或陈旧（active 但未在 today SLA 内核验）。
+  // 1. CLOSED_OR_STALE —— 真关闭（status 非 active）。
   if (!active && CLOSED_STATUSES.has(job.status)) {
     out.push({
       type: "CLOSED_OR_STALE",
@@ -60,11 +61,10 @@ export function deriveOpportunitySignals(
       evidence: { lastCheckedAt, status: job.status, freshness: facts.freshness },
     });
   } else if (active && !tier.ok) {
-    // active 但超 today 核验时限 / 从未核验 → 「长时间未确认」，进「等待再次确认」（非关键，除非被关注）。
     out.push({
-      type: "CLOSED_OR_STALE",
-      label: "长时间未确认",
-      priority: PRIORITY.CLOSED_OR_STALE,
+      type: "OPEN_UNVERIFIED",
+      label: "在招·待确认",
+      priority: PRIORITY.OPEN_UNVERIFIED,
       isCritical: false,
       evidence: { lastCheckedAt, status: job.status, freshness: tier.freshness },
     });

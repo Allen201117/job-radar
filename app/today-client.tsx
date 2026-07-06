@@ -15,7 +15,10 @@ import {
 
 const SECTION_META: Record<SectionKey, { title: string; subtitle?: string }> = {
   critical: { title: "关键提醒", subtitle: "和你已表达的关注强相关：收藏岗位的截止或关闭、需要尽快处理的机会。" },
-  main: { title: "刚核验仍在招的对口机会", subtitle: "最近确认仍在招、和你目标贴合的官方岗位。" },
+  main: {
+    title: "对口机会",
+    subtitle: "和你目标贴合的官方岗位；标「最近确认仍在招」的已核验，「在招·待确认」的会在你打开时后台复核。",
+  },
   explore: { title: "可以拓展看看", subtitle: "相关方向或你关注的公司，匹配度稍低，按需查看。" },
   momentum: { title: "本周招聘动量", subtitle: "这些公司近期在持续放岗。" },
   waiting: {

@@ -3,9 +3,9 @@
 //
 // 分区落点按 primary signal + 强度：
 //   critical : 任一 signal isCritical（关键提醒：收藏岗关闭/校招快截止）—— 永远置顶、不截断、不受强度压制。
-//   main     : primary ∈ STILL_OPEN/DEADLINE_SOON 且 score ≥ 强度门槛（active 45 / passive 70）。
-//   explore  : 仅 active；primary ∈ STILL_OPEN/DEADLINE_SOON、score 30–门槛、exploreEligible。最多 5。
-//   waiting  : primary=CLOSED_OR_STALE 且非关键（「长时间未确认」/aging）。小批，最多 8。
+//   main     : primary ∈ STILL_OPEN/OPEN_UNVERIFIED/DEADLINE_SOON 且 score ≥ 强度门槛（active 45 / passive 70）。
+//   explore  : 仅 active；primary ∈ STILL_OPEN/OPEN_UNVERIFIED/DEADLINE_SOON、score 30–门槛、exploreEligible。最多 5。
+//   waiting  : primary=CLOSED_OR_STALE 且非关键。小批，最多 8。
 //   momentum : 恒空（依赖 job_events，Phase 3 前不上 C 端「猛招」）。
 import type {
   Opportunity,
@@ -46,7 +46,7 @@ function byCriticalThenScore(a: Opportunity, b: Opportunity): number {
 
 function isMainSignal(o: Opportunity): boolean {
   const p = primaryOf(o);
-  return !!p && (p.type === "STILL_OPEN" || p.type === "DEADLINE_SOON");
+  return !!p && (p.type === "STILL_OPEN" || p.type === "OPEN_UNVERIFIED" || p.type === "DEADLINE_SOON");
 }
 
 export interface GroupOptions {

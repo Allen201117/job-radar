@@ -153,7 +153,7 @@ supabase/migrations/     # 001_init → 002_rls → … → 007_candidate_profil
                          # → 015_verify_experience_sources（experience 真实来源核验）
                          # → 016_rewrite_culture_and_experience_copy（去「避坑」+ 9 条 experience 正文改通俗）
                          # → …（前缀递增，详见目录）→ 158_admin_health_snapshot → 159_admin_ops_dashboard（ops_runs 台账表 + 运营看板聚合函数）→ 165_insight_enrich_now_and_hiring_monthly
-                         # → 166_insight_submissions → 167_overseas_prefs → 168_sources_regions → 169_seed_overseas_regions
+                         # → 166_insight_submissions → 167_overseas_prefs → 168_sources_regions → 169_seed_overseas_regions → 172_user_pref_experience_stage（求职阶段字段）
 .github/workflows/daily-crawl.yml   # 每日 + 手动抓取
 tests/                   # node --test 单测
 ```
@@ -166,7 +166,7 @@ tests/                   # node --test 单测
 | sources | 企业招聘源（含 `regions` 抓取地区，默认 `{CN}`） | 所有人读，crawler 写 |
 | source_candidates | 官方源发现候选 | admin 读，service role 写 |
 | jobs | 共享岗位库（已迁自建香港 PG，含 `country_code`/`job_scope`/`sponsorship_signal`，见核心产品原则 §4） | 所有人读，crawler 写 |
-| user_preferences | 用户偏好（含 `job_scope`/`target_regions` 求职范围） | 自己读写 |
+| user_preferences | 用户偏好（含 `job_scope`/`target_regions` 求职范围、`experience_stage` 求职阶段实习/校招/社招，迁移 172） | 自己读写 |
 | candidate_profiles | 简历档案（含英文侧 `en_*` 与 `has_en_resume`） | 自己读写 |
 | job_actions | 收藏/忽略/投递 | 自己读写 |
 | crawl_runs | 抓取日志 | admin 读，crawler 写 |
