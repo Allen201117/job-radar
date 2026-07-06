@@ -112,16 +112,29 @@ export default async function TodayPage() {
 async function TodayMetrics({ feedPromise }: { feedPromise: Promise<OpportunityFeed | null> }) {
   const feed = await feedPromise;
   if (!feed) return null;
+  // 计分板置换：把系统替用户做掉的过滤劳动说出来，而不是只报正向计数。
+  const f = feed.counts.filtered;
+  const screened = feed.counts.screened ?? 0;
+  const removed = f ? f.inactive + f.mismatch + f.low_score + f.thin : 0;
   return (
-    <div className={METRICS_GRID}>
-      <MetricTile icon={Sparkle} label="关键提醒" value={feed.counts.critical} tone="sky" />
-      <MetricTile icon={Crosshair} label="对口机会" value={feed.counts.main} tone="lime" />
-      <MetricTile
-        icon={CheckCircle}
-        label="最近确认仍在招"
-        value={feed.counts.by_signal.STILL_OPEN ?? 0}
-        tone="white"
-      />
+    <div>
+      <div className={METRICS_GRID}>
+        <MetricTile icon={Sparkle} label="关键提醒" value={feed.counts.critical} tone="sky" />
+        <MetricTile icon={Crosshair} label="对口机会" value={feed.counts.main} tone="lime" />
+        <MetricTile
+          icon={CheckCircle}
+          label="最近确认仍在招"
+          value={feed.counts.by_signal.STILL_OPEN ?? 0}
+          tone="white"
+        />
+      </div>
+      {screened > 0 && removed > 0 && f && (
+        <p className="mt-3 text-[13px] leading-5 text-[#6b655a] dark:text-[#b6ad9d]">
+          今日已为你考察 {screened.toLocaleString()} 个在库岗位，替你剔除 {removed.toLocaleString()} 个：
+          已失效 {f.inactive.toLocaleString()} · 不对口 {(f.mismatch + f.low_score).toLocaleString()} · 信息不全{" "}
+          {f.thin.toLocaleString()}——剩下的才值得你花时间。
+        </p>
+      )}
     </div>
   );
 }

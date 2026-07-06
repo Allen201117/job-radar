@@ -85,7 +85,7 @@ export default function SavedClient({
                     {d.location}
                   </span>
                 )}
-                收藏于 {d.createdAt ? new Date(d.createdAt).toLocaleDateString("zh-CN") : "—"}
+                加入于 {d.createdAt ? new Date(d.createdAt).toLocaleDateString("zh-CN") : "—"}
               </div>
             </div>
             <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">

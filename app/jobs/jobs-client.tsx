@@ -271,7 +271,8 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
                 ? `（精确 ${exactCount} + 相关 ${Math.max(0, total - exactCount)}）`
                 : ""}
               {!newViewActive && capped ? "，可加载更多" : ""}
-              ，已展示 {displayJobs.length} 个。
+              ，已展示 {displayJobs.filter((job) => !deadIds.has(job.id)).length} 个。
+              {deadIds.size > 0 ? `实时复核刚拦下 ${deadIds.size} 个已失效岗位，已自动隐藏。` : ""}
             </>
           )}
         </span>
