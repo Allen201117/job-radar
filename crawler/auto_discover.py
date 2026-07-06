@@ -24,6 +24,7 @@ from pathlib import Path
 import db
 import ops_runs
 import discover_domestic as dd
+from generate_targets import norm_company
 
 DAILY_TARGET_CAP = int(os.environ.get("AUTO_DISCOVER_TARGET_CAP", "80"))   # 每日最多 probe 多少家缺失公司
 DAILY_INSERT_CAP = int(os.environ.get("AUTO_DISCOVER_INSERT_CAP", "40"))   # 每日最多入库多少源
@@ -101,8 +102,14 @@ def existing_source_keys(sb):
 def plan_targets(curated, user_wanted, existing_companies, cap, seed=0):
     """纯函数：本轮要 probe 的目标 = 库里没有的精选目标公司。排序 = 用户点名 > 科技/新经济/消费(_priority)
     > 其余；各梯队内按 seed 随机轮转（避免每天死磕同一批失败目标，让覆盖随天数滚动），封顶 cap。"""
-    missing = [t for t in curated if (t.get("company") or "").strip()
-               and (t.get("company") or "").strip() not in existing_companies]
+    existing = {str(x).strip() for x in (existing_companies or set()) if str(x).strip()}
+    existing_norm = {norm_company(x) for x in existing if norm_company(x)}
+    missing = []
+    for t in curated:
+        name = (t.get("company") or "").strip()
+        nname = norm_company(name)
+        if name and name not in existing and (not nname or nname not in existing_norm):
+            missing.append(t)
     wanted_first = [t for t in missing if (t.get("company") or "").strip() in user_wanted]
     others = [t for t in missing if (t.get("company") or "").strip() not in user_wanted]
     priority = [t for t in others if t.get("_priority")]

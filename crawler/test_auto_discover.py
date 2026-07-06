@@ -21,6 +21,13 @@ class PlanTargetsTest(unittest.TestCase):
         self.assertIn("比亚迪", names)
         self.assertIn("立讯精密", names)
 
+    def test_filters_out_existing_companies_by_normalized_name(self):
+        curated = [_t("美图公司"), _t("得物")]
+        out = ad.plan_targets(curated, set(), {"美图"}, cap=10, seed=1)
+        names = [t["company"] for t in out]
+        self.assertNotIn("美图公司", names)        # 后缀变体已在库 → 不重复 probe
+        self.assertEqual(names, ["得物"])
+
     def test_user_wanted_first(self):
         curated = [_t("A"), _t("B"), _t("C"), _t("D")]
         out = ad.plan_targets(curated, {"C"}, set(), cap=10, seed=7)

@@ -15,6 +15,10 @@
 """
 import datetime
 import os
+import re
+import time
+
+import httpx
 
 # 行业主题（按日轮转，覆盖目标用户关心的全部方向；配合 targets_tech_consumer.json 的分类口径）
 _THEMES = [
@@ -45,8 +49,38 @@ def theme_for(date):
     return _THEMES[date.toordinal() % len(_THEMES)]
 
 
+_COMPANY_SUFFIXES = (
+    "股份有限公司",
+    "有限责任公司",
+    "有限公司",
+    "控股集团",
+    "集团控股",
+    "集团股份",
+    "控股",
+    "集团",
+    "科技",
+    "公司",
+    "中国",
+)
+
+
+def norm_company(name):
+    """公司名去重规范化：只做括号/空白/大小写与常见后缀归一，不做子串匹配。"""
+    s = str(name or "").strip().lower()
+    s = re.sub(r"[（(][^（）()]*[）)]", "", s)
+    s = re.sub(r"\s+", "", s)
+    prev = None
+    while s and s != prev:
+        prev = s
+        for suffix in _COMPANY_SUFFIXES:
+            if s.endswith(suffix) and len(s) > len(suffix):
+                s = s[:-len(suffix)]
+                break
+    return s
+
+
 def build_messages(theme_name, theme_desc, exclude_names, n):
-    ex = "、".join(list(exclude_names)[:150])
+    ex = "、".join(list(exclude_names)[:250])
     user = (
         f"列出 {n} 家【{theme_name}】领域、真实存在且当前在招聘的中国公司（{theme_desc}）。"
         f"优先中大型 / 知名 / 在招岗位多的公司。**必须排除以下已收录公司**：{ex}。只输出 JSON。"
@@ -58,7 +92,8 @@ def parse_generated(data, existing_names):
     """纯函数：从 LLM 返回的（已解析）JSON dict 提取合法候选。
     去重（库里已有 / 批内重复）、清洗 slug（去空、去带空格的）、标 _priority/_llm。"""
     existing = {str(x).strip() for x in (existing_names or set())}
-    out, seen = [], set()
+    existing_norm = {norm_company(x) for x in existing if norm_company(x)}
+    out, seen, seen_norm = [], set(), set()
     for c in ((data or {}).get("companies") or []):
         if not isinstance(c, dict):
             continue
@@ -69,9 +104,17 @@ def parse_generated(data, existing_names):
         industry = (c.get("industry") or "").strip()
         if not name or not slugs:
             continue
-        if name in existing or name in seen:
+        nname = norm_company(name)
+        is_duplicate = (
+            name in existing or name in seen or
+            (nname and nname in existing_norm) or
+            (nname and nname in seen_norm)
+        )
+        if is_duplicate:
             continue
         seen.add(name)
+        if nname:
+            seen_norm.add(nname)
         out.append({"company": name, "cn": cn, "slugs": slugs[:4],
                     "industry": industry, "_priority": True, "_llm": True})
     return out
@@ -85,8 +128,16 @@ def llm_generate(existing_names, n=50, date=None):
     tname, tdesc = theme_for(date)
     try:
         import insight_engine as ie  # 复用现成 SiliconFlow 客户端（config + json_object + loose parse）
-        data = ie.chat_json(build_messages(tname, tdesc, existing_names, n),
-                            temperature=0.5, max_tokens=3000)
+        messages = build_messages(tname, tdesc, existing_names, n)
+        for attempt in range(2):
+            try:
+                data = ie.chat_json(messages, temperature=0.5, max_tokens=2000, timeout=90)
+                break
+            except httpx.TimeoutException:
+                if attempt == 0:
+                    time.sleep(1)
+                    continue
+                raise
     except Exception as e:
         print(f"[generate_targets] LLM 失败，跳过（回退静态清单）: {type(e).__name__}: {str(e)[:80]}")
         return []
