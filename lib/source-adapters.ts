@@ -187,6 +187,24 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填「顺丰」+ https://hr.sf-express.com/jobMainHandler/main/9999，直连 SearchJob.do 社招接口，crawl_method 选 http",
   },
   {
+    value: "tencent_music",
+    label: "腾讯音乐 TME（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填「腾讯音乐」+ https://join.tencentmusic.com/social，直连 job/list + uc-job/list 公开接口（社招+校招一次抓全），crawl_method 选 http",
+  },
+  {
+    value: "antgroup",
+    label: "蚂蚁集团（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填「蚂蚁集团」+ https://talent.antgroup.com/off-campus-position，直连 hrcareersweb position/search 公开接口（社招+校招一次抓全），crawl_method 选 http",
+  },
+  {
+    value: "mihoyo",
+    label: "米哈游（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填「米哈游」+ https://jobs.mihoyo.com/#/position，直连 ats-portal v1/job/list+info 公开接口（社招+校招一次抓全），crawl_method 选 http",
+  },
+  {
     value: "amazon",
     label: "Amazon（自建 · 外企）",
     origin: "foreign",

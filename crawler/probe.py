@@ -46,6 +46,9 @@ _HTTPX_ADAPTERS = {
     "pinduoduo",  # 拼多多校招：position/list 公开接口,零浏览器
     "vivo",  # vivo 社招：portal/page 公开接口,零浏览器
     "sf_express",  # 顺丰社招：SearchJob.do 公开接口，最近 50 页低频顺序抓取
+    "tencent_music",  # 腾讯音乐自建：job/list + uc-job/list 公开接口,零浏览器
+    "antgroup",  # 蚂蚁集团自建：hrcareersweb position/search 公开接口,零浏览器
+    "mihoyo",  # 米哈游自建：ats-portal v1/job/list+info 公开接口,零浏览器
 }
 
 # 通用 ATS 的 URL 模板：给定 slug 即可拼出公开 JSON 接口地址。
