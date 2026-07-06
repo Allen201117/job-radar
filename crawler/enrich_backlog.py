@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 import db
 import enrich
 import jobs_db
+import must_apply
 import normalizer
 import ops_runs
 
@@ -217,6 +218,17 @@ def should_trip_adapter(checked, miss, min_sample=ADAPTIVE_MIN_SAMPLE, miss_rati
     return (miss / checked) >= miss_ratio
 
 
+def interleave_liveness_rows_by_priority(by_src, smap, match_company=must_apply.match_company):
+    """为什么：队列 SQL 不能改排序键；必投倾斜只能在 source 分组交错前做内存重排。"""
+    source_ids = list(by_src.keys())
+    must_ids, rest_ids = [], []
+    for sid in source_ids:
+        company = (smap.get(sid) or {}).get("company") or ""
+        (must_ids if match_company(company) else rest_ids).append(sid)
+    ordered_groups = [by_src[sid] for sid in must_ids + rest_ids]
+    return [r for tup in zip_longest(*ordered_groups) for r in tup if r]
+
+
 def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, per_host=PER_HOST, sweep=False, make_jobs_conn=None):
     """sb：取 sources（Supabase）。jobs 读写：配了 JOBS_DATABASE_URL 走香港 PG（每线程独立连接防并发），
     否则走 Supabase（每线程独立 sb 防 Errno35）。per_host=单 host 并发上限（防限流，hotjob 等单 host 关键）。
@@ -235,7 +247,12 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
     by_src = {}
     for r in rows:
         by_src.setdefault(r["source_id"], []).append(r)
-    rows = [r for tup in zip_longest(*by_src.values()) for r in tup if r]
+    pats = must_apply.patterns()
+    rows = interleave_liveness_rows_by_priority(
+        by_src,
+        smap,
+        match_company=lambda name: must_apply.match_company_against_patterns(name, pats),
+    )
 
     stat = {"filled": 0, "alive": 0, "miss": 0, "expired": 0, "err": 0, "skipped": 0}
     lock = threading.Lock()

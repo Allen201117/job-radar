@@ -62,5 +62,37 @@ class PrioritizeNewTest(unittest.TestCase):
         self.assertNotIn("first_seen_at >= now()", sql)
 
 
+class MustApplyCandidatePlanTest(unittest.TestCase):
+    def test_must_apply_first_caps_headliner_quota_at_half_limit(self):
+        must_rows = [{"id": str(i)} for i in range(1, 6)]
+        regular_rows = [{"id": str(i)} for i in range(6, 10)]
+
+        rows = audit_dead_links.merge_must_apply_candidates(must_rows, regular_rows, limit=5)
+
+        # limit=5 时 50% 上限取 floor=2，不能让必投段吃掉超过半个分片。
+        self.assertEqual([r["id"] for r in rows], ["1", "2", "6", "7", "8"])
+
+    def test_regular_segment_excludes_already_picked_ids(self):
+        must_rows = [{"id": "m1"}, {"id": "m2"}, {"id": "m3"}]
+        regular_rows = [{"id": "m2"}, {"id": "r1"}, {"id": "r2"}, {"id": "r3"}]
+
+        rows = audit_dead_links.merge_must_apply_candidates(must_rows, regular_rows, limit=4)
+
+        self.assertEqual([r["id"] for r in rows], ["m1", "m2", "r1", "r2"])
+
+    def test_must_apply_only_uses_full_limit_without_regular_rows(self):
+        must_rows = [{"id": "m1"}, {"id": "m2"}, {"id": "m3"}]
+        regular_rows = [{"id": "r1"}, {"id": "r2"}]
+
+        rows = audit_dead_links.merge_must_apply_candidates(
+            must_rows,
+            regular_rows,
+            limit=2,
+            must_apply_only=True,
+        )
+
+        self.assertEqual([r["id"] for r in rows], ["m1", "m2"])
+
+
 if __name__ == "__main__":
     unittest.main()
