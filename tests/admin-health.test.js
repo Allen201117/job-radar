@@ -60,6 +60,128 @@ test("normalizeCrawlSources derives success and partial rates from terminal non-
   );
 });
 
+test("normalizeCoverageSnapshot classifies measurable, blind, and under-covered sources", () => {
+  assert.equal(typeof H.normalizeCoverageSnapshot, "function");
+  assert.deepEqual(
+    H.normalizeCoverageSnapshot({
+      measurable: "3",
+      blind: 1,
+      avg_coverage_pct: 67,
+      under_count: 2,
+      under_sources: [
+        {
+          company: "乙公司",
+          adapter: "hotjob",
+          reported_total: 0,
+          fetched: 5,
+          coverage_pct: null,
+          last_run_at: "2026-07-07T01:00:00Z",
+        },
+        {
+          company: "甲公司",
+          adapter: "moka",
+          reported_total: 100,
+          fetched: 39,
+          coverage_pct: 39,
+          last_run_at: "2026-07-07T02:00:00Z",
+        },
+        {
+          company: "丙公司",
+          adapter: "workday",
+          reported_total: 100,
+          fetched: 120,
+          coverage_pct: 120,
+          last_run_at: "2026-07-07T03:00:00Z",
+        },
+      ],
+    }),
+    {
+      measurable: 3,
+      blind: 1,
+      avgCoveragePct: 67,
+      underCount: 2,
+      underSources: [
+        {
+          company: "乙公司",
+          adapter: "hotjob",
+          reportedTotal: 0,
+          fetched: 5,
+          coveragePct: null,
+          lastRunAt: "2026-07-07T01:00:00Z",
+        },
+        {
+          company: "甲公司",
+          adapter: "moka",
+          reportedTotal: 100,
+          fetched: 39,
+          coveragePct: 39,
+          lastRunAt: "2026-07-07T02:00:00Z",
+        },
+        {
+          company: "丙公司",
+          adapter: "workday",
+          reportedTotal: 100,
+          fetched: 120,
+          coveragePct: 100,
+          lastRunAt: "2026-07-07T03:00:00Z",
+        },
+      ],
+    },
+  );
+});
+
+test("getCoverageSnapshot calls the Supabase RPC and normalizes its response", async () => {
+  assert.equal(typeof H.getCoverageSnapshot, "function");
+  const calls = [];
+  const result = await H.getCoverageSnapshot({
+    rpc: async (name) => {
+      calls.push(name);
+      return {
+        data: {
+          measurable: 1,
+          blind: 0,
+          avg_coverage_pct: 55,
+          under_count: 1,
+          under_sources: [
+            {
+              company: "甲公司",
+              adapter: "moka",
+              reported_total: 100,
+              fetched: 55,
+              coverage_pct: 55,
+              last_run_at: "2026-07-07T02:00:00Z",
+            },
+          ],
+        },
+        error: null,
+      };
+    },
+  });
+
+  assert.deepEqual(calls, ["crawl_coverage_snapshot"]);
+  assert.equal(result.avgCoveragePct, 55);
+  assert.deepEqual(result.underSources.map((source) => [source.company, source.coveragePct]), [["甲公司", 55]]);
+});
+
+test("getCoverageSnapshot returns an empty state instead of throwing on RPC failure", async () => {
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    const result = await H.getCoverageSnapshot({
+      rpc: async () => ({ data: null, error: { message: "missing function" } }),
+    });
+    assert.deepEqual(result, {
+      measurable: 0,
+      blind: 0,
+      avgCoveragePct: null,
+      underCount: 0,
+      underSources: [],
+    });
+  } finally {
+    console.error = originalError;
+  }
+});
+
 test("buildDailyReports merges technical runs into six human-facing operation cards", () => {
   assert.equal(typeof H.buildDailyReports, "function");
   const reports = H.buildDailyReports({
@@ -310,7 +432,29 @@ test("Supabase health snapshot is aggregated in SQL and executable only by servi
   assert.match(migration, /grant execute on function public\.admin_health_snapshot\(interval\) to service_role/i);
 });
 
-test("admin health page authenticates before parallel cross-database reads and renders four plain-language sections", () => {
+test("crawl coverage snapshot uses latest enabled Supabase crawl runs and hides execution from users", () => {
+  const migrationPath = path.join(
+    __dirname,
+    "..",
+    "supabase",
+    "migrations",
+    "177_coverage_snapshot.sql",
+  );
+  const migration = fs.existsSync(migrationPath) ? fs.readFileSync(migrationPath, "utf8") : "";
+  assert.match(migration, /create or replace function public\.crawl_coverage_snapshot\(\)/i);
+  assert.match(migration, /security definer/i);
+  assert.match(migration, /distinct on \(cr\.source_id\)/i);
+  assert.match(migration, /where s\.enabled = true/i);
+  assert.match(migration, /reported_total/i);
+  assert.match(migration, /jobs_found/i);
+  assert.match(migration, /least\(100/i);
+  assert.match(migration, /coverage_pct asc/i);
+  assert.match(migration, /limit 40/i);
+  assert.match(migration, /revoke execute on function public\.crawl_coverage_snapshot\(\) from public, anon, authenticated/i);
+  assert.match(migration, /grant execute on function public\.crawl_coverage_snapshot\(\) to service_role/i);
+});
+
+test("admin health page authenticates before parallel cross-database reads and renders plain-language sections", () => {
   const pagePath = path.join(__dirname, "..", "app", "admin", "health", "page.tsx");
   const source = fs.existsSync(pagePath) ? fs.readFileSync(pagePath, "utf8") : "";
   assert.match(source, /await isAdmin\(\)/);
@@ -321,6 +465,10 @@ test("admin health page authenticates before parallel cross-database reads and r
   assert.match(source, /Promise\.allSettled/);
   assert.match(source, /今日健康/);
   assert.match(source, /各模块每日战报/);
+  assert.match(source, /全库抓全率/);
+  assert.match(source, /官网总数/);
+  assert.match(source, /我们抓到/);
+  assert.match(source, /盲区/);
   assert.match(source, /岗位库体检/);
   assert.match(source, /用户与业务/);
   assert.match(source, /buildDailyReports/);
