@@ -29,8 +29,15 @@ from urllib.parse import urlparse
 import httpx
 
 import normalizer
-from .base import RawJob
+from .base import PageResult, RawJob, paginate_all
 from .playwright_base import PlaywrightAdapter
+
+
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _first(post: dict, keys) -> str:
@@ -56,8 +63,8 @@ class WtAdapter(PlaywrightAdapter):
                    "?brandCode=1&safe=Y&recruitType={rt}&postIdsAry={pid}")
     # recruitType 平台常量：校招=1 / 社招=2 / 实习=12（与详情页 recruitType 同口径）。
     _RECRUIT_TYPES = (2, 1, 12)
-    _PAGE_CAP = 60       # 每 recruitType 最多翻页数（10/页 → 封顶 600 岗/类，足够覆盖最大租户）
-    _MAX_JOBS = 1200     # 单租户总上限（防超大央企一次拉爆库）
+    _PAGE_CAP = 200      # 每 recruitType 安全上限（10/页 → 2000 岗/类），靠 rowCount/短页自然收尾
+    _MAX_JOBS = 3000     # 单租户总安全预算（10/页 → 最坏约 300 次请求）
 
     def _bind_source(self, source_url: str) -> str:
         parsed = urlparse(source_url)
@@ -75,6 +82,8 @@ class WtAdapter(PlaywrightAdapter):
 
     def fetch(self, source_url: str) -> str:
         """直连 position/list 接口，逐 recruitType × 翻页拉全量，返回 _intercepted 信封。"""
+        self.reported_total = None
+        self.fetch_complete = False
         self._bind_source(source_url)
         api = f"{self._origin}{self._LIST_PATH.format(brand=self._brand)}"
         headers = {
@@ -85,39 +94,69 @@ class WtAdapter(PlaywrightAdapter):
             "Origin": self._origin,
         }
         collected: List[dict] = []
-        total = 0
+        totals: List[int] = []
+        type_complete: List[bool] = []
+        seen_jobs = set()
+        budget_exhausted = False
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             for rt in self._RECRUIT_TYPES:
-                if total >= self._MAX_JOBS:
+                remaining_jobs = self._MAX_JOBS - len(seen_jobs)
+                if remaining_jobs <= 0:
+                    budget_exhausted = True
                     break
-                for page in range(1, self._PAGE_CAP + 1):
-                    try:
-                        resp = client.get(api, params={
-                            "brandCode": 1, "recruitType": rt, "page": page})
-                        resp.raise_for_status()
-                        payload = resp.json()
-                    except (httpx.HTTPError, ValueError):
-                        break  # 该 recruitType 接口异常/空 → 跳到下个类型
+                max_pages = min(self._PAGE_CAP, max(1, (remaining_jobs + 9) // 10))
+
+                def fetch_page(page: int) -> PageResult:
+                    resp = client.get(api, params={
+                        "brandCode": 1, "recruitType": rt, "page": page})
+                    resp.raise_for_status()
+                    payload = resp.json()
                     if not isinstance(payload, dict):
-                        break
+                        raise ValueError("wt: position/list returned non-object payload")
                     rows = payload.get("postList") or []
-                    if not rows:
-                        break
                     # 标记本批的 recruitType，供 _map 拼稳定详情链（详情页要 recruitType）。
                     for r in rows:
                         if isinstance(r, dict):
                             r["_wtRecruitType"] = rt
-                    collected.append(payload)
-                    total += len(rows)
-                    page_count = payload.get("pageCount") or 0
-                    if total >= self._MAX_JOBS or (page_count and page >= page_count):
-                        break
-                    if len(rows) < (payload.get("rowSize") or 10):
-                        break  # 末页不足一页 → 收完
+                    if rows:
+                        collected.append(payload)
+                    return PageResult(items=rows, total=_int_or_none(payload.get("rowCount")))
+
+                rows, total, complete = paginate_all(
+                    fetch_page,
+                    page_size=10,
+                    first_page=1,
+                    max_pages=max_pages,
+                    logger=None,
+                    label=f"wt:{self._brand}:{rt}",
+                )
+                if total is not None:
+                    totals.append(total)
+                type_complete.append(complete)
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    post_id = _first(row, ("postId", "id"))
+                    if post_id:
+                        seen_jobs.add((rt, post_id))
+                if len(seen_jobs) >= self._MAX_JOBS:
+                    budget_exhausted = True
+                    break
+                if not complete and max_pages < self._PAGE_CAP:
+                    budget_exhausted = True
+                    break
         if not collected:
             # 一条都没拿到 → 多半非 wt 老版 / 接口改版 / 该域被拦；交给 run.py 记 partial（不伪装成功）。
             raise RuntimeError(
                 f"wt: empty position/list (brand={self._brand} host={self._host})")
+        self.reported_total = (
+            sum(totals) if len(totals) == len(self._RECRUIT_TYPES) else len(seen_jobs)
+        )
+        self.fetch_complete = (
+            len(type_complete) == len(self._RECRUIT_TYPES)
+            and all(type_complete)
+            and not budget_exhausted
+        )
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
 
     # PlaywrightAdapter._extract_posts 的 posts_keys 含 'postList'？没有——这里覆盖 parse 用的提取，

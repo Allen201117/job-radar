@@ -17,7 +17,7 @@ from urllib.parse import urlparse, parse_qs
 import httpx
 
 import normalizer
-from .base import BaseAdapter, RawJob, resolve_detail_cap
+from .base import BaseAdapter, PageResult, RawJob, paginate_all, resolve_detail_cap
 
 _GREATER_CHINA = ("china", "中国", "hong kong", "香港", "macau", "macao", "澳门")
 _TAIWAN = ("taiwan", "台湾", "台灣", "chinese taipei")
@@ -100,7 +100,7 @@ def _search_texts_for_regions(regions):
 
 class OracleAdapter(BaseAdapter):
     name = "oracle"
-    max_pages = 25  # 每页 20 → 单源最多约 500 在华岗（够大租户，分页 <20 即停）
+    max_pages = 100  # 每页 20 → facet/keyword 安全上限 2000，靠接口 total/短页自然收尾
 
     def should_skip(self, source_url: str):
         return None  # 公开 JSON API，跳过 HEAD 预检
@@ -144,24 +144,29 @@ class OracleAdapter(BaseAdapter):
 
         trusted: List[dict] = []
         seen = set()
+        page_complete: List[bool] = []
         if region_ids:
             # 2) 服务端 facet 过滤分页（这些是**可信在华**岗，parse 不再过滤）。
             facet_param = f",selectedLocationsFacet={','.join(region_ids)}"
-            facet_total: Optional[int] = None
-            for page in range(self.max_pages):
+            def fetch_page(page: int) -> PageResult:
                 top = self._get(f"{facet_param},limit=20,offset={page * 20}")
-                if facet_total is None:
-                    facet_total = _reported_total_from_payload(top)
                 reqs = top.get("requisitionList", []) or []
-                if not reqs:
-                    break
-                for j in reqs:
-                    jid = str(j.get("Id") or "").strip()
-                    if jid and jid not in seen:
-                        seen.add(jid)
-                        trusted.append(j)
-                if len(reqs) < 20:
-                    break
+                return PageResult(items=reqs, total=_reported_total_from_payload(top))
+
+            reqs, facet_total, complete = paginate_all(
+                fetch_page,
+                page_size=20,
+                first_page=0,
+                max_pages=self.max_pages,
+                logger=None,
+                label=f"oracle:{self._host}:facet",
+            )
+            page_complete.append(complete)
+            for j in reqs:
+                jid = str(j.get("Id") or "").strip()
+                if jid and jid not in seen:
+                    seen.add(jid)
+                    trusted.append(j)
             if facet_total is not None:
                 self.reported_total = facet_total
 
@@ -171,21 +176,25 @@ class OracleAdapter(BaseAdapter):
         if not trusted:
             keyword_totals: List[int] = []
             for kw in _search_texts_for_regions(regions):
-                keyword_total: Optional[int] = None
-                for page in range(self.max_pages):
+                def fetch_page(page: int) -> PageResult:
                     top = self._get(f",keyword={kw},limit=20,offset={page * 20}")
-                    if keyword_total is None:
-                        keyword_total = _reported_total_from_payload(top)
                     reqs = top.get("requisitionList", []) or []
-                    if not reqs:
-                        break
-                    for j in reqs:
-                        jid = str(j.get("Id") or "").strip()
-                        if jid and jid not in seen:
-                            seen.add(jid)
-                            text_jobs.append(j)
-                    if len(reqs) < 20:
-                        break
+                    return PageResult(items=reqs, total=_reported_total_from_payload(top))
+
+                reqs, keyword_total, complete = paginate_all(
+                    fetch_page,
+                    page_size=20,
+                    first_page=0,
+                    max_pages=self.max_pages,
+                    logger=None,
+                    label=f"oracle:{self._host}:keyword:{kw}",
+                )
+                page_complete.append(complete)
+                for j in reqs:
+                    jid = str(j.get("Id") or "").strip()
+                    if jid and jid not in seen:
+                        seen.add(jid)
+                        text_jobs.append(j)
                 if keyword_total is not None:
                     keyword_totals.append(keyword_total)
             search_terms = _search_texts_for_regions(regions)
@@ -200,6 +209,8 @@ class OracleAdapter(BaseAdapter):
         self.fetch_complete = (
             self.reported_total is not None
             and (len(trusted) + len(text_jobs)) >= self.reported_total
+            and bool(page_complete)
+            and all(page_complete)
         )
 
         return json.dumps({
