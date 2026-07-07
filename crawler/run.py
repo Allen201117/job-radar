@@ -314,9 +314,15 @@ def _process_one_source(source, supabase) -> dict:
         raw_jobs = adapter.parse(html)
         print(f"    parsed {len(raw_jobs)} jobs")
 
+        # 抓全率可观测（阶段①）：fetch 时 adapter 已填 reported_total/fetch_complete。
+        # 有 total 才判 complete；无 total（纯 HTML/接口无此字段）→ complete=None 不可判定（诚实盲区）。
+        _cov_total = getattr(adapter, "reported_total", None)
+        _cov_complete = getattr(adapter, "fetch_complete", False) if _cov_total is not None else None
+
         if not raw_jobs:
             db.update_crawl_run(supabase, run_id, "success",
-                                jobs_found=0)
+                                jobs_found=0,
+                                reported_total=_cov_total, coverage_complete=_cov_complete)
             return {"status": "empty", "created": 0, "updated": 0}
 
         valid_jobs = []
@@ -343,6 +349,7 @@ def _process_one_source(source, supabase) -> dict:
                     "Parsed rows, but none had high-quality job detail URLs. "
                     f"{reason_text}"
                 ),
+                reported_total=_cov_total, coverage_complete=_cov_complete,
             )
             return {"status": "no_valid", "created": 0, "updated": 0}
 
@@ -398,6 +405,7 @@ def _process_one_source(source, supabase) -> dict:
                 if invalid_reasons
                 else None
             ),
+            reported_total=_cov_total, coverage_complete=_cov_complete,
         )
 
         if invalid_reasons:

@@ -7,12 +7,19 @@ join.tencentmusic.com 是 Nuxt SSR+SPA，但岗位数据走公开 JSON 接口（
 列表行自带 duty（岗位描述）作 summary，无需逐岗 detail。
 """
 import json
-from typing import List
+from typing import List, Optional
 
 import httpx
 
 import normalizer
 from .base import BaseAdapter, RawJob
+
+
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class TencentMusicAdapter(BaseAdapter):
@@ -26,26 +33,40 @@ class TencentMusicAdapter(BaseAdapter):
     PAGE_SIZE = 100
     MAX_PAGES = 30  # 100/页 → 封顶 3000 岗；当前社招 ~118 + 校招 ~129，余量充足
 
-    def _fetch_board(self, client: httpx.Client, api: str, payload_base: dict) -> List[dict]:
+    def _fetch_board(
+        self,
+        client: httpx.Client,
+        api: str,
+        payload_base: dict,
+    ) -> tuple[List[dict], Optional[int]]:
         rows: List[dict] = []
+        total: Optional[int] = None
         for page in range(1, self.MAX_PAGES + 1):
             payload = dict(payload_base, page=page, ss=self.PAGE_SIZE)
             resp = client.post(api, json=payload)
             resp.raise_for_status()
             data = (resp.json() or {}).get("data") or {}
             items = data.get("items") or []
+            meta = data.get("_meta") or {}
+            if total is None:
+                total = _int_or_none(meta.get("total_count"))
+                if total is None:
+                    total = _int_or_none(meta.get("total"))
+                if total is None:
+                    total = _int_or_none(meta.get("count"))
             if not items:
                 break
             rows.extend(items)
-            meta = data.get("_meta") or {}
             page_count = meta.get("page_count")
             if isinstance(page_count, int) and page >= page_count:
                 break
             if len(items) < self.PAGE_SIZE:
                 break
-        return rows
+        return rows, total
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         headers = {
             "User-Agent": self.user_agent,
             "Accept": "application/json, text/plain, */*",
@@ -54,15 +75,22 @@ class TencentMusicAdapter(BaseAdapter):
             "Origin": "https://join.tencentmusic.com",
         }
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
-            social = self._fetch_board(client, self.SOCIAL_API, {
+            social, social_total = self._fetch_board(client, self.SOCIAL_API, {
                 "job_class": [], "work_city": "", "setid": "", "deptids": "",
                 "keyword": "", "order_by": "is_recommend",
             })
-            campus = self._fetch_board(client, self.CAMPUS_API, {
+            campus, campus_total = self._fetch_board(client, self.CAMPUS_API, {
                 "keyword": "", "work_city": "", "zp_type": "", "job_class": [],
             })
         if not social and not campus:
             raise RuntimeError("tencent_music: empty job/list + uc-job/list response")
+        totals = [t for t in (social_total, campus_total) if t is not None]
+        if len(totals) == 2:
+            self.reported_total = sum(totals)
+        self.fetch_complete = (
+            self.reported_total is not None
+            and (len(social) + len(campus)) >= self.reported_total
+        )
         return json.dumps({"social": social, "campus": campus}, ensure_ascii=False)
 
     def _map_row(self, row: dict, board: str) -> RawJob:

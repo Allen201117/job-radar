@@ -36,6 +36,13 @@ def _first_str(post: dict, keys) -> str:
     return ""
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _city_of(post: dict) -> str:
     for k in ("cityName", "city", "workCity", "location", "workPlace", "address",
               "city_name", "work_city", "locationName", "LocNames", "LocName", "Location"):
@@ -372,6 +379,7 @@ class BeisenAdapter(ChinaSpaAdapter):
         **零浏览器**。但 jd_url 需本租户详情路由（点击捕获，按 host 缓存到 beisen_routes.json）——故仅当
         **route 已缓存**时走 httpx（能拼 jd_url）；route 未缓存的租户回退浏览器（顺带探+缓存 route，由
         harvest_beisen_routes.py 持久化）。daily-crawl 无 Playwright → httpx 路径自给，回退浏览器会抛由上层记 failed。"""
+        self.reported_total = None
         self.fetch_complete = False
         parsed = urlparse(source_url)
         self._origin = f"{parsed.scheme}://{parsed.netloc}"
@@ -442,6 +450,11 @@ class BeisenAdapter(ChinaSpaAdapter):
                     break
                 if total is None:
                     total = jj.get("Count") or jj.get("Total") or 0
+                    reported = _int_or_none(jj.get("Count"))
+                    if reported is None:
+                        reported = _int_or_none(jj.get("Total"))
+                    if reported is not None:
+                        self.reported_total = reported
                 chunk = jj.get("Data") or []
                 if not isinstance(chunk, list) or not chunk:
                     break
@@ -532,6 +545,11 @@ class BeisenAdapter(ChinaSpaAdapter):
                         break
                     if total is None:
                         total = jj.get("Count") or jj.get("Total") or 0
+                        reported = _int_or_none(jj.get("Count"))
+                        if reported is None:
+                            reported = _int_or_none(jj.get("Total"))
+                        if reported is not None:
+                            self.reported_total = reported
                     chunk = jj.get("Data") or []
                     if not isinstance(chunk, list) or not chunk:
                         break

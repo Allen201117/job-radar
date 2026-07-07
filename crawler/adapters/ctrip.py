@@ -34,6 +34,13 @@ def _first(post: dict, keys) -> str:
     return ""
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 # category → (详情页路由前缀, 三桶分类标签)
 _CHANNEL = {
     1: ("experienced", "社会招聘"),
@@ -57,6 +64,8 @@ class CtripAdapter(PlaywrightAdapter):
     posts_keys = ("retValue.recruitJobAdList",) + PlaywrightAdapter.posts_keys
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         headers = {
             "User-Agent": self.user_agent,
             "Accept": "application/json, text/plain, */*",
@@ -67,9 +76,10 @@ class CtripAdapter(PlaywrightAdapter):
         }
         collected = []
         seen_ids = set()
+        channel_totals = []
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             for category in (1, 2):
-                total = None
+                total: Optional[int] = None
                 got = 0
                 for page_idx in range(1, self._MAX_PAGES + 1):
                     payload = {
@@ -89,6 +99,8 @@ class CtripAdapter(PlaywrightAdapter):
                     except (httpx.HTTPError, ValueError):
                         break
                     rv = jdata.get("retValue") or {}
+                    if total is None:
+                        total = _int_or_none(rv.get("total"))
                     rows = rv.get("recruitJobAdList") or []
                     if not rows:
                         break
@@ -103,12 +115,17 @@ class CtripAdapter(PlaywrightAdapter):
                     if fresh:
                         collected.append({"retValue": {"recruitJobAdList": fresh}})
                     got += len(rows)
-                    if total is None:
-                        total = rv.get("total") or 0
                     if total and got >= total:
                         break
+                if total is not None:
+                    channel_totals.append(total)
         if not collected:
             raise RuntimeError("ctrip: empty getJobAd (careers.ctrip.com)")
+        if len(channel_totals) == 2:
+            self.reported_total = sum(channel_totals)
+        self.fetch_complete = (
+            self.reported_total is not None and len(seen_ids) >= self.reported_total
+        )
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
 
     def _map(self, post: dict) -> Optional[RawJob]:

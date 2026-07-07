@@ -14,6 +14,13 @@ from .base import BaseAdapter, RawJob, resolve_detail_cap
 from .china_location import is_china_company_location
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _list_offsets(total: int, page_size: int) -> List[int]:
     """Return queryList row offsets; its pageNum parameter is an offset, not a page index."""
     if page_size <= 0:
@@ -70,6 +77,9 @@ class BydAdapter(BaseAdapter):
             data = body.get("data") or {}
             rows = data.get("data") or []
             if offset == 0:
+                reported = _int_or_none(data.get("total"))
+                if reported is not None:
+                    self.reported_total = reported
                 total = int(data.get("total") or len(rows))
                 offsets.extend(_list_offsets(total, self.LIST_PAGE_SIZE)[1:])
             for row in rows:
@@ -145,6 +155,8 @@ class BydAdapter(BaseAdapter):
         return details
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         headers = self._headers()
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             list_rows = self._fetch_list_rows(client)
@@ -167,6 +179,9 @@ class BydAdapter(BaseAdapter):
             raise RuntimeError(
                 "byd: official router generated no encrypted detail URLs"
             )
+        self.fetch_complete = (
+            self.reported_total is not None and len(list_rows) >= self.reported_total
+        )
         return json.dumps({"jobs": jobs}, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:

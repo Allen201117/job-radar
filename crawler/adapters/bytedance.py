@@ -408,6 +408,7 @@ class BytedanceAdapter(PlaywrightAdapter):
         self.retry_backoff_s = _env_float("BYTEDANCE_405_BACKOFF_S", _DEFAULT_405_BACKOFF_S)
         self.max_retries = _env_int("BYTEDANCE_MAX_RETRIES", _DEFAULT_MAX_RETRIES, minimum=0)
         self.fetch_complete = False
+        self.reported_total = None
         self._last_request_at: Optional[float] = None
 
     def _headers(self) -> dict:
@@ -488,9 +489,11 @@ class BytedanceAdapter(PlaywrightAdapter):
 
     def fetch(self, source_url: str) -> str:
         self.fetch_complete = False
+        self.reported_total = None
         result = self._httpx_fetch()
         if not result.reached:
             raise RuntimeError(f"{self.name}: posts API not reached")
+        self.reported_total = result.total
         self.fetch_complete = bool(result.complete)
         if result.hit_max_jobs:
             log.warning("%s hit BYTEDANCE_MAX_JOBS=%s; fetch_complete=False", self.name, self.max_jobs)

@@ -33,6 +33,13 @@ def _first(post: dict, keys) -> str:
     return ""
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 # jobType → (详情页路由前缀, 三桶分类标签)
 _CHANNEL = {
     "1": ("social-recruitment-detail", "社会招聘"),
@@ -58,6 +65,8 @@ class HuaweiAdapter(PlaywrightAdapter):
     posts_keys = ("result",) + PlaywrightAdapter.posts_keys
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         headers = {
             "User-Agent": self.user_agent,
             "Accept": "application/json, text/plain, */*",
@@ -66,9 +75,10 @@ class HuaweiAdapter(PlaywrightAdapter):
         }
         collected = []
         seen_ids = set()
+        channel_totals = []
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             for job_type in ("1", "2", "3"):
-                total = None
+                total: Optional[int] = None
                 got = 0
                 for page in range(1, self._MAX_PAGES + 1):
                     url = _API.format(size=self._PAGE_SIZE, page=page) + (
@@ -82,6 +92,8 @@ class HuaweiAdapter(PlaywrightAdapter):
                         payload = resp.json()
                     except (httpx.HTTPError, ValueError):
                         break
+                    if total is None:
+                        total = _int_or_none((payload.get("pageVO") or {}).get("totalRows"))
                     rows = payload.get("result") or []
                     if not rows:
                         break
@@ -96,12 +108,17 @@ class HuaweiAdapter(PlaywrightAdapter):
                     if fresh:
                         collected.append({"result": fresh})
                     got += len(rows)
-                    if total is None:
-                        total = (payload.get("pageVO") or {}).get("totalRows") or 0
                     if total and got >= total:
                         break
+                if total is not None:
+                    channel_totals.append(total)
         if not collected:
             raise RuntimeError("huawei: empty getJob (career.huawei.com)")
+        if len(channel_totals) == 3:
+            self.reported_total = sum(channel_totals)
+        self.fetch_complete = (
+            self.reported_total is not None and len(seen_ids) >= self.reported_total
+        )
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
 
     def _map(self, post: dict) -> Optional[RawJob]:

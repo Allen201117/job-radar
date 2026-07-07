@@ -29,6 +29,21 @@ _OVERSEAS_LOCS = {
 _JD = "https://jobs.careers.microsoft.com/global/en/job/{id}"
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _reported_total_from_payload(data: dict) -> Optional[int]:
+    for key in ("total", "count", "totalCount", "totalResults", "total_count"):
+        total = _int_or_none((data or {}).get(key))
+        if total is not None:
+            return total
+    return None
+
+
 def _locations_for_regions(regions):
     regions = normalizer.source_regions(regions)
     if regions == {"CN"}:
@@ -49,9 +64,14 @@ class MicrosoftAdapter(BaseAdapter):
         return None  # 公开 JSON API，跳过 HEAD 预检
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         headers = {"User-Agent": _BROWSER_UA, "Accept": "application/json"}
         collected: dict = {}  # id -> position（按 id 并集去重）
-        for loc in _locations_for_regions(getattr(self, "regions", None)):
+        locations = _locations_for_regions(getattr(self, "regions", None))
+        location_totals: List[int] = []
+        for loc in locations:
+            loc_total: Optional[int] = None
             for page in range(self.max_pages):
                 params = {"domain": "microsoft.com", "query": "", "location": loc,
                           "start": page * 20, "num": 20}
@@ -59,6 +79,8 @@ class MicrosoftAdapter(BaseAdapter):
                     r = httpx.get(_API, params=params, headers=headers, timeout=self.timeout)
                     r.raise_for_status()
                     data = r.json().get("data", {}) or {}
+                    if loc_total is None:
+                        loc_total = _reported_total_from_payload(data)
                 except Exception:
                     break
                 positions = data.get("positions", []) or []
@@ -70,6 +92,13 @@ class MicrosoftAdapter(BaseAdapter):
                         collected[pid] = p
                 if len(positions) < 20:
                     break
+            if loc_total is not None:
+                location_totals.append(loc_total)
+        if len(location_totals) == len(locations):
+            self.reported_total = sum(location_totals)
+        self.fetch_complete = (
+            self.reported_total is not None and len(collected) >= self.reported_total
+        )
         return json.dumps({"positions": list(collected.values())}, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:

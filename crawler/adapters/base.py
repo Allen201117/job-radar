@@ -43,6 +43,13 @@ class BaseAdapter:
     )
     timeout: int = 30
 
+    # 抓全率可观测（阶段①）：抓取时由 adapter 填，run.py 收尾写进 crawl_runs 供覆盖率监控。
+    #   reported_total = 官网接口本次自报的岗位总数（分母）；None = 接口无此字段/纯 HTML/不可测（诚实盲区）。
+    #     每次抓取都当场重新读，天然跟随官网实时变化（不是存死值）。
+    #   fetch_complete = 本次是否抓到了 reported_total 的全部（fetched >= total 或按接口翻完）。
+    reported_total: Optional[int] = None
+    fetch_complete: bool = False
+
     def fetch(self, source_url: str) -> str:
         """从 source_url 获取页面 HTML 或 JSON 文本。"""
         headers = {
