@@ -2,17 +2,26 @@
 // 关键：只报「可探源 99%」=不通过（分母偷窄）——必须四个数一起算得出。
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const Module = require("node:module");
 const path = require("node:path");
 const test = require("node:test");
 const ts = require("typescript");
 
 function load(rel) {
-  const src = fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
+  const sourcePath = path.join(__dirname, "..", rel);
+  const src = fs.readFileSync(sourcePath, "utf8");
   const out = ts.transpileModule(src, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true },
   }).outputText;
   const m = { exports: {} };
-  new Function("exports", "require", "module", "__filename", "__dirname", out)(m.exports, require, m, "", "");
+  const scopedRequire = Module.createRequire(sourcePath);
+  new Function("exports", "require", "module", "__filename", "__dirname", out)(
+    m.exports,
+    scopedRequire,
+    m,
+    sourcePath,
+    path.dirname(sourcePath),
+  );
   return m.exports;
 }
 const { computeClickValidityMetrics } = load("lib/admin-health.ts");

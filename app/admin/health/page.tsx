@@ -6,11 +6,14 @@ import {
   evaluateTodayHealth,
   formatPercent,
   getCoverageSnapshot,
+  getMustApplyFetchCoverage,
   normalizeCrawlSources,
   type ClickValidityMetrics,
   type CoverageSnapshot,
   type CrawlSourceRow,
   type DailyReport,
+  type MustApplyFetchCoverage,
+  type MustApplyFetchCoverageCompany,
   type OpsRunAggregateRow,
   type TodayCrawlRow,
   type TodayDiscoveryRow,
@@ -191,6 +194,13 @@ function coverageTextClass(value: number | null): string {
   if (value == null) return "text-[#8a8275] dark:text-[#9a9184]";
   if (value < 40) return "font-semibold text-[#9c4a3c] dark:text-[#e6a99f]";
   if (value < 80) return "font-semibold text-[#8f6225] dark:text-[#e0b15a]";
+  return "font-semibold text-[#3f3a33] dark:text-[#d9d0c2]";
+}
+
+function mustApplyCoverageTextClass(value: number | null): string {
+  if (value == null) return "text-[#8a8275] dark:text-[#9a9184]";
+  if (value < 40) return "font-semibold text-[#9c4a3c] dark:text-[#e6a99f]";
+  if (value < 90) return "font-semibold text-[#8f6225] dark:text-[#e0b15a]";
   return "font-semibold text-[#3f3a33] dark:text-[#d9d0c2]";
 }
 
@@ -417,11 +427,113 @@ function CoverageSection({ snapshot }: { snapshot: CoverageSnapshot | null }) {
 
 // 北极星卡：必投清单健康覆盖。回答「目标用户最想投的头部公司，我们到底罩住了几家」——
 // 这是产品对用户承诺的真实覆盖率，掉了要优先修它，别被库存总量的大数字安慰。
-function MustApplySection({ rows }: { rows: MustApplyRow[] | null }) {
+function MustApplyFetchCoverageBlock({ coverage }: { coverage: MustApplyFetchCoverage | null }) {
+  if (!coverage) {
+    return (
+      <div className="mt-5 border-t border-black/[0.06] pt-5 dark:border-white/[0.08]">
+        <ErrorPanel label="必投30家抓全率" />
+      </div>
+    );
+  }
+
+  const total = coverage.total || MUST_APPLY_LIST.length;
+  const leaking = coverage.companies.filter(
+    (company): company is MustApplyFetchCoverageCompany & { coveragePct: number } =>
+      company.coveragePct !== null && company.coveragePct < 90,
+  );
+
+  return (
+    <div className="mt-5 border-t border-black/[0.06] pt-5 dark:border-white/[0.08]">
+      {/* 频率分层（高价值源提频）待线上抓全率数据积累后按数据决定，暂不实现。 */}
+      <div className="mb-3">
+        <h3 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">必投30家抓全率</h3>
+        <p className="mt-1 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
+          官网总数 vs 我们抓到；抓全率低于 90% 的公司排在前面。
+        </p>
+      </div>
+
+      {coverage.measurable === 0 && coverage.companies.length === 0 ? (
+        <AccumulatingMetric title="必投30家抓全率" description="还没有抓取填入官网总数，暂时算不出抓全率。" />
+      ) : (
+        <>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <RatioCard
+              label="抓全家数"
+              value={`${coverage.fullyFetched}/${total}`}
+              detail="抓全率 ≥90% 的公司；口径是官网总数 vs 我们抓到。"
+              warning={coverage.fullyFetched < total * 0.8}
+            />
+            <RatioCard
+              label="平均抓全率"
+              value={coverage.avgPct == null ? "积累中" : `${coverage.avgPct}%`}
+              detail="只用官网报了总数的公司计算。"
+              warning={coverage.avgPct != null && coverage.avgPct < 90}
+            />
+            <RatioCard
+              label="盲区(算不出)"
+              value={formatCount(coverage.blind)}
+              detail="官网不报总数，暂时算不出抓全率；这不是抓漏。"
+              warning={coverage.blind > 0}
+            />
+          </div>
+
+          {coverage.measurable === 0 ? (
+            <p className="mt-4 rounded-2xl border border-dashed border-black/10 bg-white/35 px-4 py-5 text-sm text-[#8a8275] dark:border-white/10 dark:bg-white/[0.03] dark:text-[#9a9184]">
+              必投清单还没有可计算官网总数的数据，等下一轮抓取填入后展示明细。
+            </p>
+          ) : leaking.length === 0 ? (
+            <p className="mt-4 rounded-2xl border border-dashed border-black/10 bg-white/35 px-4 py-5 text-sm text-[#8a8275] dark:border-white/10 dark:bg-white/[0.03] dark:text-[#9a9184]">
+              暂无抓全率低于 90% 的必投公司。
+            </p>
+          ) : (
+            <div className="mt-4 overflow-x-auto rounded-2xl border border-black/[0.07] dark:border-white/[0.1]">
+              <table className="w-full min-w-[560px] text-left text-sm">
+                <thead className="bg-[#f4efe6] text-xs text-[#8a8275] dark:bg-[#1c1813] dark:text-[#9a9184]">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">公司</th>
+                    <th className="px-4 py-3 text-right font-medium">官网总数</th>
+                    <th className="px-4 py-3 text-right font-medium">我们抓到</th>
+                    <th className="px-4 py-3 text-right font-medium">抓全率%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leaking.map((company) => (
+                    <tr
+                      key={company.pattern || company.name}
+                      className="border-t border-black/[0.05] text-[#3f3a33] dark:border-white/[0.08] dark:text-[#d9d0c2]"
+                    >
+                      <td className="max-w-80 px-4 py-3 font-medium">
+                        <span className="block truncate">{company.name}</span>
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">{formatCount(company.reportedTotal)}</td>
+                      <td className="px-4 py-3 text-right tabular-nums">{formatCount(company.fetched)}</td>
+                      <td className={`px-4 py-3 text-right tabular-nums ${mustApplyCoverageTextClass(company.coveragePct)}`}>
+                        {company.coveragePct}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function MustApplySection({
+  rows,
+  fetchCoverage,
+}: {
+  rows: MustApplyRow[] | null;
+  fetchCoverage: MustApplyFetchCoverage | null;
+}) {
   if (!rows) {
     return (
       <Section title="北极星 · 必投清单健康覆盖" description="目标用户最常投的头部公司逐家对账。">
         <ErrorPanel label="必投清单覆盖" />
+        <MustApplyFetchCoverageBlock coverage={fetchCoverage} />
       </Section>
     );
   }
@@ -508,6 +620,7 @@ function MustApplySection({ rows }: { rows: MustApplyRow[] | null }) {
           </tbody>
         </table>
       </div>
+      <MustApplyFetchCoverageBlock coverage={fetchCoverage} />
     </Section>
   );
 }
@@ -517,12 +630,13 @@ export default async function AdminHealthPage() {
     redirect("/");
   }
 
-  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult] = await Promise.allSettled([
+  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, mustApplyFetchResult] = await Promise.allSettled([
     getJobsHealthSnapshot(),
     loadSupabaseHealth(),
     loadClickValidity(),
     loadMustApplyCoverage(),
     loadCoverageSnapshot(),
+    getMustApplyFetchCoverage(createServiceClient()),
   ]);
 
   if (jobsResult.status === "rejected") {
@@ -540,12 +654,16 @@ export default async function AdminHealthPage() {
   if (coverageResult.status === "rejected") {
     console.error("[admin-health] crawl coverage failed:", coverageResult.reason);
   }
+  if (mustApplyFetchResult.status === "rejected") {
+    console.error("[admin-health] must-apply fetch coverage failed:", mustApplyFetchResult.reason);
+  }
 
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
   const clickValidity = clickResult.status === "fulfilled" ? clickResult.value : null;
   const mustApply = mustApplyResult.status === "fulfilled" ? mustApplyResult.value : null;
   const coverage = coverageResult.status === "fulfilled" ? coverageResult.value : null;
+  const mustApplyFetchCoverage = mustApplyFetchResult.status === "fulfilled" ? mustApplyFetchResult.value : null;
   const crawlSources = normalizeCrawlSources(operations?.crawl_sources);
   const reports = buildDailyReports({
     crawl: operations?.today?.crawl || null,
@@ -634,7 +752,7 @@ export default async function AdminHealthPage() {
         </ProductHero>
 
         <div className="mt-6 grid gap-6">
-          <MustApplySection rows={mustApply} />
+          <MustApplySection rows={mustApply} fetchCoverage={mustApplyFetchCoverage} />
 
           <Section
             title="各模块每日战报"

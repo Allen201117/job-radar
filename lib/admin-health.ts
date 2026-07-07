@@ -1,8 +1,23 @@
+import mustApplyList from "./must-apply-list.json";
+
 type Numeric = number | string | null | undefined;
+
+type MustApplyListCompany = {
+  name: string;
+  pattern: string;
+};
+
+const MUST_APPLY_COMPANIES = mustApplyList as MustApplyListCompany[];
 
 function toNumber(value: Numeric): number {
   const n = Number(value ?? 0);
   return Number.isFinite(n) ? n : 0;
+}
+
+function toNullableNumber(value: Numeric): number | null {
+  if (value == null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 export function formatPercent(numerator: Numeric, denominator: Numeric): string {
@@ -212,12 +227,132 @@ export function normalizeCoverageSnapshot(row: CoverageSnapshotRow | null | unde
   };
 }
 
+export type MustApplyFetchCoverageCompanyRow = {
+  name?: string | null;
+  pattern?: string | null;
+  reported_total?: Numeric;
+  fetched?: Numeric;
+  coverage_pct?: Numeric;
+  measurable?: boolean | null;
+  last_run_at?: string | null;
+};
+
+export type MustApplyFetchCoverageRow = {
+  measurable?: Numeric;
+  blind?: Numeric;
+  fully_fetched?: Numeric;
+  avg_pct?: Numeric;
+  companies?: MustApplyFetchCoverageCompanyRow[] | null;
+};
+
+export type MustApplyFetchCoverageCompany = {
+  name: string;
+  pattern: string;
+  reportedTotal: number | null;
+  fetched: number;
+  coveragePct: number | null;
+  measurable: boolean;
+  lastRunAt: string | null;
+};
+
+export type MustApplyFetchCoverage = {
+  total: number;
+  measurable: number;
+  blind: number;
+  fullyFetched: number;
+  avgPct: number | null;
+  companies: MustApplyFetchCoverageCompany[];
+};
+
+function emptyMustApplyFetchCoverage(): MustApplyFetchCoverage {
+  return {
+    total: MUST_APPLY_COMPANIES.length,
+    measurable: 0,
+    blind: MUST_APPLY_COMPANIES.length,
+    fullyFetched: 0,
+    avgPct: null,
+    companies: [],
+  };
+}
+
+function mustApplyDisplayName(row: MustApplyFetchCoverageCompanyRow): string {
+  const pattern = typeof row.pattern === "string" ? row.pattern : "";
+  const rawName = typeof row.name === "string" ? row.name : "";
+  const matched = MUST_APPLY_COMPANIES.find((company) => company.pattern === pattern || company.pattern === rawName);
+  return matched?.name || rawName || pattern || "未知公司";
+}
+
+export function normalizeMustApplyFetchCoverage(
+  row: MustApplyFetchCoverageRow | null | undefined,
+): MustApplyFetchCoverage {
+  if (!row) return emptyMustApplyFetchCoverage();
+
+  const companies = (Array.isArray(row.companies) ? row.companies : [])
+    .map((company) => {
+      const pattern = String(company.pattern || company.name || "");
+      const reported = toNullableNumber(company.reported_total);
+      const measurable = typeof company.measurable === "boolean" ? company.measurable : reported !== null;
+      const reportedTotal = measurable ? reported : null;
+      const coveragePct = reportedTotal !== null && reportedTotal > 0 ? toClampedPercent(company.coverage_pct) : null;
+      return {
+        name: mustApplyDisplayName(company),
+        pattern,
+        reportedTotal,
+        fetched: toNumber(company.fetched),
+        coveragePct,
+        measurable,
+        lastRunAt: company.last_run_at || null,
+      };
+    })
+    .sort((a, b) => {
+      const aPct = a.coveragePct == null ? Number.POSITIVE_INFINITY : a.coveragePct;
+      const bPct = b.coveragePct == null ? Number.POSITIVE_INFINITY : b.coveragePct;
+      return aPct - bPct || a.name.localeCompare(b.name, "zh-CN");
+    });
+
+  const measurable = companies.length ? companies.filter((company) => company.measurable).length : toNumber(row.measurable);
+  const blind = companies.length ? companies.filter((company) => !company.measurable).length : toNumber(row.blind);
+  const fullyFetched = companies.length
+    ? companies.filter((company) => company.coveragePct !== null && company.coveragePct >= 90).length
+    : toNumber(row.fully_fetched);
+  const measuredCoverage = companies
+    .map((company) => company.coveragePct)
+    .filter((value): value is number => value !== null);
+  const avgFromCompanies = measuredCoverage.length
+    ? Math.round(measuredCoverage.reduce((sum, value) => sum + value, 0) / measuredCoverage.length)
+    : null;
+
+  return {
+    total: companies.length || MUST_APPLY_COMPANIES.length,
+    measurable,
+    blind,
+    fullyFetched,
+    avgPct: toClampedPercent(row.avg_pct) ?? avgFromCompanies,
+    companies,
+  };
+}
+
 type SupabaseRpcClient = {
   rpc: (
     fn: string,
     args?: Record<string, unknown>,
   ) => PromiseLike<{ data: unknown; error: { message?: string } | null }>;
 };
+
+export async function getMustApplyFetchCoverage(supabase: SupabaseRpcClient): Promise<MustApplyFetchCoverage> {
+  try {
+    const patterns = MUST_APPLY_COMPANIES.map((company) => company.pattern);
+    const { data, error } = await supabase.rpc("must_apply_coverage", { patterns });
+    if (error) {
+      console.error("[admin-health] must-apply fetch coverage failed:", error.message || error);
+      return emptyMustApplyFetchCoverage();
+    }
+    return normalizeMustApplyFetchCoverage(data as MustApplyFetchCoverageRow | null);
+  } catch (error) {
+    console.error("[admin-health] must-apply fetch coverage failed:", error);
+    return emptyMustApplyFetchCoverage();
+  }
+}
 
 export async function getCoverageSnapshot(supabase: SupabaseRpcClient): Promise<CoverageSnapshot> {
   try {
