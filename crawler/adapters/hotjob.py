@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 import httpx
 
 import normalizer
-from .base import RawJob, resolve_detail_cap
+from .base import PageResult, RawJob, paginate_all, resolve_detail_cap
 from .playwright_base import PlaywrightAdapter
 
 
@@ -57,7 +57,7 @@ class HotJobAdapter(PlaywrightAdapter):
     # → 保守 4（≈ 已验证安全上限，串行 150 岗 ~20s → ~5s）。若 CI 见限流(miss) 降回 3。
     _DETAIL_WORKERS = 4
     api_page_size = 20   # 接口服务端硬上限 = 20/页（pageSize 调更大也只回 20）
-    api_max_pages = 10   # 每渠道最多翻页数（10×20=200 岗封顶，防库膨胀；按 totalPage 提前停）
+    api_max_pages = 60   # 每渠道安全上限（60×20=1200 岗）；靠真实 total/短页自然收尾
 
     def __init__(self):
         self.official_hosts = ()
@@ -102,7 +102,7 @@ class HotJobAdapter(PlaywrightAdapter):
         # 翻页参数是 currentPage（pageIndex/pageNo 均被忽略，恒回第 1 页）；pageSize 服务端封顶 20。
         collected: List[dict] = []
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
-            for current_page in range(1, self.api_max_pages + 1):
+            def fetch_page(current_page: int) -> PageResult:
                 resp = client.post(api, data={
                     "recruitType": self._recruit_type,
                     "currentPage": current_page,
@@ -113,35 +113,30 @@ class HotJobAdapter(PlaywrightAdapter):
                 collected.append(payload)
                 page_form = (payload.get("data") or {}).get("pageForm") or {}
                 rows = page_form.get("pageData") or []
-                total_page = page_form.get("totalPage") or 0
-                if self.reported_total is None:
-                    total = _int_or_none(page_form.get("total"))
-                    if total is None:
-                        total = _int_or_none(page_form.get("totalCount"))
-                    if total is None:
-                        total = _int_or_none(page_form.get("count"))
-                    if total is None:
-                        pages_total = _int_or_none(page_form.get("totalPage"))
-                        if pages_total is not None:
-                            total = pages_total * self.api_page_size
-                    if total is not None:
-                        self.reported_total = total
-                if not rows or current_page >= total_page:
-                    break
+                total = _int_or_none(page_form.get("total"))
+                if total is None:
+                    total = _int_or_none(page_form.get("totalCount"))
+                if total is None:
+                    total = _int_or_none(page_form.get("count"))
+                return PageResult(
+                    items=rows,
+                    total=total,
+                    total_pages=_int_or_none(page_form.get("totalPage")),
+                )
+
+            posts, total, complete = paginate_all(
+                fetch_page,
+                page_size=self.api_page_size,
+                first_page=1,
+                max_pages=self.api_max_pages,
+                logger=None,
+                label=f"hotjob:{self._suite_key}",
+            )
+            self.reported_total = total
+            self.fetch_complete = complete
             # 列表无 JD 正文（workContent/serviceCondition 全空 → summary 空）；逐岗调 listPositionDetail
             # 补正文（复用同一带 Referer/Origin 的 client）。capped；单岗失败该岗无摘要、不影响入库。
-            posts = [
-                p
-                for payload in collected
-                for p in (((payload.get("data") or {}).get("pageForm") or {}).get("pageData") or [])
-                if isinstance(p, dict)
-            ]
-            self._enrich_details(client, posts)
-        if not collected:
-            raise RuntimeError(f"hotjob: empty response from listPosition (suiteKey={self._suite_key})")
-        self.fetch_complete = (
-            self.reported_total is not None and len(posts) >= self.reported_total
-        )
+            self._enrich_details(client, [p for p in posts if isinstance(p, dict)])
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
 
     def _enrich_details(self, client, posts):

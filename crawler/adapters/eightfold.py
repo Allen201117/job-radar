@@ -17,7 +17,7 @@ from urllib.parse import urlparse, parse_qs
 import httpx
 
 import normalizer
-from .base import BaseAdapter, RawJob, resolve_detail_cap
+from .base import BaseAdapter, PageResult, RawJob, paginate_all, resolve_detail_cap
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -37,7 +37,7 @@ def _reported_total_from_payload(data: dict) -> Optional[int]:
 
 class EightfoldAdapter(BaseAdapter):
     name = "eightfold"
-    max_pages = 25          # num=10/页 → 每个地点最多约 250 在华岗（打通通道足够，非全量）
+    max_pages = 100         # num=10/页 → 每个地点安全上限 1000，靠接口 total/短页自然收尾
     china_locations = ("China", "Hong Kong")  # 服务端按地点收窄到大中华区
     overseas_locations = {
         "US": ("United States",),
@@ -61,29 +61,38 @@ class EightfoldAdapter(BaseAdapter):
         seen_ids = set()
         locations = self._locations_for_regions()
         location_totals: List[int] = []
+        location_complete: List[bool] = []
         for loc in locations:
-            loc_total: Optional[int] = None
-            for page in range(self.max_pages):
+            def fetch_page(page: int) -> PageResult:
                 params = {"domain": domain, "location": loc,
                           "start": page * 10, "num": 10, "sort_by": "relevance"}
                 r = httpx.get(f"{origin}{path}", params=params, headers=headers, timeout=self.timeout)
                 r.raise_for_status()
                 data = r.json()
-                if loc_total is None:
-                    loc_total = _reported_total_from_payload(data if isinstance(data, dict) else {})
                 positions = (data or {}).get("positions", []) or []
-                if not positions:
-                    break
-                for pos in positions:
-                    pid = pos.get("id")
-                    if pid in seen_ids:
-                        continue
-                    seen_ids.add(pid)
-                    collected.append(pos)
-                if len(positions) < 10:
-                    break
+                return PageResult(
+                    items=positions,
+                    total=_reported_total_from_payload(data if isinstance(data, dict) else {}),
+                )
+
+            positions, loc_total, complete = paginate_all(
+                fetch_page,
+                page_size=10,
+                first_page=0,
+                max_pages=self.max_pages,
+                logger=None,
+                label=f"eightfold:{origin}:{loc}",
+            )
             if loc_total is not None:
                 location_totals.append(loc_total)
+            location_complete.append(complete)
+            for pos in positions:
+                pid = pos.get("id")
+                if pid and pid in seen_ids:
+                    continue
+                if pid:
+                    seen_ids.add(pid)
+                collected.append(pos)
         if len(location_totals) == len(locations):
             self.reported_total = sum(location_totals)
 
@@ -92,7 +101,8 @@ class EightfoldAdapter(BaseAdapter):
         # summary 有正文后 extract_job_type 也能从中推断类型。只补将保留的在华岗，单源封顶防夜间全量被拖垮。
         self._enrich_descriptions(origin, path, domain, collected, headers)
         self.fetch_complete = (
-            self.reported_total is not None and len(collected) >= self.reported_total
+            len(location_complete) == len(locations)
+            and all(location_complete)
         )
         return json.dumps({"_origin": origin, "positions": collected}, ensure_ascii=False)
 
