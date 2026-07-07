@@ -562,6 +562,8 @@ class BeisenAdapter(ChinaSpaAdapter):
             browser.close()
 
         if rows:
+            # 与 httpx 路径同口径：抓到 reported_total 全部才算完整（抓全率观测 honesty 契约）
+            self.fetch_complete = (total is not None and len(rows) >= (total or 0))
             return json.dumps({"_intercepted": [{"Data": rows, "Count": total or len(rows)}]},
                               ensure_ascii=False)
         if passive:  # 没捕获到 POST/重放为空 → 回退被动拦截链（异构租户兼容）
