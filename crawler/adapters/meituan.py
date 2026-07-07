@@ -21,7 +21,9 @@ class MeituanAdapter(BaseAdapter):
         "?jobUnionId={job_id}&highlightType=social"
     )
     PAGE_SIZE = 50
-    MAX_PAGES = 20
+    # 官网社招实测 ~2830 岗；旧上限 20×50=1000 封顶只抓到 ~35%。提到 80×50=4000
+    # 覆盖全量（分页按 page_rows<PAGE_SIZE 自然停，不会真跑满 80 页）。
+    MAX_PAGES = 80
 
     def fetch(self, source_url: str) -> str:
         headers = {
