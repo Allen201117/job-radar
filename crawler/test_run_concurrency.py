@@ -33,6 +33,7 @@ class IsHttpxSafeTest(unittest.TestCase):
         for a in ("greenhouse", "lever", "workday", "oracle", "hotjob", "wt",
                   "tencent", "baidu", "jd", "apple", "amazon", "microsoft",
                   "netease", "oppo",  # netease/oppo: PlaywrightAdapter 子类但自带 httpx fetch（同 hotjob/wt）
+                  "bytedance", "bytedance_campus",  # 字节 posts API 纯 httpx 全量分页，浏览器仅留给撤岗审计
                   # feishu 家族（2026-06-28）：httpx-first（posts API 冷可达），浏览器仅做回退 → 进并发档
                   "feishu", "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu"):
             self.assertTrue(run._is_httpx_safe(a), a)
@@ -40,13 +41,12 @@ class IsHttpxSafeTest(unittest.TestCase):
     def test_browser_and_unknown_false(self):
         # 真浏览器 adapter（fetch 主路径起 Playwright，非线程安全）+ 未知/空 → 必须落串行档（fail-safe）
         for a in ("moka", "beisen", "company_spa",
-                  "bytedance", "bytedance_campus", "google", "", "未来新增的源", None):
+                  "google", "", "未来新增的源", None):
             self.assertFalse(run._is_httpx_safe(a), a)
 
     def test_every_known_browser_adapter_is_serial(self):
         # 兜底铁律：fetch **主路径**会起 sync_playwright 的 adapter，绝不能进并发档（feishu 主路径已是 httpx，故不在此列）。
-        for a in ("moka", "beisen", "company_spa",
-                  "bytedance", "bytedance_campus", "google"):
+        for a in ("moka", "beisen", "company_spa", "google"):
             self.assertNotIn(a, run._HTTPX_SAFE_ADAPTERS, a)
 
 

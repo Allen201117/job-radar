@@ -158,6 +158,9 @@ _HTTPX_SAFE_ADAPTERS = {
     "netease", "oppo", "xiaohongshu", "alibaba", "huawei", "ctrip",
     "meituan", "bilibili", "pinduoduo", "vivo", "sf_express",  # 已逐一核实为纯 httpx fetch
     "tencent_music", "antgroup", "mihoyo",  # 自建门户公开 JSON 接口，纯 httpx（2026-07-06 核实）
+    # 字节：jobs.bytedance.com posts API 已改为纯 httpx offset/limit 全量翻页；
+    # sources.crawl_method 仍由运维侧改库，本白名单只控制代码侧并发档。
+    "bytedance", "bytedance_campus",
     # feishu 家族：posts API 冷 httpx 直出岗位+正文（2026-06-28 实测 generic/nio/xpeng/xiaomi/zhipu/xtool
     # 全可达），httpx-first + 浏览器回退见 adapters/feishu.py；进 daily-crawl 4×/天（原仅 enrich-crawl 1×/天）。
     "feishu", "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu",
