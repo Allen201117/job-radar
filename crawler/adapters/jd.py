@@ -1,5 +1,7 @@
 import json
+import logging
 import re
+import time
 from datetime import datetime, timezone
 from typing import List
 
@@ -7,6 +9,9 @@ import httpx
 from selectolax.parser import HTMLParser
 
 from .base import BaseAdapter, RawJob
+
+
+logger = logging.getLogger(__name__)
 
 
 class JdAdapter(BaseAdapter):
@@ -20,9 +25,17 @@ class JdAdapter(BaseAdapter):
     LIST_PAGE_URL = "https://zhaopin.jd.com/web/job/job_info_list/3"
     API_URL = "https://zhaopin.jd.com/web/job/job_list"
     DETAIL_URL = "https://zhaopin.jd.com/web/job-info-detail"
+    PAGE_SIZE = 100
+    MAX_PAGES = 100
+    PAGE_DELAY_SECONDS = 0.1
 
     def fetch(self, source_url: str) -> str:
-        """Fetch the public JD social-recruitment list API."""
+        """Fetch the public JD social-recruitment list API.
+
+        校招/实习在 campus.jd.com 独立门户，当前接口无 recruitType 参数，本 adapter 只抓社招。
+        """
+        self.reported_total = None
+        self.fetch_complete = False
         headers = {
             "User-Agent": self.user_agent,
             "Accept": "application/json, text/javascript, */*; q=0.01",
@@ -31,18 +44,40 @@ class JdAdapter(BaseAdapter):
             "Referer": self.LIST_PAGE_URL,
             "X-Requested-With": "XMLHttpRequest",
         }
-        data = {
-            "pageIndex": "1",
-            "pageSize": "15",
-            "workCityJson": "[]",
-            "jobTypeJson": "[]",
-            "jobSearch": "",
-            "depTypeJson": "[]",
-        }
-        resp = httpx.post(self.API_URL, headers=headers, data=data, timeout=self.timeout,
-                          follow_redirects=True)
-        resp.raise_for_status()
-        return resp.text
+        rows = []
+        page = 1
+        while True:
+            if page > self.MAX_PAGES:
+                logger.warning("jd: stopped at safety page cap %s", self.MAX_PAGES)
+                self.reported_total = None
+                self.fetch_complete = False
+                break
+            data = {
+                "pageIndex": str(page),
+                "pageSize": str(self.PAGE_SIZE),
+                "workCityJson": "[]",
+                "jobTypeJson": "[]",
+                "jobSearch": "",
+                "depTypeJson": "[]",
+            }
+            resp = httpx.post(
+                self.API_URL,
+                headers=headers,
+                data=data,
+                timeout=self.timeout,
+                follow_redirects=True,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            page_rows = payload if isinstance(payload, list) else _find_job_list(payload)
+            rows.extend(page_rows)
+            if len(page_rows) < self.PAGE_SIZE:
+                self.reported_total = len(rows)
+                self.fetch_complete = True
+                break
+            page += 1
+            time.sleep(self.PAGE_DELAY_SECONDS)
+        return json.dumps(rows, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:
         jobs = []
@@ -121,7 +156,9 @@ def _format_jd_job(row: dict) -> RawJob:
             or ""
         ),
         location=row.get("workCity") or row.get("location") or row.get("city") or row.get("workCityName"),
-        job_type=row.get("jobType") or row.get("recruitType"),
+        # 本 adapter 只抓社招门户（校招/实习在 campus.jd.com 未接）；接口的 jobType 是职能分类
+        # （运营类/研发类…）不是招聘类型，直接标「社招」保持 job_type 语义一致（与其它 adapter 同口径）。
+        job_type="社招",
         summary=summary or None,
         jd_url=jd_url,
         apply_url=jd_url,

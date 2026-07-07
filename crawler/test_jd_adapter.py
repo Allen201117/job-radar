@@ -26,7 +26,7 @@ class JdAdapterTest(unittest.TestCase):
         self.assertEqual(jobs[0].company, "京东")
         self.assertEqual(jobs[0].title, "数据分析师")
         self.assertEqual(jobs[0].location, "北京市")
-        self.assertEqual(jobs[0].job_type, "研发类")
+        self.assertEqual(jobs[0].job_type, "社招")  # 只抓社招门户，job_type 固定社招（非接口职能分类）
         self.assertEqual(
             jobs[0].jd_url,
             "https://zhaopin.jd.com/web/job-info-detail?requementId=217525",
