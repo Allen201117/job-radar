@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const Module = require("node:module");
 const path = require("node:path");
 const test = require("node:test");
 const ts = require("typescript");
@@ -16,8 +17,9 @@ function loadOptionalTsModule(relPath) {
     },
   }).outputText;
   const module = { exports: {} };
+  const scopedRequire = Module.createRequire(sourcePath);
   const fn = new Function("exports", "require", "module", "__filename", "__dirname", compiled);
-  fn(module.exports, require, module, sourcePath, path.dirname(sourcePath));
+  fn(module.exports, scopedRequire, module, sourcePath, path.dirname(sourcePath));
   return module.exports;
 }
 
@@ -176,6 +178,164 @@ test("getCoverageSnapshot returns an empty state instead of throwing on RPC fail
       avgCoveragePct: null,
       underCount: 0,
       underSources: [],
+    });
+  } finally {
+    console.error = originalError;
+  }
+});
+
+test("normalizeMustApplyFetchCoverage classifies must-apply fetch coverage without inventing missing totals", () => {
+  assert.equal(typeof H.normalizeMustApplyFetchCoverage, "function");
+  assert.deepEqual(
+    H.normalizeMustApplyFetchCoverage({
+      measurable: "3",
+      blind: 1,
+      fully_fetched: 2,
+      avg_pct: 72,
+      companies: [
+        {
+          name: "%腾讯%",
+          pattern: "%腾讯%",
+          reported_total: 100,
+          fetched: 90,
+          coverage_pct: 90,
+          measurable: true,
+        },
+        {
+          name: "%字节%",
+          pattern: "%字节%",
+          reported_total: 40,
+          fetched: 60,
+          coverage_pct: 150,
+          measurable: true,
+        },
+        {
+          name: "%阿里%",
+          pattern: "%阿里%",
+          reported_total: 0,
+          fetched: 3,
+          coverage_pct: null,
+          measurable: true,
+        },
+        {
+          name: "%美团%",
+          pattern: "%美团%",
+          reported_total: null,
+          fetched: 7,
+          coverage_pct: null,
+          measurable: false,
+        },
+      ],
+    }),
+    {
+      total: 4,
+      measurable: 3,
+      blind: 1,
+      fullyFetched: 2,
+      avgPct: 72,
+      companies: [
+        {
+          name: "腾讯",
+          pattern: "%腾讯%",
+          reportedTotal: 100,
+          fetched: 90,
+          coveragePct: 90,
+          measurable: true,
+          lastRunAt: null,
+        },
+        {
+          name: "字节跳动",
+          pattern: "%字节%",
+          reportedTotal: 40,
+          fetched: 60,
+          coveragePct: 100,
+          measurable: true,
+          lastRunAt: null,
+        },
+        {
+          name: "阿里巴巴",
+          pattern: "%阿里%",
+          reportedTotal: 0,
+          fetched: 3,
+          coveragePct: null,
+          measurable: true,
+          lastRunAt: null,
+        },
+        {
+          name: "美团",
+          pattern: "%美团%",
+          reportedTotal: null,
+          fetched: 7,
+          coveragePct: null,
+          measurable: false,
+          lastRunAt: null,
+        },
+      ],
+    },
+  );
+});
+
+test("getMustApplyFetchCoverage passes JSON patterns to the RPC and fails open", async () => {
+  assert.equal(typeof H.getMustApplyFetchCoverage, "function");
+  const calls = [];
+  const result = await H.getMustApplyFetchCoverage({
+    rpc: async (name, args) => {
+      calls.push({ name, args });
+      return {
+        data: {
+          measurable: 2,
+          blind: 28,
+          fully_fetched: 1,
+          avg_pct: 62,
+          companies: [
+            {
+              name: "%字节%",
+              pattern: "%字节%",
+              reported_total: 100,
+              fetched: 34,
+              coverage_pct: 34,
+              measurable: true,
+            },
+            {
+              name: "%腾讯%",
+              pattern: "%腾讯%",
+              reported_total: 80,
+              fetched: 72,
+              coverage_pct: 90,
+              measurable: true,
+            },
+          ],
+        },
+        error: null,
+      };
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, "must_apply_coverage");
+  assert.equal(calls[0].args.patterns.length, 30);
+  assert.deepEqual(calls[0].args.patterns.slice(0, 2), ["%字节%", "%腾讯%"]);
+  assert.equal(result.total, 2);
+  assert.equal(result.measurable, 2);
+  assert.equal(result.fullyFetched, 1);
+  assert.deepEqual(result.companies.map((company) => [company.name, company.coveragePct]), [
+    ["字节跳动", 34],
+    ["腾讯", 90],
+  ]);
+
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    const failed = await H.getMustApplyFetchCoverage({
+      rpc: async () => ({ data: null, error: { message: "missing function" } }),
+    });
+    assert.deepEqual(failed, {
+      total: 30,
+      measurable: 0,
+      blind: 30,
+      fullyFetched: 0,
+      avgPct: null,
+      companies: [],
     });
   } finally {
     console.error = originalError;
@@ -452,6 +612,31 @@ test("crawl coverage snapshot uses latest enabled Supabase crawl runs and hides 
   assert.match(migration, /limit 40/i);
   assert.match(migration, /revoke execute on function public\.crawl_coverage_snapshot\(\) from public, anon, authenticated/i);
   assert.match(migration, /grant execute on function public\.crawl_coverage_snapshot\(\) to service_role/i);
+});
+
+test("must-apply coverage snapshot accepts patterns, merges latest enabled source runs, and is service-role only", () => {
+  const migrationPath = path.join(
+    __dirname,
+    "..",
+    "supabase",
+    "migrations",
+    "178_must_apply_coverage.sql",
+  );
+  const migration = fs.existsSync(migrationPath) ? fs.readFileSync(migrationPath, "utf8") : "";
+  assert.match(migration, /create or replace function public\.must_apply_coverage\(patterns text\[\]\)/i);
+  assert.match(migration, /security definer/i);
+  assert.match(migration, /unnest\(patterns\) with ordinality/i);
+  assert.match(migration, /s\.company ilike r\.pattern/i);
+  assert.match(migration, /where s\.enabled = true/i);
+  assert.match(migration, /distinct on \(matched\.idx, matched\.source_id\)/i);
+  assert.match(migration, /sum\(reported_total\)/i);
+  assert.match(migration, /sum\(fetched\)/i);
+  assert.match(migration, /least\(100/i);
+  assert.match(migration, /coverage_pct asc/i);
+  assert.match(migration, /fully_fetched/i);
+  assert.match(migration, /revoke execute on function public\.must_apply_coverage\(text\[\]\) from public, anon, authenticated/i);
+  assert.match(migration, /grant execute on function public\.must_apply_coverage\(text\[\]\) to service_role/i);
+  assert.doesNotMatch(migration, /字节|腾讯|阿里|美团|拼多多/);
 });
 
 test("admin health page authenticates before parallel cross-database reads and renders plain-language sections", () => {
