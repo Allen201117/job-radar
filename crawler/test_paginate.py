@@ -129,6 +129,47 @@ class PaginateSafetyCapTests(unittest.TestCase):
         self.assertTrue(any("cap" in m.lower() or "上限" in m for m in cm.output))
 
 
+class PaginateTotalPagesTests(unittest.TestCase):
+    """接口只报 totalPage（页数）而无 item 总数、且中间页可能「短页」时（hotjob 范式）：
+    应按页数翻到底，不被短页误判为末页。"""
+
+    def test_total_pages_drives_stop(self):
+        # totalPage=3、每页满页 → 翻满 3 页即停，complete=True。
+        fetch_page, calls = _pager([
+            PageResult(items=list(range(20)), total=None, total_pages=3),
+            PageResult(items=list(range(20)), total=None, total_pages=3),
+            PageResult(items=list(range(20)), total=None, total_pages=3),
+        ])
+        items, total, complete = paginate_all(fetch_page, page_size=20)
+        self.assertEqual(len(items), 60)
+        self.assertTrue(complete)
+        self.assertEqual(total, 60)     # 无 item 总数 → 收满后诚实以已抓数为分母
+        self.assertEqual(calls, [1, 2, 3])
+
+    def test_total_pages_ignores_ragged_short_page(self):
+        # totalPage=3，但第 1 页因限流/瞬时只回了 5 条（短页）——不能据此判末页，必须继续翻到第 3 页。
+        fetch_page, calls = _pager([
+            PageResult(items=list(range(5)),  total=None, total_pages=3),   # 短页但非末页
+            PageResult(items=list(range(20)), total=None, total_pages=3),
+            PageResult(items=list(range(18)), total=None, total_pages=3),
+        ])
+        items, total, complete = paginate_all(fetch_page, page_size=20)
+        self.assertEqual(len(items), 43)   # 5 + 20 + 18，一条不丢
+        self.assertTrue(complete)
+        self.assertEqual(calls, [1, 2, 3])
+
+    def test_total_pages_empty_page_ends_early(self):
+        # totalPage 说 4 页，但第 2 页就空了（服务端实际提前没货）→ 自然收尾 complete=True。
+        fetch_page, calls = _pager([
+            PageResult(items=list(range(20)), total=None, total_pages=4),
+            PageResult(items=[],              total=None, total_pages=4),
+        ])
+        items, total, complete = paginate_all(fetch_page, page_size=20)
+        self.assertEqual(len(items), 20)
+        self.assertTrue(complete)
+        self.assertEqual(calls, [1, 2])
+
+
 class PaginateIndexingTests(unittest.TestCase):
     def test_first_page_zero_based_offset(self):
         # offset 型 adapter：first_page=0，闭包自己把 page_index 映射成 offset。

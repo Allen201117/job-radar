@@ -40,9 +40,11 @@ class RawJob:
 
 @dataclass
 class PageResult:
-    """paginate_all 每页 fetch 闭包的返回：本页条目 + 接口本次自报的总数（可为 None）。"""
+    """paginate_all 每页 fetch 闭包的返回：本页条目 + 接口本次自报的总数/总页数（都可为 None）。"""
     items: list
-    total: Optional[int] = None   # 接口自报总数（分母）；None = 本页没给/接口无此字段
+    total: Optional[int] = None   # 接口自报「岗位总数」（分母）；None = 本页没给/接口无此字段
+    total_pages: Optional[int] = None  # 接口自报「总页数」（如 hotjob 的 totalPage）；有它就按页数翻到底，
+    #                                    不受「短页」误判——治接口只报页数、又会回瞬时/限流短页的源。
 
 
 def paginate_all(
@@ -73,7 +75,9 @@ def paginate_all(
       1. 达到 max_pages 安全上限 → 停，complete=False，告警。
       2. 空页 → 停；complete = total 未知（自然收尾）或已收满（collected>=total）。
       3. total 已知且 collected>=total → 停，complete=True。
-      4. total 未知且本页 < page_size（末页）→ 停，complete=True，total 记为已抓数。
+      4. total_pages 已知且已翻满该页数 → 停，complete=True（按总页数翻到底，不被短页误判；
+         治「只报 totalPage、又会回瞬时/限流短页」的源，如 hotjob）。
+      5. total 与 total_pages 都未知、且本页 < page_size（末页）→ 停，complete=True，total 记为已抓数。
 
     异常语义（沿用 tencent/jd 已验证范式）：
       - 首页（尚未抓到任何一页）抛异常 → 原样上抛，交给 run.py 记 failed。
@@ -82,6 +86,7 @@ def paginate_all(
     log = logger or globals()["logger"]
     items: list = []
     total: Optional[int] = None
+    total_pages: Optional[int] = None
     complete = False
     page = first_page
     pages_done = 0
@@ -105,6 +110,8 @@ def paginate_all(
         page_items = list(result.items or [])
         if result.total is not None and total is None:
             total = result.total
+        if result.total_pages is not None and total_pages is None:
+            total_pages = result.total_pages
         pages_done += 1
 
         if not page_items:
@@ -114,7 +121,11 @@ def paginate_all(
         if total is not None and len(items) >= total:
             complete = True
             break
-        if total is None and len(page_items) < page_size:
+        if total_pages is not None and pages_done >= total_pages:
+            complete = True   # 按接口自报总页数翻到底（不受短页误判）
+            break
+        # 短页判末页仅在 total 与 total_pages 都未知时兜底（接口既不报总数也不报页数）。
+        if total is None and total_pages is None and len(page_items) < page_size:
             complete = True
             break
 
