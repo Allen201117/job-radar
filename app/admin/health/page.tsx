@@ -5,8 +5,10 @@ import {
   computeClickValidityMetrics,
   evaluateTodayHealth,
   formatPercent,
+  getCoverageSnapshot,
   normalizeCrawlSources,
   type ClickValidityMetrics,
+  type CoverageSnapshot,
   type CrawlSourceRow,
   type DailyReport,
   type OpsRunAggregateRow,
@@ -112,6 +114,10 @@ async function loadClickValidity(): Promise<ClickValidityMetrics> {
   return computeClickValidityMetrics((data || []) as Array<{ event?: unknown; payload?: unknown }>);
 }
 
+async function loadCoverageSnapshot(): Promise<CoverageSnapshot> {
+  return getCoverageSnapshot(createServiceClient());
+}
+
 function formatRate(rate: number | null): string {
   return rate == null ? "—" : `${(rate * 100).toFixed(1)}%`;
 }
@@ -161,6 +167,31 @@ function formatRunTime(value: string | null): string {
     minute: "2-digit",
     hour12: false,
   }).format(date);
+}
+
+function formatRunDateTime(value: string | null): string {
+  if (!value) return "暂无记录";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "暂无记录";
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+function formatWholePercent(value: number | null): string {
+  return value == null ? "积累中" : `${value}%`;
+}
+
+function coverageTextClass(value: number | null): string {
+  if (value == null) return "text-[#8a8275] dark:text-[#9a9184]";
+  if (value < 40) return "font-semibold text-[#9c4a3c] dark:text-[#e6a99f]";
+  if (value < 80) return "font-semibold text-[#8f6225] dark:text-[#e0b15a]";
+  return "font-semibold text-[#3f3a33] dark:text-[#d9d0c2]";
 }
 
 const REPORT_ICONS: Record<DailyReport["key"], ComponentType<any>> = {
@@ -294,6 +325,96 @@ function AccumulatingMetric({ title, description }: { title: string; description
   );
 }
 
+function CoverageSection({ snapshot }: { snapshot: CoverageSnapshot | null }) {
+  if (!snapshot) {
+    return (
+      <Section
+        title="全库抓全率"
+        description="每家公司：官网有多少岗 vs 我们抓到多少。排在前面的是抓漏最多的，优先补。"
+      >
+        <ErrorPanel label="全库抓全率" />
+      </Section>
+    );
+  }
+
+  const hasCoverageData =
+    snapshot.measurable > 0 ||
+    snapshot.blind > 0 ||
+    snapshot.avgCoveragePct != null ||
+    snapshot.underCount > 0 ||
+    snapshot.underSources.length > 0;
+
+  return (
+    <Section
+      title="全库抓全率"
+      description="每家公司：官网有多少岗 vs 我们抓到多少。排在前面的是抓漏最多的，优先补。"
+    >
+      {!hasCoverageData ? (
+        <AccumulatingMetric title="全库抓全率" description="覆盖率数据将在下次抓取后生成" />
+      ) : (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <MetricTile label="可测源数" value={snapshot.measurable} icon={Database} tone="sky" />
+            <MetricTile
+              label="平均抓全率"
+              value={formatWholePercent(snapshot.avgCoveragePct)}
+              icon={ChartBar}
+              tone={snapshot.avgCoveragePct != null && snapshot.avgCoveragePct < 80 ? "orange" : "lime"}
+            />
+            <MetricTile label="抓不全源数（<80%）" value={snapshot.underCount} icon={Bug} tone="orange" />
+            <MetricTile label="盲区源数" value={snapshot.blind} icon={MagnifyingGlass} tone="muted" />
+          </div>
+          <p className="mt-3 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
+            盲区=官网接口不报总数，算不出，非抓漏。
+          </p>
+
+          <div className="mt-5">
+            {snapshot.underSources.length === 0 ? (
+              <p className="rounded-2xl border border-dashed border-black/10 bg-white/35 px-4 py-5 text-sm text-[#8a8275] dark:border-white/10 dark:bg-white/[0.03] dark:text-[#9a9184]">
+                暂无抓全率低于 80% 的公司。
+              </p>
+            ) : (
+              <div className="overflow-x-auto rounded-2xl border border-black/[0.07] dark:border-white/[0.1]">
+                <table className="w-full min-w-[620px] text-left text-sm">
+                  <thead className="bg-[#f4efe6] text-xs text-[#8a8275] dark:bg-[#1c1813] dark:text-[#9a9184]">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">公司</th>
+                      <th className="px-4 py-3 text-right font-medium">官网总数</th>
+                      <th className="px-4 py-3 text-right font-medium">我们抓到</th>
+                      <th className="px-4 py-3 text-right font-medium">抓全率%</th>
+                      <th className="px-4 py-3 text-right font-medium">上次抓取</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {snapshot.underSources.map((source) => (
+                      <tr
+                        key={`${source.company}-${source.adapter}-${source.lastRunAt || "none"}`}
+                        className="border-t border-black/[0.05] text-[#3f3a33] dark:border-white/[0.08] dark:text-[#d9d0c2]"
+                      >
+                        <td className="max-w-80 px-4 py-3 font-medium">
+                          <span className="block truncate">{source.company}</span>
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums">{formatCount(source.reportedTotal)}</td>
+                        <td className="px-4 py-3 text-right tabular-nums">{formatCount(source.fetched)}</td>
+                        <td className={`px-4 py-3 text-right tabular-nums ${coverageTextClass(source.coveragePct)}`}>
+                          {source.coveragePct == null ? "算不出" : `${source.coveragePct}%`}
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums text-[#6b655a] dark:text-[#b6ad9d]">
+                          {formatRunDateTime(source.lastRunAt)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </Section>
+  );
+}
+
 // 北极星卡：必投清单健康覆盖。回答「目标用户最想投的头部公司，我们到底罩住了几家」——
 // 这是产品对用户承诺的真实覆盖率，掉了要优先修它，别被库存总量的大数字安慰。
 function MustApplySection({ rows }: { rows: MustApplyRow[] | null }) {
@@ -396,11 +517,12 @@ export default async function AdminHealthPage() {
     redirect("/");
   }
 
-  const [jobsResult, supabaseResult, clickResult, mustApplyResult] = await Promise.allSettled([
+  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult] = await Promise.allSettled([
     getJobsHealthSnapshot(),
     loadSupabaseHealth(),
     loadClickValidity(),
     loadMustApplyCoverage(),
+    loadCoverageSnapshot(),
   ]);
 
   if (jobsResult.status === "rejected") {
@@ -415,11 +537,15 @@ export default async function AdminHealthPage() {
   if (mustApplyResult.status === "rejected") {
     console.error("[admin-health] must-apply coverage failed:", mustApplyResult.reason);
   }
+  if (coverageResult.status === "rejected") {
+    console.error("[admin-health] crawl coverage failed:", coverageResult.reason);
+  }
 
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
   const clickValidity = clickResult.status === "fulfilled" ? clickResult.value : null;
   const mustApply = mustApplyResult.status === "fulfilled" ? mustApplyResult.value : null;
+  const coverage = coverageResult.status === "fulfilled" ? coverageResult.value : null;
   const crawlSources = normalizeCrawlSources(operations?.crawl_sources);
   const reports = buildDailyReports({
     crawl: operations?.today?.crawl || null,
@@ -524,6 +650,8 @@ export default async function AdminHealthPage() {
               </div>
             )}
           </Section>
+
+          <CoverageSection snapshot={coverage} />
 
           <Section
             title="岗位库体检"

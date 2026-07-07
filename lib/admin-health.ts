@@ -140,6 +140,99 @@ export function normalizeCrawlSources(rows: CrawlSourceRow[] | null | undefined)
   });
 }
 
+export type CoverageUnderSourceRow = {
+  company?: string | null;
+  adapter?: string | null;
+  reported_total?: Numeric;
+  fetched?: Numeric;
+  coverage_pct?: Numeric;
+  last_run_at?: string | null;
+};
+
+export type CoverageSnapshotRow = {
+  measurable?: Numeric;
+  blind?: Numeric;
+  avg_coverage_pct?: Numeric;
+  under_count?: Numeric;
+  under_sources?: CoverageUnderSourceRow[] | null;
+};
+
+export type CoverageUnderSource = {
+  company: string;
+  adapter: string;
+  reportedTotal: number;
+  fetched: number;
+  coveragePct: number | null;
+  lastRunAt: string | null;
+};
+
+export type CoverageSnapshot = {
+  measurable: number;
+  blind: number;
+  avgCoveragePct: number | null;
+  underCount: number;
+  underSources: CoverageUnderSource[];
+};
+
+function emptyCoverageSnapshot(): CoverageSnapshot {
+  return {
+    measurable: 0,
+    blind: 0,
+    avgCoveragePct: null,
+    underCount: 0,
+    underSources: [],
+  };
+}
+
+function toClampedPercent(value: Numeric): number | null {
+  if (value == null) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+export function normalizeCoverageSnapshot(row: CoverageSnapshotRow | null | undefined): CoverageSnapshot {
+  if (!row) return emptyCoverageSnapshot();
+  return {
+    measurable: toNumber(row.measurable),
+    blind: toNumber(row.blind),
+    avgCoveragePct: toClampedPercent(row.avg_coverage_pct),
+    underCount: toNumber(row.under_count),
+    underSources: (Array.isArray(row.under_sources) ? row.under_sources : []).map((source) => {
+      const reportedTotal = toNumber(source.reported_total);
+      return {
+        company: String(source.company || "未知公司"),
+        adapter: String(source.adapter || "unknown"),
+        reportedTotal,
+        fetched: toNumber(source.fetched),
+        coveragePct: reportedTotal > 0 ? toClampedPercent(source.coverage_pct) : null,
+        lastRunAt: source.last_run_at || null,
+      };
+    }),
+  };
+}
+
+type SupabaseRpcClient = {
+  rpc: (
+    fn: string,
+    args?: Record<string, unknown>,
+  ) => PromiseLike<{ data: unknown; error: { message?: string } | null }>;
+};
+
+export async function getCoverageSnapshot(supabase: SupabaseRpcClient): Promise<CoverageSnapshot> {
+  try {
+    const { data, error } = await supabase.rpc("crawl_coverage_snapshot");
+    if (error) {
+      console.error("[admin-health] crawl coverage snapshot failed:", error.message || error);
+      return emptyCoverageSnapshot();
+    }
+    return normalizeCoverageSnapshot(data as CoverageSnapshotRow | null);
+  } catch (error) {
+    console.error("[admin-health] crawl coverage snapshot failed:", error);
+    return emptyCoverageSnapshot();
+  }
+}
+
 export type TodayCrawlRow = {
   runs?: Numeric;
   jobs_found?: Numeric;
