@@ -38,7 +38,9 @@ class NeteaseAdapter(PlaywrightAdapter):
     _API = "https://hr.163.com/api/hr163/position/queryPage"
     _DETAIL = "https://hr.163.com/job-detail.html?id={id}"
     _PAGE_SIZE = 50
-    _MAX_PAGES = 16   # 50×16 = 800 岗封顶（防一次拉爆；网易实有 ~2452，分批足够覆盖热门）
+    # 官网实测 ~2510 岗；旧上限 16×50=800 封顶只覆盖 ~33%。提到 70×50=3500 覆盖全量
+    # （分页按 page>=pages 自然停，不会真跑满 70 页）。
+    _MAX_PAGES = 70
     # _extract_posts 走点路径取 data.list（与 hotjob 的 data.pageForm.pageData 同机制）
     posts_keys = ("data.list",) + PlaywrightAdapter.posts_keys
 
@@ -79,16 +81,21 @@ class NeteaseAdapter(PlaywrightAdapter):
         title = _first(post, ("name", "title"))
         if not (jid and title):
             return None
-        # 工作地点：workPlaceList 在列表接口里是**地点 ID 数组**（如 [229]，无名称映射可拿）→ 留空，
-        # 不伪造城市（遵守数据质量优先级）。仅当接口直接给城市名（dict/str）时才填。
+        # 工作地点：接口同时返回 workPlaceList（地点 ID 数组，如 [229]）和 workPlaceNameList
+        # （中文城市名数组，如 ["杭州市"]，一一对应）。优先取 workPlaceNameList（2026-07-07 实测
+        # 该字段存在）；缺失才回退旧逻辑，绝不拿纯 ID 伪造城市（遵守数据质量优先级）。
         loc = None
-        wpl = post.get("workPlaceList")
-        if isinstance(wpl, list) and wpl and isinstance(wpl[0], dict):
-            loc = wpl[0].get("name") or wpl[0].get("cityName") or wpl[0].get("placeName")
-        elif isinstance(wpl, str) and wpl.strip():
-            loc = wpl.strip()
-        if loc is not None and not isinstance(loc, str):
-            loc = None  # 地点 ID（int）等非字符串 → 不入 location
+        wpnl = post.get("workPlaceNameList")
+        if isinstance(wpnl, list) and wpnl and isinstance(wpnl[0], str) and wpnl[0].strip():
+            loc = wpnl[0].strip()
+        if loc is None:
+            wpl = post.get("workPlaceList")
+            if isinstance(wpl, list) and wpl and isinstance(wpl[0], dict):
+                loc = wpl[0].get("name") or wpl[0].get("cityName") or wpl[0].get("placeName")
+            elif isinstance(wpl, str) and wpl.strip():
+                loc = wpl.strip()
+            if loc is not None and not isinstance(loc, str):
+                loc = None  # 地点 ID（int）等非字符串 → 不入 location
         desc = _first(post, ("description",))
         req = _first(post, ("requirement",))
         summary = (desc + ("\n\n【任职要求】\n" + req if req else "")).strip() or None

@@ -296,3 +296,4 @@ class HorizonAdapter(FeishuRecruitAdapter):
 
 class XiaomiAdapter(FeishuRecruitAdapter):
     name = "xiaomi_feishu"; company_name = "小米"; host = "xiaomi.jobs.f.mioffice.cn"
+    _MAX_JOBS = 3000  # 小米官网 ~2030，覆写基类 600 上限抓全（其他 feishu 源不受影响）
