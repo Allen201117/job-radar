@@ -50,3 +50,20 @@
 - **能自动的**：分页上限类（最普遍）→ 框架翻到底，从根消灭，不用一个个改。
 - **不能自动的**：接口改版/漏板块/登录墙 → 人工诊断，但观测帮人精准定位、大幅提效。
 - 不存在"全自动自愈修一切"——诚实分清边界，把能自动的做到位、不能自动的用观测把人工效率拉满。
+
+---
+
+## ✅ 层 1 已完成（2026-07-07，commits 51c47c7 / 0f126cf / 2992a88，本地已 commit·待推）
+- **helper 落地**：`crawler/adapters/base.py` 新增 `PageResult` + `paginate_all(fetch_page, *, page_size, first_page, max_pages, delay_seconds, logger, label) -> (items, total, complete)`。
+  三种停止范式全覆盖：① 已知 item 总数翻到底（tencent/byd 范式）② 已知 `total_pages` 按页数翻到底（hotjob 范式，防瞬时短页误判）③ 二者都无靠短页兜底（jd 范式）。首页异常上抛记 failed、后续页异常保留已抓不炸穿。14 个纯函数单测（`crawler/test_paginate.py`）。
+- **迁移 5 个真有缺口的 ATS adapter**（挑「仍硬编码小上限 / 压根没上报抓全率」的，不是已修好的大厂）：
+  workday（观测盲区→补 flag，25→100）、wt（读了 rowCount 却没赋值→补观测 + 跨类型总预算护栏）、
+  hotjob（`totalPage*pageSize` 假分母致「假不完整」→ 用 total_pages 修）、eightfold（250 封顶→**live 实测 HSBC 在华 647 岗**，25→100）、oracle（25→100）。
+- **live 验收**（真抓真租户，非自评）：wt/wanda 626·complete、workday/mdlz 56·complete、hotjob/crc 73·complete、eightfold/hsbc 647·complete、oracle/bny 7。全 crawler 单测 642 绿。
+- **协作方式**：cc-codex-loop——CC 诊断（survey 全 adapter）+ 搭 helper（TDD）+ live 验收；Codex 批量迁移 + 按复盘修 3 处。
+
+### 层 1 剩余/后续（交下个 session）
+- **未迁移的**：smartrecruiters（0 enabled 源，跳过）；phenom/microsoft/amazon（已翻到底、上限宽松，仅一致性收益，低优）；浏览器源 company_spa/moka/google（无 server total、无法干净翻到底，另立工作流）。
+- **一处 latent 观测 bug 待修**：`crawler/adapters/china_ats.py` beisen 浏览器 replay 路径设了 `reported_total` 却漏设 `fetch_complete`（httpx 路径已对）。已建后台任务卡。
+- **每个 adapter 只 live 抽验了 1 个租户**：迁移对全部租户生效（workday 70 / hotjob 121 / wt 35 源），逐租户差异靠 daily 抓取 + `/admin/health` 抓全率看板暴露——这正是层 1 观测的用途。
+- **层 2（观测→自动重抓 CI）** 按原计划等层 1 上线跑出真实 coverage 数据后再做（此时能用真数据判断哪些该自动重抓）。层 3 人工不变。

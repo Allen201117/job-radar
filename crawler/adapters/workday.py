@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 import httpx
 
 import normalizer
-from .base import BaseAdapter, RawJob, resolve_detail_cap
+from .base import BaseAdapter, PageResult, RawJob, paginate_all, resolve_detail_cap
 
 # 大中华区 facet 关键词（China / Mainland China / Greater China / Hong Kong / Macau…）
 _GREATER_CHINA = ("china", "中国", "hong kong", "香港", "macau", "macao", "澳门")
@@ -81,7 +81,7 @@ def _search_texts_for_regions(regions):
 
 class WorkdayAdapter(BaseAdapter):
     name = "workday"
-    max_pages = 25  # 每页 20 → 单源最多约 500 在华岗（容纳 AstraZeneca 等大租户，避免静默截断；分页 <20 即停）
+    max_pages = 100  # 每页 20 → 每个 facet/keyword 安全上限 2000，靠短页自然收尾
 
     def should_skip(self, source_url: str):
         return None  # 公开 JSON API，跳过 HEAD 预检
@@ -100,6 +100,8 @@ class WorkdayAdapter(BaseAdapter):
             self._site = parts[-2] if len(parts) >= 2 else ""
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         self._parse_endpoint(source_url)
         headers = {
             "Accept": "application/json",
@@ -119,23 +121,32 @@ class WorkdayAdapter(BaseAdapter):
         # 这些是**可信在华**岗（parse 不再过滤）。同 param 多 id 一次 OR 提交；不同 param 分别提交后并集。
         trusted: List[dict] = []
         seen = set()
+        any_capped = False
         for param, ids in candidates.items():
             if not ids:
                 continue
-            for page in range(self.max_pages):
+            def fetch_page(page: int) -> PageResult:
                 body = {"appliedFacets": {param: ids}, "limit": 20, "offset": page * 20, "searchText": ""}
                 rr = httpx.post(source_url, json=body, headers=headers, timeout=self.timeout)
                 rr.raise_for_status()
                 posts = rr.json().get("jobPostings", []) or []
-                if not posts:
-                    break
-                for p in posts:
-                    key = p.get("externalPath") or p.get("title")
-                    if key and key not in seen:
-                        seen.add(key)
-                        trusted.append(p)
-                if len(posts) < 20:
-                    break
+                return PageResult(items=posts, total=None)
+
+            posts, _total, complete = paginate_all(
+                fetch_page,
+                page_size=20,
+                first_page=0,
+                max_pages=self.max_pages,
+                logger=None,
+                label=f"workday:{self._host}:{param}",
+            )
+            if not complete:
+                any_capped = True
+            for p in posts:
+                key = p.get("externalPath") or p.get("title")
+                if key and key not in seen:
+                    seen.add(key)
+                    trusted.append(p)
 
         # 3) searchText 文本补充：部分租户的在华地点埋在**嵌套/截断**的 location facet 里，facet 只露出
         # 部分叶子（如 GE HealthCare 的 locationMainGroup 只有 Hong Kong、漏掉上海 22 岗）。facet 取到的太少
@@ -145,20 +156,28 @@ class WorkdayAdapter(BaseAdapter):
         text_posts: List[dict] = []
         if len(trusted) < 25:
             for q in _search_texts_for_regions(regions):
-                for page in range(self.max_pages):
+                def fetch_page(page: int) -> PageResult:
                     body = {"appliedFacets": {}, "limit": 20, "offset": page * 20, "searchText": q}
                     rr = httpx.post(source_url, json=body, headers=headers, timeout=self.timeout)
                     rr.raise_for_status()
                     posts = rr.json().get("jobPostings", []) or []
-                    if not posts:
-                        break
-                    for p in posts:
-                        key = p.get("externalPath") or p.get("title")
-                        if key and key not in seen:
-                            seen.add(key)
-                            text_posts.append(p)
-                    if len(posts) < 20:
-                        break
+                    return PageResult(items=posts, total=None)
+
+                posts, _total, complete = paginate_all(
+                    fetch_page,
+                    page_size=20,
+                    first_page=0,
+                    max_pages=self.max_pages,
+                    logger=None,
+                    label=f"workday:{self._host}:search:{q}",
+                )
+                if not complete:
+                    any_capped = True
+                for p in posts:
+                    key = p.get("externalPath") or p.get("title")
+                    if key and key not in seen:
+                        seen.add(key)
+                        text_posts.append(p)
 
         # 4) 逐岗 detail 抓 jobDescription —— list 接口不含描述，外企卡片 JD 因此全空。
         #    GET {host}{externalPath} → jobPostingInfo.jobDescription（HTML；run.py 的 clean_summary 去标签解实体，
@@ -166,6 +185,8 @@ class WorkdayAdapter(BaseAdapter):
         #    （trusted 全保留；text_posts 取在华的），单源封顶防夜间全量被拖垮；失败该岗无摘要、不影响入库。
         self._enrich_descriptions(trusted, headers, filter_by_regions=False, regions=regions)
         self._enrich_descriptions(text_posts, headers, filter_by_regions=True, regions=regions)
+        self.reported_total = len(trusted) + len(text_posts)
+        self.fetch_complete = not any_capped
 
         return json.dumps({
             "_host": self._host, "_site": self._site,

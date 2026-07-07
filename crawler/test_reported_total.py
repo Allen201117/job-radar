@@ -5,9 +5,11 @@ from unittest.mock import patch
 from adapters import china_ats
 from adapters.antgroup import AntGroupAdapter
 from adapters.china_ats import BeisenAdapter
+from adapters.eightfold import EightfoldAdapter
 from adapters.hotjob import HotJobAdapter
 from adapters.meituan import MeituanAdapter
 from adapters.netease import NeteaseAdapter
+from adapters.wt import WtAdapter
 
 
 class _FakeResponse:
@@ -96,12 +98,11 @@ class ReportedTotalTest(unittest.TestCase):
         self.assertEqual(adapter.reported_total, 3)
         self.assertTrue(adapter.fetch_complete)
 
-    def test_hotjob_reports_total_page_times_page_size_and_exposes_cap(self):
+    def test_hotjob_ignores_total_page_product_and_completes_on_short_page(self):
         pages = [
-            {"data": {"pageForm": {"totalPage": 12, "pageData": [
-                {"postId": f"p{i}", "postName": f"Role {i}"}
+            {"data": {"pageForm": {"totalPage": 1, "pageData": [
+                {"postId": "p1", "postName": "Role 1"}
             ]}}}
-            for i in range(10)
         ]
         adapter = HotJobAdapter()
         client = _FakeClient(posts=pages)
@@ -110,7 +111,108 @@ class ReportedTotalTest(unittest.TestCase):
             with patch.object(adapter, "_enrich_details", return_value=None):
                 adapter.fetch("https://wecruit.hotjob.cn/SU123/pb/social.html")
 
-        self.assertEqual(adapter.reported_total, 240)
+        self.assertEqual(adapter.reported_total, 1)
+        self.assertTrue(adapter.fetch_complete)
+
+    def test_hotjob_total_pages_prevents_short_page_from_early_completion(self):
+        pages = [
+            {"data": {"pageForm": {"totalPage": 4, "pageData": [
+                {"postId": f"p1-{i}", "postName": f"Role 1-{i}"} for i in range(15)
+            ]}}},
+            {"data": {"pageForm": {"totalPage": 4, "pageData": [
+                {"postId": f"p2-{i}", "postName": f"Role 2-{i}"} for i in range(20)
+            ]}}},
+            {"data": {"pageForm": {"totalPage": 4, "pageData": [
+                {"postId": f"p3-{i}", "postName": f"Role 3-{i}"} for i in range(20)
+            ]}}},
+            {"data": {"pageForm": {"totalPage": 4, "pageData": [
+                {"postId": f"p4-{i}", "postName": f"Role 4-{i}"} for i in range(18)
+            ]}}},
+        ]
+        adapter = HotJobAdapter()
+        client = _FakeClient(posts=pages)
+
+        with patch("adapters.hotjob.httpx.Client", return_value=client):
+            with patch.object(adapter, "_enrich_details", return_value=None):
+                adapter.fetch("https://wecruit.hotjob.cn/SU123/pb/social.html")
+
+        self.assertEqual(len(client.calls), 4)
+        self.assertEqual(adapter.reported_total, 73)
+        self.assertTrue(adapter.fetch_complete)
+
+    def test_hotjob_unknown_total_stays_none_when_capped(self):
+        pages = [
+            {"data": {"pageForm": {"totalPage": 4, "pageData": [
+                {"postId": f"p1-{i}", "postName": f"Role 1-{i}"} for i in range(20)
+            ]}}},
+            {"data": {"pageForm": {"totalPage": 4, "pageData": [
+                {"postId": f"p2-{i}", "postName": f"Role 2-{i}"} for i in range(20)
+            ]}}},
+        ]
+        adapter = HotJobAdapter()
+        adapter.api_max_pages = 2
+        client = _FakeClient(posts=pages)
+
+        with patch("adapters.hotjob.httpx.Client", return_value=client):
+            with patch.object(adapter, "_enrich_details", return_value=None):
+                adapter.fetch("https://wecruit.hotjob.cn/SU123/pb/social.html")
+
+        self.assertIsNone(adapter.reported_total)
+        self.assertFalse(adapter.fetch_complete)
+
+    def test_eightfold_keeps_multiple_positions_with_missing_ids(self):
+        def fake_get(url, params=None, **kwargs):
+            location = (params or {}).get("location")
+            if location == "China":
+                return _FakeResponse({
+                    "total": 3,
+                    "positions": [
+                        {"id": None, "name": "Role A", "location": "China"},
+                        {"id": None, "name": "Role B", "location": "China"},
+                        {"id": "c", "name": "Role C", "location": "China"},
+                    ],
+                })
+            return _FakeResponse({"total": 0, "positions": []})
+
+        adapter = EightfoldAdapter()
+        with patch("adapters.eightfold.httpx.get", side_effect=fake_get):
+            with patch.object(adapter, "_enrich_descriptions", return_value=None):
+                payload = adapter.fetch(
+                    "https://acme.eightfold.ai/api/apply/v2/jobs?domain=acme.com"
+                )
+
+        self.assertEqual(len(json.loads(payload)["positions"]), 3)
+
+    def test_wt_total_budget_stops_after_recruit_type_and_marks_incomplete(self):
+        class _WtClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def get(self, url, params=None, **kwargs):
+                rt = int((params or {}).get("recruitType"))
+                page = int((params or {}).get("page"))
+                rows = [
+                    {"postId": f"{rt}-1", "postName": "Role 1"},
+                    {"postId": f"{rt}-2", "postName": "Role 2"},
+                ] if page == 1 else []
+                return _FakeResponse({
+                    "postList": rows,
+                    "rowCount": 2,
+                    "pageCount": 1,
+                    "rowSize": 10,
+                })
+
+        adapter = WtAdapter()
+        adapter._MAX_JOBS = 2
+        client = _WtClient()
+        with patch("adapters.wt.httpx.Client", return_value=client):
+            payload = adapter.fetch("https://wanda.hotjob.cn/wt/wanda/web/index")
+
+        self.assertEqual(len(json.loads(payload)["_intercepted"]), 1)
+        self.assertEqual(adapter.reported_total, 2)
         self.assertFalse(adapter.fetch_complete)
 
     def test_beisen_keeps_existing_complete_logic_and_reports_count(self):
