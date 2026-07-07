@@ -25,6 +25,7 @@ import { createServiceClient } from "@/lib/supabaseService";
 import {
   Briefcase,
   Bug,
+  CaretDown,
   ChartBar,
   CheckCircle,
   Clock,
@@ -125,22 +126,120 @@ function formatRate(rate: number | null): string {
   return rate == null ? "—" : `${(rate * 100).toFixed(1)}%`;
 }
 
+// 板块状态：ok 正常 / warn 注意 / critical 要处理 / idle 无数据。
+// 用来给「今日一览」的状态灯、折叠条的徽章、以及是否默认展开统一定调。
+type SectionStatus = "ok" | "warn" | "critical" | "idle";
+
+const STATUS_META: Record<SectionStatus, { icon: string; label: string; badge: string; chip: string }> = {
+  critical: {
+    icon: "🔴",
+    label: "要处理",
+    badge: "bg-[#f7e6e1] text-[#9c4a3c] dark:bg-[#7a392e]/30 dark:text-[#e6a99f]",
+    chip: "border-[#e0b4ac] bg-[#f7e6e1] dark:border-[#7a392e]/50 dark:bg-[#3a201a]",
+  },
+  warn: {
+    icon: "⚠️",
+    label: "注意",
+    badge: "bg-[#fbecd7] text-[#8f6225] dark:bg-[#825d28]/30 dark:text-[#e0b15a]",
+    chip: "border-[#edc995] bg-[#fbecd7] dark:border-[#825d28]/50 dark:bg-[#392a17]",
+  },
+  idle: {
+    icon: "•",
+    label: "无数据",
+    badge: "bg-[#ece7dd] text-[#6b655a] dark:bg-white/[0.08] dark:text-[#b6ad9d]",
+    chip: "border-black/[0.06] bg-white/40 dark:border-white/10 dark:bg-white/[0.03]",
+  },
+  ok: {
+    icon: "✅",
+    label: "正常",
+    badge: "bg-[#e6f2d3] text-[#5a7a2f] dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]",
+    chip: "border-[#c8dda9] bg-[#edf6df] dark:border-[#5d793d]/50 dark:bg-[#203018]",
+  },
+};
+
+// 可折叠板块：收起时只留一根状态条（标题＋状态徽章＋一句话概要），展开才显示明细。
+// 用原生 <details>，无需客户端 JS，兼容 server component。出问题的板块 defaultOpen 自动展开。
 function Section({
   title,
   description,
+  status = "ok",
+  summary,
+  defaultOpen = false,
   children,
 }: {
   title: string;
   description: string;
+  status?: SectionStatus;
+  summary?: string;
+  defaultOpen?: boolean;
   children: ReactNode;
 }) {
+  const meta = STATUS_META[status];
+  return (
+    <details open={defaultOpen} className="surface group overflow-hidden">
+      <summary className="flex cursor-pointer list-none items-center gap-3 p-5 sm:p-6 [&::-webkit-details-marker]:hidden">
+        <span aria-hidden="true" className="text-lg leading-none">
+          {meta.icon}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <h2 className="text-balance text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{title}</h2>
+            <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${meta.badge}`}>{meta.label}</span>
+          </div>
+          <p className="mt-0.5 truncate text-sm text-[#6b655a] dark:text-[#b6ad9d]">{summary || description}</p>
+        </div>
+        <CaretDown
+          size={18}
+          className="shrink-0 text-[#8a8275] transition-transform duration-200 group-open:rotate-180 dark:text-[#9a9184]"
+          aria-hidden="true"
+        />
+      </summary>
+      <div className="border-t border-black/[0.06] px-5 pb-5 pt-5 sm:px-6 sm:pb-6 dark:border-white/[0.08]">
+        <p className="mb-5 text-pretty text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">{description}</p>
+        {children}
+      </div>
+    </details>
+  );
+}
+
+type OverviewItem = { label: string; status: SectionStatus; summary: string };
+
+// 今日一览：把每个板块压成一行状态灯，一眼看全「出事没有、出在哪」。常显、不折叠。
+function TodayOverview({ items }: { items: OverviewItem[] }) {
+  const problems = items.filter((i) => i.status === "critical" || i.status === "warn").length;
   return (
     <section className="surface p-5 sm:p-6">
-      <div className="mb-5">
-        <h2 className="text-balance text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{title}</h2>
-        <p className="mt-1 text-pretty text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">{description}</p>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">今日一览</h2>
+          <p className="mt-1 text-sm text-[#6b655a] dark:text-[#b6ad9d]">
+            每个模块一行状态。{problems > 0 ? `有 ${problems} 项需要关注，下面对应卡片已自动展开。` : "全部正常，可放心。"}
+          </p>
+        </div>
+        <span
+          className={`shrink-0 rounded-full px-3 py-1 text-sm font-semibold ${
+            problems > 0 ? STATUS_META.warn.badge : STATUS_META.ok.badge
+          }`}
+        >
+          {problems > 0 ? `${problems} 项待关注` : "全部正常"}
+        </span>
       </div>
-      {children}
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {items.map((it) => {
+          const meta = STATUS_META[it.status];
+          return (
+            <div key={it.label} className={`flex items-center gap-2.5 rounded-xl border px-3 py-2.5 ${meta.chip}`}>
+              <span aria-hidden="true" className="text-base leading-none">
+                {meta.icon}
+              </span>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-[#1a1714] dark:text-[#f3ecdf]">{it.label}</p>
+                <p className="truncate text-xs text-[#6b655a] dark:text-[#b6ad9d]">{it.summary}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </section>
   );
 }
@@ -335,12 +434,25 @@ function AccumulatingMetric({ title, description }: { title: string; description
   );
 }
 
-function CoverageSection({ snapshot }: { snapshot: CoverageSnapshot | null }) {
+function CoverageSection({
+  snapshot,
+  status = "ok",
+  summary,
+  defaultOpen = false,
+}: {
+  snapshot: CoverageSnapshot | null;
+  status?: SectionStatus;
+  summary?: string;
+  defaultOpen?: boolean;
+}) {
   if (!snapshot) {
     return (
       <Section
         title="全库抓全率"
         description="每家公司：官网有多少岗 vs 我们抓到多少。排在前面的是抓漏最多的，优先补。"
+        status={status}
+        summary={summary}
+        defaultOpen={defaultOpen}
       >
         <ErrorPanel label="全库抓全率" />
       </Section>
@@ -358,6 +470,9 @@ function CoverageSection({ snapshot }: { snapshot: CoverageSnapshot | null }) {
     <Section
       title="全库抓全率"
       description="每家公司：官网有多少岗 vs 我们抓到多少。排在前面的是抓漏最多的，优先补。"
+      status={status}
+      summary={summary}
+      defaultOpen={defaultOpen}
     >
       {!hasCoverageData ? (
         <AccumulatingMetric title="全库抓全率" description="覆盖率数据将在下次抓取后生成" />
@@ -525,13 +640,25 @@ function MustApplyFetchCoverageBlock({ coverage }: { coverage: MustApplyFetchCov
 function MustApplySection({
   rows,
   fetchCoverage,
+  status = "ok",
+  summary,
+  defaultOpen = false,
 }: {
   rows: MustApplyRow[] | null;
   fetchCoverage: MustApplyFetchCoverage | null;
+  status?: SectionStatus;
+  summary?: string;
+  defaultOpen?: boolean;
 }) {
   if (!rows) {
     return (
-      <Section title="北极星 · 必投清单健康覆盖" description="目标用户最常投的头部公司逐家对账。">
+      <Section
+        title="北极星 · 必投清单健康覆盖"
+        description="目标用户最常投的头部公司逐家对账。"
+        status={status}
+        summary={summary}
+        defaultOpen={defaultOpen}
+      >
         <ErrorPanel label="必投清单覆盖" />
         <MustApplyFetchCoverageBlock coverage={fetchCoverage} />
       </Section>
@@ -547,6 +674,9 @@ function MustApplySection({
     <Section
       title="北极星 · 必投清单健康覆盖"
       description={`目标用户最常投的 ${n} 家头部公司逐家对账：有没有健康岗、近 7 天有没有新岗、72 小时内有没有核验。这是对用户承诺的真实覆盖率——掉了先修它，不看库存总量。清单口径在 lib/must-apply-list.ts。`}
+      status={status}
+      summary={summary}
+      defaultOpen={defaultOpen}
     >
       <div className="grid gap-3 sm:grid-cols-3">
         <RatioCard
@@ -697,6 +827,75 @@ export default async function AdminHealthPage() {
       ? "border-[#edc995] bg-[#fbecd7] text-[#8f6225] dark:border-[#825d28]/60 dark:bg-[#392a17] dark:text-[#e0b15a]"
       : "border-[#c8dda9] bg-[#edf6df] text-[#55752e] dark:border-[#5d793d]/60 dark:bg-[#203018] dark:text-[#a3d06a]";
 
+  // —— 每个板块的状态 + 一句话概要：喂给顶部「今日一览」和各板块折叠条，决定状态灯与是否默认展开 ——
+  const mustN = mustApply?.length ?? 0;
+  const maHealthy = mustApply?.filter((r) => r.healthy > 0).length ?? 0;
+  const maGaps = mustApply?.filter((r) => r.healthy === 0).length ?? 0;
+  const maBlind = mustApply?.filter((r) => r.healthy > 0 && r.checked72h === 0).length ?? 0;
+  const mustApplyStatus: SectionStatus = !mustApply ? "idle" : maGaps > 0 ? "critical" : maBlind > 0 ? "warn" : "ok";
+  const mustApplySummary = !mustApply
+    ? "必投清单数据暂不可用"
+    : `${maHealthy}/${mustN} 家有健康岗` + (maGaps ? ` · ${maGaps} 家零健康岗` : "") + (maBlind ? ` · ${maBlind} 家探活盲区` : "");
+
+  const failedReports = reports.filter((r) => r.status === "failed").length;
+  const ranReports = reports.filter((r) => r.status === "success").length;
+  const reportsStatus: SectionStatus = !operations ? "idle" : failedReports > 0 ? "critical" : ranReports === 0 ? "idle" : "ok";
+  const reportsSummary = !operations
+    ? "战报数据暂不可用"
+    : `${ranReports}/${reports.length} 个模块今天已跑` + (failedReports ? ` · ${failedReports} 个失败` : "");
+
+  const coverageHasData =
+    !!coverage &&
+    (coverage.measurable > 0 || coverage.avgCoveragePct != null || coverage.underCount > 0 || coverage.blind > 0);
+  const coverageUnder = coverage?.underCount ?? 0;
+  const coverageStatus: SectionStatus = !coverage
+    ? "idle"
+    : !coverageHasData
+      ? "idle"
+      : (coverage.avgCoveragePct != null && coverage.avgCoveragePct < 80) || coverageUnder > 0
+        ? "warn"
+        : "ok";
+  const coverageSummary = !coverageHasData
+    ? "抓全率数据积累中"
+    : (coverage!.avgCoveragePct != null ? `平均抓全率 ${coverage!.avgCoveragePct}%` : "抓全率积累中") +
+      (coverageUnder > 0 ? ` · ${coverageUnder} 家抓不全` : "");
+
+  const jobsStatus: SectionStatus = !jobs ? "idle" : "ok";
+  const jobsSummary = !jobs
+    ? "岗位库数据暂不可用"
+    : `在招 ${formatCount(jobs.activeTotal)} · 空壳 ${formatCount(jobs.thinActive)} · 待核查 ${formatCount(jobs.neverChecked)}`;
+
+  let clickStatus: SectionStatus;
+  let clickSummary: string;
+  if (!clickValidity) {
+    clickStatus = "idle";
+    clickSummary = "点击有效率数据暂不可用";
+  } else if (clickValidity.totalOpens === 0 && clickValidity.livenessTotal === 0) {
+    clickStatus = "idle";
+    clickSummary = "点击有效率积累中";
+  } else {
+    const low =
+      (clickValidity.probeValidityRate != null && clickValidity.probeValidityRate < 0.99) ||
+      (clickValidity.coverageRate != null && clickValidity.coverageRate < 0.5);
+    clickStatus = low ? "warn" : "ok";
+    clickSummary = `可探源有效率 ${formatRate(clickValidity.probeValidityRate)} · 核验覆盖 ${formatRate(clickValidity.coverageRate)}`;
+  }
+
+  const bizStatus: SectionStatus = !operations || !users ? "idle" : "ok";
+  const bizSummary =
+    !operations || !users
+      ? "用户数据暂不可用"
+      : `${formatCount(users.total_users)} 用户 · 今日新增 ${formatCount(users.today_users)} · 投递 ${formatCount(users.applied_total)}`;
+
+  const overviewItems: OverviewItem[] = [
+    { label: "必投清单覆盖", status: mustApplyStatus, summary: mustApplySummary },
+    { label: "每日战报", status: reportsStatus, summary: reportsSummary },
+    { label: "全库抓全率", status: coverageStatus, summary: coverageSummary },
+    { label: "岗位库体检", status: jobsStatus, summary: jobsSummary },
+    { label: "点击有效率", status: clickStatus, summary: clickSummary },
+    { label: "用户与业务", status: bizStatus, summary: bizSummary },
+  ];
+
   return (
     <div className="min-h-screen bg-editorial">
       <Navbar />
@@ -751,12 +950,23 @@ export default async function AdminHealthPage() {
           )}
         </ProductHero>
 
-        <div className="mt-6 grid gap-6">
-          <MustApplySection rows={mustApply} fetchCoverage={mustApplyFetchCoverage} />
+        <div className="mt-6 grid gap-4">
+          <TodayOverview items={overviewItems} />
+
+          <MustApplySection
+            rows={mustApply}
+            fetchCoverage={mustApplyFetchCoverage}
+            status={mustApplyStatus}
+            summary={mustApplySummary}
+            defaultOpen={mustApplyStatus === "critical" || mustApplyStatus === "warn"}
+          />
 
           <Section
             title="各模块每日战报"
             description="每张卡只回答三件事：今天处理了多少、有没有跑、上次什么时候跑。"
+            status={reportsStatus}
+            summary={reportsSummary}
+            defaultOpen={reportsStatus === "critical"}
           >
             {!operations ? (
               <ErrorPanel label="每日战报" />
@@ -769,11 +979,19 @@ export default async function AdminHealthPage() {
             )}
           </Section>
 
-          <CoverageSection snapshot={coverage} />
+          <CoverageSection
+            snapshot={coverage}
+            status={coverageStatus}
+            summary={coverageSummary}
+            defaultOpen={coverageStatus === "warn"}
+          />
 
           <Section
             title="岗位库体检"
             description="看岗位构成、空壳岗和待核查量；招聘源按近 7 天实际运行结果计算成功率。"
+            status={jobsStatus}
+            summary={jobsSummary}
+            defaultOpen={false}
           >
             {!jobs ? (
               <ErrorPanel label="岗位库体检" />
@@ -867,6 +1085,9 @@ export default async function AdminHealthPage() {
           <Section
             title="点击有效率（护城河指标）"
             description="用户点开官网那刻，岗位是否还在招。四个数必须一起看——只报「可探源 99%」会偷窄分母（最难的 SPA 不进分母）。"
+            status={clickStatus}
+            summary={clickSummary}
+            defaultOpen={clickStatus === "warn"}
           >
             {!clickValidity ? (
               <ErrorPanel label="点击有效率" />
@@ -938,6 +1159,9 @@ export default async function AdminHealthPage() {
           <Section
             title="用户与业务"
             description="用户、求职偏好、收藏投递、简历解析和职业洞察均使用现有真实数据。"
+            status={bizStatus}
+            summary={bizSummary}
+            defaultOpen={false}
           >
             {!operations ? (
               <ErrorPanel label="用户与业务统计" />
