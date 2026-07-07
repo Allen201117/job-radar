@@ -21,6 +21,13 @@ import normalizer
 from .base import BaseAdapter, RawJob
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class AntGroupAdapter(BaseAdapter):
     name = "antgroup"
     company_name = "蚂蚁集团"
@@ -36,7 +43,12 @@ class AntGroupAdapter(BaseAdapter):
         ("campus", "campus_group_official_site"),
     )
 
-    def _fetch_board(self, client: httpx.Client, board: str, channel: str) -> List[dict]:
+    def _fetch_board(
+        self,
+        client: httpx.Client,
+        board: str,
+        channel: str,
+    ) -> tuple[List[dict], Optional[int]]:
         rows: List[dict] = []
         total: Optional[int] = None
         for page in range(1, self.MAX_PAGES + 1):
@@ -49,19 +61,21 @@ class AntGroupAdapter(BaseAdapter):
             resp = client.post(self.API.format(board=board), json=payload)
             resp.raise_for_status()
             data = resp.json() or {}
+            if total is None:
+                total = _int_or_none(data.get("totalCount"))
             chunk = data.get("content") or []
             if not chunk:
                 break
             rows.extend(chunk)
-            if total is None:
-                total = data.get("totalCount")
             if isinstance(total, int) and len(rows) >= total:
                 break
             if len(chunk) < self.PAGE_SIZE:
                 break
-        return rows
+        return rows, total
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         headers = {
             "User-Agent": self.user_agent,
             "Accept": "application/json, text/plain, */*",
@@ -70,11 +84,21 @@ class AntGroupAdapter(BaseAdapter):
             "Origin": "https://talent.antgroup.com",
         }
         out = {}
+        totals: List[int] = []
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             for board, channel in self._BOARDS:
-                out[board] = self._fetch_board(client, board, channel)
+                rows, total = self._fetch_board(client, board, channel)
+                out[board] = rows
+                if total is not None:
+                    totals.append(total)
         if not any(out.values()):
             raise RuntimeError("antgroup: empty position/search response")
+        if len(totals) == len(self._BOARDS):
+            self.reported_total = sum(totals)
+        fetched = sum(len(rows) for rows in out.values())
+        self.fetch_complete = (
+            self.reported_total is not None and fetched >= self.reported_total
+        )
         return json.dumps(out, ensure_ascii=False)
 
     @staticmethod

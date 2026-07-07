@@ -1,12 +1,19 @@
 """拼多多校园招聘公开 API 适配器（零登录、零浏览器）。"""
 import json
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
 import httpx
 
 from .base import BaseAdapter, RawJob
 from .china_location import is_china_company_location
+
+
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _date_from_millis(value):
@@ -35,6 +42,8 @@ class PinduoduoAdapter(BaseAdapter):
     MAX_PAGES = 20
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         headers = {
             "User-Agent": self.user_agent,
             "Accept": "application/json, text/plain, */*",
@@ -56,6 +65,10 @@ class PinduoduoAdapter(BaseAdapter):
                         f"pinduoduo: list error {body.get('errorCode')} {body.get('errorMsg')}"
                     )
                 result = body.get("result") or {}
+                if self.reported_total is None:
+                    total = _int_or_none(result.get("total"))
+                    if total is not None:
+                        self.reported_total = total
                 page_rows = result.get("list") or []
                 if not page_rows:
                     break
@@ -64,6 +77,9 @@ class PinduoduoAdapter(BaseAdapter):
                     break
         if not rows:
             raise RuntimeError("pinduoduo: empty position list")
+        self.fetch_complete = (
+            self.reported_total is not None and len(rows) >= self.reported_total
+        )
         return json.dumps({"result": {"list": rows}}, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:

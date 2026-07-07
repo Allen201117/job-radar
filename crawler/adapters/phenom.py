@@ -26,6 +26,14 @@ def _job_summary(d: dict) -> Optional[str]:
     text = "\n".join(p.strip() for p in parts if isinstance(p, str) and p.strip())
     return text or None
 
+
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 # Phenom 站点常由 Akamai/CDN 前置，用常见浏览器 UA 更稳。
 _BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -45,18 +53,27 @@ class PhenomAdapter(BaseAdapter):
         return None  # 公开 JSON API，跳过 HEAD 预检
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         p = urlparse(source_url)
         host = f"{p.scheme}://{p.netloc}"
         api = source_url.split("?")[0]
         headers = {"User-Agent": _BROWSER_UA, "Accept": "application/json"}
         collected: List[dict] = []
         seen = set()
-        for loc in self._locations_for_regions():
+        locations = self._locations_for_regions()
+        location_totals: List[int] = []
+        for loc in locations:
+            loc_total: Optional[int] = None
             for page in range(self.max_pages):
                 params = {"location": loc, "limit": 100, "offset": page * 100}
                 r = httpx.get(api, params=params, headers=headers, timeout=self.timeout)
                 r.raise_for_status()
                 body = r.json()
+                if loc_total is None:
+                    loc_total = _int_or_none(body.get("totalCount"))
+                    if loc_total is None:
+                        loc_total = _int_or_none(body.get("count"))
                 jobs = body.get("jobs", []) or []
                 if not jobs:
                     break
@@ -66,9 +83,16 @@ class PhenomAdapter(BaseAdapter):
                     if slug and slug not in seen:
                         seen.add(slug)
                         collected.append(data)
-                total = body.get("totalCount") or body.get("count") or 0
+                total = loc_total or 0
                 if len(jobs) < 100 or (page + 1) * 100 >= total:
                     break
+            if loc_total is not None:
+                location_totals.append(loc_total)
+        if len(location_totals) == len(locations):
+            self.reported_total = sum(location_totals)
+        self.fetch_complete = (
+            self.reported_total is not None and len(collected) >= self.reported_total
+        )
         return json.dumps({"_host": host, "jobs": collected}, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:

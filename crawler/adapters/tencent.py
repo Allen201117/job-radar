@@ -1,10 +1,17 @@
 import json
 import re
-from typing import List
+from typing import List, Optional
 
 import httpx
 
 from .base import BaseAdapter, RawJob
+
+
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class TencentAdapter(BaseAdapter):
@@ -23,6 +30,8 @@ class TencentAdapter(BaseAdapter):
 
     def fetch(self, source_url: str) -> str:
         """拉取腾讯公开社招列表 API（多页合并），返回统一 JSON 文本。"""
+        self.reported_total = None
+        self.fetch_complete = False
         headers = {
             "User-Agent": self.user_agent,
             "Accept": "application/json, text/javascript, */*; q=0.01",
@@ -46,7 +55,16 @@ class TencentAdapter(BaseAdapter):
                     follow_redirects=True,
                 )
                 resp.raise_for_status()
-                page_posts = ((resp.json() or {}).get("Data") or {}).get("Posts") or []
+                data = ((resp.json() or {}).get("Data") or {})
+                if self.reported_total is None:
+                    total = _int_or_none(data.get("Count"))
+                    if total is None:
+                        total = _int_or_none(data.get("total"))
+                    if total is None:
+                        total = _int_or_none(data.get("count"))
+                    if total is not None:
+                        self.reported_total = total
+                page_posts = data.get("Posts") or []
             except Exception:
                 if page == 1:
                     raise  # 首页失败交给 run.py 记录为 failed
@@ -54,6 +72,9 @@ class TencentAdapter(BaseAdapter):
             if not page_posts:
                 break
             posts.extend(page_posts)
+        self.fetch_complete = (
+            self.reported_total is not None and len(posts) >= self.reported_total
+        )
         return json.dumps({"Data": {"Posts": posts}}, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:

@@ -1,11 +1,18 @@
 """vivo 社会招聘公开 API 适配器（零登录、零浏览器）。"""
 import json
-from typing import List
+from typing import List, Optional
 
 import httpx
 
 from .base import BaseAdapter, RawJob
 from .china_location import is_china_company_location
+
+
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class VivoAdapter(BaseAdapter):
@@ -21,6 +28,8 @@ class VivoAdapter(BaseAdapter):
     MAX_PAGES = 20
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         headers = {
             "User-Agent": self.user_agent,
             "Accept": "application/json, text/plain, */*",
@@ -48,6 +57,19 @@ class VivoAdapter(BaseAdapter):
                 body = response.json() or {}
                 if body.get("code") != 0:
                     raise RuntimeError(f"vivo: list error {body.get('message')}")
+                if self.reported_total is None:
+                    total = _int_or_none(body.get("total"))
+                    if total is None:
+                        total = _int_or_none(body.get("totalCount"))
+                    if total is None:
+                        total = _int_or_none(body.get("count"))
+                    data_for_total = body.get("data")
+                    if total is None and isinstance(data_for_total, dict):
+                        total = _int_or_none(data_for_total.get("total"))
+                        if total is None:
+                            total = _int_or_none(data_for_total.get("count"))
+                    if total is not None:
+                        self.reported_total = total
                 page_rows = body.get("data") or []
                 if not page_rows:
                     break
@@ -56,6 +78,9 @@ class VivoAdapter(BaseAdapter):
                     break
         if not rows:
             raise RuntimeError("vivo: empty portal/page response")
+        self.fetch_complete = (
+            self.reported_total is not None and len(rows) >= self.reported_total
+        )
         return json.dumps({"data": rows}, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:

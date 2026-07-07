@@ -22,6 +22,13 @@ import httpx
 from .base import BaseAdapter, RawJob, resolve_detail_cap
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class MihoyoAdapter(BaseAdapter):
     name = "mihoyo"
     company_name = "米哈游 miHoYo"
@@ -53,7 +60,12 @@ class MihoyoAdapter(BaseAdapter):
         except Exception:
             return None  # 单岗详情失败不拖垮整源；该岗留薄卡由 enrich 兜底
 
-    def _fetch_board(self, client: httpx.Client, hire_type: int, board: str) -> List[dict]:
+    def _fetch_board(
+        self,
+        client: httpx.Client,
+        hire_type: int,
+        board: str,
+    ) -> tuple[List[dict], Optional[int]]:
         rows: List[dict] = []
         total: Optional[int] = None
         for page in range(1, self.MAX_PAGES + 1):
@@ -62,6 +74,8 @@ class MihoyoAdapter(BaseAdapter):
             resp = client.post(self.LIST_API, json=payload)
             resp.raise_for_status()
             data = (resp.json() or {}).get("data") or {}
+            if total is None:
+                total = _int_or_none(data.get("total"))
             chunk = data.get("list") or []
             if not chunk:
                 break
@@ -69,21 +83,25 @@ class MihoyoAdapter(BaseAdapter):
                 if isinstance(row, dict):
                     row["_board"] = board
             rows.extend(chunk)
-            if total is None:
-                total = data.get("total")
             if isinstance(total, int) and len(rows) >= total:
                 break
             if len(chunk) < self.PAGE_SIZE:
                 break
-        return rows
+        return rows, total
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         with httpx.Client(timeout=self.timeout, follow_redirects=True,
                           headers=self._headers()) as client:
-            rows = (self._fetch_board(client, 0, "social")
-                    + self._fetch_board(client, 1, "campus"))
+            social, social_total = self._fetch_board(client, 0, "social")
+            campus, campus_total = self._fetch_board(client, 1, "campus")
+            rows = social + campus
             if not rows:
                 raise RuntimeError("mihoyo: empty v1/job/list response")
+            totals = [t for t in (social_total, campus_total) if t is not None]
+            if len(totals) == 2:
+                self.reported_total = sum(totals)
 
             # 逐岗补 JD 正文（列表 jobSummary 常为空；info 给 description+jobRequire）
             cap = resolve_detail_cap(self.DETAIL_CAP)
@@ -95,6 +113,9 @@ class MihoyoAdapter(BaseAdapter):
                 for row, info in zip(targets, infos):
                     if info:
                         row["_info"] = info
+        self.fetch_complete = (
+            self.reported_total is not None and len(rows) >= self.reported_total
+        )
         return json.dumps({"list": rows}, ensure_ascii=False)
 
     @staticmethod

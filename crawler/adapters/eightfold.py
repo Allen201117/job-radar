@@ -20,6 +20,21 @@ import normalizer
 from .base import BaseAdapter, RawJob, resolve_detail_cap
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _reported_total_from_payload(data: dict) -> Optional[int]:
+    for key in ("total", "count", "totalCount", "totalResults"):
+        total = _int_or_none((data or {}).get(key))
+        if total is not None:
+            return total
+    return None
+
+
 class EightfoldAdapter(BaseAdapter):
     name = "eightfold"
     max_pages = 25          # num=10/页 → 每个地点最多约 250 在华岗（打通通道足够，非全量）
@@ -34,6 +49,8 @@ class EightfoldAdapter(BaseAdapter):
         return None  # 公开 JSON API，跳过 HEAD 预检
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         p = urlparse(source_url)
         origin = f"{p.scheme}://{p.netloc}"
         path = p.path or "/api/apply/v2/jobs"
@@ -42,13 +59,19 @@ class EightfoldAdapter(BaseAdapter):
 
         collected: List[dict] = []
         seen_ids = set()
-        for loc in self._locations_for_regions():
+        locations = self._locations_for_regions()
+        location_totals: List[int] = []
+        for loc in locations:
+            loc_total: Optional[int] = None
             for page in range(self.max_pages):
                 params = {"domain": domain, "location": loc,
                           "start": page * 10, "num": 10, "sort_by": "relevance"}
                 r = httpx.get(f"{origin}{path}", params=params, headers=headers, timeout=self.timeout)
                 r.raise_for_status()
-                positions = r.json().get("positions", []) or []
+                data = r.json()
+                if loc_total is None:
+                    loc_total = _reported_total_from_payload(data if isinstance(data, dict) else {})
+                positions = (data or {}).get("positions", []) or []
                 if not positions:
                     break
                 for pos in positions:
@@ -59,11 +82,18 @@ class EightfoldAdapter(BaseAdapter):
                     collected.append(pos)
                 if len(positions) < 10:
                     break
+            if loc_total is not None:
+                location_totals.append(loc_total)
+        if len(location_totals) == len(locations):
+            self.reported_total = sum(location_totals)
 
         # 逐岗 detail 抓正文 —— 列表接口的 job_description 恒为空（已 live 验证），外企卡片 JD 因此全空。
         # GET {origin}{path}/{id}?domain={domain} → 顶层 job_description（HTML）；run.py 的 clean_summary 去标签解实体，
         # summary 有正文后 extract_job_type 也能从中推断类型。只补将保留的在华岗，单源封顶防夜间全量被拖垮。
         self._enrich_descriptions(origin, path, domain, collected, headers)
+        self.fetch_complete = (
+            self.reported_total is not None and len(collected) >= self.reported_total
+        )
         return json.dumps({"_origin": origin, "positions": collected}, ensure_ascii=False)
 
     _DETAIL_CAP = 300  # 单源逐岗 detail 抓取上限，避免拖垮夜间全量

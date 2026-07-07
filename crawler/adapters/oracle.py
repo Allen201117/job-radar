@@ -34,6 +34,33 @@ _SEARCH_TEXT_BY_REGION = {
 }
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _reported_total_from_payload(data: dict) -> Optional[int]:
+    for key in (
+        "total",
+        "count",
+        "totalCount",
+        "TotalCount",
+        "totalResults",
+        "TotalResults",
+        "totalJobs",
+        "TotalJobs",
+        "totalJobsCount",
+        "TotalJobsCount",
+        "requisitionListCount",
+    ):
+        total = _int_or_none((data or {}).get(key))
+        if total is not None:
+            return total
+    return None
+
+
 def _is_china_facet(name: str) -> bool:
     n = str(name or "").strip().lower()
     if not n or any(t in n for t in _TAIWAN):
@@ -106,6 +133,8 @@ class OracleAdapter(BaseAdapter):
         return items[0] if items else {}
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         self._parse_endpoint(source_url)
         regions = normalizer.source_regions(getattr(self, "regions", None))
         # 1) 取 locationsFacet，挑大中华区 facet Id（扁平列表，含国家级 'China' 与城市级 'Shanghai, China'）。
@@ -118,8 +147,11 @@ class OracleAdapter(BaseAdapter):
         if region_ids:
             # 2) 服务端 facet 过滤分页（这些是**可信在华**岗，parse 不再过滤）。
             facet_param = f",selectedLocationsFacet={','.join(region_ids)}"
+            facet_total: Optional[int] = None
             for page in range(self.max_pages):
                 top = self._get(f"{facet_param},limit=20,offset={page * 20}")
+                if facet_total is None:
+                    facet_total = _reported_total_from_payload(top)
                 reqs = top.get("requisitionList", []) or []
                 if not reqs:
                     break
@@ -130,14 +162,20 @@ class OracleAdapter(BaseAdapter):
                         trusted.append(j)
                 if len(reqs) < 20:
                     break
+            if facet_total is not None:
+                self.reported_total = facet_total
 
         # 3) 兜底：facet 没找到大中华区（个别租户 facet 名用城市拼写差异）时，用 keyword=China 文本召回，
         # parse 再按 is_china_location 严格过滤。trusted 已有则跳过（facet 可信、零额外开销）。
         text_jobs: List[dict] = []
         if not trusted:
+            keyword_totals: List[int] = []
             for kw in _search_texts_for_regions(regions):
+                keyword_total: Optional[int] = None
                 for page in range(self.max_pages):
                     top = self._get(f",keyword={kw},limit=20,offset={page * 20}")
+                    if keyword_total is None:
+                        keyword_total = _reported_total_from_payload(top)
                     reqs = top.get("requisitionList", []) or []
                     if not reqs:
                         break
@@ -148,12 +186,21 @@ class OracleAdapter(BaseAdapter):
                             text_jobs.append(j)
                     if len(reqs) < 20:
                         break
+                if keyword_total is not None:
+                    keyword_totals.append(keyword_total)
+            search_terms = _search_texts_for_regions(regions)
+            if len(keyword_totals) == len(search_terms):
+                self.reported_total = sum(keyword_totals)
 
         # 4) 逐岗 detail 抓职位描述 —— 列表接口不含正文，外企卡片 JD 因此全空。
         #    recruitingCEJobRequisitionDetails?finder=ById;Id="{jid}" → ExternalDescriptionStr(+Responsibilities)。
         #    只抓将保留的在华岗（trusted 全保留；text 取在华的），单源封顶；失败该岗无摘要、不影响入库。
         self._enrich_descriptions(trusted, filter_by_regions=False, regions=regions)
         self._enrich_descriptions(text_jobs, filter_by_regions=True, regions=regions)
+        self.fetch_complete = (
+            self.reported_total is not None
+            and (len(trusted) + len(text_jobs)) >= self.reported_total
+        )
 
         return json.dumps({
             "_host": self._host, "_site": self._site,

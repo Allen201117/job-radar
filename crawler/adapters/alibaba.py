@@ -39,6 +39,13 @@ def _first(post: dict, keys) -> str:
     return ""
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class AlibabaAdapter(PlaywrightAdapter):
     """阿里集团 BU 门户通用层。source_url 填该 BU 域的列表页，如
     `https://talent.taotian.com/off-campus/position-list?lang=zh`。"""
@@ -55,6 +62,8 @@ class AlibabaAdapter(PlaywrightAdapter):
     posts_keys = ("content.datas",) + PlaywrightAdapter.posts_keys
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         host = urlparse(source_url).netloc
         if not host:
             raise RuntimeError(f"alibaba: 无法从 source_url 解析 host: {source_url}")
@@ -82,7 +91,7 @@ class AlibabaAdapter(PlaywrightAdapter):
 
             def sweep(regions: str = "", sub_categories: str = ""):
                 """单过滤条件下翻页收齐（服务端 offset 封顶 500/条件），返回该条件 totalCount。"""
-                total = None
+                total: Optional[int] = None
                 got = 0
                 for page in range(1, self._MAX_PAGES + 1):
                     try:
@@ -112,14 +121,16 @@ class AlibabaAdapter(PlaywrightAdapter):
                         collected.append({"content": {"datas": fresh}})
                     got += len(rows)
                     if total is None:
-                        total = content.get("totalCount") or 0
+                        total = _int_or_none(content.get("totalCount"))
                     if total and got >= total:
                         break
-                return total or 0
+                return total
 
             # 2) 全量翻页；totalCount 超 offset 封顶时「品类 + 大城市」双维分片补漏（id 已去重）
             grand_total = sweep()
-            if grand_total > self._MAX_PAGES * self._PAGE_SIZE:
+            if grand_total is not None:
+                self.reported_total = grand_total
+            if (grand_total or 0) > self._MAX_PAGES * self._PAGE_SIZE:
                 try:
                     cat_resp = client.post(f"{base}/category/list?_csrf={csrf}", json={
                         "channel": "group_official_site", "language": "zh",
@@ -137,6 +148,9 @@ class AlibabaAdapter(PlaywrightAdapter):
                     sweep(regions=adcode)
         if not collected:
             raise RuntimeError(f"alibaba: empty position/search ({host})")
+        self.fetch_complete = (
+            self.reported_total is not None and len(seen_ids) >= self.reported_total
+        )
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
 
     def _map(self, post: dict) -> Optional[RawJob]:

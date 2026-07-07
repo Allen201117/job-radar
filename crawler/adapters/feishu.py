@@ -21,6 +21,13 @@ from .base import RawJob
 from .playwright_base import PlaywrightAdapter, _UA
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class FeishuRecruitAdapter(PlaywrightAdapter):
     host = ""  # 子类设置，如 nio.jobs.feishu.cn
     intercept_match = "/api/v1/search/job/posts"
@@ -42,6 +49,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
             "https://" + self.host + "/",
         ]
         self.fetch_complete = False
+        self.reported_total = None
 
     def _resolve_host(self, source_url: str) -> str:
         """httpx 直拉用的 host：子类有 self.host；通用类 fetch 前已 _bind_host → official_hosts[0]。"""
@@ -100,11 +108,13 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         """httpx-first：冷启动直拉 posts API（无浏览器，daily-crawl 4×/天可跑）；httpx 未打通才回退
         浏览器抓包链（仅 Playwright 可用环境如 enrich-crawl）。"""
         self.fetch_complete = False
+        self.reported_total = None
         host = self._resolve_host(source_url)
         if host:
             rows, total, reached = self._httpx_fetch(host)
             if reached:
                 # httpx 打通（含真 0 岗）→ 直接用，不再开浏览器。complete=翻全（含 0 岗）。
+                self.reported_total = _int_or_none(total)
                 self.fetch_complete = (total is not None and len(rows) >= (total or 0))
                 return json.dumps(
                     {"_intercepted": [{"data": {"job_post_list": rows, "count": total if total is not None else len(rows)}}]},
@@ -167,6 +177,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
 
         if rows:
             # 浏览器抓全判定（与 httpx 同口径）：翻到 total 且未撞 _MAX_JOBS → complete，供 list-absence。
+            self.reported_total = _int_or_none(total)
             self.fetch_complete = (total is not None and len(rows) >= (total or 0))
             # 合成下游同 shape 响应：parse() 走 posts_keys=data.job_post_list 抽取，逻辑不变。
             return json.dumps(

@@ -2,13 +2,20 @@
 import json
 import time
 import uuid
-from typing import List
+from typing import List, Optional
 
 import httpx
 
 import normalizer
 from .base import BaseAdapter, RawJob
 from .china_location import is_china_company_location
+
+
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class MeituanAdapter(BaseAdapter):
@@ -26,6 +33,8 @@ class MeituanAdapter(BaseAdapter):
     MAX_PAGES = 80
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         headers = {
             "User-Agent": self.user_agent,
             "Accept": "application/json, text/plain, */*",
@@ -51,7 +60,16 @@ class MeituanAdapter(BaseAdapter):
                 }
                 response = client.post(self.API_URL, json=payload)
                 response.raise_for_status()
-                page_rows = ((response.json() or {}).get("data") or {}).get("list") or []
+                data = ((response.json() or {}).get("data") or {})
+                if self.reported_total is None:
+                    page = data.get("page") if isinstance(data.get("page"), dict) else {}
+                    total = _int_or_none(page.get("totalCount"))
+                    if total is None:
+                        total = _int_or_none(data.get("total"))
+                    if total is not None:
+                        # Crawl coverage visibility: official reported total only, no pagination changes.
+                        self.reported_total = total
+                page_rows = data.get("list") or []
                 if not page_rows:
                     break
                 rows.extend(page_rows)
@@ -59,6 +77,9 @@ class MeituanAdapter(BaseAdapter):
                     break
         if not rows:
             raise RuntimeError("meituan: empty getJobList response")
+        self.fetch_complete = (
+            self.reported_total is not None and len(rows) >= self.reported_total
+        )
         return json.dumps({"data": {"list": rows}}, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:

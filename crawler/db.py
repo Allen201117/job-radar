@@ -51,8 +51,10 @@ def update_crawl_run(
     jobs_created: int = 0,
     jobs_updated: int = 0,
     error_message: Optional[str] = None,
+    reported_total: Optional[int] = None,
+    coverage_complete: Optional[bool] = None,
 ):
-    """更新抓取日志。"""
+    """更新抓取日志。reported_total/coverage_complete=抓全率可观测（阶段①），None 时不写该列。"""
     data = {
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "status": status,
@@ -62,6 +64,10 @@ def update_crawl_run(
     }
     if error_message:
         data["error_message"] = error_message[:1000]
+    if reported_total is not None:
+        data["reported_total"] = reported_total
+    if coverage_complete is not None:
+        data["coverage_complete"] = coverage_complete
 
     supabase.table("crawl_runs").update(data).eq("id", run_id).execute()
 

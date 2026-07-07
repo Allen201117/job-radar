@@ -57,6 +57,21 @@ def _country_codes_for_regions(regions) -> List[str]:
     return out
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _reported_total_from_payload(data: dict) -> Optional[int]:
+    for key in ("total", "count", "totalCount", "totalResults", "total_hits", "hits"):
+        total = _int_or_none((data or {}).get(key))
+        if total is not None:
+            return total
+    return None
+
+
 def _job_summary(j: dict) -> Optional[str]:
     """从 search.json 列表项直接组装 JD 正文（已 live 验证含完整 description ~3k 字 + 任职要求）。
     无需逐岗 detail（amazon.jobs 逐岗 .json 被 Akamai 拦 406），列表自带正文即够 ≥60 字门。
@@ -74,6 +89,8 @@ class AmazonAdapter(BaseAdapter):
         return None  # 公开 JSON API，跳过 HEAD 预检
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         p = urlparse(source_url)
         base = f"{p.scheme}://{p.netloc}{p.path}"
         params = {k: list(v) for k, v in parse_qs(p.query, keep_blank_values=True).items()}
@@ -96,7 +113,12 @@ class AmazonAdapter(BaseAdapter):
             url = f"{base}?{urlencode(q, doseq=True)}"
             r = httpx.get(url, headers=headers, timeout=self.timeout)
             r.raise_for_status()
-            jobs = r.json().get("jobs", []) or []
+            data = r.json()
+            if self.reported_total is None:
+                total = _reported_total_from_payload(data if isinstance(data, dict) else {})
+                if total is not None:
+                    self.reported_total = total
+            jobs = (data or {}).get("jobs", []) or []
             if not jobs:
                 break
             for j in jobs:
@@ -106,6 +128,9 @@ class AmazonAdapter(BaseAdapter):
                     collected.append(j)
             if len(jobs) < limit:
                 break
+        self.fetch_complete = (
+            self.reported_total is not None and len(collected) >= self.reported_total
+        )
         return json.dumps({"jobs": collected}, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:

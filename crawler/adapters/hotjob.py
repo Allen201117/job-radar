@@ -29,6 +29,13 @@ from .base import RawJob, resolve_detail_cap
 from .playwright_base import PlaywrightAdapter
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class HotJobAdapter(PlaywrightAdapter):
     name = "hotjob"
     company_name = ""  # 由 sources.company 兜底
@@ -80,6 +87,8 @@ class HotJobAdapter(PlaywrightAdapter):
 
     def fetch(self, source_url: str) -> str:
         """直连公开 listPosition 接口逐页拉取（无浏览器），返回 parse() 可消费的 _intercepted 信封。"""
+        self.reported_total = None
+        self.fetch_complete = False
         self._bind_source(source_url)
         api = f"{self._origin}{self._LIST_API}{self._suite_key}"
         headers = {
@@ -105,6 +114,18 @@ class HotJobAdapter(PlaywrightAdapter):
                 page_form = (payload.get("data") or {}).get("pageForm") or {}
                 rows = page_form.get("pageData") or []
                 total_page = page_form.get("totalPage") or 0
+                if self.reported_total is None:
+                    total = _int_or_none(page_form.get("total"))
+                    if total is None:
+                        total = _int_or_none(page_form.get("totalCount"))
+                    if total is None:
+                        total = _int_or_none(page_form.get("count"))
+                    if total is None:
+                        pages_total = _int_or_none(page_form.get("totalPage"))
+                        if pages_total is not None:
+                            total = pages_total * self.api_page_size
+                    if total is not None:
+                        self.reported_total = total
                 if not rows or current_page >= total_page:
                     break
             # 列表无 JD 正文（workContent/serviceCondition 全空 → summary 空）；逐岗调 listPositionDetail
@@ -118,6 +139,9 @@ class HotJobAdapter(PlaywrightAdapter):
             self._enrich_details(client, posts)
         if not collected:
             raise RuntimeError(f"hotjob: empty response from listPosition (suiteKey={self._suite_key})")
+        self.fetch_complete = (
+            self.reported_total is not None and len(posts) >= self.reported_total
+        )
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
 
     def _enrich_details(self, client, posts):

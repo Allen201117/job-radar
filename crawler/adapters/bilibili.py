@@ -1,12 +1,19 @@
 """哔哩哔哩招聘公开 API 适配器（匿名 CSRF 会话，零浏览器）。"""
 import json
 import time
-from typing import List
+from typing import List, Optional
 
 import httpx
 
 from .base import BaseAdapter, RawJob
 from .china_location import is_china_company_location
+
+
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class BilibiliAdapter(BaseAdapter):
@@ -31,6 +38,8 @@ class BilibiliAdapter(BaseAdapter):
         }
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         rows = []
         with httpx.Client(
             timeout=self.timeout,
@@ -63,7 +72,16 @@ class BilibiliAdapter(BaseAdapter):
                 body = response.json() or {}
                 if body.get("code") != 0:
                     raise RuntimeError(f"bilibili: list error {body.get('message')}")
-                page_rows = (body.get("data") or {}).get("list") or []
+                data = body.get("data") or {}
+                if self.reported_total is None:
+                    total = _int_or_none(data.get("total"))
+                    if total is None:
+                        total = _int_or_none(data.get("totalCount"))
+                    if total is None:
+                        total = _int_or_none(data.get("count"))
+                    if total is not None:
+                        self.reported_total = total
+                page_rows = data.get("list") or []
                 if not page_rows:
                     break
                 rows.extend(page_rows)
@@ -71,6 +89,9 @@ class BilibiliAdapter(BaseAdapter):
                     break
         if not rows:
             raise RuntimeError("bilibili: empty positionList response")
+        self.fetch_complete = (
+            self.reported_total is not None and len(rows) >= self.reported_total
+        )
         return json.dumps({"data": {"list": rows}}, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:

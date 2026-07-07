@@ -28,6 +28,13 @@ def _first(post: dict, keys) -> str:
     return ""
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class NeteaseAdapter(PlaywrightAdapter):
     """网易招聘 hr.163.com。source_url 填 `https://hr.163.com/job-list.html`。"""
 
@@ -45,6 +52,8 @@ class NeteaseAdapter(PlaywrightAdapter):
     posts_keys = ("data.list",) + PlaywrightAdapter.posts_keys
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         headers = {
             "User-Agent": self.user_agent,
             "Accept": "application/json, text/plain, */*",
@@ -54,6 +63,7 @@ class NeteaseAdapter(PlaywrightAdapter):
             "Origin": "https://hr.163.com",
         }
         collected = []
+        fetched = 0
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             for page in range(1, self._MAX_PAGES + 1):
                 try:
@@ -63,15 +73,23 @@ class NeteaseAdapter(PlaywrightAdapter):
                 except (httpx.HTTPError, ValueError):
                     break
                 data = payload.get("data") or {}
+                if self.reported_total is None:
+                    total = _int_or_none(data.get("total"))
+                    if total is not None:
+                        self.reported_total = total
                 rows = data.get("list") or []
                 if not rows:
                     break
                 collected.append(payload)
+                fetched += len(rows)
                 pages = data.get("pages") or 0
                 if pages and page >= pages:
                     break
         if not collected:
             raise RuntimeError("netease: empty queryPage (hr.163.com)")
+        self.fetch_complete = (
+            self.reported_total is not None and fetched >= self.reported_total
+        )
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
 
     def _map(self, post: dict) -> Optional[RawJob]:

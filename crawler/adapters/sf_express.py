@@ -9,6 +9,13 @@ from .base import BaseAdapter, RawJob
 from .china_location import is_china_company_location
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _page_numbers(total_pages: int, max_pages: int) -> List[int]:
     """Return one-based pages bounded by a defensive hard cap."""
     last_page = min(max(1, total_pages), max(1, max_pages))
@@ -74,6 +81,8 @@ class SfExpressAdapter(BaseAdapter):
         )
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         with httpx.Client(
             timeout=self.timeout,
             follow_redirects=True,
@@ -81,7 +90,9 @@ class SfExpressAdapter(BaseAdapter):
         ) as client:
             first_page = self._fetch_page(client, 1)
             total_pages = int(first_page.get("totalPage") or 1)
-            total_result = int(first_page.get("totalResult") or 0)
+            total_result = _int_or_none(first_page.get("totalResult"))
+            if total_result is not None:
+                self.reported_total = total_result
             page_size = int(first_page.get("showCount") or len(first_page.get("listObj") or []))
             pages = _page_numbers(total_pages, self.MAX_PAGES)
             rows = list(first_page.get("listObj") or [])
@@ -111,6 +122,9 @@ class SfExpressAdapter(BaseAdapter):
                 rows_by_key[key] = row
         if not rows_by_key:
             raise RuntimeError("sf_express: empty SearchJob response")
+        self.fetch_complete = (
+            self.reported_total is not None and len(rows_by_key) >= self.reported_total
+        )
         return json.dumps({"jobs": list(rows_by_key.values())}, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:

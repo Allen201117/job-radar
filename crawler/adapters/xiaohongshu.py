@@ -29,6 +29,13 @@ def _first(post: dict, keys) -> str:
     return ""
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 # recruitType → 详情页路由前缀（intern 共用 campus 路由）
 _CHANNEL_PATH = {"social": "social", "campus": "campus", "intern": "campus"}
 # recruitType → 三桶分类信号（normalizer 同口径）
@@ -50,6 +57,8 @@ class XiaohongshuAdapter(PlaywrightAdapter):
     posts_keys = ("data.list",) + PlaywrightAdapter.posts_keys
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         headers = {
             "User-Agent": self.user_agent,
             "Accept": "application/json, text/plain, */*",
@@ -60,10 +69,11 @@ class XiaohongshuAdapter(PlaywrightAdapter):
         }
         collected = []
         seen_ids = set()
+        channel_totals = []
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             for channel in ("social", "campus", "intern"):
                 got = 0
-                total = None
+                total: Optional[int] = None
                 for page in range(1, self._MAX_PAGES + 1):
                     try:
                         resp = client.post(self._API, json={
@@ -75,6 +85,8 @@ class XiaohongshuAdapter(PlaywrightAdapter):
                     except (httpx.HTTPError, ValueError):
                         break
                     data = payload.get("data") or {}
+                    if total is None:
+                        total = _int_or_none(data.get("total"))
                     rows = data.get("list") or []
                     if not rows:
                         break
@@ -89,12 +101,17 @@ class XiaohongshuAdapter(PlaywrightAdapter):
                     if fresh:
                         collected.append({"data": {"list": fresh}})
                     got += len(rows)
-                    if total is None:
-                        total = data.get("total") or 0
                     if total and got >= total:
                         break
+                if total is not None:
+                    channel_totals.append(total)
         if not collected:
             raise RuntimeError("xiaohongshu: empty pageQueryPosition (job.xiaohongshu.com)")
+        if len(channel_totals) == 3:
+            self.reported_total = sum(channel_totals)
+        self.fetch_complete = (
+            self.reported_total is not None and len(seen_ids) >= self.reported_total
+        )
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
 
     def _map(self, post: dict) -> Optional[RawJob]:

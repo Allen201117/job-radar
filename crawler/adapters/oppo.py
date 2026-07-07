@@ -29,6 +29,13 @@ def _first(post: dict, keys) -> str:
     return ""
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class OppoAdapter(PlaywrightAdapter):
     """OPPO 校招门户 careers.oppo.com。source_url 填
     `https://careers.oppo.com/university/oppo/campus/post?recruitType=Graduate`。"""
@@ -44,6 +51,8 @@ class OppoAdapter(PlaywrightAdapter):
     posts_keys = ("data.records",) + PlaywrightAdapter.posts_keys
 
     def fetch(self, source_url: str) -> str:
+        self.reported_total = None
+        self.fetch_complete = False
         headers = {
             "User-Agent": self.user_agent,
             "Accept": "application/json, text/plain, */*",
@@ -64,17 +73,22 @@ class OppoAdapter(PlaywrightAdapter):
                 except (httpx.HTTPError, ValueError):
                     break
                 data = payload.get("data") or {}
+                if total is None:
+                    total = _int_or_none(data.get("total"))
+                    if total is not None:
+                        self.reported_total = total
                 rows = data.get("records") or []
                 if not rows:
                     break
                 collected.append(payload)
                 got += len(rows)
-                if total is None:
-                    total = data.get("total") or 0
                 if total and got >= total:
                     break
         if not collected:
             raise RuntimeError("oppo: empty pageNew (careers.oppo.com)")
+        self.fetch_complete = (
+            self.reported_total is not None and got >= self.reported_total
+        )
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
 
     def _map(self, post: dict) -> Optional[RawJob]:
