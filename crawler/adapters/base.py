@@ -1,7 +1,12 @@
+import logging
 import os
+import time
 from dataclasses import dataclass, field
-from typing import Optional, List
+from typing import Callable, List, Optional, Tuple
 import httpx
+
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_detail_cap(default: int) -> int:
@@ -31,6 +36,95 @@ class RawJob:
     experience: Optional[str] = None   # 经验要求；adapter 可直填，否则由 normalizer 从全文抽取
     education: Optional[str] = None     # 学历要求；同上
     deadline: Optional[str] = None      # 投递截止；同上
+
+
+@dataclass
+class PageResult:
+    """paginate_all 每页 fetch 闭包的返回：本页条目 + 接口本次自报的总数（可为 None）。"""
+    items: list
+    total: Optional[int] = None   # 接口自报总数（分母）；None = 本页没给/接口无此字段
+
+
+def paginate_all(
+    fetch_page: Callable[[int], PageResult],
+    *,
+    page_size: int,
+    first_page: int = 1,
+    max_pages: int = 200,
+    delay_seconds: float = 0.0,
+    logger: Optional[logging.Logger] = None,
+    label: str = "",
+) -> Tuple[list, Optional[int], bool]:
+    """框架级「翻到底」纪律（治抓不全的病根：各 adapter 硬编码小分页上限）。
+
+    翻页直到抓全，返回 ``(all_items, reported_total, fetch_complete)``——正好对上
+    BaseAdapter.reported_total / fetch_complete 契约，adapter 抓完直接赋值即可。
+
+    参数：
+      fetch_page(page_index) -> PageResult：单页抓取闭包。闭包自己把 page_index 映射成
+        接口翻页参数（page 型直接用；offset 型传 first_page=0，内部算 offset=page_index*page_size）。
+      page_size：接口**实际每页返回**的条数（不是随便请求的值）——短页判定末页要靠它，
+        请求的 pageSize 必须与之一致，否则 offset 递进会跳漏。
+      first_page：起始页号（page 型接口多为 1；offset/0-based 传 0）。
+      max_pages：安全上限（防接口异常/死循环）。命中 → 停 + warn + complete=False。
+      delay_seconds：每页间隔（礼貌爬取/限速）。
+
+    停止条件（按序）：
+      1. 达到 max_pages 安全上限 → 停，complete=False，告警。
+      2. 空页 → 停；complete = total 未知（自然收尾）或已收满（collected>=total）。
+      3. total 已知且 collected>=total → 停，complete=True。
+      4. total 未知且本页 < page_size（末页）→ 停，complete=True，total 记为已抓数。
+
+    异常语义（沿用 tencent/jd 已验证范式）：
+      - 首页（尚未抓到任何一页）抛异常 → 原样上抛，交给 run.py 记 failed。
+      - 后续页抛异常 → 保留已抓条目、complete=False、停止（尽力而为，不炸穿夜间 cron）。
+    """
+    log = logger or globals()["logger"]
+    items: list = []
+    total: Optional[int] = None
+    complete = False
+    page = first_page
+    pages_done = 0
+
+    while True:
+        if pages_done >= max_pages:
+            log.warning("%s: 命中安全翻页上限 %d，可能未抓全（got=%d total=%s）",
+                        label or "paginate", max_pages, len(items), total)
+            complete = False
+            break
+        try:
+            result = fetch_page(page)
+        except Exception:
+            if pages_done == 0:
+                raise  # 首页失败 → 交上层记 failed
+            log.warning("%s: 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）",
+                        label or "paginate", pages_done + 1, len(items))
+            complete = False
+            break
+
+        page_items = list(result.items or [])
+        if result.total is not None and total is None:
+            total = result.total
+        pages_done += 1
+
+        if not page_items:
+            complete = (total is None) or (len(items) >= total)
+            break
+        items.extend(page_items)
+        if total is not None and len(items) >= total:
+            complete = True
+            break
+        if total is None and len(page_items) < page_size:
+            complete = True
+            break
+
+        page += 1
+        if delay_seconds:
+            time.sleep(delay_seconds)
+
+    if total is None and complete:
+        total = len(items)   # 未知 total 自然收尾：诚实把「看见的全部」记为分母
+    return items, total, complete
 
 
 class BaseAdapter:
