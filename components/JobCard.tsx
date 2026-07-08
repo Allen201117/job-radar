@@ -10,6 +10,7 @@ import {
   ChartBar,
   CheckCircle,
   GraduationCap,
+  HandCoins,
   Hourglass,
   MapPin,
   Sparkle,
@@ -19,7 +20,12 @@ import {
   classifyJobFunction,
   recruitmentCategory,
 } from "@/lib/china-keyword-expansion";
-import { extractDeadline, extractEducation, extractExperience } from "@/lib/job-fields";
+import {
+  extractDeadline,
+  extractEducation,
+  extractExperience,
+  jobFieldDisplayValue,
+} from "@/lib/job-fields";
 import { matchTier } from "@/lib/scoring";
 import CompanyInsightDrawer from "@/components/CompanyInsightDrawer";
 import {
@@ -88,35 +94,14 @@ function matchReasonText(reason: MatchReason): string {
   return `${MATCH_REASON_LABELS[reason.type]}：${reason.value}`;
 }
 
-// 招聘类型（实习/校招/社招）= 强特征，三色区分，每张卡片必显示。
-function recruitTypeStyle(t: string): string {
-  if (t === "实习")
-    return "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]";
-  if (t === "校招")
-    return "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]";
-  return "border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]"; // 社招
-}
-
-// 岗位职能（产品/研发/…）= 次强特征，统一中性配色，每张卡片必显示。
-const FUNCTION_STYLE =
-  "border border-black/[0.08] bg-[#f0ece2] text-[#6b655a] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#b6ad9d]";
-
-// 洞察按钮的点击前预告：实录(紫·有数量) / 岗位聚合派生(蓝·与抽屉派生标记同色) / 暂无(灰) / 加载中(中性紫)。
-// 让用户点击前就知道有没有内容、是实录还是聚合，降低空抽屉点击。
+// 洞察按钮的点击前预告：只在有实录或岗位聚合派生时显示，避免空抽屉点击。
 function insightBadge(avail: InsightAvailability | null): {
   label: string;
   title: string;
   cls: string;
   derived: boolean;
-} {
-  if (!avail) {
-    return {
-      label: "职业洞察",
-      title: "查看该公司的职业洞察",
-      cls: "border-[#cfc0e6] bg-[#efe9f8] text-[#6a4fa0] hover:border-[#bba9dd] hover:bg-[#e7def4] dark:border-[#c3b1e6]/[0.30] dark:bg-[#c3b1e6]/[0.15] dark:text-[#c3b1e6] dark:hover:border-[#c3b1e6]/[0.45] dark:hover:bg-[#c3b1e6]/[0.22]",
-      derived: false,
-    };
-  }
+} | null {
+  if (!avail) return null;
   if (avail.real > 0) {
     return {
       label: `洞察 ${avail.real}`,
@@ -133,12 +118,7 @@ function insightBadge(avail: InsightAvailability | null): {
       derived: true,
     };
   }
-  return {
-    label: "暂无洞察",
-    title: "该公司暂无可展示的职业洞察（点击查看说明）",
-    cls: "border-black/[0.08] bg-[#f0ece2] text-[#9a9184] hover:text-[#6b655a] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#837c70] dark:hover:text-[#b6ad9d]",
-    derived: false,
-  };
+  return null;
 }
 
 export default function JobCard({
@@ -188,7 +168,7 @@ export default function JobCard({
     () => job.deadline || extractDeadline(summary),
     [job.deadline, summary],
   );
-  // 强特征标签：招聘类型穷尽落到 实习/校招/社招 之一（必显示）；职能粗分到 产品/研发/… （必显示）。
+  // 强特征：招聘类型穷尽落到 实习/校招/社招 之一；职能粗分到 产品/研发/…。
   const recruitType = useMemo(
     () => recruitmentCategory({ title: job.title, job_type: job.job_type, summary, jd_url: job.jd_url }),
     [job.title, job.job_type, summary, job.jd_url],
@@ -293,7 +273,74 @@ export default function JobCard({
     (Date.now() - new Date(job.first_seen_at).getTime()) / 86400000 <= 3;
   const posted = job.posted_at
     ? new Date(job.posted_at).toLocaleDateString("zh-CN")
-    : "未知";
+    : null;
+  const metadataFields = [
+    { key: "location", icon: MapPin, label: "城市", value: jobFieldDisplayValue(job.location) },
+    { key: "salary", icon: HandCoins, label: "薪资", value: jobFieldDisplayValue(job.salary_text) },
+    { key: "experience", icon: Briefcase, label: "经验", value: jobFieldDisplayValue(exp) },
+    { key: "education", icon: GraduationCap, label: "学历", value: jobFieldDisplayValue(edu) },
+    { key: "posted", icon: CalendarBlank, label: "发布", value: jobFieldDisplayValue(posted) },
+    { key: "deadline", icon: Hourglass, label: "截止", value: jobFieldDisplayValue(deadline) },
+  ].filter((field) => field.value !== null) as Array<{
+    key: string;
+    icon: typeof MapPin;
+    label: string;
+    value: string;
+  }>;
+  const statusChips: Array<{
+    key: string;
+    label: string;
+    cls: string;
+    icon?: typeof CheckCircle;
+  }> = [];
+  const currentActionLabel =
+    currentAction === "saved"
+      ? "已加入值得投"
+      : currentAction === "applied"
+        ? "已投递"
+        : currentAction === "ignored"
+          ? "已忽略"
+          : "";
+  if (currentActionLabel) {
+    statusChips.push({
+      key: "action",
+      label: currentActionLabel,
+      cls: "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]",
+    });
+  }
+  if (job.sponsorship_signal === "available") {
+    statusChips.push({
+      key: "sponsorship-available",
+      label: "提供 Sponsorship",
+      icon: CheckCircle,
+      cls: "border border-[#bcdcae] bg-[#eef6e0] text-[#4d6b2f] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#d2f0ad]",
+    });
+  } else if (job.sponsorship_signal === "none") {
+    statusChips.push({
+      key: "sponsorship-none",
+      label: "不提供 Sponsorship",
+      icon: XCircle,
+      cls: "border border-[#f0d9a8] bg-[#fbf1de] text-[#9a6a1f] dark:border-[#e8b87f]/[0.30] dark:bg-[#e8b87f]/[0.15] dark:text-[#e8b87f]",
+    });
+  }
+  if (!currentAction) {
+    if (sessionNew) {
+      statusChips.push({
+        key: "session-new",
+        label: "本次新发现",
+        icon: Sparkle,
+        cls: "bg-[#dcefb4] text-[#4f6f2a] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]",
+      });
+    } else if (isNew) {
+      statusChips.push({
+        key: "new",
+        label: "新发现",
+        cls: "bg-[#cfe2f8] text-[#2f6299] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]",
+      });
+    }
+  }
+  const visibleStatusChips = statusChips.slice(0, 2);
+  const insight = insightBadge(insightAvail);
   // 无量纲匹配分 → 可解释三档徽标（阈值在 lib/scoring.ts，前端只消费）。
   const tier = matchTier(job.match_score);
   const matchReasons = job.match_reasons || [];
@@ -311,92 +358,79 @@ export default function JobCard({
     >
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium text-[#8a8275] dark:text-[#b6ad9d]">{job.company}</span>
-            <span
-              className={cn(
-                "rounded-full px-2.5 py-1 text-xs font-semibold",
-                recruitTypeStyle(recruitType),
-              )}
-            >
-              {recruitType}
-            </span>
-            <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", FUNCTION_STYLE)}>
-              {jobFunction}
-            </span>
-            {job.sponsorship_signal === "available" && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-[#bcdcae] bg-[#eef6e0] px-2.5 py-1 text-xs font-semibold text-[#4d6b2f] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#d2f0ad]">
-                <CheckCircle size={12} weight="fill" aria-hidden="true" />
-                提供 Sponsorship
-              </span>
-            )}
-            {job.sponsorship_signal === "none" && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-[#f0d9a8] bg-[#fbf1de] px-2.5 py-1 text-xs font-semibold text-[#9a6a1f] dark:border-[#e8b87f]/[0.30] dark:bg-[#e8b87f]/[0.15] dark:text-[#e8b87f]">
-                <XCircle size={12} weight="fill" aria-hidden="true" />
-                不提供 Sponsorship
-              </span>
-            )}
-            {sessionNew && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-[#dcefb4] px-2.5 py-1 text-xs font-semibold text-[#4f6f2a] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]">
-                <Sparkle size={12} weight="fill" aria-hidden="true" />
-                本次新发现
-              </span>
-            )}
-            {isNew && !sessionNew && (
-              <span className="rounded-full bg-[#cfe2f8] px-2.5 py-1 text-xs font-semibold text-[#2f6299] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
-                新发现
-              </span>
-            )}
-            {currentAction && (
-              <span className="rounded-full bg-[#1a1714] px-2.5 py-1 text-xs font-semibold text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
-                {currentAction === "saved"
-                  ? "已加入值得投"
-                  : currentAction === "applied"
-                    ? "已投递"
-                    : currentAction === "ignored"
-                      ? "已忽略"
-                      : ""}
-              </span>
-            )}
-            {(() => {
-              const badge = insightBadge(insightAvail);
-              return (
+          <button
+            type="button"
+            onClick={handleView}
+            className="block max-w-full text-left text-[1.35rem] font-semibold leading-tight text-[#1a1714] transition-colors hover:text-[#3f7cc0] sm:text-2xl dark:text-[#f3ecdf] dark:hover:text-[#7fb2e8]"
+          >
+            <span className="text-balance">{job.title}</span>
+          </button>
+          <p className="mt-1.5 text-base font-semibold leading-snug text-[#5f594e] dark:text-[#d9d0c2]">
+            {job.company}
+          </p>
+
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">
+            <span>{recruitType}</span>
+            <span aria-hidden="true">·</span>
+            <span>{jobFunction}</span>
+            {insight && (
+              <>
+                <span aria-hidden="true">·</span>
                 <button
                   type="button"
                   onClick={() => setInsightOpen(true)}
-                  title={badge.title}
+                  title={insight.title}
                   className={cn(
-                    "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition",
-                    badge.cls,
+                    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium transition",
+                    insight.cls,
                   )}
                 >
-                  {badge.derived ? (
+                  {insight.derived ? (
                     <ChartBar size={12} weight="fill" aria-hidden="true" />
                   ) : (
                     <Sparkle size={12} weight="fill" aria-hidden="true" />
                   )}
-                  {badge.label}
+                  {insight.label}
                 </button>
-              );
-            })()}
+              </>
+            )}
           </div>
 
-          <button
-            type="button"
-            onClick={handleView}
-            className="mt-2 block max-w-full text-left text-xl font-semibold leading-snug text-[#1a1714] transition-colors hover:text-[#3f7cc0] dark:text-[#f3ecdf] dark:hover:text-[#7fb2e8]"
-          >
-            <span className="text-balance">{job.title}</span>
-          </button>
+          {visibleStatusChips.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {visibleStatusChips.map((chip) => {
+                const Icon = chip.icon;
+                return (
+                  <span
+                    key={chip.key}
+                    className={cn("inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold", chip.cls)}
+                  >
+                    {Icon && <Icon size={12} weight="fill" aria-hidden="true" />}
+                    {chip.label}
+                  </span>
+                );
+              })}
+            </div>
+          )}
 
-          <div className="mt-4 grid grid-cols-2 gap-2 text-sm xl:grid-cols-3">
-            <Field icon={MapPin} label="城市" value={job.location || "未知"} />
-            <Field icon={Briefcase} label="薪资" value={job.salary_text || "官网未披露"} />
-            <Field icon={GraduationCap} label="经验" value={exp} />
-            <Field icon={GraduationCap} label="学历" value={edu} />
-            <Field icon={CalendarBlank} label="发布" value={posted} />
-            <Field icon={Hourglass} label="截止" value={deadline} />
-          </div>
+          {metadataFields.length > 0 &&
+            (metadataFields.length >= 4 ? (
+              <div className="mt-4 grid grid-cols-2 gap-2 text-sm xl:grid-cols-3">
+                {metadataFields.map((field) => (
+                  <Field key={field.key} icon={field.icon} label={field.label} value={field.value} />
+                ))}
+              </div>
+            ) : (
+              <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-[#6b655a] dark:text-[#b6ad9d]">
+                {metadataFields.map(({ key, icon: Icon, label, value }) => (
+                  <span key={key} className="inline-flex min-w-0 items-center gap-1.5">
+                    <Icon size={15} className="shrink-0 text-[#a39a8c] dark:text-[#a89f90]" aria-hidden="true" />
+                    <span className="text-[#9a9184] dark:text-[#aaa093]">{label}</span>
+                    <span className="font-medium text-[#3f3a33] dark:text-[#f3ecdf]">{value}</span>
+                  </span>
+                ))}
+              </div>
+            ))}
 
           {freshness.label && (
             <p
