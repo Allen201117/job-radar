@@ -81,12 +81,12 @@ const MagicBentoFX = ({
   useEffect(() => {
     if (!mounted || disabled) return;
 
-    // —— 指针跟随的全局光晕（screen 混色，在深色区最亮）——
+    // —— 指针跟随的全局光晕：视觉由 .bento-spotlight 按主题定义 ——
     let spotlight: HTMLDivElement | null = null;
     if (enableSpotlight) {
       spotlight = document.createElement("div");
       spotlight.className = "bento-spotlight";
-      spotlight.style.cssText = `position:fixed;width:${spotlightRadius * 2.4}px;height:${spotlightRadius * 2.4}px;border-radius:50%;pointer-events:none;z-index:200;opacity:0;transform:translate(-50%,-50%);mix-blend-mode:screen;background:radial-gradient(circle,rgba(${glowColor},0.15) 0%,rgba(${glowColor},0.08) 15%,rgba(${glowColor},0.04) 25%,rgba(${glowColor},0.02) 40%,transparent 70%);`;
+      spotlight.style.cssText = `position:fixed;width:${spotlightRadius * 2.4}px;height:${spotlightRadius * 2.4}px;border-radius:50%;opacity:0;transform:translate(-50%,-50%);`;
       document.body.appendChild(spotlight);
     }
 

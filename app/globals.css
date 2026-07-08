@@ -8,7 +8,7 @@
     --foreground: 240 3% 12%;
     --card: 0 0% 100%;
     --card-foreground: 240 3% 12%;
-    --primary: 210 100% 40%;
+    --primary: 153 96% 36%;
     --primary-foreground: 0 0% 100%;
     --secondary: 240 7% 97%;
     --secondary-foreground: 240 4% 14%;
@@ -20,7 +20,7 @@
     --destructive-foreground: 0 0% 100%;
     --border: 240 7% 90%;
     --input: 240 7% 90%;
-    --ring: 210 100% 40%;
+    --ring: 153 96% 36%;
     --radius: 0.75rem;
   }
 }
@@ -295,6 +295,7 @@
    ─────────────────────────────────────────────────────────────── */
 :root {
   --radar-green: 0, 230, 118; /* #00E676 雷达绿 */
+  --radar-glow: 0, 184, 76; /* 暖光纸面上更稳的雷达绿阴影 */
 }
 
 .bento-glow {
@@ -314,9 +315,9 @@
   padding: 5px;
   background: radial-gradient(
     var(--glow-radius) circle at var(--glow-x) var(--glow-y),
-    rgba(var(--radar-green), calc(var(--glow-intensity) * 0.75)) 0%,
-    rgba(var(--radar-green), calc(var(--glow-intensity) * 0.35)) 32%,
-    transparent 62%
+    rgba(var(--radar-glow), calc(var(--glow-intensity) * 0.9)) 0%,
+    rgba(var(--radar-glow), calc(var(--glow-intensity) * 0.5)) 34%,
+    transparent 64%
   );
   border-radius: inherit;
   -webkit-mask:
@@ -335,16 +336,53 @@
 /* 指针靠近时整卡微微抬升 + 绿色外辉 */
 .bento-glow:hover {
   box-shadow:
+    0 2px 8px -4px rgba(40, 34, 28, 0.2),
+    0 18px 42px -22px rgba(40, 34, 28, 0.5),
+    0 0 0 1px rgba(var(--radar-glow), 0.12),
+    0 0 34px -12px rgba(var(--radar-glow), 0.55);
+}
+
+.dark .bento-glow::after {
+  background: radial-gradient(
+    var(--glow-radius) circle at var(--glow-x) var(--glow-y),
+    rgba(var(--radar-green), calc(var(--glow-intensity) * 0.75)) 0%,
+    rgba(var(--radar-green), calc(var(--glow-intensity) * 0.35)) 32%,
+    transparent 62%
+  );
+}
+
+.dark .bento-glow:hover {
+  box-shadow:
     0 6px 24px -10px rgba(40, 34, 28, 0.3),
     0 0 28px -6px rgba(var(--radar-green), 0.45);
 }
 
 /* 全局指针光晕（JS 注入到 body；样式兜底） */
 .bento-spotlight {
-  mix-blend-mode: screen;
   will-change: transform, opacity;
   pointer-events: none;
   z-index: 200;
+  mix-blend-mode: normal;
+  background: radial-gradient(
+    circle,
+    rgba(var(--radar-glow), 0.2) 0%,
+    rgba(var(--radar-glow), 0.12) 18%,
+    rgba(var(--radar-glow), 0.07) 32%,
+    rgba(var(--radar-glow), 0.03) 50%,
+    transparent 72%
+  );
+}
+
+.dark .bento-spotlight {
+  mix-blend-mode: screen;
+  background: radial-gradient(
+    circle,
+    rgba(var(--radar-green), 0.15) 0%,
+    rgba(var(--radar-green), 0.08) 15%,
+    rgba(var(--radar-green), 0.04) 25%,
+    rgba(var(--radar-green), 0.02) 40%,
+    transparent 70%
+  );
 }
 
 .bento-particle::before {
@@ -383,8 +421,8 @@
 /* 背景模糊 + 提饱和，折射出底层暖纸与彩晕；必须配合 .cv-auto 使用（见下），
    否则几百张卡片同时做背景采样合成会拖垮渲染。 */
 .glass-card {
-  -webkit-backdrop-filter: blur(16px) saturate(180%);
-  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(18px) saturate(190%);
+  backdrop-filter: blur(18px) saturate(190%);
 }
 
 /* 顶部柔光 + 玻璃折射亮边：z-index:-1 落在「卡片自身半透明底色之上、内容之下」
@@ -397,6 +435,26 @@
   z-index: -1;
   border-radius: inherit;
   pointer-events: none;
+  background: linear-gradient(
+    160deg,
+    rgba(255, 255, 255, 0.66) 0%,
+    rgba(255, 255, 255, 0.2) 34%,
+    rgba(0, 184, 76, 0.055) 58%,
+    rgba(236, 198, 176, 0.08) 100%
+  );
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.92),
+    inset 0 -1px 1px 0 rgba(40, 34, 28, 0.05),
+    inset 0 0 0 1px rgba(40, 34, 28, 0.075),
+    inset 0 0 18px rgba(0, 184, 76, 0.035);
+}
+
+.dark .glass-card {
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  backdrop-filter: blur(16px) saturate(180%);
+}
+
+.dark .glass-card::before {
   background: linear-gradient(
     160deg,
     rgba(255, 255, 255, 0.4) 0%,
@@ -450,6 +508,7 @@
   --border: 36 10% 22%;
   --input: 36 10% 24%;
   --ring: 153 100% 45%;
+  --radar-glow: 0, 230, 118;
   color-scheme: dark;
 }
 
@@ -567,8 +626,10 @@
 }
 .radar-ring {
   position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%);
-  border: 1.5px solid rgba(var(--radar-green), 0.42); border-radius: 50%;
-  box-shadow: 0 0 24px -6px rgba(var(--radar-green), 0.3);
+  border: 1.5px solid rgba(var(--radar-glow), 0.58); border-radius: 50%;
+  box-shadow:
+    0 0 30px -7px rgba(var(--radar-glow), 0.48),
+    0 0 0 1px rgba(var(--radar-glow), 0.08);
   animation: lp-expand 4s ease-out infinite;
 }
 .dark .radar-ring {
