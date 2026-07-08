@@ -1,6 +1,19 @@
 import mustApplyList from "./must-apply-list.json";
 
 type Numeric = number | string | null | undefined;
+export type HealthBand = "good" | "warn" | "bad" | "empty";
+export type BandDirection = "higher" | "lower";
+export type BandTone = "success" | "warning" | "danger" | "muted";
+
+export const HEALTH_THRESHOLDS = {
+  clickValidity: { good: 0.99, warn: 0.9 },
+  validActiveShare: { good: 0.85, warn: 0.7 },
+  coveragePct: { good: 90, warn: 60 },
+  mustApplyHealthyCompanies: { good: 28, warn: 24 },
+  mustApplyZeroHealthyCompanies: { warn: 1, bad: 5 },
+  thinActiveShare: { good: 0.1, warn: 0.25 },
+  neverCheckedShare: { good: 0.15, warn: 0.35 },
+} as const;
 
 type MustApplyListCompany = {
   name: string;
@@ -18,6 +31,30 @@ function toNullableNumber(value: Numeric): number | null {
   if (value == null) return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+export function band(value: Numeric, threshold: { good: number; warn: number }, direction: BandDirection): HealthBand {
+  const n = toNullableNumber(value);
+  if (n === null) return "empty";
+  if (direction === "higher") {
+    if (n >= threshold.good) return "good";
+    if (n >= threshold.warn) return "warn";
+    return "bad";
+  }
+  if (n < threshold.good) return "good";
+  if (n <= threshold.warn) return "warn";
+  return "bad";
+}
+
+export function coverageBand(value: Numeric): HealthBand {
+  return band(value, HEALTH_THRESHOLDS.coveragePct, "higher");
+}
+
+export function bandTone(value: HealthBand): BandTone {
+  if (value === "good") return "success";
+  if (value === "warn") return "warning";
+  if (value === "bad") return "danger";
+  return "muted";
 }
 
 export function formatPercent(numerator: Numeric, denominator: Numeric): string {
@@ -420,10 +457,14 @@ type DailyReportInput = {
   opsRuns?: OpsRunAggregateRow[] | null;
 };
 
-const OPERATIONAL_TERMS: Record<string, string> = {
+export const OPERATIONAL_TERMS: Record<string, string> = {
   active: "在招",
   expired: "已确认撤岗",
   removed: "暂时下线",
+  today_removed: "今日下架",
+  thin_active: "空壳岗",
+  never_checked: "待核查",
+  unknown: "探不动",
   success: "完成",
   partial: "部分完成",
   partial_success: "部分完成",
@@ -599,6 +640,143 @@ export type TodayHealth = {
   label: "健康" | "注意" | "出事";
   message: string;
 };
+
+export type CombinedHealthVerdict = TodayHealth & {
+  actions: string[];
+  bands: {
+    clickValidity: HealthBand;
+    mustApply: HealthBand;
+    coverage: HealthBand;
+  };
+};
+
+function capList(names: string[]): string {
+  const clean = names.filter(Boolean);
+  const head = clean.slice(0, 3).join("、");
+  return clean.length > 3 ? `${head}等 ${clean.length} 家` : head;
+}
+
+function formatRateForAction(value: number | null): string {
+  return value == null ? "暂无数据" : `${(value * 100).toFixed(1)}%`;
+}
+
+function mustApplyBand(healthyCompanies: number | null, zeroHealthyCount: number): HealthBand {
+  let result = band(healthyCompanies, HEALTH_THRESHOLDS.mustApplyHealthyCompanies, "higher");
+  if (zeroHealthyCount >= HEALTH_THRESHOLDS.mustApplyZeroHealthyCompanies.bad) return "bad";
+  if (zeroHealthyCount >= HEALTH_THRESHOLDS.mustApplyZeroHealthyCompanies.warn && result === "good") return "warn";
+  return result;
+}
+
+export function evaluateCombinedHealth(input: {
+  validActive: Numeric;
+  crawlRuns: Numeric;
+  crawlFailedRuns: Numeric;
+  clickProbeValidityRate?: Numeric;
+  mustApplyHealthyCompanies?: Numeric;
+  mustApplyTotalCompanies?: Numeric;
+  mustApplyZeroHealthyCompanies?: string[] | Numeric;
+  mustApplyBlindCompanies?: string[];
+  coverageAvgPct?: Numeric;
+  coverageBlindSources?: Numeric;
+  previousValidActive?: Numeric;
+}): CombinedHealthVerdict {
+  void input.previousValidActive;
+  const validActive = toNullableNumber(input.validActive);
+  const crawlRuns = toNumber(input.crawlRuns);
+  const failedRuns = toNumber(input.crawlFailedRuns);
+  const clickRate = toNullableNumber(input.clickProbeValidityRate);
+  const clickValidity = band(clickRate, HEALTH_THRESHOLDS.clickValidity, "higher");
+  const healthyCompanies = toNullableNumber(input.mustApplyHealthyCompanies);
+  const mustApplyTotal = toNumber(input.mustApplyTotalCompanies) || MUST_APPLY_COMPANIES.length;
+  const zeroCompanies = Array.isArray(input.mustApplyZeroHealthyCompanies)
+    ? input.mustApplyZeroHealthyCompanies
+    : [];
+  const zeroCount = Array.isArray(input.mustApplyZeroHealthyCompanies)
+    ? zeroCompanies.length
+    : toNumber(input.mustApplyZeroHealthyCompanies);
+  const blindCompanies = input.mustApplyBlindCompanies || [];
+  const mustApply = mustApplyBand(healthyCompanies, zeroCount);
+  const coverage = coverageBand(input.coverageAvgPct);
+  const coverageBlindSources = toNumber(input.coverageBlindSources);
+  const allCrawlsFailed = crawlRuns > 0 && failedRuns >= crawlRuns;
+
+  const actions: string[] = [];
+  if (zeroCount > 0) {
+    const label = zeroCompanies.length ? capList(zeroCompanies) : `${zeroCount} 家`;
+    actions.push(`${label}：必投公司零健康岗`);
+  }
+  if (healthyCompanies === null) {
+    actions.push("必投清单健康覆盖暂不可用，请先确认香港 jobs 库查询。");
+  }
+  if (clickValidity === "bad" || clickValidity === "warn") {
+    actions.push(`点击有效率 ${formatRateForAction(clickRate)}（目标≥99%）`);
+  }
+  if (validActive === null) {
+    actions.push("岗位库统计暂不可用，先确认香港 jobs 库连接。");
+  } else if (validActive <= 0) {
+    actions.push("当前没有能投岗位，请立即检查岗位库。");
+  }
+  if (allCrawlsFailed) {
+    actions.push("今天岗位抓取全部失败，请检查抓取任务。");
+  } else if (crawlRuns <= 0) {
+    actions.push("今天还没有岗位抓取记录，请确认定时任务是否已到运行时间。");
+  }
+  if (mustApply === "warn" && zeroCount === 0 && healthyCompanies !== null) {
+    actions.push(`必投清单健康覆盖 ${healthyCompanies}/${mustApplyTotal}（目标≥28/30）`);
+  }
+  if (blindCompanies.length > 0) {
+    actions.push(`${capList(blindCompanies)}：有岗但 72h 未核验`);
+  }
+  if (coverage === "bad" || coverage === "warn") {
+    actions.push(`全库抓全率 ${input.coverageAvgPct == null ? "暂无数据" : `${toNumber(input.coverageAvgPct)}%`}（目标≥90%）`);
+  }
+  if (coverageBlindSources > 0) {
+    actions.push(`${coverageBlindSources} 个招聘源算不出抓全率，先看可测源。`);
+  }
+
+  const critical =
+    (validActive !== null && validActive <= 0) ||
+    allCrawlsFailed ||
+    clickValidity === "bad" ||
+    mustApply === "bad";
+  const warning =
+    !critical &&
+    (validActive === null ||
+      crawlRuns <= 0 ||
+      mustApply === "empty" ||
+      mustApply === "warn" ||
+      zeroCount > 0 ||
+      blindCompanies.length > 0 ||
+      coverage === "bad" ||
+      coverage === "warn" ||
+      clickValidity === "warn");
+
+  if (critical) {
+    return {
+      level: "critical",
+      label: "出事",
+      message: "核心承诺有红线，请先处理下方最靠前的问题。",
+      actions: actions.slice(0, 3),
+      bands: { clickValidity, mustApply, coverage },
+    };
+  }
+  if (warning) {
+    return {
+      level: "warning",
+      label: "注意",
+      message: "产品可用，但有会影响信任或覆盖的风险点。",
+      actions: actions.slice(0, 3),
+      bands: { clickValidity, mustApply, coverage },
+    };
+  }
+  return {
+    level: "healthy",
+    label: "健康",
+    message: "必投清单、点击有效率和今日抓取都在阈值内。",
+    actions: ["核心承诺正常：必投清单、点击有效率、今日抓取都在阈值内。"],
+    bands: { clickValidity, mustApply, coverage },
+  };
+}
 
 export function evaluateTodayHealth(input: {
   validActive: Numeric;
