@@ -29,3 +29,29 @@ export function extractDeadline(text?: string | null): string {
   if (m) return m[1].replace(/[年月]/g, "-").replace(/[./]/g, "-").replace(/-+$/, "");
   return "未知";
 }
+
+const MISSING_DISPLAY_VALUES = new Set([
+  "未知",
+  "官网未披露",
+  "未披露",
+  "暂未披露",
+  "暂无",
+  "无",
+  "n/a",
+  "na",
+  "null",
+  "undefined",
+  "-",
+  "--",
+]);
+
+export function jobFieldDisplayValue(value?: string | null): string | null {
+  const text = value?.trim();
+  if (!text) return null;
+  if (MISSING_DISPLAY_VALUES.has(text.toLowerCase())) return null;
+  return text;
+}
+
+export function hasJobFieldValue(value?: string | null): boolean {
+  return jobFieldDisplayValue(value) !== null;
+}

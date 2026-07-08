@@ -224,12 +224,20 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
             </button>
           </div>
           {/* 唯一一次「来源聚合·去标识」统一声明（每条卡片正文不再重复罗列媒体名） */}
-          <p className="mt-4 flex gap-2.5 rounded-xl border border-[#cfc0e6] bg-[#efe9f8] px-3.5 py-3 text-[13px] leading-6 text-[#5a4a78] dark:border-[#c3b1e6]/[0.30] dark:bg-[#c3b1e6]/[0.12] dark:text-[#c3b1e6]">
-            <ShieldCheck size={18} weight="fill" className="mt-0.5 shrink-0 text-[#6a4fa0] dark:text-[#c3b1e6]" />
-            <span>
-              下列内容部分来自<strong>本平台在招岗位的聚合统计</strong>（带「本平台岗位聚合」标记，属事实数据），部分来自<strong>公开报道与网络讨论的聚合</strong>并经<strong>去标识化</strong>处理（属社区参考、非官方，也不针对任何个人）。每条结论的依据见卡片下方，<strong>仅供参考</strong>，请结合官方岗位信息与面试沟通自行判断。
-            </span>
-          </p>
+          <div className="mt-4 rounded-xl border border-[#cfc0e6] bg-[#efe9f8] px-3.5 py-3 text-[13px] leading-6 text-[#5a4a78] dark:border-[#c3b1e6]/[0.30] dark:bg-[#c3b1e6]/[0.12] dark:text-[#c3b1e6]">
+            <div className="flex items-center gap-2.5">
+              <ShieldCheck size={18} weight="fill" className="shrink-0 text-[#6a4fa0] dark:text-[#c3b1e6]" />
+              <span className="font-semibold">公开来源聚合 · 去标识 · 仅供参考</span>
+            </div>
+            <details className="mt-1.5">
+              <summary className="inline-flex cursor-pointer list-none text-xs font-semibold text-[#6a4fa0] transition hover:text-[#4f3b82] [&::-webkit-details-marker]:hidden dark:text-[#c3b1e6] dark:hover:text-[#d9cdf2]">
+                了解更多
+              </summary>
+              <p className="mt-2 text-xs leading-6 text-[#5a4a78] dark:text-[#c3b1e6]">
+                下列内容部分来自<strong>本平台在招岗位的聚合统计</strong>（带「本平台岗位聚合」标记，属事实数据），部分来自<strong>公开报道与网络讨论的聚合</strong>并经<strong>去标识化</strong>处理（属社区参考、非官方，也不针对任何个人）。每条结论的依据见卡片下方，<strong>仅供参考</strong>，请结合官方岗位信息与面试沟通自行判断。
+              </p>
+            </details>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-6">
