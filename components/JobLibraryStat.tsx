@@ -73,7 +73,11 @@ export default function JobLibraryStat({ initialTotal }: Props) {
   return (
     <section className="surface bento-glow relative overflow-hidden p-3.5 text-[#1a1714] dark:text-[#f3ecdf] sm:p-4">
       <div
-        className="pointer-events-none absolute -right-12 -top-16 size-40 rounded-full bg-[#96b6e2]/20 blur-3xl"
+        className="pointer-events-none absolute -right-12 -top-16 size-40 rounded-full bg-[#00c853]/[0.26] blur-3xl dark:hidden"
+        aria-hidden="true"
+      />
+      <div
+        className="pointer-events-none absolute -right-12 -top-16 hidden size-40 rounded-full bg-[#96b6e2]/20 blur-3xl dark:block"
         aria-hidden="true"
       />
       <div className="relative flex items-center justify-between gap-3">

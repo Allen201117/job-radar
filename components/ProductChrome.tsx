@@ -48,7 +48,8 @@ export function ProductHero({
   }[align];
   return (
     <section className="surface relative overflow-hidden px-5 py-6 sm:px-7 sm:py-7 lg:px-8">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_88%_8%,rgba(150,182,226,0.18),transparent_42%),radial-gradient(circle_at_4%_120%,rgba(196,228,150,0.16),transparent_38%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_88%_8%,rgba(0,200,83,0.16),transparent_44%),radial-gradient(circle_at_18%_-10%,rgba(150,182,226,0.26),transparent_46%),radial-gradient(circle_at_4%_120%,rgba(196,228,150,0.24),transparent_40%),radial-gradient(circle_at_92%_105%,rgba(236,198,176,0.16),transparent_38%)] dark:hidden" />
+      <div className="pointer-events-none absolute inset-0 hidden bg-[radial-gradient(circle_at_88%_8%,rgba(150,182,226,0.18),transparent_42%),radial-gradient(circle_at_4%_120%,rgba(196,228,150,0.16),transparent_38%)] dark:block" />
       <div className={cn("relative flex flex-col gap-6 lg:flex-row lg:justify-between", alignClass)}>
         <div className="max-w-3xl">
           <p className="eyebrow">
