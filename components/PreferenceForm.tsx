@@ -6,7 +6,7 @@ import { track } from "@/lib/track";
 import { normalizeCompany } from "@/lib/company-normalize";
 import TagInput from "./TagInput";
 import SaveToast, { type SaveState } from "@/components/SaveToast";
-import { Buildings, CheckCircle, SlidersHorizontal } from "@phosphor-icons/react";
+import { Buildings, CaretDown, CheckCircle, SlidersHorizontal } from "@phosphor-icons/react";
 
 type Coverage = { company: string; status: string; matched_sources: number; resolution_note?: string | null };
 
@@ -147,109 +147,55 @@ export default function PreferenceForm() {
           <p className="text-sm text-[#8a8275] dark:text-[#9a9184]">系统据此每天替你筛官方机会；改完记得保存。</p>
         </div>
       </div>
-      <Field label="目标城市">
-        <TagInput
-          values={prefs.target_locations || []}
-          onChange={(v) => setArray("target_locations", v)}
-          placeholder="北京、上海、深圳…（回车或逗号添加）"
-        />
-      </Field>
-      <Field label="目标岗位方向">
-        <TagInput
-          values={prefs.target_roles || []}
-          onChange={(v) => setArray("target_roles", v)}
-          placeholder="算法、产品经理、数据分析…"
-        />
-      </Field>
-      <Field label="命中关键词">
-        <TagInput
-          values={prefs.target_keywords || []}
-          onChange={(v) => setArray("target_keywords", v)}
-          placeholder="Python、机器学习、LLM…"
-        />
-      </Field>
-      <Field label="求职阶段">
-        <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {([
-            { v: "", label: "不限" },
-            { v: "实习", label: "实习" },
-            { v: "校招", label: "校招" },
-            { v: "社招", label: "社招" },
-          ] as const).map((opt) => {
-            const selected = (prefs.experience_stage ?? "") === opt.v;
-            return (
-              <button
-                key={opt.v || "all"}
-                type="button"
-                onClick={() => setPrefs({ ...prefs, experience_stage: opt.v })}
-                aria-pressed={selected}
-                className={
-                  selected
-                    ? "rounded-xl border border-[#1a1714] bg-[#1a1714] px-3 py-2 text-sm font-semibold text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                    : "rounded-xl border border-black/[0.1] bg-white/55 px-3 py-2 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]"
-                }
-              >
-                {opt.label}
-              </button>
-            );
-          })}
+      <section className="rounded-2xl border border-black/[0.07] bg-white/55 p-4 dark:border-white/[0.1] dark:bg-white/[0.05]">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
+          <h3 className="text-sm font-semibold">核心</h3>
+          <p className="text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">填这三项就能开始，其它可稍后完善</p>
         </div>
-      </Field>
-      <Field label="目标行业">
-        <TagInput
-          values={prefs.target_industries || []}
-          onChange={(v) => setArray("target_industries", v)}
-          placeholder="互联网、金融、消费…（跨行业岗位会被挡掉）"
-        />
-      </Field>
-      <Field label="排除关键词">
-        <TagInput
-          values={prefs.exclude_keywords || []}
-          onChange={(v) => setArray("exclude_keywords", v)}
-          placeholder="销售、客服…"
-        />
-      </Field>
-      <Field label="雷达强度">
-        <div className="mt-1 flex gap-2">
-          {([
-            { v: "active", label: "积极找", hint: "每天多推、含拓展" },
-            { v: "passive", label: "先看看", hint: "只推高价值与大事" },
-          ] as const).map((opt) => {
-            const selected = (prefs.radar_intensity ?? "active") === opt.v;
-            return (
-              <button
-                key={opt.v}
-                type="button"
-                onClick={() => setPrefs({ ...prefs, radar_intensity: opt.v })}
-                aria-pressed={selected}
-                className={
-                  selected
-                    ? "flex-1 rounded-xl border border-[#1a1714] bg-[#1a1714] px-3 py-2 text-left text-sm font-semibold text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                    : "flex-1 rounded-xl border border-black/[0.1] bg-white/55 px-3 py-2 text-left text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]"
-                }
-              >
-                {opt.label}
-                <span className={`mt-0.5 block text-[11px] font-normal ${selected ? "opacity-80" : "text-[#8a8275] dark:text-[#9a9184]"}`}>
-                  {opt.hint}
-                </span>
-              </button>
-            );
-          })}
+        <div className="mt-4 space-y-4">
+          <Field label="目标城市">
+            <TagInput
+              values={prefs.target_locations || []}
+              onChange={(v) => setArray("target_locations", v)}
+              placeholder="北京、上海、深圳…（回车或逗号添加）"
+            />
+          </Field>
+          <Field label="目标岗位方向">
+            <TagInput
+              values={prefs.target_roles || []}
+              onChange={(v) => setArray("target_roles", v)}
+              placeholder="算法、产品经理、数据分析…"
+            />
+          </Field>
+          <Field label="求职阶段">
+            <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {([
+                { v: "", label: "不限" },
+                { v: "实习", label: "实习" },
+                { v: "校招", label: "校招" },
+                { v: "社招", label: "社招" },
+              ] as const).map((opt) => {
+                const selected = (prefs.experience_stage ?? "") === opt.v;
+                return (
+                  <button
+                    key={opt.v || "all"}
+                    type="button"
+                    onClick={() => setPrefs({ ...prefs, experience_stage: opt.v })}
+                    aria-pressed={selected}
+                    className={
+                      selected
+                        ? "rounded-xl border border-[#1a1714] bg-[#1a1714] px-3 py-2 text-sm font-semibold text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                        : "rounded-xl border border-black/[0.1] bg-white/55 px-3 py-2 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]"
+                    }
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </Field>
         </div>
-        <p className="mt-1.5 text-[11px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
-          强度只调日常推荐的多少与频率；关键提醒（收藏岗截止/关闭）始终会提醒你。系统也会按你的活跃度自动校准。
-        </p>
-      </Field>
-      <Field label="每日机会上限">
-        <input
-          type="number"
-          min={5}
-          max={30}
-          value={prefs.daily_limit}
-          onChange={(e) => setPrefs({ ...prefs, daily_limit: Number(e.target.value) || 20 })}
-          className="mt-1 field-soft"
-        />
-      </Field>
+      </section>
 
       {/* §10.1 关注公司：保存后立即出现状态，不等待抓取 */}
       <div className="rounded-2xl border border-black/[0.07] bg-white/45 p-4 dark:border-white/[0.1] dark:bg-white/[0.04]">
@@ -291,6 +237,87 @@ export default function PreferenceForm() {
           </ul>
         )}
       </div>
+
+      <details className="group rounded-2xl border border-black/[0.07] bg-white/35 p-4 dark:border-white/[0.1] dark:bg-white/[0.03]">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+          <span>
+            <span className="block text-sm font-semibold">进阶设置（可选）</span>
+            <span className="mt-0.5 block text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
+              关键词、排除项、行业和推荐频率
+            </span>
+          </span>
+          <CaretDown
+            size={16}
+            weight="bold"
+            className="shrink-0 text-[#8a8275] transition-transform group-open:rotate-180 dark:text-[#9a9184]"
+            aria-hidden="true"
+          />
+        </summary>
+        <div className="mt-4 space-y-4 border-t border-black/[0.06] pt-4 dark:border-white/[0.08]">
+          <Field label="命中关键词">
+            <TagInput
+              values={prefs.target_keywords || []}
+              onChange={(v) => setArray("target_keywords", v)}
+              placeholder="Python、机器学习、LLM…"
+            />
+          </Field>
+          <Field label="排除关键词">
+            <TagInput
+              values={prefs.exclude_keywords || []}
+              onChange={(v) => setArray("exclude_keywords", v)}
+              placeholder="销售、客服…"
+            />
+          </Field>
+          <Field label="目标行业">
+            <TagInput
+              values={prefs.target_industries || []}
+              onChange={(v) => setArray("target_industries", v)}
+              placeholder="互联网、金融、消费…（跨行业岗位会被挡掉）"
+            />
+          </Field>
+          <Field label="雷达强度">
+            <div className="mt-1 flex gap-2">
+              {([
+                { v: "active", label: "积极找", hint: "每天多推、含拓展" },
+                { v: "passive", label: "先看看", hint: "只推高价值与大事" },
+              ] as const).map((opt) => {
+                const selected = (prefs.radar_intensity ?? "active") === opt.v;
+                return (
+                  <button
+                    key={opt.v}
+                    type="button"
+                    onClick={() => setPrefs({ ...prefs, radar_intensity: opt.v })}
+                    aria-pressed={selected}
+                    className={
+                      selected
+                        ? "flex-1 rounded-xl border border-[#1a1714] bg-[#1a1714] px-3 py-2 text-left text-sm font-semibold text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                        : "flex-1 rounded-xl border border-black/[0.1] bg-white/55 px-3 py-2 text-left text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]"
+                    }
+                  >
+                    {opt.label}
+                    <span className={`mt-0.5 block text-[11px] font-normal ${selected ? "opacity-80" : "text-[#8a8275] dark:text-[#9a9184]"}`}>
+                      {opt.hint}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1.5 text-[11px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
+              强度只调日常推荐的多少与频率；关键提醒（收藏岗截止/关闭）始终会提醒你。系统也会按你的活跃度自动校准。
+            </p>
+          </Field>
+          <Field label="每日机会上限">
+            <input
+              type="number"
+              min={5}
+              max={30}
+              value={prefs.daily_limit}
+              onChange={(e) => setPrefs({ ...prefs, daily_limit: Number(e.target.value) || 20 })}
+              className="mt-1 field-soft"
+            />
+          </Field>
+        </div>
+      </details>
 
       {message && (
         <p className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm ${message.includes("失败") ? "border-[#e0b4ac] dark:border-[#7a392e]/[0.60] bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]" : "border-[#bcd2ed] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]"}`}>
