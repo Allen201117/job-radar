@@ -2,9 +2,9 @@
 // 抽到 lib 层后，浏览器端筛选钩子(useJobFilters) 与 服务端搜索(lib/job-search → /api/jobs/search)
 // 复用同一份匹配逻辑 → 服务端筛选结果与原前端筛选「逐字段一致」，全部既有测试照常通过。
 import {
+  cityMatchTokens,
   hasExplicitRecruitmentType,
   keywordMatchTier,
-  normalizeChinaCity,
   recruitmentCategory,
 } from "@/lib/china-keyword-expansion";
 import { classifyCompanyOriginWithSource } from "@/lib/company-origin";
@@ -65,8 +65,10 @@ export function jobFilterTier(
     if (!location) {
       degraded = true; // 城市未知（信息缺失 ≠ 不符合）→ 不淘汰，降级排后。
     } else {
-      const normalizedCity = normalizeChinaCity(filters.city);
-      if (!location.includes(filters.city) && !location.includes(normalizedCity)) {
+      // 双向城市匹配：filter「北京」经全别名（含英文/拼音 Beijing）命中 location，治单向归一漏配。
+      const hay = location.toLowerCase().replace(/\s+/g, " ");
+      const tokens = cityMatchTokens(filters.city);
+      if (tokens.length && !tokens.some((t) => hay.includes(t))) {
         return null; // 明确写了别的城市 → 淘汰。
       }
     }
