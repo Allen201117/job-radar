@@ -44,16 +44,22 @@ export const DEFAULT_FILTERS: Filters = {
   education: "",
 };
 
+export type MatchReason = {
+  tier: "exact" | "related";
+  keywordTier: "exact" | "related" | "none";
+  degradedFields: Array<"city" | "education" | "type">;
+};
+
 // 返回岗位通过当前筛选的匹配档："exact"（精确）/ "related"（同职能相关）/ null（不匹配）。
 // 城市/类型按「信息缺失不淘汰」处理：字段为空(信息未知)→ 放行但降级为 related（排序沉到精确匹配之后），
 // 仅当字段【有值且明确不符】才淘汰 → 治「爬来的岗位 location/job_type 大面积为空、被硬 AND 一刀切成 0 个」。
 // 公司/资本/薪资/新发现/隐藏是用户主动施加的硬条件，保持硬 AND；关键词走两层匹配，治 88% 空摘要的召回崩。
-export function jobFilterTier(
+export function jobFilterMatch(
   job: ScoredJob,
   filters: Filters,
-): "exact" | "related" | null {
-  // 因「字段缺失」而放行（非精确匹配）→ 整体降级为 related，靠排序沉到精确匹配之后。
-  let degraded = false;
+): MatchReason | null {
+  // 因「字段缺失」而放行（非精确匹配）→ 记录原因，整体降级为 related，靠排序沉到精确匹配之后。
+  const degradedFields: MatchReason["degradedFields"] = [];
 
   if (filters.company) {
     // 大小写不敏感子串匹配：可输入"字节"命中"字节跳动"、"bytedance"命中"ByteDance"。
@@ -63,7 +69,7 @@ export function jobFilterTier(
   if (filters.city) {
     const location = job.location || "";
     if (!location) {
-      degraded = true; // 城市未知（信息缺失 ≠ 不符合）→ 不淘汰，降级排后。
+      degradedFields.push("city"); // 城市未知（信息缺失 ≠ 不符合）→ 不淘汰，降级排后。
     } else {
       // 双向城市匹配：filter「北京」经全别名（含英文/拼音 Beijing）命中 location，治单向归一漏配。
       const hay = location.toLowerCase().replace(/\s+/g, " ");
@@ -84,7 +90,7 @@ export function jobFilterTier(
     if (hasExplicitRecruitmentType(job)) {
       if (recruitmentCategory(job) !== filters.jobType) return null; // 明确类型不符 → 淘汰。
     } else if (filters.jobType === "社招") {
-      degraded = true; // 选社招 + 类型未知 → 不淘汰，降级排后（未知 ≈ 社招）。
+      degradedFields.push("type"); // 选社招 + 类型未知 → 不淘汰，降级排后（未知 ≈ 社招）。
     } else {
       return null; // 选实习/校招 + 岗位无显式信号 = 没自报家门 → 淘汰，不放行冒充。
     }
@@ -94,7 +100,7 @@ export function jobFilterTier(
     // reject=要求高于用户学历，够不着 → 淘汰；degrade=要求缺失/解析不出 → 不一刀切，降级排后。
     const verdict = educationMatch(job.education, filters.education);
     if (verdict === "reject") return null;
-    if (verdict === "degrade") degraded = true;
+    if (verdict === "degrade") degradedFields.push("education");
   }
   if (filters.showNewOnly) {
     if (!job.first_seen_at) return null;
@@ -119,10 +125,18 @@ export function jobFilterTier(
   if (filters.sponsorshipOnly && job.sponsorship_signal === "none") return null;
   // 关键词两层：无关键词 → 放行；否则 精确 / 相关 / 不匹配(null)。
   // 任一字段靠「缺失放行」→ 整体压到 related，排序沉底（精确匹配优先展示）。
-  if (!filters.keyword) return degraded ? "related" : "exact";
-  const tier = keywordMatchTier(job, filters.keyword);
-  if (tier === null) return null;
-  return degraded ? "related" : tier;
+  const keywordTier = !filters.keyword ? "none" : keywordMatchTier(job, filters.keyword);
+  if (keywordTier === null) return null;
+  const tier =
+    keywordTier !== "related" && degradedFields.length === 0 ? "exact" : "related";
+  return { tier, keywordTier, degradedFields };
+}
+
+export function jobFilterTier(
+  job: ScoredJob,
+  filters: Filters,
+): "exact" | "related" | null {
+  return jobFilterMatch(job, filters)?.tier ?? null;
 }
 
 export function jobMatchesFilters(job: ScoredJob, filters: Filters): boolean {
@@ -139,27 +153,29 @@ export function filterAndRankJobs(
   jobs: ScoredJob[],
   filters: Filters,
   sessionNewKeys: Set<string> = new Set(),
-): Array<ScoredJob & { __tier: "exact" | "related" }> {
+): Array<ScoredJob & { __tier: "exact" | "related"; __match: MatchReason }> {
   const sortVal = (j: ScoredJob) =>
     filters.sortBy === "newest"
       ? new Date(j.posted_at || j.first_seen_at || 0).getTime()
       : j.match_score || 0;
 
   const arr = jobs
-    .map((job) => ({ job, tier: jobFilterTier(job, filters) }))
+    .map((job) => ({ job, match: jobFilterMatch(job, filters) }))
     .filter(
-      (x): x is { job: ScoredJob; tier: "exact" | "related" } => x.tier !== null,
+      (x): x is { job: ScoredJob; match: MatchReason } => x.match !== null,
     );
 
   arr.sort((a, b) => {
-    if (tierRank(a.tier) !== tierRank(b.tier)) return tierRank(a.tier) - tierRank(b.tier);
+    if (tierRank(a.match.tier) !== tierRank(b.match.tier)) {
+      return tierRank(a.match.tier) - tierRank(b.match.tier);
+    }
     const an = sessionNewKeys.has(a.job.jd_url || a.job.id) ? 0 : 1;
     const bn = sessionNewKeys.has(b.job.jd_url || b.job.id) ? 0 : 1;
     if (an !== bn) return an - bn; // 本次新发现置顶（同档内）
     return sortVal(b.job) - sortVal(a.job);
   });
 
-  return arr.map((x) => ({ ...x.job, __tier: x.tier }));
+  return arr.map((x) => ({ ...x.job, __tier: x.match.tier, __match: x.match }));
 }
 
 // 精确层数量（用于诚实展示「精确 E + 相关 R」）。
@@ -167,4 +183,23 @@ export function countExact(
   ranked: Array<{ __tier: "exact" | "related" }>,
 ): number {
   return ranked.reduce((n, j) => n + (j.__tier === "exact" ? 1 : 0), 0);
+}
+
+export function countMatchBreakdown(
+  ranked: Array<{ __tier: "exact" | "related"; __match: MatchReason }>,
+): { exact: number; relatedSameFunction: number; relatedMissingInfo: number } {
+  return ranked.reduce(
+    (acc, j) => {
+      if (j.__tier === "exact") {
+        acc.exact += 1;
+      } else if (j.__match.keywordTier === "related") {
+        // 同时「同职能相关」且字段缺失时，归入同职能相关；关键词弱匹配是更响的解释。
+        acc.relatedSameFunction += 1;
+      } else {
+        acc.relatedMissingInfo += 1;
+      }
+      return acc;
+    },
+    { exact: 0, relatedSameFunction: 0, relatedMissingInfo: 0 },
+  );
 }

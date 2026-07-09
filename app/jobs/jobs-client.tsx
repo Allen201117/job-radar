@@ -71,6 +71,8 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
     displayJobs,
     total,
     exactCount,
+    relatedSameFunction,
+    relatedMissingInfo,
     capped,
     loading,
     loadingMore,
@@ -188,7 +190,17 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
   }
 
   const visibleJobs = displayJobs.filter((job) => !deadIds.has(job.id));
-  const relatedCount = Math.max(0, total - exactCount);
+  const matchCountParts = filters.keyword
+    ? [
+        exactCount > 0 ? `精确 ${exactCount}` : "",
+        relatedSameFunction > 0 ? `同职能相关 ${relatedSameFunction}` : "",
+        relatedMissingInfo > 0 ? `信息不全 ${relatedMissingInfo}` : "",
+      ].filter(Boolean)
+    : [];
+  const searchMetaParts = [
+    ...matchCountParts,
+    capped ? "还有更多，可继续加载" : "",
+  ].filter(Boolean);
 
   return (
     <div className="space-y-5">
@@ -280,11 +292,9 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
                   </span>
                 )}
               </div>
-              {!newViewActive && (filters.keyword || capped) && (
+              {!newViewActive && searchMetaParts.length > 0 && (
                 <p className="mt-0.5 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
-                  {filters.keyword ? `精确 ${exactCount} · 相关 ${relatedCount}` : ""}
-                  {filters.keyword && capped ? " · " : ""}
-                  {capped ? "还有更多，可继续加载" : ""}
+                  {searchMetaParts.join(" · ")}
                 </p>
               )}
             </>
@@ -307,7 +317,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
                 <div className="flex items-center gap-3 pt-4 pb-1" role="separator">
                   <span className="h-px flex-1 bg-black/[0.08] dark:bg-white/[0.1]" />
                   <span className="min-w-0 text-center text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">
-                    相关岗位 · 同职能（标题未直接含「{filters.keyword}」）
+                    相关岗位 · 同职能相关或信息不全（见每条标注）
                   </span>
                   <span className="h-px flex-1 bg-black/[0.08] dark:bg-white/[0.1]" />
                 </div>
@@ -319,6 +329,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
                     : job
                 }
                 sessionNew={sessionNewKeys.has(job.jd_url || job.id)}
+                matchReason={(job as any).__match}
                 onActionChange={handleActionChange}
               />
             </Fragment>

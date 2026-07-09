@@ -5,7 +5,13 @@ import "server-only";
 import { jobsQuery } from "./client";
 import { JOB_COLUMNS } from "./types";
 import { sortAndFilterJobs } from "@/lib/scoring";
-import { filterAndRankJobs, jobFilterTier, countExact, type Filters } from "@/lib/job-filter";
+import {
+  filterAndRankJobs,
+  jobFilterTier,
+  countMatchBreakdown,
+  type Filters,
+  type MatchReason,
+} from "@/lib/job-filter";
 import { buildTsquery, annotateAndRank, annotateSourceAdapter } from "@/lib/job-search";
 import { ftsCandidateTerms, normalizeChinaCity } from "@/lib/china-keyword-expansion";
 import { appendJobScopeWhere, effectiveJobScope } from "@/lib/job-scope";
@@ -16,9 +22,11 @@ const DB_PAGE = 1000;
 const SCAN_BUDGET = 28000;
 
 export type SearchResult = {
-  jobs: Array<ScoredJob & { __tier: "exact" | "related" }>;
+  jobs: Array<ScoredJob & { __tier: "exact" | "related"; __match: MatchReason }>;
   total: number;
   exactCount: number;
+  relatedSameFunction: number;
+  relatedMissingInfo: number;
   capped: boolean;
   offset: number;
   limit: number;
@@ -56,10 +64,13 @@ async function searchViaFTS(
     adapterBySource,
   );
   const ranked = annotateAndRank(rows, filters, prefs, actions);
+  const breakdown = countMatchBreakdown(ranked);
   return {
     jobs: ranked.slice(offset, offset + limit),
     total: ranked.length,
-    exactCount: countExact(ranked),
+    exactCount: breakdown.exact,
+    relatedSameFunction: breakdown.relatedSameFunction,
+    relatedMissingInfo: breakdown.relatedMissingInfo,
     capped: rows.length >= FTS_CAP,
     offset,
     limit,
@@ -105,10 +116,13 @@ async function searchViaScan(
     off += DB_PAGE;
   }
   const ranked = filterAndRankJobs(matched, filters);
+  const breakdown = countMatchBreakdown(ranked);
   return {
     jobs: ranked.slice(offset, offset + limit),
     total: ranked.length,
-    exactCount: countExact(ranked),
+    exactCount: breakdown.exact,
+    relatedSameFunction: breakdown.relatedSameFunction,
+    relatedMissingInfo: breakdown.relatedMissingInfo,
     capped: !exhausted,
     offset,
     limit,
