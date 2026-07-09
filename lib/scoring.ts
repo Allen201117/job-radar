@@ -96,8 +96,10 @@ export function scoreJob(
   // target_roles 命中：用 keywordMatchTier 跨语言召回（与 Jobs 页 jobs-client 同口径），
   // 替换裸 includes——偏好填「产品经理」也能命中英文 "Product Manager" 标题，且带职能门防跨职能误召。
   for (const role of targetRoles) {
-    if (industryAllowed && functionAllowed && keywordMatchTier(job, role, keywordOptions)) {
-      score += 30;
+    const keywordTier =
+      industryAllowed && functionAllowed ? keywordMatchTier(job, role, keywordOptions) : null;
+    if (keywordTier) {
+      score += keywordTier === "related" ? 15 : 30;
       matched_keywords.push(role);
       match_reasons.push({ type: "role", value: role });
       content_matched = true;
@@ -131,8 +133,10 @@ export function scoreJob(
   // 同样过跨行业门 + 职能门（与 role 一致）：跨行业 / 跨职能岗的技能命中不算数
   // （否则 PM 的 SQL/Python 会命中一切数据/研发岗，把工程师岗刷成高匹配）。
   for (const kw of targetKeywords) {
-    if (industryAllowed && functionAllowed && keywordMatchTier(job, kw, keywordOptions)) {
-      score += 5;
+    const keywordTier =
+      industryAllowed && functionAllowed ? keywordMatchTier(job, kw, keywordOptions) : null;
+    if (keywordTier) {
+      score += keywordTier === "related" ? 2.5 : 5;
       matched_keywords.push(kw);
       match_reasons.push({ type: "keyword", value: kw });
       content_matched = true;

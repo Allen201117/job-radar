@@ -39,6 +39,8 @@ type ServerState = {
   jobs: RankedJob[];
   total: number;
   exactCount: number;
+  relatedSameFunction: number;
+  relatedMissingInfo: number;
   capped: boolean;
   loading: boolean;
   loadingMore: boolean;
@@ -89,6 +91,8 @@ export function useJobFilters({
     jobs: seed,
     total: hasInitialFilter ? 0 : initialTotal,
     exactCount: hasInitialFilter ? 0 : seed.length,
+    relatedSameFunction: 0,
+    relatedMissingInfo: 0,
     capped: false,
     loading: true,
     loadingMore: false,
@@ -122,6 +126,8 @@ export function useJobFilters({
         jobs: more ? [...s.jobs, ...batch] : batch,
         total: data.total ?? 0,
         exactCount: data.exactCount ?? 0,
+        relatedSameFunction: data.relatedSameFunction ?? 0,
+        relatedMissingInfo: data.relatedMissingInfo ?? 0,
         capped: Boolean(data.capped),
         loading: false,
         loadingMore: false,
@@ -187,6 +193,8 @@ export function useJobFilters({
     displayJobs,
     total: server.total,
     exactCount: server.exactCount,
+    relatedSameFunction: server.relatedSameFunction,
+    relatedMissingInfo: server.relatedMissingInfo,
     capped: server.capped,
     loading: server.loading,
     loadingMore: server.loadingMore,

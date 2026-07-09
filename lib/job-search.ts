@@ -11,8 +11,9 @@ import { sortAndFilterJobs } from "@/lib/scoring";
 import {
   filterAndRankJobs,
   jobFilterTier,
-  countExact,
   type Filters,
+  countMatchBreakdown,
+  type MatchReason,
 } from "@/lib/job-filter";
 import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 import { effectiveJobScope, jobMatchesScope } from "@/lib/job-scope";
@@ -29,9 +30,11 @@ const FTS_CAP = 8000;
 type SupabaseLike = { from: (table: string) => any };
 
 export type SearchResult = {
-  jobs: Array<ScoredJob & { __tier: "exact" | "related" }>;
+  jobs: Array<ScoredJob & { __tier: "exact" | "related"; __match: MatchReason }>;
   total: number;
   exactCount: number;
+  relatedSameFunction: number;
+  relatedMissingInfo: number;
   capped: boolean;
   offset: number;
   limit: number;
@@ -102,7 +105,7 @@ export function annotateAndRank(
   filters: Filters,
   prefs: UserPreferences | null,
   actions: JobAction[],
-): Array<ScoredJob & { __tier: "exact" | "related" }> {
+): Array<ScoredJob & { __tier: "exact" | "related"; __match: MatchReason }> {
   const scored = sortAndFilterJobs(rows, prefs, actions, {
     showIgnored: true,
     showApplied: true,
@@ -148,10 +151,13 @@ async function searchViaFTS(
 
   const rows = annotateSourceAdapter(Array.from(byId.values()), adapterBySource);
   const ranked = annotateAndRank(rows, filters, prefs, actions);
+  const breakdown = countMatchBreakdown(ranked);
   return {
     jobs: ranked.slice(offset, offset + limit),
     total: ranked.length,
-    exactCount: countExact(ranked),
+    exactCount: breakdown.exact,
+    relatedSameFunction: breakdown.relatedSameFunction,
+    relatedMissingInfo: breakdown.relatedMissingInfo,
     capped: byId.size >= FTS_CAP,
     offset,
     limit,
@@ -211,10 +217,13 @@ async function searchViaScan(
   }
 
   const ranked = filterAndRankJobs(matched, filters);
+  const breakdown = countMatchBreakdown(ranked);
   return {
     jobs: ranked.slice(offset, offset + limit),
     total: ranked.length,
-    exactCount: countExact(ranked),
+    exactCount: breakdown.exact,
+    relatedSameFunction: breakdown.relatedSameFunction,
+    relatedMissingInfo: breakdown.relatedMissingInfo,
     capped: !exhausted,
     offset,
     limit,

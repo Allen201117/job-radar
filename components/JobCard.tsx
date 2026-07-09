@@ -36,6 +36,9 @@ import {
 } from "@/lib/insight-client";
 import { track } from "@/lib/track";
 import type { MatchReason, ScoredJob } from "@/lib/types";
+// job-filter 的 MatchReason（tier/keywordTier/degradedFields）与 lib/types 的 MatchReason
+// （scoring 的 type/value）同名不同义 → 在本文件里给它取别名 FilterMatch，避免混淆/类型撞车。
+import type { MatchReason as FilterMatch } from "@/lib/job-filter";
 import type {
   OpportunityReason,
   OpportunityTier,
@@ -61,6 +64,22 @@ interface Props {
   // v3：信号标签（≥1，护城河外显）+ 点击有效率埋点用的核验年龄。
   opportunitySignals?: OpportunitySignal[];
   opportunityCheckedAgeHours?: number | null;
+  // 岗位库搜索结果的「为何相关」结构化原因（同职能 / 因某字段缺失被放行）；
+  // 只有 jobs 列表按筛选传入，其余场景（今日机会/收藏/已投）不传 → 不显示。
+  matchReason?: FilterMatch;
+}
+
+// 把结构化匹配原因翻成卡片上的一句人话（仅 related 岗显示，讲清它为什么被归入「相关」而非精确）。
+function relatedReasonLabel(m?: FilterMatch): string | null {
+  if (!m || m.tier !== "related") return null;
+  const parts: string[] = [];
+  if (m.keywordTier === "related") parts.push("同职能");
+  for (const f of m.degradedFields) {
+    if (f === "city") parts.push("缺城市信息");
+    else if (f === "education") parts.push("学历要求未知");
+    else if (f === "type") parts.push("类型未标注");
+  }
+  return parts.length ? parts.join(" · ") : null;
 }
 
 // 信号 chip 配色：关键提醒醒目（暖橙），STILL_OPEN 绿（仍在招），CLOSED_OR_STALE 灰。
@@ -131,7 +150,9 @@ export default function JobCard({
   freshnessState,
   opportunitySignals,
   opportunityCheckedAgeHours,
+  matchReason,
 }: Props) {
+  const relatedReason = relatedReasonLabel(matchReason);
   const isOpportunity = variant === "opportunity";
   const [acting, setActing] = useState(false);
   // 同步去重锁：state 是异步的，同一渲染周期内的连点会同时通过 `if (acting)`；用 ref 在调用入口同步挡住。
@@ -373,6 +394,17 @@ export default function JobCard({
             <span>{recruitType}</span>
             <span aria-hidden="true">·</span>
             <span>{jobFunction}</span>
+            {relatedReason && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span
+                  title={`该岗因匹配稍弱被归入「相关」：${relatedReason}`}
+                  className="inline-flex items-center rounded-full border border-black/[0.08] px-2 py-0.5 text-[#8a8275] dark:border-white/[0.12] dark:text-[#9a9184]"
+                >
+                  {relatedReason}
+                </span>
+              </>
+            )}
             {insight && (
               <>
                 <span aria-hidden="true">·</span>

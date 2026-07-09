@@ -369,6 +369,42 @@ test("requireRelevance with only a location signal keeps any role in that city",
   assert.ok(!shown.some((job) => job.id === "bj"));
 });
 
+test("scores same-function keyword evidence at half of exact title evidence", () => {
+  const rolePrefs = {
+    ...makePreferences(),
+    target_roles: ["后端"],
+    target_keywords: [],
+    target_locations: [],
+    target_companies: [],
+    exclude_keywords: [],
+  };
+  assert.equal(
+    scoreJob({ ...makeJob("role-exact", "后端开发工程师", "上海", ""), company: "Acme" }, rolePrefs, []).score,
+    30,
+  );
+  assert.equal(
+    scoreJob({ ...makeJob("role-related", "高级软件工程师", "上海", ""), company: "Acme" }, rolePrefs, []).score,
+    15,
+  );
+
+  const keywordPrefs = {
+    ...makePreferences(),
+    target_roles: [],
+    target_keywords: ["后端"],
+    target_locations: [],
+    target_companies: [],
+    exclude_keywords: [],
+  };
+  assert.equal(
+    scoreJob({ ...makeJob("kw-exact", "后端开发工程师", "上海", ""), company: "Acme" }, keywordPrefs, []).score,
+    5,
+  );
+  assert.equal(
+    scoreJob({ ...makeJob("kw-related", "高级软件工程师", "上海", ""), company: "Acme" }, keywordPrefs, []).score,
+    2.5,
+  );
+});
+
 function makeJob(id, title, location = "上海", summary = "Python SQL 数据分析") {
   return {
     id,
