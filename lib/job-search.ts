@@ -18,7 +18,7 @@ import {
 import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 import { effectiveJobScope, jobMatchesScope } from "@/lib/job-scope";
 // china-keyword-expansion 为 CommonJS，沿用 hooks 的 import 习惯。
-import { ftsCandidateTerms, normalizeChinaCity } from "@/lib/china-keyword-expansion";
+import { cityMatchTokens, ftsCandidateTerms } from "@/lib/china-keyword-expansion";
 
 const DB_PAGE = 1000;
 // 扫描路径：逐批增大的并行扫描页数（累计 4/12/28 页）。
@@ -113,6 +113,18 @@ export function annotateAndRank(
   return filterAndRankJobs(scored, filters);
 }
 
+function softCityOrFilter(city: string): string | null {
+  const tokens = cityMatchTokens(city);
+  if (!tokens.length) return null;
+
+  // 与 JS matcher 保持超集：空 location 放行降级；别名/拼音通过 ilike 进候选。
+  return [
+    "location.is.null",
+    "location.eq.",
+    ...tokens.map((tok) => `location.ilike.%${tok}%`),
+  ].join(",");
+}
+
 // FTS 路径：search_bigrams @@ tsquery 收窄候选 → JS 精筛分层 → 分页。
 async function searchViaFTS(
   supabase: SupabaseLike,
@@ -135,10 +147,10 @@ async function searchViaFTS(
       .select("*")
       .eq("status", "active")
       .textSearch("search_doc", tsquery, { config: "simple" });
-    // 精确收紧（在 GIN 命中集上 recheck，便宜）：bigram 的城市/公司会匹配到摘要里的提及，
-    // 加 location/company 的 ilike 把候选缩到真正同城/同公司，少拉很多行。JS 仍做最终精筛。
+    // 精确收紧（在 GIN 命中集上 recheck，便宜）：公司是硬条件；城市是软条件，必须保留空 location。
     const city = filters.city.trim();
-    if (city) q = q.ilike("location", `%${normalizeChinaCity(city) || city}%`);
+    const cityOr = city ? softCityOrFilter(city) : null;
+    if (cityOr) q = q.or(cityOr);
     if (company) q = q.ilike("company", `%${company}%`);
     const { data, error } = await q.range(off, off + DB_PAGE - 1);
     if (error) throw new Error(error.message); // 列未就绪/异常 → 调用方降级到扫描路径
@@ -164,7 +176,7 @@ async function searchViaFTS(
   };
 }
 
-// 扫描路径：按 (status,first_seen_at) 复合索引分批并行翻最新岗位 + JS 精筛，攒够当前页即停。
+// 扫描路径：按 (status,first_seen_at) 复合索引分批并行翻最新岗位 + JS 精筛；newest 可早停，match 要看满预算再排序。
 async function searchViaScan(
   supabase: SupabaseLike,
   filters: Filters,
@@ -188,7 +200,7 @@ async function searchViaScan(
   let exhausted = false;
 
   for (const bsize of BATCH_SIZES) {
-    if (matched.length > need || exhausted || nextOff >= SCAN_BUDGET) break;
+    if ((filters.sortBy !== "match" && matched.length > need) || exhausted || nextOff >= SCAN_BUDGET) break;
     const offsets: number[] = [];
     for (let k = 0; k < bsize && nextOff < SCAN_BUDGET; k++, nextOff += DB_PAGE) {
       offsets.push(nextOff);
@@ -246,6 +258,8 @@ export async function searchJobs(
   // 有关键词/城市/公司 → FTS 路径（快且全召回）；其中关键词用 ftsCandidateTerms 取「精确+同职能」候选词。
   const includeOverseasLexicon = effectiveJobScope(prefs) !== "domestic";
   const keywordTerms = keyword ? ftsCandidateTerms(keyword, { includeOverseasLexicon }) : [];
+  // 城市必须留在 tsquery（全表 GIN 命中，保住城市浏览完整覆盖——location 无 trigram 索引，移出会让
+  // 无关键词的城市搜索退化到 scan 仅覆盖最新 28k）；空 location / 别名的软放行由 softCityOrFilter 精修。
   const andTerms = [city, company].filter(Boolean);
   const tsquery = buildTsquery(keywordTerms, andTerms);
 
