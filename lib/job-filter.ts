@@ -72,12 +72,19 @@ export function jobFilterTier(
     }
   }
   if (filters.jobType) {
-    // 三桶分类（社招 / 校招 / 实习）精确匹配。但无类型信号的岗位会被 recruitmentCategory
-    // 兜底成「社招」，据此硬筛会误杀「类型未知」岗 → 有明确信号才参与过滤，否则放行降级。
+    // 三桶分类（社招 / 校招 / 实习）匹配。关键的【非对称】——「类型未知」的含义随所选类型而变：
+    //   · 实习 / 校招 是「自报家门」型：真实习/校招岗必带显式信号（标题带实习·intern / url 走
+    //     /shixi|campus 渠道 / 源 job_type）。一个岗【没有】自报家门 → 它几乎必然不是实习/校招
+    //     （recruitmentCategory 恰恰把这类无信号岗兜底成「社招」并在卡片打「社招」芯片）。故选
+    //     实习/校招时，无信号岗必须【淘汰】——否则一堆默认社招岗涌进来冒充，正是「筛实习却全是社招」。
+    //   · 社招 是「默认 / 未标记」态：无信号岗大概率就是社招 → 放行降级（治「94% job_type 空被硬筛
+    //     一刀切杀光」）。
     if (hasExplicitRecruitmentType(job)) {
       if (recruitmentCategory(job) !== filters.jobType) return null; // 明确类型不符 → 淘汰。
+    } else if (filters.jobType === "社招") {
+      degraded = true; // 选社招 + 类型未知 → 不淘汰，降级排后（未知 ≈ 社招）。
     } else {
-      degraded = true; // 类型未知 → 不淘汰，降级排后。
+      return null; // 选实习/校招 + 岗位无显式信号 = 没自报家门 → 淘汰，不放行冒充。
     }
   }
   if (filters.education) {
