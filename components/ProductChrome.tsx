@@ -1,5 +1,5 @@
 import type { ComponentType, ReactNode } from "react";
-import { ArrowRight, Sparkle } from "@phosphor-icons/react/ssr";
+import { ArrowRight, Sparkle, WarningCircle } from "@phosphor-icons/react/ssr";
 import { AnimatedStat } from "@/components/ui/animated-stat";
 import { cn } from "@/lib/utils";
 
@@ -125,15 +125,37 @@ export function EmptyPanel({
   title,
   description,
   action,
+  tone,
 }: {
   title: string;
   description: string;
   action?: ReactNode;
+  tone?: "empty" | "error";
 }) {
+  const resolvedTone = tone ?? "empty";
+
   return (
-    <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] dark:border-white/[0.1] bg-white/45 dark:bg-white/[0.05] px-6 py-14 text-center">
-      <div className="mx-auto grid size-12 place-items-center rounded-2xl bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
-        <ArrowRight size={22} weight="bold" aria-hidden="true" />
+    <div
+      className={cn(
+        "rounded-[1.5rem] border px-6 py-14 text-center",
+        resolvedTone === "error"
+          ? "border-[#e7b7ac] bg-[#fff7f4] dark:border-[#e6a99f]/[0.25] dark:bg-[#3a201a]/[0.16]"
+          : "border-dashed border-black/[0.12] bg-white/45 dark:border-white/[0.1] dark:bg-white/[0.05]",
+      )}
+    >
+      <div
+        className={cn(
+          "mx-auto grid size-12 place-items-center rounded-2xl",
+          resolvedTone === "error"
+            ? "bg-[#f7e6e1] text-[#9c4a3c] dark:bg-[#3a201a] dark:text-[#e6a99f]"
+            : "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]",
+        )}
+      >
+        {resolvedTone === "error" ? (
+          <WarningCircle size={22} weight="fill" aria-hidden="true" />
+        ) : (
+          <ArrowRight size={22} weight="bold" aria-hidden="true" />
+        )}
       </div>
       <h2 className="mt-4 text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{title}</h2>
       <p className="mx-auto mt-2 max-w-md text-pretty text-[14px] leading-6 text-[#6b655a] dark:text-[#b6ad9d]">

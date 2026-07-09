@@ -130,6 +130,7 @@ async function TodayFeed({ feedPromise }: { feedPromise: Promise<OpportunityFeed
   if (!feed) {
     return (
       <EmptyPanel
+        tone="error"
         title="机会队列暂时无法更新"
         description="机会队列暂时无法更新，请稍后重试。你的偏好和历史操作没有丢失。"
       />
