@@ -40,6 +40,12 @@ const JOB_SCOPE_OPTIONS: { value: JobScope; label: string }[] = [
   { value: "all", label: "全都要" },
 ];
 
+const JOB_SCOPE_TOAST: Record<JobScope, string> = {
+  domestic: "已切换到国内岗位",
+  overseas: "已切换到海外岗位",
+  all: "已切换到全部岗位",
+};
+
 export default function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -51,6 +57,7 @@ export default function Navbar() {
   const [acctOpen, setAcctOpen] = useState(false);
   const [jobScope, setJobScope] = useState<JobScope>("domestic");
   const [scopeSaving, setScopeSaving] = useState(false);
+  const [scopeToast, setScopeToast] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -77,6 +84,12 @@ export default function Navbar() {
     setMenuOpen(false);
     setAcctOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    if (!scopeToast) return;
+    const timer = window.setTimeout(() => setScopeToast(null), 2000);
+    return () => window.clearTimeout(timer);
+  }, [scopeToast]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -111,7 +124,9 @@ export default function Navbar() {
       });
       const data = await resp.json().catch(() => null);
       if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
-      setJobScope(normalizeJobScope(data.preferences?.job_scope));
+      const savedScope = normalizeJobScope(data.preferences?.job_scope);
+      setJobScope(savedScope);
+      setScopeToast(JOB_SCOPE_TOAST[savedScope]);
       window.dispatchEvent(new Event("preferences-scope-updated"));
       router.refresh();
     } catch (e) {
@@ -284,6 +299,17 @@ export default function Navbar() {
             </div>
           </nav>
         </>
+      )}
+      {scopeToast && (
+        <div className="pointer-events-none fixed inset-x-0 top-16 z-[120] flex justify-center px-4">
+          <div
+            role="status"
+            aria-live="polite"
+            className="save-pop rounded-full border border-black/[0.08] bg-white/95 px-4 py-2 text-sm font-semibold text-[#1a1714] shadow-[0_18px_40px_-24px_rgba(40,34,28,0.6)] backdrop-blur-xl dark:border-white/[0.12] dark:bg-[#1e1a15]/95 dark:text-[#f3ecdf] dark:shadow-[0_18px_40px_-24px_rgba(0,0,0,0.75)]"
+          >
+            {scopeToast}
+          </div>
+        </div>
       )}
     </header>
   );

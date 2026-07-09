@@ -97,26 +97,31 @@ export default function SavedClient({
 
   return (
     <div className="space-y-3">
+      {jobs.length > 0 && (
+        <div className="flex flex-col gap-2 rounded-[1.1rem] border border-black/[0.06] bg-white/45 px-4 py-3 text-sm text-[#5f594e] sm:flex-row sm:items-center sm:justify-between dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
+          <span className="inline-flex items-center gap-2">
+            <Scales size={15} weight="bold" className="text-[#3f7cc0] dark:text-[#7fb2e8]" aria-hidden="true" />
+            选择 2-4 个岗位后，可打开对比决策桌横向查看匹配度、薪资和风险。
+          </span>
+        </div>
+      )}
+
       {jobs.map((job) => (
         <div key={job.id} className="space-y-2">
-          <div className="flex flex-col gap-2 rounded-[1.1rem] border border-black/[0.06] bg-white/45 px-3 py-2.5 text-[#1a1714] sm:flex-row sm:items-center sm:justify-between dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#f3ecdf]">
-            <div className="flex items-center gap-2 text-xs text-[#8a8275] dark:text-[#9a9184]">
-              <Scales size={15} weight="bold" aria-hidden="true" />
-              <span>对比决策桌</span>
-              {compareLimitReached && !selectedIds.has(job.id) && <span>最多选择 4 个</span>}
-            </div>
+          <div className="flex justify-end">
             <button
               type="button"
+              aria-pressed={selectedIds.has(job.id)}
               onClick={() => toggleCompare(job.id)}
               disabled={compareLimitReached && !selectedIds.has(job.id)}
               className={
                 selectedIds.has(job.id)
-                  ? "inline-flex min-h-10 items-center justify-center gap-1.5 rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-3.5 py-2 text-sm font-semibold text-[#2f8a63] transition hover:bg-[#cdebde] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e] dark:hover:bg-[#6cc99e]/[0.22]"
-                  : "inline-flex min-h-10 items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3.5 py-2 text-sm font-semibold text-[#3f3a33] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
+                  ? "inline-flex h-8 items-center justify-center gap-1.5 rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-3 text-xs font-semibold text-[#2f8a63] transition hover:bg-[#cdebde] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e] dark:hover:bg-[#6cc99e]/[0.22]"
+                  : "inline-flex h-8 items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3 text-xs font-semibold text-[#3f3a33] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
               }
             >
               {selectedIds.has(job.id) && <CheckCircle size={15} weight="fill" aria-hidden="true" />}
-              {selectedIds.has(job.id) ? "已加入对比" : "加入对比"}
+              {selectedIds.has(job.id) ? "已加入" : compareLimitReached ? "最多 4 个" : "加入对比"}
             </button>
           </div>
           <JobCard job={job} onActionChange={handleActionChange} />

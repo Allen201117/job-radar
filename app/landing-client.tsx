@@ -160,7 +160,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
             <div className="float-soft">
               <div className={`lp-fcard ${cardBase} w-[200px] p-3.5`} style={{ ["--rot" as string]: "-6deg" } as CSSProperties}>
                 <p className="m-0 text-[11px] font-semibold text-[#8a8275] dark:text-[#9a9184]">今日机会</p>
-                <p className="mb-0 mt-1.5 text-[1.45rem] font-extrabold leading-tight">少量今日机会</p>
+                <p className="mb-0 mt-1.5 text-[1.45rem] font-extrabold leading-tight">3 条待处理</p>
                 <p className="mb-0 mt-1.5 text-[12px] text-[#8a8275] dark:text-[#9a9184]">高匹配待处理</p>
                 <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/[0.07] dark:bg-white/[0.08]"><div className="h-full w-[46%] rounded-full bg-[#7fb2e8]" /></div>
               </div>

@@ -13,6 +13,7 @@ import {
 } from "@phosphor-icons/react";
 import type { CareerPathReport, TimingStatusKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { PanelSkeleton } from "@/components/Skeletons";
 
 const TIMING_STYLE: Record<TimingStatusKind, string> = {
   open: "border border-[#bcdcae] dark:border-[#a3d06a]/[0.30] bg-[#e6f2d6] dark:bg-[#a3d06a]/[0.15] text-[#4f6f2a] dark:text-[#a3d06a]",
@@ -42,7 +43,16 @@ export default function CareerPathClient() {
     };
   }, []);
 
-  if (loading) return <p className="mt-8 text-sm text-[#8a8275] dark:text-[#9a9184]">正在生成职业路径…</p>;
+  if (loading)
+    return (
+      <div className="mt-8 space-y-3">
+        <p className="text-sm text-[#8a8275] dark:text-[#9a9184]">正在生成职业路径…</p>
+        <div className="grid gap-4">
+          <PanelSkeleton />
+          <PanelSkeleton />
+        </div>
+      </div>
+    );
   if (error)
     return (
       <p className="mt-8 rounded-xl border border-black/[0.06] dark:border-white/[0.1] bg-white/55 dark:bg-white/[0.05] p-4 text-sm text-[#5f594e] dark:text-[#b6ad9d]">
