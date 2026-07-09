@@ -5,7 +5,7 @@ import Link from "next/link";
 import JobCard from "@/components/JobCard";
 import { track } from "@/lib/track";
 import type { ScoredJob } from "@/lib/types";
-import type { Opportunity, OpportunityFeed } from "@/lib/opportunities/types";
+import type { Opportunity, OpportunityFeed, OpportunitySignal } from "@/lib/opportunities/types";
 import {
   todayReducer,
   initTodayState,
@@ -13,21 +13,19 @@ import {
   type SectionKey,
 } from "@/lib/opportunities/today-reducer";
 
-const SECTION_META: Record<SectionKey, { title: string; subtitle?: string }> = {
-  critical: { title: "关键提醒", subtitle: "和你已表达的关注强相关：收藏岗位的截止或关闭、需要尽快处理的机会。" },
+type DisplaySectionKey = Exclude<SectionKey, "waiting">;
+
+const SECTION_META: Record<DisplaySectionKey, { title: string; subtitle?: string }> = {
+  critical: { title: "关键提醒", subtitle: "截止与关闭优先处理" },
   main: {
     title: "对口机会",
-    subtitle: "和你目标贴合的官方岗位；标「最近确认仍在招」的已核验，「在招·待确认」的会在你打开时后台复核。",
+    subtitle: "最贴合你的目标",
   },
-  explore: { title: "可以拓展看看", subtitle: "相关方向或你关注的公司，匹配度稍低，按需查看。" },
-  momentum: { title: "本周招聘动量", subtitle: "这些公司近期在持续放岗。" },
-  waiting: {
-    title: "等待再次确认",
-    subtitle: "以下岗位距上次核验已超过常规时限，建议以官网状态为准。",
-  },
+  explore: { title: "可以拓展看看", subtitle: "相关方向，按需查看" },
+  momentum: { title: "本周招聘动量", subtitle: "近期持续放岗" },
 };
 
-const ORDER: SectionKey[] = ["critical", "main", "explore", "momentum", "waiting"];
+const ORDER: DisplaySectionKey[] = ["critical", "main", "explore", "momentum"];
 
 const ACTION_LABEL: Record<PrimaryAction, string> = {
   saved: "已加入「值得投」",
@@ -47,12 +45,20 @@ function checkedAgeHours(lastCheckedAt: string | null): number | null {
 function toScoredJob(opp: Opportunity): ScoredJob {
   return {
     ...(opp.job as ScoredJob),
+    // Today uses explicit signal chips; suppress JobCard's separate age/status sentence here.
+    last_seen_at: "",
     match_score: opp.score,
     matched_keywords: [],
     match_reasons: [],
     hidden_reason: null,
     user_action: opp.userAction,
   };
+}
+
+function visibleOpportunitySignals(opp: Opportunity): OpportunitySignal[] {
+  return opp.signals
+    .filter((s) => s.type !== "OPEN_UNVERIFIED")
+    .map((s) => (s.type === "STILL_OPEN" ? { ...s, label: "仍在招" } : s));
 }
 
 // 画像不完整空状态（§4.3）：只引导设目标，不展示任何随机岗位。
@@ -174,7 +180,7 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
 
   // 展示时校验（②层）：异步探活可见岗位，死的当场隐藏（复用 /api/jobs/liveness-check）
   useEffect(() => {
-    const visible = ORDER.flatMap((k) => state.sections[k]);
+    const visible = ORDER.flatMap((k) => displayItemsFor(k));
     const ids = visible
       .map((o) => o.job.id)
       .filter((id) => id && !livenessRequested.current.has(id) && !deadIds.has(id))
@@ -248,7 +254,11 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
     }
   }
 
-  const visibleCounts = ORDER.map((k) => state.sections[k].filter((o) => !deadIds.has(o.job.id)).length);
+  function displayItemsFor(key: DisplaySectionKey): Opportunity[] {
+    return key === "main" ? [...state.sections.main, ...state.sections.waiting] : state.sections[key];
+  }
+
+  const visibleCounts = ORDER.map((k) => displayItemsFor(k).filter((o) => !deadIds.has(o.job.id)).length);
   const total = visibleCounts.reduce((a, b) => a + b, 0);
 
   if (total === 0) {
@@ -263,7 +273,7 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
         </p>
       )}
       {ORDER.map((key) => {
-        const items = state.sections[key].filter((o) => !deadIds.has(o.job.id));
+        const items = displayItemsFor(key).filter((o) => !deadIds.has(o.job.id));
         if (items.length === 0) return null;
         const meta = SECTION_META[key];
         return (
@@ -286,7 +296,7 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
                   opportunityTier={opp.tier}
                   opportunityReasons={opp.reasons}
                   freshnessState={opp.freshness}
-                  opportunitySignals={opp.signals}
+                  opportunitySignals={visibleOpportunitySignals(opp)}
                   opportunityCheckedAgeHours={checkedAgeHours(opp.lastCheckedAt)}
                   onActionChange={handleActionChange}
                 />

@@ -1,8 +1,8 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import Navbar from "@/components/Navbar";
-import { EmptyPanel, MetricTile, ProductHero, ProductPage } from "@/components/ProductChrome";
-import { JobListSkeleton, MetricTilesSkeleton } from "@/components/Skeletons";
+import { EmptyPanel, ProductHero, ProductPage } from "@/components/ProductChrome";
+import { JobListSkeleton } from "@/components/Skeletons";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { buildRadarProfile, profileReadiness } from "@/lib/opportunities/profile";
 import { resolveIntensityForUser } from "@/lib/opportunities/intensity";
@@ -10,7 +10,7 @@ import { buildOpportunityFeed } from "@/lib/opportunities/service";
 import type { OpportunityFeed } from "@/lib/opportunities/types";
 import type { CandidateProfile, JobAction, UserPreferences } from "@/lib/types";
 import TodayClient, { OnboardingPanel } from "../today-client";
-import { Broadcast, CheckCircle, Crosshair, Sparkle } from "@phosphor-icons/react/ssr";
+import { Broadcast } from "@phosphor-icons/react/ssr";
 
 export const dynamic = "force-dynamic";
 // 须 ≥ jobs 池 statement_timeout(25s)：否则慢的跨区召回会先撞函数时限被杀（平台 504、不被页面 catch），
@@ -24,10 +24,8 @@ const HERO = {
     "系统已按你的目标、简历和岗位新鲜度完成筛选。先处理最相关的，再决定是否扩大搜索。",
 };
 
-const METRICS_GRID = "grid grid-cols-2 gap-3 lg:grid-cols-3";
-
 // 流式：先出页面骨架（导航 + 标题），慢的跨区机会召回单独在 Suspense 边界里流入，不再阻塞整页。
-// metrics 与 feed 共用同一次 feed 构建（一个 promise 分给两个边界），构建失败时退化为 null（不双抛）。
+// hero narrative 与 feed 共用同一次 feed 构建（一个 promise 分给两个边界），构建失败时退化为 null（不双抛）。
 export default async function TodayPage() {
   const user = await getRequestUser();
   if (!user) redirect("/login?next=/today");
@@ -93,7 +91,7 @@ export default async function TodayPage() {
       <Navbar />
       <ProductPage>
         <ProductHero eyebrow={HERO.eyebrow} title={HERO.title} description={HERO.description} icon={Broadcast}>
-          <Suspense fallback={<MetricTilesSkeleton count={3} gridClassName={METRICS_GRID} />}>
+          <Suspense fallback={null}>
             <TodayMetrics feedPromise={feedPromise} />
           </Suspense>
         </ProductHero>
@@ -108,7 +106,7 @@ export default async function TodayPage() {
   );
 }
 
-// 指标区：随 feed 流入。构建失败则不出指标（错误提示交给下方 feed 区，避免重复报错）。
+// 价值叙事区：随 feed 流入。构建失败则不出文案（错误提示交给下方 feed 区，避免重复报错）。
 async function TodayMetrics({ feedPromise }: { feedPromise: Promise<OpportunityFeed | null> }) {
   const feed = await feedPromise;
   if (!feed) return null;
@@ -116,26 +114,13 @@ async function TodayMetrics({ feedPromise }: { feedPromise: Promise<OpportunityF
   const f = feed.counts.filtered;
   const screened = feed.counts.screened ?? 0;
   const removed = f ? f.inactive + f.mismatch + f.low_score + f.thin : 0;
+  if (!(screened > 0 && removed > 0 && f)) return null;
   return (
-    <div>
-      <div className={METRICS_GRID}>
-        <MetricTile icon={Sparkle} label="关键提醒" value={feed.counts.critical} tone="sky" />
-        <MetricTile icon={Crosshair} label="对口机会" value={feed.counts.main} tone="lime" />
-        <MetricTile
-          icon={CheckCircle}
-          label="最近确认仍在招"
-          value={feed.counts.by_signal.STILL_OPEN ?? 0}
-          tone="white"
-        />
-      </div>
-      {screened > 0 && removed > 0 && f && (
-        <p className="mt-3 text-[13px] leading-5 text-[#6b655a] dark:text-[#b6ad9d]">
-          今日已为你考察 {screened.toLocaleString()} 个在库岗位，替你剔除 {removed.toLocaleString()} 个：
-          已失效 {f.inactive.toLocaleString()} · 不对口 {(f.mismatch + f.low_score).toLocaleString()} · 信息不全{" "}
-          {f.thin.toLocaleString()}——剩下的才值得你花时间。
-        </p>
-      )}
-    </div>
+    <p className="text-[13px] leading-5 text-[#6b655a] dark:text-[#b6ad9d]">
+      今日已为你考察 {screened.toLocaleString()} 个在库岗位，替你剔除 {removed.toLocaleString()} 个：
+      已失效 {f.inactive.toLocaleString()} · 不对口 {(f.mismatch + f.low_score).toLocaleString()} · 信息不全{" "}
+      {f.thin.toLocaleString()}——剩下的才值得你花时间。
+    </p>
   );
 }
 

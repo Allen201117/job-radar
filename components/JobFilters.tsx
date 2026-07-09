@@ -69,6 +69,12 @@ export default function JobFilters({ filters, onChange, companies, jobScope = "d
     filters.showIgnored ? "含已忽略" : "",
     filters.showApplied ? "含已投递" : "",
   ].filter(Boolean) as string[];
+  const moreActiveBits = [
+    filters.education,
+    filters.sortBy === "newest" ? "按发布时间" : "",
+    filters.capitalOrigin,
+    jobScope !== "domestic" ? filters.region : "",
+  ].filter(Boolean) as string[];
 
   const inputClass = "mt-1 w-full rounded-xl border border-black/[0.09] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm text-[#1a1714] dark:text-[#f3ecdf] transition duration-200 placeholder:text-[#a39a8c] dark:placeholder:text-[#8b8478] focus:border-[#1a1714]/55 dark:focus:border-white/55 focus:bg-white dark:focus:bg-[#1e1a15] focus:outline-none";
   const selectClass = "mt-1 w-full rounded-xl border border-black/[0.09] dark:border-white/[0.1] bg-white dark:bg-[#1e1a15] px-3 py-2 text-sm text-[#1a1714] dark:text-[#f3ecdf] transition duration-200 focus:border-[#1a1714]/55 dark:focus:border-white/55 focus:outline-none";
@@ -101,97 +107,120 @@ export default function JobFilters({ filters, onChange, companies, jobScope = "d
       </button>
 
       <div className={cn("space-y-5", open ? "block pt-4" : "hidden", "lg:block lg:pt-0")}>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <div>
-          <FilterLabel icon={Buildings} label="公司" />
-          {/* 可输入 combobox：自由输入 + 已知公司自动补全（datalist）；匹配走大小写不敏感子串。 */}
-          <input
-            value={filters.company}
-            onChange={(e) => set("company", e.target.value)}
-            list="job-company-options"
-            placeholder="输入或选择，如 字节"
-            className={inputClass}
-          />
-          <datalist id="job-company-options">
-            {companies.map((c) => (
-              <option key={c} value={c} />
-            ))}
-          </datalist>
-        </div>
-        <div>
-          <FilterLabel icon={MapPin} label="城市" />
-          <input value={filters.city} onChange={(e) => set("city", e.target.value)} placeholder="如 北京" className={inputClass} />
-        </div>
-        <div>
-          <FilterLabel icon={Briefcase} label="岗位类型" />
-          <select value={filters.jobType} onChange={(e) => set("jobType", e.target.value)} className={selectClass}>
-            <option value="">全部</option>
-            <option value="校招">校招</option>
-            <option value="社招">社招</option>
-            <option value="实习">实习</option>
-          </select>
-        </div>
-        <div>
-          <FilterLabel icon={GraduationCap} label="学历" />
-          {/* 门槛语义：选某学历=显示「该学历及以下要求」的岗位（用户够格投）；要求更高的筛掉。"学历不限"=不筛。 */}
-          <select value={filters.education} onChange={(e) => set("education", e.target.value)} className={selectClass}>
-            <option value="">学历不限</option>
-            <option value="博士">博士</option>
-            <option value="硕士">硕士</option>
-            <option value="本科">本科</option>
-            <option value="大专">大专</option>
-          </select>
-        </div>
-        <div>
-          <FilterLabel icon={MagnifyingGlass} label="关键词" />
-          <input value={filters.keyword} onChange={(e) => set("keyword", e.target.value)} placeholder="如 算法" className={inputClass} />
-        </div>
-        <div>
-          <FilterLabel icon={SortAscending} label="排序" />
-          <select value={filters.sortBy} onChange={(e) => set("sortBy", e.target.value)} className={selectClass}>
-            <option value="match">按匹配度</option>
-            <option value="newest">按发布时间</option>
-          </select>
-        </div>
-        <div>
-          <FilterLabel icon={GlobeHemisphereEast} label="资本来源" />
-          <select
-            value={filters.capitalOrigin || "全部"}
-            onChange={(e) => set("capitalOrigin", e.target.value === "全部" ? "" : e.target.value)}
-            className={selectClass}
-          >
-            {ORIGINS.map((o) => (
-              <option key={o} value={o}>{o}</option>
-            ))}
-          </select>
-        </div>
-        {jobScope !== "domestic" && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <FilterLabel icon={MapPin} label="地区" />
-            <select
-              value={filters.region || ""}
-              onChange={(e) => set("region", e.target.value)}
-              className={selectClass}
-            >
-              {REGIONS.map((r) => (
-                <option key={r.value || "all"} value={r.value}>{r.label}</option>
+            <FilterLabel icon={Buildings} label="公司" />
+            {/* 可输入 combobox：自由输入 + 已知公司自动补全（datalist）；匹配走大小写不敏感子串。 */}
+            <input
+              value={filters.company}
+              onChange={(e) => set("company", e.target.value)}
+              list="job-company-options"
+              placeholder="输入或选择，如 字节"
+              className={inputClass}
+            />
+            <datalist id="job-company-options">
+              {companies.map((c) => (
+                <option key={c} value={c} />
               ))}
+            </datalist>
+          </div>
+          <div>
+            <FilterLabel icon={MapPin} label="城市" />
+            <input value={filters.city} onChange={(e) => set("city", e.target.value)} placeholder="如 北京" className={inputClass} />
+          </div>
+          <div>
+            <FilterLabel icon={Briefcase} label="岗位类型" />
+            <select value={filters.jobType} onChange={(e) => set("jobType", e.target.value)} className={selectClass}>
+              <option value="">全部</option>
+              <option value="校招">校招</option>
+              <option value="社招">社招</option>
+              <option value="实习">实习</option>
             </select>
           </div>
-        )}
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <Check label="仅新岗位" checked={filters.showNewOnly} onChange={(v) => set("showNewOnly", v)} />
-        {/* 薪资/Sponsorship 只在海外范围显示：国内岗薪资字段稀疏、且无签证概念。 */}
-        {jobScope !== "domestic" && (
-          <>
-            <Check label="仅薪资公开" checked={filters.salaryOnly} onChange={(v) => set("salaryOnly", v)} />
-            <Check label="排除不提供 Sponsorship 的岗" checked={filters.sponsorshipOnly} onChange={(v) => set("sponsorshipOnly", v)} />
-          </>
-        )}
-        <Check label="显示已忽略" checked={filters.showIgnored} onChange={(v) => set("showIgnored", v)} />
-        <Check label="显示已投递" checked={filters.showApplied} onChange={(v) => set("showApplied", v)} />
-      </div>
+          <div>
+            <FilterLabel icon={MagnifyingGlass} label="关键词" />
+            <input value={filters.keyword} onChange={(e) => set("keyword", e.target.value)} placeholder="如 算法" className={inputClass} />
+          </div>
+        </div>
+
+        <details className="group">
+          <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl border border-black/[0.08] bg-white/45 px-3 py-2 dark:border-white/[0.1] dark:bg-white/[0.04] [&::-webkit-details-marker]:hidden">
+            <span className="shrink-0 text-sm font-semibold text-[#3f3a33] dark:text-[#d9d0c2]">更多筛选</span>
+            {moreActiveBits.length > 0 && (
+              <span className="grid size-5 shrink-0 place-items-center rounded-full bg-[#1a1714] text-[11px] font-semibold tabular-nums text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
+                {moreActiveBits.length}
+              </span>
+            )}
+            <span className="min-w-0 flex-1 truncate text-xs text-[#9a9184] dark:text-[#837c70]">
+              {moreActiveBits.length > 0 ? moreActiveBits.join(" · ") : "学历、排序、资本来源"}
+            </span>
+            <CaretDown
+              size={16}
+              weight="bold"
+              className="shrink-0 text-[#8a8275] transition-transform group-open:rotate-180 dark:text-[#9a9184]"
+              aria-hidden="true"
+            />
+          </summary>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <FilterLabel icon={GraduationCap} label="学历" />
+              {/* 门槛语义：选某学历=显示「该学历及以下要求」的岗位（用户够格投）；要求更高的筛掉。"学历不限"=不筛。 */}
+              <select value={filters.education} onChange={(e) => set("education", e.target.value)} className={selectClass}>
+                <option value="">学历不限</option>
+                <option value="博士">博士</option>
+                <option value="硕士">硕士</option>
+                <option value="本科">本科</option>
+                <option value="大专">大专</option>
+              </select>
+            </div>
+            <div>
+              <FilterLabel icon={SortAscending} label="排序" />
+              <select value={filters.sortBy} onChange={(e) => set("sortBy", e.target.value)} className={selectClass}>
+                <option value="match">按匹配度</option>
+                <option value="newest">按发布时间</option>
+              </select>
+            </div>
+            <div>
+              <FilterLabel icon={GlobeHemisphereEast} label="资本来源" />
+              <select
+                value={filters.capitalOrigin || "全部"}
+                onChange={(e) => set("capitalOrigin", e.target.value === "全部" ? "" : e.target.value)}
+                className={selectClass}
+              >
+                {ORIGINS.map((o) => (
+                  <option key={o} value={o}>{o}</option>
+                ))}
+              </select>
+            </div>
+            {jobScope !== "domestic" && (
+              <div>
+                <FilterLabel icon={MapPin} label="地区" />
+                <select
+                  value={filters.region || ""}
+                  onChange={(e) => set("region", e.target.value)}
+                  className={selectClass}
+                >
+                  {REGIONS.map((r) => (
+                    <option key={r.value || "all"} value={r.value}>{r.label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+        </details>
+
+        <div className="flex flex-wrap gap-2">
+          <Check label="仅新岗位" checked={filters.showNewOnly} onChange={(v) => set("showNewOnly", v)} />
+          {/* 薪资/Sponsorship 只在海外范围显示：国内岗薪资字段稀疏、且无签证概念。 */}
+          {jobScope !== "domestic" && (
+            <>
+              <Check label="仅薪资公开" checked={filters.salaryOnly} onChange={(v) => set("salaryOnly", v)} />
+              <Check label="排除不提供 Sponsorship 的岗" checked={filters.sponsorshipOnly} onChange={(v) => set("sponsorshipOnly", v)} />
+            </>
+          )}
+          <Check label="显示已忽略" checked={filters.showIgnored} onChange={(v) => set("showIgnored", v)} />
+          <Check label="显示已投递" checked={filters.showApplied} onChange={(v) => set("showApplied", v)} />
+        </div>
       </div>
     </div>
   );

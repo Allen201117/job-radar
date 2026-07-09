@@ -187,6 +187,9 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
     router.refresh();
   }
 
+  const visibleJobs = displayJobs.filter((job) => !deadIds.has(job.id));
+  const relatedCount = Math.max(0, total - exactCount);
+
   return (
     <div className="space-y-5">
       <JobFilters filters={filters} onChange={setFilters} companies={companies} jobScope={jobScope} />
@@ -194,7 +197,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
       {/* 搜索说明 + 手动搜索按钮（取代旧三磁贴；筛选变化已自动搜，这里手动重试）。 */}
       <div className="flex flex-col gap-3 surface p-4 text-[#1a1714] dark:text-[#f3ecdf] sm:flex-row sm:items-center sm:justify-between sm:p-5">
         <p className="text-xs leading-5 text-[#9a9184] dark:text-[#837c70]">
-          已用你保存的求职偏好作为默认搜索范围；改上方筛选条件即可调整。每日推荐请回到「今日机会」。
+          已用你保存的求职偏好作为默认搜索范围；改上方筛选条件即可调整。
         </p>
         <button
           type="button"
@@ -203,14 +206,14 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
             refresh();
           }}
           disabled={loading}
-          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full bg-[#1a1714] px-5 py-2.5 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium text-[#3f3a33] transition duration-200 hover:bg-white active:scale-[0.98] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
         >
           {loading ? (
             <CircleNotch size={16} weight="bold" className="animate-spin" aria-hidden="true" />
           ) : (
-            <MagnifyingGlass size={16} weight="bold" aria-hidden="true" />
+            <ArrowsClockwise size={16} weight="bold" aria-hidden="true" />
           )}
-          搜索
+          重新搜索
         </button>
       </div>
 
@@ -258,32 +261,43 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
         </div>
       )}
 
-      <p className="flex items-start gap-2 rounded-2xl border border-black/[0.06] dark:border-white/[0.1] bg-white/55 dark:bg-white/[0.05] px-3.5 py-2.5 text-sm leading-6 text-[#5f594e] dark:text-[#b6ad9d]">
+      <div className="flex items-start gap-2 rounded-2xl border border-black/[0.06] bg-white/55 px-3.5 py-2.5 text-sm leading-6 text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
         <MagnifyingGlass size={16} weight="bold" className="mt-0.5 shrink-0" aria-hidden="true" />
-        <span>
+        <div className="min-w-0">
           {loading ? (
-            "正在搜索岗位库…"
+            <p className="font-medium text-[#3f3a33] dark:text-[#d9d0c2]">正在搜索岗位库…</p>
           ) : (
             <>
-              {newViewActive ? "只看本次新增：" : "库里匹配你筛选的 "}
-              {newViewActive ? newMatching.length : total} 个岗位
-              {!newViewActive && filters.keyword
-                ? `（精确 ${exactCount} + 相关 ${Math.max(0, total - exactCount)}）`
-                : ""}
-              {!newViewActive && capped ? "，可加载更多" : ""}
-              ，已展示 {displayJobs.filter((job) => !deadIds.has(job.id)).length} 个。
-              {deadIds.size > 0 ? `实时复核刚拦下 ${deadIds.size} 个已失效岗位，已自动隐藏。` : ""}
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-medium text-[#3f3a33] dark:text-[#d9d0c2]">
+                  {newViewActive
+                    ? `${newMatching.length} 个本次新增 · 已展示 ${visibleJobs.length}`
+                    : `${total} 个匹配岗位 · 已展示 ${visibleJobs.length}`}
+                </p>
+                {deadIds.size > 0 && (
+                  <span className="rounded-full border border-black/[0.08] bg-white/55 px-2 py-0.5 text-xs text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#9a9184]">
+                    实时复核拦下 {deadIds.size} 个
+                  </span>
+                )}
+              </div>
+              {!newViewActive && (filters.keyword || capped) && (
+                <p className="mt-0.5 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
+                  {filters.keyword ? `精确 ${exactCount} · 相关 ${relatedCount}` : ""}
+                  {filters.keyword && capped ? " · " : ""}
+                  {capped ? "还有更多，可继续加载" : ""}
+                </p>
+              )}
             </>
           )}
-        </span>
-      </p>
+        </div>
+      </div>
       {error && (
         <p className="rounded-2xl border border-[#e7b4a0] dark:border-[#7a392e]/[0.60] bg-[#fbe9e2] dark:bg-[#3a201a] px-3.5 py-2.5 text-sm text-[#9a4a32] dark:text-[#e6a99f]">
           {error}
         </p>
       )}
       <div className="space-y-3">
-        {displayJobs.filter((job) => !deadIds.has(job.id)).map((job, i, arr) => {
+        {visibleJobs.map((job, i, arr) => {
           const tier = (job as any).__tier as "exact" | "related";
           const prevTier = i > 0 ? ((arr[i - 1] as any).__tier as string) : null;
           const showDivider = Boolean(filters.keyword) && tier === "related" && prevTier !== "related";

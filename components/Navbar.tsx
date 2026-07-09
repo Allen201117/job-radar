@@ -13,6 +13,7 @@ import {
   Briefcase,
   Broadcast,
   CheckCircle,
+  Compass,
   List,
   SignOut,
   SlidersHorizontal,
@@ -20,11 +21,12 @@ import {
   X,
 } from "@phosphor-icons/react";
 
-// 一级导航（§3.1）：今日机会 / 搜索岗位 / 关注与偏好 / 值得投 / 已投递。
-// /path、/me 不在一级导航：/path 路由保留但不暴露；/me 移入账号菜单。/sources、/admin/* 仅管理员直达。
+// 一级导航（§3.1）：今日机会 / 搜索岗位 / 职业路径 / 关注与偏好 / 值得投 / 已投递。
+// /me 移入账号菜单。/sources、/admin/* 仅管理员直达。
 const LINKS = [
   { href: "/today", key: "today", icon: Broadcast },
   { href: "/jobs", key: "jobs", icon: Briefcase },
+  { href: "/path", key: "path", icon: Compass },
   { href: "/preferences", key: "preferences", icon: SlidersHorizontal },
   { href: "/saved", key: "saved", icon: BookmarkSimple },
   { href: "/applied", key: "applied", icon: CheckCircle },

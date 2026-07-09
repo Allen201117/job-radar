@@ -246,7 +246,7 @@ export default function ResumeProfilePanel() {
   }
 
   return (
-    <section className="surface p-5 text-[#1a1714] dark:text-[#f3ecdf]">
+    <section id="resume" className="surface p-5 text-[#1a1714] dark:text-[#f3ecdf]">
       <div className="flex items-center gap-2">
         <div className="grid size-9 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
           <IdentificationCard size={18} weight="fill" aria-hidden="true" />
