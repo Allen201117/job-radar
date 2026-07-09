@@ -13,7 +13,7 @@ import {
   type MatchReason,
 } from "@/lib/job-filter";
 import { buildTsquery, annotateAndRank, annotateSourceAdapter } from "@/lib/job-search";
-import { ftsCandidateTerms, normalizeChinaCity } from "@/lib/china-keyword-expansion";
+import { cityMatchTokens, ftsCandidateTerms } from "@/lib/china-keyword-expansion";
 import { appendJobScopeWhere, effectiveJobScope } from "@/lib/job-scope";
 import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 
@@ -32,6 +32,19 @@ export type SearchResult = {
   limit: number;
 };
 
+function appendSoftCityWhere(conds: string[], params: unknown[], city: string) {
+  const tokens = cityMatchTokens(city);
+  if (!tokens.length) return;
+
+  // 城市筛选必须是 JS matcher 的超集：空 location 要放行降级，别名/拼音也要进候选。
+  const parts = ["location is null", "location = ''"];
+  for (const tok of tokens) {
+    params.push(`%${tok}%`);
+    parts.push(`location ilike $${params.length}`);
+  }
+  conds.push(`(${parts.join(" or ")})`);
+}
+
 // FTS 路径：search_doc @@ to_tsquery 收窄候选（pg 无 1000 行上限，一次取到 FTS_CAP）→ JS 精筛分层。
 async function searchViaFTS(
   filters: Filters,
@@ -48,8 +61,7 @@ async function searchViaFTS(
   appendJobScopeWhere(conds, params, prefs, filters);
   const city = filters.city.trim();
   if (city) {
-    params.push(`%${normalizeChinaCity(city) || city}%`);
-    conds.push(`location ilike $${params.length}`);
+    appendSoftCityWhere(conds, params, city);
   }
   const company = filters.company.trim();
   if (company) {
@@ -77,7 +89,7 @@ async function searchViaFTS(
   };
 }
 
-// 扫描路径：按 (status,first_seen_at) 索引翻最新岗位 + JS 精筛，攒够当前页即停（纯浏览/FTS 降级用）。
+// 扫描路径：按 (status,first_seen_at) 索引翻最新岗位 + JS 精筛；newest 可攒够即停，match 必须看满预算后再按分排序。
 async function searchViaScan(
   filters: Filters,
   prefs: UserPreferences | null,
@@ -93,7 +105,7 @@ async function searchViaScan(
   const conds = ["status = 'active'"];
   const params: unknown[] = [];
   appendJobScopeWhere(conds, params, prefs, filters);
-  while (matched.length <= need && !exhausted && off < SCAN_BUDGET) {
+  while ((filters.sortBy === "match" || matched.length <= need) && !exhausted && off < SCAN_BUDGET) {
     const rows: any[] = annotateSourceAdapter(
       await jobsQuery(
         `select ${JOB_COLUMNS} from jobs where ${conds.join(" and ")} order by first_seen_at desc limit $${params.length + 1} offset $${params.length + 2}`,
@@ -141,6 +153,10 @@ export async function searchJobsStore(
   const keyword = filters.keyword.trim();
   const includeOverseasLexicon = effectiveJobScope(prefs) !== "domestic";
   const keywordTerms = keyword ? ftsCandidateTerms(keyword, { includeOverseasLexicon }) : [];
+  // 城市必须留在 tsquery：走全表 GIN 命中，保住城市浏览的【完整覆盖】——location 无 trigram 索引，
+  // 把城市移出 tsquery 会让「城市 / 城市+类型」等无关键词搜索退化到 scan（仅最新 28k），实测只覆盖
+  // ~6% 目标城市岗（北京 1818/28201）。空 location 与别名/拼音的「软放行」由 appendSoftCityWhere 的
+  // OR 组精修（location null / 别名 ilike）——它是 JS matcher 的超集，且排除「只在正文提到该城、实际在别处」的岗。
   const andTerms = [filters.city.trim(), filters.company.trim()].filter(Boolean);
   const tsquery = buildTsquery(keywordTerms, andTerms);
 
