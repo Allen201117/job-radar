@@ -402,19 +402,19 @@ export default function ResumeProfilePanel() {
           <div className="space-y-3">
             <div>
               <span className="text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">目标岗位方向</span>
-              <TagInput values={draft.target_roles} onChange={(v) => setField("target_roles", v)} placeholder="回车添加，如 数据分析" />
+              <TagInput values={draft.target_roles} onChange={(v) => setField("target_roles", v)} ariaLabel="简历目标岗位方向标签输入" placeholder="回车添加，如 数据分析" />
             </div>
             <div>
               <span className="text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">期望城市</span>
-              <TagInput values={draft.target_locations} onChange={(v) => setField("target_locations", v)} placeholder="如 上海" />
+              <TagInput values={draft.target_locations} onChange={(v) => setField("target_locations", v)} ariaLabel="简历期望城市标签输入" placeholder="如 上海" />
             </div>
             <div>
               <span className="text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">技能标签</span>
-              <TagInput values={draft.skills} onChange={(v) => setField("skills", v)} placeholder="如 Python、SQL" />
+              <TagInput values={draft.skills} onChange={(v) => setField("skills", v)} ariaLabel="简历技能标签输入" placeholder="如 Python、SQL" />
             </div>
             <div>
               <span className="text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">行业</span>
-              <TagInput values={draft.industries} onChange={(v) => setField("industries", v)} placeholder="如 互联网、金融" />
+              <TagInput values={draft.industries} onChange={(v) => setField("industries", v)} ariaLabel="简历行业标签输入" placeholder="如 互联网、金融" />
             </div>
           </div>
 

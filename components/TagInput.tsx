@@ -5,10 +5,11 @@ import { useState } from "react";
 interface Props {
   values: string[];
   onChange: (values: string[]) => void;
+  ariaLabel: string;
   placeholder?: string;
 }
 
-export default function TagInput({ values, onChange, placeholder }: Props) {
+export default function TagInput({ values, onChange, ariaLabel, placeholder }: Props) {
   const [draft, setDraft] = useState("");
 
   function commit() {
@@ -45,6 +46,7 @@ export default function TagInput({ values, onChange, placeholder }: Props) {
         </span>
       ))}
       <input
+        aria-label={ariaLabel}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
