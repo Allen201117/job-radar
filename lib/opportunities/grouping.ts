@@ -58,19 +58,35 @@ function isCriticalOpportunity(opportunity: Opportunity): boolean {
   return opportunity.signals.some((signal) => signal.isCritical);
 }
 
-function nonCriticalPartitionValue(opportunity: Opportunity): number {
-  const primary = primaryOf(opportunity);
-  if (isMainSignal(opportunity)) return 0;
-  if (primary?.type === "CLOSED_OR_STALE") return 1;
-  return 2;
+interface SemanticRankContext {
+  intensity: RadarIntensity;
+  mainThreshold: number;
 }
 
-function bySemanticSurvivorPriority(a: Opportunity, b: Opportunity): number {
-  const aCritical = isCriticalOpportunity(a);
-  const bCritical = isCriticalOpportunity(b);
-  if (aCritical && bCritical) return byCriticalThenScore(a, b);
-  if (aCritical !== bCritical) return aCritical ? -1 : 1;
-  return nonCriticalPartitionValue(a) - nonCriticalPartitionValue(b) || byScore(a, b);
+function semanticDisplayRank(opportunity: Opportunity, context: SemanticRankContext): number {
+  if (isCriticalOpportunity(opportunity)) return 0;
+  const primary = primaryOf(opportunity);
+  if (isMainSignal(opportunity) && opportunity.score >= context.mainThreshold) return 1;
+  if (
+    context.intensity === "active" &&
+    isMainSignal(opportunity) &&
+    opportunity.exploreEligible &&
+    opportunity.score >= 30 &&
+    opportunity.score < context.mainThreshold
+  ) return 2;
+  if (primary?.type === "CLOSED_OR_STALE" && !primary.isCritical) return 3;
+  return 4;
+}
+
+function bySemanticSurvivorPriority(
+  a: Opportunity,
+  b: Opportunity,
+  context: SemanticRankContext,
+): number {
+  const aRank = semanticDisplayRank(a, context);
+  const bRank = semanticDisplayRank(b, context);
+  if (aRank !== bRank) return aRank - bRank;
+  return aRank === 0 ? byCriticalThenScore(a, b) : byScore(a, b);
 }
 
 function normalizeSemanticPart(value: unknown): string {
@@ -81,7 +97,7 @@ function normalizeSemanticPart(value: unknown): string {
     .replace(SEMANTIC_PUNCTUATION_RE, "");
 }
 
-export function semanticJobKey(opportunity: Opportunity): string {
+function semanticJobKey(opportunity: Opportunity): string {
   const company = normalizeSemanticPart(opportunity.job.company);
   const title = normalizeSemanticPart(opportunity.job.title);
   let location = normalizeSemanticPart(opportunity.job.location);
@@ -90,48 +106,14 @@ export function semanticJobKey(opportunity: Opportunity): string {
   return `semantic:${company}|${title}|${location}`;
 }
 
-function dedupeBySemanticJob(opportunities: Opportunity[]): Opportunity[] {
+function dedupeBySemanticJob(opportunities: Opportunity[], context: SemanticRankContext): Opportunity[] {
   const seen = new Set<string>();
-  return [...opportunities].sort(bySemanticSurvivorPriority).filter((opportunity) => {
+  return [...opportunities].sort((a, b) => bySemanticSurvivorPriority(a, b, context)).filter((opportunity) => {
     const key = semanticJobKey(opportunity);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-}
-
-export function mergeCriticalAlerts(
-  sections: FeedSections,
-  counts: FeedCounts,
-  externalCritical: Opportunity[],
-): void {
-  if (!externalCritical.length) return;
-
-  sections.critical = dedupeBySemanticJob([...externalCritical, ...sections.critical])
-    .filter(isCriticalOpportunity)
-    .sort(byCriticalThenScore);
-  const criticalKeys = new Set(sections.critical.map(semanticJobKey));
-  sections.main = sections.main.filter((opportunity) => !criticalKeys.has(semanticJobKey(opportunity)));
-  sections.explore = sections.explore.filter((opportunity) => !criticalKeys.has(semanticJobKey(opportunity)));
-  sections.momentum = sections.momentum.filter((opportunity) => !criticalKeys.has(semanticJobKey(opportunity)));
-  sections.waiting = sections.waiting.filter((opportunity) => !criticalKeys.has(semanticJobKey(opportunity)));
-
-  const shown = [
-    ...sections.critical,
-    ...sections.main,
-    ...sections.explore,
-    ...sections.momentum,
-    ...sections.waiting,
-  ];
-  const bySignal: Partial<Record<OpportunitySignalType, number>> = {};
-  for (const opportunity of shown) {
-    const primary = primaryOf(opportunity);
-    if (primary) bySignal[primary.type] = (bySignal[primary.type] ?? 0) + 1;
-  }
-  counts.total = shown.length;
-  counts.critical = sections.critical.length;
-  counts.main = sections.main.length;
-  counts.by_signal = bySignal;
 }
 
 function takeWithCompanyDiversity(opportunities: Opportunity[], limit: number): Opportunity[] {
@@ -182,7 +164,7 @@ export function groupOpportunities(
   // 强度调量与门槛：passive 偏少、门槛偏高（只高价值）；active 偏多、含拓展。
   const effectiveLimit = intensity === "active" ? dailyLimit : Math.max(5, Math.min(dailyLimit, 10));
   const mainThreshold = intensity === "active" ? 45 : 70;
-  const candidates = dedupeBySemanticJob(opps);
+  const candidates = dedupeBySemanticJob(opps, { intensity, mainThreshold });
 
   // isNew 仅供展示（NEWLY_DISCOVERED 信号未上时不用于分区）
   if (options.noveltySince) {
