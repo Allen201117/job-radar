@@ -16,7 +16,7 @@ import type {
 import { isProfileReady } from "./profile";
 import { computeMatchFacts, checkEligibility, type ActionState } from "./eligibility";
 import { scoreOpportunity } from "./scoring";
-import { groupOpportunities, mergeCriticalAlerts, resolveNoveltySince } from "./grouping";
+import { groupOpportunities, resolveNoveltySince } from "./grouping";
 import { deriveOpportunitySignals } from "./signals";
 import { parseDeadline } from "./deadline";
 import { recallOpportunityCandidates } from "../jobs-store/opportunities";
@@ -214,12 +214,15 @@ export async function buildOpportunityFeed(
   const overrideProvided = options.noveltySinceOverride !== undefined && options.noveltySinceOverride !== null;
   const noveltySince = resolveNoveltySince(overrideProvided ? options.noveltySinceOverride! : lastOpenedAt, now);
 
-  const { sections, counts } = groupOpportunities(opps, { dailyLimit: profile.dailyLimit, intensity, noveltySince, now });
+  // 关键提醒在截断前与完整召回候选统一语义去重/分区，冲突主卡被淘汰时后续候选可正常回填。
+  const { sections, counts } = groupOpportunities([...critical, ...opps], {
+    dailyLimit: profile.dailyLimit,
+    intensity,
+    noveltySince,
+    now,
+  });
   counts.screened = recall.jobs.length;
   counts.filtered = filtered;
-
-  // 外部关键提醒按统一语义键并入；critical 覆盖不同 ID 的同语义普通候选。
-  mergeCriticalAlerts(sections, counts, critical);
 
   await hydrateDisplayJobs(sections);
 
