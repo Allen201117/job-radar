@@ -19,7 +19,7 @@ function sqlFunctionBody(name) {
 }
 
 test("posted_at 元数据明确标注为官网发布日期", () => {
-  assert.match(jobCardSource, /label:\s*"官网发布"/);
+  assert.match(jobCardSource, /\{\s*key:\s*"posted"\s*,[^}]*\blabel:\s*"官网发布"[^}]*\}/);
 });
 
 test("active_job_counts_by_company 排除 summary 为 null 的薄卡", () => {

@@ -24,15 +24,25 @@ export function resolveNoveltySince(lastOpenedAt: string | null, now: Date): str
 
 const WAITING_CAP = 8;
 const EXPLORE_CAP = 5;
+const SEMANTIC_PUNCTUATION_RE = new RegExp("[\\s\\p{P}]+", "gu");
 
 function primaryOf(o: Opportunity): OpportunitySignal | null {
   return o.signals.length ? o.signals[0] : null;
 }
+function firstSeenMillis(value: string | Date | null | undefined): number {
+  let millis = NaN;
+  if (value instanceof Date) millis = value.getTime();
+  else if (typeof value === "string") millis = Date.parse(value);
+  return Number.isFinite(millis) ? millis : Number.NEGATIVE_INFINITY;
+}
 function cmpFirstSeenDesc(a: Opportunity, b: Opportunity): number {
-  // String() 兜底：firstSeenAt 正常是 ISO 字符串，但若上游传来 Date 对象（node-pg 时间列默认解析）
-  // 直接 .localeCompare 会抛 TypeError（2026-06-26 事故）。根因已在 jobs-store/client.ts 用 type parser 修，
-  // 这里再裹一层 String 作防御，杜绝任何时间列类型漂移把整个 Feed 排序打挂。
-  return String(b.firstSeenAt || "").localeCompare(String(a.firstSeenAt || ""));
+  // node-pg 可能交付 Date，其他路径交付 ISO；统一比较 epoch millis，避免 String(Date) 的 weekday 字典序。
+  const aTime = firstSeenMillis(a.firstSeenAt);
+  const bTime = firstSeenMillis(b.firstSeenAt);
+  if (aTime !== bTime) return bTime - aTime;
+  const aId = String(a.job.id);
+  const bId = String(b.job.id);
+  return aId < bId ? -1 : aId > bId ? 1 : 0;
 }
 function byScore(a: Opportunity, b: Opportunity): number {
   return b.score - a.score || cmpFirstSeenDesc(a, b);
@@ -44,15 +54,34 @@ function byCriticalThenScore(a: Opportunity, b: Opportunity): number {
   return pa - pb || byScore(a, b);
 }
 
+function isCriticalOpportunity(opportunity: Opportunity): boolean {
+  return opportunity.signals.some((signal) => signal.isCritical);
+}
+
+function nonCriticalPartitionValue(opportunity: Opportunity): number {
+  const primary = primaryOf(opportunity);
+  if (isMainSignal(opportunity)) return 0;
+  if (primary?.type === "CLOSED_OR_STALE") return 1;
+  return 2;
+}
+
+function bySemanticSurvivorPriority(a: Opportunity, b: Opportunity): number {
+  const aCritical = isCriticalOpportunity(a);
+  const bCritical = isCriticalOpportunity(b);
+  if (aCritical && bCritical) return byCriticalThenScore(a, b);
+  if (aCritical !== bCritical) return aCritical ? -1 : 1;
+  return nonCriticalPartitionValue(a) - nonCriticalPartitionValue(b) || byScore(a, b);
+}
+
 function normalizeSemanticPart(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) return "";
   return value
     .normalize("NFKC")
     .toLowerCase()
-    .replace(/[\s\p{P}]+/gu, "");
+    .replace(SEMANTIC_PUNCTUATION_RE, "");
 }
 
-function semanticJobKey(opportunity: Opportunity): string {
+export function semanticJobKey(opportunity: Opportunity): string {
   const company = normalizeSemanticPart(opportunity.job.company);
   const title = normalizeSemanticPart(opportunity.job.title);
   let location = normalizeSemanticPart(opportunity.job.location);
@@ -63,12 +92,46 @@ function semanticJobKey(opportunity: Opportunity): string {
 
 function dedupeBySemanticJob(opportunities: Opportunity[]): Opportunity[] {
   const seen = new Set<string>();
-  return [...opportunities].sort(byScore).filter((opportunity) => {
+  return [...opportunities].sort(bySemanticSurvivorPriority).filter((opportunity) => {
     const key = semanticJobKey(opportunity);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+export function mergeCriticalAlerts(
+  sections: FeedSections,
+  counts: FeedCounts,
+  externalCritical: Opportunity[],
+): void {
+  if (!externalCritical.length) return;
+
+  sections.critical = dedupeBySemanticJob([...externalCritical, ...sections.critical])
+    .filter(isCriticalOpportunity)
+    .sort(byCriticalThenScore);
+  const criticalKeys = new Set(sections.critical.map(semanticJobKey));
+  sections.main = sections.main.filter((opportunity) => !criticalKeys.has(semanticJobKey(opportunity)));
+  sections.explore = sections.explore.filter((opportunity) => !criticalKeys.has(semanticJobKey(opportunity)));
+  sections.momentum = sections.momentum.filter((opportunity) => !criticalKeys.has(semanticJobKey(opportunity)));
+  sections.waiting = sections.waiting.filter((opportunity) => !criticalKeys.has(semanticJobKey(opportunity)));
+
+  const shown = [
+    ...sections.critical,
+    ...sections.main,
+    ...sections.explore,
+    ...sections.momentum,
+    ...sections.waiting,
+  ];
+  const bySignal: Partial<Record<OpportunitySignalType, number>> = {};
+  for (const opportunity of shown) {
+    const primary = primaryOf(opportunity);
+    if (primary) bySignal[primary.type] = (bySignal[primary.type] ?? 0) + 1;
+  }
+  counts.total = shown.length;
+  counts.critical = sections.critical.length;
+  counts.main = sections.main.length;
+  counts.by_signal = bySignal;
 }
 
 function takeWithCompanyDiversity(opportunities: Opportunity[], limit: number): Opportunity[] {

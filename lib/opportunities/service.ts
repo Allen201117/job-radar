@@ -16,7 +16,7 @@ import type {
 import { isProfileReady } from "./profile";
 import { computeMatchFacts, checkEligibility, type ActionState } from "./eligibility";
 import { scoreOpportunity } from "./scoring";
-import { groupOpportunities, resolveNoveltySince } from "./grouping";
+import { groupOpportunities, mergeCriticalAlerts, resolveNoveltySince } from "./grouping";
 import { deriveOpportunitySignals } from "./signals";
 import { parseDeadline } from "./deadline";
 import { recallOpportunityCandidates } from "../jobs-store/opportunities";
@@ -218,18 +218,8 @@ export async function buildOpportunityFeed(
   counts.screened = recall.jobs.length;
   counts.filtered = filtered;
 
-  // 关键提醒并入 critical 区前置；同岗去重（saved 岗本就不在主召回，防御性再去一次）。
-  if (critical.length) {
-    const seen = new Set(Object.values(sections).flat().map((o) => o.job.id));
-    const freshCritical = critical.filter((o) => !seen.has(o.job.id));
-    sections.critical = [...freshCritical, ...sections.critical];
-    counts.critical = sections.critical.length;
-    counts.total += freshCritical.length;
-    for (const o of freshCritical) {
-      const p = o.signals[0];
-      if (p) counts.by_signal[p.type] = (counts.by_signal[p.type] ?? 0) + 1;
-    }
-  }
+  // 外部关键提醒按统一语义键并入；critical 覆盖不同 ID 的同语义普通候选。
+  mergeCriticalAlerts(sections, counts, critical);
 
   await hydrateDisplayJobs(sections);
 
