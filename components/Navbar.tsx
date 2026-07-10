@@ -235,9 +235,8 @@ export default function Navbar() {
       {/* 移动端下拉菜单（lg 以下） */}
       {menuOpen && (
         <>
-          <button
-            type="button"
-            aria-label="关闭菜单"
+          <div
+            aria-hidden="true"
             onClick={() => setMenuOpen(false)}
             className="fixed inset-0 top-14 z-30 bg-[#1a1714]/20 backdrop-blur-sm lg:hidden dark:bg-black/50"
           />
