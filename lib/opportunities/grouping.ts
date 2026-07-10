@@ -44,6 +44,61 @@ function byCriticalThenScore(a: Opportunity, b: Opportunity): number {
   return pa - pb || byScore(a, b);
 }
 
+function normalizeSemanticPart(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) return "";
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\s\p{P}]+/gu, "");
+}
+
+function semanticJobKey(opportunity: Opportunity): string {
+  const company = normalizeSemanticPart(opportunity.job.company);
+  const title = normalizeSemanticPart(opportunity.job.title);
+  let location = normalizeSemanticPart(opportunity.job.location);
+  if (!company || !title || !location) return `id:${opportunity.job.id}`;
+  if (location.length > 1 && location.endsWith("市")) location = location.slice(0, -1);
+  return `semantic:${company}|${title}|${location}`;
+}
+
+function dedupeBySemanticJob(opportunities: Opportunity[]): Opportunity[] {
+  const seen = new Set<string>();
+  return [...opportunities].sort(byScore).filter((opportunity) => {
+    const key = semanticJobKey(opportunity);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function takeWithCompanyDiversity(opportunities: Opportunity[], limit: number): Opportunity[] {
+  const perCompanyCap = Math.max(2, Math.ceil(limit * 0.3));
+  const companyCounts = new Map<string, number>();
+  const picked: Opportunity[] = [];
+  const overflow: Opportunity[] = [];
+
+  for (const opportunity of opportunities) {
+    if (picked.length >= limit) break;
+    const company = normalizeSemanticPart(opportunity.job.company) || `id:${opportunity.job.id}`;
+    const count = companyCounts.get(company) ?? 0;
+    if (count >= perCompanyCap) {
+      overflow.push(opportunity);
+      continue;
+    }
+    companyCounts.set(company, count + 1);
+    picked.push(opportunity);
+  }
+
+  if (picked.length < limit) {
+    for (const opportunity of overflow) {
+      if (picked.length >= limit) break;
+      picked.push(opportunity);
+    }
+  }
+
+  return picked;
+}
+
 function isMainSignal(o: Opportunity): boolean {
   const p = primaryOf(o);
   return !!p && (p.type === "STILL_OPEN" || p.type === "OPEN_UNVERIFIED" || p.type === "DEADLINE_SOON");
@@ -64,10 +119,11 @@ export function groupOpportunities(
   // 强度调量与门槛：passive 偏少、门槛偏高（只高价值）；active 偏多、含拓展。
   const effectiveLimit = intensity === "active" ? dailyLimit : Math.max(5, Math.min(dailyLimit, 10));
   const mainThreshold = intensity === "active" ? 45 : 70;
+  const candidates = dedupeBySemanticJob(opps);
 
   // isNew 仅供展示（NEWLY_DISCOVERED 信号未上时不用于分区）
   if (options.noveltySince) {
-    for (const o of opps) o.isNew = Boolean(o.firstSeenAt) && o.firstSeenAt! > options.noveltySince;
+    for (const o of candidates) o.isNew = Boolean(o.firstSeenAt) && o.firstSeenAt! > options.noveltySince;
   }
 
   const used = new Set<string>();
@@ -76,40 +132,44 @@ export function groupOpportunities(
     return list;
   };
 
-  // critical：任一信号关键。不去重前置（最高优先）、不截断、不受强度影响。
+  // critical：任一信号关键。语义去重已统一前置；本区不截断、不受公司配额或强度影响。
   const critical = take(
-    opps.filter((o) => o.signals.some((s) => s.isCritical)).sort(byCriticalThenScore)
+    candidates.filter((o) => o.signals.some((s) => s.isCritical)).sort(byCriticalThenScore)
   );
 
   // main：主信号 + 强度门槛，封顶 effectiveLimit。
   const main = take(
-    opps
-      .filter((o) => !used.has(o.job.id) && isMainSignal(o) && o.score >= mainThreshold)
-      .sort(byScore)
-      .slice(0, effectiveLimit)
+    takeWithCompanyDiversity(
+      candidates
+        .filter((o) => !used.has(o.job.id) && isMainSignal(o) && o.score >= mainThreshold)
+        .sort(byScore),
+      effectiveLimit,
+    )
   );
 
   // explore：仅 active；主信号、score 30–门槛、exploreEligible，最多 5。
   let explore: Opportunity[] = [];
   if (intensity === "active") {
     explore = take(
-      opps
-        .filter(
-          (o) =>
-            !used.has(o.job.id) &&
-            isMainSignal(o) &&
-            o.exploreEligible &&
-            o.score >= 30 &&
-            o.score < mainThreshold
-        )
-        .sort(byScore)
-        .slice(0, EXPLORE_CAP)
+      takeWithCompanyDiversity(
+        candidates
+          .filter(
+            (o) =>
+              !used.has(o.job.id) &&
+              isMainSignal(o) &&
+              o.exploreEligible &&
+              o.score >= 30 &&
+              o.score < mainThreshold
+          )
+          .sort(byScore),
+        EXPLORE_CAP,
+      )
     );
   }
 
   // waiting：长时间未确认（active 但超 today SLA）非关键，小批。
   const waiting = take(
-    opps
+    candidates
       .filter((o) => {
         if (used.has(o.job.id)) return false;
         const p = primaryOf(o);

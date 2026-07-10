@@ -13,7 +13,14 @@ function opp(o = {}) {
   const sigType = o.signal ?? "STILL_OPEN";
   const isCritical = o.critical ?? false;
   return {
-    job: { id: o.id || `j${counter}`, company: "C", title: "T", jd_url: `u${counter}`, status: "active" },
+    job: {
+      id: o.id || `j${counter}`,
+      company: o.company === undefined ? "C" : o.company,
+      title: o.title === undefined ? "T" : o.title,
+      location: o.location === undefined ? null : o.location,
+      jd_url: `u${counter}`,
+      status: "active",
+    },
     score: o.score ?? 80,
     tier: o.tier ?? "high",
     reasons: [],
@@ -119,6 +126,98 @@ test("一岗只出现一次（critical 优先于 main）", () => {
   assert.equal(ids.length, new Set(ids).size);
   assert.equal(sections.critical.length, 1);
   assert.equal(sections.main.length, 0);
+});
+
+test("不同 id 的同公司标题地点岗位只出现一次，保留排序更优者", () => {
+  const better = opp({
+    id: "better",
+    company: "字节跳动",
+    title: "AI 产品经理",
+    location: "上海",
+    score: 90,
+  });
+  const duplicate = opp({
+    id: "duplicate",
+    company: " 字节跳动 ",
+    title: "ai-产品经理",
+    location: "上海市",
+    score: 80,
+  });
+  const { sections } = groupOpportunities([duplicate, better], { dailyLimit: 20, intensity: "active" });
+  assert.deepEqual(sections.main.map((item) => item.job.id), ["better"]);
+});
+
+test("语义键任一字段缺失时回退 job.id，不误合并信息不足的岗位", () => {
+  const incomplete = [
+    opp({ id: "missing-company-a", company: null, title: "T", location: "L", score: 90 }),
+    opp({ id: "missing-company-b", company: null, title: "T", location: "L", score: 80 }),
+    opp({ id: "missing-title-a", company: "A", title: "", location: "L", score: 90 }),
+    opp({ id: "missing-title-b", company: "A", title: "", location: "L", score: 80 }),
+    opp({ id: "missing-a", company: "A", title: "T", location: null, score: 90 }),
+    opp({ id: "missing-b", company: "A", title: "T", location: null, score: 80 }),
+  ];
+  const { sections } = groupOpportunities(incomplete, { dailyLimit: 20, intensity: "active" });
+  assert.deepEqual(sections.main.map((item) => item.job.id), [
+    "missing-company-a",
+    "missing-title-a",
+    "missing-a",
+    "missing-company-b",
+    "missing-title-b",
+    "missing-b",
+  ]);
+});
+
+test("main 候选充足时优先公司多样性", () => {
+  const dominant = Array.from({ length: 8 }, (_, i) =>
+    opp({ id: `a${i}`, company: "A", title: `T${i}`, location: "L", score: 100 - i })
+  );
+  const alternatives = ["B", "C", "D", "E", "F", "G", "H"].map((company, i) =>
+    opp({ id: `x${i}`, company, title: `X${i}`, location: "L", score: 70 - i })
+  );
+  const { sections } = groupOpportunities([...dominant, ...alternatives], {
+    dailyLimit: 10,
+    intensity: "active",
+  });
+  assert.equal(sections.main.length, 10);
+  assert.ok(sections.main.filter((item) => item.job.company === "A").length <= 3);
+});
+
+test("main 只有一家公司时回填溢出候选，不制造空位", () => {
+  const only = Array.from({ length: 10 }, (_, i) =>
+    opp({ id: `only-a${i}`, company: "A", title: `T${i}`, location: "L" })
+  );
+  const { sections } = groupOpportunities(only, { dailyLimit: 10, intensity: "active" });
+  assert.equal(sections.main.length, 10);
+});
+
+test("explore 也应用软性公司多样性，且保持原上限 5", () => {
+  const dominant = Array.from({ length: 4 }, (_, i) =>
+    opp({ id: `explore-a${i}`, company: "A", title: `T${i}`, location: "L", score: 40 - i, exploreEligible: true })
+  );
+  const alternatives = ["B", "C", "D"].map((company, i) =>
+    opp({ id: `explore-x${i}`, company, title: `X${i}`, location: "L", score: 35 - i, exploreEligible: true })
+  );
+  const { sections } = groupOpportunities([...dominant, ...alternatives], {
+    dailyLimit: 20,
+    intensity: "active",
+  });
+  assert.equal(sections.explore.length, 5);
+  assert.equal(sections.explore.filter((item) => item.job.company === "A").length, 2);
+});
+
+test("waiting 不应用公司多样性，保留原排序和上限 8", () => {
+  const dominant = Array.from({ length: 6 }, (_, i) =>
+    opp({ id: `waiting-a${i}`, company: "A", title: `T${i}`, location: "L", score: 100 - i, signal: "CLOSED_OR_STALE" })
+  );
+  const alternatives = Array.from({ length: 6 }, (_, i) =>
+    opp({ id: `waiting-x${i}`, company: `X${i}`, title: `X${i}`, location: "L", score: 70 - i, signal: "CLOSED_OR_STALE" })
+  );
+  const { sections } = groupOpportunities([...dominant, ...alternatives], {
+    dailyLimit: 20,
+    intensity: "active",
+  });
+  assert.equal(sections.waiting.length, 8);
+  assert.equal(sections.waiting.filter((item) => item.job.company === "A").length, 6);
 });
 
 test("momentum 恒空（job_events 前不上）", () => {
