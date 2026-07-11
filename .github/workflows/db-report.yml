@@ -18,12 +18,15 @@ jobs:
         env:
           # Phase 1 后 jobs 热表在自建香港 PG；sources 仍留 Supabase（第 3 段 adapter 映射要跨库）。
           JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           if [ -z "${JOBS_DATABASE_URL:-}" ]; then
             echo "::error::JOBS_DATABASE_URL secret 未配置（Phase 1 后 jobs 在自建香港 PG）。"
             exit 1
           fi
+          source scripts/enable-jobs-db-strict-tls.sh
           # 第 0/1/2 段：纯 jobs 查询 → 走香港库。
           psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off <<'SQL'
           set statement_timeout = '600s';

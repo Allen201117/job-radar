@@ -6,3 +6,9 @@ export function buildJobsDatabaseSsl(
   ca: string;
   servername: string;
 };
+
+export function buildJobsDatabaseLibpqUrl(
+  rawUrl: string,
+  rootCertPath: string,
+  certificateServername?: string,
+): string;

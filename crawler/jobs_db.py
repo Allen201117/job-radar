@@ -13,9 +13,13 @@ canonical_jd_url 由 HK 库的 BEFORE INSERT/UPDATE 触发器自动维护（与 
   跨境连香港库，最小化往返是关键）。psycopg2 自动做 Python→PG 类型适配，无需手写 cast。
 """
 import os
+import atexit
+import ipaddress
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import psycopg2
 import psycopg2.extras
@@ -67,13 +71,64 @@ def _load_env():
     load_dotenv(root / ".env", override=False)
 
 
+_ssl_root_cert_file = None
+
+
+def _materialize_ssl_root_cert() -> str:
+    """将受控 CA 写入仅当前进程可读的临时文件，供 libpq verify-full 使用。"""
+    global _ssl_root_cert_file
+    if _ssl_root_cert_file:
+        return _ssl_root_cert_file
+    raw_ca = (os.environ.get("JOBS_DATABASE_SSL_CA") or "").strip()
+    if not raw_ca:
+        raise RuntimeError("JOBS_DATABASE_SSL_CA 未配置：拒绝不校验证书身份的 jobs 数据库连接。")
+    pem = raw_ca.replace("\\n", "\n")
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", prefix="job-radar-jobs-db-ca-", suffix=".pem", delete=False
+    )
+    try:
+        handle.write(pem)
+        handle.flush()
+        os.chmod(handle.name, 0o600)
+    finally:
+        handle.close()
+    _ssl_root_cert_file = handle.name
+    atexit.register(lambda: os.path.exists(handle.name) and os.unlink(handle.name))
+    return handle.name
+
+
+def strict_tls_kwargs(dsn: str, root_cert_path: str, certificate_servername: str = None) -> dict:
+    """生成 psycopg2/libpq 严格 TLS 参数；IP 端点用 hostaddr 连接、host 校验证书名。"""
+    parsed = urlparse(dsn)
+    endpoint_host = parsed.hostname
+    if not endpoint_host:
+        raise RuntimeError("JOBS_DATABASE_URL 缺少数据库主机。")
+    servername = (certificate_servername or "").strip() or endpoint_host
+    kwargs = {"sslmode": "verify-full", "sslrootcert": root_cert_path}
+    if servername != endpoint_host:
+        try:
+            ipaddress.ip_address(endpoint_host)
+        except ValueError as exc:
+            raise RuntimeError(
+                "JOBS_DATABASE_TLS_SERVERNAME 与 DNS host 不一致；请让数据库证书 SAN 匹配连接地址。"
+            ) from exc
+        kwargs.update({"host": servername, "hostaddr": endpoint_host})
+    return kwargs
+
+
 def get_conn():
     """直连自建香港 jobs 库。autocommit=True（与 supabase-py 每请求即提交语义一致；爬虫多为单条/批写）。"""
     _load_env()
     dsn = os.environ.get("JOBS_DATABASE_URL")
     if not dsn:
         raise RuntimeError("JOBS_DATABASE_URL 未配置（自建香港 jobs 库连接串）。")
-    conn = psycopg2.connect(dsn)
+    root_cert_path = _materialize_ssl_root_cert()
+    tls_kwargs = strict_tls_kwargs(
+        dsn,
+        root_cert_path,
+        os.environ.get("JOBS_DATABASE_TLS_SERVERNAME"),
+    )
+    conn = psycopg2.connect(dsn, **tls_kwargs)
     conn.autocommit = True
     return conn
 
