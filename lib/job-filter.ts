@@ -28,6 +28,21 @@ export type Filters = {
   education: string; // 用户所选学历（博士/硕士/本科/大专）；""=学历不限（不筛）
 };
 
+// 多选字段（城市 / 关键词）内部用英文逗号分隔存储；拆成去空去重的值数组。
+// 单值（无逗号）→ 一元数组，与改造前逐字段一致（向后兼容）。
+export function splitMultiValue(value: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of (value || "").split(",")) {
+    const v = raw.trim();
+    if (v && !seen.has(v)) {
+      seen.add(v);
+      out.push(v);
+    }
+  }
+  return out;
+}
+
 export const DEFAULT_FILTERS: Filters = {
   company: "",
   city: "",
@@ -66,16 +81,18 @@ export function jobFilterMatch(
     const want = filters.company.trim().toLowerCase();
     if (want && !(job.company || "").toLowerCase().includes(want)) return null;
   }
-  if (filters.city) {
+  const cities = splitMultiValue(filters.city);
+  if (cities.length) {
     const location = job.location || "";
     if (!location) {
       degradedFields.push("city"); // 城市未知（信息缺失 ≠ 不符合）→ 不淘汰，降级排后。
     } else {
-      // 双向城市匹配：filter「北京」经全别名（含英文/拼音 Beijing）命中 location，治单向归一漏配。
+      // 多城市 OR + 双向匹配：命中任一选中城市（经全别名，含英文/拼音 Beijing）即通过；
+      // 有明确 location 且全不符（写了别的城市）才淘汰。单城市时与改造前逐字段一致。
       const hay = location.toLowerCase().replace(/\s+/g, " ");
-      const tokens = cityMatchTokens(filters.city);
+      const tokens = cities.flatMap((c) => cityMatchTokens(c));
       if (tokens.length && !tokens.some((t) => hay.includes(t))) {
-        return null; // 明确写了别的城市 → 淘汰。
+        return null; // 明确写了别的城市（全不符）→ 淘汰。
       }
     }
   }
@@ -123,10 +140,23 @@ export function jobFilterMatch(
   // 保留 available + unknown。因为绝大多数 JD 不会主动写「我们提供 sponsorship」(available 天然极少)，
   // 若只留 available 会把「可能给」的岗(unknown)全滤掉 → 结果恒为 0（踩过这个坑）。
   if (filters.sponsorshipOnly && job.sponsorship_signal === "none") return null;
-  // 关键词两层：无关键词 → 放行；否则 精确 / 相关 / 不匹配(null)。
+  // 关键词多选（OR）：任一精确 → exact；否则任一相关 → related；全不匹配 → 淘汰。无关键词 → 放行。
   // 任一字段靠「缺失放行」→ 整体压到 related，排序沉底（精确匹配优先展示）。
-  const keywordTier = !filters.keyword ? "none" : keywordMatchTier(job, filters.keyword);
-  if (keywordTier === null) return null;
+  const keywords = splitMultiValue(filters.keyword);
+  let keywordTier: MatchReason["keywordTier"] = "none";
+  if (keywords.length) {
+    let best: "exact" | "related" | null = null;
+    for (const kw of keywords) {
+      const t = keywordMatchTier(job, kw);
+      if (t === "exact") {
+        best = "exact";
+        break;
+      }
+      if (t === "related") best = "related";
+    }
+    if (best === null) return null;
+    keywordTier = best;
+  }
   const tier =
     keywordTier !== "related" && degradedFields.length === 0 ? "exact" : "related";
   return { tier, keywordTier, degradedFields };
