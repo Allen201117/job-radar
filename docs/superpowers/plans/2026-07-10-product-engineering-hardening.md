@@ -328,7 +328,7 @@ env NEXT_PUBLIC_SUPABASE_URL=https://example.supabase.co NEXT_PUBLIC_SUPABASE_AN
 git diff --check
 ```
 
-Expected: audit exits zero with zero high/critical vulnerabilities; Node and Python tests pass; migrations, lint, build and diff check pass. Raw audit still reports two accepted temporary moderate findings from Next's bundled PostCSS 8.4.31. Current repository inspection found no runtime path that stringifies an untrusted CSS AST into `<style>`; review this risk weekly and on every dependency upgrade. Do not run `npm audit fix --force`, whose suggested resolution can incorrectly downgrade the supported dependency line. If Next 15 introduces a compatibility failure, fix only the demonstrated failure and add a regression test before production code changes.
+Expected: audit exits zero with zero high/critical vulnerabilities; Node and Python tests pass; migrations, lint, build and diff check pass. Raw audit still reports two moderate findings from Next's bundled PostCSS 8.4.31. Current repository inspection found no runtime path that stringifies an untrusted CSS AST into `<style>`, but this is only an assessment: until the risk owner, acceptance date, expiry, approving signature and evidence location are recorded, formal risk acceptance is incomplete and release remains blocked. Passing the high gate does not accept the moderate findings. Review this risk weekly and on every dependency upgrade. Do not run `npm audit fix --force`, whose suggested resolution can incorrectly downgrade the supported dependency line. If Next 15 introduces a compatibility failure, fix only the demonstrated failure and add a regression test before production code changes.
 
 - [ ] **Step 5: Commit Task 4 files**
 
