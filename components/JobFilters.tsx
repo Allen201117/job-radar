@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { splitMultiValue } from "@/lib/job-filter";
 import {
   Buildings,
   Briefcase,
@@ -13,6 +14,7 @@ import {
   MagnifyingGlass,
   SortAscending,
   Sparkle,
+  X,
 } from "@phosphor-icons/react";
 
 interface Filters {
@@ -125,8 +127,13 @@ export default function JobFilters({ filters, onChange, companies, jobScope = "d
             </datalist>
           </div>
           <div>
-            <FilterLabel icon={MapPin} label="城市" />
-            <input value={filters.city} onChange={(e) => set("city", e.target.value)} placeholder="如 北京" className={inputClass} />
+            <FilterLabel icon={MapPin} label="城市（可多选）" />
+            <ChipsInput
+              value={filters.city}
+              onChange={(v) => set("city", v)}
+              placeholder="如 北京，回车添加，可多选"
+              ariaLabel="城市，可多选"
+            />
           </div>
           <div>
             <FilterLabel icon={Briefcase} label="岗位类型" />
@@ -138,8 +145,13 @@ export default function JobFilters({ filters, onChange, companies, jobScope = "d
             </select>
           </div>
           <div>
-            <FilterLabel icon={MagnifyingGlass} label="关键词" />
-            <input value={filters.keyword} onChange={(e) => set("keyword", e.target.value)} placeholder="如 算法" className={inputClass} />
+            <FilterLabel icon={MagnifyingGlass} label="关键词（可多选）" />
+            <ChipsInput
+              value={filters.keyword}
+              onChange={(v) => set("keyword", v)}
+              placeholder="如 算法，回车添加，可多选"
+              ariaLabel="关键词，可多选"
+            />
           </div>
         </div>
 
@@ -222,6 +234,84 @@ export default function JobFilters({ filters, onChange, companies, jobScope = "d
           <Check label="显示已投递" checked={filters.showApplied} onChange={(v) => set("showApplied", v)} />
         </div>
       </div>
+    </div>
+  );
+}
+
+// 多选输入（城市 / 关键词）：内部以英文逗号存储的字符串 <-> 芯片。回车 / 逗号提交，退格删末项。
+// 值展示为可删除芯片；沿用暖调输入框样式（focus-within 提亮）。
+function ChipsInput({
+  value,
+  onChange,
+  placeholder,
+  ariaLabel,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  ariaLabel: string;
+}) {
+  const [draft, setDraft] = useState("");
+  const chips = splitMultiValue(value);
+
+  function commit(raw: string) {
+    const v = raw.trim();
+    setDraft("");
+    if (!v || chips.includes(v)) return;
+    onChange([...chips, v].join(","));
+  }
+  function removeAt(index: number) {
+    onChange(chips.filter((_, i) => i !== index).join(","));
+  }
+
+  return (
+    <div className="mt-1 flex w-full flex-wrap items-center gap-1.5 rounded-xl border border-black/[0.09] bg-white/70 px-2 py-1.5 text-sm transition duration-200 focus-within:border-[#1a1714]/55 focus-within:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:focus-within:border-white/55 dark:focus-within:bg-[#1e1a15]">
+      {chips.map((chip, i) => (
+        <span
+          key={chip}
+          className="inline-flex items-center gap-1 rounded-lg bg-black/[0.06] py-0.5 pl-2 pr-1 text-[13px] font-medium text-[#3f3a33] dark:bg-white/[0.1] dark:text-[#e7ddca]"
+        >
+          {chip}
+          <button
+            type="button"
+            onClick={() => removeAt(i)}
+            aria-label={`移除 ${chip}`}
+            className="grid size-4 place-items-center rounded text-[#8a8275] transition hover:bg-black/[0.08] hover:text-[#1a1714] dark:text-[#9a9184] dark:hover:bg-white/[0.12] dark:hover:text-[#f3ecdf]"
+          >
+            <X size={11} weight="bold" aria-hidden="true" />
+          </button>
+        </span>
+      ))}
+      <input
+        value={draft}
+        aria-label={ariaLabel}
+        placeholder={chips.length ? "" : placeholder}
+        onChange={(e) => {
+          const v = e.target.value;
+          // 输入 / 粘贴含分隔符（中英文逗号）→ 逐段提交，末段留在草稿。
+          if (/[,，]/.test(v)) {
+            const parts = v.split(/[,，]/);
+            const last = parts.pop() ?? "";
+            parts.forEach((p) => commit(p));
+            setDraft(last);
+          } else {
+            setDraft(v);
+          }
+        }}
+        onKeyDown={(e) => {
+          // 中文输入法组字中回车是「确认候选」，不能当作提交（否则吞掉半截拼音）。
+          if ((e.nativeEvent as any).isComposing) return;
+          if (e.key === "Enter" || e.key === ",") {
+            e.preventDefault();
+            commit(draft);
+          } else if (e.key === "Backspace" && !draft && chips.length) {
+            e.preventDefault();
+            removeAt(chips.length - 1);
+          }
+        }}
+        onBlur={() => commit(draft)}
+        className="min-w-[6rem] flex-1 bg-transparent px-1 py-1 text-sm text-[#1a1714] placeholder:text-[#a39a8c] focus:outline-none dark:text-[#f3ecdf] dark:placeholder:text-[#8b8478]"
+      />
     </div>
   );
 }
