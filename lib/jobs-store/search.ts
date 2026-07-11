@@ -8,6 +8,7 @@ import { sortAndFilterJobs } from "@/lib/scoring";
 import {
   filterAndRankJobs,
   jobFilterTier,
+  splitMultiValue,
   countMatchBreakdown,
   type Filters,
   type MatchReason,
@@ -32,11 +33,11 @@ export type SearchResult = {
   limit: number;
 };
 
-function appendSoftCityWhere(conds: string[], params: unknown[], city: string) {
-  const tokens = cityMatchTokens(city);
+function appendSoftCityWhere(conds: string[], params: unknown[], cities: string[]) {
+  const tokens = cities.flatMap((c) => cityMatchTokens(c));
   if (!tokens.length) return;
 
-  // 城市筛选必须是 JS matcher 的超集：空 location 要放行降级，别名/拼音也要进候选。
+  // 城市筛选必须是 JS matcher 的超集：空 location 要放行降级，多城市所有别名/拼音也要进候选（OR）。
   const parts = ["location is null", "location = ''"];
   for (const tok of tokens) {
     params.push(`%${tok}%`);
@@ -59,9 +60,9 @@ async function searchViaFTS(
   const conds = ["status = 'active'", "search_doc @@ to_tsquery('simple', $1)"];
   const params: unknown[] = [tsquery];
   appendJobScopeWhere(conds, params, prefs, filters);
-  const city = filters.city.trim();
-  if (city) {
-    appendSoftCityWhere(conds, params, city);
+  const cities = splitMultiValue(filters.city);
+  if (cities.length) {
+    appendSoftCityWhere(conds, params, cities);
   }
   const company = filters.company.trim();
   if (company) {
@@ -150,15 +151,21 @@ export async function searchJobsStore(
   limit: number,
   adapterBySource?: Map<string, string | null> | null,
 ): Promise<SearchResult> {
-  const keyword = filters.keyword.trim();
+  const keywords = splitMultiValue(filters.keyword);
+  const cities = splitMultiValue(filters.city);
   const includeOverseasLexicon = effectiveJobScope(prefs) !== "domestic";
-  const keywordTerms = keyword ? ftsCandidateTerms(keyword, { includeOverseasLexicon }) : [];
+  // 多关键词各自展开候选词后并集（tsquery 内 OR）。
+  const keywordTerms = keywords.flatMap((kw) =>
+    ftsCandidateTerms(kw, { includeOverseasLexicon }),
+  );
   // 城市必须留在 tsquery：走全表 GIN 命中，保住城市浏览的【完整覆盖】——location 无 trigram 索引，
   // 把城市移出 tsquery 会让「城市 / 城市+类型」等无关键词搜索退化到 scan（仅最新 28k），实测只覆盖
-  // ~6% 目标城市岗（北京 1818/28201）。空 location 与别名/拼音的「软放行」由 appendSoftCityWhere 的
-  // OR 组精修（location null / 别名 ilike）——它是 JS matcher 的超集，且排除「只在正文提到该城、实际在别处」的岗。
-  const andTerms = [filters.city.trim(), filters.company.trim()].filter(Boolean);
-  const tsquery = buildTsquery(keywordTerms, andTerms);
+  // ~6% 目标城市岗（北京 1818/28201）。多城市为一个 OR 组（(北京 | 上海)），与关键词/公司 AND。
+  // 空 location 与别名/拼音的「软放行」由 appendSoftCityWhere 的 OR 组精修（location null / 别名 ilike）
+  // ——它是 JS matcher 的超集，且排除「只在正文提到该城、实际在别处」的岗。
+  const andTerms = filters.company.trim() ? [filters.company.trim()] : [];
+  const orGroups = cities.length ? [cities] : [];
+  const tsquery = buildTsquery(keywordTerms, andTerms, orGroups);
 
   if (tsquery) {
     try {
