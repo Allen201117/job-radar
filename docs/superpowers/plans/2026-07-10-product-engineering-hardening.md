@@ -269,6 +269,12 @@ git commit -m "fix(ux): cache stats and improve accessible actions"
 - Modify: `.env.example`
 - Create: `docs/runbooks/jobs-db-production-safety.md`
 - Modify: `README.md`
+- Modify: `CLAUDE.md`
+- Modify: `tsconfig.json`
+- Modify: `next-env.d.ts`
+- Modify: `lib/scoring.ts` (Next 15 nullability compatibility only)
+- Modify: `tests/scoring.test.js`
+- Modify: `docs/superpowers/plans/2026-07-10-product-engineering-hardening.md`
 - Modify: `app/api/job-actions/[jobId]/route.ts` (Next 15 async route context compatibility only)
 - Modify: `app/api/jobs/[jobId]/liveness/route.ts` (Next 15 async route context compatibility only)
 - Modify: `app/api/job-actions/[jobId]/view/route.ts` (Next 15 async route context compatibility only)
@@ -327,7 +333,7 @@ Expected: audit exits zero with zero high/critical vulnerabilities; Node and Pyt
 - [ ] **Step 5: Commit Task 4 files**
 
 ```bash
-git add package.json package-lock.json .env.example README.md docs/runbooks/jobs-db-production-safety.md docs/superpowers/plans/2026-07-10-product-engineering-hardening.md tests/next15-route-context.test.js tests/scoring.test.js lib/scoring.ts app/api/job-actions/[jobId]/route.ts app/api/job-actions/[jobId]/view/route.ts app/api/jobs/[jobId]/liveness/route.ts
+git add package.json package-lock.json .env.example README.md CLAUDE.md tsconfig.json next-env.d.ts docs/runbooks/jobs-db-production-safety.md docs/superpowers/plans/2026-07-10-product-engineering-hardening.md tests/next15-route-context.test.js tests/scoring.test.js lib/scoring.ts app/api/job-actions/[jobId]/route.ts app/api/job-actions/[jobId]/view/route.ts app/api/jobs/[jobId]/liveness/route.ts
 git commit -m "chore(security): upgrade Next and document production DB gates"
 ```
 
