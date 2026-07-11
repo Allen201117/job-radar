@@ -301,6 +301,8 @@ test("jobs-store 校招：SQL 下推校招超集预筛（job_type/url/正文/公
   assert.match(calls[0].sql, /应届/);
   assert.match(calls[0].sql, /xiaozhao\|campus/);
   assert.match(calls[0].sql, /校园招聘/);
+  // 安全剔除「job_type 自报社招」（这些在 JS 里必是社招/实习，绝不会是校招）
+  assert.match(calls[0].sql, /job_type is null or job_type !~\* '\(社招/);
 });
 
 test("jobs-store 实习：SQL 下推实习超集预筛", async () => {
