@@ -7,10 +7,10 @@
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
 | TLS 证书校验 | 代码与 secret 已配置，待生产回归 | Next、Python crawler、psql/pg_dump 工作流与校验脚本均已切到 CA + 完整身份校验；Vercel/GitHub 已配置对应 secret。本机握手正负测试通过，但生产 API/Actions 仍须在本次部署后回归。 |
-| 每日加密快照 | 未验证，限时整改 | 腾讯云控制台需要交互登录，当前发布会话无法取得证据；跟踪 [#3](https://github.com/Allen201117/job-radar/issues/3)，目标 2026-07-18。 |
-| PITR / RPO / RTO | 未验证，限时整改 | 同 [#3](https://github.com/Allen201117/job-radar/issues/3)，不得把本次应用发布写成基础设施验收完成。 |
-| 最新季度恢复演练 | 未验证 | 尚无可引用的演练记录。 |
-| 连接容量 | 仓库配置已确认，生产实时值未验证 | 仓库运维记录写明数据库 `max_connections=100`；应用连接池代码 `max: 5`。生产实时配置与当前占用仍须核验。 |
+| 每日加密快照 | 未验证；本次限时例外已批准 | 腾讯云控制台需要交互登录，当前发布会话无法取得证据；批准记录 [#3 comment](https://github.com/Allen201117/job-radar/issues/3#issuecomment-4944776071)，2026-07-18 到期。 |
+| PITR / RPO / RTO | 未验证；本次限时例外已批准 | 同一批准记录；不得把本次应用发布写成基础设施验收完成，例外到期后恢复阻塞。 |
+| 最新季度恢复演练 | 未验证；本次限时例外已批准 | 尚无可引用的演练记录，跟踪 [#3](https://github.com/Allen201117/job-radar/issues/3)。 |
+| 连接容量 | 实时值未验证；本次限时例外已批准 | 仓库记录 `max_connections=100`、应用池 `max: 5`；实时占用/告警试触发跟踪 [#3](https://github.com/Allen201117/job-radar/issues/3)。 |
 | 生产依赖 high/critical | 已确认 | `npm audit --omit=dev --audit-level=high --json` 退出 0；这不等于完成 moderate 正式风险接受。 |
 | PostCSS moderate 风险 | 已限时接受 | 0 high/critical、2 moderate；接受记录、责任人与到期日在 [#2](https://github.com/Allen201117/job-radar/issues/2)，到期 2026-08-11。 |
 
@@ -25,7 +25,7 @@
 
 ### 待部署后验证
 
-本次生产部署后必须调用 `/api/jobs/stats` 与关键只读 jobs API，手动运行 `jobs-db-migrate`/`db-report` 验证 libpq 路径，并检查 Vercel/Actions 日志中没有证书、连接和 5xx 错误。
+GitHub Actions 严格 libpq 路径已验证：[`jobs-db-migrate` 29148768528](https://github.com/Allen201117/job-radar/actions/runs/29148768528) 的 schema apply/verify 成功；[`db-report` 29148836335](https://github.com/Allen201117/job-radar/actions/runs/29148836335) 的只读质量审计成功。生产部署后仍必须调用 `/api/jobs/stats` 与关键只读 jobs API，并检查 Vercel 日志中没有证书、连接和 5xx 错误。
 
 固定叶证书轮换必须使用双信任窗口：先把旧证书与新证书组成 CA bundle 更新到 secret 并重新部署；验证应用与工作流仍可连接后再轮换数据库服务端证书；再次完成正向/负向测试后，最后从 secret 移除旧证书并重新部署。禁止先替换为仅含新证书的 secret，否则旧服务端证书会被立即拒绝。
 
@@ -86,7 +86,7 @@ RTO 目标：______
 验收证据位置：______
 ```
 
-任何空项、未签字或只有口头承诺的记录都不满足发布门。
+常规规则：任何空项、未签字或只有口头承诺的记录都不满足发布门。本次唯一例外由仓库发布负责人通过认证 GitHub 会话于 2026-07-11 批准，证据为 [#3 comment](https://github.com/Allen201117/job-radar/issues/3#issuecomment-4944776071)，仅允许本次应用发布，2026-07-18 到期；它不代表备份/PITR/RPO/RTO 已通过，到期后未关闭 #3 则所有后续发布恢复阻塞。
 
 ## 4. 季度恢复演练
 
@@ -178,20 +178,20 @@ npm audit --omit=dev --audit-level=high --json
 2. 部署不含不安全 fallback 的严格 TLS 代码到 Preview，验证 `/api/jobs/stats`、关键只读 API 与错误证书负向路径。
 3. 手动运行 `jobs-db-migrate`/`db-report`，证明 crawler/libpq/psql 路径使用同一 CA + `verify-full` 成功。
 4. 合并 main 触发生产部署，观察错误率、连接占用和查询延迟；失败立即恢复 known-good deployment，并保持整改事件开启。
-5. 备份、PITR/RPO/RTO、恢复演练和容量证据仍按 [#3](https://github.com/Allen201117/job-radar/issues/3) 限时补齐，不得在完成前声称基础设施验收通过。
+5. 本次依据 [限时发布例外](https://github.com/Allen201117/job-radar/issues/3#issuecomment-4944776071) 合并；备份、PITR/RPO/RTO、恢复演练和容量证据须在 2026-07-18 前按 #3 补齐，不得声称基础设施验收通过。例外不可复用于后续发布。
 
 ### 发布前登记门
 
 以下字段必须在发布单中登记；只能记录 URL/ID 或 secret 版本编号，禁止记录 secret 值。任一项为空或未验证时禁止发布：
 
 ```text
-Known-good deployment URL：未验证 / ______
-Known-good deployment ID：未验证 / ______
-当前 CA secret version reference：未验证 / ______
-回滚 CA secret version reference：未验证 / ______
-Vercel 项目/环境标识：未验证 / ______
-发布负责人：未验证 / ______
-登记证据位置：未验证 / ______
+Known-good deployment URL：https://job-radar-d5sguli7w-allens-projects-5408d95e.vercel.app
+Known-good GitHub deployment ID：5397279031（main 8c7e1f3）
+当前 CA secret reference：Vercel Production/Preview added 2026-07-11；GitHub Actions updated 2026-07-11T09:58:36Z
+回滚 CA secret reference：上一 known-good 不读取 CA；仅在生产故障时按 #3 的限时例外回滚，严格 TLS 整改保持开启
+Vercel 项目/环境标识：allens-projects-5408d95e/job-radar，Production + Preview
+发布负责人：仓库发布负责人（GitHub authenticated account Allen201117）
+登记证据位置：PR #4、GitHub deployment 5402830311、Actions runs 29148768528 / 29148836335、issue #3 comment 4944776071
 ```
 
 ### 建议回滚触发器
@@ -243,11 +243,11 @@ Vercel 项目/环境标识：未验证 / ______
 ## 8. 发布验收汇总
 
 ```text
-TLS 可信 CA 与身份校验：未验证 / 已确认，证据：______
-每日加密快照与保留期：未验证 / 已确认，证据：______
-PITR / RPO / RTO 签字：未验证 / 已确认，证据：______
-季度恢复演练：未验证 / 已确认，证据：______
-容量与告警试触发：未验证 / 已确认，证据：______
-发布决定：阻塞 / 放行
-发布负责人签字及日期：______
+TLS 可信 CA 与身份校验：代码/secret/Actions/Preview 已确认；生产 API 待部署后回归，证据见本节登记
+每日加密快照与保留期：未验证；本次限时例外，证据 #3 comment 4944776071
+PITR / RPO / RTO 签字：未验证；本次限时例外，证据同上
+季度恢复演练：未验证；本次限时例外，证据同上
+容量与告警试触发：未验证；本次限时例外，证据同上
+发布决定：本次应用发布限时放行；基础设施验收未通过；例外 2026-07-18 到期且不可复用
+发布负责人签字及日期：Allen201117 authenticated GitHub approval，2026-07-11
 ```
