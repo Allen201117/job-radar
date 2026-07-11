@@ -22,6 +22,16 @@ const FTS_CAP = 8000;
 const DB_PAGE = 1000;
 const SCAN_BUDGET = 28000;
 
+// 候选取数只拉「打分/精筛」真正要用的列，把纯展示/写库列（正文之外最肥的 canonical_jd_url 等）留到
+// 分页命中后再补——函数固定在美东、库在香港，跨太平洋每少传一列 × 数千行都直接缩短耗时。JS 打分/精筛
+// （scoring + jobFilterMatch + recruitmentCategory + keywordMatchTier）只读这些列，删下面几列零精度影响。
+const CANDIDATE_COLUMNS =
+  "id, source_id, company, title, location, country_code, job_scope, job_type, summary, sponsorship_signal, " +
+  "jd_url, apply_url, salary_text, posted_at, first_seen_at, last_seen_at, status, experience, education";
+// 仅命中页(≤limit 行)回补的展示/写库列（打分精筛都不读）。
+const HYDRATE_COLUMNS =
+  "content_hash, created_at, deadline, enrich_fail_count, enrich_checked_at, canonical_jd_url";
+
 export type SearchResult = {
   jobs: Array<ScoredJob & { __tier: "exact" | "related"; __match: MatchReason }>;
   total: number;
@@ -44,6 +54,45 @@ function appendSoftCityWhere(conds: string[], params: unknown[], cities: string[
     parts.push(`location ilike $${params.length}`);
   }
   conds.push(`(${parts.join(" or ")})`);
+}
+
+// 校招/实习「预筛超集」下推 SQL：这两类是「会自报家门的少数派」（校招/实习各占极小比例），JS 把无信号岗
+// 兜底成社招后再一刀切，导致 8000 候选里绝大多数被传过来又被丢。这里在 SQL 侧先只保留「可能是校招/实习」
+// 的行——严格是 recruitmentCategory 判定的**超集**（只加正向信号、不做任何排除），最终判定仍由 JS 权威执行，
+// 因此零精度损失，只是别再把 97% 的社招岗跨洋传过来。社招是默认态（大头），不下推。
+// ⚠️ 正则须与 china-keyword-expansion 的 sourceDeclaredCategory / hasStrongCampusSignal / hasInternSignal 对齐，
+// 改一处两处同改，否则可能漏掉真校招/实习（精度红线）。
+function appendRecruitmentPrefilter(conds: string[], jobType: string) {
+  if (jobType === "校招") {
+    conds.push(
+      "(job_type ~* '(校招|校园招聘|应届|管培生|管理培训生|留学生专项|campus|new\\s+grad|university\\s+graduate|entry[-\\s]?level)'" +
+        " or jd_url ~* '(xiaozhao|campus)'" +
+        " or (coalesce(title,'')||' '||coalesce(summary,'')) ~* '(应届|[0-9]{2,4}届|校园招聘|校招|管培生|管理培训生|留学生专项|new\\s?grads?|university\\s+graduate|entry[-\\s]?level|campus\\s?(recruit|hiring)|graduate\\s+program)'" +
+        " or company ~* '(校招|校园招聘)')",
+    );
+  } else if (jobType === "实习") {
+    conds.push(
+      "(job_type ~* '(实习|intern)' or title ~* '(实习|shixi|intern)' or jd_url ~* '(shixi|intern)')",
+    );
+  }
+}
+
+// 命中页回补 HYDRATE_COLUMNS：候选阶段没拉这些展示列，排序分页定下 ≤limit 行后按 id 批量补齐再合并。
+async function hydratePageColumns(
+  page: Array<ScoredJob & { __tier: "exact" | "related"; __match: MatchReason }>,
+): Promise<void> {
+  if (!page.length) return;
+  const ids = page.map((j) => j.id);
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(",");
+  const extra = (await jobsQuery(
+    `select id, ${HYDRATE_COLUMNS} from jobs where id in (${placeholders})`,
+    ids,
+  )) as Array<Record<string, unknown>>;
+  const byId = new Map(extra.map((r) => [r.id as string, r]));
+  for (const j of page) {
+    const e = byId.get(j.id);
+    if (e) Object.assign(j, e);
+  }
 }
 
 // FTS 路径：search_doc @@ to_tsquery 收窄候选（pg 无 1000 行上限，一次取到 FTS_CAP）→ JS 精筛分层。
@@ -69,17 +118,21 @@ async function searchViaFTS(
     params.push(`%${company}%`);
     conds.push(`company ilike $${params.length}`);
   }
+  // 校招/实习超集下推：只保留可能命中的行，别把大量社招岗跨洋传过来（JS 仍权威判定）。
+  appendRecruitmentPrefilter(conds, filters.jobType);
   const rows = annotateSourceAdapter(
     await jobsQuery(
-      `select ${JOB_COLUMNS} from jobs where ${conds.join(" and ")} limit ${FTS_CAP}`,
+      `select ${CANDIDATE_COLUMNS} from jobs where ${conds.join(" and ")} limit ${FTS_CAP}`,
       params,
     ),
     adapterBySource,
   );
   const ranked = annotateAndRank(rows, filters, prefs, actions);
   const breakdown = countMatchBreakdown(ranked);
+  const page = ranked.slice(offset, offset + limit);
+  await hydratePageColumns(page); // 命中页回补展示列（候选阶段省传）
   return {
-    jobs: ranked.slice(offset, offset + limit),
+    jobs: page,
     total: ranked.length,
     exactCount: breakdown.exact,
     relatedSameFunction: breakdown.relatedSameFunction,
@@ -106,6 +159,7 @@ async function searchViaScan(
   const conds = ["status = 'active'"];
   const params: unknown[] = [];
   appendJobScopeWhere(conds, params, prefs, filters);
+  appendRecruitmentPrefilter(conds, filters.jobType); // 校招/实习超集下推，扫描也少翻无关行
   while ((filters.sortBy === "match" || matched.length <= need) && !exhausted && off < SCAN_BUDGET) {
     const rows: any[] = annotateSourceAdapter(
       await jobsQuery(

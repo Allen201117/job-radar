@@ -48,17 +48,12 @@ export async function GET(request: NextRequest) {
   let preferences: UserPreferences | null = null;
   let actions: JobAction[] = [];
   if (user) {
-    const { data: prefs } = await supabase
-      .from("user_preferences")
-      .select("*")
-      .eq("user_id", user.id)
-      .single();
+    // 偏好与操作互不依赖 → 并行拉，少一趟跨区往返（函数在美东、Supabase 跨区，串行往返会叠加固定开销）。
+    const [{ data: prefs }, { data: acts }] = await Promise.all([
+      supabase.from("user_preferences").select("*").eq("user_id", user.id).single(),
+      supabase.from("job_actions").select("*").eq("user_id", user.id),
+    ]);
     preferences = (prefs as UserPreferences | null) ?? null;
-
-    const { data: acts } = await supabase
-      .from("job_actions")
-      .select("*")
-      .eq("user_id", user.id);
     actions = (acts as JobAction[]) || [];
   }
 

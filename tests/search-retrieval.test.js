@@ -292,3 +292,45 @@ test("jobs-store 多城市：tsquery OR 组 + 软城市 OR 覆盖所有选中城
   assert.ok(calls[0].params.includes("%beijing%"));
   assert.ok(calls[0].params.includes("%shanghai%"));
 });
+
+test("jobs-store 校招：SQL 下推校招超集预筛（job_type/url/正文/公司 信号）", async () => {
+  const calls = [];
+  const { searchJobsStore } = loadJobsStore(async (sql, params) => { calls.push({ sql, params }); return []; });
+  await searchJobsStore({ ...filters, jobType: "校招", keyword: "产品经理" }, null, [], 0, 10);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].sql, /应届/);
+  assert.match(calls[0].sql, /xiaozhao\|campus/);
+  assert.match(calls[0].sql, /校园招聘/);
+});
+
+test("jobs-store 实习：SQL 下推实习超集预筛", async () => {
+  const calls = [];
+  const { searchJobsStore } = loadJobsStore(async (sql, params) => { calls.push({ sql, params }); return []; });
+  await searchJobsStore({ ...filters, jobType: "实习", keyword: "产品经理" }, null, [], 0, 10);
+  assert.match(calls[0].sql, /实习\|intern/);
+  assert.match(calls[0].sql, /shixi/);
+});
+
+test("jobs-store 社招不下推预筛（社招=默认态·大头，下推无益）", async () => {
+  const calls = [];
+  const { searchJobsStore } = loadJobsStore(async (sql, params) => { calls.push({ sql, params }); return []; });
+  await searchJobsStore({ ...filters, jobType: "社招", keyword: "产品经理" }, null, [], 0, 10);
+  assert.doesNotMatch(calls[0].sql, /应届|xiaozhao/);
+});
+
+test("jobs-store 命中页回补展示列：候选省传 canonical_jd_url，page 再补齐并合并", async () => {
+  const calls = [];
+  const { searchJobsStore } = loadJobsStore(async (sql) => {
+    calls.push({ sql });
+    if (/select id, content_hash/i.test(sql)) {
+      return [{ id: "j1", deadline: "2025-12-31", canonical_jd_url: "https://x/canon" }];
+    }
+    return [job({ id: "j1", title: "产品经理" })];
+  });
+  const r = await searchJobsStore({ ...filters, keyword: "产品经理" }, null, [], 0, 10);
+  const cand = calls.find((c) => !/content_hash/.test(c.sql));
+  assert.doesNotMatch(cand.sql, /canonical_jd_url/); // 候选不拉最肥的展示列
+  assert.equal(calls.length, 2); // 候选 + 命中页回补
+  assert.equal(r.jobs[0].deadline, "2025-12-31"); // 回补生效
+  assert.equal(r.jobs[0].canonical_jd_url, "https://x/canon");
+});
