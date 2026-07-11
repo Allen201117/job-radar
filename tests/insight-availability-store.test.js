@@ -89,11 +89,28 @@ test("availability degrades an HK count error without hiding real insights", asy
   assert.deepEqual(calls, { store: 1, rpc: 0, from: 2 });
 });
 
-test("availability derives from profile-matched company count variants", async () => {
+test("availability derives from profile-matched company-name variants", async () => {
   const profile = { ...PROFILE, company: "腾讯" };
   const { route, calls } = loadAvailabilityRoute({
     storeEnabled: true,
     storeCounts: [{ company: "腾讯深圳", job_count: 3 }],
+    profile,
+  });
+  const response = await route.GET(requestFor("腾讯"));
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    ok: true,
+    availability: { 腾讯: { real: 1, derived: true } },
+  });
+  assert.deepEqual(calls, { store: 1, rpc: 0, from: 2 });
+});
+
+test("availability derives from profile aliases in company counts", async () => {
+  const profile = { ...PROFILE, company: "腾讯", aliases: ["微信"] };
+  const { route, calls } = loadAvailabilityRoute({
+    storeEnabled: true,
+    storeCounts: [{ company: "微信科技", job_count: 3 }],
     profile,
   });
   const response = await route.GET(requestFor("腾讯"));
