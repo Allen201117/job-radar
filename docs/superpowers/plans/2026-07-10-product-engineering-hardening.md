@@ -269,6 +269,10 @@ git commit -m "fix(ux): cache stats and improve accessible actions"
 - Modify: `.env.example`
 - Create: `docs/runbooks/jobs-db-production-safety.md`
 - Modify: `README.md`
+- Modify: `app/api/job-actions/[jobId]/route.ts` (Next 15 async route context compatibility only)
+- Modify: `app/api/jobs/[jobId]/liveness/route.ts` (Next 15 async route context compatibility only)
+- Modify: `app/api/job-actions/[jobId]/view/route.ts` (Next 15 async route context compatibility only)
+- Create: `tests/next15-route-context.test.js`
 
 - [ ] **Step 1: Capture the failing security gate**
 
@@ -285,8 +289,10 @@ Expected before implementation: non-zero exit with at least one high-severity di
 Run:
 
 ```bash
-npm install next@15.5.16 eslint-config-next@15.5.16
+npm install next@15.5.18 eslint-config-next@15.5.18
 ```
+
+执行时最新 advisory 将安全修复下限推进到 `15.5.18`，因此在不跨越 Next 15 支持线、也不升级 React 19 的前提下，将原计划版本更新为 `15.5.18`。
 
 Keep React 18 unless the package manager or build proves React 19 is required. Do not use `npm audit fix --force`.
 
@@ -321,7 +327,7 @@ Expected: audit has zero high/critical vulnerabilities; Node and Python tests pa
 - [ ] **Step 5: Commit Task 4 files**
 
 ```bash
-git add package.json package-lock.json .env.example README.md docs/runbooks/jobs-db-production-safety.md
+git add package.json package-lock.json .env.example README.md docs/runbooks/jobs-db-production-safety.md docs/superpowers/plans/2026-07-10-product-engineering-hardening.md tests/next15-route-context.test.js tests/scoring.test.js lib/scoring.ts app/api/job-actions/[jobId]/route.ts app/api/job-actions/[jobId]/view/route.ts app/api/jobs/[jobId]/liveness/route.ts
 git commit -m "chore(security): upgrade Next and document production DB gates"
 ```
 
@@ -355,4 +361,3 @@ git diff --check origin/main...HEAD
 ```
 
 Expected: every command exits 0, with no high/critical vulnerability and no new lint warning.
-

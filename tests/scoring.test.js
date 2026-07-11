@@ -121,6 +121,20 @@ test("returns structured match reasons without changing the existing score", () 
   assert.deepEqual(scored.match_reasons, result.match_reasons);
 });
 
+test("unrecognized locations do not throw or produce a location match", () => {
+  const job = makeJob("job-unknown-location", "产品经理", "未知园区-α", "负责产品规划");
+  const prefs = {
+    ...makePreferences(),
+    target_roles: [],
+    target_keywords: [],
+    target_companies: [],
+    target_locations: ["未知园区-β"],
+  };
+
+  assert.doesNotThrow(() => scoreJob(job, prefs, []));
+  assert.equal(scoreJob(job, prefs, []).match_reasons.some((reason) => reason.type === "location"), false);
+});
+
 test("returns no structured reasons when preferences or matches are absent", () => {
   const job = makeJob("job-no-reasons", "行政专员", "北京", "负责行政事务");
   const emptyPrefs = {
