@@ -98,5 +98,57 @@ class BeisenHttpxTest(unittest.TestCase):
             self.assertIsNone(a._httpx_fetch("https://x.zhiye.com/social/jobs"))
 
 
+class BeisenFetchRoutingTest(unittest.TestCase):
+    """fetch() 对**未缓存**租户：先 httpx 抓完整列表，浏览器只探路由；不再让残缺的 _fetch_paginated
+    抓列表把长江存储/追觅这类几百上千岗的真源判 0。修复回归。"""
+
+    def setUp(self):
+        self._saved = dict(china_ats._BEISEN_ROUTE_CACHE)
+        china_ats._BEISEN_ROUTE_CACHE.clear()
+
+    def tearDown(self):
+        china_ats._BEISEN_ROUTE_CACHE.clear()
+        china_ats._BEISEN_ROUTE_CACHE.update(self._saved)
+
+    def test_uncached_uses_httpx_list_then_discovers_route_no_paginate(self):
+        a = BeisenAdapter()
+        list_json = json.dumps({"_intercepted": [{"Data": [{"Id": "g1"}], "Count": 1}]})
+        with mock.patch.object(BeisenAdapter, "_httpx_fetch", return_value=list_json) as httpx_fn, \
+             mock.patch.object(BeisenAdapter, "_discover_detail_route",
+                               return_value="https://x.zhiye.com/social/detail") as disc, \
+             mock.patch.object(BeisenAdapter, "_fetch_paginated",
+                               side_effect=AssertionError("不应回退浏览器抓列表")) as pag:
+            out = a.fetch("https://x.zhiye.com/social")
+        self.assertEqual(out, list_json)                       # 返回 httpx 完整列表
+        self.assertEqual(a._detail_route, "https://x.zhiye.com/social/detail")
+        httpx_fn.assert_called_once()
+        disc.assert_called_once()
+        pag.assert_not_called()                                # 未走残缺的浏览器抓列表
+        self.assertIn("x.zhiye.com", china_ats._BEISEN_ROUTE_CACHE)   # 路由已缓存
+
+    def test_uncached_httpx_miss_falls_back_to_browser(self):
+        a = BeisenAdapter()
+        paginated = json.dumps({"_intercepted": [{"Data": [{"Id": "g9"}], "Count": 1}]})
+        with mock.patch.object(BeisenAdapter, "_httpx_fetch", return_value=None), \
+             mock.patch.object(BeisenAdapter, "_fetch_paginated", return_value=paginated) as pag, \
+             mock.patch.object(BeisenAdapter, "_discover_detail_route", return_value=None):
+            out = a.fetch("https://y.zhiye.com/social")
+        self.assertEqual(out, paginated)                       # httpx 没打通 → 回退浏览器全流程
+        pag.assert_called_once()
+
+    def test_cached_route_stays_pure_httpx(self):
+        china_ats._BEISEN_ROUTE_CACHE["z.zhiye.com"] = "https://z.zhiye.com/social/detail"
+        a = BeisenAdapter()
+        list_json = json.dumps({"_intercepted": [{"Data": [{"Id": "g2"}], "Count": 1}]})
+        with mock.patch.object(BeisenAdapter, "_httpx_fetch", return_value=list_json), \
+             mock.patch.object(BeisenAdapter, "_discover_detail_route",
+                               side_effect=AssertionError("已缓存不该再探路由")), \
+             mock.patch.object(BeisenAdapter, "_fetch_paginated",
+                               side_effect=AssertionError("已缓存不该开浏览器")):
+            out = a.fetch("https://z.zhiye.com/social")
+        self.assertEqual(out, list_json)
+        self.assertEqual(a._detail_route, "https://z.zhiye.com/social/detail")
+
+
 if __name__ == "__main__":
     unittest.main()
