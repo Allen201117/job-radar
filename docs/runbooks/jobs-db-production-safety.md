@@ -6,24 +6,25 @@
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| TLS 证书校验 | 未验证，发布阻塞 | 当前 `lib/jobs-store/client.ts` 使用 `rejectUnauthorized: false`，只加密、不校验证书身份；这不是已修复状态。 |
-| 每日加密快照 | 未验证 | 备份频率、加密、保留期、责任人和证据位置均待平台负责人核验。 |
-| PITR / RPO / RTO | 未验证，需负责人签字 | 必须填写恢复能力与可接受目标后才能放行。 |
+| TLS 证书校验 | 已配置，待生产回归 | 2026-07-11 已改为 `rejectUnauthorized: true`，Vercel 已配置固定证书与证书服务器名；本机 OpenSSL 正向校验通过、错误主机名失败，生产只读 API 仍须在本次部署后回归。 |
+| 每日加密快照 | 未验证，限时整改 | 腾讯云控制台需要交互登录，当前发布会话无法取得证据；跟踪 [#3](https://github.com/Allen201117/job-radar/issues/3)，目标 2026-07-18。 |
+| PITR / RPO / RTO | 未验证，限时整改 | 同 [#3](https://github.com/Allen201117/job-radar/issues/3)，不得把本次应用发布写成基础设施验收完成。 |
 | 最新季度恢复演练 | 未验证 | 尚无可引用的演练记录。 |
 | 连接容量 | 仓库配置已确认，生产实时值未验证 | 仓库运维记录写明数据库 `max_connections=100`；应用连接池代码 `max: 5`。生产实时配置与当前占用仍须核验。 |
 | 生产依赖 high/critical | 已确认 | `npm audit --omit=dev --audit-level=high --json` 退出 0；这不等于完成 moderate 正式风险接受。 |
-| PostCSS moderate 风险 | 已评估，待正式风险接受；发布阻塞 | raw audit 的 2 个 moderate 尚缺责任人、日期、到期、批准签字和证据，见第 6 节。 |
+| PostCSS moderate 风险 | 已限时接受 | 0 high/critical、2 moderate；接受记录、责任人与到期日在 [#2](https://github.com/Allen201117/job-radar/issues/2)，到期 2026-08-11。 |
 
 ## 1. TLS
 
-### 已确认
+### 已确认（2026-07-11）
 
-- 当前应用连接池显式配置 `ssl: { rejectUnauthorized: false }`。
-- `.env.example` 中的 `JOBS_DATABASE_SSL_CA` 只是说明性占位；当前连接代码尚未读取它，不能声称可信 CA 已启用。
+- `lib/jobs-store/client.ts` 已读取 `JOBS_DATABASE_SSL_CA` 与 `JOBS_DATABASE_TLS_SERVERNAME`，并强制 `rejectUnauthorized: true`；缺少 CA 时拒绝连接，不再静默降级。
+- Vercel Production 与 Preview 已配置上述两个敏感变量；变量值不得进入仓库或发布日志。
+- 当前自签证书只声明 `localhost.localdomain`，因此通过固定叶证书作为信任根，并显式校验该证书服务器名。OpenSSL 以固定证书 + 正确服务器名返回 0，以公网主机名校验返回 hostname mismatch，证明负向门生效。
 
-### 未验证与发布阻塞
+### 待部署后验证
 
-生产环境必须先由数据库/平台负责人提供可信 CA，并通过受控 secret 配置。随后需要一次协调的代码与 secret 上线，使客户端执行完整证书校验。只有上线验证通过后，才能移除现有的不安全兼容配置。当前 `rejectUnauthorized: false` 是未解决的发布阻塞，不能因为链路已加密而豁免。
+本次生产部署后必须调用 `/api/jobs/stats` 与关键只读 jobs API，并检查 Vercel 日志中没有证书、连接和 5xx 错误。后续数据库证书轮换必须先更新固定证书 secret，再部署验证；直接轮换服务端证书会让应用按预期拒绝连接。
 
 ### 验收证据
 
@@ -162,7 +163,7 @@ npm audit --omit=dev --audit-level=high --json
 复查证据位置：未验证 / ______
 ```
 
-正式接受门：以上字段不得为空；到期前必须升级到修复版本或重新评估并取得新签字；每周复查必须附 raw audit、公告状态和运行路径复核证据。任一条件不满足时恢复“发布阻塞”。
+正式接受记录：[#2](https://github.com/Allen201117/job-radar/issues/2)。接受日期 2026-07-11，责任人/批准人为仓库发布负责人，下次复查 2026-07-18，到期 2026-08-11。到期前必须升级到修复版本或重新评估并取得新签字；每周复查必须附 raw audit、公告状态和运行路径复核证据。任一条件不满足时恢复“发布阻塞”。
 
 维护项：Next 15 的 `next lint` 已提示将在 Next 16 移除，后续应从 ESLint 8 / `next lint` 迁移到受支持的 ESLint CLI。该维护项不阻塞本轮 Next 15.5.18 上线，本任务不实施迁移。
 

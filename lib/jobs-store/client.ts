@@ -2,6 +2,7 @@
 // 仅 server（API route / RSC / server action）用 —— 绝不能进客户端 bundle（含 JOBS_DATABASE_URL）。
 import "server-only";
 import { Pool, types, type QueryResultRow } from "pg";
+import { buildJobsDatabaseSsl } from "./tls-options.js";
 
 // ⚠️ 根因修复（2026-06-26 生产事故）：node-pg 默认把 timestamptz(OID 1184)/timestamp(1114) 解析成 JS **Date 对象**，
 // 而全库代码（含 Supabase/PostgREST 路径）一律假设这些时间列是 **ISO 字符串**（`new Date(str)` / `String(str)` /
@@ -20,9 +21,8 @@ function makePool(): Pool {
   if (!url) {
     throw new Error("JOBS_DATABASE_URL 未配置（自建香港 jobs 库连接串）");
   }
-  // ⚠️ 不能直接传 connectionString：node-pg 的 pg-connection-string 把 URL 里的 sslmode=require 当成
-  //   verify-full（校验 CA）→ 拒掉自建库的自签证书（"self-signed certificate"），覆盖掉 ssl 选项。
-  //   故解析成显式字段 + 显式 ssl:{rejectUnauthorized:false}（加密但不校验，自签库正确做法）。
+  // 不能直接传 connectionString：URL 内的 sslmode 会覆盖显式 TLS 选项。
+  // 因此拆成连接字段，并强制使用受控 CA + 证书服务器名做完整验证。
   const u = new URL(url);
   const pool = new Pool({
     host: u.hostname,
@@ -30,7 +30,7 @@ function makePool(): Pool {
     user: decodeURIComponent(u.username),
     password: decodeURIComponent(u.password),
     database: u.pathname.replace(/^\//, "") || "jobradar_jobs",
-    ssl: { rejectUnauthorized: false },
+    ssl: buildJobsDatabaseSsl(process.env, u.hostname),
     max: 5,
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 8_000,
