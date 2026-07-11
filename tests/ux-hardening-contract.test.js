@@ -42,10 +42,28 @@ function createStatsSupabase({ rpcResult, recentResult, sourcesResult } = {}) {
   };
 }
 
-function loadStatsRoute({ storeEnabled = false, supabase, countValidActive, countRecentActive } = {}) {
+function loadStatsRoute({
+  storeEnabled = false,
+  supabase,
+  countValidActive,
+  countRecentActive,
+  onCreateServiceClient,
+  onCreateServerSupabase,
+  serviceClientError,
+} = {}) {
   return loadRoute("app/api/jobs/stats/route.ts", {
     "@/lib/auth": {
-      createServerSupabase: async () => supabase ?? createStatsSupabase(),
+      createServerSupabase: async () => {
+        onCreateServerSupabase?.();
+        throw new Error("stats must not use the cookie-bound Supabase client");
+      },
+    },
+    "@/lib/supabaseService": {
+      createServiceClient: () => {
+        onCreateServiceClient?.();
+        if (serviceClientError) throw serviceClientError;
+        return supabase ?? createStatsSupabase();
+      },
     },
     "@/lib/jobs-store/read": {
       jobsStoreEnabled: () => storeEnabled,
@@ -85,6 +103,42 @@ test("jobs stats GET returns its real body with a one-minute CDN cache policy", 
     response.headers.get("cache-control"),
     "public, s-maxage=60, stale-while-revalidate=300",
   );
+});
+
+test("jobs stats uses one fixed service aggregation identity for anonymous and logged-in cache semantics", async () => {
+  let serviceClients = 0;
+  let cookieClients = 0;
+  const route = loadStatsRoute({
+    supabase: createStatsSupabase({
+      rpcResult: { data: 27, error: null },
+      recentResult: { count: 19, error: null },
+      sourcesResult: { count: 7, error: null },
+    }),
+    onCreateServiceClient: () => { serviceClients += 1; },
+    onCreateServerSupabase: () => { cookieClients += 1; },
+  });
+
+  const anonymous = await route.GET();
+  const loggedIn = await route.GET();
+  const expected = { ok: true, validActive: 27, recent24h: 19, sources: 7 };
+
+  assert.deepEqual(await anonymous.json(), expected);
+  assert.deepEqual(await loggedIn.json(), expected);
+  assert.equal(serviceClients, 2);
+  assert.equal(cookieClients, 0);
+  assert.equal(anonymous.headers.get("cache-control"), loggedIn.headers.get("cache-control"));
+});
+
+test("jobs stats source has no cookie-bound or user-data dependency", () => {
+  const statsRoute = read("../app/api/jobs/stats/route.ts");
+  assert.match(statsRoute, /createServiceClient/);
+  assert.doesNotMatch(statsRoute, /createServerSupabase|cookies?\s*\(/);
+  assert.doesNotMatch(statsRoute, /auth\.getUser|user_metadata|candidate_profiles|user_preferences/);
+});
+
+test("jobs stats returns an uncached 500 when fixed service client initialization fails", async () => {
+  const route = loadStatsRoute({ serviceClientError: new Error("missing service credentials") });
+  await assertUncachedStatsFailure(await route.GET());
 });
 
 for (const scenario of [
