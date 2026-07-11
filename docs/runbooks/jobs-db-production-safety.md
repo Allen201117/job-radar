@@ -6,7 +6,7 @@
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| TLS 证书校验 | 代码与 secret 已配置，待生产回归 | Next、Python crawler、psql/pg_dump 工作流与校验脚本均已切到 CA + 完整身份校验；Vercel/GitHub 已配置对应 secret。本机握手正负测试通过，但生产 API/Actions 仍须在本次部署后回归。 |
+| TLS 证书校验 | Actions 已验证，待生产 API 回归 | Next、Python crawler、psql/pg_dump 工作流与校验脚本均已切到 CA + 完整身份校验；Vercel/GitHub 已配置对应 secret，严格 TLS 的迁移与只读审计 Actions 已成功。 |
 | 每日加密快照 | 未验证；本次限时例外已批准 | 腾讯云控制台需要交互登录，当前发布会话无法取得证据；批准记录 [#3 comment](https://github.com/Allen201117/job-radar/issues/3#issuecomment-4944776071)，2026-07-18 到期。 |
 | PITR / RPO / RTO | 未验证；本次限时例外已批准 | 同一批准记录；不得把本次应用发布写成基础设施验收完成，例外到期后恢复阻塞。 |
 | 最新季度恢复演练 | 未验证；本次限时例外已批准 | 尚无可引用的演练记录，跟踪 [#3](https://github.com/Allen201117/job-radar/issues/3)。 |
