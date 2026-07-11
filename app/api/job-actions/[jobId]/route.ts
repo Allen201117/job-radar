@@ -25,11 +25,11 @@ async function fetchJobById(supabase: ServerSupabase, jobId: string) {
   return data || null;
 }
 
-export async function PUT(request: NextRequest, { params }: { params: { jobId: string } }) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
   const auth = await requireUser();
   if (auth.error) return auth.error;
 
-  const jobId = params.jobId;
+  const { jobId } = await params;
   const body = await request.json().catch(() => ({}));
   const parsed = parseActionInput(jobId, body);
   if (!parsed.ok) {
@@ -74,10 +74,11 @@ export async function PUT(request: NextRequest, { params }: { params: { jobId: s
 const STAGES = new Set(["applied", "assessment", "interview", "offer", "closed"]);
 
 // PATCH：更新已投递岗位的进展阶段（漏斗中段最小版）。只动 action='applied' 的自有行（RLS 双保险）。
-export async function PATCH(request: NextRequest, { params }: { params: { jobId: string } }) {
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
   const auth = await requireUser();
   if (auth.error) return auth.error;
 
+  const { jobId } = await params;
   const body = await request.json().catch(() => ({}));
   const stage = body?.stage ?? null;
   if (stage !== null && (typeof stage !== "string" || !STAGES.has(stage))) {
@@ -88,7 +89,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { jobId:
     .from("job_actions")
     .update({ stage, stage_updated_at: new Date().toISOString() })
     .eq("user_id", auth.user.id)
-    .eq("job_id", params.jobId)
+    .eq("job_id", jobId)
     .eq("action", "applied")
     .select("job_id");
   if (error) {

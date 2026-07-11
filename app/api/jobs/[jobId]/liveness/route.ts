@@ -28,11 +28,11 @@ function raceTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([p, new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))]);
 }
 
-export async function POST(request: NextRequest, { params }: { params: { jobId: string } }) {
+export async function POST(request: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
   const auth = await requireUser();
   if (auth.error) return auth.error;
 
-  const jobId = params.jobId;
+  const { jobId } = await params;
   if (!isUuid(jobId)) return NextResponse.json({ ok: true, result: "unknown" });
 
   const useStore = jobsStoreEnabled();

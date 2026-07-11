@@ -288,8 +288,8 @@ function locationMatchesTarget(jobLocation: string | null | undefined, target: s
   if (!rawLocation || !rawTarget) return false;
   if (rawLocation.toLowerCase().includes(rawTarget.toLowerCase())) return true;
 
-  const normalizedLocation = normalizeChinaCity(rawLocation).toLowerCase();
-  const normalizedTarget = normalizeChinaCity(rawTarget).toLowerCase();
+  const normalizedLocation = (normalizeChinaCity(rawLocation) || "").toLowerCase();
+  const normalizedTarget = (normalizeChinaCity(rawTarget) || "").toLowerCase();
   return Boolean(normalizedLocation && normalizedTarget && normalizedLocation === normalizedTarget);
 }
 

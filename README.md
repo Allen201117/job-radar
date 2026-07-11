@@ -112,7 +112,7 @@ BAIDU_QIANFAN_SEARCH_DISABLED=false
 
 Supabase 迁移由 CI 自动 apply：push 到 `main` 且改动 `supabase/migrations/**` 时，`.github/workflows/migrate.yml` 会执行前缀校验并应用尚未执行的迁移，不要再按 README 逐条手动运行 SQL。
 
-当前仓库共有 **174** 个 Supabase SQL 迁移；明细与顺序以 `supabase/migrations/` 为准。计数命令：
+当前仓库共有 **183** 个 Supabase SQL 迁移；明细与顺序以 `supabase/migrations/` 为准。计数命令：
 
 ```bash
 ls supabase/migrations/*.sql | wc -l
@@ -187,6 +187,8 @@ python3 crawler/run.py --source jd
 11. A/B 用户 profile 和 job_actions 隔离。
 
 ## 部署
+
+生产岗位库上线前必须完成并留存 [`docs/runbooks/jobs-db-production-safety.md`](docs/runbooks/jobs-db-production-safety.md) 中的 TLS、备份、恢复与容量验收证据；未验证项不得视为已满足。
 
 ### 前端 — Vercel
 
