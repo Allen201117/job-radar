@@ -23,6 +23,8 @@ jobs:
       - name: Purge expired jobs + vacuum
         env:
           JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
@@ -30,6 +32,7 @@ jobs:
             echo "::error::JOBS_DATABASE_URL secret 未配置（与 db-migrate 同一个）。"
             exit 1
           fi
+          source scripts/enable-jobs-db-strict-tls.sh
           started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           deleted_count="$(
             PGOPTIONS="-c statement_timeout=1800000" \

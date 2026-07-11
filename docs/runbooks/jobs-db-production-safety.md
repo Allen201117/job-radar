@@ -6,7 +6,7 @@
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| TLS 证书校验 | 已配置，待生产回归 | 2026-07-11 已改为 `rejectUnauthorized: true`，Vercel 已配置固定证书与证书服务器名；本机 OpenSSL 正向校验通过、错误主机名失败，生产只读 API 仍须在本次部署后回归。 |
+| TLS 证书校验 | 代码与 secret 已配置，待生产回归 | Next、Python crawler、psql/pg_dump 工作流与校验脚本均已切到 CA + 完整身份校验；Vercel/GitHub 已配置对应 secret。本机握手正负测试通过，但生产 API/Actions 仍须在本次部署后回归。 |
 | 每日加密快照 | 未验证，限时整改 | 腾讯云控制台需要交互登录，当前发布会话无法取得证据；跟踪 [#3](https://github.com/Allen201117/job-radar/issues/3)，目标 2026-07-18。 |
 | PITR / RPO / RTO | 未验证，限时整改 | 同 [#3](https://github.com/Allen201117/job-radar/issues/3)，不得把本次应用发布写成基础设施验收完成。 |
 | 最新季度恢复演练 | 未验证 | 尚无可引用的演练记录。 |
@@ -19,12 +19,15 @@
 ### 已确认（2026-07-11）
 
 - `lib/jobs-store/client.ts` 已读取 `JOBS_DATABASE_SSL_CA` 与 `JOBS_DATABASE_TLS_SERVERNAME`，并强制 `rejectUnauthorized: true`；缺少 CA 时拒绝连接，不再静默降级。
-- Vercel Production 与 Preview 已配置上述两个敏感变量；变量值不得进入仓库或发布日志。
+- `crawler/jobs_db.py` 强制 libpq `verify-full`；IP 端点通过 `hostaddr` 连接、通过逻辑 `host` 校验证书名。所有直接调用 psql/pg_dump 的 jobs 工作流先 source `scripts/enable-jobs-db-strict-tls.sh`，两个数据库校验脚本也已移除 `rejectUnauthorized:false`。
+- Vercel Production/Preview 与 GitHub Actions 已配置上述两个敏感变量；GitHub secret 元数据更新时间为 2026-07-11，变量值不得进入仓库或发布日志。
 - 当前自签证书只声明 `localhost.localdomain`，因此通过固定叶证书作为信任根，并显式校验该证书服务器名。OpenSSL 以固定证书 + 正确服务器名返回 0，以公网主机名校验返回 hostname mismatch，证明负向门生效。
 
 ### 待部署后验证
 
-本次生产部署后必须调用 `/api/jobs/stats` 与关键只读 jobs API，并检查 Vercel 日志中没有证书、连接和 5xx 错误。后续数据库证书轮换必须先更新固定证书 secret，再部署验证；直接轮换服务端证书会让应用按预期拒绝连接。
+本次生产部署后必须调用 `/api/jobs/stats` 与关键只读 jobs API，手动运行 `jobs-db-migrate`/`db-report` 验证 libpq 路径，并检查 Vercel/Actions 日志中没有证书、连接和 5xx 错误。
+
+固定叶证书轮换必须使用双信任窗口：先把旧证书与新证书组成 CA bundle 更新到 secret 并重新部署；验证应用与工作流仍可连接后再轮换数据库服务端证书；再次完成正向/负向测试后，最后从 secret 移除旧证书并重新部署。禁止先替换为仅含新证书的 secret，否则旧服务端证书会被立即拒绝。
 
 ### 验收证据
 
@@ -151,16 +154,16 @@ order by count(*) desc;
 npm audit --omit=dev --audit-level=high --json
 ```
 
-该命令用于让 high/critical 为 0 时退出 0；通过该门不等于完成 moderate 正式风险接受。另行读取 raw audit 可见 2 个 moderate，均由 Next.js 内嵌 PostCSS 8.4.31 引起。当前仓库检查未发现将不可信 CSS AST stringify 后注入 `<style>` 的运行时路径，因此风险状态为“已评估，待正式风险接受”。在下列字段全部登记并由负责人签字前，该项仍是发布阻塞。每周及每次依赖升级必须复查公告、运行路径和修复版本。禁止执行 `npm audit fix --force`，其建议可能错误降级当前支持线。
+该命令用于让 high/critical 为 0 时退出 0；通过该门不等于自动接受 moderate。另行读取 raw audit 可见 2 个 moderate，均由 Next.js 内嵌 PostCSS 8.4.31 引起。当前仓库检查未发现将不可信 CSS AST stringify 后注入 `<style>` 的运行时路径；本轮已按下列记录完成限时接受。每周及每次依赖升级必须复查公告、运行路径和修复版本。禁止执行 `npm audit fix --force`，其建议可能错误降级当前支持线。
 
 ```text
-风险范围：未验证 / ______
-临时风险责任人：未验证 / ______
-接受日期：未验证 / ______
-复查日期：未验证 / ______
-风险到期日：未验证 / ______
-批准人及签字：未验证 / ______
-复查证据位置：未验证 / ______
+风险范围：Next.js 内嵌 PostCSS 的 GHSA-qx2v-qp2m-jg93
+临时风险责任人：仓库发布负责人
+接受日期：2026-07-11
+复查日期：2026-07-18
+风险到期日：2026-08-11
+批准人及签字：仓库发布负责人通过认证 GitHub 会话创建接受记录
+复查证据位置：https://github.com/Allen201117/job-radar/issues/2
 ```
 
 正式接受记录：[#2](https://github.com/Allen201117/job-radar/issues/2)。接受日期 2026-07-11，责任人/批准人为仓库发布负责人，下次复查 2026-07-18，到期 2026-08-11。到期前必须升级到修复版本或重新评估并取得新签字；每周复查必须附 raw audit、公告状态和运行路径复核证据。任一条件不满足时恢复“发布阻塞”。
@@ -169,12 +172,13 @@ npm audit --omit=dev --audit-level=high --json
 
 ## 7. 上线顺序与回滚
 
-上线必须按以下顺序执行：
+本轮由不安全连接原子切换为严格 TLS，必须按以下顺序执行：
 
-1. 配置可信 CA/secret，确认应用尚未引用时不会影响现网；证据只记录名称和版本。
-2. 部署支持可信 CA 且执行完整证书验证的代码，先灰度验证正向与负向 TLS 测试。
-3. 观察错误率、连接占用和查询延迟，确认后再移除 `rejectUnauthorized:false` 兼容路径。
-4. 完成备份、PITR/RPO/RTO、恢复演练和容量证据归档后，由责任人签字放行。
+1. 先在 Vercel/GitHub 配置可信 CA 与证书服务器名；证据只记录 secret 名称与更新时间。
+2. 部署不含不安全 fallback 的严格 TLS 代码到 Preview，验证 `/api/jobs/stats`、关键只读 API 与错误证书负向路径。
+3. 手动运行 `jobs-db-migrate`/`db-report`，证明 crawler/libpq/psql 路径使用同一 CA + `verify-full` 成功。
+4. 合并 main 触发生产部署，观察错误率、连接占用和查询延迟；失败立即恢复 known-good deployment，并保持整改事件开启。
+5. 备份、PITR/RPO/RTO、恢复演练和容量证据仍按 [#3](https://github.com/Allen201117/job-radar/issues/3) 限时补齐，不得在完成前声称基础设施验收通过。
 
 ### 发布前登记门
 
