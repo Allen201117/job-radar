@@ -314,6 +314,20 @@ export default function Navbar() {
               </div>
             )}
             {email && (
+              <div className="mb-1 flex items-center gap-3 rounded-2xl px-3 py-2.5">
+                <span
+                  aria-hidden="true"
+                  className="grid size-9 shrink-0 place-items-center rounded-full border border-black/[0.1] text-xs font-semibold uppercase text-[#5f594e] dark:border-white/[0.14] dark:text-[#b6ad9d]"
+                >
+                  {initial}
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-[15px] font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{username}</p>
+                  <p className="truncate text-xs text-[#9a9184] dark:text-[#837c70]">{email}</p>
+                </div>
+              </div>
+            )}
+            {email && (
               <Link
                 href="/me"
                 onClick={() => setMenuOpen(false)}
@@ -328,11 +342,10 @@ export default function Navbar() {
                 {t("me", lang)}
               </Link>
             )}
-            <div className="mt-2 flex items-center justify-between gap-3 border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
-              {email && <span className="min-w-0 flex-1 truncate text-xs text-[#9a9184] dark:text-[#837c70]">{email}</span>}
+            <div className="mt-2 border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
               <button
                 onClick={handleLogout}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-4 py-2 text-[13px] font-medium text-[#3f3a33] transition duration-200 hover:bg-white active:scale-[0.98] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-[#d9d0c2] dark:hover:bg-white/[0.12]"
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-4 py-2.5 text-[13px] font-medium text-[#3f3a33] transition duration-200 hover:bg-white active:scale-[0.98] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-[#d9d0c2] dark:hover:bg-white/[0.12]"
               >
                 <SignOut size={16} weight="bold" aria-hidden="true" />
                 {t("logout", lang)}
