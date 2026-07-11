@@ -398,7 +398,26 @@ class BeisenAdapter(ChinaSpaAdapter):
                 self._detail_route = route
                 return j
 
-        # route 未缓存 / httpx 没打通 → 回退浏览器（探+缓存 route），再不行落 SSR
+        # route 未缓存的**首见租户**：先用 httpx 抓**完整列表**（可靠），浏览器只用来探一次路由。
+        # 为何：旧实现直接走下面的 _fetch_paginated 抓列表，但浏览器拦截重放对多数租户只捞到 count-probe
+        # 的 1-2 条 → 列表近空 → 路由探测拿不到候选、jd_url 全空 → auto-discover 逐家确认把长江存储 479 /
+        # 追觅 2248 岗这类真源全判「0 岗」丢弃。实测：把 httpx 完整列表喂给 _discover_detail_route，
+        # 路由探测正常命中、几百上千岗全拼出 jd_url。故此处 httpx 抓列表 + 浏览器仅探路由。
+        if self._host not in _BEISEN_ROUTE_CACHE:
+            try:
+                j = self._httpx_fetch(source_url)
+            except Exception:
+                j = None
+            if j:
+                try:
+                    route = self._discover_detail_route(source_url, j)  # 浏览器仅探路由，不抓列表
+                except Exception:
+                    route = None
+                _BEISEN_ROUTE_CACHE[self._host] = route   # 命中或 None 都缓存，避免重复探测
+                self._detail_route = route
+                return j
+
+        # httpx 没打通 → 回退浏览器全流程（探+缓存 route），再不行落 SSR
         try:
             list_json = self._fetch_paginated(source_url)
         except RuntimeError:
