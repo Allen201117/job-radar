@@ -45,9 +45,10 @@ def parse_json_loose(text: str) -> dict:
     raise ValueError(f"llm_bad_json: {s[:200]}")
 
 
-def chat_json(messages: list, temperature: float = 0.1, max_tokens: int = 1024,
-              client: Optional[httpx.Client] = None, timeout: float = TIMEOUT) -> dict:
-    """单次 SiliconFlow chat completion，返回解析后的 JSON。未配置 / 网络 / HTTP 错误均抛异常。"""
+def chat_content(messages: list, temperature: float = 0.1, max_tokens: int = 1024,
+                 client: Optional[httpx.Client] = None, timeout: float = TIMEOUT) -> str:
+    """单次 SiliconFlow chat completion，返回**原始 content 字符串**（未解析）。
+    未配置 / 网络 / HTTP 错误均抛异常。给需要自定义 / 容错解析（如 generate_targets 的截断兜底）的调用方用。"""
     cfg = llm_config()
     if not cfg["configured"]:
         raise RuntimeError("llm_not_configured")
@@ -67,11 +68,17 @@ def chat_json(messages: list, temperature: float = 0.1, max_tokens: int = 1024,
             resp = call(False)
         resp.raise_for_status()
         data = resp.json()
-        content = (((data.get("choices") or [{}])[0]).get("message") or {}).get("content") or ""
-        return parse_json_loose(content)
+        return (((data.get("choices") or [{}])[0]).get("message") or {}).get("content") or ""
     finally:
         if client is None:
             own.close()
+
+
+def chat_json(messages: list, temperature: float = 0.1, max_tokens: int = 1024,
+              client: Optional[httpx.Client] = None, timeout: float = TIMEOUT) -> dict:
+    """单次 SiliconFlow chat completion，返回解析后的 JSON。未配置 / 网络 / HTTP 错误均抛异常。"""
+    return parse_json_loose(chat_content(messages, temperature=temperature,
+                                         max_tokens=max_tokens, client=client, timeout=timeout))
 
 
 # ---------- 纯决策逻辑（单测覆盖；这是「机器验证替代人审」的闸门核心） ----------

@@ -4,6 +4,7 @@
 """
 import datetime
 import httpx
+import json
 import os
 import unittest
 
@@ -101,17 +102,53 @@ class ThemeAndGuardTest(unittest.TestCase):
         self.assertNotIn("C250", user)
 
 
+class SalvageTruncatedJsonTest(unittest.TestCase):
+    """撞 max_tokens 截断（旧 max_tokens=2000 每天必截）→ 救回完整公司对象，半截的丢。"""
+
+    def test_recovers_complete_companies_from_truncated_array(self):
+        # 第三家 slugs 已闭合、只有 industry 被切 → 其对象仍可救回（parse 层容忍缺 industry）。
+        truncated = ('{"companies": [\n'
+                     '  {"company": "得物", "cn": "得物", "slugs": ["dewu"], "industry": "电商"},\n'
+                     '  {"company": "小红书", "cn": "小红书", "slugs": ["xhs"], "industry": "内容"},\n'
+                     '  {"company": "纵腾集团", "cn": "纵腾", "slugs": ["zongteng"], "indu')
+        data = gt.loads_companies(truncated)
+        self.assertEqual([c["company"] for c in data.get("companies", [])],
+                         ["得物", "小红书", "纵腾集团"])
+
+    def test_drops_object_truncated_mid_value(self):
+        # 第三家在 slugs 字符串中途被切（括号未闭合）→ 无法救回，只留前两家。
+        truncated = ('{"companies": [{"company":"得物","slugs":["dewu"]},'
+                     '{"company":"小红书","slugs":["xh')
+        data = gt.loads_companies(truncated)
+        self.assertEqual([c["company"] for c in data.get("companies", [])], ["得物"])
+
+    def test_valid_json_passes_through_unchanged(self):
+        valid = {"companies": [{"company": "A", "slugs": ["a"]}]}
+        self.assertEqual(gt.loads_companies(json.dumps(valid)), valid)
+
+    def test_unrecoverable_or_empty_returns_empty_dict(self):
+        self.assertEqual(gt.loads_companies("not json at all"), {})
+        self.assertEqual(gt.loads_companies(""), {})
+        self.assertEqual(gt.loads_companies(None), {})
+
+    def test_end_to_end_truncated_feeds_parse_generated(self):
+        truncated = ('{"companies": [{"company":"得物","slugs":["dewu"]},'
+                     '{"company":"纵腾","slugs":["zong')
+        out = gt.parse_generated(gt.loads_companies(truncated), set())
+        self.assertEqual([c["company"] for c in out], ["得物"])   # 完整的入，半截的丢
+
+
 class LlmGenerateTest(unittest.TestCase):
     def setUp(self):
         self._api_key = os.environ.get("SILICONFLOW_API_KEY")
         os.environ["SILICONFLOW_API_KEY"] = "test-key"
-        self._chat_json = ie.chat_json
+        self._chat_content = ie.chat_content
         self._sleep = getattr(getattr(gt, "time", None), "sleep", None)
         if self._sleep:
             gt.time.sleep = lambda _seconds: None
 
     def tearDown(self):
-        ie.chat_json = self._chat_json
+        ie.chat_content = self._chat_content
         if self._sleep:
             gt.time.sleep = self._sleep
         if self._api_key is None:
@@ -119,31 +156,42 @@ class LlmGenerateTest(unittest.TestCase):
         else:
             os.environ["SILICONFLOW_API_KEY"] = self._api_key
 
-    def test_retries_once_on_timeout_with_long_timeout_and_lower_token_budget(self):
+    def test_retries_once_on_timeout_with_long_timeout_and_ample_token_budget(self):
         calls = []
 
-        def fake_chat_json(_messages, **kwargs):
+        def fake_chat_content(_messages, **kwargs):
             calls.append(kwargs)
             if len(calls) == 1:
                 raise httpx.ReadTimeout("slow generation")
-            return {"companies": [{"company": "得物", "slugs": ["dewu"], "industry": "互联网"}]}
+            return '{"companies": [{"company": "得物", "slugs": ["dewu"], "industry": "互联网"}]}'
 
-        ie.chat_json = fake_chat_json
+        ie.chat_content = fake_chat_content
         out = gt.llm_generate(set(), n=1, date=datetime.date(2026, 7, 6))
 
         self.assertEqual([c["company"] for c in out], ["得物"])
         self.assertEqual(len(calls), 2)
         self.assertTrue(all(c["timeout"] == 90 for c in calls))
-        self.assertTrue(all(c["max_tokens"] == 2000 for c in calls))
+        self.assertTrue(all(c["max_tokens"] == gt.GEN_MAX_TOKENS for c in calls))
+
+    def test_salvages_truncated_response_instead_of_returning_empty(self):
+        """核心回归：LLM 撞上限截断时，喂料不再整段丢成 []，而是救回完整公司。"""
+        def fake_chat_content(_messages, **kwargs):
+            return ('{"companies": [{"company":"得物","cn":"得物","slugs":["dewu"],"industry":"电商"},'
+                    '{"company":"小红书","cn":"小红书","slugs":["xhs"],"industry":"内容"},'
+                    '{"company":"纵腾","cn":"纵腾","slugs":["zong')   # 截断
+
+        ie.chat_content = fake_chat_content
+        out = gt.llm_generate(set(), n=50, date=datetime.date(2026, 7, 6))
+        self.assertEqual([c["company"] for c in out], ["得物", "小红书"])
 
     def test_returns_empty_after_two_timeouts(self):
         calls = []
 
-        def fake_chat_json(_messages, **kwargs):
+        def fake_chat_content(_messages, **kwargs):
             calls.append(kwargs)
             raise httpx.TimeoutException("still slow")
 
-        ie.chat_json = fake_chat_json
+        ie.chat_content = fake_chat_content
         out = gt.llm_generate(set(), n=1, date=datetime.date(2026, 7, 6))
 
         self.assertEqual(out, [])

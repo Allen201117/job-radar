@@ -1,7 +1,7 @@
 """crawler/generate_targets.py — LLM 定期生成「库里没有的」目标公司候选，喂给 auto_discover 的安全验证流水线。
 
 为何：静态清单会烧完（targets_tech_consumer.json 149 家几天探完就没了）；要「持续保速度」必须**持续产新候选**。
-本工具用已配的 SiliconFlow（复用 insight_engine.chat_json）**每天生成一批真实存在、正在招聘的中国科技/新经济/
+本工具用已配的 SiliconFlow（复用 insight_engine.chat_content）**每天生成一批真实存在、正在招聘的中国科技/新经济/
 消费公司**（含 slug 猜测），按行业主题按日轮转，覆盖面滚动铺开。
 
 红线不变（安全全靠下游，本工具不入库、不绕验证门）：
@@ -14,11 +14,16 @@
 主题轮转 + 排除已有维持新鲜度，失败候选可能偶尔重复生成（探测廉价，可接受；持久化台账留后期）。
 """
 import datetime
+import json
 import os
 import re
 import time
 
 import httpx
+
+# n≈50 家公司的 JSON ~2500 tokens；给足余量避免撞上限被截断。旧值 2000 每天都 finish_reason=length
+# 截断 → parse 失败 → 喂料返回 [] → 静态清单榨干、扩源停摆（本次修复的根因）。截断仍由 loads_companies 兜底。
+GEN_MAX_TOKENS = 4096
 
 # 行业主题（按日轮转，覆盖目标用户关心的全部方向；配合 targets_tech_consumer.json 的分类口径）
 _THEMES = [
@@ -88,6 +93,53 @@ def build_messages(theme_name, theme_desc, exclude_names, n):
     return [{"role": "system", "content": _SYS}, {"role": "user", "content": user}]
 
 
+def _salvage_truncated_json(text):
+    """纯函数：把**截断的** JSON（LLM 撞 max_tokens）截到最后一个完整的 } / ]，补齐未闭合括号后再 parse。
+    只在严格 parse 失败时兜底——不改变正常响应的解析，只把「截断=0 产出」救成「部分产出」（完整对象留、半截丢）。
+    做法：扫描时忽略字符串内字符，栈追踪未闭合括号；截到最后一次闭合括号处，逆序补上剩余闭合符。"""
+    s = str(text or "")
+    stack, in_str, esc = [], False, False
+    last_close, stack_at_close = -1, None
+    for i, ch in enumerate(s):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if not stack:
+                return None            # 括号不平衡（多了闭合符）→ 放弃
+            stack.pop()
+            last_close, stack_at_close = i, list(stack)
+    if last_close < 0 or not stack_at_close:
+        return None                    # 无可截点，或本就闭合（那样第一次严格 parse 就成功了）
+    candidate = s[:last_close + 1] + "".join(reversed(stack_at_close))
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+
+
+def loads_companies(content):
+    """纯函数：解析 LLM 生成的公司 JSON。先严格 parse，截断时用 _salvage_truncated_json 救回完整对象。
+    总返回 dict（无法解析 → {}，交给 parse_generated 产出 []，安全回退静态清单）。"""
+    s = str(content or "").strip()
+    if not s:
+        return {}
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        salvaged = _salvage_truncated_json(s)
+        return salvaged if isinstance(salvaged, dict) else {}
+
+
 def parse_generated(data, existing_names):
     """纯函数：从 LLM 返回的（已解析）JSON dict 提取合法候选。
     去重（库里已有 / 批内重复）、清洗 slug（去空、去带空格的）、标 _priority/_llm。"""
@@ -127,17 +179,22 @@ def llm_generate(existing_names, n=50, date=None):
     date = date or datetime.datetime.now(datetime.timezone.utc).date()
     tname, tdesc = theme_for(date)
     try:
-        import insight_engine as ie  # 复用现成 SiliconFlow 客户端（config + json_object + loose parse）
+        import insight_engine as ie  # 复用现成 SiliconFlow 客户端（config + json_object 兜底）
         messages = build_messages(tname, tdesc, existing_names, n)
+        content = ""
         for attempt in range(2):
             try:
-                data = ie.chat_json(messages, temperature=0.5, max_tokens=2000, timeout=90)
+                # 取原始 content 自己解析 → 撞 max_tokens 截断也能救回完整公司（loads_companies），
+                # 而不是像旧 chat_json 那样整段 parse 失败返回 []（截断=每天 0 产出的根因）。
+                content = ie.chat_content(messages, temperature=0.5,
+                                          max_tokens=GEN_MAX_TOKENS, timeout=90)
                 break
             except httpx.TimeoutException:
                 if attempt == 0:
                     time.sleep(1)
                     continue
                 raise
+        data = loads_companies(content)
     except Exception as e:
         print(f"[generate_targets] LLM 失败，跳过（回退静态清单）: {type(e).__name__}: {str(e)[:80]}")
         return []
