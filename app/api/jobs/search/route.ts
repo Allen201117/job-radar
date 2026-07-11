@@ -9,6 +9,11 @@ import type { JobAction, UserPreferences } from "@/lib/types";
 export const dynamic = "force-dynamic";
 // 候选窗口最大 15k 行 + 打分/精筛，给足执行时间（避免大城搜索被默认 10s 砍断）。
 export const maxDuration = 60;
+// ⚡ 与自建香港 jobs 库同区运行：函数默认落在 iad1（美东），跨太平洋拉几千行候选是搜索慢(10~30s)的主因
+// （实测 x-vercel-id=sin1::iad1，SQL 仅 130ms、JS 仅 113ms，其余全耗在跨区传输）。就近到香港/新加坡后
+// 候选行传输从跨洋降到近同区。Pro 计划下 preferredRegion 生效；Hobby 计划该项被忽略，需在 Vercel
+// 控制台 Settings → Functions → Region 改单区为 hkg1/sin1（见汇报说明）。
+export const preferredRegion = ["hkg1", "sin1"];
 
 // 服务端岗位库搜索：把原前端「全库塞浏览器再筛」改为服务端有界筛选 + 分页。
 // 筛选/排序逻辑复用 lib/job-filter（与浏览器端同一份），结果逐字段一致。
