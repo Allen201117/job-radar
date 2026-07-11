@@ -196,7 +196,7 @@ python3 crawler/run.py --source jd
 npm audit --omit=dev --audit-level=high --json
 ```
 
-当前 raw audit 仍报告 2 个 moderate，来自 Next.js 内嵌 PostCSS 8.4.31。仓库检查未发现把不可信 CSS AST stringify 后注入 `<style>` 的运行时路径；这是每周和依赖升级时必须复查的已接受临时风险，不得运行会错误降级依赖的 `npm audit fix --force`。
+当前 raw audit 仍报告 2 个 moderate，来自 Next.js 内嵌 PostCSS 8.4.31。仓库检查未发现把不可信 CSS AST stringify 后注入 `<style>` 的运行时路径；该风险已评估但尚未完成正式接受，在责任人、接受日期、到期日、批准签字和证据位置登记前仍是发布阻塞。high gate 通过不等于完成 moderate 正式风险接受；每周和依赖升级时必须复查，且不得运行会错误降级依赖的 `npm audit fix --force`。
 
 ### 前端 — Vercel
 
