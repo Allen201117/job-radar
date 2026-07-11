@@ -24,15 +24,25 @@ export function resolveNoveltySince(lastOpenedAt: string | null, now: Date): str
 
 const WAITING_CAP = 8;
 const EXPLORE_CAP = 5;
+const SEMANTIC_PUNCTUATION_RE = new RegExp("[\\s\\p{P}]+", "gu");
 
 function primaryOf(o: Opportunity): OpportunitySignal | null {
   return o.signals.length ? o.signals[0] : null;
 }
+function firstSeenMillis(value: string | Date | null | undefined): number {
+  let millis = NaN;
+  if (value instanceof Date) millis = value.getTime();
+  else if (typeof value === "string") millis = Date.parse(value);
+  return Number.isFinite(millis) ? millis : Number.NEGATIVE_INFINITY;
+}
 function cmpFirstSeenDesc(a: Opportunity, b: Opportunity): number {
-  // String() 兜底：firstSeenAt 正常是 ISO 字符串，但若上游传来 Date 对象（node-pg 时间列默认解析）
-  // 直接 .localeCompare 会抛 TypeError（2026-06-26 事故）。根因已在 jobs-store/client.ts 用 type parser 修，
-  // 这里再裹一层 String 作防御，杜绝任何时间列类型漂移把整个 Feed 排序打挂。
-  return String(b.firstSeenAt || "").localeCompare(String(a.firstSeenAt || ""));
+  // node-pg 可能交付 Date，其他路径交付 ISO；统一比较 epoch millis，避免 String(Date) 的 weekday 字典序。
+  const aTime = firstSeenMillis(a.firstSeenAt);
+  const bTime = firstSeenMillis(b.firstSeenAt);
+  if (aTime !== bTime) return bTime - aTime;
+  const aId = String(a.job.id);
+  const bId = String(b.job.id);
+  return aId < bId ? -1 : aId > bId ? 1 : 0;
 }
 function byScore(a: Opportunity, b: Opportunity): number {
   return b.score - a.score || cmpFirstSeenDesc(a, b);
@@ -42,6 +52,96 @@ function byCriticalThenScore(a: Opportunity, b: Opportunity): number {
   const pa = primaryOf(a)?.priority ?? 99;
   const pb = primaryOf(b)?.priority ?? 99;
   return pa - pb || byScore(a, b);
+}
+
+function isCriticalOpportunity(opportunity: Opportunity): boolean {
+  return opportunity.signals.some((signal) => signal.isCritical);
+}
+
+interface SemanticRankContext {
+  intensity: RadarIntensity;
+  mainThreshold: number;
+}
+
+function semanticDisplayRank(opportunity: Opportunity, context: SemanticRankContext): number {
+  if (isCriticalOpportunity(opportunity)) return 0;
+  const primary = primaryOf(opportunity);
+  if (isMainSignal(opportunity) && opportunity.score >= context.mainThreshold) return 1;
+  if (
+    context.intensity === "active" &&
+    isMainSignal(opportunity) &&
+    opportunity.exploreEligible &&
+    opportunity.score >= 30 &&
+    opportunity.score < context.mainThreshold
+  ) return 2;
+  if (primary?.type === "CLOSED_OR_STALE" && !primary.isCritical) return 3;
+  return 4;
+}
+
+function bySemanticSurvivorPriority(
+  a: Opportunity,
+  b: Opportunity,
+  context: SemanticRankContext,
+): number {
+  const aRank = semanticDisplayRank(a, context);
+  const bRank = semanticDisplayRank(b, context);
+  if (aRank !== bRank) return aRank - bRank;
+  return aRank === 0 ? byCriticalThenScore(a, b) : byScore(a, b);
+}
+
+function normalizeSemanticPart(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) return "";
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(SEMANTIC_PUNCTUATION_RE, "");
+}
+
+function semanticJobKey(opportunity: Opportunity): string {
+  const company = normalizeSemanticPart(opportunity.job.company);
+  const title = normalizeSemanticPart(opportunity.job.title);
+  let location = normalizeSemanticPart(opportunity.job.location);
+  if (!company || !title || !location) return `id:${opportunity.job.id}`;
+  if (location.length > 1 && location.endsWith("市")) location = location.slice(0, -1);
+  return `semantic:${company}|${title}|${location}`;
+}
+
+function dedupeBySemanticJob(opportunities: Opportunity[], context: SemanticRankContext): Opportunity[] {
+  const seen = new Set<string>();
+  return [...opportunities].sort((a, b) => bySemanticSurvivorPriority(a, b, context)).filter((opportunity) => {
+    const key = semanticJobKey(opportunity);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function takeWithCompanyDiversity(opportunities: Opportunity[], limit: number): Opportunity[] {
+  const perCompanyCap = Math.max(2, Math.ceil(limit * 0.3));
+  const companyCounts = new Map<string, number>();
+  const picked: Opportunity[] = [];
+  const overflow: Opportunity[] = [];
+
+  for (const opportunity of opportunities) {
+    if (picked.length >= limit) break;
+    const company = normalizeSemanticPart(opportunity.job.company) || `id:${opportunity.job.id}`;
+    const count = companyCounts.get(company) ?? 0;
+    if (count >= perCompanyCap) {
+      overflow.push(opportunity);
+      continue;
+    }
+    companyCounts.set(company, count + 1);
+    picked.push(opportunity);
+  }
+
+  if (picked.length < limit) {
+    for (const opportunity of overflow) {
+      if (picked.length >= limit) break;
+      picked.push(opportunity);
+    }
+  }
+
+  return picked;
 }
 
 function isMainSignal(o: Opportunity): boolean {
@@ -64,10 +164,11 @@ export function groupOpportunities(
   // 强度调量与门槛：passive 偏少、门槛偏高（只高价值）；active 偏多、含拓展。
   const effectiveLimit = intensity === "active" ? dailyLimit : Math.max(5, Math.min(dailyLimit, 10));
   const mainThreshold = intensity === "active" ? 45 : 70;
+  const candidates = dedupeBySemanticJob(opps, { intensity, mainThreshold });
 
   // isNew 仅供展示（NEWLY_DISCOVERED 信号未上时不用于分区）
   if (options.noveltySince) {
-    for (const o of opps) o.isNew = Boolean(o.firstSeenAt) && o.firstSeenAt! > options.noveltySince;
+    for (const o of candidates) o.isNew = Boolean(o.firstSeenAt) && o.firstSeenAt! > options.noveltySince;
   }
 
   const used = new Set<string>();
@@ -76,40 +177,44 @@ export function groupOpportunities(
     return list;
   };
 
-  // critical：任一信号关键。不去重前置（最高优先）、不截断、不受强度影响。
+  // critical：任一信号关键。语义去重已统一前置；本区不截断、不受公司配额或强度影响。
   const critical = take(
-    opps.filter((o) => o.signals.some((s) => s.isCritical)).sort(byCriticalThenScore)
+    candidates.filter((o) => o.signals.some((s) => s.isCritical)).sort(byCriticalThenScore)
   );
 
   // main：主信号 + 强度门槛，封顶 effectiveLimit。
   const main = take(
-    opps
-      .filter((o) => !used.has(o.job.id) && isMainSignal(o) && o.score >= mainThreshold)
-      .sort(byScore)
-      .slice(0, effectiveLimit)
+    takeWithCompanyDiversity(
+      candidates
+        .filter((o) => !used.has(o.job.id) && isMainSignal(o) && o.score >= mainThreshold)
+        .sort(byScore),
+      effectiveLimit,
+    )
   );
 
   // explore：仅 active；主信号、score 30–门槛、exploreEligible，最多 5。
   let explore: Opportunity[] = [];
   if (intensity === "active") {
     explore = take(
-      opps
-        .filter(
-          (o) =>
-            !used.has(o.job.id) &&
-            isMainSignal(o) &&
-            o.exploreEligible &&
-            o.score >= 30 &&
-            o.score < mainThreshold
-        )
-        .sort(byScore)
-        .slice(0, EXPLORE_CAP)
+      takeWithCompanyDiversity(
+        candidates
+          .filter(
+            (o) =>
+              !used.has(o.job.id) &&
+              isMainSignal(o) &&
+              o.exploreEligible &&
+              o.score >= 30 &&
+              o.score < mainThreshold
+          )
+          .sort(byScore),
+        EXPLORE_CAP,
+      )
     );
   }
 
   // waiting：长时间未确认（active 但超 today SLA）非关键，小批。
   const waiting = take(
-    opps
+    candidates
       .filter((o) => {
         if (used.has(o.job.id)) return false;
         const p = primaryOf(o);

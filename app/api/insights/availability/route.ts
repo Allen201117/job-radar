@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
-import { findCompanyProfile } from "@/lib/insight-match";
+import { activeJobCountsByCompany, jobsStoreEnabled } from "@/lib/jobs-store/read";
+import { companyMatches, findCompanyProfile } from "@/lib/insight-match";
 import { ITEM_COLUMNS, INSIGHT_DIMENSIONS, groupGatedInsights } from "@/lib/insight-bundle";
 import type { CompanyProfile } from "@/lib/types";
 
@@ -30,14 +31,24 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ ok: true, availability: {} });
   }
 
-  const [{ data: profiles }, { data: items }, { data: counts }] = await Promise.all([
+  const countsPromise = jobsStoreEnabled()
+    ? activeJobCountsByCompany()
+        .then((data) => ({ data, error: null as any }))
+        .catch((error) => ({ data: null, error }))
+    : supabase.rpc("active_job_counts_by_company");
+  const [{ data: profiles }, { data: items }, { data: companyCounts, error: countErr }] = await Promise.all([
     supabase.from("company_profiles").select("*"),
     supabase
       .from("insight_items")
       .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
       .eq("status", "active"),
-    supabase.rpc("active_job_counts_by_company"),
+    countsPromise,
   ]);
+
+  if (countErr) {
+    console.error("[insights/availability] 读取在招计数失败（降级为无派生洞察）", countErr.message);
+  }
+  const counts = (countErr ? [] : companyCounts || []) as Array<{ company: string; job_count: number }>;
 
   const allProfiles = (profiles || []) as CompanyProfile[];
   const itemsByProfile = new Map<string, any[]>();
@@ -47,7 +58,7 @@ export async function GET(request: NextRequest) {
     itemsByProfile.set(it.company_id, arr);
   }
   const countByCompany = new Map<string, number>();
-  for (const row of (counts || []) as Array<{ company: string; job_count: number }>) {
+  for (const row of counts) {
     countByCompany.set(row.company, row.job_count || 0);
   }
 
@@ -60,11 +71,11 @@ export async function GET(request: NextRequest) {
       const { dimensions } = groupGatedInsights(itemsByProfile.get(profile.id) || [], now);
       real = INSIGHT_DIMENSIONS.reduce((n, d) => n + dimensions[d].length, 0);
     }
-    const candidates = profile
-      ? [profile.company, ...(profile.aliases || []), company]
-      : [company];
-    let activeCount = 0;
-    for (const c of Array.from(new Set(candidates))) activeCount += countByCompany.get(c) || 0;
+    const activeCount = profile
+      ? counts
+          .filter((row) => companyMatches(profile, row.company))
+          .reduce((sum, row) => sum + (row.job_count || 0), 0)
+      : countByCompany.get(company) || 0;
     availability[company] = { real, derived: activeCount >= DERIVED_MIN_ACTIVE };
   }
 

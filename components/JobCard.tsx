@@ -300,7 +300,7 @@ export default function JobCard({
     { key: "salary", icon: HandCoins, label: "薪资", value: jobFieldDisplayValue(job.salary_text) },
     { key: "experience", icon: Briefcase, label: "经验", value: jobFieldDisplayValue(exp) },
     { key: "education", icon: GraduationCap, label: "学历", value: jobFieldDisplayValue(edu) },
-    { key: "posted", icon: CalendarBlank, label: "发布", value: jobFieldDisplayValue(posted) },
+    { key: "posted", icon: CalendarBlank, label: "官网发布", value: jobFieldDisplayValue(posted) },
     { key: "deadline", icon: Hourglass, label: "截止", value: jobFieldDisplayValue(deadline) },
   ].filter((field) => field.value !== null) as Array<{
     key: string;

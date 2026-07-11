@@ -5,11 +5,11 @@ import { isUuid } from "@/lib/opportunities/action-input";
 
 export const runtime = "nodejs";
 
-export async function POST(_request: NextRequest, { params }: { params: { jobId: string } }) {
+export async function POST(_request: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
   const auth = await requireUser();
   if (auth.error) return auth.error;
 
-  const jobId = params.jobId;
+  const { jobId } = await params;
   if (!isUuid(jobId)) {
     return NextResponse.json({ ok: false, error: "invalid_job_id" }, { status: 400 });
   }

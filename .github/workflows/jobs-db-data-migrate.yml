@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - uses: actions/checkout@v4
+
       - name: Install pg client 17 (PGDG)
         run: |
           sudo apt-get update && sudo apt-get install -y curl ca-certificates
@@ -27,10 +29,13 @@ jobs:
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
         run: |
           if [ -z "${SUPABASE_DB_URL:-}" ] || [ -z "${JOBS_DATABASE_URL:-}" ]; then
             echo "::error::缺 SUPABASE_DB_URL 或 JOBS_DATABASE_URL secret。"; exit 1
           fi
+          source scripts/enable-jobs-db-strict-tls.sh
           P=/usr/lib/postgresql/17/bin
           if [ "${{ github.event.inputs.truncate_first }}" = "true" ]; then
             echo "=== TRUNCATE 香港 jobs（重跑）==="

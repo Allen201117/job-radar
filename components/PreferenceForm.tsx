@@ -157,6 +157,7 @@ export default function PreferenceForm() {
             <TagInput
               values={prefs.target_locations || []}
               onChange={(v) => setArray("target_locations", v)}
+              ariaLabel="目标城市标签输入"
               placeholder="北京、上海、深圳…（回车或逗号添加）"
             />
           </Field>
@@ -164,6 +165,7 @@ export default function PreferenceForm() {
             <TagInput
               values={prefs.target_roles || []}
               onChange={(v) => setArray("target_roles", v)}
+              ariaLabel="目标岗位方向标签输入"
               placeholder="算法、产品经理、数据分析…"
             />
           </Field>
@@ -210,6 +212,7 @@ export default function PreferenceForm() {
           <TagInput
             values={prefs.target_companies || []}
             onChange={(v) => setArray("target_companies", v)}
+            ariaLabel="关注公司标签输入"
             placeholder="Apple、百度、京东、字节…"
           />
         </div>
@@ -258,6 +261,7 @@ export default function PreferenceForm() {
             <TagInput
               values={prefs.target_keywords || []}
               onChange={(v) => setArray("target_keywords", v)}
+              ariaLabel="命中关键词标签输入"
               placeholder="Python、机器学习、LLM…"
             />
           </Field>
@@ -265,6 +269,7 @@ export default function PreferenceForm() {
             <TagInput
               values={prefs.exclude_keywords || []}
               onChange={(v) => setArray("exclude_keywords", v)}
+              ariaLabel="排除关键词标签输入"
               placeholder="销售、客服…"
             />
           </Field>
@@ -272,6 +277,7 @@ export default function PreferenceForm() {
             <TagInput
               values={prefs.target_industries || []}
               onChange={(v) => setArray("target_industries", v)}
+              ariaLabel="目标行业标签输入"
               placeholder="互联网、金融、消费…（跨行业岗位会被挡掉）"
             />
           </Field>

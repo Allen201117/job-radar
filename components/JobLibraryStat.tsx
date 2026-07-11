@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowsClockwise,
   Broadcast,
@@ -8,16 +8,33 @@ import {
 } from "@phosphor-icons/react";
 import { AnimateNumber } from "@/components/ui/animated-blur-number";
 import { AnimatedStat } from "@/components/ui/animated-stat";
+import { createJobStatsRefresher, installVisiblePolling } from "@/lib/job-stats-refresh";
 import { cn } from "@/lib/utils";
 
-// 岗位库「实时翻动」总数卡（暖光浅色版）。
+const POLL_INTERVAL_MS = 60_000;
+
+// 岗位库定时翻动总数卡（暖光浅色版）。
 // - 真数据：走服务端 /api/jobs/stats，有效在招 + 24h 确认在招读自建香港 jobs 库（Phase 1 真实源），
 //   官方源 = count(sources enabled)。取代旧的「浏览器直连 Supabase」——jobs 迁香港库后 Supabase 已是空表，
 //   客户端直连会读到空/失活计数，与 SSR 真实总数对不上。
-// - 实时：入场从 0 翻到 SSR 已知的真实总数（无需等网络），之后每 12s 轮询一次，数字变化即翻动。
+// - 定时：入场从 0 翻到 SSR 已知的真实总数（无需等网络），之后页面可见时每 60s 轮询一次。
 // - 首屏不闪：initialTotal 由服务端 SSR 传入，挂载即有真实值。
 interface Props {
   initialTotal: number;
+}
+
+interface JobStats {
+  validActive?: number;
+  sources?: number;
+  recent24h?: number;
+}
+
+async function fetchJobStats(): Promise<JobStats> {
+  // 服务端聚合：有效在招 / 24h 确认在招读香港 jobs 库，官方源读 Supabase（见 /api/jobs/stats）。
+  const resp = await fetch("/api/jobs/stats");
+  const data = await resp.json();
+  if (!resp.ok || !data?.ok) throw new Error("stats_failed");
+  return data;
 }
 
 export default function JobLibraryStat({ initialTotal }: Props) {
@@ -26,6 +43,7 @@ export default function JobLibraryStat({ initialTotal }: Props) {
   const [recent, setRecent] = useState<number | null>(null);
   const [status, setStatus] = useState<"live" | "syncing" | "stale">("live");
   const [syncedAt, setSyncedAt] = useState<Date | null>(null);
+  const refreshRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   // 入场翻动：下一帧把 0 推到 SSR 已知的真实总数。
   useEffect(() => {
@@ -33,42 +51,47 @@ export default function JobLibraryStat({ initialTotal }: Props) {
     return () => cancelAnimationFrame(id);
   }, [initialTotal]);
 
-  const refresh = useCallback(async () => {
-    setStatus("syncing");
-    try {
-      // 服务端聚合：有效在招 / 24h 确认在招读香港 jobs 库，官方源读 Supabase（见 /api/jobs/stats）。
-      const resp = await fetch("/api/jobs/stats", { cache: "no-store" });
-      const data = await resp.json();
-      if (!resp.ok || !data?.ok) throw new Error("stats_failed");
-      if (typeof data.validActive === "number") setActiveJobs(data.validActive);
-      if (typeof data.sources === "number") setSources(data.sources);
-      if (typeof data.recent24h === "number") setRecent(data.recent24h);
-      setSyncedAt(new Date());
-      setStatus("live");
-    } catch {
-      setStatus("stale");
-    }
+  useEffect(() => {
+    const refresher = createJobStatsRefresher({
+      fetchStats: fetchJobStats,
+      onStart: () => setStatus("syncing"),
+      onSuccess: (data) => {
+        if (typeof data.validActive === "number") setActiveJobs(data.validActive);
+        if (typeof data.sources === "number") setSources(data.sources);
+        if (typeof data.recent24h === "number") setRecent(data.recent24h);
+        setSyncedAt(new Date());
+        setStatus("live");
+      },
+      onError: () => setStatus("stale"),
+    });
+    refreshRef.current = refresher.refresh;
+    const cleanupPolling = installVisiblePolling({
+      documentLike: document,
+      windowLike: window,
+      refresh: refresher.refresh,
+      intervalMs: POLL_INTERVAL_MS,
+    });
+
+    return () => {
+      cleanupPolling();
+      refresher.dispose();
+      if (refreshRef.current === refresher.refresh) {
+        refreshRef.current = () => Promise.resolve();
+      }
+    };
   }, []);
 
-  useEffect(() => {
-    refresh();
-    const iv = window.setInterval(() => {
-      if (document.visibilityState === "visible") refresh();
-    }, 12000);
-    return () => window.clearInterval(iv);
-  }, [refresh]);
-
   const syncLabel = syncedAt
-    ? `${syncedAt.toLocaleTimeString("zh-CN", {
+    ? `最近同步 ${syncedAt.toLocaleTimeString("zh-CN", {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
         hour12: false,
-      })} 已同步`
+      })}`
     : "首屏服务端计数";
 
   const statusText =
-    status === "stale" ? "连接暂不可用" : status === "syncing" ? "正在刷新" : "实时刷新";
+    status === "stale" ? "连接暂不可用" : status === "syncing" ? "正在刷新" : "定时刷新";
 
   return (
     <section className="surface bento-glow relative overflow-hidden p-3.5 text-[#1a1714] dark:text-[#f3ecdf] sm:p-4">
@@ -109,7 +132,7 @@ export default function JobLibraryStat({ initialTotal }: Props) {
         </div>
         <button
           type="button"
-          onClick={refresh}
+          onClick={() => void refreshRef.current()}
           className="grid size-9 shrink-0 place-items-center rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] text-[#3f3a33] dark:text-[#d9d0c2] transition duration-200 hover:-translate-y-0.5 hover:bg-white dark:hover:bg-[#1e1a15] active:scale-[0.96]"
           aria-label="立即刷新岗位库计数"
         >
@@ -129,7 +152,9 @@ export default function JobLibraryStat({ initialTotal }: Props) {
 
       <div className="relative mt-2.5 flex items-center justify-between gap-3 border-t border-black/[0.06] dark:border-white/[0.1] pt-2.5">
         <p className="text-[11px] leading-5 text-[#9a9184] dark:text-[#837c70]">{syncLabel}</p>
-        <p className="text-[11px] font-medium text-[#3f7cc0] dark:text-[#7fb2e8]">轮询间隔 12s</p>
+        <p className="text-[11px] font-medium text-[#3f7cc0] dark:text-[#7fb2e8]">
+          轮询间隔 {POLL_INTERVAL_MS / 1000}s
+        </p>
       </div>
     </section>
   );

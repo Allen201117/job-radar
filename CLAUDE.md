@@ -6,9 +6,9 @@
 
 - 项目名称：求职雷达 / Job Radar Private Beta v0.1
 - 项目类型：3–5 人内测版「公开企业官网岗位雷达看板」Web 应用
-- 主要技术栈：Next.js 14 App Router + React 18 + TypeScript + Tailwind；Supabase（Auth / Postgres / RLS）；Python crawler（httpx + selectolax）；GitHub Actions 定时抓取
+- 主要技术栈：Next.js 15.5.18 App Router + React 18 + TypeScript + Tailwind；Supabase（Auth / Postgres / RLS）；Python crawler（httpx + selectolax）；GitHub Actions 定时抓取
 - 包管理器：npm（前端）/ pip（crawler，见 `crawler/requirements.txt`）
-- 运行环境：Node.js 18+，Python 3.11+
+- 运行环境：Node.js `^18.18.0 || ^19.8.0 || >=20.0.0`，Python 3.11+
 - 部署：前端 Vercel，crawler GitHub Actions
 
 ## 核心闭环（产品第一目标）

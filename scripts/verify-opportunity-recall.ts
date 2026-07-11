@@ -5,6 +5,7 @@
 // ⚠️ 必须与 lib/jobs-store/opportunities.ts 的 recallViaStore 同口径：P0-1 第二轮已把「三并行分支」
 //    合并成**一条** search_doc OR 查询（单连接单往返）——本脚本随之改为量这条合并查询，否则测的是旧设计。
 import { Pool } from "pg";
+import { buildJobsDatabaseSsl } from "../lib/jobs-store/tls-options.js";
 // china-keyword-expansion 为 CommonJS（.js），含 ftsCandidateTerms。
 import { ftsCandidateTerms } from "../lib/china-keyword-expansion";
 
@@ -48,7 +49,7 @@ async function main() {
     host: u.hostname, port: u.port ? Number(u.port) : 5432,
     user: decodeURIComponent(u.username), password: decodeURIComponent(u.password),
     database: u.pathname.replace(/^\//, "") || "jobradar_jobs",
-    ssl: { rejectUnauthorized: false }, max: 5, connectionTimeoutMillis: 12_000, statement_timeout: 15_000,
+    ssl: buildJobsDatabaseSsl(process.env, u.hostname), max: 5, connectionTimeoutMillis: 12_000, statement_timeout: 15_000,
   });
   pool.on("error", (e) => console.warn("[pool] idle error:", e.message));
 
