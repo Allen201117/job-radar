@@ -279,7 +279,7 @@ git commit -m "fix(ux): cache stats and improve accessible actions"
 Run:
 
 ```bash
-npm audit --omit=dev --json
+npm audit --omit=dev --audit-level=high --json
 ```
 
 Expected before implementation: non-zero exit with at least one high-severity direct `next` vulnerability. Save the package/severity counts in the task report; do not commit generated audit output.
@@ -313,7 +313,7 @@ Update README migration count from 174 to 183 and link the new runbook from the 
 Run:
 
 ```bash
-npm audit --omit=dev --json
+npm audit --omit=dev --audit-level=high --json
 node --test tests/*.test.js
 python3 -m unittest discover -s crawler -t crawler -p "test_*.py"
 bash scripts/check-migrations.sh
@@ -322,7 +322,7 @@ env NEXT_PUBLIC_SUPABASE_URL=https://example.supabase.co NEXT_PUBLIC_SUPABASE_AN
 git diff --check
 ```
 
-Expected: audit has zero high/critical vulnerabilities; Node and Python tests pass; migrations, lint, build and diff check pass. If Next 15 introduces a compatibility failure, fix only the demonstrated failure and add a regression test before production code changes.
+Expected: audit exits zero with zero high/critical vulnerabilities; Node and Python tests pass; migrations, lint, build and diff check pass. Raw audit still reports two accepted temporary moderate findings from Next's bundled PostCSS 8.4.31. Current repository inspection found no runtime path that stringifies an untrusted CSS AST into `<style>`; review this risk weekly and on every dependency upgrade. Do not run `npm audit fix --force`, whose suggested resolution can incorrectly downgrade the supported dependency line. If Next 15 introduces a compatibility failure, fix only the demonstrated failure and add a regression test before production code changes.
 
 - [ ] **Step 5: Commit Task 4 files**
 
@@ -356,7 +356,7 @@ python3 -m unittest discover -s crawler -t crawler -p "test_*.py"
 bash scripts/check-migrations.sh
 npm run lint
 env NEXT_PUBLIC_SUPABASE_URL=https://example.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=dummy npm run build
-npm audit --omit=dev --json
+npm audit --omit=dev --audit-level=high --json
 git diff --check origin/main...HEAD
 ```
 

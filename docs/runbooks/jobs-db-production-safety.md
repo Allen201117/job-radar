@@ -11,6 +11,7 @@
 | PITR / RPO / RTO | 未验证，需负责人签字 | 必须填写恢复能力与可接受目标后才能放行。 |
 | 最新季度恢复演练 | 未验证 | 尚无可引用的演练记录。 |
 | 连接容量 | 仓库配置已确认，生产实时值未验证 | 仓库运维记录写明数据库 `max_connections=100`；应用连接池代码 `max: 5`。生产实时配置与当前占用仍须核验。 |
+| 生产依赖 high/critical | 已确认 | `npm audit --omit=dev --audit-level=high --json` 退出 0；raw audit 的 2 个 moderate 为已接受临时风险，见第 6 节。 |
 
 ## 1. TLS
 
@@ -140,7 +141,25 @@ order by count(*) desc;
 
 正式告警阈值、接收人、值班升级路径和监控证据位置均为未验证，必须在上线前填写并试触发一次。
 
-## 6. 上线顺序与回滚
+## 6. 依赖安全门
+
+发布验收运行：
+
+```bash
+npm audit --omit=dev --audit-level=high --json
+```
+
+该命令用于让 high/critical 为 0 时退出 0。另行读取 raw audit 可见 2 个 moderate，均由 Next.js 内嵌 PostCSS 8.4.31 引起。当前仓库检查未发现将不可信 CSS AST stringify 后注入 `<style>` 的运行时路径，因此暂时接受该风险；接受范围、责任人和到期日仍为未验证。每周及每次依赖升级必须复查公告、运行路径和修复版本。禁止执行 `npm audit fix --force`，其建议可能错误降级当前支持线。
+
+```text
+临时风险责任人：未验证 / ______
+接受日期：未验证 / ______
+复查日期：未验证 / ______
+风险到期日：未验证 / ______
+复查证据位置：未验证 / ______
+```
+
+## 7. 上线顺序与回滚
 
 上线必须按以下顺序执行：
 
@@ -149,9 +168,59 @@ order by count(*) desc;
 3. 观察错误率、连接占用和查询延迟，确认后再移除 `rejectUnauthorized:false` 兼容路径。
 4. 完成备份、PITR/RPO/RTO、恢复演练和容量证据归档后，由责任人签字放行。
 
-回滚时只回滚应用版本或 secret 版本引用，禁止在日志中打印 secret，也禁止把 `rejectUnauthorized:false` 当作长期修复。若可信 CA 路径失败且无法安全恢复，应停止发布并恢复上一稳定版本；重新启用不校验证书的兼容路径必须作为限时安全例外单独审批，写明责任人、到期时间和整改工单。
+### 发布前登记门
 
-## 7. 发布验收汇总
+以下字段必须在发布单中登记；只能记录 URL/ID 或 secret 版本编号，禁止记录 secret 值。任一项为空或未验证时禁止发布：
+
+```text
+Known-good deployment URL：未验证 / ______
+Known-good deployment ID：未验证 / ______
+当前 CA secret version reference：未验证 / ______
+回滚 CA secret version reference：未验证 / ______
+Vercel 项目/环境标识：未验证 / ______
+发布负责人：未验证 / ______
+登记证据位置：未验证 / ______
+```
+
+### 建议回滚触发器
+
+以下阈值均为建议，监控规则是否已配置和试触发仍为未验证：
+
+- `/api/jobs/stats` 或核心 jobs API 的 5xx 错误率连续 5 分钟达到 5%。
+- 数据库 TLS 证书/主机名校验错误连续出现 5 分钟，或数据库连接错误率在 5 分钟窗口达到 2%。
+- 数据库连接占用连续 5 分钟达到 85%，或出现连接拒绝。
+- jobs API p95 延迟连续 10 分钟超过发布前基线的 2 倍。
+
+### 可执行回滚
+
+1. 冻结继续发布和非必要批任务，记录触发指标、开始时间与负责人。
+2. 在 Vercel Dashboard 将已登记的 known-good deployment Promote to Production，或使用：
+
+   ```bash
+   vercel promote "$KNOWN_GOOD_DEPLOYMENT_URL"
+   ```
+
+3. 在 secret provider 控制台把应用引用恢复到已登记的 CA secret version；只记录版本编号和审计事件，不复制或打印 secret 值。
+4. 如果 known-good 版本会恢复 `rejectUnauthorized:false`，必须先取得限时安全例外：登记批准人、到期时间、整改工单，并把流量限制到完成回滚验证所需的最小范围。缺少任一记录不得恢复该兼容路径。
+5. 回滚后以正确 CA 执行只读 `select 1`，调用关键只读 jobs API；再以错误 CA 做负向连接测试，必须失败。确认 API 错误率、TLS/连接错误、连接占用和 p95 延迟恢复后才能结束事件。
+
+```text
+回滚触发证据：未验证 / ______
+执行方式（Dashboard/CLI）：未验证 / ______
+恢复 deployment ID：未验证 / ______
+恢复 secret version reference：未验证 / ______
+安全例外批准人（如适用）：未验证 / ______
+安全例外到期时间（如适用）：未验证 / ______
+流量限制（如适用）：未验证 / ______
+正确 CA select 1：未验证 / ______
+关键只读 API：未验证 / ______
+错误 CA 必须失败：未验证 / ______
+监控恢复证据：未验证 / ______
+```
+
+回滚时禁止在日志中打印 secret，也禁止把 `rejectUnauthorized:false` 当作长期修复。若可信 CA 路径失败且无法安全恢复，应停止发布并恢复上一稳定版本。
+
+## 8. 发布验收汇总
 
 ```text
 TLS 可信 CA 与身份校验：未验证 / 已确认，证据：______
