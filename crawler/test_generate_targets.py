@@ -102,6 +102,22 @@ class ThemeAndGuardTest(unittest.TestCase):
         self.assertNotIn("C250", user)
 
 
+class TokenBudgetTest(unittest.TestCase):
+    """输出预算随 n 伸缩，不靠固定魔法数（n 被上调也不会悄悄退回截断）。"""
+
+    def test_floor_for_small_n(self):
+        self.assertEqual(gt.token_budget(1), gt.GEN_MAX_TOKENS)     # 小 n → 4096 下限兜底
+        self.assertEqual(gt.token_budget(30), gt.GEN_MAX_TOKENS)    # 30→3212 < 4096 → 仍走下限
+
+    def test_scales_above_floor_for_large_n(self):
+        self.assertGreater(gt.token_budget(50), gt.GEN_MAX_TOKENS)   # 50→5012 > 4096（比实测 ~2156 足足 2x）
+        self.assertEqual(gt.token_budget(100), 512 + 100 * gt._TOKENS_PER_COMPANY)
+
+    def test_tolerates_bad_input(self):
+        self.assertEqual(gt.token_budget(None), gt.GEN_MAX_TOKENS)
+        self.assertEqual(gt.token_budget(-5), gt.GEN_MAX_TOKENS)
+
+
 class SalvageTruncatedJsonTest(unittest.TestCase):
     """撞 max_tokens 截断（旧 max_tokens=2000 每天必截）→ 救回完整公司对象，半截的丢。"""
 
@@ -171,7 +187,7 @@ class LlmGenerateTest(unittest.TestCase):
         self.assertEqual([c["company"] for c in out], ["得物"])
         self.assertEqual(len(calls), 2)
         self.assertTrue(all(c["timeout"] == 90 for c in calls))
-        self.assertTrue(all(c["max_tokens"] == gt.GEN_MAX_TOKENS for c in calls))
+        self.assertTrue(all(c["max_tokens"] == gt.token_budget(1) for c in calls))
 
     def test_salvages_truncated_response_instead_of_returning_empty(self):
         """核心回归：LLM 撞上限截断时，喂料不再整段丢成 []，而是救回完整公司。"""
