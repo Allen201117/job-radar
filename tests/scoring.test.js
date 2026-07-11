@@ -121,7 +121,8 @@ test("returns structured match reasons without changing the existing score", () 
   assert.deepEqual(scored.match_reasons, result.match_reasons);
 });
 
-test("unrecognized locations do not throw or produce a location match", () => {
+test("unknown locations remain unmatched after the null-safe normalization compatibility change", () => {
+  // 行为合同只证明未知地点不误匹配；Next 15 build 的类型检查才是 undefined 返回值兼容的 RED/GREEN 门。
   const job = makeJob("job-unknown-location", "产品经理", "未知园区-α", "负责产品规划");
   const prefs = {
     ...makePreferences(),
