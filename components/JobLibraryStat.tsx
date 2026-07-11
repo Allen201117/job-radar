@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowsClockwise,
   Broadcast,
@@ -8,6 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import { AnimateNumber } from "@/components/ui/animated-blur-number";
 import { AnimatedStat } from "@/components/ui/animated-stat";
+import { createJobStatsRefresher, installVisiblePolling } from "@/lib/job-stats-refresh";
 import { cn } from "@/lib/utils";
 
 const POLL_INTERVAL_MS = 60_000;
@@ -22,21 +23,27 @@ interface Props {
   initialTotal: number;
 }
 
+interface JobStats {
+  validActive?: number;
+  sources?: number;
+  recent24h?: number;
+}
+
+async function fetchJobStats(): Promise<JobStats> {
+  // 服务端聚合：有效在招 / 24h 确认在招读香港 jobs 库，官方源读 Supabase（见 /api/jobs/stats）。
+  const resp = await fetch("/api/jobs/stats");
+  const data = await resp.json();
+  if (!resp.ok || !data?.ok) throw new Error("stats_failed");
+  return data;
+}
+
 export default function JobLibraryStat({ initialTotal }: Props) {
   const [activeJobs, setActiveJobs] = useState(0);
   const [sources, setSources] = useState<number | null>(null);
   const [recent, setRecent] = useState<number | null>(null);
   const [status, setStatus] = useState<"live" | "syncing" | "stale">("live");
   const [syncedAt, setSyncedAt] = useState<Date | null>(null);
-  const isMountedRef = useRef(false);
-  const inFlightRef = useRef<Promise<void> | null>(null);
-
-  useEffect(() => {
-    isMountedRef.current = true;
-    return () => {
-      isMountedRef.current = false;
-    };
-  }, []);
+  const refreshRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   // 入场翻动：下一帧把 0 推到 SSR 已知的真实总数。
   useEffect(() => {
@@ -44,48 +51,35 @@ export default function JobLibraryStat({ initialTotal }: Props) {
     return () => cancelAnimationFrame(id);
   }, [initialTotal]);
 
-  const refresh = useCallback(() => {
-    if (inFlightRef.current) return inFlightRef.current;
-
-    const request = (async () => {
-      if (isMountedRef.current) setStatus("syncing");
-      try {
-        // 服务端聚合：有效在招 / 24h 确认在招读香港 jobs 库，官方源读 Supabase（见 /api/jobs/stats）。
-        const resp = await fetch("/api/jobs/stats");
-        const data = await resp.json();
-        if (!resp.ok || !data?.ok) throw new Error("stats_failed");
-        if (!isMountedRef.current) return;
+  useEffect(() => {
+    const refresher = createJobStatsRefresher({
+      fetchStats: fetchJobStats,
+      onStart: () => setStatus("syncing"),
+      onSuccess: (data) => {
         if (typeof data.validActive === "number") setActiveJobs(data.validActive);
         if (typeof data.sources === "number") setSources(data.sources);
         if (typeof data.recent24h === "number") setRecent(data.recent24h);
         setSyncedAt(new Date());
         setStatus("live");
-      } catch {
-        if (isMountedRef.current) setStatus("stale");
-      }
-    })();
-
-    inFlightRef.current = request;
-    void request.finally(() => {
-      if (inFlightRef.current === request) inFlightRef.current = null;
+      },
+      onError: () => setStatus("stale"),
     });
-    return request;
-  }, []);
+    refreshRef.current = refresher.refresh;
+    const cleanupPolling = installVisiblePolling({
+      documentLike: document,
+      windowLike: window,
+      refresh: refresher.refresh,
+      intervalMs: POLL_INTERVAL_MS,
+    });
 
-  useEffect(() => {
-    const refreshIfVisible = () => {
-      if (document.visibilityState === "visible") refresh();
-    };
-    refreshIfVisible();
-    const iv = window.setInterval(() => {
-      refreshIfVisible();
-    }, POLL_INTERVAL_MS);
-    document.addEventListener("visibilitychange", refreshIfVisible);
     return () => {
-      window.clearInterval(iv);
-      document.removeEventListener("visibilitychange", refreshIfVisible);
+      cleanupPolling();
+      refresher.dispose();
+      if (refreshRef.current === refresher.refresh) {
+        refreshRef.current = () => Promise.resolve();
+      }
     };
-  }, [refresh]);
+  }, []);
 
   const syncLabel = syncedAt
     ? `最近同步 ${syncedAt.toLocaleTimeString("zh-CN", {
@@ -138,7 +132,7 @@ export default function JobLibraryStat({ initialTotal }: Props) {
         </div>
         <button
           type="button"
-          onClick={refresh}
+          onClick={() => void refreshRef.current()}
           className="grid size-9 shrink-0 place-items-center rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] text-[#3f3a33] dark:text-[#d9d0c2] transition duration-200 hover:-translate-y-0.5 hover:bg-white dark:hover:bg-[#1e1a15] active:scale-[0.96]"
           aria-label="立即刷新岗位库计数"
         >

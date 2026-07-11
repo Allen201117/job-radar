@@ -6,7 +6,6 @@ const { loadRoute, resolvedQuery } = require("./route-test-utils");
 
 const read = (rel) => fs.readFileSync(path.resolve(__dirname, rel), "utf8");
 
-const statsRoute = read("../app/api/jobs/stats/route.ts");
 const jobLibraryStat = read("../components/JobLibraryStat.tsx");
 const tagInput = read("../components/TagInput.tsx");
 const preferenceForm = read("../components/PreferenceForm.tsx");
@@ -65,17 +64,27 @@ async function assertUncachedStatsFailure(response) {
   assert.ok(!cacheControl.includes("s-maxage"));
 }
 
-test("jobs stats success response is CDN-cacheable for one minute", () => {
-  const successResponse = statsRoute.match(
-    /return\s+NextResponse\.json\(\s*\{\s*ok:\s*true[\s\S]*?\n\s*\);/,
-  )?.[0];
+test("jobs stats GET returns its real body with a one-minute CDN cache policy", async () => {
+  const route = loadStatsRoute({
+    storeEnabled: true,
+    supabase: createStatsSupabase({ sourcesResult: { count: 5, error: null } }),
+    countValidActive: async () => 12,
+    countRecentActive: async () => 8,
+  });
 
-  assert.ok(successResponse, "could not locate the successful stats response");
-  assert.match(
-    successResponse,
-    /["']Cache-Control["']\s*:\s*["']public, s-maxage=60, stale-while-revalidate=300["']/,
+  const response = await route.GET();
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    ok: true,
+    validActive: 12,
+    recent24h: 8,
+    sources: 5,
+  });
+  assert.equal(
+    response.headers.get("cache-control"),
+    "public, s-maxage=60, stale-while-revalidate=300",
   );
-  assert.doesNotMatch(successResponse, /["']Cache-Control["']\s*:\s*["']no-store["']/);
 });
 
 for (const scenario of [
@@ -104,13 +113,31 @@ test("jobs stats returns an uncached 500 when the HK jobs store rejects", async 
   await assertUncachedStatsFailure(await route.GET());
 });
 
-test("job library stats polls every 60 seconds without bypassing HTTP cache", () => {
-  assert.match(jobLibraryStat, /const\s+POLL_INTERVAL_MS\s*=\s*(?:60_000|60000)\s*;/);
-  assert.match(jobLibraryStat, /setInterval\([\s\S]*?,\s*POLL_INTERVAL_MS\s*\)/);
+test("jobs stats returns an uncached 500 when the HK recent-active count rejects", async () => {
+  const route = loadStatsRoute({
+    storeEnabled: true,
+    countRecentActive: async () => {
+      throw new Error("recent jobs store failed");
+    },
+  });
+
+  await assertUncachedStatsFailure(await route.GET());
+});
+
+test("job library stats wires the tested lifecycle helpers and keeps manual refresh accessible", () => {
   assert.match(
     jobLibraryStat,
-    /const\s+refreshIfVisible\s*=\s*\(\)\s*=>\s*\{\s*if\s*\(document\.visibilityState\s*===\s*["']visible["']\)\s*refresh\(\);\s*\};\s*refreshIfVisible\(\);/,
+    /import\s+\{\s*createJobStatsRefresher\s*,\s*installVisiblePolling\s*\}\s+from\s+["']@\/lib\/job-stats-refresh["']/,
   );
+  assert.match(jobLibraryStat, /const\s+POLL_INTERVAL_MS\s*=\s*(?:60_000|60000)\s*;/);
+  assert.match(jobLibraryStat, /createJobStatsRefresher\s*\(\s*\{/);
+  assert.match(jobLibraryStat, /installVisiblePolling\s*\(\s*\{/);
+  assert.match(jobLibraryStat, /documentLike:\s*document/);
+  assert.match(jobLibraryStat, /windowLike:\s*window/);
+  assert.match(jobLibraryStat, /intervalMs:\s*POLL_INTERVAL_MS/);
+  assert.match(jobLibraryStat, /cleanupPolling\s*\(\s*\)/);
+  assert.match(jobLibraryStat, /refresher\.dispose\s*\(\s*\)/);
+  assert.match(jobLibraryStat, /aria-label=["']立即刷新岗位库计数["']/);
   assert.match(jobLibraryStat, /轮询间隔\s*\{POLL_INTERVAL_MS\s*\/\s*1000\}s/);
   assert.doesNotMatch(jobLibraryStat, />\s*轮询间隔 12s\s*</);
   assert.doesNotMatch(jobLibraryStat, /fetch\(\s*["']\/api\/jobs\/stats["']\s*,\s*\{[\s\S]*?cache\s*:\s*["']no-store["']/);
@@ -118,20 +145,6 @@ test("job library stats polls every 60 seconds without bypassing HTTP cache", ()
   assert.ok(statusText, "could not locate statusText");
   assert.ok(statusText.includes("定时刷新"), "status copy must describe scheduled refresh");
   assert.ok(!statusText.includes("实时刷新"), "status copy must not claim real-time refresh");
-});
-
-test("job library stats refreshes on foregrounding and cleans up all automatic work", () => {
-  assert.match(jobLibraryStat, /document\.addEventListener\(\s*["']visibilitychange["']\s*,\s*refreshIfVisible\s*\)/);
-  assert.match(jobLibraryStat, /document\.removeEventListener\(\s*["']visibilitychange["']\s*,\s*refreshIfVisible\s*\)/);
-  assert.match(jobLibraryStat, /window\.clearInterval\(iv\)/);
-  assert.match(jobLibraryStat, /isMountedRef\.current\s*=\s*false/);
-});
-
-test("job library stats reuses in-flight refreshes and skips state updates after unmount", () => {
-  assert.match(jobLibraryStat, /if\s*\(inFlightRef\.current\)\s*return\s+inFlightRef\.current\s*;/);
-  assert.match(jobLibraryStat, /if\s*\(!isMountedRef\.current\)\s*return\s*;/);
-  assert.match(jobLibraryStat, /if\s*\(isMountedRef\.current\)\s*setStatus\(\s*["']stale["']\s*\)/);
-  assert.match(jobLibraryStat, /inFlightRef\.current\s*=\s*request/);
 });
 
 test("TagInput requires and applies a business-specific accessible name", () => {
