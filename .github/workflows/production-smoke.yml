@@ -1,0 +1,43 @@
+name: production-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Production origin to verify"
+        required: false
+        default: "https://job-radar-sigma.vercel.app"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify public pages and jobs database stats
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+        run: |
+          set -euo pipefail
+          base="${BASE_URL%/}"
+          curl --fail --silent --show-error --retry 3 --retry-all-errors \
+            --max-time 30 --output /dev/null "$base/"
+          curl --fail --silent --show-error --retry 3 --retry-all-errors \
+            --max-time 35 --output "$RUNNER_TEMP/jobs-stats.json" "$base/api/jobs/stats"
+          node - "$RUNNER_TEMP/jobs-stats.json" <<'NODE'
+          const fs = require("node:fs");
+          const body = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          if (
+            body.ok !== true ||
+            !Number.isFinite(body.validActive) ||
+            !Number.isFinite(body.recent24h) ||
+            !Number.isFinite(body.sources)
+          ) {
+            throw new Error("jobs stats response failed its public aggregate contract");
+          }
+          console.log(JSON.stringify({
+            ok: body.ok,
+            validActive: body.validActive,
+            recent24h: body.recent24h,
+            sources: body.sources,
+          }));
+          NODE
