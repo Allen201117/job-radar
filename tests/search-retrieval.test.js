@@ -271,3 +271,24 @@ test("Supabase scan keeps scanning later batches before match ranking", async ()
   assert.equal(result.jobs[0].id, "high");
   assert.equal(result.jobs[0].match_score, 30);
 });
+
+test("jobs-store 多城市：tsquery OR 组 + 软城市 OR 覆盖所有选中城市的别名", async () => {
+  const calls = [];
+  const { searchJobsStore } = loadJobsStore(async (sql, params) => {
+    calls.push({ sql, params });
+    return [];
+  });
+
+  await searchJobsStore({ ...filters, city: "北京,上海" }, null, [], 0, 10);
+
+  assert.equal(calls.length, 1);
+  // FTS 全表覆盖（不退化 scan），tsquery 里城市是 OR 组（含两城 bigram）
+  assert.match(calls[0].sql, /search_doc @@/i);
+  assert.match(String(calls[0].params[0]), /北京/);
+  assert.match(String(calls[0].params[0]), /上海/);
+  assert.match(String(calls[0].params[0]), /\|/); // 城市之间 OR
+  // 软城市 OR 组保留空 location + 两城别名/拼音
+  assert.match(calls[0].sql, /location is null or location = ''/i);
+  assert.ok(calls[0].params.includes("%beijing%"));
+  assert.ok(calls[0].params.includes("%shanghai%"));
+});
