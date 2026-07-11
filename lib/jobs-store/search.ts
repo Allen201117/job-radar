@@ -64,11 +64,15 @@ function appendSoftCityWhere(conds: string[], params: unknown[], cities: string[
 // 改一处两处同改，否则可能漏掉真校招/实习（精度红线）。
 function appendRecruitmentPrefilter(conds: string[], jobType: string) {
   if (jobType === "校招") {
+    // (a) 正向校招信号超集  AND  (b) 排除「job_type 自报社招」——sourceDeclaredCategory 里 社招 的判定
+    // 在校招之前短路(且实习更先)，故 job_type 命中社招模式的岗在 JS 里必是 社招/实习、绝不会是校招，
+    // 可安全剔除（实测把候选从 4423 收到 2661，最终校招结果数不变）。null job_type 必须保留。
     conds.push(
-      "(job_type ~* '(校招|校园招聘|应届|管培生|管理培训生|留学生专项|campus|new\\s+grad|university\\s+graduate|entry[-\\s]?level)'" +
+      "((job_type ~* '(校招|校园招聘|应届|管培生|管理培训生|留学生专项|campus|new\\s+grad|university\\s+graduate|entry[-\\s]?level)'" +
         " or jd_url ~* '(xiaozhao|campus)'" +
         " or (coalesce(title,'')||' '||coalesce(summary,'')) ~* '(应届|[0-9]{2,4}届|校园招聘|校招|管培生|管理培训生|留学生专项|new\\s?grads?|university\\s+graduate|entry[-\\s]?level|campus\\s?(recruit|hiring)|graduate\\s+program)'" +
-        " or company ~* '(校招|校园招聘)')",
+        " or company ~* '(校招|校园招聘)')" +
+        " and (job_type is null or job_type !~* '(社招|社会招聘|全职|experienced|professional|full.?time)'))",
     );
   } else if (jobType === "实习") {
     conds.push(
