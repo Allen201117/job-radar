@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
 import { activeJobCountsByCompany, jobsStoreEnabled } from "@/lib/jobs-store/read";
-import { findCompanyProfile } from "@/lib/insight-match";
+import { companyMatches, findCompanyProfile } from "@/lib/insight-match";
 import { ITEM_COLUMNS, INSIGHT_DIMENSIONS, groupGatedInsights } from "@/lib/insight-bundle";
 import type { CompanyProfile } from "@/lib/types";
 
@@ -71,11 +71,11 @@ export async function GET(request: NextRequest) {
       const { dimensions } = groupGatedInsights(itemsByProfile.get(profile.id) || [], now);
       real = INSIGHT_DIMENSIONS.reduce((n, d) => n + dimensions[d].length, 0);
     }
-    const candidates = profile
-      ? [profile.company, ...(profile.aliases || []), company]
-      : [company];
-    let activeCount = 0;
-    for (const c of Array.from(new Set(candidates))) activeCount += countByCompany.get(c) || 0;
+    const activeCount = profile
+      ? counts
+          .filter((row) => companyMatches(profile, row.company))
+          .reduce((sum, row) => sum + (row.job_count || 0), 0)
+      : countByCompany.get(company) || 0;
     availability[company] = { real, derived: activeCount >= DERIVED_MIN_ACTIVE };
   }
 
