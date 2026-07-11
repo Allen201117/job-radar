@@ -21,9 +21,20 @@ import time
 
 import httpx
 
-# n≈50 家公司的 JSON ~2500 tokens；给足余量避免撞上限被截断。旧值 2000 每天都 finish_reason=length
-# 截断 → parse 失败 → 喂料返回 [] → 静态清单榨干、扩源停摆（本次修复的根因）。截断仍由 loads_companies 兜底。
+# 输出 token 预算。旧值 2000 装不下 n=50（每天 finish_reason=length 截断 → parse 失败 → 喂料返回 []
+# → 静态清单榨干、扩源停摆，本次修复的根因）。GEN_MAX_TOKENS 是**下限兜底**；实际预算随 n 伸缩（见
+# token_budget），避免 n 被上调后固定值悄悄退回截断。极端 n 撞模型输出上限时仍由 loads_companies 截断兜底。
 GEN_MAX_TOKENS = 4096
+_TOKENS_PER_COMPANY = 90   # 实测 ~43 tokens/家（n=50→2156），给 ~2x 余量
+
+
+def token_budget(n):
+    """按请求公司数给足输出预算：max(4096 下限, 512 + n×90)。让预算随 n 涨，不靠固定魔法数。"""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 0
+    return max(GEN_MAX_TOKENS, 512 + max(0, n) * _TOKENS_PER_COMPANY)
 
 # 行业主题（按日轮转，覆盖目标用户关心的全部方向；配合 targets_tech_consumer.json 的分类口径）
 _THEMES = [
@@ -187,7 +198,7 @@ def llm_generate(existing_names, n=50, date=None):
                 # 取原始 content 自己解析 → 撞 max_tokens 截断也能救回完整公司（loads_companies），
                 # 而不是像旧 chat_json 那样整段 parse 失败返回 []（截断=每天 0 产出的根因）。
                 content = ie.chat_content(messages, temperature=0.5,
-                                          max_tokens=GEN_MAX_TOKENS, timeout=90)
+                                          max_tokens=token_budget(n), timeout=90)
                 break
             except httpx.TimeoutException:
                 if attempt == 0:
