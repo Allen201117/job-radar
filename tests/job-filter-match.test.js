@@ -47,6 +47,7 @@ const {
   jobFilterMatch,
   jobFilterTier,
   countMatchBreakdown,
+  splitMultiValue,
 } = loadTs(path.join(ROOT, "lib", "job-filter.ts"));
 
 const base = { ...DEFAULT_FILTERS };

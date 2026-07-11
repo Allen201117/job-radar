@@ -28,12 +28,14 @@ export type Filters = {
   education: string; // 用户所选学历（博士/硕士/本科/大专）；""=学历不限（不筛）
 };
 
-// 多选字段（城市 / 关键词）内部用英文逗号分隔存储；拆成去空去重的值数组。
-// 单值（无逗号）→ 一元数组，与改造前逐字段一致（向后兼容）。
+// 多选字段（城市 / 关键词）拆成去空去重的值数组。分隔符 = 逗号（中英文）或空白：
+// 用户常按老输入框习惯用空格分隔多城市（如「上海 杭州 深圳」），若只按逗号拆会被当成一个不存在的城市
+// 字面量匹配 → 几乎搜不到（踩过这个坑）。中文城市/关键词本身不含空格，按空白拆是安全且符合直觉的；
+// 单值（无分隔符）→ 一元数组，向后兼容。英文多词短语会被拆成 OR（可接受：召回略宽，不漏）。
 export function splitMultiValue(value: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const raw of (value || "").split(",")) {
+  for (const raw of (value || "").split(/[\s,，]+/)) {
     const v = raw.trim();
     if (v && !seen.has(v)) {
       seen.add(v);

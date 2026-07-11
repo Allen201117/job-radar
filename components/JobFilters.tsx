@@ -131,7 +131,7 @@ export default function JobFilters({ filters, onChange, companies, jobScope = "d
             <ChipsInput
               value={filters.city}
               onChange={(v) => set("city", v)}
-              placeholder="如 北京，回车添加，可多选"
+              placeholder="如 北京，空格或回车分隔，可多选"
               ariaLabel="城市，可多选"
             />
           </div>
@@ -149,7 +149,7 @@ export default function JobFilters({ filters, onChange, companies, jobScope = "d
             <ChipsInput
               value={filters.keyword}
               onChange={(v) => set("keyword", v)}
-              placeholder="如 算法，回车添加，可多选"
+              placeholder="如 算法，空格或回车分隔，可多选"
               ariaLabel="关键词，可多选"
             />
           </div>
@@ -254,11 +254,14 @@ function ChipsInput({
   const [draft, setDraft] = useState("");
   const chips = splitMultiValue(value);
 
+  // 提交草稿：按空白/逗号拆成多枚芯片（用户常用空格分隔多城市，如「上海 杭州 深圳」→ 三枚）。
   function commit(raw: string) {
-    const v = raw.trim();
     setDraft("");
-    if (!v || chips.includes(v)) return;
-    onChange([...chips, v].join(","));
+    const next = [...chips];
+    for (const part of splitMultiValue(raw)) {
+      if (!next.includes(part)) next.push(part);
+    }
+    if (next.length !== chips.length) onChange(next.join(","));
   }
   function removeAt(index: number) {
     onChange(chips.filter((_, i) => i !== index).join(","));
