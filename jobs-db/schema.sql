@@ -217,7 +217,11 @@ returns table(company text, job_count integer) language sql stable
 set search_path to 'public' as $function$
   select j.company, count(*)::int as job_count
   from public.jobs j
-  where j.status = 'active' and j.company is not null and j.company <> ''
+  where j.status = 'active'
+    and j.company is not null
+    and j.company <> ''
+    and j.summary is not null
+    and char_length(btrim(j.summary)) >= 60
   group by j.company
 $function$;
 

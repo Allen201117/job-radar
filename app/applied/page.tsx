@@ -1,3 +1,4 @@
+import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import { CountBadge, EmptyPanel, ProductHero, ProductPage } from "@/components/ProductChrome";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
@@ -42,7 +43,15 @@ export default async function AppliedPage() {
         <ProductPage maxWidth="max-w-5xl">
           <ProductHero eyebrow="已投递" title="已完成投递的岗位" icon={CheckCircle} />
           <div className="mt-6">
-            <EmptyPanel title="还没有标记任何已投递岗位" description="在岗位卡片里点击「已投递」后，这里会形成你的投递记录。" />
+            <EmptyPanel
+              title="还没有标记任何已投递岗位"
+              description="在岗位卡片里点击「标记投递」，这里会形成你的投递记录。"
+              action={
+                <Link href="/today" className="btn-ink">
+                  返回今日机会
+                </Link>
+              }
+            />
           </div>
         </ProductPage>
       </div>

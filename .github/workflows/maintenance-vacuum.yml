@@ -30,6 +30,8 @@ jobs:
   vacuum:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Install psql client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
@@ -37,12 +39,15 @@ jobs:
         env:
           # Phase 1 后 jobs 在自建香港 PG；vacuum 只动 jobs → 全部走 JOBS_DATABASE_URL。
           JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
           FULL: ${{ github.event.inputs.full }}
         run: |
           if [ -z "${JOBS_DATABASE_URL:-}" ]; then
             echo "::error::JOBS_DATABASE_URL secret 未配置（Phase 1 后 jobs 在自建香港 PG）。"
             exit 1
           fi
+          source scripts/enable-jobs-db-strict-tls.sh
           size_sql="select pg_size_pretty(pg_database_size(current_database())) as db_size, pg_size_pretty(pg_total_relation_size('jobs')) as jobs_total;"
           echo "=== before ==="
           psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -c "$size_sql"

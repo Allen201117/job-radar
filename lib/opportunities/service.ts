@@ -214,22 +214,15 @@ export async function buildOpportunityFeed(
   const overrideProvided = options.noveltySinceOverride !== undefined && options.noveltySinceOverride !== null;
   const noveltySince = resolveNoveltySince(overrideProvided ? options.noveltySinceOverride! : lastOpenedAt, now);
 
-  const { sections, counts } = groupOpportunities(opps, { dailyLimit: profile.dailyLimit, intensity, noveltySince, now });
+  // 关键提醒在截断前与完整召回候选统一语义去重/分区，冲突主卡被淘汰时后续候选可正常回填。
+  const { sections, counts } = groupOpportunities([...critical, ...opps], {
+    dailyLimit: profile.dailyLimit,
+    intensity,
+    noveltySince,
+    now,
+  });
   counts.screened = recall.jobs.length;
   counts.filtered = filtered;
-
-  // 关键提醒并入 critical 区前置；同岗去重（saved 岗本就不在主召回，防御性再去一次）。
-  if (critical.length) {
-    const seen = new Set(Object.values(sections).flat().map((o) => o.job.id));
-    const freshCritical = critical.filter((o) => !seen.has(o.job.id));
-    sections.critical = [...freshCritical, ...sections.critical];
-    counts.critical = sections.critical.length;
-    counts.total += freshCritical.length;
-    for (const o of freshCritical) {
-      const p = o.signals[0];
-      if (p) counts.by_signal[p.type] = (counts.by_signal[p.type] ?? 0) + 1;
-    }
-  }
 
   await hydrateDisplayJobs(sections);
 

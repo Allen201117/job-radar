@@ -4,7 +4,7 @@
 
 **目标**：每天自动监控一批企业招聘官网，把公开岗位信息整理到共享岗位库，每个用户根据自己的偏好看到不同排序。
 
-**技术栈**：Next.js 14 + Tailwind + Supabase（Auth / sources / runs / 用户数据）+ 独立 PostgreSQL 岗位库 + Python Crawler + GitHub Actions。
+**技术栈**：Next.js 15.5.18 + Tailwind + Supabase（Auth / sources / runs / 用户数据）+ 独立 PostgreSQL 岗位库 + Python Crawler + GitHub Actions。
 
 ## 架构
 
@@ -103,7 +103,7 @@ BAIDU_QIANFAN_SEARCH_DISABLED=false
 
 ### 前提条件
 
-- Node.js 18+
+- Node.js `^18.18.0 || ^19.8.0 || >=20.0.0`
 - Python 3.11+
 - Supabase 项目
 - 独立 PostgreSQL 岗位库（生产环境通过 `JOBS_DATABASE_URL` 连接）
@@ -112,7 +112,7 @@ BAIDU_QIANFAN_SEARCH_DISABLED=false
 
 Supabase 迁移由 CI 自动 apply：push 到 `main` 且改动 `supabase/migrations/**` 时，`.github/workflows/migrate.yml` 会执行前缀校验并应用尚未执行的迁移，不要再按 README 逐条手动运行 SQL。
 
-当前仓库共有 **174** 个 Supabase SQL 迁移；明细与顺序以 `supabase/migrations/` 为准。计数命令：
+当前仓库共有 **184** 个 Supabase SQL 迁移；明细与顺序以 `supabase/migrations/` 为准。计数命令：
 
 ```bash
 ls supabase/migrations/*.sql | wc -l
@@ -187,6 +187,16 @@ python3 crawler/run.py --source jd
 11. A/B 用户 profile 和 job_actions 隔离。
 
 ## 部署
+
+生产岗位库上线前必须完成并留存 [`docs/runbooks/jobs-db-production-safety.md`](docs/runbooks/jobs-db-production-safety.md) 中的 TLS、备份、恢复与容量验收证据；未验证项不得视为已满足。
+
+生产依赖安全门使用 high 阈值运行，保证 high/critical 为 0 时命令退出 0：
+
+```bash
+npm audit --omit=dev --audit-level=high --json
+```
+
+当前 raw audit 仍报告 2 个 moderate，来自 Next.js 内嵌 PostCSS 8.4.31。仓库检查未发现把不可信 CSS AST stringify 后注入 `<style>` 的运行时路径；该风险已评估但尚未完成正式接受，在责任人、接受日期、到期日、批准签字和证据位置登记前仍是发布阻塞。high gate 通过不等于完成 moderate 正式风险接受；每周和依赖升级时必须复查，且不得运行会错误降级依赖的 `npm audit fix --force`。
 
 ### 前端 — Vercel
 

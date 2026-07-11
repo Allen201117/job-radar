@@ -3,11 +3,13 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import pg from "pg";
+import tlsOptions from "../lib/jobs-store/tls-options.js";
 
 const { Client } = pg;
+const { buildJobsDatabaseSsl } = tlsOptions;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-function connectionConfig(url) {
+function connectionConfig(url, { jobsDatabase = false } = {}) {
   const parsed = new URL(url);
   return {
     host: parsed.hostname,
@@ -15,7 +17,9 @@ function connectionConfig(url) {
     user: decodeURIComponent(parsed.username),
     password: decodeURIComponent(parsed.password),
     database: parsed.pathname.replace(/^\//, ""),
-    ssl: { rejectUnauthorized: false },
+    ssl: jobsDatabase
+      ? buildJobsDatabaseSsl(process.env, parsed.hostname)
+      : { rejectUnauthorized: true },
     connectionTimeoutMillis: 10_000,
     statement_timeout: 30_000,
   };
@@ -49,7 +53,7 @@ async function main() {
   }
 
   const supabase = new Client(connectionConfig(supabaseUrl));
-  const jobs = new Client(connectionConfig(jobsUrl));
+  const jobs = new Client(connectionConfig(jobsUrl, { jobsDatabase: true }));
   await Promise.all([supabase.connect(), jobs.connect()]);
 
   try {

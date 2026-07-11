@@ -3,8 +3,7 @@
 // 副作用：判死 → markJobExpiredById(+confirmed_closed_at)；判活 → touchJobCheckedById；
 //   顺带打 job_liveness_at_click 事件（仅可探源 best-effort）。失败/超时/不可探源 → unknown（绝不因探不动判死）。
 import { NextRequest, NextResponse } from "next/server";
-import { hasSessionCookie } from "@/lib/apiAuth";
-import { getRequestUser } from "@/lib/auth";
+import { requireUser } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
 import { jobsStoreEnabled, jobsByIds } from "@/lib/jobs-store/read";
 import { markJobExpiredById, touchJobCheckedById } from "@/lib/jobs-store/write";
@@ -29,11 +28,12 @@ function raceTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([p, new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))]);
 }
 
-export async function POST(request: NextRequest, { params }: { params: { jobId: string } }) {
-  const jobId = params.jobId;
+export async function POST(request: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
+  const auth = await requireUser();
+  if (auth.error) return auth.error;
+
+  const { jobId } = await params;
   if (!isUuid(jobId)) return NextResponse.json({ ok: true, result: "unknown" });
-  // 廉价登录态（不联网）；匿名不探不写。
-  if (!hasSessionCookie(request)) return NextResponse.json({ ok: true, result: "unknown" });
 
   const useStore = jobsStoreEnabled();
   const service = createServiceClient();
@@ -101,8 +101,7 @@ export async function POST(request: NextRequest, { params }: { params: { jobId: 
 
   // 顺带打 job_liveness_at_click（点击有效率指标分母，仅可探源 best-effort）。
   try {
-    const user = await getRequestUser();
-    if (user) await trackServerEvent(service as any, user.id, "job_liveness_at_click", { job_id: jobId, adapter, result });
+    await trackServerEvent(service as any, auth.user.id, "job_liveness_at_click", { job_id: jobId, adapter, result });
   } catch {
     /* 埋点失败不影响放行 */
   }
