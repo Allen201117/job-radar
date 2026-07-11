@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - uses: actions/checkout@v4
+
       - name: Install pg client 17 (PGDG)
         run: |
           sudo apt-get update && sudo apt-get install -y curl ca-certificates

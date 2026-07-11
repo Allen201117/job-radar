@@ -29,6 +29,7 @@ test("direct libpq workflows enable verify-full before invoking jobs psql", () =
   ];
   for (const name of directLibpqWorkflows) {
     const source = fs.readFileSync(path.join(root, ".github", "workflows", name), "utf8");
+    assert.match(source, /uses:\s*actions\/checkout@/, `${name} must checkout the TLS helper`);
     assert.match(source, /source scripts\/enable-jobs-db-strict-tls\.sh/, name);
   }
 });
