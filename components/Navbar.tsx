@@ -148,23 +148,40 @@ export default function Navbar() {
           >
             <BrandMark tile={28} icon={18} wordSize={15} />
           </Link>
-          {/* 桌面端：内联导航胶囊（xl 以下交给汉堡菜单，避免中等宽度下导航与右侧控件重叠） */}
-          <nav className="hidden gap-1 xl:flex">
-            {LINKS.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className={cn(
-                  "inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium transition duration-200",
-                  pathname === link.href
-                    ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                    : "text-[#5f594e] hover:bg-black/[0.05] hover:text-[#1a1714] active:scale-[0.98] dark:text-[#b6ad9d] dark:hover:bg-white/[0.06] dark:hover:text-[#f3ecdf]",
-                )}
-              >
-                <link.icon size={16} weight={pathname === link.href ? "fill" : "regular"} aria-hidden="true" />
-                {t(link.key, lang)}
-              </Link>
-            ))}
+          {/* 桌面端：图标导航栏（lg 以上内联）。图标化后占位更小，不再与右侧控件抢空间，
+              因此恢复 lg 断点、无需退化为汉堡菜单；hover / 键盘聚焦升起气泡标签说明去处。 */}
+          <nav className="hidden items-center gap-1 lg:flex">
+            {LINKS.map((link) => {
+              const active = pathname === link.href;
+              const label = t(link.key, lang);
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  aria-label={label}
+                  aria-current={active ? "page" : undefined}
+                  className={cn(
+                    "group relative grid size-9 shrink-0 place-items-center rounded-full outline-none transition duration-200 focus-visible:ring-2 focus-visible:ring-[#1a1714]/25 dark:focus-visible:ring-[#f3ecdf]/30",
+                    active
+                      ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                      : "text-[#5f594e] hover:bg-black/[0.05] hover:text-[#1a1714] active:scale-[0.95] dark:text-[#b6ad9d] dark:hover:bg-white/[0.06] dark:hover:text-[#f3ecdf]",
+                  )}
+                >
+                  <link.icon size={19} weight={active ? "fill" : "regular"} aria-hidden="true" />
+                  {/* 气泡标签：纯视觉，真实无障碍名走 aria-label；默认隐藏，hover / 聚焦时升起 */}
+                  <span
+                    role="tooltip"
+                    className="pointer-events-none absolute left-1/2 top-full z-50 mt-2.5 -translate-x-1/2 translate-y-1 whitespace-nowrap rounded-lg bg-[#1a1714] px-2.5 py-1 text-xs font-medium text-[#f7f1e6] opacity-0 shadow-[0_12px_30px_-14px_rgba(26,23,20,0.7)] transition duration-150 ease-out group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100 dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="absolute -top-1 left-1/2 size-2 -translate-x-1/2 rotate-45 rounded-[2px] bg-[#1a1714] dark:bg-[#f3ecdf]"
+                    />
+                    {label}
+                  </span>
+                </Link>
+              );
+            })}
           </nav>
         </div>
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
@@ -173,13 +190,13 @@ export default function Navbar() {
               value={jobScope}
               saving={scopeSaving}
               onChange={handleScopeChange}
-              className="hidden xl:flex"
+              className="hidden lg:flex"
             />
           )}
           <ThemeToggle />
           {/* 桌面端账号菜单：个人主页 + 退出（/me 不再占一级导航） */}
           {email && (
-            <div className="relative hidden xl:block">
+            <div className="relative hidden lg:block">
               <button
                 type="button"
                 onClick={() => setAcctOpen((v) => !v)}
@@ -225,7 +242,7 @@ export default function Navbar() {
             onClick={() => setMenuOpen((v) => !v)}
             aria-label={menuOpen ? "关闭菜单" : "打开菜单"}
             aria-expanded={menuOpen}
-            className="grid size-9 place-items-center rounded-full border border-black/[0.08] text-[#3f3a33] transition duration-200 hover:bg-black/[0.05] active:scale-[0.96] xl:hidden dark:border-white/[0.12] dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"
+            className="grid size-9 place-items-center rounded-full border border-black/[0.08] text-[#3f3a33] transition duration-200 hover:bg-black/[0.05] active:scale-[0.96] lg:hidden dark:border-white/[0.12] dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"
           >
             {menuOpen ? <X size={18} weight="bold" aria-hidden="true" /> : <List size={18} weight="bold" aria-hidden="true" />}
           </button>
@@ -238,9 +255,9 @@ export default function Navbar() {
           <div
             aria-hidden="true"
             onClick={() => setMenuOpen(false)}
-            className="fixed inset-0 top-14 z-30 bg-[#1a1714]/20 backdrop-blur-sm xl:hidden dark:bg-black/50"
+            className="fixed inset-0 top-14 z-30 bg-[#1a1714]/20 backdrop-blur-sm lg:hidden dark:bg-black/50"
           />
-          <nav className="relative z-40 border-t border-black/[0.06] bg-[#f4efe6]/95 px-4 pb-4 pt-2 backdrop-blur-xl xl:hidden dark:border-white/[0.08] dark:bg-[#16130f]/[0.95]">
+          <nav className="relative z-40 border-t border-black/[0.06] bg-[#f4efe6]/95 px-4 pb-4 pt-2 backdrop-blur-xl lg:hidden dark:border-white/[0.08] dark:bg-[#16130f]/[0.95]">
             {LINKS.map((link) => {
               const active = pathname === link.href;
               return (
