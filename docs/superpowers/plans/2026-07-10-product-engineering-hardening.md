@@ -27,11 +27,11 @@ Add an authenticated single-job case with this contract:
 const USER = { id: "verified-user", email: "verified@example.com" };
 const tracked = [];
 // requireUser returns USER; service/read/liveness mocks return one active supported job.
-// trackServerEvent pushes [userId, event, payload] into tracked.
+// trackServerEvent pushes [service, userId, event, payload] into tracked.
 assert.equal(response.status, 200);
 assert.equal(tracked.length, 1);
-assert.equal(tracked[0][0], USER.id);
-assert.equal(tracked[0][1], "job_liveness_at_click");
+assert.equal(tracked[0][1], USER.id);
+assert.equal(tracked[0][2], "job_liveness_at_click");
 ```
 
 - [ ] **Step 2: Run the focused test and verify RED**
@@ -312,7 +312,7 @@ Add `JOBS_DATABASE_URL` to `.env.example` using a non-secret placeholder. Create
 - Capacity: database connection ceiling, application pool size, alert thresholds and escalation owner.
 - Rollout order: provision CA/secret first, deploy verified TLS code second, remove insecure compatibility flag last.
 
-Update README migration count from 174 to 183 and link the new runbook from the production/deployment section.
+Update README migration count from 174 to 184 and link the new runbook from the production/deployment section.
 
 - [ ] **Step 4: Verify dependency and documentation gates**
 
@@ -328,7 +328,7 @@ env NEXT_PUBLIC_SUPABASE_URL=https://example.supabase.co NEXT_PUBLIC_SUPABASE_AN
 git diff --check
 ```
 
-Expected: audit exits zero with zero high/critical vulnerabilities; Node and Python tests pass; migrations, lint, build and diff check pass. Raw audit still reports two moderate findings from Next's bundled PostCSS 8.4.31. Current repository inspection found no runtime path that stringifies an untrusted CSS AST into `<style>`, but this is only an assessment: until the risk owner, acceptance date, expiry, approving signature and evidence location are recorded, formal risk acceptance is incomplete and release remains blocked. Passing the high gate does not accept the moderate findings. Review this risk weekly and on every dependency upgrade. Do not run `npm audit fix --force`, whose suggested resolution can incorrectly downgrade the supported dependency line. If Next 15 introduces a compatibility failure, fix only the demonstrated failure and add a regression test before production code changes.
+Expected: audit exits zero with zero high/critical vulnerabilities; Node and Python tests pass; migration checks report 184 migrations; lint, build and diff check pass. Raw audit still reports two moderate findings from Next's bundled PostCSS 8.4.31. Current repository inspection found no runtime path that stringifies an untrusted CSS AST into `<style>`, but this is only an assessment: until the risk owner, acceptance date, expiry, approving signature and evidence location are recorded, formal risk acceptance is incomplete and release remains blocked. Passing the high gate does not accept the moderate findings. Review this risk weekly and on every dependency upgrade. Do not run `npm audit fix --force`, whose suggested resolution can incorrectly downgrade the supported dependency line. If Next 15 introduces a compatibility failure, fix only the demonstrated failure and add a regression test before production code changes.
 
 - [ ] **Step 5: Commit Task 4 files**
 
@@ -366,4 +366,4 @@ npm audit --omit=dev --audit-level=high --json
 git diff --check origin/main...HEAD
 ```
 
-Expected: every command exits 0, with no high/critical vulnerability and no new lint warning.
+Expected: every command exits 0, migration checks report 184 migrations, with no high/critical vulnerability and no new lint warning.

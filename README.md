@@ -112,7 +112,7 @@ BAIDU_QIANFAN_SEARCH_DISABLED=false
 
 Supabase 迁移由 CI 自动 apply：push 到 `main` 且改动 `supabase/migrations/**` 时，`.github/workflows/migrate.yml` 会执行前缀校验并应用尚未执行的迁移，不要再按 README 逐条手动运行 SQL。
 
-当前仓库共有 **183** 个 Supabase SQL 迁移；明细与顺序以 `supabase/migrations/` 为准。计数命令：
+当前仓库共有 **184** 个 Supabase SQL 迁移；明细与顺序以 `supabase/migrations/` 为准。计数命令：
 
 ```bash
 ls supabase/migrations/*.sql | wc -l
