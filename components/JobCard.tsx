@@ -8,7 +8,9 @@ import {
   CalendarBlank,
   CaretDown,
   ChartBar,
+  Check,
   CheckCircle,
+  Copy,
   GraduationCap,
   HandCoins,
   Hourglass,
@@ -26,6 +28,7 @@ import {
   extractExperience,
   jobFieldDisplayValue,
 } from "@/lib/job-fields";
+import { relativeTimeLabel } from "@/lib/relative-time";
 import { matchTier } from "@/lib/scoring";
 import CompanyInsightDrawer from "@/components/CompanyInsightDrawer";
 import {
@@ -160,9 +163,12 @@ export default function JobCard({
   const [currentAction, setCurrentAction] = useState(job.user_action);
   const [actionError, setActionError] = useState("");
   const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [insightOpen, setInsightOpen] = useState(false);
   // 「不适合 / 忽略」原因面板（§8.2）：ignored 必须选一个原因才写入。
   const [reasonOpen, setReasonOpen] = useState(false);
+  const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(false);
   // 洞察按钮点击前预告状态：null=未知/加载中，real>0=有实录，derived=有岗位聚合派生。
   const [insightAvail, setInsightAvail] = useState<InsightAvailability | null>(() =>
     getCachedAvailability(job.company),
@@ -171,6 +177,14 @@ export default function JobCard({
   useEffect(() => {
     setCurrentAction(job.user_action);
   }, [job.user_action]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
+    };
+  }, []);
 
   // 微批拉取该公司洞察可用性（同一列表的多张卡合并成一次请求），用于按钮上预告「洞察 N / 岗位聚合 / 暂无」。
   useEffect(() => {
@@ -289,18 +303,57 @@ export default function JobCard({
     void fetch(`/api/job-actions/${job.id}/view`, { method: "POST" }).catch(() => {});
   }
 
+  async function copyJobLink() {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(job.jd_url);
+        return true;
+      }
+    } catch {
+      // Fall through to the legacy copy path.
+    }
+
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = job.jd_url;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.top = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async function handleCopyLink() {
+    const ok = await copyJobLink();
+    if (!ok || !mountedRef.current) return;
+    track("job_copy_link", { job_id: job.id });
+    setCopied(true);
+    if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
+    copyResetTimerRef.current = setTimeout(() => {
+      if (mountedRef.current) setCopied(false);
+      copyResetTimerRef.current = null;
+    }, 2000);
+  }
+
   const isNew =
     job.first_seen_at &&
     (Date.now() - new Date(job.first_seen_at).getTime()) / 86400000 <= 3;
   const posted = job.posted_at
     ? new Date(job.posted_at).toLocaleDateString("zh-CN")
     : null;
+  const postedRelative = relativeTimeLabel(job.posted_at);
   const metadataFields = [
     { key: "location", icon: MapPin, label: "城市", value: jobFieldDisplayValue(job.location) },
     { key: "salary", icon: HandCoins, label: "薪资", value: jobFieldDisplayValue(job.salary_text) },
     { key: "experience", icon: Briefcase, label: "经验", value: jobFieldDisplayValue(exp) },
     { key: "education", icon: GraduationCap, label: "学历", value: jobFieldDisplayValue(edu) },
-    { key: "posted", icon: CalendarBlank, label: "官网发布", value: jobFieldDisplayValue(posted) },
+    { key: "posted", icon: CalendarBlank, label: "官网发布", value: jobFieldDisplayValue(posted && postedRelative ? `${posted} · ${postedRelative}` : posted) },
     { key: "deadline", icon: Hourglass, label: "截止", value: jobFieldDisplayValue(deadline) },
   ].filter((field) => field.value !== null) as Array<{
     key: string;
@@ -614,6 +667,18 @@ export default function JobCard({
           >
             官网详情
             <ArrowSquareOut size={16} weight="bold" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleCopyLink()}
+            className="inline-flex items-center justify-center gap-2 rounded-full border border-black/[0.07] bg-white/70 px-4 py-2.5 text-sm font-semibold text-[#3f3a33] transition duration-200 hover:bg-white active:scale-[0.98] lg:py-2 dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
+          >
+            {copied ? (
+              <Check size={16} weight="bold" aria-hidden="true" />
+            ) : (
+              <Copy size={16} weight="bold" aria-hidden="true" />
+            )}
+            {copied ? "已复制" : "复制链接"}
           </button>
           <div className="grid grid-cols-3 gap-2 lg:grid-cols-1">
             <ActionButton
