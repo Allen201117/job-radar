@@ -11,6 +11,7 @@ import { sortAndFilterJobs } from "@/lib/scoring";
 import {
   filterAndRankJobs,
   jobFilterTier,
+  splitMultiValue,
   type Filters,
   countMatchBreakdown,
   type MatchReason,
@@ -70,7 +71,13 @@ function termClause(term: string): string | null {
 
 // 构造 tsquery：关键词候选词「组内 OR」，再与 城市/公司 等「过滤词 AND」。全空返回 null（→走浏览/扫描）。
 // 中文出 bigram、英文出整词，两者选择性都好 → 中英文标题同时命中且快（v2，title 锚定，不再丢英文）。
-export function buildTsquery(keywordTerms: string[], andTerms: string[]): string | null {
+// orGroups：每组内部「OR」、组与组及其它子句「AND」——多选城市即一组（(北京 | 上海)），
+// 与关键词组 / 公司词 AND 相连，保住「城市留在 tsquery」的全表 GIN 覆盖。
+export function buildTsquery(
+  keywordTerms: string[],
+  andTerms: string[],
+  orGroups: string[][] = [],
+): string | null {
   const clauses: string[] = [];
 
   const kwClauses = keywordTerms.map(termClause).filter((c): c is string => !!c);
@@ -79,6 +86,11 @@ export function buildTsquery(keywordTerms: string[], andTerms: string[]): string
   for (const t of andTerms) {
     const c = termClause(t);
     if (c) clauses.push(c);
+  }
+
+  for (const group of orGroups) {
+    const groupClauses = group.map(termClause).filter((c): c is string => !!c);
+    if (groupClauses.length) clauses.push(`(${groupClauses.join(" | ")})`);
   }
 
   return clauses.length ? clauses.join(" & ") : null;
@@ -113,11 +125,11 @@ export function annotateAndRank(
   return filterAndRankJobs(scored, filters);
 }
 
-function softCityOrFilter(city: string): string | null {
-  const tokens = cityMatchTokens(city);
+function softCityOrFilter(cities: string[]): string | null {
+  const tokens = cities.flatMap((c) => cityMatchTokens(c));
   if (!tokens.length) return null;
 
-  // 与 JS matcher 保持超集：空 location 放行降级；别名/拼音通过 ilike 进候选。
+  // 与 JS matcher 保持超集：空 location 放行降级；多城市所有别名/拼音通过 ilike 进候选（OR）。
   return [
     "location.is.null",
     "location.eq.",
@@ -148,8 +160,8 @@ async function searchViaFTS(
       .eq("status", "active")
       .textSearch("search_doc", tsquery, { config: "simple" });
     // 精确收紧（在 GIN 命中集上 recheck，便宜）：公司是硬条件；城市是软条件，必须保留空 location。
-    const city = filters.city.trim();
-    const cityOr = city ? softCityOrFilter(city) : null;
+    const cities = splitMultiValue(filters.city);
+    const cityOr = cities.length ? softCityOrFilter(cities) : null;
     if (cityOr) q = q.or(cityOr);
     if (company) q = q.ilike("company", `%${company}%`);
     const { data, error } = await q.range(off, off + DB_PAGE - 1);
@@ -251,17 +263,22 @@ export async function searchJobs(
   limit: number,
   adapterBySource?: Map<string, string | null> | null,
 ): Promise<SearchResult> {
-  const keyword = filters.keyword.trim();
-  const city = filters.city.trim();
+  const keywords = splitMultiValue(filters.keyword);
+  const cities = splitMultiValue(filters.city);
   const company = filters.company.trim();
 
-  // 有关键词/城市/公司 → FTS 路径（快且全召回）；其中关键词用 ftsCandidateTerms 取「精确+同职能」候选词。
+  // 有关键词/城市/公司 → FTS 路径（快且全召回）；关键词用 ftsCandidateTerms 取「精确+同职能」候选词，
+  // 多关键词各自展开后并集（tsquery 内 OR）。
   const includeOverseasLexicon = effectiveJobScope(prefs) !== "domestic";
-  const keywordTerms = keyword ? ftsCandidateTerms(keyword, { includeOverseasLexicon }) : [];
+  const keywordTerms = keywords.flatMap((kw) =>
+    ftsCandidateTerms(kw, { includeOverseasLexicon }),
+  );
   // 城市必须留在 tsquery（全表 GIN 命中，保住城市浏览完整覆盖——location 无 trigram 索引，移出会让
-  // 无关键词的城市搜索退化到 scan 仅覆盖最新 28k）；空 location / 别名的软放行由 softCityOrFilter 精修。
-  const andTerms = [city, company].filter(Boolean);
-  const tsquery = buildTsquery(keywordTerms, andTerms);
+  // 无关键词的城市搜索退化到 scan 仅覆盖最新 28k）；多城市为一个 OR 组（(北京 | 上海)），与关键词/公司 AND。
+  // 空 location / 别名的软放行由 softCityOrFilter 精修。
+  const andTerms = company ? [company] : [];
+  const orGroups = cities.length ? [cities] : [];
+  const tsquery = buildTsquery(keywordTerms, andTerms, orGroups);
 
   if (tsquery) {
     try {

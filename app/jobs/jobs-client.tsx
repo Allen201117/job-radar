@@ -275,8 +275,13 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
         </div>
       )}
 
-      <div className="flex items-start gap-2 rounded-2xl border border-black/[0.06] bg-white/55 px-3.5 py-2.5 text-sm leading-6 text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
-        <MagnifyingGlass size={16} weight="bold" className="mt-0.5 shrink-0" aria-hidden="true" />
+      <div className="rounded-2xl border border-black/[0.06] bg-white/55 px-3.5 py-2.5 text-sm leading-6 text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
+        <div className="flex items-start gap-2">
+        {loading ? (
+          <CircleNotch size={16} weight="bold" className="mt-0.5 shrink-0 animate-spin text-[#00b84c] dark:text-[#00e676]" aria-hidden="true" />
+        ) : (
+          <MagnifyingGlass size={16} weight="bold" className="mt-0.5 shrink-0" aria-hidden="true" />
+        )}
         <div className="min-w-0">
           {loading ? (
             <p className="font-medium text-[#3f3a33] dark:text-[#d9d0c2]">正在搜索岗位库…</p>
@@ -302,13 +307,20 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
             </>
           )}
         </div>
+        </div>
+        {loading && <div className="jr-scan mt-2.5 h-1 w-full rounded-full" aria-hidden="true" />}
       </div>
       {error && (
         <p className="rounded-2xl border border-[#e7b4a0] dark:border-[#7a392e]/[0.60] bg-[#fbe9e2] dark:bg-[#3a201a] px-3.5 py-2.5 text-sm text-[#9a4a32] dark:text-[#e6a99f]">
           {error}
         </p>
       )}
-      <div className="space-y-3">
+      <div
+        className={cn(
+          "space-y-3 transition-opacity duration-200 ease-out",
+          loading && visibleJobs.length > 0 && "pointer-events-none opacity-50",
+        )}
+      >
         {visibleJobs.map((job, i, arr) => {
           const tier = (job as any).__tier as "exact" | "related";
           const prevTier = i > 0 ? ((arr[i - 1] as any).__tier as string) : null;
@@ -339,8 +351,9 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
         })}
         {loading && displayJobs.length === 0 && (
           <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] dark:border-white/[0.1] bg-white/45 dark:bg-white/[0.05] px-6 py-14 text-center">
-            <CircleNotch size={22} weight="bold" className="mx-auto animate-spin text-[#8a8275] dark:text-[#9a9184]" aria-hidden="true" />
+            <CircleNotch size={22} weight="bold" className="mx-auto animate-spin text-[#00b84c] dark:text-[#00e676]" aria-hidden="true" />
             <p className="mt-3 text-sm text-[#6b655a] dark:text-[#b6ad9d]">正在搜索岗位库…</p>
+            <div className="jr-scan mx-auto mt-4 h-1 w-40 rounded-full" aria-hidden="true" />
           </div>
         )}
         {!loading && displayJobs.length === 0 &&
