@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import BackToTop from "@/components/BackToTop";
 import JobCard from "@/components/JobCard";
 import JobFilters from "@/components/JobFilters";
 import { track } from "@/lib/track";
@@ -204,6 +205,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
 
   return (
     <div className="space-y-5">
+      <BackToTop />
       <JobFilters filters={filters} onChange={setFilters} companies={companies} jobScope={jobScope} />
 
       {/* 搜索说明 + 手动搜索按钮（取代旧三磁贴；筛选变化已自动搜，这里手动重试）。 */}
