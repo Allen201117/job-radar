@@ -271,3 +271,68 @@ test("Supabase scan keeps scanning later batches before match ranking", async ()
   assert.equal(result.jobs[0].id, "high");
   assert.equal(result.jobs[0].match_score, 30);
 });
+
+test("jobs-store 多城市：tsquery OR 组 + 软城市 OR 覆盖所有选中城市的别名", async () => {
+  const calls = [];
+  const { searchJobsStore } = loadJobsStore(async (sql, params) => {
+    calls.push({ sql, params });
+    return [];
+  });
+
+  await searchJobsStore({ ...filters, city: "北京,上海" }, null, [], 0, 10);
+
+  assert.equal(calls.length, 1);
+  // FTS 全表覆盖（不退化 scan），tsquery 里城市是 OR 组（含两城 bigram）
+  assert.match(calls[0].sql, /search_doc @@/i);
+  assert.match(String(calls[0].params[0]), /北京/);
+  assert.match(String(calls[0].params[0]), /上海/);
+  assert.match(String(calls[0].params[0]), /\|/); // 城市之间 OR
+  // 软城市 OR 组保留空 location + 两城别名/拼音
+  assert.match(calls[0].sql, /location is null or location = ''/i);
+  assert.ok(calls[0].params.includes("%beijing%"));
+  assert.ok(calls[0].params.includes("%shanghai%"));
+});
+
+test("jobs-store 校招：SQL 下推校招超集预筛（job_type/url/正文/公司 信号）", async () => {
+  const calls = [];
+  const { searchJobsStore } = loadJobsStore(async (sql, params) => { calls.push({ sql, params }); return []; });
+  await searchJobsStore({ ...filters, jobType: "校招", keyword: "产品经理" }, null, [], 0, 10);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].sql, /应届/);
+  assert.match(calls[0].sql, /xiaozhao\|campus/);
+  assert.match(calls[0].sql, /校园招聘/);
+  // 安全剔除「job_type 自报社招」（这些在 JS 里必是社招/实习，绝不会是校招）
+  assert.match(calls[0].sql, /job_type is null or job_type !~\* '\(社招/);
+});
+
+test("jobs-store 实习：SQL 下推实习超集预筛", async () => {
+  const calls = [];
+  const { searchJobsStore } = loadJobsStore(async (sql, params) => { calls.push({ sql, params }); return []; });
+  await searchJobsStore({ ...filters, jobType: "实习", keyword: "产品经理" }, null, [], 0, 10);
+  assert.match(calls[0].sql, /实习\|intern/);
+  assert.match(calls[0].sql, /shixi/);
+});
+
+test("jobs-store 社招不下推预筛（社招=默认态·大头，下推无益）", async () => {
+  const calls = [];
+  const { searchJobsStore } = loadJobsStore(async (sql, params) => { calls.push({ sql, params }); return []; });
+  await searchJobsStore({ ...filters, jobType: "社招", keyword: "产品经理" }, null, [], 0, 10);
+  assert.doesNotMatch(calls[0].sql, /应届|xiaozhao/);
+});
+
+test("jobs-store 命中页回补展示列：候选省传 canonical_jd_url，page 再补齐并合并", async () => {
+  const calls = [];
+  const { searchJobsStore } = loadJobsStore(async (sql) => {
+    calls.push({ sql });
+    if (/select id, content_hash/i.test(sql)) {
+      return [{ id: "j1", deadline: "2025-12-31", canonical_jd_url: "https://x/canon" }];
+    }
+    return [job({ id: "j1", title: "产品经理" })];
+  });
+  const r = await searchJobsStore({ ...filters, keyword: "产品经理" }, null, [], 0, 10);
+  const cand = calls.find((c) => !/content_hash/.test(c.sql));
+  assert.doesNotMatch(cand.sql, /canonical_jd_url/); // 候选不拉最肥的展示列
+  assert.equal(calls.length, 2); // 候选 + 命中页回补
+  assert.equal(r.jobs[0].deadline, "2025-12-31"); // 回补生效
+  assert.equal(r.jobs[0].canonical_jd_url, "https://x/canon");
+});

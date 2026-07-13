@@ -137,6 +137,10 @@ export default function Navbar() {
     }
   }
 
+  // 账号头像：邮箱 @ 前作为用户名，取首字符作圆形头像标识（悬停/展开可看完整用户名）。
+  const username = email ? email.split("@")[0] : "";
+  const initial = username ? username.charAt(0).toUpperCase() : "?";
+
   return (
     <header className="sticky top-0 z-40 w-full border-b border-black/[0.06] bg-[#f4efe6]/80 text-[#1a1714] backdrop-blur-xl supports-[backdrop-filter]:bg-[#f4efe6]/70 dark:border-white/[0.08] dark:bg-[#16130f]/[0.85] dark:text-[#f3ecdf] dark:supports-[backdrop-filter]:bg-[#16130f]/[0.70]">
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6 lg:gap-6 lg:px-8">
@@ -148,23 +152,40 @@ export default function Navbar() {
           >
             <BrandMark tile={28} icon={18} wordSize={15} />
           </Link>
-          {/* 桌面端：内联导航胶囊（lg 以下交给汉堡菜单） */}
-          <nav className="hidden gap-1 lg:flex">
-            {LINKS.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className={cn(
-                  "inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium transition duration-200",
-                  pathname === link.href
-                    ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                    : "text-[#5f594e] hover:bg-black/[0.05] hover:text-[#1a1714] active:scale-[0.98] dark:text-[#b6ad9d] dark:hover:bg-white/[0.06] dark:hover:text-[#f3ecdf]",
-                )}
-              >
-                <link.icon size={16} weight={pathname === link.href ? "fill" : "regular"} aria-hidden="true" />
-                {t(link.key, lang)}
-              </Link>
-            ))}
+          {/* 桌面端：图标导航栏（lg 以上内联）。图标化后占位更小，不再与右侧控件抢空间，
+              因此恢复 lg 断点、无需退化为汉堡菜单；hover / 键盘聚焦升起气泡标签说明去处。 */}
+          <nav className="hidden items-center gap-1 lg:flex">
+            {LINKS.map((link) => {
+              const active = pathname === link.href;
+              const label = t(link.key, lang);
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  aria-label={label}
+                  aria-current={active ? "page" : undefined}
+                  className={cn(
+                    "group relative grid size-9 shrink-0 place-items-center rounded-full outline-none transition duration-200 focus-visible:ring-2 focus-visible:ring-[#1a1714]/25 dark:focus-visible:ring-[#f3ecdf]/30",
+                    active
+                      ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                      : "text-[#5f594e] hover:bg-black/[0.05] hover:text-[#1a1714] active:scale-[0.95] dark:text-[#b6ad9d] dark:hover:bg-white/[0.06] dark:hover:text-[#f3ecdf]",
+                  )}
+                >
+                  <link.icon size={19} weight={active ? "fill" : "regular"} aria-hidden="true" />
+                  {/* 气泡标签：纯视觉，真实无障碍名走 aria-label；默认隐藏，hover / 聚焦时升起 */}
+                  <span
+                    role="tooltip"
+                    className="pointer-events-none absolute left-1/2 top-full z-50 mt-2.5 -translate-x-1/2 translate-y-1 whitespace-nowrap rounded-lg bg-[#1a1714] px-2.5 py-1 text-xs font-medium text-[#f7f1e6] opacity-0 shadow-[0_12px_30px_-14px_rgba(26,23,20,0.7)] transition duration-200 ease-out group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100 dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="absolute -top-1 left-1/2 size-2 -translate-x-1/2 rotate-45 rounded-[2px] bg-[#1a1714] dark:bg-[#f3ecdf]"
+                    />
+                    {label}
+                  </span>
+                </Link>
+              );
+            })}
           </nav>
         </div>
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
@@ -184,10 +205,27 @@ export default function Navbar() {
                 type="button"
                 onClick={() => setAcctOpen((v) => !v)}
                 aria-expanded={acctOpen}
-                className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.08] px-3 py-1.5 text-xs font-medium text-[#5f594e] transition duration-200 hover:bg-black/[0.05] hover:text-[#1a1714] active:scale-[0.98] dark:border-white/[0.12] dark:text-[#b6ad9d] dark:hover:bg-white/[0.06] dark:hover:text-[#f3ecdf]"
+                aria-label={`账号 ${username}`}
+                className={cn(
+                  "group relative grid size-9 place-items-center rounded-full border text-xs font-semibold uppercase outline-none transition duration-200 ease-out active:scale-[0.96] focus-visible:ring-2 focus-visible:ring-[#1a1714]/25 dark:focus-visible:ring-[#f3ecdf]/30",
+                  acctOpen
+                    ? "border-transparent bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                    : "border-black/[0.08] text-[#5f594e] hover:bg-black/[0.05] hover:text-[#1a1714] dark:border-white/[0.12] dark:text-[#b6ad9d] dark:hover:bg-white/[0.06] dark:hover:text-[#f3ecdf]",
+                )}
               >
-                <UserCircle size={16} weight={acctOpen ? "fill" : "regular"} aria-hidden="true" />
-                <span className="max-w-32 truncate">{email}</span>
+                {initial}
+                {!acctOpen && (
+                  <span
+                    role="tooltip"
+                    className="pointer-events-none absolute right-0 top-full z-50 mt-2.5 translate-y-1 whitespace-nowrap rounded-lg bg-[#1a1714] px-2.5 py-1 text-xs font-medium normal-case text-[#f7f1e6] opacity-0 shadow-[0_12px_30px_-14px_rgba(26,23,20,0.7)] transition duration-200 ease-out group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100 dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="absolute -top-1 right-3.5 size-2 rotate-45 rounded-[2px] bg-[#1a1714] dark:bg-[#f3ecdf]"
+                    />
+                    {username}
+                  </span>
+                )}
               </button>
               {acctOpen && (
                 <>
@@ -197,7 +235,11 @@ export default function Navbar() {
                     onClick={() => setAcctOpen(false)}
                     className="fixed inset-0 z-30 cursor-default"
                   />
-                  <div className="absolute right-0 z-40 mt-2 w-44 rounded-2xl border border-black/[0.08] bg-[#f4efe6]/98 p-1 shadow-lg backdrop-blur-xl dark:border-white/[0.12] dark:bg-[#16130f]/[0.98]">
+                  <div className="absolute right-0 z-40 mt-2 w-52 rounded-2xl border border-black/[0.08] bg-[#f4efe6]/98 p-1 shadow-lg backdrop-blur-xl dark:border-white/[0.12] dark:bg-[#16130f]/[0.98]">
+                    <div className="mb-1 border-b border-black/[0.06] px-3 pb-2 pt-1.5 dark:border-white/[0.08]">
+                      <p className="truncate text-sm font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{username}</p>
+                      <p className="truncate text-xs text-[#9a9184] dark:text-[#837c70]">{email}</p>
+                    </div>
                     <Link
                       href="/me"
                       onClick={() => setAcctOpen(false)}
@@ -272,6 +314,20 @@ export default function Navbar() {
               </div>
             )}
             {email && (
+              <div className="mb-1 flex items-center gap-3 rounded-2xl px-3 py-2.5">
+                <span
+                  aria-hidden="true"
+                  className="grid size-9 shrink-0 place-items-center rounded-full border border-black/[0.1] text-xs font-semibold uppercase text-[#5f594e] dark:border-white/[0.14] dark:text-[#b6ad9d]"
+                >
+                  {initial}
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-[15px] font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{username}</p>
+                  <p className="truncate text-xs text-[#9a9184] dark:text-[#837c70]">{email}</p>
+                </div>
+              </div>
+            )}
+            {email && (
               <Link
                 href="/me"
                 onClick={() => setMenuOpen(false)}
@@ -286,11 +342,10 @@ export default function Navbar() {
                 {t("me", lang)}
               </Link>
             )}
-            <div className="mt-2 flex items-center justify-between gap-3 border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
-              {email && <span className="min-w-0 flex-1 truncate text-xs text-[#9a9184] dark:text-[#837c70]">{email}</span>}
+            <div className="mt-2 border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
               <button
                 onClick={handleLogout}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-4 py-2 text-[13px] font-medium text-[#3f3a33] transition duration-200 hover:bg-white active:scale-[0.98] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-[#d9d0c2] dark:hover:bg-white/[0.12]"
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-4 py-2.5 text-[13px] font-medium text-[#3f3a33] transition duration-200 hover:bg-white active:scale-[0.98] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-[#d9d0c2] dark:hover:bg-white/[0.12]"
               >
                 <SignOut size={16} weight="bold" aria-hidden="true" />
                 {t("logout", lang)}

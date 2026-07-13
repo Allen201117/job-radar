@@ -47,6 +47,7 @@ const {
   jobFilterMatch,
   jobFilterTier,
   countMatchBreakdown,
+  splitMultiValue,
 } = loadTs(path.join(ROOT, "lib", "job-filter.ts"));
 
 const base = { ...DEFAULT_FILTERS };
@@ -170,4 +171,47 @@ test("countMatchBreakdown：keyword-related wins the related tie-break over miss
     ranked.find((j) => j.id === "both").__match.degradedFields,
     ["city", "education"],
   );
+});
+
+// ── 多选（城市 / 关键词，逗号分隔）：OR 语义 ──────────────────────────────
+test("jobFilterMatch：多城市 OR — 命中任一选中城市即通过，未选中城市淘汰，空 location 降级", () => {
+  const filters = { ...base, city: "上海,杭州,深圳" };
+  assert.equal(jobFilterTier(job({ location: "杭州" }), filters), "exact");
+  assert.equal(jobFilterTier(job({ location: "上海市浦东新区" }), filters), "exact");
+  assert.equal(jobFilterTier(job({ location: "深圳南山" }), filters), "exact");
+  assert.equal(jobFilterTier(job({ location: "广州" }), filters), null); // 未选中 → 淘汰
+  assert.deepEqual(
+    jobFilterMatch(job({ location: "" }), filters).degradedFields,
+    ["city"], // 空 location → 降级不淘汰
+  );
+});
+
+test("jobFilterMatch：多城市别名/拼音仍双向命中", () => {
+  const filters = { ...base, city: "北京,上海" };
+  assert.equal(jobFilterTier(job({ location: "Shanghai" }), filters), "exact");
+  assert.equal(jobFilterTier(job({ location: "Beijing HQ" }), filters), "exact");
+});
+
+test("jobFilterMatch：多关键词 OR — 任一精确即 exact；全不命中即淘汰", () => {
+  // 默认 job 标题「后端开发工程师」。
+  const orExact = { ...base, keyword: "后端,zzqqxx" };
+  assert.equal(jobFilterMatch(job(), orExact).keywordTier, "exact"); // 后端精确 | 无关词 → exact
+
+  const noneMatch = { ...base, keyword: "zzqqxx,wwvvuu" };
+  assert.equal(jobFilterTier(job(), noneMatch), null); // 全不命中 → 淘汰
+
+  const single = { ...base, keyword: "后端" };
+  assert.equal(
+    jobFilterMatch(job(), orExact).keywordTier,
+    jobFilterMatch(job(), single).keywordTier,
+  ); // 加一个无关词不改变命中档
+});
+
+test("jobFilterMatch：单值（无逗号）行为与改造前一致 — 向后兼容", () => {
+  const filters = { ...base, city: "北京", keyword: "后端" };
+  assert.deepEqual(jobFilterMatch(job(), filters), {
+    tier: "exact",
+    keywordTier: "exact",
+    degradedFields: [],
+  });
 });
