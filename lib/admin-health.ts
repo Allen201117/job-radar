@@ -1,4 +1,9 @@
-import mustApplyList from "./must-apply-list.json";
+import {
+  MUST_APPLY_LIST,
+  MUST_APPLY_BY_INDUSTRY,
+  industriesForPattern,
+  mustApplyUnion,
+} from "./must-apply-list";
 
 type Numeric = number | string | null | undefined;
 export type HealthBand = "good" | "warn" | "bad" | "empty";
@@ -15,12 +20,7 @@ export const HEALTH_THRESHOLDS = {
   neverCheckedShare: { good: 0.15, warn: 0.35 },
 } as const;
 
-type MustApplyListCompany = {
-  name: string;
-  pattern: string;
-};
-
-const MUST_APPLY_COMPANIES = mustApplyList as MustApplyListCompany[];
+const MUST_APPLY_COMPANIES = MUST_APPLY_LIST;
 
 function toNumber(value: Numeric): number {
   const n = Number(value ?? 0);
@@ -302,10 +302,11 @@ export type MustApplyFetchCoverage = {
 };
 
 function emptyMustApplyFetchCoverage(): MustApplyFetchCoverage {
+  const total = mustApplyUnion().length;
   return {
-    total: MUST_APPLY_COMPANIES.length,
+    total,
     measurable: 0,
-    blind: MUST_APPLY_COMPANIES.length,
+    blind: total,
     fullyFetched: 0,
     avgPct: null,
     companies: [],
@@ -315,7 +316,7 @@ function emptyMustApplyFetchCoverage(): MustApplyFetchCoverage {
 function mustApplyDisplayName(row: MustApplyFetchCoverageCompanyRow): string {
   const pattern = typeof row.pattern === "string" ? row.pattern : "";
   const rawName = typeof row.name === "string" ? row.name : "";
-  const matched = MUST_APPLY_COMPANIES.find((company) => company.pattern === pattern || company.pattern === rawName);
+  const matched = mustApplyUnion().find((company) => company.pattern === pattern || company.pattern === rawName);
   return matched?.name || rawName || pattern || "未知公司";
 }
 
@@ -360,13 +361,37 @@ export function normalizeMustApplyFetchCoverage(
     : null;
 
   return {
-    total: companies.length || MUST_APPLY_COMPANIES.length,
+    total: companies.length || mustApplyUnion().length,
     measurable,
     blind,
     fullyFetched,
     avgPct: toClampedPercent(row.avg_pct) ?? avgFromCompanies,
     companies,
   };
+}
+
+export function groupFetchCoverageByIndustry(
+  coverage: MustApplyFetchCoverage,
+  industries = Object.keys(MUST_APPLY_BY_INDUSTRY),
+): Record<string, MustApplyFetchCoverage> {
+  const grouped: Record<string, MustApplyFetchCoverage> = {};
+  for (const industry of industries) {
+    const companies = coverage.companies.filter((company) => industriesForPattern(company.pattern).includes(industry));
+    const measuredCoverage = companies
+      .map((company) => company.coveragePct)
+      .filter((value): value is number => value !== null);
+    grouped[industry] = {
+      total: MUST_APPLY_BY_INDUSTRY[industry]?.length || 0,
+      measurable: companies.filter((company) => company.measurable).length,
+      blind: companies.filter((company) => !company.measurable).length,
+      fullyFetched: companies.filter((company) => company.coveragePct !== null && company.coveragePct >= 90).length,
+      avgPct: measuredCoverage.length
+        ? Math.round(measuredCoverage.reduce((sum, value) => sum + value, 0) / measuredCoverage.length)
+        : null,
+      companies,
+    };
+  }
+  return grouped;
 }
 
 type SupabaseRpcClient = {
@@ -378,7 +403,7 @@ type SupabaseRpcClient = {
 
 export async function getMustApplyFetchCoverage(supabase: SupabaseRpcClient): Promise<MustApplyFetchCoverage> {
   try {
-    const patterns = MUST_APPLY_COMPANIES.map((company) => company.pattern);
+    const patterns = mustApplyUnion().map((company) => company.pattern);
     const { data, error } = await supabase.rpc("must_apply_coverage", { patterns });
     if (error) {
       console.error("[admin-health] must-apply fetch coverage failed:", error.message || error);
@@ -676,6 +701,14 @@ export function evaluateCombinedHealth(input: {
   mustApplyTotalCompanies?: Numeric;
   mustApplyZeroHealthyCompanies?: string[] | Numeric;
   mustApplyBlindCompanies?: string[];
+  mustApplyIndustries?: Array<{
+    industry: string;
+    healthy: number | null;
+    total: number;
+    zeroHealthyCompanies: string[];
+    blindCompanies: string[];
+    userCount: number;
+  }>;
   coverageAvgPct?: Numeric;
   coverageBlindSources?: Numeric;
   previousValidActive?: Numeric;
@@ -686,21 +719,44 @@ export function evaluateCombinedHealth(input: {
   const failedRuns = toNumber(input.crawlFailedRuns);
   const clickRate = toNullableNumber(input.clickProbeValidityRate);
   const clickValidity = band(clickRate, HEALTH_THRESHOLDS.clickValidity, "higher");
-  const healthyCompanies = toNullableNumber(input.mustApplyHealthyCompanies);
-  const mustApplyTotal = toNumber(input.mustApplyTotalCompanies) || MUST_APPLY_COMPANIES.length;
-  const zeroCompanies = Array.isArray(input.mustApplyZeroHealthyCompanies)
+  let healthyCompanies = toNullableNumber(input.mustApplyHealthyCompanies);
+  let mustApplyTotal = toNumber(input.mustApplyTotalCompanies) || MUST_APPLY_COMPANIES.length;
+  let zeroCompanies = Array.isArray(input.mustApplyZeroHealthyCompanies)
     ? input.mustApplyZeroHealthyCompanies
     : [];
-  const zeroCount = Array.isArray(input.mustApplyZeroHealthyCompanies)
+  let zeroCount = Array.isArray(input.mustApplyZeroHealthyCompanies)
     ? zeroCompanies.length
     : toNumber(input.mustApplyZeroHealthyCompanies);
-  const blindCompanies = input.mustApplyBlindCompanies || [];
-  const mustApply = mustApplyBand(healthyCompanies, zeroCount);
+  let blindCompanies = input.mustApplyBlindCompanies || [];
+  let worstIndustry: NonNullable<typeof input.mustApplyIndustries>[number] | undefined;
+  let mustApply = mustApplyBand(healthyCompanies, zeroCount);
+  if (input.mustApplyIndustries) {
+    const rank: Record<HealthBand, number> = { empty: 0, good: 1, warn: 2, bad: 3 };
+    for (const industry of input.mustApplyIndustries) {
+      const industryBand = mustApplyBand(industry.healthy, industry.zeroHealthyCompanies.length);
+      if (!worstIndustry || rank[industryBand] > rank[mustApplyBand(worstIndustry.healthy, worstIndustry.zeroHealthyCompanies.length)]) {
+        worstIndustry = industry;
+        mustApply = industryBand;
+      }
+    }
+    if (worstIndustry) {
+      healthyCompanies = worstIndustry.healthy;
+      mustApplyTotal = worstIndustry.total;
+      zeroCompanies = worstIndustry.zeroHealthyCompanies;
+      zeroCount = zeroCompanies.length;
+      blindCompanies = worstIndustry.blindCompanies;
+    }
+  }
   const coverage = coverageBand(input.coverageAvgPct);
   const coverageBlindSources = toNumber(input.coverageBlindSources);
   const allCrawlsFailed = crawlRuns > 0 && failedRuns >= crawlRuns;
 
   const actions: string[] = [];
+  if (worstIndustry && mustApply !== "good" && healthyCompanies !== null) {
+    actions.push(
+      `${worstIndustry.industry}行业必投覆盖 ${healthyCompanies}/${mustApplyTotal}（目标≥${HEALTH_THRESHOLDS.mustApplyHealthyCompanies.good}/30）`,
+    );
+  }
   if (zeroCount > 0) {
     const label = zeroCompanies.length ? capList(zeroCompanies) : `${zeroCount} 家`;
     actions.push(`${label}：必投公司零健康岗`);
@@ -721,7 +777,7 @@ export function evaluateCombinedHealth(input: {
   } else if (crawlRuns <= 0) {
     actions.push("今天还没有岗位抓取记录，请确认定时任务是否已到运行时间。");
   }
-  if (mustApply === "warn" && zeroCount === 0 && healthyCompanies !== null) {
+  if (!worstIndustry && mustApply === "warn" && zeroCount === 0 && healthyCompanies !== null) {
     actions.push(`必投清单健康覆盖 ${healthyCompanies}/${mustApplyTotal}（目标≥28/30）`);
   }
   if (blindCompanies.length > 0) {

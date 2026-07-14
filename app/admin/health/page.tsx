@@ -12,6 +12,7 @@ import {
   formatPercent,
   getCoverageSnapshot,
   getMustApplyFetchCoverage,
+  groupFetchCoverageByIndustry,
   HEALTH_THRESHOLDS,
   normalizeCrawlSources,
   translateOperationalTerm,
@@ -30,7 +31,14 @@ import {
 } from "@/lib/admin-health";
 import { isAdmin } from "@/lib/auth";
 import { getJobsHealthSnapshot, getMustApplyCoverage, type JobsHealthSnapshot, type MustApplyCoverageRow } from "@/lib/jobs-store/read";
-import { MUST_APPLY_LIST } from "@/lib/must-apply-list";
+import {
+  DEFAULT_MUST_APPLY_INDUSTRY,
+  industriesForPattern,
+  MUST_APPLY_BY_INDUSTRY,
+  MUST_APPLY_INDUSTRIES,
+  mustApplyUnion,
+} from "@/lib/must-apply-list";
+import { canonicalizeUserIndustry } from "@/lib/company-industry";
 import { createServiceClient } from "@/lib/supabaseService";
 import {
   Bug,
@@ -92,24 +100,53 @@ async function loadSupabaseHealth(): Promise<SupabaseHealthSnapshot> {
 }
 
 // 北极星：必投清单健康覆盖。jobs 在香港库、sources 在 Supabase，无法单条 SQL join → Node 层按公司名 needle 合并。
-type MustApplyRow = MustApplyCoverageRow & { hasSource: boolean; sourceEnabled: boolean };
+type MustApplyRow = MustApplyCoverageRow & { pattern: string; hasSource: boolean; sourceEnabled: boolean };
+type MustApplyRowsByIndustry = Record<string, MustApplyRow[]>;
+type UserIndustryDistribution = { counts: Record<string, number>; unset: number };
 
-async function loadMustApplyCoverage(): Promise<MustApplyRow[]> {
+async function loadMustApplyCoverage(): Promise<MustApplyRowsByIndustry> {
+  const union = mustApplyUnion();
   const [coverage, sourcesRes] = await Promise.all([
-    getMustApplyCoverage(MUST_APPLY_LIST),
+    getMustApplyCoverage(union),
     createServiceClient().from("sources").select("company, enabled"),
   ]);
   if (sourcesRes.error) throw new Error(sourcesRes.error.message);
   const sources = (sourcesRes.data || []) as Array<{ company: string | null; enabled: boolean }>;
-  return MUST_APPLY_LIST.map((c, i) => {
+  const rows = union.map((c, i) => {
     const needle = c.pattern.replace(/%/g, "").toLowerCase();
     const matched = sources.filter((s) => (s.company || "").toLowerCase().includes(needle));
     return {
       ...coverage[i],
+      pattern: c.pattern,
       hasSource: matched.length > 0,
       sourceEnabled: matched.some((s) => s.enabled),
     };
   });
+  return Object.fromEntries(
+    MUST_APPLY_INDUSTRIES.map((industry) => [
+      industry,
+      rows.filter((row) => industriesForPattern(row.pattern).includes(industry)),
+    ]),
+  );
+}
+
+async function loadUserIndustryDistribution(): Promise<UserIndustryDistribution> {
+  const { data, error } = await createServiceClient().from("user_preferences").select("target_industries");
+  if (error) throw new Error(error.message);
+  const counts: Record<string, number> = {};
+  let unset = 0;
+  for (const row of (data || []) as Array<{ target_industries?: unknown }>) {
+    const raw = Array.isArray(row.target_industries) ? row.target_industries : [];
+    const industries = Array.from(
+      new Set(raw.map((value) => canonicalizeUserIndustry(String(value))).filter((value): value is string => Boolean(value))),
+    );
+    if (!industries.length) {
+      unset += 1;
+      continue;
+    }
+    for (const industry of industries) counts[industry] = (counts[industry] || 0) + 1;
+  }
+  return { counts, unset };
 }
 
 // 点击有效率四护栏（01 spec §5）：近 7 天 opportunity_official_opened + job_liveness_at_click 聚合。
@@ -554,6 +591,7 @@ function HealthHeroVisual({
   mustApply,
   mustTotal,
   maHealthy,
+  mustApplyIndustry,
   clickValidity,
   coverage,
 }: {
@@ -562,6 +600,7 @@ function HealthHeroVisual({
   mustApply: MustApplyRow[] | null;
   mustTotal: number;
   maHealthy: number;
+  mustApplyIndustry?: string | null;
   clickValidity: ClickValidityMetrics | null;
   coverage: CoverageSnapshot | null;
 }) {
@@ -600,7 +639,7 @@ function HealthHeroVisual({
             fallback="积累中"
             pct={mustApply ? share(maHealthy, mustTotal) : null}
             tone={bandTone(health.bands.mustApply)}
-            caption={`目标 ≥${HEALTH_THRESHOLDS.mustApplyHealthyCompanies.good}/30`}
+            caption={`${mustApplyIndustry ? `${mustApplyIndustry} · ` : ""}目标 ≥${HEALTH_THRESHOLDS.mustApplyHealthyCompanies.good}/30`}
           />
           <VisualKpiTile
             label="点开仍在招"
@@ -748,7 +787,7 @@ function MustApplyFetchCoverageBlock({ coverage }: { coverage: MustApplyFetchCov
     );
   }
 
-  const total = coverage.total || MUST_APPLY_LIST.length;
+  const total = coverage.total;
   const leaking = coverage.companies.filter(
     (company): company is MustApplyFetchCoverageCompany & { coveragePct: number } =>
       company.coveragePct !== null && company.coveragePct < 90,
@@ -806,16 +845,20 @@ function MustApplyFetchCoverageBlock({ coverage }: { coverage: MustApplyFetchCov
   );
 }
 
-function MustApplySection({
+function MustApplyIndustryBlock({
   rows,
   fetchCoverage,
   healthBand = "empty",
   summary,
+  industry,
+  userCount,
 }: {
   rows: MustApplyRow[] | null;
   fetchCoverage: MustApplyFetchCoverage | null;
   healthBand?: HealthBand;
   summary?: string;
+  industry: string;
+  userCount: number;
 }) {
   const status = sectionStatusFromBand(healthBand);
   const meta = STATUS_META[status];
@@ -824,7 +867,7 @@ function MustApplySection({
       <section className="surface p-5 sm:p-6">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">必投清单健康覆盖</h2>
+            <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">必投清单健康覆盖 · {industry}（{userCount} 位用户）</h2>
             <p className="mt-1 text-sm text-[#6b655a] dark:text-[#b6ad9d]">目标用户最常投的头部公司逐家对账。</p>
           </div>
           <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_META.idle.badge}`}>暂无数据</span>
@@ -851,7 +894,7 @@ function MustApplySection({
     <section className="surface p-5 sm:p-6">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">必投清单健康覆盖</h2>
+          <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">必投清单健康覆盖 · {industry}（{userCount} 位用户）</h2>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">
             30 家目标公司逐家对账：有没有健康岗、近 7 天有没有新岗、72 小时内有没有核验。这里掉了，库存总量再大也不能算健康。
           </p>
@@ -902,6 +945,83 @@ function MustApplySection({
       )}
       <MustApplyFetchCoverageBlock coverage={fetchCoverage} />
     </section>
+  );
+}
+
+function mustApplyIndustryBand(rows: MustApplyRow[] | null): HealthBand {
+  if (!rows) return "empty";
+  const healthy = rows.filter((row) => row.healthy > 0).length;
+  const zeroHealthy = rows.length - healthy;
+  if (zeroHealthy >= HEALTH_THRESHOLDS.mustApplyZeroHealthyCompanies.bad) return "bad";
+  if (healthy >= HEALTH_THRESHOLDS.mustApplyHealthyCompanies.good) {
+    return zeroHealthy >= HEALTH_THRESHOLDS.mustApplyZeroHealthyCompanies.warn ? "warn" : "good";
+  }
+  return healthy >= HEALTH_THRESHOLDS.mustApplyHealthyCompanies.warn ? "warn" : "bad";
+}
+
+function MustApplySection({
+  rowsByIndustry,
+  fetchCoverageByIndustry,
+  activeIndustries,
+  userDistribution,
+}: {
+  rowsByIndustry: MustApplyRowsByIndustry | null;
+  fetchCoverageByIndustry: Record<string, MustApplyFetchCoverage> | null;
+  activeIndustries: string[];
+  userDistribution: UserIndustryDistribution;
+}) {
+  const reserveIndustries = MUST_APPLY_INDUSTRIES.filter((industry) => !activeIndustries.includes(industry));
+  return (
+    <div className="grid gap-4">
+      <section className="surface p-5 sm:p-6">
+        <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">用户行业分布</h2>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {MUST_APPLY_INDUSTRIES.filter((industry) => userDistribution.counts[industry]).map((industry) => (
+            <span key={industry} className={`rounded-full px-3 py-1.5 text-xs font-semibold ${BAND_CHIP_CLASS.muted}`}>
+              {industry} {userDistribution.counts[industry]} 人
+            </span>
+          ))}
+          <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${BAND_CHIP_CLASS.muted}`}>未设置 {userDistribution.unset} 人</span>
+        </div>
+      </section>
+
+      {activeIndustries.map((industry) => {
+        const rows = rowsByIndustry?.[industry] || null;
+        const healthy = rows?.filter((row) => row.healthy > 0).length ?? null;
+        const gaps = rows?.filter((row) => row.healthy === 0).length ?? 0;
+        const blind = rows?.filter((row) => row.healthy > 0 && row.checked72h === 0).length ?? 0;
+        const summary = !rows
+          ? "必投清单数据暂不可用"
+          : `${healthy}/30 家有健康岗${gaps ? ` · ${gaps} 家零健康岗` : ""}${blind ? ` · ${blind} 家 72h 未核验` : ""}`;
+        return (
+          <MustApplyIndustryBlock
+            key={industry}
+            rows={rows}
+            fetchCoverage={fetchCoverageByIndustry?.[industry] || null}
+            healthBand={mustApplyIndustryBand(rows)}
+            summary={summary}
+            industry={industry}
+            userCount={(userDistribution.counts[industry] || 0) + (industry === DEFAULT_MUST_APPLY_INDUSTRY ? userDistribution.unset : 0)}
+          />
+        );
+      })}
+
+      <section className="surface p-5 sm:p-6">
+        <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">储备行业清单</h2>
+        <p className="mt-1 text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">该行业暂无注册用户；覆盖缺口已列入每日自动扩源目标（crawler/targets_must_apply.json）。</p>
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[30rem] text-left text-sm">
+            <thead className="text-xs text-[#8a8275] dark:text-[#9a9184]"><tr><th className="pb-2 font-medium">行业</th><th className="pb-2 font-medium">健康</th><th className="pb-2 font-medium">有源</th></tr></thead>
+            <tbody className="text-[#3f3a33] dark:text-[#d9d0c2]">
+              {reserveIndustries.map((industry) => {
+                const rows = rowsByIndustry?.[industry] || [];
+                return <tr key={industry} className="border-t border-black/[0.06] dark:border-white/[0.08]"><td className="py-2.5">{industry}</td><td className="py-2.5 tabular-nums">{rows.filter((row) => row.healthy > 0).length}/30</td><td className="py-2.5 tabular-nums">{rows.filter((row) => row.hasSource).length}/30</td></tr>;
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1488,13 +1608,14 @@ export default async function AdminHealthPage() {
     redirect("/");
   }
 
-  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, mustApplyFetchResult] = await Promise.allSettled([
+  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, mustApplyFetchResult, userIndustriesResult] = await Promise.allSettled([
     getJobsHealthSnapshot(),
     loadSupabaseHealth(),
     loadClickValidity(),
     loadMustApplyCoverage(),
     loadCoverageSnapshot(),
     getMustApplyFetchCoverage(createServiceClient()),
+    loadUserIndustryDistribution(),
   ]);
 
   if (jobsResult.status === "rejected") {
@@ -1515,13 +1636,23 @@ export default async function AdminHealthPage() {
   if (mustApplyFetchResult.status === "rejected") {
     console.error("[admin-health] must-apply fetch coverage failed:", mustApplyFetchResult.reason);
   }
+  if (userIndustriesResult.status === "rejected") {
+    console.error("[admin-health] user industry distribution failed:", userIndustriesResult.reason);
+  }
 
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
   const clickValidity = clickResult.status === "fulfilled" ? clickResult.value : null;
-  const mustApply = mustApplyResult.status === "fulfilled" ? mustApplyResult.value : null;
+  const mustApplyByIndustry = mustApplyResult.status === "fulfilled" ? mustApplyResult.value : null;
   const coverage = coverageResult.status === "fulfilled" ? coverageResult.value : null;
   const mustApplyFetchCoverage = mustApplyFetchResult.status === "fulfilled" ? mustApplyFetchResult.value : null;
+  const userDistribution = userIndustriesResult.status === "fulfilled" ? userIndustriesResult.value : { counts: {}, unset: 0 };
+  const activeIndustries = MUST_APPLY_INDUSTRIES.filter(
+    (industry) => industry === DEFAULT_MUST_APPLY_INDUSTRY || (userDistribution.counts[industry] || 0) > 0,
+  );
+  const fetchCoverageByIndustry = mustApplyFetchCoverage
+    ? groupFetchCoverageByIndustry(mustApplyFetchCoverage, MUST_APPLY_INDUSTRIES)
+    : null;
   const crawlSources = normalizeCrawlSources(operations?.crawl_sources);
   const reports = buildDailyReports({
     crawl: operations?.today?.crawl || null,
@@ -1542,28 +1673,38 @@ export default async function AdminHealthPage() {
     hour12: false,
   }).format(new Date());
 
-  const mustTotal = mustApply?.length ?? MUST_APPLY_LIST.length;
-  const maRows = mustApply || [];
-  const maHealthy = maRows.filter((r) => r.healthy > 0).length;
-  const maGapRows = maRows.filter((r) => r.healthy === 0);
-  const maBlindRows = maRows.filter((r) => r.healthy > 0 && r.checked72h === 0);
-  const maGaps = maGapRows.length;
-  const maBlind = maBlindRows.length;
+  const mustApplyIndustries = activeIndustries.map((industry) => {
+    const rows = mustApplyByIndustry?.[industry];
+    return {
+      industry,
+      healthy: rows ? rows.filter((row) => row.healthy > 0).length : null,
+      total: MUST_APPLY_BY_INDUSTRY[industry].length,
+      zeroHealthyCompanies: rows ? rows.filter((row) => row.healthy === 0).map((row) => row.name) : [],
+      blindCompanies: rows ? rows.filter((row) => row.healthy > 0 && row.checked72h === 0).map((row) => row.name) : [],
+      userCount: (userDistribution.counts[industry] || 0) + (industry === DEFAULT_MUST_APPLY_INDUSTRY ? userDistribution.unset : 0),
+    };
+  });
+  const worstMustApplyIndustry = mustApplyIndustries.reduce((worst, item) => {
+    const itemBand = mustApplyIndustryBand(mustApplyByIndustry?.[item.industry] || null);
+    const worstBand = mustApplyIndustryBand(mustApplyByIndustry?.[worst.industry] || null);
+    const ranks: Record<HealthBand, number> = { empty: 0, good: 1, warn: 2, bad: 3 };
+    return ranks[itemBand] > ranks[worstBand] ? item : worst;
+  });
+  const mustTotal = worstMustApplyIndustry.total;
+  const maHealthy = worstMustApplyIndustry.healthy || 0;
   const health = evaluateCombinedHealth({
     validActive: jobs?.validActive,
     crawlRuns: operations?.today?.crawl?.runs,
     crawlFailedRuns: operations?.today?.crawl?.failed_runs,
     clickProbeValidityRate: clickValidity?.probeValidityRate,
-    mustApplyHealthyCompanies: mustApply ? maHealthy : null,
+    mustApplyHealthyCompanies: mustApplyByIndustry ? maHealthy : null,
     mustApplyTotalCompanies: mustTotal,
-    mustApplyZeroHealthyCompanies: maGapRows.map((r) => r.name),
-    mustApplyBlindCompanies: maBlindRows.map((r) => r.name),
+    mustApplyZeroHealthyCompanies: worstMustApplyIndustry.zeroHealthyCompanies,
+    mustApplyBlindCompanies: worstMustApplyIndustry.blindCompanies,
+    mustApplyIndustries,
     coverageAvgPct: coverage?.avgCoveragePct,
     coverageBlindSources: coverage?.blind,
   });
-  const mustApplySummary = !mustApply
-    ? "必投清单数据暂不可用"
-    : `${maHealthy}/${mustTotal} 家有健康岗` + (maGaps ? ` · ${maGaps} 家零健康岗` : "") + (maBlind ? ` · ${maBlind} 家 72h 未核验` : "");
 
   const failedReports = reports.filter((r) => r.status === "failed").length;
   const ranReports = reports.filter((r) => r.status === "success").length;
@@ -1629,9 +1770,10 @@ export default async function AdminHealthPage() {
           <HealthHeroVisual
             health={health}
             refreshedAt={refreshedAt}
-            mustApply={mustApply}
+            mustApply={mustApplyByIndustry ? mustApplyByIndustry[worstMustApplyIndustry.industry] : null}
             mustTotal={mustTotal}
             maHealthy={maHealthy}
+            mustApplyIndustry={activeIndustries.length > 1 ? worstMustApplyIndustry.industry : null}
             clickValidity={clickValidity}
             coverage={coverage}
           />
@@ -1639,10 +1781,10 @@ export default async function AdminHealthPage() {
 
         <div className="mt-6 grid gap-4">
           <MustApplySection
-            rows={mustApply}
-            fetchCoverage={mustApplyFetchCoverage}
-            healthBand={health.bands.mustApply}
-            summary={mustApplySummary}
+            rowsByIndustry={mustApplyByIndustry}
+            fetchCoverageByIndustry={fetchCoverageByIndustry}
+            activeIndustries={activeIndustries}
+            userDistribution={userDistribution}
           />
 
           <ClickValiditySection clickValidity={clickValidity} status={clickStatus} summary={clickSummary} />

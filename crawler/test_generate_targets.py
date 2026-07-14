@@ -6,7 +6,11 @@ import datetime
 import httpx
 import json
 import os
+import sys
 import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import generate_targets as gt
 import insight_engine as ie
@@ -79,6 +83,15 @@ class ParseGeneratedTest(unittest.TestCase):
 
 
 class ThemeAndGuardTest(unittest.TestCase):
+    def test_theme_table_covers_all_four_new_industry_blind_spots(self):
+        self.assertEqual(len(gt._THEMES), 14)
+        self.assertEqual([theme for theme, _ in gt._THEMES[-4:]], [
+            "金融机构/证券保险",
+            "地产开发/物业服务",
+            "教育/职业培训",
+            "传媒/影视/内容平台",
+        ])
+
     def test_theme_rotates_deterministically(self):
         d1 = datetime.date(2026, 7, 2)
         self.assertEqual(gt.theme_for(d1), gt.theme_for(d1))     # 同日同主题（可复现）

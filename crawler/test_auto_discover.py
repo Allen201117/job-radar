@@ -3,7 +3,14 @@
 红线：① 只 probe 库里没有的目标(不重复劳动) ② 用户点名的优先 ③ 只入库 source_url 不在库的(去重)
 ④ 每日上限封顶(不一夜铺量)。
 """
+import json
+import sys
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import auto_discover as ad
 
@@ -62,6 +69,16 @@ class PlanTargetsTest(unittest.TestCase):
         curated = [{**_t("Tech1"), "_priority": True}, _t("Old1")]
         out = ad.plan_targets(curated, {"Old1"}, set(), cap=10, seed=1)
         self.assertEqual(out[0]["company"], "Old1")   # 用户点名 > 科技/消费优先清单
+
+    def test_four_priority_tiers_are_ordered(self):
+        curated = [
+            _t("Rest"),
+            {**_t("Priority"), "_priority": True},
+            {**_t("MustApply"), "_must_apply": True},
+            {**_t("Wanted"), "_must_apply": True, "_priority": True},
+        ]
+        out = [t["company"] for t in ad.plan_targets(curated, {"Wanted"}, set(), cap=10, seed=1)]
+        self.assertEqual(out, ["Wanted", "MustApply", "Priority", "Rest"])
 
     def test_user_wanted_matches_by_normalized_name(self):
         # 用户写带后缀的变体、清单写简称 → 归一后仍要命中优先（旧实现全等匹配空转）
@@ -149,6 +166,26 @@ class CuratedTargetsFileTest(unittest.TestCase):
             self.assertTrue(t.get("company") and t.get("cn") and t.get("slugs"))
         names = [t["company"] for t in targets]
         self.assertEqual(len(names), len(set(names)))  # 跨全部清单公司名去重（不重复劳动）
+
+    def test_must_apply_targets_win_dedup_and_get_separate_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            (base / "targets_must_apply.json").write_text(json.dumps([
+                _t("重复公司"), _t("必投独有"),
+            ], ensure_ascii=False), encoding="utf-8")
+            (base / "targets_tech_consumer.json").write_text(json.dumps([
+                _t("重复公司"), _t("科技独有"),
+            ], ensure_ascii=False), encoding="utf-8")
+            with mock.patch.object(ad, "_CURATED_FILES",
+                                   ("targets_must_apply.json", "targets_tech_consumer.json")), \
+                 mock.patch.object(ad, "Path", side_effect=lambda _path: base / "auto_discover.py"):
+                targets = ad.load_curated_targets()
+
+        self.assertEqual([t["company"] for t in targets], ["重复公司", "必投独有", "科技独有"])
+        self.assertTrue(targets[0].get("_must_apply"))
+        self.assertTrue(targets[1].get("_must_apply"))
+        self.assertNotIn("_priority", targets[0])
+        self.assertTrue(targets[2].get("_priority"))
 
 
 class PlanInsertsTest(unittest.TestCase):

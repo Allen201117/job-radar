@@ -1,29 +1,10 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const Module = require("node:module");
 const path = require("node:path");
 const test = require("node:test");
-const ts = require("typescript");
+const { loadTs } = require("./_load-ts");
 
-function loadOptionalTsModule(relPath) {
-  const sourcePath = path.join(__dirname, "..", relPath);
-  if (!fs.existsSync(sourcePath)) return {};
-  const source = fs.readFileSync(sourcePath, "utf8");
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2020,
-      esModuleInterop: true,
-    },
-  }).outputText;
-  const module = { exports: {} };
-  const scopedRequire = Module.createRequire(sourcePath);
-  const fn = new Function("exports", "require", "module", "__filename", "__dirname", compiled);
-  fn(module.exports, scopedRequire, module, sourcePath, path.dirname(sourcePath));
-  return module.exports;
-}
-
-const H = loadOptionalTsModule(path.join("lib", "admin-health.ts"));
+const H = loadTs(path.join(__dirname, "..", "lib", "admin-health.ts"));
 
 test("formatPercent reports one decimal and does not invent a rate for zero denominator", () => {
   assert.equal(typeof H.formatPercent, "function");
@@ -275,7 +256,7 @@ test("normalizeMustApplyFetchCoverage classifies must-apply fetch coverage witho
   );
 });
 
-test("getMustApplyFetchCoverage passes JSON patterns to the RPC and fails open", async () => {
+test("getMustApplyFetchCoverage passes deduplicated cross-industry patterns to the RPC and fails open", async () => {
   assert.equal(typeof H.getMustApplyFetchCoverage, "function");
   const calls = [];
   const result = await H.getMustApplyFetchCoverage({
@@ -313,7 +294,8 @@ test("getMustApplyFetchCoverage passes JSON patterns to the RPC and fails open",
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].name, "must_apply_coverage");
-  assert.equal(calls[0].args.patterns.length, 30);
+  assert.ok(calls[0].args.patterns.length > 30);
+  assert.equal(new Set(calls[0].args.patterns).size, calls[0].args.patterns.length);
   assert.deepEqual(calls[0].args.patterns.slice(0, 2), ["%字节%", "%腾讯%"]);
   assert.equal(result.total, 2);
   assert.equal(result.measurable, 2);
@@ -330,9 +312,9 @@ test("getMustApplyFetchCoverage passes JSON patterns to the RPC and fails open",
       rpc: async () => ({ data: null, error: { message: "missing function" } }),
     });
     assert.deepEqual(failed, {
-      total: 30,
+      total: calls[0].args.patterns.length,
       measurable: 0,
-      blind: 30,
+      blind: calls[0].args.patterns.length,
       fullyFetched: 0,
       avgPct: null,
       companies: [],
@@ -340,6 +322,29 @@ test("getMustApplyFetchCoverage passes JSON patterns to the RPC and fails open",
   } finally {
     console.error = originalError;
   }
+});
+
+test("groupFetchCoverageByIndustry includes cross-industry companies in every requested industry", () => {
+  assert.equal(typeof H.groupFetchCoverageByIndustry, "function");
+  const grouped = H.groupFetchCoverageByIndustry(
+    {
+      total: 2,
+      measurable: 1,
+      blind: 1,
+      fullyFetched: 1,
+      avgPct: 90,
+      companies: [
+        { name: "蔚来", pattern: "%蔚来%", reportedTotal: 10, fetched: 9, coveragePct: 90, measurable: true, lastRunAt: null },
+        { name: "腾讯", pattern: "%腾讯%", reportedTotal: null, fetched: 0, coveragePct: null, measurable: false, lastRunAt: null },
+      ],
+    },
+    ["互联网/科技", "汽车/出行"],
+  );
+  assert.equal(grouped["互联网/科技"].total, 30);
+  assert.equal(grouped["汽车/出行"].total, 30);
+  assert.deepEqual(grouped["互联网/科技"].companies.map((company) => company.name), ["蔚来", "腾讯"]);
+  assert.deepEqual(grouped["汽车/出行"].companies.map((company) => company.name), ["蔚来"]);
+  assert.equal(grouped["汽车/出行"].fullyFetched, 1);
 });
 
 test("buildDailyReports merges technical runs into six human-facing operation cards", () => {
