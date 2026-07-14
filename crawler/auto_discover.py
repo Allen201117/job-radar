@@ -195,12 +195,16 @@ def resolve_watch_requests(sb, company, source_id):
 def insert_source(sb, row):
     """入库一条已验证源（service-role，与 app/api/sources 同字段口径），并给新公司排队职业洞察
     + 闭环回写用户「关注公司」请求（browser 变体复用本函数，两条扩源道同享闭环）。"""
-    res = sb.table("sources").insert({
+    payload = {
         "company": row["company"], "source_url": row["url"], "source_type": "official",
         "adapter_name": row["adapter"], "crawl_method": "http",
         "segment": row.get("segment") or "private", "industry": row.get("industry"),
         "notes": f"auto_discover: live探活 {row.get('_valid', '?')} 岗", "enabled": True,
-    }).execute()
+    }
+    # 国内两条道不传该字段，继续使用数据库默认的 {CN}；海外入口显式指定覆盖区域。
+    if row.get("regions"):
+        payload["regions"] = row["regions"]
+    res = sb.table("sources").insert(payload).execute()
     source_id = None
     try:
         source_id = ((res.data or [{}])[0] or {}).get("id")

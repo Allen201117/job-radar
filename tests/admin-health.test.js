@@ -324,6 +324,19 @@ test("getMustApplyFetchCoverage passes deduplicated cross-industry patterns to t
   }
 });
 
+test("getMustApplyFetchCoverage uses overseas patterns only when scope is overseas", async () => {
+  const calls = [];
+  await H.getMustApplyFetchCoverage({
+    rpc: async (name, args) => {
+      calls.push({ name, args });
+      return { data: null, error: null };
+    },
+  }, "overseas");
+  assert.equal(calls[0].name, "must_apply_coverage");
+  assert.ok(calls[0].args.patterns.includes("%Google%"));
+  assert.ok(!calls[0].args.patterns.includes("%字节%"));
+});
+
 test("groupFetchCoverageByIndustry includes cross-industry companies in every requested industry", () => {
   assert.equal(typeof H.groupFetchCoverageByIndustry, "function");
   const grouped = H.groupFetchCoverageByIndustry(
@@ -345,6 +358,25 @@ test("groupFetchCoverageByIndustry includes cross-industry companies in every re
   assert.deepEqual(grouped["互联网/科技"].companies.map((company) => company.name), ["蔚来", "腾讯"]);
   assert.deepEqual(grouped["汽车/出行"].companies.map((company) => company.name), ["蔚来"]);
   assert.equal(grouped["汽车/出行"].fullyFetched, 1);
+});
+
+test("groupFetchCoverageByIndustry groups overseas patterns with overseas totals", () => {
+  const grouped = H.groupFetchCoverageByIndustry(
+    {
+      total: 1,
+      measurable: 1,
+      blind: 0,
+      fullyFetched: 1,
+      avgPct: 90,
+      companies: [
+        { name: "Google", pattern: "%Google%", reportedTotal: 10, fetched: 9, coveragePct: 90, measurable: true, lastRunAt: null },
+      ],
+    },
+    ["互联网/科技"],
+    "overseas",
+  );
+  assert.equal(grouped["互联网/科技"].total, 30);
+  assert.deepEqual(grouped["互联网/科技"].companies.map((company) => company.name), ["Google"]);
 });
 
 test("buildDailyReports merges technical runs into six human-facing operation cards", () => {

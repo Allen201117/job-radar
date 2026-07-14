@@ -1,7 +1,8 @@
 // 北极星指标清单：管理员看板与爬虫探活共用的「必投清单健康覆盖」口径来源。
 // 每个行业保留 30 家目标公司；用户自由文本行业先归一，再按行业取对应清单。
 // ⚠️ 改这份清单 = 改北极星口径，指标会跳变；调整请在 commit message 里写明原因。
-import mustApplyByIndustry from "./must-apply-list.json";
+import mustApplyDomesticByIndustry from "./must-apply-list.json";
+import mustApplyOverseasByIndustry from "./must-apply-list-overseas.json";
 import { canonicalizeUserIndustry } from "./company-industry";
 
 export interface MustApplyCompany {
@@ -10,25 +11,39 @@ export interface MustApplyCompany {
 }
 
 export type MustApplyListByIndustry = Record<string, MustApplyCompany[]>;
+export type MustApplyScope = "domestic" | "overseas";
 
-export const MUST_APPLY_BY_INDUSTRY = mustApplyByIndustry as MustApplyListByIndustry;
+export const MUST_APPLY_BY_INDUSTRY = mustApplyDomesticByIndustry as MustApplyListByIndustry;
+export const MUST_APPLY_OVERSEAS_BY_INDUSTRY = mustApplyOverseasByIndustry as MustApplyListByIndustry;
 export const MUST_APPLY_INDUSTRIES = Object.keys(MUST_APPLY_BY_INDUSTRY);
 export const DEFAULT_MUST_APPLY_INDUSTRY = "互联网/科技";
 export const MUST_APPLY_LIST = MUST_APPLY_BY_INDUSTRY[DEFAULT_MUST_APPLY_INDUSTRY];
 
-export function mustApplyUnion(): MustApplyCompany[] {
+export function mustApplyByIndustry(scope: MustApplyScope): MustApplyListByIndustry {
+  return scope === "overseas" ? MUST_APPLY_OVERSEAS_BY_INDUSTRY : MUST_APPLY_BY_INDUSTRY;
+}
+
+export function mustApplyUnion(scope: MustApplyScope = "domestic"): MustApplyCompany[] {
+  const byIndustry = mustApplyByIndustry(scope);
   const seen = new Set<string>();
-  return MUST_APPLY_INDUSTRIES.flatMap((industry) => MUST_APPLY_BY_INDUSTRY[industry]).filter((company) => {
+  return MUST_APPLY_INDUSTRIES.flatMap((industry) => byIndustry[industry] || []).filter((company) => {
     if (seen.has(company.pattern)) return false;
     seen.add(company.pattern);
     return true;
   });
 }
 
-export function industriesForPattern(pattern: string): string[] {
+export function industriesForPattern(pattern: string, scope: MustApplyScope = "domestic"): string[] {
+  const byIndustry = mustApplyByIndustry(scope);
   return MUST_APPLY_INDUSTRIES.filter((industry) =>
-    MUST_APPLY_BY_INDUSTRY[industry].some((company) => company.pattern === pattern),
+    (byIndustry[industry] || []).some((company) => company.pattern === pattern),
   );
+}
+
+export function resolveMustApplyScopes(jobScope?: string | null): MustApplyScope[] {
+  if (jobScope === "overseas") return ["overseas"];
+  if (jobScope === "all") return ["domestic", "overseas"];
+  return ["domestic"];
 }
 
 export function resolveMustApplyIndustries(targetIndustries?: string[] | null): string[] {

@@ -34,9 +34,13 @@ import { getJobsHealthSnapshot, getMustApplyCoverage, type JobsHealthSnapshot, t
 import {
   DEFAULT_MUST_APPLY_INDUSTRY,
   industriesForPattern,
+  mustApplyByIndustry,
   MUST_APPLY_BY_INDUSTRY,
   MUST_APPLY_INDUSTRIES,
   mustApplyUnion,
+  resolveMustApplyIndustries,
+  resolveMustApplyScopes,
+  type MustApplyScope,
 } from "@/lib/must-apply-list";
 import { canonicalizeUserIndustry } from "@/lib/company-industry";
 import { createServiceClient } from "@/lib/supabaseService";
@@ -102,10 +106,13 @@ async function loadSupabaseHealth(): Promise<SupabaseHealthSnapshot> {
 // 北极星：必投清单健康覆盖。jobs 在香港库、sources 在 Supabase，无法单条 SQL join → Node 层按公司名 needle 合并。
 type MustApplyRow = MustApplyCoverageRow & { pattern: string; hasSource: boolean; sourceEnabled: boolean };
 type MustApplyRowsByIndustry = Record<string, MustApplyRow[]>;
-type UserIndustryDistribution = { counts: Record<string, number>; unset: number };
+type MustApplyRowsByScope = Record<MustApplyScope, MustApplyRowsByIndustry>;
+type UserIndustryDistribution = { counts: Record<MustApplyScope, Record<string, number>>; scopeUsers: Record<MustApplyScope, number>; unset: number };
+const MUST_APPLY_SCOPES: MustApplyScope[] = ["domestic", "overseas"];
+const MUST_APPLY_SCOPE_LABEL: Record<MustApplyScope, string> = { domestic: "国内", overseas: "海外" };
 
-async function loadMustApplyCoverage(): Promise<MustApplyRowsByIndustry> {
-  const union = mustApplyUnion();
+async function loadMustApplyCoverageForScope(scope: MustApplyScope): Promise<MustApplyRowsByIndustry> {
+  const union = mustApplyUnion(scope);
   const [coverage, sourcesRes] = await Promise.all([
     getMustApplyCoverage(union),
     createServiceClient().from("sources").select("company, enabled"),
@@ -125,28 +132,33 @@ async function loadMustApplyCoverage(): Promise<MustApplyRowsByIndustry> {
   return Object.fromEntries(
     MUST_APPLY_INDUSTRIES.map((industry) => [
       industry,
-      rows.filter((row) => industriesForPattern(row.pattern).includes(industry)),
+      rows.filter((row) => industriesForPattern(row.pattern, scope).includes(industry)),
     ]),
   );
 }
 
+async function loadMustApplyCoverage(): Promise<MustApplyRowsByScope> {
+  const entries = await Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await loadMustApplyCoverageForScope(scope)] as const));
+  return Object.fromEntries(entries) as MustApplyRowsByScope;
+}
+
 async function loadUserIndustryDistribution(): Promise<UserIndustryDistribution> {
-  const { data, error } = await createServiceClient().from("user_preferences").select("target_industries");
+  const { data, error } = await createServiceClient().from("user_preferences").select("target_industries, job_scope");
   if (error) throw new Error(error.message);
-  const counts: Record<string, number> = {};
+  const counts: Record<MustApplyScope, Record<string, number>> = { domestic: {}, overseas: {} };
+  const scopeUsers: Record<MustApplyScope, number> = { domestic: 0, overseas: 0 };
   let unset = 0;
-  for (const row of (data || []) as Array<{ target_industries?: unknown }>) {
+  for (const row of (data || []) as Array<{ target_industries?: unknown; job_scope?: unknown }>) {
     const raw = Array.isArray(row.target_industries) ? row.target_industries : [];
-    const industries = Array.from(
-      new Set(raw.map((value) => canonicalizeUserIndustry(String(value))).filter((value): value is string => Boolean(value))),
-    );
-    if (!industries.length) {
-      unset += 1;
-      continue;
+    const normalized = raw.map((value) => canonicalizeUserIndustry(String(value))).filter((value): value is string => Boolean(value));
+    if (!normalized.length) unset += 1;
+    const industries = resolveMustApplyIndustries(normalized);
+    for (const scope of resolveMustApplyScopes(typeof row.job_scope === "string" ? row.job_scope : null)) {
+      scopeUsers[scope] += 1;
+      for (const industry of industries) counts[scope][industry] = (counts[scope][industry] || 0) + 1;
     }
-    for (const industry of industries) counts[industry] = (counts[industry] || 0) + 1;
   }
-  return { counts, unset };
+  return { counts, scopeUsers, unset };
 }
 
 // 点击有效率四护栏（01 spec §5）：近 7 天 opportunity_official_opened + job_liveness_at_click 聚合。
@@ -850,6 +862,7 @@ function MustApplyIndustryBlock({
   fetchCoverage,
   healthBand = "empty",
   summary,
+  scope,
   industry,
   userCount,
 }: {
@@ -857,6 +870,7 @@ function MustApplyIndustryBlock({
   fetchCoverage: MustApplyFetchCoverage | null;
   healthBand?: HealthBand;
   summary?: string;
+  scope: MustApplyScope;
   industry: string;
   userCount: number;
 }) {
@@ -867,7 +881,7 @@ function MustApplyIndustryBlock({
       <section className="surface p-5 sm:p-6">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">必投清单健康覆盖 · {industry}（{userCount} 位用户）</h2>
+            <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{MUST_APPLY_SCOPE_LABEL[scope]}必投清单健康覆盖 · {industry}（{userCount} 位用户）</h2>
             <p className="mt-1 text-sm text-[#6b655a] dark:text-[#b6ad9d]">目标用户最常投的头部公司逐家对账。</p>
           </div>
           <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_META.idle.badge}`}>暂无数据</span>
@@ -894,7 +908,7 @@ function MustApplyIndustryBlock({
     <section className="surface p-5 sm:p-6">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">必投清单健康覆盖 · {industry}（{userCount} 位用户）</h2>
+          <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{MUST_APPLY_SCOPE_LABEL[scope]}必投清单健康覆盖 · {industry}（{userCount} 位用户）</h2>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">
             30 家目标公司逐家对账：有没有健康岗、近 7 天有没有新岗、72 小时内有没有核验。这里掉了，库存总量再大也不能算健康。
           </p>
@@ -965,62 +979,71 @@ function MustApplySection({
   activeIndustries,
   userDistribution,
 }: {
-  rowsByIndustry: MustApplyRowsByIndustry | null;
-  fetchCoverageByIndustry: Record<string, MustApplyFetchCoverage> | null;
-  activeIndustries: string[];
+  rowsByIndustry: MustApplyRowsByScope | null;
+  fetchCoverageByIndustry: Record<MustApplyScope, Record<string, MustApplyFetchCoverage>> | null;
+  activeIndustries: Record<MustApplyScope, string[]>;
   userDistribution: UserIndustryDistribution;
 }) {
-  const reserveIndustries = MUST_APPLY_INDUSTRIES.filter((industry) => !activeIndustries.includes(industry));
   return (
     <div className="grid gap-4">
       <section className="surface p-5 sm:p-6">
         <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">用户行业分布</h2>
         <div className="mt-3 flex flex-wrap gap-2">
-          {MUST_APPLY_INDUSTRIES.filter((industry) => userDistribution.counts[industry]).map((industry) => (
-            <span key={industry} className={`rounded-full px-3 py-1.5 text-xs font-semibold ${BAND_CHIP_CLASS.muted}`}>
-              {industry} {userDistribution.counts[industry]} 人
+          {MUST_APPLY_SCOPES.map((scope) => (
+            <span key={scope} className={`rounded-full px-3 py-1.5 text-xs font-semibold ${BAND_CHIP_CLASS.muted}`}>
+              {MUST_APPLY_SCOPE_LABEL[scope]} {userDistribution.scopeUsers[scope]} 人
             </span>
           ))}
           <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${BAND_CHIP_CLASS.muted}`}>未设置 {userDistribution.unset} 人</span>
         </div>
       </section>
 
-      {activeIndustries.map((industry) => {
-        const rows = rowsByIndustry?.[industry] || null;
-        const healthy = rows?.filter((row) => row.healthy > 0).length ?? null;
-        const gaps = rows?.filter((row) => row.healthy === 0).length ?? 0;
-        const blind = rows?.filter((row) => row.healthy > 0 && row.checked72h === 0).length ?? 0;
-        const summary = !rows
-          ? "必投清单数据暂不可用"
-          : `${healthy}/30 家有健康岗${gaps ? ` · ${gaps} 家零健康岗` : ""}${blind ? ` · ${blind} 家 72h 未核验` : ""}`;
+      {MUST_APPLY_SCOPES.map((scope) => {
+        const active = activeIndustries[scope];
+        const reserveIndustries = MUST_APPLY_INDUSTRIES.filter((industry) => !active.includes(industry));
+        const hasActive = active.some((industry) => (userDistribution.counts[scope][industry] || 0) > 0);
         return (
-          <MustApplyIndustryBlock
-            key={industry}
-            rows={rows}
-            fetchCoverage={fetchCoverageByIndustry?.[industry] || null}
-            healthBand={mustApplyIndustryBand(rows)}
-            summary={summary}
-            industry={industry}
-            userCount={(userDistribution.counts[industry] || 0) + (industry === DEFAULT_MUST_APPLY_INDUSTRY ? userDistribution.unset : 0)}
-          />
+          <section key={scope} className="surface p-5 sm:p-6">
+            <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{MUST_APPLY_SCOPE_LABEL[scope]}必投</h2>
+            {!hasActive && scope === "overseas" && <p className="mt-1 text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">当前没有海外求职用户，以下诚实展示海外储备覆盖，不计入北极星。</p>}
+            <div className="mt-4 grid gap-4">
+              {active.map((industry) => {
+                const rows = rowsByIndustry?.[scope]?.[industry] || null;
+                const healthy = rows?.filter((row) => row.healthy > 0).length ?? null;
+                const gaps = rows?.filter((row) => row.healthy === 0).length ?? 0;
+                const blind = rows?.filter((row) => row.healthy > 0 && row.checked72h === 0).length ?? 0;
+                const summary = !rows
+                  ? "必投清单数据暂不可用"
+                  : `${healthy}/30 家有健康岗${gaps ? ` · ${gaps} 家零健康岗` : ""}${blind ? ` · ${blind} 家 72h 未核验` : ""}`;
+                return (
+                  <MustApplyIndustryBlock
+                    key={`${scope}-${industry}`}
+                    rows={rows}
+                    fetchCoverage={fetchCoverageByIndustry?.[scope]?.[industry] || null}
+                    healthBand={mustApplyIndustryBand(rows)}
+                    summary={summary}
+                    scope={scope}
+                    industry={industry}
+                    userCount={userDistribution.counts[scope][industry] || 0}
+                  />
+                );
+              })}
+            </div>
+            <div className="mt-5 overflow-x-auto">
+              <h3 className="text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">储备行业清单</h3>
+              <table className="mt-3 w-full min-w-[30rem] text-left text-sm">
+                <thead className="text-xs text-[#8a8275] dark:text-[#9a9184]"><tr><th className="pb-2 font-medium">行业</th><th className="pb-2 font-medium">健康</th><th className="pb-2 font-medium">有源</th></tr></thead>
+                <tbody className="text-[#3f3a33] dark:text-[#d9d0c2]">
+                  {reserveIndustries.map((industry) => {
+                    const rows = rowsByIndustry?.[scope]?.[industry] || [];
+                    return <tr key={industry} className="border-t border-black/[0.06] dark:border-white/[0.08]"><td className="py-2.5">{industry}</td><td className="py-2.5 tabular-nums">{rows.filter((row) => row.healthy > 0).length}/30</td><td className="py-2.5 tabular-nums">{rows.filter((row) => row.hasSource).length}/30</td></tr>;
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
         );
       })}
-
-      <section className="surface p-5 sm:p-6">
-        <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">储备行业清单</h2>
-        <p className="mt-1 text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">该行业暂无注册用户；覆盖缺口已列入每日自动扩源目标（crawler/targets_must_apply.json）。</p>
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[30rem] text-left text-sm">
-            <thead className="text-xs text-[#8a8275] dark:text-[#9a9184]"><tr><th className="pb-2 font-medium">行业</th><th className="pb-2 font-medium">健康</th><th className="pb-2 font-medium">有源</th></tr></thead>
-            <tbody className="text-[#3f3a33] dark:text-[#d9d0c2]">
-              {reserveIndustries.map((industry) => {
-                const rows = rowsByIndustry?.[industry] || [];
-                return <tr key={industry} className="border-t border-black/[0.06] dark:border-white/[0.08]"><td className="py-2.5">{industry}</td><td className="py-2.5 tabular-nums">{rows.filter((row) => row.healthy > 0).length}/30</td><td className="py-2.5 tabular-nums">{rows.filter((row) => row.hasSource).length}/30</td></tr>;
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
     </div>
   );
 }
@@ -1614,7 +1637,7 @@ export default async function AdminHealthPage() {
     loadClickValidity(),
     loadMustApplyCoverage(),
     loadCoverageSnapshot(),
-    getMustApplyFetchCoverage(createServiceClient()),
+    Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await getMustApplyFetchCoverage(createServiceClient(), scope)] as const)),
     loadUserIndustryDistribution(),
   ]);
 
@@ -1643,15 +1666,26 @@ export default async function AdminHealthPage() {
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
   const clickValidity = clickResult.status === "fulfilled" ? clickResult.value : null;
-  const mustApplyByIndustry = mustApplyResult.status === "fulfilled" ? mustApplyResult.value : null;
+  const mustApplyCoverageByScope = mustApplyResult.status === "fulfilled" ? mustApplyResult.value : null;
   const coverage = coverageResult.status === "fulfilled" ? coverageResult.value : null;
-  const mustApplyFetchCoverage = mustApplyFetchResult.status === "fulfilled" ? mustApplyFetchResult.value : null;
-  const userDistribution = userIndustriesResult.status === "fulfilled" ? userIndustriesResult.value : { counts: {}, unset: 0 };
-  const activeIndustries = MUST_APPLY_INDUSTRIES.filter(
-    (industry) => industry === DEFAULT_MUST_APPLY_INDUSTRY || (userDistribution.counts[industry] || 0) > 0,
-  );
+  const userDistribution = userIndustriesResult.status === "fulfilled"
+    ? userIndustriesResult.value
+    : { counts: { domestic: {}, overseas: {} }, scopeUsers: { domestic: 0, overseas: 0 }, unset: 0 };
+  const activeIndustries = Object.fromEntries(
+    MUST_APPLY_SCOPES.map((scope) => [
+      scope,
+      MUST_APPLY_INDUSTRIES.filter(
+        (industry) => (scope === "domestic" && industry === DEFAULT_MUST_APPLY_INDUSTRY) || (userDistribution.counts[scope][industry] || 0) > 0,
+      ),
+    ]),
+  ) as Record<MustApplyScope, string[]>;
+  const mustApplyFetchCoverage = mustApplyFetchResult.status === "fulfilled"
+    ? Object.fromEntries(mustApplyFetchResult.value) as Record<MustApplyScope, MustApplyFetchCoverage>
+    : null;
   const fetchCoverageByIndustry = mustApplyFetchCoverage
-    ? groupFetchCoverageByIndustry(mustApplyFetchCoverage, MUST_APPLY_INDUSTRIES)
+    ? Object.fromEntries(
+        MUST_APPLY_SCOPES.map((scope) => [scope, groupFetchCoverageByIndustry(mustApplyFetchCoverage[scope], MUST_APPLY_INDUSTRIES, scope)]),
+      ) as Record<MustApplyScope, Record<string, MustApplyFetchCoverage>>
     : null;
   const crawlSources = normalizeCrawlSources(operations?.crawl_sources);
   const reports = buildDailyReports({
@@ -1673,20 +1707,21 @@ export default async function AdminHealthPage() {
     hour12: false,
   }).format(new Date());
 
-  const mustApplyIndustries = activeIndustries.map((industry) => {
-    const rows = mustApplyByIndustry?.[industry];
+  const mustApplyIndustries = MUST_APPLY_SCOPES.flatMap((scope) => activeIndustries[scope].map((industry) => {
+    const rows = mustApplyCoverageByScope?.[scope]?.[industry];
     return {
+      scope,
       industry,
       healthy: rows ? rows.filter((row) => row.healthy > 0).length : null,
-      total: MUST_APPLY_BY_INDUSTRY[industry].length,
+      total: mustApplyByIndustry(scope)[industry].length,
       zeroHealthyCompanies: rows ? rows.filter((row) => row.healthy === 0).map((row) => row.name) : [],
       blindCompanies: rows ? rows.filter((row) => row.healthy > 0 && row.checked72h === 0).map((row) => row.name) : [],
-      userCount: (userDistribution.counts[industry] || 0) + (industry === DEFAULT_MUST_APPLY_INDUSTRY ? userDistribution.unset : 0),
+      userCount: userDistribution.counts[scope][industry] || 0,
     };
-  });
+  }));
   const worstMustApplyIndustry = mustApplyIndustries.reduce((worst, item) => {
-    const itemBand = mustApplyIndustryBand(mustApplyByIndustry?.[item.industry] || null);
-    const worstBand = mustApplyIndustryBand(mustApplyByIndustry?.[worst.industry] || null);
+    const itemBand = mustApplyIndustryBand(mustApplyCoverageByScope?.[item.scope]?.[item.industry] || null);
+    const worstBand = mustApplyIndustryBand(mustApplyCoverageByScope?.[worst.scope]?.[worst.industry] || null);
     const ranks: Record<HealthBand, number> = { empty: 0, good: 1, warn: 2, bad: 3 };
     return ranks[itemBand] > ranks[worstBand] ? item : worst;
   });
@@ -1697,7 +1732,7 @@ export default async function AdminHealthPage() {
     crawlRuns: operations?.today?.crawl?.runs,
     crawlFailedRuns: operations?.today?.crawl?.failed_runs,
     clickProbeValidityRate: clickValidity?.probeValidityRate,
-    mustApplyHealthyCompanies: mustApplyByIndustry ? maHealthy : null,
+    mustApplyHealthyCompanies: mustApplyCoverageByScope ? maHealthy : null,
     mustApplyTotalCompanies: mustTotal,
     mustApplyZeroHealthyCompanies: worstMustApplyIndustry.zeroHealthyCompanies,
     mustApplyBlindCompanies: worstMustApplyIndustry.blindCompanies,
@@ -1770,10 +1805,10 @@ export default async function AdminHealthPage() {
           <HealthHeroVisual
             health={health}
             refreshedAt={refreshedAt}
-            mustApply={mustApplyByIndustry ? mustApplyByIndustry[worstMustApplyIndustry.industry] : null}
+            mustApply={mustApplyCoverageByScope ? mustApplyCoverageByScope[worstMustApplyIndustry.scope][worstMustApplyIndustry.industry] : null}
             mustTotal={mustTotal}
             maHealthy={maHealthy}
-            mustApplyIndustry={activeIndustries.length > 1 ? worstMustApplyIndustry.industry : null}
+            mustApplyIndustry={`${MUST_APPLY_SCOPE_LABEL[worstMustApplyIndustry.scope]}·${worstMustApplyIndustry.industry}`}
             clickValidity={clickValidity}
             coverage={coverage}
           />
@@ -1781,7 +1816,7 @@ export default async function AdminHealthPage() {
 
         <div className="mt-6 grid gap-4">
           <MustApplySection
-            rowsByIndustry={mustApplyByIndustry}
+            rowsByIndustry={mustApplyCoverageByScope}
             fetchCoverageByIndustry={fetchCoverageByIndustry}
             activeIndustries={activeIndustries}
             userDistribution={userDistribution}

@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 MUST_APPLY_JSON = Path(__file__).resolve().parents[1] / "lib" / "must-apply-list.json"
+OVERSEAS_MUST_APPLY_JSON = Path(__file__).resolve().parents[1] / "lib" / "must-apply-list-overseas.json"
 
 
 def _load_rows():
@@ -13,6 +14,16 @@ def _load_rows():
             return json.load(f)
     except Exception as e:
         print(f"⚠️ [must_apply] 读取必投清单失败，已跳过优先倾斜：{e}", file=sys.stderr)
+        return None
+
+
+def _load_overseas_rows():
+    """读取海外必投清单；失败时不影响国内探活路径。"""
+    try:
+        with OVERSEAS_MUST_APPLY_JSON.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"⚠️ [must_apply] 读取海外必投清单失败，已跳过海外优先倾斜：{e}", file=sys.stderr)
         return None
 
 
@@ -59,6 +70,22 @@ def patterns():
         return []
     return _unique_patterns(row for companies in rows.values() if isinstance(companies, list)
                             for row in companies)
+
+
+def overseas_patterns():
+    """返回海外必投清单全行业 ILIKE 模式；读取失败时 fail-open。"""
+    rows = _load_overseas_rows()
+    if isinstance(rows, list):
+        return _unique_patterns(rows)
+    if not isinstance(rows, dict):
+        return []
+    return _unique_patterns(row for companies in rows.values() if isinstance(companies, list)
+                            for row in companies)
+
+
+def all_patterns():
+    """返回国内与海外必投模式的并集，保留首次出现顺序。"""
+    return _unique_patterns([{"pattern": pattern} for pattern in patterns() + overseas_patterns()])
 
 
 def match_company_against_patterns(name: str, pats) -> bool:

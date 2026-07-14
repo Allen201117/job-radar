@@ -1,0 +1,39 @@
+name: auto-discover-overseas-sources
+
+on:
+  schedule:
+    - cron: "30 22 * * *"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "true=真入库；留空=dry-run 只数不插"
+        required: false
+        default: ""
+      target_cap:
+        description: "本次最多 probe 多少家缺失公司"
+        required: false
+        default: "80"
+      insert_cap:
+        description: "本次最多入库多少源"
+        required: false
+        default: "40"
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      AUTO_DISCOVER_OVERSEAS_TARGET_CAP: ${{ github.event.inputs.target_cap || '80' }}
+      AUTO_DISCOVER_OVERSEAS_INSERT_CAP: ${{ github.event.inputs.insert_cap || '40' }}
+      AUTO_DISCOVER_APPLY: ${{ github.event_name == 'schedule' && 'true' || github.event.inputs.apply }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+      - name: Auto-discover overseas ATS sources
+        run: python crawler/auto_discover_overseas.py

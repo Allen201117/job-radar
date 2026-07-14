@@ -2,7 +2,9 @@ import {
   MUST_APPLY_LIST,
   MUST_APPLY_BY_INDUSTRY,
   industriesForPattern,
+  mustApplyByIndustry,
   mustApplyUnion,
+  type MustApplyScope,
 } from "./must-apply-list";
 
 type Numeric = number | string | null | undefined;
@@ -301,8 +303,8 @@ export type MustApplyFetchCoverage = {
   companies: MustApplyFetchCoverageCompany[];
 };
 
-function emptyMustApplyFetchCoverage(): MustApplyFetchCoverage {
-  const total = mustApplyUnion().length;
+function emptyMustApplyFetchCoverage(scope: MustApplyScope = "domestic"): MustApplyFetchCoverage {
+  const total = mustApplyUnion(scope).length;
   return {
     total,
     measurable: 0,
@@ -313,17 +315,18 @@ function emptyMustApplyFetchCoverage(): MustApplyFetchCoverage {
   };
 }
 
-function mustApplyDisplayName(row: MustApplyFetchCoverageCompanyRow): string {
+function mustApplyDisplayName(row: MustApplyFetchCoverageCompanyRow, scope: MustApplyScope = "domestic"): string {
   const pattern = typeof row.pattern === "string" ? row.pattern : "";
   const rawName = typeof row.name === "string" ? row.name : "";
-  const matched = mustApplyUnion().find((company) => company.pattern === pattern || company.pattern === rawName);
+  const matched = mustApplyUnion(scope).find((company) => company.pattern === pattern || company.pattern === rawName);
   return matched?.name || rawName || pattern || "未知公司";
 }
 
 export function normalizeMustApplyFetchCoverage(
   row: MustApplyFetchCoverageRow | null | undefined,
+  scope: MustApplyScope = "domestic",
 ): MustApplyFetchCoverage {
-  if (!row) return emptyMustApplyFetchCoverage();
+  if (!row) return emptyMustApplyFetchCoverage(scope);
 
   const companies = (Array.isArray(row.companies) ? row.companies : [])
     .map((company) => {
@@ -333,7 +336,7 @@ export function normalizeMustApplyFetchCoverage(
       const reportedTotal = measurable ? reported : null;
       const coveragePct = reportedTotal !== null && reportedTotal > 0 ? toClampedPercent(company.coverage_pct) : null;
       return {
-        name: mustApplyDisplayName(company),
+        name: mustApplyDisplayName(company, scope),
         pattern,
         reportedTotal,
         fetched: toNumber(company.fetched),
@@ -361,7 +364,7 @@ export function normalizeMustApplyFetchCoverage(
     : null;
 
   return {
-    total: companies.length || mustApplyUnion().length,
+    total: companies.length || mustApplyUnion(scope).length,
     measurable,
     blind,
     fullyFetched,
@@ -373,15 +376,17 @@ export function normalizeMustApplyFetchCoverage(
 export function groupFetchCoverageByIndustry(
   coverage: MustApplyFetchCoverage,
   industries = Object.keys(MUST_APPLY_BY_INDUSTRY),
+  scope: MustApplyScope = "domestic",
 ): Record<string, MustApplyFetchCoverage> {
+  const byIndustry = mustApplyByIndustry(scope);
   const grouped: Record<string, MustApplyFetchCoverage> = {};
   for (const industry of industries) {
-    const companies = coverage.companies.filter((company) => industriesForPattern(company.pattern).includes(industry));
+    const companies = coverage.companies.filter((company) => industriesForPattern(company.pattern, scope).includes(industry));
     const measuredCoverage = companies
       .map((company) => company.coveragePct)
       .filter((value): value is number => value !== null);
     grouped[industry] = {
-      total: MUST_APPLY_BY_INDUSTRY[industry]?.length || 0,
+      total: byIndustry[industry]?.length || 0,
       measurable: companies.filter((company) => company.measurable).length,
       blind: companies.filter((company) => !company.measurable).length,
       fullyFetched: companies.filter((company) => company.coveragePct !== null && company.coveragePct >= 90).length,
@@ -401,18 +406,21 @@ type SupabaseRpcClient = {
   ) => PromiseLike<{ data: unknown; error: { message?: string } | null }>;
 };
 
-export async function getMustApplyFetchCoverage(supabase: SupabaseRpcClient): Promise<MustApplyFetchCoverage> {
+export async function getMustApplyFetchCoverage(
+  supabase: SupabaseRpcClient,
+  scope: MustApplyScope = "domestic",
+): Promise<MustApplyFetchCoverage> {
   try {
-    const patterns = mustApplyUnion().map((company) => company.pattern);
+    const patterns = mustApplyUnion(scope).map((company) => company.pattern);
     const { data, error } = await supabase.rpc("must_apply_coverage", { patterns });
     if (error) {
       console.error("[admin-health] must-apply fetch coverage failed:", error.message || error);
-      return emptyMustApplyFetchCoverage();
+      return emptyMustApplyFetchCoverage(scope);
     }
-    return normalizeMustApplyFetchCoverage(data as MustApplyFetchCoverageRow | null);
+    return normalizeMustApplyFetchCoverage(data as MustApplyFetchCoverageRow | null, scope);
   } catch (error) {
     console.error("[admin-health] must-apply fetch coverage failed:", error);
-    return emptyMustApplyFetchCoverage();
+    return emptyMustApplyFetchCoverage(scope);
   }
 }
 
@@ -558,7 +566,7 @@ export function buildDailyReports(input: DailyReportInput): DailyReport[] {
   const purge = summarizeOps(opsRows, ["purge_expired"]);
   const insights = summarizeOps(opsRows, ["insight_backlog"]);
   const staleness = summarizeOps(opsRows, ["insight_staleness"]);
-  const autoDiscover = summarizeOps(opsRows, ["auto_discover", "auto_discover_browser"]);
+  const autoDiscover = summarizeOps(opsRows, ["auto_discover", "auto_discover_browser", "auto_discover_overseas"]);
 
   const crawlRuns = toNumber(input.crawl?.runs);
   const crawlFailed = toNumber(input.crawl?.failed_runs);
@@ -702,6 +710,7 @@ export function evaluateCombinedHealth(input: {
   mustApplyZeroHealthyCompanies?: string[] | Numeric;
   mustApplyBlindCompanies?: string[];
   mustApplyIndustries?: Array<{
+    scope?: MustApplyScope;
     industry: string;
     healthy: number | null;
     total: number;
@@ -753,8 +762,9 @@ export function evaluateCombinedHealth(input: {
 
   const actions: string[] = [];
   if (worstIndustry && mustApply !== "good" && healthyCompanies !== null) {
+    const scopePrefix = worstIndustry.scope === "overseas" ? "海外·" : "";
     actions.push(
-      `${worstIndustry.industry}行业必投覆盖 ${healthyCompanies}/${mustApplyTotal}（目标≥${HEALTH_THRESHOLDS.mustApplyHealthyCompanies.good}/30）`,
+      `${scopePrefix}${worstIndustry.industry}行业必投覆盖 ${healthyCompanies}/${mustApplyTotal}（目标≥${HEALTH_THRESHOLDS.mustApplyHealthyCompanies.good}/30）`,
     );
   }
   if (zeroCount > 0) {
