@@ -72,6 +72,18 @@ def patterns():
                             for row in companies)
 
 
+def overseas_by_industry() -> dict[str, list[dict]]:
+    """按行业返回海外必投公司（含 name/pattern）；读取失败或旧数组形状时返回空字典。"""
+    rows = _load_overseas_rows()
+    if not isinstance(rows, dict):
+        return {}
+    return {
+        industry: [row for row in companies if isinstance(row, dict)]
+        for industry, companies in rows.items()
+        if isinstance(industry, str) and isinstance(companies, list)
+    }
+
+
 def overseas_patterns():
     """返回海外必投清单全行业 ILIKE 模式；读取失败时 fail-open。"""
     rows = _load_overseas_rows()
