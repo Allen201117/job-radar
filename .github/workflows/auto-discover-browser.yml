@@ -13,18 +13,24 @@ on:
         required: false
         default: ""
       confirm_cap:
-        description: "本次最多浏览器确认多少家（慢，默认 15）"
+        description: "本次最多浏览器确认多少家（慢 ~1-3min/家，默认 15）"
         required: false
         default: "15"
+      target_cap:
+        description: "httpx 廉价探多少家 tenant（默认 120）"
+        required: false
+        default: "120"
 
 jobs:
   discover-browser:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    # confirm 每家 1-3min；手动补缺口会调高 confirm_cap，给足预算（默认档仍只确认 15 家）。
+    timeout-minutes: 90
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       AUTO_DISCOVER_BROWSER_CONFIRM_CAP: ${{ github.event.inputs.confirm_cap || '15' }}
+      AUTO_DISCOVER_BROWSER_TARGET_CAP: ${{ github.event.inputs.target_cap || '120' }}
       # 持续喂清单：每日 LLM 生成一批「库里没有的」新目标公司（走同一探活验证门，编造/猜错自动丢）。
       AUTO_DISCOVER_LLM: "true"
       SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
