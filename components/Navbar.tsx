@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import BrandMark from "@/components/BrandMark";
+import FeedbackButton from "@/components/FeedbackButton";
 import ThemeToggle from "@/components/ThemeToggle";
 import {
   BookmarkSimple,
@@ -197,6 +198,8 @@ export default function Navbar() {
               className="hidden lg:flex"
             />
           )}
+          {/* 用户反馈：顶栏常驻入口，点开是微信反馈群二维码 */}
+          <FeedbackButton />
           <ThemeToggle />
           {/* 桌面端账号菜单：个人主页 + 退出（/me 不再占一级导航） */}
           {email && (
