@@ -140,6 +140,28 @@ test("combined verdict uses the worst active must-apply industry band", () => {
   assert.ok(verdict.actions.some((action) => action.includes("金融行业必投覆盖 3/30")));
 });
 
+test("combined verdict treats an overseas active industry as part of the worst north-star band", () => {
+  const verdict = H.evaluateCombinedHealth({
+    validActive: 1000,
+    crawlRuns: 2,
+    crawlFailedRuns: 0,
+    clickProbeValidityRate: 0.995,
+    mustApplyHealthyCompanies: 30,
+    mustApplyTotalCompanies: 30,
+    mustApplyZeroHealthyCompanies: [],
+    mustApplyBlindCompanies: [],
+    mustApplyIndustries: [
+      { industry: "互联网/科技", healthy: 30, total: 30, zeroHealthyCompanies: [], blindCompanies: [], userCount: 2 },
+      { scope: "overseas", industry: "金融", healthy: 3, total: 30, zeroHealthyCompanies: ["Goldman Sachs"], blindCompanies: [], userCount: 1 },
+    ],
+    coverageAvgPct: 92,
+    coverageBlindSources: 0,
+  });
+  assert.equal(verdict.bands.mustApply, "bad");
+  assert.equal(verdict.level, "critical");
+  assert.ok(verdict.actions.some((action) => action.includes("海外·金融行业必投覆盖 3/30")));
+});
+
 test("single warn-band industry does not duplicate the must-apply action", () => {
   const verdict = H.evaluateCombinedHealth({
     validActive: 1000,

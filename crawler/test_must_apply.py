@@ -83,6 +83,26 @@ class MustApplyListTest(unittest.TestCase):
 
         self.assertIn("必投清单", err.getvalue())
 
+    def test_overseas_patterns_and_all_patterns_dedupe_in_order(self):
+        domestic = self._json_file([{"name": "国内", "pattern": "%共享%"}])
+        overseas = self._json_file({
+            "科技": [{"name": "Google", "pattern": "%Google%"}],
+            "金融": [{"name": "重复", "pattern": "%共享%"}],
+        })
+        with mock.patch.object(must_apply, "MUST_APPLY_JSON", domestic), \
+             mock.patch.object(must_apply, "OVERSEAS_MUST_APPLY_JSON", overseas):
+            self.assertEqual(must_apply.overseas_patterns(), ["%Google%", "%共享%"])
+            self.assertEqual(must_apply.all_patterns(), ["%共享%", "%Google%"])
+
+    def test_overseas_missing_file_fails_open_without_changing_domestic_patterns(self):
+        domestic = self._json_file([{"name": "国内", "pattern": "%国内%"}])
+        missing = Path(tempfile.gettempdir()) / "job-radar-missing-overseas-must-apply-list.json"
+        with mock.patch.object(must_apply, "MUST_APPLY_JSON", domestic), \
+             mock.patch.object(must_apply, "OVERSEAS_MUST_APPLY_JSON", missing):
+            self.assertEqual(must_apply.patterns(), ["%国内%"])
+            self.assertEqual(must_apply.overseas_patterns(), [])
+            self.assertEqual(must_apply.all_patterns(), ["%国内%"])
+
 
 if __name__ == "__main__":
     unittest.main()

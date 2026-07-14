@@ -1,0 +1,5234 @@
+[
+  {
+    "company": "Google",
+    "cn": "Google",
+    "slugs": [
+      "google",
+      "google-careers",
+      "googlecareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Meta",
+    "cn": "Meta",
+    "slugs": [
+      "meta",
+      "meta-careers",
+      "metacareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Amazon",
+    "cn": "Amazon",
+    "slugs": [
+      "amazon",
+      "amazon-careers",
+      "amazoncareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Microsoft",
+    "cn": "Microsoft",
+    "slugs": [
+      "microsoft",
+      "microsoft-careers",
+      "microsoftcareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Apple",
+    "cn": "Apple",
+    "slugs": [
+      "apple",
+      "apple-careers",
+      "applecareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Netflix",
+    "cn": "Netflix",
+    "slugs": [
+      "netflix",
+      "netflix-careers",
+      "netflixcareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "NVIDIA",
+    "cn": "NVIDIA",
+    "slugs": [
+      "nvidia",
+      "nvidia-careers",
+      "nvidiacareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "OpenAI",
+    "cn": "OpenAI",
+    "slugs": [
+      "openai",
+      "openai-careers",
+      "openaicareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Anthropic",
+    "cn": "Anthropic",
+    "slugs": [
+      "anthropic",
+      "anthropic-careers",
+      "anthropiccareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Uber",
+    "cn": "Uber",
+    "slugs": [
+      "uber",
+      "uber-careers",
+      "ubercareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Airbnb",
+    "cn": "Airbnb",
+    "slugs": [
+      "airbnb",
+      "airbnb-careers",
+      "airbnbcareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Stripe",
+    "cn": "Stripe",
+    "slugs": [
+      "stripe",
+      "stripe-careers",
+      "stripecareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Databricks",
+    "cn": "Databricks",
+    "slugs": [
+      "databricks",
+      "databricks-careers",
+      "databrickscareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Snowflake",
+    "cn": "Snowflake",
+    "slugs": [
+      "snowflake",
+      "snowflake-careers",
+      "snowflakecareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Salesforce",
+    "cn": "Salesforce",
+    "slugs": [
+      "salesforce",
+      "salesforce-careers",
+      "salesforcecareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Adobe",
+    "cn": "Adobe",
+    "slugs": [
+      "adobe",
+      "adobe-careers",
+      "adobecareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Oracle",
+    "cn": "Oracle",
+    "slugs": [
+      "oracle",
+      "oracle-careers",
+      "oraclecareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Atlassian",
+    "cn": "Atlassian",
+    "slugs": [
+      "atlassian",
+      "atlassian-careers",
+      "atlassiancareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Datadog",
+    "cn": "Datadog",
+    "slugs": [
+      "datadog",
+      "datadog-careers",
+      "datadogcareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Cloudflare",
+    "cn": "Cloudflare",
+    "slugs": [
+      "cloudflare",
+      "cloudflare-careers",
+      "cloudflarecareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Palantir",
+    "cn": "Palantir",
+    "slugs": [
+      "palantir",
+      "palantir-careers",
+      "palantircareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "ServiceNow",
+    "cn": "ServiceNow",
+    "slugs": [
+      "servicenow",
+      "servicenow-careers",
+      "servicenowcareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Snap",
+    "cn": "Snap",
+    "slugs": [
+      "snap",
+      "snap-careers",
+      "snapcareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Pinterest",
+    "cn": "Pinterest",
+    "slugs": [
+      "pinterest",
+      "pinterest-careers",
+      "pinterestcareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "LinkedIn",
+    "cn": "LinkedIn",
+    "slugs": [
+      "linkedin",
+      "linkedin-careers",
+      "linkedincareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Spotify",
+    "cn": "Spotify",
+    "slugs": [
+      "spotify",
+      "spotify-careers",
+      "spotifycareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Shopee/Sea",
+    "cn": "Shopee/Sea",
+    "slugs": [
+      "shopeesea",
+      "shopee-sea",
+      "shopeesea-careers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Grab",
+    "cn": "Grab",
+    "slugs": [
+      "grab",
+      "grab-careers",
+      "grabcareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Shopify",
+    "cn": "Shopify",
+    "slugs": [
+      "shopify",
+      "shopify-careers",
+      "shopifycareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "TikTok",
+    "cn": "TikTok",
+    "slugs": [
+      "tiktok",
+      "tiktok-careers",
+      "tiktokcareers"
+    ],
+    "industry": "互联网/科技",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Goldman Sachs",
+    "cn": "Goldman Sachs",
+    "slugs": [
+      "goldmansachs",
+      "goldman-sachs",
+      "goldmansachs-careers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "JPMorgan",
+    "cn": "JPMorgan",
+    "slugs": [
+      "jpmorgan",
+      "jpmorgan-careers",
+      "jpmorgancareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Morgan Stanley",
+    "cn": "Morgan Stanley",
+    "slugs": [
+      "morganstanley",
+      "morgan-stanley",
+      "morganstanley-careers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Citadel",
+    "cn": "Citadel",
+    "slugs": [
+      "citadel",
+      "citadel-careers",
+      "citadelcareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Jane Street",
+    "cn": "Jane Street",
+    "slugs": [
+      "janestreet",
+      "jane-street",
+      "janestreet-careers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Two Sigma",
+    "cn": "Two Sigma",
+    "slugs": [
+      "twosigma",
+      "two-sigma",
+      "twosigma-careers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "BlackRock",
+    "cn": "BlackRock",
+    "slugs": [
+      "blackrock",
+      "blackrock-careers",
+      "blackrockcareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Bloomberg",
+    "cn": "Bloomberg",
+    "slugs": [
+      "bloomberg",
+      "bloomberg-careers",
+      "bloombergcareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Visa",
+    "cn": "Visa",
+    "slugs": [
+      "visa",
+      "visa-careers",
+      "visacareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Mastercard",
+    "cn": "Mastercard",
+    "slugs": [
+      "mastercard",
+      "mastercard-careers",
+      "mastercardcareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "PayPal",
+    "cn": "PayPal",
+    "slugs": [
+      "paypal",
+      "paypal-careers",
+      "paypalcareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "DBS",
+    "cn": "DBS",
+    "slugs": [
+      "dbs",
+      "dbs-careers",
+      "dbscareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "UOB",
+    "cn": "UOB",
+    "slugs": [
+      "uob",
+      "uob-careers",
+      "uobcareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "OCBC",
+    "cn": "OCBC",
+    "slugs": [
+      "ocbc",
+      "ocbc-careers",
+      "ocbccareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "HSBC",
+    "cn": "HSBC",
+    "slugs": [
+      "hsbc",
+      "hsbc-careers",
+      "hsbccareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Standard Chartered",
+    "cn": "Standard Chartered",
+    "slugs": [
+      "standardchartered",
+      "standard-chartered",
+      "standardchartered-careers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Citi",
+    "cn": "Citi",
+    "slugs": [
+      "citi",
+      "citi-careers",
+      "citicareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Bank of America",
+    "cn": "Bank of America",
+    "slugs": [
+      "bankofamerica",
+      "bank-of-america",
+      "bankofamerica-careers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Wells Fargo",
+    "cn": "Wells Fargo",
+    "slugs": [
+      "wellsfargo",
+      "wells-fargo",
+      "wellsfargo-careers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Fidelity",
+    "cn": "Fidelity",
+    "slugs": [
+      "fidelity",
+      "fidelity-careers",
+      "fidelitycareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Capital One",
+    "cn": "Capital One",
+    "slugs": [
+      "capitalone",
+      "capital-one",
+      "capitalone-careers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "American Express",
+    "cn": "American Express",
+    "slugs": [
+      "americanexpress",
+      "american-express",
+      "americanexpress-careers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Robinhood",
+    "cn": "Robinhood",
+    "slugs": [
+      "robinhood",
+      "robinhood-careers",
+      "robinhoodcareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Coinbase",
+    "cn": "Coinbase",
+    "slugs": [
+      "coinbase",
+      "coinbase-careers",
+      "coinbasecareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Revolut",
+    "cn": "Revolut",
+    "slugs": [
+      "revolut",
+      "revolut-careers",
+      "revolutcareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Wise",
+    "cn": "Wise",
+    "slugs": [
+      "wise",
+      "wise-careers",
+      "wisecareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Block",
+    "cn": "Block",
+    "slugs": [
+      "block",
+      "block-careers",
+      "blockcareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Nubank",
+    "cn": "Nubank",
+    "slugs": [
+      "nubank",
+      "nubank-careers",
+      "nubankcareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Marqeta",
+    "cn": "Marqeta",
+    "slugs": [
+      "marqeta",
+      "marqeta-careers",
+      "marqetacareers"
+    ],
+    "industry": "金融",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Procter & Gamble",
+    "cn": "Procter & Gamble",
+    "slugs": [
+      "procterandgamble",
+      "procter-and-gamble",
+      "procterandgamble-careers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Unilever",
+    "cn": "Unilever",
+    "slugs": [
+      "unilever",
+      "unilever-careers",
+      "unilevercareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Nestlé",
+    "cn": "Nestlé",
+    "slugs": [
+      "nestl",
+      "nestl-careers",
+      "nestlcareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Coca-Cola",
+    "cn": "Coca-Cola",
+    "slugs": [
+      "cocacola",
+      "coca-cola",
+      "cocacola-careers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "PepsiCo",
+    "cn": "PepsiCo",
+    "slugs": [
+      "pepsico",
+      "pepsico-careers",
+      "pepsicocareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Nike",
+    "cn": "Nike",
+    "slugs": [
+      "nike",
+      "nike-careers",
+      "nikecareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Adidas",
+    "cn": "Adidas",
+    "slugs": [
+      "adidas",
+      "adidas-careers",
+      "adidascareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Lululemon",
+    "cn": "Lululemon",
+    "slugs": [
+      "lululemon",
+      "lululemon-careers",
+      "lululemoncareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "L'Oréal",
+    "cn": "L'Oréal",
+    "slugs": [
+      "loral",
+      "l-or-al",
+      "loral-careers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Estée Lauder",
+    "cn": "Estée Lauder",
+    "slugs": [
+      "estelauder",
+      "est-e-lauder",
+      "estelauder-careers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Walmart",
+    "cn": "Walmart",
+    "slugs": [
+      "walmart",
+      "walmart-careers",
+      "walmartcareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Costco",
+    "cn": "Costco",
+    "slugs": [
+      "costco",
+      "costco-careers",
+      "costcocareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Target",
+    "cn": "Target",
+    "slugs": [
+      "target",
+      "target-careers",
+      "targetcareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Starbucks",
+    "cn": "Starbucks",
+    "slugs": [
+      "starbucks",
+      "starbucks-careers",
+      "starbuckscareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "McDonald's",
+    "cn": "McDonald's",
+    "slugs": [
+      "mcdonalds",
+      "mcdonald-s",
+      "mcdonalds-careers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Mondelez",
+    "cn": "Mondelez",
+    "slugs": [
+      "mondelez",
+      "mondelez-careers",
+      "mondelezcareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Kraft Heinz",
+    "cn": "Kraft Heinz",
+    "slugs": [
+      "kraftheinz",
+      "kraft-heinz",
+      "kraftheinz-careers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Colgate-Palmolive",
+    "cn": "Colgate-Palmolive",
+    "slugs": [
+      "colgatepalmolive",
+      "colgate-palmolive",
+      "colgatepalmolive-careers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Reckitt",
+    "cn": "Reckitt",
+    "slugs": [
+      "reckitt",
+      "reckitt-careers",
+      "reckittcareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "LVMH",
+    "cn": "LVMH",
+    "slugs": [
+      "lvmh",
+      "lvmh-careers",
+      "lvmhcareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Diageo",
+    "cn": "Diageo",
+    "slugs": [
+      "diageo",
+      "diageo-careers",
+      "diageocareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Heineken",
+    "cn": "Heineken",
+    "slugs": [
+      "heineken",
+      "heineken-careers",
+      "heinekencareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "AB InBev",
+    "cn": "AB InBev",
+    "slugs": [
+      "abinbev",
+      "ab-inbev",
+      "abinbev-careers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Danone",
+    "cn": "Danone",
+    "slugs": [
+      "danone",
+      "danone-careers",
+      "danonecareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "General Mills",
+    "cn": "General Mills",
+    "slugs": [
+      "generalmills",
+      "general-mills",
+      "generalmills-careers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Mars",
+    "cn": "Mars",
+    "slugs": [
+      "mars",
+      "mars-careers",
+      "marscareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Fast Retailing (Uniqlo)",
+    "cn": "Fast Retailing (Uniqlo)",
+    "slugs": [
+      "fastretailinguniqlo",
+      "fast-retailing-uniqlo",
+      "fastretailinguniqlo-careers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Kenvue",
+    "cn": "Kenvue",
+    "slugs": [
+      "kenvue",
+      "kenvue-careers",
+      "kenvuecareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Haleon",
+    "cn": "Haleon",
+    "slugs": [
+      "haleon",
+      "haleon-careers",
+      "haleoncareers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Keurig Dr Pepper",
+    "cn": "Keurig Dr Pepper",
+    "slugs": [
+      "keurigdrpepper",
+      "keurig-dr-pepper",
+      "keurigdrpepper-careers"
+    ],
+    "industry": "消费/零售",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Siemens",
+    "cn": "Siemens",
+    "slugs": [
+      "siemens",
+      "siemens-careers",
+      "siemenscareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "GE",
+    "cn": "GE",
+    "slugs": [
+      "ge",
+      "ge-careers",
+      "gecareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Honeywell",
+    "cn": "Honeywell",
+    "slugs": [
+      "honeywell",
+      "honeywell-careers",
+      "honeywellcareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "3M",
+    "cn": "3M",
+    "slugs": [
+      "3m",
+      "3m-careers",
+      "3mcareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Caterpillar",
+    "cn": "Caterpillar",
+    "slugs": [
+      "caterpillar",
+      "caterpillar-careers",
+      "caterpillarcareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Boeing",
+    "cn": "Boeing",
+    "slugs": [
+      "boeing",
+      "boeing-careers",
+      "boeingcareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Lockheed Martin",
+    "cn": "Lockheed Martin",
+    "slugs": [
+      "lockheedmartin",
+      "lockheed-martin",
+      "lockheedmartin-careers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "ABB",
+    "cn": "ABB",
+    "slugs": [
+      "abb",
+      "abb-careers",
+      "abbcareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Schneider Electric",
+    "cn": "Schneider Electric",
+    "slugs": [
+      "schneiderelectric",
+      "schneider-electric",
+      "schneiderelectric-careers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Bosch",
+    "cn": "Bosch",
+    "slugs": [
+      "bosch",
+      "bosch-careers",
+      "boschcareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Panasonic",
+    "cn": "Panasonic",
+    "slugs": [
+      "panasonic",
+      "panasonic-careers",
+      "panasoniccareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Sony",
+    "cn": "Sony",
+    "slugs": [
+      "sony",
+      "sony-careers",
+      "sonycareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Samsung",
+    "cn": "Samsung",
+    "slugs": [
+      "samsung",
+      "samsung-careers",
+      "samsungcareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "TSMC",
+    "cn": "TSMC",
+    "slugs": [
+      "tsmc",
+      "tsmc-careers",
+      "tsmccareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "ASML",
+    "cn": "ASML",
+    "slugs": [
+      "asml",
+      "asml-careers",
+      "asmlcareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Applied Materials",
+    "cn": "Applied Materials",
+    "slugs": [
+      "appliedmaterials",
+      "applied-materials",
+      "appliedmaterials-careers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Lam Research",
+    "cn": "Lam Research",
+    "slugs": [
+      "lamresearch",
+      "lam-research",
+      "lamresearch-careers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Texas Instruments",
+    "cn": "Texas Instruments",
+    "slugs": [
+      "texasinstruments",
+      "texas-instruments",
+      "texasinstruments-careers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Flex",
+    "cn": "Flex",
+    "slugs": [
+      "flex",
+      "flex-careers",
+      "flexcareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Jabil",
+    "cn": "Jabil",
+    "slugs": [
+      "jabil",
+      "jabil-careers",
+      "jabilcareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Emerson",
+    "cn": "Emerson",
+    "slugs": [
+      "emerson",
+      "emerson-careers",
+      "emersoncareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Rockwell Automation",
+    "cn": "Rockwell Automation",
+    "slugs": [
+      "rockwellautomation",
+      "rockwell-automation",
+      "rockwellautomation-careers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Eaton",
+    "cn": "Eaton",
+    "slugs": [
+      "eaton",
+      "eaton-careers",
+      "eatoncareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Johnson Controls",
+    "cn": "Johnson Controls",
+    "slugs": [
+      "johnsoncontrols",
+      "johnson-controls",
+      "johnsoncontrols-careers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Danaher",
+    "cn": "Danaher",
+    "slugs": [
+      "danaher",
+      "danaher-careers",
+      "danahercareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Illinois Tool Works",
+    "cn": "Illinois Tool Works",
+    "slugs": [
+      "illinoistoolworks",
+      "illinois-tool-works",
+      "illinoistoolworks-careers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Parker Hannifin",
+    "cn": "Parker Hannifin",
+    "slugs": [
+      "parkerhannifin",
+      "parker-hannifin",
+      "parkerhannifin-careers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Micron",
+    "cn": "Micron",
+    "slugs": [
+      "micron",
+      "micron-careers",
+      "microncareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Broadcom",
+    "cn": "Broadcom",
+    "slugs": [
+      "broadcom",
+      "broadcom-careers",
+      "broadcomcareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "AMD",
+    "cn": "AMD",
+    "slugs": [
+      "amd",
+      "amd-careers",
+      "amdcareers"
+    ],
+    "industry": "制造/工业",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Tesla",
+    "cn": "Tesla",
+    "slugs": [
+      "tesla",
+      "tesla-careers",
+      "teslacareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Toyota",
+    "cn": "Toyota",
+    "slugs": [
+      "toyota",
+      "toyota-careers",
+      "toyotacareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Volkswagen",
+    "cn": "Volkswagen",
+    "slugs": [
+      "volkswagen",
+      "volkswagen-careers",
+      "volkswagencareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "BMW",
+    "cn": "BMW",
+    "slugs": [
+      "bmw",
+      "bmw-careers",
+      "bmwcareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Mercedes-Benz",
+    "cn": "Mercedes-Benz",
+    "slugs": [
+      "mercedesbenz",
+      "mercedes-benz",
+      "mercedesbenz-careers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Ford",
+    "cn": "Ford",
+    "slugs": [
+      "ford",
+      "ford-careers",
+      "fordcareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "General Motors",
+    "cn": "General Motors",
+    "slugs": [
+      "generalmotors",
+      "general-motors",
+      "generalmotors-careers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Honda",
+    "cn": "Honda",
+    "slugs": [
+      "honda",
+      "honda-careers",
+      "hondacareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Nissan",
+    "cn": "Nissan",
+    "slugs": [
+      "nissan",
+      "nissan-careers",
+      "nissancareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Hyundai",
+    "cn": "Hyundai",
+    "slugs": [
+      "hyundai",
+      "hyundai-careers",
+      "hyundaicareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Rivian",
+    "cn": "Rivian",
+    "slugs": [
+      "rivian",
+      "rivian-careers",
+      "riviancareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Lucid Motors",
+    "cn": "Lucid Motors",
+    "slugs": [
+      "lucidmotors",
+      "lucid-motors",
+      "lucidmotors-careers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Stellantis",
+    "cn": "Stellantis",
+    "slugs": [
+      "stellantis",
+      "stellantis-careers",
+      "stellantiscareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "ZF",
+    "cn": "ZF",
+    "slugs": [
+      "zf",
+      "zf-careers",
+      "zfcareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Continental",
+    "cn": "Continental",
+    "slugs": [
+      "continental",
+      "continental-careers",
+      "continentalcareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Denso",
+    "cn": "Denso",
+    "slugs": [
+      "denso",
+      "denso-careers",
+      "densocareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Aptiv",
+    "cn": "Aptiv",
+    "slugs": [
+      "aptiv",
+      "aptiv-careers",
+      "aptivcareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Lyft",
+    "cn": "Lyft",
+    "slugs": [
+      "lyft",
+      "lyft-careers",
+      "lyftcareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Waymo",
+    "cn": "Waymo",
+    "slugs": [
+      "waymo",
+      "waymo-careers",
+      "waymocareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Cruise",
+    "cn": "Cruise",
+    "slugs": [
+      "cruise",
+      "cruise-careers",
+      "cruisecareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Mobileye",
+    "cn": "Mobileye",
+    "slugs": [
+      "mobileye",
+      "mobileye-careers",
+      "mobileyecareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Porsche",
+    "cn": "Porsche",
+    "slugs": [
+      "porsche",
+      "porsche-careers",
+      "porschecareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Volvo",
+    "cn": "Volvo",
+    "slugs": [
+      "volvo",
+      "volvo-careers",
+      "volvocareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Renault",
+    "cn": "Renault",
+    "slugs": [
+      "renault",
+      "renault-careers",
+      "renaultcareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Magna",
+    "cn": "Magna",
+    "slugs": [
+      "magna",
+      "magna-careers",
+      "magnacareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Valeo",
+    "cn": "Valeo",
+    "slugs": [
+      "valeo",
+      "valeo-careers",
+      "valeocareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Polestar",
+    "cn": "Polestar",
+    "slugs": [
+      "polestar",
+      "polestar-careers",
+      "polestarcareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Ferrari",
+    "cn": "Ferrari",
+    "slugs": [
+      "ferrari",
+      "ferrari-careers",
+      "ferraricareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Grab Mobility",
+    "cn": "Grab Mobility",
+    "slugs": [
+      "grabmobility",
+      "grab-mobility",
+      "grabmobility-careers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Gojek",
+    "cn": "Gojek",
+    "slugs": [
+      "gojek",
+      "gojek-careers",
+      "gojekcareers"
+    ],
+    "industry": "汽车/出行",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Pfizer",
+    "cn": "Pfizer",
+    "slugs": [
+      "pfizer",
+      "pfizer-careers",
+      "pfizercareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Johnson & Johnson",
+    "cn": "Johnson & Johnson",
+    "slugs": [
+      "johnsonandjohnson",
+      "johnson-and-johnson",
+      "johnsonandjohnson-careers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Roche",
+    "cn": "Roche",
+    "slugs": [
+      "roche",
+      "roche-careers",
+      "rochecareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Novartis",
+    "cn": "Novartis",
+    "slugs": [
+      "novartis",
+      "novartis-careers",
+      "novartiscareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Merck",
+    "cn": "Merck",
+    "slugs": [
+      "merck",
+      "merck-careers",
+      "merckcareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "AstraZeneca",
+    "cn": "AstraZeneca",
+    "slugs": [
+      "astrazeneca",
+      "astrazeneca-careers",
+      "astrazenecacareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "GSK",
+    "cn": "GSK",
+    "slugs": [
+      "gsk",
+      "gsk-careers",
+      "gskcareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Sanofi",
+    "cn": "Sanofi",
+    "slugs": [
+      "sanofi",
+      "sanofi-careers",
+      "sanoficareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Bayer",
+    "cn": "Bayer",
+    "slugs": [
+      "bayer",
+      "bayer-careers",
+      "bayercareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Novo Nordisk",
+    "cn": "Novo Nordisk",
+    "slugs": [
+      "novonordisk",
+      "novo-nordisk",
+      "novonordisk-careers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Eli Lilly",
+    "cn": "Eli Lilly",
+    "slugs": [
+      "elililly",
+      "eli-lilly",
+      "elililly-careers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "AbbVie",
+    "cn": "AbbVie",
+    "slugs": [
+      "abbvie",
+      "abbvie-careers",
+      "abbviecareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Amgen",
+    "cn": "Amgen",
+    "slugs": [
+      "amgen",
+      "amgen-careers",
+      "amgencareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Gilead Sciences",
+    "cn": "Gilead Sciences",
+    "slugs": [
+      "gileadsciences",
+      "gilead-sciences",
+      "gileadsciences-careers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Moderna",
+    "cn": "Moderna",
+    "slugs": [
+      "moderna",
+      "moderna-careers",
+      "modernacareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "BioNTech",
+    "cn": "BioNTech",
+    "slugs": [
+      "biontech",
+      "biontech-careers",
+      "biontechcareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Bristol Myers Squibb",
+    "cn": "Bristol Myers Squibb",
+    "slugs": [
+      "bristolmyerssquibb",
+      "bristol-myers-squibb",
+      "bristolmyerssquibb-careers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Takeda",
+    "cn": "Takeda",
+    "slugs": [
+      "takeda",
+      "takeda-careers",
+      "takedacareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Medtronic",
+    "cn": "Medtronic",
+    "slugs": [
+      "medtronic",
+      "medtronic-careers",
+      "medtroniccareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Abbott",
+    "cn": "Abbott",
+    "slugs": [
+      "abbott",
+      "abbott-careers",
+      "abbottcareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Boston Scientific",
+    "cn": "Boston Scientific",
+    "slugs": [
+      "bostonscientific",
+      "boston-scientific",
+      "bostonscientific-careers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Stryker",
+    "cn": "Stryker",
+    "slugs": [
+      "stryker",
+      "stryker-careers",
+      "strykercareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Thermo Fisher",
+    "cn": "Thermo Fisher",
+    "slugs": [
+      "thermofisher",
+      "thermo-fisher",
+      "thermofisher-careers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Illumina",
+    "cn": "Illumina",
+    "slugs": [
+      "illumina",
+      "illumina-careers",
+      "illuminacareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Regeneron",
+    "cn": "Regeneron",
+    "slugs": [
+      "regeneron",
+      "regeneron-careers",
+      "regeneroncareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Vertex",
+    "cn": "Vertex",
+    "slugs": [
+      "vertex",
+      "vertex-careers",
+      "vertexcareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Genentech",
+    "cn": "Genentech",
+    "slugs": [
+      "genentech",
+      "genentech-careers",
+      "genentechcareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Baxter",
+    "cn": "Baxter",
+    "slugs": [
+      "baxter",
+      "baxter-careers",
+      "baxtercareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Zoetis",
+    "cn": "Zoetis",
+    "slugs": [
+      "zoetis",
+      "zoetis-careers",
+      "zoetiscareers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Merck KGaA",
+    "cn": "Merck KGaA",
+    "slugs": [
+      "merckkgaa",
+      "merck-kgaa",
+      "merckkgaa-careers"
+    ],
+    "industry": "医疗/医药",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "ExxonMobil",
+    "cn": "ExxonMobil",
+    "slugs": [
+      "exxonmobil",
+      "exxonmobil-careers",
+      "exxonmobilcareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Chevron",
+    "cn": "Chevron",
+    "slugs": [
+      "chevron",
+      "chevron-careers",
+      "chevroncareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Shell",
+    "cn": "Shell",
+    "slugs": [
+      "shell",
+      "shell-careers",
+      "shellcareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "BP",
+    "cn": "BP",
+    "slugs": [
+      "bp",
+      "bp-careers",
+      "bpcareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "TotalEnergies",
+    "cn": "TotalEnergies",
+    "slugs": [
+      "totalenergies",
+      "totalenergies-careers",
+      "totalenergiescareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "ConocoPhillips",
+    "cn": "ConocoPhillips",
+    "slugs": [
+      "conocophillips",
+      "conocophillips-careers",
+      "conocophillipscareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Schlumberger",
+    "cn": "Schlumberger",
+    "slugs": [
+      "schlumberger",
+      "schlumberger-careers",
+      "schlumbergercareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Halliburton",
+    "cn": "Halliburton",
+    "slugs": [
+      "halliburton",
+      "halliburton-careers",
+      "halliburtoncareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "BASF",
+    "cn": "BASF",
+    "slugs": [
+      "basf",
+      "basf-careers",
+      "basfcareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Dow",
+    "cn": "Dow",
+    "slugs": [
+      "dow",
+      "dow-careers",
+      "dowcareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "DuPont",
+    "cn": "DuPont",
+    "slugs": [
+      "dupont",
+      "dupont-careers",
+      "dupontcareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "LyondellBasell",
+    "cn": "LyondellBasell",
+    "slugs": [
+      "lyondellbasell",
+      "lyondellbasell-careers",
+      "lyondellbasellcareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Air Liquide",
+    "cn": "Air Liquide",
+    "slugs": [
+      "airliquide",
+      "air-liquide",
+      "airliquide-careers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Linde",
+    "cn": "Linde",
+    "slugs": [
+      "linde",
+      "linde-careers",
+      "lindecareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "NextEra Energy",
+    "cn": "NextEra Energy",
+    "slugs": [
+      "nexteraenergy",
+      "nextera-energy",
+      "nexteraenergy-careers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Enphase Energy",
+    "cn": "Enphase Energy",
+    "slugs": [
+      "enphaseenergy",
+      "enphase-energy",
+      "enphaseenergy-careers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "First Solar",
+    "cn": "First Solar",
+    "slugs": [
+      "firstsolar",
+      "first-solar",
+      "firstsolar-careers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Vestas",
+    "cn": "Vestas",
+    "slugs": [
+      "vestas",
+      "vestas-careers",
+      "vestascareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Ørsted",
+    "cn": "Ørsted",
+    "slugs": [
+      "rsted",
+      "rsted-careers",
+      "rstedcareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Equinor",
+    "cn": "Equinor",
+    "slugs": [
+      "equinor",
+      "equinor-careers",
+      "equinorcareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Saudi Aramco",
+    "cn": "Saudi Aramco",
+    "slugs": [
+      "saudiaramco",
+      "saudi-aramco",
+      "saudiaramco-careers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Occidental",
+    "cn": "Occidental",
+    "slugs": [
+      "occidental",
+      "occidental-careers",
+      "occidentalcareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Phillips 66",
+    "cn": "Phillips 66",
+    "slugs": [
+      "phillips66",
+      "phillips-66",
+      "phillips66-careers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Valero",
+    "cn": "Valero",
+    "slugs": [
+      "valero",
+      "valero-careers",
+      "valerocareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Marathon Petroleum",
+    "cn": "Marathon Petroleum",
+    "slugs": [
+      "marathonpetroleum",
+      "marathon-petroleum",
+      "marathonpetroleum-careers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Duke Energy",
+    "cn": "Duke Energy",
+    "slugs": [
+      "dukeenergy",
+      "duke-energy",
+      "dukeenergy-careers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Southern Company",
+    "cn": "Southern Company",
+    "slugs": [
+      "southerncompany",
+      "southern-company",
+      "southerncompany-careers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "GE Vernova",
+    "cn": "GE Vernova",
+    "slugs": [
+      "gevernova",
+      "ge-vernova",
+      "gevernova-careers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "SunRun",
+    "cn": "SunRun",
+    "slugs": [
+      "sunrun",
+      "sunrun-careers",
+      "sunruncareers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Air Products",
+    "cn": "Air Products",
+    "slugs": [
+      "airproducts",
+      "air-products",
+      "airproducts-careers"
+    ],
+    "industry": "能源/化工",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "CBRE",
+    "cn": "CBRE",
+    "slugs": [
+      "cbre",
+      "cbre-careers",
+      "cbrecareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "JLL",
+    "cn": "JLL",
+    "slugs": [
+      "jll",
+      "jll-careers",
+      "jllcareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Cushman & Wakefield",
+    "cn": "Cushman & Wakefield",
+    "slugs": [
+      "cushmanandwakefield",
+      "cushman-and-wakefield",
+      "cushmanandwakefield-careers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Prologis",
+    "cn": "Prologis",
+    "slugs": [
+      "prologis",
+      "prologis-careers",
+      "prologiscareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Simon Property",
+    "cn": "Simon Property",
+    "slugs": [
+      "simonproperty",
+      "simon-property",
+      "simonproperty-careers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Brookfield",
+    "cn": "Brookfield",
+    "slugs": [
+      "brookfield",
+      "brookfield-careers",
+      "brookfieldcareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Blackstone",
+    "cn": "Blackstone",
+    "slugs": [
+      "blackstone",
+      "blackstone-careers",
+      "blackstonecareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Hines",
+    "cn": "Hines",
+    "slugs": [
+      "hines",
+      "hines-careers",
+      "hinescareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Lendlease",
+    "cn": "Lendlease",
+    "slugs": [
+      "lendlease",
+      "lendlease-careers",
+      "lendleasecareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "CapitaLand",
+    "cn": "CapitaLand",
+    "slugs": [
+      "capitaland",
+      "capitaland-careers",
+      "capitalandcareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "City Developments",
+    "cn": "City Developments",
+    "slugs": [
+      "citydevelopments",
+      "city-developments",
+      "citydevelopments-careers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Keppel",
+    "cn": "Keppel",
+    "slugs": [
+      "keppel",
+      "keppel-careers",
+      "keppelcareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Frasers Property",
+    "cn": "Frasers Property",
+    "slugs": [
+      "frasersproperty",
+      "frasers-property",
+      "frasersproperty-careers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Zillow",
+    "cn": "Zillow",
+    "slugs": [
+      "zillow",
+      "zillow-careers",
+      "zillowcareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Redfin",
+    "cn": "Redfin",
+    "slugs": [
+      "redfin",
+      "redfin-careers",
+      "redfincareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Compass",
+    "cn": "Compass",
+    "slugs": [
+      "compass",
+      "compass-careers",
+      "compasscareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Turner Construction",
+    "cn": "Turner Construction",
+    "slugs": [
+      "turnerconstruction",
+      "turner-construction",
+      "turnerconstruction-careers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Bechtel",
+    "cn": "Bechtel",
+    "slugs": [
+      "bechtel",
+      "bechtel-careers",
+      "bechtelcareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Fluor",
+    "cn": "Fluor",
+    "slugs": [
+      "fluor",
+      "fluor-careers",
+      "fluorcareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "AECOM",
+    "cn": "AECOM",
+    "slugs": [
+      "aecom",
+      "aecom-careers",
+      "aecomcareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Jacobs",
+    "cn": "Jacobs",
+    "slugs": [
+      "jacobs",
+      "jacobs-careers",
+      "jacobscareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Skanska",
+    "cn": "Skanska",
+    "slugs": [
+      "skanska",
+      "skanska-careers",
+      "skanskacareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Vinci",
+    "cn": "Vinci",
+    "slugs": [
+      "vinci",
+      "vinci-careers",
+      "vincicareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Bouygues",
+    "cn": "Bouygues",
+    "slugs": [
+      "bouygues",
+      "bouygues-careers",
+      "bouyguescareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Autodesk",
+    "cn": "Autodesk",
+    "slugs": [
+      "autodesk",
+      "autodesk-careers",
+      "autodeskcareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Procore",
+    "cn": "Procore",
+    "slugs": [
+      "procore",
+      "procore-careers",
+      "procorecareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "WeWork",
+    "cn": "WeWork",
+    "slugs": [
+      "wework",
+      "wework-careers",
+      "weworkcareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Related Companies",
+    "cn": "Related Companies",
+    "slugs": [
+      "relatedcompanies",
+      "related-companies",
+      "relatedcompanies-careers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Segro",
+    "cn": "Segro",
+    "slugs": [
+      "segro",
+      "segro-careers",
+      "segrocareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "GuocoLand",
+    "cn": "GuocoLand",
+    "slugs": [
+      "guocoland",
+      "guocoland-careers",
+      "guocolandcareers"
+    ],
+    "industry": "地产/建筑",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "FedEx",
+    "cn": "FedEx",
+    "slugs": [
+      "fedex",
+      "fedex-careers",
+      "fedexcareers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "UPS",
+    "cn": "UPS",
+    "slugs": [
+      "ups",
+      "ups-careers",
+      "upscareers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "DHL",
+    "cn": "DHL",
+    "slugs": [
+      "dhl",
+      "dhl-careers",
+      "dhlcareers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Maersk",
+    "cn": "Maersk",
+    "slugs": [
+      "maersk",
+      "maersk-careers",
+      "maerskcareers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Kuehne+Nagel",
+    "cn": "Kuehne+Nagel",
+    "slugs": [
+      "kuehnenagel",
+      "kuehne-nagel",
+      "kuehnenagel-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "DSV",
+    "cn": "DSV",
+    "slugs": [
+      "dsv",
+      "dsv-careers",
+      "dsvcareers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "DB Schenker",
+    "cn": "DB Schenker",
+    "slugs": [
+      "dbschenker",
+      "db-schenker",
+      "dbschenker-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Expeditors",
+    "cn": "Expeditors",
+    "slugs": [
+      "expeditors",
+      "expeditors-careers",
+      "expeditorscareers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "C.H. Robinson",
+    "cn": "C.H. Robinson",
+    "slugs": [
+      "chrobinson",
+      "c-h-robinson",
+      "chrobinson-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "XPO",
+    "cn": "XPO",
+    "slugs": [
+      "xpo",
+      "xpo-careers",
+      "xpocareers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "J.B. Hunt",
+    "cn": "J.B. Hunt",
+    "slugs": [
+      "jbhunt",
+      "j-b-hunt",
+      "jbhunt-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Ryder",
+    "cn": "Ryder",
+    "slugs": [
+      "ryder",
+      "ryder-careers",
+      "rydercareers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Flexport",
+    "cn": "Flexport",
+    "slugs": [
+      "flexport",
+      "flexport-careers",
+      "flexportcareers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Ninja Van",
+    "cn": "Ninja Van",
+    "slugs": [
+      "ninjavan",
+      "ninja-van",
+      "ninjavan-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "J&T Express",
+    "cn": "J&T Express",
+    "slugs": [
+      "jandtexpress",
+      "j-and-t-express",
+      "jandtexpress-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Singapore Post",
+    "cn": "Singapore Post",
+    "slugs": [
+      "singaporepost",
+      "singapore-post",
+      "singaporepost-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Nippon Express",
+    "cn": "Nippon Express",
+    "slugs": [
+      "nipponexpress",
+      "nippon-express",
+      "nipponexpress-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Yamato",
+    "cn": "Yamato",
+    "slugs": [
+      "yamato",
+      "yamato-careers",
+      "yamatocareers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "GXO Logistics",
+    "cn": "GXO Logistics",
+    "slugs": [
+      "gxologistics",
+      "gxo-logistics",
+      "gxologistics-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "DP World",
+    "cn": "DP World",
+    "slugs": [
+      "dpworld",
+      "dp-world",
+      "dpworld-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Geodis",
+    "cn": "Geodis",
+    "slugs": [
+      "geodis",
+      "geodis-careers",
+      "geodiscareers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "CEVA Logistics",
+    "cn": "CEVA Logistics",
+    "slugs": [
+      "cevalogistics",
+      "ceva-logistics",
+      "cevalogistics-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Agility",
+    "cn": "Agility",
+    "slugs": [
+      "agility",
+      "agility-careers",
+      "agilitycareers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Lineage",
+    "cn": "Lineage",
+    "slugs": [
+      "lineage",
+      "lineage-careers",
+      "lineagecareers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Old Dominion",
+    "cn": "Old Dominion",
+    "slugs": [
+      "olddominion",
+      "old-dominion",
+      "olddominion-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Schneider National",
+    "cn": "Schneider National",
+    "slugs": [
+      "schneidernational",
+      "schneider-national",
+      "schneidernational-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Penske Logistics",
+    "cn": "Penske Logistics",
+    "slugs": [
+      "penskelogistics",
+      "penske-logistics",
+      "penskelogistics-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Kerry Logistics",
+    "cn": "Kerry Logistics",
+    "slugs": [
+      "kerrylogistics",
+      "kerry-logistics",
+      "kerrylogistics-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Bolloré Logistics",
+    "cn": "Bolloré Logistics",
+    "slugs": [
+      "bollorlogistics",
+      "bollor-logistics",
+      "bollorlogistics-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "A.P. Moller",
+    "cn": "A.P. Moller",
+    "slugs": [
+      "apmoller",
+      "a-p-moller",
+      "apmoller-careers"
+    ],
+    "industry": "物流/供应链",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Disney",
+    "cn": "Disney",
+    "slugs": [
+      "disney",
+      "disney-careers",
+      "disneycareers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Warner Bros. Discovery",
+    "cn": "Warner Bros. Discovery",
+    "slugs": [
+      "warnerbrosdiscovery",
+      "warner-bros-discovery",
+      "warnerbrosdiscovery-careers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Comcast/NBCUniversal",
+    "cn": "Comcast/NBCUniversal",
+    "slugs": [
+      "comcastnbcuniversal",
+      "comcast-nbcuniversal",
+      "comcastnbcuniversal-careers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Paramount",
+    "cn": "Paramount",
+    "slugs": [
+      "paramount",
+      "paramount-careers",
+      "paramountcareers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Sony Pictures",
+    "cn": "Sony Pictures",
+    "slugs": [
+      "sonypictures",
+      "sony-pictures",
+      "sonypictures-careers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Universal Music",
+    "cn": "Universal Music",
+    "slugs": [
+      "universalmusic",
+      "universal-music",
+      "universalmusic-careers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Warner Music",
+    "cn": "Warner Music",
+    "slugs": [
+      "warnermusic",
+      "warner-music",
+      "warnermusic-careers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Electronic Arts",
+    "cn": "Electronic Arts",
+    "slugs": [
+      "electronicarts",
+      "electronic-arts",
+      "electronicarts-careers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Activision Blizzard",
+    "cn": "Activision Blizzard",
+    "slugs": [
+      "activisionblizzard",
+      "activision-blizzard",
+      "activisionblizzard-careers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Take-Two",
+    "cn": "Take-Two",
+    "slugs": [
+      "taketwo",
+      "take-two",
+      "taketwo-careers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Ubisoft",
+    "cn": "Ubisoft",
+    "slugs": [
+      "ubisoft",
+      "ubisoft-careers",
+      "ubisoftcareers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Riot Games",
+    "cn": "Riot Games",
+    "slugs": [
+      "riotgames",
+      "riot-games",
+      "riotgames-careers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Epic Games",
+    "cn": "Epic Games",
+    "slugs": [
+      "epicgames",
+      "epic-games",
+      "epicgames-careers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Roblox",
+    "cn": "Roblox",
+    "slugs": [
+      "roblox",
+      "roblox-careers",
+      "robloxcareers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Nintendo",
+    "cn": "Nintendo",
+    "slugs": [
+      "nintendo",
+      "nintendo-careers",
+      "nintendocareers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Garena",
+    "cn": "Garena",
+    "slugs": [
+      "garena",
+      "garena-careers",
+      "garenacareers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Bandai Namco",
+    "cn": "Bandai Namco",
+    "slugs": [
+      "bandainamco",
+      "bandai-namco",
+      "bandainamco-careers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Sega",
+    "cn": "Sega",
+    "slugs": [
+      "sega",
+      "sega-careers",
+      "segacareers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Live Nation",
+    "cn": "Live Nation",
+    "slugs": [
+      "livenation",
+      "live-nation",
+      "livenation-careers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Endeavor",
+    "cn": "Endeavor",
+    "slugs": [
+      "endeavor",
+      "endeavor-careers",
+      "endeavorcareers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "IMAX",
+    "cn": "IMAX",
+    "slugs": [
+      "imax",
+      "imax-careers",
+      "imaxcareers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Hasbro",
+    "cn": "Hasbro",
+    "slugs": [
+      "hasbro",
+      "hasbro-careers",
+      "hasbrocareers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Mattel",
+    "cn": "Mattel",
+    "slugs": [
+      "mattel",
+      "mattel-careers",
+      "mattelcareers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "The New York Times",
+    "cn": "The New York Times",
+    "slugs": [
+      "newyorktimes",
+      "new-york-times",
+      "newyorktimes-careers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Condé Nast",
+    "cn": "Condé Nast",
+    "slugs": [
+      "condnast",
+      "cond-nast",
+      "condnast-careers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Miniclip",
+    "cn": "Miniclip",
+    "slugs": [
+      "miniclip",
+      "miniclip-careers",
+      "miniclipcareers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Supercell",
+    "cn": "Supercell",
+    "slugs": [
+      "supercell",
+      "supercell-careers",
+      "supercellcareers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Zynga",
+    "cn": "Zynga",
+    "slugs": [
+      "zynga",
+      "zynga-careers",
+      "zyngacareers"
+    ],
+    "industry": "传媒/文娱",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Coursera",
+    "cn": "Coursera",
+    "slugs": [
+      "coursera",
+      "coursera-careers",
+      "courseracareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Udemy",
+    "cn": "Udemy",
+    "slugs": [
+      "udemy",
+      "udemy-careers",
+      "udemycareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Duolingo",
+    "cn": "Duolingo",
+    "slugs": [
+      "duolingo",
+      "duolingo-careers",
+      "duolingocareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Chegg",
+    "cn": "Chegg",
+    "slugs": [
+      "chegg",
+      "chegg-careers",
+      "cheggcareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Khan Academy",
+    "cn": "Khan Academy",
+    "slugs": [
+      "khanacademy",
+      "khan-academy",
+      "khanacademy-careers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Pearson",
+    "cn": "Pearson",
+    "slugs": [
+      "pearson",
+      "pearson-careers",
+      "pearsoncareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "McGraw Hill",
+    "cn": "McGraw Hill",
+    "slugs": [
+      "mcgrawhill",
+      "mcgraw-hill",
+      "mcgrawhill-careers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Kaplan",
+    "cn": "Kaplan",
+    "slugs": [
+      "kaplan",
+      "kaplan-careers",
+      "kaplancareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Byju's",
+    "cn": "Byju's",
+    "slugs": [
+      "byjus",
+      "byju-s",
+      "byjus-careers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Great Learning",
+    "cn": "Great Learning",
+    "slugs": [
+      "greatlearning",
+      "great-learning",
+      "greatlearning-careers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Emeritus",
+    "cn": "Emeritus",
+    "slugs": [
+      "emeritus",
+      "emeritus-careers",
+      "emerituscareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Guild",
+    "cn": "Guild",
+    "slugs": [
+      "guild",
+      "guild-careers",
+      "guildcareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Instructure",
+    "cn": "Instructure",
+    "slugs": [
+      "instructure",
+      "instructure-careers",
+      "instructurecareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Udacity",
+    "cn": "Udacity",
+    "slugs": [
+      "udacity",
+      "udacity-careers",
+      "udacitycareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "2U",
+    "cn": "2U",
+    "slugs": [
+      "2u",
+      "2u-careers",
+      "2ucareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Skillsoft",
+    "cn": "Skillsoft",
+    "slugs": [
+      "skillsoft",
+      "skillsoft-careers",
+      "skillsoftcareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Grammarly",
+    "cn": "Grammarly",
+    "slugs": [
+      "grammarly",
+      "grammarly-careers",
+      "grammarlycareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Quizlet",
+    "cn": "Quizlet",
+    "slugs": [
+      "quizlet",
+      "quizlet-careers",
+      "quizletcareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "MasterClass",
+    "cn": "MasterClass",
+    "slugs": [
+      "masterclass",
+      "masterclass-careers",
+      "masterclasscareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Multiverse",
+    "cn": "Multiverse",
+    "slugs": [
+      "multiverse",
+      "multiverse-careers",
+      "multiversecareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Go1",
+    "cn": "Go1",
+    "slugs": [
+      "go1",
+      "go1-careers",
+      "go1careers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Docebo",
+    "cn": "Docebo",
+    "slugs": [
+      "docebo",
+      "docebo-careers",
+      "docebocareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Cengage",
+    "cn": "Cengage",
+    "slugs": [
+      "cengage",
+      "cengage-careers",
+      "cengagecareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Wiley",
+    "cn": "Wiley",
+    "slugs": [
+      "wiley",
+      "wiley-careers",
+      "wileycareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Scholastic",
+    "cn": "Scholastic",
+    "slugs": [
+      "scholastic",
+      "scholastic-careers",
+      "scholasticcareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Age of Learning",
+    "cn": "Age of Learning",
+    "slugs": [
+      "ageoflearning",
+      "age-of-learning",
+      "ageoflearning-careers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Outschool",
+    "cn": "Outschool",
+    "slugs": [
+      "outschool",
+      "outschool-careers",
+      "outschoolcareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Newsela",
+    "cn": "Newsela",
+    "slugs": [
+      "newsela",
+      "newsela-careers",
+      "newselacareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "Course Hero",
+    "cn": "Course Hero",
+    "slugs": [
+      "coursehero",
+      "course-hero",
+      "coursehero-careers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  },
+  {
+    "company": "edX",
+    "cn": "edX",
+    "slugs": [
+      "edx",
+      "edx-careers",
+      "edxcareers"
+    ],
+    "industry": "教育",
+    "ats": [
+      "greenhouse",
+      "lever",
+      "ashby",
+      "smartrecruiters"
+    ]
+  }
+]
