@@ -31,7 +31,7 @@ jobs:
       # 按 adapter 一片，shard 间互不重叠（各 drain 自己 adapter 的 backlog）。
       matrix:
         adapter: [hotjob, workday, oracle, eightfold, smartrecruiters, greenhouse, lever,
-                  amazon, microsoft]
+                  amazon, microsoft, siemens, google]
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

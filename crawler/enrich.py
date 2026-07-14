@@ -14,6 +14,7 @@ import re
 from urllib.parse import urlparse, parse_qs
 
 import httpx
+from selectolax.parser import HTMLParser
 
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
       "Accept": "application/json"}
@@ -328,6 +329,40 @@ def _detail_vivo(row, src):
 
 
 # adapter_name -> fetcher（httpx 类，P1）
+def _main_text(html_text):
+    """取详情页 <main> 的文本（SSR 页面的 JD 正文容器）。上层 clean_summary 再去标签/截断。"""
+    node = HTMLParser(html_text).css_first("main")
+    return node.text() if node else ""
+
+
+def _detail_siemens(row, src):
+    # Siemens 自建 ATS（jobs.siemens.com/en_US/externaljobs/JobDetail/{id}）：详情页是 SSR，
+    # JD 正文在 <main> 里（live 验证：7.6k 字符含完整 JD；<article> 只有 324 字元信息，别用）。
+    # httpx 直抓、零浏览器。撤岗 → 404/410（_raise_if_gone 统一约定）。
+    # 补这个函数前 Siemens 338 个在招岗 100% 是无正文薄卡（adapter 压根不在 ENRICH_REGISTRY 里）。
+    r = httpx.get(row["jd_url"], headers=UA, timeout=TIMEOUT, follow_redirects=True)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    return _main_text(r.text)
+
+
+def _detail_google(row, src):
+    # Google careers（google.com/about/careers/applications/jobs/results/{id}-{slug}）：详情页 SSR，
+    # JD 正文在 <main>（live 验证 5-6k 字符）。httpx 直抓、零浏览器。
+    # ⚠️ 撤岗是**软 404**：HTTP 仍 200，但 <main> 只剩 "Job not found. This job may have been taken
+    # down."（live 抽样 5 个库内 active 岗，2 个已是这个状态）→ 必须按文案判死，否则死岗永不下架。
+    r = httpx.get(row["jd_url"], headers=UA, timeout=TIMEOUT, follow_redirects=True)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    text = _main_text(r.text)
+    flat = re.sub(r"\s+", " ", text or "").strip()
+    if "Job not found" in flat or "taken down" in flat:
+        raise JobClosedError(f"google job closed (soft 404): {row['jd_url']}")
+    return text
+
+
 ENRICH_REGISTRY = {
     "workday": _detail_workday,
     "oracle": _detail_oracle,
@@ -341,7 +376,11 @@ ENRICH_REGISTRY = {
     "amazon": _detail_amazon,
     "apple": _detail_apple,
     "meituan": _detail_meituan,
-    "microsoft": _detail_microsoft,
+    "microsoft": _detail_microsoft,   # ⚠️ liveness-only：MS 详情页是纯 SPA，httpx 拿不到正文
+                                      # （live 验证：pcsx/gcsservices 的 3 个 detail 端点全 404，
+                                      #  HTML body 全是 JS、<main> 为空）→ 616 张薄卡补正文需浏览器渲染，暂不做。
+    "siemens": _detail_siemens,
+    "google": _detail_google,
     "sf_express": _detail_sf_express,
     "tencent": _detail_tencent,
     "vivo": _detail_vivo,

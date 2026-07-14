@@ -39,7 +39,7 @@ jobs:
         # C 类大厂自建门户（amazon/apple/meituan/microsoft/sf_express/tencent/vivo）2026-06-25 纳入：
         # 逐岗 detail 探活，关闭信号 live 实测（见 crawler/enrich.py 各 _detail_xxx 注释）。
         adapter: [wt, hotjob, workday, oracle, eightfold, smartrecruiters, greenhouse, lever,
-                  amazon, apple, meituan, microsoft, sf_express, tencent, vivo]
+                  amazon, apple, meituan, microsoft, sf_express, tencent, vivo, siemens, google]
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

@@ -432,3 +432,67 @@ class DrainRowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _HtmlResp:
+    """HTML 详情页响应（siemens/google 是 SSR 页面，走 r.text 不是 r.json()）。"""
+
+    def __init__(self, text, status=200):
+        self.text = text
+        self.status_code = status
+
+
+class SiemensDetailTest(unittest.TestCase):
+    """Siemens 338 个在招岗此前 100% 是无正文薄卡（adapter 根本不在 ENRICH_REGISTRY）。
+    正文在详情页 <main> 里（live 验证 7.6k 字符；<article> 只有元信息，别用）。"""
+
+    def test_extracts_jd_body_from_main_only(self):
+        html = ("<html><body><nav>Global navigation noise</nav>"
+                "<main><h1>Embedded C Software Senior Engineer</h1>"
+                "<p>Job ID 510965 We are looking for...</p></main>"
+                "<footer>Imprint</footer></body></html>")
+        with mock.patch.object(enrich.httpx, "get", return_value=_HtmlResp(html)):
+            out = enrich._detail_siemens(
+                {"jd_url": "https://jobs.siemens.com/en_US/externaljobs/JobDetail/510965"}, {})
+        self.assertIn("Embedded C Software Senior Engineer", out)
+        self.assertIn("510965", out)
+        self.assertNotIn("Global navigation noise", out)  # <main> 外的噪音不得混进 summary
+        self.assertNotIn("Imprint", out)
+
+    def test_404_raises_job_closed(self):
+        with mock.patch.object(enrich.httpx, "get", return_value=_HtmlResp("", 404)):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich._detail_siemens(
+                    {"jd_url": "https://jobs.siemens.com/en_US/externaljobs/JobDetail/1"}, {})
+
+
+class GoogleDetailTest(unittest.TestCase):
+    """Google 撤岗是**软 404**：HTTP 仍 200，只有 <main> 文案变成 Job not found
+    （live 抽样 5 个库内 active 岗，2 个已是这个状态）。不按文案判死 → 死岗永不下架。"""
+
+    def test_extracts_jd_body_for_live_job(self):
+        html = ("<html><body><main><h2>Partner Solutions Engineer</h2>"
+                "<p>Minimum qualifications: Bachelor's degree...</p></main></body></html>")
+        with mock.patch.object(enrich.httpx, "get", return_value=_HtmlResp(html)):
+            out = enrich._detail_google(
+                {"jd_url": "https://www.google.com/about/careers/applications/jobs/results/123-x"}, {})
+        self.assertIn("Partner Solutions Engineer", out)
+        self.assertIn("Minimum qualifications", out)
+
+    def test_soft_404_body_raises_job_closed(self):
+        html = ("<html><body><main>Job not found.This job may have been taken down."
+                "Search again</main></body></html>")
+        with mock.patch.object(enrich.httpx, "get", return_value=_HtmlResp(html, 200)):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich._detail_google(
+                    {"jd_url": "https://www.google.com/about/careers/applications/jobs/results/456-y"}, {})
+
+
+class SiemensGoogleRegistryTest(unittest.TestCase):
+    def test_registered_as_httpx_enrichable(self):
+        self.assertEqual(enrich.detail_class("siemens"), "httpx")
+        self.assertEqual(enrich.detail_class("google"), "httpx")
+
+    def test_microsoft_stays_liveness_only_but_registered(self):
+        # MS 详情页是纯 SPA（3 个 detail 端点全 404、<main> 为空）→ 只探活不补正文，别误以为能富化正文。
+        self.assertEqual(enrich.detail_class("microsoft"), "httpx")
