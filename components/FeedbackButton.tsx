@@ -95,7 +95,7 @@ export default function FeedbackButton() {
                     src={QR_SRC}
                     alt="职达反馈群 微信群二维码"
                     width={939}
-                    height={1418}
+                    height={1455}
                     unoptimized
                     onError={() => setQrFailed(true)}
                     className="h-auto w-full max-w-[248px] rounded-2xl ring-1 ring-black/[0.06] dark:ring-white/[0.08]"
@@ -103,8 +103,9 @@ export default function FeedbackButton() {
                 )}
               </div>
 
+              {/* 有效期提示已印在群码图里，这里不重复 */}
               <p className="mt-4 text-xs text-[#9a9184] dark:text-[#837c70]">
-                微信「扫一扫」进群 · 群码定期更新，若提示过期请稍后再来
+                打开微信「扫一扫」即可进群
               </p>
             </div>
           </div>,
