@@ -6,6 +6,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import must_apply
 
 
@@ -17,7 +20,22 @@ class MustApplyListTest(unittest.TestCase):
         path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
         return path
 
-    def test_patterns_reads_json_in_order(self):
+    def test_patterns_returns_all_industries_deduped_in_json_order(self):
+        path = self._json_file({
+            "互联网": [
+                {"name": "字节跳动", "pattern": "%字节%"},
+                {"name": "OPPO", "pattern": "%OPPO%"},
+            ],
+            "制造": [
+                {"name": "重复公司", "pattern": "%字节%"},
+                {"name": "比亚迪", "pattern": "%比亚迪%"},
+            ],
+        })
+
+        with mock.patch.object(must_apply, "MUST_APPLY_JSON", path):
+            self.assertEqual(must_apply.patterns(), ["%字节%", "%OPPO%", "%比亚迪%"])
+
+    def test_old_list_shape_remains_compatible(self):
         path = self._json_file([
             {"name": "字节跳动", "pattern": "%字节%"},
             {"name": "OPPO", "pattern": "%OPPO%"},
@@ -25,6 +43,23 @@ class MustApplyListTest(unittest.TestCase):
 
         with mock.patch.object(must_apply, "MUST_APPLY_JSON", path):
             self.assertEqual(must_apply.patterns(), ["%字节%", "%OPPO%"])
+
+    def test_by_industry_and_selected_industry_patterns(self):
+        rows = {
+            "互联网": [{"name": "字节跳动", "pattern": "%字节%"}],
+            "制造": [
+                {"name": "重复公司", "pattern": "%字节%"},
+                {"name": "比亚迪", "pattern": "%比亚迪%"},
+            ],
+        }
+        path = self._json_file(rows)
+
+        with mock.patch.object(must_apply, "MUST_APPLY_JSON", path):
+            self.assertEqual(must_apply.by_industry(), rows)
+            self.assertEqual(must_apply.patterns_for_industries(["制造", "互联网"]),
+                             ["%字节%", "%比亚迪%"])
+            self.assertEqual(must_apply.patterns_for_industries(None),
+                             ["%字节%", "%比亚迪%"])
 
     def test_match_company_is_case_insensitive_substring(self):
         path = self._json_file([

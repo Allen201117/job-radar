@@ -31,8 +31,9 @@ DAILY_INSERT_CAP = int(os.environ.get("AUTO_DISCOVER_INSERT_CAP", "40"))   # 每
 PLATFORMS = {"feishu", "hotjob"}   # httpx-safe（hotjob 内含 wt/wecruit）；beisen/moka 需浏览器，留后置
 # 科技/新经济/消费清单排最前 → load 时标 _priority，plan_targets 里优先探（对齐目标用户，见 CLAUDE.md §3
 # 「保精度逐步扩量」：民营500强 76% 是传统制造，与目标用户错配，别让它淹没科技/消费候选）。
-_CURATED_FILES = ("targets_tech_consumer.json", "targets_private500_full.json",
+_CURATED_FILES = ("targets_must_apply.json", "targets_tech_consumer.json", "targets_private500_full.json",
                   "targets_private500.json", "targets_soe500.json")
+_MUST_APPLY_FILES = {"targets_must_apply.json"}
 _PRIORITY_FILES = {"targets_tech_consumer.json"}
 
 
@@ -48,13 +49,19 @@ def load_curated_targets():
         p = base / fn
         if not p.exists():
             continue
+        must_apply = fn in _MUST_APPLY_FILES
         priority = fn in _PRIORITY_FILES
         try:
             for t in (json.loads(p.read_text(encoding="utf-8")) or []):
                 c = (t.get("company") or "").strip()
                 if c and c not in seen:
                     seen.add(c)
-                    out.append({**t, "_priority": True} if priority else t)
+                    if must_apply:
+                        out.append({**t, "_must_apply": True})
+                    elif priority:
+                        out.append({**t, "_priority": True})
+                    else:
+                        out.append(t)
         except Exception:
             pass
     return out
@@ -100,8 +107,9 @@ def existing_source_keys(sb):
 
 
 def plan_targets(curated, user_wanted, existing_companies, cap, seed=0):
-    """纯函数：本轮要 probe 的目标 = 库里没有的精选目标公司。排序 = 用户点名 > 科技/新经济/消费(_priority)
-    > 其余；各梯队内按 seed 随机轮转（避免每天死磕同一批失败目标，让覆盖随天数滚动），封顶 cap。
+    """纯函数：本轮要 probe 的目标 = 库里没有的精选目标公司。排序 = 用户点名 > 必投缺口(_must_apply)
+    > 科技/新经济/消费(_priority) > 其余；各梯队内按 seed 随机轮转（避免每天死磕同一批失败目标，
+    让覆盖随天数滚动），封顶 cap。
     用户点名按 norm_company 归一后匹配 company/cn 两个字段——用户写「北京字节跳动科技有限公司」、
     清单写「字节跳动」也要命中（旧实现字符串全等，用户信号经常空转）。"""
     existing = {str(x).strip() for x in (existing_companies or set()) if str(x).strip()}
@@ -124,12 +132,15 @@ def plan_targets(curated, user_wanted, existing_companies, cap, seed=0):
             missing.append(t)
     wanted_first = [t for t in missing if _is_wanted(t)]
     others = [t for t in missing if not _is_wanted(t)]
-    priority = [t for t in others if t.get("_priority")]
-    rest = [t for t in others if not t.get("_priority")]
+    must_apply = [t for t in others if t.get("_must_apply")]
+    priority = [t for t in others if not t.get("_must_apply") and t.get("_priority")]
+    rest = [t for t in others if not t.get("_must_apply") and not t.get("_priority")]
     rng = random.Random(seed)
+    rng.shuffle(wanted_first)
+    rng.shuffle(must_apply)
     rng.shuffle(priority)
     rng.shuffle(rest)
-    return (wanted_first + priority + rest)[:cap]
+    return (wanted_first + must_apply + priority + rest)[:cap]
 
 
 def plan_inserts(passed, existing_urls, cap):
