@@ -46,7 +46,10 @@ _BROWSER_ADAPTERS = (
     "nio_feishu", "xiaomi_feishu", "xpeng_feishu",
     # 自建/大厂 SPA 详情页：既无 httpx 撤岗检测、又不在 liveness-sweep → 此前完全无 liveness。
     # 闭站标记未逐站核实（best-effort）；命中 DEAD_MARKERS 才下架，不中也只是盖时间戳轮转，无副作用。
-    "kuaishou", "byd", "bytedance", "bytedance_campus", "google",
+    # google 已移出：2026-07-14 live 核实其详情页其实是 SSR，httpx 直接拿得到 <main> 正文
+    # （活岗 5-6k 字符）+ 软 404 文案判死 → 已进 ENRICH_REGISTRY/liveness-sweep（httpx 快且能补正文），
+    # 留在这里只会无头重复探活（与 wt/hotjob 同理：有 httpx 检测的就不走浏览器）。
+    "kuaishou", "byd", "bytedance", "bytedance_campus",
     # 2026-06-25 补：db-report 实测 24h 覆盖=0 的大厂 SPA（alibaba 3789/netease 1177/ctrip 772/huawei 445 岗，
     # 之前不在任何保鲜流）。均为浏览器渲染详情页 → 纳入审计渲染探活（同上：命中 DEAD_MARKERS 才下架，否则只轮转盖戳）。
     "alibaba", "netease", "ctrip", "huawei",
