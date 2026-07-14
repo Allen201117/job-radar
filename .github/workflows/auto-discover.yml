@@ -17,15 +17,22 @@ on:
         description: "本次最多 probe 多少家缺失公司"
         required: false
         default: "80"
+      insert_cap:
+        description: "本次最多入库多少源（探活门不变，只放开数量闸）"
+        required: false
+        default: "40"
 
 jobs:
   discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 手动大 cap 补缺口时 probe 家数可能远超每日 80（seed 按日固定 → 同日重触发会重探同一批，
+    # 所以补缺口要靠「一轮拉大 cap」而不是多轮），给足时间预算。
+    timeout-minutes: 50
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       AUTO_DISCOVER_TARGET_CAP: ${{ github.event.inputs.target_cap || '80' }}
+      AUTO_DISCOVER_INSERT_CAP: ${{ github.event.inputs.insert_cap || '40' }}
       # 持续喂清单：每日 LLM 生成一批「库里没有的」新目标公司（走同一探活验证门，编造/猜错自动丢）。
       AUTO_DISCOVER_LLM: "true"
       SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
