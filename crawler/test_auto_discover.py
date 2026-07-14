@@ -215,3 +215,49 @@ class PlanInsertsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _PagedSourcesQuery:
+    """模拟 PostgREST：单次最多返回 1000 行，超出必须靠 range() 分页。"""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self._start, self._end = 0, 999
+
+    def select(self, *_):
+        return self
+
+    def range(self, start, end):
+        self._start, self._end = start, end
+        return self
+
+    def execute(self):
+        class R:
+            pass
+        r = R()
+        page = self.rows[self._start:self._end + 1]
+        r.data = page[:1000]   # PostgREST 硬顶：一次最多 1000 行
+        return r
+
+
+class _PagedSb:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def table(self, _name):
+        return _PagedSourcesQuery(self.rows)
+
+
+class ExistingSourceKeysPaginationTest(unittest.TestCase):
+    """回归守卫：sources 超过 1000 行时 existing_source_keys 必须分页拉全量。
+
+    2026-07-14 线上真事故：sources 涨到 1042 行，PostgREST 单次只返回前 1000 行 →
+    去重集合残缺（漏掉的正是最新入库的源）→ 同一 source_url 被重复入库 15 个。
+    改回不分页会让三条扩源道重新开始造重复源。"""
+
+    def test_reads_all_rows_beyond_postgrest_1000_row_cap(self):
+        rows = [{"company": f"C{i}", "source_url": f"https://x/{i}"} for i in range(1042)]
+        companies, urls = ad.existing_source_keys(_PagedSb(rows))
+        self.assertEqual(len(urls), 1042, "尾部 42 行被 PostgREST 截断 → 去重失效 → 重复入库")
+        self.assertIn("https://x/1041", urls)
+        self.assertEqual(len(companies), 1042)
