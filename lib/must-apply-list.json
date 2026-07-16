@@ -59,7 +59,7 @@
     { "name": "同花顺", "pattern": "%同花顺%" },
     { "name": "度小满", "pattern": "%度小满%" },
     { "name": "京东科技", "pattern": "%京东科技%" },
-    { "name": "中国人保", "pattern": "%人保%" },
+    { "name": "中国人保", "pattern": "%中国人民保险%" },
     { "name": "国信证券", "pattern": "%国信证券%" },
     { "name": "宁波银行", "pattern": "%宁波银行%" }
   ],
@@ -272,7 +272,7 @@
     { "name": "安能物流", "pattern": "%安能物流%" },
     { "name": "中国邮政", "pattern": "%中国邮政%" },
     { "name": "中远海运", "pattern": "%中远%" },
-    { "name": "中外运", "pattern": "%中外运%" },
+    { "name": "中外运", "pattern": "%中国外运%" },
     { "name": "普洛斯", "pattern": "%普洛斯%" },
     { "name": "DHL", "pattern": "%DHL%" },
     { "name": "联邦快递", "pattern": "%FedEx%" },
