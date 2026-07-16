@@ -5,6 +5,9 @@ import { jobsQuery, jobsScalar } from "./client";
 import { JOB_COLUMNS } from "./types";
 import { appendJobScopeWhere } from "@/lib/job-scope";
 import type { UserPreferences } from "@/lib/types";
+import { ilikeMatcher } from "@/lib/ilike-matcher";
+
+export { ilikeMatcher } from "@/lib/ilike-matcher";
 
 /** 是否启用自建香港库（配了连接串即用；否则各路由回退 Supabase）。 */
 export function jobsStoreEnabled(): boolean {
@@ -104,48 +107,80 @@ export type MustApplyCoverageRow = {
   checked72h: number;
 };
 
+export type CompanyActiveAggregate = {
+  company: string | null;
+  activeTotal: number;
+  healthy: number;
+  new7d: number;
+  checked72h: number;
+};
+
+let companyActiveAggregatesCache: { expiresAt: number; value: CompanyActiveAggregate[] } | null = null;
+let companyActiveAggregatesInFlight: Promise<CompanyActiveAggregate[]> | null = null;
+
 /**
- * 北极星指标：「必投清单健康覆盖」逐家统计（admin 运营看板）。
- * healthy 谓词与 count_valid_active_jobs() 字节级同口径（active + btrim(summary)≥60）。
- * 一条 SQL 30 个 ILIKE 分组扫 active 岗，实测秒级；只在 admin 页调用，不进用户路径。
+ * 每家公司只聚合一次，避免必投清单每个 pattern 都扫一遍 active jobs。
+ * 短 TTL 与 in-flight 合并只用于降低同一实例的瞬时重复读取，不作为跨请求数据缓存。
  */
-export async function getMustApplyCoverage(
-  list: Array<{ name: string; pattern: string }>,
-): Promise<MustApplyCoverageRow[]> {
-  const names = list.map((c) => c.name);
-  const pats = list.map((c) => c.pattern);
-  const rows = await jobsQuery<{
-    name: string;
+export async function getCompanyActiveAggregates(): Promise<CompanyActiveAggregate[]> {
+  const now = Date.now();
+  if (companyActiveAggregatesCache && companyActiveAggregatesCache.expiresAt > now) {
+    return companyActiveAggregatesCache.value;
+  }
+  if (companyActiveAggregatesInFlight) return companyActiveAggregatesInFlight;
+  companyActiveAggregatesInFlight = jobsQuery<{
+    company: string | null;
     active_total: string | number;
     healthy: string | number;
     new_7d: string | number;
     checked_72h: string | number;
-  }>(
-    `
-    select t.name,
-      count(j.id) as active_total,
-      count(j.id) filter (
-        where j.summary is not null and char_length(btrim(j.summary)) >= 60
-      ) as healthy,
-      count(j.id) filter (where j.first_seen_at > now() - interval '7 days') as new_7d,
-      count(j.id) filter (where j.enrich_checked_at > now() - interval '72 hours') as checked_72h
-    from unnest($1::text[], $2::text[]) as t(name, pat)
-    left join jobs j on j.status = 'active' and j.company ilike t.pat
-    group by t.name
-    `,
-    [names, pats],
-  );
-  const byName = new Map(rows.map((r) => [r.name, r]));
-  // 按清单原始顺序返回（SQL group by 不保序）
-  return list.map((c) => {
-    const r = byName.get(c.name);
-    return {
-      name: c.name,
-      activeTotal: Number(r?.active_total || 0),
-      healthy: Number(r?.healthy || 0),
-      new7d: Number(r?.new_7d || 0),
-      checked72h: Number(r?.checked_72h || 0),
-    };
+  }>(`
+    select
+      company,
+      count(*) as active_total,
+      count(*) filter (where summary is not null and char_length(btrim(summary)) >= 60) as healthy,
+      count(*) filter (where first_seen_at > now() - interval '7 days') as new_7d,
+      count(*) filter (where enrich_checked_at > now() - interval '72 hours') as checked_72h
+    from jobs
+    where status = 'active'
+    group by company
+  `)
+    .then((rows) => rows.map((row) => ({
+      company: row.company,
+      activeTotal: Number(row.active_total || 0),
+      healthy: Number(row.healthy || 0),
+      new7d: Number(row.new_7d || 0),
+      checked72h: Number(row.checked_72h || 0),
+    })))
+    .then((value) => {
+      companyActiveAggregatesCache = { value, expiresAt: Date.now() + 60_000 };
+      return value;
+    })
+    .finally(() => {
+      companyActiveAggregatesInFlight = null;
+    });
+  return companyActiveAggregatesInFlight;
+}
+
+/**
+ * 北极星指标：「必投清单健康覆盖」逐家统计（admin 运营看板）。
+ * healthy 谓词与 count_valid_active_jobs() 字节级同口径（active + btrim(summary)≥60）。
+ * 先聚合公司，再在 Node 内按 ILIKE 语义匹配，避免每条清单都扫描 active jobs。
+ */
+export async function getMustApplyCoverage(
+  list: Array<{ name: string; pattern: string }>,
+): Promise<MustApplyCoverageRow[]> {
+  const aggregates = await getCompanyActiveAggregates();
+  return list.map(({ name, pattern }) => {
+    const matches = ilikeMatcher(pattern);
+    return aggregates.reduce<MustApplyCoverageRow>((total, company) => {
+      if (!company.company || !matches(company.company)) return total;
+      total.activeTotal += company.activeTotal;
+      total.healthy += company.healthy;
+      total.new7d += company.new7d;
+      total.checked72h += company.checked72h;
+      return total;
+    }, { name, activeTotal: 0, healthy: 0, new7d: 0, checked72h: 0 });
   });
 }
 
