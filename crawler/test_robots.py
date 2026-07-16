@@ -62,5 +62,20 @@ class TestParseRobots(unittest.TestCase):
         self.assertTrue(_parse_robots(txt, "/api/x")["allowed"])
 
 
+class PublicApiAllowlistTest(unittest.TestCase):
+    """厂商文档公开 API 白名单：不发网络请求即放行，且不得外溢到其它 host/路径。"""
+
+    def test_smartrecruiters_posting_api_allowed_without_network(self):
+        from robots import check_robots
+        result = check_robots("https://api.smartrecruiters.com/v1/companies/grab/postings?limit=100")
+        self.assertTrue(result["allowed"])
+        self.assertIn("public API", result["reason"])
+
+    def test_allowlist_does_not_leak_to_other_paths_or_hosts(self):
+        from robots import _public_api_allowed
+        self.assertFalse(_public_api_allowed("api.smartrecruiters.com", "/v2/other"))
+        self.assertFalse(_public_api_allowed("www.smartrecruiters.com", "/v1/companies/x"))
+
+
 if __name__ == "__main__":
     unittest.main()
