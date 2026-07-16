@@ -298,6 +298,25 @@ def _microsoft_description(position_id: str) -> str:
         return ""
 
 
+def _detail_successfactors(row, src):
+    # SF CSB 详情页是 SSR；多数租户正文在 class 含 jobdescription 的 span（live 验证 Ferrari/Bayer/Adidas；
+    # ZF 类租户详情不内嵌正文 → 返空走 miss）。⚠️ 该 HTML 会让 selectolax 解析成空 DOM → 必须正则抽取。
+    # 撤岗/不存在 → 302 跳 /errorpage/?errortype=…（live 验证 bogus id），不是 404 → 按最终 URL 判死。
+    r = httpx.get(row["jd_url"], headers={**UA, "Accept": "text/html"}, timeout=TIMEOUT, follow_redirects=True)
+    _raise_if_gone(r)
+    if "/errorpage" in str(r.url).lower():
+        raise JobClosedError(f"successfactors closed (errorpage): {row['jd_url']}")
+    if r.status_code >= 300:
+        return ""
+    m = re.search(
+        r'<span[^>]*class="[^"]*jobdescription[^"]*"[^>]*>(.*?)</span>\s*(?:</div|<div|<footer|<span[^>]*class="[^"]*job)',
+        r.text, re.S | re.I)
+    if not m:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", m.group(1))
+    return re.sub(r"\s+", " ", html_lib.unescape(text)).strip()
+
+
 def _detail_sf_express(row, src):
     # JobSearchById 逐岗 HTML 页：在招→<title>顺丰人才招聘系统-社会招聘-{岗位名}；
     # 撤岗/不存在→<title>顺丰人才招聘系统-404（live 验证：30 oldest 全 404 标题 / 8 recent 全社招标题）。liveness-only。
@@ -406,6 +425,7 @@ ENRICH_REGISTRY = {
                                       # 但 apply.careers.microsoft.com/careers/job/{positionId}（pcsx search 命中里的
                                       # 数字长 id，非 displayJobId）是 SSR + ld+json JobPosting（2026-07-16 live 验证 200）。
     "siemens": _detail_siemens,
+    "successfactors": _detail_successfactors,  # SF CSB 详情 SSR：正则抽 jobdescription span（多数租户有；ZF 类无正文租户返空）
     "google": _detail_google,
     "sf_express": _detail_sf_express,
     "tencent": _detail_tencent,

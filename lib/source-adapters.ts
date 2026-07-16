@@ -55,6 +55,12 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填公司名 + 地址（api.smartrecruiters.com/v1/companies/{slug}/postings），在华跨国企业常用",
   },
   {
+    value: "successfactors",
+    label: "SuccessFactors（通用 ATS · 欧洲/亚洲系大厂）",
+    origin: "foreign",
+    hint: "填公司名 + SF careers 站地址（jobs.{company}.com/search/ 这类 SSR 搜索页），Ferrari/Adidas/DHL 等常用",
+  },
+  {
     value: "workday",
     label: "Workday（通用 ATS · 外企100强主力）",
     origin: "foreign",

@@ -3,7 +3,7 @@ name: enrich-backlog
 # 按 jd_url 反推官方 detail 端点富化（crawler/enrich.py），httpx 并发回写。无浏览器 → 不装 chromium。
 # 与 daily-crawl(抓列表) / enrich-crawl(浏览器源+轮转) 解耦；按 adapter 分片，shard 间不重叠。
 # 死信：enrich_fail_count≥3 的行不再入队（迁移 133）。browser 类(beisen/moka/feishu)P2 另开 shard。
-# 已支持 httpx detail 的海外 ATS：workday/oracle/eightfold/smartrecruiters/greenhouse/lever/amazon/microsoft。
+# 已支持 httpx detail 的海外 ATS：workday/oracle/eightfold/smartrecruiters/successfactors/greenhouse/lever/amazon/microsoft。
 # phenom/google 暂不进本矩阵：phenom 是 SPA 壳，google 走 browser/playwright 源。
 
 on:
@@ -30,7 +30,7 @@ jobs:
       max-parallel: 5
       # 按 adapter 一片，shard 间互不重叠（各 drain 自己 adapter 的 backlog）。
       matrix:
-        adapter: [hotjob, workday, oracle, eightfold, smartrecruiters, greenhouse, lever,
+        adapter: [hotjob, workday, oracle, eightfold, smartrecruiters, successfactors, greenhouse, lever,
                   amazon, microsoft, siemens, google]
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
