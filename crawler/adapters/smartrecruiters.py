@@ -14,30 +14,46 @@ from typing import List, Optional
 import httpx
 
 import normalizer
-from .base import BaseAdapter, RawJob, resolve_detail_cap
+from .base import BaseAdapter, PageResult, RawJob, paginate_all, resolve_detail_cap
 
 
 class SmartRecruitersAdapter(BaseAdapter):
     name = "smartrecruiters"
 
+    _PAGE_SIZE = 100  # Posting API limit 上限
+    max_pages = 100   # 安全上限 1 万岗（Bosch 全球 ~4700，留一倍余量）
+
     def should_skip(self, source_url: str):
         return None  # 公开 JSON API，跳过 HEAD 预检，由 GET 暴露真实错误
 
     def fetch(self, source_url: str) -> str:
+        # offset/limit 翻到底（旧版只吃第一页 100 条：Bosch 全球 4733 岗只留下前 100 里的
+        # 15 个在华岗，深页的中国岗全漏）。totalFound 是接口权威总数 → reported_total。
+        self.reported_total = None
+        self.fetch_complete = False
         headers = {"User-Agent": self.user_agent, "Accept": "application/json"}
-        resp = httpx.get(source_url, headers=headers, timeout=self.timeout, follow_redirects=True)
-        resp.raise_for_status()
+        base = source_url.split("?")[0]
+
+        def fetch_page(page: int) -> PageResult:
+            r = httpx.get(base, params={"limit": self._PAGE_SIZE, "offset": page * self._PAGE_SIZE},
+                          headers=headers, timeout=self.timeout, follow_redirects=True)
+            r.raise_for_status()
+            data = r.json()
+            if not isinstance(data, dict):
+                return PageResult(items=[], total=None)
+            return PageResult(items=data.get("content") or [], total=data.get("totalFound"))
+
+        rows, total, complete = paginate_all(
+            fetch_page, page_size=self._PAGE_SIZE, first_page=0,
+            max_pages=self.max_pages, label=f"smartrecruiters:{base}")
+        self.reported_total = total
+        self.fetch_complete = complete
         # 逐岗 detail 抓正文 —— 列表接口（/postings）无正文，外企卡片 JD 因此全空。
         # GET /companies/{slug}/postings/{id} → jobAd.sections.{jobDescription,responsibilities,qualifications}.text
         # （HTML；run.py 的 clean_summary 去标签解实体，summary 有正文后 extract_job_type 也能从中推断类型）。
         # 只补将保留的在华岗，单源封顶防夜间全量被拖垮；失败该岗无摘要、不影响入库。
-        try:
-            data = json.loads(resp.text)
-        except (json.JSONDecodeError, TypeError):
-            return resp.text
-        rows = data.get("content", []) if isinstance(data, dict) else []
         self._enrich_descriptions(rows, headers)
-        return json.dumps(data, ensure_ascii=False)
+        return json.dumps({"content": rows}, ensure_ascii=False)
 
     _DETAIL_CAP = 300  # 单源逐岗 detail 抓取上限，避免拖垮夜间全量
 
