@@ -4,6 +4,24 @@ from urllib.parse import urlparse
 
 USER_AGENT = "JobRadarBot/0.1"
 
+# 厂商 API 文档明确声明「公开、无鉴权、供程序化分发消费」的 ATS 端点白名单。
+# robots.txt 是针对网页爬虫的指令；这些 JSON API 由厂商官方文档开放给岗位聚合方
+# （SmartRecruiters Posting API 公开无鉴权，且其 robots.txt 对 LinkedInBot 显式
+# Allow /v1/companies/ —— 岗位分发聚合本就是厂商许可的用途，只是没把 UA 一一列全）。
+# ⚠️ 仅限「host + 路径前缀」精确豁免，不得扩大到任何网页路径；新增条目必须附厂商公开文档依据。
+_PUBLIC_API_ALLOWLIST = (
+    # https://developers.smartrecruiters.com/docs/posting-api （公开 Posting API）
+    ("api.smartrecruiters.com", "/v1/companies/"),
+)
+
+
+def _public_api_allowed(hostname: str, path: str) -> bool:
+    host = (hostname or "").lower()
+    for allow_host, prefix in _PUBLIC_API_ALLOWLIST:
+        if host == allow_host and (path or "/").startswith(prefix):
+            return True
+    return False
+
 
 def check_robots(source_url: str) -> dict:
     """
@@ -11,6 +29,8 @@ def check_robots(source_url: str) -> dict:
     返回 {"allowed": True/False, "reason": str}
     """
     parsed = urlparse(source_url)
+    if _public_api_allowed(parsed.hostname or "", parsed.path or "/"):
+        return {"allowed": True, "reason": "vendor-documented public API"}
     robots_url = f"{parsed.scheme}://{parsed.hostname}/robots.txt"
 
     try:
