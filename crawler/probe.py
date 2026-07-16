@@ -29,6 +29,7 @@ from run import ADAPTERS  # noqa: E402
 # httpx 类（无需浏览器，探活便宜）
 _HTTPX_ADAPTERS = {
     "greenhouse", "lever", "ashby", "smartrecruiters", "workday", "eightfold", "oracle",
+    "successfactors",  # SAP SF CSB SSR 搜索页（jobs.{company}.com），纯 httpx
     "amazon",  # 外企自建：Amazon.jobs search.json
     "phenom",  # 外企自建：Phenom /api/jobs
     "microsoft",  # 外企自建：MS pcsx httpx 直连

@@ -29,6 +29,7 @@ from adapters.greenhouse import GreenhouseAdapter
 from adapters.lever import LeverAdapter
 from adapters.ashby import AshbyAdapter
 from adapters.smartrecruiters import SmartRecruitersAdapter
+from adapters.successfactors import SuccessFactorsAdapter
 from adapters.workday import WorkdayAdapter
 from adapters.eightfold import EightfoldAdapter
 from adapters.oracle import OracleAdapter
@@ -104,6 +105,7 @@ ADAPTERS = {
     "lever": LeverAdapter(),
     "ashby": AshbyAdapter(),
     "smartrecruiters": SmartRecruitersAdapter(),  # 大量在华跨国企业用此 ATS（外企100强主力）
+    "successfactors": SuccessFactorsAdapter(),  # SAP SF Career Site Builder SSR（欧洲/亚洲系大厂 careers 站主力）
     "workday": WorkdayAdapter(),  # 外企100强主力：CXS API + location facet 服务端过滤到在华
     "eightfold": EightfoldAdapter(),  # 外企 ATS：eightfold.ai 公开接口 + location 服务端收窄到在华
     "oracle": OracleAdapter(),  # 外企自建门户主力：Oracle 招聘云 CE API + locationsFacet 过滤到在华
@@ -153,7 +155,7 @@ DOMESTIC_ADAPTERS = {
 # 的 adapter 误并发跑崩夜间 cron。新增 httpx adapter 时显式加进来才享受并发。
 _HTTPX_SAFE_ADAPTERS = {
     "apple", "apple_cn", "baidu", "jd", "haier", "siemens", "tencent",
-    "greenhouse", "lever", "ashby", "smartrecruiters", "workday", "eightfold",
+    "greenhouse", "lever", "ashby", "smartrecruiters", "successfactors", "workday", "eightfold",
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
     "netease", "oppo", "xiaohongshu", "alibaba", "huawei", "ctrip",
     "meituan", "bilibili", "pinduoduo", "vivo", "sf_express",  # 已逐一核实为纯 httpx fetch
