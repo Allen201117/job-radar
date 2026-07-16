@@ -17,7 +17,6 @@ import {
   normalizeCrawlSources,
   translateOperationalTerm,
   type ClickValidityMetrics,
-  type CombinedHealthVerdict,
   type CoverageSnapshot,
   type CrawlSourceRow,
   type DailyReport,
@@ -55,7 +54,6 @@ import {
   Heartbeat,
   MagnifyingGlass,
   PaperPlaneTilt,
-  Pulse,
   ShieldCheck,
   UserCircle,
   Users,
@@ -244,6 +242,7 @@ const STATUS_META: Record<SectionStatus, { icon: string; label: string; badge: s
 // 可折叠板块：收起时只留一根状态条（标题＋状态徽章＋一句话概要），展开才显示明细。
 // 用原生 <details>，无需客户端 JS，兼容 server component。出问题的板块 defaultOpen 自动展开。
 function Section({
+  id,
   title,
   description,
   status = "ok",
@@ -251,6 +250,7 @@ function Section({
   defaultOpen = false,
   children,
 }: {
+  id?: string;
   title: string;
   description: string;
   status?: SectionStatus;
@@ -260,7 +260,7 @@ function Section({
 }) {
   const meta = STATUS_META[status];
   return (
-    <details open={defaultOpen} className="surface group overflow-hidden">
+    <details id={id} open={defaultOpen} className="surface group overflow-hidden">
       <summary className="flex cursor-pointer list-none items-center gap-3 p-5 sm:p-6 [&::-webkit-details-marker]:hidden">
         <span aria-hidden="true" className="text-lg leading-none">
           {meta.icon}
@@ -331,10 +331,6 @@ function displayEmptyRate(value: string): string {
   return value === "—" ? "暂无数据" : value;
 }
 
-function ratioToPercentValue(value: number | null): number | null {
-  return value == null ? null : Math.round(value * 100);
-}
-
 function percentToRatio(value: number | null): number | null {
   return value == null ? null : value / 100;
 }
@@ -350,10 +346,11 @@ function sourceStatusLabel(row: Pick<MustApplyRow, "hasSource" | "sourceEnabled"
   return row.sourceEnabled ? "已接入" : "源已禁用";
 }
 
-function verdictTone(level: CombinedHealthVerdict["level"]): BandTone {
-  if (level === "critical") return "danger";
-  if (level === "warning") return "warning";
-  return "success";
+function actionAnchor(action: string): string {
+  if (/必投|覆盖|补源|行业|公司|供给/.test(action)) return "#must-apply-supply";
+  if (/探活|失效|过期|空壳|岗位|官网|质量|核验/.test(action)) return "#jobs-quality";
+  if (/投递|机会|点击|回访|用户/.test(action)) return "#user-loop";
+  return "#system-ops";
 }
 
 function operationTone(status: DailyReport["status"]): BandTone {
@@ -478,38 +475,6 @@ function AnimatedNumberText({
   );
 }
 
-function VisualKpiTile({
-  label,
-  value,
-  suffix,
-  fallback,
-  pct,
-  tone,
-  caption,
-}: {
-  label: string;
-  value: number | null;
-  suffix?: string;
-  fallback?: string;
-  pct: number | null;
-  tone: BandTone;
-  caption: string;
-}) {
-  return (
-    <div className="surface-soft p-4">
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">{label}</p>
-        <StatusDot tone={tone} />
-      </div>
-      <div className="mt-3">
-        <AnimatedNumberText value={value} suffix={suffix} fallback={fallback} />
-      </div>
-      <MiniBar pct={pct} tone={tone} className="mt-3" />
-      <p className="mt-2 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">{caption}</p>
-    </div>
-  );
-}
-
 function VisualChip({
   label,
   value,
@@ -597,134 +562,13 @@ function CoverageBarList({
   );
 }
 
-function HealthHeroVisual({
-  health,
-  refreshedAt,
-  mustApply,
-  mustTotal,
-  maHealthy,
-  mustApplyIndustry,
-  clickValidity,
-  coverage,
-}: {
-  health: CombinedHealthVerdict;
-  refreshedAt: string;
-  mustApply: MustApplyRow[] | null;
-  mustTotal: number;
-  maHealthy: number;
-  mustApplyIndustry?: string | null;
-  clickValidity: ClickValidityMetrics | null;
-  coverage: CoverageSnapshot | null;
-}) {
-  const coreBands = [health.bands.mustApply, health.bands.clickValidity, health.bands.coverage];
-  const coreMeasured = coreBands.filter((value) => value !== "empty").length;
-  const coreGood = coreBands.filter((value) => value === "good").length;
-  const corePct = coreMeasured > 0 ? coreGood / coreMeasured : null;
-  const ringTone = corePct == null ? "muted" : verdictTone(health.level);
-  const clickPctValue = ratioToPercentValue(clickValidity?.probeValidityRate ?? null);
-
-  return (
-    <div className="grid gap-5 lg:grid-cols-[11rem_1fr] lg:items-center">
-      <div className="flex justify-center lg:justify-start">
-        <StatRing pct={corePct} tone={ringTone} size={148} stroke={13}>
-          <span
-            className={`text-2xl font-semibold ${
-              health.level === "healthy" && corePct != null
-                ? "text-[#00c853] dark:text-[#00e676]"
-                : "text-[#1a1714] dark:text-[#f3ecdf]"
-            }`}
-          >
-            {corePct == null ? "积累中" : health.label}
-          </span>
-          <span className="mt-1 text-[11px] leading-4 text-[#6b655a] dark:text-[#b6ad9d]">
-            {corePct == null ? "0/3 项可判定" : `${coreGood}/3 项核心达标`}
-          </span>
-        </StatRing>
-      </div>
-
-      <div className="space-y-4">
-        <div className="grid gap-3 md:grid-cols-3">
-          <VisualKpiTile
-            label="必投健康覆盖"
-            value={mustApply ? maHealthy : null}
-            suffix={`/${mustTotal}`}
-            fallback="积累中"
-            pct={mustApply ? share(maHealthy, mustTotal) : null}
-            tone={bandTone(health.bands.mustApply)}
-            caption={`${mustApplyIndustry ? `${mustApplyIndustry} · ` : ""}目标 ≥${HEALTH_THRESHOLDS.mustApplyHealthyCompanies.good}/30`}
-          />
-          <VisualKpiTile
-            label="点开仍在招"
-            value={clickPctValue}
-            suffix="%"
-            fallback="暂无数据"
-            pct={clickValidity?.probeValidityRate ?? null}
-            tone={bandTone(health.bands.clickValidity)}
-            caption={`目标 ≥${Math.round(HEALTH_THRESHOLDS.clickValidity.good * 100)}%，不造昨日对比`}
-          />
-          <VisualKpiTile
-            label="全库抓全率"
-            value={coverage?.avgCoveragePct ?? null}
-            suffix="%"
-            fallback="积累中"
-            pct={percentToRatio(coverage?.avgCoveragePct ?? null)}
-            tone={bandTone(health.bands.coverage)}
-            caption={`目标 ≥${HEALTH_THRESHOLDS.coveragePct.good}%；盲区不算 0%`}
-          />
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          {health.actions.length > 0 ? (
-            health.actions.map((action, index) => (
-              <span
-                key={action}
-                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${
-                  health.level === "critical" && index === 0 ? BAND_CHIP_CLASS.danger : BAND_CHIP_CLASS.warning
-                }`}
-              >
-                <span aria-hidden="true">{health.level === "critical" && index === 0 ? "🔴" : "⚠️"}</span>
-                {action}
-              </span>
-            ))
-          ) : (
-            <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${BAND_CHIP_CLASS.success}`}>
-              <StatusDot tone="success" />
-              暂无红线行动项
-            </span>
-          )}
-        </div>
-
-        <p className="text-[11px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
-          页面生成时间：<span className="tabular-nums">{refreshedAt}</span> 北京时间 · 趋势基线 · 积累中 · 快照指标不造昨日对比
-        </p>
-      </div>
-    </div>
-  );
-}
-
 function CoverageSection({
   snapshot,
-  status = "ok",
-  summary,
-  defaultOpen = false,
 }: {
   snapshot: CoverageSnapshot | null;
-  status?: SectionStatus;
-  summary?: string;
-  defaultOpen?: boolean;
 }) {
   if (!snapshot) {
-    return (
-      <Section
-        title="全库抓全率"
-        description="每家公司：官网有多少岗 vs 我们抓到多少。排在前面的是抓漏最多的，优先补。"
-        status={status}
-        summary={summary}
-        defaultOpen={defaultOpen}
-      >
-        <ErrorPanel label="全库抓全率" />
-      </Section>
-    );
+    return <ErrorPanel label="全库抓全率" />;
   }
 
   const hasCoverageData =
@@ -736,13 +580,7 @@ function CoverageSection({
   const averageTone = bandTone(coverageBand(snapshot.avgCoveragePct));
 
   return (
-    <Section
-      title="全库抓全率"
-      description="每家公司：官网有多少岗 vs 我们抓到多少。排在前面的是抓漏最多的，优先补。"
-      status={status}
-      summary={summary}
-      defaultOpen={defaultOpen}
-    >
+    <>
       {!hasCoverageData ? (
         <AccumulatingMetric title="全库抓全率" description="覆盖率数据将在下次抓取后生成" />
       ) : (
@@ -784,7 +622,7 @@ function CoverageSection({
           </div>
         </>
       )}
-    </Section>
+    </>
   );
 }
 
@@ -1065,9 +903,9 @@ function ClickValiditySection({
     <section className="surface p-5 sm:p-6">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">点一下能打开的比例（核心承诺）</h2>
+          <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">展示岗位自动探活（非用户点击统计）</h2>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">
-            用户点开官网那一刻，岗位是否还在招。目标是可直接核验的点击里 ≥99% 仍在招；没有数据时只标暂无数据，不当作 0。
+            系统自动检查展示岗位的页面或接口状态，目标是可直接核验的岗位里 ≥99% 未发现失效；没有数据时只标暂无数据，不当作 0。
           </p>
         </div>
         <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${meta.badge}`}>{meta.label}</span>
@@ -1091,17 +929,17 @@ function ClickValiditySection({
                       <AnimatedStat value={Math.round(clickValidity.probeValidityRate * 100)} />
                       <span className="text-sm">%</span>
                     </span>
-                    <span className="mt-1 text-[11px] leading-4 text-[#6b655a] dark:text-[#b6ad9d]">点开仍在招</span>
+                    <span className="mt-1 text-[11px] leading-4 text-[#6b655a] dark:text-[#b6ad9d]">未发现失效</span>
                   </>
                 )}
               </StatRing>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <VisualChip
-                label="点击核验覆盖"
+                label="自动探活覆盖"
                 value={formatRate(clickValidity.coverageRate)}
                 tone={clickValidity.coverageRate == null ? "muted" : "success"}
-                detail={`总点击 ${formatCount(clickValidity.totalOpens)}`}
+                detail={`展示岗位 ${formatCount(clickValidity.totalOpens)}`}
               />
               <VisualChip
                 label="探不动占比"
@@ -1113,7 +951,7 @@ function ClickValiditySection({
                 label="样本"
                 value={formatCount(sample)}
                 tone={sample > 0 ? "success" : "muted"}
-                detail={`仍在招 ${formatCount(clickValidity.alive)} · 已关闭 ${formatCount(clickValidity.dead)}`}
+                detail={`未发现失效 ${formatCount(clickValidity.alive)} · 已关闭 ${formatCount(clickValidity.dead)}`}
               />
               <VisualChip
                 label="SPA 源死岗抽检率"
@@ -1125,7 +963,7 @@ function ClickValiditySection({
           </div>
 
           <p className="mt-3 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
-            目标 99%。可探源和不可探源分开报，不把探不动的点击塞进成功率。
+            目标 99%。可探源和不可探源分开报，不把探不动的岗位塞进成功率。
           </p>
 
           {clickValidity.byAdapter.length > 0 && (
@@ -1141,10 +979,10 @@ function ClickValiditySection({
                   <thead className="bg-[#f4efe6] text-xs text-[#8a8275] dark:bg-[#1c1813] dark:text-[#9a9184]">
                     <tr>
                       <th className="px-4 py-3 font-medium">来源</th>
-                      <th className="px-4 py-3 text-right font-medium">仍在招</th>
+                      <th className="px-4 py-3 text-right font-medium">未发现失效</th>
                       <th className="px-4 py-3 text-right font-medium">已关闭</th>
                       <th className="px-4 py-3 text-right font-medium">探不动</th>
-                      <th className="px-4 py-3 font-medium">点开仍在招</th>
+                      <th className="px-4 py-3 font-medium">探活有效率</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1226,8 +1064,6 @@ function JobsLibrarySection({
   operations,
   crawlSources,
   todayRemoved,
-  jobsStatus,
-  jobsSummary,
   validActiveShareBand,
   thinShareBand,
   neverCheckedShareBand,
@@ -1236,20 +1072,12 @@ function JobsLibrarySection({
   operations: SupabaseHealthSnapshot | null;
   crawlSources: ReturnType<typeof normalizeCrawlSources>;
   todayRemoved: number | null;
-  jobsStatus: SectionStatus;
-  jobsSummary: string;
   validActiveShareBand: HealthBand;
   thinShareBand: HealthBand;
   neverCheckedShareBand: HealthBand;
 }) {
   return (
-    <Section
-      title="岗位库体检"
-      description="看岗位构成、空壳岗和待核查量；招聘源按近 7 天实际运行结果计算成功率。"
-      status={jobsStatus}
-      summary={jobsSummary}
-      defaultOpen={jobsStatus === "critical"}
-    >
+    <>
       {!jobs ? (
         <ErrorPanel label="岗位库体检" />
       ) : (
@@ -1396,7 +1224,7 @@ function JobsLibrarySection({
           )}
         </div>
       </details>
-    </Section>
+    </>
   );
 }
 
@@ -1420,22 +1248,12 @@ function primaryReportMetric(report: DailyReport) {
 function DailyReportsSection({
   operations,
   reports,
-  reportsStatus,
-  reportsSummary,
 }: {
   operations: SupabaseHealthSnapshot | null;
   reports: DailyReport[];
-  reportsStatus: SectionStatus;
-  reportsSummary: string;
 }) {
   return (
-    <Section
-      title="每日战报"
-      description="各模块每日战报：每个任务只露出一个最关键数字；完整明细默认收起。今天没记录是灰色，不当作失败。"
-      status={reportsStatus}
-      summary={reportsSummary}
-      defaultOpen={reportsStatus === "critical"}
-    >
+    <>
       {!operations ? (
         <ErrorPanel label="每日战报" />
       ) : (
@@ -1482,7 +1300,7 @@ function DailyReportsSection({
           </details>
         </>
       )}
-    </Section>
+    </>
   );
 }
 
@@ -1544,24 +1362,14 @@ function BusinessSection({
   operations,
   users,
   resume,
-  bizStatus,
-  bizSummary,
 }: {
   operations: SupabaseHealthSnapshot | null;
   users: NonNullable<SupabaseHealthSnapshot["today"]>["users"] | null;
   resume: NonNullable<SupabaseHealthSnapshot["today"]>["resume"] | null;
-  bizStatus: SectionStatus;
-  bizSummary: string;
 }) {
   const disputesOpen = Number(operations?.insight?.disputes_open || 0);
   return (
-    <Section
-      title="用户与业务"
-      description="用户、求职偏好、收藏投递、简历解析和职业洞察均使用现有真实数据。"
-      status={bizStatus}
-      summary={bizSummary}
-      defaultOpen={bizStatus === "critical"}
-    >
+    <>
       {!operations ? (
         <ErrorPanel label="用户与业务统计" />
       ) : (
@@ -1622,7 +1430,7 @@ function BusinessSection({
           </BusinessPanel>
         </div>
       )}
-    </Section>
+    </>
   );
 }
 
@@ -1748,16 +1556,6 @@ export default async function AdminHealthPage() {
     ? "战报数据暂不可用"
     : `${ranReports}/${reports.length} 个模块今天已跑` + (failedReports ? ` · ${failedReports} 个失败` : "");
 
-  const coverageHasData =
-    !!coverage &&
-    (coverage.measurable > 0 || coverage.avgCoveragePct != null || coverage.underCount > 0 || coverage.blind > 0);
-  const coverageUnder = coverage?.underCount ?? 0;
-  const coverageStatus = !coverage || !coverageHasData ? "idle" : sectionStatusFromBand(coverageBand(coverage.avgCoveragePct));
-  const coverageSummary = !coverageHasData
-    ? "抓全率数据积累中"
-    : (coverage!.avgCoveragePct != null ? `平均抓全率 ${coverage!.avgCoveragePct}%` : "抓全率积累中") +
-      (coverageUnder > 0 ? ` · ${coverageUnder} 家抓不全` : "");
-
   const validActiveShareBand = jobs
     ? band(share(jobs.validActive, jobs.activeTotal), HEALTH_THRESHOLDS.validActiveShare, "higher")
     : "empty";
@@ -1769,10 +1567,6 @@ export default async function AdminHealthPage() {
     : "empty";
   const jobsQualityBand = worstBand([validActiveShareBand, thinShareBand, neverCheckedShareBand]);
   const jobsStatus = !jobs ? "idle" : sectionStatusFromBand(jobsQualityBand);
-  const jobsSummary = !jobs
-    ? "岗位库数据暂不可用"
-    : `在招 ${formatCount(jobs.activeTotal)} · 空壳 ${formatCount(jobs.thinActive)} · 待核查 ${formatCount(jobs.neverChecked)}`;
-
   let clickStatus: SectionStatus;
   let clickSummary: string;
   if (!clickValidity) {
@@ -1783,14 +1577,23 @@ export default async function AdminHealthPage() {
     clickSummary = "点击有效率积累中";
   } else {
     clickStatus = sectionStatusFromBand(health.bands.clickValidity);
-    clickSummary = `点开仍在招 ${formatRate(clickValidity.probeValidityRate)} · 核验覆盖 ${formatRate(clickValidity.coverageRate)}`;
+    clickSummary = `自动探活 ${formatRate(clickValidity.probeValidityRate)} 未发现失效 · 核验覆盖 ${formatRate(clickValidity.coverageRate)}`;
   }
 
   const bizStatus: SectionStatus = !operations || !users ? "idle" : "ok";
-  const bizSummary =
-    !operations || !users
-      ? "用户数据暂不可用"
-      : `${formatCount(users.total_users)} 用户 · 今日新增 ${formatCount(users.today_users)} · 投递 ${formatCount(users.applied_total)}`;
+  const mustApplyStatus: SectionStatus = !mustApplyCoverageByScope
+    ? "idle"
+    : sectionStatusFromBand(worstBand([health.bands.mustApply, coverageBand(coverage?.avgCoveragePct)]));
+  const mustApplySummary = !mustApplyCoverageByScope
+    ? "必投供给数据暂不可用"
+    : `最需处理：${MUST_APPLY_SCOPE_LABEL[worstMustApplyIndustry.scope]}·${worstMustApplyIndustry.industry} ${maHealthy}/${mustTotal} 家有健康岗 · ${coverage?.avgCoveragePct != null ? `平均抓全率 ${coverage.avgCoveragePct}%` : "抓全率积累中"}`;
+  const jobsAndClickStatus = sectionStatusFromBand(worstBand([jobsQualityBand, health.bands.clickValidity]));
+  const jobsAndClickSummary = !jobs
+    ? "岗位库数据暂不可用"
+    : `在招 ${formatCount(jobs.activeTotal)} · 空壳 ${formatCount(jobs.thinActive)} · ${clickValidity?.probeValidityRate == null ? "探活积累中" : `探活 ${formatRate(clickValidity.probeValidityRate)} 未发现失效`}`;
+  const heroDataMissing = !jobs && !operations;
+  const heroStatus: SectionStatus =
+    heroDataMissing || health.level === "critical" ? "critical" : health.actions.length > 0 ? "warn" : "ok";
 
   return (
     <div className="min-h-screen bg-editorial">
@@ -1798,65 +1601,35 @@ export default async function AdminHealthPage() {
       <ProductPage maxWidth="max-w-6xl">
         <ProductHero
           eyebrow="今日健康"
-          title={`今天：${health.label}`}
-          description="先看核心承诺有没有破：必投公司有没有健康岗、用户点开是否还在招、今天后台任务有没有正常跑。所有数字都来自真实数据库；没有可靠来源的项目会明确标为暂无数据或积累中。"
-          icon={Pulse}
+          title="管理员看板"
+          description="先看今天要不要管、管什么；再看用户闭环有没有发生。"
+          icon={ShieldCheck}
         >
-          <HealthHeroVisual
-            health={health}
-            refreshedAt={refreshedAt}
-            mustApply={mustApplyCoverageByScope ? mustApplyCoverageByScope[worstMustApplyIndustry.scope][worstMustApplyIndustry.industry] : null}
-            mustTotal={mustTotal}
-            maHealthy={maHealthy}
-            mustApplyIndustry={`${MUST_APPLY_SCOPE_LABEL[worstMustApplyIndustry.scope]}·${worstMustApplyIndustry.industry}`}
-            clickValidity={clickValidity}
-            coverage={coverage}
-          />
+          <div className="space-y-5">
+            <div className="grid gap-4 lg:grid-cols-[7fr_5fr]">
+              <div className="surface-soft p-4">
+                <div className="flex items-center gap-2"><p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">今日结论</p><span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${STATUS_META[heroStatus].badge}`}>{STATUS_META[heroStatus].label}</span></div>
+                <p className="mt-3 text-balance text-2xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{heroDataMissing ? "今日结论暂不可用" : health.actions.length > 0 ? `今天有 ${health.actions.length} 项需要处理` : "今日无系统侧红线"}</p>
+                <p className="mt-2 text-pretty text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">{heroDataMissing ? "健康评估数据读取失败，请查看系统运行。" : health.actions.length > 0 ? `先做：${health.actions[0]}` : "按计划推进两周冲刺。"}</p>
+              </div>
+              <div className="surface-soft p-4">
+                <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">今日行动</p>
+                {health.actions.length > 0 ? <div className="mt-3 space-y-2">{health.actions.slice(0, 3).map((action, index) => <a key={action} href={actionAnchor(action)} className="flex items-start gap-2 rounded-xl px-2 py-1.5 text-sm leading-5 text-[#3f3a33] hover:bg-white/55 dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"><span aria-hidden="true">{health.level === "critical" && index === 0 ? "🔴" : "⚠️"}</span><span>{action}</span></a>)}{health.actions.length > 3 && <p className="px-2 text-xs text-[#8a8275] dark:text-[#9a9184]">另有 {health.actions.length - 3} 项，见下方各板块</p>}</div> : <p className="mt-3 flex items-center gap-2 text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]"><StatusDot tone="success" />今日无系统侧紧急行动，继续推进两周冲刺。</p>}
+              </div>
+            </div>
+
+            <div><div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-balance text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">两周冲刺 · 用户闭环</h2><span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${STATUS_META.idle.badge}`}>埋点准备中</span></div><div className="grid grid-cols-2 gap-3 md:grid-cols-4"><a href="#user-loop" className="surface-soft p-4"><p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">标已投</p><p className="mt-3 text-2xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">{users ? formatCount(users.applied_total) : "—"}</p><p className="mt-1 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">{users ? "全部用户累计" : "数据读取失败"}</p></a>{[["收到有效机会", "行为埋点上线后可见"], ["点击官网", "行为埋点上线后可见"], ["7日回访", "埋点上线后开始积累"]].map(([label, detail]) => <div key={label} className="surface-soft p-4"><p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">{label}</p><p className="mt-3 text-2xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">待采集</p><p className="mt-1 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">{detail}</p></div>)}</div></div>
+
+            <p className="text-pretty text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]"><a href="#must-apply-supply" className="underline decoration-[#c8bda8] underline-offset-4 dark:decoration-[#655e53]">{mustApplyCoverageByScope ? `必投供给｜最需处理：${MUST_APPLY_SCOPE_LABEL[worstMustApplyIndustry.scope]}·${worstMustApplyIndustry.industry} ${maHealthy}/${mustTotal} 家有健康岗 · ${coverage?.avgCoveragePct != null ? `全库抓全率 ${coverage.avgCoveragePct}%` : "抓全率积累中"}` : "必投供给｜覆盖数据暂不可用"}</a><span> · </span><a href="#jobs-quality" className="underline decoration-[#c8bda8] underline-offset-4 dark:decoration-[#655e53]">{!clickValidity || clickValidity.probeValidityRate == null || (clickValidity.totalOpens === 0 && clickValidity.livenessTotal === 0) ? "岗位探活｜今日自动探活尚未完成" : `岗位探活｜展示岗位经系统自动探活，${formatRate(clickValidity.probeValidityRate)} 未发现失效（系统自动检查，非用户点击）`}</a></p>
+            <div className="text-[11px] leading-5 text-[#8a8275] dark:text-[#9a9184]"><p>数据更新时间：<span className="tabular-nums">{refreshedAt}</span> 北京时间</p><details className="mt-2"><summary className="cursor-pointer">数据口径说明</summary><ul className="mt-2 list-disc space-y-1 pl-4"><li>没有可靠数据来源的指标显示「待采集 / 积累中 / 暂无数据」，不用 0 代替未知，也不造昨日对比。</li><li>「最需处理」行业 = 所有活跃行业里健康覆盖最差的一个；单行业数字不代表全盘。</li><li>岗位探活为系统自动检查（页面/接口状态），不是用户真实点击统计。</li><li>全库抓全率的盲区（拿不到官网总数的源）不计入平均值，不算 0%。</li><li>7 日回访上线后，分母只计满 7 日的用户。</li></ul></details></div>
+          </div>
         </ProductHero>
 
         <div className="mt-6 grid gap-4">
-          <MustApplySection
-            rowsByIndustry={mustApplyCoverageByScope}
-            fetchCoverageByIndustry={fetchCoverageByIndustry}
-            activeIndustries={activeIndustries}
-            userDistribution={userDistribution}
-          />
-
-          <ClickValiditySection clickValidity={clickValidity} status={clickStatus} summary={clickSummary} />
-
-          <JobsLibrarySection
-            jobs={jobs}
-            operations={operations}
-            crawlSources={crawlSources}
-            todayRemoved={todayRemoved}
-            jobsStatus={jobsStatus}
-            jobsSummary={jobsSummary}
-            validActiveShareBand={validActiveShareBand}
-            thinShareBand={thinShareBand}
-            neverCheckedShareBand={neverCheckedShareBand}
-          />
-
-          <CoverageSection
-            snapshot={coverage}
-            status={coverageStatus}
-            summary={coverageSummary}
-            defaultOpen={coverageStatus === "critical"}
-          />
-
-          <DailyReportsSection
-            operations={operations}
-            reports={reports}
-            reportsStatus={reportsStatus}
-            reportsSummary={reportsSummary}
-          />
-
-          <BusinessSection
-            operations={operations}
-            users={users}
-            resume={resume}
-            bizStatus={bizStatus}
-            bizSummary={bizSummary}
-          />
+          <Section id="user-loop" title="用户闭环" description="用户有没有真正走完 收到机会 → 点开官网 → 标记已投 → 回访 的闭环。当前仅有存量计数，完整漏斗待行为埋点上线。" status={bizStatus} summary={!operations || !users ? "用户数据暂不可用" : `${formatCount(users.total_users)} 用户 · 累计投递 ${formatCount(users.applied_total)} · 其余闭环指标待埋点`}><p className="mb-5 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">收到有效机会 / 点击官网 / 7 日回访：待行为埋点上线后展示。</p><BusinessSection operations={operations} users={users} resume={resume} /></Section>
+          <Section id="must-apply-supply" title="必投供给" description="目标用户最想投的公司有没有健康岗，并诊断抓全率不足的原因。" status={mustApplyStatus} summary={mustApplySummary} defaultOpen={mustApplyStatus === "critical"}><MustApplySection rowsByIndustry={mustApplyCoverageByScope} fetchCoverageByIndustry={fetchCoverageByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} /><div className="mt-5 border-t border-black/[0.06] pt-5 dark:border-white/[0.08]"><h3 className="text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">抓全率（覆盖不足的原因诊断）</h3><div className="mt-4"><CoverageSection snapshot={coverage} /></div></div></Section>
+          <Section id="jobs-quality" title="岗位质量" description="看岗位库体检和展示岗位的系统自动探活情况。" status={jobsAndClickStatus} summary={jobsAndClickSummary} defaultOpen={jobsAndClickStatus === "critical"}><JobsLibrarySection jobs={jobs} operations={operations} crawlSources={crawlSources} todayRemoved={todayRemoved} validActiveShareBand={validActiveShareBand} thinShareBand={thinShareBand} neverCheckedShareBand={neverCheckedShareBand} /><div className="mt-5 border-t border-black/[0.06] pt-5 dark:border-white/[0.08]"><ClickValiditySection clickValidity={clickValidity} status={clickStatus} summary={clickSummary} /></div></Section>
+          <Section id="system-ops" title="系统运行" description="各模块每日战报：每个任务只露出一个最关键数字；完整明细默认收起。今天没记录是灰色，不当作失败。" status={reportsStatus} summary={reportsSummary} defaultOpen={reportsStatus === "critical"}><DailyReportsSection operations={operations} reports={reports} /></Section>
 
           <div className="flex items-center gap-2 px-1 text-xs text-[#8a8275] dark:text-[#9a9184]">
             <ShieldCheck size={15} weight="fill" aria-hidden="true" />
