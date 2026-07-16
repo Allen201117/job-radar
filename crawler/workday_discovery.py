@@ -16,6 +16,8 @@
 命中率（live 实测 15 家 workday 系大厂）：5/15。探不到的自动丢弃、零污染——这正是精度红线允许
 「猜」的前提：猜错的进不了库。
 """
+import time
+
 import httpx
 
 _HEADERS = {
@@ -50,11 +52,18 @@ def site_candidates(tenant: str, display: str):
 
 
 def _probe(url: str, timeout: int):
-    """→ (status, total)。网络异常按「租户不存在」处理（ERR）。"""
-    try:
-        r = httpx.post(url, headers=_HEADERS, json=_BODY, timeout=timeout)
-    except Exception:
-        return "ERR", 0
+    """→ (status, total)。网络异常重试一次再按「租户不存在」处理（ERR）。
+    ⚠️ 2026-07-16 live 踩坑：并发探活时瞬时限流/连接被重置 → ERR 被当成 422 同义（租户不存在）
+    静默跳过 → Salesforce(wd12,1446 岗)/Target(wd5,2000 岗)/Snap 这类真租户整批漏掉；
+    单发重试即可命中。方向敏感（ERR≠不存在），故本体重试而不是交给调用方。"""
+    for attempt in (0, 1):
+        try:
+            r = httpx.post(url, headers=_HEADERS, json=_BODY, timeout=timeout)
+            break
+        except Exception:
+            if attempt == 1:
+                return "ERR", 0
+            time.sleep(1.0)
     if r.status_code == 200:
         try:
             return 200, int((r.json() or {}).get("total") or 0)
