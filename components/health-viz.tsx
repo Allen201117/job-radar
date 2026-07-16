@@ -182,3 +182,30 @@ export function CoverageGrid({
 export function StatusDot({ tone, className }: { tone: BandTone; className?: string }) {
   return <span aria-hidden="true" className={cn("inline-block size-2.5 shrink-0 rounded-full", BAR_FILL[tone], className)} />;
 }
+
+export function FunnelBars({
+  steps,
+}: {
+  steps: Array<{ label: string; value: number | null | undefined }>;
+}) {
+  const max = Math.max(0, ...steps.map((step) => (typeof step.value === "number" ? step.value : 0)));
+  return (
+    <div className="space-y-3" role="list" aria-label="用户漏斗">
+      {steps.map((step, index) => {
+        const previous = index > 0 ? steps[index - 1]?.value : null;
+        const conversion = typeof step.value === "number" && typeof previous === "number" && previous > 0
+          ? `${((step.value / previous) * 100).toFixed(1)}%`
+          : null;
+        return (
+          <div key={step.label} role="listitem" className="grid grid-cols-[5.5rem_1fr_auto] items-center gap-3">
+            <div><p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">{step.label}</p>{index > 0 && <p className="text-[11px] text-[#8a8275] dark:text-[#9a9184]">{conversion ? `转化 ${conversion}` : "—"}</p>}</div>
+            <div className={cn("h-7 overflow-hidden rounded-full", BAR_TRACK)}>
+              {typeof step.value === "number" && max > 0 && <div className={cn("h-full rounded-full", index === 0 ? BAR_FILL.muted : BAR_FILL.success)} style={{ width: `${(step.value / max) * 100}%` }} />}
+            </div>
+            <p className="min-w-10 text-right text-sm font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">{typeof step.value === "number" ? step.value.toLocaleString("zh-CN") : "—"}</p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
