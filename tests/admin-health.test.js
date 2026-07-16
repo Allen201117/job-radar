@@ -686,18 +686,27 @@ test("admin health page authenticates before parallel cross-database reads and r
   assert.match(source, /\.rpc\("admin_health_snapshot",\s*\{\s*p_window:\s*"7 days"\s*\}\)/s);
   assert.match(source, /Promise\.allSettled/);
   assert.match(source, /今日健康/);
-  assert.match(source, /各模块每日战报/);
-  assert.match(source, /全库抓全率/);
+  assert.match(source, /管理员看板/);
+  assert.match(source, /两周冲刺 · 用户闭环/);
+  assert.match(source, /数据口径说明/);
+  assert.match(source, /id="user-loop"/);
+  assert.match(source, /id="must-apply-supply"/);
+  assert.match(source, /id="jobs-quality"/);
+  assert.match(source, /id="system-ops"/);
+  assert.match(source, /用户闭环/);
+  assert.match(source, /必投供给/);
+  assert.match(source, /岗位质量/);
+  assert.match(source, /系统运行/);
+  assert.match(source, /展示岗位自动探活（非用户点击统计）/);
+  assert.match(source, /抓全率（覆盖不足的原因诊断）/);
   assert.match(source, /官网总数/);
   assert.match(source, /我们抓到/);
   assert.match(source, /盲区/);
-  assert.match(source, /岗位库体检/);
-  assert.match(source, /用户与业务/);
   assert.match(source, /buildDailyReports/);
   assert.match(source, /零结果搜索率/);
   assert.match(source, /洞察抽屉打开率/);
   assert.match(source, /积累中/);
-  assert.doesNotMatch(source, /expired 占全库|removed 占全库|active 从未探活|待埋点|>Source<|>Adapter<|>Partial</);
+  assert.doesNotMatch(source, /expired 占全库|removed 占全库|active 从未探活|>Source<|>Adapter<|>Partial</);
 });
 
 test("admin health loading boundary reuses structural warm-paper skeletons", () => {
