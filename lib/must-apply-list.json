@@ -297,7 +297,7 @@
     { "name": "网易云音乐", "pattern": "%网易云音乐%" },
     { "name": "腾讯音乐", "pattern": "%腾讯音乐%" },
     { "name": "猫眼娱乐", "pattern": "%猫眼%" },
-    { "name": "万达电影", "pattern": "%万达电影%" },
+    { "name": "万达电影", "pattern": "%万达%" },
     { "name": "博纳影业", "pattern": "%博纳%" },
     { "name": "光线传媒", "pattern": "%光线传媒%" },
     { "name": "华策影视", "pattern": "%华策%" },
