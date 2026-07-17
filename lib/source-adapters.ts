@@ -22,6 +22,12 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
   { value: "baidu", label: "百度", origin: "domestic" },
   { value: "jd", label: "京东", origin: "domestic" },
   { value: "haier", label: "海尔", origin: "domestic" },
+  {
+    value: "iguopin",
+    label: "国聘（央企官方集中招聘）",
+    origin: "domestic",
+    hint: "填公司名检索地址（https://www.iguopin.com/job?company=中国建筑）；适配器自动翻页并核验每条公开职位详情",
+  },
   { value: "siemens", label: "西门子", origin: "foreign" },
   { value: "tencent", label: "腾讯", origin: "domestic" },
   { value: "bytedance", label: "字节跳动", origin: "domestic" },
