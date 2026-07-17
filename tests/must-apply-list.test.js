@@ -29,7 +29,9 @@ test("overseas must-apply JSON follows the domestic industry taxonomy and keeps 
     assert.equal(companies.length, 30, `${industry} must have 30 overseas companies`);
     assert.equal(new Set(companies.map((company) => company.name)).size, 30, `${industry} names must be unique`);
     assert.equal(new Set(companies.map((company) => company.pattern)).size, 30, `${industry} patterns must be unique`);
-    for (const company of companies) assert.match(company.pattern, /^%.+%$/);
+    // 两种合法形态：%子串%（常规），或无通配的精确匹配（UPS/2U 这类短名：%UPS% 会误吞
+    // Groups/Startups 等含子串的公司，ILIKE 无通配即等值匹配，专治「名字太短放宽必误伤」）。
+    for (const company of companies) assert.match(company.pattern, /^(%[^%]+%|[^%]+)$/);
   }
 });
 
