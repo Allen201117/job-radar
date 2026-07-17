@@ -42,7 +42,9 @@ def site_candidates(tenant: str, display: str):
     cap = "".join(ch for ch in (display or "") if ch.isalnum())
     out = ["External", "Careers", "External_Career_Site", f"{cap}Careers", f"{cap}_Careers",
            tenant, cap, "ExternalCareers", "External_Careers", f"{cap}_External",
-           "Global", "careers", f"{cap}Jobs"]
+           "Global", "careers", f"{cap}Jobs",
+           # 2026-07-17 live 补：Adobe=external_experienced（全小写）/ Disney={tenant}career（单数）
+           "external_experienced", "external", f"{tenant}career"]
     seen, uniq = set(), []
     for s in out:
         if s and s not in seen:
