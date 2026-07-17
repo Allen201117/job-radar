@@ -7,6 +7,17 @@ const json = require("../lib/must-apply-list.json");
 const overseasJson = require("../lib/must-apply-list-overseas.json");
 const { INDUSTRY_CATEGORIES, canonicalizeUserIndustry } = require("../lib/company-industry.js");
 const M = loadTs(path.join(__dirname, "..", "lib", "must-apply-list.ts"));
+const R = loadTs(path.join(__dirname, "..", "lib", "ilike-matcher.ts"));
+
+test("ilikeMatcher matches SQL ILIKE wildcards without changing literal matching", () => {
+  assert.equal(R.ilikeMatcher("%字节%")("北京字节跳动有限公司"), true);
+  assert.equal(R.ilikeMatcher("%BYTE%")("ByteDance"), true);
+  assert.equal(R.ilikeMatcher("%字节%")("腾讯"), false);
+  assert.equal(R.ilikeMatcher("%字节%")("ByteDance"), false);
+  assert.equal(R.ilikeMatcher("甲_公司")("甲乙公司"), true);
+  assert.equal(R.ilikeMatcher("甲%公司")("甲科技有限公司"), true);
+  assert.equal(R.ilikeMatcher("甲%公司")("乙公司"), false);
+});
 
 test("must-apply JSON follows the canonical industry taxonomy and preserves the north-star list", () => {
   assert.deepEqual(Object.keys(json), INDUSTRY_CATEGORIES);
