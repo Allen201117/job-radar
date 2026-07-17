@@ -73,7 +73,9 @@ class IguopinAdapter(BaseAdapter):
         self.reported_total = total
         self.fetch_complete = complete
         self._enrich_details(rows, headers)
-        return json.dumps({"list": rows}, ensure_ascii=False)
+        # 可选 match token：国聘关键词搜索是模糊匹配（搜「中国建筑」会夹带无关公司岗），
+        # 带 &match={token} 时 parse 只放行 company_name 含 token 的岗，保「按公司精准抓取」。
+        return json.dumps({"list": rows, "_match": _match_token(source_url)}, ensure_ascii=False)
 
     def _enrich_details(self, rows: List[dict], headers: dict) -> None:
         """读取每条公开详情；只有确认存在的逐岗详情才在 parse 中放行。"""
@@ -108,6 +110,7 @@ class IguopinAdapter(BaseAdapter):
         except (json.JSONDecodeError, TypeError):
             return []
         rows = data.get("list") if isinstance(data, dict) else None
+        match = (data.get("_match") if isinstance(data, dict) else None) or ""
         out: List[RawJob] = []
         for row in rows or []:
             if not isinstance(row, dict) or not row.get("_detail_verified"):
@@ -116,9 +119,12 @@ class IguopinAdapter(BaseAdapter):
             title = str(row.get("job_name") or "").strip()
             if not job_id or not title:
                 continue
+            company = str(row.get("company_name") or "").strip()
+            if match and match not in company:
+                continue  # 模糊搜索夹带的无关公司岗，精准过滤掉
             detail_url = _DETAIL_PAGE.format(id=job_id)
             out.append(RawJob(
-                company=str(row.get("company_name") or "").strip(),
+                company=company,
                 title=title,
                 location=_location(row.get("district_list")),
                 job_type=_text(row.get("recruitment_type_cn")),
@@ -137,6 +143,12 @@ class IguopinAdapter(BaseAdapter):
 def _company_keyword(source_url: str) -> str:
     query = parse_qs(urlparse(source_url).query)
     value = (query.get("company") or query.get("keyword") or [""])[0]
+    return unquote(value).strip()
+
+
+def _match_token(source_url: str) -> str:
+    """可选精准过滤词：只放行 company_name 含它的岗（应对国聘关键词的模糊夹带）。"""
+    value = (parse_qs(urlparse(source_url).query).get("match") or [""])[0]
     return unquote(value).strip()
 
 
