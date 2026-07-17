@@ -1,7 +1,7 @@
 import Navbar from "@/components/Navbar";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import { AnimatedStat } from "@/components/ui/animated-stat";
-import { CoverageGrid, MiniBar, StackedBar, StatRing, StatusDot } from "@/components/health-viz";
+import { CoverageGrid, FunnelBars, MiniBar, StackedBar, StatRing, StatusDot } from "@/components/health-viz";
 import {
   band,
   bandTone,
@@ -45,7 +45,6 @@ import { canonicalizeUserIndustry } from "@/lib/company-industry";
 import { createServiceClient } from "@/lib/supabaseService";
 import {
   Bug,
-  CaretDown,
   ChartBar,
   Clock,
   Compass,
@@ -80,6 +79,8 @@ type SupabaseHealthSnapshot = {
       total_users?: number;
       today_users?: number;
       users_with_preferences?: number;
+      saved_users?: number;
+      applied_users?: number;
       saved_total?: number;
       saved_today?: number;
       applied_total?: number;
@@ -239,53 +240,6 @@ const STATUS_META: Record<SectionStatus, { icon: string; label: string; badge: s
   },
 };
 
-// 可折叠板块：收起时只留一根状态条（标题＋状态徽章＋一句话概要），展开才显示明细。
-// 用原生 <details>，无需客户端 JS，兼容 server component。出问题的板块 defaultOpen 自动展开。
-function Section({
-  id,
-  title,
-  description,
-  status = "ok",
-  summary,
-  defaultOpen = false,
-  children,
-}: {
-  id?: string;
-  title: string;
-  description: string;
-  status?: SectionStatus;
-  summary?: string;
-  defaultOpen?: boolean;
-  children: ReactNode;
-}) {
-  const meta = STATUS_META[status];
-  return (
-    <details id={id} open={defaultOpen} className="surface group overflow-hidden">
-      <summary className="flex cursor-pointer list-none items-center gap-3 p-5 sm:p-6 [&::-webkit-details-marker]:hidden">
-        <span aria-hidden="true" className="text-lg leading-none">
-          {meta.icon}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <h2 className="text-balance text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{title}</h2>
-            <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${meta.badge}`}>{meta.label}</span>
-          </div>
-          <p className="mt-0.5 truncate text-sm text-[#6b655a] dark:text-[#b6ad9d]">{summary || description}</p>
-        </div>
-        <CaretDown
-          size={18}
-          className="shrink-0 text-[#8a8275] transition-transform duration-200 group-open:rotate-180 dark:text-[#9a9184]"
-          aria-hidden="true"
-        />
-      </summary>
-      <div className="border-t border-black/[0.06] px-5 pb-5 pt-5 sm:px-6 sm:pb-6 dark:border-white/[0.08]">
-        <p className="mb-5 text-pretty text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">{description}</p>
-        {children}
-      </div>
-    </details>
-  );
-}
-
 function ErrorPanel({ label }: { label: string }) {
   return (
     <div
@@ -347,10 +301,10 @@ function sourceStatusLabel(row: Pick<MustApplyRow, "hasSource" | "sourceEnabled"
 }
 
 function actionAnchor(action: string): string {
-  if (/必投|覆盖|补源|行业|公司|供给/.test(action)) return "#must-apply-supply";
-  if (/探活|失效|过期|空壳|岗位|官网|质量|核验/.test(action)) return "#jobs-quality";
-  if (/投递|机会|点击|回访|用户/.test(action)) return "#user-loop";
-  return "#system-ops";
+  if (/必投|覆盖|补源|行业|公司|供给/.test(action)) return "/admin/health?tab=supply";
+  if (/探活|失效|过期|空壳|岗位|官网|质量|核验/.test(action)) return "/admin/health?tab=jobs";
+  if (/投递|机会|点击|回访|用户/.test(action)) return "/admin/health?tab=users";
+  return "/admin/health?tab=system";
 }
 
 function operationTone(status: DailyReport["status"]): BandTone {
@@ -1434,209 +1388,164 @@ function BusinessSection({
   );
 }
 
-export default async function AdminHealthPage() {
-  if (!(await isAdmin())) {
-    redirect("/");
-  }
+function SprintCards({ users }: { users: NonNullable<SupabaseHealthSnapshot["today"]>["users"] | null }) {
+  const pending = [
+    ["收到有效机会", "行为埋点上线后可见"],
+    ["点击官网", "行为埋点上线后可见"],
+    ["7日回访", "埋点上线后开始积累"],
+  ];
+  return (
+    <section>
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">两周冲刺 · 用户闭环</h2>
+        <span className={"rounded-full px-2 py-0.5 text-[11px] font-semibold " + STATUS_META.idle.badge}>埋点准备中</span>
+      </div>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <a href="/admin/health?tab=users" className="surface-soft p-4">
+          <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">标已投</p>
+          <p className="mt-3 text-2xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">{users ? formatCount(users.applied_total) : "—"}</p>
+          <p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">全部用户累计</p>
+        </a>
+        {pending.map(([label, detail]) => (
+          <div key={label} className="surface-soft p-4">
+            <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">{label}</p>
+            <p className="mt-3 text-2xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">待采集</p>
+            <p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">{detail}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
 
-  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, mustApplyFetchResult, userIndustriesResult] = await Promise.allSettled([
-    getJobsHealthSnapshot(),
-    loadSupabaseHealth(),
-    loadClickValidity(),
-    loadMustApplyCoverage(),
-    loadCoverageSnapshot(),
-    Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await getMustApplyFetchCoverage(createServiceClient(), scope)] as const)),
-    loadUserIndustryDistribution(),
-  ]);
+function DataNotes({ refreshedAt }: { refreshedAt: string }) {
+  return (
+    <div className="text-[11px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
+      <p>数据更新时间：<span className="tabular-nums">{refreshedAt}</span> 北京时间</p>
+      <details className="mt-2">
+        <summary className="cursor-pointer">数据口径说明</summary>
+        <ul className="mt-2 list-disc space-y-1 pl-4">
+          <li>未接入显示「待采集」，真实 0 保持 0，读取失败显示「—」。</li>
+          <li>岗位探活为系统自动检查，不是用户真实点击统计。</li>
+          <li>全库抓全率盲区不计入平均值，不算 0%。</li>
+        </ul>
+      </details>
+    </div>
+  );
+}
 
-  if (jobsResult.status === "rejected") {
-    console.error("[admin-health] jobs snapshot failed:", jobsResult.reason);
-  }
-  if (supabaseResult.status === "rejected") {
-    console.error("[admin-health] supabase snapshot failed:", supabaseResult.reason);
-  }
-  if (clickResult.status === "rejected") {
-    console.error("[admin-health] click validity failed:", clickResult.reason);
-  }
-  if (mustApplyResult.status === "rejected") {
-    console.error("[admin-health] must-apply coverage failed:", mustApplyResult.reason);
-  }
-  if (coverageResult.status === "rejected") {
-    console.error("[admin-health] crawl coverage failed:", coverageResult.reason);
-  }
-  if (mustApplyFetchResult.status === "rejected") {
-    console.error("[admin-health] must-apply fetch coverage failed:", mustApplyFetchResult.reason);
-  }
-  if (userIndustriesResult.status === "rejected") {
-    console.error("[admin-health] user industry distribution failed:", userIndustriesResult.reason);
-  }
+function OverviewTab({
+  health,
+  heroStatus,
+  heroDataMissing,
+  jobs,
+  users,
+  supplyStatus,
+  systemStatus,
+  worst,
+  rowsByScope,
+  reports,
+  ran,
+  failed,
+  refreshedAt,
+}: {
+  health: ReturnType<typeof evaluateCombinedHealth>;
+  heroStatus: SectionStatus;
+  heroDataMissing: boolean;
+  jobs: JobsHealthSnapshot | null;
+  users: NonNullable<SupabaseHealthSnapshot["today"]>["users"] | null;
+  supplyStatus: SectionStatus;
+  systemStatus: SectionStatus;
+  worst: { scope: MustApplyScope; industry: string; healthy: number | null; total: number };
+  rowsByScope: MustApplyRowsByScope | null;
+  reports: DailyReport[];
+  ran: number;
+  failed: number;
+  refreshedAt: string;
+}) {
+  const cards: Array<[string, string, SectionStatus, string, string]> = [
+    ["岗位库", "jobs", jobs ? sectionStatusFromBand(band(share(jobs.validActive, jobs.activeTotal), HEALTH_THRESHOLDS.validActiveShare, "higher")) : "idle", jobs ? formatCount(jobs.activeTotal) : "—", jobs ? "有效率 " + formatPercent(jobs.validActive, jobs.activeTotal) + " · 空壳 " + formatCount(jobs.thinActive) : "数据暂不可用"],
+    ["必投供给", "supply", supplyStatus, rowsByScope ? String(worst.healthy || 0) + "/" + worst.total : "—", "最需处理：" + MUST_APPLY_SCOPE_LABEL[worst.scope] + "·" + worst.industry],
+    ["用户行为", "users", users ? "ok" : "idle", users ? formatCount(users.total_users) : "—", users ? "累计投递 " + formatCount(users.applied_total) + " 次" : "数据暂不可用"],
+    ["系统运行", "system", systemStatus, String(ran) + "/" + reports.length, failed ? String(failed) + " 个失败" : "全部正常"],
+  ];
+  return (
+    <div className="grid gap-5">
+      <div className="grid gap-4 lg:grid-cols-2">
+        <section className="surface-soft p-4">
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">今日结论</p>
+            <span className={"rounded-full px-2 py-0.5 text-[11px] font-semibold " + STATUS_META[heroStatus].badge}>{STATUS_META[heroStatus].label}</span>
+          </div>
+          <p className="mt-3 text-2xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{heroDataMissing ? "今日结论暂不可用" : health.actions.length ? "今天有 " + health.actions.length + " 项需要处理" : "今日无系统侧红线"}</p>
+          <p className="mt-2 text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">{heroDataMissing ? "健康评估数据读取失败，请查看系统运行。" : health.actions.length ? "先做：" + health.actions[0] : "按计划推进两周冲刺。"}</p>
+        </section>
+        <section className="surface-soft p-4">
+          <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">今日行动</p>
+          {health.actions.length ? <div className="mt-3 space-y-2">{health.actions.slice(0, 3).map((action, index) => <a key={action} href={actionAnchor(action)} className="flex items-start gap-2 rounded-xl px-2 py-1.5 text-sm leading-5 text-[#3f3a33] hover:bg-white/55 dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"><span>{health.level === "critical" && index === 0 ? "🔴" : "⚠️"}</span><span>{action}</span></a>)}{health.actions.length > 3 && <p className="px-2 text-xs text-[#8a8275] dark:text-[#9a9184]">另有 {health.actions.length - 3} 项，见下方各板块</p>}</div> : <p className="mt-3 flex items-center gap-2 text-sm text-[#6b655a] dark:text-[#b6ad9d]"><StatusDot tone="success" />今日无系统侧紧急行动，继续推进两周冲刺。</p>}
+        </section>
+      </div>
+      <section className="grid gap-3 md:grid-cols-4">{cards.map(([name, key, status, number, detail]) => <a key={key} href={"/admin/health?tab=" + key} className="surface-soft p-4"><div className="flex justify-between"><p className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{name}</p><span className={"rounded-full px-2 py-0.5 text-[11px] font-semibold " + STATUS_META[status].badge}>{STATUS_META[status].label}</span></div><p className="mt-4 text-3xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">{number}</p><p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">{detail}</p></a>)}</section>
+      <SprintCards users={users} />
+      <DataNotes refreshedAt={refreshedAt} />
+    </div>
+  );
+}
 
+function JobsTab({ jobs, clickValidity, clickStatus, coverage, operations, todayRemoved, validBand, checkedBand }: { jobs: JobsHealthSnapshot | null; clickValidity: ClickValidityMetrics | null; clickStatus: SectionStatus; coverage: CoverageSnapshot | null; operations: SupabaseHealthSnapshot | null; todayRemoved: number | null; validBand: HealthBand; checkedBand: HealthBand }) {
+  return <div className="grid gap-5"><section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{jobs ? <><VisualChip label="在招总量" value={formatCount(jobs.activeTotal)} tone="success" /><VisualChip label="今日新进" value={formatCount(jobs.todayNew)} tone="success" /><VisualChip label="今日下架" value={todayRemoved == null ? "—" : formatCount(todayRemoved)} tone="warning" /><VisualChip label="空壳岗" value={formatCount(jobs.thinActive)} tone="warning" /><VisualChip label="待核查" value={formatCount(jobs.neverChecked)} tone="muted" /></> : <ErrorPanel label="岗位库体检" />}</section>{jobs && <section className="surface p-5"><h2 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">库存结构</h2><StackedBar className="mt-4 h-4" total={jobs.activeTotal} segments={[{ value: jobs.validActive, tone: "success" }, { value: jobs.thinActive, tone: "warning" }]} /><p className="mt-3 text-xs text-[#8a8275] dark:text-[#9a9184]">有效在招 {formatCount(jobs.validActive)} · 空壳 {formatCount(jobs.thinActive)}</p><div className="mt-4"><div className="flex justify-between text-xs text-[#6b655a] dark:text-[#b6ad9d]"><span>待核查（与左侧有交集）</span><span>{formatCount(jobs.neverChecked)}</span></div><MiniBar className="mt-2" pct={share(jobs.neverChecked, jobs.activeTotal)} tone={bandTone(checkedBand)} /></div></section>}<section className="grid gap-4 md:grid-cols-2">{jobs && <div className="surface flex items-center gap-5 p-5"><StatRing pct={share(jobs.validActive, jobs.activeTotal)} tone={bandTone(validBand)}><span className="text-xl font-semibold">{formatPercent(jobs.validActive, jobs.activeTotal)}</span></StatRing><p>有效率</p></div>}<div className="surface flex items-center gap-5 p-5"><StatRing pct={clickValidity?.coverageRate ?? null} tone="muted"><span className="text-xl font-semibold">{clickValidity?.coverageRate == null ? "—" : formatRate(clickValidity.coverageRate)}</span></StatRing><p>探活覆盖</p></div></section><ClickValiditySection clickValidity={clickValidity} status={clickStatus} summary="展示岗位自动探活（非用户点击统计）" /><section className="surface p-5"><h2 className="mb-4 text-xl font-semibold">抓全率</h2><CoverageSection snapshot={coverage} /></section><details className="surface p-5"><summary className="cursor-pointer text-xl font-semibold">分源状态</summary><div className="mt-5"><JobsLibrarySection jobs={null} operations={operations} crawlSources={normalizeCrawlSources(operations?.crawl_sources)} todayRemoved={todayRemoved} validActiveShareBand={validBand} thinShareBand="empty" neverCheckedShareBand={checkedBand} /></div></details></div>;
+}
+
+function SupplyTab({ rowsByScope, fetchByIndustry, activeIndustries, userDistribution, worst }: { rowsByScope: MustApplyRowsByScope | null; fetchByIndustry: Record<MustApplyScope, Record<string, MustApplyFetchCoverage>> | null; activeIndustries: Record<MustApplyScope, string[]>; userDistribution: UserIndustryDistribution; worst: { scope: MustApplyScope; industry: string; healthy: number | null; total: number; zeroHealthyCompanies: string[] } }) {
+  return <div className="grid gap-5"><section className="surface flex flex-col items-center p-6 text-center"><StatRing pct={rowsByScope ? (worst.healthy || 0) / worst.total : null} tone={bandTone(mustApplyIndustryBand(rowsByScope?.[worst.scope]?.[worst.industry] || null))} size={180}><span className="text-3xl font-semibold">{rowsByScope ? String(worst.healthy || 0) + "/30" : "—"}</span></StatRing><p className="mt-3 text-sm text-[#6b655a] dark:text-[#b6ad9d]">最需处理：{MUST_APPLY_SCOPE_LABEL[worst.scope]}·{worst.industry}</p></section><MustApplySection rowsByIndustry={rowsByScope} fetchCoverageByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} /><section className="surface p-5"><h2 className="font-semibold">缺口提示</h2><div className="mt-3 flex flex-wrap gap-2">{worst.zeroHealthyCompanies.slice(0, 10).map((company) => <span key={company} className="rounded-full bg-[#fbecd7] px-3 py-1 text-xs text-[#8f6225] dark:bg-[#825d28]/30 dark:text-[#e0b15a]">{company}</span>)}{worst.zeroHealthyCompanies.length > 10 && <span className="text-xs">等 {worst.zeroHealthyCompanies.length - 10} 家</span>}{rowsByScope && worst.zeroHealthyCompanies.length === 0 && <span>真实 0 家缺口</span>}{!rowsByScope && <span>—</span>}</div></section></div>;
+}
+
+function UserTab({ operations, users, resume }: { operations: SupabaseHealthSnapshot | null; users: NonNullable<SupabaseHealthSnapshot["today"]>["users"] | null; resume: NonNullable<SupabaseHealthSnapshot["today"]>["resume"] | null }) {
+  if (!operations || !users) return <ErrorPanel label="用户行为统计" />;
+  return <div className="grid gap-5"><section className="surface p-5 sm:p-6"><h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">用户漏斗</h2><div className="mt-5"><FunnelBars steps={[{ label: "注册", value: users.total_users }, { label: "设了偏好", value: users.users_with_preferences }, { label: "收藏过", value: users.saved_users }, { label: "投递过", value: users.applied_users }]} /></div></section><section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><VisualChip label="今日新增用户" value={formatCount(users.today_users)} tone="muted" /><VisualChip label="收藏次数" value={formatCount(users.saved_total) + " + " + formatCount(users.saved_today)} tone="muted" detail="累计 + 今日" /><VisualChip label="投递次数" value={formatCount(users.applied_total) + " + " + formatCount(users.applied_today)} tone="muted" detail="累计 + 今日" /><VisualChip label="简历解析" value={resume ? formatCount(resume.succeeded) + "/" + formatCount(resume.started) : "—"} tone="muted" detail="今日成功/总数" /></section><SprintCards users={users} /><p className="text-xs text-[#8a8275] dark:text-[#9a9184]">点击官网 / 收到机会 / 7日回访 待行为埋点上线。</p></div>;
+}
+
+function SystemTab({ operations, reports, refreshedAt }: { operations: SupabaseHealthSnapshot | null; reports: DailyReport[]; refreshedAt: string }) {
+  return <div className="grid gap-5"><section className="surface p-5"><DailyReportsSection operations={operations} reports={reports} /></section><DataNotes refreshedAt={refreshedAt} /><p className="text-xs text-[#8a8275] dark:text-[#9a9184]">该页面仅管理员可访问；两套数据库分别读取，任一侧异常时另一侧仍可显示。</p></div>;
+}
+
+export default async function AdminHealthPage({ searchParams }: { searchParams: Promise<{ tab?: string | string[] }> }) {
+  if (!(await isAdmin())) redirect("/");
+  const query = await searchParams;
+  const rawTab = typeof query.tab === "string" ? query.tab : "";
+  const tab = rawTab === "jobs" || rawTab === "supply" || rawTab === "users" || rawTab === "system" ? rawTab : "overview";
+  const overview = tab === "overview";
+  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult] = await Promise.allSettled([overview || tab === "jobs" ? getJobsHealthSnapshot() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), overview || tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await getMustApplyFetchCoverage(createServiceClient(), scope)] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null)]);
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
   const clickValidity = clickResult.status === "fulfilled" ? clickResult.value : null;
-  const mustApplyCoverageByScope = mustApplyResult.status === "fulfilled" ? mustApplyResult.value : null;
+  const rowsByScope = mustApplyResult.status === "fulfilled" ? mustApplyResult.value : null;
   const coverage = coverageResult.status === "fulfilled" ? coverageResult.value : null;
-  const userDistribution = userIndustriesResult.status === "fulfilled"
-    ? userIndustriesResult.value
-    : { counts: { domestic: {}, overseas: {} }, scopeUsers: { domestic: 0, overseas: 0 }, unset: 0 };
-  const activeIndustries = Object.fromEntries(
-    MUST_APPLY_SCOPES.map((scope) => [
-      scope,
-      MUST_APPLY_INDUSTRIES.filter(
-        (industry) => (scope === "domestic" && industry === DEFAULT_MUST_APPLY_INDUSTRY) || (userDistribution.counts[scope][industry] || 0) > 0,
-      ),
-    ]),
-  ) as Record<MustApplyScope, string[]>;
-  const mustApplyFetchCoverage = mustApplyFetchResult.status === "fulfilled"
-    ? Object.fromEntries(mustApplyFetchResult.value) as Record<MustApplyScope, MustApplyFetchCoverage>
-    : null;
-  const fetchCoverageByIndustry = mustApplyFetchCoverage
-    ? Object.fromEntries(
-        MUST_APPLY_SCOPES.map((scope) => [scope, groupFetchCoverageByIndustry(mustApplyFetchCoverage[scope], MUST_APPLY_INDUSTRIES, scope)]),
-      ) as Record<MustApplyScope, Record<string, MustApplyFetchCoverage>>
-    : null;
-  const crawlSources = normalizeCrawlSources(operations?.crawl_sources);
-  const reports = buildDailyReports({
-    crawl: operations?.today?.crawl || null,
-    discovery: operations?.today?.discovery || null,
-    insight: { today_created: operations?.insight?.today_created },
-    opsRuns: operations?.today?.ops_runs || [],
-  });
-  const deadReport = reports.find((report) => report.key === "dead_jobs");
-  const todayRemoved = deadReport?.metrics.find((metric) => metric.label === "判死")?.value ?? null;
+  const userDistribution = industriesResult.status === "fulfilled" && industriesResult.value ? industriesResult.value : { counts: { domestic: {}, overseas: {} }, scopeUsers: { domestic: 0, overseas: 0 }, unset: 0 };
+  const activeIndustries = Object.fromEntries(MUST_APPLY_SCOPES.map((scope) => [scope, MUST_APPLY_INDUSTRIES.filter((industry) => (scope === "domestic" && industry === DEFAULT_MUST_APPLY_INDUSTRY) || (userDistribution.counts[scope][industry] || 0) > 0)])) as Record<MustApplyScope, string[]>;
+  const fetchCoverage = fetchResult.status === "fulfilled" && fetchResult.value ? Object.fromEntries(fetchResult.value) as Record<MustApplyScope, MustApplyFetchCoverage> : null;
+  const fetchByIndustry = fetchCoverage ? Object.fromEntries(MUST_APPLY_SCOPES.map((scope) => [scope, groupFetchCoverageByIndustry(fetchCoverage[scope], MUST_APPLY_INDUSTRIES, scope)])) as Record<MustApplyScope, Record<string, MustApplyFetchCoverage>> : null;
+  const reports = buildDailyReports({ crawl: operations?.today?.crawl || null, discovery: operations?.today?.discovery || null, insight: { today_created: operations?.insight?.today_created }, opsRuns: operations?.today?.ops_runs || [] });
   const users = operations?.today?.users || null;
   const resume = operations?.today?.resume || null;
-  const refreshedAt = new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date());
-
-  const mustApplyIndustries = MUST_APPLY_SCOPES.flatMap((scope) => activeIndustries[scope].map((industry) => {
-    const rows = mustApplyCoverageByScope?.[scope]?.[industry];
-    return {
-      scope,
-      industry,
-      healthy: rows ? rows.filter((row) => row.healthy > 0).length : null,
-      total: mustApplyByIndustry(scope)[industry].length,
-      zeroHealthyCompanies: rows ? rows.filter((row) => row.healthy === 0).map((row) => row.name) : [],
-      blindCompanies: rows ? rows.filter((row) => row.healthy > 0 && row.checked72h === 0).map((row) => row.name) : [],
-      userCount: userDistribution.counts[scope][industry] || 0,
-    };
-  }));
-  const worstMustApplyIndustry = mustApplyIndustries.reduce((worst, item) => {
-    const itemBand = mustApplyIndustryBand(mustApplyCoverageByScope?.[item.scope]?.[item.industry] || null);
-    const worstBand = mustApplyIndustryBand(mustApplyCoverageByScope?.[worst.scope]?.[worst.industry] || null);
-    const ranks: Record<HealthBand, number> = { empty: 0, good: 1, warn: 2, bad: 3 };
-    return ranks[itemBand] > ranks[worstBand] ? item : worst;
-  });
-  const mustTotal = worstMustApplyIndustry.total;
-  const maHealthy = worstMustApplyIndustry.healthy || 0;
-  const health = evaluateCombinedHealth({
-    validActive: jobs?.validActive,
-    crawlRuns: operations?.today?.crawl?.runs,
-    crawlFailedRuns: operations?.today?.crawl?.failed_runs,
-    clickProbeValidityRate: clickValidity?.probeValidityRate,
-    mustApplyHealthyCompanies: mustApplyCoverageByScope ? maHealthy : null,
-    mustApplyTotalCompanies: mustTotal,
-    mustApplyZeroHealthyCompanies: worstMustApplyIndustry.zeroHealthyCompanies,
-    mustApplyBlindCompanies: worstMustApplyIndustry.blindCompanies,
-    mustApplyIndustries,
-    coverageAvgPct: coverage?.avgCoveragePct,
-    coverageBlindSources: coverage?.blind,
-  });
-
-  const failedReports = reports.filter((r) => r.status === "failed").length;
-  const ranReports = reports.filter((r) => r.status === "success").length;
-  const reportsStatus: SectionStatus = !operations ? "idle" : failedReports > 0 ? "critical" : ranReports === 0 ? "idle" : "ok";
-  const reportsSummary = !operations
-    ? "战报数据暂不可用"
-    : `${ranReports}/${reports.length} 个模块今天已跑` + (failedReports ? ` · ${failedReports} 个失败` : "");
-
-  const validActiveShareBand = jobs
-    ? band(share(jobs.validActive, jobs.activeTotal), HEALTH_THRESHOLDS.validActiveShare, "higher")
-    : "empty";
-  const thinShareBand = jobs
-    ? band(share(jobs.thinActive, jobs.activeTotal), HEALTH_THRESHOLDS.thinActiveShare, "lower")
-    : "empty";
-  const neverCheckedShareBand = jobs
-    ? band(share(jobs.neverChecked, jobs.activeTotal), HEALTH_THRESHOLDS.neverCheckedShare, "lower")
-    : "empty";
-  const jobsQualityBand = worstBand([validActiveShareBand, thinShareBand, neverCheckedShareBand]);
-  const jobsStatus = !jobs ? "idle" : sectionStatusFromBand(jobsQualityBand);
-  let clickStatus: SectionStatus;
-  let clickSummary: string;
-  if (!clickValidity) {
-    clickStatus = "idle";
-    clickSummary = "点击有效率数据暂不可用";
-  } else if (clickValidity.totalOpens === 0 && clickValidity.livenessTotal === 0) {
-    clickStatus = "idle";
-    clickSummary = "点击有效率积累中";
-  } else {
-    clickStatus = sectionStatusFromBand(health.bands.clickValidity);
-    clickSummary = `自动探活 ${formatRate(clickValidity.probeValidityRate)} 未发现失效 · 核验覆盖 ${formatRate(clickValidity.coverageRate)}`;
-  }
-
-  const bizStatus: SectionStatus = !operations || !users ? "idle" : "ok";
-  const mustApplyStatus: SectionStatus = !mustApplyCoverageByScope
-    ? "idle"
-    : sectionStatusFromBand(worstBand([health.bands.mustApply, coverageBand(coverage?.avgCoveragePct)]));
-  const mustApplySummary = !mustApplyCoverageByScope
-    ? "必投供给数据暂不可用"
-    : `最需处理：${MUST_APPLY_SCOPE_LABEL[worstMustApplyIndustry.scope]}·${worstMustApplyIndustry.industry} ${maHealthy}/${mustTotal} 家有健康岗 · ${coverage?.avgCoveragePct != null ? `平均抓全率 ${coverage.avgCoveragePct}%` : "抓全率积累中"}`;
-  const jobsAndClickStatus = sectionStatusFromBand(worstBand([jobsQualityBand, health.bands.clickValidity]));
-  const jobsAndClickSummary = !jobs
-    ? "岗位库数据暂不可用"
-    : `在招 ${formatCount(jobs.activeTotal)} · 空壳 ${formatCount(jobs.thinActive)} · ${clickValidity?.probeValidityRate == null ? "探活积累中" : `探活 ${formatRate(clickValidity.probeValidityRate)} 未发现失效`}`;
+  const todayRemoved = reports.find((report) => report.key === "dead_jobs")?.metrics.find((metric) => metric.label === "判死")?.value ?? null;
+  const validBand = jobs ? band(share(jobs.validActive, jobs.activeTotal), HEALTH_THRESHOLDS.validActiveShare, "higher") : "empty";
+  const thinBand = jobs ? band(share(jobs.thinActive, jobs.activeTotal), HEALTH_THRESHOLDS.thinActiveShare, "lower") : "empty";
+  const checkedBand = jobs ? band(share(jobs.neverChecked, jobs.activeTotal), HEALTH_THRESHOLDS.neverCheckedShare, "lower") : "empty";
+  const jobsStatus = !jobs ? "idle" : sectionStatusFromBand(worstBand([validBand, thinBand, checkedBand]));
+  const clickStatus = !clickValidity ? "idle" : clickValidity.totalOpens === 0 && clickValidity.livenessTotal === 0 ? "idle" : sectionStatusFromBand(band(clickValidity.probeValidityRate, HEALTH_THRESHOLDS.clickValidity, "higher"));
+  const fallback = { scope: "domestic" as MustApplyScope, industry: DEFAULT_MUST_APPLY_INDUSTRY, healthy: null as number | null, total: 30, zeroHealthyCompanies: [] as string[], blindCompanies: [] as string[], userCount: 0 };
+  const candidates = MUST_APPLY_SCOPES.flatMap((scope) => activeIndustries[scope].map((industry) => { const rows = rowsByScope?.[scope]?.[industry]; return { scope, industry, healthy: rows ? rows.filter((row) => row.healthy > 0).length : null, total: mustApplyByIndustry(scope)[industry].length, zeroHealthyCompanies: rows ? rows.filter((row) => row.healthy === 0).map((row) => row.name) : [], blindCompanies: rows ? rows.filter((row) => row.healthy > 0 && row.checked72h === 0).map((row) => row.name) : [], userCount: userDistribution.counts[scope][industry] || 0 }; }));
+  const worst = candidates.reduce((current, item) => { const ranks: Record<HealthBand, number> = { empty: 0, good: 1, warn: 2, bad: 3 }; return ranks[mustApplyIndustryBand(rowsByScope?.[item.scope]?.[item.industry] || null)] > ranks[mustApplyIndustryBand(rowsByScope?.[current.scope]?.[current.industry] || null)] ? item : current; }, fallback);
+  const health = evaluateCombinedHealth({ validActive: jobs?.validActive, crawlRuns: operations?.today?.crawl?.runs, crawlFailedRuns: operations?.today?.crawl?.failed_runs, clickProbeValidityRate: clickValidity?.probeValidityRate, mustApplyHealthyCompanies: rowsByScope ? worst.healthy || 0 : null, mustApplyTotalCompanies: worst.total, mustApplyZeroHealthyCompanies: worst.zeroHealthyCompanies, mustApplyBlindCompanies: worst.blindCompanies, mustApplyIndustries: candidates, coverageAvgPct: coverage?.avgCoveragePct, coverageBlindSources: coverage?.blind });
+  const supplyStatus = !rowsByScope ? "idle" : sectionStatusFromBand(worstBand([health.bands.mustApply, coverageBand(coverage?.avgCoveragePct)]));
+  const failed = reports.filter((report) => report.status === "failed").length;
+  const ran = reports.filter((report) => report.status === "success").length;
+  const systemStatus: SectionStatus = !operations ? "idle" : failed ? "critical" : ran ? "ok" : "idle";
   const heroDataMissing = !jobs && !operations;
-  const heroStatus: SectionStatus =
-    heroDataMissing || health.level === "critical" ? "critical" : health.actions.length > 0 ? "warn" : "ok";
-
-  return (
-    <div className="min-h-screen bg-editorial">
-      <Navbar />
-      <ProductPage maxWidth="max-w-6xl">
-        <ProductHero
-          eyebrow="今日健康"
-          title="管理员看板"
-          description="先看今天要不要管、管什么；再看用户闭环有没有发生。"
-          icon={ShieldCheck}
-        >
-          <div className="space-y-5">
-            <div className="grid gap-4 lg:grid-cols-[7fr_5fr]">
-              <div className="surface-soft p-4">
-                <div className="flex items-center gap-2"><p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">今日结论</p><span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${STATUS_META[heroStatus].badge}`}>{STATUS_META[heroStatus].label}</span></div>
-                <p className="mt-3 text-balance text-2xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{heroDataMissing ? "今日结论暂不可用" : health.actions.length > 0 ? `今天有 ${health.actions.length} 项需要处理` : "今日无系统侧红线"}</p>
-                <p className="mt-2 text-pretty text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">{heroDataMissing ? "健康评估数据读取失败，请查看系统运行。" : health.actions.length > 0 ? `先做：${health.actions[0]}` : "按计划推进两周冲刺。"}</p>
-              </div>
-              <div className="surface-soft p-4">
-                <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">今日行动</p>
-                {health.actions.length > 0 ? <div className="mt-3 space-y-2">{health.actions.slice(0, 3).map((action, index) => <a key={action} href={actionAnchor(action)} className="flex items-start gap-2 rounded-xl px-2 py-1.5 text-sm leading-5 text-[#3f3a33] hover:bg-white/55 dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"><span aria-hidden="true">{health.level === "critical" && index === 0 ? "🔴" : "⚠️"}</span><span>{action}</span></a>)}{health.actions.length > 3 && <p className="px-2 text-xs text-[#8a8275] dark:text-[#9a9184]">另有 {health.actions.length - 3} 项，见下方各板块</p>}</div> : <p className="mt-3 flex items-center gap-2 text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]"><StatusDot tone="success" />今日无系统侧紧急行动，继续推进两周冲刺。</p>}
-              </div>
-            </div>
-
-            <div><div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-balance text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">两周冲刺 · 用户闭环</h2><span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${STATUS_META.idle.badge}`}>埋点准备中</span></div><div className="grid grid-cols-2 gap-3 md:grid-cols-4"><a href="#user-loop" className="surface-soft p-4"><p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">标已投</p><p className="mt-3 text-2xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">{users ? formatCount(users.applied_total) : "—"}</p><p className="mt-1 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">{users ? "全部用户累计" : "数据读取失败"}</p></a>{[["收到有效机会", "行为埋点上线后可见"], ["点击官网", "行为埋点上线后可见"], ["7日回访", "埋点上线后开始积累"]].map(([label, detail]) => <div key={label} className="surface-soft p-4"><p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">{label}</p><p className="mt-3 text-2xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">待采集</p><p className="mt-1 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">{detail}</p></div>)}</div></div>
-
-            <p className="text-pretty text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]"><a href="#must-apply-supply" className="underline decoration-[#c8bda8] underline-offset-4 dark:decoration-[#655e53]">{mustApplyCoverageByScope ? `必投供给｜最需处理：${MUST_APPLY_SCOPE_LABEL[worstMustApplyIndustry.scope]}·${worstMustApplyIndustry.industry} ${maHealthy}/${mustTotal} 家有健康岗 · ${coverage?.avgCoveragePct != null ? `全库抓全率 ${coverage.avgCoveragePct}%` : "抓全率积累中"}` : "必投供给｜覆盖数据暂不可用"}</a><span> · </span><a href="#jobs-quality" className="underline decoration-[#c8bda8] underline-offset-4 dark:decoration-[#655e53]">{!clickValidity || clickValidity.probeValidityRate == null || (clickValidity.totalOpens === 0 && clickValidity.livenessTotal === 0) ? "岗位探活｜今日自动探活尚未完成" : `岗位探活｜展示岗位经系统自动探活，${formatRate(clickValidity.probeValidityRate)} 未发现失效（系统自动检查，非用户点击）`}</a></p>
-            <div className="text-[11px] leading-5 text-[#8a8275] dark:text-[#9a9184]"><p>数据更新时间：<span className="tabular-nums">{refreshedAt}</span> 北京时间</p><details className="mt-2"><summary className="cursor-pointer">数据口径说明</summary><ul className="mt-2 list-disc space-y-1 pl-4"><li>没有可靠数据来源的指标显示「待采集 / 积累中 / 暂无数据」，不用 0 代替未知，也不造昨日对比。</li><li>「最需处理」行业 = 所有活跃行业里健康覆盖最差的一个；单行业数字不代表全盘。</li><li>岗位探活为系统自动检查（页面/接口状态），不是用户真实点击统计。</li><li>全库抓全率的盲区（拿不到官网总数的源）不计入平均值，不算 0%。</li><li>7 日回访上线后，分母只计满 7 日的用户。</li></ul></details></div>
-          </div>
-        </ProductHero>
-
-        <div className="mt-6 grid gap-4">
-          <Section id="user-loop" title="用户闭环" description="用户有没有真正走完 收到机会 → 点开官网 → 标记已投 → 回访 的闭环。当前仅有存量计数，完整漏斗待行为埋点上线。" status={bizStatus} summary={!operations || !users ? "用户数据暂不可用" : `${formatCount(users.total_users)} 用户 · 累计投递 ${formatCount(users.applied_total)} · 其余闭环指标待埋点`}><p className="mb-5 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">收到有效机会 / 点击官网 / 7 日回访：待行为埋点上线后展示。</p><BusinessSection operations={operations} users={users} resume={resume} /></Section>
-          <Section id="must-apply-supply" title="必投供给" description="目标用户最想投的公司有没有健康岗，并诊断抓全率不足的原因。" status={mustApplyStatus} summary={mustApplySummary} defaultOpen={mustApplyStatus === "critical"}><MustApplySection rowsByIndustry={mustApplyCoverageByScope} fetchCoverageByIndustry={fetchCoverageByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} /><div className="mt-5 border-t border-black/[0.06] pt-5 dark:border-white/[0.08]"><h3 className="text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">抓全率（覆盖不足的原因诊断）</h3><div className="mt-4"><CoverageSection snapshot={coverage} /></div></div></Section>
-          <Section id="jobs-quality" title="岗位质量" description="看岗位库体检和展示岗位的系统自动探活情况。" status={jobsAndClickStatus} summary={jobsAndClickSummary} defaultOpen={jobsAndClickStatus === "critical"}><JobsLibrarySection jobs={jobs} operations={operations} crawlSources={crawlSources} todayRemoved={todayRemoved} validActiveShareBand={validActiveShareBand} thinShareBand={thinShareBand} neverCheckedShareBand={neverCheckedShareBand} /><div className="mt-5 border-t border-black/[0.06] pt-5 dark:border-white/[0.08]"><ClickValiditySection clickValidity={clickValidity} status={clickStatus} summary={clickSummary} /></div></Section>
-          <Section id="system-ops" title="系统运行" description="各模块每日战报：每个任务只露出一个最关键数字；完整明细默认收起。今天没记录是灰色，不当作失败。" status={reportsStatus} summary={reportsSummary} defaultOpen={reportsStatus === "critical"}><DailyReportsSection operations={operations} reports={reports} /></Section>
-
-          <div className="flex items-center gap-2 px-1 text-xs text-[#8a8275] dark:text-[#9a9184]">
-            <ShieldCheck size={15} weight="fill" aria-hidden="true" />
-            该页面仅管理员可访问；两套数据库分别读取，任一侧异常时另一侧仍可显示。
-          </div>
-        </div>
-      </ProductPage>
-    </div>
-  );
+  const heroStatus: SectionStatus = heroDataMissing || health.level === "critical" ? "critical" : health.actions.length ? "warn" : "ok";
+  const refreshedAt = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
+  const tabs = [["overview", "总览"], ["jobs", "岗位库"], ["supply", "必投供给"], ["users", "用户行为"], ["system", "系统运行"]] as const;
+  const content = tab === "overview" ? <OverviewTab health={health} heroStatus={heroStatus} heroDataMissing={heroDataMissing} jobs={jobs} users={users} supplyStatus={supplyStatus} systemStatus={systemStatus} worst={worst} rowsByScope={rowsByScope} reports={reports} ran={ran} failed={failed} refreshedAt={refreshedAt} /> : tab === "jobs" ? <JobsTab jobs={jobs} clickValidity={clickValidity} clickStatus={clickStatus} coverage={coverage} operations={operations} todayRemoved={todayRemoved} validBand={validBand} checkedBand={checkedBand} /> : tab === "supply" ? <SupplyTab rowsByScope={rowsByScope} fetchByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} worst={worst} /> : tab === "users" ? <UserTab operations={operations} users={users} resume={resume} /> : <SystemTab operations={operations} reports={reports} refreshedAt={refreshedAt} />;
+  return <div className="min-h-screen bg-editorial"><Navbar /><ProductPage maxWidth="max-w-6xl"><ProductHero eyebrow="运营健康" title="管理员看板" description="按模块查看今日真实运行与供给情况。" icon={ShieldCheck}><nav className="mt-4 flex gap-2 overflow-x-auto pb-1" aria-label="管理员看板模块">{tabs.map(([key, label]) => <a key={key} href={key === "overview" ? "/admin/health" : "/admin/health?tab=" + key} className={"shrink-0 rounded-full border px-4 py-2 text-sm font-semibold " + (tab === key ? "border-[#1a1714] bg-[#1a1714] text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]" : "border-black/[0.12] text-[#6b655a] dark:border-white/[0.15] dark:text-[#b6ad9d]")}>{label}</a>)}</nav></ProductHero><main className="mt-6">{content}</main></ProductPage></div>;
 }
