@@ -21,6 +21,7 @@ from adapters.apple import AppleAdapter, AppleChinaAdapter
 from adapters.baidu import BaiduAdapter
 from adapters.jd import JdAdapter
 from adapters.haier import HaierAdapter
+from adapters.iguopin import IguopinAdapter
 from adapters.siemens import SiemensAdapter
 from adapters.tencent import TencentAdapter
 from adapters.bytedance import BytedanceAdapter, BytedanceCampusAdapter
@@ -92,6 +93,7 @@ ADAPTERS = {
     "baidu": BaiduAdapter(),
     "jd": JdAdapter(),
     "haier": HaierAdapter(),
+    "iguopin": IguopinAdapter(),  # 国聘央企/国企公开职位搜索 API
     "siemens": SiemensAdapter(),
     "tencent": TencentAdapter(),
     "bytedance": BytedanceAdapter(),
@@ -142,7 +144,7 @@ ADAPTERS = {
 # 扩本土覆盖（新增本土 adapter）是当前最高优先 backlog，见 CLAUDE.md「核心产品原则#3」。
 DOMESTIC_ADAPTERS = {
     "baidu", "jd", "bytedance", "bytedance_campus", "tencent",
-    "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier",
+    "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier", "iguopin",
     "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo", "xiaohongshu", "alibaba", "huawei", "ctrip",
     "meituan", "kuaishou", "bilibili", "pinduoduo", "vivo", "byd", "sf_express",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
     "tencent_music", "antgroup", "mihoyo",  # 自建门户公开接口（2026-07-06 live 验证,零浏览器）
@@ -154,7 +156,7 @@ DOMESTIC_ADAPTERS = {
 # 未知 / 浏览器 adapter 一律落串行档（fail-safe），杜绝把 Playwright（sync API，非线程安全）
 # 的 adapter 误并发跑崩夜间 cron。新增 httpx adapter 时显式加进来才享受并发。
 _HTTPX_SAFE_ADAPTERS = {
-    "apple", "apple_cn", "baidu", "jd", "haier", "siemens", "tencent",
+    "apple", "apple_cn", "baidu", "jd", "haier", "iguopin", "siemens", "tencent",
     "greenhouse", "lever", "ashby", "smartrecruiters", "successfactors", "workday", "eightfold",
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
     "netease", "oppo", "xiaohongshu", "alibaba", "huawei", "ctrip",
