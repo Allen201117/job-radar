@@ -72,3 +72,15 @@ test("compareCompanyCards: hiring 在 no_campus_now / not_ingested 之前", () =
   const sorted = [notIngested, noCampus, hiring].sort(compareCompanyCards);
   assert.deepEqual(sorted.map((c) => c.window.state), ["hiring", "no_campus_now", "not_ingested"]);
 });
+
+test("groupCampusJobs: 按城市归组，组内排序，组按岗位数降序", () => {
+  const jobs = [
+    { title: "A", city: "北京", deadline: "2026-08-10", first_seen_at: "2026-07-01" },
+    { title: "B", city: "上海", deadline: null, first_seen_at: "2026-07-05" },
+    { title: "C", city: "北京", deadline: "2026-08-01", first_seen_at: "2026-07-02" },
+  ];
+  const groups = groupCampusJobs(jobs);
+  assert.equal(groups[0].label, "北京");
+  assert.deepEqual(groups[0].jobs.map((j) => j.title), ["C", "A"]); // 8-01 早于 8-10
+  assert.equal(groups[1].label, "上海");
+});

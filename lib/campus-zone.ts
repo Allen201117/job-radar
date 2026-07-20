@@ -64,3 +64,17 @@ export function compareCompanyCards(a: any, b: any): number {
   if (nb != null) return 1;
   return 0;
 }
+
+export function groupCampusJobs(jobs: any[]): any[] {
+  const buckets = new Map<string, any[]>();
+  for (const j of jobs || []) {
+    const key = (j.city || "").trim() || "其他";
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(j);
+  }
+  const groups = Array.from(buckets.entries()).map(([key, gj]) => ({
+    key, label: key, jobs: gj.slice().sort(compareCampusJobs),
+  }));
+  groups.sort((a, b) => b.jobs.length - a.jobs.length);
+  return groups;
+}
