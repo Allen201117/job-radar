@@ -35,3 +35,32 @@ export function windowStatus(input: any): WindowState {
   if (campusJobCount > 0) return { state: "hiring" };
   return { state: "no_campus_now" };
 }
+
+function ms(x: any): number | null {
+  if (!x) return null;
+  const t = Date.parse(x);
+  return Number.isNaN(t) ? null : t;
+}
+
+export function compareCampusJobs(a: any, b: any): number {
+  const da = ms(a.deadline), db = ms(b.deadline);
+  if (da != null && db != null) return da - db;   // 都有截止 → 临近优先
+  if (da != null) return -1;                       // 有截止的排前
+  if (db != null) return 1;
+  const fa = ms(a.first_seen_at) || 0, fb = ms(b.first_seen_at) || 0;
+  return fb - fa;                                   // 都无截止 → 新增降序
+}
+
+export const WINDOW_ORDER: Record<string, number> = {
+  hiring: 0, no_campus_now: 1, stale: 2, not_ingested: 3,
+};
+
+export function compareCompanyCards(a: any, b: any): number {
+  const oa = WINDOW_ORDER[a.window.state], ob = WINDOW_ORDER[b.window.state];
+  if (oa !== ob) return oa - ob;
+  const na = a.nearestDeadlineMs, nb = b.nearestDeadlineMs;
+  if (na != null && nb != null) return na - nb;
+  if (na != null) return -1;
+  if (nb != null) return 1;
+  return 0;
+}
