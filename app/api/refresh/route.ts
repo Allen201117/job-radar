@@ -10,6 +10,7 @@ import { jobMatchesFilters, DEFAULT_FILTERS } from "@/lib/job-filter";
 import { searchJobs } from "@/lib/job-search";
 import { searchJobsStore } from "@/lib/jobs-store/search";
 import { jobsStoreEnabled } from "@/lib/jobs-store/read";
+import { fetchAllSources } from "@/lib/supabase-paginate";
 
 export const runtime = "nodejs";
 
@@ -61,13 +62,16 @@ export async function POST(request: NextRequest) {
   const prefs = prefsResult.value;
 
   // 1) 解析 scope（手动筛选优先；未配用偏好兜底；按相关性 + 每平台多样性 cap 前 N）。
-  const { data: sources, error: srcErr } = await service
-    .from("sources")
-    .select("id, company, adapter_name, source_url, industry, segment, enabled, notes")
-    .eq("enabled", true);
-  if (srcErr) {
+  // ⚠️ 必须分页拉全量 enabled sources（1079 行 > PostgREST 单次 1000 行上限）：
+  // 截断后落在尾部的源永远进不了 scope 候选 → 那些公司「刷新公司库」永远刷不到。
+  let sources: Array<Record<string, any>>;
+  try {
+    sources = await fetchAllSources(service, "id, company, adapter_name, source_url, industry, segment, enabled, notes", {
+      enabledOnly: true,
+    });
+  } catch (e: any) {
     return NextResponse.json(
-      { ok: false, error: "sources_lookup_failed", detail: srcErr.message, mode: "company_refresh" },
+      { ok: false, error: "sources_lookup_failed", detail: e?.message || String(e), mode: "company_refresh" },
       { status: 500 },
     );
   }
@@ -94,7 +98,7 @@ export async function POST(request: NextRequest) {
       },
       provenCompanies,
       provenExactCompanies,
-      sources: sources || [],
+      sources,
     },
     { cap: SCOPE_CAP },
   );
