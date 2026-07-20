@@ -8,6 +8,7 @@ const DICT: Record<string, { zh: string; en: string }> = {
   today: { zh: "今日机会", en: "Today" },
   jobs: { zh: "搜索岗位", en: "Jobs" },
   path: { zh: "职业路径", en: "Career Path" },
+  campus: { zh: "校招专区", en: "Campus" },
   preferences: { zh: "关注与偏好", en: "Preferences" },
   me: { zh: "个人主页", en: "Profile" },
   saved: { zh: "值得投", en: "Saved" },
