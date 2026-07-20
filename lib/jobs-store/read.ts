@@ -6,6 +6,7 @@ import { JOB_COLUMNS } from "./types";
 import { appendJobScopeWhere } from "@/lib/job-scope";
 import type { UserPreferences } from "@/lib/types";
 import { ilikeMatcher } from "@/lib/ilike-matcher";
+import { campusAdmission } from "@/lib/campus-zone";
 
 export { ilikeMatcher } from "@/lib/ilike-matcher";
 
@@ -277,4 +278,54 @@ export async function activeJobsByCompanies(companies: string[], limit: number):
     `select ${JOB_COLUMNS} from jobs where status = 'active' and company = any($1::text[]) limit $2`,
     [companies, limit],
   );
+}
+
+export type CampusCompanyRow = {
+  company: string;          // 必投清单展示名
+  pattern: string;
+  campusJobs: any[];        // 通过准入门 campus 的在招岗
+  internJobs: any[];        // intern 桶
+  hasAnyActiveJob: boolean; // 该公司「校招相关粗筛」里有没有岗（判 source_only_social 的输入之一，非严格任意在招）
+  lastSeenAtMs: number | null;
+};
+
+/**
+ * 校招专区：按必投清单公司聚合校招/实习岗。
+ * SQL 先按 pattern 粗筛校招相关岗（缩小行数：job_type/title/jd_url 任一命中校招或实习关键词），
+ * JS 用 campusAdmission（复用 recruitmentCategory 全量判定逻辑，含 job.experience 硬经验年限门）精筛入桶。
+ * 一次 unnest join 覆盖整份清单（~30 家）；行数=这些公司的校招相关岗，实测数百，秒级。
+ */
+export async function getCampusZone(list: Array<{ name: string; pattern: string }>): Promise<CampusCompanyRow[]> {
+  const names = list.map((c) => c.name);
+  const pats = list.map((c) => c.pattern);
+  const rows = await jobsQuery<any>(
+    `
+    select t.name as company_key, t.pat,
+      j.id, j.company, j.title, j.job_type, j.jd_url, j.apply_url, j.summary,
+      j.experience, j.deadline, j.first_seen_at, j.last_seen_at, j.location as city, j.education, j.status
+    from unnest($1::text[], $2::text[]) as t(name, pat)
+    left join jobs j on j.status = 'active' and j.company ilike t.pat
+      and (
+        coalesce(j.job_type,'') ~ '校|campus|应届|管培|培训生|graduate|new.?grad|实习|intern'
+        or coalesce(j.title,'') ~ '校|应届|届|管培|培训生|graduate|campus|new.?grad|实习|intern'
+        or coalesce(j.jd_url,'') ~ '/(xiaozhao|campus|shixi|intern)(/|\\?|$)'
+      )
+    `,
+    [names, pats],
+  );
+  const byName = new Map<string, CampusCompanyRow>();
+  for (const c of list) byName.set(c.name, {
+    company: c.name, pattern: c.pattern, campusJobs: [], internJobs: [], hasAnyActiveJob: false, lastSeenAtMs: null,
+  });
+  for (const r of rows) {
+    const agg = byName.get(r.company_key);
+    if (!agg || !r.id) continue;
+    agg.hasAnyActiveJob = true;
+    const seen = r.last_seen_at ? Date.parse(r.last_seen_at) : NaN;
+    if (!Number.isNaN(seen)) agg.lastSeenAtMs = Math.max(agg.lastSeenAtMs || 0, seen);
+    const bucket = campusAdmission(r);
+    if (bucket === "campus") agg.campusJobs.push(r);
+    else if (bucket === "intern") agg.internJobs.push(r);
+  }
+  return list.map((c) => byName.get(c.name)!);
 }
