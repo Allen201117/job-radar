@@ -24,6 +24,7 @@ async function fetchAllSources(): Promise<SourceRow[]> {
     const { data, error } = await client
       .from("sources")
       .select("company, source_url, notes, enabled")
+      .order("id")
       .range(offset, offset + step - 1);
     if (error) throw new Error(error.message);
     const rows = (data || []) as SourceRow[];
