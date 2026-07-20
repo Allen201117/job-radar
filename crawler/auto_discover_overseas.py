@@ -35,7 +35,9 @@ def existing_overseas_companies(sb):
     也别只认 _ATS_URL 那 4 个模板——那样自建/workday 系的已有海外源会被漏判、天天重探。
     URL 级去重仍由 plan_inserts(existing_urls) 兜底，不会重复入库。"""
     try:
-        rows = sb.table("sources").select("company,regions").execute().data or []
+        # 分页拉全量：sources 已越过 PostgREST 单次 1000 行硬顶（2026-07-20 实测 1121）→
+        # 不分页会把尾部已有海外源的公司误判成「未覆盖」，天天重探。
+        rows = db.fetch_all_rows(lambda: sb.table("sources").select("company,regions"))
     except Exception as e:
         print(f"[auto_discover_overseas] 读取 sources 失败，按「全未覆盖」继续: {type(e).__name__}: {e}")
         return set()

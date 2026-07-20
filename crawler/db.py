@@ -25,10 +25,40 @@ def get_supabase() -> Client:
     return create_client(url, key)
 
 
+# PostgREST 单次 select 的行数硬顶。超过它的表必须分页拉，否则静默只拿到前 1000 行。
+_PAGE_SIZE = 1000
+
+
+def fetch_all_rows(query_factory, page_size: int = _PAGE_SIZE, order_key: str = "id") -> list[dict]:
+    """分页拉全量（PostgREST 单次 select 最多 1000 行，超出部分**静默**丢弃，不报错）。
+
+    query_factory 必须每页返回一个**新**的 query builder（builder 有状态，复用会把 range/order 叠加）。
+    用法：fetch_all_rows(lambda: sb.table("sources").select("*").eq("enabled", True))
+
+    ⚠️ 每页必须带 .order(order_key)：跨请求翻页时 Postgres 不保证无 ORDER BY 的行序一致
+    → 会重复取同一行 + 漏掉另一行（漏的行数对了、内容不对，比截断更难查）。
+    """
+    out: list[dict] = []
+    offset = 0
+    while True:
+        rows = (query_factory()
+                .order(order_key, desc=False)
+                .range(offset, offset + page_size - 1)
+                .execute().data) or []
+        out.extend(rows)
+        if len(rows) < page_size:
+            break
+        offset += page_size
+    return out
+
+
 def get_sources(supabase: Client) -> list[dict]:
-    """读取所有 enabled 的 sources。"""
-    resp = supabase.table("sources").select("*").eq("enabled", True).execute()
-    return resp.data or []
+    """读取所有 enabled 的 sources。
+
+    ⚠️ 必须分页：这是 run.py 每日抓取的源清单来源，enabled 已越过 1000（2026-07-20 实测 1079）
+    → 不分页时尾部 79 个源每天根本不会被抓，且无 ORDER BY 时每次漏的还是不同的 79 个。"""
+    return fetch_all_rows(
+        lambda: supabase.table("sources").select("*").eq("enabled", True))
 
 
 def create_crawl_run(supabase: Client, source_id: str) -> str:
