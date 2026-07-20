@@ -12,20 +12,3 @@ export function campusAdmission(job: any = {}): CampusAdmission {
   if (cat === "校招") return "campus";
   return "reject";
 }
-
-// Placeholder stubs for future tasks (Task 2-5)
-export function windowStatus(job: any = {}): string {
-  throw new Error("Not implemented");
-}
-
-export function compareCampusJobs(a: any, b: any): number {
-  throw new Error("Not implemented");
-}
-
-export function compareCompanyCards(a: any, b: any): number {
-  throw new Error("Not implemented");
-}
-
-export function groupCampusJobs(jobs: any[] = []): any {
-  throw new Error("Not implemented");
-}
