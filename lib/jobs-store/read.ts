@@ -306,9 +306,9 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
     from unnest($1::text[], $2::text[]) as t(name, pat)
     left join jobs j on j.status = 'active' and j.company ilike t.pat
       and (
-        coalesce(j.job_type,'') ~ '校|campus|应届|管培|培训生|graduate|new.?grad|实习|intern'
-        or coalesce(j.title,'') ~ '校|应届|届|管培|培训生|graduate|campus|new.?grad|实习|intern'
-        or coalesce(j.jd_url,'') ~ '/(xiaozhao|campus|shixi|intern)(/|\\?|$)'
+        coalesce(j.job_type,'') ~* '校|campus|应届|管培|培训生|graduate|new.?grad|实习|intern'
+        or coalesce(j.title,'') ~* '校|应届|届|管培|培训生|graduate|campus|new.?grad|实习|intern'
+        or coalesce(j.jd_url,'') ~* '/(xiaozhao|campus|shixi|intern)(/|\\?|$)'
       )
     `,
     [names, pats],
