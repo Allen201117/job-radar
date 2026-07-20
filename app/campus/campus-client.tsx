@@ -7,11 +7,13 @@ import Link from "next/link";
 import {
   Briefcase,
   CaretDown,
+  Flag,
   GraduationCap,
   MapPin,
 } from "@phosphor-icons/react";
 import { EmptyPanel } from "@/components/ProductChrome";
 import JobCard from "@/components/JobCard";
+import SaveToast, { type SaveState } from "@/components/SaveToast";
 import { classifyJobFunction } from "@/lib/china-keyword-expansion";
 import { groupCampusJobs } from "@/lib/campus-zone";
 import { cn } from "@/lib/utils";
@@ -118,6 +120,14 @@ interface CampusFilters {
 }
 
 const EMPTY_FILTERS: CampusFilters = { city: "", education: "", jobFunction: "" };
+
+type DisputeReason = "not_campus" | "dead_link" | "closed";
+
+const DISPUTE_REASONS: { reason: DisputeReason; label: string }[] = [
+  { reason: "not_campus", label: "这不是校招" },
+  { reason: "dead_link", label: "链接失效" },
+  { reason: "closed", label: "已结束" },
+];
 
 export default function CampusClient({
   cards,
@@ -236,6 +246,27 @@ export default function CampusClient({
   // JobCard 要求的回调；本区岗位不预取 job_actions（专区场景无需个性化打分/回填 user_action），
   // 值得投/已投递/忽略仍会经 JobCard 内部走 /api/job-actions 真实写库，只是不需要在此处再镜像一份状态。
   function handleActionChange(_jobId: string, _action: PrimaryAction | null) {}
+
+  // 用户纠错入口（这不是校招/链接失效/已结束）：写 /api/campus-zone/dispute → events 复核队列。
+  // 只跟踪「哪张卡的反馈菜单展开」+ 一个共享 SaveToast 提交态，不镜像已反馈的岗位集合（允许重复反馈）。
+  const [disputeOpenId, setDisputeOpenId] = useState<string | null>(null);
+  const [disputeSaveState, setDisputeSaveState] = useState<SaveState>("idle");
+
+  async function submitDispute(jobId: string, reason: DisputeReason) {
+    setDisputeOpenId(null);
+    setDisputeSaveState("saving");
+    try {
+      const resp = await fetch("/api/campus-zone/dispute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: jobId, reason }),
+      });
+      const data = await resp.json().catch(() => null);
+      setDisputeSaveState(resp.ok && data?.ok ? "done" : "error");
+    } catch {
+      setDisputeSaveState("error");
+    }
+  }
 
   return (
     <div className="mt-8 space-y-6 text-[#1a1714] dark:text-[#f3ecdf]">
@@ -369,7 +400,16 @@ export default function CampusClient({
                               </h4>
                               <div className="space-y-3">
                                 {visibleJobs.map((job: any) => (
-                                  <JobCard key={job.id} job={toScoredJob(job)} onActionChange={handleActionChange} />
+                                  <div key={job.id} className="space-y-1.5">
+                                    <JobCard job={toScoredJob(job)} onActionChange={handleActionChange} />
+                                    <JobDisputeControl
+                                      isOpen={disputeOpenId === job.id}
+                                      onToggle={() =>
+                                        setDisputeOpenId((cur) => (cur === job.id ? null : job.id))
+                                      }
+                                      onSubmit={(reason) => submitDispute(job.id, reason)}
+                                    />
+                                  </div>
                                 ))}
                               </div>
                             </div>
@@ -389,6 +429,50 @@ export default function CampusClient({
           })}
         </div>
       )}
+
+      <SaveToast
+        state={disputeSaveState}
+        savingText="提交中…"
+        doneText="已收到，感谢反馈"
+        errorText="提交失败，请重试"
+        onDismiss={() => setDisputeSaveState("idle")}
+      />
+    </div>
+  );
+}
+
+// 单个岗位的反馈入口：点「反馈」展开三个理由 chip，选中即提交。不改 JobCard，独立渲染在卡片下方。
+function JobDisputeControl({
+  isOpen,
+  onToggle,
+  onSubmit,
+}: {
+  isOpen: boolean;
+  onToggle: () => void;
+  onSubmit: (reason: DisputeReason) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 px-1">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={isOpen}
+        className="inline-flex items-center gap-1 rounded-full px-1.5 py-1 text-xs font-medium text-[#8a8275] transition hover:text-[#5f594e] dark:text-[#9a9184] dark:hover:text-[#d9d0c2]"
+      >
+        <Flag size={12} weight="bold" aria-hidden="true" />
+        反馈
+      </button>
+      {isOpen &&
+        DISPUTE_REASONS.map((r) => (
+          <button
+            key={r.reason}
+            type="button"
+            onClick={() => onSubmit(r.reason)}
+            className="rounded-full border border-black/[0.08] bg-white/70 px-2.5 py-1 text-xs font-medium text-[#5f594e] transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.08]"
+          >
+            {r.label}
+          </button>
+        ))}
     </div>
   );
 }
