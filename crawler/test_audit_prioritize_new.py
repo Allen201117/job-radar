@@ -22,6 +22,13 @@ class _FakeQuery:
     def in_(self, *a, **k):
         return self
 
+    def order(self, *a, **k):
+        return self
+
+    def range(self, start, end):
+        self._data = self._data[start:end + 1]
+        return self
+
     def execute(self):
         return _FakeResp(self._data)
 

@@ -47,7 +47,10 @@ def _now():
 
 def seed_from_sources(sb):
     """给每个 distinct sources.company 建 company_profiles 占位（insight_checked_at=null 入队）。幂等。"""
-    srcs = (sb.table("sources").select("company").eq("enabled", True).execute().data) or []
+    # 分页拉全量：enabled sources 已越过 PostgREST 单次 1000 行硬顶（2026-07-20 实测 1079）→
+    # 不分页时尾部公司永远排不进洞察队列。
+    srcs = db.fetch_all_rows(
+        lambda: sb.table("sources").select("company").eq("enabled", True))
     companies = sorted({(s.get("company") or "").strip() for s in srcs if (s.get("company") or "").strip()})
     existing = (sb.table("company_profiles").select("company").execute().data) or []
     have = {(c.get("company") or "").strip() for c in existing}
