@@ -183,8 +183,10 @@ def fetch_browser_liveness(sb, limit, shard="0/1", host_filter=None, jobs_conn=N
     prioritize_new（01 spec §3.1，消灭 7 天盲区）：只取**近 48h 新增且从未核验**的 SPA 岗（enrich_checked_at
     IS NULL 且 first_seen_at >= now()-48h），按 first_seen_at desc → 新灌入的坏岗高频小批先清，不必等 6 分片轮转一遍。"""
     k, n = (int(x) for x in shard.split("/"))
-    src_ids = [s["id"] for s in
-               ((sb.table("sources").select("id").in_("adapter_name", list(_BROWSER_ADAPTERS)).execute().data) or [])]
+    # 分页拉全量：本过滤当前 684 行还没触顶 PostgREST 的 1000 行硬顶，但 sources 在每日扩源下持续涨
+    # （2026-07-20 total 1121）→ 统一走 helper，免得日后静默截断成「部分浏览器源永不巡检」。
+    src_ids = [s["id"] for s in db.fetch_all_rows(
+        lambda: sb.table("sources").select("id").in_("adapter_name", list(_BROWSER_ADAPTERS)))]
     if not src_ids:
         return []
     want = limit * n + 100  # 多取一些，shard 切片后仍够 limit

@@ -33,8 +33,10 @@ def _usable(route):
 
 def main():
     sb = db.get_supabase()
-    rows = (sb.table("sources").select("source_url")
-            .eq("enabled", True).eq("adapter_name", "beisen").execute().data) or []
+    # 分页拉全量：本过滤当前 331 行未触顶 PostgREST 的 1000 行硬顶，但 beisen 源随每日扩源持续涨 → 走统一 helper。
+    rows = db.fetch_all_rows(
+        lambda: sb.table("sources").select("source_url")
+        .eq("enabled", True).eq("adapter_name", "beisen"))
     # 现有落盘 route（china_ats 启动已载入 _BEISEN_ROUTE_CACHE）
     routes = dict(china_ats._BEISEN_ROUTE_CACHE)
     todo = []

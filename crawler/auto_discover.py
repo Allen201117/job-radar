@@ -104,25 +104,15 @@ def existing_source_keys(sb):
     （2026-07-14 实测 1042）→ 不分页拿到的是**残缺**去重集，尾部（正是最新入库的）漏掉
     → 去重失效 → 同一 source_url 被反复重复入库（当天 browser 道两轮把 15 个 URL 各插了 2 次）。
     DB 侧另有 sources_source_url_key 唯一索引兜底（迁移 180）。
-    ⚠️ 分页必须带稳定排序键（id）：跨请求翻页时 Postgres 不保证无 ORDER BY 的行序一致，
-    否则可能重复取到同一行、同时漏掉另一行 —— 去重集照样残缺，且残缺得没规律。"""
+    分页走 db.fetch_all_rows（每页带 .order("id")：无稳定排序键翻页会重复取同一行 + 漏掉另一行）。"""
     companies, urls = set(), set()
-    step = 1000
-    offset = 0
-    while True:
-        rows = (sb.table("sources").select("company,source_url")
-                .order("id", desc=False)
-                .range(offset, offset + step - 1).execute().data) or []
-        for r in rows:
-            c = (r.get("company") or "").strip()
-            u = (r.get("source_url") or "").strip()
-            if c:
-                companies.add(c)
-            if u:
-                urls.add(u)
-        if len(rows) < step:
-            break
-        offset += step
+    for r in db.fetch_all_rows(lambda: sb.table("sources").select("company,source_url")):
+        c = (r.get("company") or "").strip()
+        u = (r.get("source_url") or "").strip()
+        if c:
+            companies.add(c)
+        if u:
+            urls.add(u)
     return companies, urls
 
 

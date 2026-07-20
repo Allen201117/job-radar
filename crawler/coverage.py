@@ -10,14 +10,16 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, ".")
-from db import get_supabase  # noqa: E402
+from db import fetch_all_rows, get_supabase  # noqa: E402
 
 _SEG_LABEL = {"foreign": "外企", "soe": "国企央企", "private": "中国私企", None: "未分类"}
 
 
 def main():
     sb = get_supabase()
-    rows = sb.table("sources").select("company,adapter_name,segment,industry,enabled").execute().data or []
+    # 分页拉全量：sources 已越过 PostgREST 单次 1000 行硬顶（2026-07-20 实测 1121）→ 不分页报出来的覆盖度是残缺的。
+    rows = fetch_all_rows(
+        lambda: sb.table("sources").select("company,adapter_name,segment,industry,enabled"))
 
     # 按 segment → industry 聚合通道（公司）数；区分 enabled / 总数
     agg = defaultdict(lambda: defaultdict(lambda: [0, 0]))  # seg -> ind -> [total, enabled]

@@ -220,16 +220,17 @@ if __name__ == "__main__":
 class _PagedSourcesQuery:
     """模拟 PostgREST：单次最多返回 1000 行，超出必须靠 range() 分页。"""
 
-    def __init__(self, rows, ordered_by):
+    def __init__(self, rows, order_log=None):
         self.rows = rows
-        self.ordered_by = ordered_by
+        self.order_log = order_log if order_log is not None else []
+        self._ordered = None
         self._start, self._end = 0, 999
 
     def select(self, *_):
         return self
 
-    def order(self, column, **_kw):
-        self.ordered_by.append(column)
+    def order(self, col, desc=False):
+        self._ordered = col
         return self
 
     def range(self, start, end):
@@ -237,6 +238,7 @@ class _PagedSourcesQuery:
         return self
 
     def execute(self):
+        self.order_log.append(self._ordered)
         class R:
             pass
         r = R()
@@ -248,10 +250,10 @@ class _PagedSourcesQuery:
 class _PagedSb:
     def __init__(self, rows):
         self.rows = rows
-        self.ordered_by = []
+        self.order_log = []   # 每次 execute 用的排序键，None = 没排序
 
     def table(self, _name):
-        return _PagedSourcesQuery(self.rows, self.ordered_by)
+        return _PagedSourcesQuery(self.rows, self.order_log)
 
 
 class ExistingSourceKeysPaginationTest(unittest.TestCase):
@@ -268,11 +270,6 @@ class ExistingSourceKeysPaginationTest(unittest.TestCase):
         self.assertEqual(len(urls), 1042, "尾部 42 行被 PostgREST 截断 → 去重失效 → 重复入库")
         self.assertIn("https://x/1041", urls)
         self.assertEqual(len(companies), 1042)
-
-    def test_每页都带稳定排序键(self):
-        """跨请求翻页时 Postgres 不保证无 ORDER BY 的行序一致 → 可能重复取到同一行、
-        同时漏掉另一行；去重集照样残缺。每页必须显式按 id 排。"""
-        rows = [{"company": f"C{i}", "source_url": f"https://x/{i}"} for i in range(2500)]
-        sb = _PagedSb(rows)
-        ad.existing_source_keys(sb)
-        self.assertEqual(sb.ordered_by, ["id", "id", "id"], "每页都要带 order('id')")
+        # 无稳定排序键翻页时 Postgres 不保证行序 → 会重复取同一行 + 漏掉另一行（行数对、内容不对）。
+        self.assertTrue(all(k == "id" for k in sb.order_log),
+                        f"每页都必须带稳定排序键，实际 {sb.order_log}")
