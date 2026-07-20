@@ -22,6 +22,7 @@ import { parseDeadline } from "./deadline";
 import { recallOpportunityCandidates } from "../jobs-store/opportunities";
 import { jobsByIds, jobsStoreEnabled } from "../jobs-store/read";
 import { hydrateOpportunityJobs } from "./hydration";
+import { fetchAllSources } from "../supabase-paginate";
 
 type SupabaseLike = { from: (table: string) => any };
 
@@ -41,19 +42,18 @@ function buildActionMap(actions: JobAction[]): Map<string, ActionState> {
 }
 
 // 批量取 source 元信息（sources 永远在 Supabase）；失败不抛，freshness 退化为 manual SLA（§14.2）。
-// 取**全部** source 元信息（sources 是小表 ~800 行）。一次性取全表 = 可与召回并行（不再依赖召回回来的 source_ids，
+// 取**全部** source 元信息。一次性取全表 = 可与召回并行（不再依赖召回回来的 source_ids，
 // 省掉一条串行跨区往返）；失败不抛，freshness 退化为 manual SLA（§14.2）。
+// ⚠️ 必须走 fetchAllSources 分页：sources 已越过 PostgREST 单次 1000 行上限（2026-07-20 实测 1121），
+// 不分页拿到的 Map 缺条目 → 尾部源的岗位 freshness 静默退化成 manual SLA。
 async function fetchSourceMeta(supabase: SupabaseLike): Promise<Map<string, SourceMeta>> {
   const map = new Map<string, SourceMeta>();
   try {
-    const { data, error } = await supabase
-      .from("sources")
-      .select("id, company, adapter_name, crawl_method, last_checked_at, enabled");
-    if (error) {
-      console.warn("[opportunities] source metadata query failed:", error.message);
-      return map;
-    }
-    for (const s of data || []) map.set(s.id, s as SourceMeta);
+    const rows = await fetchAllSources<SourceMeta>(
+      supabase,
+      "id, company, adapter_name, crawl_method, last_checked_at, enabled",
+    );
+    for (const s of rows) map.set(s.id, s);
   } catch (e) {
     console.warn("[opportunities] source metadata query threw:", (e as Error).message);
   }
