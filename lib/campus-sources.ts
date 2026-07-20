@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabaseService";
+import { fetchAllSources } from "@/lib/supabase-paginate";
 
 export type CampusSourceInfo = { hasAnySource: boolean; hasCampusSource: boolean };
 
@@ -11,34 +12,15 @@ function isCampusSource(url: string, notes: string): boolean {
 
 type SourceRow = { company: string | null; source_url: string | null; notes: string | null; enabled: boolean };
 
-// ⚠️ sources 表已越过 1000 行（2026-07-20 实测 1121）：PostgREST 单次 select 默认封顶 1000 行会截断，
-// 残缺集会漏掉尾部（往往是最新入库的源）→ 覆盖率判断失真。必须 .range() 分页拉全，
-// 与 crawler/auto_discover.py 的 existing_source_keys() 同一分页写法对齐。
-// 若后续行数回落到 1000 以下，这段分页仍然安全（第一页拿满整表即跳出循环，不会多打一次请求）。
-async function fetchAllSources(): Promise<SourceRow[]> {
-  const client = createServiceClient();
-  const all: SourceRow[] = [];
-  const step = 1000;
-  let offset = 0;
-  while (true) {
-    const { data, error } = await client
-      .from("sources")
-      .select("company, source_url, notes, enabled")
-      .order("id")
-      .range(offset, offset + step - 1);
-    if (error) throw new Error(error.message);
-    const rows = (data || []) as SourceRow[];
-    all.push(...rows);
-    if (rows.length < step) break;
-    offset += step;
-  }
-  return all;
-}
-
 export async function getCampusSourceCoverage(
   list: Array<{ name: string; pattern: string }>,
 ): Promise<Map<string, CampusSourceInfo>> {
-  const sources = await fetchAllSources();
+  // ⚠️ 必须分页拉全量（sources 已越过 PostgREST 单次 1000 行上限，2026-07-20 实测 1121）：
+  // 残缺集会漏掉尾部（往往是最新入库的源）→ 覆盖率判断失真。分页语义见 lib/supabase-paginate.ts。
+  const sources = await fetchAllSources<SourceRow>(
+    createServiceClient(),
+    "company, source_url, notes, enabled",
+  );
   const out = new Map<string, CampusSourceInfo>();
   for (const c of list) {
     const needle = c.pattern.replace(/%/g, "").toLowerCase();
