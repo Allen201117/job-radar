@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createBrowserClient } from "@/lib/supabaseClient";
+import { fetchAllSources } from "@/lib/supabase-paginate";
 import type { Source, CrawlRun } from "@/lib/types";
 
 export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: number }) {
@@ -16,11 +17,15 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
   }, [reloadSignal]);
 
   async function loadData() {
-    const { data: srcData } = await supabase
-      .from("sources")
-      .select("*")
-      .order("company");
-    if (srcData) setSources(srcData);
+    // ⚠️ 必须分页拉全量（sources 1121 行 > PostgREST 单次 1000 行上限），否则管理页只显示前 1000 个源。
+    // 分页排序键固定 id（稳定），展示要的公司名序在内存里排。
+    try {
+      const srcData = await fetchAllSources<Source>(supabase, "*");
+      srcData.sort((a, b) => (a.company || "").localeCompare(b.company || "", "zh-Hans-CN"));
+      setSources(srcData);
+    } catch (e) {
+      console.warn("[SourceTable] sources 加载失败:", (e as Error).message);
+    }
 
     // 取每个 source 最近一次 crawl_run
     const { data: runs } = await supabase

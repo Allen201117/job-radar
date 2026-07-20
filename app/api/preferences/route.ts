@@ -8,6 +8,7 @@ import { buildRadarProfile, profileReadiness } from "@/lib/opportunities/profile
 import { parsePreferenceScopeInput, parsePreferencesInput } from "@/lib/opportunities/preferences-input";
 import { normalizeCompany } from "@/lib/company-normalize";
 import { isMissingRelation } from "@/lib/opportunities/schema-errors";
+import { fetchAllSources } from "@/lib/supabase-paginate";
 import type { CandidateProfile, UserPreferences } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -27,8 +28,14 @@ class CoverageError extends Error {
 async function syncCoverage(userId: string, targetCompanies: string[]): Promise<Coverage[]> {
   const service = createServiceClient();
 
-  const sourcesRes = await service.from("sources").select("id, company").eq("enabled", true);
-  if (sourcesRes.error) throw new CoverageError("coverage_sync_failed");
+  // ⚠️ 必须分页拉全量 enabled sources（当前 1079 行，越过 PostgREST 单次 1000 行上限）：
+  // 截断后落在尾部的公司会被误判「无源覆盖」→ 用户看到 queued 而不是 covered（用户可见错误）。
+  let enabledSources: Array<{ id: string; company: string | null }>;
+  try {
+    enabledSources = await fetchAllSources(service, "id, company", { enabledOnly: true });
+  } catch {
+    throw new CoverageError("coverage_sync_failed");
+  }
   const existingRes = await service
     .from("company_watch_requests")
     .select("normalized_company, status")
@@ -37,7 +44,7 @@ async function syncCoverage(userId: string, targetCompanies: string[]): Promise<
     throw new CoverageError(isMissingRelation(existingRes.error) ? "coverage_schema_unavailable" : "coverage_sync_failed");
 
   const sourceMap = new Map<string, string[]>();
-  for (const s of sourcesRes.data || []) {
+  for (const s of enabledSources) {
     const norm = normalizeCompany(s.company);
     if (!norm) continue;
     const arr = sourceMap.get(norm) || [];

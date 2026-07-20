@@ -220,11 +220,16 @@ if __name__ == "__main__":
 class _PagedSourcesQuery:
     """模拟 PostgREST：单次最多返回 1000 行，超出必须靠 range() 分页。"""
 
-    def __init__(self, rows):
+    def __init__(self, rows, ordered_by):
         self.rows = rows
+        self.ordered_by = ordered_by
         self._start, self._end = 0, 999
 
     def select(self, *_):
+        return self
+
+    def order(self, column, **_kw):
+        self.ordered_by.append(column)
         return self
 
     def range(self, start, end):
@@ -243,9 +248,10 @@ class _PagedSourcesQuery:
 class _PagedSb:
     def __init__(self, rows):
         self.rows = rows
+        self.ordered_by = []
 
     def table(self, _name):
-        return _PagedSourcesQuery(self.rows)
+        return _PagedSourcesQuery(self.rows, self.ordered_by)
 
 
 class ExistingSourceKeysPaginationTest(unittest.TestCase):
@@ -257,7 +263,16 @@ class ExistingSourceKeysPaginationTest(unittest.TestCase):
 
     def test_reads_all_rows_beyond_postgrest_1000_row_cap(self):
         rows = [{"company": f"C{i}", "source_url": f"https://x/{i}"} for i in range(1042)]
-        companies, urls = ad.existing_source_keys(_PagedSb(rows))
+        sb = _PagedSb(rows)
+        companies, urls = ad.existing_source_keys(sb)
         self.assertEqual(len(urls), 1042, "尾部 42 行被 PostgREST 截断 → 去重失效 → 重复入库")
         self.assertIn("https://x/1041", urls)
         self.assertEqual(len(companies), 1042)
+
+    def test_每页都带稳定排序键(self):
+        """跨请求翻页时 Postgres 不保证无 ORDER BY 的行序一致 → 可能重复取到同一行、
+        同时漏掉另一行；去重集照样残缺。每页必须显式按 id 排。"""
+        rows = [{"company": f"C{i}", "source_url": f"https://x/{i}"} for i in range(2500)]
+        sb = _PagedSb(rows)
+        ad.existing_source_keys(sb)
+        self.assertEqual(sb.ordered_by, ["id", "id", "id"], "每页都要带 order('id')")

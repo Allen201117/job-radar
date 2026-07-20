@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
 import { normalizeCompany } from "@/lib/company-normalize";
+import { fetchAllSources } from "@/lib/supabase-paginate";
 
 export const runtime = "nodejs";
 
@@ -91,9 +92,15 @@ export async function PATCH(request: NextRequest) {
       }
       matchedSourceIds = provided;
     } else {
-      const { data: srcs, error: srcErr } = await service.from("sources").select("id, company").eq("enabled", true);
-      if (srcErr) return NextResponse.json({ ok: false, error: srcErr.message }, { status: 500 });
-      matchedSourceIds = (srcs || []).filter((s: any) => normalizeCompany(s.company) === normalized).map((s: any) => s.id);
+      // ⚠️ 必须分页拉全量 enabled sources（1079 行 > PostgREST 单次 1000 行上限）：
+      // 截断后落在尾部的源关联不上 → 明明有源却报 covered_requires_source。
+      let srcs: Array<{ id: string; company: string | null }>;
+      try {
+        srcs = await fetchAllSources(service, "id, company", { enabledOnly: true });
+      } catch (e: any) {
+        return NextResponse.json({ ok: false, error: e?.message || "sources_lookup_failed" }, { status: 500 });
+      }
+      matchedSourceIds = srcs.filter((s) => normalizeCompany(s.company) === normalized).map((s) => s.id);
     }
     if (!matchedSourceIds.length) {
       return NextResponse.json({ ok: false, error: "covered_requires_source" }, { status: 400 });
