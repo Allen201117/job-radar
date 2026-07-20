@@ -338,6 +338,8 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
     for (const r of rows) {
       if (!r.id || !r.company) continue;
       const companyLower = String(r.company).toLowerCase();
+      // 归属取第一个 needle 命中的公司；必投 pattern 是人工策展的互异公司名（如 %字节% %腾讯%），
+      // 子串重叠概率极低。注意：这与重构前 SQL unnest 交叉 join「一岗可归多家」的语义不同（现在只归一家）。
       const owner = list.find((c) => companyLower.includes(c.pattern.replace(/%/g, "").toLowerCase()));
       if (!owner) continue;
       const agg = byName.get(owner.name);

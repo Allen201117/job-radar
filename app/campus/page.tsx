@@ -54,7 +54,7 @@ export default async function CampusPage() {
     const window = windowStatus({
       campusJobCount: z.campusJobs.length,
       hasCampusSource: src.hasCampusSource,
-      hasAnySource: src.hasAnySource || z.hasAnyActiveJob,
+      hasAnySource: src.hasAnySource,
       lastSeenAtMs: z.lastSeenAtMs,
       nowMs,
     });
