@@ -6,6 +6,7 @@ import { JOB_COLUMNS } from "./types";
 import { appendJobScopeWhere } from "@/lib/job-scope";
 import type { UserPreferences } from "@/lib/types";
 import { ilikeMatcher } from "@/lib/ilike-matcher";
+import { campusAdmission } from "@/lib/campus-zone";
 
 export { ilikeMatcher } from "@/lib/ilike-matcher";
 
@@ -277,4 +278,88 @@ export async function activeJobsByCompanies(companies: string[], limit: number):
     `select ${JOB_COLUMNS} from jobs where status = 'active' and company = any($1::text[]) limit $2`,
     [companies, limit],
   );
+}
+
+export type CampusCompanyRow = {
+  company: string;          // 必投清单展示名
+  pattern: string;
+  campusJobs: any[];        // 通过准入门 campus 的在招岗
+  internJobs: any[];        // intern 桶
+  hasAnyActiveJob: boolean; // 该公司「校招相关粗筛」里有没有岗（判 source_only_social 的输入之一，非严格任意在招）
+  lastSeenAtMs: number | null;
+};
+
+/**
+ * 校招专区：按必投清单公司聚合校招/实习岗。
+ * SQL 先按 pattern 粗筛校招相关岗（缩小行数：job_type/title/jd_url 任一命中校招或实习关键词），
+ * JS 用 campusAdmission（复用 recruitmentCategory 全量判定逻辑，含 job.experience 硬经验年限门）精筛入桶。
+ * 单次全表扫描 + `company ilike any(pats)`（而非 30×ilike 的 unnest left join——那种嵌套循环
+ * live 实测互联网/科技 30 家要 16.8s，逼近 25s statement_timeout）；公司归属改在 JS 端按 pattern
+ * 前缀匹配回填（见下方 for 循环），冷 9.5s / 热 1.8s。短 TTL 缓存进一步降热路径重复读取。
+ */
+export type CampusZoneCacheEntry = { expiresAt: number; value: CampusCompanyRow[] };
+const campusZoneCache = new Map<string, CampusZoneCacheEntry>();
+const campusZoneInFlight = new Map<string, Promise<CampusCompanyRow[]>>();
+
+/**
+ * 短 TTL 与 in-flight 合并只用于降低同一实例的瞬时重复读取，不作为跨请求数据缓存。
+ * cache key 用排序后的 pattern 数组拼接，不同行业组（不同必投清单）各自独立缓存、互不串号。
+ */
+export async function getCampusZone(list: Array<{ name: string; pattern: string }>): Promise<CampusCompanyRow[]> {
+  const pats = list.map((c) => c.pattern);
+  const cacheKey = [...pats].sort().join("");
+  const now = Date.now();
+  const cached = campusZoneCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) return cached.value;
+  const inFlight = campusZoneInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const promise = (async () => {
+    const rows = await jobsQuery<any>(
+      `
+      select
+        j.id, j.company, j.title, j.job_type, j.jd_url, j.apply_url, j.summary,
+        j.experience, j.deadline, j.first_seen_at, j.last_seen_at, j.location as city, j.education, j.status
+      from jobs j
+      where j.status = 'active'
+        and j.company ilike any($1::text[])
+        and (
+          coalesce(j.job_type,'') ~* '校|campus|应届|管培|培训生|graduate|new.?grad|实习|intern'
+          or coalesce(j.title,'') ~* '校|应届|届|管培|培训生|graduate|campus|new.?grad|实习|intern'
+          or coalesce(j.jd_url,'') ~* '/(xiaozhao|campus|shixi|intern)(/|\\?|$)'
+        )
+      `,
+      [pats],
+    );
+    const byName = new Map<string, CampusCompanyRow>();
+    for (const c of list) byName.set(c.name, {
+      company: c.name, pattern: c.pattern, campusJobs: [], internJobs: [], hasAnyActiveJob: false, lastSeenAtMs: null,
+    });
+    for (const r of rows) {
+      if (!r.id || !r.company) continue;
+      const companyLower = String(r.company).toLowerCase();
+      // 归属取第一个 needle 命中的公司；必投 pattern 是人工策展的互异公司名（如 %字节% %腾讯%），
+      // 子串重叠概率极低。注意：这与重构前 SQL unnest 交叉 join「一岗可归多家」的语义不同（现在只归一家）。
+      const owner = list.find((c) => companyLower.includes(c.pattern.replace(/%/g, "").toLowerCase()));
+      if (!owner) continue;
+      const agg = byName.get(owner.name);
+      if (!agg) continue;
+      agg.hasAnyActiveJob = true;
+      const seen = r.last_seen_at ? Date.parse(r.last_seen_at) : NaN;
+      if (!Number.isNaN(seen)) agg.lastSeenAtMs = Math.max(agg.lastSeenAtMs || 0, seen);
+      const bucket = campusAdmission(r);
+      if (bucket === "campus") agg.campusJobs.push(r);
+      else if (bucket === "intern") agg.internJobs.push(r);
+    }
+    return list.map((c) => byName.get(c.name)!);
+  })();
+
+  campusZoneInFlight.set(cacheKey, promise);
+  try {
+    const value = await promise;
+    campusZoneCache.set(cacheKey, { expiresAt: Date.now() + 60_000, value });
+    return value;
+  } finally {
+    campusZoneInFlight.delete(cacheKey);
+  }
 }
