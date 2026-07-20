@@ -43,6 +43,7 @@ import {
 } from "@/lib/must-apply-list";
 import { canonicalizeUserIndustry } from "@/lib/company-industry";
 import { createServiceClient } from "@/lib/supabaseService";
+import { fetchAllSources } from "@/lib/supabase-paginate";
 import {
   Bug,
   ChartBar,
@@ -116,25 +117,9 @@ type SourceRow = { company: string | null; enabled: boolean };
  * ⚠️ 必须分页拉全量：PostgREST 单次 select 默认最多返回 1000 行，而 sources 已越过 1000
  * （2026-07-20 实测 1121）→ 不分页拿到的是**残缺**集合，尾部公司被误判「从未接入」
  * → 北极星「必投清单健康覆盖」的 hasSource 残缺、覆盖率虚低。
- * 同 crawler/auto_discover.py::existing_source_keys。
- * 分页必须带稳定排序键（id）：跨请求翻页时 Postgres 不保证无 ORDER BY 的行序一致，
- * 否则可能重复取到同一行、同时漏掉另一行。 */
-async function loadAllSources(): Promise<SourceRow[]> {
-  const service = createServiceClient();
-  const step = 1000;
-  const all: SourceRow[] = [];
-  for (let offset = 0; ; offset += step) {
-    const { data, error } = await service
-      .from("sources")
-      .select("company, enabled")
-      .order("id", { ascending: true })
-      .range(offset, offset + step - 1);
-    if (error) throw new Error(error.message);
-    const rows = (data || []) as SourceRow[];
-    all.push(...rows);
-    if (rows.length < step) break;
-  }
-  return all;
+ * 分页语义（含为何必须带稳定排序键）见 lib/supabase-paginate.ts。 */
+function loadAllSources(): Promise<SourceRow[]> {
+  return fetchAllSources<SourceRow>(createServiceClient(), "company, enabled");
 }
 
 async function loadMustApplyCoverageForScope(scope: MustApplyScope, sources: SourceRow[]): Promise<MustApplyRowsByIndustry> {
