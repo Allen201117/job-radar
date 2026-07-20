@@ -12,3 +12,26 @@ export function campusAdmission(job: any = {}): CampusAdmission {
   if (cat === "校招") return "campus";
   return "reject";
 }
+
+export type WindowState = {
+  state: "hiring" | "no_campus_now" | "not_ingested" | "stale";
+  subReason?: "no_source" | "source_only_social" | "crawl_error";
+};
+
+const DEFAULT_FRESHNESS_MS = 72 * 3600 * 1000;
+
+export function windowStatus(input: any): WindowState {
+  const { campusJobCount, hasCampusSource, hasAnySource, lastSeenAtMs, nowMs } = input;
+  const threshold = input.freshnessThresholdMs || DEFAULT_FRESHNESS_MS;
+
+  // 无校招源 → 诚实告知待接入（区分尚未接入 / 只接了社招）。
+  if (!hasCampusSource) {
+    return { state: "not_ingested", subReason: hasAnySource ? "source_only_social" : "no_source" };
+  }
+  // 有校招源但数据太旧 → 降级，不拿旧数据冒充在招。
+  if (lastSeenAtMs != null && nowMs - lastSeenAtMs > threshold) {
+    return { state: "stale" };
+  }
+  if (campusJobCount > 0) return { state: "hiring" };
+  return { state: "no_campus_now" };
+}
