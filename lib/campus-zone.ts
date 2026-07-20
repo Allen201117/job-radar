@@ -22,18 +22,20 @@ const DEFAULT_FRESHNESS_MS = 72 * 3600 * 1000;
 
 export function windowStatus(input: any): WindowState {
   const { campusJobCount, hasCampusSource, hasAnySource, lastSeenAtMs, nowMs } = input;
-  const threshold = input.freshnessThresholdMs || DEFAULT_FRESHNESS_MS;
+  const threshold = input.freshnessThresholdMs ?? DEFAULT_FRESHNESS_MS;
 
-  // 无校招源 → 诚实告知待接入（区分尚未接入 / 只接了社招）。
-  if (!hasCampusSource) {
-    return { state: "not_ingested", subReason: hasAnySource ? "source_only_social" : "no_source" };
+  // campusJobCount 权威化：有真实校招岗（哪怕源 URL 不含 campus 令牌，如飞书/moka/beisen
+  // 通用租户靠 job_type=校招 识别）就不能判待接入，否则卡面列着岗却说「待接入」自相矛盾。
+  if (campusJobCount > 0) {
+    // 但数据太旧 → 降级，不拿旧数据冒充在招。
+    if (lastSeenAtMs != null && nowMs - lastSeenAtMs > threshold) {
+      return { state: "stale" };
+    }
+    return { state: "hiring" };
   }
-  // 有校招源但数据太旧 → 降级，不拿旧数据冒充在招。
-  if (lastSeenAtMs != null && nowMs - lastSeenAtMs > threshold) {
-    return { state: "stale" };
-  }
-  if (campusJobCount > 0) return { state: "hiring" };
-  return { state: "no_campus_now" };
+  // 无校招岗时才看有没有校招源 → 诚实告知待接入（区分尚未接入 / 只接了社招）。
+  if (hasCampusSource) return { state: "no_campus_now" };
+  return { state: "not_ingested", subReason: hasAnySource ? "source_only_social" : "no_source" };
 }
 
 function ms(x: any): number | null {
