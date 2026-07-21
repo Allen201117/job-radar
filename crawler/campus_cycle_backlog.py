@@ -41,6 +41,12 @@ def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _month_overlap(a1, b1, a2, b2):
+    """两个月份区间 [a1,b1] [a2,b2] 是否重叠（选项 B 放宽：重叠即视为「时间一致」）。
+    入参已保证 a<=b（me 缺省时等于 ms）。不处理跨年环绕（校招批次区间不跨年）。"""
+    return max(a1, a2) <= min(b1, b2)
+
+
 def current_cohort(now):
     """本轮默认写入的目标届别（grad_class）+ 该届失效日（valid_until）。
     规则：5 月起「下一届」进入秋招季，把 grad_class 滚到下一届；1-4 月仍算当前届的春招收尾。
@@ -153,8 +159,8 @@ def drain_one_company(sb, company):
     grad_class, valid_until = current_cohort(datetime.now(timezone.utc))
     existing_status = _existing_status_by_key(sb, profile["id"], grad_class)
 
-    # ① 逐 claim 判官，把「过 entailment」的按精确 slot(季/批/事件/起止月)归组，统计不同公开源(去重域名)。
-    slots = {}  # skey -> {"publishers": set, "official": bool, "claim": claim, "evidence": (url, quote)}
+    # ① 逐 claim 判官，收集过 entailment 的（季/批/事件 + 月份区间 + 去重域名 + 是否官方）。
+    entail = []
     for claim in claims:
         idx = claim.get("source_idx")
         if not isinstance(idx, int) or idx < 0 or idx >= len(results):
@@ -169,38 +175,46 @@ def drain_one_company(sb, company):
             continue
         if not is_entailment(judge.get("verdict"), judge.get("confidence")):
             continue  # 判官不支持原文 → 丢（宁缺不编）
-        skey = (claim["season"], claim["batch"], claim["event"], claim["month_start"], claim["month_end"])
-        slot = slots.get(skey)
-        if slot is None:
-            slot = {"publishers": set(), "official": False,
-                    "claim": claim, "evidence": (g.get("url"), claim.get("quote"))}
-            slots[skey] = slot
-        slot["publishers"].add(registrable_host(g.get("url")))
-        if is_official_grounding(g.get("url"), official_hosts):
-            slot["official"] = True
-            slot["evidence"] = (g.get("url"), claim.get("quote"))  # 优先留官方证据
+        ms = claim["month_start"]
+        me = claim["month_end"] if claim["month_end"] is not None else ms
+        entail.append({
+            "season": claim["season"], "batch": claim["batch"], "event": claim["event"],
+            "ms": ms, "me": me, "host": registrable_host(g.get("url")),
+            "official": is_official_grounding(g.get("url"), official_hosts),
+            "claim": claim, "url": g.get("url"), "quote": claim.get("quote"),
+        })
 
-    # ② 强共识优先决策；一个 event(季/批/事件)最多留一条 verified，防冲突月份都发布。
-    event_verified = set()
-    for skey, slot in sorted(slots.items(), key=lambda kv: -len(kv[1]["publishers"])):
-        season, batch, event, ms, me = skey
-        ev_key = (season, batch, event)
+    # ② 按 event(季/批/事件)分组；组内按「月份区间重叠」聚共识簇（选项 B，2026-07-21 放宽）。
+    #    anchor = 让最多不同源与之重叠的那条真实区间；≥2 个不同源重叠即发布。一个 event 只写一条。
+    groups = {}
+    for e in entail:
+        groups.setdefault((e["season"], e["batch"], e["event"]), []).append(e)
+
+    for ev_key, items in groups.items():
+        season, batch, event = ev_key
         prior = existing_status.get(ev_key)
         if prior == "verified":
             # 已定案事实绝不覆盖（不变量：verified 只能靠 superseded_by 改错，本 cron 不碰）
             stats["skipped_conflict"] += 1
             continue
-        status, source_kind, confidence = decide_cycle_status(slot["official"], len(slot["publishers"]))
-        if status == "verified" and ev_key in event_verified:
-            # 同 event 已有另一月份 verified → 冲突，本条降级 draft，不发布互相矛盾的日期
-            status, source_kind, confidence = "draft", "public_aggregate", "low"
+        # 选 anchor：与之月份区间重叠的「不同源」最多；并列取区间最窄、再取起始月最小（确定性）。
+        best = None
+        for anchor in items:
+            cluster = [e for e in items if _month_overlap(e["ms"], e["me"], anchor["ms"], anchor["me"])]
+            n_pub = len({e["host"] for e in cluster})
+            rank = (n_pub, -(anchor["me"] - anchor["ms"]), -anchor["ms"])
+            if best is None or rank > best[0]:
+                best = (rank, anchor, cluster, n_pub)
+        _, anchor, cluster, n_pub = best
+        has_official = any(e["official"] for e in cluster)
+        status, source_kind, confidence = decide_cycle_status(has_official, n_pub)
         if prior == "draft" and status == "draft":
             stats["skipped_dup_draft"] += 1  # 已有草稿、这条也草稿 → 不堆积
             continue
 
-        claim = slot["claim"]
-        ev_url, ev_quote = slot["evidence"]
-        time_expr_type = "月" if me in (None, ms) else "日期范围"
+        aclaim = anchor["claim"]
+        ev_src = next((e for e in cluster if e["official"]), anchor)  # 证据优先取簇内官方源
+        time_expr_type = "月" if aclaim["month_end"] in (None, aclaim["month_start"]) else "日期范围"
         row = {
             "company_id": profile["id"],
             "grad_class": grad_class,
@@ -208,12 +222,12 @@ def drain_one_company(sb, company):
             "batch": batch,
             "event": event,
             "time_expr_type": time_expr_type,
-            "value_text": claim["value_text"],
-            "month_start": ms,
-            "month_end": me,
+            "value_text": aclaim["value_text"],
+            "month_start": aclaim["month_start"],
+            "month_end": aclaim["month_end"],
             "confidence": confidence,
-            "evidence_url": ev_url,
-            "evidence_excerpt": (ev_quote or "")[:200],
+            "evidence_url": ev_src["url"],
+            "evidence_excerpt": (ev_src["quote"] or "")[:200],
             "evidence_fetched_at": _now_iso(),
             "source_kind": source_kind,
             "verify_status": status,
@@ -226,7 +240,6 @@ def drain_one_company(sb, company):
             print(f"  [campus-cycle-err] {company} 写入失败: {type(e).__name__}: {str(e)[:160]}")
             continue
         if status == "verified":
-            event_verified.add(ev_key)
             existing_status[ev_key] = "verified"
         stats["verified" if status == "verified" else "draft"] += 1
 
