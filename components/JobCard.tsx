@@ -31,6 +31,7 @@ import {
 import { relativeTimeLabel } from "@/lib/relative-time";
 import { matchTier } from "@/lib/scoring";
 import CompanyInsightDrawer from "@/components/CompanyInsightDrawer";
+import CompanyLogo from "@/components/CompanyLogo";
 import {
   getCachedAvailability,
   requestInsightAvailability,
@@ -439,9 +440,12 @@ export default function JobCard({
           >
             <span className="text-balance">{job.title}</span>
           </button>
-          <p className="mt-1.5 text-base font-semibold leading-snug text-[#5f594e] dark:text-[#d9d0c2]">
-            {job.company}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2">
+            <CompanyLogo company={job.company} size={26} />
+            <p className="min-w-0 truncate text-base font-semibold leading-snug text-[#5f594e] dark:text-[#d9d0c2]">
+              {job.company}
+            </p>
+          </div>
 
           <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">
             <span>{recruitType}</span>
