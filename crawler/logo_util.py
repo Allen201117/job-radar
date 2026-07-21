@@ -19,14 +19,166 @@ PLATFORM_DOMAINS = {
 # 子串命中即视为平台（北森系多变体域名）。
 _PLATFORM_SUBSTRINGS = ("beisen", "italent")
 
-# 命中平台域名的公司 → 用这张手工「公司名→品牌域名」覆盖表兜底。key 用 lower(trim(company))。
-COMPANY_DOMAIN_OVERRIDES = {
-    "蔚来": "nio.com", "nio": "nio.com",
-    "小鹏": "xpeng.com", "小鹏汽车": "xpeng.com", "xpeng": "xpeng.com",
-    "理想": "lixiang.com", "理想汽车": "lixiang.com", "li auto": "lixiang.com", "lixiang": "lixiang.com",
-    "地平线": "horizon.cc", "horizon": "horizon.cc",
-    "小米": "mi.com", "小米集团": "mi.com", "xiaomi": "mi.com",
+# 命中平台域名（飞书/北森/moka 等）的公司 → 用这张手工「公司名→品牌域名」覆盖表兜底。
+# key 用「原始公司名」（模块加载时统一 lower(trim) 归一匹配，见文件末构造）；
+# 只收录官方域名【高把握】的公司——配错=张冠李戴，宁缺毋滥（不确定的一律留空，前端首字母兜底）。
+_DOMAIN_OVERRIDES_RAW = {
+    # —— 造车 / 新能源车 / 商用车 ——
+    "蔚来": "nio.com", "NIO": "nio.com",
+    "小鹏": "xpeng.com", "小鹏汽车": "xpeng.com", "XPeng": "xpeng.com",
+    "理想": "lixiang.com", "理想汽车": "lixiang.com", "理想汽车 Li Auto": "lixiang.com",
+    "地平线": "horizon.cc", "Horizon": "horizon.cc",
+    "小米": "mi.com", "小米集团": "mi.com", "Xiaomi": "mi.com",
+    "零跑汽车": "leapmotor.com", "奇瑞汽车": "chery.cn", "奇瑞汽车 CHERY": "chery.cn",
+    "江淮汽车 JAC": "jac.com.cn", "长安汽车": "changan.com.cn", "长安汽车 Changan": "changan.com.cn",
+    "浙江吉利控股集团": "geely.com", "徐工机械": "xcmg.com", "潍柴集团": "weichai.com",
+    "三一集团": "sanygroup.com", "雅迪科技集团": "yadea.com",
+
+    # —— AI 独角兽（国内外）——
+    "OpenAI": "openai.com", "Perplexity": "perplexity.ai", "Cohere": "cohere.com",
+    "ElevenLabs": "elevenlabs.io", "Replit": "replit.com", "Supabase": "supabase.com",
+    "LangChain": "langchain.com", "Linear": "linear.app", "Harvey": "harvey.ai",
+    "Vanta": "vanta.com", "Mercor": "mercor.com", "Meshy": "meshy.ai", "Baseten": "baseten.co",
+    "Fireworks AI": "fireworks.ai", "Docebo": "docebo.com", "Instructure": "instructure.com",
+    "MiniMax 稀宇科技": "minimaxi.com", "智谱AI Zhipu": "zhipuai.cn", "月之暗面 Kimi": "moonshot.cn",
+    "零一万物 01AI": "01.ai", "硅基流动": "siliconflow.cn",
+    "第四范式": "4paradigm.com", "第四范式 4Paradigm": "4paradigm.com",
+    "云从科技": "cloudwalk.com", "商汤科技 SenseTime": "sensetime.com", "旷视科技": "megvii.com",
+    "云知声": "unisound.com", "思必驰": "aispeech.com", "科大讯飞": "iflytek.com",
+
+    # —— 自动驾驶 ——
+    "小马智行": "pony.ai", "小马智行 Pony.ai": "pony.ai",
+    "文远知行": "weride.ai", "文远知行 WeRide": "weride.ai", "Momenta": "momenta.ai",
+
+    # —— 机器人 / 智能硬件 / 消费电子 ——
+    "宇树科技（杭州）有限公司": "unitree.com", "智元机器人 AGIBot": "agibot.com",
+    "深圳市普渡科技有限公司": "pudurobotics.com", "上海擎朗智能科技有限公司": "keenon.com",
+    "极智嘉 Geek+": "geekplus.com", "新松机器人自动化股份有限公司": "siasun.com",
+    "大疆": "dji.com", "安克创新 Anker": "anker.com", "科沃斯": "ecovacs.com",
+    "石头科技": "roborock.com", "追觅科技": "dreametech.com", "添可": "tineco.com",
+    "涂鸦智能": "tuya.com", "极米科技": "xgimi.com", "极米科技 XGIMI": "xgimi.com",
+    "拓竹科技": "bambulab.com", "创想三维科技股份有限公司": "creality.com",
+    "小天才 eebbk": "eebbk.com", "XREAL": "xreal.com", "xTool": "xtool.com",
+    "美图公司": "meitu.com", "传音控股 Transsion": "transsion.com", "深圳传音控股": "transsion.com",
+    "海信集团": "hisense.com", "九号公司": "ninebot.com", "海能达": "hytera.com",
+    "大华股份 Dahua": "dahuatech.com", "浙江大华技术": "dahuatech.com", "大族激光": "hanslaser.com",
+    "老板电器": "robam.com", "欧派家居集团股份有限公司": "oppein.com",
+    "顾家家居股份有限公司": "kukahome.com",
+
+    # —— 互联网 / 平台 / 生活服务 ——
+    "作业帮": "zuoyebang.com", "作业帮 Zuoyebang": "zuoyebang.com",
+    "猿辅导": "yuanfudao.com", "猿辅导 Yuanfudao": "yuanfudao.com",
+    "好未来": "100tal.com", "好未来（学而思）": "100tal.com", "新东方 New Oriental": "xdf.cn",
+    "高途": "gaotu.cn", "携程集团 Trip.com": "trip.com", "途牛旅游网": "tuniu.com",
+    "知乎": "zhihu.com", "知乎 Zhihu": "zhihu.com", "搜狐 Sohu": "sohu.com",
+    "搜狐畅游 Changyou": "changyou.com", "新浪集团": "sina.com.cn",
+    "斗鱼": "douyu.com", "斗鱼直播 Douyu": "douyu.com", "虎牙": "huya.com", "虎牙直播 Huya": "huya.com",
+    "爱奇艺股份有限公司": "iqiyi.com", "芒果TV": "mgtv.com",
+    "唯品会 VIP.com": "vip.com", "贝壳找房": "ke.com", "自如": "ziroom.com", "我爱我家": "5i5j.com",
+    "转转": "zhuanzhuan.com", "得物 POIZON": "dewu.com", "脉脉": "maimai.cn",
+    "雪球": "xueqiu.com", "雪球 Xueqiu": "xueqiu.com", "五八同城": "58.com",
+    "名创优品": "miniso.com", "名创优品 MINISO": "miniso.com",
+    "瑞幸咖啡": "luckincoffee.com", "喜茶": "heytea.com", "海底捞": "haidilao.com",
+    "滴滴": "didiglobal.com", "滴滴出行 DiDi": "didiglobal.com",
+    "货拉拉 Lalamove": "huolala.cn", "货拉拉科技": "huolala.cn", "申通快递": "sto.cn",
+    "途虎养车": "tuhu.cn", "懂车帝 Dcar": "dongchedi.com", "易车控股有限公司": "yiche.com",
+
+    # —— 游戏 ——
+    "莉莉丝游戏 Lilith": "lilithgames.com", "鹰角网络 Hypergryph": "hypergryph.com",
+    "完美世界": "wanmei.com", "完美世界 Perfect World": "wanmei.com",
+    "巨人网络": "ztgame.com", "巨人网络 Giant": "ztgame.com", "沐瞳科技": "moonton.com",
+
+    # —— 半导体 / 芯片 / 通信设备 ——
+    "中兴通讯股份有限公司": "zte.com.cn", "兆易创新": "gigadevice.com", "寒武纪": "cambricon.com",
+    "摩尔线程": "mthreads.com", "壁仞科技": "birentech.com", "燧原科技": "enflame-tech.com",
+    "芯驰科技": "semidrive.com", "芯海科技（深圳）股份有限公司": "chipsea.com",
+    "移远通信": "quectel.com", "广和通": "fibocom.com", "全志科技股份有限公司": "allwinnertech.com",
+    "长江存储": "ymtc.com", "长鑫存储技术有限公司": "cxmt.com", "安谋科技 Arm China": "armchina.com",
+    "新华三信息技术": "h3c.com", "神州数码集团": "digitalchina.com",
+
+    # —— 消费 / 食品 / 服饰 / 零售 ——
+    "三只松鼠": "3songshu.com", "三只松鼠 Three Squirrels": "3songshu.com",
+    "农夫山泉 养生堂": "nongfuspring.com", "东鹏饮料": "eastroc.com",
+    "蒙牛": "mengniu.com.cn", "蒙牛乳业 MENGNIU": "mengniu.com.cn",
+    "李宁 LI-NING": "lining.com", "安踏 ANTA": "anta.com", "安踏体育用品集团": "anta.com",
+    "特步": "xtep.com", "森马集团": "semir.com", "江南布衣": "jnbygroup.com",
+    "周大福": "chowtaifook.com", "永辉超市": "yonghui.com.cn", "屈臣氏": "watsons.com",
+    "泡泡玛特": "popmart.com", "泡泡玛特 POP MART": "popmart.com",
+
+    # —— 医药 / 医疗器械 ——
+    "信达生物": "innoventbio.com", "百济神州": "beigene.com", "复星医药": "fosunpharma.com",
+    "药明康德": "wuxiapptec.com", "药明生物": "wuxibiologics.com",
+    "迈瑞医疗": "mindray.com", "迈瑞医疗 Mindray": "mindray.com", "微创医疗": "microport.com",
+    "联影医疗 UIH": "united-imaging.com", "江苏恒瑞医药": "hengrui.com", "三生制药": "3sbio.com",
+    "康龙化成（北京）新药技术股份有限公司": "pharmaron.com", "凯莱英": "asymchem.com",
+    "华大基因": "genomics.cn",
+
+    # —— 新能源 / 光伏 / 电池 / 电气 ——
+    "宁德时代 CATL": "catl.com", "欣旺达": "sunwoda.com", "欣旺达电子": "sunwoda.com",
+    "天合光能": "trinasolar.com", "天合光能 Trina": "trinasolar.com",
+    "阳光电源": "sungrowpower.com", "阳光电源 Sungrow": "sungrowpower.com",
+    "金风科技": "goldwind.com", "正泰集团": "chint.com",
+    "汇川技术": "inovance.com", "汇川技术 Inovance": "inovance.com", "深圳市汇川技术": "inovance.com",
+
+    # —— 企业软件 / SaaS / 网络安全 ——
+    "金山办公": "wps.cn", "金山办公 WPS": "wps.cn", "广联达": "glodon.com", "广联达 Glodon": "glodon.com",
+    "有赞": "youzan.com", "神策数据": "sensorsdata.cn", "聚水潭": "jushuitan.com",
+    "上海汉得信息技术股份有限公司": "hand-china.com", "上海法大大网络科技有限公司": "fadada.com",
+    "上海星环信息科技有限公司": "transwarp.io", "e签宝": "esign.cn",
+    "深信服": "sangfor.com.cn", "锐捷网络": "ruijie.com.cn", "锐捷网络 Ruijie": "ruijie.com.cn",
+    "绿盟科技": "nsfocus.com", "奇安信 QiAnXin": "qianxin.com",
+    "启明星辰信息技术集团股份有限公司": "venustech.com.cn",
+    "山石网科通信技术股份有限公司": "hillstonenet.com",
+    "北京天融信科技股份有限公司": "topsec.com.cn", "北京微步在线科技有限公司": "threatbook.cn",
+
+    # —— 金融 / 证券 / 保险 / 地产 ——
+    "东方财富": "eastmoney.com", "中金公司": "cicc.com", "国信证券": "guosen.com.cn",
+    "国泰君安证券股份有限公司": "gtja.com", "众安保险": "zhongan.com", "乐信集团": "lexin.com",
+    "度小满金融科技（北京）有限公司": "duxiaoman.com", "老虎国际 Tiger Brokers": "tigerbrokers.com",
+    "360集团": "360.cn", "万科 Vanke": "vanke.com", "万科企业": "vanke.com",
+    "东软集团股份有限公司": "neusoft.com",
+
+    # —— 外企科技 / 半导体 / 软件 ——
+    "3M": "3m.com", "Adobe": "adobe.com", "Autodesk 欧特克": "autodesk.com",
+    "NVIDIA": "nvidia.com", "Salesforce": "salesforce.com", "Samsung": "samsung.com",
+    "ServiceNow": "servicenow.com", "Workday": "workday.com", "Marvell": "marvell.com",
+    "Mastercard 万事达": "mastercard.com", "Visa": "visa.com", "Cadence 铿腾": "cadence.com",
+    "思科 Cisco": "cisco.com", "英特尔 Intel": "intel.com", "美光 Micron": "micron.com",
+    "恩智浦 NXP": "nxp.com", "博通 Broadcom": "broadcom.com", "科磊 KLA": "kla.com",
+    "应用材料 Applied Materials": "appliedmaterials.com", "亚德诺 ADI": "analog.com",
+    "惠普 HP": "hp.com", "慧与 HPE": "hpe.com", "Snap Inc": "snap.com", "Grab": "grab.com",
+    "Shopee": "shopee.com", "SHEIN": "shein.com", "Wise": "wise.com",
+
+    # —— 外企消费 / 工业 / 医药 / 金融 ——
+    "Nike": "nike.com", "Shell": "shell.com", "Ubisoft": "ubisoft.com", "Supercell": "supercell.com",
+    "UPS": "ups.com", "Boeing": "boeing.com", "Bosch 博世": "bosch.com", "Continental": "continental.com",
+    "可口可乐 Coca-Cola": "coca-cola.com", "卡特彼勒 Caterpillar": "caterpillar.com",
+    "博格华纳 BorgWarner": "borgwarner.com", "丹纳赫 Danaher": "danaher.com",
+    "亿滋 Mondelez": "mondelezinternational.com", "星巴克 Starbucks": "starbucks.com",
+    "飞利浦 Philips": "philips.com", "马士基 Maersk": "maersk.com", "麦格纳 Magna": "magna.com",
+    "开利 Carrier": "carrier.com", "江森自控 Johnson Controls": "johnsoncontrols.com",
+    "特灵 Trane": "trane.com", "奥的斯 Otis": "otis.com", "安波福 Aptiv": "aptiv.com",
+    "帝亚吉欧 Diageo": "diageo.com", "保乐力加 Pernod Ricard": "pernod-ricard.com",
+    "强生 Johnson & Johnson": "jnj.com", "Pfizer 辉瑞": "pfizer.com", "诺华 Novartis": "novartis.com",
+    "罗氏 Roche": "roche.com", "美敦力 Medtronic": "medtronic.com", "葛兰素史克 GSK": "gsk.com",
+    "赛诺菲 Sanofi": "sanofi.com", "赛默飞 Thermo Fisher": "thermofisher.com", "雅培 Abbott": "abbott.com",
+    "阿斯利康 AstraZeneca": "astrazeneca.com", "武田制药 Takeda": "takeda.com", "渤健 Biogen": "biogen.com",
+    "安进 Amgen": "amgen.com", "史赛克 Stryker": "stryker.com", "因美纳 Illumina": "illumina.com",
+    "陶氏化学 Dow": "dow.com", "杜邦 DuPont": "dupont.com",
+    "摩根士丹利 Morgan Stanley": "morganstanley.com", "德意志银行 Deutsche Bank": "db.com",
+    "贝莱德 BlackRock": "blackrock.com", "Citi 花旗": "citi.com",
+    "GE医疗 GE HealthCare": "gehealthcare.com", "AbbVie": "abbvie.com", "Baxter 百特": "baxter.com",
+    "MSD 默沙东": "merck.com", "Kenvue 科赴": "kenvue.com", "Zoetis": "zoetis.com",
+    "Regeneron": "regeneron.com", "The Walt Disney Company 迪士尼": "disney.com",
+    "DBS Bank 星展银行": "dbs.com", "Fidelity Investments 富达": "fidelity.com",
+    "米其林（中国）投资有限公司": "michelin.com", "资生堂（中国）投资有限公司": "shiseido.com",
+    "麦当劳（中国）有限公司": "mcdonalds.com.cn", "日立能源（中国）有限公司": "hitachienergy.com",
+    "伊顿电气（上海）有限公司": "eaton.com", "空气产品 Air Products": "airproducts.com",
+    "Rockwell Automation 罗克韦尔": "rockwellautomation.com", "Illinois Tool Works": "itw.com",
+    "Jabil": "jabil.com", "JLL 仲量联行 Jones Lang LaSalle": "jll.com",
 }
+# 统一 lower(trim) 归一，与 domain_for_company 里 company.strip().lower() 匹配同口径。
+COMPANY_DOMAIN_OVERRIDES = {k.strip().lower(): v for k, v in _DOMAIN_OVERRIDES_RAW.items()}
 
 # 中国等多级公共后缀：注册域名要多取一段（com.cn 等）。
 _MULTI_LEVEL_SUFFIXES = {

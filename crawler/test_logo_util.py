@@ -57,6 +57,14 @@ class DomainForCompanyTests(unittest.TestCase):
             "nio.com",
         )
 
+    def test_expanded_overrides_case_insensitive(self):
+        # 扩充的 override + lower 归一：原名大小写 / 带英文变体、平台托管都命中官方域名
+        self.assertEqual(domain_for_company("NVIDIA", "https://x.jobs.feishu.cn/p"), "nvidia.com")
+        self.assertEqual(domain_for_company("科大讯飞", "https://x.jobs.feishu.cn/p"), "iflytek.com")
+        self.assertEqual(
+            domain_for_company("作业帮 Zuoyebang", "https://careers.mokahr.com/x"), "zuoyebang.com"
+        )
+
     def test_non_platform_host(self):
         self.assertEqual(
             domain_for_company("百度", "https://talent.baidu.com/jobs/list"),
