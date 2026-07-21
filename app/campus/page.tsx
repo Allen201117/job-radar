@@ -9,6 +9,8 @@ import { resolveMustApplyIndustries, MUST_APPLY_BY_INDUSTRY } from "@/lib/must-a
 import { getCampusZone } from "@/lib/jobs-store/read";
 import { getCampusSourceCoverage } from "@/lib/campus-sources";
 import { windowStatus, compareCompanyCards } from "@/lib/campus-zone";
+import { getRecruitmentCyclesForCompanies } from "@/lib/recruitment-cycle-store";
+import { campusTimelineSummary } from "@/lib/recruitment-cycle";
 import CampusClient from "./campus-client";
 
 const HERO = {
@@ -43,9 +45,10 @@ export default async function CampusPage() {
     ).values(),
   );
 
-  const [zone, sourceCov] = await Promise.all([
+  const [zone, sourceCov, cyclesByPattern] = await Promise.all([
     getCampusZone(companies),
     getCampusSourceCoverage(companies),
+    getRecruitmentCyclesForCompanies(companies),
   ]);
 
   const nowMs = Date.now();
@@ -62,7 +65,9 @@ export default async function CampusPage() {
       .map((j) => (j.deadline ? Date.parse(j.deadline) : NaN))
       .filter((t) => !Number.isNaN(t));
     const nearestDeadlineMs = deadlines.length ? Math.min(...deadlines) : null;
-    return { ...z, window, nearestDeadlineMs };
+    const obs = cyclesByPattern.get(z.pattern) || [];
+    const timeline = obs.length > 0 ? campusTimelineSummary(obs) : null;
+    return { ...z, window, nearestDeadlineMs, timeline };
   });
   cards.sort(compareCompanyCards);
 
