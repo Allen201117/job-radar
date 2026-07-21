@@ -370,6 +370,16 @@ def drain_t3(sb, limit=0):
     return stat
 
 
+def _llm_health_gate():
+    """LLM 整体失败（账户欠费 / 鉴权失效）→ exit(1) 标红。别让 workflow 绿灯盖住 LLM 故障。
+    0 次 LLM 调用（T2 官方事实路径本就不怎么用 LLM）不触发，不会误报。"""
+    if E.llm_run_unhealthy():
+        h = E.llm_run_health()
+        print(f"✗ LLM 整体失败（ok={h['ok']} fail={h['fail']} account_error={h['account_error']}）"
+              f"——大概率 SiliconFlow 账户欠费 / key 失效，本轮没产出。")
+        sys.exit(1)
+
+
 def main():
     ap = argparse.ArgumentParser(description="职业洞察富化 drain（T2 Wikidata 默认 / --t3 经验层）")
     ap.add_argument("--seed-from-sources", action="store_true", help="先给所有源公司建画像占位")
@@ -385,6 +395,7 @@ def main():
 
     sb = db.get_supabase()
     started_at = _now()
+    E.reset_llm_health()
     if args.t3:
         stat = drain_one_company(sb, args.company, t3=True) if args.company else drain_t3(sb, limit=args.limit)
         checked = stat["wrote"] + stat["empty"] + stat["err"]
@@ -401,6 +412,7 @@ def main():
             started_at=started_at,
             finished_at=_now(),
         )
+        _llm_health_gate()
         return
     seeded = 0
     if args.seed_from_sources and not args.company:
@@ -421,6 +433,7 @@ def main():
         started_at=started_at,
         finished_at=_now(),
     )
+    _llm_health_gate()
 
 
 if __name__ == "__main__":

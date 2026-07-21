@@ -33,6 +33,35 @@ def llm_config() -> dict:
     }
 
 
+# ---------- LLM 运行健康信号 ----------
+# 背景（2026-07-21）：LLM cron 都写了「单条失败就跳过、不崩」的兜底，导致 SiliconFlow 账户
+# 欠费(403 balance insufficient)时整轮空转、workflow 仍报 success，故障被绿灯盖住、无人发现。
+# 这里在共享调用点 chat_content 记录每轮 LLM 成败；cron main() 据此判「LLM 整体失败」→ exit(1)
+# 让 workflow 真实标红。判据 = 出现账户级错误(401/403)，或有调用但全部失败。
+_LLM_RUN_HEALTH = {"ok": 0, "fail": 0, "account_error": False}
+
+
+def _record_llm(ok: bool, account_error: bool = False) -> None:
+    _LLM_RUN_HEALTH["ok" if ok else "fail"] += 1
+    if account_error:
+        _LLM_RUN_HEALTH["account_error"] = True
+
+
+def reset_llm_health() -> None:
+    _LLM_RUN_HEALTH.update(ok=0, fail=0, account_error=False)
+
+
+def llm_run_health() -> dict:
+    return dict(_LLM_RUN_HEALTH)
+
+
+def llm_run_unhealthy() -> bool:
+    """本进程 LLM 是否整体失败：账户级错误(401/403 欠费/鉴权)，或有调用但一次没成。
+    0 次调用（无目标/额度用尽）不算不健康——不会误报红。"""
+    h = _LLM_RUN_HEALTH
+    return bool(h["account_error"] or (h["fail"] > 0 and h["ok"] == 0))
+
+
 def parse_json_loose(text: str) -> dict:
     """先直接 parse，失败再抠第一个 {...} 块（与 lib/llm.js parseJsonLoose 同行为）。"""
     s = str(text or "").strip()
@@ -68,7 +97,17 @@ def chat_content(messages: list, temperature: float = 0.1, max_tokens: int = 102
             resp = call(False)
         resp.raise_for_status()
         data = resp.json()
-        return (((data.get("choices") or [{}])[0]).get("message") or {}).get("content") or ""
+        content = (((data.get("choices") or [{}])[0]).get("message") or {}).get("content") or ""
+        _record_llm(True)
+        return content
+    except httpx.HTTPStatusError as e:
+        # 401/403 = 账户级（欠费 / 鉴权失效）→ 标记整轮不健康，让 cron 标红
+        code = e.response.status_code if e.response is not None else 0
+        _record_llm(False, account_error=code in (401, 403))
+        raise
+    except Exception:
+        _record_llm(False)
+        raise
     finally:
         if client is None:
             own.close()
