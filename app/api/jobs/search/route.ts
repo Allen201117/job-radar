@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabaseService";
 import { searchJobs } from "@/lib/job-search";
 import { searchJobsStore } from "@/lib/jobs-store/search";
 import { DEFAULT_FILTERS, type Filters } from "@/lib/job-filter";
+import { fetchAllSources } from "@/lib/supabase-paginate";
 import type { JobAction, UserPreferences } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -61,16 +62,15 @@ export async function GET(request: NextRequest) {
     // 资本来源筛选需按来源判岗位国籍：jobs（香港库）无 adapter 列、sources 在 Supabase、跨库无法 SQL join，
     // 这里用 service-role 查一次 source_id→adapter_name 映射传给搜索层（绕 RLS，保证匿名浏览也生效）。
     // 仅 capitalOrigin 非空时才查（常规搜索零额外开销）；搜索层据此给候选岗位标注 source_adapter。
+    // ⚠️ 必须分页拉全量（sources 1121 行 > PostgREST 单次 1000 行上限）：截断后 map 缺条目
+    // → 尾部源的岗位判不出资本来源、被资本来源筛选静默漏掉。
     let adapterBySource: Map<string, string | null> | null = null;
     if (filters.capitalOrigin) {
-      const { data: srcRows } = await createServiceClient()
-        .from("sources")
-        .select("id, adapter_name");
-      adapterBySource = new Map(
-        (
-          (srcRows as Array<{ id: string; adapter_name: string | null }> | null) || []
-        ).map((s) => [s.id, s.adapter_name] as [string, string | null]),
+      const srcRows = await fetchAllSources<{ id: string; adapter_name: string | null }>(
+        createServiceClient(),
+        "id, adapter_name",
       );
+      adapterBySource = new Map(srcRows.map((s) => [s.id, s.adapter_name] as [string, string | null]));
     }
     // jobs 已迁到自建香港 PG（Phase 1）：配了 JOBS_DATABASE_URL 走 jobs-store（直连香港库，同 FTS/同精筛）；
     // 否则回退 Supabase service-role 读（本地无 env / 迁移回滚时仍可用）。prefs/actions 仍来自 Supabase。

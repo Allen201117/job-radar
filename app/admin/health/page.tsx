@@ -43,6 +43,7 @@ import {
 } from "@/lib/must-apply-list";
 import { canonicalizeUserIndustry } from "@/lib/company-industry";
 import { createServiceClient } from "@/lib/supabaseService";
+import { fetchAllSources } from "@/lib/supabase-paginate";
 import {
   Bug,
   ChartBar,
@@ -110,14 +111,20 @@ type UserIndustryDistribution = { counts: Record<MustApplyScope, Record<string, 
 const MUST_APPLY_SCOPES: MustApplyScope[] = ["domestic", "overseas"];
 const MUST_APPLY_SCOPE_LABEL: Record<MustApplyScope, string> = { domestic: "国内", overseas: "海外" };
 
-async function loadMustApplyCoverageForScope(scope: MustApplyScope): Promise<MustApplyRowsByIndustry> {
+type SourceRow = { company: string | null; enabled: boolean };
+
+/** 库里全部源（含 disabled），用于判断必投公司「有没有接过源」。
+ * ⚠️ 必须分页拉全量：PostgREST 单次 select 默认最多返回 1000 行，而 sources 已越过 1000
+ * （2026-07-20 实测 1121）→ 不分页拿到的是**残缺**集合，尾部公司被误判「从未接入」
+ * → 北极星「必投清单健康覆盖」的 hasSource 残缺、覆盖率虚低。
+ * 分页语义（含为何必须带稳定排序键）见 lib/supabase-paginate.ts。 */
+function loadAllSources(): Promise<SourceRow[]> {
+  return fetchAllSources<SourceRow>(createServiceClient(), "company, enabled");
+}
+
+async function loadMustApplyCoverageForScope(scope: MustApplyScope, sources: SourceRow[]): Promise<MustApplyRowsByIndustry> {
   const union = mustApplyUnion(scope);
-  const [coverage, sourcesRes] = await Promise.all([
-    getMustApplyCoverage(union),
-    createServiceClient().from("sources").select("company, enabled"),
-  ]);
-  if (sourcesRes.error) throw new Error(sourcesRes.error.message);
-  const sources = (sourcesRes.data || []) as Array<{ company: string | null; enabled: boolean }>;
+  const coverage = await getMustApplyCoverage(union);
   const rows = union.map((c, i) => {
     const needle = c.pattern.replace(/%/g, "").toLowerCase();
     const matched = sources.filter((s) => (s.company || "").toLowerCase().includes(needle));
@@ -137,7 +144,9 @@ async function loadMustApplyCoverageForScope(scope: MustApplyScope): Promise<Mus
 }
 
 async function loadMustApplyCoverage(): Promise<MustApplyRowsByScope> {
-  const entries = await Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await loadMustApplyCoverageForScope(scope)] as const));
+  // sources 与 scope 无关，两个 scope 共用一份，省掉一次全量分页拉取。
+  const sources = await loadAllSources();
+  const entries = await Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await loadMustApplyCoverageForScope(scope, sources)] as const));
   return Object.fromEntries(entries) as MustApplyRowsByScope;
 }
 
