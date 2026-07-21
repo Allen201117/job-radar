@@ -20,10 +20,12 @@ import { cn } from "@/lib/utils";
 import type { CampusCompanyRow } from "@/lib/jobs-store/read";
 import type { WindowState } from "@/lib/campus-zone";
 import type { ScoredJob } from "@/lib/types";
+import type { CampusTimeline } from "@/lib/recruitment-cycle";
 
 export type CampusCardData = CampusCompanyRow & {
   window: WindowState;
   nearestDeadlineMs: number | null;
+  timeline: CampusTimeline | null;
 };
 
 type RecruitMode = "campus" | "intern";
@@ -360,6 +362,22 @@ export default function CampusClient({
                     <h3 className="text-[15px] font-semibold leading-tight">{card.company}</h3>
                     <WindowBadge window={card.window} />
                   </div>
+                  {card.timeline && (
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
+                      <span className="inline-flex items-center gap-1 rounded-md border border-[#b7d2ee] bg-[#dceafa] px-1.5 py-0.5 font-medium text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
+                        据往年
+                      </span>
+                      <span>{card.timeline.gradClass}</span>
+                      {card.timeline.batchBits.map((bit) => (
+                        <span key={bit}>· {bit}</span>
+                      ))}
+                      {card.timeline.phaseLabel && (
+                        <span className="font-medium text-[#8a6312] dark:text-[#e0b15a]">
+                          · {card.timeline.phaseLabel}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   <p className="text-sm text-[#5f594e] dark:text-[#b6ad9d]">
                     {totalCount > 0
                       ? `${totalCount} 个${modeLabel}在招岗位${

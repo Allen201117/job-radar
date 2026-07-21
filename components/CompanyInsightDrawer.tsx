@@ -37,6 +37,7 @@ import { FIRST_PARTY_MIN_COUNT, type FirstPartyAggregate, type FirstPartyInsight
 import { freshnessFromVerifiedAt, type FreshnessLevel } from "@/lib/insight-verification";
 import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
+import type { RecruitmentObservation } from "@/lib/recruitment-cycle";
 
 // 新鲜度分级配色：越旧越偏琥珀，提示用户谨慎参考。
 const FRESHNESS_TONE: Record<FreshnessLevel, string> = {
@@ -243,7 +244,7 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
         <div className="flex-1 overflow-y-auto px-6 py-6">
           {loading && <p className="text-sm text-[#8a8275] dark:text-[#9a9184]">正在加载洞察…</p>}
 
-          {!loading && totalItems === 0 && (
+          {!loading && totalItems === 0 && !(data?.recruitment_cycles?.length) && (
             <div className="rounded-xl border border-black/[0.06] bg-white/55 p-5 text-[15px] leading-7 text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
               {failureMessage(data?.failure_reason)}
             </div>
@@ -257,6 +258,10 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
               onToggleSubmit={() => setSubmitOpen((v) => !v)}
               onSubmitted={() => setSubmitOpen(false)}
             />
+          )}
+
+          {!loading && data && (
+            <RecruitmentTimeline cycles={data.recruitment_cycles || []} />
           )}
 
           {!loading && totalItems > 0 && (
@@ -634,5 +639,56 @@ function InsightCard({ item }: { item: InsightItemView }) {
       </div>
       )}
     </article>
+  );
+}
+
+// ============================================================
+// 校招洞察 P2 — 招聘周期时间轴：读 recruitment_cycle_observations 新表，
+// 与上方 insight_items timing 散文洞察严格分离（唯一结构化真相源，不双写）。
+// ============================================================
+function RecruitmentTimeline({ cycles }: { cycles: RecruitmentObservation[] }) {
+  if (!cycles || cycles.length === 0) return null;
+  const bySeason = new Map<string, RecruitmentObservation[]>();
+  for (const c of cycles) {
+    if (!bySeason.has(c.season)) bySeason.set(c.season, []);
+    bySeason.get(c.season)!.push(c);
+  }
+  const gradClass = cycles[0]?.grad_class || "";
+  return (
+    <section className="mb-8">
+      <header className="mb-3 flex items-center gap-2.5">
+        <span className="grid size-8 place-items-center rounded-xl border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
+          <CalendarBlank size={17} weight="bold" />
+        </span>
+        <h3 className="text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">招聘周期</h3>
+        <span className="rounded-full border border-[#b7d2ee] bg-[#dceafa] px-2 py-0.5 text-[11px] font-medium text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
+          据往年 · {gradClass}
+        </span>
+      </header>
+      <div className="space-y-3.5">
+        {Array.from(bySeason.entries()).map(([season, rows]) => (
+          <div key={season} className="rounded-xl border border-black/[0.06] bg-white/60 p-4 dark:border-white/[0.1] dark:bg-white/[0.05]">
+            <p className="mb-2 text-sm font-semibold text-[#3f3a33] dark:text-[#d9d0c2]">{season}</p>
+            <ul className="space-y-1.5">
+              {rows.map((r, i) => (
+                <li key={i} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-[#5f594e] dark:text-[#b6ad9d]">
+                  <span className="rounded-md bg-black/[0.05] px-1.5 py-0.5 text-[11px] font-medium dark:bg-white/[0.08]">{r.batch}</span>
+                  <span>{r.event}</span>
+                  <span className="font-medium text-[#1a1714] dark:text-[#f3ecdf]">{r.value_text}</span>
+                  {r.evidence_url && (
+                    <a href={r.evidence_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[11px] text-[#2f6299] hover:underline dark:text-[#7fb2e8]">
+                      来源 <ArrowSquareOut size={10} weight="bold" />
+                    </a>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-[11px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
+        据往年规律整理（非今年确切日期），今年批次时间以官网当年公告为准。
+      </p>
+    </section>
   );
 }
