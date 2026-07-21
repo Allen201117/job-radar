@@ -37,6 +37,7 @@ import { FIRST_PARTY_MIN_COUNT, type FirstPartyAggregate, type FirstPartyInsight
 import { freshnessFromVerifiedAt, type FreshnessLevel } from "@/lib/insight-verification";
 import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
+import CompanyLogo from "@/components/CompanyLogo";
 import type { RecruitmentObservation } from "@/lib/recruitment-cycle";
 
 // 新鲜度分级配色：越旧越偏琥珀，提示用户谨慎参考。
@@ -209,9 +210,12 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
                 <Sparkle size={16} weight="fill" className="text-[#6a4fa0] dark:text-[#c3b1e6]" />
                 公司职业洞察
               </div>
-              <h2 className="mt-1.5 truncate text-2xl font-semibold leading-tight">
-                {data?.company?.display_name || data?.company?.company || company}
-              </h2>
+              <div className="mt-1.5 flex items-center gap-2.5">
+                <CompanyLogo company={company} size={34} />
+                <h2 className="min-w-0 truncate text-2xl font-semibold leading-tight">
+                  {data?.company?.display_name || data?.company?.company || company}
+                </h2>
+              </div>
               {firmoBits.length > 0 && (
                 <p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">{firmoBits.join(" · ")}</p>
               )}
