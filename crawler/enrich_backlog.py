@@ -74,8 +74,10 @@ def _now():
 def fetch_queue(sb, adapters, limit=0, jobs_conn=None):
     """取队列：这些 adapter 下 active + 空 summary + enrich_fail_count<MAX_FAIL 的岗，按最新优先。
     返回 (rows, smap)。sources 永远走 Supabase；jobs 在 jobs_conn(香港库) 给定时直连查，否则 Supabase。"""
-    srcs = (sb.table("sources").select("id,company,source_url,adapter_name")
-            .in_("adapter_name", list(adapters)).execute().data) or []
+    # 分页拉全量：本过滤当前 403 行未触顶 PostgREST 的 1000 行硬顶，但 sources 每日扩源持续涨 → 走统一 helper。
+    srcs = db.fetch_all_rows(
+        lambda: sb.table("sources").select("id,company,source_url,adapter_name")
+        .in_("adapter_name", list(adapters)))
     smap = {s["id"]: s for s in srcs}
     if not smap:
         return [], smap
@@ -120,8 +122,10 @@ def fetch_liveness_queue(sb, adapters, limit=0, jobs_conn=None):
     刻意 NOT 过滤 enrich_fail_count（不同于 fetch_queue 的 <MAX_FAIL）：backlog 放弃富化的高失败岗
     （补不到正文）恰是最可疑的「假 active」，必须仍纳入巡检才有机会被撤岗下架。每岗每轮只查一次
     （enrich_checked_at 轮转封顶单轮成本），死岗一旦 expired 即离开 active 集，集合自清。"""
-    srcs = (sb.table("sources").select("id,company,source_url,adapter_name")
-            .in_("adapter_name", list(adapters)).execute().data) or []
+    # 分页拉全量：本过滤当前 403 行未触顶 PostgREST 的 1000 行硬顶，但 sources 每日扩源持续涨 → 走统一 helper。
+    srcs = db.fetch_all_rows(
+        lambda: sb.table("sources").select("id,company,source_url,adapter_name")
+        .in_("adapter_name", list(adapters)))
     smap = {s["id"]: s for s in srcs}
     if not smap:
         return [], smap
