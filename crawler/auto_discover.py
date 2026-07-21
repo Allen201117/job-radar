@@ -18,6 +18,7 @@ beisen / moka 的逐岗 count 需浏览器确认，本 httpx cron 不碰（留 b
 import json
 import os
 import random
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,6 +36,15 @@ _CURATED_FILES = ("targets_must_apply.json", "targets_tech_consumer.json", "targ
                   "targets_private500.json", "targets_soe500.json")
 _MUST_APPLY_FILES = {"targets_must_apply.json"}
 _PRIORITY_FILES = {"targets_tech_consumer.json"}
+
+# ── 校招板块缺口重探（Track A2）：与 lib/campus-sources.ts 的 CAMPUS_URL_RE 同口径
+# （两端各自实现，判定逻辑必须一致，否则「校招覆盖率」两处会打架）。
+_CAMPUS_TOKEN_RE = re.compile(r"campus|xiaozhao|校招|校园|campus_apply|/campus", re.I)
+# moka 社招源 URL 反推 slug：新命名 social-recruitment，旧存量命名 apply，两种历史命名并存。
+_MOKA_SOCIAL_SLUG_RE = re.compile(r"app\.mokahr\.com/(?:social-recruitment|apply)/([^/?#]+)", re.I)
+# 塌陷行业（用户反馈校招覆盖薄弱的行业，见 P2 设计文档）优先补校招板块。
+CAMPUS_GAP_INDUSTRIES = ("传媒/文娱", "物流/供应链", "教育", "金融")
+CAMPUS_GAP_CAP = int(os.environ.get("AUTO_DISCOVER_CAMPUS_GAP_CAP", "30"))   # 每日最多重探多少家缺校招板块的公司
 
 
 def _now_iso():
@@ -114,6 +124,88 @@ def existing_source_keys(sb):
         if u:
             urls.add(u)
     return companies, urls
+
+
+def load_campus_gap_source_rows(sb):
+    """校招缺口判定要用到 source_url/notes/adapter_name（不止公司名，existing_source_keys 只拿名字
+    不够判「有没有校招板块」）。⚠️ 同 existing_source_keys：sources 已越过 PostgREST 单次 1000 行硬顶，
+    必须分页拉全量，否则尾部（常是最新入库的）漏判导致重复重探。"""
+    return db.fetch_all_rows(
+        lambda: sb.table("sources").select("company,source_url,notes,adapter_name,enabled"))
+
+
+def extract_moka_slug(url):
+    """从 moka 社招源 URL 反推校招板块探测要用的 slug（同租户 campus-recruitment/{slug} 用同一
+    slug，见 discover_domestic.moka_probe）。两种历史命名都要认：
+    app.mokahr.com/social-recruitment/{slug}/{orgId}（现行）与 .../apply/{slug}/{orgId}（存量）。"""
+    m = _MOKA_SOCIAL_SLUG_RE.search(url or "")
+    return m.group(1) if m else None
+
+
+def plan_campus_gap_targets(must_apply_by_industry, source_rows, cap, seed=0):
+    """纯函数：找"已有源但缺校招板块、且能反推出 moka slug"的必投公司 —— 绕过 plan_targets 的整家
+    去重（那个去重只防「重复探全新公司」，不该挡「补缺失板块」，否则这批公司永远探不到校招板块）。
+
+    判定口径镜像 lib/campus-sources.ts 的 getCampusSourceCoverage：公司名子串（大小写不敏感）匹配
+    必投清单 pattern + enabled 过滤；已有任意源命中 _CAMPUS_TOKEN_RE（URL 或 notes）视为已覆盖，
+    幂等跳过（不重复补）。
+
+    A1 的探测器目前只把 moka 的校招板块接上（beisen url_campus / hotjob-wt recruitType=1 校招渠道
+    已在 A0 摸清覆盖，不需重探；feishu 的 portal_type 不分社招校招，也不是缺口）——所以本函数只挑
+    「匹配到的源里有 moka 社招源、且能从其 URL 反推出 slug」的公司；反推不出 slug 的本轮跳过，不硬猜。
+
+    塌陷行业（CAMPUS_GAP_INDUSTRIES）优先；同一优先级内按 seed 轮转（避免每天死磕同一批）。
+    返回值 shape 与 plan_targets 的目标一致（company/cn/slugs/industry），可直接喂
+    discover_domestic.sweep(targets, {"moka"})。"""
+    enabled_rows = [r for r in (source_rows or []) if r.get("enabled")]
+    by_company_lower: dict = {}
+    for row in enabled_rows:
+        company = (row.get("company") or "").strip()
+        if company:
+            by_company_lower.setdefault(company.lower(), []).append(row)
+
+    def _matched(pattern):
+        needle = str(pattern or "").replace("%", "").strip().lower()
+        if not needle:
+            return []
+        out = []
+        for lower_company, rows in by_company_lower.items():
+            if needle in lower_company:
+                out.extend(rows)
+        return out
+
+    def _is_campus_row(row):
+        return bool(_CAMPUS_TOKEN_RE.search(row.get("source_url") or "")) or \
+               bool(_CAMPUS_TOKEN_RE.search(row.get("notes") or ""))
+
+    seen_names = set()
+    priority, rest = [], []
+    for industry, companies in (must_apply_by_industry or {}).items():
+        for entry in (companies or []):
+            name = (entry.get("name") or "").strip()
+            pattern = (entry.get("pattern") or "").strip()
+            if not name or not pattern or name in seen_names:
+                continue
+            matched = _matched(pattern)
+            if not matched:
+                continue  # 连社招源都没有 → 不是「补校招」范畴，交给 plan_targets 整家新探
+            if any(_is_campus_row(r) for r in matched):
+                continue  # 已有校招源 → 幂等跳过
+            moka_row = next((r for r in matched
+                             if (r.get("adapter_name") or "") == "moka"
+                             and extract_moka_slug(r.get("source_url") or "")), None)
+            if not moka_row:
+                continue  # 本轮只支持 moka 校招反探；其余平台的缺口本轮跳过，不硬猜
+            slug = extract_moka_slug(moka_row["source_url"])
+            seen_names.add(name)
+            target = {"company": name, "cn": name, "industry": industry, "slugs": [slug],
+                      "source_url": moka_row["source_url"]}
+            (priority if industry in CAMPUS_GAP_INDUSTRIES else rest).append(target)
+
+    rng = random.Random(seed)
+    rng.shuffle(priority)
+    rng.shuffle(rest)
+    return (priority + rest)[:cap]
 
 
 def plan_targets(curated, user_wanted, existing_companies, cap, seed=0):
