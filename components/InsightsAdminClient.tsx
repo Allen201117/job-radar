@@ -60,6 +60,26 @@ interface AdminSubmission {
   created_at: string;
   updated_at: string;
 }
+interface AdminCycle {
+  id: string;
+  company_id: string;
+  grad_class: string;
+  season: string;
+  batch: string;
+  event: string;
+  time_expr_type: string;
+  value_text: string;
+  month_start: number | null;
+  month_end: number | null;
+  confidence: string | null;
+  evidence_url: string | null;
+  evidence_excerpt: string | null;
+  verify_status: string;
+  valid_until: string | null;
+  created_by: string | null;
+  updated_at: string;
+  company_profiles: { company: string; display_name: string | null } | null;
+}
 
 const DIM_LABELS: Record<InsightDimension, string> = {
   timing: "招聘时机",
@@ -89,6 +109,18 @@ const SUBMISSION_TOPIC_LABELS: Record<string, string> = {
   promotion: "晋升",
   culture: "文化",
 };
+const CYCLE_STATUS_LABELS: Record<string, string> = {
+  draft: "草稿待核验",
+  verified: "已核验展示中",
+  rejected: "已驳回",
+};
+function cycleStatusChip(status: string) {
+  if (status === "verified")
+    return "border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]";
+  if (status === "rejected")
+    return "border-[#e0b4ac] bg-[#f7e6e1] text-[#9c4a3c] dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]";
+  return "border-black/[0.08] bg-[#f4efe6] text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#9a9184]";
+}
 const GATE_HELP: Record<string, string> = {
   deidentified: "去标识门未过：请勾选「已去标识」，且每个来源也必须勾选「已去标识」。",
   grade:
@@ -162,6 +194,7 @@ export default function InsightsAdminClient() {
   const [items, setItems] = useState<AdminItem[]>([]);
   const [disputes, setDisputes] = useState<AdminDispute[]>([]);
   const [submissions, setSubmissions] = useState<AdminSubmission[]>([]);
+  const [cycles, setCycles] = useState<AdminCycle[]>([]);
 
   const [form, setForm] = useState<FormState>({ ...EMPTY_FORM });
   const [formOpen, setFormOpen] = useState(false);
@@ -174,20 +207,26 @@ export default function InsightsAdminClient() {
   async function load() {
     setLoading(true);
     try {
-      const [res, submissionsRes] = await Promise.all([
+      const [res, submissionsRes, cyclesRes] = await Promise.all([
         fetch("/api/insights/admin"),
         fetch("/api/insights/admin/submissions"),
+        fetch("/api/insights/admin/cycles"),
       ]);
       const data = await res.json();
       const submissionsData = await submissionsRes.json();
+      const cyclesData = await cyclesRes.json();
       if (!res.ok || !data.ok) throw new Error(data.error || "加载失败");
       if (!submissionsRes.ok || !submissionsData.ok) {
         throw new Error(submissionsData.error || "待审提交加载失败");
+      }
+      if (!cyclesRes.ok || !cyclesData.ok) {
+        throw new Error(cyclesData.error || "招聘周期加载失败");
       }
       setCompanies(data.companies || []);
       setItems(data.items || []);
       setDisputes(data.disputes || []);
       setSubmissions(submissionsData.submissions || []);
+      setCycles(cyclesData.cycles || []);
       setError("");
     } catch (e) {
       setError((e as Error).message);
@@ -488,6 +527,39 @@ export default function InsightsAdminClient() {
     }
   }
 
+  async function setCycleStatus(id: string, verify_status: "verified" | "rejected") {
+    setBusyId(id);
+    try {
+      const res = await fetch("/api/insights/admin/cycles", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, verify_status }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        alert(data.error || "操作失败");
+        return;
+      }
+      await load();
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function submitCycle(form: Record<string, any>) {
+    const res = await fetch("/api/insights/admin/cycles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      alert(data.error || "提交失败");
+      return;
+    }
+    await load();
+  }
+
   if (loading) return <p className="mt-8 text-sm text-[#8a8275] dark:text-[#9a9184]">正在加载洞察后台…</p>;
   if (error)
     return (
@@ -606,6 +678,32 @@ export default function InsightsAdminClient() {
           </div>
         </section>
       )}
+
+      {/* 招聘周期（据往年 · 校招洞察 P2）：新表结构化事实，独立于上面的 insight_items 洞察条目 */}
+      <section>
+        <h2 className="mb-3 text-sm font-semibold text-[#3f3a33] dark:text-[#d9d0c2]">
+          招聘周期（据往年 · 校招洞察 P2，{cycles.length} 条观测）
+        </h2>
+        <div className="space-y-4">
+          <CycleForm companies={companies} onSubmit={submitCycle} />
+          <div className="space-y-2.5">
+            {cycles.map((c) => (
+              <CycleRow
+                key={c.id}
+                cycle={c}
+                busy={busyId === c.id}
+                onVerify={() => setCycleStatus(c.id, "verified")}
+                onReject={() => setCycleStatus(c.id, "rejected")}
+              />
+            ))}
+            {cycles.length === 0 && (
+              <p className="rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
+                还没有任何招聘周期观测。用上面的表单新增。
+              </p>
+            )}
+          </div>
+        </div>
+      </section>
 
       {/* 行业覆盖 worklist：按行业看缺口，点公司直接补录 */}
       {companies.length > 0 && (
@@ -1079,5 +1177,258 @@ function FormField({
       <label className="mb-1.5 block text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">{label}</label>
       {children}
     </div>
+  );
+}
+
+type CycleFormState = {
+  company_id: string;
+  grad_class: string;
+  season: string;
+  batch: string;
+  event: string;
+  time_expr_type: string;
+  value_text: string;
+  month_start: string;
+  month_end: string;
+  confidence: string;
+  evidence_url: string;
+  evidence_excerpt: string;
+  valid_until: string;
+  verify_status: string;
+};
+
+const EMPTY_CYCLE_FORM: CycleFormState = {
+  company_id: "",
+  grad_class: "2027届",
+  season: "秋招",
+  batch: "提前批",
+  event: "开放",
+  time_expr_type: "历史规律",
+  value_text: "",
+  month_start: "",
+  month_end: "",
+  confidence: "medium",
+  evidence_url: "",
+  evidence_excerpt: "",
+  valid_until: "",
+  verify_status: "draft",
+};
+
+function CycleForm({
+  companies,
+  onSubmit,
+}: {
+  companies: AdminCompany[];
+  onSubmit: (form: Record<string, any>) => Promise<void>;
+}) {
+  const [form, setForm] = useState<CycleFormState>({ ...EMPTY_CYCLE_FORM });
+  const [submitting, setSubmitting] = useState(false);
+
+  function setField<K extends keyof CycleFormState>(key: K, value: CycleFormState[K]) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!form.company_id || !form.grad_class.trim() || !form.value_text.trim()) {
+      alert("公司、毕业届别、展示串为必填");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      // 空串月份要转 undefined 再提交，否则会撞 validateCycleInput 的 badMonth 类型判定（"" 不是 number）
+      await onSubmit({
+        company_id: form.company_id,
+        grad_class: form.grad_class.trim(),
+        season: form.season,
+        batch: form.batch,
+        event: form.event,
+        time_expr_type: form.time_expr_type,
+        value_text: form.value_text.trim(),
+        month_start: form.month_start === "" ? undefined : Number(form.month_start),
+        month_end: form.month_end === "" ? undefined : Number(form.month_end),
+        confidence: form.confidence,
+        evidence_url: form.evidence_url.trim(),
+        evidence_excerpt: form.evidence_excerpt.trim(),
+        valid_until: form.valid_until || undefined,
+        verify_status: form.verify_status,
+      });
+      setForm({ ...EMPTY_CYCLE_FORM, company_id: form.company_id });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="surface p-5 text-[#1a1714] dark:text-[#f3ecdf]">
+      <h3 className="text-base font-semibold">新增招聘周期观测</h3>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <FormField label="公司">
+          <select value={form.company_id} onChange={(e) => setField("company_id", e.target.value)} className={inputCls}>
+            <option value="">选择公司…</option>
+            {companies.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.display_name || c.company}
+              </option>
+            ))}
+          </select>
+        </FormField>
+        <FormField label="毕业届别（如「2027届」，据往年必绑此）">
+          <input value={form.grad_class} onChange={(e) => setField("grad_class", e.target.value)} placeholder="2027届" className={inputCls} />
+        </FormField>
+        <FormField label="季">
+          <select value={form.season} onChange={(e) => setField("season", e.target.value)} className={inputCls}>
+            <option value="秋招">秋招</option>
+            <option value="春招">春招</option>
+          </select>
+        </FormField>
+        <FormField label="批次">
+          <select value={form.batch} onChange={(e) => setField("batch", e.target.value)} className={inputCls}>
+            <option value="提前批">提前批</option>
+            <option value="正式批">正式批</option>
+            <option value="补录">补录</option>
+            <option value="实习转正">实习转正</option>
+          </select>
+        </FormField>
+        <FormField label="事件">
+          <select value={form.event} onChange={(e) => setField("event", e.target.value)} className={inputCls}>
+            <option value="开放">开放</option>
+            <option value="黄金期">黄金期</option>
+            <option value="截止">截止</option>
+            <option value="结束">结束</option>
+          </select>
+        </FormField>
+        <FormField label="时间表达类型">
+          <select value={form.time_expr_type} onChange={(e) => setField("time_expr_type", e.target.value)} className={inputCls}>
+            <option value="历史规律">历史规律</option>
+            <option value="月">月</option>
+            <option value="日期范围">日期范围</option>
+            <option value="精确日期">精确日期（须带证据链接）</option>
+          </select>
+        </FormField>
+        <FormField label="展示串（如「约7月」「8-9月」）">
+          <input value={form.value_text} onChange={(e) => setField("value_text", e.target.value)} placeholder="约7月" className={inputCls} />
+        </FormField>
+        <FormField label="起始月（1-12，选填）">
+          <input
+            type="number"
+            min={1}
+            max={12}
+            value={form.month_start}
+            onChange={(e) => setField("month_start", e.target.value)}
+            className={inputCls}
+          />
+        </FormField>
+        <FormField label="结束月（1-12，选填）">
+          <input
+            type="number"
+            min={1}
+            max={12}
+            value={form.month_end}
+            onChange={(e) => setField("month_end", e.target.value)}
+            className={inputCls}
+          />
+        </FormField>
+        <FormField label="置信度">
+          <select value={form.confidence} onChange={(e) => setField("confidence", e.target.value)} className={inputCls}>
+            <option value="high">高</option>
+            <option value="medium">中</option>
+            <option value="low">低</option>
+          </select>
+        </FormField>
+        <FormField label="证据链接（精确日期必填，其余选填）">
+          <input value={form.evidence_url} onChange={(e) => setField("evidence_url", e.target.value)} placeholder="https://…" className={inputCls} />
+        </FormField>
+        <FormField label="证据短摘要（选填，禁整段原文）">
+          <input value={form.evidence_excerpt} onChange={(e) => setField("evidence_excerpt", e.target.value)} className={inputCls} />
+        </FormField>
+        <FormField label="有效期至（选填）">
+          <input type="date" value={form.valid_until} onChange={(e) => setField("valid_until", e.target.value)} className={inputCls} />
+        </FormField>
+        <FormField label="初始状态">
+          <select value={form.verify_status} onChange={(e) => setField("verify_status", e.target.value)} className={inputCls}>
+            <option value="draft">草稿（待核验，先不展示）</option>
+            <option value="verified">直接核验通过（立即展示）</option>
+          </select>
+        </FormField>
+      </div>
+      <div className="mt-4 flex gap-2">
+        <button
+          type="submit"
+          disabled={submitting}
+          className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] active:scale-[0.98] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+        >
+          {submitting ? "提交中…" : "新增观测"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function CycleRow({
+  cycle,
+  busy,
+  onVerify,
+  onReject,
+}: {
+  cycle: AdminCycle;
+  busy: boolean;
+  onVerify: () => void;
+  onReject: () => void;
+}) {
+  return (
+    <article className="surface-soft p-4 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">
+          {cycle.company_profiles?.display_name || cycle.company_profiles?.company || "（未知公司）"}
+        </span>
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
+          {cycle.grad_class}
+        </span>
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
+          {cycle.season} · {cycle.batch} · {cycle.event}
+        </span>
+        <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", cycleStatusChip(cycle.verify_status))}>
+          {CYCLE_STATUS_LABELS[cycle.verify_status] || cycle.verify_status}
+        </span>
+        <div className="ml-auto flex gap-1.5">
+          {cycle.verify_status !== "verified" && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onVerify}
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#4f6f2a] transition hover:bg-black/[0.05] hover:text-[#3f5a1c] disabled:opacity-50 dark:text-[#a3d06a] dark:hover:bg-white/[0.05] dark:hover:text-[#b8dd85]"
+            >
+              <CheckCircle size={13} weight="bold" /> 设为 verified
+            </button>
+          )}
+          {cycle.verify_status !== "rejected" && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onReject}
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#5f594e] transition hover:bg-black/[0.05] hover:text-[#1a1714] disabled:opacity-50 dark:text-[#b6ad9d] dark:hover:bg-white/[0.05] dark:hover:text-[#f3ecdf]"
+            >
+              <XCircle size={13} weight="bold" /> 设为 rejected
+            </button>
+          )}
+        </div>
+      </div>
+      <p className="mt-2 leading-6 text-[#3f3a33] dark:text-[#d9d0c2]">{cycle.value_text}</p>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[#8a8275] dark:text-[#9a9184]">
+        {cycle.confidence && <span>置信度 {cycle.confidence}</span>}
+        {cycle.valid_until && <span>有效期至 {cycle.valid_until}</span>}
+        {cycle.evidence_url && (
+          <a
+            href={cycle.evidence_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[#2f6299] hover:underline dark:text-[#7fb2e8]"
+          >
+            来源
+          </a>
+        )}
+      </div>
+    </article>
   );
 }
