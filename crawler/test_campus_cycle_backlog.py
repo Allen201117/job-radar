@@ -225,6 +225,28 @@ class DrainOneCompanyTest(unittest.TestCase):
         self.assertEqual(stats["skipped_bad_index"], 1)
         self.assertEqual(sb.inserted.get("recruitment_cycle_observations", []), [])
 
+    def test_sources_query_failure_degrades_to_draft_not_crash(self):
+        # 查官方源列表异常时永不抛：保守降级为「查无官方源」，最多让本该 verified 的降级成
+        # draft，绝不会因为查询异常反而误判出「官方」错误自动发布。
+        class _BoomSB(FakeSB):
+            def table(self, name):
+                if name == "sources":
+                    raise RuntimeError("db timeout")
+                return super().table(name)
+
+        B._ROUTER = _FakeRouter([
+            {"title": "校招公告", "url": "https://jobs.testco.com/campus/1",
+             "snippet": "提前批7月开放网申", "text": "提前批7月开放网申", "publisher": "testco官网"},
+        ])
+        B.chat_json = lambda messages, **kw: {"claims": [self._claim()]}
+        B.judge_claim = lambda content, text, **kw: {"verdict": "entailment", "confidence": 0.9, "reason": "ok"}
+        sb = _BoomSB()
+        stats = B.drain_one_company(sb, "测试公司")
+        self.assertEqual(stats["draft"], 1)
+        self.assertEqual(stats["verified"], 0)
+        rows = sb.inserted.get("recruitment_cycle_observations", [])
+        self.assertEqual(rows[0]["verify_status"], "draft")
+
     def test_no_claims_returns_stats_without_insert(self):
         B._ROUTER = _FakeRouter([
             {"title": "t", "url": "https://jobs.testco.com/campus/1",

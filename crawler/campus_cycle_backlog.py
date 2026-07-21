@@ -123,8 +123,14 @@ def drain_one_company(sb, company):
     if not results:
         return {"company": company, "skipped": "no_search_results"}
 
-    source_rows = db.fetch_all_rows(
-        lambda: sb.table("sources").select("company,source_url").eq("company", company))
+    try:
+        source_rows = db.fetch_all_rows(
+            lambda: sb.table("sources").select("company,source_url").eq("company", company))
+    except Exception as e:
+        # 查失败就当没有官方源（保守方向：最多让本轮本该 verified 的降级成 draft，绝不会因为
+        # 查询异常反而误判出「官方」而错误自动发布）。
+        print(f"  [campus-cycle-err] {company} 查询官方源列表失败: {type(e).__name__}: {str(e)[:160]}")
+        source_rows = []
     official_hosts = official_hosts_from_sources(
         [r.get("source_url") for r in source_rows if r.get("source_url")])
 
