@@ -22,7 +22,7 @@ import ops_runs
 import search_router
 from campus_cycle_extract import build_messages, parse_cycle_claims
 from insight_backlog import fetch_one_company
-from insight_engine import chat_json, judge_claim, llm_config
+from insight_engine import chat_json, judge_claim, llm_config, llm_run_health, llm_run_unhealthy, reset_llm_health
 from official_gate import decide_cycle_status, is_official_grounding, official_hosts_from_sources
 
 # 塌陷行业（同 auto_discover.CAMPUS_GAP_INDUSTRIES，用户反馈校招时间线覆盖薄弱，P2 设计文档定调）优先补。
@@ -218,6 +218,7 @@ def main():
 
     sb = db.get_supabase()
     started_at = _now_iso()
+    reset_llm_health()
 
     if args.company:
         results = [drain_one_company(sb, args.company)]
@@ -255,6 +256,13 @@ def main():
         started_at=started_at,
         finished_at=_now_iso(),
     )
+
+    # 真实健康信号：LLM 整体失败（账户欠费 / 鉴权失效）时标红，别让 workflow 绿灯盖住故障。
+    if llm_run_unhealthy():
+        h = llm_run_health()
+        print(f"✗ LLM 整体失败（ok={h['ok']} fail={h['fail']} account_error={h['account_error']}）"
+              f"——大概率 SiliconFlow 账户欠费 / key 失效，本轮没产出。")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
