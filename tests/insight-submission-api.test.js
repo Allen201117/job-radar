@@ -45,6 +45,10 @@ function chain(result, onCall = {}) {
       filters.push(["in", column, value]);
       return this;
     },
+    or(filterStr) {
+      filters.push(["or", filterStr]);
+      return this;
+    },
     order(column, options) {
       calls.push(["order", column, options]);
       return this;
@@ -253,6 +257,7 @@ test("GET /api/insights returns anonymized first-party aggregate after the thres
   };
   const service = {
     from(table) {
+      if (table === "recruitment_cycle_observations") return chain({ data: [], error: null });
       assert.equal(table, "insight_submissions");
       return chain({ data: firstPartyRows, error: null });
     },

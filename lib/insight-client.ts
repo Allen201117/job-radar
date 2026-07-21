@@ -11,6 +11,7 @@ import type {
   InsightItemView,
 } from "./types";
 import type { FirstPartyAggregate } from "./insight-submission";
+import type { RecruitmentObservation } from "./recruitment-cycle";
 
 export interface CompanyInsightResponse {
   ok: boolean;
@@ -19,6 +20,7 @@ export interface CompanyInsightResponse {
   dimensions: Record<InsightDimension, InsightItemView[]>;
   first_party: FirstPartyAggregate;
   failure_reason: string | null;
+  recruitment_cycles: RecruitmentObservation[];
   error?: string;
 }
 
@@ -60,6 +62,7 @@ export async function fetchCompanyInsights(
       dimensions: EMPTY_DIMENSIONS(),
       first_party: EMPTY_FIRST_PARTY(),
       failure_reason: "insight_unverified",
+      recruitment_cycles: [],
     };
   }
   const cached = cache.get(key);
@@ -79,6 +82,7 @@ export async function fetchCompanyInsights(
         dimensions: { ...EMPTY_DIMENSIONS(), ...(data.dimensions || {}) },
         first_party: data.first_party || EMPTY_FIRST_PARTY(),
         failure_reason: data.failure_reason ?? null,
+        recruitment_cycles: data.recruitment_cycles || [],
         error: data.error,
       };
       cache.set(key, normalized);
@@ -92,6 +96,7 @@ export async function fetchCompanyInsights(
         dimensions: EMPTY_DIMENSIONS(),
         first_party: EMPTY_FIRST_PARTY(),
         failure_reason: "insight_unverified",
+        recruitment_cycles: [],
         error: (e as Error).message,
       };
     } finally {

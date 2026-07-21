@@ -150,6 +150,23 @@ export async function GET(request: NextRequest) {
   });
   const firstParty = await loadFirstPartyInsights(candidates);
 
+  // 6) 招聘周期观测（校招洞察 P2）：仅 verified 且未过期，新表唯一源，不与 insight_items timing 混同。
+  let recruitmentCycles: any[] = [];
+  if (profile) {
+    const today = new Date().toISOString().slice(0, 10);
+    const { data: cycleRows } = await createServiceClient()
+      .from("recruitment_cycle_observations")
+      .select(
+        "id, grad_class, season, batch, event, time_expr_type, value_text, month_start, month_end, confidence, evidence_url, evidence_excerpt, valid_until",
+      )
+      .eq("company_id", profile.id)
+      .eq("verify_status", "verified")
+      .or(`valid_until.is.null,valid_until.gte.${today}`)
+      .order("season")
+      .order("month_start");
+    recruitmentCycles = cycleRows || [];
+  }
+
   return NextResponse.json({
     ok: true,
     company: profile,
@@ -159,6 +176,7 @@ export async function GET(request: NextRequest) {
     failure_reason: hasAny ? null : resolveInsightFailure(evaluations),
     enrich_now: enrichNow,
     first_party: firstParty,
+    recruitment_cycles: recruitmentCycles,
   });
 }
 
