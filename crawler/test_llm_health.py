@@ -23,10 +23,32 @@ class _FakeClient:
         pass
 
 
+class _SeqClient:
+    """按序返回一串 status（模拟 429 重试后恢复）。"""
+
+    def __init__(self, statuses, text='{"choices":[{"message":{"content":"ok"}}]}'):
+        self.statuses = list(statuses)
+        self.text = text
+        self.calls = 0
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        status = self.statuses[min(self.calls, len(self.statuses) - 1)]
+        self.calls += 1
+        return httpx.Response(status, request=httpx.Request("POST", url), text=self.text)
+
+    def close(self):
+        pass
+
+
 class LlmRunHealthTest(unittest.TestCase):
     def setUp(self):
         os.environ.setdefault("SILICONFLOW_API_KEY", "test-key")  # 让 configured=True
         E.reset_llm_health()
+        self._sleep = E.time.sleep
+        E.time.sleep = lambda *a, **k: None  # 别在单测里真 sleep
+
+    def tearDown(self):
+        E.time.sleep = self._sleep
 
     def test_zero_calls_is_healthy(self):
         self.assertFalse(E.llm_run_unhealthy())
@@ -62,6 +84,20 @@ class LlmRunHealthTest(unittest.TestCase):
             E.chat_content([{"role": "user", "content": "x"}], client=_FakeClient(500))
         # 至少成一次 → 不算整体失败（部分失败是常态）
         self.assertFalse(E.llm_run_unhealthy())
+
+    def test_429_then_success_recovers(self):
+        # 429 限流 → 退避重试 → 第 3 次 200 成功；整轮判健康
+        client = _SeqClient([429, 429, 200])
+        out = E.chat_content([{"role": "user", "content": "x"}], client=client)
+        self.assertEqual(out, "ok")
+        self.assertEqual(client.calls, 3)
+        self.assertFalse(E.llm_run_unhealthy())
+
+    def test_429_persistent_raises_and_unhealthy(self):
+        # 一直 429 → 重试用尽后抛 + 判不健康（本轮空转）
+        with self.assertRaises(httpx.HTTPStatusError):
+            E.chat_content([{"role": "user", "content": "x"}], client=_SeqClient([429]))
+        self.assertTrue(E.llm_run_unhealthy())
 
     def test_reset(self):
         with self.assertRaises(httpx.HTTPStatusError):
