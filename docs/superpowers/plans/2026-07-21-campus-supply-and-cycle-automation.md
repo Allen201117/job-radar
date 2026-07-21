@@ -18,24 +18,26 @@
 
 # Track A — 校招岗位源接入自动化（先做）
 
-**现状（investigation 实测）**：每日 `auto-discover` 在跑、塌陷行业公司在目标池，但两个洞导致最该补的 ~47 家"有社招无校招"覆盖不到：
-1. `plan_targets()` 只探"库里完全没有源"的公司 → 已有社招源的 47 家被去重跳过、永不探校招板块。
-2. `discover_domestic.py` 里 **feishu / moka 探测器只探社招板块**（feishu `portal_type:2`、moka `social-recruitment`），没探校招板块。hotjob/wt/beisen 已探校招。
+**现状（investigation + live 实测，2026-07-21）**：每日 `auto-discover` 在跑、塌陷行业公司在目标池，两个洞导致 ~47 家"有社招无校招"覆盖不到——但 **A0 live 探测把 feishu 那半个洞证伪了，Track A 实际范围收窄到只做 moka + targeting**：
+1. `plan_targets()` 只探"库里完全没有源"的公司 → 已有社招源的公司被去重跳过、永不探校招板块。**（真洞，A2 修）**
+2. moka 探测器只探 `social-recruitment` → 校招板块（`campus-recruitment`/`campus_apply`）没探。**（真洞，A1 修）**
+3. ~~feishu 只探社招板块~~ **证伪**：feishu 的 `portal_type` 根本不分社招/校招——live 测 portal_type 1/2/3 返回**同一份全量岗位列表**，校招岗靠标题届别词（如"(24-25届)"）逐岗识别。所以 feishu 源本就带回校招岗，`campusAdmission` 逐岗分类即可，**不是板块级洞、feishu 无需改**（且 P1 已确立 `campusJobCount` 权威于 `hasCampusSource`，feishu 公司有校招岗就 🟢）。
 
-### Task A0: Live 摸清 feishu / moka 校招板块的真实接口（前置，必须先做）
+### Task A0: Live 摸清校招板块接口 —— ✅ 已完成（2026-07-21）
 
-**为什么**：feishu 校招用哪个 `portal_type`（社招是 2）、moka 校招是 `campus-recruitment` 还是 `campus_apply` 路径、返回结构——这些**代码里没有、必须 live 探**。猜接口 = 违反"不猜 slug/板块"红线。
+**结论**：
+- **feishu**：`POST {host}/api/v1/search/job/posts` 的 `portal_type` 不分社招/校招，1/2/3 返回同一列表 → **feishu 校招板块不是洞，本轮不动 feishu**。
+- **moka**：`GET app.mokahr.com/campus-recruitment/{slug}` → 302 到 `/{slug}/{campusOrgId}`，title="公司名 - 校园招聘"，**campus orgId 与社招不同**（极米 社招142344/校招150242）。`campus_apply/{slug}` 等价重定向到同一 campus orgId。title-verify 命中公司名（极米/高途/飞鱼都过；shopee 校招 title="2026 Sea全球管理培训生计划"不含公司名→_verify 保守拒，可接受）。**moka 校招 oracle 确认可用**。
+- **beisen**：`to_beisen_candidates` 已 emit `url_campus`（/campus），已覆盖，不动。
+- **hotjob/wt**：`_HOTJOB_CHANNELS`/`_WT_RECRUIT` 已含 campus（recruitType 1），已覆盖，不动。
 
-- [ ] 挑 2–3 家已知有 feishu 源、且官网有校招板块的公司（从 `sources` 表查 `source_url like '%feishu%'` 的公司），live 请求其校招板块候选端点（feishu 试 `portal_type:1`/校招 portal、moka 试 `campus-recruitment/{sv}`、`campus_apply`），确认哪个返回真实校招岗 + 返回结构。**用 dangerouslyDisableSandbox + 本机网络**，只读探测、不写库。
-- [ ] 把确认到的端点模板 + 返回字段记进 Task A1 的实现依据。若某平台校招板块接口探不通/结构不稳 → **诚实记录，该平台校招探测本轮不做**，不硬猜。
+### Task A1: 给 moka_probe 加校招板块探测
 
-### Task A1: 给 discover_domestic.py 加校招板块探测
+**Files:** Modify `crawler/discover_domestic.py`（`moka_probe` → 探到社招 org 后**顺带**探 `campus-recruitment/{sv}`，命中就多产一个校招候选；`to_moka_candidates` 放行校招 URL）；Test `crawler/test_discover_domestic.py`（unittest 不打网络，mock 返回，断言校招候选生成 + `isCampusSource` 判 true）。
 
-**Files:** Modify `crawler/discover_domestic.py`（`feishu_probe` / `moka_probe` / `to_*_candidates`）；Test `crawler/test_discover_domestic.py`（或新增，unittest 不打网络，测候选生成 + 校招 URL 标记）。
-
-- [ ] 按 A0 确认的端点，给 `feishu_probe` 加校招 portal 探测、`moka_probe` 加 campus 路径探测，各自产出**独立的校招源候选**（URL 命中 `CAMPUS_URL_RE`，`notes` 标"校招板块"）。
-- [ ] 复用现有探活质量门（`probe_one` / `valid>0` / 标题核验）——校招板块也要"真有在招校招岗"才入。
-- [ ] Test：mock 返回，断言校招候选被正确生成 + `isCampusSource` 判定为 true（对齐 `lib/campus-sources.ts` 的 `CAMPUS_URL_RE`）。
+- [ ] `moka_probe` 命中社招 org 后，用**同一 slug 变体 sv** 探 `GET app.mokahr.com/campus-recruitment/{sv}`：若 302 到 `/{sv}/{digitOrgId}` 且 title 非"不存在"/404 且 `_verify(title, cn)` → 产出**独立校招候选** `{platform:"moka", kind:"campus", url:f".../campus-recruitment/{sv}/{campusOrgId}", notes:"校招板块", verified}`。社招候选照旧。
+- [ ] `to_moka_candidates` 把校招候选也转成 probe 入库格式（URL 命中 `CAMPUS_URL_RE`）；岗位数仍走 MokaAdapter（playwright）confirm，只把真有校招岗的入库（精度门不变）。
+- [ ] Test：mock `moka_probe` 返社招+校招两候选 → 断言两条都进 candidates、校招那条 URL 被 `CAMPUS_URL_RE`（对齐 `lib/campus-sources.ts`）判 true。
 
 ### Task A2: auto_discover 加"有源但缺校招源"重探路径
 
