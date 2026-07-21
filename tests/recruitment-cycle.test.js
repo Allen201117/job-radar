@@ -68,3 +68,36 @@ test("未 verified 被过滤 → null", () => {
 test("空数组 → null", () => {
   assert.equal(campusTimelineSummary([], new Date("2026-07-15T00:00:00")), null);
 });
+
+const { validateCycleInput } = loadTs(
+  path.join(__dirname, "..", "lib", "recruitment-cycle-validate.ts"),
+);
+
+test("合法输入通过", () => {
+  const r = validateCycleInput({
+    company_id: "c1", grad_class: "2027届", season: "秋招", batch: "提前批",
+    event: "开放", time_expr_type: "月", value_text: "约7月", month_start: 7, month_end: 7,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.fields.value_text, "约7月");
+});
+
+test("非法季 → 报错", () => {
+  const r = validateCycleInput({ company_id: "c1", grad_class: "2027届", season: "夏招", batch: "提前批", event: "开放", time_expr_type: "月", value_text: "x" });
+  assert.equal(r.ok, false);
+});
+
+test("缺 grad_class → 报错（据往年必绑届别）", () => {
+  const r = validateCycleInput({ company_id: "c1", season: "秋招", batch: "提前批", event: "开放", time_expr_type: "月", value_text: "x" });
+  assert.equal(r.ok, false);
+});
+
+test("精确日期缺 evidence_url → 报错（P3 官方源门）", () => {
+  const r = validateCycleInput({ company_id: "c1", grad_class: "2027届", season: "秋招", batch: "提前批", event: "开放", time_expr_type: "精确日期", value_text: "9月1日", date_start: "2026-09-01" });
+  assert.equal(r.ok, false);
+});
+
+test("month 越界 → 报错", () => {
+  const r = validateCycleInput({ company_id: "c1", grad_class: "2027届", season: "秋招", batch: "提前批", event: "开放", time_expr_type: "月", value_text: "x", month_start: 13 });
+  assert.equal(r.ok, false);
+});
