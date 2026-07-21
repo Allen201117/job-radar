@@ -185,6 +185,45 @@ class DrainOneCompanyTest(unittest.TestCase):
         self.assertEqual(stats["verified"], 0)
         self.assertEqual(stats["draft"], 1)
 
+    def test_overlapping_months_different_publishers_verified(self):
+        # 选项 B 放宽：两个不同源月份区间重叠(9月 与 9-10月)→ 视为一致 → 发布
+        B._ROUTER = _FakeRouter([
+            {"title": "牛客", "url": "https://www.nowcoder.com/d/1",
+             "snippet": "正式批9月开放", "text": "正式批9月开放", "publisher": "牛客"},
+            {"title": "知乎", "url": "https://zhuanlan.zhihu.com/p/2",
+             "snippet": "正式批9到10月", "text": "正式批9到10月", "publisher": "知乎"},
+        ])
+        B.chat_json = lambda messages, **kw: {"claims": [
+            self._claim(batch="正式批", month_start=9, month_end=9, value_text="9月", source_idx=0),
+            self._claim(batch="正式批", month_start=9, month_end=10, value_text="9-10月", source_idx=1),
+        ]}
+        B.judge_claim = lambda content, text, **kw: {"verdict": "entailment", "confidence": 0.9, "reason": "ok"}
+        sb = FakeSB(canned={"sources": []})
+        stats = B.drain_one_company(sb, "测试公司")
+        self.assertEqual(stats["verified"], 1)
+        rows = sb.inserted.get("recruitment_cycle_observations", [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["verify_status"], "verified")
+        self.assertEqual(rows[0]["source_kind"], "public_aggregate")
+
+    def test_non_overlapping_months_no_consensus_draft(self):
+        # 不重叠(7月 vs 11月)=冲突 → 无共识 → 不发布，只留一条 draft（孤证）
+        B._ROUTER = _FakeRouter([
+            {"title": "牛客", "url": "https://www.nowcoder.com/d/1",
+             "snippet": "正式批7月", "text": "正式批7月", "publisher": "牛客"},
+            {"title": "知乎", "url": "https://zhuanlan.zhihu.com/p/2",
+             "snippet": "正式批11月", "text": "正式批11月", "publisher": "知乎"},
+        ])
+        B.chat_json = lambda messages, **kw: {"claims": [
+            self._claim(batch="正式批", month_start=7, month_end=7, value_text="7月", source_idx=0),
+            self._claim(batch="正式批", month_start=11, month_end=11, value_text="11月", source_idx=1),
+        ]}
+        B.judge_claim = lambda content, text, **kw: {"verdict": "entailment", "confidence": 0.9, "reason": "ok"}
+        sb = FakeSB(canned={"sources": []})
+        stats = B.drain_one_company(sb, "测试公司")
+        self.assertEqual(stats["verified"], 0)
+        self.assertEqual(stats["draft"], 1)
+
     def test_non_entailment_claim_dropped_not_written(self):
         # 判官不支持 → 丢，连草稿都不写（宁缺不编）
         B._ROUTER = _FakeRouter([
