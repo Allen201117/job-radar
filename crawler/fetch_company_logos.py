@@ -58,27 +58,43 @@ def collect_placeholder_fingerprints(client: httpx.Client) -> set:
 
 
 def fetch_one(client: httpx.Client, domain: str, placeholders: set) -> Optional[dict]:
-    """抓一家公司的 logo。返回 {bytes, content_type, width, source} 或 None（DuckDuckGo 404 = 这家没有）。"""
+    """抓一家公司的 logo。返回 {bytes, content_type, width, source} 或 None（DuckDuckGo 与 icon.horse 都没有）。"""
     ddg = _get(client, _DDG.format(domain=domain))
-    if ddg is None or ddg.status_code == 404 or ddg.status_code != 200 or not ddg.content:
-        return None
-    best = ddg.content
-    best_ct = ddg.headers.get("content-type")
-    source = "duckduckgo"
-    width = image_width(best)
-
-    # 偏小 → 试 icon.horse 高清升级（过占位门 + 取更清晰/更大者）
-    if width is None or width < _SMALL_WIDTH:
+    ddg_ok = ddg is not None and ddg.status_code == 200 and bool(ddg.content)
+    if ddg_ok:
+        best = ddg.content
+        best_ct = ddg.headers.get("content-type")
+        source = "duckduckgo"
+        width = image_width(best)
+        # 偏小 → 试 icon.horse 高清升级（过占位门 + 取更清晰/更大者）
+        if width is None or width < _SMALL_WIDTH:
+            ih = _get(client, _ICON_HORSE.format(domain=domain))
+            if (
+                ih is not None
+                and ih.status_code == 200
+                and ih.content
+                and not is_placeholder(ih.content, placeholders)
+            ):
+                ih_w = image_width(ih.content)
+                if (ih_w or 0) > (width or 0) or len(ih.content) > len(best):
+                    best, best_ct, source, width = ih.content, ih.headers.get("content-type"), "iconhorse", ih_w
+    else:
+        # DuckDuckGo 没收录该域名的 favicon（404/失败）→ 回退 icon.horse。
+        # 仍过占位门：icon.horse 对不存在域名返回占位图（被指纹拦），对真实域名返回真 logo；
+        # 故「已配到准确品牌域名、但 DuckDuckGo 恰好没收录」的公司（科大讯飞/中兴/寒武纪等）能救回，
+        # 而域名推导错/编造的仍被占位门挡回 not_found。
         ih = _get(client, _ICON_HORSE.format(domain=domain))
         if (
-            ih is not None
-            and ih.status_code == 200
-            and ih.content
-            and not is_placeholder(ih.content, placeholders)
+            ih is None
+            or ih.status_code != 200
+            or not ih.content
+            or is_placeholder(ih.content, placeholders)
         ):
-            ih_w = image_width(ih.content)
-            if (ih_w or 0) > (width or 0) or len(ih.content) > len(best):
-                best, best_ct, source, width = ih.content, ih.headers.get("content-type"), "iconhorse", ih_w
+            return None
+        best = ih.content
+        best_ct = ih.headers.get("content-type")
+        source = "iconhorse"
+        width = image_width(best)
 
     if len(best) > _MAX_BYTES:
         print(f"[logo] {domain} 图过大({len(best)}B)，跳过", file=sys.stderr)
