@@ -245,12 +245,40 @@ def beisen_probe(slug: str, cn: str):
 
 
 # ───────────────────────── moka ─────────────────────────
+def _moka_campus_probe(sv: str, cn: str):
+    """给已命中社招 org 的 slug 变体 sv，顺带探同租户的**校招板块**（同一 oracle 套路，
+    换路径 campus-recruitment）：GET app.mokahr.com/campus-recruitment/{sv} → 302 到
+    /{sv}/{campusOrgId}（campus orgId 与社招 orgId 不同，如极米 社招142344/校招150242）。
+    非客户或未开校招板块：title 为空/'不存在'/404，或 final 无数字 orgId 段 → 返回 None
+    （这不是错误，很多租户压根没开校招板块）。命中独立做 title-verify（不复用社招的
+    verified，两个页面各自核验，防止一边张冠李戴另一边照单全收）。"""
+    try:
+        with _client() as cli:
+            r = cli.get(f"https://app.mokahr.com/campus-recruitment/{sv}")
+            final = str(r.url)
+            title = _title(r.text)
+    except Exception:
+        return None
+    parts = final.rstrip("/").split("/")
+    org_id = parts[-1] if (parts and parts[-1].isdigit()) else None
+    if not org_id or not title:
+        return None
+    if "不存在" in title or title.lower() in ("not found", "404"):
+        return None
+    if not _verify(title, cn):
+        return None  # title 不含公司名，疑张冠李戴或非目标租户 → 拒（宁缺毋滥）
+    return {"url": final, "org_id": org_id, "title": title}
+
+
 def moka_probe(slug: str, cn: str):
     """moka slug-only 自动发现 oracle：GET app.mokahr.com/social-recruitment/{slug}（无 orgId）
     → moka 自动 302 重定向到带 orgId 的完整 URL（catlhr→/catlhr/98098）。非客户 title=
     '您访问的页面不存在'、final 无数字 orgId 段。httpx 直接拿 <title> 做 title-verify
     （moka 页 title 含公司名，如 '宁德时代招聘 - CATL'）→ 发现阶段即可核张冠李戴。
-    岗位数走 confirm（MokaAdapter playwright），只把真有岗位的入库。"""
+    岗位数走 confirm（MokaAdapter playwright），只把真有岗位的入库。
+
+    命中社招 org 后，用**同一 slug 变体 sv** 顺带探校招板块（_moka_campus_probe）；命中就把
+    结果放进返回 dict 的 `campus` 键（调用方 `_probe_company` 据此拆成独立候选，见下）。"""
     # moka 租户 slug 常带后缀（catl→catlhr / xxx→xxxrecruit）→ 试 base + 常见后缀变体。
     # base 优先（避免误命中别家的 hr 变体）；title-verify 兜底张冠李戴。
     for sv in (slug, f"{slug}hr", f"{slug}-hr", f"{slug}recruit", f"{slug}career", f"{slug}careers", f"{slug}job"):
@@ -268,8 +296,12 @@ def moka_probe(slug: str, cn: str):
         if "不存在" in title or title.lower() in ("not found", "404"):
             continue
         verified = _verify(title, cn)
-        return {"platform": "moka", "host": "app.mokahr.com", "title": title, "url": final,
-                "org_id": org_id, "verified": verified, "slug_hit": sv, "count": None}
+        result = {"platform": "moka", "host": "app.mokahr.com", "title": title, "url": final,
+                  "org_id": org_id, "verified": verified, "slug_hit": sv, "count": None}
+        campus = _moka_campus_probe(sv, cn)
+        if campus:
+            result["campus"] = campus
+        return result
     return None
 
 
@@ -301,8 +333,14 @@ def _probe_company(t, platforms):
         if "moka" in platforms and "moka" not in found:
             r = moka_probe(slug, cn)
             if r:
+                campus = r.pop("campus", None)
                 r.update(company=company, cn=cn, industry=industry, slug=slug)
                 out.append(r); found.add("moka")
+                if campus:  # 校招板块命中 → 独立候选（不占 found，社招/校招各自成源）
+                    out.append({"platform": "moka", "kind": "campus", "host": "app.mokahr.com",
+                               "title": campus["title"], "url": campus["url"], "org_id": campus["org_id"],
+                               "verified": True, "slug_hit": r.get("slug_hit"), "count": None,
+                               "company": company, "cn": cn, "industry": industry, "slug": slug})
     return out
 
 
@@ -366,13 +404,16 @@ def to_beisen_candidates(hits):
 def to_moka_candidates(hits):
     """moka tenant+title-verified 命中 → confirm 候选（adapter=moka，url 含 orgId）。
     交 confirm_beisen_parallel.py(any-adapter) 用 MokaAdapter playwright 抓岗位确认，
-    只 emit 真有岗位的（质量门）。verified=False(title 不含公司名,疑张冠李戴)的不入候选。"""
+    只 emit 真有岗位的（质量门）。verified=False(title 不含公司名,疑张冠李戴)的不入候选。
+    社招（kind 缺省）与校招（kind="campus"，_probe_company 拆出的独立命中，url 含
+    campus-recruitment → 命中 CAMPUS_URL_RE）各自成候选、各自过岗位数确认（互不影响）。"""
     cands = []
     for h in hits:
         if h.get("platform") != "moka" or not h.get("verified"):
             continue
         cands.append({"company": h["company"], "adapter": "moka", "url": h["url"],
-                      "industry": h.get("industry", ""), "segment": "private"})
+                      "industry": h.get("industry", ""), "segment": "private",
+                      "kind": h.get("kind", "social")})
     return cands
 
 
