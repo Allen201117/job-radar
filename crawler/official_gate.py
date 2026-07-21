@@ -69,20 +69,33 @@ def is_official_grounding(url, official_hosts):
 _ENTAIL_CONF_MIN = 0.6
 
 
-def decide_cycle_status(judge_verdict, judge_confidence, has_official_grounding):
-    """返回 (verify_status, source_kind, confidence)。
-    官方门（选项 A）：
-      - 官方域名 grounding + 判官 entailment(≥0.6) → ('verified','official_notice','high')（自动发布）
-      - 判官 entailment 但非官方源 → ('draft','public_aggregate','medium')（停草稿、不展示）
-      - 判官不支持（neutral/contradiction）→ ('draft','llm_draft','low')
-    """
+def is_entailment(judge_verdict, judge_confidence):
+    """单条 claim 是否过判官 entailment 门（原文确实支持 + 置信 ≥0.6）。"""
     try:
         conf = float(judge_confidence)
     except (TypeError, ValueError):
         conf = 0.0
-    entail = judge_verdict == "entailment" and conf >= _ENTAIL_CONF_MIN
-    if entail and has_official_grounding:
+    return judge_verdict == "entailment" and conf >= _ENTAIL_CONF_MIN
+
+
+def decide_cycle_status(has_official_grounding, n_entailment_publishers):
+    """slot 级判定（选项 B，创始人 2026-07-21 重选）。入参已是「过判官 entailment」的聚合：
+      - 有官方招聘域名源 → ('verified','official_notice','high')（官方最强，单源即可）
+      - ≥2 个不同公开源一致 → ('verified','public_aggregate','medium')（据公开信息，多源共识）
+      - 仅 1 个公开源 → ('draft','public_aggregate','low')（孤证不发布，停草稿）
+      - 0 个 entailment 源 → ('draft','llm_draft','low')（判官都不支持，调用方一般直接丢）
+    宁缺不编仍在：单一第三方孤证不发布；日期冲突由调用方「一个 event 只留一条 verified」兜住。"""
+    n = int(n_entailment_publishers or 0)
+    if has_official_grounding:
         return ("verified", "official_notice", "high")
-    if entail:
-        return ("draft", "public_aggregate", "medium")
+    if n >= 2:
+        return ("verified", "public_aggregate", "medium")
+    if n >= 1:
+        return ("draft", "public_aggregate", "low")
     return ("draft", "llm_draft", "low")
+
+
+def registrable_host(url):
+    """取 URL 的可注册域名（去 www、末两段），用作「不同 publisher」的去重键——
+    避免同一站点多页被当成多个独立源（多源共识要真·不同来源）。"""
+    return _registrable(_host(url))
