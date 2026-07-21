@@ -1,0 +1,27 @@
+name: company-logos
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 每周一次（周一 UTC 04:00）。企业 logo 变化很慢，低频即可；海外 runner 直连 favicon 服务。
+    - cron: "0 4 * * 1"
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      - name: Fetch company logos
+        run: python crawler/fetch_company_logos.py
