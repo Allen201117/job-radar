@@ -95,6 +95,116 @@ class PlanTargetsTest(unittest.TestCase):
         self.assertEqual(out[0]["company"], "贝壳控股")
 
 
+class ExtractMokaSlugTest(unittest.TestCase):
+    """从 moka 社招源 URL 反推校招板块探测要用的 slug（Track A2）。"""
+
+    def test_extracts_from_social_recruitment_url(self):
+        url = "https://app.mokahr.com/social-recruitment/catlhr/98098"
+        self.assertEqual(ad.extract_moka_slug(url), "catlhr")
+
+    def test_extracts_from_legacy_apply_url(self):
+        url = "https://app.mokahr.com/apply/shein/2933"
+        self.assertEqual(ad.extract_moka_slug(url), "shein")
+
+    def test_non_moka_url_returns_none(self):
+        self.assertIsNone(ad.extract_moka_slug("https://xxx.zhiye.com/social"))
+
+    def test_blank_url_returns_none(self):
+        self.assertIsNone(ad.extract_moka_slug(""))
+        self.assertIsNone(ad.extract_moka_slug(None))
+
+
+class PlanCampusGapTargetsTest(unittest.TestCase):
+    """有社招无校招的必投公司专项补探队列（Track A2）——绕过 plan_targets 的整家去重。"""
+
+    def test_moka_social_only_company_is_queued(self):
+        must_apply = {"消费/零售": [{"name": "极米", "pattern": "%极米%"}]}
+        sources = [{"company": "极米科技", "source_url": "https://app.mokahr.com/social-recruitment/jimi/142344",
+                    "notes": "", "adapter_name": "moka", "enabled": True}]
+        out = ad.plan_campus_gap_targets(must_apply, sources, cap=10, seed=1)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["company"], "极米")
+        self.assertEqual(out[0]["slugs"], ["jimi"])
+        self.assertEqual(out[0]["industry"], "消费/零售")
+
+    def test_company_with_existing_campus_source_not_queued(self):
+        # 已有校招源（幂等）→ 不重复补，即便还有别的社招源
+        must_apply = {"消费/零售": [{"name": "极米", "pattern": "%极米%"}]}
+        sources = [
+            {"company": "极米科技", "source_url": "https://app.mokahr.com/social-recruitment/jimi/142344",
+             "notes": "", "adapter_name": "moka", "enabled": True},
+            {"company": "极米科技", "source_url": "https://app.mokahr.com/campus-recruitment/jimi/150242",
+             "notes": "", "adapter_name": "moka", "enabled": True},
+        ]
+        out = ad.plan_campus_gap_targets(must_apply, sources, cap=10, seed=1)
+        self.assertEqual(out, [])
+
+    def test_campus_source_detected_via_notes_too(self):
+        # URL 本身不含 campus 特征词，但 notes 标注了「校招」→ 也算已覆盖（同 lib/campus-sources.ts）
+        must_apply = {"消费/零售": [{"name": "极米", "pattern": "%极米%"}]}
+        sources = [
+            {"company": "极米科技", "source_url": "https://app.mokahr.com/social-recruitment/jimi/142344",
+             "notes": "", "adapter_name": "moka", "enabled": True},
+            {"company": "极米科技", "source_url": "https://foo.example.com/list",
+             "notes": "校招专区", "adapter_name": "beisen", "enabled": True},
+        ]
+        out = ad.plan_campus_gap_targets(must_apply, sources, cap=10, seed=1)
+        self.assertEqual(out, [])
+
+    def test_company_without_any_source_not_queued(self):
+        # 连社招源都没有 → 不是「补校招」范畴，属于 plan_targets 整家新探
+        must_apply = {"消费/零售": [{"name": "极米", "pattern": "%极米%"}]}
+        out = ad.plan_campus_gap_targets(must_apply, [], cap=10, seed=1)
+        self.assertEqual(out, [])
+
+    def test_company_with_non_moka_source_only_not_queued(self):
+        # 有社招源但不是 moka（feishu/hotjob 已在 A0 摸清覆盖或不是缺口）→ 反推不出 slug，本轮跳过
+        must_apply = {"金融": [{"name": "国信证券", "pattern": "%国信证券%"}]}
+        sources = [{"company": "国信证券", "source_url": "https://guoxin.jobs.feishu.cn/index/position",
+                    "notes": "", "adapter_name": "feishu", "enabled": True}]
+        out = ad.plan_campus_gap_targets(must_apply, sources, cap=10, seed=1)
+        self.assertEqual(out, [])
+
+    def test_disabled_source_ignored(self):
+        must_apply = {"消费/零售": [{"name": "极米", "pattern": "%极米%"}]}
+        sources = [{"company": "极米科技", "source_url": "https://app.mokahr.com/social-recruitment/jimi/142344",
+                    "notes": "", "adapter_name": "moka", "enabled": False}]
+        out = ad.plan_campus_gap_targets(must_apply, sources, cap=10, seed=1)
+        self.assertEqual(out, [])  # disabled 源不算「已有源」，视同没有，不进补校招队列（避免复活已停用源）
+
+    def test_collapsed_industries_prioritized(self):
+        must_apply = {
+            "互联网/科技": [{"name": "科技甲", "pattern": "%科技甲%"}],
+            "教育": [{"name": "教育乙", "pattern": "%教育乙%"}],
+        }
+        sources = [
+            {"company": "科技甲", "source_url": "https://app.mokahr.com/social-recruitment/tech1/1",
+             "notes": "", "adapter_name": "moka", "enabled": True},
+            {"company": "教育乙", "source_url": "https://app.mokahr.com/social-recruitment/edu1/2",
+             "notes": "", "adapter_name": "moka", "enabled": True},
+        ]
+        out = ad.plan_campus_gap_targets(must_apply, sources, cap=10, seed=1)
+        names = [t["company"] for t in out]
+        self.assertEqual(names[0], "教育乙")   # 塌陷行业（教育）排在互联网/科技之前
+
+    def test_cap_limits_batch(self):
+        must_apply = {"消费/零售": [{"name": f"C{i}", "pattern": f"%C{i}%"} for i in range(20)]}
+        sources = [{"company": f"C{i}", "source_url": f"https://app.mokahr.com/social-recruitment/c{i}/1",
+                   "notes": "", "adapter_name": "moka", "enabled": True} for i in range(20)]
+        out = ad.plan_campus_gap_targets(must_apply, sources, cap=5, seed=1)
+        self.assertEqual(len(out), 5)
+
+    def test_seed_rotation_deterministic_but_varies(self):
+        must_apply = {"消费/零售": [{"name": f"C{i}", "pattern": f"%C{i}%"} for i in range(20)]}
+        sources = [{"company": f"C{i}", "source_url": f"https://app.mokahr.com/social-recruitment/c{i}/1",
+                   "notes": "", "adapter_name": "moka", "enabled": True} for i in range(20)]
+        a = [t["company"] for t in ad.plan_campus_gap_targets(must_apply, sources, cap=5, seed=1)]
+        a2 = [t["company"] for t in ad.plan_campus_gap_targets(must_apply, sources, cap=5, seed=1)]
+        b = [t["company"] for t in ad.plan_campus_gap_targets(must_apply, sources, cap=5, seed=2)]
+        self.assertEqual(a, a2)
+        self.assertNotEqual(a, b)
+
+
 class _FakeQuery:
     def __init__(self, table):
         self.table = table
