@@ -1,0 +1,61 @@
+name: campus-cycle-enrich
+# 校招往年时间线 B4：每日 cron 自动补塌陷行业（传媒/文娱、物流/供应链、教育、金融）公司的
+# 校招批次月份（recruitment_cycle_observations）。管线 = search_router 多源检索 →
+# campus_cycle_extract 结构化 writer → insight_engine 判官 → official_gate 官方源门。
+# 红线（选项 A，创始人 2026-07-21 拍板）：auto-verify 只在「官方招聘域名 grounding + 判官
+# entailment」同时成立时发生；够不着官方证据的一律停 draft（RLS 只读 verified，用户看不到）。
+# 与 insight-enrich(20:30)/insight-enrich-t3(21:30，同用 search_router 预算池)/
+# dead-link-audit(22:00)/auto-discover-overseas(22:30) 错开。
+# 依赖：迁移 182 已应用；需 SILICONFLOW_API_KEY + 至少一个搜索源 key
+#   （BOCHA_API_KEY / TAVILY_API_KEY / SERPER_API_KEY / BAIDU_QIANFAN_API_KEY，配哪个用哪个）。
+
+on:
+  schedule:
+    - cron: "15 22 * * *"   # 每日 UTC 22:15
+  workflow_dispatch:
+    inputs:
+      company:
+        description: "只填充单家公司（调试用；留空=批量塌陷行业优先）"
+        required: false
+        default: ""
+      limit:
+        description: "批量模式：本轮最多处理多少家公司"
+        required: false
+        default: "8"
+
+jobs:
+  campus-cycle-enrich:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+      # 搜索源 key：配哪个用哪个，未配的 router 自动跳过（与 insight-enrich-t3 共用同一套每日预算）
+      BOCHA_API_KEY: ${{ secrets.BOCHA_API_KEY }}
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+      BAIDU_QIANFAN_API_KEY: ${{ secrets.BAIDU_QIANFAN_API_KEY }}
+      # 每源每日额度上限（可选，不配则用 search_router 代码默认值）；按月度预算调
+      BOCHA_DAILY_CAP: ${{ vars.BOCHA_DAILY_CAP }}
+      TAVILY_DAILY_CAP: ${{ vars.TAVILY_DAILY_CAP }}
+      SERPER_DAILY_CAP: ${{ vars.SERPER_DAILY_CAP }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      - name: Drain campus cycle backlog
+        working-directory: crawler
+        run: |
+          if [ -n "${{ github.event.inputs.company }}" ]; then
+            python3 campus_cycle_backlog.py --company "${{ github.event.inputs.company }}"
+          else
+            python3 campus_cycle_backlog.py --limit "${{ github.event.inputs.limit || '8' }}"
+          fi
