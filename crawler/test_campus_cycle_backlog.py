@@ -151,6 +151,54 @@ class DrainOneCompanyTest(unittest.TestCase):
         self.assertEqual(rows[0]["verify_status"], "draft")
         self.assertEqual(rows[0]["source_kind"], "public_aggregate")
 
+    def test_two_distinct_publishers_consensus_verified(self):
+        # 选项 B：≥2 个不同公开源对同一 slot 一致(均过判官) → 发布 public_aggregate/medium
+        B._ROUTER = _FakeRouter([
+            {"title": "牛客", "url": "https://www.nowcoder.com/d/1",
+             "snippet": "提前批7月开放网申", "text": "提前批7月开放网申", "publisher": "牛客"},
+            {"title": "知乎", "url": "https://zhuanlan.zhihu.com/p/2",
+             "snippet": "提前批7月开放网申", "text": "提前批7月开放网申", "publisher": "知乎"},
+        ])
+        B.chat_json = lambda messages, **kw: {"claims": [self._claim(source_idx=0), self._claim(source_idx=1)]}
+        B.judge_claim = lambda content, text, **kw: {"verdict": "entailment", "confidence": 0.9, "reason": "ok"}
+        sb = FakeSB(canned={"sources": []})
+        stats = B.drain_one_company(sb, "测试公司")
+        self.assertEqual(stats["verified"], 1)
+        rows = sb.inserted.get("recruitment_cycle_observations", [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["verify_status"], "verified")
+        self.assertEqual(rows[0]["source_kind"], "public_aggregate")
+        self.assertEqual(rows[0]["confidence"], "medium")
+
+    def test_same_publisher_twice_is_single_source_draft(self):
+        # 同一站点两页 ≠ 两个独立源（registrable_host 去重）→ 仍是孤证 → draft
+        B._ROUTER = _FakeRouter([
+            {"title": "牛客1", "url": "https://www.nowcoder.com/d/1",
+             "snippet": "提前批7月开放网申", "text": "提前批7月开放网申", "publisher": "牛客"},
+            {"title": "牛客2", "url": "https://m.nowcoder.com/d/2",
+             "snippet": "提前批7月开放网申", "text": "提前批7月开放网申", "publisher": "牛客"},
+        ])
+        B.chat_json = lambda messages, **kw: {"claims": [self._claim(source_idx=0), self._claim(source_idx=1)]}
+        B.judge_claim = lambda content, text, **kw: {"verdict": "entailment", "confidence": 0.9, "reason": "ok"}
+        sb = FakeSB(canned={"sources": []})
+        stats = B.drain_one_company(sb, "测试公司")
+        self.assertEqual(stats["verified"], 0)
+        self.assertEqual(stats["draft"], 1)
+
+    def test_non_entailment_claim_dropped_not_written(self):
+        # 判官不支持 → 丢，连草稿都不写（宁缺不编）
+        B._ROUTER = _FakeRouter([
+            {"title": "x", "url": "https://www.nowcoder.com/d/1",
+             "snippet": "提前批7月开放网申", "text": "提前批7月开放网申", "publisher": "牛客"},
+        ])
+        B.chat_json = lambda messages, **kw: {"claims": [self._claim()]}
+        B.judge_claim = lambda content, text, **kw: {"verdict": "neutral", "confidence": 0.9, "reason": "no"}
+        sb = FakeSB(canned={"sources": []})
+        stats = B.drain_one_company(sb, "测试公司")
+        self.assertEqual(stats["verified"], 0)
+        self.assertEqual(stats["draft"], 0)
+        self.assertEqual(sb.inserted.get("recruitment_cycle_observations", []), [])
+
     def test_existing_verified_slot_not_overwritten(self):
         # (c) 该 (届别,季,批次,事件) 已有 verified 行 → 新 claim 直接跳过，绝不覆盖已定案事实
         B._ROUTER = _FakeRouter([

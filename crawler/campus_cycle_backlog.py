@@ -23,7 +23,13 @@ import search_router
 from campus_cycle_extract import build_messages, parse_cycle_claims
 from insight_backlog import fetch_one_company
 from insight_engine import chat_json, judge_claim, llm_config, llm_run_health, llm_run_unhealthy, reset_llm_health
-from official_gate import decide_cycle_status, is_official_grounding, official_hosts_from_sources
+from official_gate import (
+    decide_cycle_status,
+    is_entailment,
+    is_official_grounding,
+    official_hosts_from_sources,
+    registrable_host,
+)
 
 # 塌陷行业（同 auto_discover.CAMPUS_GAP_INDUSTRIES，用户反馈校招时间线覆盖薄弱，P2 设计文档定调）优先补。
 COLLAPSED_INDUSTRIES = ("传媒/文娱", "物流/供应链", "教育", "金融")
@@ -147,48 +153,67 @@ def drain_one_company(sb, company):
     grad_class, valid_until = current_cohort(datetime.now(timezone.utc))
     existing_status = _existing_status_by_key(sb, profile["id"], grad_class)
 
+    # ① 逐 claim 判官，把「过 entailment」的按精确 slot(季/批/事件/起止月)归组，统计不同公开源(去重域名)。
+    slots = {}  # skey -> {"publishers": set, "official": bool, "claim": claim, "evidence": (url, quote)}
     for claim in claims:
         idx = claim.get("source_idx")
         if not isinstance(idx, int) or idx < 0 or idx >= len(results):
             stats["skipped_bad_index"] += 1
             continue
         g = results[idx]
-        key = (claim["season"], claim["batch"], claim["event"])
-        prior = existing_status.get(key)
-        if prior == "verified":
-            # 已定案的事实，绝不覆盖（不变量：verified 只能靠 superseded_by 改错，本 cron 不碰）
-            stats["skipped_conflict"] += 1
-            continue
-
         claim_sentence = f"{company}{claim['season']}{claim['batch']}约{claim['value_text']}{claim['event']}"
         try:
             judge = judge_claim(claim_sentence, g.get("text") or g.get("snippet") or "")
         except Exception as e:
             print(f"  [campus-cycle-err] {company} 判官失败: {type(e).__name__}: {str(e)[:160]}")
             continue
-        has_official = is_official_grounding(g.get("url"), official_hosts)
-        status, source_kind, confidence = decide_cycle_status(
-            judge.get("verdict"), judge.get("confidence"), has_official)
+        if not is_entailment(judge.get("verdict"), judge.get("confidence")):
+            continue  # 判官不支持原文 → 丢（宁缺不编）
+        skey = (claim["season"], claim["batch"], claim["event"], claim["month_start"], claim["month_end"])
+        slot = slots.get(skey)
+        if slot is None:
+            slot = {"publishers": set(), "official": False,
+                    "claim": claim, "evidence": (g.get("url"), claim.get("quote"))}
+            slots[skey] = slot
+        slot["publishers"].add(registrable_host(g.get("url")))
+        if is_official_grounding(g.get("url"), official_hosts):
+            slot["official"] = True
+            slot["evidence"] = (g.get("url"), claim.get("quote"))  # 优先留官方证据
 
+    # ② 强共识优先决策；一个 event(季/批/事件)最多留一条 verified，防冲突月份都发布。
+    event_verified = set()
+    for skey, slot in sorted(slots.items(), key=lambda kv: -len(kv[1]["publishers"])):
+        season, batch, event, ms, me = skey
+        ev_key = (season, batch, event)
+        prior = existing_status.get(ev_key)
+        if prior == "verified":
+            # 已定案事实绝不覆盖（不变量：verified 只能靠 superseded_by 改错，本 cron 不碰）
+            stats["skipped_conflict"] += 1
+            continue
+        status, source_kind, confidence = decide_cycle_status(slot["official"], len(slot["publishers"]))
+        if status == "verified" and ev_key in event_verified:
+            # 同 event 已有另一月份 verified → 冲突，本条降级 draft，不发布互相矛盾的日期
+            status, source_kind, confidence = "draft", "public_aggregate", "low"
         if prior == "draft" and status == "draft":
-            # 已有草稿、这条也只是草稿 → 不重复堆积
-            stats["skipped_dup_draft"] += 1
+            stats["skipped_dup_draft"] += 1  # 已有草稿、这条也草稿 → 不堆积
             continue
 
-        time_expr_type = "月" if claim["month_end"] in (None, claim["month_start"]) else "日期范围"
+        claim = slot["claim"]
+        ev_url, ev_quote = slot["evidence"]
+        time_expr_type = "月" if me in (None, ms) else "日期范围"
         row = {
             "company_id": profile["id"],
             "grad_class": grad_class,
-            "season": claim["season"],
-            "batch": claim["batch"],
-            "event": claim["event"],
+            "season": season,
+            "batch": batch,
+            "event": event,
             "time_expr_type": time_expr_type,
             "value_text": claim["value_text"],
-            "month_start": claim["month_start"],
-            "month_end": claim["month_end"],
+            "month_start": ms,
+            "month_end": me,
             "confidence": confidence,
-            "evidence_url": g.get("url"),
-            "evidence_excerpt": (claim.get("quote") or "")[:200],
+            "evidence_url": ev_url,
+            "evidence_excerpt": (ev_quote or "")[:200],
             "evidence_fetched_at": _now_iso(),
             "source_kind": source_kind,
             "verify_status": status,
@@ -200,7 +225,9 @@ def drain_one_company(sb, company):
         except Exception as e:
             print(f"  [campus-cycle-err] {company} 写入失败: {type(e).__name__}: {str(e)[:160]}")
             continue
-        existing_status[key] = status  # 本轮内也要幂等：同 key 第二条 claim 不再重复插
+        if status == "verified":
+            event_verified.add(ev_key)
+            existing_status[ev_key] = "verified"
         stats["verified" if status == "verified" else "draft"] += 1
 
     return stats

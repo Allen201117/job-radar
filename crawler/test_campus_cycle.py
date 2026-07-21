@@ -10,6 +10,8 @@ from official_gate import (  # noqa: E402
     is_official_grounding,
     official_hosts_from_sources,
     decide_cycle_status,
+    is_entailment,
+    registrable_host,
 )
 
 
@@ -105,28 +107,49 @@ class IsOfficialGroundingTest(unittest.TestCase):
         self.assertFalse(is_official_grounding("https://x.com", set()))
 
 
+class IsEntailmentTest(unittest.TestCase):
+    def test_entailment_high_conf_passes(self):
+        self.assertTrue(is_entailment("entailment", 0.8))
+        self.assertTrue(is_entailment("entailment", 0.6))
+
+    def test_low_conf_fails(self):
+        self.assertFalse(is_entailment("entailment", 0.5))
+
+    def test_non_entailment_fails(self):
+        self.assertFalse(is_entailment("neutral", 0.99))
+        self.assertFalse(is_entailment("contradiction", 0.99))
+
+    def test_bad_conf_fails(self):
+        self.assertFalse(is_entailment("entailment", None))
+        self.assertFalse(is_entailment("entailment", "x"))
+
+
 class DecideCycleStatusTest(unittest.TestCase):
-    def test_official_plus_entailment_autoverifies(self):
-        st, kind, conf = decide_cycle_status("entailment", 0.8, True)
-        self.assertEqual(st, "verified")
-        self.assertEqual(kind, "official_notice")
-        self.assertEqual(conf, "high")
+    def test_official_autoverifies_even_single_source(self):
+        # 官方招聘域名最强，单源即可发布
+        st, kind, conf = decide_cycle_status(True, 1)
+        self.assertEqual((st, kind, conf), ("verified", "official_notice", "high"))
 
-    def test_entailment_but_not_official_stays_draft(self):
-        # 判官支持但非官方源 → 停 draft、不展示（宁缺不编）
-        st, kind, conf = decide_cycle_status("entailment", 0.9, False)
+    def test_two_public_sources_verify(self):
+        # 选项 B：≥2 个不同公开源一致 → 发布，标「据公开信息」
+        st, kind, conf = decide_cycle_status(False, 2)
+        self.assertEqual((st, kind, conf), ("verified", "public_aggregate", "medium"))
+
+    def test_single_public_source_stays_draft(self):
+        # 孤证不发布（宁缺不编）
+        st, kind, conf = decide_cycle_status(False, 1)
+        self.assertEqual((st, kind), ("draft", "public_aggregate"))
+
+    def test_zero_publishers_draft(self):
+        st, kind, conf = decide_cycle_status(False, 0)
         self.assertEqual(st, "draft")
-        self.assertEqual(kind, "public_aggregate")
 
-    def test_official_but_low_confidence_stays_draft(self):
-        st, kind, conf = decide_cycle_status("entailment", 0.5, True)
-        self.assertEqual(st, "draft")
 
-    def test_no_entailment_stays_draft(self):
-        for verdict in ("neutral", "contradiction"):
-            st, kind, conf = decide_cycle_status(verdict, 0.95, True)
-            self.assertEqual(st, "draft")
-            self.assertEqual(kind, "llm_draft")
+class RegistrableHostTest(unittest.TestCase):
+    def test_strips_www_and_subdomain(self):
+        self.assertEqual(registrable_host("https://www.nowcoder.com/x"), "nowcoder.com")
+        self.assertEqual(registrable_host("https://zhuanlan.zhihu.com/p/1"), "zhihu.com")
+        self.assertEqual(registrable_host("https://sd.huatu.com/a"), "huatu.com")
 
 
 if __name__ == "__main__":
