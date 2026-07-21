@@ -2,6 +2,11 @@ name: company-logos
 
 on:
   workflow_dispatch:
+    inputs:
+      force:
+        description: "忽略 30 天新鲜度、全量重抓（改了域名覆盖表后用）"
+        required: false
+        default: "false"
   schedule:
     # 每周一次（周一 UTC 04:00）。企业 logo 变化很慢，低频即可；海外 runner 直连 favicon 服务。
     - cron: "0 4 * * 1"
@@ -24,4 +29,4 @@ jobs:
         run: pip install -r crawler/requirements.txt
 
       - name: Fetch company logos
-        run: python crawler/fetch_company_logos.py
+        run: python crawler/fetch_company_logos.py ${{ github.event.inputs.force == 'true' && '--force' || '' }}
