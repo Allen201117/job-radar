@@ -9,6 +9,7 @@
 import json
 import os
 import re
+import time
 from typing import Optional
 
 import httpx
@@ -92,14 +93,19 @@ def chat_content(messages: list, temperature: float = 0.1, max_tokens: int = 102
                         headers={"Authorization": f"Bearer {cfg['api_key']}"}, timeout=timeout)
 
     try:
-        resp = call(True)
-        if resp.status_code == 400:  # 部分模型不支持 json_object → 去掉重试一次
-            resp = call(False)
-        resp.raise_for_status()
-        data = resp.json()
-        content = (((data.get("choices") or [{}])[0]).get("message") or {}).get("content") or ""
-        _record_llm(True)
-        return content
+        for attempt in range(3):
+            resp = call(True)
+            if resp.status_code == 400:  # 部分模型不支持 json_object → 去掉重试一次
+                resp = call(False)
+            # 429 限流 / 503 过载 → 退避后重试（cron 少量串行调用不该被瞬时限流打死）
+            if resp.status_code in (429, 503) and attempt < 2:
+                time.sleep(3 * (attempt + 1))
+                continue
+            resp.raise_for_status()  # 非 2xx（含重试用尽的 429/503）→ 抛
+            data = resp.json()
+            content = (((data.get("choices") or [{}])[0]).get("message") or {}).get("content") or ""
+            _record_llm(True)
+            return content
     except httpx.HTTPStatusError as e:
         # 401/403 = 账户级（欠费 / 鉴权失效）→ 标记整轮不健康，让 cron 标红
         code = e.response.status_code if e.response is not None else 0
