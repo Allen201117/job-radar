@@ -17,6 +17,7 @@ import { extractDeadline, extractEducation, extractExperience } from "@/lib/job-
 import { matchTier } from "@/lib/scoring";
 import type { MatchReason, ScoredJob } from "@/lib/types";
 import { cleanSummary, cn, freshnessLabel } from "@/lib/utils";
+import CompanyLogo from "@/components/CompanyLogo";
 
 type Props = {
   open: boolean;
@@ -298,7 +299,10 @@ export default function SavedCompare({
                   {renderRow("职位", (job) => (
                     <div className="space-y-1">
                       <p className="text-[15px] font-semibold leading-5">{job.title}</p>
-                      <p className="text-xs text-[#8a8275] dark:text-[#9a9184]">{job.company}</p>
+                      <div className="flex items-center gap-1.5">
+                        <CompanyLogo company={job.company} size={18} />
+                        <p className="truncate text-xs text-[#8a8275] dark:text-[#9a9184]">{job.company}</p>
+                      </div>
                     </div>
                   ))}
                   {renderRow("城市", (job) => textOrMuted(job.location))}

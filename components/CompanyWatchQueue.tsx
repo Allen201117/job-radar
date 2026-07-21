@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Buildings, CircleNotch } from "@phosphor-icons/react";
+import CompanyLogo from "@/components/CompanyLogo";
 
 type WatchItem = {
   normalized_company: string;
@@ -110,7 +111,10 @@ export default function CompanyWatchQueue() {
                 className="rounded-2xl border border-black/[0.07] bg-white/45 p-3.5 dark:border-white/[0.1] dark:bg-white/[0.04]"
               >
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-semibold">{item.company}</span>
+                  <span className="flex items-center gap-1.5 font-semibold">
+                    <CompanyLogo company={item.company} size={22} />
+                    {item.company}
+                  </span>
                   <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${meta.tone}`}>{meta.label}</span>
                   <span className="text-xs text-[#8a8275] dark:text-[#9a9184]">{item.request_count} 人关注</span>
                   <span className="ml-auto text-xs text-[#9a9184] dark:text-[#837c70]">
