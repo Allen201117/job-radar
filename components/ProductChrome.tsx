@@ -47,18 +47,27 @@ export function ProductHero({
     end: "lg:items-end",
   }[align];
   return (
-    <section className="surface relative overflow-hidden px-5 py-6 sm:px-7 sm:py-7 lg:px-8">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_88%_8%,rgba(0,200,83,0.16),transparent_44%),radial-gradient(circle_at_18%_-10%,rgba(150,182,226,0.26),transparent_46%),radial-gradient(circle_at_4%_120%,rgba(196,228,150,0.24),transparent_40%),radial-gradient(circle_at_92%_105%,rgba(236,198,176,0.16),transparent_38%)] dark:hidden" />
-      <div className="pointer-events-none absolute inset-0 hidden bg-[radial-gradient(circle_at_88%_8%,rgba(150,182,226,0.18),transparent_42%),radial-gradient(circle_at_4%_120%,rgba(196,228,150,0.16),transparent_38%)] dark:block" />
-      <div className={cn("relative flex flex-col gap-6 lg:flex-row lg:justify-between", alignClass)}>
+    // 页头改为「编辑部报头」式排版：不再套大卡片 + 四色径向渐变（那是本页最丑的部分），
+    // 标题/说明这类导航性文字直接落在暖纸背景上，靠底部细分隔线收边；
+    // 真正承载「数据」的部分（岗位库计数 / 指标卡）仍走卡片，从 action / children 传入。
+    <section className="relative">
+      <div className={cn("flex flex-col gap-5 lg:flex-row lg:justify-between lg:gap-8", alignClass)}>
         <div className="max-w-3xl">
-          <p className="eyebrow">
-            <Icon size={16} weight="fill" className="text-[#3f7cc0] dark:text-[#7fb2e8]" aria-hidden="true" />
-            {eyebrow}
-          </p>
+          {/* 眉标：图标嵌入品牌天蓝小方块 + 克制的段首标签，比浮动的描边胶囊更像刻意的编辑部小节标 */}
+          <div className="flex items-center gap-2.5">
+            <span
+              className="grid size-7 shrink-0 place-items-center rounded-[0.6rem] bg-[#e6eef8] text-[#3f7cc0] ring-1 ring-inset ring-[#3f7cc0]/[0.12] dark:bg-[#7fb2e8]/[0.14] dark:text-[#7fb2e8] dark:ring-[#7fb2e8]/20"
+              aria-hidden="true"
+            >
+              <Icon size={15} weight="fill" />
+            </span>
+            <span className="text-[13px] font-semibold tracking-[0.01em] text-[#8a8275] dark:text-[#9a9184]">
+              {eyebrow}
+            </span>
+          </div>
           <h1
             className={cn(
-              "display-tight mt-4 text-balance text-3xl font-semibold leading-tight text-[#1a1714] dark:text-[#f3ecdf] sm:text-4xl lg:text-[2.9rem]",
+              "display-tight mt-4 text-balance text-[1.85rem] font-semibold leading-[1.18] text-[#1a1714] dark:text-[#f3ecdf] sm:text-[2.15rem] lg:text-[2.4rem]",
               titleClassName,
             )}
           >
@@ -70,9 +79,14 @@ export function ProductHero({
             </p>
           )}
         </div>
-        {action}
+        {action && <div className="shrink-0">{action}</div>}
       </div>
-      {children && <div className="relative mt-6 sm:mt-7">{children}</div>}
+      {children && <div className="mt-6 sm:mt-7">{children}</div>}
+      {/* 报头分隔线：细发丝线向右淡出，替代原大卡片的边界，给页头收个干净的底 */}
+      <div
+        aria-hidden="true"
+        className="mt-6 h-px w-full bg-gradient-to-r from-black/[0.11] via-black/[0.05] to-transparent dark:from-white/[0.14] dark:via-white/[0.06] dark:to-transparent"
+      />
     </section>
   );
 }
