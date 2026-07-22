@@ -58,16 +58,18 @@ def html_to_text(html, cap=6000):
 
 def fetch_first_with_signal(urls, timeout=12):
     """顺序抓候选 URL，返回第一个有日期信号的 (url, text)；全不命中返回 (None, "")。
-    永不抛（单公司抓取异常不能拖垮整批）。**单测不打真实网络。**"""
+    永不抛（单公司抓取异常不能拖垮整批）。**单测不打真实网络。**
+    注意：httpx 的 RemoteProtocolError（服务器半关连接）可能在 .get 或读 body(.text) 时抛，
+    整段（含 resp.text）都要包在 try 里，否则会逃逸到编排层变成 crash。"""
     headers = {"User-Agent": _UA}
     for u in urls or []:
         try:
             resp = httpx.get(u, headers=headers, timeout=timeout, follow_redirects=True)
+            if resp.status_code != 200:
+                continue
+            html = resp.text or ""
         except Exception:
             continue
-        if resp.status_code != 200:
-            continue
-        html = resp.text or ""
         if has_date_signal(html):
             return u, html_to_text(html)
     return None, ""
