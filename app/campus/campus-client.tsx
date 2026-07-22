@@ -13,9 +13,15 @@ import {
 } from "@phosphor-icons/react";
 import { EmptyPanel } from "@/components/ProductChrome";
 import CompanyLogo from "@/components/CompanyLogo";
+import CompanyInsightDrawer from "@/components/CompanyInsightDrawer";
 import JobCard from "@/components/JobCard";
 import SaveToast, { type SaveState } from "@/components/SaveToast";
 import { classifyJobFunction } from "@/lib/china-keyword-expansion";
+import {
+  requestInsightAvailability,
+  getCachedAvailability,
+  subscribeAvailability,
+} from "@/lib/insight-client";
 import { groupCampusJobs } from "@/lib/campus-zone";
 import { cn } from "@/lib/utils";
 import type { CampusCompanyRow } from "@/lib/jobs-store/read";
@@ -144,6 +150,15 @@ export default function CampusClient({
   const [mode, setMode] = useState<RecruitMode>("campus");
   const [filters, setFilters] = useState<CampusFilters>(EMPTY_FILTERS);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  // 公司洞察抽屉（P3a 外露）：公司卡级只拉一次可用性（比每个 JobCard 各拉更省），暂无实录/派生的公司不给点。
+  const [insightCompany, setInsightCompany] = useState<string | null>(null);
+  const [, forceAvailTick] = useState(0);
+  useEffect(() => {
+    cards.forEach((c) => requestInsightAvailability(c.company));
+    const unsub = subscribeAvailability(() => forceAvailTick((n) => n + 1));
+    return unsub;
+  }, [cards]);
 
   function toggleExpand(pattern: string) {
     setExpanded((prev) => {
@@ -389,20 +404,36 @@ export default function CampusClient({
                         }`
                       : `暂无${modeLabel}在招岗位`}
                   </p>
-                  {totalCount > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => toggleExpand(card.pattern)}
-                      aria-expanded={isExpanded}
-                      className="mt-1 inline-flex items-center justify-center gap-1.5 self-start rounded-full border border-black/[0.08] bg-white/70 px-3.5 py-1.5 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
-                    >
-                      {isExpanded ? "收起岗位" : "展开岗位"}
-                      <CaretDown
-                        className={cn("size-4 transition-transform", isExpanded && "rotate-180")}
-                        aria-hidden="true"
-                      />
-                    </button>
-                  )}
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    {totalCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => toggleExpand(card.pattern)}
+                        aria-expanded={isExpanded}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3.5 py-1.5 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
+                      >
+                        {isExpanded ? "收起岗位" : "展开岗位"}
+                        <CaretDown
+                          className={cn("size-4 transition-transform", isExpanded && "rotate-180")}
+                          aria-hidden="true"
+                        />
+                      </button>
+                    )}
+                    {(() => {
+                      // P3a：公司卡级洞察入口。有实录(real>0)或岗位聚合派生才显，避免空抽屉。
+                      const avail = getCachedAvailability(card.company);
+                      if (!avail || (!avail.real && !avail.derived)) return null;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => setInsightCompany(card.company)}
+                          className="inline-flex items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3.5 py-1.5 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
+                        >
+                          {avail.real > 0 ? `公司洞察 ${avail.real}` : "公司洞察 · 岗位聚合"}
+                        </button>
+                      );
+                    })()}
+                  </div>
                 </div>
 
                 {isExpanded && (
@@ -459,6 +490,14 @@ export default function CampusClient({
         errorText="提交失败，请重试"
         onDismiss={() => setDisputeSaveState("idle")}
       />
+
+      {insightCompany && (
+        <CompanyInsightDrawer
+          company={insightCompany}
+          open={!!insightCompany}
+          onClose={() => setInsightCompany(null)}
+        />
+      )}
     </div>
   );
 }
