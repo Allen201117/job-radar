@@ -33,6 +33,9 @@ export type CampusCardData = CampusCompanyRow & {
   window: WindowState;
   nearestDeadlineMs: number | null;
   timeline: CampusTimeline | null;
+  preciseDates: { label: string; batch: string }[];
+  batchTimingGap: string | null;
+  cleanDeadlineMs: number | null;
 };
 
 type RecruitMode = "campus" | "intern";
@@ -396,6 +399,28 @@ export default function CampusClient({
                         </span>
                       )}
                     </div>
+                  )}
+                  {/* P3：今年精确日期（官方公告，绿系强档）。措辞三档：据官方公告 > 据在招岗位 > 据往年。 */}
+                  {card.preciseDates.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 text-[#4f6f2a] dark:text-[#a3d06a]">
+                      <span className="inline-flex items-center gap-1 rounded-md border border-[#bcdcae] bg-[#e6f2d6] px-1.5 py-0.5 font-medium text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]">
+                        今年·据官方公告
+                      </span>
+                      {card.preciseDates.map((p) => (
+                        <span key={p.batch}>· {p.label}</span>
+                      ))}
+                      {card.batchTimingGap && (
+                        <span className="text-[#8a6312] dark:text-[#e0b15a]">· {card.batchTimingGap}</span>
+                      )}
+                    </div>
+                  )}
+                  {/* 快路①：无官方精确日期时，用清洗后的自有岗位 deadline 做弱档提示（灰系）。 */}
+                  {card.preciseDates.length === 0 && card.cleanDeadlineMs && (
+                    <p className="text-[12px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
+                      据在招岗位约{" "}
+                      {new Date(card.cleanDeadlineMs).toLocaleDateString("zh-CN", { month: "long", day: "numeric" })}{" "}
+                      前截止
+                    </p>
                   )}
                   <p className="text-sm text-[#5f594e] dark:text-[#b6ad9d]">
                     {totalCount > 0
