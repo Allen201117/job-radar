@@ -1,0 +1,51 @@
+name: campus-official-pages
+# 校招今年精确日期 快路②（P3b）：每日 cron 对必投公司「官方校招页 httpx 并发直取」→
+# campus_official_extract 抽精确网申/截止日期 → insight_engine 判官 → official_gate 官方源门
+# auto-verify → 幂等写 recruitment_cycle_observations（time_expr_type='精确日期'/'日期范围'）。
+# 红线（宁缺不编）：只 auto-verify「官方招聘域名 grounding（抓的就是公司自有官方页）+ 判官
+# entailment」的精确日期；SPA 空壳/无日期信号/往年过期日期一律诚实跳过。
+# 不吃搜索额度（全程 httpx 抓公开官方页，不调 search_router）。
+# 依赖：迁移 182 已应用；只需 SILICONFLOW_API_KEY（抽取+判官）+ Supabase（sources/画像/RCO）。
+# 与 campus-cycle-enrich(22:15)/insight-enrich(20:30)/insight-enrich-t3(21:30) 错峰到 20:00。
+
+on:
+  schedule:
+    - cron: "0 20 * * *"   # 每日 UTC 20:00
+  workflow_dispatch:
+    inputs:
+      company:
+        description: "只跑单家公司（调试用；留空=批量必投公司）"
+        required: false
+        default: ""
+      limit:
+        description: "批量模式：本轮最多处理多少家公司"
+        required: false
+        default: "40"
+
+jobs:
+  campus-official-pages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      - name: Drain campus official pages (快路②)
+        working-directory: crawler
+        run: |
+          if [ -n "${{ github.event.inputs.company }}" ]; then
+            python3 campus_official_backlog.py --company "${{ github.event.inputs.company }}"
+          else
+            python3 campus_official_backlog.py --limit "${{ github.event.inputs.limit || '40' }}" --workers 6
+          fi
