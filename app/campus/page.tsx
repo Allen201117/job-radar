@@ -10,7 +10,12 @@ import { getCampusZone } from "@/lib/jobs-store/read";
 import { getCampusSourceCoverage } from "@/lib/campus-sources";
 import { windowStatus, compareCompanyCards } from "@/lib/campus-zone";
 import { getRecruitmentCyclesForCompanies } from "@/lib/recruitment-cycle-store";
-import { campusTimelineSummary } from "@/lib/recruitment-cycle";
+import {
+  campusTimelineSummary,
+  campusPreciseDates,
+  campusBatchTimingGap,
+  cleanCampusDeadlineMs,
+} from "@/lib/recruitment-cycle";
 import CampusClient from "./campus-client";
 
 const HERO = {
@@ -67,7 +72,14 @@ export default async function CampusPage() {
     const nearestDeadlineMs = deadlines.length ? Math.min(...deadlines) : null;
     const obs = cyclesByPattern.get(z.pattern) || [];
     const timeline = obs.length > 0 ? campusTimelineSummary(obs) : null;
-    return { ...z, window, nearestDeadlineMs, timeline };
+    const preciseDates = obs.length > 0 ? campusPreciseDates(obs) : [];
+    const batchTimingGap = obs.length > 0 ? campusBatchTimingGap(obs) : null;
+    // 快路①：清洗后的公司级最近截止（滤掉「长期有效」/占位/远未来/过去），只作弱档提示。
+    const cleanDl = z.campusJobs
+      .map((j) => cleanCampusDeadlineMs(j.deadline))
+      .filter((t): t is number => t != null);
+    const cleanDeadlineMs = cleanDl.length ? Math.min(...cleanDl) : null;
+    return { ...z, window, nearestDeadlineMs, timeline, preciseDates, batchTimingGap, cleanDeadlineMs };
   });
   cards.sort(compareCompanyCards);
 
