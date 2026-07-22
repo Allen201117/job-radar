@@ -210,6 +210,36 @@
 }
 
 /* ───────────────────────────────────────────────────────────────
+   路由切换过场 — 仿 iOS「点开 App」的缩放开场。
+   app/template.tsx 每次导航都会被 Next 重建实例（区别于持久化的 layout），
+   因此包裹节点 .route-zoom 每次重新挂载 → 下面的 CSS 动画随之重播，全产品统一。
+
+   用 animation-fill-mode: backwards（不是 forwards）：
+   动画结束后回落到「无 transform」的基态（末帧 scale(1) 与基态视觉一致，无跳变），
+   避免残留 transform 生成新的包含块而破坏 sticky 顶栏吸顶。
+   全程 scale ≤ 1（0.94→1，无过冲），不会溢出产生横向滚动条。
+   ─────────────────────────────────────────────────────────────── */
+@keyframes route-zoom-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.route-zoom {
+  animation: route-zoom-in 0.42s cubic-bezier(0.32, 0.72, 0, 1) backwards;
+  transform-origin: 50% 42%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .route-zoom {
+    animation: none;
+  }
+}
+
+/* ───────────────────────────────────────────────────────────────
    暖光产品页通用面 — 登录后整个产品共用（看板 / 岗位 / 路径 / 偏好…）
    ─────────────────────────────────────────────────────────────── */
 @layer components {
