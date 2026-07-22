@@ -12,6 +12,7 @@ import {
   MapPin,
 } from "@phosphor-icons/react";
 import { EmptyPanel } from "@/components/ProductChrome";
+import CompanyLogo from "@/components/CompanyLogo";
 import JobCard from "@/components/JobCard";
 import SaveToast, { type SaveState } from "@/components/SaveToast";
 import { classifyJobFunction } from "@/lib/china-keyword-expansion";
@@ -359,7 +360,10 @@ export default function CampusClient({
               <div key={card.pattern} className="contents">
                 <div className="surface flex flex-col gap-3 p-5">
                   <div className="flex items-start justify-between gap-3">
-                    <h3 className="text-[15px] font-semibold leading-tight">{card.company}</h3>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <CompanyLogo company={card.company} size={28} />
+                      <h3 className="min-w-0 truncate text-[15px] font-semibold leading-tight">{card.company}</h3>
+                    </div>
                     <WindowBadge window={card.window} />
                   </div>
                   {card.timeline && (
