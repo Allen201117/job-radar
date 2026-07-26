@@ -20,8 +20,10 @@ test("ilikeMatcher matches SQL ILIKE wildcards without changing literal matching
 });
 
 test("must-apply JSON follows the canonical industry taxonomy and preserves the north-star list", () => {
-  assert.deepEqual(Object.keys(json), INDUSTRY_CATEGORIES);
-  for (const [industry, companies] of Object.entries(json)) {
+  const industries = Object.keys(json).filter((key) => !key.startsWith("_"));
+  assert.equal(json._version, "2026Q3-v1");
+  assert.deepEqual(industries, INDUSTRY_CATEGORIES);
+  for (const [industry, companies] of Object.entries(json).filter(([key]) => !key.startsWith("_"))) {
     assert.equal(companies.length, 30, `${industry} must have 30 companies`);
     assert.equal(new Set(companies.map((company) => company.name)).size, 30, `${industry} names must be unique`);
     assert.equal(new Set(companies.map((company) => company.pattern)).size, 30, `${industry} patterns must be unique`);
@@ -35,7 +37,7 @@ test("must-apply JSON follows the canonical industry taxonomy and preserves the 
 });
 
 test("overseas must-apply JSON follows the domestic industry taxonomy and keeps each industry distinct", () => {
-  assert.deepEqual(Object.keys(overseasJson), Object.keys(json));
+  assert.deepEqual(Object.keys(overseasJson), Object.keys(json).filter((key) => !key.startsWith("_")));
   for (const [industry, companies] of Object.entries(overseasJson)) {
     assert.equal(companies.length, 30, `${industry} must have 30 overseas companies`);
     assert.equal(new Set(companies.map((company) => company.name)).size, 30, `${industry} names must be unique`);
@@ -47,7 +49,8 @@ test("overseas must-apply JSON follows the domestic industry taxonomy and keeps 
 });
 
 test("must-apply TypeScript API unions patterns, finds all industries, and resolves user industries", () => {
-  assert.deepEqual(M.MUST_APPLY_INDUSTRIES, Object.keys(json));
+  assert.deepEqual(M.MUST_APPLY_INDUSTRIES, Object.keys(json).filter((key) => !key.startsWith("_")));
+  assert.equal(M.MUST_APPLY_VERSION, "2026Q3-v1");
   assert.deepEqual(M.MUST_APPLY_LIST, json["互联网/科技"]);
   const union = M.mustApplyUnion();
   assert.equal(new Set(union.map((company) => company.pattern)).size, union.length);
@@ -59,7 +62,9 @@ test("must-apply TypeScript API unions patterns, finds all industries, and resol
 });
 
 test("must-apply scope APIs select overseas data without changing domestic defaults", () => {
-  assert.deepEqual(M.mustApplyByIndustry("domestic"), json);
+  assert.deepEqual(M.mustApplyByIndustry("domestic"), Object.fromEntries(
+    Object.entries(json).filter(([key]) => !key.startsWith("_")),
+  ));
   assert.deepEqual(M.mustApplyByIndustry("overseas"), overseasJson);
   assert.deepEqual(M.mustApplyUnion("overseas").slice(0, 2), overseasJson["互联网/科技"].slice(0, 2));
   assert.deepEqual(M.industriesForPattern("%Google%", "overseas"), ["互联网/科技"]);
@@ -68,4 +73,21 @@ test("must-apply scope APIs select overseas data without changing domestic defau
   assert.deepEqual(M.resolveMustApplyScopes("all"), ["domestic", "overseas"]);
   assert.deepEqual(M.resolveMustApplyScopes("domestic"), ["domestic"]);
   assert.deepEqual(M.resolveMustApplyScopes(null), ["domestic"]);
+});
+
+test("only the four approved sub-brands expose parent portal rollup metadata", () => {
+  const entries = Object.values(json)
+    .filter(Array.isArray)
+    .flat()
+    .filter((entry) => entry.parentPattern || entry.brandTokens);
+  assert.deepEqual(
+    entries.map((entry) => [entry.name, entry.parentPattern, entry.brandTokens]),
+    [
+      ["网商银行", "%蚂蚁%", ["网商"]],
+      ["极氪", "%吉利%", ["极氪"]],
+      ["京东物流", "%京东%", ["京东物流"]],
+      ["网易云音乐", "%网易%", ["云音乐"]],
+    ],
+  );
+  assert.equal(M.mustApplyUnion().filter((entry) => entry.parentPattern).length, 4);
 });

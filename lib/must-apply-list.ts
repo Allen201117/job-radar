@@ -8,13 +8,30 @@ import { canonicalizeUserIndustry } from "./company-industry";
 export interface MustApplyCompany {
   name: string;
   pattern: string;
+  parentPattern?: string;
+  brandTokens?: string[];
 }
 
 export type MustApplyListByIndustry = Record<string, MustApplyCompany[]>;
 export type MustApplyScope = "domestic" | "overseas";
 
-export const MUST_APPLY_BY_INDUSTRY = mustApplyDomesticByIndustry as MustApplyListByIndustry;
-export const MUST_APPLY_OVERSEAS_BY_INDUSTRY = mustApplyOverseasByIndustry as MustApplyListByIndustry;
+type MustApplyJson = Record<string, unknown>;
+
+function withoutMetadata(raw: MustApplyJson): MustApplyListByIndustry {
+  return Object.fromEntries(
+    Object.entries(raw).filter(
+      ([key, value]) => !key.startsWith("_") && Array.isArray(value),
+    ),
+  ) as MustApplyListByIndustry;
+}
+
+const domesticJson = mustApplyDomesticByIndustry as unknown as MustApplyJson;
+const overseasJson = mustApplyOverseasByIndustry as unknown as MustApplyJson;
+
+export const MUST_APPLY_VERSION =
+  typeof domesticJson._version === "string" ? domesticJson._version : "unversioned";
+export const MUST_APPLY_BY_INDUSTRY = withoutMetadata(domesticJson);
+export const MUST_APPLY_OVERSEAS_BY_INDUSTRY = withoutMetadata(overseasJson);
 export const MUST_APPLY_INDUSTRIES = Object.keys(MUST_APPLY_BY_INDUSTRY);
 export const DEFAULT_MUST_APPLY_INDUSTRY = "互联网/科技";
 export const MUST_APPLY_LIST = MUST_APPLY_BY_INDUSTRY[DEFAULT_MUST_APPLY_INDUSTRY];
