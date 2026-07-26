@@ -5,11 +5,15 @@ import unittest
 from logo_util import (
     COMPANY_DOMAIN_OVERRIDES,
     build_data_uri,
+    candidate_domains,
+    company_core_names,
     domain_for_company,
     image_width,
     is_placeholder,
     is_platform_domain,
     normalize_mime,
+    page_verifies_company,
+    platform_slug,
     registrable_domain,
 )
 
@@ -88,6 +92,90 @@ class DomainForCompanyTests(unittest.TestCase):
         self.assertIsNone(
             domain_for_company("某未知公司", "https://unknown.jobs.feishu.cn/index/position"),
         )
+
+
+class PlatformSlugTests(unittest.TestCase):
+    def test_subdomain_platforms(self):
+        self.assertEqual(platform_slug("https://yangxiang.zhiye.com/campus"), "yangxiang")
+        self.assertEqual(platform_slug("https://shengshu.jobs.feishu.cn/index/position"), "shengshu")
+        self.assertEqual(
+            platform_slug("https://manulife.wd3.myworkdayjobs.com/wday/cxs/manulife/MFCJH_Jobs/jobs"),
+            "manulife",
+        )
+
+    def test_moka_path_slug(self):
+        self.assertEqual(platform_slug("https://app.mokahr.com/social-recruitment/futu5/141927"), "futu5")
+        self.assertEqual(platform_slug("https://app.mokahr.com/campus-recruitment/jimi"), "jimi")
+        self.assertEqual(platform_slug("https://app-tc.mokahr.com/apply/wesure/6018"), "wesure")
+
+    def test_ats_path_slug(self):
+        self.assertEqual(
+            platform_slug("https://api.smartrecruiters.com/v1/companies/expeditors/postings?limit=100"),
+            "expeditors",
+        )
+        self.assertEqual(
+            platform_slug("https://api.ashbyhq.com/posting-api/job-board/sierra?includeCompensation=true"),
+            "sierra",
+        )
+
+    def test_rejects_generic_and_junk(self):
+        self.assertIsNone(platform_slug("https://app.mokahr.com/"))
+        self.assertIsNone(platform_slug("https://www.zhiye.com/campus"))
+        self.assertIsNone(platform_slug(""))
+
+    def test_candidate_domains_order(self):
+        self.assertEqual(
+            candidate_domains("yangxiang"), ["yangxiang.com", "yangxiang.cn", "yangxiang.com.cn"]
+        )
+        self.assertEqual(candidate_domains(""), [])
+
+
+class CompanyCoreNamesTests(unittest.TestCase):
+    def test_strips_org_suffix_and_region_prefix(self):
+        self.assertIn("扬翔", company_core_names("扬翔股份有限公司"))
+        self.assertIn("观安", company_core_names("上海观安信息技术股份有限公司"))
+
+    def test_keeps_full_core_and_short_main(self):
+        tokens = company_core_names("昂立教育")
+        self.assertEqual(tokens[0], "昂立教育")
+        self.assertIn("昂立", tokens)
+
+    def test_mixed_zh_en(self):
+        tokens = company_core_names("博乐科技 Bole Games")
+        self.assertIn("博乐科技", tokens)
+        self.assertIn("Bole Games", tokens)
+
+    def test_drops_recruit_suffix_and_parens(self):
+        self.assertIn("中国交建", company_core_names("中国交建 校招"))
+        self.assertIn("米其林", company_core_names("米其林（中国）投资有限公司"))
+
+
+class PageVerifyTests(unittest.TestCase):
+    """核验门：正例用 live 抓到的真实首页标题；反例是 live 抓到的真实张冠李戴案例。"""
+
+    def test_accepts_matching_pages(self):
+        self.assertTrue(page_verifies_company("扬翔股份有限公司", "yangxiang", "扬翔股份"))
+        self.assertTrue(page_verifies_company("昂立教育", "onlyedu", "上海昂立教育科技集团有限公司"))
+        self.assertTrue(page_verifies_company("博乐科技 Bole Games", "bolegames", "北京博乐科技有限公司"))
+        self.assertTrue(
+            page_verifies_company("漱玉平民大药房连锁股份有限公司", "sypm", "漱玉平民大药房连锁股份有限公司")
+        )
+        self.assertTrue(page_verifies_company("阅文集团", "yuewen", "阅文集团_让好故事生生不息"))
+
+    def test_rejects_wrong_company(self):
+        # live 实测：轻松集团 slug=qsc → qsc.cn 实为美国音响公司 QSC，必须拒（张冠李戴红线）
+        self.assertFalse(
+            page_verifies_company("轻松集团", "qsc", "QSC | Audio, Video, and Control for Enhanced")
+        )
+
+    def test_rejects_unverifiable_page(self):
+        # 域名也许确实是它的，但页面自证不了 → 保守拒（宁缺毋滥）
+        self.assertFalse(page_verifies_company("蜂巢能源", "svolt", "Coming Soon"))
+        self.assertFalse(page_verifies_company("扬翔股份有限公司", "yangxiang", ""))
+
+    def test_english_company_matches_by_name_or_slug(self):
+        self.assertTrue(page_verifies_company("Expeditors", "expeditors", "Expeditors International"))
+        self.assertTrue(page_verifies_company("Meshy", "meshy", "Meshy - AI 3D Model Generator"))
 
 
 class PlaceholderTests(unittest.TestCase):
