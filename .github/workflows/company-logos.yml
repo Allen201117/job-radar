@@ -14,7 +14,8 @@ on:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 首跑含 slug 域名核验（逐个抓候选域名首页）会久一些；核验通过的域名落库，后续跑直接复用不再核验。
+    timeout-minutes: 90
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

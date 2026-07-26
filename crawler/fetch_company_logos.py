@@ -4,6 +4,8 @@
 - DuckDuckGo（icons.duckduckgo.com）是「有没有 logo」的权威：404→not_found（不存图），200→有。
 - icon.horse 仅作 DuckDuckGo 图偏小时的高清升级，且必须过「占位污染门」（它对任何域名都返回占位图）。
 - 存 data URI（base64）：国内直连境外 favicon 服务会被墙，必须抓下来跟着我们域名走。
+- 域名推导不出时（飞书/北森/moka/workday 等平台托管，占 not_found 的 98%）→ 用 URL 里的公司 slug
+  猜品牌域名，并抓首页做**页面核验**（页面自证属于该公司才认），防张冠李戴；核验不过就首字母兜底。
 
 用法：python3 fetch_company_logos.py [--limit N] [--force]
 """
@@ -11,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -21,12 +24,16 @@ from db import get_sources, get_supabase
 from logo_util import (
     COMPANY_DOMAIN_OVERRIDES,
     build_data_uri,
+    candidate_domains,
     domain_for_company,
     image_width,
     is_placeholder,
+    page_verifies_company,
+    platform_slug,
 )
 
 _TIMEOUT = 15.0
+_HOME_TIMEOUT = 6.0        # 猜域名时抓首页做核验，短超时（量大，别拖垮 CI）
 _FRESH_DAYS = 30
 _SMALL_WIDTH = 48          # DuckDuckGo 图窄于此 → 试 icon.horse 升级
 _MAX_BYTES = 200_000       # favicon 不该更大；超过视为异常，不入库（首字母兜底）
@@ -102,6 +109,53 @@ def fetch_one(client: httpx.Client, domain: str, placeholders: set) -> Optional[
     return {"bytes": best, "content_type": best_ct, "width": width, "source": source}
 
 
+def _page_signal_text(html: str) -> str:
+    """取页面「自证身份」的文本：<title> + og:site_name + description/keywords（够核验，不必整页）。"""
+    if not html:
+        return ""
+    bits = []
+    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
+    if m:
+        bits.append(re.sub(r"\s+", " ", m.group(1)).strip())
+    for pat in (
+        r'<meta[^>]+property=["\']og:site_name["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+name=["\']keywords["\'][^>]+content=["\']([^"\']+)',
+    ):
+        m2 = re.search(pat, html, re.I)
+        if m2:
+            bits.append(m2.group(1).strip())
+    return " | ".join(bits)[:600]
+
+
+def resolve_domain_by_slug(client: httpx.Client, company: str, source_url: str) -> Optional[str]:
+    """平台托管公司（北森/moka/飞书/workday…）：用 URL 里的 slug 猜品牌域名，**页面核验通过才认**。
+
+    核验门是防张冠李戴的唯一防线（live 实测：轻松集团 slug=qsc → qsc.cn 实为美国音响公司 QSC，被正确拒）。
+    核验不过 / 域名不可达 → None，交回首字母兜底（宁缺毋滥）。
+    """
+    slug = platform_slug(source_url)
+    if not slug:
+        return None
+    for domain in candidate_domains(slug):
+        # 裸域名不通时再试 www.（不少企业站只在 www 生效）；DNS 不存在会快速失败，成本低
+        for url in (f"https://{domain}", f"https://www.{domain}"):
+            try:
+                r = client.get(url, timeout=_HOME_TIMEOUT)
+            except Exception:
+                continue
+            if r.status_code >= 400:
+                continue
+            try:
+                text = _page_signal_text(r.text)
+            except Exception:  # noqa: BLE001 解码异常等
+                continue
+            if page_verifies_company(company, slug, text):
+                print(f"[logo] slug 核验通过：{company} → {domain}（{text[:38]}）")
+                return domain
+    return None
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="最多处理多少家公司（0=全部）")
@@ -111,12 +165,15 @@ def main() -> None:
     sb = get_supabase()
     sources = get_sources(sb)
 
-    # 已有记录的新鲜度
+    # 已有记录：新鲜度 + 已解析域名（已核验过的域名复用，重跑不必再核验一遍）
     existing: dict = {}
+    known_domain: dict = {}
     try:
-        rows = sb.table("company_logos").select("company_key,fetched_at").execute().data or []
+        rows = sb.table("company_logos").select("company_key,fetched_at,domain").execute().data or []
         for r in rows:
             existing[r["company_key"]] = r.get("fetched_at")
+            if r.get("domain"):
+                known_domain[r["company_key"]] = r["domain"]
     except Exception as e:  # noqa: BLE001
         print(f"[logo] 读取已有记录失败（视为空）：{e}", file=sys.stderr)
 
@@ -133,7 +190,7 @@ def main() -> None:
             seen[key] = (company, row.get("source_url") or "")
 
     processed = 0
-    stats = {"found": 0, "not_found": 0, "skip": 0, "err": 0}
+    stats = {"found": 0, "not_found": 0, "skip": 0, "err": 0, "slug_ok": 0}
     with httpx.Client(
         timeout=_TIMEOUT, follow_redirects=True, headers={"User-Agent": "job-radar-logo/1.0"}
     ) as client:
@@ -155,7 +212,17 @@ def main() -> None:
             processed += 1
 
             now_iso = datetime.now(timezone.utc).isoformat()
+            # 域名优先级：覆盖表/非平台 host > 库里已核验过的域名 > slug 猜+页面核验（平台托管公司的兜底）
             domain = domain_for_company(company, source_url, COMPANY_DOMAIN_OVERRIDES)
+            if not domain:
+                domain = known_domain.get(key)
+                if not domain:
+                    try:
+                        domain = resolve_domain_by_slug(client, company, source_url)
+                        if domain:
+                            stats["slug_ok"] += 1
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[logo] slug 解析异常 {company}: {e}", file=sys.stderr)
             result = None
             if domain:
                 try:

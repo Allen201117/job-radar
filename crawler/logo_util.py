@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 import struct
 from typing import Optional
 from urllib.parse import urlparse
@@ -250,6 +251,161 @@ def domain_for_company(company: str, source_url: str, override_map: Optional[dic
         if slug:
             return f"{slug.lower()}.com"
     return None
+
+
+# ============================================================
+# slug 兜底（覆盖率主力）：平台托管公司（北森 zhiye / moka / 飞书 / workday / smartrecruiters / ashby）
+# 的 source_url 里带公司 slug（多为公司拼音或英文名）→ 猜品牌域名，再用「页面核验门」确认该域名
+# 确实属于这家公司才认。核验门是防张冠李戴的唯一防线：实测 轻松集团 slug=qsc → qsc.cn 其实是
+# 美国音响公司 QSC，靠核验（页面不含「轻松」）正确拒绝。核验不过一律丢弃 → 首字母兜底。
+# ============================================================
+
+# 子域即 slug 的平台
+_SUBDOMAIN_SLUG_HOSTS = ("zhiye.com", "jobs.feishu.cn", "mioffice.cn", "myworkdayjobs.com")
+# 平台通用子域/路径段，不是公司标识
+_GENERIC_SLUGS = {"app", "www", "jobs", "api", "campus", "hr", "m", "app-tc", "recruit", "career", "careers"}
+# 候选顶级域（按中国公司常见度排序，命中即停）
+_CANDIDATE_TLDS = (".com", ".cn", ".com.cn")
+
+
+def platform_slug(source_url: str) -> Optional[str]:
+    """从平台托管 URL 提取公司 slug；提不出返回 None。"""
+    if not source_url:
+        return None
+    host = _host_from_source(source_url).lower()
+    try:
+        parts = [p for p in urlparse(source_url).path.split("/") if p]
+    except Exception:
+        parts = []
+
+    slug: Optional[str] = None
+    if any(h in host for h in _SUBDOMAIN_SLUG_HOSTS):
+        sub = host.split(".")[0]
+        slug = sub
+    elif "mokahr.com" in host:
+        # app.mokahr.com/social-recruitment/{slug}/... | /campus-recruitment/{slug} | /apply/{slug}/...
+        slug = parts[1] if len(parts) > 1 else None
+    elif "smartrecruiters.com" in host or "ashbyhq.com" in host:
+        for marker in ("companies", "job-board"):
+            if marker in parts:
+                i = parts.index(marker)
+                if i + 1 < len(parts):
+                    slug = parts[i + 1]
+                    break
+    if not slug:
+        return None
+    slug = slug.split("?")[0].strip().lower()
+    # 只留域名合法字符；过滤平台通用段与过短 slug
+    slug = "".join(ch for ch in slug if ch.isalnum() or ch == "-").strip("-")
+    if not slug or slug in _GENERIC_SLUGS or len(slug) < 2 or slug.isdigit():
+        return None
+    return slug
+
+
+def candidate_domains(slug: str) -> list:
+    """slug → 候选品牌域名（按常见度排序）。"""
+    if not slug:
+        return []
+    return [f"{slug}{tld}" for tld in _CANDIDATE_TLDS]
+
+
+# 公司名里的地域前缀 / 组织后缀 / 行业尾巴，剥掉后得到用于核验的「主名」
+_REGION_PREFIXES = (
+    "上海", "北京", "深圳", "广州", "杭州", "浙江", "江苏", "广东", "天津", "山东", "厦门", "无锡",
+    "苏州", "南京", "成都", "武汉", "西安", "重庆", "福建", "安徽", "湖南", "湖北", "河南", "河北",
+    "山西", "陕西", "江西", "云南", "贵州", "辽宁", "吉林", "黑龙江", "内蒙古", "新疆", "甘肃",
+    "青海", "宁夏", "西藏", "海南", "青岛", "大连", "宁波", "合肥", "长沙", "郑州", "济南", "福州",
+)
+_ORG_SUFFIXES = (
+    "股份有限公司", "有限责任公司", "控股集团有限公司", "集团股份有限公司", "有限公司", "控股有限公司",
+    "集团有限公司", "科技集团", "控股集团", "实业集团", "投资集团", "集团", "控股", "公司", "实业",
+)
+_INDUSTRY_TAILS = (
+    "信息技术", "网络科技", "智能科技", "生物科技", "医疗科技", "数字科技", "文化科技", "信息科技",
+    "科技", "网络", "信息", "技术", "生物", "医药", "医疗", "汽车", "教育", "电器", "食品", "服饰",
+    "能源", "电子", "半导体", "软件", "数据", "智能", "机械", "材料", "电气", "地产", "金融", "证券",
+    "保险", "银行", "证券股份", "投资", "物流", "传媒", "文化", "娱乐", "游戏", "餐饮", "服务",
+)
+# 页面上的「企业指示词」：2 字主名太短易误撞，要求页面同时像个公司官网
+_CORP_HINTS = ("有限公司", "股份", "集团", "官网", "公司", "科技", "控股", "企业")
+
+
+def company_core_names(company: str) -> list:
+    """公司名 → 用于核验的候选 token（长→短）。含中文主名与英文名。"""
+    raw = (company or "").strip()
+    if not raw:
+        return []
+    # 去括号内容、去「校招/社招/实习」等抓取侧后缀
+    cleaned = re.sub(r"[（(][^）)]*[）)]", "", raw)
+    cleaned = re.sub(r"\s*(校招|社招|实习|招聘)\s*$", "", cleaned).strip()
+
+    chinese = "".join(re.findall(r"[一-鿿]+", cleaned))
+    latin = " ".join(re.findall(r"[A-Za-z][A-Za-z0-9.\-]*", cleaned)).strip()
+
+    tokens: list = []
+    if chinese:
+        core = chinese
+        # 多轮剥组织后缀（「米其林投资有限公司」→ 剥「有限公司」→ 再剥「投资」→「米其林」），每轮保底留 2 字
+        for _ in range(3):
+            for suf in _ORG_SUFFIXES:  # 长后缀在前
+                if core.endswith(suf) and len(core) - len(suf) >= 2:
+                    core = core[: -len(suf)]
+                    break
+            else:
+                break
+        for pre in _REGION_PREFIXES:
+            if core.startswith(pre) and len(core) > len(pre) + 1:
+                core = core[len(pre):]
+                break
+        if len(core) >= 2:
+            tokens.append(core)
+            for tail in _INDUSTRY_TAILS:  # 再剥行业尾巴得到更短主名（如「观安信息技术」→「观安」）
+                if core.endswith(tail) and len(core) - len(tail) >= 2:
+                    tokens.append(core[: -len(tail)])
+                    break
+    if latin:
+        drop = {"inc", "ltd", "llc", "corp", "corporation", "group", "company", "co", "holdings", "limited"}
+        words = [w for w in latin.split() if w.lower().strip(".") not in drop]
+        if words:
+            tokens.append(" ".join(words))
+            if len(words) > 1 and len(words[0]) >= 4:
+                tokens.append(words[0])
+    # 去重保序
+    out: list = []
+    for t in tokens:
+        t = t.strip()
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def page_verifies_company(company: str, slug: str, page_text: str) -> bool:
+    """核验门：候选域名的页面文本（title + description 等）是否自证属于这家公司。
+
+    通过条件（任一）：
+      · 页面含公司中文主名，长度 ≥3 → 直接通过；
+      · 页面含 2 字中文主名 **且** 页面像公司官网（含「有限公司/股份/集团/官网…」）→ 通过（防「轻松」撞无关页）；
+      · 无中文名时，页面含英文公司名或 slug（长度 ≥4）→ 通过。
+    其余一律 False（宁缺毋滥，交回首字母兜底）。
+    """
+    text = (page_text or "").strip()
+    if not text:
+        return False
+    low = text.lower()
+    has_corp_hint = any(h in text for h in _CORP_HINTS)
+
+    for token in company_core_names(company):
+        if re.search(r"[一-鿿]", token):  # 中文主名
+            if token in text and (len(token) >= 3 or has_corp_hint):
+                return True
+        else:  # 英文名
+            t = token.lower()
+            if len(t) >= 4 and t in low:
+                return True
+    s = (slug or "").lower()
+    if len(s) >= 4 and s in low:
+        return True
+    return False
 
 
 def is_placeholder(img_bytes: bytes, placeholder_md5_set) -> bool:
