@@ -405,10 +405,12 @@ class RoundCapTest(unittest.TestCase):
                 row,
                 **kwargs,
                 finder=finder,
-                fingerprinter=lambda _url: {
+                fingerprinter=lambda _url, **_kwargs: {
                     "platform": "greenhouse",
                     "adapter": "greenhouse",
                     "source_url": "https://boards-api.greenhouse.io/v1/boards/acme/jobs",
+                    "identity_ok": True,
+                    "identity_reason": "page_company_match:甲公司",
                 },
                 prober=lambda _candidate: {"ok": True, "valid": 1},
             )
@@ -477,18 +479,24 @@ class RoundCapTest(unittest.TestCase):
 
     def test_iguopin_entry_uses_must_apply_company_as_search_keyword(self):
         probed = []
+        row = {
+            **_entry(),
+            "official_entry_url": "https://www.iguopin.com/job?company=甲公司",
+        }
         result, _used, _inserted = gf.process_company(
-            _entry(),
+            row,
             supabase=_Sb(),
             jobs_conn=_Conn(),
             apply=False,
             search_remaining=2,
             insert_allowed=True,
             now=NOW,
-            fingerprinter=lambda _url: {
+            fingerprinter=lambda _url, **_kwargs: {
                 "platform": "iguopin",
                 "adapter": "iguopin",
                 "source_url": None,
+                "identity_ok": True,
+                "identity_reason": "page_company_match:甲公司",
             },
             prober=lambda candidate: probed.append(candidate) or {
                 "ok": True, "valid": 1
@@ -499,6 +507,355 @@ class RoundCapTest(unittest.TestCase):
             probed[0]["url"],
             "https://www.iguopin.com/job?company=%E7%94%B2%E5%85%AC%E5%8F%B8",
         )
+
+    def test_candidate_identity_retry_uses_second_routable_candidate(self):
+        urls = [
+            "https://gimc.hotjob.cn/GIMC/pb/social.html",
+            "https://boards.greenhouse.io/acme",
+        ]
+        fingerprinted = []
+        probed = []
+
+        def finder(*_args, **_kwargs):
+            return {
+                "found": True,
+                "official_entry_url": urls[0],
+                "search_used": 1,
+                "candidates": [
+                    {"url": urls[0], "verdict": "trusted_ats", "score": 100},
+                    {"url": urls[1], "verdict": "trusted_ats", "score": 100},
+                ],
+            }
+
+        def fingerprinter(url, *, company):
+            fingerprinted.append((url, company))
+            if url == urls[0]:
+                return {
+                    "platform": "hotjob",
+                    "adapter": "hotjob",
+                    "source_url": urls[0],
+                    "identity_ok": False,
+                    "identity_reason": "page_company_not_found",
+                }
+            return {
+                "platform": "greenhouse",
+                "adapter": "greenhouse",
+                "source_url": "https://boards-api.greenhouse.io/v1/boards/acme/jobs",
+                "identity_ok": True,
+                "identity_reason": "page_company_match:甲公司",
+            }
+
+        row = {**_entry(), "official_entry_url": None}
+        result, used, _inserted = gf.process_company(
+            row,
+            supabase=_Sb(),
+            jobs_conn=_Conn(),
+            apply=False,
+            search_remaining=2,
+            insert_allowed=True,
+            now=NOW,
+            finder=finder,
+            fingerprinter=fingerprinter,
+            prober=lambda candidate: probed.append(candidate) or {
+                "ok": True, "valid": 1
+            },
+        )
+        self.assertEqual([url for url, _company in fingerprinted], urls)
+        self.assertEqual(used, 1)
+        self.assertEqual(result["state"], "platform_known")
+        self.assertEqual(result["official_entry_url"], urls[1])
+        self.assertEqual(len(probed), 1)
+        self.assertEqual(probed[0]["adapter"], "greenhouse")
+
+    def test_all_identity_mismatches_become_wrong_platform_with_rejected_hosts(self):
+        urls = [
+            "https://gimc.hotjob.cn/GIMC/pb/social.html",
+            "https://hire.feishu.cn/customer/zhongkechuangda",
+        ]
+        result, _used, _inserted = gf.process_company(
+            {**_entry(), "official_entry_url": None},
+            supabase=_Sb(),
+            jobs_conn=_Conn(),
+            apply=False,
+            search_remaining=2,
+            insert_allowed=True,
+            now=NOW,
+            finder=lambda *_args, **_kwargs: {
+                "found": True,
+                "official_entry_url": urls[0],
+                "search_used": 1,
+                "candidates": [
+                    {"url": url, "verdict": "trusted_ats", "score": 100}
+                    for url in urls
+                ],
+            },
+            fingerprinter=lambda url, **_kwargs: {
+                "platform": "hotjob" if "hotjob" in url else "feishu",
+                "adapter": "hotjob" if "hotjob" in url else "feishu",
+                "source_url": url,
+                "identity_ok": False,
+                "identity_reason": "page_company_not_found",
+            },
+            prober=lambda _candidate: self.fail("身份不符的候选不应进入 probe"),
+        )
+        self.assertEqual(result["state"], "wrong_platform")
+        self.assertEqual(result["fail_reason"], "候选入口均非本公司（张冠李戴）")
+        self.assertIsNone(result["official_entry_url"])
+        self.assertEqual(
+            result["evidence"]["rejected_candidate_hosts"],
+            ["gimc.hotjob.cn", "hire.feishu.cn"],
+        )
+
+    def test_incomplete_hotjob_url_never_reaches_probe(self):
+        prober = mock.Mock()
+        result, _used, _inserted = gf.process_company(
+            {**_entry(), "official_entry_url": "https://gimc.hotjob.cn"},
+            supabase=_Sb(),
+            jobs_conn=_Conn(),
+            apply=False,
+            search_remaining=2,
+            insert_allowed=True,
+            now=NOW,
+            fingerprinter=lambda _url, **_kwargs: {
+                "platform": "hotjob",
+                "adapter": "hotjob",
+                "source_url": None,
+                "identity_ok": True,
+                "identity_reason": "page_company_match:甲公司",
+            },
+            prober=prober,
+        )
+        prober.assert_not_called()
+        self.assertEqual(result["state"], "wrong_platform")
+
+    def test_httpx_lane_routes_browser_fallback_adapter_without_probing(self):
+        prober = mock.Mock()
+        result, _used, _inserted = gf.process_company(
+            {
+                **_entry(),
+                "official_entry_url": "https://hire.feishu.cn/customer/acme",
+            },
+            supabase=_Sb(),
+            jobs_conn=_Conn(),
+            apply=False,
+            search_remaining=2,
+            insert_allowed=True,
+            now=NOW,
+            fingerprinter=lambda _url, **_kwargs: {
+                "platform": "feishu",
+                "adapter": "feishu",
+                "source_url": "https://hire.feishu.cn/customer/acme",
+                "identity_ok": True,
+                "identity_reason": "page_company_match:甲公司",
+            },
+            prober=prober,
+        )
+        prober.assert_not_called()
+        self.assertEqual(result["state"], "wrong_platform")
+        self.assertEqual(result["detected_platform"], "unknown_spa")
+
+    def test_cached_blacklisted_url_is_discarded_and_search_runs_again(self):
+        finder = mock.Mock(return_value={
+            "found": True,
+            "official_entry_url": "https://boards.greenhouse.io/acme",
+            "search_used": 1,
+            "candidates": [{
+                "url": "https://boards.greenhouse.io/acme",
+                "verdict": "trusted_ats",
+                "score": 100,
+            }],
+            "evidence": {"candidate_urls": []},
+        })
+        result, used, _inserted = gf.process_company(
+            {
+                **_entry(),
+                "official_entry_url": "https://m.nj.bendibao.com/job/179796.shtm",
+            },
+            supabase=_Sb(),
+            jobs_conn=_Conn(),
+            apply=False,
+            search_remaining=2,
+            insert_allowed=True,
+            now=NOW,
+            finder=finder,
+            fingerprinter=lambda _url, **_kwargs: {
+                "platform": "greenhouse",
+                "adapter": "greenhouse",
+                "source_url": "https://boards-api.greenhouse.io/v1/boards/acme/jobs",
+                "identity_ok": True,
+                "identity_reason": "page_company_match:甲公司",
+            },
+            prober=lambda _candidate: {"ok": True, "valid": 1},
+        )
+        finder.assert_called_once()
+        self.assertEqual(used, 1)
+        self.assertEqual(result["official_entry_url"], "https://boards.greenhouse.io/acme")
+        self.assertIn(
+            "m.nj.bendibao.com",
+            result["evidence"]["rejected_candidate_hosts"],
+        )
+
+    def test_persisted_candidate_list_survives_into_next_round(self):
+        urls = [
+            "https://gimc.hotjob.cn/GIMC/pb/social.html",
+            "https://boards.greenhouse.io/acme",
+        ]
+        first, _used, _inserted = gf.process_company(
+            {**_entry(), "official_entry_url": None},
+            supabase=_Sb(),
+            jobs_conn=_Conn(),
+            apply=False,
+            search_remaining=2,
+            insert_allowed=True,
+            now=NOW,
+            finder=lambda *_args, **_kwargs: {
+                "found": True,
+                "official_entry_url": urls[0],
+                "search_used": 1,
+                "candidates": [
+                    {"url": url, "verdict": "trusted_ats", "score": 100}
+                    for url in urls
+                ],
+                "evidence": {"candidate_urls": []},
+            },
+            fingerprinter=lambda _url, **_kwargs: {
+                "platform": "hotjob",
+                "adapter": "hotjob",
+                "source_url": urls[0],
+                "identity_ok": True,
+                "identity_reason": "page_company_match:甲公司",
+            },
+            prober=lambda _candidate: {"ok": True, "valid": 1},
+        )
+        self.assertEqual(
+            [item["url"] for item in first["evidence"]["candidate_urls"]],
+            urls,
+        )
+
+        fingerprinted = []
+        second, used, _inserted = gf.process_company(
+            {
+                **_entry(),
+                "official_entry_url": first["official_entry_url"],
+                "evidence": first["evidence"],
+            },
+            supabase=_Sb(),
+            jobs_conn=_Conn(),
+            apply=False,
+            search_remaining=2,
+            insert_allowed=True,
+            now=NOW,
+            finder=lambda *_args, **_kwargs: self.fail("已有候选时不应重新搜索"),
+            fingerprinter=lambda url, **_kwargs: (
+                fingerprinted.append(url)
+                or (
+                    {
+                        "platform": "hotjob",
+                        "adapter": "hotjob",
+                        "source_url": urls[0],
+                        "identity_ok": False,
+                        "identity_reason": "page_company_not_found",
+                    }
+                    if url == urls[0]
+                    else {
+                        "platform": "greenhouse",
+                        "adapter": "greenhouse",
+                        "source_url": "https://boards-api.greenhouse.io/v1/boards/acme/jobs",
+                        "identity_ok": True,
+                        "identity_reason": "page_company_match:甲公司",
+                    }
+                )
+            ),
+            prober=lambda _candidate: {"ok": True, "valid": 1},
+        )
+        self.assertEqual(fingerprinted, urls)
+        self.assertEqual(used, 0)
+        self.assertEqual(second["official_entry_url"], urls[1])
+
+    def test_unverifiable_fallback_prevents_false_all_identity_mismatch(self):
+        urls = [
+            "https://jobs.example.com/careers",
+            "https://gimc.hotjob.cn/GIMC/pb/social.html",
+        ]
+        result, _used, _inserted = gf.process_company(
+            {**_entry(), "official_entry_url": None},
+            supabase=_Sb(),
+            jobs_conn=_Conn(),
+            apply=False,
+            search_remaining=2,
+            insert_allowed=True,
+            now=NOW,
+            finder=lambda *_args, **_kwargs: {
+                "found": True,
+                "official_entry_url": urls[0],
+                "search_used": 1,
+                "candidates": [{"url": url, "verdict": "likely_official", "score": 55}
+                               for url in urls],
+            },
+            fingerprinter=lambda url, **_kwargs: (
+                {
+                    "platform": "anti_bot",
+                    "adapter": None,
+                    "source_url": url,
+                    "reason": "anti_bot",
+                    "identity_ok": False,
+                    "identity_reason": "identity_unverifiable:anti_bot",
+                }
+                if url == urls[0]
+                else {
+                    "platform": "hotjob",
+                    "adapter": "hotjob",
+                    "source_url": urls[1],
+                    "identity_ok": False,
+                    "identity_reason": "page_company_not_found",
+                }
+            ),
+            prober=lambda _candidate: self.fail("候选未通过身份门"),
+        )
+        self.assertEqual(result["state"], "anti_bot")
+        self.assertNotEqual(result["fail_reason"], "候选入口均非本公司（张冠李戴）")
+
+    def test_browser_fallback_beats_unroutable_httpx_candidate(self):
+        urls = [
+            "https://gimc.hotjob.cn",
+            "https://hire.feishu.cn/customer/acme",
+        ]
+        result, _used, _inserted = gf.process_company(
+            {**_entry(), "official_entry_url": None},
+            supabase=_Sb(),
+            jobs_conn=_Conn(),
+            apply=False,
+            search_remaining=2,
+            insert_allowed=True,
+            now=NOW,
+            finder=lambda *_args, **_kwargs: {
+                "found": True,
+                "official_entry_url": urls[0],
+                "search_used": 1,
+                "candidates": [{"url": url, "verdict": "trusted_ats", "score": 100}
+                               for url in urls],
+            },
+            fingerprinter=lambda url, **_kwargs: (
+                {
+                    "platform": "hotjob",
+                    "adapter": "hotjob",
+                    "source_url": None,
+                    "identity_ok": True,
+                    "identity_reason": "page_company_match:甲公司",
+                }
+                if url == urls[0]
+                else {
+                    "platform": "feishu",
+                    "adapter": "feishu",
+                    "source_url": urls[1],
+                    "identity_ok": True,
+                    "identity_reason": "page_company_match:甲公司",
+                }
+            ),
+            prober=lambda _candidate: self.fail("浏览器候选不应进 httpx probe"),
+        )
+        self.assertEqual(result["detected_platform"], "unknown_spa")
+        self.assertEqual(result["official_entry_url"], urls[1])
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """官方招聘入口发现：按 provider 级联搜索，首个可信入口即停。"""
 import re
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import search_router
 
@@ -21,6 +21,10 @@ _CONTENT_HOSTS = (
 _CAMPUS_REPOST_HOSTS = (
     "ncss.cn", "career.tsinghua.edu.cn", "scc.pku.edu.cn",
     "career.pku.edu.cn", "job.xjtu.edu.cn",
+)
+_AGGREGATOR_HOSTS = (
+    "bendibao.com", "gaoxiaojob.com", "yingjiesheng.com", "chinahr.com",
+    "job5156.com", "ppkao.com",
 )
 _ATS_HOSTS = (
     ("mokahr.com", "moka"),
@@ -71,9 +75,20 @@ def classify_candidate_url(url, company):
     if parsed.scheme not in ("http", "https") or not host:
         return ("reject", -100, "invalid_url")
 
+    if host.endswith(".edu.cn") or host.endswith(".edu"):
+        return ("reject", -100, "institutional_host")
+    if host.endswith(".gov.cn"):
+        return ("reject", -100, "government_notice")
+    for domain in _AGGREGATOR_HOSTS:
+        if _host_matches(host, domain):
+            return ("reject", -100, "aggregator_site")
+
     # 国聘是创始人确认的唯一第三方平台例外。
     if _host_matches(host, "iguopin.com"):
-        return ("trusted_ats", 100, "trusted_ats:iguopin")
+        query = parse_qs(parsed.query or "")
+        if path.rstrip("/") == "/job" and (query.get("company") or [""])[0].strip():
+            return ("trusted_ats", 100, "trusted_ats:iguopin")
+        return ("reject", -100, "iguopin_search_page")
     for domain in _THIRD_PARTY_HOSTS:
         if _host_matches(host, domain):
             return ("reject", -100, "third_party_job_platform")
@@ -208,10 +223,11 @@ def find_official_entry(company, supabase, *, router=None, prev_row=None,
             if verdict in ("trusted_ats", "likely_official"):
                 classified.append(item)
         if classified:
-            best = sorted(
+            accepted = sorted(
                 classified,
                 key=lambda item: (-item["score"], str(item.get("url") or "")),
-            )[0]
+            )[:5]
+            best = accepted[0]
             candidates = sorted(
                 evidence,
                 key=lambda item: (-item["score"], str(item.get("url") or "")),
@@ -220,6 +236,7 @@ def find_official_entry(company, supabase, *, router=None, prev_row=None,
                 "found": True,
                 "state": "entry_found",
                 "official_entry_url": best["url"],
+                "candidates": accepted,
                 "search_used": search_used,
                 "rounds_no_entry": 0,
                 "next_retry_at": None,

@@ -1,5 +1,7 @@
 """招聘入口平台指纹。只做公开页面 GET，不绕验证码或登录态。"""
 import re
+import unicodedata
+from html import unescape
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -47,6 +49,19 @@ _JOB_SHAPE_RE = re.compile(
     r"(job[-_ ]?(?:detail|description|title|list)|position[-_ ]?(?:detail|list|id)|职位详情|岗位详情)",
     re.I,
 )
+_COMPANY_SUFFIXES = tuple(sorted((
+    "有限责任公司", "股份有限公司", "集团股份", "集团公司", "控股集团",
+    "有限公司", "股份", "集团", "公司", "有限", "控股", "科技", "传媒",
+    "影业", "银行", "兄弟",
+    "corporation", "company", "holdings", "holding", "limited", "group",
+    "corp", "ltd", "inc",
+), key=len, reverse=True))
+_SCRIPT_STYLE_RE = re.compile(
+    r"<(?:script|style|noscript)\b[^>]*>.*?</(?:script|style|noscript)>",
+    re.I | re.S,
+)
+_TITLE_RE = re.compile(r"<title\b[^>]*>(.*?)</title>", re.I | re.S)
+_TAG_RE = re.compile(r"<[^>]+>", re.S)
 
 
 def _host_detection(host, path=""):
@@ -122,6 +137,65 @@ def detect_page_state(status_code, html):
     return None
 
 
+def _compact(value):
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return re.sub(r"[\W_]+", "", normalized, flags=re.UNICODE)
+
+
+def _company_variants(company):
+    full = _compact(company)
+    if not full:
+        return []
+    core = full
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _COMPANY_SUFFIXES:
+            compact_suffix = _compact(suffix)
+            if core.endswith(compact_suffix) and len(core) > len(compact_suffix):
+                core = core[:-len(compact_suffix)]
+                changed = True
+                break
+    variants = [("full", full)]
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", core))
+    latin_count = len(re.findall(r"[a-z0-9]", core))
+    if core != full and (cjk_count >= 2 or (cjk_count == 0 and latin_count >= 3)):
+        variants.append(("core", core))
+    return variants
+
+
+def _host_company_related(final_url, company):
+    host = (urlparse(str(final_url or "")).hostname or "").lower()
+    latin_tokens = [
+        token
+        for token in re.findall(r"[a-z0-9]+", str(company or "").casefold())
+        if len(token) >= 3
+    ]
+    compact_host = host.replace("-", "").replace(".", "")
+    return any(token in compact_host for token in latin_tokens)
+
+
+def verify_page_identity(company, final_url, html):
+    """纯函数：页面标题/正文前 3000 字必须出现公司全名或安全核心词。"""
+    if not str(company or "").strip():
+        return (True, "company_not_provided")
+    source = str(html or "")
+    title_match = _TITLE_RE.search(source)
+    title = unescape(_TAG_RE.sub(" ", title_match.group(1))) if title_match else ""
+    visible = _SCRIPT_STYLE_RE.sub(" ", source)
+    visible = unescape(_TAG_RE.sub(" ", visible))[:3000]
+    title_compact = _compact(title)
+    body_compact = _compact(visible)
+    host_related = _host_company_related(final_url, company)
+    for kind, variant in _company_variants(company):
+        if variant and (variant in title_compact or variant in body_compact):
+            reason = "page_company_match:%s" % kind
+            if host_related:
+                reason += "+host_related"
+            return (True, reason)
+    return (False, "page_company_not_found")
+
+
 def _adapter_api_url(platform, candidate):
     parsed = urlparse(str(candidate or ""))
     host = (parsed.hostname or "").lower()
@@ -184,22 +258,53 @@ def _adapter_api_url(platform, candidate):
         domain = (query.get("domain") or [""])[0]
         if domain:
             return "https://%s/api/apply/v2/jobs?domain=%s" % (host, domain)
+    if platform == "hotjob":
+        portal = re.match(
+            r"^/([^/]+)/pb/(social|school|interns)\.html$",
+            parsed.path,
+            re.I,
+        )
+        if portal:
+            return candidate
+        endpoint = re.search(
+            r"/wecruit/positionInfo/listPosition/([^/?#]+)",
+            parsed.path,
+            re.I,
+        )
+        if endpoint:
+            return "https://%s/%s/pb/social.html" % (host, endpoint.group(1))
     if platform == "iguopin":
         query = parse_qs(parsed.query or "")
-        if (query.get("company") or query.get("keyword")):
+        if parsed.path.rstrip("/") == "/job" and (query.get("company") or [""])[0].strip():
             return candidate
     return None
 
 
 def resolve_source_url(platform, final_url, html):
     """把公开职位页归一成现有 adapter 真正消费的列表/API URL。"""
+    if platform == "hotjob":
+        final_api = _adapter_api_url(platform, final_url)
+        if final_api:
+            return final_api
     candidates = [url.rstrip(");,") for url in _URL_RE.findall(str(html or ""))]
     candidates.append(final_url)
     for candidate in candidates:
         api_url = _adapter_api_url(platform, candidate)
         if api_url:
             return api_url
-    if platform in ("oracle", "eightfold", "iguopin"):
+    if platform == "hotjob":
+        relative = re.search(
+            r"/wecruit/positionInfo/listPosition/([A-Za-z0-9_-]+)",
+            str(html or ""),
+            re.I,
+        )
+        parsed_final = urlparse(str(final_url or ""))
+        if relative and parsed_final.hostname:
+            return "https://%s/%s/pb/social.html" % (
+                parsed_final.hostname,
+                relative.group(1),
+            )
+    if platform in ("oracle", "eightfold", "iguopin", "hotjob"):
         return None
     for candidate in candidates:
         if detect_platform(candidate, "")[0] == platform:
@@ -207,7 +312,7 @@ def resolve_source_url(platform, final_url, html):
     return final_url
 
 
-def fingerprint(url, *, client=None, timeout=15):
+def fingerprint(url, *, company=None, client=None, timeout=15):
     """GET 招聘入口并返回平台、adapter、可探活 URL 与判定证据。失败重试一次。"""
     own_client = client is None
     cli = client or httpx.Client(
@@ -233,11 +338,16 @@ def fingerprint(url, *, client=None, timeout=15):
                     type(last_error).__name__ if last_error else "unknown"
                 ),
                 "http_status": None,
+                "identity_ok": False,
+                "identity_reason": "fetch_failed",
             }
 
         final_url = str(getattr(response, "url", None) or url)
         html = getattr(response, "text", "") or ""
         status = int(getattr(response, "status_code", 0) or 0)
+        identity_ok, identity_reason = verify_page_identity(
+            company, final_url, html
+        )
         special = detect_page_state(status, html)
         platform, adapter = detect_platform(final_url, html)
         # 已识别 ATS 的普通 SPA 壳仍交给 adapter；unknown_spa 只接住认不出的壳。
@@ -248,6 +358,12 @@ def fingerprint(url, *, client=None, timeout=15):
                 "source_url": final_url,
                 "reason": special,
                 "http_status": status,
+                "identity_ok": identity_ok,
+                "identity_reason": (
+                    identity_reason
+                    if identity_ok
+                    else "identity_unverifiable:%s" % special
+                ),
             }
         return {
             "platform": platform,
@@ -255,6 +371,8 @@ def fingerprint(url, *, client=None, timeout=15):
             "source_url": resolve_source_url(platform, final_url, html) if adapter else None,
             "reason": "host_or_html_fingerprint" if platform != "unknown" else "unrecognized",
             "http_status": status,
+            "identity_ok": identity_ok,
+            "identity_reason": identity_reason,
         }
     finally:
         if own_client:

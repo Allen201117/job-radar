@@ -4,7 +4,7 @@ import os
 import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -428,6 +428,70 @@ def _failure_for_platform(fingerprint, now):
     }
 
 
+def _candidate_items(row, official_url, finder_result):
+    items = list((finder_result or {}).get("candidates") or [])
+    if not items and finder_result:
+        items = [
+            item
+            for item in ((finder_result.get("evidence") or {}).get("candidate_urls") or [])
+            if item.get("verdict") in ("trusted_ats", "likely_official")
+        ]
+    if not items:
+        items = list(((row.get("evidence") or {}).get("candidate_urls") or []))
+    if official_url and not any(item.get("url") == official_url for item in items):
+        items.insert(0, {"url": official_url})
+    seen = set()
+    out = []
+    for item in items:
+        url = str((item or {}).get("url") or "").strip()
+        if url and url not in seen:
+            seen.add(url)
+            out.append({**(item or {}), "url": url})
+        if len(out) >= 5:
+            break
+    return out
+
+
+def _strict_httpx_probe_safe(adapter, source_url):
+    if not adapter or not source_url:
+        return False
+    if adapter == "feishu" or str(adapter).endswith("_feishu"):
+        return False
+    return run._source_is_httpx_safe({
+        "adapter_name": adapter,
+        "source_url": source_url,
+    })
+
+
+def _routable_source_url(adapter, source_url):
+    if not adapter or not source_url:
+        return False
+    if adapter == "hotjob":
+        parts = [
+            part
+            for part in urlparse(str(source_url)).path.split("/")
+            if part
+        ]
+        return (
+            len(parts) >= 3
+            and parts[1].lower() == "pb"
+            and parts[2].lower() in {
+                "social.html", "school.html", "interns.html"
+            }
+        )
+    return True
+
+
+def _rejection(url, reason, fingerprint=None):
+    return {
+        "url": url,
+        "host": (urlparse(str(url or "")).hostname or "").lower(),
+        "reason": reason,
+        "platform": (fingerprint or {}).get("platform"),
+        "identity_reason": (fingerprint or {}).get("identity_reason"),
+    }
+
+
 def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
                     insert_allowed, now=None, finder=entry_finder.find_official_entry,
                     fingerprinter=platform_fingerprint.fingerprint,
@@ -435,6 +499,14 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
     """处理一家公司；返回 (台账结果, 搜索次数, 是否消耗 insert 配额)。"""
     now = now or datetime.now(timezone.utc)
     official_url = row.get("official_entry_url")
+    cached_rejections = []
+    if official_url:
+        cached_verdict, _score, cached_reason = (
+            entry_finder.classify_candidate_url(official_url, row["company"])
+        )
+        if cached_verdict == "reject":
+            cached_rejections.append(_rejection(official_url, cached_reason))
+            official_url = None
     search_used = 0
     finder_result = None
     if not official_url:
@@ -448,29 +520,136 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
         )
         search_used = int(finder_result.get("search_used") or 0)
         if not finder_result.get("found"):
-            return finder_result, search_used, False
+            failed = dict(finder_result)
+            evidence = dict(failed.get("evidence") or {})
+            if cached_rejections:
+                evidence.update({
+                    "candidate_rejections": cached_rejections,
+                    "rejected_candidate_hosts": sorted({
+                        item["host"]
+                        for item in cached_rejections
+                        if item.get("host")
+                    }),
+                })
+            failed["evidence"] = evidence
+            return failed, search_used, False
         official_url = finder_result["official_entry_url"]
 
-    fingerprint = fingerprinter(official_url)
-    adapter = fingerprint.get("adapter")
-    source_url = fingerprint.get("source_url")
-    if fingerprint.get("platform") == "iguopin" and adapter == "iguopin" and not source_url:
-        source_url = "https://www.iguopin.com/job?company=%s" % quote(
-            row["company"], safe=""
+    candidates = _candidate_items(row, official_url, finder_result)
+    candidate_evidence = dict((finder_result or {}).get("evidence") or {})
+    candidate_evidence["candidate_urls"] = candidates
+    rejections = list(cached_rejections)
+    fallbacks = []
+    identity_checked = 0
+    identity_mismatches = 0
+    selected = None
+    for candidate in candidates:
+        candidate_url = candidate["url"]
+        verdict, _score, url_reason = entry_finder.classify_candidate_url(
+            candidate_url, row["company"]
         )
-        fingerprint = {**fingerprint, "source_url": source_url}
-    if (
-        fingerprint.get("platform") in _MANUAL_PLATFORMS
-        or not adapter
-        or not source_url
-        or not run._source_is_httpx_safe({
-            "adapter_name": adapter,
-            "source_url": source_url,
-        })
-    ):
-        result = _failure_for_platform(fingerprint, now)
-        result["official_entry_url"] = official_url
+        if verdict == "reject":
+            rejections.append(_rejection(candidate_url, url_reason))
+            continue
+        fingerprint = fingerprinter(candidate_url, company=row["company"])
+        platform = fingerprint.get("platform")
+        if platform in _MANUAL_PLATFORMS:
+            fallbacks.append((candidate_url, fingerprint))
+            rejections.append(_rejection(
+                candidate_url,
+                fingerprint.get("reason") or platform,
+                fingerprint,
+            ))
+            continue
+
+        identity_checked += 1
+        if fingerprint.get("identity_ok") is not True:
+            if fingerprint.get("identity_reason") == "page_company_not_found":
+                identity_mismatches += 1
+            rejections.append(_rejection(
+                candidate_url,
+                fingerprint.get("identity_reason") or "identity_unverified",
+                fingerprint,
+            ))
+            continue
+
+        adapter = fingerprint.get("adapter")
+        source_url = fingerprint.get("source_url")
+        if platform == "iguopin" and adapter == "iguopin" and not source_url:
+            source_url = "https://www.iguopin.com/job?company=%s" % quote(
+                row["company"], safe=""
+            )
+            fingerprint = {**fingerprint, "source_url": source_url}
+        if not _routable_source_url(adapter, source_url):
+            fallbacks.append((candidate_url, fingerprint))
+            rejections.append(_rejection(
+                candidate_url, "adapter_source_url_unroutable", fingerprint
+            ))
+            continue
+        if not _strict_httpx_probe_safe(adapter, source_url):
+            browser_fingerprint = {
+                **fingerprint,
+                "platform": "unknown_spa",
+                "adapter": None,
+                "source_url": candidate_url,
+                "reason": "requires_browser",
+            }
+            fallbacks.append((candidate_url, browser_fingerprint))
+            rejections.append(_rejection(
+                candidate_url, "requires_browser", browser_fingerprint
+            ))
+            continue
+        selected = (candidate_url, fingerprint, adapter, source_url)
+        break
+
+    rejected_hosts = sorted({
+        item["host"] for item in rejections if item.get("host")
+    })
+    rejection_evidence = {
+        **candidate_evidence,
+        "candidate_rejections": rejections,
+        "rejected_candidate_hosts": rejected_hosts,
+    }
+    if selected is None:
+        if (
+            identity_checked > 0
+            and identity_mismatches == identity_checked
+            and not fallbacks
+        ):
+            return {
+                "state": "wrong_platform",
+                "official_entry_url": None,
+                "detected_platform": None,
+                "next_retry_at": _after(now, 30),
+                "fail_reason": "候选入口均非本公司（张冠李戴）",
+                "evidence": rejection_evidence,
+            }, search_used, False
+        if fallbacks:
+            fallback_url, fallback_fingerprint = next(
+                (
+                    item
+                    for item in fallbacks
+                    if item[1].get("platform") == "unknown_spa"
+                ),
+                fallbacks[0],
+            )
+        else:
+            fallback_url = official_url
+            fallback_fingerprint = {
+                "platform": "unknown",
+                "adapter": None,
+                "source_url": None,
+                "reason": "no_routable_candidate",
+            }
+        result = _failure_for_platform(fallback_fingerprint, now)
+        result["official_entry_url"] = fallback_url
+        result["evidence"] = {
+            **result.get("evidence", {}),
+            **rejection_evidence,
+        }
         return result, search_used, False
+
+    official_url, fingerprint, adapter, source_url = selected
 
     probe_result = prober({
         "company": row["company"],
@@ -485,7 +664,11 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
             "detected_platform": fingerprint.get("platform"),
             "next_retry_at": _after(now, 14),
             "fail_reason": probe_result.get("reason") or "只读探活无有效岗位",
-            "evidence": {"fingerprint": fingerprint, "probe": probe_result},
+            "evidence": {
+                "fingerprint": fingerprint,
+                "probe": probe_result,
+                **rejection_evidence,
+            },
         }, search_used, False
 
     if apply and not insert_allowed:
@@ -495,7 +678,11 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
             "detected_platform": fingerprint.get("platform"),
             "next_retry_at": _after(now, 1),
             "fail_reason": "本轮 insert 配额已用完",
-            "evidence": {"fingerprint": fingerprint, "probe": probe_result},
+            "evidence": {
+                "fingerprint": fingerprint,
+                "probe": probe_result,
+                **rejection_evidence,
+            },
         }, search_used, False
 
     gate = run_acceptance_gate(
@@ -517,6 +704,7 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
                 **gate.get("evidence", {}),
                 "fingerprint": fingerprint,
                 "probe": probe_result,
+                **rejection_evidence,
                 "planned_action": "真抓+香港库回读验收",
             },
         })
@@ -527,6 +715,7 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
             **gate.get("evidence", {}),
             "fingerprint": fingerprint,
             "probe": probe_result,
+            **rejection_evidence,
         }
     return gate, search_used, bool(apply and gate.get("inserted_new"))
 
