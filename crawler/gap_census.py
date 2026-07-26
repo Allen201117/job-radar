@@ -18,6 +18,7 @@ select
   count(*) filter (
     where summary is not null and char_length(btrim(summary)) >= 60
   ) as healthy
+  {brand_columns}
 from jobs
 where status = 'active'
 group by company
@@ -53,8 +54,21 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
         row for row in (healthy_jobs or [])
         if _matches((row or {}).get("company"), pattern)
     ]
-    active_total = sum(_as_int(row.get("active_total")) for row in matched_jobs)
-    healthy_total = sum(_as_int(row.get("healthy")) for row in matched_jobs)
+    direct_active = sum(_as_int(row.get("active_total")) for row in matched_jobs)
+    direct_healthy = sum(_as_int(row.get("healthy")) for row in matched_jobs)
+    parent_rollup = {"active_total": 0, "healthy": 0}
+    if company.get("parentPattern") and company.get("brandTokens"):
+        for row in healthy_jobs or []:
+            rollup = (row.get("brand_rollups") or {}).get(pattern) or {}
+            parent_rollup["active_total"] += _as_int(rollup.get("active_total"))
+            parent_rollup["healthy"] += _as_int(rollup.get("healthy"))
+    accepted_parent = (
+        parent_rollup
+        if parent_rollup["healthy"] >= 3
+        else {"active_total": 0, "healthy": 0}
+    )
+    active_total = direct_active + accepted_parent["active_total"]
+    healthy_total = direct_healthy + accepted_parent["healthy"]
     matched_sources = [
         row for row in (sources_rows or [])
         if _matches((row or {}).get("company"), pattern)
@@ -79,6 +93,9 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
         "list_version": must_apply.version(),
         "active_jobs": active_total,
         "healthy_jobs": healthy_total,
+        "direct_healthy_jobs": direct_healthy,
+        "parent_portal_healthy_jobs": accepted_parent["healthy"],
+        "covered_via_parent_portal": accepted_parent["healthy"] > 0,
         "matched_job_companies": sorted({
             str(row.get("company")) for row in matched_jobs if row.get("company")
         }),
@@ -176,14 +193,91 @@ def load_companies(scope="domestic"):
             pattern = str(entry.get("pattern") or "").strip()
             if not name or not pattern:
                 continue
-            row = merged.setdefault(name, {"name": name, "pattern": pattern, "industries": []})
+            row = merged.setdefault(name, {
+                "name": name,
+                "pattern": pattern,
+                "industries": [],
+            })
+            if entry.get("parentPattern"):
+                row["parentPattern"] = str(entry["parentPattern"]).strip()
+            if entry.get("brandTokens"):
+                row["brandTokens"] = [
+                    str(token).strip()
+                    for token in entry["brandTokens"]
+                    if str(token).strip()
+                ]
             if industry not in row["industries"]:
                 row["industries"].append(industry)
     return list(merged.values())
 
 
-def fetch_job_aggregates(conn):
-    return jobs_db.fetch_all(conn, _JOB_AGGREGATE_SQL)
+def _brand_rules(companies):
+    rules = []
+    seen = set()
+    for company in companies or []:
+        pattern = str(company.get("pattern") or "").strip()
+        parent = str(company.get("parentPattern") or "").strip()
+        tokens = [
+            str(token).strip()
+            for token in (company.get("brandTokens") or [])
+            if str(token).strip()
+        ]
+        if pattern and parent and tokens and pattern not in seen:
+            seen.add(pattern)
+            rules.append({
+                "pattern": pattern,
+                "parentPattern": parent,
+                "brandTokens": tokens,
+            })
+    return rules
+
+
+def _job_aggregate_query(companies):
+    columns = []
+    params = {}
+    rules = _brand_rules(companies)
+    for index, rule in enumerate(rules):
+        prefix = "brand_%d" % index
+        params.update({
+            prefix + "_parent": rule["parentPattern"],
+            prefix + "_direct": rule["pattern"],
+            prefix + "_tokens": [
+                "%%%s%%" % token for token in rule["brandTokens"]
+            ],
+        })
+        matches = (
+            "company ilike %({prefix}_parent)s "
+            "and company not ilike %({prefix}_direct)s "
+            "and title ilike any(%({prefix}_tokens)s::text[])"
+        ).format(prefix=prefix)
+        columns.append(
+            """,
+  count(*) filter (where {matches}) as brand_{index}_active,
+  count(*) filter (
+    where summary is not null
+      and char_length(btrim(summary)) >= 60
+      and {matches}
+  ) as brand_{index}_healthy""".format(matches=matches, index=index)
+        )
+    return (
+        _JOB_AGGREGATE_SQL.format(brand_columns="".join(columns)),
+        params,
+        rules,
+    )
+
+
+def fetch_job_aggregates(conn, companies):
+    sql, params, rules = _job_aggregate_query(companies)
+    rows = jobs_db.fetch_all(conn, sql, params)
+    for row in rows:
+        row["brand_rollups"] = {
+            rule["pattern"]: {
+                "active_total": _as_int(row.get("brand_%d_active" % index)),
+                "healthy": _as_int(row.get("brand_%d_healthy" % index)),
+            }
+            for index, rule in enumerate(rules)
+        }
+    return rows
 
 
 def fetch_sources(supabase):
@@ -266,7 +360,7 @@ def census(supabase, jobs_conn, *, scope="domestic", cap=20, company=None,
     companies = load_companies(scope)
     if company:
         companies = [row for row in companies if row["name"] == company]
-    aggregates = fetch_job_aggregates(jobs_conn)
+    aggregates = fetch_job_aggregates(jobs_conn, companies)
     sources = fetch_sources(supabase)
     previous = {row.get("company"): row for row in fetch_previous_rows(supabase, scope)}
     rows = []

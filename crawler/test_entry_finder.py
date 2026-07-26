@@ -25,6 +25,31 @@ class CandidateClassificationTest(unittest.TestCase):
                 self.assertEqual(verdict, "reject")
                 self.assertLess(score, 0)
 
+    def test_rejects_institutional_aggregator_and_government_hosts(self):
+        cases = {
+            "https://job.mju.edu.cn/campus/view/id/976181": "institutional_host",
+            "https://careers.example.edu/jobs/1": "institutional_host",
+            "https://m.nj.bendibao.com/job/179796.shtm": "aggregator_site",
+            "https://www.gaoxiaojob.com/announcement/1": "aggregator_site",
+            "https://rsj.example.gov.cn/recruit/1": "government_notice",
+        }
+        for url, expected_reason in cases.items():
+            with self.subTest(url=url):
+                verdict, score, reason = ef.classify_candidate_url(url, "甲公司")
+                self.assertEqual(verdict, "reject")
+                self.assertLess(score, 0)
+                self.assertEqual(reason, expected_reason)
+
+    def test_iguopin_only_accepts_company_scoped_job_page(self):
+        accepted = ef.classify_candidate_url(
+            "https://www.iguopin.com/job?company=视觉中国", "视觉中国"
+        )
+        rejected = ef.classify_candidate_url(
+            "https://www.iguopin.com/job/list?keyword=视觉设计", "视觉中国"
+        )
+        self.assertEqual(accepted[0], "trusted_ats")
+        self.assertEqual(rejected, ("reject", -100, "iguopin_search_page"))
+
     def test_known_ats_and_iguopin_are_trusted(self):
         for url in (
             "https://acme.jobs.mokahr.com/social-recruitment/acme/1",
@@ -92,6 +117,10 @@ class CascadeSearchTest(unittest.TestCase):
         self.assertEqual(len(qianfan.calls), 1)
         self.assertEqual(len(serper.calls), 0)
         self.assertEqual(result["search_used"], 1)
+        self.assertEqual(
+            [item["url"] for item in result["candidates"]],
+            ["https://acme.mokahr.com/social-recruitment/acme/1"],
+        )
 
     def test_never_uses_more_than_two_searches(self):
         qianfan = _Provider("qianfan", [[]])

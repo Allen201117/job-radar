@@ -7,6 +7,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import platform_fingerprint as pf
 
 
+class _Response:
+    def __init__(self, url, html, status_code=200):
+        self.url = url
+        self.text = html
+        self.status_code = status_code
+
+
+class _Client:
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def get(self, url, timeout):
+        self.calls.append((url, timeout))
+        return self.response
+
+
 class DetectPlatformTest(unittest.TestCase):
     def test_detects_known_platforms_from_url_or_html(self):
         cases = [
@@ -81,6 +98,94 @@ class DetectPlatformTest(unittest.TestCase):
         self.assertIsNone(
             pf.resolve_source_url("iguopin", "https://www.iguopin.com/job", "")
         )
+        self.assertIsNone(
+            pf.resolve_source_url("hotjob", "https://gimc.hotjob.cn", "")
+        )
+
+    def test_hotjob_requires_or_derives_a_suite_path(self):
+        self.assertEqual(
+            pf.resolve_source_url(
+                "hotjob",
+                "https://gimc.hotjob.cn/GIMC/pb/social.html",
+                "",
+            ),
+            "https://gimc.hotjob.cn/GIMC/pb/social.html",
+        )
+        self.assertEqual(
+            pf.resolve_source_url(
+                "hotjob",
+                "https://gimc.hotjob.cn",
+                '<script>fetch("/wecruit/positionInfo/listPosition/GIMC")</script>',
+            ),
+            "https://gimc.hotjob.cn/GIMC/pb/social.html",
+        )
+        self.assertEqual(
+            pf.resolve_source_url(
+                "hotjob",
+                "https://gimc.hotjob.cn/GIMC/pb/school.html",
+                '<script>fetch("/wecruit/positionInfo/listPosition/GIMC")</script>',
+            ),
+            "https://gimc.hotjob.cn/GIMC/pb/school.html",
+        )
+        self.assertEqual(
+            pf.resolve_source_url(
+                "hotjob",
+                "https://gimc.hotjob.cn/GIMC/pb/interns.html",
+                '<script src="https://gimc.hotjob.cn/wecruit/positionInfo/listPosition/GIMC"></script>',
+            ),
+            "https://gimc.hotjob.cn/GIMC/pb/interns.html",
+        )
+
+
+class IdentityTest(unittest.TestCase):
+    def test_identity_accepts_exact_name_and_safe_core_variant(self):
+        exact = pf.verify_page_identity(
+            "华策影视",
+            "https://jobs.example.com",
+            "<title>华策影视招聘</title><main>欢迎加入</main>",
+        )
+        core = pf.verify_page_identity(
+            "利欧集团",
+            "https://jobs.example.com",
+            "<title>利欧招聘</title><main>社会招聘职位</main>",
+        )
+        self.assertTrue(exact[0])
+        self.assertTrue(core[0])
+
+    def test_identity_rejects_wrong_tenant_host_only_and_too_short_core(self):
+        wrong = pf.verify_page_identity(
+            "博纳影业",
+            "https://gimc.hotjob.cn/GIMC/pb/social.html",
+            "<title>省广集团 GIMC 招聘</title>",
+        )
+        host_only = pf.verify_page_identity(
+            "华谊兄弟",
+            "https://huayimedia.example.com/recruit",
+            "<title>社会招聘</title><main>开放岗位</main>",
+        )
+        short_core = pf.verify_page_identity(
+            "甲公司",
+            "https://jobs.example.com",
+            "<title>甲招聘</title>",
+        )
+        self.assertFalse(wrong[0])
+        self.assertFalse(host_only[0])
+        self.assertFalse(short_core[0])
+
+    def test_fingerprint_reuses_its_single_get_for_identity(self):
+        url = "https://acme.mokahr.com/social-recruitment/acme/1"
+        client = _Client(_Response(url, "<title>Acme 招聘</title>"))
+        result = pf.fingerprint(url, company="Acme", client=client)
+        self.assertTrue(result["identity_ok"])
+        self.assertIn("page_company_match", result["identity_reason"])
+        self.assertEqual(len(client.calls), 1)
+
+    def test_fingerprint_marks_wrong_company_page(self):
+        url = "https://gimc.hotjob.cn/GIMC/pb/social.html"
+        client = _Client(_Response(url, "<title>省广集团招聘</title>"))
+        result = pf.fingerprint(url, company="博纳影业", client=client)
+        self.assertFalse(result["identity_ok"])
+        self.assertEqual(result["identity_reason"], "page_company_not_found")
 
 
 class SpecialStateTest(unittest.TestCase):

@@ -2,6 +2,7 @@ import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -50,6 +51,82 @@ class ClassifyCompanyTest(unittest.TestCase):
         )
         scheduled = gc.schedule_initial_retry(row, NOW)
         self.assertEqual(scheduled["next_retry_at"], NOW.isoformat())
+
+    def test_parent_portal_brand_with_three_healthy_titles_is_healthy_and_not_queued(self):
+        company = {
+            **_company("网易云音乐", "%网易云音乐%", "传媒/文娱"),
+            "parentPattern": "%网易%",
+            "brandTokens": ["云音乐"],
+        }
+        row = gc.classify_company(
+            company,
+            [{
+                "company": "网易集团",
+                "active_total": 41,
+                "healthy": 41,
+                "brand_rollups": {
+                    "%网易云音乐%": {"active_total": 41, "healthy": 3}
+                },
+            }],
+            [],
+        )
+        queue = gc.plan_queue(
+            [row], {"传媒/文娱"}, set(), {"传媒/文娱": 1.0}, now=NOW, cap=20
+        )
+        self.assertEqual(row["state"], "healthy")
+        self.assertEqual(row["evidence"]["parent_portal_healthy_jobs"], 3)
+        self.assertEqual(queue, [])
+
+    def test_parent_portal_brand_with_two_healthy_titles_stays_in_queue(self):
+        company = {
+            **_company("网易云音乐", "%网易云音乐%", "传媒/文娱"),
+            "parentPattern": "%网易%",
+            "brandTokens": ["云音乐"],
+        }
+        row = gc.classify_company(
+            company,
+            [{
+                "company": "网易集团",
+                "active_total": 41,
+                "healthy": 41,
+                "brand_rollups": {
+                    "%网易云音乐%": {"active_total": 2, "healthy": 2}
+                },
+            }],
+            [],
+        )
+        queue = gc.plan_queue(
+            [row], {"传媒/文娱"}, set(), {"传媒/文娱": 0.0}, now=NOW, cap=20
+        )
+        self.assertEqual(row["state"], "unknown")
+        self.assertEqual([item["company"] for item in queue], ["网易云音乐"])
+
+    def test_brand_rollup_query_is_single_scan_and_title_only(self):
+        companies = [{
+            **_company("网易云音乐", "%网易云音乐%", "传媒/文娱"),
+            "parentPattern": "%网易%",
+            "brandTokens": ["云音乐"],
+        }]
+        with mock.patch.object(gc.jobs_db, "fetch_all", return_value=[]) as fetch:
+            self.assertEqual(gc.fetch_job_aggregates(object(), companies), [])
+        fetch.assert_called_once()
+        sql = fetch.call_args.args[1].lower()
+        self.assertIn("title ilike any", sql)
+        self.assertIn("company not ilike", sql)
+        self.assertNotIn("summary ilike", sql)
+
+    def test_load_companies_preserves_optional_brand_fields(self):
+        with mock.patch.object(gc.must_apply, "by_industry", return_value={
+            "传媒/文娱": [{
+                "name": "网易云音乐",
+                "pattern": "%网易云音乐%",
+                "parentPattern": "%网易%",
+                "brandTokens": ["云音乐"],
+            }]
+        }):
+            loaded = gc.load_companies("domestic")
+        self.assertEqual(loaded[0]["parentPattern"], "%网易%")
+        self.assertEqual(loaded[0]["brandTokens"], ["云音乐"])
 
 
 class QueuePlanningTest(unittest.TestCase):
