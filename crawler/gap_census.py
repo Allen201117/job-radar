@@ -284,8 +284,9 @@ def census(supabase, jobs_conn, *, scope="domestic", cap=20, company=None,
         now=now,
         cap=cap,
     )
-    if apply:
-        _upsert_attempts(supabase, scope, rows, now)
+    # 台账是我们自己的簿记（不是 sources/jobs），dry-run 也要落盘：
+    # 它记的是「每家公司当前处于什么状态」，不落盘就等于每轮从零开始。
+    _upsert_attempts(supabase, scope, rows, now)
     return {
         "rows": rows,
         "queue": queue,
