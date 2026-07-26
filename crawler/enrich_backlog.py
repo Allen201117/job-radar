@@ -59,11 +59,10 @@ def _thread_sb(make_sb):
 
 
 def _thread_jobs_conn(make_jobs_conn):
-    """Phase 1：每线程独立香港 jobs 库连接（psycopg2 连接非线程安全）。"""
-    conn = getattr(_TLS, "jobs_conn", None)
-    if conn is None:
-        conn = make_jobs_conn()
-        _TLS.jobs_conn = conn
+    """Phase 1：每线程独立香港 jobs 库连接（psycopg2 连接非线程安全）。
+    断链要重连（见 jobs_db.live_conn）：跨境链路掐断后死连接会让本线程后续富化全部写不进去。"""
+    conn = jobs_db.live_conn(getattr(_TLS, "jobs_conn", None), make_jobs_conn)
+    _TLS.jobs_conn = conn
     return conn
 
 
@@ -307,7 +306,8 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
 
     # CLOSED 里程碑 best-effort 批量落库（仅香港库、非 dry-run）；失败只 warning，不影响巡检结果。
     if close_events and not dry_run and use_jobs:
-        rec_conn = fetch_conn or make_jobs_conn()
+        # fetch_conn 是本轮开头建的，到这里已跑完整批（可达数十分钟）；跨境链路可能早断了 → 校验/重连。
+        rec_conn = jobs_db.live_conn(fetch_conn, make_jobs_conn)
         jobs_db.record_job_events(rec_conn, close_events)
 
     print(f"完成：填充 {stat['filled']}，仍在招 {stat['alive']}，无果/死信+1 {stat['miss']}，"
