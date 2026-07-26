@@ -47,6 +47,11 @@ _ATS_HOSTS = (
     ("iguopin.com", "iguopin"),
 )
 _PATH_TOKEN_RE = re.compile(r"(?:^|[/_.-])(job|jobs|career|careers|recruit|recruitment|zhaopin|hr|campus)(?:[/_.-]|$)", re.I)
+# 招聘子域（host 以此开头）：careers.midea.com / hr.vivo.com / zhaopin.jd.com / join.xxx.com
+_CAREER_SUBDOMAIN_RE = re.compile(
+    r"^(?:m\.|www\.)?(job|jobs|career|careers|recruit|recruitment|zhaopin|hr|campus|talent|join|apply|hire)\.",
+    re.I,
+)
 _CONTENT_PATH_RE = re.compile(r"(?:^|/)(baike|wiki|news|article|encyclopedia)(?:/|$)", re.I)
 _COMPANY_STOP = {
     "co", "company", "corp", "corporation", "group", "holding", "holdings",
@@ -116,6 +121,13 @@ def classify_candidate_url(url, company):
     if _PATH_TOKEN_RE.search(path):
         score += 55
         reasons.append("career_path")
+    # 招聘子域本身就是强官方信号：中国公司的官方招聘站大量是 careers./hr./zhaopin./job(s). 开头、
+    # 路径却是根「/」（实测 careers.midea.com 就因此被判 insufficient_official_signal 误杀）。
+    # 且中文公司名切不出 latin 词 → 下面的 company_host 对它们永远不生效，只靠 path 会漏掉一大批。
+    # 放宽是安全的：真正判「这页是不是这家公司」的是 fingerprint 里的页面身份门。
+    if _CAREER_SUBDOMAIN_RE.match(host):
+        score += 55
+        reasons.append("career_subdomain")
     words = [
         word for word in re.findall(r"[a-z0-9]+", str(company or "").lower())
         if len(word) >= 3 and word not in _COMPANY_STOP

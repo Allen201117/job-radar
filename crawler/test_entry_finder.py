@@ -184,3 +184,33 @@ class CascadeSearchTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CareerSubdomainSignalTest(unittest.TestCase):
+    """招聘子域本身算官方信号——不然中文名公司的官方招聘站会被误杀。
+
+    2026-07-26 实测：careers.midea.com（美的官方招聘站）路径是根「/」、公司名「美的集团」
+    又切不出 latin 词 → 老逻辑判 insufficient_official_signal 直接丢掉。真正判「这页是不是
+    这家公司」的是 fingerprint 里的页面身份门，这一层放宽是安全的。
+    """
+
+    def test_career_subdomain_accepted_for_chinese_named_company(self):
+        for url, company in [
+            ("https://careers.midea.com", "美的集团"),
+            ("https://hr.zto.com", "中通"),
+            ("https://job.icbc.com.cn", "工商银行"),
+            ("https://zhaopin.jd.com", "京东"),
+        ]:
+            verdict, score, reason = ef.classify_candidate_url(url, company)
+            self.assertEqual(verdict, "likely_official", url)
+            self.assertGreater(score, 0, url)
+            self.assertIn("career_subdomain", reason, url)
+
+    def test_blacklists_still_win_over_career_subdomain(self):
+        # host 前缀像招聘站，但属于高校就业网 / 资讯聚合站 / 第三方平台 → 仍然拒
+        for url, company in [
+            ("http://job.mju.edu.cn/campus/view/id/1", "利欧集团"),
+            ("https://m.nj.bendibao.com/job/179796.shtm", "凤凰传媒"),
+            ("https://job.zhaopin.com/x", "某公司"),
+        ]:
+            self.assertEqual(ef.classify_candidate_url(url, company)[0], "reject", url)
