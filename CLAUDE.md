@@ -44,6 +44,8 @@
 3. **精准 / 可靠 / 稳定 > 规模，但正式上线后「保精度逐步扩量」（2026-07-02 更新，覆盖旧「停止扩源」表述）**
    ⚠️ **2026-07-02 方向更新**：产品已正式上线，`~800` 源不够用了 → 转入**「在保精度基础上逐步扩量」**（用户 2026-07-02 定调，优先于下面 2026-06-15 的「停止铺量」旧调）。落地 = **每日自动定向扩源已启用并真入库**：`auto-discover.yml`（httpx，每日 UTC 23）+ `auto-discover-browser.yml`（beisen/moka 浏览器，每日 UTC 21）跑 `crawler/auto_discover.py` / `auto_discover_browser.py`，从精选目标公司清单里取库里没有的公司 → live 探活 → **只入「探活通过 + 真有在招岗 + 标题核验防张冠李戴」的源**（精度红线不变，猜错/无岗自动丢）。三管齐下提产出：① `crawler/targets_tech_consumer.json`（149 家科技/互联网/新经济/消费/游戏/AI/智能硬件/SaaS 目标公司，每家多 slug 变体，`_priority` 优先探，纠正旧清单 76% 传统制造与目标用户错配）；② 提转化（多 slug + 优先探对方向）；③ 提每日配额（httpx target 30→80/insert 20→40，browser tenant 60→120/confirm 10→15）。**扩量 = 定向补目标用户要的科技/消费公司，不是无脑铺量**；仍禁止猜 slug 直接入库（靠探活门兜底）。管理员看板「自动扩源」卡可看每日产出。
    **④ 持续喂清单（LLM 生成器，`crawler/generate_targets.py`，2026-07-02 加）**：静态清单会烧完 → 每日在两个 auto-discover CI 里用 SiliconFlow（复用 `insight_engine.chat_json`，env `AUTO_DISCOVER_LLM=true` + `SILICONFLOW_API_KEY`，按行业主题按日轮转）生成一批「库里没有的」真实公司候选，喂给**同一条探活验证门**（编造/猜错 slug 探活不过自动丢，绝不入库）。`AUTO_DISCOVER_LLM` 一关即回退纯静态清单。诚实边界：LLM 的真实公司宇宙有限（几千家量级），能把库从 ~900 持续喂到几千、撑很久，但不是无限高速。
+   **⑤ 缺口漏斗（2026-07-27 加，专治必投清单覆盖）**：上面①-④是「按公司清单猜 slug 探 4 个平台（feishu/hotjob/beisen/moka）」，对**非互联网行业结构性够不着**——银行/央企/外企/自建门户不在这 4 个平台上，实测 151 家必投缺口里 150 家在 sources 表连一行都没有，且 120 家天天被猜天天 0。补上的是 `crawler/gap_funnel.py` 这条**搜索找入口 → 平台指纹 → 已有 adapter 路由 / company_spa → 真抓回读健康岗才入库**的漏斗（`gap-funnel.yml`，默认 dry-run，失败按原因退避不空烧）。
+   **国聘（iguopin.com，国资委官方央企招聘平台）是「第三方平台禁令」的唯一例外**（创始人 2026-07-26 拍板）：央企大多没有逐岗官方详情页，国聘是唯一能拿到稳定 jd_url 的官方渠道；智联/BOSS/前程无忧/猎聘 红线不变。
    下面 2026-06-15 的「停止铺量」原则保留作**精度约束**（砍低质量、保稳定、扩源必 live 验证），但**扩源本身不再暂停**：
    **旧调（2026-06-15，现降级为精度约束）：不再以「源数量」为唯一指标，不搞无脑大规模铺量。** ⚠️ 旧「866 源里仅 ~327 在产出、539 个（62%）0 产出」已过时——2026-06-19 db-report 实测源池已健康：**~835 enabled、~98% 在产出，仅 ~15 个 0 产出**（且多为目标相关但当前无开岗的科技/半导体/智能车公司，监控即可；当天已 disable 14 个明确低相关的传统制造/医药/重工/校招结束死源）。产出仍偏向车厂/央企/制造 + 外企海外岗，与目标用户（科技/新经济/消费求职者）部分错配。MVP 阶段目标 = 让**少而精**的高质量源**稳定**产出**目标用户真正要的**岗位；**扩大规模是后期的事，现在搞一堆低质量公司源没用、只拖累信噪比**。
    - **指标换成「目标相关的有效产出」**：不看有多少源，看多少源在稳定产出 *目标相关 + 带 jd_url + 有 JD 正文* 的高质量岗位。
@@ -152,7 +154,18 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #   china_ats.py = 本土通用 ATS（moka / beisen / company_spa；host 从 source_url 动态解析，浏览器拦截 SPA）
                          #   tencent_music/antgroup/mihoyo = 必投清单大厂自建 SPA 门户（2026-07-06 live 验证：均有公开 JSON 接口，
                          #     纯 httpx 零浏览器，社招+校招一次抓全；company_spa 吃不掉——接口不返回 per-job URL，须模板拼已验证详情路由）
+                         #   iguopin.py = 国聘（国资委官方央企招聘平台）：recom-job 列表 + info 详情公开 API，纯 httpx。
+                         #     source_url 约定 https://www.iguopin.com/job?company={检索词}&match={核名词}，一源=一集团。
+                         #     ⚠️ match 走 company_name_match 严格核名（token 必须在实体名开头或只隔地名前缀），
+                         #     朴素子串会把「北京华晋中通电力」当中通快递（2026-07-26 实测），一入库就是张冠李戴。
                          # run.py / db.py / normalizer.py / robots.py / discovery.py
+                         # company_name_match.py = 公司名归属核验纯函数（关键词类源防同名子串张冠李戴，见上）
+                         # 缺口漏斗（必投清单补供给主链路，见 docs/superpowers/specs/2026-07-26-must-apply-gap-funnel-design.md）：
+                         #   gap_census.py(清单×jobs×sources → 台账 must_apply_gap_attempts + 工作队列)
+                         #   entry_finder.py(级联搜索找官方招聘入口，每家最多 2 次、首个可信即停，非扇出)
+                         #   platform_fingerprint.py(入口页 → ATS 平台指纹 → 路由 adapter / unknown_spa / anti_bot / login_wall)
+                         #   gap_funnel.py(编排 + 验收门：插 disabled 源 → 真抓 → 回读香港库健康岗 ≥1 才 enable，
+                         #     否则删源+删本次脏岗；失败按原因退避：平台猜错 30d / 无岗 14d / 反爬·登录墙转人工不再跑)
                          # ops_runs.py = 后台任务每日台账旁路写入（写 ops_runs 表，失败不阻断主任务；运营看板②每日战报数据源）
                          # probe.py = 扩源探活器：批量 live 探活候选源，仅把「真返回岗位」的写进迁移（本机跑 python3 probe.py --all --emit 025）
                          # 洞察供给：insight_backlog.py(T2 Wikidata+EDGAR+巨潮 / T3 多维查询包 drain：加班文化/实习体验/年终奖/晋升/面试难度→各维度；支持 --company 单公司现查；EDGAR 财报员工数会覆盖 headcount_band) / insight_engine.py(接地→判官→共识) / wikidata.py / official_edgar.py(SEC 美股上市+业绩 XBRL companyfacts) / official_cninfo.py(巨潮 A股,默认关需 INSIGHT_CNINFO_ENABLED；2026-07-02 live 验过 stockList 结构与比亚迪/顺丰匹配，但 repo Variable 仍需有效 GitHub 凭据启用) / insight_sweep.py(过期下架)
@@ -165,8 +178,10 @@ supabase/migrations/     # 001_init → 002_rls → … → 007_candidate_profil
                          # → 015_verify_experience_sources（experience 真实来源核验）
                          # → 016_rewrite_culture_and_experience_copy（去「避坑」+ 9 条 experience 正文改通俗）
                          # → …（前缀递增，详见目录）→ 158_admin_health_snapshot → 159_admin_ops_dashboard（ops_runs 台账表 + 运营看板聚合函数）→ 165_insight_enrich_now_and_hiring_monthly
+                         # → 184_company_logos → 185_must_apply_gap_attempts（必投缺口漏斗台账）
                          # → 166_insight_submissions → 167_overseas_prefs → 168_sources_regions → 169_seed_overseas_regions → 172_user_pref_experience_stage（求职阶段字段）
 .github/workflows/daily-crawl.yml   # 每日 + 手动抓取
+.github/workflows/gap-funnel.yml    # 必投缺口漏斗（每日 UTC 22:40；默认 dry-run，apply=true 才写库）
 tests/                   # node --test 单测
 ```
 
@@ -185,6 +200,7 @@ tests/                   # node --test 单测
 | discovery_runs | 官方源发现日志 | admin 读，service role 写 |
 | events | 自有埋点（简历解析质量等去标识 diagnostics） | 自己写，admin 聚合 |
 | ops_runs | 后台任务每日台账（运营看板②每日战报来源，迁移 159） | service_role 读写 |
+| must_apply_gap_attempts | 必投缺口漏斗台账：每家缺口公司走到哪一步/失败原因/复查日期（迁移 185） | service_role 写，admin 读 |
 
 共享 `jobs`，偏好与操作按 `user_id` 隔离（同一岗位可被 A 标投递、B 标收藏）。
 
