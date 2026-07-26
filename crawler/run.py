@@ -228,9 +228,13 @@ def _get_thread_supabase():
 
 
 def _get_thread_jobs_conn():
-    """Phase 1：每线程独立的自建香港 jobs 库连接（psycopg2 连接非线程安全，须每线程一个）。"""
-    if not hasattr(_TLS, "jobs_conn"):
-        _TLS.jobs_conn = jobs_db.get_conn()
+    """Phase 1：每线程独立的自建香港 jobs 库连接（psycopg2 连接非线程安全，须每线程一个）。
+
+    ⚠️ 必须每次校验存活、断了重连（jobs_db.live_conn）：重档单片要跑 1-3 小时，跨境链路被中间设备
+    掐断后 psycopg2 会把连接标 closed，若继续复用这条死连接，之后每个源的 upsert 全是
+    `InterfaceError: connection already closed` —— 2026-07-25 实测某片 20:09 断链后剩余 ~1h50m
+    抓的岗一行没写进库，还照样烧满 180min 超时。重连后最多只损失断链当下那一批。"""
+    _TLS.jobs_conn = jobs_db.live_conn(getattr(_TLS, "jobs_conn", None))
     return _TLS.jobs_conn
 
 
