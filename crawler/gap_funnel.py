@@ -368,12 +368,22 @@ def run_acceptance_gate(entry, *, adapter, source_url, supabase, jobs_conn,
 def _attempt_payload(row, result, now):
     evidence = dict(row.get("evidence") or {})
     evidence.update(result.get("evidence") or {})
+    state = result["state"]
+    next_retry_at = result.get("next_retry_at")
+    if state == "dry_run":
+        # dry-run 走到验收门就停（不插源、不抓取），但**已经查到的入口/平台必须落台账**：
+        # 否则这一轮烧掉的搜索额度白花，下一轮还得对同一批公司重搜一遍
+        # （2026-07-26 首轮实测：dry-run 花了 37 次搜索，什么都没记下来）。
+        # 落成 platform_known + 立即可重试 → 下次 apply 跑时 process_company 直接复用
+        # official_entry_url、跳过搜索。'dry_run' 不是台账 state 枚举值，不能直接写。
+        state = "platform_known"
+        next_retry_at = _iso(now)
     return {
         "scope": row.get("scope", "domestic"),
         "company": row["company"],
         "pattern": row["pattern"],
         "industries": row.get("industries") or [],
-        "state": result["state"],
+        "state": state,
         "official_entry_url": result.get(
             "official_entry_url", row.get("official_entry_url")
         ),
@@ -388,7 +398,7 @@ def _attempt_payload(row, result, now):
             result.get("rounds_no_entry", row.get("rounds_no_entry") or 0)
         ),
         "last_attempt_at": _iso(now),
-        "next_retry_at": result.get("next_retry_at"),
+        "next_retry_at": next_retry_at,
         "updated_at": _iso(now),
     }
 
@@ -575,14 +585,23 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
                 "evidence": {"exception_type": type(exc).__name__},
             }, now)
         outcomes.append(payload)
-        if apply:
-            try:
-                _write_attempt(supabase, payload)
-            except Exception as exc:
-                print(
-                    "[gap_funnel] %s 台账写入失败: %s: %s"
-                    % (row["company"], type(exc).__name__, str(exc)[:160])
-                )
+        # 逐家打印判定：dry-run 的全部价值就在于人能看懂它每家判了什么、凭什么判的。
+        print(
+            "[gap_funnel] %s → %s｜入口=%s｜平台=%s｜原因=%s"
+            % (payload["company"], payload["state"],
+               payload.get("official_entry_url") or "-",
+               payload.get("detected_platform") or "-",
+               payload.get("fail_reason") or "-")
+        )
+        # 台账**不分 apply**：它是我们自己的簿记（不是 sources/jobs），
+        # dry-run 也必须落盘，否则这轮烧掉的搜索额度白花、下轮还得重搜同一批公司。
+        try:
+            _write_attempt(supabase, payload)
+        except Exception as exc:
+            print(
+                "[gap_funnel] %s 台账写入失败: %s: %s"
+                % (row["company"], type(exc).__name__, str(exc)[:160])
+            )
 
     counts = Counter(item["state"] for item in outcomes)
     failed = sum(

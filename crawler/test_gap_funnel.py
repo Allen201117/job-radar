@@ -35,6 +35,14 @@ class _Query:
         self.action, self.payload = "insert", dict(payload)
         return self
 
+    def upsert(self, payload, on_conflict=None):
+        # 台账走 upsert。假件必须实现它：早先没实现时 _write_attempt 会抛 AttributeError
+        # 被 run_round 的 try/except 吞掉，于是「dry-run 没写任何东西」的断言是假通过。
+        self.action = "upsert"
+        self.payload = payload if isinstance(payload, list) else dict(payload)
+        self.on_conflict = on_conflict
+        return self
+
     def update(self, payload):
         self.action, self.payload = "update", dict(payload)
         return self
@@ -424,7 +432,17 @@ class RoundCapTest(unittest.TestCase):
         provider.consume.assert_called_once_with(sb, 1)
         self.assertEqual(result["metrics"]["search_used"], 1)
         self.assertIn("真实搜索消耗=1/", output.getvalue())
-        self.assertEqual(sb.writes, [])
+        # dry-run 契约：**台账要写**（它是我们自己的簿记，不写就等于这轮搜索白烧、下轮重搜），
+        # 但 sources / jobs 一个字都不许动。
+        written_tables = {name for name, _action, _payload in sb.writes}
+        self.assertEqual(written_tables, {"must_apply_gap_attempts"})
+        attempt = [p for name, action, p in sb.writes
+                   if name == "must_apply_gap_attempts" and action == "upsert"][0]
+        self.assertEqual(attempt["state"], "platform_known",
+                         "dry-run 查到的入口要落成 platform_known，下轮才能跳过搜索直接复用")
+        self.assertEqual(attempt["official_entry_url"],
+                         "https://acme.mokahr.com/social-recruitment/acme/1")
+        self.assertNotIn("sources", written_tables)
         self.assertEqual(conn.executed, [])
 
     def test_company_exception_is_printed_before_attempt_write(self):
