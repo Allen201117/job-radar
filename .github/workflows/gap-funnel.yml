@@ -1,6 +1,8 @@
 name: must-apply-gap-funnel
 
-# P1 httpx 道：默认 dry-run。只有手动 dispatch 且 apply=true 才会写 sources/jobs/台账。
+# 定时跑 = apply（2026-07-27 起）：验收门已在两轮 prod 实跑里验证过——搜索给了一堆张冠李戴的
+# 入口（高校就业网/本地宝/别家公司的 ATS 租户），一个都没能入库，全部停在失败态。dry-run 只写台账
+# 不加源，留着当默认等于每天空转。手动 dispatch 仍可传 apply=false 回到 dry-run。
 on:
   schedule:
     - cron: "40 22 * * *"
@@ -19,9 +21,9 @@ on:
         required: false
         default: "5"
       apply:
-        description: "true=真抓并按验收门写入；留空=dry-run"
+        description: "true=真抓并按验收门写入（定时跑默认 true）；填 false 回到 dry-run"
         required: false
-        default: ""
+        default: "true"
 
 jobs:
   funnel:
@@ -39,7 +41,7 @@ jobs:
       BOCHA_API_KEY: ${{ secrets.BOCHA_API_KEY }}
       DISPATCH_LIMIT: ${{ github.event.inputs.limit || '20' }}
       DISPATCH_COMPANY: ${{ github.event.inputs.company || '' }}
-      DISPATCH_APPLY: ${{ github.event.inputs.apply || '' }}
+      DISPATCH_APPLY: ${{ github.event.inputs.apply || 'true' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +76,7 @@ jobs:
       JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
       GAP_FUNNEL_BROWSER_CAP: ${{ github.event.inputs.browser_limit || '5' }}
       DISPATCH_COMPANY: ${{ github.event.inputs.company || '' }}
-      DISPATCH_APPLY: ${{ github.event.inputs.apply || '' }}
+      DISPATCH_APPLY: ${{ github.event.inputs.apply || 'true' }}
 
     steps:
       - uses: actions/checkout@v4
