@@ -20,6 +20,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
+from company_name_match import company_name_matches
+
 from .base import BaseAdapter, PageResult, RawJob, paginate_all, resolve_detail_cap
 
 
@@ -120,8 +122,8 @@ class IguopinAdapter(BaseAdapter):
             if not job_id or not title:
                 continue
             company = str(row.get("company_name") or "").strip()
-            if match and match not in company:
-                continue  # 模糊搜索夹带的无关公司岗，精准过滤掉
+            if match and not company_name_matches(company, match):
+                continue  # 模糊搜索夹带的无关公司岗，精准过滤掉（严格核名，防同名子串张冠李戴）
             detail_url = _DETAIL_PAGE.format(id=job_id)
             out.append(RawJob(
                 company=company,
