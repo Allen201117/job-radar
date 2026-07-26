@@ -6,6 +6,7 @@ import {
   band,
   bandTone,
   buildDailyReports,
+  computeMustApplySupplyLedger,
   computeClickValidityMetrics,
   coverageBand,
   evaluateCombinedHealth,
@@ -15,6 +16,7 @@ import {
   groupFetchCoverageByIndustry,
   HEALTH_THRESHOLDS,
   normalizeCrawlSources,
+  summarizeMustApplyGapAttempts,
   translateOperationalTerm,
   type ClickValidityMetrics,
   type CoverageSnapshot,
@@ -25,6 +27,9 @@ import {
   type MustApplyFetchCoverage,
   type MustApplyFetchCoverageCompany,
   type OpsRunAggregateRow,
+  type GapFunnelOpsRow,
+  type MustApplyGapAttemptRow,
+  type MustApplyGapSummary,
   type TodayCrawlRow,
   type TodayDiscoveryRow,
 } from "@/lib/admin-health";
@@ -36,6 +41,7 @@ import {
   mustApplyByIndustry,
   MUST_APPLY_BY_INDUSTRY,
   MUST_APPLY_INDUSTRIES,
+  MUST_APPLY_VERSION,
   mustApplyUnion,
   resolveMustApplyIndustries,
   resolveMustApplyScopes,
@@ -43,7 +49,7 @@ import {
 } from "@/lib/must-apply-list";
 import { canonicalizeUserIndustry } from "@/lib/company-industry";
 import { createServiceClient } from "@/lib/supabaseService";
-import { fetchAllSources } from "@/lib/supabase-paginate";
+import { fetchAllPages, fetchAllSources } from "@/lib/supabase-paginate";
 import {
   Bug,
   ChartBar,
@@ -112,6 +118,10 @@ const MUST_APPLY_SCOPES: MustApplyScope[] = ["domestic", "overseas"];
 const MUST_APPLY_SCOPE_LABEL: Record<MustApplyScope, string> = { domestic: "国内", overseas: "海外" };
 
 type SourceRow = { company: string | null; enabled: boolean };
+type MustApplyGapAdminData = {
+  attempts: MustApplyGapAttemptRow[];
+  opsRuns: GapFunnelOpsRow[];
+};
 
 /** 库里全部源（含 disabled），用于判断必投公司「有没有接过源」。
  * ⚠️ 必须分页拉全量：PostgREST 单次 select 默认最多返回 1000 行，而 sources 已越过 1000
@@ -148,6 +158,31 @@ async function loadMustApplyCoverage(): Promise<MustApplyRowsByScope> {
   const sources = await loadAllSources();
   const entries = await Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await loadMustApplyCoverageForScope(scope, sources)] as const));
   return Object.fromEntries(entries) as MustApplyRowsByScope;
+}
+
+async function loadMustApplyGapAdminData(): Promise<MustApplyGapAdminData> {
+  const service = createServiceClient();
+  const [attempts, opsResult] = await Promise.all([
+    fetchAllPages<MustApplyGapAttemptRow>((from, to) =>
+      service
+        .from("must_apply_gap_attempts")
+        .select("id,company,state,fail_reason,last_attempt_at,next_retry_at,evidence")
+        .eq("scope", "domestic")
+        .order("id", { ascending: true })
+        .range(from, to),
+    ),
+    service
+      .from("ops_runs")
+      .select("module,run_date,finished_at,metrics")
+      .in("module", ["gap_funnel", "gap_funnel_browser"])
+      .order("finished_at", { ascending: false })
+      .limit(20),
+  ]);
+  if (opsResult.error) throw new Error(opsResult.error.message);
+  return {
+    attempts,
+    opsRuns: (opsResult.data || []) as GapFunnelOpsRow[],
+  };
 }
 
 async function loadUserIndustryDistribution(): Promise<UserIndustryDistribution> {
@@ -698,11 +733,12 @@ function MustApplyIndustryBlock({
   const checkedCount = rows.filter((r) => r.checked72h > 0).length;
   const gaps = rows.filter((r) => r.healthy === 0);
   const blind = rows.filter((r) => r.healthy > 0 && r.checked72h === 0);
+  const parentCovered = rows.filter((r) => r.coveredViaParentPortal);
   const gridCells = rows.map((r) => {
     const tone: BandTone = r.healthy === 0 ? "danger" : r.checked72h === 0 ? "warning" : "success";
     return {
       tone,
-      label: `${r.name}｜健康岗 ${r.healthy}·近7天新 ${r.new7d}·72h核验 ${r.checked72h}｜${sourceStatusLabel(r)}`,
+      label: `${r.name}｜健康岗 ${r.healthy}·近7天新 ${r.new7d}·72h核验 ${r.checked72h}｜${sourceStatusLabel(r)}${r.coveredViaParentPortal ? "｜经父公司门户覆盖" : ""}`,
     };
   });
   return (
@@ -757,6 +793,11 @@ function MustApplyIndustryBlock({
             </p>
           )}
         </div>
+      )}
+      {parentCovered.length > 0 && (
+        <p className="mt-4 rounded-2xl border border-[#b8c9b8] bg-[#edf3e8] px-3.5 py-2.5 text-sm text-[#476047] dark:border-[#557055]/60 dark:bg-[#1d2b1d] dark:text-[#b9d2b5]">
+          经父公司门户覆盖：{parentCovered.map((row) => `${row.name}（${row.parentPortalHealthy} 条健康岗）`).join("、")}。这些不是独立子品牌源。
+        </p>
       )}
       <MustApplyFetchCoverageBlock coverage={fetchCoverage} />
     </section>
@@ -1505,8 +1546,57 @@ function JobsTab({ jobs, clickValidity, clickStatus, coverage, operations, today
   return <div className="grid gap-5"><section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{jobs ? <><VisualChip label="在招总量" value={formatCount(jobs.activeTotal)} tone="success" /><VisualChip label="今日新进" value={formatCount(jobs.todayNew)} tone="success" /><VisualChip label="今日下架" value={todayRemoved == null ? "—" : formatCount(todayRemoved)} tone="warning" /><VisualChip label="空壳岗" value={formatCount(jobs.thinActive)} tone="warning" /><VisualChip label="待核查" value={formatCount(jobs.neverChecked)} tone="muted" /></> : <ErrorPanel label="岗位库体检" />}</section>{jobs && <section className="surface p-5"><h2 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">库存结构</h2><StackedBar className="mt-4 h-4" total={jobs.activeTotal} segments={[{ value: jobs.validActive, tone: "success" }, { value: jobs.thinActive, tone: "warning" }]} /><p className="mt-3 text-xs text-[#8a8275] dark:text-[#9a9184]">有效在招 {formatCount(jobs.validActive)} · 空壳 {formatCount(jobs.thinActive)}</p><div className="mt-4"><div className="flex justify-between text-xs text-[#6b655a] dark:text-[#b6ad9d]"><span>待核查（与左侧有交集）</span><span>{formatCount(jobs.neverChecked)}</span></div><MiniBar className="mt-2" pct={share(jobs.neverChecked, jobs.activeTotal)} tone={bandTone(checkedBand)} /></div></section>}<section className="grid gap-4 md:grid-cols-2">{jobs && <div className="surface flex items-center gap-5 p-5"><StatRing pct={share(jobs.validActive, jobs.activeTotal)} tone={bandTone(validBand)}><span className="text-xl font-semibold">{formatPercent(jobs.validActive, jobs.activeTotal)}</span></StatRing><p>有效率</p></div>}<div className="surface flex items-center gap-5 p-5"><StatRing pct={clickValidity?.coverageRate ?? null} tone="muted"><span className="text-xl font-semibold">{clickValidity?.coverageRate == null ? "—" : formatRate(clickValidity.coverageRate)}</span></StatRing><p>探活覆盖</p></div></section><ClickValiditySection clickValidity={clickValidity} status={clickStatus} summary="展示岗位自动探活（非用户点击统计）" /><section className="surface p-5"><h2 className="mb-4 text-xl font-semibold">抓全率</h2><CoverageSection snapshot={coverage} /></section><details className="surface p-5"><summary className="cursor-pointer text-xl font-semibold">分源状态</summary><div className="mt-5"><JobsLibrarySection jobs={null} operations={operations} crawlSources={normalizeCrawlSources(operations?.crawl_sources)} todayRemoved={todayRemoved} validActiveShareBand={validBand} thinShareBand="empty" neverCheckedShareBand={checkedBand} /></div></details></div>;
 }
 
-function SupplyTab({ rowsByScope, fetchByIndustry, activeIndustries, userDistribution, worst }: { rowsByScope: MustApplyRowsByScope | null; fetchByIndustry: Record<MustApplyScope, Record<string, MustApplyFetchCoverage>> | null; activeIndustries: Record<MustApplyScope, string[]>; userDistribution: UserIndustryDistribution; worst: { scope: MustApplyScope; industry: string; healthy: number | null; total: number; zeroHealthyCompanies: string[] } }) {
-  return <div className="grid gap-5"><section className="surface flex flex-col items-center p-6 text-center"><StatRing pct={rowsByScope ? (worst.healthy || 0) / worst.total : null} tone={bandTone(mustApplyIndustryBand(rowsByScope?.[worst.scope]?.[worst.industry] || null))} size={180}><span className="text-3xl font-semibold">{rowsByScope ? String(worst.healthy || 0) + "/30" : "—"}</span></StatRing><p className="mt-3 text-sm text-[#6b655a] dark:text-[#b6ad9d]">最需处理：{MUST_APPLY_SCOPE_LABEL[worst.scope]}·{worst.industry}</p></section><MustApplySection rowsByIndustry={rowsByScope} fetchCoverageByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} /><section className="surface p-5"><h2 className="font-semibold">缺口提示</h2><div className="mt-3 flex flex-wrap gap-2">{worst.zeroHealthyCompanies.slice(0, 10).map((company) => <span key={company} className="rounded-full bg-[#fbecd7] px-3 py-1 text-xs text-[#8f6225] dark:bg-[#825d28]/30 dark:text-[#e0b15a]">{company}</span>)}{worst.zeroHealthyCompanies.length > 10 && <span className="text-xs">等 {worst.zeroHealthyCompanies.length - 10} 家</span>}{rowsByScope && worst.zeroHealthyCompanies.length === 0 && <span>真实 0 家缺口</span>}{!rowsByScope && <span>—</span>}</div></section></div>;
+function MustApplyGapLedger({
+  summary,
+  ledger,
+}: {
+  summary: MustApplyGapSummary | null;
+  ledger: { realExpansion: number | null; definitionChange: number } | null;
+}) {
+  return (
+    <section className="surface p-5 sm:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-semibold">缺口漏斗台账</h2>
+          <p className="mt-1 text-sm text-[#6b655a] dark:text-[#b6ad9d]">国内清单版本 {MUST_APPLY_VERSION}；真实扩源与计量规则变化分开记。</p>
+        </div>
+        <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${BAND_CHIP_CLASS.muted}`}>清单版本 {MUST_APPLY_VERSION}</span>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <VisualChip label="本轮真实扩源" value={ledger?.realExpansion == null ? "—" : `+${ledger.realExpansion}`} tone="success" detail="国内漏斗最近有记录的一天；仅计验收后保留的新 source" />
+        <VisualChip label="口径变动" value={ledger ? `${ledger.definitionChange >= 0 ? "+" : ""}${ledger.definitionChange}` : "—"} tone="muted" detail="仅计经父公司门户新增覆盖，不冒充扩源" />
+      </div>
+      {!summary ? <div className="mt-4"><ErrorPanel label="缺口漏斗台账" /></div> : (
+        <div className="mt-5 grid gap-4 lg:grid-cols-3">
+          <div>
+            <h3 className="text-sm font-semibold">国内各状态</h3>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {Object.entries(summary.stateCounts).map(([state, count]) => (
+                <span key={state} className={`rounded-full px-2.5 py-1 text-xs ${BAND_CHIP_CLASS.muted}`}>{state} {count}</span>
+              ))}
+            </div>
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold">最近失败原因 Top 5</h3>
+            <ul className="mt-2 space-y-1.5 text-xs text-[#6b655a] dark:text-[#b6ad9d]">
+              {summary.recentFailures.map((failure) => <li key={`${failure.company}-${failure.at}`}>{failure.company}：{failure.reason}</li>)}
+              {!summary.recentFailures.length && <li>暂无失败</li>}
+            </ul>
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold">manual_review 公司</h3>
+            <p className="mt-2 text-xs leading-5 text-[#6b655a] dark:text-[#b6ad9d]">
+              {summary.manualReviewCompanies.join("、") || "暂无"}
+            </p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SupplyTab({ rowsByScope, fetchByIndustry, activeIndustries, userDistribution, worst, gapSummary, ledger }: { rowsByScope: MustApplyRowsByScope | null; fetchByIndustry: Record<MustApplyScope, Record<string, MustApplyFetchCoverage>> | null; activeIndustries: Record<MustApplyScope, string[]>; userDistribution: UserIndustryDistribution; worst: { scope: MustApplyScope; industry: string; healthy: number | null; total: number; zeroHealthyCompanies: string[] }; gapSummary: MustApplyGapSummary | null; ledger: { realExpansion: number | null; definitionChange: number } | null }) {
+  return <div className="grid gap-5"><MustApplyGapLedger summary={gapSummary} ledger={ledger} /><section className="surface flex flex-col items-center p-6 text-center"><StatRing pct={rowsByScope ? (worst.healthy || 0) / worst.total : null} tone={bandTone(mustApplyIndustryBand(rowsByScope?.[worst.scope]?.[worst.industry] || null))} size={180}><span className="text-3xl font-semibold">{rowsByScope ? String(worst.healthy || 0) + "/30" : "—"}</span></StatRing><p className="mt-3 text-sm text-[#6b655a] dark:text-[#b6ad9d]">最需处理：{MUST_APPLY_SCOPE_LABEL[worst.scope]}·{worst.industry}</p></section><MustApplySection rowsByIndustry={rowsByScope} fetchCoverageByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} /><section className="surface p-5"><h2 className="font-semibold">缺口提示</h2><div className="mt-3 flex flex-wrap gap-2">{worst.zeroHealthyCompanies.slice(0, 10).map((company) => <span key={company} className="rounded-full bg-[#fbecd7] px-3 py-1 text-xs text-[#8f6225] dark:bg-[#825d28]/30 dark:text-[#e0b15a]">{company}</span>)}{worst.zeroHealthyCompanies.length > 10 && <span className="text-xs">等 {worst.zeroHealthyCompanies.length - 10} 家</span>}{rowsByScope && worst.zeroHealthyCompanies.length === 0 && <span>真实 0 家缺口</span>}{!rowsByScope && <span>—</span>}</div></section></div>;
 }
 
 function UserTab({ operations, users, resume }: { operations: SupabaseHealthSnapshot | null; users: NonNullable<SupabaseHealthSnapshot["today"]>["users"] | null; resume: NonNullable<SupabaseHealthSnapshot["today"]>["resume"] | null }) {
@@ -1524,11 +1614,35 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   const rawTab = typeof query.tab === "string" ? query.tab : "";
   const tab = rawTab === "jobs" || rawTab === "supply" || rawTab === "users" || rawTab === "system" ? rawTab : "overview";
   const overview = tab === "overview";
-  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult] = await Promise.allSettled([overview || tab === "jobs" ? getJobsHealthSnapshot() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), overview || tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await getMustApplyFetchCoverage(createServiceClient(), scope)] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null)]);
+  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult, gapResult] = await Promise.allSettled([overview || tab === "jobs" ? getJobsHealthSnapshot() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), overview || tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await getMustApplyFetchCoverage(createServiceClient(), scope)] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null), tab === "supply" ? loadMustApplyGapAdminData() : Promise.resolve(null)]);
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
   const clickValidity = clickResult.status === "fulfilled" ? clickResult.value : null;
   const rowsByScope = mustApplyResult.status === "fulfilled" ? mustApplyResult.value : null;
+  const gapData = gapResult.status === "fulfilled" ? gapResult.value : null;
+  const currentDomesticCompanies = new Set(mustApplyUnion("domestic").map((row) => row.name));
+  const gapSummary = gapData
+    ? summarizeMustApplyGapAttempts(
+      gapData.attempts.filter(
+        (row) =>
+          currentDomesticCompanies.has(String(row.company || ""))
+          && row.evidence?.list_version === MUST_APPLY_VERSION,
+      ),
+    )
+    : null;
+  const domesticCoverageRows = rowsByScope
+    ? Array.from(new Map(
+      Object.values(rowsByScope.domestic)
+        .flat()
+        .map((row) => [row.pattern, row] as const),
+    ).values())
+    : [];
+  const supplyLedger = gapData && rowsByScope
+    ? computeMustApplySupplyLedger(
+      gapData.opsRuns.filter((row) => row.metrics?.list_version === MUST_APPLY_VERSION),
+      domesticCoverageRows,
+    )
+    : null;
   const coverage = coverageResult.status === "fulfilled" ? coverageResult.value : null;
   const userDistribution = industriesResult.status === "fulfilled" && industriesResult.value ? industriesResult.value : { counts: { domestic: {}, overseas: {} }, scopeUsers: { domestic: 0, overseas: 0 }, unset: 0 };
   const activeIndustries = Object.fromEntries(MUST_APPLY_SCOPES.map((scope) => [scope, MUST_APPLY_INDUSTRIES.filter((industry) => (scope === "domestic" && industry === DEFAULT_MUST_APPLY_INDUSTRY) || (userDistribution.counts[scope][industry] || 0) > 0)])) as Record<MustApplyScope, string[]>;
@@ -1555,6 +1669,6 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   const heroStatus: SectionStatus = heroDataMissing || health.level === "critical" ? "critical" : health.actions.length ? "warn" : "ok";
   const refreshedAt = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
   const tabs = [["overview", "总览"], ["jobs", "岗位库"], ["supply", "必投供给"], ["users", "用户行为"], ["system", "系统运行"]] as const;
-  const content = tab === "overview" ? <OverviewTab health={health} heroStatus={heroStatus} heroDataMissing={heroDataMissing} jobs={jobs} users={users} supplyStatus={supplyStatus} systemStatus={systemStatus} worst={worst} rowsByScope={rowsByScope} reports={reports} ran={ran} failed={failed} refreshedAt={refreshedAt} /> : tab === "jobs" ? <JobsTab jobs={jobs} clickValidity={clickValidity} clickStatus={clickStatus} coverage={coverage} operations={operations} todayRemoved={todayRemoved} validBand={validBand} checkedBand={checkedBand} /> : tab === "supply" ? <SupplyTab rowsByScope={rowsByScope} fetchByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} worst={worst} /> : tab === "users" ? <UserTab operations={operations} users={users} resume={resume} /> : <SystemTab operations={operations} reports={reports} refreshedAt={refreshedAt} />;
+  const content = tab === "overview" ? <OverviewTab health={health} heroStatus={heroStatus} heroDataMissing={heroDataMissing} jobs={jobs} users={users} supplyStatus={supplyStatus} systemStatus={systemStatus} worst={worst} rowsByScope={rowsByScope} reports={reports} ran={ran} failed={failed} refreshedAt={refreshedAt} /> : tab === "jobs" ? <JobsTab jobs={jobs} clickValidity={clickValidity} clickStatus={clickStatus} coverage={coverage} operations={operations} todayRemoved={todayRemoved} validBand={validBand} checkedBand={checkedBand} /> : tab === "supply" ? <SupplyTab rowsByScope={rowsByScope} fetchByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} worst={worst} gapSummary={gapSummary} ledger={supplyLedger} /> : tab === "users" ? <UserTab operations={operations} users={users} resume={resume} /> : <SystemTab operations={operations} reports={reports} refreshedAt={refreshedAt} />;
   return <div className="min-h-screen bg-editorial"><Navbar /><ProductPage maxWidth="max-w-6xl"><ProductHero eyebrow="运营健康" title="管理员看板" description="按模块查看今日真实运行与供给情况。" icon={ShieldCheck}><nav className="mt-4 flex gap-2 overflow-x-auto pb-1" aria-label="管理员看板模块">{tabs.map(([key, label]) => <a key={key} href={key === "overview" ? "/admin/health" : "/admin/health?tab=" + key} className={"shrink-0 rounded-full border px-4 py-2 text-sm font-semibold " + (tab === key ? "border-[#1a1714] bg-[#1a1714] text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]" : "border-black/[0.12] text-[#6b655a] dark:border-white/[0.15] dark:text-[#b6ad9d]")}>{label}</a>)}</nav></ProductHero><main className="mt-6">{content}</main></ProductPage></div>;
 }

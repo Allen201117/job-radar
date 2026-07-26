@@ -471,6 +471,104 @@ export type OpsRunAggregateRow = {
   last_run_at?: string | null;
 };
 
+export type GapFunnelOpsRow = {
+  module?: string | null;
+  run_date?: string | null;
+  finished_at?: string | null;
+  metrics?: Record<string, unknown> | null;
+};
+
+export type MustApplyGapAttemptRow = {
+  company?: string | null;
+  state?: string | null;
+  fail_reason?: string | null;
+  last_attempt_at?: string | null;
+  next_retry_at?: string | null;
+  evidence?: Record<string, unknown> | null;
+};
+
+export type MustApplyGapSummary = {
+  stateCounts: Record<string, number>;
+  recentFailures: Array<{ company: string; reason: string; at: string | null }>;
+  manualReviewCompanies: string[];
+};
+
+export function computeMustApplySupplyLedger(
+  opsRows: GapFunnelOpsRow[] | null | undefined,
+  coverageRows: Array<{
+    directHealthy?: Numeric;
+    coveredViaParentPortal?: boolean;
+  }> | null | undefined,
+): { realExpansion: number | null; definitionChange: number } {
+  const modules = new Set(["gap_funnel", "gap_funnel_browser"]);
+  const eligible = (opsRows || []).filter((row) => modules.has(String(row.module || "")));
+  const dates = eligible
+    .map((row) => String(row.run_date || ""))
+    .filter(Boolean)
+    .sort();
+  const latestDate = dates[dates.length - 1];
+  const latestByModule = new Map<string, GapFunnelOpsRow>();
+  for (const row of eligible.filter((item) => item.run_date === latestDate)) {
+    const module = String(row.module);
+    const previous = latestByModule.get(module);
+    if (!previous || Date.parse(String(row.finished_at || 0)) > Date.parse(String(previous.finished_at || 0))) {
+      latestByModule.set(module, row);
+    }
+  }
+  const latestRows = Array.from(latestByModule.values());
+  const hasExpansionEvidence = latestRows.some(
+    (row) => typeof row.metrics?.sources_added === "number"
+      && Number.isFinite(row.metrics.sources_added),
+  );
+  const realExpansion = hasExpansionEvidence
+    ? latestRows.reduce(
+      (sum, row) => sum + toNumber(row.metrics?.sources_added as Numeric),
+      0,
+    )
+    : null;
+  const definitionChange = (coverageRows || []).filter(
+    (row) => row.coveredViaParentPortal && toNumber(row.directHealthy) === 0,
+  ).length;
+  return { realExpansion, definitionChange };
+}
+
+export function summarizeMustApplyGapAttempts(
+  rows: MustApplyGapAttemptRow[] | null | undefined,
+): MustApplyGapSummary {
+  const stateCounts: Record<string, number> = {};
+  for (const row of rows || []) {
+    const state = String(row.state || "unknown");
+    stateCounts[state] = (stateCounts[state] || 0) + 1;
+  }
+  const sortedStateCounts = Object.fromEntries(
+    Object.entries(stateCounts).sort(([a], [b]) => a.localeCompare(b)),
+  );
+  const recentFailures = [...(rows || [])]
+    .filter((row) => String(row.fail_reason || "").trim())
+    .sort(
+      (a, b) =>
+        Date.parse(String(b.last_attempt_at || 0)) - Date.parse(String(a.last_attempt_at || 0))
+        || String(a.company || "").localeCompare(String(b.company || "")),
+    )
+    .slice(0, 5)
+    .map((row) => ({
+      company: String(row.company || "未知公司"),
+      reason: String(row.fail_reason),
+      at: row.last_attempt_at || null,
+    }));
+  const manualStates = new Set(["manual_review", "anti_bot", "login_wall", "no_stable_jd"]);
+  const manualReviewCompanies = [...(rows || [])]
+    .filter((row) => manualStates.has(String(row.state || "")) && row.next_retry_at == null)
+    .sort(
+      (a, b) =>
+        Date.parse(String(b.last_attempt_at || 0)) - Date.parse(String(a.last_attempt_at || 0))
+        || String(a.company || "").localeCompare(String(b.company || "")),
+    )
+    .map((row) => String(row.company || ""))
+    .filter(Boolean);
+  return { stateCounts: sortedStateCounts, recentFailures, manualReviewCompanies };
+}
+
 export type DailyReportStatus = "success" | "idle" | "failed";
 
 export type DailyReport = {
