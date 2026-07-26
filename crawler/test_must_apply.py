@@ -61,6 +61,24 @@ class MustApplyListTest(unittest.TestCase):
             self.assertEqual(must_apply.patterns_for_industries(None),
                              ["%字节%", "%比亚迪%"])
 
+    def test_version_metadata_and_brand_fields_do_not_break_python_reader(self):
+        rows = {
+            "_version": "2026Q3-v1",
+            "物流": [{
+                "name": "京东物流",
+                "pattern": "%京东物流%",
+                "parentPattern": "%京东%",
+                "brandTokens": ["京东物流"],
+            }],
+        }
+        path = self._json_file(rows)
+        with mock.patch.object(must_apply, "MUST_APPLY_JSON", path):
+            grouped = must_apply.by_industry()
+            self.assertEqual(list(grouped), ["物流"])
+            self.assertEqual(grouped["物流"][0]["brandTokens"], ["京东物流"])
+            self.assertEqual(must_apply.patterns(), ["%京东物流%"])
+            self.assertEqual(must_apply.version(), "2026Q3-v1")
+
     def test_match_company_is_case_insensitive_substring(self):
         path = self._json_file([
             {"name": "字节跳动", "pattern": "%字节%"},

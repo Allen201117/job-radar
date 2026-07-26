@@ -74,6 +74,7 @@ class ChinaSpaAdapter(PlaywrightAdapter):
     def fetch(self, source_url: str) -> str:
         # 记录本次源的 origin / host / 门户前缀，供 _map 拼接相对链接与详情路由。
         parsed = urlparse(source_url)
+        self._source_url = source_url
         self._origin = f"{parsed.scheme}://{parsed.netloc}"
         self._host = parsed.netloc
         # 门户前缀 = 列表页路径去掉最后一段（section）。北森详情路由 = {origin}{prefix}/zwxq?jobAdId=
@@ -91,7 +92,11 @@ class ChinaSpaAdapter(PlaywrightAdapter):
         if raw:
             if raw.startswith("http"):
                 return raw
-            return urljoin(getattr(self, "_origin", "") + "/", raw.lstrip("/"))
+            return urljoin(
+                getattr(self, "_source_url", None)
+                or (getattr(self, "_origin", "") + "/"),
+                raw,
+            )
         # 2) 已知 ATS 形态才用模板兜底（company_spa 不设模板 → 返回空 → 丢弃）
         if self.detail_template and job_id:
             return self.detail_template.format(host=getattr(self, "_host", ""), id=job_id)
