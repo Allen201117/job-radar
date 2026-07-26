@@ -4,7 +4,7 @@ import json
 import re
 from datetime import datetime, timezone
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 from adapters.base import RawJob
 from geo import (
@@ -497,7 +497,15 @@ def validate_job_quality(raw: RawJob, source_url: str) -> tuple[bool, str]:
 
     parsed_key = _url_key(parsed)
     source_key = _url_key(source)
-    if parsed_key == source_key:
+    job_query_names = {
+        "id", "code", "jobid", "jobcode", "positionid", "positioncode",
+        "postid", "reqid", "requestid", "requisitionid", "vacancyid",
+    }
+    job_query_keys = {
+        key for key, _value in parse_qsl(parsed.query, keep_blank_values=True)
+        if re.sub(r"[^a-z0-9]", "", key.casefold()) in job_query_names
+    }
+    if parsed_key == source_key and not job_query_keys:
         return False, "jd_url equals source url"
 
     compact_title = re.sub(r"\s+", "", title).lower()

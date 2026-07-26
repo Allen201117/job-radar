@@ -13,6 +13,59 @@ test("formatPercent reports one decimal and does not invent a rate for zero deno
   assert.equal(H.formatPercent(2, 0), "—");
 });
 
+test("must-apply supply ledger keeps real source additions separate from definition changes", () => {
+  const ledger = H.computeMustApplySupplyLedger(
+    [
+      {
+        module: "gap_funnel",
+        run_date: "2026-07-27",
+        finished_at: "2026-07-27T02:00:00Z",
+        metrics: { sources_added: 2 },
+      },
+      {
+        module: "gap_funnel",
+        run_date: "2026-07-27",
+        finished_at: "2026-07-27T01:00:00Z",
+        metrics: { sources_added: 99 },
+      },
+      {
+        module: "gap_funnel_browser",
+        run_date: "2026-07-27",
+        finished_at: "2026-07-27T03:00:00Z",
+        metrics: { sources_added: 1 },
+      },
+    ],
+    [
+      { name: "甲", healthy: 3, directHealthy: 0, coveredViaParentPortal: true },
+      { name: "乙", healthy: 4, directHealthy: 1, coveredViaParentPortal: true },
+      { name: "丙", healthy: 1, directHealthy: 1, coveredViaParentPortal: false },
+    ],
+  );
+  assert.deepEqual(ledger, { realExpansion: 3, definitionChange: 1 });
+  assert.deepEqual(H.computeMustApplySupplyLedger([], []), {
+    realExpansion: null,
+    definitionChange: 0,
+  });
+});
+
+test("gap attempt summary counts states, failure top5, and terminal manual review companies", () => {
+  const rows = [
+    { company: "甲", state: "healthy", fail_reason: null, next_retry_at: null },
+    { company: "乙", state: "no_stable_jd", fail_reason: "无逐岗链接", next_retry_at: null, last_attempt_at: "2026-07-27T03:00:00Z" },
+    { company: "丙", state: "login_wall", fail_reason: "需要登录", next_retry_at: null, last_attempt_at: "2026-07-27T02:00:00Z" },
+    { company: "丁", state: "no_active_jobs", fail_reason: "没有岗位", next_retry_at: "2026-08-01T00:00:00Z", last_attempt_at: "2026-07-27T01:00:00Z" },
+  ];
+  const summary = H.summarizeMustApplyGapAttempts(rows);
+  assert.deepEqual(summary.stateCounts, {
+    healthy: 1,
+    login_wall: 1,
+    no_active_jobs: 1,
+    no_stable_jd: 1,
+  });
+  assert.deepEqual(summary.manualReviewCompanies, ["乙", "丙"]);
+  assert.deepEqual(summary.recentFailures.map((row) => row.company), ["乙", "丙", "丁"]);
+});
+
 test("normalizeCrawlSources derives success and partial rates from terminal non-skipped runs", () => {
   assert.equal(typeof H.normalizeCrawlSources, "function");
   assert.deepEqual(
@@ -692,6 +745,11 @@ test("admin health page authenticates before parallel cross-database reads and r
   assert.match(source, /总览/);
   assert.match(source, /岗位库/);
   assert.match(source, /必投供给/);
+  assert.match(source, /清单版本/);
+  assert.match(source, /本轮真实扩源/);
+  assert.match(source, /口径变动/);
+  assert.match(source, /经父公司门户覆盖/);
+  assert.match(source, /must_apply_gap_attempts/);
   assert.match(source, /系统运行/);
   assert.match(source, /展示岗位自动探活（非用户点击统计）/);
   assert.match(source, /抓全率/);
