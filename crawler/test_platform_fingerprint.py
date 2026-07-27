@@ -206,6 +206,27 @@ class SpecialStateTest(unittest.TestCase):
             pf.detect_page_state(200, '<html><div id="app"></div></html>'), "unknown_spa"
         )
 
+    def test_identity_matched_recruiting_page_without_known_ats_is_unknown_spa(self):
+        url = "https://careers.example.com/jobs"
+        html = """
+        <title>甲公司人才招聘</title>
+        <main>
+          <h1>社会招聘</h1>
+          <div class="job-list"><a href="/job-detail/1">工程师职位详情</a></div>
+        </main>
+        """
+
+        result = pf.fingerprint(
+            url,
+            company="甲公司",
+            client=_Client(_Response(url, html)),
+        )
+
+        self.assertTrue(result["identity_ok"])
+        self.assertEqual(result["platform"], "unknown_spa")
+        self.assertIsNone(result["adapter"])
+        self.assertEqual(result["source_url"], url)
+
     def test_detects_pdf_only_notice(self):
         html = '<h1>招聘公告</h1><a href="/notice.pdf">岗位附件 PDF</a>'
         self.assertEqual(pf.detect_page_state(200, html), "no_stable_jd")
