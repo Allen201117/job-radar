@@ -509,10 +509,12 @@ export function computeMustApplySupplyLedger(
   const latestDate = dates[dates.length - 1];
   const latestByModule = new Map<string, GapFunnelOpsRow>();
   for (const row of eligible.filter((item) => item.run_date === latestDate)) {
-    const module = String(row.module);
-    const previous = latestByModule.get(module);
+    // 变量名不能叫 module：Next 的 @next/next/no-assign-module-variable 会把 build 判失败
+    // （本地 next build 跳过 lint、Vercel 会跑 → 本地绿线上红，2026-07-27 实锤）。
+    const moduleName = String(row.module);
+    const previous = latestByModule.get(moduleName);
     if (!previous || Date.parse(String(row.finished_at || 0)) > Date.parse(String(previous.finished_at || 0))) {
-      latestByModule.set(module, row);
+      latestByModule.set(moduleName, row);
     }
   }
   const latestRows = Array.from(latestByModule.values());
