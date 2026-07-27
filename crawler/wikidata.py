@@ -110,6 +110,7 @@ def parse_company_facts(entity: dict, label_map: dict) -> dict:
     instance_of = _claim_items(entity, "P31")
     exchange_qids = _claim_items(entity, "P414")
     tickers = _claim_strings(entity, "P249")
+    official_sites = _claim_strings(entity, "P856")
     founded_year = _claim_year(entity, "P571")
     employees = _claim_employees(entity)
     hq_qids = _claim_items(entity, "P159")
@@ -128,6 +129,7 @@ def parse_company_facts(entity: dict, label_map: dict) -> dict:
         "listed": listed,
         "exchanges": exchanges,
         "ticker": tickers[0] if tickers else None,
+        "official_site": official_sites[0] if official_sites else None,
         "founded_year": founded_year,
         "employees": employees,
         "headcount_band": headcount_band(employees),

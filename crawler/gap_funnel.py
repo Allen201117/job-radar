@@ -17,6 +17,7 @@ import ops_runs
 import platform_fingerprint
 import probe
 import run
+import site_entry
 
 
 _TRUE = {"1", "true", "yes", "on"}
@@ -492,65 +493,21 @@ def _rejection(url, reason, fingerprint=None):
     }
 
 
-def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
-                    insert_allowed, now=None, finder=entry_finder.find_official_entry,
-                    fingerprinter=platform_fingerprint.fingerprint,
-                    prober=probe.probe_one):
-    """处理一家公司；返回 (台账结果, 搜索次数, 是否消耗 insert 配额)。"""
-    now = now or datetime.now(timezone.utc)
-    official_url = row.get("official_entry_url")
-    cached_rejections = []
-    if official_url:
-        cached_verdict, _score, cached_reason = (
-            entry_finder.classify_candidate_url(official_url, row["company"])
-        )
-        if cached_verdict == "reject":
-            cached_rejections.append(_rejection(official_url, cached_reason))
-            official_url = None
-    search_used = 0
-    finder_result = None
-    if not official_url:
-        finder_result = finder(
-            row["company"],
-            supabase,
-            prev_row=row,
-            max_searches=min(2, max(0, search_remaining)),
-            now=now,
-            consume=True,
-        )
-        search_used = int(finder_result.get("search_used") or 0)
-        if not finder_result.get("found"):
-            failed = dict(finder_result)
-            evidence = dict(failed.get("evidence") or {})
-            if cached_rejections:
-                evidence.update({
-                    "candidate_rejections": cached_rejections,
-                    "rejected_candidate_hosts": sorted({
-                        item["host"]
-                        for item in cached_rejections
-                        if item.get("host")
-                    }),
-                })
-            failed["evidence"] = evidence
-            return failed, search_used, False
-        official_url = finder_result["official_entry_url"]
-
-    candidates = _candidate_items(row, official_url, finder_result)
-    candidate_evidence = dict((finder_result or {}).get("evidence") or {})
-    candidate_evidence["candidate_urls"] = candidates
-    rejections = list(cached_rejections)
+def _evaluate_candidates(row, candidates, *, trusted_site, fingerprinter):
+    """候选统一过指纹、身份和路由门；官网候选跳过搜索 URL 评分门。"""
+    rejections = []
     fallbacks = []
     identity_checked = 0
     identity_mismatches = 0
-    selected = None
     for candidate in candidates:
         candidate_url = candidate["url"]
-        verdict, _score, url_reason = entry_finder.classify_candidate_url(
-            candidate_url, row["company"]
-        )
-        if verdict == "reject":
-            rejections.append(_rejection(candidate_url, url_reason))
-            continue
+        if not trusted_site:
+            verdict, _score, url_reason = entry_finder.classify_candidate_url(
+                candidate_url, row["company"]
+            )
+            if verdict == "reject":
+                rejections.append(_rejection(candidate_url, url_reason))
+                continue
         fingerprint = fingerprinter(candidate_url, company=row["company"])
         platform = fingerprint.get("platform")
         if platform in _MANUAL_PLATFORMS:
@@ -599,14 +556,200 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
                 candidate_url, "requires_browser", browser_fingerprint
             ))
             continue
-        selected = (candidate_url, fingerprint, adapter, source_url)
-        break
+        return {
+            "selected": (candidate_url, fingerprint, adapter, source_url),
+            "fallbacks": fallbacks,
+            "rejections": rejections,
+            "identity_checked": identity_checked,
+            "identity_mismatches": identity_mismatches,
+        }
+    return {
+        "selected": None,
+        "fallbacks": fallbacks,
+        "rejections": rejections,
+        "identity_checked": identity_checked,
+        "identity_mismatches": identity_mismatches,
+    }
+
+
+def _preferred_browser_fallback(fallbacks):
+    return next(
+        (
+            item
+            for item in fallbacks
+            if item[1].get("platform") == "unknown_spa"
+            and item[1].get("identity_ok") is True
+        ),
+        None,
+    )
+
+
+def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
+                    insert_allowed, now=None, finder=entry_finder.find_official_entry,
+                    fingerprinter=platform_fingerprint.fingerprint,
+                    prober=probe.probe_one, site_resolver=None,
+                    site_link_finder=None):
+    """处理一家公司；返回 (台账结果, 搜索次数, 是否消耗 insert 配额)。"""
+    now = now or datetime.now(timezone.utc)
+    site_resolver = site_resolver or site_entry.resolve_official_site_details
+    site_link_finder = site_link_finder or site_entry.find_careers_links
+    official_url = row.get("official_entry_url")
+    cached_rejections = []
+    entry_channel = (row.get("evidence") or {}).get("entry_channel") or "search"
+    if official_url:
+        cached_verdict, _score, cached_reason = (
+            entry_finder.classify_candidate_url(official_url, row["company"])
+        )
+        if cached_verdict == "reject":
+            cached_rejections.append(_rejection(official_url, cached_reason))
+            official_url = None
+    search_used = 0
+    finder_result = None
+    selected = None
+    fallbacks = []
+    rejections = list(cached_rejections)
+    identity_checked = 0
+    identity_mismatches = 0
+    candidate_evidence = {}
+
+    if not official_url:
+        site_result = None
+        try:
+            site_result = site_resolver(row["company"], supabase=supabase)
+        except Exception:
+            site_result = None
+        if isinstance(site_result, str):
+            site_result = {
+                "home_url": site_result,
+                "entry_channel": "wikidata_site",
+            }
+        if site_result and site_result.get("home_url"):
+            try:
+                site_candidates = site_link_finder(
+                    row["company"], site_result["home_url"]
+                )
+            except Exception:
+                site_candidates = []
+            site_candidates = _candidate_items(
+                row, None, {"candidates": site_candidates}
+            )
+            candidate_evidence.update({
+                "site_home_url": site_result["home_url"],
+                "candidate_urls": list(site_candidates),
+            })
+            evaluated = _evaluate_candidates(
+                row,
+                site_candidates,
+                trusted_site=True,
+                fingerprinter=fingerprinter,
+            )
+            selected = evaluated["selected"]
+            fallbacks.extend(evaluated["fallbacks"])
+            rejections.extend(evaluated["rejections"])
+            identity_checked += evaluated["identity_checked"]
+            identity_mismatches += evaluated["identity_mismatches"]
+            if selected:
+                entry_channel = site_result.get(
+                    "entry_channel", "wikidata_site"
+                )
+            else:
+                browser_fallback = _preferred_browser_fallback(
+                    evaluated["fallbacks"]
+                )
+                if browser_fallback:
+                    entry_channel = site_result.get(
+                        "entry_channel", "wikidata_site"
+                    )
+                    fallback_url, fallback_fingerprint = browser_fallback
+                    rejected_hosts = sorted({
+                        item["host"] for item in rejections if item.get("host")
+                    })
+                    rejection_evidence = {
+                        **candidate_evidence,
+                        "entry_channel": entry_channel,
+                        "candidate_rejections": rejections,
+                        "rejected_candidate_hosts": rejected_hosts,
+                    }
+                    result = _failure_for_platform(fallback_fingerprint, now)
+                    result["official_entry_url"] = fallback_url
+                    result["evidence"] = {
+                        **result.get("evidence", {}),
+                        **rejection_evidence,
+                    }
+                    return result, 0, False
+
+    if not official_url and selected is None:
+        finder_result = finder(
+            row["company"],
+            supabase,
+            prev_row=row,
+            max_searches=min(2, max(0, search_remaining)),
+            now=now,
+            consume=True,
+        )
+        search_used = int(finder_result.get("search_used") or 0)
+        if not finder_result.get("found"):
+            failed = dict(finder_result)
+            evidence = dict(failed.get("evidence") or {})
+            search_candidates = list(evidence.get("candidate_urls") or [])
+            evidence.update(candidate_evidence)
+            evidence["candidate_urls"] = (
+                list(candidate_evidence.get("candidate_urls") or [])
+                + search_candidates
+            )
+            evidence.update({
+                "entry_channel": "search",
+                "candidate_rejections": rejections,
+                "rejected_candidate_hosts": sorted({
+                    item["host"]
+                    for item in rejections
+                    if item.get("host")
+                }),
+            })
+            failed["evidence"] = evidence
+            return failed, search_used, False
+        official_url = finder_result["official_entry_url"]
+        search_candidates = _candidate_items(row, official_url, finder_result)
+        search_evidence = dict((finder_result or {}).get("evidence") or {})
+        previous_candidates = list(candidate_evidence.get("candidate_urls") or [])
+        candidate_evidence.update(search_evidence)
+        candidate_evidence["candidate_urls"] = (
+            previous_candidates + search_candidates
+        )
+        evaluated = _evaluate_candidates(
+            row,
+            search_candidates,
+            trusted_site=False,
+            fingerprinter=fingerprinter,
+        )
+        selected = evaluated["selected"]
+        fallbacks.extend(evaluated["fallbacks"])
+        rejections.extend(evaluated["rejections"])
+        identity_checked += evaluated["identity_checked"]
+        identity_mismatches += evaluated["identity_mismatches"]
+        entry_channel = "search"
+    elif official_url:
+        candidates = _candidate_items(row, official_url, finder_result)
+        candidate_evidence = dict((finder_result or {}).get("evidence") or {})
+        candidate_evidence["candidate_urls"] = candidates
+        evaluated = _evaluate_candidates(
+            row,
+            candidates,
+            trusted_site=False,
+            fingerprinter=fingerprinter,
+        )
+        selected = evaluated["selected"]
+        fallbacks.extend(evaluated["fallbacks"])
+        rejections.extend(evaluated["rejections"])
+        identity_checked += evaluated["identity_checked"]
+        identity_mismatches += evaluated["identity_mismatches"]
 
     rejected_hosts = sorted({
         item["host"] for item in rejections if item.get("host")
     })
     rejection_evidence = {
         **candidate_evidence,
+        "entry_channel": entry_channel,
         "candidate_rejections": rejections,
         "rejected_candidate_hosts": rejected_hosts,
     }
@@ -624,7 +767,10 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
                 "fail_reason": "候选入口均非本公司（张冠李戴）",
                 "evidence": rejection_evidence,
             }, search_used, False
-        if fallbacks:
+        browser_fallback = _preferred_browser_fallback(fallbacks)
+        if browser_fallback:
+            fallback_url, fallback_fingerprint = browser_fallback
+        elif fallbacks:
             fallback_url, fallback_fingerprint = next(
                 (
                     item
@@ -739,15 +885,30 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
         now=now,
     )
     queue = census_result["queue"]
+    round_source_rows = []
+    if queue:
+        try:
+            round_source_rows = db.fetch_all_rows(
+                lambda: supabase.table("sources").select(
+                    "id,company,source_url,enabled"
+                ).eq("enabled", True)
+            )
+        except Exception:
+            round_source_rows = []
+
+    def round_site_resolver(company_name, **_kwargs):
+        return site_entry.resolve_official_site_details(
+            company_name,
+            supabase=supabase,
+            source_rows=round_source_rows,
+        )
+
     outcomes = []
     search_used = 0
     inserts_used = 0
     stopped_search_cap = False
 
     for row in queue:
-        if search_used >= search_cap and not row.get("official_entry_url"):
-            stopped_search_cap = True
-            break
         scoped = {**row, "scope": scope}
         try:
             result, used, inserted = process_company(
@@ -758,6 +919,7 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
                 search_remaining=search_cap - search_used,
                 insert_allowed=inserts_used < insert_cap,
                 now=now,
+                site_resolver=round_site_resolver,
             )
             search_used += used
             inserts_used += int(inserted)
