@@ -1,4 +1,5 @@
 """零搜索额度的招聘入口发现：公司官网首页 → 招聘候选链接。"""
+import os
 import re
 from html import unescape
 from urllib.parse import urljoin, urlparse
@@ -142,13 +143,62 @@ def resolve_official_site_details(
             -index,
             home_url,
         ))
-    if not matches:
+    if matches:
+        return {
+            "home_url": max(matches)[-1],
+            "entry_channel": "existing_source_host",
+        }
+
+    llm_site = resolve_official_site_by_llm(company)
+    if llm_site:
+        return {"home_url": llm_site, "entry_channel": "llm_domain"}
+    return None
+
+
+# LLM 补域名的进程内缓存：同一轮里同名公司只问一次。
+_LLM_DOMAIN_CACHE: dict = {}
+
+
+def resolve_official_site_by_llm(company):
+    """Wikidata + 库内 source 都拿不到时，用 LLM 补官方主域名。
+
+    为何必须有这一步（2026-07-27 实测）：Wikidata 按**中文名**查 QID 命中率只有 ~58%
+    （125 家缺口里只解出 73 家；中信证券/龙湖/同花顺这些手工一查就有的它都判「无官网」），
+    剩下的全部掉回搜索通道 —— 台账实锤那一轮 45 家里 34 家走了 search、只有 10 家走官网通道，
+    等于官网通道白做。同一批 52 家丢给 LLM，52/52 全给出正确主域名
+    （ccb.com / citics.com / 10jqka.com.cn / huahong.com.cn / estun.com …），
+    再扒首页多命中 23 家入口。
+
+    安全性：LLM 编错域名不会造成脏数据——后面还有页面身份门 + 真抓回读健康岗两道关，
+    编造的域名要么打不开、要么身份对不上，自动丢弃。
+    未配 SILICONFLOW_API_KEY 或调用失败 → 返回 None，静默回落搜索通道。
+    """
+    key = str(company or "").strip()
+    if not key:
         return None
-    home_url = max(matches)[-1]
-    return {
-        "home_url": home_url,
-        "entry_channel": "existing_source_host",
-    }
+    if key in _LLM_DOMAIN_CACHE:
+        return _LLM_DOMAIN_CACHE[key]
+    site = None
+    if os.environ.get("GAP_FUNNEL_LLM_DOMAIN", "true").lower() not in ("0", "false", "no", "off"):
+        try:
+            import insight_engine
+
+            data = insight_engine.chat_json(
+                [
+                    {"role": "system", "content": "你是企业信息助手，只输出 JSON。"},
+                    {"role": "user", "content":
+                        "给出这家公司的**官方主域名**（不是招聘站、不是百科、不是新闻、不是招聘平台）。"
+                        "不确定就填 null，绝不编造。只输出 {\"site\": \"https://域名\" 或 null}。\n"
+                        f"公司：{key}"},
+                ],
+                max_tokens=200,
+            )
+            if isinstance(data, dict):
+                site = _http_url(data.get("site"))
+        except Exception:
+            site = None
+    _LLM_DOMAIN_CACHE[key] = site
+    return site
 
 
 def resolve_official_site(company, *, client=None):
