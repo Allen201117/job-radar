@@ -235,3 +235,41 @@ class CareersLinkTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LlmDomainFallbackTest(unittest.TestCase):
+    """Wikidata + 库内 source 都空时必须用 LLM 补域名，否则整条官网通道形同虚设。
+
+    2026-07-27 台账实锤：只有 Wikidata 一条来源时，一轮 45 家里 34 家掉回搜索通道、
+    仅 10 家走官网通道（Wikidata 按中文名查 QID 命中率 ~58%）。
+    """
+
+    def setUp(self):
+        se._LLM_DOMAIN_CACHE.clear()
+
+    def tearDown(self):
+        se._LLM_DOMAIN_CACHE.clear()
+
+    def test_falls_back_to_llm_when_wikidata_and_sources_empty(self):
+        with mock.patch.object(se.wikidata, "search_qid", return_value=None), \
+             mock.patch.object(se, "resolve_official_site_by_llm", return_value="https://www.citics.com") as llm:
+            out = se.resolve_official_site_details("中信证券", client=mock.Mock(), source_rows=[])
+        self.assertEqual(out, {"home_url": "https://www.citics.com", "entry_channel": "llm_domain"})
+        llm.assert_called_once_with("中信证券")
+
+    def test_llm_result_is_cached_per_company(self):
+        with mock.patch.object(se, "insight_engine", create=True):
+            with mock.patch("insight_engine.chat_json", return_value={"site": "https://www.estun.com"}) as chat:
+                first = se.resolve_official_site_by_llm("埃斯顿")
+                second = se.resolve_official_site_by_llm("埃斯顿")
+        self.assertEqual(first, "https://www.estun.com")
+        self.assertEqual(second, "https://www.estun.com")
+        self.assertEqual(chat.call_count, 1, "同一公司同一轮内只应问一次 LLM")
+
+    def test_llm_disabled_by_env_returns_none(self):
+        with mock.patch.dict(se.os.environ, {"GAP_FUNNEL_LLM_DOMAIN": "false"}):
+            self.assertIsNone(se.resolve_official_site_by_llm("某公司"))
+
+    def test_llm_failure_is_silent(self):
+        with mock.patch("insight_engine.chat_json", side_effect=RuntimeError("no key")):
+            self.assertIsNone(se.resolve_official_site_by_llm("某公司"))
