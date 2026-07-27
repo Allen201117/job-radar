@@ -49,6 +49,11 @@ _JOB_SHAPE_RE = re.compile(
     r"(job[-_ ]?(?:detail|description|title|list)|position[-_ ]?(?:detail|list|id)|职位详情|岗位详情)",
     re.I,
 )
+_CAREERS_SIGNAL_RE = re.compile(
+    r"(招聘|社会招聘|校园招聘|职位|岗位|人才|加入我们|工作机会|"
+    r"\bcareers?\b|\bjobs?\b|\brecruit(?:ment|ing)?\b|\btalent\b)",
+    re.I,
+)
 _COMPANY_SUFFIXES = tuple(sorted((
     "有限责任公司", "股份有限公司", "集团股份", "集团公司", "控股集团",
     "有限公司", "股份", "集团", "公司", "有限", "控股", "科技", "传媒",
@@ -135,6 +140,16 @@ def detect_page_state(status_code, html):
     ):
         return "unknown_spa"
     return None
+
+
+def _looks_like_recruiting_page(html):
+    """自建招聘页信号：有岗位列表形态，或可见文本里招聘词足够密集。"""
+    source = str(html or "")
+    if _JOB_SHAPE_RE.search(source):
+        return True
+    visible = _SCRIPT_STYLE_RE.sub(" ", source)
+    visible = unescape(_TAG_RE.sub(" ", visible))[:12000]
+    return len(_CAREERS_SIGNAL_RE.findall(visible)) >= 2
 
 
 def _compact(value):
@@ -350,6 +365,13 @@ def fingerprint(url, *, company=None, client=None, timeout=15):
         )
         special = detect_page_state(status, html)
         platform, adapter = detect_platform(final_url, html)
+        if (
+            special is None
+            and identity_ok
+            and platform == "unknown"
+            and _looks_like_recruiting_page(html)
+        ):
+            special = "unknown_spa"
         # 已识别 ATS 的普通 SPA 壳仍交给 adapter；unknown_spa 只接住认不出的壳。
         if special and (special != "unknown_spa" or platform == "unknown"):
             return {
