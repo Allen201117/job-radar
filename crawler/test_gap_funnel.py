@@ -12,6 +12,7 @@ import gap_funnel as gf
 
 
 NOW = datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc)
+REAL_SITE_RESOLVER = gf.site_entry.resolve_official_site_details
 
 
 class _Response:
@@ -352,7 +353,16 @@ class AcceptanceGateTest(unittest.TestCase):
 
 
 class RoundCapTest(unittest.TestCase):
-    def test_search_cap_stops_before_unsearched_company(self):
+    def setUp(self):
+        patcher = mock.patch.object(
+            gf.site_entry,
+            "resolve_official_site_details",
+            return_value=None,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_zero_search_cap_still_runs_zero_quota_site_channel(self):
         queued = {
             "company": "甲公司",
             "pattern": "%甲公司%",
@@ -365,17 +375,248 @@ class RoundCapTest(unittest.TestCase):
                  "census",
                  return_value={"queue": [queued], "rows": [queued], "industry_coverage": {}},
              ), \
-             mock.patch.object(gf, "process_company") as process:
+             mock.patch.object(
+                 gf,
+                 "process_company",
+                 return_value=({
+                     "state": "no_official_entry",
+                     "official_entry_url": None,
+                     "next_retry_at": None,
+                     "evidence": {},
+                 }, 0, False),
+             ) as process:
             result = gf.run_round(
                 scope="domestic",
                 limit=1,
                 apply=False,
-                supabase=object(),
-                jobs_conn=object(),
+                supabase=_Sb(),
+                jobs_conn=_Conn(),
                 now=NOW,
             )
-        process.assert_not_called()
-        self.assertEqual(result["outcomes"], [])
+        process.assert_called_once()
+        self.assertEqual(process.call_args.kwargs["search_remaining"], 0)
+        self.assertEqual(result["metrics"]["search_used"], 0)
+
+    def test_round_loads_enabled_source_hosts_only_once(self):
+        queued = [
+            {
+                "company": company,
+                "pattern": "%%%s%%" % company,
+                "industries": ["金融"],
+                "state": "unknown",
+            }
+            for company in ("甲公司", "乙公司")
+        ]
+        source_rows = [{
+            "id": "source-1",
+            "company": "甲公司",
+            "source_url": "https://jobs.example.com/list",
+            "enabled": True,
+        }]
+        resolved = []
+
+        def process(row, **kwargs):
+            resolved.append(kwargs["site_resolver"](row["company"]))
+            return ({
+                "state": "no_official_entry",
+                "official_entry_url": None,
+                "next_retry_at": None,
+                "evidence": {},
+            }, 0, False)
+
+        with mock.patch.object(
+            gf.gap_census,
+            "census",
+            return_value={
+                "queue": queued,
+                "rows": queued,
+                "industry_coverage": {},
+            },
+        ), mock.patch.object(
+            gf.db,
+            "fetch_all_rows",
+            return_value=source_rows,
+        ) as fetch_all, mock.patch.object(
+            gf.site_entry.wikidata,
+            "search_qid",
+            return_value=None,
+        ), mock.patch.object(
+            gf.site_entry,
+            "resolve_official_site_details",
+            side_effect=REAL_SITE_RESOLVER,
+        ), mock.patch.object(gf, "process_company", side_effect=process):
+            gf.run_round(
+                scope="domestic",
+                limit=2,
+                apply=False,
+                supabase=_Sb(source_rows),
+                jobs_conn=_Conn(),
+                now=NOW,
+            )
+
+        fetch_all.assert_called_once()
+        self.assertEqual(resolved[0]["entry_channel"], "existing_source_host")
+        self.assertIsNone(resolved[1])
+
+    def test_site_channel_hit_does_not_call_search_and_records_channel(self):
+        finder = mock.Mock(side_effect=AssertionError("官网命中后不应调用搜索"))
+        home = "https://www.example.com/"
+        careers = "https://careers.example.com/jobs"
+
+        result, used, _inserted = gf.process_company(
+            {**_entry(), "official_entry_url": None},
+            supabase=_Sb(),
+            jobs_conn=_Conn(),
+            apply=False,
+            search_remaining=0,
+            insert_allowed=True,
+            now=NOW,
+            finder=finder,
+            site_resolver=lambda *_args, **_kwargs: {
+                "home_url": home,
+                "entry_channel": "wikidata_site",
+            },
+            site_link_finder=lambda *_args, **_kwargs: [{
+                "url": careers,
+                "score": 300,
+            }],
+            fingerprinter=lambda _url, **_kwargs: {
+                "platform": "greenhouse",
+                "adapter": "greenhouse",
+                "source_url": "https://boards-api.greenhouse.io/v1/boards/acme/jobs",
+                "identity_ok": True,
+                "identity_reason": "page_company_match:甲公司",
+            },
+            prober=lambda _candidate: {"ok": True, "valid": 1},
+        )
+
+        finder.assert_not_called()
+        self.assertEqual(used, 0)
+        self.assertEqual(result["official_entry_url"], careers)
+        self.assertEqual(result["evidence"]["entry_channel"], "wikidata_site")
+
+    def test_site_confirmed_talent_path_bypasses_search_url_scoring(self):
+        finder = mock.Mock(side_effect=AssertionError("官网候选已命中"))
+        talent = "https://www.example.com/talent"
+
+        result, used, _inserted = gf.process_company(
+            {**_entry(), "official_entry_url": None},
+            supabase=_Sb(),
+            jobs_conn=_Conn(),
+            apply=False,
+            search_remaining=2,
+            insert_allowed=True,
+            now=NOW,
+            finder=finder,
+            site_resolver=lambda *_args, **_kwargs: {
+                "home_url": "https://www.example.com/",
+                "entry_channel": "wikidata_site",
+            },
+            site_link_finder=lambda *_args, **_kwargs: [{"url": talent}],
+            fingerprinter=lambda _url, **_kwargs: {
+                "platform": "greenhouse",
+                "adapter": "greenhouse",
+                "source_url": "https://boards-api.greenhouse.io/v1/boards/acme/jobs",
+                "identity_ok": True,
+                "identity_reason": "page_company_match:甲公司",
+            },
+            prober=lambda _candidate: {"ok": True, "valid": 1},
+        )
+
+        finder.assert_not_called()
+        self.assertEqual(used, 0)
+        self.assertEqual(result["official_entry_url"], talent)
+
+    def test_site_unknown_spa_goes_to_browser_lane_without_search(self):
+        finder = mock.Mock(side_effect=AssertionError("自建招聘页不应再烧搜索额度"))
+        careers = "https://www.example.com/recruit"
+
+        result, used, _inserted = gf.process_company(
+            {**_entry(), "official_entry_url": None},
+            supabase=_Sb(),
+            jobs_conn=_Conn(),
+            apply=False,
+            search_remaining=2,
+            insert_allowed=True,
+            now=NOW,
+            finder=finder,
+            site_resolver=lambda *_args, **_kwargs: {
+                "home_url": "https://www.example.com/",
+                "entry_channel": "existing_source_host",
+            },
+            site_link_finder=lambda *_args, **_kwargs: [{"url": careers}],
+            fingerprinter=lambda _url, **_kwargs: {
+                "platform": "unknown_spa",
+                "adapter": None,
+                "source_url": careers,
+                "identity_ok": True,
+                "identity_reason": "page_company_match:甲公司",
+            },
+            prober=lambda _candidate: self.fail("浏览器候选不进 httpx probe"),
+        )
+
+        finder.assert_not_called()
+        self.assertEqual(used, 0)
+        self.assertEqual(result["detected_platform"], "unknown_spa")
+        self.assertEqual(result["official_entry_url"], careers)
+        self.assertEqual(
+            result["evidence"]["entry_channel"],
+            "existing_source_host",
+        )
+
+    def test_site_channel_without_routable_candidate_falls_back_to_search(self):
+        finder = mock.Mock(return_value={
+            "found": True,
+            "official_entry_url": "https://boards.greenhouse.io/acme",
+            "search_used": 1,
+            "candidates": [{
+                "url": "https://boards.greenhouse.io/acme",
+                "verdict": "trusted_ats",
+                "score": 100,
+            }],
+        })
+
+        result, used, _inserted = gf.process_company(
+            {**_entry(), "official_entry_url": None},
+            supabase=_Sb(),
+            jobs_conn=_Conn(),
+            apply=False,
+            search_remaining=2,
+            insert_allowed=True,
+            now=NOW,
+            finder=finder,
+            site_resolver=lambda *_args, **_kwargs: {
+                "home_url": "https://www.example.com/",
+                "entry_channel": "existing_source_host",
+            },
+            site_link_finder=lambda *_args, **_kwargs: [{
+                "url": "https://www.example.com/recruit",
+                "score": 200,
+            }],
+            fingerprinter=lambda url, **_kwargs: (
+                {
+                    "platform": "unknown",
+                    "adapter": None,
+                    "source_url": None,
+                    "identity_ok": False,
+                    "identity_reason": "page_company_not_found",
+                }
+                if "example.com" in url
+                else {
+                    "platform": "greenhouse",
+                    "adapter": "greenhouse",
+                    "source_url": "https://boards-api.greenhouse.io/v1/boards/acme/jobs",
+                    "identity_ok": True,
+                    "identity_reason": "page_company_match:甲公司",
+                }
+            ),
+            prober=lambda _candidate: {"ok": True, "valid": 1},
+        )
+
+        finder.assert_called_once()
+        self.assertEqual(used, 1)
+        self.assertEqual(result["official_entry_url"], "https://boards.greenhouse.io/acme")
+        self.assertEqual(result["evidence"]["entry_channel"], "search")
 
     def test_dry_run_consumes_search_usage_but_writes_nothing(self):
         provider = mock.Mock()
