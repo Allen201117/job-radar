@@ -107,6 +107,16 @@ node --test tests/*.test.js && \
   npm run build && git diff --check
 ```
 
+⚠️ **`npm run build` 本地绿 ≠ Vercel 能部署**：本地 `next build` 会跳过 lint（输出里没有
+「Linting and checking validity of types」这一步），**Vercel 的 build 会跑 lint，且 Next 的
+若干规则是 Error 级会直接让部署失败**（2026-07-27 实锤：`lib/admin-health.ts` 里一个变量叫
+`module` 命中 `@next/next/no-assign-module-variable`，从 a4bc817 起连续 7 次部署失败，
+本地全程绿）。**改了 `app/` `lib/` `components/` 下的 TS/TSX 就必须另跑 `npm run lint`。**
+⚠️ 在 `.claude/worktrees/*` 里跑 `next lint` 会因为「主仓 + worktree 两份 .eslintrc.json /
+package-lock.json」报 plugin 冲突直接退出 1 —— 这是环境问题不是代码问题；此时改用
+`npx next lint --dir lib --dir app --dir components`（在能跑通的目录下），或 push 后立刻查
+Vercel 部署状态兜底（`gh api repos/<owner>/<repo>/deployments` + `/statuses`）。
+
 ## 目录结构
 
 ```
