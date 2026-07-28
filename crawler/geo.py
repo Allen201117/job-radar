@@ -43,6 +43,14 @@ OVERSEAS_LOCATION_PHRASES = (
 )
 
 _COUNTRY_TOKENS = {
+    # ⚠️ TW 必须排在 CN 前面（dict 按插入序遍历，先命中先返回）。
+    # 台湾按项目口径**不抓、不归入任一范围**：TW ∉ 任何 source regions 且 TW ∉ _GREATER_CHINA，
+    # 于是 location_in_scope 一律返回 False。
+    # 此前 TW 压根不在本表里 → "Taipei, Taipei shih, Taiwan, Province of China" 这种写法
+    # 因为含 "china" 被判成 CN 放行（2026-07-28 Siemens 改成翻全分页后实测捞进 5 个台北岗才暴露）。
+    # 原有 test_taiwan_is_not_in_any_active_scope 只覆盖 "Taiwan"/"Taipei, Taiwan"/"台北, 台湾"
+    # 这类**不含 china 字样**的写法（code=None 自然落 False），所以一直是绿的、盖不住这个洞。
+    "TW": ["taiwan", "台湾", "臺灣", "taipei", "台北", "臺北", "kaohsiung", "高雄", "hsinchu", "新竹"],
     "HK": ["hong kong", "香港", "hongkong"],
     "MO": ["macau", "macao", "澳门"],
     "CN": [m for m in CHINA_LOCATION_MARKERS if m not in {"hong kong", "香港", "macau", "macao", "澳门"}],

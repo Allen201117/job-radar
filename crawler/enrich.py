@@ -383,10 +383,20 @@ def _main_text(html_text):
 def _detail_siemens(row, src):
     # Siemens 自建 ATS（jobs.siemens.com/en_US/externaljobs/JobDetail/{id}）：详情页是 SSR，
     # JD 正文在 <main> 里（live 验证：7.6k 字符含完整 JD；<article> 只有 324 字元信息，别用）。
-    # httpx 直抓、零浏览器。撤岗 → 404/410（_raise_if_gone 统一约定）。
+    # httpx 直抓、零浏览器。
     # 补这个函数前 Siemens 338 个在招岗 100% 是无正文薄卡（adapter 压根不在 ENRICH_REGISTRY 里）。
+    # ⚠️ 撤岗**不是 404**，是 **403 + 错误页**（2026-07-28 live 实测 JobDetail/510194 → HTTP 403，
+    # <main> 只剩 "An error has occurred Page not found Go to open jobs"）。
+    # _raise_if_gone 只认 404/410 → 旧实现把 403 当普通失败吞掉返回 ""，岗位永远留在 active：
+    # 实测库里 484 个 Siemens active 岗**全部**在 7 天内被探活过、却一个都没下架过。
+    # 故按「403 且正文命中错误页文案」判死（照 _detail_google 的软 404 范式）。
+    # 必须同时看状态码和文案——单凭 403 可能是 WAF 临时拦截，误判会误杀活岗。
     r = httpx.get(row["jd_url"], headers=UA, timeout=TIMEOUT, follow_redirects=True)
     _raise_if_gone(r)
+    if r.status_code == 403:
+        flat = re.sub(r"\s+", " ", _main_text(r.text) or "").strip().lower()
+        if "page not found" in flat or "an error has occurred" in flat:
+            raise JobClosedError(f"siemens job closed (HTTP 403 error page): {row['jd_url']}")
     if r.status_code >= 300:
         return ""
     return _main_text(r.text)
