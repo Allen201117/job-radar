@@ -6,7 +6,7 @@ import httpx
 from typing import List
 
 import normalizer
-from .base import BaseAdapter, RawJob
+from .base import BaseAdapter, PageResult, RawJob, paginate_all
 
 
 class AppleAdapter(BaseAdapter):
@@ -20,16 +20,26 @@ class AppleAdapter(BaseAdapter):
     SEARCH_LOCATION = "united-states-USA"  # 子类置空 = 不限地点（全球混合，再按需过滤）
     CHINA_ONLY = False                      # 子类置 True = parse 后只保留在华/remote 岗
 
-    def fetch(self, source_url: str) -> str:
-        """Fetch Apple's public search pages and return a JSON job array."""
-        queries = ["software", "machine learning", "data", "product", "engineering"]
-        all_jobs = []
+    PAGE_SIZE = 20        # Apple 搜索页每页固定 20 条（实测）
+    MAX_PAGES = 400       # 安全上限：全量 ~6000 岗 ÷ 20 ≈ 303 页，留余量
 
-        for query in queries[:3]:
-            params = {"search": query}
-            if self.SEARCH_LOCATION:
-                params["location"] = self.SEARCH_LOCATION
-            url = f"{self.SEARCH_URL}?{urlencode(params)}"
+    def fetch(self, source_url: str) -> str:
+        """翻全 Apple 公开搜索页，返回 JSON 岗位数组。
+
+        旧实现只发 3 个写死的关键词（software / machine learning / data）各取首页，
+        每轮固定只拿到 60 条，而库里已有 1041 条 active —— 岗位绝大多数永远刷不到
+        （2026-07-28 实测 apple 源 3 天刷新率仅 11%，是全库最差之一）。
+        现改为**空关键词枚举 + 逐页翻到底**：`?search=` 不带词即返回全部岗位，
+        hydration 里 `totalRecords` 给出分母（实测限美国 4636 / 全球 6047），
+        `?page=N` 逐页 20 条且页间零重叠 —— 三点都已 live 验证。
+        关键词枚举天然带偏且互相重叠，改成全量枚举后覆盖面和可核对性都更好。
+        """
+        params = {"search": ""}
+        if self.SEARCH_LOCATION:
+            params["location"] = self.SEARCH_LOCATION
+
+        def fetch_page(page: int) -> PageResult:
+            url = f"{self.SEARCH_URL}?{urlencode({**params, 'page': page})}"
             resp = httpx.get(
                 url,
                 headers={
@@ -40,10 +50,25 @@ class AppleAdapter(BaseAdapter):
                 follow_redirects=True,
             )
             resp.raise_for_status()
-            results = self._extract_hydration_rows(resp.text)
-            all_jobs.extend(results[:50])
+            search = self._extract_search_node(resp.text)
+            rows = search.get("searchResults")
+            total = search.get("totalRecords")
+            return PageResult(
+                items=rows if isinstance(rows, list) else [],
+                total=total if isinstance(total, int) else None,
+            )
 
-        return json.dumps(all_jobs)
+        rows, total, complete = paginate_all(
+            fetch_page,
+            page_size=self.PAGE_SIZE,
+            first_page=1,
+            max_pages=self.MAX_PAGES,
+            delay_seconds=0.15,   # 礼貌爬取：几百页别把对方打毛
+            label=f"apple:{self.name}",
+        )
+        self.reported_total = total
+        self.fetch_complete = complete
+        return json.dumps(rows)
 
     def parse(self, html: str) -> List[RawJob]:
         """Parse either fetch()'s JSON array or a raw public search page."""
@@ -97,25 +122,28 @@ class AppleAdapter(BaseAdapter):
         return jobs
 
     @staticmethod
-    def _extract_hydration_rows(html: str) -> List[dict]:
+    def _extract_search_node(html: str) -> dict:
+        """抽 hydration 里的 search 节点（含 searchResults 与 totalRecords）。抽不到返回 {}。"""
         match = re.search(
             r'window\.__staticRouterHydrationData\s*=\s*JSON\.parse\("([\s\S]*?)"\);</script>',
             html or "",
         )
         if not match:
-            return []
+            return {}
 
         try:
             hydration_text = json.loads(f'"{match.group(1)}"')
             hydration = json.loads(hydration_text)
         except json.JSONDecodeError:
-            return []
+            return {}
 
-        rows = (
-            hydration.get("loaderData", {})
-            .get("search", {})
-            .get("searchResults", [])
-        )
+        node = (hydration.get("loaderData") or {}).get("search")
+        return node if isinstance(node, dict) else {}
+
+    @classmethod
+    def _extract_hydration_rows(cls, html: str) -> List[dict]:
+        """parse() 直接吃原始搜索页 HTML 时的兜底取行（fetch 走 _extract_search_node）。"""
+        rows = cls._extract_search_node(html).get("searchResults")
         return rows if isinstance(rows, list) else []
 
     @staticmethod
