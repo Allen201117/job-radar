@@ -672,5 +672,63 @@ class HostAwareShardingTest(unittest.TestCase):
                          [s["id"] for s in run._shard_by_host(srcs, 3 % 3, 3)])
 
 
+class MultiTenantShardingTest(unittest.TestCase):
+    """多租户 ATS 平台（moka）必须按租户摊到各片，否则一片被压垮。
+
+    2026-07-28 实测 run 30297659211：串行浏览器档 280 源里 **265 源同挂 app.mokahr.com**
+    → 旧的「同 host 同片」把它们整体压进 enrich(1)（该片 398 源 / 265 个 ~1min 的浏览器串行源），
+    跑满 180min 被 GitHub 取消，其余 5 片 12-34min 就跑完闲着。连挂 4 天（07-23/24/25/27）。
+    对端是 SaaS 平台不是单公司服务器；enrich-backlog-browser.yml 早已每天用 6 runner 并行渲染
+    app.mokahr.com 未触发限流 → 按租户拆片是安全的。"""
+
+    def _moka(self, n):
+        return [{"id": f"m{i}", "source_url": f"https://app.mokahr.com/apply/tenant{i}/{1000 + i}"}
+                for i in range(n)]
+
+    def test_moka_tenants_spread_across_all_shards(self):
+        srcs = self._moka(60)
+        N = 6
+        sizes = [len(run._shard_by_host(srcs, i, N)) for i in range(N)]
+        self.assertEqual(sum(sizes), 60, "分片后有源被漏掉或重复")
+        self.assertTrue(all(s > 0 for s in sizes), f"有空片，租户没摊开：{sizes}")
+        self.assertLessEqual(max(sizes) - min(sizes), 1, f"租户没均摊：{sizes}")
+
+    def test_same_moka_tenant_stays_in_one_shard(self):
+        # 同一租户的多个入口（社招/校招）仍算同一个对端，不该被拆到两个 runner 同时渲染。
+        srcs = [{"id": "a", "source_url": "https://app.mokahr.com/apply/shein/2933"},
+                {"id": "b", "source_url": "https://app.mokahr.com/apply/shein/9001"},
+                {"id": "c", "source_url": "https://app.mokahr.com/apply/lining/77"}]
+        N = 3
+        shard_of = {s["id"]: i for i in range(N) for s in run._shard_by_host(srcs, i, N)}
+        self.assertEqual(shard_of["a"], shard_of["b"], "同租户被拆到不同片")
+
+    def test_non_platform_host_still_never_split(self):
+        # 回归守卫：只有白名单里的多租户平台按租户拆；wecruit 这类共享后端必须整体一片（Errno 35）。
+        srcs = [{"id": f"w{i}", "source_url": f"https://wecruit.hotjob.cn/SU{i}/pb/social.html"}
+                for i in range(20)]
+        N = 4
+        shard_of = {s["id"]: i for i in range(N) for s in run._shard_by_host(srcs, i, N)}
+        self.assertEqual(len(set(shard_of.values())), 1, "wecruit 同主机源被拆片了")
+
+    def test_balances_by_source_count_not_key_count(self):
+        """旧 `i % shard_count` 只均衡 key 个数：一个 20 源大 key 和 1 源小 key 等价 → 各片源数差 3 倍。
+        贪心装箱按源数分，大 key 那片不再另外堆一堆小 key。"""
+        srcs = [{"id": f"w{i}", "source_url": f"https://wecruit.hotjob.cn/SU{i}/pb/x.html"}
+                for i in range(20)]
+        srcs += [{"id": f"s{i}", "source_url": f"https://c{i}.example.com/jobs"} for i in range(20)]
+        N = 4
+        sizes = [len(run._shard_by_host(srcs, i, N)) for i in range(N)]
+        self.assertEqual(sum(sizes), 40)
+        # 20 源的不可拆大 key 决定了下限；其余 20 个单源 key 应尽量填平其它片，而不是继续堆到大片上。
+        self.assertEqual(max(sizes), 20, f"最大片超过了那个不可拆的大 key：{sizes}")
+        self.assertGreaterEqual(min(sizes), 6, f"小 key 没填平其余片：{sizes}")
+
+    def test_still_deterministic_across_processes(self):
+        srcs = self._moka(30) + [{"id": "x", "source_url": "https://a.example.com/jobs"}]
+        a = [s["id"] for s in run._shard_by_host(srcs, 2, 5)]
+        b = [s["id"] for s in run._shard_by_host(srcs, 2, 5)]
+        self.assertEqual(a, b)
+
+
 if __name__ == "__main__":
     unittest.main()
