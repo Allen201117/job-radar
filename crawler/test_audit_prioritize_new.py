@@ -64,8 +64,12 @@ class PrioritizeNewTest(unittest.TestCase):
 
     def test_default_rotation_uses_oldest_first(self):
         sql = self._capture_sql(prioritize_new=False)
-        # 默认轮转：按 enrich_checked_at NULLS FIRST、source_id 打头吃部分索引
-        self.assertIn("order by source_id, enrich_checked_at asc nulls first", sql)
+        # 默认轮转：按 enrich_checked_at NULLS FIRST，且内层以 source_id 打头吃部分索引。
+        # 2026-07-28 起改成 lateral **逐源摊名额**——旧的全局 `order by source_id, … limit N`
+        # 会让 UUID 靠后的源永远轮不到（华为 440/460 岗从未探活，详见
+        # test_audit_source_fairness.py）。故这里断言「意图」而不再钉死具体排序写法。
+        self.assertIn("order by enrich_checked_at asc nulls first", sql)
+        self.assertIn("source_id = s.source_id", sql)
         self.assertNotIn("first_seen_at >= now()", sql)
 
 

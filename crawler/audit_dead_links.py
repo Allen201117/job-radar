@@ -122,25 +122,53 @@ def merge_must_apply_candidates(must_rows, regular_rows, limit, must_apply_only=
     return rows
 
 
+def per_source_quota(want, source_count):
+    """每个源本轮分到的名额（向上取整、至少 1）。轮转公平性全靠它。"""
+    return max(1, -(-want // max(1, source_count)))
+
+
 def _fetch_browser_rows_pg(jobs_conn, src_ids, want, host_filter=None, prioritize_new=False, must_patterns=None):
-    where = ["source_id = any(%s::uuid[])", "status='active'"]
-    params = [src_ids]
-    if must_patterns:
-        where.append("coalesce(company, '') ilike any(%s)")
-        params.append(list(must_patterns))
     if prioritize_new:
-        where.append("enrich_checked_at is null")
-        where.append("first_seen_at >= now() - interval '48 hours'")
-        order = "first_seen_at desc"
+        # 近 48h 新增且从未核验：本身就是小集合，全局按 first_seen_at 取即可，不必按源摊名额。
+        where = ["source_id = any(%s::uuid[])", "status='active'",
+                 "enrich_checked_at is null", "first_seen_at >= now() - interval '48 hours'"]
+        params = [src_ids]
+        if must_patterns:
+            where.append("coalesce(company, '') ilike any(%s)")
+            params.append(list(must_patterns))
+        params.append(want)
+        rows = jobs_db.fetch_all(
+            jobs_conn,
+            "select id, title, company, jd_url from jobs where " + " and ".join(where) +
+            " order by first_seen_at desc limit %s",
+            tuple(params),
+        )
     else:
-        order = "source_id, enrich_checked_at asc nulls first"
-    params.append(want)
-    rows = jobs_db.fetch_all(
-        jobs_conn,
-        "select id, title, company, jd_url from jobs where " + " and ".join(where) +
-        f" order by {order} limit %s",
-        tuple(params),
-    )
+        # ⚠️ 轮转必须**按源摊名额**，不能全局 `order by source_id, enrich_checked_at limit N`。
+        # 旧写法等价于「按 source_id 的 UUID 大小从头审到 limit 用完为止」——UUID 靠后的源永远轮不到：
+        # 2026-07-28 实测华为 source_id 前面压着 157154 个 active 岗，而本查询一轮只取 ~9100 行，
+        # 于是华为 460 个在招岗里 440 个**从未被探活过**、最近一次探活停在 2026-07-09。
+        # 这不是华为独有——718 个浏览器源里 UUID 靠后的都被同样饿死，死岗永远下不了架。
+        # 改成 lateral 逐源各取最陈旧的 N 条：内层仍以 source_id 打头走
+        # jobs_active_liveness_by_source_idx (source_id, enrich_checked_at nulls first) WHERE active，
+        # 保持原来「脱离 statement_timeout」的索引访问形态，只是把名额摊平到每个源。
+        inner = ["source_id = s.source_id", "status='active'"]
+        params = [src_ids]
+        if must_patterns:
+            inner.append("coalesce(company, '') ilike any(%s)")
+            params.append(list(must_patterns))
+        params.append(per_source_quota(want, len(src_ids)))
+        params.append(want)
+        rows = jobs_db.fetch_all(
+            jobs_conn,
+            "select j.id, j.title, j.company, j.jd_url from unnest(%s::uuid[]) as s(source_id) "
+            "cross join lateral ("
+            "  select id, title, company, jd_url, enrich_checked_at from jobs where "
+            + " and ".join(inner) +
+            "  order by enrich_checked_at asc nulls first limit %s"
+            ") j order by j.enrich_checked_at asc nulls first limit %s",
+            tuple(params),
+        )
     if host_filter:
         rows = [r for r in rows if host_filter in (host_of(r.get("jd_url")) or "")]
     return rows
@@ -159,6 +187,9 @@ def _fetch_browser_rows_supabase(sb, src_ids, want, host_filter=None, prioritize
             q = q.is_("enrich_checked_at", "null").gte("first_seen_at", cutoff_iso).order("first_seen_at", desc=True)
         else:
             # source_id 打头吃 151 (source_id, enrich_checked_at nulls first) WHERE active 索引（同 sweep）。
+            # ⚠️ 这条回退路径仍是全局排序 = UUID 靠后的源会被饿死（香港库那条已改成 lateral 逐源摊名额，
+            # 见 _fetch_browser_rows_pg）。PostgREST 没有 lateral，改不了；生产恒走香港库，
+            # 本路径只在未配 JOBS_DATABASE_URL（本地/回滚）时启用，故留着不动。
             q = q.order("source_id").order("enrich_checked_at", desc=False, nullsfirst=True)
         chunk = (q.range(offset, offset + page - 1).execute().data) or []
         if host_filter:
