@@ -105,13 +105,30 @@ CITY_ALIASES = {
 }
 
 
+def strip_nul(value):
+    """剥掉 NUL(0x00)。非字符串原样返回。
+
+    Postgres 的 text 类型不允许 NUL —— psycopg2 会直接抛
+    `ValueError: A string literal cannot contain NUL (0x00) characters`，
+    **整个源这一轮抓取全部失败**（不是丢一条，是丢一批）。
+    2026-07-28 实测 laiyifen.zhiye.com（来伊份）的岗位文本里混着 NUL，
+    每天固定挂 2 次，连挂多日。清洗器里的 `re.sub(r"\\s+", " ")` 治不了它：
+    \\x00 不属于 \\s，会原样穿透到写库那一刻才炸。
+
+    只剥 NUL：其它控制字符 Postgres 存得下，动了反而改变正文。
+    """
+    if not isinstance(value, str):
+        return value
+    return value.replace("\x00", "") if "\x00" in value else value
+
+
 def clean_title(title: str) -> str:
     """清洗岗位标题：去首尾空白、去多余空格、去尾部 " - 地点" 后缀。
 
     仅当连字符两侧都有空白时才截断（英文 "Title - City" 写法），
     避免误伤中文 "部门-角色-方向" 这类紧凑复合标题。
     """
-    t = title.strip()
+    t = strip_nul(title).strip()
     t = re.sub(r"\s+", " ", t)
     t = re.sub(r"\s+[-–—]\s+.*$", "", t).strip()
     return t
@@ -121,7 +138,7 @@ def clean_location(location: Optional[str]) -> Optional[str]:
     """清洗地点字段。"""
     if not location:
         return None
-    loc = location.strip()
+    loc = strip_nul(location).strip()
     loc = re.sub(r"\s+", " ", loc)
     if loc.lower() in ("unknown", "multiple locations", "various", ""):
         return None
@@ -132,7 +149,7 @@ def clean_summary(summary: Optional[str], max_chars: int = 400) -> Optional[str]
     """截断摘要到 max_chars 字，在词边界截断。"""
     if not summary:
         return None
-    s = summary.strip()
+    s = strip_nul(summary).strip()
     # 先解 HTML 实体（greenhouse 等接口 content 是实体编码的 &lt;p&gt;…，不解码会原样显示乱码）。
     # 解两遍兜底双重编码（&amp;lt; → &lt; → <）。
     s = html.unescape(html.unescape(s))
@@ -153,7 +170,7 @@ def clean_salary(salary_text: Optional[str]) -> Optional[str]:
     """清洗薪资文本，不过滤内容。"""
     if not salary_text:
         return None
-    s = salary_text.strip()
+    s = strip_nul(salary_text).strip()
     if s.lower() in ("competitive", "negotiable", "面议", "薪资面议", ""):
         return s
     return s
@@ -193,7 +210,10 @@ def normalize(raw: RawJob, *, source_id: str, company: str) -> dict:
     education = raw.education or extract_education(raw.summary)
     deadline = raw.deadline or extract_deadline(raw.summary)
 
-    return {
+    # 出口统一剥 NUL：title/location/summary/salary 已在各自 clean_* 里剥过（content_hash 也因此
+    # 建立在干净文本上），这里兜住不过清洗器的字段——company / jd_url / experience / education /
+    # deadline 等任何一个带 NUL 都会让整源写库炸掉（见 strip_nul 注释）。
+    return {k: strip_nul(v) for k, v in {
         "source_id": source_id,
         "company": raw.company or company,
         "title": title,
@@ -212,7 +232,7 @@ def normalize(raw: RawJob, *, source_id: str, company: str) -> dict:
         "deadline": deadline,
         "content_hash": content_hash,
         "status": "active",
-    }
+    }.items()}
 
 
 def extract_job_type(title: str, summary: Optional[str] = None) -> Optional[str]:
