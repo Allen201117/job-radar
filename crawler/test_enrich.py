@@ -496,3 +496,50 @@ class SiemensGoogleRegistryTest(unittest.TestCase):
     def test_microsoft_stays_liveness_only_but_registered(self):
         # MS 详情页是纯 SPA（3 个 detail 端点全 404、<main> 为空）→ 只探活不补正文，别误以为能富化正文。
         self.assertEqual(enrich.detail_class("microsoft"), "httpx")
+
+
+class SiemensClosedDetectionTest(unittest.TestCase):
+    """回归守卫：Siemens 撤岗是 403 + 错误页，不是 404。
+
+    2026-07-28 实测 JobDetail/510194 → HTTP 403，<main> 只剩
+    "An error has occurred Page not found Go to open jobs"。
+    _raise_if_gone 只认 404/410 → 旧实现把 403 当普通失败吞掉返回 ""，岗位永远留在 active：
+    库里 484 个 Siemens active 岗**全部**在 7 天内被探过、却一个都没下架过。
+    """
+
+    class _Resp:
+        def __init__(self, status_code, text):
+            self.status_code = status_code
+            self.text = text
+
+    _CLOSED = ("<html><body><main>An error has occurred Page not found "
+               "Go to open jobs</main></body></html>")
+    _LIVE = ("<html><body><main>Requirement Manager @Siemens Mobility KSA Job ID 509645 "
+             "Posted since 14-Jun-2026 Organization Mobility " + "detail " * 200
+             + "</main></body></html>")
+
+    def _run(self, resp):
+        orig = enrich.httpx.get
+        enrich.httpx.get = lambda *a, **k: resp
+        try:
+            return enrich._detail_siemens(
+                {"jd_url": "https://jobs.siemens.com/en_US/externaljobs/JobDetail/510194"}, {})
+        finally:
+            enrich.httpx.get = orig
+
+    def test_403_error_page_marks_job_closed(self):
+        with self.assertRaises(enrich.JobClosedError):
+            self._run(self._Resp(403, self._CLOSED))
+
+    def test_403_without_error_copy_is_not_closed(self):
+        """光看 403 不够——可能是 WAF 临时拦截，误判会误杀活岗。"""
+        blocked = "<html><body><main>Access denied by security policy</main></body></html>"
+        self.assertEqual(self._run(self._Resp(403, blocked)), "")
+
+    def test_live_job_still_returns_body(self):
+        out = self._run(self._Resp(200, self._LIVE))
+        self.assertIn("Requirement Manager", out)
+
+    def test_404_still_closed_via_shared_gate(self):
+        with self.assertRaises(enrich.JobClosedError):
+            self._run(self._Resp(404, "<html><body><main>gone</main></body></html>"))
