@@ -81,10 +81,15 @@ class HuaweiFetchCompleteTest(unittest.TestCase):
                        "3": (50, [10, 11, 12])})   # 自报 50 只给 3 条
         self.assertFalse(adapter.fetch_complete)
 
-    def test_absence_liveness_enabled(self):
-        """华为详情页是 SPA，无头审计的 DEAD_MARKERS 认不出闭站（实测探一轮 0 个下架），
-        唯一可靠撤岗信号就是公开列表缺席 → 必须开着这个开关。"""
-        self.assertTrue(HuaweiAdapter.supports_absence_liveness)
+    def test_absence_liveness_must_stay_off(self):
+        """🚫 立碑：华为**绝不能**开 list-absence 撤岗。
+
+        2026-07-29 曾据「列表接口只返 13 条、库里 460 个 active」推断其余都是死岗并开了它。
+        逐个核验后全错：用 getJobDetail/newHr 把 460 个岗一个个查了一遍，**460 个全在招**
+        （例 jobId=30153 列表里查不到，详情接口照样返完整岗位名+正文）。
+        列表接口返的是筛选过的子集 → 缺席 ≠ 撤岗。开了它，等存量降到列表规模 2 倍以内、
+        50% 安全闸不再拦，就会成批删掉在招岗。撤岗只能靠逐岗 enrich._detail_huawei。"""
+        self.assertFalse(HuaweiAdapter.supports_absence_liveness)
 
     def test_all_channels_are_queried(self):
         adapter = HuaweiAdapter()
