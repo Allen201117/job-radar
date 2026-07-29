@@ -64,6 +64,15 @@ class HuaweiAdapter(PlaywrightAdapter):
     _MAX_PAGES = 15   # 50×15=750/渠道 封顶（实习实有 431）
     posts_keys = ("result",) + PlaywrightAdapter.posts_keys
 
+    # 🚫 **绝不能给华为开 supports_absence_liveness**（2026-07-29 差点酿成误删，立碑）。
+    # 曾据「列表接口只返 13 条、库里却有 460 个 active」推断其余都是死岗并开了 list-absence。
+    # 逐个核验后**全错**：用 getJobDetail/newHr 把 460 个岗一个个查了一遍，**460 个全在招**
+    # （例 jobId=30153「法务专员」列表里查不到，详情接口照样返完整岗位名 + 岗位职责正文）。
+    # 结论：getJob/newHr 列表返回的是**筛选过的子集**，不是华为岗位全集 → 列表缺席 ≠ 撤岗。
+    # 一旦开了它，等存量降到列表规模 2 倍以内、50% 安全闸不再拦，就会成批删掉在招岗。
+    # 华为的撤岗只能靠**逐岗** getJobDetail 判定（见 enrich._detail_huawei）。
+    supports_absence_liveness = False
+
     def fetch(self, source_url: str) -> str:
         self.reported_total = None
         self.fetch_complete = False
@@ -76,6 +85,7 @@ class HuaweiAdapter(PlaywrightAdapter):
         collected = []
         seen_ids = set()
         channel_totals = []
+        channels_drained = []   # 逐渠道「是否已抓到自报总数」——完整性必须按渠道判，见下方注释
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             for job_type in ("1", "2", "3"):
                 total: Optional[int] = None
@@ -112,13 +122,20 @@ class HuaweiAdapter(PlaywrightAdapter):
                         break
                 if total is not None:
                     channel_totals.append(total)
+                    channels_drained.append(got >= total)
+                else:
+                    channels_drained.append(False)   # 连总数都没拿到 → 本渠道不算抓全
         if not collected:
             raise RuntimeError("huawei: empty getJob (career.huawei.com)")
         if len(channel_totals) == 3:
             self.reported_total = sum(channel_totals)
-        self.fetch_complete = (
-            self.reported_total is not None and len(seen_ids) >= self.reported_total
-        )
+        # ⚠️ 完整性必须**逐渠道**判，不能拿「去重后的唯一 jobId 数」比「各渠道 totalRows 之和」：
+        # 同一个岗会同时出现在多个渠道（2026-07-28 实测社招 4 条里有 4 条与实习渠道重复 →
+        # 渠道总数之和 13、去重后唯一 jobId 只有 9），于是 len(seen_ids) >= sum(totals) 恒为 False，
+        # fetch_complete **永远为 False** → 依赖它的 list-absence 撤岗（sweep_absent_jobs）
+        # 一次都没跑起来。华为官网真实在招只剩 9 个岗，库里却压着 460 个 active 下不了架。
+        # 改成「三个渠道各自都抓到了自报总数」= 本次确实把公开列表抓全了。
+        self.fetch_complete = len(channels_drained) == 3 and all(channels_drained)
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
 
     def _map(self, post: dict) -> Optional[RawJob]:

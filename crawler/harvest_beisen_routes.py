@@ -34,9 +34,15 @@ def _usable(route):
 def main():
     sb = db.get_supabase()
     # 分页拉全量：本过滤当前 331 行未触顶 PostgREST 的 1000 行硬顶，但 beisen 源随每日扩源持续涨 → 走统一 helper。
+    # ⚠️ 不能只取 enabled：缺口漏斗按验收门规矩「先插 disabled 源 → 真抓 → 回读健康岗才 enable」，
+    # 而北森新租户不先 harvest 到详情路由就抓不出岗 → 只探 enabled 会形成死结
+    # （disabled 永远拿不到路由 → 永远抓不出岗 → 永远 enable 不了 → 永远不被 harvest）。
+    # 所以把「漏斗待验收」的 disabled 源也纳进来（notes 前缀 gap_funnel:）。
     rows = db.fetch_all_rows(
-        lambda: sb.table("sources").select("source_url")
-        .eq("enabled", True).eq("adapter_name", "beisen"))
+        lambda: sb.table("sources").select("source_url,enabled,notes")
+        .eq("adapter_name", "beisen"))
+    rows = [r for r in rows
+            if r.get("enabled") or str(r.get("notes") or "").startswith("gap_funnel:")]
     # 现有落盘 route（china_ats 启动已载入 _BEISEN_ROUTE_CACHE）
     routes = dict(china_ats._BEISEN_ROUTE_CACHE)
     todo = []

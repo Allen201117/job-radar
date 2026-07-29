@@ -496,3 +496,107 @@ class SiemensGoogleRegistryTest(unittest.TestCase):
     def test_microsoft_stays_liveness_only_but_registered(self):
         # MS 详情页是纯 SPA（3 个 detail 端点全 404、<main> 为空）→ 只探活不补正文，别误以为能富化正文。
         self.assertEqual(enrich.detail_class("microsoft"), "httpx")
+
+
+class SiemensClosedDetectionTest(unittest.TestCase):
+    """回归守卫：Siemens 撤岗是 403 + 错误页，不是 404。
+
+    2026-07-28 实测 JobDetail/510194 → HTTP 403，<main> 只剩
+    "An error has occurred Page not found Go to open jobs"。
+    _raise_if_gone 只认 404/410 → 旧实现把 403 当普通失败吞掉返回 ""，岗位永远留在 active：
+    库里 484 个 Siemens active 岗**全部**在 7 天内被探过、却一个都没下架过。
+    """
+
+    class _Resp:
+        def __init__(self, status_code, text):
+            self.status_code = status_code
+            self.text = text
+
+    _CLOSED = ("<html><body><main>An error has occurred Page not found "
+               "Go to open jobs</main></body></html>")
+    _LIVE = ("<html><body><main>Requirement Manager @Siemens Mobility KSA Job ID 509645 "
+             "Posted since 14-Jun-2026 Organization Mobility " + "detail " * 200
+             + "</main></body></html>")
+
+    def _run(self, resp):
+        orig = enrich.httpx.get
+        enrich.httpx.get = lambda *a, **k: resp
+        try:
+            return enrich._detail_siemens(
+                {"jd_url": "https://jobs.siemens.com/en_US/externaljobs/JobDetail/510194"}, {})
+        finally:
+            enrich.httpx.get = orig
+
+    def test_403_error_page_marks_job_closed(self):
+        with self.assertRaises(enrich.JobClosedError):
+            self._run(self._Resp(403, self._CLOSED))
+
+    def test_403_without_error_copy_is_not_closed(self):
+        """光看 403 不够——可能是 WAF 临时拦截，误判会误杀活岗。"""
+        blocked = "<html><body><main>Access denied by security policy</main></body></html>"
+        self.assertEqual(self._run(self._Resp(403, blocked)), "")
+
+    def test_live_job_still_returns_body(self):
+        out = self._run(self._Resp(200, self._LIVE))
+        self.assertIn("Requirement Manager", out)
+
+    def test_404_still_closed_via_shared_gate(self):
+        with self.assertRaises(enrich.JobClosedError):
+            self._run(self._Resp(404, "<html><body><main>gone</main></body></html>"))
+
+
+class HuaweiClosedDetectionTest(unittest.TestCase):
+    """华为撤岗只能逐岗判，且必须「宁可漏判不可错杀」。
+
+    2026-07-29：接口对任何 jobId 都返 HTTP 200 + 109 字段骨架，区别在有没有填内容——
+    在招岗 ~32 个字段有值且 jobname 非空；不存在的 jobId 只有 5 个字段有值、jobname 空。
+    本源刚因「列表缺席即撤岗」的误判差点被清库（460 个 active 逐个核验下来全在招），
+    故判死必须两个条件同时成立，接口返半截数据时一律不判死。
+    """
+
+    class _Resp:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+
+        def json(self):
+            if self._payload is None:
+                raise ValueError("not json")
+            return self._payload
+
+    URL = ("https://career.huawei.com/reccampportal/portal5/"
+           "social-recruitment-detail.html?jobId=30153&dataSource=1")
+
+    def _run(self, resp):
+        orig = enrich.httpx.get
+        enrich.httpx.get = lambda *a, **k: resp
+        try:
+            return enrich._detail_huawei({"jd_url": self.URL}, {})
+        finally:
+            enrich.httpx.get = orig
+
+    def _live_payload(self):
+        p = {f"f{i}": f"v{i}" for i in range(30)}
+        p.update({"jobname": "法务专员", "mainBusiness": "1、负责签约授权管理"})
+        return p
+
+    def test_live_job_returns_body_not_closed(self):
+        self.assertEqual(self._run(self._Resp(self._live_payload())), "1、负责签约授权管理")
+
+    def test_empty_skeleton_is_closed(self):
+        payload = {f"f{i}": None for i in range(105)}
+        payload.update({"jobname": "", "appFlag": "N", "appStatus": 0})
+        with self.assertRaises(enrich.JobClosedError):
+            self._run(self._Resp(payload))
+
+    def test_half_filled_payload_is_never_closed(self):
+        """接口抽风返半截数据（jobname 空但字段填了不少）→ 绝不判死，宁可漏判。"""
+        payload = {f"f{i}": f"v{i}" for i in range(25)}
+        payload["jobname"] = ""
+        self.assertEqual(self._run(self._Resp(payload)), "")
+
+    def test_unparseable_response_is_not_closed(self):
+        self.assertEqual(self._run(self._Resp(None)), "")
+
+    def test_registered_as_httpx_detail(self):
+        self.assertEqual(enrich.detail_class("huawei"), "httpx")

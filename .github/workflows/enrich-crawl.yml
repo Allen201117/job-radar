@@ -1,9 +1,12 @@
 name: enrichment-crawl
 # 重档「逐岗富化」：浏览器源(beisen/moka/feishu/google/bytedance/tencent) + 全量逐岗 summary 详情。
 # 提速：改为 N 片**并行跨 runner**（strategy.matrix），每天**全量覆盖一遍**（旧：按天 1/3 轮转、每源每
-# ~3 天才刷一次）。host-aware 分片（run.py _shard_by_host）保证同一主机的源落同一片 → 跨 runner 不会
-# 并发轰同一台服务器（防 Errno 35 限流，2026-06-10 实锤 wecruit 102 源）。实测全量浏览器档 267min
-# ÷ 6 片 ≈ 单片 ~45min。快档 daily-crawl.yml 只抓 httpx 列表、跳过富化（CRAWL_DETAIL_CAP=0）。
+# ~3 天才刷一次）。分片（run.py _shard_by_host）保证同一「分片单位」的源落同一片 → 跨 runner 不会
+# 并发轰同一台服务器（防 Errno 35 限流，2026-06-10 实锤 wecruit 102 源）。分片单位默认 = host，
+# 多租户 ATS 平台（app.mokahr.com）按租户细分（run.py _shard_key_of）——否则 265 个 moka 源同 host
+# 全压进一片：2026-07-23/24/25/27 实测该片 398 源跑满 180min 被 GitHub 取消 4 次，其余 5 片
+# 12-34min 就跑完闲着。现按源数贪心装箱，实测各片 188-190 源 ≈ 单片 65-66min。
+# 快档 daily-crawl.yml 只抓 httpx 列表、跳过富化（CRAWL_DETAIL_CAP=0）。
 # ⚠️ matrix 的片数与 --shard-count 必须一致（现为 6）；改片数要两处同改。
 
 on:

@@ -383,10 +383,20 @@ def _main_text(html_text):
 def _detail_siemens(row, src):
     # Siemens 自建 ATS（jobs.siemens.com/en_US/externaljobs/JobDetail/{id}）：详情页是 SSR，
     # JD 正文在 <main> 里（live 验证：7.6k 字符含完整 JD；<article> 只有 324 字元信息，别用）。
-    # httpx 直抓、零浏览器。撤岗 → 404/410（_raise_if_gone 统一约定）。
+    # httpx 直抓、零浏览器。
     # 补这个函数前 Siemens 338 个在招岗 100% 是无正文薄卡（adapter 压根不在 ENRICH_REGISTRY 里）。
+    # ⚠️ 撤岗**不是 404**，是 **403 + 错误页**（2026-07-28 live 实测 JobDetail/510194 → HTTP 403，
+    # <main> 只剩 "An error has occurred Page not found Go to open jobs"）。
+    # _raise_if_gone 只认 404/410 → 旧实现把 403 当普通失败吞掉返回 ""，岗位永远留在 active：
+    # 实测库里 484 个 Siemens active 岗**全部**在 7 天内被探活过、却一个都没下架过。
+    # 故按「403 且正文命中错误页文案」判死（照 _detail_google 的软 404 范式）。
+    # 必须同时看状态码和文案——单凭 403 可能是 WAF 临时拦截，误判会误杀活岗。
     r = httpx.get(row["jd_url"], headers=UA, timeout=TIMEOUT, follow_redirects=True)
     _raise_if_gone(r)
+    if r.status_code == 403:
+        flat = re.sub(r"\s+", " ", _main_text(r.text) or "").strip().lower()
+        if "page not found" in flat or "an error has occurred" in flat:
+            raise JobClosedError(f"siemens job closed (HTTP 403 error page): {row['jd_url']}")
     if r.status_code >= 300:
         return ""
     return _main_text(r.text)
@@ -408,7 +418,54 @@ def _detail_google(row, src):
     return text
 
 
+_HUAWEI_DETAIL_API = ("https://career.huawei.com/reccampportal/services/portal/portalpub"
+                      "/getJobDetail/newHr")
+# 不存在的 jobId 也返 HTTP 200 + 109 字段骨架，只是几乎全空（实测 99999999 → 5 个字段有值）；
+# 在招岗实测 ~32 个字段有值。取 8 作阈值：留足余量，宁可漏判也不错杀。
+_HUAWEI_EMPTY_FIELD_CAP = 8
+
+
+def _huawei_query(jd_url, key, default=""):
+    m = re.search(rf"[?&]{key}=([^&]+)", jd_url or "")
+    return m.group(1) if m else default
+
+
+def _detail_huawei(row, src):
+    """华为 career.huawei.com：逐岗公开 JSON 详情接口，零浏览器、零鉴权。
+    GET …/portalpub/getJobDetail/newHr?jobId={id}&dataSource={ds}
+    （2026-07-29 用无头浏览器抓详情页 XHR 抓到的真实端点，httpx 直连可用。）
+
+    ⚠️ 为什么必须逐岗判、不能靠列表缺席：列表接口 getJob/newHr 返回的是**筛选过的子集**
+    （实测只返 13 条），而库里 460 个 active 逐个查下来**全部在招** → 列表缺席 ≠ 撤岗。
+    详见 adapters/huawei.py 里 supports_absence_liveness 的立碑注释。
+
+    撤岗信号：接口对任何 jobId 都返 200 + 109 字段骨架，区别在**有没有填内容**——在招岗
+    ~32 个字段有值且 jobname 非空；不存在的 jobId 只有 5 个字段有值、jobname 为空。
+    故判死要求「jobname 为空」**且**「有值字段数 ≤ 阈值」同时成立：只看 jobname 空的话，
+    接口某次返半截数据就会误杀在招岗——本源刚因误判差点被清库，这里宁可漏判不可错杀。
+    """
+    r = httpx.get(_HUAWEI_DETAIL_API,
+                  params={"jobId": _huawei_query(row["jd_url"], "jobId"),
+                          "dataSource": _huawei_query(row["jd_url"], "dataSource", "1")},
+                  headers=UA, timeout=TIMEOUT, follow_redirects=True)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    try:
+        payload = r.json()
+    except ValueError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    name = (payload.get("jobname") or payload.get("nameCn") or "").strip()
+    filled = sum(1 for v in payload.values() if v not in (None, "", [], {}))
+    if not name and filled <= _HUAWEI_EMPTY_FIELD_CAP:
+        raise JobClosedError(f"huawei job closed (detail payload empty): {row['jd_url']}")
+    return (payload.get("mainBusiness") or "").strip()
+
+
 ENRICH_REGISTRY = {
+    "huawei": _detail_huawei,
     "workday": _detail_workday,
     "oracle": _detail_oracle,
     "eightfold": _detail_eightfold,

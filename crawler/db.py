@@ -1,9 +1,11 @@
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import httpx
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
@@ -28,6 +30,39 @@ def get_supabase() -> Client:
 # PostgREST 单次 select 的行数硬顶。超过它的表必须分页拉，否则静默只拿到前 1000 行。
 _PAGE_SIZE = 1000
 
+# ── Supabase 读的链路自愈（2026-07-28 加）─────────────────────────────────
+# 爬虫跑在 GitHub Actions（Azure 海外）连 Supabase，这条链路和连香港库一样会偶发被掐断。
+# 实测（run 30363519599，enrich-backlog 的 hotjob 片）：读 sources 时
+# `httpx.ConnectError: [Errno 104] Connection reset by peer` → 整片 exit 1，
+# 而同一时刻其余 11 片读得好好的 = 不是 Supabase 挂了，是单次 TCP 抖动。
+# jobs_db.get_conn 早已有同类重试（治香港库），Supabase 这条路当时漏了 —— 这里补齐。
+# 只重试 httpx.TransportError（连接/读写/超时等网络层）；PostgREST 的 APIError（4xx/5xx 业务错、
+# 权限错、SQL 错）不重试——那些重试多少次都是同样的错，只会拖慢失败。
+_READ_ATTEMPTS = 4
+_READ_BACKOFF = (2, 5, 10)  # 第 n 次失败后等几秒再试；长度 = _READ_ATTEMPTS - 1
+
+
+def _execute_with_retry(build_query, what: str = "Supabase 读"):
+    """执行一次 PostgREST 请求，网络层抖动按 _READ_BACKOFF 重试。
+
+    build_query 必须每次返回一个**新**的 query builder（builder 有状态，重试复用会把条件叠加）。"""
+    last_exc = None
+    for attempt in range(_READ_ATTEMPTS):
+        try:
+            resp = build_query().execute()
+            if attempt:
+                print(f"[db] {what} 第 {attempt + 1} 次尝试成功（前 {attempt} 次网络抖动已重试）")
+            return resp
+        except httpx.TransportError as exc:
+            last_exc = exc
+            if attempt >= _READ_ATTEMPTS - 1:
+                break
+            wait = _READ_BACKOFF[attempt]
+            print(f"[db] {what} 失败({type(exc).__name__}: {exc})，{wait}s 后重试 "
+                  f"({attempt + 2}/{_READ_ATTEMPTS})")
+            time.sleep(wait)
+    raise last_exc
+
 
 def fetch_all_rows(query_factory, page_size: int = _PAGE_SIZE, order_key: str = "id") -> list[dict]:
     """分页拉全量（PostgREST 单次 select 最多 1000 行，超出部分**静默**丢弃，不报错）。
@@ -41,10 +76,12 @@ def fetch_all_rows(query_factory, page_size: int = _PAGE_SIZE, order_key: str = 
     out: list[dict] = []
     offset = 0
     while True:
-        rows = (query_factory()
-                .order(order_key, desc=False)
-                .range(offset, offset + page_size - 1)
-                .execute().data) or []
+        rows = _execute_with_retry(
+            lambda: (query_factory()
+                     .order(order_key, desc=False)
+                     .range(offset, offset + page_size - 1)),
+            what=f"分页读第 {offset // page_size + 1} 页",
+        ).data or []
         out.extend(rows)
         if len(rows) < page_size:
             break
