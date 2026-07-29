@@ -418,7 +418,54 @@ def _detail_google(row, src):
     return text
 
 
+_HUAWEI_DETAIL_API = ("https://career.huawei.com/reccampportal/services/portal/portalpub"
+                      "/getJobDetail/newHr")
+# 不存在的 jobId 也返 HTTP 200 + 109 字段骨架，只是几乎全空（实测 99999999 → 5 个字段有值）；
+# 在招岗实测 ~32 个字段有值。取 8 作阈值：留足余量，宁可漏判也不错杀。
+_HUAWEI_EMPTY_FIELD_CAP = 8
+
+
+def _huawei_query(jd_url, key, default=""):
+    m = re.search(rf"[?&]{key}=([^&]+)", jd_url or "")
+    return m.group(1) if m else default
+
+
+def _detail_huawei(row, src):
+    """华为 career.huawei.com：逐岗公开 JSON 详情接口，零浏览器、零鉴权。
+    GET …/portalpub/getJobDetail/newHr?jobId={id}&dataSource={ds}
+    （2026-07-29 用无头浏览器抓详情页 XHR 抓到的真实端点，httpx 直连可用。）
+
+    ⚠️ 为什么必须逐岗判、不能靠列表缺席：列表接口 getJob/newHr 返回的是**筛选过的子集**
+    （实测只返 13 条），而库里 460 个 active 逐个查下来**全部在招** → 列表缺席 ≠ 撤岗。
+    详见 adapters/huawei.py 里 supports_absence_liveness 的立碑注释。
+
+    撤岗信号：接口对任何 jobId 都返 200 + 109 字段骨架，区别在**有没有填内容**——在招岗
+    ~32 个字段有值且 jobname 非空；不存在的 jobId 只有 5 个字段有值、jobname 为空。
+    故判死要求「jobname 为空」**且**「有值字段数 ≤ 阈值」同时成立：只看 jobname 空的话，
+    接口某次返半截数据就会误杀在招岗——本源刚因误判差点被清库，这里宁可漏判不可错杀。
+    """
+    r = httpx.get(_HUAWEI_DETAIL_API,
+                  params={"jobId": _huawei_query(row["jd_url"], "jobId"),
+                          "dataSource": _huawei_query(row["jd_url"], "dataSource", "1")},
+                  headers=UA, timeout=TIMEOUT, follow_redirects=True)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    try:
+        payload = r.json()
+    except ValueError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    name = (payload.get("jobname") or payload.get("nameCn") or "").strip()
+    filled = sum(1 for v in payload.values() if v not in (None, "", [], {}))
+    if not name and filled <= _HUAWEI_EMPTY_FIELD_CAP:
+        raise JobClosedError(f"huawei job closed (detail payload empty): {row['jd_url']}")
+    return (payload.get("mainBusiness") or "").strip()
+
+
 ENRICH_REGISTRY = {
+    "huawei": _detail_huawei,
     "workday": _detail_workday,
     "oracle": _detail_oracle,
     "eightfold": _detail_eightfold,

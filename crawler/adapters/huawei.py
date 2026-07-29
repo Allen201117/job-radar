@@ -64,12 +64,14 @@ class HuaweiAdapter(PlaywrightAdapter):
     _MAX_PAGES = 15   # 50×15=750/渠道 封顶（实习实有 431）
     posts_keys = ("result",) + PlaywrightAdapter.posts_keys
 
-    # list-absence 探活：本 adapter 遍历 jobType 1/2/3 三渠道、逐渠道翻到自报 totalRows，
-    # 抓全时「列表里缺席」= 已撤岗（同 feishu/beisen 口径）。
-    # 华为详情页是 SPA，无头审计的 DEAD_MARKERS 认不出闭站（实测探了一轮 0 个下架），
-    # 唯一可靠的撤岗信号就是公开列表接口的缺席。
-    # 两道安全闸仍在：仅 fetch_complete 时才 sweep + 单源缺席占比 >50% 自动跳过。
-    supports_absence_liveness = True
+    # 🚫 **绝不能给华为开 supports_absence_liveness**（2026-07-29 差点酿成误删，立碑）。
+    # 曾据「列表接口只返 13 条、库里却有 460 个 active」推断其余都是死岗并开了 list-absence。
+    # 逐个核验后**全错**：用 getJobDetail/newHr 把 460 个岗一个个查了一遍，**460 个全在招**
+    # （例 jobId=30153「法务专员」列表里查不到，详情接口照样返完整岗位名 + 岗位职责正文）。
+    # 结论：getJob/newHr 列表返回的是**筛选过的子集**，不是华为岗位全集 → 列表缺席 ≠ 撤岗。
+    # 一旦开了它，等存量降到列表规模 2 倍以内、50% 安全闸不再拦，就会成批删掉在招岗。
+    # 华为的撤岗只能靠**逐岗** getJobDetail 判定（见 enrich._detail_huawei）。
+    supports_absence_liveness = False
 
     def fetch(self, source_url: str) -> str:
         self.reported_total = None
