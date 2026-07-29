@@ -7,6 +7,7 @@ import { appendJobScopeWhere } from "@/lib/job-scope";
 import type { UserPreferences } from "@/lib/types";
 import { ilikeMatcher } from "@/lib/ilike-matcher";
 import { campusAdmission } from "@/lib/campus-zone";
+import { mustApplyUnion, type MustApplyCompany } from "@/lib/must-apply-list";
 
 export { ilikeMatcher } from "@/lib/ilike-matcher";
 
@@ -106,6 +107,9 @@ export type MustApplyCoverageRow = {
   healthy: number;
   new7d: number;
   checked72h: number;
+  directHealthy: number;
+  parentPortalHealthy: number;
+  coveredViaParentPortal: boolean;
 };
 
 export type CompanyActiveAggregate = {
@@ -114,10 +118,73 @@ export type CompanyActiveAggregate = {
   healthy: number;
   new7d: number;
   checked72h: number;
+  brandRollups: Record<string, ActiveAggregateCounts>;
+};
+
+type ActiveAggregateCounts = {
+  activeTotal: number;
+  healthy: number;
+  new7d: number;
+  checked72h: number;
 };
 
 let companyActiveAggregatesCache: { expiresAt: number; value: CompanyActiveAggregate[] } | null = null;
 let companyActiveAggregatesInFlight: Promise<CompanyActiveAggregate[]> | null = null;
+
+type BrandRollupRule = {
+  pattern: string;
+  parentPattern: string;
+  brandTokens: string[];
+  alias: string;
+};
+
+function brandRollupRules(): BrandRollupRule[] {
+  return mustApplyUnion("domestic")
+    .filter(
+      (company): company is MustApplyCompany & {
+        parentPattern: string;
+        brandTokens: string[];
+      } => Boolean(company.parentPattern && company.brandTokens?.length),
+    )
+    .map((company, index) => ({
+      pattern: company.pattern,
+      parentPattern: company.parentPattern,
+      brandTokens: company.brandTokens,
+      alias: `brand_healthy_${index}`,
+    }));
+}
+
+function brandRollupSql(rules: BrandRollupRule[]) {
+  const params: unknown[] = [];
+  const filters = rules.map((rule) => {
+    params.push(rule.parentPattern, rule.pattern, rule.brandTokens.map((token) => `%${token}%`));
+    const parentParam = params.length - 2;
+    const directParam = params.length - 1;
+    const tokensParam = params.length;
+    const matchesBrand = `
+          company ilike $${parentParam}
+          and company not ilike $${directParam}
+          and title ilike any($${tokensParam}::text[])`;
+    return `,
+      count(*) filter (
+        where ${matchesBrand}
+      ) as ${rule.alias}_active,
+      count(*) filter (
+        where summary is not null
+          and char_length(btrim(summary)) >= 60
+          and ${matchesBrand}
+      ) as ${rule.alias}_healthy,
+      count(*) filter (
+        where first_seen_at > now() - interval '7 days'
+          and ${matchesBrand}
+      ) as ${rule.alias}_new_7d,
+      count(*) filter (
+        where enrich_checked_at > now() - interval '72 hours'
+          and ${matchesBrand}
+      ) as ${rule.alias}_checked_72h`;
+  });
+  return { sql: filters.join(""), params };
+}
 
 /**
  * 每家公司只聚合一次，避免必投清单每个 pattern 都扫一遍 active jobs。
@@ -129,12 +196,15 @@ export async function getCompanyActiveAggregates(): Promise<CompanyActiveAggrega
     return companyActiveAggregatesCache.value;
   }
   if (companyActiveAggregatesInFlight) return companyActiveAggregatesInFlight;
+  const rules = brandRollupRules();
+  const rollup = brandRollupSql(rules);
   companyActiveAggregatesInFlight = jobsQuery<{
     company: string | null;
     active_total: string | number;
     healthy: string | number;
     new_7d: string | number;
     checked_72h: string | number;
+    [key: string]: string | number | null;
   }>(`
     select
       company,
@@ -142,16 +212,25 @@ export async function getCompanyActiveAggregates(): Promise<CompanyActiveAggrega
       count(*) filter (where summary is not null and char_length(btrim(summary)) >= 60) as healthy,
       count(*) filter (where first_seen_at > now() - interval '7 days') as new_7d,
       count(*) filter (where enrich_checked_at > now() - interval '72 hours') as checked_72h
+      ${rollup.sql}
     from jobs
     where status = 'active'
     group by company
-  `)
+  `, rollup.params)
     .then((rows) => rows.map((row) => ({
       company: row.company,
       activeTotal: Number(row.active_total || 0),
       healthy: Number(row.healthy || 0),
       new7d: Number(row.new_7d || 0),
       checked72h: Number(row.checked_72h || 0),
+      brandRollups: Object.fromEntries(
+        rules.map((rule) => [rule.pattern, {
+          activeTotal: Number(row[`${rule.alias}_active`] || 0),
+          healthy: Number(row[`${rule.alias}_healthy`] || 0),
+          new7d: Number(row[`${rule.alias}_new_7d`] || 0),
+          checked72h: Number(row[`${rule.alias}_checked_72h`] || 0),
+        }]),
+      ),
     })))
     .then((value) => {
       companyActiveAggregatesCache = { value, expiresAt: Date.now() + 60_000 };
@@ -169,12 +248,22 @@ export async function getCompanyActiveAggregates(): Promise<CompanyActiveAggrega
  * 先聚合公司，再在 Node 内按 ILIKE 语义匹配，避免每条清单都扫描 active jobs。
  */
 export async function getMustApplyCoverage(
-  list: Array<{ name: string; pattern: string }>,
+  list: MustApplyCompany[],
 ): Promise<MustApplyCoverageRow[]> {
   const aggregates = await getCompanyActiveAggregates();
-  return list.map(({ name, pattern }) => {
+  return computeMustApplyCoverage(list, aggregates);
+}
+
+export function computeMustApplyCoverage(
+  list: MustApplyCompany[],
+  aggregates: CompanyActiveAggregate[],
+): MustApplyCoverageRow[] {
+  return list.map(({ name, pattern, parentPattern, brandTokens }) => {
     const matches = ilikeMatcher(pattern);
-    return aggregates.reduce<MustApplyCoverageRow>((total, company) => {
+    const direct = aggregates.reduce<Omit<
+      MustApplyCoverageRow,
+      "directHealthy" | "parentPortalHealthy" | "coveredViaParentPortal"
+    >>((total, company) => {
       if (!company.company || !matches(company.company)) return total;
       total.activeTotal += company.activeTotal;
       total.healthy += company.healthy;
@@ -182,6 +271,31 @@ export async function getMustApplyCoverage(
       total.checked72h += company.checked72h;
       return total;
     }, { name, activeTotal: 0, healthy: 0, new7d: 0, checked72h: 0 });
+    const parentRollup = parentPattern && brandTokens?.length
+      ? aggregates.reduce<ActiveAggregateCounts>((sum, company) => {
+        const rollup = company.brandRollups?.[pattern];
+        if (!rollup) return sum;
+        sum.activeTotal += rollup.activeTotal;
+        sum.healthy += rollup.healthy;
+        sum.new7d += rollup.new7d;
+        sum.checked72h += rollup.checked72h;
+        return sum;
+      }, { activeTotal: 0, healthy: 0, new7d: 0, checked72h: 0 })
+      : { activeTotal: 0, healthy: 0, new7d: 0, checked72h: 0 };
+    const acceptedParent = parentRollup.healthy >= 3
+      ? parentRollup
+      : { activeTotal: 0, healthy: 0, new7d: 0, checked72h: 0 };
+    const parentPortalHealthy = acceptedParent.healthy;
+    return {
+      ...direct,
+      activeTotal: direct.activeTotal + acceptedParent.activeTotal,
+      healthy: direct.healthy + parentPortalHealthy,
+      new7d: direct.new7d + acceptedParent.new7d,
+      checked72h: direct.checked72h + acceptedParent.checked72h,
+      directHealthy: direct.healthy,
+      parentPortalHealthy,
+      coveredViaParentPortal: parentPortalHealthy > 0,
+    };
   });
 }
 

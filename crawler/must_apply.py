@@ -46,8 +46,19 @@ def by_industry() -> dict[str, list[dict]]:
     return {
         industry: [row for row in companies if isinstance(row, dict)]
         for industry, companies in rows.items()
-        if isinstance(industry, str) and isinstance(companies, list)
+        if (
+            isinstance(industry, str)
+            and not industry.startswith("_")
+            and isinstance(companies, list)
+        )
     }
+
+
+def version() -> str:
+    """返回清单版本元数据；旧清单没有版本时保持可读。"""
+    rows = _load_rows()
+    value = rows.get("_version") if isinstance(rows, dict) else None
+    return value if isinstance(value, str) and value.strip() else "unversioned"
 
 
 def patterns_for_industries(industries) -> list[str]:
@@ -80,7 +91,11 @@ def overseas_by_industry() -> dict[str, list[dict]]:
     return {
         industry: [row for row in companies if isinstance(row, dict)]
         for industry, companies in rows.items()
-        if isinstance(industry, str) and isinstance(companies, list)
+        if (
+            isinstance(industry, str)
+            and not industry.startswith("_")
+            and isinstance(companies, list)
+        )
     }
 
 

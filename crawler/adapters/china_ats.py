@@ -14,6 +14,7 @@
 host / tenant 从每个 source 的 source_url 动态解析，因此**同一 adapter 覆盖任意租户公司**。
 playwright 仅在 fetch() 内惰性导入。
 """
+import html as _html
 import json
 import re
 from typing import List, Optional
@@ -22,7 +23,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 import normalizer
-from .base import RawJob
+from .base import RawJob, resolve_detail_cap
 from .playwright_base import PlaywrightAdapter
 
 
@@ -74,6 +75,7 @@ class ChinaSpaAdapter(PlaywrightAdapter):
     def fetch(self, source_url: str) -> str:
         # 记录本次源的 origin / host / 门户前缀，供 _map 拼接相对链接与详情路由。
         parsed = urlparse(source_url)
+        self._source_url = source_url
         self._origin = f"{parsed.scheme}://{parsed.netloc}"
         self._host = parsed.netloc
         # 门户前缀 = 列表页路径去掉最后一段（section）。北森详情路由 = {origin}{prefix}/zwxq?jobAdId=
@@ -91,7 +93,11 @@ class ChinaSpaAdapter(PlaywrightAdapter):
         if raw:
             if raw.startswith("http"):
                 return raw
-            return urljoin(getattr(self, "_origin", "") + "/", raw.lstrip("/"))
+            return urljoin(
+                getattr(self, "_source_url", None)
+                or (getattr(self, "_origin", "") + "/"),
+                raw,
+            )
         # 2) 已知 ATS 形态才用模板兜底（company_spa 不设模板 → 返回空 → 丢弃）
         if self.detail_template and job_id:
             return self.detail_template.format(host=getattr(self, "_host", ""), id=job_id)
@@ -333,20 +339,63 @@ _BEISEN_SSR_PARAMS = ("jobId", "adId", "jobAdId")
 _BEISEN_SSR_ANCHOR_JS = r"""
 () => {
   const out=[], seen=new Set();
+  const push=(id,name,href)=>{
+    if(!name || name.length<3 || name.length>60) return;   // 跳过登录/注册等短文本
+    if(seen.has(id)) return; seen.add(id);
+    out.push({id, name, href});
+  };
+  // ① 查询串式：?jobId= / ?jobAdId= / ?adId=（详情 path 因租户而异，需 _discover_ssr_route 探）
   for (const a of document.querySelectorAll(
         "a[href*='jobId='],a[href*='adId='],a[href*='jobAdId=']")) {
     const href=a.getAttribute('href')||'';
     const m=href.match(/(?:jobId|jobAdId|adId)=([^&#]+)/i);
     if(!m) continue;
-    const id=decodeURIComponent(m[1]);
-    const name=(a.innerText||a.textContent||'').trim();
-    if(!name || name.length<3 || name.length>60) continue;  // 跳过登录/注册等短文本
-    if(seen.has(id)) continue; seen.add(id);
-    out.push({id, name});
+    push(decodeURIComponent(m[1]), (a.innerText||a.textContent||'').trim(), a.href);
+  }
+  // ② 路径式：/job_show/230910610、/zpdetail/230300168 …（老版 CMS Portal 租户用这种，
+  //    2026-07-27 实测科伦 kelun=/job_show/{id}、启德 eic=/zpdetail/{id}）。
+  //    这类 href 本身就是**完整可用的详情链接**，直接带出去用，不需要再猜路由。
+  for (const a of document.querySelectorAll("a[href]")) {
+    const href=a.getAttribute('href')||'';
+    const m=href.match(/\/(?:job[_-]?show|zpdetail|jobdetail|job[_-]?detail|positiondetail)\/(\d{4,})/i);
+    if(!m) continue;
+    push(m[1], (a.innerText||a.textContent||'').trim(), a.href);
   }
   return out.slice(0,120);
 }
 """
+
+
+_BEISEN_SSR_JD_RE = re.compile(
+    r"(工作职责|岗位职责|职位描述|工作内容|岗位描述|职责描述)[：:]\s*(.+)$", re.S)
+_BEISEN_SSR_SUMMARY_CAP = 60
+
+
+def _beisen_ssr_fill_summaries(jobs: List[dict]) -> None:
+    """老版 CMS Portal 租户：详情页是 SSR 直出正文，纯 httpx 取回来即可（无需浏览器）。
+
+    为何要做：不补正文的话这些岗只是「薄卡」——`count_valid_active_jobs()` 与北极星
+    「必投清单健康覆盖」都要求 summary≥60 字，薄卡不计数，等于白抓
+    （2026-07-27 实测科伦/启德首抓 17 岗全无正文）。
+    只取「工作职责/岗位职责/职位描述」之后的正文，去掉导航与页眉页脚噪声；失败静默跳过（留薄卡）。
+    """
+    cap = resolve_detail_cap(_BEISEN_SSR_SUMMARY_CAP)
+    with httpx.Client(timeout=15, follow_redirects=True,
+                      headers={"User-Agent": PlaywrightAdapter.user_agent}) as cli:
+        for job in jobs[:cap]:
+            try:
+                resp = cli.get(job["jd_url"])
+                if resp.status_code != 200:
+                    continue
+                text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", resp.text, flags=re.S | re.I)
+                text = re.sub(r"<[^>]+>", " ", text)
+                text = re.sub(r"\s+", " ", _html.unescape(_html.unescape(text))).strip()
+                m = _BEISEN_SSR_JD_RE.search(text)
+                body = (m.group(2) if m else "").strip()
+                if len(body) >= 60:
+                    job["summary"] = body[:4000]
+            except Exception:
+                continue
 
 
 class BeisenAdapter(ChinaSpaAdapter):
@@ -609,6 +658,22 @@ class BeisenAdapter(ChinaSpaAdapter):
                 if not anchors:
                     raise RuntimeError(
                         f"beisen: SSR 列表页无 jobId/adId 锚点（非老版 SSR 或被反爬）host={self._host}")
+                # 锚点自带完整详情 href（路径式租户，如 /job_show/{id}、/zpdetail/{id}）→ 直接用，
+                # 不必再 render-verify 猜路由：页面给的就是真链接，猜反而可能猜错。
+                direct = [a for a in anchors
+                          if str(a.get("href") or "").startswith(("http://", "https://"))
+                          and re.search(r"/(?:job[_-]?show|zpdetail|jobdetail|job[_-]?detail|positiondetail)/\d{4,}",
+                                        str(a.get("href")), re.I)]
+                if direct:
+                    jobs, seen = [], set()
+                    for a in direct:
+                        jd = str(a["href"])
+                        if jd in seen:
+                            continue
+                        seen.add(jd)
+                        jobs.append({"title": a["name"], "jd_url": jd, "location": a.get("location")})
+                    _beisen_ssr_fill_summaries(jobs)
+                    return json.dumps({"_ssr_jobs": jobs}, ensure_ascii=False)
                 route = _BEISEN_ROUTE_CACHE.get(self._host)
                 if not (isinstance(route, dict) and route.get("ssr_path")):
                     route = self._discover_ssr_route(page, origin, anchors)
@@ -661,7 +726,8 @@ class BeisenAdapter(ChinaSpaAdapter):
                     continue
                 seen.add(jd)
                 out.append(RawJob(company=self.company_name or "", title=title,
-                                  location=j.get("location"), job_type=None, summary=None,
+                                  location=j.get("location"), job_type=None,
+                                  summary=j.get("summary"),
                                   jd_url=jd, apply_url=jd, posted_at=None))
             return out
         return super().parse(html)  # 新版 JSON 拦截路径

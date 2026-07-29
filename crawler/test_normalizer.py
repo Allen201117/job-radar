@@ -260,3 +260,47 @@ class IsChinaLocationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StripNulTest(unittest.TestCase):
+    """回归守卫：抓到的文本里混进 NUL(0x00) 不能把整源写库炸掉。
+
+    2026-07-28 线上：laiyifen.zhiye.com（来伊份）的岗位文本含 NUL，psycopg2 抛
+    `ValueError: A string literal cannot contain NUL (0x00) characters`，
+    **整源那一轮全部写不进去**（不是丢一条），每天固定挂 2 次连挂多日。
+    清洗器原有的 re.sub(r"\s+", " ") 治不了——\x00 不属于 \s，会穿透到写库那刻才炸。
+    """
+
+    def test_strip_nul_only_removes_nul(self):
+        self.assertEqual(normalizer.strip_nul("a\x00b"), "ab")
+        self.assertEqual(normalizer.strip_nul("干净文本"), "干净文本")
+        # 其它控制字符 Postgres 存得下，不该被动（动了就改了正文）
+        self.assertEqual(normalizer.strip_nul("a\tb\nc"), "a\tb\nc")
+        self.assertIsNone(normalizer.strip_nul(None))
+        self.assertEqual(normalizer.strip_nul(123), 123)
+
+    def test_cleaners_drop_nul(self):
+        self.assertNotIn("\x00", normalizer.clean_title("后端\x00工程师"))
+        self.assertNotIn("\x00", normalizer.clean_summary("负责\x00后端研发") or "")
+        self.assertNotIn("\x00", normalizer.clean_salary("20\x00k") or "")
+        loc = normalizer.clean_location("上海\x00")
+        self.assertNotIn("\x00", loc or "")
+
+    def test_normalize_output_has_no_nul_in_any_field(self):
+        raw = RawJob(
+            company="来伊份\x00",
+            title="门店运营\x00专员",
+            location="上海\x00",
+            summary="负责\x00门店运营",
+            jd_url="https://laiyifen.zhiye.com/social/detail?jobAdId=abc\x00",
+            apply_url="https://laiyifen.zhiye.com/social/detail?jobAdId=abc\x00",
+            salary_text="8\x00k",
+            experience="3\x00年",
+            education="本科\x00",
+            deadline="2026-12-31\x00",
+        )
+        row = normalizer.normalize(raw, source_id="s1", company="来伊份")
+        offenders = [k for k, v in row.items() if isinstance(v, str) and "\x00" in v]
+        self.assertEqual(offenders, [], f"这些字段仍带 NUL，会把整源写库炸掉: {offenders}")
+        self.assertEqual(row["company"], "来伊份")
+        self.assertEqual(row["title"], "门店运营专员")

@@ -13,6 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import httpx  # noqa: E402
+
 import db  # noqa: E402
 
 
@@ -110,6 +112,74 @@ class FetchAllRowsTest(unittest.TestCase):
         rows = db.fetch_all_rows(
             lambda: sb.table("sources").select("*").eq("enabled", True))
         self.assertEqual(len(rows), 1079, "分页不能吃掉 .eq 过滤条件")
+        self.assertTrue(all(r["enabled"] for r in rows))
+
+
+class SupabaseReadRetryTest(unittest.TestCase):
+    """读 Supabase 的网络抖动必须重试，不能让整个 CI 分片 exit 1。
+
+    2026-07-28 线上（run 30363519599，enrich-backlog 的 hotjob 片）：读 sources 时
+    `httpx.ConnectError: [Errno 104] Connection reset by peer` 直接冒泡 → 整片挂，
+    而同一时刻其余 11 片读得好好的 = 单次 TCP 抖动，不是 Supabase 挂了。
+    香港库那条路（jobs_db.get_conn）2026-07-26 已加同类重试，Supabase 这条当时漏了。"""
+
+    def setUp(self):
+        # 测试里不要真 sleep 掉 17 秒
+        self._orig_sleep = db.time.sleep
+        db.time.sleep = lambda _s: None
+
+    def tearDown(self):
+        db.time.sleep = self._orig_sleep
+
+    def _flaky_sb(self, rows, fail_times, exc):
+        """返回 (fake supabase, state)；前 fail_times 次 execute 抛 exc，之后正常返回。
+        state["n"] = execute 被调用的总次数（用来断言重试了几次）。"""
+        state = {"n": 0}
+
+        class Q(_FakeQuery):
+            def execute(self):
+                state["n"] += 1
+                if state["n"] <= fail_times:
+                    raise exc
+                return super().execute()
+
+        class Sb(_FakeSb):
+            def table(self, _name):
+                return Q(list(self.rows), self.order_log)
+
+        return Sb(rows), state
+
+    def test_retries_transient_connect_reset_then_succeeds(self):
+        sb, state = self._flaky_sb(
+            _sources(10), fail_times=2,
+            exc=httpx.ConnectError("[Errno 104] Connection reset by peer"))
+        rows = db.fetch_all_rows(lambda: sb.table("sources").select("*"))
+        self.assertEqual(len(rows), 10, "重试后应拿到完整数据")
+        self.assertEqual(state["n"], 3, "应在第 3 次尝试成功（前 2 次抖动）")
+
+    def test_gives_up_after_attempt_cap_and_raises_original(self):
+        sb, state = self._flaky_sb(
+            _sources(10), fail_times=99,
+            exc=httpx.ConnectError("[Errno 104] Connection reset by peer"))
+        with self.assertRaises(httpx.ConnectError):
+            db.fetch_all_rows(lambda: sb.table("sources").select("*"))
+        self.assertEqual(state["n"], db._READ_ATTEMPTS, "重试次数应等于 _READ_ATTEMPTS")
+
+    def test_does_not_retry_non_network_errors(self):
+        """PostgREST 的业务错（权限/SQL/4xx）重试多少次都是同样的错，只会拖慢失败。"""
+        sb, state = self._flaky_sb(_sources(10), fail_times=99, exc=ValueError("bad query"))
+        with self.assertRaises(ValueError):
+            db.fetch_all_rows(lambda: sb.table("sources").select("*"))
+        self.assertEqual(state["n"], 1, "非网络错不该重试")
+
+    def test_retry_rebuilds_query_so_filters_are_not_stacked(self):
+        """builder 有状态：重试若复用同一个 builder，range/order 会叠加 → 拿到错的页。"""
+        sb, _ = self._flaky_sb(
+            _sources(1121, enabled_from=1079), fail_times=1,
+            exc=httpx.ReadError("boom"))
+        rows = db.fetch_all_rows(
+            lambda: sb.table("sources").select("*").eq("enabled", True))
+        self.assertEqual(len(rows), 1079, "重试后过滤+分页结果应和没抖动时一致")
         self.assertTrue(all(r["enabled"] for r in rows))
 
 

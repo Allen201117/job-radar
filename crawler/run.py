@@ -21,6 +21,7 @@ from adapters.apple import AppleAdapter, AppleChinaAdapter
 from adapters.baidu import BaiduAdapter
 from adapters.jd import JdAdapter
 from adapters.haier import HaierAdapter
+from adapters.iguopin import IguopinAdapter
 from adapters.siemens import SiemensAdapter
 from adapters.tencent import TencentAdapter
 from adapters.bytedance import BytedanceAdapter, BytedanceCampusAdapter
@@ -92,6 +93,7 @@ ADAPTERS = {
     "baidu": BaiduAdapter(),
     "jd": JdAdapter(),
     "haier": HaierAdapter(),
+    "iguopin": IguopinAdapter(),  # 国聘央企/国企公开职位搜索 API
     "siemens": SiemensAdapter(),
     "tencent": TencentAdapter(),
     "bytedance": BytedanceAdapter(),
@@ -142,7 +144,7 @@ ADAPTERS = {
 # 扩本土覆盖（新增本土 adapter）是当前最高优先 backlog，见 CLAUDE.md「核心产品原则#3」。
 DOMESTIC_ADAPTERS = {
     "baidu", "jd", "bytedance", "bytedance_campus", "tencent",
-    "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier",
+    "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier", "iguopin",
     "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo", "xiaohongshu", "alibaba", "huawei", "ctrip",
     "meituan", "kuaishou", "bilibili", "pinduoduo", "vivo", "byd", "sf_express",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
     "tencent_music", "antgroup", "mihoyo",  # 自建门户公开接口（2026-07-06 live 验证,零浏览器）
@@ -154,7 +156,7 @@ DOMESTIC_ADAPTERS = {
 # 未知 / 浏览器 adapter 一律落串行档（fail-safe），杜绝把 Playwright（sync API，非线程安全）
 # 的 adapter 误并发跑崩夜间 cron。新增 httpx adapter 时显式加进来才享受并发。
 _HTTPX_SAFE_ADAPTERS = {
-    "apple", "apple_cn", "baidu", "jd", "haier", "siemens", "tencent",
+    "apple", "apple_cn", "baidu", "jd", "haier", "iguopin", "siemens", "tencent",
     "greenhouse", "lever", "ashby", "smartrecruiters", "successfactors", "workday", "eightfold",
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
     "netease", "oppo", "xiaohongshu", "alibaba", "huawei", "ctrip",
@@ -199,19 +201,57 @@ def _shard_host_of(s):
         return ""
 
 
+# 多租户 ATS 平台主机：同一 host 下每个 tenant 是**不同公司**各自的招聘页，对端是 SaaS 平台
+# 而非某家公司的小服务器 → 按 tenant 拆到不同片是安全的。
+# 佐证：enrich-backlog-browser.yml 早已在生产每天用 6 个 runner 并行渲染 app.mokahr.com
+# （每片 1500 岗），从未触发限流。
+# ⚠️ **绝不要**把 wecruit.hotjob.cn 这类加进来——那是单一招聘服务的共享后端，
+# 2026-06-10 实锤源级并发即 Errno 35 全灭（89/102 源），必须整体落同一片。
+_MULTI_TENANT_SHARD_HOSTS = {"app.mokahr.com", "app-tc.mokahr.com"}
+
+
+def _shard_key_of(s):
+    """分片单位 = 「不希望被多 runner 同时轰的那个对端」。默认就是 host；
+    多租户平台细到 host+租户路径前两段（moka 形如 /apply/{tenant}/{id}）。
+
+    动机（2026-07-28 实测 run 30297659211）：串行浏览器档 280 源里 265 源同挂 app.mokahr.com
+    → 「同 host 同片」把它们整体压进 enrich(1) 一片，该片 398 源（含 265 个浏览器串行源，
+    ~1min/源）跑满 180min 被 GitHub 取消，其余 5 片 12-34min 就跑完闲着。连挂 4 天。"""
+    host = _shard_host_of(s)
+    if host not in _MULTI_TENANT_SHARD_HOSTS:
+        return host
+    from urllib.parse import urlparse
+    segs = [p for p in urlparse(s.get("source_url") or "").path.split("/") if p][:2]
+    return f"{host}/{'/'.join(segs)}" if segs else host
+
+
 def _shard_by_host(sources, shard_index, shard_count):
-    """按主机分桶分片（替代旧 round-robin 源切片 `sources[i::n]`）。
+    """按「分片单位」分桶分片（替代旧 round-robin 源切片 `sources[i::n]`）。
 
     重档从「按天 1/shard_count 轮转单 runner」改为「N 片同时并行跨 runner」后，必须保证
-    **同一主机的所有源落同一片** —— 否则同主机源被切到不同 runner → 多 runner 并发抓同一台服务器
-    → 触发限流（Errno 35，正是单 runner 内 _group_by_host 串行要防的；2026-06-10 实锤 wecruit 102 源）。
-    做法：对 sorted 唯一主机轮转分配（i % shard_count）。**用 sorted 而非 Python 随机化 hash()**——
-    各 runner 是独立进程，hash() 加盐每进程不同会导致主机→片映射不一致（漏抓/重抓）；sorted 确定性一致。
-    主机数（而非源数）在各片间均衡；超大单主机（hotjob/wecruit）整体落一片，但其为 httpx 快源、可接受。
+    **同一分片单位的所有源落同一片** —— 否则同主机源被切到不同 runner → 多 runner 并发抓同一台
+    服务器 → 触发限流（Errno 35，正是单 runner 内 _group_by_host 串行要防的；2026-06-10 实锤
+    wecruit 102 源）。分片单位见 _shard_key_of（默认 host，多租户平台按租户细分）。
+
+    分配用**贪心装箱**（LPT：源数降序，每个 key 丢进当前最轻的片），而非旧的 `i % shard_count`
+    轮转——轮转只均衡「key 的个数」，把 102 源的大 key 和 1 源的小 key 等价看待，实测各片源数
+    能差到 3 倍（112 vs 398）。按源数装箱后各片工作量才真的接近。
+    ⚠️ 排序与平局一律用 (源数, key 名) 决定，**禁止用 Python 的 hash()**——各 runner 是独立进程，
+    hash() 每进程加盐不同会算出不一致的映射（有的源被漏抓、有的被两片重抓）。
     保持各源原顺序（本土优先不被打乱）。shard_index 须由调用方先 %= shard_count 归一。"""
-    hosts = sorted({_shard_host_of(s) for s in sources})
-    host_shard = {h: i % shard_count for i, h in enumerate(hosts)}
-    return [s for s in sources if host_shard.get(_shard_host_of(s)) == shard_index]
+    counts: dict = {}
+    for s in sources:
+        key = _shard_key_of(s)
+        counts[key] = counts.get(key, 0) + 1
+
+    load = [0] * shard_count
+    key_shard: dict = {}
+    for key, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        target = min(range(shard_count), key=lambda j: (load[j], j))
+        key_shard[key] = target
+        load[target] += n
+
+    return [s for s in sources if key_shard.get(_shard_key_of(s)) == shard_index]
 
 
 # 并发档每线程独立 supabase 客户端。根因（2026-06-10 实锤，traceback 指向
@@ -228,9 +268,13 @@ def _get_thread_supabase():
 
 
 def _get_thread_jobs_conn():
-    """Phase 1：每线程独立的自建香港 jobs 库连接（psycopg2 连接非线程安全，须每线程一个）。"""
-    if not hasattr(_TLS, "jobs_conn"):
-        _TLS.jobs_conn = jobs_db.get_conn()
+    """Phase 1：每线程独立的自建香港 jobs 库连接（psycopg2 连接非线程安全，须每线程一个）。
+
+    ⚠️ 必须每次校验存活、断了重连（jobs_db.live_conn）：重档单片要跑 1-3 小时，跨境链路被中间设备
+    掐断后 psycopg2 会把连接标 closed，若继续复用这条死连接，之后每个源的 upsert 全是
+    `InterfaceError: connection already closed` —— 2026-07-25 实测某片 20:09 断链后剩余 ~1h50m
+    抓的岗一行没写进库，还照样烧满 180min 超时。重连后最多只损失断链当下那一批。"""
+    _TLS.jobs_conn = jobs_db.live_conn(getattr(_TLS, "jobs_conn", None))
     return _TLS.jobs_conn
 
 

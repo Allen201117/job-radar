@@ -1,0 +1,105 @@
+name: must-apply-gap-funnel
+
+# 定时跑 = apply（2026-07-27 起）：验收门已在两轮 prod 实跑里验证过——搜索给了一堆张冠李戴的
+# 入口（高校就业网/本地宝/别家公司的 ATS 租户），一个都没能入库，全部停在失败态。dry-run 只写台账
+# 不加源，留着当默认等于每天空转。手动 dispatch 仍可传 apply=false 回到 dry-run。
+on:
+  schedule:
+    - cron: "40 22 * * *"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "本轮最多处理多少家公司"
+        required: false
+        default: "20"
+      company:
+        description: "只处理这一家必投公司（留空跑队列）"
+        required: false
+        default: ""
+      browser_limit:
+        description: "浏览器道最多处理多少家公司"
+        required: false
+        default: "5"
+      apply:
+        description: "true=真抓并按验收门写入（定时跑默认 true）；填 false 回到 dry-run"
+        required: false
+        default: "true"
+
+jobs:
+  funnel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+      JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+      JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+      SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+      BAIDU_QIANFAN_API_KEY: ${{ secrets.BAIDU_QIANFAN_API_KEY }}
+      SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      BOCHA_API_KEY: ${{ secrets.BOCHA_API_KEY }}
+      DISPATCH_LIMIT: ${{ github.event.inputs.limit || '20' }}
+      DISPATCH_COMPANY: ${{ github.event.inputs.company || '' }}
+      DISPATCH_APPLY: ${{ github.event.inputs.apply || 'true' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      - name: Run must-apply gap funnel
+        shell: bash
+        run: |
+          args=(--scope domestic --limit "$DISPATCH_LIMIT")
+          if [[ -n "$DISPATCH_COMPANY" ]]; then
+            args+=(--company "$DISPATCH_COMPANY")
+          fi
+          if [[ "${DISPATCH_APPLY,,}" =~ ^(1|true|yes|on)$ ]]; then
+            export GAP_FUNNEL_APPLY=true
+          fi
+          python3 crawler/gap_funnel.py "${args[@]}"
+
+  funnel-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+      JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+      JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+      GAP_FUNNEL_BROWSER_CAP: ${{ github.event.inputs.browser_limit || '5' }}
+      DISPATCH_COMPANY: ${{ github.event.inputs.company || '' }}
+      DISPATCH_APPLY: ${{ github.event.inputs.apply || 'true' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      - name: Install Playwright chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run must-apply gap funnel browser lane
+        shell: bash
+        run: |
+          args=(--scope domestic --limit "$GAP_FUNNEL_BROWSER_CAP")
+          if [[ -n "$DISPATCH_COMPANY" ]]; then
+            args+=(--company "$DISPATCH_COMPANY")
+          fi
+          if [[ "${DISPATCH_APPLY,,}" =~ ^(1|true|yes|on)$ ]]; then
+            export GAP_FUNNEL_APPLY=true
+          fi
+          python3 crawler/gap_funnel_browser.py "${args[@]}"

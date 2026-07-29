@@ -16,6 +16,7 @@ import os
 import atexit
 import ipaddress
 import tempfile
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -116,8 +117,33 @@ def strict_tls_kwargs(dsn: str, root_cert_path: str, certificate_servername: str
     return kwargs
 
 
+# ── 跨境链路自愈（2026-07-26 加）────────────────────────────────────────────
+# 爬虫跑在 GitHub Actions（Azure 海外）连腾讯云香港库，这条跨境链路会偶发丢包/被中间设备掐断。
+# 连接层不自愈就会放大成两类 CI 失败（均已实测）：
+#   ① 建连时一次 TLS 握手抖动 → `server closed the connection unexpectedly` → 整片 exit 1。
+#      enrich-backlog 12 片矩阵里每天有 1 片这样挂（同一时刻其余 11 片连得好好的 = 不是库的问题）。
+#   ② 长跑任务的连接被静默掐断后，psycopg2 把 conn 标 closed，后续每次写都 InterfaceError。
+#      enrichment-crawl 实测连接 20:09 断掉后，剩余 ~1h50m 一行都没写进去，还烧满 180min 超时。
+# 对策：建连重试（治①）+ TCP keepalive（治②的成因）+ 调用方持有的连接断了要重连（治②的后果）。
+_CONNECT_ATTEMPTS = 4
+_CONNECT_BACKOFF = (2, 5, 10)  # 第 n 次失败后等几秒再试；长度 = _CONNECT_ATTEMPTS - 1
+
+# libpq TCP keepalive：空闲时让内核主动探活，抢在跨境 NAT/防火墙表项超时前把连接刷活；
+# 真断了也能在 ~80s 内报错，而不是卡到 TCP 默认的十几分钟（实测出现过 Connection timed out 长挂）。
+_KEEPALIVE_KWARGS = {
+    "connect_timeout": 15,
+    "keepalives": 1,
+    "keepalives_idle": 30,
+    "keepalives_interval": 10,
+    "keepalives_count": 5,
+}
+
+
 def get_conn():
-    """直连自建香港 jobs 库。autocommit=True（与 supabase-py 每请求即提交语义一致；爬虫多为单条/批写）。"""
+    """直连自建香港 jobs 库。autocommit=True（与 supabase-py 每请求即提交语义一致；爬虫多为单条/批写）。
+
+    建连失败按 _CONNECT_BACKOFF 重试——跨境链路抖一下不该让整个 CI 分片挂掉。
+    只重试 OperationalError（网络/握手类）；配置错、认证失败等直接抛，不做无意义重试。"""
     _load_env()
     dsn = os.environ.get("JOBS_DATABASE_URL")
     if not dsn:
@@ -128,9 +154,46 @@ def get_conn():
         root_cert_path,
         os.environ.get("JOBS_DATABASE_TLS_SERVERNAME"),
     )
-    conn = psycopg2.connect(dsn, **tls_kwargs)
-    conn.autocommit = True
-    return conn
+    tls_kwargs.update(_KEEPALIVE_KWARGS)
+
+    last_exc = None
+    for attempt in range(_CONNECT_ATTEMPTS):
+        try:
+            conn = psycopg2.connect(dsn, **tls_kwargs)
+            conn.autocommit = True
+            if attempt:
+                print(f"[jobs_db] 建连第 {attempt + 1} 次尝试成功（前 {attempt} 次跨境抖动已重试）")
+            return conn
+        except psycopg2.OperationalError as exc:
+            last_exc = exc
+            if attempt >= _CONNECT_ATTEMPTS - 1:
+                break
+            wait = _CONNECT_BACKOFF[attempt]
+            print(f"[jobs_db] 建连失败({type(exc).__name__}: {exc})，{wait}s 后重试 "
+                  f"({attempt + 2}/{_CONNECT_ATTEMPTS})")
+            time.sleep(wait)
+    raise last_exc
+
+
+def conn_alive(conn) -> bool:
+    """连接是否还可用。psycopg2 在链路断掉后把 conn.closed 置非 0，之后任何 cursor() 都抛
+    `InterfaceError: connection already closed` —— 缓存长连接的调用方据此判断该不该重连。
+    注意：closed==0 但对端已消失的窗口仍存在（那一次操作会抛 OperationalError 并把 closed 置位），
+    下一次调用即可自愈；keepalive 负责把这个窗口压到最小。"""
+    return conn is not None and getattr(conn, "closed", 1) == 0
+
+
+def live_conn(conn, make_conn=None):
+    """返回一个可用连接：给定的 conn 还活着就复用，断了就重新建一条（长跑任务的自愈入口）。"""
+    if conn_alive(conn):
+        return conn
+    if conn is not None:
+        print("[jobs_db] 检测到连接已断，重连香港库")
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return (make_conn or get_conn)()
 
 
 def enabled() -> bool:

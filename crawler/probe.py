@@ -33,7 +33,7 @@ _HTTPX_ADAPTERS = {
     "amazon",  # 外企自建：Amazon.jobs search.json
     "phenom",  # 外企自建：Phenom /api/jobs
     "microsoft",  # 外企自建：MS pcsx httpx 直连
-    "apple", "apple_cn", "baidu", "jd", "siemens", "haier",
+    "apple", "apple_cn", "baidu", "jd", "siemens", "haier", "iguopin",
     "hotjob",  # 本土 wecruit：直连 listPosition 接口，无浏览器（详见 adapters/hotjob.py）
     "wt",  # 本土老版 WinTalent：直连 position/list JSON，无浏览器（详见 adapters/wt.py）
     "netease",  # 网易自建：hr.163.com queryPage httpx 直连（详见 adapters/netease.py）

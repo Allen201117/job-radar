@@ -100,3 +100,39 @@ class TestLocationInScope(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TaiwanWithChinaSuffixTest(unittest.TestCase):
+    """台湾写成「Taiwan, Province of China」时不许被当成 CN 放行。
+
+    2026-07-28 Siemens 改成翻全分页后实测捞进 5 个台北岗才暴露：TW 压根不在 _COUNTRY_TOKENS 里，
+    这种写法含 "china" → derive_country_code 判成 CN → 进了国内看板。
+    上面的 test_taiwan_is_not_in_any_active_scope 只覆盖不含 china 字样的写法（code=None
+    自然落 False），盖不住这个洞。
+    """
+
+    VARIANTS = (
+        "Taipei, Taipei shih, Taiwan, Province of China",
+        "Taiwan, Province of China",
+        "Hsinchu, Taiwan, Province of China",
+        "台北, 台湾, 中国",
+    )
+
+    def test_not_in_scope_for_any_region_set(self):
+        for loc in self.VARIANTS:
+            with self.subTest(loc=loc):
+                self.assertFalse(location_in_scope(loc, {"CN"}))
+                self.assertFalse(location_in_scope(loc, {"CN", "US", "SG", "Remote"}))
+
+    def test_country_code_is_tw_not_cn(self):
+        for loc in self.VARIANTS:
+            with self.subTest(loc=loc):
+                self.assertEqual(derive_country_code(loc), "TW")
+
+    def test_mainland_and_hongkong_still_work(self):
+        # 别为了拦台湾误伤大陆/港澳
+        self.assertEqual(derive_country_code("Shanghai, Shanghai Shi, China"), "CN")
+        self.assertEqual(derive_country_code("Wuxi, Jiangsu Sheng, China"), "CN")
+        self.assertEqual(derive_country_code("Hong Kong"), "HK")
+        self.assertTrue(location_in_scope("Wuxi, Jiangsu Sheng, China", {"CN"}))
+        self.assertTrue(location_in_scope("Hong Kong", {"CN"}))

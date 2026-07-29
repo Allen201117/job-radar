@@ -109,17 +109,20 @@ def load_user_wanted_companies(sb):
 
 
 def existing_source_keys(sb):
-    """库里已有的公司名 + source_url（含 disabled），用于去重。
+    """库里已有的公司名（**只算 enabled**）+ source_url（含 disabled），用于去重。
+    ⚠️ 公司名去重只算 enabled：一家公司曾经插过一个坏源（后被 disable）时，若把它也算「已覆盖」，
+    这家公司会被永久跳过、再也不会被重新发现平台（2026-07-26 实测礼来即此状态）。
+    source_url 仍算全量（含 disabled）——URL 级去重是防重复插同一行，与「公司是否还需要找源」无关。
     ⚠️ 必须分页拉全量：PostgREST 单次查询默认最多返回 1000 行，而 sources 已越过 1000
     （2026-07-14 实测 1042）→ 不分页拿到的是**残缺**去重集，尾部（正是最新入库的）漏掉
     → 去重失效 → 同一 source_url 被反复重复入库（当天 browser 道两轮把 15 个 URL 各插了 2 次）。
     DB 侧另有 sources_source_url_key 唯一索引兜底（迁移 180）。
     分页走 db.fetch_all_rows（每页带 .order("id")：无稳定排序键翻页会重复取同一行 + 漏掉另一行）。"""
     companies, urls = set(), set()
-    for r in db.fetch_all_rows(lambda: sb.table("sources").select("company,source_url")):
+    for r in db.fetch_all_rows(lambda: sb.table("sources").select("company,source_url,enabled")):
         c = (r.get("company") or "").strip()
         u = (r.get("source_url") or "").strip()
-        if c:
+        if c and r.get("enabled"):
             companies.add(c)
         if u:
             urls.add(u)

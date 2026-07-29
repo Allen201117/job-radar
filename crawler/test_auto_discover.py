@@ -374,7 +374,8 @@ class ExistingSourceKeysPaginationTest(unittest.TestCase):
     改回不分页会让三条扩源道重新开始造重复源。"""
 
     def test_reads_all_rows_beyond_postgrest_1000_row_cap(self):
-        rows = [{"company": f"C{i}", "source_url": f"https://x/{i}"} for i in range(1042)]
+        rows = [{"company": f"C{i}", "source_url": f"https://x/{i}", "enabled": True}
+                for i in range(1042)]
         sb = _PagedSb(rows)
         companies, urls = ad.existing_source_keys(sb)
         self.assertEqual(len(urls), 1042, "尾部 42 行被 PostgREST 截断 → 去重失效 → 重复入库")
@@ -383,3 +384,15 @@ class ExistingSourceKeysPaginationTest(unittest.TestCase):
         # 无稳定排序键翻页时 Postgres 不保证行序 → 会重复取同一行 + 漏掉另一行（行数对、内容不对）。
         self.assertTrue(all(k == "id" for k in sb.order_log),
                         f"每页都必须带稳定排序键，实际 {sb.order_log}")
+
+    def test_disabled_source_does_not_mark_company_as_covered(self):
+        """一家公司只有 disabled 源时，必须仍被当作「待发现」——否则永久跳过、再也找不回平台。
+
+        2026-07-26 实测：礼来在 sources 里只有一个 disabled 源，于是每日扩源永远跳过它，
+        既不重新找平台，也不会有健康岗。URL 级去重不受影响（防重复插同一行）。"""
+        rows = [{"company": "礼来", "source_url": "https://x/lilly", "enabled": False},
+                {"company": "海尔", "source_url": "https://x/haier", "enabled": True}]
+        companies, urls = ad.existing_source_keys(_PagedSb(rows))
+        self.assertNotIn("礼来", companies, "只有 disabled 源的公司不能算已覆盖")
+        self.assertIn("海尔", companies)
+        self.assertIn("https://x/lilly", urls, "URL 去重仍要含 disabled，避免重复插同一行")
