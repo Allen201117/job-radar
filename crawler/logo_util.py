@@ -272,6 +272,13 @@ _DOMAIN_OVERRIDES_RAW = {
     "利欧集团": "leo-group.com", "华谊兄弟": "huayibrothers.com",
     "快看漫画": "kuaikanmanhua.com", "视觉中国": "vcg.com", "中文在线": "chineseall.com",
 
+    # —— 曾被记成平台域名（iguopin.com）而显示成「国聘」logo 的公司（2026-07-30 人眼核对发现，
+    #    奔驰/中国平安 都在其中）。下面域名同样过了 live title 核验。——
+    "中国平安": "pingan.cn", "中国建筑": "cscec.com", "中国电建": "powerchina.cn",
+    "中国石油": "cnpc.com.cn", "中国铁建": "crcc.cn", "中远海运": "coscoshipping.com",
+    "华图教育": "huatu.com", "南方电网": "csg.cn", "奔驰": "mercedes-benz.com",
+    "爱尔眼科": "aierchina.com",
+
     # —— 教育 ——
     "新东方": "xdf.cn", "学而思": "xueersi.com", "网易有道": "youdao.com",
     "掌门教育": "zhangmen.com", "编程猫": "codemao.cn", "松鼠AI": "squirrelai.com",

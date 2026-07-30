@@ -4,10 +4,13 @@
 后者是校招专区/看板的展示名，不在 sources 里 → 不补进来这些卡就永远是首字母兜底。
 
 来源与质量门（见 CLAUDE.md「企业 logo」）：
-- 三源取最清晰者，都过「是不是图片」内容嗅探门（站点 /favicon.ico 常返 HTML 错误页）：
+- 两源取最清晰者，都过「是不是图片」内容嗅探门（站点 /favicon.ico 常返 HTML 错误页）：
   1. DuckDuckGo（icons.duckduckgo.com）—— live 实测无重复 md5，有就是真 logo，但多为小图、收录率低（65/205）；
-  2. 公司官网自有图标（apple-touch-icon > icon > /favicon.ico）—— 覆盖率主力（166/205）、常是 180px 大图、公司自证；
-  3. icon.horse —— 仅前两路都空时兜底，必须过占位门（它的 fallback 是按域名首字符生成的字母头像）。
+  2. 公司官网自有图标（apple-touch-icon > icon > /favicon.ico）—— 覆盖率主力（166/205）、常是 180px 大图、公司自证。
+- ⛔ icon.horse 已停用（2026-07-30）：它的 fallback 是按域名首字符生成的灰底字母块，
+  占位指纹补全（36/36）后那一轮它的真图产出是 **0**（来源分布 duckduckgo 27 / site 66 / iconhorse 0），
+  即「前两源拿不到时它给的一定是占位图」→ 留着只有污染风险，不如退回我们自己的暖色首字母兜底
+  （更好看、风格统一）。占位指纹仍保留，仅用于 --repair-placeholders 清理历史遗留的假图。
 - 存 data URI（base64）：国内直连境外 favicon 服务会被墙，必须抓下来跟着我们域名走。
 - 域名推导不出时（飞书/北森/moka/workday 等平台托管）→ 用 URL 里的公司 slug 猜品牌域名，
   并抓首页做**页面核验**（页面自证属于该公司才认），防张冠李戴；核验不过就首字母兜底。
@@ -143,8 +146,9 @@ def fetch_one(client: httpx.Client, domain: str, placeholders: dict) -> Optional
 
     来源优先级按「清晰度」排（都过内容嗅探门）：
       1. DuckDuckGo —— live 实测无重复 md5（干净，有就是真 logo），但多为 16-32px 小图、收录率低；
-      2. 公司官网自有图标 —— 覆盖率最高、常是 180px apple-touch-icon，最权威；
-      3. icon.horse —— 仅在前两路都空时兜底，且必须过字母头像占位门。
+      2. 公司官网自有图标 —— 覆盖率最高、常是 180px apple-touch-icon，最权威。
+    两源都空就返回 None（前端首字母兜底）——不再退到 icon.horse，理由见文件头。
+    `placeholders` 参数保留但不再参与取图，仅由 find_fake_logo_keys 用于清理历史假图。
     """
     cands = []
     ddg = _get(client, _DDG.format(domain=domain))
@@ -163,24 +167,8 @@ def fetch_one(client: httpx.Client, domain: str, placeholders: dict) -> Optional
         if site:
             cands.append(site)
 
-    # 前两路都空 → icon.horse 兜底（救「域名准确但 DuckDuckGo 未收录、官网又打不开」的公司）。
-    # 只有拿到该首字符的占位指纹时才敢用它：没指纹就无法区分「真 logo」和「灰底字母块」，
-    # 宁可退回我们自己的暖色首字母兜底（更好看、风格统一），也不入一张通用灰块。
-    if not cands:
-        ch = next((c for c in domain.lower() if c.isalnum()), "")
-        fp = placeholders.get(ch)
-        if fp:
-            ih = _get(client, _ICON_HORSE.format(domain=domain))
-            if (
-                ih is not None
-                and ih.status_code == 200
-                and ih.content
-                and hashlib.md5(ih.content).hexdigest() != fp
-            ):
-                cand = _candidate(ih.content, ih.headers.get("content-type"), "iconhorse")
-                if cand:
-                    cands.append(cand)
-
+    # ⚠️ 不再用 icon.horse 抓新图（2026-07-30 停用，见文件头说明）：占位门补全后它的产出是 0，
+    # 只剩污染风险。它仍出现在 find_fake_logo_keys 里，用来清理历史遗留的假图。
     if not cands:
         return None
     return max(cands, key=lambda c: (c["width"], len(c["bytes"])))
@@ -193,6 +181,7 @@ def find_fake_logo_keys(sb, placeholders: dict) -> set:
        灰底字母块被当成真 logo 入库（live 实测 538 张 iconhorse 图里 303 张是这种）；
     2. 同一张图跨**多个不同域名**出现 —— 真 logo 一家一张，跨域名重复必是平台/占位图。
        按域名而非公司名去重：同品牌多个名字变体（「美团」/「美团 meituan」）共用一个域名，不算重复。
+    3. 域名本身是招聘平台（iguopin/hotjob/beisen/moka…）—— 抓到的是平台 logo，不是公司的。
     """
     try:
         rows = (
@@ -225,6 +214,16 @@ def find_fake_logo_keys(sb, placeholders: dict) -> set:
         distinct_domains = {d for _, d in entries if d}
         if md5 in fp_values or len(distinct_domains) > 1:
             bad.update(k for k, _ in entries)
+
+    # 判据 3：域名本身是招聘平台 → 抓到的必然是平台自己的 logo，不是这家公司的。
+    # ⚠️ 判据 2（跨域名重复）抓不到这种：这些公司**共用同一个错域名**，域名集合只有一个元素。
+    # live 实测：10 家（含奔驰 / 中国平安 / 中国石油）domain=iguopin.com，全都显示成「国聘」的 logo。
+    # 例外：公司自己就是平台（Workday），此时覆盖表里它的域名正好等于该平台域名。
+    for r in rows:
+        dom = (r.get("domain") or "").strip().lower()
+        key = r["company_key"]
+        if dom and is_platform_domain(dom) and COMPANY_DOMAIN_OVERRIDES.get(key) != dom:
+            bad.add(key)
     print(f"[logo] 复检 {len(rows)} 张已入库图 → {len(bad)} 张判定为假 logo，将重抓")
     return bad
 

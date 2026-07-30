@@ -42,10 +42,14 @@ class StubClient:
         return Resp(status=404)
 
 
-class IconHorseGateTests(unittest.TestCase):
-    """icon.horse 只在「拿到该首字符占位指纹」且「图不等于指纹」时才可用。"""
+class IconHorseDisabledTests(unittest.TestCase):
+    """icon.horse 已停用：两源都拿不到就返回 None（前端首字母兜底），绝不再去请求它。
 
-    def _client(self, ih_content):
+    停用理由见 fetch_company_logos 文件头——占位指纹补全后它的真图产出是 0，
+    留着只会往库里塞灰底通用字母块。
+    """
+
+    def _client(self, ih_content=PNG_180):
         return StubClient({
             "https://icons.duckduckgo.com": Resp(status=404),
             "https://acme.test": Resp(status=500),          # 官网打不开
@@ -53,27 +57,79 @@ class IconHorseGateTests(unittest.TestCase):
             "https://icon.horse/icon/acme.test": Resp(content=ih_content),
         })
 
-    def test_skipped_when_fingerprint_for_char_missing(self):
-        # 缺 'a' 的指纹 → 宁缺毋滥，直接不用 icon.horse（哪怕它返回了图）
-        c = self._client(PNG_180)
-        self.assertIsNone(F.fetch_one(c, "acme.test", {"b": "whatever"}))
-        self.assertFalse(any("icon.horse" in u for u in c.seen), "缺指纹时不该请求 icon.horse")
-
-    def test_rejected_when_image_equals_placeholder_fingerprint(self):
+    def test_never_requests_icon_horse(self):
         import hashlib
 
-        fp = hashlib.md5(PNG_256_FAKE).hexdigest()
-        c = self._client(PNG_256_FAKE)
-        self.assertIsNone(F.fetch_one(c, "acme.test", {"a": fp}))
+        c = self._client()
+        # 即使给了完整指纹、即使 icon.horse 会返回一张「不是占位图」的图，也不该用它
+        self.assertIsNone(F.fetch_one(c, "acme.test", {"a": hashlib.md5(PNG_256_FAKE).hexdigest()}))
+        self.assertFalse(any("icon.horse" in u for u in c.seen), "不该再请求 icon.horse")
 
-    def test_accepted_when_image_differs_from_fingerprint(self):
+    def test_returns_none_without_fingerprints(self):
+        self.assertIsNone(F.fetch_one(self._client(), "acme.test", {}))
+
+
+class FakeLogoDetectionTests(unittest.TestCase):
+    """find_fake_logo_keys 三条判据。判据 3 是 live 踩出来的：10 家公司 domain=iguopin.com
+    全显示成「国聘」的 logo，而判据 2（跨域名重复）抓不到——它们共用同一个错域名。"""
+
+    class FakeSB:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def table(self, _name):
+            return self
+
+        def select(self, _cols):
+            return self
+
+        def eq(self, *_a):
+            return self
+
+        def execute(self):
+            return type("R", (), {"data": self._rows})()
+
+    @staticmethod
+    def _row(key, domain, payload):
+        import base64
+
+        return {
+            "company_key": key,
+            "domain": domain,
+            "logo_data": "data:image/png;base64," + base64.b64encode(payload).decode(),
+        }
+
+    def test_platform_domain_is_fake_even_without_duplicate(self):
+        sb = self.FakeSB([self._row("奔驰", "iguopin.com", b"unique-image-1")])
+        self.assertEqual(F.find_fake_logo_keys(sb, {}), {"奔驰"})
+
+    def test_workday_the_employer_is_exempt(self):
+        # 公司自己就是平台时，覆盖表里它的域名正好等于该平台域名 → 不算假
+        sb = self.FakeSB([self._row("workday", "workday.com", b"real-workday-logo")])
+        self.assertEqual(F.find_fake_logo_keys(sb, {}), set())
+
+    def test_same_image_across_two_domains_is_fake(self):
+        sb = self.FakeSB([
+            self._row("a", "a.com", b"same-bytes"),
+            self._row("b", "b.com", b"same-bytes"),
+        ])
+        self.assertEqual(F.find_fake_logo_keys(sb, {}), {"a", "b"})
+
+    def test_same_image_same_domain_is_not_fake(self):
+        # 同品牌两个名字变体共用一个域名 → 图当然一样，不能误杀
+        sb = self.FakeSB([
+            self._row("美团", "meituan.com", b"same-bytes"),
+            self._row("美团 meituan", "meituan.com", b"same-bytes"),
+        ])
+        self.assertEqual(F.find_fake_logo_keys(sb, {}), set())
+
+    def test_placeholder_fingerprint_hit_is_fake(self):
         import hashlib
 
-        fp = hashlib.md5(PNG_256_FAKE).hexdigest()
-        c = self._client(PNG_180)
-        got = F.fetch_one(c, "acme.test", {"a": fp})
-        self.assertIsNotNone(got)
-        self.assertEqual(got["source"], "iconhorse")
+        payload = b"letter-avatar-bytes"
+        sb = self.FakeSB([self._row("某公司", "acme.test", payload)])
+        fp = {"a": hashlib.md5(payload).hexdigest()}
+        self.assertEqual(F.find_fake_logo_keys(sb, fp), {"某公司"})
 
 
 class SourcePriorityTests(unittest.TestCase):
