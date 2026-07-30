@@ -1,183 +1,203 @@
 <meta charset="utf-8">
-<title>职达 JobRadar — 方向 B「昨夜」</title>
+<title>职达 JobRadar — 方向 B《说一次，然后你只做选择》</title>
 <!--
-  方向 B：《昨夜，我们敲了 138,949 扇门》
+  方向 B（第二版，2026-07-30 重做）《说一次，然后你只做选择》
 
-  和方向 A 刻意反着来（A = 暖纸 / 笔记本实景 / 慢推 / 品牌开场 / 卖"安静高级"）：
-    · 深色全屏，无设备、无环境 —— 画面里只有数据本身
-    · 硬切快剪，摄影机做"弹跳缩放"而不是平滑推轨
-    · 痛点开场，品牌憋到最后 3 秒才出
-    · 论点不同：A 卖"每天替你看官网"的从容，B 卖"昨夜我们真干了这些活"的力气
+  ⚠️ 第一版聚焦错了，作废：那版讲"昨夜我们敲了 138,949 扇门"——那是**我们的劳动量**，
+     不是**用户的收益**。用户不关心我们跑了多少数据。producer-brag ≠ 卖点。
 
-  画面仍然是时间 t 的纯函数（__render(t)），所以成片必然丝滑 —— 这一层技术手法
-  两个方向共用，见 render.py 的说明。
+  这一版只讲产品实际能干的两件事：
+    ① 快速可靠地筛出**适合你的官方岗位链接** —— 国内外 + 实习/校招/社招 全覆盖，
+       点开就是企业官网详情页，不是第三方平台的转载页
+    ② **职业洞察 = 信息差** —— 时机 / 薪酬强度 / 路径 / 文化，带分级+时效+来源，
+       让你不只知道"有这个岗"，而是知道"该不该去、去哪个"
 
-  ⚠️ 确定性铁律：这里绝不可以出现 Math.random()。
-     几百行"洪流"里的每一处随机（宽度、语料、判定）都必须由 h(i) 这个
-     纯哈希从下标算出来。一旦用了真随机，每一帧都会重新掷骰子 → 成片全是雪花。
+  和方向 A 的分工：A 暖纸慢推、卖气质，走官网首屏；B 深色快剪、卖功能，走信息流。
 
-  片中所有数字都来自 2026-07-30 的生产库实测，没有一个是编的：
-     4,075    今天 24h 内新增在招岗位
-     1,053    覆盖的企业官网数
-     138,949  过去 24h 逐个敲门探活复检过的岗位数
-     7,738    无 JD 正文的空壳卡（不计入"有效在招"）
-     308,331  库内有效在招（count_valid_active_jobs）
-  岗位卡里的公司 / 职位 / 城市同样是库里真实存在的行。
+  画面是时间 t 的纯函数（__render(t)），成片必然丝滑，见 render.py。
+
+  ⚠️ 两条铁律（都踩过）：
+     1. 绝不能出现 Math.random() —— 每帧重掷骰子 = 成片全是雪花。随机一律走 h(i) 纯哈希。
+     2. 画面里的公司×职位×城市必须是库里真实存在的整行，不能按字段拼；
+        洞察正文必须是 supabase/migrations/014·016 里人工核过的真实内容，不能自己编。
+
+  素材出处（2026-07-30）：
+    · 岗位行 = 香港生产库 jobs 表真实行
+    · 洞察 = migration 014_seed_career_insights / 016_rewrite_culture_and_experience_copy
+             （字节 timing/fact 校招节奏、字节与腾讯 compensation_intensity/experience）
 -->
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   html,body{width:100%;height:100%;overflow:hidden;background:#000}
-
   :root{
-    /* 产品真实的深色 token（app/globals.css 的 .dark 一侧） */
-    --canvas:#16130f;          /* 暖深色，不是纯黑 —— 纯黑会掉出品牌体系 */
-    --ink:#f3ecdf;
-    --ink2:#b6ad9d;
-    --ink3:#837c70;
-    --ink4:#5c564c;
-    --hair:rgba(255,255,255,0.085);
-    --surf:rgba(255,255,255,0.045);
-    --green:#00e676;           /* 雷达绿 —— 全片唯一的高饱和色 */
+    --canvas:#16130f; --ink:#f3ecdf; --ink2:#b6ad9d; --ink3:#837c70; --ink4:#5c564c;
+    --hair:rgba(255,255,255,.085); --surf:rgba(255,255,255,.05);
+    --green:#00e676; --sky:#7fb2e8; --amber:#e0b15a; --lilac:#b9a6e0;
     --font:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Segoe UI",sans-serif;
   }
-
-  #stage{
-    position:absolute;top:0;left:0;transform-origin:50% 50%;
-    background:var(--canvas);color:var(--ink);
-    font-family:var(--font);
-    -webkit-font-smoothing:antialiased;
-    overflow:hidden;
-  }
-  /* 每个 beat 一层，硬切靠 display 切换 —— 不做交叉溶解，那是 A 的语言 */
+  #stage{position:absolute;top:0;left:0;transform-origin:50% 50%;
+    background:var(--canvas);color:var(--ink);font-family:var(--font);
+    -webkit-font-smoothing:antialiased;overflow:hidden}
   .layer{position:absolute;inset:0;overflow:hidden}
 
-  /* ── 洪流：一整墙滚动的岗位行 ───────────────────────────── */
-  #floodClip{position:absolute;left:0;right:0;overflow:hidden}
-  #flood{position:absolute;left:0;right:0;top:0;will-change:transform}
-  .row{
-    position:relative;display:flex;align-items:center;gap:18px;
-    border-bottom:1px solid var(--hair);
-    padding:0 52px;
-    transform-origin:50% 50%;
-  }
-  .row .co{flex:0 0 auto;color:var(--ink3);font-size:25px;font-weight:600;letter-spacing:.01em}
-  .row .ti{flex:1 1 auto;color:var(--ink);font-size:27px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .row .lo{flex:0 0 auto;color:var(--ink4);font-size:23px;font-variant-numeric:tabular-nums}
-  /* 判定标：灰=筛掉，绿=留下。刻意不用红 —— 产品里 expired 也不是红的 */
-  .row .vd{
-    flex:0 0 auto;font-size:21px;font-weight:600;padding:5px 13px;border-radius:999px;
-    white-space:nowrap;letter-spacing:.02em;
-  }
-  .row .vd.kill{background:rgba(255,255,255,.07);color:var(--ink3);border:1px solid var(--hair)}
-  .row .vd.keep{background:rgba(0,230,118,.14);color:var(--green);border:1px solid rgba(0,230,118,.34)}
-  /* 划掉线：从左向右扫过 */
-  .row .strike{
-    position:absolute;left:52px;top:50%;height:1px;background:var(--ink4);
-    transform-origin:0 50%;
-  }
+  .eb{font-size:25px;font-weight:700;letter-spacing:.24em;color:var(--ink4)}
+  .h1{font-size:76px;font-weight:600;line-height:1.2;letter-spacing:-.028em}
+  .h2{font-size:52px;font-weight:600;line-height:1.28;letter-spacing:-.022em}
+  .sub{font-size:34px;font-weight:400;line-height:1.55;color:var(--ink2)}
 
-  /* 大数字压在洪流上会和行文字打架 —— 垫一层上下淡出的暗幕把中间压暗 */
-  #scrim{position:absolute;inset:0;pointer-events:none;
-    background:linear-gradient(180deg,
-      transparent 0%,   rgba(22,19,15,.30) 18%,
-      rgba(22,19,15,.94) 30%, rgba(22,19,15,.96) 47%,
-      rgba(22,19,15,.30) 60%, transparent 78%)}
+  /* ── ① 说一次：目标落格 ─────────────────────────── */
+  #ask{position:absolute;left:70px;right:70px;text-align:center}
+  #askChips{display:flex;justify-content:center;gap:18px;margin-top:52px;flex-wrap:nowrap}
+  .tgt{font-size:38px;font-weight:600;padding:20px 34px;border-radius:999px;
+    border:1px solid var(--hair);background:var(--surf);white-space:nowrap;transform-origin:50% 50%}
+  .tgt.on{border-color:rgba(0,230,118,.38);background:rgba(0,230,118,.12);color:var(--green)}
 
-  /* ── 大数字 ─────────────────────────────────────────── */
-  .hero{position:absolute;left:0;right:0;text-align:center;transform-origin:50% 50%}
-  .hero .num{
-    font-size:196px;font-weight:700;line-height:.92;letter-spacing:-.045em;
-    font-variant-numeric:tabular-nums;color:var(--ink);
-  }
-  .hero .num.g{color:var(--green)}
-  .hero .cap{margin-top:26px;font-size:40px;font-weight:500;color:var(--ink2);letter-spacing:.005em}
-  .hero .eb{
-    font-size:24px;font-weight:700;letter-spacing:.26em;color:var(--ink4);
-    margin-bottom:30px;
-  }
-
-  /* ── 企业官网点阵 + 雷达扫描（canvas 画，最省最稳）────────── */
-  #dotWrap{position:absolute;left:0;right:0;display:grid;place-items:center}
-  #dots{display:block}
-
-  /* ── 三张真实岗位卡 ─────────────────────────────────── */
-  #cards{position:absolute;left:64px;right:64px;display:flex;flex-direction:column;gap:30px}
-  .card{
-    background:var(--surf);border:1px solid var(--hair);border-radius:26px;
-    padding:34px 36px;transform-origin:50% 50%;
-    box-shadow:0 24px 60px -20px rgba(0,0,0,.6);
-  }
-  .card .top{display:flex;align-items:center;gap:16px;margin-bottom:20px}
-  .card .tile{
-    width:52px;height:52px;border-radius:17px;display:grid;place-items:center;
-    background:#f3ecdf;color:#16130f;font-size:25px;font-weight:700;flex:0 0 auto;
-  }
-  .card .co{font-size:28px;font-weight:600;color:var(--ink2)}
-  .card .ti{font-size:39px;font-weight:600;line-height:1.24;letter-spacing:-.015em;color:var(--ink)}
-  .card .foot{display:flex;align-items:center;gap:12px;margin-top:24px;flex-wrap:nowrap}
-  .chip{
-    font-size:23px;font-weight:600;padding:9px 17px;border-radius:999px;white-space:nowrap;
-    border:1px solid var(--hair);background:rgba(255,255,255,.05);color:var(--ink2);
-  }
+  /* ── ② 岗位卡 ──────────────────────────────────── */
+  #jobsHead{position:absolute;left:70px;right:70px}
+  #jobs{position:absolute;left:64px;right:64px;display:flex;flex-direction:column;gap:26px}
+  .card{background:var(--surf);border:1px solid var(--hair);border-radius:26px;
+    padding:32px 34px;transform-origin:50% 50%;box-shadow:0 24px 60px -20px rgba(0,0,0,.6)}
+  .card .top{display:flex;align-items:center;gap:15px;margin-bottom:18px}
+  .card .tile{width:50px;height:50px;border-radius:16px;display:grid;place-items:center;
+    background:#f3ecdf;color:#16130f;font-size:24px;font-weight:700;flex:0 0 auto}
+  .card .co{font-size:27px;font-weight:600;color:var(--ink2)}
+  .card .ti{font-size:37px;font-weight:600;line-height:1.26;letter-spacing:-.015em}
+  .card .foot{display:flex;align-items:center;gap:11px;margin-top:22px;flex-wrap:nowrap}
+  .chip{font-size:22px;font-weight:600;padding:9px 16px;border-radius:999px;white-space:nowrap;
+    border:1px solid var(--hair);background:rgba(255,255,255,.05);color:var(--ink2)}
   .chip.hit{background:rgba(0,230,118,.15);border-color:rgba(0,230,118,.36);color:var(--green)}
   .chip.sky{background:rgba(127,178,232,.15);border-color:rgba(127,178,232,.32);color:#9cc4ee}
-  .card .go{margin-left:auto;font-size:24px;font-weight:600;color:var(--ink3);white-space:nowrap}
+  .chip.amber{background:rgba(224,177,90,.15);border-color:rgba(224,177,90,.32);color:var(--amber)}
+  .card .go{margin-left:auto;font-size:23px;font-weight:600;color:var(--ink3);white-space:nowrap}
+  .card .go.lit{color:var(--green)}
 
-  /* ── 品牌收尾 ───────────────────────────────────────── */
+  /* 覆盖广度：不吹抓取量，只讲"你能找到的范围" */
+  #breadth{position:absolute;left:64px;right:64px;display:flex;justify-content:center;
+    gap:12px;flex-wrap:nowrap}
+  #breadth .b{font-size:24px;font-weight:600;padding:12px 20px;border-radius:999px;
+    border:1px solid var(--hair);background:var(--surf);color:var(--ink2);white-space:nowrap;
+    transform-origin:50% 50%}
+
+  /* 官网直达：地址栏 —— 证明链接是官方的，不是第三方转载 */
+  #urlbar{position:absolute;left:90px;right:90px;display:flex;align-items:center;gap:16px;
+    padding:24px 30px;border-radius:20px;background:rgba(255,255,255,.07);
+    border:1px solid var(--hair);transform-origin:50% 50%}
+  #urlbar .lock{width:30px;height:30px;border-radius:50%;background:rgba(0,230,118,.2);
+    display:grid;place-items:center;flex:0 0 auto}
+  #urlbar .u{font-size:28px;font-weight:500;color:var(--ink);white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+  #urlbar .tag{font-size:21px;font-weight:700;padding:7px 14px;border-radius:999px;
+    background:rgba(0,230,118,.16);color:var(--green);white-space:nowrap;flex:0 0 auto}
+
+  /* ── ③ 职业洞察抽屉 ────────────────────────────── */
+  #drawer{position:absolute;left:44px;right:44px;bottom:0;
+    background:#1c1813;border:1px solid var(--hair);
+    border-radius:34px 34px 0 0;padding:40px 40px 0;transform-origin:50% 100%}
+  #drawer .dh{display:flex;align-items:center;gap:14px;margin-bottom:10px}
+  #drawer .dt{font-size:40px;font-weight:600;letter-spacing:-.02em}
+  #drawer .banner{font-size:21px;color:var(--ink4);margin-bottom:30px;line-height:1.5}
+  .ins{border-top:1px solid var(--hair);padding:26px 0;transform-origin:50% 50%}
+  .ins .r1{display:flex;align-items:center;gap:12px;margin-bottom:13px;flex-wrap:nowrap}
+  .ins .dim{font-size:23px;font-weight:700;padding:8px 15px;border-radius:10px;white-space:nowrap}
+  .ins .dim.t{background:rgba(127,178,232,.16);color:#9cc4ee}
+  .ins .dim.c{background:rgba(224,177,90,.16);color:var(--amber)}
+  .ins .dim.p{background:rgba(185,166,224,.16);color:var(--lilac)}
+  .ins .dim.u{background:rgba(0,230,118,.14);color:var(--green)}
+  .ins .gr{font-size:20px;font-weight:600;color:var(--ink4);white-space:nowrap;
+    border:1px solid var(--hair);padding:6px 12px;border-radius:999px}
+  .ins .tl{font-size:29px;font-weight:600;margin-bottom:9px;letter-spacing:-.01em}
+  .ins .bd{font-size:25px;line-height:1.62;color:var(--ink2)}
+  .ins .src{font-size:20px;color:var(--ink4);margin-top:11px}
+
+  /* ── ④ 两家对照 ────────────────────────────────── */
+  #cmpHead{position:absolute;left:70px;right:70px;text-align:center}
+  #cmp{position:absolute;left:52px;right:52px;display:flex;gap:22px}
+  .col{flex:1 1 0;min-width:0;background:var(--surf);border:1px solid var(--hair);
+    border-radius:28px;padding:32px 26px;transform-origin:50% 50%}
+  .col .cn{font-size:34px;font-weight:600;margin-bottom:6px}
+  .col .cr{font-size:23px;color:var(--ink4);margin-bottom:26px}
+  .col .kv{border-top:1px solid var(--hair);padding:20px 0}
+  .col .k{font-size:21px;color:var(--ink4);margin-bottom:8px}
+  .col .v{font-size:28px;font-weight:600;line-height:1.35}
+  .col .v.g{color:var(--green)} .col .v.a{color:var(--amber)}
+  #cmpNote{position:absolute;left:70px;right:70px;text-align:center;
+    font-size:30px;color:var(--ink2);line-height:1.5}
+
+  /* ── ⑤ 品牌 ───────────────────────────────────── */
   #brand{position:absolute;left:0;right:0;text-align:center}
-  /* nowrap 是必须的：字标一旦换行，整片气质当场崩掉 */
   .lockup{display:inline-flex;align-items:center;gap:22px;white-space:nowrap}
-  .lockup .tile{
-    width:96px;height:96px;border-radius:31px;background:#f3ecdf;
-    display:grid;place-items:center;flex:0 0 auto;
-  }
+  .lockup .tile{width:96px;height:96px;border-radius:31px;background:#f3ecdf;
+    display:grid;place-items:center;flex:0 0 auto}
   .lockup .wm{display:inline-flex;align-items:baseline;gap:14px;white-space:nowrap}
   .lockup .cn{font-size:74px;font-weight:600;letter-spacing:-.02em;color:var(--ink)}
   .lockup .en{font-size:26px;font-weight:700;letter-spacing:.24em;color:var(--ink3)}
-  #brand .kicker{margin-top:46px;font-size:44px;font-weight:500;line-height:1.5;color:var(--ink2)}
-  #brand .cta{
-    display:inline-block;margin-top:52px;padding:24px 50px;border-radius:999px;
-    background:#f3ecdf;color:#16130f;font-size:32px;font-weight:600;white-space:nowrap;
-  }
+  #brand .kicker{margin-top:44px;font-size:42px;font-weight:500;line-height:1.5;color:var(--ink2)}
+  #brand .cta{display:inline-block;margin-top:50px;padding:24px 50px;border-radius:999px;
+    background:#f3ecdf;color:#16130f;font-size:32px;font-weight:600;white-space:nowrap}
 
-  /* ── 画面质感：暗角 + 极轻噪点，压住"网页截图感" ─────────── */
   #vig{position:absolute;inset:0;pointer-events:none;
-    background:radial-gradient(120% 78% at 50% 44%,transparent 38%,rgba(0,0,0,.42) 100%)}
+    background:radial-gradient(122% 80% at 50% 44%,transparent 40%,rgba(0,0,0,.44) 100%)}
   #grain{position:absolute;inset:0;pointer-events:none;opacity:.05;
     background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.86' numOctaves='3'/></filter><rect width='140' height='140' filter='url(%23n)'/></svg>")}
   #flash{position:absolute;inset:0;pointer-events:none;background:#000;opacity:0}
 </style>
 
 <div id="stage">
-  <div class="layer" id="L_flood">
-    <div id="floodClip"><div id="flood"></div></div>
-    <div id="scrim"></div>
-    <div class="hero" id="floodHero">
-      <div class="eb" id="fhEb">今天 · 企业官网新增</div>
-      <div class="num" id="fhNum">0</div>
-      <div class="cap" id="fhCap">个岗位</div>
+  <!-- ① 说一次 -->
+  <div class="layer" id="L_ask">
+    <div id="ask">
+      <div class="eb" id="askEb">第一步 · 只做一次</div>
+      <div class="h1" id="askH" style="margin-top:28px"></div>
+      <div id="askChips"></div>
+      <div class="sub" id="askSub" style="margin-top:56px"></div>
     </div>
   </div>
 
-  <div class="layer" id="L_dots">
-    <div id="dotWrap"><canvas id="dots"></canvas></div>
-    <div class="hero" id="dotHero">
-      <div class="num" id="dhNum">0</div>
-      <div class="cap" id="dhCap"></div>
+  <!-- ② 适合你的官方岗位 -->
+  <div class="layer" id="L_jobs">
+    <div id="jobsHead">
+      <div class="eb">价值一</div>
+      <div class="h2" id="jobsH" style="margin-top:20px"></div>
+    </div>
+    <div id="jobs"></div>
+    <div id="breadth"></div>
+    <div id="urlbar">
+      <span class="lock"><svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+        <path d="M6 11V8a6 6 0 1 1 12 0v3" stroke="#00e676" stroke-width="2.4"/>
+        <rect x="4" y="11" width="16" height="10" rx="2.4" fill="#00e676"/></svg></span>
+      <span class="u" id="urlText"></span>
+      <span class="tag">企业官网</span>
     </div>
   </div>
 
-  <div class="layer" id="L_cards">
-    <div class="hero" id="cardHero">
-      <div class="eb">今天值得你动的</div>
+  <!-- ③ 职业洞察 -->
+  <div class="layer" id="L_ins">
+    <div id="jobsHead2" style="position:absolute;left:70px;right:70px">
+      <div class="eb">价值二</div>
+      <div class="h2" id="insH" style="margin-top:20px"></div>
     </div>
-    <div id="cards"></div>
+    <div id="drawer">
+      <div class="dh"><span class="dt" id="drawerCo"></span></div>
+      <div class="banner">来源聚合 · 已去标识 · 每条都带分级、时效与出处</div>
+      <div id="insList"></div>
+    </div>
   </div>
 
+  <!-- ④ 选出最适合你的 -->
+  <div class="layer" id="L_cmp">
+    <div id="cmpHead">
+      <div class="eb">于是</div>
+      <div class="h2" id="cmpH" style="margin-top:20px"></div>
+    </div>
+    <div id="cmp"></div>
+    <div id="cmpNote"></div>
+  </div>
+
+  <!-- ⑤ 品牌 -->
   <div class="layer" id="L_brand">
     <div id="brand">
       <div class="lockup">
-        <span class="tile"><svg id="bsvg" width="62" height="62" viewBox="0 0 48 48" fill="none">
+        <span class="tile"><svg width="62" height="62" viewBox="0 0 48 48" fill="none">
           <circle cx="24" cy="24" r="16" stroke="#16130f" stroke-width="3" opacity=".42"/>
           <path id="bsweep" d="M24 24V8a16 16 0 0 1 13.9 8Z" fill="#00b25c" opacity=".9"/>
           <circle cx="24" cy="24" r="3" fill="#16130f"/>
@@ -185,7 +205,7 @@
         </svg></span>
         <span class="wm"><span class="cn">职达</span><span class="en">JOBRADAR</span></span>
       </div>
-      <div class="kicker">只看官网。<br>只留下值得行动的。</div>
+      <div class="kicker">官方岗位 + 行业信息差<br>说一次，然后你只做选择。</div>
       <div class="cta">开始设置我的雷达</div>
     </div>
   </div>
@@ -194,450 +214,282 @@
 </div>
 
 <script>
-// ══════════════════════════════════════════════════════════════
-//  数学工具
-// ══════════════════════════════════════════════════════════════
 const clamp=(x,a,b)=>x<a?a:(x>b?b:x);
 const lerp=(a,b,p)=>a+(b-a)*p;
-/** 归一化区间进度，超出两端自动夹到 0/1 */
 const seg=(t,a,b)=>clamp((t-a)/(b-a),0,1);
-const eOut =p=>1-Math.pow(1-p,3);
-const eOut4=p=>1-Math.pow(1-p,4);
-const eExpo=p=>p>=1?1:1-Math.pow(2,-10*p);
+const eOut=p=>1-Math.pow(1-p,3);
 const eInOut=p=>p<.5?4*p*p*p:1-Math.pow(-2*p+2,3)/2;
-const eBack=p=>{const c=1.9;const q=p-1;return 1+(c+1)*q*q*q+c*q*q;};
-/** 确定性哈希：整个片子里唯一的"随机"来源。绝不用 Math.random。 */
+const eBack=p=>{const c=1.9,q=p-1;return 1+(c+1)*q*q*q+c*q*q;};
+/** 确定性哈希 —— 全片唯一的"随机"来源，绝不用 Math.random */
 function h(i,s){const x=Math.sin((i+1)*127.1+(s||0)*311.7)*43758.5453;return x-Math.floor(x);}
 const show=(el,on)=>{el.style.display=on?"":"none";};
+/** 按字数逐字显示，做"正在打出来"的效果（纯 t 的函数） */
+const typed=(s,p)=>s.slice(0,Math.round(clamp(p,0,1)*s.length));
 
-// ══════════════════════════════════════════════════════════════
-//  真实素材（2026-07-30 生产库实测）
-// ══════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+//  素材（全部真实，出处见文件头注释）
+// ══════════════════════════════════════════════════════════
+const TARGETS=["上海","算法工程师","实习"];
+
+// 香港生产库 jobs 表真实行
 const JOBS=[
-  ["京东","智能硬件工程师","上海"],
-  ["京东","空间智能算法工程师（场景图方向）","北京"],
-  ["京东","产品经理/产品运营","北京"],
-  ["京东","机器人环境理解算法工程师（3DCV）","北京"],
-  ["字节跳动","游戏客户端专家开发工程师","广州"],
-  ["字节跳动","C端营销创意设计师","北京"],
-  ["字节跳动","高级全栈工程师","北京"],
-  ["字节跳动","研发PMO/技术项目经理","北京"],
-  ["vivo","传感器软件工程师","深圳"],
-  ["vivo","感知与交互算法工程师","上海"],
-  ["vivo","语音算法工程师","杭州"],
-  ["vivo","CMF设计师","东莞"],
-  ["顺丰","自动化技术工程师","江门"],
-  ["顺丰","Java开发工程师","西安"],
-  ["小米","生态链软件产品经理","武汉"],
-  ["网易","资深全栈开发工程师","广州"],
-  ["网易","资深平台产品经理（AI/策略/体验）","杭州"],
-  ["网易","CG概念设计师（漫威争锋）","广州"],
-  ["网易","云商-售前解决方案工程师","上海"],
-  ["网易","内容型产品经理（官网编辑方向）","杭州"],
-  ["快手","数据研发工程师（商业化方向）","北京"],
-  ["快手","客户端测试开发工程师（音视频）","北京"],
-  ["哔哩哔哩","资深广告智能投放算法工程师","上海"],
-  ["比亚迪","设备工程师","蚌埠"],
-  ["比亚迪","助理品质工程师","徐州"],
-  ["美团","后端开发工程师","北京"],
-  ["腾讯","客户端开发工程师","深圳"],
-  ["Apple","Machine Learning Engineer","上海"],
-  ["拼多多","算法工程师","上海"],
-  ["腾讯音乐","推荐算法工程师","深圳"],
+  ["字节跳动","高级全栈工程师","北京","社招"],
+  ["网易","资深平台产品经理（AI/策略/体验）","杭州","社招"],
+  ["Apple","Machine Learning Engineer","上海","社招"],
 ];
-/** 筛掉的理由 —— 全部是管线里真实存在的判定，不编造 */
-const KILLS=["已撤岗","无正文","城市不符","类型不符","关键词排除","行业不符"];
-/** 最终留下的三张：库里真实的行 */
-const PICKS=[
-  ["字节跳动","高级全栈工程师","北京","社招","高匹配"],
-  ["网易","资深平台产品经理（AI/策略/体验）","杭州","社招","高匹配"],
-  ["快手","数据研发工程师（商业化方向）","北京","社招","高匹配"],
+// 覆盖广度：讲"你能找到的范围"，不讲我们抓了多少
+const BREADTH=["实习","校招","社招","国内","海外"];
+const OFFICIAL_URL="jobs.bytedance.com/experienced/position/…";
+
+// 洞察：migration 014 / 016 的真实行，一字未改其口径
+const INSIGHTS=[
+  ["t","时机","事实 · 官方来源","校招节奏：提前批靠前",
+   "据官方招聘渠道与公开校招公告，字节校招通常秋招提前批约 7 月启动、正式批集中在 8–9 月，春招 3–4 月有补录。",
+   "来源：字节跳动官方招聘 · 时效 每年 7–9 月"],
+  ["c","薪酬强度","经验 · 约 20 条样本","薪资偏高，强度也偏大",
+   "据公开讨论聚合（去标识化），字节在互联网公司中给薪相对偏高，对应工作强度也偏大；不同 BU 差异明显。",
+   "时效 2025–2026 观察 · 仅供参考"],
+  ["p","路径","经验 · 多源","晋升与转岗看 BU",
+   "公开讨论中普遍提到内部转岗机会存在，但不同 BU 的晋升节奏差异较大。",
+   "时效 2025–2026 观察"],
 ];
 
-// ══════════════════════════════════════════════════════════════
-//  时间轴（秒）—— 硬切，不交叉溶解
-// ══════════════════════════════════════════════════════════════
+// 对照：字节 vs 腾讯，用的是 migration 014 里两家真实的 compensation_intensity 行
+const CMP=[
+  ["字节跳动","薪酬强度 · 约 20 条样本",[["给薪","相对偏高","g"],["强度","偏大","a"],["差异","BU 之间明显",""]]],
+  ["腾讯","薪酬强度 · 约 14 条样本",[["给薪","稳健、福利较好","g"],["强度","大厂中相对中等","g"],["差异","事业群之间明显",""]]],
+];
+
+// ══════════════════════════════════════════════════════════
+//  时间轴（秒）
+// ══════════════════════════════════════════════════════════
 const T={
-  hook:[0.00, 2.50],   // 洪流灌入 + 4,075 跳数
-  judge:[2.50, 5.60],  // 逐行判定：大部分该被筛掉
-  work:[5.60,10.40],   // 【signature】1,053 家官网点阵 + 雷达扫描 → 138,949 扇门
-  crush:[10.40,13.60], // 4075 → 812 → 47 → 3 硬压
-  cards:[13.60,18.20], // 三张真实岗位卡
-  brand:[18.20,21.60], // 品牌 + CTA
+  ask  :[0.00, 3.60],
+  jobs :[3.60, 9.20],
+  ins  :[9.20,15.40],
+  cmp  :[15.40,19.20],
+  brand:[19.20,22.40],
 };
 const DUR=T.brand[1];
 window.__DUR=DUR;
 
-// ══════════════════════════════════════════════════════════════
-//  建 DOM（只建一次；__render 只改 transform / opacity）
-// ══════════════════════════════════════════════════════════════
-const ROW_H=58, NROW=132;
-const floodEl=document.getElementById("flood");
-const rows=[];
-for(let i=0;i<NROW;i++){
-  // 留下的行用固定下标，不用哈希：压缩段的可视窗口大约是第 72–104 行，
-  // 必须保证"活下来的那几行"正好落在窗口里、且不被中间的暗幕压住，
-  // 否则观众看到的是一片空 —— 看不见倒下才是问题，看不见活着更是。
-  const KEEPERS={93:0,96:1,99:2};   // 下标 → PICKS 序号
-  const keep = (i in KEEPERS)||i===48||i===63;
-
-  // ⚠️ 整条 tuple 一起取，绝不能按字段各自错位去拼 —— 那样会造出
-  //   "比亚迪 · 传感器软件工程师 · 广州" 这种库里根本不存在的组合。
-  //   片子通篇在讲"数据是真的"，画面里就不能有一行是拼出来的。
-  //   stride 7 与 30 互质，所以 30 行内不重复，够用了。
-  let co,ti,lo;
-  if(i in KEEPERS){
-    // 活下来的三行 = 后面那三张卡本身，观众看着它们活下来、再放大成卡
-    const p=PICKS[KEEPERS[i]]; co=p[0];ti=p[1];lo=p[2];
-  }else{
-    const src=JOBS[(i*7+3)%JOBS.length];
-    co=src[0];ti=src[1];lo=src[2];
-  }
-  const kill = KILLS[Math.floor(h(i,4)*KILLS.length)];
-  const el=document.createElement("div");
-  el.className="row";
-  el.style.height=ROW_H+"px";
-  el.innerHTML=
-    '<span class="co">'+co+'</span>'+
-    '<span class="ti">'+ti+'</span>'+
-    '<span class="lo">'+lo+'</span>'+
-    '<span class="vd '+(keep?"keep":"kill")+'">'+(keep?"留下":kill)+'</span>'+
-    '<span class="strike"></span>';
-  floodEl.appendChild(el);
-  rows.push({el,keep,
-    vd:el.querySelector(".vd"),
-    st:el.querySelector(".strike"),
-    ti:el.querySelector(".ti"),
-    co:el.querySelector(".co"),
-    lo:el.querySelector(".lo")});
-}
-
-const cardsEl=document.getElementById("cards");
-const cards=PICKS.map(p=>{
-  const el=document.createElement("div");
-  el.className="card";
-  el.innerHTML=
-    '<div class="top"><span class="tile">'+p[0][0]+'</span><span class="co">'+p[0]+'</span></div>'+
-    '<div class="ti">'+p[1]+'</div>'+
-    '<div class="foot">'+
-      '<span class="chip">'+p[2]+'</span>'+
-      '<span class="chip sky">'+p[3]+'</span>'+
-      '<span class="chip hit">'+p[4]+'</span>'+
-      '<span class="go">官网直达 →</span>'+
-    '</div>';
-  cardsEl.appendChild(el);
-  return el;
+// ══════════════════════════════════════════════════════════
+//  建 DOM
+// ══════════════════════════════════════════════════════════
+const chipsEl=document.getElementById("askChips");
+const tgts=TARGETS.map(x=>{
+  const s=document.createElement("span");s.className="tgt";s.textContent=x;
+  chipsEl.appendChild(s);return s;
 });
 
-// 点阵：一个点 = 一家被覆盖的企业官网
-const NDOT=1053, DCOL=34;
-const DROW=Math.ceil(NDOT/DCOL);
-const cv=document.getElementById("dots"), ctx=cv.getContext("2d");
-const dots=[];
-for(let i=0;i<NDOT;i++){
-  const c=i%DCOL, r=Math.floor(i/DCOL);
-  dots.push({c,r,
-    // 抖动一点点，避免死板的方格
-    jx:(h(i,1)-.5)*3.2, jy:(h(i,2)-.5)*3.2,
-    sz:1.7+h(i,3)*1.5});
-}
+const jobsEl=document.getElementById("jobs");
+const cards=JOBS.map(j=>{
+  const el=document.createElement("div");el.className="card";
+  el.innerHTML='<div class="top"><span class="tile">'+j[0][0]+'</span><span class="co">'+j[0]+'</span></div>'+
+    '<div class="ti">'+j[1]+'</div>'+
+    '<div class="foot"><span class="chip">'+j[2]+'</span><span class="chip sky">'+j[3]+'</span>'+
+    '<span class="chip hit">高匹配</span><span class="go">官网直达 →</span></div>';
+  jobsEl.appendChild(el);return el;
+});
+const goEls=cards.map(c=>c.querySelector(".go"));
 
-// ── 元素引用 ──
+const brEl=document.getElementById("breadth");
+const brs=BREADTH.map(b=>{
+  const s=document.createElement("span");s.className="b";s.textContent=b;
+  brEl.appendChild(s);return s;
+});
+
+const insListEl=document.getElementById("insList");
+const insEls=INSIGHTS.map(x=>{
+  const el=document.createElement("div");el.className="ins";
+  el.innerHTML='<div class="r1"><span class="dim '+x[0]+'">'+x[1]+'</span>'+
+    '<span class="gr">'+x[2]+'</span></div>'+
+    '<div class="tl">'+x[3]+'</div><div class="bd">'+x[4]+'</div>'+
+    '<div class="src">'+x[5]+'</div>';
+  insListEl.appendChild(el);return el;
+});
+
+const cmpEl=document.getElementById("cmp");
+const cols=CMP.map(c=>{
+  const el=document.createElement("div");el.className="col";
+  el.innerHTML='<div class="cn">'+c[0]+'</div><div class="cr">'+c[1]+'</div>'+
+    c[2].map(kv=>'<div class="kv"><div class="k">'+kv[0]+'</div>'+
+      '<div class="v '+kv[2]+'">'+kv[1]+'</div></div>').join("");
+  cmpEl.appendChild(el);return el;
+});
+
+// ── refs ──
 const stage=document.getElementById("stage");
-const L={flood:document.getElementById("L_flood"),dots:document.getElementById("L_dots"),
-         cards:document.getElementById("L_cards"),brand:document.getElementById("L_brand")};
-const floodClip=document.getElementById("floodClip");
-const fh=document.getElementById("floodHero"),fhNum=document.getElementById("fhNum"),
-      fhCap=document.getElementById("fhCap"),fhEb=document.getElementById("fhEb");
-const dh=document.getElementById("dotHero"),dhNum=document.getElementById("dhNum"),
-      dhCap=document.getElementById("dhCap"),dotWrap=document.getElementById("dotWrap");
-const cardHero=document.getElementById("cardHero");
+const L={ask:document.getElementById("L_ask"),jobs:document.getElementById("L_jobs"),
+         ins:document.getElementById("L_ins"),cmp:document.getElementById("L_cmp"),
+         brand:document.getElementById("L_brand")};
+const askEl=document.getElementById("ask"),askH=document.getElementById("askH"),
+      askSub=document.getElementById("askSub");
+const jobsHead=document.getElementById("jobsHead"),jobsH=document.getElementById("jobsH"),
+      urlbar=document.getElementById("urlbar"),urlText=document.getElementById("urlText");
+const insHead=document.getElementById("jobsHead2"),insH=document.getElementById("insH"),
+      drawer=document.getElementById("drawer"),drawerCo=document.getElementById("drawerCo");
+const cmpHead=document.getElementById("cmpHead"),cmpH=document.getElementById("cmpH"),
+      cmpNote=document.getElementById("cmpNote");
 const brandEl=document.getElementById("brand"),lockup=brandEl.querySelector(".lockup"),
       kicker=brandEl.querySelector(".kicker"),ctaEl=brandEl.querySelector(".cta"),
       bsweep=document.getElementById("bsweep"),bblip=document.getElementById("bblip");
 const flash=document.getElementById("flash");
 
-// ══════════════════════════════════════════════════════════════
-//  尺寸
-// ══════════════════════════════════════════════════════════════
 let W=1080,H=1920;
 window.__setSize=function(w,hh){
   W=w;H=hh;
-  stage.style.width=W+"px";stage.style.height=H+"px";
-  // 版式按 1080×1920 设计，其他分辨率整体等比缩放（不重排，避免换行意外）
   const k=Math.min(W/1080,H/1920);
+  stage.style.width="1080px";stage.style.height="1920px";
   stage.style.transform="scale("+k+")";
   stage.style.left=((W-1080*k)/2)+"px";
   stage.style.top=((H-1920*k)/2)+"px";
-  stage.style.width="1080px";stage.style.height="1920px";
-
-  floodClip.style.top="0px";floodClip.style.height="1920px";
-  const dw=DCOL*26, dhh=DROW*26;
-  cv.width=dw*2;cv.height=dhh*2;                  // 2× 超采样，点边缘不糊
-  cv.style.width=dw+"px";cv.style.height=dhh+"px";
-  ctx.scale(2,2);
-  dotWrap.style.top=(1920/2-dhh/2-60)+"px";
-  ctx.imageSmoothingEnabled=true;
 };
 
-// ══════════════════════════════════════════════════════════════
-//  数字格式
-// ══════════════════════════════════════════════════════════════
-const fmt=n=>Math.round(n).toLocaleString("en-US");
-/** 阶梯式跳数：不做平滑插值，机械感更狠 */
-function stepNum(p,stops){
-  const i=clamp(Math.floor(p*stops.length),0,stops.length-1);
-  return stops[i];
-}
+// ══════════════════════════════════════════════════════════
+//  ① 说一次
+// ══════════════════════════════════════════════════════════
+function drawAsk(t){
+  const p=seg(t,T.ask[0],T.ask[1]);
+  askEl.style.top="700px";
+  // 逐字打出来。注意用 innerHTML 是为了让 <br> 生效，
+  // typed() 按字符切会把 "<br>" 切断 —— 所以两行分开切，别整串切。
+  const l1=typed("你只需要说一次",seg(p,0.05,0.26));
+  const l2=typed("你要找什么",seg(p,0.26,0.42));
+  askH.innerHTML=l1+"<br>"+l2;
+  document.getElementById("askEb").style.opacity=seg(p,0.0,0.10);
 
-// ══════════════════════════════════════════════════════════════
-//  各 beat 的绘制
-// ══════════════════════════════════════════════════════════════
-function drawFlood(t,phase){
-  // phase: "hook" | "judge" | "crush"
-  const p0=seg(t,T.hook[0],T.hook[1]);
-
-  // 洪流持续上滚：hook 段猛冲，judge 段减速但不停（"摄影机不停"是丝滑的来源）
-  let scroll;
-  if(phase==="hook"){
-    scroll=eOut4(p0)*(NROW*ROW_H-1920)*0.42;
-  }else{
-    const p1=seg(t,T.judge[0],T.judge[1]);
-    const base=(NROW*ROW_H-1920)*0.42;
-    scroll=base+eInOut(p1)*(NROW*ROW_H-1920)*0.30;
-    if(phase==="crush"){
-      const p2=seg(t,T.crush[0],T.crush[1]);
-      scroll=base+(NROW*ROW_H-1920)*0.30+eOut(p2)*90;   // 压缩时几乎停住
-    }
-  }
-  floodEl.style.transform="translate3d(0,"+(-scroll)+"px,0)";
-
-  const pj=seg(t,T.judge[0],T.judge[1]-0.35);
-  const pc=seg(t,T.crush[0],T.crush[1]-0.30);
-
-  for(let i=0;i<NROW;i++){
-    const R=rows[i];
-    // ── 灌入：每行错峰淡入（错峰 + 位移是"丝滑"的第二个机制）
-    const inD=h(i,6)*0.55;
-    const pin=phase==="hook"?seg(t,T.hook[0]+inD,T.hook[0]+inD+0.5):1;
-    // ── 判定：判定标按行错峰出现，划掉线扫过
-    const jd=(i/NROW)*0.72+h(i,7)*0.16;
-    const pv=phase==="hook"?0:seg(pj,jd,jd+0.20);
-    // ── 压缩：非留下的行塌掉
-    const cd=h(i,8)*0.34;
-    const pk=phase==="crush"?seg(pc,cd,cd+0.30):0;
-
-    const dead=!R.keep;
-    // 只有被判死的行才塌陷。pk 是给所有行都算了的，
-    // 用它之前必须先过 dead 这道闸，否则活下来的三行也会被压成一条线（踩过）。
-    const pkill=dead?pk:0;
-    const alive=1-pkill;
-
-    R.vd.style.opacity=pv;
-    R.vd.style.transform="translateX("+lerp(14,0,eOut(pv))+"px)";
-    // 划掉线只画在被筛掉的行上
-    R.st.style.opacity=dead?pv*0.85:0;
-    R.st.style.width=dead?(pv*720)+"px":"0px";
-
-    // 被判死的行整体退到背景里去
-    const fade=dead?lerp(1,0.30,pv):1;
-    R.ti.style.opacity=fade;
-    R.co.style.opacity=dead?lerp(1,0.34,pv):0.9;
-    R.lo.style.opacity=dead?lerp(1,0.28,pv):0.8;
-
-    R.el.style.opacity=pin*alive;
-    // 压缩用 scaleY 塌陷，不动 height —— 改 height 会触发重排，
-    // 132 行同时重排会把活下来的行挤出画面，观众只看到一片空。
-    R.el.style.transform=
-      "translate3d(0,"+lerp(26,0,eOut(pin))+"px,0) scaleY("+(1-pkill*0.86)+")";
-  }
-
-  // ── 大数字
-  if(phase==="hook"){
-    const pn=seg(t,0.18,2.15);
-    fhNum.textContent=fmt(eExpo(pn)*4075);
-    fhNum.className="num";
-    fhEb.textContent="今天 · 企业官网新增";
-    fhCap.textContent="个岗位";
-    fh.style.opacity=seg(t,0.10,0.5);
-    fh.style.top="640px";
-    const pop=1+0.035*(1-eOut(seg(t,2.05,2.45)));
-    fh.style.transform="scale("+pop+")";
-  }else if(phase==="judge"){
-    fhNum.textContent="4,075";
-    fhNum.className="num";
-    fhEb.textContent="今天 · 企业官网新增";
-    fhCap.textContent="其中大部分不该占用你的时间";
-    fh.style.opacity=1;fh.style.top="640px";fh.style.transform="scale(1)";
-  }else{
-    // crush：4075 → 812 → 47 → 3，阶梯硬跳
-    const p=seg(t,T.crush[0]+0.15,T.crush[1]-0.55);
-    const v=stepNum(p,[4075,4075,812,812,47,47,3,3]);
-    fhNum.textContent=fmt(v);
-    fhNum.className="num"+(v===3?" g":"");
-    fhEb.textContent="逐条筛";
-    fhCap.textContent=v===3?"个值得你动的机会":"";
-    fh.style.opacity=1;fh.style.top="640px";
-    // 每次跳数给一个 6% 的弹跳
-    const k=p*8, fr=k-Math.floor(k);
-    fh.style.transform="scale("+(1+0.055*(1-eOut(clamp(fr*3,0,1))))+")";
-  }
-
-  // 洪流整体的"摄影机"：缓慢推近 + judge 段轻微下压
-  const camP=seg(t,T.hook[0],T.judge[1]);
-  const camC=phase==="crush"?seg(t,T.crush[0],T.crush[1]):0;
-  L.flood.style.transform="scale("+(1+0.045*eInOut(camP)+0.05*eOut(camC))+")";
-  // 压缩段不再整层压暗：塌陷本身就是主角，压暗只会让人看不见发生了什么
-  floodClip.style.opacity=1;
-  // 暗幕在压缩段收一点，把下三分之一让出来给活下来的行
-  document.getElementById("scrim").style.opacity=
-    phase==="crush"?lerp(1,0.72,eOut(camC)):1;
-}
-
-function drawDots(t){
-  const p=seg(t,T.work[0],T.work[1]);
-  const dw=DCOL*26, dhh=DROW*26;
-  ctx.clearRect(0,0,dw,dhh);
-
-  const cx=dw/2, cy=dhh/2;
-  // 扫描臂转 1.35 圈；乘上 easeInOut 让它有起有收，不是匀速转
-  const sweep=eInOut(clamp(p/0.86,0,1))*Math.PI*2*1.35 - Math.PI/2;
-
-  // 扫描扇形（拖尾）
-  const TAIL=Math.PI*0.42;
-  for(let s=0;s<26;s++){
-    const a0=sweep-TAIL*(s/26), a1=sweep-TAIL*((s+1)/26);
-    ctx.beginPath();ctx.moveTo(cx,cy);
-    ctx.arc(cx,cy,Math.max(dw,dhh),a1,a0);ctx.closePath();
-    ctx.fillStyle="rgba(0,230,118,"+(0.052*(1-s/26))+")";ctx.fill();
-  }
-  // 扫描臂本体
-  ctx.strokeStyle="rgba(0,230,118,.62)";ctx.lineWidth=1.4;
-  ctx.beginPath();ctx.moveTo(cx,cy);
-  ctx.lineTo(cx+Math.cos(sweep)*Math.max(dw,dhh),cy+Math.sin(sweep)*Math.max(dw,dhh));
-  ctx.stroke();
-
-  for(let i=0;i<NDOT;i++){
-    const d=dots[i];
-    const x=d.c*26+13+d.jx, y=d.r*26+13+d.jy;
-    // 这个点被扫过几次了？（累计角度，所以第二圈也会再亮一下）
-    let a=Math.atan2(y-cy,x-cx);
-    let da=a-(-Math.PI/2); if(da<0)da+=Math.PI*2;
-    const visited=(sweep+Math.PI/2)-da;
-    const lit=visited>=0;
-    // 刚被扫过的瞬间最亮，然后落回"已确认"的暗绿
-    const recency=lit?clamp(1-visited/0.72,0,1):0;
-    const glow=Math.max(recency, lit?0.30:0);
-
-    // 点阵自身也是错峰浮现的，不是一开始就全在
-    const appear=clamp((p*1.7)-(d.r/DROW)*0.55,0,1);
-    if(appear<=0) continue;
-
-    const rr=d.sz*(1+recency*1.5)*appear;
-    if(lit){
-      if(recency>0.05){
-        ctx.beginPath();ctx.arc(x,y,rr*3.4,0,6.2832);
-        ctx.fillStyle="rgba(0,230,118,"+(0.13*recency*appear)+")";ctx.fill();
-      }
-      ctx.beginPath();ctx.arc(x,y,rr,0,6.2832);
-      ctx.fillStyle="rgba(0,230,118,"+((0.34+0.62*recency)*appear)+")";ctx.fill();
-    }else{
-      // 未扫到的点要够亮 —— 这一镜的主角是"1,053 家"这个体量本身，
-      // 点太暗就只剩一道绿光在转，体量没了，这镜就白拍了。
-      ctx.beginPath();ctx.arc(x,y,d.sz*appear,0,6.2832);
-      ctx.fillStyle="rgba(243,236,223,"+(0.30*appear)+")";ctx.fill();
-    }
-  }
-
-  // 数字：先 1,053 家官网，再翻到 138,949 扇门
-  const flip=0.52;
-  if(p<flip){
-    const pn=seg(p,0.06,0.42);
-    dhNum.textContent=fmt(eExpo(pn)*1053);
-    dhCap.textContent="家企业官网 · 昨夜跑了一遍";
-  }else{
-    const pn=seg(p,flip,flip+0.30);
-    dhNum.textContent=fmt(eExpo(pn)*138949);
-    dhCap.textContent="个岗位 · 逐个敲门确认还在不在";
-  }
-  dh.style.top="1430px";
-  dh.style.opacity=seg(p,0.03,0.14);
-  // 翻数字那一下给个弹跳
-  const pop=1+0.05*(1-eOut(clamp((p-flip)/0.14,0,1)))*(p>=flip?1:0);
-  dh.style.transform="scale("+pop+")";
-  dotWrap.style.opacity=seg(p,0,0.10)*(1-seg(p,0.95,1));
-  // 点阵层轻微推近，画面永远在动
-  L.dots.style.transform="scale("+(1.02+0.05*eInOut(p))+")";
-}
-
-function drawCards(t){
-  const p=seg(t,T.cards[0],T.cards[1]);
-  cardHero.style.top="330px";
-  cardHero.style.opacity=seg(p,0.02,0.16);
-  document.getElementById("cards").style.top="560px";
-
-  cards.forEach((el,i)=>{
-    // 硬切之后不能有空窗：第一张卡在切点上就已经在落了
-    const d=i*0.085;
-    const pi=seg(p,0.0+d,0.0+d+0.26);
+  tgts.forEach((el,i)=>{
+    const pi=seg(p,0.40+i*0.09,0.40+i*0.09+0.20);
     el.style.opacity=pi;
-    // eBack 让卡片落下时"沉"一下，有重量
-    el.style.transform=
-      "translate3d(0,"+lerp(64,0,eBack(pi))+"px,0) scale("+lerp(0.955,1,eBack(pi))+")";
+    el.style.transform="scale("+lerp(0.86,1,eBack(pi))+")";
+    // 落格瞬间点绿：把"这就是你的条件"讲明白
+    if(pi>=1) el.classList.add("on"); else el.classList.remove("on");
   });
-  // 唯一一段慢下来的镜头：和前面的快剪形成对比
-  L.cards.style.transform="scale("+(1.0+0.035*eInOut(p))+")";
-  L.cards.style.opacity=1-seg(p,0.94,1)*0.35;
+
+  askSub.style.opacity=seg(p,0.74,0.92);
+  askSub.innerHTML="剩下的每天自动跑<br>你不用再一个个刷官网";
+  L.ask.style.transform="scale("+(1+0.03*eInOut(p))+")";
 }
 
+// ══════════════════════════════════════════════════════════
+//  ② 价值一：适合你的官方岗位
+// ══════════════════════════════════════════════════════════
+function drawJobs(t){
+  const p=seg(t,T.jobs[0],T.jobs[1]);
+  jobsHead.style.top="250px";
+  jobsHead.style.opacity=seg(p,0.0,0.10);
+  jobsH.innerHTML="筛出适合你的岗位<br><span style='color:#00e676'>点开就是企业官网</span>";
+
+  document.getElementById("jobs").style.top="510px";
+  cards.forEach((el,i)=>{
+    const pi=seg(p,0.06+i*0.075,0.06+i*0.075+0.24);
+    el.style.opacity=pi;
+    el.style.transform="translate3d(0,"+lerp(52,0,eBack(pi))+"px,0) scale("+lerp(0.96,1,eBack(pi))+")";
+  });
+
+  // 覆盖广度：实习/校招/社招 · 国内/海外 —— 逐个亮起
+  brEl.style.top="1290px";
+  brs.forEach((el,i)=>{
+    const pi=seg(p,0.34+i*0.045,0.34+i*0.045+0.16);
+    el.style.opacity=pi;
+    el.style.transform="scale("+lerp(0.88,1,eBack(pi))+")";
+  });
+
+  // 点第一张卡的「官网直达」→ 地址栏推上来，证明是官方链接
+  const pt=seg(p,0.58,0.66);
+  goEls[0].className="go"+(pt>0.4?" lit":"");
+  cards[0].style.transform=cards[0].style.transform.replace(/ scale\([^)]*\)$/,
+    " scale("+(1+0.018*Math.sin(clamp(pt,0,1)*Math.PI))+")");
+
+  const pu=seg(p,0.64,0.86);
+  urlbar.style.top="1430px";
+  urlbar.style.opacity=pu;
+  urlbar.style.transform="translate3d(0,"+lerp(40,0,eOut(pu))+"px,0) scale("+lerp(0.95,1,eBack(pu))+")";
+  urlText.textContent=typed(OFFICIAL_URL,seg(p,0.66,0.90));
+
+  L.jobs.style.transform="scale("+(1+0.028*eInOut(p))+")";
+}
+
+// ══════════════════════════════════════════════════════════
+//  ③ 价值二：职业洞察 = 信息差
+// ══════════════════════════════════════════════════════════
+function drawIns(t){
+  const p=seg(t,T.ins[0],T.ins[1]);
+  insHead.style.top="180px";
+  insHead.style.opacity=seg(p,0.0,0.09);
+  insH.innerHTML="再告诉你<span style='color:#00e676'>该不该去</span><br>时机 · 薪酬强度 · 路径 · 文化";
+
+  drawerCo.textContent="字节跳动 · 职业洞察";
+  // 抽屉从底部推上来
+  const pd=seg(p,0.06,0.30);
+  drawer.style.height="1360px";
+  drawer.style.transform="translate3d(0,"+lerp(1360,0,eOut(pd))+"px,0)";
+  drawer.style.opacity=1;
+
+  insEls.forEach((el,i)=>{
+    const pi=seg(p,0.26+i*0.13,0.26+i*0.13+0.26);
+    el.style.opacity=pi;
+    el.style.transform="translate3d(0,"+lerp(26,0,eOut(pi))+"px,0)";
+  });
+  L.ins.style.transform="scale("+(1+0.022*eInOut(p))+")";
+}
+
+// ══════════════════════════════════════════════════════════
+//  ④ 于是你能选
+// ══════════════════════════════════════════════════════════
+function drawCmp(t){
+  const p=seg(t,T.cmp[0],T.cmp[1]);
+  cmpHead.style.top="300px";
+  cmpHead.style.opacity=seg(p,0.0,0.12);
+  cmpH.innerHTML="两个都能投的时候<br>你知道<span style='color:#00e676'>哪个更适合你</span>";
+
+  cmpEl.style.top="700px";
+  cols.forEach((el,i)=>{
+    const pi=seg(p,0.10+i*0.11,0.10+i*0.11+0.30);
+    el.style.opacity=pi;
+    el.style.transform="translate3d(0,"+lerp(44,0,eBack(pi))+"px,0) scale("+lerp(0.95,1,eBack(pi))+")";
+  });
+  cmpNote.style.top="1560px";
+  cmpNote.style.opacity=seg(p,0.62,0.86);
+  cmpNote.innerHTML="按你自己的承受度选，不是按谁名气大";
+  L.cmp.style.transform="scale("+(1+0.024*eInOut(p))+")";
+}
+
+// ══════════════════════════════════════════════════════════
+//  ⑤ 品牌
+// ══════════════════════════════════════════════════════════
 function drawBrand(t){
   const p=seg(t,T.brand[0],T.brand[1]);
-  brandEl.style.top="640px";
+  brandEl.style.top="620px";
   const pl=seg(p,0.04,0.40);
   lockup.style.opacity=pl;
   lockup.style.transform="scale("+lerp(0.93,1,eBack(pl))+")";
-  // 品牌 mark 的扫描臂转一圈 —— 和 beat 2 的全屏扫描同一个机制，首尾咬合
   bsweep.setAttribute("transform","rotate("+(eOut(seg(p,0.06,0.62))*360)+" 24 24)");
   bblip.setAttribute("opacity",String(0.35+0.65*Math.abs(Math.sin(seg(p,0.1,1)*Math.PI*3))));
-  kicker.style.opacity=seg(p,0.30,0.62);
-  kicker.style.transform="translate3d(0,"+lerp(20,0,eOut(seg(p,0.30,0.62)))+"px,0)";
-  const pc=seg(p,0.52,0.80);
+  kicker.style.opacity=seg(p,0.28,0.60);
+  kicker.style.transform="translate3d(0,"+lerp(20,0,eOut(seg(p,0.28,0.60)))+"px,0)";
+  const pc=seg(p,0.50,0.78);
   ctaEl.style.opacity=pc;
   ctaEl.style.transform="scale("+lerp(0.94,1,eBack(pc))+")";
-  L.brand.style.transform="scale("+(1.0+0.022*eInOut(p))+")";
+  L.brand.style.transform="scale("+(1+0.02*eInOut(p))+")";
 }
 
-// ══════════════════════════════════════════════════════════════
-//  主入口：画面 = t 的纯函数
-// ══════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+//  主入口
+// ══════════════════════════════════════════════════════════
 window.__render=function(t){
   t=clamp(t,0,DUR);
-  const inHook =t< T.judge[0];
-  const inJudge=t>=T.judge[0]&&t<T.work[0];
-  const inWork =t>=T.work[0] &&t<T.crush[0];
-  const inCrush=t>=T.crush[0]&&t<T.cards[0];
-  const inCards=t>=T.cards[0]&&t<T.brand[0];
-  const inBrand=t>=T.brand[0];
+  const a=t<T.jobs[0], b=t>=T.jobs[0]&&t<T.ins[0],
+        c=t>=T.ins[0]&&t<T.cmp[0], d=t>=T.cmp[0]&&t<T.brand[0], e=t>=T.brand[0];
+  show(L.ask,a);show(L.jobs,b);show(L.ins,c);show(L.cmp,d);show(L.brand,e);
+  if(a)drawAsk(t); if(b)drawJobs(t); if(c)drawIns(t); if(d)drawCmp(t); if(e)drawBrand(t);
 
-  show(L.flood,inHook||inJudge||inCrush);
-  show(L.dots,inWork);
-  show(L.cards,inCards);
-  show(L.brand,inBrand);
-
-  if(inHook)  drawFlood(t,"hook");
-  if(inJudge) drawFlood(t,"judge");
-  if(inCrush) drawFlood(t,"crush");
-  if(inWork)  drawDots(t);
-  if(inCards) drawCards(t);
-  if(inBrand) drawBrand(t);
-
-  // 硬切点上压两帧黑：剪辑的"咔"，也顺手盖掉图层切换的接缝
   let fl=0;
-  [T.work[0],T.crush[0],T.cards[0],T.brand[0]].forEach(c=>{
-    const d=Math.abs(t-c);
-    if(d<0.034) fl=Math.max(fl,1-d/0.034);
+  [T.jobs[0],T.ins[0],T.cmp[0],T.brand[0]].forEach(x=>{
+    const dd=Math.abs(t-x); if(dd<0.034) fl=Math.max(fl,1-dd/0.034);
   });
-  flash.style.opacity=fl*0.72;
+  flash.style.opacity=fl*0.7;
 };
 
 window.__setSize(1080,1920);
