@@ -8,11 +8,15 @@ from logo_util import (
     candidate_domains,
     company_core_names,
     domain_for_company,
+    icon_link_urls,
+    icon_score,
     image_width,
+    is_image_bytes,
     is_placeholder,
     is_platform_domain,
     normalize_mime,
     page_verifies_company,
+    placeholder_probe_domains,
     platform_slug,
     registrable_domain,
 )
@@ -225,6 +229,115 @@ class ImageWidthTests(unittest.TestCase):
 
     def test_unknown_returns_none(self):
         self.assertIsNone(image_width(b"not-an-image"))
+
+
+class PlaceholderProbeDomainTests(unittest.TestCase):
+    """icon.horse 占位图按域名首字符生成字母头像 → 指纹必须覆盖 a-z0-9，否则漏掉的字母会被当真 logo。"""
+
+    def test_covers_all_letters_and_digits(self):
+        doms = placeholder_probe_domains()
+        self.assertEqual(len(doms), 36)
+        self.assertEqual(len({d[0] for d in doms}), 36)
+        for ch in ("a", "c", "s", "z", "0", "9"):
+            self.assertTrue(any(d.startswith(ch) for d in doms), ch)
+
+    def test_domains_are_implausible(self):
+        for d in placeholder_probe_domains():
+            self.assertIn("not-a-real-brand", d)
+            self.assertTrue(d.endswith(".com"))
+
+
+class IsImageBytesTests(unittest.TestCase):
+    def test_real_image_headers(self):
+        self.assertTrue(is_image_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20))
+        self.assertTrue(is_image_bytes(b"\x00\x00\x01\x00\x01\x00\x20"))
+        self.assertTrue(is_image_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 10))
+        self.assertTrue(is_image_bytes(b"GIF89a" + b"\x00" * 10))
+        self.assertTrue(is_image_bytes(b"RIFF" + b"\x00" * 4 + b"WEBP" + b"\x00" * 4))
+
+    def test_svg_with_and_without_xml_prolog(self):
+        self.assertTrue(is_image_bytes(b"<svg xmlns='http://www.w3.org/2000/svg'></svg>"))
+        self.assertTrue(is_image_bytes(b"  <?xml version='1.0'?><svg></svg>"))
+
+    def test_rejects_html_error_page(self):
+        # 站点 /favicon.ico 常返 200 + HTML（404 页面），必须挡掉，否则入库一张废图
+        self.assertFalse(is_image_bytes(b"<!DOCTYPE html><html><head><title>404</title>"))
+        self.assertFalse(is_image_bytes(b""))
+
+
+class IconScoreTests(unittest.TestCase):
+    def test_svg_ranks_high(self):
+        self.assertEqual(icon_score("image/svg+xml", b"<svg></svg>"), 256)
+
+    def test_png_uses_width(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR" + (180).to_bytes(4, "big") + b"\x00" * 8
+        self.assertEqual(icon_score("image/png", png), 180)
+
+    def test_unknown_scores_zero(self):
+        self.assertEqual(icon_score("image/x-icon", b"\x00\x00\x01\x00"), 0)
+
+
+class IconLinkUrlsTests(unittest.TestCase):
+    def test_apple_touch_icon_first_and_favicon_fallback_last(self):
+        html = (
+            '<link rel="icon" href="/small.ico">'
+            '<link rel="apple-touch-icon" href="/big-180.png">'
+        )
+        urls = icon_link_urls("https://example.com/", html)
+        self.assertEqual(urls[0], "https://example.com/big-180.png")
+        self.assertEqual(urls[1], "https://example.com/small.ico")
+        self.assertEqual(urls[-1], "https://example.com/favicon.ico")
+
+    def test_relative_protocol_and_absolute_hrefs(self):
+        html = (
+            '<link rel="shortcut icon" href="img/f.png">'
+            '<link rel="icon" href="https://cdn.example.net/x.svg">'
+        )
+        urls = icon_link_urls("https://example.com/zh/", html)
+        self.assertIn("https://example.com/zh/img/f.png", urls)
+        self.assertIn("https://cdn.example.net/x.svg", urls)
+
+    def test_skips_data_uri_and_dedupes(self):
+        html = (
+            '<link rel="icon" href="data:image/png;base64,AAA">'
+            '<link rel="icon" href="/a.png"><link rel="icon" href="/a.png">'
+        )
+        urls = icon_link_urls("https://example.com/", html)
+        self.assertNotIn("data:image/png;base64,AAA", urls)
+        self.assertEqual(urls.count("https://example.com/a.png"), 1)
+
+    def test_no_html_still_gives_favicon(self):
+        self.assertEqual(icon_link_urls("https://example.com/", ""), ["https://example.com/favicon.ico"])
+
+    def test_caps_candidates(self):
+        html = "".join(f'<link rel="icon" href="/i{i}.png">' for i in range(20))
+        self.assertLessEqual(len(icon_link_urls("https://example.com/", html)), 4)
+
+
+class MustApplyBrandOverrideTests(unittest.TestCase):
+    """必投清单品牌短名的域名覆盖：短名是校招专区展示名，配不上就只能首字母兜底。"""
+
+    def test_short_brand_names_resolve(self):
+        for name, domain in (
+            ("美团", "meituan.com"),
+            ("阿里巴巴", "alibabagroup.com"),
+            ("招商银行", "cmbchina.com"),
+            ("比亚迪", "byd.com"),
+            ("顺丰", "sf-express.com"),
+        ):
+            self.assertEqual(domain_for_company(name, "", COMPANY_DOMAIN_OVERRIDES), domain)
+
+    def test_live_verification_failures_stay_unmapped(self):
+        # live 核验没过的（域名被抢注 / 已改名 / 根域是无关站）一律不收，宁缺毋滥
+        for name in ("立讯精密", "光线传媒", "卓越教育", "中储智运", "万达电影"):
+            self.assertIsNone(domain_for_company(name, "", COMPANY_DOMAIN_OVERRIDES), name)
+
+    def test_no_platform_domain_leaked_into_overrides(self):
+        # 唯一豁免：Workday 自己就是雇主，它的官网恰好也是我们排除的 ATS 平台域名。
+        for name, domain in COMPANY_DOMAIN_OVERRIDES.items():
+            if name == "workday":
+                continue
+            self.assertFalse(is_platform_domain(domain), f"{name} → {domain} 是招聘平台域名")
 
 
 if __name__ == "__main__":
