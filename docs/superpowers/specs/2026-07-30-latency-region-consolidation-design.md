@@ -168,6 +168,62 @@ getUser（改造前每请求都走）        566.7 ms/次   （5 次平均）
 2. 部署后实测复核：`x-vercel-id` 是否变为 `hkg1`、页面 TTFB、`/api/jobs/stats` TTFB。
 3. 跑稳一天后，再评估第 ③ 步（Supabase 迁新加坡）是否还值得做——鉴权往返已消除，剩余 Supabase 查询只在页面 SSR 阶段（`/today` 6 次、`/jobs` 3 次、`/saved` 2 次），③ 的边际收益已明显缩小。
 
+## 7.5 上线后实测（2026-07-30，均已 push 到 main）
+
+区域切换已确认生效：`x-vercel-id: iad1::hkg1::…`（第二段为函数执行区，稳定 hkg1）。
+
+| 接口 | 改造前 | 改造后 |
+|---|---|---|
+| `/api/jobs/stats` | **6.6s**（且 2/3 次超时） | **1.5~4.0s** |
+| 落地页 `/` | 1.7~4.2s | 1.9~2.9s |
+| `/api/company-logos` | — | 1.87s |
+| `/api/jobs/search` | 25.3~26.2s | **20.8~21.4s**（仍慢，见 7.6） |
+
+> 测量链路为「中国本机 → 代理出口美东 → hkg1」，绝对值被自身代理放大（edge 段显示 iad1 即代理出口）；真实用户走香港/日本节点会更好。前后对比经同一链路，比例可信。
+
+### 7.5.1 漏项与补救
+
+首轮只覆盖了走 `requireUser()` 的 23 个路由，漏了 **11 处内联调 `supabase.auth.getUser()`** 的接口，其中 `/api/jobs/search` 是 `/jobs` 页最热的接口（筛选器每变一次都打它）——漏掉它等于改动②在用户最常走的路径上没生效。已在 commit `3b025bb` 补齐（改法：只把网络调用换成 `verifyRequestClaims(supabase)`，各路由 401/204 语义与变量绑定原样保留），另含落地页 `app/page.tsx` 与 `lib/auth.getProfile()`（`isAdmin()` 经由它，是三个管理员页的入口门）。核查结论：请求路径上已无网络 `getUser()`，仅剩 `lib/auth.getUser()` 一个带警告注释的逃生口。
+
+## 7.6 岗位搜索 21s：**另一条**病根，与地理无关（未解决）
+
+`app/api/jobs/search/route.ts` 原有注释把「搜索慢 10~30s」归因为「函数在美东、跨太平洋拉候选行」。**该结论已被实测证伪**：迁到 hkg1 后（函数确实在香港、与 jobs 库同城）仍 25.3~26.2s。注释已更正。
+
+真因在 `lib/jobs-store/search.ts` 的 `searchViaScan`：
+
+```js
+while ((filters.sortBy === "match" || matched.length <= need) && !exhausted && off < SCAN_BUDGET)
+```
+
+`sortBy` 默认 `"match"` 使第一个条件恒真 → **必须看满 `SCAN_BUDGET=28000` 行**才能按分排序（生产 317,220 个 active 岗，预算每次都被打满），且当时是逐页 `DB_PAGE=1000` **串行**拉、每行还拖着 `summary`。
+
+直连香港库实测（本机经代理，比例可信）：
+
+```
+一页 1000 行，带 summary + 全列（25 列）   76.2s
+同一页，8 个窄列（无 summary）             9.4s
+→ summary 约占候选传输量 87%
+```
+
+但 `summary` 是打分与 `exclude_keywords` 精筛要读的（见该文件列清单注释），不能直接砍。
+
+### 7.6.1 两次失败的优化尝试（已在代码里记录禁止事项，勿重走）
+
+| 尝试 | 结果 |
+|---|---|
+| 并行取页，照搬 `lib/job-search.ts` 的 `BATCH_SIZES=[4,8,16]` | **500** `timeout exceeded when trying to connect` |
+| 并行取页，并发降到 3（< 池 max 5） | 500 消失，但 **25s → 32s，更差** |
+
+- 第一次的教训：两条路径机制不同**不能照搬**——`lib/job-search.ts` 走 supabase-js（HTTP，无连接池上限），`lib/jobs-store/*` 直连 pg，受 `client.ts` 的 `max:5` + `connectionTimeoutMillis:8000` 约束，**池满后多出的获取请求不排队等待，8s 就抛错**。并发数必须小于池 max。
+- 第二次的教训：**并行救不了这条路径**。香港库是腾讯云轻量 **2 vCPU**，而 `order by first_seen_at desc limit 1000 offset 27000` 这类大偏移扫描是 DB 端 CPU 密集活（要走完并跳过 2.7 万行），3 个并发压 2 核只是互抢 CPU；node-pg 解析 2.8 万肥行也是单线程。**瓶颈不是「等网络往返」，减少往返次数零收益。** 按「跨洋往返」直觉做的推断在这里是错的。
+
+已退回串行（commit `1994bfd`），只保留唯一安全改进：候选只取 `CANDIDATE_COLUMNS` + 命中页 `hydratePageColumns` 回补（与 FTS 路径同一套，严格少传数据）→ **20.8~21.4s**（约 18%）。
+
+### 7.6.2 下一步（需单独立项）
+
+真解法不是微优化，而是**别扫 2.8 万行**：把打分/排序下推到 SQL，或缩小候选窗口。但 `sortBy=match` 的语义（必须看满预算才能排序）决定了得先改语义，属检索层重构。
+⚠️ 动它必须 live 验覆盖率——历史上有人把 city 移出 tsquery 导致覆盖从 28678 暴跌到 1818。
+
 ## 8. 验证
 
 - `node --test tests/*.test.js`
