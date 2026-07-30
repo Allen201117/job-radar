@@ -152,7 +152,8 @@ export default function CampusClient({
 }) {
   const [mode, setMode] = useState<RecruitMode>("campus");
   const [filters, setFilters] = useState<CampusFilters>(EMPTY_FILTERS);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // 手风琴：同一时刻只允许一家公司展开（同时展开多家会把三列网格撑成一长条，页面很乱）。
+  const [expandedPattern, setExpandedPattern] = useState<string | null>(null);
 
   // 公司洞察抽屉（P3a 外露）：公司卡级只拉一次可用性（比每个 JobCard 各拉更省），暂无实录/派生的公司不给点。
   const [insightCompany, setInsightCompany] = useState<string | null>(null);
@@ -164,12 +165,7 @@ export default function CampusClient({
   }, [cards]);
 
   function toggleExpand(pattern: string) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(pattern)) next.delete(pattern);
-      else next.add(pattern);
-      return next;
-    });
+    setExpandedPattern((cur) => (cur === pattern ? null : pattern));
   }
 
   // 当前态（校招/实习）下每家公司的原始岗位列表——先按 mode 取桶，其余步骤共用。
@@ -227,12 +223,11 @@ export default function CampusClient({
   const livenessRequested = useRef<Set<string>>(new Set());
   useEffect(() => {
     const visibleIds: string[] = [];
-    expanded.forEach((pattern) => {
-      const jobs = filteredJobsByPattern.get(pattern) || [];
-      for (const j of jobs) {
+    if (expandedPattern) {
+      for (const j of filteredJobsByPattern.get(expandedPattern) || []) {
         if (j.id) visibleIds.push(j.id);
       }
-    });
+    }
     const ids = visibleIds
       .filter((id) => !livenessRequested.current.has(id) && !deadIds.has(id))
       .slice(0, 25);
@@ -262,7 +257,7 @@ export default function CampusClient({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expanded, filteredJobsByPattern]);
+  }, [expandedPattern, filteredJobsByPattern]);
 
   // JobCard 要求的回调；本区岗位不预取 job_actions（专区场景无需个性化打分/回填 user_action），
   // 值得投/已投递/忽略仍会经 JobCard 内部走 /api/job-actions 真实写库，只是不需要在此处再镜像一份状态。
@@ -368,7 +363,7 @@ export default function CampusClient({
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {cards.map((card) => {
-            const isExpanded = expanded.has(card.pattern);
+            const isExpanded = expandedPattern === card.pattern;
             const totalCount = mode === "campus" ? card.campusJobs.length : card.internJobs.length;
             const filteredJobs = filteredJobsByPattern.get(card.pattern) || [];
             const groups = isExpanded ? groupCampusJobs(filteredJobs) : [];

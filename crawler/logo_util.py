@@ -9,7 +9,7 @@ import hashlib
 import re
 import struct
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 # 招聘托管 / 共享 ATS 平台域名：取其根域名会拿到平台自己的 logo，不是公司的 → 必须排除。
 PLATFORM_DOMAINS = {
@@ -177,6 +177,103 @@ _DOMAIN_OVERRIDES_RAW = {
     "伊顿电气（上海）有限公司": "eaton.com", "空气产品 Air Products": "airproducts.com",
     "Rockwell Automation 罗克韦尔": "rockwellautomation.com", "Illinois Tool Works": "itw.com",
     "Jabil": "jabil.com", "JLL 仲量联行 Jones Lang LaSalle": "jll.com",
+
+    # ============================================================
+    # 必投清单品牌短名（lib/must-apply-list.json 的 name）——校招专区/看板按短名展示，
+    # 而 sources.company 多为全称或英文名，短名在 company_logos 里一行都没有 → 全走首字母兜底。
+    # 下面每条都过了 live 核验（抓官网首页 title 自证身份，2026-07-30）；
+    # 核验不过的（域名被抢注/已改名/打不开且拿不准）一律不收，宁缺毋滥留首字母兜底：
+    # 立讯精密(根域是 Outlook 登录页) / 光线传媒 / 柠萌影业 / 卓越教育(zhuoyue.com 是无关站)
+    # / 万泰生物 / 扬子江药业 / 新丽传媒 / 思考乐 / 东方盛虹 / 建发房产 / 中储智运(ONLYOFFICE)
+    # / 华发股份 / 凤凰传媒 / 万达电影·阿里影业(已改名儒意/大麦，logo 与展示名不符)。
+    # ============================================================
+    # —— 互联网 / 科技 ——
+    "阿里巴巴": "alibabagroup.com", "美团": "meituan.com", "拼多多": "pinduoduo.com",
+    "快手": "kuaishou.com", "哔哩哔哩": "bilibili.com", "荣耀": "hihonor.com",
+    "米哈游": "mihoyo.com", "贝壳": "ke.com", "得物": "dewu.com",
+    "微众银行": "webank.com", "腾讯音乐": "tencentmusic.com",
+
+    # —— 金融 ——
+    "招商银行": "cmbchina.com", "工商银行": "icbc.com.cn", "建设银行": "ccb.com",
+    "中国银行": "boc.cn", "农业银行": "abchina.com", "交通银行": "bankcomm.com",
+    "中信银行": "citicbank.com", "兴业银行": "cib.com.cn", "浦发银行": "spdb.com.cn",
+    "民生银行": "cmbc.com.cn", "宁波银行": "nbcb.com.cn", "网商银行": "mybank.cn",
+    "太平洋保险": "cpic.com.cn", "中国人保": "picc.com.cn", "中国人寿": "chinalife.com.cn",
+    "中信证券": "cs.ecitic.com", "华泰证券": "htsc.com.cn", "招商证券": "cmschina.com",
+    "广发证券": "gf.com.cn", "同花顺": "10jqka.com.cn", "度小满": "duxiaoman.com",
+    "京东科技": "jd.com",
+
+    # —— 消费 / 零售 ——
+    "农夫山泉": "nongfuspring.com", "双汇": "shuanghui.net", "光明乳业": "brightdairy.com",
+    "安踏": "anta.com", "波司登": "bosideng.com", "蜜雪冰城": "mxbc.com",
+    "霸王茶姬": "chagee.com", "星巴克": "starbucks.com.cn", "欧莱雅": "loreal.com",
+    "宝洁": "pg.com", "联合利华": "unilever.com", "雀巢": "nestle.com",
+    "可口可乐": "coca-cola.com", "百事": "pepsico.com", "沃尔玛": "walmart.com",
+    "盒马": "freshippo.com", "麦当劳": "mcdonalds.com.cn", "元气森林": "chiforest.com",
+
+    # —— 制造 / 工业 ——
+    "富士康": "foxconn.com", "三一重工": "sanygroup.com", "潍柴": "weichai.com",
+    "格力": "gree.com", "美的集团": "midea.com", "海信": "hisense.com",
+    "中芯国际": "smics.com", "长鑫存储": "cxmt.com", "歌尔股份": "goertek.com",
+    "蓝思科技": "lens-technology.com", "埃斯顿": "estun.com", "福耀玻璃": "fuyaogroup.com",
+    "西门子": "siemens.com", "ABB": "abb.com", "施耐德": "se.com",
+    "霍尼韦尔": "honeywell.com", "卡特彼勒": "caterpillar.com", "松下": "panasonic.com",
+    "黑芝麻智能": "blacksesametech.com", "金域医学": "kingmed.com.cn",
+
+    # —— 汽车 / 出行 ——
+    "比亚迪": "byd.com", "吉利": "geely.com", "奇瑞": "chery.cn", "广汽": "gac.com.cn",
+    "上汽": "saicmotor.com", "一汽": "faw.com.cn", "北汽": "baicgroup.com.cn",
+    "赛力斯": "seres.cn", "极氪": "zeekrlife.com", "博世": "bosch.com",
+    "宝马": "bmw.com", "奥迪": "audi.com", "大陆集团": "continental.com",
+    "采埃孚": "zf.com", "曹操出行": "caocaokeji.cn",
+
+    # —— 医疗 / 医药 ——
+    "君实生物": "junshipharma.com", "智飞生物": "zhifeishengwu.com", "石药集团": "cspc.com.cn",
+    "齐鲁制药": "qilu-pharma.com", "华东医药": "eastchinapharm.com", "鱼跃医疗": "yuwell.com",
+    "辉瑞": "pfizer.com", "诺华": "novartis.com", "罗氏": "roche.com",
+    "阿斯利康": "astrazeneca.com", "强生": "jnj.com", "默沙东": "merck.com",
+    "赛诺菲": "sanofi.com", "拜耳": "bayer.com", "诺和诺德": "novonordisk.com",
+    "礼来": "lilly.com",
+
+    # —— 能源 / 化工 ——
+    "中国石化": "sinopec.com", "国家能源集团": "chnenergy.com.cn", "华能集团": "chng.com.cn",
+    "三峡集团": "ctg.com.cn", "隆基绿能": "longi.com", "通威": "tongwei.com",
+    "晶科能源": "jinkosolar.com", "晶澳科技": "jasolar.com", "亿纬锂能": "evebattery.com",
+    "中创新航": "calb-tech.com", "远景能源": "envision-group.com", "万华化学": "whchem.com",
+    "荣盛石化": "rongsheng-group.com", "巴斯夫": "basf.com", "陶氏": "dow.com",
+    "壳牌": "shell.com", "中化集团": "sinochem.com", "中国交建": "ccccltd.cn",
+
+    # —— 地产 / 建筑 ——
+    "万科": "vanke.com", "中海地产": "coli688.com", "龙湖集团": "longfor.com",
+    "绿城": "greentowncn.com", "金地集团": "gemdale.com", "越秀地产": "yuexiuproperty.com",
+    "滨江集团": "hzbinjiang.com", "仁恒置地": "yanlordland.com", "上海建工": "scg.com.cn",
+    "金螳螂": "goldmantis.com", "万物云": "onewo.com",
+
+    # —— 物流 / 供应链 ——
+    "顺丰": "sf-express.com", "京东物流": "jdl.com", "中通": "zto.com",
+    "韵达": "yundaex.com", "极兔": "jtexpress.com", "德邦": "deppon.com",
+    "跨越速运": "ky-express.com", "货拉拉": "huolala.cn", "满帮": "ymm56.com",
+    "日日顺": "rrs.com", "安能物流": "ane56.com", "中国邮政": "chinapost.com.cn",
+    "中外运": "sinotrans.com", "普洛斯": "glp.com", "DHL": "dhl.com",
+    "联邦快递": "fedex.com", "嘉里物流": "kln.com", "密尔克卫": "mwclg.com",
+    "东航物流": "ceairlogistics.com", "达达集团": "imdada.cn", "闪送": "ishansong.com",
+    "准时达": "jusdaglobal.com", "传化智联": "transfar.com", "百世集团": "800best.com",
+
+    # —— 传媒 / 文娱 ——
+    "爱奇艺": "iqiyi.com", "芒果超媒": "mgtv.com", "优酷": "youku.com",
+    "掌阅科技": "zhangyue.com", "网易云音乐": "music.163.com", "猫眼娱乐": "maoyan.com",
+    "博纳影业": "bonafilm.cn", "华策影视": "huacemedia.com", "开心麻花": "kaixinmahua.com.cn",
+    "东方明珠": "opg.cn", "分众传媒": "focusmedia.cn", "蓝色光标": "bluefocus.com",
+    "利欧集团": "leo-group.com", "华谊兄弟": "huayibrothers.com",
+    "快看漫画": "kuaikanmanhua.com", "视觉中国": "vcg.com", "中文在线": "chineseall.com",
+
+    # —— 教育 ——
+    "新东方": "xdf.cn", "学而思": "xueersi.com", "网易有道": "youdao.com",
+    "掌门教育": "zhangmen.com", "编程猫": "codemao.cn", "松鼠AI": "squirrelai.com",
+    "尚德机构": "sunlands.com", "达内教育": "tedu.cn", "洪恩教育": "ihuman.com",
+    "多邻国": "duolingo.com", "新航道": "xhd.cn", "金吉列": "jjl.cn",
+    "一起教育": "17zuoye.com", "传智教育": "itcast.cn", "凯叔讲故事": "kaishustory.com",
+    "启德教育": "eic.org.cn",
 }
 # 统一 lower(trim) 归一，与 domain_for_company 里 company.strip().lower() 匹配同口径。
 COMPANY_DOMAIN_OVERRIDES = {k.strip().lower(): v for k, v in _DOMAIN_OVERRIDES_RAW.items()}
@@ -413,6 +510,79 @@ def is_placeholder(img_bytes: bytes, placeholder_md5_set) -> bool:
     if not img_bytes:
         return True
     return hashlib.md5(img_bytes).hexdigest() in placeholder_md5_set
+
+
+# icon.horse 的占位图是**按域名首字符生成的字母头像**（live 实测 2026-07-30：
+# cib.com.cn 与 citicbank.com 都返回同一张 "c" 头像，md5 完全相同；czz-not-a-real-brand… 也是同一张）。
+# 旧实现只用 2 个假域名（首字母 z / n）取指纹 → 其余 34 个字母的占位图全被当成真 logo 入库，
+# 用户看到的是灰底通用字母块（比我们自己的暖色首字母兜底更丑、更不一致）。
+# 修法：按 a-z0-9 各造一个必然不存在的域名取指纹，覆盖全部字母头像。
+def placeholder_probe_domains() -> list:
+    """返回用于取 icon.horse 占位指纹的假域名（覆盖 a-z0-9 全部首字符）。"""
+    chars = [chr(c) for c in range(ord("a"), ord("z") + 1)] + [str(d) for d in range(10)]
+    return [f"{ch}zz-not-a-real-brand-9x7q.com" for ch in chars]
+
+
+_IMAGE_EXTS = (".ico", ".png", ".svg", ".jpg", ".jpeg", ".gif", ".webp")
+
+
+def is_image_bytes(img_bytes: bytes) -> bool:
+    """按内容嗅探是否真的是图片。站点 /favicon.ico 常返 200 + HTML 错误页，必须靠它挡掉。"""
+    if not img_bytes:
+        return False
+    if img_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+        return True
+    if img_bytes[:4] == b"\x00\x00\x01\x00":
+        return True
+    if img_bytes[:3] == b"\xff\xd8\xff":
+        return True
+    if img_bytes[:6] in (b"GIF87a", b"GIF89a"):
+        return True
+    if img_bytes[:4] == b"RIFF" and img_bytes[8:12] == b"WEBP":
+        return True
+    head = img_bytes[:512].lstrip().lower()
+    return head[:5] == b"<?xml" or b"<svg" in head[:256]
+
+
+def icon_score(content_type: Optional[str], img_bytes: bytes) -> int:
+    """图标「清晰度」排序分：像素宽；svg 矢量按 256 计（任何尺寸都清晰）；解析不出算 0。"""
+    if normalize_mime(content_type, img_bytes) == "image/svg+xml":
+        return 256
+    return image_width(img_bytes) or 0
+
+
+_ICON_LINK_RE = re.compile(
+    r"<link\b[^>]*\brel\s*=\s*[\"'][^\"']*\b"
+    r"(?:apple-touch-icon|apple-touch-icon-precomposed|shortcut icon|icon)\b[^\"']*[\"'][^>]*>",
+    re.I,
+)
+_HREF_RE = re.compile(r"href\s*=\s*[\"']([^\"']+)[\"']", re.I)
+
+
+def icon_link_urls(base_url: str, html: str) -> list:
+    """从公司官网首页 HTML 抽出图标候选 URL（apple-touch-icon 优先，因为通常是 180px 大图），
+    末尾补 /favicon.ico 兜底。公司官网自己声明的图标最权威，且国内公司覆盖率远高于境外 favicon 服务。"""
+    out: list = []
+    for tag in _ICON_LINK_RE.findall(html or "")[:12]:
+        m = _HREF_RE.search(tag)
+        if not m:
+            continue
+        href = m.group(1).strip()
+        if not href or href.lower().startswith(("data:", "javascript:")):
+            continue
+        out.append((0 if "apple-touch" in tag.lower() else 1, urljoin(base_url, href)))
+    out.sort(key=lambda x: x[0])
+    urls = [u for _, u in out]
+    if base_url:
+        urls.append(urljoin(base_url, "/favicon.ico"))
+    seen: set = set()
+    uniq: list = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            uniq.append(u)
+    # 封顶 4 个候选：抓取是串行的（近千家公司），每家多探一个 URL 都会摊到 CI 总时长上
+    return uniq[:4]
 
 
 def normalize_mime(content_type: Optional[str], img_bytes: bytes = b"") -> str:
