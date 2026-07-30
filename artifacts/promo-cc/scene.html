@@ -1,0 +1,873 @@
+<meta charset="utf-8">
+<title>职达 JobRadar — promo scene</title>
+<style>
+  /* ---------------------------------------------------------------
+     职达 JobRadar 宣传片场景 · 确定性渲染
+     核心约束：不用任何 CSS animation / transition。所有运动都由
+     render(t) 在 JS 里按时间 t 直接写 style —— 每一帧都是 t 的纯函数，
+     渲染器按帧步进就绝无掉帧/抖动（这是"丝滑"的真正来源）。
+     颜色/字体/圆角照抄 app/globals.css + DESIGN.md 的暖纸编辑部体系。
+  --------------------------------------------------------------- */
+  :root {
+    --paper:#f4efe6; --ink:#1a1714; --ink-soft:#2b2520; --on-ink:#f7f1e6;
+    --t2:#3f3a33; --t3:#5f594e; --t4:#8a8275; --t5:#9a9184;
+    --sky-bg:#dceafa; --sky-tx:#2f6299; --sky-bd:#b7d2ee;
+    --green-bg:#eef6e0; --green-tx:#4d6b2f; --green-bd:#bcdcae;
+    --amber-bg:#f8efd9; --amber-tx:#8a6a2a; --amber-bd:#e4d1a8;
+    --lilac-bg:#efe9f8; --lilac-tx:#6a4fa0; --lilac-bd:#cfc0e6;
+    --radar:#00e676;
+    --font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+            "SF Pro Display","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Segoe UI",sans-serif;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { background:#000; overflow:hidden; }
+  body { font-family:var(--font); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; }
+
+  #stage {
+    position:relative; overflow:hidden;
+    background-color:var(--paper);
+    /* 照 globals.css 的三层径向渐变，但把冷色那层压下来：
+       竖屏 1080×1920 里顶部那块蓝灰会铺满上半屏，把暖纸洗成惨白。
+       末尾再补一层暖白提亮中心，保住"纸"的感觉。 */
+    background-image:
+      radial-gradient(64% 40% at 88% 0%,   rgba(150,182,226,.19), transparent 64%),
+      radial-gradient(56% 42% at 0% 95%,   rgba(196,228,150,.19), transparent 62%),
+      radial-gradient(62% 46% at 100% 99%, rgba(236,198,176,.34), transparent 62%),
+      radial-gradient(88% 58% at 50% 48%,  rgba(250,244,232,.62), transparent 72%);
+  }
+  /* 摄影机层：整片持续缓慢推移 / 平移都写在这一层的 transform 上 */
+  #cam { position:absolute; inset:0; transform-origin:50% 50%; will-change:transform; }
+  .sc  { position:absolute; inset:0; }
+
+  /* 纸面颗粒：既是品牌质感，也顺手把大面积渐变的色带抖掉 */
+  #grain { position:absolute; inset:-20%; pointer-events:none; opacity:.055; mix-blend-mode:multiply;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+  #vig { position:absolute; inset:0; pointer-events:none;
+    background:radial-gradient(80% 64% at 50% 46%, transparent 54%, rgba(96,76,54,.14) 100%); }
+  #fade { position:absolute; inset:0; background:#16130f; pointer-events:none; }
+
+  .disp { letter-spacing:-.022em; font-weight:650; color:var(--ink); }
+  .cen  { position:absolute; left:0; right:0; text-align:center; }
+  .nw   { white-space:nowrap; }
+  .surface {
+    background:rgba(255,255,255,.74); border:1px solid rgba(0,0,0,.07);
+    border-radius:26px; box-shadow:0 24px 60px -28px rgba(26,23,20,.30), 0 2px 6px rgba(26,23,20,.04);
+  }
+  .chip { display:inline-flex; align-items:center; gap:8px; border-radius:999px;
+    font-weight:650; border:1px solid transparent; white-space:nowrap; }
+  .pill-ink { display:inline-flex; align-items:center; justify-content:center; gap:12px;
+    background:var(--ink); color:var(--on-ink); border-radius:999px; font-weight:650;
+    white-space:nowrap; }
+
+  /* ---- S1 噪音流 ---- */
+  .row { position:absolute; left:64px; width:952px; height:104px; border-radius:20px;
+    background:rgba(255,255,255,.58); border:1px solid rgba(0,0,0,.06); overflow:hidden; }
+  .row i { position:absolute; left:26px; top:26px; width:52px; height:52px; border-radius:15px;
+    background:rgba(26,23,20,.17); display:block; }
+  .row b, .row s { position:absolute; left:98px; display:block; border-radius:6px;
+    background:rgba(26,23,20,.27); text-decoration:none; }
+  .row b { top:31px; height:15px; }
+  .row s { top:60px; height:11px; background:rgba(26,23,20,.14); }
+
+  /* ---- S5 漏斗小方块（放大到 1080 宽下盖章可读） ---- */
+  .tile { position:absolute; width:176px; height:112px; border-radius:18px;
+    background:rgba(255,255,255,.78); border:1px solid rgba(0,0,0,.07); overflow:hidden;
+    box-shadow:0 10px 24px -16px rgba(26,23,20,.32); }
+  .tile u { position:absolute; left:16px; top:16px; width:30px; height:30px; border-radius:9px;
+    background:rgba(26,23,20,.15); text-decoration:none; display:block; }
+  .tile b, .tile s { position:absolute; left:16px; display:block; border-radius:4px; }
+  .tile b { top:58px; height:10px; width:124px; background:rgba(26,23,20,.22); }
+  .tile s { top:78px; height:8px;  width:84px;  background:rgba(26,23,20,.12); }
+  .stamp { position:absolute; left:50%; top:50%; padding:7px 15px; border-radius:999px;
+    font-size:25px; font-weight:750; white-space:nowrap; }
+
+  /* ---- S6 真实岗位卡 ---- */
+  .card { position:absolute; left:56px; width:968px; padding:34px 36px 30px;
+    background:rgba(255,255,255,.82); border:1px solid rgba(0,0,0,.07); border-radius:34px;
+    box-shadow:0 34px 80px -38px rgba(26,23,20,.34), 0 2px 6px rgba(26,23,20,.04); }
+  .card .ttl { font-size:40px; line-height:1.16; font-weight:650; color:var(--ink); letter-spacing:-.02em; }
+  .card .co  { display:flex; align-items:center; gap:12px; margin-top:16px; }
+  .card .lg  { width:44px; height:44px; border-radius:13px; display:grid; place-items:center;
+    font-size:22px; font-weight:700; color:#fff; flex:none; }
+  .card .cn  { font-size:29px; font-weight:650; color:var(--t3); }
+  .card .meta{ margin-top:14px; font-size:24px; font-weight:600; color:var(--t4); }
+  .card .chips{ margin-top:20px; display:flex; gap:12px; flex-wrap:wrap; }
+  .card .why { margin-top:22px; padding-top:20px; border-top:1px solid rgba(0,0,0,.06);
+    display:flex; flex-direction:column; gap:11px; }
+  .card .why div { font-size:24px; color:var(--t3); display:flex; align-items:center; gap:12px; }
+  .card .why em { width:11px; height:11px; border-radius:999px; background:#7aa84b; flex:none; }
+  .card .act { position:absolute; right:36px; bottom:30px; display:flex; gap:12px; align-items:center; }
+
+  #cursor { position:absolute; width:30px; height:30px; pointer-events:none; }
+  #cursor svg { display:block; filter:drop-shadow(0 3px 6px rgba(26,23,20,.34)); }
+  .caret { display:inline-block; width:3px; background:var(--ink); vertical-align:-.14em; }
+</style>
+
+<div id="stage">
+  <div id="cam">
+
+    <!-- ==================== S1 · 痛点：刷不完 ==================== -->
+    <div class="sc" id="s1">
+      <div id="s1rows"></div>
+      <div id="s1veil" style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(244,239,230,.92) 0%,rgba(244,239,230,.30) 24%,rgba(244,239,230,.38) 62%,rgba(244,239,230,.93) 100%)"></div>
+      <div class="cen disp nw" id="s1a" style="top:786px;font-size:88px;line-height:1.14">每天几百个新岗位</div>
+      <div class="cen disp nw" id="s1b" style="top:916px;font-size:88px;line-height:1.14;color:var(--t3)">刷不完，也挑不出来</div>
+    </div>
+
+    <!-- ==================== S2 · 雷达启动 / 品牌 ==================== -->
+    <div class="sc" id="s2">
+      <div id="s2ring" style="position:absolute;left:50%;top:760px"></div>
+      <div id="s2mark" style="position:absolute;left:50%;top:760px;transform-origin:50% 50%">
+        <svg width="248" height="248" viewBox="0 0 48 48" fill="none" style="display:block;margin:-124px 0 0 -124px">
+          <circle id="mr" cx="24" cy="24" r="16" stroke="#1a1714" stroke-width="1.9" opacity=".34"
+                  stroke-linecap="round" transform="rotate(-90 24 24)"/>
+          <g id="msweepg" style="transform-origin:24px 24px">
+            <path d="M24 24V8a16 16 0 0 1 13.9 8Z" fill="#00e676" opacity=".82"/>
+          </g>
+          <circle cx="24" cy="24" r="2.4" fill="#1a1714"/>
+          <circle id="mblip" cx="34" cy="16" r="2.6" fill="#00e676"/>
+        </svg>
+      </div>
+      <div class="cen" id="s2word" style="top:1000px">
+        <span class="disp nw" id="s2zh" style="font-size:112px;letter-spacing:-.03em"></span>
+        <span class="nw" id="s2en" style="display:block;margin-top:22px;font-size:34px;font-weight:750;
+              letter-spacing:.34em;color:var(--t5)"></span>
+      </div>
+      <div class="cen disp nw" id="s2tag" style="top:1262px;font-size:52px;color:var(--t3);font-weight:600">每天替你看官网</div>
+    </div>
+
+    <!-- ==================== S3 · 设置一次目标 ==================== -->
+    <div class="sc" id="s3">
+      <div class="cen disp nw" id="s3h" style="top:398px;font-size:66px">设置一次目标</div>
+      <div class="surface" id="s3w" style="position:absolute;left:78px;top:540px;width:924px;padding:48px 54px 52px">
+        <div class="nw" style="font-size:26px;font-weight:700;color:var(--t4);letter-spacing:.02em">求职偏好</div>
+
+        <div class="nw" style="margin-top:34px;font-size:26px;color:var(--t4);font-weight:600">目标岗位方向</div>
+        <div class="fld" id="f1" style="margin-top:14px">
+          <span id="f1t"></span><span class="caret" id="c1"></span>
+        </div>
+
+        <div class="nw" style="margin-top:32px;font-size:26px;color:var(--t4);font-weight:600">目标城市</div>
+        <div class="fld" id="f2" style="margin-top:14px">
+          <span id="f2t"></span><span class="caret" id="c2"></span>
+        </div>
+
+        <div class="nw" style="margin-top:32px;font-size:26px;color:var(--t4);font-weight:600">求职阶段</div>
+        <div style="margin-top:16px;display:flex;gap:14px">
+          <span class="chip stg" id="g1" style="padding:14px 30px;font-size:28px">实习</span>
+          <span class="chip stg" id="g2" style="padding:14px 30px;font-size:28px">校招</span>
+          <span class="chip stg" id="g3" style="padding:14px 30px;font-size:28px">社招</span>
+        </div>
+
+        <div class="nw" style="margin-top:32px;font-size:26px;color:var(--t4);font-weight:600">关键技能</div>
+        <div style="margin-top:16px;display:flex;gap:14px">
+          <span class="chip kw" id="k1" style="padding:12px 26px;font-size:27px">AI</span>
+          <span class="chip kw" id="k2" style="padding:12px 26px;font-size:27px">数据</span>
+          <span class="chip kw" id="k3" style="padding:12px 26px;font-size:27px">增长</span>
+        </div>
+
+        <div class="pill-ink" id="s3btn" style="margin-top:48px;width:100%;height:96px;font-size:32px">
+          保存我的雷达
+        </div>
+      </div>
+      <div class="cen nw" id="s3note" style="top:1552px;font-size:30px;color:var(--t4);font-weight:600">填一次，之后每天自动跑</div>
+    </div>
+
+    <!-- ==================== S4 · 系统替你盯着 ==================== -->
+    <div class="sc" id="s4">
+      <div id="s4rings" style="position:absolute;left:50%;top:648px"></div>
+      <div id="s4orbit" style="position:absolute;left:50%;top:648px"></div>
+      <div id="s4core" style="position:absolute;left:50%;top:648px;transform:translate(-50%,-50%)">
+        <svg width="120" height="120" viewBox="0 0 48 48" fill="none" style="display:block">
+          <circle cx="24" cy="24" r="16" stroke="#1a1714" stroke-width="1.9" opacity=".34"/>
+          <g id="s4sweep" style="transform-origin:24px 24px">
+            <path d="M24 24V8a16 16 0 0 1 13.9 8Z" fill="#00e676" opacity=".82"/>
+          </g>
+          <circle cx="24" cy="24" r="2.4" fill="#1a1714"/>
+        </svg>
+      </div>
+      <div class="cen disp nw" id="s4h" style="top:250px;font-size:66px">系统开始替你盯着</div>
+      <div id="s4stats" style="position:absolute;left:78px;top:1132px;width:924px;display:flex;flex-direction:column;gap:22px"></div>
+      <div class="cen nw" id="s4foot" style="top:1596px;font-size:28px;color:var(--t4);font-weight:600">全部来自企业官方招聘页，不是第三方转载</div>
+    </div>
+
+    <!-- ==================== S5 · 逐条核验，宁缺毋滥 ==================== -->
+    <div class="sc" id="s5">
+      <div class="cen disp nw" id="s5h" style="top:296px;font-size:60px">逐条核验，一条条问过去</div>
+      <div id="s5q" style="position:absolute;left:0;right:0;top:406px;display:flex;justify-content:center;gap:16px"></div>
+      <div id="s5grid" style="position:absolute;left:0;top:0"></div>
+      <div class="cen disp nw" id="s5end" style="top:1330px;font-size:76px;line-height:1.2">宁可空着，也不硬凑</div>
+    </div>
+
+    <!-- ==================== S6 · 今日机会 ==================== -->
+    <div class="sc" id="s6">
+      <div class="cen" id="s6eye" style="top:206px">
+        <span class="nw" style="display:inline-flex;align-items:center;gap:14px;font-size:30px;font-weight:700;color:var(--t4)">
+          <span style="width:14px;height:14px;border-radius:999px;background:var(--radar);display:inline-block"></span>
+          今日机会 · 已核验
+        </span>
+      </div>
+      <div class="cen disp nw" id="s6h" style="top:268px;font-size:66px">今天值得处理的 3 条</div>
+      <div id="s6cards"></div>
+      <div id="s6browser" style="position:absolute;left:70px;top:626px;width:940px;
+           background:rgba(255,255,255,.95);border:1px solid rgba(0,0,0,.08);border-radius:30px;overflow:hidden;
+           box-shadow:0 50px 110px -40px rgba(26,23,20,.46)">
+        <div style="height:92px;display:flex;align-items:center;gap:16px;padding:0 28px;
+             background:rgba(240,236,226,.94);border-bottom:1px solid rgba(0,0,0,.06)">
+          <span style="width:16px;height:16px;border-radius:999px;background:#e0b4ac;flex:none"></span>
+          <span style="width:16px;height:16px;border-radius:999px;background:#e7d3a3;flex:none"></span>
+          <span style="width:16px;height:16px;border-radius:999px;background:#bcdcae;flex:none"></span>
+          <span class="nw" style="flex:1;margin-left:14px;height:52px;border-radius:999px;background:rgba(255,255,255,.92);
+                border:1px solid rgba(0,0,0,.06);display:flex;align-items:center;padding:0 22px;overflow:hidden;
+                font-size:23px;color:var(--t3);font-weight:600">jobs.bytedance.com/experienced/position/…</span>
+        </div>
+        <div style="padding:44px 40px 48px">
+          <div class="nw" style="font-size:26px;font-weight:700;color:var(--t4)">字节跳动 · 官方招聘</div>
+          <div style="margin-top:18px;font-size:42px;font-weight:650;color:var(--ink);letter-spacing:-.02em;line-height:1.2">
+            平台产品经理（AI开放方向）-抖音</div>
+          <div style="margin-top:26px;display:flex;flex-direction:column;gap:14px">
+            <span style="height:14px;width:100%;border-radius:6px;background:rgba(26,23,20,.11)"></span>
+            <span style="height:14px;width:92%;border-radius:6px;background:rgba(26,23,20,.11)"></span>
+            <span style="height:14px;width:74%;border-radius:6px;background:rgba(26,23,20,.11)"></span>
+          </div>
+          <div class="pill-ink" style="margin-top:40px;height:88px;width:320px;font-size:30px">立即申请</div>
+        </div>
+      </div>
+      <div class="cen disp nw" id="s6note" style="top:1650px;font-size:44px;color:var(--t2);font-weight:620">
+        点开就是企业官网，不是转载页</div>
+    </div>
+
+    <!-- ==================== S7 · 收尾 ==================== -->
+    <div class="sc" id="s7">
+      <div id="s7mark" style="position:absolute;left:50%;top:614px;transform:translate(-50%,-50%);white-space:nowrap">
+        <span style="display:inline-flex;align-items:center;gap:30px;white-space:nowrap">
+          <span style="width:132px;height:132px;border-radius:42px;background:var(--ink);display:grid;place-items:center;flex:none">
+            <svg width="84" height="84" viewBox="0 0 48 48" fill="none">
+              <circle cx="24" cy="24" r="16" stroke="#f7f1e6" stroke-width="1.9" opacity=".40"/>
+              <g id="s7sweep" style="transform-origin:24px 24px">
+                <path d="M24 24V8a16 16 0 0 1 13.9 8Z" fill="#00e676" opacity=".86"/>
+              </g>
+              <circle cx="24" cy="24" r="2.4" fill="#f7f1e6"/>
+              <circle cx="34" cy="16" r="2.6" fill="#00e676"/>
+            </svg>
+          </span>
+          <span style="display:inline-flex;align-items:baseline;gap:18px;white-space:nowrap">
+            <span class="disp nw" style="font-size:106px;letter-spacing:-.03em">职达</span>
+            <span class="nw" style="font-size:32px;font-weight:750;letter-spacing:.30em;color:var(--t5)">JOBRADAR</span>
+          </span>
+        </span>
+      </div>
+      <div class="cen disp nw" id="s7l1" style="top:842px;font-size:74px;line-height:1.22">每天替你看官网，</div>
+      <div class="cen disp nw" id="s7l2" style="top:944px;font-size:74px;line-height:1.22">只留下值得行动的机会。</div>
+      <div class="cen" id="s7cta" style="top:1150px">
+        <span class="pill-ink" id="s7btn" style="height:112px;padding:0 62px;font-size:36px">
+          开始设置我的雷达
+          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+               stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </span>
+      </div>
+    </div>
+
+    <div id="cursor">
+      <svg viewBox="0 0 24 24" width="30" height="30">
+        <path d="M4 2l6.5 18 2.6-7.4L20 10z" fill="#1a1714" stroke="#fff" stroke-width="1.4"/>
+      </svg>
+    </div>
+  </div>
+  <div id="grain"></div>
+  <div id="vig"></div>
+  <div id="fade"></div>
+</div>
+
+<script>
+/* =================================================================
+   确定性动画引擎
+   ================================================================= */
+const W = 1080, H = 1920;
+const el = id => document.getElementById(id);
+
+const cl = (v,a=0,b=1) => v<a?a : v>b?b : v;
+const lerp = (a,b,p) => a + (b-a)*p;
+const E = {
+  lin : p => p,
+  out : p => 1-Math.pow(1-p,3),
+  out4: p => 1-Math.pow(1-p,4),
+  out5: p => 1-Math.pow(1-p,5),
+  in3 : p => p*p*p,
+  io  : p => p<.5 ? 4*p*p*p : 1-Math.pow(-2*p+2,3)/2,
+  io2 : p => p<.5 ? 2*p*p   : 1-Math.pow(-2*p+2,2)/2,
+  back: p => { const c=1.9; const q=p-1; return 1 + (c+1)*q*q*q + c*q*q; },
+  soft: p => .5-.5*Math.cos(Math.PI*cl(p)),   // 首尾都平的钟形，最"丝"
+};
+const P  = (t,s,d) => cl((t-s)/d);
+const TW = (t,s,d,a,b,e='out') => lerp(a,b,E[e](P(t,s,d)));
+function band(t, s, inD, hold, outD) {
+  if (t < s) return 0;
+  if (t < s+inD) return E.soft(P(t,s,inD));
+  if (t < s+inD+hold) return 1;
+  return 1 - E.soft(P(t, s+inD+hold, outD));
+}
+function rng(seed){ let x=seed>>>0||1; return ()=>{ x^=x<<13;x>>>=0;x^=x>>17;x^=x<<5;x>>>=0; return x/4294967296; }; }
+
+/* 只碰 transform / opacity / filter —— 合成器友好 */
+function set(node, o) {
+  if (!node) return;
+  const p = [];
+  if (o.x !== undefined || o.y !== undefined) p.push(`translate3d(${(o.x||0).toFixed(2)}px,${(o.y||0).toFixed(2)}px,0)`);
+  if (o.cx) p.push('translateX(-50%)');
+  if (o.cy) p.push('translateY(-50%)');
+  if (o.rot !== undefined) p.push(`rotate(${o.rot.toFixed(3)}deg)`);
+  if (o.s !== undefined)   p.push(`scale(${o.s.toFixed(4)})`);
+  node.style.transform = p.join(' ');
+  if (o.o !== undefined) node.style.opacity = o.o.toFixed(3);
+  if (o.blur !== undefined) node.style.filter = o.blur > .02 ? `blur(${o.blur.toFixed(2)}px)` : 'none';
+  if (o.dsp !== undefined) node.style.display = o.dsp;
+}
+function typed(text, t, s, d) {
+  return text.slice(0, Math.round(E.io2(P(t,s,d)) * text.length));
+}
+function rollNum(t, s, d, to) {
+  return Math.round(to*E.out5(P(t,s,d))).toLocaleString('en-US');
+}
+
+/* =================================================================
+   时间轴（秒）
+   ================================================================= */
+const T = {
+  s1:{a:0.00, b:5.30},
+  s2:{a:5.10, b:9.00},
+  s3:{a:8.80, b:14.10},
+  s4:{a:13.90,b:19.40},
+  s5:{a:19.20,b:25.00},
+  s6:{a:24.80,b:31.40},
+  s7:{a:31.20,b:36.00},
+};
+const DUR = 36.0;
+
+/* =================================================================
+   建 DOM
+   ================================================================= */
+const S1N = 15, s1rows = [];
+{
+  const r = rng(7);
+  const frag = document.createDocumentFragment();
+  for (let i=0;i<S1N;i++){
+    const d = document.createElement('div'); d.className='row';
+    const bw = 300 + Math.floor(r()*400), sw = 170 + Math.floor(r()*230);
+    d.innerHTML = `<i></i><b style="width:${bw}px"></b><s style="width:${sw}px"></s>`;
+    frag.appendChild(d); s1rows.push(d);
+  }
+  el('s1rows').appendChild(frag);
+}
+
+const s2rings = [];
+{
+  const host = el('s2ring');
+  for (let i=0;i<4;i++){
+    const d = document.createElement('div');
+    d.style.cssText = `position:absolute;left:0;top:0;border-radius:999px;border:2px solid rgba(0,230,118,.50);`;
+    host.appendChild(d); s2rings.push(d);
+  }
+}
+
+/* S4 涟漪 + 公司卫星（只用真实覆盖的公司；数量减到 8，轨道拉大，不再糊成一团） */
+const s4rings = [], s4chips = [];
+{
+  const host = el('s4rings');
+  for (let i=0;i<5;i++){
+    const d = document.createElement('div');
+    d.style.cssText = `position:absolute;left:0;top:0;border-radius:999px;border:2px solid rgba(0,230,118,.38);`;
+    host.appendChild(d); s4rings.push(d);
+  }
+  const co = ['字节跳动','腾讯','Apple','京东','美团','小米','比亚迪','顺丰'];
+  const oh = el('s4orbit');
+  co.forEach((name,i)=>{
+    const d = document.createElement('div');
+    d.className = 'chip';
+    d.textContent = name;
+    d.style.cssText += `position:absolute;left:0;top:0;padding:13px 26px;font-size:26px;
+      background:rgba(255,255,255,.90);border-color:rgba(0,0,0,.07);color:var(--t2);
+      box-shadow:0 12px 30px -18px rgba(26,23,20,.42);`;
+    oh.appendChild(d); s4chips.push({node:d, name, i});
+  });
+}
+
+const S4STATS = [
+  { to:1053,   unit:'家', label:'企业官方招聘源', tone:'sky'   },
+  { to:307661, unit:'个', label:'在招岗位（有完整 JD 正文）', tone:'green' },
+  { to:141218, unit:'个', label:'昨天逐条核验过的岗位', tone:'amber' },
+];
+const s4nodes = [];
+{
+  const host = el('s4stats');
+  const tone = { sky:'var(--sky-bd)', green:'var(--green-bd)', amber:'var(--amber-bd)' };
+  S4STATS.forEach(s=>{
+    const d = document.createElement('div');
+    d.style.cssText = `display:flex;align-items:center;gap:26px;padding:26px 32px;border-radius:26px;
+      background:rgba(255,255,255,.78);border:1px solid rgba(0,0,0,.06);
+      box-shadow:0 18px 44px -30px rgba(26,23,20,.34)`;
+    d.innerHTML = `
+      <span style="min-width:330px;display:flex;align-items:baseline;gap:10px;white-space:nowrap">
+        <span class="num" style="font-size:66px;font-weight:700;letter-spacing:-.03em;color:var(--ink);
+              font-variant-numeric:tabular-nums">0</span>
+        <span style="font-size:30px;font-weight:650;color:var(--t4)">${s.unit}</span>
+      </span>
+      <span style="flex:1;font-size:28px;font-weight:620;color:var(--t3);line-height:1.35">${s.label}</span>
+      <span style="width:16px;height:56px;border-radius:999px;background:${tone[s.tone]};flex:none"></span>`;
+    host.appendChild(d);
+    s4nodes.push({ box:d, num:d.querySelector('.num'), meta:s });
+  });
+}
+
+/* S5 核验问句 + 岗位小方块（5×5=25 块，放大到盖章可读） */
+const S5Q = ['还在招吗？','对口吗？','信息全吗？'];
+const s5qn = [];
+{
+  const host = el('s5q');
+  S5Q.forEach(q=>{
+    const d = document.createElement('div');
+    d.className='chip';
+    d.textContent = q;
+    d.style.cssText += `padding:14px 30px;font-size:30px;background:rgba(255,255,255,.90);
+      border-color:rgba(0,0,0,.07);color:var(--t2);box-shadow:0 12px 30px -20px rgba(26,23,20,.4)`;
+    host.appendChild(d); s5qn.push(d);
+  });
+}
+const S5C = 5, S5R = 5, S5N = S5C*S5R;
+const TW_ = 176, TH_ = 112, S5GX = 30, S5GY = 24;
+const S5X0 = (W - (S5C*TW_ + (S5C-1)*S5GX))/2, S5Y0 = 520;
+const KEEP = [7, 12, 17];
+// 活下来的三条 = 下一场 S6 的三张卡（首字母 / 配色一致，叙事接得上）
+const KEEPCO = [{ch:'字', hue:'#3f6fb0'}, {ch:'百', hue:'#4a7cc0'}, {ch:'腾', hue:'#3f8f7a'}];
+const s5tiles = [];
+{
+  const host = el('s5grid'), r = rng(23);
+  const REASON = [
+    { key:'dead', label:'已失效',   bg:'#f0ece2',         tx:'#6b655a',         bd:'rgba(0,0,0,.10)' },
+    { key:'mism', label:'不对口',   bg:'var(--sky-bg)',   tx:'var(--sky-tx)',   bd:'var(--sky-bd)' },
+    { key:'thin', label:'信息不全', bg:'var(--amber-bg)', tx:'var(--amber-tx)', bd:'var(--amber-bd)' },
+  ];
+  for (let i=0;i<S5N;i++){
+    const col = i % S5C, row = (i/S5C)|0;
+    const d = document.createElement('div'); d.className='tile';
+    const keep = KEEP.includes(i);
+    const rs = keep ? null : REASON[i % 3];
+    if (keep) {
+      const co = KEEPCO[KEEP.indexOf(i)];
+      // 留下的那三块给真内容：能看出是"岗位"，不是灰方块
+      d.innerHTML =
+        `<u style="background:${co.hue};color:#fff;display:grid;place-items:center;
+              font-size:17px;font-weight:700;line-height:1">${co.ch}</u>
+         <b style="background:rgba(26,23,20,.42);width:112px;top:58px"></b>
+         <s style="background:rgba(26,23,20,.24);width:74px;top:78px"></s>
+         <span class="k-open" style="position:absolute;right:14px;top:18px;display:inline-flex;
+               align-items:center;gap:5px;padding:4px 9px;border-radius:999px;font-size:14px;
+               font-weight:700;background:var(--green-bg);color:var(--green-tx);
+               border:1px solid var(--green-bd);white-space:nowrap;opacity:0">
+           <span style="width:7px;height:7px;border-radius:999px;background:#5f9138"></span>仍在招</span>`;
+    } else {
+      d.innerHTML = `<u></u><b></b><s></s>`
+        + `<span class="stamp" style="background:${rs.bg};color:${rs.tx};border:1px solid ${rs.bd}">${rs.label}</span>`;
+    }
+    host.appendChild(d);
+    s5tiles.push({
+      node:d, keep,
+      reason: rs ? rs.key : 'keep',
+      stamp: d.querySelector('.stamp'),
+      kopen: d.querySelector('.k-open'),
+      bx: S5X0 + col*(TW_+S5GX),
+      by: S5Y0 + row*(TH_+S5GY),
+      jx: (r()*2-1), jy: (r()*2-1), jr: (r()*2-1),
+    });
+  }
+}
+
+/* S6 三张真实岗位卡（标题 / 公司 / 城市全部取自线上库真实数据） */
+const S6DATA = [
+  { co:'字节跳动', hue:'#3f6fb0', title:'平台产品经理（AI开放方向）-抖音', city:'北京',
+    kind:'社招', tier:'高匹配', open:'仍在招',
+    why:['命中目标方向：产品经理','命中城市：北京','命中技能：AI'] },
+  { co:'百度', hue:'#4a7cc0', title:'百度网盘APP—高级用户产品经理（AI及消费方向）', city:'北京',
+    kind:'社招', tier:'高匹配', open:'仍在招',
+    why:['命中目标方向：产品经理','命中城市：北京'] },
+  { co:'腾讯', hue:'#3f8f7a', title:'微信小店-数据科学', city:'广州',
+    kind:'社招', tier:'相关机会', open:'仍在招',
+    why:['命中技能：数据'] },
+];
+const s6cards = [];
+{
+  const host = el('s6cards');
+  S6DATA.forEach(j=>{
+    const d = document.createElement('div'); d.className='card';
+    const hi = j.tier === '高匹配';
+    d.innerHTML = `
+      <div class="ttl">${j.title}</div>
+      <div class="co">
+        <span class="lg" style="background:${j.hue}">${j.co[0]}</span>
+        <span class="cn nw">${j.co}</span>
+      </div>
+      <div class="meta nw">${j.kind} · ${j.city} · 产品</div>
+      <div class="chips">
+        <span class="chip" style="padding:11px 22px;font-size:25px;
+          background:${hi?'var(--green-bg)':'var(--sky-bg)'};color:${hi?'var(--green-tx)':'var(--sky-tx)'};
+          border-color:${hi?'var(--green-bd)':'var(--sky-bd)'}">${j.tier}</span>
+        <span class="chip" style="padding:11px 22px;font-size:25px;background:var(--green-bg);
+          color:var(--green-tx);border-color:var(--green-bd)">
+          <span style="width:11px;height:11px;border-radius:999px;background:#5f9138;display:inline-block"></span>
+          ${j.open}</span>
+        <span class="chip" style="padding:11px 22px;font-size:25px;background:var(--lilac-bg);
+          color:var(--lilac-tx);border-color:var(--lilac-bd)">职业洞察</span>
+      </div>
+      <div class="why">${j.why.map(w=>`<div><em></em>${w}</div>`).join('')}</div>
+      <div class="act">
+        <span class="pill-ink" style="height:78px;padding:0 34px;font-size:27px">官网详情
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+               stroke-linecap="round"><path d="M9 5h10v10M19 5L7 17"/></svg>
+        </span>
+      </div>`;
+    host.appendChild(d); s6cards.push(d);
+  });
+}
+
+/* =================================================================
+   每帧渲染：render(t) —— 全片唯一的真相来源
+   ================================================================= */
+function render(t) {
+  /* ---------- 摄影机：全程不停的慢速推移 ---------- */
+  const KF = [
+    {t:T.s1.a,      s:1.16, x:0, y: 40},
+    {t:T.s1.b,      s:1.05, x:0, y:-30},
+    {t:T.s2.b,      s:1.02, x:0, y:  0},
+    {t:T.s3.a+1.2,  s:1.07, x:0, y: 30},
+    {t:T.s3.b,      s:1.12, x:0, y:-34},
+    {t:T.s4.a+1.0,  s:1.03, x:0, y:  0},
+    {t:T.s4.b,      s:1.08, x:0, y:-26},
+    {t:T.s5.a+1.0,  s:1.02, x:0, y:  0},
+    {t:T.s5.b,      s:1.10, x:0, y: 10},
+    {t:T.s6.a+1.4,  s:1.04, x:0, y: 20},
+    {t:T.s6.b,      s:1.09, x:0, y:-30},
+    {t:DUR,         s:1.02, x:0, y:  0},
+  ];
+  let cs=KF[0].s, cx=KF[0].x, cy=KF[0].y;
+  for (let i=0;i<KF.length-1;i++){
+    const a=KF[i], b=KF[i+1];
+    if (t>=a.t) {
+      const p = E.soft(cl((t-a.t)/(b.t-a.t)));
+      cs = lerp(a.s,b.s,p); cx = lerp(a.x,b.x,p); cy = lerp(a.y,b.y,p);
+    }
+  }
+  // 呼吸漂移：让画面永远"活着"，即使某一拍没有元素在动
+  cx += Math.sin(t*0.42) * 7;
+  cy += Math.cos(t*0.33) * 9;
+  cs += Math.sin(t*0.27) * 0.006;
+  set(el('cam'), {x:cx, y:cy, s:cs});
+
+  /* ---------- 场景可见性 ---------- */
+  const vis = {
+    s1: band(t, T.s1.a, 0.45, (T.s1.b-T.s1.a)-1.05, 0.60),
+    s2: band(t, T.s2.a, 0.45, (T.s2.b-T.s2.a)-1.00, 0.55),
+    s3: band(t, T.s3.a, 0.45, (T.s3.b-T.s3.a)-1.00, 0.55),
+    s4: band(t, T.s4.a, 0.45, (T.s4.b-T.s4.a)-1.00, 0.55),
+    s5: band(t, T.s5.a, 0.45, (T.s5.b-T.s5.a)-1.00, 0.55),
+    s6: band(t, T.s6.a, 0.45, (T.s6.b-T.s6.a)-1.00, 0.55),
+    s7: band(t, T.s7.a, 0.55, DUR-T.s7.a,           0.01),
+  };
+  for (const k in vis) {
+    const n = el(k);
+    n.style.opacity = vis[k].toFixed(3);
+    n.style.display = vis[k] < 0.002 ? 'none' : 'block';
+  }
+
+  /* ---------- 开场压黑 ---------- */
+  el('fade').style.opacity = (1 - E.soft(P(t, 0.0, 0.75))).toFixed(3);
+
+  /* ================= S1 · 痛点 ================= */
+  if (vis.s1 > 0.002) {
+    const a = T.s1.a;
+    const scroll = TW(t, a, 5.3, 0, -1080, 'lin') + Math.sin(t*0.6)*10;
+    s1rows.forEach((n,i)=>{
+      const y = 210 + i*126 + scroll;
+      const p  = E.out4(P(t, a+0.10 + i*0.055, 0.75));
+      const dim = 1 - E.soft(P(t, a+2.35 + i*0.030, 0.85)) * 0.42;
+      set(n, { x: lerp(140,0,p), y, o: p*dim, blur: lerp(9,0,p) });
+    });
+    el('s1veil').style.opacity = TW(t, a+1.9, 1.5, 0, 0.9, 'soft').toFixed(3);
+    const p1 = E.out4(P(t, a+2.15, 1.05)), p2 = E.out4(P(t, a+2.95, 1.05));
+    set(el('s1a'), { y: lerp(46,0,p1), o: p1 });
+    set(el('s1b'), { y: lerp(46,0,p2), o: p2 });
+  }
+
+  /* ================= S2 · 雷达启动 / 品牌 ================= */
+  if (vis.s2 > 0.002) {
+    const a = T.s2.a;
+    const p = E.back(P(t, a+0.15, 1.05));
+    const breathe = 1 + Math.sin((t-a)*1.5)*0.012;
+    set(el('s2mark'), { cx:1, cy:1, s: lerp(0.42,1,p)*breathe, o: E.out(P(t,a+0.15,0.5)) });
+    const C = 2*Math.PI*16, dp = E.out5(P(t, a+0.25, 1.15));
+    const mr = el('mr'); mr.style.strokeDasharray = C; mr.style.strokeDashoffset = (C*(1-dp)).toFixed(3);
+    el('msweepg').style.transform = `rotate(${TW(t, a+0.30, 2.6, 0, 900, 'out5').toFixed(2)}deg)`;
+    const blipT = (t - (a+1.55));
+    const bp = blipT < 0 ? 0 : Math.max(0, 1 - (blipT % 1.05)/1.05);
+    el('mblip').setAttribute('r', (2.6 + bp*2.2).toFixed(2));
+    el('mblip').setAttribute('opacity', (0.35 + bp*0.65).toFixed(3));
+    s2rings.forEach((n,i)=>{
+      const ph = ((t - a - 0.5 - i*0.42) / 2.0);
+      if (ph < 0 || ph > 1) { n.style.opacity = 0; return; }
+      const R = lerp(110, 460, E.out(ph));
+      n.style.width = n.style.height = (R*2)+'px';
+      n.style.marginLeft = n.style.marginTop = (-R)+'px';
+      n.style.opacity = ((1-ph)*0.46).toFixed(3);
+    });
+    el('s2zh').textContent = typed('职达', t, a+1.35, 0.55);
+    el('s2en').textContent = typed('JOBRADAR', t, a+1.80, 0.85);
+    const wp = E.out4(P(t, a+1.30, 0.8));
+    set(el('s2word'), { y: lerp(26,0,wp), o: wp });
+    const tp = E.out4(P(t, a+2.35, 0.95));
+    set(el('s2tag'), { y: lerp(30,0,tp), o: tp });
+  }
+
+  /* ================= S3 · 设置一次目标 ================= */
+  if (vis.s3 > 0.002) {
+    const a = T.s3.a;
+    const hp = E.out4(P(t, a+0.10, 0.85));
+    set(el('s3h'), { y: lerp(34,0,hp), o: hp });
+    const wp = E.out4(P(t, a+0.28, 1.0));
+    set(el('s3w'), { y: lerp(70,0,wp), s: lerp(0.965,1,wp), o: wp });
+
+    const F = [
+      { fld:'f1', txt:'f1t', car:'c1', v:'产品经理 / 增长产品', s:a+0.95 },
+      { fld:'f2', txt:'f2t', car:'c2', v:'北京 · 上海',        s:a+1.95 },
+    ];
+    F.forEach(f=>{
+      const fo = E.out(P(t, f.s-0.30, 0.45));
+      const focus = P(t, f.s-0.10, 0.25) - P(t, f.s+1.05, 0.4);
+      const n = el(f.fld);
+      n.style.cssText = `margin-top:14px;height:92px;border-radius:20px;display:flex;align-items:center;
+        padding:0 28px;font-size:32px;font-weight:620;color:var(--ink);white-space:nowrap;
+        background:rgba(255,255,255,${(0.52+0.36*fo).toFixed(2)});
+        border:2px solid rgba(${focus>0.05?'63,124,192':'0,0,0'},${focus>0.05?(0.30+0.35*focus).toFixed(2):'0.07'});
+        opacity:${fo.toFixed(3)}`;
+      el(f.txt).textContent = typed(f.v, t, f.s, 0.95);
+      const on = t > f.s-0.1 && t < f.s+1.15;
+      const blink = Math.sin((t-f.s)*22) > -0.2 ? 1 : 0;
+      const c = el(f.car);
+      c.style.height = '38px';
+      c.style.opacity = on ? blink : 0;
+      c.style.marginLeft = '3px';
+    });
+
+    [['g1',0],['g2',1],['g3',2]].forEach(([id,i])=>{
+      const p = E.back(P(t, a+2.95 + i*0.13, 0.65));
+      const on = i===2 ? E.out(P(t, a+3.55, 0.4)) : 0;
+      const n = el(id);
+      n.style.background = on>0.02 ? `rgba(26,23,20,${(0.06+0.94*on).toFixed(2)})` : 'rgba(255,255,255,.70)';
+      n.style.color = on>0.5 ? 'var(--on-ink)' : 'var(--t2)';
+      n.style.borderColor = 'rgba(0,0,0,.07)';
+      set(n, { y: lerp(20,0,p), s: lerp(0.86,1,p), o: p });
+    });
+    [['k1',0,1],['k2',1,1],['k3',2,0]].forEach(([id,i,sel])=>{
+      const p = E.back(P(t, a+3.35 + i*0.12, 0.6));
+      const on = sel ? E.out(P(t, a+3.85 + i*0.18, 0.4)) : 0;
+      const n = el(id);
+      n.style.background  = on>0.02 ? 'var(--sky-bg)' : 'rgba(255,255,255,.64)';
+      n.style.color       = on>0.02 ? 'var(--sky-tx)' : 'var(--t4)';
+      n.style.borderColor = on>0.02 ? 'var(--sky-bd)' : 'rgba(0,0,0,.07)';
+      set(n, { y: lerp(18,0,p), s: lerp(0.88,1,p), o: p });
+    });
+
+    const bp = E.out4(P(t, a+4.05, 0.7));
+    const press = P(t, a+4.62, 0.13) - P(t, a+4.80, 0.22);
+    set(el('s3btn'), { y: lerp(24,0,bp), s: lerp(0.97,1,bp) * (1 - 0.035*cl(press)), o: bp });
+    const np = E.out4(P(t, a+4.35, 0.8));
+    set(el('s3note'), { y: lerp(20,0,np), o: np*0.95 });
+
+    const cur = el('cursor');
+    const show = P(t, a+3.95, 0.3) - P(t, a+5.05, 0.35);
+    const mp = E.io(P(t, a+4.05, 0.6));
+    set(cur, { x: lerp(880, 560, mp), y: lerp(1720, 1500, mp) + (cl(press)*6), o: cl(show) });
+  } else { el('cursor').style.opacity = 0; }
+
+  /* ================= S4 · 系统替你盯着 ================= */
+  if (vis.s4 > 0.002) {
+    const a = T.s4.a;
+    const hp = E.out4(P(t, a+0.10, 0.85));
+    set(el('s4h'), { y: lerp(30,0,hp), o: hp });
+
+    const cp = E.back(P(t, a+0.25, 0.9));
+    set(el('s4core'), { cx:1, cy:1, s: lerp(0.5,1,cp), o: cp });
+    el('s4sweep').style.transform = `rotate(${((t-a)*118).toFixed(2)}deg)`;
+
+    s4rings.forEach((n,i)=>{
+      if (t < a+0.35) { n.style.opacity = 0; return; }
+      const ph = (((t - a - 0.35) / 2.4) + i*0.2) % 1;
+      const R = lerp(64, 372, E.out(ph));
+      n.style.width = n.style.height = (R*2)+'px';
+      n.style.marginLeft = n.style.marginTop = (-R)+'px';
+      n.style.opacity = ((1-ph)*0.40*E.out(P(t,a+0.35,0.6))).toFixed(3);
+    });
+
+    // 公司名沿椭圆轨道慢转；被扫描扇扫到就发绿光（真居中，不再用 margin hack）
+    s4chips.forEach(({node,i})=>{
+      const N = s4chips.length;
+      const ang = (i/N)*Math.PI*2 + (t-a)*0.16;
+      const R   = 352 + (i%2)*74;
+      const x = Math.cos(ang)*R, y = Math.sin(ang)*R*0.50;
+      const p = E.out4(P(t, a+0.55 + i*0.06, 0.8));
+      const sweep = (((t-a)*118) % 360);
+      const chipDeg = ((ang*180/Math.PI) % 360 + 360) % 360;
+      const dd = Math.abs(((chipDeg - sweep + 540) % 360) - 180);
+      const hit = cl(1 - dd/26);
+      node.style.borderColor = hit>0.05 ? `rgba(0,230,118,${(0.25+0.6*hit).toFixed(2)})` : 'rgba(0,0,0,.07)';
+      node.style.boxShadow   = `0 12px 30px -18px rgba(26,23,20,.42)` +
+        (hit>0.05 ? `, 0 0 ${(10+26*hit).toFixed(0)}px rgba(0,230,118,${(0.30*hit).toFixed(2)})` : '');
+      set(node, { x, y, cx:1, cy:1, s: lerp(0.7,1,p)*(1+0.05*hit), o: p*lerp(0.50,1,hit*0.7+0.3) });
+    });
+
+    s4nodes.forEach(({box,num,meta}, i)=>{
+      const s = a+1.55 + i*0.42;
+      const p = E.out4(P(t, s, 0.85));
+      set(box, { x: lerp(-40,0,p), o: p });
+      num.textContent = rollNum(t, s+0.05, 1.35, meta.to);
+    });
+    const fp = E.out4(P(t, a+3.45, 0.9));
+    set(el('s4foot'), { y: lerp(18,0,fp), o: fp*0.9 });
+  }
+
+  /* ================= S5 · 逐条核验，宁缺毋滥 ================= */
+  if (vis.s5 > 0.002) {
+    const a = T.s5.a;
+    const hp = E.out4(P(t, a+0.10, 0.8));
+    set(el('s5h'), { y: lerp(28,0,hp), o: hp });
+
+    const WAVE = [a+0.85, a+1.60, a+2.35];
+    s5qn.forEach((n,i)=>{
+      const p  = E.back(P(t, a+0.42 + i*0.14, 0.6));
+      const on = P(t, WAVE[i]-0.18, 0.32) - P(t, WAVE[i]+1.05, 0.5);
+      n.style.background = on>0.03 ? 'rgba(26,23,20,.92)' : 'rgba(255,255,255,.90)';
+      n.style.color      = on>0.3  ? 'var(--on-ink)' : 'var(--t2)';
+      set(n, { y: lerp(18,0,p), s: lerp(0.88,1,p)*(1+0.04*cl(on)), o: p });
+    });
+
+    const R = { dead:WAVE[0], mism:WAVE[1], thin:WAVE[2] };
+    // 留下的三块最后横排居中；scale 绕自身中心，所以按"目标中心"反解位移
+    const KEEPSC = 1.5, KCY = 900, KCX = [240, 540, 840];
+    s5tiles.forEach((tl, i)=>{
+      const inP = E.out4(P(t, a+0.30 + (i%S5C)*0.04 + ((i/S5C)|0)*0.055, 0.8));
+      const dx = Math.sin(t*0.7 + tl.jx*6.28)*3.5;
+      const dy = Math.cos(t*0.6 + tl.jy*6.28)*3.5;
+
+      if (tl.keep) {
+        const g = E.io(P(t, a+3.00, 0.95));
+        const k = KEEP.indexOf(i);
+        const tx = KCX[k] - (tl.bx + TW_/2);
+        const ty = KCY     - (tl.by + TH_/2);
+        tl.node.style.borderColor = `rgba(0,230,118,${(0.16+0.5*g).toFixed(2)})`;
+        tl.node.style.boxShadow = `0 10px 24px -16px rgba(26,23,20,.32), 0 0 ${(g*46).toFixed(0)}px rgba(0,230,118,${(0.26*g).toFixed(2)})`;
+        // 聚拢到位后才亮「仍在招」，避免小尺寸下糊成一团
+        if (tl.kopen) tl.kopen.style.opacity = E.out(P(t, a+4.00, 0.55)).toFixed(3);
+        set(tl.node, {
+          x: tl.bx + tx*g + dx*(1-g),
+          y: tl.by + ty*g + dy*(1-g),
+          s: lerp(0.85,1,inP)*lerp(1,KEEPSC,g), o: inP,
+        });
+      } else {
+        const ws = R[tl.reason];
+        const stampP = E.back(P(t, ws, 0.34));
+        const fall   = E.in3(P(t, ws+0.40, 0.72));
+        if (tl.stamp) {
+          tl.stamp.style.transform = `translate(-50%,-50%) scale(${lerp(0.55,1,stampP).toFixed(3)}) rotate(${lerp(-9,-4,stampP).toFixed(2)}deg)`;
+          tl.stamp.style.opacity = stampP.toFixed(3);
+        }
+        const gray = cl(stampP);
+        tl.node.style.filter = gray>0.02 ? `grayscale(${(gray*0.9).toFixed(2)})` : 'none';
+        set(tl.node, {
+          x: tl.bx + dx*(1-fall) + tl.jx*90*fall,
+          y: tl.by + dy*(1-fall) + fall*900,
+          rot: tl.jr*16*fall,
+          s: lerp(0.85,1,inP)*(1-0.14*fall),
+          o: inP * (1-fall) * lerp(1,0.55,gray),
+        });
+      }
+    });
+
+    const ep = E.out4(P(t, a+3.50, 0.95));
+    set(el('s5end'), { y: lerp(34,0,ep), o: ep });
+  }
+
+  /* ================= S6 · 今日机会 ================= */
+  if (vis.s6 > 0.002) {
+    const a = T.s6.a;
+    const ep = E.out4(P(t, a+0.10, 0.7));
+    set(el('s6eye'), { y: lerp(20,0,ep), o: ep*0.95 });
+    const hp = E.out4(P(t, a+0.25, 0.85));
+    set(el('s6h'), { y: lerp(30,0,hp), o: hp });
+
+    const openP = E.io(P(t, a+3.30, 0.95));
+    const YT = [398, 858, 1318];
+    s6cards.forEach((n,i)=>{
+      const p = E.out4(P(t, a+0.55 + i*0.24, 1.0));
+      set(n, {
+        y: YT[i] + lerp(120,0,p) - openP*80,
+        s: lerp(0.94,1,p) * lerp(1,0.90,openP),
+        o: p * lerp(1,0.22,openP),
+        blur: lerp(14,0,p) + openP*7,
+      });
+    });
+
+    const cur = el('cursor');
+    const show = P(t, a+2.05, 0.3) - P(t, a+3.55, 0.3);
+    const mp = E.io(P(t, a+2.15, 0.85));
+    const press = P(t, a+3.10, 0.11) - P(t, a+3.26, 0.2);
+    set(cur, { x: lerp(300, 838, mp), y: lerp(1520, 686, mp) + cl(press)*5, o: cl(show) });
+
+    const bp = E.out4(P(t, a+3.30, 1.05));
+    set(el('s6browser'), {
+      y: lerp(150,0,bp), s: lerp(0.92,1,bp), o: bp, blur: lerp(10,0,bp),
+      dsp: bp<0.002 ? 'none' : 'block',
+    });
+    const np = E.out4(P(t, a+4.35, 0.9));
+    set(el('s6note'), { y: lerp(26,0,np), o: np });
+  }
+
+  /* ================= S7 · 收尾 ================= */
+  if (vis.s7 > 0.002) {
+    const a = T.s7.a;
+    const mp = E.back(P(t, a+0.15, 1.05));
+    const breathe = 1 + Math.sin((t-a)*1.25)*0.008;
+    set(el('s7mark'), { cx:1, cy:1, s: lerp(0.80,1,mp)*breathe, o: E.out(P(t,a+0.15,0.6)) });
+    el('s7sweep').style.transform = `rotate(${((t-a)*100).toFixed(2)}deg)`;
+    const p1 = E.out4(P(t, a+0.60, 0.95)), p2 = E.out4(P(t, a+0.80, 0.95));
+    set(el('s7l1'), { y: lerp(34,0,p1), o: p1 });
+    set(el('s7l2'), { y: lerp(34,0,p2), o: p2 });
+    const cp = E.back(P(t, a+1.30, 0.85));
+    const glow = 0.5+0.5*Math.sin((t-a)*2.0);
+    set(el('s7cta'), { y: lerp(26,0,cp), s: lerp(0.92,1,cp), o: cp });
+    el('s7btn').style.boxShadow = `0 22px 60px -26px rgba(26,23,20,${(0.44+0.14*glow).toFixed(2)})`;
+    el('cursor').style.opacity = 0;
+  }
+}
+
+/* =================================================================
+   渲染器接口
+   ================================================================= */
+window.__DUR = DUR;
+window.__setSize = (w,h) => {
+  const st = el('stage');
+  st.style.width = w+'px'; st.style.height = h+'px';
+  // 竖屏 1080×1920 是基准；其他画幅整体等比缩放居中，版式不重排
+  const k = Math.min(w/W, h/H);
+  const cam = el('cam');
+  cam.style.width = W+'px'; cam.style.height = H+'px';
+  cam.style.left = ((w-W*k)/2)+'px'; cam.style.top = ((h-H*k)/2)+'px';
+  cam.style.right='auto'; cam.style.bottom='auto';
+  window.__k = k;
+};
+window.__render = (t) => {
+  render(Math.max(0, Math.min(DUR, t)));
+  const cam = el('cam'), k = window.__k || 1;
+  if (k !== 1) cam.style.transform = `scale(${k}) ` + cam.style.transform;
+};
+
+window.__setSize(W, H);
+window.__render(0);
+</script>
