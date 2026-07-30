@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
+import { verifyRequestClaims } from "@/lib/auth-claims";
 import { createServiceClient } from "@/lib/supabaseService";
 import { searchJobs } from "@/lib/job-search";
 import { searchJobsStore } from "@/lib/jobs-store/search";
@@ -20,9 +21,7 @@ export const preferredRegion = ["hkg1", "sin1"];
 // 筛选/排序逻辑复用 lib/job-filter（与浏览器端同一份），结果逐字段一致。
 export async function GET(request: NextRequest) {
   const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await verifyRequestClaims(supabase);
 
   const p = request.nextUrl.searchParams;
   const bool = (k: string) => p.get(k) === "1" || p.get(k) === "true";

@@ -21,7 +21,7 @@ export type ApiAuthResult =
 
 export async function requireUser(): Promise<ApiAuthResult> {
   const supabase = await createServerSupabase();
-  // 本地 JWT 验签，零网络。/api/* 不经 middleware，23 个路由各自调用本函数——
+  // 本地 JWT 验签，零网络。/api/* 不经 middleware，各路由自行调用本函数——
   // 改造前这里是每个 API 各一次跨洋 getUser()，是「页面出来了但一直在转圈」的主因。
   const user = await verifyRequestClaims(supabase);
   if (!user) {

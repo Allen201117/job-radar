@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
+import { verifyRequestClaims } from "@/lib/auth-claims";
 import { createServiceClient } from "@/lib/supabaseService";
 import liveSearch from "@/lib/live-search";
 import { jobsStoreEnabled } from "@/lib/jobs-store/read";
@@ -37,9 +38,7 @@ const INLINE_ATS_CAP = Number(process.env.LIVE_ATS_SOURCE_LIMIT || 8);
 
 export async function GET(request: NextRequest) {
   const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await verifyRequestClaims(supabase);
 
   if (!user) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });

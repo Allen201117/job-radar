@@ -20,7 +20,15 @@ function loadAvailabilityRoute({
 } = {}) {
   const calls = { store: 0, rpc: 0, from: 0 };
   const supabase = {
-    auth: { getUser: async () => ({ data: { user } }) },
+    // 路由改走本地 JWT 验签（lib/auth-claims）：身份取自 claims 的 sub / email。
+    // 测试环境未设 NEXT_PUBLIC_SUPABASE_URL，故 JWKS 取不到、不会发起任何网络请求。
+    auth: {
+      getUser: async () => ({ data: { user } }),
+      getClaims: async () =>
+        user
+          ? { data: { claims: { sub: user.id, email: user.email } }, error: null }
+          : { data: null, error: { message: "no session" } },
+    },
     from(table) {
       calls.from += 1;
       if (table === "company_profiles") return resolvedQuery({ data: [profile], error: null });
