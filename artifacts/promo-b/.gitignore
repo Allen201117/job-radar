@@ -1,0 +1,9 @@
+# 渲染产物与审阅中间物：只提交源（scene.html / render.py / build.sh），成片本地生成
+frames/
+.work/
+out/
+stills/
+stills2/
+chk*/
+crushchk*/
+sheet_*.png
