@@ -148,6 +148,15 @@ test("jobs-store city-only search stays on FTS (全表覆盖) 且软城市仍保
   assert.deepEqual(result.jobs[0].__match.degradedFields, ["city"]);
 });
 
+// 翻页调用与「命中页回补展示列」的调用要分开看：回补走 `where id in (...)`，
+// 末位参数是 id 而不是 offset，所以按类型区分（数字=翻页 offset，字符串=回补）。
+function splitScanCalls(calls) {
+  return {
+    pageOffsets: calls.filter((c) => typeof c === "number"),
+    hydrated: calls.filter((c) => typeof c === "string"),
+  };
+}
+
 test("jobs-store scan keeps scanning the budget before match ranking", async () => {
   const calls = [];
   const { searchJobsStore } = loadJobsStore(async (sql, params) => {
@@ -164,7 +173,13 @@ test("jobs-store scan keeps scanning the budget before match ranking", async () 
 
   const result = await searchJobsStore({ ...filters, sortBy: "match" }, prefs, [], 0, 1);
 
-  assert.deepEqual(calls, [0, 1000]);
+  // match 必须看满预算才能排序 → 按 BATCH_SIZES 首批并行取 4 页（不再串行逐页 await）。
+  // 数据在第 2 页就见底时，本批余下几页会空跑——这是换取「28 页不再顺序叠加」的代价，
+  // 且过量取数被限制在一个批次内；生产库 30 万+ active 行，预算内页页都满。
+  const { pageOffsets, hydrated } = splitScanCalls(calls);
+  assert.deepEqual(pageOffsets, [0, 1000, 2000, 3000]);
+  // 候选阶段不再拉展示列 → 命中页必须回补一次，否则前端拿不到 deadline/canonical_jd_url 等。
+  assert.deepEqual(hydrated, ["high"]);
   assert.equal(result.jobs[0].id, "high");
   assert.equal(result.jobs[0].match_score, 30);
 });
@@ -180,7 +195,10 @@ test("jobs-store scan still stops early for newest ranking", async () => {
 
   const result = await searchJobsStore({ ...filters, sortBy: "newest" }, prefs, [], 0, 1);
 
-  assert.deepEqual(calls, [0]);
+  // newest 攒够 need 就能停 → 保持串行逐页，**不得**为了并行白拉后面几页（只翻 1 页）。
+  const { pageOffsets, hydrated } = splitScanCalls(calls);
+  assert.deepEqual(pageOffsets, [0]);
+  assert.deepEqual(hydrated, ["new-0"]);
   assert.equal(result.jobs[0].id, "new-0");
 });
 
