@@ -41,7 +41,6 @@ from logo_util import (
     icon_link_urls,
     icon_score,
     is_image_bytes,
-    is_placeholder,
     is_platform_domain,
     page_verifies_company,
     placeholder_probe_domains,
@@ -73,16 +72,31 @@ def _get(client: httpx.Client, url: str, timeout: Optional[float] = None) -> Opt
     return None
 
 
-def collect_placeholder_fingerprints(client: httpx.Client) -> set:
-    """抓一批必然不存在的域名的 icon.horse 图，其 md5 即占位指纹（用于后续过滤）。
+def collect_placeholder_fingerprints(client: httpx.Client) -> dict:
+    """取 icon.horse 占位图指纹，返回 {域名首字符: md5}。
 
-    占位图按域名首字符生成字母头像 → 必须 a-z0-9 各取一遍，否则漏掉的字母会被当成真 logo 入库。
+    占位图是**按域名首字符生成的字母头像**，且「域名不存在」与「域名存在但没图」返回的是同一张
+    （live 验证：rrs.com / transfar.com / yuwell.com 与同首字母的假域名 md5 逐字节相同）
+    → 用假域名逐字符取一遍即可覆盖两种情况。
+    ⚠️ 这 36 个探测请求**必须都成功**，指纹才是完整的；实测偶发失败（曾只取到 29 个），
+    缺哪个字符，那个字符的灰底字母块就会被当真 logo 入库（用户看到的「没有 logo」正是这个）。
+    所以缺失的字符会被记下来，`fetch_one` 对这些字符**直接不用 icon.horse**（宁缺毋滥）。
     """
-    prints = set()
+    prints: dict = {}
     for d in placeholder_probe_domains():
-        r = _get(client, _ICON_HORSE.format(domain=d))
-        if r is not None and r.status_code == 200 and r.content:
-            prints.add(hashlib.md5(r.content).hexdigest())
+        ch = d[0]
+        for attempt in range(3):  # 多试几次：指纹不全会直接导致假 logo 入库，值得多花几个请求
+            r = _get(client, _ICON_HORSE.format(domain=d))
+            if r is not None and r.status_code == 200 and r.content:
+                prints[ch] = hashlib.md5(r.content).hexdigest()
+                break
+            # icon.horse 对连发请求会限流（CI 实测 36 个探测只成功 12 个）→ 退避后再试
+            time.sleep(1.5 * (attempt + 1))
+        time.sleep(0.3)
+    missing = [d[0] for d in placeholder_probe_domains() if d[0] not in prints]
+    if missing:
+        print(f"[logo] ⚠️ 占位指纹缺 {len(missing)} 个字符（{''.join(missing)}）"
+              f"：这些首字符的域名将不使用 icon.horse", file=sys.stderr)
     return prints
 
 
@@ -124,7 +138,7 @@ def fetch_site_icon(client: httpx.Client, domain: str) -> Optional[dict]:
     return None
 
 
-def fetch_one(client: httpx.Client, domain: str, placeholders: set) -> Optional[dict]:
+def fetch_one(client: httpx.Client, domain: str, placeholders: dict) -> Optional[dict]:
     """抓一家公司的 logo，三源取最清晰者。返回 {bytes, content_type, width, source} 或 None。
 
     来源优先级按「清晰度」排（都过内容嗅探门）：
@@ -149,25 +163,30 @@ def fetch_one(client: httpx.Client, domain: str, placeholders: set) -> Optional[
         if site:
             cands.append(site)
 
-    # 前两路都空 → icon.horse 兜底（救「域名准确但 DuckDuckGo 未收录、官网又打不开」的公司）
+    # 前两路都空 → icon.horse 兜底（救「域名准确但 DuckDuckGo 未收录、官网又打不开」的公司）。
+    # 只有拿到该首字符的占位指纹时才敢用它：没指纹就无法区分「真 logo」和「灰底字母块」，
+    # 宁可退回我们自己的暖色首字母兜底（更好看、风格统一），也不入一张通用灰块。
     if not cands:
-        ih = _get(client, _ICON_HORSE.format(domain=domain))
-        if (
-            ih is not None
-            and ih.status_code == 200
-            and ih.content
-            and not is_placeholder(ih.content, placeholders)
-        ):
-            cand = _candidate(ih.content, ih.headers.get("content-type"), "iconhorse")
-            if cand:
-                cands.append(cand)
+        ch = next((c for c in domain.lower() if c.isalnum()), "")
+        fp = placeholders.get(ch)
+        if fp:
+            ih = _get(client, _ICON_HORSE.format(domain=domain))
+            if (
+                ih is not None
+                and ih.status_code == 200
+                and ih.content
+                and hashlib.md5(ih.content).hexdigest() != fp
+            ):
+                cand = _candidate(ih.content, ih.headers.get("content-type"), "iconhorse")
+                if cand:
+                    cands.append(cand)
 
     if not cands:
         return None
     return max(cands, key=lambda c: (c["width"], len(c["bytes"])))
 
 
-def find_fake_logo_keys(sb, placeholders: set) -> set:
+def find_fake_logo_keys(sb, placeholders: dict) -> set:
     """复检**已入库**的图，找出「假 logo」（应重抓/退回首字母兜底）。两条判据：
 
     1. md5 命中 icon.horse 占位指纹 —— 旧实现只取了 2 个字母的指纹，其余 34 个字母的
@@ -200,10 +219,11 @@ def find_fake_logo_keys(sb, placeholders: set) -> set:
         md5 = hashlib.md5(raw).hexdigest()
         by_md5.setdefault(md5, []).append((r["company_key"], (r.get("domain") or "").lower()))
 
+    fp_values = set(placeholders.values())
     bad: set = set()
     for md5, entries in by_md5.items():
         distinct_domains = {d for _, d in entries if d}
-        if md5 in placeholders or len(distinct_domains) > 1:
+        if md5 in fp_values or len(distinct_domains) > 1:
             bad.update(k for k, _ in entries)
     print(f"[logo] 复检 {len(rows)} 张已入库图 → {len(bad)} 张判定为假 logo，将重抓")
     return bad
@@ -329,7 +349,7 @@ def main() -> None:
         timeout=_TIMEOUT, follow_redirects=True, headers={"User-Agent": "job-radar-logo/1.0"}
     ) as client:
         placeholders = collect_placeholder_fingerprints(client)
-        print(f"[logo] 占位指纹 {len(placeholders)} 个；待处理公司 {len(seen)} 家")
+        print(f"[logo] 占位指纹 {len(placeholders)}/36 个字符；待处理公司 {len(seen)} 家")
 
         # 忽略新鲜度、强制重抓的 key 集合（补了域名覆盖表 / 修复假 logo 时用）
         stale_keys: set = set()
