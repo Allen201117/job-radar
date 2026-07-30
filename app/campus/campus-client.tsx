@@ -225,8 +225,8 @@ export default function CampusClient({
   // 未取回前展开区显示加载态；失败则清掉请求标记，下次展开可重试。
   const [fullJobs, setFullJobs] = useState<Map<string, any[]>>(new Map());
   const fullJobsRequested = useRef<Set<string>>(new Set());
+  // 手风琴同时只可能展开一家（expandedPattern），所以这里只取当前那一家。
   useEffect(() => {
-    // 手风琴下最多只有一家展开 → 一次只取一家的完整行（取过的留在 fullJobs 里，重复展开不再请求）。
     const pattern = expandedPattern;
     if (!pattern || fullJobsRequested.current.has(pattern)) return;
     const card = cards.find((c) => c.pattern === pattern);
@@ -245,7 +245,7 @@ export default function CampusClient({
         const data = await resp.json().catch(() => null);
         if (cancelled) return;
         if (!data?.ok) {
-          fullJobsRequested.current.delete(pattern);
+          fullJobsRequested.current.delete(pattern); // 失败清标记，收起再展开可重试
           return;
         }
         // 校招链路统一用 city（getCampusZone 的 SQL 是 `j.location as city`），而按 id 取回的是

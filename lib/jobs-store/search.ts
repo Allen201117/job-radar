@@ -20,6 +20,56 @@ import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 const FTS_CAP = 8000;
 const DB_PAGE = 1000;
 const SCAN_BUDGET = 28000;
+
+/**
+ * 扫描候选缓存（同一 lambda 实例内跨请求共享）。
+ *
+ * **为什么可以共享**：这批候选行**与用户无关**——where 只有 `status='active'` + 求职范围
+ * （job_scope / target_regions）+ 招聘类型超集下推，排序固定 `first_seen_at desc`。
+ * 用户偏好只参与之后的打分/精筛，而那一步在 `sortAndFilterJobs` 里是
+ * `{...job, match_score, …}` **复制**后再写（lib/scoring.ts:224），不碰原行。
+ *
+ * ⚠️ **不变量：任何人不得就地改写这些行。** 唯一例外是 `annotateSourceAdapter` 写
+ * `source_adapter`，它的值来自全局 sources 映射、与用户无关，因此幂等安全。
+ * 若将来新增「按用户往行对象写回」的逻辑，**必须先深拷贝**，否则会把一个用户的数据泄给另一个。
+ *
+ * **收益**：一次 /api/jobs/search 要从香港库拉满 SCAN_BUDGET=2.8 万行（实测 summary 15MB +
+ * 其余列 4.3MB），而 sortBy=match 默认每次都得看满预算。缓存后同实例后续请求零传输；
+ * in-flight 去重让并发请求只拉一次（改造前两个用户同时开 /jobs = 各拉 20MB）。
+ * TTL 60s：岗位库由爬虫按天级写入，60 秒的陈旧对用户不可见。
+ */
+const SCAN_CACHE_TTL_MS = 60_000;
+/** 最多缓存几个不同候选组合（求职范围 × 招聘类型）。每份约 20MB，只留最热的几个，别把内存吃满。 */
+const SCAN_CACHE_MAX = 2;
+const scanCache = new Map<string, { expiresAt: number; rows: any[] }>();
+const scanInFlight = new Map<string, Promise<any[]>>();
+
+/** 供测试重置模块级缓存（本文件每个用例都是新模块实例，这里只为显式清理留个口子）。 */
+export function __resetScanCache(): void {
+  scanCache.clear();
+  scanInFlight.clear();
+}
+
+async function fetchScanCandidates(sql: string, params: unknown[]): Promise<any[]> {
+  const key = `${sql}|${JSON.stringify(params)}`;
+  const hit = scanCache.get(key);
+  if (hit && hit.expiresAt > Date.now()) return hit.rows;
+  const pending = scanInFlight.get(key);
+  if (pending) return pending;
+
+  const p = (async () => {
+    try {
+      const rows = (await jobsQuery(sql, params)) as any[];
+      if (!scanCache.has(key) && scanCache.size >= SCAN_CACHE_MAX) scanCache.clear();
+      scanCache.set(key, { expiresAt: Date.now() + SCAN_CACHE_TTL_MS, rows });
+      return rows;
+    } finally {
+      scanInFlight.delete(key);
+    }
+  })();
+  scanInFlight.set(key, p);
+  return p;
+}
 // ⚠️⚠️ 别再尝试「并行取候选页」来加速这条扫描路径 —— 2026-07-30 线上实测两次都更差：
 //   1) 照搬 lib/job-search.ts 的 BATCH_SIZES=[4,8,16] → 直接 500
 //      ({"error":"timeout exceeded when trying to connect"})。两条路径机制不同不能照搬：
@@ -209,9 +259,14 @@ async function searchViaScan(
     // 真正的大头是**把候选传回来**——2.8 万行里 summary 就占 15 MB（其余关键列仅 4.3 MB）。
     // 而 summary 砍不掉：classifyJobFunction / keywordMatchTier 的兄弟组排除 / 校招信号判定
     // 都要读它（见 lib/china-keyword-expansion.js:709/753/623），砍了就是静默改坏匹配精度。
-    // → 下一步真解法是**物化派生字段**（job_function / 招聘类型等落成列，写入时算好），
-    //   让候选取数不再需要 summary。属 schema 改动，见设计文档。
-    exhausted = absorb(await fetchRows(SCAN_BUDGET, 0), SCAN_BUDGET);
+    // → 更进一步的解法是**物化派生字段**（job_function / 招聘类型等落成列，写入时算好），
+    //   让候选取数根本不需要 summary。属 schema 改动，见设计文档。
+    // 在物化之前，先用「候选与用户无关」这一点把重复传输吃掉：走进程内缓存 + 并发去重
+    // （见上面 fetchScanCandidates 的注释与不变量）。
+    exhausted = absorb(
+      await fetchScanCandidates(sql, [...params, SCAN_BUDGET, 0]),
+      SCAN_BUDGET,
+    );
   } else {
     // newest 攒够 need 即停 → 保持逐页，不为了少几次往返把 2.8 万行全拉回来。
     // （并行取页已实测更慢/会 500，见上面常量位置的记录，别再改回去。）
