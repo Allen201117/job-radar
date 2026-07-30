@@ -20,10 +20,14 @@ import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 const FTS_CAP = 8000;
 const DB_PAGE = 1000;
 const SCAN_BUDGET = 28000;
-// 扫描路径每批并行取几页（与 lib/job-search.ts 同一组值）：4+8+16=28 页 × DB_PAGE 正好铺满
-// SCAN_BUDGET。注意 lib/jobs-store/client.ts 的连接池 max:5，所以后面的大批次实际由池限流成
-// 最多 5 个并发、其余排队——这是有意的：既拿到并行收益，也不会拿几十个连接去压香港库。
-const BATCH_SIZES = [4, 8, 16];
+// 扫描路径每批并行取几页。
+// ⚠️ 这个数**必须小于** lib/jobs-store/client.ts 的连接池 max（当前 5），不能照搬
+// lib/job-search.ts 的 BATCH_SIZES=[4,8,16]：那份走 supabase-js（HTTP，无连接池上限），
+// 而这里直连 pg —— 池满后多出来的获取请求不会乖乖排队，而是等到
+// connectionTimeoutMillis(8s) 就抛 "timeout exceeded when trying to connect"，
+// 整条接口 500。（2026-07-30 线上实测踩过：批次 8/16 直接把搜索打成 500。）
+// 取 3 留 2 条余量：一条给命中页 hydrate，一条给同实例的并发请求。
+const SCAN_CONCURRENCY = 3;
 
 // 候选取数只拉「打分/精筛」真正要用的列，把纯展示/写库列（正文之外最肥的 canonical_jd_url 等）留到
 // 分页命中后再补——函数固定在美东、库在香港，跨太平洋每少传一列 × 数千行都直接缩短耗时。JS 打分/精筛
@@ -189,14 +193,12 @@ async function searchViaScan(
   };
 
   if (filters.sortBy === "match") {
-    // match 必须看满 SCAN_BUDGET 才能按分排序 → 页数是定的，分批并行取（复刻 lib/job-search.ts
-    // 的 BATCH_SIZES，4+8+16=28 页刚好铺满预算）。此前是串行逐页 await：28 趟往返 + 28 次传输
-    // 顺序叠加，实测整条接口 25s。批内并行、批间仍按页序 absorb → matched 顺序与 exhausted
-    // 语义同串行版完全一致，纯粹少干等。
-    for (const bsize of BATCH_SIZES) {
-      if (exhausted || nextOff >= SCAN_BUDGET) break;
+    // match 必须看满 SCAN_BUDGET 才能按分排序 → 页数是定的（28 页），按 SCAN_CONCURRENCY 分批
+    // 并行取。此前是串行逐页 await：28 趟往返 + 28 次传输顺序叠加，实测整条接口 25s。
+    // 批内并行、批间仍按页序 absorb → matched 顺序与 exhausted 语义同串行版完全一致。
+    while (!exhausted && nextOff < SCAN_BUDGET) {
       const offsets: number[] = [];
-      for (let k = 0; k < bsize && nextOff < SCAN_BUDGET; k++, nextOff += DB_PAGE) {
+      for (let k = 0; k < SCAN_CONCURRENCY && nextOff < SCAN_BUDGET; k++, nextOff += DB_PAGE) {
         offsets.push(nextOff);
       }
       const pages = await Promise.all(offsets.map((o) => fetchPage(o)));
