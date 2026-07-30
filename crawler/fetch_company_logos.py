@@ -39,6 +39,7 @@ from logo_util import (
     icon_score,
     is_image_bytes,
     is_placeholder,
+    is_platform_domain,
     page_verifies_company,
     placeholder_probe_domains,
     platform_slug,
@@ -280,7 +281,9 @@ def main() -> None:
         for r in rows:
             existing[r["company_key"]] = r.get("fetched_at")
             prev_status[r["company_key"]] = r.get("status")
-            if r.get("domain"):
+            # 复用库里已核验过的域名，但**平台域名不复用**：早期把 hotjob.cn / iguopin.com 这类
+            # 共享平台域名当成公司域名存下来了，直接复用会绕过下面的 slug 兜底、并可能显示平台 logo。
+            if r.get("domain") and not is_platform_domain(r["domain"]):
                 known_domain[r["company_key"]] = r["domain"]
     except Exception as e:  # noqa: BLE001
         print(f"[logo] 读取已有记录失败（视为空）：{e}", file=sys.stderr)
@@ -301,13 +304,17 @@ def main() -> None:
     # 而 sources.company 常是全称或英文名 → 短名在 company_logos 里没有行，前端只能全走首字母兜底。
     # 这些公司没有 source_url，域名只能来自 COMPANY_DOMAIN_OVERRIDES（配不到就 not_found，仍是首字母兜底）。
     must_apply_added = 0
+    must_apply_keys: set = set()
     for companies in must_apply.by_industry().values():
         for row in companies:
             name = (row.get("name") or "").strip()
             if not name:
                 continue
             key = name.lower()
+            must_apply_keys.add(key)
             if key not in seen:
+                # 追加而不是插到前面：同名公司若已在 sources 里，要保住它的 source_url（域名推导要用）。
+                # 优先级靠后面对 targets 排序来给，不靠这里的插入顺序。
                 seen[key] = (name, "")
                 must_apply_added += 1
     print(f"[logo] 必投清单补入 {must_apply_added} 个品牌短名")
@@ -345,7 +352,14 @@ def main() -> None:
                 except Exception:
                     pass
             targets.append((key, company, source_url))
-        print(f"[logo] 需抓取 {len(targets)} 家（跳过新鲜的 {stats['skip']} 家），并发 {_WORKERS}")
+        # 必投清单公司排前面：它们是校招专区/北极星看板上真正露脸的品牌，价值最高。
+        # 这样即使 CI 超时被砍，先落地的也是最该有 logo 的那批（长尾中小公司下一轮再补）。
+        targets.sort(key=lambda t: 0 if t[0] in must_apply_keys else 1)
+        print(
+            f"[logo] 需抓取 {len(targets)} 家（其中必投清单 "
+            f"{sum(1 for t in targets if t[0] in must_apply_keys)} 家排在前面）"
+            f"，跳过新鲜的 {stats['skip']} 家，并发 {_WORKERS}"
+        )
 
         def work(item):
             """单家公司：定域名 → 抓图 → 返回待写行（异常不外抛，坏一家不拖垮整批）。"""
