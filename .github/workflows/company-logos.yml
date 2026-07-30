@@ -14,8 +14,8 @@ on:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    # 首跑含 slug 域名核验（逐个抓候选域名首页）会久一些；核验通过的域名落库，后续跑直接复用不再核验。
-    timeout-minutes: 90
+    # 首跑含 slug 域名核验 + 官网图标探测（逐个抓首页）会久一些；核验通过的域名落库，后续跑直接复用不再核验。
+    timeout-minutes: 180
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -29,5 +29,12 @@ jobs:
       - name: Install crawler dependencies
         run: pip install -r crawler/requirements.txt
 
+      # 常规跑就带上两个修复开关：
+      #   --refetch-not-found  上次没抓到的重试（域名覆盖表补了新公司后能自动补上）
+      #   --repair-placeholders 复检已入库的假 logo（icon.horse 灰底字母块 / 跨域名重复图）并重抓
+      # 二者都只影响「忽略新鲜度」的判断，不会把全库重抓一遍（那是 --force）。
       - name: Fetch company logos
-        run: python crawler/fetch_company_logos.py ${{ github.event.inputs.force == 'true' && '--force' || '' }}
+        run: |
+          python crawler/fetch_company_logos.py \
+            --refetch-not-found --repair-placeholders \
+            ${{ github.event.inputs.force == 'true' && '--force' || '' }}
