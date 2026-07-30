@@ -16,8 +16,14 @@ function createSupabase({ eventError = null } = {}) {
     resumeRows,
     profileRows,
     preferenceRows,
+    // 路由改走本地 JWT 验签（lib/auth-claims）：身份取自 claims 的 sub / email。
+    // 测试环境未设 NEXT_PUBLIC_SUPABASE_URL，故 JWKS 取不到、不会发起任何网络请求。
     auth: {
       getUser: async () => ({ data: { user: USER } }),
+      getClaims: async () => ({
+        data: { claims: { sub: USER.id, email: USER.email } },
+        error: null,
+      }),
     },
     from(table) {
       if (table === "events") {

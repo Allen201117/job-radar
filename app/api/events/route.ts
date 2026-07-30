@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
+import { verifyRequestClaims } from "@/lib/auth-claims";
 import { parseEventInput } from "@/lib/track";
 
 export const runtime = "nodejs";
@@ -10,9 +11,7 @@ export const runtime = "nodejs";
 export async function POST(request: NextRequest) {
   try {
     const supabase = await createServerSupabase();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const user = await verifyRequestClaims(supabase);
     if (!user) {
       return new NextResponse(null, { status: 204 });
     }

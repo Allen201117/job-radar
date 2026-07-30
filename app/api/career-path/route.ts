@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
+import { verifyRequestClaims } from "@/lib/auth-claims";
 import { jobsStoreEnabled, activeJobCountsByCompany } from "@/lib/jobs-store/read";
 import { companyMatches, findCompanyProfile } from "@/lib/insight-match";
 import { ITEM_COLUMNS, groupGatedInsights } from "@/lib/insight-bundle";
@@ -13,9 +14,7 @@ const FALLBACK_LIMIT = 8;
 // ③ 个性化职业路径：确定性引擎。锚定用户目标公司 + 画像 + 洞察层 + jobs 在招计数。
 export async function GET() {
   const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await verifyRequestClaims(supabase);
   if (!user) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }

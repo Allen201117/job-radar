@@ -8,7 +8,15 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
 
 function authenticatedSupabase(role = "admin") {
   return {
-    auth: { getUser: async () => ({ data: { user: USER } }) },
+    auth: {
+      getUser: async () => ({ data: { user: USER } }),
+      // requireUser 改走本地 JWT 验签（lib/auth-claims）：身份取自 claims 的 sub / email。
+      // 测试环境未设 NEXT_PUBLIC_SUPABASE_URL，故 JWKS 取不到、不会发起任何网络请求。
+      getClaims: async () => ({
+        data: { claims: { sub: USER.id, email: USER.email } },
+        error: null,
+      }),
+    },
     from(table) {
       if (table === "profiles") {
         return resolvedQuery({ data: { role }, error: null });
@@ -67,7 +75,10 @@ test("shared requireUser returns 401 when Supabase has no authenticated user", a
   const apiAuth = loadRoute("lib/apiAuth.ts", {
     "./auth": {
       createServerSupabase: async () => ({
-        auth: { getUser: async () => ({ data: { user: null } }) },
+        auth: {
+          getUser: async () => ({ data: { user: null } }),
+          getClaims: async () => ({ data: null, error: { message: "no session" } }),
+        },
       }),
     },
   });

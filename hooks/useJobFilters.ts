@@ -144,8 +144,16 @@ export function useJobFilters({
     }
   }, []);
 
-  // 筛选变化 → 防抖 300ms 后重搜（offset 0）。挂载时也会跑一次（应用初始筛选）。
+  // 挂载首搜是否已发起。首搜没有「用户正在连续输入」这回事，防抖那 300ms 是纯空等。
+  const firstSearchRef = useRef(false);
+
+  // 筛选变化 → 防抖 300ms 后重搜（offset 0）；挂载首搜立即发起（应用初始筛选）。
   useEffect(() => {
+    if (!firstSearchRef.current) {
+      firstSearchRef.current = true;
+      runSearch(filters, 0);
+      return;
+    }
     const t = setTimeout(() => {
       runSearch(filters, 0);
     }, 300);

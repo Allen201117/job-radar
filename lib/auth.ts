@@ -39,6 +39,9 @@ export async function getSession() {
   return data.session;
 }
 
+/** ⚠️ 走网络到 Supabase 所在区域（悉尼）。**只在确实需要 Auth 服务器上权威最新用户记录时用**
+ * （如刚改过邮箱、要看封禁状态）。判断「当前是谁」一律用 getRequestUser()（页面）或
+ * lib/apiAuth.requireUser()（API），它们走本地 JWT 验签、零网络。详见 lib/auth-claims.ts。 */
 export async function getUser() {
   const supabase = await createServerSupabase();
   const { data } = await supabase.auth.getUser();
@@ -46,7 +49,9 @@ export async function getUser() {
 }
 
 export async function getProfile() {
-  const user = await getUser();
+  // 取 id 用零网络的请求头，不再为此跑一次跨洋 getUser()——isAdmin() 经由本函数，
+  // 而它是 /sources、/admin/insights、/admin/health 三个页面的入口门。
+  const user = await getRequestUser();
   if (!user) return null;
   const supabase = await createServerSupabase();
   const { data } = await supabase
