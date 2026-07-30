@@ -20,14 +20,17 @@ import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 const FTS_CAP = 8000;
 const DB_PAGE = 1000;
 const SCAN_BUDGET = 28000;
-// 扫描路径每批并行取几页。
-// ⚠️ 这个数**必须小于** lib/jobs-store/client.ts 的连接池 max（当前 5），不能照搬
-// lib/job-search.ts 的 BATCH_SIZES=[4,8,16]：那份走 supabase-js（HTTP，无连接池上限），
-// 而这里直连 pg —— 池满后多出来的获取请求不会乖乖排队，而是等到
-// connectionTimeoutMillis(8s) 就抛 "timeout exceeded when trying to connect"，
-// 整条接口 500。（2026-07-30 线上实测踩过：批次 8/16 直接把搜索打成 500。）
-// 取 3 留 2 条余量：一条给命中页 hydrate，一条给同实例的并发请求。
-const SCAN_CONCURRENCY = 3;
+// ⚠️⚠️ 别再尝试「并行取候选页」来加速这条扫描路径 —— 2026-07-30 线上实测两次都更差：
+//   1) 照搬 lib/job-search.ts 的 BATCH_SIZES=[4,8,16] → 直接 500
+//      ({"error":"timeout exceeded when trying to connect"})。两条路径机制不同不能照搬：
+//      那份走 supabase-js（HTTP，无池上限），这里直连 pg，受 client.ts 的
+//      max:5 + connectionTimeoutMillis:8000 约束，池满后多出的获取请求不排队、8s 就抛。
+//   2) 降到并发 3（< 池 max）后 500 消失，但 TTFB 从基线 25s **恶化到 32s**。
+// 原因：香港库是 2 vCPU 轻量机，而 `order by first_seen_at desc limit 1000 offset 27000`
+// 这类大偏移扫描是 DB 端 CPU 密集活（要走完并跳过 2.7 万行），并发只是互抢 CPU；
+// node-pg 解析 2.8 万肥行也是单线程，并行取回只让解析交错。
+// → 结论：这条路径的瓶颈不是「等网络往返」，并行救不了它。真正的解法是别扫 2.8 万行
+//   （把打分/排序下推到 SQL，或缩小候选窗口），属于检索层重构，见设计文档。
 
 // 候选取数只拉「打分/精筛」真正要用的列，把纯展示/写库列（正文之外最肥的 canonical_jd_url 等）留到
 // 分页命中后再补——函数固定在美东、库在香港，跨太平洋每少传一列 × 数千行都直接缩短耗时。JS 打分/精筛
@@ -192,29 +195,15 @@ async function searchViaScan(
     return rows.length < DB_PAGE;
   };
 
-  if (filters.sortBy === "match") {
-    // match 必须看满 SCAN_BUDGET 才能按分排序 → 页数是定的（28 页），按 SCAN_CONCURRENCY 分批
-    // 并行取。此前是串行逐页 await：28 趟往返 + 28 次传输顺序叠加，实测整条接口 25s。
-    // 批内并行、批间仍按页序 absorb → matched 顺序与 exhausted 语义同串行版完全一致。
-    while (!exhausted && nextOff < SCAN_BUDGET) {
-      const offsets: number[] = [];
-      for (let k = 0; k < SCAN_CONCURRENCY && nextOff < SCAN_BUDGET; k++, nextOff += DB_PAGE) {
-        offsets.push(nextOff);
-      }
-      const pages = await Promise.all(offsets.map((o) => fetchPage(o)));
-      for (const raw of pages) {
-        if (absorbPage(raw)) {
-          exhausted = true;
-          break;
-        }
-      }
-    }
-  } else {
-    // newest 攒够 need 就能停 → 保持串行逐页，不为了并行白拉后面几页。
-    while (matched.length <= need && !exhausted && nextOff < SCAN_BUDGET) {
-      exhausted = absorbPage(await fetchPage(nextOff));
-      nextOff += DB_PAGE;
-    }
+  // 串行逐页：match 恒真要看满预算才能按分排序，newest 攒够 need 即停。
+  // （并行版已实测更慢/会 500，见上面常量位置的记录，别再改回去。）
+  while (
+    (filters.sortBy === "match" || matched.length <= need) &&
+    !exhausted &&
+    nextOff < SCAN_BUDGET
+  ) {
+    exhausted = absorbPage(await fetchPage(nextOff));
+    nextOff += DB_PAGE;
   }
   const ranked = filterAndRankJobs(matched, filters);
   const breakdown = countMatchBreakdown(ranked);
