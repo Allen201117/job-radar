@@ -148,8 +148,8 @@ test("jobs-store city-only search stays on FTS (全表覆盖) 且软城市仍保
   assert.deepEqual(result.jobs[0].__match.degradedFields, ["city"]);
 });
 
-// 翻页调用与「命中页回补展示列」的调用要分开看：回补走 `where id in (...)`，
-// 末位参数是 id 而不是 offset，所以按类型区分（数字=翻页 offset，字符串=回补）。
+// 候选取数调用与「命中页回补展示列」的调用要分开看：回补走 `where id in (...)`，
+// 末位参数是 id 而不是 offset，所以按类型区分（数字=候选取数的 offset，字符串=回补）。
 function splitScanCalls(calls) {
   return {
     pageOffsets: calls.filter((c) => typeof c === "number"),
@@ -157,32 +157,37 @@ function splitScanCalls(calls) {
   };
 }
 
-test("jobs-store scan keeps scanning the budget before match ranking", async () => {
+test("jobs-store scan takes the whole match budget in ONE query", async () => {
   const calls = [];
+  const limits = [];
   const { searchJobsStore } = loadJobsStore(async (sql, params) => {
     const off = params[params.length - 1];
     calls.push(off);
-    if (off === 0) {
-      return Array.from({ length: 1000 }, (_, i) => job({ id: `low-${i}` }));
-    }
-    if (off === 1000) {
-      return [job({ id: "high", title: "产品经理" })];
-    }
-    return [];
+    // 候选取数的参数是 [...where, limit, offset]（offset 是数字）；回补是 where id in (...)（全是 id 字符串）。
+    if (typeof off === "number") limits.push(params[params.length - 2]);
+    if (off !== 0) return [];
+    // 高分岗排在这一大批的靠后位置：只看头 1000 行是找不到它的。
+    return [
+      ...Array.from({ length: 1000 }, (_, i) => job({ id: `low-${i}` })),
+      job({ id: "high", title: "产品经理" }),
+    ];
   });
 
   const result = await searchJobsStore({ ...filters, sortBy: "match" }, prefs, [], 0, 1);
 
-  // match 必须看满预算才能排序 → 串行逐页翻到见底（第 2 页短页即停）。
-  // ⚠️ 别改成并行取页：实测并发 8/16 会让池抛 connect timeout(500)、并发 3 则从 25s 恶化到
-  // 32s（香港库仅 2 vCPU，大 offset 扫描是 DB 端 CPU 密集活，并发只是互抢）。详见
-  // lib/jobs-store/search.ts SCAN_BUDGET 上方的记录。
   const { pageOffsets, hydrated } = splitScanCalls(calls);
-  assert.deepEqual(pageOffsets, [0, 1000]);
-  // 候选阶段不再拉展示列 → 命中页必须回补一次，否则前端拿不到 deadline/canonical_jd_url 等。
-  assert.deepEqual(hydrated, ["high"]);
+  // match 必须看满预算才能按分排序 → 一次查完，**不再 OFFSET 翻页**。
+  // 翻页是移植 PostgREST(单次上限 1000 行)时留下的阑尾，直连 pg 没有该上限。
+  // 实测（热缓存）：28 次翻页累计 679ms vs 单查询 45~73ms。
+  // ⚠️ 也别改成并行取页：实测并发 8/16 会让 pg 池抛 connect timeout(500)、并发 3 则
+  // 从 25s 恶化到 32s（香港库仅 2 vCPU，扫描是 DB 端 CPU 密集活，并发只是互抢）。
+  assert.deepEqual(pageOffsets, [0]);
+  assert.deepEqual(limits, [28000]); // SCAN_BUDGET，一次取满
+  // 排序仍跨整批生效：高分岗在第 1001 位也要被排到最前。
   assert.equal(result.jobs[0].id, "high");
   assert.equal(result.jobs[0].match_score, 30);
+  // 候选阶段不拉展示列 → 命中页必须回补一次，否则前端拿不到 deadline/canonical_jd_url 等。
+  assert.deepEqual(hydrated, ["high"]);
 });
 
 test("jobs-store scan still stops early for newest ranking", async () => {

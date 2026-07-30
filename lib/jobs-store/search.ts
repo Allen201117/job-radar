@@ -180,9 +180,9 @@ async function searchViaScan(
   const sql =
     `select ${CANDIDATE_COLUMNS} from jobs where ${conds.join(" and ")} ` +
     `order by first_seen_at desc limit $${params.length + 1} offset $${params.length + 2}`;
-  const fetchPage = (off: number) => jobsQuery(sql, [...params, DB_PAGE, off]);
-  // 吸收一页：把候选打分/精筛后并入 matched，返回「是否该停」（空页或短页=已到底）。
-  const absorbPage = (raw: unknown): boolean => {
+  const fetchRows = (want: number, off: number) => jobsQuery(sql, [...params, want, off]);
+  // 吸收一批：打分/精筛后并入 matched，返回「是否已到底」（拿到的比想要的少 = 没更多了）。
+  const absorb = (raw: unknown, want: number): boolean => {
     const rows: any[] = annotateSourceAdapter(raw as any[], adapterBySource);
     if (!rows.length) return true;
     const scored = sortAndFilterJobs(rows, prefs, actions, {
@@ -192,18 +192,33 @@ async function searchViaScan(
     for (const j of scored) {
       if (jobFilterTier(j, filters) !== null) matched.push(j);
     }
-    return rows.length < DB_PAGE;
+    return rows.length < want;
   };
 
-  // 串行逐页：match 恒真要看满预算才能按分排序，newest 攒够 need 即停。
-  // （并行版已实测更慢/会 500，见上面常量位置的记录，别再改回去。）
-  while (
-    (filters.sortBy === "match" || matched.length <= need) &&
-    !exhausted &&
-    nextOff < SCAN_BUDGET
-  ) {
-    exhausted = absorbPage(await fetchPage(nextOff));
-    nextOff += DB_PAGE;
+  if (filters.sortBy === "match") {
+    // match 必须看满 SCAN_BUDGET 才能按分排序 → **一次查完，不要 OFFSET 翻页**。
+    // 翻页是移植 lib/job-search.ts 时留下的阑尾：那侧走 PostgREST（单次最多返 1000 行）
+    // 才不得不翻页，直连 pg 没有该上限 —— 同文件的 FTS 路径本来就是一条 `limit FTS_CAP`。
+    // OFFSET 还是二次方浪费：第 k 页要重走 k×1000 条索引项，28 页累计走 40.6 万次才取回 2.8 万行。
+    // 结果集与顺序同翻页版完全一致（同一 where + 同一 order by，只是不再分片取）。
+    //
+    // 香港库实测（EXPLAIN ANALYZE，热缓存，不含结果传输）：
+    //   28 次 OFFSET 翻页累计  679 ms
+    //   单查询 limit 28000      45~73 ms
+    // ⚠️ 收益就 ~0.6s，别高估：这条接口端到端约 21s，DB 执行只占极小一块。
+    // 真正的大头是**把候选传回来**——2.8 万行里 summary 就占 15 MB（其余关键列仅 4.3 MB）。
+    // 而 summary 砍不掉：classifyJobFunction / keywordMatchTier 的兄弟组排除 / 校招信号判定
+    // 都要读它（见 lib/china-keyword-expansion.js:709/753/623），砍了就是静默改坏匹配精度。
+    // → 下一步真解法是**物化派生字段**（job_function / 招聘类型等落成列，写入时算好），
+    //   让候选取数不再需要 summary。属 schema 改动，见设计文档。
+    exhausted = absorb(await fetchRows(SCAN_BUDGET, 0), SCAN_BUDGET);
+  } else {
+    // newest 攒够 need 即停 → 保持逐页，不为了少几次往返把 2.8 万行全拉回来。
+    // （并行取页已实测更慢/会 500，见上面常量位置的记录，别再改回去。）
+    while (matched.length <= need && !exhausted && nextOff < SCAN_BUDGET) {
+      exhausted = absorb(await fetchRows(DB_PAGE, nextOff), DB_PAGE);
+      nextOff += DB_PAGE;
+    }
   }
   const ranked = filterAndRankJobs(matched, filters);
   const breakdown = countMatchBreakdown(ranked);
