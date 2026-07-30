@@ -226,43 +226,40 @@ export default function CampusClient({
   const [fullJobs, setFullJobs] = useState<Map<string, any[]>>(new Map());
   const fullJobsRequested = useRef<Set<string>>(new Set());
   useEffect(() => {
-    const pending = Array.from(expanded).filter((p) => !fullJobsRequested.current.has(p));
-    if (pending.length === 0) return;
-    pending.forEach((p) => fullJobsRequested.current.add(p));
+    // 手风琴下最多只有一家展开 → 一次只取一家的完整行（取过的留在 fullJobs 里，重复展开不再请求）。
+    const pattern = expandedPattern;
+    if (!pattern || fullJobsRequested.current.has(pattern)) return;
+    const card = cards.find((c) => c.pattern === pattern);
+    if (!card) return;
+    const ids = [...card.campusJobs, ...card.internJobs].map((j: any) => j.id).filter(Boolean);
+    if (ids.length === 0) return;
+    fullJobsRequested.current.add(pattern);
     let cancelled = false;
     (async () => {
-      for (const pattern of pending) {
-        const card = cards.find((c) => c.pattern === pattern);
-        if (!card) continue;
-        const ids = [...card.campusJobs, ...card.internJobs]
-          .map((j: any) => j.id)
-          .filter(Boolean);
-        if (ids.length === 0) continue;
-        try {
-          const resp = await fetch("/api/jobs/by-ids", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ids }),
-          });
-          const data = await resp.json().catch(() => null);
-          if (cancelled) return;
-          if (!data?.ok) {
-            fullJobsRequested.current.delete(pattern);
-            continue;
-          }
-          // 校招链路统一用 city（getCampusZone 的 SQL 是 `j.location as city`），而按 id 取回的是
-          // 原始 location 列 → 这里对齐，否则展开区的城市分组与 toScoredJob 都会拿不到城市。
-          const rows = (data.jobs || []).map((r: any) => ({ ...r, city: r.location ?? null }));
-          setFullJobs((prev) => new Map(prev).set(pattern, rows));
-        } catch {
-          if (!cancelled) fullJobsRequested.current.delete(pattern);
+      try {
+        const resp = await fetch("/api/jobs/by-ids", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }),
+        });
+        const data = await resp.json().catch(() => null);
+        if (cancelled) return;
+        if (!data?.ok) {
+          fullJobsRequested.current.delete(pattern);
+          return;
         }
+        // 校招链路统一用 city（getCampusZone 的 SQL 是 `j.location as city`），而按 id 取回的是
+        // 原始 location 列 → 这里对齐，否则展开区的城市分组与 toScoredJob 都会拿不到城市。
+        const rows = (data.jobs || []).map((r: any) => ({ ...r, city: r.location ?? null }));
+        setFullJobs((prev) => new Map(prev).set(pattern, rows));
+      } catch {
+        if (!cancelled) fullJobsRequested.current.delete(pattern);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [expanded, cards]);
+  }, [expandedPattern, cards]);
 
   /** 展开区要渲染的完整行：按「轻量记录筛选后的 id」从取回的完整行里挑，口径与卡面计数一致。 */
   function expandedRows(pattern: string, slimFiltered: any[]): any[] {
