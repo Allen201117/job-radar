@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
+import { verifyRequestClaims } from "@/lib/auth-claims";
 import resumeParser from "@/lib/resume-parser";
 import llm from "@/lib/llm";
 import resumeExtract from "@/lib/resume-extract";
@@ -64,9 +65,7 @@ async function extractResumeText(
 
 export async function GET() {
   const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await verifyRequestClaims(supabase);
 
   if (!user) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
@@ -93,9 +92,7 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await verifyRequestClaims(supabase);
 
   if (!user) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });

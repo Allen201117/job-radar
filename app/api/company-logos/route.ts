@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
+import { verifyRequestClaims } from "@/lib/auth-claims";
 
 export const runtime = "nodejs";
 
@@ -8,9 +9,7 @@ export const runtime = "nodejs";
 // 按 company_key（lower(trim(company))）匹配，与抓取脚本 / 前端同口径。
 export async function GET(request: NextRequest) {
   const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await verifyRequestClaims(supabase);
   if (!user) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
