@@ -208,6 +208,38 @@ test("jobs-store scan still stops early for newest ranking", async () => {
   assert.equal(result.jobs[0].id, "new-0");
 });
 
+test("jobs-store scan caches candidates across requests and dedupes concurrent ones", async () => {
+  let candidateFetches = 0;
+  const { searchJobsStore } = loadJobsStore(async (sql, params) => {
+    // 候选取数的末位参数是 offset(数字)；命中页回补走 `where id in (...)`，参数是 id(字符串)。
+    if (typeof params[params.length - 1] === "number") candidateFetches += 1;
+    return [job({ id: "a", title: "产品经理" })];
+  });
+
+  const args = [{ ...filters, sortBy: "match" }, prefs, [], 0, 1];
+
+  // 并发两发：候选与用户无关 → in-flight 去重，只应打库一次。
+  const [r1, r2] = await Promise.all([
+    searchJobsStore(...args),
+    searchJobsStore(...args),
+  ]);
+  assert.equal(candidateFetches, 1, "并发相同搜索应只取一次候选");
+
+  // 再来一发（TTL 内）→ 命中缓存，仍是一次。
+  const r3 = await searchJobsStore(...args);
+  assert.equal(candidateFetches, 1, "TTL 内重复搜索应命中缓存");
+
+  // 结果必须与没有缓存时完全一致（缓存只省传输，不改语义）。
+  for (const r of [r1, r2, r3]) {
+    assert.equal(r.jobs[0].id, "a");
+    assert.equal(r.total, 1);
+  }
+
+  // 换求职范围 → where/params 变了 → 必须重新取，不能错用上一份候选。
+  await searchJobsStore({ ...filters, sortBy: "match" }, { ...prefs, job_scope: "overseas" }, [], 0, 1);
+  assert.equal(candidateFetches, 2, "求职范围不同的候选不得复用");
+});
+
 function supabaseFtsMock() {
   const calls = { or: [], ilike: [] };
   class Query {
