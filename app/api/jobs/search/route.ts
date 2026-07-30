@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
+import { verifyRequestClaims } from "@/lib/auth-claims";
 import { createServiceClient } from "@/lib/supabaseService";
 import { searchJobs } from "@/lib/job-search";
 import { searchJobsStore } from "@/lib/jobs-store/search";
@@ -10,19 +11,20 @@ import type { JobAction, UserPreferences } from "@/lib/types";
 export const dynamic = "force-dynamic";
 // 候选窗口最大 15k 行 + 打分/精筛，给足执行时间（避免大城搜索被默认 10s 砍断）。
 export const maxDuration = 60;
-// ⚡ 与自建香港 jobs 库同区运行：函数默认落在 iad1（美东），跨太平洋拉几千行候选是搜索慢(10~30s)的主因
-// （实测 x-vercel-id=sin1::iad1，SQL 仅 130ms、JS 仅 113ms，其余全耗在跨区传输）。就近到香港/新加坡后
-// 候选行传输从跨洋降到近同区。Pro 计划下 preferredRegion 生效；Hobby 计划该项被忽略，需在 Vercel
-// 控制台 Settings → Functions → Region 改单区为 hkg1/sin1（见汇报说明）。
+// 区域已由仓库根 vercel.json 的 `regions: ["hkg1"]` 全局锁定到香港（与自建 jobs 库同城）。
+// ⚠️ 2026-07-30 实测更正：本接口曾慢到 10~30s，此前归因为「函数在美东、跨太平洋拉候选行」，
+// 该结论已被证伪 —— 迁到香港后（x-vercel-id=iad1::hkg1::…，函数确实在香港）仍是 25s。
+// 真因在 lib/jobs-store/search.ts 的扫描路径：sortBy 默认 "match" 让循环条件恒真 → 必须看满
+// SCAN_BUDGET=28000 行，而它当时是「串行逐页 await + 每行拖着 summary 的全列」。已改为分批并行
+// 取页 + 候选只取打分列、命中页再回补。剩余大头是 summary 本身（实测约占候选传输量 87%，但打分与
+// exclude_keywords 精筛要读它，不能直接砍）——见 docs/superpowers/specs/2026-07-30-latency-*。
 export const preferredRegion = ["hkg1", "sin1"];
 
 // 服务端岗位库搜索：把原前端「全库塞浏览器再筛」改为服务端有界筛选 + 分页。
 // 筛选/排序逻辑复用 lib/job-filter（与浏览器端同一份），结果逐字段一致。
 export async function GET(request: NextRequest) {
   const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await verifyRequestClaims(supabase);
 
   const p = request.nextUrl.searchParams;
   const bool = (k: string) => p.get(k) === "1" || p.get(k) === "true";

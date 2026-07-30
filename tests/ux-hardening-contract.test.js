@@ -10,7 +10,9 @@ const jobLibraryStat = read("../components/JobLibraryStat.tsx");
 const tagInput = read("../components/TagInput.tsx");
 const preferenceForm = read("../components/PreferenceForm.tsx");
 const resumeProfilePanel = read("../components/ResumeProfilePanel.tsx");
-const navbar = read("../components/Navbar.tsx");
+// 顶栏交互标记（移动端菜单/汉堡按钮）住在客户端组件里；components/Navbar.tsx 现在只是
+// 读 middleware 注入请求头、把登录态透传下去的服务端外壳，不含任何标记。
+const navbar = read("../components/NavbarClient.tsx");
 const appliedPage = read("../app/applied/page.tsx");
 
 function tagInputCalls(source) {
