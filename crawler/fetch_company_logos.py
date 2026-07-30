@@ -21,6 +21,7 @@ import base64
 import hashlib
 import re
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -44,23 +45,27 @@ from logo_util import (
 )
 
 _TIMEOUT = 15.0
-_HOME_TIMEOUT = 6.0        # 猜域名时抓首页做核验，短超时（量大，别拖垮 CI）
+# 抓公司官网首页/图标的超时。⚠️ 别再压到 6s：并发下国内站点 TLS 握手常超 6s，
+# 一超时就会把「其实有真 logo 的公司」误判成 not_found（live 踩过：吉利/恒瑞/劲仔并发跑全灭、串行跑都有图）。
+_HOME_TIMEOUT = 10.0
 _FRESH_DAYS = 30
 _SMALL_WIDTH = 48          # 已有图窄于此 → 继续找更清晰的来源（站点大图 / icon.horse）
 _MAX_BYTES = 200_000       # favicon 不该更大；超过视为异常，不入库（首字母兜底）
-_WORKERS = 8               # 并发抓取的公司数（各家不同 host，不集中压单站；写库仍在主线程串行）
+_WORKERS = 4               # 并发抓取的公司数（8 并发实测误判率高：见 _HOME_TIMEOUT 注释）
 _DDG = "https://icons.duckduckgo.com/ip3/{domain}.ico"
 _ICON_HORSE = "https://icon.horse/icon/{domain}"
 
 
-def _get(client: httpx.Client, url: str) -> Optional[httpx.Response]:
+def _get(client: httpx.Client, url: str, timeout: Optional[float] = None) -> Optional[httpx.Response]:
+    """带重试的 GET。重试间小睡一下：并发下连续两次瞬时失败很常见，不退避等于没重试。"""
     for attempt in range(2):
         try:
-            return client.get(url)
+            return client.get(url) if timeout is None else client.get(url, timeout=timeout)
         except Exception as e:  # noqa: BLE001
             if attempt == 1:
                 print(f"[logo] 请求失败 {url}: {e}", file=sys.stderr)
                 return None
+            time.sleep(0.6)
     return None
 
 
@@ -96,11 +101,8 @@ def fetch_site_icon(client: httpx.Client, domain: str) -> Optional[dict]:
     （国内公司大量不在境外 favicon 服务的收录范围内）。且是公司自证的图，不存在张冠李戴/占位污染。
     """
     for base in (f"https://{domain}", f"https://www.{domain}"):
-        try:
-            r = client.get(base, timeout=_HOME_TIMEOUT)
-        except Exception:
-            continue
-        if r.status_code >= 400:
+        r = _get(client, base, timeout=_HOME_TIMEOUT)
+        if r is None or r.status_code >= 400:
             continue
         try:
             html = r.text
@@ -108,11 +110,8 @@ def fetch_site_icon(client: httpx.Client, domain: str) -> Optional[dict]:
             html = ""
         best = None
         for url in icon_link_urls(str(r.url), html):
-            try:
-                ir = client.get(url, timeout=_HOME_TIMEOUT)
-            except Exception:
-                continue
-            if ir.status_code != 200:
+            ir = _get(client, url, timeout=_HOME_TIMEOUT)
+            if ir is None or ir.status_code != 200:
                 continue
             cand = _candidate(ir.content, ir.headers.get("content-type"), "site")
             if cand and (best is None or cand["width"] > best["width"]):
@@ -314,7 +313,7 @@ def main() -> None:
     print(f"[logo] 必投清单补入 {must_apply_added} 个品牌短名")
 
     processed = 0
-    stats = {"found": 0, "not_found": 0, "skip": 0, "err": 0, "slug_ok": 0}
+    stats = {"found": 0, "not_found": 0, "kept": 0, "skip": 0, "err": 0, "slug_ok": 0}
     by_source: dict = {}
     with httpx.Client(
         timeout=_TIMEOUT, follow_redirects=True, headers={"User-Agent": "job-radar-logo/1.0"}
@@ -324,10 +323,12 @@ def main() -> None:
 
         # 忽略新鲜度、强制重抓的 key 集合（补了域名覆盖表 / 修复假 logo 时用）
         stale_keys: set = set()
+        fake_keys: set = set()
         if args.refetch_not_found:
             stale_keys.update(k for k, s in prev_status.items() if s == "not_found")
         if args.repair_placeholders:
-            stale_keys.update(find_fake_logo_keys(sb, placeholders))
+            fake_keys = find_fake_logo_keys(sb, placeholders)
+            stale_keys.update(fake_keys)
 
         # 先按新鲜度筛出真正要抓的公司，再并发抓（近千家公司串行抓要几小时，会撞 CI 超时；
         # 每家公司是不同 host，并发不会集中压同一站点）。
@@ -367,16 +368,22 @@ def main() -> None:
                 except Exception as e:  # noqa: BLE001
                     print(f"[logo] 抓取异常 {company}/{domain}: {e}", file=sys.stderr)
                     err = True
-            return company, domain, result, slug_resolved, err
+            return key, company, domain, result, slug_resolved, err
 
         with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
-            for company, domain, result, slug_resolved, err in pool.map(work, targets):
+            for key, company, domain, result, slug_resolved, err in pool.map(work, targets):
                 processed += 1
                 if slug_resolved:
                     stats["slug_ok"] += 1
                 if err:
                     stats["err"] += 1
                 now_iso = datetime.now(timezone.utc).isoformat()
+                # ⚠️ 不变量：抓不到时**不许**把已有的真 logo 覆写成 not_found。
+                # 抓取会瞬时失败（并发/超时/站点抖动），一失败就清库等于用噪音删好数据。
+                # 例外是被复检判定为假 logo 的（fake_keys）——那本来就该退回首字母兜底。
+                if result is None and prev_status.get(key) == "found" and key not in fake_keys:
+                    stats["kept"] += 1
+                    continue
                 if result is None:
                     row = {
                         "company": company, "logo_data": None, "domain": domain,
