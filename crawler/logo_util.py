@@ -272,6 +272,20 @@ _DOMAIN_OVERRIDES_RAW = {
     "利欧集团": "leo-group.com", "华谊兄弟": "huayibrothers.com",
     "快看漫画": "kuaikanmanhua.com", "视觉中国": "vcg.com", "中文在线": "chineseall.com",
 
+    # —— 第二批补漏（2026-07-31）：这些必投公司之前压根没配域名 → 只能首字母兜底。
+    #    带 title 的都过了 live 核验；标「未核验」的是本机当时连不上、但域名归属无争议的（CI 会真抓，
+    #    抓错会在下一轮人眼核对时暴露）。核验反例：协鑫猜 gclgroup.com 实为**法国物流咨询公司**，已弃。——
+    "海天味业": "haitian-food.com", "泰康保险": "taikang.com", "国泰海通": "gtht.com",
+    "百胜中国": "yumchina.com", "中联重科": "zoomlion.com", "TCL": "tcl.com",
+    "京东方": "boe.com", "中国中车": "crrcgc.cc", "长城汽车": "gwm.com.cn",
+    "联影医疗": "united-imaging.com", "中海油": "cnooc.com.cn", "万达集团": "wanda.cn",
+    "中国金茂": "chinajinmao.cn", "中国中铁": "crec.cn", "中国能建": "ceec.net.cn",
+    "圆通": "yto.net.cn", "中公教育": "offcn.com", "粉笔": "fenbi.com",
+    "学大教育": "xueda.com",
+    # 未核验（本机连不上，域名归属无争议）
+    "伊利": "yili.com", "国家电网": "sgcc.com.cn", "中国中冶": "mcc.com.cn",
+    "恒力集团": "hengligroup.com",
+
     # —— 曾被记成平台域名（iguopin.com）而显示成「国聘」logo 的公司（2026-07-30 人眼核对发现，
     #    奔驰/中国平安 都在其中）。下面域名同样过了 live title 核验。——
     "中国平安": "pingan.cn", "中国建筑": "cscec.com", "中国电建": "powerchina.cn",

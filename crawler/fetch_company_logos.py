@@ -60,6 +60,16 @@ _MAX_BYTES = 200_000       # favicon 不该更大；超过视为异常，不入�
 _WORKERS = 4               # 并发抓取的公司数（8 并发实测误判率高：见 _HOME_TIMEOUT 注释）
 _DDG = "https://icons.duckduckgo.com/ip3/{domain}.ico"
 _ICON_HORSE = "https://icon.horse/icon/{domain}"
+# 用浏览器 UA 抓公司官网：不少企业站（强生 / 阿斯利康 / 雀巢 / 礼来 / 陶氏 / 通威…）对陌生 UA 直接 403，
+# 换成浏览器 UA 才拿得到首页 HTML → 才能读到 <link rel=icon>。抓的是公开首页与图标，不绕任何鉴权。
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 job-radar-logo/1.0"
+    ),
+    "Accept": "text/html,application/xhtml+xml,image/avif,image/webp,image/png,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+}
 
 
 def _get(client: httpx.Client, url: str, timeout: Optional[float] = None) -> Optional[httpx.Response]:
@@ -344,9 +354,7 @@ def main() -> None:
     processed = 0
     stats = {"found": 0, "not_found": 0, "kept": 0, "skip": 0, "err": 0, "slug_ok": 0}
     by_source: dict = {}
-    with httpx.Client(
-        timeout=_TIMEOUT, follow_redirects=True, headers={"User-Agent": "job-radar-logo/1.0"}
-    ) as client:
+    with httpx.Client(timeout=_TIMEOUT, follow_redirects=True, headers=_HEADERS) as client:
         placeholders = collect_placeholder_fingerprints(client)
         print(f"[logo] 占位指纹 {len(placeholders)}/36 个字符；待处理公司 {len(seen)} 家")
 
