@@ -26,18 +26,29 @@ const HERO = {
 
 // 流式：先出页面骨架（导航 + 标题），慢的跨区机会召回单独在 Suspense 边界里流入，不再阻塞整页。
 // hero narrative 与 feed 共用同一次 feed 构建（一个 promise 分给两个边界），构建失败时退化为 null（不双抛）。
-export default async function TodayPage() {
+export default async function TodayPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const tPageStart = performance.now();
+  const sp = searchParams ? await searchParams : undefined;
+  // 诊断开关：只有显式带 ?__timing=1 才把各阶段耗时渲染进页面，普通用户永远拿不到。
+  const wantTiming = sp?.__timing === "1";
+
   const user = await getRequestUser();
   if (!user) redirect("/login?next=/today");
 
   const supabase = await createServerSupabase();
   // 决定 onboarding / 强度只需这几张「按用户」的小表，秒回——shell 在这之后即可渲染。
+  const tUserRows = performance.now();
   const [prefsRes, candRes, actsRes, stateRes] = await Promise.all([
     supabase.from("user_preferences").select("*").eq("user_id", user.id).maybeSingle(),
     supabase.from("candidate_profiles").select("*").eq("user_id", user.id).maybeSingle(),
     supabase.from("job_actions").select("*").eq("user_id", user.id),
     supabase.from("user_radar_state").select("last_opened_at").eq("user_id", user.id).maybeSingle(),
   ]);
+  const userRowsMs = Math.round(performance.now() - tUserRows);
 
   const profile = buildRadarProfile(
     user.id,
@@ -101,8 +112,41 @@ export default async function TodayPage() {
             <TodayFeed feedPromise={feedPromise} />
           </Suspense>
         </section>
+        {wantTiming && (
+          // 放在最后一个 Suspense 边界里 → 它在 feed 完成后才 flush，因此能带上 feed 各阶段耗时，
+          // 且它自身的 shellToFlush 就是「首字节之后还等了多久」。
+          <Suspense fallback={null}>
+            <TimingProbe feedPromise={feedPromise} userRowsMs={userRowsMs} tPageStart={tPageStart} />
+          </Suspense>
+        )}
       </ProductPage>
     </div>
+  );
+}
+
+/** 诊断探针：仅 ?__timing=1 时渲染。输出隐藏的 JSON，供 curl 读取，不影响可见 UI。 */
+async function TimingProbe({
+  feedPromise,
+  userRowsMs,
+  tPageStart,
+}: {
+  feedPromise: Promise<OpportunityFeed | null>;
+  userRowsMs: number;
+  tPageStart: number;
+}) {
+  const feed = await feedPromise;
+  const payload = {
+    user_rows_ms: userRowsMs, // shell 之前那 4 条 Supabase(悉尼) 并行查询
+    server_total_ms: Math.round(performance.now() - tPageStart), // 页面函数内总耗时（到 feed 完成）
+    feed: feed?.timing ?? null, // buildOpportunityFeed 内部分解
+  };
+  return (
+    <script
+      type="application/json"
+      id="jr-timing"
+      // 纯诊断数据（全是毫秒数与条数，无任何用户信息）；type 非 JS，浏览器不执行。
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(payload) }}
+    />
   );
 }
 

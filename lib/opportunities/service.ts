@@ -208,15 +208,44 @@ export async function buildOpportunityFeed(
   }
 
   const actionMap = buildActionMap(actions);
+  // 各阶段耗时（诊断用，见文件顶部 FeedTiming 注释）。performance.now() 成本可忽略，常开无妨；
+  // 只有 /today?__timing=1 才会把它渲染出来，普通用户拿不到。
+  const clock = () => performance.now();
+  const t0 = clock();
+  const mark: Record<string, number> = {};
+
   // 两条互相独立的 I/O 并行：① 岗位召回（香港库）② 关键提醒（香港库，按 saved/applied 岗）。
   // source 元信息改为召回之后按 id 取（只要这一批真正涉及的源）——它原本挤在这个 Promise.all 里
   // 号称"并行"，实际是全表分页的 2 趟串行跨洋往返 + 1121 行，反而是最慢的一条。
   // 详见 fetchSourceMetaFor 的注释与实测数字。
+  let recallMs = 0;
+  let criticalMs = 0;
   const [recall, critical] = await Promise.all([
-    recallOpportunityCandidates(profile, now, supabase),
-    buildCriticalAlerts(actions, profile, intensity, now),
+    (async () => {
+      const s = clock();
+      try {
+        return await recallOpportunityCandidates(profile, now, supabase);
+      } finally {
+        recallMs = clock() - s;
+      }
+    })(),
+    (async () => {
+      const s = clock();
+      try {
+        return await buildCriticalAlerts(actions, profile, intensity, now);
+      } finally {
+        criticalMs = clock() - s;
+      }
+    })(),
   ]);
+  mark.recall = recallMs;
+  mark.critical = criticalMs;
+  mark.parallel = clock() - t0; // 这一阶段的墙钟（= 两条里最慢的那条）
+
+  const tSrc = clock();
   const sourceMeta = await fetchSourceMetaFor(supabase, recall.jobs);
+  mark.sourcemeta = clock() - tSrc;
+  const tCompute = clock();
 
   const opps: Opportunity[] = [];
   // 计分板置换：统计每一次静默 continue（用户看不见的过滤劳动），随 feed 外显。
@@ -259,10 +288,13 @@ export async function buildOpportunityFeed(
     });
   }
 
+  mark.compute = clock() - tCompute;
+
   // 关键提醒（saved 岗关闭/快截止）已在上面与召回并行取好，置顶不受强度压制。
   const overrideProvided = options.noveltySinceOverride !== undefined && options.noveltySinceOverride !== null;
   const noveltySince = resolveNoveltySince(overrideProvided ? options.noveltySinceOverride! : lastOpenedAt, now);
 
+  const tGroup = clock();
   // 关键提醒在截断前与完整召回候选统一语义去重/分区，冲突主卡被淘汰时后续候选可正常回填。
   const { sections, counts } = groupOpportunities([...critical, ...opps], {
     dailyLimit: profile.dailyLimit,
@@ -272,8 +304,14 @@ export async function buildOpportunityFeed(
   });
   counts.screened = recall.jobs.length;
   counts.filtered = filtered;
+  mark.group = clock() - tGroup;
 
+  const tHydrate = clock();
   await hydrateDisplayJobs(sections);
+  mark.hydrate = clock() - tHydrate;
+  mark.total = clock() - t0;
+  mark.candidates = recall.jobs.length;
+  mark.displayed = Object.values(sections).reduce((n, arr) => n + arr.length, 0);
 
   return {
     generated_at: now.toISOString(),
@@ -284,5 +322,17 @@ export async function buildOpportunityFeed(
     intensity,
     counts,
     sections,
+    timing: {
+      recall: Math.round(mark.recall),
+      critical: Math.round(mark.critical),
+      parallel: Math.round(mark.parallel),
+      sourcemeta: Math.round(mark.sourcemeta),
+      compute: Math.round(mark.compute),
+      group: Math.round(mark.group),
+      hydrate: Math.round(mark.hydrate),
+      total: Math.round(mark.total),
+      candidates: mark.candidates,
+      displayed: mark.displayed,
+    },
   };
 }
