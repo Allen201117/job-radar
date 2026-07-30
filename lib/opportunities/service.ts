@@ -46,18 +46,49 @@ function buildActionMap(actions: JobAction[]): Map<string, ActionState> {
 // 省掉一条串行跨区往返）；失败不抛，freshness 退化为 manual SLA（§14.2）。
 // ⚠️ 必须走 fetchAllSources 分页：sources 已越过 PostgREST 单次 1000 行上限（2026-07-20 实测 1121），
 // 不分页拿到的 Map 缺条目 → 尾部源的岗位 freshness 静默退化成 manual SLA。
+/** source 元信息全局缓存（同一 lambda 实例内共享）。
+ *
+ * 为什么值得缓存：这份数据**与用户无关、全站同一份**，且只在爬虫跑完才变（last_checked_at）。
+ * 改造前每次 /today 渲染都要从 Supabase（悉尼）分页拉全部 1121 行 —— 因为越过 PostgREST 单次
+ * 1000 行上限，`fetchAllSources` 内部是**串行**翻页，即每次渲染 2 趟跨洋往返 + 传 1121 行，
+ * 而它撑高了 buildOpportunityFeed 那个 Promise.all 阶段的耗时（该阶段取三条里最慢的那条）。
+ * TTL 5 分钟：freshness 徽章只看「上次检查时间」的粗粒度，5 分钟内完全够新鲜。
+ * in-flight 去重：冷启动瞬间多请求打进来时只拉一次。 */
+const SOURCE_META_TTL_MS = 5 * 60 * 1000;
+let sourceMetaCache: { expiresAt: number; value: Map<string, SourceMeta> } | null = null;
+let sourceMetaInFlight: Promise<Map<string, SourceMeta>> | null = null;
+
+/** 供测试重置模块级缓存，避免用例间互相污染。 */
+export function __resetSourceMetaCache(): void {
+  sourceMetaCache = null;
+  sourceMetaInFlight = null;
+}
+
 async function fetchSourceMeta(supabase: SupabaseLike): Promise<Map<string, SourceMeta>> {
-  const map = new Map<string, SourceMeta>();
-  try {
-    const rows = await fetchAllSources<SourceMeta>(
-      supabase,
-      "id, company, adapter_name, crawl_method, last_checked_at, enabled",
-    );
-    for (const s of rows) map.set(s.id, s);
-  } catch (e) {
-    console.warn("[opportunities] source metadata query threw:", (e as Error).message);
-  }
-  return map;
+  if (sourceMetaCache && sourceMetaCache.expiresAt > Date.now()) return sourceMetaCache.value;
+  if (sourceMetaInFlight) return sourceMetaInFlight;
+
+  const p = (async () => {
+    const map = new Map<string, SourceMeta>();
+    try {
+      const rows = await fetchAllSources<SourceMeta>(
+        supabase,
+        "id, company, adapter_name, crawl_method, last_checked_at, enabled",
+      );
+      for (const s of rows) map.set(s.id, s);
+      // 只在真拿到数据时才写缓存：失败时若把空 Map 缓存住，整个 TTL 内所有岗位的 freshness
+      // 都会静默退化成 manual SLA（§14.2），比多拉一次贵得多。
+      sourceMetaCache = { expiresAt: Date.now() + SOURCE_META_TTL_MS, value: map };
+    } catch (e) {
+      console.warn("[opportunities] source metadata query threw:", (e as Error).message);
+    }
+    return map;
+  })();
+  sourceMetaInFlight = p;
+  p.finally(() => {
+    if (sourceMetaInFlight === p) sourceMetaInFlight = null;
+  });
+  return p;
 }
 
 // recall 为省跨区传输只回硬门/打分必需列（截断 summary）；展示卡在这里按 id 用**完整行**回填。
