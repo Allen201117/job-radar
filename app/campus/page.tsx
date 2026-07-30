@@ -10,6 +10,7 @@ import { getCampusZone } from "@/lib/jobs-store/read";
 import { getCampusSourceCoverage } from "@/lib/campus-sources";
 import { windowStatus, compareCompanyCards } from "@/lib/campus-zone";
 import { getRecruitmentCyclesForCompanies } from "@/lib/recruitment-cycle-store";
+import { classifyJobFunction } from "@/lib/china-keyword-expansion";
 import {
   campusTimelineSummary,
   campusPreciseDates,
@@ -17,6 +18,40 @@ import {
   cleanCampusDeadlineMs,
 } from "@/lib/recruitment-cycle";
 import CampusClient from "./campus-client";
+
+/** 下发给客户端的轻量岗位记录：只带「筛选 + 计数 + 按需取详情」真正需要的字段。
+ *
+ * 关键是 `fn`：职能标签在**服务端**用完整 summary 算好（classifyJobFunction 与客户端原先
+ * 调用的是同一份实现、同一份输入），客户端拿标签直接比对即可 → 筛选选项、每家公司的计数、
+ * 任意筛选组合下的结果都与改造前完全一致，**精度零损失**，但不必把 JD 正文发到浏览器。
+ * 完整岗位行在用户展开某家公司时经 `/api/jobs/by-ids` 按需取回。 */
+function slimJob(j: any) {
+  return {
+    id: j.id,
+    city: j.city ?? null,
+    education: j.education ?? null,
+    fn: classifyJobFunction({ title: j.title, job_type: j.job_type, summary: j.summary }),
+  };
+}
+
+/** 从若干公司的岗位桶里收集筛选候选值。与客户端原实现同口径（同样 trim / filter(Boolean) / sort）。 */
+function collectOptions(lists: Array<ReturnType<typeof slimJob>[]>) {
+  const cities = new Set<string>();
+  const edus = new Set<string>();
+  const fns = new Set<string>();
+  for (const jobs of lists) {
+    for (const j of jobs) {
+      if (j.city) cities.add(String(j.city).trim());
+      if (j.education) edus.add(String(j.education).trim());
+      fns.add(j.fn);
+    }
+  }
+  return {
+    cityOptions: Array.from(cities).filter(Boolean).sort(),
+    educationOptions: Array.from(edus).filter(Boolean).sort(),
+    functionOptions: Array.from(fns).filter(Boolean).sort(),
+  };
+}
 
 const HERO = {
   eyebrow: "校招专区",
@@ -79,16 +114,43 @@ export default async function CampusPage() {
       .map((j) => cleanCampusDeadlineMs(j.deadline))
       .filter((t): t is number => t != null);
     const cleanDeadlineMs = cleanDl.length ? Math.min(...cleanDl) : null;
-    return { ...z, window, nearestDeadlineMs, timeline, preciseDates, batchTimingGap, cleanDeadlineMs };
+    return {
+      company: z.company,
+      pattern: z.pattern,
+      // ⚠️ 只下发轻量岗位记录，**绝不再 `{...z}`**：那会把每家公司的完整岗位行（含 JD 正文）
+      // 全序列化进 props，实测单页 16.3 MB，而岗位卡默认折叠、用户根本没看。
+      campusJobs: z.campusJobs.map(slimJob),
+      internJobs: z.internJobs.map(slimJob),
+      window,
+      nearestDeadlineMs, // 仅供下面 compareCompanyCards 在服务端排序，客户端不读
+      timeline,
+      preciseDates,
+      batchTimingGap,
+      cleanDeadlineMs,
+    };
   });
   cards.sort(compareCompanyCards);
+
+  // 筛选下拉候选值改在**服务端**算：客户端原先要靠 classifyJobFunction(title+job_type+summary)
+  // 现算职能，才不得不拿到正文。现在服务端用完整正文算好（同一份实现、同一份输入、同样
+  // 先收集再 filter(Boolean).sort()），选项值与改造前逐字节一致——精度零损失。
+  // 按 mode 分开算，与客户端原来「只从当前态那个桶里收集」的口径一致。
+  const filterOptions = {
+    campus: collectOptions(cards.map((c) => c.campusJobs)),
+    intern: collectOptions(cards.map((c) => c.internJobs)),
+  };
 
   return (
     <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage>
         <ProductHero eyebrow={HERO.eyebrow} title={HERO.title} description={HERO.description} icon={GraduationCap} />
-        <CampusClient cards={cards} industries={industries} hasIndustry={rawIndustries.length > 0} />
+        <CampusClient
+          cards={cards}
+          industries={industries}
+          hasIndustry={rawIndustries.length > 0}
+          filterOptions={filterOptions}
+        />
       </ProductPage>
     </div>
   );

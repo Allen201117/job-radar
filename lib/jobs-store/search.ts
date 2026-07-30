@@ -3,7 +3,6 @@
 //   差别仅「候选取数」从 supabase-js 换成直连 pg SQL → 搜索口径/精度/排序与线上零差异。
 import "server-only";
 import { jobsQuery } from "./client";
-import { JOB_COLUMNS } from "./types";
 import { sortAndFilterJobs } from "@/lib/scoring";
 import {
   filterAndRankJobs,
@@ -21,6 +20,17 @@ import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 const FTS_CAP = 8000;
 const DB_PAGE = 1000;
 const SCAN_BUDGET = 28000;
+// ⚠️⚠️ 别再尝试「并行取候选页」来加速这条扫描路径 —— 2026-07-30 线上实测两次都更差：
+//   1) 照搬 lib/job-search.ts 的 BATCH_SIZES=[4,8,16] → 直接 500
+//      ({"error":"timeout exceeded when trying to connect"})。两条路径机制不同不能照搬：
+//      那份走 supabase-js（HTTP，无池上限），这里直连 pg，受 client.ts 的
+//      max:5 + connectionTimeoutMillis:8000 约束，池满后多出的获取请求不排队、8s 就抛。
+//   2) 降到并发 3（< 池 max）后 500 消失，但 TTFB 从基线 25s **恶化到 32s**。
+// 原因：香港库是 2 vCPU 轻量机，而 `order by first_seen_at desc limit 1000 offset 27000`
+// 这类大偏移扫描是 DB 端 CPU 密集活（要走完并跳过 2.7 万行），并发只是互抢 CPU；
+// node-pg 解析 2.8 万肥行也是单线程，并行取回只让解析交错。
+// → 结论：这条路径的瓶颈不是「等网络往返」，并行救不了它。真正的解法是别扫 2.8 万行
+//   （把打分/排序下推到 SQL，或缩小候选窗口），属于检索层重构，见设计文档。
 
 // 候选取数只拉「打分/精筛」真正要用的列，把纯展示/写库列（正文之外最肥的 canonical_jd_url 等）留到
 // 分页命中后再补——函数固定在美东、库在香港，跨太平洋每少传一列 × 数千行都直接缩短耗时。JS 打分/精筛
@@ -158,24 +168,23 @@ async function searchViaScan(
 ): Promise<SearchResult> {
   const need = offset + limit;
   const matched: ScoredJob[] = [];
-  let off = 0;
+  let nextOff = 0;
   let exhausted = false;
   const conds = ["status = 'active'"];
   const params: unknown[] = [];
   appendJobScopeWhere(conds, params, prefs, filters);
   appendRecruitmentPrefilter(conds, filters.jobType); // 校招/实习超集下推，扫描也少翻无关行
-  while ((filters.sortBy === "match" || matched.length <= need) && !exhausted && off < SCAN_BUDGET) {
-    const rows: any[] = annotateSourceAdapter(
-      await jobsQuery(
-        `select ${JOB_COLUMNS} from jobs where ${conds.join(" and ")} order by first_seen_at desc limit $${params.length + 1} offset $${params.length + 2}`,
-        [...params, DB_PAGE, off],
-      ),
-      adapterBySource,
-    );
-    if (!rows.length) {
-      exhausted = true;
-      break;
-    }
+  // 候选只取 CANDIDATE_COLUMNS（与 FTS 路径同一套）：JS 打分/精筛只读这些列，纯展示列留到
+  // 命中页再回补。此前这里拉的是全量 JOB_COLUMNS —— sortBy=match 默认要看满 SCAN_BUDGET=28000 行，
+  // 多传的 6 个展示列 × 2.8 万行是白扔的带宽。
+  const sql =
+    `select ${CANDIDATE_COLUMNS} from jobs where ${conds.join(" and ")} ` +
+    `order by first_seen_at desc limit $${params.length + 1} offset $${params.length + 2}`;
+  const fetchRows = (want: number, off: number) => jobsQuery(sql, [...params, want, off]);
+  // 吸收一批：打分/精筛后并入 matched，返回「是否已到底」（拿到的比想要的少 = 没更多了）。
+  const absorb = (raw: unknown, want: number): boolean => {
+    const rows: any[] = annotateSourceAdapter(raw as any[], adapterBySource);
+    if (!rows.length) return true;
     const scored = sortAndFilterJobs(rows, prefs, actions, {
       showIgnored: true,
       showApplied: true,
@@ -183,13 +192,40 @@ async function searchViaScan(
     for (const j of scored) {
       if (jobFilterTier(j, filters) !== null) matched.push(j);
     }
-    if (rows.length < DB_PAGE) exhausted = true;
-    off += DB_PAGE;
+    return rows.length < want;
+  };
+
+  if (filters.sortBy === "match") {
+    // match 必须看满 SCAN_BUDGET 才能按分排序 → **一次查完，不要 OFFSET 翻页**。
+    // 翻页是移植 lib/job-search.ts 时留下的阑尾：那侧走 PostgREST（单次最多返 1000 行）
+    // 才不得不翻页，直连 pg 没有该上限 —— 同文件的 FTS 路径本来就是一条 `limit FTS_CAP`。
+    // OFFSET 还是二次方浪费：第 k 页要重走 k×1000 条索引项，28 页累计走 40.6 万次才取回 2.8 万行。
+    // 结果集与顺序同翻页版完全一致（同一 where + 同一 order by，只是不再分片取）。
+    //
+    // 香港库实测（EXPLAIN ANALYZE，热缓存，不含结果传输）：
+    //   28 次 OFFSET 翻页累计  679 ms
+    //   单查询 limit 28000      45~73 ms
+    // ⚠️ 收益就 ~0.6s，别高估：这条接口端到端约 21s，DB 执行只占极小一块。
+    // 真正的大头是**把候选传回来**——2.8 万行里 summary 就占 15 MB（其余关键列仅 4.3 MB）。
+    // 而 summary 砍不掉：classifyJobFunction / keywordMatchTier 的兄弟组排除 / 校招信号判定
+    // 都要读它（见 lib/china-keyword-expansion.js:709/753/623），砍了就是静默改坏匹配精度。
+    // → 下一步真解法是**物化派生字段**（job_function / 招聘类型等落成列，写入时算好），
+    //   让候选取数不再需要 summary。属 schema 改动，见设计文档。
+    exhausted = absorb(await fetchRows(SCAN_BUDGET, 0), SCAN_BUDGET);
+  } else {
+    // newest 攒够 need 即停 → 保持逐页，不为了少几次往返把 2.8 万行全拉回来。
+    // （并行取页已实测更慢/会 500，见上面常量位置的记录，别再改回去。）
+    while (matched.length <= need && !exhausted && nextOff < SCAN_BUDGET) {
+      exhausted = absorb(await fetchRows(DB_PAGE, nextOff), DB_PAGE);
+      nextOff += DB_PAGE;
+    }
   }
   const ranked = filterAndRankJobs(matched, filters);
   const breakdown = countMatchBreakdown(ranked);
+  const page = ranked.slice(offset, offset + limit);
+  await hydratePageColumns(page); // 命中页回补展示列（候选阶段省传）
   return {
-    jobs: ranked.slice(offset, offset + limit),
+    jobs: page,
     total: ranked.length,
     exactCount: breakdown.exact,
     relatedSameFunction: breakdown.relatedSameFunction,

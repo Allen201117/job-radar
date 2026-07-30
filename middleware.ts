@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { verifyRequestClaims } from "@/lib/auth-claims";
 
 export async function middleware(request: NextRequest) {
   // setAll 刷新出来的会话 cookie：① 回写浏览器（Set-Cookie）；② 并入转发给页面的请求 cookie 头，
@@ -25,9 +26,12 @@ export async function middleware(request: NextRequest) {
   );
 
   // 全站唯一一次安全级验证（同时按需刷新会话）。受保护页面不再重复调用 getUser。
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // 走本地 JWT 验签而非 getUser()：middleware 跑在全球边缘节点，**不跟随 vercel.json 的
+  // regions 设置**（Vercel 官方明确说明），所以这里每请求一次的 Auth 网络往返（边缘 →
+  // Supabase 所在区域）没法靠迁移机房消除，只能靠「不联网」消除。
+  // 会话刷新照常发生（getClaims 内部先 getSession，临期即用 refresh token 刷新并触发上面的
+  // setAll），因此下面的 cookie 回写逻辑无需改动。详见 lib/auth-claims.ts。
+  const user = await verifyRequestClaims(supabase);
 
   // 转发给页面的请求头：注入「已验证」的 user id/email——页面零网络读取（见 lib/auth.getRequestUser），
   // 省掉每次导航在页面里重复一次 getUser() 网络往返（冷启动下这是最大的串行阻塞之一）。

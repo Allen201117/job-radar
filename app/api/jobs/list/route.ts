@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
+import { verifyRequestClaims } from "@/lib/auth-claims";
 import { jobsStoreEnabled, listLatestActive } from "@/lib/jobs-store/read";
 import { sortAndFilterJobs } from "@/lib/scoring";
 import type { Job, UserPreferences, JobAction } from "@/lib/types";
@@ -11,9 +12,7 @@ export const dynamic = "force-dynamic";
 // 打分口径与岗位库页 SSR 一致（同 sortAndFilterJobs + 用户偏好/操作），合并后前端再按 match_score/最新统一排序。
 export async function GET(request: NextRequest) {
   const supabase = await createServerSupabase();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await verifyRequestClaims(supabase);
 
   const params = request.nextUrl.searchParams;
   const offset = Math.max(0, Number(params.get("offset") || 0));
