@@ -16,6 +16,11 @@ PLATFORM_DOMAINS = {
     "feishu.cn", "mioffice.cn", "mokahr.com", "zhiye.com",
     "greenhouse.io", "lever.co", "myworkdayjobs.com", "workday.com",
     "ashbyhq.com", "smartrecruiters.com", "teamtailor.com", "pinpointhq.com",
+    # 2026-07-30 补：这几个也是共享平台，之前漏了 → 197 个源把平台域名当成了自家品牌域名
+    # （hotjob.cn=北森 wecruit 159 个源 / iguopin.com=国聘 28 个 / oraclecloud.com=Oracle HCM / eightfold.ai=Eightfold ATS）。
+    # 后果有两层：① 平台一旦有 favicon，这 197 家会集体显示平台 logo（张冠李戴）；
+    # ② 因为 domain 已「有值」，slug 兜底那条路根本不会被触发，等于白白放弃这些公司的真 logo。
+    "hotjob.cn", "iguopin.com", "oraclecloud.com", "eightfold.ai",
 }
 # 子串命中即视为平台（北森系多变体域名）。
 _PLATFORM_SUBSTRINGS = ("beisen", "italent")

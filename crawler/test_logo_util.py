@@ -247,6 +247,22 @@ class PlaceholderProbeDomainTests(unittest.TestCase):
             self.assertTrue(d.endswith(".com"))
 
 
+class SharedPlatformHostTests(unittest.TestCase):
+    """共享平台域名必须被排除：否则同平台上百家公司会集体拿到平台自己的 logo（张冠李戴），
+    且因为 domain 已「有值」，slug 兜底那条路不会被触发 = 白白放弃这些公司的真 logo。"""
+
+    def test_late_added_platforms(self):
+        # 2026-07-30 实测 sources 里的量：hotjob.cn 159 / iguopin.com 28 / oraclecloud.com 6 / eightfold.ai 4
+        for d in ("hotjob.cn", "iguopin.com", "oraclecloud.com", "eightfold.ai"):
+            self.assertTrue(is_platform_domain(d), d)
+
+    def test_source_url_on_platform_yields_no_domain(self):
+        self.assertIsNone(
+            domain_for_company("奥迪汽车（中国）业务有限公司", "https://wecruit.hotjob.cn/SU123/pb/social.html", {})
+        )
+        self.assertIsNone(domain_for_company("某央企", "https://www.iguopin.com/job?company=x", {}))
+
+
 class IsImageBytesTests(unittest.TestCase):
     def test_real_image_headers(self):
         self.assertTrue(is_image_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20))
