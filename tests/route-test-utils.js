@@ -62,7 +62,19 @@ function loadRoute(relativePath, mocks = {}) {
     if (request.startsWith("@/")) {
       return scopedRequire(path.join(ROOT, request.slice(2)));
     }
-    return scopedRequire(request);
+    try {
+      return scopedRequire(request);
+    } catch (e) {
+      // Node 的 require 不认 .ts。被测文件里未被显式 mock 的相对 TS 依赖（如 lib/apiAuth.ts
+      // 依赖的 ./auth-claims）走到这里，就地转译加载真实实现，而不是 MODULE_NOT_FOUND。
+      // 只作为解析失败后的回落，既有解析顺序与行为不变。
+      if (e.code !== "MODULE_NOT_FOUND" || !request.startsWith(".")) throw e;
+      const base = path.resolve(path.dirname(sourcePath), request);
+      for (const candidate of [`${base}.ts`, `${base}.tsx`, path.join(base, "index.ts")]) {
+        if (fs.existsSync(candidate)) return loadTsModule(path.relative(ROOT, candidate));
+      }
+      throw e;
+    }
   };
 
   const mod = { exports: {} };
