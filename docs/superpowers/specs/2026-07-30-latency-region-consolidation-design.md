@@ -219,10 +219,63 @@ while ((filters.sortBy === "match" || matched.length <= need) && !exhausted && o
 
 已退回串行（commit `1994bfd`），只保留唯一安全改进：候选只取 `CANDIDATE_COLUMNS` + 命中页 `hydratePageColumns` 回补（与 FTS 路径同一套，严格少传数据）→ **20.8~21.4s**（约 18%）。
 
-### 7.6.2 下一步（需单独立项）
+### 7.6.2 第三次尝试：去掉 OFFSET 翻页（成功，已上线 `654bbbd`）
 
-真解法不是微优化，而是**别扫 2.8 万行**：把打分/排序下推到 SQL，或缩小候选窗口。但 `sortBy=match` 的语义（必须看满预算才能排序）决定了得先改语义，属检索层重构。
-⚠️ 动它必须 live 验覆盖率——历史上有人把 city 移出 tsquery 导致覆盖从 28678 暴跌到 1818。
+`searchViaScan` 的 match 路径原本用 28 页 × `DB_PAGE=1000` 的 OFFSET 循环取满预算。**那是移植 `lib/job-search.ts` 时留下的阑尾**：那侧走 PostgREST（单次最多返 1000 行）才不得不翻页，直连 pg 没有该上限——同文件的 FTS 路径本来就是一条 `limit FTS_CAP` 单查询。OFFSET 还是二次方浪费：第 k 页要重走 k×1000 条索引项，28 页累计走 40.6 万次才取回 2.8 万行。
+
+改为单查询 `limit SCAN_BUDGET`，结果集与顺序完全一致（同一 where + 同一 order by）。`newest` 路径保持逐页（攒够即停）。
+
+香港库 `EXPLAIN ANALYZE`（热缓存，不含结果传输）：
+
+```
+28 次 OFFSET 翻页累计   679 ms
+单查询 limit 28000       45~73 ms
+```
+
+⚠️ **诚实标注**：此前基于一次**冷缓存**测量（offset 27000 = 423ms）在注释里写过「6.1s → 0.42s」，热缓存实测只有 ~0.6s 收益，已更正。DB 执行在端到端 21s 里只占极小一块。
+
+### 7.6.3 累计效果与剩余瓶颈
+
+| 阶段 | `/api/jobs/search` TTFB |
+|---|---|
+| 原始 | 25.3~26.2s |
+| + 候选列裁剪（`1994bfd`） | 20.8~21.4s |
+| + 去掉 OFFSET 翻页（`654bbbd`） | **16.6~17.8s（均值 17.2s）** |
+
+累计约 **−34%**。`total=28000` 说明预算照旧扫满、结果正确。
+
+**剩余瓶颈 = 把候选传回来。** 香港库实测这 2.8 万行里：
+
+```
+summary        15 MB
+其余关键列      4.3 MB
+```
+
+而 `summary` **砍不掉**（已逐行核实 `lib/china-keyword-expansion.js`）：
+
+| 用途 | 位置 |
+|---|---|
+| `classifyJobFunction`（职能门） | `:709` `normalizeForMatch([title, summary])` |
+| `keywordMatchTier` 兄弟组排除 | `:753` `_jobSearchableText` |
+| 校招/实习信号判定 | `:623` `hasStrongCampusSignal(title + summary)` |
+| `exclude_keywords` 硬过滤 | `lib/scoring.ts:181` |
+
+砍了就是静默改坏职能门 / 匹配层级 / 校招判定 —— 不可接受。
+
+### 7.6.4 下一步：物化派生字段（未做，需拍板）
+
+要让候选取数不再需要 `summary`，得把上面那几个「从 title+summary 算出来的判断」在**写入时算好、落成列**：
+
+1. 迁移给 `jobs` 加列（`job_function`、招聘类型、兄弟组命中位图等）：改 `jobs-db/schema.sql` → `gh workflow run jobs-db-migrate`；
+2. 回填 317,220 行（离线跑一次分类器）；
+3. 写入端同步产出该列：`crawler/jobs_db.py` + `lib/jobs-store/write.ts` 两处同口径；
+4. `classifyJobFunction` 等改为「有列就读列、没有才现算」（向后兼容）；
+5. `exclude_keywords` 下推 SQL（用 `strpos(lower(...), lower($n)) = 0`，与 JS 的 `text.includes` 逐字等价，避免 LIKE 转义问题）；
+6. 之后才能把 `summary` 从 `CANDIDATE_COLUMNS` 移除。
+
+**成本/风险**：schema 改动 + 生产热表 31 万行回填 + 匹配器行为改动。⚠️ 必须 live 验覆盖率——历史上有人把 city 移出 tsquery 导致覆盖从 28678 暴跌到 1818（见记忆 `job-radar-filter-design-overhaul`）。
+
+**更便宜的替代方案（一行改动，但属产品取舍）**：调小 `SCAN_BUDGET`。它本就是近似（2.8 万 / 31.7 万 = 8.8% 的库），砍到 8000（与 `FTS_CAP` 齐平）可把传输量降到约 1/3.5，但**会改变匹配候选范围**——匹配质量与速度的权衡，需产品决策，不由实现方单方面定。
 
 ## 8. 验证
 
