@@ -218,6 +218,26 @@ export interface FeedCounts {
   filtered?: FilteredCounts; // 被剔除分桶（价值叙事用；由 service 填充）
 }
 
+/** feed 构建各阶段耗时（毫秒，诊断用）。
+ *
+ * 为什么要有它：/today 的总时长长期定位不出主人 —— 本机经代理量到的 I/O 数字会被自己的慢链路
+ * 放大，拿去外推线上瓶颈**必然错**（2026-07-30 连错两次：先猜 sources 全表拉取贵、又猜是行数多，
+ * 加缓存 / 改按 id 取之后线上总时长纹丝不动；而纯 CPU 的逐岗计算本地实测只有 430ms）。
+ * 所以改为在**线上**直接量：performance.now() 成本可忽略、常开无妨，
+ * 只有 `/today?__timing=1` 才会把它渲染进页面（普通用户拿不到）。 */
+export interface FeedTiming {
+  recall: number; // 香港库召回（与 critical 并行）
+  critical: number; // 香港库关键提醒（与 recall 并行）
+  parallel: number; // 上面这一阶段的墙钟 = 两条里最慢的那条
+  sourcemeta: number; // Supabase(悉尼) 按 id 取 source 元信息
+  compute: number; // 逐岗 JS 计算（事实/硬门/打分/信号）
+  group: number; // 分区
+  hydrate: number; // 香港库按 id 回填展示行
+  total: number; // buildOpportunityFeed 端到端
+  candidates: number; // 召回条数
+  displayed: number; // 最终展示条数
+}
+
 // /api/opportunities 响应体（§7.1 + v3 §8.2）
 export interface OpportunityFeed {
   generated_at: string;
@@ -228,4 +248,5 @@ export interface OpportunityFeed {
   intensity: RadarIntensity; // 强度（日常推荐的量/频/门槛）
   counts: FeedCounts;
   sections: FeedSections;
+  timing?: FeedTiming;
 }
