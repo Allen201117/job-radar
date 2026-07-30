@@ -3,7 +3,6 @@
 //   差别仅「候选取数」从 supabase-js 换成直连 pg SQL → 搜索口径/精度/排序与线上零差异。
 import "server-only";
 import { jobsQuery } from "./client";
-import { JOB_COLUMNS } from "./types";
 import { sortAndFilterJobs } from "@/lib/scoring";
 import {
   filterAndRankJobs,
@@ -21,6 +20,10 @@ import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 const FTS_CAP = 8000;
 const DB_PAGE = 1000;
 const SCAN_BUDGET = 28000;
+// 扫描路径每批并行取几页（与 lib/job-search.ts 同一组值）：4+8+16=28 页 × DB_PAGE 正好铺满
+// SCAN_BUDGET。注意 lib/jobs-store/client.ts 的连接池 max:5，所以后面的大批次实际由池限流成
+// 最多 5 个并发、其余排队——这是有意的：既拿到并行收益，也不会拿几十个连接去压香港库。
+const BATCH_SIZES = [4, 8, 16];
 
 // 候选取数只拉「打分/精筛」真正要用的列，把纯展示/写库列（正文之外最肥的 canonical_jd_url 等）留到
 // 分页命中后再补——函数固定在美东、库在香港，跨太平洋每少传一列 × 数千行都直接缩短耗时。JS 打分/精筛
@@ -158,24 +161,23 @@ async function searchViaScan(
 ): Promise<SearchResult> {
   const need = offset + limit;
   const matched: ScoredJob[] = [];
-  let off = 0;
+  let nextOff = 0;
   let exhausted = false;
   const conds = ["status = 'active'"];
   const params: unknown[] = [];
   appendJobScopeWhere(conds, params, prefs, filters);
   appendRecruitmentPrefilter(conds, filters.jobType); // 校招/实习超集下推，扫描也少翻无关行
-  while ((filters.sortBy === "match" || matched.length <= need) && !exhausted && off < SCAN_BUDGET) {
-    const rows: any[] = annotateSourceAdapter(
-      await jobsQuery(
-        `select ${JOB_COLUMNS} from jobs where ${conds.join(" and ")} order by first_seen_at desc limit $${params.length + 1} offset $${params.length + 2}`,
-        [...params, DB_PAGE, off],
-      ),
-      adapterBySource,
-    );
-    if (!rows.length) {
-      exhausted = true;
-      break;
-    }
+  // 候选只取 CANDIDATE_COLUMNS（与 FTS 路径同一套）：JS 打分/精筛只读这些列，纯展示列留到
+  // 命中页再回补。此前这里拉的是全量 JOB_COLUMNS —— sortBy=match 默认要看满 SCAN_BUDGET=28000 行，
+  // 多传的 6 个展示列 × 2.8 万行是白扔的带宽。
+  const sql =
+    `select ${CANDIDATE_COLUMNS} from jobs where ${conds.join(" and ")} ` +
+    `order by first_seen_at desc limit $${params.length + 1} offset $${params.length + 2}`;
+  const fetchPage = (off: number) => jobsQuery(sql, [...params, DB_PAGE, off]);
+  // 吸收一页：把候选打分/精筛后并入 matched，返回「是否该停」（空页或短页=已到底）。
+  const absorbPage = (raw: unknown): boolean => {
+    const rows: any[] = annotateSourceAdapter(raw as any[], adapterBySource);
+    if (!rows.length) return true;
     const scored = sortAndFilterJobs(rows, prefs, actions, {
       showIgnored: true,
       showApplied: true,
@@ -183,13 +185,41 @@ async function searchViaScan(
     for (const j of scored) {
       if (jobFilterTier(j, filters) !== null) matched.push(j);
     }
-    if (rows.length < DB_PAGE) exhausted = true;
-    off += DB_PAGE;
+    return rows.length < DB_PAGE;
+  };
+
+  if (filters.sortBy === "match") {
+    // match 必须看满 SCAN_BUDGET 才能按分排序 → 页数是定的，分批并行取（复刻 lib/job-search.ts
+    // 的 BATCH_SIZES，4+8+16=28 页刚好铺满预算）。此前是串行逐页 await：28 趟往返 + 28 次传输
+    // 顺序叠加，实测整条接口 25s。批内并行、批间仍按页序 absorb → matched 顺序与 exhausted
+    // 语义同串行版完全一致，纯粹少干等。
+    for (const bsize of BATCH_SIZES) {
+      if (exhausted || nextOff >= SCAN_BUDGET) break;
+      const offsets: number[] = [];
+      for (let k = 0; k < bsize && nextOff < SCAN_BUDGET; k++, nextOff += DB_PAGE) {
+        offsets.push(nextOff);
+      }
+      const pages = await Promise.all(offsets.map((o) => fetchPage(o)));
+      for (const raw of pages) {
+        if (absorbPage(raw)) {
+          exhausted = true;
+          break;
+        }
+      }
+    }
+  } else {
+    // newest 攒够 need 就能停 → 保持串行逐页，不为了并行白拉后面几页。
+    while (matched.length <= need && !exhausted && nextOff < SCAN_BUDGET) {
+      exhausted = absorbPage(await fetchPage(nextOff));
+      nextOff += DB_PAGE;
+    }
   }
   const ranked = filterAndRankJobs(matched, filters);
   const breakdown = countMatchBreakdown(ranked);
+  const page = ranked.slice(offset, offset + limit);
+  await hydratePageColumns(page); // 命中页回补展示列（候选阶段省传）
   return {
-    jobs: ranked.slice(offset, offset + limit),
+    jobs: page,
     total: ranked.length,
     exactCount: breakdown.exact,
     relatedSameFunction: breakdown.relatedSameFunction,
