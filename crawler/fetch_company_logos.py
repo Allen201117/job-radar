@@ -21,6 +21,7 @@ import base64
 import hashlib
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -47,6 +48,7 @@ _HOME_TIMEOUT = 6.0        # 猜域名时抓首页做核验，短超时（量大
 _FRESH_DAYS = 30
 _SMALL_WIDTH = 48          # 已有图窄于此 → 继续找更清晰的来源（站点大图 / icon.horse）
 _MAX_BYTES = 200_000       # favicon 不该更大；超过视为异常，不入库（首字母兜底）
+_WORKERS = 8               # 并发抓取的公司数（各家不同 host，不集中压单站；写库仍在主线程串行）
 _DDG = "https://icons.duckduckgo.com/ip3/{domain}.ico"
 _ICON_HORSE = "https://icon.horse/icon/{domain}"
 
@@ -327,12 +329,13 @@ def main() -> None:
         if args.repair_placeholders:
             stale_keys.update(find_fake_logo_keys(sb, placeholders))
 
+        # 先按新鲜度筛出真正要抓的公司，再并发抓（近千家公司串行抓要几小时，会撞 CI 超时；
+        # 每家公司是不同 host，并发不会集中压同一站点）。
+        targets = []
         for key, (company, source_url) in seen.items():
-            if args.limit and processed >= args.limit:
+            if args.limit and len(targets) >= args.limit:
                 break
-            # 新鲜度跳过（stale_keys 里的强制重抓）
-            stale_override = key in stale_keys
-            if not args.force and not stale_override and existing.get(key):
+            if not args.force and key not in stale_keys and existing.get(key):
                 try:
                     ts = datetime.fromisoformat(str(existing[key]).replace("Z", "+00:00"))
                     if ts > fresh_cutoff:
@@ -340,9 +343,13 @@ def main() -> None:
                         continue
                 except Exception:
                     pass
-            processed += 1
+            targets.append((key, company, source_url))
+        print(f"[logo] 需抓取 {len(targets)} 家（跳过新鲜的 {stats['skip']} 家），并发 {_WORKERS}")
 
-            now_iso = datetime.now(timezone.utc).isoformat()
+        def work(item):
+            """单家公司：定域名 → 抓图 → 返回待写行（异常不外抛，坏一家不拖垮整批）。"""
+            key, company, source_url = item
+            slug_resolved = False
             # 域名优先级：覆盖表/非平台 host > 库里已核验过的域名 > slug 猜+页面核验（平台托管公司的兜底）
             domain = domain_for_company(company, source_url, COMPANY_DOMAIN_OVERRIDES)
             if not domain:
@@ -350,39 +357,49 @@ def main() -> None:
                 if not domain:
                     try:
                         domain = resolve_domain_by_slug(client, company, source_url)
-                        if domain:
-                            stats["slug_ok"] += 1
+                        slug_resolved = bool(domain)
                     except Exception as e:  # noqa: BLE001
                         print(f"[logo] slug 解析异常 {company}: {e}", file=sys.stderr)
-            result = None
+            result, err = None, False
             if domain:
                 try:
                     result = fetch_one(client, domain, placeholders)
                 except Exception as e:  # noqa: BLE001
                     print(f"[logo] 抓取异常 {company}/{domain}: {e}", file=sys.stderr)
+                    err = True
+            return company, domain, result, slug_resolved, err
+
+        with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
+            for company, domain, result, slug_resolved, err in pool.map(work, targets):
+                processed += 1
+                if slug_resolved:
+                    stats["slug_ok"] += 1
+                if err:
                     stats["err"] += 1
+                now_iso = datetime.now(timezone.utc).isoformat()
+                if result is None:
+                    row = {
+                        "company": company, "logo_data": None, "domain": domain,
+                        "width": None, "source": None, "status": "not_found", "fetched_at": now_iso,
+                    }
+                    stats["not_found"] += 1
+                else:
+                    row = {
+                        "company": company,
+                        "logo_data": build_data_uri(result["content_type"], result["bytes"]),
+                        "domain": domain, "width": result["width"], "source": result["source"],
+                        "status": "found", "fetched_at": now_iso,
+                    }
+                    stats["found"] += 1
+                    by_source[result["source"]] = by_source.get(result["source"], 0) + 1
 
-            if result is None:
-                row = {
-                    "company": company, "logo_data": None, "domain": domain,
-                    "width": None, "source": None, "status": "not_found", "fetched_at": now_iso,
-                }
-                stats["not_found"] += 1
-            else:
-                row = {
-                    "company": company,
-                    "logo_data": build_data_uri(result["content_type"], result["bytes"]),
-                    "domain": domain, "width": result["width"], "source": result["source"],
-                    "status": "found", "fetched_at": now_iso,
-                }
-                stats["found"] += 1
-                by_source[result["source"]] = by_source.get(result["source"], 0) + 1
-
-            try:
-                sb.table("company_logos").upsert(row, on_conflict="company_key").execute()
-            except Exception as e:  # noqa: BLE001
-                print(f"[logo] 写入失败 {company}: {e}", file=sys.stderr)
-                stats["err"] += 1
+                try:
+                    sb.table("company_logos").upsert(row, on_conflict="company_key").execute()
+                except Exception as e:  # noqa: BLE001
+                    print(f"[logo] 写入失败 {company}: {e}", file=sys.stderr)
+                    stats["err"] += 1
+                if processed % 50 == 0:
+                    print(f"[logo] 进度 {processed}/{len(targets)}：{stats}", flush=True)
 
     print(f"[logo] 完成：{stats} 来源分布={by_source}（processed={processed}）")
 
