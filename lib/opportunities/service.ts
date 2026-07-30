@@ -22,7 +22,6 @@ import { parseDeadline } from "./deadline";
 import { recallOpportunityCandidates } from "../jobs-store/opportunities";
 import { jobsByIds, jobsStoreEnabled } from "../jobs-store/read";
 import { hydrateOpportunityJobs } from "./hydration";
-import { fetchAllSources } from "../supabase-paginate";
 
 type SupabaseLike = { from: (table: string) => any };
 
@@ -41,54 +40,72 @@ function buildActionMap(actions: JobAction[]): Map<string, ActionState> {
   return map;
 }
 
-// 批量取 source 元信息（sources 永远在 Supabase）；失败不抛，freshness 退化为 manual SLA（§14.2）。
-// 取**全部** source 元信息。一次性取全表 = 可与召回并行（不再依赖召回回来的 source_ids，
-// 省掉一条串行跨区往返）；失败不抛，freshness 退化为 manual SLA（§14.2）。
-// ⚠️ 必须走 fetchAllSources 分页：sources 已越过 PostgREST 单次 1000 行上限（2026-07-20 实测 1121），
-// 不分页拿到的 Map 缺条目 → 尾部源的岗位 freshness 静默退化成 manual SLA。
-/** source 元信息全局缓存（同一 lambda 实例内共享）。
- *
- * 为什么值得缓存：这份数据**与用户无关、全站同一份**，且只在爬虫跑完才变（last_checked_at）。
- * 改造前每次 /today 渲染都要从 Supabase（悉尼）分页拉全部 1121 行 —— 因为越过 PostgREST 单次
- * 1000 行上限，`fetchAllSources` 内部是**串行**翻页，即每次渲染 2 趟跨洋往返 + 传 1121 行，
- * 而它撑高了 buildOpportunityFeed 那个 Promise.all 阶段的耗时（该阶段取三条里最慢的那条）。
- * TTL 5 分钟：freshness 徽章只看「上次检查时间」的粗粒度，5 分钟内完全够新鲜。
- * in-flight 去重：冷启动瞬间多请求打进来时只拉一次。 */
+const SOURCE_META_COLUMNS = "id, company, adapter_name, crawl_method, last_checked_at, enabled";
+/** freshness 徽章只看「上次检查时间」的粗粒度，5 分钟内完全够新鲜。 */
 const SOURCE_META_TTL_MS = 5 * 60 * 1000;
-let sourceMetaCache: { expiresAt: number; value: Map<string, SourceMeta> } | null = null;
-let sourceMetaInFlight: Promise<Map<string, SourceMeta>> | null = null;
+/** 单次 `.in()` 带几个 id：PostgREST 的 select 走 GET，id 太多会把 URL 撑爆。 */
+const SOURCE_META_CHUNK = 100;
+
+let sourceMetaCache = new Map<string, SourceMeta>();
+let sourceMetaCacheAt = 0;
 
 /** 供测试重置模块级缓存，避免用例间互相污染。 */
 export function __resetSourceMetaCache(): void {
-  sourceMetaCache = null;
-  sourceMetaInFlight = null;
+  sourceMetaCache = new Map();
+  sourceMetaCacheAt = 0;
 }
 
-async function fetchSourceMeta(supabase: SupabaseLike): Promise<Map<string, SourceMeta>> {
-  if (sourceMetaCache && sourceMetaCache.expiresAt > Date.now()) return sourceMetaCache.value;
-  if (sourceMetaInFlight) return sourceMetaInFlight;
+/**
+ * 取本次召回**真正涉及到**的那些 source 的元信息（sources 永远在 Supabase）。
+ * 失败不抛，freshness 退化为 manual SLA（§14.2）。
+ *
+ * ⚠️ 为什么不再取全表：旧实现一次性拉全部 sources，理由是「可与召回并行、省一条串行往返」。
+ * 但 sources 已越过 PostgREST 单次 1000 行上限（实测 1121），`fetchAllSources` 内部因此是
+ * **串行**翻页 —— 所谓的"并行"里藏着 2 趟跨洋往返 + 1121 行传输，本地实测这一条就要 1434ms，
+ * 反而成了 buildOpportunityFeed 那个 Promise.all 阶段的最慢一条。
+ * 而实测一次召回（limit 4000）只涉及 **395 个源**：改成按 id 取后 395 < 1000 → 一次往返、
+ * 行数少 65%，即使排在召回之后串行执行也更快。
+ *
+ * 另加按 id 的进程内缓存（TTL 5 分钟）：同实例的后续渲染只补差集。⚠️ 但别指望它——
+ * 低流量下 Vercel 几乎每请求一个新实例，命中率很低（本轮实测：只加缓存不改取数方式，
+ * /today 总时长纹丝不动）。真正的收益来自「少取行」，缓存只是锦上添花。
+ */
+async function fetchSourceMetaFor(
+  supabase: SupabaseLike,
+  jobs: Array<{ source_id?: string | null }>,
+): Promise<Map<string, SourceMeta>> {
+  const wanted = new Set<string>();
+  for (const j of jobs) if (j.source_id) wanted.add(j.source_id);
+  if (!wanted.size) return new Map();
 
-  const p = (async () => {
-    const map = new Map<string, SourceMeta>();
+  if (Date.now() - sourceMetaCacheAt > SOURCE_META_TTL_MS) {
+    sourceMetaCache = new Map();
+    sourceMetaCacheAt = Date.now();
+  }
+  const missing = Array.from(wanted).filter((id) => !sourceMetaCache.has(id));
+  if (missing.length) {
+    const chunks: string[][] = [];
+    for (let i = 0; i < missing.length; i += SOURCE_META_CHUNK) {
+      chunks.push(missing.slice(i, i + SOURCE_META_CHUNK));
+    }
     try {
-      const rows = await fetchAllSources<SourceMeta>(
-        supabase,
-        "id, company, adapter_name, crawl_method, last_checked_at, enabled",
+      const results = await Promise.all(
+        chunks.map((ids) => supabase.from("sources").select(SOURCE_META_COLUMNS).in("id", ids)),
       );
-      for (const s of rows) map.set(s.id, s);
-      // 只在真拿到数据时才写缓存：失败时若把空 Map 缓存住，整个 TTL 内所有岗位的 freshness
-      // 都会静默退化成 manual SLA（§14.2），比多拉一次贵得多。
-      sourceMetaCache = { expiresAt: Date.now() + SOURCE_META_TTL_MS, value: map };
+      for (const r of results) {
+        if (r?.error) throw new Error(r.error.message);
+        for (const s of (r?.data || []) as SourceMeta[]) sourceMetaCache.set(s.id, s);
+      }
     } catch (e) {
       console.warn("[opportunities] source metadata query threw:", (e as Error).message);
     }
-    return map;
-  })();
-  sourceMetaInFlight = p;
-  p.finally(() => {
-    if (sourceMetaInFlight === p) sourceMetaInFlight = null;
-  });
-  return p;
+  }
+  const out = new Map<string, SourceMeta>();
+  for (const id of wanted) {
+    const s = sourceMetaCache.get(id);
+    if (s) out.set(id, s);
+  }
+  return out;
 }
 
 // recall 为省跨区传输只回硬门/打分必需列（截断 summary）；展示卡在这里按 id 用**完整行**回填。
@@ -191,14 +208,15 @@ export async function buildOpportunityFeed(
   }
 
   const actionMap = buildActionMap(actions);
-  // 三条互相独立的 I/O 并行（旧实现是 recall→sourceMeta→…→critical 顺序 await，跨区往返串行叠加）：
-  //   ① 岗位召回（香港库）② source 元信息（Supabase 全表）③ 关键提醒（香港库，按 saved/applied 岗）。
-  // 并行后 today SSR 只吃最慢一条，而非三条之和。
-  const [recall, sourceMeta, critical] = await Promise.all([
+  // 两条互相独立的 I/O 并行：① 岗位召回（香港库）② 关键提醒（香港库，按 saved/applied 岗）。
+  // source 元信息改为召回之后按 id 取（只要这一批真正涉及的源）——它原本挤在这个 Promise.all 里
+  // 号称"并行"，实际是全表分页的 2 趟串行跨洋往返 + 1121 行，反而是最慢的一条。
+  // 详见 fetchSourceMetaFor 的注释与实测数字。
+  const [recall, critical] = await Promise.all([
     recallOpportunityCandidates(profile, now, supabase),
-    fetchSourceMeta(supabase),
     buildCriticalAlerts(actions, profile, intensity, now),
   ]);
+  const sourceMeta = await fetchSourceMetaFor(supabase, recall.jobs);
 
   const opps: Opportunity[] = [];
   // 计分板置换：统计每一次静默 continue（用户看不见的过滤劳动），随 feed 外显。
