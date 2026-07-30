@@ -34,6 +34,8 @@
       radial-gradient(60% 48% at 100% 98%, rgba(236,198,176,.34), transparent 62%),
       radial-gradient(90% 60% at 50% 50%,  rgba(247,241,230,.55), transparent 70%);
   }
+  /* 画幅适配层：只负责把 1080×1920 基准画布等比放到目标分辨率。 */
+  #fit { position:absolute; width:1080px; height:1920px; transform-origin:0 0; will-change:transform; }
   /* 摄影机层：整片持续缓慢推进 / 平移都写在这一层的 transform 上 */
   #cam { position:absolute; inset:0; transform-origin:50% 50%; will-change:transform; }
   .sc  { position:absolute; inset:0; }
@@ -103,7 +105,8 @@
 </style>
 
 <div id="stage">
-  <div id="cam">
+  <div id="fit">
+    <div id="cam">
 
     <!-- ==================== S1 · 痛点：刷不完 ==================== -->
     <div class="sc" id="s1">
@@ -272,6 +275,7 @@
       <svg viewBox="0 0 24 24" width="30" height="30">
         <path d="M4 2l6.5 18 2.6-7.4L20 10z" fill="#1a1714" stroke="#fff" stroke-width="1.4"/>
       </svg>
+    </div>
     </div>
   </div>
   <div id="grain"></div>
@@ -888,18 +892,17 @@ window.__setSize = (w,h) => {
   st.style.width = w+'px'; st.style.height = h+'px';
   // 竖屏 1080×1920 是基准；其他画幅整体等比缩放后居中，版式不重排
   const k = Math.min(w/W, h/H);
+  const fit = el('fit');
   const cam = el('cam');
+  fit.style.width = W+'px'; fit.style.height = H+'px';
+  fit.style.left = ((w-W*k)/2)+'px'; fit.style.top = ((h-H*k)/2)+'px';
+  fit.style.transform = `scale(${k})`;
   cam.style.width = W+'px'; cam.style.height = H+'px';
-  cam.style.left = ((w-W*k)/2)+'px'; cam.style.top = ((h-H*k)/2)+'px';
+  cam.style.left = '0px'; cam.style.top = '0px';
   cam.style.right='auto'; cam.style.bottom='auto';
-  cam.dataset.k = k;
-  window.__k = k;
 };
 window.__render = (t) => {
   render(Math.max(0, Math.min(DUR, t)));
-  // 画幅缩放叠在摄影机之外：把 __k 乘到 cam 已算好的 transform 上
-  const cam = el('cam'), k = window.__k || 1;
-  if (k !== 1) cam.style.transform = `scale(${k}) ` + cam.style.transform;
 };
 
 window.__setSize(W, H);
