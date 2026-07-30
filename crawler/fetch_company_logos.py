@@ -12,7 +12,10 @@
 - 域名推导不出时（飞书/北森/moka/workday 等平台托管）→ 用 URL 里的公司 slug 猜品牌域名，
   并抓首页做**页面核验**（页面自证属于该公司才认），防张冠李戴；核验不过就首字母兜底。
 
-用法：python3 fetch_company_logos.py [--limit N] [--force] [--refetch-not-found]
+用法：python3 fetch_company_logos.py [--limit N] [--force] [--refetch-not-found] [--repair-placeholders]
+  --refetch-not-found    上次没抓到的忽略新鲜度重抓（补了域名覆盖表后用）
+  --repair-placeholders  复检已入库的假 logo（占位图 / 跨域名重复图）并重抓
+  两者只影响「忽略新鲜度」的判断；全库重抓才用 --force。weekly CI 默认带前两个。
 """
 from __future__ import annotations
 
