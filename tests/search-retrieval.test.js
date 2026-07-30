@@ -173,11 +173,12 @@ test("jobs-store scan keeps scanning the budget before match ranking", async () 
 
   const result = await searchJobsStore({ ...filters, sortBy: "match" }, prefs, [], 0, 1);
 
-  // match 必须看满预算才能排序 → 按 BATCH_SIZES 首批并行取 4 页（不再串行逐页 await）。
-  // 数据在第 2 页就见底时，本批余下几页会空跑——这是换取「28 页不再顺序叠加」的代价，
+  // match 必须看满预算才能排序 → 按 SCAN_CONCURRENCY(=3) 分批并行取（不再串行逐页 await）。
+  // 数据在第 2 页就见底时，本批余下那页会空跑——这是换取「28 页不再顺序叠加」的代价，
   // 且过量取数被限制在一个批次内；生产库 30 万+ active 行，预算内页页都满。
+  // ⚠️ 这个数必须 < 连接池 max(5)：批次给大了池会抛 connect timeout 把接口打成 500（已踩过）。
   const { pageOffsets, hydrated } = splitScanCalls(calls);
-  assert.deepEqual(pageOffsets, [0, 1000, 2000, 3000]);
+  assert.deepEqual(pageOffsets, [0, 1000, 2000]);
   // 候选阶段不再拉展示列 → 命中页必须回补一次，否则前端拿不到 deadline/canonical_jd_url 等。
   assert.deepEqual(hydrated, ["high"]);
   assert.equal(result.jobs[0].id, "high");
