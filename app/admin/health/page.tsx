@@ -132,9 +132,12 @@ function loadAllSources(): Promise<SourceRow[]> {
   return fetchAllSources<SourceRow>(createServiceClient(), "company, enabled");
 }
 
-async function loadMustApplyCoverageForScope(scope: MustApplyScope, sources: SourceRow[]): Promise<MustApplyRowsByIndustry> {
+function buildMustApplyRowsForScope(
+  scope: MustApplyScope,
+  sources: SourceRow[],
+  coverage: MustApplyCoverageRow[],
+): MustApplyRowsByIndustry {
   const union = mustApplyUnion(scope);
-  const coverage = await getMustApplyCoverage(union);
   const rows = union.map((c, i) => {
     const needle = c.pattern.replace(/%/g, "").toLowerCase();
     const matched = sources.filter((s) => (s.company || "").toLowerCase().includes(needle));
@@ -154,10 +157,17 @@ async function loadMustApplyCoverageForScope(scope: MustApplyScope, sources: Sou
 }
 
 async function loadMustApplyCoverage(): Promise<MustApplyRowsByScope> {
-  // sources 与 scope 无关，两个 scope 共用一份，省掉一次全量分页拉取。
-  const sources = await loadAllSources();
-  const entries = await Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await loadMustApplyCoverageForScope(scope, sources)] as const));
-  return Object.fromEntries(entries) as MustApplyRowsByScope;
+  // sources（Supabase 全量分页 ~560ms）与 coverage（香港库聚合 ~1.1s）互不依赖 → 并行，
+  // 别退回「先 await sources 再查 coverage」，那是白白把两者串起来。
+  // sources 与 scope 无关，两个 scope 共用一份，省掉一次全量分页拉取；
+  // getMustApplyCoverage 内部共用同一份公司聚合（in-flight 合并），两个 scope 只查一次库。
+  const [sources, coverages] = await Promise.all([
+    loadAllSources(),
+    Promise.all(MUST_APPLY_SCOPES.map((scope) => getMustApplyCoverage(mustApplyUnion(scope)))),
+  ]);
+  return Object.fromEntries(
+    MUST_APPLY_SCOPES.map((scope, i) => [scope, buildMustApplyRowsForScope(scope, sources, coverages[i])]),
+  ) as MustApplyRowsByScope;
 }
 
 async function loadMustApplyGapAdminData(): Promise<MustApplyGapAdminData> {
