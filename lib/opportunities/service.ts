@@ -208,6 +208,9 @@ export async function buildOpportunityFeed(
   }
 
   const actionMap = buildActionMap(actions);
+  const actionedIds = Array.from(actionMap.entries())
+    .filter(([, state]) => state.primary !== null)
+    .map(([jobId]) => jobId);
   // 各阶段耗时（诊断用，见文件顶部 FeedTiming 注释）。performance.now() 成本可忽略，常开无妨；
   // 只有 /today?__timing=1 才会把它渲染出来，普通用户拿不到。
   const clock = () => performance.now();
@@ -224,7 +227,9 @@ export async function buildOpportunityFeed(
     (async () => {
       const s = clock();
       try {
-        return await recallOpportunityCandidates(profile, now, supabase);
+        // 已处理过的岗（saved/ignored/applied）下推到 SQL 排除：它们在 stage-2 必被 already_actioned 挡掉，
+        // 留在候选里只是白占名额。viewed 不算——那类岗仍可展示（只在打分里 -8）。
+        return await recallOpportunityCandidates(profile, now, supabase, { actionedJobIds: actionedIds });
       } finally {
         recallMs = clock() - s;
       }
