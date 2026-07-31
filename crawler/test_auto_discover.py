@@ -52,6 +52,12 @@ class PlanTargetsTest(unittest.TestCase):
             cap=10, seed=1)]
         self.assertEqual(names, [])
 
+    def test_corporate_form_suffix_variant_is_covered(self):
+        # 清单「创维集团」↔ 库里「创维 Skyworth 校招」：剥掉「集团」才是归属前缀，只比原始名会漏
+        names = [t["company"] for t in ad.plan_targets(
+            [_t("创维集团")], set(), {"创维 Skyworth 校招"}, cap=10, seed=1)]
+        self.assertEqual(names, [])
+
     def test_different_company_sharing_a_token_still_probed(self):
         # 「网易」在库 ≠ 「网易有道」已覆盖；「万达集团」在库 ≠ 「万达电影」已覆盖 —— 不许误并
         names = [t["company"] for t in ad.plan_targets(
@@ -73,6 +79,15 @@ class PlanTargetsTest(unittest.TestCase):
         self.assertGreater(kinds.count("prio"), 0)
         self.assertGreater(kinds.count("rest"), 0)
         self.assertLessEqual(kinds.count("must"), 40)   # 必投缺口最多占一小半
+
+    def test_fresh_llm_candidates_probed_before_stale_static_priority(self):
+        # 同为 priority：今天 LLM 新生成的（_llm）从没探过，静态清单那批已被探了几周还不出
+        # → 新料必须排前面，否则混合洗牌下新料只分到零头（2026-07-31 实测 0 产出）
+        curated = ([{**_t(f"S{i}"), "_priority": True} for i in range(75)]
+                   + [{**_t(f"L{i}"), "_priority": True, "_llm": True} for i in range(39)])
+        out = ad.plan_targets(curated, set(), set(), cap=80, seed=1)
+        prio = [t["company"] for t in out if t.get("_priority")]
+        self.assertEqual(len([c for c in prio if c.startswith("L")]), 39)   # 新料全被探到
 
     def test_unused_tier_quota_is_reallocated(self):
         # 某梯队候选不足配额时，剩余名额顺延给别的梯队——别浪费每日预算
