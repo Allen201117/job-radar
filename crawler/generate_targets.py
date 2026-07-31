@@ -21,6 +21,8 @@ import time
 
 import httpx
 
+from company_name_match import company_name_matches
+
 # 输出 token 预算。旧值 2000 装不下 n=50（每天 finish_reason=length 截断 → parse 失败 → 喂料返回 []
 # → 静态清单榨干、扩源停摆，本次修复的根因）。GEN_MAX_TOKENS 是**下限兜底**；实际预算随 n 伸缩（见
 # token_budget），避免 n 被上调后固定值悄悄退回截断。极端 n 撞模型输出上限时仍由 loads_companies 截断兜底。
@@ -99,6 +101,31 @@ def norm_company(name):
     return s
 
 
+def company_covered(name, existing, existing_norm=None):
+    """库里是否已有这家公司（三层判据，逐层放宽）。扩源两端共用，口径必须一致。
+
+    ⚠️ 只用「名字全等 / norm 后全等」是不够的：清单/LLM 写品牌短名，库里写全称或带英文名——
+    「隆基绿能」↔「隆基绿能 LONGi」、「极兔」↔「极兔速递」、「蓝色光标」↔「北京蓝色光标数据科技」——
+    都会被判成缺失、天天重探；探活反而能过（库里真有这家），随后被 source_url 去重全挡掉
+    →「验证通过 11 / 可入库 0」，探测名额 100% 空烧（2026-07-31 线上实测）。
+    第三层复用 company_name_matches 的归属规则（token 须在开头或只隔地名前缀），
+    所以「网易」在库不会让「网易有道」被误判已覆盖。"""
+    if not name:
+        return False
+    if name in existing:
+        return True
+    nname = norm_company(name)
+    if existing_norm is None:
+        existing_norm = {norm_company(x) for x in existing if norm_company(x)}
+    if nname and nname in existing_norm:
+        return True
+    if any(company_name_matches(e, name) for e in existing):
+        return True
+    # 归一后再比一次：清单写「创维集团」、库里写「创维 Skyworth 校招」——前者剥掉「集团」才
+    # 是后者的归属前缀，只比原始名会漏（2026-07-31 线上实测这条被去重挡掉）。
+    return bool(nname) and any(company_name_matches(e, nname) for e in existing_norm)
+
+
 def build_messages(theme_name, theme_desc, exclude_names, n):
     ex = "、".join(list(exclude_names)[:250])
     user = (
@@ -173,8 +200,7 @@ def parse_generated(data, existing_names):
             continue
         nname = norm_company(name)
         is_duplicate = (
-            name in existing or name in seen or
-            (nname and nname in existing_norm) or
+            company_covered(name, existing, existing_norm) or name in seen or
             (nname and nname in seen_norm)
         )
         if is_duplicate:
@@ -201,8 +227,12 @@ def llm_generate(existing_names, n=50, date=None):
             try:
                 # 取原始 content 自己解析 → 撞 max_tokens 截断也能救回完整公司（loads_companies），
                 # 而不是像旧 chat_json 那样整段 parse 失败返回 []（截断=每天 0 产出的根因）。
+                # ⚠️ timeout 别再调回 90：n=50 实测单次就要 ~83s，贴着 90s 线 → 经常 ReadTimeout，
+                # 两次重试也一起挂 → 当天喂料返回 []、扩源回退榨干的静态清单（2026-07-31 实测，
+                # 本地与 CI 各复现一次）。喂料失败是静默的，只有这行日志会说话。
                 content = ie.chat_content(messages, temperature=0.5,
-                                          max_tokens=token_budget(n), timeout=90)
+                                          max_tokens=token_budget(n),
+                                          timeout=int(os.environ.get("GEN_TARGETS_TIMEOUT", "240")))
                 break
             except httpx.TimeoutException:
                 if attempt == 0:

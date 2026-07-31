@@ -53,6 +53,22 @@ class ParseGeneratedTest(unittest.TestCase):
         out = gt.parse_generated(data, {"美图"})
         self.assertEqual([c["company"] for c in out], ["得物"])   # 后缀变体已在库 → 不重复
 
+    def test_dedups_brand_short_name_against_full_name_in_db(self):
+        # LLM 爱吐品牌短名，库里存的是带英文名/业务后缀的全称 → 必须判重，别浪费探测名额
+        # （2026-07-31 实测 LLM 一批 43 家里就有「新东方」，库里是「新东方 New Oriental」）
+        data = {"companies": [
+            {"company": "新东方", "slugs": ["xdf"], "industry": "x"},
+            {"company": "极兔", "slugs": ["jt"], "industry": "x"},
+            {"company": "流利说", "slugs": ["liulishuo"], "industry": "x"},
+        ]}
+        out = gt.parse_generated(data, {"新东方 New Oriental", "极兔速递"})
+        self.assertEqual([c["company"] for c in out], ["流利说"])
+
+    def test_keeps_different_company_sharing_a_token(self):
+        # 「网易」在库 ≠「网易有道」已覆盖——不许误并，否则真缺口被永久跳过
+        data = {"companies": [{"company": "网易有道", "slugs": ["youdao"], "industry": "x"}]}
+        self.assertEqual([c["company"] for c in gt.parse_generated(data, {"网易"})], ["网易有道"])
+
     def test_dedups_within_batch(self):
         data = {"companies": [
             {"company": "A", "slugs": ["a"]},
@@ -199,7 +215,9 @@ class LlmGenerateTest(unittest.TestCase):
 
         self.assertEqual([c["company"] for c in out], ["得物"])
         self.assertEqual(len(calls), 2)
-        self.assertTrue(all(c["timeout"] == 90 for c in calls))
+        # 240 不是拍脑袋：n=50 实测单次 ~83s，旧值 90 贴着线 → 本地与 CI 各复现一次 ReadTimeout，
+        # 两次重试一起挂 = 当天喂料 [] → 扩源回退榨干的静态清单。别再调回 90。
+        self.assertTrue(all(c["timeout"] == 240 for c in calls))
         self.assertTrue(all(c["max_tokens"] == gt.token_budget(1) for c in calls))
 
     def test_salvages_truncated_response_instead_of_returning_empty(self):

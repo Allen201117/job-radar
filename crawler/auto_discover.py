@@ -25,8 +25,7 @@ from pathlib import Path
 import db
 import ops_runs
 import discover_domestic as dd
-from company_name_match import company_name_matches
-from generate_targets import norm_company
+from generate_targets import company_covered, norm_company
 
 DAILY_TARGET_CAP = int(os.environ.get("AUTO_DISCOVER_TARGET_CAP", "80"))   # 每日最多 probe 多少家缺失公司
 DAILY_INSERT_CAP = int(os.environ.get("AUTO_DISCOVER_INSERT_CAP", "40"))   # 每日最多入库多少源
@@ -218,23 +217,6 @@ def plan_campus_gap_targets(must_apply_by_industry, source_rows, cap, seed=0):
     return (priority + rest)[:cap]
 
 
-def _company_covered(name, existing, existing_norm):
-    """库里是否已有这家公司（三层判据，逐层放宽）。
-
-    ⚠️ 只用「名字全等 / norm 后全等」是不够的：清单写品牌短名、库里写全称或带英文名——
-    「隆基绿能」↔「隆基绿能 LONGi」、「极兔」↔「极兔速递」、「蓝色光标」↔「北京蓝色光标数据科技」——
-    都会被判成缺失、天天重探；探活反而能过（库里真有这家），随后被 source_url 去重全挡掉
-    → 「验证通过 11 / 可入库 0」，探测名额 100% 空烧（2026-07-31 线上实测）。
-    第三层复用 company_name_matches 的归属规则（token 须在开头或只隔地名前缀），
-    所以「网易」在库不会让「网易有道」被误判已覆盖。"""
-    if name in existing:
-        return True
-    nname = norm_company(name)
-    if nname and nname in existing_norm:
-        return True
-    return any(company_name_matches(e, name) for e in existing)
-
-
 def plan_targets(curated, user_wanted, existing_companies, cap, seed=0):
     """纯函数：本轮要 probe 的目标 = 库里没有的精选目标公司。梯队 = 用户点名 > 必投缺口(_must_apply)
     > 科技/新经济/消费(_priority) > 其余；各梯队内按 seed 随机轮转（避免每天死磕同一批失败目标，
@@ -260,16 +242,23 @@ def plan_targets(curated, user_wanted, existing_companies, cap, seed=0):
 
     missing = [t for t in curated
                if (t.get("company") or "").strip()
-               and not _company_covered((t.get("company") or "").strip(), existing, existing_norm)]
+               and not company_covered((t.get("company") or "").strip(), existing, existing_norm)]
     wanted_first = [t for t in missing if _is_wanted(t)]
     others = [t for t in missing if not _is_wanted(t)]
     must_apply = [t for t in others if t.get("_must_apply")]
     priority = [t for t in others if not t.get("_must_apply") and t.get("_priority")]
     rest = [t for t in others if not t.get("_must_apply") and not t.get("_priority")]
+    # 同为 priority，今天 LLM 新生成的候选排在静态清单之前：静态那批已经被探了几周、剩下的
+    # 是探不出来的残渣，而新料是**从没探过的**——混在一起洗牌等于让新料只分到零头
+    # （2026-07-31 实测：39 家新料 vs 75 家静态残渣挤 40 个名额，新料只探到十几家、0 产出）。
+    priority_fresh = [t for t in priority if t.get("_llm")]
+    priority_stale = [t for t in priority if not t.get("_llm")]
     rng = random.Random(seed)
     rng.shuffle(wanted_first)
     rng.shuffle(must_apply)
-    rng.shuffle(priority)
+    rng.shuffle(priority_fresh)
+    rng.shuffle(priority_stale)
+    priority = priority_fresh + priority_stale
     rng.shuffle(rest)
 
     # 用户点名的不占配额（量小、信号最强）；其余名额按梯队配额分，谁也不能吃满。
