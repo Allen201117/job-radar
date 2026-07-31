@@ -25,10 +25,17 @@ from pathlib import Path
 import db
 import ops_runs
 import discover_domestic as dd
+from company_name_match import company_name_matches
 from generate_targets import norm_company
 
 DAILY_TARGET_CAP = int(os.environ.get("AUTO_DISCOVER_TARGET_CAP", "80"))   # 每日最多 probe 多少家缺失公司
 DAILY_INSERT_CAP = int(os.environ.get("AUTO_DISCOVER_INSERT_CAP", "40"))   # 每日最多入库多少源
+# 梯队配额（占每日 probe 名额的比例，见 plan_targets）：必投缺口给一小半就够——它有 gap_funnel
+# 专职漏斗在做，这条 httpx 道对它长期 0 产出；大头给 priority（科技/消费清单 + 每日 LLM 新料），
+# 那才是真正的增量来源。用不完的名额会顺延，不浪费。
+TIER_QUOTA_MUST_APPLY = float(os.environ.get("AUTO_DISCOVER_QUOTA_MUST_APPLY", "0.25"))
+TIER_QUOTA_PRIORITY = float(os.environ.get("AUTO_DISCOVER_QUOTA_PRIORITY", "0.50"))
+TIER_QUOTA_REST = float(os.environ.get("AUTO_DISCOVER_QUOTA_REST", "0.25"))
 PLATFORMS = {"feishu", "hotjob"}   # httpx-safe（hotjob 内含 wt/wecruit）；beisen/moka 需浏览器，留后置
 # 科技/新经济/消费清单排最前 → load 时标 _priority，plan_targets 里优先探（对齐目标用户，见 CLAUDE.md §3
 # 「保精度逐步扩量」：民营500强 76% 是传统制造，与目标用户错配，别让它淹没科技/消费候选）。
@@ -211,10 +218,32 @@ def plan_campus_gap_targets(must_apply_by_industry, source_rows, cap, seed=0):
     return (priority + rest)[:cap]
 
 
+def _company_covered(name, existing, existing_norm):
+    """库里是否已有这家公司（三层判据，逐层放宽）。
+
+    ⚠️ 只用「名字全等 / norm 后全等」是不够的：清单写品牌短名、库里写全称或带英文名——
+    「隆基绿能」↔「隆基绿能 LONGi」、「极兔」↔「极兔速递」、「蓝色光标」↔「北京蓝色光标数据科技」——
+    都会被判成缺失、天天重探；探活反而能过（库里真有这家），随后被 source_url 去重全挡掉
+    → 「验证通过 11 / 可入库 0」，探测名额 100% 空烧（2026-07-31 线上实测）。
+    第三层复用 company_name_matches 的归属规则（token 须在开头或只隔地名前缀），
+    所以「网易」在库不会让「网易有道」被误判已覆盖。"""
+    if name in existing:
+        return True
+    nname = norm_company(name)
+    if nname and nname in existing_norm:
+        return True
+    return any(company_name_matches(e, name) for e in existing)
+
+
 def plan_targets(curated, user_wanted, existing_companies, cap, seed=0):
-    """纯函数：本轮要 probe 的目标 = 库里没有的精选目标公司。排序 = 用户点名 > 必投缺口(_must_apply)
+    """纯函数：本轮要 probe 的目标 = 库里没有的精选目标公司。梯队 = 用户点名 > 必投缺口(_must_apply)
     > 科技/新经济/消费(_priority) > 其余；各梯队内按 seed 随机轮转（避免每天死磕同一批失败目标，
     让覆盖随天数滚动），封顶 cap。
+
+    ⚠️ 梯队是**配额**不是严格优先级：必投缺口(133 家)恒 > 每日 cap(80)，严格优先级下它会吃满
+    76/80 个名额，priority（科技/消费 + 每天 LLM 新生成的候选）和 rest 拿到 0 —— 「持续喂清单」
+    彻底空转，扩源产出连日归零（2026-07-31 实测）。且必投缺口有 gap_funnel 专职漏斗（带失败退避
+    台账）在做，这条 httpx 道对它连探 3 天 0 产出，没有理由让它独占预算。
     用户点名按 norm_company 归一后匹配 company/cn 两个字段——用户写「北京字节跳动科技有限公司」、
     清单写「字节跳动」也要命中（旧实现字符串全等，用户信号经常空转）。"""
     existing = {str(x).strip() for x in (existing_companies or set()) if str(x).strip()}
@@ -229,12 +258,9 @@ def plan_targets(curated, user_wanted, existing_companies, cap, seed=0):
                 return True
         return False
 
-    missing = []
-    for t in curated:
-        name = (t.get("company") or "").strip()
-        nname = norm_company(name)
-        if name and name not in existing and (not nname or nname not in existing_norm):
-            missing.append(t)
+    missing = [t for t in curated
+               if (t.get("company") or "").strip()
+               and not _company_covered((t.get("company") or "").strip(), existing, existing_norm)]
     wanted_first = [t for t in missing if _is_wanted(t)]
     others = [t for t in missing if not _is_wanted(t)]
     must_apply = [t for t in others if t.get("_must_apply")]
@@ -245,7 +271,22 @@ def plan_targets(curated, user_wanted, existing_companies, cap, seed=0):
     rng.shuffle(must_apply)
     rng.shuffle(priority)
     rng.shuffle(rest)
-    return (wanted_first + must_apply + priority + rest)[:cap]
+
+    # 用户点名的不占配额（量小、信号最强）；其余名额按梯队配额分，谁也不能吃满。
+    picked = wanted_first[:cap]
+    budget = cap - len(picked)
+    pools = ((must_apply, TIER_QUOTA_MUST_APPLY), (priority, TIER_QUOTA_PRIORITY),
+             (rest, TIER_QUOTA_REST))
+    leftovers = []
+    for pool, quota in pools:
+        take = int(budget * quota)
+        picked += pool[:take]
+        leftovers.append(pool[take:])
+    for pool in leftovers:   # 某梯队候选不足配额 → 剩余名额顺延，别浪费每日预算
+        if len(picked) >= cap:
+            break
+        picked += pool[:cap - len(picked)]
+    return picked[:cap]
 
 
 def plan_inserts(passed, existing_urls, cap):
@@ -344,6 +385,14 @@ def main():
     passed = dd.to_passed(hits)
     to_insert = plan_inserts(passed, existing_urls, DAILY_INSERT_CAP)
     print(f"[auto_discover] sweep 命中 {len(hits)} / 验证通过 {len(passed)} / 可入库(去重后) {len(to_insert)}")
+    # 探活通过却被 URL 去重挡掉 = 这家其实已在库、只是清单与库里公司名写法不同（假缺失），白烧探测
+    # 名额。不打出来就完全静默——2026-07-31 之前它连日 100% 空转两周没人看得见。
+    blocked = [p for p in passed if (p.get("url") or "").strip() in existing_urls]
+    if blocked:
+        print(f"[auto_discover] ⚠️ 探活通过但 source_url 已在库、被去重挡掉 {len(blocked)} 条"
+              f"（多半是清单公司名 ≠ 库里公司名的假缺失，浪费了探测名额）：")
+        for p in blocked[:5]:
+            print(f"      [{p['adapter']}] {p['company']} → {p['url']}")
 
     added = 0
     for row in to_insert:
@@ -359,7 +408,7 @@ def main():
     ops_runs.record_ops_run(
         sb, "auto_discover",
         {"checked": len(targets), "produced": added, "companies_enriched": added,
-         "candidates": len(to_insert)},
+         "candidates": len(to_insert), "deduped": len(blocked)},
         status=ops_runs.status_from_counts(len(to_insert), len(to_insert) - added),
         started_at=started, finished_at=_now_iso())
     print(f"[auto_discover] 完成: 入库 {added} 源 (apply={apply})")

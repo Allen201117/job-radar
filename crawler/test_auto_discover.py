@@ -35,6 +35,51 @@ class PlanTargetsTest(unittest.TestCase):
         self.assertNotIn("美图公司", names)        # 后缀变体已在库 → 不重复 probe
         self.assertEqual(names, ["得物"])
 
+    def test_brand_short_name_covered_by_full_name_in_db(self):
+        """清单写品牌短名、库里写全称/带英文名 → 必须判「已覆盖」，不再天天重探。
+
+        2026-07-31 线上实测：这类假缺失让 httpx 扩源道连日「验证通过 11 / 可入库 0」——
+        探活能过（因为库里真有这家），但 source_url 去重把它全挡掉，等于 100% 空烧探测名额。"""
+        existing = {"隆基绿能 LONGi", "度小满金融科技（北京）有限公司", "极兔速递", "歌尔股份 GoerTek"}
+        curated = [_t("隆基绿能"), _t("度小满"), _t("极兔"), _t("歌尔股份"), _t("真的新公司")]
+        names = [t["company"] for t in ad.plan_targets(curated, set(), existing, cap=10, seed=1)]
+        self.assertEqual(names, ["真的新公司"])
+
+    def test_place_prefixed_full_name_in_db_covers_brand(self):
+        # 库里是「地名 + 品牌」的法人全称 → 同一家，不重探（复用张冠李戴核验的归属规则）
+        names = [t["company"] for t in ad.plan_targets(
+            [_t("蓝色光标"), _t("双汇")], set(), {"北京蓝色光标数据科技", "河南双汇投资发展"},
+            cap=10, seed=1)]
+        self.assertEqual(names, [])
+
+    def test_different_company_sharing_a_token_still_probed(self):
+        # 「网易」在库 ≠ 「网易有道」已覆盖；「万达集团」在库 ≠ 「万达电影」已覆盖 —— 不许误并
+        names = [t["company"] for t in ad.plan_targets(
+            [_t("网易有道"), _t("万达电影")], set(), {"网易", "万达集团"}, cap=10, seed=1)]
+        self.assertEqual(sorted(names), ["万达电影", "网易有道"])
+
+    def test_must_apply_tier_cannot_starve_other_tiers(self):
+        """必投缺口梯队再大也不能吃满每日名额。
+
+        2026-07-31 线上实测：必投缺口 133 家 > 每日 cap 80，严格优先级下 76/80 名额恒被它吃掉，
+        priority（科技/消费 + 每天 LLM 新生成的候选）与 rest 拿到 0 —— 「持续喂清单」完全空转。"""
+        curated = ([{**_t(f"M{i}"), "_must_apply": True} for i in range(200)]
+                   + [{**_t(f"P{i}"), "_priority": True} for i in range(100)]
+                   + [_t(f"R{i}") for i in range(500)])
+        out = ad.plan_targets(curated, set(), set(), cap=80, seed=1)
+        kinds = [("must" if t.get("_must_apply") else "prio" if t.get("_priority") else "rest")
+                 for t in out]
+        self.assertEqual(len(out), 80)
+        self.assertGreater(kinds.count("prio"), 0)
+        self.assertGreater(kinds.count("rest"), 0)
+        self.assertLessEqual(kinds.count("must"), 40)   # 必投缺口最多占一小半
+
+    def test_unused_tier_quota_is_reallocated(self):
+        # 某梯队候选不足配额时，剩余名额顺延给别的梯队——别浪费每日预算
+        curated = [{**_t("M1"), "_must_apply": True}] + [_t(f"R{i}") for i in range(50)]
+        out = ad.plan_targets(curated, set(), set(), cap=20, seed=1)
+        self.assertEqual(len(out), 20)
+
     def test_user_wanted_first(self):
         curated = [_t("A"), _t("B"), _t("C"), _t("D")]
         out = ad.plan_targets(curated, {"C"}, set(), cap=10, seed=7)
