@@ -154,9 +154,29 @@ function brandRollupRules(): BrandRollupRule[] {
     }));
 }
 
-function brandRollupSql(rules: BrandRollupRule[]) {
-  const params: unknown[] = [];
-  const filters = rules.map((rule) => {
+/**
+ * 品牌 rollup **单独一条查询**，且按**精确公司名**取，不再拼进主聚合。
+ *
+ * ⚠️ 为什么必须拆开（2026-07-31，live explain analyze）：rollup 每条规则贡献 4 个
+ * `count(*) filter (...)`，每个都带 `company ilike '%x%'`（前导 % 用不上索引）。混在主聚合里
+ * 意味着**全部 31 万 active 行都要跑 16 个 ilike 表达式** → 该查询 1.1s 涨到 **5.8s**，
+ * 而它正是 /admin/health 的关键路径。
+ *
+ * ⚠️ 为什么用「精确公司名」而不是 `company ilike any(父公司pattern)`：
+ * 后者仍要全扫 active（实测 1.04s）；而父公司名字可以直接从**主聚合已经返回的公司清单**里挑出来
+ * （实测只有 9 家），再用 `company = any($1)` 走 `jobs_active_company_idx` btree → 实测 **227ms**。
+ * 也别想着「两条并行就不用管各自多快」：香港库只有 2 vCPU，实测并行跑两条全扫，
+ * 各自从 1.1s 一起涨到 2.1s，总时间一点没省。所以是**串行两条**：1.1s + 0.23s。
+ *
+ * 结果**逐字节等价**（已用同一 MVCC 快照 live 对拍 1051 家公司，0 差异）：
+ * 主聚合里非匹配公司的 rollup 计数本来就全是 0，computeMustApplyCoverage 按 pattern 跨公司求和，
+ * 少加一堆 0 不改变结果；每条规则的归属判定仍由 SQL 里原样保留的 ilike 谓词决定，
+ * JS 只负责挑「要把哪些公司名送进这条查询」，且用的是与 computeMustApplyCoverage 同一个
+ * `ilikeMatcher`（宁可多送几家，也不会漏——多送的公司 rollup 算出来也是 0）。
+ */
+function brandRollupQuery(rules: BrandRollupRule[], companies: string[]): { sql: string; params: unknown[] } {
+  const params: unknown[] = [companies];
+  const columns = rules.map((rule) => {
     params.push(rule.parentPattern, rule.pattern, rule.brandTokens.map((token) => `%${token}%`));
     const parentParam = params.length - 2;
     const directParam = params.length - 1;
@@ -165,7 +185,7 @@ function brandRollupSql(rules: BrandRollupRule[]) {
           company ilike $${parentParam}
           and company not ilike $${directParam}
           and title ilike any($${tokensParam}::text[])`;
-    return `,
+    return `
       count(*) filter (
         where ${matchesBrand}
       ) as ${rule.alias}_active,
@@ -183,8 +203,29 @@ function brandRollupSql(rules: BrandRollupRule[]) {
           and ${matchesBrand}
       ) as ${rule.alias}_checked_72h`;
   });
-  return { sql: filters.join(""), params };
+  return {
+    sql: `
+      select company, ${columns.join(",")}
+      from jobs
+      where status = 'active' and company = any($1::text[])
+      group by company
+    `,
+    params,
+  };
 }
+
+/** 主聚合已返回的公司里，挑出可能属于某个父公司门户的（与 computeMustApplyCoverage 同一套 ILIKE 语义）。 */
+function parentPortalCompanies(rules: BrandRollupRule[], companies: Array<string | null>): string[] {
+  if (!rules.length) return [];
+  const matchers = rules.map((rule) => ilikeMatcher(rule.parentPattern));
+  const out = new Set<string>();
+  for (const company of companies) {
+    if (company && matchers.some((matches) => matches(company))) out.add(company);
+  }
+  return Array.from(out);
+}
+
+const EMPTY_ROLLUP: ActiveAggregateCounts = { activeTotal: 0, healthy: 0, new7d: 0, checked72h: 0 };
 
 /**
  * 每家公司只聚合一次，避免必投清单每个 pattern 都扫一遍 active jobs。
@@ -197,41 +238,52 @@ export async function getCompanyActiveAggregates(): Promise<CompanyActiveAggrega
   }
   if (companyActiveAggregatesInFlight) return companyActiveAggregatesInFlight;
   const rules = brandRollupRules();
-  const rollup = brandRollupSql(rules);
-  companyActiveAggregatesInFlight = jobsQuery<{
+  type AggregateRow = {
     company: string | null;
     active_total: string | number;
     healthy: string | number;
     new_7d: string | number;
     checked_72h: string | number;
-    [key: string]: string | number | null;
-  }>(`
-    select
-      company,
-      count(*) as active_total,
-      count(*) filter (where summary is not null and char_length(btrim(summary)) >= 60) as healthy,
-      count(*) filter (where first_seen_at > now() - interval '7 days') as new_7d,
-      count(*) filter (where enrich_checked_at > now() - interval '72 hours') as checked_72h
-      ${rollup.sql}
-    from jobs
-    where status = 'active'
-    group by company
-  `, rollup.params)
-    .then((rows) => rows.map((row) => ({
-      company: row.company,
-      activeTotal: Number(row.active_total || 0),
-      healthy: Number(row.healthy || 0),
-      new7d: Number(row.new_7d || 0),
-      checked72h: Number(row.checked_72h || 0),
-      brandRollups: Object.fromEntries(
-        rules.map((rule) => [rule.pattern, {
-          activeTotal: Number(row[`${rule.alias}_active`] || 0),
-          healthy: Number(row[`${rule.alias}_healthy`] || 0),
-          new7d: Number(row[`${rule.alias}_new_7d`] || 0),
-          checked72h: Number(row[`${rule.alias}_checked_72h`] || 0),
-        }]),
-      ),
-    })))
+  };
+  type RollupRow = { company: string | null; [key: string]: string | number | null };
+  // 主聚合先跑；品牌 rollup 用它返回的公司名精确取第二条（不合成一条、也不并行，见 brandRollupQuery 注释）。
+  companyActiveAggregatesInFlight = jobsQuery<AggregateRow>(`
+      select
+        company,
+        count(*) as active_total,
+        count(*) filter (where summary is not null and char_length(btrim(summary)) >= 60) as healthy,
+        count(*) filter (where first_seen_at > now() - interval '7 days') as new_7d,
+        count(*) filter (where enrich_checked_at > now() - interval '72 hours') as checked_72h
+      from jobs
+      where status = 'active'
+      group by company
+    `)
+    .then(async (rows) => {
+      const portals = parentPortalCompanies(rules, rows.map((row) => row.company));
+      const rollup = portals.length ? brandRollupQuery(rules, portals) : null;
+      const rollupRows = rollup ? await jobsQuery<RollupRow>(rollup.sql, rollup.params) : ([] as RollupRow[]);
+      const rollupByCompany = new Map(rollupRows.map((row) => [row.company, row]));
+      return rows.map((row) => {
+        const hit = rollupByCompany.get(row.company);
+        return {
+          company: row.company,
+          activeTotal: Number(row.active_total || 0),
+          healthy: Number(row.healthy || 0),
+          new7d: Number(row.new_7d || 0),
+          checked72h: Number(row.checked_72h || 0),
+          brandRollups: Object.fromEntries(
+            rules.map((rule) => [rule.pattern, hit
+              ? {
+                activeTotal: Number(hit[`${rule.alias}_active`] || 0),
+                healthy: Number(hit[`${rule.alias}_healthy`] || 0),
+                new7d: Number(hit[`${rule.alias}_new_7d`] || 0),
+                checked72h: Number(hit[`${rule.alias}_checked_72h`] || 0),
+              }
+              : EMPTY_ROLLUP]),
+          ),
+        };
+      });
+    })
     .then((value) => {
       companyActiveAggregatesCache = { value, expiresAt: Date.now() + 60_000 };
       return value;
