@@ -14,11 +14,44 @@
     --amber:#f8efd9; --amber-t:#8a6a2a; --amber-b:#e4d1a8;
     --lilac:#efe9f8; --lilac-t:#6a4fa0; --lilac-b:#cfc0e6;
     --rose:#f8e6ea; --rose-t:#a84f63; --rose-b:#e6bcc4;
-    --font:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Segoe UI",sans-serif;
+    /* 拉丁字母/数字仍走苹果原生 SF，中文交给思源 —— 两边各取所长 */
+    --font:"SF Pro Display",-apple-system,BlinkMacSystemFont,SansCJK,"Segoe UI",sans-serif;
+    --display:"SF Pro Display",-apple-system,SerifCJK,Georgia,serif;
   }
+  /*
+    ⚠️ 中文字体是这条片子最大的观感问题，根因不是"选错字体"而是**假粗体合成**：
+    这台机器没装苹方（PingFang），也没装楷体；原字体栈静默回退到只有 Regular 的宋体，
+    而版式里写的是 font-weight:620/680/720/760 —— 浏览器只能把笔画硬涂粗，
+    中文笔画一涂就糊成一团，所以看着又钝又脏。
+
+    修法两步：
+      1. 换成思源黑体/宋体（SIL OFL，可商用），有真实的 Regular / Medium / SemiBold
+      2. @font-face 用**字重区间**把 500–900 全部指到真字重文件，
+         浏览器就再也不会合成假粗体（改字重时别把区间改窄了，否则假粗体会回来）
+
+    注：DESIGN.md 里"禁用 webfont"是保护线上站点（GFW 下加载不可靠）；
+    视频不受此限 —— 输出是像素，字体只需在渲染时存在。字体已按片中用到的
+    414 个字做子集化，80MB → 639KB，可入库。重新生成见 fonts/README.md
+  */
+  @font-face{font-family:SansCJK;src:url("fonts/sans-r.woff2")format("woff2");font-weight:100 450;font-display:block}
+  @font-face{font-family:SansCJK;src:url("fonts/sans-m.woff2")format("woff2");font-weight:451 900;font-display:block}
+  @font-face{font-family:SerifCJK;src:url("fonts/serif-r.woff2")format("woff2");font-weight:100 450;font-display:block}
+  @font-face{font-family:SerifCJK;src:url("fonts/serif-sb.woff2")format("woff2");font-weight:451 900;font-display:block}
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{overflow:hidden;background:#000}
   body{font-family:var(--font);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  /*
+    字体分工 —— 这条界线不要越：
+      宋体 = **片子自己的叙述声音**（大标题、收尾主张），暖纸编辑部气质与"细节感"的来源
+      黑体 = **产品界面本身**（岗位卡、洞察卡、表单、浏览器窗口、品牌字标）
+
+    为什么卡片里的字必须留黑体：那些是真实产品界面，产品里就是黑体。
+    把 UI 也改成宋体，等于让宣传片误传产品长相 —— 观众照着片子的样子去用，会对不上。
+    品牌字标同理：产品 logo（components/BrandMark.tsx）是黑体，
+    片子里的「职达」必须和它一致，否则同一条片子里顶栏小字标是黑体、大字标是宋体，自己打架。
+  */
+  .disp{font-family:var(--display)}
+  .tiny-brand b,#s2zh,#s7brand .disp{font-family:var(--font);font-weight:700}
   #stage{position:relative;overflow:hidden;background-color:var(--paper);background-image:
     radial-gradient(58% 50% at 84% 2%,rgba(150,182,226,.30),transparent 62%),
     radial-gradient(52% 46% at 2% 92%,rgba(196,228,150,.22),transparent 60%),
@@ -144,6 +177,55 @@ const typed=(text,t,s,d)=>text.slice(0,Math.round(E.io(P(t,s,d))*text.length));
 function band(t,s,inD,hold,outD){if(t<s)return 0;if(t<s+inD)return E.soft(P(t,s,inD));if(t<s+inD+hold)return 1;return 1-E.soft(P(t,s+inD+hold,outD));}
 function set(n,o={}){if(!n)return;const tf=[];if(o.x!==undefined||o.y!==undefined)tf.push(`translate3d(${(o.x||0).toFixed(2)}px,${(o.y||0).toFixed(2)}px,0)`);if(o.cx)tf.push('translateX(-50%)');if(o.cy)tf.push('translateY(-50%)');if(o.rot!==undefined)tf.push(`rotate(${o.rot.toFixed(2)}deg)`);if(o.s!==undefined)tf.push(`scale(${o.s.toFixed(4)})`);n.style.transform=tf.join(' ');if(o.o!==undefined)n.style.opacity=o.o.toFixed(3);if(o.blur!==undefined)n.style.filter=o.blur>.02?`blur(${o.blur.toFixed(2)}px)`:'none';if(o.dsp!==undefined)n.style.display=o.dsp;}
 
+/*
+  ── 入场原语 ────────────────────────────────────────────────────
+  原来全片的文字/卡片都是同一招「整块淡入 + 上移」，所以看着呆板。
+  下面三个原语给入场做出层次和方向差异：
+
+    splitChars  把一行字拆成逐字 span（只拆文本节点，<br> 原样保留 ——
+                直接切 innerHTML 会把 <br> 切成 <b，踩过）
+    revealChars 逐字错峰入场：位移 + 去模糊 + 轻微缩放，可指定来向
+    driftLife   落位后的微呼吸 —— 静止 = 廉价，已到位的元素也要一直微微动
+*/
+function splitChars(node){
+  if(!node||node.dataset.split)return [];
+  const chars=[];
+  [...node.childNodes].forEach(n=>{
+    if(n.nodeType!==3)return;                       // <br> 等元素节点原样跳过
+    const frag=document.createDocumentFragment();
+    [...n.textContent].forEach(c=>{
+      if(c===' '){frag.appendChild(document.createTextNode(' '));return;}
+      const s=document.createElement('i');
+      s.textContent=c;
+      s.style.cssText='display:inline-block;font-style:normal;will-change:transform,opacity,filter';
+      frag.appendChild(s);chars.push(s);
+    });
+    node.replaceChild(frag,n);
+  });
+  node.dataset.split='1';
+  return chars;
+}
+function revealChars(chars,t,start,o={}){
+  const step=o.step??.030, dur=o.dur??.62, dy=o.dy??26, dx=o.dx??0,
+        bl=o.blur??7, sc=o.sc??.93, rot=o.rot??0, ease=o.ease||E.out4;
+  const mid=(chars.length-1)/2;
+  for(let i=0;i<chars.length;i++){
+    const s=chars[i], inv0=1;
+    // sides=true 时按字在行内的位置分向：两端往中间收，中间几乎不动
+    const dxi = o.sides ? dx*(i<mid?-1:1)*Math.abs(i-mid)/(mid||1) : dx;
+    // sides 时改成"从中间向两端依次点亮"，比左到右扫更有设计感
+    const order = o.sides ? Math.abs(i-mid) : i;
+    const q=ease(P(t,start+order*step,dur)), inv=1-q;
+    // 落位后不冻住：留一点极小的错相漂移，画面永远是活的
+    const life=Math.sin(t*.62+i*.42)*.85*q;
+    s.style.opacity=q.toFixed(3);
+    s.style.transform=`translate3d(${(dxi*inv).toFixed(2)}px,${(dy*inv+life).toFixed(2)}px,0)`
+      +` rotate(${(rot*inv).toFixed(2)}deg) scale(${lerp(sc,1,q).toFixed(4)})`;
+    s.style.filter=q>.985?'none':`blur(${(bl*inv).toFixed(2)}px)`;
+  }
+}
+const driftLife=(t,amp,spd,ph)=>Math.sin(t*spd+ph)*amp;
+
 const T={s1:[0,4.9],s2:[4.6,8.3],s3:[8.0,13.7],s4:[13.4,20.1],s5:[19.8,24.9],s6:[24.6,31.8],s7:[31.5,36]};
 const DUR=36;
 const JOBS=[
@@ -171,6 +253,16 @@ const rings=[];{
  const host=el('s2rings');for(let i=0;i<4;i++){const n=document.createElement('i');n.style.cssText='position:absolute;left:0;top:0;border:2px solid rgba(0,230,118,.43);border-radius:999px';host.appendChild(n);rings.push(n);}
 }
 
+/* 逐字入场的文案（建一次，render 里只改 transform）。
+   每段给不同的来向/节奏，全片才不会一个味道。 */
+const CH={};
+['s1title','s1copy','s2tag','s3title','s3copy','s4title','s4copy',
+ 's5title','s5copy','s6title','s6subtitle','s6copy','s7l1','s7l2']
+  .forEach(id=>{CH[id]=splitChars(el(id));});
+/* s6 词组接力用：后半句的半宽。必须等字体就位 + 图层可见才能量到，
+   所以懒量一次再缓存（提前量会拿到 0，前半句就不会居中）。 */
+let s6HalfW=null;
+
 function sceneVis(t,a,b){return band(t,a,.42,(b-a)-1.0,.58);}
 function render(t){
   /* 电影机位：整片永远慢慢推近，并叠一层缓慢漂移。 */
@@ -185,37 +277,116 @@ function render(t){
   if(scenes.s1>.002){
     const scroll=-670*P(t,.1,4.75)+Math.sin(t*.72)*7;
     s1rows.forEach((n,i)=>{const q=E.out4(P(t,.06+i*.055,.7));set(n,{x:lerp(92,0,q),y:84+i*89+scroll,o:q*.82,blur:lerp(9,0,q)});});
-    const title=E.out4(P(t,1.72,1.0)),copy=E.out4(P(t,2.46,.9));
-    set(el('s1title'),{y:lerp(30,0,title),o:title});set(el('s1copy'),{y:lerp(22,0,copy),o:copy});
+    // 开场标题：逐字从下方浮起、去模糊。父层只留一点整体上移，位移主要交给单字
+    set(el('s1title'),{y:lerp(10,0,E.out4(P(t,1.72,1.1))),o:1});
+    revealChars(CH.s1title,t,1.72,{step:.045,dur:.72,dy:38,blur:9,sc:.90});
+    set(el('s1copy'),{o:1});
+    revealChars(CH.s1copy,t,2.52,{step:.016,dur:.52,dy:16,blur:5,sc:.96});
   }
   if(scenes.s2>.002){
     const a=T.s2[0],mark=E.back(P(t,a+.12,1.0));set(el('s2mark'),{cx:1,cy:1,s:lerp(.48,1,mark),o:E.out(P(t,a+.1,.5))});
     const C=2*Math.PI*16,draw=E.out5(P(t,a+.22,1.1));const c=el('s2circle');c.style.strokeDasharray=C;c.style.strokeDashoffset=(C*(1-draw)).toFixed(2);el('s2sweep').style.transform=`rotate(${(900*E.out5(P(t,a+.30,2.55))).toFixed(2)}deg)`;
     const bp=cl(1-((t-a-1.1)%1.05)/1.05);el('s2blip').setAttribute('r',(2.6+2.1*bp).toFixed(2));
     rings.forEach((n,i)=>{const q=(t-a-.4-i*.36)/1.8;if(q<0||q>1){n.style.opacity=0;return;}const r=lerp(68,280,E.out(q));n.style.width=n.style.height=(2*r)+'px';n.style.marginLeft=n.style.marginTop=(-r)+'px';n.style.opacity=((1-q)*.5).toFixed(3);});
-    el('s2zh').textContent=typed('职达',t,a+1.24,.52);el('s2en').textContent=typed('JOBRADAR',t,a+1.66,.8);const wp=E.out4(P(t,a+1.2,.8)),tp=E.out4(P(t,a+2.18,.78));set(el('s2word'),{y:lerp(22,0,wp),o:wp});set(el('s2tag'),{y:lerp(22,0,tp),o:tp});
+    el('s2zh').textContent=typed('职达',t,a+1.24,.52);el('s2en').textContent=typed('JOBRADAR',t,a+1.66,.8);const wp=E.out4(P(t,a+1.2,.8));set(el('s2word'),{y:lerp(22,0,wp),o:wp});
+    // 这句换成"从两侧向中间收拢"：和上一场的由下而上区分开
+    set(el('s2tag'),{o:1});
+    revealChars(CH.s2tag,t,a+2.18,{step:.030,dur:.68,dy:0,dx:30,sides:true,blur:6,sc:.88,ease:E.out5});
   }
   if(scenes.s3>.002){
-    const a=T.s3[0],p1=E.out4(P(t,a+.08,.75)),p2=E.out4(P(t,a+.3,.95));set(el('s3title'),{y:lerp(26,0,p1),o:p1});set(el('s3form'),{y:lerp(48,0,p2),s:lerp(.97,1,p2),o:p2});
+    const a=T.s3[0],p2=E.out4(P(t,a+.3,.95));
+    // 这句从上方"落"下来（前两场是由下而上/两侧收拢，这里再换一个方向）
+    set(el('s3title'),{o:1});
+    revealChars(CH.s3title,t,a+.08,{step:.038,dur:.60,dy:-30,blur:8,sc:.94,rot:-3,ease:E.out5});
+    set(el('s3form'),{y:lerp(48,0,p2),s:lerp(.97,1,p2),o:p2});
     [['scopeCn',0],['scopeOverseas',1],['stageIntern',0],['stageCampus',1],['stageSocial',2]].forEach(([id,i])=>{const n=el(id),q=E.back(P(t,a+1.6+i*.1,.5));set(n,{y:lerp(14,0,q),s:lerp(.88,1,q),o:q});});
-    const b=E.out4(P(t,a+3.12,.65)),press=P(t,a+3.7,.12)-P(t,a+3.88,.22);set(el('s3button'),{y:lerp(18,0,b),s:1-.035*cl(press),o:b});const cp=E.out4(P(t,a+3.4,.7));set(el('s3copy'),{y:lerp(18,0,cp),o:cp});
+    const b=E.out4(P(t,a+3.12,.65)),press=P(t,a+3.7,.12)-P(t,a+3.88,.22);set(el('s3button'),{y:lerp(18,0,b),s:1-.035*cl(press),o:b});
+    set(el('s3copy'),{o:1});
+    revealChars(CH.s3copy,t,a+3.4,{step:.013,dur:.46,dy:12,blur:4,sc:.97});
     const cur=el('cursor'),mv=E.io(P(t,a+3.12,.65));set(cur,{x:lerp(744,438,mv),y:lerp(1010,689,mv)+cl(press)*5,o:cl(P(t,a+3,.25)-P(t,a+4.15,.35))});
   }
   if(scenes.s4>.002){
-    const a=T.s4[0],h=E.out4(P(t,a+.08,.7)),chip=E.out4(P(t,a+.38,.7));set(el('s4title'),{y:lerp(25,0,h),o:h});set(el('s4scope'),{y:lerp(18,0,chip),o:chip});
-    s4cards.forEach((n,i)=>{const q=E.out4(P(t,a+.75+i*.22,.9));set(n,{y:200+i*190+lerp(74,0,q),s:lerp(.96,1,q),o:q,blur:lerp(10,0,q)});});
-    const cp=E.out4(P(t,a+2.55,.8));set(el('s4copy'),{y:lerp(15,0,cp),o:cp});
+    const a=T.s4[0],chip=E.back(P(t,a+.38,.7));
+    // 标题逐字（这场从中间向两端点亮），范围芯片带一点回弹
+    set(el('s4title'),{o:1});
+    revealChars(CH.s4title,t,a+.08,{step:.028,dur:.58,dy:22,sides:true,dx:12,blur:7,sc:.92});
+    set(el('s4scope'),{y:lerp(18,0,chip),s:lerp(.92,1,chip),o:cl(chip)});
+    // 卡片改成带 3D 倾斜的"翻落"：原来是纯淡入+上移，三张一个样，最呆的就是这里
+    s4cards.forEach((n,i)=>{
+      const q=E.out5(P(t,a+.75+i*.20,.95));const inv=1-q;
+      const life=driftLife(t,1.6,.44,i*1.1)*q;      // 落位后微呼吸，别僵着
+      n.style.opacity=q.toFixed(3);
+      n.style.transformOrigin='50% 0%';
+      n.style.transform=`perspective(1400px) translate3d(${(i%2?18:-18)*inv}px,`
+        +`${(200+i*190+lerp(70,0,q)+life).toFixed(2)}px,0)`
+        +` rotateX(${(11*inv).toFixed(2)}deg) rotate(${((i%2?.9:-.9)*inv).toFixed(2)}deg)`
+        +` scale(${lerp(.955,1,q).toFixed(4)})`;
+      n.style.filter=q>.985?'none':`blur(${(11*inv).toFixed(2)}px)`;
+    });
+    set(el('s4copy'),{o:1});
+    revealChars(CH.s4copy,t,a+2.55,{step:.012,dur:.44,dy:12,blur:4,sc:.97});
   }
   if(scenes.s5>.002){
-    const a=T.s5[0],h=E.out4(P(t,a+.1,.7)),e=E.out4(P(t,a+.42,.65)),b=E.out4(P(t,a+.74,.95));set(el('s5title'),{y:lerp(26,0,h),o:h});set(el('s5eye'),{y:lerp(15,0,e),o:e});set(el('s5browser'),{y:lerp(80,0,b),s:lerp(.95,1,b),o:b,blur:lerp(10,0,b)});const cp=E.out4(P(t,a+2.12,.8));set(el('s5copy'),{y:lerp(20,0,cp),o:cp});
+    const a=T.s5[0],e=E.back(P(t,a+.42,.65)),b=E.out5(P(t,a+.74,.95));
+    set(el('s5title'),{o:1});
+    revealChars(CH.s5title,t,a+.1,{step:.034,dur:.56,dy:26,blur:7,sc:.92,rot:2});
+    set(el('s5eye'),{y:lerp(15,0,e),s:lerp(.9,1,e),o:cl(e)});
+    // 浏览器窗口：从稍远处"推"到眼前（透视 + 去模糊），比单纯淡入有纵深
+    {const inv=1-b;const n=el('s5browser');
+     n.style.opacity=b.toFixed(3);n.style.transformOrigin='50% 50%';
+     n.style.transform=`perspective(1500px) translate3d(0,${(lerp(86,0,b)+driftLife(t,2,.4,0)*b).toFixed(2)}px,0)`
+       +` rotateX(${(9*inv).toFixed(2)}deg) scale(${lerp(.93,1,b).toFixed(4)})`;
+     n.style.filter=b>.985?'none':`blur(${(12*inv).toFixed(2)}px)`;}
+    set(el('s5copy'),{o:1});
+    revealChars(CH.s5copy,t,a+2.12,{step:.036,dur:.54,dy:0,dx:26,sides:true,blur:5,sc:.9});
   }
   if(scenes.s6>.002){
-    const a=T.s6[0],h=E.out4(P(t,a+.08,.65)),s=E.out4(P(t,a+.26,.65));set(el('s6title'),{y:lerp(22,0,h),o:h});set(el('s6subtitle'),{y:lerp(16,0,s),o:s});
-    Array.from(el('s6dims').children).forEach((n,i)=>{const q=E.back(P(t,a+.52+i*.1,.52));set(n,{y:lerp(16,0,q),s:lerp(.86,1,q),o:q});});
-    const no=E.out4(P(t,a+1.02,.65));set(el('s6notice'),{y:lerp(18,0,no),o:no});const i1=E.out4(P(t,a+1.32,.85)),i2=E.out4(P(t,a+2.42,.9));set(el('insightTiming'),{y:lerp(58,0,i1),o:i1,blur:lerp(9,0,i1)});set(el('insightComp'),{y:lerp(58,0,i2),o:i2,blur:lerp(9,0,i2)});const cp=E.out4(P(t,a+3.5,.7));set(el('s6copy'),{y:lerp(18,0,cp),o:cp});
+    const a=T.s6[0];
+    /*
+      全片的"论点句"，给它一个真正的记忆点 —— 参考片里
+      "Motion → Motion Design → Motion Designer" 那种词组接力：
+      先让「找得到」独立居中站住，再把「，也要选得对」推进来，
+      前半句同时左移让位。这句正好是产品价值的两半，机制和语义对得上。
+    */
+    set(el('s6title'),{o:1});
+    const A6=CH.s6title.slice(0,3), B6=CH.s6title.slice(3);   // 「找得到」/「，也要选得对」
+    revealChars(A6,t,a+.10,{step:.070,dur:.72,dy:30,blur:9,sc:.88,ease:E.out5});
+    revealChars(B6,t,a+1.05,{step:.048,dur:.62,dy:0,dx:26,blur:7,sc:.90,ease:E.out5});
+    // 后半句还没进来时，前半句要顶在整行的视觉中心；进来后归位
+    // （宽度等字体就位、图层可见后再量，量一次缓存）
+    if(s6HalfW===null && B6.length && B6[0].offsetWidth)
+      s6HalfW=B6.reduce((s,n)=>s+n.offsetWidth,0)/2;
+    if(s6HalfW){
+      const sh=s6HalfW*(1-E.io(P(t,a+1.05,.80)));
+      for(const n of A6) n.style.transform=`translate3d(${sh.toFixed(2)}px,0,0) `+n.style.transform;
+    }
+    set(el('s6subtitle'),{o:1});
+    revealChars(CH.s6subtitle,t,a+.62,{step:.012,dur:.44,dy:14,blur:4,sc:.97});
+    // 四个维度芯片：逐个弹入 + 落位后轻微错相起伏，像依次点亮
+    Array.from(el('s6dims').children).forEach((n,i)=>{
+      const q=E.back(P(t,a+.92+i*.11,.52));
+      set(n,{y:lerp(16,0,q)+driftLife(t,1.3,.52,i*1.4)*cl(q),s:lerp(.86,1,q),o:cl(q)});
+    });
+    const no=E.out4(P(t,a+1.42,.65));set(el('s6notice'),{y:lerp(18,0,no),o:no});
+    // 两张洞察卡改成从侧面"抽出"，和岗位卡的翻落区分开
+    [['insightTiming',1.72,-1],['insightComp',2.82,1]].forEach(([id,st,dir])=>{
+      const q=E.out5(P(t,a+st,.92)),inv=1-q,n=el(id);
+      n.style.opacity=q.toFixed(3);
+      n.style.transform=`translate3d(${(dir*46*inv).toFixed(2)}px,`
+        +`${(lerp(34,0,q)+driftLife(t,1.5,.38,dir)*q).toFixed(2)}px,0)`
+        +` scale(${lerp(.97,1,q).toFixed(4)})`;
+      n.style.filter=q>.985?'none':`blur(${(9*inv).toFixed(2)}px)`;
+    });
+    set(el('s6copy'),{o:1});
+    revealChars(CH.s6copy,t,a+3.9,{step:.011,dur:.44,dy:12,blur:4,sc:.97});
   }
   if(scenes.s7>.002){
-    const a=T.s7[0],m=E.back(P(t,a+.12,.9));set(el('s7brand'),{cx:1,cy:1,s:lerp(.83,1,m),o:E.out(P(t,a+.12,.5))});el('s7sweep').style.transform=`rotate(${((t-a)*118).toFixed(2)}deg)`;const l1=E.out4(P(t,a+.55,.8)),l2=E.out4(P(t,a+.77,.8)),cta=E.back(P(t,a+1.25,.8));set(el('s7l1'),{y:lerp(24,0,l1),o:l1});set(el('s7l2'),{y:lerp(24,0,l2),o:l2});set(el('s7cta'),{y:lerp(22,0,cta),s:lerp(.93,1,cta),o:cta});el('cursor').style.opacity=0;
+    const a=T.s7[0],m=E.back(P(t,a+.12,.9));set(el('s7brand'),{cx:1,cy:1,s:lerp(.83,1,m),o:E.out(P(t,a+.12,.5))});el('s7sweep').style.transform=`rotate(${((t-a)*118).toFixed(2)}deg)`;const cta=E.back(P(t,a+1.55,.8));
+    // 收尾两行逐字，第二行比第一行慢一档 —— 让"再帮你选更适合的那个"落得更重
+    set(el('s7l1'),{o:1});set(el('s7l2'),{o:1});
+    revealChars(CH.s7l1,t,a+.55,{step:.040,dur:.62,dy:26,blur:8,sc:.91});
+    revealChars(CH.s7l2,t,a+.92,{step:.048,dur:.68,dy:26,blur:8,sc:.91,ease:E.out5});
+    set(el('s7cta'),{y:lerp(22,0,cta)+driftLife(t,1.4,.5,0)*cl(cta),s:lerp(.93,1,cta),o:cl(cta)});el('cursor').style.opacity=0;
   }
 }
 

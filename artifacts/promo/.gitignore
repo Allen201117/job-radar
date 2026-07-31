@@ -1,0 +1,8 @@
+# 渲染中间物与成片：只提交源（scene.html / render.py / build.sh / fonts / 文档）
+.work/
+frames/
+stills*/
+chk*/
+out/
+*.png
+!fonts/*
