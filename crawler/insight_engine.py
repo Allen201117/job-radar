@@ -15,7 +15,11 @@ from typing import Optional
 import httpx
 
 DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1"
-DEFAULT_MODEL = "Pro/deepseek-ai/DeepSeek-V3"
+DEFAULT_MODEL = "Pro/deepseek-ai/DeepSeek-V3.1"
+# 备用模型：主模型被 SiliconFlow 服务端限流（429 code 50609「System is too busy now」）时降级。
+# 刻意选**不同厂商**——2026-07-31 起 DeepSeek-V3 整个系列被挤爆、持续 3 天 100% 429，
+# 同系兜底救不了；退避重试同样救不了（服务端容量问题会持续数天，不是瞬时抖动）。
+DEFAULT_FALLBACK_MODEL = "Qwen/Qwen2.5-72B-Instruct"
 TIMEOUT = 40
 
 # 判官放行阈值：entailment 且置信 ≥ 此值 → 候选 active；[0.4, 此值) → pending_review；其余 drop
@@ -30,6 +34,7 @@ def llm_config() -> dict:
         "api_key": key,
         "base_url": os.environ.get("SILICONFLOW_BASE_URL", DEFAULT_BASE_URL).rstrip("/"),
         "model": os.environ.get("SILICONFLOW_MODEL", DEFAULT_MODEL),
+        "fallback_model": os.environ.get("SILICONFLOW_FALLBACK_MODEL", DEFAULT_FALLBACK_MODEL),
         "configured": bool(key),
     }
 
@@ -84,24 +89,33 @@ def chat_content(messages: list, temperature: float = 0.1, max_tokens: int = 102
         raise RuntimeError("llm_not_configured")
     own = client or httpx.Client()
 
-    def call(use_json_format: bool):
-        body = {"model": cfg["model"], "messages": messages,
+    def call(use_json_format: bool, model: str):
+        body = {"model": model, "messages": messages,
                 "temperature": temperature, "max_tokens": max_tokens}
         if use_json_format:
             body["response_format"] = {"type": "json_object"}
         return own.post(f"{cfg['base_url']}/chat/completions", json=body,
                         headers={"Authorization": f"Bearer {cfg['api_key']}"}, timeout=timeout)
 
+    models = [cfg["model"]]
+    if cfg["fallback_model"] and cfg["fallback_model"] != cfg["model"]:
+        models.append(cfg["fallback_model"])
+
     try:
-        for attempt in range(3):
-            resp = call(True)
-            if resp.status_code == 400:  # 部分模型不支持 json_object → 去掉重试一次
-                resp = call(False)
-            # 429 限流 / 503 过载 → 退避后重试（cron 少量串行调用不该被瞬时限流打死）
-            if resp.status_code in (429, 503) and attempt < 2:
-                time.sleep(3 * (attempt + 1))
+        for mi, model in enumerate(models):
+            for attempt in range(3):
+                resp = call(True, model)
+                if resp.status_code == 400:  # 部分模型不支持 json_object → 去掉重试一次
+                    resp = call(False, model)
+                # 429 限流 / 503 过载 → 退避后重试（cron 少量串行调用不该被瞬时限流打死）
+                if resp.status_code in (429, 503) and attempt < 2:
+                    time.sleep(3 * (attempt + 1))
+                    continue
+                break
+            # 该模型退避用尽仍被限流 → 换备用模型重来（整个模型被服务端挤爆会持续数天）
+            if resp.status_code in (429, 503) and mi < len(models) - 1:
                 continue
-            resp.raise_for_status()  # 非 2xx（含重试用尽的 429/503）→ 抛
+            resp.raise_for_status()  # 非 2xx（含全部模型都重试用尽的 429/503）→ 抛
             data = resp.json()
             content = (((data.get("choices") or [{}])[0]).get("message") or {}).get("content") or ""
             _record_llm(True)
