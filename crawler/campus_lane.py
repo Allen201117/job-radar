@@ -30,6 +30,18 @@ SURGE_DELTA = 50
 # 抓全判据：入库数 / adapter 自报官网总数 低于此值即认为没抓全。
 COVERAGE_THRESHOLD = 0.9
 
+# 开闸检测用的「校招岗」SQL 判据（香港 jobs 库）。
+#
+# ⚠️ 这是**抓取运维信号**，不是用户看到的那个数。用户侧走 lib/campus-zone.ts 的 campusAdmission
+# （精度优先、弱词不判校招、≥2 年经验强制社招），口径更严；这里要的是**跨快照稳定可比**：
+# 开闸判据比的是同一把尺子量出来的前后两个数，尺子粗一点不影响倍数/增量的判断，
+# 但尺子如果跟着产品口径漂移，历史快照就不可比了。所以这把尺子刻意独立、且刻意保持简单。
+# 两边都变严/变松时不需要同步——它们回答的是不同问题。
+CAMPUS_JOB_SQL_PREDICATE = (
+    "(job_type ~ '校|应届|campus|Campus|graduate|Graduate' "
+    "or title ~ '校招|校园招聘|应届|秋招|春招')"
+)
+
 
 def is_campus_season(month: Optional[int]) -> bool:
     """当前月份是否处于校招季（秋招或春招）。"""
