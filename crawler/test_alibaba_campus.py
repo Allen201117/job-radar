@@ -70,5 +70,60 @@ class TestAlibabaCampusPayloadSelfProof(unittest.TestCase):
         self.assertIsNotNone(self.a._map(_row(categoryType="FreshMan", batchName="")))
 
 
+class TestEmptyVsBroken(unittest.TestCase):
+    """「一条岗都没有」有两种成因，处置完全相反——不区分就会把「2027 届还没开闸」
+    天天记成抓取失败，把真故障淹在噪音里（2026-08-04 首轮车道实测踩到：3 个阿里校招源
+    全部 FAILED，其实只是那几个 BU 的校招频道还没放岗）。"""
+
+    def _adapter_with_fake_client(self, responses):
+        """responses: 依次返回的 (status_code, json) 或 Exception。"""
+        import httpx
+        from adapters import alibaba
+
+        class FakeResp:
+            def __init__(self, payload): self._p = payload
+            def raise_for_status(self): pass
+            def json(self): return self._p
+
+        class FakeClient:
+            def __init__(self, *a, **k): self.cookies = {"XSRF-TOKEN": "t"}
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def get(self, *a, **k): return FakeResp({})
+            def post(self, *a, **k):
+                item = responses.pop(0) if responses else {"content": {"datas": [], "totalCount": 0}}
+                if isinstance(item, Exception):
+                    raise item
+                return FakeResp(item)
+
+        return FakeClient, alibaba, httpx
+
+    def test_api_answered_with_zero_jobs_does_not_raise(self):
+        FakeClient, alibaba, _ = self._adapter_with_fake_client(
+            [{"content": {"datas": [], "totalCount": 0}}])
+        orig = alibaba.httpx.Client
+        alibaba.httpx.Client = FakeClient
+        try:
+            a = alibaba.AlibabaCampusAdapter(); a.company_name = "阿里云"
+            raw = a.fetch("https://careers.aliyun.com/campus/position-list?lang=zh")
+            self.assertEqual(a.parse(raw), [])
+            self.assertEqual(a.reported_total, 0)
+            self.assertTrue(a.fetch_complete)   # 0/0 = 抓全了，不是没抓完
+        finally:
+            alibaba.httpx.Client = orig
+
+    def test_api_never_answered_raises(self):
+        import httpx as _h
+        FakeClient, alibaba, _ = self._adapter_with_fake_client([_h.ConnectError("boom")])
+        orig = alibaba.httpx.Client
+        alibaba.httpx.Client = FakeClient
+        try:
+            a = alibaba.AlibabaCampusAdapter(); a.company_name = "X"
+            with self.assertRaises(RuntimeError):
+                a.fetch("https://x.alibaba.com/campus/position-list?lang=zh")
+        finally:
+            alibaba.httpx.Client = orig
+
+
 if __name__ == "__main__":
     unittest.main()

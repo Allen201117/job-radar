@@ -97,6 +97,11 @@ class AlibabaAdapter(PlaywrightAdapter):
                 raise RuntimeError(f"alibaba: 拿不到 XSRF-TOKEN ({host})")
 
             seen_ids = set()
+            # 接口是否至少成功应答过一次。用来区分两种「一条都没有」：
+            #   · 接口 200 且 totalCount=0 → **真的没岗**（校招频道在正式批开闸前完全正常）
+            #   · 接口从没答上来（超时/5xx/JSON 坏） → 真故障，必须 raise 让 crawl_run 记 failed
+            # 不区分的话，「2027 届还没开闸」会天天被记成抓取失败，把真故障淹在噪音里。
+            api_answered = [False]
 
             def sweep(regions: str = "", sub_categories: str = ""):
                 """单过滤条件下翻页收齐（服务端 offset 封顶 500/条件），返回该条件 totalCount。"""
@@ -112,6 +117,7 @@ class AlibabaAdapter(PlaywrightAdapter):
                         })
                         resp.raise_for_status()
                         payload = resp.json()
+                        api_answered[0] = True
                     except (httpx.HTTPError, ValueError):
                         break
                     content = payload.get("content") or {}
@@ -155,8 +161,14 @@ class AlibabaAdapter(PlaywrightAdapter):
                         sweep(sub_categories=codes)
                 for adcode in self._REGION_SHARDS:
                     sweep(regions=adcode)
+        if not collected and not api_answered[0]:
+            raise RuntimeError(f"alibaba: position/search 无应答 ({host})")
         if not collected:
-            raise RuntimeError(f"alibaba: empty position/search ({host})")
+            # 接口答了、就是 0 条：校招频道在正式批开闸前的正常状态（2026-08-04 实测 13 个 BU
+            # 里 11 个校招 0 条）。返回空信封让上层记 0 岗成功，而不是 failed。
+            self.reported_total = 0
+            self.fetch_complete = True
+            return json.dumps({"_intercepted": []}, ensure_ascii=False)
         self.fetch_complete = (
             self.reported_total is not None and len(seen_ids) >= self.reported_total
         )
