@@ -544,11 +544,19 @@ def run_crawl(filter_adapter: str = None, tier: str = "all",
     total_updated = sum(r["updated"] for r in results)
     success_count = sum(1 for r in results if r["status"] in ("success", "partial_success"))
     fail_count = sum(1 for r in results if r["status"] == "failed")
+    # "empty" = 抓取链路完全正常、只是这个源当下一个岗都没有（列表返回空）。
+    # 它既不是成功也不是失败，此前两个计数器都不统计它 → 调用方看到 0 成功 0 失败，
+    # 分不清「源坏了」和「源是空的」。校招场景下这个区分是刚需：板块在正式批开闸前
+    # 空着是常态，误判成失败会让它吃长退避、错过整个开闸窗口（campus_board_verify 实测踩到）。
+    empty_count = sum(1 for r in results if r["status"] == "empty")
+    skipped_count = sum(1 for r in results if r["status"] == "skipped")
 
     print(f"\n[crawler] 完成: {success_count} 成功, {fail_count} 失败, "
+          f"{empty_count} 空源, {skipped_count} 跳过, "
           f"created={total_created}, updated={total_updated}")
     return {"created": total_created, "updated": total_updated,
-            "success": success_count, "failed": fail_count}
+            "success": success_count, "failed": fail_count,
+            "empty": empty_count, "skipped": skipped_count}
 
 
 if __name__ == "__main__":

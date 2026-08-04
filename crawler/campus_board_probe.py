@@ -135,3 +135,23 @@ def moka_tenant(source_url: str) -> Optional[str]:
 def hotjob_tenant(source_url: str) -> Optional[tuple]:
     m = _HOTJOB_RE.match(source_url or "")
     return (m.group(1), m.group(2)) if m else None
+
+
+def classify_empty_result(crawl_result) -> str:
+    """抓完一个岗都没有时，这是「板块空着」还是「抓坏了」？返回台账 state。
+
+    ⚠️ 这个区分栽过三次（阿里校招频道 / 校招板块验收 / run_crawl 的 empty 状态），
+    根子是同一条：**在「等开闸」这类场景里，「什么都没等到」是正常态、不是故障态**。
+    判错的代价不对称——把「板块空着」当故障会吃长退避、错过整个开闸窗口；
+    反过来只是多探一次。
+
+    判据取 run_crawl 的返回：
+      failed ≥ 1                     → 真失败（no_healthy_jobs，长退避）
+      success/empty 至少处理过 1 个   → 板块空着（empty_board，短退避，开闸后复查）
+      两者皆无（如 robots skipped）   → 当失败处理，长退避
+    """
+    result = crawl_result or {}
+    if (result.get("failed") or 0) >= 1:
+        return "no_healthy_jobs"
+    processed = (result.get("success") or 0) + (result.get("empty") or 0)
+    return "empty_board" if processed >= 1 else "no_healthy_jobs"

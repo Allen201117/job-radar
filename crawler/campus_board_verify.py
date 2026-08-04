@@ -108,8 +108,12 @@ def verify_one(supabase, conn, candidate, all_sources):
         # 校招板块在正式批开闸前**空着是常态**（首轮 12 个里 6 个是这种），
         # 把它当失败记 30 天退避，等于错过整个开闸窗口。这与阿里那个坑同构：
         # 「什么都没等到」在等待场景里是正常态，不是故障态。
-        crawled_ok = (result.get("success") or 0) >= 1 and (result.get("failed") or 0) == 0
-        state = "empty_board" if crawled_ok else "no_healthy_jobs"
+        # 抓取链路正常 = 没有失败，且该源确实被处理过（success/empty 任一）。
+        # ⚠️ 必须把 run_crawl 的 "empty"（列表返回空）算进来——它正是「板块存在但当前没岗」，
+        # 是这里最想识别的状态。首轮实测 11 个源全落在 empty 上，只看 success 会全判成抓取失败、
+        # 吃 30 天退避、错过开闸窗口。skipped（robots）不算正常，交给 no_healthy_jobs 长退避。
+        state = P.classify_empty_result(result)
+        crawled_ok = state == "empty_board"
         _log(f"  ✗ {label}：抓完回读 0 岗（{'板块当前无岗，开闸后复查' if crawled_ok else '抓取失败'}）")
         purge_source(supabase, conn, candidate["id"])
         return state
