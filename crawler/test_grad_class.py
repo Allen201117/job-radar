@@ -21,6 +21,13 @@ class TestExtractGradClass(unittest.TestCase):
         self.assertEqual(extract_grad_class(title="2028春招提前批"), 2028)
         self.assertEqual(extract_grad_class(summary="2027年校园招聘正式启动"), 2027)
 
+    def test_project_name_style(self):
+        # 招聘项目名写法（快手校招项目名实测即 `2027应届生`/`2027实习生`）
+        self.assertEqual(extract_grad_class(job_type="2027应届生"), 2027)
+        self.assertEqual(extract_grad_class(job_type="2027实习生"), 2027)
+        self.assertEqual(extract_grad_class(job_type="2026应届生"), 2026)
+        self.assertEqual(extract_grad_class(summary="面向2027年应届毕业生"), 2027)
+
     def test_english_signals(self):
         self.assertEqual(extract_grad_class(title="Software Engineer, Class of 2027"), 2027)
         self.assertEqual(extract_grad_class(title="2027 Graduate Program - Analyst"), 2027)

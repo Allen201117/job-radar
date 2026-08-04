@@ -20,6 +20,14 @@ test("extractGradClass: 年份 + 校招/秋招/春招/校园招聘", () => {
   assert.equal(extractGradClass({ summary: "2027年校园招聘正式启动" }), 2027);
 });
 
+test("extractGradClass: 招聘项目名写法（2027应届生 / 2027实习生）", () => {
+  // 快手校招项目名实测即 `2027应届生`/`2027实习生`；只认「届/校招/秋招」会把这类全漏成 null
+  assert.equal(extractGradClass({ job_type: "2027应届生" }), 2027);
+  assert.equal(extractGradClass({ job_type: "2027实习生" }), 2027);
+  assert.equal(extractGradClass({ job_type: "2026应届生" }), 2026);
+  assert.equal(extractGradClass({ summary: "面向2027年应届毕业生" }), 2027);
+});
+
 test("extractGradClass: 英文硬信号", () => {
   assert.equal(extractGradClass({ title: "Software Engineer, Class of 2027" }), 2027);
   assert.equal(extractGradClass({ title: "2027 Graduate Program - Analyst" }), 2027);

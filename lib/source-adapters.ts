@@ -145,6 +145,12 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填 BU 公司名 + 该 BU 域列表页（{BU域}/off-campus/position-list?lang=zh，如 talent.taotian.com 淘天 / careers.aliyun.com 阿里云），直连 position/search，crawl_method 选 http",
   },
   {
+    value: "kuaishou_campus",
+    label: "快手 校招（campus.kuaishou.cn · 本土）",
+    origin: "domestic",
+    hint: "填「快手 Kuaishou」+ https://campus.kuaishou.cn/。与社招那个站(zhaopin.kuaishou.cn)是两回事：校招接口公开，纯 httpx 零鉴权，招聘项目码按年份动态发现，crawl_method 选 http",
+  },
+  {
     value: "alibaba_campus",
     label: "阿里巴巴集团 BU 门户 · 校招（通用 · 本土）",
     origin: "domestic",
