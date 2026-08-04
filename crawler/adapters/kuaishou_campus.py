@@ -1,5 +1,12 @@
 """快手**校园招聘**门户（campus.kuaishou.cn）—— 纯 httpx 零鉴权零浏览器。
 
+🚫🚫 **该源当前已停用：campus.kuaishou.cn 的 robots.txt 是 `User-agent: * / Disallow: /`，
+明确禁止任何抓取**（2026-08-04 首轮生产运行暴露，迁移 192 已 disable 对应 source）。
+run.py 的 check_robots 会把它记为 skipped、一条都不写库——本 adapter 因此**当前不产出任何数据**。
+代码与单测保留，是为了万一快手日后放开 robots 能直接复用（把 sources.enabled 改回 true 即可）。
+⚠️ 这是合规边界不是技术障碍：**不要试图绕过**（改 UA / 跳过 robots / 换代理都不行）。
+对比：社招域 zhaopin.kuaishou.cn 的 /robots.txt 返 404（无 robots = 允许），既有 kuaishou 源不受影响。
+
 与既有 `kuaishou` adapter 的关系：那个抓的是社招（`zhaopin.kuaishou.cn/#/official/**social**/`，
 需要 Playwright 拦截页面签名请求）。校招是**另一个站**，且接口是公开的 `/open/` 路径，httpx 直连即可。
 2026-08-04 之前库里快手校招岗 = 1 个，就是因为只接了社招那个站。
