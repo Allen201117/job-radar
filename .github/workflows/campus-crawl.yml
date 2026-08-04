@@ -1,0 +1,71 @@
+name: campus-crawl
+
+# 校招高频车道（2027 届秋招正式批基座）。
+#
+# 为什么要单独一条车道：校招公司**一次性放出全部岗位**——开闸即从几十跳到几百上千。
+# daily-crawl 每 6 小时一轮、enrich-crawl 每天一轮，最坏要等一天才进库，而秋招前几天的
+# 曝光窗口最值钱。本车道把「必投清单里的校招源」（几十个）单独拎出来每小时刷一遍，
+# 并在检测到开闸时**立刻再抓一遍**不等下一个整点。
+#
+# 与主链路的关系：这是**叠加的加密轮次**，daily-crawl / enrich-crawl 覆盖面一行不减。
+# 选源 = sources.board ∈ {campus,mixed} ∪ 近 30 天真产过校招岗的源，交必投清单
+# （并集不可省：live 实测 430 个真产校招岗的源里 board 只覆盖 281，漏的全是比亚迪/小红书/
+#  华为/蚂蚁这类把校招社招混在一个列表里的自建门户）。
+#
+# 淡季由脚本内 is_campus_season 判月份早退（秋招 8-11 月 / 春招 2-4 月），
+# 不删 cron 是为了随时能 workflow_dispatch 手动跑；强跑设 force=true。
+
+on:
+  schedule:
+    # 每小时的 :20 —— 与 daily-crawl（整点 UTC 1/7/13/17）、enrich-crawl（UTC 18:00）错峰，
+    # 不与它们抢同一时刻的目标站点连接。
+    - cron: "20 * * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "淡季也强制跑一轮（true/false）"
+        required: false
+        default: "false"
+
+concurrency:
+  # 上一轮没跑完就别叠下一轮——同一批源被两个 runner 并发轰容易触发目标站点限流。
+  group: campus-crawl
+  cancel-in-progress: false
+
+jobs:
+  campus-lane:
+    runs-on: ubuntu-latest
+    # 车道只抓几十个源；给 50min 是为了容纳开闸当轮的「加急重抓」第二遍（可能上千岗要 upsert）。
+    timeout-minutes: 50
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # ⚠️ 忘配这三个 = 静默写空库（见记忆 job-radar-phase1-ci-jobs-db-wiring）。
+      # 本车道更严：campus_crawl.main() 在未配 JOBS_DATABASE_URL 时直接非零退出，
+      # 因为开闸检测必须回读香港 jobs 库，静默降级会造成「CI 绿灯但检测从没跑过」的假象。
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+      JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+      JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+      CAMPUS_LANE_FORCE: ${{ github.event.inputs.force }}
+      # 车道源少，并发可以给足；同主机仍由 run.py 的主机队列串行护着，不会打爆单站。
+      CRAWL_CONCURRENCY: "8"
+      # 车道只负责「把新放出来的岗尽快抓进来」，逐岗富化交给 enrich-backlog 按自己的节奏做。
+      CRAWL_DETAIL_CAP: "0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      # 校招板块里有浏览器源（moka campus-recruitment 门户等），tier=all 两档都跑 → 需要 chromium。
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run campus lane (select → crawl → detect surge → re-crawl)
+        run: python crawler/campus_crawl.py
+        working-directory: ${{ github.workspace }}

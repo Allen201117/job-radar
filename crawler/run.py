@@ -474,9 +474,13 @@ def _process_one_source(source, supabase) -> dict:
 
 
 def run_crawl(filter_adapter: str = None, tier: str = "all",
-              shard_index: int = 0, shard_count: int = 1):
+              shard_index: int = 0, shard_count: int = 1,
+              sources_override: list = None):
+    """全库抓取。sources_override 非空时只抓这批源（调用方已自行选源、已过滤 enabled），
+    用于校招高频车道等「按业务口径挑一小撮源加密抓」的场景（见 crawler/campus_crawl.py）。
+    分档/分片/本土优先等下游逻辑对两条路径完全一致，避免车道走出与主链路不同的抓取行为。"""
     supabase = db.get_supabase()
-    sources = db.get_sources(supabase)
+    sources = list(sources_override) if sources_override is not None else db.get_sources(supabase)
 
     if not sources:
         print("[crawler] 没有 enabled sources，退出。")
