@@ -145,6 +145,12 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填 BU 公司名 + 该 BU 域列表页（{BU域}/off-campus/position-list?lang=zh，如 talent.taotian.com 淘天 / careers.aliyun.com 阿里云），直连 position/search，crawl_method 选 http",
   },
   {
+    value: "meituan_campus",
+    label: "美团 校招（zhaopin.meituan.com/web/campus · 本土）",
+    origin: "domestic",
+    hint: "填「美团 Meituan」+ https://zhaopin.meituan.com/web/campus。与社招同接口，靠板块过滤区分（应届生/转正实习/日常实习三桶一次抓全），crawl_method 选 http",
+  },
+  {
     value: "kuaishou_campus",
     label: "快手 校招（campus.kuaishou.cn · 本土）",
     origin: "domestic",
