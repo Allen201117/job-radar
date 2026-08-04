@@ -31,7 +31,7 @@ from normalizer import canonicalize_jd_url
 # jobs 可写列（与 jobs-db/schema.sql 对齐）。canonical_jd_url 由触发器维护、search_doc v1 不填 → 都不在写入列。
 _INSERT_COLS = (
     "id", "source_id", "company", "title", "location", "country_code", "job_scope",
-    "job_type", "summary", "jd_url", "apply_url", "salary_text", "posted_at",
+    "job_type", "grad_class", "summary", "jd_url", "apply_url", "salary_text", "posted_at",
     "first_seen_at", "last_seen_at", "status", "content_hash", "experience", "education",
     "deadline", "sponsorship_signal", "enrich_fail_count", "enrich_checked_at",
 )
@@ -49,6 +49,13 @@ _UPDATE_COLS = tuple(
 # 仅当新值非空才覆盖（fresh 数据仍优先，如 beisen 列表自带 Duty/Require、httpx 大厂内联正文）。
 _PRESERVE_IF_EMPTY = ("summary", "job_type", "experience", "education", "deadline", "salary_text")
 
+# 同样要防「重抓抹掉」，但列是**非文本类型**，不能套 NULLIF(%s,'')：
+# NULLIF(2027, '') 会让 Postgres 把 '' 往 integer 强转 → invalid input syntax，整源写库炸掉。
+# 非文本列的「空」就是 NULL，直接 COALESCE(%s, 列) 即可。
+# grad_class：届别从标题/正文抽，列表页文本比详情页短，重抓时常抽不出来（None）。不保护的话，
+# 富化阶段从完整 JD 抽到的「2027 届」会被次日列表重抓的 None 抹掉——与 summary 被抹的老坑同形态。
+_PRESERVE_IF_NULL = ("grad_class",)
+
 
 def _update_set_clause(cols=_UPDATE_COLS) -> str:
     """构造 UPDATE 的 SET 子句。每列恰好消费一个 %s，占位符顺序与 _row_tuple(job, cols) 一致。
@@ -56,12 +63,16 @@ def _update_set_clause(cols=_UPDATE_COLS) -> str:
       （除身份字段外与在招岗无异），裸 status=%s 会把 sweep 判死的岗每天刷回 active（点开 404/已下线）。
       expired 留 expired、其余（removed/active）走 ELSE 仍刷 active（复活漏看岗、保 job_actions 外键）；
       ELSE 仍占一个 %s，故占位符总数不变。
-    - 保留型富化字段：COALESCE(NULLIF(%s,''), 列) 防空值抹掉既有内容。其余字段：直接 %s 覆盖。"""
+    - 保留型富化字段：文本列走 COALESCE(NULLIF(%s,''), 列)，非文本列走 COALESCE(%s, 列)
+      （NULLIF(整数, '') 会触发 '' → integer 强转报错，见 _PRESERVE_IF_NULL 注释）。防空值抹掉既有内容。
+    - 其余字段：直接 %s 覆盖。"""
     def _one(c):
         if c == "status":
             return "status = CASE WHEN jobs.status = 'expired' THEN 'expired' ELSE %s END"
         if c in _PRESERVE_IF_EMPTY:
             return f"{c} = COALESCE(NULLIF(%s, ''), {c})"
+        if c in _PRESERVE_IF_NULL:
+            return f"{c} = COALESCE(%s, {c})"
         return f"{c} = %s"
     return ", ".join(_one(c) for c in cols)
 

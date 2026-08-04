@@ -10,6 +10,7 @@ import { getCampusZone } from "@/lib/jobs-store/read";
 import { getCampusSourceCoverage } from "@/lib/campus-sources";
 import { windowStatus, compareCompanyCards } from "@/lib/campus-zone";
 import { getRecruitmentCyclesForCompanies } from "@/lib/recruitment-cycle-store";
+import { getRecentCampusSurges } from "@/lib/campus-surge-store";
 import { classifyJobFunction } from "@/lib/china-keyword-expansion";
 import {
   campusTimelineSummary,
@@ -85,10 +86,11 @@ export default async function CampusPage() {
     ).values(),
   );
 
-  const [zone, sourceCov, cyclesByPattern] = await Promise.all([
+  const [zone, sourceCov, cyclesByPattern, surgesByPattern] = await Promise.all([
     getCampusZone(companies),
     getCampusSourceCoverage(companies),
     getRecruitmentCyclesForCompanies(companies),
+    getRecentCampusSurges(companies),
   ]);
 
   const nowMs = Date.now();
@@ -127,6 +129,11 @@ export default async function CampusPage() {
       preciseDates,
       batchTimingGap,
       cleanDeadlineMs,
+      // 「刚开正式批」：近 7 天检测到校招岗一次性放量（判据 crawler/campus_lane.detect_surge）。
+      // 秋招正式批是一次性放量，这是用户最该马上行动的信号。
+      surge: surgesByPattern.get(z.pattern) ?? null,
+      // 明确标了往届（如 2026 届）而被移出列表的岗数——不静默丢弃，卡面照实说一句。
+      pastClassJobCount: z.pastClassJobCount,
     };
   });
   cards.sort(compareCompanyCards);

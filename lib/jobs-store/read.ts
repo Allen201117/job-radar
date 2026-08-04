@@ -7,6 +7,7 @@ import { appendJobScopeWhere } from "@/lib/job-scope";
 import type { UserPreferences } from "@/lib/types";
 import { ilikeMatcher } from "@/lib/ilike-matcher";
 import { campusAdmission } from "@/lib/campus-zone";
+import { isCurrentSeasonGradClass } from "@/lib/grad-class";
 import { mustApplyUnion, type MustApplyCompany } from "@/lib/must-apply-list";
 
 export { ilikeMatcher } from "@/lib/ilike-matcher";
@@ -453,6 +454,7 @@ export type CampusCompanyRow = {
   internJobs: any[];        // intern 桶
   hasAnyActiveJob: boolean; // 该公司「校招相关粗筛」里有没有岗（判 source_only_social 的输入之一，非严格任意在招）
   lastSeenAtMs: number | null;
+  pastClassJobCount: number; // 明确标了往届（如秋招期库里没下架干净的 2026 届）而被移出列表的岗数，供卡面诚实说明
 };
 
 /**
@@ -485,7 +487,8 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
       `
       select
         j.id, j.company, j.title, j.job_type, j.jd_url, j.apply_url, j.summary,
-        j.experience, j.deadline, j.first_seen_at, j.last_seen_at, j.location as city, j.education, j.status
+        j.experience, j.deadline, j.first_seen_at, j.last_seen_at, j.location as city, j.education, j.status,
+        j.grad_class
       from jobs j
       where j.status = 'active'
         and j.company ilike any($1::text[])
@@ -500,6 +503,7 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
     const byName = new Map<string, CampusCompanyRow>();
     for (const c of list) byName.set(c.name, {
       company: c.name, pattern: c.pattern, campusJobs: [], internJobs: [], hasAnyActiveJob: false, lastSeenAtMs: null,
+      pastClassJobCount: 0,
     });
     for (const r of rows) {
       if (!r.id || !r.company) continue;
@@ -514,8 +518,16 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
       const seen = r.last_seen_at ? Date.parse(r.last_seen_at) : NaN;
       if (!Number.isNaN(seen)) agg.lastSeenAtMs = Math.max(agg.lastSeenAtMs || 0, seen);
       const bucket = campusAdmission(r);
+      if (bucket === "reject") continue;
+      // 往届岗（明确标了比当季更早的届别，如秋招开闸期库里没下架干净的 2026 届）不进默认列表——
+      // 校招用户投一个往届岗就白费一轮。届别未知（绝大多数岗）照常展示，留白不等于隐藏。
+      // 不静默丢弃：计数留给卡面说明「另有 N 个往届岗」，避免用户以为我们漏抓。
+      if (!isCurrentSeasonGradClass(r.grad_class)) {
+        agg.pastClassJobCount += 1;
+        continue;
+      }
       if (bucket === "campus") agg.campusJobs.push(r);
-      else if (bucket === "intern") agg.internJobs.push(r);
+      else agg.internJobs.push(r);
     }
     return list.map((c) => byName.get(c.name)!);
   })();

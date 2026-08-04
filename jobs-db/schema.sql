@@ -21,6 +21,7 @@ create table if not exists jobs (
   country_code      text,
   job_scope         text not null default 'domestic',
   job_type          text,
+  grad_class        smallint,   -- 届别（2027 = 2027 届）；只认硬信号，抽不出留 NULL（见 crawler/grad_class.py）
   summary           text,
   jd_url            text not null,
   apply_url         text,
@@ -51,6 +52,10 @@ alter table jobs alter column job_scope set default 'domestic';
 update jobs set job_scope = 'domestic' where job_scope is null;
 alter table jobs alter column job_scope set not null;
 alter table jobs add column if not exists sponsorship_signal text;
+-- 届别（2026-08-04，2027 届秋招）。存量行留 NULL 不回填：届别只认岗位文本里的硬信号，
+-- 靠入库时间倒推等于猜，会把上一届残岗标成当季（详见 crawler/grad_class.py 注释）。
+-- 存量岗会在下一轮列表重抓时由 normalizer 自然补上（抽得出才补）。
+alter table jobs add column if not exists grad_class smallint;
 
 -- ── 岗位生命周期事件（append-only 里程碑；02 spec §5.1）──
 -- 只记里程碑，不记心跳：每岗一辈子 ~2–4 条（首见/拿到官方发布/若干天确认/下架）。
