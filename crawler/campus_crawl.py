@@ -21,7 +21,12 @@ import db
 import jobs_db
 import must_apply
 import ops_runs
-from run import run_crawl
+from run import run_crawl, _HTTPX_SAFE_ADAPTERS as HTTPX_SAFE_ADAPTERS
+
+
+# 单轮加急重抓的家数上限。开闸重抓允许跑浏览器档（单源 2-5min），封顶防止旺季多家同时开闸时
+# 撞 50min 超时导致一家都没抓完。被推迟的下一个整点仍是候选（快照已留痕）。
+SURGE_RECRAWL_CAP = 8
 
 
 def _log(msg: str) -> None:
@@ -123,8 +128,18 @@ def main() -> int:
         _log(f"选中 {len(selected)} 源（board 命中 {by_board}，"
              f"实际产出补充 {len(selected) - by_board}）/ 全库 {len(all_sources)} 源")
 
+        # ⚠️ 每小时只抓 httpx 档，浏览器档**不进高频车道**。
+        # 实测（2026-08-04）：选中的 193 源里 105 个是浏览器串行源（60 beisen + 45 moka），
+        # 单源 2-5 分钟 → 一轮要 3.5~8.7 小时，每小时跑必然撞 50min 超时、每次只抓十几个源就被杀，
+        # 既没抓完又天天烧 CI。浏览器源仍由 enrich-crawl 每日全量覆盖（覆盖面不减，只是不加密）。
+        # 幸好高价值大厂校招板块几乎全在 httpx 档：字节/腾讯/阿里/美团/网易/京东/百度/华为/蚂蚁/米哈游/小红书。
+        crawl_targets, browser_only = campus_lane.split_by_crawl_tier(selected, HTTPX_SAFE_ADAPTERS)
+        if browser_only:
+            _log(f"其中 {len(browser_only)} 个浏览器源不进本车道（单源 2-5min 跑不动每小时），"
+                 f"仍由 enrich-crawl 每日覆盖；本轮实抓 {len(crawl_targets)} 个 httpx 源")
+
         before = campus_counts_by_source(conn)
-        run_crawl(sources_override=selected, tier="all")
+        run_crawl(sources_override=crawl_targets, tier="httpx")
 
         # 抓完回读 → 判开闸
         after = campus_counts_by_source(conn)
@@ -158,9 +173,18 @@ def main() -> int:
         # 一次性放出上千岗时，单轮抓取常因分页/超时没拿全；紧接着的第二轮能把余量补上，
         # 是否真抓全由 crawl_runs.coverage_complete（adapter 自报）判定，不在这里自己下结论。
         if surged:
-            _log(f"开闸 {len(surged)} 家 → 立即加急重抓："
-                 f"{', '.join((s.get('company') or '?') for s in surged)}")
-            run_crawl(sources_override=surged, tier="all")
+            # 加急重抓允许跑浏览器档（tier=all）——开闸是罕见事件，值得为它多花时间。
+            # 但要封顶：万一同一轮多家一起开闸（秋招旺季完全可能），全跑浏览器档会撞 50min 超时，
+            # 结果一家都没抓完。按放量幅度排序取前 N 家；**被推迟的照实打日志**，不做静默截断
+            # ——它们下一个整点仍是 surge 候选（快照已留痕，基线没被这轮吃掉）。
+            surged.sort(key=lambda s: after.get(str(s["id"]), 0), reverse=True)
+            batch, deferred = surged[:SURGE_RECRAWL_CAP], surged[SURGE_RECRAWL_CAP:]
+            _log(f"开闸 {len(surged)} 家 → 立即加急重抓 {len(batch)} 家："
+                 f"{', '.join((s.get('company') or '?') for s in batch)}")
+            if deferred:
+                _log(f"⚠️ 本轮容量所限推迟 {len(deferred)} 家到下一个整点："
+                     f"{', '.join((s.get('company') or '?') for s in deferred)}")
+            run_crawl(sources_override=batch, tier="all")
 
         ops_runs.record_ops_run(supabase, "campus_lane", {
             "sources": len(selected),

@@ -6,7 +6,41 @@ from campus_lane import (
     is_campus_season,
     is_undercrawled,
     select_campus_sources,
+    split_by_crawl_tier,
 )
+
+
+class TestSplitByCrawlTier(unittest.TestCase):
+    """高频车道只跑得起 httpx 档：浏览器源单源 2-5min，2026-08-04 实测选中 193 源里 105 个是
+    浏览器源 → 一轮 3.5~8.7 小时，每小时跑必然撞 50min 超时被杀。"""
+
+    SAFE = {"alibaba_campus", "hotjob", "meituan", "huawei"}
+
+    def test_splits_and_preserves_order(self):
+        srcs = [
+            {"id": "1", "adapter_name": "alibaba_campus"},
+            {"id": "2", "adapter_name": "moka"},      # 浏览器
+            {"id": "3", "adapter_name": "hotjob"},
+            {"id": "4", "adapter_name": "beisen"},    # 浏览器
+        ]
+        fast, slow = split_by_crawl_tier(srcs, self.SAFE)
+        self.assertEqual([s["id"] for s in fast], ["1", "3"])
+        self.assertEqual([s["id"] for s in slow], ["2", "4"])
+
+    def test_unknown_adapter_falls_to_browser_tier(self):
+        # fail-safe：白名单外一律当浏览器档，杜绝把非线程安全的 adapter 误并发跑崩
+        fast, slow = split_by_crawl_tier([{"id": "x", "adapter_name": "brand_new_adapter"}], self.SAFE)
+        self.assertEqual(fast, [])
+        self.assertEqual(len(slow), 1)
+
+    def test_missing_adapter_name_is_browser_tier(self):
+        fast, slow = split_by_crawl_tier([{"id": "x"}], self.SAFE)
+        self.assertEqual(fast, [])
+        self.assertEqual(len(slow), 1)
+
+    def test_empty_inputs(self):
+        self.assertEqual(split_by_crawl_tier([], self.SAFE), ([], []))
+        self.assertEqual(split_by_crawl_tier(None, None), ([], []))
 
 
 class TestCampusSeason(unittest.TestCase):

@@ -83,6 +83,23 @@ def select_campus_sources(
     return out
 
 
+def split_by_crawl_tier(sources: Iterable[dict], httpx_safe_adapters) -> tuple:
+    """按抓取方式把源拆成 (httpx 档, 浏览器档)，保持原顺序。
+
+    高频车道只跑得起 httpx 档：浏览器源（Playwright，非线程安全故串行）单源 2-5 分钟，
+    2026-08-04 实测选中的 193 源里 105 个是浏览器源（60 beisen + 45 moka）→ 一轮 3.5~8.7 小时，
+    每小时跑必然撞超时被杀，既抓不完又天天烧 CI。浏览器源仍由 enrich-crawl 每日全量覆盖。
+
+    ⚠️ 拆分只影响「抓」，不影响「看」：开闸检测仍对**全部**选中源做快照——浏览器源的岗位数
+    也会因每日 enrich-crawl 而变化，我们照样能在下一个整点发现它开闸并触发加急重抓。
+    """
+    safe = set(httpx_safe_adapters or ())
+    fast, slow = [], []
+    for s in sources or []:
+        (fast if (s.get("adapter_name") or "") in safe else slow).append(s)
+    return fast, slow
+
+
 def detect_surge(
     prev_count: Optional[int],
     curr_count: Optional[int],

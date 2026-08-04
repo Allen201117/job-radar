@@ -62,8 +62,10 @@ jobs:
       - name: Install crawler dependencies
         run: pip install -r crawler/requirements.txt
 
-      # 校招板块里有浏览器源（moka campus-recruitment 门户等），tier=all 两档都跑 → 需要 chromium。
-      - name: Install Playwright browser
+      # 常规每小时轮次只跑 httpx 档，用不到 chromium；但**开闸后的加急重抓**走 tier=all，
+      # 那一下可能撞上浏览器源。开闸是随时可能发生、且最不能错过的一刻，不能等下一轮再装浏览器，
+      # 所以每轮都预装（公开仓库 Actions 分钟无限，~1min 的固定开销换开闸当场就能重抓，值）。
+      - name: Install Playwright browser (for surge re-crawl)
         run: python -m playwright install --with-deps chromium
 
       - name: Run campus lane (select → crawl → detect surge → re-crawl)
