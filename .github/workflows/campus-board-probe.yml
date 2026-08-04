@@ -1,0 +1,78 @@
+name: campus-board-probe
+
+# 校招板块批量补源（取代逐家手工啃自建门户）。
+#
+# 为什么这条流水线存在：库里 94% 的源是通用 ATS 平台，平台的校招板块 URL 是模板化的
+# → 可批量推导 + 批量探。实测手工 2 小时打通 2 家，批量分诊 20 秒扫完 152 个候选命中 140。
+#
+# 两个 job 串行：
+#   probe  —— 层1 廉价分诊（httpx 秒级）：候选推导 → robots 门 → 可达且像真板块 → 插 disabled 源
+#   verify —— 层2 昂贵验收（可能跑浏览器 adapter）：真抓 → 非重复门 → 健康岗 ≥1 → 才 enable
+#
+# ⚠️ 默认 dry-run。要真写库必须手动带 apply=true——这条流水线会**新增源**，
+# 属于对岗位库有实质影响的操作，不做成无人值守自动跑。
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "true = 真写库（插 disabled 候选源）；缺省 dry-run 只报告"
+        required: false
+        default: "false"
+      probe_limit:
+        description: "层1 本轮处理多少个候选"
+        required: false
+        default: "40"
+      verify_limit:
+        description: "层2 本轮验收几个（moka 是浏览器源 2-5min/个，别开太大）"
+        required: false
+        default: "12"
+
+concurrency:
+  group: campus-board-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+      JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+      JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r crawler/requirements.txt
+      - name: Layer 1 — triage campus board candidates
+        run: |
+          python crawler/campus_board_probe_run.py \
+            --limit "${{ github.event.inputs.probe_limit || '40' }}" \
+            ${{ github.event.inputs.apply == 'true' && '--apply' || '' }}
+
+  verify:
+    needs: probe
+    if: ${{ github.event.inputs.apply == 'true' }}
+    runs-on: ubuntu-latest
+    # 层2 可能跑 moka 浏览器 adapter（2-5min/源）；12 个 ≈ 25-60min，留足余量。
+    timeout-minutes: 90
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+      JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+      JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+      CRAWL_DETAIL_CAP: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r crawler/requirements.txt
+      - run: python -m playwright install --with-deps chromium
+      - name: Layer 2 — acceptance gate (crawl → anti-duplicate → healthy jobs)
+        run: python crawler/campus_board_verify.py --limit "${{ github.event.inputs.verify_limit || '12' }}"
