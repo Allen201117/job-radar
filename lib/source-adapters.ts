@@ -150,12 +150,8 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     origin: "domestic",
     hint: "填「美团 Meituan」+ https://zhaopin.meituan.com/web/campus。与社招同接口，靠板块过滤区分（应届生/转正实习/日常实习三桶一次抓全），crawl_method 选 http",
   },
-  {
-    value: "kuaishou_campus",
-    label: "快手 校招（campus.kuaishou.cn · 本土）",
-    origin: "domestic",
-    hint: "填「快手 Kuaishou」+ https://campus.kuaishou.cn/。与社招那个站(zhaopin.kuaishou.cn)是两回事：校招接口公开，纯 httpx 零鉴权，招聘项目码按年份动态发现，crawl_method 选 http",
-  },
+  // kuaishou_campus 故意**不列在下拉里**：campus.kuaishou.cn 的 robots.txt 是 Disallow: /，
+  // 加了源也只会被 check_robots 跳过（迁移 192 已停用既有源）。adapter 代码保留待其放开 robots。
   {
     value: "alibaba_campus",
     label: "阿里巴巴集团 BU 门户 · 校招（通用 · 本土）",
