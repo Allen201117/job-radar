@@ -13,6 +13,7 @@ import { JOB_COLUMNS } from "./types";
 import canonicalUrl from "@/lib/canonical-url";
 import geo from "@/lib/geo";
 import sponsorship from "@/lib/sponsorship";
+import { extractGradClass } from "@/lib/grad-class";
 
 const { canonicalizeJdUrl } = canonicalUrl as {
   canonicalizeJdUrl: (u: string | null | undefined) => string | null;
@@ -27,18 +28,22 @@ const { sponsorshipSignal } = sponsorship as {
 
 // insert 数据列（值取自 job，缺省 null）；canonical_jd_url/search_doc 由触发器维护、id/时间/状态/计数走字面量。
 const INSERT_DATA_COLS = [
-  "source_id", "company", "title", "location", "country_code", "job_scope", "job_type", "summary", "jd_url",
-  "apply_url", "salary_text", "posted_at", "content_hash", "experience", "education", "deadline", "sponsorship_signal",
+  "source_id", "company", "title", "location", "country_code", "job_scope", "job_type", "grad_class", "summary",
+  "jd_url", "apply_url", "salary_text", "posted_at", "content_hash", "experience", "education", "deadline",
+  "sponsorship_signal",
 ] as const;
 // update 数据列：刷新 live 重抓提供的基础字段 + location 派生 geo 字段；不碰 source_id / jd_url /
 // experience / education / deadline / first_seen_at，避免把爬虫/富化已填字段清空。
 const UPDATE_DATA_COLS = [
-  "company", "title", "location", "country_code", "job_scope", "job_type", "summary",
+  "company", "title", "location", "country_code", "job_scope", "job_type", "grad_class", "summary",
   "apply_url", "salary_text", "posted_at", "content_hash", "sponsorship_signal",
 ] as const;
 // 这些富化字段在 UPDATE 时新值为空则保留旧值（COALESCE(NULLIF(...))），与 crawler/jobs_db._PRESERVE_IF_EMPTY 同口径：
 // app 的 discovery/search 刷新多只带列表骨架（无 JD 正文）→ 不得把浏览器/httpx 富化补好的 summary 抹成 NULL。
 const PRESERVE_IF_EMPTY = new Set<string>(["summary", "job_type", "salary_text"]);
+// 同样要防「刷新抹掉」，但列是非文本类型 → 不能套 NULLIF(x,'')（'' 往 smallint 强转会报错）。
+// 非文本列的「空」就是 NULL，直接 COALESCE(x, 列)。与 crawler/jobs_db._PRESERVE_IF_NULL 同口径。
+const PRESERVE_IF_NULL = new Set<string>(["grad_class"]);
 
 export type UpsertResult = { row: any; action: "created" | "updated" };
 
@@ -49,6 +54,8 @@ function withDerivedFields(job: Record<string, any>): Record<string, any> {
     job_scope: job.job_scope ?? deriveJobScope(job.location),
     sponsorship_signal:
       job.sponsorship_signal ?? sponsorshipSignal([job.title, job.summary].filter(Boolean).join(" ")),
+    // 届别只认硬信号，抽不出留 null（与 crawler/grad_class.py 同口径，改规则两边同改）
+    grad_class: job.grad_class ?? extractGradClass(job),
   };
 }
 
@@ -64,8 +71,11 @@ async function findIdByCanonical(canon: string | null): Promise<string | null> {
 }
 
 async function updateById(id: string, job: Record<string, any>): Promise<any | null> {
-  const setParts = UPDATE_DATA_COLS.map((c, i) =>
-    PRESERVE_IF_EMPTY.has(c) ? `${c} = COALESCE(NULLIF($${i + 1}, ''), ${c})` : `${c} = $${i + 1}`);
+  const setParts = UPDATE_DATA_COLS.map((c, i) => {
+    if (PRESERVE_IF_EMPTY.has(c)) return `${c} = COALESCE(NULLIF($${i + 1}, ''), ${c})`;
+    if (PRESERVE_IF_NULL.has(c)) return `${c} = COALESCE($${i + 1}, ${c})`;
+    return `${c} = $${i + 1}`;
+  });
   // expired = detail 探活确认撤岗的强信号；列表/发现重抓不得复活它（否则点开 404/已下线）。
   // 与 crawler/jobs_db._update_set_clause 的 status CASE 同口径：expired 黏住，removed/active 仍刷 active。
   setParts.push("status = CASE WHEN jobs.status = 'expired' THEN 'expired' ELSE 'active' END", "last_seen_at = now()");

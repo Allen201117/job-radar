@@ -48,6 +48,10 @@ export type CampusCardData = {
   preciseDates: { label: string; batch: string }[];
   batchTimingGap: string | null;
   cleanDeadlineMs: number | null;
+  // 近 7 天检测到「校招岗一次性放量」= 正式批开闸（判据 crawler/campus_lane.detect_surge）
+  surge: { atMs: number; fromCount: number | null; toCount: number } | null;
+  // 明确标了往届（如 2026 届）而被移出列表的岗数；不静默丢弃，卡面照实说一句
+  pastClassJobCount: number;
 };
 
 type RecruitMode = "campus" | "intern";
@@ -433,6 +437,21 @@ export default function CampusClient({
                     </div>
                     <WindowBadge window={card.window} />
                   </div>
+                  {/* 正式批开闸（近 7 天校招岗一次性放量）——秋招最该立刻行动的信号，放在最上面。
+                      不写「新增 N 个」而写「一次性放出 N 个」：放量是校招的形态特征，也解释了为什么值得马上看。 */}
+                  {card.surge && (
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 text-[#9a4a1a] dark:text-[#f0a06a]">
+                      <span className="inline-flex items-center gap-1 rounded-md border border-[#f0c3a0] bg-[#fce8d8] px-1.5 py-0.5 font-medium dark:border-[#f0a06a]/[0.30] dark:bg-[#f0a06a]/[0.15]">
+                        🔥 刚开正式批
+                      </span>
+                      <span>
+                        一次性放出 {card.surge.toCount}
+                        {card.surge.fromCount != null && card.surge.fromCount > 0
+                          ? `（此前 ${card.surge.fromCount}）`
+                          : ""}
+                      </span>
+                    </div>
+                  )}
                   {card.timeline && (
                     <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
                       <span className="inline-flex items-center gap-1 rounded-md border border-[#b7d2ee] bg-[#dceafa] px-1.5 py-0.5 font-medium text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
@@ -478,6 +497,13 @@ export default function CampusClient({
                         }`
                       : `暂无${modeLabel}在招岗位`}
                   </p>
+                  {/* 往届岗不静默丢弃：说清楚「有但不是这一届」，免得用户以为我们漏抓。
+                      只有岗位文本里写明届别（如「2026届」）的才会被挡；届别未知的岗照常在上面列着。 */}
+                  {card.pastClassJobCount > 0 && (
+                    <p className="text-[12px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
+                      另有 {card.pastClassJobCount} 个往届岗位未列出
+                    </p>
+                  )}
                   <div className="mt-1 flex flex-wrap items-center gap-2">
                     {totalCount > 0 && (
                       <button

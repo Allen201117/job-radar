@@ -7,6 +7,7 @@ from typing import Optional
 from urllib.parse import parse_qsl, urlparse
 
 from adapters.base import RawJob
+from grad_class import extract_grad_class
 from geo import (
     CHINA_LOCATION_MARKERS,
     OVERSEAS_LOCATION_PHRASES,
@@ -221,6 +222,10 @@ def normalize(raw: RawJob, *, source_id: str, company: str) -> dict:
         "country_code": derive_country_code(location),
         "job_scope": derive_job_scope(location),
         "job_type": job_type,
+        # 届别只认硬信号（2027届/27届/2027校招/Class of 2027…），抽不出留 None。
+        # 绝不靠入库时间兜底——8 月同时在抓 2027 届新岗与 2026 届收尾岗，猜错=把往届岗
+        # 标成当季让用户白投一轮。留白不隐藏：无届别的岗照常展示（详见 crawler/grad_class.py）。
+        "grad_class": extract_grad_class(title, job_type, full_summary),
         "summary": full_summary,
         "sponsorship_signal": sponsorship_signal(" ".join(x for x in (raw.title, full_summary) if x)),
         "jd_url": raw.jd_url,
