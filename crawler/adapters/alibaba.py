@@ -61,6 +61,15 @@ class AlibabaAdapter(PlaywrightAdapter):
     _REGION_SHARDS = ("330100", "110100", "310100", "440300", "440100")  # 杭州/北京/上海/深圳/广州
     posts_keys = ("content.datas",) + PlaywrightAdapter.posts_keys
 
+    # 板块开关（子类 AlibabaCampusAdapter 覆盖）。判据 2026-08-04 live 实测（淘天域，浏览器内同源实测）：
+    #   channel="GROUP_OFFICIAL_SITE" → 605 条，batchName=null            → 社招
+    #   channel="" / 任意服务端不认的值 → 34 条，batchName=淘天集团2026届秋季应届生招聘 → 校招
+    # ⚠️ 「校招用空 channel」是服务端 fallback 行为，不是文档化契约 → 绝不能只信这个参数：
+    # _map 里还要用 payload 自证是校招（batchName/categoryType），详见 AlibabaCampusAdapter。
+    _CHANNEL = "GROUP_OFFICIAL_SITE"
+    _PORTAL = "off-campus"        # 详情页与 Referer 的路由段
+    _JOB_TYPE = "社会招聘"
+
     def fetch(self, source_url: str) -> str:
         self.reported_total = None
         self.fetch_complete = False
@@ -73,7 +82,7 @@ class AlibabaAdapter(PlaywrightAdapter):
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "zh-CN,en;q=0.9",
             "Content-Type": "application/json",
-            "Referer": f"{base}/off-campus/position-list",
+            "Referer": f"{base}/{self._PORTAL}/position-list",
             "Origin": base,
         }
         collected = []
@@ -82,7 +91,7 @@ class AlibabaAdapter(PlaywrightAdapter):
             client.get(f"{base}/?lang=zh")
             csrf = client.cookies.get("XSRF-TOKEN")
             if not csrf:
-                client.get(f"{base}/off-campus/position-list?lang=zh")
+                client.get(f"{base}/{self._PORTAL}/position-list?lang=zh")
                 csrf = client.cookies.get("XSRF-TOKEN")
             if not csrf:
                 raise RuntimeError(f"alibaba: 拿不到 XSRF-TOKEN ({host})")
@@ -96,7 +105,7 @@ class AlibabaAdapter(PlaywrightAdapter):
                 for page in range(1, self._MAX_PAGES + 1):
                     try:
                         resp = client.post(f"{base}/position/search?_csrf={csrf}", json={
-                            "channel": "GROUP_OFFICIAL_SITE", "language": "zh",
+                            "channel": self._CHANNEL, "language": "zh",
                             "batchId": "", "categories": "", "deptCodes": [],
                             "key": "", "regions": regions, "subCategories": sub_categories,
                             "pageIndex": page, "pageSize": self._PAGE_SIZE,
@@ -164,16 +173,55 @@ class AlibabaAdapter(PlaywrightAdapter):
         desc = _first(post, ("description",))
         req = _first(post, ("requirement",))
         summary = (desc + ("\n\n【任职要求】\n" + req if req else "")).strip() or None
-        jd_url = f"https://{host}/off-campus/position-detail?lang=zh&positionId={pid}"
+        jd_url = f"https://{host}/{self._PORTAL}/position-detail?lang=zh&positionId={pid}"
         locs = post.get("workLocations")
         location = locs[0] if isinstance(locs, list) and locs and isinstance(locs[0], str) else None
         return RawJob(
             company=self.company_name or "",
             title=title,
             location=location,
-            job_type="社会招聘",  # off-campus 渠道恒为社招（校招在 campus-talent 另一套系统）
+            job_type=self._JOB_TYPE,
             summary=summary,
             jd_url=jd_url,
             apply_url=jd_url,
             posted_at=normalizer.pick_publish_date(post),
         )
+
+
+class AlibabaCampusAdapter(AlibabaAdapter):
+    """阿里各 BU 的**校招**频道。source_url 填 `https://{host}/campus/position-list?lang=zh`。
+
+    2026-08-04 live 实测（淘天域，页面同源发请求，逐值对拍）：
+        channel="GROUP_OFFICIAL_SITE"  → totalCount=605，batchName=null                     ← 社招
+        channel=""（或服务端不认的任意值）→ totalCount=34， batchName=淘天集团2026届秋季应届生招聘 ← 校招
+        channel="campus_group_official_site" → totalCount=0（是岗位上的 channels 取值，不是入参取值）
+    即：校招不是「另一个 channel 常量」，而是**不传 channel 时的默认集**。
+
+    ⚠️ 为什么不能只信这个入参：它是服务端 fallback 行为、不是文档化契约，哪天默认集改成社招
+    我们就会把 3000 个社招岗当校招灌进校招专区（比漏抓更糟——用户按校招投了个社招岗）。
+    所以 _map 里用 **payload 自证**：只放行 categoryType=freshman 或 batchName 含「届」的行，
+    自证不过的一律丢弃。这与项目「精度红线：能返回数据 ≠ 猜对了」同一条原则。
+
+    详情页 `https://{host}/campus/position-detail?lang=zh&positionId={id}` 已 live 验证渲染出
+    本岗标题（浏览器打开 positionId=199902900003 → 标题「算法工程师- AIGC方向（T-Star Lab26届秋招）」）。
+    """
+
+    name = "alibaba_campus"
+    _CHANNEL = ""            # 见上：校招 = 不传 channel 的默认集
+    _PORTAL = "campus"
+    _JOB_TYPE = "校园招聘"
+
+    def _map(self, post: dict) -> Optional[RawJob]:
+        job = super()._map(post)
+        if job is None:
+            return None
+        # payload 自证：校招行带 categoryType="freshman" 与 batchName（如「淘天集团2026届秋季应届生招聘」）。
+        # 两者皆无 → 说明服务端默认集已不是校招，宁可这轮抓 0 条，也不把社招岗灌进校招专区。
+        category_type = (post.get("categoryType") or "").strip().lower()
+        batch_name = (post.get("batchName") or "").strip()
+        if category_type != "freshman" and "届" not in batch_name:
+            return None
+        # 批次名里带届别（「2026届秋季应届生招聘」）→ 喂给 normalizer 的届别抽取，比标题更可靠。
+        if batch_name:
+            job.job_type = f"{self._JOB_TYPE} {batch_name}"
+        return job

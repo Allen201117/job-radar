@@ -44,7 +44,7 @@ from adapters.google import GoogleAdapter
 from adapters.netease import NeteaseAdapter
 from adapters.oppo import OppoAdapter
 from adapters.xiaohongshu import XiaohongshuAdapter
-from adapters.alibaba import AlibabaAdapter
+from adapters.alibaba import AlibabaAdapter, AlibabaCampusAdapter
 from adapters.huawei import HuaweiAdapter
 from adapters.ctrip import CtripAdapter
 from adapters.meituan import MeituanAdapter
@@ -126,6 +126,8 @@ ADAPTERS = {
     "oppo": OppoAdapter(),  # OPPO 校招门户：careers.oppo.com openapi 公开接口,零浏览器
     "xiaohongshu": XiaohongshuAdapter(),  # 小红书自建门户：job.xiaohongshu.com pageQueryPosition,零浏览器
     "alibaba": AlibabaAdapter(),  # 阿里集团 BU 门户通用层：position/search 公开接口,host 动态解析,零浏览器
+    # 阿里校招频道：同接口不传 channel 即校招默认集（2026-08-04 live 对拍），payload 自证 freshman/批次名防误灌
+    "alibaba_campus": AlibabaCampusAdapter(),
     "huawei": HuaweiAdapter(),  # 华为自建门户：career.huawei.com getJob 公开接口,零鉴权零浏览器
     "ctrip": CtripAdapter(),  # 携程自建门户：careers.ctrip.com getJobAd 公开接口,零浏览器
     "meituan": MeituanAdapter(),  # 美团自建门户：getJobList 公开接口,零浏览器
@@ -145,7 +147,7 @@ ADAPTERS = {
 DOMESTIC_ADAPTERS = {
     "baidu", "jd", "bytedance", "bytedance_campus", "tencent",
     "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier", "iguopin",
-    "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo", "xiaohongshu", "alibaba", "huawei", "ctrip",
+    "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",
     "meituan", "kuaishou", "bilibili", "pinduoduo", "vivo", "byd", "sf_express",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
     "tencent_music", "antgroup", "mihoyo",  # 自建门户公开接口（2026-07-06 live 验证,零浏览器）
 }
@@ -159,7 +161,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "apple", "apple_cn", "baidu", "jd", "haier", "iguopin", "siemens", "tencent",
     "greenhouse", "lever", "ashby", "smartrecruiters", "successfactors", "workday", "eightfold",
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
-    "netease", "oppo", "xiaohongshu", "alibaba", "huawei", "ctrip",
+    "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",
     "meituan", "bilibili", "pinduoduo", "vivo", "sf_express",  # 已逐一核实为纯 httpx fetch
     "tencent_music", "antgroup", "mihoyo",  # 自建门户公开 JSON 接口，纯 httpx（2026-07-06 核实）
     # 字节：jobs.bytedance.com posts API 已改为纯 httpx offset/limit 全量翻页；

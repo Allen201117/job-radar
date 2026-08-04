@@ -145,6 +145,12 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填 BU 公司名 + 该 BU 域列表页（{BU域}/off-campus/position-list?lang=zh，如 talent.taotian.com 淘天 / careers.aliyun.com 阿里云），直连 position/search，crawl_method 选 http",
   },
   {
+    value: "alibaba_campus",
+    label: "阿里巴巴集团 BU 门户 · 校招（通用 · 本土）",
+    origin: "domestic",
+    hint: "同 BU 域但填校招列表页（{BU域}/campus/position-list?lang=zh）。校招是同一接口的默认频道（不传 channel），适配器用批次名/freshman 自证是校招才入库，crawl_method 选 http",
+  },
+  {
     value: "huawei",
     label: "华为（自建门户 · 本土）",
     origin: "domestic",
