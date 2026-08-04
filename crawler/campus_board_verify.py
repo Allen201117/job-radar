@@ -68,15 +68,30 @@ def healthy_count(rows):
 
 
 def purge_source(supabase, conn, source_id):
-    """验收不过：删本次落下的脏岗 + 删源行。顺序不能反——先删岗再删源，避免外键孤儿。"""
+    """验收不过：删脏岗 → 删该源的 crawl_runs → 删源行。
+
+    ⚠️ crawl_runs 必须先删：源一被抓过，crawl_runs 就有引用，
+    `crawl_runs_source_id_fkey` 外键会挡住删源（首轮实测 6 个源全卡在这里，
+    留下 disabled 孤儿）。而验收流程**必然**先抓一轮再判——所以这个引用是必然存在的，
+    不是偶发。删这几条 crawl_runs 没有信息损失：源本身都要删了，它的抓取日志无处可归。
+    """
     try:
         jobs_db.execute(conn, "delete from jobs where source_id = %s", (str(source_id),))
     except Exception as e:
         _log(f"⚠️ 清理脏岗失败 source_id={source_id}: {type(e).__name__}: {e}")
     try:
+        supabase.table("crawl_runs").delete().eq("source_id", source_id).execute()
+    except Exception as e:
+        _log(f"⚠️ 清理 crawl_runs 失败 source_id={source_id}: {type(e).__name__}: {e}")
+    try:
         supabase.table("sources").delete().eq("id", source_id).execute()
     except Exception as e:
+        # 删不掉就退而求其次：确保它是 disabled，绝不让一个未验收的源留在 enabled 状态
         _log(f"⚠️ 删源失败 source_id={source_id}: {type(e).__name__}: {e}")
+        try:
+            supabase.table("sources").update({"enabled": False}).eq("id", source_id).execute()
+        except Exception:
+            pass
 
 
 def verify_one(supabase, conn, candidate, all_sources):
@@ -85,13 +100,19 @@ def verify_one(supabase, conn, candidate, all_sources):
     label = f"{company} / {candidate.get('adapter_name')}"
 
     # 关1：真抓一轮（override 单源，走与主链路完全相同的抓取/质量门/写库路径）
-    run_crawl(sources_override=[{**candidate, "enabled": True}], tier="all")
+    result = run_crawl(sources_override=[{**candidate, "enabled": True}], tier="all") or {}
 
     rows = source_jobs(conn, candidate["id"])
     if not rows:
-        _log(f"  ✗ {label}：抓完回读 0 岗")
+        # ⚠️ 区分「抓取成功但板块是空的」与「抓取本身失败」——处置和退避天数完全不同。
+        # 校招板块在正式批开闸前**空着是常态**（首轮 12 个里 6 个是这种），
+        # 把它当失败记 30 天退避，等于错过整个开闸窗口。这与阿里那个坑同构：
+        # 「什么都没等到」在等待场景里是正常态，不是故障态。
+        crawled_ok = (result.get("success") or 0) >= 1 and (result.get("failed") or 0) == 0
+        state = "empty_board" if crawled_ok else "no_healthy_jobs"
+        _log(f"  ✗ {label}：抓完回读 0 岗（{'板块当前无岗，开闸后复查' if crawled_ok else '抓取失败'}）")
         purge_source(supabase, conn, candidate["id"])
-        return "no_healthy_jobs"
+        return state
 
     # 关2：非重复（比岗位身份，不比 URL——见模块 docstring）
     sib = sibling_source(candidate, all_sources)
