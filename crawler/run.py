@@ -47,7 +47,7 @@ from adapters.xiaohongshu import XiaohongshuAdapter
 from adapters.alibaba import AlibabaAdapter, AlibabaCampusAdapter
 from adapters.huawei import HuaweiAdapter
 from adapters.ctrip import CtripAdapter
-from adapters.meituan import MeituanAdapter
+from adapters.meituan import MeituanAdapter, MeituanCampusAdapter
 from adapters.kuaishou import KuaishouAdapter
 from adapters.kuaishou_campus import KuaishouCampusAdapter
 from adapters.bilibili import BilibiliAdapter
@@ -132,6 +132,8 @@ ADAPTERS = {
     "huawei": HuaweiAdapter(),  # 华为自建门户：career.huawei.com getJob 公开接口,零鉴权零浏览器
     "ctrip": CtripAdapter(),  # 携程自建门户：careers.ctrip.com getJobAd 公开接口,零浏览器
     "meituan": MeituanAdapter(),  # 美团自建门户：getJobList 公开接口,零浏览器
+    # 美团校招：同接口带板块过滤 jobType=[{code:4,subCode:[1,2,6]}]（对象数组,2026-08-04 截获真实请求确定）
+    "meituan_campus": MeituanCampusAdapter(),
     "kuaishou": KuaishouAdapter(),  # 快手自建门户：页面 JS 签名,Playwright 拦截 open positions
     # 快手校招是另一个站(campus.kuaishou.cn)且接口公开：纯 httpx 零鉴权,项目码动态发现(2026-08-04 live)
     "kuaishou_campus": KuaishouCampusAdapter(),
@@ -151,7 +153,7 @@ DOMESTIC_ADAPTERS = {
     "baidu", "jd", "bytedance", "bytedance_campus", "tencent",
     "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier", "iguopin",
     "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",
-    "meituan", "kuaishou", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "byd", "sf_express",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
+    "meituan", "meituan_campus", "kuaishou", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "byd", "sf_express",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
     "tencent_music", "antgroup", "mihoyo",  # 自建门户公开接口（2026-07-06 live 验证,零浏览器）
 }
 
@@ -165,7 +167,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "greenhouse", "lever", "ashby", "smartrecruiters", "successfactors", "workday", "eightfold",
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
     "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",
-    "meituan", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "sf_express",  # 已逐一核实为纯 httpx fetch
+    "meituan", "meituan_campus", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "sf_express",  # 已逐一核实为纯 httpx fetch
     "tencent_music", "antgroup", "mihoyo",  # 自建门户公开 JSON 接口，纯 httpx（2026-07-06 核实）
     # 字节：jobs.bytedance.com posts API 已改为纯 httpx offset/limit 全量翻页；
     # sources.crawl_method 仍由运维侧改库，本白名单只控制代码侧并发档。
