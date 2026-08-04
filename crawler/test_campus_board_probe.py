@@ -2,6 +2,7 @@ import unittest
 
 from campus_board_probe import (
     NEEDS_SEPARATE_CAMPUS_SOURCE,
+    classify_empty_result,
     campus_candidate_url,
     is_duplicate_board,
     job_identities,
@@ -112,6 +113,31 @@ class TestDuplicateBoardGate(unittest.TestCase):
         self.assertTrue(is_duplicate_board(["https://x.com/a"], ["https://x.com/b"]))
         self.assertTrue(is_duplicate_board([], ["https://x/?jobId=1"]))
         self.assertTrue(is_duplicate_board(["https://x/?jobId=1"], []))
+
+
+class TestClassifyEmptyResult(unittest.TestCase):
+    """栽过三次的区分：「等开闸时什么都没等到」是正常态，不是故障态。
+    判错代价不对称——当故障 = 吃长退避、错过整个开闸窗口；当空板块 = 最多多探一次。"""
+
+    def test_empty_status_is_an_empty_board_not_a_failure(self):
+        # run_crawl 的 "empty"（列表返回空）既不计 success 也不计 failed，
+        # 只看 success 会把 11 个正常源全判成抓取失败（2026-08-04 实测）
+        self.assertEqual(classify_empty_result({"success": 0, "failed": 0, "empty": 1}), "empty_board")
+
+    def test_success_with_zero_jobs_is_empty_board(self):
+        self.assertEqual(classify_empty_result({"success": 1, "failed": 0, "empty": 0}), "empty_board")
+
+    def test_real_failure_stays_a_failure(self):
+        self.assertEqual(classify_empty_result({"success": 0, "failed": 1, "empty": 0}), "no_healthy_jobs")
+
+    def test_skipped_only_counts_as_failure(self):
+        # robots skipped：既没 success 也没 empty → 不算「板块空着」，走长退避
+        self.assertEqual(classify_empty_result({"success": 0, "failed": 0, "empty": 0, "skipped": 1}),
+                         "no_healthy_jobs")
+
+    def test_missing_or_none_result_is_failure(self):
+        self.assertEqual(classify_empty_result(None), "no_healthy_jobs")
+        self.assertEqual(classify_empty_result({}), "no_healthy_jobs")
 
 
 if __name__ == "__main__":
