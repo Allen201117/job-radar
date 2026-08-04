@@ -57,18 +57,27 @@ def recent_campus_producing_source_ids(conn, days: int = 30) -> set:
 
 
 def last_snapshot_counts(supabase, source_ids: list) -> dict:
-    """每个源最近一条快照的 campus_job_count（开闸判据的基线）。无快照的源不出现在返回里。"""
+    """每个源最近一条快照的 campus_job_count（开闸判据的基线）。无快照的源不出现在返回里。
+
+    读失败一律返回已拿到的部分、不抛——**抓取那一轮已经发生了**，不能因为读不到基线就把
+    整轮判定为失败（迁移未 apply、Supabase 抖动都会走到这里）。没有基线的源在
+    detect_surge 里返回 False，最坏结果是这轮漏报一次开闸，下轮就有基线了。
+    """
     out = {}
     if not source_ids:
         return out
     # 表是变更日志（只在数字变化时插行），单源行数很少；按 captured_at 倒序取首条即可。
     for chunk_start in range(0, len(source_ids), 100):
         chunk = source_ids[chunk_start:chunk_start + 100]
-        resp = (supabase.table("campus_board_snapshots")
-                .select("source_id, campus_job_count, captured_at")
-                .in_("source_id", chunk)
-                .order("captured_at", desc=True)
-                .execute())
+        try:
+            resp = (supabase.table("campus_board_snapshots")
+                    .select("source_id, campus_job_count, captured_at")
+                    .in_("source_id", chunk)
+                    .order("captured_at", desc=True)
+                    .execute())
+        except Exception as e:
+            _log(f"⚠️ 快照基线读取失败（本轮不判开闸，抓取结果不受影响）：{type(e).__name__}: {e}")
+            return out
         for row in (resp.data or []):
             out.setdefault(row["source_id"], row["campus_job_count"])
     return out
