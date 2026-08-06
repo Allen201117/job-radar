@@ -159,6 +159,33 @@ test("ATS 门户路径对称：/social 门户里正文写『应届亦可』仍�
   );
 });
 
+test("年限只在「经验」语境里才算硬门槛——成长路径/派驻时长不是经验要求", () => {
+  // 校招 JD 高频写法：管培生的晋升周期、培养周期、外派时长。旧实现拿无上下文的
+  // /(\d{1,2})[-~至到](\d{1,2})年/ 匹配，把这些当成 ≥2 年经验 → 明确的校招岗被层2 判成社招。
+  const campusUrl = "https://app.mokahr.com/campus-recruitment/acme/1#/job/z";
+  for (const summary of [
+    "管培生培养计划，2~3年晋升为管理者，带团队！任职要求：应届统招硕士学历。",
+    "通过 2-3 年的配套加速培养机制，成长为具有全局思维的新生代管理者。",
+    "选拔绩优、高潜的校招生进入现场管理发展通道，优秀者 2-3 年发展成为一线主管。",
+    "本科及以上学历；需要派往墨西哥工作 3-5 年。",
+  ]) {
+    assert.equal(recruitmentCategory({ title: "销售管培生", jd_url: campusUrl, summary }), "校招", summary);
+  }
+  // 反向保住原意图：真的写「N 年经验」仍然强制社招（层2 的存在理由）
+  assert.equal(
+    recruitmentCategory({
+      title: "硬件工程师",
+      jd_url: campusUrl,
+      summary: "有 2 年以上在实验室硬件或软件设计开发经验，有产品成功上市者优先。",
+    }),
+    "社招",
+  );
+  assert.equal(
+    recruitmentCategory({ title: "结构工程师", summary: "任职要求：5 年以上相关工作经验。" }),
+    "社招",
+  );
+});
+
 test("门户令牌带 -/_ 后缀也要认（moka /campus-recruitment 漏判 31.6% 的真因）", () => {
   // moka 的门户路径是 /campus-recruitment/ 与 /campus_apply/，令牌后跟的是 - 或 _ 而非 /。
   // 旧正则要求令牌后紧跟 / ? $ → 对 moka 整个层4 失效，校招岗被层7 兜底成「社招」，
