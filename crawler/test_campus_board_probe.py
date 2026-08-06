@@ -173,5 +173,22 @@ class TestRetryDays(unittest.TestCase):
         self.assertEqual(retry_days("something_new", 9), 30)
 
 
+class TestEntrypointsImportable(unittest.TestCase):
+    """两条入口脚本必须能被 import —— 挪符号时最容易漏掉的就是调用方。
+
+    2026-08-06 踩过：把 RETRY_DAYS 从 campus_board_probe_run 下沉到判据层，
+    campus_board_verify 仍从旧位置 import。crawler 全量 1092 个单测全绿，
+    CI 层2 一启动就 ImportError 挂掉——纯函数单测覆盖不到入口脚本的 import 图。
+    这两个模块 import 时无网络/DB 副作用（只有调用才连），所以冒烟测得起。
+    """
+
+    def test_probe_run_and_verify_import_cleanly(self):
+        import importlib
+
+        for mod in ("campus_board_probe_run", "campus_board_verify"):
+            with self.subTest(module=mod):
+                importlib.import_module(mod)
+
+
 if __name__ == "__main__":
     unittest.main()

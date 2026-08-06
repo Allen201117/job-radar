@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 import campus_board_probe as P
 import db
 import jobs_db
-from campus_board_probe_run import RETRY_DAYS, upsert_attempt
+from campus_board_probe_run import upsert_attempt
 from run import run_crawl
 
 
