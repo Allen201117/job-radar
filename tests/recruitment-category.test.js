@@ -159,6 +159,33 @@ test("ATS 门户路径对称：/social 门户里正文写『应届亦可』仍�
   );
 });
 
+test("门户令牌带 -/_ 后缀也要认（moka /campus-recruitment 漏判 31.6% 的真因）", () => {
+  // moka 的门户路径是 /campus-recruitment/ 与 /campus_apply/，令牌后跟的是 - 或 _ 而非 /。
+  // 旧正则要求令牌后紧跟 / ? $ → 对 moka 整个层4 失效，校招岗被层7 兜底成「社招」，
+  // 2026-08-07 实测该门户 5525 个在招岗里 31.6% 中招、进不了校招专区。
+  for (const url of [
+    "https://app.mokahr.com/campus-recruitment/catlhr/148948#/job/0f6a4c5a",
+    "https://app.mokahr.com/campus_apply/feiyu/142123#/job/cb2832de",
+    "https://app-tc.mokahr.com/campus-recruitment/xcmg/148091#/job/64e1fa14",
+  ]) {
+    assert.equal(recruitmentCategory({ title: "人力资源主管", jd_url: url }), "校招", url);
+  }
+  // 对称：社招门户后缀同样要认
+  assert.equal(
+    recruitmentCategory({ title: "工艺工程师", jd_url: "https://app.mokahr.com/social-recruitment/acme/123#/job/x" }),
+    "社招",
+  );
+  // ⚠️ 安全边界：层2（≥2 年经验强制社招）优先级高于本层，放宽门户令牌不能让资深岗混进校招
+  assert.equal(
+    recruitmentCategory({
+      title: "资深结构工程师",
+      jd_url: "https://app.mokahr.com/campus-recruitment/acme/1#/job/y",
+      summary: "任职要求：5 年以上结构设计经验。",
+    }),
+    "社招",
+  );
+});
+
 test("信任来源自报 job_type：不被正文杂词污染", () => {
   // 源渠道=社会招聘，正文顺带提"可转正实习/毕业生" → 仍社招（信任源头，实习标记只认标题/url）
   assert.equal(
