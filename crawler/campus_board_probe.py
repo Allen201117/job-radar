@@ -34,6 +34,39 @@
 import re
 from typing import Iterable, Optional
 
+from campus_lane import is_campus_season
+
+# 失败退避（天）：不同原因复查价值差很多，别一刀切天天重探。
+RETRY_DAYS = {
+    "robots_blocked": 3650,    # 合规禁止基本不会变，等于永久搁置（要变也是人工发现）
+    "unreachable": 30,
+    "empty_board": 14,         # 现在没岗，开闸后可能有 → 两周后再看
+    "duplicate_board": 3650,   # 与既有源同一批岗，平台机制决定的，不会变
+    "no_healthy_jobs": 30,
+}
+
+# 校招季（秋招 8-11 月 / 春招 2-4 月）的退避覆盖：只对「等开闸」类状态生效。
+#
+# 为什么要有它：`empty_board` = 板块在、但当下没挂岗，**正是等开闸的状态**。淡季两周一探
+# 合理；但秋招开闸是突发的（2026-08-03 单日入库 +2030 个校招岗），14 天退避意味着 8/5 探空的
+# 板块要等到 8/19 才复查——整个 8 月上中旬的开闸窗口全错过，而这正是应届生最需要看到岗位的时候。
+#
+# 只缩 empty_board，不动其它：`unreachable`/`no_healthy_jobs` 是链路问题不是时令问题，
+# 缩短只会空烧；`robots_blocked`/`duplicate_board` 是结构性结论，永远不该因季节改变。
+CAMPUS_SEASON_RETRY_DAYS = {
+    "empty_board": 3,
+}
+
+
+def retry_days(state: str, month: Optional[int] = None) -> int:
+    """某个失败状态该退避多少天再复查；校招季对「等开闸」类状态加速。
+
+    month=None（未传月份）时一律走淡季表——宁可探得慢，也不因为拿不到时令而误判成旺季。
+    """
+    if is_campus_season(month) and state in CAMPUS_SEASON_RETRY_DAYS:
+        return CAMPUS_SEASON_RETRY_DAYS[state]
+    return RETRY_DAYS.get(state, 30)
+
 # 平台 → 该平台的校招板块是否需要**单独建源**。False = 既有源已抓全三类，补了就是重复源。
 NEEDS_SEPARATE_CAMPUS_SOURCE = {
     "hotjob": True,

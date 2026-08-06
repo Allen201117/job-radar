@@ -2,11 +2,13 @@ import unittest
 
 from campus_board_probe import (
     NEEDS_SEPARATE_CAMPUS_SOURCE,
+    RETRY_DAYS,
     classify_empty_result,
     campus_candidate_url,
     is_duplicate_board,
     job_identities,
     job_identity,
+    retry_days,
 )
 
 
@@ -138,6 +140,37 @@ class TestClassifyEmptyResult(unittest.TestCase):
     def test_missing_or_none_result_is_failure(self):
         self.assertEqual(classify_empty_result(None), "no_healthy_jobs")
         self.assertEqual(classify_empty_result({}), "no_healthy_jobs")
+
+
+class TestRetryDays(unittest.TestCase):
+    """校招季里「板块空着」必须快速复探——开闸是突发的，等两周就错过窗口。"""
+
+    def test_empty_board_accelerates_in_autumn_season(self):
+        # 秋招 8-11 月：8/5 探空的板块不该等到 8/19 才复查
+        for month in (8, 9, 10, 11):
+            self.assertEqual(retry_days("empty_board", month), 3, f"{month} 月该走校招季退避")
+
+    def test_empty_board_accelerates_in_spring_season(self):
+        for month in (2, 3, 4):
+            self.assertEqual(retry_days("empty_board", month), 3)
+
+    def test_empty_board_keeps_slow_backoff_off_season(self):
+        for month in (1, 5, 6, 7, 12):
+            self.assertEqual(retry_days("empty_board", month), 14, f"{month} 月不是校招季")
+
+    def test_unknown_month_falls_back_to_off_season(self):
+        # 拿不到月份时宁可探得慢，也不误判成旺季天天空烧
+        self.assertEqual(retry_days("empty_board"), 14)
+        self.assertEqual(retry_days("empty_board", None), 14)
+
+    def test_structural_verdicts_never_accelerate(self):
+        # robots 禁止 / 重复板块 是结构性结论，不因季节改变；
+        # unreachable / no_healthy_jobs 是链路问题不是时令问题，缩短只会空烧。
+        for state in ("robots_blocked", "duplicate_board", "unreachable", "no_healthy_jobs"):
+            self.assertEqual(retry_days(state, 9), RETRY_DAYS[state], f"{state} 不该被校招季加速")
+
+    def test_unknown_state_defaults_to_30(self):
+        self.assertEqual(retry_days("something_new", 9), 30)
 
 
 if __name__ == "__main__":

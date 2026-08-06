@@ -33,14 +33,7 @@ TRIAGE_WORKERS = 12
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
 
-# 失败退避（天）：不同原因复查价值差很多，别一刀切天天重探。
-RETRY_DAYS = {
-    "robots_blocked": 3650,    # 合规禁止基本不会变，等于永久搁置（要变也是人工发现）
-    "unreachable": 30,
-    "empty_board": 14,         # 现在没岗，开闸后可能有 → 两周后再看
-    "duplicate_board": 3650,   # 与既有源同一批岗，平台机制决定的，不会变
-    "no_healthy_jobs": 30,
-}
+# 退避天数是纯判据，连同校招季加速一起放在 campus_board_probe.RETRY_DAYS / retry_days()。
 
 
 def _log(msg):
@@ -107,15 +100,16 @@ def board_job_identities(conn, source_id):
 
 def upsert_attempt(supabase, company, adapter, candidate_url, state, note=""):
     """台账写入，失败只告警（旁路，绝不阻断主流程）。"""
-    days = RETRY_DAYS.get(state, 30)
+    now = datetime.now(timezone.utc)
+    days = P.retry_days(state, now.month)
     row = {
         "company": company,
         "adapter_name": adapter,
         "candidate_url": candidate_url,
         "state": state,
         "note": (note or "")[:500],
-        "recheck_after": (datetime.now(timezone.utc) + timedelta(days=days)).date().isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "recheck_after": (now + timedelta(days=days)).date().isoformat(),
+        "updated_at": now.isoformat(),
     }
     try:
         supabase.table("campus_board_attempts").upsert(row, on_conflict="company,adapter_name").execute()
