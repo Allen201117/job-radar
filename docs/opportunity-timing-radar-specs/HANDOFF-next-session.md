@@ -61,7 +61,7 @@ active 126,702；**checked_24h 仅 39,291（31%）**、never_checked 86,775（68
 ## Live 验证 runbook（环境网络通，自己做、别推给用户）
 - 跑 workflow on 分支：`gh workflow run <wf> --ref draft/radar-pivot-0623` → `gh run watch <id> --exit-status`。
 - 读香港库（只读 OK，DDL 写会被 classifier 拦→走 jobs-db-migrate）：
-  `set -a; source /Users/bytedance/Desktop/求职雷达/.env.local; set +a; psql "$JOBS_DATABASE_URL" -c "..."`，**Bash 需 dangerouslyDisableSandbox=true**（否则 TLS 代理把响应抹 null），**绝不打印密钥值**。
+  `set -a; source <项目根>/.env.local; set +a; psql "$JOBS_DATABASE_URL" -c "..."`，**Bash 需 dangerouslyDisableSandbox=true**（否则 TLS 代理把响应抹 null），**绝不打印密钥值**。
 - schema 改香港库：改 `jobs-db/schema.sql` → `gh workflow run jobs-db-migrate --ref <分支>`（幂等）。
 - 覆盖率体检：`gh workflow run db-report --ref <分支>` → `gh run view <id> --log`。
 

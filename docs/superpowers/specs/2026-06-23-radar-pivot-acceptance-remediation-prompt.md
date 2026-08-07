@@ -5,7 +5,7 @@
 工作目录：
 
 ```text
-/Users/bytedance/Desktop/求职雷达-wt-radar-pivot-0623
+<项目根>-wt-radar-pivot-0623
 ```
 
 当前分支：
@@ -376,7 +376,7 @@ coverage_schema_unavailable
 全部必须重新执行并记录真实结果：
 
 ```bash
-cd /Users/bytedance/Desktop/求职雷达-wt-radar-pivot-0623
+cd <项目根>-wt-radar-pivot-0623
 
 node --test tests/*.test.js
 python3 -m unittest discover -s crawler -t crawler -p "test_*.py"

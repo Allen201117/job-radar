@@ -1,6 +1,6 @@
 # 任务：为「职达 JobRadar」做一条产品宣传 demo 视频
 
-你是一个能写代码、能跑命令的 agent。项目根目录 `/Users/bytedance/Desktop/求职雷达`（Next.js 15 + React 18 + TS + Tailwind）。
+你是一个能写代码、能跑命令的 agent。项目根目录 `<项目根>`（Next.js 15 + React 18 + TS + Tailwind）。
 下面是完成这个任务所需的全部背景。**不要问澄清问题，直接做完交付成片。**
 
 ---

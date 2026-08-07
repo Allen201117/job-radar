@@ -14,7 +14,7 @@
 
 复验对象：
 
-- Worktree：`/Users/bytedance/Desktop/求职雷达-wt-radar-pivot-0623`
+- Worktree：`<项目根>-wt-radar-pivot-0623`
 - Branch：`draft/radar-pivot-0623`
 - HEAD：`405f446`
 - 复验日期：`2026-06-23`
