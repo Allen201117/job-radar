@@ -7,7 +7,7 @@
 
 ## 你的角色与使命
 
-你是「求职雷达 / Job Radar」项目（`/Users/bytedance/Desktop/求职雷达`）的爬虫工程师。
+你是「求职雷达 / Job Radar」项目（`<项目根>`）的爬虫工程师。
 本项目抓取**公开企业官网岗位**，标准化入库，给用户做岗位雷达看板。
 
 **使命**：为下列**自建门户、岗位 API 登录态/签名拦截**的大厂，各打通一条能稳定抓到**在华真岗**的抓取链路，
@@ -105,7 +105,7 @@
 ## Live 访问 / 运行 / 验证（沙箱注意）
 
 - 一切 DB / 联网 curl **必须**用 Bash 工具的 `dangerouslyDisableSandbox: true`（普通沙箱会阻断/抹掉网络）。
-- 载入环境：`set -a && source /Users/bytedance/Desktop/求职雷达/.env.local && set +a`（在项目目录跑）。**绝不 echo/打印任何密钥**。
+- 载入环境：`set -a && source <项目根>/.env.local && set +a`（在项目目录跑）。**绝不 echo/打印任何密钥**。
 - 香港 jobs 库（jobs 表）：`psql "$JOBS_DATABASE_URL" -c "..."`；**会话 TZ 是 Asia/Shanghai，比时间用 `last_seen_at at time zone 'utc'`**。
 - sources 表在 Supabase（不在香港库）：用 node + `@supabase/supabase-js`（`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`，REST 分页 1000/页）。
 - 本地跑单源（验证 adapter）：`cd crawler && set -a; source ../.env.local; set +a; python3 run.py --source <adapter_name>`

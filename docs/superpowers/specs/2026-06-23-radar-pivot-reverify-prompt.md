@@ -6,7 +6,7 @@
 
 ## 0. 在哪 / 提交范围
 
-- Worktree：`/Users/bytedance/Desktop/求职雷达-wt-radar-pivot-0623`，分支 `draft/radar-pivot-0623`，HEAD=`9f7146a`，**未 push**。
+- Worktree：`<项目根>-wt-radar-pivot-0623`，分支 `draft/radar-pivot-0623`，HEAD=`9f7146a`，**未 push**。
 - 本轮修复提交（在你上轮之后新增）：
   ```
   5b4428b P0-1 召回超时 — 砍跨区传输量
@@ -23,7 +23,7 @@
 ## 1. 先跑自动化门（应全绿；我实测如下，请复跑）
 
 ```bash
-cd /Users/bytedance/Desktop/求职雷达-wt-radar-pivot-0623
+cd <项目根>-wt-radar-pivot-0623
 node --test tests/*.test.js          # 我实测 448 pass / 0 fail
 python3 -m unittest discover -s crawler -t crawler -p "test_*.py"   # 409 OK
 npx tsc --noEmit                     # 0 error
