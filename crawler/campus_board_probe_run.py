@@ -137,14 +137,23 @@ def main():
     ap = argparse.ArgumentParser(description="校招板块批量探测")
     ap.add_argument("--apply", action="store_true",
                     help="真写库（插 disabled 源交给验收门）；缺省只 dry-run 报告")
-    ap.add_argument("--limit", type=int, default=40, help="本轮最多处理多少个候选")
+    ap.add_argument("--limit", type=int, default=40,
+                    help="本轮最多处理多少个候选；0 = 不限（与 verify_sources / "
+                         "probe_overseas_f500 同约定）")
     args = ap.parse_args()
 
     supabase = db.get_supabase()
     sources = db.get_sources(supabase)
     candidates = derive_candidates(sources)
     _log(f"推导候选 {len(candidates)} 个 / 全库 {len(sources)} 源")
-    candidates = skip_by_ledger(supabase, candidates)[:args.limit]
+    candidates = skip_by_ledger(supabase, candidates)
+    # ⚠️ 必须判 0：`[:0]` 是空列表不是「不限」。2026-08-06 三次 apply=true 的生产运行都填了
+    # probe_limit=0（本意「不限」），层1 因此**全程空转**（日志「本轮处理 0 个」），
+    # 只有层2 在消化旧积压——看着连跑三轮在补源，实际一个新候选都没探。
+    # 仓库既有约定就是 0=不限（verify_sources.py / probe_overseas_f500.py 都写了这个判断），
+    # 这里当初漏了。
+    if args.limit > 0:
+        candidates = candidates[:args.limit]
     _log(f"扣除台账未到复查日的，本轮处理 {len(candidates)} 个")
     if not candidates:
         return 0
