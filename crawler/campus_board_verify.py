@@ -148,7 +148,8 @@ def verify_one(supabase, conn, candidate, all_sources):
 def main():
     ap = argparse.ArgumentParser(description="校招板块候选源验收门")
     ap.add_argument("--limit", type=int, default=12,
-                    help="本轮验收几个候选（moka 是浏览器源 2-5min/个，别开太大撞 CI 超时）")
+                    help="本轮验收几个候选（moka 是浏览器源 2-5min/个，别开太大撞 CI 超时）；"
+                         "0 = 不限，但 90min job 超时下**不建议**用")
     args = ap.parse_args()
 
     if not jobs_db.enabled():
@@ -171,7 +172,10 @@ def main():
         return 1
     pending = [s for s in all_sources
                if not s.get("enabled")
-               and (s.get("company"), s.get("adapter_name")) in awaiting][:args.limit]
+               and (s.get("company"), s.get("adapter_name")) in awaiting]
+    # 同 campus_board_probe_run：`[:0]` 是空列表不是「不限」，判 0 才是仓库既有约定。
+    if args.limit > 0:
+        pending = pending[:args.limit]
     if not pending:
         _log("没有待验收的候选源。")
         return 0

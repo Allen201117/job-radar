@@ -20,11 +20,11 @@ on:
         required: false
         default: "false"
       probe_limit:
-        description: "层1 本轮处理多少个候选"
+        description: "层1 本轮处理多少个候选（0 = 不限）"
         required: false
         default: "40"
       verify_limit:
-        description: "层2 本轮验收几个（moka 是浏览器源 2-5min/个，别开太大）"
+        description: "层2 本轮验收几个，0 = 不限（moka 是浏览器源 2-5min/个，90min 超时下别超过 20）"
         required: false
         default: "12"
 
