@@ -15,7 +15,7 @@
 
 ## 1. 被验代码在哪
 
-- **Worktree**：`/Users/USER/Desktop/求职雷达-wt-radar-pivot-0623`
+- **Worktree**：`<项目根>-wt-radar-pivot-0623`
 - **分支**：`draft/radar-pivot-0623`（基于 origin/main 的 `ab3cade`）
 - **提交**（`git log --oneline`）：
   - `4972ec5` 文档（两份设计文）
@@ -33,7 +33,7 @@
 | 项 | 说明 |
 |---|---|
 | Node/npm、Python3.11 | 运行单测 / build / crawler 单测 |
-| `.env.local` | 须在 worktree 根（`NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`，香港库走 `JOBS_DATABASE_URL`）。缺了就从主仓库 `/Users/USER/Desktop/求职雷达/.env.local` 复制（**只 cp，不要打印内容**）。 |
+| `.env.local` | 须在 worktree 根（`NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`，香港库走 `JOBS_DATABASE_URL`）。缺了就从主仓库 `<项目根>/.env.local` 复制（**只 cp，不要打印内容**）。 |
 | `node_modules` | worktree 独立，没有就先 `npm install --prefix <worktree>` |
 | 测试账号 | `test@jobradar.local` / `test123456`（需已在 Supabase 建好） |
 | 沙箱限制 | 沙箱可能禁端口/断网 → live 登录、连库、起 dev server 多半要在**用户本机**跑；自动化门（§3）不需要网络。 |
@@ -58,7 +58,7 @@
 在 worktree 根依次执行，记录实际输出：
 
 ```bash
-cd /Users/USER/Desktop/求职雷达-wt-radar-pivot-0623
+cd <项目根>-wt-radar-pivot-0623
 node --test tests/*.test.js                                            # 期望：pass 426 / fail 0
 python3 -m unittest discover -s crawler -t crawler -p "test_*.py"      # 期望：OK（约 409 tests）
 npx tsc --noEmit                                                       # 期望：退出码 0、无 error TS

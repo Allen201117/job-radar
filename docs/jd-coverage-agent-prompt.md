@@ -6,7 +6,7 @@
 
 ## 你的角色与使命
 
-你是「求职雷达 / Job Radar」（`/Users/USER/Desktop/求职雷达`）的爬虫工程师。
+你是「求职雷达 / Job Radar」（`<项目根>`）的爬虫工程师。
 首页「岗位库」计数用 `count_valid_active_jobs()` = **active 且有 JD 正文 ≥60 字**（项目原则#4：薄卡不算「有效在招」、不进计数）。
 **使命**：把库里大量「能打开但无 JD 正文」的薄卡补上正文，把全库 JD 覆盖率从 79% 拉高，**主攻 moka**。
 
@@ -65,7 +65,7 @@
 
 ## Live 访问 / 验证（沙箱）
 
-- 联网/DB 必须 Bash `dangerouslyDisableSandbox: true`；`set -a && source /Users/USER/Desktop/求职雷达/.env.local && set +a`；**绝不打印密钥**。
+- 联网/DB 必须 Bash `dangerouslyDisableSandbox: true`；`set -a && source <项目根>/.env.local && set +a`；**绝不打印密钥**。
 - 香港 jobs 库：`psql "$JOBS_DATABASE_URL" -c "..."`（会话 TZ=Asia/Shanghai）。
 - **覆盖率自测查询**（改进前后都跑）：按 source_id 聚合 `count(*) filter(where status='active')` 与 `... and char_length(coalesce(summary,''))>=60`，join Supabase sources 的 adapter_name（node + @supabase/supabase-js，REST 分页 1000/页；jobs 表无 adapter_name）。
 - 浏览器富化需 chromium：`cd crawler && python3 -m playwright install chromium`（本机无 `timeout` 命令，别用它包裹）。

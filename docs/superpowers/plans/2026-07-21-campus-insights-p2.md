@@ -120,7 +120,7 @@ create policy "Admins can write cycles"
 
 - [ ] **Step 2: 校验 diff 干净**
 
-Run: `git -C /Users/USER/Desktop/求职雷达/.claude/worktrees/campus-insights-p2-design-69d8c0 diff --check`
+Run: `git -C <项目根>/.claude/worktrees/campus-insights-p2-design-69d8c0 diff --check`
 Expected: 无输出（无空白错误）
 
 - [ ] **Step 3: 确认前缀未占用**
