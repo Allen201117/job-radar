@@ -17,9 +17,17 @@ name: campus-crawl
 
 on:
   schedule:
-    # 每小时的 :20 —— 与 daily-crawl（整点 UTC 1/7/13/17）、enrich-crawl（UTC 18:00）错峰，
-    # 不与它们抢同一时刻的目标站点连接。
-    - cron: "20 * * * *"
+    # 每 20 分钟触发，但**实际每小时才真跑一轮** —— 多出来的由 gate job 挡回去。
+    #
+    # 为什么不老老实实写 "20 * * * *"：GitHub 在平台高负载时会静默丢弃 schedule 触发，
+    # 高频 cron 尤甚。2026-08-07 实测老写法只跑出 ~7 次/天、相邻两轮平均间隔 171 分钟
+    # —— 车道真实节奏只有设计值的 1/3，秋招开闸最坏要等 3 小时才被发现。
+    # 已排除另两种解释：每轮只跑 8-9 分钟不存在堵塞；23 个 run 里 0 个 cancelled，
+    # 不是 concurrency 把排队的顶掉。剩下就是 GitHub 官方文档写明的「高负载时跳过」。
+    # 加密到每 20 分钟后：丢了触发有富余的补上，没丢触发也不会真去轰目标站点三遍。
+    #
+    # 🚫 改 cron 前先看下面的 gate job —— 拿掉那道闸就会真的每 20 分钟抓一遍。
+    - cron: "*/20 * * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -33,7 +41,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 频率闸：上面的 cron 是「每 20 分钟触发」，这道闸把节奏拉回「每小时真跑一轮」。
+  # 刻意做成独立的轻量 job（不 checkout 依赖、不装 chromium，整轮 ~10 秒）——
+  # 判「不该跑」的轮次不该花 2-3 分钟装环境。crawler/campus_lane_gate.py 因此只用标准库。
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      due: ${{ steps.check.outputs.due }}
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      CAMPUS_LANE_FORCE: ${{ github.event.inputs.force }}
+      # GITHUB_EVENT_NAME 不在这里设 —— Actions 默认就注入它，且 GITHUB_ 是保留前缀。
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - id: check
+        name: 该不该跑（距上轮真跑完 ≥50min / 校招季 / 手动触发一律放行）
+        run: python campus_lane_gate.py
+        working-directory: crawler
+
   campus-lane:
+    needs: gate
+    if: needs.gate.outputs.due == 'true'
     runs-on: ubuntu-latest
     # 车道只抓几十个源；给 50min 是为了容纳开闸当轮的「加急重抓」第二遍（可能上千岗要 upsert）。
     timeout-minutes: 50
