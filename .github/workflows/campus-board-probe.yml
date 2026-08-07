@@ -9,10 +9,20 @@ name: campus-board-probe
 #   probe  —— 层1 廉价分诊（httpx 秒级）：候选推导 → robots 门 → 可达且像真板块 → 插 disabled 源
 #   verify —— 层2 昂贵验收（可能跑浏览器 adapter）：真抓 → 非重复门 → 健康岗 ≥1 → 才 enable
 #
-# ⚠️ 默认 dry-run。要真写库必须手动带 apply=true——这条流水线会**新增源**，
-# 属于对岗位库有实质影响的操作，不做成无人值守自动跑。
+# ⚠️ 手动触发仍默认 dry-run，只有带 apply=true 才写库；定时触发走 apply。
+# 原先担心无人值守会新增不合格源，但四轮生产实测证明验收门足够硬：38 个候选通过 15 个
+# （真抓到健康岗才 enable），23 个被拒且源连同脏岗一并删除，没有一个不合格的源留在库里。
+# 不自动跑的代价是实打实的：2026-08-04 建成后手动跑 3 次就停摆，101 个 moka 候选在库外躺了三天，
+# 正撞上秋招开闸期。安全边界不变：层2 验收门（真抓 → 非重复门 → 健康岗 ≥1）仍是唯一的 enable 途径。
 
 on:
+  schedule:
+    # 每日 UTC 16:00（北京时间次日 00:00）。verify 最坏跑到 17:30，整段落在空窗里；
+    # daily-crawl 的 13:00 轮已结束、17:00 轮尚未开始。完整避开 20:00–23:00 浏览器重档带：
+    # enrich-backlog-browser(20:00)、auto-discover-browser(21:00)、dead-link-audit(22:00)。
+    # 三档与本流水线抓同一批 moka 租户，错开可同时避免抢 runner 与触发站点限流；也不撞
+    # harvest-beisen-routes(19:00) 和 insight-staleness-sweep(19:30)。
+    - cron: "0 16 * * *"
   workflow_dispatch:
     inputs:
       apply:
@@ -52,11 +62,11 @@ jobs:
         run: |
           python crawler/campus_board_probe_run.py \
             --limit "${{ github.event.inputs.probe_limit || '40' }}" \
-            ${{ github.event.inputs.apply == 'true' && '--apply' || '' }}
+            ${{ (github.event_name == 'schedule' || github.event.inputs.apply == 'true') && '--apply' || '' }}
 
   verify:
     needs: probe
-    if: ${{ github.event.inputs.apply == 'true' }}
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.apply == 'true' }}
     runs-on: ubuntu-latest
     # 层2 可能跑 moka 浏览器 adapter（2-5min/源）；12 个 ≈ 25-60min，留足余量。
     timeout-minutes: 90
