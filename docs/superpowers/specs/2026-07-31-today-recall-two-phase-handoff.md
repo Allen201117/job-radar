@@ -111,7 +111,7 @@ Postgres 自带 `ts_rank`，schema 已有 `search_doc` tsvector + GIN 索引（�
 **必须先量清楚 `ts_rank` 排序的代价**（它是 post-filter 排序，Postgres 要对所有命中行算分再排）：
 
 ```bash
-cd /Users/USER/Desktop/求职雷达
+cd <项目根>
 set -a; source .env.local; set +a
 export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
 COLS="id, source_id, company, title, location, job_scope, left(btrim(summary),300) as summary, jd_url, posted_at, deadline, first_seen_at, last_seen_at, enrich_checked_at, status, education"
@@ -169,7 +169,7 @@ psql "$JOBS_DATABASE_URL" -X -q -t -c "select count(*) from jobs where $BASE and
 
 ### 6.2 连香港库
 ```bash
-cd /Users/USER/Desktop/求职雷达
+cd <项目根>
 set -a; source .env.local; set +a
 export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
 psql "$JOBS_DATABASE_URL" -X -q -c "…"

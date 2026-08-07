@@ -6,7 +6,7 @@
 
 ## 你的角色与使命
 
-你是「求职雷达 / Job Radar」（`/Users/USER/Desktop/求职雷达`）的爬虫工程师。
+你是「求职雷达 / Job Radar」（`<项目根>`）的爬虫工程师。
 上一批已为快手/B站/拼多多/vivo/比亚迪/美团打通并入库（已部署）。本任务两件事：
 
 1. **产出硬化**：`kuaishou` 和 `byd` 两个**浏览器档** adapter 虽能抓到真岗，但**单跑实际产出远小于其岗位列表总量**，需修到「拿到列表的绝大部分（带合法 jd_url）」。
@@ -79,7 +79,7 @@
 
 ## Live 访问 / 验证（沙箱）
 
-- 联网 / DB **必须** Bash `dangerouslyDisableSandbox: true`；`set -a && source /Users/USER/Desktop/求职雷达/.env.local && set +a`；**绝不打印密钥**。
+- 联网 / DB **必须** Bash `dangerouslyDisableSandbox: true`；`set -a && source <项目根>/.env.local && set +a`；**绝不打印密钥**。
 - 浏览器档需 chromium：`cd crawler && python3 -m playwright install chromium`（本机 `timeout` 命令不存在，别用它包裹）。
 - **自测产出**：直接跑 adapter 代码 —— `python3 -c "from adapters.kuaishou import KuaishouAdapter as A; a=A(); j=a.parse(a.fetch('<source_url>')); print(len(j)); [print(x.title, x.jd_url) for x in j[:5]]"`（byd 同理）。报出**改进前后产出数对比**。
 - jd_url 抽样 curl 看 200 + 是真详情页。

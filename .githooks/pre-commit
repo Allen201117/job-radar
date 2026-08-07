@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# 公开仓库提交前防护。启用方式（每个 clone 一次；npm install 会自动执行）：
+#   git config core.hooksPath .githooks
+set -uo pipefail
+
+root="$(git rev-parse --show-toplevel)" || exit 0
+
+# ① 提交身份：git 没配 user.email 时会退化成 <系统用户名>@<主机名>，
+#    这会把电脑用户名（可能是公司名）永久写进公开提交记录，且只能靠重写历史才能抹掉。
+email="$(git config user.email || true)"
+name="$(git config user.name || true)"
+if [ -z "$email" ] || [ -z "$name" ] || [[ "$email" == *"@localhost" ]] || [[ "$email" != *"@"* ]]; then
+  echo "✋ 提交被拦下：git 身份不完整（name='$name' email='$email'）。" >&2
+  echo "   它会把你的电脑用户名写进公开提交记录。先配好再提交：" >&2
+  echo "     git config --global user.name  '<你的 GitHub 用户名>'" >&2
+  echo "     git config --global user.email '<你的 GitHub noreply 邮箱>'" >&2
+  echo "   noreply 邮箱在 GitHub → Settings → Emails 页面获取（形如 12345+用户名@users.noreply.github.com）。" >&2
+  exit 1
+fi
+
+# ② 内容扫描：本机绝对路径 / 私人邮箱 / 公网 IP / 密钥形态
+exec "$root/scripts/scan-sensitive.sh" --staged

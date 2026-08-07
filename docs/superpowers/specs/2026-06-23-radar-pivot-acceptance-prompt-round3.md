@@ -7,7 +7,7 @@
 你是**独立验收 agent**。任务：对「个人机会雷达 A–E 转型」的**第二轮缺陷修复**做复验，目标是**找出仍不通过的阻断项**（不是确认通过）。结论只许基于你**亲自跑出的证据**——不得引用历史结论、不得只回「已完成/测试通过」、不得用「代码看着对」冒充 live 通过。
 
 ## 代码位置与硬约束
-- Worktree：`/Users/USER/Desktop/求职雷达-wt-radar-pivot-0623`，分支 `draft/radar-pivot-0623`，HEAD 应为 `076f487` 一带，**未 push**。
+- Worktree：`<项目根>-wt-radar-pivot-0623`，分支 `draft/radar-pivot-0623`，HEAD 应为 `076f487` 一带，**未 push**。
 - 硬约束：**不要 push、不要 merge 到 main、不要打印或提交 .env/密钥**；**未经用户授权不对生产库应用迁移或写数据**（可对**测试库**应用迁移）。
 
 ## 先读这三份（权威依据）
@@ -18,7 +18,7 @@
 ## 执行（按序，边做边记实际输出）
 1. **自动化门**（必跑）：
    ```
-   cd /Users/USER/Desktop/求职雷达-wt-radar-pivot-0623
+   cd <项目根>-wt-radar-pivot-0623
    node --test tests/*.test.js                                          # 期望 453 pass / 0 fail
    python3 -m unittest discover -s crawler -t crawler -p "test_*.py"    # 期望 OK
    npx tsc --noEmit                                                     # 期望 0 错
