@@ -4,13 +4,18 @@
 本模块只放不打网络、不碰 DB 的纯函数，供 campus-crawl 车道与开闸检测共用、可单测：
 
   · is_campus_season      —— 淡季不跑高频车道
+  · is_due                —— 频率闸（GitHub 丢 schedule 触发的对策，见函数注释）
   · select_campus_sources —— 选源（board 静态分类 ∪ 实际产出，交必投清单）
   · detect_surge          —— 开闸判据
   · coverage_ratio / is_undercrawled —— 抓全自检（拿不到官网自报总数时诚实返回「测不了」）
 
 编排与 IO 在 campus_crawl.py，这里保持零副作用。
+
+⚠️ 本模块**只准依赖标准库**：campus_lane_gate.py 要在没装 crawler/requirements.txt 的
+轻量 CI job 里 import 它，加任何第三方依赖都会把那道闸打死。
 """
 
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable, Optional
 
 # 覆盖校招的板块值，与 lib/source-board.ts 的 CAMPUS_BOARDS 同口径（跨端契约，改动须两边同改）。
@@ -48,6 +53,49 @@ def is_campus_season(month: Optional[int]) -> bool:
     if not isinstance(month, int):
         return False
     return month in AUTUMN_MONTHS or month in SPRING_MONTHS
+
+
+# 频率闸的最小间隔。车道设计节奏是每小时一轮，留 10 分钟余量吸收 GitHub 的触发抖动
+# （cron 实际到点时间前后浮动几分钟很常见，卡死 60 分钟会让本该跑的那轮被自己挡掉）。
+MIN_LANE_INTERVAL_MINUTES = 50
+
+
+def is_due(last_finished_at, now: datetime,
+           min_interval_minutes: int = MIN_LANE_INTERVAL_MINUTES) -> bool:
+    """距上一轮**真跑完**是否已经够久，够久才允许本轮开跑。
+
+    为什么需要这道闸：GitHub 会在平台高负载时静默丢弃 schedule 触发，高频 cron 尤甚。
+    2026-08-07 实测 cron "20 * * * *"（声称每小时 24 次）实际只触发 ~7 次/天、
+    相邻两轮平均间隔 171 分钟 —— 车道的实际节奏是设计值的 1/3，开闸响应最坏要等 3 小时。
+    已排除「上轮没跑完堵住」（每轮只 8-9 分钟）和「concurrency 把排队的顶掉」（0 个 cancelled）。
+    对策是把 cron 加密到每 20 分钟，多出来的轮次由本判据挡回去——丢了触发有富余的补上，
+    没丢触发也不会真的每 20 分钟去轰目标站点。
+
+    `last_finished_at` 取 ops_runs 里 module='campus_lane' 的最新 finished_at
+    （车道跑完才写，是「真跑过」而不是「CI 起来过」的权威证据；用后者会因为早退轮次
+    也算 success 而把时间戳一直往后推，最后永远跑不了）。
+
+    安全默认一律是 True（该跑）：拿不到时间戳、时间戳解析不了、甚至时间戳在未来，
+    都判该跑。**漏跑会错过秋招开闸窗口，多跑一轮只是多花几分钟 CI。**
+    """
+    if min_interval_minutes <= 0:
+        return True
+    if not last_finished_at:
+        return True
+
+    if isinstance(last_finished_at, datetime):
+        last = last_finished_at
+    else:
+        try:
+            last = datetime.fromisoformat(str(last_finished_at).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return True  # 坏时间戳绝不能把车道永久卡死
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+
+    if last > now:
+        return True  # 时钟偏移/脏数据写进未来时间，同样不能一直等下去
+    return now - last >= timedelta(minutes=min_interval_minutes)
 
 
 def select_campus_sources(

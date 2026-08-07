@@ -1,13 +1,65 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from campus_lane import (
     coverage_ratio,
     detect_surge,
     is_campus_season,
+    is_due,
     is_undercrawled,
     select_campus_sources,
     split_by_crawl_tier,
 )
+
+
+class TestIsDue(unittest.TestCase):
+    """频率闸：GitHub 会丢掉约 2/3 的 schedule 触发（2026-08-07 实测 cron "20 * * * *"
+    只跑出 ~7 次/天、相邻两轮间隔 171min），所以 cron 加密到每 20 分钟，
+    由本判据把多余的轮次挡回去，实际节奏才回到设计的每小时一轮。
+
+    安全默认是「宁可多跑一轮，不可永远不跑」——车道漏跑会错过秋招开闸窗口，
+    多跑一轮只是多花几分钟 CI（公开仓库分钟无限）。"""
+
+    NOW = datetime(2026, 8, 7, 12, 0, tzinfo=timezone.utc)
+
+    def test_never_ran_is_due(self):
+        self.assertTrue(is_due(None, self.NOW))
+
+    def test_empty_string_is_due(self):
+        self.assertTrue(is_due("", self.NOW))
+
+    def test_unparseable_timestamp_is_due(self):
+        # 宁可多跑：解析不了就当没跑过，绝不因为一个坏时间戳把车道永久卡死。
+        self.assertTrue(is_due("not-a-timestamp", self.NOW))
+
+    def test_recent_run_is_not_due(self):
+        self.assertFalse(is_due((self.NOW - timedelta(minutes=20)).isoformat(), self.NOW))
+
+    def test_old_enough_run_is_due(self):
+        self.assertTrue(is_due((self.NOW - timedelta(minutes=51)).isoformat(), self.NOW))
+
+    def test_boundary_exactly_min_interval_is_due(self):
+        self.assertTrue(is_due((self.NOW - timedelta(minutes=50)).isoformat(), self.NOW))
+
+    def test_accepts_zulu_suffix(self):
+        # PostgREST 回 ...Z 或 +00:00 都有可能，两种都要认。
+        self.assertFalse(is_due("2026-08-07T11:40:00Z", self.NOW))
+        self.assertTrue(is_due("2026-08-07T10:00:00Z", self.NOW))
+
+    def test_naive_timestamp_treated_as_utc(self):
+        self.assertFalse(is_due("2026-08-07T11:40:00", self.NOW))
+
+    def test_future_timestamp_is_due(self):
+        # 时钟偏移/脏数据写进未来时间，绝不能让车道永远等下去。
+        self.assertTrue(is_due((self.NOW + timedelta(hours=3)).isoformat(), self.NOW))
+
+    def test_custom_interval(self):
+        ts = (self.NOW - timedelta(minutes=30)).isoformat()
+        self.assertFalse(is_due(ts, self.NOW, min_interval_minutes=50))
+        self.assertTrue(is_due(ts, self.NOW, min_interval_minutes=10))
+
+    def test_zero_interval_always_due(self):
+        self.assertTrue(is_due(self.NOW.isoformat(), self.NOW, min_interval_minutes=0))
 
 
 class TestSplitByCrawlTier(unittest.TestCase):
