@@ -61,3 +61,25 @@ jobs:
             --adapter "${{ matrix.adapter }}" \
             --limit "${{ github.event.inputs.limit || '50000' }}" \
             --workers "${{ github.event.inputs.workers || '10' }}"
+
+  # 见 enrich-backlog.yml 同名 job：分片「够不着库」软失败换取不误报，
+  # 这一步换台干净 runner 亲自连一次库，兜住「库真挂了却全绿」。
+  guard:
+    needs: sweep
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+      JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+      JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+      - name: Probe jobs DB reachability
+        working-directory: crawler
+        run: python jobs_db_probe.py

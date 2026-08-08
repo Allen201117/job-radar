@@ -150,6 +150,18 @@ _REDACTIONS = (
 )
 
 
+class JobsDbUnreachable(psycopg2.OperationalError):
+    """重试预算烧光仍连不上香港库 —— 「够不着库」，不是「库里出错」。
+
+    单列一个类型，是为了让调用方能把这两件事分开处置：
+      · 够不着库：CI 矩阵里多半是**单个 runner 的出口 IP 被路径上掐掉**（2026-08-08 实测
+        同一轮 12 个分片里 11 个连得好好的，只有 1 片全程 RST），重试再久也没用，
+        而队列是幂等的、下一轮自然补上 → 该记台账、不该把整轮 CI 拖红。
+      · 库里出错（SQL 错、约束冲突…）：真 bug，必须炸。
+    继承 psycopg2.OperationalError，所以既有的 `except OperationalError` 全部照常工作。
+    """
+
+
 def redact_conn_error(exc):
     """把建连异常里的主机/端口抹掉，返回同类型的新异常（类型不变，调用方的 except 不受影响）。"""
     message = str(exc)
@@ -201,7 +213,7 @@ def get_conn():
             print(f"[jobs_db] 建连失败({type(exc).__name__}: {redact_conn_error(exc)})，{wait}s 后重试 "
                   f"({attempt + 2}/{_CONNECT_ATTEMPTS})")
             time.sleep(wait)
-    raise redact_conn_error(last_exc) from None
+    raise JobsDbUnreachable(str(redact_conn_error(last_exc))) from None
 
 
 def conn_alive(conn) -> bool:
