@@ -127,6 +127,15 @@ class GetConnRetryTest(unittest.TestCase):
         否则一次网络抖动就能打掉整个 CI 分片。"""
         self.assertGreaterEqual(sum(jobs_db._CONNECT_BACKOFF), 120)
 
+    def test_budget_exhausted_raises_unreachable_but_stays_operational_error(self):
+        """「够不着库」要能被单独 catch（分片软失败靠它），同时不能破坏既有的
+        `except psycopg2.OperationalError` 调用方 → 必须是它的子类。"""
+        connect = mock.Mock(side_effect=psycopg2.OperationalError("server closed the connection unexpectedly"))
+        with mock.patch.object(psycopg2, "connect", connect):
+            with self.assertRaises(jobs_db.JobsDbUnreachable):
+                jobs_db.get_conn()
+        self.assertTrue(issubclass(jobs_db.JobsDbUnreachable, psycopg2.OperationalError))
+
     def test_host_and_port_are_redacted_from_raised_error(self):
         """公开仓库红线：Actions 日志全网可读，建连报错不许带香港库 IP/端口。"""
         boom = psycopg2.OperationalError(

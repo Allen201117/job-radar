@@ -56,3 +56,28 @@ jobs:
             --adapter "${{ matrix.adapter }}" \
             --limit "${{ github.event.inputs.limit || '20000' }}" \
             --workers "${{ github.event.inputs.workers || '8' }}"
+
+  # 分片「够不着香港库」时会软失败（记台账 + 退 0），因为那多半只是该 runner 的出口 IP 被掐，
+  # 不该让 1/12 的分片把整轮拖红。代价是「库真挂了」也会全绿 —— 这一步就是补这个洞：
+  # 换一台干净 runner 亲自连一次库，连不上才是真故障，红在这里。
+  # 诚实边界：guard 用的是又一个随机出口 IP，所以它是很强的信号、不是数学证明；
+  # 每个软失败分片都在 ops_runs 台账里记了 status=failed，运营看板能看到真实损耗。
+  guard:
+    needs: drain
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+      JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+      JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+      - name: Probe jobs DB reachability
+        working-directory: crawler
+        run: python jobs_db_probe.py

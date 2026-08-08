@@ -335,20 +335,40 @@ def main():
 
     sb = db.get_supabase()
     started_at = _now()
-    stat = drain(
-        sb,
-        adapter=args.adapter,
-        limit=args.limit,
-        workers=args.workers,
-        dry_run=args.dry_run,
-        sweep=args.sweep,
-    )
+    module = "liveness_sweep" if args.sweep else "enrich_backlog"
+    shard = args.adapter or "all"
+    try:
+        stat = drain(
+            sb,
+            adapter=args.adapter,
+            limit=args.limit,
+            workers=args.workers,
+            dry_run=args.dry_run,
+            sweep=args.sweep,
+        )
+    except jobs_db.JobsDbUnreachable as exc:
+        # 够不着香港库 ≠ 本分片有 bug。实测这多半是单个 runner 的出口 IP 被掐（同轮其余分片正常），
+        # 重试预算已烧光、再试也是 RST；队列幂等，下一轮自然补上 → 台账照实记 failed，
+        # 但进程退 0，不让 1/12 的分片把整轮拖红成告警噪音。
+        # 「真·全库不可达」由 workflow 末尾的 guard job 亲自连一次库兜底报警（那里会红）。
+        print(f"⚠️ 够不着香港 jobs 库（建连重试预算已烧光）：{exc}")
+        print(f"⚠️ 本分片 {shard} 整片跳过，队列下一轮补上；已记台账 module={module} status=failed")
+        if not args.dry_run:
+            ops_runs.record_ops_run(
+                sb,
+                module,
+                {"checked": 0, "unreachable": 1, "adapter": shard},
+                status="failed",
+                started_at=started_at,
+                finished_at=_now(),
+            )
+        return
     if not args.dry_run:
         # checked = 真正探了的（不含限流跳过的 skipped）
         checked = stat["filled"] + stat["alive"] + stat["miss"] + stat["expired"] + stat["err"]
         ops_runs.record_ops_run(
             sb,
-            "liveness_sweep" if args.sweep else "enrich_backlog",
+            module,
             {
                 "checked": checked,
                 "enriched": stat["filled"],
