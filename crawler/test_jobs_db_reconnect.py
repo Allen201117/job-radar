@@ -119,6 +119,29 @@ class GetConnRetryTest(unittest.TestCase):
     def test_backoff_table_covers_every_retry(self):
         self.assertEqual(len(jobs_db._CONNECT_BACKOFF), jobs_db._CONNECT_ATTEMPTS - 1)
 
+    def test_retry_window_survives_a_two_minute_crossborder_blip(self):
+        """跨境抖动是「一两分钟的窗口」，不是「几秒」。
+
+        2026-08-08 实测：liveness-sweep / enrich-backlog 两次挂掉，都是 4 次重试在 ~19s 内烧光
+        （对端直接 RST，每次建连秒失败，等待总和才是真正的窗口）。重试预算必须覆盖 ≥120s，
+        否则一次网络抖动就能打掉整个 CI 分片。"""
+        self.assertGreaterEqual(sum(jobs_db._CONNECT_BACKOFF), 120)
+
+    def test_host_and_port_are_redacted_from_raised_error(self):
+        """公开仓库红线：Actions 日志全网可读，建连报错不许带香港库 IP/端口。"""
+        boom = psycopg2.OperationalError(
+            'connection to server at "203.0.113.10", port 5432 failed: '
+            "server closed the connection unexpectedly"
+        )
+        connect = mock.Mock(side_effect=boom)
+        with mock.patch.object(psycopg2, "connect", connect):
+            with self.assertRaises(psycopg2.OperationalError) as caught:
+                jobs_db.get_conn()
+        leaked = str(caught.exception)
+        self.assertNotIn("203.0.113.10", leaked)
+        self.assertNotIn("5432", leaked)
+        self.assertIn("server closed the connection unexpectedly", leaked)  # 诊断信息要留住
+
 
 if __name__ == "__main__":
     unittest.main()

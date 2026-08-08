@@ -15,6 +15,7 @@ canonical_jd_url 由 HK 库的 BEFORE INSERT/UPDATE 触发器自动维护（与 
 import os
 import atexit
 import ipaddress
+import re
 import tempfile
 import time
 import uuid
@@ -136,8 +137,25 @@ def strict_tls_kwargs(dsn: str, root_cert_path: str, certificate_servername: str
 #   ② 长跑任务的连接被静默掐断后，psycopg2 把 conn 标 closed，后续每次写都 InterfaceError。
 #      enrichment-crawl 实测连接 20:09 断掉后，剩余 ~1h50m 一行都没写进去，还烧满 180min 超时。
 # 对策：建连重试（治①）+ TCP keepalive（治②的成因）+ 调用方持有的连接断了要重连（治②的后果）。
-_CONNECT_ATTEMPTS = 4
-_CONNECT_BACKOFF = (2, 5, 10)  # 第 n 次失败后等几秒再试；长度 = _CONNECT_ATTEMPTS - 1
+_CONNECT_ATTEMPTS = 7
+_CONNECT_BACKOFF = (2, 5, 10, 20, 30, 60)  # 第 n 次失败后等几秒再试；长度 = _CONNECT_ATTEMPTS - 1（合计 127s）
+
+# 跨境建连报错里带香港库的公网 IP + 端口（psycopg2 原文形如
+# `connection to server at "<公网IP>", port <端口> failed: ...`）。本仓库是 PUBLIC，
+# Actions 日志全网可读 → 打印/抛出前必须脱敏（红线见 CLAUDE.md「公开仓库红线」）。
+_REDACTIONS = (
+    (re.compile(r'(\bat )"[^"]*"'), r'\1"<jobs-db>"'),
+    (re.compile(r'(\bhost name )"[^"]*"'), r'\1"<jobs-db>"'),
+    (re.compile(r'(\bport )\d+'), r'\1<redacted>'),
+)
+
+
+def redact_conn_error(exc):
+    """把建连异常里的主机/端口抹掉，返回同类型的新异常（类型不变，调用方的 except 不受影响）。"""
+    message = str(exc)
+    for pattern, replacement in _REDACTIONS:
+        message = pattern.sub(replacement, message)
+    return type(exc)(message)
 
 # libpq TCP keepalive：空闲时让内核主动探活，抢在跨境 NAT/防火墙表项超时前把连接刷活；
 # 真断了也能在 ~80s 内报错，而不是卡到 TCP 默认的十几分钟（实测出现过 Connection timed out 长挂）。
@@ -180,10 +198,10 @@ def get_conn():
             if attempt >= _CONNECT_ATTEMPTS - 1:
                 break
             wait = _CONNECT_BACKOFF[attempt]
-            print(f"[jobs_db] 建连失败({type(exc).__name__}: {exc})，{wait}s 后重试 "
+            print(f"[jobs_db] 建连失败({type(exc).__name__}: {redact_conn_error(exc)})，{wait}s 后重试 "
                   f"({attempt + 2}/{_CONNECT_ATTEMPTS})")
             time.sleep(wait)
-    raise last_exc
+    raise redact_conn_error(last_exc) from None
 
 
 def conn_alive(conn) -> bool:
