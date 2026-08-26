@@ -22,7 +22,13 @@ import site_entry
 
 
 _TRUE = {"1", "true", "yes", "on"}
-_MANUAL_PLATFORMS = {"anti_bot", "login_wall", "no_stable_jd"}
+# anti_bot / login_wall 是**对方的门槛**（反爬、要登录），只能转人工 → 永不重试。
+# no_stable_jd 不一样：它是**我们没拿到逐岗链接**，属于自身抓取能力问题，
+# 而抓取能力一直在改进（2026-08-26 就修掉一个：P2 对标准 ATS 租户误用通用盲抓，
+# 万泰生物同一 URL 由 0 个岗变 15 个）。把它钉成永不重试 = 每次能力升级都救不回存量。
+# 故给长退避，让系统改进后能自我修复。
+_MANUAL_PLATFORMS = {"anti_bot", "login_wall"}
+_NO_STABLE_JD_RETRY_DAYS = 45
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -335,7 +341,7 @@ def run_acceptance_gate(entry, *, adapter, source_url, supabase, jobs_conn,
             "kept_source": False,
             "source_id": None,
             "inserted_new": inserted_new,
-            "next_retry_at": None,
+            "next_retry_at": _after(now, _NO_STABLE_JD_RETRY_DAYS),
             "fail_reason": "逐岗链接打不开，或页面缺岗位标题/公司身份信号",
             "evidence": evidence,
         }

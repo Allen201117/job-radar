@@ -19,7 +19,8 @@ _TRUE = {"1", "true", "yes", "on"}
 _TERMINAL_STATES = {
     "healthy",
     "manual_review",
-    "no_stable_jd",
+    # no_stable_jd 不在此列：它是我们没拿到逐岗链接（自身能力问题，会随 adapter 改进
+    # 而变化），靠 next_retry_at 的长退避重试，不能钉成永不重试。见 gap_funnel._MANUAL_PLATFORMS。
     "anti_bot",
     "login_wall",
     "governance_candidate",
@@ -157,7 +158,9 @@ def process_browser_company(
             "state": "no_stable_jd",
             "official_entry_url": source_url,
             "detected_platform": "unknown_spa",
-            "next_retry_at": None,
+            "next_retry_at": gap_funnel._after(
+                now, gap_funnel._NO_STABLE_JD_RETRY_DAYS
+            ),
             "fail_reason": probe_result.get("reason") or "浏览器拦截未拿到真实逐岗 URL",
             "evidence": {
                 "probe": probe_result,

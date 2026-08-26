@@ -6,6 +6,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import gap_funnel
 import gap_funnel_browser as browser
 import normalizer
 from adapters.base import RawJob
@@ -81,7 +82,14 @@ class BrowserCompanyTest(unittest.TestCase):
             )
         )
 
-    def test_no_per_job_url_becomes_manual_no_stable_jd_without_retry(self):
+    def test_no_per_job_url_becomes_no_stable_jd_with_long_backoff(self):
+        """拿不到逐岗 URL 是**我们自身**的抓取能力问题，不是对方门槛 → 长退避而非永不重试。
+
+        钉死这条的原因：抓取能力会改进（2026-08-26 修掉「标准 ATS 租户被通用盲抓」后，
+        万泰生物同一 URL 由 0 个岗变 15 个）。若钉成 next_retry_at=None，
+        每次能力升级都救不回存量，队列只会单向缩小直到枯竭。
+        对方门槛（anti_bot / login_wall）才该永不重试。
+        """
         gate_calls = []
         result = browser.process_browser_company(
             _row(),
@@ -97,7 +105,11 @@ class BrowserCompanyTest(unittest.TestCase):
             acceptance_gate=lambda *args, **kwargs: gate_calls.append((args, kwargs)),
         )
         self.assertEqual(result["state"], "no_stable_jd")
-        self.assertIsNone(result["next_retry_at"])
+        self.assertIsNotNone(result["next_retry_at"])
+        self.assertEqual(
+            result["next_retry_at"],
+            gap_funnel._after(NOW, gap_funnel._NO_STABLE_JD_RETRY_DAYS),
+        )
         self.assertEqual(gate_calls, [])
         self.assertTrue(result["evidence"]["manual_review"])
 
