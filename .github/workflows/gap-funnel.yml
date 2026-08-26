@@ -67,6 +67,12 @@ jobs:
           python3 crawler/gap_funnel.py "${args[@]}"
 
   funnel-browser:
+    # P2 吃的是 P1 当轮判定出的 unknown_spa 入口。两道并行时 P2 读台账时 P1 还没写完，
+    # 于是 P1 本轮新发现的 SPA 入口全要压到下一个周期才被浏览器碰——白等一整轮。
+    # （2026-08-26 实测：P1 当轮交接 18 家，同 run 的 P2 只看到存量的 1 家。）
+    # if: always() 保证 P1 失败时 P2 仍处理存量队列——它不依赖 P1 本轮是否成功。
+    needs: funnel
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
