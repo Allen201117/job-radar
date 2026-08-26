@@ -235,8 +235,8 @@ def process_browser_company(
             "state": "no_stable_jd",
             "official_entry_url": source_url,
             "detected_platform": "unknown_spa",
-            "next_retry_at": gap_funnel._after(
-                now, gap_funnel._NO_STABLE_JD_RETRY_DAYS
+            "next_retry_at": gap_funnel._after_spread(
+                now, gap_funnel._NO_STABLE_JD_RETRY_DAYS, row.get("company")
             ),
             "fail_reason": probe_result.get("reason") or "浏览器拦截未拿到真实逐岗 URL",
             "evidence": {

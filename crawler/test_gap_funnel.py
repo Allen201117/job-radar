@@ -1187,5 +1187,32 @@ class CandidateItemsDedupeTest(unittest.TestCase):
         self.assertEqual(len(urls), 2)
 
 
+class BackoffSpreadTest(unittest.TestCase):
+    """固定天数退避会让同批失败的公司全落在同一天，队列一个月半空、到期日挤爆。
+
+    2026-08-26 实测：31 家 wrong_platform + 6 家 no_official_entry 全排在 9/25，
+    而每天只处理 20 家。
+    """
+
+    def _dates(self, companies, days=30):
+        from datetime import datetime, timezone
+        now = datetime(2026, 8, 26, tzinfo=timezone.utc)
+        return [gf._after_spread(now, days, c)[:10] for c in companies]
+
+    def test_same_batch_spreads_across_days(self):
+        companies = [f"公司{i}" for i in range(30)]
+        self.assertGreater(len(set(self._dates(companies))), 5)
+
+    def test_offset_is_stable_for_same_company(self):
+        """必须用公司名 hash 而非随机数，否则每次重跑都漂、永远排不上队。"""
+        self.assertEqual(self._dates(["中国银行"]), self._dates(["中国银行"]))
+
+    def test_never_schedules_in_the_past(self):
+        for days in (1, 2, 14, 30, 45):
+            for company in ("A", "很长的中文公司名称有限公司", ""):
+                with self.subTest(days=days, company=company):
+                    self.assertGreaterEqual(self._dates([company], days)[0], "2026-08-27")
+
+
 if __name__ == "__main__":
     unittest.main()

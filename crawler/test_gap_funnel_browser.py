@@ -108,7 +108,9 @@ class BrowserCompanyTest(unittest.TestCase):
         self.assertIsNotNone(result["next_retry_at"])
         self.assertEqual(
             result["next_retry_at"],
-            gap_funnel._after(NOW, gap_funnel._NO_STABLE_JD_RETRY_DAYS),
+            gap_funnel._after_spread(
+                NOW, gap_funnel._NO_STABLE_JD_RETRY_DAYS, "甲公司"
+            ),
         )
         self.assertEqual(gate_calls, [])
         self.assertTrue(result["evidence"]["manual_review"])

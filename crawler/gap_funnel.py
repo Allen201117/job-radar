@@ -2,6 +2,7 @@
 import argparse
 import os
 import re
+import zlib
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlparse
@@ -48,6 +49,19 @@ def _iso(value):
 
 def _after(now, days):
     return _iso(now + timedelta(days=days))
+
+
+def _after_spread(now, days, key, *, spread=None):
+    """退避 + 按公司名稳定抖动，避免同批失败的公司在同一天雪崩式回归。
+
+    固定天数退避会让同一批失败的公司**全部落在同一天**：2026-08-26 实测
+    31 家 wrong_platform + 6 家 no_official_entry 全挤在 9/25，而每天只处理 20 家
+    —— 从今天到 9/25 队列半空、到那天又一次性挤爆，之后再空一个月。
+    抖动用 crc32(公司名) 而非随机数：同一家每次算出的偏移一致，重跑不会来回漂。
+    """
+    span = max(1, int(spread if spread is not None else max(1, days // 3)))
+    offset = zlib.crc32(str(key or "").encode("utf-8")) % (span * 2 + 1) - span
+    return _after(now, max(1, int(days) + offset))
 
 
 def _source_payload(entry, adapter, source_url, crawl_method="http"):
@@ -349,7 +363,9 @@ def run_acceptance_gate(entry, *, adapter, source_url, supabase, jobs_conn,
             "kept_source": False,
             "source_id": None,
             "inserted_new": inserted_new,
-            "next_retry_at": _after(now, _NO_STABLE_JD_RETRY_DAYS),
+            "next_retry_at": _after_spread(
+                now, _NO_STABLE_JD_RETRY_DAYS, entry.get("company")
+            ),
             "fail_reason": "逐岗链接打不开，或页面缺岗位标题/公司身份信号",
             "evidence": evidence,
         }
@@ -374,7 +390,7 @@ def run_acceptance_gate(entry, *, adapter, source_url, supabase, jobs_conn,
             "kept_source": False,
             "source_id": None,
             "inserted_new": inserted_new,
-            "next_retry_at": _after(now, 14),
+            "next_retry_at": _after_spread(now, 14, entry.get("company")),
             "fail_reason": "浏览器道真抓后只有薄正文岗位，未达到健康岗验收门",
             "evidence": evidence,
         }
@@ -384,7 +400,10 @@ def run_acceptance_gate(entry, *, adapter, source_url, supabase, jobs_conn,
         "kept_source": True,
         "source_id": source_id,
         "inserted_new": inserted_new,
-        "next_retry_at": None if state == "healthy" else _after(now, 14),
+        "next_retry_at": (
+            None if state == "healthy"
+            else _after_spread(now, 14, entry.get("company"))
+        ),
         "fail_reason": None,
         "evidence": evidence,
     }
@@ -434,7 +453,7 @@ def _write_attempt(supabase, payload):
     ).execute()
 
 
-def _failure_for_platform(fingerprint, now):
+def _failure_for_platform(fingerprint, now, company=None):
     platform = fingerprint["platform"]
     if platform in _MANUAL_PLATFORMS:
         return {
@@ -447,7 +466,7 @@ def _failure_for_platform(fingerprint, now):
     return {
         "state": "wrong_platform",
         "detected_platform": platform,
-        "next_retry_at": _after(now, 30),
+        "next_retry_at": _after_spread(now, 30, company),
         "fail_reason": "P1 httpx 道无可用 adapter",
         "evidence": {"fingerprint": fingerprint},
     }
@@ -708,7 +727,9 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
                         "candidate_rejections": rejections,
                         "rejected_candidate_hosts": rejected_hosts,
                     }
-                    result = _failure_for_platform(fallback_fingerprint, now)
+                    result = _failure_for_platform(
+                        fallback_fingerprint, now, row["company"]
+                    )
                     result["official_entry_url"] = fallback_url
                     result["evidence"] = {
                         **result.get("evidence", {}),
@@ -836,7 +857,9 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
                 "source_url": None,
                 "reason": "no_routable_candidate",
             }
-        result = _failure_for_platform(fallback_fingerprint, now)
+        result = _failure_for_platform(
+            fallback_fingerprint, now, row["company"]
+        )
         result["official_entry_url"] = fallback_url
         result["evidence"] = {
             **result.get("evidence", {}),
