@@ -13,6 +13,8 @@ _THIRD_PARTY_HOSTS = (
     "recruit.net", "bebee.com", "wondercv.com", "superjianli.com",
     "shixiseng.com", "yinhangzhaopin.com", "yingjiesheng.com", "dajie.com",
     "saramin.co.kr", "glassdoor.com", "monster.com",
+    # 牛企招聘：实测赛力斯、福耀玻璃的「官方入口」被判到了 jobs.niuqizp.com 上。
+    "niuqizp.com",
 )
 _CONTENT_HOSTS = (
     "zhihu.com", "csdn.net", "sohu.com", "weixin.qq.com", "jianshu.com",

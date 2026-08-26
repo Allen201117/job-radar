@@ -33,12 +33,14 @@ class CandidateClassificationTest(unittest.TestCase):
             "https://www.qcc.com/firm/abc.html",
             "https://www.tianyancha.com/company/123",
             "https://www.qixin.com/company/abc",
+            # 牛企招聘：赛力斯/福耀玻璃曾被判到这里
+            "https://jobs.niuqizp.com/job-vyY5NzZM5.html",
         ):
             with self.subTest(url=url):
                 verdict, score, reason = ef.classify_candidate_url(url, "华谊兄弟")
                 self.assertEqual(verdict, "reject")
                 self.assertLess(score, 0)
-                self.assertEqual(reason, "content_site")
+                self.assertIn(reason, ("content_site", "third_party_job_platform"))
 
     def test_rejects_institutional_aggregator_and_government_hosts(self):
         cases = {

@@ -357,6 +357,28 @@ class CareersLinkTest(unittest.TestCase):
         self.assertLessEqual(len(client.calls), 24)
 
 
+    def test_extract_candidates_skips_official_error_pages(self):
+        """官网自己的 404 页也是「官网链接」，会绕过 gap_funnel 对 trusted_site 的评分豁免。
+
+        实测智飞生物被指到 zhifeishengwu.com/zh_CN/404.html、光线传媒被指到 ewang.com/404.html。
+        """
+        html = (
+            '<a href="/zh_CN/404.html">招聘</a>'
+            '<a href="/careers">招聘</a>'
+            '<a href="/job/404detail">岗位详情</a>'
+        )
+        urls = [
+            item["url"]
+            for item in se._extract_candidates(
+                html, "https://example.com/", "https://example.com/"
+            )
+        ]
+        self.assertNotIn("https://example.com/zh_CN/404.html", urls)
+        self.assertIn("https://example.com/careers", urls)
+        # 路径里带 404 但不是错误页的，不能误伤
+        self.assertIn("https://example.com/job/404detail", urls)
+
+
 if __name__ == "__main__":
     unittest.main()
 

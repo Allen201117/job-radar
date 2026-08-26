@@ -43,6 +43,11 @@ _CAREERS_RE = re.compile(
     r"\btalent\b|\bzhaopin\b|(?:^|[^a-z])hr(?:[^a-z]|$))",
     re.I,
 )
+# 官网自己的错误页也是「官网链接」，会绕过 gap_funnel 对 trusted_site 候选的评分豁免。
+# 实测把智飞生物指到了 zhifeishengwu.com/zh_CN/404.html、光线传媒指到 ewang.com/404.html。
+_ERROR_PAGE_RE = re.compile(
+    r"(?:^|/)(?:404|403|500|error|not[-_]?found)(?:\.[a-z0-9]+)?/?$", re.I
+)
 _COMPOUND_SUFFIXES = {
     "com.cn", "net.cn", "org.cn", "gov.cn",
     "com.hk", "com.tw", "co.uk", "co.jp", "com.au",
@@ -292,6 +297,8 @@ def _extract_candidates(html, page_url, home_url):
             continue
         url = _http_url(urljoin(page_url, href))
         if not url or url in seen:
+            continue
+        if _ERROR_PAGE_RE.search(urlparse(url).path or ""):
             continue
         seen.add(url)
         score, reason = _candidate_score(home_url, url)
