@@ -25,6 +25,21 @@ class CandidateClassificationTest(unittest.TestCase):
                 self.assertEqual(verdict, "reject")
                 self.assertLess(score, 0)
 
+    def test_rejects_company_registry_sites(self):
+        """企业工商信息站不是招聘入口（华谊兄弟/柠萌影业/正午阳光曾被判到爱企查上）。"""
+        for url in (
+            "https://aiqicha.baidu.com/details/rankList?query=abc&type=20",
+            "https://aiqicha.baidu.com/details/ugknowledge?id=abc",
+            "https://www.qcc.com/firm/abc.html",
+            "https://www.tianyancha.com/company/123",
+            "https://www.qixin.com/company/abc",
+        ):
+            with self.subTest(url=url):
+                verdict, score, reason = ef.classify_candidate_url(url, "华谊兄弟")
+                self.assertEqual(verdict, "reject")
+                self.assertLess(score, 0)
+                self.assertEqual(reason, "content_site")
+
     def test_rejects_institutional_aggregator_and_government_hosts(self):
         cases = {
             "https://job.mju.edu.cn/campus/view/id/976181": "institutional_host",

@@ -17,6 +17,10 @@ _THIRD_PARTY_HOSTS = (
 _CONTENT_HOSTS = (
     "zhihu.com", "csdn.net", "sohu.com", "weixin.qq.com", "jianshu.com",
     "baijiahao.baidu.com",
+    # 企业工商信息站不是招聘入口：实测华谊兄弟/柠萌影业/正午阳光三家的 official_entry_url
+    # 被判成了 aiqicha.baidu.com/details/…（爱企查），白跑一轮还被记成 no_stable_jd。
+    # 上面 baidu.com 的特判只挡 /baike，爱企查走 /details 从这个缝里漏了过去。
+    "aiqicha.baidu.com", "qcc.com", "tianyancha.com", "qixin.com",
 )
 _CAMPUS_REPOST_HOSTS = (
     "ncss.cn", "career.tsinghua.edu.cn", "scc.pku.edu.cn",

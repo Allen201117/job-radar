@@ -1,7 +1,9 @@
 """零搜索额度的招聘入口发现：公司官网首页 → 招聘候选链接。"""
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from html import unescape
+from threading import Lock
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -14,8 +16,20 @@ import wikidata
 
 
 _TIMEOUT = 15
-_MAX_GETS = 8
-_COMMON_PATHS = ("/careers", "/join", "/jobs", "/zhaopin", "/about/join")
+_MAX_GETS = 24
+_MAX_CONCURRENT_GETS = 8
+_CAREER_SUBDOMAINS = (
+    "careers", "jobs", "job", "hr", "zhaopin", "recruit", "talent",
+    "join", "campus", "hire", "joinus",
+)
+_COMMON_PATHS = (
+    "/careers", "/career", "/jobs", "/job", "/join", "/join-us",
+    "/joinus", "/recruitment", "/recruit", "/zhaopin", "/hr", "/about/join",
+)
+_CAREER_CONTENT_KEYWORDS = (
+    "招聘", "职位", "岗位", "careers", "jobs", "社会招聘", "校园招聘",
+    "join us", "recruit", "应聘", "投递",
+)
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -49,6 +63,25 @@ def _registered_domain(host):
     return ".".join(parts[-3:]) if suffix2 in _COMPOUND_SUFFIXES else suffix2
 
 
+def career_entry_candidates(home_url: str) -> list[str]:
+    """由官网域名生成候选招聘入口 URL（子域 + 路径），按命中概率排序，不发网络请求。"""
+    home_url = _http_url(home_url)
+    if not home_url:
+        return []
+    parsed = urlparse(home_url)
+    registered = _registered_domain(parsed.hostname)
+    if not registered:
+        return []
+    origin = "%s://%s" % (parsed.scheme, parsed.netloc)
+    candidates = [
+        "%s://%s.%s/" % (parsed.scheme, subdomain, registered)
+        for subdomain in _CAREER_SUBDOMAINS
+    ]
+    candidates.extend(urljoin(origin + "/", path) for path in _COMMON_PATHS)
+    seen = set()
+    return [url for url in candidates if not (url in seen or seen.add(url))]
+
+
 def _same_or_near_company(source_company, company):
     left = str(source_company or "").strip()
     right = str(company or "").strip()
@@ -76,7 +109,58 @@ def _source_home_url(source_url):
 def resolve_official_site_details(
     company, *, client=None, supabase=None, source_rows=None
 ):
-    """返回官网 URL 与来源通道；异常按 Wikidata → sources 顺序静默降级。"""
+    """返回官网 URL 与来源通道；按本地表 → sources → Wikidata → LLM 静默降级。"""
+    company_key = str(company or "").strip().lower()
+    try:
+        import logo_util
+
+        domain = (logo_util.COMPANY_DOMAIN_OVERRIDES or {}).get(company_key)
+        home_url = _http_url("https://%s/" % str(domain or "").strip().strip("/"))
+        if home_url:
+            return {
+                "home_url": home_url,
+                "entry_channel": "verified_domain_table",
+            }
+    except Exception:
+        pass
+
+    if source_rows is None:
+        try:
+            sb = supabase or db.get_supabase()
+            rows = db.fetch_all_rows(
+                lambda: sb.table("sources").select(
+                    "id,company,source_url,enabled"
+                ).eq("enabled", True)
+            )
+        except Exception:
+            rows = []
+    else:
+        rows = list(source_rows)
+
+    matches = []
+    target = re.sub(r"[\W_]+", "", str(company or "").casefold())
+    for index, row in enumerate(rows):
+        if row.get("enabled") is False:
+            continue
+        source_company = str(row.get("company") or "").strip()
+        if not _same_or_near_company(source_company, company):
+            continue
+        home_url = _source_home_url(row.get("source_url"))
+        if not home_url:
+            continue
+        source_key = re.sub(r"[\W_]+", "", source_company.casefold())
+        matches.append((
+            1 if source_key == target else 0,
+            1 if row.get("enabled") else 0,
+            -index,
+            home_url,
+        ))
+    if matches:
+        return {
+            "home_url": max(matches)[-1],
+            "entry_channel": "existing_source_host",
+        }
+
     own_client = client is None
     cli = client or httpx.Client(
         timeout=_TIMEOUT,
@@ -112,43 +196,6 @@ def resolve_official_site_details(
         if own_client:
             cli.close()
 
-    if source_rows is None:
-        try:
-            sb = supabase or db.get_supabase()
-            rows = db.fetch_all_rows(
-                lambda: sb.table("sources").select(
-                    "id,company,source_url,enabled"
-                ).eq("enabled", True)
-            )
-        except Exception:
-            return None
-    else:
-        rows = list(source_rows)
-
-    matches = []
-    target = re.sub(r"[\W_]+", "", str(company or "").casefold())
-    for index, row in enumerate(rows):
-        if row.get("enabled") is False:
-            continue
-        source_company = str(row.get("company") or "").strip()
-        if not _same_or_near_company(source_company, company):
-            continue
-        home_url = _source_home_url(row.get("source_url"))
-        if not home_url:
-            continue
-        source_key = re.sub(r"[\W_]+", "", source_company.casefold())
-        matches.append((
-            1 if source_key == target else 0,
-            1 if row.get("enabled") else 0,
-            -index,
-            home_url,
-        ))
-    if matches:
-        return {
-            "home_url": max(matches)[-1],
-            "entry_channel": "existing_source_host",
-        }
-
     llm_site = resolve_official_site_by_llm(company)
     if llm_site:
         return {"home_url": llm_site, "entry_channel": "llm_domain"}
@@ -160,7 +207,7 @@ _LLM_DOMAIN_CACHE: dict = {}
 
 
 def resolve_official_site_by_llm(company):
-    """Wikidata + 库内 source 都拿不到时，用 LLM 补官方主域名。
+    """本地域名表、库内 source、Wikidata 都拿不到时，用 LLM 补官方主域名。
 
     为何必须有这一步（2026-07-27 实测）：Wikidata 按**中文名**查 QID 命中率只有 ~58%
     （125 家缺口里只解出 73 家；中信证券/龙湖/同花顺这些手工一查就有的它都判「无官网」），
@@ -202,7 +249,7 @@ def resolve_official_site_by_llm(company):
 
 
 def resolve_official_site(company, *, client=None):
-    """公司名 → 官网 URL；Wikidata P856 优先，已有 source host 次之。"""
+    """公司名 → 官网 URL；本地域名表、已有 source host、Wikidata 依次兜底。"""
     result = resolve_official_site_details(company, client=client)
     return result["home_url"] if result else None
 
@@ -275,8 +322,15 @@ def _rank_candidates(items):
     ]
 
 
+def _has_career_content(final_url, html):
+    if _CAREERS_RE.search(str(final_url or "")):
+        return True
+    content = str(html or "").casefold()
+    return sum(keyword.casefold() in content for keyword in _CAREER_CONTENT_KEYWORDS) >= 2
+
+
 def find_careers_links(company, home_url, *, client=None):
-    """GET 官网并抽招聘链接；无首页命中时试常见路径，总 GET（含重试）不超过 8。"""
+    """GET 官网并合并首页锚点与招聘模板候选，总 GET 不超过 24。"""
     del company  # 身份核验统一交给下游 platform_fingerprint。
     home_url = _http_url(home_url)
     if not home_url:
@@ -288,13 +342,15 @@ def find_careers_links(company, home_url, *, client=None):
         headers=_HEADERS,
     )
     requests_used = 0
+    requests_lock = Lock()
 
-    def fetch(url):
+    def fetch(url, *, attempts=2):
         nonlocal requests_used
-        for _attempt in range(2):
-            if requests_used >= _MAX_GETS:
-                return None
-            requests_used += 1
+        for _attempt in range(attempts):
+            with requests_lock:
+                if requests_used >= _MAX_GETS:
+                    return None
+                requests_used += 1
             try:
                 response = cli.get(
                     url,
@@ -302,11 +358,10 @@ def find_careers_links(company, home_url, *, client=None):
                     follow_redirects=True,
                     headers=_HEADERS,
                 )
-                if int(getattr(response, "status_code", 0) or 0) >= 400:
-                    continue
-                return response
             except Exception:
                 continue
+            if int(getattr(response, "status_code", 0) or 0) == 200:
+                return response
         return None
 
     try:
@@ -314,40 +369,52 @@ def find_careers_links(company, home_url, *, client=None):
         base_url = (
             _http_url(getattr(response, "url", None)) if response is not None else None
         ) or home_url
+        candidates = []
         if response is not None:
             candidates = _extract_candidates(
                 getattr(response, "text", ""), base_url, base_url
             )
-            if candidates:
-                return _rank_candidates(candidates)
 
-        parsed = urlparse(base_url)
-        origin = "%s://%s/" % (parsed.scheme, parsed.netloc)
-        for path in _COMMON_PATHS:
-            path_url = urljoin(origin, path)
-            response = fetch(path_url)
+        template_urls = career_entry_candidates(base_url)[:max(0, _MAX_GETS - requests_used)]
+        with ThreadPoolExecutor(max_workers=_MAX_CONCURRENT_GETS) as executor:
+            responses = list(executor.map(
+                lambda url: fetch(url, attempts=1), template_urls
+            ))
+            retry_indexes = [
+                index for index, response in enumerate(responses)
+                if response is None
+            ][:max(0, _MAX_GETS - requests_used)]
+            if retry_indexes:
+                retries = list(executor.map(
+                    lambda index: fetch(template_urls[index], attempts=1), retry_indexes
+                ))
+                for index, response in zip(retry_indexes, retries):
+                    if response is not None:
+                        responses[index] = response
+        next_index = len(candidates)
+        for candidate_url, response in zip(template_urls, responses):
             if response is None:
                 continue
-            final_url = _http_url(getattr(response, "url", None)) or path_url
+            final_url = _http_url(getattr(response, "url", None)) or candidate_url
             html = getattr(response, "text", "")
-            candidates = _extract_candidates(html, final_url, base_url)
-            if (
-                _CAREERS_RE.search(final_url)
-                or _CAREERS_RE.search(unescape(str(html or "")))
-            ):
-                score, reason = _candidate_score(base_url, final_url)
-                candidates.insert(0, {
-                    "url": final_url,
-                    "text": "",
-                    "href": path,
-                    "score": score,
-                    "reason": reason,
-                    "source_page": final_url,
-                    "_index": -1,
-                })
-            if candidates:
-                return _rank_candidates(candidates)
-        return []
+            if not _has_career_content(final_url, html):
+                continue
+            score, reason = _candidate_score(base_url, final_url)
+            candidates.append({
+                "url": final_url,
+                "text": "",
+                "href": candidate_url,
+                "score": score,
+                "reason": reason,
+                "source_page": final_url,
+                "_index": next_index,
+            })
+            next_index += 1
+            for item in _extract_candidates(html, final_url, base_url):
+                item["_index"] = next_index
+                candidates.append(item)
+                next_index += 1
+        return _rank_candidates(candidates)
     finally:
         if own_client:
             cli.close()

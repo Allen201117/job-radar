@@ -130,6 +130,48 @@ class ClassifyCompanyTest(unittest.TestCase):
 
 
 class QueuePlanningTest(unittest.TestCase):
+    def test_never_attempted_company_runs_before_old_retry(self):
+        rows = [
+            {"company": "老失败", "industries": ["金融"], "state": "unknown", "attempts": 30},
+            {"company": "新公司", "industries": ["金融"], "state": "unknown", "attempts": 0},
+        ]
+        queue = gc.plan_queue(rows, {"金融"}, set(), {"金融": 0.1}, now=NOW, cap=2)
+        self.assertEqual([row["company"] for row in queue], ["新公司", "老失败"])
+
+    def test_unknown_with_future_retry_is_not_eligible(self):
+        rows = [{
+            "company": "未到期", "industries": ["金融"], "state": "unknown", "attempts": 30,
+            "next_retry_at": (NOW + timedelta(days=1)).isoformat(),
+        }]
+        queue = gc.plan_queue(rows, {"金融"}, set(), {"金融": 0.1}, now=NOW, cap=20)
+        self.assertEqual(queue, [])
+
+    def test_zero_cap_returns_no_rows(self):
+        rows = [{"company": "新公司", "industries": ["金融"], "state": "unknown"}]
+        self.assertEqual(
+            gc.plan_queue(rows, {"金融"}, set(), {"金融": 0.1}, now=NOW, cap=0),
+            [],
+        )
+
+    def test_industry_quota_defers_excess_then_backfills_when_needed(self):
+        rows = [
+            {"company": "金%02d" % index, "industries": ["金融"], "state": "unknown"}
+            for index in range(5)
+        ] + [
+            {"company": "教育%02d" % index, "industries": ["教育"], "state": "unknown"}
+            for index in range(3)
+        ]
+        queue = gc.plan_queue(
+            rows, {"金融", "教育"}, set(), {"金融": 0.1, "教育": 0.2}, now=NOW, cap=5
+        )
+        self.assertEqual(sum(row["industries"][0] == "金融" for row in queue), 3)
+        self.assertEqual(sum(row["industries"][0] == "教育" for row in queue), 2)
+
+        only_finance = gc.plan_queue(
+            rows[:5], {"金融"}, set(), {"金融": 0.1}, now=NOW, cap=5
+        )
+        self.assertEqual(len(only_finance), 5)
+
     def test_target_industry_then_user_wanted_then_low_coverage(self):
         rows = [
             {"company": "非目标", "industries": ["互联网/科技"], "state": "unknown"},

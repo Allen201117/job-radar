@@ -1,5 +1,6 @@
 """必投清单缺口台账：一次聚合 jobs，再在 Python 内按清单 pattern 归属公司。"""
 import os
+from math import ceil
 from datetime import datetime, timezone
 
 import db
@@ -162,26 +163,47 @@ def _coverage_for(row, industry_coverage):
 
 def plan_queue(rows, target_industries, user_wanted, industry_coverage, *,
                now=None, cap=20):
-    """纯函数：过滤到期项，按行业/用户/覆盖率/公司名稳定排序后裁剪配额。"""
+    """纯函数：过滤到期项，优先首跑并避免单行业长期占满队列。"""
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     targets = {str(x).strip() for x in (target_industries or set()) if str(x).strip()}
     eligible = []
     for row in rows or []:
         state = row.get("state") or "unknown"
         retry_at = _parse_datetime(row.get("next_retry_at"))
-        if state == "unknown" or (retry_at is not None and retry_at <= now):
+        if (
+            (state == "unknown" and retry_at is None)
+            or (retry_at is not None and retry_at <= now)
+        ):
             eligible.append(row)
 
     def key(row):
         industries = set(row.get("industries") or [])
         return (
+            0 if _as_int(row.get("attempts")) == 0 else 1,
             0 if industries & targets else 1,
             0 if _wanted(row.get("company"), user_wanted) else 1,
             _coverage_for(row, industry_coverage),
             str(row.get("company") or "").casefold(),
         )
 
-    return sorted(eligible, key=key)[:max(0, int(cap or 0))]
+    limit = max(0, int(cap or 0))
+    if not limit:
+        return []
+    per_industry_limit = max(3, int(ceil(limit * 0.4)))
+    selected = []
+    deferred = []
+    industry_counts = {}
+    for row in sorted(eligible, key=key):
+        industries = row.get("industries") or []
+        industry = str(industries[0]).strip() if industries else ""
+        if industry_counts.get(industry, 0) < per_industry_limit:
+            selected.append(row)
+            industry_counts[industry] = industry_counts.get(industry, 0) + 1
+        else:
+            deferred.append(row)
+        if len(selected) >= limit:
+            return selected
+    return (selected + deferred)[:limit]
 
 
 def load_companies(scope="domestic"):

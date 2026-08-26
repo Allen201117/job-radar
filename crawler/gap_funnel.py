@@ -690,6 +690,17 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
         search_used = int(finder_result.get("search_used") or 0)
         if not finder_result.get("found"):
             failed = dict(finder_result)
+            fail_reason = str(failed.get("fail_reason") or "")
+            if (
+                failed.get("state") == "unknown"
+                and not failed.get("next_retry_at")
+                and (
+                    search_remaining <= 0
+                    or "无可用搜索 provider" in fail_reason
+                    or "搜索额度已耗尽" in fail_reason
+                )
+            ):
+                failed["next_retry_at"] = _after(now, 1)
             evidence = dict(failed.get("evidence") or {})
             search_candidates = list(evidence.get("candidate_urls") or [])
             evidence.update(candidate_evidence)

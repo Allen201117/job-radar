@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import site_entry as se
 import wikidata as W
+import logo_util
 
 
 def _str(value):
@@ -60,23 +61,59 @@ class WikidataOfficialSiteTest(unittest.TestCase):
 
         self.assertEqual(facts["official_site"], "https://www.example.com/")
 
-    def test_resolve_official_site_uses_wikidata_before_sources(self):
-        entity = {
-            "id": "Q123",
-            "labels": {"zh": {"value": "测试公司"}},
-            "claims": {"P856": [_str("https://www.example.com/")]},
-        }
-        with mock.patch.object(se.wikidata, "search_qid", return_value="Q123"), \
-             mock.patch.object(
-                 se.wikidata,
-                 "_get",
-                 return_value={"entities": {"Q123": entity}},
-             ), \
-             mock.patch.object(se.db, "get_supabase") as get_supabase:
-            resolved = se.resolve_official_site("测试公司", client=object())
+    def test_resolve_official_site_uses_source_before_wikidata(self):
+        rows = [{
+            "id": "source-1",
+            "company": "测试公司",
+            "source_url": "https://jobs.example.com/careers/list",
+            "enabled": True,
+        }]
+        with mock.patch.object(
+            se.wikidata, "search_qid", side_effect=AssertionError("sources 应优先")
+        ):
+            result = se.resolve_official_site_details(
+                "测试公司", client=object(), source_rows=rows
+            )
 
-        self.assertEqual(resolved, "https://www.example.com/")
-        get_supabase.assert_not_called()
+        self.assertEqual(result, {
+            "home_url": "https://jobs.example.com/",
+            "entry_channel": "existing_source_host",
+        })
+
+    def test_verified_domain_table_prevents_wikidata_lookup(self):
+        with mock.patch.dict(
+            logo_util.COMPANY_DOMAIN_OVERRIDES,
+            {"测试公司": "verified.example.com"},
+            clear=False,
+        ), mock.patch.object(
+            se.wikidata, "search_qid", side_effect=AssertionError("本地命中不应联网")
+        ), mock.patch.object(
+            se, "resolve_official_site_by_llm", side_effect=AssertionError("本地命中不应问 LLM")
+        ):
+            result = se.resolve_official_site_details(
+                "  测试公司  ", client=object(), source_rows=[]
+            )
+
+        self.assertEqual(result, {
+            "home_url": "https://verified.example.com/",
+            "entry_channel": "verified_domain_table",
+        })
+
+    def test_domain_table_miss_falls_back_to_wikidata_then_llm(self):
+        with mock.patch.dict(logo_util.COMPANY_DOMAIN_OVERRIDES, {}, clear=True), \
+             mock.patch.object(se.wikidata, "search_qid", return_value=None), \
+             mock.patch.object(
+                 se, "resolve_official_site_by_llm", return_value="https://llm.example.com/"
+             ) as llm:
+            result = se.resolve_official_site_details(
+                "未收录公司", client=object(), source_rows=[]
+            )
+
+        self.assertEqual(result, {
+            "home_url": "https://llm.example.com/",
+            "entry_channel": "llm_domain",
+        })
+        llm.assert_called_once_with("未收录公司")
 
     def test_resolve_official_site_falls_back_to_near_name_source_host(self):
         rows = [{
@@ -117,6 +154,19 @@ class WikidataOfficialSiteTest(unittest.TestCase):
 
 
 class CareersLinkTest(unittest.TestCase):
+    def test_career_entry_candidates_prioritize_subdomains_and_keep_compound_suffix(self):
+        candidates = se.career_entry_candidates("https://www.example.com.cn/about")
+
+        self.assertEqual(candidates[0], "https://careers.example.com.cn/")
+        self.assertIn("https://joinus.example.com.cn/", candidates)
+        self.assertIn("https://www.example.com.cn/recruitment", candidates)
+        self.assertEqual(len(candidates), len(set(candidates)))
+        self.assertEqual(candidates, se.career_entry_candidates("https://www.example.com.cn/about"))
+
+    def test_career_entry_candidates_rejects_empty_or_invalid_url(self):
+        self.assertEqual(se.career_entry_candidates(""), [])
+        self.assertEqual(se.career_entry_candidates("example.com"), [])
+
     def test_candidates_are_sorted_by_site_relationship_and_ats_bonus(self):
         home = "https://www.example.com/"
         html = """
@@ -182,14 +232,15 @@ class CareersLinkTest(unittest.TestCase):
             home: _Response(home, "<a href='/products'>产品</a>"),
             careers: _Response(
                 careers,
-                "<title>测试公司招聘</title><h1>开放岗位</h1>",
+                "<title>测试公司招聘</title><h1>招聘开放职位岗位</h1>",
             ),
         })
 
         links = se.find_careers_links("测试公司", home, client=client)
 
         self.assertEqual(links[0]["url"], careers)
-        self.assertEqual([url for url, _kwargs in client.calls], [home, careers])
+        self.assertEqual(client.calls[0][0], home)
+        self.assertIn(careers, [url for url, _kwargs in client.calls])
 
     def test_common_path_redirected_to_home_does_not_hide_later_real_path(self):
         home = "https://www.example.com/"
@@ -200,19 +251,92 @@ class CareersLinkTest(unittest.TestCase):
             careers: _Response(home, "<a href='/products'>产品</a>"),
             join: _Response(
                 join,
-                "<title>测试公司人才招聘</title><h1>开放岗位</h1>",
+                "<title>测试公司人才招聘</title><h1>招聘开放职位岗位</h1>",
             ),
         })
 
         links = se.find_careers_links("测试公司", home, client=client)
 
         self.assertEqual(links[0]["url"], join)
+        self.assertEqual(client.calls[0][0], home)
+        self.assertIn(careers, [url for url, _kwargs in client.calls])
+        self.assertIn(join, [url for url, _kwargs in client.calls])
+
+    def test_template_spa_html_keywords_are_kept_without_visible_text(self):
+        home = "https://www.midea.com/"
+        careers = "https://careers.midea.com/"
+        client = _Client({
+            home: _Response(home, "<html></html>"),
+            careers: _Response(
+                careers,
+                "<script>careers jobs recruit 招聘 职位 岗位</script>",
+            ),
+        })
+
+        links = se.find_careers_links("美的", home, client=client)
+
+        self.assertIn(careers, [item["url"] for item in links])
+
+    def test_template_careers_final_url_is_kept_with_almost_empty_html(self):
+        home = "https://www.citics.com/"
+        careers = "https://careers.citics.com/"
+        client = _Client({
+            home: _Response(home, "<html></html>"),
+            careers: _Response(careers, "<script>window.__SPA__={}</script>"),
+        })
+
+        links = se.find_careers_links("中信证券", home, client=client)
+
+        self.assertIn(careers, [item["url"] for item in links])
+
+    def test_template_careers_subdomain_redirected_home_without_keywords_is_rejected(self):
+        home = "https://www.example.com/"
+        careers = "https://careers.example.com/"
+        client = _Client({
+            home: _Response(home, "<html></html>"),
+            careers: _Response(home, "<html><body>集团首页</body></html>"),
+        })
+
+        links = se.find_careers_links("测试公司", home, client=client)
+
+        self.assertNotIn(home, [item["url"] for item in links])
+
+    def test_template_page_extracts_nested_careers_link(self):
+        home = "https://www.example.com/"
+        careers = "https://www.example.com/careers"
+        nested = "https://www.example.com/column/16/"
+        client = _Client({
+            home: _Response(home, "<html></html>"),
+            careers: _Response(
+                careers,
+                "<a href='/column/16/'>社会招聘</a>",
+            ),
+        })
+
+        links = se.find_careers_links("万华化学", home, client=client)
+
+        self.assertIn(careers, [item["url"] for item in links])
+        self.assertIn(nested, [item["url"] for item in links])
+
+    def test_template_fetch_retries_transient_connection_failure(self):
+        home = "https://www.example.com/"
+        careers = "https://www.example.com/careers"
+        client = _Client({
+            home: [
+                RuntimeError("PoolTimeout"),
+                _Response(home, "<a href='/join'>加入我们</a>"),
+            ],
+        })
+
+        links = se.find_careers_links("测试公司", home, client=client)
+
+        self.assertIn("https://www.example.com/join", [item["url"] for item in links])
         self.assertEqual(
-            [url for url, _kwargs in client.calls],
-            [home, careers, join],
+            sum(url == home for url, _kwargs in client.calls),
+            2,
         )
 
-    def test_retries_failures_but_never_exceeds_eight_gets(self):
+    def test_template_probe_never_exceeds_get_budget(self):
         home = "https://www.example.com/"
         client = _Client({
             home: [RuntimeError("boom"), RuntimeError("boom")],
@@ -230,7 +354,7 @@ class CareersLinkTest(unittest.TestCase):
         links = se.find_careers_links("测试公司", home, client=client)
 
         self.assertEqual(links, [])
-        self.assertEqual(len(client.calls), 8)
+        self.assertLessEqual(len(client.calls), 24)
 
 
 if __name__ == "__main__":
@@ -251,7 +375,8 @@ class LlmDomainFallbackTest(unittest.TestCase):
         se._LLM_DOMAIN_CACHE.clear()
 
     def test_falls_back_to_llm_when_wikidata_and_sources_empty(self):
-        with mock.patch.object(se.wikidata, "search_qid", return_value=None), \
+        with mock.patch.dict(logo_util.COMPANY_DOMAIN_OVERRIDES, {}, clear=True), \
+             mock.patch.object(se.wikidata, "search_qid", return_value=None), \
              mock.patch.object(se, "resolve_official_site_by_llm", return_value="https://www.citics.com") as llm:
             out = se.resolve_official_site_details("中信证券", client=mock.Mock(), source_rows=[])
         self.assertEqual(out, {"home_url": "https://www.citics.com", "entry_channel": "llm_domain"})

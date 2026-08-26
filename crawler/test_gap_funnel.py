@@ -397,6 +397,32 @@ class RoundCapTest(unittest.TestCase):
         self.assertEqual(process.call_args.kwargs["search_remaining"], 0)
         self.assertEqual(result["metrics"]["search_used"], 0)
 
+    def test_search_unavailable_unknown_gets_one_day_retry(self):
+        result, used, inserted = gf.process_company(
+            {**_entry(), "official_entry_url": None},
+            supabase=_Sb(),
+            jobs_conn=_Conn(),
+            apply=False,
+            search_remaining=0,
+            insert_allowed=True,
+            now=NOW,
+            site_resolver=lambda *_args, **_kwargs: None,
+            finder=lambda *_args, **_kwargs: {
+                "found": False,
+                "state": "unknown",
+                "official_entry_url": None,
+                "search_used": 0,
+                "next_retry_at": None,
+                "fail_reason": "无可用搜索 provider 或本轮搜索额度已耗尽",
+                "evidence": {},
+            },
+        )
+        self.assertEqual(used, 0)
+        self.assertFalse(inserted)
+        self.assertEqual(result["state"], "unknown")
+        self.assertEqual(result["next_retry_at"], (NOW + gf.timedelta(days=1)).isoformat())
+        self.assertEqual(result["fail_reason"], "无可用搜索 provider 或本轮搜索额度已耗尽")
+
     def test_round_loads_enabled_source_hosts_only_once(self):
         queued = [
             {
