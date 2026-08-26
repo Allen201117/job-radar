@@ -66,6 +66,51 @@ test("gap attempt summary counts states, failure top5, and terminal manual revie
   assert.deepEqual(summary.recentFailures.map((row) => row.company), ["乙", "丙", "丁"]);
 });
 
+test("must-apply governance list turns terminal and retry states into a human action", () => {
+  const items = H.buildMustApplyGovernanceItems([
+    {
+      company: "万达电影",
+      industries: ["传媒文娱"],
+      state: "governance_candidate",
+      attempts: 3,
+      rounds_no_entry: 2,
+      last_attempt_at: "2026-08-26T03:00:00Z",
+    },
+    {
+      company: "视觉中国",
+      industries: ["传媒文娱"],
+      state: "anti_bot",
+      attempts: 2,
+      fail_reason: "captcha required",
+      last_attempt_at: "2026-08-26T02:00:00Z",
+    },
+    {
+      company: "入口未公开",
+      industries: ["制造业"],
+      state: "no_official_entry",
+      attempts: 2,
+      rounds_no_entry: 2,
+      last_attempt_at: "2026-08-26T01:00:00Z",
+    },
+    {
+      company: "等待重试",
+      industries: ["制造业"],
+      state: "no_active_jobs",
+      attempts: 1,
+      fail_reason: "search quota exhausted",
+      last_attempt_at: "2026-08-25T01:00:00Z",
+    },
+    { company: "已覆盖", state: "healthy", attempts: 1 },
+  ]);
+
+  assert.deepEqual(items.map((item) => item.company), ["万达电影", "视觉中国", "入口未公开", "等待重试"]);
+  assert.equal(items[0].blocker, "连续多轮未找到公开招聘入口，已暂停自动重试");
+  assert.equal(items[1].blocker, "招聘页面设置了访问限制，暂时无法核验");
+  assert.equal(items[2].suggestedAction, "考虑换成同行业其他公司");
+  assert.equal(items[3].blocker, "本轮查询资源不足");
+  assert.equal(items[3].suggestedAction, "等下轮自动重试");
+});
+
 test("normalizeCrawlSources derives success and partial rates from terminal non-skipped runs", () => {
   assert.equal(typeof H.normalizeCrawlSources, "function");
   assert.deepEqual(

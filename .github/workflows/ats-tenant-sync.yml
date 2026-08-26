@@ -1,0 +1,34 @@
+name: sync-ats-tenants
+
+on:
+  schedule:
+    # 每周一 UTC 05:30，避开整点抓取和晚间浏览器重档。
+    - cron: "30 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Sync ATS tenant snapshots
+        run: python3 crawler/sync_ats_tenants.py --apply
+      - name: Commit updated snapshots if changed
+        run: |
+          if ! git diff --quiet -- crawler/data/ats_tenants; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add crawler/data/ats_tenants
+            git commit -m "chore(crawler): 同步 ATS 租户快照 [skip ci]"
+            git push origin HEAD:main
+            echo "tenant snapshots committed."
+          else
+            echo "no tenant snapshot changes."
+          fi

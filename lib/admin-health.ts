@@ -480,8 +480,11 @@ export type GapFunnelOpsRow = {
 
 export type MustApplyGapAttemptRow = {
   company?: string | null;
+  industries?: string[] | null;
   state?: string | null;
   fail_reason?: string | null;
+  attempts?: Numeric;
+  rounds_no_entry?: Numeric;
   last_attempt_at?: string | null;
   next_retry_at?: string | null;
   evidence?: Record<string, unknown> | null;
@@ -492,6 +495,72 @@ export type MustApplyGapSummary = {
   recentFailures: Array<{ company: string; reason: string; at: string | null }>;
   manualReviewCompanies: string[];
 };
+
+export type MustApplyGovernanceItem = {
+  company: string;
+  industries: string[];
+  blocker: string;
+  attempts: number;
+  lastAttemptAt: string | null;
+  suggestedAction: string;
+};
+
+const GAP_BLOCKERS: Record<string, string> = {
+  governance_candidate: "连续多轮未找到公开招聘入口，已暂停自动重试",
+  anti_bot: "招聘页面设置了访问限制，暂时无法核验",
+  no_official_entry: "暂未找到可信的官方招聘入口",
+  wrong_platform: "找到的招聘入口与该公司不匹配",
+  no_active_jobs: "招聘入口暂未发现可验收的在招岗位",
+  no_stable_jd: "招聘页未提供稳定的职位详情链接",
+  login_wall: "招聘页面需要登录，暂时无法核验",
+  manual_review: "招聘入口需要人工确认",
+};
+
+function plainGapFailReason(value: string | null | undefined): string | null {
+  const reason = String(value || "").trim().toLowerCase();
+  if (!reason) return null;
+  if (/search.*(quota|cap)|额度|无可用.*(provider|查询)|查询资源/.test(reason)) return "本轮查询资源不足";
+  if (/anti.?bot|captcha|验证码|访问限制/.test(reason)) return "招聘页面设置了访问限制，暂时无法核验";
+  if (/login|登录/.test(reason)) return "招聘页面需要登录，暂时无法核验";
+  if (/稳定.*(jd|链接)|no.*stable|逐岗/.test(reason)) return "招聘页未提供稳定的职位详情链接";
+  if (/官方.*入口|no.*official/.test(reason)) return "暂未找到可信的官方招聘入口";
+  if (/没有岗位|无在招|no.*active/.test(reason)) return "招聘入口暂未发现可验收的在招岗位";
+  return null;
+}
+
+export function buildMustApplyGovernanceItems(
+  rows: MustApplyGapAttemptRow[] | null | undefined,
+): MustApplyGovernanceItem[] {
+  const visibleStates = new Set(Object.keys(GAP_BLOCKERS));
+  return [...(rows || [])]
+    .filter((row) => {
+      const state = String(row.state || "unknown");
+      return visibleStates.has(state) || (state === "unknown" && Boolean(String(row.fail_reason || "").trim()));
+    })
+    .map((row) => {
+      const state = String(row.state || "unknown");
+      const roundsNoEntry = toNumber(row.rounds_no_entry);
+      const shouldReplace = state === "governance_candidate"
+        || state === "anti_bot"
+        || (state === "no_official_entry" && roundsNoEntry >= 2);
+      return {
+        company: String(row.company || "未知公司"),
+        industries: (Array.isArray(row.industries) ? row.industries : [])
+          .map((industry) => String(industry || "").trim())
+          .filter(Boolean),
+        blocker: plainGapFailReason(row.fail_reason) || GAP_BLOCKERS[state] || "本轮未能完成招聘入口核验",
+        attempts: toNumber(row.attempts),
+        lastAttemptAt: row.last_attempt_at || null,
+        suggestedAction: shouldReplace ? "考虑换成同行业其他公司" : "等下轮自动重试",
+      };
+    })
+    .sort((a, b) =>
+      (a.suggestedAction === "考虑换成同行业其他公司" ? 0 : 1)
+      - (b.suggestedAction === "考虑换成同行业其他公司" ? 0 : 1)
+      || Date.parse(String(b.lastAttemptAt || 0)) - Date.parse(String(a.lastAttemptAt || 0))
+      || a.company.localeCompare(b.company),
+    );
+}
 
 export function computeMustApplySupplyLedger(
   opsRows: GapFunnelOpsRow[] | null | undefined,
@@ -605,6 +674,19 @@ export const OPERATIONAL_TERMS: Record<string, string> = {
   skipped: "未执行",
   queued: "等待运行",
   running: "运行中",
+  entry_found: "已找到招聘入口",
+  platform_known: "已识别招聘平台",
+  source_added: "已加入招聘源",
+  healthy: "已覆盖",
+  thin_only: "岗位信息不足",
+  no_official_entry: "未找到官方招聘入口",
+  wrong_platform: "入口不匹配",
+  no_active_jobs: "暂未发现在招岗位",
+  no_stable_jd: "职位链接不稳定",
+  anti_bot: "访问受限",
+  login_wall: "需要登录",
+  manual_review: "需要人工确认",
+  governance_candidate: "建议治理",
 };
 
 export function translateOperationalTerm(value: string | null | undefined): string {

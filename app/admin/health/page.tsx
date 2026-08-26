@@ -5,6 +5,7 @@ import { CoverageGrid, FunnelBars, MiniBar, StackedBar, StatRing, StatusDot } fr
 import {
   band,
   bandTone,
+  buildMustApplyGovernanceItems,
   buildDailyReports,
   computeMustApplySupplyLedger,
   computeClickValidityMetrics,
@@ -29,6 +30,7 @@ import {
   type OpsRunAggregateRow,
   type GapFunnelOpsRow,
   type MustApplyGapAttemptRow,
+  type MustApplyGovernanceItem,
   type MustApplyGapSummary,
   type TodayCrawlRow,
   type TodayDiscoveryRow,
@@ -176,7 +178,7 @@ async function loadMustApplyGapAdminData(): Promise<MustApplyGapAdminData> {
     fetchAllPages<MustApplyGapAttemptRow>((from, to) =>
       service
         .from("must_apply_gap_attempts")
-        .select("id,company,state,fail_reason,last_attempt_at,next_retry_at,evidence")
+        .select("id,company,industries,state,fail_reason,attempts,rounds_no_entry,last_attempt_at,next_retry_at,evidence")
         .eq("scope", "domestic")
         .order("id", { ascending: true })
         .range(from, to),
@@ -1582,7 +1584,7 @@ function MustApplyGapLedger({
             <h3 className="text-sm font-semibold">国内各状态</h3>
             <div className="mt-2 flex flex-wrap gap-2">
               {Object.entries(summary.stateCounts).map(([state, count]) => (
-                <span key={state} className={`rounded-full px-2.5 py-1 text-xs ${BAND_CHIP_CLASS.muted}`}>{state} {count}</span>
+                <span key={state} className={`rounded-full px-2.5 py-1 text-xs ${BAND_CHIP_CLASS.muted}`}>{translateOperationalTerm(state)} {count}</span>
               ))}
             </div>
           </div>
@@ -1605,8 +1607,12 @@ function MustApplyGapLedger({
   );
 }
 
-function SupplyTab({ rowsByScope, fetchByIndustry, activeIndustries, userDistribution, worst, gapSummary, ledger }: { rowsByScope: MustApplyRowsByScope | null; fetchByIndustry: Record<MustApplyScope, Record<string, MustApplyFetchCoverage>> | null; activeIndustries: Record<MustApplyScope, string[]>; userDistribution: UserIndustryDistribution; worst: { scope: MustApplyScope; industry: string; healthy: number | null; total: number; zeroHealthyCompanies: string[] }; gapSummary: MustApplyGapSummary | null; ledger: { realExpansion: number | null; definitionChange: number } | null }) {
-  return <div className="grid gap-5"><MustApplyGapLedger summary={gapSummary} ledger={ledger} /><section className="surface flex flex-col items-center p-6 text-center"><StatRing pct={rowsByScope ? (worst.healthy || 0) / worst.total : null} tone={bandTone(mustApplyIndustryBand(rowsByScope?.[worst.scope]?.[worst.industry] || null))} size={180}><span className="text-3xl font-semibold">{rowsByScope ? String(worst.healthy || 0) + "/30" : "—"}</span></StatRing><p className="mt-3 text-sm text-[#6b655a] dark:text-[#b6ad9d]">最需处理：{MUST_APPLY_SCOPE_LABEL[worst.scope]}·{worst.industry}</p></section><MustApplySection rowsByIndustry={rowsByScope} fetchCoverageByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} /><section className="surface p-5"><h2 className="font-semibold">缺口提示</h2><div className="mt-3 flex flex-wrap gap-2">{worst.zeroHealthyCompanies.slice(0, 10).map((company) => <span key={company} className="rounded-full bg-[#fbecd7] px-3 py-1 text-xs text-[#8f6225] dark:bg-[#825d28]/30 dark:text-[#e0b15a]">{company}</span>)}{worst.zeroHealthyCompanies.length > 10 && <span className="text-xs">等 {worst.zeroHealthyCompanies.length - 10} 家</span>}{rowsByScope && worst.zeroHealthyCompanies.length === 0 && <span>真实 0 家缺口</span>}{!rowsByScope && <span>—</span>}</div></section></div>;
+function MustApplyGovernanceList({ items }: { items: MustApplyGovernanceItem[] | null }) {
+  return <section className="surface p-5 sm:p-6"><div><h2 className="text-xl font-semibold">必投清单待治理</h2><p className="mt-1 text-sm text-[#6b655a] dark:text-[#b6ad9d]">只提示需要人工判断的公司，不自动改动必投清单口径。</p></div>{!items ? <div className="mt-4"><ErrorPanel label="必投清单待治理" /></div> : !items.length ? <p className="mt-4 text-sm text-[#6b655a] dark:text-[#b6ad9d]">当前没有待治理公司。</p> : <div className="mt-4 overflow-auto rounded-2xl border border-black/[0.07] dark:border-white/[0.1]"><table className="w-full min-w-[780px] text-left text-sm"><thead className="bg-[#f4efe6] text-xs text-[#8a8275] dark:bg-[#1c1813] dark:text-[#9a9184]"><tr><th className="px-4 py-3 font-medium">公司</th><th className="px-4 py-3 font-medium">所属行业</th><th className="px-4 py-3 font-medium">卡在哪</th><th className="px-4 py-3 text-right font-medium">尝试次数</th><th className="px-4 py-3 font-medium">最后一次</th><th className="px-4 py-3 font-medium">建议动作</th></tr></thead><tbody>{items.map((item) => <tr key={item.company} className="border-t border-black/[0.05] text-[#3f3a33] dark:border-white/[0.08] dark:text-[#d9d0c2]"><td className="px-4 py-3 font-medium">{item.company}</td><td className="px-4 py-3 text-xs">{item.industries.join("、") || "未标注"}</td><td className="max-w-xs px-4 py-3 text-xs leading-5">{item.blocker}</td><td className="px-4 py-3 text-right tabular-nums">{item.attempts}</td><td className="px-4 py-3 text-xs">{formatRunTime(item.lastAttemptAt)}</td><td className="px-4 py-3 text-xs font-medium">{item.suggestedAction}</td></tr>)}</tbody></table></div>}</section>;
+}
+
+function SupplyTab({ rowsByScope, fetchByIndustry, activeIndustries, userDistribution, worst, gapSummary, governanceItems, ledger }: { rowsByScope: MustApplyRowsByScope | null; fetchByIndustry: Record<MustApplyScope, Record<string, MustApplyFetchCoverage>> | null; activeIndustries: Record<MustApplyScope, string[]>; userDistribution: UserIndustryDistribution; worst: { scope: MustApplyScope; industry: string; healthy: number | null; total: number; zeroHealthyCompanies: string[] }; gapSummary: MustApplyGapSummary | null; governanceItems: MustApplyGovernanceItem[] | null; ledger: { realExpansion: number | null; definitionChange: number } | null }) {
+  return <div className="grid gap-5"><MustApplyGapLedger summary={gapSummary} ledger={ledger} /><MustApplyGovernanceList items={governanceItems} /><section className="surface flex flex-col items-center p-6 text-center"><StatRing pct={rowsByScope ? (worst.healthy || 0) / worst.total : null} tone={bandTone(mustApplyIndustryBand(rowsByScope?.[worst.scope]?.[worst.industry] || null))} size={180}><span className="text-3xl font-semibold">{rowsByScope ? String(worst.healthy || 0) + "/30" : "—"}</span></StatRing><p className="mt-3 text-sm text-[#6b655a] dark:text-[#b6ad9d]">最需处理：{MUST_APPLY_SCOPE_LABEL[worst.scope]}·{worst.industry}</p></section><MustApplySection rowsByIndustry={rowsByScope} fetchCoverageByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} /><section className="surface p-5"><h2 className="font-semibold">缺口提示</h2><div className="mt-3 flex flex-wrap gap-2">{worst.zeroHealthyCompanies.slice(0, 10).map((company) => <span key={company} className="rounded-full bg-[#fbecd7] px-3 py-1 text-xs text-[#8f6225] dark:bg-[#825d28]/30 dark:text-[#e0b15a]">{company}</span>)}{worst.zeroHealthyCompanies.length > 10 && <span className="text-xs">等 {worst.zeroHealthyCompanies.length - 10} 家</span>}{rowsByScope && worst.zeroHealthyCompanies.length === 0 && <span>真实 0 家缺口</span>}{!rowsByScope && <span>—</span>}</div></section></div>;
 }
 
 function UserTab({ operations, users, resume }: { operations: SupabaseHealthSnapshot | null; users: NonNullable<SupabaseHealthSnapshot["today"]>["users"] | null; resume: NonNullable<SupabaseHealthSnapshot["today"]>["resume"] | null }) {
@@ -1631,15 +1637,14 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   const rowsByScope = mustApplyResult.status === "fulfilled" ? mustApplyResult.value : null;
   const gapData = gapResult.status === "fulfilled" ? gapResult.value : null;
   const currentDomesticCompanies = new Set(mustApplyUnion("domestic").map((row) => row.name));
-  const gapSummary = gapData
-    ? summarizeMustApplyGapAttempts(
-      gapData.attempts.filter(
-        (row) =>
-          currentDomesticCompanies.has(String(row.company || ""))
-          && row.evidence?.list_version === MUST_APPLY_VERSION,
-      ),
+  const currentGapAttempts = gapData
+    ? gapData.attempts.filter(
+      (row) => currentDomesticCompanies.has(String(row.company || ""))
+        && row.evidence?.list_version === MUST_APPLY_VERSION,
     )
     : null;
+  const gapSummary = currentGapAttempts ? summarizeMustApplyGapAttempts(currentGapAttempts) : null;
+  const governanceItems = currentGapAttempts ? buildMustApplyGovernanceItems(currentGapAttempts) : null;
   const domesticCoverageRows = rowsByScope
     ? Array.from(new Map(
       Object.values(rowsByScope.domestic)
@@ -1679,6 +1684,6 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   const heroStatus: SectionStatus = heroDataMissing || health.level === "critical" ? "critical" : health.actions.length ? "warn" : "ok";
   const refreshedAt = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
   const tabs = [["overview", "总览"], ["jobs", "岗位库"], ["supply", "必投供给"], ["users", "用户行为"], ["system", "系统运行"]] as const;
-  const content = tab === "overview" ? <OverviewTab health={health} heroStatus={heroStatus} heroDataMissing={heroDataMissing} jobs={jobs} users={users} supplyStatus={supplyStatus} systemStatus={systemStatus} worst={worst} rowsByScope={rowsByScope} reports={reports} ran={ran} failed={failed} refreshedAt={refreshedAt} /> : tab === "jobs" ? <JobsTab jobs={jobs} clickValidity={clickValidity} clickStatus={clickStatus} coverage={coverage} operations={operations} todayRemoved={todayRemoved} validBand={validBand} checkedBand={checkedBand} /> : tab === "supply" ? <SupplyTab rowsByScope={rowsByScope} fetchByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} worst={worst} gapSummary={gapSummary} ledger={supplyLedger} /> : tab === "users" ? <UserTab operations={operations} users={users} resume={resume} /> : <SystemTab operations={operations} reports={reports} refreshedAt={refreshedAt} />;
+  const content = tab === "overview" ? <OverviewTab health={health} heroStatus={heroStatus} heroDataMissing={heroDataMissing} jobs={jobs} users={users} supplyStatus={supplyStatus} systemStatus={systemStatus} worst={worst} rowsByScope={rowsByScope} reports={reports} ran={ran} failed={failed} refreshedAt={refreshedAt} /> : tab === "jobs" ? <JobsTab jobs={jobs} clickValidity={clickValidity} clickStatus={clickStatus} coverage={coverage} operations={operations} todayRemoved={todayRemoved} validBand={validBand} checkedBand={checkedBand} /> : tab === "supply" ? <SupplyTab rowsByScope={rowsByScope} fetchByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} worst={worst} gapSummary={gapSummary} governanceItems={governanceItems} ledger={supplyLedger} /> : tab === "users" ? <UserTab operations={operations} users={users} resume={resume} /> : <SystemTab operations={operations} reports={reports} refreshedAt={refreshedAt} />;
   return <div className="min-h-screen bg-editorial"><Navbar /><ProductPage maxWidth="max-w-6xl"><ProductHero eyebrow="运营健康" title="管理员看板" description="按模块查看今日真实运行与供给情况。" icon={ShieldCheck}><nav className="mt-4 flex gap-2 overflow-x-auto pb-1" aria-label="管理员看板模块">{tabs.map(([key, label]) => <a key={key} href={key === "overview" ? "/admin/health" : "/admin/health?tab=" + key} className={"shrink-0 rounded-full border px-4 py-2 text-sm font-semibold " + (tab === key ? "border-[#1a1714] bg-[#1a1714] text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]" : "border-black/[0.12] text-[#6b655a] dark:border-white/[0.15] dark:text-[#b6ad9d]")}>{label}</a>)}</nav></ProductHero><main className="mt-6">{content}</main></ProductPage></div>;
 }
