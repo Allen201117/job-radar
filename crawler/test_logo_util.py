@@ -345,8 +345,34 @@ class MustApplyBrandOverrideTests(unittest.TestCase):
 
     def test_live_verification_failures_stay_unmapped(self):
         # live 核验没过的（域名被抢注 / 已改名 / 根域是无关站）一律不收，宁缺毋滥
-        for name in ("立讯精密", "光线传媒", "卓越教育", "中储智运", "万达电影"):
+        for name in ("立讯精密", "卓越教育", "中储智运"):
             self.assertIsNone(domain_for_company(name, "", COMPANY_DOMAIN_OVERRIDES), name)
+
+    def test_renamed_or_wrong_domain_companies_now_verified(self):
+        """光线传媒 / 万达电影曾在「核验没过」名单里，2026-08-26 用**正确域名**核验通过。
+
+        原则没变（核验不过一律不收），变的是事实——之前核验用的是错域名：
+        · 光线传媒探的是 enlightmedia.com，那是 114 字节的**停放空壳**（DNS 指向 AWS 停放 IP）；
+          真官网是 E视网 www.ewang.com，live title「E视网 - 光线传媒官网」自证。
+        · 万达电影 2026-04 已更名儒意电影，wandafilm.com 301 到 www.ruyifilm.com，
+          live title「儒意电影 - RUYI CINEMA」自证；招聘在北森 ruyifilm.zhiye.com（实测 27 岗）。
+        这两家此前因此被判「没有公开招聘」并进了治理候选名单，实际是我们域名找错了。
+        """
+        self.assertEqual(
+            domain_for_company("光线传媒", "", COMPANY_DOMAIN_OVERRIDES), "ewang.com"
+        )
+        for name in ("万达电影", "儒意影业"):
+            self.assertEqual(
+                domain_for_company(name, "", COMPANY_DOMAIN_OVERRIDES),
+                "ruyifilm.com",
+                name,
+            )
+
+    def test_nonexistent_domain_removed(self):
+        """利欧集团原填 leo-group.com 是 NXDOMAIN；leo.com.cn 也连不上、无法自证 → 不填。"""
+        self.assertIsNone(
+            domain_for_company("利欧集团", "", COMPANY_DOMAIN_OVERRIDES)
+        )
 
     def test_no_platform_domain_leaked_into_overrides(self):
         # 唯一豁免：Workday 自己就是雇主，它的官网恰好也是我们排除的 ATS 平台域名。

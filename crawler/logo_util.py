@@ -269,7 +269,19 @@ _DOMAIN_OVERRIDES_RAW = {
     "掌阅科技": "zhangyue.com", "网易云音乐": "music.163.com", "猫眼娱乐": "maoyan.com",
     "博纳影业": "bonafilm.cn", "华策影视": "huacemedia.com", "开心麻花": "kaixinmahua.com.cn",
     "东方明珠": "opg.cn", "分众传媒": "focusmedia.cn", "蓝色光标": "bluefocus.com",
-    "利欧集团": "leo-group.com", "华谊兄弟": "huayibrothers.com",
+    # ⚠️ 利欧集团原填 leo-group.com 是**不存在的域名**（NXDOMAIN，2026-08-26 live 核实），
+    # 已移除。leo.com.cn 也连不上、无法 live 自证 title，按「核验不过一律不收」的规矩不填；
+    # 它的招聘确认在飞书租户 leoglobal（portal /leoxz/，实测 71 岗、title「利欧集团校招」）。
+    "华谊兄弟": "huayibrothers.com",
+    # 下面三家曾被判「没有公开招聘」而进治理候选，实为**域名找错**（2026-08-26 live 核实）：
+    # · 光线传媒官网不是 enlightmedia.com（那是 114 字节的停放空壳），是 E视网 ewang.com，
+    #   自建 JSON API + SSR 详情页，实测 29 岗，纯 httpx 可抓
+    # · 万达电影 2026-04 已更名儒意电影，wandafilm.com 301 到 ruyifilm.com，
+    #   招聘在北森 ruyifilm.zhiye.com，实测 27 岗（清单里「儒意影业」与它是同一入口）
+    # · 万达集团（与万达电影已切割）走 wt/wecruit：wanda.hotjob.cn，实测 625 岗
+    "光线传媒": "ewang.com",
+    "万达电影": "ruyifilm.com",
+    "儒意影业": "ruyifilm.com",
     "快看漫画": "kuaikanmanhua.com", "视觉中国": "vcg.com", "中文在线": "chineseall.com",
 
     # —— 第二批补漏（2026-07-31）：这些必投公司之前压根没配域名 → 只能首字母兜底。
