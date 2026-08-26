@@ -648,35 +648,6 @@ test("buildDailyReports keeps ledger-only metrics unavailable before ops data ac
   assert.deepEqual(deadJobs.metrics.map((metric) => metric.value), [null, null, null]);
 });
 
-test("evaluateTodayHealth uses only available evidence and never invents a historical baseline", () => {
-  assert.equal(typeof H.evaluateTodayHealth, "function");
-  assert.deepEqual(
-    H.evaluateTodayHealth({ validActive: 1000, crawlRuns: 4, crawlFailedRuns: 0 }),
-    {
-      level: "healthy",
-      label: "健康",
-      message: "今天抓取已运行，当前有可投岗位；历史波动基线仍在积累。",
-    },
-  );
-  assert.equal(
-    H.evaluateTodayHealth({ validActive: 1000, crawlRuns: 0, crawlFailedRuns: 0 }).level,
-    "warning",
-  );
-  assert.equal(
-    H.evaluateTodayHealth({ validActive: 1000, crawlRuns: 3, crawlFailedRuns: 3 }).level,
-    "critical",
-  );
-  assert.equal(
-    H.evaluateTodayHealth({
-      validActive: 700,
-      crawlRuns: 3,
-      crawlFailedRuns: 0,
-      previousValidActive: 1000,
-    }).level,
-    "warning",
-  );
-});
-
 test("operational terms are translated to plain Chinese", () => {
   assert.equal(typeof H.translateOperationalTerm, "function");
   assert.equal(H.translateOperationalTerm("active"), "在招");
@@ -802,10 +773,34 @@ test("admin health page authenticates before parallel cross-database reads and r
   assert.match(source, /我们抓到/);
   assert.match(source, /盲区/);
   assert.match(source, /buildDailyReports/);
-  assert.match(source, /零结果搜索率/);
-  assert.match(source, /洞察抽屉打开率/);
+  assert.match(source, /待处理申诉/);
+  assert.match(source, /href="\/admin\/insights"/);
+  assert.match(source, /北极星 · 必投健康覆盖/);
+  assert.match(source, /showHealthSummary=\{false\}/);
   assert.match(source, /积累中/);
+  assert.doesNotMatch(source, /function BusinessSection/);
+  const healthLib = fs.readFileSync(path.join(__dirname, "..", "lib", "admin-health.ts"), "utf8");
+  assert.doesNotMatch(healthLib, /function evaluateTodayHealth/);
   assert.doesNotMatch(source, /expired 占全库|removed 占全库|active 从未探活|>Source<|>Adapter<|>Partial</);
+});
+
+test("north-star snapshot migration keeps daily writes idempotent and admin-readable", () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, "..", "supabase", "migrations", "194_north_star_snapshots.sql"),
+    "utf8",
+  );
+  const writer = fs.readFileSync(
+    path.join(__dirname, "..", "crawler", "north_star_snapshot.py"),
+    "utf8",
+  );
+  assert.match(migration, /snapshot_date date primary key/i);
+  assert.match(migration, /must_apply_healthy_companies integer not null/i);
+  assert.match(migration, /worst_industry text not null/i);
+  assert.match(migration, /job_validity_rate numeric/i);
+  assert.match(migration, /enable row level security/i);
+  assert.match(migration, /Admins can read north_star_snapshots/i);
+  assert.match(writer, /upsert\(row, on_conflict="snapshot_date"\)/);
+  assert.match(writer, /主任务不受影响/);
 });
 
 test("admin health loading boundary reuses structural warm-paper skeletons", () => {

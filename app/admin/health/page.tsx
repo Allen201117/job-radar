@@ -61,13 +61,10 @@ import {
   FileText,
   Heartbeat,
   MagnifyingGlass,
-  PaperPlaneTilt,
   ShieldCheck,
-  UserCircle,
-  Users,
 } from "@phosphor-icons/react/ssr";
 import { redirect } from "next/navigation";
-import type { ComponentType, ReactNode } from "react";
+import type { ComponentType } from "react";
 
 export const dynamic = "force-dynamic";
 
@@ -109,6 +106,16 @@ async function loadSupabaseHealth(): Promise<SupabaseHealthSnapshot> {
   const { data, error } = await service.rpc("admin_health_snapshot", { p_window: "7 days" });
   if (error) throw new Error(error.message);
   return (data || {}) as SupabaseHealthSnapshot;
+}
+
+async function loadNorthStarSnapshotStart(): Promise<string | null> {
+  const { data, error } = await createServiceClient()
+    .from("north_star_snapshots")
+    .select("snapshot_date")
+    .order("snapshot_date", { ascending: true })
+    .limit(1);
+  if (error) throw new Error(error.message);
+  return data?.[0]?.snapshot_date || null;
 }
 
 // 北极星：必投清单健康覆盖。jobs 在香港库、sources 在 Supabase，无法单条 SQL join → Node 层按公司名 needle 合并。
@@ -726,7 +733,7 @@ function MustApplyIndustryBlock({
   const meta = STATUS_META[status];
   if (!rows) {
     return (
-      <section className="surface p-5 sm:p-6">
+      <section className="surface-soft p-5 sm:p-6">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{MUST_APPLY_SCOPE_LABEL[scope]}必投清单健康覆盖 · {industry}（{userCount} 位用户）</h2>
@@ -754,7 +761,7 @@ function MustApplyIndustryBlock({
     };
   });
   return (
-    <section className="surface p-5 sm:p-6">
+    <section className="surface-soft p-5 sm:p-6">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{MUST_APPLY_SCOPE_LABEL[scope]}必投清单健康覆盖 · {industry}（{userCount} 位用户）</h2>
@@ -840,7 +847,7 @@ function MustApplySection({
 }) {
   return (
     <div className="grid gap-4">
-      <section className="surface p-5 sm:p-6">
+      <section className="surface-soft p-5 sm:p-6">
         <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">用户行业分布</h2>
         <div className="mt-3 flex flex-wrap gap-2">
           {MUST_APPLY_SCOPES.map((scope) => (
@@ -857,7 +864,7 @@ function MustApplySection({
         const reserveIndustries = MUST_APPLY_INDUSTRIES.filter((industry) => !active.includes(industry));
         const hasActive = active.some((industry) => (userDistribution.counts[scope][industry] || 0) > 0);
         return (
-          <section key={scope} className="surface p-5 sm:p-6">
+          <section key={scope} className="surface-soft p-5 sm:p-6">
             <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{MUST_APPLY_SCOPE_LABEL[scope]}必投</h2>
             {!hasActive && scope === "overseas" && <p className="mt-1 text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">当前没有海外求职用户，以下诚实展示海外储备覆盖，不计入北极星。</p>}
             <div className="mt-4 grid gap-4">
@@ -916,7 +923,7 @@ function ClickValiditySection({
   const clickTone = bandTone(clickBand);
   const sample = clickValidity ? clickValidity.alive + clickValidity.dead : 0;
   return (
-    <section className="surface p-5 sm:p-6">
+    <section className="surface-soft p-5 sm:p-6">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">展示岗位自动探活（非用户点击统计）</h2>
@@ -1083,6 +1090,7 @@ function JobsLibrarySection({
   validActiveShareBand,
   thinShareBand,
   neverCheckedShareBand,
+  showHealthSummary = true,
 }: {
   jobs: JobsHealthSnapshot | null;
   operations: SupabaseHealthSnapshot | null;
@@ -1091,12 +1099,13 @@ function JobsLibrarySection({
   validActiveShareBand: HealthBand;
   thinShareBand: HealthBand;
   neverCheckedShareBand: HealthBand;
+  showHealthSummary?: boolean;
 }) {
   return (
     <>
-      {!jobs ? (
+      {!jobs && showHealthSummary ? (
         <ErrorPanel label="岗位库体检" />
-      ) : (
+      ) : jobs ? (
         <>
           <div className="grid gap-5 lg:grid-cols-[12rem_1fr] lg:items-center">
             <div className="flex justify-center lg:justify-start">
@@ -1179,7 +1188,7 @@ function JobsLibrarySection({
             今日下架（今天新判定失效） · 已确认撤岗（探活确认永久移除） · 暂时下线（疑似下线，可能恢复） · 空壳岗（有链接但没岗位正文，质量差） · 待核查（还没探活验证）
           </p>
         </>
-      )}
+      ) : null}
 
       <details className="mt-5 rounded-2xl border border-black/[0.07] bg-white/35 dark:border-white/[0.1] dark:bg-white/[0.03]">
         <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-[#1a1714] dark:text-[#f3ecdf] [&::-webkit-details-marker]:hidden">
@@ -1320,136 +1329,6 @@ function DailyReportsSection({
   );
 }
 
-function BusinessPanel({ title, icon: Icon, children }: { title: string; icon: ComponentType<any>; children: ReactNode }) {
-  return (
-    <div className="surface-soft p-4">
-      <div className="flex items-center gap-2">
-        <span className="grid size-7 place-items-center rounded-lg bg-[#ece7dd] text-[#6b655a] dark:bg-white/[0.08] dark:text-[#b6ad9d]">
-          <Icon size={15} weight="fill" aria-hidden="true" />
-        </span>
-        <h3 className="text-sm font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{title}</h3>
-      </div>
-      <div className="mt-3 grid gap-3">{children}</div>
-    </div>
-  );
-}
-
-function HeroNumberTile({
-  label,
-  value,
-  detail,
-  icon: Icon,
-  tone = "muted",
-  warning = false,
-}: {
-  label: string;
-  value: number | string | null;
-  detail: string;
-  icon: ComponentType<any>;
-  tone?: BandTone;
-  warning?: boolean;
-}) {
-  return (
-    <div
-      className={`rounded-2xl border px-3.5 py-3 ${
-        warning
-          ? "border-[#edc995] bg-[#fbecd7] dark:border-[#825d28]/60 dark:bg-[#392a17]"
-          : "border-black/[0.06] bg-white/45 dark:border-white/[0.08] dark:bg-white/[0.04]"
-      }`}
-    >
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-[#6b655a] dark:text-[#b6ad9d]">
-          <span className={`grid size-7 place-items-center rounded-lg ${BAND_CHIP_CLASS[tone]}`}>
-            <Icon size={15} weight="fill" aria-hidden="true" />
-          </span>
-          <p className="text-xs font-medium">{label}</p>
-        </div>
-        <StatusDot tone={tone} />
-      </div>
-      <p className="mt-3 text-2xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">
-        {typeof value === "number" ? <AnimatedStat value={value} /> : value ?? "暂无数据"}
-      </p>
-      <p className="mt-1 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">{detail}</p>
-    </div>
-  );
-}
-
-function BusinessSection({
-  operations,
-  users,
-  resume,
-}: {
-  operations: SupabaseHealthSnapshot | null;
-  users: NonNullable<SupabaseHealthSnapshot["today"]>["users"] | null;
-  resume: NonNullable<SupabaseHealthSnapshot["today"]>["resume"] | null;
-}) {
-  const disputesOpen = Number(operations?.insight?.disputes_open || 0);
-  return (
-    <>
-      {!operations ? (
-        <ErrorPanel label="用户与业务统计" />
-      ) : (
-        <div className="grid gap-4 lg:grid-cols-3">
-          <BusinessPanel title="增长" icon={Users}>
-            {users ? (
-              <>
-                <HeroNumberTile label="总用户数" value={Number(users.total_users || 0)} detail="当前累计注册用户" icon={Users} tone="success" />
-                <HeroNumberTile label="今日新增用户" value={Number(users.today_users || 0)} detail="真实日增量，不展示伪趋势" icon={UserCircle} tone="muted" />
-              </>
-            ) : (
-              <ErrorPanel label="用户统计" />
-            )}
-            <AccumulatingMetric title="趋势基线" description="用户、覆盖、库存都是快照指标，历史基线还在积累中。" />
-          </BusinessPanel>
-
-          <BusinessPanel title="参与" icon={ChartBar}>
-            {users ? (
-              <>
-                <HeroNumberTile label="设了求职偏好" value={Number(users.users_with_preferences || 0)} detail="已保存目标岗位、城市或关键词的用户" icon={UserCircle} tone="success" />
-                <HeroNumberTile label="收藏岗位" value={Number(users.saved_total || 0)} detail={`今日新增 ${formatCount(users.saved_today)} 次`} icon={Heartbeat} tone="muted" />
-                <HeroNumberTile label="投递记录" value={Number(users.applied_total || 0)} detail={`今日新增 ${formatCount(users.applied_today)} 次`} icon={PaperPlaneTilt} tone="muted" />
-              </>
-            ) : (
-              <ErrorPanel label="用户操作统计" />
-            )}
-          </BusinessPanel>
-
-          <BusinessPanel title="待办" icon={ShieldCheck}>
-            {resume ? (
-              <HeroNumberTile
-                label="今日简历解析"
-                value={Number(resume.started || 0)}
-                detail={`成功率 ${displayEmptyRate(formatPercent(resume.succeeded, resume.started))}；智能 / 规则 ${formatCount(resume.llm)} / ${formatCount(resume.rule)}`}
-                icon={FileText}
-                tone="muted"
-              />
-            ) : (
-              <ErrorPanel label="简历解析统计" />
-            )}
-            <HeroNumberTile
-              label="可用职业洞察"
-              value={Number(operations.insight?.active_total || 0)}
-              detail={`今日新增 ${formatCount(operations.insight?.today_created)} 条`}
-              icon={Compass}
-              tone="success"
-            />
-            <HeroNumberTile
-              label="待处理申诉"
-              value={disputesOpen}
-              detail={`历史累计 ${formatCount(operations.insight?.disputes_total)} 条`}
-              icon={ShieldCheck}
-              tone={disputesOpen > 0 ? "warning" : "muted"}
-              warning={disputesOpen > 0}
-            />
-            <AccumulatingMetric title="洞察抽屉打开率" description="需要先持续记录岗位卡曝光和洞察打开事件，数据稳定后再展示。" />
-            <AccumulatingMetric title="零结果搜索率" description="需要先持续记录搜索提交、筛选条件和返回结果数，暂不拿别的日志代替。" />
-          </BusinessPanel>
-        </div>
-      )}
-    </>
-  );
-}
-
 function SprintCards({ users }: { users: NonNullable<SupabaseHealthSnapshot["today"]>["users"] | null }) {
   const pending = [
     ["收到有效机会", "行为埋点上线后可见"],
@@ -1463,7 +1342,7 @@ function SprintCards({ users }: { users: NonNullable<SupabaseHealthSnapshot["tod
         <span className={"rounded-full px-2 py-0.5 text-[11px] font-semibold " + STATUS_META.idle.badge}>埋点准备中</span>
       </div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <a href="/admin/health?tab=users" className="surface-soft p-4">
+        <a href="/admin/health?tab=users" className="surface-soft surface-hover p-4">
           <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">标已投</p>
           <p className="mt-3 text-2xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">{users ? formatCount(users.applied_total) : "—"}</p>
           <p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">全部用户累计</p>
@@ -1510,6 +1389,9 @@ function OverviewTab({
   ran,
   failed,
   refreshedAt,
+  disputesOpen,
+  northStarSnapshotStart,
+  northStarSnapshotUnavailable,
 }: {
   health: ReturnType<typeof evaluateCombinedHealth>;
   heroStatus: SectionStatus;
@@ -1524,6 +1406,9 @@ function OverviewTab({
   ran: number;
   failed: number;
   refreshedAt: string;
+  disputesOpen: number | undefined;
+  northStarSnapshotStart: string | null;
+  northStarSnapshotUnavailable: boolean;
 }) {
   const cards: Array<[string, string, SectionStatus, string, string]> = [
     ["岗位库", "jobs", jobs ? sectionStatusFromBand(band(share(jobs.validActive, jobs.activeTotal), HEALTH_THRESHOLDS.validActiveShare, "higher")) : "idle", jobs ? formatCount(jobs.activeTotal) : "—", jobs ? "有效率 " + formatPercent(jobs.validActive, jobs.activeTotal) + " · 空壳 " + formatCount(jobs.thinActive) : "数据暂不可用"],
@@ -1534,7 +1419,7 @@ function OverviewTab({
   return (
     <div className="grid gap-5">
       <div className="grid gap-4 lg:grid-cols-2">
-        <section className="surface-soft p-4">
+        <section className="surface p-4">
           <div className="flex items-center gap-2">
             <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">今日结论</p>
             <span className={"rounded-full px-2 py-0.5 text-[11px] font-semibold " + STATUS_META[heroStatus].badge}>{STATUS_META[heroStatus].label}</span>
@@ -1542,12 +1427,27 @@ function OverviewTab({
           <p className="mt-3 text-2xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{heroDataMissing ? "今日结论暂不可用" : health.actions.length ? "今天有 " + health.actions.length + " 项需要处理" : "今日无系统侧红线"}</p>
           <p className="mt-2 text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">{heroDataMissing ? "健康评估数据读取失败，请查看系统运行。" : health.actions.length ? "先做：" + health.actions[0] : "按计划推进两周冲刺。"}</p>
         </section>
-        <section className="surface-soft p-4">
+        <section className="surface p-4">
           <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">今日行动</p>
-          {health.actions.length ? <div className="mt-3 space-y-2">{health.actions.slice(0, 3).map((action, index) => <a key={action} href={actionAnchor(action)} className="flex items-start gap-2 rounded-xl px-2 py-1.5 text-sm leading-5 text-[#3f3a33] hover:bg-white/55 dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"><span>{health.level === "critical" && index === 0 ? "🔴" : "⚠️"}</span><span>{action}</span></a>)}{health.actions.length > 3 && <p className="px-2 text-xs text-[#8a8275] dark:text-[#9a9184]">另有 {health.actions.length - 3} 项，见下方各板块</p>}</div> : <p className="mt-3 flex items-center gap-2 text-sm text-[#6b655a] dark:text-[#b6ad9d]"><StatusDot tone="success" />今日无系统侧紧急行动，继续推进两周冲刺。</p>}
+          {health.actions.length || (disputesOpen || 0) > 0 ? <div className="mt-3 space-y-2">{health.actions.slice(0, 3).map((action, index) => <a key={action} href={actionAnchor(action)} className="flex items-start gap-2 rounded-xl px-2 py-1.5 text-sm leading-5 text-[#3f3a33] hover:bg-white/55 dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"><span>{health.level === "critical" && index === 0 ? "🔴" : "⚠️"}</span><span>{action}</span></a>)}{health.actions.length > 3 && <p className="px-2 text-xs text-[#8a8275] dark:text-[#9a9184]">另有 {health.actions.length - 3} 项，见下方各板块</p>}{(disputesOpen || 0) > 0 && <a href="/admin/insights" className="flex items-start gap-2 rounded-xl px-2 py-1.5 text-sm font-medium leading-5 text-[#8f6225] hover:bg-[#fbecd7] dark:text-[#e0b15a] dark:hover:bg-[#825d28]/20"><StatusDot tone="warning" /><span>待处理申诉：{formatCount(disputesOpen)} 条</span></a>}</div> : <p className="mt-3 flex items-center gap-2 text-sm text-[#6b655a] dark:text-[#b6ad9d]"><StatusDot tone="success" />今日无系统侧紧急行动，继续推进两周冲刺。</p>}
         </section>
       </div>
-      <section className="grid gap-3 md:grid-cols-4">{cards.map(([name, key, status, number, detail]) => <a key={key} href={"/admin/health?tab=" + key} className="surface-soft p-4"><div className="flex justify-between"><p className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{name}</p><span className={"rounded-full px-2 py-0.5 text-[11px] font-semibold " + STATUS_META[status].badge}>{STATUS_META[status].label}</span></div><p className="mt-4 text-3xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">{number}</p><p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">{detail}</p></a>)}</section>
+      <section className="grid gap-3 md:grid-cols-4">{cards.map(([name, key, status, number, detail]) => <a key={key} href={"/admin/health?tab=" + key} className="surface surface-hover p-4"><div className="flex justify-between"><p className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{name}</p><span className={"rounded-full px-2 py-0.5 text-[11px] font-semibold " + STATUS_META[status].badge}>{STATUS_META[status].label}</span></div><p className="mt-4 text-3xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">{number}</p><p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">{detail}</p></a>)}</section>
+      <section className="surface p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">北极星 · 必投健康覆盖</p>
+            <p className="mt-2 text-2xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">{rowsByScope ? `${worst.healthy || 0}/${worst.total}` : "暂无数据"}</p>
+            <p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">当前最需处理：{MUST_APPLY_SCOPE_LABEL[worst.scope]}·{worst.industry}</p>
+          </div>
+          <div className="min-w-[16rem] max-w-md flex-1">
+            <AccumulatingMetric
+              title="趋势数据"
+              description={northStarSnapshotUnavailable ? "趋势开始时间暂无数据，暂不展示走势。" : northStarSnapshotStart ? `趋势数据从 ${northStarSnapshotStart} 开始积累，样本不足时不展示走势。` : "写入任务已接入；首条数据将在每日抓取完成后出现。"}
+            />
+          </div>
+        </div>
+      </section>
       <SprintCards users={users} />
       <DataNotes refreshedAt={refreshedAt} />
     </div>
@@ -1555,7 +1455,7 @@ function OverviewTab({
 }
 
 function JobsTab({ jobs, clickValidity, clickStatus, coverage, operations, todayRemoved, validBand, checkedBand }: { jobs: JobsHealthSnapshot | null; clickValidity: ClickValidityMetrics | null; clickStatus: SectionStatus; coverage: CoverageSnapshot | null; operations: SupabaseHealthSnapshot | null; todayRemoved: number | null; validBand: HealthBand; checkedBand: HealthBand }) {
-  return <div className="grid gap-5"><section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{jobs ? <><VisualChip label="在招总量" value={formatCount(jobs.activeTotal)} tone="success" /><VisualChip label="今日新进" value={formatCount(jobs.todayNew)} tone="success" /><VisualChip label="今日下架" value={todayRemoved == null ? "—" : formatCount(todayRemoved)} tone="warning" /><VisualChip label="空壳岗" value={formatCount(jobs.thinActive)} tone="warning" /><VisualChip label="待核查" value={formatCount(jobs.neverChecked)} tone="muted" /></> : <ErrorPanel label="岗位库体检" />}</section>{jobs && <section className="surface p-5"><h2 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">库存结构</h2><StackedBar className="mt-4 h-4" total={jobs.activeTotal} segments={[{ value: jobs.validActive, tone: "success" }, { value: jobs.thinActive, tone: "warning" }]} /><p className="mt-3 text-xs text-[#8a8275] dark:text-[#9a9184]">有效在招 {formatCount(jobs.validActive)} · 空壳 {formatCount(jobs.thinActive)}</p><div className="mt-4"><div className="flex justify-between text-xs text-[#6b655a] dark:text-[#b6ad9d]"><span>待核查（与左侧有交集）</span><span>{formatCount(jobs.neverChecked)}</span></div><MiniBar className="mt-2" pct={share(jobs.neverChecked, jobs.activeTotal)} tone={bandTone(checkedBand)} /></div></section>}<section className="grid gap-4 md:grid-cols-2">{jobs && <div className="surface flex items-center gap-5 p-5"><StatRing pct={share(jobs.validActive, jobs.activeTotal)} tone={bandTone(validBand)}><span className="text-xl font-semibold">{formatPercent(jobs.validActive, jobs.activeTotal)}</span></StatRing><p>有效率</p></div>}<div className="surface flex items-center gap-5 p-5"><StatRing pct={clickValidity?.coverageRate ?? null} tone="muted"><span className="text-xl font-semibold">{clickValidity?.coverageRate == null ? "—" : formatRate(clickValidity.coverageRate)}</span></StatRing><p>探活覆盖</p></div></section><ClickValiditySection clickValidity={clickValidity} status={clickStatus} summary="展示岗位自动探活（非用户点击统计）" /><section className="surface p-5"><h2 className="mb-4 text-xl font-semibold">抓全率</h2><CoverageSection snapshot={coverage} /></section><details className="surface p-5"><summary className="cursor-pointer text-xl font-semibold">分源状态</summary><div className="mt-5"><JobsLibrarySection jobs={null} operations={operations} crawlSources={normalizeCrawlSources(operations?.crawl_sources)} todayRemoved={todayRemoved} validActiveShareBand={validBand} thinShareBand="empty" neverCheckedShareBand={checkedBand} /></div></details></div>;
+  return <div className="grid gap-5"><section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{jobs ? <><VisualChip label="在招总量" value={formatCount(jobs.activeTotal)} tone="success" /><VisualChip label="今日新进" value={formatCount(jobs.todayNew)} tone="success" /><VisualChip label="今日下架" value={todayRemoved == null ? "—" : formatCount(todayRemoved)} tone="warning" /><VisualChip label="空壳岗" value={formatCount(jobs.thinActive)} tone="warning" /><VisualChip label="待核查" value={formatCount(jobs.neverChecked)} tone="muted" /></> : <ErrorPanel label="岗位库体检" />}</section>{jobs && <section className="surface-soft p-5"><h2 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">库存结构</h2><StackedBar className="mt-4 h-4" total={jobs.activeTotal} segments={[{ value: jobs.validActive, tone: "success" }, { value: jobs.thinActive, tone: "warning" }]} /><p className="mt-3 text-xs text-[#8a8275] dark:text-[#9a9184]">有效在招 {formatCount(jobs.validActive)} · 空壳 {formatCount(jobs.thinActive)}</p><div className="mt-4"><div className="flex justify-between text-xs text-[#6b655a] dark:text-[#b6ad9d]"><span>待核查（与左侧有交集）</span><span>{formatCount(jobs.neverChecked)}</span></div><MiniBar className="mt-2" pct={share(jobs.neverChecked, jobs.activeTotal)} tone={bandTone(checkedBand)} /></div></section>}<section className="grid gap-4 md:grid-cols-2">{jobs && <div className="surface-soft flex items-center gap-5 p-5"><StatRing pct={share(jobs.validActive, jobs.activeTotal)} tone={bandTone(validBand)}><span className="text-xl font-semibold">{formatPercent(jobs.validActive, jobs.activeTotal)}</span></StatRing><p>有效率</p></div>}<div className="surface-soft flex items-center gap-5 p-5"><StatRing pct={clickValidity?.coverageRate ?? null} tone="muted"><span className="text-xl font-semibold">{clickValidity?.coverageRate == null ? "—" : formatRate(clickValidity.coverageRate)}</span></StatRing><p>探活覆盖</p></div></section><ClickValiditySection clickValidity={clickValidity} status={clickStatus} summary="展示岗位自动探活（非用户点击统计）" /><section className="surface-soft p-5"><h2 className="mb-4 text-xl font-semibold">抓全率</h2><CoverageSection snapshot={coverage} /></section><details className="surface-soft p-5"><summary className="cursor-pointer text-xl font-semibold">分源状态</summary><div className="mt-5"><JobsLibrarySection jobs={null} operations={operations} crawlSources={normalizeCrawlSources(operations?.crawl_sources)} todayRemoved={todayRemoved} validActiveShareBand={validBand} thinShareBand="empty" neverCheckedShareBand={checkedBand} showHealthSummary={false} /></div></details></div>;
 }
 
 function MustApplyGapLedger({
@@ -1566,7 +1466,7 @@ function MustApplyGapLedger({
   ledger: { realExpansion: number | null; definitionChange: number } | null;
 }) {
   return (
-    <section className="surface p-5 sm:p-6">
+    <section className="surface-soft p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold">缺口漏斗台账</h2>
@@ -1608,20 +1508,20 @@ function MustApplyGapLedger({
 }
 
 function MustApplyGovernanceList({ items }: { items: MustApplyGovernanceItem[] | null }) {
-  return <section className="surface p-5 sm:p-6"><div><h2 className="text-xl font-semibold">必投清单待治理</h2><p className="mt-1 text-sm text-[#6b655a] dark:text-[#b6ad9d]">只提示需要人工判断的公司，不自动改动必投清单口径。</p></div>{!items ? <div className="mt-4"><ErrorPanel label="必投清单待治理" /></div> : !items.length ? <p className="mt-4 text-sm text-[#6b655a] dark:text-[#b6ad9d]">当前没有待治理公司。</p> : <div className="mt-4 overflow-auto rounded-2xl border border-black/[0.07] dark:border-white/[0.1]"><table className="w-full min-w-[780px] text-left text-sm"><thead className="bg-[#f4efe6] text-xs text-[#8a8275] dark:bg-[#1c1813] dark:text-[#9a9184]"><tr><th className="px-4 py-3 font-medium">公司</th><th className="px-4 py-3 font-medium">所属行业</th><th className="px-4 py-3 font-medium">卡在哪</th><th className="px-4 py-3 text-right font-medium">尝试次数</th><th className="px-4 py-3 font-medium">最后一次</th><th className="px-4 py-3 font-medium">建议动作</th></tr></thead><tbody>{items.map((item) => <tr key={item.company} className="border-t border-black/[0.05] text-[#3f3a33] dark:border-white/[0.08] dark:text-[#d9d0c2]"><td className="px-4 py-3 font-medium">{item.company}</td><td className="px-4 py-3 text-xs">{item.industries.join("、") || "未标注"}</td><td className="max-w-xs px-4 py-3 text-xs leading-5">{item.blocker}</td><td className="px-4 py-3 text-right tabular-nums">{item.attempts}</td><td className="px-4 py-3 text-xs">{formatRunTime(item.lastAttemptAt)}</td><td className="px-4 py-3 text-xs font-medium">{item.suggestedAction}</td></tr>)}</tbody></table></div>}</section>;
+  return <section className="surface-soft p-5 sm:p-6"><div><h2 className="text-xl font-semibold">必投清单待治理</h2><p className="mt-1 text-sm text-[#6b655a] dark:text-[#b6ad9d]">只提示需要人工判断的公司，不自动改动必投清单口径。</p></div>{!items ? <div className="mt-4"><ErrorPanel label="必投清单待治理" /></div> : !items.length ? <p className="mt-4 text-sm text-[#6b655a] dark:text-[#b6ad9d]">当前没有待治理公司。</p> : <div className="mt-4 overflow-auto rounded-2xl border border-black/[0.07] dark:border-white/[0.1]"><table className="w-full min-w-[780px] text-left text-sm"><thead className="bg-[#f4efe6] text-xs text-[#8a8275] dark:bg-[#1c1813] dark:text-[#9a9184]"><tr><th className="px-4 py-3 font-medium">公司</th><th className="px-4 py-3 font-medium">所属行业</th><th className="px-4 py-3 font-medium">卡在哪</th><th className="px-4 py-3 text-right font-medium">尝试次数</th><th className="px-4 py-3 font-medium">最后一次</th><th className="px-4 py-3 font-medium">建议动作</th></tr></thead><tbody>{items.map((item) => <tr key={item.company} className="border-t border-black/[0.05] text-[#3f3a33] dark:border-white/[0.08] dark:text-[#d9d0c2]"><td className="px-4 py-3 font-medium">{item.company}</td><td className="px-4 py-3 text-xs">{item.industries.join("、") || "未标注"}</td><td className="max-w-xs px-4 py-3 text-xs leading-5">{item.blocker}</td><td className="px-4 py-3 text-right tabular-nums">{item.attempts}</td><td className="px-4 py-3 text-xs">{formatRunTime(item.lastAttemptAt)}</td><td className="px-4 py-3 text-xs font-medium">{item.suggestedAction}</td></tr>)}</tbody></table></div>}</section>;
 }
 
 function SupplyTab({ rowsByScope, fetchByIndustry, activeIndustries, userDistribution, worst, gapSummary, governanceItems, ledger }: { rowsByScope: MustApplyRowsByScope | null; fetchByIndustry: Record<MustApplyScope, Record<string, MustApplyFetchCoverage>> | null; activeIndustries: Record<MustApplyScope, string[]>; userDistribution: UserIndustryDistribution; worst: { scope: MustApplyScope; industry: string; healthy: number | null; total: number; zeroHealthyCompanies: string[] }; gapSummary: MustApplyGapSummary | null; governanceItems: MustApplyGovernanceItem[] | null; ledger: { realExpansion: number | null; definitionChange: number } | null }) {
-  return <div className="grid gap-5"><MustApplyGapLedger summary={gapSummary} ledger={ledger} /><MustApplyGovernanceList items={governanceItems} /><section className="surface flex flex-col items-center p-6 text-center"><StatRing pct={rowsByScope ? (worst.healthy || 0) / worst.total : null} tone={bandTone(mustApplyIndustryBand(rowsByScope?.[worst.scope]?.[worst.industry] || null))} size={180}><span className="text-3xl font-semibold">{rowsByScope ? String(worst.healthy || 0) + "/30" : "—"}</span></StatRing><p className="mt-3 text-sm text-[#6b655a] dark:text-[#b6ad9d]">最需处理：{MUST_APPLY_SCOPE_LABEL[worst.scope]}·{worst.industry}</p></section><MustApplySection rowsByIndustry={rowsByScope} fetchCoverageByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} /><section className="surface p-5"><h2 className="font-semibold">缺口提示</h2><div className="mt-3 flex flex-wrap gap-2">{worst.zeroHealthyCompanies.slice(0, 10).map((company) => <span key={company} className="rounded-full bg-[#fbecd7] px-3 py-1 text-xs text-[#8f6225] dark:bg-[#825d28]/30 dark:text-[#e0b15a]">{company}</span>)}{worst.zeroHealthyCompanies.length > 10 && <span className="text-xs">等 {worst.zeroHealthyCompanies.length - 10} 家</span>}{rowsByScope && worst.zeroHealthyCompanies.length === 0 && <span>真实 0 家缺口</span>}{!rowsByScope && <span>—</span>}</div></section></div>;
+  return <div className="grid gap-5"><MustApplyGapLedger summary={gapSummary} ledger={ledger} /><MustApplyGovernanceList items={governanceItems} /><section className="surface-soft flex flex-col items-center p-6 text-center"><StatRing pct={rowsByScope ? (worst.healthy || 0) / worst.total : null} tone={bandTone(mustApplyIndustryBand(rowsByScope?.[worst.scope]?.[worst.industry] || null))} size={180}><span className="text-3xl font-semibold">{rowsByScope ? String(worst.healthy || 0) + "/30" : "—"}</span></StatRing><p className="mt-3 text-sm text-[#6b655a] dark:text-[#b6ad9d]">最需处理：{MUST_APPLY_SCOPE_LABEL[worst.scope]}·{worst.industry}</p></section><MustApplySection rowsByIndustry={rowsByScope} fetchCoverageByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} /><section className="surface-soft p-5"><h2 className="font-semibold">缺口提示</h2><div className="mt-3 flex flex-wrap gap-2">{worst.zeroHealthyCompanies.slice(0, 10).map((company) => <span key={company} className="rounded-full bg-[#fbecd7] px-3 py-1 text-xs text-[#8f6225] dark:bg-[#825d28]/30 dark:text-[#e0b15a]">{company}</span>)}{worst.zeroHealthyCompanies.length > 10 && <span className="text-xs">等 {worst.zeroHealthyCompanies.length - 10} 家</span>}{rowsByScope && worst.zeroHealthyCompanies.length === 0 && <span>真实 0 家缺口</span>}{!rowsByScope && <span>—</span>}</div></section></div>;
 }
 
 function UserTab({ operations, users, resume }: { operations: SupabaseHealthSnapshot | null; users: NonNullable<SupabaseHealthSnapshot["today"]>["users"] | null; resume: NonNullable<SupabaseHealthSnapshot["today"]>["resume"] | null }) {
   if (!operations || !users) return <ErrorPanel label="用户行为统计" />;
-  return <div className="grid gap-5"><section className="surface p-5 sm:p-6"><h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">用户漏斗</h2><div className="mt-5"><FunnelBars steps={[{ label: "注册", value: users.total_users }, { label: "设了偏好", value: users.users_with_preferences }, { label: "收藏过", value: users.saved_users }, { label: "投递过", value: users.applied_users }]} /></div></section><section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><VisualChip label="今日新增用户" value={formatCount(users.today_users)} tone="muted" /><VisualChip label="收藏次数" value={formatCount(users.saved_total) + " + " + formatCount(users.saved_today)} tone="muted" detail="累计 + 今日" /><VisualChip label="投递次数" value={formatCount(users.applied_total) + " + " + formatCount(users.applied_today)} tone="muted" detail="累计 + 今日" /><VisualChip label="简历解析" value={resume ? formatCount(resume.succeeded) + "/" + formatCount(resume.started) : "—"} tone="muted" detail="今日成功/总数" /></section><SprintCards users={users} /><p className="text-xs text-[#8a8275] dark:text-[#9a9184]">点击官网 / 收到机会 / 7日回访 待行为埋点上线。</p></div>;
+  return <div className="grid gap-5"><section className="surface-soft p-5 sm:p-6"><h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">用户漏斗</h2><div className="mt-5"><FunnelBars steps={[{ label: "注册", value: users.total_users }, { label: "设了偏好", value: users.users_with_preferences }, { label: "收藏过", value: users.saved_users }, { label: "投递过", value: users.applied_users }]} /></div></section><section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><VisualChip label="今日新增用户" value={formatCount(users.today_users)} tone="muted" /><VisualChip label="收藏次数" value={formatCount(users.saved_total) + " + " + formatCount(users.saved_today)} tone="muted" detail="累计 + 今日" /><VisualChip label="投递次数" value={formatCount(users.applied_total) + " + " + formatCount(users.applied_today)} tone="muted" detail="累计 + 今日" /><VisualChip label="简历解析" value={resume ? formatCount(resume.succeeded) + "/" + formatCount(resume.started) : "—"} tone="muted" detail="今日成功/总数" /></section><SprintCards users={users} /><p className="text-xs text-[#8a8275] dark:text-[#9a9184]">点击官网 / 收到机会 / 7日回访 待行为埋点上线。</p></div>;
 }
 
 function SystemTab({ operations, reports, refreshedAt }: { operations: SupabaseHealthSnapshot | null; reports: DailyReport[]; refreshedAt: string }) {
-  return <div className="grid gap-5"><section className="surface p-5"><DailyReportsSection operations={operations} reports={reports} /></section><DataNotes refreshedAt={refreshedAt} /><p className="text-xs text-[#8a8275] dark:text-[#9a9184]">该页面仅管理员可访问；两套数据库分别读取，任一侧异常时另一侧仍可显示。</p></div>;
+  return <div className="grid gap-5"><section className="surface-soft p-5"><DailyReportsSection operations={operations} reports={reports} /></section><DataNotes refreshedAt={refreshedAt} /><p className="text-xs text-[#8a8275] dark:text-[#9a9184]">该页面仅管理员可访问；两套数据库分别读取，任一侧异常时另一侧仍可显示。</p></div>;
 }
 
 export default async function AdminHealthPage({ searchParams }: { searchParams: Promise<{ tab?: string | string[] }> }) {
@@ -1630,7 +1530,7 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   const rawTab = typeof query.tab === "string" ? query.tab : "";
   const tab = rawTab === "jobs" || rawTab === "supply" || rawTab === "users" || rawTab === "system" ? rawTab : "overview";
   const overview = tab === "overview";
-  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult, gapResult] = await Promise.allSettled([overview || tab === "jobs" ? getJobsHealthSnapshot() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), overview || tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await getMustApplyFetchCoverage(createServiceClient(), scope)] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null), tab === "supply" ? loadMustApplyGapAdminData() : Promise.resolve(null)]);
+  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult, gapResult, northStarSnapshotResult] = await Promise.allSettled([overview || tab === "jobs" ? getJobsHealthSnapshot() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), overview || tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await getMustApplyFetchCoverage(createServiceClient(), scope)] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null), tab === "supply" ? loadMustApplyGapAdminData() : Promise.resolve(null), overview ? loadNorthStarSnapshotStart() : Promise.resolve(null)]);
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
   const clickValidity = clickResult.status === "fulfilled" ? clickResult.value : null;
@@ -1684,6 +1584,6 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   const heroStatus: SectionStatus = heroDataMissing || health.level === "critical" ? "critical" : health.actions.length ? "warn" : "ok";
   const refreshedAt = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
   const tabs = [["overview", "总览"], ["jobs", "岗位库"], ["supply", "必投供给"], ["users", "用户行为"], ["system", "系统运行"]] as const;
-  const content = tab === "overview" ? <OverviewTab health={health} heroStatus={heroStatus} heroDataMissing={heroDataMissing} jobs={jobs} users={users} supplyStatus={supplyStatus} systemStatus={systemStatus} worst={worst} rowsByScope={rowsByScope} reports={reports} ran={ran} failed={failed} refreshedAt={refreshedAt} /> : tab === "jobs" ? <JobsTab jobs={jobs} clickValidity={clickValidity} clickStatus={clickStatus} coverage={coverage} operations={operations} todayRemoved={todayRemoved} validBand={validBand} checkedBand={checkedBand} /> : tab === "supply" ? <SupplyTab rowsByScope={rowsByScope} fetchByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} worst={worst} gapSummary={gapSummary} governanceItems={governanceItems} ledger={supplyLedger} /> : tab === "users" ? <UserTab operations={operations} users={users} resume={resume} /> : <SystemTab operations={operations} reports={reports} refreshedAt={refreshedAt} />;
+  const content = tab === "overview" ? <OverviewTab health={health} heroStatus={heroStatus} heroDataMissing={heroDataMissing} jobs={jobs} users={users} supplyStatus={supplyStatus} systemStatus={systemStatus} worst={worst} rowsByScope={rowsByScope} reports={reports} ran={ran} failed={failed} refreshedAt={refreshedAt} disputesOpen={operations?.insight?.disputes_open} northStarSnapshotStart={northStarSnapshotResult.status === "fulfilled" ? northStarSnapshotResult.value : null} northStarSnapshotUnavailable={northStarSnapshotResult.status === "rejected"} /> : tab === "jobs" ? <JobsTab jobs={jobs} clickValidity={clickValidity} clickStatus={clickStatus} coverage={coverage} operations={operations} todayRemoved={todayRemoved} validBand={validBand} checkedBand={checkedBand} /> : tab === "supply" ? <SupplyTab rowsByScope={rowsByScope} fetchByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} worst={worst} gapSummary={gapSummary} governanceItems={governanceItems} ledger={supplyLedger} /> : tab === "users" ? <UserTab operations={operations} users={users} resume={resume} /> : <SystemTab operations={operations} reports={reports} refreshedAt={refreshedAt} />;
   return <div className="min-h-screen bg-editorial"><Navbar /><ProductPage maxWidth="max-w-6xl"><ProductHero eyebrow="运营健康" title="管理员看板" description="按模块查看今日真实运行与供给情况。" icon={ShieldCheck}><nav className="mt-4 flex gap-2 overflow-x-auto pb-1" aria-label="管理员看板模块">{tabs.map(([key, label]) => <a key={key} href={key === "overview" ? "/admin/health" : "/admin/health?tab=" + key} className={"shrink-0 rounded-full border px-4 py-2 text-sm font-semibold " + (tab === key ? "border-[#1a1714] bg-[#1a1714] text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]" : "border-black/[0.12] text-[#6b655a] dark:border-white/[0.15] dark:text-[#b6ad9d]")}>{label}</a>)}</nav></ProductHero><main className="mt-6">{content}</main></ProductPage></div>;
 }

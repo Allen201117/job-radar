@@ -43,6 +43,8 @@ jobs:
       DISPATCH_LIMIT: ${{ github.event.inputs.limit || '20' }}
       DISPATCH_COMPANY: ${{ github.event.inputs.company || '' }}
       DISPATCH_APPLY: ${{ github.event.inputs.apply || 'true' }}
+      # 每日完整必投普查后写北极星；写入失败只告警，绝不阻断主任务。
+      NORTH_STAR_SNAPSHOT: "true"
 
     steps:
       - uses: actions/checkout@v4
