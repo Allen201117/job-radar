@@ -448,13 +448,20 @@ def _candidate_items(row, official_url, finder_result):
         items = list(((row.get("evidence") or {}).get("candidate_urls") or []))
     if official_url and not any(item.get("url") == official_url for item in items):
         items.insert(0, {"url": official_url})
+    # 按「去掉 #fragment 的地址」去重：同一个招聘页的锚点变体（/career、/career#jobs、
+    # /career#contactus、/career#hot）本质是同一页，却会吃满 5 个候选名额，
+    # 把真正的外部 ATS 入口挤出去——实测万泰生物的 moka 租户地址就是这么丢的。
     seen = set()
     out = []
     for item in items:
         url = str((item or {}).get("url") or "").strip()
-        if url and url not in seen:
-            seen.add(url)
-            out.append({**(item or {}), "url": url})
+        if not url:
+            continue
+        key = url.split("#", 1)[0] or url
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({**(item or {}), "url": url})
         if len(out) >= 5:
             break
     return out

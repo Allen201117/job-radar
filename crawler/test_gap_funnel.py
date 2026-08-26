@@ -1149,5 +1149,43 @@ class RoundCapTest(unittest.TestCase):
         self.assertEqual(result["official_entry_url"], urls[1])
 
 
+class CandidateItemsDedupeTest(unittest.TestCase):
+    """同页锚点变体不能吃满候选名额，否则真正的外部 ATS 入口会被挤出去。
+
+    实测（2026-08-26）万泰生物：候选 5 个名额被
+    /career、/career#jobs、/career#contactus、/career#hot 占了 4 个（本质同一页），
+    真正的 moka 租户地址 app.mokahr.com/social-recruitment/ystwt/97880 排在后面被截断
+    → 判「候选入口均非本公司」。
+    """
+
+    def test_anchor_variants_collapse_to_one(self):
+        items = [
+            {"url": "https://www.ystwt.cn/career"},
+            {"url": "https://www.ystwt.cn/career#jobs"},
+            {"url": "https://www.ystwt.cn/career#contactus"},
+            {"url": "https://www.ystwt.cn/career#hot"},
+            {"url": "https://app.mokahr.com/social-recruitment/ystwt/97880"},
+        ]
+        urls = [
+            item["url"]
+            for item in gf._candidate_items({}, None, {"candidates": items})
+        ]
+        self.assertEqual(urls, [
+            "https://www.ystwt.cn/career",
+            "https://app.mokahr.com/social-recruitment/ystwt/97880",
+        ])
+
+    def test_distinct_paths_are_kept(self):
+        items = [
+            {"url": "https://a.example/careers"},
+            {"url": "https://a.example/jobs"},
+        ]
+        urls = [
+            item["url"]
+            for item in gf._candidate_items({}, None, {"candidates": items})
+        ]
+        self.assertEqual(len(urls), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
