@@ -301,8 +301,14 @@ def resolve_source_url(platform, final_url, html):
         final_api = _adapter_api_url(platform, final_url)
         if final_api:
             return final_api
-    candidates = [url.rstrip(");,") for url in _URL_RE.findall(str(html or ""))]
-    candidates.append(final_url)
+    # final_url 必须排在最前：它是我们**实际访问到、且过了身份核验**的页面，最可信。
+    # 排在 HTML 扫出来的 URL 后面会被同域垃圾抢先——实测万泰生物的 moka 源地址被判成
+    # sentry-fe.mokahr.com/api/107/store/（前端错误监控 SDK 的上报地址，host 恰好含 mokahr.com），
+    # P2 拿它去抓自然 0 个岗。页面里的第三方 SDK/CDN/静态资源域名普遍带主域，这类污染是常态。
+    candidates = [final_url]
+    candidates.extend(
+        url.rstrip(");,") for url in _URL_RE.findall(str(html or ""))
+    )
     for candidate in candidates:
         api_url = _adapter_api_url(platform, candidate)
         if api_url:

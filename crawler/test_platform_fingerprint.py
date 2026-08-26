@@ -232,5 +232,39 @@ class SpecialStateTest(unittest.TestCase):
         self.assertEqual(pf.detect_page_state(200, html), "no_stable_jd")
 
 
+class ResolveSourceUrlPriorityTest(unittest.TestCase):
+    """final_url 必须优先于 HTML 里扫出来的同域 URL。
+
+    实测（2026-08-26）万泰生物的 moka 源地址被解析成
+    sentry-fe.mokahr.com/api/107/store/ —— 前端错误监控 SDK 的上报地址，
+    host 恰好含 mokahr.com 就被当成了招聘列表地址，P2 拿它抓到 0 个岗。
+    第三方 SDK / CDN / 静态资源普遍挂在主域下，这类污染是常态而非个例。
+    """
+
+    def test_final_url_wins_over_same_domain_sdk_noise(self):
+        html = (
+            '<script src="https://sentry-fe.mokahr.com/api/107/store/'
+            '?sentry_version=7&sentry_client=raven-js"></script>'
+        )
+        self.assertEqual(
+            pf.resolve_source_url(
+                "moka",
+                "https://app.mokahr.com/social-recruitment/ystwt/97880",
+                html,
+            ),
+            "https://app.mokahr.com/social-recruitment/ystwt/97880",
+        )
+
+    def test_html_still_used_when_final_url_is_not_the_platform(self):
+        """final_url 判不出平台时，仍从 HTML 里找——原有兜底行为不能退化。"""
+        html = '<a href="https://acme.zhiye.com/social/jobs">招聘</a>'
+        self.assertEqual(
+            pf.resolve_source_url(
+                "beisen", "https://www.acme.com/careers", html
+            ),
+            "https://acme.zhiye.com/social/jobs",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
