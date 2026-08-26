@@ -74,14 +74,14 @@ jobs:
     needs: funnel
     if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
       JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
       JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
-      GAP_FUNNEL_BROWSER_CAP: ${{ github.event.inputs.browser_limit || '5' }}
+      GAP_FUNNEL_BROWSER_CAP: ${{ github.event.inputs.browser_limit || '8' }}
       DISPATCH_COMPANY: ${{ github.event.inputs.company || '' }}
       DISPATCH_APPLY: ${{ github.event.inputs.apply || 'true' }}
 
