@@ -263,5 +263,43 @@ class ForceRerunTest(unittest.TestCase):
         self.assertEqual([row["company"] for row in forced], ["万泰生物"])
 
 
+class ThinRescueTest(unittest.TestCase):
+    """薄卡救济：抽样证明正文取得到才放行，质量红线不放松。
+
+    背景（2026-08-26 live）：moka 列表接口天生不返回正文，库里 2.6 万张 moka 卡
+    全靠每晚逐岗渲染 backfill 补。验收门要求「当场就有健康岗」→ 任何 moka 租户
+    都永远进不来。万泰生物实测：列表 15 个岗全是薄卡，但逐岗渲染 3/3 都补出了
+    390-890 字的真实岗位职责。
+    """
+
+    _SAMPLES = [{"jd_url": "u1"}, {"jd_url": "u2"}, {"jd_url": "u3"}]
+
+    def test_non_whitelisted_adapter_gets_no_rescue(self):
+        """非白名单平台完全不救济——行为与改动前一致。"""
+        self.assertIsNone(browser.make_thin_rescue("company_spa"))
+        self.assertIsNone(browser.make_thin_rescue("beisen"))
+
+    def test_passes_when_summaries_are_recoverable(self):
+        rescue = browser.make_thin_rescue("moka", scraper=lambda _u: "正" * 80)
+        self.assertTrue(rescue(self._SAMPLES))
+
+    def test_rejects_when_summaries_are_not_recoverable(self):
+        for scraper in (lambda _u: "短", lambda _u: "", lambda _u: None):
+            with self.subTest(scraper=scraper):
+                rescue = browser.make_thin_rescue("moka", scraper=scraper)
+                self.assertFalse(rescue(self._SAMPLES))
+
+    def test_one_of_three_is_not_enough(self):
+        rescue = browser.make_thin_rescue(
+            "moka", scraper=lambda u: "正" * 80 if u == "u1" else ""
+        )
+        self.assertFalse(rescue(self._SAMPLES))
+
+    def test_too_few_samples_rejected(self):
+        rescue = browser.make_thin_rescue("moka", scraper=lambda _u: "正" * 80)
+        self.assertFalse(rescue([{"jd_url": "u1"}]))
+        self.assertFalse(rescue([]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -124,6 +124,75 @@ def resolve_browser_adapter(row, entry_url):
     return adapter, (real_source_url or entry_url)
 
 
+
+# 列表接口天生不返回正文、但逐岗渲染补得到的平台。库里 2.6 万张 moka 卡就是这么来的
+# （每晚 scripts/backfill_moka_summaries.py 补），对它们要求「当场有健康岗」= 永远进不来。
+_THIN_RESCUE_ADAPTERS = {"moka"}
+_THIN_RESCUE_SAMPLE = 3
+_THIN_RESCUE_MIN_OK = 2
+_THIN_RESCUE_MIN_CHARS = 60
+
+
+def _scrape_job_summary(page, url, *, timeout=30):
+    """逐岗渲染取正文，复用 backfill 脚本里已调好的选择器。"""
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "_moka_backfill",
+        Path(__file__).resolve().parent.parent / "scripts" / "backfill_moka_summaries.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+    page.wait_for_timeout(2500)
+    return module._scrape_jd(page)
+
+
+def make_thin_rescue(adapter, *, scraper=None):
+    """薄卡救济：抽样证明这个源的正文确实取得到，取得到才放行。
+
+    质量红线不变——仍然要求正文可获取，变的只是验证方式：
+    「当场每个岗都有正文」→「抽样证明正文补得出来」，后者才符合 moka 的实际工作方式。
+    非白名单平台返回 None（不救济，行为与改动前完全一致）。
+    """
+    if adapter not in _THIN_RESCUE_ADAPTERS:
+        return None
+
+    def rescue(samples):
+        urls = [
+            str((sample or {}).get("jd_url") or "").strip()
+            for sample in (samples or [])
+        ]
+        urls = [url for url in urls if url][:_THIN_RESCUE_SAMPLE]
+        if len(urls) < _THIN_RESCUE_MIN_OK:
+            return False
+        if scraper is not None:
+            texts = [scraper(url) for url in urls]
+        else:
+            from playwright.sync_api import sync_playwright
+
+            texts = []
+            with sync_playwright() as runtime:
+                browser = runtime.chromium.launch(headless=True)
+                try:
+                    page = browser.new_context(locale="zh-CN").new_page()
+                    for url in urls:
+                        try:
+                            texts.append(_scrape_job_summary(page, url))
+                        except Exception:
+                            texts.append("")
+                finally:
+                    browser.close()
+        ok = sum(
+            1 for text in texts
+            if len(str(text or "").strip()) >= _THIN_RESCUE_MIN_CHARS
+        )
+        return ok >= _THIN_RESCUE_MIN_OK
+
+    return rescue
+
+
 def process_browser_company(
     row,
     *,
@@ -186,6 +255,7 @@ def process_browser_company(
         now=now,
         crawl_method="playwright",
         enable_thin=False,
+        thin_rescue=make_thin_rescue(adapter),
         validate_jd=jd_validator,
     )
     result.update({

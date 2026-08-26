@@ -254,8 +254,16 @@ def run_acceptance_gate(entry, *, adapter, source_url, supabase, jobs_conn,
                         read_samples=read_source_samples,
                         validate_jd=validate_jd_url,
                         delete_jobs=delete_source_jobs,
-                        now=None, crawl_method="http", enable_thin=True):
-    """真抓验收门。dry-run 不插源、不抓取、不写或删任何数据。"""
+                        now=None, crawl_method="http", enable_thin=True,
+                        thin_rescue=None):
+    """真抓验收门。dry-run 不插源、不抓取、不写或删任何数据。
+
+    thin_rescue：可选回调 `(samples) -> bool`，只在「抓到岗位但全是薄卡」时调用。
+    某些平台的列表接口**天生不返回正文**（moka 就是，库里 2.6 万张 moka 卡靠每晚
+    逐岗渲染 backfill 补正文），对它们要求「当场就有健康岗」等于永远进不来。
+    回调的职责是**抽样证明这个源的正文确实取得到**——取得到才放行，
+    质量红线不变，变的只是验证方式（当场全有 → 抽样可得）。
+    """
     now = now or datetime.now(timezone.utc)
     if not apply:
         return {
@@ -346,6 +354,15 @@ def run_acceptance_gate(entry, *, adapter, source_url, supabase, jobs_conn,
             "evidence": evidence,
         }
     state = "healthy" if healthy >= 1 else "thin_only"
+    if state == "thin_only" and not enable_thin and thin_rescue is not None:
+        try:
+            rescued = bool(thin_rescue(samples))
+        except Exception as exc:
+            rescued = False
+            evidence["thin_rescue_error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
+        evidence["thin_rescue"] = rescued
+        if rescued:
+            enable_thin = True
     if state == "thin_only" and not enable_thin:
         _rollback(
             supabase, jobs_conn, source_id, delete_jobs,
