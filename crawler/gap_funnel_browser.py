@@ -327,9 +327,13 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
                 )
 
     counts = Counter(row["state"] for row in outcomes)
+    # thin_only 不是失败：薄卡救济过门后源**已 enable、岗位已入库**，
+    # 正文由每晚 backfill 补。P1 一直用这个口径，P2 漏了 → 成功入库却报成失败态，
+    # 运营看日志会误判「今天没出货」（2026-08-26 万泰生物实测撞上）。
+    _NOT_FAILURE = ("healthy", "platform_known", "thin_only")
     failed = sum(
         count for state, count in counts.items()
-        if state not in ("healthy", "platform_known")
+        if state not in _NOT_FAILURE
     )
     metrics = {
         "checked": len(outcomes),
@@ -359,11 +363,17 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
     failures = ",".join(
         "%s=%s" % item
         for item in sorted(counts.items())
-        if item[0] not in ("healthy", "platform_known")
+        if item[0] not in _NOT_FAILURE
     ) or "无"
     print(
-        "[gap_funnel_browser] 处理=%d 新增healthy=%d 失败态=%s apply=%s"
-        % (len(outcomes), counts.get("healthy", 0), failures, apply)
+        "[gap_funnel_browser] 处理=%d 新增healthy=%d thin_only=%d 失败态=%s apply=%s"
+        % (
+            len(outcomes),
+            counts.get("healthy", 0),
+            counts.get("thin_only", 0),
+            failures,
+            apply,
+        )
     )
     return {"outcomes": outcomes, "metrics": metrics, "queue": queue}
 
