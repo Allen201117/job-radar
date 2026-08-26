@@ -35,6 +35,7 @@ export type CampusSlimJob = {
   city: string | null;
   education: string | null;
   fn: string;
+  gc: number | null;
 };
 
 export type CampusCardData = {
@@ -117,6 +118,7 @@ function toScoredJob(job: any): ScoredJob {
     country_code: job.country_code ?? null,
     job_scope: job.job_scope ?? null,
     job_type: job.job_type ?? null,
+    grad_class: job.grad_class ?? null,
     summary: job.summary ?? null,
     sponsorship_signal: job.sponsorship_signal ?? null,
     jd_url: job.jd_url,
@@ -145,9 +147,10 @@ interface CampusFilters {
   city: string;
   education: string;
   jobFunction: string;
+  gradClass: number | null;
 }
 
-const EMPTY_FILTERS: CampusFilters = { city: "", education: "", jobFunction: "" };
+const EMPTY_FILTERS: CampusFilters = { city: "", education: "", jobFunction: "", gradClass: null };
 
 type DisputeReason = "not_campus" | "dead_link" | "closed";
 
@@ -161,6 +164,7 @@ type CampusFilterOptions = {
   cityOptions: string[];
   educationOptions: string[];
   functionOptions: string[];
+  gradClassOptions: number[];
 };
 
 export default function CampusClient({
@@ -202,7 +206,7 @@ export default function CampusClient({
   // 值与此前客户端现算的逐字节一致）。客户端因此不再需要 JD 正文——原先为了现算职能，
   // 页面得把 30 家公司的全部岗位正文都序列化进 props，实测单页 16.3 MB。
   // 见 app/campus/page.tsx 的 slimJob / collectOptions。
-  const { cityOptions, educationOptions, functionOptions } =
+  const { cityOptions, educationOptions, functionOptions, gradClassOptions } =
     mode === "campus" ? filterOptions.campus : filterOptions.intern;
 
   function passesFilters(job: any): boolean {
@@ -210,6 +214,7 @@ export default function CampusClient({
     if (filters.education && String(job.education || "").trim() !== filters.education) return false;
     // 职能用服务端预先算好的标签（同一份 classifyJobFunction、同一份输入）→ 与现算结果一致。
     if (filters.jobFunction && job.fn !== filters.jobFunction) return false;
+    if (filters.gradClass !== null && job.gc !== filters.gradClass) return false;
     return true;
   }
 
@@ -223,7 +228,9 @@ export default function CampusClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cards, jobsByMode, filters]);
 
-  const hasActiveFilter = Boolean(filters.city || filters.education || filters.jobFunction);
+  const activeFilterCount = [filters.city, filters.education, filters.jobFunction, filters.gradClass]
+    .filter((value) => value !== "" && value !== null).length;
+  const hasActiveFilter = activeFilterCount > 0;
 
   // 展开某家公司时按需取回完整岗位行（页面只下发了轻量记录，见 slimJob）。key = pattern。
   // 未取回前展开区显示加载态；失败则清掉请求标记，下次展开可重试。
@@ -356,62 +363,79 @@ export default function CampusClient({
         <p className="text-sm text-[#5f594e] dark:text-[#b6ad9d]">
           已接入官方校招源并持续验证的岗位 · 按行业「{industries.join("、")}」匹配 {cards.length} 家必投目标公司
         </p>
-        {/* 校招 / 实习切换：驱动卡面计数、展开区与探活取哪个桶。 */}
-        <div className="inline-flex shrink-0 rounded-full border border-black/[0.08] bg-white/60 p-1 dark:border-white/[0.1] dark:bg-white/[0.05]">
-          {(["campus", "intern"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setMode(m)}
-              className={cn(
-                "rounded-full px-3.5 py-1.5 text-sm font-medium transition",
-                mode === m
-                  ? "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                  : "text-[#8a8275] hover:text-[#1a1714] dark:text-[#9a9184] dark:hover:text-[#f3ecdf]",
-              )}
-            >
-              {m === "campus" ? "校招" : "实习"}
-            </button>
-          ))}
-        </div>
       </div>
 
-      {/* 筛选条：城市/学历/职能三个下拉，选项来自当前态真实出现过的值——不造空筛选。
-          届别（应届 xxxx 届）：jobs 表没有结构化届别字段（爬虫未落库），本轮不做，避免拿标题正则臆造出不准的届别筛选。 */}
-      <div className="surface flex flex-wrap items-end gap-3 p-4 sm:p-5">
-        <FilterSelect
-          icon={MapPin}
-          label="城市"
-          value={filters.city}
-          onChange={(v) => setFilters((f) => ({ ...f, city: v }))}
-          options={cityOptions}
-          allLabel="全部城市"
-        />
-        <FilterSelect
-          icon={GraduationCap}
-          label="学历"
-          value={filters.education}
-          onChange={(v) => setFilters((f) => ({ ...f, education: v }))}
-          options={educationOptions}
-          allLabel="学历不限"
-        />
-        <FilterSelect
-          icon={Briefcase}
-          label="职能"
-          value={filters.jobFunction}
-          onChange={(v) => setFilters((f) => ({ ...f, jobFunction: v }))}
-          options={functionOptions}
-          allLabel="全部职能"
-        />
-        {hasActiveFilter && (
-          <button
-            type="button"
-            onClick={() => setFilters(EMPTY_FILTERS)}
-            className="rounded-full border border-black/[0.08] bg-white/70 px-3.5 py-2 text-sm font-medium text-[#5f594e] transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.08]"
-          >
-            清空筛选
-          </button>
-        )}
+      <div className="surface space-y-3 p-4 sm:p-5">
+        {/* 校招 / 实习切换：驱动卡面计数、展开区与探活取哪个桶。 */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-black/[0.06] pb-3 dark:border-white/[0.1]">
+          <p className="text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">岗位范围与筛选</p>
+          <div className="inline-flex shrink-0 rounded-full border border-black/[0.08] bg-white/60 p-1 dark:border-white/[0.1] dark:bg-white/[0.05]">
+            {(["campus", "intern"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                className={cn(
+                  "rounded-full px-3.5 py-1.5 text-sm font-medium transition",
+                  mode === m
+                    ? "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                    : "text-[#8a8275] hover:text-[#1a1714] dark:text-[#9a9184] dark:hover:text-[#f3ecdf]",
+                )}
+              >
+                {m === "campus" ? "校招" : "实习"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 选项全部来自当前模式已下发的岗位；往届岗位已在服务端过滤，届别不会出现空结果。 */}
+        <div className="flex flex-wrap items-end gap-3" role="group" aria-label="岗位筛选">
+          <FilterSelect
+            icon={MapPin}
+            label="城市"
+            value={filters.city}
+            onChange={(v) => setFilters((f) => ({ ...f, city: v }))}
+            options={cityOptions}
+            allLabel="全部城市"
+          />
+          <FilterSelect
+            icon={GraduationCap}
+            label="学历"
+            value={filters.education}
+            onChange={(v) => setFilters((f) => ({ ...f, education: v }))}
+            options={educationOptions}
+            allLabel="学历不限"
+          />
+          <FilterSelect
+            icon={Briefcase}
+            label="职能"
+            value={filters.jobFunction}
+            onChange={(v) => setFilters((f) => ({ ...f, jobFunction: v }))}
+            options={functionOptions}
+            allLabel="全部职能"
+          />
+          <FilterSelect
+            icon={GraduationCap}
+            label="届别"
+            value={filters.gradClass ?? ""}
+            onChange={(v) => setFilters((f) => ({ ...f, gradClass: v ? Number(v) : null }))}
+            options={gradClassOptions}
+            allLabel="全部届别"
+            formatOption={(value) => `${value}届`}
+          />
+          {hasActiveFilter && (
+            <div className="flex items-center gap-2 pb-0.5">
+              <span className="text-xs font-medium text-[#8a6312] dark:text-[#e0b15a]">已筛选 {activeFilterCount} 项</span>
+              <button
+                type="button"
+                onClick={() => setFilters(EMPTY_FILTERS)}
+                className="rounded-full border border-black/[0.08] bg-white/70 px-3.5 py-2 text-sm font-medium text-[#5f594e] transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.08]"
+              >
+                清空筛选
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {cards.length === 0 ? (
@@ -541,7 +565,7 @@ export default function CampusClient({
                     {!rowsLoaded ? (
                       <EmptyPanel title="正在加载岗位…" description={`共 ${filteredJobs.length} 个，稍等一下。`} />
                     ) : groups.length === 0 ? (
-                      <EmptyPanel title="当前筛选下没有匹配岗位" description="换一个城市/学历/职能试试，或清空筛选。" />
+                      <EmptyPanel title="当前筛选下没有匹配岗位" description="换一个城市、学历、职能或届别试试，或清空筛选。" />
                     ) : (
                       <div className="space-y-5">
                         {groups.map((group) => {
@@ -647,13 +671,15 @@ function FilterSelect({
   onChange,
   options,
   allLabel,
+  formatOption,
 }: {
   icon: typeof MapPin;
   label: string;
-  value: string;
+  value: string | number;
   onChange: (v: string) => void;
-  options: string[];
+  options: Array<string | number>;
   allLabel: string;
+  formatOption?: (value: string | number) => string;
 }) {
   return (
     <label className="flex min-w-[9rem] flex-1 flex-col gap-1 text-xs font-medium text-[#8a8275] dark:text-[#9a9184] sm:flex-none">
@@ -662,14 +688,14 @@ function FilterSelect({
         {label}
       </span>
       <select
-        value={value}
+        value={String(value)}
         onChange={(e) => onChange(e.target.value)}
         className="rounded-xl border border-black/[0.09] dark:border-white/[0.1] bg-white dark:bg-[#1e1a15] px-3 py-2 text-sm text-[#1a1714] dark:text-[#f3ecdf] transition duration-200 focus:border-[#1a1714]/55 dark:focus:border-white/55 focus:outline-none"
       >
         <option value="">{allLabel}</option>
         {options.map((opt) => (
-          <option key={opt} value={opt}>
-            {opt}
+          <option key={String(opt)} value={String(opt)}>
+            {formatOption ? formatOption(opt) : opt}
           </option>
         ))}
       </select>
