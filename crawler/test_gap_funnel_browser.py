@@ -239,5 +239,29 @@ class ResolveBrowserAdapterTest(unittest.TestCase):
         )
 
 
+class ForceRerunTest(unittest.TestCase):
+    """人工点名（--company）必须绕过退避，否则修好 bug 也验证不了。
+
+    死锁实录（2026-08-26）：万泰生物因「P2 拿不到真实 adapter」被打成 no_stable_jd
+    → 退避 45 天 → 修好该 bug 后想立刻验证，--company 却因退避跑不动 →
+    而 real_adapter 恰恰只有重跑才会写入 → 互相锁死。
+    """
+
+    def test_backoff_blocks_by_default_but_not_when_named(self):
+        future = datetime(2031, 1, 1, tzinfo=timezone.utc).isoformat()
+        rows = [{
+            "company": "万泰生物",
+            "detected_platform": "unknown_spa",
+            "official_entry_url": "https://app.mokahr.com/social-recruitment/ystwt/97880",
+            "state": "no_stable_jd",
+            "next_retry_at": future,
+        }]
+        self.assertEqual(browser.plan_browser_queue(rows, cap=5, now=NOW), [])
+        forced = browser.plan_browser_queue(
+            rows, cap=5, now=NOW, ignore_backoff=True
+        )
+        self.assertEqual([row["company"] for row in forced], ["万泰生物"])
+
+
 if __name__ == "__main__":
     unittest.main()

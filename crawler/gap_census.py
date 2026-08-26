@@ -162,8 +162,14 @@ def _coverage_for(row, industry_coverage):
 
 
 def plan_queue(rows, target_industries, user_wanted, industry_coverage, *,
-               now=None, cap=20):
-    """纯函数：过滤到期项，优先首跑并避免单行业长期占满队列。"""
+               now=None, cap=20, ignore_backoff=False):
+    """纯函数：过滤到期项，优先首跑并避免单行业长期占满队列。
+
+    ignore_backoff=True 用于**人工点名单家公司**（CLI/workflow 的 --company）：
+    点名却因退避不跑，会让人以为系统坏了，更要命的是会锁死自我修复——
+    公司因某个 bug 失败 → 退避 45 天 → 修好 bug 想验证却跑不动 → 只能干等。
+    定时任务默认 False，退避照常生效。
+    """
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     targets = {str(x).strip() for x in (target_industries or set()) if str(x).strip()}
     eligible = []
@@ -171,7 +177,8 @@ def plan_queue(rows, target_industries, user_wanted, industry_coverage, *,
         state = row.get("state") or "unknown"
         retry_at = _parse_datetime(row.get("next_retry_at"))
         if (
-            (state == "unknown" and retry_at is None)
+            ignore_backoff
+            or (state == "unknown" and retry_at is None)
             or (retry_at is not None and retry_at <= now)
         ):
             eligible.append(row)
@@ -397,6 +404,7 @@ def census(supabase, jobs_conn, *, scope="domestic", cap=20, company=None,
         target_industries_from_env(),
         wanted,
         coverage,
+        ignore_backoff=bool(company),
         now=now,
         cap=cap,
     )

@@ -79,8 +79,11 @@ def _env_int(name, default):
         return default
 
 
-def plan_browser_queue(rows, *, cap=5, now=None):
-    """纯函数：只接 unknown_spa；人工终止态永不重试，薄岗按原 retry 时间重试。"""
+def plan_browser_queue(rows, *, cap=5, now=None, ignore_backoff=False):
+    """纯函数：只接 unknown_spa；人工终止态永不重试，薄岗按原 retry 时间重试。
+
+    ignore_backoff=True 对应人工点名单家公司（--company），语义同 gap_census.plan_queue。
+    """
     now = now or datetime.now(timezone.utc)
     candidates = []
     for row in rows or []:
@@ -89,7 +92,12 @@ def plan_browser_queue(rows, *, cap=5, now=None):
         if not row.get("official_entry_url") or row.get("state") in _TERMINAL_STATES:
             continue
         retry_at = gap_census._parse_datetime(row.get("next_retry_at"))
-        if row.get("state") != "wrong_platform" and retry_at is not None and retry_at > now:
+        if (
+            not ignore_backoff
+            and row.get("state") != "wrong_platform"
+            and retry_at is not None
+            and retry_at > now
+        ):
             continue
         candidates.append(row)
     return sorted(
@@ -216,7 +224,9 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
         apply=False,
         now=now,
     )
-    queue = plan_browser_queue(census_result["rows"], cap=cap, now=now)
+    queue = plan_browser_queue(
+        census_result["rows"], cap=cap, now=now, ignore_backoff=bool(company)
+    )
     outcomes = []
     for row in queue:
         scoped = {**row, "scope": scope}
