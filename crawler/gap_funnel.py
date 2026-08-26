@@ -545,10 +545,17 @@ def _evaluate_candidates(row, candidates, *, trusted_site, fingerprinter):
             ))
             continue
         if not _strict_httpx_probe_safe(adapter, source_url):
+            # 转交 P2 浏览器道。platform/adapter 置空是 P2 队列筛选要的（它只接 unknown_spa），
+            # 但**已经认出来的平台必须留着**：万泰生物是标准 moka 租户、广汽是 beisen 租户，
+            # P2 拿不到这个信息就只能用 company_spa 通用盲抓 → 抓不到逐岗链接 → no_stable_jd。
+            # 2026-08-26 实测同一个 URL：company_spa 抓 0 个，moka adapter 抓 15 个带完整 jd_url 的岗。
             browser_fingerprint = {
                 **fingerprint,
                 "platform": "unknown_spa",
                 "adapter": None,
+                "real_platform": platform,
+                "real_adapter": adapter,
+                "real_source_url": source_url,
                 "source_url": candidate_url,
                 "reason": "requires_browser",
             }

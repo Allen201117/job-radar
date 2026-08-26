@@ -97,6 +97,24 @@ def plan_browser_queue(rows, *, cap=5, now=None):
     )[:max(0, int(cap or 0))]
 
 
+
+# P1 认出平台但因「httpx 道不安全」转交 P2 时，会把 platform/adapter 置空（P2 队列靠
+# unknown_spa 筛选），真实平台留在 evidence.fingerprint.real_* 里。P2 必须把它取回来：
+# 万泰生物是标准 moka 租户，company_spa 通用盲抓 0 个岗，moka adapter 抓 15 个带完整 jd_url 的岗。
+_BROWSER_ADAPTER_WHITELIST = {"moka", "beisen", "feishu", "company_spa"}
+
+
+def resolve_browser_adapter(row, entry_url):
+    """纯函数：优先用 P1 认出的真实 adapter，认不出才回落 company_spa 通用盲抓。"""
+    fingerprint = ((row or {}).get("evidence") or {}).get("fingerprint") or {}
+    adapter = str(fingerprint.get("real_adapter") or "").strip()
+    if adapter not in _BROWSER_ADAPTER_WHITELIST or adapter == "company_spa":
+        return "company_spa", entry_url
+    # adapter 真正消费的列表 URL 可能与展示入口不同（P1 已解析好）。
+    real_source_url = str(fingerprint.get("real_source_url") or "").strip()
+    return adapter, (real_source_url or entry_url)
+
+
 def process_browser_company(
     row,
     *,
@@ -111,9 +129,10 @@ def process_browser_company(
     """拦截探活后调用 P1/P2 共用的真抓验收门。"""
     now = now or datetime.now(timezone.utc)
     source_url = row.get("official_entry_url")
+    adapter, source_url = resolve_browser_adapter(row, source_url)
     candidate = {
         "company": row["company"],
-        "adapter": "company_spa",
+        "adapter": adapter,
         "url": source_url,
         "industry": (row.get("industries") or [None])[0],
     }
@@ -148,7 +167,7 @@ def process_browser_company(
 
     result = acceptance_gate(
         row,
-        adapter="company_spa",
+        adapter=adapter,
         source_url=source_url,
         supabase=supabase,
         jobs_conn=jobs_conn,
@@ -172,7 +191,7 @@ def process_browser_company(
             "fail_reason": None,
             "evidence": {
                 **result["evidence"],
-                "planned_action": "CompanySpa 真抓+香港库健康岗回读验收",
+                "planned_action": "%s 真抓+香港库健康岗回读验收" % adapter,
             },
         })
     return result

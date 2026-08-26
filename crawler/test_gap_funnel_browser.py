@@ -188,5 +188,44 @@ class BrowserCompanyTest(unittest.TestCase):
         record_ops.assert_not_called()
 
 
+class ResolveBrowserAdapterTest(unittest.TestCase):
+    """P1 认出的平台必须传到 P2，否则标准 ATS 租户会被通用盲抓打成 no_stable_jd。
+
+    2026-08-26 实测万泰生物同一个 URL：company_spa 抓 0 个岗，moka adapter 抓 15 个
+    带完整逐岗 jd_url 的岗。
+    """
+
+    def test_uses_real_adapter_and_its_source_url(self):
+        row = {"evidence": {"fingerprint": {
+            "real_adapter": "moka",
+            "real_source_url": "https://app.mokahr.com/social-recruitment/ystwt/97880",
+        }}}
+        self.assertEqual(
+            browser.resolve_browser_adapter(row, "https://entry.example/jobs"),
+            ("moka", "https://app.mokahr.com/social-recruitment/ystwt/97880"),
+        )
+
+    def test_falls_back_to_company_spa(self):
+        """真认不出、老数据没这个字段、adapter 不在浏览器白名单 —— 都回落通用盲抓。"""
+        for row in (
+            {"evidence": {"fingerprint": {"real_adapter": None}}},
+            {"evidence": {}},
+            {},
+            {"evidence": {"fingerprint": {"real_adapter": "workday"}}},
+        ):
+            with self.subTest(row=row):
+                self.assertEqual(
+                    browser.resolve_browser_adapter(row, "https://x.example/jobs"),
+                    ("company_spa", "https://x.example/jobs"),
+                )
+
+    def test_real_adapter_without_source_url_keeps_entry(self):
+        row = {"evidence": {"fingerprint": {"real_adapter": "beisen"}}}
+        self.assertEqual(
+            browser.resolve_browser_adapter(row, "https://gacrnd.zhiye.com"),
+            ("beisen", "https://gacrnd.zhiye.com"),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
