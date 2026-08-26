@@ -8,6 +8,7 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
+import ats_tenant_seed
 import db
 import entry_finder
 import gap_census
@@ -1019,16 +1020,89 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
     return {"outcomes": outcomes, "metrics": metrics, "queue": queue}
 
 
+def run_tenant_seed_round(*, limit=None, apply=False, supabase=None,
+                          jobs_conn=None, now=None):
+    """将本地 ATS 租户快照按既有验收门转成候选源，默认仅 dry-run。"""
+    now = now or datetime.now(timezone.utc)
+    supabase = supabase or db.get_supabase()
+    insert_cap = _env_int("GAP_FUNNEL_TENANT_SEED_INSERT_CAP", 15)
+    requested = insert_cap if limit is None else max(0, int(limit))
+    tenant_cap = min(requested, insert_cap)
+    existing_source_urls = [
+        row.get("source_url")
+        for row in db.fetch_all_rows(
+            lambda: supabase.table("sources").select("source_url")
+        )
+        if row.get("source_url")
+    ]
+    tenants = ats_tenant_seed.rank_tenants(
+        ats_tenant_seed.filter_new_tenants(
+            ats_tenant_seed.load_upstream_tenants(), existing_source_urls
+        ),
+        must_apply.all_patterns(),
+    )[:tenant_cap]
+    queue = [{
+        **tenant,
+        "adapter": tenant["platform"],
+        "crawl_method": "playwright",
+    } for tenant in tenants]
+    if apply and jobs_conn is None:
+        jobs_conn = jobs_db.get_conn()
+
+    outcomes = []
+    for tenant in queue:
+        entry = {
+            "company": tenant["name"],
+            "pattern": "%%%s%%" % tenant["name"],
+            "industries": [],
+        }
+        result = run_acceptance_gate(
+            entry,
+            adapter=tenant["adapter"],
+            source_url=tenant["url"],
+            supabase=supabase,
+            jobs_conn=jobs_conn,
+            apply=apply,
+            now=now,
+            crawl_method=tenant["crawl_method"],
+            enable_thin=False,
+        )
+        healthy = int((result.get("evidence") or {}).get("healthy_jobs") or 0)
+        outcome = {**tenant, **result}
+        outcomes.append(outcome)
+        print(
+            "[tenant_seed] %s → %s｜平台=%s｜URL=%s｜健康岗=%d"
+            % (tenant["name"], result["state"], tenant["platform"], tenant["url"], healthy)
+        )
+    return {
+        "outcomes": outcomes,
+        "queue": queue,
+        "metrics": {
+            "checked": len(outcomes),
+            "states": dict(Counter(item["state"] for item in outcomes)),
+            "dry_run": not apply,
+            "insert_cap": insert_cap,
+        },
+    }
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="必投清单缺口漏斗 P1（httpx 道）")
     parser.add_argument("--scope", choices=["domestic", "overseas"], default="domestic")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--company", default=None)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--tenant-seed", action="store_true")
     args = parser.parse_args(argv)
     apply = os.environ.get("GAP_FUNNEL_APPLY", "").strip().lower() in _TRUE
     if args.dry_run:
         apply = False
+    if args.tenant_seed:
+        run_tenant_seed_round(
+            limit=max(0, args.limit) if args.limit is not None else None,
+            apply=apply,
+        )
+        return
     run_round(
         scope=args.scope,
         limit=max(0, args.limit) if args.limit is not None else None,

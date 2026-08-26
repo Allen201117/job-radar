@@ -423,6 +423,30 @@ class RoundCapTest(unittest.TestCase):
         self.assertEqual(result["next_retry_at"], (NOW + gf.timedelta(days=1)).isoformat())
         self.assertEqual(result["fail_reason"], "无可用搜索 provider 或本轮搜索额度已耗尽")
 
+    def test_tenant_seed_dry_run_uses_existing_gate_without_writes(self):
+        tenants = [{
+            "name": "齐鲁制药", "slug": "qilu",
+            "url": "https://qilu.zhiye.com/Social", "platform": "beisen",
+        }, {
+            "name": "Trip.com Group", "slug": "trip/70415",
+            "url": "https://app.mokahr.com/social-recruitment/trip/70415", "platform": "moka",
+        }]
+        output = io.StringIO()
+        with mock.patch.object(
+            gf.ats_tenant_seed, "load_upstream_tenants", return_value=tenants
+        ), mock.patch.object(gf.db, "fetch_all_rows", return_value=[]), \
+             mock.patch.object(gf.must_apply, "all_patterns", return_value=["%齐鲁制药%"]), \
+             contextlib.redirect_stdout(output):
+            result = gf.run_tenant_seed_round(
+                limit=2, apply=False, supabase=_Sb(), now=NOW
+            )
+
+        self.assertEqual([item["state"] for item in result["outcomes"]], ["dry_run", "dry_run"])
+        self.assertEqual(result["queue"][0]["name"], "齐鲁制药")
+        self.assertEqual(result["queue"][0]["adapter"], "beisen")
+        self.assertEqual(result["queue"][1]["adapter"], "moka")
+        self.assertIn("[tenant_seed] 齐鲁制药 → dry_run｜平台=beisen", output.getvalue())
+
     def test_round_loads_enabled_source_hosts_only_once(self):
         queued = [
             {
