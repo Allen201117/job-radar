@@ -1,6 +1,13 @@
 name: production-smoke
 
+# 生产冒烟：首页能开 + /api/jobs/stats 的公开聚合契约还在。
+#
+# ⚠️ 2026-08-27 补 schedule：此前只有 workflow_dispatch，最后一次运行停在 2026-07-11（47 天）——
+# 有冒烟测试但是死的，等于没有。每日 UTC 04:00 跑一次（排在 db-report 03:30 之后，互不打架）。
+# 定时触发时 inputs 为空，必须给 BASE_URL 兜个默认值，否则 curl 会去请求空字符串。
 on:
+  schedule:
+    - cron: "0 4 * * *"
   workflow_dispatch:
     inputs:
       base_url:
@@ -15,7 +22,7 @@ jobs:
     steps:
       - name: Verify public pages and jobs database stats
         env:
-          BASE_URL: ${{ inputs.base_url }}
+          BASE_URL: ${{ inputs.base_url || 'https://job-radar-sigma.vercel.app' }}
         run: |
           set -euo pipefail
           base="${BASE_URL%/}"

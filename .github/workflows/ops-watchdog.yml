@@ -1,0 +1,57 @@
+name: ops-watchdog
+
+# 后台任务真产出告警：每天扫一遍 ops_runs 台账 + discovery_runs + events + workflow 运行历史，
+# 把「静默坏掉」的任务开成本仓库的 GitHub Issue（防刷屏：同标题的 open issue 只追评论、不新开）。
+# 规则与判据见 crawler/ops_watchdog.py 头注释 / docs/superpowers/specs/2026-08-27-observability-and-ux-plan.md §2.2。
+#
+# 时间：每日 UTC 01:00——排在所有夜间档之后（auto-discover 21/23、gap-funnel 22:40、
+# insight 19:30/20:30、dead-link-audit 22:00、purge 02:30 是次日的事），这样看到的是完整的一夜产出。
+#
+# ⚠️ 默认 dry-run：只在日志里打印「会开哪些 issue」，零写入。要真开 issue，
+# 到 repo → Settings → Variables 加 OPS_WATCHDOG_APPLY=true（或手动 dispatch 时把 apply 填 true）。
+# 这样开关不用改代码，也不会因为某次误判就往仓库里灌一堆 issue。
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "true=真开 issue；默认 false 只打印"
+        required: false
+        default: "false"
+      days:
+        description: "规则 A：连续几天零产出才告警"
+        required: false
+        default: "2"
+
+permissions:
+  contents: read
+  actions: read      # 规则 B/E 要读 workflow 运行与 job 详情
+  issues: write      # 告警出口
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      OPS_WATCHDOG_APPLY: ${{ github.event.inputs.apply || vars.OPS_WATCHDOG_APPLY || 'false' }}
+      # 已知在停摆、不想被反复提醒的模块（逗号分隔）。留空即全查。
+      OPS_WATCHDOG_MUTE_MODULES: ${{ vars.OPS_WATCHDOG_MUTE_MODULES }}
+      DISPATCH_DAYS: ${{ github.event.inputs.days || '2' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      - name: Run ops watchdog
+        shell: bash
+        run: python3 crawler/ops_watchdog.py --days "$DISPATCH_DAYS"

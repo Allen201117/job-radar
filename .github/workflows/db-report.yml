@@ -1,10 +1,17 @@
 name: db-report
 
-# 一次性诊断：岗位质量审计。打印 status 分布 / active 有效率（有 JD 正文 vs 薄卡）/ 失活未探活比例 /
+# 岗位质量审计。打印 status 分布 / active 有效率（有 JD 正文 vs 薄卡）/ 失活未探活比例 /
 # 分 adapter 的 active 与有效分布。供「质量方针整治」定口径、决定砍哪些源用。只读、不改库。
 # Phase 1 后 jobs 热表在自建香港 PG（JOBS_DATABASE_URL）；sources 仍在 Supabase（SUPABASE_DB_URL）→
 #   第 0/1/2 段查香港库；第 3 段 adapter 维度跨两库，单条 psql 做不了 join，改 shell 内 awk 汇总。
+#
+# ⚠️ 2026-08-27 补 schedule：CLAUDE.md 明写「任何岗位变多/变少/质量的判断先跑 db-report」，
+# 但它此前只有 workflow_dispatch，最后一次运行停在 2026-07-11（47 天）——被当权威依据的东西
+# 其实是死的。每日 UTC 03:30 跑一次：排在 daily-crawl(01:00) 与 purge-expired(02:30) 之后，
+# 拿到的是当天治理完的数字；只读查询，对库的压力可忽略。
 on:
+  schedule:
+    - cron: "30 3 * * *"
   workflow_dispatch:
 
 jobs:
