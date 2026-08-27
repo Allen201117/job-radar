@@ -350,6 +350,15 @@ def enrich_company_t3(sb, profile):
 
 def drain_t3(sb, limit=0):
     """T3 drain（多源搜索，各源受每日额度 → 串行 + 预算守门，绝不冲破各自日顶）。"""
+    # 先探 LLM，再碰任何搜索额度。余额不足时继续搜索只会空烧有限日配额。
+    try:
+        E.chat_content([{"role": "user", "content": "health check"}], max_tokens=1)
+    except Exception as exc:
+        if E.llm_run_health()["account_error"]:
+            raise RuntimeError(
+                "T3 LLM 预探活失败（账户余额不足或鉴权失效）；已在搜索前中止，未调用搜索 API"
+            ) from exc
+        print(f"⚠ T3 LLM 预探活未通过（非账户级）：{type(exc).__name__}；继续按原流程执行")
     if not _ROUTER.is_configured():
         print("✗ 无搜索源配置（BOCHA/TAVILY/SERPER/千帆 key 全缺或熔断）→ 跳过 T3")
         return {"wrote": 0, "empty": 0, "err": 0, "budget_left": 0}

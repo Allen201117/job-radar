@@ -50,6 +50,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         ]
         self.fetch_complete = False
         self.reported_total = None
+        self._prefetched = None
 
     def _resolve_host(self, source_url: str) -> str:
         """httpx 直拉用的 host：子类有 self.host；通用类 fetch 前已 _bind_host → official_hosts[0]。"""
@@ -104,14 +105,47 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
             return rows, total, reached
         return rows, total, reached
 
+    def _detail_portal_closed(self, host: str, post: dict) -> bool:
+        """只抽一岗确认租户详情门户；请求异常一律放行，避免误杀。"""
+        pid = str((post or {}).get("id") or (post or {}).get("code") or "").strip()
+        if not pid:
+            return False
+        try:
+            response = httpx.get(
+                self.detail_template.format(id=pid),
+                timeout=self._HTTPX_TIMEOUT,
+                follow_redirects=True,
+                headers={"User-Agent": _UA, "Referer": f"https://{host}/index/position"},
+            )
+            return response.status_code in (404, 410)
+        except Exception:
+            return False
+
+    def should_skip(self, source_url: str) -> Optional[str]:
+        """租户详情门户关闭时整源跳过；列表 API 仍吐岗不足以证明可投。"""
+        if not getattr(self, "host", "") and hasattr(self, "_bind_host"):
+            self._bind_host(source_url)
+        host = self._resolve_host(source_url)
+        if not host:
+            return None
+        rows, total, reached = self._httpx_fetch(host)
+        if not reached:
+            return None
+        self._prefetched = (rows, total, reached)
+        if rows and self._detail_portal_closed(host, rows[0]):
+            return "feishu tenant detail portal closed (404/Not Found); skip source to avoid unusable jd_url"
+        return None
+
     def fetch(self, source_url: str) -> str:
         """httpx-first：冷启动直拉 posts API（无浏览器，daily-crawl 4×/天可跑）；httpx 未打通才回退
         浏览器抓包链（仅 Playwright 可用环境如 enrich-crawl）。"""
         self.fetch_complete = False
         self.reported_total = None
+        prefetched = self._prefetched
+        self._prefetched = None
         host = self._resolve_host(source_url)
         if host:
-            rows, total, reached = self._httpx_fetch(host)
+            rows, total, reached = prefetched or self._httpx_fetch(host)
             if reached:
                 # httpx 打通（含真 0 岗）→ 直接用，不再开浏览器。complete=翻全（含 0 岗）。
                 self.reported_total = _int_or_none(total)
@@ -269,6 +303,7 @@ class FeishuGenericAdapter(FeishuRecruitAdapter):
         self.official_hosts = ()
         self.detail_template = ""
         self.list_urls = []
+        self._prefetched = None
 
     def _bind_host(self, source_url: str):
         parsed = urlparse(source_url)

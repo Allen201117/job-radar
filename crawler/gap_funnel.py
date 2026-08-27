@@ -11,6 +11,7 @@ import httpx
 
 import ats_tenant_seed
 import db
+import enrich
 import entry_finder
 import gap_census
 import jobs_db
@@ -31,6 +32,7 @@ _TRUE = {"1", "true", "yes", "on"}
 # 故给长退避，让系统改进后能自我修复。
 _MANUAL_PLATFORMS = {"anti_bot", "login_wall"}
 _NO_STABLE_JD_RETRY_DAYS = 45
+_BROWSER_REVIEW_RETRY_DAYS = 14
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -210,21 +212,47 @@ def validate_jd_url(url, title, company=None, *, client=None, timeout=15):
             cli.close()
 
 
-def _sample_that_passes(samples, validate_jd, pattern, company):
+def _sample_validation(sample, *, adapter, source_url, validate_jd, company):
+    """返回 pass / fail / browser_review。
+
+    httpx 详情 HTML 对 SPA 只是空壳，不能把「未看见标题」当成链接失效。已有
+    enrich detail 探活器的明确关闭信号才可判 fail；没有这类接口的源一律交浏览器复核。
+    """
+    if adapter in enrich.ENRICH_REGISTRY:
+        try:
+            enrich.enrich_one(adapter, sample, {
+                "source_url": source_url,
+                "adapter_name": adapter,
+            })
+            return "pass"
+        except enrich.JobClosedError:
+            return "fail"
+        except Exception:
+            # 网络/限流/接口改版都不能证明岗位已关闭。
+            return "browser_review"
+    # 无接口关闭信号（包括 browser adapter、未知 SPA、网络异常和接口改版）一律中性复核。
+    # HTML 标题核验无法证明 SPA 链接失效，不能再参与删源判定。
+    return "browser_review"
+
+
+def _sample_that_passes(samples, validate_jd, pattern, company, *, adapter, source_url):
+    browser_review = False
     for sample in samples or []:
         url = sample.get("jd_url")
         title = sample.get("title")
         company_matches = must_apply.match_company_against_patterns(
             sample.get("company"), [pattern]
         )
-        if (
-            company_matches
-            and url
-            and title
-            and validate_jd(url, title, company)
-        ):
-            return sample
-    return None
+        if company_matches and url and title:
+            verdict = _sample_validation(
+                sample, adapter=adapter, source_url=source_url,
+                validate_jd=validate_jd, company=company,
+            )
+            if verdict == "pass":
+                return sample, False
+            if verdict == "browser_review":
+                browser_review = True
+    return None, browser_review
 
 
 def _rollback(supabase, jobs_conn, source_id, delete_jobs, *, inserted_new, state,
@@ -299,11 +327,12 @@ def run_acceptance_gate(entry, *, adapter, source_url, supabase, jobs_conn,
         healthy = int(counts.get("healthy") or 0)
         total = int(counts.get("total") or 0)
         samples = read_samples(jobs_conn, source_id) if total > 0 else []
-        passed_sample = (
+        passed_sample, needs_browser_review = (
             _sample_that_passes(
-                samples, validate_jd, entry["pattern"], entry["company"]
+                samples, validate_jd, entry["pattern"], entry["company"],
+                adapter=adapter, source_url=source_url,
             )
-            if total > 0 else None
+            if total > 0 else (None, False)
         )
     except Exception as original_exc:
         try:
@@ -354,6 +383,21 @@ def run_acceptance_gate(entry, *, adapter, source_url, supabase, jobs_conn,
             "evidence": evidence,
         }
     if not passed_sample:
+        if needs_browser_review:
+            _enable_source(supabase, source_id, "browser_review")
+            return {
+                # state 是 must_apply_gap_attempts 的受限枚举；复用 platform_known，
+                # 具体待办放 fail_reason/evidence，避免为了中性结果写坏台账。
+                "state": "platform_known",
+                "kept_source": True,
+                "source_id": source_id,
+                "inserted_new": inserted_new,
+                "next_retry_at": _after_spread(
+                    now, _BROWSER_REVIEW_RETRY_DAYS, entry.get("company")
+                ),
+                "fail_reason": "待浏览器复核：未据 SPA 空壳回滚来源",
+                "evidence": {**evidence, "browser_review_pending": True},
+            }
         _rollback(
             supabase, jobs_conn, source_id, delete_jobs,
             inserted_new=inserted_new, state="no_stable_jd",

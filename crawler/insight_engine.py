@@ -43,7 +43,7 @@ def llm_config() -> dict:
 # 背景（2026-07-21）：LLM cron 都写了「单条失败就跳过、不崩」的兜底，导致 SiliconFlow 账户
 # 欠费(403 balance insufficient)时整轮空转、workflow 仍报 success，故障被绿灯盖住、无人发现。
 # 这里在共享调用点 chat_content 记录每轮 LLM 成败；cron main() 据此判「LLM 整体失败」→ exit(1)
-# 让 workflow 真实标红。判据 = 出现账户级错误(401/403)，或有调用但全部失败。
+# 让 workflow 真实标红。判据 = 出现账户级错误(401/402/403 或余额不足提示)，或有调用但全部失败。
 _LLM_RUN_HEALTH = {"ok": 0, "fail": 0, "account_error": False}
 
 
@@ -62,10 +62,18 @@ def llm_run_health() -> dict:
 
 
 def llm_run_unhealthy() -> bool:
-    """本进程 LLM 是否整体失败：账户级错误(401/403 欠费/鉴权)，或有调用但一次没成。
+    """本进程 LLM 是否整体失败：账户级错误(401/402/403 欠费/鉴权)，或有调用但一次没成。
     0 次调用（无目标/额度用尽）不算不健康——不会误报红。"""
     h = _LLM_RUN_HEALTH
     return bool(h["account_error"] or (h["fail"] > 0 and h["ok"] == 0))
+
+
+def is_account_error(status_code: int, message: str = "") -> bool:
+    """SiliconFlow 账户不可用：鉴权、欠费 HTTP 或余额不足正文。"""
+    if status_code in (401, 402, 403):
+        return True
+    text = str(message or "").casefold()
+    return (("balance" in text and "insufficient" in text) or "余额不足" in text)
 
 
 def parse_json_loose(text: str) -> dict:
@@ -121,9 +129,10 @@ def chat_content(messages: list, temperature: float = 0.1, max_tokens: int = 102
             _record_llm(True)
             return content
     except httpx.HTTPStatusError as e:
-        # 401/403 = 账户级（欠费 / 鉴权失效）→ 标记整轮不健康，让 cron 标红
+        # 401/402/403 或余额不足 = 账户级（欠费 / 鉴权失效）→ 标记整轮不健康，让 cron 标红
         code = e.response.status_code if e.response is not None else 0
-        _record_llm(False, account_error=code in (401, 403))
+        message = e.response.text if e.response is not None else str(e)
+        _record_llm(False, account_error=is_account_error(code, message))
         raise
     except Exception:
         _record_llm(False)

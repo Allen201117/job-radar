@@ -89,6 +89,35 @@ class HttpxFetchTest(unittest.TestCase):
 
 
 class FetchDecisionTest(unittest.TestCase):
+    def test_closed_detail_portal_skips_whole_tenant(self):
+        a = feishu.NioAdapter()
+        rows = [{"id": "1", "title": "T"}]
+        closed = type("Response", (), {"status_code": 404, "text": "Not Found"})()
+        with mock.patch.object(a, "_httpx_fetch", return_value=(rows, 1, True)), \
+                mock.patch.object(feishu.httpx, "get", return_value=closed) as get:
+            reason = a.should_skip("https://nio.jobs.feishu.cn/index/position")
+        self.assertIn("detail portal closed", reason)
+        self.assertEqual(get.call_count, 1)
+
+    def test_reachable_detail_portal_keeps_prefetched_jobs(self):
+        a = feishu.NioAdapter()
+        rows = [{"id": "1", "title": "T"}]
+        live = type("Response", (), {"status_code": 200, "text": "job detail"})()
+        with mock.patch.object(a, "_httpx_fetch", return_value=(rows, 1, True)), \
+                mock.patch.object(feishu.httpx, "get", return_value=live) as get:
+            self.assertIsNone(a.should_skip("https://nio.jobs.feishu.cn/index/position"))
+            out = json.loads(a.fetch("https://nio.jobs.feishu.cn/index/position"))
+        self.assertEqual(out["_intercepted"][0]["data"]["job_post_list"], rows)
+        self.assertEqual(get.call_count, 1)
+
+    def test_200_html_with_not_found_text_does_not_skip_tenant(self):
+        a = feishu.NioAdapter()
+        rows = [{"id": "1", "title": "T"}]
+        spa_shell = type("Response", (), {"status_code": 200, "text": "i18n: Not Found"})()
+        with mock.patch.object(a, "_httpx_fetch", return_value=(rows, 1, True)), \
+                mock.patch.object(feishu.httpx, "get", return_value=spa_shell):
+            self.assertIsNone(a.should_skip("https://nio.jobs.feishu.cn/index/position"))
+
     def test_reached_complete_sets_flag_and_envelope(self):
         a = feishu.NioAdapter()
         with mock.patch.object(a, "_httpx_fetch", return_value=([{"id": "1", "title": "T"}], 1, True)):

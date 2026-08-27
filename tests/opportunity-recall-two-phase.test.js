@@ -116,6 +116,16 @@ test("没有已处理岗时不加排除条件（不发空数组给 SQL）", () =
   assert.ok(!built.sql.includes("uuid[]"));
 });
 
+test("校招预筛同时覆盖届别标题与既有校招关键词", () => {
+  const grad = buildRecallSql(mk({ experienceStage: "校招" }), SINCE, 900);
+  const stagePatterns = grad.params.find((p) => Array.isArray(p) && p.includes("%校招%"));
+  assert.ok(stagePatterns.includes("%届%"), "-27届 类标题必须在 SQL 预筛通过");
+  assert.ok("工艺工程师-27届".includes("届"), "届别标题样例应命中新增 SQL 模式");
+  for (const pattern of ["%校招%", "%应届%", "%campus%"]) {
+    assert.ok(stagePatterns.includes(pattern), `既有 ${pattern} 召回不得收紧`);
+  }
+});
+
 test("排除词仍在 SQL 里比对完整 summary（不能挪到 JS：召回行只有 300 字）", () => {
   const built = buildRecallSql(mk({ excludeKeywords: ["外包"] }), SINCE, 900);
   assert.match(built.sql, /not \(lower\(concat_ws\(' ', title, company, location, job_type, summary, salary_text\)\)/);

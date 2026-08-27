@@ -1,5 +1,6 @@
 """洞察 T2 worker 编排单测（mock supabase + mock wikidata，不打网络/DB）。"""
 import unittest
+from unittest import mock
 
 import insight_backlog as B
 import official_cninfo as CN
@@ -227,6 +228,25 @@ class TestT3(unittest.TestCase):
         res = B.enrich_company_t3(FakeSB(store), {"id": "c2", "company": "Y", "aliases": []})
         self.assertEqual(res, "empty")
         self.assertTrue(any("t3_checked_at" in p for _, p in store.get("company_profiles_updates", [])))
+
+    def test_account_preflight_stops_before_any_search(self):
+        search = mock.Mock()
+        router = type("Router", (), {
+            "is_configured": lambda _self: True,
+            "remaining": lambda _self, _sb: 10,
+            "search": search,
+        })()
+        B._ROUTER = router
+        E.reset_llm_health()
+
+        def account_failure(*_args, **_kwargs):
+            E._record_llm(False, account_error=True)
+            raise RuntimeError("HTTP 402 balance insufficient")
+
+        with mock.patch.object(E, "chat_content", side_effect=account_failure):
+            with self.assertRaisesRegex(RuntimeError, "搜索前中止"):
+                B.drain_t3(FakeSB({}), limit=1)
+        search.assert_not_called()
 
 
 if __name__ == "__main__":

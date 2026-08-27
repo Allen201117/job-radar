@@ -98,7 +98,7 @@ def _entry():
 
 
 class AcceptanceGateTest(unittest.TestCase):
-    def _run(self, counts, jd_ok=True, apply=True):
+    def _run(self, counts, jd_ok=True, apply=True, adapter="greenhouse"):
         sb = _Sb()
         conn = _Conn()
         process_calls = []
@@ -109,7 +109,7 @@ class AcceptanceGateTest(unittest.TestCase):
 
         result = gf.run_acceptance_gate(
             _entry(),
-            adapter="greenhouse",
+            adapter=adapter,
             source_url="https://boards.greenhouse.io/acme",
             supabase=sb,
             jobs_conn=conn,
@@ -146,26 +146,27 @@ class AcceptanceGateTest(unittest.TestCase):
     def test_browser_gate_writes_playwright_source_and_rejects_thin_only(self):
         sb = _Sb()
         conn = _Conn()
-        result = gf.run_acceptance_gate(
-            _entry(),
-            adapter="company_spa",
-            source_url="https://jobs.example.com",
-            supabase=sb,
-            jobs_conn=conn,
-            apply=True,
-            crawl_method="playwright",
-            enable_thin=False,
-            process_source=lambda _source, _sb: {"status": "success"},
-            read_counts=lambda _conn, _sid: {"healthy": 0, "total": 2},
-            read_samples=lambda _conn, _sid: [{
-                "company": "甲公司",
-                "title": "工程师",
-                "jd_url": "https://jobs.example.com/1",
-            }],
-            validate_jd=lambda _url, _title, _company: True,
-            delete_jobs=lambda c, sid: c.executed.append(("delete_jobs", sid)),
-            now=NOW,
-        )
+        with mock.patch.object(gf.enrich, "enrich_one", return_value=""):
+            result = gf.run_acceptance_gate(
+                _entry(),
+                adapter="hotjob",
+                source_url="https://jobs.example.com/SU1/pb/social.html",
+                supabase=sb,
+                jobs_conn=conn,
+                apply=True,
+                crawl_method="playwright",
+                enable_thin=False,
+                process_source=lambda _source, _sb: {"status": "success"},
+                read_counts=lambda _conn, _sid: {"healthy": 0, "total": 2},
+                read_samples=lambda _conn, _sid: [{
+                    "company": "甲公司",
+                    "title": "工程师",
+                    "jd_url": "https://jobs.example.com/1",
+                }],
+                validate_jd=lambda _url, _title, _company: True,
+                delete_jobs=lambda c, sid: c.executed.append(("delete_jobs", sid)),
+                now=NOW,
+            )
         inserted = next(
             payload
             for name, action, payload in sb.writes
@@ -184,11 +185,56 @@ class AcceptanceGateTest(unittest.TestCase):
         self.assertTrue(any(name == "crawl_runs" and action == "delete" for name, action, _ in sb.writes))
         self.assertTrue(any(name == "sources" and action == "delete" for name, action, _ in sb.writes))
 
-    def test_failed_jd_validation_rolls_back(self):
-        result, sb, conn, _ = self._run((1, 1), jd_ok=False)
-        self.assertEqual(result["state"], "no_stable_jd")
-        self.assertIn(("delete_jobs", "source-new"), conn.executed)
-        self.assertTrue(any(name == "sources" and action == "delete" for name, action, _ in sb.writes))
+    def test_unverifiable_spa_sample_keeps_source_for_browser_review(self):
+        result, sb, conn, _ = self._run((1, 1), jd_ok=False, adapter="unknown_spa")
+        self.assertEqual(result["state"], "platform_known")
+        self.assertTrue(result["kept_source"])
+        self.assertTrue(result["evidence"]["browser_review_pending"])
+        self.assertEqual(conn.executed, [])
+
+    def test_every_registry_adapter_uses_detail_interface_not_html_title_check(self):
+        sample = {"company": "甲公司", "title": "工程师", "jd_url": "https://jobs.example.com/1"}
+        calls = []
+        with mock.patch.object(gf.enrich, "enrich_one", side_effect=lambda *args: calls.append(args) or ""):
+            for adapter in sorted(gf.enrich.ENRICH_REGISTRY):
+                self.assertEqual(
+                    gf._sample_validation(
+                        sample, adapter=adapter, source_url="https://jobs.example.com",
+                        validate_jd=lambda *_args: self.fail("registry adapter 不得走 HTML 标题核验"),
+                        company="甲公司",
+                    ),
+                    "pass",
+                )
+        self.assertEqual([call[0] for call in calls], sorted(gf.enrich.ENRICH_REGISTRY))
+
+    def test_adapter_outside_registry_is_browser_review_even_when_html_probe_raises(self):
+        self.assertEqual(
+            gf._sample_validation(
+                {"title": "工程师", "jd_url": "https://jobs.example.com/1"},
+                adapter="ashby", source_url="https://jobs.example.com",
+                validate_jd=lambda *_args: (_ for _ in ()).throw(RuntimeError("SPA shell")),
+                company="甲公司",
+            ),
+            "browser_review",
+        )
+
+    def test_spa_shell_html_is_browser_review_not_no_stable_jd(self):
+        sb = _Sb()
+        conn = _Conn()
+        result = gf.run_acceptance_gate(
+            _entry(), adapter="unknown_spa", source_url="https://jobs.example.com",
+            supabase=sb, jobs_conn=conn, apply=True,
+            process_source=lambda _source, _sb: {"status": "success"},
+            read_counts=lambda _conn, _sid: {"healthy": 1, "total": 1},
+            read_samples=lambda _conn, _sid: [{
+                "company": "甲公司", "title": "工程师", "jd_url": "https://jobs.example.com/1",
+            }],
+            validate_jd=lambda *_args: False,  # httpx 只拿到 SPA 空壳
+            delete_jobs=lambda c, sid: c.executed.append(("delete_jobs", sid)), now=NOW,
+        )
+        self.assertEqual(result["state"], "platform_known")
+        self.assertTrue(result["kept_source"])
+        self.assertEqual(conn.executed, [])
 
     def test_dry_run_performs_no_write_or_crawl(self):
         result, sb, conn, calls = self._run((1, 1), apply=False)

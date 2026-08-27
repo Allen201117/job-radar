@@ -122,7 +122,7 @@ function stageRecallPatterns(profile: RadarProfile): { text: string[]; url: stri
   }
   if (profile.experienceStage === "校招") {
     return {
-      text: ["%校招%", "%校园%", "%应届%", "%campus%", "%graduate%"],
+      text: ["%校招%", "%校园%", "%应届%", "%campus%", "%graduate%", "%届%"],
       url: ["%campus%"],
     };
   }

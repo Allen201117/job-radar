@@ -24,6 +24,11 @@ class _FakeClient:
 
 
 class TestEngineDecision(unittest.TestCase):
+    def test_402_and_insufficient_balance_are_account_errors(self):
+        self.assertTrue(E.is_account_error(402, "Sorry, your account balance is insufficient"))
+        self.assertTrue(E.is_account_error(500, "账户余额不足"))
+        self.assertFalse(E.is_account_error(429, "System is too busy now"))
+
     def test_decide_status(self):
         self.assertEqual(E.decide_status("entailment", 0.9), "active")
         self.assertEqual(E.decide_status("entailment", 0.6), "active")

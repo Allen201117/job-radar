@@ -32,7 +32,7 @@ jobs:
   audit:
     if: github.event_name != 'schedule' || github.event.schedule == '0 22 * * *'
     runs-on: ubuntu-latest
-    timeout-minutes: 90   # 1500 岗 × ~3s ≈ 75min；远低于 GH 6h 硬杀
+    timeout-minutes: 150  # 1200 岗 × 慢 SPA ~6s ≈ 120min；给渲染与网络抖动留余量
     strategy:
       fail-fast: false
       matrix:
@@ -66,7 +66,7 @@ jobs:
             ARGS="$ARGS --sweep ${{ inputs.sweep }}"
           else
             # 必投优先只改候选分配：最多 50% 分片容量先保头部公司，剩余仍按原轮转补满。
-            ARGS="$ARGS --shard ${{ matrix.shard }} --limit ${{ inputs.limit || '1500' }} --must-apply-first"
+            ARGS="$ARGS --shard ${{ matrix.shard }} --limit ${{ inputs.limit || '1200' }} --must-apply-first"
           fi
           echo "audit args:$ARGS"
           python3 audit_dead_links.py $ARGS
