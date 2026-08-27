@@ -359,6 +359,37 @@ class TestBeisenParseSsrPayload(unittest.TestCase):
         self.assertIsNone(jobs[0].job_type)
 
 
+class DataUrlAnchorTest(unittest.TestCase):
+    """详情链接写在 data-url 而不是 href 的租户（建发 chinacdc，2026-08-27 live）。
+
+    它的行长这样：<li><a href="javascript:void(0)" data-url="/zwxq?jobId=561284174">…</a></li>
+    —— href 是 javascript:void(0)，真链接在 data-url。只认 href 会**一条都抓不到**，
+    整源被判「0 岗」丢弃（建发 110 个在招岗就是这么被漏掉一个月的）。
+    """
+
+    ROW = (
+        '<li><a href="javascript:void(0)" data-url="/zwxq?jobId=561284174" class="flex-between">'
+        '<span><b>项目售后主管-西安团结未央项目(J14073)</b></span>'
+        '<span>陕西省-西安市</span><span>若干</span><span>2026-08-11</span>'
+        '<span><b>查看详情</b></span></a></li>'
+    )
+
+    def test_data_url_anchor_is_extracted(self):
+        rows, _ = _cms_parse_list(self.ROW, "https://chinacdc.zhiye.com")
+        self.assertEqual(len(rows), 1, "data-url 上的详情链接必须能抽出来")
+        self.assertEqual(rows[0]["jd_url"],
+                         "https://chinacdc.zhiye.com/zwxq?jobId=561284174")
+
+    def test_href_anchor_still_works(self):
+        """反向不变量：加了 data-url 支持不能把原来 href 型的租户弄坏。"""
+        row = ('<li><a href="/socialxq?jobId=390684920&jc=1&c=&p=1^-1&ky=">'
+               '<span><b>精装修工程师(J10954)</b></span></a></li>')
+        rows, _ = _cms_parse_list(row, "https://smics.zhiye.com")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["jd_url"],
+                         "https://smics.zhiye.com/socialxq?jobId=390684920&jc=1")
+
+
 class StaleCmsHintTest(unittest.TestCase):
     """beisen_routes.json 里 {"cms": true} 过时（租户已升级到新版 SPA）时的自愈。
 

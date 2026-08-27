@@ -424,8 +424,12 @@ _CMS_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 # 岗位行：<li><a href="…?jobId=…">…</a></li>。**必须锚在 <li> 上**——科伦(kelun) 这类老版 CMS
 # 的「热招职位」侧栏也有裸 <a href="/social_show?jobId=…">，而它的主列表是 <table><tr><td>，
 # 不加 <li> 约束会只捞到侧栏 10 条却自称抓全（fetch_complete=True → list-absence 误杀在招岗）。
+# ⚠️ 详情链接不一定在 href 上：建发(chinacdc) 这类租户写成
+#     <li><a href="javascript:void(0)" data-url="/zwxq?jobId=561284174">…</a></li>
+#   —— href 是 javascript:void(0)，真链接在 **data-url**。只认 href 会一条都抓不到、
+#   整源判「0 岗」丢弃（2026-08-27 live 实测建发 10 条/页全被漏掉）。故两个属性都认。
 _CMS_ROW_RE = re.compile(
-    r"<li[^>]*>\s*<a\s[^>]*href=\"(?P<href>[^\"]*[?&](?:jobId|jobAdId|adId)=[^\"]+)\"[^>]*>(?P<body>.*?)</a>",
+    r"<li[^>]*>\s*<a\s[^>]*(?:href|data-url)=\"(?P<href>[^\"]*[?&](?:jobId|jobAdId|adId)=[^\"]+)\"[^>]*>(?P<body>.*?)</a>",
     re.S | re.I)
 _CMS_SPAN_RE = re.compile(r"<span[^>]*>(.*?)</span>", re.S | re.I)
 _CMS_TH_RE = re.compile(r"<th[^>]*>(.*?)</th>", re.S | re.I)
