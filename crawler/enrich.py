@@ -469,6 +469,167 @@ def _detail_huawei(row, src):
     return (payload.get("mainBusiness") or "").strip()
 
 
+# --- 探活盲区六家（2026-08-28，审阅 P1-3：11 adapter 12,775 岗三层探活零覆盖）---
+# 每家的判死信号都做过真伪 id live 对拍（真 id ≥2 个返回正常数据、伪 id ≥2 个返回可区分的
+# 「不存在」信号），证据见各函数注释。红线不变：只认正面撤岗证据，含糊信号一律不判死。
+
+
+def _detail_jd(row, src):
+    # jd_url = zhaopin.jd.com/web/job-info-detail?requementId={id}：JSP SSR 页面，零鉴权。
+    # 在招 → HTTP 200，正文内嵌 <h1 class="post-name"> + div.main-content 下「岗位描述/任职要求」
+    # 成对 div.part（live 验证 3 真 id）。不存在/已撤 → HTTP 302 跳首页、body 空（live 验证 4 伪 id）。
+    # httpx.get 默认不跟随重定向 → 302 本身就是判死信号。
+    r = httpx.get(row["jd_url"], headers={**UA, "Accept": "text/html"}, timeout=TIMEOUT)
+    if r.status_code in (301, 302, 303, 307, 308):
+        raise JobClosedError(f"jd closed (redirect {r.status_code}): {row['jd_url']}")
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    tree = HTMLParser(r.text)
+    if not tree.css_first("h1.post-name"):
+        return ""  # 页面结构变化/未命中标题，保守不判死
+    parts = [n.text(separator=" ", strip=True) for n in tree.css("div.main-content div.part")]
+    return "\n".join(x for x in parts if x)
+
+
+_ANT_BOARD_BY_PATH = {"off-campus-position": "social", "campus-position": "campus"}
+
+
+def _detail_antgroup(row, src):
+    # talent.antgroup.com 是 UMI SPA；公开 JSON 接口 = POST hrcareersweb.antgroup.com/api/
+    # {social|campus}/position/detail，body={"id":positionId}，零鉴权（live 验证 3 真 id 200+38 字段）。
+    # 不存在/撤岗 → 200 + {"success":true,"content":null}（live 验证 4 伪 id 皆此形状）。
+    # ⚠️ {"success":false,...} 是含糊系统异常（live 验证 id="1" 返 system_error），不判死。
+    p = urlparse(row["jd_url"])
+    board = _ANT_BOARD_BY_PATH.get((p.path or "").strip("/"))
+    pid = (parse_qs(p.query).get("positionId") or [""])[0]
+    if not (board and pid):
+        return ""
+    headers = {**UA, "Content-Type": "application/json",
+               "Referer": "https://talent.antgroup.com/", "Origin": "https://talent.antgroup.com"}
+    r = httpx.post(f"https://hrcareersweb.antgroup.com/api/{board}/position/detail",
+                   json={"id": pid}, headers=headers, timeout=TIMEOUT)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    try:
+        j = r.json() or {}
+    except ValueError:
+        return ""
+    if not j.get("success"):
+        return ""
+    content = j.get("content")
+    if content is None:
+        raise JobClosedError(f"antgroup positionId={pid} closed (content=null): {row['jd_url']}")
+    if not isinstance(content, dict):
+        return ""
+    return "\n".join(x for x in (content.get("description"), content.get("requirement")) if x)
+
+
+def _detail_haier(row, src):
+    # maker.haier.net/client/job/detail.html?id={id}：SSR，零鉴权。在招 → 200 + 26-27KB、
+    # 正文在 4 个 div.cb-wordwrap（live 验证 3 真 id）。不存在/撤岗 → 200 但 ~6.5KB、出现
+    # 专用错误容器 <div class="cb-page404">（「参数错误」+3 秒跳转，live 验证 3 伪 id）。
+    # 按 cb-page404 判死而非「cb-wordwrap 为空」——防页面改版误杀。
+    r = httpx.get(row["jd_url"], headers={**UA, "Accept": "text/html"}, timeout=TIMEOUT,
+                  follow_redirects=True)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    tree = HTMLParser(r.text)
+    if tree.css_first("div.cb-page404"):
+        raise JobClosedError(f"haier job closed (cb-page404): {row['jd_url']}")
+    parts = [n.text(separator=" ", strip=True) for n in tree.css("div.cb-wordwrap")]
+    return "\n".join(x for x in parts if x)
+
+
+def _detail_ashby(row, src):
+    # jobs.ashbyhq.com/{org}/{uuid}：SSR，真实在招岗注入 <title>{岗位} @ {公司}</title> +
+    # application/ld+json JobPosting（含 description 正文），live 验证 3 真 id。
+    # 撤岗/不存在（含整个 org 不存在）→ 统一通用壳：<title>Jobs</title>、无 ld+json、HTTP 恒 200
+    # （live 验证 4 种伪造完全一致）→ 只能按内容判死，且要求「title==Jobs 且无 ld+json」双条件。
+    if not re.match(r"^/[^/]+/[0-9a-fA-F-]{36}/?$", urlparse(row["jd_url"]).path):
+        return ""
+    r = httpx.get(row["jd_url"], headers={**UA, "Accept": "text/html"}, timeout=TIMEOUT,
+                  follow_redirects=True)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    title_m = re.search(r"<title>(.*?)</title>", r.text, re.S)
+    title = html_lib.unescape(title_m.group(1).strip()) if title_m else ""
+    ld_m = re.search(r"<script[^>]*application/ld\+json[^>]*>(.*?)</script>", r.text, re.S)
+    if title == "Jobs" and not ld_m:
+        raise JobClosedError(f"ashby posting gone (generic shell): {row['jd_url']}")
+    if not ld_m:
+        return ""
+    try:
+        data = json.loads(ld_m.group(1))
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    if not isinstance(data, dict) or data.get("@type") != "JobPosting":
+        return ""
+    desc = html_lib.unescape(str(data.get("description") or ""))
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", desc)).strip()
+
+
+_MIHOYO_INFO_API = "https://ats.openout.mihoyo.com/ats-portal/v1/job/info"
+
+
+def _detail_mihoyo(row, src):
+    # jd_url 是 hash 路由 SPA（#/position/{id} 或 #/campus/position/{id}，id 在 fragment）；
+    # detail = adapter 在用的公开 v1/job/info（POST {id, channelDetailIds:[1]}），社招/校招同接口。
+    # live 验证：真 id（社招 9407/9406/9404、校招 9100）code=0+完整 data；伪数字 id → 200 +
+    # code=1080001052「当前职位不存在」。⚠️ 只认 1080001052：code=2080001003 是入参格式错
+    # （非数字 id 才触发），拿它判死会把我方解析 bug 错杀成撤岗。
+    m = re.search(r"/position/(\d+)", urlparse(row["jd_url"]).fragment)
+    if not m:
+        return ""
+    headers = {**UA, "Accept": "application/json, text/plain, */*", "Content-Type": "application/json",
+               "Referer": "https://jobs.mihoyo.com/", "Origin": "https://jobs.mihoyo.com"}
+    r = httpx.post(_MIHOYO_INFO_API, json={"id": m.group(1), "channelDetailIds": [1]},
+                   headers=headers, timeout=TIMEOUT)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    j = r.json() or {}
+    if str(j.get("code")) == "1080001052":
+        raise JobClosedError(f"mihoyo job id={m.group(1)} closed: {j.get('message')}")
+    d = j.get("data")
+    if not isinstance(d, dict):
+        return ""
+    return "\n".join(x for x in (d.get("description"), d.get("jobRequire")) if x)
+
+
+def _detail_tencent_music(row, src):
+    # join.tencentmusic.com：社招 POST /api/job/info、校招 POST /api/uc-job/info，body={"id":id}，
+    # board 取 jd_url 路径首段。live 验证：真 id（社招 15055/15057、校招 15056）code="200"(字符串)
+    # +完整 data；伪 id（数字/非数字、两接口）→ 200 + code=404(数字) + msg="该岗位不存在！"。
+    # 真伪 code 连类型都不同，用 str() 统一比较防类型漂移。
+    p = urlparse(row["jd_url"])
+    parts = [x for x in p.path.split("/") if x]
+    if not parts:
+        return ""
+    board = parts[0]
+    jid = (parse_qs(p.query).get("id") or [""])[0]
+    if not jid:
+        return ""
+    api = ("https://join.tencentmusic.com/api/uc-job/info" if board == "campus"
+           else "https://join.tencentmusic.com/api/job/info")
+    headers = {**UA, "Accept": "application/json, text/plain, */*", "Content-Type": "application/json",
+               "Referer": f"https://join.tencentmusic.com/{board}", "Origin": "https://join.tencentmusic.com"}
+    r = httpx.post(api, json={"id": jid}, headers=headers, timeout=TIMEOUT)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    j = r.json() or {}
+    if str(j.get("code")) == "404":
+        raise JobClosedError(f"tencent_music job id={jid} closed: {j.get('msg')}")
+    d = j.get("data")
+    if not isinstance(d, dict):
+        return ""
+    return "\n".join(x for x in (d.get("duty"), d.get("requirement")) if x)
+
+
 ENRICH_REGISTRY = {
     "huawei": _detail_huawei,
     "workday": _detail_workday,
@@ -495,6 +656,13 @@ ENRICH_REGISTRY = {
     "sf_express": _detail_sf_express,
     "tencent": _detail_tencent,
     "vivo": _detail_vivo,
+    # 盲区六家（2026-08-28，真伪 id live 对拍，见各函数注释）：
+    "jd": _detail_jd,
+    "antgroup": _detail_antgroup,
+    "haier": _detail_haier,
+    "ashby": _detail_ashby,
+    "mihoyo": _detail_mihoyo,
+    "tencent_music": _detail_tencent_music,
 }
 
 # 需渲染、低并发：SPA 壳详情页无 httpx 关闭信号，走 audit_dead_links 浏览器审计兜底。
