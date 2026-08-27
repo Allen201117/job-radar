@@ -211,7 +211,8 @@ class AcceptanceGateTest(unittest.TestCase):
         self.assertEqual(
             gf._sample_validation(
                 {"title": "工程师", "jd_url": "https://jobs.example.com/1"},
-                adapter="ashby", source_url="https://jobs.example.com",
+                # phenom 是 SPA 壳、始终不在 ENRICH_REGISTRY（ashby 2026-08-28 进注册表后不再适用作反例）
+                adapter="phenom", source_url="https://jobs.example.com",
                 validate_jd=lambda *_args: (_ for _ in ()).throw(RuntimeError("SPA shell")),
                 company="甲公司",
             ),
