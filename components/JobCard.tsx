@@ -11,6 +11,7 @@ import {
   Check,
   CheckCircle,
   Copy,
+  DotsThree,
   GraduationCap,
   HandCoins,
   Hourglass,
@@ -169,6 +170,8 @@ export default function JobCard({
   const [insightOpen, setInsightOpen] = useState(false);
   // 「不适合 / 忽略」原因面板（§8.2）：ignored 必须选一个原因才写入。
   const [reasonOpen, setReasonOpen] = useState(false);
+  // 次要操作（复制链接 / 标记投递 / 不适合）收进「更多」面板：卡片默认只露 2 个主动作，功能一个不少。
+  const [moreOpen, setMoreOpen] = useState(false);
   const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(false);
   // 洞察按钮点击前预告状态：null=未知/加载中，real>0=有实录，derived=有岗位聚合派生。
@@ -268,6 +271,7 @@ export default function JobCard({
   // 值得投 / 已投递：点已选则取消（action=null）
   function handlePrimary(action: "saved" | "applied") {
     if (acting) return;
+    setMoreOpen(false);
     const prev = currentAction as PrimaryAction | null;
     void callActionApi(prev === action ? null : action, prev);
   }
@@ -275,6 +279,7 @@ export default function JobCard({
   // 不适合 / 忽略：已选则取消；否则先开原因面板（ignored 必须带原因）
   function handleIgnore() {
     if (acting) return;
+    setMoreOpen(false);
     if (currentAction === "ignored") {
       void callActionApi(null, "ignored");
       return;
@@ -439,7 +444,7 @@ export default function JobCard({
           <button
             type="button"
             onClick={handleView}
-            className="block max-w-full text-left text-[1.35rem] font-semibold leading-tight text-[#1a1714] transition-colors hover:text-[#3f7cc0] sm:text-2xl dark:text-[#f3ecdf] dark:hover:text-[#7fb2e8]"
+            className="block max-w-full text-left text-[1.35rem] font-semibold leading-tight text-[#1a1714] transition-colors hover:text-[#2f8a63] sm:text-2xl dark:text-[#f3ecdf] dark:hover:text-[#6cc99e]"
           >
             <span className="text-balance">{job.title}</span>
           </button>
@@ -551,16 +556,18 @@ export default function JobCard({
               <p
                 className={cn(
                   "whitespace-pre-line text-pretty text-sm leading-6 text-[#5f594e] dark:text-[#b6ad9d]",
-                  !expanded && "line-clamp-3",
+                  // 默认只露 1 行（一屏能多放几张卡），要看细节再「展开全文」。
+                  !expanded && "line-clamp-1",
                 )}
               >
                 {summary}
               </p>
-              {summary.length > 80 && (
+              {/* 阈值跟着 clamp 从 3 行降到 1 行：>40 字在窄屏也一定被截断，不能没有展开入口。 */}
+              {summary.length > 40 && (
                 <button
                   type="button"
                   onClick={() => setExpanded((v) => !v)}
-                  className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-[#3f7cc0] transition-colors hover:text-[#2f6299] dark:text-[#7fb2e8] dark:hover:text-[#a8cdf0]"
+                  className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-[#2f8a63] transition-colors hover:text-[#1a1714] dark:text-[#6cc99e] dark:hover:text-[#f3ecdf]"
                 >
                   {expanded ? "收起" : "展开全文"}
                   <CaretDown
@@ -607,7 +614,7 @@ export default function JobCard({
                   {opportunityReasons.map((r, i) => (
                     <li
                       key={`${r.type}:${i}`}
-                      className="inline-flex items-center gap-1 rounded-full border border-[#cfe0f5] bg-[#e8f1fc] px-2.5 py-1 text-xs font-medium text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.12] dark:text-[#7fb2e8]"
+                      className="inline-flex items-center gap-1 rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-1 text-xs font-medium text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.12] dark:text-[#6cc99e]"
                     >
                       <Sparkle size={11} weight="fill" aria-hidden="true" />
                       {r.label}
@@ -636,7 +643,7 @@ export default function JobCard({
                   {job.matched_keywords.slice(0, 3).map((kw) => (
                     <span
                       key={kw}
-                      className="rounded-full border border-[#cfe0f5] bg-[#e8f1fc] px-2.5 py-1 text-xs font-medium text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.12] dark:text-[#7fb2e8]"
+                      className="rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-1 text-xs font-medium text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.12] dark:text-[#6cc99e]"
                     >
                       {kw}
                     </span>
@@ -676,7 +683,8 @@ export default function JobCard({
           )}
         </div>
 
-        {/* 移动端：官网详情整宽 + 三个操作并排一行；桌面端（lg）回到右侧竖排。 */}
+        {/* 只露 2 个主动作（官网详情 / 值得投），其余收进「更多」——功能一个不少，只是不再占 5 行高度。
+            移动端：官网详情整宽 + 值得投·更多并排一行；桌面端（lg）回到右侧竖排。 */}
         <div className="flex shrink-0 flex-col gap-2 lg:w-36">
           <button
             type="button"
@@ -686,19 +694,7 @@ export default function JobCard({
             官网详情
             <ArrowSquareOut size={16} weight="bold" aria-hidden="true" />
           </button>
-          <button
-            type="button"
-            onClick={() => void handleCopyLink()}
-            className="inline-flex items-center justify-center gap-2 rounded-full border border-black/[0.07] bg-white/70 px-4 py-2.5 text-sm font-semibold text-[#3f3a33] transition duration-200 hover:bg-white active:scale-[0.98] lg:py-2 dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
-          >
-            {copied ? (
-              <Check size={16} weight="bold" aria-hidden="true" />
-            ) : (
-              <Copy size={16} weight="bold" aria-hidden="true" />
-            )}
-            {copied ? "已复制" : "复制链接"}
-          </button>
-          <div className="grid grid-cols-3 gap-2 lg:grid-cols-1">
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
             <ActionButton
               active={currentAction === "saved"}
               disabled={acting}
@@ -707,21 +703,49 @@ export default function JobCard({
               label={currentAction === "saved" ? "已加入值得投" : "值得投"}
             />
             <ActionButton
-              active={currentAction === "applied"}
-              disabled={acting}
-              onClick={() => handlePrimary("applied")}
-              icon={CheckCircle}
-              label={currentAction === "applied" ? "已投递" : "标记投递"}
-            />
-            <ActionButton
-              muted
-              active={currentAction === "ignored"}
-              disabled={acting}
-              onClick={handleIgnore}
-              icon={XCircle}
-              label={currentAction === "ignored" ? "已忽略" : isOpportunity ? "不适合" : "忽略"}
+              active={false}
+              expanded={moreOpen}
+              disabled={false}
+              onClick={() => {
+                setReasonOpen(false);
+                setMoreOpen((v) => !v);
+              }}
+              icon={DotsThree}
+              label="更多"
             />
           </div>
+
+          {moreOpen && (
+            <div className="rounded-xl border border-black/[0.08] bg-white/95 p-2 shadow-lg dark:border-white/[0.12] dark:bg-[#16130f]/95">
+              <div className="flex flex-col gap-0.5">
+                <MoreItem
+                  onClick={() => void handleCopyLink()}
+                  icon={copied ? Check : Copy}
+                  label={copied ? "已复制" : "复制链接"}
+                />
+                <MoreItem
+                  disabled={acting}
+                  active={currentAction === "applied"}
+                  onClick={() => handlePrimary("applied")}
+                  icon={CheckCircle}
+                  label={currentAction === "applied" ? "已投递（点击取消）" : "标记投递"}
+                />
+                <MoreItem
+                  disabled={acting}
+                  active={currentAction === "ignored"}
+                  onClick={handleIgnore}
+                  icon={XCircle}
+                  label={
+                    currentAction === "ignored"
+                      ? "已忽略（点击取消）"
+                      : isOpportunity
+                        ? "不适合"
+                        : "忽略"
+                  }
+                />
+              </div>
+            </div>
+          )}
 
           {reasonOpen && (
             <div className="rounded-xl border border-black/[0.08] bg-white/95 p-2 shadow-lg dark:border-white/[0.12] dark:bg-[#16130f]/95">
@@ -789,17 +813,51 @@ function Field({
 function ActionButton({
   active,
   disabled,
-  muted,
   onClick,
   icon: Icon,
   label,
+  expanded,
 }: {
   active: boolean;
   disabled: boolean;
-  muted?: boolean;
   onClick: () => void;
   icon: typeof BookmarkSimple;
   label: string;
+  // 只有「更多」这类开合按钮传：给读屏软件报当前是展开还是收起。
+  expanded?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-expanded={expanded}
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center justify-center gap-1 rounded-full px-2 py-2.5 text-[12px] font-medium transition duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-4 sm:py-2 sm:text-sm",
+        active
+          ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+          : "border border-black/[0.07] bg-white/70 text-[#3f3a33] hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]",
+      )}
+    >
+      <Icon size={16} weight={active ? "fill" : "regular"} className="shrink-0" aria-hidden="true" />
+      {label}
+    </button>
+  );
+}
+
+// 「更多」面板里的次要操作：与忽略原因面板同一套小行样式，窄到 lg:w-36 也放得下。
+function MoreItem({
+  onClick,
+  icon: Icon,
+  label,
+  active,
+  disabled,
+}: {
+  onClick: () => void;
+  icon: typeof BookmarkSimple;
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -807,15 +865,13 @@ function ActionButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "inline-flex items-center justify-center gap-1 rounded-full px-2 py-2.5 text-[12px] font-medium transition duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-4 sm:py-2 sm:text-sm",
+        "inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition hover:bg-black/[0.05] disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-white/[0.06]",
         active
-          ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-          : muted
-            ? "text-[#8a8275] hover:bg-black/[0.05] hover:text-[#1a1714] dark:text-[#9a9184] dark:hover:bg-white/[0.05] dark:hover:text-[#f3ecdf]"
-            : "border border-black/[0.07] bg-white/70 text-[#3f3a33] hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]",
+          ? "font-semibold text-[#1a1714] dark:text-[#f3ecdf]"
+          : "text-[#3f3a33] dark:text-[#d9d0c2]",
       )}
     >
-      <Icon size={16} weight={active ? "fill" : "regular"} className="shrink-0" aria-hidden="true" />
+      <Icon size={14} weight={active ? "fill" : "regular"} className="shrink-0" aria-hidden="true" />
       {label}
     </button>
   );
