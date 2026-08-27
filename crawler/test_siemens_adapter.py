@@ -112,6 +112,7 @@ class SiemensPaginationTest(unittest.TestCase):
 
         self.assertEqual(len(jobs), len({j.jd_url for j in jobs}), "跨关键词没按 jd_url 去重")
         self.assertEqual(len(jobs), 8)
+        self.assertEqual(adapter.reported_total, 8, "重叠全文搜索词不能把官网分母相加")
 
 
 class SiemensRegionScopeTest(unittest.TestCase):

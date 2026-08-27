@@ -23,6 +23,7 @@ from adapters.jd import JdAdapter
 from adapters.haier import HaierAdapter
 from adapters.iguopin import IguopinAdapter
 from adapters.siemens import SiemensAdapter
+from adapters.avature import AvatureAdapter
 from adapters.tencent import TencentAdapter
 from adapters.bytedance import BytedanceAdapter, BytedanceCampusAdapter
 from adapters.feishu import NioAdapter, XpengAdapter, HorizonAdapter, XiaomiAdapter, FeishuGenericAdapter
@@ -58,6 +59,8 @@ from adapters.sf_express import SfExpressAdapter
 from adapters.tencent_music import TencentMusicAdapter
 from adapters.antgroup import AntGroupAdapter
 from adapters.mihoyo import MihoyoAdapter
+from adapters.gllue import GllueAdapter
+from adapters.cnstaff import CnstaffAdapter
 
 
 SUMMARY_STORAGE_LIMIT = int(os.environ.get("JOB_SUMMARY_STORAGE_LIMIT", "500") or "500")
@@ -96,6 +99,7 @@ ADAPTERS = {
     "haier": HaierAdapter(),
     "iguopin": IguopinAdapter(),  # 国聘央企/国企公开职位搜索 API
     "siemens": SiemensAdapter(),
+    "avature": AvatureAdapter(),  # Avature SearchJobs SSR 通用层（详情链接直接取卡片 href）
     "tencent": TencentAdapter(),
     "bytedance": BytedanceAdapter(),
     "bytedance_campus": BytedanceCampusAdapter(),  # 字节校招/实习（与社招同平台）
@@ -145,6 +149,8 @@ ADAPTERS = {
     "tencent_music": TencentMusicAdapter(),  # 腾讯音乐自建门户：job/list + uc-job/list 公开接口,零浏览器
     "antgroup": AntGroupAdapter(),  # 蚂蚁集团自建门户：hrcareersweb position/search 公开接口,零浏览器
     "mihoyo": MihoyoAdapter(),  # 米哈游自建门户：ats-portal v1/job/list+info 公开接口,零浏览器
+    "gllue": GllueAdapter(),  # Gllue Next.js SSR 通用层，host 从 source_url 动态解析
+    "cnstaff": CnstaffAdapter(),  # 聘客 cnstaff joblist API 通用层，host/tenant 动态解析
 }
 
 # 中国本土公司源（每日后台爬取高优）：本土覆盖优先级 > 外企，排在外企 ATS 前先抓。
@@ -154,7 +160,7 @@ DOMESTIC_ADAPTERS = {
     "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier", "iguopin",
     "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",
     "meituan", "meituan_campus", "kuaishou", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "byd", "sf_express",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
-    "tencent_music", "antgroup", "mihoyo",  # 自建门户公开接口（2026-07-06 live 验证,零浏览器）
+    "tencent_music", "antgroup", "mihoyo", "gllue", "cnstaff",  # 自建门户公开接口（零浏览器）
 }
 
 
@@ -168,7 +174,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
     "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",
     "meituan", "meituan_campus", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "sf_express",  # 已逐一核实为纯 httpx fetch
-    "tencent_music", "antgroup", "mihoyo",  # 自建门户公开 JSON 接口，纯 httpx（2026-07-06 核实）
+    "tencent_music", "antgroup", "mihoyo", "avature", "gllue", "cnstaff",  # 公开接口/SSR，纯 httpx
     # 字节：jobs.bytedance.com posts API 已改为纯 httpx offset/limit 全量翻页；
     # sources.crawl_method 仍由运维侧改库，本白名单只控制代码侧并发档。
     "bytedance", "bytedance_campus",

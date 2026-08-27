@@ -28,10 +28,10 @@ const S = loadTsModule(path.join("lib", "source-adapters.ts"));
 
 test("adapter 白名单覆盖 crawler ADAPTERS 全部值（含通用 ATS）", () => {
   for (const v of [
-    "apple", "apple_cn", "baidu", "jd", "haier", "siemens", "tencent",
+    "apple", "apple_cn", "baidu", "jd", "haier", "siemens", "avature", "tencent",
     "bytedance", "bytedance_campus", "nio_feishu", "xpeng_feishu", "horizon_feishu",
     "xiaomi_feishu", "greenhouse", "lever", "ashby", "smartrecruiters", "successfactors", "workday",
-    "moka", "beisen", "company_spa", "feishu", "hotjob", "eightfold", "oracle", "amazon", "phenom", "microsoft", "google",
+    "moka", "beisen", "company_spa", "feishu", "hotjob", "eightfold", "oracle", "amazon", "phenom", "microsoft", "google", "gllue", "cnstaff",
   ]) {
     assert.equal(S.isValidAdapter(v), true, `${v} 应在白名单`);
   }
@@ -113,7 +113,7 @@ test("每个 adapter 必标 origin（外企/本土），FOREIGN_ATS_ADAPTERS 由
     [...S.FOREIGN_ATS_ADAPTERS].sort(),
     [
       "amazon", "apple", "apple_cn", "ashby", "eightfold", "google", "greenhouse",
-      "lever", "microsoft", "oracle", "phenom", "siemens", "smartrecruiters", "successfactors", "workday",
+      "avature", "lever", "microsoft", "oracle", "phenom", "siemens", "smartrecruiters", "successfactors", "workday",
     ].sort(),
   );
   assert.equal(S.isForeignAtsAdapter("greenhouse"), true);
