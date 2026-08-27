@@ -29,6 +29,8 @@ on:
 jobs:
   vacuum:
     runs-on: ubuntu-latest
+    timeout-minutes: 90   # VACUUM FULL 重写全表也用不了这么久；防 runner 挂起白等默认 6h
+
     steps:
       - uses: actions/checkout@v4
 

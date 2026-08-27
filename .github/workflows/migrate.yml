@@ -15,6 +15,7 @@ on:
 jobs:
   migrate:
     runs-on: ubuntu-latest
+    timeout-minutes: 30   # 迁移内部自抬 statement_timeout=1800s；再挂就是 runner/网络问题，别白等 6h
     steps:
       - uses: actions/checkout@v4
 

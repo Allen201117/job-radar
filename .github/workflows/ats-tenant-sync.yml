@@ -18,6 +18,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crawler/requirements.txt
       - name: Sync ATS tenant snapshots
         run: python3 crawler/sync_ats_tenants.py --apply
       - name: Commit updated snapshots if changed

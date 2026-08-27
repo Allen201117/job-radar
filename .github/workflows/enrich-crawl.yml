@@ -20,6 +20,12 @@ on:
         required: false
         default: "all"
 
+# 2026-08-28 硬化：并发组防手动触发叠上定时（12 片同跑连接峰值 72 逼近 HK max_connections=100）；
+# guard job 兜底「分片软失败全绿但库真挂」（与 enrich-backlog.yml 同款）。
+concurrency:
+  group: enrichment-crawl
+  cancel-in-progress: false
+
 jobs:
   enrich:
     strategy:
@@ -44,11 +50,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crawler/requirements.txt
 
       - name: Install crawler dependencies
         run: pip install -r crawler/requirements.txt
 
       - name: Install Playwright browser (SPA browser-intercept tier)
+        # httpx-only 档不需要 chromium，省每片 1-2 分钟安装
+        if: ${{ github.event.inputs.tier != 'httpx' }}
         run: python -m playwright install --with-deps chromium
 
       # 并行分片：matrix.shard 提供片号（0-5），run.py 内 _shard_by_host 按主机分桶取本片的源。
@@ -58,3 +68,27 @@ jobs:
             --tier "${{ github.event.inputs.tier || 'all' }}" \
             --shard-index "${{ matrix.shard }}" \
             --shard-count 6
+
+  # 分片各自软失败会全绿（见 enrich-backlog.yml guard 注释）；换台干净 runner 亲自连一次库，
+  # 连不上才是真故障，红在这里。
+  guard:
+    needs: enrich
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+      JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+      JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crawler/requirements.txt
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+      - name: Probe jobs DB reachability
+        working-directory: crawler
+        run: python jobs_db_probe.py

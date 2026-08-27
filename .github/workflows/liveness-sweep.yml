@@ -13,7 +13,9 @@ on:
   # 维持 today 24h / search 72h 核验 SLA；避开 daily-crawl(1/7/13/17)/purge(02:30)/晚间重档(18–22)。
   # 频率是可调旋钮：SLA 紧→提频，CI 预算紧→降频。
   schedule:
-    - cron: "0 4,12,20 * * *"
+    # 2026-08-28：20:00 档后移到 21:00——enrich-crawl(18:00) 实测均值 129min、最长 181min，
+    # 20:00 起飞必然与其尾部叠跑（同写香港库）。改 5/13/21 保持 8h 间距、避开重叠窗。
+    - cron: "0 5,13,21 * * *"
   workflow_dispatch:
     inputs:
       limit:
@@ -55,6 +57,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crawler/requirements.txt
       - name: Install crawler dependencies
         run: pip install -r crawler/requirements.txt
       - name: Liveness sweep (${{ matrix.adapter }})
@@ -62,7 +66,7 @@ jobs:
           python crawler/enrich_backlog.py --sweep \
             --adapter "${{ matrix.adapter }}" \
             --limit "${{ github.event.inputs.limit || '50000' }}" \
-            --workers "${{ github.event.inputs.workers || '10' }}"
+            --workers "${{ github.event.inputs.workers || '6' }}"
 
   # 见 enrich-backlog.yml 同名 job：分片「够不着库」软失败换取不误报，
   # 这一步换台干净 runner 亲自连一次库，兜住「库真挂了却全绿」。
@@ -80,6 +84,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crawler/requirements.txt
       - name: Install crawler dependencies
         run: pip install -r crawler/requirements.txt
       - name: Probe jobs DB reachability

@@ -16,6 +16,8 @@ on:
 jobs:
   purge:
     runs-on: ubuntu-latest
+    # 2026-08-28：此前无超时=默认 360min，08-18 实锤跑满 6h 被硬杀。日常 ~20min，45 兜底。
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 

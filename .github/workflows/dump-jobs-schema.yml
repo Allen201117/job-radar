@@ -4,6 +4,7 @@ on:
 jobs:
   dump:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Install pg client 17 (PGDG)
         run: |
@@ -12,14 +13,20 @@ jobs:
           sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
           echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update && sudo apt-get install -y postgresql-client-17
-      - name: Dump search_tokens + jobs public functions inventory
+      # 2026-08-28 修：Phase 1 后 search_tokens 等 jobs 函数活在自建香港库（jobs-db/schema.sql），
+      # Supabase 的 jobs 是空表——此前连 SUPABASE_DB_URL 查的是错误的库，输出没有意义。
+      - uses: actions/checkout@v4
+      - name: Dump search_tokens + jobs public functions inventory (HK jobs DB)
         env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
         run: |
-          if [ -z "${SUPABASE_DB_URL:-}" ]; then echo "::error::SUPABASE_DB_URL 未配置"; exit 1; fi
+          if [ -z "${JOBS_DATABASE_URL:-}" ]; then echo "::error::JOBS_DATABASE_URL 未配置"; exit 1; fi
+          source scripts/enable-jobs-db-strict-tls.sh
           P=/usr/lib/postgresql/17/bin
           echo "========== search_tokens body =========="
-          $P/psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -P pager=off -c "\sf search_tokens" 2>&1 || true
+          $P/psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off -c "\sf search_tokens" 2>&1 || true
           echo "========== all public functions (names only) =========="
-          $P/psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -P pager=off -c "select proname, pg_get_function_arguments(oid) from pg_proc where pronamespace='public'::regnamespace order by proname;"
+          $P/psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off -c "select proname, pg_get_function_arguments(oid) from pg_proc where pronamespace='public'::regnamespace order by proname;"
           echo "[dump] done."

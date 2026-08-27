@@ -22,7 +22,7 @@ on:
       limit:
         description: "轮转模式：单 shard 本轮渲染上限(控 CI 时长，~3s/岗)"
         required: false
-        default: "1500"
+        default: "1200"
       apply:
         description: "true=下架确认 dead + 盖巡检时间戳；false=只报告(dry-run)"
         required: false
@@ -49,6 +49,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crawler/requirements.txt
       - name: Install deps
         run: pip install -r crawler/requirements.txt
       - name: Install chromium
@@ -94,6 +96,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crawler/requirements.txt
       - name: Install deps
         run: pip install -r crawler/requirements.txt
       - name: Install chromium

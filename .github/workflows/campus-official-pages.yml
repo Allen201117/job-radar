@@ -18,7 +18,7 @@ on:
   #      且补上了以前根本没有的 **LLM 日顶硬闸**（llm_budget，默认 250 次/天）与**用量记账**。
   #   想再暂停：把下面 schedule 两行重新注释掉即可。
   schedule:
-  - cron: "0 20 * * *"   # 每日 UTC 20:00
+  - cron: "20 20 * * *"   # 每日 UTC 20:20（2026-08-28 与 enrich-backlog-browser 的 20:00 真正错开）
   workflow_dispatch:
     inputs:
       company:
@@ -45,6 +45,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crawler/requirements.txt
 
       - name: Install crawler dependencies
         run: pip install -r crawler/requirements.txt
