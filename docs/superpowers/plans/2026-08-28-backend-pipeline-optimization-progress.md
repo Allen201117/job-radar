@@ -61,21 +61,37 @@ P3：#10 liveness-only TIMEOUT=25s 偏松；#11 sweep_absent_jobs 双查询；#1
 - [x] 2.10 dump-jobs-schema 改连 HK 库
 - [!] 2.11 OPS_WATCHDOG_APPLY=true 被权限分类器拦（gh variable set 不可执行）→ **需用户手动**：repo Settings → Variables 加 OPS_WATCHDOG_APPLY=true，watchdog 才会真开 Issue 告警
 
-### 批次 3：爬虫代码效率与静默失败治理
-- [ ] 3.1 robots.txt host 级进程缓存（每轮省 700-800 请求）
-- [ ] 3.2 should_skip HEAD host 级缓存 + timeout 10→5s
-- [ ] 3.3 db.py get_discovery_run 重复定义删死代码
-- [ ] 3.4 iguopin 快车道空转修（快档 CRAWL_DETAIL_CAP=0 与 _detail_verified 硬门冲突）
-- [ ] 3.5 搜索 provider 账户级判据下沉到 search_provider_http.py/qianfan_search.py（欠费≠没搜到，保护 gap_funnel/校招链全部调用方）
-- [ ] 3.6 洞察队列排序 founded_year → 无洞察×在招岗位数 desc（insight_backlog.py:373）
-- [ ] 3.7 洞察快车道台账回写（insight-enrich.yml 补 status 回写，治永 queued）
-- [ ] 3.8 gap_funnel：缓存 entry 身份复核 + anti_bot 30d 退避（P1-8）
+### 批次 3：爬虫代码效率与静默失败治理（Codex 实现 + CC 两轮复盘，73476f2）
+- [x] 3.1 robots.txt host 级进程缓存（双检锁、锁外 I/O）
+- [x] 3.2 should_skip HEAD host 缓存 + timeout 5s；★复盘轮抓到的雷：瞬态网络异常曾被永久缓存成整 host 跳过（一次超时=清零整个 ATS 平台的源）→ 改 fail-open 不缓存 + 补异常路径测试
+- [x] 3.3 db.py 重复 get_discovery_run 死代码删除
+- [x] 3.4 iguopin 快档整源提前跳过（详情硬门未放宽），28 源不再每日空转
+- [x] 3.5 搜索账户级判据下沉：401/402 直判、403 须命中账户关键词（防 IP 限速误拉黑）；进程内拉黑 + 显眼日志；全部调用方受保护
+- [x] 3.6 洞察 T3 队列改按香港库 active 岗位数 desc（HK 不可用回退 founded_year）
+- [x] 3.7 insight-enrich 现查台账 success/failed 回写（always() 步骤兜失败）
+- [x] 3.8 gap_funnel 缓存 entry 身份复核（不过即丢弃重发现）+ anti_bot 30 天退避
 
-### 待 CI 数据线校准后决定
-- [ ] 4.x 失败率/超时/schedule 丢失的实测修复项（待 agent A 数据）
+### CI 数据线校准结论（1347 个 run 实测）
+- [x] 无新增故障项：failed/cancelled 大头 = 已修的 dead-link-audit 90min 超时（69daa71）+ 08-08 GitHub 平台事故 + SiliconFlow 欠费（已充值）。purge-expired 6h 硬杀实锤 → 批次 2 已补 timeout。liveness-sweep 均值 126min/最长 384min → 20h 冷却 + 错峰后预期大幅缩短（待观测）
 
 ## 实施记录
 
-- [x] 体检启动：4 条并行审查线 + 生产库实测（2026-08-28）
-- [x] LLM 账户恢复 live 验证（HTTP 200）；三条 LLM cron 已确认恢复在位
-- [ ] 清单定稿（等 CI 数据线）
+- [x] 体检：4 并行审查线 + 生产库实测（2026-08-28）
+- [x] LLM 账户恢复 live 验证（HTTP 200）；insight-t3/campus 三条 cron 已恢复
+- [x] 批次 1（f782bf9/2b1d465/03c30a0）+ feishu 存量清理 1,006 条（live）
+- [x] 批次 2（2412c31，27 文件）
+- [x] 批次 3（73476f2，Codex 脑手循环两轮 + code-reviewer 审查）
+- [x] 验证：crawler 1423 tests OK / node 863 OK / yml 解析 OK / 敏感扫描 OK
+
+## 遗留（后续排期）
+
+1. alibaba_campus 探活（133 岗）：detail 接口已 live 验证（content:null=撤岗），差 13 个 BU 域的 per-host cookie+CSRF 会话管理。
+2. phenom SPA 源探活走浏览器审计道（无 httpx 信号）。
+3. summary_doc 正文 FTS（消召回 14.3% 结构漏，审阅建议单独立项）。
+4. 看板 moduleVerdict / watchdog MODULE_OUTPUT 两套口径统一（长期项）。
+5. 洞察 3 年窗 ~5% 泄漏（P2 小项）。
+6. jd 撤岗态样本未验证（只验过「从未存在的 id」走 302；若京东撤岗走别的路径会安全漏判）——上线后观察 jd 分片 sweep 命中率，长期为 0 再摸撤岗样本。
+
+## 需用户手动的一件事
+
+- repo Settings → Secrets and variables → Actions → Variables 新增 `OPS_WATCHDOG_APPLY=true`（ops-watchdog 目前 dry-run，从不真开 Issue 告警；gh CLI 写变量被会话权限拦，只差这一步）。
