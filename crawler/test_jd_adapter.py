@@ -23,7 +23,9 @@ class JdAdapterTest(unittest.TestCase):
         jobs = JdAdapter().parse(json.dumps(payload, ensure_ascii=False))
 
         self.assertEqual(len(jobs), 1)
-        self.assertEqual(jobs[0].company, "京东")
+        # 行里没有 positionDeptName（或部门不在 _DEPT_TO_COMPANY 映射表里）→ company 留空，
+        # 由 normalizer 回落 sources.company（「京东」）。按部门派生子公司见 test_jd_subsidiary.py。
+        self.assertEqual(jobs[0].company, "")
         self.assertEqual(jobs[0].title, "数据分析师")
         self.assertEqual(jobs[0].location, "北京市")
         self.assertEqual(jobs[0].job_type, "社招")  # 只抓社招门户，job_type 固定社招（非接口职能分类）
