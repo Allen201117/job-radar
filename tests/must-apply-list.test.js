@@ -17,6 +17,7 @@ test("ilikeMatcher matches SQL ILIKE wildcards without changing literal matching
   assert.equal(R.ilikeMatcher("甲_公司")("甲乙公司"), true);
   assert.equal(R.ilikeMatcher("甲%公司")("甲科技有限公司"), true);
   assert.equal(R.ilikeMatcher("甲%公司")("乙公司"), false);
+  assert.equal(R.ilikeMatcher("%国家电网%")("国网江苏省电力有限公司（国家电网）"), true);
 });
 
 test("must-apply JSON follows the canonical industry taxonomy and preserves the north-star list", () => {

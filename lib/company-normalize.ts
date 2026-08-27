@@ -5,6 +5,7 @@
 
 // 长的尾缀必须排在前面，确保「股份有限公司」整体剥除而非先剥「有限公司」留下残尾。
 const SUFFIXES = ["股份有限公司", "有限公司", "集团", "控股", "中国", "china"];
+const REGION_ONLY_SUFFIX = /^(?:北京|上海|天津|重庆|香港|澳门|台湾|(?:[^()（）]+)(?:省|市|自治区|特别行政区|区|县|镇|乡|街道))$/;
 
 export function normalizeCompany(raw: unknown): string {
   if (typeof raw !== "string") return "";
@@ -20,4 +21,18 @@ export function normalizeCompany(raw: unknown): string {
     }
   }
   return s;
+}
+
+/**
+ * 从「子公司（集团短名）」展示名取集团短名，供精确 company key 的回退查询复用。
+ * 仅识别末尾的一对全角/半角括号；纯地域尾缀（如「某某公司(北京)」）不是集团短名。
+ */
+export function companyGroupBrandSuffix(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  const match = value.match(/(?:（([^（）]+)）|\(([^()]+)\))$/);
+  if (!match) return null;
+  const brand = (match[1] || match[2] || "").trim();
+  if (!brand || REGION_ONLY_SUFFIX.test(brand)) return null;
+  return brand;
 }

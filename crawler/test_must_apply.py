@@ -88,6 +88,8 @@ class MustApplyListTest(unittest.TestCase):
         with mock.patch.object(must_apply, "MUST_APPLY_JSON", path):
             self.assertTrue(must_apply.match_company("北京字节跳动科技有限公司"))
             self.assertTrue(must_apply.match_company("oppo广东移动通信有限公司"))
+            self.assertTrue(must_apply.match_company_against_patterns(
+                "国网江苏省电力有限公司（国家电网）", ["%国家电网%"]))
             self.assertFalse(must_apply.match_company("随便公司"))
             self.assertFalse(must_apply.match_company(""))
 
