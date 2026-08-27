@@ -249,6 +249,30 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填企业首页或 joblist 地址（https://{tenant}.cnstaff.com/）；适配器直连公开 joblist API 并遍历全部职类，crawl_method 选 http",
   },
   {
+    value: "midea",
+    label: "美的集团（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填 https://recruit.midea.com/recruitOut/ihr/social/；适配器直连公开 position/list 接口并全量翻页，crawl_method 选 http",
+  },
+  {
+    value: "cmb",
+    label: "招商银行（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填 https://career.cmbchina.com/positionList/social；适配器直连公开社会招聘列表和详情接口，crawl_method 选 http",
+  },
+  {
+    value: "cmbc",
+    label: "中国民生银行（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填 https://career.cmbc.com.cn/#/app/recruitmentlist；适配器直连公开社会招聘列表接口，crawl_method 选 http",
+  },
+  {
+    value: "gree",
+    label: "格力（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填 https://zhaopin.greeyun.com/；适配器直连公开校招和社招接口，crawl_method 选 http",
+  },
+  {
     value: "amazon",
     label: "Amazon（自建 · 外企）",
     origin: "foreign",

@@ -49,7 +49,7 @@ _HTTPX_ADAPTERS = {
     "sf_express",  # 顺丰社招：SearchJob.do 公开接口，最近 50 页低频顺序抓取
     "tencent_music",  # 腾讯音乐自建：job/list + uc-job/list 公开接口,零浏览器
     "antgroup",  # 蚂蚁集团自建：hrcareersweb position/search 公开接口,零浏览器
-    "mihoyo", "gllue", "cnstaff",  # 自建门户公开接口/SSR，零浏览器
+    "mihoyo", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree",  # 自建门户公开接口/SSR，零浏览器
 }
 
 # 通用 ATS 的 URL 模板：给定 slug 即可拼出公开 JSON 接口地址。
