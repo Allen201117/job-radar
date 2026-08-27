@@ -11,7 +11,8 @@ import "server-only";
 import { jobsQuery } from "./client";
 import { jobsStoreEnabled } from "./read";
 import { buildTsquery } from "@/lib/job-search";
-import { ftsCandidateTerms } from "@/lib/china-keyword-expansion";
+import { ftsCandidateTerms, classifyJobFunction } from "@/lib/china-keyword-expansion";
+import { userTargetFunctions } from "@/lib/opportunities/eligibility";
 import { appendJobScopeWhere, effectiveTargetRegions, jobMatchesScope } from "@/lib/job-scope";
 import type { RadarProfile } from "@/lib/opportunities/types";
 
@@ -79,6 +80,23 @@ function roleTsquery(profile: RadarProfile): string | null {
   const terms = [...profile.targetRoles, ...profile.targetKeywords];
   if (!terms.length) return null;
   const includeOverseasLexicon = profile.jobScope !== "domestic";
+  // 跨职能剪枝：stage-2 的方向门还有一道**职能门**（岗位职能判得出且不在用户目标职能集内 → 直接拒）。
+  // 召回却是把每个词的词库组全 OR 起来，于是「产品经理 + Prompt Engineering」会把整个研发词库
+  // （工程师/engineer/研发/developer…）拉进候选池，再由 JS 一个个扔掉：某真实产品画像 1,216 个候选里
+  // 1,053 个被方向门拒掉，光「研发」职能就 724 个（2026-08-27 实测）。这里用**同一套** userTargetFunctions
+  // + classifyJobFunction 提前剪掉，两端判据一致、不会各说各话。
+  // 三条边界（有测试钉着，见 tests/opportunity-recall-function-prune.test.js）：
+  //   ① 用户自己写的原词一律保留——他写「工程师」就是要搜工程师；
+  //   ② 职能判不出（"其他"）的词保留——职能门本来就放行这类岗；
+  //   ③ 用户没填 targetRoles（目标职能集为空）时一个词都不剪——无从判断就别猜。
+  const targetFns = userTargetFunctions(profile);
+  const rawTerms = new Set(terms.map((t) => String(t).trim().toLowerCase()));
+  const outOfScope = (term: string): boolean => {
+    if (!targetFns.size) return false;
+    if (rawTerms.has(String(term).trim().toLowerCase())) return false;
+    const fn = classifyJobFunction({ title: term });
+    return Boolean(fn && fn !== "其他" && !targetFns.has(fn));
+  };
   // 同时按词去重：多个关键词常映射到同一个词库组（如 SQL / Python / 数据分析），
   // 不去重会把 `(数据 & 据分 & 分析)` 之类的子句原样重复三四遍，纯属让 GIN 白干。
   const seen = new Set<string>();
@@ -89,6 +107,7 @@ function roleTsquery(profile: RadarProfile): string | null {
       const key = String(term).trim().toLowerCase();
       if (!key || seen.has(key)) continue;
       seen.add(key);
+      if (outOfScope(term)) continue;
       out.push(term);
     }
   }
