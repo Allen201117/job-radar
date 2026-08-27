@@ -12,7 +12,7 @@ import { jobsQuery } from "./client";
 import { jobsStoreEnabled } from "./read";
 import { buildTsquery } from "@/lib/job-search";
 import { ftsCandidateTerms } from "@/lib/china-keyword-expansion";
-import { appendJobScopeWhere, jobMatchesScope } from "@/lib/job-scope";
+import { appendJobScopeWhere, effectiveTargetRegions, jobMatchesScope } from "@/lib/job-scope";
 import type { RadarProfile } from "@/lib/opportunities/types";
 
 type SupabaseLike = { from: (table: string) => any };
@@ -51,9 +51,9 @@ const RECALL_TIERS = ["role", "company", "cityNew"] as const;
 type RecallTier = (typeof RECALL_TIERS)[number];
 // 权重只在「该层这次有效」时参与分配（如用户没填城市 → cityNew 不存在，预算全给 role/company）。
 const TIER_WEIGHTS: Record<RecallTier, number> = { role: 5, company: 2, cityNew: 3 };
-// 总预算 900：旧的 1500 里绝大多数是「最近爬到但与方向无关」的行，排序改对后同样的卡片数只需更少候选，
-// 载荷随之从约 1MB 降到约 0.6MB（剩余瓶颈就是传输，见 2026-07-30 latency 设计文档）。
-const RECALL_BUDGET = 900;
+// 总预算 1800：层内排序与 JS 硬门对齐后仍保留同一候选集合，再把预算从 900 提到 1800，
+// 降低候选名额竞争造成的漏报；额外 900 行约增加 1.2MB 传输和少量 JS 计算。
+export const RECALL_BUDGET = 1800;
 // 已 saved/ignored/applied 的岗在 stage-2 必被 already_actioned 挡掉，却白占候选名额 → 下推到 SQL。
 // 封顶 500：超出的仍由 stage-2 兜底拒绝，语义不变（这是纯粹的名额优化，不是过滤条件）。
 const ACTIONED_EXCLUDE_CAP = 500;
@@ -223,16 +223,47 @@ export function buildRecallSql(
     : null;
   const cityRef = cityTs ? (params.push(cityTs), `search_doc @@ to_tsquery('simple', $${params.length})`) : null;
 
-  // 层内排序：城市命中 → 城市未知 → 其余；再按最新。城市查询很便宜（几个词），
-  // 与那条昂贵的扩展方向 tsquery 不同，放在 order by 里逐行算不心疼。
+  // 层内排序：国内是「城市命中 → 城市未知 → 其余」；含海外范围时是
+  // 「目标地区命中 → 目标城市命中 → 其余」。城市/地区判断只在每层限量候选上逐行算，
+  // 不另拆一层，避免昂贵的方向 GIN 再扫一次。
   const cityFirst = cityRef
     ? `(case when ${cityRef} then 0 when location is null or btrim(location) = '' then 1 else 2 end), first_seen_at desc`
     : "first_seen_at desc";
+  let regionMatch: string | null = null;
+  if (profile.jobScope !== "domestic") {
+    const regions = effectiveTargetRegions({ job_scope: profile.jobScope, target_regions: profile.targetRegions });
+    const countryRegions = regions.filter((region) => region !== "Remote");
+    const parts: string[] = [];
+    if (countryRegions.length) {
+      params.push(countryRegions);
+      parts.push(`country_code = any($${params.length}::text[])`);
+    }
+    if (regions.includes("Remote")) {
+      parts.push(
+        "(country_code is null and (lower(coalesce(location, '')) like '%remote%' or coalesce(location, '') like '%远程%'))",
+      );
+    }
+    if (parts.length) regionMatch = `(job_scope = 'overseas' and (${parts.join(" or ")}))`;
+  }
+  const regionCityFirst = regionMatch
+    ? cityRef
+      ? `(case when ${regionMatch} then 0 when ${cityRef} then 1 else 2 end), first_seen_at desc`
+      : `(case when ${regionMatch} then 0 else 1 end), first_seen_at desc`
+    : cityFirst;
+  // companyHit 不豁免 JS 的方向硬门，cityNew 也会捞到仅城市命中的岗位；两层都先把
+  // 方向命中放前面。它只是已限量候选的逐行布尔判断，不会新增方向 GIN 扫描。
+  const directionFirst = roleRef ? `(case when ${roleRef} then 0 else 1 end), ` : "";
 
   const tiers: Array<{ tier: RecallTier; conds: string[]; order: string }> = [];
-  if (roleRef) tiers.push({ tier: "role", conds: [roleRef], order: cityFirst });
-  if (companyRef) tiers.push({ tier: "company", conds: [companyRef], order: cityFirst });
-  if (cityRef) tiers.push({ tier: "cityNew", conds: [cityRef, "first_seen_at >= $1"], order: "first_seen_at desc" });
+  if (roleRef) tiers.push({ tier: "role", conds: [roleRef], order: regionCityFirst });
+  if (companyRef) tiers.push({ tier: "company", conds: [companyRef], order: `${directionFirst}${regionCityFirst}` });
+  if (cityRef) {
+    tiers.push({
+      tier: "cityNew",
+      conds: [cityRef, "first_seen_at >= $1"],
+      order: `${directionFirst}${regionCityFirst}`,
+    });
+  }
   if (!tiers.length) return null; // profile_ready 应保证至少一项；防御性返回
 
   params.push(budget);

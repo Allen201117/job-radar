@@ -5,7 +5,7 @@ const test = require("node:test");
 const path = require("node:path");
 const { loadTs } = require("./_load-ts");
 
-const { buildRecallSql, stripTierColumns } = loadTs(
+const { RECALL_BUDGET, buildRecallSql, stripTierColumns } = loadTs(
   path.join(__dirname, "..", "lib", "jobs-store", "opportunities.ts"),
 );
 
@@ -55,18 +55,54 @@ test("画像连方向/公司/城市都没有 → 返回 null，不发查询", ()
 test("填了城市 → 每层都先按「城市命中 → 城市未知 → 其余」排，再按最新", () => {
   const built = buildRecallSql(mk({ targetLocations: ["上海"], targetCompanies: ["字节跳动"] }), SINCE, 900);
   const cityOrder = /case when search_doc @@ to_tsquery\('simple', \$\d+\) then 0 when location is null or btrim\(location\) = '' then 1 else 2 end/;
-  // role 层与 company 层都要有；cityNew 层本身就在城市里，按最新即可
-  assert.equal((built.sql.match(new RegExp(cityOrder.source, "g")) || []).length, 4); // 2 层 × (window + order by)
+  // 三层都按城市桶排序；每层在 window 与子查询 order by 各出现一次。
+  assert.equal((built.sql.match(new RegExp(cityOrder.source, "g")) || []).length, 6);
+});
+
+// companyHit 只豁免行业门，方向不符仍会被 checkEligibility 的 role_mismatch 拒掉；
+// cityNew 也可能捞到仅因城市命中、方向不符的岗位。因此这两层必须先把方向命中顶上来。
+test("公司层与城市新增层先排方向命中，避免名额被必然 role_mismatch 的岗位占用", () => {
+  const built = buildRecallSql(mk({ targetLocations: ["上海"], targetCompanies: ["字节跳动"] }), SINCE, 900);
+  const roleParamIndex = built.params.findIndex((p) => typeof p === "string" && p.includes("产品"));
+  const roleRef = `search_doc @@ to_tsquery('simple', $${roleParamIndex + 1})`;
+  const directionFirst = new RegExp(`case when ${roleRef.replace(/[()$]/g, "\\$&")} then 0 else 1 end`, "g");
+  // company 与 cityNew 各在 row_number + 子查询 order by 出现一次。
+  assert.equal((built.sql.match(directionFirst) || []).length, 4);
+});
+
+// 海外/都要画像的城市词匹配不到国内 location；若沿用「城市 → 空城市 → 其他」，
+// US/SG/Remote 岗会被压到最后。目标地区必须成为最高优先级。
+test("含海外范围时先排目标地区，再排目标城市，城市未知不再单列优先级", () => {
+  const built = buildRecallSql(
+    mk({ jobScope: "all", targetRegions: ["US"], targetLocations: ["上海"], targetCompanies: ["字节跳动"] }),
+    SINCE,
+    900,
+  );
+  const regionParamIndex = built.params.findIndex((p) => Array.isArray(p) && p.length === 1 && p[0] === "US");
+  assert.notEqual(regionParamIndex, -1, "目标地区必须作为 SQL 排序参数传入");
+  const cityParamIndex = built.params.findIndex((p) => typeof p === "string" && p.includes("上海"));
+  const regionThenCity = new RegExp(
+    `case when \\(job_scope = 'overseas' and \\(country_code = any\\(\\$${regionParamIndex + 1}::text\\[\\]\\)\\)\\) then 0 when search_doc @@ to_tsquery\\('simple', \\$${cityParamIndex + 1}\\) then 1 else 2 end`,
+    "g",
+  );
+  assert.equal((built.sql.match(regionThenCity) || []).length, 6);
+  assert.ok(!built.sql.includes("when location is null or btrim(location) = '' then 1"));
+});
+
+test("Today 默认召回预算为 1800 条", () => {
+  assert.equal(RECALL_BUDGET, 1800);
 });
 
 // ⚠️ 别把「方向×城市」拆成单独一层：那条词库扩展后的方向 tsquery 是最贵的东西，
-// 拆开等于让 GIN 扫它两遍（live 实测某画像 3.3s → 6.0s）。整条 SQL 只能出现一次方向层。
-test("方向 tsquery 在整条 SQL 里只被扫一次（不许拆成 role + roleCity 两层）", () => {
+// 拆开等于让 GIN 扫它两遍（live 实测某画像 3.3s → 6.0s）。公司/cityNew 的 order by 可逐行
+// 判断方向，但方向 tsquery 只能作为一个层的 where 条件，不能新增第二个 GIN 召回层。
+test("方向 tsquery 只作为 role 层 where 条件出现（不许拆成 role + roleCity 两层）", () => {
   const built = buildRecallSql(mk({ targetLocations: ["上海"] }), SINCE, 900);
   const roleParamIndex = built.params.findIndex((p) => typeof p === "string" && p.includes("产品"));
   const roleRef = `to_tsquery('simple', $${roleParamIndex + 1})`;
-  const occurrences = built.sql.split(roleRef).length - 1;
-  assert.equal(occurrences, 1, "方向查询出现次数必须为 1（出现在 role 层的 where）");
+  const escapedRoleRef = roleRef.replace(/[()$]/g, "\\$&");
+  const whereOccurrences = built.sql.match(new RegExp(`from jobs where[\\s\\S]*?${escapedRoleRef} order by`, "g")) || [];
+  assert.equal(whereOccurrences.length, 1, "方向查询只能有一个 where（role 层的 GIN 扫描）");
 });
 
 // 关键词多的画像会把扩展后的 tsquery 撑到几百个子句，GIN 扫描随之从 0.1s 涨到 3.5s
