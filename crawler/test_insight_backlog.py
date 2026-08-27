@@ -217,6 +217,11 @@ class _FakeRouter:
     def search(self, sb, query, top_k=8, client=None):
         return list(self._results)
 
+    def remaining_above_reserve(self, sb):
+        """T3 这条链改走「扣掉校招预留额度」的口径（见 search_router.campus_reserve）；
+        桩这里与 remaining 同值即可——预留量本身有独立单测 test_search_reserve.py。"""
+        return self.remaining(sb)
+
     def remaining(self, sb):
         return 999  # 充足额度，让查询包跑满
 
@@ -302,6 +307,7 @@ class TestT3(unittest.TestCase):
         router = type("Router", (), {
             "is_configured": lambda _self: True,
             "remaining": lambda _self, _sb: 10,
+            "remaining_above_reserve": lambda _self, _sb: 10,
             "search": search,
         })()
         B._ROUTER = router
@@ -321,6 +327,7 @@ class TestT3(unittest.TestCase):
         B._ROUTER = type("Router", (), {
             "is_configured": lambda _self: False,
             "remaining": lambda _self, _sb: 0,
+            "remaining_above_reserve": lambda _self, _sb: 0,
             "search": mock.Mock(),
         })()
         E.reset_llm_health()

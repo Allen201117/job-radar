@@ -390,8 +390,8 @@ def enrich_company_t3(sb, profile):
     # 粒度取「每公司结算一次」：最坏超出一家公司的用量（~11 次），换掉逐次调用的跨洋往返。
     llm_calls_before = E.llm_usage_totals().get("calls", 0)
     for pack in T3_QUERY_PACK:
-        if _ROUTER.remaining(sb) <= 0:
-            break  # 搜索额度用尽 → 剩余主题留到下轮
+        if _ROUTER.remaining_above_reserve(sb) <= 0:
+            break  # 搜索额度触到「校招预留线」→ 剩余主题留到下轮（见 search_router.campus_reserve）
         if llm_budget.remaining(sb) <= 0:
             print(f"  [t3] {profile['company']}: LLM 日顶已到，剩余主题留到下轮")
             break
@@ -457,8 +457,11 @@ def drain_t3(sb, limit=0):
     if not _ROUTER.is_configured():
         print("✗ 无搜索源配置（BOCHA/TAVILY/SERPER/千帆 key 全缺或熔断）→ 跳过 T3")
         return {"wrote": 0, "empty": 0, "err": 0, "budget_left": 0}
-    remaining = _ROUTER.remaining(sb)
-    print(f"搜索源当日剩余总额度：{remaining}")
+    # ⚠️ 用 remaining_above_reserve 而不是 remaining：搜索额度是全局共享的，
+    # 这条链以前一路吃到 0，把排在它后面 45 分钟的校招时间线链**饿死了整整一周**
+    # （ops_runs 连续 7 天 companies_processed=0，却因为不抛异常一直报 success）。
+    remaining = _ROUTER.remaining_above_reserve(sb)
+    print(f"搜索源当日可用额度（已扣校招预留 {search_router.campus_reserve()}）：{remaining}")
     if remaining <= 0:
         return {"wrote": 0, "empty": 0, "err": 0, "budget_left": 0}
     cap = remaining if not limit else min(remaining, limit)
@@ -466,10 +469,10 @@ def drain_t3(sb, limit=0):
     print(f"T3 队列（notable·待富化）取 {len(rows)} 家（额度封顶 {cap}）")
     stat = {"wrote": 0, "empty": 0, "err": 0}
     for p in rows:
-        if _ROUTER.remaining(sb) <= 0:
-            print("额度用尽，停"); break
+        if _ROUTER.remaining_above_reserve(sb) <= 0:
+            print("额度触到校招预留线，停"); break
         stat[enrich_company_t3(sb, p)] += 1
-    stat["budget_left"] = _ROUTER.remaining(sb)
+    stat["budget_left"] = _ROUTER.remaining_above_reserve(sb)
     print(f"T3 完成：{stat}")
     return stat
 

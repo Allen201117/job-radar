@@ -343,6 +343,20 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 - ⚠️ **只认单方向**（清单名 ⊂ 库里名）。写成双向包含会让库里的「京东」被更长的「京东科技」抢走
   —— 这个 bug 在实现时被单测当场抓到，用例已钉在 `crawler/test_must_apply_owner.py`。
 
+## 搜索额度是全局共享的 —— 贪心方必须给校招链留一份（2026-08-28 立）
+
+`search_usage` 的每日额度是**所有链共用一个池子**。T3 洞察 drain 会一路吃到 0
+（`cap = remaining`，队列多长就吃多久），而校招时间线链 cron 排在它后面 45 分钟
+→ **每天开跑时 remaining 恒为 0、第一家就 break**。
+实测 2026-08-21~27 连续 7 天 `ops_runs` 记 `companies_processed: 0`，
+**却因为不抛异常一直报 success**（绿灯 ≠ 有产出，见「爬虫体检方法论」）。
+
+✅ 修法 = `search_router.campus_reserve()`（env `SEARCH_RESERVE_CAMPUS`，默认 25）+
+`remaining_above_reserve()`：**只有 T3 这类贪心方调后者**，校招链继续调 `remaining()`
+把预留的那份真正用掉。设 0 = 回到旧行为。
+⚠️ **别指望靠调 cron 先后解决**——那只会把饿死的换成另一条链。
+⚠️ 以后再加吃搜索额度的链，先想清楚它是「贪心方」还是「被预留方」，别默认 `remaining()`。
+
 ## LLM 成本纪律（2026-08-27 成本审计后立）
 
 **钱的 86% 烧在职业洞察 T3 一条链**（每家公司 = 主题数 × (1 writer + ~2.7 judge)，唯一的乘法结构）。

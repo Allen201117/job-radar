@@ -6,6 +6,21 @@
 provider 协议（见 search_provider_http.SearchProvider / search_qianfan.QianfanProvider）：
   name / is_configured() / remaining(sb) -> int / search(query, top_k, client) -> list / consume(sb, n)
 """
+import os
+
+
+def campus_reserve() -> int:
+    """给校招时间线链预留的每日搜索次数（env SEARCH_RESERVE_CAMPUS，默认 25）。
+
+    设 0 = 不预留（回到「T3 吃光、校招饿死」的旧行为）。非法值回默认。
+    """
+    raw = os.environ.get("SEARCH_RESERVE_CAMPUS")
+    if raw not in (None, ""):
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    return 25
 
 
 class SearchRouter:
@@ -22,6 +37,21 @@ class SearchRouter:
     def remaining(self, sb):
         """已配置 provider 当日剩余额度之和（drain 用它判断是否还能跑）。"""
         return sum(p.remaining(sb) for p in self._active())
+
+    def remaining_above_reserve(self, sb):
+        """扣掉「给校招链预留的那一份」之后，**贪心消费方**还能用多少。
+
+        为何要有它：搜索额度是全局共享的，而 T3 洞察 drain 会一路吃到 0
+        （`cap = remaining`，队列多长就吃多久）。校招时间线链 cron 排在 T3 之后 45 分钟，
+        于是**每天开跑时 remaining 恒为 0、第一家就 break** ——
+        2026-08-21~27 连续 7 天 ops_runs 记录 `companies_processed: 0`，
+        却因为不抛异常一直报 success（绿灯 ≠ 有产出，CLAUDE.md 体检方法论立过碑）。
+        这不是逻辑 bug 是**资源饿死**：靠调 cron 先后只会把饿死的换成另一条。
+
+        口径：**只有 T3 这类贪心方调它**；校招链继续调 `remaining()` 用满预留额度。
+        预留量走 env `SEARCH_RESERVE_CAMPUS`（默认 25，够校招链一轮 8 家）。
+        """
+        return max(0, self.remaining(sb) - campus_reserve())
 
     def search(self, sb, query, top_k=8, client=None):
         """各已配置且有额度的 provider 依次检索 → 按 url 并取去重（保留先出现者）。
