@@ -2,7 +2,7 @@
 // 入参 opps 已是 eligible 且各自 signals 已派生（service 负责）；本模块只做分区/截断/去重，不重算匹配/信号。
 //
 // 分区落点按 primary signal + 强度：
-//   critical : 任一 signal isCritical（关键提醒：收藏岗关闭/校招快截止）—— 永远置顶、不截断、不受强度压制。
+//   critical : 任一 signal isCritical（关键提醒：收藏岗关闭/校招快截止）—— 永远置顶、总条数不截断、不受强度压制，但守放宽后的公司上限。
 //   main     : primary ∈ STILL_OPEN/OPEN_UNVERIFIED/DEADLINE_SOON 且 score ≥ 强度门槛（active 45 / passive 70）。
 //   explore  : 仅 active；primary ∈ STILL_OPEN/OPEN_UNVERIFIED/DEADLINE_SOON、score 30–门槛、exploreEligible。最多 5。
 //   waiting  : primary=CLOSED_OR_STALE 且非关键。小批，最多 8。
@@ -116,15 +116,36 @@ function dedupeBySemanticJob(opportunities: Opportunity[], context: SemanticRank
   });
 }
 
-function takeWithCompanyDiversity(opportunities: Opportunity[], limit: number): Opportunity[] {
-  const perCompanyCap = Math.max(2, Math.ceil(limit * 0.3));
+function companyKeyOf(opportunity: Opportunity): string {
+  return normalizeSemanticPart(opportunity.job.company) || `id:${opportunity.job.id}`;
+}
+
+// 公司配额与「放宽后的回填上限」。
+// ⚠️ 回填曾是「无条件把刚被配额拒掉的岗原样放回来」，等于配额自己把自己撤销了
+// （线上 30 张卡：字节 9 个封顶 → 回填又塞回 6 个 → 一家占 15 张 = 半屏，2026-08-27 实测）。
+// 现在回填也守配额，只是把上限放宽到 cap + floor(cap/2)（30 张时 9 → 13）：
+// 宁可少给几张卡，也不让一家公司占掉半屏。
+// ⚠️ 这里是 floor 不是 ceil：ceil 在 limit=10 时给出 3+2=5，正好是半屏，等于放行本条规则要拦的事；
+// floor 让单公司恒定 <50%（30 张 → 13、10 张 → 4）。
+function companyCapsFor(basis: number): { perCompanyCap: number; backfillCap: number } {
+  const perCompanyCap = Math.max(2, Math.ceil(basis * 0.3));
+  return { perCompanyCap, backfillCap: perCompanyCap + Math.floor(perCompanyCap / 2) };
+}
+
+// limit = 本区总条数上限（critical 区不截断，传 Infinity）；capBasis = 算公司配额的基数，默认同 limit。
+function takeWithCompanyDiversity(
+  opportunities: Opportunity[],
+  limit: number,
+  capBasis: number = limit,
+): Opportunity[] {
+  const { perCompanyCap, backfillCap } = companyCapsFor(capBasis);
   const companyCounts = new Map<string, number>();
   const picked: Opportunity[] = [];
   const overflow: Opportunity[] = [];
 
   for (const opportunity of opportunities) {
     if (picked.length >= limit) break;
-    const company = normalizeSemanticPart(opportunity.job.company) || `id:${opportunity.job.id}`;
+    const company = companyKeyOf(opportunity);
     const count = companyCounts.get(company) ?? 0;
     if (count >= perCompanyCap) {
       overflow.push(opportunity);
@@ -137,6 +158,10 @@ function takeWithCompanyDiversity(opportunities: Opportunity[], limit: number): 
   if (picked.length < limit) {
     for (const opportunity of overflow) {
       if (picked.length >= limit) break;
+      const company = companyKeyOf(opportunity);
+      const count = companyCounts.get(company) ?? 0;
+      if (count >= backfillCap) continue;
+      companyCounts.set(company, count + 1);
       picked.push(opportunity);
     }
   }
@@ -177,7 +202,12 @@ export function groupOpportunities(
     return list;
   };
 
-  // critical：任一信号关键。语义去重已统一前置；本区不截断、不受公司配额或强度影响。
+  // critical：任一信号关键。语义去重已统一前置；本区不截断、不受强度影响，
+  // 且**故意不受公司配额约束**——这里装的是「你收藏/投递过的那个岗关闭了 / 快截止了」，
+  // 是对用户自己动作的告警，不是发现流。同一家公司收藏了 20 个岗同时关闭，20 条都得告诉他；
+  // 给告警做多样性限流 = 悄悄吞掉用户自己的东西。
+  // ⚠️ 2026-08-27 一度按「回填撤销配额那个坑的第二处」给它加过配额，随即撤回：那个坑的前提是
+  // 「有配额 + 有回填」，critical 两样都没有，不是同一个问题。别再加。
   const critical = take(
     candidates.filter((o) => o.signals.some((s) => s.isCritical)).sort(byCriticalThenScore)
   );
