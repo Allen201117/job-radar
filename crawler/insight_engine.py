@@ -178,8 +178,11 @@ def consensus_ok(grade: str, n_publishers: int) -> bool:
     return (n_publishers or 0) >= 1
 
 
-def final_status(verdict: str, confidence: float, grade: str, n_publishers: int) -> str:
+def final_status(verdict: str, confidence: float, grade: str, n_publishers: int,
+                 company_relevant: bool = True, dimension_relevant: bool = True) -> str:
     """判官 + 共识 合议出落库状态。共识不足 → abstain(drop)，与设计 §13 一致。"""
+    if not company_relevant or not dimension_relevant:
+        return "drop"
     s = decide_status(verdict, confidence)
     if s in ("active", "pending_review") and not consensus_ok(grade, n_publishers):
         return "drop"
@@ -194,6 +197,7 @@ _DIM_GUIDE = {
     "culture": "公司文化 / 节奏的群体性印象，措辞中性、温馨提示口吻。grade=experience。",
     "timing": "校招 / 社招节奏与月份窗口。grade=fact。",
     "listing": "上市状态 / 交易所 / 代码（禁编造股价）。grade=fact。",
+    "hiring": "招聘 / 面试流程、轮次、难度与体验。grade=fact 或 experience。",
 }
 
 _WRITER_SYS = (
@@ -205,9 +209,13 @@ _WRITER_SYS = (
 )
 
 _JUDGE_SYS = (
-    "你是事实核查判官。判断【来源原文】是否支持【结论】。从严：原文没有明确支持就不要给 entailment。"
-    "只输出 JSON：{\"verdict\":\"entailment|contradiction|neutral\",\"confidence\":0到1的小数,\"reason\":\"一句话\"}。"
-    "entailment=原文明确支持结论；contradiction=原文与结论矛盾；neutral=原文未提及或不足以支持。"
+    "你是事实核查判官。判断【来源原文包】是否支持【结论】。从严：原文没有明确支持就不要给 entailment。"
+    "同时判断结论是否真的在说目标公司，以及是否属于指定维度；行业泛化、其他公司、或维度错配一律为 false。"
+    "只输出 JSON：{\"verdict\":\"entailment|contradiction|neutral\",\"confidence\":0到1的小数,\"reason\":\"一句话\","
+    "\"company_relevant\":true或false,\"dimension_relevant\":true或false,\"supported_source_idxs\":[明确支持结论的来源序号],"
+    "\"sample_size\":来源原文明确给出的样本人数/评价数整数或null}。"
+    "entailment=至少一条原文明确支持结论；contradiction=原文与结论矛盾；neutral=原文未提及或不足以支持。"
+    "supported_source_idxs 只能列明确支持的来源，不能为凑数列无关来源；sample_size 只能抄原文明确样本量，不能用搜索结果条数推断。"
 )
 
 
@@ -233,10 +241,23 @@ def extract_claims(company: str, dimension: str, sources: list,
     return claims if isinstance(claims, list) else []
 
 
-def judge_claim(claim_content: str, source_text: str,
+def judge_claim(company: str, dimension: str, claim_content: Optional[str] = None, sources: Optional[list] = None,
                 client: Optional[httpx.Client] = None) -> dict:
-    """judge：判来源原文是否支持结论。返回 {verdict, confidence, reason}。"""
-    user = f"【结论】{claim_content}\n\n【来源原文】{(source_text or '')[:1500]}"
+    """judge：一次判整包来源，返回判词、相关性、支持来源和可证实的样本量。
+
+    兼容既有两参数调用 ``judge_claim(claim, source_text)``；职业洞察主链使用完整四参数形态。
+    """
+    if claim_content is None and sources is None:
+        claim_content, source_text = company, dimension
+        company, dimension, sources = "", "", [{"text": source_text}]
+    guide = _DIM_GUIDE.get(dimension, dimension)
+    blocks = []
+    for i, source in enumerate(sources or []):
+        blocks.append(f"[来源{i}] publisher={source.get('publisher') or '未知'}\n{(source.get('text') or '')[:1500]}")
+    user = (
+        f"【目标公司】{company}\n【目标维度】{dimension}（{guide}）\n【结论】{claim_content}"
+        f"\n\n【来源原文包】\n" + "\n\n".join(blocks)
+    )
     out = chat_json([{"role": "system", "content": _JUDGE_SYS},
                      {"role": "user", "content": user}], temperature=0.0, max_tokens=200, client=client)
     verdict = str(out.get("verdict", "neutral")).strip().lower() if isinstance(out, dict) else "neutral"
@@ -246,8 +267,29 @@ def judge_claim(claim_content: str, source_text: str,
         conf = float(out.get("confidence", 0.0))
     except (TypeError, ValueError):
         conf = 0.0
+    support = []
+    raw_support = out.get("supported_source_idxs") if isinstance(out, dict) else None
+    if isinstance(raw_support, list):
+        for raw_idx in raw_support:
+            try:
+                idx = int(raw_idx)
+            except (TypeError, ValueError):
+                continue
+            if str(raw_idx).strip() != str(idx) or not (0 <= idx < len(sources or [])) or idx in support:
+                continue
+            support.append(idx)
+    try:
+        sample_size = int(out.get("sample_size")) if isinstance(out, dict) and out.get("sample_size") is not None else None
+    except (TypeError, ValueError):
+        sample_size = None
+    if sample_size is not None and sample_size <= 0:
+        sample_size = None
     return {"verdict": verdict, "confidence": max(0.0, min(1.0, conf)),
-            "reason": str(out.get("reason", ""))[:200] if isinstance(out, dict) else ""}
+            "reason": str(out.get("reason", ""))[:200] if isinstance(out, dict) else "",
+            "company_relevant": out.get("company_relevant") is True if isinstance(out, dict) else False,
+            "dimension_relevant": out.get("dimension_relevant") is True if isinstance(out, dict) else False,
+            "supported_source_idxs": support,
+            "sample_size": sample_size}
 
 
 def run_pipeline(company: str, dimension: str, sources: list,
@@ -260,8 +302,6 @@ def run_pipeline(company: str, dimension: str, sources: list,
     retrieval，可用 mock sources 单测；retrieval 接入即生效。
     """
     claims = extract_claims(company, dimension, sources, client=client)
-    publishers = {s.get("publisher") for s in (sources or []) if s.get("publisher")}
-    n_pub = len(publishers)
     out = []
     for c in claims:
         idx = c.get("source_idx")
@@ -269,7 +309,13 @@ def run_pipeline(company: str, dimension: str, sources: list,
         if not src:
             out.append({"claim": c, "judge": None, "status": "drop"})  # 无可追溯来源 → abstain
             continue
-        j = judge_claim(c.get("content", ""), src.get("text", ""), client=client)
-        status = final_status(j["verdict"], j["confidence"], c.get("grade", "experience"), n_pub)
-        out.append({"claim": c, "judge": j, "status": status})
+        j = judge_claim(company, dimension, c.get("content", ""), sources, client=client)
+        verified = [sources[i] for i in j["supported_source_idxs"]]
+        n_pub = len({s.get("publisher") for s in verified if s.get("publisher")})
+        status = final_status(j["verdict"], j["confidence"], c.get("grade", "experience"), n_pub,
+                              j["company_relevant"], j["dimension_relevant"])
+        claim = dict(c)
+        # 样本量只信判官从原文明确识别出的证据，绝不沿用 writer 或检索条数的猜测。
+        claim["sample_size"] = j["sample_size"]
+        out.append({"claim": claim, "judge": j, "status": status})
     return out

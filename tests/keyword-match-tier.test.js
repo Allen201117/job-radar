@@ -57,12 +57,29 @@ test("跨职能精度（反向）：算法 不再误召正文提'算法'的产�
   assert.equal(keywordMatchTier(design, "算法"), null);
 });
 
-test("正文召回：同职能、正文具体词点明角色 → 仍 exact（标题没体现也召回）", () => {
-  // 用户明确要求：很多岗位关键词不在标题里，正文表达也要召回。
-  const campusPm = { title: "2024 届校园招聘", summary: "产品经理方向，负责需求管理" };
-  const seniorAlgo = { title: "资深工程师", summary: "负责推荐算法与模型训练" };
-  assert.equal(keywordMatchTier(campusPm, "pm"), "exact", "正文含'产品经理'且同职能应命中");
-  assert.equal(keywordMatchTier(seniorAlgo, "算法"), "exact", "正文含'算法'且同职能应命中");
+test("正文召回：标题已判职能、正文具体词点明方向 → 仍 exact", () => {
+  // 仅标题职能可为正文开门，避免招聘活动标签靠正文自证为产品岗。
+  const product = { title: "产品经理", summary: "负责机器学习能力的产品落地" };
+  const seniorAlgo = { title: "资深工程师", summary: "负责机器学习模型训练" };
+  assert.equal(keywordMatchTier(product, "AI 产品经理"), "exact", "标题产品岗正文含机器学习应命中");
+  assert.equal(keywordMatchTier(seniorAlgo, "算法"), "exact", "正文含'机器学习'且同职能应命中");
+});
+
+test("标题未判职能的岗位不能靠正文自证为 exact", () => {
+  assert.notEqual(
+    keywordMatchTier(
+      { title: "招聘HR（抖音）", summary: "支持的岗位类型包括产品经理和算法工程师" },
+      "AI 产品经理",
+    ),
+    "exact",
+  );
+  assert.notEqual(
+    keywordMatchTier(
+      { title: "门店管理储备岗", summary: "使用数据分析工具优化门店运营" },
+      "数据分析师",
+    ),
+    "exact",
+  );
 });
 
 test("真岗位仍精确命中（标题命中）", () => {

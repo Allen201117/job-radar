@@ -95,7 +95,11 @@ class TestPipeline(unittest.TestCase):
             {"content": "据公开讨论该公司强度偏大", "grade": "experience", "source_idx": 0},
             {"content": "无来源支撑", "grade": "experience", "source_idx": 9},  # 越界 idx → drop
         ]
-        E.judge_claim = lambda content, src, client=None: {"verdict": "entailment", "confidence": 0.9, "reason": ""}
+        E.judge_claim = lambda company, dim, content, sources, client=None: {
+            "verdict": "entailment", "confidence": 0.9, "reason": "",
+            "company_relevant": True, "dimension_relevant": True,
+            "supported_source_idxs": [0, 1], "sample_size": None,
+        }
         sources = [{"url": "u1", "publisher": "A", "text": "t1"}, {"url": "u2", "publisher": "B", "text": "t2"}]
         res = E.run_pipeline("X", "culture", sources)
         self.assertEqual(len(res), 2)
@@ -104,9 +108,67 @@ class TestPipeline(unittest.TestCase):
 
     def test_pipeline_single_publisher_drops_experience(self):
         E.extract_claims = lambda *a, **k: [{"content": "c", "grade": "experience", "source_idx": 0}]
-        E.judge_claim = lambda *a, **k: {"verdict": "entailment", "confidence": 0.9}
+        E.judge_claim = lambda *a, **k: {
+            "verdict": "entailment", "confidence": 0.9,
+            "company_relevant": True, "dimension_relevant": True,
+            "supported_source_idxs": [0], "sample_size": None,
+        }
         res = E.run_pipeline("X", "culture", [{"url": "u", "publisher": "A", "text": "t"}])
         self.assertEqual(res[0]["status"], "drop")  # experience 仅 1 publisher → 共识不足 → drop
+
+    def test_pipeline_drops_claim_about_other_company_or_dimension(self):
+        E.extract_claims = lambda *a, **k: [{"content": "c", "grade": "fact", "source_idx": 0}]
+        E.judge_claim = lambda *a, **k: {
+            "verdict": "entailment", "confidence": 0.9,
+            "company_relevant": False, "dimension_relevant": True,
+            "supported_source_idxs": [0], "sample_size": None,
+        }
+        res = E.run_pipeline("目标公司", "hiring", [{"url": "u", "publisher": "A", "text": "行业加班新闻"}])
+        self.assertEqual(res[0]["status"], "drop")
+
+        E.judge_claim = lambda *a, **k: {
+            "verdict": "entailment", "confidence": 0.9,
+            "company_relevant": True, "dimension_relevant": False,
+            "supported_source_idxs": [0], "sample_size": None,
+        }
+        res = E.run_pipeline("目标公司", "hiring", [{"url": "u", "publisher": "A", "text": "加班文化"}])
+        self.assertEqual(res[0]["status"], "drop")
+
+    def test_pipeline_uses_only_judge_supported_sources_for_consensus_and_sample(self):
+        E.extract_claims = lambda *a, **k: [{"content": "c", "grade": "experience", "source_idx": 0}]
+        E.judge_claim = lambda *a, **k: {
+            "verdict": "entailment", "confidence": 0.9,
+            "company_relevant": True, "dimension_relevant": True,
+            "supported_source_idxs": [0], "sample_size": 7,
+        }
+        sources = [
+            {"url": "u1", "publisher": "A", "text": "t1"},
+            {"url": "u2", "publisher": "B", "text": "无关结果"},
+        ]
+        res = E.run_pipeline("X", "culture", sources)
+        self.assertEqual(res[0]["status"], "drop")  # 不能拿无关 B 源凑共识
+        self.assertEqual(res[0]["claim"]["sample_size"], 7)
+
+
+class TestJudgeParsing(unittest.TestCase):
+    def test_judge_parses_relevance_supporting_sources_and_content_sample_only(self):
+        original = E.chat_json
+        E.chat_json = lambda *a, **k: {
+            "verdict": "entailment", "confidence": "0.8", "reason": "原文直接提及",
+            "company_relevant": True, "dimension_relevant": True,
+            "supported_source_idxs": [0, "1", 9, -1], "sample_size": "12",
+        }
+        try:
+            result = E.judge_claim("目标公司", "culture", "据公开讨论…", [
+                {"publisher": "A", "text": "样本一"},
+                {"publisher": "B", "text": "样本二"},
+            ])
+        finally:
+            E.chat_json = original
+        self.assertEqual(result["supported_source_idxs"], [0, 1])
+        self.assertEqual(result["sample_size"], 12)
+        self.assertTrue(result["company_relevant"])
+        self.assertTrue(result["dimension_relevant"])
 
 
 if __name__ == "__main__":

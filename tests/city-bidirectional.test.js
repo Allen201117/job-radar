@@ -24,6 +24,14 @@ test("cityMatchTokens：空 → []", () => {
   assert.deepEqual(cityMatchTokens(null), []);
 });
 
+test("cityMatchTokens：省份/区域展开为下属城市及其别名，仅用于匹配", () => {
+  const shaanxi = cityMatchTokens("陕西");
+  assert.ok(shaanxi.includes("西安"));
+  assert.ok(shaanxi.includes("xian"));
+  const yangtzeRiverDelta = cityMatchTokens("长三角");
+  for (const city of ["上海", "杭州", "南京", "苏州"]) assert.ok(yangtzeRiverDelta.includes(city));
+});
+
 // 递归 TS 加载器（解 @/ 别名 + 相对 .ts；.js/node_modules 走原生 require）。
 const ROOT = path.join(__dirname, "..");
 function loadTs(absPath, cache = new Map()) {

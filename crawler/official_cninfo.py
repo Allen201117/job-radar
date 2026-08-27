@@ -44,20 +44,22 @@ def _strip_name(s) -> str:
     return s.strip()
 
 
-def find_stock(stock_list, name) -> Optional[dict]:
-    """按公司名严格匹配 A 股简称（zwjc）：精确 或 去后缀后相等。纯函数，宁缺毋滥防误配。"""
-    n = str(name or "").strip()
-    if not isinstance(stock_list, list) or not n:
+def find_stock(stock_list, name, aliases=None) -> Optional[dict]:
+    """按公司名或画像别名匹配 A 股简称（zwjc）：精确 或 去后缀后相等，宁缺毋滥防误配。"""
+    raw_aliases = aliases if isinstance(aliases, (list, tuple)) else [aliases] if aliases else []
+    candidates = [str(c or "").strip() for c in [name, *raw_aliases]]
+    candidates = [c for i, c in enumerate(candidates) if c and c not in candidates[:i]]
+    if not isinstance(stock_list, list) or not candidates:
         return None
-    ns = _strip_name(n)
     for row in stock_list:
         if not isinstance(row, dict):
             continue
         z = str(row.get("zwjc") or "").strip()
         if not z:
             continue
-        if z == n or (ns and _strip_name(z) == ns):
-            return row
+        for candidate in candidates:
+            if z == candidate or _strip_name(z) == _strip_name(candidate):
+                return row
     return None
 
 
@@ -92,10 +94,9 @@ def get_listing_by_name(name, aliases=None, client=None) -> Optional[dict]:
         stocks = data.get("stockList") if isinstance(data, dict) else None
         if not isinstance(stocks, list):
             return None
-        for cand in [name, *(aliases or [])]:
-            st = find_stock(stocks, cand)
-            if st:
-                return stock_to_listing(st)
+        st = find_stock(stocks, name, aliases)
+        if st:
+            return stock_to_listing(st)
         return None
     except Exception as e:
         print(f"  [cninfo-err] {name}: {type(e).__name__}: {str(e)[:140]}")

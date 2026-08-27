@@ -33,6 +33,19 @@ test("其它职能分类回归不受影响", () => {
   assert.equal(classifyJobFunction({ title: "" }), "其他");
 });
 
+test("正文兜底不再把非研发标题误判为研发，标题研发不受影响", () => {
+  assert.equal(
+    classifyJobFunction({ title: "公共关系岗", summary: "需要理解 AI、技术和算法发展" }),
+    "其他",
+  );
+  assert.equal(
+    classifyJobFunction({ title: "招聘HR（抖音）", summary: "支持产品经理与算法工程师招聘" }),
+    "产品",
+    "本轮不改变其他职能的正文兜底行为",
+  );
+  assert.equal(classifyJobFunction({ title: "算法工程师", summary: "负责 AI 平台" }), "研发");
+});
+
 // 领域降级门：机械/工艺/化工等「非软件工程」岗仅靠泛词（开发/技术/工程师）落入研发，
 // 应归「其他」而非软件「研发」桶——否则被「算法/AI/数据」类查询经相关层误召。
 // 用户实锤：「工艺技术开发（机械/自动化）」被打成研发 + 误命中「AI 数据产品经理」。

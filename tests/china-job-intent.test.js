@@ -40,6 +40,31 @@ test("散词（非概念组）按 AND 处理", () => {
   assert.equal(jobMatchesChinaKeyword(job, "前端 腾讯"), false, "公司不匹配应过滤");
 });
 
+test("正文精确命中只使用标题职能，不允许正文自证职能", () => {
+  assert.equal(
+    jobMatchesChinaKeyword(
+      { title: "产品经理", summary: "负责机器学习能力的产品落地" },
+      "AI 产品经理",
+    ),
+    true,
+    "标题已判产品时，正文长词命中仍放行",
+  );
+  assert.equal(
+    jobMatchesChinaKeyword(
+      { title: "招聘HR（抖音）", summary: "支持的岗位类型包括产品经理和算法工程师" },
+      "AI 产品经理",
+    ),
+    false,
+  );
+  assert.equal(
+    jobMatchesChinaKeyword(
+      { title: "门店管理储备岗", summary: "使用数据分析工具优化门店运营" },
+      "数据分析师",
+    ),
+    false,
+  );
+});
+
 // ——— 岗位职能粗分类 ———
 
 test("职能分类覆盖主要桶", () => {

@@ -11,6 +11,7 @@
   python3 insight_backlog.py --limit 200 --workers 4
 """
 import argparse
+import copy
 import os
 import sys
 import threading
@@ -120,6 +121,23 @@ def _official_headcount_band(li):
     return wikidata.headcount_band(employees)
 
 
+def _a_share_exchange(exchange):
+    """交易所字段是否指向 A 股；仅此类需巨潮交叉验证。"""
+    text = str(exchange or "")
+    return any(name in text for name in ("上交所", "深交所", "北交所", "上海证券交易所", "深圳证券交易所", "北京证券交易所"))
+
+
+def _listing_without_exchange(li, company):
+    """交叉验证缺失/冲突时保留已上市事实，删除不能确认的交易所表述。"""
+    cleaned = copy.deepcopy(li)
+    payload = dict(cleaned.get("payload") or {})
+    payload["exchange"] = None
+    cleaned["payload"] = payload
+    publisher = cleaned.get("source_publisher") or "公开资料"
+    cleaned["content"] = f"据{publisher}公开资料，{company}为已上市公司。"
+    return cleaned
+
+
 def enrich_company(sb, profile):
     """富化单家公司并回写。返回 'ok' | 'noface'（Wikidata 查无）| 'err'。永不抛。"""
     try:
@@ -135,12 +153,21 @@ def enrich_company(sb, profile):
             return "err"
         return "noface"
     try:
-        # 官方披露优先：EDGAR(美股·ticker，更权威+最新申报) → 巨潮(A股·名，默认关，须 INSIGHT_CNINFO_ENABLED) → Wikidata 回落
+        # 官方披露优先。A 股交易所不得直抄 Wikidata：只有巨潮开启且两边一致才写入交易所。
+        wiki_li = wikidata.facts_to_listing(facts)
         li = EDG.get_listing_by_ticker(facts.get("ticker")) if facts.get("ticker") else None
-        if not li and CN.enabled():
-            li = CN.get_listing_by_name(profile["company"], profile.get("aliases"))
+        cninfo_li = CN.get_listing_by_name(profile["company"], profile.get("aliases")) if CN.enabled() else None
+        if not li and cninfo_li:
+            wiki_exchange = ((wiki_li or {}).get("payload") or {}).get("exchange")
+            cninfo_exchange = ((cninfo_li.get("payload") or {}).get("exchange"))
+            if wiki_li and wiki_exchange == cninfo_exchange:
+                li = cninfo_li
+            else:
+                li = _listing_without_exchange(cninfo_li, profile["company"])
         if not li:
-            li = wikidata.facts_to_listing(facts)
+            li = wiki_li
+            if li and _a_share_exchange(((li.get("payload") or {}).get("exchange"))):
+                li = _listing_without_exchange(li, profile["company"])
         if li:
             write_listing(sb, profile["id"], li)
         prof = wikidata.facts_to_profile(facts)
@@ -238,18 +265,20 @@ T3_QUERY_PACK = [
 _ROUTER = search_router.default_router()  # 多源搜索；未配 key 的源自动跳过（配哪个用哪个）
 
 
-def _pick_sources(results, claim, max_n=3):
-    """给条目选附来源：被引用那条 + 其它不同 publisher 的，凑 ≥2 个不同 publisher 以过共识门。"""
-    idx = claim.get("source_idx")
+def _pick_sources(results, judge, max_n=3):
+    """只取判官明确认定支持该 claim 的来源；绝不拿搜索结果凑展示门。"""
     chosen, seen = [], set()
-    if isinstance(idx, int) and 0 <= idx < len(results):
-        chosen.append(results[idx]); seen.add(results[idx].get("publisher"))
-    for r in results:
+    for idx in (judge or {}).get("supported_source_idxs") or []:
+        if not isinstance(idx, int) or not (0 <= idx < len(results)):
+            continue
+        result = results[idx]
+        publisher = result.get("publisher")
+        if publisher in seen:
+            continue
+        chosen.append(result)
+        seen.add(publisher)
         if len(chosen) >= max_n:
             break
-        if r in chosen or r.get("publisher") in seen:
-            continue
-        chosen.append(r); seen.add(r.get("publisher"))
     return chosen
 
 
@@ -320,11 +349,12 @@ def enrich_company_t3(sb, profile):
                 if entry["status"] == "drop":
                     continue
                 claim = dict(entry["claim"])
-                # 样本量 = 检索到的公开讨论篇数（诚实满足读时门 ≥5 + 来源 ≥2 publisher）
-                if not str(claim.get("sample_size") or "").isdigit():
-                    claim["sample_size"] = len(results)
-                write_experience(sb, profile["id"], claim, _pick_sources(results, entry["claim"]),
-                                 entry.get("judge") or {}, entry["status"],
+                judge = entry.get("judge") or {}
+                sources = _pick_sources(results, judge)
+                source_publishers = len({s.get("publisher") for s in sources if s.get("publisher")})
+                if not E.consensus_ok(claim.get("grade", "experience"), source_publishers):
+                    continue
+                write_experience(sb, profile["id"], claim, sources, judge, entry["status"],
                                  dimension=pack["dimension"], topic=pack["topic"])
                 wrote_any = True
         except Exception as e:
