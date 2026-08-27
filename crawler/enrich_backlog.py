@@ -110,9 +110,17 @@ def fetch_queue(sb, adapters, limit=0, jobs_conn=None):
     return rows, smap
 
 
-def fetch_liveness_queue(sb, adapters, limit=0, jobs_conn=None):
-    """死活巡检队列：这些 adapter 下**所有** active 岗（不限空 summary），按 enrich_checked_at 最旧优先
-    （从未复检的 NULL 最先）轮转复检——逐岗 detail 探活，撤岗信号 → expired。返回 (rows, smap)。
+# 巡检冷却：20h 内刚探过的岗不再入队。sweep 每日 3 次（间隔 8h），无冷却时小体量 adapter
+# （active < limit）每次全量重探 = 同岗日探 3 次（2026-08-26 审阅实测日探 40.8 万次、每岗 2.2 次），
+# 且 enrich-backlog（每 3h）与 sweep 的 12 个交集 adapter 双重探活。加冷却后一次探活 20h 内对两条链
+# 都生效，预算自动流向最旧/从未探过的岗（实测 19.8 万岗 7 天未探 vs 15.3 万岗天天重探的两极分化）。
+# 20h = 比相邻两轮间隔（8h）长、比 24h 短，防「每天固定时刻跑」的边界漂移漏一整轮。
+LIVENESS_COOLDOWN_HOURS = int(os.environ.get("LIVENESS_COOLDOWN_HOURS", "20"))
+
+
+def fetch_liveness_queue(sb, adapters, limit=0, jobs_conn=None, cooldown_hours=None):
+    """死活巡检队列：这些 adapter 下 active 且 20h 内没探过的岗（不限空 summary），按 enrich_checked_at
+    最旧优先（从未复检的 NULL 最先）轮转复检——逐岗 detail 探活，撤岗信号 → expired。返回 (rows, smap)。
     sources 走 Supabase；jobs 在 jobs_conn(香港库) 给定时直连查，否则 Supabase。
 
     与 fetch_queue（只取空 summary 的富化 backlog）区别：巡检覆盖**已有正文**的存量岗，
@@ -128,11 +136,15 @@ def fetch_liveness_queue(sb, adapters, limit=0, jobs_conn=None):
     smap = {s["id"]: s for s in srcs}
     if not smap:
         return [], smap
+    hours = LIVENESS_COOLDOWN_HOURS if cooldown_hours is None else cooldown_hours
     if jobs_conn is not None:
         sql = ("select id, source_id, title, jd_url, job_type, summary, enrich_fail_count from jobs "
                "where source_id = any(%s::uuid[]) and status='active' "
+               "and (enrich_checked_at is null or enrich_checked_at < now() - make_interval(hours => %s)) "
                "order by source_id, enrich_checked_at asc nulls first" + (f" limit {int(limit)}" if limit else ""))
-        return jobs_db.fetch_all(jobs_conn, sql, (list(smap.keys()),)), smap
+        return jobs_db.fetch_all(jobs_conn, sql, (list(smap.keys()), hours)), smap
+    from datetime import timedelta
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     rows = []
     page = 0
     while True:
@@ -140,6 +152,7 @@ def fetch_liveness_queue(sb, adapters, limit=0, jobs_conn=None):
                  .select("id,source_id,title,jd_url,job_type,summary,enrich_fail_count")
                  .in_("source_id", list(smap.keys()))
                  .eq("status", "active")
+                 .or_(f"enrich_checked_at.is.null,enrich_checked_at.lt.{cutoff_iso}")
                  # 同 fetch_queue（8c90896）：排序键以 source_id 打头，才吃得到 migration 151 的
                  # (source_id, enrich_checked_at nulls first) WHERE active 部分索引。裸 ORDER BY
                  # enrich_checked_at + source_id IN(本 adapter 上百源) 会被 PostgREST 通用计划带去全表扫
@@ -160,9 +173,13 @@ def enrich_row(sb, row, src, dry_run=False, jobs_conn=None):
     jobs_conn 给定时写库走香港 PG（jobs_db），否则走 Supabase（sb）。
     - 'expired'：fetcher 报源站已撤岗（JobClosedError，如 hotjob state=1017）→ 置 status='expired'，
       不再当死信富化（这类「假 active」岗永远补不到 summary 且污染岗位库）。
-    - 'miss'：无正文 / 网络异常 → enrich_fail_count+1（网络错误走重试，不 expired）。"""
+    - 'miss'：请求成功但无正文 → enrich_fail_count+1（走死信轮转，不 expired）。
+    - 'err'：抓取抛异常（网络错/超时/限流）→ 不写库、不盖 enrich_checked_at，留队列下轮重试。
+      ⚠️ 网络异常绝不能进 'alive' 分支：那等于「没查到 = 确认在招」，死岗会被反复盖活章
+      且被推到轮转队列末尾，永远追不上（2026-08-26 审阅 P0-7 的代码根因，勿回退）。"""
     adapter = (src or {}).get("adapter_name") or ""
     closed = False
+    fetch_err = False
     try:
         body = enrich.enrich_one(adapter, row, src)
     except enrich.JobClosedError:
@@ -170,6 +187,7 @@ def enrich_row(sb, row, src, dry_run=False, jobs_conn=None):
         body = ""
     except Exception:
         body = ""
+        fetch_err = True
     if closed:
         patch = {"status": "expired", "enrich_checked_at": _now()}
         result = "expired"
@@ -183,6 +201,9 @@ def enrich_row(sb, row, src, dry_run=False, jobs_conn=None):
                     patch["job_type"] = jt
             result = "filled"
         elif row.get("summary"):
+            if fetch_err:
+                # 巡检路径抓取失败 → 「没查到」≠「在招」，不盖章、不写库，留队列下轮重试。
+                return "err"
             # 巡检专属分支：仍在招、已有正文 → 只盖复检时间戳（不重写 summary，省写入、不扰动正文）。
             # backlog 路径 fetch_queue 不 select summary → row.get("summary") 恒 None，永不进此分支（行为不变）。
             patch = {"enrich_checked_at": _now()}
@@ -285,16 +306,20 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
             res = "err"  # 兜底：任何意外都不许炸穿 ex.map（否则掀翻整批，本 drain 实锤过）
         with lock:
             stat[res] += 1
-            a = per_adapter.setdefault(adp, {"checked": 0, "miss": 0})
+            a = per_adapter.setdefault(adp, {"checked": 0, "miss": 0, "err": 0})
             a["checked"] += 1
             if res == "miss":
                 a["miss"] += 1
+            elif res == "err":
+                # 网络异常改走 err 后（不再混进 miss），限流特征（429/超时抛异常）也计入熔断分子，
+                # 否则被限流的 adapter 永远凑不够 miss 率、熔断失效。
+                a["err"] += 1
             if res == "expired":  # 巡检确认撤岗 → 收集 CLOSED（批量末尾一次性落库，避免每岗一次往返）
                 close_events.append(jobs_db.plan_close_event(row["id"], row.get("source_id"), day))
-            # 源级自适应：miss 率异常高 → 熔断该 adapter 本轮剩余（一次性 warning，不默默失败）
-            if adp not in tripped and should_trip_adapter(a["checked"], a["miss"]):
+            # 源级自适应：miss+err 率异常高 → 熔断该 adapter 本轮剩余（一次性 warning，不默默失败）
+            if adp not in tripped and should_trip_adapter(a["checked"], a["miss"] + a["err"]):
                 tripped.add(adp)
-                print(f"⚠️ [自适应] adapter={adp} 本轮 miss {a['miss']}/{a['checked']} 过高（疑似被限流），"
+                print(f"⚠️ [自适应] adapter={adp} 本轮 miss+err {a['miss'] + a['err']}/{a['checked']} 过高（疑似被限流），"
                       f"跳过本轮剩余 {adp} 岗（不盖时间戳，下轮重试）")
             done = stat["filled"] + stat["alive"] + stat["miss"] + stat["expired"] + stat["err"] + stat["skipped"]
             if done % 200 == 0:
@@ -311,7 +336,7 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
         jobs_db.record_job_events(rec_conn, close_events)
 
     print(f"完成：填充 {stat['filled']}，仍在招 {stat['alive']}，无果/死信+1 {stat['miss']}，"
-          f"源站撤岗→expired {stat['expired']}，写库错(留队列重试) {stat['err']}，"
+          f"源站撤岗→expired {stat['expired']}，网络/写库错(留队列重试) {stat['err']}，"
           f"限流跳过(下轮重试) {stat['skipped']}"
           f"{'（dry-run 未写库）' if dry_run else ''}")
     if tripped:

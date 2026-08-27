@@ -38,8 +38,10 @@ jobs:
       matrix:
         # C 类大厂自建门户（amazon/apple/meituan/microsoft/sf_express/tencent/vivo）2026-06-25 纳入：
         # 逐岗 detail 探活，关闭信号 live 实测（见 crawler/enrich.py 各 _detail_xxx 注释）。
+        # 2026-08-28 补 avature：ENRICH_REGISTRY 早有 _detail_avature（欧莱雅等 adapter_name=avature 的源），
+        # 但 matrix 只有别名 siemens 分片 → avature 源此前既不被探活也不被富化（审阅 P1-3 盲区）。
         adapter: [wt, hotjob, workday, oracle, eightfold, smartrecruiters, greenhouse, lever,
-                  amazon, apple, meituan, microsoft, sf_express, tencent, vivo, siemens, successfactors, google,
+                  amazon, apple, meituan, microsoft, sf_express, tencent, vivo, siemens, avature, successfactors, google,
                   huawei]
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

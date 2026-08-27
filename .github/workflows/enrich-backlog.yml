@@ -4,7 +4,10 @@ name: enrich-backlog
 # 与 daily-crawl(抓列表) / enrich-crawl(浏览器源+轮转) 解耦；按 adapter 分片，shard 间不重叠。
 # 死信：enrich_fail_count≥3 的行不再入队（迁移 133）。browser 类(beisen/moka/feishu)P2 另开 shard。
 # 已支持 httpx detail 的海外 ATS：workday/oracle/eightfold/smartrecruiters/successfactors/greenhouse/lever/amazon/microsoft。
-# phenom/google 暂不进本矩阵：phenom 是 SPA 壳，google 走 browser/playwright 源。
+# phenom 不进本矩阵（SPA 壳无 httpx 正文）；google 有 _detail_google（ENRICH_REGISTRY）在矩阵内。
+# 2026-08-28：补 wt/tencent/vivo/avature/huawei——这五个 detail fetcher 都能返回真实正文
+# （wt=workContent+serviceCondition / tencent=Responsibility+Requirement / vivo=job_desc /
+#   avature=详情页 / huawei=mainBusiness），此前只被 liveness-sweep 探活、空 summary 永远补不上。
 
 on:
   schedule:
@@ -30,8 +33,8 @@ jobs:
       max-parallel: 5
       # 按 adapter 一片，shard 间互不重叠（各 drain 自己 adapter 的 backlog）。
       matrix:
-        adapter: [hotjob, workday, oracle, eightfold, smartrecruiters, successfactors, greenhouse, lever,
-                  amazon, microsoft, siemens, google]
+        adapter: [hotjob, wt, workday, oracle, eightfold, smartrecruiters, successfactors, greenhouse, lever,
+                  amazon, microsoft, siemens, avature, google, tencent, vivo, huawei]
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
