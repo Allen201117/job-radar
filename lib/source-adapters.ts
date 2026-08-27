@@ -29,6 +29,12 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填公司名检索地址（https://www.iguopin.com/job?company=中国建筑）；适配器自动翻页并核验每条公开职位详情",
   },
   { value: "siemens", label: "西门子", origin: "foreign" },
+  {
+    value: "avature",
+    label: "Avature（通用 ATS · 外企）",
+    origin: "foreign",
+    hint: "填公司 Avature SearchJobs 地址，保留服务端地区 facet（如 careers.{company}.com/.../SearchJobs?...）；适配器按首页实际卡片数翻页并直接取详情链接",
+  },
   { value: "tencent", label: "腾讯", origin: "domestic" },
   { value: "bytedance", label: "字节跳动", origin: "domestic" },
   { value: "bytedance_campus", label: "字节跳动 校招 / 实习", origin: "domestic" },
@@ -229,6 +235,18 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     label: "米哈游（自建门户 · 本土）",
     origin: "domestic",
     hint: "填「米哈游」+ https://jobs.mihoyo.com/#/position，直连 ats-portal v1/job/list+info 公开接口（社招+校招一次抓全），crawl_method 选 http",
+  },
+  {
+    value: "gllue",
+    label: "Gllue（通用 ATS · 本土企业官网）",
+    origin: "domestic",
+    hint: "填企业 Gllue 列表地址（https://{company}.career.gllue.com/jobs）；适配器按 page 翻页并限量抓公开详情正文，crawl_method 选 http",
+  },
+  {
+    value: "cnstaff",
+    label: "聘客 cnstaff（通用 ATS · 本土企业官网）",
+    origin: "domestic",
+    hint: "填企业首页或 joblist 地址（https://{tenant}.cnstaff.com/）；适配器直连公开 joblist API 并遍历全部职类，crawl_method 选 http",
   },
   {
     value: "amazon",

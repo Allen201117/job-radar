@@ -380,8 +380,9 @@ def _main_text(html_text):
     return node.text() if node else ""
 
 
-def _detail_siemens(row, src):
-    # Siemens 自建 ATS（jobs.siemens.com/en_US/externaljobs/JobDetail/{id}）：详情页是 SSR，
+def _detail_avature(row, src):
+    # Avature SearchJobs SSR 详情页（各租户 JobDetail 路径不同）：正文在 <main> 里。
+    # Siemens 使用 /externaljobs/JobDetail/{id}；其他租户仍直接 GET 各自卡片给出的 jd_url。
     # JD 正文在 <main> 里（live 验证：7.6k 字符含完整 JD；<article> 只有 324 字元信息，别用）。
     # httpx 直抓、零浏览器。
     # 补这个函数前 Siemens 338 个在招岗 100% 是无正文薄卡（adapter 压根不在 ENRICH_REGISTRY 里）。
@@ -396,10 +397,14 @@ def _detail_siemens(row, src):
     if r.status_code == 403:
         flat = re.sub(r"\s+", " ", _main_text(r.text) or "").strip().lower()
         if "page not found" in flat or "an error has occurred" in flat:
-            raise JobClosedError(f"siemens job closed (HTTP 403 error page): {row['jd_url']}")
+            raise JobClosedError(f"avature job closed (HTTP 403 error page): {row['jd_url']}")
     if r.status_code >= 300:
         return ""
     return _main_text(r.text)
+
+
+# 保留旧私有符号，既有 Siemens 测试/第三方脚本仍可调用；新接线统一使用通用函数。
+_detail_siemens = _detail_avature
 
 
 def _detail_google(row, src):
@@ -481,7 +486,10 @@ ENRICH_REGISTRY = {
     "microsoft": _detail_microsoft,   # liveness + 正文：jobs.careers.microsoft.com 前端是 Akamai+SPA 拿不到，
                                       # 但 apply.careers.microsoft.com/careers/job/{positionId}（pcsx search 命中里的
                                       # 数字长 id，非 displayJobId）是 SSR + ld+json JobPosting（2026-07-16 live 验证 200）。
-    "siemens": _detail_siemens,
+    "siemens": _detail_avature,
+    # 欧莱雅 Avature live 验证不存在 JobDetail 为 404，由共享 _raise_if_gone 判死；
+    # Siemens 的特殊 403 + 错误页分支仍保留，且只有命中文案才会判死。
+    "avature": _detail_avature,
     "successfactors": _detail_successfactors,  # SF CSB 详情 SSR：正则抽 jobdescription span（多数租户有；ZF 类无正文租户返空）
     "google": _detail_google,
     "sf_express": _detail_sf_express,
