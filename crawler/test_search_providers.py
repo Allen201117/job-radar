@@ -6,9 +6,11 @@
 import os
 import unittest
 from datetime import datetime, timezone
+from unittest import mock
 
 import search_base
 import search_bocha
+import search_provider_http
 import search_router
 import search_serper
 import search_tavily
@@ -138,6 +140,9 @@ class TestSerperParse(unittest.TestCase):
 
 
 class TestSearchRouter(unittest.TestCase):
+    def tearDown(self):
+        search_router._BLACKLISTED_PROVIDERS.clear()
+
     def test_unions_and_dedups_by_url_in_provider_order(self):
         a = FakeProvider("a", [_res("u1"), _res("u2")])
         b = FakeProvider("b", [_res("u2"), _res("u3")])  # u2 与 a 重复
@@ -182,6 +187,48 @@ class TestSearchRouter(unittest.TestCase):
         b = FakeProvider("b", remaining=3, configured=False)
         c = FakeProvider("c", remaining=7)
         self.assertEqual(search_router.SearchRouter([a, b, c]).remaining(None), 12)
+
+    def test_402_blacklists_provider_and_second_call_skips_it(self):
+        class AccountFailureProvider(FakeProvider):
+            def search(self, query, top_k=8, client=None):
+                self.search_calls += 1
+                raise search_router.SearchAccountError("HTTP 402: payment required")
+
+        provider = AccountFailureProvider("account-402")
+        router = search_router.SearchRouter([provider])
+        self.assertEqual(router.search(None, "q"), [])
+        self.assertIn("account-402", search_router._BLACKLISTED_PROVIDERS)
+        self.assertEqual(router.search(None, "q again"), [])
+        self.assertEqual(provider.search_calls, 1)
+
+    def test_200_empty_result_does_not_blacklist_provider(self):
+        provider = FakeProvider("empty-200", [])
+        self.assertEqual(search_router.SearchRouter([provider]).search(None, "q"), [])
+        self.assertNotIn("empty-200", search_router._BLACKLISTED_PROVIDERS)
+
+    def test_403_without_account_keywords_does_not_blacklist_provider(self):
+        class ForbiddenProvider(FakeProvider):
+            def search(self, query, top_k=8, client=None):
+                self.search_calls += 1
+                if search_router.is_search_account_error(403, "forbidden from this IP"):
+                    raise search_router.SearchAccountError("HTTP 403")
+                return []
+
+        provider = ForbiddenProvider("ip-forbidden")
+        self.assertEqual(search_router.SearchRouter([provider]).search(None, "q"), [])
+        self.assertNotIn("ip-forbidden", search_router._BLACKLISTED_PROVIDERS)
+
+    def test_403_account_suspended_blacklists_provider(self):
+        class SuspendedProvider(FakeProvider):
+            def search(self, query, top_k=8, client=None):
+                self.search_calls += 1
+                if search_router.is_search_account_error(403, "account suspended"):
+                    raise search_router.SearchAccountError("HTTP 403: account suspended")
+                return []
+
+        provider = SuspendedProvider("account-suspended")
+        self.assertEqual(search_router.SearchRouter([provider]).search(None, "q"), [])
+        self.assertIn("account-suspended", search_router._BLACKLISTED_PROVIDERS)
 
 
 class TestBuildRequest(unittest.TestCase):
@@ -238,6 +285,26 @@ class TestHttpProviderConfig(unittest.TestCase):
         self.assertEqual(self._mk().cap(), 200)
         os.environ["BOCHA_DAILY_CAP"] = "50"
         self.assertEqual(self._mk().cap(), 50)
+
+    def test_402_is_raised_as_account_error(self):
+        os.environ["BOCHA_API_KEY"] = "x"
+        client = mock.Mock()
+        client.post.return_value = mock.Mock(status_code=402, text="payment required")
+        with self.assertRaises(search_router.SearchAccountError):
+            self._mk().search("q", client=client)
+
+    def test_403_without_account_keywords_is_ordinary_empty_result(self):
+        os.environ["BOCHA_API_KEY"] = "x"
+        client = mock.Mock()
+        client.post.return_value = mock.Mock(status_code=403, text="forbidden from this IP")
+        self.assertEqual(self._mk().search("q", client=client), [])
+
+    def test_403_account_suspended_is_raised_as_account_error(self):
+        os.environ["BOCHA_API_KEY"] = "x"
+        client = mock.Mock()
+        client.post.return_value = mock.Mock(status_code=403, text="account suspended")
+        with self.assertRaises(search_router.SearchAccountError):
+            self._mk().search("q", client=client)
 
 
 class TestDefaultRouter(unittest.TestCase):

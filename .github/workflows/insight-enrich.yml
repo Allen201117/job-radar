@@ -51,6 +51,7 @@ jobs:
         run: pip install -r crawler/requirements.txt
 
       - name: Drain career-insight T2 backlog (Wikidata)
+        id: enrich-t2
         working-directory: crawler
         run: |
           if [ -n "${{ github.event.inputs.company }}" ]; then
@@ -65,6 +66,20 @@ jobs:
           fi
 
       - name: Enrich single-company T3 experience layer
+        id: enrich-t3
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.company != '' }}
         working-directory: crawler
         run: python3 insight_backlog.py --t3 --company "${{ github.event.inputs.company }}"
+
+      - name: Finalize single-company insight ledger
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.company != '' }}
+        working-directory: crawler
+        env:
+          INSIGHT_ENRICH_FINAL_STATUS: ${{ job.status == 'success' && 'success' || 'failed' }}
+          INSIGHT_ENRICH_FINAL_DIAGNOSTICS: ${{ job.status == 'success' && 'workflow completed' || 'workflow failed; inspect GitHub Actions logs' }}
+        run: |
+          python3 insight_backlog.py \
+            --finish-run \
+            --company "${{ github.event.inputs.company }}" \
+            --finish-status "$INSIGHT_ENRICH_FINAL_STATUS" \
+            --finish-diagnostics "$INSIGHT_ENRICH_FINAL_DIAGNOSTICS"

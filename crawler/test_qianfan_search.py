@@ -1,8 +1,10 @@
 """千帆客户端：额度守卫 + 响应解析 单测（不打网络）。"""
 import os
 import unittest
+from unittest import mock
 
 import qianfan_search as qf
+from search_router import SearchAccountError
 
 
 class FakeQ:
@@ -71,6 +73,13 @@ class TestParseAndGuards(unittest.TestCase):
         self.assertFalse(qf.is_configured())
         self.assertEqual(qf.search("x"), [])  # 熔断 → 空，且不发请求
         os.environ.pop("BAIDU_QIANFAN_SEARCH_DISABLED")
+
+    def test_402_is_raised_as_account_error(self):
+        with mock.patch.dict(os.environ, {"BAIDU_QIANFAN_API_KEY": "x"}, clear=False):
+            client = mock.Mock()
+            client.post.return_value = mock.Mock(status_code=402, text="balance insufficient")
+            with self.assertRaises(SearchAccountError):
+                qf.search("x", client=client)
 
 
 if __name__ == "__main__":

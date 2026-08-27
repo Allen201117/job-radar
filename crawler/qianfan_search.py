@@ -12,6 +12,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from search_router import SearchAccountError, is_search_account_error
+
 WEB_SEARCH_URL = "https://qianfan.baidubce.com/v2/ai_search/web_search"
 DEFAULT_TOP_K = 8
 TIMEOUT = 12
@@ -87,10 +89,14 @@ def search(query, top_k=DEFAULT_TOP_K, client=None):
     own = client or httpx.Client()
     try:
         r = own.post(WEB_SEARCH_URL, json=body, headers=headers, timeout=TIMEOUT)
+        if is_search_account_error(r.status_code, r.text):
+            raise SearchAccountError(f"HTTP {r.status_code}: {r.text[:160]}")
         if r.status_code >= 300:
             print(f"  [qf-err] HTTP {r.status_code}: {r.text[:160]}")
             return []
         data = r.json()
+    except SearchAccountError:
+        raise
     except Exception as e:
         print(f"  [qf-err] {type(e).__name__}: {str(e)[:160]}")
         return []

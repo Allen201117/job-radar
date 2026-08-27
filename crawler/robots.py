@@ -1,8 +1,11 @@
 import httpx
+import threading
 from urllib.parse import urlparse
 
 
 USER_AGENT = "JobRadarBot/0.1"
+_ROBOTS_CACHE = {}
+_ROBOTS_CACHE_LOCK = threading.Lock()
 
 # 厂商 API 文档明确声明「公开、无鉴权、供程序化分发消费」的 ATS 端点白名单。
 # robots.txt 是针对网页爬虫的指令；这些 JSON API 由厂商官方文档开放给岗位聚合方
@@ -31,27 +34,41 @@ def check_robots(source_url: str) -> dict:
     parsed = urlparse(source_url)
     if _public_api_allowed(parsed.hostname or "", parsed.path or "/"):
         return {"allowed": True, "reason": "vendor-documented public API"}
-    robots_url = f"{parsed.scheme}://{parsed.hostname}/robots.txt"
+    key = ((parsed.scheme or "").lower(), (parsed.hostname or "").lower())
 
-    try:
-        resp = httpx.get(
-            robots_url,
-            headers={"User-Agent": USER_AGENT},
-            timeout=10,
-            follow_redirects=True,
-        )
-        if resp.status_code >= 500:
-            return {"allowed": True, "reason": "robots.txt server error"}
+    # 结果按 host 缓存，但 robots 的规则仍须按本次 path 解析。网络请求在锁外进行，
+    # 不把不同 host 的首轮 robots 检查串行化；同 host 并发 miss 最多多抓一次。
+    with _ROBOTS_CACHE_LOCK:
+        cached = _ROBOTS_CACHE.get(key)
+    if cached is None:
+        robots_url = f"{parsed.scheme}://{parsed.hostname}/robots.txt"
+        try:
+            resp = httpx.get(
+                robots_url,
+                headers={"User-Agent": USER_AGENT},
+                timeout=10,
+                follow_redirects=True,
+            )
+            fetched = (
+                None if resp.status_code >= 500 else resp.text,
+                "robots.txt server error" if resp.status_code >= 500 else "",
+            )
+        except httpx.TimeoutException:
+            fetched = (None, "robots.txt timeout")
+        except httpx.ConnectError:
+            fetched = (None, "robots.txt unreachable")
+        except Exception as e:
+            fetched = (None, f"robots.txt error: {e}")
+        with _ROBOTS_CACHE_LOCK:
+            cached = _ROBOTS_CACHE.get(key)
+            if cached is None:
+                _ROBOTS_CACHE[key] = fetched
+                cached = fetched
 
-        text = resp.text
-        return _parse_robots(text, parsed.path)
-
-    except httpx.TimeoutException:
-        return {"allowed": True, "reason": "robots.txt timeout"}
-    except httpx.ConnectError:
-        return {"allowed": True, "reason": "robots.txt unreachable"}
-    except Exception as e:
-        return {"allowed": True, "reason": f"robots.txt error: {e}"}
+    text, reason = cached
+    if text is None:
+        return {"allowed": True, "reason": reason}
+    return _parse_robots(text, parsed.path)
 
 
 _ME_AGENTS = ("jobradarbot", "jobradar")

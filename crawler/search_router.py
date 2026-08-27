@@ -9,6 +9,31 @@ provider 协议（见 search_provider_http.SearchProvider / search_qianfan.Qianf
 import os
 
 
+class SearchAccountError(Exception):
+    """搜索 provider 的鉴权/欠费类错误；重试同一账户没有意义。"""
+
+
+_ACCOUNT_ERROR_KEYWORDS = ("payment", "balance", "quota", "suspended", "欠费", "余额", "额度")
+_BLACKLISTED_PROVIDERS = set()
+
+
+def is_search_account_error(status_code, message=""):
+    if status_code in (401, 402):
+        return True
+    text = str(message or "").casefold()
+    return any(keyword in text for keyword in _ACCOUNT_ERROR_KEYWORDS)
+
+
+def provider_blacklisted(provider):
+    return getattr(provider, "name", "") in _BLACKLISTED_PROVIDERS
+
+
+def blacklist_provider(provider, error):
+    name = getattr(provider, "name", "?")
+    _BLACKLISTED_PROVIDERS.add(name)
+    print(f"⚠️ [search-account-error] provider={name}: {str(error)[:120]}")
+
+
 def campus_reserve() -> int:
     """给校招时间线链预留的每日搜索次数（env SEARCH_RESERVE_CAMPUS，默认 25）。
 
@@ -28,11 +53,14 @@ class SearchRouter:
         self.providers = list(providers or [])
 
     def _active(self):
-        return [p for p in self.providers if p.is_configured()]
+        return [
+            p for p in self.providers
+            if p.is_configured() and not provider_blacklisted(p)
+        ]
 
     def is_configured(self):
         """任一 provider 配置了 key 即可用。"""
-        return any(p.is_configured() for p in self.providers)
+        return bool(self._active())
 
     def remaining(self, sb):
         """已配置 provider 当日剩余额度之和（drain 用它判断是否还能跑）。"""
@@ -63,6 +91,9 @@ class SearchRouter:
                     continue
                 results = p.search(query, top_k, client) or []
                 p.consume(sb, 1)  # 实际发起一次检索 → 记一次额度（无论结果多少）
+            except SearchAccountError as e:
+                blacklist_provider(p, e)
+                continue
             except Exception as e:
                 print(f"  [search-router] {getattr(p, 'name', '?')} 兜底跳过: "
                       f"{type(e).__name__}: {str(e)[:120]}")

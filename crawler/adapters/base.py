@@ -1,12 +1,16 @@
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Tuple
+from urllib.parse import urlparse
 import httpx
 
 
 logger = logging.getLogger(__name__)
+_HEAD_SKIP_CACHE = {}
+_HEAD_SKIP_CACHE_LOCK = threading.Lock()
 
 
 def resolve_detail_cap(default: int) -> int:
@@ -182,16 +186,29 @@ class BaseAdapter:
         检查是否应该跳过该源。
         返回 None 表示不跳过；返回字符串表示跳过原因。
         """
+        parsed = urlparse(source_url)
+        key = ((parsed.scheme or "").lower(), (parsed.hostname or "").lower())
+        # 双检锁（同 robots.py）：锁内只读写缓存，HEAD 请求在锁外做——持锁做 5s 网络 I/O
+        # 会把所有 host 的首次预检串行化。同 host 极小概率重复探一次，可接受。
+        with _HEAD_SKIP_CACHE_LOCK:
+            if key in _HEAD_SKIP_CACHE:
+                return _HEAD_SKIP_CACHE[key]
+        # 只有真实 HTTP 响应的结论才是 host 级信号；网络异常 fail-open 且不缓存，留给下个源重试。
         try:
             headers = {"User-Agent": self.user_agent}
-            resp = httpx.head(source_url, headers=headers, timeout=10, follow_redirects=True)
+            resp = httpx.head(source_url, headers=headers, timeout=5, follow_redirects=True)
             if resp.status_code in (403, 429):
-                return f"HTTP {resp.status_code}"
-            if resp.status_code >= 500:
-                return f"HTTP {resp.status_code} (server error)"
-        except Exception as e:
-            return f"Connection failed: {e}"
-        return None
+                result = f"HTTP {resp.status_code}"
+            elif resp.status_code >= 500:
+                result = f"HTTP {resp.status_code} (server error)"
+            else:
+                result = None
+        except Exception:
+            return None
+        with _HEAD_SKIP_CACHE_LOCK:
+            if key not in _HEAD_SKIP_CACHE:
+                _HEAD_SKIP_CACHE[key] = result
+            return _HEAD_SKIP_CACHE[key]
 
     @staticmethod
     def _is_blocked(text: str, status_code: int) -> bool:

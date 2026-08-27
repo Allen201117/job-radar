@@ -152,7 +152,7 @@ def _provider_plan(router, supabase):
     available = []
     for provider in providers:
         try:
-            if provider.is_configured():
+            if provider.is_configured() and not search_router.provider_blacklisted(provider):
                 remaining = int(provider.remaining(supabase))
                 if remaining > 0:
                     available.append((provider, remaining))
@@ -177,6 +177,10 @@ def _provider_plan(router, supabase):
 def _search_one(provider, supabase, query, top_k, client, consume):
     try:
         results = provider.search(query, top_k, client) or []
+    except search_router.SearchAccountError as exc:
+        search_router.blacklist_provider(provider, exc)
+        results = []
+        error = "%s: %s" % (type(exc).__name__, str(exc)[:160])
     except Exception as exc:
         results = []
         error = "%s: %s" % (type(exc).__name__, str(exc)[:160])

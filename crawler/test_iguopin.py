@@ -1,5 +1,6 @@
 """国聘公开接口 fixture：离线运行，不访问网络。"""
 import json
+import os
 from pathlib import Path
 import unittest
 from unittest import mock
@@ -54,6 +55,18 @@ class IguopinAdapterTest(unittest.TestCase):
         self.assertEqual(
             _company_keyword("https://www.iguopin.com/job?company=%E4%B8%AD%E5%9B%BD%E5%BB%BA%E7%AD%91"),
             "中国建筑")
+
+    def test_zero_detail_cap_skips_before_list_request(self):
+        with mock.patch.dict(os.environ, {"CRAWL_DETAIL_CAP": "0"}, clear=False), \
+             mock.patch("adapters.iguopin.httpx.post") as post:
+            reason = IguopinAdapter().should_skip("https://www.iguopin.com/job?company=国家电网")
+
+        self.assertIn("requires detail verification", reason)
+        post.assert_not_called()
+
+    def test_positive_detail_cap_keeps_source_eligible(self):
+        with mock.patch.dict(os.environ, {"CRAWL_DETAIL_CAP": "1"}, clear=False):
+            self.assertIsNone(IguopinAdapter().should_skip("https://www.iguopin.com/job?company=国家电网"))
 
     def test_fetch_expands_group_children_and_labels_jobs_with_group_brand(self):
         """防止国聘又只停在模糊搜索命中的边缘子公司。"""

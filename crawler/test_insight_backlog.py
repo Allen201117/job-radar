@@ -11,7 +11,7 @@ import wikidata as W
 class FakeQuery:
     def __init__(self, store, table):
         self.store, self.table = store, table
-        self._op, self._payload, self._filters = None, None, {}
+        self._op, self._payload, self._filters, self._limit = None, None, {}, None
 
     def select(self, *a, **k):
         self._op = "select"; return self
@@ -38,6 +38,7 @@ class FakeQuery:
         return self
 
     def limit(self, *a, **k):
+        self._limit = int(a[0]) if a else None
         return self
 
     def order(self, *a, **k):
@@ -47,6 +48,8 @@ class FakeQuery:
         if self._op == "update":
             self.store.setdefault(self.table + "_updates", []).append((dict(self._filters), self._payload))
         data = self.store.get("_canned_" + self.table, [])
+        if self._limit is not None:
+            data = data[:self._limit]
         return type("R", (), {"data": data})()
 
 
@@ -203,6 +206,47 @@ class TestWorker(unittest.TestCase):
         self.assertFalse(store.get("insight_items"))  # 没有 insert
         item_updates = store.get("insight_items_updates", [])
         self.assertTrue(any(f.get("id") == "existing-1" for f, _ in item_updates))
+
+    def test_finish_insight_enrich_run_merges_diagnostics_and_marks_success(self):
+        store = {"_canned_discovery_runs": [{
+            "id": "run-1", "diagnostics": {"company": "测试集团", "source": "api"},
+        }]}
+        self.assertTrue(B.finish_insight_enrich_run(
+            FakeSB(store), "测试集团", "success", {"workflow": "completed"},
+        ))
+        filters, payload = store["discovery_runs_updates"][0]
+        self.assertEqual(filters["id"], "run-1")
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["diagnostics"]["source"], "api")
+        self.assertEqual(payload["diagnostics"]["workflow"], "completed")
+
+    def test_fetch_t3_queue_ranks_all_candidates_by_active_jobs_once(self):
+        store = {"_canned_company_profiles": [
+            {"id": "a", "company": "小公司", "aliases": [], "t3_fail_count": 0},
+            {"id": "b", "company": "大公司", "aliases": [], "t3_fail_count": 0},
+            {"id": "c", "company": "中公司", "aliases": [], "t3_fail_count": 0},
+        ]}
+        fetch_all = mock.Mock(return_value=[
+            {"company": "小公司", "active_count": 1},
+            {"company": "大公司", "active_count": 9},
+            {"company": "中公司", "active_count": 4},
+        ])
+        with mock.patch.object(B.jobs_db, "enabled", return_value=True), \
+             mock.patch.object(B.jobs_db, "get_conn", return_value=object()), \
+             mock.patch.object(B.jobs_db, "fetch_all", fetch_all):
+            rows = B.fetch_t3_queue(FakeSB(store), limit=2)
+
+        self.assertEqual([row["company"] for row in rows], ["大公司", "中公司"])
+        fetch_all.assert_called_once()
+
+    def test_fetch_t3_queue_falls_back_to_existing_order_without_jobs_db(self):
+        store = {"_canned_company_profiles": [
+            {"id": "a", "company": "原排序第一", "aliases": [], "t3_fail_count": 0},
+            {"id": "b", "company": "原排序第二", "aliases": [], "t3_fail_count": 0},
+        ]}
+        with mock.patch.object(B.jobs_db, "enabled", return_value=False):
+            rows = B.fetch_t3_queue(FakeSB(store), limit=1)
+        self.assertEqual([row["company"] for row in rows], ["原排序第一"])
 
 
 import insight_engine as E
