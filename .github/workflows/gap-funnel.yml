@@ -35,7 +35,10 @@ jobs:
       JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
       JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
       JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
-      SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+      # ⏸️ 2026-08-27 撤下 LLM key（创始人决定，待 SiliconFlow 充值后取消注释）：
+      # site_entry 的 LLM 找入口是可选增强，未配 key 时静默回落搜索通道（site_entry.py:226），
+      # 漏斗主流程（搜索找入口 → 平台指纹 → 真抓验收）不受影响。
+      # SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
       BAIDU_QIANFAN_API_KEY: ${{ secrets.BAIDU_QIANFAN_API_KEY }}
       SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}

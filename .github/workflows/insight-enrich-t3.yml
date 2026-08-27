@@ -6,8 +6,12 @@ name: insight-enrich-t3
 # 与 T2(insight-enrich 20:30)/enrich-* cron 错开。
 
 on:
-  schedule:
-    - cron: "30 21 * * *"   # 每日 UTC 21:30
+  # ⏸️ 2026-08-27 暂停定时（创始人决定，待充值后恢复）：SiliconFlow 余额耗尽返回 HTTP 402，
+  # 而本轮流程是「先检索、后调 LLM」→ 每天照常烧光 ~90 次搜索额度（serper 是一次性总额度，
+  # 烧掉不再回来）却写入 0 条。代码侧已加账户预探活熔断，但定时本身没必要空跑。
+  # 恢复方法：账户充值后取消下面两行注释即可；先用 workflow_dispatch 手动跑一轮确认账户恢复更稳。
+  # schedule:
+  #   - cron: "30 21 * * *"   # 每日 UTC 21:30
   workflow_dispatch:
     inputs:
       limit:

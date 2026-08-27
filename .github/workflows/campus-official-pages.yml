@@ -9,8 +9,11 @@ name: campus-official-pages
 # 与 campus-cycle-enrich(22:15)/insight-enrich(20:30)/insight-enrich-t3(21:30) 错峰到 20:00。
 
 on:
-  schedule:
-    - cron: "0 20 * * *"   # 每日 UTC 20:00
+  # ⏸️ 2026-08-27 暂停定时（创始人决定，待充值后恢复）：抽取与判官全靠 LLM，
+  # SiliconFlow 余额耗尽（HTTP 402）期间整轮写入 0 条。本管线不吃搜索额度，
+  # 但空跑没有意义。恢复方法：账户充值后取消下面两行注释。
+  # schedule:
+  #   - cron: "0 20 * * *"   # 每日 UTC 20:00
   workflow_dispatch:
     inputs:
       company:

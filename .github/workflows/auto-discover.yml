@@ -34,7 +34,10 @@ jobs:
       AUTO_DISCOVER_TARGET_CAP: ${{ github.event.inputs.target_cap || '80' }}
       AUTO_DISCOVER_INSERT_CAP: ${{ github.event.inputs.insert_cap || '40' }}
       # 持续喂清单：每日 LLM 生成一批「库里没有的」新目标公司（走同一探活验证门，编造/猜错自动丢）。
-      AUTO_DISCOVER_LLM: "true"
+      # ⏸️ 2026-08-27 关闭 LLM 喂料（创始人决定，待 SiliconFlow 充值后恢复为 "true"）：
+      # 余额耗尽返回 402，喂料必失败。关掉后本 workflow 回退纯静态清单（targets_*.json），
+      # 探活/入库主流程完全不受影响，只是新候选不再由 LLM 补充。
+      AUTO_DISCOVER_LLM: "false"
       SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
     steps:
       - uses: actions/checkout@v4

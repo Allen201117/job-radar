@@ -10,8 +10,11 @@ name: campus-cycle-enrich
 #   （BOCHA_API_KEY / TAVILY_API_KEY / SERPER_API_KEY / BAIDU_QIANFAN_API_KEY，配哪个用哪个）。
 
 on:
-  schedule:
-    - cron: "15 22 * * *"   # 每日 UTC 22:15
+  # ⏸️ 2026-08-27 暂停定时（创始人决定，待充值后恢复）：本管线走 search_router + LLM 判官，
+  # SiliconFlow 余额耗尽（HTTP 402）期间只会烧搜索额度、写入 0 条。
+  # 恢复方法：账户充值后取消下面两行注释。
+  # schedule:
+  #   - cron: "15 22 * * *"   # 每日 UTC 22:15
   workflow_dispatch:
     inputs:
       company:
