@@ -1,7 +1,7 @@
 import Navbar from "@/components/Navbar";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import { AnimatedStat } from "@/components/ui/animated-stat";
-import { CoverageGrid, FunnelBars, MiniBar, StackedBar, StatRing, StatusDot } from "@/components/health-viz";
+import { BarList, Callout, KpiCard, StatRing, StatusBadge, StatusDot, Tracker, type TrackerItem } from "@/components/health-viz";
 import {
   band,
   bandTone,
@@ -52,22 +52,9 @@ import {
 import { canonicalizeUserIndustry } from "@/lib/company-industry";
 import { createServiceClient } from "@/lib/supabaseService";
 import { fetchAllPages, fetchAllSources } from "@/lib/supabase-paginate";
-import {
-  Bug,
-  ChartBar,
-  Clock,
-  Compass,
-  Database,
-  FileText,
-  Heartbeat,
-  MagnifyingGlass,
-  PaperPlaneTilt,
-  ShieldCheck,
-  UserCircle,
-  Users,
-} from "@phosphor-icons/react/ssr";
+import { dailyTrackerTone, nullableShare } from "@/lib/admin-health-tracker";
+import { Clock, ShieldCheck } from "@phosphor-icons/react/ssr";
 import { redirect } from "next/navigation";
-import type { ComponentType, ReactNode } from "react";
 
 export const dynamic = "force-dynamic";
 
@@ -104,11 +91,27 @@ type SupabaseHealthSnapshot = {
   };
 };
 
+type HealthDailySeries = {
+  days?: Array<{
+    day?: string;
+    ops?: { runs?: number; failed?: number; partial?: number };
+    crawl?: { runs?: number; failed?: number; partial?: number };
+    north_star?: { healthy?: number; total?: number; written_at?: string } | null;
+  }>;
+};
+
 async function loadSupabaseHealth(): Promise<SupabaseHealthSnapshot> {
   const service = createServiceClient();
   const { data, error } = await service.rpc("admin_health_snapshot", { p_window: "7 days" });
   if (error) throw new Error(error.message);
   return (data || {}) as SupabaseHealthSnapshot;
+}
+
+async function loadHealthDailySeries(): Promise<HealthDailySeries> {
+  const service = createServiceClient();
+  const { data, error } = await service.rpc("admin_health_daily_series", { p_days: 30 });
+  if (error) throw new Error(error.message);
+  return (data || {}) as HealthDailySeries;
 }
 
 // 北极星：必投清单健康覆盖。jobs 在香港库、sources 在 Supabase，无法单条 SQL join → Node 层按公司名 needle 合并。
@@ -235,20 +238,13 @@ async function loadCoverageSnapshot(): Promise<CoverageSnapshot> {
 }
 
 function formatRate(rate: number | null): string {
-  return rate == null ? "暂无数据" : `${(rate * 100).toFixed(1)}%`;
+  return rate == null ? "—" : `${(rate * 100).toFixed(1)}%`;
 }
 
-function share(numerator: number | null | undefined, denominator: number | null | undefined): number | null {
-  const total = Number(denominator || 0);
-  if (total <= 0) return null;
-  return Number(numerator || 0) / total;
-}
+const share = nullableShare;
 
-function sectionStatusFromBand(value: HealthBand): SectionStatus {
-  if (value === "bad") return "critical";
-  if (value === "warn") return "warn";
-  if (value === "good") return "ok";
-  return "idle";
+function sectionStatusFromBand(value: HealthBand): BandTone {
+  return bandTone(value);
 }
 
 function worstBand(values: HealthBand[]): HealthBand {
@@ -257,44 +253,6 @@ function worstBand(values: HealthBand[]): HealthBand {
   if (values.includes("good")) return "good";
   return "empty";
 }
-
-const BAND_CHIP_CLASS: Record<ReturnType<typeof bandTone>, string> = {
-  danger: "bg-[#f7e6e1] text-[#9c4a3c] dark:bg-[#7a392e]/30 dark:text-[#e6a99f]",
-  warning: "bg-[#fbecd7] text-[#8f6225] dark:bg-[#825d28]/30 dark:text-[#e0b15a]",
-  success: "bg-[#e6f2d3] text-[#5a7a2f] dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]",
-  muted: "bg-[#ece7dd] text-[#6b655a] dark:bg-white/[0.08] dark:text-[#b6ad9d]",
-};
-
-// 板块状态：ok 正常 / warn 注意 / critical 要处理 / idle 无数据。
-// 用来给「今日一览」的状态灯、折叠条的徽章、以及是否默认展开统一定调。
-type SectionStatus = "ok" | "warn" | "critical" | "idle";
-
-const STATUS_META: Record<SectionStatus, { icon: string; label: string; badge: string; chip: string }> = {
-  critical: {
-    icon: "🔴",
-    label: "要处理",
-    badge: "bg-[#f7e6e1] text-[#9c4a3c] dark:bg-[#7a392e]/30 dark:text-[#e6a99f]",
-    chip: "border-[#e0b4ac] bg-[#f7e6e1] dark:border-[#7a392e]/50 dark:bg-[#3a201a]",
-  },
-  warn: {
-    icon: "⚠️",
-    label: "注意",
-    badge: "bg-[#fbecd7] text-[#8f6225] dark:bg-[#825d28]/30 dark:text-[#e0b15a]",
-    chip: "border-[#edc995] bg-[#fbecd7] dark:border-[#825d28]/50 dark:bg-[#392a17]",
-  },
-  idle: {
-    icon: "•",
-    label: "无数据",
-    badge: "bg-[#ece7dd] text-[#6b655a] dark:bg-white/[0.08] dark:text-[#b6ad9d]",
-    chip: "border-black/[0.06] bg-white/40 dark:border-white/10 dark:bg-white/[0.03]",
-  },
-  ok: {
-    icon: "✅",
-    label: "正常",
-    badge: "bg-[#e6f2d3] text-[#5a7a2f] dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]",
-    chip: "border-[#c8dda9] bg-[#edf6df] dark:border-[#5d793d]/50 dark:bg-[#203018]",
-  },
-};
 
 function ErrorPanel({ label }: { label: string }) {
   return (
@@ -308,7 +266,7 @@ function ErrorPanel({ label }: { label: string }) {
 }
 
 function formatCount(value: number | null | undefined): string {
-  return Number(value || 0).toLocaleString("zh-CN");
+  return value == null ? "—" : value.toLocaleString("zh-CN");
 }
 
 function formatRunTime(value: string | null): string {
@@ -338,7 +296,7 @@ function formatRunDateTime(value: string | null): string {
 }
 
 function displayEmptyRate(value: string): string {
-  return value === "—" ? "暂无数据" : value;
+  return value;
 }
 
 function percentToRatio(value: number | null): number | null {
@@ -369,73 +327,34 @@ function operationTone(status: DailyReport["status"]): BandTone {
   return "success";
 }
 
-function bandTextClass(value: HealthBand): string {
-  if (value === "bad") return "font-semibold text-[#9c4a3c] dark:text-[#e6a99f]";
-  if (value === "warn") return "font-semibold text-[#8f6225] dark:text-[#e0b15a]";
-  if (value === "good") return "font-semibold text-[#3f3a33] dark:text-[#d9d0c2]";
-  return "text-[#8a8275] dark:text-[#9a9184]";
-}
-
-function coverageTextClass(value: number | null): string {
-  return bandTextClass(coverageBand(value));
-}
-
-const REPORT_ICONS: Record<DailyReport["key"], ComponentType<any>> = {
-  crawl: Bug,
-  enrichment: FileText,
-  dead_jobs: Heartbeat,
-  insights: Compass,
-  auto_discover: Database,
-  discovery: MagnifyingGlass,
-};
-
 function displayOperationMetricLabel(label: string): string {
   if (label === "判死") return translateOperationalTerm("today_removed");
   return label;
 }
 
 function OperationCard({ report }: { report: DailyReport }) {
-  const Icon = REPORT_ICONS[report.key];
-  const statusClass = {
-    success: "bg-[#e6f2d3] text-[#5a7a2f] dark:bg-[#a3d06a]/15 dark:text-[#a3d06a]",
-    idle: "bg-[#ece7dd] text-[#6b655a] dark:bg-white/[0.08] dark:text-[#b6ad9d]",
-    failed: "bg-[#f7e6e1] text-[#9c4a3c] dark:bg-[#7a392e]/30 dark:text-[#e6a99f]",
-  }[report.status];
-
   return (
     <article className="surface-soft flex h-full flex-col p-4 sm:p-5">
       <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 gap-3">
-          <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
-            <Icon size={20} weight="fill" aria-hidden="true" />
-          </div>
-          <div>
-            <h3 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{report.title}</h3>
-            <p className="mt-1 text-pretty text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
-              {report.description}
-            </p>
-          </div>
+        <div>
+          <h3 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{report.title}</h3>
+          <p className="mt-1 text-pretty text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
+            {report.description}
+          </p>
         </div>
-        <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${statusClass}`}>
-          {report.statusLabel}
-        </span>
+        <StatusBadge tone={operationTone(report.status)} label={report.statusLabel} />
       </div>
 
       <div className={`mt-5 grid grid-cols-2 gap-2 ${report.metrics.length >= 3 ? "sm:grid-cols-3" : ""}`}>
         {report.metrics.map((metric) => (
-          <div
+          <KpiCard
             key={metric.label}
-            className="rounded-xl border border-black/[0.06] bg-white/55 px-3 py-3 dark:border-white/[0.08] dark:bg-white/[0.04]"
-          >
-            <p className="text-[11px] text-[#8a8275] dark:text-[#9a9184]">{displayOperationMetricLabel(metric.label)}</p>
-            <p className="mt-1 text-lg font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">
-              {metric.value == null ? (
-                <span className="text-sm font-medium text-[#8a8275] dark:text-[#9a9184]">积累中</span>
-              ) : (
-                formatCount(metric.value)
-              )}
-            </p>
-          </div>
+            title={displayOperationMetricLabel(metric.label)}
+            value={metric.value == null ? "—" : formatCount(metric.value)}
+            tone={metric.value == null ? "muted" : operationTone(report.status)}
+            detail={metric.value == null ? "该指标仍在积累" : "今日产出"}
+            className="min-h-0 p-3"
+          />
         ))}
       </div>
 
@@ -447,7 +366,7 @@ function OperationCard({ report }: { report: DailyReport }) {
   );
 }
 
-function AccumulatingMetric({ title, description }: { title: string; description: string }) {
+function AccumulatingMetric({ title, description, items = [] }: { title: string; description: string; items?: TrackerItem[] }) {
   return (
     <div className="rounded-2xl border border-dashed border-black/10 bg-white/35 p-4 dark:border-white/10 dark:bg-white/[0.03]">
       <div className="flex items-start justify-between gap-3">
@@ -459,53 +378,35 @@ function AccumulatingMetric({ title, description }: { title: string; description
           积累中
         </span>
       </div>
+      {items.length > 0 && <Tracker className="mt-4" items={items} ariaLabel={`${title}最近 30 天积累情况`} />}
     </div>
   );
 }
 
-function AnimatedNumberText({
-  value,
-  suffix = "",
-  fallback = "暂无数据",
-  className = "text-3xl",
-}: {
-  value: number | null;
-  suffix?: string;
-  fallback?: string;
-  className?: string;
-}) {
-  if (value == null) {
-    return <span className="text-sm font-semibold text-[#8a8275] dark:text-[#9a9184]">{fallback}</span>;
-  }
-  return (
-    <span className={`inline-flex items-baseline gap-0.5 font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf] ${className}`}>
-      <AnimatedStat value={value} />
-      {suffix && <span className="text-[0.58em]">{suffix}</span>}
-    </span>
-  );
+function shortDay(value: string | undefined): string {
+  return value ? value.slice(5) : "未知日期";
 }
 
-function VisualChip({
-  label,
-  value,
-  tone = "muted",
-  detail,
-}: {
-  label: string;
-  value: string;
-  tone?: BandTone;
-  detail?: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-black/[0.06] bg-white/45 px-3.5 py-3 dark:border-white/[0.08] dark:bg-white/[0.04]">
-      <div className="flex items-center gap-2">
-        <StatusDot tone={tone} />
-        <p className="text-xs font-medium text-[#6b655a] dark:text-[#b6ad9d]">{label}</p>
-      </div>
-      <p className="mt-1 text-lg font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">{value}</p>
-      {detail && <p className="mt-1 text-[11px] leading-4 text-[#8a8275] dark:text-[#9a9184]">{detail}</p>}
-    </div>
-  );
+function northStarTrackerItems(series: HealthDailySeries | null): TrackerItem[] {
+  return (series?.days || []).map((day) => {
+    const snapshot = day.north_star;
+    const healthy = snapshot?.healthy ?? null;
+    return {
+      label: snapshot ? `${shortDay(day.day)}：${formatCount(snapshot.healthy)}/${formatCount(snapshot.total)} 家有健康岗` : `${shortDay(day.day)}：暂无快照`,
+      tone: healthy == null ? "muted" : bandTone(band(healthy, HEALTH_THRESHOLDS.mustApplyHealthyCompanies, "higher")),
+    };
+  });
+}
+
+function processTrackerItems(series: HealthDailySeries | null, key: "ops" | "crawl"): TrackerItem[] {
+  return (series?.days || []).map((day) => {
+    const run = day[key];
+    const tone = dailyTrackerTone(run);
+    const label = run?.runs == null
+      ? `${shortDay(day.day)}：暂无记录`
+      : `${shortDay(day.day)}：运行 ${formatCount(run.runs)} 次，失败 ${formatCount(run.failed)} 次，部分完成 ${formatCount(run.partial)} 次`;
+    return { label, tone };
+  });
 }
 
 function CoverageBarList({
@@ -530,46 +431,15 @@ function CoverageBarList({
     );
   }
 
-  return (
-    <div className="space-y-3">
-      {items.map((item) => {
-        const itemBand = coverageBand(item.pct);
-        const tone = bandTone(itemBand);
-        return (
-          <div key={item.key} className="grid items-center gap-2 sm:grid-cols-[10rem_1fr_5.5rem]">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-[#1a1714] dark:text-[#f3ecdf]">{item.label}</p>
-              {item.caption && <p className="truncate text-[11px] text-[#9a9184] dark:text-[#837c70]">{item.caption}</p>}
-            </div>
-            {item.pct == null ? (
-              <div className="flex min-w-0 justify-start">
-                <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${BAND_CHIP_CLASS.muted}`}>
-                  算不出（盲区）
-                </span>
-              </div>
-            ) : (
-              <div className="relative min-w-0">
-                <MiniBar pct={item.pct / 100} tone={tone} />
-                <span className="absolute left-[90%] top-[-3px] h-[calc(100%+6px)] w-px bg-[#1a1714]/30 dark:bg-white/40" />
-              </div>
-            )}
-            <div className="text-left text-sm tabular-nums text-[#3f3a33] dark:text-[#d9d0c2] sm:text-right">
-              {item.pct == null ? (
-                <span className="text-[#8a8275] dark:text-[#9a9184]">暂无数据</span>
-              ) : (
-                <span className={coverageTextClass(item.pct)}>{item.pct}%</span>
-              )}
-              {item.fetched != null && item.total != null && (
-                <p className="text-[11px] text-[#9a9184] dark:text-[#837c70]">
-                  {formatCount(item.fetched)}/{formatCount(item.total)}
-                </p>
-              )}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
+  return <BarList ariaLabel="抓全率明细" items={items.map((item) => ({
+    key: item.key,
+    label: item.label,
+    ratio: item.pct == null ? null : item.pct / 100,
+    tone: bandTone(coverageBand(item.pct)),
+    caption: item.caption,
+    value: item.pct == null ? "—" : `${item.pct}%`,
+    valueDetail: item.fetched != null && item.total != null ? `${formatCount(item.fetched)}/${formatCount(item.total)}` : undefined,
+  }))} />;
 }
 
 function CoverageSection({
@@ -595,23 +465,17 @@ function CoverageSection({
         <AccumulatingMetric title="全库抓全率" description="覆盖率数据将在下次抓取后生成" />
       ) : (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[1.15fr_1fr_1fr_1fr]">
-            <div className="surface-soft flex items-center gap-4 p-4">
-              <StatRing pct={percentToRatio(snapshot.avgCoveragePct)} tone={averageTone} size={78} stroke={8} target={0.9}>
-                <span className="text-sm font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">
-                  {snapshot.avgCoveragePct == null ? "积累中" : `${snapshot.avgCoveragePct}%`}
-                </span>
-              </StatRing>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">平均抓全率</p>
-                <p className="mt-1 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
-                  目标 {HEALTH_THRESHOLDS.coveragePct.good}%，只算官网报总数的源。
-                </p>
-              </div>
-            </div>
-            <VisualChip label="可测源数" value={formatCount(snapshot.measurable)} tone="muted" />
-            <VisualChip label="抓不全源数（<90%）" value={formatCount(snapshot.underCount)} tone={snapshot.underCount > 0 ? "warning" : "success"} />
-            <VisualChip label="盲区源数" value={formatCount(snapshot.blind)} tone="muted" detail="官网不报总数" />
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <KpiCard
+              title="平均抓全率"
+              value={snapshot.avgCoveragePct == null ? "—" : `${snapshot.avgCoveragePct}%`}
+              tone={averageTone}
+              detail={`目标 ${HEALTH_THRESHOLDS.coveragePct.good}%，只算官网报总数的源。`}
+              footnote="排除官网不报总数的盲区源"
+            />
+            <KpiCard title="可测源数" value={formatCount(snapshot.measurable)} tone="muted" detail="官网报总数，才可计算抓全率" />
+            <KpiCard title="抓不全源数（<90%）" value={formatCount(snapshot.underCount)} tone={snapshot.underCount > 0 ? "warning" : "success"} detail="低于目标的源会列在下方" />
+            <KpiCard title="盲区源数" value={formatCount(snapshot.blind)} tone="muted" detail="官网不报总数，不能当成抓漏" />
           </div>
           <p className="mt-3 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
             盲区=官网接口不报总数，算不出，非抓漏。
@@ -668,16 +532,16 @@ function MustApplyFetchCoverageBlock({ coverage }: { coverage: MustApplyFetchCov
       ) : (
         <>
           <div className="grid gap-4 lg:grid-cols-[8.5rem_1fr] lg:items-center">
-            <StatRing pct={percentToRatio(coverage.avgPct)} tone={averageTone} size={118} stroke={10} target={0.9}>
+            <StatRing pct={percentToRatio(coverage.avgPct)} tone={averageTone} size="section" target={0.9}>
               <span className="text-lg font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">
                 {coverage.avgPct == null ? "积累中" : `${coverage.avgPct}%`}
               </span>
               <span className="mt-0.5 text-[10px] text-[#8a8275] dark:text-[#9a9184]">平均抓全率</span>
             </StatRing>
             <div className="grid gap-3 sm:grid-cols-3">
-              <VisualChip label="抓全家数" value={`${coverage.fullyFetched}/${total}`} tone="muted" detail="≥90% 才算抓全" />
-              <VisualChip label="盲区(算不出)" value={formatCount(coverage.blind)} tone="muted" detail="官网不报总数" />
-              <VisualChip label="可测公司" value={formatCount(coverage.measurable)} tone="muted" detail="只用可测源算平均" />
+              <KpiCard title="抓全家数" value={`${coverage.fullyFetched}/${total}`} tone="muted" detail="≥90% 才算抓全" className="min-h-0" />
+              <KpiCard title="盲区（算不出）" value={formatCount(coverage.blind)} tone="muted" detail="官网不报总数" className="min-h-0" />
+              <KpiCard title="可测公司" value={formatCount(coverage.measurable)} tone="muted" detail="只用可测源算平均" className="min-h-0" />
             </div>
           </div>
 
@@ -723,16 +587,15 @@ function MustApplyIndustryBlock({
   userCount: number;
 }) {
   const status = sectionStatusFromBand(healthBand);
-  const meta = STATUS_META[status];
   if (!rows) {
     return (
-      <section className="surface p-5 sm:p-6">
+      <section className="surface-soft p-5 sm:p-6">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{MUST_APPLY_SCOPE_LABEL[scope]}必投清单健康覆盖 · {industry}（{userCount} 位用户）</h2>
             <p className="mt-1 text-sm text-[#6b655a] dark:text-[#b6ad9d]">目标用户最常投的头部公司逐家对账。</p>
           </div>
-          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_META.idle.badge}`}>暂无数据</span>
+          <StatusBadge tone="muted" />
         </div>
         <ErrorPanel label="必投清单覆盖" />
         <MustApplyFetchCoverageBlock coverage={fetchCoverage} />
@@ -754,7 +617,7 @@ function MustApplyIndustryBlock({
     };
   });
   return (
-    <section className="surface p-5 sm:p-6">
+    <section className="surface-soft p-5 sm:p-6">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{MUST_APPLY_SCOPE_LABEL[scope]}必投清单健康覆盖 · {industry}（{userCount} 位用户）</h2>
@@ -762,13 +625,13 @@ function MustApplyIndustryBlock({
             30 家目标公司逐家对账：有没有健康岗、近 7 天有没有新岗、72 小时内有没有核验。这里掉了，库存总量再大也不能算健康。
           </p>
         </div>
-        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${meta.badge}`}>{meta.label}</span>
+        <StatusBadge tone={status} />
       </div>
       {summary && <p className="mb-4 text-sm text-[#6b655a] dark:text-[#b6ad9d]">{summary}</p>}
 
       <div className="grid gap-5 lg:grid-cols-[11rem_1fr] lg:items-center">
         <div className="flex justify-center lg:justify-start">
-          <StatRing pct={share(healthyCount, n)} tone={bandTone(healthBand)} size={154} stroke={12} target={28 / 30}>
+          <StatRing pct={share(healthyCount, n)} tone={bandTone(healthBand)} size="section" target={28 / 30}>
             <span className="inline-flex items-baseline gap-0.5 text-3xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">
               <AnimatedStat value={healthyCount} />
               <span className="text-sm">/30</span>
@@ -777,19 +640,14 @@ function MustApplyIndustryBlock({
           </StatRing>
         </div>
         <div className="min-w-0">
-          <CoverageGrid cells={gridCells} />
-          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-[#6b655a] dark:text-[#b6ad9d]">
-            <span className="inline-flex items-center gap-1.5"><StatusDot tone="success" />有健康岗</span>
-            <span className="inline-flex items-center gap-1.5"><StatusDot tone="warning" />72h未核验</span>
-            <span className="inline-flex items-center gap-1.5"><StatusDot tone="danger" />零健康岗</span>
-          </div>
+          <Tracker items={gridCells} ariaLabel="必投清单逐家公司状态" />
         </div>
       </div>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <VisualChip label="近 7 天有新岗" value={`${freshCount}/${n}`} tone="muted" detail="活水信号，不作健康阈值" />
-        <VisualChip label="72h 内核验过" value={`${checkedCount}/${n}`} tone={blind.length > 0 ? "warning" : "success"} detail="有岗未核验会在下方点名" />
-        <VisualChip label="健康覆盖目标" value={`≥${HEALTH_THRESHOLDS.mustApplyHealthyCompanies.good}/30`} tone={bandTone(healthBand)} detail="24-27 家为注意，低于 24 家为出事" />
+        <KpiCard title="近 7 天有新岗" value={`${freshCount}/${n}`} tone="muted" detail="活水信号，不作健康阈值" className="min-h-0" />
+        <KpiCard title="72h 内核验过" value={`${checkedCount}/${n}`} tone={blind.length > 0 ? "warning" : "success"} detail="有岗未核验会在下方点名" className="min-h-0" />
+        <KpiCard title="健康覆盖目标" value={`≥${HEALTH_THRESHOLDS.mustApplyHealthyCompanies.good}/30`} tone={bandTone(healthBand)} detail="24 至 27 家为关注，低于 24 家需处理" className="min-h-0" />
       </div>
 
       {(gaps.length > 0 || blind.length > 0) && (
@@ -840,15 +698,13 @@ function MustApplySection({
 }) {
   return (
     <div className="grid gap-4">
-      <section className="surface p-5 sm:p-6">
+      <section className="surface-soft p-5 sm:p-6">
         <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">用户行业分布</h2>
         <div className="mt-3 flex flex-wrap gap-2">
           {MUST_APPLY_SCOPES.map((scope) => (
-            <span key={scope} className={`rounded-full px-3 py-1.5 text-xs font-semibold ${BAND_CHIP_CLASS.muted}`}>
-              {MUST_APPLY_SCOPE_LABEL[scope]} {userDistribution.scopeUsers[scope]} 人
-            </span>
+            <StatusBadge key={scope} tone="muted" label={`${MUST_APPLY_SCOPE_LABEL[scope]} ${userDistribution.scopeUsers[scope]} 人`} />
           ))}
-          <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${BAND_CHIP_CLASS.muted}`}>未设置 {userDistribution.unset} 人</span>
+          <StatusBadge tone="muted" label={`未设置 ${userDistribution.unset} 人`} />
         </div>
       </section>
 
@@ -857,7 +713,7 @@ function MustApplySection({
         const reserveIndustries = MUST_APPLY_INDUSTRIES.filter((industry) => !active.includes(industry));
         const hasActive = active.some((industry) => (userDistribution.counts[scope][industry] || 0) > 0);
         return (
-          <section key={scope} className="surface p-5 sm:p-6">
+          <section key={scope} className="surface-soft p-5 sm:p-6">
             <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{MUST_APPLY_SCOPE_LABEL[scope]}必投</h2>
             {!hasActive && scope === "overseas" && <p className="mt-1 text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">当前没有海外求职用户，以下诚实展示海外储备覆盖，不计入北极星。</p>}
             <div className="mt-4 grid gap-4">
@@ -886,11 +742,11 @@ function MustApplySection({
             <div className="mt-5 overflow-x-auto">
               <h3 className="text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">储备行业清单</h3>
               <table className="mt-3 w-full min-w-[30rem] text-left text-sm">
-                <thead className="text-xs text-[#8a8275] dark:text-[#9a9184]"><tr><th className="pb-2 font-medium">行业</th><th className="pb-2 font-medium">健康</th><th className="pb-2 font-medium">有源</th></tr></thead>
+                <thead className="sticky top-0 z-10 bg-[#f4efe6] text-xs text-[#8a8275] dark:bg-[#1c1813] dark:text-[#9a9184]"><tr><th className="pb-2 font-medium">行业</th><th className="pb-2 text-right font-medium">健康</th><th className="pb-2 text-right font-medium">有源</th></tr></thead>
                 <tbody className="text-[#3f3a33] dark:text-[#d9d0c2]">
                   {reserveIndustries.map((industry) => {
                     const rows = rowsByIndustry?.[scope]?.[industry] || [];
-                    return <tr key={industry} className="border-t border-black/[0.06] dark:border-white/[0.08]"><td className="py-2.5">{industry}</td><td className="py-2.5 tabular-nums">{rows.filter((row) => row.healthy > 0).length}/30</td><td className="py-2.5 tabular-nums">{rows.filter((row) => row.hasSource).length}/30</td></tr>;
+                    return <tr key={industry} className="border-t border-black/[0.06] dark:border-white/[0.08]"><td className="py-2.5">{industry}</td><td className="py-2.5 text-right tabular-nums">{rows.filter((row) => row.healthy > 0).length}/30</td><td className="py-2.5 text-right tabular-nums">{rows.filter((row) => row.hasSource).length}/30</td></tr>;
                   })}
                 </tbody>
               </table>
@@ -908,23 +764,22 @@ function ClickValiditySection({
   summary,
 }: {
   clickValidity: ClickValidityMetrics | null;
-  status: SectionStatus;
+  status: BandTone;
   summary: string;
 }) {
-  const meta = STATUS_META[status];
   const clickBand = band(clickValidity?.probeValidityRate, HEALTH_THRESHOLDS.clickValidity, "higher");
   const clickTone = bandTone(clickBand);
   const sample = clickValidity ? clickValidity.alive + clickValidity.dead : 0;
   return (
-    <section className="surface p-5 sm:p-6">
+    <section className="surface-soft p-5 sm:p-6">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">展示岗位自动探活（非用户点击统计）</h2>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">
-            系统自动检查展示岗位的页面或接口状态，目标是可直接核验的岗位里 ≥99% 未发现失效；没有数据时只标暂无数据，不当作 0。
+            系统自动检查展示岗位的页面或接口状态，目标是可直接核验的岗位里 ≥99% 未发现失效；没有数据时显示“—”，不当作 0。
           </p>
         </div>
-        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${meta.badge}`}>{meta.label}</span>
+        <StatusBadge tone={status} />
       </div>
       <p className="mb-4 text-sm text-[#6b655a] dark:text-[#b6ad9d]">{summary}</p>
       {!clickValidity ? (
@@ -933,10 +788,10 @@ function ClickValiditySection({
         <>
           <div className="grid gap-5 lg:grid-cols-[11rem_1fr] lg:items-center">
             <div className="flex justify-center lg:justify-start">
-              <StatRing pct={clickValidity.probeValidityRate} tone={clickTone} size={150} stroke={12} target={0.99}>
+              <StatRing pct={clickValidity.probeValidityRate} tone={clickTone} size="section" target={0.99}>
                 {clickValidity.probeValidityRate == null ? (
                   <>
-                    <span className="text-lg font-semibold text-[#8a8275] dark:text-[#9a9184]">暂无数据</span>
+                    <span className="text-lg font-semibold text-[#8a8275] dark:text-[#9a9184]">—</span>
                     <span className="mt-1 text-[11px] text-[#8a8275] dark:text-[#9a9184]">目标 99%</span>
                   </>
                 ) : (
@@ -951,27 +806,27 @@ function ClickValiditySection({
               </StatRing>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <VisualChip
-                label="自动探活覆盖"
+              <KpiCard
                 value={formatRate(clickValidity.coverageRate)}
                 tone={clickValidity.coverageRate == null ? "muted" : "success"}
                 detail={`展示岗位 ${formatCount(clickValidity.totalOpens)}`}
+                title="自动探活覆盖"
               />
-              <VisualChip
-                label="探不动占比"
+              <KpiCard
+                title="探不动占比"
                 value={formatRate(clickValidity.unknownRate)}
                 tone={clickValidity.unknownRate == null ? "muted" : clickValidity.unknownRate > 0 ? "warning" : "success"}
                 detail={`总核验 ${formatCount(clickValidity.livenessTotal)}`}
               />
-              <VisualChip
-                label="样本"
+              <KpiCard
+                title="样本"
                 value={formatCount(sample)}
                 tone={sample > 0 ? "success" : "muted"}
                 detail={`未发现失效 ${formatCount(clickValidity.alive)} · 已关闭 ${formatCount(clickValidity.dead)}`}
               />
-              <VisualChip
-                label="SPA 源死岗抽检率"
-                value="暂无数据"
+              <KpiCard
+                title="SPA 源死岗抽检率"
+                value="待采集"
                 tone="muted"
                 detail="审计抽样还未接入"
               />
@@ -987,45 +842,16 @@ function ClickValiditySection({
               <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-[#1a1714] dark:text-[#f3ecdf] [&::-webkit-details-marker]:hidden">
                 按技术来源展开
               </summary>
-              <div className="overflow-auto border-t border-black/[0.06] dark:border-white/[0.08]">
-                <table className="w-full min-w-[560px] text-left text-sm">
-                  <caption className="caption-bottom px-4 py-3 text-left text-xs text-[#8a8275] dark:text-[#9a9184]">
-                    来源名保留原始 adapter，方便工程定位。
-                  </caption>
-                  <thead className="bg-[#f4efe6] text-xs text-[#8a8275] dark:bg-[#1c1813] dark:text-[#9a9184]">
-                    <tr>
-                      <th className="px-4 py-3 font-medium">来源</th>
-                      <th className="px-4 py-3 text-right font-medium">未发现失效</th>
-                      <th className="px-4 py-3 text-right font-medium">已关闭</th>
-                      <th className="px-4 py-3 text-right font-medium">探不动</th>
-                      <th className="px-4 py-3 font-medium">探活有效率</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {clickValidity.byAdapter.map((a) => {
-                      const adapterBand = band(a.validityRate, HEALTH_THRESHOLDS.clickValidity, "higher");
-                      return (
-                        <tr
-                          key={a.adapter}
-                          className="border-t border-black/[0.05] text-[#3f3a33] dark:border-white/[0.08] dark:text-[#d9d0c2]"
-                        >
-                          <td className="px-4 py-3 font-medium">{a.adapter}</td>
-                          <td className="px-4 py-3 text-right tabular-nums">{a.alive}</td>
-                          <td className="px-4 py-3 text-right tabular-nums">{a.dead}</td>
-                          <td className="px-4 py-3 text-right tabular-nums">{a.unknown}</td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-3">
-                              <MiniBar pct={a.validityRate} tone={bandTone(adapterBand)} className="min-w-28 flex-1" />
-                              <span className={`w-16 text-right tabular-nums ${bandTextClass(adapterBand)}`}>
-                                {formatRate(a.validityRate)}
-                              </span>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div className="border-t border-black/[0.06] p-4 dark:border-white/[0.08]">
+                <BarList ariaLabel="按技术来源的探活有效率" items={clickValidity.byAdapter.map((adapter) => ({
+                  key: adapter.adapter,
+                  label: adapter.adapter,
+                  ratio: adapter.validityRate,
+                  tone: bandTone(band(adapter.validityRate, HEALTH_THRESHOLDS.clickValidity, "higher")),
+                  value: formatRate(adapter.validityRate),
+                  valueDetail: `正常 ${formatCount(adapter.alive)} · 关闭 ${formatCount(adapter.dead)} · 探不动 ${formatCount(adapter.unknown)}`,
+                }))} />
+                <p className="mt-3 text-xs text-[#8a8275] dark:text-[#9a9184]">来源名保留原始 adapter，方便工程定位。</p>
               </div>
             </details>
           )}
@@ -1043,38 +869,6 @@ function sourceSuccessTone(value: string): BandTone {
   return "danger";
 }
 
-function SmallMetricTile({
-  label,
-  value,
-  detail,
-  icon: Icon,
-  tone = "muted",
-}: {
-  label: string;
-  value: number | null;
-  detail: string;
-  icon: ComponentType<any>;
-  tone?: BandTone;
-}) {
-  return (
-    <div className="surface-soft p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-[#6b655a] dark:text-[#b6ad9d]">
-          <span className={`grid size-7 place-items-center rounded-lg ${BAND_CHIP_CLASS[tone]}`}>
-            <Icon size={15} weight="fill" aria-hidden="true" />
-          </span>
-          <p className="text-xs font-medium">{label}</p>
-        </div>
-        <StatusDot tone={tone} />
-      </div>
-      <div className="mt-3">
-        <AnimatedNumberText value={value} fallback="暂无数据" className="text-2xl" />
-      </div>
-      <p className="mt-2 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">{detail}</p>
-    </div>
-  );
-}
-
 function JobsLibrarySection({
   jobs,
   operations,
@@ -1083,6 +877,7 @@ function JobsLibrarySection({
   validActiveShareBand,
   thinShareBand,
   neverCheckedShareBand,
+  showHealthSummary = true,
 }: {
   jobs: JobsHealthSnapshot | null;
   operations: SupabaseHealthSnapshot | null;
@@ -1091,21 +886,17 @@ function JobsLibrarySection({
   validActiveShareBand: HealthBand;
   thinShareBand: HealthBand;
   neverCheckedShareBand: HealthBand;
+  showHealthSummary?: boolean;
 }) {
   return (
     <>
-      {!jobs ? (
+      {!jobs && showHealthSummary ? (
         <ErrorPanel label="岗位库体检" />
-      ) : (
+      ) : jobs ? (
         <>
           <div className="grid gap-5 lg:grid-cols-[12rem_1fr] lg:items-center">
             <div className="flex justify-center lg:justify-start">
-              <StatRing
-                pct={share(jobs.validActive, jobs.activeTotal)}
-                tone={bandTone(validActiveShareBand)}
-                size={166}
-                stroke={13}
-              >
+              <StatRing pct={share(jobs.validActive, jobs.activeTotal)} tone={bandTone(validActiveShareBand)} size="section">
                 <span className="inline-flex items-baseline gap-0.5 text-3xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">
                   <AnimatedStat value={jobs.validActive} />
                 </span>
@@ -1115,71 +906,26 @@ function JobsLibrarySection({
               </StatRing>
             </div>
             <div className="space-y-4">
-              <div>
-                <div className="flex items-center justify-between gap-3 text-xs text-[#6b655a] dark:text-[#b6ad9d]">
-                  <span>在招构成</span>
-                  <span className="tabular-nums">
-                    能投 {formatCount(jobs.validActive)} · 空壳 {formatCount(jobs.thinActive)}
-                  </span>
-                </div>
-                <StackedBar
-                  className="mt-2 h-3"
-                  total={jobs.activeTotal}
-                  segments={[
-                    { value: jobs.validActive, tone: "success" },
-                    { value: jobs.thinActive, tone: "warning" },
-                  ]}
-                />
-                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#6b655a] dark:text-[#b6ad9d]">
-                  <span className="inline-flex items-center gap-1.5"><StatusDot tone="success" />能投岗位</span>
-                  <span className="inline-flex items-center gap-1.5"><StatusDot tone="warning" />空壳岗</span>
-                </div>
-              </div>
-              <div className="rounded-2xl border border-black/[0.06] bg-white/40 p-4 dark:border-white/[0.08] dark:bg-white/[0.03]">
-                <div className="flex items-center justify-between gap-3 text-sm">
-                  <p className="font-medium text-[#3f3a33] dark:text-[#d9d0c2]">待核查占在招</p>
-                  <p className={`tabular-nums ${bandTextClass(neverCheckedShareBand)}`}>
-                    {displayEmptyRate(formatPercent(jobs.neverChecked, jobs.activeTotal))}
-                  </p>
-                </div>
-                <MiniBar pct={share(jobs.neverChecked, jobs.activeTotal)} tone={bandTone(neverCheckedShareBand)} className="mt-3" />
-                <p className="mt-2 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
-                  待核查会和在招岗位重叠，所以单独画条形，不放进圆环，避免重复计数。
-                </p>
-              </div>
+              <BarList ariaLabel="岗位库存构成" items={[
+                { key: "valid", label: "能投岗位", ratio: share(jobs.validActive, jobs.activeTotal), tone: "success", value: formatCount(jobs.validActive), valueDetail: `在招 ${formatCount(jobs.activeTotal)} 中可投` },
+                { key: "thin", label: "空壳岗", ratio: share(jobs.thinActive, jobs.activeTotal), tone: "warning", value: formatCount(jobs.thinActive), valueDetail: "有链接但没有岗位正文" },
+                { key: "unchecked", label: "待核查", ratio: share(jobs.neverChecked, jobs.activeTotal), tone: bandTone(neverCheckedShareBand), value: displayEmptyRate(formatPercent(jobs.neverChecked, jobs.activeTotal)), valueDetail: "与在招岗位可能重叠" },
+              ]} />
             </div>
           </div>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <SmallMetricTile label="今日新进" value={jobs.todayNew} detail="今天新入库的岗位" icon={ChartBar} tone="success" />
-            <SmallMetricTile
-              label={translateOperationalTerm("today_removed")}
-              value={todayRemoved}
-              detail="今天新判定失效的岗位"
-              icon={Heartbeat}
-              tone={todayRemoved == null ? "muted" : todayRemoved > 0 ? "warning" : "success"}
-            />
-            <SmallMetricTile
-              label={translateOperationalTerm("expired")}
-              value={jobs.expired}
-              detail="探活确认永久移除"
-              icon={Bug}
-              tone="muted"
-            />
-            <SmallMetricTile
-              label={translateOperationalTerm("removed")}
-              value={jobs.removed}
-              detail="疑似下线，后续可能恢复"
-              icon={Clock}
-              tone="muted"
-            />
+            <KpiCard title="今日新进" value={formatCount(jobs.todayNew)} tone="success" detail="今天新入库的岗位" className="min-h-0" />
+            <KpiCard title={translateOperationalTerm("today_removed")} value={formatCount(todayRemoved)} tone={todayRemoved == null ? "muted" : todayRemoved > 0 ? "warning" : "success"} detail="今天新判定失效的岗位" className="min-h-0" />
+            <KpiCard title={translateOperationalTerm("expired")} value={formatCount(jobs.expired)} tone="muted" detail="探活确认永久移除" className="min-h-0" />
+            <KpiCard title={translateOperationalTerm("removed")} value={formatCount(jobs.removed)} tone="muted" detail="疑似下线，后续可能恢复" className="min-h-0" />
           </div>
 
           <p className="mt-3 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
             今日下架（今天新判定失效） · 已确认撤岗（探活确认永久移除） · 暂时下线（疑似下线，可能恢复） · 空壳岗（有链接但没岗位正文，质量差） · 待核查（还没探活验证）
           </p>
         </>
-      )}
+      ) : null}
 
       <details className="mt-5 rounded-2xl border border-black/[0.07] bg-white/35 dark:border-white/[0.1] dark:bg-white/[0.03]">
         <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-[#1a1714] dark:text-[#f3ecdf] [&::-webkit-details-marker]:hidden">
@@ -1187,56 +933,22 @@ function JobsLibrarySection({
         </summary>
         <div className="border-t border-black/[0.06] p-4 dark:border-white/[0.08]">
           <p className="mb-3 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
-            成功率按完成、部分完成、失败三类运行计算；没运行过的招聘源显示“暂无数据”。
+            成功率按完成、部分完成、失败三类运行计算；没运行过的招聘源显示“—”。
           </p>
           {!operations ? (
             <ErrorPanel label="招聘源统计" />
           ) : crawlSources.length === 0 ? (
             <p className="text-sm text-[#8a8275] dark:text-[#9a9184]">暂无启用的招聘源。</p>
           ) : (
-            <div className="max-h-[34rem] overflow-auto rounded-2xl border border-black/[0.07] dark:border-white/[0.1]">
-              <table className="w-full min-w-[680px] text-left text-sm">
-                <thead className="sticky top-0 z-10 bg-[#f4efe6] text-xs text-[#8a8275] dark:bg-[#1c1813] dark:text-[#9a9184]">
-                  <tr>
-                    <th className="px-4 py-3 font-medium">公司</th>
-                    <th className="px-4 py-3 text-right font-medium">运行次数</th>
-                    <th className="px-4 py-3 font-medium">成功率</th>
-                    <th className="px-4 py-3 text-right font-medium">部分完成</th>
-                    <th className="px-4 py-3 text-right font-medium">失败 / 跳过</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {crawlSources.map((source) => {
-                    const successRatio = parsePercentRatio(source.successRate);
-                    return (
-                      <tr
-                        key={source.sourceId}
-                        className="border-t border-black/[0.05] text-[#3f3a33] dark:border-white/[0.08] dark:text-[#d9d0c2]"
-                      >
-                        <td className="max-w-80 px-4 py-3">
-                          <p className="truncate font-medium">{source.company}</p>
-                          <p className="mt-0.5 truncate text-[11px] text-[#9a9184] dark:text-[#837c70]">{source.adapterName}</p>
-                        </td>
-                        <td className="px-4 py-3 text-right tabular-nums">{source.runs}</td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-3">
-                            <MiniBar pct={successRatio} tone={sourceSuccessTone(source.successRate)} className="min-w-28 flex-1" />
-                            <span className="w-16 text-right tabular-nums">{displayEmptyRate(source.successRate)}</span>
-                          </div>
-                        </td>
-                        <td className={`px-4 py-3 text-right tabular-nums ${source.partialRate === "—" ? "text-[#8a8275] dark:text-[#9a9184]" : ""}`}>
-                          {displayEmptyRate(source.partialRate)}
-                        </td>
-                        <td className="px-4 py-3 text-right tabular-nums">
-                          <span className={source.failed > 0 ? "font-semibold text-[#9c4a3c] dark:text-[#e6a99f]" : ""}>{source.failed}</span>
-                          <span className="text-[#9a9184] dark:text-[#837c70]"> / {source.skipped}</span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <BarList className="max-h-[34rem] overflow-auto" ariaLabel="招聘源近七天表现" items={crawlSources.map((source) => ({
+              key: source.sourceId,
+              label: source.company,
+              caption: `${source.adapterName} · 运行 ${formatCount(source.runs)} 次 · 部分完成 ${displayEmptyRate(source.partialRate)}`,
+              ratio: parsePercentRatio(source.successRate),
+              tone: sourceSuccessTone(source.successRate),
+              value: displayEmptyRate(source.successRate),
+              valueDetail: `失败 ${formatCount(source.failed)} / 跳过 ${formatCount(source.skipped)}`,
+            }))} />
           )}
         </div>
       </details>
@@ -1279,27 +991,15 @@ function DailyReportsSection({
               const metric = primaryReportMetric(report);
               const tone = operationTone(report.status);
               return (
-                <article key={report.key} className="rounded-2xl border border-black/[0.06] bg-white/45 p-3 dark:border-white/[0.08] dark:bg-white/[0.04]">
-                  <div className="flex items-center gap-2">
-                    <StatusDot tone={tone} />
-                    <h3 className="truncate text-xs font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{report.title}</h3>
-                  </div>
-                  <p className="mt-3 text-2xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">
-                    {metric?.value == null ? (
-                      <span className="text-sm font-medium text-[#8a8275] dark:text-[#9a9184]">
-                        {report.status === "idle" ? "今天没记录" : "积累中"}
-                      </span>
-                    ) : (
-                      <AnimatedStat value={metric.value} />
-                    )}
-                  </p>
-                  <p className="mt-1 truncate text-[11px] text-[#6b655a] dark:text-[#b6ad9d]">
-                    {metric ? displayOperationMetricLabel(metric.label) : report.statusLabel}
-                  </p>
-                  <p className="mt-2 truncate text-[11px] text-[#9a9184] dark:text-[#837c70]">
-                    上次运行 {formatRunTime(report.lastRunAt)}
-                  </p>
-                </article>
+                <KpiCard
+                  key={report.key}
+                  title={report.title}
+                  value={metric?.value == null ? "—" : formatCount(metric.value)}
+                  tone={tone}
+                  detail={metric ? displayOperationMetricLabel(metric.label) : report.statusLabel}
+                  footnote={`上次运行 ${formatRunTime(report.lastRunAt)}`}
+                  className="min-h-0 p-3"
+                />
               );
             })}
           </div>
@@ -1320,136 +1020,6 @@ function DailyReportsSection({
   );
 }
 
-function BusinessPanel({ title, icon: Icon, children }: { title: string; icon: ComponentType<any>; children: ReactNode }) {
-  return (
-    <div className="surface-soft p-4">
-      <div className="flex items-center gap-2">
-        <span className="grid size-7 place-items-center rounded-lg bg-[#ece7dd] text-[#6b655a] dark:bg-white/[0.08] dark:text-[#b6ad9d]">
-          <Icon size={15} weight="fill" aria-hidden="true" />
-        </span>
-        <h3 className="text-sm font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{title}</h3>
-      </div>
-      <div className="mt-3 grid gap-3">{children}</div>
-    </div>
-  );
-}
-
-function HeroNumberTile({
-  label,
-  value,
-  detail,
-  icon: Icon,
-  tone = "muted",
-  warning = false,
-}: {
-  label: string;
-  value: number | string | null;
-  detail: string;
-  icon: ComponentType<any>;
-  tone?: BandTone;
-  warning?: boolean;
-}) {
-  return (
-    <div
-      className={`rounded-2xl border px-3.5 py-3 ${
-        warning
-          ? "border-[#edc995] bg-[#fbecd7] dark:border-[#825d28]/60 dark:bg-[#392a17]"
-          : "border-black/[0.06] bg-white/45 dark:border-white/[0.08] dark:bg-white/[0.04]"
-      }`}
-    >
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-[#6b655a] dark:text-[#b6ad9d]">
-          <span className={`grid size-7 place-items-center rounded-lg ${BAND_CHIP_CLASS[tone]}`}>
-            <Icon size={15} weight="fill" aria-hidden="true" />
-          </span>
-          <p className="text-xs font-medium">{label}</p>
-        </div>
-        <StatusDot tone={tone} />
-      </div>
-      <p className="mt-3 text-2xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">
-        {typeof value === "number" ? <AnimatedStat value={value} /> : value ?? "暂无数据"}
-      </p>
-      <p className="mt-1 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">{detail}</p>
-    </div>
-  );
-}
-
-function BusinessSection({
-  operations,
-  users,
-  resume,
-}: {
-  operations: SupabaseHealthSnapshot | null;
-  users: NonNullable<SupabaseHealthSnapshot["today"]>["users"] | null;
-  resume: NonNullable<SupabaseHealthSnapshot["today"]>["resume"] | null;
-}) {
-  const disputesOpen = Number(operations?.insight?.disputes_open || 0);
-  return (
-    <>
-      {!operations ? (
-        <ErrorPanel label="用户与业务统计" />
-      ) : (
-        <div className="grid gap-4 lg:grid-cols-3">
-          <BusinessPanel title="增长" icon={Users}>
-            {users ? (
-              <>
-                <HeroNumberTile label="总用户数" value={Number(users.total_users || 0)} detail="当前累计注册用户" icon={Users} tone="success" />
-                <HeroNumberTile label="今日新增用户" value={Number(users.today_users || 0)} detail="真实日增量，不展示伪趋势" icon={UserCircle} tone="muted" />
-              </>
-            ) : (
-              <ErrorPanel label="用户统计" />
-            )}
-            <AccumulatingMetric title="趋势基线" description="用户、覆盖、库存都是快照指标，历史基线还在积累中。" />
-          </BusinessPanel>
-
-          <BusinessPanel title="参与" icon={ChartBar}>
-            {users ? (
-              <>
-                <HeroNumberTile label="设了求职偏好" value={Number(users.users_with_preferences || 0)} detail="已保存目标岗位、城市或关键词的用户" icon={UserCircle} tone="success" />
-                <HeroNumberTile label="收藏岗位" value={Number(users.saved_total || 0)} detail={`今日新增 ${formatCount(users.saved_today)} 次`} icon={Heartbeat} tone="muted" />
-                <HeroNumberTile label="投递记录" value={Number(users.applied_total || 0)} detail={`今日新增 ${formatCount(users.applied_today)} 次`} icon={PaperPlaneTilt} tone="muted" />
-              </>
-            ) : (
-              <ErrorPanel label="用户操作统计" />
-            )}
-          </BusinessPanel>
-
-          <BusinessPanel title="待办" icon={ShieldCheck}>
-            {resume ? (
-              <HeroNumberTile
-                label="今日简历解析"
-                value={Number(resume.started || 0)}
-                detail={`成功率 ${displayEmptyRate(formatPercent(resume.succeeded, resume.started))}；智能 / 规则 ${formatCount(resume.llm)} / ${formatCount(resume.rule)}`}
-                icon={FileText}
-                tone="muted"
-              />
-            ) : (
-              <ErrorPanel label="简历解析统计" />
-            )}
-            <HeroNumberTile
-              label="可用职业洞察"
-              value={Number(operations.insight?.active_total || 0)}
-              detail={`今日新增 ${formatCount(operations.insight?.today_created)} 条`}
-              icon={Compass}
-              tone="success"
-            />
-            <HeroNumberTile
-              label="待处理申诉"
-              value={disputesOpen}
-              detail={`历史累计 ${formatCount(operations.insight?.disputes_total)} 条`}
-              icon={ShieldCheck}
-              tone={disputesOpen > 0 ? "warning" : "muted"}
-              warning={disputesOpen > 0}
-            />
-            <AccumulatingMetric title="洞察抽屉打开率" description="需要先持续记录岗位卡曝光和洞察打开事件，数据稳定后再展示。" />
-            <AccumulatingMetric title="零结果搜索率" description="需要先持续记录搜索提交、筛选条件和返回结果数，暂不拿别的日志代替。" />
-          </BusinessPanel>
-        </div>
-      )}
-    </>
-  );
-}
-
 function SprintCards({ users }: { users: NonNullable<SupabaseHealthSnapshot["today"]>["users"] | null }) {
   const pending = [
     ["收到有效机会", "行为埋点上线后可见"],
@@ -1460,20 +1030,12 @@ function SprintCards({ users }: { users: NonNullable<SupabaseHealthSnapshot["tod
     <section>
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">两周冲刺 · 用户闭环</h2>
-        <span className={"rounded-full px-2 py-0.5 text-[11px] font-semibold " + STATUS_META.idle.badge}>埋点准备中</span>
+        <StatusBadge tone="muted" label="埋点准备中" />
       </div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <a href="/admin/health?tab=users" className="surface-soft p-4">
-          <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">标已投</p>
-          <p className="mt-3 text-2xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">{users ? formatCount(users.applied_total) : "—"}</p>
-          <p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">全部用户累计</p>
-        </a>
+        <KpiCard title="标已投" value={users ? formatCount(users.applied_total) : "—"} tone="muted" detail="全部用户累计" href="/admin/health?tab=users" className="min-h-0" />
         {pending.map(([label, detail]) => (
-          <div key={label} className="surface-soft p-4">
-            <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">{label}</p>
-            <p className="mt-3 text-2xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">待采集</p>
-            <p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">{detail}</p>
-          </div>
+          <KpiCard key={label} title={label} value="待采集" tone="muted" detail={detail} className="min-h-0" />
         ))}
       </div>
     </section>
@@ -1510,52 +1072,80 @@ function OverviewTab({
   ran,
   failed,
   refreshedAt,
+  disputesOpen,
+  dailySeries,
+  dailySeriesUnavailable,
 }: {
   health: ReturnType<typeof evaluateCombinedHealth>;
-  heroStatus: SectionStatus;
+  heroStatus: BandTone;
   heroDataMissing: boolean;
   jobs: JobsHealthSnapshot | null;
   users: NonNullable<SupabaseHealthSnapshot["today"]>["users"] | null;
-  supplyStatus: SectionStatus;
-  systemStatus: SectionStatus;
+  supplyStatus: BandTone;
+  systemStatus: BandTone;
   worst: { scope: MustApplyScope; industry: string; healthy: number | null; total: number };
   rowsByScope: MustApplyRowsByScope | null;
   reports: DailyReport[];
   ran: number;
   failed: number;
   refreshedAt: string;
+  disputesOpen: number | undefined;
+  dailySeries: HealthDailySeries | null;
+  dailySeriesUnavailable: boolean;
 }) {
-  const cards: Array<[string, string, SectionStatus, string, string]> = [
-    ["岗位库", "jobs", jobs ? sectionStatusFromBand(band(share(jobs.validActive, jobs.activeTotal), HEALTH_THRESHOLDS.validActiveShare, "higher")) : "idle", jobs ? formatCount(jobs.activeTotal) : "—", jobs ? "有效率 " + formatPercent(jobs.validActive, jobs.activeTotal) + " · 空壳 " + formatCount(jobs.thinActive) : "数据暂不可用"],
-    ["必投供给", "supply", supplyStatus, rowsByScope ? String(worst.healthy || 0) + "/" + worst.total : "—", "最需处理：" + MUST_APPLY_SCOPE_LABEL[worst.scope] + "·" + worst.industry],
-    ["用户行为", "users", users ? "ok" : "idle", users ? formatCount(users.total_users) : "—", users ? "累计投递 " + formatCount(users.applied_total) + " 次" : "数据暂不可用"],
-    ["系统运行", "system", systemStatus, String(ran) + "/" + reports.length, failed ? String(failed) + " 个失败" : "全部正常"],
+  const cards: Array<[string, string, BandTone, string, string, string]> = [
+    ["岗位库", "jobs", jobs ? sectionStatusFromBand(band(share(jobs.validActive, jobs.activeTotal), HEALTH_THRESHOLDS.validActiveShare, "higher")) : "muted", jobs ? formatCount(jobs.activeTotal) : "—", jobs ? "有效率 " + formatPercent(jobs.validActive, jobs.activeTotal) + " · 空壳 " + formatCount(jobs.thinActive) : "数据暂不可用", "在招、有效率与空壳岗均来自岗位库快照"],
+    ["必投供给", "supply", supplyStatus, rowsByScope ? `${formatCount(worst.healthy)}/${formatCount(worst.total)}` : "—", "最需处理：" + MUST_APPLY_SCOPE_LABEL[worst.scope] + "·" + worst.industry, "按当前用户行业的必投公司逐家计算"],
+    ["用户行为", "users", users ? "success" : "muted", users ? formatCount(users.total_users) : "—", users ? "累计投递 " + formatCount(users.applied_total) + " 次" : "数据暂不可用", "今日汇总，不含未接入的行为埋点"],
+    ["系统运行", "system", systemStatus, String(ran) + "/" + reports.length, failed ? String(failed) + " 个失败" : "全部正常", "今日后台任务已运行数 / 已配置数"],
   ];
+  const northStarItems = northStarTrackerItems(dailySeries);
+  const snapshotDays = northStarItems.filter((item) => item.tone !== "muted").length;
+  const firstSnapshot = dailySeries?.days?.find((day) => day.north_star)?.day;
   return (
     <div className="grid gap-5">
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section className="surface-soft p-4">
-          <div className="flex items-center gap-2">
-            <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">今日结论</p>
-            <span className={"rounded-full px-2 py-0.5 text-[11px] font-semibold " + STATUS_META[heroStatus].badge}>{STATUS_META[heroStatus].label}</span>
+      <section className="surface p-5 sm:p-7">
+        <p className="text-sm font-medium text-[#625c51] dark:text-[#c5bbaa]">北极星 · 必投健康覆盖</p>
+        <div className="mt-4 flex flex-wrap items-end justify-between gap-5">
+          <div>
+            <p className="max-w-2xl text-lg font-semibold leading-7 text-[#1a1714] dark:text-[#f3ecdf]">{rowsByScope ? `${MUST_APPLY_SCOPE_LABEL[worst.scope]}·${worst.industry} 是现在最需要补齐的行业。` : "必投清单数据暂不可用，不能判断今天该补哪一处。"}</p>
+            <p className="mt-4 inline-flex items-baseline gap-2 tabular-nums text-[#1a1714] dark:text-[#f3ecdf]"><span className="text-[4rem] font-semibold leading-none tracking-[-0.05em] sm:text-[4.75rem]">{rowsByScope ? formatCount(worst.healthy) : "—"}</span><span className="text-lg text-[#625c51] dark:text-[#c5bbaa]">/ {formatCount(worst.total)} 家有健康岗</span></p>
           </div>
-          <p className="mt-3 text-2xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{heroDataMissing ? "今日结论暂不可用" : health.actions.length ? "今天有 " + health.actions.length + " 项需要处理" : "今日无系统侧红线"}</p>
-          <p className="mt-2 text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">{heroDataMissing ? "健康评估数据读取失败，请查看系统运行。" : health.actions.length ? "先做：" + health.actions[0] : "按计划推进两周冲刺。"}</p>
-        </section>
-        <section className="surface-soft p-4">
-          <p className="text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2]">今日行动</p>
-          {health.actions.length ? <div className="mt-3 space-y-2">{health.actions.slice(0, 3).map((action, index) => <a key={action} href={actionAnchor(action)} className="flex items-start gap-2 rounded-xl px-2 py-1.5 text-sm leading-5 text-[#3f3a33] hover:bg-white/55 dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"><span>{health.level === "critical" && index === 0 ? "🔴" : "⚠️"}</span><span>{action}</span></a>)}{health.actions.length > 3 && <p className="px-2 text-xs text-[#8a8275] dark:text-[#9a9184]">另有 {health.actions.length - 3} 项，见下方各板块</p>}</div> : <p className="mt-3 flex items-center gap-2 text-sm text-[#6b655a] dark:text-[#b6ad9d]"><StatusDot tone="success" />今日无系统侧紧急行动，继续推进两周冲刺。</p>}
-        </section>
-      </div>
-      <section className="grid gap-3 md:grid-cols-4">{cards.map(([name, key, status, number, detail]) => <a key={key} href={"/admin/health?tab=" + key} className="surface-soft p-4"><div className="flex justify-between"><p className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{name}</p><span className={"rounded-full px-2 py-0.5 text-[11px] font-semibold " + STATUS_META[status].badge}>{STATUS_META[status].label}</span></div><p className="mt-4 text-3xl font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">{number}</p><p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">{detail}</p></a>)}</section>
+          <div className="text-sm text-[#756e62] dark:text-[#b6ad9d]"><StatusBadge tone={rowsByScope ? supplyStatus : "muted"} /><p className="mt-3">本页读取于 <span className="tabular-nums">{refreshedAt}</span> 北京时间</p></div>
+        </div>
+      </section>
+      <div className="border-t border-black/[0.10] dark:border-white/[0.12]" />
+      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">{cards.map(([name, key, status, number, detail, footnote]) => <KpiCard key={key} title={name} value={number} tone={status} detail={detail} footnote={footnote} href={`/admin/health?tab=${key}`} weight="strong" />)}</section>
+      <Callout tone={heroStatus} className="surface">{heroDataMissing ? "今日结论暂不可用，请先查看系统运行。" : health.actions.length ? `今天有 ${health.actions.length} 项需要处理，先做：${health.actions[0]}` : "今日没有系统侧红线，可以按计划推进两周冲刺。"}</Callout>
+      <section className="surface p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div><h2 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">今日行动</h2><p className="mt-1 text-xs text-[#756e62] dark:text-[#b6ad9d]">只列今天可以直接处理的事项。</p></div>
+          <StatusBadge tone={heroStatus} />
+        </div>
+        {health.actions.length || (disputesOpen || 0) > 0 ? <div className="mt-3 space-y-2">{health.actions.slice(0, 3).map((action, index) => <a key={action} href={actionAnchor(action)} className="flex items-start gap-2 rounded-xl px-2 py-1.5 text-sm leading-5 text-[#3f3a33] hover:bg-white/55 dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"><StatusDot tone={health.level === "critical" && index === 0 ? "danger" : "warning"} /><span>{action}</span></a>)}{health.actions.length > 3 && <p className="px-2 text-xs text-[#8a8275] dark:text-[#9a9184]">另有 {health.actions.length - 3} 项，见下方各板块</p>}{(disputesOpen || 0) > 0 && <a href="/admin/insights" className="flex items-start gap-2 rounded-xl px-2 py-1.5 text-sm font-medium leading-5 text-[#8f6225] hover:bg-[#fbecd7] dark:text-[#e0b15a] dark:hover:bg-[#825d28]/20"><StatusDot tone="warning" /><span>待处理申诉：{formatCount(disputesOpen)} 条</span></a>}</div> : <p className="mt-3 flex items-center gap-2 text-sm text-[#6b655a] dark:text-[#b6ad9d]"><StatusDot tone="success" />今日无系统侧紧急行动，继续推进两周冲刺。</p>}
+      </section>
+      <AccumulatingMetric title="北极星趋势" description={dailySeriesUnavailable ? "趋势序列暂不可用，今天不展示走势。" : firstSnapshot ? `趋势数据从 ${firstSnapshot} 开始积累，目前已有 ${snapshotDays} 天；样本不足时不展示涨跌或折线。` : "每日写入已接入，首条快照将在每日抓取完成后出现。"} items={northStarItems} />
       <SprintCards users={users} />
       <DataNotes refreshedAt={refreshedAt} />
     </div>
   );
 }
 
-function JobsTab({ jobs, clickValidity, clickStatus, coverage, operations, todayRemoved, validBand, checkedBand }: { jobs: JobsHealthSnapshot | null; clickValidity: ClickValidityMetrics | null; clickStatus: SectionStatus; coverage: CoverageSnapshot | null; operations: SupabaseHealthSnapshot | null; todayRemoved: number | null; validBand: HealthBand; checkedBand: HealthBand }) {
-  return <div className="grid gap-5"><section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{jobs ? <><VisualChip label="在招总量" value={formatCount(jobs.activeTotal)} tone="success" /><VisualChip label="今日新进" value={formatCount(jobs.todayNew)} tone="success" /><VisualChip label="今日下架" value={todayRemoved == null ? "—" : formatCount(todayRemoved)} tone="warning" /><VisualChip label="空壳岗" value={formatCount(jobs.thinActive)} tone="warning" /><VisualChip label="待核查" value={formatCount(jobs.neverChecked)} tone="muted" /></> : <ErrorPanel label="岗位库体检" />}</section>{jobs && <section className="surface p-5"><h2 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">库存结构</h2><StackedBar className="mt-4 h-4" total={jobs.activeTotal} segments={[{ value: jobs.validActive, tone: "success" }, { value: jobs.thinActive, tone: "warning" }]} /><p className="mt-3 text-xs text-[#8a8275] dark:text-[#9a9184]">有效在招 {formatCount(jobs.validActive)} · 空壳 {formatCount(jobs.thinActive)}</p><div className="mt-4"><div className="flex justify-between text-xs text-[#6b655a] dark:text-[#b6ad9d]"><span>待核查（与左侧有交集）</span><span>{formatCount(jobs.neverChecked)}</span></div><MiniBar className="mt-2" pct={share(jobs.neverChecked, jobs.activeTotal)} tone={bandTone(checkedBand)} /></div></section>}<section className="grid gap-4 md:grid-cols-2">{jobs && <div className="surface flex items-center gap-5 p-5"><StatRing pct={share(jobs.validActive, jobs.activeTotal)} tone={bandTone(validBand)}><span className="text-xl font-semibold">{formatPercent(jobs.validActive, jobs.activeTotal)}</span></StatRing><p>有效率</p></div>}<div className="surface flex items-center gap-5 p-5"><StatRing pct={clickValidity?.coverageRate ?? null} tone="muted"><span className="text-xl font-semibold">{clickValidity?.coverageRate == null ? "—" : formatRate(clickValidity.coverageRate)}</span></StatRing><p>探活覆盖</p></div></section><ClickValiditySection clickValidity={clickValidity} status={clickStatus} summary="展示岗位自动探活（非用户点击统计）" /><section className="surface p-5"><h2 className="mb-4 text-xl font-semibold">抓全率</h2><CoverageSection snapshot={coverage} /></section><details className="surface p-5"><summary className="cursor-pointer text-xl font-semibold">分源状态</summary><div className="mt-5"><JobsLibrarySection jobs={null} operations={operations} crawlSources={normalizeCrawlSources(operations?.crawl_sources)} todayRemoved={todayRemoved} validActiveShareBand={validBand} thinShareBand="empty" neverCheckedShareBand={checkedBand} /></div></details></div>;
+function JobsTab({ jobs, clickValidity, clickStatus, coverage, operations, todayRemoved, validBand, checkedBand, dailySeries, dailySeriesUnavailable }: { jobs: JobsHealthSnapshot | null; clickValidity: ClickValidityMetrics | null; clickStatus: BandTone; coverage: CoverageSnapshot | null; operations: SupabaseHealthSnapshot | null; todayRemoved: number | null; validBand: HealthBand; checkedBand: HealthBand; dailySeries: HealthDailySeries | null; dailySeriesUnavailable: boolean }) {
+  return <div className="grid gap-5">
+    {jobs ? <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <KpiCard title="在招总量" value={formatCount(jobs.activeTotal)} tone="success" detail="岗位库当前仍在招聘的岗位" />
+      <KpiCard title="今日新进" value={formatCount(jobs.todayNew)} tone="success" detail="今天新入库的岗位" />
+      <KpiCard title="今日下架" value={formatCount(todayRemoved)} tone={todayRemoved == null ? "muted" : todayRemoved > 0 ? "warning" : "success"} detail="今天新判定失效的岗位" />
+      <KpiCard title="空壳岗" value={formatCount(jobs.thinActive)} tone="warning" detail="有链接，但没有岗位正文" />
+      <KpiCard title="待核查" value={formatCount(jobs.neverChecked)} tone={bandTone(checkedBand)} detail="还没有完成探活验证" />
+    </section> : <ErrorPanel label="岗位库体检" />}
+    {jobs && <section className="surface-soft p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">库存结构</h2><p className="mt-1 text-xs text-[#756e62] dark:text-[#b6ad9d]">同一岗位可同时属于“在招”和“待核查”，不把它们相加。</p></div><StatRing pct={share(jobs.validActive, jobs.activeTotal)} tone={bandTone(validBand)} size="section"><span className="text-lg font-semibold tabular-nums">{formatPercent(jobs.validActive, jobs.activeTotal)}</span><span className="text-[10px] text-[#756e62] dark:text-[#b6ad9d]">能投有效率</span></StatRing></div><BarList className="mt-4" ariaLabel="岗位库存构成" items={[{ key: "valid", label: "能投岗位", ratio: share(jobs.validActive, jobs.activeTotal), tone: "success", value: formatCount(jobs.validActive) }, { key: "thin", label: "空壳岗", ratio: share(jobs.thinActive, jobs.activeTotal), tone: "warning", value: formatCount(jobs.thinActive) }, { key: "unchecked", label: "待核查", ratio: share(jobs.neverChecked, jobs.activeTotal), tone: bandTone(checkedBand), value: formatCount(jobs.neverChecked) }]} /><p className="mt-3 text-[10px] text-[#8a8275] dark:text-[#9a9184]">按当前岗位快照计算，今天读取；待核查与在招可能重叠。</p></section>}
+    <section className="surface-soft p-5"><h2 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">抓取运行近 30 天</h2><p className="mt-1 text-xs text-[#756e62] dark:text-[#b6ad9d]">每格一天。失败优先显示为处理，部分完成显示为关注。</p>{dailySeriesUnavailable ? <div className="mt-4"><ErrorPanel label="抓取运行日序列" /></div> : <Tracker className="mt-4" items={processTrackerItems(dailySeries, "crawl")} ariaLabel="抓取运行近 30 天" />}</section>
+    <ClickValiditySection clickValidity={clickValidity} status={clickStatus} summary="展示岗位自动探活，不是用户真实点击统计。" />
+    <section className="surface-soft p-5"><h2 className="mb-4 text-xl font-semibold">抓全率</h2><CoverageSection snapshot={coverage} /><p className="mt-4 text-[10px] text-[#8a8275] dark:text-[#9a9184]">只计算官网明确报总数的招聘源，盲区不按 0% 处理。</p></section>
+    <details className="surface-soft p-5"><summary className="cursor-pointer text-xl font-semibold">分源状态</summary><div className="mt-5"><JobsLibrarySection jobs={null} operations={operations} crawlSources={normalizeCrawlSources(operations?.crawl_sources)} todayRemoved={todayRemoved} validActiveShareBand={validBand} thinShareBand="empty" neverCheckedShareBand={checkedBand} showHealthSummary={false} /></div></details>
+  </div>;
 }
 
 function MustApplyGapLedger({
@@ -1566,17 +1156,17 @@ function MustApplyGapLedger({
   ledger: { realExpansion: number | null; definitionChange: number } | null;
 }) {
   return (
-    <section className="surface p-5 sm:p-6">
+    <section className="surface-soft p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold">缺口漏斗台账</h2>
           <p className="mt-1 text-sm text-[#6b655a] dark:text-[#b6ad9d]">国内清单版本 {MUST_APPLY_VERSION}；真实扩源与计量规则变化分开记。</p>
         </div>
-        <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${BAND_CHIP_CLASS.muted}`}>清单版本 {MUST_APPLY_VERSION}</span>
+        <StatusBadge tone="muted" label={`清单版本 ${MUST_APPLY_VERSION}`} />
       </div>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <VisualChip label="本轮真实扩源" value={ledger?.realExpansion == null ? "—" : `+${ledger.realExpansion}`} tone="success" detail="国内漏斗最近有记录的一天；仅计验收后保留的新 source" />
-        <VisualChip label="口径变动" value={ledger ? `${ledger.definitionChange >= 0 ? "+" : ""}${ledger.definitionChange}` : "—"} tone="muted" detail="仅计经父公司门户新增覆盖，不冒充扩源" />
+        <KpiCard title="本轮真实扩源" value={ledger?.realExpansion == null ? "—" : `+${ledger.realExpansion}`} tone="success" detail="国内漏斗最近有记录的一天，只计验收后保留的新 source" className="min-h-0" />
+        <KpiCard title="口径变动" value={ledger ? `${ledger.definitionChange >= 0 ? "+" : ""}${ledger.definitionChange}` : "—"} tone="muted" detail="仅计经父公司门户新增覆盖，不冒充扩源" className="min-h-0" />
       </div>
       {!summary ? <div className="mt-4"><ErrorPanel label="缺口漏斗台账" /></div> : (
         <div className="mt-5 grid gap-4 lg:grid-cols-3">
@@ -1584,7 +1174,7 @@ function MustApplyGapLedger({
             <h3 className="text-sm font-semibold">国内各状态</h3>
             <div className="mt-2 flex flex-wrap gap-2">
               {Object.entries(summary.stateCounts).map(([state, count]) => (
-                <span key={state} className={`rounded-full px-2.5 py-1 text-xs ${BAND_CHIP_CLASS.muted}`}>{translateOperationalTerm(state)} {count}</span>
+                <StatusBadge key={state} tone="muted" label={`${translateOperationalTerm(state)} ${formatCount(count)}`} />
               ))}
             </div>
           </div>
@@ -1608,20 +1198,27 @@ function MustApplyGapLedger({
 }
 
 function MustApplyGovernanceList({ items }: { items: MustApplyGovernanceItem[] | null }) {
-  return <section className="surface p-5 sm:p-6"><div><h2 className="text-xl font-semibold">必投清单待治理</h2><p className="mt-1 text-sm text-[#6b655a] dark:text-[#b6ad9d]">只提示需要人工判断的公司，不自动改动必投清单口径。</p></div>{!items ? <div className="mt-4"><ErrorPanel label="必投清单待治理" /></div> : !items.length ? <p className="mt-4 text-sm text-[#6b655a] dark:text-[#b6ad9d]">当前没有待治理公司。</p> : <div className="mt-4 overflow-auto rounded-2xl border border-black/[0.07] dark:border-white/[0.1]"><table className="w-full min-w-[780px] text-left text-sm"><thead className="bg-[#f4efe6] text-xs text-[#8a8275] dark:bg-[#1c1813] dark:text-[#9a9184]"><tr><th className="px-4 py-3 font-medium">公司</th><th className="px-4 py-3 font-medium">所属行业</th><th className="px-4 py-3 font-medium">卡在哪</th><th className="px-4 py-3 text-right font-medium">尝试次数</th><th className="px-4 py-3 font-medium">最后一次</th><th className="px-4 py-3 font-medium">建议动作</th></tr></thead><tbody>{items.map((item) => <tr key={item.company} className="border-t border-black/[0.05] text-[#3f3a33] dark:border-white/[0.08] dark:text-[#d9d0c2]"><td className="px-4 py-3 font-medium">{item.company}</td><td className="px-4 py-3 text-xs">{item.industries.join("、") || "未标注"}</td><td className="max-w-xs px-4 py-3 text-xs leading-5">{item.blocker}</td><td className="px-4 py-3 text-right tabular-nums">{item.attempts}</td><td className="px-4 py-3 text-xs">{formatRunTime(item.lastAttemptAt)}</td><td className="px-4 py-3 text-xs font-medium">{item.suggestedAction}</td></tr>)}</tbody></table></div>}</section>;
+  return <section className="surface-soft p-5 sm:p-6"><div><h2 className="text-xl font-semibold">必投清单待治理</h2><p className="mt-1 text-sm text-[#6b655a] dark:text-[#b6ad9d]">只提示需要人工判断的公司，不自动改动必投清单口径。</p></div>{!items ? <div className="mt-4"><ErrorPanel label="必投清单待治理" /></div> : !items.length ? <p className="mt-4 text-sm text-[#6b655a] dark:text-[#b6ad9d]">当前没有待治理公司。</p> : <div className="mt-4 max-h-[34rem] overflow-auto rounded-2xl border border-black/[0.07] dark:border-white/[0.1]"><table className="w-full min-w-[780px] text-left text-sm"><thead className="sticky top-0 z-10 bg-[#f4efe6] text-xs text-[#8a8275] dark:bg-[#1c1813] dark:text-[#9a9184]"><tr><th className="px-4 py-3 font-medium">公司</th><th className="px-4 py-3 font-medium">所属行业</th><th className="px-4 py-3 font-medium">卡在哪</th><th className="px-4 py-3 text-right font-medium">尝试次数</th><th className="px-4 py-3 font-medium">最后一次</th><th className="px-4 py-3 font-medium">建议动作</th></tr></thead><tbody>{items.map((item) => <tr key={item.company} className="border-t border-black/[0.05] text-[#3f3a33] dark:border-white/[0.08] dark:text-[#d9d0c2]"><td className="px-4 py-3 font-medium">{item.company}</td><td className="px-4 py-3 text-xs">{item.industries.join("、") || "未标注"}</td><td className="max-w-xs px-4 py-3 text-xs leading-5">{item.blocker}</td><td className="px-4 py-3 text-right tabular-nums">{item.attempts}</td><td className="px-4 py-3 text-xs">{formatRunTime(item.lastAttemptAt)}</td><td className="px-4 py-3 text-xs font-medium">{item.suggestedAction}</td></tr>)}</tbody></table></div>}</section>;
 }
 
 function SupplyTab({ rowsByScope, fetchByIndustry, activeIndustries, userDistribution, worst, gapSummary, governanceItems, ledger }: { rowsByScope: MustApplyRowsByScope | null; fetchByIndustry: Record<MustApplyScope, Record<string, MustApplyFetchCoverage>> | null; activeIndustries: Record<MustApplyScope, string[]>; userDistribution: UserIndustryDistribution; worst: { scope: MustApplyScope; industry: string; healthy: number | null; total: number; zeroHealthyCompanies: string[] }; gapSummary: MustApplyGapSummary | null; governanceItems: MustApplyGovernanceItem[] | null; ledger: { realExpansion: number | null; definitionChange: number } | null }) {
-  return <div className="grid gap-5"><MustApplyGapLedger summary={gapSummary} ledger={ledger} /><MustApplyGovernanceList items={governanceItems} /><section className="surface flex flex-col items-center p-6 text-center"><StatRing pct={rowsByScope ? (worst.healthy || 0) / worst.total : null} tone={bandTone(mustApplyIndustryBand(rowsByScope?.[worst.scope]?.[worst.industry] || null))} size={180}><span className="text-3xl font-semibold">{rowsByScope ? String(worst.healthy || 0) + "/30" : "—"}</span></StatRing><p className="mt-3 text-sm text-[#6b655a] dark:text-[#b6ad9d]">最需处理：{MUST_APPLY_SCOPE_LABEL[worst.scope]}·{worst.industry}</p></section><MustApplySection rowsByIndustry={rowsByScope} fetchCoverageByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} /><section className="surface p-5"><h2 className="font-semibold">缺口提示</h2><div className="mt-3 flex flex-wrap gap-2">{worst.zeroHealthyCompanies.slice(0, 10).map((company) => <span key={company} className="rounded-full bg-[#fbecd7] px-3 py-1 text-xs text-[#8f6225] dark:bg-[#825d28]/30 dark:text-[#e0b15a]">{company}</span>)}{worst.zeroHealthyCompanies.length > 10 && <span className="text-xs">等 {worst.zeroHealthyCompanies.length - 10} 家</span>}{rowsByScope && worst.zeroHealthyCompanies.length === 0 && <span>真实 0 家缺口</span>}{!rowsByScope && <span>—</span>}</div></section></div>;
+  const tone = bandTone(mustApplyIndustryBand(rowsByScope?.[worst.scope]?.[worst.industry] || null));
+  return <div className="grid gap-5">
+    <section className="surface p-5 sm:p-7"><div className="grid gap-5 lg:grid-cols-[auto_1fr] lg:items-center"><div className="flex justify-center"><StatRing pct={rowsByScope ? share(worst.healthy, worst.total) : null} tone={tone} size="northstar" target={28 / 30}><span className="text-3xl font-semibold tabular-nums">{rowsByScope ? `${formatCount(worst.healthy)}/${formatCount(worst.total)}` : "—"}</span><span className="mt-1 text-[10px] text-[#756e62] dark:text-[#b6ad9d]">家有健康岗</span></StatRing></div><div><p className="text-sm font-medium text-[#625c51] dark:text-[#c5bbaa]">北极星 · 必投健康覆盖</p><h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-[#1a1714] dark:text-[#f3ecdf]">{rowsByScope ? `${MUST_APPLY_SCOPE_LABEL[worst.scope]}·${worst.industry} 现在最需要补齐。` : "必投清单数据暂不可用，不能判断今天该补哪一处。"}</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-[#756e62] dark:text-[#b6ad9d]">先保证目标用户最常投的公司有可投岗位，再处理扩源过程和台账。</p><div className="mt-4"><StatusBadge tone={rowsByScope ? tone : "muted"} /></div></div></div></section>
+    <section className="grid gap-3 md:grid-cols-2"><KpiCard title="最差行业" value={`${MUST_APPLY_SCOPE_LABEL[worst.scope]}·${worst.industry}`} tone={rowsByScope ? tone : "muted"} detail={rowsByScope ? `${formatCount(worst.healthy)}/${formatCount(worst.total)} 家有健康岗` : "当前无法读取必投覆盖"} footnote="按当前有求职用户的行业计算" /><KpiCard title="零健康岗公司" value={rowsByScope ? formatCount(worst.zeroHealthyCompanies.length) : "—"} tone={worst.zeroHealthyCompanies.length > 0 ? "danger" : rowsByScope ? "success" : "muted"} detail={rowsByScope ? (worst.zeroHealthyCompanies.slice(0, 3).join("、") || "真实 0 家缺口") : "读取失败时不把它当作 0"} footnote="只列当前最差行业中的公司" /></section>
+    <MustApplySection rowsByIndustry={rowsByScope} fetchCoverageByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} />
+    <section className="grid gap-5 border-t border-black/[0.10] pt-5 dark:border-white/[0.12]"><Callout tone={worst.zeroHealthyCompanies.length > 0 ? "warning" : "success"}>{rowsByScope ? (worst.zeroHealthyCompanies.length > 0 ? `优先处理：${worst.zeroHealthyCompanies.slice(0, 10).join("、")}${worst.zeroHealthyCompanies.length > 10 ? ` 等 ${worst.zeroHealthyCompanies.length} 家` : ""}。` : "当前最差行业没有零健康岗公司。") : "必投清单读取失败，暂不生成缺口结论。"}</Callout><MustApplyGapLedger summary={gapSummary} ledger={ledger} /><MustApplyGovernanceList items={governanceItems} /></section>
+  </div>;
 }
 
 function UserTab({ operations, users, resume }: { operations: SupabaseHealthSnapshot | null; users: NonNullable<SupabaseHealthSnapshot["today"]>["users"] | null; resume: NonNullable<SupabaseHealthSnapshot["today"]>["resume"] | null }) {
   if (!operations || !users) return <ErrorPanel label="用户行为统计" />;
-  return <div className="grid gap-5"><section className="surface p-5 sm:p-6"><h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">用户漏斗</h2><div className="mt-5"><FunnelBars steps={[{ label: "注册", value: users.total_users }, { label: "设了偏好", value: users.users_with_preferences }, { label: "收藏过", value: users.saved_users }, { label: "投递过", value: users.applied_users }]} /></div></section><section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><VisualChip label="今日新增用户" value={formatCount(users.today_users)} tone="muted" /><VisualChip label="收藏次数" value={formatCount(users.saved_total) + " + " + formatCount(users.saved_today)} tone="muted" detail="累计 + 今日" /><VisualChip label="投递次数" value={formatCount(users.applied_total) + " + " + formatCount(users.applied_today)} tone="muted" detail="累计 + 今日" /><VisualChip label="简历解析" value={resume ? formatCount(resume.succeeded) + "/" + formatCount(resume.started) : "—"} tone="muted" detail="今日成功/总数" /></section><SprintCards users={users} /><p className="text-xs text-[#8a8275] dark:text-[#9a9184]">点击官网 / 收到机会 / 7日回访 待行为埋点上线。</p></div>;
+  const funnel = [{ key: "registered", label: "注册", value: users.total_users }, { key: "preferences", label: "设了偏好", value: users.users_with_preferences }, { key: "saved", label: "收藏过", value: users.saved_users }, { key: "applied", label: "投递过", value: users.applied_users }];
+  return <div className="grid gap-5"><section className="surface-soft p-5 sm:p-6"><h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">用户漏斗</h2><p className="mt-1 text-xs text-[#756e62] dark:text-[#b6ad9d]">累计去重人数，条形以注册人数为基准。</p><BarList className="mt-5" ariaLabel="用户漏斗" items={funnel.map((step) => ({ key: step.key, label: step.label, ratio: share(step.value, users.total_users), tone: "success", value: formatCount(step.value) }))} /></section><section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><KpiCard title="今日新增用户" value={formatCount(users.today_users)} tone="muted" detail="今天完成注册的用户" /><KpiCard title="收藏次数" value={`${formatCount(users.saved_total)} + ${formatCount(users.saved_today)}`} tone="muted" detail="累计 + 今日" /><KpiCard title="投递次数" value={`${formatCount(users.applied_total)} + ${formatCount(users.applied_today)}`} tone="muted" detail="累计 + 今日" /><KpiCard title="简历解析" value={resume ? `${formatCount(resume.succeeded)}/${formatCount(resume.started)}` : "—"} tone="muted" detail="今日成功 / 总数" /></section><SprintCards users={users} /><p className="text-xs text-[#8a8275] dark:text-[#9a9184]">点击官网、收到机会、7 日回访仍待行为埋点接入。</p></div>;
 }
 
-function SystemTab({ operations, reports, refreshedAt }: { operations: SupabaseHealthSnapshot | null; reports: DailyReport[]; refreshedAt: string }) {
-  return <div className="grid gap-5"><section className="surface p-5"><DailyReportsSection operations={operations} reports={reports} /></section><DataNotes refreshedAt={refreshedAt} /><p className="text-xs text-[#8a8275] dark:text-[#9a9184]">该页面仅管理员可访问；两套数据库分别读取，任一侧异常时另一侧仍可显示。</p></div>;
+function SystemTab({ operations, reports, refreshedAt, dailySeries, dailySeriesUnavailable }: { operations: SupabaseHealthSnapshot | null; reports: DailyReport[]; refreshedAt: string; dailySeries: HealthDailySeries | null; dailySeriesUnavailable: boolean }) {
+  return <div className="grid gap-5"><section className="surface-soft p-5"><h2 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">后台任务近 30 天</h2><p className="mt-1 text-xs text-[#756e62] dark:text-[#b6ad9d]">每格一天。任一任务失败为处理，部分完成为关注，无记录单独保留。</p>{dailySeriesUnavailable ? <div className="mt-4"><ErrorPanel label="后台任务日序列" /></div> : <Tracker className="mt-4" items={processTrackerItems(dailySeries, "ops")} ariaLabel="后台任务近 30 天" />}<p className="mt-3 text-[10px] text-[#8a8275] dark:text-[#9a9184]">按 ops_runs 每日台账汇总，不把没有记录显示成成功或 0。</p></section><section className="surface-soft p-5"><DailyReportsSection operations={operations} reports={reports} /></section><DataNotes refreshedAt={refreshedAt} /><p className="text-xs text-[#8a8275] dark:text-[#9a9184]">该页面仅管理员可访问；两套数据库分别读取，任一侧异常时另一侧仍可显示。</p></div>;
 }
 
 export default async function AdminHealthPage({ searchParams }: { searchParams: Promise<{ tab?: string | string[] }> }) {
@@ -1630,7 +1227,7 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   const rawTab = typeof query.tab === "string" ? query.tab : "";
   const tab = rawTab === "jobs" || rawTab === "supply" || rawTab === "users" || rawTab === "system" ? rawTab : "overview";
   const overview = tab === "overview";
-  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult, gapResult] = await Promise.allSettled([overview || tab === "jobs" ? getJobsHealthSnapshot() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), overview || tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await getMustApplyFetchCoverage(createServiceClient(), scope)] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null), tab === "supply" ? loadMustApplyGapAdminData() : Promise.resolve(null)]);
+  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult, gapResult, dailySeriesResult] = await Promise.allSettled([overview || tab === "jobs" ? getJobsHealthSnapshot() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), overview || tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await getMustApplyFetchCoverage(createServiceClient(), scope)] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null), tab === "supply" ? loadMustApplyGapAdminData() : Promise.resolve(null), overview || tab === "jobs" || tab === "system" ? loadHealthDailySeries() : Promise.resolve(null)]);
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
   const clickValidity = clickResult.status === "fulfilled" ? clickResult.value : null;
@@ -1670,20 +1267,21 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   const validBand = jobs ? band(share(jobs.validActive, jobs.activeTotal), HEALTH_THRESHOLDS.validActiveShare, "higher") : "empty";
   const thinBand = jobs ? band(share(jobs.thinActive, jobs.activeTotal), HEALTH_THRESHOLDS.thinActiveShare, "lower") : "empty";
   const checkedBand = jobs ? band(share(jobs.neverChecked, jobs.activeTotal), HEALTH_THRESHOLDS.neverCheckedShare, "lower") : "empty";
-  const jobsStatus = !jobs ? "idle" : sectionStatusFromBand(worstBand([validBand, thinBand, checkedBand]));
-  const clickStatus = !clickValidity ? "idle" : clickValidity.totalOpens === 0 && clickValidity.livenessTotal === 0 ? "idle" : sectionStatusFromBand(band(clickValidity.probeValidityRate, HEALTH_THRESHOLDS.clickValidity, "higher"));
+  const clickStatus: BandTone = !clickValidity ? "muted" : clickValidity.totalOpens === 0 && clickValidity.livenessTotal === 0 ? "muted" : sectionStatusFromBand(band(clickValidity.probeValidityRate, HEALTH_THRESHOLDS.clickValidity, "higher"));
   const fallback = { scope: "domestic" as MustApplyScope, industry: DEFAULT_MUST_APPLY_INDUSTRY, healthy: null as number | null, total: 30, zeroHealthyCompanies: [] as string[], blindCompanies: [] as string[], userCount: 0 };
   const candidates = MUST_APPLY_SCOPES.flatMap((scope) => activeIndustries[scope].map((industry) => { const rows = rowsByScope?.[scope]?.[industry]; return { scope, industry, healthy: rows ? rows.filter((row) => row.healthy > 0).length : null, total: mustApplyByIndustry(scope)[industry].length, zeroHealthyCompanies: rows ? rows.filter((row) => row.healthy === 0).map((row) => row.name) : [], blindCompanies: rows ? rows.filter((row) => row.healthy > 0 && row.checked72h === 0).map((row) => row.name) : [], userCount: userDistribution.counts[scope][industry] || 0 }; }));
   const worst = candidates.reduce((current, item) => { const ranks: Record<HealthBand, number> = { empty: 0, good: 1, warn: 2, bad: 3 }; return ranks[mustApplyIndustryBand(rowsByScope?.[item.scope]?.[item.industry] || null)] > ranks[mustApplyIndustryBand(rowsByScope?.[current.scope]?.[current.industry] || null)] ? item : current; }, fallback);
-  const health = evaluateCombinedHealth({ validActive: jobs?.validActive, crawlRuns: operations?.today?.crawl?.runs, crawlFailedRuns: operations?.today?.crawl?.failed_runs, clickProbeValidityRate: clickValidity?.probeValidityRate, mustApplyHealthyCompanies: rowsByScope ? worst.healthy || 0 : null, mustApplyTotalCompanies: worst.total, mustApplyZeroHealthyCompanies: worst.zeroHealthyCompanies, mustApplyBlindCompanies: worst.blindCompanies, mustApplyIndustries: candidates, coverageAvgPct: coverage?.avgCoveragePct, coverageBlindSources: coverage?.blind });
-  const supplyStatus = !rowsByScope ? "idle" : sectionStatusFromBand(worstBand([health.bands.mustApply, coverageBand(coverage?.avgCoveragePct)]));
+  const health = evaluateCombinedHealth({ validActive: jobs?.validActive, crawlRuns: operations?.today?.crawl?.runs, crawlFailedRuns: operations?.today?.crawl?.failed_runs, clickProbeValidityRate: clickValidity?.probeValidityRate, mustApplyHealthyCompanies: rowsByScope ? worst.healthy : null, mustApplyTotalCompanies: worst.total, mustApplyZeroHealthyCompanies: worst.zeroHealthyCompanies, mustApplyBlindCompanies: worst.blindCompanies, mustApplyIndustries: candidates, coverageAvgPct: coverage?.avgCoveragePct, coverageBlindSources: coverage?.blind });
+  const supplyStatus: BandTone = !rowsByScope ? "muted" : sectionStatusFromBand(worstBand([health.bands.mustApply, coverageBand(coverage?.avgCoveragePct)]));
   const failed = reports.filter((report) => report.status === "failed").length;
   const ran = reports.filter((report) => report.status === "success").length;
-  const systemStatus: SectionStatus = !operations ? "idle" : failed ? "critical" : ran ? "ok" : "idle";
+  const systemStatus: BandTone = !operations ? "muted" : failed ? "danger" : ran ? "success" : "muted";
   const heroDataMissing = !jobs && !operations;
-  const heroStatus: SectionStatus = heroDataMissing || health.level === "critical" ? "critical" : health.actions.length ? "warn" : "ok";
+  const heroStatus: BandTone = heroDataMissing || health.level === "critical" ? "danger" : health.actions.length ? "warning" : "success";
   const refreshedAt = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
   const tabs = [["overview", "总览"], ["jobs", "岗位库"], ["supply", "必投供给"], ["users", "用户行为"], ["system", "系统运行"]] as const;
-  const content = tab === "overview" ? <OverviewTab health={health} heroStatus={heroStatus} heroDataMissing={heroDataMissing} jobs={jobs} users={users} supplyStatus={supplyStatus} systemStatus={systemStatus} worst={worst} rowsByScope={rowsByScope} reports={reports} ran={ran} failed={failed} refreshedAt={refreshedAt} /> : tab === "jobs" ? <JobsTab jobs={jobs} clickValidity={clickValidity} clickStatus={clickStatus} coverage={coverage} operations={operations} todayRemoved={todayRemoved} validBand={validBand} checkedBand={checkedBand} /> : tab === "supply" ? <SupplyTab rowsByScope={rowsByScope} fetchByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} worst={worst} gapSummary={gapSummary} governanceItems={governanceItems} ledger={supplyLedger} /> : tab === "users" ? <UserTab operations={operations} users={users} resume={resume} /> : <SystemTab operations={operations} reports={reports} refreshedAt={refreshedAt} />;
+  const dailySeries = dailySeriesResult.status === "fulfilled" ? dailySeriesResult.value : null;
+  const dailySeriesUnavailable = dailySeriesResult.status === "rejected";
+  const content = tab === "overview" ? <OverviewTab health={health} heroStatus={heroStatus} heroDataMissing={heroDataMissing} jobs={jobs} users={users} supplyStatus={supplyStatus} systemStatus={systemStatus} worst={worst} rowsByScope={rowsByScope} reports={reports} ran={ran} failed={failed} refreshedAt={refreshedAt} disputesOpen={operations?.insight?.disputes_open} dailySeries={dailySeries} dailySeriesUnavailable={dailySeriesUnavailable} /> : tab === "jobs" ? <JobsTab jobs={jobs} clickValidity={clickValidity} clickStatus={clickStatus} coverage={coverage} operations={operations} todayRemoved={todayRemoved} validBand={validBand} checkedBand={checkedBand} dailySeries={dailySeries} dailySeriesUnavailable={dailySeriesUnavailable} /> : tab === "supply" ? <SupplyTab rowsByScope={rowsByScope} fetchByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} worst={worst} gapSummary={gapSummary} governanceItems={governanceItems} ledger={supplyLedger} /> : tab === "users" ? <UserTab operations={operations} users={users} resume={resume} /> : <SystemTab operations={operations} reports={reports} refreshedAt={refreshedAt} dailySeries={dailySeries} dailySeriesUnavailable={dailySeriesUnavailable} />;
   return <div className="min-h-screen bg-editorial"><Navbar /><ProductPage maxWidth="max-w-6xl"><ProductHero eyebrow="运营健康" title="管理员看板" description="按模块查看今日真实运行与供给情况。" icon={ShieldCheck}><nav className="mt-4 flex gap-2 overflow-x-auto pb-1" aria-label="管理员看板模块">{tabs.map(([key, label]) => <a key={key} href={key === "overview" ? "/admin/health" : "/admin/health?tab=" + key} className={"shrink-0 rounded-full border px-4 py-2 text-sm font-semibold " + (tab === key ? "border-[#1a1714] bg-[#1a1714] text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]" : "border-black/[0.12] text-[#6b655a] dark:border-white/[0.15] dark:text-[#b6ad9d]")}>{label}</a>)}</nav></ProductHero><main className="mt-6">{content}</main></ProductPage></div>;
 }

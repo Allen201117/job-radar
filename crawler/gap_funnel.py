@@ -15,6 +15,7 @@ import entry_finder
 import gap_census
 import jobs_db
 import must_apply
+import north_star_snapshot
 import ops_runs
 import platform_fingerprint
 import probe
@@ -956,6 +957,17 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
         apply=apply,
         now=now,
     )
+    if (
+        os.environ.get("NORTH_STAR_SNAPSHOT", "").lower() in _TRUE
+        and scope == "domestic"
+        and not company
+    ):
+        north_star_snapshot.record_daily_snapshot(
+            supabase,
+            jobs_conn,
+            now=now,
+            census_rows=census_result["rows"],
+        )
     queue = census_result["queue"]
     round_source_rows = []
     if queue:

@@ -1025,33 +1025,3 @@ export function evaluateCombinedHealth(input: {
     bands: { clickValidity, mustApply, coverage },
   };
 }
-
-export function evaluateTodayHealth(input: {
-  validActive: Numeric;
-  crawlRuns: Numeric;
-  crawlFailedRuns: Numeric;
-  previousValidActive?: Numeric;
-}): TodayHealth {
-  const validActive = toNumber(input.validActive);
-  const crawlRuns = toNumber(input.crawlRuns);
-  const failedRuns = toNumber(input.crawlFailedRuns);
-  const previous = input.previousValidActive == null ? null : toNumber(input.previousValidActive);
-
-  if (validActive <= 0) {
-    return { level: "critical", label: "出事", message: "当前没有可确认能投的岗位，请立即检查岗位库。" };
-  }
-  if (crawlRuns > 0 && failedRuns >= crawlRuns) {
-    return { level: "critical", label: "出事", message: "今天的岗位抓取全部失败，请立即检查。" };
-  }
-  if (crawlRuns <= 0) {
-    return { level: "warning", label: "注意", message: "今天还没有岗位抓取记录，请确认定时任务是否已到运行时间。" };
-  }
-  if (previous && previous > 0 && validActive / previous < 0.8) {
-    return { level: "warning", label: "注意", message: "能投岗位较历史基线明显下降，请检查下架和抓取情况。" };
-  }
-  return {
-    level: "healthy",
-    label: "健康",
-    message: "今天抓取已运行，当前有可投岗位；历史波动基线仍在积累。",
-  };
-}

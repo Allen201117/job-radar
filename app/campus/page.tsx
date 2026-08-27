@@ -32,6 +32,7 @@ function slimJob(j: any) {
     city: j.city ?? null,
     education: j.education ?? null,
     fn: classifyJobFunction({ title: j.title, job_type: j.job_type, summary: j.summary }),
+    gc: j.grad_class ?? null,
   };
 }
 
@@ -40,17 +41,20 @@ function collectOptions(lists: Array<ReturnType<typeof slimJob>[]>) {
   const cities = new Set<string>();
   const edus = new Set<string>();
   const fns = new Set<string>();
+  const gradClasses = new Set<number>();
   for (const jobs of lists) {
     for (const j of jobs) {
       if (j.city) cities.add(String(j.city).trim());
       if (j.education) edus.add(String(j.education).trim());
       fns.add(j.fn);
+      if (typeof j.gc === "number") gradClasses.add(j.gc);
     }
   }
   return {
     cityOptions: Array.from(cities).filter(Boolean).sort(),
     educationOptions: Array.from(edus).filter(Boolean).sort(),
     functionOptions: Array.from(fns).filter(Boolean).sort(),
+    gradClassOptions: Array.from(gradClasses).sort((a, b) => b - a),
   };
 }
 
