@@ -40,6 +40,10 @@ class TestFindStock(unittest.TestCase):
     def test_suffix_stripped_match(self):
         self.assertEqual(C.find_stock(self.STOCKS, "比亚迪股份有限公司")["code"], "002594")
 
+    def test_alias_match(self):
+        stocks = [{"code": "000333", "zwjc": "美的集团", "orgId": "gssz0000333"}]
+        self.assertEqual(C.find_stock(stocks, "美的", aliases=["美的集团"])["code"], "000333")
+
     def test_no_false_positive(self):
         self.assertIsNone(C.find_stock(self.STOCKS, "中国平安"))  # 平安银行 ≠ 中国平安
         self.assertIsNone(C.find_stock(self.STOCKS, "字节跳动"))

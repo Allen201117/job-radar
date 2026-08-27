@@ -156,6 +156,37 @@ class TestWorker(unittest.TestCase):
         self.assertTrue(any(r.get("publisher") == "巨潮资讯"
                             for op, r in store.get("insight_sources", [])))
 
+    def test_a_share_wikidata_exchange_is_blank_when_cninfo_disabled(self):
+        store = {"_canned_insight_items": []}
+        W.get_company_facts = lambda c, a=None: {
+            **FACTS, "exchanges": ["深交所"], "ticker": "000333",
+        }
+        res = B.enrich_company(FakeSB(store), {"id": "a1", "company": "美的", "aliases": ["美的集团"]})
+        self.assertEqual(res, "ok")
+        row = next(r for op, r in store["insight_items"] if op == "insert")
+        self.assertIsNone(row["payload"]["exchange"])
+        self.assertNotIn("深交所", row["content"])
+
+    def test_a_share_exchange_is_blank_when_wikidata_and_cninfo_disagree(self):
+        store = {"_canned_insight_items": []}
+        W.get_company_facts = lambda c, a=None: {
+            **FACTS, "exchanges": ["上交所"], "ticker": "000333",
+        }
+        CN.enabled = lambda: True
+        CN.get_listing_by_name = lambda *a, **k: {
+            "dimension": "listing", "grade": "fact", "title": "上市状态 · 巨潮资讯（官方披露）",
+            "content": "据巨潮资讯网，美的集团 为 A 股上市公司，股票代码 000333（深交所）。",
+            "payload": {"status": "listed", "exchange": "深交所", "ticker": "000333"},
+            "origin": "official", "source_url": "http://www.cninfo.com.cn/x?stockCode=000333",
+            "source_publisher": "巨潮资讯",
+        }
+        res = B.enrich_company(FakeSB(store), {"id": "a2", "company": "美的", "aliases": ["美的集团"]})
+        self.assertEqual(res, "ok")
+        row = next(r for op, r in store["insight_items"] if op == "insert")
+        self.assertIsNone(row["payload"]["exchange"])
+        self.assertNotIn("上交所", row["content"])
+        self.assertNotIn("深交所", row["content"])
+
     def test_noface_marks_checked(self):
         store = {}
         W.get_company_facts = lambda c, a=None: None
@@ -205,7 +236,7 @@ class TestT3(unittest.TestCase):
         E.run_pipeline = lambda c, d, s, client=None: [{
             "claim": {"content": "据公开讨论该公司强度偏大", "grade": "experience",
                       "source_idx": 0, "sample_size": "6", "quote": "加班偏多"},
-            "judge": {"verdict": "entailment", "confidence": 0.8}, "status": "active",
+            "judge": {"verdict": "entailment", "confidence": 0.8, "supported_source_idxs": [0, 1]}, "status": "active",
         }]
         store = {}
         res = B.enrich_company_t3(FakeSB(store), {"id": "c1", "company": "X", "aliases": []})
@@ -228,6 +259,41 @@ class TestT3(unittest.TestCase):
         res = B.enrich_company_t3(FakeSB(store), {"id": "c2", "company": "Y", "aliases": []})
         self.assertEqual(res, "empty")
         self.assertTrue(any("t3_checked_at" in p for _, p in store.get("company_profiles_updates", [])))
+
+    def test_pick_sources_never_fills_with_unverified_results(self):
+        results = [
+            {"url": "https://a.example/1", "publisher": "a.example"},
+            {"url": "https://b.example/2", "publisher": "b.example"},
+        ]
+        picked = B._pick_sources(results, {"supported_source_idxs": [0]})
+        self.assertEqual(picked, [results[0]])
+
+    def test_t3_does_not_backfill_sample_size_from_search_result_count(self):
+        B._ROUTER = _FakeRouter([
+            {"url": "https://a.example/1", "publisher": "a.example", "text": "t1"},
+            {"url": "https://b.example/2", "publisher": "b.example", "text": "t2"},
+        ])
+        E.run_pipeline = lambda *a, **k: [{
+            "claim": {"content": "据公开讨论…", "grade": "experience", "sample_size": None},
+            "judge": {"supported_source_idxs": [0, 1]}, "status": "active",
+        }]
+        store = {}
+        self.assertEqual(B.enrich_company_t3(FakeSB(store), {"id": "c3", "company": "Z", "aliases": []}), "wrote")
+        self.assertTrue(store["insight_items"])
+        self.assertTrue(all(row["sample_size"] is None for op, row in store["insight_items"] if op == "insert"))
+
+    def test_t3_does_not_write_active_entry_without_enough_judge_sources(self):
+        B._ROUTER = _FakeRouter([
+            {"url": "https://a.example/1", "publisher": "a.example", "text": "t1"},
+            {"url": "https://b.example/2", "publisher": "b.example", "text": "无关"},
+        ])
+        E.run_pipeline = lambda *a, **k: [{
+            "claim": {"content": "据公开讨论…", "grade": "experience", "sample_size": 8},
+            "judge": {"supported_source_idxs": [0]}, "status": "active",
+        }]
+        store = {}
+        self.assertEqual(B.enrich_company_t3(FakeSB(store), {"id": "c4", "company": "W", "aliases": []}), "empty")
+        self.assertFalse(store.get("insight_items"))
 
     def test_account_preflight_stops_before_any_search(self):
         search = mock.Mock()
