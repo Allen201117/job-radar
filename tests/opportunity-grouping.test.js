@@ -81,8 +81,9 @@ test("分数与 firstSeenAt 完全相同时用 job.id 稳定破同分", () => {
 });
 
 test("关键提醒：isCritical 进 critical 区，不被 main 截断、置顶", () => {
-  const crits = Array.from({ length: 12 }, () =>
-    opp({ signal: "CLOSED_OR_STALE", critical: true, score: 100 })
+  // 分散到 12 家公司：本用例只验「总条数不被 dailyLimit 截断」，公司配额另有专门用例。
+  const crits = Array.from({ length: 12 }, (_, i) =>
+    opp({ company: `C${i}`, signal: "CLOSED_OR_STALE", critical: true, score: 100 })
   );
   const { sections, counts } = groupOpportunities(crits, { dailyLimit: 5, intensity: "active" });
   assert.equal(sections.critical.length, 12); // 不被 dailyLimit 截断
@@ -116,7 +117,8 @@ test("OPEN_UNVERIFIED 分数 30–门槛 + exploreEligible → explore", () => {
 });
 
 test("active：score 30–门槛 + exploreEligible → explore（最多 5）", () => {
-  const ex = Array.from({ length: 8 }, () => opp({ score: 40, exploreEligible: true }));
+  // 分散到 8 家公司：本用例只验 EXPLORE_CAP=5，公司配额另有专门用例。
+  const ex = Array.from({ length: 8 }, (_, i) => opp({ company: `C${i}`, score: 40, exploreEligible: true }));
   const { sections } = groupOpportunities(ex, { dailyLimit: 20, intensity: "active" });
   assert.equal(sections.explore.length, 5);
   assert.equal(sections.main.length, 0); // 40 < active 门槛 45
@@ -133,7 +135,8 @@ test("passive：不显拓展、门槛抬到 70、量收窄", () => {
 });
 
 test("passive daily_limit 收窄到 ≤10", () => {
-  const opps = Array.from({ length: 20 }, () => opp({ score: 90 }));
+  // 分散到 20 家公司：本用例只验 passive 的 effectiveLimit，公司配额另有专门用例。
+  const opps = Array.from({ length: 20 }, (_, i) => opp({ company: `C${i}`, score: 90 }));
   const { sections } = groupOpportunities(opps, { dailyLimit: 30, intensity: "passive" });
   assert.equal(sections.main.length, 10);
 });
@@ -285,12 +288,63 @@ test("main 候选充足时优先公司多样性", () => {
   assert.ok(sections.main.filter((item) => item.job.company === "A").length <= 3);
 });
 
-test("main 只有一家公司时回填溢出候选，不制造空位", () => {
+test("回归：候选公司不够多时，回填也守配额——单公司封顶在放宽上限，不许占满整屏（2026-08-27 F-2）", () => {
+  // 旧实现：回填分支把刚被配额拒掉的岗**原样**放回，等于配额自己撤销自己
+  // （线上 30 张卡 = 字节 9 个封顶 + 回填 6 个 = 15 张，占半屏）。
+  // 现在回填上限 = cap + floor(cap/2)：dailyLimit 10 → cap 3 → 放宽到 4。
   const only = Array.from({ length: 10 }, (_, i) =>
     opp({ id: `only-a${i}`, company: "A", title: `T${i}`, location: "L" })
   );
   const { sections } = groupOpportunities(only, { dailyLimit: 10, intensity: "active" });
+  assert.equal(sections.main.length, 4);
+  assert.equal(sections.main.filter((item) => item.job.company === "A").length, 4);
+});
+
+test("回填只补到放宽上限：其余公司补得上就不留空位（cap 3 → 放宽 4）", () => {
+  // A 独大但另有 3 家垫底：A 先吃满 cap 3，B/C/D 各 1，回填再给 A 补 1 到放宽上限 4 → 共 7。
+  const dominant = Array.from({ length: 9 }, (_, i) =>
+    opp({ id: `mix-a${i}`, company: "A", title: `T${i}`, location: "L", score: 100 - i })
+  );
+  const others = ["B", "C", "D"].map((company, i) =>
+    opp({ id: `mix-x${i}`, company, title: `X${i}`, location: "L", score: 60 - i })
+  );
+  const { sections } = groupOpportunities([...dominant, ...others], { dailyLimit: 10, intensity: "active" });
+  assert.equal(sections.main.filter((item) => item.job.company === "A").length, 4);
+  assert.equal(sections.main.length, 7);
+});
+
+test("公司够多时行为不变：填满 limit，且没有一家越过原配额", () => {
+  // 12 家各 1 个 + A 家 3 个：limit 10 全部填满，A 不超过 cap 3，走不到回填分支。
+  const spread = Array.from({ length: 12 }, (_, i) =>
+    opp({ id: `spread${i}`, company: `S${i}`, title: `T${i}`, location: "L", score: 90 - i })
+  );
+  const someA = Array.from({ length: 3 }, (_, i) =>
+    opp({ id: `spread-a${i}`, company: "A", title: `A${i}`, location: "L", score: 95 - i })
+  );
+  const { sections } = groupOpportunities([...someA, ...spread], { dailyLimit: 10, intensity: "active" });
   assert.equal(sections.main.length, 10);
+  const maxPerCompany = Math.max(
+    ...Object.values(
+      sections.main.reduce((acc, item) => {
+        acc[item.job.company] = (acc[item.job.company] ?? 0) + 1;
+        return acc;
+      }, {})
+    )
+  );
+  assert.equal(maxPerCompany, 3);
+});
+
+// 反向哨兵：critical 装的是「你收藏/投递过的那个岗关闭了 / 快截止了」，是对用户自己动作的告警，
+// 不是发现流。2026-08-27 一度给它加过公司配额（误当成「回填撤销配额」那个坑的第二处），随即撤回——
+// 那个坑的前提是「有配额 + 有回填」，critical 两样都没有。给告警做多样性限流 = 悄悄吞掉用户自己的东西。
+test("critical 区不受公司配额约束：同一家公司的关键提醒必须全部保留", () => {
+  const crits = Array.from({ length: 12 }, (_, i) =>
+    opp({ id: `crit-a${i}`, company: "A", title: `T${i}`, location: "L", signal: "CLOSED_OR_STALE", critical: true, score: 100 - i })
+  );
+  const { sections } = groupOpportunities(crits, { dailyLimit: 10, intensity: "active" });
+  // 12 条全部保留：既不被 dailyLimit(10) 截断，也不被公司配额砍掉
+  assert.equal(sections.critical.filter((item) => item.job.company === "A").length, 12);
+  assert.equal(sections.critical.length, 12);
 });
 
 test("explore 也应用软性公司多样性，且保持原上限 5", () => {

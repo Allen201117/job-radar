@@ -35,7 +35,10 @@ export interface ActionState {
 // 用户「方向」职能集（筛选准确性核心）：只从**目标岗位**逐条整体分类，**不含关键词**——
 // 关键词里的 "SQL/Python/数据埋点" 会把方向污染成 研发/数据，让后端/算法岗误判为方向匹配。
 // 与 lib/scoring.ts 搜索路径同口径（classifyJobFunction({title: role})，跳过判不出的「其他」）。
-function userTargetFunctions(profile: RadarProfile): Set<string> {
+// 导出给 stage-1 召回复用（lib/jobs-store/opportunities.ts 的跨职能剪枝）：
+// 召回与本文件的职能门必须用**同一套**目标职能集合，否则两端判据漂移、召回又会把
+// 用不上的职能拉回来。
+export function userTargetFunctions(profile: RadarProfile): Set<string> {
   const out = new Set<string>();
   for (const role of profile.targetRoles) {
     const fn = classifyJobFunction({ title: role });

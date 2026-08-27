@@ -220,14 +220,17 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
             </span>
             个人机会雷达 · 持续更新
           </span>
-          <h1 className="display-tight lp-reveal mt-6 text-balance text-[clamp(2.6rem,6.6vw,5.2rem)] font-black leading-[1.16] tracking-[-0.035em]">
+          {/* 字号上限 5.2rem 时第二行 11 个字放不进 820px，会把「会。」挤成第三行的孤字。
+              上限收到 4.6rem = 在 820px 里仍能一行放下「只留下值得行动的机会。」的最大字号；
+              「的机会。」再加 whitespace-nowrap 兜底，任何字体/文案微调都不会再出现单字孤行。 */}
+          <h1 className="display-tight lp-reveal mt-6 text-balance text-[clamp(2.6rem,6.6vw,4.6rem)] font-black leading-[1.16] tracking-[-0.035em]">
             每天替你看官网，<br />
             只留下
             <span className="relative whitespace-nowrap">
               值得行动
               <span className="absolute inset-x-[-6px] bottom-[0.1em] -z-10 h-[0.32em] rounded-[0.2em] bg-[#00e676]/35" aria-hidden="true" />
             </span>
-            的机会。
+            <span className="whitespace-nowrap">的机会。</span>
           </h1>
           <p className="lp-reveal mx-auto mt-6 max-w-[600px] text-pretty text-[17px] leading-[1.75] text-[#5f594e] dark:text-[#b6ad9d]">
             设置一次目标，系统持续监控企业官方招聘页，过滤失效和不相关岗位，告诉你今天真正值得看的机会。

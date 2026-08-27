@@ -640,16 +640,93 @@ export function summarizeMustApplyGapAttempts(
   return { stateCounts: sortedStateCounts, recentFailures, manualReviewCompanies };
 }
 
-export type DailyReportStatus = "success" | "idle" | "failed";
+// 全站唯一的模块判据。热力图和模块卡都调它 —— 两处曾各写一套且方向相反
+// （热力图「任一失败即红」vs 模块卡「全挂才算失败」），同一天同一份数据一个判红一个判绿。
+// 产出量必须进判据：只看「跑没跑」会把「跑了但一个都没产出」说成正常。
+export type ModuleVerdict = "healthy" | "attention" | "broken" | "idle";
+
+export function moduleVerdict(input: {
+  runs: Numeric;
+  failed: Numeric;
+  produced: number | null;
+  expectsOutput: boolean;
+}): ModuleVerdict {
+  const runs = Math.max(0, toNumber(input.runs));
+  const failed = Math.max(0, toNumber(input.failed));
+  if (runs <= 0) return "idle";
+  if (failed >= runs) return "broken";
+  // 「产出 0」排在「有失败」之前：跑了一整天一件事没产出，比「跑了 10 次挂了 1 次」严重得多，
+  // 而这正是这块看板存在的理由（旧判据里产出量根本不是入参 → 线上出现过「产出岗位 0 · ● 正常」）。
+  // produced 为 null = 该模块今天没有台账，不臆断；只有实测到 0 才判死。
+  if (input.expectsOutput && input.produced === 0) return "broken";
+  if (failed > 0) return "attention";
+  return "healthy";
+}
+
+export function verdictTone(verdict: ModuleVerdict): BandTone {
+  if (verdict === "healthy") return "success";
+  if (verdict === "attention") return "warning";
+  if (verdict === "broken") return "danger";
+  return "muted";
+}
+
+export function verdictLabel(verdict: ModuleVerdict): string {
+  if (verdict === "healthy") return "正常";
+  if (verdict === "attention") return "有失败";
+  if (verdict === "broken") return "出问题";
+  return "今天没记录";
+}
+
+// 「跑没跑」与「产出多少」是两件事，各自上色，不合并成一个词。
+export function runSignalTone(runs: Numeric, failed: Numeric): BandTone {
+  return verdictTone(moduleVerdict({ runs, failed, produced: null, expectsOutput: false }));
+}
+
+export function outputSignalTone(produced: number | null, expectsOutput: boolean): BandTone {
+  if (produced == null) return "muted";
+  if (produced > 0) return "success";
+  return expectsOutput ? "danger" : "muted";
+}
+
+export type DailyRunSeriesPoint = { runs?: Numeric; failed?: Numeric; partial?: Numeric } | null | undefined;
+
+// 热力图一格 = 当天所有后台任务合起来的结论，与模块卡走同一个 moduleVerdict；
+// partial 只在没有失败时才降级成关注，不能把「无记录」伪装成 0 或成功。
+export function dailyRunVerdict(run: DailyRunSeriesPoint): ModuleVerdict {
+  if (!run || run.runs == null) return "idle";
+  const verdict = moduleVerdict({ runs: run.runs, failed: run.failed, produced: null, expectsOutput: false });
+  if (verdict === "healthy" && toNumber(run.partial) > 0) return "attention";
+  return verdict;
+}
+
+export function dailyRunTone(run: DailyRunSeriesPoint): BandTone {
+  return verdictTone(dailyRunVerdict(run));
+}
 
 export type DailyReport = {
-  key: "crawl" | "enrichment" | "dead_jobs" | "insights" | "auto_discover" | "discovery";
+  key: "crawl" | "enrichment" | "dead_jobs" | "insights" | "auto_discover" | "discovery" | "gap_funnel" | "campus_supply";
   title: string;
   description: string;
-  status: DailyReportStatus;
-  statusLabel: string;
+  verdict: ModuleVerdict;
+  verdictLabel: string;
+  runs: number;
+  failed: number;
+  runTone: BandTone;
+  produced: number | null;
+  producedLabel: string;
+  producedCaption: string;
+  producedTone: BandTone;
+  expectsOutput: boolean;
   lastRunAt: string | null;
   metrics: Array<{ label: string; value: number | null }>;
+};
+
+export type OpsRunRow = {
+  module?: string | null;
+  status?: string | null;
+  metrics?: Record<string, unknown> | null;
+  started_at?: string | null;
+  finished_at?: string | null;
 };
 
 type DailyReportInput = {
@@ -657,6 +734,8 @@ type DailyReportInput = {
   discovery?: TodayDiscoveryRow | null;
   insight?: { today_created?: Numeric } | null;
   opsRuns?: OpsRunAggregateRow[] | null;
+  /** 原始 ops_runs 行：admin_health_snapshot 只抽了 6 个指标键，缺口漏斗 / 校招供给的产出口径不在其中。 */
+  opsRunRows?: OpsRunRow[] | null;
 };
 
 export const OPERATIONAL_TERMS: Record<string, string> = {
@@ -729,49 +808,91 @@ function summarizeOps(rows: OpsRunAggregateRow[], modules: string[]) {
   };
 }
 
-function reportStatus(runs: number, failed: number): DailyReportStatus {
-  if (runs <= 0) return "idle";
-  if (failed >= runs) return "failed";
-  return "success";
+// 原始 ops_runs 行聚合：快照 RPC 只抽固定 6 个指标键，缺口漏斗的 sources_added、
+// 校招车道的 snapshots/surged 都不在里面，所以这些模块的产出只能从原始行里取。
+function summarizeOpsRows(rows: OpsRunRow[], modules: string[]) {
+  const selected = rows.filter((row) => modules.includes(String(row.module || "")));
+  const metrics: Record<string, number> = {};
+  for (const row of selected) {
+    for (const [key, value] of Object.entries(row.metrics || {})) {
+      if (typeof value === "number" && Number.isFinite(value)) metrics[key] = (metrics[key] || 0) + value;
+    }
+  }
+  return {
+    available: selected.length > 0,
+    runs: selected.length,
+    failed: selected.filter((row) => String(row.status || "") === "failed").length,
+    metrics,
+    lastRunAt: latestTimestamp(selected.map((row) => row.finished_at || row.started_at)),
+  };
 }
 
-function statusLabel(status: DailyReportStatus): string {
-  if (status === "success") return "今天已运行";
-  if (status === "failed") return "运行失败";
-  return "今天没记录";
+function buildReport(input: {
+  key: DailyReport["key"];
+  title: string;
+  description: string;
+  runs: number;
+  failed: number;
+  produced: number | null;
+  producedLabel: string;
+  producedCaption: string;
+  expectsOutput: boolean;
+  lastRunAt: string | null;
+  metrics: DailyReport["metrics"];
+}): DailyReport {
+  const verdict = moduleVerdict({
+    runs: input.runs,
+    failed: input.failed,
+    produced: input.produced,
+    expectsOutput: input.expectsOutput,
+  });
+  return {
+    key: input.key,
+    title: input.title,
+    description: input.description,
+    verdict,
+    verdictLabel: verdictLabel(verdict),
+    runs: input.runs,
+    failed: input.failed,
+    runTone: runSignalTone(input.runs, input.failed),
+    produced: input.produced,
+    producedLabel: input.producedLabel,
+    producedCaption: input.producedCaption,
+    producedTone: outputSignalTone(input.produced, input.expectsOutput),
+    expectsOutput: input.expectsOutput,
+    lastRunAt: input.lastRunAt,
+    metrics: input.metrics,
+  };
 }
 
 export function buildDailyReports(input: DailyReportInput): DailyReport[] {
   const opsRows = input.opsRuns || [];
+  const rawRows = input.opsRunRows || [];
   const enrichment = summarizeOps(opsRows, ["enrich_backlog"]);
   const liveness = summarizeOps(opsRows, ["liveness_sweep", "dead_link_audit"]);
   const purge = summarizeOps(opsRows, ["purge_expired"]);
   const insights = summarizeOps(opsRows, ["insight_backlog"]);
   const staleness = summarizeOps(opsRows, ["insight_staleness"]);
   const autoDiscover = summarizeOps(opsRows, ["auto_discover", "auto_discover_browser", "auto_discover_overseas"]);
+  const gapFunnel = summarizeOpsRows(rawRows, ["gap_funnel", "gap_funnel_browser"]);
+  const campus = summarizeOpsRows(rawRows, ["campus_lane", "campus_cycle_backlog", "campus_official_backlog"]);
 
   const crawlRuns = toNumber(input.crawl?.runs);
   const crawlFailed = toNumber(input.crawl?.failed_runs);
   const discoveryRuns = toNumber(input.discovery?.runs);
   const discoveryFailed = toNumber(input.discovery?.failed_runs);
-  const enrichmentStatus = reportStatus(enrichment.runs, enrichment.failed);
-  const deadRuns = liveness.runs + purge.runs;
-  const deadFailed = liveness.failed + purge.failed;
-  const deadStatus = reportStatus(deadRuns, deadFailed);
-  const insightRuns = insights.runs + staleness.runs;
-  const insightFailed = insights.failed + staleness.failed;
-  const insightStatus = reportStatus(insightRuns, insightFailed);
-  const crawlStatus = reportStatus(crawlRuns, crawlFailed);
-  const discoveryStatus = reportStatus(discoveryRuns, discoveryFailed);
-  const autoDiscoverStatus = reportStatus(autoDiscover.runs, autoDiscover.failed);
 
   return [
-    {
+    buildReport({
       key: "crawl",
       title: "岗位抓取",
       description: "每天去各企业官网抓新发布的岗位",
-      status: crawlStatus,
-      statusLabel: statusLabel(crawlStatus),
+      runs: crawlRuns,
+      failed: crawlFailed,
+      produced: input.crawl ? toNumber(input.crawl.jobs_created) : null,
+      producedLabel: "今日新增岗位",
+      producedCaption: "今天真正入库的新岗位数",
+      expectsOutput: true,
       lastRunAt: input.crawl?.last_run_at || null,
       metrics: [
         { label: "运行次数", value: input.crawl ? crawlRuns : null },
@@ -779,63 +900,126 @@ export function buildDailyReports(input: DailyReportInput): DailyReport[] {
         { label: "新增岗位", value: input.crawl ? toNumber(input.crawl.jobs_created) : null },
         { label: "失败来源", value: input.crawl ? toNumber(input.crawl.failed_sources) : null },
       ],
-    },
-    {
+    }),
+    buildReport({
       key: "enrichment",
       title: "详情补全",
       description: "给只有标题的空壳岗补上职位描述正文",
-      status: enrichmentStatus,
-      statusLabel: statusLabel(enrichmentStatus),
+      runs: enrichment.runs,
+      failed: enrichment.failed,
+      produced: enrichment.available ? enrichment.enriched : null,
+      producedLabel: "今日补全正文",
+      producedCaption: "今天补上职位描述的岗位数",
+      expectsOutput: true,
       lastRunAt: enrichment.lastRunAt,
       metrics: [
         { label: "检查岗位", value: enrichment.available ? enrichment.checked : null },
         { label: "补全正文", value: enrichment.available ? enrichment.enriched : null },
       ],
-    },
-    {
+    }),
+    buildReport({
       key: "dead_jobs",
       title: "死岗治理",
       description: "核查岗位还在不在招，撤掉的清理回收",
-      status: deadStatus,
-      statusLabel: statusLabel(deadStatus),
+      runs: liveness.runs + purge.runs,
+      failed: liveness.failed + purge.failed,
+      produced: liveness.available ? liveness.checked : null,
+      producedLabel: "今日核查岗位",
+      producedCaption: "今天逐岗探活核查过的岗位数",
+      expectsOutput: true,
       lastRunAt: latestTimestamp([liveness.lastRunAt, purge.lastRunAt]),
       metrics: [
         { label: "核查", value: liveness.available ? liveness.checked : null },
         { label: "判死", value: liveness.available ? liveness.expired : null },
         { label: "清除", value: purge.available ? purge.deleted : null },
       ],
-    },
-    {
+    }),
+    buildReport({
       key: "insights",
       title: "职业洞察",
       description: "给公司补职业洞察，过期的自动下架",
-      status: insightStatus,
-      statusLabel: statusLabel(insightStatus),
+      runs: insights.runs + staleness.runs,
+      failed: insights.failed + staleness.failed,
+      produced: input.insight ? toNumber(input.insight.today_created) : null,
+      producedLabel: "今日新增洞察",
+      producedCaption: "今天新写入的洞察条数",
+      expectsOutput: true,
       lastRunAt: latestTimestamp([insights.lastRunAt, staleness.lastRunAt]),
       metrics: [
         { label: "新增洞察", value: toNumber(input.insight?.today_created) },
         { label: "富化公司", value: insights.available ? insights.companiesEnriched : null },
         { label: "过期下架", value: staleness.available ? staleness.retired : null },
       ],
-    },
-    {
+    }),
+    buildReport({
       key: "auto_discover",
       title: "自动扩源",
       description: "每天自动探查目标公司（含 AI 每日新生成的候选），验证通过、真有在招岗才加成新招聘源",
-      status: autoDiscoverStatus,
-      statusLabel: statusLabel(autoDiscoverStatus),
+      runs: autoDiscover.runs,
+      failed: autoDiscover.failed,
+      produced: autoDiscover.available ? autoDiscover.companiesEnriched : null,
+      producedLabel: "今日新增源",
+      producedCaption: "今天真加进招聘源的公司数",
+      expectsOutput: true,
       lastRunAt: autoDiscover.lastRunAt,
       metrics: [
         { label: "探查公司", value: autoDiscover.available ? autoDiscover.checked : null },
         { label: "新增源", value: autoDiscover.available ? autoDiscover.companiesEnriched : null },
       ],
-    },
-    {
+    }),
+    buildReport({
+      key: "gap_funnel",
+      title: "缺口漏斗",
+      description: "给必投清单里还没接入的公司找官方招聘入口，真抓到岗才加成源",
+      runs: gapFunnel.runs,
+      failed: gapFunnel.failed,
+      produced: gapFunnel.available ? toNumber(gapFunnel.metrics.sources_added) : null,
+      producedLabel: "今日新增源",
+      producedCaption: "今天补进招聘源的缺口公司数",
+      expectsOutput: true,
+      lastRunAt: gapFunnel.lastRunAt,
+      metrics: [
+        { label: "处理公司", value: gapFunnel.available ? toNumber(gapFunnel.metrics.checked) : null },
+        { label: "新增源", value: gapFunnel.available ? toNumber(gapFunnel.metrics.sources_added) : null },
+        {
+          label: "已覆盖",
+          value: gapFunnel.available
+            ? toNumber(gapFunnel.metrics.healthy) + toNumber(gapFunnel.metrics.thin_only)
+            : null,
+        },
+      ],
+    }),
+    buildReport({
+      key: "campus_supply",
+      title: "校招供给",
+      description: "每小时盯必投公司的校招板块，放量就立刻加急重抓；台账暂无「今日入库校招岗」口径，产出先看有多少个源的校招岗位数变了",
+      runs: campus.runs,
+      failed: campus.failed,
+      // 台账没有「今日入库校招岗」这个口径，不硬编造：用真实存在的 snapshots
+      // （今天校招岗位数发生变化的源数），caption 如实说明它是什么。
+      produced: campus.available ? toNumber(campus.metrics.snapshots) : null,
+      producedLabel: "今日有变动的校招源",
+      producedCaption: "今天校招岗位数发生变化的源数",
+      expectsOutput: true,
+      lastRunAt: campus.lastRunAt,
+      metrics: [
+        { label: "开闸公司", value: campus.available ? toNumber(campus.metrics.surged) : null },
+        { label: "校招岗位库存", value: campus.available ? toNumber(campus.metrics.campus_jobs_total) : null },
+        { label: "新增校招洞察", value: campus.available ? toNumber(campus.metrics.verified) : null },
+      ],
+    }),
+    buildReport({
       key: "discovery",
       title: "刷新 / 发现",
       description: "用户点按钮临时找新公司、新岗位",
-      status: discoveryStatus,
-      statusLabel: statusLabel(discoveryStatus),
+      runs: discoveryRuns,
+      failed: discoveryFailed,
+      produced: input.discovery
+        ? toNumber(input.discovery.jobs_created) + toNumber(input.discovery.jobs_updated)
+        : null,
+      producedLabel: "今日产出岗位",
+      producedCaption: "用户点刷新后新增或更新的岗位数",
+      expectsOutput: true,
       lastRunAt: input.discovery?.last_run_at || null,
       metrics: [
         { label: "运行次数", value: input.discovery ? discoveryRuns : null },
@@ -846,7 +1030,7 @@ export function buildDailyReports(input: DailyReportInput): DailyReport[] {
             : null,
         },
       ],
-    },
+    }),
   ];
 }
 
