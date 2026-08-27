@@ -213,10 +213,69 @@ class TencentMusicDetailTest(unittest.TestCase):
 
 class RegistryWiringTest(unittest.TestCase):
     def test_blindspot_adapters_registered(self):
-        for name in ("jd", "antgroup", "haier", "ashby", "mihoyo", "tencent_music"):
+        for name in ("jd", "antgroup", "haier", "ashby", "mihoyo", "tencent_music",
+                     "iguopin", "pinduoduo", "meituan_campus"):
             self.assertIn(name, enrich.ENRICH_REGISTRY)
             self.assertEqual(enrich.detail_class(name), "httpx")
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IguopinDetailTest(unittest.TestCase):
+    _ROW = {"jd_url": "https://www.iguopin.com/job/detail?id=215422750917920320"}
+
+    def test_alive_returns_contents(self):
+        body = {"code": 200, "msg": "OK", "data": {"job_id": "215422750917920320",
+                                                   "status": 1, "contents": "岗位职责..."}}
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp(body)):
+            self.assertEqual(enrich._detail_iguopin(self._ROW, {}), "岗位职责...")
+
+    def test_status_2_raises_job_closed(self):
+        body = {"code": 200, "data": {"job_id": "196915804485193548", "status": 2}}
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp(body)):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich._detail_iguopin(self._ROW, {})
+
+    def test_code_2001_raises_job_closed(self):
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({"code": 2001, "msg": "数据不存在。"})):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich._detail_iguopin(self._ROW, {})
+
+    def test_unknown_code_returns_empty_not_closed(self):
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({"code": 5000, "msg": "系统繁忙"})):
+            self.assertEqual(enrich._detail_iguopin(self._ROW, {}), "")
+
+
+class PinduoduoDetailTest(unittest.TestCase):
+    _ROW = {"jd_url": "https://careers.pddglobalhr.com/campus/grad/detail"
+                      "?positionId=54ad4666-f80b-47be-840b-5a99cf04a3d7"}
+
+    def test_alive_returns_summary(self):
+        body = {"success": True, "result": {"id": "54ad4666-f80b-47be-840b-5a99cf04a3d7",
+                                            "normal": True, "jobDuty": "负责xxx",
+                                            "serveRequirement": "本科以上"}}
+        with mock.patch.object(enrich.httpx, "post", lambda *a, **k: _Resp(body)):
+            out = enrich._detail_pinduoduo(self._ROW, {})
+        self.assertIn("负责xxx", out)
+        self.assertIn("本科以上", out)
+
+    def test_null_id_raises_job_closed(self):
+        body = {"success": True, "result": {"id": None, "normal": False}}
+        with mock.patch.object(enrich.httpx, "post", lambda *a, **k: _Resp(body)):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich._detail_pinduoduo(self._ROW, {})
+
+    def test_success_false_returns_empty_not_closed(self):
+        body = {"success": False, "errorCode": 991000000, "errorMsg": "职位id不为空"}
+        with mock.patch.object(enrich.httpx, "post", lambda *a, **k: _Resp(body)):
+            self.assertEqual(enrich._detail_pinduoduo(self._ROW, {}), "")
+
+    def test_missing_position_id_returns_empty(self):
+        self.assertEqual(enrich._detail_pinduoduo({"jd_url": "https://careers.pddglobalhr.com/campus/grad/detail"}, {}), "")
+
+
+class MeituanCampusAliasTest(unittest.TestCase):
+    def test_meituan_campus_reuses_meituan_detail(self):
+        self.assertIs(enrich.ENRICH_REGISTRY["meituan_campus"], enrich._detail_meituan)

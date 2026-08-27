@@ -630,6 +630,58 @@ def _detail_tencent_music(row, src):
     return "\n".join(x for x in (d.get("duty"), d.get("requirement")) if x)
 
 
+def _detail_iguopin(row, src):
+    # jd_url = www.iguopin.com/job/detail?id={job_id}；detail = 抓取阶段已在用的公开 info API。
+    # 撤岗/过期 → 200 + {"code":200,"data":{"status":2,...}}（live 验证 40/40 个 deadline 已过的
+    # 真实岗全部复现，数据仍完整、仅 status 1→2）；不存在 → {"code":2001,"msg":"数据不存在。"}
+    # （live 验证伪 id + 缺参数均命中）。未知 code 一律不判死。
+    job_id = (parse_qs(urlparse(row["jd_url"]).query).get("id") or [""])[0]
+    if not job_id:
+        return ""
+    r = httpx.get("https://gp-api.iguopin.com/api/jobs/v1/info", params={"id": job_id},
+                  headers={**UA, "Referer": "https://www.iguopin.com/"}, timeout=TIMEOUT)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    j = r.json() or {}
+    code = j.get("code")
+    if code == 2001:
+        raise JobClosedError(f"iguopin id={job_id} not found: {j.get('msg')}")
+    if code != 200:
+        return ""
+    data = j.get("data") or {}
+    if str(data.get("status")) == "2":
+        raise JobClosedError(f"iguopin id={job_id} closed: status=2")
+    return data.get("contents") or ""
+
+
+def _detail_pinduoduo(row, src):
+    # jd_url = careers.pddglobalhr.com/campus/grad/detail?positionId={uuid}；detail = 独立公开
+    # POST 接口。撤岗/不存在 → 200 + {"success":true,"result":{"id":null,"normal":false,...}}
+    # （live 验证 4/4 真实过期旧岗 + 2 种伪造 id 同一签名）；在招 → result.id 与请求一致。
+    # success=false 是入参类错误（如「职位id不为空」），不判死。
+    job_id = (parse_qs(urlparse(row["jd_url"]).query).get("positionId") or [""])[0]
+    if not job_id:
+        return ""
+    r = httpx.post("https://careers.pddglobalhr.com/api/careers/api/recruit/position/detail",
+                   json={"id": job_id},
+                   headers={**UA, "Content-Type": "application/json",
+                            "Referer": "https://careers.pddglobalhr.com/campus/grad",
+                            "Origin": "https://careers.pddglobalhr.com"}, timeout=TIMEOUT)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    j = r.json() or {}
+    if not j.get("success"):
+        return ""
+    result = j.get("result") or {}
+    if str(result.get("id") or "") != job_id:
+        raise JobClosedError(f"pinduoduo positionId={job_id} closed (id mismatch/null)")
+    duty = result.get("jobDuty") or ""
+    req = result.get("serveRequirement") or result.get("serviceRequirement") or ""
+    return (duty + ("\n\n【任职要求】\n" + req if req else "")).strip()
+
+
 ENRICH_REGISTRY = {
     "huawei": _detail_huawei,
     "workday": _detail_workday,
@@ -663,6 +715,13 @@ ENRICH_REGISTRY = {
     "ashby": _detail_ashby,
     "mihoyo": _detail_mihoyo,
     "tencent_music": _detail_tencent_music,
+    "iguopin": _detail_iguopin,
+    "pinduoduo": _detail_pinduoduo,
+    # meituan_campus 的 jd_url 与 meituan 完全同构（同 jobUnionId 参数、同接口；live 验证
+    # 伪 id 返 status=0+「职位已下线或不存在！」与 _detail_meituan 判死逻辑逐字节吻合）：
+    "meituan_campus": _detail_meituan,
+    # alibaba_campus 暂缺：13 个 BU 白标域名各自独立 cookie+CSRF 会话，详情接口已 live 验证
+    # （POST /position/detail，content:null=撤岗），需 per-host session 管理，单独排期。
 }
 
 # 需渲染、低并发：SPA 壳详情页无 httpx 关闭信号，走 audit_dead_links 浏览器审计兜底。

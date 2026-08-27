@@ -35,7 +35,10 @@ jobs:
       matrix:
         adapter: [hotjob, wt, workday, oracle, eightfold, smartrecruiters, successfactors, greenhouse, lever,
                   amazon, microsoft, siemens, avature, google, tencent, vivo, huawei,
-                  jd, antgroup, haier, ashby, mihoyo, tencent_music]
+                  jd, antgroup, haier, ashby, mihoyo, tencent_music,
+                  iguopin, pinduoduo]
+        # meituan_campus 不进本矩阵：_detail_meituan 是 liveness-only（正文列表自带、detail 恒空），
+        # 进富化队列只会空转烧 fail_count；它在 liveness-sweep 矩阵里做探活。
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

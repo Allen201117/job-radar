@@ -46,7 +46,8 @@ jobs:
         # 判死信号全部真伪 id live 对拍过（见 crawler/enrich.py 注释），宁可漏判不可错杀。
         adapter: [wt, hotjob, workday, oracle, eightfold, smartrecruiters, greenhouse, lever,
                   amazon, apple, meituan, microsoft, sf_express, tencent, vivo, siemens, avature, successfactors, google,
-                  huawei, jd, antgroup, haier, ashby, mihoyo, tencent_music]
+                  huawei, jd, antgroup, haier, ashby, mihoyo, tencent_music,
+                  iguopin, pinduoduo, meituan_campus]
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
