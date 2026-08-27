@@ -1032,7 +1032,7 @@ class RoundCapTest(unittest.TestCase):
             result["evidence"]["rejected_candidate_hosts"],
         )
 
-    def test_persisted_candidate_list_survives_into_next_round(self):
+    def test_cached_identity_mismatch_discards_cache_and_rediscovers(self):
         urls = [
             "https://gimc.hotjob.cn/GIMC/pb/social.html",
             "https://boards.greenhouse.io/acme",
@@ -1070,6 +1070,13 @@ class RoundCapTest(unittest.TestCase):
         )
 
         fingerprinted = []
+        finder = mock.Mock(return_value={
+            "found": True,
+            "official_entry_url": urls[1],
+            "search_used": 1,
+            "candidates": [{"url": urls[1], "verdict": "trusted_ats", "score": 100}],
+            "evidence": {"candidate_urls": []},
+        })
         second, used, _inserted = gf.process_company(
             {
                 **_entry(),
@@ -1082,7 +1089,7 @@ class RoundCapTest(unittest.TestCase):
             search_remaining=2,
             insert_allowed=True,
             now=NOW,
-            finder=lambda *_args, **_kwargs: self.fail("已有候选时不应重新搜索"),
+            finder=finder,
             fingerprinter=lambda url, **_kwargs: (
                 fingerprinted.append(url)
                 or (
@@ -1104,9 +1111,11 @@ class RoundCapTest(unittest.TestCase):
                 )
             ),
             prober=lambda _candidate: {"ok": True, "valid": 1},
+            site_resolver=lambda *_args, **_kwargs: None,
         )
         self.assertEqual(fingerprinted, urls)
-        self.assertEqual(used, 0)
+        finder.assert_called_once()
+        self.assertEqual(used, 1)
         self.assertEqual(second["official_entry_url"], urls[1])
 
     def test_unverifiable_fallback_prevents_false_all_identity_mismatch(self):
@@ -1150,7 +1159,16 @@ class RoundCapTest(unittest.TestCase):
             prober=lambda _candidate: self.fail("候选未通过身份门"),
         )
         self.assertEqual(result["state"], "anti_bot")
+        self.assertEqual(result["next_retry_at"], (NOW + gf.timedelta(days=30)).isoformat())
         self.assertNotEqual(result["fail_reason"], "候选入口均非本公司（张冠李戴）")
+
+    def test_login_wall_remains_manual_without_retry(self):
+        with mock.patch("builtins.print") as printed:
+            result = gf._failure_for_platform(
+                {"platform": "login_wall", "reason": "login required"}, NOW, "甲公司"
+            )
+        self.assertIsNone(result["next_retry_at"])
+        printed.assert_called_once()
 
     def test_browser_fallback_beats_unroutable_httpx_candidate(self):
         urls = [

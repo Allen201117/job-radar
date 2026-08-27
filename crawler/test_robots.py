@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -75,6 +76,19 @@ class PublicApiAllowlistTest(unittest.TestCase):
         from robots import _public_api_allowed
         self.assertFalse(_public_api_allowed("api.smartrecruiters.com", "/v2/other"))
         self.assertFalse(_public_api_allowed("www.smartrecruiters.com", "/v1/companies/x"))
+
+
+class RobotsCacheTest(unittest.TestCase):
+    def test_same_host_different_paths_fetches_robots_once(self):
+        import robots
+
+        robots._ROBOTS_CACHE.clear()
+        response = mock.Mock(status_code=200, text="User-agent: *\nDisallow:\n")
+        with mock.patch.object(robots.httpx, "get", return_value=response) as get:
+            self.assertTrue(robots.check_robots("https://careers.example/jobs")["allowed"])
+            self.assertTrue(robots.check_robots("https://careers.example/campus")["allowed"])
+
+        self.assertEqual(get.call_count, 1)
 
 
 if __name__ == "__main__":

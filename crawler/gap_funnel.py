@@ -25,12 +25,14 @@ import site_entry
 
 
 _TRUE = {"1", "true", "yes", "on"}
-# anti_bot / login_wall 是**对方的门槛**（反爬、要登录），只能转人工 → 永不重试。
+# login_wall 是**对方的门槛**，只能转人工 → 永不重试。anti_bot 的策略可能变化，保留长退避复试。
 # no_stable_jd 不一样：它是**我们没拿到逐岗链接**，属于自身抓取能力问题，
 # 而抓取能力一直在改进（2026-08-26 就修掉一个：P2 对标准 ATS 租户误用通用盲抓，
 # 万泰生物同一 URL 由 0 个岗变 15 个）。把它钉成永不重试 = 每次能力升级都救不回存量。
 # 故给长退避，让系统改进后能自我修复。
-_MANUAL_PLATFORMS = {"anti_bot", "login_wall"}
+_MANUAL_PLATFORMS = {"login_wall"}
+_ANTI_BOT_RETRY_DAYS = 30
+_BLOCKED_PLATFORMS = _MANUAL_PLATFORMS | {"anti_bot"}
 _NO_STABLE_JD_RETRY_DAYS = 45
 _BROWSER_REVIEW_RETRY_DAYS = 14
 _UA = (
@@ -501,10 +503,19 @@ def _write_attempt(supabase, payload):
 def _failure_for_platform(fingerprint, now, company=None):
     platform = fingerprint["platform"]
     if platform in _MANUAL_PLATFORMS:
+        print(f"[gap_funnel] {company or 'unknown'}: {platform} 需人工处理，不自动重试")
         return {
             "state": platform,
             "detected_platform": platform,
             "next_retry_at": None,
+            "fail_reason": fingerprint.get("reason") or platform,
+            "evidence": {"fingerprint": fingerprint},
+        }
+    if platform == "anti_bot":
+        return {
+            "state": platform,
+            "detected_platform": platform,
+            "next_retry_at": _after(now, _ANTI_BOT_RETRY_DAYS),
             "fail_reason": fingerprint.get("reason") or platform,
             "evidence": {"fingerprint": fingerprint},
         }
@@ -605,7 +616,7 @@ def _evaluate_candidates(row, candidates, *, trusted_site, fingerprinter):
                 continue
         fingerprint = fingerprinter(candidate_url, company=row["company"])
         platform = fingerprint.get("platform")
-        if platform in _MANUAL_PLATFORMS:
+        if platform in _BLOCKED_PLATFORMS:
             fallbacks.append((candidate_url, fingerprint))
             rejections.append(_rejection(
                 candidate_url,
@@ -696,23 +707,43 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
     site_resolver = site_resolver or site_entry.resolve_official_site_details
     site_link_finder = site_link_finder or site_entry.find_careers_links
     official_url = row.get("official_entry_url")
-    cached_rejections = []
     entry_channel = (row.get("evidence") or {}).get("entry_channel") or "search"
+    search_used = 0
+    finder_result = None
+    selected = None
+    fallbacks = []
+    rejections = []
+    identity_checked = 0
+    identity_mismatches = 0
+    candidate_evidence = {}
+    cache_evaluated = False
     if official_url:
         cached_verdict, _score, cached_reason = (
             entry_finder.classify_candidate_url(official_url, row["company"])
         )
         if cached_verdict == "reject":
-            cached_rejections.append(_rejection(official_url, cached_reason))
+            rejections.append(_rejection(official_url, cached_reason))
             official_url = None
-    search_used = 0
-    finder_result = None
-    selected = None
-    fallbacks = []
-    rejections = list(cached_rejections)
-    identity_checked = 0
-    identity_mismatches = 0
-    candidate_evidence = {}
+        else:
+            # 缓存入口也必须过与首次发现完全相同的 URL + 页面身份门；缓存错配时不能
+            # 继续把旧公司的候选粘住，应丢弃后重新发现。
+            cache_evaluated = True
+            evaluated = _evaluate_candidates(
+                row, [{"url": official_url}], trusted_site=False, fingerprinter=fingerprinter,
+            )
+            selected = evaluated["selected"]
+            fallbacks.extend(evaluated["fallbacks"])
+            rejections.extend(evaluated["rejections"])
+            identity_checked += evaluated["identity_checked"]
+            identity_mismatches += evaluated["identity_mismatches"]
+            candidate_evidence["candidate_urls"] = [{"url": official_url}]
+            if (
+                selected is None
+                and identity_checked > 0
+                and identity_mismatches == identity_checked
+                and not fallbacks
+            ):
+                official_url = None
 
     if not official_url:
         site_result = None
@@ -843,7 +874,7 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
         identity_checked += evaluated["identity_checked"]
         identity_mismatches += evaluated["identity_mismatches"]
         entry_channel = "search"
-    elif official_url:
+    elif official_url and selected is None and not cache_evaluated:
         candidates = _candidate_items(row, official_url, finder_result)
         candidate_evidence = dict((finder_result or {}).get("evidence") or {})
         candidate_evidence["candidate_urls"] = candidates

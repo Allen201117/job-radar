@@ -21,6 +21,7 @@ from datetime import datetime, timezone, timedelta
 
 import db
 import insight_engine as E
+import jobs_db
 import llm_budget
 import official_cninfo as CN
 import official_edgar as EDG
@@ -248,6 +249,37 @@ def drain_one_company(sb, company, t3=False):
             "err": 1 if res == "err" else 0}
 
 
+def finish_insight_enrich_run(sb, company, status, diagnostics=None):
+    """回写现查快车道最新 queued 台账；不碰其它公司的并发请求。"""
+    if status not in ("success", "failed"):
+        raise ValueError("insight enrich run status must be success or failed")
+    rows = (
+        sb.table("discovery_runs")
+        .select("id,diagnostics")
+        .eq("mode", "insight_enrich")
+        .eq("company", (company or "").strip())
+        .eq("status", "queued")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+        .data
+    ) or []
+    if not rows:
+        print("[insight-enrich] 未找到待回写的 queued 台账")
+        return False
+    previous = rows[0].get("diagnostics") or {}
+    merged = {**previous, **(diagnostics or {})}
+    update = {
+        "status": status,
+        "finished_at": _now(),
+        "failure_reason": None if status == "success" else "workflow_failed",
+        "error_message": None if status == "success" else str(merged.get("error") or "workflow failed")[:500],
+        "diagnostics": merged,
+    }
+    sb.table("discovery_runs").update(update).eq("id", rows[0]["id"]).execute()
+    return True
+
+
 # ============================================================
 # T3 经验层：多源搜索（博查/Tavily/Serper/千帆，search_router）→ 验证引擎（接地→判官→共识）→ 写 active/pending_review
 # 各源受每日额度：drain_t3 串行 + search_usage/qianfan_usage 持久预算守门，绝不冲破各自日顶。
@@ -372,9 +404,35 @@ def fetch_t3_queue(sb, limit):
          .or_(f"t3_checked_at.is.null,t3_checked_at.lt.{cutoff}")
          .order("founded_year", desc=True, nullsfirst=False)
          .order("t3_checked_at", desc=False, nullsfirst=True))
-    if limit:
-        q = q.limit(limit)
-    return (q.execute().data) or []
+    if not jobs_db.enabled():
+        if limit:
+            q = q.limit(limit)
+        return (q.execute().data) or []
+
+    # 仅 jobs 库可用时才多取候选：按在招岗需求排序后再截断，避免 founded_year 把大户永远挤在队尾。
+    rows = (q.execute().data) or []
+    if not rows:
+        return []
+    try:
+        conn = jobs_db.get_conn()
+        counts = jobs_db.fetch_all(
+            conn,
+            """
+            select company, count(*) as active_count
+            from jobs
+            where status = 'active' and company = any(%s)
+            group by 1
+            """,
+            ([str(row.get("company") or "") for row in rows],),
+        )
+        active_counts = {
+            str(item.get("company") or ""): int(item.get("active_count") or 0)
+            for item in counts
+        }
+        rows.sort(key=lambda row: -active_counts.get(str(row.get("company") or ""), 0))
+    except Exception as exc:
+        print(f"[t3] 香港 jobs 库岗位计数失败，回退 founded_year 排序: {type(exc).__name__}")
+    return rows[:limit] if limit else rows
 
 
 def enrich_company_t3(sb, profile):
@@ -494,6 +552,9 @@ def main():
     ap.add_argument("--company", default="", help="只富化单家公司（现查快车道用）")
     ap.add_argument("--limit", type=int, default=0, help="本次最多处理多少公司（0=全部/额度上限）")
     ap.add_argument("--workers", type=int, default=4, help="T2 并发线程数（对 Wikidata 礼貌，建议 ≤6）")
+    ap.add_argument("--finish-run", action="store_true", help="回写单公司现查台账终态（workflow 收尾用）")
+    ap.add_argument("--finish-status", choices=("success", "failed"), default="success")
+    ap.add_argument("--finish-diagnostics", default="", help="收尾写入 diagnostics.workflow")
     args = ap.parse_args()
 
     if not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SERVICE_ROLE_KEY")):
@@ -501,6 +562,16 @@ def main():
         sys.exit(1)
 
     sb = db.get_supabase()
+    if args.finish_run:
+        if not args.company:
+            print("✗ --finish-run 需要 --company")
+            sys.exit(1)
+        diagnostics = {"workflow": args.finish_diagnostics or "insight enrich finished"}
+        if args.finish_status == "failed":
+            diagnostics["error"] = args.finish_diagnostics or "workflow failed"
+        if not finish_insight_enrich_run(sb, args.company, args.finish_status, diagnostics):
+            sys.exit(1)
+        return
     started_at = _now()
     E.reset_llm_health()
     if args.t3:

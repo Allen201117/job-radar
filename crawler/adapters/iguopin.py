@@ -42,6 +42,9 @@ class IguopinAdapter(BaseAdapter):
     _DETAIL_CAP = 300
 
     def should_skip(self, source_url: str):
+        if resolve_detail_cap(self._DETAIL_CAP) == 0:
+            print("[iguopin] 需详情核验、快档 cap=0 → 跳过本轮")
+            return "iguopin requires detail verification; CRAWL_DETAIL_CAP=0"
         return None  # JSON POST 不适合 HEAD；由首个 GET/POST 返回真实错误
 
     def fetch(self, source_url: str) -> str:

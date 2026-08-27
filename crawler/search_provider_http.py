@@ -8,6 +8,7 @@ import os
 import httpx
 
 import search_budget
+from search_router import SearchAccountError, is_search_account_error
 
 
 class HttpSearchProvider:
@@ -47,10 +48,14 @@ class HttpSearchProvider:
         own = client or httpx.Client()
         try:
             r = own.post(url, json=body, headers=headers, timeout=self.timeout)
+            if is_search_account_error(r.status_code, r.text):
+                raise SearchAccountError(f"HTTP {r.status_code}: {r.text[:160]}")
             if r.status_code >= 300:
                 print(f"  [{self.name}-err] HTTP {r.status_code}: {r.text[:160]}")
                 return []
             data = r.json()
+        except SearchAccountError:
+            raise
         except Exception as e:
             print(f"  [{self.name}-err] {type(e).__name__}: {str(e)[:160]}")
             return []

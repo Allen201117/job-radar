@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import entry_finder as ef
+import search_router
 
 
 class CandidateClassificationTest(unittest.TestCase):
@@ -123,6 +124,9 @@ class _Router:
 
 
 class CascadeSearchTest(unittest.TestCase):
+    def tearDown(self):
+        search_router._BLACKLISTED_PROVIDERS.clear()
+
     def test_first_trusted_result_stops_before_second_provider(self):
         qianfan = _Provider(
             "qianfan",
@@ -197,6 +201,16 @@ class CascadeSearchTest(unittest.TestCase):
         self.assertEqual(provider.consumed, 0)
         self.assertEqual(result["search_used"], 0)
         self.assertIn("provider unavailable", result["evidence"]["search_errors"][0]["error"])
+
+    def test_account_error_blacklists_direct_entry_finder_provider(self):
+        provider = _Provider(
+            "entry-account-error", [search_router.SearchAccountError("HTTP 402: payment required")]
+        )
+        router = _Router([provider])
+        self.assertFalse(ef.find_official_entry("Acme", object(), router=router, max_searches=1)["found"])
+        self.assertIn("entry-account-error", search_router._BLACKLISTED_PROVIDERS)
+        self.assertFalse(ef.find_official_entry("Acme", object(), router=router, max_searches=1)["found"])
+        self.assertEqual(len(provider.calls), 1)
 
 
 if __name__ == "__main__":
