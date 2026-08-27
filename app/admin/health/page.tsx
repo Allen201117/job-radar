@@ -10,6 +10,7 @@ import {
   computeMustApplySupplyLedger,
   computeClickValidityMetrics,
   coverageBand,
+  dailyRunTone,
   evaluateCombinedHealth,
   formatPercent,
   getCoverageSnapshot,
@@ -19,6 +20,7 @@ import {
   normalizeCrawlSources,
   summarizeMustApplyGapAttempts,
   translateOperationalTerm,
+  verdictTone,
   type ClickValidityMetrics,
   type CoverageSnapshot,
   type CrawlSourceRow,
@@ -28,6 +30,7 @@ import {
   type MustApplyFetchCoverage,
   type MustApplyFetchCoverageCompany,
   type OpsRunAggregateRow,
+  type OpsRunRow,
   type GapFunnelOpsRow,
   type MustApplyGapAttemptRow,
   type MustApplyGovernanceItem,
@@ -52,7 +55,7 @@ import {
 import { canonicalizeUserIndustry } from "@/lib/company-industry";
 import { createServiceClient } from "@/lib/supabaseService";
 import { fetchAllPages, fetchAllSources } from "@/lib/supabase-paginate";
-import { dailyTrackerTone, nullableShare } from "@/lib/admin-health-tracker";
+import { nullableShare } from "@/lib/admin-health-tracker";
 import { Clock, ShieldCheck } from "@phosphor-icons/react/ssr";
 import { redirect } from "next/navigation";
 
@@ -112,6 +115,28 @@ async function loadHealthDailySeries(): Promise<HealthDailySeries> {
   const { data, error } = await service.rpc("admin_health_daily_series", { p_days: 30 });
   if (error) throw new Error(error.message);
   return (data || {}) as HealthDailySeries;
+}
+
+// 缺口漏斗 / 校招供给这 5 个模块每天都在写 ops_runs，却一直没进看板；
+// 而 admin_health_snapshot 只抽了固定 6 个指标键，它们的产出口径（sources_added / snapshots …）不在里面
+// → 直接读今天的原始台账行，产出数字才有真实来源。
+const EXTRA_OPS_MODULES = ["gap_funnel", "gap_funnel_browser", "campus_lane", "campus_cycle_backlog", "campus_official_backlog"];
+
+function shanghaiToday(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
+async function loadExtraOpsRuns(): Promise<OpsRunRow[]> {
+  const service = createServiceClient();
+  return fetchAllPages<OpsRunRow>((from, to) =>
+    service
+      .from("ops_runs")
+      .select("id,module,status,metrics,started_at,finished_at")
+      .in("module", EXTRA_OPS_MODULES)
+      .eq("run_date", shanghaiToday())
+      .order("id", { ascending: true })
+      .range(from, to),
+  );
 }
 
 // 北极星：必投清单健康覆盖。jobs 在香港库、sources 在 Supabase，无法单条 SQL join → Node 层按公司名 needle 合并。
@@ -321,15 +346,23 @@ function actionAnchor(action: string): string {
   return "/admin/health?tab=system";
 }
 
-function operationTone(status: DailyReport["status"]): BandTone {
-  if (status === "failed") return "danger";
-  if (status === "idle") return "muted";
-  return "success";
-}
-
 function displayOperationMetricLabel(label: string): string {
   if (label === "判死") return translateOperationalTerm("today_removed");
   return label;
+}
+
+// 「跑没跑」是一句话，「产出多少」是另一句话，分开写、各自上色。
+// 合并成一个「● 正常」正是看板说谎的来源（10 个挂 9 个也叫正常、产出 0 也叫正常）。
+function runSignalText(report: DailyReport): string {
+  if (report.runs <= 0) return "今天没有运行记录";
+  if (report.failed <= 0) return `今天跑了 ${formatCount(report.runs)} 次 · 全部成功`;
+  return `今天跑了 ${formatCount(report.runs)} 次 · 失败 ${formatCount(report.failed)} 次（${formatPercent(report.failed, report.runs)}）`;
+}
+
+function outputSignalText(report: DailyReport): string {
+  if (report.produced == null) return "产出暂无数据";
+  if (report.produced > 0) return "有产出";
+  return report.expectsOutput ? "产出为 0" : "产出为 0（不计入判断）";
 }
 
 function OperationCard({ report }: { report: DailyReport }) {
@@ -342,17 +375,34 @@ function OperationCard({ report }: { report: DailyReport }) {
             {report.description}
           </p>
         </div>
-        <StatusBadge tone={operationTone(report.status)} label={report.statusLabel} />
+        <StatusBadge tone={verdictTone(report.verdict)} label={report.verdictLabel} />
       </div>
 
-      <div className={`mt-5 grid grid-cols-2 gap-2 ${report.metrics.length >= 3 ? "sm:grid-cols-3" : ""}`}>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <KpiCard
+          title="运行情况"
+          value={report.runs <= 0 ? "—" : `${formatCount(report.runs)} 次`}
+          tone={report.runTone}
+          detail={runSignalText(report)}
+          className="min-h-0 p-3"
+        />
+        <KpiCard
+          title={report.producedLabel}
+          value={report.produced == null ? "—" : formatCount(report.produced)}
+          tone={report.producedTone}
+          detail={report.producedCaption}
+          className="min-h-0 p-3"
+        />
+      </div>
+
+      <div className={`mt-2 grid grid-cols-2 gap-2 ${report.metrics.length >= 3 ? "sm:grid-cols-3" : ""}`}>
         {report.metrics.map((metric) => (
           <KpiCard
             key={metric.label}
             title={displayOperationMetricLabel(metric.label)}
             value={metric.value == null ? "—" : formatCount(metric.value)}
-            tone={metric.value == null ? "muted" : operationTone(report.status)}
-            detail={metric.value == null ? "该指标仍在积累" : "今日产出"}
+            tone="muted"
+            detail={metric.value == null ? "该指标仍在积累" : "今日台账"}
             className="min-h-0 p-3"
           />
         ))}
@@ -398,10 +448,12 @@ function northStarTrackerItems(series: HealthDailySeries | null): TrackerItem[] 
   });
 }
 
+// 热力图与模块卡共用 lib/admin-health 的 moduleVerdict（dailyRunTone 是它的日序列包装），
+// 不再各写一套 —— 曾经热力图「任一失败即红」而模块卡「全挂才算失败」，同一天一个红一个绿。
 function processTrackerItems(series: HealthDailySeries | null, key: "ops" | "crawl"): TrackerItem[] {
   return (series?.days || []).map((day) => {
     const run = day[key];
-    const tone = dailyTrackerTone(run);
+    const tone = dailyRunTone(run);
     const label = run?.runs == null
       ? `${shortDay(day.day)}：暂无记录`
       : `${shortDay(day.day)}：运行 ${formatCount(run.runs)} 次，失败 ${formatCount(run.failed)} 次，部分完成 ${formatCount(run.partial)} 次`;
@@ -956,29 +1008,14 @@ function JobsLibrarySection({
   );
 }
 
-const PRIMARY_REPORT_METRIC: Record<DailyReport["key"], string> = {
-  crawl: "新增岗位",
-  enrichment: "补全正文",
-  dead_jobs: "判死",
-  insights: "新增洞察",
-  auto_discover: "新增源",
-  discovery: "产出岗位",
-};
-
-function primaryReportMetric(report: DailyReport) {
-  return (
-    report.metrics.find((metric) => metric.label === PRIMARY_REPORT_METRIC[report.key]) ||
-    report.metrics.find((metric) => metric.value != null) ||
-    report.metrics[0]
-  );
-}
-
 function DailyReportsSection({
   operations,
   reports,
+  extraOpsUnavailable,
 }: {
   operations: SupabaseHealthSnapshot | null;
   reports: DailyReport[];
+  extraOpsUnavailable: boolean;
 }) {
   return (
     <>
@@ -986,22 +1023,28 @@ function DailyReportsSection({
         <ErrorPanel label="每日战报" />
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            {reports.map((report) => {
-              const metric = primaryReportMetric(report);
-              const tone = operationTone(report.status);
-              return (
-                <KpiCard
-                  key={report.key}
-                  title={report.title}
-                  value={metric?.value == null ? "—" : formatCount(metric.value)}
-                  tone={tone}
-                  detail={metric ? displayOperationMetricLabel(metric.label) : report.statusLabel}
-                  footnote={`上次运行 ${formatRunTime(report.lastRunAt)}`}
-                  className="min-h-0 p-3"
-                />
-              );
-            })}
+          {/* 台账读失败时要说读失败，不能让缺口漏斗 / 校招供给显示成「今天没记录」——那是另一种说谎。 */}
+          {extraOpsUnavailable && (
+            <Callout tone="warning" className="mb-3">缺口漏斗与校招供给的台账这次没读到，这两张卡的数字暂不可信，不代表它们今天没跑。</Callout>
+          )}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            {reports.map((report) => (
+              <KpiCard
+                key={report.key}
+                title={report.title}
+                value={report.produced == null ? "—" : formatCount(report.produced)}
+                tone={report.producedTone}
+                status={
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <StatusBadge tone={report.producedTone} label={outputSignalText(report)} />
+                    <StatusBadge tone={report.runTone} label={report.runs <= 0 ? "没运行" : `跑 ${formatCount(report.runs)} · 挂 ${formatCount(report.failed)}`} />
+                  </span>
+                }
+                detail={report.producedLabel}
+                footnote={`${runSignalText(report)} · 上次运行 ${formatRunTime(report.lastRunAt)}`}
+                className="min-h-0 p-3"
+              />
+            ))}
           </div>
 
           <details className="mt-5 rounded-2xl border border-black/[0.07] bg-white/35 dark:border-white/[0.1] dark:bg-white/[0.03]">
@@ -1069,8 +1112,6 @@ function OverviewTab({
   worst,
   rowsByScope,
   reports,
-  ran,
-  failed,
   refreshedAt,
   disputesOpen,
   dailySeries,
@@ -1086,18 +1127,28 @@ function OverviewTab({
   worst: { scope: MustApplyScope; industry: string; healthy: number | null; total: number };
   rowsByScope: MustApplyRowsByScope | null;
   reports: DailyReport[];
-  ran: number;
-  failed: number;
   refreshedAt: string;
   disputesOpen: number | undefined;
   dailySeries: HealthDailySeries | null;
   dailySeriesUnavailable: boolean;
 }) {
+  const healthyReports = reports.filter((report) => report.verdict === "healthy");
+  const brokenReports = reports.filter((report) => report.verdict === "broken");
+  const attentionReports = reports.filter((report) => report.verdict === "attention");
+  const idleReports = reports.filter((report) => report.verdict === "idle");
+  const systemDetail = brokenReports.length
+    ? `${brokenReports.length} 个出问题：${brokenReports.map((report) => report.title).join("、")}`
+    : attentionReports.length
+      ? `${attentionReports.length} 个有失败：${attentionReports.map((report) => report.title).join("、")}`
+      : idleReports.length
+        ? `${idleReports.length} 个今天还没记录`
+        : "全部模块今天都有产出";
   const cards: Array<[string, string, BandTone, string, string, string]> = [
     ["岗位库", "jobs", jobs ? sectionStatusFromBand(band(share(jobs.validActive, jobs.activeTotal), HEALTH_THRESHOLDS.validActiveShare, "higher")) : "muted", jobs ? formatCount(jobs.activeTotal) : "—", jobs ? "有效率 " + formatPercent(jobs.validActive, jobs.activeTotal) + " · 空壳 " + formatCount(jobs.thinActive) : "数据暂不可用", "在招、有效率与空壳岗均来自岗位库快照"],
     ["必投供给", "supply", supplyStatus, rowsByScope ? `${formatCount(worst.healthy)}/${formatCount(worst.total)}` : "—", "最需处理：" + MUST_APPLY_SCOPE_LABEL[worst.scope] + "·" + worst.industry, "按当前用户行业的必投公司逐家计算"],
     ["用户行为", "users", users ? "success" : "muted", users ? formatCount(users.total_users) : "—", users ? "累计投递 " + formatCount(users.applied_total) + " 次" : "数据暂不可用", "今日汇总，不含未接入的行为埋点"],
-    ["系统运行", "system", systemStatus, String(ran) + "/" + reports.length, failed ? String(failed) + " 个失败" : "全部正常", "今日后台任务已运行数 / 已配置数"],
+    // 口径从「今天跑没跑」换成「今天产出正不正常」，与热力图、模块卡走同一个 moduleVerdict。
+    ["后台产出", "system", systemStatus, String(healthyReports.length) + "/" + reports.length, systemDetail, "今日产出正常的后台模块数 / 全部模块数"],
   ];
   const northStarItems = northStarTrackerItems(dailySeries);
   const snapshotDays = northStarItems.filter((item) => item.tone !== "muted").length;
@@ -1141,7 +1192,7 @@ function JobsTab({ jobs, clickValidity, clickStatus, coverage, operations, today
       <KpiCard title="待核查" value={formatCount(jobs.neverChecked)} tone={bandTone(checkedBand)} detail="还没有完成探活验证" />
     </section> : <ErrorPanel label="岗位库体检" />}
     {jobs && <section className="surface-soft p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">库存结构</h2><p className="mt-1 text-xs text-[#756e62] dark:text-[#b6ad9d]">同一岗位可同时属于“在招”和“待核查”，不把它们相加。</p></div><StatRing pct={share(jobs.validActive, jobs.activeTotal)} tone={bandTone(validBand)} size="section"><span className="text-lg font-semibold tabular-nums">{formatPercent(jobs.validActive, jobs.activeTotal)}</span><span className="text-[10px] text-[#756e62] dark:text-[#b6ad9d]">能投有效率</span></StatRing></div><BarList className="mt-4" ariaLabel="岗位库存构成" items={[{ key: "valid", label: "能投岗位", ratio: share(jobs.validActive, jobs.activeTotal), tone: "success", value: formatCount(jobs.validActive) }, { key: "thin", label: "空壳岗", ratio: share(jobs.thinActive, jobs.activeTotal), tone: "warning", value: formatCount(jobs.thinActive) }, { key: "unchecked", label: "待核查", ratio: share(jobs.neverChecked, jobs.activeTotal), tone: bandTone(checkedBand), value: formatCount(jobs.neverChecked) }]} /><p className="mt-3 text-[10px] text-[#8a8275] dark:text-[#9a9184]">按当前岗位快照计算，今天读取；待核查与在招可能重叠。</p></section>}
-    <section className="surface-soft p-5"><h2 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">抓取运行近 30 天</h2><p className="mt-1 text-xs text-[#756e62] dark:text-[#b6ad9d]">每格一天。失败优先显示为处理，部分完成显示为关注。</p>{dailySeriesUnavailable ? <div className="mt-4"><ErrorPanel label="抓取运行日序列" /></div> : <Tracker className="mt-4" items={processTrackerItems(dailySeries, "crawl")} ariaLabel="抓取运行近 30 天" />}</section>
+    <section className="surface-soft p-5"><h2 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">抓取运行近 30 天</h2><p className="mt-1 text-xs text-[#756e62] dark:text-[#b6ad9d]">每格一天。全部失败显示为处理，有失败或部分完成显示为关注，与下方模块卡同一套判据。</p>{dailySeriesUnavailable ? <div className="mt-4"><ErrorPanel label="抓取运行日序列" /></div> : <Tracker className="mt-4" items={processTrackerItems(dailySeries, "crawl")} ariaLabel="抓取运行近 30 天" />}</section>
     <ClickValiditySection clickValidity={clickValidity} status={clickStatus} summary="展示岗位自动探活，不是用户真实点击统计。" />
     <section className="surface-soft p-5"><h2 className="mb-4 text-xl font-semibold">抓全率</h2><CoverageSection snapshot={coverage} /><p className="mt-4 text-[10px] text-[#8a8275] dark:text-[#9a9184]">只计算官网明确报总数的招聘源，盲区不按 0% 处理。</p></section>
     <details className="surface-soft p-5"><summary className="cursor-pointer text-xl font-semibold">分源状态</summary><div className="mt-5"><JobsLibrarySection jobs={null} operations={operations} crawlSources={normalizeCrawlSources(operations?.crawl_sources)} todayRemoved={todayRemoved} validActiveShareBand={validBand} thinShareBand="empty" neverCheckedShareBand={checkedBand} showHealthSummary={false} /></div></details>
@@ -1217,8 +1268,8 @@ function UserTab({ operations, users, resume }: { operations: SupabaseHealthSnap
   return <div className="grid gap-5"><section className="surface-soft p-5 sm:p-6"><h2 className="text-xl font-semibold text-[#1a1714] dark:text-[#f3ecdf]">用户漏斗</h2><p className="mt-1 text-xs text-[#756e62] dark:text-[#b6ad9d]">累计去重人数，条形以注册人数为基准。</p><BarList className="mt-5" ariaLabel="用户漏斗" items={funnel.map((step) => ({ key: step.key, label: step.label, ratio: share(step.value, users.total_users), tone: "success", value: formatCount(step.value) }))} /></section><section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><KpiCard title="今日新增用户" value={formatCount(users.today_users)} tone="muted" detail="今天完成注册的用户" /><KpiCard title="收藏次数" value={`${formatCount(users.saved_total)} + ${formatCount(users.saved_today)}`} tone="muted" detail="累计 + 今日" /><KpiCard title="投递次数" value={`${formatCount(users.applied_total)} + ${formatCount(users.applied_today)}`} tone="muted" detail="累计 + 今日" /><KpiCard title="简历解析" value={resume ? `${formatCount(resume.succeeded)}/${formatCount(resume.started)}` : "—"} tone="muted" detail="今日成功 / 总数" /></section><SprintCards users={users} /><p className="text-xs text-[#8a8275] dark:text-[#9a9184]">点击官网、收到机会、7 日回访仍待行为埋点接入。</p></div>;
 }
 
-function SystemTab({ operations, reports, refreshedAt, dailySeries, dailySeriesUnavailable }: { operations: SupabaseHealthSnapshot | null; reports: DailyReport[]; refreshedAt: string; dailySeries: HealthDailySeries | null; dailySeriesUnavailable: boolean }) {
-  return <div className="grid gap-5"><section className="surface-soft p-5"><h2 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">后台任务近 30 天</h2><p className="mt-1 text-xs text-[#756e62] dark:text-[#b6ad9d]">每格一天。任一任务失败为处理，部分完成为关注，无记录单独保留。</p>{dailySeriesUnavailable ? <div className="mt-4"><ErrorPanel label="后台任务日序列" /></div> : <Tracker className="mt-4" items={processTrackerItems(dailySeries, "ops")} ariaLabel="后台任务近 30 天" />}<p className="mt-3 text-[10px] text-[#8a8275] dark:text-[#9a9184]">按 ops_runs 每日台账汇总，不把没有记录显示成成功或 0。</p></section><section className="surface-soft p-5"><DailyReportsSection operations={operations} reports={reports} /></section><DataNotes refreshedAt={refreshedAt} /><p className="text-xs text-[#8a8275] dark:text-[#9a9184]">该页面仅管理员可访问；两套数据库分别读取，任一侧异常时另一侧仍可显示。</p></div>;
+function SystemTab({ operations, reports, refreshedAt, dailySeries, dailySeriesUnavailable, extraOpsUnavailable }: { operations: SupabaseHealthSnapshot | null; reports: DailyReport[]; refreshedAt: string; dailySeries: HealthDailySeries | null; dailySeriesUnavailable: boolean; extraOpsUnavailable: boolean }) {
+  return <div className="grid gap-5"><section className="surface-soft p-5"><h2 className="font-semibold text-[#1a1714] dark:text-[#f3ecdf]">后台任务近 30 天</h2><p className="mt-1 text-xs text-[#756e62] dark:text-[#b6ad9d]">每格一天。全部失败为处理，有失败或部分完成为关注，无记录单独保留；与下方模块卡共用同一套判据。</p>{dailySeriesUnavailable ? <div className="mt-4"><ErrorPanel label="后台任务日序列" /></div> : <Tracker className="mt-4" items={processTrackerItems(dailySeries, "ops")} ariaLabel="后台任务近 30 天" />}<p className="mt-3 text-[10px] text-[#8a8275] dark:text-[#9a9184]">按 ops_runs 每日台账汇总，不把没有记录显示成成功或 0；模块卡的「产出」为 0 时一律不判正常。</p></section><section className="surface-soft p-5"><DailyReportsSection operations={operations} reports={reports} extraOpsUnavailable={extraOpsUnavailable} /></section><DataNotes refreshedAt={refreshedAt} /><p className="text-xs text-[#8a8275] dark:text-[#9a9184]">该页面仅管理员可访问；两套数据库分别读取，任一侧异常时另一侧仍可显示。</p></div>;
 }
 
 export default async function AdminHealthPage({ searchParams }: { searchParams: Promise<{ tab?: string | string[] }> }) {
@@ -1227,7 +1278,7 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   const rawTab = typeof query.tab === "string" ? query.tab : "";
   const tab = rawTab === "jobs" || rawTab === "supply" || rawTab === "users" || rawTab === "system" ? rawTab : "overview";
   const overview = tab === "overview";
-  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult, gapResult, dailySeriesResult] = await Promise.allSettled([overview || tab === "jobs" ? getJobsHealthSnapshot() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), overview || tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await getMustApplyFetchCoverage(createServiceClient(), scope)] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null), tab === "supply" ? loadMustApplyGapAdminData() : Promise.resolve(null), overview || tab === "jobs" || tab === "system" ? loadHealthDailySeries() : Promise.resolve(null)]);
+  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult, gapResult, dailySeriesResult, extraOpsResult] = await Promise.allSettled([overview || tab === "jobs" ? getJobsHealthSnapshot() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), overview || tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await getMustApplyFetchCoverage(createServiceClient(), scope)] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null), tab === "supply" ? loadMustApplyGapAdminData() : Promise.resolve(null), overview || tab === "jobs" || tab === "system" ? loadHealthDailySeries() : Promise.resolve(null), overview || tab === "system" ? loadExtraOpsRuns() : Promise.resolve(null)]);
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
   const clickValidity = clickResult.status === "fulfilled" ? clickResult.value : null;
@@ -1260,7 +1311,8 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   const activeIndustries = Object.fromEntries(MUST_APPLY_SCOPES.map((scope) => [scope, MUST_APPLY_INDUSTRIES.filter((industry) => (scope === "domestic" && industry === DEFAULT_MUST_APPLY_INDUSTRY) || (userDistribution.counts[scope][industry] || 0) > 0)])) as Record<MustApplyScope, string[]>;
   const fetchCoverage = fetchResult.status === "fulfilled" && fetchResult.value ? Object.fromEntries(fetchResult.value) as Record<MustApplyScope, MustApplyFetchCoverage> : null;
   const fetchByIndustry = fetchCoverage ? Object.fromEntries(MUST_APPLY_SCOPES.map((scope) => [scope, groupFetchCoverageByIndustry(fetchCoverage[scope], MUST_APPLY_INDUSTRIES, scope)])) as Record<MustApplyScope, Record<string, MustApplyFetchCoverage>> : null;
-  const reports = buildDailyReports({ crawl: operations?.today?.crawl || null, discovery: operations?.today?.discovery || null, insight: { today_created: operations?.insight?.today_created }, opsRuns: operations?.today?.ops_runs || [] });
+  const extraOpsRuns = extraOpsResult.status === "fulfilled" ? extraOpsResult.value : null;
+  const reports = buildDailyReports({ crawl: operations?.today?.crawl || null, discovery: operations?.today?.discovery || null, insight: { today_created: operations?.insight?.today_created }, opsRuns: operations?.today?.ops_runs || [], opsRunRows: extraOpsRuns || [] });
   const users = operations?.today?.users || null;
   const resume = operations?.today?.resume || null;
   const todayRemoved = reports.find((report) => report.key === "dead_jobs")?.metrics.find((metric) => metric.label === "判死")?.value ?? null;
@@ -1273,15 +1325,22 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   const worst = candidates.reduce((current, item) => { const ranks: Record<HealthBand, number> = { empty: 0, good: 1, warn: 2, bad: 3 }; return ranks[mustApplyIndustryBand(rowsByScope?.[item.scope]?.[item.industry] || null)] > ranks[mustApplyIndustryBand(rowsByScope?.[current.scope]?.[current.industry] || null)] ? item : current; }, fallback);
   const health = evaluateCombinedHealth({ validActive: jobs?.validActive, crawlRuns: operations?.today?.crawl?.runs, crawlFailedRuns: operations?.today?.crawl?.failed_runs, clickProbeValidityRate: clickValidity?.probeValidityRate, mustApplyHealthyCompanies: rowsByScope ? worst.healthy : null, mustApplyTotalCompanies: worst.total, mustApplyZeroHealthyCompanies: worst.zeroHealthyCompanies, mustApplyBlindCompanies: worst.blindCompanies, mustApplyIndustries: candidates, coverageAvgPct: coverage?.avgCoveragePct, coverageBlindSources: coverage?.blind });
   const supplyStatus: BandTone = !rowsByScope ? "muted" : sectionStatusFromBand(worstBand([health.bands.mustApply, coverageBand(coverage?.avgCoveragePct)]));
-  const failed = reports.filter((report) => report.status === "failed").length;
-  const ran = reports.filter((report) => report.status === "success").length;
-  const systemStatus: BandTone = !operations ? "muted" : failed ? "danger" : ran ? "success" : "muted";
+  // 概览的系统色取所有模块里最严的那一档，与模块卡、热力图同出一个 moduleVerdict。
+  const systemStatus: BandTone = !operations
+    ? "muted"
+    : reports.some((report) => report.verdict === "broken")
+      ? "danger"
+      : reports.some((report) => report.verdict === "attention")
+        ? "warning"
+        : reports.some((report) => report.verdict === "healthy")
+          ? "success"
+          : "muted";
   const heroDataMissing = !jobs && !operations;
   const heroStatus: BandTone = heroDataMissing || health.level === "critical" ? "danger" : health.actions.length ? "warning" : "success";
   const refreshedAt = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
   const tabs = [["overview", "总览"], ["jobs", "岗位库"], ["supply", "必投供给"], ["users", "用户行为"], ["system", "系统运行"]] as const;
   const dailySeries = dailySeriesResult.status === "fulfilled" ? dailySeriesResult.value : null;
   const dailySeriesUnavailable = dailySeriesResult.status === "rejected";
-  const content = tab === "overview" ? <OverviewTab health={health} heroStatus={heroStatus} heroDataMissing={heroDataMissing} jobs={jobs} users={users} supplyStatus={supplyStatus} systemStatus={systemStatus} worst={worst} rowsByScope={rowsByScope} reports={reports} ran={ran} failed={failed} refreshedAt={refreshedAt} disputesOpen={operations?.insight?.disputes_open} dailySeries={dailySeries} dailySeriesUnavailable={dailySeriesUnavailable} /> : tab === "jobs" ? <JobsTab jobs={jobs} clickValidity={clickValidity} clickStatus={clickStatus} coverage={coverage} operations={operations} todayRemoved={todayRemoved} validBand={validBand} checkedBand={checkedBand} dailySeries={dailySeries} dailySeriesUnavailable={dailySeriesUnavailable} /> : tab === "supply" ? <SupplyTab rowsByScope={rowsByScope} fetchByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} worst={worst} gapSummary={gapSummary} governanceItems={governanceItems} ledger={supplyLedger} /> : tab === "users" ? <UserTab operations={operations} users={users} resume={resume} /> : <SystemTab operations={operations} reports={reports} refreshedAt={refreshedAt} dailySeries={dailySeries} dailySeriesUnavailable={dailySeriesUnavailable} />;
+  const content = tab === "overview" ? <OverviewTab health={health} heroStatus={heroStatus} heroDataMissing={heroDataMissing} jobs={jobs} users={users} supplyStatus={supplyStatus} systemStatus={systemStatus} worst={worst} rowsByScope={rowsByScope} reports={reports} refreshedAt={refreshedAt} disputesOpen={operations?.insight?.disputes_open} dailySeries={dailySeries} dailySeriesUnavailable={dailySeriesUnavailable} /> : tab === "jobs" ? <JobsTab jobs={jobs} clickValidity={clickValidity} clickStatus={clickStatus} coverage={coverage} operations={operations} todayRemoved={todayRemoved} validBand={validBand} checkedBand={checkedBand} dailySeries={dailySeries} dailySeriesUnavailable={dailySeriesUnavailable} /> : tab === "supply" ? <SupplyTab rowsByScope={rowsByScope} fetchByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} worst={worst} gapSummary={gapSummary} governanceItems={governanceItems} ledger={supplyLedger} /> : tab === "users" ? <UserTab operations={operations} users={users} resume={resume} /> : <SystemTab operations={operations} reports={reports} refreshedAt={refreshedAt} dailySeries={dailySeries} dailySeriesUnavailable={dailySeriesUnavailable} extraOpsUnavailable={extraOpsResult.status === "rejected"} />;
   return <div className="min-h-screen bg-editorial"><Navbar /><ProductPage maxWidth="max-w-6xl"><ProductHero eyebrow="运营健康" title="管理员看板" description="按模块查看今日真实运行与供给情况。" icon={ShieldCheck}><nav className="mt-4 flex gap-2 overflow-x-auto pb-1" aria-label="管理员看板模块">{tabs.map(([key, label]) => <a key={key} href={key === "overview" ? "/admin/health" : "/admin/health?tab=" + key} className={"shrink-0 rounded-full border px-4 py-2 text-sm font-semibold " + (tab === key ? "border-[#1a1714] bg-[#1a1714] text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]" : "border-black/[0.12] text-[#6b655a] dark:border-white/[0.15] dark:text-[#b6ad9d]")}>{label}</a>)}</nav></ProductHero><main className="mt-6">{content}</main></ProductPage></div>;
 }

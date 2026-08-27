@@ -477,7 +477,7 @@ test("groupFetchCoverageByIndustry groups overseas patterns with overseas totals
   assert.deepEqual(grouped["互联网/科技"].companies.map((company) => company.name), ["Google"]);
 });
 
-test("buildDailyReports merges technical runs into six human-facing operation cards", () => {
+test("buildDailyReports merges technical runs into eight human-facing operation cards", () => {
   assert.equal(typeof H.buildDailyReports, "function");
   const reports = H.buildDailyReports({
     crawl: {
@@ -610,6 +610,12 @@ test("buildDailyReports merges technical runs into six human-facing operation ca
         last_run_at: "2026-06-22T09:30:00Z",
       },
     ],
+    opsRunRows: [
+      { module: "gap_funnel", status: "failed", metrics: { checked: 20, sources_added: 0, healthy: 0, thin_only: 0 }, finished_at: "2026-06-22T10:00:00Z" },
+      { module: "gap_funnel_browser", status: "success", metrics: { checked: 6, sources_added: 2, healthy: 2, thin_only: 1 }, finished_at: "2026-06-22T10:30:00Z" },
+      { module: "campus_lane", status: "success", metrics: { snapshots: 12, surged: 1, campus_jobs_total: 900 }, finished_at: "2026-06-22T11:00:00Z" },
+      { module: "campus_cycle_backlog", status: "success", metrics: { verified: 4 }, finished_at: "2026-06-22T11:30:00Z" },
+    ],
   });
 
   assert.deepEqual(reports.map((report) => report.title), [
@@ -618,13 +624,15 @@ test("buildDailyReports merges technical runs into six human-facing operation ca
     "死岗治理",
     "职业洞察",
     "自动扩源",
+    "缺口漏斗",
+    "校招供给",
     "刷新 / 发现",
   ]);
   assert.deepEqual(
     reports.find((report) => report.key === "auto_discover").metrics.map((metric) => [metric.label, metric.value]),
     [["探查公司", 90], ["新增源", 3]],
   );
-  assert.equal(reports.find((report) => report.key === "auto_discover").status, "success");
+  assert.equal(reports.find((report) => report.key === "auto_discover").verdict, "healthy");
   assert.deepEqual(
     reports.find((report) => report.key === "dead_jobs").metrics.map((metric) => [metric.label, metric.value]),
     [["核查", 120], ["判死", 11], ["清除", 7]],
@@ -633,7 +641,90 @@ test("buildDailyReports merges technical runs into six human-facing operation ca
     reports.find((report) => report.key === "insights").metrics.map((metric) => [metric.label, metric.value]),
     [["新增洞察", 6], ["富化公司", 8], ["过期下架", 5]],
   );
-  assert.equal(reports.find((report) => report.key === "enrichment").status, "success");
+  assert.equal(reports.find((report) => report.key === "enrichment").verdict, "healthy");
+
+  // 两个曾经完全看不到的模块：原始台账行是它们产出口径的唯一来源。
+  const gap = reports.find((report) => report.key === "gap_funnel");
+  assert.equal(gap.runs, 2);
+  assert.equal(gap.failed, 1);
+  assert.equal(gap.produced, 2);
+  assert.equal(gap.verdict, "attention");
+  assert.equal(gap.runTone, "warning");
+  const campus = reports.find((report) => report.key === "campus_supply");
+  assert.equal(campus.produced, 12);
+  assert.equal(campus.verdict, "healthy");
+  assert.deepEqual(
+    campus.metrics.map((metric) => [metric.label, metric.value]),
+    [["开闸公司", 1], ["校招岗位库存", 900], ["新增校招洞察", 4]],
+  );
+});
+
+test("moduleVerdict never calls a module healthy when it produced nothing", () => {
+  assert.equal(typeof H.moduleVerdict, "function");
+  // 线上原样：刷新/发现「运行 2 次、0 失败、产出岗位 0」以前显示「● 正常」。
+  assert.equal(H.moduleVerdict({ runs: 2, failed: 0, produced: 0, expectsOutput: true }), "broken");
+  assert.equal(H.outputSignalTone(0, true), "danger");
+  // 没有产出口径的模块不许被产出规则误伤。
+  assert.equal(H.moduleVerdict({ runs: 2, failed: 0, produced: 0, expectsOutput: false }), "healthy");
+  // 产出未知（模块今天没台账）不臆断成 0。
+  assert.equal(H.moduleVerdict({ runs: 2, failed: 0, produced: null, expectsOutput: true }), "healthy");
+  assert.equal(H.outputSignalTone(null, true), "muted");
+});
+
+test("moduleVerdict stops calling 9-out-of-10 failures a success", () => {
+  // 旧 reportStatus 只有 failed >= runs 才算失败：10 个挂 9 个仍返回 success。
+  assert.equal(H.moduleVerdict({ runs: 10, failed: 9, produced: 100, expectsOutput: true }), "attention");
+  assert.equal(H.moduleVerdict({ runs: 10, failed: 10, produced: 100, expectsOutput: true }), "broken");
+  assert.equal(H.moduleVerdict({ runs: 0, failed: 0, produced: null, expectsOutput: true }), "idle");
+  assert.equal(H.verdictTone("attention"), "warning");
+  assert.equal(H.verdictTone("broken"), "danger");
+  assert.equal(H.verdictTone("idle"), "muted");
+  assert.equal(H.verdictTone("healthy"), "success");
+});
+
+test("heatmap and module cards reach the same verdict on the same day's numbers", () => {
+  // 防复发：看板曾有两套方向相反的判据（热力图任一失败即红 / 模块卡全挂才算失败），
+  // 同一天同一份数据一个判红一个判绿。两边现在必须由同一个 moduleVerdict 推出来。
+  const matrix = [
+    { runs: 0, failed: 0 },
+    { runs: 1, failed: 0 },
+    { runs: 1, failed: 1 },
+    { runs: 10, failed: 1 },
+    { runs: 10, failed: 9 },
+    { runs: 10, failed: 10 },
+    { runs: 195, failed: 1 },
+  ];
+  for (const point of matrix) {
+    assert.equal(
+      H.dailyRunVerdict({ runs: point.runs, failed: point.failed, partial: 0 }),
+      H.moduleVerdict({ runs: point.runs, failed: point.failed, produced: null, expectsOutput: false }),
+      `热力图与模块卡对 runs=${point.runs} failed=${point.failed} 的结论必须一致`,
+    );
+    assert.equal(
+      H.dailyRunTone({ runs: point.runs, failed: point.failed, partial: 0 }),
+      H.runSignalTone(point.runs, point.failed),
+      `热力图与模块卡对 runs=${point.runs} failed=${point.failed} 的颜色必须一致`,
+    );
+  }
+  // 无记录不能被伪装成 0 或成功；partial 只在没有失败时降级成关注。
+  assert.equal(H.dailyRunVerdict(null), "idle");
+  assert.equal(H.dailyRunVerdict({ runs: null }), "idle");
+  assert.equal(H.dailyRunVerdict({ runs: 5, failed: 0, partial: 2 }), "attention");
+  assert.equal(H.dailyRunVerdict({ runs: 5, failed: 5, partial: 2 }), "broken");
+});
+
+test("admin health page drives heatmap and overview card from the shared verdict", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "app", "admin", "health", "page.tsx"), "utf8");
+  // 热力图必须调共享判据，不能再走 admin-health-tracker 那套「任一失败即红」。
+  assert.match(source, /const tone = dailyRunTone\(run\)/);
+  assert.doesNotMatch(source, /dailyTrackerTone/);
+  // 概览卡口径改成「产出正常 X/N」，不再是「今天跑没跑」。
+  assert.match(source, /healthyReports\.length/);
+  assert.doesNotMatch(source, /report\.status === "failed"/);
+  // 五个此前只写台账、看板看不到的模块必须被归集。
+  for (const module of ["gap_funnel", "gap_funnel_browser", "campus_lane", "campus_cycle_backlog", "campus_official_backlog"]) {
+    assert.ok(source.includes(module), `${module} 必须出现在看板读取的模块清单里`);
+  }
 });
 
 test("buildDailyReports keeps ledger-only metrics unavailable before ops data accumulates", () => {
@@ -644,8 +735,16 @@ test("buildDailyReports keeps ledger-only metrics unavailable before ops data ac
     opsRuns: [],
   });
   const deadJobs = reports.find((report) => report.key === "dead_jobs");
-  assert.equal(deadJobs.status, "idle");
+  assert.equal(deadJobs.verdict, "idle");
+  assert.equal(deadJobs.produced, null);
+  assert.equal(deadJobs.producedTone, "muted");
   assert.deepEqual(deadJobs.metrics.map((metric) => metric.value), [null, null, null]);
+  // 台账里没有的模块只能说「今天没记录」，不能说正常也不能说失败。
+  for (const key of ["gap_funnel", "campus_supply"]) {
+    const report = reports.find((item) => item.key === key);
+    assert.equal(report.verdict, "idle");
+    assert.equal(report.produced, null);
+  }
 });
 
 test("operational terms are translated to plain Chinese", () => {
