@@ -359,6 +359,8 @@ def drain_t3(sb, limit=0):
                 "T3 LLM 预探活失败（账户余额不足或鉴权失效）；已在搜索前中止，未调用搜索 API"
             ) from exc
         print(f"⚠ T3 LLM 预探活未通过（非账户级）：{type(exc).__name__}；继续按原流程执行")
+    finally:
+        E.forget_llm_probe()
     if not _ROUTER.is_configured():
         print("✗ 无搜索源配置（BOCHA/TAVILY/SERPER/千帆 key 全缺或熔断）→ 跳过 T3")
         return {"wrote": 0, "empty": 0, "err": 0, "budget_left": 0}

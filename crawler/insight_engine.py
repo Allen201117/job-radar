@@ -57,6 +57,16 @@ def reset_llm_health() -> None:
     _LLM_RUN_HEALTH.update(ok=0, fail=0, account_error=False)
 
 
+def forget_llm_probe() -> None:
+    """把预探活那一次调用从成败计数里抹掉，只留 account_error 标记。
+
+    探活成功不是真实产出。若把它记成 ok，「有调用但一次没成」(fail>0 and ok==0)
+    这条判据就再也不成立——真实调用全网络失败时 workflow 反而绿灯，正是本模块
+    要治的「故障被绿灯盖住」。探活发生在整轮最开头，此时计数只可能来自它自己。
+    """
+    _LLM_RUN_HEALTH.update(ok=0, fail=0)
+
+
 def llm_run_health() -> dict:
     return dict(_LLM_RUN_HEALTH)
 

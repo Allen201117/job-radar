@@ -248,6 +248,29 @@ class TestT3(unittest.TestCase):
                 B.drain_t3(FakeSB({}), limit=1)
         search.assert_not_called()
 
+    def test_preflight_success_does_not_mask_all_failing_real_calls(self):
+        """探活成功不得计入健康分，否则真实调用全失败时 workflow 反而绿灯。"""
+        B._ROUTER = type("Router", (), {
+            "is_configured": lambda _self: False,
+            "remaining": lambda _self, _sb: 0,
+            "search": mock.Mock(),
+        })()
+        E.reset_llm_health()
+
+        def probe_ok(*_args, **_kwargs):
+            E._record_llm(True)      # 真实 chat_content 成功时的内部行为
+            return "ok"
+
+        with mock.patch.object(E, "chat_content", side_effect=probe_ok):
+            B.drain_t3(FakeSB({}), limit=1)
+        self.assertEqual(E.llm_run_health()["ok"], 0, "探活不该留下 ok 计数")
+
+        E._record_llm(False)         # 探活之后的真实调用全部失败（非账户级）
+        self.assertTrue(
+            E.llm_run_unhealthy(),
+            "探活成功 + 真实调用全失败，健康门必须触发，否则故障被绿灯掩盖",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
