@@ -327,6 +327,22 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 | 顺丰 | 可用（httpx，最近 50 页诚实 cap） | `hr.sf-express.com/JobSearchById/{id},{positionType}` |
 | 海尔 | **暂不可用** | 只解析到入口页，保持 `partial_success` |
 
+## ⚠️ 必投清单公司名 ↔ sources.company 的归属匹配（2026-08-27 立）
+
+清单里存的是**品牌短名**（腾讯音乐 / 工商银行），库里 `sources.company` 存的常是**实体全称或带后缀**
+（腾讯音乐 TME / 中国工商银行）。**用 `.eq()` 精确匹配会大面积对不上** ——
+`campus_official_backlog` 就是这么每天空跑至少一周的：40 家目标里 30 家判「没有官方域名」直接跳过、
+产出恒为 0（2026-08-27 实测：精确匹配可用 12/40，改归属匹配后 19/40）。
+
+✅ 统一用 `crawler/must_apply.resolve_owner(name, must_apply.all_names())` / `sources_for(...)`。
+规则 = **清单名必须是库里名字的子串，命中多个时最长的清单名胜出**。
+- ❌ 不能用裸子串 `%京东%`：会把**京东方（BOE）** 算成京东 → 拿 boe.com 给京东的校招日期做接地，
+  这是「归属准确性高于一切」的红线。
+- ❌ 也不能用 `company_name_match.company_name_matches`：它防的是另一种坑（token 不在开头，
+  如「北京华晋中通电力」≠ 中通），对「京东方 vs 京东」返回 True，挡不住这个。
+- ⚠️ **只认单方向**（清单名 ⊂ 库里名）。写成双向包含会让库里的「京东」被更长的「京东科技」抢走
+  —— 这个 bug 在实现时被单测当场抓到，用例已钉在 `crawler/test_must_apply_owner.py`。
+
 ## LLM 成本纪律（2026-08-27 成本审计后立）
 
 **钱的 86% 烧在职业洞察 T3 一条链**（每家公司 = 主题数 × (1 writer + ~2.7 judge)，唯一的乘法结构）。

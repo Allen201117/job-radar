@@ -32,7 +32,7 @@ def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-def drain_official_one(sb, company, now):
+def drain_official_one(sb, company, now, all_rows=None, names=None):
     """单公司快路② drain。永不抛。返回统计 dict。"""
     stats = {"company": company, "claims_seen": 0, "verified": 0, "draft": 0, "skipped": None}
 
@@ -42,9 +42,19 @@ def drain_official_one(sb, company, now):
     if not llm_config()["configured"]:
         return {"company": company, "skipped": "llm_not_configured"}
 
+    # ⚠️ 这里曾经用 .eq("company", company) 精确匹配，而 company 来自**必投清单的品牌短名**，
+    # 与 sources.company 的实体写法经常对不上 → 30/40 家直接判 no_official_host、整条链每天空跑。
+    # 2026-08-27 实测：精确匹配只命中 20/40 家、其中有自有官方域的仅 12 家；按归属匹配后
+    # 命中 30/40、有自有官方域 19 家。错配是**双向**的：腾讯音乐 vs「腾讯音乐 TME」（库里更长）、
+    # 工商银行 vs「中国工商银行」（库里更长）。
+    # 用 must_apply.resolve_owner 判归属而不是裸子串：这里是**事实接地**（拿自有官方域核校招日期），
+    # `%京东%` 会把京东方(BOE)算成京东 → 用 boe.com 给京东的日期接地，是张冠李戴红线。
+    # all_rows/names 由 main 预取一次传进来（40 家并发，每家再全表拉一遍 sources 是白烧）；
+    # --company 单跑时为 None，就地取一次。
     try:
-        source_rows = db.fetch_all_rows(
-            lambda: sb.table("sources").select("company,source_url").eq("company", company))
+        rows = all_rows if all_rows is not None else db.fetch_all_rows(
+            lambda: sb.table("sources").select("company,source_url"))
+        source_rows = must_apply.sources_for(company, rows, names or must_apply.all_names())
     except Exception as e:
         print(f"  [campus-official-err] {company} 查源失败: {type(e).__name__}: {str(e)[:120]}")
         return {"company": company, "skipped": "sources_error"}
@@ -140,9 +150,13 @@ def main():
                     targets.append(name)
         targets = targets[:max(0, args.limit)]
         print(f"[campus_official_backlog] 目标 {len(targets)} 家（已覆盖 {len(covered)} 家跳过），workers={args.workers}")
+        all_rows = db.fetch_all_rows(
+            lambda: sb.table("sources").select("company,source_url"))
+        names = must_apply.all_names()
         results = []
         with ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
-            futs = {ex.submit(drain_official_one, sb, name, now): name for name in targets}
+            futs = {ex.submit(drain_official_one, sb, name, now, all_rows, names): name
+                    for name in targets}
             for fut in as_completed(futs):
                 try:
                     results.append(fut.result())
