@@ -196,6 +196,27 @@ create trigger jobs_search_doc_trg
   before insert or update of title, company, location, job_type on jobs
   for each row execute function jobs_set_search_doc();
 
+-- ── 招聘阶段谓词（校招 / 实习）：与 lib/jobs-store/opportunities.ts 的 stageRecallPatterns 逐字对齐 ──
+-- 它存在的唯一理由是**给下面两个分区索引写谓词**；应用层 SQL 不调它、也不需要改。
+-- 之所以「不改应用层也能生效」：这是个简单 SQL 函数且标了 immutable，Postgres 建索引时会把它
+-- **内联**成常量折叠后的那串 OR-of-LIKE，与召回 SQL 里的 where 子句结构完全相同 → 谓词匹配成立。
+-- ⚠️ 改这里必须同步改 lib/jobs-store/opportunities.ts 的 stageRecallPatterns，否则谓词不再匹配、
+-- 索引会被 planner 静默忽略（不报错，只是又变慢）。改完用 EXPLAIN 确认仍走 *_campus_gin / *_intern_gin。
+create or replace function job_stage_match(p_title text, p_job_type text, p_jd_url text, p_stage text)
+returns boolean language sql immutable parallel safe as $function$
+  select case p_stage
+    when 'campus' then
+         lower(p_title) like any(array['%校招%','%校园%','%应届%','%campus%','%graduate%','%届%'])
+      or lower(coalesce(p_job_type,'')) like any(array['%校招%','%校园%','%应届%','%campus%','%graduate%','%届%'])
+      or lower(coalesce(p_jd_url,'')) like any(array['%campus%'])
+    when 'intern' then
+         lower(p_title) like any(array['%实习%','%intern%'])
+      or lower(coalesce(p_job_type,'')) like any(array['%实习%','%intern%'])
+      or lower(coalesce(p_jd_url,'')) like any(array['%shixi%','%intern%'])
+    else true
+  end
+$function$;
+
 -- ── 「有效在招」诚实计数（active + 有 JD 正文 ≥60 字）──
 create or replace function count_valid_active_jobs()
 returns bigint language sql stable as $function$
@@ -248,6 +269,20 @@ create index if not exists jobs_valid_active_idx            on jobs (id) where s
 
 -- ── 中文 bigram 全文检索 GIN（search_doc）：app 搜索主路径（lib/jobs-store/search.ts 的 textSearch）──
 create index if not exists jobs_search_doc_gin on jobs using gin (search_doc);
+
+-- ── 校招 / 实习分区 GIN：治 /today 召回的方向层慢（2026-08-27 加）──
+-- 病因：召回方向层的 tsquery 命中十几万行后，**还要逐行堆扫**才能应用招聘阶段过滤
+-- （title/job_type/jd_url 三个 like，走不了索引），实测某真实校招画像 14.7 万行只留下 7,456 行。
+-- 修法：把「阶段」下沉成索引谓词，让 GIN 扫描本身只返回该阶段的岗。
+-- live 实测（实习档同一条召回，前后对照各 3 轮，全程未删任何索引）：3,211/3,376/5,648ms → 316/317/482ms（≈−90%）。
+-- 成本：campus ≈ 8MB / intern ≈ 4MB；CREATE INDEX CONCURRENTLY 各 4–6 秒建成、全程不锁写。
+-- ⚠️ 应用层 SQL 一行没改就生效（靠 job_stage_match 被内联后与 where 子句结构相同）。
+-- 社招（无阶段过滤）用不到这两个索引，仍走全量 jobs_search_doc_gin —— 已知边界，不是漏配。
+-- 生产上首次创建请用 CONCURRENTLY；本文件是幂等重建用，普通 create 即可。
+create index if not exists jobs_search_doc_campus_gin on jobs using gin (search_doc)
+  where status = 'active' and job_stage_match(title, job_type, jd_url, 'campus');
+create index if not exists jobs_search_doc_intern_gin on jobs using gin (search_doc)
+  where status = 'active' and job_stage_match(title, job_type, jd_url, 'intern');
 
 -- 注：原 jobs_title_trgm_idx / jobs_company_trgm_idx（pg_trgm GIN，title/company ILIKE 辅助）已于
 -- 2026-06-20 下架——生产实测 5 天 0 次 idx_scan（搜索的 ilike 都在 FTS 收窄后的小集合上过滤、用不到它们），
