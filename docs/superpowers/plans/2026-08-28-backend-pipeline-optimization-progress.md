@@ -41,25 +41,25 @@ P3：#10 liveness-only TIMEOUT=25s 偏松；#11 sweep_absent_jobs 双查询；#1
 ## 优化清单（按 ROI 排序，实施时逐项打勾；草案，待 CI 数据线校准）
 
 ### 批次 1：探活/富化 正确性 + 预算重分配（最高 ROI）
-- [ ] 1.1 enrich_row 网络异常与真 miss 分流：fetch 异常走 `err` 不盖 enrich_checked_at；持久失败死信升级（复用 enrich_fail_count），sweep 队列过滤死信（治「盖活章」根因，P0）
-- [ ] 1.2 fetch_liveness_queue 加 ~20h 冷却（HK SQL + Supabase 两路径），消同岗日探 3 次 + 12 adapter 双探（探活量预计 -55%，预算自动流向 stale 岗）
-- [ ] 1.3 wecruit 空壳判死扩到 postType=campus/intern，并清剩余 ~60 条存量
-- [ ] 1.4 enrich-backlog matrix：移除 google（空跑）；补 avature/wt/tencent/vivo（有正文能力不被 drain）；liveness-sweep matrix 补 avature
-- [ ] 1.5 盲区探活器补齐（12,775 岗零覆盖）：先 jd/ashby/antgroup（62%），再 haier/mihoyo/iguopin/meituan_campus/phenom/tencent_music/alibaba_campus/pinduoduo；每个探活器判死信号必须真伪 id live 对拍，宁可漏判不可错杀（适合派 Codex 写、CC live 验收）
-- [ ] 1.6 feishu 1,192 条存量坏链清理（代码门已在，用 _detail_portal_closed 逐租户 detail 确认后批量标 expired；核验样本量匹配影响面）
+- [x] 1.1 enrich_row 网络异常与真 miss 分流（f782bf9）：巡检路径 fetch 异常返 'err' 不写库不盖章；backlog 路径保持 miss+fail_count 有界重试（防无限回队）；熔断分子改 miss+err。★取舍：未做「自动死信→expired」升级——宁可漏判红线下，永久 miss 岗留给渠道级判死器处理
+- [x] 1.2 巡检 20h 冷却（f782bf9，env LIVENESS_COOLDOWN_HOURS，HK+Supabase 两路径都加）
+- [x] 1.3 wecruit 空壳存量：live 探针实测 134 个 hotjob 源中 6 个渠道未发布，其岗**已全部是 removed（712 条）**——并行 session 清理已覆盖；歌尔校招渠道现探测通过（租户已发布，自愈门生效），无需动库
+- [x] 1.4 矩阵修正（f782bf9）：liveness-sweep 补 avature；enrich-backlog 补 wt/tencent/vivo/avature/huawei；google 是误报（registry 有 _detail_google），改的是过时注释
+- [x] 1.5 盲区探活器 9/11 家接入（2b1d465 + 03c30a0，~12,460 岗）：jd/antgroup/haier/ashby/mihoyo/tencent_music/iguopin/pinduoduo/meituan_campus；全部真伪 id live 对拍 + 集成后 live 冒烟全过 + 33 mock 单测。国聘顺带实锤 40 个 deadline 已过的僵尸岗（接口 status=2），进 sweep 后自动清。遗留：alibaba_campus（133 岗，13 个 BU 域独立 cookie+CSRF 会话，接口已验证 content:null=撤岗，单独排期）；phenom 走浏览器审计道
+- [x] 1.6 feishu 存量坏链已清（2026-08-28 live）：69 个 feishu 源逐租户 _detail_portal_closed 探测，11 个门户关闭（拓竹380/Momenta249/面壁121/小马智行69/商汤65/无问芯穹47/欢乐互娱27/XREAL23/道旅21/极致4）与审阅点名完全吻合；抽 3 条真实 jd_url 终验全 404 → **1,006 条 active 标 removed**（可复活口径，should_skip 门挡重灌，循环重生不会再发生）。展示态死链主因清除
 
-### 批次 2：Workflow 配置硬化（纯 yml，低风险）
-- [ ] 2.1 liveness-sweep workers fallback '10'→'6'（对齐文档，压连接峰值）
-- [ ] 2.2 enrich-crawl 加 concurrency 组 + guard job（仿 enrich-backlog）
-- [ ] 2.3 dead-link-audit 主 audit job 加 max-parallel: 3
-- [ ] 2.4 补 timeout-minutes：purge-expired 30 / maintenance-vacuum 60 / migrate 20 / jobs-db-migrate 60 / db-report 30 / dump-jobs-schema 10
-- [ ] 2.5 pip 依赖缓存：高频 workflow 全部用 setup-python 的 cache: pip（enrich-backlog 每天 96 次冷安装是重灾区）
-- [ ] 2.6 enrich-crawl 的 Playwright 改条件安装（httpx tier 不装）
-- [ ] 2.7 campus-crawl gate job 去掉 setup-python（用 runner 自带 python3）
-- [ ] 2.8 cron 错峰：22:00-22:40 四重档叠加拆开；campus-official-pages 20:00→20:20
-- [ ] 2.9 参数一致性：dead-link-audit limit 描述 1500 改 1200（以实际为准）；daily-crawl 删 sweep_limit 死参数
-- [ ] 2.10 dump-jobs-schema 改连 HK 库（JOBS_DATABASE_URL）
-- [ ] 2.11 ops-watchdog 从 dry-run 转真告警（repo Variable OPS_WATCHDOG_APPLY=true，先核对 watchdog 输出质量再开）
+### 批次 2：Workflow 配置硬化（2412c31，纯 yml）
+- [x] 2.1 liveness-sweep workers fallback '10'→'6'
+- [x] 2.2 enrich-crawl concurrency 组 + guard job + httpx 档跳过 chromium
+- [x] 2.3 ★决定不做 dead-link-audit max-parallel:3——审计产能是稀缺品（SPA 轮检曾拖到 37 天），浏览器分片 DB 写入率低、连接占用可忽略，收紧并发会重新引入产能坍缩
+- [x] 2.4 timeout 补齐：purge 45（实测 08-18 跑满 6h 被杀）/ vacuum 90 / migrate 30 / jobs-db-migrate 60 / db-report 30 / dump-jobs-schema 10
+- [x] 2.5 pip 缓存：20 个 workflow 的 setup-python 全部加 cache:pip（insight-enrich.yml 由 Codex 线负责）
+- [x] 2.6 = 2.2 一并做
+- [x] 2.7 campus-crawl gate 去 setup-python（每天 72 次纯开销）
+- [x] 2.8 错峰：liveness-sweep 4/12/20→5/13/21（enrich-crawl 实测均值 129min，20:00 必叠跑）；campus-official-pages 20:00→20:20。22:40 gap-funnel 维持（浏览器档轻 DB 占用）
+- [x] 2.9 参数一致性：audit limit 描述改 1200；daily-crawl 删 sweep_limit
+- [x] 2.10 dump-jobs-schema 改连 HK 库
+- [!] 2.11 OPS_WATCHDOG_APPLY=true 被权限分类器拦（gh variable set 不可执行）→ **需用户手动**：repo Settings → Variables 加 OPS_WATCHDOG_APPLY=true，watchdog 才会真开 Issue 告警
 
 ### 批次 3：爬虫代码效率与静默失败治理
 - [ ] 3.1 robots.txt host 级进程缓存（每轮省 700-800 请求）
