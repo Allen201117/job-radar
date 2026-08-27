@@ -21,6 +21,7 @@ from datetime import datetime, timezone, timedelta
 
 import db
 import insight_engine as E
+import llm_budget
 import official_cninfo as CN
 import official_edgar as EDG
 import ops_runs
@@ -253,15 +254,63 @@ def drain_one_company(sb, company, t3=False):
 # 见 docs/superpowers/specs/2026-06-20-career-insights-supply-upgrade-design.md。
 # ============================================================
 T3_TTL_DAYS = 180  # 经验类复核更慢
-# 多维查询包：每条定向检索一个主题、路由到对应**已有**维度（不新增 dimension）。
-# 成本：N 条查询/公司 × 多源 → 受免费额度，每天约处理 总额度/(N×活跃源数) 家；深度优先、长尾慢铺。
-T3_QUERY_PACK = [
-    {"topic": "加班文化", "query": "{c} 加班 工作强度 文化 996 节奏 怎么样", "dimension": "culture"},
-    {"topic": "实习体验", "query": "{c} 实习 实习生 体验 待遇 转正 怎么样", "dimension": "culture"},
-    {"topic": "年终奖", "query": "{c} 年终奖 发几个月 奖金 调薪 福利", "dimension": "compensation_intensity"},
-    {"topic": "晋升发展", "query": "{c} 晋升 涨薪 职级 发展 机会 天花板", "dimension": "path"},
-    {"topic": "面试难度", "query": "{c} 面试 难度 流程 几轮 体验 通过", "dimension": "hiring"},
-]
+# 多维查询包目录：每条定向检索一个主题、路由到对应**已有**维度（不新增 dimension）。
+# 成本：每个主题 ≈ 1 次 writer + ~2.7 次 judge ≈ 3.7 次 LLM 调用 → **主题数直接等比放大每家公司的账单**。
+# 目录保留全部历史主题（含已下架的两个），改主题不用改代码，见下面 T3_DEFAULT_TOPICS 注释。
+T3_TOPIC_CATALOG = {
+    "加班文化": {"topic": "加班文化", "query": "{c} 加班 工作强度 文化 996 节奏 怎么样", "dimension": "culture"},
+    "实习体验": {"topic": "实习体验", "query": "{c} 实习 实习生 体验 待遇 转正 怎么样", "dimension": "culture"},
+    "年终奖": {"topic": "年终奖", "query": "{c} 年终奖 发几个月 奖金 调薪 福利", "dimension": "compensation_intensity"},
+    "晋升发展": {"topic": "晋升发展", "query": "{c} 晋升 涨薪 职级 发展 机会 天花板", "dimension": "path"},
+    "面试难度": {"topic": "面试难度", "query": "{c} 面试 难度 流程 几轮 体验 通过", "dimension": "hiring"},
+}
+
+# 默认只跑 3 个主题（2026-08-27 创始人拍板：用深度换广度）。
+# 【为什么砍】LLM 花费 86% 压在 T3 这一条链上：5 主题 × ~3.7 次 ≈ 每家 15 次调用，同样预算每天
+#   只覆盖 ~8 家公司；砍到 3 主题后每家 ~9 次，同预算能覆盖 ~13 家。每家洞察薄一点，但**覆盖面**
+#   对求职者更值钱（抽屉里有内容的公司多一半，胜过少数公司多两张卡）。
+# 【砍哪两个：按「这个维度有没有别的免费供给层」取舍，不是拍脑袋】
+#   ✂ 实习体验 —— 和「加班文化」同属 culture 维度（同一分区里两条群体印象、彼此重复），且只服务
+#     实习生这一细分人群；culture 又是 PRD §8.1 里风险最高、明确要求「做浅做克制」的维度，
+#     本来就不该吃掉 T3 40% 的预算。
+#   ✂ 面试难度 —— 写进 hiring 维度，而 hiring 已由 T1 派生层（lib/insight-derive.ts，读时现算、
+#     零 LLM 零网络）稳定供给；PRD §8.1 给 hiring 标注的供给层本来就是「T1 派生」。砍掉它，
+#     抽屉里不会有任何一个分区变空。
+# 【保留的 3 个：各自独占一个「没有免费替代供给」的维度】
+#   年终奖   → compensation_intensity：T1 只能从 JD 里明写的薪资推薪资带，而国内官网岗位绝大多数
+#              不写薪资 → 实际覆盖极低；「到手多少」是求职者判断「值不值得去」最硬的一条。
+#   加班文化 → culture：只有 T3 供给，砍了「公司文化 / 温馨提示」分区就没内容。
+#   晋升发展 → path：只有 T3 供给（T1/T2 都不产 path），砍了「进入路径」分区永久空白。
+# 【怎么调回来】不用改代码：设 env INSIGHT_T3_TOPICS（逗号分隔主题名，取值见 T3_TOPIC_CATALOG），
+#   例：INSIGHT_T3_TOPICS='年终奖,加班文化,晋升发展,实习体验,面试难度' 即恢复五主题。
+# 顺序 = 预算耗尽时的优先级（enrich_company_t3 逐条跑，额度用尽就 break）：先钱、再强度、再发展。
+T3_DEFAULT_TOPICS = ("年终奖", "加班文化", "晋升发展")
+
+
+def resolve_query_pack(raw=None, catalog=None, default_topics=None):
+    """纯函数：INSIGHT_T3_TOPICS 的原始字符串 → 查询包列表（顺序按 env 给的顺序）。
+
+    容错走 fail-soft：目录里没有的主题名只告警并跳过，全部无效 / 未配置则回落默认 3 主题——
+    repo Variable 打错一个字不该让整轮 T3 变成空转。
+    """
+    catalog = catalog if catalog is not None else T3_TOPIC_CATALOG
+    default_topics = default_topics if default_topics is not None else T3_DEFAULT_TOPICS
+    names, seen = [], set()
+    for chunk in str(raw or "").replace("，", ",").replace("、", ",").split(","):
+        name = chunk.strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        if name in catalog:
+            names.append(name)
+        else:
+            print(f"⚠ INSIGHT_T3_TOPICS 里的「{name}」不在主题目录中，已跳过（可选：{'/'.join(catalog)}）")
+    if not names:
+        names = [n for n in default_topics if n in catalog]
+    return [dict(catalog[n]) for n in names]
+
+
+T3_QUERY_PACK = resolve_query_pack(os.environ.get("INSIGHT_T3_TOPICS"))
 _ROUTER = search_router.default_router()  # 多源搜索；未配 key 的源自动跳过（配哪个用哪个）
 
 
@@ -334,9 +383,18 @@ def enrich_company_t3(sb, profile):
     替换旧代：本轮写完后退役本次之前的 public_web active（跨维度），不堆积老聚合（保即时性）。"""
     run_start = _now()
     wrote_any = False
+    # LLM 花费的 86% 在这条链上（2026-08-27 成本审计）。搜索侧本来就有日顶（下面 _ROUTER.remaining），
+    # LLM 侧此前**完全没有天花板** → 花多少全看队列多长，账户欠费了都没人察觉。这里补上第二道闸。
+    # 记账口径：gate 按主题查（与搜索额度同频），**扣减按 engine 的真实调用数**（不按估算值预扣），
+    # 所以 cap 的单位就是「真实 LLM 调用次数」，与 llm_budget 语义一致。
+    # 粒度取「每公司结算一次」：最坏超出一家公司的用量（~11 次），换掉逐次调用的跨洋往返。
+    llm_calls_before = E.llm_usage_totals().get("calls", 0)
     for pack in T3_QUERY_PACK:
         if _ROUTER.remaining(sb) <= 0:
-            break  # 额度用尽 → 剩余主题留到下轮
+            break  # 搜索额度用尽 → 剩余主题留到下轮
+        if llm_budget.remaining(sb) <= 0:
+            print(f"  [t3] {profile['company']}: LLM 日顶已到，剩余主题留到下轮")
+            break
         try:
             results = _ROUTER.search(sb, pack["query"].format(c=profile["company"]))
             if not results:
@@ -360,6 +418,11 @@ def enrich_company_t3(sb, profile):
         except Exception as e:
             print(f"  [t3-err] {profile['company']}/{pack['topic']}: {type(e).__name__}: {str(e)[:120]}")
             continue
+    # 本公司实际花掉多少次 LLM，如实记进日顶台账（失败只打日志，绝不阻断主任务）
+    _spent = max(0, E.llm_usage_totals().get("calls", 0) - llm_calls_before)
+    if _spent:
+        llm_budget.check_and_consume(sb, kind="insight_t3", n=_spent)
+
     try:
         if wrote_any:
             # 退役本次之前的 public_web active（跨维度），换最新一代
@@ -453,6 +516,9 @@ def main():
             started_at=started_at,
             finished_at=_now(),
         )
+        # 本轮真实 token 用量落台账（2026-08-27 前代码里从不记 usage，只能按字符数瞎估花费，
+        # 账户 8-25 欠费了都没人察觉）。写失败只打日志，不阻断。
+        E.record_usage_ops_run(sb)
         _llm_health_gate()
         return
     seeded = 0
@@ -474,6 +540,7 @@ def main():
         started_at=started_at,
         finished_at=_now(),
     )
+    E.record_usage_ops_run(sb)   # 同上：真实 token 用量落台账
     _llm_health_gate()
 
 

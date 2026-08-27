@@ -244,9 +244,11 @@ class TestT3(unittest.TestCase):
         items = store.get("insight_items", [])
         self.assertTrue(any(op == "insert" and r["dimension"] == "culture" and r["origin"] == "public_web"
                             for op, r in items))
-        # 多维查询包：年终奖→comp、晋升→path、面试难度→hiring 都该写到对应维度
+        # 多维查询包：当前生效的每个主题都该写到它自己的维度（主题清单可由 INSIGHT_T3_TOPICS 调，
+        # 所以这里从 T3_QUERY_PACK 现取期望维度，别再写死一组字面量）
         dims = {r["dimension"] for op, r in items if op == "insert"}
-        self.assertTrue({"compensation_intensity", "path", "hiring"} <= dims, f"应覆盖多维，实得 {dims}")
+        expected_dims = {p["dimension"] for p in B.T3_QUERY_PACK}
+        self.assertTrue(expected_dims <= dims, f"应覆盖多维 {expected_dims}，实得 {dims}")
         self.assertTrue(any(op == "insert" and r.get("valid_until") for op, r in items))  # 带过期日(保鲜)
         self.assertTrue(store.get("insight_sources"))   # 多来源已附（过共识门）
         self.assertTrue(any(p.get("status") == "retired"

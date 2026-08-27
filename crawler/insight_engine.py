@@ -9,23 +9,42 @@
 import json
 import os
 import re
+import sys
 import time
+import unicodedata
 from typing import Optional
 
 import httpx
 
 DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1"
-DEFAULT_MODEL = "Pro/deepseek-ai/DeepSeek-V3.1"
+# 主模型（2026-08-27 换）：本项目的 LLM 活儿只有「结构化 JSON 抽取 + 事实判定」，不需要顶级推理，
+# 后面还有纯函数校验 + 判官阈值 0.6 + ≥2 源共识三道硬门兜底 → 挑便宜够用的。
+# ¥0.7/M 输入、¥2.8/M 输出（旧 Pro/deepseek-ai/DeepSeek-V3.1 是 ¥4/¥12，省 ~80%）。
+# ⚠️ 不带 `Pro/` 前缀：`Pro/` 不是更好的档，只是**只能扣充值余额**；非 Pro 同名模型还能吃赠费余额。
+# live 实测（2026-08-27，同一 JSON 抽取 prompt）：in=43 / out=14，返回 JSON 完全正确、无思考前缀。
+DEFAULT_MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"
 # 备用模型：主模型被 SiliconFlow 服务端限流（429 code 50609「System is too busy now」）时降级。
-# 刻意选**不同厂商**——2026-07-31 起 DeepSeek-V3 整个系列被挤爆、持续 3 天 100% 429，
-# 同系兜底救不了；退避重试同样救不了（服务端容量问题会持续数天，不是瞬时抖动）。
-DEFAULT_FALLBACK_MODEL = "Qwen/Qwen2.5-72B-Instruct"
+# 刻意选**不同厂商**（智谱 GLM vs 阿里 Qwen）——2026-07-31 起 DeepSeek-V3 整个系列被挤爆、
+# 持续 3 天 100% 429，同厂系兜底救不了；退避重试同样救不了（服务端容量问题会持续数天）。
+# ⚠️ 降级模型**必须是非思考模式**：思考模型会先吐一大段推理再给 JSON，把 max_tokens 撑爆导致
+# JSON 被截断（本项目在扩源链踩过 max_tokens 截断的坑，commit 7073224）。
+# live 实测（2026-08-27，同一 prompt）：GLM-4-32B-0414 out=15、reasoning_content 为空 → 非思考；
+# 作为反例，tencent/Hunyuan-A13B-Instruct out=159 + 244 字符 reasoning、Qwen/Qwen3-8B out=269 → 一律不用。
+# 注：GLM-4-32B-0414 上下文 32K；judge 一次喂整包来源（每条截断 1500 字符），
+# 若日后放大 per-source 截断或来源条数，先复核这条上下文余量。
+DEFAULT_FALLBACK_MODEL = "THUDM/GLM-4-32B-0414"
 TIMEOUT = 40
 
 # 判官放行阈值：entailment 且置信 ≥ 此值 → 候选 active；[0.4, 此值) → pending_review；其余 drop
 JUDGE_CONFIDENCE_MIN = 0.6
 JUDGE_REVIEW_FLOOR = 0.4
 EXPERIENCE_MIN_PUBLISHERS = 2
+
+# writer 喂多少条来源（省 token 大头：judge 只跑一次而 writer 输入随来源线性涨）。
+# ⚠️ 必须是**前 N 条前缀截断**：writer 返回的 source_idx 要能直接索引调用方的完整 sources 列表。
+# 展示门（lib/insight-verification.ts）要的 sample_size 来自**判官**从原文识别的样本量、
+# judge 仍看整包来源 → 截 writer 输入不影响 `sample_size >= 5` 与 ≥2 publisher 两道门。
+WRITER_MAX_SOURCES = 8
 
 
 def llm_config() -> dict:
@@ -86,6 +105,61 @@ def is_account_error(status_code: int, message: str = "") -> bool:
     return (("balance" in text and "insufficient" in text) or "余额不足" in text)
 
 
+# ---------- LLM 用量台账（2026-08-27 加） ----------
+# 背景：以前代码里**没有任何地方读 API 返回的 usage**，花费只能按字符数瞎估，账户欠费都要事后才发现。
+# 这里在唯一调用点 chat_content 把真实 token 数记下来：
+#   ① 每次调用打一行 `[llm-usage] …`，CI 日志可直接 grep 聚合；
+#   ② 进程内累计 `llm_usage_totals()`，cron 收尾可打总账 / 写 ops_runs 旁路台账。
+# 记账**永远不能阻断主任务**：所有解析与写库都吞异常。
+_LLM_USAGE = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "by_model": {}}
+
+
+def _record_usage(model: str, usage: Optional[dict], tag: str = "") -> None:
+    try:
+        u = usage if isinstance(usage, dict) else {}
+        prompt = int(u.get("prompt_tokens") or 0)
+        completion = int(u.get("completion_tokens") or 0)
+        _LLM_USAGE["calls"] += 1
+        _LLM_USAGE["prompt_tokens"] += prompt
+        _LLM_USAGE["completion_tokens"] += completion
+        per = _LLM_USAGE["by_model"].setdefault(
+            model, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0})
+        per["calls"] += 1
+        per["prompt_tokens"] += prompt
+        per["completion_tokens"] += completion
+        # 单行、字段固定 → CI 日志 `grep '\[llm-usage\]'` 即可聚合
+        print(f"[llm-usage] model={model} tag={tag or '-'} in={prompt} out={completion}")
+    except Exception as exc:  # noqa: BLE001 - 记账不能打断主任务
+        sys.stderr.write(f"[llm-usage] 记账失败（主任务不受影响）: {type(exc).__name__}\n")
+
+
+def llm_usage_totals() -> dict:
+    """本进程累计 LLM 用量（真实 token，不是字符数估算）。"""
+    return {"calls": _LLM_USAGE["calls"],
+            "prompt_tokens": _LLM_USAGE["prompt_tokens"],
+            "completion_tokens": _LLM_USAGE["completion_tokens"],
+            "by_model": {m: dict(v) for m, v in _LLM_USAGE["by_model"].items()}}
+
+
+def reset_llm_usage() -> None:
+    _LLM_USAGE.update(calls=0, prompt_tokens=0, completion_tokens=0, by_model={})
+
+
+def record_usage_ops_run(supabase, module: str = "llm_usage", started_at=None) -> bool:
+    """把本进程累计用量写一条 ops_runs 旁路台账（复用 crawler/ops_runs.py 范式）。
+    调用方在 cron 收尾时调；失败只告警、返回 False，绝不抛。"""
+    try:
+        import ops_runs  # 延迟导入：insight_engine 本身不依赖 supabase 栈
+        totals = llm_usage_totals()
+        if not totals["calls"]:
+            return False  # 本轮没调过 LLM → 不写空账
+        return ops_runs.record_ops_run(supabase, module, totals,
+                                       status="success", started_at=started_at)
+    except Exception as exc:  # noqa: BLE001 - 旁路台账不能打断主任务
+        sys.stderr.write(f"[llm-usage] ops_runs 台账写入失败（主任务不受影响）: {type(exc).__name__}\n")
+        return False
+
+
 def parse_json_loose(text: str) -> dict:
     """先直接 parse，失败再抠第一个 {...} 块（与 lib/llm.js parseJsonLoose 同行为）。"""
     s = str(text or "").strip()
@@ -99,7 +173,8 @@ def parse_json_loose(text: str) -> dict:
 
 
 def chat_content(messages: list, temperature: float = 0.1, max_tokens: int = 1024,
-                 client: Optional[httpx.Client] = None, timeout: float = TIMEOUT) -> str:
+                 client: Optional[httpx.Client] = None, timeout: float = TIMEOUT,
+                 tag: str = "") -> str:
     """单次 SiliconFlow chat completion，返回**原始 content 字符串**（未解析）。
     未配置 / 网络 / HTTP 错误均抛异常。给需要自定义 / 容错解析（如 generate_targets 的截断兜底）的调用方用。"""
     cfg = llm_config()
@@ -136,6 +211,7 @@ def chat_content(messages: list, temperature: float = 0.1, max_tokens: int = 102
             resp.raise_for_status()  # 非 2xx（含全部模型都重试用尽的 429/503）→ 抛
             data = resp.json()
             content = (((data.get("choices") or [{}])[0]).get("message") or {}).get("content") or ""
+            _record_usage(model, data.get("usage") if isinstance(data, dict) else None, tag)
             _record_llm(True)
             return content
     except httpx.HTTPStatusError as e:
@@ -153,10 +229,13 @@ def chat_content(messages: list, temperature: float = 0.1, max_tokens: int = 102
 
 
 def chat_json(messages: list, temperature: float = 0.1, max_tokens: int = 1024,
-              client: Optional[httpx.Client] = None, timeout: float = TIMEOUT) -> dict:
-    """单次 SiliconFlow chat completion，返回解析后的 JSON。未配置 / 网络 / HTTP 错误均抛异常。"""
+              client: Optional[httpx.Client] = None, timeout: float = TIMEOUT,
+              tag: str = "") -> dict:
+    """单次 SiliconFlow chat completion，返回解析后的 JSON。未配置 / 网络 / HTTP 错误均抛异常。
+    tag 只用于用量日志归类（如 t3-writer / t3-judge），不影响请求本身。"""
     return parse_json_loose(chat_content(messages, temperature=temperature,
-                                         max_tokens=max_tokens, client=client, timeout=timeout))
+                                         max_tokens=max_tokens, client=client, timeout=timeout,
+                                         tag=tag))
 
 
 # ---------- 纯决策逻辑（单测覆盖；这是「机器验证替代人审」的闸门核心） ----------
@@ -176,6 +255,38 @@ def consensus_ok(grade: str, n_publishers: int) -> bool:
     if grade == "experience":
         return (n_publishers or 0) >= EXPERIENCE_MIN_PUBLISHERS
     return (n_publishers or 0) >= 1
+
+
+# ---------- 引文预筛（judge 之前的零成本纯函数门） ----------
+# writer 每条 claim 都要给一句出自来源原文的 quote。如果这句话**根本不在任何来源正文里**，
+# 那它就是编的，本来就该丢——这一步用字符串匹配就能判，不必花一次判官调用（省 ~12% 调用）。
+# ⚠️ 刻意做得宽松，宁可放行给判官也不误杀：
+#   ① 归一后再比（NFKC 抹平全/半角、casefold、去掉全部空白与常见标点）；
+#   ② 引文里的省略号按片段拆开，每段都要能在**同一条**来源里找到（拼接多源 = 编造）；
+#   ③ 引文缺失 / 归一后过短 / 来源没有正文 → 不做判断，一律放行。
+_QUOTE_ELLIPSIS = re.compile(r"\.{2,}|。{2,}|…+|、{2,}")
+_QUOTE_NOISE = re.compile(
+    r"[\s　]+|[，。、；：！？「」『』“”‘’\"'()\[\]{}【】《》〈〉…—–\-_·~`,.;:!?/\\|]+")
+QUOTE_MIN_CHARS = 4  # 归一后短于此的片段信息量不足，不拿来判真伪
+
+
+def _normalize_quote_text(value: str) -> str:
+    """归一到「只剩实义字符」：全角→半角、大小写、空白与标点全去掉。"""
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return _QUOTE_NOISE.sub("", text)
+
+
+def quote_supported(quote: Optional[str], texts: list) -> bool:
+    """引文是否真出自某条来源正文（容忍空白 / 标点 / 全半角差异）。拿不准一律 True（放行）。"""
+    fragments = [f for f in (_normalize_quote_text(part)
+                             for part in _QUOTE_ELLIPSIS.split(str(quote or "")))
+                 if len(f) >= QUOTE_MIN_CHARS]
+    if not fragments:
+        return True  # 没给引文 / 引文过短 → 不可判定，交给判官
+    haystacks = [h for h in (_normalize_quote_text(t) for t in (texts or [])) if h]
+    if not haystacks:
+        return True  # 来源没有正文可比 → 不可判定
+    return any(all(f in h for f in fragments) for h in haystacks)
 
 
 def final_status(verdict: str, confidence: float, grade: str, n_publishers: int,
@@ -219,12 +330,25 @@ _JUDGE_SYS = (
 )
 
 
+def writer_max_sources() -> int:
+    """writer 单次最多喂几条来源（env INSIGHT_WRITER_MAX_SOURCES 可覆盖；非法值回默认）。"""
+    try:
+        n = int(os.environ.get("INSIGHT_WRITER_MAX_SOURCES", "") or WRITER_MAX_SOURCES)
+    except (TypeError, ValueError):
+        return WRITER_MAX_SOURCES
+    return n if n > 0 else WRITER_MAX_SOURCES
+
+
 def extract_claims(company: str, dimension: str, sources: list,
                    client: Optional[httpx.Client] = None) -> list:
-    """writer：从 sources（[{url,publisher,text}]）抽取候选 claim 列表（每条绑 source_idx + quote）。"""
+    """writer：从 sources（[{url,publisher,text}]）抽取候选 claim 列表（每条绑 source_idx + quote）。
+
+    只喂**前 N 条**（默认 8）：搜索路由一次能出 18-20 条，writer 输入随条数线性涨钱，
+    而排序靠前的结果相关性最高。前缀截断保证 source_idx 仍能索引调用方的完整 sources。
+    """
     guide = _DIM_GUIDE.get(dimension, "")
     blocks = []
-    for i, s in enumerate(sources or []):
+    for i, s in enumerate((sources or [])[:writer_max_sources()]):
         text = (s.get("text") or "")[:1500]
         blocks.append(f"[来源{i}] publisher={s.get('publisher') or '未知'}\n{text}")
     user = (
@@ -234,7 +358,8 @@ def extract_claims(company: str, dimension: str, sources: list,
         "\"sample_size\":\"experience给整数否则空\"}]}"
     )
     out = chat_json([{"role": "system", "content": _WRITER_SYS},
-                     {"role": "user", "content": user}], temperature=0.2, max_tokens=900, client=client)
+                     {"role": "user", "content": user}], temperature=0.2, max_tokens=900,
+                    client=client, tag="t3-writer")
     claims = out.get("claims") if isinstance(out, dict) else None
     if not (isinstance(claims, list) and claims):  # 排查 writer 抽空：打印模型原始返回
         print(f"  [t3-writer] {company}/{dimension}: 0 claims; out={str(out)[:260]}")
@@ -259,7 +384,8 @@ def judge_claim(company: str, dimension: str, claim_content: Optional[str] = Non
         f"\n\n【来源原文包】\n" + "\n\n".join(blocks)
     )
     out = chat_json([{"role": "system", "content": _JUDGE_SYS},
-                     {"role": "user", "content": user}], temperature=0.0, max_tokens=200, client=client)
+                     {"role": "user", "content": user}], temperature=0.0, max_tokens=200,
+                    client=client, tag="t3-judge")
     verdict = str(out.get("verdict", "neutral")).strip().lower() if isinstance(out, dict) else "neutral"
     if verdict not in ("entailment", "contradiction", "neutral"):
         verdict = "neutral"
@@ -294,7 +420,7 @@ def judge_claim(company: str, dimension: str, claim_content: Optional[str] = Non
 
 def run_pipeline(company: str, dimension: str, sources: list,
                  client: Optional[httpx.Client] = None) -> list:
-    """T3 经验层完整决策流水线：接地的 sources → 抽取(writer) → 逐 claim 判官 → 共识 → 定状态。
+    """T3 经验层完整决策流水线：接地的 sources → 抽取(writer) → 引文预筛 → 逐 claim 判官 → 共识 → 定状态。
     返回 [{claim, judge, status}]；DB 落库由调用方按 status 处理
     （active=展示 / pending_review=边缘队列 / drop=abstain 丢弃）。
 
@@ -308,6 +434,12 @@ def run_pipeline(company: str, dimension: str, sources: list,
         src = sources[idx] if isinstance(idx, int) and 0 <= idx < len(sources or []) else None
         if not src:
             out.append({"claim": c, "judge": None, "status": "drop"})  # 无可追溯来源 → abstain
+            continue
+        # 判官之前的零成本预筛：引文不在任何来源正文里 = 编的，直接丢，省一次 LLM 调用
+        if not quote_supported(c.get("quote"), [s.get("text") for s in (sources or [])]):
+            print(f"  [t3-quote] {company}/{dimension}: 引文不在来源原文里 → drop（未调判官）"
+                  f" quote={str(c.get('quote'))[:40]}")
+            out.append({"claim": c, "judge": None, "status": "drop"})
             continue
         j = judge_claim(company, dimension, c.get("content", ""), sources, client=client)
         verified = [sources[i] for i in j["supported_source_idxs"]]

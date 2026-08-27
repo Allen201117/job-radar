@@ -17,7 +17,7 @@
 ## 1. 当前状态锚点（Codex 先看这些文件了解现状）
 
 - `lib/insight-derive.ts` — T1 派生（读时现算）：`deriveTiming` / `deriveHiring`（含 `classifyHiringSignal` 大小年信号 + `payload.hiring_signal`）/ `deriveSalaryBand` / `deriveCompanyInsights(jobs, now, opts)`。opts.headcountBand 已接入。
-- `crawler/insight_backlog.py` — T2/T3 drain。T3 已是**多维查询包** `T3_QUERY_PACK`（加班文化/实习体验/年终奖/晋升/面试难度 → 各维度 culture/comp/path/hiring），`enrich_company_t3` 逐主题检索 + replace-on-refresh 跨维度退役；`write_experience(…, dimension, topic)`。`enrich_company`（T2）顺序 = EDGAR(美股 ticker) → 巨潮(A股名,gated) → Wikidata 回落。
+- `crawler/insight_backlog.py` — T2/T3 drain。T3 已是**多维查询包** `T3_QUERY_PACK`（2026-08-27 起**默认 3 主题**：年终奖/加班文化/晋升发展 → comp/culture/path；「实习体验」「面试难度」已砍，仍在 T3_TOPIC_CATALOG 里、env INSIGHT_T3_TOPICS 可调回），`enrich_company_t3` 逐主题检索 + replace-on-refresh 跨维度退役；`write_experience(…, dimension, topic)`。`enrich_company`（T2）顺序 = EDGAR(美股 ticker) → 巨潮(A股名,gated) → Wikidata 回落。
 - `crawler/official_edgar.py` — SEC EDGAR：`get_listing_by_ticker`（ticker→CIK→submissions→listing）+ `financials_from_companyfacts`（XBRL 营收/净利/同比/员工，折进同一 listing item 的 content + `payload.financials`）。
 - `crawler/official_cninfo.py` — 巨潮 A 股：`get_listing_by_name` / `find_stock` / `exchange_from_code`。**默认关**（`INSIGHT_CNINFO_ENABLED`）。
 - `crawler/search_router.py` — 多源搜索路由（博查/Tavily/Serper/千帆），各源日顶 `search_usage`（迁移 156），默认免费安全档。
