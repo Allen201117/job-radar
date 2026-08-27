@@ -138,6 +138,39 @@ class JdAdapter(BaseAdapter):
         return jobs
 
 
+# 京东列表行逐岗自报事业群名 positionDeptName，取值来自京东官方 BU 字典
+# （POST /web/job/job_allparams 的 deptList，2026-08-27 live 核实共 10 个顶层事业群；
+# 同批 1740 条列表里实际出现 9 个，且**永远是顶层名、不带下级路径**，兄弟字段
+# positionDeptCode / positionDeptCodeFullpath 全为空串 → 只能按名字精确匹配）。
+#
+# 必投清单（lib/must-apply-list.json）把「京东科技」「京东物流」记成独立公司
+# （pattern 分别是 %京东科技% / %京东物流%），而本 adapter 过去把 company 硬编码成「京东」，
+# 于是这两家明明有在招岗却被算成覆盖缺口。这里按部门把它们派生出来：
+# crawler/normalizer.normalize() 里是 `"company": raw.company or company`，
+# 即 RawJob.company 非空时覆盖 sources.company，留空则回落 sources.company（「京东」）。
+#
+# ⚠️ 本设计成立的前提：「京东」在必投清单里是子串匹配 %京东%，而「京东科技」「京东物流」
+# 都含「京东」二字 → 派生之后京东母公司**仍然算覆盖**，不会顾此失彼。
+#
+# 只映这两家、其余一律回落的理由：
+#   - 「国际事业部」「探索研究院」（live 共 60 岗）不含「京东」二字，一旦派生反而会把这些岗
+#     踢出京东的覆盖统计 —— 净亏，绝不派生。
+#   - 京东零售 / 京东健康 / 京东工业 / 京东产发 / 京东集团 目前不在必投清单里，派生了换不来
+#     任何覆盖收益，按最小改动留空回落；将来清单收录了，往下表加一行即可。
+#   - ⚠️「京东方」(BOE) 是毫不相干的另一家公司（清单里独立一行 %京东方%），任何时候都不许派生到它。
+# 新增映射前请先核对 lib/must-apply-list.json 里的写法，逐字一致，别凭印象编。
+_DEPT_TO_COMPANY = {
+    "京东科技": "京东科技",
+    "京东物流": "京东物流",
+}
+
+
+def _derive_company(row: dict) -> str:
+    """按列表行自报的事业群派生子公司归属；未知/缺失部门返回 "" 回落 sources.company。"""
+    dept = (row.get("positionDeptName") or "").strip()
+    return _DEPT_TO_COMPANY.get(dept, "")
+
+
 def _format_jd_job(row: dict) -> RawJob:
     requirement_id = str(row.get("requirementId") or row.get("requementId") or "").strip()
     jd_url = f"{JdAdapter.DETAIL_URL}?requementId={requirement_id}" if requirement_id else ""
@@ -146,7 +179,7 @@ def _format_jd_job(row: dict) -> RawJob:
     summary = "\n".join(part for part in [work_content, qualification] if part)
 
     return RawJob(
-        company="京东",
+        company=_derive_company(row),
         title=(
             row.get("positionNameOpen")
             or row.get("positionName")

@@ -18,12 +18,12 @@ import html as _html
 import json
 import re
 from typing import List, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
 
 import normalizer
-from .base import RawJob, resolve_detail_cap
+from .base import PageResult, RawJob, paginate_all, resolve_detail_cap
 from .playwright_base import PlaywrightAdapter
 
 
@@ -332,7 +332,10 @@ _BEISEN_DETAIL_NAMES = ("zwxq", "detail", "jobdetail", "positiondetail", "jobDet
 
 # —— 老版 SSR（C 型）专用：列表页 HTML 直出 per-job 锚点，无 JSON 接口可拦 ——
 # 详情页路径因租户而异（中核=szxq、BOE 校招=details2021…），param 多为 jobId(数字)/adId。
-_BEISEN_SSR_DETAIL_PATHS = ("szxq", "szzwxq", "xzxq", "campusxq", "zwxq", "details2021",
+# socialxq / overseasxq 是 theme2 老版 CMS 的社招 / 海外板块详情路由（2026-08-27 中芯国际 live 实测）；
+# 原来只有 campusxq，导致这类租户的社招 / 海外板块猜不出路由 → jd_url 全空 → 整源判「0 岗」丢弃。
+_BEISEN_SSR_DETAIL_PATHS = ("szxq", "szzwxq", "xzxq", "campusxq", "socialxq", "overseasxq",
+                            "zwxq", "details2021",
                             "overseadetail", "detail", "jobdetail", "szzp", "xq", "positiondetail")
 _BEISEN_SSR_PARAMS = ("jobId", "adId", "jobAdId")
 # 从 SSR 列表页抽取 per-job 锚点（jobId/adId/jobAdId=数字或 GUID + 标题文本），去重。
@@ -398,6 +401,240 @@ def _beisen_ssr_fill_summaries(jobs: List[dict]) -> None:
                 continue
 
 
+# ============================================================================
+# 老版 CMS Portal 门户（北森 theme2 SSR）——纯 httpx，零浏览器
+# ============================================================================
+# 与新版 SPA 租户的区别（2026-08-27 live 实测 smics.zhiye.com=中芯国际 563 岗）：
+#   新版：列表页是 React，HTML 里抽得到 PortalId，岗位走 POST GetJobAdPageList（→ _httpx_fetch）。
+#   老版：列表页 SSR 直出 <li><a href="/{板块}xq?jobId={id}&jc=N">，**没有 PortalId、没有那个接口**
+#         → _httpx_fetch 返回 None → 旧代码只能掉进浏览器慢车道（慢，且 _fetch_ssr 不翻页、只取首屏）。
+# 识别一律按**响应特征**（抽不到 PortalId + 列表页直出 jobId 锚点），不按域名/租户名写白名单。
+#
+# 已 live 确认的坑：
+#   ① 服务端**无条件 gzip**：httpx 自动解压（curl 要 --compressed），否则拿到乱码会误判空页。
+#   ② 列表锚点尾部带**筛选态回传参数** `&c=&p=1^-1,3^-1&ky=`，随用户当前筛选变化 →
+#      必须只留 jobId(+jc) 两个身份参数，否则同一岗算出多个 canonical_jd_url = 库里同岗多行。
+#   ③ 翻页越界仍返 **HTTP 200 + 完整页面骨架**（约 19KB）→ 只能靠「页内锚点数 == 0」判终止，
+#      绝不能靠状态码。末页页数各板块不同（实测社招 30 / 校招 25 / 海外 3）且随在招量变，不写死。
+#   ④ 模板占位岗藏在 HTML 注释里（href="" 的假行，如「光罩OPC工程师/大专/北京市海淀区」重复多条）
+#      → 解析前必须先剥掉 <!-- --> ，否则整页混进假岗。
+#   ⑤ 列表里**长标题被服务端截断**（25 字 + "..."，实测约 10% 的行），详情页 <h2> 才是全名 →
+#      截断行必须优先补详情，否则「日更快车道写截断名 / 夜间富化写全名」来回抖。
+_CMS_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+# 岗位行：<li><a href="…?jobId=…">…</a></li>。**必须锚在 <li> 上**——科伦(kelun) 这类老版 CMS
+# 的「热招职位」侧栏也有裸 <a href="/social_show?jobId=…">，而它的主列表是 <table><tr><td>，
+# 不加 <li> 约束会只捞到侧栏 10 条却自称抓全（fetch_complete=True → list-absence 误杀在招岗）。
+_CMS_ROW_RE = re.compile(
+    r"<li[^>]*>\s*<a\s[^>]*href=\"(?P<href>[^\"]*[?&](?:jobId|jobAdId|adId)=[^\"]+)\"[^>]*>(?P<body>.*?)</a>",
+    re.S | re.I)
+_CMS_SPAN_RE = re.compile(r"<span[^>]*>(.*?)</span>", re.S | re.I)
+_CMS_TH_RE = re.compile(r"<th[^>]*>(.*?)</th>", re.S | re.I)
+_CMS_PAGE_LINK_RE = re.compile(r"PageIndex=(\d{1,4})", re.I)
+_CMS_ID_RE = re.compile(r"[?&](jobId|jobAdId|adId)=([^&#]+)", re.I)
+_CMS_JC_RE = re.compile(r"[?&]jc=([^&#]+)", re.I)
+_CMS_PORTAL_ID_RE = re.compile(r'PortalId"\s*:\s*"([0-9a-fA-F-]+)"')
+# 详情页（同一套 theme2 模板，中英文两版只有 label 不同）：
+#   标题 <div class="xqtitle …"><h2>岗位名</h2>
+#   字段 <li><span>职位学历：</span><b>硕士</b></li> / <li><span>Education:</span><b>Bachelor</b></li>
+#   正文 <h3>职位描述</h3><div class="xqm">…</div><h3>职位要求</h3><div class="xqm">…</div>
+_CMS_DETAIL_TITLE_RE = re.compile(
+    r"<div[^>]*class=\"[^\"]*xqtitle[^\"]*\"[^>]*>.*?<h2[^>]*>(.*?)</h2>", re.S | re.I)
+_CMS_DETAIL_FIELD_RE = re.compile(
+    r"<li[^>]*>\s*<span[^>]*>(.*?)</span>\s*<b[^>]*>(.*?)</b>", re.S | re.I)
+_CMS_DETAIL_SECTION_RE = re.compile(
+    r"<h3[^>]*>(.*?)</h3>\s*<div[^>]*class=\"xqm\"[^>]*>(.*?)</div>", re.S | re.I)
+_CMS_CITY_RE = re.compile(r"[一-龥]{2,}[省市区县]")
+_CMS_ACTION_RE = re.compile(r"查看职位|查看详情|立即申请|投递|view detail|apply", re.I)
+_CMS_TRUNCATED_RE = re.compile(r"(\.{3}|…)\s*$")
+
+_CMS_PAGE_SIZE = 10       # theme2 列表固定每页 10 条（短页 = 末页的判据）
+_CMS_MAX_PAGES = 200      # 安全上限（防接口异常翻不停）；命中即 fetch_complete=False
+_CMS_DETAIL_CAP = 800     # 逐岗补正文默认上限（详情 ~0.13s/个，中芯最大板块 293 岗 ≈ 38s）
+_CMS_TITLE_REPAIR_CAP = 120   # 即使 CRAWL_DETAIL_CAP=0（日更快车道跳过富化），仍补这么多条截断标题
+# 正文入库下限。刻意低于 count_valid_active_jobs() 的 60 字「有效在招」线：这里是从
+# <h3>+<div class="xqm"> **结构块**里取的，短 ≠ 噪声（中芯校招 6 个环保安全岗 JD 本来就只有 50 来字），
+# 存下来用户至少看得见、匹配器也读得到；「够不够 60 字算有效在招」由计数口径在读时把关，不在这一层砍。
+_CMS_SUMMARY_MIN = 20
+
+# 表头文本 → 列语义。**从最具体到最泛**匹配：「职位分类」必须在「职位」之前命中，
+# 否则含「职位」二字的表头会被一律当成标题列。
+_CMS_COL_KEYWORDS = (
+    ("职位名称", "title"), ("岗位名称", "title"), ("job title", "title"), ("job name", "title"),
+    ("position name", "title"),
+    ("职位分类", "category"), ("职位类别", "category"), ("岗位类别", "category"), ("职能", "category"),
+    ("job category", "category"), ("category", "category"),
+    ("职位学历", "education"), ("学历", "education"), ("education", "education"), ("degree", "education"),
+    ("工作地点", "location"), ("工作城市", "location"), ("work place", "location"),
+    ("location", "location"), ("城市", "location"), ("地点", "location"),
+    ("操作", "action"), ("view", "action"),
+    ("职位", "title"), ("岗位", "title"), ("position", "title"),
+)
+# 学历档次从低到高。列表常写「硕士、博士」（= 硕士及以上），并列时取**最低**档——
+# 招聘方给的是门槛下限，取高档会把本来符合条件的人筛掉。
+_CMS_EDU_ORDER = ("不限", "大专", "本科", "硕士", "博士")
+
+
+def _cms_text(fragment: Optional[str]) -> str:
+    """HTML 片段 → 纯文本（去标签 + 反转义 + 折叠空白）。"""
+    if not fragment:
+        return ""
+    text = re.sub(r"<br\s*/?>", "\n", fragment, flags=re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = _html.unescape(_html.unescape(text))
+    return re.sub(r"[ \t\r\f\v]+", " ", text).strip()
+
+
+def _cms_education(value: Optional[str]) -> Optional[str]:
+    """列表/详情的『职位学历』归一到 normalizer 口径（博士/硕士/本科/大专/不限）。
+    并列多档取最低档（见 _CMS_EDU_ORDER）；非学历值（如误填的「社招」）返回 None。"""
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    hits = []
+    for piece in re.split(r"[、,，/|]+", raw):
+        level = normalizer.extract_education(piece)
+        if level in _CMS_EDU_ORDER:
+            hits.append(level)
+    if hits:
+        return min(hits, key=_CMS_EDU_ORDER.index)
+    return normalizer.extract_education(raw)
+
+
+def _cms_normalize_job_url(origin: str, href: str) -> str:
+    """列表锚点 → 稳定的逐岗 jd_url：只保留 jobId(+jc) 两个身份参数。
+
+    原始锚点形如 `/socialxq?jobId=390609112&jc=1&c=&p=1^-1,3^-1&ky=`——尾部 c/p/ky 是**筛选态回传**，
+    随用户当前筛选条件变化；不剥掉的话同一个岗在不同筛选态下会算出不同 canonical_jd_url
+    （canonicalize_jd_url 只去 utm_ 类 tracking 参数，c/p/ky 会被原样保留）→ 库里出现重复行。"""
+    if not href:
+        return ""
+    href = _html.unescape(href).strip()
+    m = _CMS_ID_RE.search(href)
+    if not m:
+        return ""
+    path = href.split("?", 1)[0].split("#", 1)[0]
+    query = f"{m.group(1)}={m.group(2)}"
+    jc = _CMS_JC_RE.search(href)
+    if jc and jc.group(1).strip():
+        query += f"&jc={jc.group(1).strip()}"
+    base = path if path.startswith(("http://", "https://")) else urljoin((origin or "") + "/", path)
+    return f"{base}?{query}"
+
+
+def _cms_column_map(html_text: str):
+    """表头 <th> → {列下标: 列语义}。老版 CMS 各租户列序/列数不同，按表头对齐比按下标硬编码稳。"""
+    headers = [_cms_text(h) for h in _CMS_TH_RE.findall(html_text)]
+    col_map = {}
+    for idx, head in enumerate(headers):
+        low = head.lower()
+        for keyword, field in _CMS_COL_KEYWORDS:
+            if keyword in low:
+                col_map[idx] = field
+                break
+    return col_map, len(headers)
+
+
+def _cms_row_fields(cells: List[str], col_map: dict, header_count: int) -> dict:
+    """一行的若干 <span> 文本 → {title, location, education, category}。
+    表头对得上就按表头映射；对不上（表头缺失/列数不符的租户）退回按**取值特征**认字段。"""
+    out = {"title": "", "location": None, "education": None, "category": None}
+    if col_map and header_count == len(cells):
+        for idx, cell in enumerate(cells):
+            field = col_map.get(idx)
+            if field and field != "action" and cell:
+                out[field] = cell
+    if out["title"]:
+        return out
+    rest = []
+    for cell in cells:
+        if not cell or _CMS_ACTION_RE.search(cell):
+            continue
+        if out["education"] is None and _cms_education(cell):
+            out["education"] = cell
+            continue
+        if out["location"] is None and _CMS_CITY_RE.search(cell) and len(cell) <= 20:
+            out["location"] = cell
+            continue
+        rest.append(cell)
+    out["title"] = max(rest, key=len) if rest else ""
+    return out
+
+
+def _cms_parse_list(html_text: str, origin: str):
+    """老版 CMS 列表页 HTML → (rows, last_page)。
+
+    rows = [{title, jd_url, location, education, category, title_truncated}]，按 jd_url 去重。
+    last_page = 分页条里出现过的最大 PageIndex（站点自报的总页数，实测每页都带真末页号）；
+    抽不到返回 None（交给 paginate_all 用「空页/短页」兜底判末页）。"""
+    body = _CMS_COMMENT_RE.sub(" ", html_text or "")   # 先剥注释：模板占位假岗藏在里面
+    col_map, header_count = _cms_column_map(body)
+    rows, seen = [], set()
+    for m in _CMS_ROW_RE.finditer(body):
+        jd_url = _cms_normalize_job_url(origin, m.group("href"))
+        if not jd_url or jd_url in seen:
+            continue
+        cells = [_cms_text(s) for s in _CMS_SPAN_RE.findall(m.group("body"))]
+        fields = _cms_row_fields(cells, col_map, header_count) if cells else {
+            "title": _cms_text(m.group("body")), "location": None, "education": None, "category": None}
+        title = (fields.get("title") or "").strip()
+        if not (3 <= len(title) <= 120):   # 太短/太长的不是岗位名（登录、导航等）
+            continue
+        seen.add(jd_url)
+        rows.append({
+            "title": title,
+            "jd_url": jd_url,
+            "location": fields.get("location") or None,
+            "education": _cms_education(fields.get("education")),
+            # 学历列被租户误填成招聘类型（中芯社招板块实测有「社招」）→ 当 job_type 用，别丢
+            "job_type": (fields.get("education")
+                         if normalizer.is_recruitment_type(fields.get("education")) else None),
+            "title_truncated": bool(_CMS_TRUNCATED_RE.search(title)),
+        })
+    pages = [int(p) for p in _CMS_PAGE_LINK_RE.findall(body)]
+    return rows, (max(pages) if pages else None)
+
+
+def _cms_parse_detail(html_text: str) -> dict:
+    """老版 CMS 详情页 HTML → {title, summary, education, job_type, location}。
+
+    正文只取 <h3>小标题</h3> + <div class="xqm">正文</div> 这些块，**不做「某关键词之后全要」的整页切片**——
+    该模板正文后面紧跟着几千字《职位申请知情同意书》，整页切片会把隐私条款当岗位正文写进库。
+    中英双版同模板（社招/校招是「职位描述/职位要求」，海外板块是「job description/Job requirements」），
+    故按结构取而不是按中文关键词找。"""
+    out = {"title": "", "summary": None, "education": None, "job_type": None, "location": None}
+    if not html_text:
+        return out
+    cleaned = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html_text, flags=re.S | re.I)
+    cleaned = _CMS_COMMENT_RE.sub(" ", cleaned)
+
+    m = _CMS_DETAIL_TITLE_RE.search(cleaned)
+    if m:
+        out["title"] = _cms_text(m.group(1))
+
+    for label_raw, value_raw in _CMS_DETAIL_FIELD_RE.findall(cleaned):
+        label = _cms_text(label_raw).rstrip("：:").strip().lower()
+        value = _cms_text(value_raw)
+        if not value:
+            continue
+        if any(k in label for k in ("学历", "education", "degree")):
+            out["education"] = _cms_education(value)
+        elif any(k in label for k in ("工作地点", "工作城市", "location", "work place")):
+            out["location"] = value
+        elif any(k in label for k in ("工作类型", "job type", "employment")):
+            out["job_type"] = value
+
+    parts = []
+    for head_raw, body_raw in _CMS_DETAIL_SECTION_RE.findall(cleaned):
+        head, body = _cms_text(head_raw), _cms_text(body_raw)
+        if not body:
+            continue
+        parts.append(f"【{head}】\n{body}" if head else body)
+    summary = "\n".join(parts).strip()
+    if len(summary) >= _CMS_SUMMARY_MIN:
+        out["summary"] = summary[:4000]
+    return out
+
+
 class BeisenAdapter(ChinaSpaAdapter):
     """北森招聘（*.zhiye.com / *.italent.cn / 自有 careers 域名，由北森承载）。
 
@@ -438,6 +675,27 @@ class BeisenAdapter(ChinaSpaAdapter):
         self.list_urls = [source_url]
 
         route = _BEISEN_ROUTE_CACHE.get(self._host)
+        # beisen_routes.json 里登记 {"cms": true} = 已知老版 CMS Portal 租户。作用有二：
+        #   ① 让 beisen_httpx_ready() 认它为「零浏览器可抓」→ run.py 把它排进 httpx 并发快车道
+        #      （否则未登记的 host 一律落串行浏览器档，白占慢车道名额）；
+        #   ② 直接走老版 CMS 分支，省掉一次注定拿不到 PortalId 的新版探测请求。
+        cms_hint = isinstance(route, dict) and route.get("cms") is True
+        cms_tried = False
+        if cms_hint:
+            cms_tried = True
+            try:
+                cms = self._httpx_fetch_cms(source_url)
+            except Exception:
+                cms = None
+            if cms:
+                return cms
+            # 登记信息过时（租户升级到新版 SPA）→ **必须把这条假登记从缓存里清掉**，否则下面
+            # 「首见租户」分支会因为 host 还在缓存里被跳过 → 详情路由永远探不出来 → _resolve_url
+            # 全返空 → 整源解析成 0 岗，偏偏浏览器路径又把 fetch_complete 置成 True
+            # ＝「0 岗 + 自称抓全」，正是 CLAUDE.md §4 立碑警告的误杀在招岗组合。
+            _BEISEN_ROUTE_CACHE.pop(self._host, None)
+            route = None
+
         if route:  # route 已缓存 → 尝试纯 httpx（拿到列表即能拼 jd_url，不开浏览器）
             try:
                 j = self._httpx_fetch(source_url)
@@ -466,7 +724,18 @@ class BeisenAdapter(ChinaSpaAdapter):
                 self._detail_route = route
                 return j
 
-        # httpx 没打通 → 回退浏览器全流程（探+缓存 route），再不行落 SSR
+        # 新版 GetJobAdPageList 没打通 → 先试**老版 CMS Portal 门户**（theme2 SSR，同样零浏览器）。
+        # 放在开浏览器之前：老版 CMS 抽不到 PortalId，走浏览器只会白跑几分钟且 _fetch_ssr 不翻页。
+        # 与上面两处 httpx 尝试同样的容错口径：这条新分支出任何意外都只退回原有浏览器路径，不改变既有源的命运。
+        if not cms_tried:
+            try:
+                cms = self._httpx_fetch_cms(source_url)
+            except Exception:
+                cms = None
+            if cms:
+                return cms
+
+        # 都没打通 → 回退浏览器全流程（探+缓存 route），再不行落 SSR
         try:
             list_json = self._fetch_paginated(source_url)
         except RuntimeError:
@@ -536,6 +805,119 @@ class BeisenAdapter(ChinaSpaAdapter):
             return None
         self.fetch_complete = (total is not None and len(rows) >= (total or 0))
         return json.dumps({"_intercepted": [{"Data": rows, "Count": total or len(rows)}]}, ensure_ascii=False)
+
+    # ---- 老版 CMS Portal 门户（theme2 SSR）：纯 httpx 抓全 ----
+
+    @staticmethod
+    def _cms_page_url(parsed, page: int) -> str:
+        """把 PageIndex 换成目标页（保留 source_url 自带的其它 query，替换而非追加）。"""
+        query = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+                 if k.lower() != "pageindex"]
+        query.append(("PageIndex", str(page)))
+        return urlunparse(parsed._replace(query=urlencode(query)))
+
+    def _httpx_fetch_cms(self, source_url: str) -> Optional[str]:
+        """老版 CMS Portal 门户（北森 theme2 SSR）：纯 httpx 翻全列表 + SSR 详情直出正文。
+
+        返回值与 _fetch_ssr 同 shape（``{"_ssr_jobs":[…]}``），parse() 不必新增分支。
+        **不是**老版 CMS（列表页抽得到 PortalId → 新版 SPA；或首页没有 <li> jobId 锚点）→ 返回 None，
+        原封不动交回原有流程（浏览器重放 / _fetch_ssr），故对现有 234 个新版租户零影响。
+        """
+        parsed = urlparse(source_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        pages_seen = [0]        # 闭包记账：真正抓了几页（用于校正 fetch_complete，见下）
+        repeated = [False]      # 翻页参数不认账（每页都回同一批岗）时置位，见 fetch_page
+        cache = {}              # 首页 HTML 复用，别为了探测多打一次
+        all_urls = set()
+
+        with httpx.Client(timeout=20, follow_redirects=True,
+                          headers={"User-Agent": PlaywrightAdapter.user_agent}) as cli:
+            try:
+                first = cli.get(self._cms_page_url(parsed, 1))
+                first.raise_for_status()
+            except Exception:
+                return None
+            # 识别按响应特征，不按域名/租户名：有 PortalId = 新版 SPA，不归本分支管。
+            if _CMS_PORTAL_ID_RE.search(first.text or ""):
+                return None
+            cache[1] = first.text
+            first_rows, last_page = _cms_parse_list(first.text, origin)
+            if not first_rows:
+                return None
+
+            def fetch_page(page: int) -> PageResult:
+                text = cache.pop(page, None)
+                if text is None:
+                    resp = cli.get(self._cms_page_url(parsed, page))
+                    resp.raise_for_status()   # 首页失败上抛记 failed；后续页由 paginate_all 尽力而为
+                    text = resp.text
+                rows, _ = _cms_parse_list(text, origin)
+                pages_seen[0] = page
+                # 该租户的翻页参数不是 PageIndex（页页回同一批岗）→ 立刻停，别空转 200 页；
+                # 且此时**只看见了第一页**，绝不能自称抓全（下面把 complete 置 False）。
+                fresh = [r for r in rows if r["jd_url"] not in all_urls]
+                if rows and not fresh:
+                    repeated[0] = True
+                    return PageResult(items=[], total=None, total_pages=None)
+                all_urls.update(r["jd_url"] for r in rows)
+                # 翻页越界仍是 200 + 完整骨架 → 只能靠「本页锚点数 0」判终止（paginate_all 的空页规则）。
+                # total_pages 只认首页分页条自报的末页号（实测每页都带真末页，社招 30 / 校招 25 / 海外 3）。
+                return PageResult(items=rows, total=None,
+                                  total_pages=last_page if page == 1 else None)
+
+            jobs, _total, complete = paginate_all(
+                fetch_page, page_size=_CMS_PAGE_SIZE, first_page=1,
+                max_pages=_CMS_MAX_PAGES, logger=None,
+                label=f"beisen-cms {parsed.netloc}")
+
+            # 分页条自报 N 页却没翻到 N 页（中途空页/限流），或翻页参数根本不认账 → 不许自称抓全。
+            # fetch_complete=True 会开启 list-absence 撤岗，抓漏 + 自称抓全 = 误杀在招岗（CLAUDE.md §4 立碑）。
+            if repeated[0] or (last_page and pages_seen[0] < last_page):
+                complete = False
+
+            uniq, seen = [], set()
+            for row in jobs:
+                if row["jd_url"] in seen:
+                    continue
+                seen.add(row["jd_url"])
+                uniq.append(row)
+            self._cms_fill_details(uniq, cli)
+
+        if not uniq:
+            return None
+        # 站点只报页数不报岗位总数 → 抓全时诚实把「看见的全部」记为分母（paginate_all 同口径）。
+        self.reported_total = len(uniq) if complete else None
+        self.fetch_complete = complete
+        return json.dumps({"_ssr_jobs": uniq}, ensure_ascii=False)
+
+    def _cms_fill_details(self, rows: List[dict], cli) -> None:
+        """逐岗 GET SSR 详情页补 summary / 全名标题 / 学历（同一个 GET 全拿到，无需单独 enrich 通道）。
+
+        两个 cap：
+          - 正文富化走 resolve_detail_cap(_CMS_DETAIL_CAP)，日更快车道 CRAWL_DETAIL_CAP=0 时跳过（框架约定）。
+          - **截断标题**（列表 25 字截断，实测约 10% 的行）另有独立小额度：即使富化关掉也要修，
+            否则快车道写「…(J133...」、夜间富化写全名，同一岗标题天天来回抖（title 不在 _PRESERVE_IF_EMPTY 里）。
+        单条失败静默跳过（保留列表信息，最差是薄卡），绝不因为一个详情页炸掉整源。"""
+        cap = resolve_detail_cap(_CMS_DETAIL_CAP)
+        truncated = [r for r in rows if r.get("title_truncated")]
+        rest = [r for r in rows if not r.get("title_truncated")]
+        queue = truncated + rest
+        budget = max(cap, min(len(truncated), _CMS_TITLE_REPAIR_CAP))
+        for row in queue[:budget]:
+            try:
+                resp = cli.get(row["jd_url"])
+                if resp.status_code != 200:
+                    continue
+                detail = _cms_parse_detail(resp.text)
+            except Exception:
+                continue
+            # 详情页 <h2> 才是全名；伪 id 页只有导航骨架（无 h2、无 xqm）→ detail 全空，保留列表值。
+            if detail["title"] and not _CMS_TRUNCATED_RE.search(detail["title"]):
+                row["title"] = detail["title"]
+                row["title_truncated"] = False
+            for field in ("summary", "education", "job_type", "location"):
+                if detail.get(field) and not row.get(field):
+                    row[field] = detail[field]
 
     def _fetch_paginated(self, source_url: str) -> str:
         """渲染列表页，捕获其 GetJobAdPageList POST 请求，然后用站点自身 session 服务端翻页重放，
@@ -725,9 +1107,10 @@ class BeisenAdapter(ChinaSpaAdapter):
                 if not (jd and title) or jd in seen:
                     continue
                 seen.add(jd)
+                # job_type/education 老版 CMS 才有（列表列 + 详情页字段）；老调用方不传 → None，行为不变。
                 out.append(RawJob(company=self.company_name or "", title=title,
-                                  location=j.get("location"), job_type=None,
-                                  summary=j.get("summary"),
+                                  location=j.get("location"), job_type=j.get("job_type"),
+                                  summary=j.get("summary"), education=j.get("education"),
                                   jd_url=jd, apply_url=jd, posted_at=None))
             return out
         return super().parse(html)  # 新版 JSON 拦截路径
