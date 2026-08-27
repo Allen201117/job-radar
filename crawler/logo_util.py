@@ -250,8 +250,8 @@ _DOMAIN_OVERRIDES_RAW = {
 
     # —— 地产 / 建筑 ——
     "万科": "vanke.com", "中海地产": "coli688.com", "龙湖集团": "longfor.com",
-    "绿城": "greentowncn.com", "金地集团": "gemdale.com", "越秀地产": "yuexiuproperty.com",
-    "滨江集团": "hzbinjiang.com", "仁恒置地": "yanlordland.com", "上海建工": "scg.com.cn",
+    "绿城": "chinagreentown.com", "金地集团": "gemdale.com", "越秀地产": "yuexiuproperty.com",
+     "仁恒置地": "yanlordland.com", "上海建工": "scg.com.cn",
     "金螳螂": "goldmantis.com", "万物云": "onewo.com",
 
     # —— 物流 / 供应链 ——
