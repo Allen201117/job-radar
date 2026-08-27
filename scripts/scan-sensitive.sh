@@ -30,6 +30,10 @@ skip_file() {
 IP_ALLOW='(^|[^0-9.])(10|127|0|255|169\.254|192\.168|172\.(1[6-9]|2[0-9]|3[01])|203\.0\.113|198\.51\.100|192\.0\.2|22[4-9]|23[0-9])\.|(Chrome|Firefox|Safari|Edge?|AppleWebKit|Version|OPR|Mobile|Gecko)/[0-9]+\.'
 # 明显是占位符的连接串不算泄露
 DSN_ALLOW='(your-|xxx+|placeholder|changeme|replace-me|example\.(com|invalid)|\.invalid|<[^>]*>|\$\{|:(password|pass|secret)@)'
+# 远程 URL 里的 /home/ 或 /Users/ 路径段不是本机路径（如美的接口 …/backend/rec/home/out/…）。
+# 只豁免「同一行里该路径段紧跟在 http(s):// 主机后面、中间不含空格或引号」的情况，
+# 本机路径（/Users/xxx/…、file:///Users/…）不会命中这条，仍然会被拦。
+PATH_ALLOW='https?://[^[:space:]"]*/(Users|home)/'
 # 测试夹具里的假邮箱
 EMAIL_ALLOW='(zhangsan|lisi|wangwu|zhaoliu|test|demo|foo|bar|example|sample|dummy|user|someone|noreply)@'
 
@@ -46,7 +50,7 @@ scan_one() { # <文件路径（用于报告）>
   local f="$1" line
 
   while IFS= read -r line; do report "本机绝对路径（暴露电脑用户名）" "$f" "$line"
-  done < <(grep -n -I -E '/(Users|home)/[A-Za-z0-9._-]+/' "$tmp" 2>/dev/null)
+  done < <(grep -n -I -E '/(Users|home)/[A-Za-z0-9._-]+/' "$tmp" 2>/dev/null | grep -v -E "$PATH_ALLOW")
 
   while IFS= read -r line; do report "私人邮箱" "$f" "$line"
   done < <(grep -n -I -E '[A-Za-z0-9._%+-]+@(gmail|qq|163|126|foxmail|hotmail|outlook|icloud|sina|yeah)\.(com|cn|net)' "$tmp" 2>/dev/null | grep -v -E "$EMAIL_ALLOW")
