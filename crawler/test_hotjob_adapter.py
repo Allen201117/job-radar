@@ -7,6 +7,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(__file__))
 
 import normalizer
+import adapters.hotjob as hotjob_mod
 from adapters.hotjob import HotJobAdapter
 
 
@@ -174,6 +175,65 @@ class TestHotJobDetailEnrich(unittest.TestCase):
         self.a._enrich_details(_Boom(), posts)
         self.assertNotIn("workContent", posts[0])
         self.assertIsNone(self.a._map(posts[0]).summary)
+
+
+class TestHotJobChannelGate(unittest.TestCase):
+    """渠道发布门 should_skip() — 不打真实网络，构造 search/condition 响应。
+
+    2026-08-26 live 实测：租户未在后台发布某渠道页面时，search/condition 只回
+    {"state":"200","type":"success"}（无 data），前端 posDetail 永远转圈，
+    但 listPosition 仍照常返回岗位 → 抓下来的 jd_url 是用户点不开的死链。
+    """
+
+    def setUp(self):
+        self.a = HotJobAdapter()
+        self.url = "https://seazen.hotjob.cn/SU630dafb40dcad4076dfdf5ce/pb/social.html"
+
+    def _patch(self, payload=None, boom=None):
+        calls = []
+
+        class _Resp:
+            def raise_for_status(self_inner):
+                return None
+
+            def json(self_inner):
+                return payload
+
+        def fake_get(api, **kwargs):
+            calls.append((api, kwargs.get("params")))
+            if boom:
+                raise boom
+            return _Resp()
+
+        self._orig_get = hotjob_mod.httpx.get
+        hotjob_mod.httpx.get = fake_get
+        self.addCleanup(lambda: setattr(hotjob_mod.httpx, "get", self._orig_get))
+        return calls
+
+    def test_skips_channel_whose_portal_is_unpublished(self):
+        calls = self._patch({"state": "200", "type": "success"})
+        reason = self.a.should_skip(self.url)
+        self.assertIsNotNone(reason)
+        self.assertIn("recruitType=2", reason)
+        # 探的是本渠道的 condition 接口
+        self.assertIn("/wecruit/suite/post/search/condition/SU630dafb40dcad4076dfdf5ce", calls[0][0])
+        self.assertEqual(calls[0][1], {"recruitType": 2})
+
+    def test_does_not_skip_when_channel_published(self):
+        self._patch({"data": {"searchDisplayItem": [{"value": "workPlace"}]}, "state": "200"})
+        self.assertIsNone(self.a.should_skip(self.url))
+
+    def test_probes_channel_specific_recruit_type(self):
+        calls = self._patch({"state": "200", "type": "success"})
+        a = HotJobAdapter()
+        a.should_skip("https://seazen.hotjob.cn/SU630dafb40dcad4076dfdf5ce/pb/interns.html")
+        self.assertEqual(calls[0][1], {"recruitType": 12})
+
+    def test_probe_failure_does_not_block_crawl(self):
+        # 宁可漏判不可错杀：探测本身失败（网络/限流）不许把好源判死
+        self._patch(boom=RuntimeError("network down"))
+        self.assertIsNone(self.a.should_skip(self.url))
+
 
 
 if __name__ == "__main__":

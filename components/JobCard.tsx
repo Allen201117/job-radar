@@ -28,6 +28,7 @@ import {
   extractExperience,
   jobFieldDisplayValue,
 } from "@/lib/job-fields";
+import { gradClassLabel, isEarlyBatch } from "@/lib/campus-batch";
 import { relativeTimeLabel } from "@/lib/relative-time";
 import { matchTier } from "@/lib/scoring";
 import CompanyInsightDrawer from "@/components/CompanyInsightDrawer";
@@ -213,6 +214,8 @@ export default function JobCard({
     () => classifyJobFunction({ title: job.title, job_type: job.job_type, summary }),
     [job.title, job.job_type, summary],
   );
+  const gradClass = useMemo(() => gradClassLabel(job.grad_class), [job.grad_class]);
+  const earlyBatch = useMemo(() => isEarlyBatch(job.title), [job.title]);
   // 新鲜度信任信号：last_seen_at 距今多久 → 「今天/X 天前确认在招」；>14 天转暖橙告警「可能已下线」。
   const freshness = useMemo(() => freshnessLabel(job.last_seen_at), [job.last_seen_at]);
 
@@ -451,6 +454,17 @@ export default function JobCard({
             <span>{recruitType}</span>
             <span aria-hidden="true">·</span>
             <span>{jobFunction}</span>
+            {gradClass && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>{gradClass}</span>
+              </>
+            )}
+            {earlyBatch && (
+              <span className="inline-flex items-center rounded-full border border-[#e4d1a8] bg-[#f8efd9] px-2 py-0.5 text-[#8a6a2a] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/12 dark:text-[#e0b15a]">
+                提前批
+              </span>
+            )}
             {relatedReason && (
               <>
                 <span aria-hidden="true">·</span>

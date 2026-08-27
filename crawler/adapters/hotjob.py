@@ -52,6 +52,8 @@ class HotJobAdapter(PlaywrightAdapter):
     # 逐岗详情接口：列表 listPosition 不含 JD 正文，详情 listPositionDetail 才有 workContent/serviceCondition。
     # 接口路径 + 字段经 posDetail.js bundle 核实，POST body = postId + recruitType。
     _DETAIL_API = "/wecruit/positionInfo/listPositionDetail/"
+    # 渠道发布门：前端各页 bootstrap 时读它的 data.searchDisplayItem 渲染筛选器与列表。
+    _CONDITION_API = "/wecruit/suite/post/search/condition/"
     _DETAIL_CAP = 150    # 单源逐岗 detail 补摘要上限（覆盖绝大多数源；超大源部分覆盖，避免拖垮夜间全量）
     # 逐岗 detail 并发数：wecruit 单 host 对并发敏感（enrich_backlog 实测 8 worker 被限流、PER_HOST=3 才恢复）
     # → 保守 4（≈ 已验证安全上限，串行 150 岗 ~20s → ~5s）。若 CI 见限流(miss) 降回 3。
@@ -84,6 +86,48 @@ class HotJobAdapter(PlaywrightAdapter):
         entry = f"{origin}/{suite_key}/pb/{page_name}"
         self.list_urls = [entry]
         return suite_key
+
+    def should_skip(self, source_url: str) -> Optional[str]:
+        """渠道发布门：租户没在后台发布该渠道页面时，整条源跳过、一个岗都不入库。
+
+        wecruit 前端（列表页与逐岗 posDetail 共用）bootstrap 时要读
+        GET {origin}/wecruit/suite/post/search/condition/{suiteKey}?recruitType=N
+        的 data.searchDisplayItem。租户未发布该渠道时此接口只回
+        {"state":"200","type":"success"}（**无 data 键**），前端读 undefined 崩掉：
+        列表页停在「内部处理中，请稍后再试」，逐岗 posDetail 永远转「正在加载中...」。
+
+        坑在于 listPosition / listPositionDetail 这两个数据接口**照常返回岗位**，
+        所以纯看抓取侧一切正常，抓下来的 jd_url 却是用户点开转圈到死的页面
+        —— 违反项目「jd_url 准确性高于一切」红线。故抓取前先探这道门。
+
+        2026-08-26 live 实测（10 条渠道，浏览器逐个复核 10/10 转圈；另取 3 条
+        探测通过的源复核 3/3 正常渲染）：新城控股 society 1258 岗、荣耀 411 岗、
+        歌尔 402 岗、宁德新能源 148 岗等。探测通过与否与租户 suite/config 里
+        有无 society/campus 页面配置一致。
+
+        自愈：租户日后发布该渠道，本探测自然放行、无需人工改库。
+        探测本身失败（网络/限流）一律放行——宁可漏判不可错杀。
+        """
+        self._bind_source(source_url)
+        api = f"{self._origin}{self._CONDITION_API}{self._suite_key}"
+        try:
+            resp = httpx.get(
+                api,
+                params={"recruitType": self._recruit_type},
+                headers={"User-Agent": self.user_agent, "Referer": source_url},
+                timeout=self.timeout,
+                follow_redirects=True,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception:
+            return None
+        if isinstance(payload, dict) and "data" not in payload:
+            return (
+                f"wecruit channel not published (recruitType={self._recruit_type}): "
+                "search/condition returned no data — portal pages hang, jd_url unusable"
+            )
+        return None
 
     def fetch(self, source_url: str) -> str:
         """直连公开 listPosition 接口逐页拉取（无浏览器），返回 parse() 可消费的 _intercepted 信封。"""

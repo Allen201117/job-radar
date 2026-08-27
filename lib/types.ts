@@ -7,6 +7,7 @@ export interface Job {
   country_code?: string | null;
   job_scope?: string | null;
   job_type: string | null;
+  grad_class?: number | null;
   summary: string | null;
   sponsorship_signal?: "available" | "none" | "unknown" | string | null;
   jd_url: string;
