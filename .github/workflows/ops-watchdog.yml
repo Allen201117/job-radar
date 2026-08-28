@@ -16,9 +16,12 @@ on:
   workflow_dispatch:
     inputs:
       apply:
-        description: "true=真开 issue；默认 false 只打印"
+        description: "true=真开 issue / false=只打印；留空则跟随 repo 变量 OPS_WATCHDOG_APPLY"
         required: false
-        default: "false"
+        # ⚠️ 默认必须留空：GitHub 表达式里非空字符串一律为真，default:"false" 会让下面的
+        # `inputs.apply || vars.OPS_WATCHDOG_APPLY` 永远短路成 "false"，手动触发时无声吃掉 repo 变量
+        # （2026-08-28 实测：变量已设 true，手动跑出来仍是 dry-run、一条 issue 都不开）。
+        default: ""
       days:
         description: "规则 A：连续几天零产出才告警"
         required: false
