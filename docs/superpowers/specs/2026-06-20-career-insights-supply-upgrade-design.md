@@ -133,14 +133,14 @@ Phase 1（解瓶颈 + 免费额度验路由）→ Phase 2（官方源补可靠�
 
 | 模块 | commit | 落地 / 偏差 |
 |---|---|---|
-| spec | `b15de20` | 本文件 |
-| Phase 1 多源搜索层 | `a7b6611` | 博查/Tavily/Serper/千帆 provider + 路由（并取去重 / 单源兜底 / 各源日顶 `search_usage` 迁移 156）。配哪个 key 用哪个、未配跳过。 |
-| Phase 2a SEC EDGAR | `d4d486b` | ticker→CIK→submissions 官方上市事实，官方优先盖 Wikidata；一公司一行就地升级。 |
-| Phase 2b 巨潮(A股) | `8ee8087` | 名→A股简称严格匹配→listing official；**默认关 `INSIGHT_CNINFO_ENABLED`**（守禁猜入库，待 live 验返回格式）。**港交所未做**（官方列表 xlsx/不稳 AJAX 需新依赖，Wikidata 已覆盖多数港股）。 |
-| Phase 3 即时性 | `0eae5c3` | 现查触发（建 `company_profiles` 占位入队，零 churn；快车道② `workflow_dispatch` 未做，留后续）+ 过期下架巡检 `insight_sweep`。 |
-| T3 逐源日志 | `1a94b63` | 修 Phase 1 漏改的「千帆」硬编码 → 工作流日志显示各源用量。 |
-| 即时性闸（§6.1） | `5d0116e` | 近 3 年窗 + `valid_until` + replace-on-refresh。 |
-| 存量补保质期 + 额度安全档 | `6febd65` | 迁移 157 补 287 条 `valid_until`（0 漏网）；默认日顶降到免费额度安全档。 |
+| spec | `40d0382` | 本文件 |
+| Phase 1 多源搜索层 | `ef4b139` | 博查/Tavily/Serper/千帆 provider + 路由（并取去重 / 单源兜底 / 各源日顶 `search_usage` 迁移 156）。配哪个 key 用哪个、未配跳过。 |
+| Phase 2a SEC EDGAR | `8c1fedc` | ticker→CIK→submissions 官方上市事实，官方优先盖 Wikidata；一公司一行就地升级。 |
+| Phase 2b 巨潮(A股) | `aa37f98` | 名→A股简称严格匹配→listing official；**默认关 `INSIGHT_CNINFO_ENABLED`**（守禁猜入库，待 live 验返回格式）。**港交所未做**（官方列表 xlsx/不稳 AJAX 需新依赖，Wikidata 已覆盖多数港股）。 |
+| Phase 3 即时性 | `e1e4b49` | 现查触发（建 `company_profiles` 占位入队，零 churn；快车道② `workflow_dispatch` 未做，留后续）+ 过期下架巡检 `insight_sweep`。 |
+| T3 逐源日志 | `b54e670` | 修 Phase 1 漏改的「千帆」硬编码 → 工作流日志显示各源用量。 |
+| 即时性闸（§6.1） | `74e879f` | 近 3 年窗 + `valid_until` + replace-on-refresh。 |
+| 存量补保质期 + 额度安全档 | `61be4bb` | 迁移 157 补 287 条 `valid_until`（0 漏网）；默认日顶降到免费额度安全档。 |
 
 **额度细水长流（免费档默认值）**：千帆 40/日（每日重置=主力）/ Tavily 30/日（≈900 月、<1000 免费）/ Serper 20/日（2500 一次性总额→约 4 月）/ 博查 50/日（付费）。每天约 40 家、三源交叉优先、千帆兜底；可在 repo Variables `*_DAILY_CAP` 上调。
 

@@ -16,13 +16,13 @@
 ## 1. 被验代码在哪
 
 - **Worktree**：`<项目根>-wt-radar-pivot-0623`
-- **分支**：`draft/radar-pivot-0623`（基于 origin/main 的 `ab3cade`）
+- **分支**：`draft/radar-pivot-0623`（基于 origin/main 的 `b53909b`）
 - **提交**（`git log --oneline`）：
-  - `4972ec5` 文档（两份设计文）
-  - `86d7b90` A 引擎纯函数 + 数据模型 + 召回
-  - `0a23bf4` B+C 今日机会 Feed + 动作闭环
-  - `f6a3014` D 信息架构降级主动爬取
-  - `38ff930` E 关注公司与覆盖请求
+  - `8d92015` 文档（两份设计文）
+  - `7f96459` A 引擎纯函数 + 数据模型 + 召回
+  - `d328e73` B+C 今日机会 Feed + 动作闭环
+  - `2d0cb13` D 信息架构降级主动爬取
+  - `ef4cfb0` E 关注公司与覆盖请求
 - ⚠️ **不要在旧分支 `claude/compassionate-ardinghelli-b8a957` 上验**（它落后 main 18 提交、缺迁移 160/行业门）。
 - ⚠️ 验收期间**不要 push、不要 merge 到 main**（push = 上线 + 自动跑迁移，需用户拍板）。
 

@@ -111,7 +111,7 @@ no_official_entry 3 / no_active_jobs 2 / thin_only 1。
 ### ③ 需人工介入（约 34 家）
 - anti_bot 7 家——但其中 4 家 entry 本身张冠李戴（优酷→强生、视觉中国→insta360、福耀/赛力斯→第三方牛企招聘），
   修好 entry 复核后可能根本不是 anti_bot；且 anti_bot next_retry_at=None 永不重试，
-  niuqizp 黑名单（529d2b3）对存量行永远生效不了，需人工清 entry；
+  niuqizp 黑名单（266a76c）对存量行永远生效不了，需人工清 entry；
 - 张冠李戴粘住的 entry ~10 家需人工清（见复核节）：阿里影业→阿里健康、宁波银行→恒丰银行、大陆集团→联想、
   盒马→厦大嘉庚学院、交通银行→jobscall.me、仁恒置地→51job、DHL→mqjob.cn、华谊/正午阳光→爱企查、日日顺→海尔创客；
 - 教育/能化 unknown att 26–32 共 14 家（中教控股、思考乐、掌门、松鼠AI、洪恩、编程猫、东方盛虹、中创新航、
@@ -140,11 +140,11 @@ no_official_entry 3 / no_active_jobs 2 / thin_only 1。
 
 - 实锤误杀 #1（P0）：亿纬锂能。probe ok、valid=872、真抓 created=872，但验收样本用 httpx 抓
   wecruit posDetail.html（JS 渲染页）验标题失败 → no_stable_jd → 872 个真岗全部回滚删除（香港库现 0 行，已复核）。
-  与 01ba16f 修掉的「内容门跑在提纯文本上误杀 SPA」同类病换层。修法：已知平台（hotjob/wt/moka/beisen）
+  与 4a63099 修掉的「内容门跑在提纯文本上误杀 SPA」同类病换层。修法：已知平台（hotjob/wt/moka/beisen）
   样本核验走平台 detail API（hotjob 有 state 字段，enrich.py 就在用）；unknown_spa 浏览器渲染后再验。
   该行 8/27 重试，不修代码会再次误杀。
 - 实锤误杀 #2：华泰证券 wt 租户，指纹正确、身份核验通过，但 probe URL 是页面里的 jquery.js →
-  JSONDecodeError → att=32。属 P1→P2 参数拼装 bug（003ed29 修了「没传」，没修「传了但拼错」）。
+  JSONDecodeError → att=32。属 P1→P2 参数拼装 bug（f4b04cb 修了「没传」，没修「传了但拼错」）。
 - 指标级误报：国家电网记 no_active_jobs，实际其 iguopin 源有 2 个健康岗——census 的 %国家电网%
   pattern 匹配不上子公司全称。
 - 量化诚实边界：到达验收门被拒 40 行（no_stable_jd 37 + no_active_jobs 2 + thin_only 1）。

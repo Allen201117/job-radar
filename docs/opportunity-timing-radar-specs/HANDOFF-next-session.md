@@ -2,7 +2,7 @@
 
 > 写于 2026-06-25。基线分支 `draft/radar-pivot-0623`。权威 spec：本目录 `01`~`06`。总进度：`IMPLEMENTATION-PROGRESS-v3.md`。
 
-## ✅ 已完成（2026-06-25 续做，commit ee93792 + 7efc272，全绿 + live 验证）
+## ✅ 已完成（2026-06-25 续做，commit a4b79c7 + 60a5bdc，全绿 + live 验证）
 - **C 类 9 大厂逐岗撤岗探活（原"下一步主线"）已做完**：7 源 clean httpx detector（amazon/apple/meituan/
   microsoft/sf_express/tencent/vivo，关闭信号逐源 live 实测、13/13 集成实测通过）接进 `enrich.ENRICH_REGISTRY`
   + `lib/liveness-client.js` LIVENESS + `liveness-sweep.yml` matrix；bilibili 入 `audit_dead_links._BROWSER_ADAPTERS`
@@ -33,7 +33,7 @@ active 126,702；**checked_24h 仅 39,291（31%）**、never_checked 86,775（68
 > 含义：今日主清单（STILL_OPEN 需 ≤24h 核验）当前偏向 httpx 源；科技消费大厂（多为 SPA/自建）大多落「等待再次确认」，直到保鲜覆盖churn上来。**这是 spec 要的诚实状态，不是 bug。**
 
 ## 下一步主线：把剩余大厂源纳入保鲜覆盖（接着本 session 做了一半的活）
-本 session 已把 **B 类 4 个 SPA 大厂**（alibaba/netease/ctrip/huawei，~6200 岗）加进 `audit_dead_links._BROWSER_ADAPTERS`（commit 75ec9d7）。**剩 C 类 9 个 httpx 大厂无 detail 撤岗探活器 → 24h 覆盖恒 0**：
+本 session 已把 **B 类 4 个 SPA 大厂**（alibaba/netease/ctrip/huawei，~6200 岗）加进 `audit_dead_links._BROWSER_ADAPTERS`（commit e258717）。**剩 C 类 9 个 httpx 大厂无 detail 撤岗探活器 → 24h 覆盖恒 0**：
 
 `amazon, apple, bilibili, meituan, microsoft, phenom, sf_express, tencent, vivo`
 

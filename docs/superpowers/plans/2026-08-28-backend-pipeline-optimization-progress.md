@@ -34,21 +34,21 @@ P3：#10 liveness-only TIMEOUT=25s 偏松；#11 sweep_absent_jobs 双查询；#1
 
 ### D. 审阅遗留核对（已回，逐条对过 diff 而非只信 commit message）
 
-已修：P0-4 验收门 SPA 误杀（69daa71，改走 ENRICH_REGISTRY detail 只认 JobClosedError）；P0-5 央企枚举（5f4f6ee）；P0-8 LLM 保险丝全链（→081ebac 恢复定时）；P0-9 假共识门（ac91fd9）；P1-2 审计 timeout 90→150/limit→1200（但 90min 被杀真凶未查）；P1-3 首项 successfactors 已进 sweep matrix；P1-10 巨潮交叉验证；P2 db-report/production-smoke 已补 schedule。
+已修：P0-4 验收门 SPA 误杀（417def1，改走 ENRICH_REGISTRY detail 只认 JobClosedError）；P0-5 央企枚举（e67f87d）；P0-8 LLM 保险丝全链（→fddca17 恢复定时）；P0-9 假共识门（0065ad8）；P1-2 审计 timeout 90→150/limit→1200（但 90min 被杀真凶未查）；P1-3 首项 successfactors 已进 sweep matrix；P1-10 巨潮交叉验证；P2 db-report/production-smoke 已补 schedule。
 部分修：P0-6 feishu 坏链**代码门已加**（feishu.py \_detail_portal_closed/should_skip 只认 404/410）但 1,192 条存量坏链是否清掉无证据；P0-7 暗死岗**只清了数据（4028→60）根因代码没动**——enrich_backlog.py L163-193 任何 fetch 异常仍与「真无正文」同路盖 enrich_checked_at，无死信升级，剩余 60 条（wecruit campus/intern 板块）就是活证据。
 未动：P1-3 其余 11 adapter 盲区 12,775 岗（jd 3,173/ashby 2,718/antgroup 2,046 占 62%，均有公开 JSON 接口可照 ENRICH_REGISTRY 模式补）；P1-8 gap_funnel entry 身份复核+anti_bot 退避；P1-9 洞察队列仍按 founded_year 排（insight_backlog.py:373）；P1-11 beisen absence 对拍（决策项，维持 dry-run）；P2 iguopin 快车道空转（resolve_detail_cap(300) 在快档 CRAWL_DETAIL_CAP=0 时返 0 → \_detail_verified 全无 → 全丢）；P2 洞察快车道台账永 queued（insight-enrich.yml 无状态回写）；P2 sweep 3 次/天过配；遗留#5 搜索 provider 无账户级判据（search_provider_http.py:50-51 / qianfan_search.py:90-91，status>=300 一律静默返 []，账户欠费=没搜到，gap_funnel/校招链无保护）；遗留#4 看板/watchdog 两套口径；遗留#6 审计 90min 被杀真凶未查。
 
 ## 优化清单（按 ROI 排序，实施时逐项打勾；草案，待 CI 数据线校准）
 
 ### 批次 1：探活/富化 正确性 + 预算重分配（最高 ROI）
-- [x] 1.1 enrich_row 网络异常与真 miss 分流（f782bf9）：巡检路径 fetch 异常返 'err' 不写库不盖章；backlog 路径保持 miss+fail_count 有界重试（防无限回队）；熔断分子改 miss+err。★取舍：未做「自动死信→expired」升级——宁可漏判红线下，永久 miss 岗留给渠道级判死器处理
-- [x] 1.2 巡检 20h 冷却（f782bf9，env LIVENESS_COOLDOWN_HOURS，HK+Supabase 两路径都加）
+- [x] 1.1 enrich_row 网络异常与真 miss 分流（25c97ae）：巡检路径 fetch 异常返 'err' 不写库不盖章；backlog 路径保持 miss+fail_count 有界重试（防无限回队）；熔断分子改 miss+err。★取舍：未做「自动死信→expired」升级——宁可漏判红线下，永久 miss 岗留给渠道级判死器处理
+- [x] 1.2 巡检 20h 冷却（25c97ae，env LIVENESS_COOLDOWN_HOURS，HK+Supabase 两路径都加）
 - [x] 1.3 wecruit 空壳存量：live 探针实测 134 个 hotjob 源中 6 个渠道未发布，其岗**已全部是 removed（712 条）**——并行 session 清理已覆盖；歌尔校招渠道现探测通过（租户已发布，自愈门生效），无需动库
-- [x] 1.4 矩阵修正（f782bf9）：liveness-sweep 补 avature；enrich-backlog 补 wt/tencent/vivo/avature/huawei；google 是误报（registry 有 _detail_google），改的是过时注释
-- [x] 1.5 盲区探活器 9/11 家接入（2b1d465 + 03c30a0，~12,460 岗）：jd/antgroup/haier/ashby/mihoyo/tencent_music/iguopin/pinduoduo/meituan_campus；全部真伪 id live 对拍 + 集成后 live 冒烟全过 + 33 mock 单测。国聘顺带实锤 40 个 deadline 已过的僵尸岗（接口 status=2），进 sweep 后自动清。遗留：alibaba_campus（133 岗，13 个 BU 域独立 cookie+CSRF 会话，接口已验证 content:null=撤岗，单独排期）；phenom 走浏览器审计道
+- [x] 1.4 矩阵修正（25c97ae）：liveness-sweep 补 avature；enrich-backlog 补 wt/tencent/vivo/avature/huawei；google 是误报（registry 有 _detail_google），改的是过时注释
+- [x] 1.5 盲区探活器 9/11 家接入（327ca5e + 6f8ab9c，~12,460 岗）：jd/antgroup/haier/ashby/mihoyo/tencent_music/iguopin/pinduoduo/meituan_campus；全部真伪 id live 对拍 + 集成后 live 冒烟全过 + 33 mock 单测。国聘顺带实锤 40 个 deadline 已过的僵尸岗（接口 status=2），进 sweep 后自动清。遗留：alibaba_campus（133 岗，13 个 BU 域独立 cookie+CSRF 会话，接口已验证 content:null=撤岗，单独排期）；phenom 走浏览器审计道
 - [x] 1.6 feishu 存量坏链已清（2026-08-28 live）：69 个 feishu 源逐租户 _detail_portal_closed 探测，11 个门户关闭（拓竹380/Momenta249/面壁121/小马智行69/商汤65/无问芯穹47/欢乐互娱27/XREAL23/道旅21/极致4）与审阅点名完全吻合；抽 3 条真实 jd_url 终验全 404 → **1,006 条 active 标 removed**（可复活口径，should_skip 门挡重灌，循环重生不会再发生）。展示态死链主因清除
 
-### 批次 2：Workflow 配置硬化（2412c31，纯 yml）
+### 批次 2：Workflow 配置硬化（d0354a1，纯 yml）
 - [x] 2.1 liveness-sweep workers fallback '10'→'6'
 - [x] 2.2 enrich-crawl concurrency 组 + guard job + httpx 档跳过 chromium
 - [x] 2.3 ★决定不做 dead-link-audit max-parallel:3——审计产能是稀缺品（SPA 轮检曾拖到 37 天），浏览器分片 DB 写入率低、连接占用可忽略，收紧并发会重新引入产能坍缩
@@ -61,7 +61,7 @@ P3：#10 liveness-only TIMEOUT=25s 偏松；#11 sweep_absent_jobs 双查询；#1
 - [x] 2.10 dump-jobs-schema 改连 HK 库
 - [!] 2.11 OPS_WATCHDOG_APPLY=true 被权限分类器拦（gh variable set 不可执行）→ **需用户手动**：repo Settings → Variables 加 OPS_WATCHDOG_APPLY=true，watchdog 才会真开 Issue 告警
 
-### 批次 3：爬虫代码效率与静默失败治理（Codex 实现 + CC 两轮复盘，73476f2）
+### 批次 3：爬虫代码效率与静默失败治理（Codex 实现 + CC 两轮复盘，308cde7）
 - [x] 3.1 robots.txt host 级进程缓存（双检锁、锁外 I/O）
 - [x] 3.2 should_skip HEAD host 缓存 + timeout 5s；★复盘轮抓到的雷：瞬态网络异常曾被永久缓存成整 host 跳过（一次超时=清零整个 ATS 平台的源）→ 改 fail-open 不缓存 + 补异常路径测试
 - [x] 3.3 db.py 重复 get_discovery_run 死代码删除
@@ -72,15 +72,15 @@ P3：#10 liveness-only TIMEOUT=25s 偏松；#11 sweep_absent_jobs 双查询；#1
 - [x] 3.8 gap_funnel 缓存 entry 身份复核（不过即丢弃重发现）+ anti_bot 30 天退避
 
 ### CI 数据线校准结论（1347 个 run 实测）
-- [x] 无新增故障项：failed/cancelled 大头 = 已修的 dead-link-audit 90min 超时（69daa71）+ 08-08 GitHub 平台事故 + SiliconFlow 欠费（已充值）。purge-expired 6h 硬杀实锤 → 批次 2 已补 timeout。liveness-sweep 均值 126min/最长 384min → 20h 冷却 + 错峰后预期大幅缩短（待观测）
+- [x] 无新增故障项：failed/cancelled 大头 = 已修的 dead-link-audit 90min 超时（417def1）+ 08-08 GitHub 平台事故 + SiliconFlow 欠费（已充值）。purge-expired 6h 硬杀实锤 → 批次 2 已补 timeout。liveness-sweep 均值 126min/最长 384min → 20h 冷却 + 错峰后预期大幅缩短（待观测）
 
 ## 实施记录
 
 - [x] 体检：4 并行审查线 + 生产库实测（2026-08-28）
 - [x] LLM 账户恢复 live 验证（HTTP 200）；insight-t3/campus 三条 cron 已恢复
-- [x] 批次 1（f782bf9/2b1d465/03c30a0）+ feishu 存量清理 1,006 条（live）
-- [x] 批次 2（2412c31，27 文件）
-- [x] 批次 3（73476f2，Codex 脑手循环两轮 + code-reviewer 审查）
+- [x] 批次 1（25c97ae/327ca5e/6f8ab9c）+ feishu 存量清理 1,006 条（live）
+- [x] 批次 2（d0354a1，27 文件）
+- [x] 批次 3（308cde7，Codex 脑手循环两轮 + code-reviewer 审查）
 - [x] 验证：crawler 1423 tests OK / node 863 OK / yml 解析 OK / 敏感扫描 OK
 
 ## 遗留（后续排期）
@@ -95,7 +95,7 @@ P3：#10 liveness-only TIMEOUT=25s 偏松；#11 sweep_absent_jobs 双查询；#1
 ## 收尾：告警接通 + 同日验证（2026-08-28 下午）
 
 - [x] 用户已加 repo 变量 `OPS_WATCHDOG_APPLY=true`。
-- [x] **接通时抓到一个真 bug（ee66a34）**：`inputs.apply` 的 `default:"false"` 让
+- [x] **接通时抓到一个真 bug（5c3f170）**：`inputs.apply` 的 `default:"false"` 让
       `inputs.apply || vars.OPS_WATCHDOG_APPLY` 永远短路成 false（GitHub 表达式里非空字符串一律为真），
       **手动触发时无声吃掉刚设好的变量**（实测：变量已 true，跑出来仍是 dry-run、0 issue）。
       定时触发不受影响（inputs 为空）。修法=默认值改空串让回退链生效；全仓仅此一处此写法。

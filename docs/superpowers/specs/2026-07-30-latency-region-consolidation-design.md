@@ -183,7 +183,7 @@ getUser（改造前每请求都走）        566.7 ms/次   （5 次平均）
 
 ### 7.5.1 漏项与补救
 
-首轮只覆盖了走 `requireUser()` 的 23 个路由，漏了 **11 处内联调 `supabase.auth.getUser()`** 的接口，其中 `/api/jobs/search` 是 `/jobs` 页最热的接口（筛选器每变一次都打它）——漏掉它等于改动②在用户最常走的路径上没生效。已在 commit `3b025bb` 补齐（改法：只把网络调用换成 `verifyRequestClaims(supabase)`，各路由 401/204 语义与变量绑定原样保留），另含落地页 `app/page.tsx` 与 `lib/auth.getProfile()`（`isAdmin()` 经由它，是三个管理员页的入口门）。核查结论：请求路径上已无网络 `getUser()`，仅剩 `lib/auth.getUser()` 一个带警告注释的逃生口。
+首轮只覆盖了走 `requireUser()` 的 23 个路由，漏了 **11 处内联调 `supabase.auth.getUser()`** 的接口，其中 `/api/jobs/search` 是 `/jobs` 页最热的接口（筛选器每变一次都打它）——漏掉它等于改动②在用户最常走的路径上没生效。已在 commit `2cca40d` 补齐（改法：只把网络调用换成 `verifyRequestClaims(supabase)`，各路由 401/204 语义与变量绑定原样保留），另含落地页 `app/page.tsx` 与 `lib/auth.getProfile()`（`isAdmin()` 经由它，是三个管理员页的入口门）。核查结论：请求路径上已无网络 `getUser()`，仅剩 `lib/auth.getUser()` 一个带警告注释的逃生口。
 
 ## 7.6 岗位搜索 21s：**另一条**病根，与地理无关（未解决）
 
@@ -217,9 +217,9 @@ while ((filters.sortBy === "match" || matched.length <= need) && !exhausted && o
 - 第一次的教训：两条路径机制不同**不能照搬**——`lib/job-search.ts` 走 supabase-js（HTTP，无连接池上限），`lib/jobs-store/*` 直连 pg，受 `client.ts` 的 `max:5` + `connectionTimeoutMillis:8000` 约束，**池满后多出的获取请求不排队等待，8s 就抛错**。并发数必须小于池 max。
 - 第二次的教训：**并行救不了这条路径**。香港库是腾讯云轻量 **2 vCPU**，而 `order by first_seen_at desc limit 1000 offset 27000` 这类大偏移扫描是 DB 端 CPU 密集活（要走完并跳过 2.7 万行），3 个并发压 2 核只是互抢 CPU；node-pg 解析 2.8 万肥行也是单线程。**瓶颈不是「等网络往返」，减少往返次数零收益。** 按「跨洋往返」直觉做的推断在这里是错的。
 
-已退回串行（commit `1994bfd`），只保留唯一安全改进：候选只取 `CANDIDATE_COLUMNS` + 命中页 `hydratePageColumns` 回补（与 FTS 路径同一套，严格少传数据）→ **20.8~21.4s**（约 18%）。
+已退回串行（commit `dfd8d38`），只保留唯一安全改进：候选只取 `CANDIDATE_COLUMNS` + 命中页 `hydratePageColumns` 回补（与 FTS 路径同一套，严格少传数据）→ **20.8~21.4s**（约 18%）。
 
-### 7.6.2 第三次尝试：去掉 OFFSET 翻页（成功，已上线 `654bbbd`）
+### 7.6.2 第三次尝试：去掉 OFFSET 翻页（成功，已上线 `4b461e9`）
 
 `searchViaScan` 的 match 路径原本用 28 页 × `DB_PAGE=1000` 的 OFFSET 循环取满预算。**那是移植 `lib/job-search.ts` 时留下的阑尾**：那侧走 PostgREST（单次最多返 1000 行）才不得不翻页，直连 pg 没有该上限——同文件的 FTS 路径本来就是一条 `limit FTS_CAP` 单查询。OFFSET 还是二次方浪费：第 k 页要重走 k×1000 条索引项，28 页累计走 40.6 万次才取回 2.8 万行。
 
@@ -239,8 +239,8 @@ while ((filters.sortBy === "match" || matched.length <= need) && !exhausted && o
 | 阶段 | `/api/jobs/search` TTFB |
 |---|---|
 | 原始 | 25.3~26.2s |
-| + 候选列裁剪（`1994bfd`） | 20.8~21.4s |
-| + 去掉 OFFSET 翻页（`654bbbd`） | **16.6~17.8s（均值 17.2s）** |
+| + 候选列裁剪（`dfd8d38`） | 20.8~21.4s |
+| + 去掉 OFFSET 翻页（`4b461e9`） | **16.6~17.8s（均值 17.2s）** |
 
 累计约 **−34%**。`total=28000` 说明预算照旧扫满、结果正确。
 

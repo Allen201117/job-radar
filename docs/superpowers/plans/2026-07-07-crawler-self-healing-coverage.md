@@ -53,7 +53,7 @@
 
 ---
 
-## ✅ 层 1 已完成（2026-07-07，commits 51c47c7 / 0f126cf / 2992a88，本地已 commit·待推）
+## ✅ 层 1 已完成（2026-07-07，commits 31b0f7d / 53ae7d2 / 9558012，本地已 commit·待推）
 - **helper 落地**：`crawler/adapters/base.py` 新增 `PageResult` + `paginate_all(fetch_page, *, page_size, first_page, max_pages, delay_seconds, logger, label) -> (items, total, complete)`。
   三种停止范式全覆盖：① 已知 item 总数翻到底（tencent/byd 范式）② 已知 `total_pages` 按页数翻到底（hotjob 范式，防瞬时短页误判）③ 二者都无靠短页兜底（jd 范式）。首页异常上抛记 failed、后续页异常保留已抓不炸穿。14 个纯函数单测（`crawler/test_paginate.py`）。
 - **迁移 5 个真有缺口的 ATS adapter**（挑「仍硬编码小上限 / 压根没上报抓全率」的，不是已修好的大厂）：

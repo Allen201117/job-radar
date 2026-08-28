@@ -16,7 +16,7 @@
 
 - Worktree：`<项目根>-wt-radar-pivot-0623`
 - Branch：`draft/radar-pivot-0623`
-- HEAD：`405f446`
+- HEAD：`b649362`
 - 复验日期：`2026-06-23`
 
 结论：**不通过**。
@@ -659,7 +659,7 @@ Expected:
 
 ```bash
 git status --short
-git diff --stat 405f446
+git diff --stat b649362
 git log --oneline -10
 ```
 

@@ -76,12 +76,12 @@
 
 ## 10. 最终 commit（本轮修复）
 ```
-ac8f0a8 docs(acceptance): A–E 验收手册
-5b4428b perf(opportunities): P0-1 召回超时 — 砍跨区传输量
-768b526 fix(opportunities): P0-2 关注公司假成功 + §9 诚实 schema 码
-d7fb166 fix(opportunities): P1-1 Today 动作状态机改纯 reducer
-cd6c070 fix(opportunities): P1-2 /saved 下线岗快照 + JobAction 类型
-b57016f fix(opportunities): P1-3 去假数字/旧文案 + P2 登录回跳安全
+c4ccd52 docs(acceptance): A–E 验收手册
+540999f perf(opportunities): P0-1 召回超时 — 砍跨区传输量
+89dd343 fix(opportunities): P0-2 关注公司假成功 + §9 诚实 schema 码
+cf0e01c fix(opportunities): P1-1 Today 动作状态机改纯 reducer
+72e118e fix(opportunities): P1-2 /saved 下线岗快照 + JobAction 类型
+fbfcfae fix(opportunities): P1-3 去假数字/旧文案 + P2 登录回跳安全
 <本提交> test(opportunities): §9.2 迁移契约测试
 ```
 （A–E 主体实现的更早 commit 见 `git log`。）未 push，等独立验收。

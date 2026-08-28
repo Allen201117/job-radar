@@ -6,16 +6,16 @@
 
 ## 0. 在哪 / 提交范围
 
-- Worktree：`<项目根>-wt-radar-pivot-0623`，分支 `draft/radar-pivot-0623`，HEAD=`9f7146a`，**未 push**。
+- Worktree：`<项目根>-wt-radar-pivot-0623`，分支 `draft/radar-pivot-0623`，HEAD=`68ed281`，**未 push**。
 - 本轮修复提交（在你上轮之后新增）：
   ```
-  5b4428b P0-1 召回超时 — 砍跨区传输量
-  768b526 P0-2 关注公司假成功 + §9 诚实 schema 码
-  d7fb166 P1-1 Today 动作状态机改纯 reducer
-  cd6c070 P1-2 /saved 下线岗快照 + JobAction 类型
-  b57016f P1-3 去假数字/旧文案 + P2 登录回跳
-  53e204e §9.2 迁移契约测试
-  9f7146a 修复报告
+  540999f P0-1 召回超时 — 砍跨区传输量
+  89dd343 P0-2 关注公司假成功 + §9 诚实 schema 码
+  cf0e01c P1-1 Today 动作状态机改纯 reducer
+  72e118e P1-2 /saved 下线岗快照 + JobAction 类型
+  fbfcfae P1-3 去假数字/旧文案 + P2 登录回跳
+  7287d11 §9.2 迁移契约测试
+  68ed281 修复报告
   ```
 - 深度细节见同目录 `...-remediation-report.md`（根因/改动/门结果）。验收基线手册见 `...-acceptance-AtoE.md`。
 - 硬约束（继续遵守）：**不 push、不 merge main、不打印 .env/密钥；未经用户授权不对生产应用迁移/建索引/写测试数据；可在测试库应用迁移做写类验收。**
@@ -91,7 +91,7 @@ git diff --check                     # 干净
 
 ---
 
-## 5. 复验轮 2 — 你上轮 6 个阻断项的处置（commit `308291e`，HEAD 仍未 push）
+## 5. 复验轮 2 — 你上轮 6 个阻断项的处置（commit `e3dc4bf`，HEAD 仍未 push）
 
 > 自动化门已复跑：node --test **453** / crawler 409 / tsc 0 / build / check-migrations 168 / git diff --check 全绿。
 

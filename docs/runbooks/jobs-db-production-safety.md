@@ -186,7 +186,7 @@ npm audit --omit=dev --audit-level=high --json
 
 ```text
 Known-good deployment URL：https://job-radar-d5sguli7w-allens-projects-5408d95e.vercel.app
-Known-good GitHub deployment ID：5397279031（main 8c7e1f3）
+Known-good GitHub deployment ID：5397279031（main 6f83484）
 当前 CA secret reference：Vercel Production/Preview added 2026-07-11；GitHub Actions updated 2026-07-11T09:58:36Z
 回滚 CA secret reference：上一 known-good 不读取 CA；仅在生产故障时按 #3 的限时例外回滚，严格 TLS 整改保持开启
 Vercel 项目/环境标识：allens-projects-5408d95e/job-radar，Production + Preview

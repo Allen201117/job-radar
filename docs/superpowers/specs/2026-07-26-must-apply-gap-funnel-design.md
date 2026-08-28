@@ -31,7 +31,7 @@
 3. **三块造好却没用上的资产**：
    - `company_spa`（`crawler/adapters/china_ats.py`）——通用自建 SPA 官网 adapter，浏览器拦截站点自己的岗位接口、只放行带真实 per-job URL 的岗，**加源零代码**。当前 enabled sources 里 **0 个**在用。
    - `crawler/search_router.py`（千帆/博查/Tavily/Serper）——只服务「职业洞察 T3」，**完全没接扩源**。
-   - **国聘（iguopin）adapter 已写好并 live 验过**（commit `1c89996` + `56a67ed`，7/12 家央企达标：中国建筑 193 岗、中国电建 81 岗、中国铁建 10 岗、国家电网、中石油、工行、平安），**但躺在没合并的分支 `draft/codex-iguopin-0717`**。后果：Supabase 里那 4 个 iguopin 源自 2026-07-17 起再没被抓过（`jobs.last_seen_at` 最大值 = 2026-07-17），中国电建/中国铁建当前的健康岗是 7-17 的存货，即将被探活扫成 expired → **地产/建筑 15/30 会自己往下掉**。
+   - **国聘（iguopin）adapter 已写好并 live 验过**（commit `87adb22` + `d0f1913`，7/12 家央企达标：中国建筑 193 岗、中国电建 81 岗、中国铁建 10 岗、国家电网、中石油、工行、平安），**但躺在没合并的分支 `draft/codex-iguopin-0717`**。后果：Supabase 里那 4 个 iguopin 源自 2026-07-17 起再没被抓过（`jobs.last_seen_at` 最大值 = 2026-07-17），中国电建/中国铁建当前的健康岗是 7-17 的存货，即将被探活扫成 expired → **地产/建筑 15/30 会自己往下掉**。
 
 ### 1.3 计量瑕疵（已复核，规模有限但必须修）
 
@@ -168,7 +168,7 @@ RLS：`service_role` 全权；admin（`profiles.role='admin'`）只读。参照 
 
 ### 4.1 P0：国聘回收（第 1 天，独立可上线）
 
-1. **合并分支**：`git merge draft/codex-iguopin-0717`（2 commits：`1c89996`、`56a67ed`）。预期冲突点：`crawler/run.py`（ADAPTERS 表 + `_HTTPX_ADAPTERS` 列表）、`crawler/probe.py`、`lib/source-adapters.ts`。合并后：
+1. **合并分支**：`git merge draft/codex-iguopin-0717`（2 commits：`87adb22`、`d0f1913`）。预期冲突点：`crawler/run.py`（ADAPTERS 表 + `_HTTPX_ADAPTERS` 列表）、`crawler/probe.py`、`lib/source-adapters.ts`。合并后：
    - `crawler/run.py` 的 ADAPTERS 必须含 `"iguopin": IguopinAdapter()`；
    - `lib/source-adapters.ts` 白名单含 `iguopin`；
    - `enrich-backlog.yml` / `daily-crawl.yml` 的 adapter 分片名单如按 adapter 枚举，需同步（接线四处，见 memory `job-radar-must-apply-breakthrough`）。
@@ -176,7 +176,7 @@ RLS：`service_role` 全权；admin（`profiles.role='admin'`）只读。参照 
 3. **批量补央企源**（每家必须 live 验证后才入库）：
    候选（来自 §1.2 的 31 家「连清单都没进」+ 已在清单但零健康的央企）：
    中国石油、中国石化、中海油、国家电网、南方电网、国家能源集团、华能集团、三峡集团、中国中铁、中国中冶、中国能建、中国邮政、中远海运、招商蛇口、华润置地、中海地产、上海建工、东航物流。
-   - `source_url` 约定：`https://www.iguopin.com/job?company={公司全称}&match={精准匹配词}`（`match` 是 adapter 的精准过滤参数，见 commit `56a67ed`，用于根治国聘模糊搜索夹带无关岗）。
+   - `source_url` 约定：`https://www.iguopin.com/job?company={公司全称}&match={精准匹配词}`（`match` 是 adapter 的精准过滤参数，见 commit `d0f1913`，用于根治国聘模糊搜索夹带无关岗）。
    - **入库门**：跑一次真抓 → 香港库回读该 source 的健康岗 ≥1 → 抽查 1 条 `jd_url` 200 + 标题核验 + 公司归属正确 → 才写 `sources`。0 命中的（commit 记录里招行/中行/中石化/中铁/中信证券曾 0 命中）不入库，写台账 `no_active_jobs` + 14 天后复查。
    - `sources.company` 用**清单里的 name**，别用国聘上的全称变体，避免 pattern 对不上（这是历史高频病）。
 4. **修 `%万达%` 假绿**（诚实修正，覆盖会 -2）：

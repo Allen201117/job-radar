@@ -56,13 +56,13 @@ P3a（抽屉外露，独立小改，先落见效）→ P3b 快路② 官方页�
 
 ## 0.6 上线后实测 + 决策 A（2026-07-22，首次 prod cron 后，最新，优先于全文）
 
-**P3 已全部实现并上线 main（8 commit c082e15..0cf3531，Vercel 部署，零新迁移）。首次 prod cron（run 29914043898，40 家）实测 = 0 verified。**
+**P3 已全部实现并上线 main（8 commit cf9cfd8..5ac4822，Vercel 部署，零新迁移）。首次 prod cron（run 29914043898，40 家）实测 = 0 verified。**
 
 - **快是真快**：40 家几分钟跑完、零搜索额度。但**精确日期真实产出≈0**，且 live 探证「补官方域名填坑也无用」。
 - **真瓶颈（探 10 家高价值大厂官方页测出）**：不在「缺官方 host」，而在**大厂官方招聘页几乎全是 SPA**——日期前端 JS 渲染、不在 httpx 看到的 HTML 里（美团 34KB/大疆 68KB 有 HTML 无日期信号；网易/米哈游 campus 页 2-3KB SPA 空壳；理想/小鹏/腾讯音乐/小米 的 careers.*/campus.* 连 host 都猜不对）。唯一 SSR 出机读日期的是**字节 jobs.bytedance.com/campus（819KB），但当季 2027 日期还没挂**（页面显上一季 2026-03/04/05）。补对 host 照样撞 SPA 墙 + 无机读日期。
 - **✅ 创始人决策 A**：**接受快路② 做「零成本机会主义捞子」**——每晚自动跑，谁官方页恰好 SSR 出当季精确日期就顺手捞谁（字节挂出 2027 日期时/制造业官方 moka 域名列了日期时会捞到），捞不到诚实留白。**不再投「填官方域名 / 逐家 bespoke SPA 接口 / 回退慢搜索」的重工作**（精确日期真要拿只剩这三条，前两条创始人已排除、第三条正是想避开的慢+吃额度）。
 - **P3 对用户的即时价值 = P3a 抽屉外露 + P2 据往年时间线 + 快路① deadline 提示（三块均已上线）**；精确日期是 bonus 不是主菜。
-- **健壮性**：首次 cron 5 家（得物/贝壳/券商）httpx 读 body 时 RemoteProtocolError → 已修（`fetch_first_with_signal` 把 resp.text 包进 try，commit 0cf3531）转为 clean skip。
+- **健壮性**：首次 cron 5 家（得物/贝壳/券商）httpx 读 body 时 RemoteProtocolError → 已修（`fetch_first_with_signal` 把 resp.text 包进 try，commit 5ac4822）转为 clean skip。
 
 ## 1. 背景与目标
 

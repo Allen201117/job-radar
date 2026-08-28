@@ -422,7 +422,7 @@ git commit -m "feat(crawler): sources.regions 列 + run.py 透传给 adapter, �
 - [ ] **Step 1: 查现有隔离测试**
 
 Run: `grep -rn "_host\|per.source\|type()(" crawler/ | grep -i workday`
-读 commit fba4c56 引入的「每源新实例隔离」代码（`_process_one_source` 里 `type(adapter)()` 新实例）。
+读 commit f55c0ef 引入的「每源新实例隔离」代码（`_process_one_source` 里 `type(adapter)()` 新实例）。
 
 - [ ] **Step 2: 写/扩并发隔离测试**
 
