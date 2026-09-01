@@ -1,0 +1,17 @@
+王某某 | 求职意向：前端开发工程师
+邮箱：zzz@example.com  现居：深圳
+
+教育背景
+2021.09-2025.06  深圳大学  软件工程  本科
+
+实习经历
+2024.05-2024.12  某科技公司  前端开发实习生  深圳
+- 使用 React + TypeScript 开发中后台管理系统，交付 20+ 页面
+- 优化首屏加载，通过懒加载与代码分割将 LCP 从 3.2s 降到 1.4s
+- 参与组件库建设，沉淀 15 个通用组件
+
+项目经历
+个人博客系统：Next.js + Tailwind，SSR 渲染，部署在 Vercel
+
+技能
+JavaScript、TypeScript、React、Vue、Next.js、Webpack、Vite、CSS、Node.js、Git

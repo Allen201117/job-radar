@@ -33,3 +33,8 @@ crawler/targets_*
 crawler/*_candidates.json
 !crawler/famous_candidates.json
 moka_custom.json
+
+# 匹配评测器的运行产物（每次跑都重新生成，不入库）
+scripts/match-eval/parsed-profiles*.json
+scripts/match-eval/eval-raw*.json
+scripts/match-eval/*-judged.json
