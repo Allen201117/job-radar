@@ -243,10 +243,23 @@ def normalize(raw: RawJob, *, source_id: str, company: str) -> dict:
 def extract_job_type(title: str, summary: Optional[str] = None) -> Optional[str]:
     """从标题和摘要中推断岗位类型。"""
     text = f"{title} {summary or ''}".lower()
-    if "暑期实习" in text or re.search(r"summer(?:\s+\d{4})?\s+intern(ship)?s?\b", text, re.I):
-        return "暑期实习"
-    if any(w in text for w in ("日常实习", "daily intern", "off-cycle intern")):
-        return "日常实习"
+    title_text = str(title or "").lower()
+
+    # 层0：实习**只认标题**，且优先于下面所有看全文的规则。两个方向的坑都在这一层堵：
+    #   ① 实习被抢走：校招 / 留学生专项 / 管培生 三条规则都看「标题+整段正文」且原本排在实习之前，
+    #      而实习 JD 正文常写「面向 2027 届应届生」「留学生亦可」→ `研发实习生` 被标成校招、
+    #      `运维实习生` 被标成留学生专项，实习用户在实习专区收不到这些岗。
+    #   ② 社招被误标实习：正文里「有大厂实习经历者优先」是社招 JD 高频词，看全文会把
+    #      `高级后端工程师` 标成实习 —— 错标实习的危害更大（会把资深岗推给实习生，
+    #      见 recruitmentCategory 层1「实习自报最权威」）。
+    # 取舍：宁可漏判「标题没写但正文写明」的少数实习岗，也不能把社招错标成实习。
+    # 读时侧 recruitmentCategory 还有 url 门户层可以兜底。
+    if "实习" in title_text or re.search(r"\bintern(?:ship)?s?\b", title_text, re.I):
+        if "暑期实习" in text or re.search(r"summer(?:\s+\d{4})?\s+intern(ship)?s?\b", text, re.I):
+            return "暑期实习"
+        if any(w in text for w in ("日常实习", "daily intern", "off-cycle intern")):
+            return "日常实习"
+        return "实习"
     if any(w in text for w in ("管培生", "管理培训生", "graduate program", "management trainee")):
         return "管培生"
     if any(w in text for w in ("留学生", "海外学生", "overseas student", "returnee")):
@@ -257,16 +270,8 @@ def extract_job_type(title: str, summary: Optional[str] = None) -> Optional[str]
         return "校招"
     if re.search(r"\b(university\s+graduate|entry[-\s]?level)\b", text, re.I):
         return "校招"
-    # ⚠️ 英文 intern 必须走**词边界**，不能裸子串。text 是 `标题 + 整段 JD 正文`，
-    # 而 internal / international / internet 在英文 JD 里极其常见：
-    # 2026-09-02 真实库实测，裸子串让 27,824 个在招岗被标成 job_type=实习，
-    # Stripe 的 "internal tools"、汇丰的 "international banking"、辉瑞的
-    # "international clinical trials" 全部中招 —— `Principal Product Manager`（JD 明写要 6 年）
-    # 被标实习后，会被 recruitmentCategory 的「实习自报最权威」层直接认成实习岗推给实习生。
-    # 上面 summer / daily intern 两条规则本来就用了 \b，唯独这条漏了。
-    # 中文「实习」是 CJK，无词边界问题，保持子串。
-    if "实习" in text or re.search(r"\bintern(?:ship)?s?\b", text, re.I):
-        return "实习"
+    # （原本这里有一条「看全文判实习」的兜底，已上移到层0 并收紧成只认标题——
+    #   保留在这里会让正文的「有实习经历者优先」把社招岗标成实习。见层0 注释。）
     if any(
         w in text
         for w in ("投研", "研究员", "研究岗", "行业研究", "股票研究", "equity research", "investment research")
