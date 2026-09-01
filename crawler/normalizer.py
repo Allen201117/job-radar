@@ -257,7 +257,15 @@ def extract_job_type(title: str, summary: Optional[str] = None) -> Optional[str]
         return "校招"
     if re.search(r"\b(university\s+graduate|entry[-\s]?level)\b", text, re.I):
         return "校招"
-    if any(w in text for w in ("实习", "intern", "internship")):
+    # ⚠️ 英文 intern 必须走**词边界**，不能裸子串。text 是 `标题 + 整段 JD 正文`，
+    # 而 internal / international / internet 在英文 JD 里极其常见：
+    # 2026-09-02 真实库实测，裸子串让 27,824 个在招岗被标成 job_type=实习，
+    # Stripe 的 "internal tools"、汇丰的 "international banking"、辉瑞的
+    # "international clinical trials" 全部中招 —— `Principal Product Manager`（JD 明写要 6 年）
+    # 被标实习后，会被 recruitmentCategory 的「实习自报最权威」层直接认成实习岗推给实习生。
+    # 上面 summer / daily intern 两条规则本来就用了 \b，唯独这条漏了。
+    # 中文「实习」是 CJK，无词边界问题，保持子串。
+    if "实习" in text or re.search(r"\bintern(?:ship)?s?\b", text, re.I):
         return "实习"
     if any(
         w in text
