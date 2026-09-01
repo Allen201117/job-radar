@@ -99,6 +99,9 @@ export interface MatchFacts {
   roleTier: "exact" | "related" | null; // 跨 role+keyword 取最优 keywordMatchTier
   roleConstrained: boolean; // 用户是否设了 target role / keyword
   roleMatchLabel: string | null; // 产生最优 tier 的目标词（原因展示用）
+  // 方向命中是否落在**标题**上（而非只在 JD 正文里提了一嘴）。纯打分用：
+  // 「岗位名就是用户要的方向」与「JD 里顺带提到」的可投价值差一档，同给 exact 分会制造大量并列。
+  roleTitleHit: boolean;
 
   companyHit: boolean; // 命中用户 target company（归一 exact）
   companyName: string | null; // 命中的公司展示名（原因用）

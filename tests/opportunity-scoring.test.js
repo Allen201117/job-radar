@@ -15,6 +15,7 @@ function facts(over = {}) {
     roleTier: null,
     roleConstrained: false,
     roleMatchLabel: null,
+    roleTitleHit: false,
     companyHit: false,
     companyName: null,
     location: "na",
@@ -32,12 +33,15 @@ function facts(over = {}) {
   };
 }
 
-test("方向 exact 分高于 related", () => {
-  const exact = scoreOpportunity(facts({ roleTier: "exact" }), []).score;
+test("方向分三档：标题命中 40 > 仅正文命中 30 > 相关 22", () => {
+  // 三档是为了打散并列——旧的两档让真实画像的 TOP30 里出现 28 个同分岗位，排序退化成随机。
+  const titleHit = scoreOpportunity(facts({ roleTier: "exact", roleTitleHit: true }), []).score;
+  const bodyOnly = scoreOpportunity(facts({ roleTier: "exact" }), []).score;
   const related = scoreOpportunity(facts({ roleTier: "related" }), []).score;
-  assert.equal(exact, 35);
+  assert.equal(titleHit, 40);
+  assert.equal(bodyOnly, 30);
   assert.equal(related, 22);
-  assert.ok(exact > related);
+  assert.ok(titleHit > bodyOnly && bodyOnly > related);
 });
 
 test("目标公司命中 +15", () => {
@@ -58,10 +62,16 @@ test("技能命中每项 +3，封顶 +15", () => {
   assert.equal(scoreOpportunity(facts({ skillsHit: ["a", "b", "c", "d", "e", "f"] }), []).score, 15);
 });
 
-test("首次发现新鲜度分段：<=24h +10, <=72h +7, <=7d +3", () => {
+test("新鲜度连续衰减：24h 内满分 10，之后线性降到第 7 天归零", () => {
+  // 连续而非三档：三档意味着同档内这一项完全同分，是排序并列的另一个大来源。
   assert.equal(scoreOpportunity(facts({ noveltyHours: 10 }), []).score, 10);
-  assert.equal(scoreOpportunity(facts({ noveltyHours: 48 }), []).score, 7);
-  assert.equal(scoreOpportunity(facts({ noveltyHours: 120 }), []).score, 3);
+  assert.equal(scoreOpportunity(facts({ noveltyHours: 24 }), []).score, 10);
+  const d2 = scoreOpportunity(facts({ noveltyHours: 48 }), []).score;
+  const d3 = scoreOpportunity(facts({ noveltyHours: 72 }), []).score;
+  const d5 = scoreOpportunity(facts({ noveltyHours: 120 }), []).score;
+  assert.ok(d2 > d3 && d3 > d5 && d5 > 0, `应严格递减: ${d2} > ${d3} > ${d5} > 0`);
+  assert.equal(d2, 8.3); // (7-2)/6*10
+  assert.equal(scoreOpportunity(facts({ noveltyHours: 7 * 24 }), []).score, 0);
   assert.equal(scoreOpportunity(facts({ noveltyHours: 1000 }), []).score, 0);
   assert.equal(scoreOpportunity(facts({ noveltyHours: null }), []).score, 0);
 });
@@ -72,20 +82,20 @@ test("summary≥200 且 verified +5；非 verified 不加", () => {
 });
 
 test("已 viewed 未决定 -8（clamp 不为负）", () => {
-  assert.equal(scoreOpportunity(facts({ roleTier: "exact", viewed: true }), []).score, 27); // 35-8
+  assert.equal(scoreOpportunity(facts({ roleTier: "exact", viewed: true }), []).score, 22); // 30-8
   assert.equal(scoreOpportunity(facts({ viewed: true }), []).score, 0); // 0-8 → clamp 0
 });
 
 test("degraded 每项 -2，最低 -8", () => {
-  assert.equal(scoreOpportunity(facts({ roleTier: "exact" }), ["location"]).score, 33); // 35-2
-  assert.equal(scoreOpportunity(facts({ roleTier: "exact" }), ["location", "stage"]).score, 31); // 35-4
+  assert.equal(scoreOpportunity(facts({ roleTier: "exact" }), ["location"]).score, 28); // 30-2
+  assert.equal(scoreOpportunity(facts({ roleTier: "exact" }), ["location", "stage"]).score, 26); // 30-4
   // 5 项也只扣 8（实际最多 4 项，验证 floor）
-  assert.equal(scoreOpportunity(facts({ roleTier: "exact" }), ["a", "b", "c", "d", "e"]).score, 27); // 35-8
+  assert.equal(scoreOpportunity(facts({ roleTier: "exact" }), ["a", "b", "c", "d", "e"]).score, 22); // 30-8
 });
 
 test("score clamp 0–100", () => {
-  const big = facts({ roleTier: "exact", companyHit: true, location: "match", stage: "match", industry: "match", skillsHit: ["a", "b", "c", "d", "e"], noveltyHours: 1, summaryLong: true });
-  // 35+15+15+10+10+15+10+5 = 115 → clamp 100
+  const big = facts({ roleTier: "exact", roleTitleHit: true, companyHit: true, location: "match", stage: "match", industry: "match", skillsHit: ["a", "b", "c", "d", "e"], noveltyHours: 1, summaryLong: true });
+  // 40+15+15+10+10+15+10+5 = 120 → clamp 100
   assert.equal(scoreOpportunity(big, []).score, 100);
   assert.equal(scoreOpportunity(facts({ viewed: true }), ["a", "b", "c", "d"]).score, 0);
 });

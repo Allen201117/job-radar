@@ -41,7 +41,10 @@ export function buildReasons(f: MatchFacts): OpportunityReason[] {
 export function scoreOpportunity(f: MatchFacts, degraded: readonly DegradedDimension[]): ScoreResult {
   let raw = 0;
 
-  if (f.roleTier === "exact") raw += 35;
+  // 方向分三档而不是两档。真实画像实测：旧的两档让 TOP30 里出现 28 个同分岗位，
+  // 排序退化成随机——用户看到的前 10 个只是同分堆里任意抓的，方向修准了也感受不到。
+  // 「岗位名就是用户要的方向」和「JD 正文里顺带提了一句」可投价值差一档，不该同分。
+  if (f.roleTier === "exact") raw += f.roleTitleHit ? 40 : 30;
   else if (f.roleTier === "related") raw += 22;
 
   if (f.companyHit) raw += 15;
@@ -57,10 +60,12 @@ export function scoreOpportunity(f: MatchFacts, degraded: readonly DegradedDimen
 
   raw += Math.min(15, f.skillsHit.length * 3);
 
-  if (f.noveltyHours != null) {
-    if (f.noveltyHours <= 24) raw += 10;
-    else if (f.noveltyHours <= 72) raw += 7;
-    else if (f.noveltyHours <= 168) raw += 3;
+  // 新鲜度连续衰减，不再是 10/7/3 三档跳变——三档意味着同一档里的岗位这一项完全同分，
+  // 是并列的另一个大来源。24h 内满分，之后线性衰减到第 7 天归零，保留一位小数打散同分。
+  if (f.noveltyHours != null && f.noveltyHours >= 0) {
+    const days = f.noveltyHours / 24;
+    if (days <= 1) raw += 10;
+    else if (days < 7) raw += Math.round((10 * (7 - days)) / 6 * 10) / 10;
   }
 
   if (f.summaryLong && f.freshness === "verified") raw += 5;

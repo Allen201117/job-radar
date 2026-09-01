@@ -178,6 +178,13 @@ export function computeMatchFacts(
       ? bestRoleTier(job, directionQueries, keywordOptions)
       : { tier: null as null, label: null };
 
+  // 方向命中落在标题上还是只在正文里？用只带 title/company 的裁剪岗位再判一次即可
+  // （keywordMatchTier 的内容域来自 location/job_type/summary/salary，这里全部留空）。
+  const roleTitleHit =
+    role.tier === "exact" && role.label
+      ? keywordMatchTier({ ...job, summary: null, job_type: null, salary_text: null, location: null }, role.label, keywordOptions) === "exact"
+      : false;
+
   const loc = locationState(job, profile);
   const stage = stageState(job, profile.experienceStage);
   const ind = industryState(job, profile.targetIndustries);
@@ -199,6 +206,7 @@ export function computeMatchFacts(
     roleTier: role.tier,
     roleConstrained,
     roleMatchLabel: role.label,
+    roleTitleHit,
     companyHit: company.hit,
     companyName: company.name,
     location: loc.state,
