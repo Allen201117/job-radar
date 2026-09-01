@@ -48,7 +48,7 @@
 
 ### 3.1 迁移 144/145 卡住没 apply（线上 schema 落后于代码）
 
-- 已 push 的迁移（在 origin/main，HEAD `2bc0f7c`）：
+- 已 push 的迁移（在 origin/main，HEAD `16924ba`）：
   - `supabase/migrations/144_jobs_canonical_jd_url.sql` — 加 `canonical_jd_url` 列 + 回填 + 触发器 + **dedup 存量重复（降级 removed）** + active partial unique index。
   - `supabase/migrations/145_active_job_counts_by_company.sql` — `active_job_counts_by_company()` RPC（career-path 用）。
 - **`db-migrate` workflow 失败两次**：
@@ -159,12 +159,12 @@
 
 ## 7. 当前 git / 迁移状态
 
-- 分支 `main`，HEAD = `2bc0f7c`，**本地与 origin/main 已同步**（0 领先）。
+- 分支 `main`，HEAD = `16924ba`，**本地与 origin/main 已同步**（0 领先）。
 - 近期相关 commit：
-  - `2bc0f7c` fix(db): 迁移144回填抬高 statement_timeout
-  - `2053a6a` docs(CLAUDE): 固化 canonical_jd_url 三处同步约束
-  - `1869967` feat(db): jobs 唯一性下沉到 DB（144 原始版）
-  - `a0ec076` perf(career-path): 在招计数下沉到 DB 聚合（145）
+  - `16924ba` fix(db): 迁移144回填抬高 statement_timeout
+  - `e6e9227` docs(CLAUDE): 固化 canonical_jd_url 三处同步约束
+  - `fa8ad50` feat(db): jobs 唯一性下沉到 DB（144 原始版）
+  - `d08dcfe` perf(career-path): 在招计数下沉到 DB 聚合（145）
 - 生产库 schema 实际停在 **143**（144/145 未 apply，等空间）。
 - 仓库根另有 `CODEX_REVIEW.md`（更早一轮全局审阅，可选读）。
 
