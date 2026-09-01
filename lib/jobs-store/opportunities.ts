@@ -11,7 +11,7 @@ import "server-only";
 import { jobsQuery } from "./client";
 import { jobsStoreEnabled } from "./read";
 import { buildTsquery } from "@/lib/job-search";
-import { ftsCandidateTerms, classifyJobFunction } from "@/lib/china-keyword-expansion";
+import { keywordMatchUnits, classifyJobFunction } from "@/lib/china-keyword-expansion";
 import { userTargetFunctions } from "@/lib/opportunities/eligibility";
 import { appendJobScopeWhere, effectiveTargetRegions, jobMatchesScope } from "@/lib/job-scope";
 import type { RadarProfile } from "@/lib/opportunities/types";
@@ -97,21 +97,60 @@ function roleTsquery(profile: RadarProfile): string | null {
     const fn = classifyJobFunction({ title: term });
     return Boolean(fn && fn !== "其他" && !targetFns.has(fn));
   };
-  // 同时按词去重：多个关键词常映射到同一个词库组（如 SQL / Python / 数据分析），
-  // 不去重会把 `(数据 & 据分 & 分析)` 之类的子句原样重复三四遍，纯属让 GIN 白干。
-  const seen = new Set<string>();
-  const out: string[] = [];
+  // 每个查询词按**它自己的 AND 单元结构**建子句，词与词之间才 OR。
+  //
+  // 旧实现把所有词的词库扩展**全部拍平成一个大 OR**，代价是召回池被泛词彻底稀释：
+  // 「前端开发工程师」扩展后含「工程师 / engineer / 研发 / developer」，而库里泛工程师岗有 82,738 个、
+  // 真前端岗只有 1,225 个 → 1,800 的召回预算几乎全被泛工程师岗吃掉，stage-2 再把它们一个个拒掉
+  // （实测 1,125 个候选里 1,094 个 role_mismatch），真前端岗只剩 24 个能展示。**这不是精度问题，
+  // 是召回池根本没捞到货**：过滤器修得再准，池子里没有对的岗也白搭。
+  //
+  // 改成 AND-of-ORs 后同一个查询变成 `(前端|frontend|react|…) & (工程师|engineer|…)`，
+  // 与 stage-2 的 keywordMatchUnits 用**同一套**单元拆分，两端口径一致、召回不再喂给过滤器一池垃圾。
+  const clauses: string[] = [];
+  const seenClause = new Set<string>();
+  const seenTerm = new Set<string>();
+  let clauseBudget = ROLE_TSQUERY_CLAUSE_BUDGET;
+
   for (const t of terms) {
-    const group = out.length < ROLE_TSQUERY_CLAUSE_BUDGET ? ftsCandidateTerms(t, { includeOverseasLexicon }) : [t];
-    for (const term of group) {
-      const key = String(term).trim().toLowerCase();
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      if (outOfScope(term)) continue;
-      out.push(term);
+    // 超出扩展预算后**不丢词**，只是不再展开词库——原词单独成子句仍能精确召回。
+    // （沿用旧实现的语义：预算砍掉的是长尾近义扩展，不是用户的检索意图。）
+    const units = clauseBudget > 0 ? keywordMatchUnits(t, { includeOverseasLexicon }) : [];
+    const unitClauses: string[] = [];
+    for (const unit of units) {
+      // 职能剪枝沿用旧口径：跨职能的**扩展词**剪掉。
+      // 单单元的词还要过一遍全局词去重：单单元子句本质就是顶层的一段扁平 OR，
+      // 同一个词在多段里重复只会让 GIN 白扫（实测「AI」的单向展开含整个算法组，
+      // 与用户另外写的「算法」整组重叠 10 个词）。OR 幂等，去重不改语义。
+      // 多单元（AND）子句不参与：它的每个 OR 组都是 AND 的一侧，缺词会放宽匹配。
+      const singleUnit = units.length === 1;
+      const kept = unit.filter(
+        (term) => !outOfScope(term) && !(singleUnit && seenTerm.has(term)),
+      );
+      if (singleUnit) for (const term of kept) seenTerm.add(term);
+      // 整个单元被剪光 → 这个词的这一层完全跨职能，AND 结构不成立，整条走下面的原词回退。
+      if (!kept.length) { unitClauses.length = 0; break; }
+      const q = buildTsquery(kept, []);
+      if (!q) { unitClauses.length = 0; break; }
+      unitClauses.push(q);
+      clauseBudget -= kept.length;
     }
+
+    // 回退到用户原词：**原词一律不剪**（他写「Prompt Engineering」就是要搜它，哪怕这个词
+    // 整体属于别的职能）。只有词库**扩展**出来的跨职能词才该被剪——丢掉原词等于把用户
+    // 明确写下的检索意图吃掉。契约钉在 tests/opportunity-recall-function-prune.test.js。
+    const clause = unitClauses.length
+      ? unitClauses.length === 1
+        ? unitClauses[0]
+        : `(${unitClauses.join(" & ")})`
+      : buildTsquery([t], []);
+    if (!clause) continue;
+    if (seenClause.has(clause)) continue; // SQL/Python/数据分析 常拆出同一组单元，去重免得 GIN 白干
+    seenClause.add(clause);
+    clauses.push(clause);
   }
-  return buildTsquery(out, []);
+
+  return clauses.length ? clauses.join(" | ") : null;
 }
 
 function mergeById(target: Map<string, any>, rows: any[] | null | undefined): void {

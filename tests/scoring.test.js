@@ -454,3 +454,45 @@ function makePreferences() {
     daily_limit: 20,
   };
 }
+
+test("技能关键词只加分、不算方向命中（requireRelevance 下不得把跨方向岗放进看板）", () => {
+  // 真实画像实测：数据分析师的简历技能里有 Excel，旧实现让「结算专员」凭 Excel 拿到
+  // content_matched=true 混进 Today 看板，卡片理由写着「方向匹配：Excel」。
+  const prefs = {
+    target_roles: ["数据分析师"],
+    target_keywords: ["Excel"],
+    target_locations: [],
+    target_companies: [],
+    target_industries: [],
+    exclude_keywords: [],
+  };
+  const job = {
+    id: "j-settle",
+    title: "结算专员",
+    company: "某广告公司",
+    location: "北京",
+    summary: "负责与媒体的结算工作，把控资金流向，账单核对，保障现金流与付款管理，熟练使用 Excel 完成对账。",
+  };
+  const out = sortAndFilterJobs([job], prefs, [], { requireRelevance: true });
+  assert.equal(out.length, 0, "只靠技能词命中的跨方向岗不该进看板");
+});
+
+test("用户没填目标岗位时，关键词仍然回退充当方向（否则这类用户一个岗都收不到）", () => {
+  const prefs = {
+    target_roles: [],
+    target_keywords: ["数据分析"],
+    target_locations: [],
+    target_companies: [],
+    target_industries: [],
+    exclude_keywords: [],
+  };
+  const job = {
+    id: "j-da",
+    title: "数据分析师",
+    company: "某公司",
+    location: "北京",
+    summary: "负责业务数据分析与看板搭建。",
+  };
+  const out = sortAndFilterJobs([job], prefs, [], { requireRelevance: true });
+  assert.equal(out.length, 1, "没填目标岗位时关键词必须还能当方向用");
+});

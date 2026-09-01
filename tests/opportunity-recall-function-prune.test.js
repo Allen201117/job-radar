@@ -98,8 +98,22 @@ test("同职能与判不出职能的扩展词照常保留（别剪过头）", ()
 test("用户没填 targetRoles（判不出目标职能）时一个词都不剪", () => {
   // userTargetFunctions 只看 targetRoles；集合为空 = 无从判断，此时必须保持原样不剪
   const built = buildRecallSql(mk({ targetKeywords: ["Prompt Engineering"] }), SINCE, 900);
-  const roleTs = roleTsqueryOf(built, "Prompt Engineering");
+  // 锚点用扩展词而非原词整串：方向 tsquery 现在是 AND-of-ORs（见 roleTsquery 注释），
+  // 「Prompt Engineering」被拆成 `(工程师|engineer|…) & (prompt)`，整串不再字面出现。
+  // 剪枝契约看的是「哪些词在」，不是「以什么结构在」——逐词断言即可。
+  const roleTs = roleTsqueryOf(built, "engineer");
   for (const kept of ["工程师", "engineer", "研发"]) {
     assert.ok(roleTs.includes(clauseFor(kept)), `没有目标职能可依据时不该剪掉「${kept}」`);
   }
+  assert.ok(roleTs.includes(clauseFor("prompt")), "残差单元 prompt 必须在，否则原词意图丢失");
+});
+
+test("方向 tsquery 是 AND-of-ORs：泛词不能单独召回岗位", () => {
+  // 本轮召回改造的核心契约。旧实现把词库扩展拍平成一个大 OR，「前端开发工程师」里的「工程师」
+  // 单独就能命中 → 库里 82,738 个泛工程师岗把 1,800 的召回预算吃干净，真前端岗（1,225 个）
+  // 只有 24 个进得了候选池。AND 结构让泛词只能做限定、不能单独召回。
+  const built = buildRecallSql(mk({ targetRoles: ["前端开发工程师"] }), SINCE, 900);
+  const roleTs = roleTsqueryOf(built, "前端");
+  assert.match(roleTs, /&/, "方向 tsquery 必须含 AND 连接符，否则又退回泛词全 OR");
+  assert.ok(roleTs.includes(clauseFor("工程师")), "泛词仍参与，但只作为 AND 的一侧");
 });

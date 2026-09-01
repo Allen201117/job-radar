@@ -157,8 +157,16 @@ export function computeMatchFacts(
   action: ActionState,
   now: Date
 ): MatchFacts {
-  const roleQueries = [...profile.targetRoles, ...profile.targetKeywords];
-  const roleConstrained = roleQueries.length > 0;
+  // 方向（occupation）与技能（skill）分离：方向只认**目标岗位**，技能词一律不参与方向判定。
+  // 简历解析把「技能」原样灌进 target_keywords（Python / SQL / Excel / Figma），旧实现把它们
+  // 与目标岗位一起当方向查询 → 真实画像实测：方向「数据分析师」的用户被推「结算专员」「管理培训生」，
+  // 卡片上写着「方向匹配：Excel」。技能是求职者会什么，不是他想做什么，判不了方向。
+  // 用户没填目标岗位时才回退用关键词——否则这类用户一个岗位都召不回。
+  const directionQueries = profile.targetRoles.length > 0 ? profile.targetRoles : profile.targetKeywords;
+  const roleConstrained = directionQueries.length > 0;
+  // 关键词降级为「加分技能」（≤15 分封顶），只有在它没被当作方向查询时才并入，避免同一个词双重计分。
+  const skillTerms =
+    profile.targetRoles.length > 0 ? [...profile.skills, ...profile.targetKeywords] : profile.skills;
   // 职能门：岗位职能判得出且不在用户方向集内 → 不认作方向匹配（roleTier=null → checkEligibility 按 role_mismatch 拒掉）。
   // 这样「后端/算法开发(研发)」不会因 JD 里含 AI/产品 被误标 方向匹配/高匹配。判不出(其他)或用户没填方向 → 放行（不误杀）。
   const userFns = userTargetFunctions(profile);
@@ -166,7 +174,9 @@ export function computeMatchFacts(
   const functionAllowed = userFns.size === 0 || jobFn === "其他" || userFns.has(jobFn);
   const keywordOptions = usesOverseasScope(profile, job) ? { includeOverseasLexicon: true } : {};
   const role =
-    roleConstrained && functionAllowed ? bestRoleTier(job, roleQueries, keywordOptions) : { tier: null as null, label: null };
+    roleConstrained && functionAllowed
+      ? bestRoleTier(job, directionQueries, keywordOptions)
+      : { tier: null as null, label: null };
 
   const loc = locationState(job, profile);
   const stage = stageState(job, profile.experienceStage);
@@ -198,7 +208,7 @@ export function computeMatchFacts(
     education: educationState(job, profile.highestEducation),
     industry: ind.state,
     industryName: ind.name,
-    skillsHit: skillsHit(job, profile.skills),
+    skillsHit: skillsHit(job, skillTerms),
     noveltyHours,
     userAction: action.primary,
     viewed: action.viewed,

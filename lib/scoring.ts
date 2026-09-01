@@ -132,6 +132,13 @@ export function scoreJob(
   // target_keywords 命中：同走 keywordMatchTier 跨语言召回（与 Jobs 页同口径），替换裸 includes。
   // 同样过跨行业门 + 职能门（与 role 一致）：跨行业 / 跨职能岗的技能命中不算数
   // （否则 PM 的 SQL/Python 会命中一切数据/研发岗，把工程师岗刷成高匹配）。
+  //
+  // ⚠️ 关键词**只加分、不算「方向命中」**（与 lib/opportunities/eligibility.ts 同口径）：
+  // 简历解析把技能原样灌进 target_keywords（Python / SQL / Excel / Figma），技能是「会什么」
+  // 不是「想做什么」，判不了方向。真实画像实测：让它置 content_matched 会把「结算专员」
+  // 「管理培训生」放进数据分析师的看板，理由写着「方向匹配：Excel」。
+  // 用户没填目标岗位时才回退——否则这类用户一个岗位都过不了 requireRelevance 硬门。
+  const keywordsCountAsDirection = targetRoles.length === 0;
   for (const kw of targetKeywords) {
     const keywordTier =
       industryAllowed && functionAllowed ? keywordMatchTier(job, kw, keywordOptions) : null;
@@ -139,7 +146,7 @@ export function scoreJob(
       score += keywordTier === "related" ? 2.5 : 5;
       matched_keywords.push(kw);
       match_reasons.push({ type: "keyword", value: kw });
-      content_matched = true;
+      if (keywordsCountAsDirection) content_matched = true;
     }
   }
 
