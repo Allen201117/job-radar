@@ -22,6 +22,7 @@ import {
   subscribeAvailability,
 } from "@/lib/insight-client";
 import { groupCampusJobs } from "@/lib/campus-zone";
+import { formatDateLabel } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import type { WindowState } from "@/lib/campus-zone";
 import type { ScoredJob } from "@/lib/types";
@@ -510,7 +511,7 @@ export default function CampusClient({
                   {card.preciseDates.length === 0 && card.cleanDeadlineMs && (
                     <p className="text-[12px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
                       据在招岗位约{" "}
-                      {new Date(card.cleanDeadlineMs).toLocaleDateString("zh-CN", { month: "long", day: "numeric" })}{" "}
+                      {formatDateLabel(card.cleanDeadlineMs, { month: "long", day: "numeric" })}{" "}
                       前截止
                     </p>
                   )}

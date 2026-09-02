@@ -5,6 +5,7 @@
 // 顶部漏斗小结让用户一眼看到自己的求职管道，不用回 Excel 记进展。
 import { useMemo, useState } from "react";
 import { ArrowSquareOut, MapPin } from "@phosphor-icons/react";
+import { formatDateLabel } from "@/lib/relative-time";
 
 export type AppliedItem = {
   jobId: string;
@@ -102,7 +103,7 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
                         {item.location}
                       </span>
                     )}
-                    投递于 {item.createdAt ? new Date(item.createdAt).toLocaleDateString("zh-CN") : "—"}
+                    投递于 {formatDateLabel(item.createdAt) ?? "—"}
                   </div>
                 </div>
                 {item.down ? (

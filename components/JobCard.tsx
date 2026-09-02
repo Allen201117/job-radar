@@ -30,7 +30,7 @@ import {
   jobFieldDisplayValue,
 } from "@/lib/job-fields";
 import { gradClassLabel, isEarlyBatch } from "@/lib/campus-batch";
-import { relativeTimeLabel } from "@/lib/relative-time";
+import { formatDateLabel, relativeTimeLabel } from "@/lib/relative-time";
 import { matchTier } from "@/lib/scoring";
 import CompanyInsightDrawer from "@/components/CompanyInsightDrawer";
 import CompanyLogo from "@/components/CompanyLogo";
@@ -385,9 +385,7 @@ export default function JobCard({
   const isNew =
     job.first_seen_at &&
     (Date.now() - new Date(job.first_seen_at).getTime()) / 86400000 <= 3;
-  const posted = job.posted_at
-    ? new Date(job.posted_at).toLocaleDateString("zh-CN")
-    : null;
+  const posted = formatDateLabel(job.posted_at);
   const postedRelative = relativeTimeLabel(job.posted_at);
   const postedLabel = jobFieldDisplayValue(
     posted && postedRelative ? `${posted} · ${postedRelative}` : posted,
