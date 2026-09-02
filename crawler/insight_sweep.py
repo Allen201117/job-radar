@@ -10,6 +10,7 @@ import os
 import sys
 from datetime import datetime, timezone
 
+import db
 
 def expired_cutoff(now=None):
     """今天的 UTC 日期串；valid_until < 此值即过期（含当天有效，次日才算过期）。"""
@@ -27,12 +28,16 @@ def is_expired(item, now=None):
 
 def sweep(sb, now=None):
     """把所有 valid_until 已过的 active 条目批量置 retired。返回退役条数。"""
-    rows = (sb.table("insight_items").select("id,valid_until")
-            .eq("status", "active").not_.is_("valid_until", "null").execute().data) or []
-    expired = [r["id"] for r in rows if is_expired(r, now)]
+    cutoff = expired_cutoff(now)
+    expired = [r["id"] for r in db.fetch_all_rows(
+        lambda: (sb.table("insight_items").select("id,valid_until")
+                 .eq("status", "active")
+                 .not_.is_("valid_until", "null")
+                 .lt("valid_until", cutoff))
+    )]
     for i in range(0, len(expired), 200):
         sb.table("insight_items").update({"status": "retired"}).in_("id", expired[i:i + 200]).execute()
-    print(f"过期下架：{len(expired)}/{len(rows)} 条 active(带 valid_until) → retired（cutoff={expired_cutoff(now)}）")
+    print(f"过期下架：{len(expired)} 条 active(带 valid_until) → retired（cutoff={cutoff}）")
     return len(expired)
 
 

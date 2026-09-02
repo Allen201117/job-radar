@@ -456,3 +456,23 @@ class ExistingSourceKeysPaginationTest(unittest.TestCase):
         self.assertNotIn("礼来", companies, "只有 disabled 源的公司不能算已覆盖")
         self.assertIn("海尔", companies)
         self.assertIn("https://x/lilly", urls, "URL 去重仍要含 disabled，避免重复插同一行")
+
+
+class AutoDiscoverLedgerTest(unittest.TestCase):
+    def test_static_exhaustion_records_explicit_metrics(self):
+        static_targets = [_t("已在库公司")]
+        ledger = mock.Mock(return_value=True)
+        with mock.patch.object(ad.db, "get_supabase", return_value=object()), \
+             mock.patch.object(ad, "load_user_wanted_companies", return_value=set()), \
+             mock.patch.object(ad, "existing_source_keys", return_value=({"已在库公司"}, set())), \
+             mock.patch.object(ad, "load_curated_targets", return_value=static_targets), \
+             mock.patch.object(ad, "load_targets", return_value=static_targets), \
+             mock.patch.object(ad, "plan_targets", return_value=[]), \
+             mock.patch.object(ad.ops_runs, "record_ops_run", ledger):
+            ad.main()
+        _sb, module, metrics = ledger.call_args.args[:3]
+        self.assertEqual(module, "auto_discover")
+        self.assertTrue(metrics["exhausted"])
+        self.assertEqual(metrics["candidates_total"], 1)
+        self.assertEqual(metrics["already_in_library"], 1)
+        self.assertEqual(metrics["deduped"], 0)

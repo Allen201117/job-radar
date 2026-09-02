@@ -1,4 +1,6 @@
 import sys
+import json
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +48,20 @@ class BrowserQueueTest(unittest.TestCase):
             "next_retry_at": "2026-08-10T00:00:00+00:00",
         }
         self.assertEqual(browser.plan_browser_queue([row], cap=5, now=NOW), [])
+
+    def test_handoff_rows_are_prioritized_before_ledger_queue(self):
+        handoff = _row("P1 新公司")
+        handoff["next_retry_at"] = "2099-01-01T00:00:00+00:00"
+        ledger = [_row("存量公司")]
+        queue = browser.merge_browser_queues([handoff], ledger, cap=2, now=NOW)
+        self.assertEqual([row["company"] for row in queue], ["P1 新公司", "存量公司"])
+
+    def test_reads_handoff_file_and_falls_back_when_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "handoff.json"
+            path.write_text(json.dumps({"companies": [_row("交接公司")]}), encoding="utf-8")
+            self.assertEqual(browser.load_handoff_rows(path)[0]["company"], "交接公司")
+            self.assertEqual(browser.load_handoff_rows(Path(directory) / "missing.json"), [])
 
 
 class BrowserCompanyTest(unittest.TestCase):

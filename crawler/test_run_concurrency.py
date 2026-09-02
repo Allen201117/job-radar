@@ -554,7 +554,7 @@ class RunCrawlIntegrationTest(unittest.TestCase):
             "get_sb": run.db.get_supabase, "get_src": run.db.get_sources,
             "create": run.db.create_crawl_run, "update": run.db.update_crawl_run,
             "upsert_batch": run.db.upsert_jobs_batch, "ts": run.db.update_source_timestamp,
-            "robots": run.check_robots,
+            "robots": run.check_robots, "ops_run": run.ops_runs.record_ops_run,
         }
         run._HTTPX_SAFE_ADAPTERS.add("_fake_httpx")  # 让假 httpx 源进并发档
         run.db.get_supabase = lambda: "SB"
@@ -568,6 +568,7 @@ class RunCrawlIntegrationTest(unittest.TestCase):
         run.db.upsert_jobs_batch = lambda sb, jobs: (len(jobs), 0)
         run.db.update_source_timestamp = lambda sb, sid: None
         run.check_robots = lambda url: {"allowed": True, "reason": ""}
+        run.ops_runs.record_ops_run = mock.Mock(return_value=True)
         run.ADAPTERS["_fake_httpx"] = _FakeAdapter()
         run.ADAPTERS["_fake_browser"] = _FakeBrowserAdapter()
 
@@ -581,6 +582,7 @@ class RunCrawlIntegrationTest(unittest.TestCase):
         run.db.upsert_jobs_batch = self._orig["upsert_batch"]
         run.db.update_source_timestamp = self._orig["ts"]
         run.check_robots = self._orig["robots"]
+        run.ops_runs.record_ops_run = self._orig["ops_run"]
         run.ADAPTERS.pop("_fake_httpx", None)
         run.ADAPTERS.pop("_fake_browser", None)
 
@@ -604,6 +606,27 @@ class RunCrawlIntegrationTest(unittest.TestCase):
         self.assertEqual(summary["created"], 1)
         self.assertEqual(summary["success"], 1)
         self.assertEqual(summary["failed"], 0)
+
+    def test_records_daily_crawl_ops_run(self):
+        run.run_crawl()
+        _sb, module, metrics = run.ops_runs.record_ops_run.call_args.args[:3]
+        self.assertEqual(module, "daily_crawl")
+        self.assertEqual(metrics["sources_total"], 3)
+        self.assertEqual(metrics["success_count"], 3)
+        self.assertEqual(metrics["jobs_found_total"], 3)
+        self.assertFalse(metrics["all_empty"])
+
+    def test_all_empty_is_recorded_as_success_with_warning_metric(self):
+        source = {"adapter_name": "_fake_httpx", "company": "空源",
+                  "source_url": "https://empty.example.com/list", "id": "empty"}
+        with mock.patch.object(
+            run, "_process_one_source",
+            return_value={"status": "empty", "created": 0, "updated": 0},
+        ):
+            run.run_crawl(sources_override=[source])
+        _sb, _module, metrics = run.ops_runs.record_ops_run.call_args.args[:3]
+        self.assertTrue(metrics["all_empty"])
+        self.assertEqual(run.ops_runs.record_ops_run.call_args.kwargs["status"], "success")
 
     def test_shard_round_robin_covers_all_without_overlap(self):
         # 源分片轮转 1/2：片 0 = 并发[0::2]=[a] + 串行[0::2]=[c] → 2 源；片 1 = 并发[1::2]=[b] + 串行[]→ 1 源。

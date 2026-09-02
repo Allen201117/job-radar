@@ -1,6 +1,7 @@
 """职业洞察过期下架巡检单测（纯日期逻辑 + sweep 编排，不打网络/DB）。"""
 import unittest
 from datetime import datetime, timezone
+from unittest import mock
 
 import insight_sweep as S
 
@@ -26,6 +27,7 @@ class _FakeQ:
     def __init__(self, store):
         self.store = store
         self._upd = None
+        self._lt = None
 
     def select(self, *a, **k):
         return self
@@ -40,6 +42,17 @@ class _FakeQ:
     def is_(self, *a, **k):
         return self
 
+    def lt(self, col, value):
+        self._lt = (col, value)
+        self.store["lt"] = self._lt
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def range(self, *a, **k):
+        return self
+
     def in_(self, col, vals):
         self.store.setdefault("retired_ids", []).extend(vals)
         return self
@@ -52,7 +65,11 @@ class _FakeQ:
         if self._upd is not None:
             self.store.setdefault("updates", []).append(self._upd)
             return type("R", (), {"data": []})()
-        return type("R", (), {"data": self.store.get("_rows", [])})()
+        rows = self.store.get("_rows", [])
+        if self._lt:
+            col, value = self._lt
+            rows = [row for row in rows if str(row.get(col) or "") < value]
+        return type("R", (), {"data": rows})()
 
 
 class _FakeSB:
@@ -76,6 +93,7 @@ class TestSweep(unittest.TestCase):
         self.assertEqual(n, 2)
         self.assertEqual(sorted(store.get("retired_ids", [])), ["a", "c"])
         self.assertTrue(all(u == {"status": "retired"} for u in store.get("updates", [])))
+        self.assertEqual(store["lt"], ("valid_until", "2026-06-20"))
 
     def test_nothing_expired_no_update(self):
         store = {"_rows": [{"id": "b", "valid_until": "2026-12-31"}]}
@@ -83,6 +101,13 @@ class TestSweep(unittest.TestCase):
         self.assertEqual(n, 0)
         self.assertEqual(store.get("retired_ids", []), [])
         self.assertEqual(store.get("updates", []), [])
+
+    def test_paginates_more_than_postgrest_page(self):
+        expired = [{"id": str(i), "valid_until": "2026-01-01"} for i in range(1201)]
+        with mock.patch.object(S.db, "fetch_all_rows", return_value=expired) as fetch_all:
+            n = S.sweep(_FakeSB({}), self.NOW)
+        self.assertEqual(n, 1201)
+        self.assertEqual(len(fetch_all.call_args_list), 1)
 
 
 if __name__ == "__main__":

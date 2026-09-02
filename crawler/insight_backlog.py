@@ -55,7 +55,8 @@ def seed_from_sources(sb):
     srcs = db.fetch_all_rows(
         lambda: sb.table("sources").select("company").eq("enabled", True))
     companies = sorted({(s.get("company") or "").strip() for s in srcs if (s.get("company") or "").strip()})
-    existing = (sb.table("company_profiles").select("company").execute().data) or []
+    existing = db.fetch_all_rows(
+        lambda: sb.table("company_profiles").select("company"))
     have = {(c.get("company") or "").strip() for c in existing}
     todo = [c for c in companies if c not in have]
     for i in range(0, len(todo), 100):
@@ -69,13 +70,12 @@ def seed_from_sources(sb):
 def fetch_queue(sb, limit=0):
     """取队列：insight_checked_at 为空 或 超 TTL，且未超死信。"""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=TTL_DAYS)).isoformat()
-    q = (sb.table("company_profiles")
-         .select("id,company,aliases,insight_fail_count")
-         .lt("insight_fail_count", MAX_FAIL)
-         .or_(f"insight_checked_at.is.null,insight_checked_at.lt.{cutoff}"))
-    if limit:
-        q = q.limit(limit)
-    return (q.execute().data) or []
+    rows = db.fetch_all_rows(
+        lambda: (sb.table("company_profiles")
+                 .select("id,company,aliases,insight_fail_count")
+                 .lt("insight_fail_count", MAX_FAIL)
+                 .or_(f"insight_checked_at.is.null,insight_checked_at.lt.{cutoff}")))
+    return rows[:limit] if limit else rows
 
 
 def _existing_listing(sb, company_id):
@@ -399,18 +399,18 @@ def fetch_t3_queue(sb, limit):
     凡有画像即可入 T3 队列。安全/温和靠 drain_t3 的搜索额度封顶（~90/天）+ 判官 ≥2 源共识门自动 abstain
     低信号公司，不会爆预算。notable 优先（founded_year desc）先花额度在信号好的公司上。"""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=T3_TTL_DAYS)).isoformat()
-    q = (sb.table("company_profiles").select("id,company,aliases,t3_fail_count")
-         .lt("t3_fail_count", MAX_FAIL)
-         .or_(f"t3_checked_at.is.null,t3_checked_at.lt.{cutoff}")
-         .order("founded_year", desc=True, nullsfirst=False)
-         .order("t3_checked_at", desc=False, nullsfirst=True))
+    def query():
+        return (sb.table("company_profiles").select("id,company,aliases,t3_fail_count")
+                .lt("t3_fail_count", MAX_FAIL)
+                .or_(f"t3_checked_at.is.null,t3_checked_at.lt.{cutoff}")
+                .order("founded_year", desc=True, nullsfirst=False)
+                .order("t3_checked_at", desc=False, nullsfirst=True))
+
+    rows = db.fetch_all_rows(query)
     if not jobs_db.enabled():
-        if limit:
-            q = q.limit(limit)
-        return (q.execute().data) or []
+        return rows[:limit] if limit else rows
 
     # 仅 jobs 库可用时才多取候选：按在招岗需求排序后再截断，避免 founded_year 把大户永远挤在队尾。
-    rows = (q.execute().data) or []
     if not rows:
         return []
     try:

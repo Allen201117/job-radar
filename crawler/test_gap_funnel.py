@@ -1,6 +1,8 @@
 import contextlib
 import io
+import json
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1250,6 +1252,24 @@ class CandidateItemsDedupeTest(unittest.TestCase):
             for item in gf._candidate_items({}, None, {"candidates": items})
         ]
         self.assertEqual(len(urls), 2)
+
+
+class BrowserHandoffTest(unittest.TestCase):
+    def test_writes_only_unknown_spa_rows_for_p2(self):
+        outcomes = [
+            {"company": "P1 SPA", "state": "wrong_platform", "industries": ["金融"],
+             "official_entry_url": "https://spa.example/jobs", "detected_platform": "unknown_spa",
+             "evidence": {"fingerprint": {"real_adapter": "moka"}}},
+            {"company": "已处理", "official_entry_url": "https://ok.example/jobs",
+             "detected_platform": "greenhouse"},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "handoff.json"
+            rows = gf.write_browser_handoff(path, outcomes)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual([row["company"] for row in rows], ["P1 SPA"])
+        self.assertEqual(payload["version"], 1)
+        self.assertEqual(payload["companies"][0]["official_entry_url"], "https://spa.example/jobs")
 
 
 class BackoffSpreadTest(unittest.TestCase):

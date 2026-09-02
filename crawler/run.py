@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 import db
 import jobs_db
 import normalizer
+import ops_runs
 from robots import check_robots
 from adapters.apple import AppleAdapter, AppleChinaAdapter
 from adapters.baidu import BaiduAdapter
@@ -564,6 +565,26 @@ def run_crawl(filter_adapter: str = None, tier: str = "all",
     # 空着是常态，误判成失败会让它吃长退避、错过整个开闸窗口（campus_board_verify 实测踩到）。
     empty_count = sum(1 for r in results if r["status"] == "empty")
     skipped_count = sum(1 for r in results if r["status"] == "skipped")
+    partial_count = sum(1 for r in results if r["status"] in ("partial_success", "no_valid"))
+    failed_ratio = (fail_count / active_n) if active_n else 0
+    all_empty = active_n > 0 and empty_count == active_n
+    # ops_runs 只允许 success/partial/failed；全空是可观测预警而不是执行失败，
+    # 因此保留 success 并以 all_empty 指标供 ops-watchdog 识别。
+    ops_status = "failed" if failed_ratio >= 0.5 else "success"
+    ops_runs.record_ops_run(
+        supabase,
+        "daily_crawl",
+        {
+            "sources_total": active_n,
+            "success_count": success_count,
+            "empty_count": empty_count,
+            "failed_count": fail_count,
+            "partial_count": partial_count,
+            "jobs_found_total": total_created + total_updated,
+            "all_empty": all_empty,
+        },
+        status=ops_status,
+    )
 
     print(f"\n[crawler] 完成: {success_count} 成功, {fail_count} 失败, "
           f"{empty_count} 空源, {skipped_count} 跳过, "
