@@ -133,9 +133,17 @@ class SourceSelectionTest(unittest.TestCase):
 class FilterRawJobsTest(unittest.TestCase):
     def test_query_match_on_title_summary_type(self):
         self.assertTrue(discovery.job_matches_query(_job(title="后端工程师", summary="x", job_type="社招"), "后端"))
-        self.assertTrue(discovery.job_matches_query(_job(title="x", summary="负责算法", job_type="社招"), "算法"))
+        # 这是有意翻转的旧口径：正文判职能再允许正文命中是循环论证，JS 侧从来就是 False。
+        # 标题没有职能信号时，JD 里的「算法」不足以证明它是算法岗——技术 JD 普遍会提算法/技术/开发，
+        # 正是跨职能误召根因。2026-09-02 改为 False，与 lib/china-keyword-expansion.js 对齐。
+        self.assertFalse(discovery.job_matches_query(_job(title="x", summary="负责算法", job_type="社招"), "算法"))
         self.assertFalse(discovery.job_matches_query(_job(title="财务", summary="报表", job_type="社招"), "算法"))
         self.assertTrue(discovery.job_matches_query(_job(), ""))  # 空 query 全命中
+
+    def test_body_match_needs_title_function_evidence(self):
+        self.assertTrue(
+            discovery.job_matches_query(_job(title="算法工程师", summary="负责机器学习模型"), "机器学习")
+        )
 
     def test_city_match(self):
         self.assertTrue(discovery.job_matches_city(_job(location="北京市"), "北京"))

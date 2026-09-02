@@ -22,7 +22,34 @@ test("真·产品角色仍准确归产品（回归）", () => {
   assert.equal(classifyJobFunction({ title: "AI 产品经理" }), "产品");
   assert.equal(classifyJobFunction({ title: "高级产品经理" }), "产品");
   assert.equal(classifyJobFunction({ title: "数据产品经理" }), "产品");
-  assert.equal(classifyJobFunction({ title: "产品运营" }), "产品");
+});
+
+test("产品运营与项目管理不再误判成产品", () => {
+  // 这是有意推翻的旧口径：旧规则把「产品运营」当成真·产品角色，生产库 384 个标题含「产品运营」的
+  // 在招岗全判「产品」，全被推荐给产品经理用户。产品运营是运营岗，不是产品经理岗；创始人 2026-09-02
+  // 明确指出这是误推，所以本断言从「产品」翻成「运营」，不是回归失败。
+  assert.equal(classifyJobFunction({ title: "产品运营" }), "运营");
+  assert.equal(classifyJobFunction({ title: "资深AI产品运营（花生AI）" }), "运营");
+  assert.equal(classifyJobFunction({ title: "商业产品运营专家-穿山甲" }), "运营");
+  assert.equal(classifyJobFunction({ title: "Product Operations Manager" }), "运营");
+
+  assert.notEqual(classifyJobFunction({ title: "Assembler D shift Nights (12-Hours; 6 pm -6 am)" }), "产品");
+  assert.notEqual(
+    classifyJobFunction({ title: "Customer Service Agent (Monday-Friday, 9:00 AM-5:00 PM)" }),
+    "产品",
+  );
+  assert.notEqual(classifyJobFunction({ title: "CVD PM Machinist" }), "产品");
+  assert.equal(classifyJobFunction({ title: "AI智算项目经理（PM）" }), "项目管理");
+  assert.equal(classifyJobFunction({ title: "Principal Technical Program Manager" }), "项目管理");
+  assert.notEqual(classifyJobFunction({ title: "Senior PM, International Trading" }), "产品");
+
+  assert.equal(classifyJobFunction({ title: "产品经理" }), "产品");
+  assert.equal(classifyJobFunction({ title: "Senior Product Manager, Autonomous Vehicle Reliability" }), "产品");
+  assert.equal(classifyJobFunction({ title: "海外产品经理" }), "产品");
+  assert.equal(
+    classifyJobFunction({ title: "行政专员", summary: "需要有项目管理经验" }),
+    "职能",
+  );
 });
 
 test("其它职能分类回归不受影响", () => {

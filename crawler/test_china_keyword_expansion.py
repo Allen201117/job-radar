@@ -84,6 +84,32 @@ class ClassifyJobFunctionTest(unittest.TestCase):
     def test_product_precedes_algorithm(self):
         self.assertEqual(cke.classify_job_function("AI 产品经理", "", "了解算法"), "产品")
 
+    def test_title_classifier_matches_frontend_key_boundaries(self):
+        self.assertEqual(cke.classify_job_title_function("2027 届校园招聘 - 后台开发工程师"), "研发")
+        self.assertEqual(cke.classify_job_title_function("招聘HR（抖音）"), "职能")
+        self.assertEqual(cke.classify_job_title_function("商业化-数据科学家（AI Agent 开发方向）"), "数据")
+        self.assertEqual(cke.classify_job_title_function("Engineering Manager, Growth"), "研发")
+
+    def test_product_operations_and_project_management_not_product(self):
+        self.assertEqual(cke.classify_job_function("产品运营"), "运营")
+        self.assertEqual(cke.classify_job_function("资深AI产品运营（花生AI）"), "运营")
+        self.assertEqual(cke.classify_job_function("商业产品运营专家-穿山甲"), "运营")
+        self.assertEqual(cke.classify_job_function("Product Operations Manager"), "运营")
+
+        self.assertNotEqual(cke.classify_job_function("Assembler D shift Nights (12-Hours; 6 pm -6 am)"), "产品")
+        self.assertNotEqual(
+            cke.classify_job_function("Customer Service Agent (Monday-Friday, 9:00 AM-5:00 PM)"), "产品"
+        )
+        self.assertNotEqual(cke.classify_job_function("CVD PM Machinist"), "产品")
+        self.assertEqual(cke.classify_job_function("AI智算项目经理（PM）"), "项目管理")
+        self.assertEqual(cke.classify_job_function("Principal Technical Program Manager"), "项目管理")
+        self.assertNotEqual(cke.classify_job_function("Senior PM, International Trading"), "产品")
+
+        self.assertEqual(cke.classify_job_function("产品经理"), "产品")
+        self.assertEqual(cke.classify_job_function("Senior Product Manager, Autonomous Vehicle Reliability"), "产品")
+        self.assertEqual(cke.classify_job_function("海外产品经理"), "产品")
+        self.assertNotEqual(cke.classify_job_function("行政专员", "", "需要有项目管理经验"), "项目管理")
+
     def test_title_first_not_misled_by_job_type(self):
         # 标题优先：job_type/summary 不带偏标题已明确的职能（与 JS 同口径）。
         # 实锤：B站「数据科学家」挂部门 job_type=「产品运营类」下，仍应判数据。
@@ -123,8 +149,15 @@ class JobMatchesTest(unittest.TestCase):
         self.assertFalse(cke.job_matches(pm[0], pm[1], "算法"), "PM 岗正文提'算法'不应命中'算法'")
 
     def test_body_recall_same_function(self):
-        # 标题没体现、正文具体词点明角色 + 同职能 → 仍命中（保留召回）
-        self.assertTrue(cke.job_matches("2024 届校园招聘", "产品经理方向，负责需求管理", "pm"))
+        # 这是有意翻转的旧口径：JS 的 jobMatchesChinaKeyword 用 classifyJobTitleFunction 只看标题，
+        # 且要求 titleFn 不是「职能」，所以纯「2024 届校园招聘」一直不匹配。Python 旧行为是正文
+        # 自证正文的循环论证副产品；两端必须同口径，否则爬虫会抓回前端根本不会推荐的岗。
+        # 代价是：真实角色只写在正文的纯活动标签校招会在刷新公司库/官方源发现的后置过滤中漏掉。
+        # 这是已知取舍——标题无法判方向时宁可漏，不可把方向不明的岗推给用户。将来若要放宽，应仅对
+        # 纯活动标题让正文职能作为弱信号，JS/Python 两端同时改并用真实库对拍误召率，不能只放宽 Python。
+        self.assertFalse(cke.job_matches("2024 届校园招聘", "产品经理方向，负责需求管理", "pm"))
+        # 标题已有真实技术角色时，正文的同职能具体词仍可召回，不误伤「校招标签 + 具体方向」的岗位。
+        self.assertTrue(cke.job_matches("2026年校园招聘-算法工程师", "机器学习方向", "机器学习"))
         self.assertTrue(cke.job_matches("资深工程师", "负责推荐算法与模型训练", "算法"))
 
     def test_real_jobs_match_via_title(self):
