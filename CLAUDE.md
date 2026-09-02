@@ -143,6 +143,7 @@ app/                     # Next.js App Router 页面
   api/insights/admin/route.ts          # admin 洞察后台：GET 列全部 / POST 增改(过校验门) / PATCH 上下架
   api/insights/dispute/resolve/route.ts # admin 处理申诉：upheld(下架对应 item) / rejected
   api/career-path/route.ts   # 模块 ③ 个性化职业路径（确定性引擎，无 LLM）
+  api/campus-zone/jobs/route.ts  # 校招专区展开某家公司时按需取完整岗位行（按 公司+模式，非按 id，见下「校招专区首屏」）
 components/              # JobCard / JobFilters / PreferenceForm / Navbar / ResumeProfilePanel
                          # SourceTable（presentational，含 reloadSignal）/ SourceManager / AddSourceForm（A1）
                          # InsightsAdminClient（洞察管理页客户端，A2）
@@ -161,6 +162,8 @@ lib/                     # 工具层：supabaseClient、auth、scoring、types�
                          #   只展示不拖红。爬虫探活倾斜吃全行业并集（must_apply.patterns()）；清单里库内没有的公司由
                          #   crawler/targets_must_apply.json 喂给每日自动扩源（plan_targets 梯队：用户点名 > 必投缺口 > 科技/消费 > 其余））
                          # job-fields（经验/学历/截止 正则兜底纯函数，JobCard 与 SavedCompare 共用）
+                         # campus-facets（校招专区聚合分面：构建 + 匹配同文件，防两端下标口径漂移）
+                         # campus-user-industries（用户行业→必投公司解析，/campus 页与展开接口共用同一份范围）
                          # source-adapters（adapter/抓取方式白名单 + validateSourceInput 纯函数）
                          # live-search（已知源刷新格式化/校验）、official-discovery、
                          # baidu-qianfan-search、china-keyword-expansion、china-official-sources、client-job-mapping
@@ -385,6 +388,40 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 免费「百度搜索」每日 50 次。控制台 0/50 或未付费时设 `BAIDU_QIANFAN_SEARCH_DISABLED=true`，`/api/discovery` 直接返回 `provider_rate_limited` / `rate_limited=true`，前端稳定展示不崩。额度耗尽时不要反复点「发现」或跑 5-query live 验证。
 
 **职业洞察 T3 检索已扩为多源路由**（`crawler/search_router.py`：博查/Tavily/Serper/千帆，配哪个 key 用哪个、未配自动跳过、各源 `*_DAILY_CAP` 日顶走 `search_usage` 表 + 迁移 156；**免费额度保守日顶**=代码默认 tavily 30 / serper 20 / bocha 50、千帆 40，**绝不一次性用完**［Serper 2500 为一次性总额、Tavily 1000/月、千帆 50/天每日重置=常驻主力］，可在 repo Variables 上调）。千帆仍受上面 50/天全局额度（`qianfan_usage`），但**不再是唯一检索源** → T3 富化吞吐不再被它单独卡死。新增 env（GitHub Secrets + 本地 `.env.local`）：`BOCHA_API_KEY` / `TAVILY_API_KEY` / `SERPER_API_KEY`（+ 可选 `*_DAILY_CAP`）。合规不变：仍只走搜索 API 取去标识聚合 + 判官核验 + ≥2 源，不直接爬社区。设计见 `docs/superpowers/specs/2026-06-20-career-insights-supply-upgrade-design.md`。
+
+## ⚠️ 校招专区首屏：只下发聚合分面，绝不逐条下发岗位（2026-09-02 立）
+
+`/campus` 首屏曾 **responseEnd 10.1s / 单页 2.09 MB HTML**，而 TTFB 只有 189ms ——
+**慢的不是取数排队，是 SSR 那一段本身**：把 30 家必投公司的 16,494 个校招岗逐条序列化进 props。
+判读法记住：`TTFB 快 + responseEnd 慢` = 生成/传输页面本身的问题，别去查连接池和数据库排队。
+
+现行形态（改动前务必读懂，别改回去）：
+1. **页面一条岗位记录都不下发**，只下发 `lib/campus-facets.ts` 的聚合分面
+   `[城市下标, 学历下标, 职能下标, 届别, 计数]`。依据：客户端拿逐条记录只做两件事——填筛选下拉、
+   算「当前筛选下有几个岗」，**两件事都只依赖这四个维度**，与具体是哪个岗无关。
+   live 实测 16,494 条压成 1,917 个四元组，props 2,086 KB → 52.6 KB。
+   ⚠️ **构建（buildCampusFacets）与匹配（countMatchingFacets）刻意放同一文件**：下标口径两端一漂，
+   卡面就安静地报错数字——不报错、不崩，只骗用户。等价性由 `tests/campus-facets.test.js`
+   穷举全部筛选组合钉死，改分面必须让它继续绿。
+2. **重活按行业清单缓存**（`unstable_cache`，10 分钟）。它只依赖必投清单、不含用户私有数据，所以能跨请求共享。
+   ⚠️ `windowStatus` 与排序**刻意留在缓存外每请求现算**——它们依赖「此刻」（72h 新鲜度阈值），
+   一起缓存会把徽章冻住。缓存里只放 `lastSeenAtMs` 这类原始输入。
+   ⚠️ 缓存函数体内不得读 `cookies()`/`headers()`（unstable_cache 限制）。
+3. **聚合 SQL 不用 `company ilike any()`**：带前导 % 用不了任何索引 → 39 万 active 行并行全表扫
+   （live EXPLAIN 2567ms / 127,726 buffers）。改成先用 `jobs_active_company_idx` 取全部 active
+   公司名（`allActiveCompanyNames`，5 分钟进程内缓存），JS 按同样的「不区分大小写子串」语义解析出
+   确切名字，再 `company = any()` 走 Bitmap Index Scan（957ms / 46,413 buffers，结果集逐行相同）。
+4. **展开某家公司走 `/api/campus-zone/jobs`（按 公司+模式），不按 id**：按 id 取就得先把 16,494 个
+   uuid 下发到浏览器，光 uuid 就 0.59 MB，白白抵消收益。
+   ⚠️ 旧的 by-ids 调法有个真 bug：把 campus 与 intern 的 id 拼一起再截前 200 →
+   **大厂的实习桶被校招桶挤没，实习模式展开必然空白**。按模式取从根上没有这个问题。
+   ⚠️ 取数分两段：准入门 `campusAdmission` 要看 JD 正文，但**排序键 deadline/first_seen_at 与
+   归属键 company 都是轻字段** → 先只取轻字段排好序，再顺着顺序分批（500）取完整行跑准入门，
+   收满 200 就停。一次性拉完整行 live 实测字节 5.8s，分段后 0.5~0.9s，语义完全一致。
+5. **归属规则三处必须一致**（getCampusZone / getCampusCompanyJobs / 分面计数）：
+   list 里第一个 pattern 命中者得（`腾讯音乐 TME` 归 `%腾讯音乐%` 不归 `%腾讯%`）。
+   任一处漂移 → 卡面计数与展开列表对不上。live 交叉验证法：卡面计数（来自分面）与
+   `/api/campus-zone/jobs` 返回条数（独立重算）在未截断的公司上必须逐个相等。
 
 ## 认证
 
