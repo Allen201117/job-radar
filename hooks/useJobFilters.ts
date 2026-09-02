@@ -105,14 +105,22 @@ export function useJobFilters({
 
   // 单调请求号：晚到的旧请求结果一律丢弃，避免竞态把新搜索覆盖回旧结果。
   const reqRef = useRef(0);
+  // 重搜和翻页的生命周期不同：改筛选时只该停掉旧重搜，不能把用户主动点的「加载更多」也误杀。
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const moreAbortRef = useRef<AbortController | null>(null);
 
   const runSearch = useCallback(async (f: Filters, offset: number) => {
     const myReq = ++reqRef.current;
     const more = offset > 0;
+    const abortRef = more ? moreAbortRef : searchAbortRef;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setServer((s) => ({ ...s, loading: !more, loadingMore: more, error: null }));
     try {
       const resp = await fetch(
         `/api/jobs/search?${filtersToParams(f, offset, JOBS_PAGE_SIZE)}`,
+        { signal: controller.signal },
       );
       const data = await resp.json();
       if (myReq !== reqRef.current) return; // 已被更新的搜索取代
@@ -137,16 +145,29 @@ export function useJobFilters({
         loadingMore: false,
         error: null,
       }));
-    } catch {
+    } catch (error) {
+      // 主动取消时，新请求已经接管 loading；旧请求若擅自收尾会把加载态闪成失败或空闲。
+      if (error instanceof Error && error.name === "AbortError") return;
       if (myReq !== reqRef.current) return;
+      console.error("[jobs] 岗位搜索失败", error);
       setServer((s) => ({
         ...s,
         loading: false,
         loadingMore: false,
         error: "搜索失败，请重试",
       }));
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
     }
   }, []);
+
+  const abortInFlightSearches = useCallback(() => {
+    // 卸载后没有可承接结果的界面，继续跑 8 秒重查询只会占住服务端队列。
+    searchAbortRef.current?.abort();
+    moreAbortRef.current?.abort();
+  }, []);
+
+  useEffect(() => abortInFlightSearches, [abortInFlightSearches]);
 
   // 挂载首搜是否已发起。首搜没有「用户正在连续输入」这回事，防抖那 300ms 是纯空等。
   const firstSearchRef = useRef(false);

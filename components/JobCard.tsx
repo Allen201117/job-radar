@@ -484,13 +484,13 @@ export default function JobCard({
           <button
             type="button"
             onClick={handleView}
-            className="block max-w-full text-left text-[1.35rem] font-semibold leading-tight ink-1 transition-colors hover:text-[#2f8a63] sm:text-2xl dark:hover:text-[#6cc99e]"
+            className="t-h1 block max-w-full text-left ink-1 transition-colors hover:text-[#2f8a63] dark:hover:text-[#6cc99e]"
           >
             <span className="text-balance">{job.title}</span>
           </button>
           <div className="mt-1.5 flex items-center gap-2">
             <CompanyLogo company={job.company} size={26} />
-            <p className="min-w-0 truncate text-base font-semibold leading-snug ink-2">
+            <p className="t-h3 min-w-0 truncate ink-2">
               {job.company}
             </p>
           </div>
@@ -504,7 +504,7 @@ export default function JobCard({
                 <span
                   key={chip.key}
                   className={cn(
-                    "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[13px] font-semibold leading-5",
+                    "t-label inline-flex items-center gap-1 rounded-full px-2.5 py-1",
                     chip.cls,
                   )}
                 >
@@ -520,7 +520,7 @@ export default function JobCard({
 
           {/* 次要 meta：时间线 + 归类原因 + 洞察入口。刻意保持低对比度，不跟关键标签抢注意力。 */}
           {(postedLabel || freshness.label || relatedReason || insight) && (
-            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium ink-3">
+            <div className="t-caption mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 ink-3">
               {postedLabel && (
                 <span className="inline-flex items-center gap-1">
                   <CalendarBlank size={12} className="shrink-0" aria-hidden="true" />
@@ -550,7 +550,7 @@ export default function JobCard({
                   onClick={() => setInsightOpen(true)}
                   title={insight.title}
                   className={cn(
-                    "inline-flex min-h-11 min-w-11 items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium transition lg:min-h-0 lg:min-w-0",
+                    "t-label inline-flex min-h-11 min-w-11 items-center gap-1 rounded-full border px-2 py-0.5 transition lg:min-h-0 lg:min-w-0",
                     insight.cls,
                   )}
                 >
@@ -569,7 +569,7 @@ export default function JobCard({
             <div className="mt-4">
               <p
                 className={cn(
-                  "whitespace-pre-line text-pretty text-sm leading-6 ink-2",
+                  "t-body-sm whitespace-pre-line text-pretty ink-2",
                   // 默认只露 1 行（一屏能多放几张卡），要看细节再「展开全文」。
                   !expanded && "line-clamp-1",
                 )}
@@ -581,7 +581,7 @@ export default function JobCard({
                 <button
                   type="button"
                   onClick={() => setExpanded((v) => !v)}
-                  className="mt-2 inline-flex min-h-11 items-center gap-1 text-sm font-medium text-[#2f8a63] transition-colors hover:opacity-80 dark:text-[#6cc99e] lg:min-h-0"
+                  className="t-label mt-2 inline-flex min-h-11 items-center gap-1 text-[#2f8a63] transition-colors hover:opacity-80 dark:text-[#6cc99e] lg:min-h-0"
                 >
                   {expanded ? "收起" : "展开全文"}
                   <CaretDown
@@ -600,7 +600,7 @@ export default function JobCard({
                   {opportunitySignals.map((s, i) => (
                     <span
                       key={`${s.type}:${i}`}
-                      className={cn("rounded-full border px-2.5 py-1 text-xs font-semibold", SIGNAL_STYLE[s.type])}
+                      className={cn("t-micro rounded-full border px-2.5 py-1", SIGNAL_STYLE[s.type])}
                     >
                       {s.isCritical ? "● " : ""}
                       {s.label}
@@ -613,7 +613,7 @@ export default function JobCard({
                   <span
                     title="按你的目标、简历与岗位新鲜度评估的匹配档位"
                     className={cn(
-                      "rounded-full px-2.5 py-1 text-xs font-semibold",
+                      "t-micro rounded-full px-2.5 py-1",
                       opportunityTier === "high"
                         ? "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
                         : "border border-black/[0.08] bg-[#f0ece2] ink-2 dark:border-white/[0.1] dark:bg-white/[0.08]",
@@ -628,7 +628,7 @@ export default function JobCard({
                   {opportunityReasons.map((r, i) => (
                     <li
                       key={`${r.type}:${i}`}
-                      className="inline-flex items-center gap-1 rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-1 text-xs font-medium text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.12] dark:text-[#6cc99e]"
+                      className="t-label inline-flex items-center gap-1 rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-1 text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.12] dark:text-[#6cc99e]"
                     >
                       <Sparkle size={11} weight="fill" aria-hidden="true" />
                       {r.label}
@@ -645,7 +645,7 @@ export default function JobCard({
                     <span
                       title="根据你的求职偏好与简历画像评估的匹配档位"
                       className={cn(
-                        "rounded-full px-2.5 py-1 text-xs font-semibold",
+                        "t-micro rounded-full px-2.5 py-1",
                         tier.level === "high"
                           ? "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
                           : "border border-black/[0.08] bg-[#f0ece2] ink-2 dark:border-white/[0.1] dark:bg-white/[0.08]",
@@ -657,7 +657,7 @@ export default function JobCard({
                   {job.matched_keywords.slice(0, 3).map((kw) => (
                     <span
                       key={kw}
-                      className="rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-1 text-xs font-medium text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.12] dark:text-[#6cc99e]"
+                      className="t-label rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-1 text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.12] dark:text-[#6cc99e]"
                     >
                       {kw}
                     </span>
@@ -667,7 +667,7 @@ export default function JobCard({
 
               {tier.level !== "none" && matchReasons.length > 0 && (
                 <details className="mt-3 rounded-xl border border-black/[0.07] bg-white/45 px-3.5 py-2.5 open:bg-white/65 [&[open]_.match-reason-caret]:rotate-180 dark:border-white/[0.1] dark:bg-white/[0.04] dark:open:bg-white/[0.07]">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold ink-2 transition-opacity hover:opacity-80 [&::-webkit-details-marker]:hidden">
+                  <summary className="t-label flex cursor-pointer list-none items-center justify-between gap-3 ink-2 transition-opacity hover:opacity-80 [&::-webkit-details-marker]:hidden">
                     <span className="inline-flex items-center gap-1.5">
                       <Sparkle size={14} weight="fill" aria-hidden="true" />
                       为什么推荐
@@ -677,7 +677,7 @@ export default function JobCard({
                       aria-hidden="true"
                     />
                   </summary>
-                  <ul className="mt-2.5 space-y-1.5 border-t border-black/[0.06] pt-2.5 text-sm ink-2 dark:border-white/[0.08]">
+                  <ul className="t-body-sm mt-2.5 space-y-1.5 border-t border-black/[0.06] pt-2.5 ink-2 dark:border-white/[0.08]">
                     {matchReasons.map((reason, index) => (
                       <li
                         key={`${reason.type}:${reason.value}:${index}`}
@@ -703,7 +703,7 @@ export default function JobCard({
           <button
             type="button"
             onClick={handleView}
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-[#1a1714] px-4 py-2.5 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98] lg:min-h-0 lg:py-2 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+            className="t-label inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-[#1a1714] px-4 py-2.5 text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98] lg:min-h-0 lg:py-2 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
           >
             官网详情
             <ArrowSquareOut size={16} weight="bold" aria-hidden="true" />
@@ -763,7 +763,7 @@ export default function JobCard({
 
           {reasonOpen && (
             <div className="rounded-xl border border-black/[0.08] bg-white/95 p-2 shadow-lg dark:border-white/[0.12] dark:bg-[#16130f]/95">
-              <p className="px-1 pb-1 text-xs font-medium ink-3">
+              <p className="t-caption px-1 pb-1 ink-3">
                 为什么不适合？
               </p>
               <div className="flex flex-col gap-0.5">
@@ -772,7 +772,7 @@ export default function JobCard({
                     key={r.code}
                     type="button"
                     onClick={() => pickReason(r.code)}
-                    className="rounded-lg px-2 py-1.5 text-left text-xs ink-2 transition hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
+                    className="t-caption rounded-lg px-2 py-1.5 text-left ink-2 transition hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
                   >
                     {r.label}
                   </button>
@@ -780,7 +780,7 @@ export default function JobCard({
                 <button
                   type="button"
                   onClick={() => setReasonOpen(false)}
-                  className="mt-0.5 rounded-lg px-2 py-1.5 text-left text-xs font-medium ink-3 transition hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
+                  className="t-caption mt-0.5 rounded-lg px-2 py-1.5 text-left ink-3 transition hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
                 >
                   取消
                 </button>
@@ -788,7 +788,7 @@ export default function JobCard({
             </div>
           )}
           {actionError && (
-            <span className="rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-2 py-1 text-xs text-[#9c4a3c] lg:text-right dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]">
+            <span className="t-caption rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-2 py-1 text-[#9c4a3c] lg:text-right dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]">
               {actionError}
             </span>
           )}
@@ -855,7 +855,7 @@ function ActionButton({
       aria-expanded={expanded}
       onClick={onClick}
       className={cn(
-        "inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-full px-2 py-2.5 text-[12px] font-medium transition duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-4 sm:py-2 sm:text-sm lg:min-h-0 lg:min-w-0",
+        "t-label inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-full px-2 py-2.5 transition duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-4 sm:py-2 lg:min-h-0 lg:min-w-0",
         active
           ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
           : "border border-black/[0.07] bg-white/70 ink-2 hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]",
@@ -887,7 +887,7 @@ function MoreItem({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition hover:bg-black/[0.05] disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-white/[0.06]",
+        "t-caption inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-black/[0.05] disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-white/[0.06]",
         active
           ? "font-semibold ink-1"
           : "ink-2",
