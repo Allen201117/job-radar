@@ -7,6 +7,7 @@ const { loadRoute, resolvedQuery } = require("./route-test-utils");
 const read = (rel) => fs.readFileSync(path.resolve(__dirname, rel), "utf8");
 
 const jobLibraryStat = read("../components/JobLibraryStat.tsx");
+const jobFilters = read("../components/JobFilters.tsx");
 const tagInput = read("../components/TagInput.tsx");
 const preferenceForm = read("../components/PreferenceForm.tsx");
 const resumeProfilePanel = read("../components/ResumeProfilePanel.tsx");
@@ -180,6 +181,27 @@ test("jobs stats returns an uncached 500 when the HK recent-active count rejects
   await assertUncachedStatsFailure(await route.GET());
 });
 
+test("filter popovers can be closed by clicking their own trigger", () => {
+  // 2026-09-02 回归：关外部逻辑挂在 window 的 pointerdown 上，判据是「点击目标不在弹层内」。
+  // 触发按钮本身不在弹层里 → 点它会先被判成「点了外面」而关闭，紧接着的 click 又把它开回来，
+  // 净效果是同一个按钮永远关不掉，只能按 Esc 或点空白处。修法是让「触发按钮 + 弹层」的包裹层
+  // 吃掉 pointerdown，别让 window 监听器看见。这里钉死：每个包裹层都必须带这个拦截。
+  // 注意别用 /<div ...[^>]*>/ 去圈整个标签：箭头函数的 `=>` 里就有个 `>`，会把匹配提前截断
+  // （本断言初版就栽在这，报了个假失败）。改成「带守卫的包裹层数量 == 全部包裹层数量」。
+  const allWrappers = (jobFilters.match(/<div className="relative shrink-0"/g) || []).length;
+  const guarded = (
+    jobFilters.match(
+      /<div className="relative shrink-0" onPointerDown=\{\(event\) => event\.stopPropagation\(\)\}>/g,
+    ) || []
+  ).length;
+  assert.ok(allWrappers >= 5, `expected the filter-bar popover wrappers, found ${allWrappers}`);
+  assert.equal(
+    guarded,
+    allWrappers,
+    "every popover wrapper must swallow pointerdown so its own trigger can toggle it closed",
+  );
+});
+
 test("job library stats wires the tested lifecycle helpers and keeps manual refresh accessible", () => {
   assert.match(
     jobLibraryStat,
@@ -194,13 +216,27 @@ test("job library stats wires the tested lifecycle helpers and keeps manual refr
   assert.match(jobLibraryStat, /cleanupPolling\s*\(\s*\)/);
   assert.match(jobLibraryStat, /refresher\.dispose\s*\(\s*\)/);
   assert.match(jobLibraryStat, /aria-label=["']立即刷新岗位库计数["']/);
-  assert.match(jobLibraryStat, /轮询间隔\s*\{POLL_INTERVAL_MS\s*\/\s*1000\}s/);
-  assert.doesNotMatch(jobLibraryStat, />\s*轮询间隔 12s\s*</);
+  // 展示给用户的刷新周期必须**从 POLL_INTERVAL_MS 推导**，不能写死数字（旧断言防的是
+  // 「常量 60s、界面写 12s」这种谎）。2026-09-02 文案去黑话后，「轮询间隔 60s」这句从正文
+  // 移到了 title 提示上——技术词不再糊在用户脸上，但派生关系照旧守住。
+  assert.match(jobLibraryStat, /\$\{POLL_INTERVAL_MS\s*\/\s*1000\}\s*秒自动更新/);
+  // 「不许出现」类守卫必须只看**用户可见文案**：整份源码里包含解释这些词为何被弃用的注释，
+  // 直接对全文断言会把注释算成违规（2026-09-02 实际踩到）。所以先剥掉注释再断言。
+  const visibleCopy = stripComments(jobLibraryStat);
+  assert.doesNotMatch(visibleCopy, /轮询间隔\s*\d+\s*s/);
+  // 去黑话：这两个词是内部实现细节，对求职者零信息量，不许再回到界面上。
+  assert.doesNotMatch(visibleCopy, /首屏服务端计数/);
   assert.doesNotMatch(jobLibraryStat, /fetch\(\s*["']\/api\/jobs\/stats["']\s*,\s*\{[\s\S]*?cache\s*:\s*["']no-store["']/);
   const statusText = jobLibraryStat.match(/const\s+statusText\s*=([\s\S]*?);/)?.[1];
   assert.ok(statusText, "could not locate statusText");
-  assert.ok(statusText.includes("定时刷新"), "status copy must describe scheduled refresh");
-  assert.ok(!statusText.includes("实时刷新"), "status copy must not claim real-time refresh");
+  // 诚实底线不变：这个数是 60s 轮询来的，**任何形式的「实时」都不许出现**（旧断言只挡了
+  // 「实时刷新」四个字，挡不住单说「实时」——2026-09-02 改文案时就真踩了这个洞，被本测试抓到）。
+  assert.ok(!/实时/.test(stripComments(statusText)), "status copy must not claim real-time refresh");
+  assert.match(
+    jobLibraryStat,
+    /const\s+syncLabel\s*=[\s\S]*?每分钟更新/,
+    "status copy must describe scheduled refresh in plain Chinese",
+  );
 });
 
 test("TagInput requires and applies a business-specific accessible name", () => {
@@ -261,3 +297,14 @@ test("applied empty state explains the real action and has one primary Today CTA
   );
   assert.equal((appliedPage.match(/返回今日机会/g) ?? []).length, 1, "Today CTA must be unique");
 });
+
+// 剥掉 JS/JSX 注释，只留会渲染给用户看的代码文本。
+// 顺序要紧：先块注释（含 {/* JSX 注释 */}），再整行 // 注释——只剥「整行就是注释」的行，
+// 不碰行尾注释，免得把字符串里的 https:// 之类误伤。
+function stripComments(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .filter((line) => !/^\s*\/\//.test(line))
+    .join("\n");
+}

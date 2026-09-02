@@ -1,44 +1,32 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import { splitMultiValue } from "@/lib/job-filter";
+import { JOB_FUNCTION_BUCKETS } from "@/lib/china-keyword-expansion";
+import { splitMultiValue, type Filters } from "@/lib/job-filter";
 import {
   Buildings,
-  Briefcase,
   CaretDown,
+  Check,
   Funnel,
-  GlobeHemisphereEast,
   GraduationCap,
-  MapPin,
   MagnifyingGlass,
-  SortAscending,
-  Sparkle,
+  MapPin,
+  SlidersHorizontal,
   X,
 } from "@phosphor-icons/react";
-
-interface Filters {
-  company: string;
-  city: string;
-  jobType: string;
-  keyword: string;
-  showIgnored: boolean;
-  showApplied: boolean;
-  showNewOnly: boolean;
-  sortBy: "match" | "newest";
-  capitalOrigin: string;
-  region: string;
-  salaryOnly: boolean;
-  sponsorshipOnly: boolean;
-  education: string;
-}
 
 interface Props {
   filters: Filters;
   onChange: (filters: Filters) => void;
+  onClearAll: () => void;
+  onClearOne: (key: keyof Filters, value?: string) => void;
   companies: string[];
+  resultTotal: number;
   jobScope?: string | null;
 }
+
+type PopoverName = "city" | "jobFunction" | "experience" | "keyword" | "company" | null;
 
 const ORIGINS = ["全部", "中国", "外企", "美企", "德企", "日企", "欧企"];
 const REGIONS = [
@@ -47,303 +35,203 @@ const REGIONS = [
   { value: "SG", label: "新加坡" },
   { value: "Remote", label: "远程" },
 ];
+const EXPERIENCE = [
+  { value: "", label: "不限" },
+  { value: "fresh", label: "应届无经验" },
+  { value: "0-3", label: "0–3 年" },
+  { value: "3-5", label: "3–5 年" },
+  { value: "5-10", label: "5–10 年" },
+  { value: "10+", label: "10 年+" },
+];
+const EDUCATION = ["不限", "大专", "本科", "硕士", "博士"];
+const POSTED_WITHIN = [
+  { value: "", label: "不限" },
+  { value: "1", label: "24 小时内" },
+  { value: "3", label: "3 天内" },
+  { value: "7", label: "7 天内" },
+  { value: "30", label: "30 天内" },
+];
 
-export default function JobFilters({ filters, onChange, companies, jobScope = "domestic" }: Props) {
-  // 移动端默认收起筛选，先让用户看到岗位；点击「筛选」条展开。桌面端（lg+）始终展开。
-  const [open, setOpen] = useState(false);
+const buttonBase = "t-label inline-flex min-h-10 items-center gap-1.5 rounded-full border px-3 transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a1714]/30 dark:focus-visible:ring-[#f3ecdf]/35";
+const buttonIdle = "border-black/[0.1] bg-white/55 hover:border-black/[0.2] hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:hover:border-white/[0.22] dark:hover:bg-white/[0.1]";
+const buttonActive = "border-[#1a1714]/45 bg-[#eee8dc] dark:border-[#f3ecdf]/45 dark:bg-[#f3ecdf]/[0.12]";
 
-  function set(key: keyof Filters, value: string | boolean) {
+export default function JobFilters({
+  filters,
+  onChange,
+  onClearAll,
+  onClearOne,
+  companies,
+  resultTotal,
+  jobScope = "domestic",
+}: Props) {
+  const [activePopover, setActivePopover] = useState<PopoverName>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const overseas = jobScope !== "domestic";
+
+  const set = (key: keyof Filters, value: Filters[keyof Filters]) => {
     onChange({ ...filters, [key]: value });
-  }
+  };
+  const togglePopover = (name: PopoverName) => setActivePopover((current) => (current === name ? null : name));
 
-  // 收起态在「筛选」条上回显当前生效的筛选，避免折叠后看不出筛了什么。
-  const activeBits = [
-    filters.company,
-    filters.city,
-    filters.jobType,
-    filters.education,
-    filters.keyword,
-    jobScope !== "domestic" ? filters.region : "",
-    filters.capitalOrigin,
-    filters.showNewOnly ? "仅新岗位" : "",
-    filters.salaryOnly ? "仅薪资公开" : "",
-    filters.sponsorshipOnly ? "排除无 Sponsorship" : "",
-    filters.showIgnored ? "含已忽略" : "",
-    filters.showApplied ? "含已投递" : "",
-  ].filter(Boolean) as string[];
-  const moreActiveBits = [
-    filters.education,
-    filters.sortBy === "newest" ? "按发布时间" : "",
-    filters.capitalOrigin,
-    jobScope !== "domestic" ? filters.region : "",
-  ].filter(Boolean) as string[];
-
-  const inputClass = "mt-1 w-full rounded-xl border border-black/[0.09] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm text-[#1a1714] dark:text-[#f3ecdf] transition duration-200 placeholder:text-[#a39a8c] dark:placeholder:text-[#8b8478] focus:border-[#1a1714]/55 dark:focus:border-white/55 focus:bg-white dark:focus:bg-[#1e1a15] focus:outline-none";
-  const selectClass = "mt-1 w-full rounded-xl border border-black/[0.09] dark:border-white/[0.1] bg-white dark:bg-[#1e1a15] px-3 py-2 text-sm text-[#1a1714] dark:text-[#f3ecdf] transition duration-200 focus:border-[#1a1714]/55 dark:focus:border-white/55 focus:outline-none";
+  const activeChips = collectActiveChips(filters, overseas);
+  const allFiltersCount = countPanelFilters(filters, overseas);
 
   return (
-    <div className="surface p-4 text-[#1a1714] dark:text-[#f3ecdf] sm:p-5">
-      {/* 移动端折叠开关（lg 以下） */}
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="-m-1 flex w-full items-center gap-2 rounded-xl p-1 text-left lg:hidden"
-      >
-        <Funnel size={18} weight="fill" className="shrink-0 text-[#5f594e] dark:text-[#b6ad9d]" aria-hidden="true" />
-        <span className="shrink-0 text-sm font-semibold text-[#3f3a33] dark:text-[#d9d0c2]">筛选</span>
-        {activeBits.length > 0 && (
-          <span className="grid size-5 shrink-0 place-items-center rounded-full bg-[#1a1714] dark:bg-[#f3ecdf] text-[11px] font-semibold tabular-nums text-[#f7f1e6] dark:text-[#16130f]">
-            {activeBits.length}
-          </span>
-        )}
-        <span className="min-w-0 flex-1 truncate text-xs text-[#9a9184] dark:text-[#837c70]">
-          {activeBits.length > 0 ? activeBits.join(" · ") : "全部岗位"}
-        </span>
-        <CaretDown
-          size={16}
-          weight="bold"
-          className={cn("shrink-0 text-[#8a8275] dark:text-[#9a9184] transition-transform", open && "rotate-180")}
-          aria-hidden="true"
-        />
-      </button>
-
-      <div className={cn("space-y-5", open ? "block pt-4" : "hidden", "lg:block lg:pt-0")}>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div>
-            <FilterLabel icon={Buildings} label="公司" />
-            {/* 可输入 combobox：自由输入 + 已知公司自动补全（datalist）；匹配走大小写不敏感子串。 */}
-            <input
-              value={filters.company}
-              onChange={(e) => set("company", e.target.value)}
-              list="job-company-options"
-              placeholder="输入或选择，如 字节"
-              className={inputClass}
-            />
-            <datalist id="job-company-options">
-              {companies.map((c) => (
-                <option key={c} value={c} />
-              ))}
-            </datalist>
-          </div>
-          <div>
-            <FilterLabel icon={MapPin} label="城市（可多选）" />
-            <ChipsInput
-              value={filters.city}
-              onChange={(v) => set("city", v)}
-              placeholder="如 北京，空格或回车分隔，可多选"
-              ariaLabel="城市，可多选"
-            />
-          </div>
-          <div>
-            <FilterLabel icon={Briefcase} label="岗位类型" />
-            <select value={filters.jobType} onChange={(e) => set("jobType", e.target.value)} className={selectClass}>
-              <option value="">全部</option>
-              <option value="校招">校招</option>
-              <option value="社招">社招</option>
-              <option value="实习">实习</option>
-            </select>
-          </div>
-          <div>
-            <FilterLabel icon={MagnifyingGlass} label="关键词（可多选）" />
-            <ChipsInput
-              value={filters.keyword}
-              onChange={(v) => set("keyword", v)}
-              placeholder="如 算法，空格或回车分隔，可多选"
-              ariaLabel="关键词，可多选"
-            />
-          </div>
+    <section aria-label="岗位筛选" className="space-y-2">
+      <div className="sticky top-14 z-30 -mx-1 border-b border-black/[0.08] bg-[#f4efe6]/95 px-1 py-2.5 dark:border-white/[0.1] dark:bg-[#16130f]/95">
+        <div className="hidden items-center gap-2 overflow-x-auto scrollbar-hide lg:flex">
+          <div className="relative shrink-0" onPointerDown={(event) => event.stopPropagation()}><FilterTrigger label="城市" value={compactMultiValue(filters.city)} active={Boolean(filters.city)} open={activePopover === "city"} onClick={() => togglePopover("city")} icon={<MapPin size={15} weight="fill" aria-hidden="true" />} /><Popover open={activePopover === "city"} onClose={() => setActivePopover(null)}><MultiValueEditor value={filters.city} onChange={(value) => set("city", value)} ariaLabel="城市，可多选" placeholder="输入城市后按回车" /></Popover></div>
+          <RecruitmentType value={filters.jobType} onChange={(value) => set("jobType", value)} />
+          <div className="relative shrink-0" onPointerDown={(event) => event.stopPropagation()}><FilterTrigger label="岗位职能" value={compactMultiValue(filters.jobFunction)} active={Boolean(filters.jobFunction)} open={activePopover === "jobFunction"} onClick={() => togglePopover("jobFunction")} /><Popover open={activePopover === "jobFunction"} onClose={() => setActivePopover(null)}><FunctionPicker value={filters.jobFunction} onChange={(value) => set("jobFunction", value)} /></Popover></div>
+          <div className="relative shrink-0" onPointerDown={(event) => event.stopPropagation()}><FilterTrigger label="经验" value={labelFor(EXPERIENCE, filters.experience)} active={Boolean(filters.experience)} open={activePopover === "experience"} onClick={() => togglePopover("experience")} /><Popover open={activePopover === "experience"} onClose={() => setActivePopover(null)}><PillGroup options={EXPERIENCE} value={filters.experience} onChange={(value) => set("experience", value)} ariaLabel="工作经验" /></Popover></div>
+          <div className="relative shrink-0" onPointerDown={(event) => event.stopPropagation()}><FilterTrigger label="关键词" value={compactMultiValue(filters.keyword)} active={Boolean(filters.keyword)} open={activePopover === "keyword"} onClick={() => togglePopover("keyword")} icon={<MagnifyingGlass size={15} weight="bold" aria-hidden="true" />} /><Popover open={activePopover === "keyword"} onClose={() => setActivePopover(null)}><MultiValueEditor value={filters.keyword} onChange={(value) => set("keyword", value)} ariaLabel="关键词，可多选" placeholder="输入关键词后按回车" /></Popover></div>
+          <div className="relative shrink-0" onPointerDown={(event) => event.stopPropagation()}><FilterTrigger label="公司" value={filters.company} active={Boolean(filters.company)} open={activePopover === "company"} onClick={() => togglePopover("company")} icon={<Buildings size={15} weight="fill" aria-hidden="true" />} /><Popover open={activePopover === "company"} onClose={() => setActivePopover(null)}><CompanyPicker value={filters.company} onChange={(value) => set("company", value)} companies={companies} /></Popover></div>
+          <button type="button" onClick={() => setPanelOpen(true)} className={cn(buttonBase, buttonIdle, "relative shrink-0")} aria-haspopup="dialog">
+            <SlidersHorizontal size={16} weight="bold" aria-hidden="true" />
+            全部筛选
+            {allFiltersCount > 0 && <CountBadge count={allFiltersCount} />}
+          </button>
         </div>
 
-        <details className="group">
-          <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl border border-black/[0.08] bg-white/45 px-3 py-2 dark:border-white/[0.1] dark:bg-white/[0.04] [&::-webkit-details-marker]:hidden">
-            <span className="shrink-0 text-sm font-semibold text-[#3f3a33] dark:text-[#d9d0c2]">更多筛选</span>
-            {moreActiveBits.length > 0 && (
-              <span className="grid size-5 shrink-0 place-items-center rounded-full bg-[#1a1714] text-[11px] font-semibold tabular-nums text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
-                {moreActiveBits.length}
-              </span>
-            )}
-            <span className="min-w-0 flex-1 truncate text-xs text-[#9a9184] dark:text-[#837c70]">
-              {moreActiveBits.length > 0 ? moreActiveBits.join(" · ") : "学历、排序、资本来源"}
-            </span>
-            <CaretDown
-              size={16}
-              weight="bold"
-              className="shrink-0 text-[#8a8275] transition-transform group-open:rotate-180 dark:text-[#9a9184]"
-              aria-hidden="true"
-            />
-          </summary>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div>
-              <FilterLabel icon={GraduationCap} label="学历" />
-              {/* 门槛语义：选某学历=显示「该学历及以下要求」的岗位（用户够格投）；要求更高的筛掉。"学历不限"=不筛。 */}
-              <select value={filters.education} onChange={(e) => set("education", e.target.value)} className={selectClass}>
-                <option value="">学历不限</option>
-                <option value="博士">博士</option>
-                <option value="硕士">硕士</option>
-                <option value="本科">本科</option>
-                <option value="大专">大专</option>
-              </select>
-            </div>
-            <div>
-              <FilterLabel icon={SortAscending} label="排序" />
-              <select value={filters.sortBy} onChange={(e) => set("sortBy", e.target.value)} className={selectClass}>
-                <option value="match">按匹配度</option>
-                <option value="newest">按发布时间</option>
-              </select>
-            </div>
-            <div>
-              <FilterLabel icon={GlobeHemisphereEast} label="资本来源" />
-              <select
-                value={filters.capitalOrigin || "全部"}
-                onChange={(e) => set("capitalOrigin", e.target.value === "全部" ? "" : e.target.value)}
-                className={selectClass}
-              >
-                {ORIGINS.map((o) => (
-                  <option key={o} value={o}>{o}</option>
-                ))}
-              </select>
-            </div>
-            {jobScope !== "domestic" && (
-              <div>
-                <FilterLabel icon={MapPin} label="地区" />
-                <select
-                  value={filters.region || ""}
-                  onChange={(e) => set("region", e.target.value)}
-                  className={selectClass}
-                >
-                  {REGIONS.map((r) => (
-                    <option key={r.value || "all"} value={r.value}>{r.label}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </div>
-        </details>
-
-        <div className="flex flex-wrap gap-2">
-          <Check label="仅新岗位" checked={filters.showNewOnly} onChange={(v) => set("showNewOnly", v)} />
-          {/* 薪资/Sponsorship 只在海外范围显示：国内岗薪资字段稀疏、且无签证概念。 */}
-          {jobScope !== "domestic" && (
-            <>
-              <Check label="仅薪资公开" checked={filters.salaryOnly} onChange={(v) => set("salaryOnly", v)} />
-              <Check label="排除不提供 Sponsorship 的岗" checked={filters.sponsorshipOnly} onChange={(v) => set("sponsorshipOnly", v)} />
-            </>
-          )}
-          <Check label="显示已忽略" checked={filters.showIgnored} onChange={(v) => set("showIgnored", v)} />
-          <Check label="显示已投递" checked={filters.showApplied} onChange={(v) => set("showApplied", v)} />
+        <div className="flex items-center gap-2 lg:hidden">
+          <label className="flex min-w-0 flex-1 items-center gap-2 rounded-full border border-black/[0.1] bg-white/65 px-3 py-2 dark:border-white/[0.12] dark:bg-white/[0.06]">
+            <MagnifyingGlass size={17} weight="bold" className="ink-3 shrink-0" aria-hidden="true" />
+            <input value={filters.keyword} onChange={(event) => set("keyword", event.target.value)} aria-label="关键词" placeholder="关键词……" className="t-body-sm min-w-0 flex-1 bg-transparent outline-none placeholder:ink-4" />
+          </label>
+          <button type="button" onClick={() => setPanelOpen(true)} className={cn(buttonBase, buttonIdle, "relative shrink-0")} aria-haspopup="dialog">
+            <Funnel size={16} weight="fill" aria-hidden="true" />
+            筛选
+            {activeChips.length > 0 && <CountBadge count={activeChips.length} />}
+          </button>
         </div>
       </div>
+
+      {activeChips.length > 0 && <SelectedChips chips={activeChips} onClearAll={onClearAll} onClearOne={onClearOne} />}
+
+      <AllFiltersPanel
+        open={panelOpen}
+        filters={filters}
+        onClose={() => setPanelOpen(false)}
+        onChange={set}
+        onClearAll={onClearAll}
+        companies={companies}
+        resultTotal={resultTotal}
+        overseas={overseas}
+      />
+    </section>
+  );
+}
+
+function FilterTrigger({ label, value, active, open = false, icon, onClick }: { label: string; value: string; active: boolean; open?: boolean; icon?: ReactNode; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className={cn(buttonBase, active || open ? buttonActive : buttonIdle, "shrink-0")} aria-expanded={open}>
+      {icon}
+      <span>{active ? value : label}</span>
+      <CaretDown size={14} weight="bold" aria-hidden="true" />
+    </button>
+  );
+}
+
+function RecruitmentType({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <div role="group" className="flex shrink-0 rounded-full border border-black/[0.1] bg-white/55 p-0.5 dark:border-white/[0.12] dark:bg-white/[0.05]" aria-label="招聘类型">
+      {["", "校招", "社招", "实习"].map((item) => (
+        <button key={item || "all"} type="button" onClick={() => onChange(item)} aria-pressed={value === item} className={cn("t-label rounded-full px-3 py-2 transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a1714]/30 dark:focus-visible:ring-[#f3ecdf]/35", value === item ? "btn-ink-sm !px-3 !py-2" : "ink-3 hover:bg-black/[0.05] dark:hover:bg-white/[0.1]")}>
+          {item || "全部"}
+        </button>
+      ))}
     </div>
   );
 }
 
-// 多选输入（城市 / 关键词）：内部以英文逗号存储的字符串 <-> 芯片。回车 / 逗号提交，退格删末项。
-// 值展示为可删除芯片；沿用暖调输入框样式（focus-within 提亮）。
-function ChipsInput({
-  value,
-  onChange,
-  placeholder,
-  ariaLabel,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-  ariaLabel: string;
-}) {
+function Popover({ open, onClose, children }: { open: boolean; onClose: () => void; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    const onPointerDown = (event: PointerEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [open, onClose]);
+  if (!open) return null;
+  return <div ref={ref} role="dialog" aria-label="筛选选项" className="absolute z-40 mt-1 w-[min(30rem,calc(100vw-2rem))] rounded-2xl border border-black/[0.1] bg-[#f4efe6] p-3 shadow-lg dark:border-white/[0.12] dark:bg-[#211b14]">{children}</div>;
+}
+
+function MultiValueEditor({ value, onChange, placeholder, ariaLabel }: { value: string; onChange: (value: string) => void; placeholder: string; ariaLabel: string }) {
   const [draft, setDraft] = useState("");
   const chips = splitMultiValue(value);
-
-  // 提交草稿：按空白/逗号拆成多枚芯片（用户常用空格分隔多城市，如「上海 杭州 深圳」→ 三枚）。
-  function commit(raw: string) {
-    setDraft("");
+  const commit = (raw: string) => {
     const next = [...chips];
-    for (const part of splitMultiValue(raw)) {
-      if (!next.includes(part)) next.push(part);
-    }
+    splitMultiValue(raw).forEach((item) => {
+      if (!next.includes(item)) next.push(item);
+    });
+    setDraft("");
     if (next.length !== chips.length) onChange(next.join(","));
-  }
-  function removeAt(index: number) {
-    onChange(chips.filter((_, i) => i !== index).join(","));
-  }
-
+  };
   return (
-    <div className="mt-1 flex w-full flex-wrap items-center gap-1.5 rounded-xl border border-black/[0.09] bg-white/70 px-2 py-1.5 text-sm transition duration-200 focus-within:border-[#1a1714]/55 focus-within:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:focus-within:border-white/55 dark:focus-within:bg-[#1e1a15]">
-      {chips.map((chip, i) => (
-        <span
-          key={chip}
-          className="inline-flex items-center gap-1 rounded-lg bg-black/[0.06] py-0.5 pl-2 pr-1 text-[13px] font-medium text-[#3f3a33] dark:bg-white/[0.1] dark:text-[#e7ddca]"
-        >
-          {chip}
-          <button
-            type="button"
-            onClick={() => removeAt(i)}
-            aria-label={`移除 ${chip}`}
-            className="grid size-4 place-items-center rounded text-[#8a8275] transition hover:bg-black/[0.08] hover:text-[#1a1714] dark:text-[#9a9184] dark:hover:bg-white/[0.12] dark:hover:text-[#f3ecdf]"
-          >
-            <X size={11} weight="bold" aria-hidden="true" />
-          </button>
-        </span>
-      ))}
-      <input
-        value={draft}
-        aria-label={ariaLabel}
-        placeholder={chips.length ? "" : placeholder}
-        onChange={(e) => {
-          const v = e.target.value;
-          // 输入 / 粘贴含分隔符（中英文逗号）→ 逐段提交，末段留在草稿。
-          if (/[,，]/.test(v)) {
-            const parts = v.split(/[,，]/);
-            const last = parts.pop() ?? "";
-            parts.forEach((p) => commit(p));
-            setDraft(last);
-          } else {
-            setDraft(v);
-          }
-        }}
-        onKeyDown={(e) => {
-          // 中文输入法组字中回车是「确认候选」，不能当作提交（否则吞掉半截拼音）。
-          if ((e.nativeEvent as any).isComposing) return;
-          if (e.key === "Enter" || e.key === ",") {
-            e.preventDefault();
-            commit(draft);
-          } else if (e.key === "Backspace" && !draft && chips.length) {
-            e.preventDefault();
-            removeAt(chips.length - 1);
-          }
-        }}
-        onBlur={() => commit(draft)}
-        className="min-w-[6rem] flex-1 bg-transparent px-1 py-1 text-sm text-[#1a1714] placeholder:text-[#a39a8c] focus:outline-none dark:text-[#f3ecdf] dark:placeholder:text-[#8b8478]"
-      />
+    <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-black/[0.1] bg-white/60 p-2 dark:border-white/[0.12] dark:bg-white/[0.05]">
+      {chips.map((chip) => <button key={chip} type="button" onClick={() => onChange(chips.filter((item) => item !== chip).join(","))} aria-label={`移除 ${chip}`} className="chip ink-2 min-h-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a1714]/30 dark:focus-visible:ring-[#f3ecdf]/35">{chip}<X size={13} weight="bold" aria-hidden="true" /></button>)}
+      <input value={draft} onChange={(event) => setDraft(event.target.value)} onBlur={() => commit(draft)} onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing) return;
+        if (event.key === "Enter" || event.key === ",") { event.preventDefault(); commit(draft); }
+        if (event.key === "Backspace" && !draft && chips.length) onChange(chips.slice(0, -1).join(","));
+      }} aria-label={ariaLabel} placeholder={chips.length ? "" : placeholder} className="t-body-sm min-w-40 flex-1 bg-transparent px-1 py-1 outline-none placeholder:ink-4" />
     </div>
   );
 }
 
-function Check({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <label className="flex cursor-pointer items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm text-[#5f594e] dark:text-[#b6ad9d] transition duration-200 hover:bg-white dark:hover:bg-[#1e1a15] hover:text-[#1a1714] dark:hover:text-[#f3ecdf] active:scale-[0.98]">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="size-4 rounded border-black/20 dark:border-white/20 accent-[#1a1714] dark:accent-[#f3ecdf]"
-      />
-      {label}
-    </label>
-  );
+function FunctionPicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const selected = splitMultiValue(value);
+  const toggle = (item: string) => onChange((selected.includes(item) ? selected.filter((value) => value !== item) : [...selected, item]).join(","));
+  return <div className="space-y-3"><div className="flex items-center justify-between"><p className="t-h3">岗位职能</p><div className="flex gap-3"><button type="button" onClick={() => onChange(JOB_FUNCTION_BUCKETS.join(","))} className="t-label ink-3 hover:ink-1">全选</button><button type="button" onClick={() => onChange("")} className="t-label ink-3 hover:ink-1">清空</button></div></div><div className="grid grid-cols-2 gap-1.5">{JOB_FUNCTION_BUCKETS.map((item) => <label key={item} className={cn("t-body-sm flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2", selected.includes(item) && "bg-[#eee8dc] dark:bg-white/[0.1]")}><input type="checkbox" checked={selected.includes(item)} onChange={() => toggle(item)} className="size-4 accent-[#1a1714] dark:accent-[#f3ecdf]" />{item}</label>)}</div></div>;
 }
 
-function FilterLabel({
-  icon: Icon,
-  label,
-}: {
-  icon: typeof Sparkle;
-  label: string;
-}) {
-  return (
-    <label className="inline-flex items-center gap-1.5 text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">
-      <Icon size={14} weight="fill" aria-hidden="true" />
-      {label}
-    </label>
-  );
+function CompanyPicker({ value, onChange, companies }: { value: string; onChange: (value: string) => void; companies: string[] }) {
+  return <div className="space-y-2"><label className="t-h3" htmlFor="job-company-filter">公司</label><input id="job-company-filter" value={value} onChange={(event) => onChange(event.target.value)} list="job-company-options" placeholder="输入公司名称" className="t-body-sm w-full rounded-xl border border-black/[0.1] bg-white/60 px-3 py-2.5 outline-none focus:border-[#1a1714]/45 dark:border-white/[0.12] dark:bg-white/[0.05] dark:focus:border-[#f3ecdf]/45" /><datalist id="job-company-options">{companies.map((company) => <option key={company} value={company} />)}</datalist></div>;
 }
+
+function SelectedChips({ chips, onClearAll, onClearOne }: { chips: ActiveChip[]; onClearAll: () => void; onClearOne: (key: keyof Filters, value?: string) => void }) {
+  return <div className="flex items-center gap-2 overflow-x-auto px-1 pb-1 scrollbar-hide" aria-label="已选筛选条件"><div className="flex min-w-max gap-1.5">{chips.map((chip) => <button key={chip.id} type="button" onClick={() => onClearOne(chip.key, chip.value)} className="chip ink-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a1714]/30 dark:focus-visible:ring-[#f3ecdf]/35"><X size={13} weight="bold" aria-hidden="true" />{chip.label}</button>)}</div><button type="button" onClick={onClearAll} className="t-label ink-3 ml-auto shrink-0 px-2 py-1 hover:ink-1">清空全部</button></div>;
+}
+
+function AllFiltersPanel({ open, filters, onChange, onClearAll, onClose, companies, resultTotal, overseas }: { open: boolean; filters: Filters; onChange: (key: keyof Filters, value: Filters[keyof Filters]) => void; onClearAll: () => void; onClose: () => void; companies: string[]; resultTotal: number; overseas: boolean }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKeyDown);
+    panelRef.current?.focus();
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+  if (!open) return null;
+  return <div className="fixed inset-0 z-50 flex items-end bg-black/30 p-0 dark:bg-black/55 lg:items-stretch lg:justify-end" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={panelRef} role="dialog" aria-modal="true" aria-label="全部筛选" tabIndex={-1} className="job-filter-panel flex h-[85dvh] w-full flex-col rounded-t-3xl bg-[#f4efe6] shadow-2xl outline-none dark:bg-[#16130f] lg:h-full lg:w-[23.75rem] lg:rounded-none lg:rounded-l-3xl" onMouseDown={(event) => event.stopPropagation()}><div className="flex items-center justify-between border-b border-black/[0.08] px-5 py-4 dark:border-white/[0.1]"><h2 className="t-h2">全部筛选</h2><button type="button" onClick={onClose} aria-label="关闭全部筛选" className="grid size-9 place-items-center rounded-full ink-3 hover:bg-black/[0.06] hover:ink-1 dark:hover:bg-white/[0.1]"><X size={18} weight="bold" aria-hidden="true" /></button></div><div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5"><div className="space-y-3 lg:hidden"><PanelTitle>基础条件</PanelTitle><MultiValueEditor value={filters.city} onChange={(value) => onChange("city", value)} ariaLabel="城市，可多选" placeholder="城市，可多选" /><RecruitmentType value={filters.jobType} onChange={(value) => onChange("jobType", value)} /><FunctionPicker value={filters.jobFunction} onChange={(value) => onChange("jobFunction", value)} /><MultiValueEditor value={filters.keyword} onChange={(value) => onChange("keyword", value)} ariaLabel="关键词，可多选" placeholder="关键词，可多选" /><CompanyPicker value={filters.company} onChange={(value) => onChange("company", value)} companies={companies} /></div><div className="space-y-3"><PanelTitle>岗位要求</PanelTitle><PillField label="学历" options={EDUCATION.map((item) => ({ value: item === "不限" ? "" : item, label: item }))} value={filters.education} onChange={(value) => onChange("education", value)} /><PillField label="经验" options={EXPERIENCE} value={filters.experience} onChange={(value) => onChange("experience", value)} /></div><div className="space-y-3"><PanelTitle>岗位新鲜度</PanelTitle><PillField label="发布时间" options={POSTED_WITHIN} value={filters.postedWithin} onChange={(value) => onChange("postedWithin", value)} /><Toggle label="仅新岗位" checked={filters.showNewOnly} onChange={(value) => onChange("showNewOnly", value)} /></div><div className="space-y-3"><PanelTitle>公司</PanelTitle><PillField label="资本来源" options={ORIGINS.map((item) => ({ value: item === "全部" ? "" : item, label: item }))} value={filters.capitalOrigin} onChange={(value) => onChange("capitalOrigin", value)} /></div>{overseas && <div className="space-y-3"><PanelTitle>海外</PanelTitle><PillField label="目标地区" options={REGIONS} value={filters.region} onChange={(value) => onChange("region", value)} /><Toggle label="仅显示提供 Sponsorship 的岗位" checked={filters.sponsorshipOnly} onChange={(value) => onChange("sponsorshipOnly", value)} /></div>}<div className="space-y-3"><PanelTitle>展示</PanelTitle><Toggle label="仅显示公开薪资的岗位" checked={filters.salaryOnly} onChange={(value) => onChange("salaryOnly", value)} /><Toggle label="显示已忽略" checked={filters.showIgnored} onChange={(value) => onChange("showIgnored", value)} /><Toggle label="显示已投递" checked={filters.showApplied} onChange={(value) => onChange("showApplied", value)} /><PillField label="排序" options={[{ value: "match", label: "按匹配度" }, { value: "newest", label: "按发布时间" }]} value={filters.sortBy} onChange={(value) => onChange("sortBy", value as Filters["sortBy"])} /></div></div><div className="flex items-center gap-3 border-t border-black/[0.08] bg-[#f4efe6] px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] dark:border-white/[0.1] dark:bg-[#16130f]"><button type="button" onClick={onClearAll} className="t-label ink-3 shrink-0 px-2 py-2 hover:ink-1">重置全部</button><button type="button" onClick={onClose} className="btn-ink-sm min-w-0 flex-1"><span>查看</span><span className="t-num">{resultTotal}</span><span>个岗位</span></button></div></div></div>;
+}
+
+function PanelTitle({ children }: { children: ReactNode }) { return <h3 className="t-h3">{children}</h3>; }
+function PillField({ label, options, value, onChange }: { label: string; options: Array<{ value: string; label: string }>; value: string; onChange: (value: string) => void }) { return <div className="space-y-2"><p className="t-label">{label}</p><PillGroup options={options} value={value} onChange={onChange} ariaLabel={label} /></div>; }
+function PillGroup({ options, value, onChange, ariaLabel }: { options: Array<{ value: string; label: string }>; value: string; onChange: (value: string) => void; ariaLabel: string }) { return <div className="flex flex-wrap gap-2" aria-label={ariaLabel}>{options.map((option) => <button key={option.value || "all"} type="button" onClick={() => onChange(option.value)} aria-pressed={value === option.value} className={cn("t-label rounded-full border px-3 py-2 transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a1714]/30 dark:focus-visible:ring-[#f3ecdf]/35", value === option.value ? buttonActive : buttonIdle)}>{option.label}</button>)}</div>; }
+function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) { return <label className="flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-black/[0.08] bg-white/45 px-3 py-2.5 dark:border-white/[0.1] dark:bg-white/[0.04]"><span className="t-body-sm">{label}</span><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="size-4 accent-[#1a1714] dark:accent-[#f3ecdf]" /></label>; }
+function CountBadge({ count }: { count: number }) { return <span className="btn-ink-sm t-num absolute -right-1 -top-1 grid size-4 place-items-center !p-0">{count}</span>; }
+
+type ActiveChip = { id: string; key: keyof Filters; value?: string; label: string };
+function collectActiveChips(filters: Filters, overseas: boolean): ActiveChip[] {
+  const values: ActiveChip[] = [];
+  const addMany = (key: "city" | "keyword" | "jobFunction", prefix = "") => splitMultiValue(filters[key]).forEach((value) => values.push({ id: `${key}-${value}`, key, value, label: `${prefix}${value}` }));
+  addMany("city");
+  addMany("keyword");
+  addMany("jobFunction");
+  const singles: Array<[keyof Filters, string, string]> = [["company", filters.company, "公司："], ["jobType", filters.jobType, ""], ["experience", labelFor(EXPERIENCE, filters.experience), ""], ["education", filters.education, ""], ["postedWithin", labelFor(POSTED_WITHIN, filters.postedWithin), ""], ["capitalOrigin", filters.capitalOrigin, ""], ["region", overseas ? labelFor(REGIONS, filters.region) : "", ""], ["sortBy", filters.sortBy === "newest" ? "按发布时间" : "", ""]];
+  singles.forEach(([key, value, prefix]) => { if (value) values.push({ id: `${key}-${value}`, key, label: `${prefix}${value}` }); });
+  ([["showNewOnly", filters.showNewOnly, "仅新岗位"], ["salaryOnly", filters.salaryOnly, "仅公开薪资"], ["sponsorshipOnly", overseas && filters.sponsorshipOnly, "仅 Sponsorship"], ["showIgnored", filters.showIgnored, "显示已忽略"], ["showApplied", filters.showApplied, "显示已投递"]] as Array<[keyof Filters, boolean, string]>).forEach(([key, enabled, label]) => { if (enabled) values.push({ id: String(key), key, label }); });
+  return values;
+}
+function countPanelFilters(filters: Filters, overseas: boolean): number { return [filters.education, filters.experience, filters.postedWithin, filters.capitalOrigin, overseas ? filters.region : "", filters.showNewOnly, filters.salaryOnly, overseas && filters.sponsorshipOnly, filters.showIgnored, filters.showApplied, filters.sortBy !== "match"].filter(Boolean).length; }
+function compactMultiValue(value: string): string { const items = splitMultiValue(value); return items.length > 1 ? `${items[0]} +${items.length - 1}` : items[0] || ""; }
+function labelFor(options: Array<{ value: string; label: string }>, value: string): string { return options.find((option) => option.value === value)?.label || ""; }

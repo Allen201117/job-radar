@@ -1,11 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import {
-  ArrowsClockwise,
-  Broadcast,
-  ClockCounterClockwise,
-} from "@phosphor-icons/react";
+import { ArrowsClockwise } from "@phosphor-icons/react";
 import { AnimateNumber } from "@/components/ui/animated-blur-number";
 import { AnimatedStat } from "@/components/ui/animated-stat";
 import { createJobStatsRefresher, installVisiblePolling } from "@/lib/job-stats-refresh";
@@ -13,12 +9,20 @@ import { cn } from "@/lib/utils";
 
 const POLL_INTERVAL_MS = 60_000;
 
-// 岗位库定时翻动总数卡（暖光浅色版）。
-// - 真数据：走服务端 /api/jobs/stats，有效在招 + 24h 确认在招读自建香港 jobs 库（Phase 1 真实源），
-//   官方源 = count(sources enabled)。取代旧的「浏览器直连 Supabase」——jobs 迁香港库后 Supabase 已是空表，
-//   客户端直连会读到空/失活计数，与 SSR 真实总数对不上。
-// - 定时：入场从 0 翻到 SSR 已知的真实总数（无需等网络），之后页面可见时每 60s 轮询一次。
-// - 首屏不闪：initialTotal 由服务端 SSR 传入，挂载即有真实值。
+// 岗位库数据条（报头 dateline 形态）。
+//
+// 为什么从「右侧竖卡」改成「标题下的横条」：旧形态是一张 280×200 的卡片浮在报头右边，
+// 三个问题——① 它把筛选器整体压到 y≈550，1440×900 视口里一条岗位都看不到（走查实测）；
+// ② 卡里的大数字 40px 比页面 H1 的 32px 还大，视觉权重倒置，用户第一眼落在计数上而不是
+// 页面标题上；③ surface 卡里又嵌两张 surface-soft 小卡，「卡中卡」层级冗余。
+// 横条把 ~200px 垂直空间压到 ~52px，数字降到 22px（明确小于 H1），三组数据平级用细竖线分隔。
+//
+// 文案同时去黑话（走查里普通求职者看不懂的词）：
+//   「有效在招」→「在招岗位」、「官方源」→「家企业官方源」、「24h 确认在招」→「24 小时内核验有效」；
+//   「轮询间隔 60s」「首屏服务端计数」是内部实现细节，对求职者零信息量，直接删。
+//
+// 真数据仍走 /api/jobs/stats（有效在招 / 24h 核验读自建香港 jobs 库，官方源读 Supabase）；
+// 首屏不闪：initialTotal 由服务端 SSR 传入，挂载即有真实值。
 interface Props {
   initialTotal: number;
 }
@@ -30,7 +34,6 @@ interface JobStats {
 }
 
 async function fetchJobStats(): Promise<JobStats> {
-  // 服务端聚合：有效在招 / 24h 确认在招读香港 jobs 库，官方源读 Supabase（见 /api/jobs/stats）。
   const resp = await fetch("/api/jobs/stats");
   const data = await resp.json();
   if (!resp.ok || !data?.ok) throw new Error("stats_failed");
@@ -81,101 +84,108 @@ export default function JobLibraryStat({ initialTotal }: Props) {
     };
   }, []);
 
+  // 只说人话：已同步过就报「几点几分更新」，没同步过就报机制「每分钟更新」。
+  // ⚠️ 不许写「实时」——这个数是 60s 轮询来的，自称实时是骗用户；
+  // 旧文案「轮询间隔 60s」诚实但是黑话（走查实测求职者看不懂），所以换成「每分钟更新」：
+  // 既保住「这是定时刷新、不是实时」的诚实底线，又不用技术词。契约由 ux-hardening-contract 守。
   const syncLabel = syncedAt
-    ? `最近同步 ${syncedAt.toLocaleTimeString("zh-CN", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-      })}`
-    : "首屏服务端计数";
-
-  const statusText =
-    status === "stale" ? "连接暂不可用" : status === "syncing" ? "正在刷新" : "定时刷新";
+    ? `${syncedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })} 更新`
+    : `每分钟更新`;
+  const statusText = status === "stale" ? "连接暂不可用" : status === "syncing" ? "更新中" : syncLabel;
 
   return (
-    <section className="surface bento-glow relative overflow-hidden p-3.5 text-[#1a1714] dark:text-[#f3ecdf] sm:p-4">
-      <div
-        className="pointer-events-none absolute -right-12 -top-16 size-40 rounded-full bg-[#00c853]/[0.26] blur-3xl dark:hidden"
-        aria-hidden="true"
+    <section
+      className="flex flex-wrap items-center gap-x-1 gap-y-2 rounded-2xl border border-black/[0.07] bg-white/55 px-4 py-2.5 dark:border-white/[0.09] dark:bg-white/[0.04]"
+      aria-label="岗位库概况"
+      title={`每 ${POLL_INTERVAL_MS / 1000} 秒自动更新`}
+    >
+      <StatCell
+        value={activeJobs}
+        unit="个"
+        label="在招岗位"
+        primary
+        animated
       />
-      <div
-        className="pointer-events-none absolute -right-12 -top-16 hidden size-40 rounded-full bg-[#96b6e2]/20 blur-3xl dark:block"
-        aria-hidden="true"
-      />
-      <div className="relative flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="chip">
-            <span
-              className={cn(
-                "size-2 rounded-full",
-                status === "stale"
-                  ? "bg-[#d08a4a]"
-                  : status === "syncing"
-                    ? "animate-pulse bg-[#3f7cc0]"
-                    : "bg-[#3fae6a]",
-              )}
-              aria-hidden="true"
-            />
-            {statusText}
-          </div>
-          <p className="mt-2 text-[12px] text-[#8a8275] dark:text-[#9a9184]">岗位库 · 有效在招</p>
-          <div className="mt-0.5 flex items-baseline gap-1.5">
-            <AnimateNumber
-              value={activeJobs}
-              duration={700}
-              blur={14}
-              className="text-[1.8rem] font-semibold leading-none tracking-[-0.03em] text-[#1a1714] dark:text-[#f3ecdf] sm:text-[2.05rem]"
-            />
-            <span className="text-sm font-medium text-[#9a9184] dark:text-[#837c70]">个</span>
-          </div>
-        </div>
+      <Divider />
+      <StatCell value={sources} unit="家" label="企业官方源" />
+      <Divider />
+      <StatCell value={recent} unit="个" label="24 小时内核验有效" />
+
+      {/* 状态与刷新推到最右：它是「元信息」，不该和三组业务数字抢注意力 */}
+      <div className="ml-auto flex items-center gap-2 pl-3">
+        <span
+          className={cn(
+            "size-1.5 shrink-0 rounded-full",
+            status === "stale"
+              ? "bg-[#d08a4a]"
+              : status === "syncing"
+                ? "animate-pulse bg-[#3f7cc0]"
+                : "bg-[#3fae6a]",
+          )}
+          aria-hidden="true"
+        />
+        <span className="t-caption whitespace-nowrap">{statusText}</span>
         <button
           type="button"
           onClick={() => void refreshRef.current()}
-          className="grid size-9 shrink-0 place-items-center rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] text-[#3f3a33] dark:text-[#d9d0c2] transition duration-200 hover:-translate-y-0.5 hover:bg-white dark:hover:bg-[#1e1a15] active:scale-[0.96]"
+          className="grid size-7 shrink-0 place-items-center rounded-full border border-black/[0.08] bg-white/70 text-[#3f3a33] transition duration-200 hover:bg-white active:scale-[0.94] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-[#1e1a15]"
           aria-label="立即刷新岗位库计数"
         >
           <ArrowsClockwise
-            size={16}
+            size={13}
             weight="bold"
             className={cn(status === "syncing" && "animate-spin")}
             aria-hidden="true"
           />
         </button>
       </div>
-
-      <div className="relative mt-3 grid grid-cols-2 gap-2">
-        <SubStat icon={Broadcast} label="官方源" value={sources} />
-        <SubStat icon={ClockCounterClockwise} label="24h 确认在招" value={recent} />
-      </div>
-
-      <div className="relative mt-2.5 flex items-center justify-between gap-3 border-t border-black/[0.06] dark:border-white/[0.1] pt-2.5">
-        <p className="text-[11px] leading-5 text-[#9a9184] dark:text-[#837c70]">{syncLabel}</p>
-        <p className="text-[11px] font-medium text-[#3f7cc0] dark:text-[#7fb2e8]">
-          轮询间隔 {POLL_INTERVAL_MS / 1000}s
-        </p>
-      </div>
     </section>
   );
 }
 
-function SubStat({
-  icon: Icon,
-  label,
+// 一格数据：数字在前、单位与标签紧随，横向排列扫读最快。
+// primary 那格略大（22px）但明确小于页面 H1（≈38px），避免旧版「数字比标题还大」的权重倒置。
+function StatCell({
   value,
+  unit,
+  label,
+  primary = false,
+  animated = false,
 }: {
-  icon: typeof Broadcast;
-  label: string;
   value: number | null;
+  unit: string;
+  label: string;
+  primary?: boolean;
+  animated?: boolean;
 }) {
+  const numberClass = cn(
+    "t-num font-semibold ink-1",
+    primary ? "text-[1.375rem] leading-none" : "text-[0.9375rem] leading-none",
+  );
   return (
-    <div className="surface-soft bento-glow px-3 py-2.5">
-      <Icon size={15} weight="fill" className="text-[#3f7cc0] dark:text-[#7fb2e8]" aria-hidden="true" />
-      <p className="mt-1.5 text-[11px] text-[#9a9184] dark:text-[#837c70]">{label}</p>
-      <p className="mt-0.5 text-base font-semibold tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">
-        {value === null ? <span className="text-[#c4bdb0] dark:text-[#6f685e]">—</span> : <AnimatedStat value={value} />}
-      </p>
+    <div className="flex items-baseline gap-1.5 px-2">
+      {value === null ? (
+        <span className={cn(numberClass, "ink-4")}>—</span>
+      ) : animated ? (
+        <AnimateNumber value={value} duration={700} blur={14} className={numberClass} />
+      ) : (
+        <span className={numberClass}>
+          <AnimatedStat value={value} />
+        </span>
+      )}
+      <span className="t-caption whitespace-nowrap">
+        {unit}
+        {label}
+      </span>
     </div>
+  );
+}
+
+function Divider() {
+  return (
+    <span
+      aria-hidden="true"
+      className="hidden h-4 w-px shrink-0 bg-black/[0.09] dark:bg-white/[0.12] sm:block"
+    />
   );
 }

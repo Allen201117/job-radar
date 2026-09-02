@@ -44,14 +44,18 @@
       radial-gradient(52% 46% at 2% 92%, rgba(196, 228, 150, 0.22), transparent 60%),
       radial-gradient(54% 50% at 100% 96%, rgba(236, 198, 176, 0.30), transparent 60%);
     isolation: isolate;
-    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    font-family: var(--font-sans);
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
   }
 
   h1,
   h2,
   h3 {
-    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+    font-family: var(--font-display);
   }
 
   :focus-visible {
@@ -94,10 +98,100 @@
    ─────────────────────────────────────────────────────────────── */
 @layer base {
   :root {
-    /* 全产品统一字体：与看板一致的无衬线显示栈（Mac 上中文回落 PingFang SC） */
+    /* ═══ 排版基座 ═══
+       字体栈的排法是「西文在前、中文在后」：西文字形由 system-ui（Mac=SF Pro / Win=Segoe UI）
+       渲染，中文不在西文字体里 → 自动回落到后面的 CJK 列表。反过来把中文字体提前会让西文
+       也用中文字体的拉丁字形（又宽又丑），这是中文站最常见的字体错误。
+       仍不加载 webfont：规避国内 Google Fonts 封锁 + 离线构建不挂；MiSans / HarmonyOS /
+       思源黑体 只在用户本机装了才生效，装不到就落 PingFang SC（Mac）/ 微软雅黑（Win）。 */
+    --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+      "Segoe UI", "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Source Han Sans SC",
+      "Noto Sans SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     --font-display: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-      "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+      "SF Pro Display", "Segoe UI", "PingFang SC", "HarmonyOS Sans SC", "MiSans",
+      "Source Han Sans SC", "Noto Sans SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+
+    /* ═══ 文字墨色四级 ═══
+       替代此前散落全站的 30+ 个 inline hex。旧的三级色 #9a9184 / #8a8275 在暖纸底 #f4efe6 上
+       对比度只有 2.9:1 / 3.2:1，**低于 WCAG AA 的 4.5:1**——这就是「关键信息太浅、看不清」的
+       量化原因。ink-3 压到 #6b6355（≈5.0:1）过 AA；真正的「弱到几乎不用读」才用 ink-4。 */
+    --ink-1: #1a1714; /* 主文本：标题、岗位名、数字 */
+    --ink-2: #4f483e; /* 次文本：正文、说明段落 */
+    --ink-3: #6b6355; /* 三级：字段标签、元信息（仍过 AA） */
+    --ink-4: #9a9184; /* 四级：占位符、禁用态、纯装饰（不承载信息） */
   }
+
+  .dark {
+    --ink-1: #f3ecdf;
+    --ink-2: #c9c0b0;
+    --ink-3: #a79e90;
+    --ink-4: #7a7368;
+  }
+}
+
+@layer components {
+  /* ═══ 语义排版阶梯 ═══
+     一个层级 = 一个类，字号 / 行高 / 字重 / 字距 / 墨色一次给全，调用方不再各写各的。
+     规矩三条：
+     ① 中文行高比英文大一档（正文 1.7，英文习惯 1.5），方块字密不透气就是「丑」的主因之一；
+     ② 字重只用 400 / 500 / 600 / 700 四档，**正文一律 400**——此前全站 98% 的文字挤在
+        medium(500) 与 semibold(600) 两档，等于没有层级，满屏「中等粗」看着又平又糊；
+     ③ 中文正文字距不收紧（0），只有 ≥18px 的西文/数字标题才用负字距。 */
+  .t-display {
+    font-family: var(--font-display);
+    @apply text-[1.85rem] font-bold leading-[1.18] sm:text-[2.15rem] lg:text-[2.4rem];
+    letter-spacing: -0.025em;
+    color: var(--ink-1);
+  }
+  .t-h1 {
+    font-family: var(--font-display);
+    @apply text-[1.5rem] font-semibold leading-[1.35];
+    letter-spacing: -0.015em;
+    color: var(--ink-1);
+  }
+  .t-h2 {
+    @apply text-[1.125rem] font-semibold leading-[1.5];
+    letter-spacing: -0.01em;
+    color: var(--ink-1);
+  }
+  .t-h3 {
+    @apply text-[1rem] font-semibold leading-[1.6];
+    color: var(--ink-1);
+  }
+  .t-body {
+    @apply text-[0.9375rem] font-normal leading-[1.7];
+    color: var(--ink-2);
+  }
+  .t-body-sm {
+    @apply text-[0.875rem] font-normal leading-[1.65];
+    color: var(--ink-2);
+  }
+  .t-label {
+    @apply text-[0.8125rem] font-medium leading-[1.5];
+    color: var(--ink-3);
+  }
+  .t-caption {
+    @apply text-[0.75rem] font-normal leading-[1.5];
+    letter-spacing: 0.01em;
+    color: var(--ink-3);
+  }
+  .t-micro {
+    @apply text-[0.6875rem] font-medium leading-[1.45];
+    letter-spacing: 0.02em;
+    color: var(--ink-3);
+  }
+  /* 数字专用：等宽数字 + 紧字距，用在计数 / 薪资 / 匹配度这类要对齐扫读的地方 */
+  .t-num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1, "cv01" 1;
+    letter-spacing: -0.01em;
+  }
+
+  /* 墨色单独可用（只换颜色、不动字号的场景） */
+  .ink-1 { color: var(--ink-1); }
+  .ink-2 { color: var(--ink-2); }
+  .ink-3 { color: var(--ink-3); }
+  .ink-4 { color: var(--ink-4); }
 }
 
 @layer components {
@@ -235,6 +329,29 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .route-zoom {
+    animation: none;
+  }
+}
+
+/* 筛选面板只用位移与透明度进场：抽屉/Sheet 是当前筛选上下文，不该用布局动画挤动背后的岗位列表。 */
+@keyframes job-filter-sheet-in {
+  from { opacity: 0; transform: translateY(1rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.job-filter-panel {
+  animation: job-filter-sheet-in 200ms ease-out both;
+}
+@media (min-width: 1024px) {
+  @keyframes job-filter-drawer-in {
+    from { opacity: 0; transform: translateX(1rem); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  .job-filter-panel {
+    animation-name: job-filter-drawer-in;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .job-filter-panel {
     animation: none;
   }
 }
