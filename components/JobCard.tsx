@@ -99,6 +99,38 @@ const SIGNAL_STYLE: Record<OpportunitySignalType, string> = {
   COMPANY_MOMENTUM: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/12 dark:text-[#7fb2e8]",
 };
 
+// 关键结构性字段（招聘类型 / 岗位类型 / 城市 / 学历 / 经验 / 薪资 / 截止）的标签配色。
+// 设计原则：只有「招聘类型」按 实习/校招/社招 三色区分领读（它决定这岗跟你有没有关系），
+// 其余一律中性高对比 —— 否则一张卡七种颜色，等于没有重点。
+type KeyTagTone = "campus" | "intern" | "social" | "neutral" | "money" | "warn";
+
+const KEY_TAG_TONE: Record<KeyTagTone, string> = {
+  campus: "border-[#a9d8c4] bg-[#dcf2e8] text-[#256b4d] dark:border-[#6cc99e]/35 dark:bg-[#6cc99e]/[0.14] dark:text-[#8fdcb8]",
+  intern: "border-[#c3d9f2] bg-[#e6f0fb] text-[#2f6299] dark:border-[#7fb2e8]/35 dark:bg-[#7fb2e8]/[0.14] dark:text-[#a9cef3]",
+  social: "border-[#ddd0b6] bg-[#f4ecdc] text-[#6b5f4c] dark:border-white/[0.16] dark:bg-white/[0.10] dark:text-[#ddd3c4]",
+  neutral: "border-black/[0.09] bg-white/75 text-[#3f3a33] dark:border-white/[0.14] dark:bg-white/[0.08] dark:text-[#e6ddce]",
+  money: "border-[#bcdcae] bg-[#eef6e0] text-[#4d6b2f] dark:border-[#a3d06a]/35 dark:bg-[#a3d06a]/[0.14] dark:text-[#cbeba2]",
+  warn: "border-[#f0d9a8] bg-[#fbf1de] text-[#8a6a2a] dark:border-[#e0b15a]/35 dark:bg-[#e0b15a]/[0.14] dark:text-[#e0b15a]",
+};
+
+// recruitmentCategory 穷尽落到这三个桶；兜底 social 只是防它将来加桶时不崩。
+const RECRUIT_TONE: Record<string, KeyTagTone> = {
+  实习: "intern",
+  校招: "campus",
+  社招: "social",
+};
+
+type KeyTagSpec = {
+  key: string;
+  icon?: typeof MapPin;
+  label: string;
+  value: string | null;
+  tone: KeyTagTone;
+  // 值自明的（北京 / 本科 / 20-30K）不重复写字段名；「经验 3-5年」「截止 10-15」才需要带标签。
+  showLabel?: boolean;
+  strong?: boolean;
+};
+
 const OPPORTUNITY_TIER_LABEL: Record<OpportunityTier, string> = {
   high: "高匹配",
   related: "相关机会",
@@ -357,19 +389,29 @@ export default function JobCard({
     ? new Date(job.posted_at).toLocaleDateString("zh-CN")
     : null;
   const postedRelative = relativeTimeLabel(job.posted_at);
-  const metadataFields = [
-    { key: "location", icon: MapPin, label: "城市", value: jobFieldDisplayValue(job.location) },
-    { key: "salary", icon: HandCoins, label: "薪资", value: jobFieldDisplayValue(job.salary_text) },
-    { key: "experience", icon: Briefcase, label: "经验", value: jobFieldDisplayValue(exp) },
-    { key: "education", icon: GraduationCap, label: "学历", value: jobFieldDisplayValue(edu) },
-    { key: "posted", icon: CalendarBlank, label: "官网发布", value: jobFieldDisplayValue(posted && postedRelative ? `${posted} · ${postedRelative}` : posted) },
-    { key: "deadline", icon: Hourglass, label: "截止", value: jobFieldDisplayValue(deadline) },
-  ].filter((field) => field.value !== null) as Array<{
-    key: string;
-    icon: typeof MapPin;
-    label: string;
-    value: string;
-  }>;
+  const postedLabel = jobFieldDisplayValue(
+    posted && postedRelative ? `${posted} · ${postedRelative}` : posted,
+  );
+  // 关键结构性字段做成标签行。这些是扫卡时真正用来做决策的字段，
+  // 过去散在「浅灰点号行」+「弱对比两列小格子」里，对比度低到几乎看不见（用户原话：太浅了、不易看出）。
+  const keyTagCandidates: Array<KeyTagSpec | null> = [
+    { key: "recruit", label: "招聘类型", value: recruitType, tone: RECRUIT_TONE[recruitType] ?? "social", strong: true },
+    gradClass ? { key: "grad", label: "届别", value: gradClass, tone: "campus" } : null,
+    earlyBatch ? { key: "early", label: "批次", value: "提前批", tone: "warn" } : null,
+    // classifyJobFunction 兜底值「其他」= 没判出来，做成标签只会误导 → 不显示。
+    jobFunction && jobFunction !== "其他"
+      ? { key: "function", label: "岗位类型", value: jobFunction, tone: "neutral" }
+      : null,
+    { key: "location", icon: MapPin, label: "城市", value: jobFieldDisplayValue(job.location), tone: "neutral" },
+    { key: "education", icon: GraduationCap, label: "学历", value: jobFieldDisplayValue(edu), tone: "neutral" },
+    { key: "experience", icon: Briefcase, label: "经验", value: jobFieldDisplayValue(exp), tone: "neutral", showLabel: true },
+    { key: "salary", icon: HandCoins, label: "薪资", value: jobFieldDisplayValue(job.salary_text), tone: "money" },
+    { key: "deadline", icon: Hourglass, label: "截止", value: jobFieldDisplayValue(deadline), tone: "warn", showLabel: true },
+  ];
+  // 空字段静默不装框（沿用 jobFieldDisplayValue 口径：未知/未披露 都算空）。
+  const keyTags = keyTagCandidates.filter(
+    (tag): tag is KeyTagSpec & { value: string } => Boolean(tag && tag.value),
+  );
   const statusChips: Array<{
     key: string;
     label: string;
@@ -455,35 +497,56 @@ export default function JobCard({
             </p>
           </div>
 
-          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">
-            <span>{recruitType}</span>
-            <span aria-hidden="true">·</span>
-            <span>{jobFunction}</span>
-            {gradClass && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span>{gradClass}</span>
-              </>
-            )}
-            {earlyBatch && (
-              <span className="inline-flex items-center rounded-full border border-[#e4d1a8] bg-[#f8efd9] px-2 py-0.5 text-[#8a6a2a] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/12 dark:text-[#e0b15a]">
-                提前批
-              </span>
-            )}
-            {relatedReason && (
-              <>
-                <span aria-hidden="true">·</span>
+          {/* 关键标签行 = 状态（已投递/新发现…）+ 结构性字段（招聘类型/岗位类型/城市/学历/经验/薪资/截止）。
+              合并成一行 chip：一眼可扫，且比原来「浅灰点号行 + 两列小格子」少占两行高度。 */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+            {visibleStatusChips.map((chip) => {
+              const Icon = chip.icon;
+              return (
+                <span
+                  key={chip.key}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[13px] font-semibold leading-5",
+                    chip.cls,
+                  )}
+                >
+                  {Icon && <Icon size={13} weight="fill" aria-hidden="true" />}
+                  {chip.label}
+                </span>
+              );
+            })}
+            {keyTags.map(({ key, ...tag }) => (
+              <KeyTag key={key} {...tag} />
+            ))}
+          </div>
+
+          {/* 次要 meta：时间线 + 归类原因 + 洞察入口。刻意保持低对比度，不跟关键标签抢注意力。 */}
+          {(postedLabel || freshness.label || relatedReason || insight) && (
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">
+              {postedLabel && (
+                <span className="inline-flex items-center gap-1">
+                  <CalendarBlank size={12} className="shrink-0" aria-hidden="true" />
+                  官网发布 {postedLabel}
+                </span>
+              )}
+              {freshness.label && (
+                <span
+                  className={cn(
+                    freshness.stale && "font-semibold text-[#9a6a2a] dark:text-[#e0b15a]",
+                  )}
+                >
+                  {freshness.label}
+                </span>
+              )}
+              {relatedReason && (
                 <span
                   title={`该岗因匹配稍弱被归入「相关」：${relatedReason}`}
                   className="inline-flex items-center rounded-full border border-black/[0.08] px-2 py-0.5 text-[#8a8275] dark:border-white/[0.12] dark:text-[#9a9184]"
                 >
                   {relatedReason}
                 </span>
-              </>
-            )}
-            {insight && (
-              <>
-                <span aria-hidden="true">·</span>
+              )}
+              {insight && (
                 <button
                   type="button"
                   onClick={() => setInsightOpen(true)}
@@ -500,55 +563,8 @@ export default function JobCard({
                   )}
                   {insight.label}
                 </button>
-              </>
-            )}
-          </div>
-
-          {visibleStatusChips.length > 0 && (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              {visibleStatusChips.map((chip) => {
-                const Icon = chip.icon;
-                return (
-                  <span
-                    key={chip.key}
-                    className={cn("inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold", chip.cls)}
-                  >
-                    {Icon && <Icon size={12} weight="fill" aria-hidden="true" />}
-                    {chip.label}
-                  </span>
-                );
-              })}
-            </div>
-          )}
-
-          {metadataFields.length > 0 &&
-            (metadataFields.length >= 4 ? (
-              <div className="mt-4 grid grid-cols-2 gap-2 text-sm xl:grid-cols-3">
-                {metadataFields.map((field) => (
-                  <Field key={field.key} icon={field.icon} label={field.label} value={field.value} />
-                ))}
-              </div>
-            ) : (
-              <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-[#6b655a] dark:text-[#b6ad9d]">
-                {metadataFields.map(({ key, icon: Icon, label, value }) => (
-                  <span key={key} className="inline-flex min-w-0 items-center gap-1.5">
-                    <Icon size={15} className="shrink-0 text-[#a39a8c] dark:text-[#a89f90]" aria-hidden="true" />
-                    <span className="text-[#9a9184] dark:text-[#aaa093]">{label}</span>
-                    <span className="font-medium text-[#3f3a33] dark:text-[#f3ecdf]">{value}</span>
-                  </span>
-                ))}
-              </div>
-            ))}
-
-          {freshness.label && (
-            <p
-              className={cn(
-                "mt-2 text-xs font-medium",
-                freshness.stale ? "text-[#9a6a2a] dark:text-[#e0b15a]" : "text-[#8a8275] dark:text-[#9a9184]",
               )}
-            >
-              {freshness.label}
-            </p>
+            </div>
           )}
 
           {summary && (
@@ -790,23 +806,31 @@ export default function JobCard({
   );
 }
 
-function Field({
+// 关键字段标签：图标 + 值。值自明就不写字段名（北京 / 本科），
+// 光看值会歧义的才带标签（经验 3-5年 / 截止 10-15）；完整含义一律进 title 供悬浮与读屏。
+function KeyTag({
   icon: Icon,
   label,
   value,
-}: {
-  icon: typeof MapPin;
-  label: string;
-  value: string;
-}) {
+  tone,
+  showLabel,
+  strong,
+}: Omit<KeyTagSpec, "key" | "value"> & { value: string }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 rounded-xl border border-black/[0.06] bg-white/55 px-3 py-2 dark:border-white/[0.12] dark:bg-white/[0.07]">
-      <Icon size={16} className="shrink-0 text-[#a39a8c] dark:text-[#a89f90]" aria-hidden="true" />
-      <div className="min-w-0">
-        <span className="mr-1 text-[#9a9184] dark:text-[#aaa093]">{label}</span>
-        <span className="truncate font-medium text-[#3f3a33] dark:text-[#f3ecdf]">{value}</span>
-      </div>
-    </div>
+    <span
+      title={`${label}：${value}`}
+      className={cn(
+        // max-w 给多地点岗位兜底（「深圳市南山区 / 北京市西城区 / 上海市浦东新区」会独占一整行），
+        // 超长截断 + 全文进 title 悬浮。
+        "inline-flex max-w-[16rem] items-center gap-1 rounded-full border px-2.5 py-1 text-[13px] leading-5",
+        strong ? "font-semibold" : "font-medium",
+        KEY_TAG_TONE[tone],
+      )}
+    >
+      {Icon && <Icon size={13} weight="bold" className="shrink-0 opacity-60" aria-hidden="true" />}
+      {showLabel && <span className="shrink-0 opacity-70">{label}</span>}
+      <span className="truncate">{value}</span>
+    </span>
   );
 }
 
