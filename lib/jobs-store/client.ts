@@ -31,7 +31,14 @@ function makePool(): Pool {
     password: decodeURIComponent(u.password),
     database: u.pathname.replace(/^\//, "") || "jobradar_jobs",
     ssl: buildJobsDatabaseSsl(process.env, u.hostname),
-    max: 5,
+    // 每实例最多握 2 条连接（2026-09-03 由 5 降下来）。
+    // 香港库只有 100 个连接位，而**大头是我们自己的 CI**：实测 21:00 UTC 两条抓取链撞档时
+    // 光爬虫就占到 ~73 条，Vercel 侧约 19 条，合计逼近上限；打满后本池 8s 超时 → 用户拿到 500。
+    // Node 函数一个实例同时只处理一个请求，2 条已含冗余（一条在用、一条备用/重连），
+    // 降到 2 后同样 100 个位子能容纳的实例数从 ~20 抬到 ~50，扛量水位直接翻倍。
+    // ⚠️ 代价是「单实例并发 >2 时排队」——若将来开启 Vercel Fluid Compute（一个实例并发处理多个
+    // 请求），必须重新评估这个值，否则长尾会变差。
+    max: 2,
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 8_000,
     // 跨区（Vercel→香港）大结果集传输会占 statement_timeout（服务器发送被慢客户端阻塞也计时）。给 25s 防御余量
