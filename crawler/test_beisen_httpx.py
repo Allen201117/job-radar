@@ -149,6 +149,21 @@ class BeisenFetchRoutingTest(unittest.TestCase):
         self.assertEqual(out, list_json)
         self.assertEqual(a._detail_route, "https://z.zhiye.com/social/detail")
 
+    def test_cached_route_httpx_fail_raises_not_browser(self):
+        """route 已缓存但 httpx fetch 失败 → 应 raise RuntimeError，绝不穿透到浏览器。
+        这正是 haixin.zhiye.com 的 bug 场景：路由缓存存在但 httpx 拿不到数据，
+        旧代码会尝试 _fetch_paginated → 触发 Playwright.launch，CI 里直接崩溃。"""
+        china_ats._BEISEN_ROUTE_CACHE["haixin.zhiye.com"] = (
+            "https://haixin.zhiye.com/social/detail"
+        )
+        a = BeisenAdapter()
+        with mock.patch.object(BeisenAdapter, "_httpx_fetch", return_value=None), \
+             mock.patch.object(BeisenAdapter, "_fetch_paginated",
+                               side_effect=AssertionError("路由已缓存不应开浏览器")) as pag:
+            with self.assertRaises(RuntimeError):
+                a.fetch("https://haixin.zhiye.com/social")
+        pag.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
