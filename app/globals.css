@@ -949,6 +949,13 @@
 }
 .save-check { animation: save-check 0.42s cubic-bezier(0.2, 0.8, 0.2, 1) 0.04s both; }
 
+/* 就地操作的底部胶囊反馈（ActionToast）：从下方轻推入场，不遮内容、不阻断点击。 */
+@keyframes action-toast-pop {
+  from { opacity: 0; transform: translateY(10px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+.action-toast-pop { animation: action-toast-pop 0.22s cubic-bezier(0.2, 0.8, 0.2, 1); }
+
 /* ───────────────────────────────────────────────────────────────
    品牌雷达 logo 动效（BrandMark / RadarMark）：扫描扇形持续旋转 + 命中点呼吸。
    全站 logo 位置（导航 / 页脚 / 登录 / 注册）共用同一动态效果。reduced-motion 下静止。

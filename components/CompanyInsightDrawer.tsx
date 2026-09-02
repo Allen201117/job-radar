@@ -8,6 +8,7 @@ import {
   CalendarBlank,
   ChatCircleText,
   ChartLineUp,
+  CircleNotch,
   ClockCounterClockwise,
   Flag,
   Path,
@@ -510,6 +511,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
   const [reason, setReason] = useState("");
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState("");
   const chip = item.derived
     ? {
         text: "本平台岗位聚合",
@@ -520,6 +522,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
 
   async function submitDispute() {
     setSending(true);
+    setSendError("");
     try {
       const res = await fetch("/api/insights/dispute", {
         method: "POST",
@@ -529,9 +532,13 @@ function InsightCard({ item }: { item: InsightItemView }) {
       if (res.ok) {
         setSent(true);
         setDisputing(false);
+      } else {
+        // 之前 !res.ok 是静默的：表单原样留着，用户看不出提交没成功。
+        setSendError("提交失败，请稍后重试。");
       }
     } catch (e) {
       console.error("[insight-drawer] 申诉失败", (e as Error).message);
+      setSendError("提交失败，请检查网络后重试。");
     } finally {
       setSending(false);
     }
@@ -616,10 +623,12 @@ function InsightCard({ item }: { item: InsightItemView }) {
               <button
                 type="button"
                 disabled={sending}
+                aria-busy={sending}
                 onClick={submitDispute}
-                className="rounded-full bg-[#1a1714] px-3 py-1 text-[11px] font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+                className="inline-flex items-center gap-1 rounded-full bg-[#1a1714] px-3 py-1 text-[11px] font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
               >
-                提交
+                {sending && <CircleNotch size={11} weight="bold" className="animate-spin" aria-hidden="true" />}
+                {sending ? "提交中…" : "提交"}
               </button>
               <button
                 type="button"
@@ -629,6 +638,9 @@ function InsightCard({ item }: { item: InsightItemView }) {
                 取消
               </button>
             </div>
+            {sendError && (
+              <p className="text-[11px] text-[#9c4a3c] dark:text-[#e6a99f]">{sendError}</p>
+            )}
           </div>
         ) : (
           <button

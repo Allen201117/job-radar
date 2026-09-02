@@ -15,6 +15,13 @@ const resumeProfilePanel = read("../components/ResumeProfilePanel.tsx");
 // 读 middleware 注入请求头、把登录态透传下去的服务端外壳，不含任何标记。
 const navbar = read("../components/NavbarClient.tsx");
 const appliedPage = read("../app/applied/page.tsx");
+const actionToast = read("../components/ActionToast.tsx");
+const jobCard = read("../components/JobCard.tsx");
+const jobsClient = read("../app/jobs/jobs-client.tsx");
+const savedClient = read("../app/saved/saved-client.tsx");
+const sourceTable = read("../components/SourceTable.tsx");
+const insightDrawer = read("../components/CompanyInsightDrawer.tsx");
+const insightsAdmin = read("../components/InsightsAdminClient.tsx");
 
 function tagInputCalls(source) {
   return source.match(/<TagInput\b[\s\S]*?\/>/g) ?? [];
@@ -325,6 +332,83 @@ test("applied empty state explains the real action and has one primary Today CTA
     /<EmptyPanel\b[\s\S]*?action=\{[\s\S]*?<Link\s+href=["']\/today["']\s+className=["']btn-ink["']>[\s\S]*?返回今日机会[\s\S]*?<\/Link>[\s\S]*?\}/,
   );
   assert.equal((appliedPage.match(/返回今日机会/g) ?? []).length, 1, "Today CTA must be unique");
+});
+
+// ───────────────────────────────────────────────────────────────
+// 点击反馈契约（2026-09-03 立）：每个「点一下要等服务端」的操作，都必须让用户看见
+// ① 中间态（在跑）② 结果态（成没成）。分两档：重提交走 SaveToast（居中转圈+打勾），
+// 就地高频操作走 ActionToast（底部胶囊）。失败静默 = 用户以为按钮坏了，是这里最要防的事。
+// ───────────────────────────────────────────────────────────────
+
+test("简历 AI 解析与保存都复用 SaveToast 的中间态 + 结果态", () => {
+  assert.match(resumeProfilePanel, /import\s+SaveToast[\s\S]*?from\s+["']@\/components\/SaveToast["']/);
+  // 解析：saving / done / error 三态都要落到 toast 上，不能只有按钮文案。
+  assert.match(resumeProfilePanel, /setParseState\("saving"\)/);
+  assert.match(resumeProfilePanel, /setParseState\("done"\)/);
+  assert.match(resumeProfilePanel, /setParseState\("error"\)/);
+  assert.match(resumeProfilePanel, /setSaveState\("saving"\)/);
+  assert.match(resumeProfilePanel, /setSaveState\("done"\)/);
+  assert.match(resumeProfilePanel, /setSaveState\("error"\)/);
+  const toasts = resumeProfilePanel.match(/<SaveToast\b[\s\S]*?\/>/g) ?? [];
+  assert.equal(toasts.length, 2, "解析和保存各要一个 SaveToast");
+  assert.ok(
+    toasts.some((t) => /state=\{parseState\}/.test(t) && /savingText=/.test(t)),
+    "解析的中间态要说清在做什么（AI 解析中…）",
+  );
+  assert.ok(toasts.some((t) => /state=\{saveState\}/.test(t)));
+  // 选了文件也要当场确认收到，别让用户盯着一个没反应的输入框。
+  assert.match(resumeProfilePanel, /已选择 \{file\.name\}/);
+});
+
+test("岗位卡动作在落库后才回调 onActionResult，页面据此弹就地反馈", () => {
+  // onActionChange 在乐观更新和失败回滚时各调一次，拿它弹提示会把回滚说成成功。
+  assert.match(jobCard, /onActionResult\?:\s*\(result:\s*\{[\s\S]*?ok:\s*boolean/);
+  assert.match(jobCard, /onActionResult\?\.\(\{\s*jobId:\s*job\.id,\s*action:\s*next,\s*ok:\s*true\s*\}\)/);
+  assert.match(jobCard, /onActionResult\?\.\(\{\s*jobId:\s*job\.id,\s*action:\s*next,\s*ok:\s*false\s*\}\)/);
+  for (const [name, source] of [["jobs", jobsClient], ["saved", savedClient]]) {
+    assert.match(source, /<ActionToast\b/, `${name} 页要渲染 ActionToast`);
+    assert.match(source, /onActionResult=\{/, `${name} 页要把结果接到 toast 上`);
+    assert.match(source, /jobActionToastText\(action, ok\)/, `${name} 页要用共用文案`);
+  }
+  // 文案只有一份，别各页各写一套。
+  assert.match(actionToast, /export function jobActionToastText/);
+});
+
+test("失败不许静默：源开关 / 取消值得投 / 洞察申诉都要说出来", () => {
+  // 源开关：以前失败什么也不做，用户以为切成功了。
+  assert.match(sourceTable, /setToggleError\(/);
+  assert.match(sourceTable, /disabled=\{togglingId !== null\}/);
+  assert.match(sourceTable, /切换中/);
+  // 已下线岗位的「取消值得投」：以前失败只是把卡片悄悄放回去。
+  assert.match(savedClient, /取消失败，请重试/);
+  assert.match(savedClient, /cancelingId === d\.jobId \? "取消中…" : "取消值得投"/);
+  // 洞察申诉：以前 !res.ok 直接吞掉。
+  assert.match(insightDrawer, /setSendError\("提交失败/);
+  assert.match(insightDrawer, /sending \? "提交中…" : "提交"/);
+});
+
+test("退出登录有 pending，失败也要有话说", () => {
+  assert.match(navbar, /const \[loggingOut, setLoggingOut\] = useState\(false\)/);
+  assert.match(navbar, /setLogoutError\("退出失败/);
+  const logoutButtons = navbar.match(/<button[^>]*onClick=\{handleLogout\}[\s\S]*?<\/button>/g) ?? [];
+  assert.equal(logoutButtons.length, 2, "桌面端和移动端各一个退出按钮");
+  logoutButtons.forEach((btn, i) => {
+    assert.match(btn, /disabled=\{loggingOut\}/, `退出按钮 #${i + 1} 缺 pending 态`);
+  });
+});
+
+test("洞察后台审核结果走站内 toast，不再用原生 alert", () => {
+  assert.equal(
+    (stripComments(insightsAdmin).match(/\balert\(/g) ?? []).length,
+    0,
+    "原生 alert 是阻断式弹窗，且和站内反馈风格不一致",
+  );
+  assert.match(insightsAdmin, /<ActionToast\b/);
+  // 四组审核按钮都要在处理时给转圈。
+  assert.ok(
+    (insightsAdmin.match(/处理中…/g) ?? []).length >= 6,
+    "上下架 / 申诉 / 分享审核 / 招聘周期四组按钮都要有 pending 文案",
+  );
 });
 
 // 剥掉 JS/JSX 注释，只留会渲染给用户看的代码文本。
