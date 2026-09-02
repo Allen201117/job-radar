@@ -41,6 +41,7 @@ RULE_TITLES = {
     "C": "台账卡住未回写",
     "D": "账户级错误",
     "E": "关键任务超期未跑",
+    "F": "源连续失败",
 }
 
 # ── 规则 A：每个模块的「产出口径」与「处理量口径」────────────────────────────
@@ -61,7 +62,14 @@ MODULE_OUTPUT = {
     "campus_official_backlog": (("verified", "draft"), ("companies_processed",)),
     "campus_cycle_backlog": (("verified", "draft"), ("companies_processed",)),
     "campus_lane": (("snapshots",), ("sources",)),
+    # run.py 每轮抓取收尾写的台账（2026-09-03）：有源可抓却一个岗都没拿到 = 零产出。
+    "daily_crawl": (("jobs_found_total",), ("sources_total",)),
 }
+
+# 规则 F：一个源在回看窗口内「每一轮都失败」才告警。
+# 2026-09-03 实测：11 个源一周 28 轮全挂（Workday 站点名错 / 板块改名 / 反爬 403 / 浏览器没装），
+# 每轮各自被吞成 crawl_runs 一行 failed，模块级绿灯完全看不见——只有源级视角才抓得到。
+DEAD_SOURCE_MIN_RUNS = 8   # 少于这个次数不判（新源、低频源不冤枉）
 
 # 「0 就是正常」的模块：产出为 0 表示没东西可做，不是坏了 → 明确排除在规则 A 之外，
 # 也不用在日志里提醒「补口径」。
@@ -315,6 +323,43 @@ def evaluate_zero_output(rows, today, days=2, muted=()):
             "next": "先看该模块最近一次 workflow 日志：是队列取空了、平台变了，还是 key / 额度没了。",
         })
     return findings, skipped
+
+
+def evaluate_dead_sources(crawl_rows, sources_by_id, days=5, min_runs=DEAD_SOURCE_MIN_RUNS):
+    """规则 F：某个 enabled 源在近 days 天内跑了 ≥ min_runs 次且**全部** failed → 告警。
+
+    每个源一个 finding（标题稳定 = 同源去重）；evidence 带最常见的错误首行，看一眼就知道是
+    站点名错 / 板块改名 / 反爬 / 环境缺件，直接决定「改 URL / 停用 / 修 adapter」。
+    只看 status=='failed'：partial_success / 空产出不算（那是规则 A 的口径）。"""
+    by_source = defaultdict(lambda: {"n": 0, "failed": 0, "errors": Counter()})
+    for row in crawl_rows or []:
+        sid = row.get("source_id")
+        if not sid:
+            continue
+        agg = by_source[sid]
+        agg["n"] += 1
+        if row.get("status") == "failed":
+            agg["failed"] += 1
+            agg["errors"][str(row.get("error_message") or "")[:100]] += 1
+    findings = []
+    for sid, agg in sorted(by_source.items()):
+        source = sources_by_id.get(sid)
+        if not source or not source.get("enabled", True):
+            continue
+        if agg["n"] < min_runs or agg["failed"] != agg["n"]:
+            continue
+        top_error = agg["errors"].most_common(1)[0][0] if agg["errors"] else "(无错误信息)"
+        label = f"{source.get('adapter_name') or '?'} / {source.get('company') or sid}"
+        findings.append({
+            "rule": "F",
+            "subject": label,
+            "summary": f"源 `{label}` 近 {days} 天 {agg['n']} 轮抓取全部失败，一个岗都没进库。",
+            "evidence": [f"最常见错误：{top_error}",
+                         f"source_url：{source.get('source_url') or '?'}"],
+            "next": "按错误类型处置：4xx 站点名/板块名错 → 改 source_url；403/反爬 → 停用（不绕）；"
+                    "环境缺件（浏览器不存在等）→ 修 workflow；其它 → 修 adapter。别让它继续每轮白跑。",
+        })
+    return findings
 
 
 def evaluate_timeout_kills(runs, jobs_by_run, meta_by_path, ratio=TIMEOUT_KILL_RATIO, min_repeats=2):
@@ -683,6 +728,8 @@ def main():
     parser.add_argument("--stuck-hours", type=int, default=6, help="规则 C：queued 超过几小时算卡住")
     parser.add_argument("--lookback-days", type=int, default=5,
                         help="规则 B：回看几天的 workflow 运行（太短会漏掉几天才犯一次的；太长会在修好后多念叨几天）")
+    parser.add_argument("--dead-source-days", type=int, default=5,
+                        help="规则 F：回看几天内某源每一轮都失败才告警")
     parser.add_argument("--apply", action="store_true", help="真开 issue（默认 dry-run 只打印）")
     parser.add_argument("--repo", default="", help="owner/name，默认自动识别")
     args = parser.parse_args()
@@ -716,6 +763,21 @@ def main():
     findings += zero
     findings += evaluate_stuck_ledger(discovery_rows, now=now, hours=args.stuck_hours)
     findings += evaluate_account_errors(event_rows, ops_rows, now=now)
+    # 规则 F 单独包住：crawl_runs 是最大的一张表（1,400 源 × 4 轮/天），取不到不能拖垮 A/C/D。
+    try:
+        dead_since = (now - timedelta(days=args.dead_source_days)).isoformat()
+        crawl_rows = db.fetch_all_rows(
+            lambda: sb.table("crawl_runs").select("source_id,status,error_message")
+                      .gte("started_at", dead_since)
+        )
+        source_rows = db.fetch_all_rows(
+            lambda: sb.table("sources").select("id,adapter_name,company,source_url,enabled")
+                      .eq("enabled", True)
+        )
+        findings += evaluate_dead_sources(crawl_rows, {r["id"]: r for r in source_rows},
+                                          days=args.dead_source_days)
+    except Exception as exc:  # noqa: BLE001
+        print(f"::warning::[watchdog] 规则 F（源连续失败）本轮没查成：{type(exc).__name__}: {exc}")
 
     meta_by_path = load_workflow_meta(root)
     repo = args.repo or detect_repo()
