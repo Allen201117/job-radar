@@ -480,21 +480,42 @@ const CAMPUS_PREFILTER_SQL = `(
  * 语义等价性：SQL 的 `ilike '%x%'` = 不区分大小写子串，与这里的 toLowerCase().includes 同义；
  * 候选集来自 `status='active'`，与主查询的 status 条件一致，所以不会漏。
  */
+// 全部 active 公司名的短 TTL 缓存：这份清单 live 只有 1467 行、且只在新源入库时才变，
+// 但每次校招看板刷新 / 每次展开一家公司都要用它，不缓存就是每次白付 ~384ms。
+let activeCompanyNamesCache: { expiresAt: number; value: string[] } | null = null;
+let activeCompanyNamesInFlight: Promise<string[]> | null = null;
+
+async function allActiveCompanyNames(): Promise<string[]> {
+  const now = Date.now();
+  if (activeCompanyNamesCache && activeCompanyNamesCache.expiresAt > now) {
+    return activeCompanyNamesCache.value;
+  }
+  if (activeCompanyNamesInFlight) return activeCompanyNamesInFlight;
+  activeCompanyNamesInFlight = (async () => {
+    const rows = await jobsQuery<{ company: string | null }>(
+      "select distinct company from jobs where status = 'active'",
+    );
+    return rows.map((r) => r.company).filter((c): c is string => !!c);
+  })();
+  try {
+    const value = await activeCompanyNamesInFlight;
+    activeCompanyNamesCache = { expiresAt: Date.now() + 5 * 60_000, value };
+    return value;
+  } finally {
+    activeCompanyNamesInFlight = null;
+  }
+}
+
 async function resolveActiveCompanyNames(patterns: string[]): Promise<string[]> {
   const needles = patterns
     .map((p) => p.replace(/%/g, "").toLowerCase())
     .filter(Boolean);
   if (!needles.length) return [];
-  const rows = await jobsQuery<{ company: string | null }>(
-    "select distinct company from jobs where status = 'active'",
-  );
-  return rows
-    .map((r) => r.company)
-    .filter((c): c is string => !!c)
-    .filter((c) => {
-      const lower = c.toLowerCase();
-      return needles.some((n) => lower.includes(n));
-    });
+  const all = await allActiveCompanyNames();
+  return all.filter((c) => {
+    const lower = c.toLowerCase();
+    return needles.some((n) => lower.includes(n));
+  });
 }
 
 /**
