@@ -3,12 +3,15 @@
 import { useEffect, useState } from "react";
 import {
   ArrowCounterClockwise,
+  CheckCircle,
   FileText,
   FloppyDisk,
+  X,
   IdentificationCard,
   Sparkle,
   UploadSimple,
 } from "@phosphor-icons/react";
+import SaveToast, { type SaveState } from "@/components/SaveToast";
 import TagInput from "./TagInput";
 
 type EduItem = { school: string; degree: string; major: string; start: string; end: string };
@@ -73,8 +76,13 @@ export default function ResumeProfilePanel() {
   const [resumeText, setResumeText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [applyToPreferences, setApplyToPreferences] = useState(false);
-  const [parsing, setParsing] = useState(false);
-  const [saving, setSaving] = useState(false);
+  // 解析 / 保存各自一份提交态：复用个人资料「保存」那套 SaveToast（中间态转圈 + 成功态打勾）。
+  const [parseState, setParseState] = useState<SaveState>("idle");
+  const [parseDoneText, setParseDoneText] = useState("AI 解析完成");
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [saveDoneText, setSaveDoneText] = useState("已保存画像");
+  const parsing = parseState === "saving";
+  const saving = saveState === "saving";
   const [message, setMessage] = useState("");
   const [draft, setDraft] = useState<StructuredProfile>(EMPTY);
   const [resumeId, setResumeId] = useState<string | null>(null);
@@ -107,7 +115,7 @@ export default function ResumeProfilePanel() {
 
   async function handleParse(e: React.FormEvent) {
     e.preventDefault();
-    setParsing(true);
+    setParseState("saving");
     setMessage("");
     try {
       const form = new FormData();
@@ -120,6 +128,7 @@ export default function ResumeProfilePanel() {
       const data = await resp.json();
       if (!data.ok) {
         setMessage(formatError(data.error));
+        setParseState("error");
         return;
       }
       setDraft(coerce(data.profile));
@@ -131,15 +140,17 @@ export default function ResumeProfilePanel() {
           ? `AI 解析暂不可用（原因：${data.llm_error || "未知"}${data.llm_detail ? "｜" + data.llm_detail : ""}），已用规则给出草稿，请核对补全后再保存。`
           : "AI 已解析，请核对 / 编辑后点「确认保存」。",
       );
+      // 规则降级不是失败，但也不该说「AI 解析完成」——成功态如实说是草稿。
+      setParseDoneText(data.source === "rule" ? "已生成草稿" : "AI 解析完成");
+      setParseState("done");
     } catch {
       setMessage("解析失败，请稍后重试。");
-    } finally {
-      setParsing(false);
+      setParseState("error");
     }
   }
 
   async function handleSave() {
-    setSaving(true);
+    setSaveState("saving");
     setMessage("");
     try {
       const resp = await fetch("/api/resume", {
@@ -157,6 +168,7 @@ export default function ResumeProfilePanel() {
       const data = await resp.json();
       if (!data.ok) {
         setMessage(`保存失败：${data.error || "请重试"}`);
+        setSaveState("error");
         return;
       }
       setSaved(data.profile);
@@ -171,13 +183,20 @@ export default function ResumeProfilePanel() {
             ? "已保存画像并回填求职偏好。"
             : "已保存画像。",
       );
+      setSaveDoneText(
+        data.english_profile_applied
+          ? "已保存英文画像"
+          : data.preferences_applied
+            ? "已保存并同步偏好"
+            : "已保存画像",
+      );
+      setSaveState("done");
       if (data.preferences_applied) {
         window.dispatchEvent(new Event("resume-preferences-updated"));
       }
     } catch {
       setMessage("保存失败，请重试。");
-    } finally {
-      setSaving(false);
+      setSaveState("error");
     }
   }
 
@@ -299,6 +318,20 @@ export default function ResumeProfilePanel() {
                 onChange={(e) => setFile(e.target.files?.[0] || null)}
                 className="mt-1 block w-full rounded-xl border border-black/[0.09] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm ink-1 file:mr-3 file:rounded-full file:border-0 file:bg-[#1a1714] dark:file:bg-[#f3ecdf] file:px-3 file:py-1 file:text-xs file:font-semibold file:text-[#f7f1e6] dark:file:text-[#16130f] transition duration-200 focus:border-[#1a1714]/55 dark:focus:border-white/40 focus:outline-none"
               />
+              {file && (
+                <div className="mt-2 inline-flex max-w-full items-center gap-2 rounded-full border border-[#bcd2ed] bg-[#e8f1fc] px-3 py-1.5 text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
+                  <CheckCircle size={15} weight="fill" aria-hidden="true" className="shrink-0" />
+                  <span className="t-caption truncate">已选择 {file.name}（{formatFileSize(file.size)}）</span>
+                  <button
+                    type="button"
+                    onClick={() => setFile(null)}
+                    aria-label="移除已选择的简历文件"
+                    className="grid size-5 shrink-0 place-items-center rounded-full transition hover:bg-black/[0.08] dark:hover:bg-white/[0.15]"
+                  >
+                    <X size={12} weight="bold" aria-hidden="true" />
+                  </button>
+                </div>
+              )}
             </div>
 
             <div>
@@ -462,8 +495,28 @@ export default function ResumeProfilePanel() {
           </div>
         </div>
       )}
+
+      <SaveToast
+        state={parseState}
+        savingText="AI 解析简历中…"
+        doneText={parseDoneText}
+        errorText={message || "解析失败，请稍后重试。"}
+        onDismiss={() => setParseState("idle")}
+      />
+      <SaveToast
+        state={saveState}
+        doneText={saveDoneText}
+        errorText={message || "保存失败，请重试。"}
+        onDismiss={() => setSaveState("idle")}
+      />
     </section>
   );
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function SavedSummary({ profile }: { profile: any }) {

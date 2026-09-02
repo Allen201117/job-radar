@@ -1,3 +1,4 @@
+import { unstable_cache } from "next/cache";
 import Navbar from "@/components/Navbar";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import JobLibraryStat from "@/components/JobLibraryStat";
@@ -39,18 +40,46 @@ function buildInitialFilters(prefs: any, cp: any): { city: string; jobType: stri
 // 真正的筛选/分页由前端挂载后调 /api/jobs/search 在服务端跑（库 10万+，不再前端全量加载）。
 const PAGE1 = 60;
 
+/**
+ * 首屏三件套（最新 60 行 + 两个计数）按「求职范围」缓存，跨请求**跨实例**复用。
+ *
+ * 为什么值得缓存：`count_valid_active_jobs()` 要全扫 41 万行，香港库实测**冷 4.3s / 热 313ms**，
+ * 而它是个**全局**数字（谁看都一样）、只在爬虫写入时才变（按天级）——以前每打开一次 /jobs 就重算一遍。
+ * 三个查询里没有任何一项依赖「此刻」或用户私有数据。
+ *
+ * ⚠️ key 只取真正影响结果集的两项，且取**原始值**而非归一化后的值：`appendJobScopeWhere` 只读
+ * `job_scope` + `target_regions`（见 lib/job-scope.ts），原样传回去重建即可产出逐字节相同的 SQL，
+ * 不依赖「归一化是幂等的」这个假设。不含任何用户私有字段 → 跨用户共享安全。
+ * ⚠️ 函数体内不得读 cookies()/headers()（unstable_cache 限制）；这里只调 jobs-store，安全。
+ */
+const loadJobsFirstScreen = unstable_cache(
+  async (
+    jobScope: string | null,
+    targetRegions: string[],
+  ): Promise<{ jobs: Job[]; total: number; libraryTotal: number }> => {
+    const scopePrefs = { job_scope: jobScope, target_regions: targetRegions } as UserPreferences;
+    const [jobs, total, libraryTotal] = await Promise.all([
+      listLatestActive(PAGE1, 0, scopePrefs),
+      countActiveForScope(scopePrefs),
+      countValidActive(),
+    ]);
+    return { jobs: (jobs as Job[]) || [], total, libraryTotal };
+  },
+  ["jobs-first-screen-v1"],
+  // 5 分钟：岗位库按天级写入，滞后用户感知不到；但足以让绝大多数请求不再全扫 41 万行。
+  { revalidate: 300, tags: ["jobs-first-screen"] },
+);
+
 async function fetchFirstPageAndTotal(
   supabase: Awaited<ReturnType<typeof createServerSupabase>>,
   preferences: UserPreferences | null,
 ): Promise<{ jobs: Job[]; total: number; libraryTotal: number }> {
   // jobs 已迁自建香港 PG（Phase 1）：配了 JOBS_DATABASE_URL 走 jobs-store；否则回退 Supabase。
   if (jobsStoreEnabled()) {
-    const [jobs, total, libraryTotal] = await Promise.all([
-      listLatestActive(PAGE1, 0, preferences),
-      countActiveForScope(preferences),
-      countValidActive(),
-    ]);
-    return { jobs: (jobs as Job[]) || [], total, libraryTotal };
+    return loadJobsFirstScreen(
+      preferences?.job_scope ?? null,
+      (preferences?.target_regions as string[] | undefined) ?? [],
+    );
   }
   const [page, validCount] = await Promise.all([
     supabase

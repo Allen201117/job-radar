@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { CircleNotch } from "@phosphor-icons/react";
 import { createBrowserClient } from "@/lib/supabaseClient";
 import { fetchAllSources } from "@/lib/supabase-paginate";
 import type { Source, CrawlRun } from "@/lib/types";
@@ -9,6 +10,9 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
   const [sources, setSources] = useState<Source[]>([]);
   const [latestRuns, setLatestRuns] = useState<Record<string, CrawlRun>>({});
   const [loading, setLoading] = useState(true);
+  // 正在切换的源 id + 失败提示：这个开关原来点下去到写库返回之间毫无反应，失败还完全静默（用户以为切成功了）。
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [toggleError, setToggleError] = useState("");
   const supabase = createBrowserClient();
 
   useEffect(() => {
@@ -48,18 +52,24 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
   }
 
   async function toggleSource(source: Source) {
+    if (togglingId) return;
+    setTogglingId(source.id);
+    setToggleError("");
     const { error } = await supabase
       .from("sources")
       .update({ enabled: !source.enabled })
       .eq("id", source.id);
 
-    if (!error) {
+    if (error) {
+      setToggleError(`${source.company}：切换失败（${error.message}），状态未改变。`);
+    } else {
       setSources((prev) =>
         prev.map((s) =>
           s.id === source.id ? { ...s, enabled: !s.enabled } : s,
         ),
       );
     }
+    setTogglingId(null);
   }
 
   if (loading) {
@@ -68,6 +78,11 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
 
   return (
     <div className="surface overflow-x-auto px-4 ink-1 ">
+      {toggleError && (
+        <p className="mt-4 rounded-xl border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c] dark:border-[#7a392e]/[0.6] dark:bg-[#3a201a] dark:text-[#e6a99f]">
+          {toggleError}
+        </p>
+      )}
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-black/[0.06] text-left text-xs font-medium ink-3 dark:border-white/[0.1] ">
@@ -100,13 +115,18 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
                 <td className="py-2 pr-4">
                   <button
                     onClick={() => toggleSource(source)}
-                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                    disabled={togglingId !== null}
+                    aria-busy={togglingId === source.id}
+                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium transition disabled:opacity-50 ${
                       source.enabled
                         ? "bg-[#cde8a0] text-[#3f5a1c] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]"
                         : "bg-[#f3d9d2] text-[#9c4a3c] dark:bg-[#3a201a] dark:text-[#e6a99f]"
                     }`}
                   >
-                    {source.enabled ? "启用" : "禁用"}
+                    {togglingId === source.id && (
+                      <CircleNotch size={11} weight="bold" className="animate-spin" aria-hidden="true" />
+                    )}
+                    {togglingId === source.id ? "切换中" : source.enabled ? "启用" : "禁用"}
                   </button>
                 </td>
                 <td className="py-2 pr-4 text-xs ink-3 ">

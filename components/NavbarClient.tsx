@@ -14,6 +14,7 @@ import {
   Briefcase,
   Broadcast,
   CheckCircle,
+  CircleNotch,
   Compass,
   GraduationCap,
   List,
@@ -63,6 +64,8 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
   // i18n 暂收口：导航固定中文，不放开语言切换（基础设施保留在 lib/i18n.ts）。
   const lang = "zh" as const;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
   const [acctOpen, setAcctOpen] = useState(false);
   const [jobScope, setJobScope] = useState<JobScope>("domestic");
   const [scopeSaving, setScopeSaving] = useState(false);
@@ -109,9 +112,19 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
   }, [menuOpen]);
 
   async function handleLogout() {
-    await supabase.auth.signOut();
-    router.push("/login");
-    router.refresh();
+    if (loggingOut) return;
+    setLoggingOut(true);
+    setLogoutError("");
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      router.push("/login");
+      router.refresh();
+    } catch {
+      // 之前失败是完全静默的：用户点了「退出」却还停在原页面，只能理解成「按钮坏了」。
+      setLogoutError("退出失败，请重试");
+      setLoggingOut(false);
+    }
   }
 
   async function handleScopeChange(next: JobScope) {
@@ -257,11 +270,20 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
                     <button
                       type="button"
                       onClick={handleLogout}
-                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium ink-2 transition hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
+                      disabled={loggingOut}
+                      aria-busy={loggingOut}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium ink-2 transition hover:bg-black/[0.05] disabled:opacity-60 dark:hover:bg-white/[0.06]"
                     >
-                      <SignOut size={16} aria-hidden="true" />
+                      {loggingOut ? (
+                        <CircleNotch size={16} className="animate-spin" aria-hidden="true" />
+                      ) : (
+                        <SignOut size={16} aria-hidden="true" />
+                      )}
                       {t("logout", lang)}
                     </button>
+                    {logoutError && (
+                      <p className="px-3 pb-1 text-xs text-[#9c4a3c] dark:text-[#e6a99f]">{logoutError}</p>
+                    )}
                   </div>
                 </>
               )}
@@ -351,11 +373,20 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
             <div className="mt-2 border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
               <button
                 onClick={handleLogout}
-                className="inline-flex w-full items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-4 py-2.5 text-[13px] font-medium ink-2 transition duration-200 hover:bg-white active:scale-[0.98] dark:border-white/[0.12] dark:bg-white/[0.06] dark:hover:bg-white/[0.12]"
+                disabled={loggingOut}
+                aria-busy={loggingOut}
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-4 py-2.5 text-[13px] font-medium ink-2 transition duration-200 hover:bg-white active:scale-[0.98] disabled:opacity-60 dark:border-white/[0.12] dark:bg-white/[0.06] dark:hover:bg-white/[0.12]"
               >
-                <SignOut size={16} weight="bold" aria-hidden="true" />
+                {loggingOut ? (
+                  <CircleNotch size={16} weight="bold" className="animate-spin" aria-hidden="true" />
+                ) : (
+                  <SignOut size={16} weight="bold" aria-hidden="true" />
+                )}
                 {t("logout", lang)}
               </button>
+              {logoutError && (
+                <p className="mt-2 text-center text-xs text-[#9c4a3c] dark:text-[#e6a99f]">{logoutError}</p>
+              )}
             </div>
           </nav>
         </>

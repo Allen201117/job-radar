@@ -58,6 +58,9 @@ import { cleanSummary, cn, freshnessLabel } from "@/lib/utils";
 interface Props {
   job: ScoredJob;
   onActionChange: (jobId: string, action: PrimaryAction | null) => void;
+  /** 动作真正落库（或失败回滚）之后回调一次，页面用它弹「已加入值得投」这类就地反馈。
+      注意别用 onActionChange 代劳——那个在乐观更新和回滚时各调一次，拿它弹提示会把回滚说成成功。 */
+  onActionResult?: (result: { jobId: string; action: PrimaryAction | null; ok: boolean }) => void;
   // 本次会话刷新/发现新拿到的岗位 → 绿色高亮 + 「本次新发现」标
   sessionNew?: boolean;
   // 'opportunity' = 今日机会卡（档位/原因来自引擎，按钮=值得投/不适合/已投递）；
@@ -181,6 +184,7 @@ function insightBadge(avail: InsightAvailability | null): {
 export default function JobCard({
   job,
   onActionChange,
+  onActionResult,
   sessionNew,
   variant = "library",
   opportunityTier,
@@ -288,12 +292,14 @@ export default function JobCard({
       } else if (next) {
         track("job_action", { action: next, job_id: job.id });
       }
+      onActionResult?.({ jobId: job.id, action: next, ok: true });
     } catch (e) {
       console.error("[job-card] action failed", e);
       setCurrentAction(prev);
       onActionChange(job.id, prev);
       setActionError("操作失败，已恢复原状态");
       setTimeout(() => setActionError(""), 2500);
+      onActionResult?.({ jobId: job.id, action: next, ok: false });
     } finally {
       setActing(false);
       actingRef.current = false;
