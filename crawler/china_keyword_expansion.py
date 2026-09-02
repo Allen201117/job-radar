@@ -129,39 +129,65 @@ KEYWORD_GROUP_FUNCTIONS = [
     None,     # 20 实习
 ]
 
+# 非软件工程降级门专用：词表刻意宽于生产制造，只负责阻止传统工程/医疗靠泛工程师进入软件研发。
+# 基底来自 HEAD 原词表，合并本轮新增制造词；结构/管道/技术文档无上下文可留「其他」，但绝不能判研发。
+_NON_SOFTWARE_ENG_DOMAIN = re.compile(
+    r"机械|机电|机加|钣金|工艺|化工|化学|材料|冶金|铸造|锻造|焊接|焊工|模具|注塑|液压|气动|数控|机床|刀具|工装|夹具|"
+    r"热处理|土木|结构工程|岩土|暖通|给排水|管道|强电|工业工程|生产工艺|制造工艺|工艺技术|纺织|印染|涂装|总装|冲压|车身|"
+    r"底盘|发动机|动力总成|整车|工业自动化|机械自动化|热设计|散热|结构设计|精密仪器|仪器仪表|光学|镜头|声学|射频|天线|电源|"
+    r"电池|电芯|储能|逆变|试剂|生物|医疗器械|临床|药物|制药|检测认证|可靠性|环境试验|工业设计|包装设计|技术文档|标准化|"
+    r"生产|制造|车间|产线|装配|组装|操作工|技工|班组长|领班|工段|钳工|电工|铣工|车工|设备维护|设备维修|保养|production|"
+    r"manufactur\w*|assembler|operator|machinist|technician|maintenance|fabrication|welding|tooling|transmission|mechanic|质量|品控|品管|"
+    r"质检|检验员|检测|ehs|环保|安全员|职业健康|\bqa\b|\bqc\b|\bsqe\b|quality|safety|inspection",
+    re.I,
+)
+
+# 生产制造归类专用：只放官方字典归属制造的传统工程、产线与质量安全词，不含土木/临床/生物医药。
+_MANUFACTURING_DOMAIN = re.compile(
+    r"生产|制造|车间|产线|装配|组装|操作工|技工|班组长|领班|工段|钳工|电工|焊工|铣工|车工|设备维护|设备维修|保养|"
+    r"production|manufactur\w*|assembler|operator|machinist|technician|maintenance|fabrication|welding|tooling|机械|机电|机加|钣金|工艺|"
+    r"化工|化学|材料|冶金|铸造|锻造|焊接|模具|注塑|液压|气动|数控|机床|刀具|工装|夹具|热处理|纺织|印染|涂装|总装|"
+    r"冲压|车身|底盘|发动机|动力总成|整车|电气|自动化|强电|仪器仪表|热设计|散热|射频|天线|电源|电池|电芯|储能|逆变|"
+    r"光学|镜头|声学|精密仪器|工业工程|生产工艺|制造工艺|工艺技术|工业自动化|机械自动化|包装设计|标准化|检测认证|环境试验|"
+    r"transmission|mechanic|质量|品控|品管|质检|检验员|可靠性|质量体系|管理体系|体系工程师|体系专员|体系认证|认证|检测|ehs|"
+    r"环保|安全员|职业健康|\bqa\b|\bqc\b|\bsqe\b|quality|safety|inspection",
+    re.I,
+)
+
 # 职能粗分类规则（与 JS JOB_FUNCTION_RULES 同口径，顺序敏感：产品经理优先于"含算法字样"）。
 _JOB_FUNCTION_RULES = [
-    ("产品", re.compile(r"产品经理|产品策划|产品负责人|产品总监|产品专家|product\s*manager|product\s*owner", re.I)),
+    ("产品", re.compile(r"产品经理|产品策划|产品负责人|产品总监|产品专家|产品实习生|产品助理|产品专员|产品企划|product\s*manager|product\s*owner|product\s*lead|(?:director|head|vp|vice\s*president)[,\s]+(?:of\s+)?product", re.I)),
     # PM/PO 在英文标题里还会表示上午下午、预防性保养等，故意不收裸 \bpm\b；也不收「工程项目」等泛词。
     ("项目管理", re.compile(r"项目经理|项目管理|项目主管|项目总监|项目负责人|交付经理|交付总监|\bpmo\b|project\s*manager|program\s*manager|delivery\s*manager|technical\s*program\s*manager|\btpm\b", re.I)),
     ("设计", re.compile(r"视觉设计|交互设计|ui\s*设计|ux|平面设计|设计师|designer", re.I)),
     ("数据", re.compile(r"数据分析|数据科学|数据工程|大数据|数据挖掘|data\s*(analyst|scien|engineer)|\bbi\b|商业分析", re.I)),
-    ("研发", re.compile(r"算法|前端|后端|客户端|测试|运维|架构|嵌入式|硬件|\bsde\b|\bsre\b|programmer|software|软件", re.I)),
+    # 英文裸 architect 在香港库实测 1915 个且压倒性是 IT 架构师；少数 Construction Project Architect 的漏判可接受。
+    ("研发", re.compile(r"算法|前端|后端|客户端|测试|运维|架构|嵌入式|硬件|\barchitect\b|\bsde\b|\bsre\b|programmer|software|软件", re.I)),
+    # 具体软件研发之后、泛「工程师」之前：传统工程和质量安全不能被工程师抢进研发。
+    ("生产制造", _MANUFACTURING_DOMAIN),
+    # 仅认建筑语境：裸结构/强电/工程部等在生产库大量属于机械、电气和通用工程部门。
+    ("建筑工程", re.compile(r"建筑师|钢结构|混凝土|建筑结构|水工结构|桥梁|土木|土建|道路|隧道|市政|岩土|勘察|暖通|给排水|供变电|幕墙|装饰|施工|监理|造价|预算员|建筑设计|(?:高速|公路)\s*项目|architectural|landscape\s*architect|construction|site\s*engineer|civil\s*engineer", re.I)),
     # 泛工程后缀：与 JS 一样只在没有具体职能词时才兜底，避免「Data Engineer」被工程师抢成研发。
     ("研发", re.compile(r"工程师|研发|开发|技术|engineer|developer", re.I), True),
     ("运营", re.compile(r"用户运营|内容运营|运营|增长|operations|growth", re.I)),
     ("市场", re.compile(r"市场|营销|品牌|公关|marketing|brand|\bpr\b", re.I)),
-    ("销售", re.compile(r"销售|商务拓展|\bbd\b|sales|客户经理|business\s*development", re.I)),
+    ("医疗健康", re.compile(r"医生|医师|护士|护理|药师|药剂|临床数据|临床|\bcra\b|\bcrc\b|\bcta\b|医学|医药|药物|制药|药品|药理|检验科|放射|影像|超声|口腔|中医|兽医|营养师|康复|理疗|\bmsl\b|医学事务|医疗器械|试剂|生物制药|生物医药|medical|clinical|nurse|pharmac\w*|physician|therapist|biolog\w*|pathology", re.I)),
+    ("金融业务", re.compile(r"柜员|综合柜员|理赔|查勘|核保|核赔|承保|信贷|信审|风控|风险管理|合规风控|投资|投研|精算|证券|保险|银行|理财|资产管理|资管|基金|信托|外汇|清算|清算结算|资金结算|证券结算|跨境结算|反洗钱|信用卡|交易员|teller|banker|underwrit\w*|actuar\w*|trader|trading|credit\s*analyst|investment", re.I)),
+    ("教育培训", re.compile(r"教师|老师|讲师|教练|教研|助教|辅导员|班主任|教务|培训师|课程顾问|保育|幼师|teacher|instructor|tutor|faculty|professor|lecturer", re.I)),
+    # 不含「客户经理」：它是销售岗位，避免客服服务抢走既有销售规则。
+    ("客服服务", re.compile(r"客服|客户服务|客户支持|售后|服务专员|服务顾问|话务|坐席|门店|店长|店员|导购|收银|前台|接待|服务员|咖啡师|调茶师|运动顾问|零售|customer\s*service|customer\s*support|customer\s*success|front\s*desk|receptionist|barista|cashier|retail\s*associate", re.I)),
+    ("销售", re.compile(r"销售|商务拓展|业务拓展|渠道拓展|\bbd\b|sales|客户经理|business\s*development|account\s*(executive|manager)", re.I)),
     ("供应链", re.compile(r"供应链|采购|物流|仓储|supply\s*chain|procurement|logistics", re.I)),
-    ("职能", re.compile(r"人力资源|招聘|\bhr\b|财务|会计|审计|法务|法律|合规|行政|finance|legal|recruit|human\s*resources", re.I)),
+    ("职能", re.compile(r"人力资源|招聘|\bhr\b|\bhrbp\b|财务|会计|审计|税务|法务|法律|合规|行政|秘书|finance|financial|tax|legal|counsel|compliance|recruit|talent\s*acquisition|human\s*resources|administrative|\badmin\b", re.I)),
 ]
 
-# 与 JS BODY_FALLBACK_BLOCKED 对齐：研发的「技术/开发」、项目管理的「项目管理经验」在 JD 正文里
-# 都是万能套话。正文判出它们等于没判，必须退回标题结论，不能把标题未说明职能的岗批量误标。
-_BODY_FALLBACK_BLOCKED = {"研发", "项目管理"}
+# 与 JS BODY_FALLBACK_BLOCKED 对齐：职能绝大多数由标题确定；这些桶在正文里是万能套话，必须退回标题结论。
+_BODY_FALLBACK_BLOCKED = {"研发", "项目管理", "生产制造", "建筑工程", "医疗健康", "金融业务", "教育培训", "客服服务"}
 
 # function=null 的跨语言泛锚点：只在标题命中才算，绝不撞正文（职能门覆盖不到这类）。
 TITLE_ONLY_ANCHORS = {normalize_for_match(t) for t in
                       ["工程师", "engineer", "研发", "developer", "软件", "software"]}
 
-# 非软件「工程/工业」领域硬标记（与 JS NON_SOFTWARE_ENG_DOMAIN 同口径）：机械/工艺/化工/材料/土木…
-# 这些岗常含「开发/技术/工程师」等泛词，会被研发规则吃进「软件研发」桶，但属制造/工业工程领域，
-# 不是软件研发。不隔离则被「算法/AI/数据」等映射到研发职能的查询经职能门/相关层误召。
-_NON_SOFTWARE_ENG_DOMAIN = re.compile(
-    r"机械|机电|机加|钣金|工艺|化工|化学|材料|冶金|铸造|锻造|焊接|焊工|模具|注塑|液压|气动|数控|机床|刀具|"
-    r"工装|夹具|热处理|土木|结构工程|岩土|暖通|给排水|管道|强电|工业工程|生产工艺|制造工艺|工艺技术|纺织|"
-    r"印染|涂装|总装|冲压|车身|底盘|发动机|动力总成|整车|工业自动化|机械自动化"
-)
 # 软件/IT/算法信号（与 JS SOFTWARE_ENG_SIGNAL 同口径）：命中其一则即使带工业标记仍判软件研发
 #（机器人/自动驾驶/嵌入式软件等交叉岗）。故意排除泛词 研发/开发/技术/工程师 及过常见的「数据」。
 _SOFTWARE_ENG_SIGNAL = re.compile(
@@ -169,7 +195,7 @@ _SOFTWARE_ENG_SIGNAL = re.compile(
     r"full[\s-]?stack|客户端|服务端|嵌入式|固件|firmware|测试开发|自动化测试|sdet|运维|sre|devops|"
     r"架构师|代码|编程|程序员|programmer|\bjava\b|python|golang|c\+\+|c#|\.net|javascript|typescript|"
     r"\breact\b|\bvue\b|机器学习|machine\s*learning|深度学习|deep\s*learning|\bml\b|\bnlp\b|大模型|"
-    r"\bllm\b|\bai\b|人工智能|计算机视觉|\bcv\b|系统开发|平台开发|web|\bapp\b|小程序|数据库|database|"
+    r"\bllm\b|\bai\b|人工智能|计算机视觉|\bcv\b|系统开发|平台开发|trading\s+systems?\s+engineer|web|\bapp\b|小程序|数据库|database|"
     r"\bsql\b|云计算|区块链",
     re.I,
 )
@@ -183,11 +209,16 @@ def _run_function_rules(text, prefer_last, use_generic):
         is_generic = bool(item[2]) if len(item) > 2 else False
         if is_generic != use_generic:
             continue
-        # 领域降级门：仅靠泛词落入「研发」、却带非软件工业领域硬标记、且无软件信号 → 归「其他」，
-        # 不塌进软件研发桶（杜绝「算法/AI/数据」类查询经职能门误召，与 JS 同口径）。
+        # 配套护栏①：传统工程仅靠泛词落入研发且无软件信号时，不能塌进软件研发。
         if (name == "研发"
                 and _NON_SOFTWARE_ENG_DOMAIN.search(text)
                 and not _SOFTWARE_ENG_SIGNAL.search(text)):
+            continue
+        # 配套护栏②：传统工程词与软件信号共现时，生产制造让给软件研发。
+        if name == "生产制造" and _SOFTWARE_ENG_SIGNAL.search(text):
+            continue
+        # 金融词也可能是软件系统所属领域（Trading Systems Engineer）；有精确软件信号时让给研发。
+        if name == "金融业务" and _SOFTWARE_ENG_SIGNAL.search(text):
             continue
         if not prefer_last:
             if rule.search(text):

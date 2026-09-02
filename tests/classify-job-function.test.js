@@ -22,6 +22,9 @@ test("真·产品角色仍准确归产品（回归）", () => {
   assert.equal(classifyJobFunction({ title: "AI 产品经理" }), "产品");
   assert.equal(classifyJobFunction({ title: "高级产品经理" }), "产品");
   assert.equal(classifyJobFunction({ title: "数据产品经理" }), "产品");
+  assert.equal(classifyJobFunction({ title: "产品实习生" }), "产品");
+  assert.equal(classifyJobFunction({ title: "AI产品实习生" }), "产品");
+  assert.equal(classifyJobFunction({ title: "产品助理" }), "产品");
 });
 
 test("产品运营与项目管理不再误判成产品", () => {
@@ -58,6 +61,112 @@ test("其它职能分类回归不受影响", () => {
   assert.equal(classifyJobFunction({ title: "数据分析师" }), "数据");
   assert.equal(classifyJobFunction({ title: "视觉设计师" }), "设计");
   assert.equal(classifyJobFunction({ title: "" }), "其他");
+});
+
+// 2026-09-02 生产库 5 万条在招岗对拍：全行业岗位有 27.6% 落入「其他」，其中教育/医疗/建筑/制造更高。
+// 以下标题均为生产库真实样本；新增桶只从标题判，防止 JD 正文的行业套话批量误标。
+test("全行业新增职能桶覆盖生产库真实标题", () => {
+  for (const title of [
+    "工装设备工程师(J10074)", "射频工程师", "钣金工艺工程师", "轮胎成型工艺(J10020)",
+    "装配工（云电-西安基地）", "锅炉、空压操作工（众业公司）", "Warehouse Operator",
+    "Production Associate", "Production Supervisor", "Manufacturing Technician", "Transmission Mechanic", "检验员QC(J10141)", "品控官", "Site EHS Manager II",
+    "Quality Control Analyst I (1st Shift)", "过程质量岗",
+  ]) assert.equal(classifyJobFunction({ title }), "生产制造", title);
+
+  for (const title of [
+    "桥梁专业总体(J47269)", "水工结构设计（暑期实习）(J47191)", "施工员", "工程造价岗",
+    "莱青高速项目工程部经理", "铁路牵引供变电专业岗位(J47476)",
+  ]) assert.equal(classifyJobFunction({ title }), "建筑工程", title);
+
+  for (const title of [
+    "肿瘤内科医生(013598)", "儿科门诊护士(013912)", "放射技师(007212)", "营养师",
+    "临床协调员/临床研究护士（CRC）-济宁", "CRA Intern-青岛（2027校招）", "药物安全专员-沈阳",
+    "Medical Director, USMA Respiratory", "Plasma Center Nurse LVN",
+  ]) assert.equal(classifyJobFunction({ title }), "医疗健康", title);
+
+  for (const title of [
+    "综合柜员岗（呼盟下辖支公司）", "非车险查勘岗", "权益投资经理", "高级风控专员（资管子公司）",
+    "Personal Banker Burleson John Jones", "Roving Personal Banker", "Teller Part Time Silver City",
+  ]) assert.equal(classifyJobFunction({ title }), "金融业务", title);
+
+  for (const title of [
+    "杭州学而思—科学思维教师", "初中语文学习机教师(J55308)", "高中一对一学科教师（教师基地全职）", "进校-渠道培训师",
+  ]) assert.equal(classifyJobFunction({ title }), "教育培训", title);
+
+  for (const title of [
+    "服务专员(019850)", "全职 | 星级咖啡师", "调茶师（上海八佰伴店）", "运动顾问",
+    "Customer Service Representative Small Business", "迪卡侬零售部门经理--天津",
+  ]) assert.equal(classifyJobFunction({ title }), "客服服务", title);
+});
+
+test("新增职能桶不抢软件研发、销售和公司职能岗位", () => {
+  for (const title of ["汽车嵌入式软件工程师", "机械臂算法工程师", "工业自动化测试开发", "Software Architect", "解决方案架构师"]) {
+    assert.equal(classifyJobFunction({ title }), "研发", title);
+  }
+  for (const title of ["客户经理", "大客户经理"]) assert.equal(classifyJobFunction({ title }), "销售", title);
+  for (const title of ["财务经理", "审计专员", "税务助理专员"]) assert.equal(classifyJobFunction({ title }), "职能", title);
+  assert.equal(classifyJobFunction({ title: "产品经理" }), "产品");
+  assert.equal(classifyJobFunction({ title: "产品运营" }), "运营");
+  assert.equal(classifyJobFunction({ title: "Product Engineer" }), "研发");
+  assert.equal(classifyJobFunction({ title: "Medical Device Software Engineer" }), "研发");
+  assert.equal(classifyJobFunction({ title: "Trading Systems Engineer" }), "研发");
+  // Instructional Designer 中 designer 是明确设计角色；它不是 instructor，不能被教育培训的精确词误吃。
+  assert.equal(classifyJobFunction({ title: "Instructional Designer" }), "设计");
+  assert.notEqual(classifyJobFunction({ title: "车载电源产品开发工程师" }), "产品");
+  assert.equal(classifyJobFunction({ title: "产品质量与可靠性工程" }), "生产制造");
+});
+
+// 2026-09-02 香港生产库对拍：建筑/金融/制造中的泛词会把大量非本职能岗位错分，以下均为真实标题。
+test("建筑、金融与制造的行业词必须有明确语境", () => {
+  for (const title of [
+    "Solutions Architect", "Senior Data Architect", "AI Security Architect- ARC, Apple Information Security",
+    "Real-Time Computer Vision Architect", "Product Engineer",
+  ]) assert.equal(classifyJobFunction({ title }), "研发", title);
+
+  for (const title of ["建筑师", "钢结构工程师", "土木工程师", "造价工程师", "2026届校招四公司施工技术岗(J45759)"]) {
+    assert.equal(classifyJobFunction({ title }), "建筑工程", title);
+  }
+  for (const title of ["机械结构设计工程师-27届", "强电经理"]) assert.equal(classifyJobFunction({ title }), "生产制造", title);
+  assert.notEqual(classifyJobFunction({ title: "研发体系流程管理经理" }), "生产制造");
+
+  for (const title of [
+    "Director, Surgical Vision Equipment Portfolio, GSM", "Hematology Portfolio Analytics Manager",
+    "伊顺特运中心河南驰枢达电商运营部费用结算员",
+  ]) assert.notEqual(classifyJobFunction({ title }), "金融业务", title);
+  for (const title of ["Teller Part Time Hillcrest", "Personal Banker Farmington", "Actuarial Analyst"]) {
+    assert.equal(classifyJobFunction({ title }), "金融业务", title);
+  }
+  assert.equal(classifyJobFunction({ title: "Production Associate" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "产品实习生" }), "产品");
+  assert.equal(classifyJobFunction({ title: "产品经理" }), "产品");
+  assert.equal(classifyJobFunction({ title: "产品运营" }), "运营");
+});
+
+// 降级门与生产制造桶不能共用词表：前者要尽量全地阻止传统工程/医疗岗落入软件研发，后者才要求归类精确。
+test("传统工程和医疗词不再因泛工程师落入研发", () => {
+  for (const title of [
+    "光学工程师", "声学工程师", "精密仪器工程师", "包装设计工程师", "工业工程师(IE)",
+    "生产工艺工程师", "标准化工程师",
+  ]) assert.equal(classifyJobFunction({ title }), "生产制造", title);
+  for (const title of ["医疗器械工程师", "试剂研发工程师", "药物研发工程师", "制药工程师", "临床数据管理"]) {
+    assert.equal(classifyJobFunction({ title }), "医疗健康", title);
+  }
+  // 结构/管道/技术文档缺少行业语境时可保守留「其他」，但绝不能以泛工程师进入软件研发。
+  for (const title of ["结构工程师", "管道工程师", "技术文档工程师"]) {
+    assert.notEqual(classifyJobFunction({ title }), "研发", title);
+  }
+  for (const title of ["土木工程师", "岩土工程师", "暖通工程师", "给排水工程师"]) {
+    assert.equal(classifyJobFunction({ title }), "建筑工程", title);
+  }
+  for (const title of ["生物特征识别算法工程师", "汽车嵌入式软件工程师", "机械臂算法工程师", "工业自动化测试开发", "Solutions Architect"]) {
+    assert.equal(classifyJobFunction({ title }), "研发", title);
+  }
+  assert.equal(classifyJobFunction({ title: "机械结构设计工程师-27届" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "钢结构工程师" }), "建筑工程");
+  assert.equal(classifyJobFunction({ title: "Teller Part Time Hillcrest" }), "金融业务");
+  assert.equal(classifyJobFunction({ title: "产品实习生" }), "产品");
+  assert.equal(classifyJobFunction({ title: "产品运营" }), "运营");
+  assert.equal(classifyJobFunction({ title: "Product Engineer" }), "研发");
 });
 
 test("正文兜底不再把非研发标题误判为研发，标题研发不受影响", () => {
@@ -103,15 +212,18 @@ test("招聘活动标签不掩盖标题里的真实角色", () => {
   assert.equal(classifyJobFunction({ title: "【27届校招】法务专员（IPR方向）" }), "职能");
 });
 
-// 领域降级门：机械/工艺/化工等「非软件工程」岗仅靠泛词（开发/技术/工程师）落入研发，
-// 应归「其他」而非软件「研发」桶——否则被「算法/AI/数据」类查询经相关层误召。
-// 用户实锤：「工艺技术开发（机械/自动化）」被打成研发 + 误命中「AI 数据产品经理」。
-test("非软件工程岗（机械/工艺/化工…）不再误判为软件研发", () => {
-  assert.equal(classifyJobFunction({ title: "工艺技术开发（机械/自动化）" }), "其他");
-  assert.equal(classifyJobFunction({ title: "机械工程师" }), "其他");
-  assert.equal(classifyJobFunction({ title: "化工工艺开发" }), "其他");
-  assert.equal(classifyJobFunction({ title: "材料研发工程师" }), "其他");
-  assert.equal(classifyJobFunction({ title: "焊接技术工程师" }), "其他");
+// 口径演进（2026-09-02）：这组原意始终是「不许塌进软件研发」，该保护仍成立；旧口径只能扔进「其他」，
+// 代价是卡片无类型标签，且「其他=放行」让它们绕过方向门推给互联网用户。生产库「其他」占 27.6%，制造/工业更高。
+// BOSS直聘、智联官方职位字典均将机械/材料/化工/工艺/电气自动化放在一级「生产制造」：这不是回归失败，
+// 而是从判不出升级为判对；用户实锤「工艺技术开发（机械/自动化）」曾被研发误召。
+test("非软件工程岗归生产制造而非软件研发", () => {
+  assert.equal(classifyJobFunction({ title: "工艺技术开发（机械/自动化）" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "机械工程师" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "化工工艺开发" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "材料研发工程师" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "焊接技术工程师" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "产品质量与可靠性工程(BJ)(J20823)" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "车载电源产品开发工程师(J13826)" }), "生产制造");
 });
 
 test("带软件信号的交叉岗仍判研发（保守降级，不误伤机器人/嵌入式等）", () => {

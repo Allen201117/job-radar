@@ -83,6 +83,9 @@ class ClassifyJobFunctionTest(unittest.TestCase):
 
     def test_product_precedes_algorithm(self):
         self.assertEqual(cke.classify_job_function("AI 产品经理", "", "了解算法"), "产品")
+        self.assertEqual(cke.classify_job_function("产品实习生"), "产品")
+        self.assertEqual(cke.classify_job_function("AI产品实习生"), "产品")
+        self.assertEqual(cke.classify_job_function("产品助理"), "产品")
 
     def test_title_classifier_matches_frontend_key_boundaries(self):
         self.assertEqual(cke.classify_job_title_function("2027 届校园招聘 - 后台开发工程师"), "研发")
@@ -126,13 +129,131 @@ class ClassifyJobFunctionTest(unittest.TestCase):
         self.assertEqual(cke.classify_job_function("招聘专员", "", "负责候选人寻访"), "职能")
 
     def test_non_software_engineering_not_rd(self):
-        # 机械/工艺/化工等非软件工程岗仅靠泛词落入研发 → 归「其他」，不被「算法/AI/数据」类查询误召。
-        self.assertEqual(cke.classify_job_function("工艺技术开发（机械/自动化）"), "其他")
-        self.assertEqual(cke.classify_job_function("机械工程师"), "其他")
-        self.assertEqual(cke.classify_job_function("化工工艺开发"), "其他")
+        # 口径演进（2026-09-02）：原意仍是「不许塌进软件研发」；旧口径扔进「其他」会让卡片无标签，
+        # 且「其他=放行」绕过方向门。生产库「其他」占 27.6%，制造/工业更高；BOSS/智联职位字典将
+        # 机械/材料/化工/工艺/电气自动化归一级「生产制造」，故这是从判不出升级为判对，不是回归失败。
+        self.assertEqual(cke.classify_job_function("工艺技术开发（机械/自动化）"), "生产制造")
+        self.assertEqual(cke.classify_job_function("机械工程师"), "生产制造")
+        self.assertEqual(cke.classify_job_function("化工工艺开发"), "生产制造")
+        self.assertEqual(cke.classify_job_function("材料研发工程师"), "生产制造")
+        self.assertEqual(cke.classify_job_function("焊接技术工程师"), "生产制造")
+        self.assertEqual(cke.classify_job_function("产品质量与可靠性工程(BJ)(J20823)"), "生产制造")
+        self.assertEqual(cke.classify_job_function("车载电源产品开发工程师(J13826)"), "生产制造")
         # 带软件信号的交叉岗仍判研发（保守降级，不误伤机器人/嵌入式）。
         self.assertEqual(cke.classify_job_function("机械臂算法工程师"), "研发")
         self.assertEqual(cke.classify_job_function("汽车嵌入式软件工程师"), "研发")
+
+    def test_new_cross_industry_function_buckets_from_production_titles(self):
+        # 2026-09-02 生产库真实标题：六个新桶仅从标题认领，不能靠正文万能套话误标。
+        cases = {
+            "生产制造": [
+                "工装设备工程师(J10074)", "射频工程师", "钣金工艺工程师", "轮胎成型工艺(J10020)",
+                "装配工（云电-西安基地）", "锅炉、空压操作工（众业公司）", "Warehouse Operator",
+                "Production Associate", "Production Supervisor", "Manufacturing Technician", "Transmission Mechanic", "检验员QC(J10141)", "品控官", "Site EHS Manager II",
+                "Quality Control Analyst I (1st Shift)", "过程质量岗",
+            ],
+            "建筑工程": [
+                "桥梁专业总体(J47269)", "水工结构设计（暑期实习）(J47191)", "施工员", "工程造价岗",
+                "莱青高速项目工程部经理", "铁路牵引供变电专业岗位(J47476)",
+            ],
+            "医疗健康": [
+                "肿瘤内科医生(013598)", "儿科门诊护士(013912)", "放射技师(007212)", "营养师",
+                "临床协调员/临床研究护士（CRC）-济宁", "CRA Intern-青岛（2027校招）", "药物安全专员-沈阳",
+                "Medical Director, USMA Respiratory", "Plasma Center Nurse LVN",
+            ],
+            "金融业务": [
+                "综合柜员岗（呼盟下辖支公司）", "非车险查勘岗", "权益投资经理", "高级风控专员（资管子公司）",
+                "Personal Banker Burleson John Jones", "Roving Personal Banker", "Teller Part Time Silver City",
+            ],
+            "教育培训": [
+                "杭州学而思—科学思维教师", "初中语文学习机教师(J55308)", "高中一对一学科教师（教师基地全职）", "进校-渠道培训师",
+            ],
+            "客服服务": [
+                "服务专员(019850)", "全职 | 星级咖啡师", "调茶师（上海八佰伴店）", "运动顾问",
+                "Customer Service Representative Small Business", "迪卡侬零售部门经理--天津",
+            ],
+        }
+        for expected, titles in cases.items():
+            for title in titles:
+                with self.subTest(title=title):
+                    self.assertEqual(cke.classify_job_function(title), expected)
+
+    def test_new_buckets_do_not_steal_existing_functions(self):
+        for title in ("汽车嵌入式软件工程师", "机械臂算法工程师", "工业自动化测试开发", "Software Architect", "解决方案架构师"):
+            with self.subTest(title=title):
+                self.assertEqual(cke.classify_job_function(title), "研发")
+        for title in ("客户经理", "大客户经理"):
+            with self.subTest(title=title):
+                self.assertEqual(cke.classify_job_function(title), "销售")
+        for title in ("财务经理", "审计专员", "税务助理专员"):
+            with self.subTest(title=title):
+                self.assertEqual(cke.classify_job_function(title), "职能")
+        self.assertEqual(cke.classify_job_function("产品经理"), "产品")
+        self.assertEqual(cke.classify_job_function("产品运营"), "运营")
+        self.assertEqual(cke.classify_job_function("Product Engineer"), "研发")
+        self.assertEqual(cke.classify_job_function("Medical Device Software Engineer"), "研发")
+        self.assertEqual(cke.classify_job_function("Trading Systems Engineer"), "研发")
+        # Instructional Designer 是设计角色，不是 instructor；教育培训的精确词不能误吃它。
+        self.assertEqual(cke.classify_job_function("Instructional Designer"), "设计")
+        self.assertNotEqual(cke.classify_job_function("车载电源产品开发工程师"), "产品")
+        self.assertEqual(cke.classify_job_function("产品质量与可靠性工程"), "生产制造")
+
+    def test_building_finance_and_manufacturing_words_require_context(self):
+        # 2026-09-02 香港生产库对拍：以下均为裸 architect、portfolio、结算、体系等泛词导致的真实误判。
+        for title in (
+            "Solutions Architect", "Senior Data Architect", "AI Security Architect- ARC, Apple Information Security",
+            "Real-Time Computer Vision Architect", "Product Engineer",
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(cke.classify_job_function(title), "研发")
+        for title in ("建筑师", "钢结构工程师", "土木工程师", "造价工程师", "2026届校招四公司施工技术岗(J45759)"):
+            with self.subTest(title=title):
+                self.assertEqual(cke.classify_job_function(title), "建筑工程")
+        for title in ("机械结构设计工程师-27届", "强电经理"):
+            with self.subTest(title=title):
+                self.assertEqual(cke.classify_job_function(title), "生产制造")
+        self.assertNotEqual(cke.classify_job_function("研发体系流程管理经理"), "生产制造")
+        for title in (
+            "Director, Surgical Vision Equipment Portfolio, GSM", "Hematology Portfolio Analytics Manager",
+            "伊顺特运中心河南驰枢达电商运营部费用结算员",
+        ):
+            with self.subTest(title=title):
+                self.assertNotEqual(cke.classify_job_function(title), "金融业务")
+        for title in ("Teller Part Time Hillcrest", "Personal Banker Farmington", "Actuarial Analyst"):
+            with self.subTest(title=title):
+                self.assertEqual(cke.classify_job_function(title), "金融业务")
+        self.assertEqual(cke.classify_job_function("Production Associate"), "生产制造")
+        self.assertEqual(cke.classify_job_function("产品实习生"), "产品")
+        self.assertEqual(cke.classify_job_function("产品经理"), "产品")
+        self.assertEqual(cke.classify_job_function("产品运营"), "运营")
+
+    def test_traditional_engineering_and_medical_words_do_not_fall_into_software_rd(self):
+        # 降级门与生产制造桶不可共用词表：前者尽量全地拦传统工程/医疗，后者才要求归类精确。
+        for title in (
+            "光学工程师", "声学工程师", "精密仪器工程师", "包装设计工程师", "工业工程师(IE)",
+            "生产工艺工程师", "标准化工程师",
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(cke.classify_job_function(title), "生产制造")
+        for title in ("医疗器械工程师", "试剂研发工程师", "药物研发工程师", "制药工程师", "临床数据管理"):
+            with self.subTest(title=title):
+                self.assertEqual(cke.classify_job_function(title), "医疗健康")
+        # 结构/管道/技术文档缺少行业语境时可保守留「其他」，但绝不能以泛工程师进入软件研发。
+        for title in ("结构工程师", "管道工程师", "技术文档工程师"):
+            with self.subTest(title=title):
+                self.assertNotEqual(cke.classify_job_function(title), "研发")
+        for title in ("土木工程师", "岩土工程师", "暖通工程师", "给排水工程师"):
+            with self.subTest(title=title):
+                self.assertEqual(cke.classify_job_function(title), "建筑工程")
+        for title in ("生物特征识别算法工程师", "汽车嵌入式软件工程师", "机械臂算法工程师", "工业自动化测试开发", "Solutions Architect"):
+            with self.subTest(title=title):
+                self.assertEqual(cke.classify_job_function(title), "研发")
+        self.assertEqual(cke.classify_job_function("机械结构设计工程师-27届"), "生产制造")
+        self.assertEqual(cke.classify_job_function("钢结构工程师"), "建筑工程")
+        self.assertEqual(cke.classify_job_function("Teller Part Time Hillcrest"), "金融业务")
+        self.assertEqual(cke.classify_job_function("产品实习生"), "产品")
+        self.assertEqual(cke.classify_job_function("产品运营"), "运营")
+        self.assertEqual(cke.classify_job_function("Product Engineer"), "研发")
 
 
 class JobMatchesTest(unittest.TestCase):
