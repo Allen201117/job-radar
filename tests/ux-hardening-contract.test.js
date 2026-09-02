@@ -7,6 +7,7 @@ const { loadRoute, resolvedQuery } = require("./route-test-utils");
 const read = (rel) => fs.readFileSync(path.resolve(__dirname, rel), "utf8");
 
 const jobLibraryStat = read("../components/JobLibraryStat.tsx");
+const jobFilters = read("../components/JobFilters.tsx");
 const tagInput = read("../components/TagInput.tsx");
 const preferenceForm = read("../components/PreferenceForm.tsx");
 const resumeProfilePanel = read("../components/ResumeProfilePanel.tsx");
@@ -178,6 +179,27 @@ test("jobs stats returns an uncached 500 when the HK recent-active count rejects
   });
 
   await assertUncachedStatsFailure(await route.GET());
+});
+
+test("filter popovers can be closed by clicking their own trigger", () => {
+  // 2026-09-02 回归：关外部逻辑挂在 window 的 pointerdown 上，判据是「点击目标不在弹层内」。
+  // 触发按钮本身不在弹层里 → 点它会先被判成「点了外面」而关闭，紧接着的 click 又把它开回来，
+  // 净效果是同一个按钮永远关不掉，只能按 Esc 或点空白处。修法是让「触发按钮 + 弹层」的包裹层
+  // 吃掉 pointerdown，别让 window 监听器看见。这里钉死：每个包裹层都必须带这个拦截。
+  // 注意别用 /<div ...[^>]*>/ 去圈整个标签：箭头函数的 `=>` 里就有个 `>`，会把匹配提前截断
+  // （本断言初版就栽在这，报了个假失败）。改成「带守卫的包裹层数量 == 全部包裹层数量」。
+  const allWrappers = (jobFilters.match(/<div className="relative shrink-0"/g) || []).length;
+  const guarded = (
+    jobFilters.match(
+      /<div className="relative shrink-0" onPointerDown=\{\(event\) => event\.stopPropagation\(\)\}>/g,
+    ) || []
+  ).length;
+  assert.ok(allWrappers >= 5, `expected the filter-bar popover wrappers, found ${allWrappers}`);
+  assert.equal(
+    guarded,
+    allWrappers,
+    "every popover wrapper must swallow pointerdown so its own trigger can toggle it closed",
+  );
 });
 
 test("job library stats wires the tested lifecycle helpers and keeps manual refresh accessible", () => {

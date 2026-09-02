@@ -54,8 +54,10 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
         if (!cancelled && data?.ok && Array.isArray(data.companies)) {
           setCompanies(data.companies);
         }
-      } catch {
-        // 取不到就保持空 datalist——公司框仍可自由输入子串
+      } catch (error) {
+        // 取不到就保持空 datalist——公司框仍可自由输入子串。但不能静默吞：
+        // 公司下拉长期为空时，得能从控制台看出是接口挂了还是真没数据。
+        console.error("[jobs] 公司候选加载失败", error);
       }
     })();
     return () => {
