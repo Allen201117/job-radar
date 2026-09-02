@@ -1,5 +1,6 @@
 """必投清单缺口漏斗 P1：httpx 入口发现 → 指纹 → 探活 → 真抓 → 回读验收。"""
 import argparse
+import json
 import os
 import re
 import zlib
@@ -697,6 +698,37 @@ def _preferred_browser_fallback(fallbacks):
     )
 
 
+def browser_handoff_rows(outcomes):
+    """取本轮应即时交给 P2 的 unknown_spa 入口，按公司去重且保留 P2 所需台账字段。"""
+    rows, seen = [], set()
+    for outcome in outcomes or []:
+        if outcome.get("detected_platform") != "unknown_spa":
+            continue
+        company = str(outcome.get("company") or "").strip()
+        entry_url = str(outcome.get("official_entry_url") or "").strip()
+        key = company.casefold()
+        if not company or not entry_url or key in seen:
+            continue
+        seen.add(key)
+        rows.append({
+            field: outcome.get(field)
+            for field in (
+                "company", "pattern", "industries", "scope", "state",
+                "official_entry_url", "detected_platform", "next_retry_at", "evidence",
+            )
+        })
+    return rows
+
+
+def write_browser_handoff(path, outcomes):
+    """将 P1 本轮 unknown_spa 结果写为 P2 artifact。"""
+    rows = browser_handoff_rows(outcomes)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump({"version": 1, "companies": rows}, handle, ensure_ascii=False)
+    print("[gap_funnel] P2 交接文件已写 %s（unknown_spa=%d）" % (path, len(rows)))
+    return rows
+
+
 def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
                     insert_allowed, now=None, finder=entry_finder.find_official_entry,
                     fingerprinter=platform_fingerprint.fingerprint,
@@ -1015,7 +1047,7 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
 
 
 def run_round(*, scope="domestic", limit=None, company=None, apply=False,
-              supabase=None, jobs_conn=None, now=None):
+              supabase=None, jobs_conn=None, now=None, handoff_file=None):
     now = now or datetime.now(timezone.utc)
     started = now
     supabase = supabase or db.get_supabase()
@@ -1164,6 +1196,8 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
             apply,
         )
     )
+    if handoff_file:
+        write_browser_handoff(handoff_file, outcomes)
     return {"outcomes": outcomes, "metrics": metrics, "queue": queue}
 
 
@@ -1239,6 +1273,8 @@ def main(argv=None):
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--company", default=None)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--handoff-file", default=None,
+                        help="写入本轮 unknown_spa 交接文件，供 P2 浏览器道即时消费")
     parser.add_argument("--tenant-seed", action="store_true")
     args = parser.parse_args(argv)
     apply = os.environ.get("GAP_FUNNEL_APPLY", "").strip().lower() in _TRUE
@@ -1255,6 +1291,7 @@ def main(argv=None):
         limit=max(0, args.limit) if args.limit is not None else None,
         company=args.company,
         apply=apply,
+        handoff_file=args.handoff_file,
     )
 
 

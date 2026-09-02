@@ -1,5 +1,6 @@
 """必投清单缺口漏斗 P2：unknown_spa 浏览器道。"""
 import argparse
+import json
 import os
 import re
 from collections import Counter
@@ -104,6 +105,38 @@ def plan_browser_queue(rows, *, cap=5, now=None, ignore_backoff=False):
         candidates,
         key=lambda row: str(row.get("company") or "").casefold(),
     )[:max(0, int(cap or 0))]
+
+
+def load_handoff_rows(path):
+    """读 P1 本轮 artifact；坏文件只告警并回退台账队列。"""
+    if not path or not os.path.exists(path):
+        return []
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        rows = payload.get("companies") if isinstance(payload, dict) else payload
+        return [row for row in (rows or []) if isinstance(row, dict)]
+    except (OSError, ValueError, TypeError) as exc:
+        print("[gap_funnel_browser] 交接文件读取失败，回退台账队列: %s: %s"
+              % (type(exc).__name__, exc))
+        return []
+
+
+def merge_browser_queues(handoff_rows, ledger_rows, *, cap, now):
+    """P1 当轮 handoff 优先，随后补入台账里本就到期的 unknown_spa 公司。"""
+    handoff = plan_browser_queue(
+        handoff_rows, cap=len(handoff_rows or []), now=now, ignore_backoff=True)
+    ledger = plan_browser_queue(ledger_rows, cap=len(ledger_rows or []), now=now)
+    out, seen = [], set()
+    for row in handoff + ledger:
+        key = str(row.get("company") or "").strip().casefold()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+        if len(out) >= max(0, int(cap or 0)):
+            break
+    return out
 
 
 
@@ -279,7 +312,7 @@ def process_browser_company(
 
 
 def run_round(*, scope="domestic", limit=None, company=None, apply=False,
-              supabase=None, jobs_conn=None, now=None):
+              supabase=None, jobs_conn=None, now=None, handoff_file=None):
     now = now or datetime.now(timezone.utc)
     started = now
     supabase = supabase or db.get_supabase()
@@ -294,9 +327,13 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
         apply=False,
         now=now,
     )
-    queue = plan_browser_queue(
-        census_result["rows"], cap=cap, now=now, ignore_backoff=bool(company)
-    )
+    handoff_rows = load_handoff_rows(handoff_file)
+    if company:
+        queue = plan_browser_queue(
+            census_result["rows"], cap=cap, now=now, ignore_backoff=True)
+    else:
+        queue = merge_browser_queues(
+            handoff_rows, census_result["rows"], cap=cap, now=now)
     outcomes = []
     for row in queue:
         scoped = {**row, "scope": scope}
@@ -350,6 +387,7 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
         "states": dict(counts),
         "dry_run": not apply,
         "list_version": must_apply.version(),
+        "handoff_loaded": len(handoff_rows),
     }
     if apply:
         ops_runs.record_ops_run(
@@ -384,6 +422,8 @@ def main(argv=None):
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--company", default=None)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--handoff-file", default=None,
+                        help="读取 P1 当轮 unknown_spa artifact，优先处理其中公司")
     args = parser.parse_args(argv)
     apply = os.environ.get("GAP_FUNNEL_APPLY", "").strip().lower() in _TRUE
     if args.dry_run:
@@ -393,6 +433,7 @@ def main(argv=None):
         limit=max(0, args.limit) if args.limit is not None else None,
         company=args.company,
         apply=apply,
+        handoff_file=args.handoff_file,
     )
 
 

@@ -83,11 +83,11 @@ def load_curated_targets():
     return out
 
 
-def load_targets(existing_companies):
+def load_targets(existing_companies, static_targets=None):
     """静态精选清单 (+ 可选 LLM 每日生成的新候选，标 _priority 优先探)。
     LLM 生成 gated on env AUTO_DISCOVER_LLM，默认关；生成的候选一样走后续探活验证门，编造/猜错自动丢。
     「持续喂清单」= 静态清单会烧完，靠 generate_targets 每天补新候选维持扩源速度。"""
-    targets = load_curated_targets()
+    targets = list(static_targets) if static_targets is not None else load_curated_targets()
     if os.environ.get("AUTO_DISCOVER_LLM", "").lower() in ("1", "true", "yes"):
         try:
             import generate_targets as gt
@@ -359,15 +359,32 @@ def main():
     sb = db.get_supabase()
     user_wanted = load_user_wanted_companies(sb)
     existing_companies, existing_urls = existing_source_keys(sb)
-    curated = load_targets(existing_companies)
+    static_targets = load_curated_targets()
+    curated = load_targets(existing_companies, static_targets)
     seed = int(datetime.now(timezone.utc).strftime("%Y%m%d"))
     targets = plan_targets(curated, user_wanted, existing_companies, DAILY_TARGET_CAP, seed=seed)
+    existing_norm = {norm_company(name) for name in existing_companies if norm_company(name)}
+    already_in_library = sum(
+        1 for target in static_targets
+        if company_covered((target.get("company") or "").strip(), existing_companies, existing_norm)
+    )
     print(f"[auto_discover] curated={len(curated)} user_wanted={len(user_wanted)} "
           f"existing={len(existing_companies)} → 本轮 probe {len(targets)} 家缺失公司 (apply={apply})")
     if not targets:
-        ops_runs.record_ops_run(sb, "auto_discover", {"checked": 0, "produced": 0},
-                                status="success", started_at=started, finished_at=_now_iso())
-        print("[auto_discover] 无缺失目标，结束。")
+        exhausted = bool(static_targets)
+        ops_runs.record_ops_run(
+            sb,
+            "auto_discover",
+            {"checked": 0, "produced": 0, "candidates_total": len(static_targets),
+             "already_in_library": already_in_library, "deduped": 0,
+             "exhausted": exhausted},
+            # ops_runs 不支持 warning；静态清单耗尽以 exhausted 指标供 watchdog 预警。
+            status="success", started_at=started, finished_at=_now_iso())
+        if exhausted:
+            print("[auto-discover] 静态清单已耗尽：候选 %d 家全部在库或被去重，今日零扩源"
+                  % len(static_targets))
+        else:
+            print("[auto_discover] 无缺失目标，结束。")
         return
 
     hits = dd.sweep(targets, PLATFORMS)
@@ -397,7 +414,8 @@ def main():
     ops_runs.record_ops_run(
         sb, "auto_discover",
         {"checked": len(targets), "produced": added, "companies_enriched": added,
-         "candidates": len(to_insert), "deduped": len(blocked)},
+         "candidates": len(to_insert), "candidates_total": len(static_targets),
+         "already_in_library": already_in_library, "deduped": len(blocked)},
         status=ops_runs.status_from_counts(len(to_insert), len(to_insert) - added),
         started_at=started, finished_at=_now_iso())
     print(f"[auto_discover] 完成: 入库 {added} 源 (apply={apply})")

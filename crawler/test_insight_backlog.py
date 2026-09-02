@@ -44,6 +44,9 @@ class FakeQuery:
     def order(self, *a, **k):
         return self
 
+    def range(self, *a, **k):
+        return self
+
     def execute(self):
         if self._op == "update":
             self.store.setdefault(self.table + "_updates", []).append((dict(self._filters), self._payload))
@@ -247,6 +250,30 @@ class TestWorker(unittest.TestCase):
         with mock.patch.object(B.jobs_db, "enabled", return_value=False):
             rows = B.fetch_t3_queue(FakeSB(store), limit=1)
         self.assertEqual([row["company"] for row in rows], ["原排序第一"])
+
+    def test_seed_from_sources_paginates_company_profiles(self):
+        fetch_all = mock.Mock(side_effect=[
+            [{"company": "源公司"}], [{"company": "已存在"}],
+        ])
+        with mock.patch.object(B.db, "fetch_all_rows", fetch_all):
+            created = B.seed_from_sources(FakeSB({}))
+        self.assertEqual(created, 1)
+        self.assertEqual(fetch_all.call_count, 2)
+
+    def test_fetch_queue_paginates_before_applying_limit(self):
+        all_rows = [{"id": str(i), "company": f"C{i}"} for i in range(1201)]
+        with mock.patch.object(B.db, "fetch_all_rows", return_value=all_rows) as fetch_all:
+            rows = B.fetch_queue(FakeSB({}), limit=7)
+        self.assertEqual([row["id"] for row in rows], [str(i) for i in range(7)])
+        fetch_all.assert_called_once()
+
+    def test_fetch_t3_queue_paginates_before_limit_without_jobs_db(self):
+        all_rows = [{"id": str(i), "company": f"C{i}"} for i in range(1201)]
+        with mock.patch.object(B.db, "fetch_all_rows", return_value=all_rows) as fetch_all, \
+             mock.patch.object(B.jobs_db, "enabled", return_value=False):
+            rows = B.fetch_t3_queue(FakeSB({}), limit=3)
+        self.assertEqual([row["id"] for row in rows], ["0", "1", "2"])
+        fetch_all.assert_called_once()
 
 
 import insight_engine as E
