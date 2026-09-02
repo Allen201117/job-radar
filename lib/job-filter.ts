@@ -5,6 +5,7 @@ import {
   cityMatchTokens,
   classifyJobFunction,
   hasExplicitRecruitmentType,
+  jobMatchesChinaKeyword,
   keywordMatchTier,
   _minRequiredExperienceYears,
   recruitmentCategory,
@@ -29,6 +30,7 @@ export type Filters = {
   sponsorshipOnly: boolean;
   education: string; // 用户所选学历（博士/硕士/本科/大专）；""=学历不限（不筛）
   jobFunction: string; // 职能多选，逗号分隔；""=不限
+  jobRole: string; // 具体岗位方向多选，逗号分隔；""=不限
   experience: string; // fresh / 0-3 / 3-5 / 5-10 / 10+；""=不限
   postedWithin: string; // 1 / 3 / 7 / 30（天）；""=不限
 };
@@ -65,6 +67,7 @@ export const DEFAULT_FILTERS: Filters = {
   sponsorshipOnly: false,
   education: "",
   jobFunction: "",
+  jobRole: "",
   experience: "",
   postedWithin: "",
 };
@@ -72,6 +75,7 @@ export const DEFAULT_FILTERS: Filters = {
 // 新增三类硬筛不把「信息缺失」降级放行：这些都是用户主动收窄结果的条件，模糊命中会反过来破坏筛选可信度。
 export const FILTER_REJECT_REASONS = {
   jobFunction: "job_function",
+  jobRole: "job_role",
   experience: "experience",
   postedWithin: "posted_within",
 } as const;
@@ -85,6 +89,14 @@ export type MatchReason = {
 export function matchesJobFunction(job: Pick<ScoredJob, "title" | "summary">, value: string): boolean {
   const selected = splitMultiValue(value);
   return selected.length === 0 || selected.includes(classifyJobFunction(job));
+}
+
+// 二级方向是用户主动收窄的条件，只认词表精确层（标题锚定 + 已有的跨职能防串规则）。
+// 不能调用 keywordMatchTier 的 related：例如「销售工程师」会因泛工程词落进研发相关层，
+// 但绝不能在用户勾选「测试」时冒充测试岗。
+export function matchesJobRole(job: Pick<ScoredJob, "title" | "summary">, value: string): boolean {
+  const selected = splitMultiValue(value);
+  return selected.length === 0 || selected.some((role) => jobMatchesChinaKeyword(job, role));
 }
 
 export function matchesExperienceBand(
@@ -160,7 +172,17 @@ export function jobFilterMatch(
       return null; // 选实习/校招 + 岗位无显式信号 = 没自报家门 → 淘汰，不放行冒充。
     }
   }
-  if (!matchesJobFunction(job, filters.jobFunction)) return null;
+  // 一级与二级不是交集，而是用户勾选范围的并集：选「研发」+「产品经理」表示
+  // 「全部研发岗 ∪ 产品经理岗」。若强行分别判断，会把这类合理组合筛成空结果。
+  const selectedFunctions = splitMultiValue(filters.jobFunction);
+  const selectedRoles = splitMultiValue(filters.jobRole);
+  if (
+    (selectedFunctions.length || selectedRoles.length) &&
+    !(selectedFunctions.length && matchesJobFunction(job, filters.jobFunction)) &&
+    !(selectedRoles.length && matchesJobRole(job, filters.jobRole))
+  ) {
+    return null;
+  }
   if (!matchesExperienceBand(job, filters.experience)) return null;
   if (!matchesPostedWithin(job, filters.postedWithin)) return null;
   if (filters.education) {
