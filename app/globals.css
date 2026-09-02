@@ -353,25 +353,60 @@
   }
 }
 
-/* 筛选面板只用位移与透明度进场：抽屉/Sheet 是当前筛选上下文，不该用布局动画挤动背后的岗位列表。 */
+/* 「全部筛选」面板的进场动效。
+   移动端是从底部升起的 Sheet；桌面端**从「全部筛选」按钮本体长出来**——按钮位置由 JS 在点击那一刻
+   量出来，换算成 --fx/--fy（按钮中心相对视窗中心的偏移）和 --fs（起始缩放）喂进来，于是弹窗看起来
+   是从那颗按钮放大展开的，用户一眼知道「这个窗口是刚才那个按钮打开的」。
+   ⚠️ 桌面端不再用「从右侧滑入的抽屉」：抽屉会让整页压着一层遮罩，而筛选条仍是亮的、看着像能点，
+   实际全被遮罩吃掉——线上实测用户点「岗位职能」命中的是遮罩不是按钮，直接被判成「按钮点不了」。 */
 @keyframes job-filter-sheet-in {
-  from { opacity: 0; transform: translateY(1rem); }
+  from { opacity: 0; transform: translateY(1.25rem); }
   to { opacity: 1; transform: translateY(0); }
 }
+@keyframes job-filter-grow-in {
+  from {
+    opacity: 0;
+    transform: translate(var(--fx, 0px), var(--fy, 0px)) scale(var(--fs, 0.9));
+  }
+  to {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
 .job-filter-panel {
-  animation: job-filter-sheet-in 200ms ease-out both;
+  animation: job-filter-sheet-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+/* 维度弹层：从触发按钮那一侧的上沿轻微下沉展开，给「它是从这颗按钮下面掉出来的」一个视觉交代。 */
+@keyframes job-filter-pop-in {
+  from { opacity: 0; transform: translateY(-0.375rem) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.job-filter-pop {
+  transform-origin: top left;
+  animation: job-filter-pop-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .job-filter-pop {
+    animation: none;
+  }
+}
+
+@keyframes job-filter-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.job-filter-backdrop {
+  animation: job-filter-backdrop-in 180ms ease-out both;
 }
 @media (min-width: 1024px) {
-  @keyframes job-filter-drawer-in {
-    from { opacity: 0; transform: translateX(1rem); }
-    to { opacity: 1; transform: translateX(0); }
-  }
   .job-filter-panel {
-    animation-name: job-filter-drawer-in;
+    animation-name: job-filter-grow-in;
+    animation-duration: 280ms;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .job-filter-panel {
+  .job-filter-panel,
+  .job-filter-backdrop {
     animation: none;
   }
 }

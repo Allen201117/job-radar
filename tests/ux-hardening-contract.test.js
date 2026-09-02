@@ -191,6 +191,22 @@ test("empty single-select filters do not masquerade as active conditions", () =>
   assert.match(body, /if \(!value\) return "";/, "labelFor must return empty string for an unset value");
 });
 
+test("filter popovers escape the filter bar's scroll container", () => {
+  // 2026-09-02 线上实测：筛选条内层是 overflow-x-auto（移动端要横滑），而**滚动容器两个轴都裁剪**。
+  // 弹层原本 absolute 在条里 → 463px 高的弹层被裁进 42px 高的条里，DOM 里明明打开了、屏幕上
+  // 什么都不出现，用户直接判「这些按钮点不了」。必须 portal 到 body + fixed 定位手动锚位。
+  assert.match(jobFilters, /import \{ createPortal \} from "react-dom";/, "popover must be portaled");
+  // ⚠️ 别用 /function X\([\s\S]*?\n\}/ 切函数体：多行解构参数里的 `}: {` 是顶格的，会把匹配提前
+  // 截断成只剩签名（这条断言初版就栽在这）。切到下一个顶层 function 为止才稳。
+  const popover = jobFilters.match(/function Popover\([\s\S]*?(?=\nfunction )/)?.[0];
+  assert.ok(popover, "could not locate Popover");
+  assert.match(popover, /createPortal\(/, "popover must render through a portal, not inline");
+  assert.match(popover, /className="job-filter-pop fixed /, "portaled popover must be position:fixed");
+  assert.doesNotMatch(popover, /className="[^"]*\babsolute\b/, "popover must not go back to absolute inside the bar");
+  // 锚位要跟着滚动走，否则 portal 出去的弹层会飘在原地
+  assert.match(popover, /addEventListener\("scroll", place, true\)/, "popover must re-anchor on scroll");
+});
+
 test("filter popovers can be closed by clicking their own trigger", () => {
   // 2026-09-02 回归：关外部逻辑挂在 window 的 pointerdown 上，判据是「点击目标不在弹层内」。
   // 触发按钮本身不在弹层里 → 点它会先被判成「点了外面」而关闭，紧接着的 click 又把它开回来，
@@ -198,13 +214,14 @@ test("filter popovers can be closed by clicking their own trigger", () => {
   // 吃掉 pointerdown，别让 window 监听器看见。这里钉死：每个包裹层都必须带这个拦截。
   // 注意别用 /<div ...[^>]*>/ 去圈整个标签：箭头函数的 `=>` 里就有个 `>`，会把匹配提前截断
   // （本断言初版就栽在这，报了个假失败）。改成「带守卫的包裹层数量 == 全部包裹层数量」。
-  const allWrappers = (jobFilters.match(/<div className="relative shrink-0"/g) || []).length;
+  // 2026-09-02 起五个维度收进 FilterField 统一封装，守卫也只剩这一处。
+  const allWrappers = (jobFilters.match(/<div ref=\{anchorRef\} className="relative shrink-0"/g) || []).length;
   const guarded = (
     jobFilters.match(
-      /<div className="relative shrink-0" onPointerDown=\{\(event\) => event\.stopPropagation\(\)\}>/g,
+      /<div ref=\{anchorRef\} className="relative shrink-0" onPointerDown=\{\(event\) => event\.stopPropagation\(\)\}>/g,
     ) || []
   ).length;
-  assert.ok(allWrappers >= 5, `expected the filter-bar popover wrappers, found ${allWrappers}`);
+  assert.ok(allWrappers >= 1, `expected the FilterField popover wrapper, found ${allWrappers}`);
   assert.equal(
     guarded,
     allWrappers,
