@@ -266,6 +266,9 @@ async function searchViaScan(
   // 候选只取 CANDIDATE_COLUMNS（与 FTS 路径同一套）：JS 打分/精筛只读这些列，纯展示列留到
   // 命中页再回补。此前这里拉的是全量 JOB_COLUMNS —— sortBy=match 默认要看满 SCAN_BUDGET=28000 行，
   // 多传的 6 个展示列 × 2.8 万行是白扔的带宽。
+  // ⚠️ 别再试「用 json_agg 把整批行打成一个字段传回来」绕开 node-pg 逐字段解析：2026-09-02
+  // 上线实测**更慢**（无筛选冷路径 19.0s → 20.5s），因为 json 要给每行每列写一遍 key 名，
+  // 2.8 万行多出约 8MB 纯键名、字节 +33%，把省下的解析成本吃光了（已撤回，commit f011592）。
   const sql =
     `select ${CANDIDATE_COLUMNS} from jobs where ${conds.join(" and ")} ` +
     `order by first_seen_at desc limit $${params.length + 1} offset $${params.length + 2}`;
