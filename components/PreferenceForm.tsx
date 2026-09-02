@@ -15,7 +15,7 @@ const COVERAGE_LABEL: Record<string, { label: string; tone: string }> = {
   covered: { label: "已纳入持续监控", tone: "bg-[#e6f2d3] text-[#5a7a2f] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]" },
   queued: { label: "已记录，等待接入官方招聘源", tone: "bg-[#dbe9fa] text-[#2f6299] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]" },
   researching: { label: "正在确认官方招聘入口", tone: "bg-[#fbe6d1] text-[#9a6326] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]" },
-  unsupported: { label: "暂时无法稳定监控", tone: "bg-[#ece7dd] text-[#6b655a] dark:bg-white/[0.08] dark:text-[#b6ad9d]" },
+  unsupported: { label: "暂时无法稳定监控", tone: "bg-[#ece7dd] ink-2 dark:bg-white/[0.08]" },
 };
 
 export default function PreferenceForm() {
@@ -130,27 +130,27 @@ export default function PreferenceForm() {
 
   if (!prefs) {
     return (
-      <div className="surface p-5 text-sm text-[#5f594e] dark:text-[#b6ad9d]">
+      <div className="surface p-5 text-sm ink-2">
         {message || "加载中..."}
       </div>
     );
   }
 
   return (
-    <form onSubmit={handleSave} className="surface space-y-5 p-5 text-[#1a1714] dark:text-[#f3ecdf]">
+    <form onSubmit={handleSave} className="surface space-y-5 p-5 ink-1">
       <div className="flex items-center gap-2">
         <div className="grid size-9 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
           <SlidersHorizontal size={18} weight="fill" aria-hidden="true" />
         </div>
         <div>
           <h2 className="text-base font-semibold">求职目标</h2>
-          <p className="text-sm text-[#8a8275] dark:text-[#9a9184]">系统据此每天替你筛官方机会；改完记得保存。</p>
+          <p className="text-sm ink-3">系统据此每天替你筛官方机会；改完记得保存。</p>
         </div>
       </div>
       <section className="rounded-2xl border border-black/[0.07] bg-white/55 p-4 dark:border-white/[0.1] dark:bg-white/[0.05]">
         <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
           <h3 className="text-sm font-semibold">核心</h3>
-          <p className="text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">填这三项就能开始，其它可稍后完善</p>
+          <p className="text-xs leading-5 ink-3">填这三项就能开始，其它可稍后完善</p>
         </div>
         <div className="mt-4 space-y-4">
           <Field label="目标城市">
@@ -187,7 +187,7 @@ export default function PreferenceForm() {
                     className={
                       selected
                         ? "rounded-xl border border-[#1a1714] bg-[#1a1714] px-3 py-2 text-sm font-semibold text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                        : "rounded-xl border border-black/[0.1] bg-white/55 px-3 py-2 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]"
+                        : "rounded-xl border border-black/[0.1] bg-white/55 px-3 py-2 text-sm font-medium ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]"
                     }
                   >
                     {opt.label}
@@ -202,10 +202,10 @@ export default function PreferenceForm() {
       {/* §10.1 关注公司：保存后立即出现状态，不等待抓取 */}
       <div className="rounded-2xl border border-black/[0.07] bg-white/45 p-4 dark:border-white/[0.1] dark:bg-white/[0.04]">
         <div className="flex items-center gap-2">
-          <Buildings size={18} weight="fill" className="text-[#5f594e] dark:text-[#b6ad9d]" aria-hidden="true" />
+          <Buildings size={18} weight="fill" className="ink-2" aria-hidden="true" />
           <h3 className="text-sm font-semibold">关注公司</h3>
         </div>
-        <p className="mt-1 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
+        <p className="mt-1 text-xs leading-5 ink-3">
           加入你想持续盯的公司，保存后系统会替你监控它们的官方招聘页。未覆盖的会先记录、再接入。
         </p>
         <div className="mt-3">
@@ -228,11 +228,11 @@ export default function PreferenceForm() {
               return (
                 <li key={c.company} className="text-sm">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate font-medium text-[#3f3a33] dark:text-[#d9d0c2]">{c.company}</span>
+                    <span className="min-w-0 truncate font-medium ink-2">{c.company}</span>
                     <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${meta.tone}`}>{meta.label}</span>
                   </div>
                   {c.resolution_note && (
-                    <p className="mt-1 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">{c.resolution_note}</p>
+                    <p className="mt-1 text-xs leading-5 ink-3">{c.resolution_note}</p>
                   )}
                 </li>
               );
@@ -245,14 +245,14 @@ export default function PreferenceForm() {
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
           <span>
             <span className="block text-sm font-semibold">进阶设置（可选）</span>
-            <span className="mt-0.5 block text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
+            <span className="mt-0.5 block text-xs leading-5 ink-3">
               关键词、排除项、行业和推荐频率
             </span>
           </span>
           <CaretDown
             size={16}
             weight="bold"
-            className="shrink-0 text-[#8a8275] transition-transform group-open:rotate-180 dark:text-[#9a9184]"
+            className="shrink-0 ink-3 transition-transform group-open:rotate-180"
             aria-hidden="true"
           />
         </summary>
@@ -297,18 +297,18 @@ export default function PreferenceForm() {
                     className={
                       selected
                         ? "flex-1 rounded-xl border border-[#1a1714] bg-[#1a1714] px-3 py-2 text-left text-sm font-semibold text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                        : "flex-1 rounded-xl border border-black/[0.1] bg-white/55 px-3 py-2 text-left text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]"
+                        : "flex-1 rounded-xl border border-black/[0.1] bg-white/55 px-3 py-2 text-left text-sm font-medium ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]"
                     }
                   >
                     {opt.label}
-                    <span className={`mt-0.5 block text-[11px] font-normal ${selected ? "opacity-80" : "text-[#8a8275] dark:text-[#9a9184]"}`}>
+                    <span className={`mt-0.5 block text-[11px] font-normal ${selected ? "opacity-80" : "ink-3"}`}>
                       {opt.hint}
                     </span>
                   </button>
                 );
               })}
             </div>
-            <p className="mt-1.5 text-[11px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
+            <p className="mt-1.5 text-[11px] leading-5 ink-3">
               强度只调日常推荐的多少与频率；关键提醒（收藏岗截止/关闭）始终会提醒你。系统也会按你的活跃度自动校准。
             </p>
           </Field>
@@ -349,7 +349,7 @@ export default function PreferenceForm() {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">{label}</label>
+      <label className="text-sm font-medium ink-2">{label}</label>
       {children}
     </div>
   );

@@ -50,12 +50,12 @@ export default function BrandMark({
       {wordmark && (
         <span className="inline-flex items-baseline gap-1.5 leading-none">
           <span
-            className="display-tight font-semibold text-[#1a1714] dark:text-[#f3ecdf]"
+            className="display-tight font-semibold ink-1 "
             style={{ fontSize: wordSize }}
           >
             职达
           </span>
-          <span className="text-[10px] font-bold tracking-[0.2em] text-[#9a9184] dark:text-[#837c70]">
+          <span className="text-[10px] font-bold tracking-[0.2em] ink-3 ">
             JOBRADAR
           </span>
         </span>

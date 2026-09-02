@@ -234,4 +234,12 @@ function collectActiveChips(filters: Filters, overseas: boolean): ActiveChip[] {
 }
 function countPanelFilters(filters: Filters, overseas: boolean): number { return [filters.education, filters.experience, filters.postedWithin, filters.capitalOrigin, overseas ? filters.region : "", filters.showNewOnly, filters.salaryOnly, overseas && filters.sponsorshipOnly, filters.showIgnored, filters.showApplied, filters.sortBy !== "match"].filter(Boolean).length; }
 function compactMultiValue(value: string): string { const items = splitMultiValue(value); return items.length > 1 ? `${items[0]} +${items.length - 1}` : items[0] || ""; }
-function labelFor(options: Array<{ value: string; label: string }>, value: string): string { return options.find((option) => option.value === value)?.label || ""; }
+// ⚠️ 空值必须返回空串，不能返回「不限」那一项的 label。
+// 每个单选组的第一项都是 { value: "", label: "不限" / "全部海外" }，若照常查表，
+// 「没选」会被翻译成「不限」这个**看起来像已选**的字符串 → ① 已选 chip 行凭空多出
+// 「✕不限」（线上实测一次冒出两个：经验 + 发布时间）② 触发按钮显示成已选态。
+// 「不限」是给弹层里的选项用的，不是给「已选摘要」用的。
+function labelFor(options: Array<{ value: string; label: string }>, value: string): string {
+  if (!value) return "";
+  return options.find((option) => option.value === value)?.label || "";
+}

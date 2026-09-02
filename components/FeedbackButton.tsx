@@ -36,7 +36,7 @@ export default function FeedbackButton() {
         type="button"
         onClick={() => setOpen(true)}
         aria-label="用户反馈"
-        className="group relative grid size-9 place-items-center rounded-full text-[#5f594e] outline-none transition duration-200 hover:bg-black/[0.05] hover:text-[#1a1714] active:scale-[0.95] focus-visible:ring-2 focus-visible:ring-[#1a1714]/25 dark:text-[#b6ad9d] dark:hover:bg-white/[0.06] dark:hover:text-[#f3ecdf] dark:focus-visible:ring-[#f3ecdf]/30"
+        className="group relative grid size-11 place-items-center rounded-full ink-2 outline-none transition duration-200 hover:bg-black/[0.05] active:scale-[0.95] focus-visible:ring-2 focus-visible:ring-[#1a1714]/25 lg:size-9 dark:hover:bg-white/[0.06] dark:focus-visible:ring-[#f3ecdf]/30"
       >
         <ChatCircleDots size={19} aria-hidden="true" />
         {/* 气泡标签：与一级导航同款，纯视觉，无障碍名走 aria-label */}
@@ -70,24 +70,24 @@ export default function FeedbackButton() {
                 type="button"
                 onClick={() => setOpen(false)}
                 aria-label="关闭"
-                className="absolute right-4 top-4 grid size-8 place-items-center rounded-full text-[#8a8275] transition hover:bg-black/[0.05] hover:text-[#1a1714] dark:text-[#9a9184] dark:hover:bg-white/[0.06] dark:hover:text-[#f3ecdf]"
+                className="absolute right-4 top-4 grid size-8 place-items-center rounded-full ink-3 transition hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
               >
                 <X size={16} weight="bold" aria-hidden="true" />
               </button>
 
               <h2
                 id="feedback-dialog-title"
-                className="text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]"
+                className="text-lg font-semibold ink-1"
               >
                 加入用户反馈群
               </h2>
-              <p className="mx-auto mt-1.5 max-w-[16rem] text-sm leading-relaxed text-[#5f594e] dark:text-[#b6ad9d]">
+              <p className="mx-auto mt-1.5 max-w-[16rem] text-sm leading-relaxed ink-2">
                 用得不顺手、岗位不准、想要什么功能，微信扫码进群直接说，我们看得到。
               </p>
 
               <div className="mt-5 flex justify-center">
                 {qrFailed ? (
-                  <p className="rounded-2xl border border-dashed border-black/[0.12] px-6 py-10 text-sm text-[#8a8275] dark:border-white/[0.16] dark:text-[#9a9184]">
+                  <p className="rounded-2xl border border-dashed border-black/[0.12] px-6 py-10 text-sm ink-3 dark:border-white/[0.16]">
                     二维码暂时加载不出来，稍后再试
                   </p>
                 ) : (
@@ -104,7 +104,7 @@ export default function FeedbackButton() {
               </div>
 
               {/* 有效期提示已印在群码图里，这里不重复 */}
-              <p className="mt-4 text-xs text-[#9a9184] dark:text-[#837c70]">
+              <p className="mt-4 text-xs ink-3">
                 打开微信「扫一扫」即可进群
               </p>
             </div>

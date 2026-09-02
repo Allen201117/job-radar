@@ -45,7 +45,7 @@ export default function BackToTop() {
       aria-hidden={!visible}
       tabIndex={visible ? 0 : -1}
       className={cn(
-        "fixed bottom-[max(1.5rem,env(safe-area-inset-bottom))] right-[max(1.5rem,env(safe-area-inset-right))] z-40 grid size-11 place-items-center rounded-full border border-black/[0.08] bg-white/70 text-[#3f3a33] shadow-lg shadow-black/[0.06] transition duration-200 ease-out hover:-translate-y-0.5 hover:bg-white active:scale-[0.96] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:shadow-black/20 dark:hover:bg-[#1e1a15]",
+        "above-mobile-nav fixed right-[max(1.5rem,env(safe-area-inset-right))] z-40 grid size-11 place-items-center rounded-full border border-black/[0.08] bg-white/70 ink-2 shadow-lg shadow-black/[0.06] transition duration-200 ease-out hover:-translate-y-0.5 hover:bg-white active:scale-[0.96] dark:border-white/[0.1] dark:bg-white/[0.05] dark:shadow-black/20 dark:hover:bg-[#1e1a15]",
         visible ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-2 opacity-0",
       )}
     >

@@ -42,14 +42,14 @@ const MATCH_REASON_LABELS = {
 const CHIP_TONE: Record<InsightChipTone, string> = {
   positive: "border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]",
   warning: "border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]",
-  neutral: "border-black/[0.08] bg-[#f4efe6] text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#9a9184]",
+  neutral: "border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08] ",
 };
 
 const LABEL_CELL =
-  "sticky left-0 z-10 w-28 min-w-28 border-b border-r border-black/[0.06] bg-[#f4efe6] px-3 py-4 align-top text-xs font-semibold text-[#6b655a] dark:border-white/[0.1] dark:bg-[#16130f] dark:text-[#b6ad9d]";
+  "sticky left-0 z-10 w-28 min-w-28 border-b border-r border-black/[0.06] bg-[#f4efe6] px-3 py-4 align-top text-xs font-semibold ink-2 dark:border-white/[0.1] dark:bg-[#16130f] ";
 const DATA_CELL =
-  "min-w-[220px] border-b border-r border-black/[0.06] bg-white/45 px-4 py-4 align-top text-sm text-[#1a1714] dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-[#f3ecdf]";
-const MUTED = "text-[#9a9184] dark:text-[#837c70]";
+  "min-w-[220px] border-b border-r border-black/[0.06] bg-white/45 px-4 py-4 align-top text-sm ink-1 dark:border-white/[0.1] dark:bg-white/[0.04] ";
+const MUTED = "ink-3 ";
 
 function companyKey(company: string): string {
   return company.trim().toLowerCase();
@@ -217,7 +217,7 @@ export default function SavedCompare({
           </span>
         )}
         {reasons.length > 0 && (
-          <ul className="space-y-1 text-xs leading-5 text-[#6b655a] dark:text-[#b6ad9d]">
+          <ul className="space-y-1 text-xs leading-5 ink-2 ">
             {reasons.map((reason, idx) => (
               <li key={`${reason.type}-${reason.value}-${idx}`}>{matchReasonText(reason)}</li>
             ))}
@@ -231,7 +231,7 @@ export default function SavedCompare({
     const state = insights[companyKey(job.company)];
     if (!state || state.loading) {
       return (
-        <span className="inline-flex items-center gap-2 text-xs text-[#8a8275] dark:text-[#9a9184]">
+        <span className="inline-flex items-center gap-2 text-xs ink-3 ">
           <CircleNotch size={14} weight="bold" className="animate-spin" aria-hidden="true" />
           正在加载洞察
         </span>
@@ -247,7 +247,7 @@ export default function SavedCompare({
             {chip.text}
           </span>
         )}
-        {comp && <p className="text-xs leading-5 text-[#6b655a] dark:text-[#b6ad9d]">{comp}</p>}
+        {comp && <p className="text-xs leading-5 ink-2 ">{comp}</p>}
       </div>
     );
   }
@@ -264,22 +264,22 @@ export default function SavedCompare({
         role="dialog"
         aria-modal="true"
         aria-label="岗位对比决策桌"
-        className="relative flex h-full w-full flex-col bg-[#f4efe6] text-[#1a1714] shadow-2xl dark:bg-[#16130f] dark:text-[#f3ecdf]"
+        className="relative flex h-full w-full flex-col bg-[#f4efe6] ink-1 shadow-2xl dark:bg-[#16130f] "
       >
         <header className="border-b border-black/[0.06] bg-gradient-to-b from-white/70 to-transparent px-4 pb-4 pt-5 sm:px-6 dark:border-white/[0.1] dark:from-white/[0.05]">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-sm text-[#8a8275] dark:text-[#9a9184]">
+              <div className="flex items-center gap-2 text-sm ink-3 ">
                 <Scales size={17} weight="bold" aria-hidden="true" />
                 对比决策桌
               </div>
               <h2 className="mt-1 text-2xl font-semibold leading-tight">并排看关键决策信息</h2>
-              <p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">已选 {jobs.length}/4，关闭后选择状态会保留。</p>
+              <p className="mt-1 text-xs ink-3 ">已选 {jobs.length}/4，关闭后选择状态会保留。</p>
             </div>
             <button
               type="button"
               onClick={onClose}
-              className="shrink-0 rounded-full bg-black/[0.05] p-2 text-[#5f594e] transition hover:bg-black/[0.08] hover:text-[#1a1714] dark:bg-white/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.08] dark:hover:text-[#f3ecdf]"
+              className="shrink-0 rounded-full bg-black/[0.05] p-2 ink-2 transition hover:bg-black/[0.08] hover:opacity-80 dark:bg-white/[0.05] dark:hover:bg-white/[0.08] "
               aria-label="关闭对比层"
             >
               <X size={18} weight="bold" aria-hidden="true" />
@@ -289,7 +289,7 @@ export default function SavedCompare({
 
         <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
           {jobs.length === 0 ? (
-            <div className="rounded-[1.25rem] border border-dashed border-black/[0.12] bg-white/45 px-6 py-12 text-center text-sm text-[#6b655a] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
+            <div className="rounded-[1.25rem] border border-dashed border-black/[0.12] bg-white/45 px-6 py-12 text-center text-sm ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
               还没有选择岗位。
             </div>
           ) : (
@@ -301,7 +301,7 @@ export default function SavedCompare({
                       <p className="text-[15px] font-semibold leading-5">{job.title}</p>
                       <div className="flex items-center gap-1.5">
                         <CompanyLogo company={job.company} size={18} />
-                        <p className="truncate text-xs text-[#8a8275] dark:text-[#9a9184]">{job.company}</p>
+                        <p className="truncate text-xs ink-3 ">{job.company}</p>
                       </div>
                     </div>
                   ))}
@@ -347,7 +347,7 @@ export default function SavedCompare({
                       <button
                         type="button"
                         onClick={() => onRemove(job.id)}
-                        className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3 py-2 text-sm font-semibold text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
+                        className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3 py-2 text-sm font-semibold ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
                       >
                         <XCircle size={14} weight="bold" aria-hidden="true" />
                         移出对比

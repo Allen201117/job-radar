@@ -18,7 +18,7 @@ const STATUS_LABEL: Record<string, { label: string; tone: string }> = {
   queued: { label: "待接入", tone: "bg-[#dbe9fa] text-[#2f6299] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]" },
   researching: { label: "确认入口中", tone: "bg-[#fbe6d1] text-[#9a6326] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]" },
   covered: { label: "已覆盖", tone: "bg-[#e6f2d3] text-[#5a7a2f] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]" },
-  unsupported: { label: "暂不支持", tone: "bg-[#ece7dd] text-[#6b655a] dark:bg-white/[0.08] dark:text-[#b6ad9d]" },
+  unsupported: { label: "暂不支持", tone: "bg-[#ece7dd] ink-2 dark:bg-white/[0.08] " },
 };
 
 function fmtDate(s: string): string {
@@ -78,12 +78,12 @@ export default function CompanyWatchQueue() {
   }
 
   return (
-    <div className="surface p-5 text-[#1a1714] dark:text-[#f3ecdf]">
+    <div className="surface p-5 ink-1 ">
       <div className="flex items-center gap-2">
-        <Buildings size={18} weight="fill" className="text-[#5f594e] dark:text-[#b6ad9d]" aria-hidden="true" />
+        <Buildings size={18} weight="fill" className="ink-2 " aria-hidden="true" />
         <h2 className="text-base font-semibold">用户希望监控的公司</h2>
       </div>
-      <p className="mt-1 text-sm text-[#8a8275] dark:text-[#9a9184]">
+      <p className="mt-1 text-sm ink-3 ">
         用户在「关注与偏好」里加的公司。已覆盖的会自动标记；其余按请求人数排队，确认官方入口后用上方「添加源」接入，再标「已覆盖」。
       </p>
 
@@ -94,12 +94,12 @@ export default function CompanyWatchQueue() {
       )}
 
       {loading ? (
-        <div className="mt-4 flex items-center gap-2 text-sm text-[#8a8275] dark:text-[#9a9184]">
+        <div className="mt-4 flex items-center gap-2 text-sm ink-3 ">
           <CircleNotch size={16} weight="bold" className="animate-spin" aria-hidden="true" />
           加载中…
         </div>
       ) : items.length === 0 ? (
-        <p className="mt-4 text-sm text-[#8a8275] dark:text-[#9a9184]">暂无用户关注请求。</p>
+        <p className="mt-4 text-sm ink-3 ">暂无用户关注请求。</p>
       ) : (
         <ul className="mt-4 space-y-2.5">
           {items.map((item) => {
@@ -116,13 +116,13 @@ export default function CompanyWatchQueue() {
                     {item.company}
                   </span>
                   <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${meta.tone}`}>{meta.label}</span>
-                  <span className="text-xs text-[#8a8275] dark:text-[#9a9184]">{item.request_count} 人关注</span>
-                  <span className="ml-auto text-xs text-[#9a9184] dark:text-[#837c70]">
+                  <span className="text-xs ink-3 ">{item.request_count} 人关注</span>
+                  <span className="ml-auto text-xs ink-3 ">
                     首次 {fmtDate(item.first_requested)} · 最近 {fmtDate(item.last_requested)}
                   </span>
                 </div>
                 {item.resolution_note && (
-                  <p className="mt-1.5 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">说明：{item.resolution_note}</p>
+                  <p className="mt-1.5 text-xs leading-5 ink-3 ">说明：{item.resolution_note}</p>
                 )}
                 <div className="mt-2.5 flex flex-wrap gap-1.5">
                   <QueueBtn disabled={isBusy} onClick={() => setStatus(item, "researching")}>标记确认入口中</QueueBtn>
@@ -144,7 +144,7 @@ function QueueBtn({ children, onClick, disabled }: { children: React.ReactNode; 
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="rounded-full border border-black/[0.08] bg-white/70 px-3 py-1.5 text-xs font-medium text-[#3f3a33] transition hover:bg-white active:scale-[0.98] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
+      className="rounded-full border border-black/[0.08] bg-white/70 px-3 py-1.5 text-xs font-medium ink-2 transition hover:bg-white active:scale-[0.98] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
     >
       {children}
     </button>
