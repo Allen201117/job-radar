@@ -68,7 +68,11 @@ export interface UserPreferences {
   user_id: string;
   target_locations: string[];
   target_roles: string[];
+  // 用户在偏好页手填的补充搜索词。**简历解析不写这里**（技能进下面的 skills）——
+  // 语义分工见 supabase/migrations/202_user_preferences_skills.sql。
   target_keywords: string[];
+  // 技能（会什么）：只参与打分加分，永不判方向。历史行可能缺，读取处一律 `|| []` 兜底。
+  skills?: string[];
   exclude_keywords: string[];
   target_companies: string[];
   job_scope?: "domestic" | "overseas" | "all" | string | null;

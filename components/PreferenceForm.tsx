@@ -257,12 +257,15 @@ export default function PreferenceForm() {
           />
         </summary>
         <div className="mt-4 space-y-4 border-t border-black/[0.06] pt-4 dark:border-white/[0.08]">
-          <Field label="命中关键词">
+          {/* 占位文案原本举的是「Python、机器学习、LLM」——那是**技能**，等于在教用户把「会什么」
+              填进「要搜什么」，正是 2026-09-02 那次「/jobs 恒 0 结果」的同一个认知错误。
+              技能由简历解析写进 skills 列（迁移 202），只参与打分加分；这个框是补充搜索词。 */}
+          <Field label="补充搜索词">
             <TagInput
               values={prefs.target_keywords || []}
               onChange={(v) => setArray("target_keywords", v)}
-              ariaLabel="命中关键词标签输入"
-              placeholder="Python、机器学习、LLM…"
+              ariaLabel="补充搜索词标签输入"
+              placeholder="填岗位方向，如 增长产品、策略产品…"
             />
           </Field>
           <Field label="排除关键词">

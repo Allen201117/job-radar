@@ -27,7 +27,7 @@ const { buildPreferencesFromResumeProfile } = require(path.join(ROOT, "lib/resum
     console.log("=== " + r.file + " ===");
     console.log("headline      :", r.profile.headline);
     console.log("target_roles  :", JSON.stringify(r.prefs.target_roles));
-    console.log("target_keywords:", JSON.stringify(r.prefs.target_keywords));
+    console.log("skills        :", JSON.stringify(r.prefs.skills));
     console.log("industries    :", JSON.stringify(r.prefs.industries));
     console.log("locations     :", JSON.stringify(r.prefs.target_locations));
     console.log("stage         :", r.profile.experience_stage);
