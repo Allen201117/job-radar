@@ -24,7 +24,14 @@ function buildInitialFilters(prefs: any, cp: any): { city: string; jobType: stri
   return {
     city: first(cp?.target_locations, prefs?.target_locations),
     jobType: STAGES.includes(stage) ? stage : "",
-    keyword: first(prefs?.target_keywords, cp?.target_roles, prefs?.target_roles),
+    // 关键词框是**硬 AND 筛选条件**，只能放「想做什么」（方向），不能放「会什么」（技能）。
+    // 原实现优先取 target_keywords —— 但简历解析是把技能/概念原样灌进那个字段的
+    // （lib/scoring.ts:137 已就此定过调：技能判不了方向，用户没填目标岗位时才回退）。
+    // 于是线上出现：某画像 target_keywords[0] = 「用户旅程」，被当成默认筛选词 →
+    // FTS 的 search_doc 不含 JD 正文、全库 39 万在招岗没有一个标题带这四个字 →
+    // 打开 /jobs 恒定「0 个匹配岗位」（2026-09-02 香港库直查坐实：命中 0 行）。
+    // 改成方向优先后同一画像同一组筛选条件召回 943 个岗（live 实测）；技能只留作最后兜底。
+    keyword: first(cp?.target_roles, prefs?.target_roles, prefs?.target_keywords),
   };
 }
 
