@@ -81,6 +81,8 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
     hasMore,
     loadMore,
     refresh,
+    clearAll,
+    clearOne,
     newMatching,
   } = useJobFilters({ officialJobs, onlyNew, initialFilters, initialJobs, initialTotal });
 
@@ -206,7 +208,15 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
   return (
     <div className="space-y-5">
       <BackToTop />
-      <JobFilters filters={filters} onChange={setFilters} companies={companies} jobScope={jobScope} />
+      <JobFilters
+        filters={filters}
+        onChange={setFilters}
+        onClearAll={clearAll}
+        onClearOne={clearOne}
+        companies={companies}
+        resultTotal={total}
+        jobScope={jobScope}
+      />
 
       {/* 搜索说明 + 手动搜索按钮（取代旧三磁贴；筛选变化已自动搜，这里手动重试）。 */}
       <div className="flex flex-col gap-3 surface p-4 text-[#1a1714] dark:text-[#f3ecdf] sm:flex-row sm:items-center sm:justify-between sm:p-5">

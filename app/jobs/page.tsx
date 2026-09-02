@@ -103,14 +103,12 @@ export default async function JobsPage() {
           description="按公司、城市、岗位方向和条件主动搜索。每日推荐请回到「今日机会」。"
           icon={Database}
           align="start"
-          action={
-            <div className="w-full sm:w-[260px] lg:w-[280px]">
-              {/* 实时翻动的岗位库总数（连后端真实数据，走 /api/jobs/stats 读香港库） */}
-              <JobLibraryStat initialTotal={libraryTotal} />
-            </div>
-          }
-        />
-        <div className="mt-8">
+        >
+          {/* 岗位库数据条：从「报头右侧的竖卡」改到「标题下的横条」。旧形态把筛选器压到 y≈550，
+              1440×900 首屏一条岗位都看不到；横条省下 ~150px，让筛选器和首批结果进首屏。 */}
+          <JobLibraryStat initialTotal={libraryTotal} />
+        </ProductHero>
+        <div className="mt-6">
           <JobsClient
             initialJobs={scored as ScoredJob[]}
             initialTotal={total}

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   filterAndRankJobs,
   DEFAULT_FILTERS,
+  splitMultiValue,
   type Filters,
 } from "@/lib/job-filter";
 import type { ScoredJob } from "@/lib/types";
@@ -24,6 +25,9 @@ function filtersToParams(f: Filters, offset: number, limit: number): string {
   if (f.capitalOrigin) p.set("capitalOrigin", f.capitalOrigin);
   if (f.region) p.set("region", f.region);
   if (f.education) p.set("education", f.education);
+  if (f.jobFunction) p.set("jobFunction", f.jobFunction);
+  if (f.experience) p.set("experience", f.experience);
+  if (f.postedWithin) p.set("postedWithin", f.postedWithin);
   if (f.salaryOnly) p.set("salaryOnly", "1");
   if (f.sponsorshipOnly) p.set("sponsorshipOnly", "1");
   if (f.showIgnored) p.set("showIgnored", "1");
@@ -169,6 +173,21 @@ export function useJobFilters({
     runSearch(filters, 0);
   }, [filters, runSearch]);
 
+  const clearAll = useCallback(() => {
+    // 排序是展示偏好而非筛选条件；清空条件时保留它，避免用户刚切「按发布时间」又被静默改回去。
+    setFilters((current) => ({ ...DEFAULT_FILTERS, sortBy: current.sortBy }));
+  }, []);
+
+  const clearOne = useCallback((key: keyof Filters, value?: string) => {
+    setFilters((current) => {
+      if (value && ["city", "keyword", "jobFunction"].includes(key)) {
+        const next = splitMultiValue(String(current[key])).filter((item) => item !== value).join(",");
+        return { ...current, [key]: next };
+      }
+      return { ...current, [key]: DEFAULT_FILTERS[key] };
+    });
+  }, []);
+
   // 会话新发现（刷新/发现）：客户端用同一份 jobFilterTier 精筛 + 排序，置顶展示。
   const sessionNewKeys = useMemo(
     () => new Set(officialJobs.map((j) => j.jd_url || j.id)),
@@ -210,6 +229,8 @@ export function useJobFilters({
     hasMore,
     loadMore,
     refresh,
+    clearAll,
+    clearOne,
     newMatching,
   };
 }

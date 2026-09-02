@@ -333,6 +333,29 @@
   }
 }
 
+/* 筛选面板只用位移与透明度进场：抽屉/Sheet 是当前筛选上下文，不该用布局动画挤动背后的岗位列表。 */
+@keyframes job-filter-sheet-in {
+  from { opacity: 0; transform: translateY(1rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.job-filter-panel {
+  animation: job-filter-sheet-in 200ms ease-out both;
+}
+@media (min-width: 1024px) {
+  @keyframes job-filter-drawer-in {
+    from { opacity: 0; transform: translateX(1rem); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  .job-filter-panel {
+    animation-name: job-filter-drawer-in;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .job-filter-panel {
+    animation: none;
+  }
+}
+
 /* ───────────────────────────────────────────────────────────────
    暖光产品页通用面 — 登录后整个产品共用（看板 / 岗位 / 路径 / 偏好…）
    ─────────────────────────────────────────────────────────────── */
