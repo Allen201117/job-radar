@@ -3,8 +3,10 @@
 // 复用同一份匹配逻辑 → 服务端筛选结果与原前端筛选「逐字段一致」，全部既有测试照常通过。
 import {
   cityMatchTokens,
+  classifyJobFunction,
   hasExplicitRecruitmentType,
   keywordMatchTier,
+  _minRequiredExperienceYears,
   recruitmentCategory,
 } from "@/lib/china-keyword-expansion";
 import { classifyCompanyOriginWithSource } from "@/lib/company-origin";
@@ -26,6 +28,9 @@ export type Filters = {
   salaryOnly: boolean;
   sponsorshipOnly: boolean;
   education: string; // 用户所选学历（博士/硕士/本科/大专）；""=学历不限（不筛）
+  jobFunction: string; // 职能多选，逗号分隔；""=不限
+  experience: string; // fresh / 0-3 / 3-5 / 5-10 / 10+；""=不限
+  postedWithin: string; // 1 / 3 / 7 / 30（天）；""=不限
 };
 
 // 多选字段（城市 / 关键词）拆成去空去重的值数组。分隔符 = 逗号（中英文）或空白：
@@ -59,13 +64,54 @@ export const DEFAULT_FILTERS: Filters = {
   salaryOnly: false,
   sponsorshipOnly: false,
   education: "",
+  jobFunction: "",
+  experience: "",
+  postedWithin: "",
 };
+
+// 新增三类硬筛不把「信息缺失」降级放行：这些都是用户主动收窄结果的条件，模糊命中会反过来破坏筛选可信度。
+export const FILTER_REJECT_REASONS = {
+  jobFunction: "job_function",
+  experience: "experience",
+  postedWithin: "posted_within",
+} as const;
 
 export type MatchReason = {
   tier: "exact" | "related";
   keywordTier: "exact" | "related" | "none";
   degradedFields: Array<"city" | "education" | "type">;
 };
+
+export function matchesJobFunction(job: Pick<ScoredJob, "title" | "summary">, value: string): boolean {
+  const selected = splitMultiValue(value);
+  return selected.length === 0 || selected.includes(classifyJobFunction(job));
+}
+
+export function matchesExperienceBand(
+  job: Pick<ScoredJob, "experience" | "summary" | "title">,
+  band: string,
+): boolean {
+  if (!band) return true;
+  const years = _minRequiredExperienceYears(
+    [job.experience, job.summary, job.title].filter(Boolean).join(" "),
+  );
+  if (band === "fresh") return years === null || years === 0;
+  // 除「应届无经验」外，解析不出年限不能冒充命中：用户主动收窄时，宁可不展示证据不足的岗位。
+  if (years === null) return false;
+  if (band === "0-3") return years < 3;
+  if (band === "3-5") return years >= 3 && years < 5;
+  if (band === "5-10") return years >= 5 && years < 10;
+  if (band === "10+") return years >= 10;
+  return true;
+}
+
+export function matchesPostedWithin(job: Pick<ScoredJob, "posted_at">, days: string): boolean {
+  if (!days) return true;
+  const value = Number(days);
+  const postedAt = new Date(job.posted_at || "").getTime();
+  if (!Number.isFinite(value) || value <= 0 || Number.isNaN(postedAt)) return false;
+  return postedAt >= Date.now() - value * 86_400_000;
+}
 
 // 返回岗位通过当前筛选的匹配档："exact"（精确）/ "related"（同职能相关）/ null（不匹配）。
 // 城市/类型按「信息缺失不淘汰」处理：字段为空(信息未知)→ 放行但降级为 related（排序沉到精确匹配之后），
@@ -114,6 +160,9 @@ export function jobFilterMatch(
       return null; // 选实习/校招 + 岗位无显式信号 = 没自报家门 → 淘汰，不放行冒充。
     }
   }
+  if (!matchesJobFunction(job, filters.jobFunction)) return null;
+  if (!matchesExperienceBand(job, filters.experience)) return null;
+  if (!matchesPostedWithin(job, filters.postedWithin)) return null;
   if (filters.education) {
     // 学历门槛/资格语义（用户拍板）+「信息缺失不淘汰」，全部封装在 educationMatch（纯函数·有单测）：
     // reject=要求高于用户学历，够不着 → 淘汰；degrade=要求缺失/解析不出 → 不一刀切，降级排后。

@@ -81,11 +81,11 @@ export function ProductHero({
         </div>
         {action && <div className="shrink-0">{action}</div>}
       </div>
-      {children && <div className="mt-6 sm:mt-7">{children}</div>}
+      {children && <div className="mt-5">{children}</div>}
       {/* 报头分隔线：细发丝线向右淡出，替代原大卡片的边界，给页头收个干净的底 */}
       <div
         aria-hidden="true"
-        className="mt-6 h-px w-full bg-gradient-to-r from-black/[0.11] via-black/[0.05] to-transparent dark:from-white/[0.14] dark:via-white/[0.06] dark:to-transparent"
+        className="mt-5 h-px w-full bg-gradient-to-r from-black/[0.11] via-black/[0.05] to-transparent dark:from-white/[0.14] dark:via-white/[0.06] dark:to-transparent"
       />
     </section>
   );

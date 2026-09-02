@@ -116,6 +116,15 @@ function appendSoftCityWhere(conds: string[], params: unknown[], cities: string[
   conds.push(`(${parts.join(" or ")})`);
 }
 
+function appendPostedWithinWhere(conds: string[], params: unknown[], postedWithin: string) {
+  if (!postedWithin) return;
+  const days = Number(postedWithin);
+  if (!Number.isInteger(days) || ![1, 3, 7, 30].includes(days)) return;
+  params.push(days);
+  // 发布时间是唯一能安全缩小候选窗口的新条件；NULL 没有可核验的发布时间，不能混进「最近发布」。
+  conds.push(`posted_at >= now() - ($${params.length}::int * interval '1 day')`);
+}
+
 // 校招/实习「预筛超集」下推 SQL：这两类是「会自报家门的少数派」（校招/实习各占极小比例），JS 把无信号岗
 // 兜底成社招后再一刀切，导致 8000 候选里绝大多数被传过来又被丢。这里在 SQL 侧先只保留「可能是校招/实习」
 // 的行——严格是 recruitmentCategory 判定的**超集**（只加正向信号、不做任何排除），最终判定仍由 JS 权威执行，
@@ -173,6 +182,7 @@ async function searchViaFTS(
   const conds = ["status = 'active'", "search_doc @@ to_tsquery('simple', $1)"];
   const params: unknown[] = [tsquery];
   appendJobScopeWhere(conds, params, prefs, filters);
+  appendPostedWithinWhere(conds, params, filters.postedWithin);
   const cities = splitMultiValue(filters.city);
   if (cities.length) {
     appendSoftCityWhere(conds, params, cities);
@@ -223,6 +233,7 @@ async function searchViaScan(
   const conds = ["status = 'active'"];
   const params: unknown[] = [];
   appendJobScopeWhere(conds, params, prefs, filters);
+  appendPostedWithinWhere(conds, params, filters.postedWithin);
   appendRecruitmentPrefilter(conds, filters.jobType); // 校招/实习超集下推，扫描也少翻无关行
   // 候选只取 CANDIDATE_COLUMNS（与 FTS 路径同一套）：JS 打分/精筛只读这些列，纯展示列留到
   // 命中页再回补。此前这里拉的是全量 JOB_COLUMNS —— sortBy=match 默认要看满 SCAN_BUDGET=28000 行，

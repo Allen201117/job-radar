@@ -6,8 +6,9 @@ import { JOB_COLUMNS } from "./types";
 import { appendJobScopeWhere } from "@/lib/job-scope";
 import type { UserPreferences } from "@/lib/types";
 import { ilikeMatcher } from "@/lib/ilike-matcher";
-import { campusAdmission } from "@/lib/campus-zone";
+import { campusAdmission, compareCampusJobs } from "@/lib/campus-zone";
 import { isCurrentSeasonGradClass } from "@/lib/grad-class";
+import { classifyJobFunction } from "@/lib/china-keyword-expansion";
 import { mustApplyUnion, type MustApplyCompany } from "@/lib/must-apply-list";
 
 export { ilikeMatcher } from "@/lib/ilike-matcher";
@@ -457,13 +458,72 @@ export type CampusCompanyRow = {
   pastClassJobCount: number; // 明确标了往届（如秋招期库里没下架干净的 2026 届）而被移出列表的岗数，供卡面诚实说明
 };
 
+/** 校招专区粗筛条件：job_type / title / jd_url 任一命中校招或实习关键词。
+ *  getCampusZone（全清单聚合）与 getCampusCompanyJobs（展开单家取完整行）共用同一份，
+ *  两边口径必须逐字一致——否则卡面计数与展开区列表会对不上。 */
+const CAMPUS_PREFILTER_SQL = `(
+          coalesce(j.job_type,'') ~* '校|campus|应届|管培|培训生|graduate|new.?grad|实习|intern'
+          or coalesce(j.title,'') ~* '校|应届|届|管培|培训生|graduate|campus|new.?grad|实习|intern'
+          or coalesce(j.jd_url,'') ~* '/(xiaozhao|campus|shixi|intern)(/|\\?|$)'
+        )`;
+
+/**
+ * 把必投清单的 `%关键词%` pattern 解析成库里**确切的** company 取值。
+ *
+ * 为什么多这一跳：`company ilike any($1)` 带前导 % 用不了任何 btree 索引 → 规划器只能对
+ * 39 万 active 行做并行全表扫（live EXPLAIN：Execution 2567ms / 127,726 buffers）。
+ * 先用 `jobs_active_company_idx` 走 Index Only Scan 拿到全部 1467 个 active 公司名（384ms），
+ * 在 JS 里按同样的「不区分大小写子串」语义筛出命中的确切名字，主查询就能改成
+ * `company = any($1::text[])` 走 Bitmap Index Scan（live EXPLAIN：957ms / 46,413 buffers）。
+ * 合计 1.34s vs 2.57s，且**结果集逐行相同**（live 对拍两侧都是 16,494 行）。
+ *
+ * 语义等价性：SQL 的 `ilike '%x%'` = 不区分大小写子串，与这里的 toLowerCase().includes 同义；
+ * 候选集来自 `status='active'`，与主查询的 status 条件一致，所以不会漏。
+ */
+// 全部 active 公司名的短 TTL 缓存：这份清单 live 只有 1467 行、且只在新源入库时才变，
+// 但每次校招看板刷新 / 每次展开一家公司都要用它，不缓存就是每次白付 ~384ms。
+let activeCompanyNamesCache: { expiresAt: number; value: string[] } | null = null;
+let activeCompanyNamesInFlight: Promise<string[]> | null = null;
+
+async function allActiveCompanyNames(): Promise<string[]> {
+  const now = Date.now();
+  if (activeCompanyNamesCache && activeCompanyNamesCache.expiresAt > now) {
+    return activeCompanyNamesCache.value;
+  }
+  if (activeCompanyNamesInFlight) return activeCompanyNamesInFlight;
+  activeCompanyNamesInFlight = (async () => {
+    const rows = await jobsQuery<{ company: string | null }>(
+      "select distinct company from jobs where status = 'active'",
+    );
+    return rows.map((r) => r.company).filter((c): c is string => !!c);
+  })();
+  try {
+    const value = await activeCompanyNamesInFlight;
+    activeCompanyNamesCache = { expiresAt: Date.now() + 5 * 60_000, value };
+    return value;
+  } finally {
+    activeCompanyNamesInFlight = null;
+  }
+}
+
+async function resolveActiveCompanyNames(patterns: string[]): Promise<string[]> {
+  const needles = patterns
+    .map((p) => p.replace(/%/g, "").toLowerCase())
+    .filter(Boolean);
+  if (!needles.length) return [];
+  const all = await allActiveCompanyNames();
+  return all.filter((c) => {
+    const lower = c.toLowerCase();
+    return needles.some((n) => lower.includes(n));
+  });
+}
+
 /**
  * 校招专区：按必投清单公司聚合校招/实习岗。
- * SQL 先按 pattern 粗筛校招相关岗（缩小行数：job_type/title/jd_url 任一命中校招或实习关键词），
+ * SQL 先按公司 + 校招关键词粗筛（见 resolveActiveCompanyNames / CAMPUS_PREFILTER_SQL），
  * JS 用 campusAdmission（复用 recruitmentCategory 全量判定逻辑，含 job.experience 硬经验年限门）精筛入桶。
- * 单次全表扫描 + `company ilike any(pats)`（而非 30×ilike 的 unnest left join——那种嵌套循环
- * live 实测互联网/科技 30 家要 16.8s，逼近 25s statement_timeout）；公司归属改在 JS 端按 pattern
- * 前缀匹配回填（见下方 for 循环），冷 9.5s / 热 1.8s。短 TTL 缓存进一步降热路径重复读取。
+ * 公司归属在 JS 端按 pattern 子串匹配回填（见下方 for 循环）。短 TTL 缓存降同实例重复读取；
+ * 跨请求复用由调用方（app/campus/page.tsx 的 unstable_cache）负责。
  */
 export type CampusZoneCacheEntry = { expiresAt: number; value: CampusCompanyRow[] };
 const campusZoneCache = new Map<string, CampusZoneCacheEntry>();
@@ -483,23 +543,22 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
   if (inFlight) return inFlight;
 
   const promise = (async () => {
-    const rows = await jobsQuery<any>(
-      `
+    const names = await resolveActiveCompanyNames(pats);
+    const rows = names.length
+      ? await jobsQuery<any>(
+          `
       select
         j.id, j.company, j.title, j.job_type, j.jd_url, j.apply_url, j.summary,
         j.experience, j.deadline, j.first_seen_at, j.last_seen_at, j.location as city, j.education, j.status,
         j.grad_class
       from jobs j
       where j.status = 'active'
-        and j.company ilike any($1::text[])
-        and (
-          coalesce(j.job_type,'') ~* '校|campus|应届|管培|培训生|graduate|new.?grad|实习|intern'
-          or coalesce(j.title,'') ~* '校|应届|届|管培|培训生|graduate|campus|new.?grad|实习|intern'
-          or coalesce(j.jd_url,'') ~* '/(xiaozhao|campus|shixi|intern)(/|\\?|$)'
-        )
+        and j.company = any($1::text[])
+        and ${CAMPUS_PREFILTER_SQL}
       `,
-      [pats],
-    );
+          [names],
+        )
+      : [];
     const byName = new Map<string, CampusCompanyRow>();
     for (const c of list) byName.set(c.name, {
       company: c.name, pattern: c.pattern, campusJobs: [], internJobs: [], hasAnyActiveJob: false, lastSeenAtMs: null,
@@ -540,4 +599,57 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
   } finally {
     campusZoneInFlight.delete(cacheKey);
   }
+}
+
+/**
+ * 校招专区「展开某家公司」时按需取该公司当前桶的完整岗位行。
+ *
+ * 页面本身只下发筛选/计数用的**聚合分面**（见 app/campus/page.tsx），一行岗位都不下发，
+ * 所以展开时必须回库取。与 getCampusZone 共用同一套判定，逐条对齐：
+ *   · 同一份粗筛 SQL（CAMPUS_PREFILTER_SQL）
+ *   · 同一条归属规则（list 里第一个 pattern 命中者得，`腾讯音乐 TME` 归 %腾讯音乐% 不归 %腾讯%）
+ *   · 同一道准入门（campusAdmission + isCurrentSeasonGradClass）
+ * 任一处漂移都会让卡面计数与展开列表对不上，改动务必两边同步。
+ *
+ * `fn` 由服务端用**完整 summary** 算好随行返回：客户端拿它做职能筛选，与分面里的职能标签
+ * 同源同值，不必在浏览器里重跑分类器、也不会两处算出不同结果。
+ */
+export type CampusCompanyJobs = { jobs: any[]; total: number };
+
+export async function getCampusCompanyJobs(
+  list: Array<{ name: string; pattern: string }>,
+  pattern: string,
+  bucket: "campus" | "intern",
+  limit: number,
+): Promise<CampusCompanyJobs> {
+  const target = list.find((c) => c.pattern === pattern);
+  if (!target) return { jobs: [], total: 0 };
+  const names = await resolveActiveCompanyNames([pattern]);
+  if (!names.length) return { jobs: [], total: 0 };
+  const rows = await jobsQuery<any>(
+    `
+    select ${JOB_COLUMNS}, j.location as city
+    from jobs j
+    where j.status = 'active'
+      and j.company = any($1::text[])
+      and ${CAMPUS_PREFILTER_SQL}
+    `,
+    [names],
+  );
+  const kept: any[] = [];
+  for (const r of rows) {
+    if (!r.id || !r.company) continue;
+    const companyLower = String(r.company).toLowerCase();
+    const owner = list.find((c) => companyLower.includes(c.pattern.replace(/%/g, "").toLowerCase()));
+    if (!owner || owner.pattern !== target.pattern) continue;
+    if (campusAdmission(r) !== bucket) continue;
+    if (!isCurrentSeasonGradClass(r.grad_class)) continue;
+    kept.push(r);
+  }
+  // 截断前先排序：compareCampusJobs = 临近截止优先、其次新增降序，所以被截掉的一定是最不紧急的那批。
+  kept.sort(compareCampusJobs);
+  return {
+    jobs: kept.slice(0, limit).map((r) => ({ ...r, fn: classifyJobFunction(r) })),
+    total: kept.length,
+  };
 }

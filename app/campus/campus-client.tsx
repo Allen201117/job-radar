@@ -23,27 +23,32 @@ import {
 } from "@/lib/insight-client";
 import { groupCampusJobs } from "@/lib/campus-zone";
 import { formatDateLabel } from "@/lib/relative-time";
+import {
+  campusRowMatches,
+  countMatchingFacets,
+  selectFacetIndexes,
+  type CampusFacet,
+  type CampusFilterOptions,
+} from "@/lib/campus-facets";
 import { cn } from "@/lib/utils";
 import type { WindowState } from "@/lib/campus-zone";
 import type { ScoredJob } from "@/lib/types";
 import type { CampusTimeline } from "@/lib/recruitment-cycle";
 
-/** 下发给客户端的轻量岗位记录（与 app/campus/page.tsx 的 slimJob 同构）：
- *  只有筛选/计数/按需取详情要用的字段，**刻意不含 summary**——完整行经
- *  /api/jobs/by-ids 在展开时按需取回。改这里务必同步改 slimJob。 */
-export type CampusSlimJob = {
-  id: string;
-  city: string | null;
-  education: string | null;
-  fn: string;
-  gc: number | null;
-};
-
-export type CampusCardData = {
+/** 一张公司卡。**不含任何单条岗位记录**——只有聚合分面（见 lib/campus-facets.ts）：
+ *  逐条下发实测单页 2.09 MB / 16,494 条，而客户端拿它们只做两件事（填筛选下拉、算筛选后计数），
+ *  两件事都只依赖分面那四个维度。完整岗位行在用户展开某家公司时经 /api/campus-zone/jobs 按需取回。 */
+export type CampusBoardCard = {
   company: string;
   pattern: string;
-  campusJobs: CampusSlimJob[];
-  internJobs: CampusSlimJob[];
+  campusTotal: number;
+  internTotal: number;
+  campusFacets: CampusFacet[];
+  internFacets: CampusFacet[];
+  // windowStatus 的输入：徽章由页面按「此刻」现算，缓存里不放随时间失效的结论
+  hasCampusSource: boolean;
+  hasAnySource: boolean;
+  lastSeenAtMs: number | null;
   window: WindowState;
   nearestDeadlineMs: number | null;
   timeline: CampusTimeline | null;
@@ -161,20 +166,13 @@ const DISPUTE_REASONS: { reason: DisputeReason; label: string }[] = [
   { reason: "closed", label: "已结束" },
 ];
 
-type CampusFilterOptions = {
-  cityOptions: string[];
-  educationOptions: string[];
-  functionOptions: string[];
-  gradClassOptions: number[];
-};
-
 export default function CampusClient({
   cards,
   industries,
   hasIndustry,
   filterOptions,
 }: {
-  cards: CampusCardData[];
+  cards: CampusBoardCard[];
   industries: string[];
   hasIndustry: boolean;
   filterOptions: { campus: CampusFilterOptions; intern: CampusFilterOptions };
@@ -197,88 +195,84 @@ export default function CampusClient({
     setExpandedPattern((cur) => (cur === pattern ? null : pattern));
   }
 
-  // 当前态（校招/实习）下每家公司的原始岗位列表——先按 mode 取桶，其余步骤共用。
-  const jobsByMode = useMemo(
-    () => cards.map((c) => (mode === "campus" ? c.campusJobs : c.internJobs)),
+  // 当前态（校招/实习）下每家公司的聚合分面——先按 mode 取桶，其余步骤共用。
+  const facetsByMode = useMemo(
+    () => cards.map((c) => (mode === "campus" ? c.campusFacets : c.internFacets)),
     [cards, mode],
   );
 
-  // 筛选下拉候选值改由**服务端**下发（那边用完整 summary 跑同一份 classifyJobFunction，
-  // 值与此前客户端现算的逐字节一致）。客户端因此不再需要 JD 正文——原先为了现算职能，
-  // 页面得把 30 家公司的全部岗位正文都序列化进 props，实测单页 16.3 MB。
-  // 见 app/campus/page.tsx 的 slimJob / collectOptions。
+  // 筛选下拉候选值由**服务端**下发（那边用完整 summary 跑同一份 classifyJobFunction，
+  // 值与此前客户端现算的逐字节一致）。客户端因此不再需要 JD 正文，也不需要逐条岗位记录——
+  // 分面里的下标就指向这几个数组。见 app/campus/page.tsx 的 buildFacets。
   const { cityOptions, educationOptions, functionOptions, gradClassOptions } =
     mode === "campus" ? filterOptions.campus : filterOptions.intern;
 
-  function passesFilters(job: any): boolean {
-    if (filters.city && String(job.city || "").trim() !== filters.city) return false;
-    if (filters.education && String(job.education || "").trim() !== filters.education) return false;
-    // 职能用服务端预先算好的标签（同一份 classifyJobFunction、同一份输入）→ 与现算结果一致。
-    if (filters.jobFunction && job.fn !== filters.jobFunction) return false;
-    if (filters.gradClass !== null && job.gc !== filters.gradClass) return false;
-    return true;
-  }
+  const activeOptions = mode === "campus" ? filterOptions.campus : filterOptions.intern;
+  const selected = useMemo(() => selectFacetIndexes(filters, activeOptions), [filters, activeOptions]);
 
-  // 每家公司在当前态 + 当前筛选下真正会展示的岗位（供卡面计数与展开区共用，口径统一）。
-  const filteredJobsByPattern = useMemo(() => {
-    const map = new Map<string, any[]>();
+  // 每家公司在当前态 + 当前筛选下的岗位数（卡面计数）。分面已按四元组去重，
+  // 累加它们的计数与逐条过滤的结果逐位相同，但只需遍历约两千条而不是一万六。
+  const filteredCountByPattern = useMemo(() => {
+    const map = new Map<string, number>();
     cards.forEach((card, i) => {
-      map.set(card.pattern, jobsByMode[i].filter(passesFilters));
+      map.set(card.pattern, countMatchingFacets(facetsByMode[i], selected));
     });
     return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cards, jobsByMode, filters]);
+  }, [cards, facetsByMode, selected]);
 
   const activeFilterCount = [filters.city, filters.education, filters.jobFunction, filters.gradClass]
     .filter((value) => value !== "" && value !== null).length;
   const hasActiveFilter = activeFilterCount > 0;
 
-  // 展开某家公司时按需取回完整岗位行（页面只下发了轻量记录，见 slimJob）。key = pattern。
+  // 展开某家公司时按需取回该公司当前桶的完整岗位行（页面一条岗位记录都没下发，见 CampusFacet）。
+  // key = `pattern|mode`：校招与实习是两批岗，切模式必须重取（旧实现只按 pattern 存，
+  // 且把两桶 id 拼起来截前 200 → 大厂实习桶会被校招桶挤没，展开区空白）。
   // 未取回前展开区显示加载态；失败则清掉请求标记，下次展开可重试。
-  const [fullJobs, setFullJobs] = useState<Map<string, any[]>>(new Map());
+  type FetchedJobs = { rows: any[]; total: number };
+  const [fullJobs, setFullJobs] = useState<Map<string, FetchedJobs>>(new Map());
   const fullJobsRequested = useRef<Set<string>>(new Set());
   // 手风琴同时只可能展开一家（expandedPattern），所以这里只取当前那一家。
   useEffect(() => {
     const pattern = expandedPattern;
-    if (!pattern || fullJobsRequested.current.has(pattern)) return;
+    if (!pattern) return;
+    const key = `${pattern}|${mode}`;
+    if (fullJobsRequested.current.has(key)) return;
     const card = cards.find((c) => c.pattern === pattern);
     if (!card) return;
-    const ids = [...card.campusJobs, ...card.internJobs].map((j: any) => j.id).filter(Boolean);
-    if (ids.length === 0) return;
-    fullJobsRequested.current.add(pattern);
+    if ((mode === "campus" ? card.campusTotal : card.internTotal) === 0) return;
+    fullJobsRequested.current.add(key);
     let cancelled = false;
     (async () => {
       try {
-        const resp = await fetch("/api/jobs/by-ids", {
+        const resp = await fetch("/api/campus-zone/jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ids }),
+          body: JSON.stringify({ pattern, mode }),
         });
         const data = await resp.json().catch(() => null);
         if (cancelled) return;
         if (!data?.ok) {
-          fullJobsRequested.current.delete(pattern); // 失败清标记，收起再展开可重试
+          fullJobsRequested.current.delete(key); // 失败清标记，收起再展开可重试
           return;
         }
-        // 校招链路统一用 city（getCampusZone 的 SQL 是 `j.location as city`），而按 id 取回的是
-        // 原始 location 列 → 这里对齐，否则展开区的城市分组与 toScoredJob 都会拿不到城市。
-        const rows = (data.jobs || []).map((r: any) => ({ ...r, city: r.location ?? null }));
-        setFullJobs((prev) => new Map(prev).set(pattern, rows));
+        setFullJobs((prev) =>
+          new Map(prev).set(key, { rows: data.jobs || [], total: data.total ?? (data.jobs || []).length }),
+        );
       } catch {
-        if (!cancelled) fullJobsRequested.current.delete(pattern);
+        if (!cancelled) fullJobsRequested.current.delete(key);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [expandedPattern, cards]);
+  }, [expandedPattern, mode, cards]);
 
-  /** 展开区要渲染的完整行：按「轻量记录筛选后的 id」从取回的完整行里挑，口径与卡面计数一致。 */
-  function expandedRows(pattern: string, slimFiltered: any[]): any[] {
-    const rows = fullJobs.get(pattern);
-    if (!rows) return [];
-    const keep = new Set(slimFiltered.map((j: any) => j.id));
-    return rows.filter((r: any) => keep.has(r.id));
+  /** 展开区要渲染的完整行：取回后按当前筛选过一遍，口径与卡面计数一致
+   *  （`row.fn` 由接口随行返回，与分面里的职能标签同源同值）。 */
+  function expandedRows(pattern: string): any[] {
+    const fetched = fullJobs.get(`${pattern}|${mode}`);
+    if (!fetched) return [];
+    return fetched.rows.filter((r: any) => campusRowMatches(r, filters));
   }
 
   // 展示时探活（②层，复刻 app/jobs/jobs-client.tsx）：对当前展开公司里可见的岗位批量探活，
@@ -288,7 +282,7 @@ export default function CampusClient({
   useEffect(() => {
     const visibleIds: string[] = [];
     if (expandedPattern) {
-      for (const j of filteredJobsByPattern.get(expandedPattern) || []) {
+      for (const j of expandedRows(expandedPattern)) {
         if (j.id) visibleIds.push(j.id);
       }
     }
@@ -321,7 +315,7 @@ export default function CampusClient({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expandedPattern, filteredJobsByPattern]);
+  }, [expandedPattern, mode, fullJobs, filters]);
 
   // JobCard 要求的回调；本区岗位不预取 job_actions（专区场景无需个性化打分/回填 user_action），
   // 值得投/已投递/忽略仍会经 JobCard 内部走 /api/job-actions 真实写库，只是不需要在此处再镜像一份状态。
@@ -445,11 +439,16 @@ export default function CampusClient({
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {cards.map((card) => {
             const isExpanded = expandedPattern === card.pattern;
-            const totalCount = mode === "campus" ? card.campusJobs.length : card.internJobs.length;
-            const filteredJobs = filteredJobsByPattern.get(card.pattern) || [];
-            // 卡面计数用轻量记录（filteredJobs）；展开区渲染用按需取回的完整行，两者按同一批 id 对齐。
-            const rowsLoaded = !isExpanded || fullJobs.has(card.pattern);
-            const groups = isExpanded ? groupCampusJobs(expandedRows(card.pattern, filteredJobs)) : [];
+            const totalCount = mode === "campus" ? card.campusTotal : card.internTotal;
+            const filteredCount = filteredCountByPattern.get(card.pattern) ?? 0;
+            // 卡面计数用聚合分面；展开区渲染用按需取回的完整行，两者过同一套筛选口径。
+            const fetched = fullJobs.get(`${card.pattern}|${mode}`);
+            const rowsLoaded = !isExpanded || !!fetched;
+            const visibleRows = isExpanded ? expandedRows(card.pattern) : [];
+            const groups = isExpanded ? groupCampusJobs(visibleRows) : [];
+            // 大厂一个桶可能上千个岗，展开区最多取回 200 个（见 /api/campus-zone/jobs）。
+            // 截断了就照实说一句，不让用户以为「筛选后只剩这些」。
+            const cappedBy = fetched && fetched.total > fetched.rows.length ? fetched.rows.length : 0;
             const modeLabel = mode === "campus" ? "校招" : "实习";
 
             return (
@@ -518,7 +517,7 @@ export default function CampusClient({
                   <p className="text-sm text-[#5f594e] dark:text-[#b6ad9d]">
                     {totalCount > 0
                       ? `${totalCount} 个${modeLabel}在招岗位${
-                          hasActiveFilter && isExpanded ? ` · 筛选后 ${filteredJobs.length} 个` : ""
+                          hasActiveFilter && isExpanded ? ` · 筛选后 ${filteredCount} 个` : ""
                         }`
                       : `暂无${modeLabel}在招岗位`}
                   </p>
@@ -564,7 +563,7 @@ export default function CampusClient({
                 {isExpanded && (
                   <div className="sm:col-span-2 lg:col-span-3">
                     {!rowsLoaded ? (
-                      <EmptyPanel title="正在加载岗位…" description={`共 ${filteredJobs.length} 个，稍等一下。`} />
+                      <EmptyPanel title="正在加载岗位…" description={`共 ${filteredCount} 个，稍等一下。`} />
                     ) : groups.length === 0 ? (
                       <EmptyPanel title="当前筛选下没有匹配岗位" description="换一个城市、学历、职能或届别试试，或清空筛选。" />
                     ) : (
@@ -597,9 +596,14 @@ export default function CampusClient({
                         })}
                       </div>
                     )}
+                    {cappedBy > 0 && (
+                      <p className="mt-3 text-xs text-[#8a8275] dark:text-[#9a9184]">
+                        该公司{modeLabel}岗位较多，这里按临近截止优先展示前 {cappedBy} 个
+                      </p>
+                    )}
                     {deadIds.size > 0 && (
                       <p className="mt-3 text-xs text-[#8a8275] dark:text-[#9a9184]">
-                        实时复核拦下 {Array.from(deadIds).filter((id) => filteredJobs.some((j) => j.id === id)).length} 个
+                        实时复核拦下 {visibleRows.filter((j: any) => deadIds.has(j.id)).length} 个
                       </p>
                     )}
                   </div>

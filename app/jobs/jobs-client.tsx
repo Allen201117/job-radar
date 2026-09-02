@@ -54,8 +54,10 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
         if (!cancelled && data?.ok && Array.isArray(data.companies)) {
           setCompanies(data.companies);
         }
-      } catch {
-        // 取不到就保持空 datalist——公司框仍可自由输入子串
+      } catch (error) {
+        // 取不到就保持空 datalist——公司框仍可自由输入子串。但不能静默吞：
+        // 公司下拉长期为空时，得能从控制台看出是接口挂了还是真没数据。
+        console.error("[jobs] 公司候选加载失败", error);
       }
     })();
     return () => {
@@ -81,6 +83,8 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
     hasMore,
     loadMore,
     refresh,
+    clearAll,
+    clearOne,
     newMatching,
   } = useJobFilters({ officialJobs, onlyNew, initialFilters, initialJobs, initialTotal });
 
@@ -206,7 +210,15 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
   return (
     <div className="space-y-5">
       <BackToTop />
-      <JobFilters filters={filters} onChange={setFilters} companies={companies} jobScope={jobScope} />
+      <JobFilters
+        filters={filters}
+        onChange={setFilters}
+        onClearAll={clearAll}
+        onClearOne={clearOne}
+        companies={companies}
+        resultTotal={total}
+        jobScope={jobScope}
+      />
 
       {/* 搜索说明 + 手动搜索按钮（取代旧三磁贴；筛选变化已自动搜，这里手动重试）。 */}
       <div className="flex flex-col gap-3 surface p-4 text-[#1a1714] dark:text-[#f3ecdf] sm:flex-row sm:items-center sm:justify-between sm:p-5">

@@ -129,6 +129,19 @@ test("jobs-store FTS city predicate keeps empty locations and bidirectional city
   assert.doesNotMatch(calls[0].sql, /location ilike \$\d+\s+and/i);
 });
 
+test("jobs-store pushes postedWithin into parameterized SQL", async () => {
+  const calls = [];
+  const { searchJobsStore } = loadJobsStore(async (sql, params) => {
+    calls.push({ sql, params });
+    return [];
+  });
+
+  await searchJobsStore({ ...filters, postedWithin: "7", keyword: "产品经理" }, null, [], 0, 10);
+
+  assert.match(calls[0].sql, /posted_at >= now\(\) - \(\$\d+::int \* interval '1 day'\)/i);
+  assert.ok(calls[0].params.includes(7));
+});
+
 test("jobs-store city-only search stays on FTS (全表覆盖) 且软城市仍保留空 location 行", async () => {
   // 城市留在 tsquery → 走 FTS 全表 GIN，而非只扫最新 28k 的 scan（后者实测只覆盖 ~6% 城市岗）。
   // 同时 appendSoftCityWhere 的 OR 组保住「命中该城的空 location 行」→ JS matcher 标为 city 降级。
