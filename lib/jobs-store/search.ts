@@ -28,8 +28,16 @@ const SCAN_BUDGET = 28000;
  * 线上实测收益（香港库）：无筛选的 /jobs 落地态要拉满 SCAN_BUDGET=2.8 万行，
  * 首次 TTFB 19.0s、命中缓存 2.1s；FTS 路径（城市/关键词搜索）4354 行候选，
  * 未接缓存时**每翻一页都重拉一遍**。in-flight 去重让并发请求只拉一次。
+ *
+ * 2026-09-03 由 60s 提到 5min：登录态生产实测这条接口有两个清晰档位——命中 1.0~1.7s、
+ * 未命中 3.6~5.8s（城市越大越慢：上海 total 3567 首发 5.8s）。60s 覆盖不住一次正常的
+ * 筛选/翻页浏览，用户每隔一会儿就掉回未命中档。
+ * 陈旧代价可忽略：岗位库由爬虫**按天**写入，且缓存只存原始岗位行——用户自己的
+ * 收藏/忽略/投递(actions)与偏好都在缓存之后的打分层参与，改了立刻生效，不受 TTL 影响。
+ * 死岗也不靠它兜底：看板加载后有异步探活会把死岗当场隐藏（见 CLAUDE.md「展示时校验」）。
+ * ⚠️ 上限由下面的**行数预算**兜着，不由 TTL 兜——调 TTL 不会让内存无限涨。
  */
-const SCAN_CACHE_TTL_MS = 60_000;
+const SCAN_CACHE_TTL_MS = 300_000;
 /**
  * 缓存按**行数**记账，不按条数。
  *
@@ -72,7 +80,7 @@ function evictToRowBudget(incomingRows: number): void {
  * `source_adapter`，它的值来自全局 sources 映射、与用户无关，因此幂等安全。
  * 若将来新增「按用户往行对象写回」的逻辑，**必须先深拷贝**，否则会把一个用户的数据泄给另一个。
  *
- * TTL 60s：岗位库由爬虫按天级写入，60 秒的陈旧对用户不可见。
+ * TTL 见 SCAN_CACHE_TTL_MS：岗位库由爬虫按天级写入，分钟级陈旧对用户不可见。
  */
 async function fetchCandidates(sql: string, params: unknown[]): Promise<any[]> {
   const key = `${sql}|${JSON.stringify(params)}`;
