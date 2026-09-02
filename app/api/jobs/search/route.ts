@@ -16,8 +16,15 @@ export const maxDuration = 60;
 // 该结论已被证伪 —— 迁到香港后（x-vercel-id=iad1::hkg1::…，函数确实在香港）仍是 25s。
 // 真因在 lib/jobs-store/search.ts 的扫描路径：sortBy 默认 "match" 让循环条件恒真 → 必须看满
 // SCAN_BUDGET=28000 行，而它当时是「串行逐页 await + 每行拖着 summary 的全列」。已改为分批并行
-// 取页 + 候选只取打分列、命中页再回补。剩余大头是 summary 本身（实测约占候选传输量 87%，但打分与
-// exclude_keywords 精筛要读它，不能直接砍）——见 docs/superpowers/specs/2026-07-30-latency-*。
+// 取页 + 候选只取打分列、命中页再回补。见 docs/superpowers/specs/2026-07-30-latency-*。
+// ⚠️ 2026-09-02 再次实测更正：上一句「剩余大头是 summary 传输（占 87%）」也不准确。
+// 拆解「深圳+校招」（total 2277）：DB 执行 355~383ms、候选 4354 行共 4.8MB（不是 15MB），
+// 两项都不是瓶颈；**大头是 JS 打分**——scoring 按 (岗位 × 关键词) 逐对调 keywordMatchTier，
+// 耗时随关键词数放大：0 个 97ms / 4 个 2,171ms / 12 个 14,095ms（这也是「并发 3 个 = 8/16/24s
+// 完全串行、而库始终空闲」的原因：单线程 CPU 被打满）。已用记忆化修掉（见
+// lib/china-keyword-expansion.js 文件头），同档 12 关键词降到 220ms。
+// 冷请求现在剩下的确实是「把候选搬进函数」，其中 summary 占载荷 79%，但它是匹配要读的，
+// 砍它属精度取舍，未做。
 export const preferredRegion = ["hkg1", "sin1"];
 
 // 服务端岗位库搜索：把原前端「全库塞浏览器再筛」改为服务端有界筛选 + 分页。

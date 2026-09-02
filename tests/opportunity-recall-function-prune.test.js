@@ -68,18 +68,43 @@ test("跨职能的扩展词不进召回 tsquery（产品画像不该把研发词
   }
 });
 
-test("用户自己写的原词一律保留，哪怕它属于别的职能", () => {
-  // 原词就是「Prompt Engineering」（研发职能）：用户明确写了，必须留
+test("用户自己写的原词一律保留：方向词全部来自 targetRoles，天然在目标职能集内", () => {
+  // 这条原来的语料是「roles=产品经理 + keywords=Prompt Engineering」，考的是「用户手写的跨职能
+  // 原词不能被职能剪枝剪掉」。2026-09-02 起召回方向词**只取 targetRoles**，而目标职能集
+  // （userTargetFunctions）恰恰就是从 targetRoles 推出来的 —— 于是「原词落在目标职能集外」
+  // 这个情形在结构上不再可能发生，剪枝只可能剪到词库**展开**出来的跨职能词。
+  // 这里把它钉成结构性事实：用户写的每个方向词，都必须原样出现在召回 tsquery 里。
+  const roles = ["产品经理", "Prompt Engineering", "水泥搅拌"];
+  const built = buildRecallSql(mk({ targetRoles: roles }), SINCE, 900);
+  const roleTs = roleTsqueryOf(built, "产品经理");
+  for (const raw of ["产品经理", "prompt", "水泥搅拌"]) {
+    assert.ok(
+      roleTs.includes(clauseFor(raw)) || roleTs.includes(clauseFor(raw).toLowerCase()),
+      `用户原词「${raw}」被剪掉了——原词永远不能剪`,
+    );
+  }
+});
+
+test("填了目标岗位时，targetKeywords 不进召回（到方向门也必被 role_mismatch 拒）", () => {
+  // 与 lib/opportunities/eligibility.ts:165/238 对齐：有 targetRoles 时方向判定只认 targetRoles，
+  // 匹配不上就 reject("role_mismatch")。所以只靠关键词召回来的岗一个都展示不出来，
+  // 留在 stage-1 只是白扫 GIN、白占召回预算（实测某产品画像 1,216 个候选里 1,053 个如此）。
   const built = buildRecallSql(
-    mk({ targetRoles: ["产品经理"], targetKeywords: ["Prompt Engineering"] }),
+    mk({ targetRoles: ["产品经理"], targetKeywords: ["水泥搅拌"] }),
     SINCE,
     900,
   );
   const roleTs = roleTsqueryOf(built, "产品经理");
   assert.ok(
-    roleTs.includes(clauseFor("Prompt Engineering")),
-    "用户原词 Prompt Engineering 被剪掉了——原词永远不能剪",
+    !roleTs.includes(clauseFor("水泥搅拌")),
+    "填了目标岗位时 targetKeywords 不该进召回方向层",
   );
+});
+
+test("没填目标岗位时才回退 targetKeywords（否则这类用户一个岗都召不回）", () => {
+  const built = buildRecallSql(mk({ targetKeywords: ["水泥搅拌"] }), SINCE, 900);
+  const roleTs = roleTsqueryOf(built, "水泥搅拌");
+  assert.ok(roleTs.includes(clauseFor("水泥搅拌")), "没有目标岗位时必须回退用关键词召回");
 });
 
 test("同职能与判不出职能的扩展词照常保留（别剪过头）", () => {

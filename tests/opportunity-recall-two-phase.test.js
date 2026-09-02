@@ -137,17 +137,21 @@ function topLevelClauses(ts) {
   return out.map((s) => s.trim()).filter(Boolean);
 }
 
-test("方向 tsquery 子句去重（多个关键词常映射到同一个词库组）", () => {
-  const built = buildRecallSql(mk({ targetKeywords: HEAVY_KEYWORDS.slice(0, 10) }), SINCE, 900);
+// ⚠️ 下面三条的语料从 targetKeywords 挪到了 targetRoles（2026-09-02）：召回的方向词自此
+// **只取 targetRoles**，填了目标岗位就不再掺 targetKeywords（技能/补充词到 stage-2 的方向门
+// 必然被 role_mismatch 拒掉，留在召回里只会白扫 GIN）。这三条考的是「方向 tsquery 自身的
+// 去重 / 预算 / 保原词」性质，与词从哪个字段来无关，所以只换语料、断言原样保留。
+test("方向 tsquery 子句去重（多个方向词常映射到同一个词库组）", () => {
+  const built = buildRecallSql(mk({ targetRoles: HEAVY_KEYWORDS.slice(0, 10) }), SINCE, 900);
   const ts = built.params.find((p) => typeof p === "string" && p.includes("|"));
   const clauses = topLevelClauses(ts);
   assert.equal(new Set(clauses).size, clauses.length, "tsquery 里出现了重复子句");
 });
 
-test("映射到同一词库组的多个关键词只贡献一条子句（SQL / Python / 数据分析）", () => {
+test("映射到同一词库组的多个方向词只贡献一条子句（SQL / Python / 数据分析）", () => {
   // 去重的实际收益：这三个词都落在「数据分析」组，展开后是同一组 OR，
   // 不去重就会让 GIN 把同一组词扫三遍。
-  const built = buildRecallSql(mk({ targetKeywords: ["SQL", "Python", "数据分析"] }), SINCE, 900);
+  const built = buildRecallSql(mk({ targetRoles: ["SQL", "Python", "数据分析"] }), SINCE, 900);
   const ts = built.params.find((p) => typeof p === "string" && p.includes("|"));
   assert.equal(ts.split("(sql)").length - 1, 1, "同一个词库组在 tsquery 里出现了不止一次");
 });
@@ -156,7 +160,7 @@ test("方向 tsquery 子句数封顶，超预算的原词仍然进查询（只�
   // 末尾这个词不属于任何词库组：它只可能以「原词 bigram」的形式出现，
   // 用来证明超出扩展预算的词没有被丢掉。
   const built = buildRecallSql(
-    mk({ targetKeywords: [...HEAVY_KEYWORDS, "水泥搅拌"] }),
+    mk({ targetRoles: [...HEAVY_KEYWORDS, "水泥搅拌"] }),
     SINCE,
     900,
   );

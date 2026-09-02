@@ -1,0 +1,15 @@
+-- 202_user_preferences_skills.sql
+-- 技能有了自己的列，不再借住在 target_keywords 里。
+--
+-- 背景：简历解析本来分得很清楚（prompt 明写「target_roles 只输出岗位方向，不要输出技能」，
+-- 技能另有 skills 字段），但写进偏好那一步做了 `target_keywords = skills` ——
+-- 把「会什么」贴上了「要搜什么」的标签。下游凡是拿 target_keywords 当检索词的地方就跟着跑偏：
+-- 某产品画像的召回里 1,216 个候选有 1,053 个被方向门拒掉（lib/jobs-store/opportunities.ts 注释实测），
+-- /jobs 的默认筛选词被填成「用户旅程」导致恒 0 结果（2026-09-02 线上事故）。
+--
+-- 这里给 user_preferences 补一个中文侧 skills 列，与既有的 candidate_profiles.en_skills 对称。
+-- 语义分工从此固定：
+--   target_roles    = 想做什么（方向）→ 决定召回与方向判定
+--   skills          = 会什么（技能）  → 只参与打分加分，永不判方向
+--   target_keywords = 用户自己补充的搜索词，简历解析不再往里写
+alter table user_preferences add column if not exists skills text[] not null default '{}';

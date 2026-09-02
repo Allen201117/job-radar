@@ -77,7 +77,14 @@ const RECALL_COLUMNS =
 const ROLE_TSQUERY_CLAUSE_BUDGET = 120;
 
 function roleTsquery(profile: RadarProfile): string | null {
-  const terms = [...profile.targetRoles, ...profile.targetKeywords];
+  // 召回词 = **方向优先**，与 stage-2 的方向判定同一行判据（lib/opportunities/eligibility.ts:165）。
+  // 旧实现把 targetRoles 与 targetKeywords 拼在一起当召回词，但 stage-2 早已定调「技能判不了方向，
+  // 填了目标岗位就只认目标岗位」→ 只靠技能词召回来的岗位，到了方向门必然被 role_mismatch 拒掉，
+  // 白扫一趟 GIN 又白跑一遍 JS。实测这类无效候选占某产品画像的 87%（1,216 个里 1,053 个被拒）。
+  // 两端口径统一后：召回集只小不大、结果集不变、子句数下降（词多的画像曾把召回从 3.3s 拖到 4.1s）。
+  // 用户没填目标岗位时仍回退关键词——否则这类用户一个岗位都召不回（与 eligibility 同款兜底）。
+  const terms =
+    profile.targetRoles.length > 0 ? profile.targetRoles : profile.targetKeywords;
   if (!terms.length) return null;
   const includeOverseasLexicon = profile.jobScope !== "domestic";
   // 跨职能剪枝：stage-2 的方向门还有一道**职能门**（岗位职能判得出且不在用户目标职能集内 → 直接拒）。

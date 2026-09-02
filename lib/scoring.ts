@@ -279,8 +279,14 @@ function scoringTargetRoles(preferences: UserPreferences, overseasProfile: boole
   return uniqueStrings([...(preferences.en_target_roles || []), ...base]);
 }
 
+// 「加分项」词集 = 用户手填的补充搜索词 ∪ 简历技能。技能自 2026-09-02 起单独存 `skills` 列
+// （此前被灌进 target_keywords，见迁移 202）；两者在打分里的待遇完全一样——只加分、不算方向命中
+// （keywordsCountAsDirection 只在用户没填目标岗位时才为真），所以并集读取不改变任何判定语义。
 function scoringTargetKeywords(preferences: UserPreferences, overseasProfile: boolean): string[] {
-  const base = preferences.target_keywords || [];
+  const base = uniqueStrings([
+    ...(preferences.target_keywords || []),
+    ...(preferences.skills || []),
+  ]);
   if (!overseasProfile) return base;
   return uniqueStrings([
     ...(preferences.en_target_keywords || []),
