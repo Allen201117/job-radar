@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import JobCard from "@/components/JobCard";
 import SavedCompare from "@/components/SavedCompare";
+import { formatDateLabel } from "@/lib/relative-time";
 import { track } from "@/lib/track";
 import type { ScoredJob } from "@/lib/types";
 import { CheckCircle, MapPin, Scales } from "@phosphor-icons/react";
@@ -141,7 +142,7 @@ export default function SavedClient({
                     {d.location}
                   </span>
                 )}
-                加入于 {d.createdAt ? new Date(d.createdAt).toLocaleDateString("zh-CN") : "—"}
+                加入于 {formatDateLabel(d.createdAt) ?? "—"}
               </div>
             </div>
             <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">

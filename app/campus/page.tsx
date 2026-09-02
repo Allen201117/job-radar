@@ -1,62 +1,101 @@
 export const dynamic = "force-dynamic";
 
+import { unstable_cache } from "next/cache";
 import { redirect } from "next/navigation";
 import Navbar from "@/components/Navbar";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import { GraduationCap } from "@phosphor-icons/react/ssr";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
-import { resolveMustApplyIndustries, MUST_APPLY_BY_INDUSTRY } from "@/lib/must-apply-list";
+import { companiesForIndustries, getUserCampusScope } from "@/lib/campus-user-industries";
 import { getCampusZone } from "@/lib/jobs-store/read";
 import { getCampusSourceCoverage } from "@/lib/campus-sources";
 import { windowStatus, compareCompanyCards } from "@/lib/campus-zone";
 import { getRecruitmentCyclesForCompanies } from "@/lib/recruitment-cycle-store";
 import { getRecentCampusSurges } from "@/lib/campus-surge-store";
-import { classifyJobFunction } from "@/lib/china-keyword-expansion";
+import { buildCampusFacets, type CampusFilterOptions } from "@/lib/campus-facets";
 import {
   campusTimelineSummary,
   campusPreciseDates,
   campusBatchTimingGap,
   cleanCampusDeadlineMs,
 } from "@/lib/recruitment-cycle";
-import CampusClient from "./campus-client";
+import CampusClient, { type CampusBoardCard } from "./campus-client";
 
-/** 下发给客户端的轻量岗位记录：只带「筛选 + 计数 + 按需取详情」真正需要的字段。
+export type CampusBoard = {
+  cards: CampusBoardCard[];
+  filterOptions: { campus: CampusFilterOptions; intern: CampusFilterOptions };
+};
+
+/**
+ * 校招看板的重活：聚合岗位、算职能分面、拉源覆盖 / 招聘周期 / 开闸快照。
  *
- * 关键是 `fn`：职能标签在**服务端**用完整 summary 算好（classifyJobFunction 与客户端原先
- * 调用的是同一份实现、同一份输入），客户端拿标签直接比对即可 → 筛选选项、每家公司的计数、
- * 任意筛选组合下的结果都与改造前完全一致，**精度零损失**，但不必把 JD 正文发到浏览器。
- * 完整岗位行在用户展开某家公司时经 `/api/jobs/by-ids` 按需取回。 */
-function slimJob(j: any) {
-  return {
-    id: j.id,
-    city: j.city ?? null,
-    education: j.education ?? null,
-    fn: classifyJobFunction({ title: j.title, job_type: j.job_type, summary: j.summary }),
-    gc: j.grad_class ?? null,
-  };
-}
+ * **只依赖行业清单，不含任何用户私有数据**，所以可以跨请求共享缓存 —— 这正是本页首屏
+ * 从 10s 降下来的关键：这一坨活 live 实测要数秒（光 jobs 库那条聚合查询就 ~1.3s，
+ * 还要把 30 家公司近 1.7 万个岗的 JD 正文取回来跑分类），逐请求重算纯属浪费。
+ *
+ * ⚠️ 缓存里**不放** windowStatus / 排序结果：它们依赖「此刻」（72h 新鲜度阈值），
+ * 必须每请求用缓存里的 lastSeenAtMs 现算，否则徽章会随缓存一起冻住。
+ * ⚠️ 函数体内不得读 cookies()/headers() 等动态 API（unstable_cache 限制）；
+ * 这里用的 createServiceClient 只读环境变量，安全。
+ */
+const loadCampusBoard = unstable_cache(
+  async (industries: string[]): Promise<CampusBoard> => {
+    const companies = companiesForIndustries(industries);
+    const [zone, sourceCov, cyclesByPattern, surgesByPattern] = await Promise.all([
+      getCampusZone(companies),
+      getCampusSourceCoverage(companies),
+      getRecruitmentCyclesForCompanies(companies),
+      getRecentCampusSurges(companies),
+    ]);
 
-/** 从若干公司的岗位桶里收集筛选候选值。与客户端原实现同口径（同样 trim / filter(Boolean) / sort）。 */
-function collectOptions(lists: Array<ReturnType<typeof slimJob>[]>) {
-  const cities = new Set<string>();
-  const edus = new Set<string>();
-  const fns = new Set<string>();
-  const gradClasses = new Set<number>();
-  for (const jobs of lists) {
-    for (const j of jobs) {
-      if (j.city) cities.add(String(j.city).trim());
-      if (j.education) edus.add(String(j.education).trim());
-      fns.add(j.fn);
-      if (typeof j.gc === "number") gradClasses.add(j.gc);
-    }
-  }
-  return {
-    cityOptions: Array.from(cities).filter(Boolean).sort(),
-    educationOptions: Array.from(edus).filter(Boolean).sort(),
-    functionOptions: Array.from(fns).filter(Boolean).sort(),
-    gradClassOptions: Array.from(gradClasses).sort((a, b) => b - a),
-  };
-}
+    const campus = buildCampusFacets(zone.map((z) => ({ pattern: z.pattern, jobs: z.campusJobs })));
+    const intern = buildCampusFacets(zone.map((z) => ({ pattern: z.pattern, jobs: z.internJobs })));
+
+    const cards: CampusBoardCard[] = zone.map((z) => {
+      const src = sourceCov.get(z.pattern) || { hasAnySource: z.hasAnyActiveJob, hasCampusSource: false };
+      const deadlines = z.campusJobs
+        .map((j) => (j.deadline ? Date.parse(j.deadline) : NaN))
+        .filter((t) => !Number.isNaN(t));
+      const obs = cyclesByPattern.get(z.pattern) || [];
+      // 快路①：清洗后的公司级最近截止（滤掉「长期有效」/占位/远未来/过去），只作弱档提示。
+      const cleanDl = z.campusJobs
+        .map((j) => cleanCampusDeadlineMs(j.deadline))
+        .filter((t): t is number => t != null);
+      return {
+        company: z.company,
+        pattern: z.pattern,
+        // ⚠️ 只下发聚合分面，**一条岗位记录都不下发**：逐条下发实测单页 2.09 MB（16,494 条），
+        // 而岗位卡默认折叠、用户根本没看。展开某家公司时才经 /api/campus-zone/jobs 取完整行。
+        campusTotal: campus.totals.get(z.pattern) ?? 0,
+        internTotal: intern.totals.get(z.pattern) ?? 0,
+        campusFacets: campus.byPattern.get(z.pattern) ?? [],
+        internFacets: intern.byPattern.get(z.pattern) ?? [],
+        // windowStatus 的三个输入原样带出，徽章在页面里按「此刻」现算（见上方注释）。
+        hasCampusSource: src.hasCampusSource,
+        hasAnySource: src.hasAnySource,
+        lastSeenAtMs: z.lastSeenAtMs,
+        nearestDeadlineMs: deadlines.length ? Math.min(...deadlines) : null,
+        timeline: obs.length > 0 ? campusTimelineSummary(obs) : null,
+        preciseDates: obs.length > 0 ? campusPreciseDates(obs) : [],
+        batchTimingGap: obs.length > 0 ? campusBatchTimingGap(obs) : null,
+        cleanDeadlineMs: cleanDl.length ? Math.min(...cleanDl) : null,
+        // 「刚开正式批」：近 7 天检测到校招岗一次性放量（判据 crawler/campus_lane.detect_surge）。
+        // 秋招正式批是一次性放量，这是用户最该马上行动的信号。
+        surge: surgesByPattern.get(z.pattern) ?? null,
+        // 明确标了往届（如 2026 届）而被移出列表的岗数——不静默丢弃，卡面照实说一句。
+        pastClassJobCount: z.pastClassJobCount,
+        // 每请求现算，这里先占位（缓存里不放随时间变化的值）。
+        window: { state: "not_ingested" as const },
+      };
+    });
+
+    return { cards, filterOptions: { campus: campus.options, intern: intern.options } };
+  },
+  ["campus-board-v1"],
+  // 10 分钟：校招看板的数据由每日 / 每小时的抓取车道产出，10 分钟的滞后用户感知不到，
+  // 但足以让绝大多数请求走缓存、不再逐次重算这坨重活。
+  { revalidate: 600, tags: ["campus-board"] },
+);
 
 const HERO = {
   eyebrow: "校招专区",
@@ -69,87 +108,26 @@ export default async function CampusPage() {
   const user = await getRequestUser();
   if (!user) redirect("/login?next=/campus");
 
-  // 读用户行业：candidate_profiles（简历解析）优先，回退 user_preferences（手填偏好）。
-  // 走 createServerSupabase（RLS，只读用户自己的行），与 today/saved 等页面同一模式,
-  // 不用 service-role client（这不是 admin 场景）。
   const supabase = await createServerSupabase();
-  const [profRes, prefRes] = await Promise.all([
-    supabase.from("candidate_profiles").select("target_industries").eq("user_id", user.id).maybeSingle(),
-    supabase.from("user_preferences").select("target_industries").eq("user_id", user.id).maybeSingle(),
-  ]);
-  const rawIndustries =
-    (profRes.data?.target_industries as string[] | null) ||
-    (prefRes.data?.target_industries as string[] | null) ||
-    [];
-  const industries = resolveMustApplyIndustries(rawIndustries); // 空/归一不出 → 兜底"互联网/科技"
+  const { rawIndustries, industries } = await getUserCampusScope(supabase, user.id);
 
-  // 按行业取必投清单公司，跨行业按 pattern 去重（同一公司可能出现在多个行业清单里）。
-  const companies = Array.from(
-    new Map(
-      industries.flatMap((ind) => MUST_APPLY_BY_INDUSTRY[ind] || []).map((c) => [c.pattern, c] as const),
-    ).values(),
-  );
+  // 缓存键只认行业清单本身，排序后传入让「同一组行业、不同顺序」共用一份缓存。
+  const board = await loadCampusBoard([...industries].sort());
 
-  const [zone, sourceCov, cyclesByPattern, surgesByPattern] = await Promise.all([
-    getCampusZone(companies),
-    getCampusSourceCoverage(companies),
-    getRecruitmentCyclesForCompanies(companies),
-    getRecentCampusSurges(companies),
-  ]);
-
+  // 徽章与排序按「此刻」现算：缓存里存的是 lastSeenAtMs 等原始输入，不是随时间失效的结论。
   const nowMs = Date.now();
-  const cards = zone.map((z) => {
-    const src = sourceCov.get(z.pattern) || { hasAnySource: z.hasAnyActiveJob, hasCampusSource: false };
-    const window = windowStatus({
-      campusJobCount: z.campusJobs.length,
-      hasCampusSource: src.hasCampusSource,
-      hasAnySource: src.hasAnySource,
-      lastSeenAtMs: z.lastSeenAtMs,
-      nowMs,
-    });
-    const deadlines = z.campusJobs
-      .map((j) => (j.deadline ? Date.parse(j.deadline) : NaN))
-      .filter((t) => !Number.isNaN(t));
-    const nearestDeadlineMs = deadlines.length ? Math.min(...deadlines) : null;
-    const obs = cyclesByPattern.get(z.pattern) || [];
-    const timeline = obs.length > 0 ? campusTimelineSummary(obs) : null;
-    const preciseDates = obs.length > 0 ? campusPreciseDates(obs) : [];
-    const batchTimingGap = obs.length > 0 ? campusBatchTimingGap(obs) : null;
-    // 快路①：清洗后的公司级最近截止（滤掉「长期有效」/占位/远未来/过去），只作弱档提示。
-    const cleanDl = z.campusJobs
-      .map((j) => cleanCampusDeadlineMs(j.deadline))
-      .filter((t): t is number => t != null);
-    const cleanDeadlineMs = cleanDl.length ? Math.min(...cleanDl) : null;
-    return {
-      company: z.company,
-      pattern: z.pattern,
-      // ⚠️ 只下发轻量岗位记录，**绝不再 `{...z}`**：那会把每家公司的完整岗位行（含 JD 正文）
-      // 全序列化进 props，实测单页 16.3 MB，而岗位卡默认折叠、用户根本没看。
-      campusJobs: z.campusJobs.map(slimJob),
-      internJobs: z.internJobs.map(slimJob),
-      window,
-      nearestDeadlineMs, // 仅供下面 compareCompanyCards 在服务端排序，客户端不读
-      timeline,
-      preciseDates,
-      batchTimingGap,
-      cleanDeadlineMs,
-      // 「刚开正式批」：近 7 天检测到校招岗一次性放量（判据 crawler/campus_lane.detect_surge）。
-      // 秋招正式批是一次性放量，这是用户最该马上行动的信号。
-      surge: surgesByPattern.get(z.pattern) ?? null,
-      // 明确标了往届（如 2026 届）而被移出列表的岗数——不静默丢弃，卡面照实说一句。
-      pastClassJobCount: z.pastClassJobCount,
-    };
-  });
-  cards.sort(compareCompanyCards);
-
-  // 筛选下拉候选值改在**服务端**算：客户端原先要靠 classifyJobFunction(title+job_type+summary)
-  // 现算职能，才不得不拿到正文。现在服务端用完整正文算好（同一份实现、同一份输入、同样
-  // 先收集再 filter(Boolean).sort()），选项值与改造前逐字节一致——精度零损失。
-  // 按 mode 分开算，与客户端原来「只从当前态那个桶里收集」的口径一致。
-  const filterOptions = {
-    campus: collectOptions(cards.map((c) => c.campusJobs)),
-    intern: collectOptions(cards.map((c) => c.internJobs)),
-  };
+  const cards = board.cards
+    .map((c) => ({
+      ...c,
+      window: windowStatus({
+        campusJobCount: c.campusTotal,
+        hasCampusSource: c.hasCampusSource,
+        hasAnySource: c.hasAnySource,
+        lastSeenAtMs: c.lastSeenAtMs,
+        nowMs,
+      }),
+    }))
+    .sort(compareCompanyCards);
 
   return (
     <div className="min-h-screen bg-editorial">
@@ -160,7 +138,7 @@ export default async function CampusPage() {
           cards={cards}
           industries={industries}
           hasIndustry={rawIndustries.length > 0}
-          filterOptions={filterOptions}
+          filterOptions={board.filterOptions}
         />
       </ProductPage>
     </div>
