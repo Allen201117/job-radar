@@ -29,8 +29,10 @@ jobs:
     timeout-minutes: 50   # 远低于 6h 硬杀；httpx 富化快，单 shard 应分钟级
     strategy:
       fail-fast: false
-      # 扩海外矩阵后仍限制同时 5 个 shard，避免把香港库连接峰值从原 5 片直接放大到 9 片。
-      max-parallel: 5
+      # 扩海外矩阵后仍限制并发 shard 数，避免把香港库连接峰值从原 5 片直接放大到 9 片。
+      # 2026-09-03 5→3：与 liveness-sweep 撞档时峰值曾达 5×9 + 4×7 = 73 连接（+Vercel ≥19 逼近 100）；
+      # 本 workflow 30 天均值仅 1.7 分钟/轮，降并发几乎不影响产出，峰值降到 27。
+      max-parallel: 3
       # 按 adapter 一片，shard 间互不重叠（各 drain 自己 adapter 的 backlog）。
       matrix:
         adapter: [hotjob, wt, workday, oracle, eightfold, smartrecruiters, successfactors, greenhouse, lever,

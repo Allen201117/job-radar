@@ -15,7 +15,9 @@ on:
   schedule:
     # 2026-08-28：20:00 档后移到 21:00——enrich-crawl(18:00) 实测均值 129min、最长 181min，
     # 20:00 起飞必然与其尾部叠跑（同写香港库）。改 5/13/21 保持 8h 间距、避开重叠窗。
-    - cron: "0 5,13,21 * * *"
+    # 2026-09-03：21:00 与 enrich-backlog(0 */3) 同分钟起飞，连接峰值叠到 ~73（见 docs/superpowers/specs/2026-09-03-backend-review.md M3）。
+    # 改 2/10/22：保持 8h 间距，三档都避开 */3 整点；22:00 只与 dead-link-audit（max-parallel 2，浏览器源）同档，连接量小。
+    - cron: "0 2,10,22 * * *"
   workflow_dispatch:
     inputs:
       limit:
@@ -34,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       # max-parallel:4 = 同时只 4 个分片在跑 → 峰值 ~4×(workers+1) 连接，护住香港库 max_connections=100
-      #（app pool ~10 + 每 3h 的 enrich-backlog 突发 ~45 连接叠加也不挤爆）。小源先跑完释放槽位，
+      #（app pool ~10~20 + 每 3h 的 enrich-backlog 突发 ~27 连接（已降 max-parallel 3）叠加也不挤爆）。小源先跑完释放槽位，
       # 大源（wt/hotjob/workday）很快拿到并发槽，关键路径不被拖慢。
       max-parallel: 4
       matrix:
