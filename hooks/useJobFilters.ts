@@ -26,6 +26,7 @@ function filtersToParams(f: Filters, offset: number, limit: number): string {
   if (f.region) p.set("region", f.region);
   if (f.education) p.set("education", f.education);
   if (f.jobFunction) p.set("jobFunction", f.jobFunction);
+  if (f.jobRole) p.set("jobRole", f.jobRole);
   if (f.experience) p.set("experience", f.experience);
   if (f.postedWithin) p.set("postedWithin", f.postedWithin);
   if (f.salaryOnly) p.set("salaryOnly", "1");
@@ -201,7 +202,7 @@ export function useJobFilters({
 
   const clearOne = useCallback((key: keyof Filters, value?: string) => {
     setFilters((current) => {
-      if (value && ["city", "keyword", "jobFunction"].includes(key)) {
+      if (value && ["city", "keyword", "jobFunction", "jobRole"].includes(key)) {
         const next = splitMultiValue(String(current[key])).filter((item) => item !== value).join(",");
         return { ...current, [key]: next };
       }

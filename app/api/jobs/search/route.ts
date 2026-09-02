@@ -38,6 +38,7 @@ export async function GET(request: NextRequest) {
     region: p.get("region") || "",
     education: p.get("education") || "",
     jobFunction: p.get("jobFunction") || "",
+    jobRole: p.get("jobRole") || "",
     experience: p.get("experience") || "",
     postedWithin: p.get("postedWithin") || "",
     salaryOnly: bool("salaryOnly"),
