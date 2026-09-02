@@ -415,6 +415,22 @@ Supabase Auth（邮箱登录）+ cookie session。`middleware.ts` 排除 `/api/*
 - 不吞错（catch 至少记录）。
 - 外部请求只走 lib 层封装与 crawler adapters；遵守合规边界。
 
+### 会被 SSR 渲染的日期一律走 `formatDateLabel`，禁止裸 `toLocaleDateString`（2026-09-02 立）
+
+`toLocaleDateString` / `toLocaleString` 按**运行时**时区格式化。**Vercel 函数跑 UTC、浏览器跑用户本地时区（国内 UTC+8）**，
+于是同一个时间戳 SSR 渲染成「2026/8/30」、hydration 渲染成「2026/8/31」→ React 判定文本不一致 →
+**Minified React error #418，每次加载必现**（2026-09-02 实测 /today /jobs /campus 三个页面全中）。
+
+- ✅ 防：`lib/relative-time.formatDateLabel(input, options?)`，内部钉死 `timeZone: "Asia/Shanghai"`。
+  岗位发布日 / 截止日 / 投递日本来就是「北京时间的哪一天」，与看的人在哪儿无关，两端因此必然一致。
+- ⚠️ **不要用 `suppressHydrationWarning` 掩盖**——那是真不一致，用户首帧看到的是错的日期。
+- 判断要不要改：**这段文字会不会进服务端渲染的 HTML**。挂载后才 fetch 再渲染的（SourceTable /
+  CompanyWatchQueue / InsightsAdminClient / CompanyInsightDrawer / JobLibraryStat 的「最近同步」）
+  不参与 hydration，可以不管。
+- ⚠️ **本地默认复现不出来**：`npm run dev` 的服务端和浏览器都是 Asia/Shanghai。要复现必须
+  `env TZ=UTC npm run dev`（对齐 Vercel）或 `TZ=America/New_York`（更容易越过日界）。
+- 回归测试钉在 `tests/relative-time.test.js`（跨 3 个运行时时区断言同一输出）。
+
 ### 排版与文字颜色：一律用语义类，禁止再写 inline hex 文字色（2026-09-02 立）
 
 `app/globals.css` 有一套语义排版系统，**新代码必须用它**，不要再写 `text-[#5f594e]` 或
