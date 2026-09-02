@@ -63,6 +63,37 @@ test("其它职能分类回归不受影响", () => {
   assert.equal(classifyJobFunction({ title: "" }), "其他");
 });
 
+test("中文假朋友不污染分类，真岗位词仍保留", () => {
+  for (const title of [
+    "华星-产品管理类（本硕）",
+    "客车-产品管理主任工程师",
+    "DMPK-化合物样品管理员(J24376)",
+    "DMPK-早期药物理化性质检测研究员(J24611)",
+  ]) assert.notEqual(classifyJobFunction({ title }), "生产制造", title);
+
+  for (const title of ["SAP MM系统实施工程师", "高级系统实施工程师", "【AI】云端浏览器基础设施工程师"]) {
+    assert.notEqual(classifyJobFunction({ title }), "建筑工程", title);
+  }
+
+  for (const title of ["品质检验员", "质检员"]) assert.equal(classifyJobFunction({ title }), "生产制造", title);
+  for (const title of ["施工员", "2026届校招四公司施工技术岗(J45759)", "土建造价工程师"]) {
+    assert.equal(classifyJobFunction({ title }), "建筑工程", title);
+  }
+});
+
+test("清理跨行业裸词后仍按真实岗位职能分类", () => {
+  assert.notEqual(classifyJobFunction({ title: "保全电工" }), "金融业务");
+  assert.notEqual(classifyJobFunction({ title: "个人护理产品一号位(J45931)" }), "医疗健康");
+  assert.equal(classifyJobFunction({ title: "护士" }), "医疗健康");
+  assert.equal(classifyJobFunction({ title: "临床协调员/临床研究护士（CRC）-济宁" }), "医疗健康");
+  assert.equal(classifyJobFunction({ title: "餐厅领班" }), "客服服务");
+  assert.equal(classifyJobFunction({ title: "青岛-一对一全科教师(J55621)" }), "教育培训");
+  assert.equal(classifyJobFunction({ title: "全科医学科医师(J20060)" }), "医疗健康");
+  assert.equal(classifyJobFunction({ title: "产品经理" }), "产品");
+  assert.equal(classifyJobFunction({ title: "产品实习生" }), "产品");
+  assert.equal(classifyJobFunction({ title: "产品运营" }), "运营");
+});
+
 // 2026-09-02 生产库 5 万条在招岗对拍：全行业岗位有 27.6% 落入「其他」，其中教育/医疗/建筑/制造更高。
 // 以下标题均为生产库真实样本；新增桶只从标题判，防止 JD 正文的行业套话批量误标。
 test("全行业新增职能桶覆盖生产库真实标题", () => {

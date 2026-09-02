@@ -5,12 +5,96 @@ const {
   expandChinaKeywordTerms,
   expandChinaCityTargets,
   ftsCandidateTerms,
+  CHINA_KEYWORD_GROUPS,
+  KEYWORD_GROUP_FUNCTIONS,
   normalizeChinaCity,
   normalizeChinaJobFields,
   normalizeChinaJobType,
   jobMatchesChinaKeyword,
+  keywordMatchTier,
   keywordMatchUnits,
 } = require("../lib/china-keyword-expansion");
+
+test("非互联网方向会扩展到生产库职位标题使用的同义词", () => {
+  // 每一行模拟用户实际会填写的方向词；预期词均为生产库岗位标题可见写法。
+  for (const [query, expectedTerms] of [
+    ["银行柜员", ["柜员", "teller"]],
+    ["银行信贷", ["信贷", "personal banker"]],
+    ["保险理赔", ["理赔", "underwriter"]],
+    ["投资经理", ["投资经理", "portfolio manager"]],
+    ["中学数学教师", ["教师", "主讲"]],
+    ["教研培训", ["教研", "课程研发"]],
+    ["临床护士", ["护士", "nurse"]],
+    ["临床医生", ["医生", "physician"]],
+    ["临床研究", ["临床监查", "cra"]],
+    ["药师", ["药师", "pharmacist"]],
+    ["医药代表", ["医药代表", "msl"]],
+    ["机械工程师", ["机械设计", "mechanical engineer"]],
+    ["工艺工程师", ["工艺工程", "manufacturing engineer"]],
+    ["电气自动化", ["电气工程", "plc"]],
+    ["质量工程师", ["质量工程", "sqe"]],
+    ["生产管理", ["生产管理", "operator"]],
+    ["土木工程师", ["土建", "施工"]],
+    ["工程造价", ["造价", "quantity surveyor"]],
+    ["客户服务", ["客服", "customer support"]],
+    ["门店零售", ["店长", "retail"]],
+  ]) {
+    const terms = expandChinaKeywordTerms(query).map((term) => term.toLowerCase());
+    for (const expected of expectedTerms) assert.ok(terms.includes(expected), `${query} 应扩展出 ${expected}`);
+  }
+});
+
+test("关键词组与职能桶按索引严格对齐", () => {
+  assert.equal(KEYWORD_GROUP_FUNCTIONS.length, CHINA_KEYWORD_GROUPS.length);
+});
+
+test("追加非互联网方向组不影响现有互联网方向的精确匹配", () => {
+  for (const [query, title] of [
+    ["产品经理", "资深产品经理"],
+    ["算法", "推荐算法工程师"],
+    ["前端", "前端开发工程师"],
+    ["数据分析", "数据分析师"],
+  ]) {
+    const job = { title };
+    assert.equal(jobMatchesChinaKeyword(job, query), true, `${query} 应继续命中 ${title}`);
+    assert.equal(keywordMatchTier(job, query), "exact", `${query} 对 ${title} 应保持 exact`);
+  }
+});
+
+test("新方向组让不同标题写法进入真实推荐链路", () => {
+  // 这些标题不与用户词字面相同；tier 非空才会通过 eligibility 的 role_mismatch 硬门。
+  for (const [query, title, expectedTier] of [
+    ["银行柜员", "综合柜员岗"],
+    // 学段组追加后，这条从 related 升级为 exact；保留断言以防未来又退回硬匹配「中学数学」。
+    ["中学数学教师", "高中数学主讲教师", "exact"],
+    ["土木工程师", "施工员"],
+  ]) {
+    assert.equal(keywordMatchTier({ title }, query), expectedTier || "related", `${query} 应召回 ${title}`);
+  }
+});
+
+test("学段组把中学数学教师的真实标题写法提升为 exact", () => {
+  const units = keywordMatchUnits("中学数学教师");
+  assert.equal(units.length, 3);
+  assert.ok(units.some((unit) => unit.includes("高中") && unit.includes("初中")), "学段应独立成 OR 单元");
+  assert.ok(units.some((unit) => unit.includes("数学")), "学科残差应保留为 AND 单元");
+
+  for (const title of ["高中数学主讲教师-苏州分校-26校招", "初中数学教研"]) {
+    assert.equal(keywordMatchTier({ title }, "中学数学教师"), "exact", title);
+  }
+});
+
+test("关键词匹配跳过中文假朋友但保留同标题里的真施工", () => {
+  assert.equal(keywordMatchTier({ title: "SAP MM系统实施工程师" }, "土木工程师"), null);
+  assert.equal(keywordMatchTier({ title: "土建造价工程师" }, "土木工程师"), "exact");
+  assert.equal(
+    jobMatchesChinaKeyword({ title: "土建施工与系统实施工程" }, "土木"),
+    true,
+    "同一标题既有真施工又有实施工时，不能被整体否定",
+  );
+  assert.equal(keywordMatchTier({ title: "资深产品经理" }, "产品经理"), "exact");
+  assert.equal(keywordMatchTier({ title: "推荐算法工程师" }, "算法"), "exact");
+});
 
 test("中文连写词：词库外的具体词不得被丢弃（否则查询退化成搜泛词）", () => {
   // 「天线工程师」只有「工程师」命中预置组，「天线」在词库外。若按「整串含组词=已覆盖」处理，

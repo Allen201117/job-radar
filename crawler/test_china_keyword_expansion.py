@@ -23,6 +23,13 @@ class ContainsTermBoundaryTest(unittest.TestCase):
         self.assertTrue(cke.contains_term("后端工程师", "后端"))
         self.assertFalse(cke.contains_term("财务分析", "算法"))
 
+    def test_cjk_false_friends_are_skipped_but_real_occurrences_still_match(self):
+        self.assertFalse(cke.contains_term("系统实施工程师", "施工"))
+        self.assertFalse(cke.contains_term("产品管理", "品管"))
+        self.assertFalse(cke.contains_term("理化性质检测", "质检"))
+        self.assertTrue(cke.contains_term("土建施工与系统实施工程", "施工"))
+        self.assertTrue(cke.contains_term("品质检验员", "质检"))
+
 
 class ExpandTest(unittest.TestCase):
     def test_chinese_expands_to_english_synonyms(self):
@@ -66,11 +73,41 @@ class QueryMatchesTest(unittest.TestCase):
 
 class ParityWithFrontendTest(unittest.TestCase):
     def test_group_count_matches_frontend(self):
-        # 与 lib/china-keyword-expansion.js 的 21 组保持一致
-        self.assertEqual(len(cke.CHINA_KEYWORD_GROUPS), 21)
+        # 本次把 JS 已有 25 组同步到 crawler，并在末尾追加金融、教育、医疗、制造、建筑、客服共 20 组。
+        # 本次再追加「学段」修饰组；46 这个数是两端索引同构的守卫：加组时必须同步 KEYWORD_GROUP_FUNCTIONS。
+        self.assertEqual(len(cke.CHINA_KEYWORD_GROUPS), 46)
 
     def test_group_functions_aligned(self):
         self.assertEqual(len(cke.KEYWORD_GROUP_FUNCTIONS), len(cke.CHINA_KEYWORD_GROUPS))
+
+    def test_non_internet_queries_expand_to_real_title_variants(self):
+        # 每行是用户会填写的方向词及生产库标题会出现的同义词，防止词表只加名称却无法召回真实岗名。
+        cases = [
+            ("银行柜员", ("柜员", "teller")),
+            ("银行信贷", ("信贷", "personal banker")),
+            ("保险理赔", ("理赔", "underwriter")),
+            ("投资经理", ("投资经理", "portfolio manager")),
+            ("中学数学教师", ("教师", "主讲")),
+            ("教研培训", ("教研", "课程研发")),
+            ("临床护士", ("护士", "nurse")),
+            ("临床医生", ("医生", "physician")),
+            ("临床研究", ("临床监查", "cra")),
+            ("药师", ("药师", "pharmacist")),
+            ("医药代表", ("医药代表", "msl")),
+            ("机械工程师", ("机械设计", "mechanical engineer")),
+            ("工艺工程师", ("工艺工程", "manufacturing engineer")),
+            ("电气自动化", ("电气工程", "plc")),
+            ("质量工程师", ("质量工程", "sqe")),
+            ("生产管理", ("生产管理", "operator")),
+            ("土木工程师", ("土建", "施工")),
+            ("工程造价", ("造价", "quantity surveyor")),
+            ("客户服务", ("客服", "customer support")),
+            ("门店零售", ("店长", "retail")),
+        ]
+        for query, expected_terms in cases:
+            terms = {term.lower() for term in cke.expand_china_keyword_terms(query)}
+            for expected in expected_terms:
+                self.assertIn(expected, terms, f"{query} 应扩展出 {expected}")
 
 
 class ClassifyJobFunctionTest(unittest.TestCase):
@@ -255,6 +292,35 @@ class ClassifyJobFunctionTest(unittest.TestCase):
         self.assertEqual(cke.classify_job_function("产品运营"), "运营")
         self.assertEqual(cke.classify_job_function("Product Engineer"), "研发")
 
+    def test_cjk_false_friends_do_not_pollute_function_buckets(self):
+        for title in (
+            "华星-产品管理类（本硕）", "客车-产品管理主任工程师",
+            "DMPK-化合物样品管理员(J24376)", "DMPK-早期药物理化性质检测研究员(J24611)",
+        ):
+            with self.subTest(title=title):
+                self.assertNotEqual(cke.classify_job_function(title), "生产制造")
+        for title in ("SAP MM系统实施工程师", "高级系统实施工程师", "【AI】云端浏览器基础设施工程师"):
+            with self.subTest(title=title):
+                self.assertNotEqual(cke.classify_job_function(title), "建筑工程")
+        for title in ("品质检验员", "质检员"):
+            with self.subTest(title=title):
+                self.assertEqual(cke.classify_job_function(title), "生产制造")
+        for title in ("施工员", "2026届校招四公司施工技术岗(J45759)", "土建造价工程师"):
+            with self.subTest(title=title):
+                self.assertEqual(cke.classify_job_function(title), "建筑工程")
+
+    def test_cleaned_cross_industry_terms_keep_real_job_functions(self):
+        self.assertNotEqual(cke.classify_job_function("保全电工"), "金融业务")
+        self.assertNotEqual(cke.classify_job_function("个人护理产品一号位(J45931)"), "医疗健康")
+        self.assertEqual(cke.classify_job_function("护士"), "医疗健康")
+        self.assertEqual(cke.classify_job_function("临床协调员/临床研究护士（CRC）-济宁"), "医疗健康")
+        self.assertEqual(cke.classify_job_function("餐厅领班"), "客服服务")
+        self.assertEqual(cke.classify_job_function("青岛-一对一全科教师(J55621)"), "教育培训")
+        self.assertEqual(cke.classify_job_function("全科医学科医师(J20060)"), "医疗健康")
+        self.assertEqual(cke.classify_job_function("产品经理"), "产品")
+        self.assertEqual(cke.classify_job_function("产品实习生"), "产品")
+        self.assertEqual(cke.classify_job_function("产品运营"), "运营")
+
 
 class JobMatchesTest(unittest.TestCase):
     """字段感知 + 职能门：发现端（刷新公司库 / 联网发现）精准过滤的核心，与前端看板同口径。"""
@@ -291,6 +357,19 @@ class JobMatchesTest(unittest.TestCase):
 
     def test_empty_query_matches_all(self):
         self.assertTrue(cke.job_matches("任意岗位", "任意正文", ""))
+
+    def test_false_friends_and_school_stage_use_the_real_matcher(self):
+        units = cke.keyword_match_units("中学数学教师")
+        self.assertEqual(len(units), 3)
+        self.assertTrue(any("高中" in unit and "初中" in unit for unit in units))
+        self.assertTrue(any(unit == ["数学"] for unit in units))
+        self.assertTrue(cke.job_matches("高中数学主讲教师-苏州分校-26校招", "", "中学数学教师"))
+        self.assertTrue(cke.job_matches("初中数学教研", "", "中学数学教师"))
+        self.assertFalse(cke.job_matches("SAP MM系统实施工程师", "", "土木工程师"))
+        self.assertTrue(cke.job_matches("土建造价工程师", "", "土木工程师"))
+        self.assertTrue(cke.job_matches("土建施工与系统实施工程", "", "土木"))
+        self.assertTrue(cke.job_matches("资深产品经理", "", "产品经理"))
+        self.assertTrue(cke.job_matches("推荐算法工程师", "", "算法"))
 
 
 if __name__ == "__main__":
