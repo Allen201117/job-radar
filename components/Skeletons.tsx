@@ -23,7 +23,12 @@ export function JobCardSkeleton() {
           </div>
           <Bar className="h-3 w-full max-w-md" />
         </div>
-        <Bar className="h-9 w-24 shrink-0 rounded-full" />
+        {/* 真实 JobCard 右侧是「官网详情」+「值得投 / 更多」两组按钮：骨架只放一个矩形会矮一大截，
+            数据到达时整列往下跳。补成同构的两组，让占位高度贴近真实卡片。 */}
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <Bar className="h-9 w-24 rounded-full" />
+          <Bar className="h-9 w-20 rounded-full" />
+        </div>
       </div>
     </div>
   );

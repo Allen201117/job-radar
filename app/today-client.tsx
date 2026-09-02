@@ -78,28 +78,28 @@ export function OnboardingPanel({
 
   return (
     <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] bg-white/45 px-6 py-14 text-center dark:border-white/[0.1] dark:bg-white/[0.05]">
-      <h2 className="text-lg font-semibold ink-1">先告诉我们你想找什么</h2>
-      <p className="mx-auto mt-2 max-w-md text-pretty text-[14px] leading-6 ink-2">
+      <h2 className="t-h2 ink-1">先告诉我们你想找什么</h2>
+      <p className="t-body-sm mx-auto mt-2 max-w-md text-pretty ink-2">
         设置目标岗位和城市后，系统会每天从企业官网中筛出值得处理的机会。
       </p>
       <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
         <Link
           href="/preferences"
-          className="inline-flex items-center justify-center rounded-full bg-[#1a1714] px-5 py-2.5 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+          className="t-label inline-flex items-center justify-center rounded-full bg-[#1a1714] px-5 py-2.5 text-[#f7f1e6] transition hover:bg-[#2b2520] dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
         >
           设置求职目标
         </Link>
         <Link
           href="/preferences#resume"
-          className="inline-flex items-center justify-center rounded-full border border-black/[0.1] bg-white/70 px-5 py-2.5 text-sm font-semibold ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
+          className="t-label inline-flex items-center justify-center rounded-full border border-black/[0.1] bg-white/70 px-5 py-2.5 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
         >
           上传简历生成画像
         </Link>
       </div>
       {/* 给「先随便逛逛」的新用户留出口：不设目标也能看岗位库，别把首次访问堵死在表单前 */}
-      <p className="mt-4 text-[13px] ink-3">
+      <p className="t-caption mt-4 ink-3">
         还没想好？
-        <Link href="/jobs" className="ml-1 font-medium underline underline-offset-2 hover:opacity-80">
+        <Link href="/jobs" className="t-label ml-1 underline underline-offset-2 hover:opacity-80">
           先去岗位库随便逛逛
         </Link>
       </p>
@@ -119,18 +119,18 @@ function EmptyQueue({ counts }: { counts?: OpportunityFeed["counts"] }) {
       : "系统持续在监控你关注的官方招聘源，有新机会会第一时间出现在这里。你也可以：";
   return (
     <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] bg-white/45 px-6 py-14 text-center dark:border-white/[0.1] dark:bg-white/[0.05]">
-      <h2 className="text-lg font-semibold ink-1">今天暂时没有新的对口机会</h2>
-      <p className="mx-auto mt-2 max-w-md text-pretty text-[14px] leading-6 ink-2">
+      <h2 className="t-h2 ink-1">今天暂时没有新的对口机会</h2>
+      <p className="t-body-sm mx-auto mt-2 max-w-md text-pretty ink-2">
         {explain}
       </p>
       <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
-        <Link href="/preferences" className="rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]">
+        <Link href="/preferences" className="t-label rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]">
           调整求职目标
         </Link>
-        <Link href="/jobs" className="rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]">
+        <Link href="/jobs" className="t-label rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]">
           搜索完整岗位库
         </Link>
-        <Link href="/preferences" className="rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]">
+        <Link href="/preferences" className="t-label rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]">
           添加关注公司
         </Link>
       </div>
@@ -268,7 +268,7 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
   return (
     <div className="space-y-10">
       {deadIds.size > 0 && (
-        <p className="rounded-full border border-black/[0.08] bg-white/60 px-4 py-2 text-[13px] leading-5 ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
+        <p className="t-body-sm rounded-full border border-black/[0.08] bg-white/60 px-4 py-2 ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
           刚刚实时复核发现 {deadIds.size} 个岗位已失效，已自动为你隐藏，帮你省一次白点。
         </p>
       )}
@@ -279,12 +279,12 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
         return (
           <section key={key}>
             <div className="mb-3">
-              <h2 className="text-lg font-semibold ink-1">
+              <h2 className="t-h2 ink-1">
                 {meta.title}
-                <span className="ml-2 text-sm font-normal ink-3">{items.length}</span>
+                <span className="t-num ml-2 ink-3">{items.length}</span>
               </h2>
               {meta.subtitle && (
-                <p className="mt-1 text-[13px] leading-5 ink-3">{meta.subtitle}</p>
+                <p className="t-caption mt-1 ink-3">{meta.subtitle}</p>
               )}
             </div>
             <div className="space-y-3">
@@ -308,13 +308,13 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
 
       {state.toast && (
         <div className="above-mobile-nav fixed inset-x-0 z-50 flex justify-center px-4">
-          <div className="flex items-center gap-3 rounded-full border border-black/[0.1] bg-[#1a1714] px-4 py-2.5 text-sm text-[#f7f1e6] shadow-lg dark:bg-[#f3ecdf] dark:text-[#16130f]">
+          <div className="t-body-sm flex items-center gap-3 rounded-full border border-black/[0.1] bg-[#1a1714] px-4 py-2.5 text-[#f7f1e6] shadow-lg dark:bg-[#f3ecdf] dark:text-[#16130f]">
             {state.toast.undoFailed ? (
               <span>撤销失败，已重新移出</span>
             ) : (
               <>
                 <span>{state.toast.action ? ACTION_LABEL[state.toast.action] : "已处理"}</span>
-                <button type="button" onClick={undo} className="font-semibold underline underline-offset-2 hover:opacity-80">
+                <button type="button" onClick={undo} className="t-label text-[#f7f1e6] underline underline-offset-2 hover:opacity-80 dark:text-[#16130f]">
                   撤销
                 </button>
               </>
