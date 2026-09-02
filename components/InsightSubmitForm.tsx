@@ -16,7 +16,7 @@ interface Props {
 }
 
 const inputCls =
-  "w-full rounded-lg border border-black/[0.09] bg-white/70 px-3 py-2 text-sm text-[#1a1714] outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#f3ecdf] dark:placeholder:text-[#8b8478] dark:focus:border-white/40 dark:focus:bg-[#1e1a15]";
+  "w-full rounded-lg border border-black/[0.09] bg-white/70 px-3 py-2 text-sm ink-1 outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:placeholder:text-[#8b8478] dark:focus:border-white/40 dark:focus:bg-[#1e1a15]";
 
 const TOPIC_OPTIONS = Object.entries(FIRST_PARTY_TOPICS).map(([value, label]) => ({
   value: value as FirstPartyTopic,
@@ -115,7 +115,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
     >
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="space-y-1.5">
-          <span className="text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">主题</span>
+          <span className="text-xs font-medium ink-3 ">主题</span>
           <select
             value={topic}
             onChange={(e) => setTopic(e.target.value as FirstPartyTopic)}
@@ -130,7 +130,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
         </label>
 
         <div className="space-y-1.5">
-          <span className="text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">评分</span>
+          <span className="text-xs font-medium ink-3 ">评分</span>
           <div className="grid grid-cols-5 gap-1.5">
             {[1, 2, 3, 4, 5].map((value) => (
               <button
@@ -141,7 +141,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
                   "h-9 rounded-lg border text-sm font-semibold transition",
                   rating === value
                     ? "border-[#1a1714] bg-[#1a1714] text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                    : "border-black/[0.08] bg-white/60 text-[#5f594e] hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.08]",
+                    : "border-black/[0.08] bg-white/60 ink-2 hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]",
                 )}
               >
                 {value}
@@ -152,7 +152,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
 
         {topic === "bonus" && (
           <label className="space-y-1.5">
-            <span className="text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">年终奖月数</span>
+            <span className="text-xs font-medium ink-3 ">年终奖月数</span>
             <input
               type="number"
               min="0"
@@ -167,7 +167,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
         {topic === "interview" && (
           <>
             <label className="space-y-1.5">
-              <span className="text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">面试轮数</span>
+              <span className="text-xs font-medium ink-3 ">面试轮数</span>
               <input
                 type="number"
                 min="1"
@@ -177,7 +177,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
               />
             </label>
             <label className="space-y-1.5">
-              <span className="text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">结果</span>
+              <span className="text-xs font-medium ink-3 ">结果</span>
               <select
                 value={interviewResult}
                 onChange={(e) => setInterviewResult(e.target.value)}
@@ -193,7 +193,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
         )}
 
         <label className="space-y-1.5 sm:col-span-2">
-          <span className="flex items-center justify-between gap-3 text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">
+          <span className="flex items-center justify-between gap-3 text-xs font-medium ink-3 ">
             <span>内容</span>
             <span>{content.length}/{FIRST_PARTY_CONTENT_MAX}</span>
           </span>
@@ -207,7 +207,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
         </label>
       </div>
 
-      <label className="mt-3 flex items-start gap-2 text-xs leading-5 text-[#5f594e] dark:text-[#b6ad9d]">
+      <label className="mt-3 flex items-start gap-2 text-xs leading-5 ink-2 ">
         <input
           type="checkbox"
           checked={consent}

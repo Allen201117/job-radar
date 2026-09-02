@@ -54,7 +54,7 @@ const AUDIENCES = [
 ];
 
 const cardBase =
-  "rounded-[18px] border border-black/[0.05] bg-white text-[#1a1714] shadow-[0_1px_1px_rgba(40,34,28,0.05),0_22px_48px_-20px_rgba(40,34,28,0.32)] hover:shadow-[0_30px_60px_-24px_rgba(40,34,28,0.45)] dark:border-white/[0.06] dark:bg-[#1e1a15] dark:text-[#f3ecdf] dark:shadow-[0_22px_48px_-20px_rgba(0,0,0,0.6)]";
+  "rounded-[18px] border border-black/[0.05] bg-white ink-1 shadow-[0_1px_1px_rgba(40,34,28,0.05),0_22px_48px_-20px_rgba(40,34,28,0.32)] hover:shadow-[0_30px_60px_-24px_rgba(40,34,28,0.45)] dark:border-white/[0.06] dark:bg-[#1e1a15] dark:shadow-[0_22px_48px_-20px_rgba(0,0,0,0.6)]";
 
 export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
   const primaryHref = loggedIn ? "/today" : "/login";
@@ -126,18 +126,18 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
   }, []);
 
   return (
-    <main className="bg-editorial grain relative min-h-screen overflow-x-hidden text-[#1a1714] dark:text-[#f3ecdf]">
+    <main className="bg-editorial grain relative min-h-screen overflow-x-hidden ink-1 ">
       {/* ——— 导航 ——— */}
       <header className="sticky top-3 z-50 px-4">
         <nav className="mx-auto flex max-w-6xl items-center justify-between rounded-full border border-black/[0.07] bg-[#f4efe6]/80 px-3 py-2.5 pl-4 shadow-[0_10px_30px_-22px_rgba(40,34,28,0.5)] backdrop-blur-xl dark:border-white/[0.1] dark:bg-[#191510]/[0.92] dark:shadow-[0_16px_36px_-22px_rgba(0,0,0,0.85)]">
           <Link href="/" className="transition-opacity hover:opacity-70">
             <BrandMark tile={32} icon={20} wordSize={17} />
           </Link>
-          <div className="hidden items-center gap-7 text-[14px] text-[#5f594e] md:flex dark:text-[#b6ad9d]">
-            <a href="#why" className="transition-colors hover:text-[#1a1714] dark:hover:text-[#f3ecdf]">为什么选它</a>
-            <a href="#vs" className="transition-colors hover:text-[#1a1714] dark:hover:text-[#f3ecdf]">和平台的区别</a>
-            <a href="#insight" className="transition-colors hover:text-[#1a1714] dark:hover:text-[#f3ecdf]">职业洞察</a>
-            <a href="#who" className="transition-colors hover:text-[#1a1714] dark:hover:text-[#f3ecdf]">适用人群</a>
+          <div className="hidden items-center gap-7 text-[14px] ink-2 md:flex ">
+            <a href="#why" className="transition-colors hover:opacity-80 ">为什么选它</a>
+            <a href="#vs" className="transition-colors hover:opacity-80 ">和平台的区别</a>
+            <a href="#insight" className="transition-colors hover:opacity-80 ">职业洞察</a>
+            <a href="#who" className="transition-colors hover:opacity-80 ">适用人群</a>
           </div>
           <div className="flex items-center gap-2">
             <ThemeToggle />
@@ -159,19 +159,19 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
           <figure className="lp-float absolute left-[-12px] top-[54px]" style={{ ["--fd" as string]: 42 } as CSSProperties}>
             <div className="float-soft">
               <div className={`lp-fcard ${cardBase} w-[200px] p-3.5`} style={{ ["--rot" as string]: "-6deg" } as CSSProperties}>
-                <p className="m-0 text-[11px] font-semibold text-[#8a8275] dark:text-[#9a9184]">今日机会</p>
+                <p className="m-0 text-[11px] font-semibold ink-3 ">今日机会</p>
                 <p className="mb-0 mt-1.5 text-[1.45rem] font-extrabold leading-tight">3 条待处理</p>
-                <p className="mb-0 mt-1.5 text-[12px] text-[#8a8275] dark:text-[#9a9184]">高匹配待处理</p>
+                <p className="mb-0 mt-1.5 text-[12px] ink-3 ">高匹配待处理</p>
                 <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/[0.07] dark:bg-white/[0.08]"><div className="h-full w-[46%] rounded-full bg-[#7fb2e8]" /></div>
               </div>
             </div>
-            <figcaption className="mt-2 text-[12px] text-[#9a9184] dark:text-[#837c70]">今日机会</figcaption>
+            <figcaption className="mt-2 text-[12px] ink-3 ">今日机会</figcaption>
           </figure>
 
           <figure className="lp-float absolute right-[-16px] top-[30px]" style={{ ["--fd" as string]: 30 } as CSSProperties}>
             <div className="float-soft" style={{ animationDelay: "1.3s" }}>
               <div className={`lp-fcard ${cardBase} w-[236px] p-4`} style={{ ["--rot" as string]: "5deg" } as CSSProperties}>
-                <div className="flex items-center gap-1.5 text-[12px] text-[#8a8275] dark:text-[#9a9184]"><b className="text-[#1a1714] dark:text-[#f3ecdf]">Apple</b>·上海</div>
+                <div className="flex items-center gap-1.5 text-[12px] ink-3 "><b className="ink-1 ">Apple</b>·上海</div>
                 <p className="mb-0 mt-2 text-[15px] font-bold leading-snug">Machine Learning Engineer</p>
                 <div className="mt-3.5 flex items-center justify-between">
                   <div className="flex gap-1.5">
@@ -182,14 +182,14 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
                 </div>
               </div>
             </div>
-            <figcaption className="mt-2 text-right text-[12px] text-[#9a9184] dark:text-[#837c70]">官方岗位详情</figcaption>
+            <figcaption className="mt-2 text-right text-[12px] ink-3 ">官方岗位详情</figcaption>
           </figure>
 
           <figure className="lp-float absolute bottom-[-26px] left-[6px]" style={{ ["--fd" as string]: 24 } as CSSProperties}>
             <div className="float-soft" style={{ animationDelay: "0.7s" }}>
               <div className={`lp-fcard ${cardBase} w-[218px] p-4`} style={{ ["--rot" as string]: "3deg" } as CSSProperties}>
-                <p className="m-0 text-[11px] font-semibold text-[#8a8275] dark:text-[#9a9184]">职业洞察 · 分级标时间</p>
-                <ul className="m-0 mt-3 grid list-none grid-cols-2 gap-2.5 p-0 text-[12px] text-[#5f594e] dark:text-[#b6ad9d]">
+                <p className="m-0 text-[11px] font-semibold ink-3 ">职业洞察 · 分级标时间</p>
+                <ul className="m-0 mt-3 grid list-none grid-cols-2 gap-2.5 p-0 text-[12px] ink-2 ">
                   <li className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-[#7fb2e8]" />时机</li>
                   <li className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-[#b6da7e]" />薪酬</li>
                   <li className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-[#e7b27e]" />路径</li>
@@ -197,7 +197,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
                 </ul>
               </div>
             </div>
-            <figcaption className="mt-2 text-[12px] text-[#9a9184] dark:text-[#837c70]">职业洞察</figcaption>
+            <figcaption className="mt-2 text-[12px] ink-3 ">职业洞察</figcaption>
           </figure>
 
           <figure className="lp-float absolute bottom-[-14px] right-[8px]" style={{ ["--fd" as string]: 38 } as CSSProperties}>
@@ -207,7 +207,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
                 <p className="m-0 text-[13px] font-semibold leading-snug text-[#f7f1e6]">招聘平台的<br />水货岗已过滤</p>
               </div>
             </div>
-            <figcaption className="mt-2 text-right text-[12px] text-[#9a9184] dark:text-[#837c70]">质量门</figcaption>
+            <figcaption className="mt-2 text-right text-[12px] ink-3 ">质量门</figcaption>
           </figure>
         </div>
 
@@ -232,7 +232,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
             </span>
             <span className="whitespace-nowrap">的机会。</span>
           </h1>
-          <p className="lp-reveal mx-auto mt-6 max-w-[600px] text-pretty text-[17px] leading-[1.75] text-[#5f594e] dark:text-[#b6ad9d]">
+          <p className="lp-reveal mx-auto mt-6 max-w-[600px] text-pretty text-[17px] leading-[1.75] ink-2 ">
             设置一次目标，系统持续监控企业官方招聘页，过滤失效和不相关岗位，告诉你今天真正值得看的机会。
           </p>
           <div className="lp-reveal mt-8 flex flex-wrap items-center justify-center gap-3">
@@ -242,7 +242,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
             </Link>
             <a href="#why" className="btn-ghost cursor-target text-base">看看怎么用</a>
           </div>
-          <p className="lp-reveal mt-5 text-[13px] text-[#9a9184] dark:text-[#837c70]">
+          <p className="lp-reveal mt-5 text-[13px] ink-3 ">
             覆盖 Apple · 字节 · 腾讯 · 京东 · 微软 等主流企业官方招聘源，持续更新
           </p>
         </div>
@@ -250,13 +250,13 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
 
       {/* ——— 公司官方源 ——— */}
       <div className="lp-reveal mx-auto mt-6 max-w-6xl px-6">
-        <p className="mb-4 text-center text-[12px] font-bold uppercase tracking-[0.16em] text-[#9a9184] dark:text-[#837c70]">岗位只来自这些企业的官方招聘源</p>
+        <p className="mb-4 text-center text-[12px] font-bold uppercase tracking-[0.16em] ink-3 ">岗位只来自这些企业的官方招聘源</p>
         <div className="lp-marquee overflow-hidden [mask-image:linear-gradient(90deg,transparent,#000_8%,#000_92%,transparent)] [-webkit-mask-image:linear-gradient(90deg,transparent,#000_8%,#000_92%,transparent)]">
           <div className="lp-marquee-track gap-3 py-2">
             {[...COMPANIES, ...COMPANIES].map((c, i) => (
               <span
                 key={`${c}-${i}`}
-                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/70 bg-white/45 px-5 py-3 text-[15px] font-semibold text-[#1a1714] shadow-[0_10px_26px_-20px_rgba(40,34,28,0.4)] backdrop-blur-md dark:border-white/[0.14] dark:bg-white/[0.06] dark:text-[#f3ecdf]"
+                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/70 bg-white/45 px-5 py-3 text-[15px] font-semibold ink-1 shadow-[0_10px_26px_-20px_rgba(40,34,28,0.4)] backdrop-blur-md dark:border-white/[0.14] dark:bg-white/[0.06] "
               >
                 <span className="size-1.5 rounded-full bg-[#00e676] opacity-80" />
                 {c}
@@ -273,7 +273,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
           <h2 className="display-tight mt-3.5 text-balance text-[clamp(2rem,4.6vw,2.9rem)] font-extrabold leading-[1.14] tracking-[-0.02em]">
             少一点假岗位和噪音，<br className="hidden sm:block" />多一点能直接投的好机会。
           </h2>
-          <p className="mt-5 text-pretty text-[17px] leading-[1.7] text-[#5f594e] dark:text-[#b6ad9d]">
+          <p className="mt-5 text-pretty text-[17px] leading-[1.7] ink-2 ">
             不是又一个聚合搜索框。职达把「找到官方真岗位」这件事，拆成四件你能感知到的事。
           </p>
         </div>
@@ -285,13 +285,13 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
               style={{ ["--d" as string]: `${i * 0.08}s` } as CSSProperties}
             >
               <div className="flex items-center justify-between">
-                <span className="grid size-11 place-items-center rounded-[14px] bg-[#f4efe6] text-[#1a1714] dark:bg-white/[0.08] dark:text-[#f3ecdf]">
+                <span className="grid size-11 place-items-center rounded-[14px] bg-[#f4efe6] ink-1 dark:bg-white/[0.08] ">
                   <p.icon size={22} weight="fill" aria-hidden="true" />
                 </span>
                 <span className="size-2.5 rounded-full" style={{ background: p.dot }} />
               </div>
               <h3 className="display-tight mt-5 text-[1.4rem] font-extrabold">{p.title}</h3>
-              <p className="mt-2.5 text-pretty text-[14px] leading-[1.65] text-[#5f594e] dark:text-[#b6ad9d]">{p.text}</p>
+              <p className="mt-2.5 text-pretty text-[14px] leading-[1.65] ink-2 ">{p.text}</p>
             </article>
           ))}
         </div>
@@ -307,11 +307,11 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
         </div>
         <div className="mt-12 grid gap-4 sm:grid-cols-2">
           <div className="lp-reveal rounded-[22px] border border-black/[0.06] bg-white/55 p-7 dark:border-white/[0.08] dark:bg-white/[0.03]">
-            <h3 className="text-[1.25rem] font-extrabold text-[#5f594e] dark:text-[#b6ad9d]">刷招聘平台</h3>
+            <h3 className="text-[1.25rem] font-extrabold ink-2 ">刷招聘平台</h3>
             <div className="mt-3.5">
               {["真岗、假岗、钓鱼岗混在一起", "大量挂着却早就招满的过期岗", "中介转载，点进去还要再注册", "每天刷很久，真正合适的没几个"].map((line) => (
                 <div key={line} className="flex items-start gap-3 rounded-xl px-2.5 py-3 text-[15px] leading-snug transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]">
-                  <span className="mt-0.5 grid size-[22px] shrink-0 place-items-center rounded-full bg-black/[0.07] text-[#8a8275] dark:bg-white/[0.08] dark:text-[#9a9184]"><X size={12} weight="bold" aria-hidden="true" /></span>
+                  <span className="mt-0.5 grid size-[22px] shrink-0 place-items-center rounded-full bg-black/[0.07] ink-3 dark:bg-white/[0.08] "><X size={12} weight="bold" aria-hidden="true" /></span>
                   {line}
                 </div>
               ))}
@@ -377,7 +377,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
           <h2 className="display-tight mt-3.5 text-balance text-[clamp(2rem,4.6vw,2.9rem)] font-extrabold leading-[1.14] tracking-[-0.02em]">
             校招、实习、社招，<br className="hidden sm:block" />哪个阶段都能用。
           </h2>
-          <p className="mt-5 text-pretty text-[17px] leading-[1.7] text-[#5f594e] dark:text-[#b6ad9d]">不管你在求职的哪一段，职达只给你官方、最新、匹配的信号。</p>
+          <p className="mt-5 text-pretty text-[17px] leading-[1.7] ink-2 ">不管你在求职的哪一段，职达只给你官方、最新、匹配的信号。</p>
         </div>
         <div className="mt-12 grid gap-4 sm:grid-cols-3">
           {AUDIENCES.map((a, i) => (
@@ -387,12 +387,12 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
               style={{ ["--d" as string]: `${i * 0.1}s` } as CSSProperties}
             >
               <div className="flex items-center gap-3">
-                <span className="grid size-11 place-items-center rounded-[14px] bg-[#f4efe6] text-[#1a1714] transition-transform duration-300 group-hover:-rotate-6 dark:bg-white/[0.08] dark:text-[#f3ecdf]">
+                <span className="grid size-11 place-items-center rounded-[14px] bg-[#f4efe6] ink-1 transition-transform duration-300 group-hover:-rotate-6 dark:bg-white/[0.08] ">
                   <a.icon size={22} weight="fill" aria-hidden="true" />
                 </span>
                 <span className="display-tight text-[1.4rem] font-extrabold">{a.tag}</span>
               </div>
-              <p className="mt-5 text-pretty text-[14px] leading-[1.65] text-[#5f594e] dark:text-[#b6ad9d]">{a.text}</p>
+              <p className="mt-5 text-pretty text-[14px] leading-[1.65] ink-2 ">{a.text}</p>
             </article>
           ))}
         </div>
@@ -409,7 +409,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
           </h2>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
             {["城市匹配", "简历画像", "官方源校验", "分级职业洞察"].map((c) => (
-              <span key={c} className="rounded-full border border-black/[0.07] bg-white px-4 py-1.5 text-[13px] font-semibold text-[#6b655a] transition-transform hover:-translate-y-0.5 dark:border-white/[0.1] dark:bg-white/[0.06] dark:text-[#b6ad9d]">{c}</span>
+              <span key={c} className="rounded-full border border-black/[0.07] bg-white px-4 py-1.5 text-[13px] font-semibold ink-2 transition-transform hover:-translate-y-0.5 dark:border-white/[0.1] dark:bg-white/[0.06] ">{c}</span>
             ))}
           </div>
           <div className="mt-8 flex justify-center">
@@ -427,7 +427,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
           <Link href="/" className="transition-opacity hover:opacity-70">
             <BrandMark tile={28} icon={18} wordSize={15} />
           </Link>
-          <p className="max-w-xl text-[12px] leading-5 text-[#9a9184] dark:text-[#837c70]">
+          <p className="max-w-xl text-[12px] leading-5 ink-3 ">
             岗位仅来自企业官方公开渠道；职业洞察以聚合形式呈现、来源去标识，支持通知后删除。© 2026 职达 JobRadar
           </p>
         </div>

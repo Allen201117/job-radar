@@ -47,9 +47,9 @@ export default async function InsightsAdminPage() {
           icon={Sparkle}
         />
 
-        <section className="surface mb-6 p-5 text-[#1a1714] dark:text-[#f3ecdf] sm:p-6">
+        <section className="surface mb-6 p-5 ink-1 sm:p-6">
           <h2 className="text-base font-semibold">近 7 天事件计数</h2>
-          <p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">
+          <p className="mt-1 text-xs ink-3 ">
             自有最小埋点（无第三方分析 SDK）。用于判断职业洞察 / 岗位点击 / 刷新等功能是否有人用。
           </p>
           {stats.error ? (
@@ -57,11 +57,11 @@ export default async function InsightsAdminPage() {
               统计暂不可用：{stats.error}
             </p>
           ) : stats.rows.length === 0 ? (
-            <p className="mt-4 text-sm text-[#8a8275] dark:text-[#9a9184]">近 7 天暂无事件。</p>
+            <p className="mt-4 text-sm ink-3 ">近 7 天暂无事件。</p>
           ) : (
             <table className="mt-4 w-full max-w-md text-sm">
               <thead>
-                <tr className="border-b border-black/[0.08] text-left text-xs text-[#8a8275] dark:border-white/[0.1] dark:text-[#9a9184]">
+                <tr className="border-b border-black/[0.08] text-left text-xs ink-3 dark:border-white/[0.1] ">
                   <th className="py-2 font-medium">事件</th>
                   <th className="py-2 text-right font-medium">近 7 天次数</th>
                 </tr>
@@ -69,7 +69,7 @@ export default async function InsightsAdminPage() {
               <tbody>
                 {stats.rows.map((r) => (
                   <tr key={r.event} className="border-b border-black/[0.05] dark:border-white/[0.1]">
-                    <td className="py-2 font-mono text-[#3f3a33] dark:text-[#d9d0c2]">{r.event}</td>
+                    <td className="py-2 font-mono ink-2 ">{r.event}</td>
                     <td className="py-2 text-right font-semibold tabular-nums">{r.count}</td>
                   </tr>
                 ))}

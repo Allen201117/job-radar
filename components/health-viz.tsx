@@ -86,10 +86,10 @@ export function KpiCard({
   const content = (
     <>
       <p className="text-xs font-medium text-[#625c51] dark:text-[#c5bbaa]">{title}</p>
-      <div className="mt-2 min-h-10 text-[1.75rem] font-semibold leading-none tracking-[-0.035em] tabular-nums text-[#1a1714] dark:text-[#f3ecdf]">{value}</div>
+      <div className="mt-2 min-h-10 text-[1.75rem] font-semibold leading-none tracking-[-0.035em] tabular-nums ink-1 ">{value}</div>
       <div className="mt-3 min-h-5">{status || <StatusBadge tone={tone} />}</div>
-      <p className="mt-2 text-xs leading-5 text-[#756e62] dark:text-[#b6ad9d]">{detail}</p>
-      {footnote && <p className="mt-4 border-t border-black/[0.06] pt-2 text-[10px] leading-4 text-[#8a8275] dark:border-white/[0.08] dark:text-[#9a9184]">{footnote}</p>}
+      <p className="mt-2 text-xs leading-5 ink-3">{detail}</p>
+      {footnote && <p className="mt-4 border-t border-black/[0.06] pt-2 text-[10px] leading-4 ink-3 dark:border-white/[0.08] ">{footnote}</p>}
     </>
   );
   const cardClass = cn(
@@ -135,12 +135,12 @@ export function BarList({
                 这一竖条宽度恒定、只由 tone 决定，给「差」一个与数值无关的强调通道。 */}
             <span aria-hidden="true" className={cn("absolute inset-y-0 left-0 w-[3px]", HEALTH_STATUS_META[tone].fill, tone === "muted" && "opacity-40")} />
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-[#1a1714] dark:text-[#f3ecdf]">{item.label}</p>
-              {item.caption && <p className="mt-0.5 truncate text-[11px] text-[#756e62] dark:text-[#b6ad9d]">{item.caption}</p>}
+              <p className="truncate text-sm font-medium ink-1 ">{item.label}</p>
+              {item.caption && <p className="mt-0.5 truncate text-[11px] ink-3">{item.caption}</p>}
             </div>
-            <div className="text-right tabular-nums text-sm font-semibold text-[#3f3a33] dark:text-[#d9d0c2]">
+            <div className="text-right tabular-nums text-sm font-semibold ink-2 ">
               {item.value}
-              {item.valueDetail && <p className="mt-0.5 text-[11px] font-normal text-[#756e62] dark:text-[#b6ad9d]">{item.valueDetail}</p>}
+              {item.valueDetail && <p className="mt-0.5 text-[11px] font-normal ink-3">{item.valueDetail}</p>}
             </div>
           </div>
         );
@@ -168,7 +168,7 @@ export function Tracker({
           return <span key={`${item.label}-${index}`} role="img" title={item.label} aria-label={item.label} className={cn("grid aspect-square min-w-0 place-items-center rounded-[4px] border text-[9px] font-bold leading-none", meta.cell)}>{meta.symbol}</span>;
         })}
       </div>
-      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[#756e62] dark:text-[#b6ad9d]" aria-label="状态图例">
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] ink-3" aria-label="状态图例">
         {(Object.keys(HEALTH_STATUS_META) as BandTone[]).map((tone) => <span key={tone} className="inline-flex items-center gap-1"><StatusDot tone={tone} />{HEALTH_STATUS_META[tone].label}</span>)}
       </div>
     </div>
@@ -212,5 +212,5 @@ export function StatRing({
 }
 
 export function Callout({ tone = "muted", children, className }: { tone?: BandTone; children: ReactNode; className?: string }) {
-  return <aside className={cn("flex items-start gap-2 rounded-xl border border-black/[0.07] bg-white/45 px-3.5 py-3 text-sm leading-5 text-[#3f3a33] dark:border-white/[0.09] dark:bg-white/[0.04] dark:text-[#d9d0c2]", className)}><StatusDot tone={tone} className="mt-1" /><p>{children}</p></aside>;
+  return <aside className={cn("flex items-start gap-2 rounded-xl border border-black/[0.07] bg-white/45 px-3.5 py-3 text-sm leading-5 ink-2 dark:border-white/[0.09] dark:bg-white/[0.04] ", className)}><StatusDot tone={tone} className="mt-1" /><p>{children}</p></aside>;
 }

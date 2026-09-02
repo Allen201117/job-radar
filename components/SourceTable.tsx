@@ -63,14 +63,14 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
   }
 
   if (loading) {
-    return <p className="surface p-5 text-sm text-[#5f594e] dark:text-[#b6ad9d]">加载中...</p>;
+    return <p className="surface p-5 text-sm ink-2 ">加载中...</p>;
   }
 
   return (
-    <div className="surface overflow-x-auto px-4 text-[#1a1714] dark:text-[#f3ecdf]">
+    <div className="surface overflow-x-auto px-4 ink-1 ">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-black/[0.06] text-left text-xs font-medium text-[#8a8275] dark:border-white/[0.1] dark:text-[#9a9184]">
+          <tr className="border-b border-black/[0.06] text-left text-xs font-medium ink-3 dark:border-white/[0.1] ">
             <th className="py-2 pr-4">公司</th>
             <th className="py-2 pr-4">URL</th>
             <th className="py-2 pr-4">抓取方式</th>
@@ -109,7 +109,7 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
                     {source.enabled ? "启用" : "禁用"}
                   </button>
                 </td>
-                <td className="py-2 pr-4 text-xs text-[#8a8275] dark:text-[#9a9184]">
+                <td className="py-2 pr-4 text-xs ink-3 ">
                   {source.last_checked_at
                     ? new Date(source.last_checked_at).toLocaleString("zh-CN")
                     : "—"}
@@ -129,10 +129,10 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
                       {run.jobs_found > 0 && ` (${run.jobs_found})`}
                     </span>
                   ) : (
-                    <span className="text-xs text-[#9a9184] dark:text-[#837c70]">—</span>
+                    <span className="text-xs ink-3 ">—</span>
                   )}
                 </td>
-                <td className="py-2 text-xs text-[#8a8275] dark:text-[#9a9184]">
+                <td className="py-2 text-xs ink-3 ">
                   {source.notes || "—"}
                 </td>
               </tr>

@@ -128,7 +128,7 @@ export default function JobLibraryStat({ initialTotal }: Props) {
         <button
           type="button"
           onClick={() => void refreshRef.current()}
-          className="grid size-7 shrink-0 place-items-center rounded-full border border-black/[0.08] bg-white/70 text-[#3f3a33] transition duration-200 hover:bg-white active:scale-[0.94] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-[#1e1a15]"
+          className="grid size-7 shrink-0 place-items-center rounded-full border border-black/[0.08] bg-white/70 ink-2 transition duration-200 hover:bg-white active:scale-[0.94] dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-[#1e1a15]"
           aria-label="立即刷新岗位库计数"
         >
           <ArrowsClockwise
@@ -173,9 +173,10 @@ function StatCell({
           <AnimatedStat value={value} />
         </span>
       )}
+      {/* 单位与标签之间留一个细间隔：直接相连会渲染成「个24 小时内核验有效」，数字和文案糊成一团 */}
       <span className="t-caption whitespace-nowrap">
         {unit}
-        {label}
+        <span className="pl-1">{label}</span>
       </span>
     </div>
   );

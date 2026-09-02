@@ -93,7 +93,7 @@ const SIGNAL_STYLE: Record<OpportunitySignalType, string> = {
   STILL_OPEN: "border-[#bcdcae] bg-[#eef6e0] text-[#4d6b2f] dark:border-[#a3d06a]/45 dark:bg-[#a3d06a]/20 dark:text-[#d2f0ad]",
   OPEN_UNVERIFIED: "border-[#e4d1a8] bg-[#f8efd9] text-[#8a6a2a] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/12 dark:text-[#e0b15a]",
   DEADLINE_SOON: "border-[#f0d9a8] bg-[#fbf1de] text-[#9a6a1f] dark:border-[#e8b87f]/30 dark:bg-[#e8b87f]/12 dark:text-[#e8b87f]",
-  CLOSED_OR_STALE: "border-black/[0.08] bg-[#f0ece2] text-[#6b655a] dark:border-white/10 dark:bg-white/[0.08] dark:text-[#b6ad9d]",
+  CLOSED_OR_STALE: "border-black/[0.08] bg-[#f0ece2] ink-2 dark:border-white/10 dark:bg-white/[0.08]",
   CAMPUS_WINDOW: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/12 dark:text-[#7fb2e8]",
   NEWLY_DISCOVERED: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/12 dark:text-[#7fb2e8]",
   COMPANY_MOMENTUM: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/12 dark:text-[#7fb2e8]",
@@ -108,7 +108,7 @@ const KEY_TAG_TONE: Record<KeyTagTone, string> = {
   campus: "border-[#a9d8c4] bg-[#dcf2e8] text-[#256b4d] dark:border-[#6cc99e]/35 dark:bg-[#6cc99e]/[0.14] dark:text-[#8fdcb8]",
   intern: "border-[#c3d9f2] bg-[#e6f0fb] text-[#2f6299] dark:border-[#7fb2e8]/35 dark:bg-[#7fb2e8]/[0.14] dark:text-[#a9cef3]",
   social: "border-[#ddd0b6] bg-[#f4ecdc] text-[#6b5f4c] dark:border-white/[0.16] dark:bg-white/[0.10] dark:text-[#ddd3c4]",
-  neutral: "border-black/[0.09] bg-white/75 text-[#3f3a33] dark:border-white/[0.14] dark:bg-white/[0.08] dark:text-[#e6ddce]",
+  neutral: "border-black/[0.09] bg-white/75 ink-2 dark:border-white/[0.14] dark:bg-white/[0.08]",
   money: "border-[#bcdcae] bg-[#eef6e0] text-[#4d6b2f] dark:border-[#a3d06a]/35 dark:bg-[#a3d06a]/[0.14] dark:text-[#cbeba2]",
   warn: "border-[#f0d9a8] bg-[#fbf1de] text-[#8a6a2a] dark:border-[#e0b15a]/35 dark:bg-[#e0b15a]/[0.14] dark:text-[#e0b15a]",
 };
@@ -473,7 +473,7 @@ export default function JobCard({
       className={cn(
         // cv-auto = content-visibility 性能护栏；glass-card = 暖光液态玻璃；
         // 去掉常驻 will-change-transform（几百张卡片各自占一个 GPU 层会撑爆显存→崩页），hover 位移交给 transition。
-        "group cursor-target bento-glow cv-auto glass-card rounded-[1.35rem] border p-5 text-[#1a1714] transition duration-300 ease-out hover:-translate-y-1 motion-reduce:hover:translate-y-0 dark:text-[#f3ecdf]",
+        "group cursor-target bento-glow cv-auto glass-card rounded-[1.35rem] border p-5 ink-1 transition duration-300 ease-out hover:-translate-y-1 motion-reduce:hover:translate-y-0",
         sessionNew
           ? "border-[#bcdcae] bg-[#eef6e0]/75 ring-1 ring-[#cfe6b0] hover:bg-[#eef6e0]/90 hover:shadow-[0_26px_56px_-28px_rgba(60,90,30,0.4)] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.08] dark:ring-[#a3d06a]/[0.25] dark:hover:bg-[#a3d06a]/[0.12]"
           : "border-black/[0.06] bg-white/55 shadow-[0_18px_44px_-30px_rgba(40,34,28,0.32)] hover:border-black/[0.1] hover:bg-white/80 hover:shadow-[0_26px_56px_-26px_rgba(40,34,28,0.42)] dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:border-white/20 dark:hover:bg-white/[0.08]",
@@ -484,13 +484,13 @@ export default function JobCard({
           <button
             type="button"
             onClick={handleView}
-            className="block max-w-full text-left text-[1.35rem] font-semibold leading-tight text-[#1a1714] transition-colors hover:text-[#2f8a63] sm:text-2xl dark:text-[#f3ecdf] dark:hover:text-[#6cc99e]"
+            className="block max-w-full text-left text-[1.35rem] font-semibold leading-tight ink-1 transition-colors hover:text-[#2f8a63] sm:text-2xl dark:hover:text-[#6cc99e]"
           >
             <span className="text-balance">{job.title}</span>
           </button>
           <div className="mt-1.5 flex items-center gap-2">
             <CompanyLogo company={job.company} size={26} />
-            <p className="min-w-0 truncate text-base font-semibold leading-snug text-[#5f594e] dark:text-[#d9d0c2]">
+            <p className="min-w-0 truncate text-base font-semibold leading-snug ink-2">
               {job.company}
             </p>
           </div>
@@ -520,7 +520,7 @@ export default function JobCard({
 
           {/* 次要 meta：时间线 + 归类原因 + 洞察入口。刻意保持低对比度，不跟关键标签抢注意力。 */}
           {(postedLabel || freshness.label || relatedReason || insight) && (
-            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium ink-3">
               {postedLabel && (
                 <span className="inline-flex items-center gap-1">
                   <CalendarBlank size={12} className="shrink-0" aria-hidden="true" />
@@ -539,7 +539,7 @@ export default function JobCard({
               {relatedReason && (
                 <span
                   title={`该岗因匹配稍弱被归入「相关」：${relatedReason}`}
-                  className="inline-flex items-center rounded-full border border-black/[0.08] px-2 py-0.5 text-[#8a8275] dark:border-white/[0.12] dark:text-[#9a9184]"
+                  className="inline-flex items-center rounded-full border border-black/[0.08] px-2 py-0.5 ink-3 dark:border-white/[0.12]"
                 >
                   {relatedReason}
                 </span>
@@ -550,7 +550,7 @@ export default function JobCard({
                   onClick={() => setInsightOpen(true)}
                   title={insight.title}
                   className={cn(
-                    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium transition",
+                    "inline-flex min-h-11 min-w-11 items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium transition lg:min-h-0 lg:min-w-0",
                     insight.cls,
                   )}
                 >
@@ -569,7 +569,7 @@ export default function JobCard({
             <div className="mt-4">
               <p
                 className={cn(
-                  "whitespace-pre-line text-pretty text-sm leading-6 text-[#5f594e] dark:text-[#b6ad9d]",
+                  "whitespace-pre-line text-pretty text-sm leading-6 ink-2",
                   // 默认只露 1 行（一屏能多放几张卡），要看细节再「展开全文」。
                   !expanded && "line-clamp-1",
                 )}
@@ -581,7 +581,7 @@ export default function JobCard({
                 <button
                   type="button"
                   onClick={() => setExpanded((v) => !v)}
-                  className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-[#2f8a63] transition-colors hover:text-[#1a1714] dark:text-[#6cc99e] dark:hover:text-[#f3ecdf]"
+                  className="mt-2 inline-flex min-h-11 items-center gap-1 text-sm font-medium text-[#2f8a63] transition-colors hover:opacity-80 dark:text-[#6cc99e] lg:min-h-0"
                 >
                   {expanded ? "收起" : "展开全文"}
                   <CaretDown
@@ -616,7 +616,7 @@ export default function JobCard({
                       "rounded-full px-2.5 py-1 text-xs font-semibold",
                       opportunityTier === "high"
                         ? "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                        : "border border-black/[0.08] bg-[#f0ece2] text-[#6b655a] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#b6ad9d]",
+                        : "border border-black/[0.08] bg-[#f0ece2] ink-2 dark:border-white/[0.1] dark:bg-white/[0.08]",
                     )}
                   >
                     {OPPORTUNITY_TIER_LABEL[opportunityTier]}
@@ -648,7 +648,7 @@ export default function JobCard({
                         "rounded-full px-2.5 py-1 text-xs font-semibold",
                         tier.level === "high"
                           ? "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                          : "border border-black/[0.08] bg-[#f0ece2] text-[#6b655a] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#b6ad9d]",
+                          : "border border-black/[0.08] bg-[#f0ece2] ink-2 dark:border-white/[0.1] dark:bg-white/[0.08]",
                       )}
                     >
                       {tier.label}
@@ -667,7 +667,7 @@ export default function JobCard({
 
               {tier.level !== "none" && matchReasons.length > 0 && (
                 <details className="mt-3 rounded-xl border border-black/[0.07] bg-white/45 px-3.5 py-2.5 open:bg-white/65 [&[open]_.match-reason-caret]:rotate-180 dark:border-white/[0.1] dark:bg-white/[0.04] dark:open:bg-white/[0.07]">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-[#5f594e] transition-colors hover:text-[#1a1714] [&::-webkit-details-marker]:hidden dark:text-[#b6ad9d] dark:hover:text-[#f3ecdf]">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold ink-2 transition-opacity hover:opacity-80 [&::-webkit-details-marker]:hidden">
                     <span className="inline-flex items-center gap-1.5">
                       <Sparkle size={14} weight="fill" aria-hidden="true" />
                       为什么推荐
@@ -677,7 +677,7 @@ export default function JobCard({
                       aria-hidden="true"
                     />
                   </summary>
-                  <ul className="mt-2.5 space-y-1.5 border-t border-black/[0.06] pt-2.5 text-sm text-[#5f594e] dark:border-white/[0.08] dark:text-[#b6ad9d]">
+                  <ul className="mt-2.5 space-y-1.5 border-t border-black/[0.06] pt-2.5 text-sm ink-2 dark:border-white/[0.08]">
                     {matchReasons.map((reason, index) => (
                       <li
                         key={`${reason.type}:${reason.value}:${index}`}
@@ -703,7 +703,7 @@ export default function JobCard({
           <button
             type="button"
             onClick={handleView}
-            className="inline-flex items-center justify-center gap-2 rounded-full bg-[#1a1714] px-4 py-2.5 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98] lg:py-2 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-[#1a1714] px-4 py-2.5 text-sm font-semibold text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98] lg:min-h-0 lg:py-2 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
           >
             官网详情
             <ArrowSquareOut size={16} weight="bold" aria-hidden="true" />
@@ -763,7 +763,7 @@ export default function JobCard({
 
           {reasonOpen && (
             <div className="rounded-xl border border-black/[0.08] bg-white/95 p-2 shadow-lg dark:border-white/[0.12] dark:bg-[#16130f]/95">
-              <p className="px-1 pb-1 text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">
+              <p className="px-1 pb-1 text-xs font-medium ink-3">
                 为什么不适合？
               </p>
               <div className="flex flex-col gap-0.5">
@@ -772,7 +772,7 @@ export default function JobCard({
                     key={r.code}
                     type="button"
                     onClick={() => pickReason(r.code)}
-                    className="rounded-lg px-2 py-1.5 text-left text-xs text-[#3f3a33] transition hover:bg-black/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"
+                    className="rounded-lg px-2 py-1.5 text-left text-xs ink-2 transition hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
                   >
                     {r.label}
                   </button>
@@ -780,7 +780,7 @@ export default function JobCard({
                 <button
                   type="button"
                   onClick={() => setReasonOpen(false)}
-                  className="mt-0.5 rounded-lg px-2 py-1.5 text-left text-xs font-medium text-[#8a8275] transition hover:bg-black/[0.05] dark:text-[#9a9184] dark:hover:bg-white/[0.06]"
+                  className="mt-0.5 rounded-lg px-2 py-1.5 text-left text-xs font-medium ink-3 transition hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
                 >
                   取消
                 </button>
@@ -855,10 +855,10 @@ function ActionButton({
       aria-expanded={expanded}
       onClick={onClick}
       className={cn(
-        "inline-flex items-center justify-center gap-1 rounded-full px-2 py-2.5 text-[12px] font-medium transition duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-4 sm:py-2 sm:text-sm",
+        "inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-full px-2 py-2.5 text-[12px] font-medium transition duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-4 sm:py-2 sm:text-sm lg:min-h-0 lg:min-w-0",
         active
           ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-          : "border border-black/[0.07] bg-white/70 text-[#3f3a33] hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]",
+          : "border border-black/[0.07] bg-white/70 ink-2 hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]",
       )}
     >
       <Icon size={16} weight={active ? "fill" : "regular"} className="shrink-0" aria-hidden="true" />
@@ -889,8 +889,8 @@ function MoreItem({
       className={cn(
         "inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition hover:bg-black/[0.05] disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-white/[0.06]",
         active
-          ? "font-semibold text-[#1a1714] dark:text-[#f3ecdf]"
-          : "text-[#3f3a33] dark:text-[#d9d0c2]",
+          ? "font-semibold ink-1"
+          : "ink-2",
       )}
     >
       <Icon size={14} weight={active ? "fill" : "regular"} className="shrink-0" aria-hidden="true" />

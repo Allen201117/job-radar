@@ -48,8 +48,8 @@ export default function SaveToast({
       >
         {state === "saving" && (
           <>
-            <CircleNotch size={30} weight="bold" className="animate-spin text-[#1a1714] dark:text-[#f3ecdf]" aria-hidden="true" />
-            <p className="text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">{savingText}</p>
+            <CircleNotch size={30} weight="bold" className="animate-spin ink-1 " aria-hidden="true" />
+            <p className="text-sm font-medium ink-2 ">{savingText}</p>
           </>
         )}
         {state === "done" && (
@@ -57,7 +57,7 @@ export default function SaveToast({
             <span className="save-check grid size-11 place-items-center rounded-full bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
               <CheckCircle size={26} weight="fill" aria-hidden="true" />
             </span>
-            <p className="text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{doneText}</p>
+            <p className="text-base font-semibold ink-1 ">{doneText}</p>
           </>
         )}
         {state === "error" && (

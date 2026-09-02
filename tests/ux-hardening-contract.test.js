@@ -181,6 +181,16 @@ test("jobs stats returns an uncached 500 when the HK recent-active count rejects
   await assertUncachedStatsFailure(await route.GET());
 });
 
+test("empty single-select filters do not masquerade as active conditions", () => {
+  // 2026-09-02 线上实测：已选条件行凭空冒出两个「✕不限」（经验 + 发布时间）。
+  // 根因是 labelFor 照常查表——每个单选组第一项都是 { value: "", label: "不限" / "全部海外" }，
+  // 于是「没选」被翻译成「不限」这个看起来像已选的字符串，既生成了 chip、又让触发按钮显示成已选态。
+  // 「不限」是给弹层里的选项用的，不是给「已选摘要」用的，所以空值必须早返回空串。
+  const body = jobFilters.match(/function labelFor\([\s\S]*?\n\}/)?.[0];
+  assert.ok(body, "could not locate labelFor");
+  assert.match(body, /if \(!value\) return "";/, "labelFor must return empty string for an unset value");
+});
+
 test("filter popovers can be closed by clicking their own trigger", () => {
   // 2026-09-02 回归：关外部逻辑挂在 window 的 pointerdown 上，判据是「点击目标不在弹层内」。
   // 触发按钮本身不在弹层里 → 点它会先被判成「点了外面」而关闭，紧接着的 click 又把它开回来，

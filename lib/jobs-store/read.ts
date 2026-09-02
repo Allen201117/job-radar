@@ -613,8 +613,19 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
  *
  * `fn` 由服务端用**完整 summary** 算好随行返回：客户端拿它做职能筛选，与分面里的职能标签
  * 同源同值，不必在浏览器里重跑分类器、也不会两处算出不同结果。
+ *
+ * ⚡ 为什么分两段取：准入门 campusAdmission 要看 JD 正文，所以「哪些岗算这个桶的」离不开正文；
+ * 但**排序键（deadline / first_seen_at）和归属键（company）都是轻字段**。于是先只取轻字段把
+ * 全公司的岗排好序，再顺着这个顺序**分批**取完整行（含正文）跑准入门，够 limit 条就停。
+ * 字节这种大厂一个桶 5,524 个岗、粗筛命中 8,100 行，一次性拉完整行是 ~8 MB / live 实测 5.8s；
+ * 分批后通常一两批（500~1000 行）就够，其余正文根本不取。
+ * 语义与「全取回来再排序截断」**完全一致**：排序在取正文之前就已定好，顺序靠前的先判，
+ * 收满 200 条时后面的岗不可能挤进前 200。最坏情况（该桶的岗全排在最后）退化成旧行为，不会更差。
  */
-export type CampusCompanyJobs = { jobs: any[]; total: number };
+export type CampusCompanyJobs = { jobs: any[]; scanned: number };
+
+/** 每批取多少条完整行。够大以求一批命中，又不至于为 200 条结果拉回上千条正文。 */
+const CAMPUS_DETAIL_CHUNK = 500;
 
 export async function getCampusCompanyJobs(
   list: Array<{ name: string; pattern: string }>,
@@ -623,12 +634,14 @@ export async function getCampusCompanyJobs(
   limit: number,
 ): Promise<CampusCompanyJobs> {
   const target = list.find((c) => c.pattern === pattern);
-  if (!target) return { jobs: [], total: 0 };
+  if (!target) return { jobs: [], scanned: 0 };
   const names = await resolveActiveCompanyNames([pattern]);
-  if (!names.length) return { jobs: [], total: 0 };
-  const rows = await jobsQuery<any>(
+  if (!names.length) return { jobs: [], scanned: 0 };
+
+  // 第一段：只取轻字段（不含 summary），足够做归属 + 届别门 + 排序。
+  const light = await jobsQuery<any>(
     `
-    select ${JOB_COLUMNS}, j.location as city
+    select j.id, j.company, j.grad_class, j.deadline, j.first_seen_at
     from jobs j
     where j.status = 'active'
       and j.company = any($1::text[])
@@ -636,20 +649,39 @@ export async function getCampusCompanyJobs(
     `,
     [names],
   );
-  const kept: any[] = [];
-  for (const r of rows) {
+  const candidates: any[] = [];
+  for (const r of light) {
     if (!r.id || !r.company) continue;
     const companyLower = String(r.company).toLowerCase();
+    // 归属规则与 getCampusZone 逐字一致：list 里第一个 pattern 命中者得。
     const owner = list.find((c) => companyLower.includes(c.pattern.replace(/%/g, "").toLowerCase()));
     if (!owner || owner.pattern !== target.pattern) continue;
-    if (campusAdmission(r) !== bucket) continue;
+    // 届别门只看 grad_class，轻字段就能判，先剪枝再取正文。
     if (!isCurrentSeasonGradClass(r.grad_class)) continue;
-    kept.push(r);
+    candidates.push(r);
   }
-  // 截断前先排序：compareCampusJobs = 临近截止优先、其次新增降序，所以被截掉的一定是最不紧急的那批。
-  kept.sort(compareCampusJobs);
-  return {
-    jobs: kept.slice(0, limit).map((r) => ({ ...r, fn: classifyJobFunction(r) })),
-    total: kept.length,
-  };
+  // 临近截止优先、其次新增降序 —— 与全量排序结果相同（这两个键都在轻字段里）。
+  candidates.sort(compareCampusJobs);
+
+  // 第二段：顺着排好的顺序分批取完整行跑准入门，收满 limit 就不再往下取。
+  const kept: any[] = [];
+  let scanned = 0;
+  for (let i = 0; i < candidates.length && kept.length < limit; i += CAMPUS_DETAIL_CHUNK) {
+    const ids = candidates.slice(i, i + CAMPUS_DETAIL_CHUNK).map((r) => r.id);
+    const rows = await jobsQuery<any>(
+      `select ${JOB_COLUMNS}, j.location as city from jobs j where j.id = any($1::uuid[])`,
+      [ids],
+    );
+    scanned += ids.length;
+    const byId = new Map(rows.map((r: any) => [r.id, r]));
+    // 按本批在候选序列里的顺序处理，保证「先来的先占名额」与全量排序一致。
+    for (const c of candidates.slice(i, i + CAMPUS_DETAIL_CHUNK)) {
+      if (kept.length >= limit) break;
+      const full = byId.get(c.id);
+      if (!full) continue;
+      if (campusAdmission(full) !== bucket) continue;
+      kept.push({ ...full, fn: classifyJobFunction(full) });
+    }
+  }
+  return { jobs: kept, scanned };
 }

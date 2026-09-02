@@ -220,29 +220,6 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
         jobScope={jobScope}
       />
 
-      {/* 搜索说明 + 手动搜索按钮（取代旧三磁贴；筛选变化已自动搜，这里手动重试）。 */}
-      <div className="flex flex-col gap-3 surface p-4 text-[#1a1714] dark:text-[#f3ecdf] sm:flex-row sm:items-center sm:justify-between sm:p-5">
-        <p className="text-xs leading-5 text-[#9a9184] dark:text-[#837c70]">
-          已用你保存的求职偏好作为默认搜索范围；改上方筛选条件即可调整。
-        </p>
-        <button
-          type="button"
-          onClick={() => {
-            track("search", { keyword: filters.keyword || "" });
-            refresh();
-          }}
-          disabled={loading}
-          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium text-[#3f3a33] transition duration-200 hover:bg-white active:scale-[0.98] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
-        >
-          {loading ? (
-            <CircleNotch size={16} weight="bold" className="animate-spin" aria-hidden="true" />
-          ) : (
-            <ArrowsClockwise size={16} weight="bold" aria-hidden="true" />
-          )}
-          重新搜索
-        </button>
-      </div>
-
       {/* 故障回滚专用：高级手动抓取工具（默认隐藏，NEXT_PUBLIC_MANUAL_CRAWL_UI=true 才渲染）。 */}
       {MANUAL_CRAWL_UI_ENABLED && (
         <AdvancedCrawlTools filters={filters} setOfficialJobs={setOfficialJobs} />
@@ -266,7 +243,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
                 "rounded-full px-3 py-1 text-xs font-medium transition",
                 newViewActive
                   ? "bg-[#cde8a0] text-[#3f5a1c] dark:bg-[#a3d06a]/[0.25] dark:text-[#a3d06a]"
-                  : "text-[#8a8275] dark:text-[#9a9184] hover:bg-black/[0.05] dark:hover:bg-white/[0.05] hover:text-[#1a1714] dark:hover:text-[#f3ecdf]",
+                  : "ink-3 hover:bg-black/[0.05] dark:hover:bg-white/[0.05] hover:opacity-80 ",
               )}
             >
               只看新发现
@@ -278,7 +255,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
                 "rounded-full px-3 py-1 text-xs font-medium transition",
                 !newViewActive
                   ? "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                  : "text-[#8a8275] dark:text-[#9a9184] hover:bg-black/[0.05] dark:hover:bg-white/[0.05] hover:text-[#1a1714] dark:hover:text-[#f3ecdf]",
+                  : "ink-3 hover:bg-black/[0.05] dark:hover:bg-white/[0.05] hover:opacity-80 ",
               )}
             >
               查看全部
@@ -287,8 +264,11 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
         </div>
       )}
 
-      <div className="rounded-2xl border border-black/[0.06] bg-white/55 px-3.5 py-2.5 text-sm leading-6 text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
-        <div className="flex items-start gap-2">
+      {/* 计数 + 重新搜索并成一行：原本「已用你保存的偏好…」说明卡和这条计数各占一整行、
+          合计吃掉约 170px 首屏高度，把第一张岗位卡挤出视野。说明卡已删（上方 chip 行把
+          正在生效的条件逐条列出来了，比那句话准确得多），按钮并到这里。 */}
+      <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-black/[0.06] bg-white/55 px-3.5 py-2.5 text-sm leading-6 ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
+        <div className="flex min-w-0 flex-1 items-start gap-2">
         {loading ? (
           <CircleNotch size={16} weight="bold" className="mt-0.5 shrink-0 animate-spin text-[#00b84c] dark:text-[#00e676]" aria-hidden="true" />
         ) : (
@@ -296,23 +276,23 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
         )}
         <div className="min-w-0">
           {loading ? (
-            <p className="font-medium text-[#3f3a33] dark:text-[#d9d0c2]">正在搜索岗位库…</p>
+            <p className="font-medium ink-2 ">正在搜索岗位库…</p>
           ) : (
             <>
               <div className="flex flex-wrap items-center gap-2">
-                <p className="font-medium text-[#3f3a33] dark:text-[#d9d0c2]">
+                <p className="font-medium ink-2 ">
                   {newViewActive
                     ? `${newMatching.length} 个本次新增 · 已展示 ${visibleJobs.length}`
                     : `${total} 个匹配岗位 · 已展示 ${visibleJobs.length}`}
                 </p>
                 {deadIds.size > 0 && (
-                  <span className="rounded-full border border-black/[0.08] bg-white/55 px-2 py-0.5 text-xs text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#9a9184]">
+                  <span className="rounded-full border border-black/[0.08] bg-white/55 px-2 py-0.5 text-xs ink-3 dark:border-white/[0.1] dark:bg-white/[0.05] ">
                     实时复核拦下 {deadIds.size} 个
                   </span>
                 )}
               </div>
               {!newViewActive && searchMetaParts.length > 0 && (
-                <p className="mt-0.5 text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
+                <p className="mt-0.5 text-xs leading-5 ink-3 ">
                   {searchMetaParts.join(" · ")}
                 </p>
               )}
@@ -320,6 +300,22 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
           )}
         </div>
         </div>
+        <button
+          type="button"
+          onClick={() => {
+            track("search", { keyword: filters.keyword || "" });
+            refresh();
+          }}
+          disabled={loading}
+          className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium ink-2 transition duration-200 hover:bg-white active:scale-[0.98] disabled:opacity-50 lg:min-h-0 dark:border-white/[0.12] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
+        >
+          {loading ? (
+            <CircleNotch size={16} weight="bold" className="animate-spin" aria-hidden="true" />
+          ) : (
+            <ArrowsClockwise size={16} weight="bold" aria-hidden="true" />
+          )}
+          重新搜索
+        </button>
         {loading && <div className="jr-scan mt-2.5 h-1 w-full rounded-full" aria-hidden="true" />}
       </div>
       {error && (
@@ -342,7 +338,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
               {showDivider && (
                 <div className="flex items-center gap-3 pt-4 pb-1" role="separator">
                   <span className="h-px flex-1 bg-black/[0.08] dark:bg-white/[0.1]" />
-                  <span className="min-w-0 text-center text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">
+                  <span className="min-w-0 text-center text-xs font-medium ink-3 ">
                     相关岗位 · 同职能相关或信息不全（见每条标注）
                   </span>
                   <span className="h-px flex-1 bg-black/[0.08] dark:bg-white/[0.1]" />
@@ -364,17 +360,17 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
         {loading && displayJobs.length === 0 && (
           <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] dark:border-white/[0.1] bg-white/45 dark:bg-white/[0.05] px-6 py-14 text-center">
             <CircleNotch size={22} weight="bold" className="mx-auto animate-spin text-[#00b84c] dark:text-[#00e676]" aria-hidden="true" />
-            <p className="mt-3 text-sm text-[#6b655a] dark:text-[#b6ad9d]">正在搜索岗位库…</p>
+            <p className="mt-3 text-sm ink-2 ">正在搜索岗位库…</p>
             <div className="jr-scan mx-auto mt-4 h-1 w-40 rounded-full" aria-hidden="true" />
           </div>
         )}
         {!loading && displayJobs.length === 0 &&
           (officialJobs.length > 0 && (filters.city || filters.jobType) ? (
             <div className="rounded-[1.5rem] border border-dashed border-[#e7c98a] dark:border-[#e0b15a]/[0.30] bg-[#fbf2d8] dark:bg-[#e0b15a]/[0.15] px-6 py-10 text-center">
-              <h2 className="text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">
+              <h2 className="text-lg font-semibold ink-1 ">
                 本次发现 {officialJobs.length} 个岗位，但 0 个符合当前筛选
               </h2>
-              <p className="mx-auto mt-2 max-w-md text-pretty text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">
+              <p className="mx-auto mt-2 max-w-md text-pretty text-sm leading-6 ink-2 ">
                 发现的岗位未同时满足
                 {filters.city ? ` 城市『${filters.city}』` : ""}
                 {filters.jobType ? ` 类型『${filters.jobType}』` : ""}
@@ -390,21 +386,21 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
             </div>
           ) : (
             <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] dark:border-white/[0.1] bg-white/45 dark:bg-white/[0.05] px-6 py-14 text-center">
-              <h2 className="text-lg font-semibold text-[#1a1714] dark:text-[#f3ecdf]">没有匹配的岗位</h2>
-              <p className="mx-auto mt-2 max-w-md text-pretty text-sm leading-6 text-[#6b655a] dark:text-[#b6ad9d]">
+              <h2 className="text-lg font-semibold ink-1 ">没有匹配的岗位</h2>
+              <p className="mx-auto mt-2 max-w-md text-pretty text-sm leading-6 ink-2 ">
                 可以放宽筛选条件，或把目标公司加入关注，让系统持续替你监控它的官方招聘页。
               </p>
               <div className="mt-5 flex flex-col items-center justify-center gap-3 sm:flex-row">
                 <button
                   type="button"
                   onClick={broadenFilters}
-                  className="rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]"
+                  className="rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] "
                 >
                   放宽筛选条件
                 </button>
                 <Link
                   href="/preferences"
-                  className="rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2]"
+                  className="rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 text-sm font-medium ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] "
                 >
                   添加关注公司
                 </Link>
@@ -418,7 +414,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
             type="button"
             onClick={loadMore}
             disabled={loadingMore}
-            className="inline-flex items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-5 py-2.5 text-sm font-medium text-[#3f3a33] dark:text-[#d9d0c2] transition duration-200 hover:bg-white dark:hover:bg-[#1e1a15] active:scale-[0.98] disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-5 py-2.5 text-sm font-medium ink-2 transition duration-200 hover:bg-white dark:hover:bg-[#1e1a15] active:scale-[0.98] disabled:opacity-50"
           >
             {loadingMore ? (
               <>
@@ -428,7 +424,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
             ) : (
               <>
                 加载更多
-                <span className="tabular-nums text-[#9a9184] dark:text-[#837c70]">（还有 {total - displayJobs.length} 个）</span>
+                <span className="tabular-nums ink-3 ">（还有 {total - displayJobs.length} 个）</span>
               </>
             )}
           </button>
@@ -453,8 +449,8 @@ function AdvancedCrawlTools({
     useDiscoveryPoll({ filters, setOfficialJobs, setSearchInfo, setResult });
 
   return (
-    <details className="surface p-4 text-[#1a1714] dark:text-[#f3ecdf] sm:p-5">
-      <summary className="cursor-pointer text-sm font-semibold text-[#3f3a33] dark:text-[#d9d0c2]">
+    <details className="surface p-4 ink-1 sm:p-5">
+      <summary className="cursor-pointer text-sm font-semibold ink-2 ">
         高级工具 · 手动抓取（联网，约 1–5 分钟）
       </summary>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -480,7 +476,7 @@ function AdvancedCrawlTools({
         />
       </div>
       {searchInfo && (
-        <p className="mt-3 rounded-2xl border border-black/[0.06] dark:border-white/[0.1] bg-[#f6f3ec] dark:bg-[#1c1813] px-3.5 py-2.5 text-pretty text-sm leading-6 text-[#5f594e] dark:text-[#b6ad9d]">
+        <p className="mt-3 rounded-2xl border border-black/[0.06] dark:border-white/[0.1] bg-[#f6f3ec] dark:bg-[#1c1813] px-3.5 py-2.5 text-pretty text-sm leading-6 ink-2 ">
           {searchInfo}
         </p>
       )}
@@ -545,14 +541,14 @@ function ActionTile({
           )}
         </span>
         <span className="min-w-0">
-          <span className="block text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{label}</span>
-          <span className="mt-1 block text-[13px] leading-5 text-[#8a8275] dark:text-[#9a9184]">{hint}</span>
+          <span className="block text-base font-semibold ink-1 ">{label}</span>
+          <span className="mt-1 block text-[13px] leading-5 ink-3 ">{hint}</span>
         </span>
         <ArrowUpRight
           size={18}
           weight="bold"
           aria-hidden="true"
-          className="pointer-events-none absolute right-4 top-4 -translate-x-1 translate-y-1 text-[#8a8275] opacity-0 transition-all duration-300 ease-out group-hover/tile:translate-x-0 group-hover/tile:translate-y-0 group-hover/tile:opacity-100 dark:text-[#9a9184]"
+          className="pointer-events-none absolute right-4 top-4 -translate-x-1 translate-y-1 ink-3 opacity-0 transition-all duration-300 ease-out group-hover/tile:translate-x-0 group-hover/tile:translate-y-0 group-hover/tile:opacity-100 "
         />
       </button>
       <span
@@ -585,7 +581,7 @@ function RetrievalDoneBanner({
       <span
         className={cn(
           "mt-0.5 grid size-7 shrink-0 place-items-center rounded-full",
-          success ? "bg-[#dcecbf] dark:bg-[#a3d06a]/[0.20] text-[#5b7d2c] dark:text-[#a3d06a]" : "bg-black/[0.06] dark:bg-white/[0.05] text-[#8a8275] dark:text-[#9a9184]",
+          success ? "bg-[#dcecbf] dark:bg-[#a3d06a]/[0.20] text-[#5b7d2c] dark:text-[#a3d06a]" : "bg-black/[0.06] dark:bg-white/[0.05] ink-3 ",
         )}
       >
         {success ? (
@@ -595,10 +591,10 @@ function RetrievalDoneBanner({
         )}
       </span>
       <div className="min-w-0 flex-1">
-        <p className={cn("text-sm font-semibold", success ? "text-[#3f5a1c] dark:text-[#a3d06a]" : "text-[#3f3a33] dark:text-[#d9d0c2]")}>
+        <p className={cn("text-sm font-semibold", success ? "text-[#3f5a1c] dark:text-[#a3d06a]" : "ink-2 ")}>
           {result.title}
         </p>
-        <p className={cn("mt-0.5 text-pretty text-sm leading-6", success ? "text-[#557029] dark:text-[#a3d06a]" : "text-[#6b655a] dark:text-[#b6ad9d]")}>
+        <p className={cn("mt-0.5 text-pretty text-sm leading-6", success ? "text-[#557029] dark:text-[#a3d06a]" : "ink-2 ")}>
           {result.detail}
         </p>
       </div>
@@ -606,7 +602,7 @@ function RetrievalDoneBanner({
         type="button"
         onClick={onDismiss}
         aria-label="关闭完成提示"
-        className="-mr-1 -mt-1 shrink-0 rounded-full p-1.5 text-[#8a8275] dark:text-[#9a9184] transition hover:bg-black/[0.06] dark:hover:bg-white/[0.05] hover:text-[#1a1714] dark:hover:text-[#f3ecdf]"
+        className="-mr-1 -mt-1 shrink-0 rounded-full p-1.5 ink-3 transition hover:bg-black/[0.06] dark:hover:bg-white/[0.05] hover:opacity-80 "
       >
         <X size={15} weight="bold" aria-hidden="true" />
       </button>
@@ -629,11 +625,11 @@ function BrowserDiscoveryProgress({ discovery }: { discovery: BrowserDiscoverySt
   const activeIndex = discovery.phase === "queued" ? 0 : 1;
 
   return (
-    <div className="surface p-4 text-[#1a1714] dark:text-[#f3ecdf]">
+    <div className="surface p-4 ink-1 ">
       <div className="flex items-center gap-2.5">
         <CircleNotch size={18} weight="bold" className="animate-spin text-[#3f7cc0] dark:text-[#7fb2e8]" aria-hidden="true" />
         <span className="text-sm font-semibold">{isRefresh ? "正在刷新对口公司…" : "正在发掘新公司…"}</span>
-        <span className="ml-auto text-xs tabular-nums text-[#8a8275] dark:text-[#9a9184]">
+        <span className="ml-auto text-xs tabular-nums ink-3 ">
           {hasProg ? `已更新 ${prog!.done}/${prog!.total} 家 · ` : ""}已用时 {formatElapsed(discovery.elapsedSec)}
         </span>
       </div>
@@ -650,15 +646,15 @@ function BrowserDiscoveryProgress({ discovery }: { discovery: BrowserDiscoverySt
               ) : state === "active" ? (
                 <CircleNotch size={16} weight="bold" className="shrink-0 animate-spin text-[#3f7cc0] dark:text-[#7fb2e8]" aria-hidden="true" />
               ) : (
-                <Circle size={16} className="shrink-0 text-[#c4bdb0] dark:text-[#6f685e]" aria-hidden="true" />
+                <Circle size={16} className="shrink-0 ink-4 " aria-hidden="true" />
               )}
               <span
                 className={
                   state === "pending"
-                    ? "text-[#9a9184] dark:text-[#837c70]"
+                    ? "ink-3 "
                     : state === "active"
-                      ? "text-[#1a1714] dark:text-[#f3ecdf]"
-                      : "text-[#5f594e] dark:text-[#b6ad9d]"
+                      ? "ink-1 "
+                      : "ink-2 "
                 }
               >
                 {`${i + 1}. ${label}`}
@@ -667,7 +663,7 @@ function BrowserDiscoveryProgress({ discovery }: { discovery: BrowserDiscoverySt
           );
         })}
       </ol>
-      <p className="mt-3 text-pretty text-xs leading-5 text-[#8a8275] dark:text-[#9a9184]">
+      <p className="mt-3 text-pretty text-xs leading-5 ink-3 ">
         可离开本页，{isRefresh ? "刷新" : "发现"}完成后结果会自动进岗位库；回到本页或刷新即可看到新增岗位。
       </p>
     </div>

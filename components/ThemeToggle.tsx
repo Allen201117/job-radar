@@ -32,7 +32,7 @@ export default function ThemeToggle({ className }: { className?: string }) {
       onClick={toggle}
       aria-label={dark ? "切换到浅色模式" : "切换到深色模式"}
       className={cn(
-        "grid size-9 place-items-center rounded-full border border-black/[0.08] text-[#3f3a33] transition duration-200 hover:bg-black/[0.05] active:scale-[0.96] dark:border-white/[0.12] dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]",
+        "grid size-9 place-items-center rounded-full border border-black/[0.08] ink-2 transition duration-200 hover:bg-black/[0.05] active:scale-[0.96] dark:border-white/[0.12] dark:hover:bg-white/[0.06]",
         className,
       )}
     >

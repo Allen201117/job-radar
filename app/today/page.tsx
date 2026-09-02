@@ -169,7 +169,7 @@ async function TodayMetrics({ bundlePromise }: { bundlePromise: Promise<TodayBun
   const removed = f ? f.inactive + f.mismatch + f.low_score + f.thin : 0;
   if (!(screened > 0 && removed > 0 && f)) return null;
   return (
-    <p className="text-[13px] leading-5 text-[#6b655a] dark:text-[#b6ad9d]">
+    <p className="text-[13px] leading-5 ink-2 ">
       今日已为你考察 {screened.toLocaleString()} 个在库岗位，替你剔除 {removed.toLocaleString()} 个：
       已失效 {f.inactive.toLocaleString()} · 不对口 {(f.mismatch + f.low_score).toLocaleString()} · 信息不全{" "}
       {f.thin.toLocaleString()}——剩下的才值得你花时间。
