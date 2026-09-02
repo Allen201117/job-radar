@@ -137,6 +137,71 @@ class IguopinAdapterTest(unittest.TestCase):
         self.assertEqual(searched, ["国家电网"])
         self.assertEqual([job.company for job in jobs], ["国网国际融资租赁有限公司"])
 
+    def test_fetch_only_verifies_rows_matching_match_token(self):
+        matched = _job("matched", "中国石油天然气集团有限公司", "company-1")
+        unrelated = _job("unrelated", "中国石化销售有限公司", "company-2")
+
+        def fake_post(_url, **_kwargs):
+            return _Response({"code": 200, "data": {"total": 2, "list": [matched, unrelated]}})
+
+        def fake_get(_url, **kwargs):
+            self.assertEqual(kwargs["params"]["id"], "matched")
+            return _Response({"code": 200, "data": {**matched, "contents": matched["contents"]}})
+
+        with mock.patch.object(IguopinAdapter, "_expand_group_children", return_value=None), \
+             mock.patch("adapters.iguopin.httpx.post", side_effect=fake_post), \
+             mock.patch("adapters.iguopin.httpx.get", side_effect=fake_get) as get:
+            IguopinAdapter().fetch("https://www.iguopin.com/job?company=中国石油&match=中国石油")
+
+        self.assertEqual(get.call_count, 1)
+
+    def test_fetch_verifies_group_child_despite_non_matching_company_name(self):
+        root = _job("root", "中国石油天然气集团有限公司", "company-1")
+        child = _job("child", "大庆油田有限责任公司", "company-2")
+
+        def fake_post(_url, **_kwargs):
+            return _Response({"code": 200, "data": {"total": 1, "list": [root]}})
+
+        def add_group_child(rows, _headers):
+            child["_group_child"] = True
+            rows.append(child)
+            return "中国石油"
+
+        def fake_get(_url, **kwargs):
+            job_id = kwargs["params"]["id"]
+            row = {"root": root, "child": child}[job_id]
+            return _Response({"code": 200, "data": {**row, "contents": row["contents"]}})
+
+        with mock.patch.object(IguopinAdapter, "_expand_group_children", side_effect=add_group_child), \
+             mock.patch("adapters.iguopin.httpx.post", side_effect=fake_post), \
+             mock.patch("adapters.iguopin.httpx.get", side_effect=fake_get) as get:
+            IguopinAdapter().fetch("https://www.iguopin.com/job?company=中国石油&match=中国石油")
+
+        detail_ids = [call.kwargs["params"]["id"] for call in get.call_args_list
+                      if "jobs/v1/info" in call.args[0]]
+        self.assertEqual(set(detail_ids), {"root", "child"})
+
+    def test_fetch_without_match_verifies_all_rows_within_detail_cap(self):
+        rows = [_job(str(index), f"公司 {index}", f"company-{index}") for index in range(3)]
+
+        def fake_post(_url, **_kwargs):
+            return _Response({"code": 200, "data": {"total": len(rows), "list": rows}})
+
+        def fake_get(_url, **kwargs):
+            job_id = kwargs["params"]["id"]
+            row = next(row for row in rows if row["job_id"] == job_id)
+            return _Response({"code": 200, "data": {**row, "contents": row["contents"]}})
+
+        with mock.patch.object(IguopinAdapter, "_DETAIL_CAP", 2), \
+             mock.patch.object(IguopinAdapter, "_expand_group_children", return_value=None), \
+             mock.patch("adapters.iguopin.httpx.post", side_effect=fake_post), \
+             mock.patch("adapters.iguopin.httpx.get", side_effect=fake_get) as get:
+            IguopinAdapter().fetch("https://www.iguopin.com/job?company=任意公司")
+
+        detail_ids = [call.kwargs["params"]["id"] for call in get.call_args_list
+                      if "jobs/v1/info" in call.args[0]]
+        self.assertEqual(set(detail_ids), {"0", "1"})
+
     def test_company_group_brand_label_avoids_duplicates_and_group_self(self):
         """防止展示名重复品牌，或把集团自身写成冗余括号后缀。"""
         rows = []
