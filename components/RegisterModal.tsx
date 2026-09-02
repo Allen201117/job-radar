@@ -244,7 +244,7 @@ export default function RegisterModal({
           type="button"
           onClick={() => !loading && onClose()}
           aria-label="关闭"
-          className="absolute right-4 top-4 grid size-8 place-items-center rounded-full text-[#8a8275] dark:text-[#9a9184] transition-colors hover:bg-black/[0.05] dark:hover:bg-white/[0.05] hover:text-[#1a1714] dark:hover:text-[#f3ecdf]"
+          className="absolute right-4 top-4 grid size-8 place-items-center rounded-full ink-3 transition-colors hover:bg-black/[0.05] dark:hover:bg-white/[0.05] hover:opacity-80 "
         >
           <X size={18} weight="bold" aria-hidden="true" />
         </button>
@@ -255,7 +255,7 @@ export default function RegisterModal({
             <span className="grid size-9 place-items-center rounded-xl bg-[#1a1714] dark:bg-[#f3ecdf] text-[#f7f1e6] dark:text-[#16130f]">
               <RadarMark size={20} />
             </span>
-            <span className="display-tight text-lg font-medium tracking-tight text-[#1a1714] dark:text-[#f3ecdf]">
+            <span className="display-tight text-lg font-medium tracking-tight ink-1 ">
               注册职达
             </span>
           </div>
@@ -275,7 +275,7 @@ export default function RegisterModal({
                           ? "bg-[#1a1714] dark:bg-[#f3ecdf] text-[#f7f1e6] dark:text-[#16130f]"
                           : active
                             ? "bg-[#1a1714] dark:bg-[#f3ecdf] text-[#f7f1e6] dark:text-[#16130f] ring-4 ring-[#1a1714]/10 dark:ring-[#f3ecdf]/[0.20]"
-                            : "bg-black/[0.06] dark:bg-white/[0.06] text-[#9a9184] dark:text-[#837c70]",
+                            : "bg-black/[0.06] dark:bg-white/[0.06] ink-3 ",
                       ].join(" ")}
                     >
                       {done ? <Check size={13} weight="bold" aria-hidden="true" /> : i + 1}
@@ -283,7 +283,7 @@ export default function RegisterModal({
                     <span
                       className={[
                         "text-[11px] font-medium",
-                        done || active ? "text-[#1a1714] dark:text-[#f3ecdf]" : "text-[#9a9184] dark:text-[#837c70]",
+                        done || active ? "ink-1 " : "ink-3 ",
                       ].join(" ")}
                     >
                       {s.label}
@@ -307,11 +307,11 @@ export default function RegisterModal({
             {step === "email" && (
               <form className="space-y-4" onSubmit={handleEmail}>
                 <div>
-                  <h3 className="text-[1.15rem] font-semibold text-[#1a1714] dark:text-[#f3ecdf]">填写你的邮箱</h3>
-                  <p className="mt-1 text-[13px] text-[#8a8275] dark:text-[#9a9184]">先填邮箱，下一步设置登录密码</p>
+                  <h3 className="text-[1.15rem] font-semibold ink-1 ">填写你的邮箱</h3>
+                  <p className="mt-1 text-[13px] ink-3 ">先填邮箱，下一步设置登录密码</p>
                 </div>
                 <div>
-                  <label htmlFor="reg-email" className="mb-1.5 block text-[13px] font-medium text-[#5f594e] dark:text-[#b6ad9d]">
+                  <label htmlFor="reg-email" className="mb-1.5 block text-[13px] font-medium ink-2 ">
                     邮箱
                   </label>
                   <div className="relative">
@@ -343,11 +343,11 @@ export default function RegisterModal({
             {step === "password" && (
               <form className="space-y-4" onSubmit={handlePassword}>
                 <div>
-                  <h3 className="text-[1.15rem] font-semibold text-[#1a1714] dark:text-[#f3ecdf]">设置登录密码</h3>
-                  <p className="mt-1 text-[13px] text-[#8a8275] dark:text-[#9a9184]">下一步我们会发验证码到你的邮箱完成验证</p>
+                  <h3 className="text-[1.15rem] font-semibold ink-1 ">设置登录密码</h3>
+                  <p className="mt-1 text-[13px] ink-3 ">下一步我们会发验证码到你的邮箱完成验证</p>
                 </div>
                 <div>
-                  <label htmlFor="reg-password" className="mb-1.5 block text-[13px] font-medium text-[#5f594e] dark:text-[#b6ad9d]">
+                  <label htmlFor="reg-password" className="mb-1.5 block text-[13px] font-medium ink-2 ">
                     密码
                   </label>
                   <div className="relative">
@@ -370,7 +370,7 @@ export default function RegisterModal({
                       type="button"
                       onClick={() => setShowPassword((v) => !v)}
                       aria-label={showPassword ? "隐藏密码" : "显示密码"}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[#a8a195] dark:text-[#837c70] hover:text-[#5f594e] dark:hover:text-[#b6ad9d]"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[#a8a195] dark:text-[#837c70] transition-opacity hover:opacity-80"
                     >
                       {showPassword ? (
                         <EyeSlash size={17} aria-hidden="true" />
@@ -391,9 +391,9 @@ export default function RegisterModal({
             {step === "code" && (
               <form className="space-y-4" onSubmit={handleCode}>
                 <div>
-                  <h3 className="text-[1.15rem] font-semibold text-[#1a1714] dark:text-[#f3ecdf]">输入验证码</h3>
-                  <p className="mt-1 text-[13px] text-[#8a8275] dark:text-[#9a9184]">
-                    已发送至 <span className="font-medium text-[#5f594e] dark:text-[#b6ad9d]">{email}</span>
+                  <h3 className="text-[1.15rem] font-semibold ink-1 ">输入验证码</h3>
+                  <p className="mt-1 text-[13px] ink-3 ">
+                    已发送至 <span className="font-medium ink-2 ">{email}</span>
                   </p>
                 </div>
                 <input
@@ -422,7 +422,7 @@ export default function RegisterModal({
                       setMessage("");
                       setStep("email");
                     }}
-                    className="flex items-center gap-1 text-[#8a8275] dark:text-[#9a9184] hover:text-[#1a1714] dark:hover:text-[#f3ecdf]"
+                    className="flex items-center gap-1 ink-3 hover:opacity-80 "
                   >
                     <ArrowLeft size={13} weight="bold" aria-hidden="true" />
                     改邮箱
@@ -431,7 +431,7 @@ export default function RegisterModal({
                     type="button"
                     onClick={handleResend}
                     disabled={cooldown > 0 || loading}
-                    className="font-medium text-[#1a1714] dark:text-[#f3ecdf] underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:text-[#b8b1a4] dark:disabled:text-[#6b655a] disabled:no-underline"
+                    className="font-medium ink-1 underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:text-[#b8b1a4] dark:disabled:text-[#6b655a] disabled:no-underline"
                   >
                     {cooldown > 0 ? `重新发送 (${cooldown}s)` : "重新发送"}
                   </button>
@@ -444,19 +444,19 @@ export default function RegisterModal({
                 <span className="grid size-16 place-items-center rounded-full bg-[#eef4e8] dark:bg-[#1e2a17] text-[#4a6b3c] dark:text-[#a3d06a]">
                   <CheckCircle size={40} weight="fill" aria-hidden="true" />
                 </span>
-                <h3 className="text-[1.25rem] font-semibold text-[#1a1714] dark:text-[#f3ecdf]">注册成功</h3>
-                <p className="text-[13px] text-[#8a8275] dark:text-[#9a9184]">正在进入今日看板…</p>
+                <h3 className="text-[1.25rem] font-semibold ink-1 ">注册成功</h3>
+                <p className="text-[13px] ink-3 ">正在进入今日看板…</p>
               </div>
             )}
           </div>
 
           {step !== "success" && (
-            <p className="mt-6 text-center text-[12px] text-[#9a9184] dark:text-[#837c70]">
+            <p className="mt-6 text-center text-[12px] ink-3 ">
               已有账号？{" "}
               <button
                 type="button"
                 onClick={() => !loading && onClose()}
-                className="font-medium text-[#1a1714] dark:text-[#f3ecdf] hover:underline"
+                className="font-medium ink-1 hover:underline"
               >
                 去登录
               </button>

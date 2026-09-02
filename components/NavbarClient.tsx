@@ -35,6 +35,9 @@ const LINKS = [
   { href: "/applied", key: "applied", icon: CheckCircle },
 ];
 
+// 移动端先给用户最常用的四步路，次级入口仍留在汉堡菜单，避免把所有路径都挤成难点的图标。
+const MOBILE_PRIMARY_LINKS = LINKS.filter((link) => ["today", "jobs", "campus", "saved"].includes(link.key));
+
 type JobScope = "domestic" | "overseas" | "all";
 
 const JOB_SCOPE_OPTIONS: { value: JobScope; label: string }[] = [
@@ -142,7 +145,8 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
   const initial = username ? username.charAt(0).toUpperCase() : "?";
 
   return (
-    <header className="sticky top-0 z-40 w-full border-b border-black/[0.06] bg-[#f4efe6]/80 text-[#1a1714] backdrop-blur-xl supports-[backdrop-filter]:bg-[#f4efe6]/70 dark:border-white/[0.08] dark:bg-[#16130f]/[0.85] dark:text-[#f3ecdf] dark:supports-[backdrop-filter]:bg-[#16130f]/[0.70]">
+    <>
+      <header className="sticky top-0 z-40 w-full border-b border-black/[0.06] bg-[#f4efe6]/80 ink-1 backdrop-blur-xl supports-[backdrop-filter]:bg-[#f4efe6]/70 dark:border-white/[0.08] dark:bg-[#16130f]/[0.85] dark:supports-[backdrop-filter]:bg-[#16130f]/[0.70]">
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6 lg:gap-6 lg:px-8">
         <div className="flex min-w-0 items-center gap-7">
           {/* 登录后 Logo 跳今日机会；未登录跳公开 Landing */}
@@ -168,7 +172,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
                     "group relative grid size-9 shrink-0 place-items-center rounded-full outline-none transition duration-200 focus-visible:ring-2 focus-visible:ring-[#1a1714]/25 dark:focus-visible:ring-[#f3ecdf]/30",
                     active
                       ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                      : "text-[#5f594e] hover:bg-black/[0.05] hover:text-[#1a1714] active:scale-[0.95] dark:text-[#b6ad9d] dark:hover:bg-white/[0.06] dark:hover:text-[#f3ecdf]",
+                      : "ink-2 hover:bg-black/[0.05] active:scale-[0.95] dark:hover:bg-white/[0.06]",
                   )}
                 >
                   <link.icon size={19} weight={active ? "fill" : "regular"} aria-hidden="true" />
@@ -188,7 +192,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
             })}
           </nav>
         </div>
-        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+        <div className="flex min-w-0 items-center gap-3">
           {email && (
             <JobScopeSwitch
               value={jobScope}
@@ -199,7 +203,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
           )}
           {/* 用户反馈：顶栏常驻入口，点开是微信反馈群二维码 */}
           <FeedbackButton />
-          <ThemeToggle />
+          <ThemeToggle className="size-11 lg:size-9" />
           {/* 桌面端账号菜单：个人主页 + 退出（/me 不再占一级导航） */}
           {email && (
             <div className="relative hidden lg:block">
@@ -212,7 +216,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
                   "group relative grid size-9 place-items-center rounded-full border text-xs font-semibold uppercase outline-none transition duration-200 ease-out active:scale-[0.96] focus-visible:ring-2 focus-visible:ring-[#1a1714]/25 dark:focus-visible:ring-[#f3ecdf]/30",
                   acctOpen
                     ? "border-transparent bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                    : "border-black/[0.08] text-[#5f594e] hover:bg-black/[0.05] hover:text-[#1a1714] dark:border-white/[0.12] dark:text-[#b6ad9d] dark:hover:bg-white/[0.06] dark:hover:text-[#f3ecdf]",
+                    : "border-black/[0.08] ink-2 hover:bg-black/[0.05] dark:border-white/[0.12] dark:hover:bg-white/[0.06]",
                 )}
               >
                 {initial}
@@ -239,13 +243,13 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
                   />
                   <div className="absolute right-0 z-40 mt-2 w-52 rounded-2xl border border-black/[0.08] bg-[#f4efe6]/98 p-1 shadow-lg backdrop-blur-xl dark:border-white/[0.12] dark:bg-[#16130f]/[0.98]">
                     <div className="mb-1 border-b border-black/[0.06] px-3 pb-2 pt-1.5 dark:border-white/[0.08]">
-                      <p className="truncate text-sm font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{username}</p>
-                      <p className="truncate text-xs text-[#9a9184] dark:text-[#837c70]">{email}</p>
+                      <p className="truncate text-sm font-semibold ink-1">{username}</p>
+                      <p className="truncate text-xs ink-3">{email}</p>
                     </div>
                     <Link
                       href="/me"
                       onClick={() => setAcctOpen(false)}
-                      className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-[#3f3a33] transition hover:bg-black/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"
+                      className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium ink-2 transition hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
                     >
                       <UserCircle size={16} aria-hidden="true" />
                       个人主页
@@ -253,7 +257,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
                     <button
                       type="button"
                       onClick={handleLogout}
-                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-[#3f3a33] transition hover:bg-black/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium ink-2 transition hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
                     >
                       <SignOut size={16} aria-hidden="true" />
                       {t("logout", lang)}
@@ -269,7 +273,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
             onClick={() => setMenuOpen((v) => !v)}
             aria-label={menuOpen ? "关闭菜单" : "打开菜单"}
             aria-expanded={menuOpen}
-            className="grid size-9 place-items-center rounded-full border border-black/[0.08] text-[#3f3a33] transition duration-200 hover:bg-black/[0.05] active:scale-[0.96] lg:hidden dark:border-white/[0.12] dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]"
+            className="grid size-11 place-items-center rounded-full border border-black/[0.08] ink-2 transition duration-200 hover:bg-black/[0.05] active:scale-[0.96] lg:hidden dark:border-white/[0.12] dark:hover:bg-white/[0.06]"
           >
             {menuOpen ? <X size={18} weight="bold" aria-hidden="true" /> : <List size={18} weight="bold" aria-hidden="true" />}
           </button>
@@ -296,7 +300,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
                     "flex items-center gap-3 rounded-2xl px-3.5 py-3 text-[15px] font-medium transition duration-200",
                     active
                       ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                      : "text-[#3f3a33] hover:bg-black/[0.05] active:scale-[0.99] dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]",
+                      : "ink-2 hover:bg-black/[0.05] active:scale-[0.99] dark:hover:bg-white/[0.06]",
                   )}
                 >
                   <link.icon size={20} weight={active ? "fill" : "regular"} aria-hidden="true" />
@@ -319,13 +323,13 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
               <div className="mb-1 flex items-center gap-3 rounded-2xl px-3 py-2.5">
                 <span
                   aria-hidden="true"
-                  className="grid size-9 shrink-0 place-items-center rounded-full border border-black/[0.1] text-xs font-semibold uppercase text-[#5f594e] dark:border-white/[0.14] dark:text-[#b6ad9d]"
+                  className="grid size-9 shrink-0 place-items-center rounded-full border border-black/[0.1] text-xs font-semibold uppercase ink-2 dark:border-white/[0.14]"
                 >
                   {initial}
                 </span>
                 <div className="min-w-0">
-                  <p className="truncate text-[15px] font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{username}</p>
-                  <p className="truncate text-xs text-[#9a9184] dark:text-[#837c70]">{email}</p>
+                  <p className="truncate text-[15px] font-semibold ink-1">{username}</p>
+                  <p className="truncate text-xs ink-3">{email}</p>
                 </div>
               </div>
             )}
@@ -337,7 +341,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
                   "flex items-center gap-3 rounded-2xl px-3.5 py-3 text-[15px] font-medium transition duration-200",
                   pathname === "/me"
                     ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                    : "text-[#3f3a33] hover:bg-black/[0.05] active:scale-[0.99] dark:text-[#d9d0c2] dark:hover:bg-white/[0.06]",
+                    : "ink-2 hover:bg-black/[0.05] active:scale-[0.99] dark:hover:bg-white/[0.06]",
                 )}
               >
                 <UserCircle size={20} weight={pathname === "/me" ? "fill" : "regular"} aria-hidden="true" />
@@ -347,7 +351,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
             <div className="mt-2 border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
               <button
                 onClick={handleLogout}
-                className="inline-flex w-full items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-4 py-2.5 text-[13px] font-medium text-[#3f3a33] transition duration-200 hover:bg-white active:scale-[0.98] dark:border-white/[0.12] dark:bg-white/[0.06] dark:text-[#d9d0c2] dark:hover:bg-white/[0.12]"
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-4 py-2.5 text-[13px] font-medium ink-2 transition duration-200 hover:bg-white active:scale-[0.98] dark:border-white/[0.12] dark:bg-white/[0.06] dark:hover:bg-white/[0.12]"
               >
                 <SignOut size={16} weight="bold" aria-hidden="true" />
                 {t("logout", lang)}
@@ -361,13 +365,45 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
           <div
             role="status"
             aria-live="polite"
-            className="save-pop rounded-full border border-black/[0.08] bg-white/95 px-4 py-2 text-sm font-semibold text-[#1a1714] shadow-[0_18px_40px_-24px_rgba(40,34,28,0.6)] backdrop-blur-xl dark:border-white/[0.12] dark:bg-[#1e1a15]/95 dark:text-[#f3ecdf] dark:shadow-[0_18px_40px_-24px_rgba(0,0,0,0.75)]"
+            className="save-pop rounded-full border border-black/[0.08] bg-white/95 px-4 py-2 text-sm font-semibold ink-1 shadow-[0_18px_40px_-24px_rgba(40,34,28,0.6)] backdrop-blur-xl dark:border-white/[0.12] dark:bg-[#1e1a15]/95 dark:shadow-[0_18px_40px_-24px_rgba(0,0,0,0.75)]"
           >
             {scopeToast}
           </div>
         </div>
       )}
-    </header>
+      </header>
+      {/* 必须放在带 backdrop-filter 的 header 外：否则 fixed 会以顶栏为包含块，无法贴住视窗底部。 */}
+      <nav
+        aria-label="主要导航"
+        className={cn(
+          "fixed inset-x-0 bottom-0 z-40 grid grid-cols-4 border-t border-black/[0.08] bg-[#f4efe6]/95 px-1 pb-[env(safe-area-inset-bottom)] pt-1 shadow-[0_-8px_24px_-20px_rgba(26,23,20,0.45)] backdrop-blur-xl lg:hidden dark:border-white/[0.12] dark:bg-[#16130f]/[0.95] dark:shadow-[0_-8px_24px_-20px_rgba(0,0,0,0.7)]",
+          menuOpen && "invisible",
+        )}
+      >
+        {MOBILE_PRIMARY_LINKS.map((link) => {
+          const active = pathname === link.href || pathname.startsWith(`${link.href}/`);
+          const label = t(link.key, lang);
+          return (
+            <Link
+              key={link.href}
+              href={link.href}
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl px-2 py-1 outline-none transition duration-200 focus-visible:ring-2 focus-visible:ring-[#1a1714]/25 dark:focus-visible:ring-[#f3ecdf]/30",
+                active
+                  ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                  : "ink-2 hover:bg-black/[0.05] active:scale-[0.98] dark:hover:bg-white/[0.06]",
+              )}
+            >
+              <link.icon size={20} weight={active ? "fill" : "regular"} aria-hidden="true" />
+              <span className={cn("t-micro leading-none", active ? "text-[#f7f1e6] dark:text-[#16130f]" : "ink-2")}>
+                {label}
+              </span>
+            </Link>
+          );
+        })}
+      </nav>
+    </>
   );
 }
 
@@ -390,7 +426,7 @@ function JobScopeSwitch({
 }) {
   return (
     <div className={cn("items-center gap-2", className)}>
-      <span className={cn("shrink-0 text-xs font-medium text-[#8a8275] dark:text-[#9a9184]", mobile ? "w-16" : "")}>
+      <span className={cn("shrink-0 text-xs font-medium ink-3", mobile ? "w-16" : "")}>
         求职范围
       </span>
       <div className="grid grid-cols-3 rounded-full border border-black/[0.08] bg-white/55 p-0.5 dark:border-white/[0.12] dark:bg-white/[0.05]">
@@ -407,7 +443,7 @@ function JobScopeSwitch({
                 "h-7 min-w-14 rounded-full px-2 text-xs font-semibold transition duration-200 disabled:cursor-wait disabled:opacity-70",
                 selected
                   ? "bg-[#1a1714] text-[#f7f1e6] shadow-sm dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                  : "text-[#5f594e] hover:bg-black/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.06]",
+                  : "ink-2 hover:bg-black/[0.05] dark:hover:bg-white/[0.06]",
               )}
             >
               {opt.label}

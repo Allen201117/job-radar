@@ -59,7 +59,7 @@ export default function TagInput({ values, onChange, ariaLabel, placeholder }: P
         }}
         onBlur={commit}
         placeholder={(values || []).length ? "" : placeholder}
-        className="min-w-[90px] flex-1 border-0 bg-transparent px-1 py-0.5 text-sm text-[#1a1714] dark:text-[#f3ecdf] outline-none placeholder:text-[#a39a8c] dark:placeholder:text-[#8b8478]"
+        className="min-w-[90px] flex-1 border-0 bg-transparent px-1 py-0.5 text-sm ink-1 outline-none placeholder:text-[#a39a8c] dark:placeholder:text-[#8b8478]"
       />
     </div>
   );

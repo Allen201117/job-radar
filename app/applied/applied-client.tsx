@@ -68,7 +68,7 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
   return (
     <div>
       {items.length > 1 && (
-        <div className="mb-4 flex flex-wrap items-center gap-2 text-[13px] text-[#6b655a] dark:text-[#b6ad9d]">
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-[13px] ink-2">
           <span className="font-medium">你的求职管道：</span>
           {FUNNEL_STAGES.map((s) => (
             <span
@@ -79,7 +79,7 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
             </span>
           ))}
           {funnel.closed > 0 && (
-            <span className="rounded-full border border-black/[0.06] bg-white/40 px-2.5 py-1 tabular-nums text-[#9a9184] dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-[#837c70]">
+            <span className="rounded-full border border-black/[0.06] bg-white/40 px-2.5 py-1 tabular-nums ink-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
               已结束 {funnel.closed}
             </span>
           )}
@@ -90,12 +90,12 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
         {items.map((item) => {
           const cur = stages[item.jobId] ?? "applied";
           return (
-            <div key={item.jobId} className="surface surface-hover p-5 text-[#1a1714] dark:text-[#f3ecdf]">
+            <div key={item.jobId} className="surface surface-hover p-5 ink-1">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <span className="text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">{item.company}</span>
+                  <span className="text-xs font-medium ink-3">{item.company}</span>
                   <h3 className="mt-1 text-lg font-semibold">{item.title}</h3>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#8a8275] dark:text-[#9a9184]">
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs ink-3">
                     {item.location && (
                       <span className="inline-flex items-center gap-1 rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2 py-1">
                         <MapPin size={13} weight="fill" aria-hidden="true" />
@@ -106,7 +106,7 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
                   </div>
                 </div>
                 {item.down ? (
-                  <span className="inline-flex w-full shrink-0 items-center justify-center gap-2 rounded-full border border-black/[0.08] bg-[#f0ece2] px-4 py-2.5 text-sm font-medium text-[#9a9184] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#837c70] sm:w-auto sm:py-2">
+                  <span className="inline-flex w-full shrink-0 items-center justify-center gap-2 rounded-full border border-black/[0.08] bg-[#f0ece2] px-4 py-2.5 text-sm font-medium ink-3 dark:border-white/[0.1] dark:bg-white/[0.05] sm:w-auto sm:py-2">
                     原岗位已下线
                   </span>
                 ) : (
@@ -123,7 +123,7 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
               </div>
 
               <div className="mt-4 flex flex-wrap items-center gap-1.5 border-t border-black/[0.05] pt-3 dark:border-white/[0.06]">
-                <span className="mr-1 text-xs text-[#8a8275] dark:text-[#9a9184]">进展</span>
+                <span className="mr-1 text-xs ink-3">进展</span>
                 {STAGE_ORDER.map((s) => (
                   <button
                     key={s}
@@ -133,7 +133,7 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
                     className={
                       cur === s
                         ? "rounded-full bg-[#1a1714] px-3 py-1.5 text-xs font-semibold text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                        : "rounded-full border border-black/[0.08] bg-white/60 px-3 py-1.5 text-xs font-medium text-[#6b655a] transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.08]"
+                        : "rounded-full border border-black/[0.08] bg-white/60 px-3 py-1.5 text-xs font-medium ink-2 transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
                     }
                   >
                     {STAGE_LABEL[s]}

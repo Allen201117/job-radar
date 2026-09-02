@@ -98,7 +98,7 @@ export default function SavedClient({
   return (
     <div className="space-y-3">
       {jobs.length > 0 && (
-        <div className="flex flex-col gap-2 rounded-[1.1rem] border border-black/[0.06] bg-white/45 px-4 py-3 text-sm text-[#5f594e] sm:flex-row sm:items-center sm:justify-between dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
+        <div className="flex flex-col gap-2 rounded-[1.1rem] border border-black/[0.06] bg-white/45 px-4 py-3 text-sm ink-2 sm:flex-row sm:items-center sm:justify-between dark:border-white/[0.1] dark:bg-white/[0.05]">
           <span className="inline-flex items-center gap-2">
             <Scales size={15} weight="bold" className="text-[#3f7cc0] dark:text-[#7fb2e8]" aria-hidden="true" />
             选择 2-4 个岗位后，可打开对比决策桌横向查看匹配度、薪资和风险。
@@ -117,7 +117,7 @@ export default function SavedClient({
               className={
                 selectedIds.has(job.id)
                   ? "inline-flex h-8 items-center justify-center gap-1.5 rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-3 text-xs font-semibold text-[#2f8a63] transition hover:bg-[#cdebde] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e] dark:hover:bg-[#6cc99e]/[0.22]"
-                  : "inline-flex h-8 items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3 text-xs font-semibold text-[#3f3a33] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
+                  : "inline-flex h-8 items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3 text-xs font-semibold ink-2 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
               }
             >
               {selectedIds.has(job.id) && <CheckCircle size={15} weight="fill" aria-hidden="true" />}
@@ -129,12 +129,12 @@ export default function SavedClient({
       ))}
 
       {deleted.map((d) => (
-        <div key={d.jobId} className="surface p-5 text-[#1a1714] dark:text-[#f3ecdf]">
+        <div key={d.jobId} className="surface p-5 ink-1">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
-              <span className="text-xs font-medium text-[#8a8275] dark:text-[#9a9184]">{d.company}</span>
+              <span className="text-xs font-medium ink-3">{d.company}</span>
               <h3 className="mt-1 text-lg font-semibold">{d.title}</h3>
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#8a8275] dark:text-[#9a9184]">
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs ink-3">
                 {d.location && (
                   <span className="inline-flex items-center gap-1 rounded-full border border-black/[0.06] bg-[#f4efe6] px-2 py-1 dark:border-white/[0.1] dark:bg-[#16130f]">
                     <MapPin size={13} weight="fill" aria-hidden="true" />
@@ -145,13 +145,13 @@ export default function SavedClient({
               </div>
             </div>
             <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
-              <span className="inline-flex items-center justify-center gap-2 rounded-full border border-black/[0.08] bg-[#f0ece2] px-4 py-2 text-sm font-medium text-[#9a9184] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#837c70]">
+              <span className="inline-flex items-center justify-center gap-2 rounded-full border border-black/[0.08] bg-[#f0ece2] px-4 py-2 text-sm font-medium ink-3 dark:border-white/[0.1] dark:bg-white/[0.05]">
                 原岗位已下线
               </span>
               <button
                 type="button"
                 onClick={() => cancelDeleted(d.jobId)}
-                className="text-xs font-medium text-[#8a8275] underline underline-offset-2 transition hover:text-[#1a1714] dark:text-[#9a9184] dark:hover:text-[#f3ecdf]"
+                className="text-xs font-medium ink-3 underline underline-offset-2 transition hover:opacity-80"
               >
                 取消值得投
               </button>
@@ -161,7 +161,7 @@ export default function SavedClient({
       ))}
 
       {selectedCount > 0 && (
-        <div className="fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
+        <div className="above-mobile-nav fixed inset-x-0 z-50 flex justify-center px-4">
           <div className="flex w-full max-w-xl flex-col gap-3 rounded-[1.25rem] border border-black/[0.1] bg-[#1a1714] px-4 py-3 text-sm text-[#f7f1e6] shadow-lg sm:flex-row sm:items-center sm:justify-between dark:border-white/[0.12] dark:bg-[#f3ecdf] dark:text-[#16130f]">
             <span className="font-semibold tabular-nums">已选 {selectedCount}/4</span>
             <div className="flex items-center gap-2">
@@ -169,7 +169,7 @@ export default function SavedClient({
                 type="button"
                 onClick={openCompare}
                 disabled={selectedCount < 2}
-                className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-full bg-[#f7f1e6] px-4 py-2 font-semibold text-[#1a1714] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45 sm:flex-none dark:bg-[#16130f] dark:text-[#f3ecdf] dark:hover:bg-[#2b2520]"
+                className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-full bg-[#f7f1e6] px-4 py-2 font-semibold ink-1 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45 sm:flex-none dark:bg-[#16130f] dark:hover:bg-[#2b2520]"
               >
                 <Scales size={15} weight="bold" aria-hidden="true" />
                 开始对比

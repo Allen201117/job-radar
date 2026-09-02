@@ -72,7 +72,7 @@ const WINDOW_BADGE: Record<
     icon: "⚪",
     label: "当前未观测到在招校招岗",
     className:
-      "border border-black/[0.08] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] text-[#8a8275] dark:text-[#9a9184]",
+      "border border-black/[0.08] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] ink-3",
   },
   stale: {
     icon: "⏳",
@@ -348,11 +348,11 @@ export default function CampusClient({
   }
 
   return (
-    <div className="mt-8 space-y-6 text-[#1a1714] dark:text-[#f3ecdf]">
+    <div className="mt-8 space-y-6 ink-1">
       {!hasIndustry && (
         <p className="rounded-xl border border-[#cfe0f5] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] px-4 py-3 text-sm leading-6 text-[#2f6299] dark:text-[#7fb2e8]">
           你还没设置简历行业，当前按默认行业展示。到
-          <Link href="/preferences" className="mx-1 underline underline-offset-2 hover:text-[#1a1714] dark:hover:text-[#f3ecdf]">
+          <Link href="/preferences" className="mx-1 underline underline-offset-2 hover:opacity-80">
             偏好设置
           </Link>
           完善简历行业，可精准锁定你的目标公司。
@@ -360,7 +360,7 @@ export default function CampusClient({
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-[#5f594e] dark:text-[#b6ad9d]">
+        <p className="text-sm ink-2">
           已接入官方校招源并持续验证的岗位 · 按行业「{industries.join("、")}」匹配 {cards.length} 家必投目标公司
         </p>
       </div>
@@ -368,7 +368,7 @@ export default function CampusClient({
       <div className="surface space-y-3 p-4 sm:p-5">
         {/* 校招 / 实习切换：驱动卡面计数、展开区与探活取哪个桶。 */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-black/[0.06] pb-3 dark:border-white/[0.1]">
-          <p className="text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">岗位范围与筛选</p>
+          <p className="text-sm font-medium ink-2">岗位范围与筛选</p>
           <div className="inline-flex shrink-0 rounded-full border border-black/[0.08] bg-white/60 p-1 dark:border-white/[0.1] dark:bg-white/[0.05]">
             {(["campus", "intern"] as const).map((m) => (
               <button
@@ -379,7 +379,7 @@ export default function CampusClient({
                   "rounded-full px-3.5 py-1.5 text-sm font-medium transition",
                   mode === m
                     ? "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                    : "text-[#8a8275] hover:text-[#1a1714] dark:text-[#9a9184] dark:hover:text-[#f3ecdf]",
+                    : "ink-3 hover:opacity-80",
                 )}
               >
                 {m === "campus" ? "校招" : "实习"}
@@ -429,7 +429,7 @@ export default function CampusClient({
               <button
                 type="button"
                 onClick={() => setFilters(EMPTY_FILTERS)}
-                className="rounded-full border border-black/[0.08] bg-white/70 px-3.5 py-2 text-sm font-medium text-[#5f594e] transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.08]"
+                className="rounded-full border border-black/[0.08] bg-white/70 px-3.5 py-2 text-sm font-medium ink-2 transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
               >
                 清空筛选
               </button>
@@ -477,7 +477,7 @@ export default function CampusClient({
                     </div>
                   )}
                   {card.timeline && (
-                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 ink-3">
                       <span className="inline-flex items-center gap-1 rounded-md border border-[#b7d2ee] bg-[#dceafa] px-1.5 py-0.5 font-medium text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
                         据往年
                       </span>
@@ -508,13 +508,13 @@ export default function CampusClient({
                   )}
                   {/* 快路①：无官方精确日期时，用清洗后的自有岗位 deadline 做弱档提示（灰系）。 */}
                   {card.preciseDates.length === 0 && card.cleanDeadlineMs && (
-                    <p className="text-[12px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
+                    <p className="text-[12px] leading-5 ink-3">
                       据在招岗位约{" "}
                       {new Date(card.cleanDeadlineMs).toLocaleDateString("zh-CN", { month: "long", day: "numeric" })}{" "}
                       前截止
                     </p>
                   )}
-                  <p className="text-sm text-[#5f594e] dark:text-[#b6ad9d]">
+                  <p className="text-sm ink-2">
                     {totalCount > 0
                       ? `${totalCount} 个${modeLabel}在招岗位${
                           hasActiveFilter && isExpanded ? ` · 筛选后 ${filteredJobs.length} 个` : ""
@@ -524,7 +524,7 @@ export default function CampusClient({
                   {/* 往届岗不静默丢弃：说清楚「有但不是这一届」，免得用户以为我们漏抓。
                       只有岗位文本里写明届别（如「2026届」）的才会被挡；届别未知的岗照常在上面列着。 */}
                   {card.pastClassJobCount > 0 && (
-                    <p className="text-[12px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
+                    <p className="text-[12px] leading-5 ink-3">
                       另有 {card.pastClassJobCount} 个往届岗位未列出
                     </p>
                   )}
@@ -534,7 +534,7 @@ export default function CampusClient({
                         type="button"
                         onClick={() => toggleExpand(card.pattern)}
                         aria-expanded={isExpanded}
-                        className="inline-flex items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3.5 py-1.5 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
+                        className="inline-flex items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3.5 py-1.5 text-sm font-medium ink-2 transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
                       >
                         {isExpanded ? "收起岗位" : "展开岗位"}
                         <CaretDown
@@ -551,7 +551,7 @@ export default function CampusClient({
                         <button
                           type="button"
                           onClick={() => setInsightCompany(card.company)}
-                          className="inline-flex items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3.5 py-1.5 text-sm font-medium text-[#3f3a33] transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
+                          className="inline-flex items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3.5 py-1.5 text-sm font-medium ink-2 transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
                         >
                           {avail.real > 0 ? `公司洞察 ${avail.real}` : "公司洞察 · 岗位聚合"}
                         </button>
@@ -573,7 +573,7 @@ export default function CampusClient({
                           if (visibleJobs.length === 0) return null;
                           return (
                             <div key={group.key} className="space-y-3">
-                              <h4 className="flex items-center gap-1.5 text-sm font-semibold text-[#8a8275] dark:text-[#9a9184]">
+                              <h4 className="flex items-center gap-1.5 text-sm font-semibold ink-3">
                                 <MapPin size={14} weight="fill" aria-hidden="true" />
                                 {group.label} · {visibleJobs.length}
                               </h4>
@@ -597,7 +597,7 @@ export default function CampusClient({
                       </div>
                     )}
                     {deadIds.size > 0 && (
-                      <p className="mt-3 text-xs text-[#8a8275] dark:text-[#9a9184]">
+                      <p className="mt-3 text-xs ink-3">
                         实时复核拦下 {Array.from(deadIds).filter((id) => filteredJobs.some((j) => j.id === id)).length} 个
                       </p>
                     )}
@@ -644,7 +644,7 @@ function JobDisputeControl({
         type="button"
         onClick={onToggle}
         aria-expanded={isOpen}
-        className="inline-flex items-center gap-1 rounded-full px-1.5 py-1 text-xs font-medium text-[#8a8275] transition hover:text-[#5f594e] dark:text-[#9a9184] dark:hover:text-[#d9d0c2]"
+        className="inline-flex items-center gap-1 rounded-full px-1.5 py-1 text-xs font-medium ink-3 transition hover:opacity-80"
       >
         <Flag size={12} weight="bold" aria-hidden="true" />
         反馈
@@ -655,7 +655,7 @@ function JobDisputeControl({
             key={r.reason}
             type="button"
             onClick={() => onSubmit(r.reason)}
-            className="rounded-full border border-black/[0.08] bg-white/70 px-2.5 py-1 text-xs font-medium text-[#5f594e] transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.08]"
+            className="rounded-full border border-black/[0.08] bg-white/70 px-2.5 py-1 text-xs font-medium ink-2 transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
           >
             {r.label}
           </button>
@@ -682,7 +682,7 @@ function FilterSelect({
   formatOption?: (value: string | number) => string;
 }) {
   return (
-    <label className="flex min-w-[9rem] flex-1 flex-col gap-1 text-xs font-medium text-[#8a8275] dark:text-[#9a9184] sm:flex-none">
+    <label className="flex min-w-[9rem] flex-1 flex-col gap-1 text-xs font-medium ink-3 sm:flex-none">
       <span className="inline-flex items-center gap-1.5">
         <Icon size={14} weight="fill" aria-hidden="true" />
         {label}
@@ -690,7 +690,7 @@ function FilterSelect({
       <select
         value={String(value)}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-xl border border-black/[0.09] dark:border-white/[0.1] bg-white dark:bg-[#1e1a15] px-3 py-2 text-sm text-[#1a1714] dark:text-[#f3ecdf] transition duration-200 focus:border-[#1a1714]/55 dark:focus:border-white/55 focus:outline-none"
+        className="min-h-11 rounded-xl border border-black/[0.09] dark:border-white/[0.1] bg-white px-3 py-2 text-sm ink-1 transition duration-200 focus:border-[#1a1714]/55 focus:outline-none dark:bg-[#1e1a15] dark:focus:border-white/55 lg:min-h-0"
       >
         <option value="">{allLabel}</option>
         {options.map((opt) => (

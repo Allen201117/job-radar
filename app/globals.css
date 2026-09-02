@@ -52,6 +52,13 @@
     text-rendering: optimizeLegibility;
   }
 
+  @media (max-width: 1023px) {
+    body {
+      /* 底部主导航固定在视窗内；预留安全区，避免列表最后一项落在 iPhone 横条和 Tab Bar 后面。 */
+      padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
+    }
+  }
+
   h1,
   h2,
   h3 {
@@ -330,6 +337,19 @@
 @media (prefers-reduced-motion: reduce) {
   .route-zoom {
     animation: none;
+  }
+}
+
+/* 移动端底部主导航（Tab Bar）会占住视窗底部约 3rem + 安全区。所有「浮在底部」的元素都必须
+   抬到它上面，否则：BackToTop 与 Tab Bar 同为 z-40 会互相盖；今日机会的 toast、值得投的
+   对比浮条是 z-50，会直接压在 Tab Bar 上——而那条浮条的按钮位置正好落在 tab 上，必然误触。
+   桌面没有 Tab Bar，落回原来的 1.5rem。 */
+.above-mobile-nav {
+  bottom: calc(3rem + env(safe-area-inset-bottom) + 0.75rem);
+}
+@media (min-width: 1024px) {
+  .above-mobile-nav {
+    bottom: 1.5rem;
   }
 }
 

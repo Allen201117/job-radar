@@ -206,27 +206,27 @@ export default function ResumeProfilePanel() {
     return (
       <div>
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">{title}</span>
+          <span className="text-sm font-medium ink-2 ">{title}</span>
           <button
             type="button"
             onClick={() => addItem(listKey, empty)}
-            className="rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-2.5 py-1 text-xs text-[#5f594e] dark:text-[#b6ad9d] transition hover:bg-white dark:hover:bg-white/[0.08] hover:text-[#1a1714] dark:hover:text-[#f3ecdf]"
+            className="rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-2.5 py-1 text-xs ink-2 transition hover:bg-white dark:hover:bg-white/[0.08] hover:opacity-80 "
           >
             + 添加
           </button>
         </div>
         <div className="mt-2 space-y-2">
-          {items.length === 0 && <p className="text-xs text-[#9a9184] dark:text-[#837c70]">（暂无，可点「添加」补充）</p>}
+          {items.length === 0 && <p className="text-xs ink-3 ">（暂无，可点「添加」补充）</p>}
           {items.map((it, idx) => (
             <div key={idx} className="surface-soft p-3">
               <div className="grid gap-2 sm:grid-cols-2">
                 {fields.map(([k, label]) => (
-                  <label key={k} className="block text-xs text-[#8a8275] dark:text-[#9a9184]">
+                  <label key={k} className="block text-xs ink-3 ">
                     {label}
                     <input
                       value={it[k] || ""}
                       onChange={(e) => updateItem(listKey, idx, k, e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-black/[0.09] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-2.5 py-1.5 text-sm text-[#1a1714] dark:text-[#f3ecdf] outline-none transition focus:border-[#1a1714]/55 dark:focus:border-white/40 focus:bg-white dark:focus:bg-white/[0.08]"
+                      className="mt-1 w-full rounded-lg border border-black/[0.09] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-2.5 py-1.5 text-sm ink-1 outline-none transition focus:border-[#1a1714]/55 dark:focus:border-white/40 focus:bg-white dark:focus:bg-white/[0.08]"
                     />
                   </label>
                 ))}
@@ -234,7 +234,7 @@ export default function ResumeProfilePanel() {
               <button
                 type="button"
                 onClick={() => removeItem(listKey, idx)}
-                className="mt-2 text-xs text-[#9a9184] dark:text-[#837c70] transition-colors hover:text-[#9c4a3c] dark:hover:text-[#e6a99f]"
+                className="mt-2 text-xs ink-3 transition-colors hover:text-[#9c4a3c] dark:hover:text-[#e6a99f]"
               >
                 移除
               </button>
@@ -246,14 +246,14 @@ export default function ResumeProfilePanel() {
   }
 
   return (
-    <section id="resume" className="surface p-5 text-[#1a1714] dark:text-[#f3ecdf]">
+    <section id="resume" className="surface p-5 ink-1 ">
       <div className="flex items-center gap-2">
         <div className="grid size-9 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
           <IdentificationCard size={18} weight="fill" aria-hidden="true" />
         </div>
         <h2 className="text-base font-semibold">简历画像</h2>
       </div>
-      <p className="mt-2 text-sm text-[#8a8275] dark:text-[#9a9184]">
+      <p className="mt-2 text-sm ink-3 ">
         上传或粘贴简历，AI 结构化抽取教育 / 实习 / 项目 / 技能；可预览、编辑后再确认保存，只写入你的账号。
       </p>
 
@@ -279,7 +279,7 @@ export default function ResumeProfilePanel() {
                       className={
                         selected
                           ? "h-8 rounded-full bg-[#1a1714] px-3 text-sm font-semibold text-[#f7f1e6] shadow-sm dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                          : "h-8 rounded-full px-3 text-sm font-medium text-[#5f594e] transition hover:bg-black/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.06]"
+                          : "h-8 rounded-full px-3 text-sm font-medium ink-2 transition hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
                       }
                     >
                       {opt.label}
@@ -289,7 +289,7 @@ export default function ResumeProfilePanel() {
               </div>
             </div>
             <div>
-              <label className="inline-flex items-center gap-1.5 text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">
+              <label className="inline-flex items-center gap-1.5 text-sm font-medium ink-2 ">
                 <UploadSimple size={16} weight="bold" aria-hidden="true" />
                 {variant === "en" ? "上传英文简历（可选）" : "上传简历（.txt / .md / PDF / Word / 图片）"}
               </label>
@@ -297,12 +297,12 @@ export default function ResumeProfilePanel() {
                 type="file"
                 accept=".txt,.md,.pdf,.docx,.png,.jpg,.jpeg,.webp,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
                 onChange={(e) => setFile(e.target.files?.[0] || null)}
-                className="mt-1 block w-full rounded-xl border border-black/[0.09] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm text-[#1a1714] dark:text-[#f3ecdf] file:mr-3 file:rounded-full file:border-0 file:bg-[#1a1714] dark:file:bg-[#f3ecdf] file:px-3 file:py-1 file:text-xs file:font-semibold file:text-[#f7f1e6] dark:file:text-[#16130f] transition duration-200 focus:border-[#1a1714]/55 dark:focus:border-white/40 focus:outline-none"
+                className="mt-1 block w-full rounded-xl border border-black/[0.09] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm ink-1 file:mr-3 file:rounded-full file:border-0 file:bg-[#1a1714] dark:file:bg-[#f3ecdf] file:px-3 file:py-1 file:text-xs file:font-semibold file:text-[#f7f1e6] dark:file:text-[#16130f] transition duration-200 focus:border-[#1a1714]/55 dark:focus:border-white/40 focus:outline-none"
               />
             </div>
 
             <div>
-              <label className="inline-flex items-center gap-1.5 text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">
+              <label className="inline-flex items-center gap-1.5 text-sm font-medium ink-2 ">
                 <FileText size={16} weight="bold" aria-hidden="true" />
                 或粘贴简历内容
               </label>
@@ -322,7 +322,7 @@ export default function ResumeProfilePanel() {
               </p>
             )}
             {llmReady === true && (
-              <p className="text-xs text-[#8a8275] dark:text-[#9a9184]">AI 解析已就绪{llmModel ? `（模型 ${llmModel}）` : ""}。</p>
+              <p className="text-xs ink-3 ">AI 解析已就绪{llmModel ? `（模型 ${llmModel}）` : ""}。</p>
             )}
 
             <button
@@ -337,18 +337,18 @@ export default function ResumeProfilePanel() {
 
           <div className="mt-5 border-t border-black/[0.06] dark:border-white/[0.1] pt-4">
             {loadingSaved ? (
-              <p className="text-sm text-[#8a8275] dark:text-[#9a9184]">加载画像中…</p>
+              <p className="text-sm ink-3 ">加载画像中…</p>
             ) : saved ? (
               <SavedSummary profile={saved} />
             ) : (
-              <p className="text-sm text-[#8a8275] dark:text-[#9a9184]">还没有简历画像，先上传或粘贴简历开始。</p>
+              <p className="text-sm ink-3 ">还没有简历画像，先上传或粘贴简历开始。</p>
             )}
           </div>
         </>
       ) : (
         <div className="mt-4 space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block text-sm text-[#5f594e] dark:text-[#b6ad9d]">
+            <label className="block text-sm ink-2 ">
               一句话定位
               <input
                 value={draft.headline}
@@ -356,12 +356,12 @@ export default function ResumeProfilePanel() {
                 className="mt-1 field-soft"
               />
             </label>
-            <label className="block text-sm text-[#5f594e] dark:text-[#b6ad9d]">
+            <label className="block text-sm ink-2 ">
               求职阶段
               <select
                 value={draft.experience_stage}
                 onChange={(e) => setField("experience_stage", e.target.value)}
-                className="mt-1 w-full rounded-xl border border-black/[0.09] dark:border-white/[0.1] bg-white dark:bg-[#1e1a15] px-3 py-2.5 text-sm text-[#1a1714] dark:text-[#f3ecdf] outline-none transition focus:border-[#1a1714]/55 dark:focus:border-white/40"
+                className="mt-1 w-full rounded-xl border border-black/[0.09] dark:border-white/[0.1] bg-white dark:bg-[#1e1a15] px-3 py-2.5 text-sm ink-1 outline-none transition focus:border-[#1a1714]/55 dark:focus:border-white/40"
               >
                 {STAGES.map((s) => (
                   <option key={s} value={s}>
@@ -373,7 +373,7 @@ export default function ResumeProfilePanel() {
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3">
-            <label className="block text-sm text-[#5f594e] dark:text-[#b6ad9d]">
+            <label className="block text-sm ink-2 ">
               姓名
               <input
                 value={draft.basic_info.name}
@@ -381,7 +381,7 @@ export default function ResumeProfilePanel() {
                 className="mt-1 field-soft"
               />
             </label>
-            <label className="block text-sm text-[#5f594e] dark:text-[#b6ad9d]">
+            <label className="block text-sm ink-2 ">
               城市
               <input
                 value={draft.basic_info.city}
@@ -389,7 +389,7 @@ export default function ResumeProfilePanel() {
                 className="mt-1 field-soft"
               />
             </label>
-            <label className="block text-sm text-[#5f594e] dark:text-[#b6ad9d]">
+            <label className="block text-sm ink-2 ">
               联系方式（已脱敏）
               <input
                 value={draft.basic_info.contact}
@@ -401,19 +401,19 @@ export default function ResumeProfilePanel() {
 
           <div className="space-y-3">
             <div>
-              <span className="text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">目标岗位方向</span>
+              <span className="text-sm font-medium ink-2 ">目标岗位方向</span>
               <TagInput values={draft.target_roles} onChange={(v) => setField("target_roles", v)} ariaLabel="简历目标岗位方向标签输入" placeholder="回车添加，如 数据分析" />
             </div>
             <div>
-              <span className="text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">期望城市</span>
+              <span className="text-sm font-medium ink-2 ">期望城市</span>
               <TagInput values={draft.target_locations} onChange={(v) => setField("target_locations", v)} ariaLabel="简历期望城市标签输入" placeholder="如 上海" />
             </div>
             <div>
-              <span className="text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">技能标签</span>
+              <span className="text-sm font-medium ink-2 ">技能标签</span>
               <TagInput values={draft.skills} onChange={(v) => setField("skills", v)} ariaLabel="简历技能标签输入" placeholder="如 Python、SQL" />
             </div>
             <div>
-              <span className="text-sm font-medium text-[#5f594e] dark:text-[#b6ad9d]">行业</span>
+              <span className="text-sm font-medium ink-2 ">行业</span>
               <TagInput values={draft.industries} onChange={(v) => setField("industries", v)} ariaLabel="简历行业标签输入" placeholder="如 互联网、金融" />
             </div>
           </div>
@@ -423,7 +423,7 @@ export default function ResumeProfilePanel() {
           {renderList("工作 / 项目经历", "projects", [["name", "项目"], ["role", "角色"], ["stack", "技术栈"], ["outcome", "成果"]], EMPTY_PROJECT)}
 
           {variant === "cn" ? (
-            <label className="flex cursor-pointer items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm text-[#5f594e] dark:text-[#b6ad9d] transition duration-200 hover:bg-white dark:hover:bg-white/[0.08] hover:text-[#1a1714] dark:hover:text-[#f3ecdf]">
+            <label className="flex cursor-pointer items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm ink-2 transition duration-200 hover:bg-white dark:hover:bg-white/[0.08] hover:opacity-80 ">
               <input type="checkbox" checked={applyToPreferences} onChange={(e) => setApplyToPreferences(e.target.checked)} className="accent-[#1a1714] dark:accent-[#f3ecdf]" />
               同步到求职偏好（方向 / 城市 / 技能）
             </label>
@@ -473,13 +473,13 @@ function SavedSummary({ profile }: { profile: any }) {
   return (
     <div className="space-y-3">
       <div>
-        <div className="text-xs text-[#8a8275] dark:text-[#9a9184]">当前画像</div>
-        <div className="mt-1 text-sm font-medium text-[#1a1714] dark:text-[#f3ecdf]">{profile.headline || "未命名画像"}</div>
+        <div className="text-xs ink-3 ">当前画像</div>
+        <div className="mt-1 text-sm font-medium ink-1 ">{profile.headline || "未命名画像"}</div>
       </div>
       <ChipGroup label="方向" values={profile.target_roles || []} />
       <ChipGroup label="城市" values={profile.target_locations || []} />
       <ChipGroup label="技能" values={profile.skills || []} />
-      <div className="flex flex-wrap gap-2 text-xs text-[#5f594e] dark:text-[#b6ad9d]">
+      <div className="flex flex-wrap gap-2 text-xs ink-2 ">
         <span className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1">教育 {eduCount}</span>
         <span className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1">实习 {internCount}</span>
         <span className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1">项目 {projectCount}</span>
@@ -502,12 +502,12 @@ function ChipGroup({ label, values }: { label: string; values: string[] }) {
   if (!values.length) return null;
   return (
     <div>
-      <div className="text-xs text-[#8a8275] dark:text-[#9a9184]">{label}</div>
+      <div className="text-xs ink-3 ">{label}</div>
       <div className="mt-1 flex flex-wrap gap-1.5">
         {values.map((value) => (
           <span
             key={value}
-            className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1 text-xs font-medium text-[#5f594e] dark:text-[#b6ad9d]"
+            className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1 text-xs font-medium ink-2 "
           >
             {value}
           </span>

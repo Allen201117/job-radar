@@ -43,7 +43,7 @@ import type { RecruitmentObservation } from "@/lib/recruitment-cycle";
 // 新鲜度分级配色：越旧越偏琥珀，提示用户谨慎参考。
 const FRESHNESS_TONE: Record<FreshnessLevel, string> = {
   fresh: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]",
-  recent: "border border-black/[0.08] bg-[#f4efe6] text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#9a9184]",
+  recent: "border border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08] ",
   aging: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]",
   stale: "border border-[#e0a94e] bg-[#fbe6c4] text-[#8a5a12] dark:border-[#e0b15a]/[0.40] dark:bg-[#e0b15a]/[0.20] dark:text-[#e8bf72]",
 };
@@ -51,7 +51,7 @@ const FRESHNESS_TONE: Record<FreshnessLevel, string> = {
 const PAYLOAD_CHIP_TONE: Record<InsightChipTone, string> = {
   positive: "border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]",
   warning: "border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]",
-  neutral: "border-black/[0.08] bg-[#f4efe6] text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#9a9184]",
+  neutral: "border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08] ",
 };
 
 interface Props {
@@ -200,13 +200,13 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
         role="dialog"
         aria-modal="true"
         aria-label="公司职业洞察"
-        className="relative flex h-full w-full flex-col border-l border-black/[0.08] bg-[#f4efe6] text-[#1a1714] shadow-2xl sm:max-w-xl lg:max-w-2xl dark:border-white/[0.1] dark:bg-[#16130f] dark:text-[#f3ecdf]"
+        className="relative flex h-full w-full flex-col border-l border-black/[0.08] bg-[#f4efe6] ink-1 shadow-2xl sm:max-w-xl lg:max-w-2xl dark:border-white/[0.1] dark:bg-[#16130f] "
       >
         {/* 头部：明确「社区聚合·非官方」，与官方岗位数据视觉区分 */}
         <div className="border-b border-black/[0.06] bg-gradient-to-b from-white/60 to-transparent px-6 pb-5 pt-6 dark:border-white/[0.1] dark:from-white/[0.05]">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-sm text-[#8a8275] dark:text-[#9a9184]">
+              <div className="flex items-center gap-2 text-sm ink-3 ">
                 <Sparkle size={16} weight="fill" className="text-[#6a4fa0] dark:text-[#c3b1e6]" />
                 公司职业洞察
               </div>
@@ -217,13 +217,13 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
                 </h2>
               </div>
               {firmoBits.length > 0 && (
-                <p className="mt-1 text-xs text-[#8a8275] dark:text-[#9a9184]">{firmoBits.join(" · ")}</p>
+                <p className="mt-1 text-xs ink-3 ">{firmoBits.join(" · ")}</p>
               )}
             </div>
             <button
               type="button"
               onClick={onClose}
-              className="shrink-0 rounded-full bg-black/[0.05] p-2 text-[#5f594e] transition hover:bg-black/[0.08] hover:text-[#1a1714] dark:bg-white/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.08] dark:hover:text-[#f3ecdf]"
+              className="shrink-0 rounded-full bg-black/[0.05] p-2 ink-2 transition hover:bg-black/[0.08] hover:opacity-80 dark:bg-white/[0.05] dark:hover:bg-white/[0.08] "
             >
               <X size={18} weight="bold" />
             </button>
@@ -246,10 +246,10 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-6">
-          {loading && <p className="text-sm text-[#8a8275] dark:text-[#9a9184]">正在加载洞察…</p>}
+          {loading && <p className="text-sm ink-3 ">正在加载洞察…</p>}
 
           {!loading && totalItems === 0 && !(data?.recruitment_cycles?.length) && (
-            <div className="rounded-xl border border-black/[0.06] bg-white/55 p-5 text-[15px] leading-7 text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
+            <div className="rounded-xl border border-black/[0.06] bg-white/55 p-5 text-[15px] leading-7 ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
               {failureMessage(data?.failure_reason)}
             </div>
           )}
@@ -285,8 +285,8 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
                       >
                         <Meta.icon size={17} weight="bold" className={Meta.iconText} />
                       </span>
-                      <h3 className="text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{Meta.label}</h3>
-                      <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-xs font-medium text-[#8a8275] dark:bg-white/[0.08] dark:text-[#9a9184]">
+                      <h3 className="text-base font-semibold ink-1 ">{Meta.label}</h3>
+                      <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-xs font-medium ink-3 dark:bg-white/[0.08] ">
                         {items.length}
                       </span>
                     </header>
@@ -328,7 +328,7 @@ function FirstPartySection({
         <span className="grid size-8 place-items-center rounded-xl border border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]">
           <ChatCircleText size={17} weight="bold" />
         </span>
-        <h3 className="text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">员工自愿分享</h3>
+        <h3 className="text-base font-semibold ink-1 ">员工自愿分享</h3>
         {visible && (
           <span className="inline-flex items-center gap-1 rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-2 py-0.5 text-xs font-medium text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]">
             <Star size={12} weight="fill" />
@@ -338,7 +338,7 @@ function FirstPartySection({
         <button
           type="button"
           onClick={onToggleSubmit}
-          className="ml-auto rounded-full border border-black/[0.08] bg-white/70 px-3 py-1.5 text-xs font-semibold text-[#3f3a33] transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#d9d0c2] dark:hover:bg-white/[0.08]"
+          className="ml-auto rounded-full border border-black/[0.08] bg-white/70 px-3 py-1.5 text-xs font-semibold ink-2 transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
         >
           {submitOpen ? "收起" : "贡献一条"}
         </button>
@@ -351,7 +351,7 @@ function FirstPartySection({
           ))}
         </div>
       ) : (
-        <div className="rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm leading-6 text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
+        <div className="rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm leading-6 ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
           已审核 {count} 条，满 {FIRST_PARTY_MIN_COUNT} 条后才会匿名聚合展示（人数太少容易被认出来，保护每位分享者）。
         </div>
       )}
@@ -372,7 +372,7 @@ function FirstPartyCard({ item }: { item: FirstPartyInsightItem }) {
         <span className="rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-0.5 text-[11px] font-semibold text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]">
           员工自愿分享 · 已审核
         </span>
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d]">
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
           匿名 · {item.topic_label}
         </span>
         {item.rating != null && (
@@ -382,8 +382,8 @@ function FirstPartyCard({ item }: { item: FirstPartyInsightItem }) {
           </span>
         )}
       </div>
-      <p className="mt-2.5 leading-7 text-[#3f3a33] dark:text-[#d9d0c2]">{item.content}</p>
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#8a8275] dark:text-[#9a9184]">
+      <p className="mt-2.5 leading-7 ink-2 ">{item.content}</p>
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs ink-3 ">
         {item.created_month && (
           <span className="inline-flex items-center gap-1">
             <CalendarBlank size={13} />
@@ -429,7 +429,7 @@ const EQUITY_ANGLE: Record<
     text: "未上市独角兽：估值高、市场看好，股权激励潜在含金量高，常是值得投递的标的；但短期不可变现、依赖后续融资或上市兑现。",
   },
   private: {
-    tone: "border-black/[0.08] bg-[#f4efe6] text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#9a9184]",
+    tone: "border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08] ",
     label: "投递视角 · 重看现金",
     text: "未上市且暂无明确上市计划：股权短期难变现，评估 offer 时建议以现金薪酬为主、股权为辅。",
   },
@@ -550,19 +550,19 @@ function InsightCard({ item }: { item: InsightItemView }) {
           {chip.text}
         </span>
         {item.outdated && (
-          <span className="rounded-full border border-black/[0.08] bg-[#f4efe6] px-2 py-0.5 text-[11px] text-[#8a8275] dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-[#9a9184]">
+          <span className="rounded-full border border-black/[0.08] bg-[#f4efe6] px-2 py-0.5 text-[11px] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08] ">
             可能已过时
           </span>
         )}
       </div>
 
-      {item.title && <p className="mt-2.5 text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">{item.title}</p>}
-      <p className="mt-1.5 leading-7 text-[#3f3a33] dark:text-[#d9d0c2]">{item.content}</p>
+      {item.title && <p className="mt-2.5 text-base font-semibold ink-1 ">{item.title}</p>}
+      <p className="mt-1.5 leading-7 ink-2 ">{item.content}</p>
       <PayloadChips item={item} />
       <EquityAngle payload={item.payload} />
       <QuoteLink payload={item.payload} />
 
-      <div className="mt-3.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#8a8275] dark:text-[#9a9184]">
+      <div className="mt-3.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs ink-3 ">
         {item.time_window && (
           <span className="inline-flex items-center gap-1">
             <CalendarBlank size={13} />
@@ -590,7 +590,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
               href={s.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 rounded-md border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] text-[#5f594e] transition hover:bg-white hover:text-[#1a1714] dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#b6ad9d] dark:hover:bg-white/[0.08] dark:hover:text-[#f3ecdf]"
+              className="inline-flex items-center gap-1 rounded-md border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 transition hover:bg-white hover:opacity-80 dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08] "
             >
               {s.publisher || "来源"}
               <ArrowSquareOut size={11} weight="bold" />
@@ -610,7 +610,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
               onChange={(e) => setReason(e.target.value)}
               placeholder="说明哪里有误（选填）"
               rows={2}
-              className="w-full rounded-lg border border-black/[0.09] bg-white/70 px-2.5 py-1.5 text-xs text-[#1a1714] outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-[#f3ecdf] dark:placeholder:text-[#8b8478] dark:focus:border-white/40 dark:focus:bg-white/[0.08]"
+              className="w-full rounded-lg border border-black/[0.09] bg-white/70 px-2.5 py-1.5 text-xs ink-1 outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:placeholder:text-[#8b8478] dark:focus:border-white/40 dark:focus:bg-white/[0.08]"
             />
             <div className="flex gap-2">
               <button
@@ -624,7 +624,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
               <button
                 type="button"
                 onClick={() => setDisputing(false)}
-                className="rounded-full px-3 py-1 text-[11px] text-[#8a8275] hover:text-[#1a1714] dark:text-[#9a9184] dark:hover:text-[#f3ecdf]"
+                className="rounded-full px-3 py-1 text-[11px] ink-3 hover:opacity-80 "
               >
                 取消
               </button>
@@ -634,7 +634,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
           <button
             type="button"
             onClick={() => setDisputing(true)}
-            className="inline-flex items-center gap-1 text-[11px] text-[#9a9184] transition hover:text-[#1a1714] dark:text-[#837c70] dark:hover:text-[#f3ecdf]"
+            className="inline-flex items-center gap-1 text-[11px] ink-3 transition hover:opacity-80 "
           >
             <Flag size={12} />
             这条有误?
@@ -664,7 +664,7 @@ function RecruitmentTimeline({ cycles }: { cycles: RecruitmentObservation[] }) {
         <span className="grid size-8 place-items-center rounded-xl border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
           <CalendarBlank size={17} weight="bold" />
         </span>
-        <h3 className="text-base font-semibold text-[#1a1714] dark:text-[#f3ecdf]">招聘周期</h3>
+        <h3 className="text-base font-semibold ink-1 ">招聘周期</h3>
         <span className="rounded-full border border-[#b7d2ee] bg-[#dceafa] px-2 py-0.5 text-[11px] font-medium text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
           据往年 · {gradClass}
         </span>
@@ -672,13 +672,13 @@ function RecruitmentTimeline({ cycles }: { cycles: RecruitmentObservation[] }) {
       <div className="space-y-3.5">
         {Array.from(bySeason.entries()).map(([season, rows]) => (
           <div key={season} className="rounded-xl border border-black/[0.06] bg-white/60 p-4 dark:border-white/[0.1] dark:bg-white/[0.05]">
-            <p className="mb-2 text-sm font-semibold text-[#3f3a33] dark:text-[#d9d0c2]">{season}</p>
+            <p className="mb-2 text-sm font-semibold ink-2 ">{season}</p>
             <ul className="space-y-1.5">
               {rows.map((r, i) => (
-                <li key={i} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-[#5f594e] dark:text-[#b6ad9d]">
+                <li key={i} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] ink-2 ">
                   <span className="rounded-md bg-black/[0.05] px-1.5 py-0.5 text-[11px] font-medium dark:bg-white/[0.08]">{r.batch}</span>
                   <span>{r.event}</span>
-                  <span className="font-medium text-[#1a1714] dark:text-[#f3ecdf]">{r.value_text}</span>
+                  <span className="font-medium ink-1 ">{r.value_text}</span>
                   {r.evidence_url && (
                     <a href={r.evidence_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[11px] text-[#2f6299] hover:underline dark:text-[#7fb2e8]">
                       来源 <ArrowSquareOut size={10} weight="bold" />
@@ -690,7 +690,7 @@ function RecruitmentTimeline({ cycles }: { cycles: RecruitmentObservation[] }) {
           </div>
         ))}
       </div>
-      <p className="mt-2 text-[11px] leading-5 text-[#8a8275] dark:text-[#9a9184]">
+      <p className="mt-2 text-[11px] leading-5 ink-3 ">
         据往年规律整理（非今年确切日期），今年批次时间以官网当年公告为准。
       </p>
     </section>
