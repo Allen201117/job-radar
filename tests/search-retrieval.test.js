@@ -405,3 +405,72 @@ test("jobs-store 命中页回补展示列：候选省传 canonical_jd_url，page
   assert.equal(r.jobs[0].deadline, "2025-12-31"); // 回补生效
   assert.equal(r.jobs[0].canonical_jd_url, "https://x/canon");
 });
+
+// ── 候选缓存（FTS 与扫描两条路径共用）────────────────────────────────────────
+// 候选取数是这个接口服务端耗时的绝大头（香港库实测 4354 行 ≈ 4.8MB；无筛选态 2.8 万行、
+// 首次 TTFB 19s）。翻页是在 JS 里 slice 的 → 第 2 页的候选 SQL 与第 1 页逐字节相同，
+// 不缓存就是把同一批行重拉一遍。下面钉死「该复用时复用、不该复用时绝不复用」。
+
+const isCandidateSql = (sql) => /from jobs where status = 'active'/.test(sql);
+
+test("同一筛选条件翻页复用候选缓存，候选 SQL 只发一次", async () => {
+  const calls = [];
+  const { searchJobsStore } = loadJobsStore(async (sql) => {
+    calls.push(sql);
+    return [];
+  });
+  const f = { ...filters, city: "深圳" };
+  await searchJobsStore(f, null, [], 0, 60, null);
+  await searchJobsStore(f, null, [], 60, 60, null); // 第 2 页：offset 只影响 JS slice
+  assert.equal(calls.filter(isCandidateSql).length, 1, "第 2 页必须吃缓存，不该重发候选查询");
+});
+
+test("筛选条件不同 → 缓存 key 不同，绝不互相串味", async () => {
+  const calls = [];
+  const { searchJobsStore } = loadJobsStore(async (sql, params) => {
+    calls.push({ sql, params });
+    return [];
+  });
+  await searchJobsStore({ ...filters, city: "深圳" }, null, [], 0, 60, null);
+  await searchJobsStore({ ...filters, city: "北京" }, null, [], 0, 60, null);
+  const candidates = calls.filter((c) => isCandidateSql(c.sql));
+  assert.equal(candidates.length, 2, "换城市必须另发一次查询");
+  assert.notDeepEqual(candidates[0].params, candidates[1].params);
+});
+
+test("并发同一查询只打一次库（in-flight 去重）", async () => {
+  let hits = 0;
+  const { searchJobsStore } = loadJobsStore(async (sql) => {
+    if (isCandidateSql(sql)) hits += 1;
+    await new Promise((r) => setTimeout(r, 5));
+    return [];
+  });
+  const f = { ...filters, city: "广州" };
+  await Promise.all([
+    searchJobsStore(f, null, [], 0, 60, null),
+    searchJobsStore(f, null, [], 0, 60, null),
+    searchJobsStore(f, null, [], 0, 60, null),
+  ]);
+  assert.equal(hits, 1, "三个并发请求应共享同一次取数");
+});
+
+test("超行数预算时淘汰最旧的一份，而不是把缓存整体清空", async () => {
+  const calls = [];
+  const bulk = (n, city) =>
+    Array.from({ length: n }, (_, i) => job({ id: `${city}-${i}`, location: city }));
+  const { searchJobsStore } = loadJobsStore(async (sql, params) => {
+    calls.push(sql);
+    if (!isCandidateSql(sql)) return [];
+    return bulk(40000, String(params[1] || "").replace(/%/g, "") || "x");
+  });
+  // 预算 60000 行：A(4 万) 装得下；B(4 万) 进来后 A 必须被挤掉；再查 B 仍应命中缓存。
+  const A = { ...filters, city: "深圳" };
+  const B = { ...filters, city: "北京" };
+  await searchJobsStore(A, null, [], 0, 1, null);
+  await searchJobsStore(B, null, [], 0, 1, null);
+  const before = calls.filter(isCandidateSql).length;
+  await searchJobsStore(B, null, [], 0, 1, null); // 最近写入的 B 应还在
+  assert.equal(calls.filter(isCandidateSql).length, before, "B 应命中缓存");
+  await searchJobsStore(A, null, [], 0, 1, null); // A 已被挤掉 → 重新取数
+  assert.equal(calls.filter(isCandidateSql).length, before + 1, "A 应已被淘汰、需重取");
+});

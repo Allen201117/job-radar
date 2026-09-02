@@ -22,25 +22,23 @@ const DB_PAGE = 1000;
 const SCAN_BUDGET = 28000;
 
 /**
- * 扫描候选缓存（同一 lambda 实例内跨请求共享）。
+ * 候选缓存 TTL（同一 lambda 实例内跨请求共享，FTS 与扫描两条路径共用）。
+ * 能共享的理由与不变量见下面 `fetchCandidates` 的注释。
  *
- * **为什么可以共享**：这批候选行**与用户无关**——where 只有 `status='active'` + 求职范围
- * （job_scope / target_regions）+ 招聘类型超集下推，排序固定 `first_seen_at desc`。
- * 用户偏好只参与之后的打分/精筛，而那一步在 `sortAndFilterJobs` 里是
- * `{...job, match_score, …}` **复制**后再写（lib/scoring.ts:224），不碰原行。
- *
- * ⚠️ **不变量：任何人不得就地改写这些行。** 唯一例外是 `annotateSourceAdapter` 写
- * `source_adapter`，它的值来自全局 sources 映射、与用户无关，因此幂等安全。
- * 若将来新增「按用户往行对象写回」的逻辑，**必须先深拷贝**，否则会把一个用户的数据泄给另一个。
- *
- * **收益**：一次 /api/jobs/search 要从香港库拉满 SCAN_BUDGET=2.8 万行（实测 summary 15MB +
- * 其余列 4.3MB），而 sortBy=match 默认每次都得看满预算。缓存后同实例后续请求零传输；
- * in-flight 去重让并发请求只拉一次（改造前两个用户同时开 /jobs = 各拉 20MB）。
- * TTL 60s：岗位库由爬虫按天级写入，60 秒的陈旧对用户不可见。
+ * 线上实测收益（香港库）：无筛选的 /jobs 落地态要拉满 SCAN_BUDGET=2.8 万行，
+ * 首次 TTFB 19.0s、命中缓存 2.1s；FTS 路径（城市/关键词搜索）4354 行候选，
+ * 未接缓存时**每翻一页都重拉一遍**。in-flight 去重让并发请求只拉一次。
  */
 const SCAN_CACHE_TTL_MS = 60_000;
-/** 最多缓存几个不同候选组合（求职范围 × 招聘类型）。每份约 20MB，只留最热的几个，别把内存吃满。 */
-const SCAN_CACHE_MAX = 2;
+/**
+ * 缓存按**行数**记账，不按条数。
+ *
+ * 两条路径的候选集大小差一个数量级（扫描 28000 行 ≈ 20MB，FTS 常见几千行 ≈ 5MB），
+ * 按条数封顶会让「一个扫描候选集」和「一个 FTS 候选集」占同样的名额：/jobs 落地页与
+ * 城市搜索交替访问时互相驱逐，两边都永远打不中。按行数记账则大集合自然占更多预算。
+ * 6 万行 ≈ 两份满额扫描候选，是这个函数内存上限的保守取值。
+ */
+const CANDIDATE_CACHE_ROW_BUDGET = 60_000;
 const scanCache = new Map<string, { expiresAt: number; rows: any[] }>();
 const scanInFlight = new Map<string, Promise<any[]>>();
 
@@ -50,7 +48,33 @@ export function __resetScanCache(): void {
   scanInFlight.clear();
 }
 
-async function fetchScanCandidates(sql: string, params: unknown[]): Promise<any[]> {
+/** 超预算时按插入顺序淘汰最旧的（Map 保序），而不是整体 clear —— 别为了收一份新的把全部热数据丢光。 */
+function evictToRowBudget(incomingRows: number): void {
+  let total = incomingRows;
+  for (const entry of scanCache.values()) total += entry.rows.length;
+  for (const key of scanCache.keys()) {
+    if (total <= CANDIDATE_CACHE_ROW_BUDGET) break;
+    total -= scanCache.get(key)!.rows.length;
+    scanCache.delete(key);
+  }
+}
+
+/**
+ * 取候选行（带进程内缓存 + 并发去重）。**FTS 与扫描两条路径共用**。
+ *
+ * key = 完整 SQL + 全部绑定参数，而 where 子句里已经含了会改变结果集的每一项
+ * （tsquery / 求职范围 / 城市 / 公司 / 发布时间 / 招聘类型预筛）→ 同 key 必同结果集，
+ * 不同用户的偏好差异会体现成不同的 params、拿到各自的 key，不会串味。
+ * 用户偏好只参与之后的打分/精筛，而那一步在 `sortAndFilterJobs` 里是
+ * `{...job, match_score, …}` **复制**后再写（lib/scoring.ts），不碰原行。
+ *
+ * ⚠️ **不变量：任何人不得就地改写这些行。** 唯一例外是 `annotateSourceAdapter` 写
+ * `source_adapter`，它的值来自全局 sources 映射、与用户无关，因此幂等安全。
+ * 若将来新增「按用户往行对象写回」的逻辑，**必须先深拷贝**，否则会把一个用户的数据泄给另一个。
+ *
+ * TTL 60s：岗位库由爬虫按天级写入，60 秒的陈旧对用户不可见。
+ */
+async function fetchCandidates(sql: string, params: unknown[]): Promise<any[]> {
   const key = `${sql}|${JSON.stringify(params)}`;
   const hit = scanCache.get(key);
   if (hit && hit.expiresAt > Date.now()) return hit.rows;
@@ -60,7 +84,8 @@ async function fetchScanCandidates(sql: string, params: unknown[]): Promise<any[
   const p = (async () => {
     try {
       const rows = (await jobsQuery(sql, params)) as any[];
-      if (!scanCache.has(key) && scanCache.size >= SCAN_CACHE_MAX) scanCache.clear();
+      scanCache.delete(key); // 重新插入 = 移到队尾，让淘汰顺序反映最近写入
+      evictToRowBudget(rows.length);
       scanCache.set(key, { expiresAt: Date.now() + SCAN_CACHE_TTL_MS, rows });
       return rows;
     } finally {
@@ -194,8 +219,11 @@ async function searchViaFTS(
   }
   // 校招/实习超集下推：只保留可能命中的行，别把大量社招岗跨洋传过来（JS 仍权威判定）。
   appendRecruitmentPrefilter(conds, filters.jobType);
+  // 走同一份候选缓存：候选集只由 where 决定（已全部进 key），而**翻页是在 JS 里 slice 的**——
+  // 第 2 页的 SQL 与第 1 页逐字节相同。不缓存的话每翻一页都要把几千行重新跨库拉一遍再解析一遍，
+  // 香港库实测这段占该接口服务端耗时的绝大部分（4354 行 ≈ 4.8MB）。
   const rows = annotateSourceAdapter(
-    await jobsQuery(
+    await fetchCandidates(
       `select ${CANDIDATE_COLUMNS} from jobs where ${conds.join(" and ")} limit ${FTS_CAP}`,
       params,
     ),
@@ -273,9 +301,9 @@ async function searchViaScan(
     // → 更进一步的解法是**物化派生字段**（job_function / 招聘类型等落成列，写入时算好），
     //   让候选取数根本不需要 summary。属 schema 改动，见设计文档。
     // 在物化之前，先用「候选与用户无关」这一点把重复传输吃掉：走进程内缓存 + 并发去重
-    // （见上面 fetchScanCandidates 的注释与不变量）。
+    // （见上面 fetchCandidates 的注释与不变量）。
     exhausted = absorb(
-      await fetchScanCandidates(sql, [...params, SCAN_BUDGET, 0]),
+      await fetchCandidates(sql, [...params, SCAN_BUDGET, 0]),
       SCAN_BUDGET,
     );
   } else {
