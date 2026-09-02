@@ -83,7 +83,7 @@ async function fetchCandidates(sql: string, params: unknown[]): Promise<any[]> {
 
   const p = (async () => {
     try {
-      const rows = (await jobsQuery(sql, params)) as any[];
+      const rows = await queryCandidateRows(sql, params);
       scanCache.delete(key); // 重新插入 = 移到队尾，让淘汰顺序反映最近写入
       evictToRowBudget(rows.length);
       scanCache.set(key, { expiresAt: Date.now() + SCAN_CACHE_TTL_MS, rows });
@@ -108,14 +108,60 @@ async function fetchCandidates(sql: string, params: unknown[]): Promise<any[]> {
 //   （把打分/排序下推到 SQL，或缩小候选窗口），属于检索层重构，见设计文档。
 
 // 候选取数只拉「打分/精筛」真正要用的列，把纯展示/写库列（正文之外最肥的 canonical_jd_url 等）留到
-// 分页命中后再补——函数固定在美东、库在香港，跨太平洋每少传一列 × 数千行都直接缩短耗时。JS 打分/精筛
-// （scoring + jobFilterMatch + recruitmentCategory + keywordMatchTier）只读这些列，删下面几列零精度影响。
-const CANDIDATE_COLUMNS =
-  "id, source_id, company, title, location, country_code, job_scope, job_type, summary, sponsorship_signal, " +
-  "jd_url, apply_url, salary_text, posted_at, first_seen_at, last_seen_at, status, experience, education";
+// 分页命中后再补。JS 打分/精筛（scoring + jobFilterMatch + recruitmentCategory + keywordMatchTier）
+// 只读这些列，删下面几列零精度影响。
+const CANDIDATE_TEXT_COLUMNS = [
+  "id", "source_id", "company", "title", "location", "country_code", "job_scope", "job_type",
+  "summary", "sponsorship_signal", "jd_url", "apply_url", "salary_text", "status",
+  "experience", "education",
+] as const;
+// timestamptz 列。JSON 传输层必须显式 ::text —— 见 queryCandidateRows 的说明。
+const CANDIDATE_TS_COLUMNS = ["posted_at", "first_seen_at", "last_seen_at"] as const;
+const CANDIDATE_COLUMNS = [...CANDIDATE_TEXT_COLUMNS, ...CANDIDATE_TS_COLUMNS].join(", ");
+// JSON 层的投影：时间列转成与线协议**逐字节相同**的文本（都走 timestamptz_out，
+// 已在生产库拿 2 万行核对过 0 处差异），其余列原样。两份列表由同一组常量派生，杜绝漂移。
+const CANDIDATE_JSON_PROJECTION = [
+  ...CANDIDATE_TEXT_COLUMNS,
+  ...CANDIDATE_TS_COLUMNS.map((c) => `${c}::text as ${c}`),
+].join(", ");
 // 仅命中页(≤limit 行)回补的展示/写库列（打分精筛都不读）。
 const HYDRATE_COLUMNS =
   "content_hash, created_at, deadline, enrich_fail_count, enrich_checked_at, canonical_jd_url";
+
+/**
+ * 取候选行：让**库**把整个结果集打成一个 json 数组一次性传回，而不是走 pg 的逐字段线协议。
+ *
+ * 为什么：香港库实测这条接口的服务端耗时几乎全在「把候选行搬进函数」这一步，而且它既不是
+ * 数据库执行也不是网络——
+ *   FTS(4354 行)：堆扫描+过滤 355~383ms，渲染成线协议文本 489~678ms，而端到端服务端耗时约 2.3s；
+ *   扫描(28000 行)：库侧 3.2~3.4s，端到端却要 19s。
+ * 差额是 node-pg 在函数里逐字段解析的开销：4354 行 × 19 列 = 8.3 万次、28000 行 = 53 万次
+ * 字段解析，全在 JS 单线程上。改成一个 json 字段后，node-pg 只解析 1 个字段，剩下的交给
+ * V8 原生 JSON.parse（pg 对 json 类型的默认 parser 就是它）。
+ * 库侧成本反而更低（json_agg 425~436ms < 线协议渲染 489~678ms），字节数也少约 11%。
+ *
+ * ⚠️ 三条不变量，改这里必须全部保住：
+ *  1) **内层 SQL 原样不动**。时间列的 ::text 只能放在外面这层投影里。曾试过把 ::text 直接写进
+ *     内层列表，结果 `order by first_seen_at` 被解析成**输出列**（已是 text）→ 计划变成
+ *     `Sort Key: ((jobs.first_seen_at)::text) DESC`，排序从时间序悄悄变成字典序。
+ *  2) **时间列必须显式 ::text**。让 json_agg 自己渲染 timestamptz 会得到 ISO-8601
+ *     （`2026-07-07T14:15:17.841751+08:00`），与全库假定的线协议文本
+ *     （`2026-07-07 14:15:17.841751+08`）不一样 —— 2026-06-26 的 503 就是时间列类型不一致
+ *     引发的（见 client.ts 的 type parser 注释）。::text 与线协议同走 timestamptz_out，
+ *     已在生产库拿 2 万行核对过 0 处差异。
+ *  3) **中间那层只做投影**（无 order by / 无聚合），所以它按输入顺序流式产出，json_agg 也就
+ *     按同样顺序聚合 —— 行顺序与改造前逐行对拍一致（同一 REPEATABLE READ 快照下 4354 行
+ *     与 28000 行各自 0 处差异）。顺序不是可有可无的：命中同分时 V8 的稳定排序会让输入顺序
+ *     决定展示顺序。
+ */
+async function queryCandidateRows(innerSql: string, params: unknown[]): Promise<any[]> {
+  const rows = (await jobsQuery(
+    `select coalesce(json_agg(t), '[]'::json) as rows ` +
+      `from (select ${CANDIDATE_JSON_PROJECTION} from (${innerSql}) src) t`,
+    params,
+  )) as Array<{ rows: any[] | null }>;
+  return rows[0]?.rows ?? [];
+}
 
 export type SearchResult = {
   jobs: Array<ScoredJob & { __tier: "exact" | "related"; __match: MatchReason }>;
@@ -269,7 +315,7 @@ async function searchViaScan(
   const sql =
     `select ${CANDIDATE_COLUMNS} from jobs where ${conds.join(" and ")} ` +
     `order by first_seen_at desc limit $${params.length + 1} offset $${params.length + 2}`;
-  const fetchRows = (want: number, off: number) => jobsQuery(sql, [...params, want, off]);
+  const fetchRows = (want: number, off: number) => queryCandidateRows(sql, [...params, want, off]);
   // 吸收一批：打分/精筛后并入 matched，返回「是否已到底」（拿到的比想要的少 = 没更多了）。
   const absorb = (raw: unknown, want: number): boolean => {
     const rows: any[] = annotateSourceAdapter(raw as any[], adapterBySource);

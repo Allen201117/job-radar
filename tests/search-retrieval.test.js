@@ -106,9 +106,16 @@ function job(overrides = {}) {
   };
 }
 
+// 候选取数走 json 传输（见 lib/jobs-store/search.ts 的 queryCandidateRows）：库返回的是
+// 单行单列的信封 `[{ rows: [...] }]`。各用例的 mock 仍按「直接返回岗位数组」书写，这里统一
+// 套信封，免得每个用例都得记住传输层长什么样。
 function loadJobsStore(jobsQuery) {
+  const withEnvelope = async (sql, params) => {
+    const rows = await jobsQuery(sql, params);
+    return /json_agg/.test(sql) ? [{ rows }] : rows;
+  };
   return loadTsWithMocks(path.join(ROOT, "lib", "jobs-store", "search.ts"), {
-    "./client": { jobsQuery },
+    "./client": { jobsQuery: withEnvelope },
   });
 }
 
@@ -473,4 +480,50 @@ test("超行数预算时淘汰最旧的一份，而不是把缓存整体清空",
   assert.equal(calls.filter(isCandidateSql).length, before, "B 应命中缓存");
   await searchJobsStore(A, null, [], 0, 1, null); // A 已被挤掉 → 重新取数
   assert.equal(calls.filter(isCandidateSql).length, before + 1, "A 应已被淘汰、需重取");
+});
+
+// ── 候选行的 json 传输层 ──────────────────────────────────────────────────────
+// 让库把整个结果集打成一个 json 数组返回，替掉 node-pg 的逐字段解析（8.3 万~53 万次/请求）。
+// 这里钉死三条不变量，任何一条破了都会静默改变结果顺序或时间列格式。
+
+test("json 传输：内层 SQL 必须原样嵌入，::text 只出现在外层投影", () => {
+  // 曾把 ::text 直接写进内层列表 → `order by first_seen_at` 被解析成已经是 text 的输出列，
+  // 计划变成 Sort Key: ((jobs.first_seen_at)::text)，排序从时间序悄悄退化成字典序。
+  const calls = [];
+  const { searchJobsStore } = loadJobsStore(async (sql, params) => {
+    calls.push(sql);
+    return [];
+  });
+  return searchJobsStore({ ...filters, sortBy: "match" }, null, [], 0, 60, null).then(() => {
+    const sql = calls.find((c) => /json_agg/.test(c));
+    assert.ok(sql, "候选查询应走 json_agg 传输");
+    const inner = sql.match(/from \(select .*? from \((.*)\) src\) t$/s)[1];
+    assert.ok(
+      /order by first_seen_at desc/.test(inner),
+      "内层排序必须还在原始 timestamptz 列上",
+    );
+    assert.ok(!/::text/.test(inner), "内层绝不能出现 ::text —— 会把排序键换成文本");
+    for (const col of ["posted_at", "first_seen_at", "last_seen_at"]) {
+      assert.ok(
+        sql.includes(`${col}::text as ${col}`),
+        `${col} 必须在外层投影转成与线协议同格式的文本`,
+      );
+    }
+  });
+});
+
+test("json 传输：空结果返回空数组而不是崩", async () => {
+  // json_agg 无行时返回 NULL，SQL 侧已 coalesce；这里覆盖库连信封都没给的情况。
+  const { searchJobsStore } = loadJobsStore(async () => []);
+  const out = await searchJobsStore({ ...filters, city: "深圳" }, null, [], 0, 60, null);
+  assert.deepEqual(out.jobs, []);
+  assert.equal(out.total, 0);
+});
+
+test("json 传输：信封里的行原样交给打分链路", async () => {
+  const { searchJobsStore } = loadJobsStore(async (sql) =>
+    /json_agg/.test(sql) ? [job({ id: "j1", title: "产品经理" })] : [],
+  );
+  const out = await searchJobsStore({ ...filters, city: "北京" }, null, [], 0, 60, null);
+  assert.deepEqual(out.jobs.map((j) => j.id), ["j1"]);
 });
