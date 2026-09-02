@@ -227,8 +227,7 @@ export default function CampusClient({
   // key = `pattern|mode`：校招与实习是两批岗，切模式必须重取（旧实现只按 pattern 存，
   // 且把两桶 id 拼起来截前 200 → 大厂实习桶会被校招桶挤没，展开区空白）。
   // 未取回前展开区显示加载态；失败则清掉请求标记，下次展开可重试。
-  type FetchedJobs = { rows: any[]; total: number };
-  const [fullJobs, setFullJobs] = useState<Map<string, FetchedJobs>>(new Map());
+  const [fullJobs, setFullJobs] = useState<Map<string, any[]>>(new Map());
   const fullJobsRequested = useRef<Set<string>>(new Set());
   // 手风琴同时只可能展开一家（expandedPattern），所以这里只取当前那一家。
   useEffect(() => {
@@ -254,9 +253,7 @@ export default function CampusClient({
           fullJobsRequested.current.delete(key); // 失败清标记，收起再展开可重试
           return;
         }
-        setFullJobs((prev) =>
-          new Map(prev).set(key, { rows: data.jobs || [], total: data.total ?? (data.jobs || []).length }),
-        );
+        setFullJobs((prev) => new Map(prev).set(key, data.jobs || []));
       } catch {
         if (!cancelled) fullJobsRequested.current.delete(key);
       }
@@ -269,9 +266,9 @@ export default function CampusClient({
   /** 展开区要渲染的完整行：取回后按当前筛选过一遍，口径与卡面计数一致
    *  （`row.fn` 由接口随行返回，与分面里的职能标签同源同值）。 */
   function expandedRows(pattern: string): any[] {
-    const fetched = fullJobs.get(`${pattern}|${mode}`);
-    if (!fetched) return [];
-    return fetched.rows.filter((r: any) => campusRowMatches(r, filters));
+    const rows = fullJobs.get(`${pattern}|${mode}`);
+    if (!rows) return [];
+    return rows.filter((r: any) => campusRowMatches(r, filters));
   }
 
   // 展示时探活（②层，复刻 app/jobs/jobs-client.tsx）：对当前展开公司里可见的岗位批量探活，
@@ -446,8 +443,9 @@ export default function CampusClient({
             const visibleRows = isExpanded ? expandedRows(card.pattern) : [];
             const groups = isExpanded ? groupCampusJobs(visibleRows) : [];
             // 大厂一个桶可能上千个岗，展开区最多取回 200 个（见 /api/campus-zone/jobs）。
-            // 截断了就照实说一句，不让用户以为「筛选后只剩这些」。
-            const cappedBy = fetched && fetched.total > fetched.rows.length ? fetched.rows.length : 0;
+            // 「取回来的比这个桶的总数少」= 被截断了，照实说一句，不让用户以为「筛选后只剩这些」。
+            // 总数用卡面那个（来自聚合分面，权威），不让接口再去数一遍。
+            const cappedBy = fetched && fetched.length < totalCount ? fetched.length : 0;
             const modeLabel = mode === "campus" ? "校招" : "实习";
 
             return (

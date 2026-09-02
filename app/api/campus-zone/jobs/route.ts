@@ -51,8 +51,10 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { jobs, total } = await getCampusCompanyJobs(companies, pattern, mode, MAX_JOBS);
-    return NextResponse.json({ ok: true, jobs, total, capped: total > jobs.length });
+    // 是否截断由调用方拿卡面总数（来自聚合分面，权威）与 jobs.length 比对得出——
+    // 这里不再回一个 total：为了拿它就得把全公司的岗位正文都取回来数一遍，正是刚优化掉的那笔开销。
+    const { jobs } = await getCampusCompanyJobs(companies, pattern, mode, MAX_JOBS);
+    return NextResponse.json({ ok: true, jobs });
   } catch (e: any) {
     console.error("[api/campus-zone/jobs] 取岗失败:", e?.message);
     return NextResponse.json({ ok: false, error: e?.message || "fetch_failed" }, { status: 500 });
