@@ -286,6 +286,13 @@ function MultiValueEditor({ value, onChange, placeholder, ariaLabel }: { value: 
   );
 }
 
+// 二级方向的**展示名**覆盖表（只影响界面文字，不影响匹配）。
+// 二级取值是关键词组的代表词——匹配用它没问题，但个别代表词当界面标签不合适：组 23 的代表词是
+// "ios"，而该组实际覆盖 ios/android/移动端，直接把 "ios" 摆给用户看既偏窄又像技术黑话。
+// 这里只换显示，jobRole 里存的仍是代表词，匹配链路一个字没动。
+const ROLE_LABELS: Record<string, string> = { ios: "移动端" };
+const roleLabel = (role: string) => ROLE_LABELS[role] ?? role;
+
 // 岗位方向选择器：左「一级职能」/ 右「二级具体岗位」的主从形态（BOSS / 拉勾的通行做法）。
 //
 // 为什么必须两级：一级只有 17 个大桶（研发 / 产品 / 设计 …），而求职者是按**「测试」「后端」**
@@ -386,7 +393,7 @@ function FunctionPicker({
                     onChange={() => toggle(selectedRoles, role, onChangeRole)}
                     className="size-4 accent-[#1a1714] dark:accent-[#f3ecdf]"
                   />
-                  <span className="ink-2">{role}</span>
+                  <span className="ink-2">{roleLabel(role)}</span>
                 </label>
               ))}
             </div>
@@ -445,7 +452,7 @@ function CountBadge({ count }: { count: number }) { return <span className="btn-
 type ActiveChip = { id: string; key: keyof Filters; value?: string; label: string };
 function collectActiveChips(filters: Filters, overseas: boolean): ActiveChip[] {
   const values: ActiveChip[] = [];
-  const addMany = (key: "city" | "keyword" | "jobFunction" | "jobRole", prefix = "") => splitMultiValue(filters[key]).forEach((value) => values.push({ id: `${key}-${value}`, key, value, label: `${prefix}${value}` }));
+  const addMany = (key: "city" | "keyword" | "jobFunction" | "jobRole", prefix = "") => splitMultiValue(filters[key]).forEach((value) => values.push({ id: `${key}-${value}`, key, value, label: `${prefix}${key === "jobRole" ? roleLabel(value) : value}` }));
   addMany("city");
   addMany("keyword");
   addMany("jobFunction");
