@@ -1,0 +1,20 @@
+[
+  { "file": "01-产品经理.txt",
+    "prefs": { "target_roles": ["产品经理"], "target_keywords": ["产品经理","需求分析","用户增长","AI产品"], "target_locations": ["北京"], "industries": ["互联网/科技"] },
+    "profile": { "target_roles": ["产品经理","AI产品经理"], "skills": ["需求分析","产品设计","用户研究","数据分析","Axure","SQL"], "industries": ["互联网/科技"], "target_locations": ["北京"], "education_summary": "本科", "experience_stage": "experienced", "seniority": "mid" } },
+  { "file": "02-机械工程师.txt",
+    "prefs": { "target_roles": ["机械工程师"], "target_keywords": ["机械设计","结构设计","SolidWorks","公差配合"], "target_locations": ["上海"], "industries": ["制造/工业"] },
+    "profile": { "target_roles": ["机械工程师","结构设计工程师"], "skills": ["SolidWorks","CATIA","公差配合","注塑","钣金","DFM"], "industries": ["制造/工业"], "target_locations": ["上海"], "education_summary": "本科", "experience_stage": "experienced", "seniority": "mid" } },
+  { "file": "03-临床护士.txt",
+    "prefs": { "target_roles": ["护士"], "target_keywords": ["临床护理","急诊","护理"], "target_locations": ["广州"], "industries": ["医疗/医药"] },
+    "profile": { "target_roles": ["护士","临床护理"], "skills": ["静脉输液","急救","护理文书","病情观察"], "industries": ["医疗/医药"], "target_locations": ["广州"], "education_summary": "本科", "experience_stage": "experienced", "seniority": "junior" } },
+  { "file": "04-银行柜员.txt",
+    "prefs": { "target_roles": ["银行柜员"], "target_keywords": ["柜面","对公业务","风控"], "target_locations": ["深圳"], "industries": ["金融"] },
+    "profile": { "target_roles": ["银行柜员","理财经理"], "skills": ["柜面操作","反洗钱","客户维护","信贷审核"], "industries": ["金融"], "target_locations": ["深圳"], "education_summary": "本科", "experience_stage": "experienced", "seniority": "junior" } },
+  { "file": "05-中学教师.txt",
+    "prefs": { "target_roles": ["中学数学教师"], "target_keywords": ["教研","备课","中考"], "target_locations": ["杭州"], "industries": ["教育"] },
+    "profile": { "target_roles": ["中学数学教师","教研老师"], "skills": ["教案设计","课堂管理","中考命题","一对一辅导"], "industries": ["教育"], "target_locations": ["杭州"], "education_summary": "硕士", "experience_stage": "experienced", "seniority": "mid" } },
+  { "file": "06-土木施工.txt",
+    "prefs": { "target_roles": ["土木工程师"], "target_keywords": ["施工管理","造价","现场"], "target_locations": ["成都"], "industries": ["地产/建筑"] },
+    "profile": { "target_roles": ["土木工程师","施工员"], "skills": ["施工组织","造价预算","CAD","现场管理"], "industries": ["地产/建筑"], "target_locations": ["成都"], "education_summary": "本科", "experience_stage": "experienced", "seniority": "mid" } }
+]
