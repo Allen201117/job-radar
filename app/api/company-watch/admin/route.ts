@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
 import { normalizeCompany } from "@/lib/company-normalize";
-import { fetchAllSources } from "@/lib/supabase-paginate";
+import { fetchAllPages, fetchAllSources } from "@/lib/supabase-paginate";
 
 export const runtime = "nodejs";
 
@@ -16,16 +16,23 @@ export async function GET() {
   if (auth.error) return auth.error;
 
   const service = createServiceClient();
-  const { data, error } = await service
-    .from("company_watch_requests")
-    .select("normalized_company, company, status, resolution_note, created_at, updated_at");
-  if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+  let data: any[];
+  try {
+    data = await fetchAllPages<any>(
+      (from, to) =>
+        service
+          .from("company_watch_requests")
+          .select("normalized_company, company, status, resolution_note, created_at, updated_at")
+          .order("id", { ascending: true })
+          .range(from, to),
+    );
+  } catch (err: any) {
+    return NextResponse.json({ ok: false, error: err?.message || "load_failed" }, { status: 500 });
   }
 
   // 按 normalized_company 聚合：请求人数、代表展示名、最新状态/说明、首次与最近请求时间。
   const byNorm = new Map<string, any>();
-  for (const r of data || []) {
+  for (const r of data) {
     const key = r.normalized_company;
     const agg = byNorm.get(key) || {
       normalized_company: key,

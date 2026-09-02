@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
+import { fetchAllPages } from "@/lib/supabase-paginate";
 import { validateCycleInput } from "@/lib/recruitment-cycle-validate";
 
 export const runtime = "nodejs";
@@ -11,19 +12,32 @@ export async function GET() {
   const guard = await requireAdmin();
   if (guard.error) return guard.error;
   const service = createServiceClient();
-  const [{ data: companies, error: cErr }, { data: cycles, error: yErr }] = await Promise.all([
-    service.from("company_profiles").select("id, company, display_name").order("company"),
-    service
-      .from("recruitment_cycle_observations")
-      .select("*, company_profiles!inner(company, display_name)")
-      .order("updated_at", { ascending: false }),
-  ]);
-  if (cErr || yErr) {
-    const message = cErr?.message || yErr?.message || "load_failed";
-    console.error("[cycles-admin] 读取失败", message);
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+  // company_profiles 超 1000 行，分页取全量；cycles 行数有限，单次即可
+  let companies: any[], cycles: any[] | null, cyclesErr: any;
+  try {
+    [companies, { data: cycles, error: cyclesErr }] = await Promise.all([
+      fetchAllPages<any>(
+        (from, to) =>
+          service
+            .from("company_profiles")
+            .select("id, company, display_name")
+            .order("id", { ascending: true })
+            .range(from, to),
+      ),
+      service
+        .from("recruitment_cycle_observations")
+        .select("*, company_profiles!inner(company, display_name)")
+        .order("updated_at", { ascending: false }),
+    ]);
+  } catch (err: any) {
+    console.error("[cycles-admin] 读取失败", err?.message);
+    return NextResponse.json({ ok: false, error: err?.message || "load_failed" }, { status: 500 });
   }
-  return NextResponse.json({ ok: true, companies: companies || [], cycles: cycles || [] });
+  if (cyclesErr) {
+    console.error("[cycles-admin] 读取失败", cyclesErr.message);
+    return NextResponse.json({ ok: false, error: cyclesErr.message }, { status: 500 });
+  }
+  return NextResponse.json({ ok: true, companies, cycles: cycles || [] });
 }
 
 export async function POST(request: NextRequest) {

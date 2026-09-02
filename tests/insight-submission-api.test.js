@@ -97,6 +97,16 @@ function insightRouteMocks(service, supabase) {
       jobsStoreEnabled: () => false,
       activeJobsByCompanies: async () => [],
     },
+    "@/lib/insight-availability-cache": {
+      // 让 getCachedCompanyProfilesLight 委托给传入的 supabase mock（与旧 supabase.from 语义一致）
+      getCachedCompanyProfilesLight: async () => {
+        try {
+          const result = await supabase.from("company_profiles").select("id,company,aliases,display_name,headcount_band");
+          return (result && result.data) || [];
+        } catch { return []; }
+      },
+      getCachedActiveJobCounts: async () => [],
+    },
     "@/lib/discovery-dispatch": {
       __esModule: true,
       default: {

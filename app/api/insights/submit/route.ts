@@ -6,6 +6,7 @@ import {
   type NormalizedInsightSubmission,
 } from "@/lib/insight-submission";
 import { createServiceClient } from "@/lib/supabaseService";
+import { getCachedCompanyProfilesLight } from "@/lib/insight-availability-cache";
 import type { CompanyProfile } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -49,13 +50,12 @@ export async function POST(request: NextRequest) {
 
   const service = createServiceClient();
   let profile: CompanyProfile | null = null;
-  const { data: profiles, error: profileError } = await service
-    .from("company_profiles")
-    .select("*");
-  if (profileError) {
-    console.error("[insights-submit] 读取 company_profiles 失败", profileError.message);
-  } else {
-    profile = findCompanyProfile((profiles || []) as CompanyProfile[], validation.value.company);
+  try {
+    const profilesLight = await getCachedCompanyProfilesLight();
+    profile = findCompanyProfile(profilesLight as CompanyProfile[], validation.value.company);
+  } catch (profileError: any) {
+    console.error("[insights-submit] 读取 company_profiles 失败", profileError?.message);
+    // best-effort：画像匹配失败不阻断用户提交
   }
 
   const { data: inserted, error: insertError } = await service

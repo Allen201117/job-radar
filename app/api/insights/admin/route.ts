@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
+import { fetchAllPages } from "@/lib/supabase-paginate";
 import {
   evaluateInsight,
   passesDeidentifiedGate,
@@ -107,23 +108,39 @@ export async function GET() {
   if (guard.error) return guard.error;
 
   const service = createServiceClient();
-  const [{ data: companies, error: cErr }, { data: rawItems, error: iErr }, { data: disputes, error: dErr }] =
-    await Promise.all([
-      service.from("company_profiles").select("id, company, display_name, aliases, industry").order("company"),
-      service
-        .from("insight_items")
-        .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
-        .order("updated_at", { ascending: false }),
+  // company_profiles 和 insight_items 均超 1000 行，必须分页取全量
+  let companies: any[], rawItems: any[], disputes: any[];
+  try {
+    [companies, rawItems, disputes] = await Promise.all([
+      fetchAllPages<any>(
+        (from, to) =>
+          service
+            .from("company_profiles")
+            .select("id, company, display_name, aliases, industry")
+            .order("id", { ascending: true })
+            .range(from, to),
+      ),
+      fetchAllPages<any>(
+        (from, to) =>
+          service
+            .from("insight_items")
+            .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
+            .order("id", { ascending: true })
+            .range(from, to),
+      ),
       service
         .from("insight_disputes")
         .select("id, item_id, reason, contact, status, created_at")
         .eq("status", "open")
-        .order("created_at", { ascending: false }),
+        .order("created_at", { ascending: false })
+        .then(({ data, error }) => {
+          if (error) throw new Error(error.message);
+          return data || [];
+        }),
     ]);
-  if (cErr || iErr || dErr) {
-    const message = cErr?.message || iErr?.message || dErr?.message || "load_failed";
-    console.error("[insights-admin] 读取失败", message);
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+  } catch (err: any) {
+    console.error("[insights-admin] 读取失败", err?.message);
+    return NextResponse.json({ ok: false, error: err?.message || "load_failed" }, { status: 500 });
   }
 
   const items = (rawItems || []).map((raw: any) => {

@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
 import { verifyRequestClaims } from "@/lib/auth-claims";
-import { jobsStoreEnabled, activeJobCountsByCompany } from "@/lib/jobs-store/read";
 import { companyMatches, findCompanyProfile } from "@/lib/insight-match";
 import { ITEM_COLUMNS, groupGatedInsights } from "@/lib/insight-bundle";
 import { buildCareerPath, type CareerCompanyInput } from "@/lib/career-path";
+import { getCachedCompanyProfilesLight, getCachedActiveJobCounts } from "@/lib/insight-availability-cache";
 import type { CompanyProfile } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -19,18 +19,18 @@ export async function GET() {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  // 1) 画像 + 偏好
-  const [{ data: profile }, { data: prefs }, { data: profiles, error: profileErr }] =
-    await Promise.all([
+  // 1) 画像 + 偏好 + company_profiles 轻列（走跨实例缓存，避免每请求整表读 1152+ 行）
+  const [[{ data: profile }, { data: prefs }], allProfilesLight] = await Promise.all([
+    Promise.all([
       supabase.from("candidate_profiles").select("*").eq("user_id", user.id).maybeSingle(),
       supabase.from("user_preferences").select("*").eq("user_id", user.id).maybeSingle(),
-      supabase.from("company_profiles").select("*"),
-    ]);
-  if (profileErr) {
-    console.error("[career-path] 读取 company_profiles 失败", profileErr.message);
-    return NextResponse.json({ ok: false, error: profileErr.message }, { status: 500 });
-  }
-  const allProfiles = (profiles || []) as CompanyProfile[];
+    ]),
+    getCachedCompanyProfilesLight().catch((err: any) => {
+      console.error("[career-path] 读取 company_profiles 失败", err?.message);
+      return [] as CompanyProfile[];
+    }),
+  ]);
+  const allProfiles = allProfilesLight as CompanyProfile[];
 
   // 2) 目标公司 → 匹配画像；为空则 fallback 推荐全部种子（引擎按窗口期排序后截断）
   const targetCompanies: string[] = (prefs?.target_companies || []).filter(Boolean);
@@ -66,34 +66,23 @@ export async function GET() {
 
   // 3) 批量取洞察 + jobs 在招计数
   const ids = chosen.map((p) => p.id);
-  // 在招计数走 DB 侧聚合（active_job_counts_by_company RPC，按 company group by），
-  // 不再全量拉 jobs.company 进内存；公司别名归一仍在 JS（companyMatches）对小集合做 sum。
-  // 在招计数：配了 env 走 jobs-store(香港库 active_job_counts_by_company)；否则 Supabase RPC。
-  const countsPromise = jobsStoreEnabled()
-    ? activeJobCountsByCompany()
-        .then((data) => ({ data, error: null as any }))
-        .catch((error) => ({ data: null, error }))
-    : supabase.rpc("active_job_counts_by_company");
-  const [{ data: items, error: itemErr }, { data: companyCounts, error: countErr }] =
-    await Promise.all([
-      supabase
-        .from("insight_items")
-        .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
-        .in("company_id", ids)
-        .eq("status", "active"),
-      countsPromise,
-    ]);
+  // 在招计数走跨实例缓存（同 availability 接口）；insight_items 按 ids 精确过滤。
+  const [{ data: items, error: itemErr }, rawCounts] = await Promise.all([
+    supabase
+      .from("insight_items")
+      .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
+      .in("company_id", ids)
+      .eq("status", "active"),
+    getCachedActiveJobCounts().catch(() => [] as Array<{ company: string; job_count: number }>),
+  ]);
+  const companyCounts = rawCounts;
+  const countErr = null; // getCachedActiveJobCounts 内部已记录错误并降级为空数组
   if (itemErr) {
     // 洞察条目读取失败（如批量 .in 过大或瞬时错误）→ 降级为「无洞察条目」而非整页报错；
     // 时机/在招计数仍可用，至少给出窗口期推荐。items 为 null 时下方 (items || []) 自然成空。
     console.error("[career-path] 读取 insight_items 失败（降级为无条目）", itemErr.message);
   }
-  // 在招计数只用于「N 个在招岗位」徽标 + 排序次键，不是核心内容。即使聚合慢/超时也不应整页 500——
-  // 记录后降级为「不显示计数」，洞察（时机/路径/文化）照常返回。
-  if (countErr) {
-    console.error("[career-path] 读取在招计数失败（降级为不显示计数）", countErr.message);
-  }
-  const counts = (countErr ? [] : companyCounts || []) as Array<{ company: string; job_count: number }>;
+  const counts = (companyCounts || []) as Array<{ company: string; job_count: number }>;
 
   const byCompany = new Map<string, any[]>();
   for (const it of (items || []) as any[]) {

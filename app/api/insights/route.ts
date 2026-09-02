@@ -20,6 +20,7 @@ import {
   type InsightSubmissionRow,
 } from "@/lib/insight-submission";
 import { jobsStoreEnabled, activeJobsByCompanies } from "@/lib/jobs-store/read";
+import { getCachedCompanyProfilesLight } from "@/lib/insight-availability-cache";
 import type {
   CompanyProfile,
   InsightDimension,
@@ -65,17 +66,33 @@ export async function GET(request: NextRequest) {
   }
 
   // 1) 取全部公司画像，归一化匹配（苹果↔Apple、字节↔ByteDance）。可能无画像（95% 公司）。
-  const { data: profiles, error: profileError } = await supabase
-    .from("company_profiles")
-    .select("*");
-  if (profileError) {
-    console.error("[insights] 读取 company_profiles 失败", profileError.message);
+  //    走跨实例缓存（10min），轻列足够 findCompanyProfile + deriveCompanyInsights 使用。
+  let profilesLight: CompanyProfile[];
+  try {
+    profilesLight = (await getCachedCompanyProfilesLight()) as CompanyProfile[];
+  } catch (profileError: any) {
+    console.error("[insights] 读取 company_profiles 失败", profileError?.message);
     return NextResponse.json(
-      { ok: false, error: profileError.message },
+      { ok: false, error: profileError?.message || "profiles_unavailable" },
       { status: 500 },
     );
   }
-  const profile = findCompanyProfile((profiles || []) as CompanyProfile[], company);
+  const profileLight = findCompanyProfile(profilesLight, company);
+  // 轻列只够做归一化匹配；抽屉还要展示 industry / founded_year / hq_location 等全列字段，
+  // 命中后按 id 单行补取（主键读，零成本），未命中或读失败则回落轻列。
+  let profile: CompanyProfile | null = profileLight;
+  if (profileLight) {
+    const { data: fullProfile, error: fullError } = await supabase
+      .from("company_profiles")
+      .select("*")
+      .eq("id", profileLight.id)
+      .maybeSingle();
+    if (fullError) {
+      console.warn("[insights] 补取画像全列失败，回落轻列", fullError.message);
+    } else if (fullProfile) {
+      profile = fullProfile as CompanyProfile;
+    }
+  }
 
   // 2) Tier1 派生：从自有 jobs 直接算事实洞察（无需画像，保证 100% 覆盖）。
   //    匹配候选 = 查询词 + 画像 company/aliases；限 active，cap 3000 行足够代表性聚合。

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
 import { verifyRequestClaims } from "@/lib/auth-claims";
-import { activeJobCountsByCompany, jobsStoreEnabled } from "@/lib/jobs-store/read";
 import { companyMatches, findCompanyProfile } from "@/lib/insight-match";
 import { ITEM_COLUMNS, INSIGHT_DIMENSIONS, groupGatedInsights } from "@/lib/insight-bundle";
+import { fetchAllPages } from "@/lib/supabase-paginate";
+import { getCachedCompanyProfilesLight, getCachedActiveJobCounts } from "@/lib/insight-availability-cache";
 import type { CompanyProfile } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -12,7 +13,8 @@ export const runtime = "nodejs";
 //   real    = 过门后的实录洞察条数（与抽屉同口径 groupGatedInsights）。
 //   derived = 是否有「岗位聚合」派生洞察。lib/insight-derive 的 deriveHiring 在 active 岗位数 >= 3 时
 //             必产出，故用 active 岗位数 >= 3 作为派生可用性阈值（与派生层同口径）。
-// 成本与公司数无关：一次取 公司画像(小表) + 全部 active 洞察行(仅 ~5% 公司有) + 各公司 active 岗位计数(RPC)。
+// 成本：company_profiles 轻列 + active 岗位计数走跨实例缓存（10min）；
+//       insight_items 按请求里的 company ids 精确过滤，不整表拉。
 const DERIVED_MIN_ACTIVE = 3;
 
 export async function GET(request: NextRequest) {
@@ -30,32 +32,42 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ ok: true, availability: {} });
   }
 
-  const countsPromise = jobsStoreEnabled()
-    ? activeJobCountsByCompany()
-        .then((data) => ({ data, error: null as any }))
-        .catch((error) => ({ data: null, error }))
-    : supabase.rpc("active_job_counts_by_company");
-  const [{ data: profiles }, { data: items }, { data: companyCounts, error: countErr }] = await Promise.all([
-    supabase.from("company_profiles").select("*"),
-    supabase
-      .from("insight_items")
-      .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
-      .eq("status", "active"),
-    countsPromise,
+  // company_profiles 轻列 + 在招计数走跨实例缓存（两者对所有用户相同）
+  const EMPTY_PROFILES: CompanyProfile[] = [];
+  const EMPTY_COUNTS: Array<{ company: string; job_count: number }> = [];
+  const [allProfilesLight, counts] = await Promise.all([
+    getCachedCompanyProfilesLight().catch(() => EMPTY_PROFILES),
+    getCachedActiveJobCounts().catch(() => EMPTY_COUNTS),
   ]);
+  const allProfiles = allProfilesLight as CompanyProfile[];
 
-  if (countErr) {
-    console.error("[insights/availability] 读取在招计数失败（降级为无派生洞察）", countErr.message);
+  // 先从请求的 companies 匹配出有画像的 profile id 列表，再精确过滤 insight_items
+  const profileIds: string[] = [];
+  for (const company of companies) {
+    const p = findCompanyProfile(allProfiles, company);
+    if (p) profileIds.push(p.id);
   }
-  const counts = (countErr ? [] : companyCounts || []) as Array<{ company: string; job_count: number }>;
 
-  const allProfiles = (profiles || []) as CompanyProfile[];
+  // 仅当有匹配到画像时才查询 insight_items，按 company_id in(ids) 精确过滤
   const itemsByProfile = new Map<string, any[]>();
-  for (const it of (items || []) as any[]) {
-    const arr = itemsByProfile.get(it.company_id) || [];
-    arr.push(it);
-    itemsByProfile.set(it.company_id, arr);
+  if (profileIds.length > 0) {
+    const items = await fetchAllPages<any>(
+      (from, to) =>
+        supabase
+          .from("insight_items")
+          .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
+          .in("company_id", profileIds)
+          .eq("status", "active")
+          .order("id", { ascending: true })
+          .range(from, to),
+    ).catch(() => []);
+    for (const it of items) {
+      const arr = itemsByProfile.get(it.company_id) || [];
+      arr.push(it);
+      itemsByProfile.set(it.company_id, arr);
+    }
   }
+
   const countByCompany = new Map<string, number>();
   for (const row of counts) {
     countByCompany.set(row.company, row.job_count || 0);

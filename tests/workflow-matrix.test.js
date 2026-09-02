@@ -49,7 +49,7 @@ test("enrich-backlog drains supported overseas httpx detail adapters", () => {
 });
 
 test("enrich-backlog caps adapter fan-out after overseas matrix expansion", () => {
-  assert.equal(maxParallel(workflow("enrich-backlog.yml")), 5);
+  assert.equal(maxParallel(workflow("enrich-backlog.yml")), 3); // 2026-09-03 与 liveness-sweep 错峰后降到 3（峰值 27 连接）
 });
 
 test("liveness-sweep covers overseas httpx closure-capable adapters", () => {
