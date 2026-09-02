@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, PencilSimple, Trash, ArrowCounterClockwise, X, Flag, Warning, Sparkle, CheckCircle, XCircle } from "@phosphor-icons/react";
+import { Plus, PencilSimple, Trash, ArrowCounterClockwise, CircleNotch, X, Flag, Warning, Sparkle, CheckCircle, XCircle } from "@phosphor-icons/react";
+import ActionToast, { useActionToast } from "@/components/ActionToast";
 import { INSIGHT_DIMENSIONS } from "@/lib/insight-bundle";
 import { INDUSTRIES } from "@/lib/industries";
 import type {
@@ -203,6 +204,8 @@ export default function InsightsAdminClient() {
   const [saving, setSaving] = useState(false);
   const [aiDrafting, setAiDrafting] = useState(false);
   const [busyId, setBusyId] = useState("");
+  // 审核类操作的结果反馈：原来失败走原生 alert（阻断且与站内风格不一致），成功则只有列表悄悄变。
+  const { toast, show: showToast, dismiss: dismissToast } = useActionToast();
 
   async function load() {
     setLoading(true);
@@ -476,14 +479,17 @@ export default function InsightsAdminClient() {
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
-        alert(
-          data.gate && GATE_HELP[data.gate]
-            ? `无法上架：${GATE_HELP[data.gate]}`
-            : data.error || "操作失败",
-        );
+        showToast({
+          text:
+            data.gate && GATE_HELP[data.gate]
+              ? `无法上架：${GATE_HELP[data.gate]}`
+              : data.error || "操作失败",
+          tone: "error",
+        });
         return;
       }
       await load();
+      showToast({ text: status === "active" ? "已上架" : "已下架" });
     } finally {
       setBusyId("");
     }
@@ -499,10 +505,11 @@ export default function InsightsAdminClient() {
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
-        alert(data.error || "操作失败");
+        showToast({ text: data.error || "操作失败", tone: "error" });
         return;
       }
       await load();
+      showToast({ text: resolution === "upheld" ? "申诉成立，已下架该条" : "已驳回申诉" });
     } finally {
       setBusyId("");
     }
@@ -518,10 +525,11 @@ export default function InsightsAdminClient() {
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
-        alert(data.error || "操作失败");
+        showToast({ text: data.error || "操作失败", tone: "error" });
         return;
       }
       await load();
+      showToast({ text: status === "approved" ? "已通过该条分享" : "已拒绝该条分享" });
     } finally {
       setBusyId("");
     }
@@ -537,10 +545,11 @@ export default function InsightsAdminClient() {
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
-        alert(data.error || "操作失败");
+        showToast({ text: data.error || "操作失败", tone: "error" });
         return;
       }
       await load();
+      showToast({ text: `已设为 ${verify_status}` });
     } finally {
       setBusyId("");
     }
@@ -554,10 +563,11 @@ export default function InsightsAdminClient() {
     });
     const data = await res.json();
     if (!res.ok || !data.ok) {
-      alert(data.error || "提交失败");
+      showToast({ text: data.error || "提交失败", tone: "error" });
       return;
     }
     await load();
+    showToast({ text: "已提交招聘周期" });
   }
 
   if (loading) return <p className="mt-8 text-sm ink-3 ">正在加载洞察后台…</p>;
@@ -661,15 +671,21 @@ export default function InsightsAdminClient() {
                       onClick={() => resolveDispute(d, "upheld")}
                       className="inline-flex items-center gap-1.5 rounded-full bg-[#1a1714] px-3 py-1.5 text-xs font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
                     >
-                      <Trash size={13} weight="bold" /> 成立并下架
+                      {busyId === d.id ? (
+                        <CircleNotch size={13} weight="bold" className="animate-spin" />
+                      ) : (
+                        <Trash size={13} weight="bold" />
+                      )}{" "}
+                      {busyId === d.id ? "处理中…" : "成立并下架"}
                     </button>
                     <button
                       type="button"
                       disabled={busyId === d.id}
                       onClick={() => resolveDispute(d, "rejected")}
-                      className="rounded-full border border-black/[0.1] px-3 py-1.5 text-xs font-medium ink-2 transition hover:bg-black/[0.05] hover:opacity-80 disabled:opacity-50 dark:border-white/[0.1] dark:hover:bg-white/[0.05] "
+                      className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.1] px-3 py-1.5 text-xs font-medium ink-2 transition hover:bg-black/[0.05] hover:opacity-80 disabled:opacity-50 dark:border-white/[0.1] dark:hover:bg-white/[0.05] "
                     >
-                      驳回
+                      {busyId === d.id && <CircleNotch size={13} weight="bold" className="animate-spin" />}
+                      {busyId === d.id ? "处理中…" : "驳回"}
                     </button>
                   </div>
                 </article>
@@ -775,6 +791,8 @@ export default function InsightsAdminClient() {
           </p>
         )}
       </section>
+
+      <ActionToast toast={toast} onDismiss={dismissToast} />
     </div>
   );
 }
@@ -817,7 +835,8 @@ function SubmissionRow({
           onClick={onApprove}
           className="inline-flex items-center gap-1.5 rounded-full bg-[#1a1714] px-3 py-1.5 text-xs font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
         >
-          <CheckCircle size={13} weight="bold" /> 通过
+          {busy ? <CircleNotch size={13} weight="bold" className="animate-spin" /> : <CheckCircle size={13} weight="bold" />}{" "}
+          {busy ? "处理中…" : "通过"}
         </button>
         <button
           type="button"
@@ -825,7 +844,8 @@ function SubmissionRow({
           onClick={onReject}
           className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.1] px-3 py-1.5 text-xs font-medium ink-2 transition hover:bg-black/[0.05] hover:opacity-80 disabled:opacity-50 dark:border-white/[0.1] dark:hover:bg-white/[0.05] "
         >
-          <XCircle size={13} weight="bold" /> 拒绝
+          {busy ? <CircleNotch size={13} weight="bold" className="animate-spin" /> : <XCircle size={13} weight="bold" />}{" "}
+          {busy ? "处理中…" : "拒绝"}
         </button>
       </div>
     </article>
@@ -883,7 +903,8 @@ function ItemRow({
               onClick={onRetire}
               className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] ink-2 transition hover:bg-black/[0.05] hover:opacity-80 disabled:opacity-50 dark:hover:bg-white/[0.05] "
             >
-              <Trash size={13} /> 下架
+              {busy ? <CircleNotch size={13} className="animate-spin" /> : <Trash size={13} />}{" "}
+              {busy ? "处理中…" : "下架"}
             </button>
           ) : (
             <button
@@ -892,7 +913,8 @@ function ItemRow({
               onClick={onActivate}
               className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#4f6f2a] transition hover:bg-black/[0.05] hover:text-[#3f5a1c] disabled:opacity-50 dark:text-[#a3d06a] dark:hover:bg-white/[0.05] dark:hover:text-[#b8dd85]"
             >
-              <ArrowCounterClockwise size={13} /> 上架
+              {busy ? <CircleNotch size={13} className="animate-spin" /> : <ArrowCounterClockwise size={13} />}{" "}
+              {busy ? "处理中…" : "上架"}
             </button>
           )}
         </div>
@@ -1223,6 +1245,7 @@ function CycleForm({
 }) {
   const [form, setForm] = useState<CycleFormState>({ ...EMPTY_CYCLE_FORM });
   const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState("");
 
   function setField<K extends keyof CycleFormState>(key: K, value: CycleFormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -1231,9 +1254,10 @@ function CycleForm({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.company_id || !form.grad_class.trim() || !form.value_text.trim()) {
-      alert("公司、毕业届别、展示串为必填");
+      setFormError("公司、毕业届别、展示串为必填");
       return;
     }
+    setFormError("");
     setSubmitting(true);
     try {
       // 空串月份要转 undefined 再提交，否则会撞 validateCycleInput 的 badMonth 类型判定（"" 不是 number）
@@ -1352,12 +1376,18 @@ function CycleForm({
           </select>
         </FormField>
       </div>
+      {formError && (
+        <p className="mt-4 rounded-xl border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c] dark:border-[#7a392e]/[0.6] dark:bg-[#3a201a] dark:text-[#e6a99f]">
+          {formError}
+        </p>
+      )}
       <div className="mt-4 flex gap-2">
         <button
           type="submit"
           disabled={submitting}
           className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] active:scale-[0.98] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
         >
+          {submitting && <CircleNotch size={15} weight="bold" className="animate-spin" aria-hidden="true" />}
           {submitting ? "提交中…" : "新增观测"}
         </button>
       </div>
@@ -1399,7 +1429,8 @@ function CycleRow({
               onClick={onVerify}
               className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#4f6f2a] transition hover:bg-black/[0.05] hover:text-[#3f5a1c] disabled:opacity-50 dark:text-[#a3d06a] dark:hover:bg-white/[0.05] dark:hover:text-[#b8dd85]"
             >
-              <CheckCircle size={13} weight="bold" /> 设为 verified
+              {busy ? <CircleNotch size={13} weight="bold" className="animate-spin" /> : <CheckCircle size={13} weight="bold" />}{" "}
+              {busy ? "处理中…" : "设为 verified"}
             </button>
           )}
           {cycle.verify_status !== "rejected" && (
@@ -1409,7 +1440,8 @@ function CycleRow({
               onClick={onReject}
               className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] ink-2 transition hover:bg-black/[0.05] hover:opacity-80 disabled:opacity-50 dark:hover:bg-white/[0.05] "
             >
-              <XCircle size={13} weight="bold" /> 设为 rejected
+              {busy ? <CircleNotch size={13} weight="bold" className="animate-spin" /> : <XCircle size={13} weight="bold" />}{" "}
+              {busy ? "处理中…" : "设为 rejected"}
             </button>
           )}
         </div>

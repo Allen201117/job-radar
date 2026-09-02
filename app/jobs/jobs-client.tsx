@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import ActionToast, { jobActionToastText, useActionToast } from "@/components/ActionToast";
 import BackToTop from "@/components/BackToTop";
 import JobCard from "@/components/JobCard";
 import JobFilters from "@/components/JobFilters";
@@ -179,6 +180,8 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
     setOnlyNew(false);
   }
 
+  const { toast, show: showToast, dismiss: dismissToast } = useActionToast();
+
   function handleActionChange(jobId: string, action: PrimaryAction | null) {
     setOfficialJobs((jobs) =>
       jobs.map((job) =>
@@ -354,6 +357,9 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
                 sessionNew={sessionNewKeys.has(job.jd_url || job.id)}
                 matchReason={(job as any).__match}
                 onActionChange={handleActionChange}
+                onActionResult={({ action, ok }) =>
+                  showToast({ text: jobActionToastText(action, ok), tone: ok ? "default" : "error" })
+                }
               />
             </Fragment>
           );
@@ -426,6 +432,8 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
           </button>
         </div>
       )}
+
+      <ActionToast toast={toast} onDismiss={dismissToast} />
     </div>
   );
 }

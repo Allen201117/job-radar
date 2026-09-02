@@ -452,6 +452,26 @@ Supabase Auth（邮箱登录）+ cookie session。`middleware.ts` 排除 `/api/*
 - 不吞错（catch 至少记录）。
 - 外部请求只走 lib 层封装与 crawler adapters；遵守合规边界。
 
+### 点击反馈分档：每个异步操作都要有中间态 + 结果态（2026-09-03 立）
+
+创始人定的方向：这个产品的前端是**重交互、重细节**的。凡是「点一下要等服务端」的操作，
+用户必须看见两件事——**它在跑**、**它成没成**。按频次分两档，别混用：
+
+| 档 | 用什么 | 适用 |
+|---|---|---|
+| 重提交（低频，用户要停下来等结果） | `components/SaveToast.tsx`（居中，转圈 → 打勾/叉，自动消失） | 保存资料 / 保存偏好 / **AI 解析简历** / 保存简历画像 / 校招反馈 |
+| 就地操作（高频，结果已经写在按钮上） | `components/ActionToast.tsx`（底部胶囊，1.8s，不遮内容不阻断；带「撤销」的自动延到 4s） | 值得投 / 标记投递 / 忽略 / 取消值得投 / 后台审核 |
+| 取数、翻页 | 按钮内 pending（转圈 + 文案）+ 骨架屏 | 加载更多 / 刷新公司库 / 搜索 |
+
+- **失败绝不许静默**。踩过的实例：`SourceTable` 的启用/禁用开关失败时什么都不做（用户以为切成功了）、
+  `saved-client` 取消值得投失败只是把卡片悄悄放回去、`CompanyInsightDrawer` 申诉 `!res.ok` 直接吞掉。
+  这三类「点了像没反应 / 像成功了其实没成」比慢更伤信任。
+- ⚠️ **别拿乐观更新的回调当成功提示**：`JobCard.onActionChange` 在乐观更新和失败回滚时**各调一次**，
+  用它弹 toast 会把回滚说成成功。落库后的结果走 `onActionResult({jobId, action, ok})`。
+- **岗位动作文案只有一份**：`jobActionToastText()`，`/jobs` `/saved` 共用（`/today` 有自己带「撤销」的 toast）。
+- 站内不用原生 `alert()`：阻断、样式与全站不一致，且移动端体验差。
+- 契约测试钉在 `tests/ux-hardening-contract.test.js`（「点击反馈契约」一段），新增异步交互请顺手补断言。
+
 ### 会被 SSR 渲染的日期一律走 `formatDateLabel`，禁止裸 `toLocaleDateString`（2026-09-02 立）
 
 `toLocaleDateString` / `toLocaleString` 按**运行时**时区格式化。**Vercel 函数跑 UTC、浏览器跑用户本地时区（国内 UTC+8）**，
@@ -496,11 +516,11 @@ Supabase Auth（邮箱登录）+ cookie session。`middleware.ts` 排除 `/api/*
 
 ### 筛选器：不做展开/收起（2026-09-02 立）
 
-`components/JobFilters.tsx` 是「顶部吸顶 filter bar + 全部筛选抽屉 + 已选 chip 行」形态。
+`components/JobFilters.tsx` 是「顶部吸顶 filter bar + 「更多」弹窗（标题「筛选」，移动端入口叫「筛选」）+ 已选 chip 行」形态。
 竞品调研（BOSS/拉勾/猎聘/智联/51job/LinkedIn/Indeed/Wellfound 8 家）结论：8/8 都用吸顶
-filter bar，而「维度放不下」的业界标准解法**不是折叠手风琴，是把溢出维度收进「全部筛选」
-弹层**。所以：**不要再往筛选器里加 `<details>` / 手风琴 / 「更多筛选」折叠**，加维度就往
-抽屉里放。契约测试 `tests/ux-hardening-contract.test.js` 守着这条。
+filter bar，而「维度放不下」的业界标准解法**不是折叠手风琴，是把溢出维度收进「更多」
+弹层**。所以：**不要再往筛选器里加 `<details>` / 手风琴 / 折叠区**，加维度就往
+弹层里放。契约测试 `tests/ux-hardening-contract.test.js` 守着这条。
 - 岗位职能的可选值域**唯一来源**是 `lib/china-keyword-expansion.js` 导出的
   `JOB_FUNCTION_BUCKETS`，UI 从它渲染。加职能桶只改那一处，别在 UI 里留第二份硬编码，
   否则用户会筛到永远不可能命中的「幽灵条件」。
@@ -509,8 +529,8 @@ filter bar，而「维度放不下」的业界标准解法**不是折叠手风�
   高的条里，`[role=dialog]` 在 DOM 里明明存在、屏幕上什么都不出现，用户只会得出「这些按钮
   点不了」的结论（2026-09-02 线上实测确认，创始人正是这么反馈的）。修法 = `createPortal` 到
   body + `fixed` 手动锚位 + 监听 `scroll`(capture) / `resize` 重新对位。契约测试已钉死。
-- ⚠️ **「全部筛选」是居中弹窗，不是侧边抽屉**：抽屉的遮罩只有 `bg-black/30`，在浅色底上几乎
-  看不出来，筛选条看着还是亮的、像能点，实际点到的是遮罩。现行形态 = 桌面端从「全部筛选」
+- ⚠️ **「更多」打开的是居中弹窗，不是侧边抽屉**：抽屉的遮罩只有 `bg-black/30`，在浅色底上几乎
+  看不出来，筛选条看着还是亮的、像能点，实际点到的是遮罩。现行形态 = 桌面端从「更多」
   按钮放大展开的居中弹窗（点击那一刻量按钮矩形 → `--fx/--fy/--fs` 喂给 CSS keyframe），
   移动端底部 Sheet；遮罩加深到 `#1a1714/45` + 模糊，背景明确读成不可交互。
 - ⚠️ **弹层的「点外部关闭」要连自己的触发按钮一起豁免**：关外部逻辑挂在 window 的

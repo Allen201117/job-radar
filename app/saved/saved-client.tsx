@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import ActionToast, { jobActionToastText, useActionToast } from "@/components/ActionToast";
 import JobCard from "@/components/JobCard";
 import SavedCompare from "@/components/SavedCompare";
 import { formatDateLabel } from "@/lib/relative-time";
@@ -46,6 +47,10 @@ export default function SavedClient({
     setDeleted(deletedSaved);
   }, [deletedSaved]);
 
+  const { toast, show: showToast, dismiss: dismissToast } = useActionToast();
+  // 已下线岗位的「取消值得投」正在提交的 id：给按钮一个 pending 态，别让用户以为没点上。
+  const [cancelingId, setCancelingId] = useState<string | null>(null);
+
   const selectedJobs = jobs.filter((job) => selectedIds.has(job.id));
   const selectedCount = selectedIds.size;
   const compareLimitReached = selectedCount >= 4;
@@ -82,7 +87,9 @@ export default function SavedClient({
 
   // 下线岗位仍可取消「值得投」（action=null）。乐观移除；失败则恢复。
   async function cancelDeleted(jobId: string) {
+    if (cancelingId) return;
     const prev = deleted;
+    setCancelingId(jobId);
     setDeleted((d) => d.filter((x) => x.jobId !== jobId));
     try {
       const resp = await fetch(`/api/job-actions/${jobId}`, {
@@ -91,8 +98,13 @@ export default function SavedClient({
         body: JSON.stringify({ action: null }),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      showToast({ text: "已取消值得投" });
     } catch {
       setDeleted(prev); // 恢复
+      // 之前失败是静默回滚的：卡片自己跳回来，用户只会以为「点了没用」。
+      showToast({ text: "取消失败，请重试", tone: "error" });
+    } finally {
+      setCancelingId(null);
     }
   }
 
@@ -125,7 +137,13 @@ export default function SavedClient({
               {selectedIds.has(job.id) ? "已加入" : compareLimitReached ? "最多 4 个" : "加入对比"}
             </button>
           </div>
-          <JobCard job={job} onActionChange={handleActionChange} />
+          <JobCard
+            job={job}
+            onActionChange={handleActionChange}
+            onActionResult={({ action, ok }) =>
+              showToast({ text: jobActionToastText(action, ok), tone: ok ? "default" : "error" })
+            }
+          />
         </div>
       ))}
 
@@ -152,9 +170,10 @@ export default function SavedClient({
               <button
                 type="button"
                 onClick={() => cancelDeleted(d.jobId)}
-                className="text-xs font-medium ink-3 underline underline-offset-2 transition hover:opacity-80"
+                disabled={cancelingId === d.jobId}
+                className="text-xs font-medium ink-3 underline underline-offset-2 transition hover:opacity-80 disabled:opacity-50"
               >
-                取消值得投
+                {cancelingId === d.jobId ? "取消中…" : "取消值得投"}
               </button>
             </div>
           </div>
@@ -200,6 +219,8 @@ export default function SavedClient({
           })
         }
       />
+
+      <ActionToast toast={toast} onDismiss={dismissToast} />
     </div>
   );
 }
