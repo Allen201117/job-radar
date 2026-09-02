@@ -112,11 +112,11 @@ export default async function TodayPage({
     <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage>
-        <ProductHero eyebrow={HERO.eyebrow} title={HERO.title} description={HERO.description} icon={Broadcast}>
-          <Suspense fallback={null}>
-            <TodayMetrics bundlePromise={bundlePromise} />
-          </Suspense>
-        </ProductHero>
+        {/* 页头下原本挂着一条「今日已为你考察 1,348 个，替你剔除 1,274 个：已失效 · 不对口 · 信息不全」
+            的计分板。2026-09-02 创始人明确要求下线：它把内部漏斗的中间数当卖点讲给用户听，
+            而用户只关心「今天有什么值得投的」——「剔除 1,274 个」既不可验证，也容易让人觉得
+            系统在自夸工作量。要衡量漏斗健康度请看 /admin/health，别放在用户面前。 */}
+        <ProductHero eyebrow={HERO.eyebrow} title={HERO.title} description={HERO.description} icon={Broadcast} />
 
         <section className="mt-8">
           <Suspense fallback={<JobListSkeleton count={6} />}>
@@ -156,24 +156,6 @@ async function TimingProbe({
       // 纯诊断数据（全是毫秒数与条数，无任何用户信息）；type 非 JS，浏览器不执行。
       dangerouslySetInnerHTML={{ __html: JSON.stringify(payload) }}
     />
-  );
-}
-
-// 价值叙事区：随主体流入。构建失败或画像未就绪则不出文案（错误提示交给下方主体区，避免重复报错）。
-async function TodayMetrics({ bundlePromise }: { bundlePromise: Promise<TodayBundle | null> }) {
-  const feed = (await bundlePromise)?.feed;
-  if (!feed) return null;
-  // 计分板置换：把系统替用户做掉的过滤劳动说出来，而不是只报正向计数。
-  const f = feed.counts.filtered;
-  const screened = feed.counts.screened ?? 0;
-  const removed = f ? f.inactive + f.mismatch + f.low_score + f.thin : 0;
-  if (!(screened > 0 && removed > 0 && f)) return null;
-  return (
-    <p className="text-[13px] leading-5 ink-2 ">
-      今日已为你考察 {screened.toLocaleString()} 个在库岗位，替你剔除 {removed.toLocaleString()} 个：
-      已失效 {f.inactive.toLocaleString()} · 不对口 {(f.mismatch + f.low_score).toLocaleString()} · 信息不全{" "}
-      {f.thin.toLocaleString()}——剩下的才值得你花时间。
-    </p>
   );
 }
 

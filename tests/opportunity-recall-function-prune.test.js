@@ -68,18 +68,74 @@ test("跨职能的扩展词不进召回 tsquery（产品画像不该把研发词
   }
 });
 
-test("用户自己写的原词一律保留，哪怕它属于别的职能", () => {
-  // 原词就是「Prompt Engineering」（研发职能）：用户明确写了，必须留
+test("用户自己写的原词一律保留：方向词全部来自 targetRoles，天然在目标职能集内", () => {
+  // 这条原来的语料是「roles=产品经理 + keywords=Prompt Engineering」，考的是「用户手写的跨职能
+  // 原词不能被职能剪枝剪掉」。2026-09-02 起召回方向词**只取 targetRoles**，而目标职能集
+  // （userTargetFunctions）恰恰就是从 targetRoles 推出来的 —— 于是「原词落在目标职能集外」
+  // 这个情形在结构上不再可能发生，剪枝只可能剪到词库**展开**出来的跨职能词。
+  // 这里把它钉成结构性事实：用户写的每个方向词，都必须原样出现在召回 tsquery 里。
+  const roles = ["产品经理", "Prompt Engineering", "水泥搅拌"];
+  const built = buildRecallSql(mk({ targetRoles: roles }), SINCE, 900);
+  const roleTs = roleTsqueryOf(built, "产品经理");
+  for (const raw of ["产品经理", "prompt", "水泥搅拌"]) {
+    assert.ok(
+      roleTs.includes(clauseFor(raw)) || roleTs.includes(clauseFor(raw).toLowerCase()),
+      `用户原词「${raw}」被剪掉了——原词永远不能剪`,
+    );
+  }
+});
+
+test("填了目标岗位时，targetKeywords 不进召回（到方向门也必被 role_mismatch 拒）", () => {
+  // 与 lib/opportunities/eligibility.ts:165/238 对齐：有 targetRoles 时方向判定只认 targetRoles，
+  // 匹配不上就 reject("role_mismatch")。所以只靠关键词召回来的岗一个都展示不出来，
+  // 留在 stage-1 只是白扫 GIN、白占召回预算（实测某产品画像 1,216 个候选里 1,053 个如此）。
   const built = buildRecallSql(
-    mk({ targetRoles: ["产品经理"], targetKeywords: ["Prompt Engineering"] }),
+    mk({ targetRoles: ["产品经理"], targetKeywords: ["水泥搅拌"] }),
     SINCE,
     900,
   );
   const roleTs = roleTsqueryOf(built, "产品经理");
   assert.ok(
-    roleTs.includes(clauseFor("Prompt Engineering")),
-    "用户原词 Prompt Engineering 被剪掉了——原词永远不能剪",
+    !roleTs.includes(clauseFor("水泥搅拌")),
+    "填了目标岗位时 targetKeywords 不该进召回方向层",
   );
+});
+
+test("没填目标岗位时才回退 targetKeywords（否则这类用户一个岗都召不回）", () => {
+  const built = buildRecallSql(mk({ targetKeywords: ["水泥搅拌"] }), SINCE, 900);
+  const roleTs = roleTsqueryOf(built, "水泥搅拌");
+  assert.ok(roleTs.includes(clauseFor("水泥搅拌")), "没有目标岗位时必须回退用关键词召回");
+});
+
+test("整词就是一个跨职能概念组 → 只用原词召回，不展开这一组", () => {
+  // 病灶：outOfScope 判词的职能用 classifyJobFunction({title: term})，把**单个词当岗位标题**猜。
+  // 「ai」「llm」「agent」「大模型」这样一猜全是「其他」，被规则②整批放行 —— 而它们命中面最广。
+  // 某 AI 产品画像的 target_roles 里有「AI Agent」（不是岗位名，classifyJobFunction 判「其他」、
+  // 因此不进目标职能集{产品}），它单独展开成一整组 OR，把全库算法/AI 岗灌进召回池，
+  // 到 stage-2 再被职能门一个个拒掉。
+  // 修法：词属于哪个概念组是**已知**的（KEYWORD_GROUP_FUNCTIONS），不用猜。
+  // live 实测（7 画像对拍）：该画像能过方向门的候选 297 → 826（+178%），其余 6 个画像逐个不变。
+  const built = buildRecallSql(mk({ targetRoles: ["产品经理", "AI Agent"] }), SINCE, 900);
+  const roleTs = roleTsqueryOf(built, "产品经理");
+  // 原词仍在（规则①不破）：用户写了就还能精确召回
+  assert.ok(roleTs.includes(clauseFor("AI Agent")), "用户原词「AI Agent」不该被丢掉");
+  // 但整个 AI/算法组不再单独成 OR 子句去捞全库算法岗
+  for (const expanded of ["大模型", "人工智能", "生成式", "智能体"]) {
+    assert.ok(
+      !roleTs.includes(clauseFor(expanded)),
+      `「${expanded}」属于研发职能、用户目标职能是产品，不该被展开进召回`,
+    );
+  }
+});
+
+test("多单元（AND）的词不受影响：AI 是限定词不是方向，剪了会让整条退化成裸原词", () => {
+  // 「AI 产品经理」= `(ai|大模型|…) & (产品经理|pm|…)`：AI 那一组虽属研发，但它是 AND 的一侧、
+  // 单独召不回任何岗，必须保留。只有**单单元**（整词=一个组）才可能靠一组泛词独自灌满召回池。
+  const built = buildRecallSql(mk({ targetRoles: ["AI 产品经理"] }), SINCE, 900);
+  const roleTs = roleTsqueryOf(built, "产品经理");
+  assert.match(roleTs, /&/, "多单元词必须保持 AND-of-ORs 结构");
+  assert.ok(roleTs.includes(clauseFor("大模型")) || roleTs.includes(clauseFor("ai")),
+    "AND 一侧的限定组不该被剪");
 });
 
 test("同职能与判不出职能的扩展词照常保留（别剪过头）", () => {

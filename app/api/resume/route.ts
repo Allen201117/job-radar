@@ -437,7 +437,7 @@ async function upsertMergedPreferences(
   parsedPreferences: {
     target_locations: string[];
     target_roles: string[];
-    target_keywords: string[];
+    skills: string[];
     industries: string[];
   },
 ) {
@@ -453,8 +453,19 @@ async function upsertMergedPreferences(
     {
       user_id: userId,
       target_locations: mergeUnique(existing?.target_locations, parsedPreferences.target_locations),
-      target_roles: mergeUnique(existing?.target_roles, parsedPreferences.target_roles),
-      target_keywords: mergeUnique(existing?.target_keywords, parsedPreferences.target_keywords),
+      // ⚠️ 方向与技能**以本次简历为准覆盖，不再累积**（2026-09-02 改）：
+      // 这两项描述的是「这份简历此刻的求职意图」，而 mergeUnique 只增不减 —— 传三次简历就攒三代，
+      // 半年前想做的岗位永远赖着不走。线上实测某账号因此攒出 23 个关键词（单次解析上限才 8 个）、
+      // 5 个目标岗位（大模型指令要求最多 3 个），把召回稀释得一塌糊涂。
+      // 解析结果为空时不覆盖（保住用户在偏好页手填的内容，别被一次失败的解析清空）。
+      target_roles: parsedPreferences.target_roles.length
+        ? parsedPreferences.target_roles
+        : existing?.target_roles || [],
+      skills: parsedPreferences.skills.length
+        ? parsedPreferences.skills
+        : existing?.skills || [],
+      // target_keywords 归用户自己所有：简历解析不再往里写，这里原样保留他手填的补充搜索词。
+      target_keywords: existing?.target_keywords || [],
       // 跨行业门用：简历解析出的行业并入既有目标行业（与其它字段同口径 merge，不覆盖用户已填）。
       target_industries: mergeUnique(existing?.target_industries, parsedPreferences.industries),
       exclude_keywords: existing?.exclude_keywords || [],
@@ -473,11 +484,11 @@ function mergeUnique(existing: string[] | null | undefined, incoming: string[]) 
 function hasPreferenceSignal(preferences: {
   target_locations: string[];
   target_roles: string[];
-  target_keywords: string[];
+  skills: string[];
 }) {
   return [
     ...(preferences.target_locations || []),
     ...(preferences.target_roles || []),
-    ...(preferences.target_keywords || []),
+    ...(preferences.skills || []),
   ].some(Boolean);
 }

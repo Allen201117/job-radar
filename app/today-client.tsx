@@ -107,15 +107,14 @@ export function OnboardingPanel({
   );
 }
 
-// 空队列要回答「为什么是 0」：有过滤数据时明说考察了多少、各被什么原因剔除——是「宁缺毋滥」，不是「系统没干活」。
+// 空队列仍要回答「为什么是 0」，但**不报内部漏斗的中间数**（2026-09-02 创始人要求下线
+// 「考察 N 个 / 剔除 M 个：已失效·不对口·信息不全」那套话术——那是给运营看的漏斗，
+// 不是给求职者看的价值）。这里只说结论 + 下一步动作，语气仍是「宁缺毋滥」而非「系统没干活」。
 function EmptyQueue({ counts }: { counts?: OpportunityFeed["counts"] }) {
-  const f = counts?.filtered;
   const screened = counts?.screened ?? 0;
   const explain =
-    screened > 0 && f
-      ? `今天系统考察了 ${screened.toLocaleString()} 个在库岗位：已失效 ${f.inactive.toLocaleString()} 个、不对口 ${(
-          f.mismatch + f.low_score
-        ).toLocaleString()} 个、信息不全 ${f.thin.toLocaleString()} 个——没有一条达到推荐门槛。我们宁可空着，也不硬凑。你可以：`
+    screened > 0
+      ? "今天的官方在招岗位都过了一遍，没有一条达到推荐门槛——宁可空着，也不硬凑。你可以："
       : "系统持续在监控你关注的官方招聘源，有新机会会第一时间出现在这里。你也可以：";
   return (
     <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] bg-white/45 px-6 py-14 text-center dark:border-white/[0.1] dark:bg-white/[0.05]">

@@ -73,7 +73,9 @@ export function buildRadarProfile(
   const useEnglishProfile = (jobScope === "overseas" || jobScope === "all") && candidate?.has_en_resume === true;
   const cnRoles = preferOrFallback(prefs?.target_roles, candidate?.target_roles);
   const cnKeywords = uniqStrings(prefs?.target_keywords);
-  const cnSkills = uniqStrings(candidate?.skills);
+  // 技能取简历档案优先、偏好列兜底：两处都由简历解析写入（迁移 202 起偏好也有 skills 列），
+  // 老账号可能只有其中一处有值。技能只喂 skillTerms 加分，永不进方向判定（见 eligibility.ts:165）。
+  const cnSkills = uniqStrings([...(candidate?.skills ?? []), ...(prefs?.skills ?? [])]);
   const enRoles = preferOrFallback(candidate?.en_target_roles, cnRoles);
   const enKeywords = preferOrFallback(candidate?.en_target_keywords, cnKeywords);
   const enSkills = preferOrFallback(candidate?.en_skills, cnSkills);

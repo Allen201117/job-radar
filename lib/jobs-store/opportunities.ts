@@ -11,7 +11,12 @@ import "server-only";
 import { jobsQuery } from "./client";
 import { jobsStoreEnabled } from "./read";
 import { buildTsquery } from "@/lib/job-search";
-import { keywordMatchUnits, classifyJobFunction } from "@/lib/china-keyword-expansion";
+import {
+  keywordMatchUnits,
+  classifyJobFunction,
+  CHINA_KEYWORD_GROUPS,
+  KEYWORD_GROUP_FUNCTIONS,
+} from "@/lib/china-keyword-expansion";
 import { userTargetFunctions } from "@/lib/opportunities/eligibility";
 import { appendJobScopeWhere, effectiveTargetRegions, jobMatchesScope } from "@/lib/job-scope";
 import type { RadarProfile } from "@/lib/opportunities/types";
@@ -76,8 +81,54 @@ const RECALL_COLUMNS =
 // 本来就会重新判匹配层级。
 const ROLE_TSQUERY_CLAUSE_BUDGET = 120;
 
+// 词 → 它所属概念组的职能集合。词库组与组职能是同一份静态数据（CHINA_KEYWORD_GROUPS /
+// KEYWORD_GROUP_FUNCTIONS），所以「这个扩展词属于哪个职能」是**查得到的**，不用拿
+// classifyJobFunction 把单个词当标题猜（那样 ai/sql/python/数据 全被猜成「其他」）。
+// 一个词可能同时在多个组里（如「数据」既在数据分析组也在数据工程组）→ 取并集。
+let termGroupFunctions: Map<string, Set<string>> | null = null;
+
+function normalizeTerm(value: unknown): string {
+  return String(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function groupFunctionsOf(term: string): Set<string> {
+  if (!termGroupFunctions) {
+    termGroupFunctions = new Map();
+    CHINA_KEYWORD_GROUPS.forEach((group: string[], i: number) => {
+      const fn = KEYWORD_GROUP_FUNCTIONS[i];
+      if (!fn) return; // null = 该组不是职能（招聘类型 / 投研 / 工程通用锚点）
+      for (const raw of group) {
+        const key = normalizeTerm(raw);
+        if (!key) continue;
+        if (!termGroupFunctions!.has(key)) termGroupFunctions!.set(key, new Set());
+        termGroupFunctions!.get(key)!.add(fn);
+      }
+    });
+  }
+  return termGroupFunctions.get(normalizeTerm(term)) ?? new Set<string>();
+}
+
+/**
+ * 这个单元（= 一个概念组展开出的同义词 OR）的职能，是否**确定**且**完全**落在用户目标职能之外。
+ * 判不出职能（组职能全空）时返回 false —— 沿用「无从判断就别猜」的既有边界，宁可多召回。
+ */
+function groupFunctionsAllOutOfScope(unit: readonly string[], targetFns: Set<string>): boolean {
+  if (!targetFns.size) return false; // 用户没填目标岗位 → 一个词都不剪（既有规则③）
+  const fns = new Set<string>();
+  for (const term of unit) for (const fn of groupFunctionsOf(term)) fns.add(fn);
+  if (!fns.size) return false;
+  return ![...fns].some((fn) => targetFns.has(fn));
+}
+
 function roleTsquery(profile: RadarProfile): string | null {
-  const terms = [...profile.targetRoles, ...profile.targetKeywords];
+  // 召回词 = **方向优先**，与 stage-2 的方向判定同一行判据（lib/opportunities/eligibility.ts:165）。
+  // 旧实现把 targetRoles 与 targetKeywords 拼在一起当召回词，但 stage-2 早已定调「技能判不了方向，
+  // 填了目标岗位就只认目标岗位」→ 只靠技能词召回来的岗位，到了方向门必然被 role_mismatch 拒掉，
+  // 白扫一趟 GIN 又白跑一遍 JS。实测这类无效候选占某产品画像的 87%（1,216 个里 1,053 个被拒）。
+  // 两端口径统一后：召回集只小不大、结果集不变、子句数下降（词多的画像曾把召回从 3.3s 拖到 4.1s）。
+  // 用户没填目标岗位时仍回退关键词——否则这类用户一个岗位都召不回（与 eligibility 同款兜底）。
+  const terms =
+    profile.targetRoles.length > 0 ? profile.targetRoles : profile.targetKeywords;
   if (!terms.length) return null;
   const includeOverseasLexicon = profile.jobScope !== "domestic";
   // 跨职能剪枝：stage-2 的方向门还有一道**职能门**（岗位职能判得出且不在用户目标职能集内 → 直接拒）。
@@ -88,7 +139,10 @@ function roleTsquery(profile: RadarProfile): string | null {
   // 三条边界（有测试钉着，见 tests/opportunity-recall-function-prune.test.js）：
   //   ① 用户自己写的原词一律保留——他写「工程师」就是要搜工程师；
   //   ② 职能判不出（"其他"）的词保留——职能门本来就放行这类岗；
-  //   ③ 用户没填 targetRoles（目标职能集为空）时一个词都不剪——无从判断就别猜。
+  //   ③ 用户没填 targetRoles（目标职能集为空）时一个词都不剪——无从判断就别猜；
+  //   ④ 整词=一个跨职能概念组（单单元）时不展开这一组，只留原词——见下方 skipExpansion。
+  //      ②靠 classifyJobFunction 把单个词当标题猜职能，ai/llm/agent/sql 全被猜成「其他」而漏网，
+  //      ④改用「这个词属于哪个概念组」这一已知事实来判，补上②的漏。
   const targetFns = userTargetFunctions(profile);
   const rawTerms = new Set(terms.map((t) => String(t).trim().toLowerCase()));
   const outOfScope = (term: string): boolean => {
@@ -116,8 +170,24 @@ function roleTsquery(profile: RadarProfile): string | null {
     // 超出扩展预算后**不丢词**，只是不再展开词库——原词单独成子句仍能精确召回。
     // （沿用旧实现的语义：预算砍掉的是长尾近义扩展，不是用户的检索意图。）
     const units = clauseBudget > 0 ? keywordMatchUnits(t, { includeOverseasLexicon }) : [];
+    // 「整词就是一个跨职能概念组」→ 只用原词召回，不展开这一组。
+    //
+    // 病灶（2026-09-02 实测）：outOfScope 判词的职能用的是 `classifyJobFunction({title: term})`，
+    // 把**单个词当岗位标题**去猜。`ai` / `llm` / `agent` / `sql` / `python` / `数据` 这样一猜全是
+    // 「其他」，于是规则②「职能判不出的词保留」把它们整批放行 —— 而它们恰恰是命中面最广的泛词。
+    // 后果：某 AI 产品画像写了「AI Agent」「数据驱动」两个词（都不是岗位名，classifyJobFunction
+    // 判「其他」，不进目标职能集），它们各自单独展开成一整组 OR，把全库算法岗 / 数据岗灌进召回池，
+    // 到 stage-2 再被职能门一个个拒掉：role 层 900 个候选只有 190 个过得了方向门（21%）。
+    //
+    // 修法：词来自哪个概念组是**已知**的，不必猜 —— 用 KEYWORD_GROUP_FUNCTIONS 查这一组的职能。
+    // 只处理**单单元**的词（整词=一个概念组）：这一组的职能确定、且完全在用户目标职能之外，
+    // 就不展开它，回退成原词（`ai agent` 的 bigram 仍能精确召回，用户意图不丢）。
+    // ⚠️ 多单元（AND）的词一律不动：「AI 产品经理」= `(ai|大模型|…) & (产品经理|pm|…)`，
+    // 那个 AI 组是**限定词**不是方向，AND 结构本身已经把它约束住了，剪掉反而会让整条退化成裸原词。
+    const skipExpansion =
+      units.length === 1 && groupFunctionsAllOutOfScope(units[0], targetFns);
     const unitClauses: string[] = [];
-    for (const unit of units) {
+    for (const unit of skipExpansion ? [] : units) {
       // 职能剪枝沿用旧口径：跨职能的**扩展词**剪掉。
       // 单单元的词还要过一遍全局词去重：单单元子句本质就是顶层的一段扁平 OR，
       // 同一个词在多段里重复只会让 GIN 白扫（实测「AI」的单向展开含整个算法组，

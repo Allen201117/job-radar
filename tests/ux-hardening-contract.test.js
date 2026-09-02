@@ -279,7 +279,9 @@ test("all six preference TagInput calls have distinct explicit aria labels", () 
     preferenceForm,
     6,
     "PreferenceForm",
-    ["目标城市", "目标岗位", "关注公司", "命中关键词", "排除关键词", "目标行业"],
+    // 「命中关键词」2026-09-02 改名「补充搜索词」：旧名 + 旧占位（Python、机器学习…）在教用户
+    // 把技能填进搜索框，正是 /jobs 恒 0 结果那次事故的认知源头。技能改由 skills 列承载（迁移 202）。
+    ["目标城市", "目标岗位", "关注公司", "补充搜索词", "排除关键词", "目标行业"],
   );
 });
 
