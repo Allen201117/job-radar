@@ -174,7 +174,18 @@ function appendRecruitmentPrefilter(conds: string[], jobType: string) {
         " or jd_url ~* '(xiaozhao|campus)'" +
         " or (coalesce(title,'')||' '||coalesce(summary,'')) ~* '(应届|[0-9]{2,4}届|校园招聘|校招|管培生|管理培训生|留学生专项|new\\s?grads?|university\\s+graduate|entry[-\\s]?level|campus\\s?(recruit|hiring)|graduate\\s+program)'" +
         " or company ~* '(校招|校园招聘)')" +
-        " and (job_type is null or job_type !~* '(社招|社会招聘|全职|experienced|professional|full.?time)'))",
+        " and (job_type is null or job_type !~* '(社招|社会招聘|全职|experienced|professional|full.?time)')" +
+        // (c) 排除「实习」——recruitmentCategory 的层1（实习）最先短路，命中它的岗**绝不可能**再被判成
+        // 校招，所以从校招查询里剔掉是逻辑上安全的，不是近似。
+        // 这里逐字复刻层1 的三个条件（job_type / title / url 路径段），香港库真实数据验过零分歧：
+        // 深圳+校招 的 4354 条候选里，正确剔除 955 条 JS 判实习的，误杀真校招岗 **0 条**。
+        // ⚠️ intern 必须**两侧**词边界（PG 用 \y，对应 JS 的 \b）：否则 international / internal /
+        // internet 会把全职岗当实习剔掉——同款坑在 crawler 上实锤过 27,824 个岗被误标。
+        // ⚠️ url 只认**路径段** /shixi /intern，不认 `?postType=intern` 这类查询参数：
+        // 实测 wecruit 有 10 个「27届」真校招岗带 postType=intern，按查询参数算会被误杀。
+        " and not (coalesce(job_type,'') ~* '(实习|\\yintern(ship)?s?\\y)'" +
+        " or coalesce(title,'') ~ '(实习|shixi)' or coalesce(title,'') ~* '\\yintern(ship)?s?\\y'" +
+        " or coalesce(nullif(jd_url,''), apply_url, '') ~* '/(shixi|intern)(/|\\?|$)'))",
     );
   } else if (jobType === "实习") {
     conds.push(

@@ -374,6 +374,39 @@ test("jobs-store 校招：SQL 下推校招超集预筛（job_type/url/正文/公
   assert.match(calls[0].sql, /job_type is null or job_type !~\* '\(社招/);
 });
 
+// 校招查询里剔掉实习：recruitmentCategory 的层1（实习）最先短路 → 命中它的岗绝不可能是校招。
+// 香港库真实数据验过：深圳+校招 4354 条候选 → 3399 条（-22%），而 total 仍是 2275（结果零变化）。
+test("jobs-store 校招：下推剔除实习，且 intern 必须两侧词边界", async () => {
+  const calls = [];
+  const { searchJobsStore } = loadJobsStore(async (sql, params) => { calls.push({ sql, params }); return []; });
+  await searchJobsStore({ ...filters, jobType: "校招", keyword: "产品经理" }, null, [], 0, 10);
+  const sql = calls[0].sql;
+
+  assert.match(sql, /and not \(/, "校招下推必须带实习排除");
+  // 逐字对齐 recruitmentCategory 层1 的三个来源：job_type / title / url 路径段。
+  assert.match(sql, /coalesce\(job_type,''\) ~\* '\(实习\|/);
+  assert.match(sql, /coalesce\(title,''\) ~ '\(实习\|shixi\)'/);
+  assert.match(sql, /\/\(shixi\|intern\)\(\/\|/, "url 只认路径段");
+
+  // ⚠️ 最关键的一条：intern 必须**两侧**词边界（PG 的 \y），否则 international / internal /
+  // internet 会把全职岗当实习剔掉 —— 同款裸子串坑在 crawler 上实锤误标过 27,824 个岗。
+  const internClauses = sql.match(/[^']*intern\(ship\)\?s\?[^']*/g) || [];
+  assert.ok(internClauses.length >= 2, "应有 job_type / title 两处 intern 判定");
+  for (const c of internClauses) {
+    assert.ok(
+      c.includes("\\yintern(ship)?s?\\y"),
+      `intern 判定必须两侧词边界，实际是: ${c}`,
+    );
+  }
+  // 反向：排除段里不许出现没有词边界的裸 intern。
+  const notPart = sql.slice(sql.indexOf("and not ("));
+  assert.doesNotMatch(
+    notPart,
+    /[^y(]intern\(ship\)\?s\?[^\\]/,
+    "排除段里不许有裸 intern 子串",
+  );
+});
+
 test("jobs-store 实习：SQL 下推实习超集预筛", async () => {
   const calls = [];
   const { searchJobsStore } = loadJobsStore(async (sql, params) => { calls.push({ sql, params }); return []; });
