@@ -99,6 +99,14 @@ const WINDOW_BADGE: Record<
 // ⚙️ 待接入卡不向用户暴露子原因（no_source / source_only_social）——只在 tooltip 里说一句通用文案。
 const NOT_INGESTED_TOOLTIP = "该公司校招源接入中";
 
+// 时间线依据 → 用户看到的措辞。三档强弱：官方公告 > 公开信息 > 往年规律。
+// 由 campusTimelineSummary 算出的 basis 决定，绝不硬编码（见 lib/recruitment-cycle.ts 的注释）。
+const TIMELINE_BASIS_LABEL: Record<"official" | "public" | "historical", string> = {
+  official: "今年·据官方公告",
+  public: "今年·据公开信息",
+  historical: "据往年",
+};
+
 function WindowBadge({ window }: { window: WindowState }) {
   const badge = WINDOW_BADGE[window.state];
   const title = window.state === "not_ingested" ? NOT_INGESTED_TOOLTIP : undefined;
@@ -508,8 +516,10 @@ export default function CampusClient({
                   )}
                   {card.timeline && (
                     <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 ink-3">
+                      {/* ⚠️ 措辞由数据的 basis 决定，不写死。写死「据往年」时，卡面渲染出的是
+                          「据往年 2027届 · 正式批8-10月」——往年不可能有 2027 届，14 家全中（用户实锤）。 */}
                       <span className="inline-flex items-center gap-1 rounded-md border border-[#b7d2ee] bg-[#dceafa] px-1.5 py-0.5 font-medium text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
-                        据往年
+                        {TIMELINE_BASIS_LABEL[card.timeline.basis]}
                       </span>
                       <span>{card.timeline.gradClass}</span>
                       {card.timeline.batchBits.map((bit) => (
