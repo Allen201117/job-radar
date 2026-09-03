@@ -18,18 +18,22 @@ import {
   Compass,
   GraduationCap,
   List,
+  Path,
   SignOut,
   UserCircle,
   X,
 } from "@phosphor-icons/react";
 
-// 一级导航：今日机会 / 搜索岗位 / 职业路径 / 校招专区 / 个人主页 / 值得投 / 已投递。
+// 一级导航：今日机会 / 搜索岗位 / 洞察库 / 职业路径 / 校招专区 / 个人主页 / 值得投 / 已投递。
 // 2026-09-03：原「关注与偏好」与「个人主页」功能重复（两处各挂一份简历画像面板），已合并为后者。
 // /me 移入账号菜单。/sources、/admin/* 仅管理员直达。
 const LINKS = [
   { href: "/today", key: "today", icon: Broadcast },
   { href: "/jobs", key: "jobs", icon: Briefcase },
-  { href: "/path", key: "path", icon: Compass },
+  // 洞察库与岗位库平级：产品是「岗位信息」与「洞察信息」两个维度，
+  // 洞察不该只活在岗位卡点开的抽屉里（创始人 2026-09-03 定调）。
+  { href: "/insights", key: "insights", icon: Compass },
+  { href: "/path", key: "path", icon: Path },
   { href: "/campus", key: "campus", icon: GraduationCap },
   { href: "/me", key: "me", icon: UserCircle },
   { href: "/saved", key: "saved", icon: BookmarkSimple },

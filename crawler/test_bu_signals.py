@@ -166,3 +166,40 @@ class OwnershipConsistencyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WritePlanTest(unittest.TestCase):
+    """写入计划：复用已有行的 id 走批量 upsert，不再一行一次 HTTP。"""
+
+    SUBJECT = {"id": "sub-1", "name": "飞书", "kind": "business_unit"}
+
+    def _metric(self, key="hiring_volume_30d"):
+        return {
+            "metric_key": key, "metric_value": 47, "metric_unit": "个",
+            "dimension": "hiring", "title": "飞书", "content": "近 30 天新挂出 47 个（基于 397 个在招岗）。",
+            "sample_size": 397, "scope": {}, "payload": {"sample_n": 397},
+            "time_window": "截至 2026-09-03 的在招岗位",
+        }
+
+    def test_new_metric_gets_fresh_id(self):
+        rows, retire = S.plan_subject_rows(self.SUBJECT, "c1", [self._metric()], [], "now", 14)
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["id"])
+        self.assertEqual(rows[0]["origin"], "derived")
+        self.assertEqual(rows[0]["assertion"], "signal")
+        self.assertEqual(retire, [])
+
+    def test_existing_metric_reuses_id_so_upsert_updates_in_place(self):
+        existing = [{"id": "row-1", "metric_key": "hiring_volume_30d", "status": "active"}]
+        rows, _ = S.plan_subject_rows(self.SUBJECT, "c1", [self._metric()], existing, "now", 14)
+        self.assertEqual(rows[0]["id"], "row-1")
+
+    def test_vanished_metric_is_retired_not_deleted(self):
+        existing = [{"id": "row-old", "metric_key": "salary_range_k", "status": "active"}]
+        rows, retire = S.plan_subject_rows(self.SUBJECT, "c1", [self._metric()], existing, "now", 14)
+        self.assertEqual(retire, ["row-old"])
+        self.assertEqual(len(rows), 1)
+
+    def test_derived_rows_expire_so_a_stalled_pipeline_stops_showing_numbers(self):
+        rows, _ = S.plan_subject_rows(self.SUBJECT, "c1", [self._metric()], [], "now", 14)
+        self.assertTrue(rows[0]["valid_until"])

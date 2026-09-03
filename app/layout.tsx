@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import MagicBentoFX from "@/components/MagicBentoFX";
 import RadarRings from "@/components/RadarRings";
+import PageViewTracker from "@/components/PageViewTracker";
 
 export const metadata: Metadata = {
   title: "职达 JobRadar | 官方岗位雷达",
@@ -22,6 +23,8 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
         {/* 全站雷达波纹（雷达绿同心环）：固定视口、内容背后，所有页面共用 */}
         <RadarRings />
+        {/* 页面浏览埋点：留存 / 页面分布的唯一数据来源，不渲染任何东西 */}
+        <PageViewTracker />
         {children}
         {/* MagicBento 悬浮光效（雷达绿）：给 .bento-glow 卡片加 指针描边发光/粒子/磁吸/点击波纹 */}
         <MagicBentoFX

@@ -125,6 +125,10 @@ export async function GET() {
           service
             .from("insight_items")
             .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
+            // ⚠️ 排除 origin='derived'：派生条目是机器每天重算的（2026-09-03 起约 9,000 条），
+            // 不做逐条人工策展，全量拉到浏览器只会把这个页面压垮。
+            // 它们的治理入口是「洞察主体」面板：按主体下架、按 metric_key 批量处置。
+            .neq("origin", "derived")
             .order("id", { ascending: true })
             .range(from, to),
       ),

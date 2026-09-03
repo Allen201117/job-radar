@@ -65,6 +65,10 @@ jobs:
         if: ${{ github.event.inputs.skip_extract != 'true' }}
         working-directory: crawler
         env:
+          # 没有画像的公司整家进不了洞察库（画像是 insight_subjects 的外键父表）。
+          # live 实测 1,985 家有在招岗的公司里只有 976 家有画像。新画像带
+          # insight_checked_at，不会插到用户关心的公司前面去抢富化预算。
+          BU_CREATE_PROFILES: "true"
           INPUT_COMPANY: ${{ github.event.inputs.company }}
           INPUT_LIMIT: ${{ github.event.inputs.limit || '0' }}
           INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}

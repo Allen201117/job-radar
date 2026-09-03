@@ -31,12 +31,24 @@ _RECRUITMENT_RE = re.compile(
     # 蚂蚁「Plan A」都被抽成了业务线。它们是招聘项目/培养计划，不是业务线。
     # ⚠️ 只在**整词或结尾**匹配「计划/专项」，否则会误杀真业务线（如「计划财务部」不受影响，
     #    但「可灵AI专项」会被剔——它与「可灵AI」重复，剔掉正好去重）。
+    # 第二轮（全库跑完抽检 100 条）：社会招聘(172)/内部招聘(91)/培训生(162)/CRC Intern(111)
+    # 都进了库，说明只写「社招/实习」这类简称挡不住全称与英文写法。
     r"\d{2,4}\s*届|校招|秋招|春招|社招|实习生?招聘|\d{4}(?:校园|招聘)|内推|热招|急招"
-    r"|实习|转正|(?:计划|专项|项目)$|^plan\s|培养生|管培",
+    r"|实习|转正|(?:计划|专项|项目)$|^plan\s|培养生|管培"
+    r"|社会招聘|内部招聘|校园招聘|公开招聘|招聘$|培训生|储备生|见习"
+    r"|\bintern(?:ship)?\b|\btrainee\b|\bcampus\b|\bgraduate\b",
     re.IGNORECASE,
 )
 _JOB_ROLE_RE = re.compile(
-    r"(?:工程师|专家|经理|实习生|顾问|设计师|架构师|策划|运营|开发|分析师|主管|总监|BP|HRBP|助理|专员)$",
+    # 2026-09-03 live：跑到外企源上才暴露——Apple 抽出 manager(30)/genius(23)。
+    # 英文岗位名同样要挡，且英文里岗位名常在**开头**（"Manager - Retail"），故不锚定结尾。
+    # 第二轮补一线岗位名：店员(98)/维修技师(83)/区域业代(119) 也被当成了业务线。
+    r"(?:工程师|专家|经理|实习生|顾问|设计师|架构师|策划|运营|开发|分析师|主管|总监|BP|HRBP|助理|专员"
+    r"|店员|店长|技师|业代|导购|司机|操作工|文员|销售|客服|收银|保安|厨师|服务员|护士|药师|教师"
+    r"|研究员|科学家|岗)$"
+    r"|^(?:manager|engineer|specialist|analyst|director|lead|intern|associate|consultant"
+    r"|designer|developer|scientist|architect|coordinator|representative|technician"
+    r"|supervisor|advisor|expert|officer|recruiter|genius|advisor)s?$",
     re.IGNORECASE,
 )
 _PURE_SYMBOL_RE = re.compile(r"^[^\w\u4e00-\u9fff]+$", re.UNICODE)
@@ -45,11 +57,17 @@ _PURE_SYMBOL_RE = re.compile(r"^[^\w\u4e00-\u9fff]+$", re.UNICODE)
 _GENERIC_TERMS = {
     "data", "平台", "中台", "国际化", "技术", "业务", "方向", "项目", "中心", "部门",
     "研发", "产品", "运营", "职能", "总部", "海外", "国内", "集团", "公司", "其他",
+    # 第二轮 live：「中国(111)」被当成了业务线；它是区域不是业务线。
+    "中国", "中国区", "大中华区", "亚太", "全球", "本部", "分部",
+    # 大区名：只做**全等**判断，所以「外运华东」这类真子公司不受影响。
+    "华东", "华南", "华北", "华中", "西南", "西北", "东北", "华西",
 }
 # 国家 / 地区（live 实测：蚂蚁 malaysia(42)）。城市走 _CITY_TERMS，这里补国家。
 _COUNTRY_TERMS = {
     "malaysia", "singapore", "japan", "korea", "usa", "uk", "india", "indonesia",
     "thailand", "vietnam", "philippines", "brazil", "mexico", "germany", "france",
+    # 地区缩写（live：Apple 抽出 us(162)）。都是地点不是业务线。
+    "us", "eu", "emea", "apac", "amer", "latam", "anz", "na", "row",
     "马来西亚", "新加坡", "日本", "韩国", "美国", "英国", "印度", "印尼", "泰国", "越南",
 }
 # 纯项目代号：J3 / A1 / UE5 之类（live 实测：腾讯 J3(36)）。
@@ -75,6 +93,32 @@ _CITY_TERMS.discard("")
 
 def _now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+_OPEN_TO_CLOSE = {"（": "）", "(": ")", "【": "】", "[": "]", "《": "》"}
+_CLOSERS = set(_OPEN_TO_CLOSE.values())
+
+
+def _strip_unbalanced(value: str) -> str:
+    """去掉首尾**没有配对**的括号。
+
+    live 实测：源标题形如「（基石产品线）-高级研究员」，按连字符切出的碎片是
+    「基石产品线）」——它作为业务线名直接展示给用户就是个错字。
+    只去首尾不配对的那一个，不动内部括号（「剪映CapCut（国际）」保持原样，
+    由停用词与阈值处理）。
+    """
+    text = value
+    while text and text[-1] in _CLOSERS:
+        closer = text[-1]
+        opener = next(o for o, c in _OPEN_TO_CLOSE.items() if c == closer)
+        if text.count(closer) <= text.count(opener):
+            break
+        text = text[:-1].strip()
+    while text and text[0] in _OPEN_TO_CLOSE:
+        if text.count(text[0]) <= text.count(_OPEN_TO_CLOSE[text[0]]):
+            break
+        text = text[1:].strip()
+    return text
 
 
 def normalize_bu(token: str) -> str:
@@ -111,9 +155,15 @@ def extract_candidates(title: str) -> list[str]:
         return []
     out = []
     normalized_seen = set()
+    # ⚠️ 「前缀 X-」「后缀 -X」是**中文招聘站的书写约定**（腾讯云-后端工程师 / 快手【主站】），
+    # 本抽取器也只在 38,491 条中文标题上验证过。英文标题里连字符是**构词符**
+    # （Multi-Channel / Pre-Sales / Mixed-Signal），照搬会把词根当业务线——
+    # 2026-09-03 live 实测：Amazon 抽出 multi(33)/pre(22)、Apple 抽出 us(162)/mixed(20)。
+    # 所以纯英文标题只走 【X】 括号形态，不走连字符。宁可漏抽，不可错抽。
+    has_cjk = bool(re.search(r"[\u4e00-\u9fff]", text))
 
     def add(value):
-        value = str(value or "").strip()
+        value = _strip_unbalanced(str(value or "").strip())
         key = normalize_bu(value)
         if value and key and key not in normalized_seen:
             out.append(value)
@@ -121,6 +171,9 @@ def extract_candidates(title: str) -> list[str]:
 
     for match in _BRACKET_RE.finditer(text):
         add(match.group(1) or match.group(2))
+
+    if not has_cjk:
+        return out
 
     # prefix：开头 X-。后续的岗位名/方向仍由 is_noise 与频次门过滤。
     first_dash = _DASH_RE.search(text)
@@ -221,13 +274,13 @@ def collect_company_data(job_rows: list[dict], profile_index, min_jobs: int):
     """jobs 行按画像公司聚合，返回 subject 写入前的纯数据。"""
     exact, normalized, _ = profile_index
     data = {}
-    unmatched_companies = set()
+    unmatched_companies = Counter()
     for row in job_rows or []:
         company = str((row or {}).get("company") or "").strip()
         profile = resolve_profile(company, exact, normalized)
         if not profile:
             if company:
-                unmatched_companies.add(company)
+                unmatched_companies[company] += 1
             continue
         profile_id = profile["id"]
         item = data.setdefault(profile_id, {
@@ -312,6 +365,38 @@ def plan_subject_changes(company_data: dict, existing_rows: list[dict]):
     return plan
 
 
+def plan_new_profiles(unmatched: set, min_jobs: int, counts: dict) -> list[dict]:
+    """给「有足够在招岗但还没有画像」的公司准备画像行（纯函数，便于单测）。
+
+    ⚠️ 为什么必须建：company_profiles 是 insight_subjects 的外键父表，没有画像的公司
+    **整家被挡在洞察库外**。live 实测 1,985 家有在招岗的公司里只有 976 家有画像，
+    而恰恰是缺画像的那批（国聘上的央企子公司）才写明了薪资——洞察库里
+    salary_range_k 一条都出不来，根因就是这个，不是解析器不行。
+
+    ⚠️ 新画像一律带 insight_checked_at=now()：富化队列按 `insight_checked_at nulls first`
+    取活，留空会让这 1,000 家长尾**插到用户真正关心的公司前面**去花 LLM/搜索预算。
+    覆盖率要补，富化优先级不能动。
+    """
+    now = _now_iso()
+    return [
+        {"company": name, "insight_checked_at": now}
+        for name in sorted(unmatched)
+        if int(counts.get(name, 0)) >= int(min_jobs)
+    ]
+
+
+def create_profiles(supabase, rows: list[dict], batch: int = 200) -> int:
+    """按批插画像。company 上有唯一约束，并发/重跑时靠 ignore_duplicates 幂等。"""
+    created = 0
+    for start in range(0, len(rows), batch):
+        chunk = rows[start:start + batch]
+        supabase.table("company_profiles").upsert(
+            chunk, on_conflict="company", ignore_duplicates=True
+        ).execute()
+        created += len(chunk)
+    return created
+
+
 def fetch_active_jobs(company: str = "") -> list[dict]:
     conn = jobs_db.get_conn()
     try:
@@ -369,7 +454,15 @@ def main():
     parser.add_argument("--company", default="", help="只处理 jobs.company 精确等于该值的一家公司")
     parser.add_argument("--min-jobs", type=int, default=None, help="业务线入库的最小 active 岗位数")
     parser.add_argument("--limit", type=int, default=0, help="最多处理多少个已匹配画像的公司（0=全部）")
+    parser.add_argument("--create-profiles", action="store_true",
+                        help="给「有足够在招岗却没有画像」的公司补建 company_profiles")
+    parser.add_argument("--profile-min-jobs", type=int, default=None,
+                        help="补建画像的最小在招岗数（默认 10，与公司级统计门槛一致）")
     args = parser.parse_args()
+    create_profiles_enabled = args.create_profiles or os.environ.get(
+        "BU_CREATE_PROFILES", "").lower() in ("1", "true", "yes")
+    profile_min_jobs = args.profile_min_jobs if args.profile_min_jobs is not None else int(
+        os.environ.get("BU_PROFILE_MIN_JOBS", "10"))
     min_jobs = args.min_jobs if args.min_jobs is not None else int(os.environ.get("BU_MIN_JOBS", DEFAULT_MIN_JOBS))
     if min_jobs < 1:
         parser.error("--min-jobs 必须 >= 1")
@@ -380,6 +473,18 @@ def main():
     profile_index = build_profile_index(profiles)
     job_rows = fetch_active_jobs(args.company)
     company_data, unmatched = collect_company_data(job_rows, profile_index, min_jobs)
+
+    # 先给「有足够在招岗却没有画像」的公司补画像，再用新画像重算一次归属，
+    # 否则这些公司这一轮仍然进不了洞察库（下一轮才生效，白等一天）。
+    if create_profiles_enabled and not args.dry_run and unmatched:
+        new_profiles = plan_new_profiles(set(unmatched), profile_min_jobs, unmatched)
+        if new_profiles:
+            created = create_profiles(supabase, new_profiles)
+            print(f"补建 {created} 家公司画像（在招岗 >= {profile_min_jobs} 且此前无画像）。")
+            profiles = db.fetch_all_rows(
+                lambda: supabase.table("company_profiles").select("id,company,aliases"))
+            profile_index = build_profile_index(profiles)
+            company_data, unmatched = collect_company_data(job_rows, profile_index, min_jobs)
     if args.limit:
         selected = sorted(company_data, key=lambda key: company_data[key]["company"])[:args.limit]
         company_data = {key: company_data[key] for key in selected}
@@ -387,7 +492,8 @@ def main():
     for item in sorted(company_data.values(), key=lambda row: row["company"]):
         _print_company(item)
     if unmatched:
-        print(f"跳过 {len(unmatched)} 家未匹配 company_profiles 的公司（不新建画像）。")
+        print(f"跳过 {len(unmatched)} 家未匹配 company_profiles 的公司"
+              f"（在招岗 < {profile_min_jobs}，不值得单独建画像）。")
     if args.dry_run:
         print("dry-run：未写 insight_subjects 或 ops_runs。")
         return

@@ -624,10 +624,10 @@ test("buildDailyReports merges technical runs into eight human-facing operation 
   assert.deepEqual(reports.map((report) => report.title), [
     "岗位抓取",
     "详情补全",
-    "死岗治理",
+    "下架岗位清理",
     "职业洞察",
-    "自动扩源",
-    "缺口漏斗",
+    "自动新增公司",
+    "补公司流水线",
     "校招供给",
     "刷新 / 发现",
   ]);
@@ -638,11 +638,11 @@ test("buildDailyReports merges technical runs into eight human-facing operation 
   assert.equal(reports.find((report) => report.key === "auto_discover").verdict, "healthy");
   assert.deepEqual(
     reports.find((report) => report.key === "dead_jobs").metrics.map((metric) => [metric.label, metric.value]),
-    [["核查", 120], ["判死", 11], ["清除", 7]],
+    [["查过", 120], ["确认已下架", 11], ["清理掉", 7]],
   );
   assert.deepEqual(
     reports.find((report) => report.key === "insights").metrics.map((metric) => [metric.label, metric.value]),
-    [["新增洞察", 6], ["富化公司", 8], ["过期下架", 5]],
+    [["新增洞察", 6], ["补齐资料的公司", 8], ["过期下架", 5]],
   );
   assert.equal(reports.find((report) => report.key === "enrichment").verdict, "healthy");
 
@@ -658,7 +658,7 @@ test("buildDailyReports merges technical runs into eight human-facing operation 
   assert.equal(campus.verdict, "healthy");
   assert.deepEqual(
     campus.metrics.map((metric) => [metric.label, metric.value]),
-    [["开闸公司", 1], ["校招岗位库存", 900], ["新增校招洞察", 4]],
+    [["开始放岗的公司", 1], ["校招岗位总数", 900], ["新增校招洞察", 4]],
   );
 });
 
@@ -859,21 +859,21 @@ test("admin health page authenticates before parallel cross-database reads and r
   assert.match(source, /运营健康/);
   assert.match(source, /管理员看板/);
   assert.match(source, /两周冲刺 · 用户闭环/);
-  assert.match(source, /数据口径说明/);
+  assert.match(source, /这些数字怎么来的/);
   assert.match(source, /总览/);
   assert.match(source, /岗位库/);
   assert.match(source, /必投供给/);
   assert.match(source, /清单版本/);
-  assert.match(source, /本轮真实扩源/);
-  assert.match(source, /口径变动/);
-  assert.match(source, /经父公司门户覆盖/);
+  assert.match(source, /这一轮真的新接入/);
+  assert.match(source, /统计规则变动/);
+  assert.match(source, /通过母公司的招聘页覆盖到/);
   assert.match(source, /must_apply_gap_attempts/);
   assert.match(source, /系统运行/);
-  assert.match(source, /展示岗位自动探活（非用户点击统计）/);
-  assert.match(source, /抓全率/);
+  assert.match(source, /岗位还在不在（系统自动查，不是用户点击统计）/);
+  assert.match(source, /抓全比例|抓得全不全|抓到几成/);
   assert.match(source, /官网总数/);
   assert.match(source, /我们抓到/);
-  assert.match(source, /盲区/);
+  assert.match(source, /算不出的公司/);
   assert.match(source, /buildDailyReports/);
   assert.match(source, /待处理申诉/);
   assert.match(source, /href="\/admin\/insights"/);
@@ -881,6 +881,24 @@ test("admin health page authenticates before parallel cross-database reads and r
   assert.match(source, /showHealthSummary=\{false\}/);
   assert.match(source, /积累中/);
   assert.doesNotMatch(source, /function BusinessSection/);
+  // 语言口径（2026-09-03 创始人定调：看板读者是产品经理，不是工程师）。
+  // ⚠️ 只能扫「会显示出来的字」：代码注释、变量名、数据库列名里出现 ops_runs / adapter
+  //    完全正常，扫整个文件会把它们误判成页面文案（本断言第一版就是这么误报的）。
+  const visibleText = source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "")
+    .split("\n")
+    .flatMap((line) => [
+      ...(line.match(/(?:title|label|detail|description|footnote|placeholder|ariaLabel)=[{"]?"([^"]*)"/g) || []),
+      ...(line.match(/>[^<>{}]*[\u4e00-\u9fff][^<>{}]*</g) || []),
+    ])
+    .join("\n");
+  for (const jargon of ["ops_runs", "manual_review", "adapter", "SPA", "日序列", "台账", "探活"]) {
+    assert.ok(
+      !visibleText.includes(jargon),
+      `看板上用户能看见的文案不该出现技术黑话「${jargon}」`,
+    );
+  }
   const healthLib = fs.readFileSync(path.join(__dirname, "..", "lib", "admin-health.ts"), "utf8");
   assert.doesNotMatch(healthLib, /function evaluateTodayHealth/);
   assert.doesNotMatch(source, /expired 占全库|removed 占全库|active 从未探活|>Source<|>Adapter<|>Partial</);

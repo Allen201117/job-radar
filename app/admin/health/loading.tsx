@@ -1,4 +1,4 @@
-import Navbar from "@/components/Navbar";
+import AdminNav from "@/components/AdminNav";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import { MetricTilesSkeleton, PanelSkeleton } from "@/components/Skeletons";
 import { ShieldCheck } from "@phosphor-icons/react/ssr";
@@ -6,7 +6,7 @@ import { ShieldCheck } from "@phosphor-icons/react/ssr";
 export default function Loading() {
   return (
     <div className="min-h-screen bg-editorial">
-      <Navbar />
+      <AdminNav />
       <ProductPage maxWidth="max-w-6xl">
         <ProductHero
           eyebrow="运营健康"

@@ -9,6 +9,14 @@ import {
 } from "@/lib/source-adapters";
 import type { Source } from "@/lib/types";
 
+// 抓取方式的取值是给程序用的（http / playwright / manual），下拉里要给人话。
+// 只改显示、不改值——值是 lib/source-adapters.CRAWL_METHODS 的契约，与 crawler 端对齐。
+const CRAWL_METHOD_LABEL: Record<string, string> = {
+  http: "直接请求（快，多数公司用这个）",
+  playwright: "开浏览器渲染（慢，网页要跑脚本才出岗位时用）",
+  manual: "人工维护（不自动抓）",
+};
+
 interface Props {
   onAdded: (source: Source) => void;
 }
@@ -116,13 +124,13 @@ export default function AddSourceForm({ onAdded }: Props) {
           />
         </Field>
 
-        <Field label="adapter" error={fieldErrors.adapter_name}>
+        <Field label="这家公司用哪套招聘系统" error={fieldErrors.adapter_name}>
           <select
             value={form.adapter_name}
             onChange={(e) => set("adapter_name", e.target.value)}
             className={inputCls}
           >
-            <option value="">请选择 adapter…</option>
+            <option value="">选一个…</option>
             {SOURCE_ADAPTERS.map((a) => (
               <option key={a.value} value={a.value}>
                 {a.label}
@@ -140,7 +148,7 @@ export default function AddSourceForm({ onAdded }: Props) {
           />
         </Field>
 
-        <Field label="抓取方式" error={fieldErrors.crawl_method}>
+        <Field label="用什么方式抓" error={fieldErrors.crawl_method}>
           <select
             value={form.crawl_method}
             onChange={(e) => set("crawl_method", e.target.value)}
@@ -148,7 +156,7 @@ export default function AddSourceForm({ onAdded }: Props) {
           >
             {CRAWL_METHODS.map((m) => (
               <option key={m} value={m}>
-                {m}
+                {CRAWL_METHOD_LABEL[m] || m}
               </option>
             ))}
           </select>
@@ -162,7 +170,7 @@ export default function AddSourceForm({ onAdded }: Props) {
               onChange={(e) => set("enabled", e.target.checked)}
               className="size-4 accent-[#1a1714]"
             />
-            创建后立即启用（次日抓取生效）
+            创建后立即启用（明天的定时抓取就会带上它）
           </label>
         </Field>
 
@@ -170,7 +178,7 @@ export default function AddSourceForm({ onAdded }: Props) {
           <input
             value={form.notes}
             onChange={(e) => set("notes", e.target.value)}
-            placeholder="给自己看的说明，如「2026Q2 新增外企 ATS」"
+            placeholder="给自己看的说明，如「2026Q2 新增的外企」"
             className={inputCls}
           />
         </Field>

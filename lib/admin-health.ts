@@ -672,9 +672,9 @@ export function verdictTone(verdict: ModuleVerdict): BandTone {
 
 export function verdictLabel(verdict: ModuleVerdict): string {
   if (verdict === "healthy") return "正常";
-  if (verdict === "attention") return "有失败";
-  if (verdict === "broken") return "出问题";
-  return "今天没记录";
+  if (verdict === "attention") return "有失败，但仍有产出";
+  if (verdict === "broken") return "没跑通或一条都没产出";
+  return "今天还没有运行记录";
 }
 
 // 「跑没跑」与「产出多少」是两件事，各自上色，不合并成一个词。
@@ -886,7 +886,7 @@ export function buildDailyReports(input: DailyReportInput): DailyReport[] {
     buildReport({
       key: "crawl",
       title: "岗位抓取",
-      description: "每天去各企业官网抓新发布的岗位",
+      description: "每天去各家企业官网，把新发布的岗位抓回来",
       runs: crawlRuns,
       failed: crawlFailed,
       produced: input.crawl ? toNumber(input.crawl.jobs_created) : null,
@@ -898,13 +898,13 @@ export function buildDailyReports(input: DailyReportInput): DailyReport[] {
         { label: "运行次数", value: input.crawl ? crawlRuns : null },
         { label: "抓到岗位", value: input.crawl ? toNumber(input.crawl.jobs_found) : null },
         { label: "新增岗位", value: input.crawl ? toNumber(input.crawl.jobs_created) : null },
-        { label: "失败来源", value: input.crawl ? toNumber(input.crawl.failed_sources) : null },
+        { label: "抓失败的公司数", value: input.crawl ? toNumber(input.crawl.failed_sources) : null },
       ],
     }),
     buildReport({
       key: "enrichment",
       title: "详情补全",
-      description: "给只有标题的空壳岗补上职位描述正文",
+      description: "给只有标题、没有职位描述的「空壳岗」补上正文",
       runs: enrichment.runs,
       failed: enrichment.failed,
       produced: enrichment.available ? enrichment.enriched : null,
@@ -919,19 +919,19 @@ export function buildDailyReports(input: DailyReportInput): DailyReport[] {
     }),
     buildReport({
       key: "dead_jobs",
-      title: "死岗治理",
-      description: "核查岗位还在不在招，撤掉的清理回收",
+      title: "下架岗位清理",
+      description: "逐个去看岗位还在不在招，已经撤下的清理掉、把空间还回来",
       runs: liveness.runs + purge.runs,
       failed: liveness.failed + purge.failed,
       produced: liveness.available ? liveness.checked : null,
       producedLabel: "今日核查岗位",
-      producedCaption: "今天逐岗探活核查过的岗位数",
+      producedCaption: "今天逐个查过「还在不在」的岗位数",
       expectsOutput: true,
       lastRunAt: latestTimestamp([liveness.lastRunAt, purge.lastRunAt]),
       metrics: [
-        { label: "核查", value: liveness.available ? liveness.checked : null },
-        { label: "判死", value: liveness.available ? liveness.expired : null },
-        { label: "清除", value: purge.available ? purge.deleted : null },
+        { label: "查过", value: liveness.available ? liveness.checked : null },
+        { label: "确认已下架", value: liveness.available ? liveness.expired : null },
+        { label: "清理掉", value: purge.available ? purge.deleted : null },
       ],
     }),
     buildReport({
@@ -947,14 +947,14 @@ export function buildDailyReports(input: DailyReportInput): DailyReport[] {
       lastRunAt: latestTimestamp([insights.lastRunAt, staleness.lastRunAt]),
       metrics: [
         { label: "新增洞察", value: toNumber(input.insight?.today_created) },
-        { label: "富化公司", value: insights.available ? insights.companiesEnriched : null },
+        { label: "补齐资料的公司", value: insights.available ? insights.companiesEnriched : null },
         { label: "过期下架", value: staleness.available ? staleness.retired : null },
       ],
     }),
     buildReport({
       key: "auto_discover",
-      title: "自动扩源",
-      description: "每天自动探查目标公司（含 AI 每日新生成的候选），验证通过、真有在招岗才加成新招聘源",
+      title: "自动新增公司",
+      description: "每天自动去试目标公司的官方招聘页（候选名单里有一部分是 AI 每天新生成的）。试通了、而且确认真有岗在招，才会正式接入",
       runs: autoDiscover.runs,
       failed: autoDiscover.failed,
       produced: autoDiscover.available ? autoDiscover.companiesEnriched : null,
@@ -969,8 +969,8 @@ export function buildDailyReports(input: DailyReportInput): DailyReport[] {
     }),
     buildReport({
       key: "gap_funnel",
-      title: "缺口漏斗",
-      description: "给必投清单里还没接入的公司找官方招聘入口，真抓到岗才加成源",
+      title: "补公司流水线",
+      description: "给必投清单里还没接上的公司找官方招聘入口，真抓到岗位才正式接入",
       runs: gapFunnel.runs,
       failed: gapFunnel.failed,
       produced: gapFunnel.available ? toNumber(gapFunnel.metrics.sources_added) : null,
@@ -992,19 +992,19 @@ export function buildDailyReports(input: DailyReportInput): DailyReport[] {
     buildReport({
       key: "campus_supply",
       title: "校招供给",
-      description: "每小时盯必投公司的校招板块，放量就立刻加急重抓；台账暂无「今日入库校招岗」口径，产出先看有多少个源的校招岗位数变了",
+      description: "每小时盯着必投公司的校招板块，一开始放岗就立刻加急重抓。目前还统计不到「今天新收了几个校招岗」，所以先看有多少家公司的校招岗位数变了",
       runs: campus.runs,
       failed: campus.failed,
       // 台账没有「今日入库校招岗」这个口径，不硬编造：用真实存在的 snapshots
-      // （今天校招岗位数发生变化的源数），caption 如实说明它是什么。
+      // （今天校招岗位数发生变化的公司数），caption 如实说明它是什么。
       produced: campus.available ? toNumber(campus.metrics.snapshots) : null,
-      producedLabel: "今日有变动的校招源",
-      producedCaption: "今天校招岗位数发生变化的源数",
+      producedLabel: "今天校招岗有变化的公司",
+      producedCaption: "今天校招岗位数发生变化的公司数",
       expectsOutput: true,
       lastRunAt: campus.lastRunAt,
       metrics: [
-        { label: "开闸公司", value: campus.available ? toNumber(campus.metrics.surged) : null },
-        { label: "校招岗位库存", value: campus.available ? toNumber(campus.metrics.campus_jobs_total) : null },
+        { label: "开始放岗的公司", value: campus.available ? toNumber(campus.metrics.surged) : null },
+        { label: "校招岗位总数", value: campus.available ? toNumber(campus.metrics.campus_jobs_total) : null },
         { label: "新增校招洞察", value: campus.available ? toNumber(campus.metrics.verified) : null },
       ],
     }),
@@ -1138,20 +1138,20 @@ export function evaluateCombinedHealth(input: {
     actions.push(`${label}：必投公司零健康岗`);
   }
   if (healthyCompanies === null) {
-    actions.push("必投清单健康覆盖暂不可用，请先确认香港 jobs 库查询。");
+    actions.push("必投清单覆盖率读不出来，岗位库这次没查通，先看这里。");
   }
   if (clickValidity === "bad" || clickValidity === "warn") {
     actions.push(`点击有效率 ${formatRateForAction(clickRate)}（目标≥99%）`);
   }
   if (validActive === null) {
-    actions.push("岗位库统计暂不可用，先确认香港 jobs 库连接。");
+    actions.push("岗位库统计读不出来，先确认岗位库连得上。");
   } else if (validActive <= 0) {
     actions.push("当前没有能投岗位，请立即检查岗位库。");
   }
   if (allCrawlsFailed) {
     actions.push("今天岗位抓取全部失败，请检查抓取任务。");
   } else if (crawlRuns <= 0) {
-    actions.push("今天还没有岗位抓取记录，请确认定时任务是否已到运行时间。");
+    actions.push("今天还没有抓取记录，可能是每天的定时抓取还没到点。");
   }
   if (!worstIndustry && mustApply === "warn" && zeroCount === 0 && healthyCompanies !== null) {
     actions.push(`必投清单健康覆盖 ${healthyCompanies}/${mustApplyTotal}（目标≥28/30）`);
