@@ -222,10 +222,13 @@ def find_official_entry(company, supabase, *, router=None, prev_row=None,
     for index in range(limit):
         provider = plan[index]
         query = queries[index]
+        # 成本闸不是安全闸：额度表读不到（Supabase 抖一下）一律 fail-open 放行，
+        # 与 llm_budget 同口径；否则一次抖动就让整条漏斗空转一天。
         try:
             remaining = int(router.remaining_above_reserve(supabase))
-        except Exception:
-            remaining = 0
+        except Exception as exc:  # noqa: BLE001
+            print(f"[entry_finder] 读搜索额度失败，按放行处理：{type(exc).__name__}: {exc}")
+            remaining = 1
         if remaining <= 0:
             return {
                 "found": False,

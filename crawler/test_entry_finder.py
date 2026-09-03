@@ -192,6 +192,22 @@ class CascadeSearchTest(unittest.TestCase):
         self.assertIn("额度不足", result["fail_reason"])
         self.assertEqual(provider.calls, [])
 
+    def test_reserve_lookup_failure_fails_open_and_still_searches(self):
+        # 成本闸不是安全闸：额度表读不到要放行（与 llm_budget 同口径），不能让漏斗空转一天。
+        provider = _Provider(
+            "qianfan",
+            [[{"url": "https://acme.mokahr.com/social-recruitment/acme/1"}]],
+        )
+        router = _Router([provider])
+
+        def _boom(_sb):
+            raise RuntimeError("supabase down")
+
+        router.remaining_above_reserve = _boom
+        result = ef.find_official_entry("Acme", object(), router=router)
+        self.assertNotEqual(result.get("fail_reason"), "搜索额度不足（已为校招链预留）")
+        self.assertEqual(len(provider.calls), 1)
+
     def test_successful_search_consumes_provider_usage_by_default(self):
         provider = _Provider(
             "qianfan",
