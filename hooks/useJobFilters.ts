@@ -61,7 +61,8 @@ type UseJobFiltersArgs = {
   // 「只看新发现」开关
   onlyNew: boolean;
   // 从用户已保存偏好预填的筛选初值（城市/类型/关键词）；用户手动改即覆盖。
-  initialFilters?: { city?: string; jobType?: string; keyword?: string };
+  // company 由 URL 带入（洞察库跳过来时锁定这家公司），偏好里没有这一项。
+  initialFilters?: { city?: string; jobType?: string; keyword?: string; company?: string };
   // SSR 首页岗位（无初始筛选时做即时首屏）+ 活跃总数（无筛选浏览时的诚实计数）
   initialJobs: ScoredJob[];
   initialTotal: number;
@@ -81,10 +82,14 @@ export function useJobFilters({
     city: initialFilters?.city || "",
     jobType: initialFilters?.jobType || "",
     keyword: initialFilters?.keyword || "",
+    company: initialFilters?.company || "",
   });
 
   const hasInitialFilter = Boolean(
-    initialFilters?.city || initialFilters?.jobType || initialFilters?.keyword,
+    initialFilters?.city ||
+      initialFilters?.jobType ||
+      initialFilters?.keyword ||
+      initialFilters?.company,
   );
 
   // 无初始筛选 → 用 SSR 首页(取前一页)做即时首屏；有初始筛选 → 首搜返回前先空(免闪未筛选的错误内容)。

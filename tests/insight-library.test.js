@@ -222,3 +222,65 @@ test("查询串解析：未知取值丢弃，不静默筛出 0 条", () => {
   assert.equal(f.metricMin, 30);
   assert.deepEqual(f.has, ["a", "b"]);
 });
+
+test("索引不带正文：缓存条目超 2MB 会被 Vercel 静默丢弃，正文必须留到分页时现取", () => {
+  const index = L.buildLibraryIndex([subject()], [signalItem()], COMPANIES, NOW);
+  const metric = index[0].metrics[0];
+  // 元组顺序 = [metric_key, metric_value, sample_size, assertion]，改口径必须改这里
+  assert.deepEqual(metric, ["hiring_volume_30d", 47, 397, "signal"]);
+  assert.equal(L.metricKey(metric), "hiring_volume_30d");
+  assert.equal(L.metricValue(metric), 47);
+  assert.equal(L.metricSample(metric), 397);
+  assert.equal(L.metricAssertion(metric), "signal");
+  assert.equal(index[0].cards, undefined, "正文不该出现在缓存索引里");
+});
+
+test("索引体积：1500 个主体 × 7 条指标必须远小于 2MB 缓存上限", () => {
+  const subjects = [];
+  const items = [];
+  for (let i = 0; i < 1500; i++) {
+    subjects.push(subject({ id: `s-${i}`, name: `业务线${i}` }));
+    for (let k = 0; k < 7; k++) {
+      items.push(
+        signalItem({ id: `i-${i}-${k}`, subject_id: `s-${i}`, metric_key: `m_key_${k}` }),
+      );
+    }
+  }
+  const bytes = JSON.stringify(
+    L.buildLibraryIndex(subjects, items, COMPANIES, NOW),
+  ).length;
+  // 超过 2MB 会被 Vercel 数据缓存**静默丢弃** → 每请求重建索引（线上实测 ~10s）。
+  // 留 2 倍余量：洞察库还会长。
+  assert.ok(bytes < 1_000_000, `索引 ${Math.round(bytes / 1024)}KB，离 2MB 上限太近`);
+});
+
+
+test("subject_id 为 NULL = 公司级，必须挂到公司主体上（否则存量说法整批消失）", () => {
+  // 线上实测：存量 5,958 条 T2/T3 条目都是公司级写入的（subject_id 为 NULL）。
+  // 按 subject_id 硬筛会让洞察库的筛选器里只剩「数据」一档，一条说法都不出现。
+  const companySubject = subject({ id: "s-co", kind: "company", name: "字节跳动" });
+  const legacyClaim = signalItem({
+    id: "legacy-1",
+    subject_id: null,
+    origin: "public_web",
+    assertion: "claim",
+    grade: "experience",
+    content: "据公开讨论，年终奖普遍在 2-3 个月。",
+    metric_key: "bonus_months",
+    metric_value: 2.5,
+    sample_size: 6,
+    sources: [source("https://a.com/x"), source("https://b.com/y")],
+  });
+  const index = L.buildLibraryIndex([companySubject], [legacyClaim], COMPANIES, NOW);
+  assert.equal(index.length, 1);
+  assert.equal(index[0].assertion_counts.claim, 1);
+  assert.equal(index[0].item_count, 1);
+});
+
+test("公司级条目不会误挂到业务线主体上", () => {
+  const bu = subject({ id: "s-bu", kind: "business_unit", name: "飞书" });
+  const legacy = signalItem({ id: "legacy-2", subject_id: null });
+  // 没有 company 主体时，公司级条目无处可挂 —— 宁可不显示，也不能记到业务线头上
+  const index = L.buildLibraryIndex([bu], [legacy], COMPANIES, NOW);
+  assert.equal(index[0].item_count, 0);
+});

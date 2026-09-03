@@ -8,6 +8,8 @@ const {
   campusFacetKey,
   campusRowMatches,
   countMatchingFacets,
+  countUnlabeledInMatch,
+  selectionIsUnsatisfiable,
   selectFacetIndexes,
 } = loadTs(path.join(__dirname, "..", "lib", "campus-facets.ts"));
 
@@ -16,18 +18,19 @@ const {
 // **任意筛选组合下，分面累加出来的计数必须与逐条过滤的结果逐位相同**。
 // 一旦漂了，卡面会安静地报一个错数字——不报错、不崩，只是骗用户。
 
-/** 参照实现 = 改造前 campus-client 的 passesFilters（作用在 page.tsx 的 slimJob 产物上）。 */
+/** 参照实现：逐条过滤。语义 = 「排除已知不符的，放行未标注的」（2026-09-03 起，见 campus-facets.ts）。
+ *  ⚠️ 它必须与被测实现同语义，这条测试守的不是「语义对不对」，而是**分面聚合与逐条过滤是否等价**。 */
 function referencePasses(job, filters) {
   const slim = {
-    city: job.city ?? null,
-    education: job.education ?? null,
+    city: String(job.city ?? "").trim(),
+    education: String(job.education ?? "").trim(),
     fn: campusFacetKey(job).fn,
-    gc: job.grad_class ?? null,
+    gc: typeof job.grad_class === "number" ? job.grad_class : null,
   };
-  if (filters.city && String(slim.city || "").trim() !== filters.city) return false;
-  if (filters.education && String(slim.education || "").trim() !== filters.education) return false;
+  if (filters.city && slim.city && slim.city !== filters.city) return false;
+  if (filters.education && slim.education && slim.education !== filters.education) return false;
   if (filters.jobFunction && slim.fn !== filters.jobFunction) return false;
-  if (filters.gradClass !== null && slim.gc !== filters.gradClass) return false;
+  if (filters.gradClass !== null && slim.gc !== null && slim.gc !== filters.gradClass) return false;
   return true;
 }
 
@@ -125,33 +128,80 @@ test("分面确实把岗位压小了（否则这次改造没有意义）", () =>
   assert.equal(facets.reduce((n, f) => n + f[4], 0), jobs.length);
 });
 
-test("筛选值不在当前模式的选项表里 → 计数为 0，不是「匹配全部」", () => {
+test("筛选值不在当前模式的选项表里 → 计数为 0，不是「匹配全部」也不是「只剩未标注的」", () => {
   // 校招桶与实习桶的选项表不同；用户切模式后旧筛选值可能失效，绝不能因此退化成不筛。
+  // ⚠️ 改成「未标注放行」后这里多了一个陷阱：若不先短路失效筛选，无城市的岗会在筛「火星」时
+  // 被放行 → 失效筛选静静变成「只看没写城市的岗」。
   const jobs = makeJobs(120);
   const { options, byPattern } = buildCampusFacets([{ pattern: "%x%", jobs }]);
-  const sel = selectFacetIndexes(
-    { city: "火星", education: "", jobFunction: "", gradClass: null },
-    options,
-  );
-  assert.equal(countMatchingFacets(byPattern.get("%x%"), sel), 0);
+  const facets = byPattern.get("%x%");
+  const filters = { city: "火星", education: "", jobFunction: "", gradClass: null };
+  const sel = selectFacetIndexes(filters, options);
+  assert.equal(selectionIsUnsatisfiable(sel), true);
+  assert.equal(countMatchingFacets(facets, sel), 0);
+  assert.ok(jobs.some((j) => !String(j.city ?? "").trim()), "样本里必须有无城市的岗，否则这条测试没在测东西");
+
+  // 展开区必须同口径：卡面 0，展开也必须 0
+  const rows = jobs.map((j) => ({ ...j, fn: campusFacetKey(j).fn }));
+  const expanded = selectionIsUnsatisfiable(sel) ? [] : rows.filter((r) => campusRowMatches(r, filters));
+  assert.equal(expanded.length, 0);
 });
 
-test("空维度（无城市/无学历）只被「全部」匹配到，与逐条实现同义", () => {
+test("未标注的维度放行：字段缺失 ≠ 不符合（2026-09-03 用户实锤后改的语义）", () => {
+  // 旧语义把「没写城市/学历/届别」的岗在对应筛选下全部藏起来。live 实测这不是边角：
+  // 校招+实习 70,568 个在招岗里届别未知 78.7%、学历空 38.6%、城市空 14.5%。
+  // lib/grad-class.js 早就写明「留白 ≠ 隐藏」，服务端也照做，唯独这个筛选器逆着来。
   const jobs = [
     { title: "2027届校园招聘-后端开发工程师", city: null, education: "本科", grad_class: 2027 },
     { title: "2027届校园招聘-后端开发工程师", city: "北京", education: null, grad_class: 2027 },
+    { title: "校园招聘-后端开发工程师", city: "北京", education: "本科", grad_class: null },
+    { title: "2027届校园招聘-后端开发工程师", city: "上海", education: "硕士", grad_class: 2027 },
   ];
   const { options, byPattern } = buildCampusFacets([{ pattern: "%x%", jobs }]);
   const facets = byPattern.get("%x%");
+  const sel = (f) => selectFacetIndexes({ city: "", education: "", jobFunction: "", gradClass: null, ...f }, options);
 
-  const all = selectFacetIndexes({ city: "", education: "", jobFunction: "", gradClass: null }, options);
-  assert.equal(countMatchingFacets(facets, all), 2);
+  assert.equal(countMatchingFacets(facets, sel({})), 4, "不筛 → 全部");
+  // 北京：命中 2 条北京 + 1 条无城市（放行），上海那条被排除
+  assert.equal(countMatchingFacets(facets, sel({ city: "北京" })), 3);
+  // 本科：命中 2 条本科 + 1 条无学历（放行），硕士那条被排除
+  assert.equal(countMatchingFacets(facets, sel({ education: "本科" })), 3);
+  // 2027 届：3 条标了 2027 + 1 条届别未知（放行）—— 旧语义这里只会返回 3
+  assert.equal(countMatchingFacets(facets, sel({ gradClass: 2027 })), 4);
 
-  const beijing = selectFacetIndexes({ city: "北京", education: "", jobFunction: "", gradClass: null }, options);
-  assert.equal(countMatchingFacets(facets, beijing), 1); // 无城市那条不该被算进来
+  assert.deepEqual(options.cityOptions, ["上海", "北京"]); // 空城市仍不进下拉
+  assert.deepEqual(options.educationOptions, ["ってい本科", "硕士"].filter((v) => v !== "ってい本科").concat([]).length ? ["本科", "硕士"] : ["本科", "硕士"]);
+});
 
-  assert.deepEqual(options.cityOptions, ["北京"]); // 空城市不进下拉
-  assert.deepEqual(options.educationOptions, ["本科"]);
+test("放行未标注不等于蒙混：countUnlabeledInMatch 报出其中有多少条是靠放行进来的", () => {
+  const jobs = [
+    { title: "2027届校园招聘-后端开发工程师", city: "北京", education: "本科", grad_class: 2027 },
+    { title: "校园招聘-后端开发工程师", city: "北京", education: "本科", grad_class: null },
+    { title: "校园招聘-后端开发工程师", city: "北京", education: "本科", grad_class: null },
+  ];
+  const { options, byPattern } = buildCampusFacets([{ pattern: "%x%", jobs }]);
+  const facets = byPattern.get("%x%");
+  const sel = (f) => selectFacetIndexes({ city: "", education: "", jobFunction: "", gradClass: null, ...f }, options);
+
+  assert.equal(countMatchingFacets(facets, sel({ gradClass: 2027 })), 3);
+  assert.equal(countUnlabeledInMatch(facets, sel({ gradClass: 2027 })), 2, "其中 2 条届别未标注");
+  // 没筛会产生未标注的维度时恒为 0
+  assert.equal(countUnlabeledInMatch(facets, sel({})), 0);
+  assert.equal(countUnlabeledInMatch(facets, sel({ jobFunction: "研发" })), 0, "职能不参与未标注放行");
+});
+
+test("职能仍是硬相等：「其他」是分类结果不是未知，不该被当成未标注放行", () => {
+  const jobs = [
+    { title: "2027届校园招聘-后端开发工程师", city: "北京", education: "本科", grad_class: 2027 },
+    { title: "2027届校园招聘-董事长助理", city: "北京", education: "本科", grad_class: 2027 },
+  ];
+  const { options, byPattern } = buildCampusFacets([{ pattern: "%x%", jobs }]);
+  const facets = byPattern.get("%x%");
+  // 两条岗的职能不同；任选其一都只该命中一条，绝不能因为「另一条判成其他」就一并放行
+  for (const fn of options.functionOptions) {
+    const sel = selectFacetIndexes({ city: "", education: "", jobFunction: fn, gradClass: null }, options);
+    assert.equal(countMatchingFacets(facets, sel), 1, `职能=${fn} 应只命中 1 条`);
+  }
 });
 
 test("展开区的整行匹配与分面计数同口径（否则卡面写 N 个、展开却是另一批）", () => {

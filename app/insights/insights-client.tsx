@@ -18,6 +18,7 @@ import {
   FRESHNESS_LABEL,
   METRIC_LABEL,
   missingContributionTopics,
+  type LibraryCardMetric,
   type LibraryFacets,
   type LibrarySubject,
 } from "@/lib/insight-library";
@@ -37,6 +38,8 @@ type Filters = {
   assertion: string;
   dimension: string;
   metric: string;
+  /** 选中指标的数值下限（如「近 30 天新挂出 ≥ 50」）。只有选了指标才有意义。 */
+  metricMin: string;
   freshness: string;
   sort: string;
 };
@@ -47,6 +50,7 @@ const EMPTY: Filters = {
   assertion: "",
   dimension: "",
   metric: "",
+  metricMin: "",
   freshness: "",
   sort: "fresh",
 };
@@ -67,6 +71,8 @@ function toQuery(filters: Filters, page: number): string {
   if (filters.assertion) params.set("assertion", filters.assertion);
   if (filters.dimension) params.set("dimension", filters.dimension);
   if (filters.metric) params.set("metric", filters.metric);
+  // 阈值只在选了指标时才有意义：没有指标就没有「大于多少」这回事。
+  if (filters.metric && filters.metricMin.trim()) params.set("metricMin", filters.metricMin.trim());
   if (filters.freshness) params.set("freshness", filters.freshness);
   if (filters.sort) params.set("sort", filters.sort);
   if (page > 1) params.set("page", String(page));
@@ -130,8 +136,9 @@ export default function InsightsClient({
 
   const active = useMemo(
     () =>
+      // metricMin 不单独成 chip：它显示在「指标」那颗 chip 里（「近 30 天新挂出 ≥ 50」）。
       (Object.keys(filters) as Array<keyof Filters>).filter(
-        (k) => k !== "sort" && filters[k],
+        (k) => k !== "sort" && k !== "metricMin" && filters[k],
       ),
     [filters],
   );
@@ -192,13 +199,26 @@ export default function InsightsClient({
           />
           <Select
             value={filters.metric}
-            onChange={(v) => set({ metric: v })}
+            onChange={(v) => set({ metric: v, metricMin: v ? filters.metricMin : "" })}
             placeholder="全部指标"
             options={facets.metric.map((b) => ({
               value: b.key,
               label: `${METRIC_LABEL[b.key] || b.key}（${b.count}）`,
             }))}
           />
+          {filters.metric && (
+            <label className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3 py-1.5 dark:border-white/[0.1] dark:bg-white/[0.06]">
+              <span className="t-label ink-3">≥</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                value={filters.metricMin}
+                onChange={(e) => set({ metricMin: e.target.value })}
+                placeholder="数值下限"
+                className="w-20 bg-transparent t-label ink-1 outline-none"
+              />
+            </label>
+          )}
           <Select
             value={filters.freshness}
             onChange={(v) => set({ freshness: v })}
@@ -226,7 +246,13 @@ export default function InsightsClient({
               <button
                 key={key}
                 type="button"
-                onClick={() => set({ [key]: "" } as Partial<Filters>)}
+                onClick={() =>
+                  set(
+                    (key === "metric"
+                      ? { metric: "", metricMin: "" }
+                      : { [key]: "" }) as Partial<Filters>,
+                  )
+                }
                 className="rounded-full border border-[#3f7cc0]/25 bg-[#e6eef8] px-2.5 py-1 t-micro text-[#2f6299] transition hover:bg-[#dbe7f6] dark:border-[#7fb2e8]/25 dark:bg-[#7fb2e8]/[0.14] dark:text-[#7fb2e8]"
               >
                 {labelFor(key, filters)} ✕
@@ -304,13 +330,24 @@ export default function InsightsClient({
   );
 }
 
+/** 卡面正文。正文取不到时退回结构化字段拼一句，绝不显示空白。 */
+function metricText(m: LibraryCardMetric): string {
+  if (m.content) return m.content;
+  const value = m.metric_value == null ? "" : `${m.metric_value}${m.metric_unit || ""}`;
+  const n = m.sample_size == null ? "" : `（基于 ${m.sample_size} 个在招岗）`;
+  return `${METRIC_LABEL[m.metric_key] || m.metric_key} ${value}${n}`.trim();
+}
+
 function labelFor(key: keyof Filters, filters: Filters): string {
   const value = filters[key];
   if (key === "q") return `搜索「${value}」`;
   if (key === "kind") return value === "company" ? "公司" : "业务线";
   if (key === "assertion") return ASSERTION_LABEL[value as InsightAssertion] || value;
   if (key === "dimension") return DIMENSION_LABEL[value as keyof typeof DIMENSION_LABEL] || value;
-  if (key === "metric") return METRIC_LABEL[value] || value;
+  if (key === "metric") {
+    const label = METRIC_LABEL[value] || value;
+    return filters.metricMin.trim() ? `${label} ≥ ${filters.metricMin.trim()}` : label;
+  }
   if (key === "freshness") return FRESHNESS_LABEL[value] || value;
   return value;
 }
@@ -405,9 +442,14 @@ function SubjectCard({
     }
   }
 
-  const jobsHref = `/jobs?q=${encodeURIComponent(
-    subject.kind === "business_unit" ? subject.name : subject.company,
-  )}`;
+  // 互链到岗位库：公司走 company 筛选（jobs.company 大小写不敏感子串），
+  // 业务线再叠一个关键词把范围收到这条线上。
+  // ⚠️ 诚实边界：岗位库没有「业务线」这个筛选维度（业务线是从标题抽出来的派生概念），
+  //    所以业务线卡跳过去的条数**不保证**等于卡面的 job_count；公司卡才是同一口径。
+  const jobsHref =
+    subject.kind === "business_unit"
+      ? `/jobs?company=${encodeURIComponent(subject.company)}&q=${encodeURIComponent(subject.name)}`
+      : `/jobs?company=${encodeURIComponent(subject.company)}`;
 
   return (
     <article className="rounded-2xl border border-black/[0.06] bg-white/60 p-5 dark:border-white/[0.1] dark:bg-white/[0.05]">
@@ -457,14 +499,14 @@ function SubjectCard({
         </div>
       </header>
 
-      {subject.metrics.length > 0 && (
+      {(subject.cards || []).length > 0 && (
         <ul className="mt-3.5 grid gap-2">
-          {subject.metrics.slice(0, 3).map((m) => (
+          {(subject.cards || []).map((m) => (
             <li key={m.metric_key} className="flex items-start gap-2">
               <span className="mt-[3px] shrink-0 rounded px-1.5 py-0.5 t-micro ink-3 ring-1 ring-inset ring-black/[0.06] dark:ring-white/[0.1]">
                 {METRIC_LABEL[m.metric_key] || m.metric_key}
               </span>
-              <span className="t-body-sm ink-2">{m.content}</span>
+              <span className="t-body-sm ink-2">{metricText(m)}</span>
             </li>
           ))}
         </ul>

@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/apiAuth";
 import {
+  attachCardContents,
   getInsightLibraryIndex,
   getSubjectItems,
 } from "@/lib/insight-library-store";
@@ -62,12 +63,17 @@ export async function GET(request: NextRequest) {
   const sorted = sortSubjects(matched, filters.sort);
   const start = (page - 1) * LIBRARY_PAGE_SIZE;
 
+  // 正文只为这一页现取（见 lib/insight-library-store.attachCardContents）。
+  const pageSubjects = await attachCardContents(
+    sorted.slice(start, start + LIBRARY_PAGE_SIZE).map(trimSubjectForCard),
+  );
+
   return NextResponse.json({
     ok: true,
     total: sorted.length,
     page,
     page_size: LIBRARY_PAGE_SIZE,
-    subjects: sorted.slice(start, start + LIBRARY_PAGE_SIZE).map(trimSubjectForCard),
+    subjects: pageSubjects,
     facets: computeFacets(index.subjects, filters),
     index_built_at: index.builtAt,
   });

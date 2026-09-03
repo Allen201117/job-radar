@@ -26,7 +26,9 @@ import { formatDateLabel } from "@/lib/relative-time";
 import {
   campusRowMatches,
   countMatchingFacets,
+  countUnlabeledInMatch,
   selectFacetIndexes,
+  selectionIsUnsatisfiable,
   type CampusFacet,
   type CampusFilterOptions,
 } from "@/lib/campus-facets";
@@ -96,6 +98,14 @@ const WINDOW_BADGE: Record<
 
 // ⚙️ 待接入卡不向用户暴露子原因（no_source / source_only_social）——只在 tooltip 里说一句通用文案。
 const NOT_INGESTED_TOOLTIP = "该公司校招源接入中";
+
+// 时间线依据 → 用户看到的措辞。三档强弱：官方公告 > 公开信息 > 往年规律。
+// 由 campusTimelineSummary 算出的 basis 决定，绝不硬编码（见 lib/recruitment-cycle.ts 的注释）。
+const TIMELINE_BASIS_LABEL: Record<"official" | "public" | "historical", string> = {
+  official: "今年·据官方公告",
+  public: "今年·据公开信息",
+  historical: "据往年",
+};
 
 function WindowBadge({ window }: { window: WindowState }) {
   const badge = WINDOW_BADGE[window.state];
@@ -224,6 +234,25 @@ export default function CampusClient({
     .filter((value) => value !== "" && value !== null).length;
   const hasActiveFilter = activeFilterCount > 0;
 
+  // 筛选结果里有多少条是**靠「未标注放行」才进来的**（岗位没写届别/学历/城市）。
+  // 放行是对的（库里届别未知占 78.7%，硬筛等于藏掉四分之三），但必须照实说一句，
+  // 否则用户会以为筛出来的每一条都确定符合条件 —— 那是另一种形式的骗人。
+  const unlabeledInMatch = useMemo(() => {
+    if (!hasActiveFilter) return 0;
+    let n = 0;
+    cards.forEach((_card, i) => {
+      n += countUnlabeledInMatch(facetsByMode[i], selected);
+    });
+    return n;
+  }, [cards, facetsByMode, selected, hasActiveFilter]);
+
+  // 被筛的维度里，哪些会产生「未标注」（职能不算——它总有值，「其他」是分类不是缺失）。
+  const unlabeledDims = [
+    filters.gradClass !== null ? "届别" : null,
+    filters.education ? "学历" : null,
+    filters.city ? "城市" : null,
+  ].filter(Boolean) as string[];
+
   // 展开某家公司时按需取回该公司当前桶的完整岗位行（页面一条岗位记录都没下发，见 CampusFacet）。
   // key = `pattern|mode`：校招与实习是两批岗，切模式必须重取（旧实现只按 pattern 存，
   // 且把两桶 id 拼起来截前 200 → 大厂实习桶会被校招桶挤没，展开区空白）。
@@ -269,6 +298,8 @@ export default function CampusClient({
   function expandedRows(pattern: string): any[] {
     const rows = fullJobs.get(`${pattern}|${mode}`);
     if (!rows) return [];
+    // 失效筛选值（切校招/实习后残留）下卡面计数是 0，展开也必须是 0，否则两处对不上。
+    if (selectionIsUnsatisfiable(selected)) return [];
     return rows.filter((r: any) => campusRowMatches(r, filters));
   }
 
@@ -428,6 +459,15 @@ export default function CampusClient({
             </div>
           )}
         </div>
+
+        {/* 诚实说明：岗位没写届别/学历/城市时按「未知」放行，不当作不符合。
+            库里届别未知占 78.7%、学历空 38.6%，硬筛会把它们全藏掉（用户看到的「岗位太少」
+            有一大半来自这里）；但放行之后必须说清楚，别让用户以为每条都确定符合。 */}
+        {unlabeledInMatch > 0 && unlabeledDims.length > 0 && (
+          <p className="t-caption ink-3">
+            结果含 {unlabeledInMatch} 个未标注{unlabeledDims.join(" / ")}的岗位 —— 招聘方没写明，已按「可能符合」保留，投递前请看岗位详情确认。
+          </p>
+        )}
       </div>
 
       {cards.length === 0 ? (
@@ -476,8 +516,10 @@ export default function CampusClient({
                   )}
                   {card.timeline && (
                     <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 ink-3">
+                      {/* ⚠️ 措辞由数据的 basis 决定，不写死。写死「据往年」时，卡面渲染出的是
+                          「据往年 2027届 · 正式批8-10月」——往年不可能有 2027 届，14 家全中（用户实锤）。 */}
                       <span className="inline-flex items-center gap-1 rounded-md border border-[#b7d2ee] bg-[#dceafa] px-1.5 py-0.5 font-medium text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
-                        据往年
+                        {TIMELINE_BASIS_LABEL[card.timeline.basis]}
                       </span>
                       <span>{card.timeline.gradClass}</span>
                       {card.timeline.batchBits.map((bit) => (

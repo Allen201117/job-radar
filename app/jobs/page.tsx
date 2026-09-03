@@ -95,7 +95,18 @@ async function fetchFirstPageAndTotal(
   return { jobs: (page.data as Job[]) || [], total, libraryTotal: total };
 }
 
-export default async function JobsPage() {
+export default async function JobsPage({
+  searchParams,
+}: {
+  // 洞察库 → 岗位库的互链带着 ?company=<公司名> 过来。此前 /jobs 完全不读 URL 参数，
+  // 于是那条链接点了等于什么都没发生（打开的还是按偏好预填的默认筛选）。
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = (await searchParams) || {};
+  const one = (key: string): string => {
+    const value = params[key];
+    return (Array.isArray(value) ? value[0] : value || "").trim();
+  };
   const supabase = await createServerSupabase();
   const user = await getRequestUser();
 
@@ -118,6 +129,8 @@ export default async function JobsPage() {
   const firstPage = await fetchFirstPageAndTotal(supabase, preferences);
 
   // 默认按用户已保存偏好预填筛选器（城市/类型/关键词）；用户手动改即覆盖。
+  const urlCompany = one("company");
+  const urlKeyword = one("q");
   const initialFilters = buildInitialFilters(preferences, candidate);
 
   const { jobs, total, libraryTotal } = firstPage;
@@ -148,7 +161,14 @@ export default async function JobsPage() {
           <JobsClient
             initialJobs={scored as ScoredJob[]}
             initialTotal={total}
-            initialFilters={initialFilters}
+            initialFilters={{
+              ...initialFilters,
+              // URL 明确指定时**覆盖**偏好预填：用户是带着「看这家公司」的意图点过来的，
+              // 再叠上偏好里的城市/关键词只会把结果筛没。
+              ...(urlCompany
+                ? { company: urlCompany, city: "", keyword: urlKeyword, jobType: "" }
+                : {}),
+            }}
             jobScope={preferences?.job_scope ?? "domestic"}
           />
         </div>

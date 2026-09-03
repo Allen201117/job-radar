@@ -6,7 +6,14 @@ import { unstable_cache } from "next/cache";
 import { createServiceClient } from "./supabaseService";
 import { fetchAllPages } from "./supabase-paginate";
 import { ITEM_COLUMNS, flattenSources } from "./insight-bundle";
-import { buildLibraryIndex, type LibrarySubject, type RawItemRow, type RawSubjectRow } from "./insight-library";
+import {
+  buildLibraryIndex,
+  metricKey,
+  type LibraryCardMetric,
+  type LibrarySubject,
+  type RawItemRow,
+  type RawSubjectRow,
+} from "./insight-library";
 import { evaluateInsight } from "./insight-verification";
 import type { InsightItemView } from "./types";
 
@@ -41,7 +48,7 @@ async function loadIndex(): Promise<LibraryIndex> {
       .from("insight_items")
       .select(`${ITEM_COLUMNS}, ${SOURCE_SELECT}`)
       .eq("status", "active")
-      .not("subject_id", "is", null)
+      // 不按 subject_id 过滤：NULL 是「公司级」，由 buildLibraryIndex 挂到公司主体上。
       .order("id", { ascending: true })
       .range(from, to),
   );
@@ -62,7 +69,18 @@ async function loadIndex(): Promise<LibraryIndex> {
     profileRows.map((row) => [row.id, { company: row.company, industry: row.industry ?? null }]),
   );
 
-  return { subjects: buildLibraryIndex(subjectRows, items, companies), builtAt: new Date().toISOString() };
+  const subjects = buildLibraryIndex(subjectRows, items, companies);
+  // ⚠️ 缓存条目一旦超过 Vercel 数据缓存的 2MB 上限就会**静默不缓存**，症状是每个请求
+  // 都在重建索引（线上实测 ~10s/次），且没有任何报错。这行日志是它唯一的哨兵。
+  const bytes = JSON.stringify(subjects).length;
+  if (bytes > 1_500_000) {
+    console.warn(
+      `[insight-library] 索引已 ${Math.round(bytes / 1024)}KB，逼近 2MB 缓存上限；` +
+        "再涨会静默失去缓存，需要进一步瘦身或分片。",
+    );
+  }
+  console.log(`[insight-library] 索引重建：${subjects.length} 个主体，${Math.round(bytes / 1024)}KB`);
+  return { subjects, builtAt: new Date().toISOString() };
 }
 
 /**
@@ -102,4 +120,72 @@ export async function getSubjectItems(subjectId: string): Promise<InsightItemVie
       (rank[a.assertion || "claim"] ?? 9) - (rank[b.assertion || "claim"] ?? 9) ||
       (b.sample_size || 0) - (a.sample_size || 0),
   );
+}
+
+/**
+ * 给「当前这一页」的主体卡补上指标正文。
+ *
+ * 正文不进缓存索引（见 LibraryMetric 注释），所以每页现取一次：最多 24 个主体 × 3 条，
+ * 按 item id 直接命中主键，比把 1,500 个主体的正文全塞进缓存便宜得多，
+ * 也让首屏体积不随洞察库规模增长。
+ */
+export async function attachCardContents(
+  subjects: LibrarySubject[],
+  perSubject = 3,
+): Promise<LibrarySubject[]> {
+  const ids = subjects.map((s) => s.id);
+  if (ids.length === 0) return subjects;
+
+  const supabase = createServiceClient();
+  // 公司主体的卡面条目可能是公司级写入的（subject_id 为 NULL），所以两路都要取。
+  const companyIds = subjects.filter((s) => s.kind === "company").map((s) => s.company_id);
+  const columns =
+    "subject_id, company_id, metric_key, metric_value, metric_unit, sample_size, assertion, content, scope";
+  const [bySubjectRes, byCompanyRes] = await Promise.all([
+    supabase.from("insight_items").select(columns)
+      .in("subject_id", ids).eq("status", "active").not("metric_key", "is", null),
+    companyIds.length
+      ? supabase.from("insight_items").select(columns)
+        .in("company_id", companyIds).is("subject_id", null)
+        .eq("status", "active").not("metric_key", "is", null)
+      : Promise.resolve({ data: [], error: null } as any),
+  ]);
+  const error = bySubjectRes.error || byCompanyRes.error;
+  const data = [...(bySubjectRes.data || []), ...(byCompanyRes.data || [])];
+  if (error) {
+    // 取不到正文不该让整页空掉：卡面退回只显示指标名与数值（见 metricText）。
+    console.error("[insight-library] 取卡面正文失败", error.message);
+    return subjects;
+  }
+  const subjectIdByCompany = new Map(
+    subjects.filter((s) => s.kind === "company").map((s) => [s.company_id, s.id]),
+  );
+  const bySubject = new Map<string, any[]>();
+  for (const row of data || []) {
+    const key = row.subject_id || subjectIdByCompany.get(row.company_id);
+    if (!key) continue;
+    const list = bySubject.get(key);
+    if (list) list.push(row);
+    else bySubject.set(key, [row]);
+  }
+  return subjects.map((subject) => {
+    // 卡面顺序必须与索引里 trimSubjectForCard 的口径一致：signal 在前，再按样本量。
+    const wantedKeys = subject.metrics.slice(0, perSubject).map(metricKey);
+    const rows = bySubject.get(subject.id) || [];
+    const cards: LibraryCardMetric[] = [];
+    for (const key of wantedKeys) {
+      const row = rows.find((r) => r.metric_key === key);
+      if (!row) continue;
+      cards.push({
+        metric_key: row.metric_key,
+        metric_value: row.metric_value ?? null,
+        metric_unit: row.metric_unit ?? null,
+        sample_size: row.sample_size ?? null,
+        assertion: (row.assertion || "claim") as LibraryCardMetric["assertion"],
+        content: row.content,
+        scope: row.scope || {},
+      });
+    }
+    return { ...subject, cards };
+  });
 }
