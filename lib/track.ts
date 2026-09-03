@@ -283,3 +283,160 @@ export function track(event: string, payload?: Record<string, unknown>): void {
     console.warn("[track] failed:", (e as Error).message);
   }
 }
+
+// ============================================================
+// 用户行为分析（2026-09-03 加）：只补三个断掉的埋点，不撒网。
+//   page_view        → 谁来了 / 看了哪几页 / 回访（留存的唯一可算依据）
+//   preferences_saved→ 激活漏斗断掉的那一环
+//   search_result    → 用户在找什么 + 「搜完 0 条」的比例
+// payload 一律先过 sanitizePayload 的禁用字段门（见 FORBIDDEN_EVENT_PAYLOAD_KEYS）。
+// ============================================================
+
+export const PAGE_VIEW_EVENT = "page_view";
+export const PREFERENCES_SAVED_EVENT = "preferences_saved";
+export const SEARCH_RESULT_EVENT = "search_result";
+
+// 看板按页面分组统计，路径必须是**有限枚举**：动态段（/jobs/<uuid>）会把分组炸成上千行，
+// 统计出来既看不懂也走不了索引。未知路径统一归 other，不丢弃（丢弃会让「访问总量」对不上）。
+const TRACKED_PATHS = [
+  "/",
+  "/today",
+  "/jobs",
+  "/campus",
+  "/path",
+  "/saved",
+  "/applied",
+  "/preferences",
+  "/me",
+  "/login",
+  "/sources",
+  "/admin/health",
+  "/admin/insights",
+] as const;
+
+export function normalizePagePath(input: unknown): string {
+  if (typeof input !== "string") return "other";
+  const path = input.split("?")[0].split("#")[0].replace(/\/+$/, "") || "/";
+  return (TRACKED_PATHS as readonly string[]).includes(path) ? path : "other";
+}
+
+// 搜索词只用于「用户在找什么」的词频统计：去空白、限长、小写化以便聚合同义大小写。
+export const SEARCH_KEYWORD_MAX = 40;
+
+export function normalizeSearchKeyword(input: unknown): string {
+  if (typeof input !== "string") return "";
+  return input.trim().slice(0, SEARCH_KEYWORD_MAX).toLowerCase();
+}
+
+// 多选筛选值（城市/职能/岗位方向）拆成数组并封顶，防止一条 payload 塞进上百个值。
+export function splitFilterValues(input: unknown, cap = 8): string[] {
+  if (typeof input !== "string" || !input.trim()) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of input.split(/[\s,，]+/)) {
+    const v = raw.trim().slice(0, 24);
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+type SearchFiltersInput = {
+  keyword?: string;
+  city?: string;
+  jobFunction?: string;
+  jobRole?: string;
+  jobType?: string;
+  company?: string;
+  education?: string;
+  experience?: string;
+  region?: string;
+  postedWithin?: string;
+  capitalOrigin?: string;
+  salaryOnly?: boolean;
+  sponsorshipOnly?: boolean;
+};
+
+// 判定「一次搜索用了几个筛选条件」：只数真正起筛选作用的字段（排序 / 显示开关不算）。
+const COUNTED_FILTER_KEYS: (keyof SearchFiltersInput)[] = [
+  "keyword",
+  "city",
+  "jobFunction",
+  "jobRole",
+  "jobType",
+  "company",
+  "education",
+  "experience",
+  "region",
+  "postedWithin",
+  "capitalOrigin",
+];
+
+export function buildSearchResultPayload(
+  filters: SearchFiltersInput | null | undefined,
+  result: { resultCount?: unknown; capped?: unknown; latencyMs?: unknown },
+): Record<string, unknown> {
+  const f = filters || {};
+  let filterCount = 0;
+  for (const key of COUNTED_FILTER_KEYS) {
+    const v = f[key];
+    if (typeof v === "string" && v.trim()) filterCount += 1;
+  }
+  if (f.salaryOnly) filterCount += 1;
+  if (f.sponsorshipOnly) filterCount += 1;
+
+  const rawCount = Number(result?.resultCount);
+  const resultCount = Number.isFinite(rawCount) ? Math.max(0, Math.floor(rawCount)) : 0;
+  const latency = Number(result?.latencyMs);
+
+  return {
+    result_count: resultCount,
+    // zero 单独存一份布尔：SQL 侧统计「0 结果率」不必对 jsonb 数字做类型转换。
+    zero_result: resultCount === 0,
+    keyword: normalizeSearchKeyword(f.keyword),
+    cities: splitFilterValues(f.city),
+    functions: splitFilterValues(f.jobFunction),
+    roles: splitFilterValues(f.jobRole),
+    stage: typeof f.jobType === "string" ? f.jobType.slice(0, 24) : "",
+    filter_count: filterCount,
+    capped: Boolean(result?.capped),
+    latency_bucket: Number.isFinite(latency) ? bucketLatency(latency) : "pending",
+  };
+}
+
+// 事件名 → 人话。管理员看板不该出现 opportunity_official_opened 这种给程序看的字符串。
+// 未登记的事件保留原名（新加埋点忘了登记时，宁可露出英文，也不能显示成「未知」把它藏掉）。
+const EVENT_LABELS: Record<string, string> = {
+  page_view: "打开了某个页面",
+  search: "点了重新搜索",
+  search_result: "搜索出结果",
+  preferences_saved: "保存了求职目标",
+  radar_open: "打开今日推荐",
+  radar_feed_opened: "今日推荐加载完成",
+  radar_onboarding_required: "被「请先设置求职目标」拦下",
+  opportunity_click: "点了推荐的机会",
+  opportunity_official_opened: "跳去了企业官网",
+  opportunity_feedback: "对推荐给了反馈",
+  opportunity_undo: "撤销了刚才的操作",
+  job_click: "点开了岗位",
+  job_action: "对岗位做了标记（收藏/投递/忽略）",
+  job_copy_link: "复制了岗位链接",
+  job_liveness_at_click: "点击时顺带查了岗位还在不在",
+  saved_compare_opened: "打开了岗位对比",
+  insight_drawer_open: "看了公司洞察",
+  company_watch_added: "关注了一家公司",
+  company_watch_removed: "取消关注公司",
+  campus_job_dispute: "反馈校招岗位有问题",
+  refresh_click: "点了刷新公司库",
+  resume_parse_started: "开始解析简历",
+  resume_parse_succeeded: "简历解析成功",
+  resume_parse_fallback_rule: "简历解析降级成规则版",
+  resume_profile_saved: "保存了简历画像",
+  resume_preferences_applied: "把简历同步进了求职目标",
+};
+
+export function eventLabel(event: string): string {
+  return EVENT_LABELS[event] || event;
+}

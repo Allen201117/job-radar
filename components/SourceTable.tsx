@@ -6,6 +6,13 @@ import { createBrowserClient } from "@/lib/supabaseClient";
 import { fetchAllSources } from "@/lib/supabase-paginate";
 import type { Source, CrawlRun } from "@/lib/types";
 
+// 抓取结果的英文状态别直接甩在页面上——管理员看板的读者是产品经理，不是工程师。
+const RUN_STATUS_LABEL: Record<string, string> = {
+  success: "抓到了",
+  partial_success: "只抓到一部分",
+  failed: "抓失败",
+};
+
 export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: number }) {
   const [sources, setSources] = useState<Source[]>([]);
   const [latestRuns, setLatestRuns] = useState<Record<string, CrawlRun>>({});
@@ -87,11 +94,11 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
         <thead>
           <tr className="border-b border-black/[0.06] text-left text-xs font-medium ink-3 dark:border-white/[0.1] ">
             <th className="py-2 pr-4">公司</th>
-            <th className="py-2 pr-4">URL</th>
+            <th className="py-2 pr-4">官方招聘页</th>
             <th className="py-2 pr-4">抓取方式</th>
             <th className="py-2 pr-4">启用</th>
-            <th className="py-2 pr-4">最近抓取</th>
-            <th className="py-2 pr-4">最近状态</th>
+            <th className="py-2 pr-4">上次抓取时间</th>
+            <th className="py-2 pr-4">上次结果</th>
             <th className="py-2">备注</th>
           </tr>
         </thead>
@@ -145,7 +152,7 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
                             : "bg-[#f3d9d2] text-[#9c4a3c] dark:bg-[#3a201a] dark:text-[#e6a99f]"
                       }`}
                     >
-                      {run.status}
+                      {(run.status && RUN_STATUS_LABEL[run.status]) || run.status || "—"}
                       {run.jobs_found > 0 && ` (${run.jobs_found})`}
                     </span>
                   ) : (
