@@ -334,6 +334,66 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class CoverageShortfallRuleTest(unittest.TestCase):
+    """规则 G：源「跑绿了但没抓全」。真实病例见 2026-09-04 的 crawl_runs 实测。"""
+
+    SOURCES = {
+        "s1": {"id": "s1", "adapter_name": "beisen", "company": "奇瑞汽车", "enabled": True},
+        "s2": {"id": "s2", "adapter_name": "smartrecruiters", "company": "Bosch 博世", "enabled": True},
+        "s3": {"id": "s3", "adapter_name": "beisen", "company": "已停用", "enabled": False},
+        "s4": {"id": "s4", "adapter_name": "feishu", "company": "蔚来", "enabled": True},
+    }
+
+    @staticmethod
+    def _row(sid, reported, found, complete=False, started="2026-08-27T00:00:00+00:00"):
+        return {"source_id": sid, "status": "success", "started_at": started,
+                "reported_total": reported, "jobs_found": found, "coverage_complete": complete}
+
+    def test_reports_aggregate_with_biggest_gap_first(self):
+        rows = [self._row("s1", 5643, 600), self._row("s4", 2055, 600)]
+        [finding] = W.evaluate_coverage_shortfall(rows, self.SOURCES)
+        self.assertEqual(finding["rule"], "G")
+        self.assertIn("2 个源", finding["summary"])
+        self.assertIn("6498", finding["summary"])        # 5043 + 1455
+        self.assertIn("奇瑞汽车", finding["evidence"][0])  # 缺口最大的排最前
+
+    def test_coverage_complete_true_is_not_a_shortfall(self):
+        """外企 ATS 的 reported_total 是**过滤前全球总数**，抓完才按 regions 做地区后置过滤。
+        把它们算进来 = 天天喊狼来了，这条规则就废了。"""
+        rows = [self._row("s2", 4828, 1705, complete=True)]
+        self.assertEqual(W.evaluate_coverage_shortfall(rows, self.SOURCES), [])
+
+    def test_unknown_coverage_is_not_a_shortfall(self):
+        """coverage_complete=None = 接口没给分母，诚实盲区，不是抓不全。"""
+        rows = [self._row("s1", 5643, 600, complete=None)]
+        self.assertEqual(W.evaluate_coverage_shortfall(rows, self.SOURCES), [])
+
+    def test_small_gaps_stay_quiet(self):
+        rows = [self._row("s1", 5000, 4950)]      # 比例够高
+        self.assertEqual(W.evaluate_coverage_shortfall(rows, self.SOURCES), [])
+        rows = [self._row("s1", 300, 100)]        # 比例低但绝对量小
+        self.assertEqual(W.evaluate_coverage_shortfall(rows, self.SOURCES), [])
+
+    def test_total_gap_below_floor_stays_quiet(self):
+        rows = [self._row("s1", 1000, 700)]       # 单源过线但全站才 300
+        self.assertEqual(W.evaluate_coverage_shortfall(rows, self.SOURCES), [])
+
+    def test_disabled_source_is_skipped(self):
+        rows = [self._row("s3", 28827, 600)]
+        self.assertEqual(W.evaluate_coverage_shortfall(rows, self.SOURCES), [])
+
+    def test_only_latest_run_per_source_counts(self):
+        """一个源一天跑 4 轮，早上没抓全、晚上抓全了 → 不该再报。"""
+        rows = [self._row("s1", 5643, 600, started="2026-08-27T01:00:00+00:00"),
+                self._row("s1", 5643, 5643, complete=True, started="2026-08-27T13:00:00+00:00")]
+        self.assertEqual(W.evaluate_coverage_shortfall(rows, self.SOURCES), [])
+
+    def test_issue_title_is_stable(self):
+        rows = [self._row("s1", 5643, 600), self._row("s4", 2055, 600)]
+        [finding] = W.evaluate_coverage_shortfall(rows, self.SOURCES)
+        self.assertEqual(W.issue_title(finding), "[watchdog] 源抓不全：抓取覆盖")
+
+
 class DeadSourceRuleTest(unittest.TestCase):
     SOURCES = {
         "s1": {"id": "s1", "adapter_name": "workday", "company": "奥的斯 Otis",

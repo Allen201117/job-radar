@@ -29,7 +29,7 @@ from urllib.parse import urlparse
 import httpx
 
 import normalizer
-from .base import PageResult, RawJob, paginate_all
+from .base import DEFAULT_LIST_CAP, PageResult, RawJob, paginate_all, resolve_list_cap
 from .playwright_base import PlaywrightAdapter
 
 
@@ -64,7 +64,10 @@ class WtAdapter(PlaywrightAdapter):
     # recruitType 平台常量：校招=1 / 社招=2 / 实习=12（与详情页 recruitType 同口径）。
     _RECRUIT_TYPES = (2, 1, 12)
     _PAGE_CAP = 200      # 每 recruitType 安全上限（10/页 → 2000 岗/类），靠 rowCount/短页自然收尾
-    _MAX_JOBS = 3000     # 单租户总安全预算（10/页 → 最坏约 300 次请求）
+    # 单租户总安全预算（10/页 → 最坏约 800 次请求；env CRAWL_MAX_JOBS 可整体调档）。
+    # 长城汽车自报 3420 岗，卡在旧的 3000 就差最后 803 个（2026-09-04 crawl_runs 实测），
+    # 这种「差一点点」的截断最不值得留。
+    _MAX_JOBS = DEFAULT_LIST_CAP
 
     def _bind_source(self, source_url: str) -> str:
         parsed = urlparse(source_url)
@@ -98,9 +101,10 @@ class WtAdapter(PlaywrightAdapter):
         type_complete: List[bool] = []
         seen_jobs = set()
         budget_exhausted = False
+        cap = resolve_list_cap(self._MAX_JOBS)
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             for rt in self._RECRUIT_TYPES:
-                remaining_jobs = self._MAX_JOBS - len(seen_jobs)
+                remaining_jobs = cap - len(seen_jobs)
                 if remaining_jobs <= 0:
                     budget_exhausted = True
                     break
@@ -139,7 +143,7 @@ class WtAdapter(PlaywrightAdapter):
                     post_id = _first(row, ("postId", "id"))
                     if post_id:
                         seen_jobs.add((rt, post_id))
-                if len(seen_jobs) >= self._MAX_JOBS:
+                if len(seen_jobs) >= cap:
                     budget_exhausted = True
                     break
                 if not complete and max_pages < self._PAGE_CAP:

@@ -85,6 +85,42 @@ class BeisenHttpxTest(unittest.TestCase):
             a._httpx_fetch("https://x.zhiye.com/social/jobs")
         self.assertFalse(a.fetch_complete)     # 撞上限 → absence 不会误判
 
+    def test_short_page_does_not_end_pagination_when_total_known(self):
+        """限流/抖动回一个短页，不许当末页收工。
+
+        2026-09-04 实测病例：中国交建自报 2565、深页明明有数据，却只抓到 800 就 complete=False，
+        病根就是旧判据「本页条数 < pageSize → 末页」。北森被打急了会回短页，一撞就整源截断。
+        """
+        a = self._a(page_size=2, max_jobs=100)
+        with _patch(HTML, [_page([1, 2], 5), _page([3], 5), _page([4, 5], 5)]):
+            out = json.loads(a._httpx_fetch("https://x.zhiye.com/social/jobs"))
+        self.assertEqual(len(out["_intercepted"][0]["Data"]), 5)   # 短页之后继续翻，收齐 5 条
+        self.assertTrue(a.fetch_complete)
+
+    def test_page_with_no_new_ids_stops_pagination(self):
+        """接口在原地打转（重复回同一批）→ 必须停，否则翻到 max_jobs 才罢休、白烧配额。"""
+        a = self._a(page_size=2, max_jobs=100)
+        with _patch(HTML, [_page([1, 2], 99), _page([1, 2], 99), _page([3], 99)]):
+            out = json.loads(a._httpx_fetch("https://x.zhiye.com/social/jobs"))
+        self.assertEqual(len(out["_intercepted"][0]["Data"]), 2)
+        self.assertFalse(a.fetch_complete)     # 没收齐 99 → 诚实标未抓全
+
+    def test_duplicate_rows_across_pages_are_deduped(self):
+        """重复行不能顶掉真实进度：不去重的话「收满 total 就停」会提前满足、尾巴永远抓不到。"""
+        a = self._a(page_size=2, max_jobs=100)
+        with _patch(HTML, [_page([1, 2], 4), _page([2, 3], 4), _page([4], 4)]):
+            out = json.loads(a._httpx_fetch("https://x.zhiye.com/social/jobs"))
+        ids = [r["Id"] for r in out["_intercepted"][0]["Data"]]
+        self.assertEqual(ids, ["1", "2", "3", "4"])
+        self.assertTrue(a.fetch_complete)
+
+    def test_short_page_still_ends_pagination_when_total_unknown(self):
+        """没有分母可判时，短页仍是唯一的自然末页信号，不能一路翻到上限。"""
+        a = self._a(page_size=2, max_jobs=100)
+        with _patch(HTML, [_page([1, 2], 0), _page([3], 0)]):
+            out = json.loads(a._httpx_fetch("https://x.zhiye.com/social/jobs"))
+        self.assertEqual(len(out["_intercepted"][0]["Data"]), 3)
+
     def test_endpoint_case_fallback(self):
         # 只有 /api/JobAd/（大写 A）返 Data → 适配器两试应命中它
         a = self._a()
