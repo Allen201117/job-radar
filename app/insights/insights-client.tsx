@@ -62,7 +62,9 @@ const SORT_LABEL: Record<string, string> = {
   jobs: "在招规模最大",
 };
 
-const ASSERTION_ORDER: InsightAssertion[] = ["fact", "signal", "claim"];
+// 洞察库现在只承载「官方事实」与「公开说法」两档；第一方数据层（signal）已从本页撤下
+// （2026-09-03 创始人定调：招聘结构不算信息差）。派生链仍在后台跑，趋势出来后再单独放回。
+const ASSERTION_ORDER: InsightAssertion[] = ["fact", "claim"];
 
 function toQuery(filters: Filters, page: number): string {
   const params = new URLSearchParams();
@@ -200,7 +202,7 @@ export default function InsightsClient({
           <Select
             value={filters.metric}
             onChange={(v) => set({ metric: v, metricMin: v ? filters.metricMin : "" })}
-            placeholder="全部指标"
+            placeholder="全部主题"
             options={facets.metric.map((b) => ({
               value: b.key,
               label: `${METRIC_LABEL[b.key] || b.key}（${b.count}）`,
