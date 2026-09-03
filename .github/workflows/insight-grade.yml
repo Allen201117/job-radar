@@ -1,0 +1,59 @@
+name: insight-grade
+
+# 把「加班强度 / 晋升节奏 / 实习体验」这三类档位说法判成 1–5 档，让它们可筛。
+# 为什么必须有这条 workflow（而不是手跑一次就算）：
+#   · T3 每天都在写新的说法，新写的没有档位就又不可筛了；
+#   · 手跑依赖本机网络，实测本机到 Supabase 会间歇性断（SSL EOF），跑到一半就废。
+# 排期：22:40 UTC，与 22:10 insight-subjects、22:40 gap-funnel 之后，避开 T3 富化本身。
+on:
+  schedule:
+    - cron: "50 22 * * *"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "本轮最多处理多少条（0=全部待判档的）"
+        required: false
+        default: "0"
+      metric:
+        description: "只处理某一个主题（overtime_level / promotion_pace / intern_experience）"
+        required: false
+        default: ""
+      dry_run:
+        description: "只判档不写库"
+        required: false
+        default: "false"
+
+concurrency:
+  group: insight-grade
+  cancel-in-progress: false
+
+jobs:
+  grade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+      # 与 T3 共用同一个 LLM 日顶（llm_budget），不会两条链各花一份。
+      LLM_DAILY_CAP: ${{ vars.LLM_DAILY_CAP || '250' }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+      - name: Grade opinion-style insights
+        working-directory: crawler
+        env:
+          INPUT_LIMIT: ${{ github.event.inputs.limit || '0' }}
+          INPUT_METRIC: ${{ github.event.inputs.metric }}
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          ARGS=()
+          if [ "$INPUT_LIMIT" != "0" ]; then ARGS+=(--limit "$INPUT_LIMIT"); fi
+          if [ -n "$INPUT_METRIC" ]; then ARGS+=(--metric "$INPUT_METRIC"); fi
+          if [ "$INPUT_DRY_RUN" = "true" ]; then ARGS+=(--dry-run); else ARGS+=(--apply); fi
+          python3 insight_grade_extract.py "${ARGS[@]}"

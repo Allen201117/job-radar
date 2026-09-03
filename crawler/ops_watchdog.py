@@ -66,6 +66,8 @@ MODULE_OUTPUT = {
     "bu_extract": (("kept",), ("companies_scanned",)),
     # 有主体可算却一条指标都没产出 = 洞察库页面会空着，属零产出。
     "bu_signals": (("items_written",), ("subjects_scanned",)),
+    # 有待判档的条目却一条都没判出来 = 档位筛选会一直空着，属零产出。
+    "insight_grade_extract": (("graded",), ("scanned",)),
     # run.py 每轮抓取收尾写的台账（2026-09-03）：有源可抓却一个岗都没拿到 = 零产出。
     "daily_crawl": (("jobs_found_total",), ("sources_total",)),
 }
