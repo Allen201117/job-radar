@@ -175,8 +175,21 @@ export type CrawlSourceMetric = {
   skipped: number;
 };
 
-export function normalizeCrawlSources(rows: CrawlSourceRow[] | null | undefined): CrawlSourceMetric[] {
-  return (rows || []).map((row) => {
+// 「分源状态」列表默认只渲染最需要关注的前 N 个。
+//
+// 为什么必须有上限：这块是**默认折叠**的，但服务端会把它整份序列化进首屏 RSC 数据发给浏览器——
+// 2026-09-03 线上实测，1000+ 个源让「岗位库」这一页膨胀到 2.6MB（其中 1.47MB 就是它），
+// 用户根本没点开、却先下载了。SQL 侧已经按 `failed desc, partial_success desc` 排序，
+// 所以前 N 个正是「最该看的那几个」，截断不损失产品意图。
+// ⚠️ 截断必须让人看得见（调用方要显示「共 M 个」），不能悄悄少几行还装作是全部。
+export const CRAWL_SOURCE_DISPLAY_LIMIT = 60;
+
+export function normalizeCrawlSources(
+  rows: CrawlSourceRow[] | null | undefined,
+  limit: number = CRAWL_SOURCE_DISPLAY_LIMIT,
+): CrawlSourceMetric[] {
+  const capped = Number.isFinite(limit) && limit > 0 ? (rows || []).slice(0, limit) : (rows || []);
+  return capped.map((row) => {
     const success = toNumber(row.success);
     const partial = toNumber(row.partial_success);
     const failed = toNumber(row.failed);

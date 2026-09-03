@@ -10,6 +10,7 @@ import { campusAdmission, compareCampusJobs } from "@/lib/campus-zone";
 import { isCurrentSeasonGradClass } from "@/lib/grad-class";
 import { classifyJobFunction } from "@/lib/china-keyword-expansion";
 import { mustApplyUnion, type MustApplyCompany } from "@/lib/must-apply-list";
+import { unstable_cache } from "next/cache";
 
 export { ilikeMatcher } from "@/lib/ilike-matcher";
 
@@ -231,9 +232,14 @@ const EMPTY_ROLLUP: ActiveAggregateCounts = { activeTotal: 0, healthy: 0, new7d:
 
 /**
  * 每家公司只聚合一次，避免必投清单每个 pattern 都扫一遍 active jobs。
- * 短 TTL 与 in-flight 合并只用于降低同一实例的瞬时重复读取，不作为跨请求数据缓存。
+ *
+ * ⚠️ 这是全站最贵的一条查询：对 39.6 万条 active 岗位做 group by company + 4 个条件计数，
+ * 香港库只有 2 vCPU，单跑 1.2~1.5s，**和另一条重查询撞一起会飙到 3.3s**（2026-09-03 实测）。
+ * 下面的 Map + in-flight 只在**同一个实例内**去重瞬时并发，跨请求的缓存交给外层 unstable_cache——
+ * 别把进程内 Map 当缓存用：serverless 每次请求可能落在不同实例，命中率约等于 0
+ * （线上实测同一个 tab 三次分别 2s / 6s / 6s，就是这么来的）。
  */
-export async function getCompanyActiveAggregates(): Promise<CompanyActiveAggregate[]> {
+async function fetchCompanyActiveAggregates(): Promise<CompanyActiveAggregate[]> {
   const now = Date.now();
   if (companyActiveAggregatesCache && companyActiveAggregatesCache.expiresAt > now) {
     return companyActiveAggregatesCache.value;
@@ -294,6 +300,35 @@ export async function getCompanyActiveAggregates(): Promise<CompanyActiveAggrega
       companyActiveAggregatesInFlight = null;
     });
   return companyActiveAggregatesInFlight;
+}
+
+// 跨实例缓存：运营看板不需要秒级实时——「今天各家公司有没有可投岗位」这种数据，
+// 晚几分钟完全可接受，但每次打开都重扫 39.6 万行不可接受。
+//
+// ⚠️ 缓存函数体内不得读 cookies()/headers()（unstable_cache 的限制）。
+// 这里走的是 service-role 直连 pg，本来就与请求身份无关，天然满足。
+export const COMPANY_AGGREGATES_TTL_SECONDS = 180;
+
+const cachedCompanyActiveAggregates = unstable_cache(
+  fetchCompanyActiveAggregates,
+  ["company-active-aggregates"],
+  { revalidate: COMPANY_AGGREGATES_TTL_SECONDS, tags: ["company-active-aggregates"] },
+);
+
+// unstable_cache 只在 Next 的请求上下文里可用；在单测 / 独立脚本里调用会抛
+// 「Invariant: incrementalCache missing」。**拿不到缓存就退回直查**，而不是把整条链炸掉——
+// 缓存是加速手段，不该成为新的失败点。只吞这一种错，其余原样抛出，不掩盖真问题。
+function isMissingIncrementalCache(error: unknown): boolean {
+  return error instanceof Error && /incrementalCache missing/i.test(error.message);
+}
+
+export async function getCompanyActiveAggregates(): Promise<CompanyActiveAggregate[]> {
+  try {
+    return await cachedCompanyActiveAggregates();
+  } catch (error) {
+    if (!isMissingIncrementalCache(error)) throw error;
+    return fetchCompanyActiveAggregates();
+  }
 }
 
 /**
