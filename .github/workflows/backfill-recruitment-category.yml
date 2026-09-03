@@ -37,7 +37,10 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-      - run: npm ci --ignore-scripts
+      # 只装脚本真正用到的那一个包，不跑 npm ci。
+      # 原因：仓库的 package-lock.json 与 package.json 目前不同步（@emnapi 几个传递依赖），
+      # npm ci 是严格模式会直接失败；而本脚本只需要 pg，没必要为它拉整棵依赖树。
+      - run: npm install --no-save --no-audit --no-fund --ignore-scripts "pg@^8.13.1"
       - name: Run backfill
         env:
           JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
