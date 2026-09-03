@@ -29,6 +29,7 @@ import {
   formatHiringSignalChip,
   type InsightChipTone,
 } from "@/lib/insight-chip-format";
+import { assertionChip } from "@/lib/insight-assertion-chip";
 import type {
   InsightAssertion,
   InsightDimension,
@@ -115,63 +116,6 @@ const DIMENSION_ORDER: InsightDimension[] = [
   "path",
   "culture",
 ];
-
-// v3 三档承诺芯片（按 assertion 出，兼容存量 assertion=null 时回落 grade）。
-// 文案遵循 spec §1.5：signal 只给数字，claim 明确是转述，fact 可肯定陈述。
-function assertionChip(
-  assertion: InsightAssertion | null | undefined,
-  grade: InsightGrade,
-  sampleSize: number | null,
-  publisherCount: number,
-  payload?: Record<string, unknown>,
-): { text: string; cls: string } {
-  // 取实际 sample_n（v3 派生层写在 payload.sample_n）
-  const sampleN =
-    sampleSize ??
-    (typeof payload?.sample_n === "number" ? payload.sample_n : null) ??
-    (typeof payload?.active_count === "number" ? payload.active_count : null);
-
-  const effectiveAssertion: InsightAssertion | null = assertion ?? null;
-
-  if (effectiveAssertion === "fact") {
-    return {
-      text: "事实 · 据官方披露",
-      cls: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]",
-    };
-  }
-  if (effectiveAssertion === "signal") {
-    // signal：只给数字，不下结论。样本量是核心承诺。
-    const nLabel = sampleN != null ? `基于 ${sampleN} 个在招岗` : "基于在招岗位";
-    return {
-      text: `数据 · ${nLabel}`,
-      cls: "border border-[#a9cfd8] bg-[#dcf0f2] text-[#2f7d8a] dark:border-[#6cc0cf]/[0.30] dark:bg-[#6cc0cf]/[0.15] dark:text-[#6cc0cf]",
-    };
-  }
-  if (effectiveAssertion === "claim") {
-    // claim：必须读起来像转述，来源数是承诺。
-    const claimLabel = publisherCount > 0 ? `据 ${publisherCount} 处公开讨论` : "公开讨论";
-    return {
-      text: `说法 · ${claimLabel}`,
-      cls: "border border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08]",
-    };
-  }
-  // assertion=null：存量行，回落 grade 逻辑（兼容迁移期）
-  if (grade === "fact") {
-    return {
-      text: "事实 · 公开来源",
-      cls: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]",
-    };
-  }
-  const expText = sampleSize
-    ? `经验 · 据约 ${sampleSize} 条反馈`
-    : publisherCount > 0
-      ? `经验 · 据 ${publisherCount} 个公开来源`
-      : "经验 · 群体反馈";
-  return {
-    text: expText,
-    cls: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]",
-  };
-}
 
 export default function CompanyInsightDrawer({ company, open, onClose }: Props) {
   const [loading, setLoading] = useState(false);
