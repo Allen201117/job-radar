@@ -142,7 +142,7 @@ class NeteaseCampusAdapter(BaseAdapter):
             anchor = max(nav_ids) if nav_ids else self.FALLBACK_ANCHOR
             window = range(max(1, anchor - self.SCAN_BACK), anchor + self.SCAN_AHEAD + 1)
 
-            current: List[int] = []
+            current: List[tuple] = []   # (projectId, projectName)
             for project_id in window:
                 try:
                     banner = client.get(self.BANNER_URL, params=self._params(projectId=project_id)).json()
@@ -153,9 +153,9 @@ class NeteaseCampusAdapter(BaseAdapter):
                 if not project_name:
                     continue   # 该 id 没有项目
                 if project_is_current(project_name, project_id in nav_ids, target_year):
-                    current.append(project_id)
+                    current.append((project_id, str(project_name).strip()))
 
-            for project_id in current:
+            for project_id, project_name in current:
                 total, got = None, 0
                 for page in range(1, self.MAX_PAGES + 1):
                     try:
@@ -175,6 +175,10 @@ class NeteaseCampusAdapter(BaseAdapter):
                         if not key or key in seen:
                             continue
                         seen.add(key)
+                        # 招聘项目名是这一行**唯一**的校招/实习信号：岗位标题里常常什么都没有
+                        # （"游戏设计师（AI+策划）"），而库里的分类触发器只看 title/job_type。
+                        # 2026-09-04 实测：不带项目名时 245 条里有 141 条被判成社招。
+                        row["_project"] = project_name
                         rows.append(row)
                         fresh += 1
                     got += len(page_rows)
@@ -212,7 +216,10 @@ class NeteaseCampusAdapter(BaseAdapter):
             location = places.split(",")[0].strip() if places else ""
             if location and not is_china_company_location(location):
                 continue
+            project = str(row.get("_project") or "").strip()
             bits = []
+            if project:
+                bits.append("招聘项目：" + project)
             if places:
                 bits.append(f"工作地点：{places}")
             desc = str(row.get("positionDescription") or "").strip()
@@ -226,7 +233,9 @@ class NeteaseCampusAdapter(BaseAdapter):
                 company=self.company_name,
                 title=title,
                 location=location or None,
-                job_type=str(row.get("positionTypeName") or "").strip() or None,
+                # job_type 喂给库里的招聘类型分类器，所以放**招聘项目名**（"2027届雷火秋季校园招聘"）
+                # 而不是 positionTypeName（那是职能分类"技术"/"人工智能"，对判校招毫无信息量）。
+                job_type=project or str(row.get("positionTypeName") or "").strip() or None,
                 summary="\n".join(bits).strip() or None,
                 jd_url=jd_url,
                 apply_url=jd_url,

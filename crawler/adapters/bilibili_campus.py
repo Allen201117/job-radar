@@ -143,13 +143,18 @@ class BilibiliCampusAdapter(BaseAdapter):
             if location and not is_china_company_location(location):
                 continue
             jd_url = self.DETAIL_URL.format(job_id=job_id)
-            summary = str(row.get("positionDescription") or "").strip() or None
+            bucket = str(row.get("_bucket") or "").strip()
+            desc = str(row.get("positionDescription") or "").strip()
+            summary = ("招聘项目：" + bucket + "\n" + desc).strip() if bucket else (desc or None)
+            summary = summary or None
             jobs.append(RawJob(
                 company=self.company_name,
                 title=title,
                 location=location or None,
-                # 三桶分类靠库里的触发器判，这里只如实给「全职/实习」这类岗位性质。
-                job_type=str(row.get("positionTypeName") or row.get("_bucket") or "").strip() or None,
+                # job_type 喂给库里的招聘类型分类器 → 放**桶名**（校园招聘/实习），
+                # 不是 positionTypeName（恒为"全职"，对判校招毫无信息量）。
+                # 2026-09-04 实测：只给"全职"时 366 条里有 38 条被判成社招。
+                job_type=bucket or str(row.get("positionTypeName") or "").strip() or None,
                 summary=summary,
                 jd_url=jd_url,
                 apply_url=jd_url,
