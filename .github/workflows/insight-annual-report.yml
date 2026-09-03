@@ -1,0 +1,57 @@
+name: insight-annual-report
+
+# 巨潮 A 股年报官方事实：员工规模/构成 + 年报会计口径人均薪酬。
+# 与 20:00 enrich-backlog-browser、20:30 insight-enrich、21:00 auto-discover-browser 错开。
+on:
+  schedule:
+    - cron: "50 20 * * *"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "本轮最多处理多少家公司"
+        required: false
+        default: "40"
+      company:
+        description: "只处理单家公司（留空=队列）"
+        required: false
+        default: ""
+      dry_run:
+        description: "只查找/解析，不写数据库"
+        required: false
+        default: "false"
+
+jobs:
+  annual-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # 此链路独立开关，不能改变 INSIGHT_CNINFO_ENABLED 的 listing 富化语义。
+      INSIGHT_ANNUAL_REPORT_ENABLED: ${{ vars.INSIGHT_ANNUAL_REPORT_ENABLED || 'true' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      - name: Parse A-share annual-report official facts
+        working-directory: crawler
+        env:
+          INPUT_LIMIT: ${{ github.event.inputs.limit || '40' }}
+          INPUT_COMPANY: ${{ github.event.inputs.company }}
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          ARGS=(--limit "$INPUT_LIMIT")
+          if [ -n "$INPUT_COMPANY" ]; then
+            ARGS+=(--company "$INPUT_COMPANY")
+          fi
+          if [ "$INPUT_DRY_RUN" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          python3 official_annual_report.py "${ARGS[@]}"

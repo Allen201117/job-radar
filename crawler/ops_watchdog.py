@@ -57,6 +57,7 @@ MODULE_OUTPUT = {
     "liveness_sweep": (("checked",), ("checked",)),
     "dead_link_audit": (("checked",), ("checked",)),
     "insight_backlog": (("companies_enriched",), ("checked",)),
+    "annual_report": (("written",), ("checked",)),
     "gap_funnel": (("sources_added",), ("processed",)),
     "gap_funnel_browser": (("sources_added",), ("processed",)),
     "campus_official_backlog": (("verified", "draft"), ("companies_processed",)),
