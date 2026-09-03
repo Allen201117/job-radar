@@ -21,11 +21,14 @@ from robots import check_robots
 from adapters.apple import AppleAdapter, AppleChinaAdapter
 from adapters.baidu import BaiduAdapter
 from adapters.jd import JdAdapter
+from adapters.jd_campus import JdCampusAdapter
 from adapters.haier import HaierAdapter
+from adapters.hikvision import HikvisionAdapter
 from adapters.iguopin import IguopinAdapter
 from adapters.siemens import SiemensAdapter
 from adapters.avature import AvatureAdapter
 from adapters.tencent import TencentAdapter
+from adapters.tencent_campus import TencentCampusAdapter
 from adapters.bytedance import BytedanceAdapter, BytedanceCampusAdapter
 from adapters.feishu import NioAdapter, XpengAdapter, HorizonAdapter, XiaomiAdapter, FeishuGenericAdapter
 from adapters.greenhouse import GreenhouseAdapter
@@ -101,11 +104,17 @@ ADAPTERS = {
     "apple_cn": AppleChinaAdapter(),  # Apple 在华岗位（保留全球 apple 源）
     "baidu": BaiduAdapter(),
     "jd": JdAdapter(),
+    # 京东校招独立门户 campus.jd.com（jd.py 只抓社招 zhaopin.jd.com）
+    "jd_campus": JdCampusAdapter(),
     "haier": HaierAdapter(),
+    # 海康校招独立域名 campushr.hikvision.com（社招 talent.hikvision.com 被 EdgeOne 拦）
+    "hikvision": HikvisionAdapter(),
     "iguopin": IguopinAdapter(),  # 国聘央企/国企公开职位搜索 API
     "siemens": SiemensAdapter(),
     "avature": AvatureAdapter(),  # Avature SearchJobs SSR 通用层（详情链接直接取卡片 href）
     "tencent": TencentAdapter(),
+    # 腾讯校招独立域名 join.qq.com（careers.tencent.com 的 attrId=2 只有 16 个海外岗）
+    "tencent_campus": TencentCampusAdapter(),
     "bytedance": BytedanceAdapter(),
     "bytedance_campus": BytedanceCampusAdapter(),  # 字节校招/实习（与社招同平台）
     "nio_feishu": NioAdapter(),
@@ -178,7 +187,7 @@ DOMESTIC_ADAPTERS = {
 # 未知 / 浏览器 adapter 一律落串行档（fail-safe），杜绝把 Playwright（sync API，非线程安全）
 # 的 adapter 误并发跑崩夜间 cron。新增 httpx adapter 时显式加进来才享受并发。
 _HTTPX_SAFE_ADAPTERS = {
-    "apple", "apple_cn", "baidu", "jd", "haier", "iguopin", "siemens", "tencent",
+    "apple", "apple_cn", "baidu", "jd", "haier", "iguopin", "siemens", "tencent", "tencent_campus", "hikvision",
     "greenhouse", "lever", "ashby", "smartrecruiters", "successfactors", "workday", "eightfold",
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
     "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",

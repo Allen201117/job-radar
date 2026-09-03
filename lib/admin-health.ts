@@ -749,6 +749,9 @@ type DailyReportInput = {
   opsRuns?: OpsRunAggregateRow[] | null;
   /** 原始 ops_runs 行：admin_health_snapshot 只抽了 6 个指标键，缺口漏斗 / 校招供给的产出口径不在其中。 */
   opsRunRows?: OpsRunRow[] | null;
+  /** 必投清单的校招供给覆盖（lib/campus-supply-coverage.summarizeCampusSupply 的产物）。
+   *  台账只能回答「任务跑没跑」，回答不了「30 家打通了几家」—— 那要查岗位库，故由页面算好传入。 */
+  campusSupply?: { healthy: number; total: number; ourGap: number; theirGap: number; reachablePct: number | null } | null;
 };
 
 export const OPERATIONAL_TERMS: Record<string, string> = {
@@ -1005,7 +1008,7 @@ export function buildDailyReports(input: DailyReportInput): DailyReport[] {
     buildReport({
       key: "campus_supply",
       title: "校招供给",
-      description: "每小时盯着必投公司的校招板块，一开始放岗就立刻加急重抓。目前还统计不到「今天新收了几个校招岗」，所以先看有多少家公司的校招岗位数变了",
+      description: "每小时盯着必投公司的校招板块，一开始放岗就立刻加急重抓。「已打通」= 这家公司的校招岗位量相对它的社招体量是正常的；不正常的多半是我们漏了它的校招板块，不是对方没招人",
       runs: campus.runs,
       failed: campus.failed,
       // 台账没有「今日入库校招岗」这个口径，不硬编造：用真实存在的 snapshots
@@ -1016,6 +1019,10 @@ export function buildDailyReports(input: DailyReportInput): DailyReport[] {
       expectsOutput: true,
       lastRunAt: campus.lastRunAt,
       metrics: [
+        // 覆盖口径放最前：这是「打通了没有」的答案，比「今天跑了几次」更该先看到。
+        { label: "必投清单已打通", value: input.campusSupply ? input.campusSupply.healthy : null },
+        { label: "还差几家（我们能修的）", value: input.campusSupply ? input.campusSupply.ourGap : null },
+        { label: "对方还没开校招", value: input.campusSupply ? input.campusSupply.theirGap : null },
         { label: "开始放岗的公司", value: campus.available ? toNumber(campus.metrics.surged) : null },
         { label: "校招岗位总数", value: campus.available ? toNumber(campus.metrics.campus_jobs_total) : null },
         { label: "新增校招洞察", value: campus.available ? toNumber(campus.metrics.verified) : null },

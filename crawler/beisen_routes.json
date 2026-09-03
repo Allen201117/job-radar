@@ -79,6 +79,7 @@
     "ssr_param": "jobId",
     "ssr_path": "campusxq"
   },
+  "ganfenglithium.zhiye.com": "https://ganfenglithium.zhiye.com/campus/detail",
   "gangyan.zhiye.com": "https://gangyan.zhiye.com/campus/detail",
   "genertec.zhiye.com": "https://genertec.zhiye.com/social/detail",
   "genomics.zhiye.com": "https://genomics.zhiye.com/social/detail",
@@ -91,6 +92,7 @@
   "guanan.zhiye.com": "https://guanan.zhiye.com/social/detail",
   "guosen.zhiye.com": "https://guosen.zhiye.com/social/detail",
   "h3c.zhiye.com": "https://h3c.zhiye.com/campus/detail",
+  "haikegroup.zhiye.com": "https://haikegroup.zhiye.com/zwxq",
   "haitian.zhiye.com": "https://haitian.zhiye.com/social/detail",
   "haixin.zhiye.com": "https://haixin.zhiye.com/social/detail",
   "hand-china.zhiye.com": "https://hand-china.zhiye.com/campus/detail",
@@ -105,6 +107,7 @@
   "hitachienergy.zhiye.com": "https://hitachienergy.zhiye.com/campus/detail",
   "hopewind.zhiye.com": "https://hopewind.zhiye.com/social/detail",
   "hoshine.zhiye.com": "https://hoshine.zhiye.com/social/detail",
+  "hr-campus.vivo.com": "https://hr-campus.vivo.com/campus/detail",
   "huace.zhiye.com": "https://huace.zhiye.com/social/detail",
   "huafeng.zhiye.com": "https://huafeng.zhiye.com/campus/detail",
   "huifu.zhiye.com": "https://huifu.zhiye.com/social/detail",
@@ -226,6 +229,7 @@
   "yiche.zhiye.com": "https://yiche.zhiye.com/campus/detail",
   "yiducloud.zhiye.com": "https://yiducloud.zhiye.com/campus/detail",
   "yihetang.zhiye.com": "https://yihetang.zhiye.com/social/detail",
+  "yijiahe.zhiye.com": "https://yijiahe.zhiye.com/social/detail",
   "yiling.zhiye.com": "https://yiling.zhiye.com/social/detail",
   "yizumi.zhiye.com": "https://yizumi.zhiye.com/social/detail",
   "ymtc.zhiye.com": "https://ymtc.zhiye.com/social/detail",
@@ -241,8 +245,5 @@
   "zhuanzhuan.zhiye.com": "https://zhuanzhuan.zhiye.com/social/detail",
   "zongshen.zhiye.com": "https://zongshen.zhiye.com/campus/detail",
   "zongteng.zhiye.com": "https://zongteng.zhiye.com/social/detail",
-  "zuche.zhiye.com": "https://zuche.zhiye.com/social/detail",
-  "haikegroup.zhiye.com": "https://haikegroup.zhiye.com/zwxq",
-  "ganfenglithium.zhiye.com": "https://ganfenglithium.zhiye.com/campus/detail",
-  "yijiahe.zhiye.com": "https://yijiahe.zhiye.com/social/detail"
+  "zuche.zhiye.com": "https://zuche.zhiye.com/social/detail"
 }

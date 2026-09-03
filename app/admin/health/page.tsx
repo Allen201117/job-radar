@@ -42,7 +42,9 @@ import {
   type TodayDiscoveryRow,
 } from "@/lib/admin-health";
 import { isAdmin } from "@/lib/auth";
-import { getJobsHealthSnapshot, getMustApplyCoverage, type JobsHealthSnapshot, type MustApplyCoverageRow } from "@/lib/jobs-store/read";
+import { getCampusSupplyInputs, getJobsHealthSnapshot, getMustApplyCoverage, type JobsHealthSnapshot, type MustApplyCoverageRow } from "@/lib/jobs-store/read";
+import { summarizeCampusSupply } from "@/lib/campus-supply-coverage";
+import { ilikeMatcher } from "@/lib/ilike-matcher";
 import {
   DEFAULT_MUST_APPLY_INDUSTRY,
   industriesForPattern,
@@ -191,7 +193,8 @@ type UserIndustryDistribution = { counts: Record<MustApplyScope, Record<string, 
 const MUST_APPLY_SCOPES: MustApplyScope[] = ["domestic", "overseas"];
 const MUST_APPLY_SCOPE_LABEL: Record<MustApplyScope, string> = { domestic: "国内", overseas: "海外" };
 
-type SourceRow = { company: string | null; enabled: boolean };
+// board 供「校招供给覆盖」判 hasCampusSource 用（campus/mixed 才算接了校招通道）。
+type SourceRow = { company: string | null; enabled: boolean; board: string | null };
 type MustApplyGapAdminData = {
   attempts: MustApplyGapAttemptRow[];
   opsRuns: GapFunnelOpsRow[];
@@ -202,8 +205,9 @@ type MustApplyGapAdminData = {
  * （2026-07-20 实测 1121）→ 不分页拿到的是**残缺**集合，尾部公司被误判「从未接入」
  * → 北极星「必投清单健康覆盖」的 hasSource 残缺、覆盖率虚低。
  * 分页语义（含为何必须带稳定排序键）见 lib/supabase-paginate.ts。 */
+// board 供「校招供给覆盖」判 hasCampusSource（campus/mixed 才算接了校招通道）。
 const loadAllSources = cachedLoader<SourceRow[]>("all-sources", () =>
-  fetchAllSources<SourceRow>(createServiceClient(), "company, enabled"));
+  fetchAllSources<SourceRow>(createServiceClient(), "company, enabled, board"));
 
 function buildMustApplyRowsForScope(
   scope: MustApplyScope,
@@ -241,6 +245,34 @@ const loadMustApplyCoverage = cachedLoader<MustApplyRowsByScope>("must-apply-cov
   return Object.fromEntries(
     MUST_APPLY_SCOPES.map((scope, i) => [scope, buildMustApplyRowsForScope(scope, sources, coverages[i])]),
   ) as MustApplyRowsByScope;
+});
+
+/**
+ * 必投清单（国内互联网/科技）的校招供给覆盖。
+ * 复用 getCompanyActiveAggregates 那一次全表聚合（多两个 count filter，不额外扫表）；
+ * hasCampusSource 从 sources 侧带入 —— jobs 库里没有源信息，缺了它就分不清
+ * 「我们没接校招通道」和「接了但对方没开」，而这个区分正是本指标的意义所在。
+ */
+const loadCampusSupplySummary = cachedLoader("campus-supply", async () => {
+  const list = MUST_APPLY_BY_INDUSTRY["互联网/科技"] || [];
+  if (!list.length) return null;
+  const [inputs, sources] = await Promise.all([getCampusSupplyInputs(list), loadAllSources()]);
+  const byName = new Map(inputs.map((i) => [i.company, i]));
+  return summarizeCampusSupply(
+    list.map(({ name, pattern }) => {
+      const matches = ilikeMatcher(pattern);
+      const hit = sources.filter((s) => s.company && matches(s.company));
+      const agg = byName.get(name);
+      return {
+        company: name,
+        campusJobs: agg?.campusJobs ?? 0,
+        internJobs: agg?.internJobs ?? 0,
+        socialJobs: agg?.socialJobs ?? 0,
+        hasCampusSource: hit.some((s) => s.enabled && (s.board === "campus" || s.board === "mixed")),
+        hasAnySource: hit.some((s) => s.enabled),
+      };
+    }),
+  );
 });
 
 const loadMustApplyGapAdminData = cachedLoader<MustApplyGapAdminData>("gap-admin", async () => {
@@ -1513,7 +1545,7 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   // 必投清单的国内/海外切换。默认国内——目前海外没有用户在找，进来先看该看的那份。
   const mustApplyScope: MustApplyScope = (typeof query.scope === "string" ? query.scope : "") === "overseas" ? "overseas" : "domestic";
   const overview = tab === "overview";
-  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult, gapResult, dailySeriesResult, extraOpsResult, analyticsResult] = await Promise.allSettled([overview || tab === "jobs" ? loadJobsHealth() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await cachedByKey(["fetch-coverage", scope], () => getMustApplyFetchCoverage(createServiceClient(), scope))] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null), tab === "supply" ? loadMustApplyGapAdminData() : Promise.resolve(null), overview || tab === "jobs" || tab === "system" ? loadHealthDailySeries() : Promise.resolve(null), overview || tab === "system" ? loadExtraOpsRuns() : Promise.resolve(null), tab === "users" ? cachedByKey(["user-analytics", includeStaff ? "with-staff" : "no-staff"], () => getUserAnalytics(createServiceClient(), { days: 30, includeStaff })) : Promise.resolve(null)]);
+  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult, gapResult, dailySeriesResult, extraOpsResult, analyticsResult, campusSupplyResult] = await Promise.allSettled([overview || tab === "jobs" ? loadJobsHealth() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await cachedByKey(["fetch-coverage", scope], () => getMustApplyFetchCoverage(createServiceClient(), scope))] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null), tab === "supply" ? loadMustApplyGapAdminData() : Promise.resolve(null), overview || tab === "jobs" || tab === "system" ? loadHealthDailySeries() : Promise.resolve(null), overview || tab === "system" ? loadExtraOpsRuns() : Promise.resolve(null), tab === "users" ? cachedByKey(["user-analytics", includeStaff ? "with-staff" : "no-staff"], () => getUserAnalytics(createServiceClient(), { days: 30, includeStaff })) : Promise.resolve(null), overview || tab === "system" || tab === "supply" ? loadCampusSupplySummary() : Promise.resolve(null)]);
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
   const clickValidity = clickResult.status === "fulfilled" ? clickResult.value : null;
@@ -1547,9 +1579,11 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   const fetchCoverage = fetchResult.status === "fulfilled" && fetchResult.value ? Object.fromEntries(fetchResult.value) as Record<MustApplyScope, MustApplyFetchCoverage> : null;
   const fetchByIndustry = fetchCoverage ? Object.fromEntries(MUST_APPLY_SCOPES.map((scope) => [scope, groupFetchCoverageByIndustry(fetchCoverage[scope], MUST_APPLY_INDUSTRIES, scope)])) as Record<MustApplyScope, Record<string, MustApplyFetchCoverage>> : null;
   const extraOpsRuns = extraOpsResult.status === "fulfilled" ? extraOpsResult.value : null;
+  // 取失败传 null（卡面显示「读取失败」），不要退化成 0 —— 0 会被读成「一家都没打通」。
+  const campusSupply = campusSupplyResult.status === "fulfilled" ? campusSupplyResult.value : null;
   // 读失败与「真的没有用户」必须分开：前者传 null 让报告显示读取失败，后者才是 0。
   const userAnalytics = analyticsResult.status === "fulfilled" ? analyticsResult.value : null;
-  const reports = buildDailyReports({ crawl: operations?.today?.crawl || null, discovery: operations?.today?.discovery || null, insight: { today_created: operations?.insight?.today_created }, opsRuns: operations?.today?.ops_runs || [], opsRunRows: extraOpsRuns || [] });
+  const reports = buildDailyReports({ crawl: operations?.today?.crawl || null, discovery: operations?.today?.discovery || null, insight: { today_created: operations?.insight?.today_created }, opsRuns: operations?.today?.ops_runs || [], opsRunRows: extraOpsRuns || [], campusSupply });
   const users = operations?.today?.users || null;
   const resume = operations?.today?.resume || null;
   const todayRemoved = reports.find((report) => report.key === "dead_jobs")?.metrics.find((metric) => metric.label === "判死")?.value ?? null;
