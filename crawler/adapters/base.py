@@ -12,6 +12,18 @@ logger = logging.getLogger(__name__)
 _HEAD_SKIP_CACHE = {}
 _HEAD_SKIP_CACHE_LOCK = threading.Lock()
 
+# 单源列表抓取条数上限（见 resolve_list_cap）。旧的 600 硬默认让 32 个源每轮只抓到前 600 条、
+# 累计漏掉 10.7 万个岗（2026-09-04 crawl_runs 实测），其中 74% 是必投清单公司。
+#
+# 为什么是 8000：2026-09-04 逐源量过官网自报总数，45 个截断源里 43 个 ≤8000（来伊份 7204、
+# 奇瑞 5643、喜茶 5078、新东方 4273、中国交建 2565…），设到 8000 一次性把它们全部抓全；
+# 只有星巴克 26,720 和我爱我家 28,827 仍会被截——这两家是「同一个岗 × N 家门店」的批量发布
+# （星巴克归一后只有 30 种标题、其中 3 种占 99%；我爱我家 2.8 万条是 1.16 万个不同门店岗），
+# 把它们整包拉进来只会把检索冲成一片，与「精准 > 规模」冲突。它们的稀有总部岗另有出路：
+# 北森 GetJobAdPageList 的 KeyWords 是**服务端检索**（实测 KeyWords=Manager → 17 条，
+# 一次请求就拿到藏在第 475 页的 Procurement Manager），比翻 500 页便宜 25 倍——留作第二阶段。
+DEFAULT_LIST_CAP = 8000
+
 
 def resolve_detail_cap(default: int) -> int:
     """逐岗 detail 富化上限。env CRAWL_DETAIL_CAP 覆盖各 adapter 的 _DETAIL_CAP：
@@ -24,6 +36,30 @@ def resolve_detail_cap(default: int) -> int:
         except ValueError:
             pass
     return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw not in (None, ""):
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    return default
+
+
+def resolve_list_cap(default: int) -> int:
+    """单源**列表**抓取条数上限。与 resolve_detail_cap（逐岗富化上限）是两码事。
+
+    env CRAWL_MAX_JOBS 整体调档 —— 出事（CI 超时 / 某站被我们翻烦了）不用改代码重新部署，
+    改一个 repo variable 下一轮就生效。
+
+    ⚠️ 不要在这里对 default 取 max：adapter 声明的基准档必须能**往下**压（单测把 _MAX_JOBS 设成 2
+    来验「撞上限 → 不算抓全」，取 max 会让这类断言静默失效，也堵死以后给个别慢源单独降档的路）。
+    ⚠️ 撞上限时调用方**必须**让 fetch_complete=False——beisen/feishu 都开了 list-absence 探活，
+    「没抓到的尾巴」被当成「列表缺席」会整批误判撤岗（CLAUDE.md §4 立碑的误杀在招岗）。
+    """
+    return _env_int("CRAWL_MAX_JOBS", default)
 
 
 @dataclass

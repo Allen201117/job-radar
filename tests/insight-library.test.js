@@ -342,3 +342,37 @@ test("迁移 209 的主题映射与 T3 写入的标题一一对应（改一边�
     );
   }
 });
+
+test("同主题多条时按中位数筛，不能取碰到的第一条", () => {
+  // 线上实测：滴滴同时挂着「加班强度·准时下班(1)」与两条「加班强度·加班多(4)」。
+  // 取第一条会让它被「加班强度 ≤ 2」筛出来 —— 用户筛「加班少的公司」，第一个结果写着「加班多」。
+  const items = [1, 4, 4].map((v, i) =>
+    signalItem({
+      id: `ot-${i}`,
+      origin: "public_web",
+      assertion: "claim",
+      grade: "experience",
+      content: `据公开讨论，加班情况 ${v}`,
+      metric_key: "overtime_level",
+      metric_value: v,
+      sample_size: 6,
+      sources: [source(`https://a${i}.com/x`), source(`https://b${i}.com/y`)],
+    }),
+  );
+  const index = L.buildLibraryIndex([subject()], items, COMPANIES, NOW);
+  assert.equal(index.length, 1);
+  // 中位数 = 4 → 「加班少（≤2）」筛不出来
+  assert.equal(L.filterSubjects(index, { metric: "overtime_level", metricMax: 2 }).length, 0);
+  // 「加班多（≥4）」筛得出来
+  assert.equal(L.filterSubjects(index, { metric: "overtime_level", metricMin: 4 }).length, 1);
+});
+
+test("单条时中位数就是它自己（不能因为改了聚合口径把正常情况弄坏）", () => {
+  const one = signalItem({
+    origin: "public_web", assertion: "claim", grade: "experience",
+    content: "据公开讨论，准时下班", metric_key: "overtime_level", metric_value: 1,
+    sample_size: 6, sources: [source("https://a.com/x"), source("https://b.com/y")],
+  });
+  const index = L.buildLibraryIndex([subject()], [one], COMPANIES, NOW);
+  assert.equal(L.filterSubjects(index, { metric: "overtime_level", metricMax: 2 }).length, 1);
+});

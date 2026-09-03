@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import httpx
 
 import normalizer
-from .base import RawJob
+from .base import DEFAULT_LIST_CAP, RawJob, resolve_list_cap
 from .playwright_base import PlaywrightAdapter, _UA
 
 
@@ -28,12 +28,28 @@ def _int_or_none(value) -> Optional[int]:
         return None
 
 
+def _should_continue(before, after, chunk, total, page_size):
+    """还该不该翻下一页。
+
+    ⚠️ 末页判据**不能**用「本页条数 < pageSize」：站点限流/抖动时会回短页，一个瞬时短页就把
+    整源停在半路（同一条在 beisen 上实测把中国交建从 2565 掐到 800）。改用「这一页有没有带来
+    新岗位」（before/after 是去重后的行数）；只有在没有分母可判时才退回短页当自然末页。"""
+    if after <= before:
+        return False
+    if total:
+        return True
+    return len(chunk) >= page_size
+
+
 class FeishuRecruitAdapter(PlaywrightAdapter):
     host = ""  # 子类设置，如 nio.jobs.feishu.cn
     intercept_match = "/api/v1/search/job/posts"
     posts_keys = ("data.job_post_list", "job_post_list")
     _PAGE_SIZE = 50    # 单页拉取数（接口实测 limit=50 稳定返回，远超站点默认 10）
-    _MAX_JOBS = 600    # 单租户上限（防超大公司一次拉爆）
+    # 单租户抓取条数上限（env CRAWL_MAX_JOBS 可整体调档）。旧的 600 硬顶让蔚来(2055)/小鹏(1552)/
+    # 哪吒(1127)/智元(904)/安克(848)/物美(785)/理想(754) 每轮都只抓到前 600 条
+    # （2026-09-04 crawl_runs 实测），且这七家全部 ≤8000，抬档一次就能抓全。
+    _MAX_JOBS = DEFAULT_LIST_CAP
     _HTTPX_TIMEOUT = 20
 
     # list-absence 探活：feishu posts API 返**全量在招岗**（非夹带已关闭岗），且本类按 count 翻全；
@@ -72,7 +88,8 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                    "Referer": f"https://{host}/index/position"}
         try:
             with httpx.Client(timeout=self._HTTPX_TIMEOUT, follow_redirects=True, headers=headers) as cli:
-                while len(rows) < self._MAX_JOBS:
+                cap = resolve_list_cap(self._MAX_JOBS)
+                while len(rows) < cap:
                     body = {"keyword": "", "limit": self._PAGE_SIZE, "offset": offset,
                             "job_category_id_list": [], "tag_id_list": [], "location_code_list": [],
                             "subject_id_list": [], "recruitment_id_list": [], "portal_type": 2,
@@ -91,6 +108,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                     chunk = data.get("job_post_list") or []
                     if not isinstance(chunk, list) or not chunk:
                         break
+                    before = len(rows)
                     for post in chunk:
                         pid = str((post or {}).get("id") or "")
                         if pid and pid not in seen:
@@ -98,7 +116,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                             rows.append(post)
                     if total and len(rows) >= total:
                         break
-                    if len(chunk) < self._PAGE_SIZE:  # 末页不足一页 → 收完
+                    if not _should_continue(before, len(rows), chunk, total, self._PAGE_SIZE):
                         break
                     offset += self._PAGE_SIZE
         except Exception:
@@ -231,7 +249,8 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         total = None
         offset = 0
         hdrs = {"content-type": "application/json"}
-        while len(rows) < self._MAX_JOBS:
+        cap = resolve_list_cap(self._MAX_JOBS)
+        while len(rows) < cap:
             body["offset"] = offset
             body["limit"] = self._PAGE_SIZE
             try:
@@ -247,6 +266,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
             chunk = data.get("job_post_list") or []
             if not isinstance(chunk, list) or not chunk:
                 break
+            before = len(rows)
             for post in chunk:
                 pid = str((post or {}).get("id") or "")
                 if pid and pid not in seen:
@@ -254,7 +274,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                     rows.append(post)
             if total and len(rows) >= total:
                 break
-            if len(chunk) < self._PAGE_SIZE:  # 末页不足一页 → 收完
+            if not _should_continue(before, len(rows), chunk, total, self._PAGE_SIZE):
                 break
             offset += self._PAGE_SIZE
         return rows, total
@@ -342,4 +362,6 @@ class HorizonAdapter(FeishuRecruitAdapter):
 
 class XiaomiAdapter(FeishuRecruitAdapter):
     name = "xiaomi_feishu"; company_name = "小米"; host = "xiaomi.jobs.f.mioffice.cn"
-    _MAX_JOBS = 3000  # 小米官网 ~2030，覆写基类 600 上限抓全（其他 feishu 源不受影响）
+    # 原来这里单独覆写 _MAX_JOBS=3000「抓全小米的 ~2030 岗」。那是给一家公司打的补丁，
+    # 别的租户照样卡在 600 —— 直到 2026-09-04 才量出来还有 32 个源在漏 9 万个岗。
+    # 现在基类基准档就是 3000、必投公司自动抬到 8000，这条补丁不再需要（留碑不留码）。

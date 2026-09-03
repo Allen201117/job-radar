@@ -16,6 +16,7 @@ playwright 仅在 fetch() 内惰性导入。
 """
 import html as _html
 import json
+import logging
 import re
 from typing import List, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
@@ -23,8 +24,11 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 import httpx
 
 import normalizer
-from .base import PageResult, RawJob, paginate_all, resolve_detail_cap
+from .base import (DEFAULT_LIST_CAP, PageResult, RawJob, paginate_all, resolve_detail_cap,
+                   resolve_list_cap)
 from .playwright_base import PlaywrightAdapter
+
+_log = logging.getLogger(__name__)
 
 
 def _first_str(post: dict, keys) -> str:
@@ -639,6 +643,40 @@ def _cms_parse_detail(html_text: str) -> dict:
     return out
 
 
+def _dedup_new(chunk, seen_ids, id_fields):
+    """本页里没见过的行（按岗位 id 去重）。翻页途中接口重复回同一批是常态，
+    不去重会让「收满 total 就停」提前满足，尾巴永远抓不到。"""
+    fresh = []
+    for row in chunk:
+        if not isinstance(row, dict):
+            continue
+        key = next((str(row[f]) for f in id_fields if row.get(f) not in (None, "")), None)
+        if key is None:
+            fresh.append(row)          # 认不出 id 的行照收，宁可重也不漏
+            continue
+        if key in seen_ids:
+            continue
+        seen_ids.add(key)
+        fresh.append(row)
+    return fresh
+
+
+def _should_continue(fresh, chunk, total, page_size):
+    """还该不该翻下一页。
+
+    ⚠️ 末页判据**不能**用「本页条数 < pageSize」：北森在限流/抖动时会回短页（2026-09-04 本机
+    连续请求就被它掐成 ConnectError），一个瞬时短页就会让整源停在半路 —— 中国交建自报 2565、
+    深页明明有数据，却只抓到 800 就收工，正是这么来的。项目里 hotjob/海康那两次也栽在同一条。
+
+    改用「这一页有没有带来新岗位」：接口在原地打转或真到末页 → fresh 为空 → 停；否则继续。
+    只有在**没有分母可判**（total 未知）时，才退回短页当自然末页。"""
+    if not fresh:
+        return False
+    if total:
+        return True
+    return len(chunk) >= page_size
+
+
 class BeisenAdapter(ChinaSpaAdapter):
     """北森招聘（*.zhiye.com / *.italent.cn / 自有 careers 域名，由北森承载）。
 
@@ -658,7 +696,11 @@ class BeisenAdapter(ChinaSpaAdapter):
     # 个别 PageSize=10），渲染时不会自己翻页到底。我们捕获该 POST、用站点自己的 PortalId+session
     # **服务端重放**并翻页到收齐 Count 条（接口实测支持 PageSize=50）。
     _PAGE_SIZE = 50      # 单页拉取数（接口实测 50 稳定返回）
-    _MAX_JOBS = 600      # 单租户上限（防超大央企一次拉爆；600=12 页足够覆盖绝大多数）
+    # 单租户抓取条数上限（env CRAWL_MAX_JOBS 可整体调档，见 base.resolve_list_cap 的取数依据）。
+    # ⚠️ 别再把这个数字当成「越大越好」往上堆：2026-09-04 实测 26 个北森源因旧的 600 硬顶累计漏
+    # 8.7 万岗（该修），但星巴克那 26,720 条归一后只有 30 种标题、3 种占 99%（不该整包拉）——
+    # 「抓全」和「抓多」不是一回事。
+    _MAX_JOBS = DEFAULT_LIST_CAP
 
     # list-absence 探活：beisen GetJobAdPageList 返全量在招岗 + 本类翻全 → 抓全时列表缺席=下架（同 feishu）。
     supports_absence_liveness = True
@@ -779,7 +821,9 @@ class BeisenAdapter(ChinaSpaAdapter):
             m = re.search(r'PortalId"\s*:\s*"([0-9a-fA-F-]+)"', html or "")
             portal_id = m.group(1) if m else ""
             index = 0
-            while len(rows) < self._MAX_JOBS:
+            seen_ids: set = set()
+            cap = resolve_list_cap(self._MAX_JOBS)
+            while len(rows) < cap:
                 body = {"PageIndex": index, "PageSize": self._PAGE_SIZE, "Category": [],
                         "KeyWords": "", "SpecialType": 0, "PortalId": portal_id,
                         "DisplayFields": ["Category", "Kind", "LocId", "PostDate", "WorkWeChatQrCode"]}
@@ -805,10 +849,11 @@ class BeisenAdapter(ChinaSpaAdapter):
                 chunk = jj.get("Data") or []
                 if not isinstance(chunk, list) or not chunk:
                     break
-                rows.extend(chunk)
+                fresh = _dedup_new(chunk, seen_ids, self._ID_FIELDS)
+                rows.extend(fresh)
                 if total and len(rows) >= total:
                     break
-                if len(chunk) < self._PAGE_SIZE:
+                if not _should_continue(fresh, chunk, total, self._PAGE_SIZE):
                     break
                 index += 1
         if not rows:
@@ -993,7 +1038,9 @@ class BeisenAdapter(ChinaSpaAdapter):
                 body = dict(captured["body"])
                 hdrs = {"content-type": captured.get("ct") or "application/json"}
                 index = 0
-                while len(rows) < self._MAX_JOBS:
+                seen_ids = set()
+                cap = resolve_list_cap(self._MAX_JOBS)
+                while len(rows) < cap:
                     body["PageSize"] = self._PAGE_SIZE
                     body["PageIndex"] = index
                     try:
@@ -1013,10 +1060,11 @@ class BeisenAdapter(ChinaSpaAdapter):
                     chunk = jj.get("Data") or []
                     if not isinstance(chunk, list) or not chunk:
                         break
-                    rows.extend(chunk)
+                    fresh = _dedup_new(chunk, seen_ids, self._ID_FIELDS)
+                    rows.extend(fresh)
                     if total and len(rows) >= total:
                         break
-                    if len(chunk) < self._PAGE_SIZE:  # 末页不足一页 → 收完了
+                    if not _should_continue(fresh, chunk, total, self._PAGE_SIZE):
                         break
                     index += 1
             browser.close()

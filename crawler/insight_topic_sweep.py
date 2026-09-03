@@ -86,12 +86,33 @@ def _chunks(values: List, size: int = WRITE_BATCH_SIZE) -> Iterable[List]:
         yield values[offset:offset + size]
 
 
+def _group_updates(payloads: List[dict]) -> Dict[tuple, List[str]]:
+    """把「每行一份部分字段」压成「同一份改动 → 一批 id」。
+
+    ⚠️ 这里不能用 PostgREST 的 upsert（2026-09-04 线上实测炸过一次）：
+    upsert = INSERT ... ON CONFLICT，Postgres 会先校验**待插入行**的 NOT NULL 约束。
+    我们的 payload 只带 {id, metric_key/metric_value}，company_id 为空 →
+    `null value in column "company_id" violates not-null constraint`，整批失败。
+    改成 update + in_ 才是「只改这几列」的语义；按改动内容分组仍然保住了批量
+    （不同值的种类远少于行数：月数就那几档、主题就六个）。
+    """
+    grouped: Dict[tuple, List[str]] = defaultdict(list)
+    for payload in payloads:
+        row_id = payload.get("id")
+        if not row_id:
+            continue
+        patch = tuple(sorted((k, v) for k, v in payload.items() if k != "id"))
+        grouped[patch].append(str(row_id))
+    return grouped
+
+
 def apply_plan(supabase, plan: dict) -> None:
     """按不超过 200 条的批次写回，避免 6 千条逐行跨洋 HTTP 请求。"""
-    for payloads in _chunks(plan["metric_updates"]):
-        supabase.table("insight_items").upsert(payloads, on_conflict="id").execute()
-    for payloads in _chunks(plan["reroute_updates"]):
-        supabase.table("insight_items").upsert(payloads, on_conflict="id").execute()
+    for payloads in (plan["metric_updates"], plan["reroute_updates"]):
+        for patch, ids in _group_updates(payloads).items():
+            values = dict(patch)
+            for chunk in _chunks(ids):
+                supabase.table("insight_items").update(values).in_("id", chunk).execute()
 
     # 去重与主题退役可能在同一个批次；先去重可保证 status 写入总次数与统计一致。
     retired_ids = list(dict.fromkeys(plan["retire"] + plan["dedupe"]))

@@ -298,6 +298,24 @@ class _FakeRouter:
         return 999  # 充足额度，让查询包跑满
 
 
+# 写入端主题门（2026-09-04 起）会把「答非所问」的内容直接拦掉不写。
+# 所以假管线不能再对所有主题返回同一句话——同一句「强度偏大」不可能同时是
+# 年终奖、面试难度、裁员稳定性的答案，被拦掉恰恰说明门在干活。
+# 这里按维度给对口内容，让测试验的是「写入链路」而不是「门失效」。
+_ON_TOPIC_BY_DIMENSION = {
+    "culture": "据公开讨论该公司加班偏多，工作强度偏大",
+    "compensation_intensity": "据公开讨论该公司年终奖普遍在 2 个月左右",
+    "hiring": "据公开讨论该公司面试共 3 轮，流程较长",
+    "path": "据公开讨论该公司晋升通道清晰，职级路径明确",
+    "timing": "据公开讨论该公司加班偏多",
+    "listing": "据公开讨论该公司加班偏多",
+}
+
+
+def _on_topic(dimension):
+    return _ON_TOPIC_BY_DIMENSION.get(dimension, "据公开讨论该公司加班偏多")
+
+
 class TestT3(unittest.TestCase):
     def setUp(self):
         self._orig_router, self._pipeline = B._ROUTER, E.run_pipeline
@@ -311,7 +329,7 @@ class TestT3(unittest.TestCase):
             {"title": "t2", "url": "https://b.com/2", "snippet": "氛围不错", "text": "氛围不错", "publisher": "b.com"},
         ])
         E.run_pipeline = lambda c, d, s, client=None: [{
-            "claim": {"content": "据公开讨论该公司强度偏大", "grade": "experience",
+            "claim": {"content": _on_topic(d), "grade": "experience",
                       "source_idx": 0, "sample_size": "6", "quote": "加班偏多"},
             "judge": {"verdict": "entailment", "confidence": 0.8, "supported_source_idxs": [0, 1]}, "status": "active",
         }]
@@ -345,8 +363,8 @@ class TestT3(unittest.TestCase):
             {"url": "https://a.example/1", "publisher": "a.example", "text": "t1"},
             {"url": "https://b.example/2", "publisher": "b.example", "text": "t2"},
         ])
-        E.run_pipeline = lambda *a, **k: [{
-            "claim": {"content": "据公开讨论…", "grade": "experience", "sample_size": 8},
+        E.run_pipeline = lambda c, d, *a, **k: [{
+            "claim": {"content": _on_topic(d), "grade": "experience", "sample_size": 8},
             "judge": {"supported_source_idxs": [0, 1]}, "status": "pending_review",
         }]
         store = {}
@@ -364,8 +382,8 @@ class TestT3(unittest.TestCase):
             {"url": "https://a.example/1", "publisher": "a.example", "text": "t1"},
             {"url": "https://b.example/2", "publisher": "b.example", "text": "t2"},
         ])
-        E.run_pipeline = lambda *a, **k: [{
-            "claim": {"content": "据公开讨论…", "grade": "experience", "sample_size": 8},
+        E.run_pipeline = lambda c, d, *a, **k: [{
+            "claim": {"content": _on_topic(d), "grade": "experience", "sample_size": 8},
             "judge": {"supported_source_idxs": [0, 1]}, "status": "active",
         }]
         store = {}
@@ -414,8 +432,8 @@ class TestT3(unittest.TestCase):
             {"url": "https://a.example/1", "publisher": "a.example", "text": "t1"},
             {"url": "https://b.example/2", "publisher": "b.example", "text": "t2"},
         ])
-        E.run_pipeline = lambda *a, **k: [{
-            "claim": {"content": "据公开讨论…", "grade": "experience", "sample_size": None},
+        E.run_pipeline = lambda c, d, *a, **k: [{
+            "claim": {"content": _on_topic(d), "grade": "experience", "sample_size": None},
             "judge": {"supported_source_idxs": [0, 1]}, "status": "active",
         }]
         store = {}
@@ -428,8 +446,8 @@ class TestT3(unittest.TestCase):
             {"url": "https://a.example/1", "publisher": "a.example", "text": "t1"},
             {"url": "https://b.example/2", "publisher": "b.example", "text": "无关"},
         ])
-        E.run_pipeline = lambda *a, **k: [{
-            "claim": {"content": "据公开讨论…", "grade": "experience", "sample_size": 8},
+        E.run_pipeline = lambda c, d, *a, **k: [{
+            "claim": {"content": _on_topic(d), "grade": "experience", "sample_size": 8},
             "judge": {"supported_source_idxs": [0]}, "status": "active",
         }]
         store = {}
@@ -483,3 +501,30 @@ class TestT3(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class T3QueuePriorityTest(unittest.TestCase):
+    """搜索额度是硬瓶颈（实测每天只够 ~20 家），必须先花在用户真正会投的公司上。"""
+
+    def test_must_apply_companies_come_first(self):
+        import must_apply
+        names = must_apply.all_names()
+        # 从清单里取一个真实公司名，保证用例不依赖某一家特定公司
+        listed = sorted(names)[0]
+        rows = [
+            {"company": "某不在清单的公司", "id": "a"},
+            {"company": listed, "id": "b"},
+        ]
+        counts = {"某不在清单的公司": 9999, listed: 1}
+        rows.sort(key=lambda row: (
+            0 if must_apply.resolve_owner(str(row.get("company") or ""), names) else 1,
+            -counts.get(str(row.get("company") or ""), 0),
+        ))
+        self.assertEqual(rows[0]["id"], "b", "必投清单公司必须排在在招岗更多的非清单公司前面")
+
+    def test_jingdongfang_is_not_treated_as_jingdong(self):
+        """裸子串会把「京东方」算成「京东」——本仓库为此立过碑，这里钉死。"""
+        import must_apply
+        names = must_apply.all_names()
+        self.assertEqual(must_apply.resolve_owner("京东方 BOE", names), "京东方")
+        self.assertEqual(must_apply.resolve_owner("京东集团", names), "京东")

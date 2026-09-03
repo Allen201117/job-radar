@@ -42,6 +42,7 @@ RULE_TITLES = {
     "D": "账户级错误",
     "E": "关键任务超期未跑",
     "F": "源连续失败",
+    "G": "源抓不全",
 }
 
 # ── 规则 A：每个模块的「产出口径」与「处理量口径」────────────────────────────
@@ -66,6 +67,8 @@ MODULE_OUTPUT = {
     "bu_extract": (("kept",), ("companies_scanned",)),
     # 有主体可算却一条指标都没产出 = 洞察库页面会空着，属零产出。
     "bu_signals": (("items_written",), ("subjects_scanned",)),
+    # 有待判档的条目却一条都没判出来 = 档位筛选会一直空着，属零产出。
+    "insight_grade_extract": (("graded",), ("scanned",)),
     # run.py 每轮抓取收尾写的台账（2026-09-03）：有源可抓却一个岗都没拿到 = 零产出。
     "daily_crawl": (("jobs_found_total",), ("sources_total",)),
 }
@@ -80,7 +83,9 @@ DEAD_SOURCE_MIN_RUNS = 8   # 少于这个次数不判（新源、低频源不冤
 #   insight_staleness：retired=0 = 当天没有过期洞察
 #   purge_expired：deleted=0 = 当天没有确认撤下的死岗
 #   ops_watchdog：本模块自己的台账
-NO_OUTPUT_MODULES = ("insight_staleness", "purge_expired", "ops_watchdog")
+#   search_quota_probe：它的产出就是「有没有越线」，critical=0 是好事不是零产出
+NO_OUTPUT_MODULES = ("insight_staleness", "purge_expired", "ops_watchdog",
+                     "search_quota_probe")
 
 # 规则 D：已落库的账户级错误信号。lib/track.ts 把 402/余额不足归一成 llm_insufficient_balance、
 # 把 401/403 归一成 llm_auth_error，写进 events.payload.diagnostics.error_code——用户侧真实踩到的欠费。
@@ -92,6 +97,12 @@ TIMEOUT_KILL_RATIO = 0.95       # 时长 ≥ 声明 timeout 的 95% + 被 cancel
 # 而 GitHub 会丢 schedule 触发（本项目实测丢过 2/3），把下限设成小时级会天天误报高频任务。
 # 24h 一次都没跑 = 真死了，这个判据不会冤枉谁。
 OVERDUE_FLOOR_MIN = 1440
+
+# 规则 G：抓全率。ratio 低于此值 + 缺口绝对量够大，才算「真的漏了」——两个条件缺一不可，
+# 否则 700 个源里天天有几十个因为四舍五入进榜，告警就没人看了。
+COVERAGE_RATIO_FLOOR = 0.9
+COVERAGE_MIN_GAP = 200      # 单源少抓这么多才值得开口（约等于「一个源整整少了 4 页」）
+COVERAGE_TOTAL_GAP = 2000   # 全站累计缺口低于这个数就先不吵（正常抖动区间）
 
 
 # ══════════════════ 纯函数层（可单测、不打网络）══════════════════
@@ -364,6 +375,85 @@ def evaluate_dead_sources(crawl_rows, sources_by_id, days=5, min_runs=DEAD_SOURC
                     "环境缺件（浏览器不存在等）→ 修 workflow；其它 → 修 adapter。别让它继续每轮白跑。",
         })
     return findings
+
+
+def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
+                                ratio_floor=COVERAGE_RATIO_FLOOR,
+                                min_gap=COVERAGE_MIN_GAP,
+                                total_gap=COVERAGE_TOTAL_GAP):
+    """规则 G：源「跑绿了但没抓全」——官网自报 N 个岗，我们只入库了远少于 N 个。
+
+    为什么必须自动报：这类源 status 全是 success，模块级绿灯、源级也不失败，唯一的痕迹是
+    crawl_runs.coverage_complete=false。2026-09-04 人肉跑 SQL 才发现 32 个源在这么漏，
+    累计 10.7 万个岗，其中 74% 是必投清单公司——**没有告警的指标等于没有指标**。
+
+    ⚠️ 只认 coverage_complete **is False**，不看 true。true 且 found<reported 的那批
+    （smartrecruiters / successfactors 等外企 ATS）不是抓不全，是**分母口径**问题：
+    它们的 reported_total 取的是接口全球总数，而我们抓完还按 sources.regions 做了地区后置过滤，
+    自然 found≪reported。把它们算进来只会让这条规则天天喊狼来了。
+
+    输出**一条聚合 finding**（不是每源一条）：subject 固定，标题稳定可去重；正文按缺口排序
+    列出最该看的几个，直接决定「调 CRAWL_MAX_JOBS 档位 / 修 adapter 分页 / 这源本来就该停」。
+    """
+    # ⚠️ 先按源挑出**最后一轮**，再判这一轮抓没抓全。顺序反过来（先滤掉 complete=true 再挑最新）
+    # 会让「早上没抓全、晚上抓全了」的源继续被报——最后一轮才是当下的真实状态。
+    latest = {}
+    for row in crawl_rows or []:
+        sid = row.get("source_id")
+        if not sid or row.get("reported_total") in (None, ""):
+            continue   # 没有分母的轮次不参与判定，也不该顶掉有分母的轮次
+        started = _as_dt(row.get("started_at"))
+        prev = latest.get(sid)
+        if prev is None or prev[0] is None or (started and started > prev[0]):
+            latest[sid] = (started, row)
+
+    shortfalls = []
+    for sid, (_started, row) in latest.items():
+        source = sources_by_id.get(sid)
+        if not source or not source.get("enabled", True):
+            continue
+        if row.get("coverage_complete") is not False:   # None（不可判定）和 True 都不算
+            continue
+        reported = _num(row.get("reported_total")) or 0
+        found = _num(row.get("jobs_found")) or 0
+        gap = int(reported - found)
+        if reported <= 0 or gap < min_gap or found >= reported * ratio_floor:
+            continue
+        shortfalls.append({
+            "company": source.get("company") or sid,
+            "adapter": source.get("adapter_name") or "?",
+            "reported": int(reported), "found": int(found), "gap": gap,
+        })
+
+    if not shortfalls:
+        return []
+    shortfalls.sort(key=lambda x: -x["gap"])
+    grand = sum(x["gap"] for x in shortfalls)
+    if grand < total_gap:
+        return []
+
+    by_adapter = Counter()
+    for item in shortfalls:
+        by_adapter[item["adapter"]] += item["gap"]
+    evidence = [
+        f"{item['company']}（{item['adapter']}）：官网自报 {item['reported']}，只入库 {item['found']}，"
+        f"少 {item['gap']}"
+        for item in shortfalls[:8]
+    ]
+    if len(shortfalls) > 8:
+        evidence.append(f"…还有 {len(shortfalls) - 8} 个源没列出来")
+    evidence.append("按 adapter 汇总缺口：" + "、".join(
+        f"{name} {gap}" for name, gap in by_adapter.most_common(5)))
+    return [{
+        "rule": "G",
+        "subject": "抓取覆盖",
+        "summary": f"{len(shortfalls)} 个源本轮没抓全，累计少入库 {grand} 个岗位"
+                   f"（官网自报的都拿得到，是我们自己停在半路）。",
+        "evidence": evidence,
+        "next": "先看缺口最大的那个 adapter：撞条数上限 → 调 CRAWL_MAX_JOBS / "
+                "CRAWL_MAX_JOBS_MUST_APPLY 档位；翻页在中途报错 → 修 adapter 分页；"
+                "这源本来就不该抓那么多 → 停用或降档。别让它继续每轮漏同一批岗。",
+    }]
 
 
 def evaluate_timeout_kills(runs, jobs_by_run, meta_by_path, ratio=TIMEOUT_KILL_RATIO, min_repeats=2):
@@ -771,17 +861,23 @@ def main():
     try:
         dead_since = (now - timedelta(days=args.dead_source_days)).isoformat()
         crawl_rows = db.fetch_all_rows(
-            lambda: sb.table("crawl_runs").select("source_id,status,error_message")
+            lambda: sb.table("crawl_runs")
+                      .select("source_id,status,error_message,started_at,"
+                              "reported_total,coverage_complete,jobs_found")
                       .gte("started_at", dead_since)
         )
         source_rows = db.fetch_all_rows(
             lambda: sb.table("sources").select("id,adapter_name,company,source_url,enabled")
                       .eq("enabled", True)
         )
-        findings += evaluate_dead_sources(crawl_rows, {r["id"]: r for r in source_rows},
+        sources_by_id = {r["id"]: r for r in source_rows}
+        findings += evaluate_dead_sources(crawl_rows, sources_by_id,
                                           days=args.dead_source_days)
+        # 规则 G 复用同一批 crawl_rows / sources（多取三列，不多打一次库）。
+        findings += evaluate_coverage_shortfall(crawl_rows, sources_by_id)
     except Exception as exc:  # noqa: BLE001
-        print(f"::warning::[watchdog] 规则 F（源连续失败）本轮没查成：{type(exc).__name__}: {exc}")
+        print(f"::warning::[watchdog] 规则 F/G（源连续失败 / 抓不全）本轮没查成："
+              f"{type(exc).__name__}: {exc}")
 
     meta_by_path = load_workflow_meta(root)
     repo = args.repo or detect_repo()

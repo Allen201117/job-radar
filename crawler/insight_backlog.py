@@ -23,6 +23,8 @@ from datetime import datetime, timezone, timedelta
 import db
 import insight_engine as E
 import jobs_db
+import insight_topic_gate as topic_gate
+import must_apply
 import llm_budget
 import official_cninfo as CN
 import official_edgar as EDG
@@ -381,6 +383,10 @@ def resolve_query_pack(raw=None, catalog=None, default_topics=None):
 
 
 T3_QUERY_PACK = resolve_query_pack(os.environ.get("INSIGHT_T3_TOPICS"))
+
+# 主题门的本轮累计：拦掉多少、转投多少。会进 drain_t3 的返回值 → ops_runs 台账。
+# 「跑绿了」不等于「产出是对的」——这两个数字是判断门有没有在干活的唯一依据。
+GATE_STATS = {"off_topic_blocked": 0, "rerouted": 0}
 _ROUTER = search_router.default_router()  # 多源搜索；未配 key 的源自动跳过（配哪个用哪个）
 
 
@@ -401,17 +407,26 @@ def _pick_sources(results, judge, max_n=3):
     return chosen
 
 
-def write_experience(sb, company_id, claim, sources, judge, status, dimension="culture", topic=None):
+def write_experience(sb, company_id, claim, sources, judge, status, dimension="culture", topic=None,
+                     metric_key=None):
     """写一条 T3 经验条目（origin=public_web）+ 多来源（去标识、仅短 excerpt，禁整段 UGC）。
-    dimension/topic 由查询包指定：路由到对应已有维度，title 带主题（如「年终奖 · 群体印象」）。"""
+    dimension/topic 由查询包指定：路由到对应已有维度，title 带主题（如「年终奖 · 群体印象」）。
+
+    metric_key 由调用方的主题门给出（见 insight_topic_gate.gate_new_claim）：
+    条目**从出生就带主题与数值**，不再靠事后迁移补课——散文进得来，就得能被索引和筛选。
+    """
     item_id = str(uuid.uuid4())
     title = claim.get("title") or (f"{topic} · 群体印象" if topic else "公开讨论 · 群体印象")
     assertion, grade = normalize_assertion("public_web", claim.get("grade") or "experience")
+    content = claim.get("content")
+    metric_value = topic_gate.extract_metric_value(metric_key, content) if metric_key else None
     sb.table("insight_items").insert({
         "id": item_id, "company_id": company_id, "dimension": dimension,
         "grade": grade,
         "title": title,
-        "content": claim.get("content"),
+        "content": content,
+        "metric_key": metric_key,
+        "metric_value": metric_value,
         "sample_size": int(claim["sample_size"]) if str(claim.get("sample_size") or "").isdigit() else None,
         "payload": {}, "origin": "public_web", "assertion": assertion,
         "deidentified": True, "status": status,
@@ -469,7 +484,16 @@ def fetch_t3_queue(sb, limit):
             str(item.get("company") or ""): int(item.get("active_count") or 0)
             for item in counts
         }
-        rows.sort(key=lambda row: -active_counts.get(str(row.get("company") or ""), 0))
+        # ⚠️ 必投清单公司**排在最前**（2026-09-04）：洞察库现在只放信息差，而信息差
+        # 全靠这条链产出；搜索额度是硬瓶颈（实测每天只够 ~20 家），所以额度必须先花在
+        # 用户真正会投的公司上，而不是按在招岗多寡排——在招岗最多的常常是央企批量岗。
+        # 归属用 must_apply.resolve_owner（清单名 ⊂ 库里名、最长者胜），
+        # 裸子串会把「京东方」算成「京东」，那是本仓库立过碑的红线。
+        must_apply_names = must_apply.all_names()
+        rows.sort(key=lambda row: (
+            0 if must_apply.resolve_owner(str(row.get("company") or ""), must_apply_names) else 1,
+            -active_counts.get(str(row.get("company") or ""), 0),
+        ))
     except Exception as exc:
         print(f"[t3] 香港 jobs 库岗位计数失败，回退 founded_year 排序: {type(exc).__name__}")
     return rows[:limit] if limit else rows
@@ -482,6 +506,9 @@ def enrich_company_t3(sb, profile):
     run_start = _now()
     wrote_any = False
     wrote_active = False
+    # 主题门的计数：拦掉多少、转投多少。绝不静默——「跑绿了」不等于「产出是对的」。
+    off_topic_blocked = 0
+    rerouted = 0
     # LLM 花费的 86% 在这条链上（2026-08-27 成本审计）。搜索侧本来就有日顶（下面 _ROUTER.remaining），
     # LLM 侧此前**完全没有天花板** → 花多少全看队列多长，账户欠费了都没人察觉。这里补上第二道闸。
     # 记账口径：gate 按主题查（与搜索额度同频），**扣减按 engine 的真实调用数**（不按估算值预扣），
@@ -515,13 +542,32 @@ def enrich_company_t3(sb, profile):
                                          if E.registrable_host(s.get("url"))})
                 if not E.consensus_ok(claim.get("grade", "experience"), source_publishers):
                     continue
+                # 主题门：搜索回来的多半是招聘页，写手照实复述就成了「答非所问」的洞察。
+                # 存量实测跑题率 50.9%（晋升发展 71.4%）。这里在**写入前**判：
+                # 答非所问的根本不写，写歪主题的当场转投到对的主题与维度。
+                action, metric_key, routed_dim = topic_gate.gate_new_claim(
+                    claim.get("content"), pack["topic"])
+                if action == "retire":
+                    off_topic_blocked += 1
+                    GATE_STATS["off_topic_blocked"] += 1
+                    print(f"  [t3-gate] {profile['company']}/{pack['topic']} 答非所问，未写入："
+                          f"{str(claim.get('content') or '')[:40]}")
+                    continue
+                if action == "reroute":
+                    rerouted += 1
+                    GATE_STATS["rerouted"] += 1
+                    print(f"  [t3-gate] {profile['company']}/{pack['topic']} → 转投 {metric_key}")
                 write_experience(sb, profile["id"], claim, sources, judge, entry["status"],
-                                 dimension=pack["dimension"], topic=pack["topic"])
+                                 dimension=routed_dim or pack["dimension"], topic=pack["topic"],
+                                 metric_key=metric_key)
                 wrote_any = True
                 wrote_active = wrote_active or entry["status"] == "active"
         except Exception as e:
             print(f"  [t3-err] {profile['company']}/{pack['topic']}: {type(e).__name__}: {str(e)[:120]}")
             continue
+    if off_topic_blocked or rerouted:
+        print(f"  [t3-gate] {profile['company']}: 拦下 {off_topic_blocked} 条答非所问，"
+              f"转投 {rerouted} 条")
     # 本公司实际花掉多少次 LLM，如实记进日顶台账（失败只打日志，绝不阻断主任务）
     _spent = max(0, E.llm_usage_totals().get("calls", 0) - llm_calls_before)
     if _spent:
@@ -572,11 +618,15 @@ def drain_t3(sb, limit=0):
     rows = fetch_t3_queue(sb, cap)
     print(f"T3 队列（notable·待富化）取 {len(rows)} 家（额度封顶 {cap}）")
     stat = {"wrote": 0, "empty": 0, "err": 0}
+    GATE_STATS["off_topic_blocked"] = 0
+    GATE_STATS["rerouted"] = 0
     for p in rows:
         if _ROUTER.remaining_above_reserve(sb) <= 0:
             print("额度触到校招预留线，停"); break
         stat[enrich_company_t3(sb, p)] += 1
     stat["budget_left"] = _ROUTER.remaining_above_reserve(sb)
+    # 主题门的产出也进台账：只看 wrote/empty 看不出「写进去的是不是对的」。
+    stat.update(GATE_STATS)
     print(f"T3 完成：{stat}")
     return stat
 

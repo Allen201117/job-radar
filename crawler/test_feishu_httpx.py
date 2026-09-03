@@ -71,6 +71,21 @@ class HttpxFetchTest(unittest.TestCase):
         self.assertEqual(sorted(r["id"] for r in rows), ["1", "2", "3"])
         self.assertTrue(reached)
 
+    def test_short_page_does_not_end_pagination_when_total_known(self):
+        """限流/抖动回一个短页，不许当末页收工（同 beisen 那条：判据要看有没有新岗，不看页长）。"""
+        a = self._adapter(page_size=2, max_jobs=100)
+        with _patch_client([_page([1, 2], 5), _page([3], 5), _page([4, 5], 5)]):
+            rows, total, reached = a._httpx_fetch("nio.jobs.feishu.cn")
+        self.assertEqual(len(rows), 5)
+        self.assertEqual(total, 5)
+
+    def test_page_with_no_new_ids_stops_pagination(self):
+        """接口重复回同一批 → 停，别一路翻到上限白烧配额。"""
+        a = self._adapter(page_size=2, max_jobs=100)
+        with _patch_client([_page([1, 2], 99), _page([1, 2], 99), _page([3], 99)]):
+            rows, total, reached = a._httpx_fetch("nio.jobs.feishu.cn")
+        self.assertEqual(len(rows), 2)
+
     def test_caps_at_max_jobs_not_complete(self):
         a = self._adapter(page_size=2, max_jobs=2)
         with _patch_client([_page([1, 2], 9), _page([3, 4], 9)]):
