@@ -48,7 +48,7 @@ async function loadIndex(): Promise<LibraryIndex> {
       .from("insight_items")
       .select(`${ITEM_COLUMNS}, ${SOURCE_SELECT}`)
       .eq("status", "active")
-      .not("subject_id", "is", null)
+      // 不按 subject_id 过滤：NULL 是「公司级」，由 buildLibraryIndex 挂到公司主体上。
       .order("id", { ascending: true })
       .range(from, to),
   );
@@ -137,22 +137,36 @@ export async function attachCardContents(
   if (ids.length === 0) return subjects;
 
   const supabase = createServiceClient();
-  const { data, error } = await supabase
-    .from("insight_items")
-    .select("subject_id, metric_key, metric_value, metric_unit, sample_size, assertion, content, scope")
-    .in("subject_id", ids)
-    .eq("status", "active")
-    .not("metric_key", "is", null);
+  // 公司主体的卡面条目可能是公司级写入的（subject_id 为 NULL），所以两路都要取。
+  const companyIds = subjects.filter((s) => s.kind === "company").map((s) => s.company_id);
+  const columns =
+    "subject_id, company_id, metric_key, metric_value, metric_unit, sample_size, assertion, content, scope";
+  const [bySubjectRes, byCompanyRes] = await Promise.all([
+    supabase.from("insight_items").select(columns)
+      .in("subject_id", ids).eq("status", "active").not("metric_key", "is", null),
+    companyIds.length
+      ? supabase.from("insight_items").select(columns)
+        .in("company_id", companyIds).is("subject_id", null)
+        .eq("status", "active").not("metric_key", "is", null)
+      : Promise.resolve({ data: [], error: null } as any),
+  ]);
+  const error = bySubjectRes.error || byCompanyRes.error;
+  const data = [...(bySubjectRes.data || []), ...(byCompanyRes.data || [])];
   if (error) {
     // 取不到正文不该让整页空掉：卡面退回只显示指标名与数值（见 metricText）。
     console.error("[insight-library] 取卡面正文失败", error.message);
     return subjects;
   }
+  const subjectIdByCompany = new Map(
+    subjects.filter((s) => s.kind === "company").map((s) => [s.company_id, s.id]),
+  );
   const bySubject = new Map<string, any[]>();
   for (const row of data || []) {
-    const list = bySubject.get(row.subject_id);
+    const key = row.subject_id || subjectIdByCompany.get(row.company_id);
+    if (!key) continue;
+    const list = bySubject.get(key);
     if (list) list.push(row);
-    else bySubject.set(row.subject_id, [row]);
+    else bySubject.set(key, [row]);
   }
   return subjects.map((subject) => {
     // 卡面顺序必须与索引里 trimSubjectForCard 的口径一致：signal 在前，再按样本量。

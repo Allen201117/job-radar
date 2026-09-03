@@ -150,14 +150,25 @@ export function buildLibraryIndex(
   companies: Map<string, { company: string; industry: string | null }>,
   now: Date = new Date(),
 ): LibrarySubject[] {
+  // subject_id 为 NULL = **公司级**（迁移 204 的定义），不是「没有主体」。
+  // 存量 T2/T3 条目（官方事实 + 公开说法）全都是公司级写入的；照 subject_id 硬筛会把
+  // 它们整批排除在洞察库外——线上实测就是这样：筛选器里只剩「数据」一档，
+  // 5,958 条「说法」一条都不出现。这里把公司级条目挂到该公司的 company 主体上。
+  const companySubjectId = new Map<string, string>();
+  for (const subject of subjects || []) {
+    if (subject.kind === "company" && subject.status === "active") {
+      companySubjectId.set(subject.company_id, subject.id);
+    }
+  }
   const bySubject = new Map<string, RawItemRow[]>();
   for (const item of items || []) {
-    if (!item.subject_id) continue;
+    const targetId = item.subject_id || companySubjectId.get(item.company_id);
+    if (!targetId) continue;
     const ev = evaluateInsight(item, item.sources || [], now);
     if (!ev.displayable) continue;
-    const list = bySubject.get(item.subject_id);
+    const list = bySubject.get(targetId);
     if (list) list.push(item);
-    else bySubject.set(item.subject_id, [item]);
+    else bySubject.set(targetId, [item]);
   }
 
   const out: LibrarySubject[] = [];
