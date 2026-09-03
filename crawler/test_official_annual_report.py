@@ -158,3 +158,11 @@ class UnitSuffixTest(unittest.TestCase):
         self.assertEqual(fields["edu_master"], 9000)
         self.assertEqual(fields["edu_bachelor"], 30000)
 
+    def test_master_alias_and_above_is_extracted(self):
+        # 郑州银行 2025 年报写法：「硕士及以上 1,359」——原来只认「硕士」抽不到，本科及以上占比就算不出。
+        text = "在职员工的数量合计（人） 6,052\n硕士及以上 1,359\n本科 4,383\n专科及以下 310"
+        fields = A.extract_employee_fields(text)
+        self.assertEqual(fields["edu_master"], 1359)
+        self.assertEqual(fields["edu_bachelor"], 4383)
+        self.assertEqual(fields["edu_below_bachelor"], 310)
+

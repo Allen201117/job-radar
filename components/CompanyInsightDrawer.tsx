@@ -36,6 +36,7 @@ import type {
 } from "@/lib/types";
 import { FIRST_PARTY_MIN_COUNT, type FirstPartyAggregate, type FirstPartyInsightItem } from "@/lib/insight-submission";
 import { countDistinctPublishers, freshnessFromVerifiedAt, type FreshnessLevel } from "@/lib/insight-verification";
+import { formatDateLabel } from "@/lib/relative-time";
 import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
 import CompanyLogo from "@/components/CompanyLogo";
@@ -224,7 +225,7 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
                 </h2>
               </div>
               {firmoBits.length > 0 && (
-                <p className="mt-1 text-xs ink-3 ">{firmoBits.join(" · ")}</p>
+                <p className="mt-1 t-caption">{firmoBits.join(" · ")}</p>
               )}
             </div>
             <button
@@ -253,7 +254,12 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-6">
-          {loading && <p className="text-sm ink-3 ">正在加载洞察…</p>}
+          {loading && (
+            <div className="flex items-center gap-2 t-body-sm ink-3">
+              <CircleNotch size={16} weight="bold" className="animate-spin shrink-0" aria-hidden="true" />
+              正在加载洞察…
+            </div>
+          )}
 
           {!loading && totalItems === 0 && !(data?.recruitment_cycles?.length) && (
             <div className="rounded-xl border border-black/[0.06] bg-white/55 p-5 text-[15px] leading-7 ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
@@ -292,7 +298,7 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
                       >
                         <Meta.icon size={17} weight="bold" className={Meta.iconText} />
                       </span>
-                      <h3 className="text-base font-semibold ink-1 ">{Meta.label}</h3>
+                      <h3 className="t-h3">{Meta.label}</h3>
                       <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-xs font-medium ink-3 dark:bg-white/[0.08] ">
                         {items.length}
                       </span>
@@ -335,7 +341,7 @@ function FirstPartySection({
         <span className="grid size-8 place-items-center rounded-xl border border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]">
           <ChatCircleText size={17} weight="bold" />
         </span>
-        <h3 className="text-base font-semibold ink-1 ">员工自愿分享</h3>
+        <h3 className="t-h3">员工自愿分享</h3>
         {visible && (
           <span className="inline-flex items-center gap-1 rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-2 py-0.5 text-xs font-medium text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]">
             <Star size={12} weight="fill" />
@@ -389,7 +395,7 @@ function FirstPartyCard({ item }: { item: FirstPartyInsightItem }) {
           </span>
         )}
       </div>
-      <p className="mt-2.5 leading-7 ink-2 ">{item.content}</p>
+      <p className="mt-2.5 t-body">{item.content}</p>
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs ink-3 ">
         {item.created_month && (
           <span className="inline-flex items-center gap-1">
@@ -513,8 +519,10 @@ function PayloadChips({ item }: { item: InsightItemView }) {
 }
 
 // T1 派生 hiring 维度的补充统计行（经验分布/学历分布/占比/在架周期）
+// 用「标签 | 数值」两列对齐，标签 ink-2 medium，数值 ink-3，一眼可扫。
 function HiringStats({ payload }: { payload: Record<string, unknown> }) {
-  const lines: string[] = [];
+  type StatRow = { label: string; value: string };
+  const rows: StatRow[] = [];
 
   // 经验分布
   const expDist = payload.experience_dist;
@@ -522,11 +530,12 @@ function HiringStats({ payload }: { payload: Record<string, unknown> }) {
     const entries = Object.entries(expDist as Record<string, number>);
     const total = entries.reduce((s, [, v]) => s + v, 0);
     if (total > 0) {
-      const parts = entries
+      const value = entries
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3)
-        .map(([k, v]) => `${k} ${Math.round((v / total) * 100)}%`);
-      lines.push(`经验要求：${parts.join(" · ")}`);
+        .map(([k, v]) => `${k} ${Math.round((v / total) * 100)}%`)
+        .join(" · ");
+      rows.push({ label: "经验", value });
     }
   }
 
@@ -536,11 +545,12 @@ function HiringStats({ payload }: { payload: Record<string, unknown> }) {
     const entries = Object.entries(eduDist as Record<string, number>);
     const total = entries.reduce((s, [, v]) => s + v, 0);
     if (total > 0) {
-      const parts = entries
+      const value = entries
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3)
-        .map(([k, v]) => `${k} ${Math.round((v / total) * 100)}%`);
-      lines.push(`学历要求：${parts.join(" · ")}`);
+        .map(([k, v]) => `${k} ${Math.round((v / total) * 100)}%`)
+        .join(" · ");
+      rows.push({ label: "学历", value });
     }
   }
 
@@ -552,20 +562,23 @@ function HiringStats({ payload }: { payload: Record<string, unknown> }) {
     const parts = (["social", "campus", "intern"] as const)
       .filter((k) => (s[k] || 0) > 0)
       .map((k) => `${LABEL[k]} ${s[k]}%`);
-    if (parts.length > 0) lines.push(`招聘类型：${parts.join(" · ")}`);
+    if (parts.length > 0) rows.push({ label: "类型", value: parts.join(" · ") });
   }
 
   // 在架时长中位数
   const openAge = payload.open_age_days_median;
   if (typeof openAge === "number" && openAge > 0) {
-    lines.push(`在架时长：中位数约 ${openAge} 天`);
+    rows.push({ label: "在架", value: `中位数约 ${openAge} 天` });
   }
 
-  if (lines.length === 0) return null;
+  if (rows.length === 0) return null;
   return (
-    <div className="mt-2 space-y-0.5 text-[13px] leading-6 ink-3">
-      {lines.map((line) => (
-        <p key={line}>{line}</p>
+    <div className="mt-3 space-y-1 border-t border-black/[0.06] pt-2.5 dark:border-white/[0.07]">
+      {rows.map((row) => (
+        <div key={row.label} className="flex gap-3">
+          <span className="t-caption w-8 shrink-0 font-medium ink-2">{row.label}</span>
+          <span className="t-caption ink-3">{row.value}</span>
+        </div>
       ))}
     </div>
   );
@@ -629,8 +642,8 @@ function InsightCard({ item }: { item: InsightItemView }) {
         )}
       </div>
 
-      {item.title && <p className="mt-2.5 text-base font-semibold ink-1 ">{item.title}</p>}
-      <p className="mt-1.5 leading-7 ink-2 ">{item.content}</p>
+      {item.title && <p className="mt-2.5 t-h3">{item.title}</p>}
+      <p className="mt-1.5 t-body">{item.content}</p>
       {item.derived && item.dimension === "hiring" && <HiringStats payload={item.payload} />}
       <PayloadChips item={item} />
       <EquityAngle payload={item.payload} />
@@ -651,7 +664,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
             )}
           >
             <ClockCounterClockwise size={12} weight="bold" />
-            {freshness.text} · {new Date(item.last_verified_at).toLocaleDateString("zh-CN")}
+            {freshness.text} · {formatDateLabel(item.last_verified_at)}
           </span>
         )}
       </div>
@@ -743,7 +756,7 @@ function RecruitmentTimeline({ cycles }: { cycles: RecruitmentObservation[] }) {
         <span className="grid size-8 place-items-center rounded-xl border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
           <CalendarBlank size={17} weight="bold" />
         </span>
-        <h3 className="text-base font-semibold ink-1 ">招聘周期</h3>
+        <h3 className="t-h3">招聘周期</h3>
         <span className="rounded-full border border-[#b7d2ee] bg-[#dceafa] px-2 py-0.5 text-[11px] font-medium text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
           据往年 · {gradClass}
         </span>

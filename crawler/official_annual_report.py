@@ -153,7 +153,8 @@ def extract_employee_fields(text):
         "emp_finance": ("财务人员",),
         "emp_admin": ("行政人员",),
         "edu_phd": ("博士",),
-        "edu_master": ("硕士",),
+        # 银行/国企年报常写「硕士及以上」「研究生」，长标签放前面优先命中。
+        "edu_master": ("硕士及以上", "硕士研究生", "研究生及以上", "硕士", "研究生"),
         "edu_below_bachelor": ("大专及以下", "专科及以下", "本科以下", "大专", "专科"),
     }
     for key, labels in mappings.items():
