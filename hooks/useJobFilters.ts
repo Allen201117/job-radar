@@ -47,6 +47,8 @@ type ServerState = {
   relatedSameFunction: number;
   relatedMissingInfo: number;
   capped: boolean;
+  /** capped 时服务端算出的真实匹配总数；算不准就是 null（前端退回「N+」，见 lib/match-total）。 */
+  exactTotal: number | null;
   loading: boolean;
   loadingMore: boolean;
   error: string | null;
@@ -99,6 +101,7 @@ export function useJobFilters({
     relatedSameFunction: 0,
     relatedMissingInfo: 0,
     capped: false,
+    exactTotal: null,
     loading: true,
     loadingMore: false,
     error: null,
@@ -142,6 +145,7 @@ export function useJobFilters({
         relatedSameFunction: data.relatedSameFunction ?? 0,
         relatedMissingInfo: data.relatedMissingInfo ?? 0,
         capped: Boolean(data.capped),
+        exactTotal: typeof data.exactTotal === "number" ? data.exactTotal : null,
         loading: false,
         loadingMore: false,
         error: null,
@@ -245,6 +249,7 @@ export function useJobFilters({
     relatedSameFunction: server.relatedSameFunction,
     relatedMissingInfo: server.relatedMissingInfo,
     capped: server.capped,
+    exactTotal: server.exactTotal,
     loading: server.loading,
     loadingMore: server.loadingMore,
     error: server.error,

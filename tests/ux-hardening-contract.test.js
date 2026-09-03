@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const { loadRoute, resolvedQuery } = require("./route-test-utils");
+const { loadTs } = require("./_load-ts");
 
 const read = (rel) => fs.readFileSync(path.resolve(__dirname, rel), "utf8");
 
@@ -421,3 +422,78 @@ function stripComments(source) {
     .filter((line) => !/^\s*\/\//.test(line))
     .join("\n");
 }
+
+
+// ───────────────────────────────────────────────────────────────
+// 计数诚实契约（2026-09-03 立）：检索是「先取候选、再 JS 精筛」，候选有取数上限。
+// 撞上限时 total 只是「取到这么多」，不是真实匹配数 —— 线上「深圳+社招」因此长期把 8000
+// （FTS_CAP）当真实数展示，而库里符合条件的有 15,290 个。撞上限时一律不许渲染确定数字。
+// ───────────────────────────────────────────────────────────────
+
+test("撞取数上限时页面不渲染确定数字，一律走 formatMatchTotal", () => {
+  const code = stripComments(jobsClient);
+  assert.match(code, /import \{ formatMatchTotal \} from "@\/lib\/match-total"/);
+  assert.match(code, /formatMatchTotal\(total, capped, exactTotal\)/);
+  // 计数行必须用 matchTotal.text，不能再把 total 直接插进文案。
+  assert.match(code, /\$\{matchTotal\.text\} 个匹配岗位/);
+  assert.doesNotMatch(code, /\$\{total\} 个匹配岗位/);
+  // 「还有 N 个」是拿 total 减出来的，撞上限时同样是假数字 → 必须先判 capped。
+  assert.doesNotMatch(
+    code,
+    /^\s*<span className="t-num ink-3">（还有 \{total - displayJobs\.length\} 个）<\/span>\s*$/m,
+    "撞上限时不能无条件渲染「还有 N 个」",
+  );
+  assert.match(code, /matchTotal\.approximate \|\| capped \? "（还有更多）"/);
+});
+
+test("筛选弹窗的「查看 N 个岗位」拿的是同一份计数文案", () => {
+  // 传数字进去就没法表达「8000+」；这里钉死它只接文案，源头统一在 jobs-client。
+  assert.match(jobFilters, /resultTotalText: string/);
+  assert.doesNotMatch(jobFilters, /resultTotal:\s*number/);
+  assert.match(jobFilters, /<span className="t-num">\{resultTotalText\}<\/span>/);
+  assert.match(jobsClient, /resultTotalText=\{matchTotal\.text\}/);
+});
+
+test("每个筛选项都必须显式归类，才允许用 SQL count 算真实总数", () => {
+  const {
+    DEFAULT_FILTERS,
+    SQL_PUSHED_FILTER_KEYS,
+    JS_ONLY_FILTER_KEYS,
+    NON_FILTERING_FILTER_KEYS,
+    filtersFullyPushedToSql,
+  } = loadTs(path.resolve(__dirname, "../lib/job-filter.ts"));
+
+  const classified = [
+    ...SQL_PUSHED_FILTER_KEYS,
+    ...JS_ONLY_FILTER_KEYS,
+    ...NON_FILTERING_FILTER_KEYS,
+  ];
+  assert.equal(new Set(classified).size, classified.length, "同一个筛选项不能被归两次类");
+  assert.deepEqual(
+    classified.slice().sort(),
+    Object.keys(DEFAULT_FILTERS).sort(),
+    "新增筛选项必须显式归类：漏了就是线上悄悄给出另一个错数字",
+  );
+
+  // 全默认 → 每一项都已在候选 where 里表达，可以用 count(*) 算真实总数。
+  assert.equal(filtersFullyPushedToSql(DEFAULT_FILTERS), true);
+  // 任一「只能在 JS 里判」的条件被启用 → 不许再用 SQL 计数。
+  for (const key of JS_ONLY_FILTER_KEYS) {
+    const enabled = typeof DEFAULT_FILTERS[key] === "boolean" ? true : "x";
+    assert.equal(
+      filtersFullyPushedToSql({ ...DEFAULT_FILTERS, [key]: enabled }),
+      false,
+      `${key} 生效时不能用 SQL 计数`,
+    );
+  }
+  // 已下推的条件不影响资格。
+  assert.equal(
+    filtersFullyPushedToSql({ ...DEFAULT_FILTERS, city: "深圳", jobType: "社招" }),
+    true,
+  );
+  // 用户输入里带 LIKE 通配符时，候选 where 比 JS 的字面子串更宽 → 计数会多算，必须弃权。
+  for (const bad of ["%", "_", "\\"]) {
+    assert.equal(filtersFullyPushedToSql({ ...DEFAULT_FILTERS, company: bad }), false);
+    assert.equal(filtersFullyPushedToSql({ ...DEFAULT_FILTERS, city: bad }), false);
+  }
+});

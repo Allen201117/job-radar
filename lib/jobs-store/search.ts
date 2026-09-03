@@ -3,9 +3,10 @@
 //   差别仅「候选取数」从 supabase-js 换成直连 pg SQL → 搜索口径/精度/排序与线上零差异。
 import "server-only";
 import { jobsQuery } from "./client";
-import { sortAndFilterJobs } from "@/lib/scoring";
+import { actionHiddenJobIds, sortAndFilterJobs } from "@/lib/scoring";
 import {
   filterAndRankJobs,
+  filtersFullyPushedToSql,
   jobFilterTier,
   splitMultiValue,
   countMatchBreakdown,
@@ -127,11 +128,15 @@ const HYDRATE_COLUMNS =
 
 export type SearchResult = {
   jobs: Array<ScoredJob & { __tier: "exact" | "related"; __match: MatchReason }>;
+  /** 可翻页的条数 = 候选里通过精筛的条数。候选被截断时它**不是**真实总数，别拿它当计数展示。 */
   total: number;
   exactCount: number;
   relatedSameFunction: number;
   relatedMissingInfo: number;
+  /** 候选撞上限：`total` 只是「取到这么多」，真实匹配数更大。 */
   capped: boolean;
+  /** capped 时的真实匹配总数；只有能证明数字正确时才有值，否则 null（前端退回「N+」）。 */
+  exactTotal: number | null;
   offset: number;
   limit: number;
 };
@@ -235,6 +240,68 @@ async function hydratePageColumns(
   }
 }
 
+/** 候选里落在「SQL 也会一并排除」的隐藏岗（ignored / applied）条数。 */
+function countHidden(rows: Array<{ id?: string }>, hiddenIds: Set<string>): number {
+  if (!hiddenIds.size) return 0;
+  return rows.reduce((n, r) => n + (r.id && hiddenIds.has(r.id) ? 1 : 0), 0);
+}
+
+/**
+ * 候选撞上限（capped）时，用一条 count(*) 拿**真实匹配总数**。
+ *
+ * 不这么做的话，前端只能把「取数上限」当真实值展示：线上「深圳 + 社招」候选撞 FTS_CAP=8000，
+ * 页面就写「8000 个匹配岗位」，而库里符合条件的其实是 15,290 个（2026-09-03 实测）。
+ *
+ * 计数用的**就是取候选那条 where**（同一份 conds/params，不另写一套），所以不存在「两套条件漂移」；
+ * 需要成立的只有一个方向：**where 成立 ⇒ jobFilterMatch 放行**。四道门保证它，任一不满足就返回
+ * null，前端退回诚实的「N+」—— 宁可不给数字，也不给另一个错的确定数字：
+ *   ① 结构门：还有只能在 JS 里判的条件在生效（关键词/职能/学历/经验…）→ 不给。
+ *   ② 偏好门：exclude_keywords 命中即硬删，而 SQL 看不到 JD 正文 → 不给。
+ *   ③ 运行时自检：where 若真是充分条件，这批候选里除了 SQL 一并排除的 ignored/applied 之外，
+ *      **一个都不该被 JS 淘汰**。不成立 = 等价性已经漂了（有人给 jobFilterMatch 加了条件却没同步
+ *      上面的归类表）→ 不给。这道门不依赖任何人记得改代码，是最后一道保险。
+ *   ④ recruitment_category 尚未算出的行走的是「信号超集」兜底分支，那条不是充分条件 → 结果集里
+ *      只要还有这种行，数就不可信。
+ */
+async function exactTotalWhenCapped(args: {
+  conds: string[];
+  params: unknown[];
+  filters: Filters;
+  prefs: UserPreferences | null;
+  hiddenIds: Set<string>;
+  scanned: number;
+  hiddenScanned: number;
+  rankedLength: number;
+}): Promise<number | null> {
+  const { conds, params, filters, prefs, hiddenIds, scanned, hiddenScanned, rankedLength } = args;
+  if (!filtersFullyPushedToSql(filters)) return null; // ①
+  if ((prefs?.exclude_keywords || []).length) return null; // ②
+  if (rankedLength !== scanned - hiddenScanned) return null; // ③
+
+  const countParams = [...params];
+  const where = [...conds];
+  if (hiddenIds.size) {
+    countParams.push([...hiddenIds]);
+    where.push(`not (id = any($${countParams.length}::uuid[]))`);
+  }
+  try {
+    // 走同一份候选缓存：翻页时 where 逐字节相同 → 一次查询覆盖整轮浏览（实测热查询 ~85ms）。
+    const rows = (await fetchCandidates(
+      `select count(*)::int as total, count(*) filter (where recruitment_category is null)::int as unclassified ` +
+        `from jobs where ${where.join(" and ")}`,
+      countParams,
+    )) as Array<{ total: number; unclassified: number }>;
+    const row = rows[0];
+    if (!row) return null;
+    if (filters.jobType && row.unclassified > 0) return null; // ④
+    // 真实总数不可能比「已经排出来的条数」还少；小于就说明这个数不可信。
+    return row.total >= rankedLength ? row.total : null;
+  } catch {
+    // 计数只是展示优化，挂了就退回「N+」，绝不拖垮搜索本身。
+    return null;
+  }
+}
+
 // FTS 路径：search_doc @@ to_tsquery 收窄候选（pg 无 1000 行上限，一次取到 FTS_CAP）→ JS 精筛分层。
 async function searchViaFTS(
   filters: Filters,
@@ -245,6 +312,9 @@ async function searchViaFTS(
   tsquery: string,
   adapterBySource?: Map<string, string | null> | null,
 ): Promise<SearchResult> {
+  // 「默认会被隐藏」的岗位（忽略/已投递）。⚠️ 无偏好时 scoreJob 直接返回 hidden_reason=null，
+  // 用户操作根本不生效（lib/scoring.ts），这里必须同口径，否则算真实总数时会多排除。
+  const hiddenIds = prefs ? actionHiddenJobIds(actions, filters) : new Set<string>();
   // 不加 order by：让 planner 用 GIN bitmap 只取命中行；排序交给 JS filterAndRankJobs。
   const conds = ["status = 'active'", "search_doc @@ to_tsquery('simple', $1)"];
   const params: unknown[] = [tsquery];
@@ -274,14 +344,31 @@ async function searchViaFTS(
   const ranked = annotateAndRank(rows, filters, prefs, actions);
   const breakdown = countMatchBreakdown(ranked);
   const page = ranked.slice(offset, offset + limit);
-  await hydratePageColumns(page); // 命中页回补展示列（候选阶段省传）
+  const capped = rows.length >= FTS_CAP;
+  // 回补展示列与「真实总数」计数彼此无关，并行跑，别把 85ms 串到 TTFB 上。
+  const [, exactTotal] = await Promise.all([
+    hydratePageColumns(page), // 命中页回补展示列（候选阶段省传）
+    capped
+      ? exactTotalWhenCapped({
+          conds,
+          params,
+          filters,
+          prefs,
+          hiddenIds,
+          scanned: rows.length,
+          hiddenScanned: countHidden(rows, hiddenIds),
+          rankedLength: ranked.length,
+        })
+      : Promise.resolve(null),
+  ]);
   return {
     jobs: page,
     total: ranked.length,
     exactCount: breakdown.exact,
     relatedSameFunction: breakdown.relatedSameFunction,
     relatedMissingInfo: breakdown.relatedMissingInfo,
-    capped: rows.length >= FTS_CAP,
+    capped,
+    exactTotal,
     offset,
     limit,
   };
@@ -300,6 +387,10 @@ async function searchViaScan(
   const matched: ScoredJob[] = [];
   let nextOff = 0;
   let exhausted = false;
+  // 实际翻过的候选行数 / 其中被 SQL 也会一并排除的隐藏岗数（算真实总数时的自检基线，见 exactTotalWhenCapped）。
+  let scanned = 0;
+  let hiddenScanned = 0;
+  const hiddenIds = prefs ? actionHiddenJobIds(actions, filters) : new Set<string>();
   const conds = ["status = 'active'"];
   const params: unknown[] = [];
   appendJobScopeWhere(conds, params, prefs, filters);
@@ -319,6 +410,8 @@ async function searchViaScan(
   const absorb = (raw: unknown, want: number): boolean => {
     const rows: any[] = annotateSourceAdapter(raw as any[], adapterBySource);
     if (!rows.length) return true;
+    scanned += rows.length;
+    hiddenScanned += countHidden(rows, hiddenIds);
     const scored = sortAndFilterJobs(rows, prefs, actions, {
       showIgnored: true,
       showApplied: true,
@@ -362,14 +455,30 @@ async function searchViaScan(
   const ranked = filterAndRankJobs(matched, filters);
   const breakdown = countMatchBreakdown(ranked);
   const page = ranked.slice(offset, offset + limit);
-  await hydratePageColumns(page); // 命中页回补展示列（候选阶段省传）
+  const capped = !exhausted;
+  const [, exactTotal] = await Promise.all([
+    hydratePageColumns(page), // 命中页回补展示列（候选阶段省传）
+    capped
+      ? exactTotalWhenCapped({
+          conds,
+          params,
+          filters,
+          prefs,
+          hiddenIds,
+          scanned,
+          hiddenScanned,
+          rankedLength: ranked.length,
+        })
+      : Promise.resolve(null),
+  ]);
   return {
     jobs: page,
     total: ranked.length,
     exactCount: breakdown.exact,
     relatedSameFunction: breakdown.relatedSameFunction,
     relatedMissingInfo: breakdown.relatedMissingInfo,
-    capped: !exhausted,
+    capped,
+    exactTotal,
     offset,
     limit,
   };

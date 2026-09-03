@@ -8,6 +8,7 @@ import BackToTop from "@/components/BackToTop";
 import JobCard from "@/components/JobCard";
 import JobFilters from "@/components/JobFilters";
 import { JobListSkeleton } from "@/components/Skeletons";
+import { formatMatchTotal } from "@/lib/match-total";
 import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
 import { MANUAL_CRAWL_UI_ENABLED } from "@/lib/product-flags";
@@ -79,6 +80,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
     relatedSameFunction,
     relatedMissingInfo,
     capped,
+    exactTotal,
     loading,
     loadingMore,
     error,
@@ -199,6 +201,8 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
   }
 
   const visibleJobs = displayJobs.filter((job) => !deadIds.has(job.id));
+  // 候选撞上限时 total 只是取数上限，不是真实匹配数 → 交给 formatMatchTotal 决定给不给确定数字。
+  const matchTotal = formatMatchTotal(total, capped, exactTotal);
   const matchCountParts = filters.keyword
     ? [
         exactCount > 0 ? `精确 ${exactCount}` : "",
@@ -220,7 +224,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
         onClearAll={clearAll}
         onClearOne={clearOne}
         companies={companies}
-        resultTotal={total}
+        resultTotalText={matchTotal.text}
         jobScope={jobScope}
       />
 
@@ -287,7 +291,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
                 <p className="t-label ink-2">
                   {newViewActive
                     ? `${newMatching.length} 个本次新增 · 已展示 ${visibleJobs.length}`
-                    : `${total} 个匹配岗位 · 已展示 ${visibleJobs.length}`}
+                    : `${matchTotal.text} 个匹配岗位 · 已展示 ${visibleJobs.length}`}
                 </p>
                 {deadIds.size > 0 && (
                   <span className="t-caption rounded-full border border-black/[0.08] bg-white/55 px-2 py-0.5 ink-3 dark:border-white/[0.1] dark:bg-white/[0.05]">
@@ -426,7 +430,10 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
             ) : (
               <>
                 加载更多
-                <span className="t-num ink-3">（还有 {total - displayJobs.length} 个）</span>
+                {/* 撞上限时 total 是取数上限，减出来的差值同样是假数字 → 只说「还有更多」。 */}
+                <span className="t-num ink-3">
+                  {matchTotal.approximate || capped ? "（还有更多）" : `（还有 ${total - displayJobs.length} 个）`}
+                </span>
               </>
             )}
           </button>

@@ -202,6 +202,36 @@ export function scoreJob(
   };
 }
 
+/**
+ * 「默认会被隐藏」的岗位 id 集合（与 scoreJob 里 hidden_reason = ignored / applied_by_default 同口径）：
+ * 每个岗位以**最近一次非 viewed 操作**为准，saved 不隐藏；两个开关都打开时集合为空。
+ *
+ * 只看用户操作，不含 exclude_keywords —— 那条要读 JD 正文，SQL 侧表达不了。
+ * 用途：候选撞上限时用 count(*) 算真实总数，SQL 要把这些岗一并排除，才和 JS 的口径对得上
+ * （见 lib/jobs-store/search.ts 的 exactTotalWhenCapped）。改 scoreJob 的隐藏规则务必同步这里，
+ * tests/scoring-hidden-ids.test.js 会拿两边对拍。
+ */
+export function actionHiddenJobIds(
+  actions: JobAction[],
+  options: { showIgnored?: boolean; showApplied?: boolean } = {},
+): Set<string> {
+  const hidden = new Set<string>();
+  if (options.showIgnored && options.showApplied) return hidden;
+  const primary = new Map<string, JobAction>();
+  for (const a of actions || []) {
+    if (!a || !a.job_id || a.action === "viewed") continue;
+    const cur = primary.get(a.job_id);
+    if (!cur || new Date(a.created_at).getTime() > new Date(cur.created_at).getTime()) {
+      primary.set(a.job_id, a);
+    }
+  }
+  for (const [jobId, a] of primary) {
+    if (a.action === "ignored" && !options.showIgnored) hidden.add(jobId);
+    if (a.action === "applied" && !options.showApplied) hidden.add(jobId);
+  }
+  return hidden;
+}
+
 export function sortAndFilterJobs(
   jobs: Job[],
   preferences: UserPreferences | null,
