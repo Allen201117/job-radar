@@ -5,7 +5,7 @@ import Navbar from "@/components/Navbar";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import { Compass } from "@phosphor-icons/react/ssr";
 import { getRequestUser } from "@/lib/auth";
-import { getInsightLibraryIndex } from "@/lib/insight-library-store";
+import { attachCardContents, getInsightLibraryIndex } from "@/lib/insight-library-store";
 import {
   computeFacets,
   filterSubjects,
@@ -33,6 +33,9 @@ export default async function InsightsPage() {
   // 索引是跨实例缓存的，这里只是一次内存筛选与排序。
   const filters = {};
   const sorted = sortSubjects(filterSubjects(index.subjects, filters), "fresh");
+  const firstPage = await attachCardContents(
+    sorted.slice(0, LIBRARY_PAGE_SIZE).map(trimSubjectForCard),
+  );
 
   return (
     <div className="min-h-screen bg-editorial">
@@ -40,7 +43,7 @@ export default async function InsightsPage() {
       <ProductPage>
         <ProductHero {...HERO} icon={Compass} />
         <InsightsClient
-          initialSubjects={sorted.slice(0, LIBRARY_PAGE_SIZE).map(trimSubjectForCard)}
+          initialSubjects={firstPage}
           initialTotal={sorted.length}
           initialFacets={computeFacets(index.subjects, filters)}
           subjectTotal={index.subjects.length}

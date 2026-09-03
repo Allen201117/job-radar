@@ -22,14 +22,46 @@ import type {
   InsightSource,
 } from "./types";
 
-/** 主体卡上直接展示的指标（正文已是人话一句，前端不再拼装）。 */
-export interface LibraryMetric {
+/**
+ * 主体卡上直接展示的指标。
+ *
+ * ⚠️ `content` / `scope` **刻意不进缓存索引**：Vercel 数据缓存单条上限 2MB，
+ * 带上正文后 1,500 个主体 × 约 7 条指标就顶到上限 → unstable_cache **静默不缓存**，
+ * 每个请求都重建索引（2026-09-03 线上实测：index_built_at 每次都变、每次 ~10s）。
+ * 正文只为「当前这一页的 24 个主体」按 item id 现取（attachCardContents）。
+ */
+/**
+ * 缓存索引里的指标，**打包成元组**：`[metric_key, metric_value, sample_size, assertion]`。
+ *
+ * 为什么不用对象（这是量出来的，不是风格偏好）：
+ *   1,600 个主体 × 7 条指标时，对象形态实测 1,716KB，顶着 Vercel 数据缓存 2MB 上限 ——
+ *   超了就**静默不缓存**，每个请求都重建索引（线上实测 index_built_at 每次都变、每次 ~10s，
+ *   而且没有任何报错）。光是 JSON 的键名与 item uuid 就占掉 0.8MB。
+ *   元组化后同一组数据 ~560KB，留出 2 倍余量。
+ *   同一权衡在 /campus 的分面上已经做过一次（CLAUDE.md「校招专区首屏」）。
+ *
+ * ⚠️ 打包与读取（下面的 M_* 下标与 metricKey/metricValue 等）**刻意放同一文件**：
+ *    下标口径两端一漂，页面就会安静地显示错数字——不报错、不崩，只骗用户。
+ */
+export type PackedMetric = [string, number | null, number | null, InsightAssertion];
+
+export const M_KEY = 0;
+export const M_VALUE = 1;
+export const M_SAMPLE = 2;
+export const M_ASSERTION = 3;
+
+export const metricKey = (m: PackedMetric): string => m[M_KEY];
+export const metricValue = (m: PackedMetric): number | null => m[M_VALUE];
+export const metricSample = (m: PackedMetric): number | null => m[M_SAMPLE];
+export const metricAssertion = (m: PackedMetric): InsightAssertion => m[M_ASSERTION];
+
+/** 卡面用的可读形态：只为「当前这一页」的主体现取，不进缓存索引。 */
+export interface LibraryCardMetric {
   metric_key: string;
   metric_value: number | null;
   metric_unit: string | null;
   sample_size: number | null;
   assertion: InsightAssertion;
-  dimension: InsightDimension;
   content: string;
   scope: Record<string, unknown>;
 }
@@ -45,7 +77,9 @@ export interface LibrarySubject {
   /** 三档承诺各有多少条可展示内容——这是「健康度」的第一眼判据。 */
   assertion_counts: Record<InsightAssertion, number>;
   dimensions: InsightDimension[];
-  metrics: LibraryMetric[];
+  metrics: PackedMetric[];
+  /** 卡面正文，由 attachCardContents 为当前页补上；缓存索引里没有。 */
+  cards?: LibraryCardMetric[];
   /** 最近一次核实时间（ISO）。null = 该主体还没有任何可展示洞察。 */
   last_verified_at: string | null;
   freshness: FreshnessLevel | null;
@@ -135,23 +169,15 @@ export function buildLibraryIndex(
     const assertion_counts: Record<InsightAssertion, number> = { fact: 0, signal: 0, claim: 0 };
     const dims = new Set<InsightDimension>();
     let latest: string | null = null;
-    const metrics: LibraryMetric[] = [];
+    const metrics: PackedMetric[] = [];
     for (const item of own) {
       const assertion = (item.assertion || "claim") as InsightAssertion;
       assertion_counts[assertion] = (assertion_counts[assertion] || 0) + 1;
       dims.add(item.dimension);
       if (!latest || item.last_verified_at > latest) latest = item.last_verified_at;
       if (item.metric_key) {
-        metrics.push({
-          metric_key: item.metric_key,
-          metric_value: item.metric_value ?? null,
-          metric_unit: item.metric_unit ?? null,
-          sample_size: item.sample_size ?? null,
-          assertion,
-          dimension: item.dimension,
-          content: item.content,
-          scope: (item.scope || {}) as Record<string, unknown>,
-        });
+        // 只留筛选/分面/排序需要的四个值。正文与单位见 PackedMetric 的注释。
+        metrics.push([item.metric_key, item.metric_value ?? null, item.sample_size ?? null, assertion]);
       }
     }
     out.push({
@@ -164,7 +190,7 @@ export function buildLibraryIndex(
       job_count: subject.job_count || 0,
       assertion_counts,
       dimensions: [...dims],
-      metrics: metrics.sort((a, b) => a.metric_key.localeCompare(b.metric_key)),
+      metrics: metrics.sort((a, b) => metricKey(a).localeCompare(metricKey(b))),
       last_verified_at: latest,
       freshness: freshnessFromVerifiedAt(latest, now)?.level ?? null,
       item_count: own.length,
@@ -175,8 +201,8 @@ export function buildLibraryIndex(
 
 // ── 筛选与排序 ────────────────────────────────────────────────────────────
 
-function metricOf(subject: LibrarySubject, key: string): LibraryMetric | undefined {
-  return subject.metrics.find((m) => m.metric_key === key);
+function metricOf(subject: LibrarySubject, key: string): PackedMetric | undefined {
+  return subject.metrics.find((m) => metricKey(m) === key);
 }
 
 /** 单个筛选项是否放行。拆成一条一条，好让分面能「排除自己这一项」重算。 */
@@ -196,8 +222,9 @@ const PREDICATES: Record<string, (s: LibrarySubject, f: LibraryFilters) => boole
     if (!f.metric) return true;
     const m = metricOf(s, f.metric);
     if (!m) return false;
-    if (f.metricMin != null && (m.metric_value == null || m.metric_value < f.metricMin)) return false;
-    if (f.metricMax != null && (m.metric_value == null || m.metric_value > f.metricMax)) return false;
+    const value = metricValue(m);
+    if (f.metricMin != null && (value == null || value < f.metricMin)) return false;
+    if (f.metricMax != null && (value == null || value > f.metricMax)) return false;
     return true;
   },
   has: (s, f) => (f.has || []).every((key) => Boolean(metricOf(s, key))),
@@ -223,7 +250,7 @@ export function sortSubjects(
     rows.sort((a, b) => b.job_count - a.job_count || a.name.localeCompare(b.name));
   } else if (sort === "sample") {
     const maxN = (s: LibrarySubject) =>
-      s.metrics.reduce((acc, m) => Math.max(acc, m.sample_size || 0), 0);
+      s.metrics.reduce((acc, m) => Math.max(acc, metricSample(m) || 0), 0);
     rows.sort((a, b) => maxN(b) - maxN(a) || b.job_count - a.job_count);
   } else if (sort === "insights") {
     rows.sort((a, b) => b.item_count - a.item_count || b.job_count - a.job_count);
@@ -272,7 +299,7 @@ export function computeFacets(
         (k) => (s.assertion_counts[k] || 0) > 0,
       ),
     ),
-    metric: tally(on("metric"), (s) => s.metrics.map((m) => m.metric_key)),
+    metric: tally(on("metric"), (s) => s.metrics.map(metricKey)),
     industry: tally(on("industry"), (s) => (s.industry ? [s.industry] : [])),
     freshness: tally(on("freshness"), (s) => (s.freshness ? [s.freshness] : [])),
   };
@@ -323,8 +350,8 @@ export function trimSubjectForCard(subject: LibrarySubject): LibrarySubject {
   const metrics = [...subject.metrics]
     .sort(
       (a, b) =>
-        (rank[a.assertion] ?? 9) - (rank[b.assertion] ?? 9) ||
-        (b.sample_size || 0) - (a.sample_size || 0),
+        (rank[metricAssertion(a)] ?? 9) - (rank[metricAssertion(b)] ?? 9) ||
+        (metricSample(b) || 0) - (metricSample(a) || 0),
     )
     .slice(0, CARD_METRICS);
   return { ...subject, metrics };
@@ -390,6 +417,6 @@ export const CONTRIBUTION_GAPS: Array<{ key: string; label: string; topic: strin
 
 /** 该主体还缺哪几类「我们给不了、只有待过的人知道」的内容。 */
 export function missingContributionTopics(subject: LibrarySubject): typeof CONTRIBUTION_GAPS {
-  const have = new Set(subject.metrics.map((m) => m.metric_key));
+  const have = new Set(subject.metrics.map(metricKey));
   return CONTRIBUTION_GAPS.filter((gap) => !have.has(gap.key));
 }

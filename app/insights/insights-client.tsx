@@ -18,6 +18,7 @@ import {
   FRESHNESS_LABEL,
   METRIC_LABEL,
   missingContributionTopics,
+  type LibraryCardMetric,
   type LibraryFacets,
   type LibrarySubject,
 } from "@/lib/insight-library";
@@ -304,6 +305,14 @@ export default function InsightsClient({
   );
 }
 
+/** 卡面正文。正文取不到时退回结构化字段拼一句，绝不显示空白。 */
+function metricText(m: LibraryCardMetric): string {
+  if (m.content) return m.content;
+  const value = m.metric_value == null ? "" : `${m.metric_value}${m.metric_unit || ""}`;
+  const n = m.sample_size == null ? "" : `（基于 ${m.sample_size} 个在招岗）`;
+  return `${METRIC_LABEL[m.metric_key] || m.metric_key} ${value}${n}`.trim();
+}
+
 function labelFor(key: keyof Filters, filters: Filters): string {
   const value = filters[key];
   if (key === "q") return `搜索「${value}」`;
@@ -457,14 +466,14 @@ function SubjectCard({
         </div>
       </header>
 
-      {subject.metrics.length > 0 && (
+      {(subject.cards || []).length > 0 && (
         <ul className="mt-3.5 grid gap-2">
-          {subject.metrics.slice(0, 3).map((m) => (
+          {(subject.cards || []).map((m) => (
             <li key={m.metric_key} className="flex items-start gap-2">
               <span className="mt-[3px] shrink-0 rounded px-1.5 py-0.5 t-micro ink-3 ring-1 ring-inset ring-black/[0.06] dark:ring-white/[0.1]">
                 {METRIC_LABEL[m.metric_key] || m.metric_key}
               </span>
-              <span className="t-body-sm ink-2">{m.content}</span>
+              <span className="t-body-sm ink-2">{metricText(m)}</span>
             </li>
           ))}
         </ul>
