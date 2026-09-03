@@ -136,6 +136,11 @@ function cachedLoader<T>(key: string, loader: () => Promise<T>): () => Promise<T
   };
 }
 
+// 香港库的第二条全表扫（第一条是 lib/jobs-store/read 里的公司聚合）。
+// 2026-09-03 psql 实测：单跑 1.21~1.50s，**与公司聚合撞一起 3.31s**（库只有 2 vCPU）。
+// 总览与岗位库两页都要它，不缓存就等于每次打开都重扫 41.9 万行。
+const loadJobsHealth = cachedLoader<JobsHealthSnapshot>("jobs-health", () => getJobsHealthSnapshot());
+
 const loadSupabaseHealth = cachedLoader<SupabaseHealthSnapshot>("supabase-health", async () => {
   const service = createServiceClient();
   const { data, error } = await service.rpc("admin_health_snapshot", { p_window: "7 days" });
@@ -218,7 +223,7 @@ function buildMustApplyRowsForScope(
   );
 }
 
-async function loadMustApplyCoverage(): Promise<MustApplyRowsByScope> {
+const loadMustApplyCoverage = cachedLoader<MustApplyRowsByScope>("must-apply-coverage", async () => {
   // sources（Supabase 全量分页 ~560ms）与 coverage（香港库聚合 ~1.1s）互不依赖 → 并行，
   // 别退回「先 await sources 再查 coverage」，那是白白把两者串起来。
   // sources 与 scope 无关，两个 scope 共用一份，省掉一次全量分页拉取；
@@ -230,7 +235,7 @@ async function loadMustApplyCoverage(): Promise<MustApplyRowsByScope> {
   return Object.fromEntries(
     MUST_APPLY_SCOPES.map((scope, i) => [scope, buildMustApplyRowsForScope(scope, sources, coverages[i])]),
   ) as MustApplyRowsByScope;
-}
+});
 
 async function loadMustApplyGapAdminData(): Promise<MustApplyGapAdminData> {
   const service = createServiceClient();
@@ -257,7 +262,7 @@ async function loadMustApplyGapAdminData(): Promise<MustApplyGapAdminData> {
   };
 }
 
-async function loadUserIndustryDistribution(): Promise<UserIndustryDistribution> {
+const loadUserIndustryDistribution = cachedLoader<UserIndustryDistribution>("user-industries", async () => {
   const { data, error } = await createServiceClient().from("user_preferences").select("target_industries, job_scope");
   if (error) throw new Error(error.message);
   const counts: Record<MustApplyScope, Record<string, number>> = { domestic: {}, overseas: {} };
@@ -274,10 +279,10 @@ async function loadUserIndustryDistribution(): Promise<UserIndustryDistribution>
     }
   }
   return { counts, scopeUsers, unset };
-}
+});
 
 // 点击有效率四护栏（01 spec §5）：近 7 天 opportunity_official_opened + job_liveness_at_click 聚合。
-async function loadClickValidity(): Promise<ClickValidityMetrics> {
+const loadClickValidity = cachedLoader<ClickValidityMetrics>("click-validity", async () => {
   const service = createServiceClient();
   const since = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
   const { data, error } = await service
@@ -288,11 +293,10 @@ async function loadClickValidity(): Promise<ClickValidityMetrics> {
     .limit(10000);
   if (error) throw new Error(error.message);
   return computeClickValidityMetrics((data || []) as Array<{ event?: unknown; payload?: unknown }>);
-}
+});
 
-async function loadCoverageSnapshot(): Promise<CoverageSnapshot> {
-  return getCoverageSnapshot(createServiceClient());
-}
+const loadCoverageSnapshot = cachedLoader<CoverageSnapshot>("coverage-snapshot", () =>
+  getCoverageSnapshot(createServiceClient()));
 
 function formatRate(rate: number | null): string {
   return rate == null ? "—" : `${(rate * 100).toFixed(1)}%`;
@@ -1503,7 +1507,7 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   // 必投清单的国内/海外切换。默认国内——目前海外没有用户在找，进来先看该看的那份。
   const mustApplyScope: MustApplyScope = (typeof query.scope === "string" ? query.scope : "") === "overseas" ? "overseas" : "domestic";
   const overview = tab === "overview";
-  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult, gapResult, dailySeriesResult, extraOpsResult, analyticsResult] = await Promise.allSettled([overview || tab === "jobs" ? getJobsHealthSnapshot() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await getMustApplyFetchCoverage(createServiceClient(), scope)] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null), tab === "supply" ? loadMustApplyGapAdminData() : Promise.resolve(null), overview || tab === "jobs" || tab === "system" ? loadHealthDailySeries() : Promise.resolve(null), overview || tab === "system" ? loadExtraOpsRuns() : Promise.resolve(null), tab === "users" ? getUserAnalytics(createServiceClient(), { days: 30, includeStaff }) : Promise.resolve(null)]);
+  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult, gapResult, dailySeriesResult, extraOpsResult, analyticsResult] = await Promise.allSettled([overview || tab === "jobs" ? loadJobsHealth() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await getMustApplyFetchCoverage(createServiceClient(), scope)] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null), tab === "supply" ? loadMustApplyGapAdminData() : Promise.resolve(null), overview || tab === "jobs" || tab === "system" ? loadHealthDailySeries() : Promise.resolve(null), overview || tab === "system" ? loadExtraOpsRuns() : Promise.resolve(null), tab === "users" ? getUserAnalytics(createServiceClient(), { days: 30, includeStaff }) : Promise.resolve(null)]);
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
   const clickValidity = clickResult.status === "fulfilled" ? clickResult.value : null;
