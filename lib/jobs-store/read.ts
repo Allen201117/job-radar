@@ -120,6 +120,11 @@ export type CompanyActiveAggregate = {
   healthy: number;
   new7d: number;
   checked72h: number;
+  /** 招聘类型拆分——供「校招供给覆盖」度量用（lib/campus-supply-coverage.ts）。
+   *  刻意挂在这次已有的全表聚合上：多两个 count filter 不额外扫一遍表。 */
+  campusJobs: number;
+  internJobs: number;
+  socialJobs: number;
   brandRollups: Record<string, ActiveAggregateCounts>;
 };
 
@@ -246,6 +251,9 @@ export async function getCompanyActiveAggregates(): Promise<CompanyActiveAggrega
     healthy: string | number;
     new_7d: string | number;
     checked_72h: string | number;
+    campus_jobs: string | number;
+    intern_jobs: string | number;
+    social_jobs: string | number;
   };
   type RollupRow = { company: string | null; [key: string]: string | number | null };
   // 主聚合先跑；品牌 rollup 用它返回的公司名精确取第二条（不合成一条、也不并行，见 brandRollupQuery 注释）。
@@ -255,7 +263,10 @@ export async function getCompanyActiveAggregates(): Promise<CompanyActiveAggrega
         count(*) as active_total,
         count(*) filter (where summary is not null and char_length(btrim(summary)) >= 60) as healthy,
         count(*) filter (where first_seen_at > now() - interval '7 days') as new_7d,
-        count(*) filter (where enrich_checked_at > now() - interval '72 hours') as checked_72h
+        count(*) filter (where enrich_checked_at > now() - interval '72 hours') as checked_72h,
+        count(*) filter (where recruitment_category = '校招') as campus_jobs,
+        count(*) filter (where recruitment_category = '实习') as intern_jobs,
+        count(*) filter (where recruitment_category = '社招') as social_jobs
       from jobs
       where status = 'active'
       group by company
@@ -273,6 +284,9 @@ export async function getCompanyActiveAggregates(): Promise<CompanyActiveAggrega
           healthy: Number(row.healthy || 0),
           new7d: Number(row.new_7d || 0),
           checked72h: Number(row.checked_72h || 0),
+          campusJobs: Number(row.campus_jobs || 0),
+          internJobs: Number(row.intern_jobs || 0),
+          socialJobs: Number(row.social_jobs || 0),
           brandRollups: Object.fromEntries(
             rules.map((rule) => [rule.pattern, hit
               ? {
@@ -306,6 +320,30 @@ export async function getMustApplyCoverage(
 ): Promise<MustApplyCoverageRow[]> {
   const aggregates = await getCompanyActiveAggregates();
   return computeMustApplyCoverage(list, aggregates);
+}
+
+/**
+ * 必投清单每家的「校招供给」原料（分类判定见 lib/campus-supply-coverage.ts）。
+ * 复用 getCompanyActiveAggregates 那一次全表聚合 —— 不额外扫表。
+ * `hasCampusSource` 由调用方从 sources 侧带入（jobs 库里没有源信息）。
+ */
+export async function getCampusSupplyInputs(
+  list: MustApplyCompany[],
+): Promise<Array<{ company: string; campusJobs: number; internJobs: number; socialJobs: number }>> {
+  const aggregates = await getCompanyActiveAggregates();
+  return list.map(({ name, pattern }) => {
+    const matches = ilikeMatcher(pattern);
+    return aggregates.reduce(
+      (total, c) => {
+        if (!c.company || !matches(c.company)) return total;
+        total.campusJobs += c.campusJobs;
+        total.internJobs += c.internJobs;
+        total.socialJobs += c.socialJobs;
+        return total;
+      },
+      { company: name, campusJobs: 0, internJobs: 0, socialJobs: 0 },
+    );
+  });
 }
 
 export function computeMustApplyCoverage(

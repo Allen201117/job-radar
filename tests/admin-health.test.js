@@ -658,8 +658,26 @@ test("buildDailyReports merges technical runs into eight human-facing operation 
   assert.equal(campus.verdict, "healthy");
   assert.deepEqual(
     campus.metrics.map((metric) => [metric.label, metric.value]),
-    [["开始放岗的公司", 1], ["校招岗位总数", 900], ["新增校招洞察", 4]],
+    // 覆盖三项排在最前：「打通了几家」比「今天跑了几次」更该先被看到。
+    // 没传 campusSupply 时全为 null（读取失败 / 该 tab 不取数），不退化成 0——
+    // 0 会被读成「一家都没打通」，那是编造。
+    [["必投清单已打通", null], ["还差几家（我们能修的）", null], ["对方还没开校招", null],
+     ["开始放岗的公司", 1], ["校招岗位总数", 900], ["新增校招洞察", 4]],
   );
+});
+
+test("校招供给卡照实报出「必投清单打通了几家」", () => {
+  // 立这条断言的原因：创始人要求「必投三十家必须全部打通」，而此前**全站没有任何地方
+  // 能回答打通了几家** —— 看板只报任务跑没跑。没有度量就谈不上「稳定」。
+  const reports = H.buildDailyReports({
+    opsRunRows: [{ module: "campus_lane", status: "success", metrics: { snapshots: 12, surged: 1, campus_jobs_total: 900 } }],
+    campusSupply: { healthy: 17, total: 30, ourGap: 13, theirGap: 0, reachablePct: 57 },
+  });
+  const campus = reports.find((report) => report.key === "campus_supply");
+  const byLabel = Object.fromEntries(campus.metrics.map((m) => [m.label, m.value]));
+  assert.equal(byLabel["必投清单已打通"], 17);
+  assert.equal(byLabel["还差几家（我们能修的）"], 13);
+  assert.equal(byLabel["对方还没开校招"], 0, "对方没开的单独计，不混进我们的缺口");
 });
 
 test("moduleVerdict never calls a module healthy when it produced nothing", () => {
