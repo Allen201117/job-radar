@@ -121,6 +121,48 @@ class BeisenHttpxTest(unittest.TestCase):
             out = json.loads(a._httpx_fetch("https://x.zhiye.com/social/jobs"))
         self.assertEqual(len(out["_intercepted"][0]["Data"]), 3)
 
+    def test_transient_page_failure_is_retried_not_fatal(self):
+        """限流抖一下不许把整源截断。
+
+        2026-09-04 线上实测：单源上限 600→8000 后对 *.zhiye.com 的请求量翻十几倍，
+        北森按 IP 限流（X-RateLimit-…-second: 50）开始偶发掐我们，而旧代码一页拿不到就 break
+        → 上海医药 230→50、三一 135→50。重试补上后，中间一页失败仍能收齐。
+        """
+        class _FlakyClient(_FakeClient):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.failed_once = False
+
+            def post(self, url, json=None, headers=None):
+                if json.get("PageIndex") == 1 and not self.failed_once:
+                    self.failed_once = True
+                    raise RuntimeError("429 rate limited")
+                return _Resp(self.pages[json["PageIndex"]] if json["PageIndex"] < len(self.pages)
+                             else {"Data": [], "Count": self.pages[0]["Count"]})
+
+        a = self._a(page_size=2, max_jobs=100)
+        pages = [_page([1, 2], 5), _page([3, 4], 5), _page([5], 5)]
+        with mock.patch.object(china_ats, "_PAGE_BACKOFF_SECONDS", 0), \
+             mock.patch.object(china_ats.httpx, "Client", lambda **kw: _FlakyClient(HTML, pages)):
+            out = json.loads(a._httpx_fetch("https://x.zhiye.com/social/jobs"))
+        self.assertEqual(len(out["_intercepted"][0]["Data"]), 5)
+        self.assertTrue(a.fetch_complete)
+
+    def test_page_failing_every_retry_stops_without_claiming_complete(self):
+        """真的一直拿不到 → 停，但绝不许标抓全（否则 list-absence 会拿半截列表去判撤岗）。"""
+        class _DeadClient(_FakeClient):
+            def post(self, url, json=None, headers=None):
+                if json.get("PageIndex", 0) >= 1:
+                    raise RuntimeError("429 rate limited")
+                return _Resp(self.pages[0])
+
+        a = self._a(page_size=2, max_jobs=100)
+        with mock.patch.object(china_ats, "_PAGE_BACKOFF_SECONDS", 0), \
+             mock.patch.object(china_ats.httpx, "Client", lambda **kw: _DeadClient(HTML, [_page([1, 2], 99)])):
+            out = json.loads(a._httpx_fetch("https://x.zhiye.com/social/jobs"))
+        self.assertEqual(len(out["_intercepted"][0]["Data"]), 2)
+        self.assertFalse(a.fetch_complete)
+
     def test_endpoint_case_fallback(self):
         # 只有 /api/JobAd/（大写 A）返 Data → 适配器两试应命中它
         a = self._a()

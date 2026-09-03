@@ -18,6 +18,7 @@ import html as _html
 import json
 import logging
 import re
+import time
 from typing import List, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
@@ -29,6 +30,11 @@ from .base import (DEFAULT_LIST_CAP, PageResult, RawJob, paginate_all, resolve_d
 from .playwright_base import PlaywrightAdapter
 
 _log = logging.getLogger(__name__)
+
+# 翻页时单页失败的重试次数与退避基数（见 _post_page_with_retry）。3 次 × 0.6s 退避足够穿过
+# 北森的秒级限流窗口，又不会让一个真坏掉的源把整轮抓取拖住。
+_PAGE_RETRIES = 3
+_PAGE_BACKOFF_SECONDS = 0.6
 
 
 def _first_str(post: dict, keys) -> str:
@@ -643,6 +649,30 @@ def _cms_parse_detail(html_text: str) -> dict:
     return out
 
 
+def _post_page_with_retry(cli, endpoints, ep_ok, body, attempts=_PAGE_RETRIES):
+    """POST 一页 GetJobAdPageList，失败退避重试。返回 (payload|None, 命中的端点)。
+
+    ⚠️ 为什么必须重试：北森按 **IP** 限流（响应头 `X-RateLimit-Limit-<host><ip>-second: 50`）。
+    2026-09-04 把单源上限从 600 抬到 8000 之后，我们对 *.zhiye.com 这一个 CDN 的请求量翻了十几倍，
+    偶发被掐成了常态；而旧代码一页拿不到就 `break`，一次抖动就把整源截断——当天线上实测
+    上海医药 230→50、三一 135→50、新奥 220→118（同一轮里另有 26 个源多抓了 3.1 万个岗，
+    方向是对的，但这 461 个岗的回归是自己造的，得补上）。
+
+    端点大小写两试（/api/Jobad/ 与 /api/JobAd/）只在**首次**发生，命中后固定，不重复试错。
+    """
+    for attempt in range(max(1, attempts)):
+        for ep in ((ep_ok,) if ep_ok else endpoints):
+            try:
+                cand = cli.post(ep, json=body, headers={"Content-Type": "application/json"}).json()
+            except Exception:
+                continue
+            if isinstance(cand, dict) and isinstance(cand.get("Data"), list):
+                return cand, ep
+        if attempt + 1 < max(1, attempts):
+            time.sleep(_PAGE_BACKOFF_SECONDS * (attempt + 1))
+    return None, ep_ok
+
+
 def _dedup_new(chunk, seen_ids, id_fields):
     """本页里没见过的行（按岗位 id 去重）。翻页途中接口重复回同一批是常态，
     不去重会让「收满 total 就停」提前满足，尾巴永远抓不到。"""
@@ -827,16 +857,7 @@ class BeisenAdapter(ChinaSpaAdapter):
                 body = {"PageIndex": index, "PageSize": self._PAGE_SIZE, "Category": [],
                         "KeyWords": "", "SpecialType": 0, "PortalId": portal_id,
                         "DisplayFields": ["Category", "Kind", "LocId", "PostDate", "WorkWeChatQrCode"]}
-                jj = None
-                for ep in ((ep_ok,) if ep_ok else endpoints):
-                    try:
-                        resp = cli.post(ep, json=body, headers={"Content-Type": "application/json"})
-                        cand = resp.json()
-                    except Exception:
-                        continue
-                    if isinstance(cand, dict) and isinstance(cand.get("Data"), list):
-                        jj, ep_ok = cand, ep
-                        break
+                jj, ep_ok = _post_page_with_retry(cli, endpoints, ep_ok, body)
                 if not isinstance(jj, dict):
                     break
                 if total is None:
