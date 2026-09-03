@@ -141,3 +141,19 @@ Vercel 计划：代码里 `maxDuration=60` 顶着 Hobby 上限，判断当前是
 - **体验线**：大陆→悉尼 150~200ms 且晚高峰丢包；→香港 30~50ms；→境内 5~20ms。Vercel 无境内节点、vercel.app 被污染。
 - **分阶段**：内测（现在）= 隐私政策告知境外存储 + Supabase 迁新加坡区（省 60~100ms）+ 企业名义短信签名；万级日活 = 前端迁境内（需 ICP 备案，前提境内服务器）+ jobs 库迁境内 RDS + 标准合同；十万级 = Auth 自托管/国内 IDaaS + 全境内 + 许可证。
 - **GitHub Actions**：公开仓分钟免费；转私有后免费额度 2,000 分钟/月，本项目日均 1,139 分钟（≈34,000/月），超额按 $0.008/分钟约 $256/月。**解法 = 自托管 runner**：私有仓自托管 runner 不计分钟；放在香港（与 jobs 库同城）还能同时消掉 31 条跨境 CI 连接和 Workday/Phenom 对 Azure 出口 IP 的拦截。一台 2C4G 即可起步，浏览器档再加一台。
+
+## 10. 第三批：纯代码工程性修复（803a406，不花钱、不改产品行为）
+
+| 项 | 处置 |
+|---|---|
+| S4 偏好保存 syncCoverage 6 次串行跨洋 | ✅ 并行读 → 内存算 → 并行写 → 一次权威读，降到 3 次；纯计算抽 `lib/sync-coverage.ts` + 10 单测 |
+| S6 现查触发同公司去重 | ✅ 核实已有（`lib/insight-enrich-now` reuse 分支），不改 |
+| S7 T3 退役只认本轮写出 active | ✅ 全 pending_review 不再清空一家公司 |
+| R3 巡检 alive 分支补 job_type | ✅ 存量岗不再永远落「其他」桶 |
+| R4 撤岗写 enrich_checked_at | ✅ 与 write.ts 同口径 |
+| A4 扩源点名配额上限 50% | ✅ 点名 ≥ cap 不再清零其它梯队 |
+| A5 漏斗尊重搜索预留 | ✅ 走 remaining_above_reserve；读取失败 fail-open |
+| Workday 429 | ✅ 读 Retry-After 退避一次（默认 5s、上限 30s） |
+| R2 write.ts 注释 | 已存在，审查误报 |
+
+仍待拍板（非代码）：外企 ATS 降频（省 18% runner 时间）、自托管 runner、Supabase 迁新加坡、升库内存、Vercel Pro。
