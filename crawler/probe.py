@@ -36,6 +36,10 @@ _HTTPX_ADAPTERS = {
     "apple", "apple_cn", "baidu", "jd", "siemens", "avature", "haier", "iguopin",
     "hotjob",  # 本土 wecruit：直连 listPosition 接口，无浏览器（详见 adapters/hotjob.py）
     "wt",  # 本土老版 WinTalent：直连 position/list JSON，无浏览器（详见 adapters/wt.py）
+    # 飞书招聘家族：posts API 冷 httpx 直出岗位+正文，httpx-first + 浏览器回退（adapters/feishu.py）。
+    # 不列在这里会导致 --emit 出来的迁移把 crawl_method 写成 playwright（误导运维），
+    # 也会让默认（不带 --all）的探活白白跳过一整类最容易扩的源。
+    "feishu", "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu",
     "netease",  # 网易自建：hr.163.com queryPage httpx 直连（详见 adapters/netease.py）
     "oppo",  # OPPO 校招门户：careers.oppo.com openapi httpx 直连（详见 adapters/oppo.py）
     "xiaohongshu",  # 小红书自建：job.xiaohongshu.com pageQueryPosition httpx 直连（详见 adapters/xiaohongshu.py）
