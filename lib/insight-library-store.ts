@@ -200,10 +200,30 @@ export async function attachCardContents(
     const live = bySubject.get(subject.id) || [];
     // 索引可能比库旧（治理脚本刚退役过一批），此时该主体已经没有可展示内容 → 本页不显示它。
     if (live.length === 0) continue;
+    // 筛中主题的「代表值」= 该主题所有档位的中位数，与 lib/insight-library 的筛选口径一致。
+    // ⚠️ 卡面要挑**最能解释这次匹配**的那几条：线上实测滴滴 5 条加班档位是 [1,2,2,4,4]，
+    // 中位数 2 所以被「≤2」筛出来是对的，但卡面按老排序挑到了 1、4、4 —— 两条 2 一条没露，
+    // 用户看到「加班多」会以为筛错了。所以按「离中位数的距离」排，离得近的先上。
+    const focusValues = focusMetric
+      ? live
+          .filter((i) => i.metric_key === focusMetric && i.metric_value != null)
+          .map((i) => i.metric_value as number)
+          .sort((a, b) => a - b)
+      : [];
+    const focusMedian = focusValues.length
+      ? focusValues.length % 2
+        ? focusValues[(focusValues.length - 1) / 2]
+        : (focusValues[focusValues.length / 2 - 1] + focusValues[focusValues.length / 2]) / 2
+      : null;
+    const distance = (item: InsightItemView) =>
+      focusMedian == null || item.metric_key !== focusMetric || item.metric_value == null
+        ? Number.POSITIVE_INFINITY
+        : Math.abs(item.metric_value - focusMedian);
     live.sort(
       (a, b) =>
         // 筛中的主题优先：用户是带着「看这一项」的意图筛过来的。
         (focusMetric ? (b.metric_key === focusMetric ? 1 : 0) - (a.metric_key === focusMetric ? 1 : 0) : 0) ||
+        distance(a) - distance(b) ||
         (rank[a.assertion || "claim"] ?? 9) - (rank[b.assertion || "claim"] ?? 9) ||
         (b.sample_size || 0) - (a.sample_size || 0),
     );
