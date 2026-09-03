@@ -12,6 +12,7 @@
 """
 import argparse
 import copy
+import logging
 import os
 import sys
 import threading
@@ -34,6 +35,7 @@ TTL_DAYS = 90       # 官方事实变动罕见，90 天复核一次
 SOURCE_KIND = "public_aggregate"  # Wikidata = 公开聚合（须在 013 insight_sources.source_kind 白名单内）
 
 _TLS = threading.local()
+LOG = logging.getLogger(__name__)
 
 
 def _thread_sb(make_sb):
@@ -46,6 +48,31 @@ def _thread_sb(make_sb):
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def normalize_assertion(origin, grade):
+    """来源层 + 旧 grade → v3 assertion + 安全的 grade（纯函数，可单测）。
+
+    public_web 是公开讨论，不论 LLM 给出什么 grade 都只能是 claim；历史上它会被
+    错标成 fact，因此在唯一 T3 写入口再降一次，防止旧提示词或模型输出回归。
+    """
+    origin = str(origin or "").strip()
+    grade = str(grade or "").strip() or "experience"
+    if origin == "public_web":
+        if grade == "fact":
+            LOG.warning(
+                "public_web insight requested grade=fact; downgraded to grade=experience and assertion=claim"
+            )
+            grade = "experience"
+        return "claim", grade
+    if origin in ("official", "official_filing", "wikidata"):
+        return "fact", grade
+    if origin == "derived":
+        return "signal", grade
+    if origin == "manual":
+        return ("fact" if grade == "fact" else "claim"), grade
+    # 未知来源宁可作为说法，避免新来源未经建模就获得事实承诺。
+    return "claim", grade
 
 
 def seed_from_sources(sb):
@@ -88,10 +115,12 @@ def _existing_listing(sb, company_id):
 
 def write_listing(sb, company_id, li):
     """写 / 更新 listing 洞察 + 溯源（仅新建时建一次来源）。li = wikidata.facts_to_listing 或 official_edgar 同形。"""
+    origin = li.get("origin", "wikidata")
+    assertion, grade = normalize_assertion(origin, li.get("grade") or "fact")
     item = {
-        "company_id": company_id, "dimension": "listing", "grade": "fact",
+        "company_id": company_id, "dimension": "listing", "grade": grade,
         "title": li["title"], "content": li["content"], "payload": li["payload"],
-        "origin": li.get("origin", "wikidata"), "deidentified": True, "status": "active",
+        "origin": origin, "assertion": assertion, "deidentified": True, "status": "active",
         "time_window": f"上市状态截至 {datetime.now(timezone.utc).year} 年",
         "last_verified_at": _now(),
     }
@@ -377,13 +406,15 @@ def write_experience(sb, company_id, claim, sources, judge, status, dimension="c
     dimension/topic 由查询包指定：路由到对应已有维度，title 带主题（如「年终奖 · 群体印象」）。"""
     item_id = str(uuid.uuid4())
     title = claim.get("title") or (f"{topic} · 群体印象" if topic else "公开讨论 · 群体印象")
+    assertion, grade = normalize_assertion("public_web", claim.get("grade") or "experience")
     sb.table("insight_items").insert({
         "id": item_id, "company_id": company_id, "dimension": dimension,
-        "grade": claim.get("grade") or "experience",
+        "grade": grade,
         "title": title,
         "content": claim.get("content"),
         "sample_size": int(claim["sample_size"]) if str(claim.get("sample_size") or "").isdigit() else None,
-        "payload": {}, "origin": "public_web", "deidentified": True, "status": status,
+        "payload": {}, "origin": "public_web", "assertion": assertion,
+        "deidentified": True, "status": status,
         "time_window": claim.get("time_window") or f"{datetime.now(timezone.utc).year} 观察",
         "verification": {"verdict": judge.get("verdict"), "confidence": judge.get("confidence")},
         "last_verified_at": _now(),

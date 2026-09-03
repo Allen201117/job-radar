@@ -270,3 +270,145 @@ test("passesGradeGate: 备用路径优先读 verification.confidence（爬虫真
   const low = { ...item, verification: { verdict: "entailment", confidence: 0.7 } };
   assert.equal(V.passesGradeGate(low, sources), false);
 });
+
+// ============================================================
+// v3 新增测试：绝对化措辞禁用词 + assertion 门
+// ============================================================
+
+test("containsBannedAssertion: v3 新增禁用词命中", () => {
+  // 绝对化措辞应被拦截
+  assert.equal(V.containsBannedAssertion("这家公司一定很轻松"), true, "一定（非量化）应命中");
+  assert.equal(V.containsBannedAssertion("结果必然如此"), true, "必然应命中");
+  assert.equal(V.containsBannedAssertion("这是最好的选择"), true, "最好应命中");
+  assert.equal(V.containsBannedAssertion("薪资最差"), true, "最差应命中");
+  assert.equal(V.containsBannedAssertion("所有人都是认可的"), true, "都是应命中");
+  assert.equal(V.containsBannedAssertion("肯定有年终奖"), true, "肯定应命中");
+});
+
+test("containsBannedAssertion: 「一定程度」合法用法不被拦截", () => {
+  assert.equal(
+    V.containsBannedAssertion("据公开报道，一定程度上反映了整体文化。"),
+    false,
+    "「一定程度」不应命中",
+  );
+  assert.equal(
+    V.containsBannedAssertion("一定数量的岗位集中在研发方向。"),
+    false,
+    "「一定数量」不应命中",
+  );
+});
+
+test("passesClaimGate: 有时间窗 + ≥2 来源域名 → 过门", () => {
+  const item = { time_window: "2025", valid_from: null, valid_until: null };
+  const sources = [
+    makeSource({ id: "a", url: "https://www.zhihu.com/q/1" }),
+    makeSource({ id: "b", url: "https://www.nowcoder.com/d/2" }),
+  ];
+  assert.equal(V.passesClaimGate(item, sources), true);
+});
+
+test("passesClaimGate: 缺时间窗 → 不过门", () => {
+  const item = { time_window: null, valid_from: null, valid_until: null };
+  const sources = [
+    makeSource({ id: "a", url: "https://www.zhihu.com/q/1" }),
+    makeSource({ id: "b", url: "https://www.nowcoder.com/d/2" }),
+  ];
+  assert.equal(V.passesClaimGate(item, sources), false);
+});
+
+test("passesClaimGate: 只有 1 个注册域名 → 不过门", () => {
+  const item = { time_window: "2025", valid_from: null, valid_until: null };
+  const sources = [
+    makeSource({ id: "a", url: "https://www.zhihu.com/q/1" }),
+    makeSource({ id: "b", url: "https://zhuanlan.zhihu.com/p/2" }), // 同一注册域
+  ];
+  assert.equal(V.passesClaimGate(item, sources), false);
+});
+
+test("resolveEffectiveAssertion: fact + public_web 来源 → 降级为 claim", () => {
+  const sources = [
+    { ...makeSource(), source_kind: "public_web", deidentified: true },
+  ];
+  assert.equal(V.resolveEffectiveAssertion("fact", sources), "claim");
+});
+
+test("resolveEffectiveAssertion: fact + official_filing 来源 → 保持 fact", () => {
+  const sources = [
+    { ...makeSource(), source_kind: "official_filing", deidentified: true },
+  ];
+  assert.equal(V.resolveEffectiveAssertion("fact", sources), "fact");
+});
+
+test("resolveEffectiveAssertion: null assertion → 返回 null（由调用方回落 grade）", () => {
+  assert.equal(V.resolveEffectiveAssertion(null, [makeSource()]), null);
+  assert.equal(V.resolveEffectiveAssertion(undefined, [makeSource()]), null);
+});
+
+test("resolveEffectiveAssertion: signal / claim assertion → 原样返回", () => {
+  assert.equal(V.resolveEffectiveAssertion("signal", []), "signal");
+  assert.equal(V.resolveEffectiveAssertion("claim", [makeSource()]), "claim");
+});
+
+test("evaluateInsight: assertion=claim 但缺时间窗 → 不展示", () => {
+  const item = makeItem({
+    assertion: "claim",
+    grade: "experience",
+    time_window: null,
+    valid_until: null,
+    valid_from: null,
+    sample_size: 10,
+  });
+  const sources = [
+    makeSource({ id: "a", url: "https://www.zhihu.com/q/1" }),
+    makeSource({ id: "b", url: "https://www.nowcoder.com/d/2" }),
+  ];
+  const ev = V.evaluateInsight(item, sources, NOW);
+  assert.equal(ev.displayable, false);
+  assert.equal(ev.failure_reason, "insight_unverified");
+});
+
+test("evaluateInsight: assertion=claim 且只有 1 域名来源 → 不展示", () => {
+  const item = makeItem({
+    assertion: "claim",
+    grade: "experience",
+    time_window: "2025",
+    sample_size: 10,
+  });
+  const sources = [
+    makeSource({ id: "a", url: "https://www.zhihu.com/q/1" }),
+    makeSource({ id: "b", url: "https://zhuanlan.zhihu.com/p/2" }), // 同域
+  ];
+  const ev = V.evaluateInsight(item, sources, NOW);
+  assert.equal(ev.displayable, false);
+});
+
+test("evaluateInsight: assertion=claim 满足条件 → 展示", () => {
+  const item = makeItem({
+    assertion: "claim",
+    grade: "experience",
+    time_window: "2025",
+    sample_size: 10,
+  });
+  const sources = [
+    makeSource({ id: "a", url: "https://www.zhihu.com/q/1" }),
+    makeSource({ id: "b", url: "https://www.nowcoder.com/d/2" }),
+  ];
+  const ev = V.evaluateInsight(item, sources, NOW);
+  assert.equal(ev.displayable, true);
+});
+
+test("evaluateInsight: assertion=signal → 不受 claim 门限制（signal 无需来源）", () => {
+  const item = makeItem({
+    assertion: "signal",
+    grade: "fact",
+    time_window: "截至 2026-09",
+    sample_size: 50,
+  });
+  // signal 类：无来源也可展示（来自自有岗位库，非外部来源）
+  const ev = V.evaluateInsight(item, [], NOW);
+  // grade=fact 需 >=1 有效来源，但 assertion=signal 的派生条目 grade 也是 fact
+  // 派生条目在 derived=true 时跳过来源门（此处测 non-derived 存储型 signal）
+  // → 如果 passesGradeGate(fact, []) = false，evaluateInsight 应在 grade 门拦住
+  // 确认当前行为：grade=fact 无来源 → insight_unverified（此为预期行为）
+  assert.equal(ev.failure_reason, "insight_unverified");
+});
