@@ -31,14 +31,21 @@ _RECRUITMENT_RE = re.compile(
     # 蚂蚁「Plan A」都被抽成了业务线。它们是招聘项目/培养计划，不是业务线。
     # ⚠️ 只在**整词或结尾**匹配「计划/专项」，否则会误杀真业务线（如「计划财务部」不受影响，
     #    但「可灵AI专项」会被剔——它与「可灵AI」重复，剔掉正好去重）。
+    # 第二轮（全库跑完抽检 100 条）：社会招聘(172)/内部招聘(91)/培训生(162)/CRC Intern(111)
+    # 都进了库，说明只写「社招/实习」这类简称挡不住全称与英文写法。
     r"\d{2,4}\s*届|校招|秋招|春招|社招|实习生?招聘|\d{4}(?:校园|招聘)|内推|热招|急招"
-    r"|实习|转正|(?:计划|专项|项目)$|^plan\s|培养生|管培",
+    r"|实习|转正|(?:计划|专项|项目)$|^plan\s|培养生|管培"
+    r"|社会招聘|内部招聘|校园招聘|公开招聘|招聘$|培训生|储备生|见习"
+    r"|\bintern(?:ship)?\b|\btrainee\b|\bcampus\b|\bgraduate\b",
     re.IGNORECASE,
 )
 _JOB_ROLE_RE = re.compile(
     # 2026-09-03 live：跑到外企源上才暴露——Apple 抽出 manager(30)/genius(23)。
     # 英文岗位名同样要挡，且英文里岗位名常在**开头**（"Manager - Retail"），故不锚定结尾。
-    r"(?:工程师|专家|经理|实习生|顾问|设计师|架构师|策划|运营|开发|分析师|主管|总监|BP|HRBP|助理|专员)$"
+    # 第二轮补一线岗位名：店员(98)/维修技师(83)/区域业代(119) 也被当成了业务线。
+    r"(?:工程师|专家|经理|实习生|顾问|设计师|架构师|策划|运营|开发|分析师|主管|总监|BP|HRBP|助理|专员"
+    r"|店员|店长|技师|业代|导购|司机|操作工|文员|销售|客服|收银|保安|厨师|服务员|护士|药师|教师"
+    r"|研究员|科学家|岗)$"
     r"|^(?:manager|engineer|specialist|analyst|director|lead|intern|associate|consultant"
     r"|designer|developer|scientist|architect|coordinator|representative|technician"
     r"|supervisor|advisor|expert|officer|recruiter|genius|advisor)s?$",
@@ -50,6 +57,10 @@ _PURE_SYMBOL_RE = re.compile(r"^[^\w\u4e00-\u9fff]+$", re.UNICODE)
 _GENERIC_TERMS = {
     "data", "平台", "中台", "国际化", "技术", "业务", "方向", "项目", "中心", "部门",
     "研发", "产品", "运营", "职能", "总部", "海外", "国内", "集团", "公司", "其他",
+    # 第二轮 live：「中国(111)」被当成了业务线；它是区域不是业务线。
+    "中国", "中国区", "大中华区", "亚太", "全球", "本部", "分部",
+    # 大区名：只做**全等**判断，所以「外运华东」这类真子公司不受影响。
+    "华东", "华南", "华北", "华中", "西南", "西北", "东北", "华西",
 }
 # 国家 / 地区（live 实测：蚂蚁 malaysia(42)）。城市走 _CITY_TERMS，这里补国家。
 _COUNTRY_TERMS = {
@@ -82,6 +93,32 @@ _CITY_TERMS.discard("")
 
 def _now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+_OPEN_TO_CLOSE = {"（": "）", "(": ")", "【": "】", "[": "]", "《": "》"}
+_CLOSERS = set(_OPEN_TO_CLOSE.values())
+
+
+def _strip_unbalanced(value: str) -> str:
+    """去掉首尾**没有配对**的括号。
+
+    live 实测：源标题形如「（基石产品线）-高级研究员」，按连字符切出的碎片是
+    「基石产品线）」——它作为业务线名直接展示给用户就是个错字。
+    只去首尾不配对的那一个，不动内部括号（「剪映CapCut（国际）」保持原样，
+    由停用词与阈值处理）。
+    """
+    text = value
+    while text and text[-1] in _CLOSERS:
+        closer = text[-1]
+        opener = next(o for o, c in _OPEN_TO_CLOSE.items() if c == closer)
+        if text.count(closer) <= text.count(opener):
+            break
+        text = text[:-1].strip()
+    while text and text[0] in _OPEN_TO_CLOSE:
+        if text.count(text[0]) <= text.count(_OPEN_TO_CLOSE[text[0]]):
+            break
+        text = text[1:].strip()
+    return text
 
 
 def normalize_bu(token: str) -> str:
@@ -126,7 +163,7 @@ def extract_candidates(title: str) -> list[str]:
     has_cjk = bool(re.search(r"[\u4e00-\u9fff]", text))
 
     def add(value):
-        value = str(value or "").strip()
+        value = _strip_unbalanced(str(value or "").strip())
         key = normalize_bu(value)
         if value and key and key not in normalized_seen:
             out.append(value)
