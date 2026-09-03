@@ -283,3 +283,125 @@ export function track(event: string, payload?: Record<string, unknown>): void {
     console.warn("[track] failed:", (e as Error).message);
   }
 }
+
+// ============================================================
+// 用户行为分析（2026-09-03 加）：只补三个断掉的埋点，不撒网。
+//   page_view        → 谁来了 / 看了哪几页 / 回访（留存的唯一可算依据）
+//   preferences_saved→ 激活漏斗断掉的那一环
+//   search_result    → 用户在找什么 + 「搜完 0 条」的比例
+// payload 一律先过 sanitizePayload 的禁用字段门（见 FORBIDDEN_EVENT_PAYLOAD_KEYS）。
+// ============================================================
+
+export const PAGE_VIEW_EVENT = "page_view";
+export const PREFERENCES_SAVED_EVENT = "preferences_saved";
+export const SEARCH_RESULT_EVENT = "search_result";
+
+// 看板按页面分组统计，路径必须是**有限枚举**：动态段（/jobs/<uuid>）会把分组炸成上千行，
+// 统计出来既看不懂也走不了索引。未知路径统一归 other，不丢弃（丢弃会让「访问总量」对不上）。
+const TRACKED_PATHS = [
+  "/",
+  "/today",
+  "/jobs",
+  "/campus",
+  "/path",
+  "/saved",
+  "/applied",
+  "/preferences",
+  "/me",
+  "/login",
+  "/sources",
+  "/admin/health",
+  "/admin/insights",
+] as const;
+
+export function normalizePagePath(input: unknown): string {
+  if (typeof input !== "string") return "other";
+  const path = input.split("?")[0].split("#")[0].replace(/\/+$/, "") || "/";
+  return (TRACKED_PATHS as readonly string[]).includes(path) ? path : "other";
+}
+
+// 搜索词只用于「用户在找什么」的词频统计：去空白、限长、小写化以便聚合同义大小写。
+export const SEARCH_KEYWORD_MAX = 40;
+
+export function normalizeSearchKeyword(input: unknown): string {
+  if (typeof input !== "string") return "";
+  return input.trim().slice(0, SEARCH_KEYWORD_MAX).toLowerCase();
+}
+
+// 多选筛选值（城市/职能/岗位方向）拆成数组并封顶，防止一条 payload 塞进上百个值。
+export function splitFilterValues(input: unknown, cap = 8): string[] {
+  if (typeof input !== "string" || !input.trim()) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of input.split(/[\s,，]+/)) {
+    const v = raw.trim().slice(0, 24);
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+type SearchFiltersInput = {
+  keyword?: string;
+  city?: string;
+  jobFunction?: string;
+  jobRole?: string;
+  jobType?: string;
+  company?: string;
+  education?: string;
+  experience?: string;
+  region?: string;
+  postedWithin?: string;
+  capitalOrigin?: string;
+  salaryOnly?: boolean;
+  sponsorshipOnly?: boolean;
+};
+
+// 判定「一次搜索用了几个筛选条件」：只数真正起筛选作用的字段（排序 / 显示开关不算）。
+const COUNTED_FILTER_KEYS: (keyof SearchFiltersInput)[] = [
+  "keyword",
+  "city",
+  "jobFunction",
+  "jobRole",
+  "jobType",
+  "company",
+  "education",
+  "experience",
+  "region",
+  "postedWithin",
+  "capitalOrigin",
+];
+
+export function buildSearchResultPayload(
+  filters: SearchFiltersInput | null | undefined,
+  result: { resultCount?: unknown; capped?: unknown; latencyMs?: unknown },
+): Record<string, unknown> {
+  const f = filters || {};
+  let filterCount = 0;
+  for (const key of COUNTED_FILTER_KEYS) {
+    const v = f[key];
+    if (typeof v === "string" && v.trim()) filterCount += 1;
+  }
+  if (f.salaryOnly) filterCount += 1;
+  if (f.sponsorshipOnly) filterCount += 1;
+
+  const rawCount = Number(result?.resultCount);
+  const resultCount = Number.isFinite(rawCount) ? Math.max(0, Math.floor(rawCount)) : 0;
+  const latency = Number(result?.latencyMs);
+
+  return {
+    result_count: resultCount,
+    // zero 单独存一份布尔：SQL 侧统计「0 结果率」不必对 jsonb 数字做类型转换。
+    zero_result: resultCount === 0,
+    keyword: normalizeSearchKeyword(f.keyword),
+    cities: splitFilterValues(f.city),
+    functions: splitFilterValues(f.jobFunction),
+    roles: splitFilterValues(f.jobRole),
+    stage: typeof f.jobType === "string" ? f.jobType.slice(0, 24) : "",
+    filter_count: filterCount,
+    capped: Boolean(result?.capped),
+    latency_bucket: Number.isFinite(latency) ? bucketLatency(latency) : "pending",
+  };
+}

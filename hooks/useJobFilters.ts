@@ -8,6 +8,7 @@ import {
   type Filters,
 } from "@/lib/job-filter";
 import type { ScoredJob } from "@/lib/types";
+import { SEARCH_RESULT_EVENT, buildSearchResultPayload, track } from "@/lib/track";
 
 // 每页（首屏 / 「加载更多」）的服务端分页大小。
 export const JOBS_PAGE_SIZE = 60;
@@ -121,6 +122,7 @@ export function useJobFilters({
     const controller = new AbortController();
     abortRef.current = controller;
     setServer((s) => ({ ...s, loading: !more, loadingMore: more, error: null }));
+    const startedAt = Date.now();
     try {
       const resp = await fetch(
         `/api/jobs/search?${filtersToParams(f, offset, JOBS_PAGE_SIZE)}`,
@@ -138,6 +140,19 @@ export function useJobFilters({
         return;
       }
       const batch: RankedJob[] = Array.isArray(data.jobs) ? data.jobs : [];
+      // 「用户在找什么 / 搜完 0 条的比例」的唯一数据来源。只在**首屏搜索**打点：
+      // 翻页(more)与首屏共用同一组筛选条件，一起打会把同一次搜索重复计成多次，
+      // 直接把 0 结果率的分母灌水。
+      if (!more) {
+        track(
+          SEARCH_RESULT_EVENT,
+          buildSearchResultPayload(f, {
+            resultCount: data.total ?? 0,
+            capped: Boolean(data.capped),
+            latencyMs: Date.now() - startedAt,
+          }),
+        );
+      }
       setServer((s) => ({
         jobs: more ? [...s.jobs, ...batch] : batch,
         total: data.total ?? 0,

@@ -1,4 +1,4 @@
-import Navbar from "@/components/Navbar";
+import AdminNav from "@/components/AdminNav";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import InsightsAdminClient from "@/components/InsightsAdminClient";
 import { isAdmin } from "@/lib/auth";
@@ -38,7 +38,7 @@ export default async function InsightsAdminPage() {
 
   return (
     <div className="min-h-screen bg-editorial">
-      <Navbar />
+      <AdminNav />
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
           eyebrow="洞察管理"

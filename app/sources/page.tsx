@@ -1,4 +1,4 @@
-import Navbar from "@/components/Navbar";
+import AdminNav from "@/components/AdminNav";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import SourceManager from "@/components/SourceManager";
 import { isAdmin } from "@/lib/auth";
@@ -14,7 +14,7 @@ export default async function SourcesPage() {
 
   return (
     <div className="min-h-screen bg-editorial">
-      <Navbar />
+      <AdminNav />
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
           eyebrow="数据源"

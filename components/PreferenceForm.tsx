@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import type { UserPreferences } from "@/lib/types";
-import { track } from "@/lib/track";
+import { PREFERENCES_SAVED_EVENT, track } from "@/lib/track";
 import { normalizeCompany } from "@/lib/company-normalize";
 import TagInput from "./TagInput";
 import SaveToast, { type SaveState } from "@/components/SaveToast";
@@ -88,6 +88,22 @@ export default function PreferenceForm() {
         throw new Error(data?.error || `HTTP ${resp.status}`);
       }
       if (data.preferences) setPrefs(withDefaults({ ...prefs, ...data.preferences }));
+      // 激活漏斗「设完求职目标」这一环。此前只有简历解析埋点，没有偏好保存埋点，
+      // 于是「传完简历 → 设完偏好」中间那一跳在漏斗里是断的，看不出人掉在哪。
+      // 打在这里（偏好本体已落库）而不是 data.ok 分支里：关注公司同步失败属于部分成功，
+      // 用户的求职目标其实已经存进去了，算他走完了这一步才诚实。
+      track(PREFERENCES_SAVED_EVENT, {
+        roles_count: (prefs.target_roles || []).length,
+        locations_count: (prefs.target_locations || []).length,
+        keywords_count: (prefs.target_keywords || []).length,
+        exclude_count: (prefs.exclude_keywords || []).length,
+        companies_count: (prefs.target_companies || []).length,
+        industries: prefs.target_industries || [],
+        job_scope: prefs.job_scope ?? "domestic",
+        experience_stage: prefs.experience_stage ?? "",
+        radar_intensity: prefs.radar_intensity ?? "active",
+        partial: !data.ok,
+      });
       if (data.ok) {
         const newCoverage: Coverage[] = data.coverage || [];
         setCoverage(newCoverage);
