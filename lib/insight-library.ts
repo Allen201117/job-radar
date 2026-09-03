@@ -405,6 +405,7 @@ export const METRIC_LABEL: Record<string, string> = {
   promotion_pace: "晋升节奏",
   interview_rounds: "面试难度",
   intern_experience: "实习体验",
+  pay_level: "薪资水平",
   work_culture: "公开讨论",
   hiring_freeze_signal: "招聘骤降",
   layoff_mention: "裁员提及",
