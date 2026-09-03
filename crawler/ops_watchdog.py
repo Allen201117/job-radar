@@ -83,7 +83,9 @@ DEAD_SOURCE_MIN_RUNS = 8   # 少于这个次数不判（新源、低频源不冤
 #   insight_staleness：retired=0 = 当天没有过期洞察
 #   purge_expired：deleted=0 = 当天没有确认撤下的死岗
 #   ops_watchdog：本模块自己的台账
-NO_OUTPUT_MODULES = ("insight_staleness", "purge_expired", "ops_watchdog")
+#   search_quota_probe：它的产出就是「有没有越线」，critical=0 是好事不是零产出
+NO_OUTPUT_MODULES = ("insight_staleness", "purge_expired", "ops_watchdog",
+                     "search_quota_probe")
 
 # 规则 D：已落库的账户级错误信号。lib/track.ts 把 402/余额不足归一成 llm_insufficient_balance、
 # 把 401/403 归一成 llm_auth_error，写进 events.payload.diagnostics.error_code——用户侧真实踩到的欠费。

@@ -90,11 +90,25 @@ async function loadIndex(): Promise<LibraryIndex> {
 /**
  * ⚠️ 跨实例缓存（unstable_cache），不要退回进程内 Map：serverless 多实例下命中率≈0。
  * 索引只依赖库里的洞察、与用户无关，所以可以全站共享。
+ *
+ * ⚠️ 缓存键里**带一个时间桶**，不要只靠 `revalidate` 的后台重验证。
+ * 线上实测：光配 revalidate:600 时，`index_built_at` 三个多小时一动不动 ——
+ * 后台重验证要花 ~10s 建索引，在响应已经返回的 serverless 实例上大概率跑不完，
+ * 于是永远在发陈旧数据、而且**不报错**。症状很难看：治理脚本刚判完档，
+ * 页面按「加班强度 ≤ 2」筛却是 0 条（索引里 metric_value 还全是空）。
+ * 时间桶让每个 10 分钟窗口成为**不同的缓存条目**：窗口内第一个请求同步建好（慢一次），
+ * 其余全部命中。不依赖任何后台任务跑完。
  */
-export const getInsightLibraryIndex = unstable_cache(loadIndex, ["insight-library-index-v1"], {
-  revalidate: INDEX_TTL_SECONDS,
-  tags: ["insight-library"],
-});
+const getCachedIndex = unstable_cache(
+  async (_bucket: number) => loadIndex(),
+  ["insight-library-index-v2"],
+  { revalidate: INDEX_TTL_SECONDS * 2, tags: ["insight-library"] },
+);
+
+export async function getInsightLibraryIndex(): Promise<LibraryIndex> {
+  const bucket = Math.floor(Date.now() / (INDEX_TTL_SECONDS * 1000));
+  return getCachedIndex(bucket);
+}
 
 /**
  * 展开某个主体时才取它的全部条目（走 idx_insight_items_subject 部分索引）。
@@ -136,6 +150,8 @@ export async function getSubjectItems(subjectId: string): Promise<InsightItemVie
 export async function attachCardContents(
   subjects: LibrarySubject[],
   perSubject = 3,
+  /** 当前筛选选中的主题：卡面把它排最前。用户筛「加班少的公司」却先看到年终奖，很别扭。 */
+  focusMetric?: string | null,
 ): Promise<LibrarySubject[]> {
   const ids = subjects.map((s) => s.id);
   if (ids.length === 0) return subjects;
@@ -184,8 +200,30 @@ export async function attachCardContents(
     const live = bySubject.get(subject.id) || [];
     // 索引可能比库旧（治理脚本刚退役过一批），此时该主体已经没有可展示内容 → 本页不显示它。
     if (live.length === 0) continue;
+    // 筛中主题的「代表值」= 该主题所有档位的中位数，与 lib/insight-library 的筛选口径一致。
+    // ⚠️ 卡面要挑**最能解释这次匹配**的那几条：线上实测滴滴 5 条加班档位是 [1,2,2,4,4]，
+    // 中位数 2 所以被「≤2」筛出来是对的，但卡面按老排序挑到了 1、4、4 —— 两条 2 一条没露，
+    // 用户看到「加班多」会以为筛错了。所以按「离中位数的距离」排，离得近的先上。
+    const focusValues = focusMetric
+      ? live
+          .filter((i) => i.metric_key === focusMetric && i.metric_value != null)
+          .map((i) => i.metric_value as number)
+          .sort((a, b) => a - b)
+      : [];
+    const focusMedian = focusValues.length
+      ? focusValues.length % 2
+        ? focusValues[(focusValues.length - 1) / 2]
+        : (focusValues[focusValues.length / 2 - 1] + focusValues[focusValues.length / 2]) / 2
+      : null;
+    const distance = (item: InsightItemView) =>
+      focusMedian == null || item.metric_key !== focusMetric || item.metric_value == null
+        ? Number.POSITIVE_INFINITY
+        : Math.abs(item.metric_value - focusMedian);
     live.sort(
       (a, b) =>
+        // 筛中的主题优先：用户是带着「看这一项」的意图筛过来的。
+        (focusMetric ? (b.metric_key === focusMetric ? 1 : 0) - (a.metric_key === focusMetric ? 1 : 0) : 0) ||
+        distance(a) - distance(b) ||
         (rank[a.assertion || "claim"] ?? 9) - (rank[b.assertion || "claim"] ?? 9) ||
         (b.sample_size || 0) - (a.sample_size || 0),
     );

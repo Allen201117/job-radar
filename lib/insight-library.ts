@@ -219,6 +219,25 @@ function metricOf(subject: LibrarySubject, key: string): PackedMetric | undefine
   return subject.metrics.find((m) => metricKey(m) === key);
 }
 
+/**
+ * 一个主体在某个主题上的**代表值**：所有该主题条目数值的中位数。
+ *
+ * ⚠️ 不能取「第一条」（2026-09-04 线上抓到）：滴滴同时挂着「加班强度·准时下班(1)」
+ * 与两条「加班强度·加班多(4)」，取第一条会让它被「加班强度 ≤ 2」筛出来——
+ * 用户筛「加班少的公司」，第一个结果却写着「加班多」。
+ * 众说纷纭是真实情况，但筛选必须给一个**能站得住的汇总**，中位数是最不容易被极端说法带偏的那个。
+ */
+function metricAggregate(subject: LibrarySubject, key: string): number | null {
+  const values = subject.metrics
+    .filter((m) => metricKey(m) === key)
+    .map(metricValue)
+    .filter((v): v is number => v != null)
+    .sort((a, b) => a - b);
+  if (values.length === 0) return null;
+  const mid = Math.floor(values.length / 2);
+  return values.length % 2 ? values[mid] : (values[mid - 1] + values[mid]) / 2;
+}
+
 /** 单个筛选项是否放行。拆成一条一条，好让分面能「排除自己这一项」重算。 */
 const PREDICATES: Record<string, (s: LibrarySubject, f: LibraryFilters) => boolean> = {
   q: (s, f) => {
@@ -236,7 +255,8 @@ const PREDICATES: Record<string, (s: LibrarySubject, f: LibraryFilters) => boole
     if (!f.metric) return true;
     const m = metricOf(s, f.metric);
     if (!m) return false;
-    const value = metricValue(m);
+    // 数值比较用该主题的中位数，不是碰到的第一条（见 metricAggregate）。
+    const value = metricAggregate(s, f.metric);
     if (f.metricMin != null && (value == null || value < f.metricMin)) return false;
     if (f.metricMax != null && (value == null || value > f.metricMax)) return false;
     return true;
