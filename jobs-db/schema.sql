@@ -52,6 +52,22 @@ alter table jobs alter column job_scope set default 'domestic';
 update jobs set job_scope = 'domestic' where job_scope is null;
 alter table jobs alter column job_scope set not null;
 alter table jobs add column if not exists sponsorship_signal text;
+
+-- ── 招聘类型物化（2026-09-03，第1步：只加列 + 回填，暂不改任何读写行为）──────────────
+-- 为什么要存：判「社招/校招/实习」的规则只有一份权威实现，在 JS（lib/china-keyword-expansion.js
+-- 的 recruitmentCategory，七层裁决 + 完整单测）。而检索侧只能用「正向信号并集」的 SQL 近似去捞，
+-- 两套判据结构不同 → 必然捞进大量注定被否决的岗（live 实测「深圳+校招」候选 4354 条里 43% 是
+-- 这么来的：37% 挂在社招门户下、SQL 那套压根没看门户信号）。把 JS 的裁决结果存下来，检索与筛选
+-- 从此查同一个字段，结构上不可能再不一致。
+--
+-- ⚠️ 必须存**两个**值，缺一不可 —— job-filter.jobFilterMatch 同时用到它们：
+--     有明确依据 → 类型不符就淘汰；无明确依据 → 选社招放行降级、选校招/实习淘汰。
+--   只存 category 而不存 explicit，SQL 仍然无法精确表达这条规则。
+-- ⚠️ NULL = 「还没算」，不等于「不是」。检索必须放行 NULL 走原有兜底，否则回填期间和分类失败时
+--   新岗会从筛选结果里凭空消失（新岗恰恰是用户最想看的）。
+-- 值域：recruitment_category ∈ {社招, 校招, 实习}；两列由同一次 JS 计算同时写入，不允许只写一个。
+alter table jobs add column if not exists recruitment_category text;
+alter table jobs add column if not exists recruitment_explicit boolean;
 -- 届别（2026-08-04，2027 届秋招）。存量行留 NULL 不回填：届别只认岗位文本里的硬信号，
 -- 靠入库时间倒推等于猜，会把上一届残岗标成当季（详见 crawler/grad_class.py 注释）。
 -- 存量岗会在下一轮列表重抓时由 normalizer 自然补上（抽得出才补）。
