@@ -20,7 +20,11 @@ on:
         type: string
         default: ""
   schedule:
-    # 每天 UTC 19:30 补漏一次：抓取链之后、洞察链之前，避开 21:00 UTC 的连接峰值。
+    # 每天 UTC 19:30 跑一次**全量重算**：抓取链之后、避开 21:00 UTC 的连接峰值。
+    # 为什么是全量重算而不是只补 NULL：富化链（enrich-backlog）是**直接 UPDATE summary**、
+    # 不走 upsert，所以不会触发入库时的分类 → 正文变了但存的类型还是旧的。只补 NULL 治不了这种漂移。
+    # 成本可接受：全表 42 万行读一遍约 3 分钟，且脚本只写「算出来和存的不一样」的行，
+    # 没变化的日子实际写入接近 0。
     - cron: "30 19 * * *"
 
 concurrency:
@@ -51,10 +55,12 @@ jobs:
           if [ -z "${JOBS_DATABASE_URL:-}" ]; then
             echo "::error::JOBS_DATABASE_URL 未配置"; exit 1
           fi
-          # 定时触发一律走「只补 NULL」的 apply（补漏）；手动触发按输入走。
+          # 定时触发一律走「全量重算」的 apply（治富化直改 summary 造成的漂移）；手动触发按输入走。
           MODE="${{ github.event.inputs.mode || 'apply' }}"
           ARGS="--$MODE"
-          if [ "${{ github.event.inputs.all }}" = "true" ]; then ARGS="$ARGS --all"; fi
+          if [ "${{ github.event.inputs.all }}" = "true" ] || [ "${{ github.event_name }}" = "schedule" ]; then
+            ARGS="$ARGS --all"
+          fi
           if [ -n "${{ github.event.inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ github.event.inputs.limit }}"; fi
           echo "运行参数：$ARGS"
           node scripts/backfill-recruitment-category.js $ARGS

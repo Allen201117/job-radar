@@ -165,33 +165,56 @@ function appendPostedWithinWhere(conds: string[], params: unknown[], postedWithi
 // ⚠️ 正则须与 china-keyword-expansion 的 sourceDeclaredCategory / hasStrongCampusSignal / hasInternSignal 对齐，
 // 改一处两处同改，否则可能漏掉真校招/实习（精度红线）。
 function appendRecruitmentPrefilter(conds: string[], jobType: string) {
+  if (jobType !== "校招" && jobType !== "实习" && jobType !== "社招") return;
+
+  // ── 主路：查物化列，与 JS 的 jobFilterMatch 逐字同义 ──────────────────────────────
+  // 这两列由入库时的 JS 权威规则算好（crawler/recruitment_classify.py → scripts/classify-recruitment.js），
+  // 所以这里不是「近似超集」而是**精确等价**：
+  //   · 选 校招/实习：有明确依据 且 类型相符才留（无依据的岗 JS 会淘汰，这里也淘汰）
+  //   · 选 社招    ：只淘汰「有明确依据且不是社招」的（无依据的岗 JS 放行降级，这里也放行）
+  const exact =
+    jobType === "社招"
+      ? "not (recruitment_explicit and recruitment_category <> '社招')"
+      : `recruitment_explicit and recruitment_category = '${jobType}'`;
+
+  // ── 兜底路：recruitment_category is null = 「还没算」，**不等于「不是」** ──────────────
+  // 什么时候会是 null：一次性回填尚未覆盖到、或入库时分类降级（没装 node / 超时）。
+  // 这时必须退回原来的信号超集，绝不能当它不存在——否则新抓来的岗会从筛选结果里凭空消失，
+  // 而新岗恰恰是用户最想看的。社招本来就不下推（默认态、大头），兜底路直接放行。
+  conds.push(`((recruitment_category is not null and ${exact}) or (recruitment_category is null and ${legacyRecruitmentSuperset(jobType)}))`);
+}
+
+/**
+ * 旧的「正向信号并集」超集，现在只服务于 recruitment_category 尚未算出的行。
+ *
+ * ⚠️ 它与 JS 的分层裁决**结构不同**（这里是「有任一信号就捞」，JS 是「高可信信号可否决低可信」），
+ * 所以它只能当超集用、不能当等价判据 —— 这正是物化那两列的原因：live 实测「深圳+校招」4354 条
+ * 候选里 43% 是被它捞进来又被 JS 扔掉的（其中 37% 挂在社招门户下，而这里压根没看门户信号）。
+ * ⚠️ 正则须与 china-keyword-expansion 的 sourceDeclaredCategory / hasStrongCampusSignal /
+ * hasInternSignal 对齐；作为超集，宁可放宽不可收紧（收紧=漏掉真岗，精度红线）。
+ */
+function legacyRecruitmentSuperset(jobType: string): string {
   if (jobType === "校招") {
-    // (a) 正向校招信号超集  AND  (b) 排除「job_type 自报社招」——sourceDeclaredCategory 里 社招 的判定
-    // 在校招之前短路(且实习更先)，故 job_type 命中社招模式的岗在 JS 里必是 社招/实习、绝不会是校招，
-    // 可安全剔除（实测把候选从 4423 收到 2661，最终校招结果数不变）。null job_type 必须保留。
-    conds.push(
+    return (
       "((job_type ~* '(校招|校园招聘|应届|管培生|管理培训生|留学生专项|campus|new\\s+grad|university\\s+graduate|entry[-\\s]?level)'" +
-        " or jd_url ~* '(xiaozhao|campus)'" +
-        " or (coalesce(title,'')||' '||coalesce(summary,'')) ~* '(应届|[0-9]{2,4}届|校园招聘|校招|管培生|管理培训生|留学生专项|new\\s?grads?|university\\s+graduate|entry[-\\s]?level|campus\\s?(recruit|hiring)|graduate\\s+program)'" +
-        " or company ~* '(校招|校园招聘)')" +
-        " and (job_type is null or job_type !~* '(社招|社会招聘|全职|experienced|professional|full.?time)')" +
-        // (c) 排除「实习」——recruitmentCategory 的层1（实习）最先短路，命中它的岗**绝不可能**再被判成
-        // 校招，所以从校招查询里剔掉是逻辑上安全的，不是近似。
-        // 这里逐字复刻层1 的三个条件（job_type / title / url 路径段），香港库真实数据验过零分歧：
-        // 深圳+校招 的 4354 条候选里，正确剔除 955 条 JS 判实习的，误杀真校招岗 **0 条**。
-        // ⚠️ intern 必须**两侧**词边界（PG 用 \y，对应 JS 的 \b）：否则 international / internal /
-        // internet 会把全职岗当实习剔掉——同款坑在 crawler 上实锤过 27,824 个岗被误标。
-        // ⚠️ url 只认**路径段** /shixi /intern，不认 `?postType=intern` 这类查询参数：
-        // 实测 wecruit 有 10 个「27届」真校招岗带 postType=intern，按查询参数算会被误杀。
-        " and not (coalesce(job_type,'') ~* '(实习|\\yintern(ship)?s?\\y)'" +
-        " or coalesce(title,'') ~ '(实习|shixi)' or coalesce(title,'') ~* '\\yintern(ship)?s?\\y'" +
-        " or coalesce(nullif(jd_url,''), apply_url, '') ~* '/(shixi|intern)(/|\\?|$)'))",
-    );
-  } else if (jobType === "实习") {
-    conds.push(
-      "(job_type ~* '(实习|intern)' or title ~* '(实习|shixi|intern)' or jd_url ~* '(shixi|intern)')",
+      " or jd_url ~* '(xiaozhao|campus)'" +
+      " or (coalesce(title,'')||' '||coalesce(summary,'')) ~* '(应届|[0-9]{2,4}届|校园招聘|校招|管培生|管理培训生|留学生专项|new\\s?grads?|university\\s+graduate|entry[-\\s]?level|campus\\s?(recruit|hiring)|graduate\\s+program)'" +
+      " or company ~* '(校招|校园招聘)')" +
+      " and (job_type is null or job_type !~* '(社招|社会招聘|全职|experienced|professional|full.?time)')" +
+      // 排除实习：recruitmentCategory 层1（实习）最先短路，命中它绝不可能再被判成校招。
+      // ⚠️ intern 必须**两侧**词边界（PG 用 \y）：否则 international / internal / internet 会被当实习剔掉
+      //    ——同款裸子串坑在 crawler 上实锤误标过 27,824 个岗。
+      // ⚠️ url 只认**路径段** /shixi /intern，不认 `?postType=intern`：实测 wecruit 有 10 个「27届」
+      //    真校招岗带该参数，按查询参数算会被误杀。
+      " and not (coalesce(job_type,'') ~* '(实习|\\yintern(ship)?s?\\y)'" +
+      " or coalesce(title,'') ~ '(实习|shixi)' or coalesce(title,'') ~* '\\yintern(ship)?s?\\y'" +
+      " or coalesce(nullif(jd_url,''), apply_url, '') ~* '/(shixi|intern)(/|\\?|$)'))"
     );
   }
+  if (jobType === "实习") {
+    return "(job_type ~* '(实习|intern)' or title ~* '(实习|shixi|intern)' or jd_url ~* '(shixi|intern)')";
+  }
+  return "true"; // 社招=默认态·大头，无信号可下推 → 兜底路全放行，交给 JS 精筛
 }
 
 // 命中页回补 HYDRATE_COLUMNS：候选阶段没拉这些展示列，排序分页定下 ≤limit 行后按 id 批量补齐再合并。

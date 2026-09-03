@@ -415,11 +415,42 @@ test("jobs-store 实习：SQL 下推实习超集预筛", async () => {
   assert.match(calls[0].sql, /shixi/);
 });
 
-test("jobs-store 社招不下推预筛（社招=默认态·大头，下推无益）", async () => {
+// 招聘类型已物化成 jobs.recruitment_category / recruitment_explicit（入库时由 JS 权威规则算好），
+// 检索改查这两列 —— 与 job-filter.jobFilterMatch 逐字同义，不再是「正向信号并集」的近似超集。
+// ⚠️ 三条不变量，破一条都会静默改坏筛选：
+//   ① 选校招/实习 = 有明确依据 且 类型相符（无依据的岗 JS 淘汰，SQL 也必须淘汰）
+//   ② 选社招 = 只淘汰「有依据且不是社招」（无依据的 JS 放行降级，SQL 也必须放行）
+//   ③ recruitment_category is null =「还没算」≠「不是」→ 必须退回旧超集，否则新岗凭空消失
+test("jobs-store 社招：只淘汰「有明确依据且不是社招」的岗", async () => {
   const calls = [];
   const { searchJobsStore } = loadJobsStore(async (sql, params) => { calls.push({ sql, params }); return []; });
   await searchJobsStore({ ...filters, jobType: "社招", keyword: "产品经理" }, null, [], 0, 10);
-  assert.doesNotMatch(calls[0].sql, /应届|xiaozhao/);
+  const sql = calls[0].sql;
+  assert.match(sql, /not \(recruitment_explicit and recruitment_category <> '社招'\)/);
+  // 社招兜底路不下推任何信号（默认态·大头）：不该出现校招/实习的信号词。
+  assert.doesNotMatch(sql, /应届|xiaozhao/);
+});
+
+test("jobs-store 招聘类型下推：查物化列，且 NULL 必须退回旧超集（新岗不能凭空消失）", async () => {
+  for (const [jobType, want] of [["校招", "校招"], ["实习", "实习"]]) {
+    const calls = [];
+    const { searchJobsStore } = loadJobsStore(async (sql, params) => { calls.push({ sql, params }); return []; });
+    await searchJobsStore({ ...filters, jobType, keyword: "产品经理" }, null, [], 0, 10);
+    const sql = calls[0].sql;
+    assert.match(
+      sql,
+      new RegExp(`recruitment_explicit and recruitment_category = '${want}'`),
+      `${jobType} 应走物化列精确过滤`,
+    );
+    assert.match(
+      sql,
+      /recruitment_category is null and/,
+      `${jobType} 必须保留 NULL 兜底路 —— 否则回填未覆盖/分类降级的新岗会从结果里消失`,
+    );
+    // 兜底路仍是旧的信号超集（宁可放宽不可收紧）。
+    if (jobType === "校招") assert.match(sql, /应届/);
+    if (jobType === "实习") assert.match(sql, /shixi/);
+  }
 });
 
 test("jobs-store 命中页回补展示列：候选省传 canonical_jd_url，page 再补齐并合并", async () => {
