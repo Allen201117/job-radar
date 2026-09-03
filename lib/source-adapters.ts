@@ -39,6 +39,7 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
   { value: "tencent_campus", label: "腾讯 校招 / 实习（join.qq.com）", origin: "domestic" },
   { value: "bilibili_campus", label: "哔哩哔哩 校招 / 实习（jobs.bilibili.com/campus）", origin: "domestic" },
   { value: "netease_campus", label: "网易 校招 / 实习（campus.163.com，含互娱·雷火·互联网）", origin: "domestic" },
+  { value: "alibaba_campus_portal", label: "阿里巴巴 校招主站（campus-talent.alibaba.com，集团统一）", origin: "domestic" },
   { value: "hikvision", label: "海康威视 校招 / 实习", origin: "domestic" },
   { value: "jd_campus", label: "京东 校招 / 实习（campus.jd.com）", origin: "domestic" },
   { value: "bytedance", label: "字节跳动", origin: "domestic" },
