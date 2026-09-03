@@ -442,9 +442,14 @@ function SubjectCard({
     }
   }
 
-  const jobsHref = `/jobs?q=${encodeURIComponent(
-    subject.kind === "business_unit" ? subject.name : subject.company,
-  )}`;
+  // 互链到岗位库：公司走 company 筛选（jobs.company 大小写不敏感子串），
+  // 业务线再叠一个关键词把范围收到这条线上。
+  // ⚠️ 诚实边界：岗位库没有「业务线」这个筛选维度（业务线是从标题抽出来的派生概念），
+  //    所以业务线卡跳过去的条数**不保证**等于卡面的 job_count；公司卡才是同一口径。
+  const jobsHref =
+    subject.kind === "business_unit"
+      ? `/jobs?company=${encodeURIComponent(subject.company)}&q=${encodeURIComponent(subject.name)}`
+      : `/jobs?company=${encodeURIComponent(subject.company)}`;
 
   return (
     <article className="rounded-2xl border border-black/[0.06] bg-white/60 p-5 dark:border-white/[0.1] dark:bg-white/[0.05]">
