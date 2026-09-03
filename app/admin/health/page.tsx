@@ -63,6 +63,7 @@ import { fetchAllPages, fetchAllSources } from "@/lib/supabase-paginate";
 import { nullableShare } from "@/lib/admin-health-tracker";
 import { Clock, ShieldCheck } from "@phosphor-icons/react/ssr";
 import { redirect } from "next/navigation";
+import { unstable_cache } from "next/cache";
 
 export const dynamic = "force-dynamic";
 
@@ -108,19 +109,59 @@ type HealthDailySeries = {
   }>;
 };
 
-async function loadSupabaseHealth(): Promise<SupabaseHealthSnapshot> {
+// ── 跨实例缓存 ────────────────────────────────────────────────────────────
+// 运营看板是「看今天跑得怎么样」，不需要秒级实时；但此前整页 force-dynamic + 零缓存，
+// 每有人打开一次就把下面这些重查询全部重算一遍。2026-09-03 线上实测：
+// 总览 5.6s / 必投供给 6.2s（首字节只要 ~55ms，慢的全在服务端算数据这一段），
+// 且几条重查询并发时会互相抢资源，越并发越慢（单跑 0.8s 的 RPC 三条并发涨到 2.6s）。
+//
+// ⚠️ 缓存函数体内不得读 cookies()/headers()（unstable_cache 的限制）。
+// 下面全部走 service-role 客户端，与请求身份无关，天然满足。
+// ⚠️ 缓存的是「取数结果」，红黄绿判定与文案仍每请求现算——阈值调整能立刻生效。
+const ADMIN_DATA_TTL_SECONDS = 180;
+
+// 带参数的取数（按 scope / 按是否含管理员）必须**按参数分开缓存键**，
+// 共用一个 key 会让国内/海外、含/不含管理员的结果互相污染——这是缓存最典型的错法。
+function cachedByKey<T>(keyParts: string[], loader: () => Promise<T>): Promise<T> {
+  return cachedLoader(keyParts.join(":"), loader)();
+}
+
+function cachedLoader<T>(key: string, loader: () => Promise<T>): () => Promise<T> {
+  const cached = unstable_cache(loader, ["admin-health", key], {
+    revalidate: ADMIN_DATA_TTL_SECONDS,
+    tags: ["admin-health"],
+  });
+  // unstable_cache 只在 Next 请求上下文里可用，单测/脚本里调用会抛
+  // 「Invariant: incrementalCache missing」→ 退回直查，别让缓存变成新的失败点。
+  // 只吞这一种错，其余原样抛出。
+  return async () => {
+    try {
+      return await cached();
+    } catch (error) {
+      if (!(error instanceof Error) || !/incrementalCache missing/i.test(error.message)) throw error;
+      return loader();
+    }
+  };
+}
+
+// 香港库的第二条全表扫（第一条是 lib/jobs-store/read 里的公司聚合）。
+// 2026-09-03 psql 实测：单跑 1.21~1.50s，**与公司聚合撞一起 3.31s**（库只有 2 vCPU）。
+// 总览与岗位库两页都要它，不缓存就等于每次打开都重扫 41.9 万行。
+const loadJobsHealth = cachedLoader<JobsHealthSnapshot>("jobs-health", () => getJobsHealthSnapshot());
+
+const loadSupabaseHealth = cachedLoader<SupabaseHealthSnapshot>("supabase-health", async () => {
   const service = createServiceClient();
   const { data, error } = await service.rpc("admin_health_snapshot", { p_window: "7 days" });
   if (error) throw new Error(error.message);
   return (data || {}) as SupabaseHealthSnapshot;
-}
+});
 
-async function loadHealthDailySeries(): Promise<HealthDailySeries> {
+const loadHealthDailySeries = cachedLoader<HealthDailySeries>("daily-series", async () => {
   const service = createServiceClient();
   const { data, error } = await service.rpc("admin_health_daily_series", { p_days: 30 });
   if (error) throw new Error(error.message);
   return (data || {}) as HealthDailySeries;
-}
+});
 
 // 缺口漏斗 / 校招供给这 5 个模块每天都在写 ops_runs，却一直没进看板；
 // 而 admin_health_snapshot 只抽了固定 6 个指标键，它们的产出口径（sources_added / snapshots …）不在里面
@@ -131,7 +172,7 @@ function shanghaiToday(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 }
 
-async function loadExtraOpsRuns(): Promise<OpsRunRow[]> {
+const loadExtraOpsRuns = cachedLoader<OpsRunRow[]>("extra-ops-runs", async () => {
   const service = createServiceClient();
   return fetchAllPages<OpsRunRow>((from, to) =>
     service
@@ -142,7 +183,7 @@ async function loadExtraOpsRuns(): Promise<OpsRunRow[]> {
       .order("id", { ascending: true })
       .range(from, to),
   );
-}
+});
 
 // 北极星：必投清单健康覆盖。jobs 在香港库、sources 在 Supabase，无法单条 SQL join → Node 层按公司名 needle 合并。
 type MustApplyRow = MustApplyCoverageRow & { pattern: string; hasSource: boolean; sourceEnabled: boolean };
@@ -164,9 +205,9 @@ type MustApplyGapAdminData = {
  * （2026-07-20 实测 1121）→ 不分页拿到的是**残缺**集合，尾部公司被误判「从未接入」
  * → 北极星「必投清单健康覆盖」的 hasSource 残缺、覆盖率虚低。
  * 分页语义（含为何必须带稳定排序键）见 lib/supabase-paginate.ts。 */
-function loadAllSources(): Promise<SourceRow[]> {
-  return fetchAllSources<SourceRow>(createServiceClient(), "company, enabled, board");
-}
+// board 供「校招供给覆盖」判 hasCampusSource（campus/mixed 才算接了校招通道）。
+const loadAllSources = cachedLoader<SourceRow[]>("all-sources", () =>
+  fetchAllSources<SourceRow>(createServiceClient(), "company, enabled, board"));
 
 function buildMustApplyRowsForScope(
   scope: MustApplyScope,
@@ -192,7 +233,7 @@ function buildMustApplyRowsForScope(
   );
 }
 
-async function loadMustApplyCoverage(): Promise<MustApplyRowsByScope> {
+const loadMustApplyCoverage = cachedLoader<MustApplyRowsByScope>("must-apply-coverage", async () => {
   // sources（Supabase 全量分页 ~560ms）与 coverage（香港库聚合 ~1.1s）互不依赖 → 并行，
   // 别退回「先 await sources 再查 coverage」，那是白白把两者串起来。
   // sources 与 scope 无关，两个 scope 共用一份，省掉一次全量分页拉取；
@@ -204,7 +245,7 @@ async function loadMustApplyCoverage(): Promise<MustApplyRowsByScope> {
   return Object.fromEntries(
     MUST_APPLY_SCOPES.map((scope, i) => [scope, buildMustApplyRowsForScope(scope, sources, coverages[i])]),
   ) as MustApplyRowsByScope;
-}
+});
 
 /**
  * 必投清单（国内互联网/科技）的校招供给覆盖。
@@ -212,7 +253,7 @@ async function loadMustApplyCoverage(): Promise<MustApplyRowsByScope> {
  * hasCampusSource 从 sources 侧带入 —— jobs 库里没有源信息，缺了它就分不清
  * 「我们没接校招通道」和「接了但对方没开」，而这个区分正是本指标的意义所在。
  */
-async function loadCampusSupplySummary() {
+const loadCampusSupplySummary = cachedLoader("campus-supply", async () => {
   const list = MUST_APPLY_BY_INDUSTRY["互联网/科技"] || [];
   if (!list.length) return null;
   const [inputs, sources] = await Promise.all([getCampusSupplyInputs(list), loadAllSources()]);
@@ -232,9 +273,9 @@ async function loadCampusSupplySummary() {
       };
     }),
   );
-}
+});
 
-async function loadMustApplyGapAdminData(): Promise<MustApplyGapAdminData> {
+const loadMustApplyGapAdminData = cachedLoader<MustApplyGapAdminData>("gap-admin", async () => {
   const service = createServiceClient();
   const [attempts, opsResult] = await Promise.all([
     fetchAllPages<MustApplyGapAttemptRow>((from, to) =>
@@ -257,9 +298,9 @@ async function loadMustApplyGapAdminData(): Promise<MustApplyGapAdminData> {
     attempts,
     opsRuns: (opsResult.data || []) as GapFunnelOpsRow[],
   };
-}
+});
 
-async function loadUserIndustryDistribution(): Promise<UserIndustryDistribution> {
+const loadUserIndustryDistribution = cachedLoader<UserIndustryDistribution>("user-industries", async () => {
   const { data, error } = await createServiceClient().from("user_preferences").select("target_industries, job_scope");
   if (error) throw new Error(error.message);
   const counts: Record<MustApplyScope, Record<string, number>> = { domestic: {}, overseas: {} };
@@ -276,10 +317,10 @@ async function loadUserIndustryDistribution(): Promise<UserIndustryDistribution>
     }
   }
   return { counts, scopeUsers, unset };
-}
+});
 
 // 点击有效率四护栏（01 spec §5）：近 7 天 opportunity_official_opened + job_liveness_at_click 聚合。
-async function loadClickValidity(): Promise<ClickValidityMetrics> {
+const loadClickValidity = cachedLoader<ClickValidityMetrics>("click-validity", async () => {
   const service = createServiceClient();
   const since = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
   const { data, error } = await service
@@ -290,11 +331,10 @@ async function loadClickValidity(): Promise<ClickValidityMetrics> {
     .limit(10000);
   if (error) throw new Error(error.message);
   return computeClickValidityMetrics((data || []) as Array<{ event?: unknown; payload?: unknown }>);
-}
+});
 
-async function loadCoverageSnapshot(): Promise<CoverageSnapshot> {
-  return getCoverageSnapshot(createServiceClient());
-}
+const loadCoverageSnapshot = cachedLoader<CoverageSnapshot>("coverage-snapshot", () =>
+  getCoverageSnapshot(createServiceClient()));
 
 function formatRate(rate: number | null): string {
   return rate == null ? "—" : `${(rate * 100).toFixed(1)}%`;
@@ -1234,7 +1274,9 @@ function SprintCards({ users }: { users: NonNullable<SupabaseHealthSnapshot["tod
 function DataNotes({ refreshedAt }: { refreshedAt: string }) {
   return (
     <div className="text-[11px] leading-5 ink-3 ">
-      <p>数据更新时间：<span className="tabular-nums">{refreshedAt}</span> 北京时间</p>
+      <p>页面打开时间：<span className="tabular-nums">{refreshedAt}</span> 北京时间</p>
+      {/* 缓存了就必须说出来。写「数据更新时间 = 现在」而实际是 3 分钟前算的，是另一种说谎。 */}
+      <p className="mt-0.5">数据每 {Math.round(ADMIN_DATA_TTL_SECONDS / 60)} 分钟重算一次，所以可能比此刻晚几分钟——运营看板看的是「今天跑得怎么样」，不追秒级实时。</p>
       <details className="mt-2">
         <summary className="cursor-pointer">这些数字怎么来的</summary>
         <ul className="mt-2 list-disc space-y-1 pl-4">
@@ -1341,8 +1383,42 @@ function JobsTab({ jobs, clickValidity, clickStatus, coverage, operations, today
     <section className="surface-soft p-5"><h2 className="font-semibold ink-1 ">抓取运行近 30 天</h2><p className="mt-1 text-xs ink-3">每格一天。一天全挂了显示「得处理」，有挂的或只跑完一半显示「要注意」。与下面每张模块卡用的是同一套标准。</p>{dailySeriesUnavailable ? <div className="mt-4"><ErrorPanel label="每天的抓取记录" /></div> : <Tracker className="mt-4" items={processTrackerItems(dailySeries, "crawl")} ariaLabel="抓取运行近 30 天" />}</section>
     <ClickValiditySection clickValidity={clickValidity} status={clickStatus} summary="系统自动查看板上这些岗位还在不在，不是用户真实点击的统计。" />
     <section className="surface-soft p-5"><h2 className="t-h2 mb-4 ink-1">抓得全不全</h2><CoverageSection snapshot={coverage} /><p className="mt-4 text-[10px] ink-3 ">只算「官网明写共有几个岗」的公司。官网不写的算不出来，不按 0% 处理。</p></section>
-    <details className="surface-soft p-5"><summary className="cursor-pointer text-xl font-semibold">分源状态</summary><div className="mt-5"><JobsLibrarySection jobs={null} operations={operations} crawlSources={normalizeCrawlSources(operations?.crawl_sources)} todayRemoved={todayRemoved} validActiveShareBand={validBand} thinShareBand="empty" neverCheckedShareBand={checkedBand} showHealthSummary={false} /></div></details>
+    <CrawlSourceBreakdown operations={operations} todayRemoved={todayRemoved} validBand={validBand} checkedBand={checkedBand} />
   </div>;
+}
+
+// 分源状态（默认折叠）。只渲染最该看的前 CRAWL_SOURCE_DISPLAY_LIMIT 个。
+// 背景：这块虽然折叠着，服务端仍会把它整份塞进首屏数据——线上实测让本页膨胀到 2.6MB，
+// 其中 1.47MB 是它，而用户多数时候根本不会点开。截断后诚实说明「一共多少个」，
+// 不做那种「悄悄少几行、页面上却像是全部」的事。
+function CrawlSourceBreakdown({
+  operations,
+  todayRemoved,
+  validBand,
+  checkedBand,
+}: {
+  operations: SupabaseHealthSnapshot | null;
+  todayRemoved: number | null;
+  validBand: HealthBand;
+  checkedBand: HealthBand;
+}) {
+  const all = operations?.crawl_sources || [];
+  const shown = normalizeCrawlSources(all);
+  const omitted = Math.max(0, all.length - shown.length);
+  return (
+    <details className="surface-soft p-5">
+      <summary className="t-h2 cursor-pointer ink-1">分源状态</summary>
+      <div className="mt-5">
+        <JobsLibrarySection jobs={null} operations={operations} crawlSources={shown} todayRemoved={todayRemoved} validActiveShareBand={validBand} thinShareBand="empty" neverCheckedShareBand={checkedBand} showHealthSummary={false} />
+        {omitted > 0 && (
+          <p className="t-caption mt-3 ink-3">
+            只列了最需要关注的前 {shown.length} 个（一共 {all.length} 个）。排序是「失败最多的排最前」，
+            所以没列出来的都是表现更好的。
+          </p>
+        )}
+      </div>
+    </details>
+  );
 }
 
 function MustApplyGapLedger({
@@ -1469,7 +1545,7 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   // 必投清单的国内/海外切换。默认国内——目前海外没有用户在找，进来先看该看的那份。
   const mustApplyScope: MustApplyScope = (typeof query.scope === "string" ? query.scope : "") === "overseas" ? "overseas" : "domestic";
   const overview = tab === "overview";
-  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult, gapResult, dailySeriesResult, extraOpsResult, analyticsResult, campusSupplyResult] = await Promise.allSettled([overview || tab === "jobs" ? getJobsHealthSnapshot() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), overview || tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await getMustApplyFetchCoverage(createServiceClient(), scope)] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null), tab === "supply" ? loadMustApplyGapAdminData() : Promise.resolve(null), overview || tab === "jobs" || tab === "system" ? loadHealthDailySeries() : Promise.resolve(null), overview || tab === "system" ? loadExtraOpsRuns() : Promise.resolve(null), tab === "users" ? getUserAnalytics(createServiceClient(), { days: 30, includeStaff }) : Promise.resolve(null), overview || tab === "system" || tab === "supply" ? loadCampusSupplySummary() : Promise.resolve(null)]);
+  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult, gapResult, dailySeriesResult, extraOpsResult, analyticsResult, campusSupplyResult] = await Promise.allSettled([overview || tab === "jobs" ? loadJobsHealth() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await cachedByKey(["fetch-coverage", scope], () => getMustApplyFetchCoverage(createServiceClient(), scope))] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null), tab === "supply" ? loadMustApplyGapAdminData() : Promise.resolve(null), overview || tab === "jobs" || tab === "system" ? loadHealthDailySeries() : Promise.resolve(null), overview || tab === "system" ? loadExtraOpsRuns() : Promise.resolve(null), tab === "users" ? cachedByKey(["user-analytics", includeStaff ? "with-staff" : "no-staff"], () => getUserAnalytics(createServiceClient(), { days: 30, includeStaff })) : Promise.resolve(null), overview || tab === "system" || tab === "supply" ? loadCampusSupplySummary() : Promise.resolve(null)]);
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
   const clickValidity = clickResult.status === "fulfilled" ? clickResult.value : null;

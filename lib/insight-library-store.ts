@@ -48,6 +48,11 @@ async function loadIndex(): Promise<LibraryIndex> {
       .from("insight_items")
       .select(`${ITEM_COLUMNS}, ${SOURCE_SELECT}`)
       .eq("status", "active")
+      // ⚠️ 洞察库不放「数据层」（2026-09-03 创始人定调）：城市分布、学历要求这类
+      // 用户自己在岗位库筛一下就有，不算信息差。洞察库只承载「别人的经验感受」
+      // 与官方事实。派生链**照常在后台跑**（快照要攒够 30 天才有趋势），
+      // 等趋势这类真信息差出来了再单独放回。
+      .neq("origin", "derived")
       // 不按 subject_id 过滤：NULL 是「公司级」，由 buildLibraryIndex 挂到公司主体上。
       .order("id", { ascending: true })
       .range(from, to),
@@ -143,11 +148,12 @@ export async function attachCardContents(
     "subject_id, company_id, metric_key, metric_value, metric_unit, sample_size, assertion, content, scope";
   const [bySubjectRes, byCompanyRes] = await Promise.all([
     supabase.from("insight_items").select(columns)
-      .in("subject_id", ids).eq("status", "active").not("metric_key", "is", null),
+      .in("subject_id", ids).eq("status", "active")
+      .neq("origin", "derived").not("metric_key", "is", null),
     companyIds.length
       ? supabase.from("insight_items").select(columns)
         .in("company_id", companyIds).is("subject_id", null)
-        .eq("status", "active").not("metric_key", "is", null)
+        .eq("status", "active").neq("origin", "derived").not("metric_key", "is", null)
       : Promise.resolve({ data: [], error: null } as any),
   ]);
   const error = bySubjectRes.error || byCompanyRes.error;

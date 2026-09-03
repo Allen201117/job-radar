@@ -37,7 +37,7 @@ type PrimaryAction = "saved" | "ignored" | "applied";
 interface Props {
   initialJobs: ScoredJob[];
   initialTotal: number;
-  initialFilters?: { city?: string; jobType?: string; keyword?: string };
+  initialFilters?: { city?: string; jobType?: string; keyword?: string; company?: string };
   jobScope?: string | null;
 }
 

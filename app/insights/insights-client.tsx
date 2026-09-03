@@ -38,6 +38,8 @@ type Filters = {
   assertion: string;
   dimension: string;
   metric: string;
+  /** 选中指标的数值下限（如「近 30 天新挂出 ≥ 50」）。只有选了指标才有意义。 */
+  metricMin: string;
   freshness: string;
   sort: string;
 };
@@ -48,6 +50,7 @@ const EMPTY: Filters = {
   assertion: "",
   dimension: "",
   metric: "",
+  metricMin: "",
   freshness: "",
   sort: "fresh",
 };
@@ -59,7 +62,9 @@ const SORT_LABEL: Record<string, string> = {
   jobs: "在招规模最大",
 };
 
-const ASSERTION_ORDER: InsightAssertion[] = ["fact", "signal", "claim"];
+// 洞察库现在只承载「官方事实」与「公开说法」两档；第一方数据层（signal）已从本页撤下
+// （2026-09-03 创始人定调：招聘结构不算信息差）。派生链仍在后台跑，趋势出来后再单独放回。
+const ASSERTION_ORDER: InsightAssertion[] = ["fact", "claim"];
 
 function toQuery(filters: Filters, page: number): string {
   const params = new URLSearchParams();
@@ -68,6 +73,8 @@ function toQuery(filters: Filters, page: number): string {
   if (filters.assertion) params.set("assertion", filters.assertion);
   if (filters.dimension) params.set("dimension", filters.dimension);
   if (filters.metric) params.set("metric", filters.metric);
+  // 阈值只在选了指标时才有意义：没有指标就没有「大于多少」这回事。
+  if (filters.metric && filters.metricMin.trim()) params.set("metricMin", filters.metricMin.trim());
   if (filters.freshness) params.set("freshness", filters.freshness);
   if (filters.sort) params.set("sort", filters.sort);
   if (page > 1) params.set("page", String(page));
@@ -131,8 +138,9 @@ export default function InsightsClient({
 
   const active = useMemo(
     () =>
+      // metricMin 不单独成 chip：它显示在「指标」那颗 chip 里（「近 30 天新挂出 ≥ 50」）。
       (Object.keys(filters) as Array<keyof Filters>).filter(
-        (k) => k !== "sort" && filters[k],
+        (k) => k !== "sort" && k !== "metricMin" && filters[k],
       ),
     [filters],
   );
@@ -193,13 +201,26 @@ export default function InsightsClient({
           />
           <Select
             value={filters.metric}
-            onChange={(v) => set({ metric: v })}
-            placeholder="全部指标"
+            onChange={(v) => set({ metric: v, metricMin: v ? filters.metricMin : "" })}
+            placeholder="全部主题"
             options={facets.metric.map((b) => ({
               value: b.key,
               label: `${METRIC_LABEL[b.key] || b.key}（${b.count}）`,
             }))}
           />
+          {filters.metric && (
+            <label className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3 py-1.5 dark:border-white/[0.1] dark:bg-white/[0.06]">
+              <span className="t-label ink-3">≥</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                value={filters.metricMin}
+                onChange={(e) => set({ metricMin: e.target.value })}
+                placeholder="数值下限"
+                className="w-20 bg-transparent t-label ink-1 outline-none"
+              />
+            </label>
+          )}
           <Select
             value={filters.freshness}
             onChange={(v) => set({ freshness: v })}
@@ -227,7 +248,13 @@ export default function InsightsClient({
               <button
                 key={key}
                 type="button"
-                onClick={() => set({ [key]: "" } as Partial<Filters>)}
+                onClick={() =>
+                  set(
+                    (key === "metric"
+                      ? { metric: "", metricMin: "" }
+                      : { [key]: "" }) as Partial<Filters>,
+                  )
+                }
                 className="rounded-full border border-[#3f7cc0]/25 bg-[#e6eef8] px-2.5 py-1 t-micro text-[#2f6299] transition hover:bg-[#dbe7f6] dark:border-[#7fb2e8]/25 dark:bg-[#7fb2e8]/[0.14] dark:text-[#7fb2e8]"
               >
                 {labelFor(key, filters)} ✕
@@ -319,7 +346,10 @@ function labelFor(key: keyof Filters, filters: Filters): string {
   if (key === "kind") return value === "company" ? "公司" : "业务线";
   if (key === "assertion") return ASSERTION_LABEL[value as InsightAssertion] || value;
   if (key === "dimension") return DIMENSION_LABEL[value as keyof typeof DIMENSION_LABEL] || value;
-  if (key === "metric") return METRIC_LABEL[value] || value;
+  if (key === "metric") {
+    const label = METRIC_LABEL[value] || value;
+    return filters.metricMin.trim() ? `${label} ≥ ${filters.metricMin.trim()}` : label;
+  }
   if (key === "freshness") return FRESHNESS_LABEL[value] || value;
   return value;
 }
@@ -414,9 +444,14 @@ function SubjectCard({
     }
   }
 
-  const jobsHref = `/jobs?q=${encodeURIComponent(
-    subject.kind === "business_unit" ? subject.name : subject.company,
-  )}`;
+  // 互链到岗位库：公司走 company 筛选（jobs.company 大小写不敏感子串），
+  // 业务线再叠一个关键词把范围收到这条线上。
+  // ⚠️ 诚实边界：岗位库没有「业务线」这个筛选维度（业务线是从标题抽出来的派生概念），
+  //    所以业务线卡跳过去的条数**不保证**等于卡面的 job_count；公司卡才是同一口径。
+  const jobsHref =
+    subject.kind === "business_unit"
+      ? `/jobs?company=${encodeURIComponent(subject.company)}&q=${encodeURIComponent(subject.name)}`
+      : `/jobs?company=${encodeURIComponent(subject.company)}`;
 
   return (
     <article className="rounded-2xl border border-black/[0.06] bg-white/60 p-5 dark:border-white/[0.1] dark:bg-white/[0.05]">

@@ -177,6 +177,9 @@ export function buildLibraryIndex(
     const company = companies.get(subject.company_id);
     if (!company) continue;
     const own = bySubject.get(subject.id) || [];
+    // 一条可展示内容都没有的主体不进洞察库：空卡片对用户是纯噪声。
+    // （撤掉数据层后，只有派生信号的主体——尤其是全部 485 个业务线——都会落在这里。）
+    if (own.length === 0) continue;
     const assertion_counts: Record<InsightAssertion, number> = { fact: 0, signal: 0, claim: 0 };
     const dims = new Set<InsightDimension>();
     let latest: string | null = null;
@@ -400,7 +403,10 @@ export const METRIC_LABEL: Record<string, string> = {
   bonus_months: "年终奖",
   overtime_level: "加班强度",
   promotion_pace: "晋升节奏",
-  interview_rounds: "面试轮次",
+  interview_rounds: "面试难度",
+  intern_experience: "实习体验",
+  pay_level: "薪资水平",
+  work_culture: "公开讨论",
   hiring_freeze_signal: "招聘骤降",
   layoff_mention: "裁员提及",
   listing_status: "上市状态",

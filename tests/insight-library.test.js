@@ -280,7 +280,65 @@ test("subject_id 为 NULL = 公司级，必须挂到公司主体上（否则存�
 test("公司级条目不会误挂到业务线主体上", () => {
   const bu = subject({ id: "s-bu", kind: "business_unit", name: "飞书" });
   const legacy = signalItem({ id: "legacy-2", subject_id: null });
-  // 没有 company 主体时，公司级条目无处可挂 —— 宁可不显示，也不能记到业务线头上
+  // 没有 company 主体时，公司级条目无处可挂 —— 宁可不显示，也不能记到业务线头上。
+  // 结果是这个业务线主体一条内容都没有 → 整个不进洞察库（不留空卡片）。
   const index = L.buildLibraryIndex([bu], [legacy], COMPANIES, NOW);
-  assert.equal(index[0].item_count, 0);
+  assert.equal(index.length, 0);
+});
+
+// ============================================================
+// 2026-09-03 创始人定调：洞察库不放「数据层」——招聘结构不算信息差。
+// ============================================================
+
+test("一条可展示内容都没有的主体不进洞察库（撤掉数据层后不能留下空卡片）", () => {
+  const onlySignal = subject({ id: "s-only-signal" });
+  // 索引层面：即使传进来的条目全被门挡掉，主体也不该出现
+  const index = L.buildLibraryIndex([onlySignal], [], COMPANIES, NOW);
+  assert.equal(index.length, 0);
+});
+
+test("有说法内容的主体照常进洞察库", () => {
+  const claim = signalItem({
+    origin: "public_web",
+    assertion: "claim",
+    grade: "experience",
+    content: "据公开讨论，年终奖普遍在 2-3 个月。",
+    metric_key: "bonus_months",
+    sample_size: 6,
+    sources: [source("https://a.com/x"), source("https://b.com/y")],
+  });
+  const index = L.buildLibraryIndex([subject()], [claim], COMPANIES, NOW);
+  assert.equal(index.length, 1);
+  assert.equal(index[0].item_count, 1);
+  assert.equal(L.metricKey(index[0].metrics[0]), "bonus_months");
+});
+
+test("说法层的主题键都有人话标签（没有标签的键会在页面上直接露出英文）", () => {
+  for (const key of [
+    "bonus_months", "overtime_level", "interview_rounds",
+    "promotion_pace", "intern_experience", "work_culture", "layoff_mention",
+  ]) {
+    assert.ok(L.METRIC_LABEL[key], `metric_key ${key} 缺人话标签`);
+  }
+});
+
+test("迁移 209 的主题映射与 T3 写入的标题一一对应（改一边必须改另一边）", () => {
+  const fs2 = require("node:fs");
+  const sql = fs2.readFileSync(
+    path.join(__dirname, "..", "supabase", "migrations", "209_insight_topic_metric_keys.sql"),
+    "utf8",
+  );
+  const catalog = fs2.readFileSync(
+    path.join(__dirname, "..", "crawler", "insight_backlog.py"),
+    "utf8",
+  );
+  // T3_TOPIC_CATALOG 里的每个主题名都必须在迁移的映射里出现，否则那批条目归不了类
+  const topics = [...catalog.matchAll(/^\s{4}"([^"]+)":\s*\{"topic"/gm)].map((m) => m[1]);
+  assert.ok(topics.length >= 5, "没解析到 T3 主题目录");
+  for (const topic of topics) {
+    assert.ok(
+      sql.includes(`title like '${topic}%'`),
+      `T3 主题「${topic}」没有对应的 metric_key 映射（迁移 209）`,
+    );
+  }
 });
