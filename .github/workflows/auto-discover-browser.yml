@@ -38,6 +38,12 @@ jobs:
       SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
     steps:
       - uses: actions/checkout@v4
+      # 入库时算招聘类型要调 scripts/classify-recruitment.js（规则唯一实现在 JS）。
+      # 缺 node 不会让抓取失败（recruitment_classify 会静默降级留空、由补漏任务捡回），
+      # 但那样每天几千个新岗都要等补漏，所以这里显式装上、不赌 runner 自带。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

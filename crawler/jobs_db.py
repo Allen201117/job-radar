@@ -28,6 +28,7 @@ import psycopg2.extras
 from dotenv import load_dotenv
 
 from normalizer import canonicalize_jd_url
+from recruitment_classify import annotate as _annotate_recruitment
 
 # jobs 可写列（与 jobs-db/schema.sql 对齐）。canonical_jd_url 由触发器维护、search_doc v1 不填 → 都不在写入列。
 _INSERT_COLS = (
@@ -35,6 +36,9 @@ _INSERT_COLS = (
     "job_type", "grad_class", "summary", "jd_url", "apply_url", "salary_text", "posted_at",
     "first_seen_at", "last_seen_at", "status", "content_hash", "experience", "education",
     "deadline", "sponsorship_signal", "enrich_fail_count", "enrich_checked_at",
+    # 招聘类型物化（2026-09-03）：入库时就由 JS 权威规则算好，检索直接查这两列，
+    # 不再让 SQL 用「正向信号并集」去近似（那套与 JS 的分层裁决结构不同，必然捞进注定被否决的岗）。
+    "recruitment_category", "recruitment_explicit",
 )
 # update 时不动：主键 id / 首见时间 first_seen_at / enrich 子系统独占的 enrich_checked_at·enrich_fail_count。
 # 后两者由 enrich_backlog 死活巡检+富化**直接 UPDATE**（非本 upsert）：列表重抓若把 enrich_checked_at 抹回
@@ -48,14 +52,19 @@ _UPDATE_COLS = tuple(
 # 「浏览器逐岗富化补好的 summary 被下一次列表重抓的空值抹掉」——moka 1% 覆盖根因（2026-06-20 查实：
 # 每晚 backfill 补 ~8800 条，次日列表重爬 summary=None 全抹回 NULL，count_valid_active_jobs 永远上不去）。
 # 仅当新值非空才覆盖（fresh 数据仍优先，如 beisen 列表自带 Duty/Require、httpx 大厂内联正文）。
-_PRESERVE_IF_EMPTY = ("summary", "job_type", "experience", "education", "deadline", "salary_text")
+_PRESERVE_IF_EMPTY = ("summary", "job_type", "experience", "education", "deadline", "salary_text",
+                      # 分类降级时是 None（不是「判定为空」）——必须保留上一次算好的值，
+                      # 否则一次 node 不可用就把全库这一列抹成 NULL（同 summary 被重抓抹掉的老坑）。
+                      "recruitment_category")
 
 # 同样要防「重抓抹掉」，但列是**非文本类型**，不能套 NULLIF(%s,'')：
 # NULLIF(2027, '') 会让 Postgres 把 '' 往 integer 强转 → invalid input syntax，整源写库炸掉。
 # 非文本列的「空」就是 NULL，直接 COALESCE(%s, 列) 即可。
 # grad_class：届别从标题/正文抽，列表页文本比详情页短，重抓时常抽不出来（None）。不保护的话，
 # 富化阶段从完整 JD 抽到的「2027 届」会被次日列表重抓的 None 抹掉——与 summary 被抹的老坑同形态。
-_PRESERVE_IF_NULL = ("grad_class",)
+# recruitment_explicit 是 boolean，不能套 NULLIF(%s,'')（会触发 '' → boolean 强转报错），
+# 与 grad_class 同走 COALESCE(%s, 列)。保护理由同 recruitment_category。
+_PRESERVE_IF_NULL = ("grad_class", "recruitment_explicit")
 
 
 def _update_set_clause(cols=_UPDATE_COLS) -> str:
@@ -390,6 +399,8 @@ def _row_tuple(job: dict, cols, **overrides):
 
 def upsert_job(conn, job: dict) -> str:
     """单条 upsert，冲突键 canonical_jd_url；返回 'created' | 'updated'。"""
+    # 入库前算好招聘类型（失败静默留空，绝不阻断写入）。批量路径已算过的行会被跳过。
+    _annotate_recruitment([job])
     canon = canonicalize_jd_url(job.get("jd_url"))
     now = _now()
     with conn.cursor() as cur:
@@ -424,6 +435,10 @@ def upsert_jobs_batch(conn, jobs: list, page_size: int = 500) -> tuple:
     ③ 命中→批量 UPDATE（execute_batch）、未命中→批量 INSERT（execute_values）；撞唯一键退回逐行 upsert_job。"""
     if not jobs:
         return (0, 0)
+
+    # ⓪ 入库前批量算好招聘类型。按批调（一批 500 条约 6ms），绝不能逐条调——进程启动才是大头。
+    #    失败一律静默留空，岗位照常入库，由 backfill-recruitment-category 补漏。
+    _annotate_recruitment(jobs)
 
     # ① 批内去重
     deduped = {}
