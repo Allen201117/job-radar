@@ -61,3 +61,51 @@ class UpdateSetClauseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RecruitmentMaterializationTests(unittest.TestCase):
+    """招聘类型物化（2026-09-03）：入库时由 JS 权威规则算好，检索直接查这两列。
+
+    为什么要物化：筛选是「按可信度分层裁决」，而检索只能用「正向信号并集」去近似——两者结构
+    不同，必然捞进大量注定被否决的岗（live 实测「深圳+校招」4354 条候选里 43% 属此类）。
+    """
+
+    def test_two_columns_are_written(self):
+        # 必须**两列都写**：job-filter.jobFilterMatch 同时用「是什么类型」和「有没有明确依据」
+        # （无依据时：选社招放行降级、选校招/实习淘汰）。只写 category，SQL 表达不了这条规则。
+        for col in ("recruitment_category", "recruitment_explicit"):
+            self.assertIn(col, jobs_db._INSERT_COLS)
+            self.assertIn(col, jobs_db._UPDATE_COLS)
+
+    def test_degraded_classification_must_not_wipe_existing_values(self):
+        # 分类降级时写的是 None（「没算出来」），不是「判定为空」。若直接覆盖，一次 node 不可用
+        # 就会把全库这两列抹成 NULL —— 与 summary 被列表重抓抹掉的老坑同形态。
+        clause = jobs_db._update_set_clause()
+        self.assertIn(
+            "recruitment_category = COALESCE(NULLIF(%s, ''), recruitment_category)", clause)
+        # boolean 列不能套 NULLIF(%s,'')（'' → boolean 强转会报错，整源写库炸掉），走 COALESCE。
+        self.assertIn("recruitment_explicit = COALESCE(%s, recruitment_explicit)", clause)
+        self.assertNotIn("NULLIF(%s, ''), recruitment_explicit", clause)
+
+    def test_both_write_paths_classify_before_writing(self):
+        import inspect
+        for fn in (jobs_db.upsert_job, jobs_db.upsert_jobs_batch):
+            src = inspect.getsource(fn)
+            self.assertIn("_annotate_recruitment", src,
+                          f"{fn.__name__} 必须在写库前补齐招聘类型两列")
+
+    def test_classification_failure_never_breaks_ingestion(self):
+        # 主链路不能被这个可选的富化步骤拖垮：任何异常都只降级留空，由补漏任务捡回。
+        import recruitment_classify
+
+        jobs = [{"title": "2027届 算法工程师", "summary": "", "jd_url": "", "job_type": "校招"}]
+        orig = recruitment_classify.classify
+        try:
+            recruitment_classify.classify = lambda items: (_ for _ in ()).throw(RuntimeError("boom"))
+            # annotate 内部调用 classify；异常必须被兜住，且两列留 None。
+            try:
+                recruitment_classify.annotate(jobs)
+            except Exception as exc:  # pragma: no cover
+                self.fail(f"分类失败不得抛给调用方：{exc}")
+        finally:
+            recruitment_classify.classify = orig

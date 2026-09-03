@@ -75,10 +75,18 @@ def classify(jobs: Iterable[dict]) -> list[tuple[str | None, bool | None]]:
 
 
 def annotate(jobs: list[dict[str, Any]]) -> None:
-    """就地给每个 job 补上两列。已经带值的行不覆盖（调用方可能已算过）。"""
-    todo = [j for j in jobs if j.get("recruitment_category") is None]
-    if not todo:
-        return
-    for job, (cat, exp) in zip(todo, classify(todo)):
-        job["recruitment_category"] = cat
-        job["recruitment_explicit"] = exp
+    """就地给每个 job 补上两列。已经带值的行不覆盖（调用方可能已算过）。
+
+    ⚠️ 这里**再兜一层异常**（classify 内部已经兜过）：这是写库主链路上的一个可选富化步骤，
+    任何从意料之外的路径冒出来的异常都不许冒泡到 upsert —— 否则一个支线故障会让整源抓取失败。
+    降级后两列留空，由 backfill-recruitment-category 的定时任务捡回。
+    """
+    try:
+        todo = [j for j in jobs if j.get("recruitment_category") is None]
+        if not todo:
+            return
+        for job, (cat, exp) in zip(todo, classify(todo)):
+            job["recruitment_category"] = cat
+            job["recruitment_explicit"] = exp
+    except Exception as exc:  # noqa: BLE001 —— 主链路不能被支线拖垮，见上
+        _warn_once(f"annotate 异常 {type(exc).__name__}: {exc}")
