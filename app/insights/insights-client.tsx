@@ -504,10 +504,13 @@ function SubjectCard({
       {(subject.cards || []).length > 0 && (
         <ul className="mt-3.5 grid gap-2">
           {(subject.cards || []).map((m) => (
-            <li key={m.metric_key} className="flex items-start gap-2">
-              <span className="mt-[3px] shrink-0 rounded px-1.5 py-0.5 t-micro ink-3 ring-1 ring-inset ring-black/[0.06] dark:ring-white/[0.1]">
-                {METRIC_LABEL[m.metric_key] || m.metric_key}
-              </span>
+            <li key={`${m.metric_key}-${m.content.slice(0, 12)}`} className="flex items-start gap-2">
+              {/* 官方年报这类事实没有主题键，别渲染成一个空芯片 */}
+              {m.metric_key && (
+                <span className="mt-[3px] shrink-0 rounded px-1.5 py-0.5 t-micro ink-3 ring-1 ring-inset ring-black/[0.06] dark:ring-white/[0.1]">
+                  {METRIC_LABEL[m.metric_key] || m.metric_key}
+                </span>
+              )}
               <span className="t-body-sm ink-2">{metricText(m)}</span>
             </li>
           ))}
@@ -537,7 +540,8 @@ function SubjectCard({
       {gaps.length > 0 && !contribute && (
         // 互惠墙：空缺处不写「暂无数据」，写成贡献入口（spec §1.5「把第三层的空缺做成飞轮」）。
         <p className="mt-2.5 t-caption ink-3">
-          {gaps.map((g) => g.label).join(" / ")} 我们的岗位数据里没有。
+          {/* 撤掉数据层后，这句不再是「岗位数据里没有」，而是「这几栏还没有可信内容」 */}
+          {gaps.map((g) => g.label).join(" / ")} 还没有可信内容。
           <span className="ink-2"> 你在{subject.company}待过？说一句真实体验，解锁其他人的说法。</span>
         </p>
       )}
