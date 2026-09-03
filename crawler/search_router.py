@@ -125,7 +125,7 @@ class SearchRouter:
 
 
 def default_router():
-    """按环境变量装配默认多源路由器（顺序=中文深度优先：博查 → Tavily → Serper → 千帆）。
+    """按环境变量装配默认多源路由器（顺序=额度可持续性优先，见下方注释）。
     未配 key 的源 router 自会跳过 → 「先用各家免费额度验证灵活性」即配哪个用哪个。
     每源日顶默认值仅为安全上限，正式放量由 *_DAILY_CAP env 按月度预算调。"""
     import search_bocha
@@ -134,15 +134,54 @@ def default_router():
     import search_tavily
     from search_provider_http import HttpSearchProvider
 
-    # 默认日顶按各家免费额度保守设，**绝不一次性用完**（可在 repo Variables *_DAILY_CAP 上调）：
-    #   tavily 30/日 ≈ 900/月（< 1000 免费/月）；serper 20/日（2500 一次性总额 → 约 4 个月）；
-    #   bocha 50/日（付费，保守）；千帆走自身 QIANFAN_DAILY_CAP=40/日（每日重置、免费、是常驻主力）。
+    # ⚠️ 顺序 = **额度可持续性优先**（2026-09-04 改，原来是「中文深度优先」）。
+    # search() 是「按本列表顺序逐个试、够 5 条就停」，所以排在前面的先被消耗。
+    # 原顺序 博查 → Tavily → Serper → 千帆 把**一次性额度的 Serper 排在每天回血的千帆前面**，
+    # 正好是反的：台账实测 2026-06-20 起 68 天里 Serper 已用掉 1,299 / 2,500（52%），
+    # 按每月 ~570 次的速度约两个月见底，而千帆每天 50 次免费额度天天没用完。
+    # 现顺序按「回血周期」排：每月回血 → 每天回血 → 一次性 → 付费。
+    #   1. tavily  每月 1,000 免费（月初重置），日顶 32 ≈ 960/月，留 4% 余量
+    #   2. 千帆    每天 50 免费（次日重置），走自身 QIANFAN_DAILY_CAP=40
+    #   3. serper  **2,500 一次性总额，用完就没了** → 日顶砍到 10，当最后手段
+    #   4. bocha   **付费**（不是免费额度）→ 放最后，避免有人配了 key 就默认先花钱
+    # 想临时调回来不必改代码：repo Variables 的 *_DAILY_CAP 可覆盖任一日顶。
     return SearchRouter([
+        HttpSearchProvider("tavily", "TAVILY_API_KEY", search_tavily.parse_response,
+                           search_tavily.build_request, "TAVILY_DAILY_CAP", 32),
+        search_qianfan.QianfanProvider(),
+        HttpSearchProvider("serper", "SERPER_API_KEY", search_serper.parse_response,
+                           search_serper.build_request, "SERPER_DAILY_CAP", 10),
         HttpSearchProvider("bocha", "BOCHA_API_KEY", search_bocha.parse_response,
                            search_bocha.build_request, "BOCHA_DAILY_CAP", 50),
-        HttpSearchProvider("tavily", "TAVILY_API_KEY", search_tavily.parse_response,
-                           search_tavily.build_request, "TAVILY_DAILY_CAP", 30),
-        HttpSearchProvider("serper", "SERPER_API_KEY", search_serper.parse_response,
-                           search_serper.build_request, "SERPER_DAILY_CAP", 20),
-        search_qianfan.QianfanProvider(),
     ])
+
+
+# ── 一次性额度的耗尽预警 ────────────────────────────────────────────────
+# Serper 的免费额度是 **2,500 次一次性总额**（不是按月重置），用完就静默没了 ——
+# 表现会是「T3 突然不产出」，又是一次「绿灯零产出」。这里靠自家台账算累计用量预警，
+# 不需要各家的余额 API（那些 key 只在 CI，本地拿不到）。
+LIFETIME_QUOTA = {"serper": 2500}
+LIFETIME_WARN_RATIO = 0.8
+
+
+def lifetime_used(sb, provider: str) -> int:
+    """某个源自台账建立以来的累计消耗次数。读不到就返回 0（预警不该拖垮主任务）。"""
+    try:
+        import db
+        rows = db.fetch_all_rows(
+            lambda: sb.table("search_usage").select("used").eq("provider", provider),
+            order_key="day",
+        )
+        return sum(int(r.get("used") or 0) for r in rows)
+    except Exception:
+        return 0
+
+
+def lifetime_warnings(sb) -> list:
+    """返回 [(provider, 已用, 总额)]，仅列出已越过 80% 的一次性额度源。"""
+    out = []
+    for provider, quota in LIFETIME_QUOTA.items():
+        used = lifetime_used(sb, provider)
+        if used >= quota * LIFETIME_WARN_RATIO:
+            out.append((provider, used, quota))
+    return out
