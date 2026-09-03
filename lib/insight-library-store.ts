@@ -150,6 +150,8 @@ export async function getSubjectItems(subjectId: string): Promise<InsightItemVie
 export async function attachCardContents(
   subjects: LibrarySubject[],
   perSubject = 3,
+  /** 当前筛选选中的主题：卡面把它排最前。用户筛「加班少的公司」却先看到年终奖，很别扭。 */
+  focusMetric?: string | null,
 ): Promise<LibrarySubject[]> {
   const ids = subjects.map((s) => s.id);
   if (ids.length === 0) return subjects;
@@ -200,6 +202,8 @@ export async function attachCardContents(
     if (live.length === 0) continue;
     live.sort(
       (a, b) =>
+        // 筛中的主题优先：用户是带着「看这一项」的意图筛过来的。
+        (focusMetric ? (b.metric_key === focusMetric ? 1 : 0) - (a.metric_key === focusMetric ? 1 : 0) : 0) ||
         (rank[a.assertion || "claim"] ?? 9) - (rank[b.assertion || "claim"] ?? 9) ||
         (b.sample_size || 0) - (a.sample_size || 0),
     );

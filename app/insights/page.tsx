@@ -50,6 +50,8 @@ export default async function InsightsPage({
   const sorted = sortSubjects(filterSubjects(index.subjects, filters), filters.sort);
   const firstPage = await attachCardContents(
     sorted.slice(0, LIBRARY_PAGE_SIZE).map(trimSubjectForCard),
+    3,
+    filters.metric,
   );
 
   return (

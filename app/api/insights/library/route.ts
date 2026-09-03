@@ -66,6 +66,8 @@ export async function GET(request: NextRequest) {
   // 正文只为这一页现取（见 lib/insight-library-store.attachCardContents）。
   const pageSubjects = await attachCardContents(
     sorted.slice(start, start + LIBRARY_PAGE_SIZE).map(trimSubjectForCard),
+    3,
+    filters.metric,
   );
 
   return NextResponse.json({
