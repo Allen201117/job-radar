@@ -134,3 +134,89 @@
 4. `/insights` 页面（列表 → 筛选 → 主体下钻 → 与岗位库互链）。
 5. 贡献入口 + 治理后台。
 6. T3 按业务线定向检索。
+
+---
+
+## 7. 已交付（2026-09-03 第二阶段，全部已上 main 并线上验证）
+
+### 7.1 读模型契约（`GET /api/insights/library`）
+
+**列表**（无 `subject` 参数时）：
+
+```jsonc
+{
+  "ok": true,
+  "total": 1529,          // 当前筛选下的主体数
+  "page": 1,
+  "page_size": 24,
+  "index_built_at": "2026-09-03T08:47:44.231Z",  // 索引重建时刻；连续两次请求应当**相同**，变了=缓存没命中
+  "subjects": [ /* LibrarySubject，见下 */ ],
+  "facets": {             // 每个分面都在「其它筛选已生效、本分面自己不生效」的集合上计数
+    "kind":      [{"key":"company","count":1044}, {"key":"business_unit","count":485}],
+    "assertion": [{"key":"signal","count":1433}, {"key":"claim","count":377}, {"key":"fact","count":18}],
+    "dimension": [{"key":"hiring","count":1458}, …],
+    "metric":    [{"key":"hiring_volume_30d","count":1433}, …],
+    "industry":  […],
+    "freshness": [{"key":"fresh","count":1468}]
+  }
+}
+```
+
+`LibrarySubject`：
+
+```jsonc
+{
+  "id": "uuid", "company_id": "uuid", "company": "字节跳动", "industry": "互联网/科技",
+  "kind": "business_unit",            // 或 "company"
+  "name": "飞书", "job_count": 397,
+  "assertion_counts": {"fact": 0, "signal": 7, "claim": 2},
+  "dimensions": ["hiring", "compensation_intensity"],
+  "item_count": 9,                     // **过了展示门之后**的条数；必须等于展开后看到的条数
+  "last_verified_at": "2026-09-03T…", "freshness": "fresh",
+  "metrics": [["hiring_volume_30d", 47, 397, "signal"], …],   // 元组！见下
+  "cards":  [{"metric_key":"…","metric_value":47,"metric_unit":"个","sample_size":397,
+              "assertion":"signal","content":"近 30 天新挂出…（基于 397 个在招岗）。","scope":{}}]
+}
+```
+
+⚠️ **`metrics` 是元组 `[metric_key, metric_value, sample_size, assertion]`**，不是对象。
+理由是量出来的：对象形态 1,600 主体 × 7 指标实测 1,716KB，顶穿 Vercel 数据缓存 2MB 上限 →
+**静默不缓存**，每请求重建索引（线上实测 ~10s/次，且不报错）。元组化后 983KB。
+下标常量与访问器（`M_KEY` / `metricKey()` …）与打包逻辑**同文件**，防两端口径漂移。
+
+⚠️ `cards`（带正文）**不在缓存索引里**，只为当前这一页的 24 个主体现取 → 首屏体积不随洞察库规模增长。
+
+**展开单个主体**：`?subject=<uuid>` → `{ ok, subject, items: InsightItemView[] }`，
+`items` 与索引计数走**同一道展示门**，所以卡面写几条、展开就是几条。
+
+**筛选参数**：`q` / `company` / `kind` / `dimension` / `assertion` / `industry` /
+`metric` + `metricMin` + `metricMax` / `has`（可重复）/ `freshness` / `sort` / `page`。
+未知取值一律丢弃而不是原样透传（否则会静默筛出 0 条，用户读成「没有数据」）。
+
+### 7.2 线上实测数字（生产站，2026-09-03）
+
+| 项 | 数字 |
+|---|---|
+| 主体 | 1,529（公司 1,044 + 业务线 485） |
+| 派生 signal 条目 | 9,652（0 失败） |
+| 每日快照 | 1,590 行（趋势的时间序列从今天开始积累） |
+| 假「事实」降级 | 1,619 → 0；active fact 从 1,914 降到 295 |
+| `/insights` 首屏 | **592–602ms**（热）/ 211KB —— 验收线 <1s、<300KB |
+| `/api/insights/library` | 442–686ms（热），27KB/页 |
+| 业务线抽检噪声率 | 13% → ~2%（两轮降噪，逐类钉了回归断言） |
+
+### 7.3 本轮**没做**的（留给下一棒）
+
+1. **T3 检索按业务线定向**（任务卡 §2.3 上半）：仍是 `{公司} 加班` 而非 `{公司} {业务线} 加班`，
+   结果也还没挂 `subject_id`。这是「说法」层唯一没动的部分。
+2. **`hiring_trend_30d_pct` / `hiring_trend_90d_pct` 现在恒为 0 条**，这是**刻意的**：
+   趋势只能由 `insight_subject_daily` 的跨日快照得出，而快照今天才开始记。
+   ⚠️ 别改回「用 jobs.first_seen_at 分窗口算」——expired 岗每日 purge，
+   「30-60 天前」的窗口只剩活到今天的那部分，相除会系统性把环比算高。
+   30 天后这两个指标会自己出现，无需改代码。
+3. **`salary_range_k` 只有 27 个主体**：全库 395,969 个在招岗里只有 7,160 个写了薪资、
+   仅约 1,645 个能解析成明确区间（spec §1.5 的「薪资覆盖 1.8%」在库里逐字成立）。
+   这不是解析器的问题，是源头就没有。
+4. **筛选条件没有同步进 URL**：目前不可分享、不可收藏、刷新即重置。
+5. **贡献入口只到「提交」为止**：聚合门槛 `FIRST_PARTY_MIN_COUNT=5` 未按任务卡建议降到 3，
+   分级验证标记（企业邮箱 / 脱敏 offer / 工牌）未做。
