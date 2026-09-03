@@ -5,7 +5,7 @@
 // 不依赖网络、不依赖 DB，输入 item + 其溯源 sources，输出可否展示。
 // ============================================================
 
-import type { InsightItem, InsightSource } from "./types";
+import type { InsightAssertion, InsightItem, InsightSource } from "./types";
 
 // experience 类条目要求的最小支撑样本量（PRD §8.2 阈值示例 N>=5）
 export const EXPERIENCE_MIN_SAMPLE = 5;
@@ -21,11 +21,20 @@ export interface InsightEvaluation {
 }
 
 // 产品口吻断言黑名单：一切评价必须聚合 + 归因，禁止产品自己下断言（PRD §7.2 / §14）
+// v3 扩充：绝对化措辞（见 spec §2.2 红线 3）—— 命中即不展示，不是改写。
 const BANNED_ASSERTIONS: RegExp[] = [
   /我们(认定|认为|断定|判定|觉得)/,
   /本产品(认为|认定|判定|断定)/,
   /平台(认定|断定|判定)/,
   /(毫无疑问|绝对|百分百|一定)是最/,
+  // v3 新增：绝对化措辞（spec §2.2 红线 3）。内容由 admin 策展，命中即不展示。
+  // 「一定」排除「一定程度/数量/比例」等量化修饰语（量化表达不构成绝对化断言）。
+  /一定(?!程度|数量|比例|规模|条件|要求)/,
+  /必然/,
+  /最好/,
+  /最差/,
+  /都是/,
+  /肯定/,
 ];
 
 // 归因标记：评价性内容必须带「据 N 位反馈 / 根据公开数据」这类口径
@@ -92,6 +101,63 @@ export function countDistinctPublishers(sources: InsightSource[] | undefined): n
   return set.size;
 }
 
+// ============================================================
+// v3 assertion 展示门（spec §2.2 红线）
+// ============================================================
+
+// 非官方 source_kind：含这些类型的来源不允许作为 fact 证据（spec §2.2 红线 2）。
+const NON_FACT_SOURCE_KINDS: Set<InsightSource["source_kind"]> = new Set([
+  "public_web",
+  "public_aggregate",
+  "community_deidentified",
+]);
+
+// claim 展示条件：必须同时有时间窗 + ≥2 个不同注册域名来源（spec §2.2 红线 1）。
+export function passesClaimGate(
+  item: Pick<InsightItem, "time_window" | "valid_from" | "valid_until">,
+  sources: InsightSource[] | undefined,
+): boolean {
+  if (!hasTimeWindow(item)) return false;
+  return countDistinctPublishers(sources) >= 2;
+}
+
+// fact assertion 来源合规检查：含 non-fact source_kind → 降级为 claim 处置。
+// 返回条目实际应当按哪个 assertion 展示（兜底迁移期脏数据）。
+export function resolveEffectiveAssertion(
+  assertion: InsightAssertion | null | undefined,
+  sources: InsightSource[] | undefined,
+): InsightAssertion | null {
+  if (!assertion) return null; // 存量行未回填，由调用方回落 grade
+  if (assertion === "fact") {
+    const hasNonFact = (sources || []).some(
+      (s) => s.source_kind != null && NON_FACT_SOURCE_KINDS.has(s.source_kind),
+    );
+    if (hasNonFact) return "claim"; // 降级
+  }
+  return assertion;
+}
+
+// signal 门（v3）：第一方派生条目走这条，不走 grade 门。
+//
+// 为什么必须单开一条：grade 门对 fact 要求「>=1 个有效来源」，而 signal 的来源**就是我们自己
+// 的岗位库**，永远没有外部 URL 可挂 —— 拿 grade 门去卡它，等于把唯一可信的第一方数据全部挡在
+// 门外（写进库也永远展示不出来，且不报错，是最难发现的那类故障）。
+//
+// 换来的约束是两条硬门：
+//   1) origin 必须真的是 derived。assertion 是**声明**，origin 是**事实**；只看声明的话，
+//      任何写入方把 assertion 填成 'signal' 就能绕过全部来源要求。
+//   2) 必须有样本量且达到最低门。派生层（crawler/bu_signals.py）自己按公司 10 / 业务线 20 把关，
+//      这里再兜一道普适底线，防止将来新写入方忘了把门。
+export const SIGNAL_MIN_SAMPLE = 10;
+
+export function passesSignalGate(
+  item: Pick<InsightItem, "sample_size"> & { origin?: string | null },
+): boolean {
+  if (item.origin !== "derived") return false;
+  const n = item.sample_size;
+  return typeof n === "number" && n >= SIGNAL_MIN_SAMPLE;
+}
+
 // grade 门：
 //   fact    → >=1 有效来源
 //   experience → sample_size>=5（原条件），或 distinct publishers>=2 且 verification.confidence>=0.8（判官置信度，兼容 payload.confidence）
@@ -145,7 +211,7 @@ export function passesAssertionLint(
   return true;
 }
 
-// 单条评估：按顺序过 status / 去标识 / grade / 归因 / 时效 门，再判过时
+// 单条评估：按顺序过 status / 去标识 / grade / assertion / 归因 / 时效 门，再判过时
 export function evaluateInsight(
   item: InsightItem,
   sources: InsightSource[] | undefined,
@@ -157,10 +223,21 @@ export function evaluateInsight(
   if (!passesDeidentifiedGate(item, sources)) {
     return { displayable: false, outdated: false, failure_reason: "insight_unverified" };
   }
-  if (!passesGradeGate(item, sources)) {
+  // assertion 门先判：signal 与 fact/claim 的可信依据完全不同，不能共用 grade 门。
+  const effectiveAssertion = resolveEffectiveAssertion(item.assertion, sources);
+  if (effectiveAssertion === "signal") {
+    if (!passesSignalGate(item)) {
+      return { displayable: false, outdated: false, failure_reason: "insight_unverified" };
+    }
+  } else if (!passesGradeGate(item, sources)) {
     return { displayable: false, outdated: false, failure_reason: "insight_unverified" };
   }
   if (!passesAssertionLint(item)) {
+    return { displayable: false, outdated: false, failure_reason: "insight_unverified" };
+  }
+  // v3 assertion 门：claim 类必须有时间窗 + ≥2 来源域名（spec §2.2 红线 1）。
+  // assertion 为 null（存量）时跳过此门，由 grade 门兜底。
+  if (effectiveAssertion === "claim" && !passesClaimGate(item, sources)) {
     return { displayable: false, outdated: false, failure_reason: "insight_unverified" };
   }
   if (!hasTimeWindow(item)) {

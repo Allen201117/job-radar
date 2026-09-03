@@ -126,17 +126,14 @@ export async function upsertJob(job: Record<string, any>): Promise<UpsertResult 
 /**
  * 按 id 补 summary（enrich 按需富化写回）。返回是否命中一行。
  *
- * ⚠️ 同时把物化的招聘类型作废：正文是分类输入之一，改了正文而不动那两列，就会留下
- * 「分类和它依据的字段对不上」的行 —— 而检索侧是拿这两列**排除**候选的，对不上就意味着
- * 真校招/实习岗被挡在候选外、用户搜不到（2026-09-03 在列表重抓那条链上实锤过 5,275 行）。
- * 这里不就地重算：手上只有 summary，缺 company / apply_url / experience 等输入，算错比过时更糟。
- * NULL 是诚实状态，检索侧对 NULL 会退回安全的「信号超集」，由定时全量重算补回。
+ * 不用管物化的招聘类型：正文是它的分类依据之一，库里的触发器
+ * （jobs-db/schema.sql 的 jobs_guard_recruitment_class）看到依据变了会自动把结论作废，
+ * 再由补算任务按最终那一行重算。**别在这里手写分类**——手上只有 summary，
+ * 缺 company / apply_url / experience，算出来的会和最终那一行对不上（那正是 2026-09-03 的 bug）。
  */
 export async function updateJobSummaryById(id: string, summary: string): Promise<boolean> {
   const rows = await jobsQuery(
-    "update jobs set summary = $1, enrich_checked_at = now(), " +
-      "recruitment_category = null, recruitment_explicit = null " +
-      "where id = $2::uuid returning id",
+    "update jobs set summary = $1, enrich_checked_at = now() where id = $2::uuid returning id",
     [summary, id],
   );
   return rows.length > 0;

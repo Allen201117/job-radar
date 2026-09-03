@@ -499,12 +499,11 @@ test("每个筛选项都必须显式归类，才允许用 SQL count 算真实总
   }
 });
 
-test("app 侧补正文时必须作废物化的招聘类型（分类和它依据的字段不许对不上）", () => {
-  // 正文是分类输入之一。改了正文却留着旧分类 → 检索侧拿这两列**排除**候选，
-  // 真校招/实习岗会被挡在候选外、用户搜不到（2026-09-03 在列表重抓那条链上实锤过 5,275 行）。
-  // 不就地重算是刻意的：这里只有 summary，缺 company/apply_url/experience，算错比过时更糟。
-  const stmt = stripComments(jobsStoreWrite).match(/update jobs set summary[\s\S]{0,240}?returning id/);
+test("app 侧补正文只写 summary，招聘类型交给库里的触发器", () => {
+  // 这两列的所有权在数据库（jobs-db/schema.sql 的 jobs_guard_recruitment_class）：
+  // 依据变了它自动作废、依据没变谁都别想改。写入方各自「注意一下」正是 2026-09-03 那次
+  // 8,140 行漂移的成因（真校招岗被记成社招 → 搜「校招」搜不到），别再加回来。
+  const stmt = stripComments(jobsStoreWrite).match(/update jobs set summary[\s\S]{0,200}?returning id/);
   assert.ok(stmt, "updateJobSummaryById 的 SQL 变了，请重新核对这条不变量");
-  assert.match(stmt[0], /recruitment_category\s*=\s*null/i);
-  assert.match(stmt[0], /recruitment_explicit\s*=\s*null/i);
+  assert.doesNotMatch(stmt[0], /recruitment_/i, "别在写入方手写分类，算不准（缺 company/experience 等输入）");
 });

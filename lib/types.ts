@@ -231,7 +231,8 @@ export type InsightSourceKind =
   | "official_site"
   | "campus_announcement"
   | "public_aggregate"
-  | "community_deidentified";
+  | "community_deidentified"
+  | "public_web"; // T3 搜索型来源（v3 新增）：展示层按 claim 处置，不得升格为 fact。
 
 export interface CompanyProfile {
   id: string;
@@ -261,6 +262,20 @@ export interface InsightSource {
   created_at: string;
 }
 
+// v3 断言强度：fact=官方/第一方可核验事实；signal=自有岗位库观测量；claim=公开讨论说法。
+// NULL = 存量条目未回填（展示层回落 grade 逻辑，兼容迁移期）。
+export type InsightAssertion = "fact" | "signal" | "claim";
+
+// 来源层（migration 135/203）。展示门要用它判断「signal 是不是真的来自第一方派生」，
+// 光看 assertion 不够——assertion 是声明，origin 是事实。
+export type InsightOrigin =
+  | "derived"
+  | "wikidata"
+  | "official"
+  | "official_filing"
+  | "public_web"
+  | "manual";
+
 export interface InsightItem {
   id: string;
   company_id: string;
@@ -280,6 +295,14 @@ export interface InsightItem {
   status: InsightStatus;
   created_at: string;
   updated_at: string;
+  origin?: InsightOrigin | null;
+  // v3 结构化字段（migration 204，存量行为 NULL）
+  assertion?: InsightAssertion | null;
+  subject_id?: string | null;
+  metric_key?: string | null;
+  metric_value?: number | null;
+  metric_unit?: string | null;
+  scope?: Record<string, unknown> | null;
 }
 
 // 带溯源 + 时效标记的展示态条目

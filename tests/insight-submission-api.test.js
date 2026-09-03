@@ -41,6 +41,10 @@ function chain(result, onCall = {}) {
       filters.push(["eq", column, value]);
       return this;
     },
+    neq(column, value) {
+      filters.push(["neq", column, value]);
+      return this;
+    },
     in(column, value) {
       filters.push(["in", column, value]);
       return this;

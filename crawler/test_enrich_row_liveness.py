@@ -107,36 +107,23 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class EnrichInvalidatesMaterializedRecruitment(unittest.TestCase):
-    """富化改了分类输入 → 必须把物化的招聘类型作废（2026-09-03）。
+class EnrichLeavesRecruitmentColumnsToTheDatabase(unittest.TestCase):
+    """富化改了正文 → 分类的作废交给库里的触发器，这里**不许**自己动那两列（2026-09-03 根治）。
 
-    这条链是**直接 UPDATE**、不走 upsert，队列里也没带齐分类输入（缺 company/apply_url/experience），
-    所以不就地重算——算错比过时更糟。置 NULL 是诚实状态：检索侧对 NULL 会退回安全的「信号超集」，
-    真正的重算交给 backfill-recruitment-category 的定时全量。
-    留着旧值的后果不是数字难看：检索按这两列**排除**候选，对不上就意味着真校招岗搜不到。
+    手上只有 summary，缺 company / apply_url / experience —— 自己算会算错，而算错比过时更糟。
+    库里的 jobs_guard_recruitment_class 看到分类依据变了会自动置 NULL，
+    再由补算任务按最终那一行重算（jobs-db/schema.sql）。
     """
 
-    def _sql_and_params(self, ex):
-        return ex.call_args[0][1], ex.call_args[0][2]
-
-    def test_filling_summary_nulls_the_materialized_columns(self):
+    def test_filling_summary_does_not_touch_the_columns(self):
         with mock.patch.object(enrich, "enrich_one", return_value="这是一段足够长的 JD 正文" * 8), \
                 mock.patch.object(enrich_backlog.jobs_db, "execute") as ex:
             res = enrich_backlog.enrich_row(None, _row(), SRC, dry_run=False, jobs_conn=object())
         self.assertEqual(res, "filled")
-        sql, _ = self._sql_and_params(ex)
-        self.assertIn("recruitment_category = %s", sql)
-        self.assertIn("recruitment_explicit = %s", sql)
-
-    def test_alive_without_content_change_leaves_them_alone(self):
-        # 只盖复检时间戳、没动分类输入 → 不许顺手把分类抹掉（那会白白扩大候选、拖累检索）。
-        with mock.patch.object(enrich, "enrich_one", return_value=""), \
-                mock.patch.object(enrich_backlog.jobs_db, "execute") as ex:
-            res = enrich_backlog.enrich_row(None, _row(summary="旧正文", job_type="社招"), SRC,
-                                            dry_run=False, jobs_conn=object())
-        self.assertEqual(res, "alive")
-        sql, _ = self._sql_and_params(ex)
+        sql = ex.call_args[0][1]
+        self.assertIn("summary", sql)
         self.assertNotIn("recruitment_category", sql)
+        self.assertNotIn("recruitment_explicit", sql)
 
     def test_dry_run_writes_nothing(self):
         with mock.patch.object(enrich, "enrich_one", return_value="正文" * 60), \
