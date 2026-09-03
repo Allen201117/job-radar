@@ -154,7 +154,10 @@ test("jobs-store city-only search stays on FTS (全表覆盖) 且软城市仍保
   const result = await searchJobsStore({ ...filters, city: "北京" }, null, [], 0, 1);
 
   assert.match(calls[0].sql, /search_doc @@/i); // FTS 全表覆盖，不退化到 scan
-  assert.doesNotMatch(calls[0].sql, /order by first_seen_at desc/i);
+  // 「是不是 scan」要看 offset 翻页，不能再拿 order by 当判据 —— FTS 路径 2026-09-03 起也带
+  // order by（候选窗口装不下时决定砍掉谁，见 candidateOrderBy），拿它区分两条路会误判。
+  assert.doesNotMatch(calls[0].sql, /offset \$\d+/i);
+  assert.match(calls[0].sql, /limit 8000$/i);
   assert.match(calls[0].sql, /location is null or location = ''/i); // 软城市 OR 组仍在
   assert.ok(calls[0].params.includes("%beijing%")); // 双向别名
   assert.equal(result.jobs[0].id, "missing-city");

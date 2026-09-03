@@ -72,6 +72,52 @@ export const DEFAULT_FILTERS: Filters = {
   postedWithin: "",
 };
 
+/**
+ * 计算「真实匹配总数」时的筛选项归类（候选撞上限时才用到，见 lib/jobs-store/search.ts）。
+ *
+ * 判据是**单向蕴含**：取候选那条 where 成立 ⇒ jobFilterMatch 也放行。只要这条成立，
+ * 「拿同一条 where 跑 count(*)」就等于真实匹配总数 —— 不需要反向也等价。
+ *
+ * ⚠️ 新增筛选项必须在下面三张表里显式归类：tests/ux-hardening-contract.test.js 断言三表之并集
+ * 恰好是 Filters 的全部 key。忘了归类 = 测试红，而不是线上悄悄给出另一个错数字。
+ */
+export const SQL_PUSHED_FILTER_KEYS = [
+  "company", // company ilike '%X%'（X 不含通配符时 ⇒ JS 的大小写不敏感子串）
+  "city", // appendSoftCityWhere：空 location 放行 + 全别名 ilike，与下面的城市分支同口径
+  "jobType", // 物化列 recruitment_category / recruitment_explicit 与本文件逐字同义
+  "postedWithin", // posted_at >= now() - N day
+  "region", // job_scope='overseas' + country_code / Remote ⇒ jobMatchesRegion
+  "showIgnored", // 被隐藏的岗按 id 从 count 里一并排除
+  "showApplied",
+] as const;
+
+/** 只能在 JS 里判的筛选项：任一被启用 → 不能用 SQL 计数（前端退回诚实的「N+」）。 */
+export const JS_ONLY_FILTER_KEYS = [
+  "keyword", // keywordMatchTier 要读标题/正文
+  "capitalOrigin", // 公司名名单 + 来源 adapter（sources 在另一个库，无法 join）
+  "education", // educationMatch 解析学历文本
+  "jobFunction", // classifyJobFunction 读标题/正文
+  "jobRole",
+  "experience", // 从正文解析年限
+  "salaryOnly", // 以下三项技术上可下推，但目前候选 where 里没有 → 一律当 JS-only
+  "sponsorshipOnly",
+  "showNewOnly",
+] as const;
+
+/** 不参与筛选（只影响排序/展示），对计数没有影响。 */
+export const NON_FILTERING_FILTER_KEYS = ["sortBy"] as const;
+
+// SQL LIKE 通配符：出现在用户输入里时，候选 where 会比 JS 的字面子串更宽 → 拿它计数会多算。
+const SQL_WILDCARD = /[%_\\]/;
+
+/** 本次查询的每一项条件是否都已被候选 where 精确表达（→ 可以用 count(*) 算真实总数）。 */
+export function filtersFullyPushedToSql(filters: Filters): boolean {
+  for (const key of JS_ONLY_FILTER_KEYS) {
+    if (filters[key] !== DEFAULT_FILTERS[key]) return false;
+  }
+  return !SQL_WILDCARD.test(filters.company) && !SQL_WILDCARD.test(filters.city);
+}
+
 // 新增三类硬筛不把「信息缺失」降级放行：这些都是用户主动收窄结果的条件，模糊命中会反过来破坏筛选可信度。
 export const FILTER_REJECT_REASONS = {
   jobFunction: "job_function",

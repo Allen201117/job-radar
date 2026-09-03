@@ -202,6 +202,36 @@ export function scoreJob(
   };
 }
 
+/**
+ * 「默认会被隐藏」的岗位 id 集合（与 scoreJob 里 hidden_reason = ignored / applied_by_default 同口径）：
+ * 每个岗位以**最近一次非 viewed 操作**为准，saved 不隐藏；两个开关都打开时集合为空。
+ *
+ * 只看用户操作，不含 exclude_keywords —— 那条要读 JD 正文，SQL 侧表达不了。
+ * 用途：候选撞上限时用 count(*) 算真实总数，SQL 要把这些岗一并排除，才和 JS 的口径对得上
+ * （见 lib/jobs-store/search.ts 的 exactTotalWhenCapped）。改 scoreJob 的隐藏规则务必同步这里，
+ * tests/scoring-hidden-ids.test.js 会拿两边对拍。
+ */
+export function actionHiddenJobIds(
+  actions: JobAction[],
+  options: { showIgnored?: boolean; showApplied?: boolean } = {},
+): Set<string> {
+  const hidden = new Set<string>();
+  if (options.showIgnored && options.showApplied) return hidden;
+  const primary = new Map<string, JobAction>();
+  for (const a of actions || []) {
+    if (!a || !a.job_id || a.action === "viewed") continue;
+    const cur = primary.get(a.job_id);
+    if (!cur || new Date(a.created_at).getTime() > new Date(cur.created_at).getTime()) {
+      primary.set(a.job_id, a);
+    }
+  }
+  for (const [jobId, a] of primary) {
+    if (a.action === "ignored" && !options.showIgnored) hidden.add(jobId);
+    if (a.action === "applied" && !options.showApplied) hidden.add(jobId);
+  }
+  return hidden;
+}
+
 export function sortAndFilterJobs(
   jobs: Job[],
   preferences: UserPreferences | null,
@@ -264,6 +294,45 @@ export function sortAndFilterJobs(
     return out.slice(0, options.limit);
   }
   return out;
+}
+
+/**
+ * 「能给岗位加分」的偏好词，**按加分来源分组**。
+ *
+ * 用途：候选窗口装不下时，靠它把「可能得高分的岗」优先放进窗口
+ * （lib/jobs-store/search.ts 的 candidateOrderBy）。
+ * 分组而不是拍平成一个数组，是因为调用方要按「这一维在本次候选集里还有没有区分度」逐组取舍
+ * —— 用户已经按深圳筛过了，再把 target_locations 放进优先级里，全部候选都算「命中」，
+ * 等于没排（live 实测就是这么栽的：15,350 个候选全命中）。
+ *
+ * ⚠️ 必须与 scoreJob 里真正参与加分的字段是**同一套**：漏掉一类，那类高分岗就会被截断在
+ * 窗口外，「按匹配度」的第一页会缺人，而这种缺失在页面上完全看不出来。
+ * tests/scoring-signal-terms.test.js 拿 scoreJob 的实际得分对拍钉死。
+ * 这里不判 exact/related、不设职能/行业门 —— 只负责「优先进窗口」，最终判定仍由 scoreJob 权威执行。
+ */
+export type ScoringSignalGroups = {
+  /** 目标岗位 + 补充词 + 技能 → scoreJob 的 +30/+15（role）与 +5/+2.5（keyword） */
+  direction: string[];
+  /** 目标公司 → +15 */
+  companies: string[];
+  /** 目标城市 → +20 */
+  locations: string[];
+};
+
+export function scoringSignalGroups(
+  preferences: UserPreferences | null,
+  options: { overseasProfile?: boolean } = {},
+): ScoringSignalGroups {
+  if (!preferences) return { direction: [], companies: [], locations: [] };
+  const overseasProfile = options.overseasProfile === true;
+  return {
+    direction: uniqueStrings([
+      ...scoringTargetRoles(preferences, overseasProfile),
+      ...scoringTargetKeywords(preferences, overseasProfile),
+    ]),
+    companies: uniqueStrings(preferences.target_companies || []),
+    locations: uniqueStrings(preferences.target_locations || []),
+  };
 }
 
 function shouldUseOverseasProfile(job: Job, preferences: UserPreferences): boolean {
