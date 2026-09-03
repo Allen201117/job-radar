@@ -1,0 +1,57 @@
+name: backfill-recruitment-category
+
+# 招聘类型物化：把 JS 侧的权威裁决写进 jobs.recruitment_category / recruitment_explicit。
+# 手动触发用于一次性回填与只读对拍；定时那次是「补漏」——爬虫入库时已经算好了，
+# 这里只兜住极少数分类失败的行（NULL），不是常规路径。
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "check=只读对拍（绝不写库） / apply=写库"
+        type: choice
+        options: ["check", "apply"]
+        default: "check"
+      all:
+        description: "apply 时是否全量重算覆盖（false=只补 NULL）"
+        type: boolean
+        default: false
+      limit:
+        description: "只处理前 N 行（留空=不限，用于小样本试跑）"
+        type: string
+        default: ""
+  schedule:
+    # 每天 UTC 19:30 补漏一次：抓取链之后、洞察链之前，避开 21:00 UTC 的连接峰值。
+    - cron: "30 19 * * *"
+
+concurrency:
+  group: backfill-recruitment-category
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci --ignore-scripts
+      - name: Run backfill
+        env:
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+        run: |
+          set -euo pipefail
+          if [ -z "${JOBS_DATABASE_URL:-}" ]; then
+            echo "::error::JOBS_DATABASE_URL 未配置"; exit 1
+          fi
+          # 定时触发一律走「只补 NULL」的 apply（补漏）；手动触发按输入走。
+          MODE="${{ github.event.inputs.mode || 'apply' }}"
+          ARGS="--$MODE"
+          if [ "${{ github.event.inputs.all }}" = "true" ]; then ARGS="$ARGS --all"; fi
+          if [ -n "${{ github.event.inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ github.event.inputs.limit }}"; fi
+          echo "运行参数：$ARGS"
+          node scripts/backfill-recruitment-category.js $ARGS
