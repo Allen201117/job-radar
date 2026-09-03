@@ -42,7 +42,26 @@ def _should_continue(before, after, chunk, total, page_size):
 
 
 class FeishuRecruitAdapter(PlaywrightAdapter):
+    """飞书招聘门户通用层。
+
+    ## 子门户（website_path）—— 校招/实习岗藏在这里，2026-09-04 才挖出来
+    同一个租户可以挂多个门户，**用哪个门户由请求头 `website-path` 决定**，与 URL 路径同名：
+      · 不带该头（主门户）= 社招全集      · `campus` = 校园招聘
+      · `internship` = 实习              · `newretailing` 等 = 租户自定义专项
+    小米实测：不带 1894 / campus 764 / internship 554 / newretailing 121，四个池子互不相同。
+
+    ⚠️ 此前判「飞书私有部署没有校招板块」是**错的**，错在试错了维度：当时对比的是
+    `storefront_id` 两个取值（返回完全相同的 1887 条），而真正的开关是这个请求头。
+    ⚠️ `portal_type` 也不是开关：带 `website-path: campus` 时传 2 或 6 都返回同一批 764 条。
+    ⚠️ **`website-path: index` 不等于「主门户」**，它是个更小的子集（蔚来 2055 → 1801），
+       所以 `_bind_website_path` 把 index 当成「没有子门户」。
+
+    新增一个租户的校招源**不需要写代码**：插一条 source_url 指向 `https://{host}/campus/position`
+    的 sources 行即可，本类按路径自动切门户、切详情模板。
+    """
+
     host = ""  # 子类设置，如 nio.jobs.feishu.cn
+    website_path = ""  # 由 source_url 派生；""=主门户（社招）
     intercept_match = "/api/v1/search/job/posts"
     posts_keys = ("data.job_post_list", "job_post_list")
     _PAGE_SIZE = 50    # 单页拉取数（接口实测 limit=50 稳定返回，远超站点默认 10）
@@ -59,14 +78,32 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
 
     def __init__(self):
         self.official_hosts = (self.host,)
-        self.detail_template = "https://" + self.host + "/index/position/{id}/detail"
-        self.list_urls = [
-            "https://" + self.host + "/index/position",
-            "https://" + self.host + "/",
-        ]
+        self.website_path = ""
+        self._apply_website_path("")
         self.fetch_complete = False
         self.reported_total = None
         self._prefetched = None
+
+    def _apply_website_path(self, path: str) -> None:
+        """按子门户重算详情模板与入口页。path="" = 主门户（社招），走 /index/…（历史行为不变）。"""
+        self.website_path = path or ""
+        prefix = path or "index"
+        self.detail_template = f"https://{self.host}/{prefix}/position/{{id}}/detail"
+        self.list_urls = [
+            f"https://{self.host}/{prefix}/position",
+            "https://" + self.host + "/",
+        ]
+
+    def _bind_website_path(self, source_url: str) -> None:
+        """从 source_url 的首个路径段派生子门户（见 website_path 的类注释）。
+
+        ⚠️ **`index` 必须当成「没有子门户」**：飞书的主门户带 `website-path: index` 反而是
+        *子集* —— 2026-09-04 实测蔚来不带该头 2055 岗、带 index 只有 1801 岗（少 254 个）。
+        库里 70 个存量飞书源全是 `/index/position`，一旦把 index 也派生出去就是**全体缩水**。
+        """
+        segments = [seg for seg in (urlparse(source_url).path or "").split("/") if seg]
+        first = segments[0] if segments else ""
+        self._apply_website_path("" if first in ("", "index", "position") else first)
 
     def _resolve_host(self, source_url: str) -> str:
         """httpx 直拉用的 host：子类有 self.host；通用类 fetch 前已 _bind_host → official_hosts[0]。"""
@@ -83,9 +120,14 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         total: Optional[int] = None
         reached = False
         offset = 0
+        prefix = self.website_path or "index"
         headers = {"User-Agent": _UA, "Accept-Language": "zh-CN,en;q=0.9",
                    "Content-Type": "application/json",
-                   "Referer": f"https://{host}/index/position"}
+                   "portal-channel": "saas-career", "portal-platform": "pc",
+                   "Referer": f"https://{host}/{prefix}/position"}
+        if self.website_path:
+            # 只有子门户才带这个头。主门户带 `website-path: index` 会拿到更小的子集（见类注释）。
+            headers["website-path"] = self.website_path
         try:
             with httpx.Client(timeout=self._HTTPX_TIMEOUT, follow_redirects=True, headers=headers) as cli:
                 cap = resolve_list_cap(self._MAX_JOBS)
@@ -133,7 +175,8 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                 self.detail_template.format(id=pid),
                 timeout=self._HTTPX_TIMEOUT,
                 follow_redirects=True,
-                headers={"User-Agent": _UA, "Referer": f"https://{host}/index/position"},
+                headers={"User-Agent": _UA,
+                         "Referer": f"https://{host}/{self.website_path or 'index'}/position"},
             )
             return response.status_code in (404, 410)
         except Exception:
@@ -143,6 +186,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         """租户详情门户关闭时整源跳过；列表 API 仍吐岗不足以证明可投。"""
         if not getattr(self, "host", "") and hasattr(self, "_bind_host"):
             self._bind_host(source_url)
+        self._bind_website_path(source_url)
         host = self._resolve_host(source_url)
         if not host:
             return None
@@ -161,6 +205,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         self.reported_total = None
         prefetched = self._prefetched
         self._prefetched = None
+        self._bind_website_path(source_url)
         host = self._resolve_host(source_url)
         if host:
             rows, total, reached = prefetched or self._httpx_fetch(host)

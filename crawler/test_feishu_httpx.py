@@ -47,6 +47,63 @@ def _patch_client(pages):
     return mock.patch.object(feishu.httpx, "Client", lambda **kw: _FakeClient(pages))
 
 
+class WebsitePathTest(unittest.TestCase):
+    """子门户（website-path 请求头）—— 校招/实习岗藏在这里。
+
+    2026-09-04 实测：小米不带该头 1894 / campus 764 / internship 554 / newretailing 121，
+    四个池子互不相同；蔚来 campus 920 个岗全是「校招-…」。
+    此前判「飞书私有部署没有校招板块」是错的，错在试的是 storefront_id 而不是这个头。
+    """
+
+    def _a(self, url):
+        a = feishu.NioAdapter()
+        a._bind_website_path(url)
+        return a
+
+    def test_campus_path_is_derived_from_source_url(self):
+        a = self._a("https://nio.jobs.feishu.cn/campus/position")
+        self.assertEqual(a.website_path, "campus")
+        self.assertEqual(a.detail_template,
+                         "https://nio.jobs.feishu.cn/campus/position/{id}/detail")
+        self.assertEqual(a.list_urls[0], "https://nio.jobs.feishu.cn/campus/position")
+
+    def test_index_must_not_become_a_website_path(self):
+        """⚠️ 主门户带 `website-path: index` 拿到的是**子集**：蔚来 2055 → 1801，少 254 个岗。
+        库里 70 个存量飞书源全是 /index/position，派生 index 就是全体缩水。"""
+        for url in ("https://nio.jobs.feishu.cn/index/position",
+                    "https://nio.jobs.feishu.cn/",
+                    "https://nio.jobs.feishu.cn"):
+            a = self._a(url)
+            self.assertEqual(a.website_path, "", url)
+            self.assertEqual(a.detail_template,
+                             "https://nio.jobs.feishu.cn/index/position/{id}/detail", url)
+
+    def test_other_custom_portals_are_derived(self):
+        for path, expected in (("internship", "internship"), ("newretailing", "newretailing"),
+                               ("ponyai", "ponyai")):
+            a = self._a(f"https://nio.jobs.feishu.cn/{path}/position")
+            self.assertEqual(a.website_path, expected)
+
+    def test_header_sent_only_for_sub_portals(self):
+        captured = {}
+
+        class _CapClient(_FakeClient):
+            def __init__(self, pages, **kw):
+                super().__init__(pages)
+                captured["headers"] = kw.get("headers") or {}
+
+        for url, expect_header in (("https://nio.jobs.feishu.cn/campus/position", "campus"),
+                                   ("https://nio.jobs.feishu.cn/index/position", None)):
+            captured.clear()
+            a = self._a(url)
+            a._PAGE_SIZE = 2
+            with mock.patch.object(feishu.httpx, "Client",
+                                   lambda **kw: _CapClient([_page([1], 1)], **kw)):
+                a._httpx_fetch("nio.jobs.feishu.cn")
+            self.assertEqual(captured["headers"].get("website-path"), expect_header, url)
+            self.assertIn("portal-channel", captured["headers"])
+
+
 class HttpxFetchTest(unittest.TestCase):
     def _adapter(self, page_size=2, max_jobs=10):
         a = feishu.NioAdapter()
