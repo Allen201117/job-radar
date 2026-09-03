@@ -109,3 +109,56 @@ class RecruitmentMaterializationTests(unittest.TestCase):
                 self.fail(f"分类失败不得抛给调用方：{exc}")
         finally:
             recruitment_classify.classify = orig
+
+
+class ThinUpdateKeepsStoredRecruitmentTests(unittest.TestCase):
+    """列表重抓的瘦 payload 不许覆盖物化的招聘类型（2026-09-03 线上实锤 5,275 行）。
+
+    机制：分类是拿本次 payload 算的，而 summary/job_type/experience 落库走「新值为空则保留旧值」
+    → 最终那一行 = 旧的富字段 + 瘦 payload 算出来的分类，两者对不上。症状是逻辑上不可能的
+    `job_type` 有值却 `recruitment_explicit=false`。后果：检索按这两列**排除**候选，
+    真校招岗会被挡在候选外、搜「校招」搜不到。
+    """
+
+    def test_thin_payload_drops_classification(self):
+        import recruitment_classify
+        # 列表重抓的典型形态：有标题/链接，但没正文、没招聘类型、没经验要求。
+        job = {"title": "后端工程师", "jd_url": "https://x/1",
+               "summary": None, "job_type": None, "experience": None,
+               "recruitment_category": "社招", "recruitment_explicit": False}
+        recruitment_classify.drop_for_thin_update(job)
+        self.assertIsNone(job["recruitment_category"])
+        self.assertIsNone(job["recruitment_explicit"])
+
+    def test_full_payload_keeps_classification(self):
+        import recruitment_classify
+        job = {"title": "2027 届校园招聘 后端工程师", "jd_url": "https://x/1",
+               "summary": "面向 2027 届应届生", "job_type": "校招", "experience": "不限",
+               "recruitment_category": "校招", "recruitment_explicit": True}
+        recruitment_classify.drop_for_thin_update(job)
+        self.assertEqual(job["recruitment_category"], "校招")
+        self.assertTrue(job["recruitment_explicit"])
+
+    def test_blank_strings_count_as_thin(self):
+        import recruitment_classify
+        job = {"summary": "  ", "job_type": "", "experience": "3 年",
+               "recruitment_category": "社招", "recruitment_explicit": True}
+        recruitment_classify.drop_for_thin_update(job)
+        self.assertIsNone(job["recruitment_category"])
+
+    def test_update_paths_invoke_the_guard(self):
+        # 两条 UPDATE 路径（单条 upsert_job / 批量 upsert_jobs_bulk）都必须调；
+        # INSERT 路径不能调（新行没有「旧的富字段」，本次 payload 就是全部内容）。
+        import inspect
+        src = inspect.getsource(jobs_db)
+        self.assertEqual(src.count("_drop_thin_recruitment(job)"), 2,
+                         "两条 UPDATE 路径各调一次，别多别少")
+
+    def test_preserved_inputs_match_upsert_preserve_rules(self):
+        # 判「瘦不瘦」用的字段，必须正好是「分类输入 ∩ upsert 会保留旧值的列」。
+        # 任一边改了而这边没跟上，就会重新写出对不上的行。
+        import recruitment_classify
+        classifier_inputs = set(recruitment_classify._FIELDS)
+        preserved = set(jobs_db._PRESERVE_IF_EMPTY) | set(jobs_db._PRESERVE_IF_NULL)
+        expected = (classifier_inputs & preserved) - {"recruitment_category", "recruitment_explicit"}
+        self.assertEqual(set(recruitment_classify._PRESERVED_INPUTS), expected)

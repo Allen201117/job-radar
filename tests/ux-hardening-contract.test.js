@@ -23,6 +23,7 @@ const savedClient = read("../app/saved/saved-client.tsx");
 const sourceTable = read("../components/SourceTable.tsx");
 const insightDrawer = read("../components/CompanyInsightDrawer.tsx");
 const insightsAdmin = read("../components/InsightsAdminClient.tsx");
+const jobsStoreWrite = read("../lib/jobs-store/write.ts");
 
 function tagInputCalls(source) {
   return source.match(/<TagInput\b[\s\S]*?\/>/g) ?? [];
@@ -496,4 +497,14 @@ test("每个筛选项都必须显式归类，才允许用 SQL count 算真实总
     assert.equal(filtersFullyPushedToSql({ ...DEFAULT_FILTERS, company: bad }), false);
     assert.equal(filtersFullyPushedToSql({ ...DEFAULT_FILTERS, city: bad }), false);
   }
+});
+
+test("app 侧补正文时必须作废物化的招聘类型（分类和它依据的字段不许对不上）", () => {
+  // 正文是分类输入之一。改了正文却留着旧分类 → 检索侧拿这两列**排除**候选，
+  // 真校招/实习岗会被挡在候选外、用户搜不到（2026-09-03 在列表重抓那条链上实锤过 5,275 行）。
+  // 不就地重算是刻意的：这里只有 summary，缺 company/apply_url/experience，算错比过时更糟。
+  const stmt = stripComments(jobsStoreWrite).match(/update jobs set summary[\s\S]{0,240}?returning id/);
+  assert.ok(stmt, "updateJobSummaryById 的 SQL 变了，请重新核对这条不变量");
+  assert.match(stmt[0], /recruitment_category\s*=\s*null/i);
+  assert.match(stmt[0], /recruitment_explicit\s*=\s*null/i);
 });

@@ -74,6 +74,37 @@ def classify(jobs: Iterable[dict]) -> list[tuple[str | None, bool | None]]:
         return [(None, None)] * len(items)
 
 
+# 分类输入里、upsert 会「新值为空则保留旧值」的那几列（与 jobs_db._PRESERVE_IF_EMPTY 同口径）。
+# education / deadline / salary_text 也被保留，但它们不是分类输入，与这里无关。
+_PRESERVED_INPUTS = ("summary", "job_type", "experience")
+
+
+def carries_full_inputs(job: dict[str, Any]) -> bool:
+    """本次 payload 是否带齐了「会被保留规则替换掉」的那几个分类输入。"""
+    return all(str(job.get(f) or "").strip() for f in _PRESERVED_INPUTS)
+
+
+def drop_for_thin_update(job: dict[str, Any]) -> None:
+    """UPDATE 且 payload 偏瘦时，把算好的分类作废（置 None）→ 由 _PRESERVE_IF_* 保留库里那份。
+
+    ⚠️ 为什么必须这样（2026-09-03 线上实锤 5,275 行）：分类是拿**这次抓到的 payload** 算的，
+    而落库时 summary / job_type / experience 走「新值为空则保留旧值」→ 最终那一行是
+    「旧的富字段 + 用瘦 payload 算出来的分类」，两者对不上。典型症状：`job_type='社招'` 却
+    `recruitment_explicit=false` —— 规则里只要 job_type 有值就必然是「有据」，这个状态逻辑上
+    不可能出现，除非分类算的时候 job_type 是空的。
+    后果不只是数字难看：检索侧按这两列**排除**候选（lib/jobs-store/search.ts），
+    一个真校招岗被记成社招就会被挡在候选之外 → 用户搜「校招」永远搜不到它。
+
+    保留旧值是安全的：那份是它被写进去时按当时整行算出来的，自洽。
+    标题等「列表每次都带」的字段真变了导致的陈旧，由 backfill-recruitment-category
+    的定时全量重算兜底（它读的是库里最终那一行，不会有这个错位）。
+    """
+    if carries_full_inputs(job):
+        return
+    job["recruitment_category"] = None
+    job["recruitment_explicit"] = None
+
+
 def annotate(jobs: list[dict[str, Any]]) -> None:
     """就地给每个 job 补上两列。已经带值的行不覆盖（调用方可能已算过）。
 

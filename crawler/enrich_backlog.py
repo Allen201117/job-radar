@@ -216,6 +216,13 @@ def enrich_row(sb, row, src, dry_run=False, jobs_conn=None):
             patch = {"enrich_fail_count": (row.get("enrich_fail_count") or 0) + 1,
                      "enrich_checked_at": _now()}
             result = "miss"
+    # 改了分类输入（正文 / 招聘类型）就把物化的分类作废：这条链是**直接 UPDATE**、不走 upsert，
+    # 队列里也没带齐分类输入（缺 company / apply_url / experience），硬算会算错——算错比过时更糟。
+    # 置 NULL 是诚实状态：检索侧对 NULL 会退回「信号超集」这条安全兜底（见 lib/jobs-store/search.ts），
+    # 结果照样正确，只是候选略宽；真正的重算交给 backfill-recruitment-category 的定时全量。
+    if not dry_run and ("summary" in patch or "job_type" in patch):
+        patch["recruitment_category"] = None
+        patch["recruitment_explicit"] = None
     if dry_run:
         return result
     try:

@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 
 from normalizer import canonicalize_jd_url
 from recruitment_classify import annotate as _annotate_recruitment
+from recruitment_classify import drop_for_thin_update as _drop_thin_recruitment
 
 # jobs 可写列（与 jobs-db/schema.sql 对齐）。canonical_jd_url 由触发器维护、search_doc v1 不填 → 都不在写入列。
 _INSERT_COLS = (
@@ -406,6 +407,8 @@ def upsert_job(conn, job: dict) -> str:
     with conn.cursor() as cur:
         existing_id = _find_existing_id_by_canonical(cur, canon)
         if existing_id:
+            # 瘦 payload 不许覆盖分类：否则会写出「旧的富字段 + 瘦 payload 算的分类」，见 drop_for_thin_update。
+            _drop_thin_recruitment(job)
             sets = _update_set_clause()
             vals = _row_tuple(job, _UPDATE_COLS, last_seen_at=now)
             cur.execute(f"update jobs set {sets} where id = %s", (*vals, existing_id))
@@ -466,6 +469,8 @@ def upsert_jobs_batch(conn, jobs: list, page_size: int = 500) -> tuple:
             ex = existing.get(canon)
             if ex:
                 jid = ex["id"]
+                # 同 upsert_job：瘦 payload 不许覆盖分类（drop_for_thin_update 里有完整理由）。
+                _drop_thin_recruitment(job)
                 to_update.append(_row_tuple(job, _UPDATE_COLS, last_seen_at=now) + (jid,))
                 # 有效新状态：expired 黏住（不复活）、其余刷 active——与 _update_set_clause 同口径。
                 eff_status = "expired" if ex["status"] == "expired" else "active"
