@@ -13,6 +13,8 @@
 --      `count=869` 却拿到 0 条，极易误判成「限流」。
 --
 -- Idempotent: guarded by source_url。
+-- ⚠️ crawl_method 只接受 'http' / 'playwright' / 'manual'（sources_crawl_method_check）。
+--    写 'browser' 会让整个迁移事务回滚——连前面几条合法的 insert 一起没了。
 
 insert into sources (company, source_url, source_type, adapter_name, crawl_method, segment, industry, notes)
 select 'vivo', 'https://hr-campus.vivo.com/', 'official', 'beisen', 'http', 'private', '互联网·智能终端',
@@ -35,7 +37,7 @@ select '海康威视', 'https://campushr.hikvision.com/school', 'official', 'hik
 where not exists (select 1 from sources where source_url = 'https://campushr.hikvision.com/school');
 
 insert into sources (company, source_url, source_type, adapter_name, crawl_method, segment, industry, notes)
-select '京东', 'https://campus.jd.com/', 'official', 'jd_campus', 'browser', 'private', '互联网',
+select '京东', 'https://campus.jd.com/', 'official', 'jd_campus', 'playwright', 'private', '互联网',
        '京东校园招聘（campus.jd.com，jd.py 只抓社招 zhaopin.jd.com）。'
        '⚠️ 列表接口有风控：httpx 直调返回 JDOA 拦截页，必须浏览器拦截页面自己发的请求。'
        'jd_url = #/details?id={publishId}（拦截 window.open 抓到的，其余路由全渲染空白）。'
