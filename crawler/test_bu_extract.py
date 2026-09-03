@@ -217,3 +217,16 @@ class SecondRoundLiveNoiseTest(unittest.TestCase):
         for token in ("淘宝闪购", "剪映CapCut", "达摩院", "网商银行", "微信小店",
                       "无人车业务部", "国际事业群IBG", "番茄小说", "豆包", "阿里妈妈"):
             self.assertFalse(B.is_noise(token), token)
+
+
+class ProfileProvisionTest(unittest.TestCase):
+    """没有画像的公司整家进不了洞察库——这是覆盖率只有一半的真因。"""
+
+    def test_only_companies_above_threshold_get_a_profile(self):
+        rows = B.plan_new_profiles({"A公司", "B公司"}, 10, {"A公司": 45, "B公司": 3})
+        self.assertEqual([r["company"] for r in rows], ["A公司"])
+
+    def test_new_profiles_do_not_jump_the_enrichment_queue(self):
+        # 富化队列按 insight_checked_at nulls first 取活；留空会让长尾插队抢 LLM/搜索预算
+        rows = B.plan_new_profiles({"A公司"}, 1, {"A公司": 5})
+        self.assertTrue(rows[0]["insight_checked_at"])

@@ -2,6 +2,7 @@ import AdminNav from "@/components/AdminNav";
 import { eventLabel } from "@/lib/track";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import InsightsAdminClient from "@/components/InsightsAdminClient";
+import InsightSubjectsAdmin from "@/components/InsightSubjectsAdmin";
 import { isAdmin } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabaseService";
 import { aggregateEventCounts } from "@/lib/track";
@@ -80,6 +81,7 @@ export default async function InsightsAdminPage() {
         </section>
 
         <InsightsAdminClient />
+        <InsightSubjectsAdmin />
       </ProductPage>
     </div>
   );

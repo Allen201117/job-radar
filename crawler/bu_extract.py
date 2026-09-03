@@ -274,13 +274,13 @@ def collect_company_data(job_rows: list[dict], profile_index, min_jobs: int):
     """jobs 行按画像公司聚合，返回 subject 写入前的纯数据。"""
     exact, normalized, _ = profile_index
     data = {}
-    unmatched_companies = set()
+    unmatched_companies = Counter()
     for row in job_rows or []:
         company = str((row or {}).get("company") or "").strip()
         profile = resolve_profile(company, exact, normalized)
         if not profile:
             if company:
-                unmatched_companies.add(company)
+                unmatched_companies[company] += 1
             continue
         profile_id = profile["id"]
         item = data.setdefault(profile_id, {
@@ -365,6 +365,38 @@ def plan_subject_changes(company_data: dict, existing_rows: list[dict]):
     return plan
 
 
+def plan_new_profiles(unmatched: set, min_jobs: int, counts: dict) -> list[dict]:
+    """给「有足够在招岗但还没有画像」的公司准备画像行（纯函数，便于单测）。
+
+    ⚠️ 为什么必须建：company_profiles 是 insight_subjects 的外键父表，没有画像的公司
+    **整家被挡在洞察库外**。live 实测 1,985 家有在招岗的公司里只有 976 家有画像，
+    而恰恰是缺画像的那批（国聘上的央企子公司）才写明了薪资——洞察库里
+    salary_range_k 一条都出不来，根因就是这个，不是解析器不行。
+
+    ⚠️ 新画像一律带 insight_checked_at=now()：富化队列按 `insight_checked_at nulls first`
+    取活，留空会让这 1,000 家长尾**插到用户真正关心的公司前面**去花 LLM/搜索预算。
+    覆盖率要补，富化优先级不能动。
+    """
+    now = _now_iso()
+    return [
+        {"company": name, "insight_checked_at": now}
+        for name in sorted(unmatched)
+        if int(counts.get(name, 0)) >= int(min_jobs)
+    ]
+
+
+def create_profiles(supabase, rows: list[dict], batch: int = 200) -> int:
+    """按批插画像。company 上有唯一约束，并发/重跑时靠 ignore_duplicates 幂等。"""
+    created = 0
+    for start in range(0, len(rows), batch):
+        chunk = rows[start:start + batch]
+        supabase.table("company_profiles").upsert(
+            chunk, on_conflict="company", ignore_duplicates=True
+        ).execute()
+        created += len(chunk)
+    return created
+
+
 def fetch_active_jobs(company: str = "") -> list[dict]:
     conn = jobs_db.get_conn()
     try:
@@ -422,7 +454,15 @@ def main():
     parser.add_argument("--company", default="", help="只处理 jobs.company 精确等于该值的一家公司")
     parser.add_argument("--min-jobs", type=int, default=None, help="业务线入库的最小 active 岗位数")
     parser.add_argument("--limit", type=int, default=0, help="最多处理多少个已匹配画像的公司（0=全部）")
+    parser.add_argument("--create-profiles", action="store_true",
+                        help="给「有足够在招岗却没有画像」的公司补建 company_profiles")
+    parser.add_argument("--profile-min-jobs", type=int, default=None,
+                        help="补建画像的最小在招岗数（默认 10，与公司级统计门槛一致）")
     args = parser.parse_args()
+    create_profiles_enabled = args.create_profiles or os.environ.get(
+        "BU_CREATE_PROFILES", "").lower() in ("1", "true", "yes")
+    profile_min_jobs = args.profile_min_jobs if args.profile_min_jobs is not None else int(
+        os.environ.get("BU_PROFILE_MIN_JOBS", "10"))
     min_jobs = args.min_jobs if args.min_jobs is not None else int(os.environ.get("BU_MIN_JOBS", DEFAULT_MIN_JOBS))
     if min_jobs < 1:
         parser.error("--min-jobs 必须 >= 1")
@@ -433,6 +473,18 @@ def main():
     profile_index = build_profile_index(profiles)
     job_rows = fetch_active_jobs(args.company)
     company_data, unmatched = collect_company_data(job_rows, profile_index, min_jobs)
+
+    # 先给「有足够在招岗却没有画像」的公司补画像，再用新画像重算一次归属，
+    # 否则这些公司这一轮仍然进不了洞察库（下一轮才生效，白等一天）。
+    if create_profiles_enabled and not args.dry_run and unmatched:
+        new_profiles = plan_new_profiles(set(unmatched), profile_min_jobs, unmatched)
+        if new_profiles:
+            created = create_profiles(supabase, new_profiles)
+            print(f"补建 {created} 家公司画像（在招岗 >= {profile_min_jobs} 且此前无画像）。")
+            profiles = db.fetch_all_rows(
+                lambda: supabase.table("company_profiles").select("id,company,aliases"))
+            profile_index = build_profile_index(profiles)
+            company_data, unmatched = collect_company_data(job_rows, profile_index, min_jobs)
     if args.limit:
         selected = sorted(company_data, key=lambda key: company_data[key]["company"])[:args.limit]
         company_data = {key: company_data[key] for key in selected}
@@ -440,7 +492,8 @@ def main():
     for item in sorted(company_data.values(), key=lambda row: row["company"]):
         _print_company(item)
     if unmatched:
-        print(f"跳过 {len(unmatched)} 家未匹配 company_profiles 的公司（不新建画像）。")
+        print(f"跳过 {len(unmatched)} 家未匹配 company_profiles 的公司"
+              f"（在招岗 < {profile_min_jobs}，不值得单独建画像）。")
     if args.dry_run:
         print("dry-run：未写 insight_subjects 或 ops_runs。")
         return
