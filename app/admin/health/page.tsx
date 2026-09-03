@@ -118,6 +118,12 @@ type HealthDailySeries = {
 // ⚠️ 缓存的是「取数结果」，红黄绿判定与文案仍每请求现算——阈值调整能立刻生效。
 const ADMIN_DATA_TTL_SECONDS = 180;
 
+// 带参数的取数（按 scope / 按是否含管理员）必须**按参数分开缓存键**，
+// 共用一个 key 会让国内/海外、含/不含管理员的结果互相污染——这是缓存最典型的错法。
+function cachedByKey<T>(keyParts: string[], loader: () => Promise<T>): Promise<T> {
+  return cachedLoader(keyParts.join(":"), loader)();
+}
+
 function cachedLoader<T>(key: string, loader: () => Promise<T>): () => Promise<T> {
   const cached = unstable_cache(loader, ["admin-health", key], {
     revalidate: ADMIN_DATA_TTL_SECONDS,
@@ -237,7 +243,7 @@ const loadMustApplyCoverage = cachedLoader<MustApplyRowsByScope>("must-apply-cov
   ) as MustApplyRowsByScope;
 });
 
-async function loadMustApplyGapAdminData(): Promise<MustApplyGapAdminData> {
+const loadMustApplyGapAdminData = cachedLoader<MustApplyGapAdminData>("gap-admin", async () => {
   const service = createServiceClient();
   const [attempts, opsResult] = await Promise.all([
     fetchAllPages<MustApplyGapAttemptRow>((from, to) =>
@@ -260,7 +266,7 @@ async function loadMustApplyGapAdminData(): Promise<MustApplyGapAdminData> {
     attempts,
     opsRuns: (opsResult.data || []) as GapFunnelOpsRow[],
   };
-}
+});
 
 const loadUserIndustryDistribution = cachedLoader<UserIndustryDistribution>("user-industries", async () => {
   const { data, error } = await createServiceClient().from("user_preferences").select("target_industries, job_scope");
@@ -1507,7 +1513,7 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   // 必投清单的国内/海外切换。默认国内——目前海外没有用户在找，进来先看该看的那份。
   const mustApplyScope: MustApplyScope = (typeof query.scope === "string" ? query.scope : "") === "overseas" ? "overseas" : "domestic";
   const overview = tab === "overview";
-  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult, gapResult, dailySeriesResult, extraOpsResult, analyticsResult] = await Promise.allSettled([overview || tab === "jobs" ? loadJobsHealth() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await getMustApplyFetchCoverage(createServiceClient(), scope)] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null), tab === "supply" ? loadMustApplyGapAdminData() : Promise.resolve(null), overview || tab === "jobs" || tab === "system" ? loadHealthDailySeries() : Promise.resolve(null), overview || tab === "system" ? loadExtraOpsRuns() : Promise.resolve(null), tab === "users" ? getUserAnalytics(createServiceClient(), { days: 30, includeStaff }) : Promise.resolve(null)]);
+  const [jobsResult, supabaseResult, clickResult, mustApplyResult, coverageResult, fetchResult, industriesResult, gapResult, dailySeriesResult, extraOpsResult, analyticsResult] = await Promise.allSettled([overview || tab === "jobs" ? loadJobsHealth() : Promise.resolve(null), overview || tab === "jobs" || tab === "users" || tab === "system" ? loadSupabaseHealth() : Promise.resolve(null), overview || tab === "jobs" ? loadClickValidity() : Promise.resolve(null), overview || tab === "supply" ? loadMustApplyCoverage() : Promise.resolve(null), overview || tab === "jobs" || tab === "supply" ? loadCoverageSnapshot() : Promise.resolve(null), tab === "supply" ? Promise.all(MUST_APPLY_SCOPES.map(async (scope) => [scope, await cachedByKey(["fetch-coverage", scope], () => getMustApplyFetchCoverage(createServiceClient(), scope))] as const)) : Promise.resolve(null), overview || tab === "supply" ? loadUserIndustryDistribution() : Promise.resolve(null), tab === "supply" ? loadMustApplyGapAdminData() : Promise.resolve(null), overview || tab === "jobs" || tab === "system" ? loadHealthDailySeries() : Promise.resolve(null), overview || tab === "system" ? loadExtraOpsRuns() : Promise.resolve(null), tab === "users" ? cachedByKey(["user-analytics", includeStaff ? "with-staff" : "no-staff"], () => getUserAnalytics(createServiceClient(), { days: 30, includeStaff })) : Promise.resolve(null)]);
   const jobs = jobsResult.status === "fulfilled" ? jobsResult.value : null;
   const operations = supabaseResult.status === "fulfilled" ? supabaseResult.value : null;
   const clickValidity = clickResult.status === "fulfilled" ? clickResult.value : null;
