@@ -437,3 +437,32 @@ export function missingContributionTopics(subject: LibrarySubject): typeof CONTR
   const have = new Set(subject.metrics.map(metricKey));
   return CONTRIBUTION_GAPS.filter((gap) => !have.has(gap.key));
 }
+
+/**
+ * 档位的**短标签**，只用于芯片与筛选项显示。
+ * ⚠️ 完整口径（判档依据）在 crawler/insight_grade_scale.py 的 GRADE_SCALES，
+ *    那份才是喂给模型的真相；这里改文案不等于改口径，两边语义必须一致。
+ */
+export const GRADE_LABEL: Record<string, Record<number, string>> = {
+  overtime_level: {
+    1: "准时下班",
+    2: "偶有加班",
+    3: "加班常见",
+    4: "加班多",
+    5: "996 / 大小周",
+  },
+  promotion_pace: {
+    1: "晋升极难",
+    2: "晋升偏慢",
+    3: "看绩效",
+    4: "通道清晰",
+    5: "晋升快",
+  },
+  intern_experience: {
+    1: "打杂 / 难转正",
+    2: "转正不确定",
+    3: "安排一般",
+    4: "有带教有项目",
+    5: "转正率高",
+  },
+};

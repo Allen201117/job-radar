@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import {
   ArrowSquareOut,
   CaretDown,
@@ -16,6 +17,7 @@ import { assertionChip, ASSERTION_LABEL, ASSERTION_PROMISE } from "@/lib/insight
 import {
   DIMENSION_LABEL,
   FRESHNESS_LABEL,
+  GRADE_LABEL,
   METRIC_LABEL,
   missingContributionTopics,
   type LibraryCardMetric,
@@ -29,6 +31,8 @@ type Props = {
   initialSubjects: LibrarySubject[];
   initialTotal: number;
   initialFacets: LibraryFacets;
+  /** 服务端从 URL 解析出的初始筛选；页面刷新 / 分享链接都靠它。 */
+  initialFilters?: Partial<Filters>;
   subjectTotal: number;
 };
 
@@ -38,8 +42,9 @@ type Filters = {
   assertion: string;
   dimension: string;
   metric: string;
-  /** 选中指标的数值下限（如「近 30 天新挂出 ≥ 50」）。只有选了指标才有意义。 */
+  /** 选中指标的数值上下限。用户要的常常是「加班**少**的公司」，所以上限不能省。 */
   metricMin: string;
+  metricMax: string;
   freshness: string;
   sort: string;
 };
@@ -51,6 +56,7 @@ const EMPTY: Filters = {
   dimension: "",
   metric: "",
   metricMin: "",
+  metricMax: "",
   freshness: "",
   sort: "fresh",
 };
@@ -75,8 +81,9 @@ function toQuery(filters: Filters, page: number): string {
   if (filters.metric) params.set("metric", filters.metric);
   // 阈值只在选了指标时才有意义：没有指标就没有「大于多少」这回事。
   if (filters.metric && filters.metricMin.trim()) params.set("metricMin", filters.metricMin.trim());
+  if (filters.metric && filters.metricMax.trim()) params.set("metricMax", filters.metricMax.trim());
   if (filters.freshness) params.set("freshness", filters.freshness);
-  if (filters.sort) params.set("sort", filters.sort);
+  if (filters.sort && filters.sort !== "fresh") params.set("sort", filters.sort);
   if (page > 1) params.set("page", String(page));
   return params.toString();
 }
@@ -85,9 +92,12 @@ export default function InsightsClient({
   initialSubjects,
   initialTotal,
   initialFacets,
+  initialFilters,
   subjectTotal,
 }: Props) {
-  const [filters, setFilters] = useState<Filters>(EMPTY);
+  const router = useRouter();
+  const pathname = usePathname();
+  const [filters, setFilters] = useState<Filters>({ ...EMPTY, ...(initialFilters || {}) });
   const [subjects, setSubjects] = useState(initialSubjects);
   const [facets, setFacets] = useState(initialFacets);
   const [total, setTotal] = useState(initialTotal);
@@ -129,18 +139,25 @@ export default function InsightsClient({
 
   useEffect(() => {
     if (firstRender.current) {
+      // 首屏由服务端按 URL 里的筛选渲染好了，别再多打一次一样的请求。
       firstRender.current = false;
       return;
     }
-    const timer = setTimeout(() => load(filters, 1, false), 250);
+    const timer = setTimeout(() => {
+      load(filters, 1, false);
+      // 把筛选同步进地址栏：可分享、可收藏、刷新不丢。
+      // 用 replace 而不是 push —— 连续调筛选不该把浏览器后退键塞满。
+      const qs = toQuery(filters, 1);
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    }, 250);
     return () => clearTimeout(timer);
-  }, [filters, load]);
+  }, [filters, load, pathname, router]);
 
   const active = useMemo(
     () =>
       // metricMin 不单独成 chip：它显示在「指标」那颗 chip 里（「近 30 天新挂出 ≥ 50」）。
       (Object.keys(filters) as Array<keyof Filters>).filter(
-        (k) => k !== "sort" && k !== "metricMin" && filters[k],
+        (k) => k !== "sort" && k !== "metricMin" && k !== "metricMax" && filters[k],
       ),
     [filters],
   );
@@ -201,7 +218,13 @@ export default function InsightsClient({
           />
           <Select
             value={filters.metric}
-            onChange={(v) => set({ metric: v, metricMin: v ? filters.metricMin : "" })}
+            onChange={(v) =>
+              set({
+                metric: v,
+                metricMin: v ? filters.metricMin : "",
+                metricMax: v ? filters.metricMax : "",
+              })
+            }
             placeholder="全部主题"
             options={facets.metric.map((b) => ({
               value: b.key,
@@ -216,8 +239,17 @@ export default function InsightsClient({
                 inputMode="decimal"
                 value={filters.metricMin}
                 onChange={(e) => set({ metricMin: e.target.value })}
-                placeholder="数值下限"
-                className="w-20 bg-transparent t-label ink-1 outline-none"
+                placeholder="下限"
+                className="w-16 bg-transparent t-label ink-1 outline-none"
+              />
+              <span className="t-label ink-3">≤</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                value={filters.metricMax}
+                onChange={(e) => set({ metricMax: e.target.value })}
+                placeholder="上限"
+                className="w-16 bg-transparent t-label ink-1 outline-none"
               />
             </label>
           )}
@@ -251,7 +283,7 @@ export default function InsightsClient({
                 onClick={() =>
                   set(
                     (key === "metric"
-                      ? { metric: "", metricMin: "" }
+                      ? { metric: "", metricMin: "", metricMax: "" }
                       : { [key]: "" }) as Partial<Filters>,
                   )
                 }
@@ -340,6 +372,12 @@ function metricText(m: LibraryCardMetric): string {
   return `${METRIC_LABEL[m.metric_key] || m.metric_key} ${value}${n}`.trim();
 }
 
+/** 档位类指标（加班强度/晋升节奏/实习体验）把 1–5 翻成人话，直接贴在指标名后面。 */
+function gradeText(metricKey: string, value: number | null): string {
+  if (value == null) return "";
+  return GRADE_LABEL[metricKey]?.[Math.round(value)] || "";
+}
+
 function labelFor(key: keyof Filters, filters: Filters): string {
   const value = filters[key];
   if (key === "q") return `搜索「${value}」`;
@@ -348,7 +386,12 @@ function labelFor(key: keyof Filters, filters: Filters): string {
   if (key === "dimension") return DIMENSION_LABEL[value as keyof typeof DIMENSION_LABEL] || value;
   if (key === "metric") {
     const label = METRIC_LABEL[value] || value;
-    return filters.metricMin.trim() ? `${label} ≥ ${filters.metricMin.trim()}` : label;
+    const lo = filters.metricMin.trim();
+    const hi = filters.metricMax.trim();
+    if (lo && hi) return `${label} ${lo}–${hi}`;
+    if (lo) return `${label} ≥ ${lo}`;
+    if (hi) return `${label} ≤ ${hi}`;
+    return label;
   }
   if (key === "freshness") return FRESHNESS_LABEL[value] || value;
   return value;
@@ -509,6 +552,9 @@ function SubjectCard({
               {m.metric_key && (
                 <span className="mt-[3px] shrink-0 rounded px-1.5 py-0.5 t-micro ink-3 ring-1 ring-inset ring-black/[0.06] dark:ring-white/[0.1]">
                   {METRIC_LABEL[m.metric_key] || m.metric_key}
+                  {gradeText(m.metric_key, m.metric_value) && (
+                    <span className="ink-1"> · {gradeText(m.metric_key, m.metric_value)}</span>
+                  )}
                 </span>
               )}
               <span className="t-body-sm ink-2">{metricText(m)}</span>
@@ -598,7 +644,11 @@ function ItemRow({ item }: { item: InsightItemView }) {
           {DIMENSION_LABEL[item.dimension] || item.dimension}
         </span>
         {item.metric_key && (
-          <span className="t-micro ink-4">{METRIC_LABEL[item.metric_key] || item.metric_key}</span>
+          <span className="t-micro ink-4">
+            {METRIC_LABEL[item.metric_key] || item.metric_key}
+            {gradeText(item.metric_key, item.metric_value ?? null) &&
+              ` · ${gradeText(item.metric_key, item.metric_value ?? null)}`}
+          </span>
         )}
         {item.outdated && <span className="t-micro ink-4">可能已过时</span>}
       </div>
