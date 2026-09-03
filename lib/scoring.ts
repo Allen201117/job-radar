@@ -296,6 +296,45 @@ export function sortAndFilterJobs(
   return out;
 }
 
+/**
+ * 「能给岗位加分」的偏好词，**按加分来源分组**。
+ *
+ * 用途：候选窗口装不下时，靠它把「可能得高分的岗」优先放进窗口
+ * （lib/jobs-store/search.ts 的 candidateOrderBy）。
+ * 分组而不是拍平成一个数组，是因为调用方要按「这一维在本次候选集里还有没有区分度」逐组取舍
+ * —— 用户已经按深圳筛过了，再把 target_locations 放进优先级里，全部候选都算「命中」，
+ * 等于没排（live 实测就是这么栽的：15,350 个候选全命中）。
+ *
+ * ⚠️ 必须与 scoreJob 里真正参与加分的字段是**同一套**：漏掉一类，那类高分岗就会被截断在
+ * 窗口外，「按匹配度」的第一页会缺人，而这种缺失在页面上完全看不出来。
+ * tests/scoring-signal-terms.test.js 拿 scoreJob 的实际得分对拍钉死。
+ * 这里不判 exact/related、不设职能/行业门 —— 只负责「优先进窗口」，最终判定仍由 scoreJob 权威执行。
+ */
+export type ScoringSignalGroups = {
+  /** 目标岗位 + 补充词 + 技能 → scoreJob 的 +30/+15（role）与 +5/+2.5（keyword） */
+  direction: string[];
+  /** 目标公司 → +15 */
+  companies: string[];
+  /** 目标城市 → +20 */
+  locations: string[];
+};
+
+export function scoringSignalGroups(
+  preferences: UserPreferences | null,
+  options: { overseasProfile?: boolean } = {},
+): ScoringSignalGroups {
+  if (!preferences) return { direction: [], companies: [], locations: [] };
+  const overseasProfile = options.overseasProfile === true;
+  return {
+    direction: uniqueStrings([
+      ...scoringTargetRoles(preferences, overseasProfile),
+      ...scoringTargetKeywords(preferences, overseasProfile),
+    ]),
+    companies: uniqueStrings(preferences.target_companies || []),
+    locations: uniqueStrings(preferences.target_locations || []),
+  };
+}
+
 function shouldUseOverseasProfile(job: Job, preferences: UserPreferences): boolean {
   const scope = preferences.job_scope || "domestic";
   if (scope === "overseas") return true;

@@ -3,7 +3,7 @@
 //   差别仅「候选取数」从 supabase-js 换成直连 pg SQL → 搜索口径/精度/排序与线上零差异。
 import "server-only";
 import { jobsQuery } from "./client";
-import { actionHiddenJobIds, sortAndFilterJobs } from "@/lib/scoring";
+import { actionHiddenJobIds, scoringSignalGroups, sortAndFilterJobs } from "@/lib/scoring";
 import {
   filterAndRankJobs,
   filtersFullyPushedToSql,
@@ -222,6 +222,74 @@ function legacyRecruitmentSuperset(jobType: string): string {
   return "true"; // 社招=默认态·大头，无信号可下推 → 兜底路全放行，交给 JS 精筛
 }
 
+/**
+ * 拿来做「偏好优先」的 tsquery：把用户偏好词按搜索框同一套词表展开后 OR 起来。
+ *
+ * ⚠️ **只放在本次候选集里还有区分度的维度**。用户已经按「深圳」筛过了 → 候选全在深圳 →
+ * 再把 target_locations 放进来，每一行都算「偏好命中」，排序等于没排。这不是理论顾虑：
+ * live 实测「深圳 + 社招」15,350 个候选，带上城市词命中 15,350（0 区分度），
+ * 剔除后降到 4,642 —— 正好装得进 8000 的窗口，于是**能拿方向/公司加分的岗一个都不会被砍**。
+ * 被剔掉的那一维在候选集内是常量，窗口内外同样拿得到那份分，不影响相对排序。
+ *
+ * 词数封顶是为了别让 tsquery 无限膨胀（简历技能可能有几十条）；排在前面的是目标岗位，
+ * 也正是加分最高（+30/+15）的一类，截掉尾巴不影响「高分岗一定在窗口内」这个性质。
+ */
+const PREF_SIGNAL_TERM_CAP = 40;
+
+function preferenceTsquery(filters: Filters, prefs: UserPreferences | null): string | null {
+  if (!prefs) return null;
+  const includeOverseasLexicon = effectiveJobScope(prefs) !== "domestic";
+  const groups = scoringSignalGroups(prefs, { overseasProfile: includeOverseasLexicon });
+  const signals = [
+    ...groups.direction,
+    // 用户自己填了公司/城市 → 候选已按它收窄，这一维在集合内是常量，放进来只会稀释区分度。
+    ...(filters.company.trim() ? [] : groups.companies),
+    ...(splitMultiValue(filters.city).length ? [] : groups.locations),
+  ];
+  const terms = signals
+    .slice(0, PREF_SIGNAL_TERM_CAP)
+    .flatMap((t: string) => ftsCandidateTerms(t, { includeOverseasLexicon }));
+  return buildTsquery(terms, [], []);
+}
+
+/**
+ * 候选窗口的排序 —— 它真正决定的是「装不下时砍掉谁」。
+ *
+ * 此前 FTS 那条查询**根本没有 order by**（为了让 planner 用 GIN bitmap 直接取命中行）：
+ * 线上「深圳 + 社招」有 15,350 个候选、窗口只有 8000，砍掉哪 7,350 个纯看执行计划 →
+ * 「按匹配度」排出来的第一页其实只是「任意一批里最匹配的」。这是撞上限最伤的一处，
+ * 比数字不准更伤——数字看得见，排序偏了看不见。
+ *
+ * 实测这笔排序很便宜（香港库「深圳+社招」15,350 行：无序 147ms / 按新鲜度 59ms /
+ * 真实画像的偏好优先 187ms），而且走 5 分钟候选缓存只付一次，所以直接让截断变得有意义：
+ *   · 按发布时间排 → `first_seen_at desc`：被砍掉的确实更旧，**窗口内的分页与全集一致**。
+ *   · 按匹配度排 → 「命中用户偏好的」优先，再按新鲜度补满。可论证：scoreJob 里 10 分以上的
+ *     加分项（岗位 +30/+15、城市 +20、公司 +15、补充词 +5/+2.5）**全部来自偏好词**，所以
+ *     偏好命中的行必定进窗口；窗口外的行最多只剩「近 7 天 +10」，而补位恰恰按新鲜度排
+ *     → 被砍掉的确实是分数最低的一批。
+ *
+ * ⚠️ 已知边界：`search_doc` 只含 title/company/location/job_type，**不含 JD 正文**
+ *   （见 jobs-db/schema.sql 的 jobs_set_search_doc）→「只在正文里命中偏好词」的岗不算偏好命中。
+ *   这不是这里新引入的不一致：关键词搜索一直是标题锚定的（同一个 search_doc）。要消掉它得给
+ *   正文单独建 FTS，是另一件事。
+ * ⚠️ 排序参数进了候选缓存的 key → 不同偏好的用户不再共用同一份候选。内测规模下可接受；
+ *   要恢复共享只能牺牲上面那条正确性，别为省缓存把它换回去。
+ * ⚠️ 不要加 `nulls last`：索引是 (status, first_seen_at desc) 即 NULLS FIRST，加了就用不上索引；
+ *   而 first_seen_at 线上 0 个 NULL（有 default now()），两者结果本来就一样。
+ */
+function candidateOrderBy(
+  params: unknown[],
+  filters: Filters,
+  prefs: UserPreferences | null,
+): string {
+  const fresh = "first_seen_at desc";
+  if (filters.sortBy === "newest") return ` order by ${fresh}`;
+  const prefQuery = preferenceTsquery(filters, prefs);
+  if (!prefQuery) return ` order by ${fresh}`; // 无偏好时打分只剩「近 7 天 +10」→ 按新鲜度排就是对的
+  params.push(prefQuery);
+  return ` order by (search_doc @@ to_tsquery('simple', $${params.length})) desc, ${fresh}`;
+}
+
 // 命中页回补 HYDRATE_COLUMNS：候选阶段没拉这些展示列，排序分页定下 ≤limit 行后按 id 批量补齐再合并。
 async function hydratePageColumns(
   page: Array<ScoredJob & { __tier: "exact" | "related"; __match: MatchReason }>,
@@ -315,7 +383,8 @@ async function searchViaFTS(
   // 「默认会被隐藏」的岗位（忽略/已投递）。⚠️ 无偏好时 scoreJob 直接返回 hidden_reason=null，
   // 用户操作根本不生效（lib/scoring.ts），这里必须同口径，否则算真实总数时会多排除。
   const hiddenIds = prefs ? actionHiddenJobIds(actions, filters) : new Set<string>();
-  // 不加 order by：让 planner 用 GIN bitmap 只取命中行；排序交给 JS filterAndRankJobs。
+  // 最终排序仍由 JS filterAndRankJobs 权威执行；这里的 order by 只管「窗口装不下时砍掉谁」
+  // （见 candidateOrderBy，实测不额外收费）。
   const conds = ["status = 'active'", "search_doc @@ to_tsquery('simple', $1)"];
   const params: unknown[] = [tsquery];
   appendJobScopeWhere(conds, params, prefs, filters);
@@ -334,10 +403,14 @@ async function searchViaFTS(
   // 走同一份候选缓存：候选集只由 where 决定（已全部进 key），而**翻页是在 JS 里 slice 的**——
   // 第 2 页的 SQL 与第 1 页逐字节相同。不缓存的话每翻一页都要把几千行重新跨库拉一遍再解析一遍，
   // 香港库实测这段占该接口服务端耗时的绝大部分（4354 行 ≈ 4.8MB）。
+  // ⚠️ 排序参数走 candidateParams，`params` 保持「只含 where」——exactTotalWhenCapped 要拿它拼
+  // count 查询，多带一个用不到的绑定参数 PG 会直接报错。
+  const candidateParams = [...params];
+  const orderBy = candidateOrderBy(candidateParams, filters, prefs);
   const rows = annotateSourceAdapter(
     await fetchCandidates(
-      `select ${CANDIDATE_COLUMNS} from jobs where ${conds.join(" and ")} limit ${FTS_CAP}`,
-      params,
+      `select ${CANDIDATE_COLUMNS} from jobs where ${conds.join(" and ")}${orderBy} limit ${FTS_CAP}`,
+      candidateParams,
     ),
     adapterBySource,
   );
@@ -402,10 +475,13 @@ async function searchViaScan(
   // ⚠️ 别再试「用 json_agg 把整批行打成一个字段传回来」绕开 node-pg 逐字段解析：2026-09-02
   // 上线实测**更慢**（无筛选冷路径 19.0s → 20.5s），因为 json 要给每行每列写一遍 key 名，
   // 2.8 万行多出约 8MB 纯键名、字节 +33%，把省下的解析成本吃光了（已撤回，commit f011592）。
+  // 同 FTS 路径：`params` 只留 where（计数要用），排序参数进 candidateParams。
+  const candidateParams = [...params];
+  const orderBy = candidateOrderBy(candidateParams, filters, prefs);
   const sql =
-    `select ${CANDIDATE_COLUMNS} from jobs where ${conds.join(" and ")} ` +
-    `order by first_seen_at desc limit $${params.length + 1} offset $${params.length + 2}`;
-  const fetchRows = (want: number, off: number) => jobsQuery(sql, [...params, want, off]);
+    `select ${CANDIDATE_COLUMNS} from jobs where ${conds.join(" and ")}${orderBy} ` +
+    `limit $${candidateParams.length + 1} offset $${candidateParams.length + 2}`;
+  const fetchRows = (want: number, off: number) => jobsQuery(sql, [...candidateParams, want, off]);
   // 吸收一批：打分/精筛后并入 matched，返回「是否已到底」（拿到的比想要的少 = 没更多了）。
   const absorb = (raw: unknown, want: number): boolean => {
     const rows: any[] = annotateSourceAdapter(raw as any[], adapterBySource);
@@ -441,7 +517,7 @@ async function searchViaScan(
     // 在物化之前，先用「候选与用户无关」这一点把重复传输吃掉：走进程内缓存 + 并发去重
     // （见上面 fetchCandidates 的注释与不变量）。
     exhausted = absorb(
-      await fetchCandidates(sql, [...params, SCAN_BUDGET, 0]),
+      await fetchCandidates(sql, [...candidateParams, SCAN_BUDGET, 0]),
       SCAN_BUDGET,
     );
   } else {
