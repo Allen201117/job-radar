@@ -21,6 +21,7 @@ import argparse
 import os
 import re
 import statistics
+import uuid
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
@@ -366,38 +367,47 @@ def _item_row(subject, company_id, metric, now_iso, valid_days: int) -> dict:
     }
 
 
-def write_subject_metrics(supabase, subject, company_id, metrics, existing_rows,
-                          now_iso, valid_days) -> tuple[int, int, int]:
-    """把一个主体的指标行写库：有则更新、无则插入、本轮算不出的退役。"""
+def plan_subject_rows(subject, company_id, metrics, existing_rows, now_iso, valid_days):
+    """一个主体的写入计划（纯函数）：要 upsert 的完整行 + 要退役的 id。
+
+    ⚠️ 复用已有行的 id 走 upsert（冲突目标是主键 id），而不是「有就 update、没有就 insert」——
+    后者是一行一次 HTTP，第一轮 ~1 万条指标就要一万次跨洋往返，会把整轮拖成小时级。
+    """
     by_key = {row.get("metric_key"): row for row in existing_rows if row.get("metric_key")}
-    inserted = updated = retired = 0
-    fresh_keys = set()
+    rows, fresh_keys = [], set()
     for metric in metrics:
         row = _item_row(subject, company_id, metric, now_iso, valid_days)
-        fresh_keys.add(metric["metric_key"])
         old = by_key.get(metric["metric_key"])
-        if old:
-            supabase.table("insight_items").update(row).eq("id", old["id"]).execute()
-            updated += 1
-        else:
-            supabase.table("insight_items").insert(row).execute()
-            inserted += 1
+        row["id"] = old["id"] if old else str(uuid.uuid4())
+        fresh_keys.add(metric["metric_key"])
+        rows.append(row)
     # 本轮样本不够或字段消失的指标：退役而不是删除，保住 id 与可追溯性。
-    for key, row in by_key.items():
-        if key not in fresh_keys and row.get("status") == "active":
-            supabase.table("insight_items").update(
-                {"status": "retired", "updated_at": now_iso}
-            ).eq("id", row["id"]).execute()
-            retired += 1
-    return inserted, updated, retired
+    retire_ids = [
+        row["id"] for key, row in by_key.items()
+        if key not in fresh_keys and row.get("status") == "active"
+    ]
+    return rows, retire_ids
 
 
-def record_snapshot(supabase, subject_id: str, active_count: int, new_30d: int, day: str) -> None:
-    """当日快照。同日重跑覆盖（upsert），趋势的唯一诚实来源。"""
-    supabase.table("insight_subject_daily").upsert({
-        "subject_id": subject_id, "day": day,
-        "active_count": int(active_count), "new_30d": int(new_30d),
-    }, on_conflict="subject_id,day").execute()
+def write_rows(supabase, rows: list[dict], retire_ids: list[str], now_iso: str,
+               batch: int = 200) -> tuple[int, int]:
+    """按批写。冲突目标是主键 id：已有行原地更新，新行插入。"""
+    for start in range(0, len(rows), batch):
+        supabase.table("insight_items").upsert(rows[start:start + batch]).execute()
+    for start in range(0, len(retire_ids), batch):
+        supabase.table("insight_items").update(
+            {"status": "retired", "updated_at": now_iso}
+        ).in_("id", retire_ids[start:start + batch]).execute()
+    return len(rows), len(retire_ids)
+
+
+def record_snapshots(supabase, snapshots: list[dict], batch: int = 200) -> int:
+    """当日快照，按批 upsert。同日重跑覆盖，趋势的唯一诚实来源。"""
+    for start in range(0, len(snapshots), batch):
+        supabase.table("insight_subject_daily").upsert(
+            snapshots[start:start + batch], on_conflict="subject_id,day"
+        ).execute()
+    return len(snapshots)
 
 
 def fetch_snapshots(supabase, subject_ids: list[str], since_day: str) -> dict[str, list[dict]]:
@@ -470,7 +480,7 @@ def main():
 
     metrics_count = {
         "companies_scanned": 0, "subjects_scanned": 0, "subjects_with_metrics": 0,
-        "items_inserted": 0, "items_updated": 0, "items_retired": 0,
+        "items_written": 0, "items_retired": 0,
         "snapshots": 0, "failed": 0,
     }
     conn = jobs_db.get_conn()
@@ -493,6 +503,7 @@ def main():
                 buckets = assign_jobs_to_subjects(jobs, set(bu_keys))
                 eligible_bu = sum(1 for key, rows in buckets.items() if len(rows) >= MIN_BU)
 
+                pending_rows, pending_retire, pending_snapshots = [], [], []
                 for subject in company_subjects:
                     metrics_count["subjects_scanned"] += 1
                     if subject["kind"] == "company":
@@ -519,18 +530,26 @@ def main():
                             for m in metrics:
                                 print(f"    [{m['metric_key']}] {m['content']}")
                         continue
-                    ins, upd, ret = write_subject_metrics(
-                        supabase, subject, company_id, metrics,
+                    rows, retire_ids = plan_subject_rows(
+                        subject, company_id, metrics,
                         existing_items.get(subject["id"], []), _now_iso(), args.valid_days,
                     )
-                    metrics_count["items_inserted"] += ins
-                    metrics_count["items_updated"] += upd
-                    metrics_count["items_retired"] += ret
+                    pending_rows.extend(rows)
+                    pending_retire.extend(retire_ids)
                     new_30 = sum(1 for jb in subject_jobs
                                  if (d := days_between(jb.get("first_seen_at"), now)) is not None
                                  and d <= 30)
-                    record_snapshot(supabase, subject["id"], len(subject_jobs), new_30, day)
-                    metrics_count["snapshots"] += 1
+                    pending_snapshots.append({
+                        "subject_id": subject["id"], "day": day,
+                        "active_count": len(subject_jobs), "new_30d": new_30,
+                    })
+
+                if args.dry_run:
+                    continue
+                written, retired = write_rows(supabase, pending_rows, pending_retire, _now_iso())
+                metrics_count["items_written"] += written
+                metrics_count["items_retired"] += retired
+                metrics_count["snapshots"] += record_snapshots(supabase, pending_snapshots)
             except Exception as exc:  # noqa: BLE001 —— 一家公司失败不该让整轮没产出
                 metrics_count["failed"] += 1
                 print(f"⚠️ {display} 派生失败，跳过继续：{type(exc).__name__}: {exc}", flush=True)

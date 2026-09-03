@@ -70,6 +70,11 @@ export interface LibraryFilters {
   sort?: LibrarySort;
 }
 
+/** 列表每页多少张主体卡。页面与接口共用，避免两处不一致导致「加载更多」错位。 */
+export const LIBRARY_PAGE_SIZE = 24;
+/** 主体卡上最多展示几条指标；其余在展开时取。 */
+export const CARD_METRICS = 6;
+
 export interface FacetBucket {
   key: string;
   count: number;
@@ -310,4 +315,81 @@ export function parseLibraryFilters(params: URLSearchParams): LibraryFilters {
     freshness: pick(params.get("freshness"), FRESHNESS),
     sort: pick(params.get("sort"), SORTS) || "fresh",
   };
+}
+
+/** 主体卡只带头条指标：signal 在前（第一方最可信），再按样本量。 */
+export function trimSubjectForCard(subject: LibrarySubject): LibrarySubject {
+  const rank: Record<string, number> = { signal: 0, fact: 1, claim: 2 };
+  const metrics = [...subject.metrics]
+    .sort(
+      (a, b) =>
+        (rank[a.assertion] ?? 9) - (rank[b.assertion] ?? 9) ||
+        (b.sample_size || 0) - (a.sample_size || 0),
+    )
+    .slice(0, CARD_METRICS);
+  return { ...subject, metrics };
+}
+
+// ── 展示用标签（页面与治理后台共用，别在 UI 里留第二份）──────────────────
+export const DIMENSION_LABEL: Record<InsightDimension, string> = {
+  timing: "招聘时机",
+  hiring: "招聘动态",
+  listing: "上市 / 股票",
+  compensation_intensity: "薪资 / 强度",
+  path: "进入路径",
+  culture: "公司文化",
+};
+
+/** metric_key → 人话。枚举本身在迁移 204 的 CHECK 里，新增指标两处都要加。 */
+export const METRIC_LABEL: Record<string, string> = {
+  headcount_total: "员工总数",
+  headcount_tech_ratio: "技术人员占比",
+  edu_bachelor_plus_ratio: "本科及以上占比",
+  edu_master_plus_ratio: "硕士及以上占比",
+  bu_count: "业务线条数",
+  bu_job_count: "业务线在招岗位数",
+  hiring_volume_30d: "近 30 天新挂出",
+  hiring_trend_30d_pct: "30 天环比",
+  hiring_trend_90d_pct: "90 天环比",
+  open_age_days_median: "岗位在架时长",
+  city_share: "城市分布",
+  function_share: "职能分布",
+  bucket_share: "招聘类型分布",
+  exp_years_median: "经验年限",
+  edu_requirement_mode: "学历要求",
+  avg_comp_annual: "人均薪酬",
+  salary_range_k: "明写薪资",
+  bonus_months: "年终奖",
+  overtime_level: "加班强度",
+  promotion_pace: "晋升节奏",
+  interview_rounds: "面试轮次",
+  hiring_freeze_signal: "招聘骤降",
+  layoff_mention: "裁员提及",
+  listing_status: "上市状态",
+  revenue_yoy: "营收同比",
+};
+
+export const FRESHNESS_LABEL: Record<string, string> = {
+  fresh: "近期核实",
+  recent: "数月前核实",
+  aging: "较久未更新",
+  stale: "久未更新",
+};
+
+/**
+ * 岗位库只能答「稳定性」和「好不好进」。强度 / 晋升 / 面试完全不在岗位数据里，
+ * 薪资明写覆盖仅 1.8% —— 这几栏没内容时不显示「暂无数据」，而是给贡献入口。
+ * （spec §1.5 + 任务卡 §2.3 互惠墙）
+ */
+export const CONTRIBUTION_GAPS: Array<{ key: string; label: string; topic: string }> = [
+  { key: "overtime_level", label: "工作强度 / 加班", topic: "culture" },
+  { key: "bonus_months", label: "年终奖", topic: "compensation" },
+  { key: "promotion_pace", label: "晋升节奏", topic: "career" },
+  { key: "interview_rounds", label: "面试流程", topic: "interview" },
+];
+
+/** 该主体还缺哪几类「我们给不了、只有待过的人知道」的内容。 */
+export function missingContributionTopics(subject: LibrarySubject): typeof CONTRIBUTION_GAPS {
+  const have = new Set(subject.metrics.map((m) => m.metric_key));
+  return CONTRIBUTION_GAPS.filter((gap) => !have.has(gap.key));
 }

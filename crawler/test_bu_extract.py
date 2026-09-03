@@ -181,3 +181,52 @@ class EnglishTitleNoiseTest(unittest.TestCase):
     def test_region_abbreviations_are_noise(self):
         for token in ("us", "EMEA", "apac", "latam"):
             self.assertTrue(B.is_noise(token), token)
+
+
+class SecondRoundLiveNoiseTest(unittest.TestCase):
+    """2026-09-03 全库跑完后抽检 100 条业务线，逐类钉死。
+
+    修前噪声率 ~13%（超过 spec §5.1 的 <10% 验收线），来源是四类：
+    半个括号的碎片 / 招聘类型全称 / 区域名 / 一线岗位名。
+    """
+
+    def test_unbalanced_bracket_fragment_is_repaired_not_displayed(self):
+        # live：「基石产品线）」「综合创新线）」「肿瘤创新线）」带着半个括号进了库
+        self.assertEqual(B._strip_unbalanced("基石产品线）"), "基石产品线")
+        self.assertEqual(B._strip_unbalanced("（综合创新线"), "综合创新线")
+        # 配对的括号不动
+        self.assertEqual(B._strip_unbalanced("剪映CapCut（国际）"), "剪映CapCut（国际）")
+
+    def test_recruitment_type_full_names_are_noise(self):
+        for token in ("社会招聘", "内部招聘", "校园招聘", "培训生", "储备生",
+                      "CRC Intern", "Graduate Program", "Trainee"):
+            self.assertTrue(B.is_noise(token), token)
+
+    def test_region_names_are_noise_but_real_subsidiaries_survive(self):
+        for token in ("中国", "华东", "亚太", "大中华区"):
+            self.assertTrue(B.is_noise(token), token)
+        # 只做全等判断 → 真子公司不受影响
+        for token in ("外运华东", "长城国际", "蚂蚁国际"):
+            self.assertFalse(B.is_noise(token), token)
+
+    def test_frontline_job_titles_are_noise(self):
+        for token in ("店员", "维修技师", "区域业代", "高级研究员", "财务岗"):
+            self.assertTrue(B.is_noise(token), token)
+
+    def test_real_business_units_from_the_same_sample_survive(self):
+        for token in ("淘宝闪购", "剪映CapCut", "达摩院", "网商银行", "微信小店",
+                      "无人车业务部", "国际事业群IBG", "番茄小说", "豆包", "阿里妈妈"):
+            self.assertFalse(B.is_noise(token), token)
+
+
+class ProfileProvisionTest(unittest.TestCase):
+    """没有画像的公司整家进不了洞察库——这是覆盖率只有一半的真因。"""
+
+    def test_only_companies_above_threshold_get_a_profile(self):
+        rows = B.plan_new_profiles({"A公司", "B公司"}, 10, {"A公司": 45, "B公司": 3})
+        self.assertEqual([r["company"] for r in rows], ["A公司"])
+
+    def test_new_profiles_do_not_jump_the_enrichment_queue(self):
+        # 富化队列按 insight_checked_at nulls first 取活；留空会让长尾插队抢 LLM/搜索预算
+        rows = B.plan_new_profiles({"A公司"}, 1, {"A公司": 5})
+        self.assertTrue(rows[0]["insight_checked_at"])
