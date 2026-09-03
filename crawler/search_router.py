@@ -48,6 +48,17 @@ def campus_reserve() -> int:
     return 25
 
 
+def search_fanout_min_results() -> int:
+    """首源已够用时停止扇出（env SEARCH_FANOUT_MIN_RESULTS，默认 5）。"""
+    raw = os.environ.get("SEARCH_FANOUT_MIN_RESULTS")
+    if raw not in (None, ""):
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return 5
+
+
 class SearchRouter:
     def __init__(self, providers):
         self.providers = list(providers or [])
@@ -82,9 +93,10 @@ class SearchRouter:
         return max(0, self.remaining(sb) - campus_reserve())
 
     def search(self, sb, query, top_k=8, client=None):
-        """各已配置且有额度的 provider 依次检索 → 按 url 并取去重（保留先出现者）。
+        """各已配置且有额度的 provider 依次检索，够用即停 → 按 url 并取去重（保留先出现者）。
         单源报错/无结果不影响其它源；返回统一形状列表。"""
         out, seen = [], set()
+        minimum = search_fanout_min_results()
         for p in self._active():
             try:
                 if p.remaining(sb) <= 0:
@@ -107,6 +119,8 @@ class SearchRouter:
                 out.append(r)
                 new += 1
             print(f"  [search] {p.name}: 返回 {len(results)} 条 / 去重后新增 {new} 条")
+            if len(out) >= minimum:
+                break
         return out
 
 

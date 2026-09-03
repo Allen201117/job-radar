@@ -58,6 +58,11 @@ class TestEngineDecision(unittest.TestCase):
         with self.assertRaises(ValueError):
             E.parse_json_loose("no json here")
 
+    def test_registrable_host_merges_subdomains_and_mobile_prefixes(self):
+        self.assertEqual(E.registrable_host("https://zhihu.com/question/1"), "zhihu.com")
+        self.assertEqual(E.registrable_host("https://zhuanlan.zhihu.com/p/2"), "zhihu.com")
+        self.assertEqual(E.registrable_host("https://m.example.com/a"), "example.com")
+
 
 class TestChatJsonTimeout(unittest.TestCase):
     def setUp(self):
@@ -116,6 +121,19 @@ class TestPipeline(unittest.TestCase):
         }
         res = E.run_pipeline("X", "culture", [{"url": "u", "publisher": "A", "text": "t"}])
         self.assertEqual(res[0]["status"], "drop")  # experience 仅 1 publisher → 共识不足 → drop
+
+    def test_pipeline_uses_url_domain_not_provider_label_for_consensus(self):
+        E.extract_claims = lambda *a, **k: [{"content": "c", "grade": "experience", "source_idx": 0}]
+        E.judge_claim = lambda *a, **k: {
+            "verdict": "entailment", "confidence": 0.9,
+            "company_relevant": True, "dimension_relevant": True,
+            "supported_source_idxs": [0, 1], "sample_size": None,
+        }
+        res = E.run_pipeline("X", "culture", [
+            {"url": "https://zhihu.com/question/1", "publisher": "provider-a", "text": "t"},
+            {"url": "https://zhuanlan.zhihu.com/p/2", "publisher": "provider-b", "text": "t"},
+        ])
+        self.assertEqual(res[0]["status"], "drop")
 
     def test_pipeline_drops_claim_about_other_company_or_dimension(self):
         E.extract_claims = lambda *a, **k: [{"content": "c", "grade": "fact", "source_idx": 0}]
@@ -321,24 +339,61 @@ class TestDefaultModels(unittest.TestCase):
 
 
 class TestJudgeParsing(unittest.TestCase):
-    def test_judge_parses_relevance_supporting_sources_and_content_sample_only(self):
+    def test_judge_keeps_sample_size_only_when_supported_source_has_literal_number(self):
         original = E.chat_json
         E.chat_json = lambda *a, **k: {
             "verdict": "entailment", "confidence": "0.8", "reason": "原文直接提及",
             "company_relevant": True, "dimension_relevant": True,
             "supported_source_idxs": [0, "1", 9, -1], "sample_size": "12",
+            "evidence_kind": "direct",
         }
         try:
             result = E.judge_claim("目标公司", "culture", "据公开讨论…", [
                 {"publisher": "A", "text": "样本一"},
-                {"publisher": "B", "text": "样本二"},
+                {"publisher": "B", "text": "样本 12 条评价"},
             ])
         finally:
             E.chat_json = original
         self.assertEqual(result["supported_source_idxs"], [0, 1])
         self.assertEqual(result["sample_size"], 12)
+        self.assertEqual(result["evidence_kind"], "direct")
         self.assertTrue(result["company_relevant"])
         self.assertTrue(result["dimension_relevant"])
+
+    def test_judge_clears_sample_size_when_number_is_not_in_supported_sources(self):
+        original = E.chat_json
+        E.chat_json = lambda *a, **k: {
+            "verdict": "entailment", "confidence": 0.9,
+            "company_relevant": True, "dimension_relevant": True,
+            "supported_source_idxs": [0], "sample_size": 18, "evidence_kind": "direct",
+        }
+        try:
+            result = E.judge_claim("目标公司", "culture", "据公开讨论…", [
+                {"publisher": "A", "text": "多位员工提到工作节奏快"},
+            ])
+        finally:
+            E.chat_json = original
+        self.assertIsNone(result["sample_size"])
+
+    def test_judge_caps_confidence_by_evidence_kind(self):
+        original = E.chat_json
+        try:
+            E.chat_json = lambda *a, **k: {
+                "verdict": "entailment", "confidence": 0.95,
+                "company_relevant": True, "dimension_relevant": True,
+                "supported_source_idxs": [0], "sample_size": None, "evidence_kind": "indirect",
+            }
+            indirect = E.judge_claim("目标公司", "culture", "c", [{"text": "正文"}])
+            E.chat_json = lambda *a, **k: {
+                "verdict": "entailment", "confidence": 0.95,
+                "company_relevant": True, "dimension_relevant": True,
+                "supported_source_idxs": [0], "sample_size": None, "evidence_kind": "listing",
+            }
+            listing = E.judge_claim("目标公司", "culture", "c", [{"text": "正文"}])
+        finally:
+            E.chat_json = original
+        self.assertEqual(indirect["confidence"], 0.8)
+        self.assertEqual(listing["confidence"], 0.4)
 
 
 if __name__ == "__main__":

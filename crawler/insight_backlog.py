@@ -286,43 +286,52 @@ def finish_insight_enrich_run(sb, company, status, diagnostics=None):
 # 见 docs/superpowers/specs/2026-06-20-career-insights-supply-upgrade-design.md。
 # ============================================================
 T3_TTL_DAYS = 180  # 经验类复核更慢
-# 多维查询包目录：每条定向检索一个主题、路由到对应**已有**维度（不新增 dimension）。
-# 成本：每个主题 ≈ 1 次 writer + ~2.7 次 judge ≈ 3.7 次 LLM 调用 → **主题数直接等比放大每家公司的账单**。
-# 目录保留全部历史主题（含已下架的两个），改主题不用改代码，见下面 T3_DEFAULT_TOPICS 注释。
-T3_TOPIC_CATALOG = {
-    "加班文化": {"topic": "加班文化", "query": "{c} 加班 工作强度 文化 996 节奏 怎么样", "dimension": "culture"},
-    "实习体验": {"topic": "实习体验", "query": "{c} 实习 实习生 体验 待遇 转正 怎么样", "dimension": "culture"},
-    "年终奖": {"topic": "年终奖", "query": "{c} 年终奖 发几个月 奖金 调薪 福利", "dimension": "compensation_intensity"},
-    "晋升发展": {"topic": "晋升发展", "query": "{c} 晋升 涨薪 职级 发展 机会 天花板", "dimension": "path"},
-    "面试难度": {"topic": "面试难度", "query": "{c} 面试 难度 流程 几轮 体验 通过", "dimension": "hiring"},
+T3_HOST_DENYLIST = {
+    "instagram.com", "facebook.com", "reddit.com", "x.com", "twitter.com", "tiktok.com",
+    "zhipin.com", "zhaopin.com", "liepin.com", "51job.com", "lagou.com",
 }
 
-# 默认只跑 3 个主题（2026-08-27 创始人拍板：用深度换广度）。
-# 【为什么砍】LLM 花费 86% 压在 T3 这一条链上：5 主题 × ~3.7 次 ≈ 每家 15 次调用，同样预算每天
-#   只覆盖 ~8 家公司；砍到 3 主题后每家 ~9 次，同预算能覆盖 ~13 家。每家洞察薄一点，但**覆盖面**
-#   对求职者更值钱（抽屉里有内容的公司多一半，胜过少数公司多两张卡）。
-# 【砍哪两个：按「这个维度有没有别的免费供给层」取舍，不是拍脑袋】
-#   ✂ 实习体验 —— 和「加班文化」同属 culture 维度（同一分区里两条群体印象、彼此重复），且只服务
-#     实习生这一细分人群；culture 又是 PRD §8.1 里风险最高、明确要求「做浅做克制」的维度，
-#     本来就不该吃掉 T3 40% 的预算。
-#   ✂ 面试难度 —— 写进 hiring 维度，而 hiring 已由 T1 派生层（lib/insight-derive.ts，读时现算、
-#     零 LLM 零网络）稳定供给；PRD §8.1 给 hiring 标注的供给层本来就是「T1 派生」。砍掉它，
-#     抽屉里不会有任何一个分区变空。
-# 【保留的 3 个：各自独占一个「没有免费替代供给」的维度】
-#   年终奖   → compensation_intensity：T1 只能从 JD 里明写的薪资推薪资带，而国内官网岗位绝大多数
-#              不写薪资 → 实际覆盖极低；「到手多少」是求职者判断「值不值得去」最硬的一条。
-#   加班文化 → culture：只有 T3 供给，砍了「公司文化 / 温馨提示」分区就没内容。
-#   晋升发展 → path：只有 T3 供给（T1/T2 都不产 path），砍了「进入路径」分区永久空白。
+
+def resolve_t3_host_denylist(raw=None):
+    """T3 来源域名黑名单；env INSIGHT_T3_HOST_DENYLIST 配置时完全覆盖默认值。"""
+    if raw is None:
+        raw = os.environ.get("INSIGHT_T3_HOST_DENYLIST")
+    if raw in (None, ""):
+        return set(T3_HOST_DENYLIST)
+    return {E.registrable_host(host) for host in str(raw).split(",") if E.registrable_host(host)}
+
+
+def filter_t3_results(results, denylist=None):
+    """搜索结果在 writer / judge 之前按来源站点过滤，返回（保留结果，拦截数）。"""
+    denylist = set(denylist) if denylist is not None else resolve_t3_host_denylist()
+    kept = [result for result in (results or []) if E.registrable_host((result or {}).get("url")) not in denylist]
+    return kept, len(results or []) - len(kept)
+
+
+# 多维查询包目录：每条定向检索一个主题、路由到对应**已有**维度（不新增 dimension）。
+# 成本：每个主题 ≈ 1 次 writer + ~2.7 次 judge ≈ 3.7 次 LLM 调用 → **主题数直接等比放大每家公司的账单**。
+# 目录保留全部主题，默认集以外的主题可由 env 调回，见下面 T3_DEFAULT_TOPICS 注释。
+T3_TOPIC_CATALOG = {
+    "加班文化": {"topic": "加班文化", "query": "{c} 公司 加班 强度 到点下班 996 大小周 工作节奏", "dimension": "culture"},
+    "实习体验": {"topic": "实习体验", "query": "{c} 公司 实习 实习生 体验 待遇 转正 怎么样", "dimension": "culture"},
+    "年终奖": {"topic": "年终奖", "query": "{c} 公司 年终奖 发几个月 奖金 调薪 福利", "dimension": "compensation_intensity"},
+    "晋升发展": {"topic": "晋升发展", "query": "{c} 公司 晋升 涨薪 职级 发展 机会 天花板", "dimension": "path"},
+    "面试难度": {"topic": "面试难度", "query": "{c} 公司 面试 难度 流程 几轮 体验 通过", "dimension": "hiring"},
+    "裁员稳定性": {"topic": "裁员稳定性", "query": "{c} 公司 裁员 缩编 业务调整 稳定 最近", "dimension": "hiring"},
+}
+
+# 默认跑 4 个主题（2026-09-03）：用户最在意薪资 / 面试 / 强度 / 稳定性四类信息差。
+# 成本由 search_router 的「首源够用即停」抵消；晋升发展 / 实习体验仍保留在目录，按需由 env 调回。
 # 【怎么调回来】不用改代码：设 env INSIGHT_T3_TOPICS（逗号分隔主题名，取值见 T3_TOPIC_CATALOG），
-#   例：INSIGHT_T3_TOPICS='年终奖,加班文化,晋升发展,实习体验,面试难度' 即恢复五主题。
-# 顺序 = 预算耗尽时的优先级（enrich_company_t3 逐条跑，额度用尽就 break）：先钱、再强度、再发展。
-T3_DEFAULT_TOPICS = ("年终奖", "加班文化", "晋升发展")
+#   例：INSIGHT_T3_TOPICS='年终奖,加班文化,面试难度,裁员稳定性,晋升发展' 即加回晋升发展。
+# 顺序 = 预算耗尽时的优先级（enrich_company_t3 逐条跑，额度用尽就 break）：先钱、再强度、再面试、再稳定。
+T3_DEFAULT_TOPICS = ("年终奖", "加班文化", "面试难度", "裁员稳定性")
 
 
 def resolve_query_pack(raw=None, catalog=None, default_topics=None):
     """纯函数：INSIGHT_T3_TOPICS 的原始字符串 → 查询包列表（顺序按 env 给的顺序）。
 
-    容错走 fail-soft：目录里没有的主题名只告警并跳过，全部无效 / 未配置则回落默认 3 主题——
+    容错走 fail-soft：目录里没有的主题名只告警并跳过，全部无效 / 未配置则回落默认主题——
     repo Variable 打错一个字不该让整轮 T3 变成空转。
     """
     catalog = catalog if catalog is not None else T3_TOPIC_CATALOG
@@ -353,8 +362,8 @@ def _pick_sources(results, judge, max_n=3):
         if not isinstance(idx, int) or not (0 <= idx < len(results)):
             continue
         result = results[idx]
-        publisher = result.get("publisher")
-        if publisher in seen:
+        publisher = E.registrable_host(result.get("url"))
+        if not publisher or publisher in seen:
             continue
         chosen.append(result)
         seen.add(publisher)
@@ -456,10 +465,13 @@ def enrich_company_t3(sb, profile):
             break
         try:
             results = _ROUTER.search(sb, pack["query"].format(c=profile["company"]))
+            results, host_denied = filter_t3_results(results)
+            if host_denied:
+                print(f"  [t3] host_denied={host_denied}")
             if not results:
                 continue
             pipeline = E.run_pipeline(profile["company"], pack["dimension"], results)
-            pubs = len({r.get("publisher") for r in results if r.get("publisher")})
+            pubs = len({E.registrable_host(r.get("url")) for r in results if E.registrable_host(r.get("url"))})
             print(f"  [t3] {profile['company']}/{pack['topic']}: 多源 {len(results)} 条/{pubs} 域 → "
                   f"{[e['status'] for e in pipeline]}")
             for entry in pipeline:
@@ -468,7 +480,8 @@ def enrich_company_t3(sb, profile):
                 claim = dict(entry["claim"])
                 judge = entry.get("judge") or {}
                 sources = _pick_sources(results, judge)
-                source_publishers = len({s.get("publisher") for s in sources if s.get("publisher")})
+                source_publishers = len({E.registrable_host(s.get("url")) for s in sources
+                                         if E.registrable_host(s.get("url"))})
                 if not E.consensus_ok(claim.get("grade", "experience"), source_publishers):
                     continue
                 write_experience(sb, profile["id"], claim, sources, judge, entry["status"],
