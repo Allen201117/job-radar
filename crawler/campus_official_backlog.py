@@ -170,9 +170,14 @@ def main():
         print(f"  {r.get('company')}: {r.get('skipped') or 'ok'} "
               f"verified={r.get('verified', 0)} draft={r.get('draft', 0)}")
 
+    # ⚠️ skip 原因必须进台账：本链曾连续多天记 {"draft":0,"verified":0,"companies_processed":40}
+    # 且 status=success —— 40 家一家没产出，台账里却看不出是没有官方域 / 页面无信号 / 判官没过，
+    # 只能本地复现才能判因，正是本项目明令禁止的「失败静默 + 绿灯零产出」。
     ops_runs.record_ops_run(
         sb, "campus_official_backlog",
-        {"companies_processed": processed, "verified": verified, "draft": draft},
+        {"companies_processed": processed, "verified": verified, "draft": draft,
+         "claims_seen": sum(r.get("claims_seen", 0) for r in results),
+         **ops_runs.skip_breakdown(results)},
         status=ops_runs.status_from_counts(processed, 0),
         started_at=started_at, finished_at=_now_iso())
 

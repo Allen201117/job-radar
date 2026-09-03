@@ -291,6 +291,9 @@ def main():
             "verified": verified,
             "draft": draft,
             "skipped": skipped,
+            # 光有总数看不出卡在哪（没搜到结果？判官没过？额度耗尽？）——按原因拆开，
+            # 与 campus_official_backlog 共用同一份实现，两条链的口径不会漂。
+            **ops_runs.skip_breakdown(results, flags=("budget_exhausted",)),
         },
         status=ops_runs.status_from_counts(companies_processed, 0),
         started_at=started_at,
