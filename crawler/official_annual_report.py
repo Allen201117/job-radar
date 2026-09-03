@@ -27,6 +27,9 @@ SEARCH_PAGE = f"{CNINFO_BASE}/new/commonUrl/pageOfSearch?url=disclosure/list/sea
 ANNOUNCEMENT_URL = f"{CNINFO_BASE}/new/hisAnnouncement/query"
 UA = {"User-Agent": "JobRadar/1.0 (career-insights annual-report)"}
 ORIGIN = "official_filing"
+# v3 断言强度：年报是官方披露 → fact。与 insight_backlog.normalize_assertion 同口径，
+# 改这里必须同步那边（两处都写库）。
+ASSERTION = "fact"
 SOURCE_KIND = "official_filing"
 DEFAULT_LIMIT = 40
 
@@ -290,7 +293,7 @@ def build_fact_items(company_profile, report, fields, metrics):
         if metrics.get("bachelor_or_above_ratio") is not None:
             clauses.append(f"本科及以上占 {_pct(metrics['bachelor_or_above_ratio'])}")
         items.append({
-            "dimension": "hiring", "grade": "fact", "origin": ORIGIN,
+            "dimension": "hiring", "grade": "fact", "origin": ORIGIN, "assertion": ASSERTION,
             "title": f"员工规模与构成 · 据 {year} 年年报",
             "content": f"据 {year} 年年报，" + "；".join(clauses) + "。",
             "payload": payload, "deidentified": True, "status": "active",
@@ -302,7 +305,7 @@ def build_fact_items(company_profile, report, fields, metrics):
     if compensation is not None:
         amount_wan = f"{compensation / 10000:.1f}".rstrip("0").rstrip(".")
         items.append({
-            "dimension": "compensation_intensity", "grade": "fact", "origin": ORIGIN,
+            "dimension": "compensation_intensity", "grade": "fact", "origin": ORIGIN, "assertion": ASSERTION,
             "title": f"人均薪酬（年报口径）· 据 {year} 年年报",
             "content": f"据 {year} 年年报应付职工薪酬倒推，人均约 {amount_wan} 万元/年（含公司承担的社保公积金，为会计计提口径，仅供量级参考）。",
             "payload": payload, "deidentified": True, "status": "active",

@@ -96,6 +96,7 @@ class TestWorker(unittest.TestCase):
         items = store.get("insight_items", [])
         self.assertTrue(any(op == "insert" and r["dimension"] == "listing" and r["origin"] == "wikidata"
                             for op, r in items))
+        self.assertTrue(all(r.get("assertion") == "fact" for op, r in items if op == "insert"))
         # 溯源 + 关联各建一条
         self.assertTrue(store.get("insight_sources"))
         self.assertTrue(store.get("insight_item_sources"))
@@ -320,6 +321,7 @@ class TestT3(unittest.TestCase):
         items = store.get("insight_items", [])
         self.assertTrue(any(op == "insert" and r["dimension"] == "culture" and r["origin"] == "public_web"
                             for op, r in items))
+        self.assertTrue(all(r.get("assertion") == "claim" for op, r in items if op == "insert"))
         # 多维查询包：当前生效的每个主题都该写到它自己的维度（主题清单可由 INSIGHT_T3_TOPICS 调，
         # 所以这里从 T3_QUERY_PACK 现取期望维度，别再写死一组字面量）
         dims = {r["dimension"] for op, r in items if op == "insert"}
