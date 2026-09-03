@@ -1,7 +1,7 @@
 """T3 多维查询包主题清单单测（纯函数，不打网络 / 不碰 DB / 不调 LLM）。
 
-主题数直接等比放大 LLM 账单（每主题 ≈ 1 writer + ~2.7 judge），所以这里把「默认 3 个」
-和「env 能一键调回来」钉死：改主题必须改 env，不该再改代码。
+主题数直接等比放大 LLM 账单（每主题 ≈ 1 writer + ~2.7 judge），所以这里把默认主题集
+和「env 能一键调回来」钉死：改主题必须同步更新测试。
 """
 import unittest
 
@@ -9,28 +9,26 @@ import insight_backlog as B
 
 
 class T3TopicResolutionTest(unittest.TestCase):
-    def test_catalog_keeps_all_five_topics_for_rollback(self):
-        """砍掉的两个主题留在目录里（只是不默认跑）→ 一个 env 就能恢复五主题。"""
+    def test_catalog_keeps_all_six_topics_for_env_override(self):
+        """默认外的实习 / 晋升主题仍在目录里，可由 env 一键调回。"""
         self.assertEqual(
             set(B.T3_TOPIC_CATALOG),
-            {"加班文化", "实习体验", "年终奖", "晋升发展", "面试难度"},
+            {"加班文化", "实习体验", "年终奖", "晋升发展", "面试难度", "裁员稳定性"},
         )
 
-    def test_default_pack_is_three_topics(self):
+    def test_default_pack_is_four_user_information_gaps(self):
         pack = B.resolve_query_pack(None)
-        self.assertEqual([p["topic"] for p in pack], ["年终奖", "加班文化", "晋升发展"])
+        self.assertEqual([p["topic"] for p in pack], ["年终奖", "加班文化", "面试难度", "裁员稳定性"])
 
-    def test_default_topics_cover_three_distinct_dimensions(self):
-        """保留的 3 个各占一个「没有免费供给层」的维度：comp / culture / path，不许重复占坑。"""
+    def test_default_topics_route_to_compensation_culture_and_hiring(self):
         dims = [p["dimension"] for p in B.resolve_query_pack(None)]
-        self.assertEqual(sorted(dims), ["compensation_intensity", "culture", "path"])
-        self.assertEqual(len(set(dims)), 3)
+        self.assertEqual(dims, ["compensation_intensity", "culture", "hiring", "hiring"])
 
-    def test_env_can_restore_five_topics_in_given_order(self):
-        pack = B.resolve_query_pack("年终奖,加班文化,晋升发展,实习体验,面试难度")
+    def test_env_can_include_all_six_topics_in_given_order(self):
+        pack = B.resolve_query_pack("年终奖,加班文化,面试难度,裁员稳定性,晋升发展,实习体验")
         self.assertEqual(
             [p["topic"] for p in pack],
-            ["年终奖", "加班文化", "晋升发展", "实习体验", "面试难度"],
+            ["年终奖", "加班文化", "面试难度", "裁员稳定性", "晋升发展", "实习体验"],
         )
 
     def test_env_can_narrow_further(self):
@@ -42,10 +40,10 @@ class T3TopicResolutionTest(unittest.TestCase):
         self.assertEqual([p["topic"] for p in pack], ["年终奖", "晋升发展"])
 
     def test_all_invalid_falls_back_to_default(self):
-        """repo Variable 打错一个字不该让整轮 T3 空转 → 回落默认 3 主题，绝不返回空包。"""
+        """repo Variable 打错一个字不该让整轮 T3 空转 → 回落默认主题，绝不返回空包。"""
         for raw in ("", "   ", ",,,", "typo1,typo2"):
             self.assertEqual([p["topic"] for p in B.resolve_query_pack(raw)],
-                             ["年终奖", "加班文化", "晋升发展"], raw)
+                             ["年终奖", "加班文化", "面试难度", "裁员稳定性"], raw)
 
     def test_duplicates_collapse(self):
         pack = B.resolve_query_pack("年终奖,年终奖,加班文化")

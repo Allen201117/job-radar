@@ -12,6 +12,7 @@ import re
 import sys
 import time
 import unicodedata
+from urllib.parse import urlparse
 from typing import Optional
 
 import httpx
@@ -39,6 +40,27 @@ TIMEOUT = 40
 JUDGE_CONFIDENCE_MIN = 0.6
 JUDGE_REVIEW_FLOOR = 0.4
 EXPERIENCE_MIN_PUBLISHERS = 2
+
+# 不引入公共后缀库的最小实现：T3 来源集中在常见中英文站点，覆盖常见二级公共后缀即可。
+_COMPOUND_PUBLIC_SUFFIXES = {"com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn", "co.uk", "org.uk", "ac.uk"}
+
+
+def registrable_host(url: str) -> str:
+    """URL → 统一 publisher 域名；子域 / www / m. 归到同一站点。"""
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw if "://" in raw else f"//{raw}")
+    host = (parsed.hostname or "").casefold().strip(".")
+    if not host:
+        return ""
+    while host.startswith(("www.", "m.")):
+        host = host.split(".", 1)[1]
+    labels = host.split(".")
+    if len(labels) <= 2:
+        return host
+    suffix = ".".join(labels[-2:])
+    return ".".join(labels[-3:]) if suffix in _COMPOUND_PUBLIC_SUFFIXES else suffix
 
 # writer 喂多少条来源（省 token 大头：judge 只跑一次而 writer 输入随来源线性涨）。
 # ⚠️ 必须是**前 N 条前缀截断**：writer 返回的 source_idx 要能直接索引调用方的完整 sources 列表。
@@ -324,8 +346,11 @@ _JUDGE_SYS = (
     "同时判断结论是否真的在说目标公司，以及是否属于指定维度；行业泛化、其他公司、或维度错配一律为 false。"
     "只输出 JSON：{\"verdict\":\"entailment|contradiction|neutral\",\"confidence\":0到1的小数,\"reason\":\"一句话\","
     "\"company_relevant\":true或false,\"dimension_relevant\":true或false,\"supported_source_idxs\":[明确支持结论的来源序号],"
-    "\"sample_size\":来源原文明确给出的样本人数/评价数整数或null}。"
+    "\"sample_size\":来源原文明确给出的样本人数/评价数整数或null,"
+    "\"evidence_kind\":\"direct|indirect|generic|listing\"}。"
     "entailment=至少一条原文明确支持结论；contradiction=原文与结论矛盾；neutral=原文未提及或不足以支持。"
+    "置信度：0.9-1.0 仅用于来源直接、具体陈述该公司该主题（有数字或具体做法）；0.6-0.8 用于提到该公司但陈述笼统或间接；"
+    "<0.5 用于泛行业内容、同名歧义或只是岗位列表页。evidence_kind 分别填 direct、indirect、generic、listing。"
     "supported_source_idxs 只能列明确支持的来源，不能为凑数列无关来源；sample_size 只能抄原文明确样本量，不能用搜索结果条数推断。"
 )
 
@@ -410,12 +435,29 @@ def judge_claim(company: str, dimension: str, claim_content: Optional[str] = Non
         sample_size = None
     if sample_size is not None and sample_size <= 0:
         sample_size = None
-    return {"verdict": verdict, "confidence": max(0.0, min(1.0, conf)),
+    if sample_size is not None:
+        literal = re.compile(rf"(?<!\d){re.escape(str(sample_size))}(?!\d)")
+        supported_texts = [
+            f"{source.get('excerpt') or ''}\n{source.get('text') or ''}"
+            for i, source in enumerate(sources or []) if i in support
+        ]
+        if not any(literal.search(text) for text in supported_texts):
+            sample_size = None
+    evidence_kind = str(out.get("evidence_kind", "generic")).strip().lower() if isinstance(out, dict) else "generic"
+    if evidence_kind not in ("direct", "indirect", "generic", "listing"):
+        evidence_kind = "generic"
+    confidence = max(0.0, min(1.0, conf))
+    if evidence_kind in ("generic", "listing"):
+        confidence = min(confidence, 0.4)
+    elif evidence_kind == "indirect":
+        confidence = min(confidence, 0.8)
+    return {"verdict": verdict, "confidence": confidence,
             "reason": str(out.get("reason", ""))[:200] if isinstance(out, dict) else "",
             "company_relevant": out.get("company_relevant") is True if isinstance(out, dict) else False,
             "dimension_relevant": out.get("dimension_relevant") is True if isinstance(out, dict) else False,
             "supported_source_idxs": support,
-            "sample_size": sample_size}
+            "sample_size": sample_size,
+            "evidence_kind": evidence_kind}
 
 
 def run_pipeline(company: str, dimension: str, sources: list,
@@ -443,7 +485,7 @@ def run_pipeline(company: str, dimension: str, sources: list,
             continue
         j = judge_claim(company, dimension, c.get("content", ""), sources, client=client)
         verified = [sources[i] for i in j["supported_source_idxs"]]
-        n_pub = len({s.get("publisher") for s in verified if s.get("publisher")})
+        n_pub = len({registrable_host(s.get("url")) for s in verified if registrable_host(s.get("url"))})
         status = final_status(j["verdict"], j["confidence"], c.get("grade", "experience"), n_pub,
                               j["company_relevant"], j["dimension_relevant"])
         claim = dict(c)

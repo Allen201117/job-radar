@@ -149,6 +149,20 @@ class TestSearchRouter(unittest.TestCase):
         out = search_router.SearchRouter([a, b]).search(None, "q")
         self.assertEqual([r["url"] for r in out], ["u1", "u2", "u3"])
 
+    def test_stops_after_first_provider_reaches_fanout_minimum(self):
+        a = FakeProvider("a", [_res(f"u{i}") for i in range(6)])
+        b = FakeProvider("b", [_res("u7")])
+        out = search_router.SearchRouter([a, b]).search(None, "q")
+        self.assertEqual(len(out), 6)
+        self.assertEqual(b.search_calls, 0)
+
+    def test_queries_next_provider_when_first_is_below_fanout_minimum(self):
+        a = FakeProvider("a", [_res("u1"), _res("u2")])
+        b = FakeProvider("b", [_res("u3"), _res("u4"), _res("u5")])
+        out = search_router.SearchRouter([a, b]).search(None, "q")
+        self.assertEqual([r["url"] for r in out], ["u1", "u2", "u3", "u4", "u5"])
+        self.assertEqual(b.search_calls, 1)
+
     def test_skips_unconfigured_provider(self):
         a = FakeProvider("a", [_res("u1")], configured=False)
         b = FakeProvider("b", [_res("u2")])
