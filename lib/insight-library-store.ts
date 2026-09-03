@@ -8,7 +8,6 @@ import { fetchAllPages } from "./supabase-paginate";
 import { ITEM_COLUMNS, flattenSources } from "./insight-bundle";
 import {
   buildLibraryIndex,
-  metricKey,
   type LibraryCardMetric,
   type LibrarySubject,
   type RawItemRow,
@@ -142,56 +141,80 @@ export async function attachCardContents(
   if (ids.length === 0) return subjects;
 
   const supabase = createServiceClient();
-  // 公司主体的卡面条目可能是公司级写入的（subject_id 为 NULL），所以两路都要取。
+  // 公司主体的条目可能是公司级写入的（subject_id 为 NULL），所以两路都要取。
   const companyIds = subjects.filter((s) => s.kind === "company").map((s) => s.company_id);
-  const columns =
-    "subject_id, company_id, metric_key, metric_value, metric_unit, sample_size, assertion, content, scope";
+  const select = `${ITEM_COLUMNS}, ${SOURCE_SELECT}`;
   const [bySubjectRes, byCompanyRes] = await Promise.all([
-    supabase.from("insight_items").select(columns)
-      .in("subject_id", ids).eq("status", "active")
-      .neq("origin", "derived").not("metric_key", "is", null),
+    supabase.from("insight_items").select(select)
+      .in("subject_id", ids).eq("status", "active").neq("origin", "derived"),
     companyIds.length
-      ? supabase.from("insight_items").select(columns)
+      ? supabase.from("insight_items").select(select)
         .in("company_id", companyIds).is("subject_id", null)
-        .eq("status", "active").neq("origin", "derived").not("metric_key", "is", null)
+        .eq("status", "active").neq("origin", "derived")
       : Promise.resolve({ data: [], error: null } as any),
   ]);
   const error = bySubjectRes.error || byCompanyRes.error;
-  const data = [...(bySubjectRes.data || []), ...(byCompanyRes.data || [])];
   if (error) {
-    // 取不到正文不该让整页空掉：卡面退回只显示指标名与数值（见 metricText）。
-    console.error("[insight-library] 取卡面正文失败", error.message);
+    // 取不到就退回索引里的数字：卡面会略旧，但不会整页空掉。
+    console.error("[insight-library] 取卡面内容失败", error.message);
     return subjects;
   }
+
   const subjectIdByCompany = new Map(
     subjects.filter((s) => s.kind === "company").map((s) => [s.company_id, s.id]),
   );
-  const bySubject = new Map<string, any[]>();
-  for (const row of data || []) {
-    const key = row.subject_id || subjectIdByCompany.get(row.company_id);
+  const now = new Date();
+  const bySubject = new Map<string, InsightItemView[]>();
+  for (const raw of [...(bySubjectRes.data || []), ...(byCompanyRes.data || [])]) {
+    const key = (raw as any).subject_id || subjectIdByCompany.get((raw as any).company_id);
     if (!key) continue;
+    const sources = flattenSources(raw);
+    // ⚠️ 与索引、与展开视图走**同一道展示门**：卡面写几条，点开就必须是几条。
+    const ev = evaluateInsight(raw as any, sources, now);
+    if (!ev.displayable) continue;
     const list = bySubject.get(key);
-    if (list) list.push(row);
-    else bySubject.set(key, [row]);
+    const view = { ...(raw as any), sources, outdated: ev.outdated } as InsightItemView;
+    if (list) list.push(view);
+    else bySubject.set(key, [view]);
   }
-  return subjects.map((subject) => {
-    // 卡面顺序必须与索引里 trimSubjectForCard 的口径一致：signal 在前，再按样本量。
-    const wantedKeys = subject.metrics.slice(0, perSubject).map(metricKey);
-    const rows = bySubject.get(subject.id) || [];
-    const cards: LibraryCardMetric[] = [];
-    for (const key of wantedKeys) {
-      const row = rows.find((r) => r.metric_key === key);
-      if (!row) continue;
-      cards.push({
-        metric_key: row.metric_key,
-        metric_value: row.metric_value ?? null,
-        metric_unit: row.metric_unit ?? null,
-        sample_size: row.sample_size ?? null,
-        assertion: (row.assertion || "claim") as LibraryCardMetric["assertion"],
-        content: row.content,
-        scope: row.scope || {},
-      });
+
+  const rank: Record<string, number> = { fact: 0, claim: 1, signal: 2 };
+  const out: LibrarySubject[] = [];
+  for (const subject of subjects) {
+    const live = bySubject.get(subject.id) || [];
+    // 索引可能比库旧（治理脚本刚退役过一批），此时该主体已经没有可展示内容 → 本页不显示它。
+    if (live.length === 0) continue;
+    live.sort(
+      (a, b) =>
+        (rank[a.assertion || "claim"] ?? 9) - (rank[b.assertion || "claim"] ?? 9) ||
+        (b.sample_size || 0) - (a.sample_size || 0),
+    );
+    const counts: Record<string, number> = { fact: 0, signal: 0, claim: 0 };
+    const dims = new Set<string>();
+    let latest: string | null = null;
+    for (const item of live) {
+      counts[item.assertion || "claim"] = (counts[item.assertion || "claim"] || 0) + 1;
+      dims.add(item.dimension);
+      if (!latest || item.last_verified_at > latest) latest = item.last_verified_at;
     }
-    return { ...subject, cards };
-  });
+    out.push({
+      ...subject,
+      // 卡面上一切给用户看的数字都取自这次实时查询，不取缓存索引——
+      // 索引只负责筛选/分面/排序（轻微滞后无所谓），展示必须准。
+      item_count: live.length,
+      assertion_counts: counts as LibrarySubject["assertion_counts"],
+      dimensions: [...dims] as LibrarySubject["dimensions"],
+      last_verified_at: latest,
+      cards: live.slice(0, perSubject).map((item) => ({
+        metric_key: item.metric_key || "",
+        metric_value: item.metric_value ?? null,
+        metric_unit: item.metric_unit ?? null,
+        sample_size: item.sample_size ?? null,
+        assertion: (item.assertion || "claim") as LibraryCardMetric["assertion"],
+        content: item.content,
+        scope: (item.scope || {}) as Record<string, unknown>,
+      })),
+    });
+  }
+  return out;
 }
