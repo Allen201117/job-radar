@@ -84,6 +84,34 @@ class WebsitePathTest(unittest.TestCase):
             a = self._a(f"https://nio.jobs.feishu.cn/{path}/position")
             self.assertEqual(a.website_path, expected)
 
+    def test_generic_adapter_keeps_real_host_in_detail_template(self):
+        """⚠️ 通用类的 self.host 是空串，真实 host 在 official_hosts 里（由 _bind_host 放进去）。
+
+        早先 _apply_website_path 直接用 self.host，把 _bind_host 刚算好的 detail_template
+        覆写成 `https:///index/position/{id}/detail` → jd_url 全废 → **68 个通用飞书源
+        解析出 0 岗却仍标 fetch_complete=True**（2026-09-04 实测拓竹 reported=165/parsed=0）。
+        这正是「0 岗 + 自称抓全」的红线组合。
+        """
+        for url, expect in (
+            ("https://bambulab.jobs.feishu.cn/campus/position",
+             "https://bambulab.jobs.feishu.cn/campus/position/{id}/detail"),
+            ("https://li.jobs.feishu.cn/index/position",
+             "https://li.jobs.feishu.cn/index/position/{id}/detail"),
+            ("https://ponyai.jobs.feishu.cn/ponyai/position",
+             "https://ponyai.jobs.feishu.cn/ponyai/position/{id}/detail"),
+        ):
+            a = feishu.FeishuGenericAdapter()
+            a._bind_host(url)
+            a._bind_website_path(url)
+            self.assertEqual(a.detail_template, expect, url)
+            self.assertNotIn("https:///", a.detail_template, url)
+
+    def test_apply_website_path_is_a_noop_before_host_is_bound(self):
+        """通用类构造完还没绑 host —— 此时不许把模板写成空 host。"""
+        a = feishu.FeishuGenericAdapter()
+        a._apply_website_path("campus")
+        self.assertEqual(a.detail_template, "")
+
     def test_header_sent_only_for_sub_portals(self):
         captured = {}
 

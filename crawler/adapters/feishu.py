@@ -85,13 +85,24 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         self._prefetched = None
 
     def _apply_website_path(self, path: str) -> None:
-        """按子门户重算详情模板与入口页。path="" = 主门户（社招），走 /index/…（历史行为不变）。"""
+        """按子门户重算详情模板与入口页。path="" = 主门户（社招），走 /index/…（历史行为不变）。
+
+        ⚠️ host 必须从 **official_hosts 优先** 取：`FeishuGenericAdapter` 的 host 是空串、
+        真实 host 由 `_bind_host` 放进 official_hosts。早先这里直接用 self.host，结果把它
+        `_bind_host` 刚算好的 detail_template 覆写成 `https:///index/position/{id}/detail`
+        → jd_url 全废 → 68 个通用飞书源**解析出 0 岗却仍标 fetch_complete=True**
+        （2026-09-04 实测拓竹 reported=165/parsed=0）。这正是 CLAUDE.md 立碑的
+        「0 岗 + 自称抓全」组合，回归测试见 test_feishu_httpx.WebsitePathTest。
+        """
         self.website_path = path or ""
+        host = (self.official_hosts[0] if getattr(self, "official_hosts", None) else "") or self.host
+        if not host:
+            return   # host 还没绑定（通用类的 __init__ 阶段）→ 什么都别改，等 _bind_host 之后再来
         prefix = path or "index"
-        self.detail_template = f"https://{self.host}/{prefix}/position/{{id}}/detail"
+        self.detail_template = f"https://{host}/{prefix}/position/{{id}}/detail"
         self.list_urls = [
-            f"https://{self.host}/{prefix}/position",
-            "https://" + self.host + "/",
+            f"https://{host}/{prefix}/position",
+            f"https://{host}/",
         ]
 
     def _bind_website_path(self, source_url: str) -> None:
