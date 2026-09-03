@@ -1409,8 +1409,23 @@ function UserTab({
   );
 }
 
+// 顶栏只放天天要看的五个模块（创始人定的）。洞察管理 / 招聘源管理是偶尔才进一次的
+// 维护页，放在「系统运行」底部——不占顶栏，也不至于让站内彻底没有入口、只能手打网址。
+function MaintenanceLinks() {
+  return (
+    <section className="surface-soft p-5">
+      <h2 className="t-h3 ink-1">维护入口</h2>
+      <p className="t-caption mt-1 ink-3">不常用，所以没放在顶栏。</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <a href="/sources" className="t-label inline-flex items-center rounded-full border border-black/[0.12] px-3.5 py-1.5 ink-2 transition hover:bg-black/[0.04] dark:border-white/[0.15] dark:hover:bg-white/[0.06]">招聘源管理</a>
+        <a href="/admin/insights" className="t-label inline-flex items-center rounded-full border border-black/[0.12] px-3.5 py-1.5 ink-2 transition hover:bg-black/[0.04] dark:border-white/[0.15] dark:hover:bg-white/[0.06]">洞察管理</a>
+      </div>
+    </section>
+  );
+}
+
 function SystemTab({ operations, reports, refreshedAt, dailySeries, dailySeriesUnavailable, extraOpsUnavailable }: { operations: SupabaseHealthSnapshot | null; reports: DailyReport[]; refreshedAt: string; dailySeries: HealthDailySeries | null; dailySeriesUnavailable: boolean; extraOpsUnavailable: boolean }) {
-  return <div className="grid gap-5"><section className="surface-soft p-5"><h2 className="font-semibold ink-1 ">后台任务近 30 天</h2><p className="mt-1 text-xs ink-3">每格一天。一天全挂了显示「得处理」，有挂的或只跑完一半显示「要注意」，没有记录的单独标出来不伪装成 0。与下面每张模块卡同一套标准。</p>{dailySeriesUnavailable ? <div className="mt-4"><ErrorPanel label="每天的后台任务记录" /></div> : <Tracker className="mt-4" items={processTrackerItems(dailySeries, "ops")} ariaLabel="后台任务近 30 天" />}<p className="mt-3 text-[10px] ink-3 ">按每天的后台运行记录汇总。没有记录就显示「没有记录」，不会伪装成成功或 0；跑完了但一条产出都没有，一律不算正常。</p></section><section className="surface-soft p-5"><DailyReportsSection operations={operations} reports={reports} extraOpsUnavailable={extraOpsUnavailable} /></section><DataNotes refreshedAt={refreshedAt} /><p className="text-xs ink-3 ">这一页只有管理员能打开。数据分别来自两个库，一边读不出来时另一边照常显示。</p></div>;
+  return <div className="grid gap-5"><section className="surface-soft p-5"><h2 className="font-semibold ink-1 ">后台任务近 30 天</h2><p className="mt-1 text-xs ink-3">每格一天。一天全挂了显示「得处理」，有挂的或只跑完一半显示「要注意」，没有记录的单独标出来不伪装成 0。与下面每张模块卡同一套标准。</p>{dailySeriesUnavailable ? <div className="mt-4"><ErrorPanel label="每天的后台任务记录" /></div> : <Tracker className="mt-4" items={processTrackerItems(dailySeries, "ops")} ariaLabel="后台任务近 30 天" />}<p className="mt-3 text-[10px] ink-3 ">按每天的后台运行记录汇总。没有记录就显示「没有记录」，不会伪装成成功或 0；跑完了但一条产出都没有，一律不算正常。</p></section><section className="surface-soft p-5"><DailyReportsSection operations={operations} reports={reports} extraOpsUnavailable={extraOpsUnavailable} /></section><DataNotes refreshedAt={refreshedAt} /><MaintenanceLinks /><p className="text-xs ink-3 ">这一页只有管理员能打开。数据分别来自两个库，一边读不出来时另一边照常显示。</p></div>;
 }
 
 export default async function AdminHealthPage({ searchParams }: { searchParams: Promise<{ tab?: string | string[]; staff?: string | string[]; scope?: string | string[] }> }) {
@@ -1489,5 +1504,7 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   const dailySeries = dailySeriesResult.status === "fulfilled" ? dailySeriesResult.value : null;
   const dailySeriesUnavailable = dailySeriesResult.status === "rejected";
   const content = tab === "overview" ? <OverviewTab health={health} heroStatus={heroStatus} heroDataMissing={heroDataMissing} jobs={jobs} users={users} supplyStatus={supplyStatus} systemStatus={systemStatus} worst={worst} rowsByScope={rowsByScope} reports={reports} refreshedAt={refreshedAt} disputesOpen={operations?.insight?.disputes_open} dailySeries={dailySeries} dailySeriesUnavailable={dailySeriesUnavailable} /> : tab === "jobs" ? <JobsTab jobs={jobs} clickValidity={clickValidity} clickStatus={clickStatus} coverage={coverage} operations={operations} todayRemoved={todayRemoved} validBand={validBand} checkedBand={checkedBand} dailySeries={dailySeries} dailySeriesUnavailable={dailySeriesUnavailable} /> : tab === "supply" ? <SupplyTab rowsByScope={rowsByScope} fetchByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} worst={worst} gapSummary={gapSummary} governanceItems={governanceItems} ledger={supplyLedger} mustApplyScope={mustApplyScope} /> : tab === "users" ? <UserTab analytics={userAnalytics} includeStaff={includeStaff} users={users} resume={resume} /> : <SystemTab operations={operations} reports={reports} refreshedAt={refreshedAt} dailySeries={dailySeries} dailySeriesUnavailable={dailySeriesUnavailable} extraOpsUnavailable={extraOpsResult.status === "rejected"} />;
-  return <div className="min-h-screen bg-editorial"><AdminNav /><ProductPage maxWidth="max-w-6xl"><ProductHero eyebrow="运营健康" title="管理员看板" description="按模块查看今日真实运行与供给情况。" icon={ShieldCheck}><nav className="mt-4 flex gap-2 overflow-x-auto pb-1" aria-label="管理员看板模块">{tabs.map(([key, label]) => <a key={key} href={key === "overview" ? "/admin/health" : "/admin/health?tab=" + key} className={"shrink-0 rounded-full border px-4 py-2 text-sm font-semibold " + (tab === key ? "border-[#1a1714] bg-[#1a1714] text-[#f7f1e6] dark:border-[#f3ecdf] dark:bg-[#f3ecdf] dark:text-[#16130f]" : "border-black/[0.12] ink-2 dark:border-white/[0.15] ")}>{label}</a>)}</nav></ProductHero><main className="mt-6">{content}</main></ProductPage></div>;
+  // 模块切换已经上移到顶栏（AdminNav），页头不再重复一排一模一样的胶囊。
+  const tabLabel = tabs.find(([key]) => key === tab)?.[1] || "总览";
+  return <div className="min-h-screen bg-editorial"><AdminNav activeTab={tab} /><ProductPage maxWidth="max-w-6xl"><ProductHero eyebrow="运营健康" title={`管理员看板 · ${tabLabel}`} description="今天真实的运行与供给情况。" icon={ShieldCheck} /><main className="mt-6">{content}</main></ProductPage></div>;
 }

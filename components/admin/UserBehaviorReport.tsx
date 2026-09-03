@@ -115,26 +115,23 @@ export default function UserBehaviorReport({
 
   return (
     <div className="grid gap-5">
-      {/* ── 结论条：整页唯一的「一句话」，读完就知道下一步动哪儿 ── */}
-      <section className="surface p-5 sm:p-7">
-        <p className="t-caption font-medium text-[#625c51] dark:text-[#c5bbaa]">
-          用户行为 · 最近 {a.windowDays} 天
-        </p>
-        <h1 className="t-display mt-2 max-w-3xl ink-1">{headlineSentence(a)}</h1>
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <StatusBadge tone={a.totals.weekActive > 0 ? "success" : "warning"} label={`本周有 ${a.totals.weekActive} 人在用`} />
-          <StatusBadge tone="muted" label={`今天 ${a.totals.todayActive} 人`} />
-          <a
-            href={staffHref}
-            className="t-label inline-flex items-center gap-1.5 rounded-full border border-black/[0.12] px-3 py-1.5 ink-2 transition hover:bg-black/[0.04] dark:border-white/[0.15] dark:hover:bg-white/[0.06]"
-          >
-            {includeStaff ? "已含管理员/测试号 · 点此排除" : `已排除管理员与测试号（${a.excludedUsers} 个）· 点此含入`}
-          </a>
-        </div>
-        <p className="t-caption mt-3 max-w-3xl leading-5 ink-3">
-          默认把管理员和测试账号排除在外。不排除的话，自己人日常使用产生的几百条操作会把所有比率拉高，
-          看着很热闹，但那不是真实用户。
-        </p>
+      {/* ── 口径条：一行说清「统计了谁、多长时间」，外加排除开关 ──
+          刻意不放巨型标题句：下面四张卡本来就在说同样的结论（最大的坎 / 回访 / 白搜 / 推荐比），
+          再顶一行大字既重复又压掉真正该被先看到的数字。 */}
+      <section className="surface-soft flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+        <span className="t-label font-semibold ink-1">用户行为</span>
+        <span className="t-caption ink-3">最近 {a.windowDays} 天</span>
+        <span aria-hidden="true" className="h-3.5 w-px bg-black/[0.12] dark:bg-white/[0.16]" />
+        <StatusBadge tone={a.totals.weekActive > 0 ? "success" : "warning"} label={`本周 ${a.totals.weekActive} 人在用`} />
+        <StatusBadge tone="muted" label={`今天 ${a.totals.todayActive} 人`} />
+        <StatusBadge tone="muted" label={`累计注册 ${a.totals.registered} 人`} />
+        <a
+          href={staffHref}
+          title="不排除的话，自己人日常使用产生的几百条操作会把所有比率拉高，看着热闹但那不是真实用户"
+          className="t-label ml-auto inline-flex items-center gap-1.5 rounded-full border border-black/[0.12] px-3 py-1.5 ink-2 transition hover:bg-black/[0.04] dark:border-white/[0.15] dark:hover:bg-white/[0.06]"
+        >
+          {includeStaff ? "已含管理员/测试号 · 点此排除" : `已排除管理员与测试号（${a.excludedUsers} 个）`}
+        </a>
       </section>
 
       {/* ── 四个锚点：一屏读完四个问题的答案，点了跳到依据 ── */}
@@ -208,6 +205,7 @@ export default function UserBehaviorReport({
             </div>
           </aside>
         </div>
+        <p className="t-body-sm mt-4 ink-2">{headlineSentence(a)}</p>
         {a.sideMetrics.onboardingBlocked > registered * 0.5 && (
           <Callout tone="warning" className="mt-4">
             {a.sideMetrics.onboardingBlocked} 人（{Math.round((a.sideMetrics.onboardingBlocked / registered) * 100)}%）
