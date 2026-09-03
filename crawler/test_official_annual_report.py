@@ -109,6 +109,9 @@ class FactItemTest(unittest.TestCase):
         self.assertIn("在职员工 131,988 人", items[0]["content"])
         self.assertIn("技术人员占 15%", items[0]["content"])
         self.assertEqual(items[0]["origin"], "official_filing")
+        # v3：年报是官方披露 → assertion=fact；两条都必须带，否则新写的行 assertion 为空，
+        # 展示门（只放行 fact 的官方来源）会把年报事实当说法处理。
+        self.assertEqual([item["assertion"] for item in items], ["fact", "fact"])
         self.assertIn("含公司承担的社保公积金，为会计计提口径，仅供量级参考", items[1]["content"])
         self.assertEqual(items[1]["payload"]["report_year"], 2024)
         self.assertEqual(items[1]["source"]["publisher"], "巨潮资讯网")
