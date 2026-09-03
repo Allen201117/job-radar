@@ -84,7 +84,7 @@ export function OnboardingPanel({
       </p>
       <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
         <Link
-          href="/preferences"
+          href="/me"
           className="t-label inline-flex items-center justify-center rounded-full bg-[#1a1714] px-5 py-2.5 text-[#f7f1e6] transition hover:bg-[#2b2520] dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
         >
           设置求职目标
@@ -123,13 +123,13 @@ function EmptyQueue({ counts }: { counts?: OpportunityFeed["counts"] }) {
         {explain}
       </p>
       <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
-        <Link href="/preferences" className="t-label rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]">
+        <Link href="/me" className="t-label rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]">
           调整求职目标
         </Link>
         <Link href="/jobs" className="t-label rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]">
           搜索完整岗位库
         </Link>
-        <Link href="/preferences" className="t-label rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]">
+        <Link href="/me" className="t-label rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]">
           添加关注公司
         </Link>
       </div>

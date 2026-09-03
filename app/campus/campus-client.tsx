@@ -344,7 +344,7 @@ export default function CampusClient({
       {!hasIndustry && (
         <p className="rounded-xl border border-[#cfe0f5] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] px-4 py-3 text-sm leading-6 text-[#2f6299] dark:text-[#7fb2e8]">
           你还没设置简历行业，当前按默认行业展示。到
-          <Link href="/preferences" className="mx-1 underline underline-offset-2 hover:opacity-80">
+          <Link href="/me" className="mx-1 underline underline-offset-2 hover:opacity-80">
             偏好设置
           </Link>
           完善简历行业，可精准锁定你的目标公司。

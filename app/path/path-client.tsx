@@ -71,7 +71,7 @@ export default function CareerPathClient() {
       {report.is_recommended_fallback && report.recommendations.length > 0 && (
         <p className="rounded-xl border border-[#cfe0f5] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] px-4 py-3 text-sm leading-6 text-[#2f6299] dark:text-[#7fb2e8]">
           你还没设置目标公司，以下是按<strong>当前招聘窗口期</strong>给出的推荐。到
-          <Link href="/preferences" className="mx-1 underline underline-offset-2 hover:opacity-80 ">
+          <Link href="/me" className="mx-1 underline underline-offset-2 hover:opacity-80 ">
             偏好设置
           </Link>
           里加上目标公司，建议会更贴合你。
@@ -187,7 +187,7 @@ function EmptyState({ reason }: { reason: CareerPathReport["failure_reason"] }) 
             上传简历
             <ArrowRight size={16} weight="bold" aria-hidden="true" />
           </Link>
-          <Link href="/preferences" className="btn-soft">填写求职偏好</Link>
+          <Link href="/me" className="btn-soft">填写求职偏好</Link>
         </div>
       </div>
     );

@@ -403,7 +403,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
                   放宽筛选条件
                 </button>
                 <Link
-                  href="/preferences"
+                  href="/me"
                   className="t-label rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]"
                 >
                   添加关注公司
