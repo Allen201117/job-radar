@@ -1,4 +1,4 @@
--- 209 — classify_source_board：把新增的「专职校招 adapter」纳入 campus 判定
+-- 212 — classify_source_board：把新增的「专职校招 adapter」纳入 campus 判定
 --
 -- 起因：2027 届秋招补校招供给时接入了 tencent_campus（join.qq.com，869 岗）。
 -- 它的 source_url 是 `https://join.qq.com/` —— **不含任何 campus/school/grad 令牌**，
