@@ -111,54 +111,61 @@ class RecruitmentMaterializationTests(unittest.TestCase):
             recruitment_classify.classify = orig
 
 
-class ThinUpdateKeepsStoredRecruitmentTests(unittest.TestCase):
-    """列表重抓的瘦 payload 不许覆盖物化的招聘类型（2026-09-03 线上实锤 5,275 行）。
+class RecruitmentClassOwnershipTests(unittest.TestCase):
+    """招聘类型两列的「所有权」在数据库，不在写入方（2026-09-03 根治）。
 
-    机制：分类是拿本次 payload 算的，而 summary/job_type/experience 落库走「新值为空则保留旧值」
-    → 最终那一行 = 旧的富字段 + 瘦 payload 算出来的分类，两者对不上。症状是逻辑上不可能的
-    `job_type` 有值却 `recruitment_explicit=false`。后果：检索按这两列**排除**候选，
-    真校招岗会被挡在候选外、搜「校招」搜不到。
+    2026-09-03 实测：写入方各自算、各自写 → 全库 8,140 行 / 1.93% 的结论和它依据的字段对不上，
+    其中约 1,161 行是真校招/实习岗被记成社招；而检索按这两列**排除**候选 → 用户搜「校招」搜不到。
+    机制是：分类拿「本次抓到的瘦 payload」算，而 summary/job_type/experience 落库走 COALESCE
+    保留旧富字段，两者必然错位。写入方有 4 条以上、语言还不同，靠自觉治不住 →
+    交给库里的触发器 jobs_guard_recruitment_class 统一把门。
     """
 
-    def test_thin_payload_drops_classification(self):
-        import recruitment_classify
-        # 列表重抓的典型形态：有标题/链接，但没正文、没招聘类型、没经验要求。
-        job = {"title": "后端工程师", "jd_url": "https://x/1",
-               "summary": None, "job_type": None, "experience": None,
-               "recruitment_category": "社招", "recruitment_explicit": False}
-        recruitment_classify.drop_for_thin_update(job)
-        self.assertIsNone(job["recruitment_category"])
-        self.assertIsNone(job["recruitment_explicit"])
+    def _schema(self):
+        import pathlib
+        return pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "jobs-db", "schema.sql").read_text(encoding="utf-8")
 
-    def test_full_payload_keeps_classification(self):
-        import recruitment_classify
-        job = {"title": "2027 届校园招聘 后端工程师", "jd_url": "https://x/1",
-               "summary": "面向 2027 届应届生", "job_type": "校招", "experience": "不限",
-               "recruitment_category": "校招", "recruitment_explicit": True}
-        recruitment_classify.drop_for_thin_update(job)
-        self.assertEqual(job["recruitment_category"], "校招")
-        self.assertTrue(job["recruitment_explicit"])
+    def test_schema_installs_the_guard_trigger(self):
+        sql = self._schema()
+        self.assertIn("create or replace function jobs_guard_recruitment_class()", sql)
+        self.assertIn("create trigger jobs_recruitment_class_guard_trg", sql)
+        self.assertIn("before update on jobs", sql,
+                      "必须对每一次 UPDATE 生效：限定列会漏掉「只改这两列」的越权写入")
 
-    def test_blank_strings_count_as_thin(self):
+    def test_guard_covers_exactly_the_classifier_inputs(self):
+        # 触发器判「依据变没变」用的字段，必须与分类器的输入逐个对上。
+        # 少一个 → 那个字段变了却不作废（写出对不上的行）；多一个 → 无谓地反复作废。
+        import re
         import recruitment_classify
-        job = {"summary": "  ", "job_type": "", "experience": "3 年",
-               "recruitment_category": "社招", "recruitment_explicit": True}
-        recruitment_classify.drop_for_thin_update(job)
-        self.assertIsNone(job["recruitment_category"])
+        sql = self._schema()
+        body = sql[sql.index("jobs_guard_recruitment_class()"):sql.index("jobs_recruitment_class_guard_trg")]
+        guarded = set(re.findall(r"new\.(\w+)", body)) - {
+            "recruitment_category", "recruitment_explicit"}
+        self.assertEqual(guarded, set(recruitment_classify._FIELDS))
 
-    def test_update_paths_invoke_the_guard(self):
-        # 两条 UPDATE 路径（单条 upsert_job / 批量 upsert_jobs_bulk）都必须调；
-        # INSERT 路径不能调（新行没有「旧的富字段」，本次 payload 就是全部内容）。
+    def test_only_the_reclassify_job_may_write_values(self):
+        sql = self._schema()
+        self.assertIn("current_setting('jobradar.reclassify', true)", sql)
+        # 补算脚本必须打这个标记，否则写库会静默变成空操作（不报错、只是一行都改不动）。
+        import pathlib
+        script = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "scripts", "backfill-recruitment-category.js").read_text(encoding="utf-8")
+        self.assertIn("set jobradar.reclassify = 'on'", script)
+        self.assertNotIn("pool.query(", script,
+                         "必须用同一条连接，否则会话上的标记打了也用不上")
+
+    def test_writers_no_longer_hand_tune_the_columns(self):
+        # 写入方各自「注意一下」正是复发的温床：所有权已经交给库，这里钉死没人偷偷加回来。
         import inspect
-        src = inspect.getsource(jobs_db)
-        self.assertEqual(src.count("_drop_thin_recruitment(job)"), 2,
-                         "两条 UPDATE 路径各调一次，别多别少")
+        import enrich_backlog
+        for mod in (jobs_db, enrich_backlog):
+            src = inspect.getsource(mod)
+            self.assertNotIn("drop_for_thin_update", src)
+            self.assertNotIn('patch["recruitment_category"]', src)
 
-    def test_preserved_inputs_match_upsert_preserve_rules(self):
-        # 判「瘦不瘦」用的字段，必须正好是「分类输入 ∩ upsert 会保留旧值的列」。
-        # 任一边改了而这边没跟上，就会重新写出对不上的行。
-        import recruitment_classify
-        classifier_inputs = set(recruitment_classify._FIELDS)
-        preserved = set(jobs_db._PRESERVE_IF_EMPTY) | set(jobs_db._PRESERVE_IF_NULL)
-        expected = (classifier_inputs & preserved) - {"recruitment_category", "recruitment_explicit"}
-        self.assertEqual(set(recruitment_classify._PRESERVED_INPUTS), expected)
+    def test_insert_still_carries_the_classification(self):
+        # INSERT 不被触发器拦：新行的 payload 就是整行内容，写入方算出来必然自洽。
+        # 去掉它会让每个新岗都得等补算任务，白白拉长 NULL 窗口。
+        for col in ("recruitment_category", "recruitment_explicit"):
+            self.assertIn(col, jobs_db._INSERT_COLS)
