@@ -137,7 +137,12 @@ export async function GET(request: NextRequest) {
       .from("insight_items")
       .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
       .eq("company_id", profile.id)
-      .eq("status", "active");
+      .eq("status", "active")
+      // ⚠️ 排除 origin='derived'：抽屉的第一方数字由上面 deriveCompanyInsights 读时算，
+      // 而 crawler/bu_signals.py 把同一批指标物化进 insight_items 供洞察库页面按指标筛选。
+      // 两者同源，不排除就会在抽屉里把同一个数字显示两遍。
+      // （后续若把抽屉也切成读物化行，删掉这一行并同时去掉读时派生，不要两者都留。）
+      .neq("origin", "derived");
     if (itemError) {
       console.error("[insights] 读取 insight_items 失败", itemError.message);
       return NextResponse.json(

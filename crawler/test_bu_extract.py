@@ -107,3 +107,47 @@ class LiveNoiseRegressionTest(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertFalse(B.is_noise(token, company), token)
 
+
+
+class DisplayNameTest(unittest.TestCase):
+    """身份（归一键）与展示名（原始写法）必须分开。
+
+    洞察库页面直接展示 insight_subjects.name；若 name 存 casefold 后的归一键，
+    「TikTok Shop」会以「tiktok shop」出现在用户面前。
+    """
+
+    def _data(self, titles, company="字节跳动"):
+        rows = [{"company": company, "title": t} for t in titles]
+        profile = {"id": "c1", "company": company, "aliases": []}
+        index = B.build_profile_index([profile])
+        data, _ = B.collect_company_data(rows, index, 2)
+        return data
+
+    def test_display_keeps_original_casing(self):
+        data = self._data(["TikTok Shop-后端工程师", "TikTok Shop-前端工程师"])
+        plan = B.plan_subject_changes(data, [])
+        names = {row["name"] for row in plan["insert"]}
+        self.assertIn("TikTok Shop", names)
+        self.assertNotIn("tiktok shop", names)
+
+    def test_most_common_variant_wins(self):
+        data = self._data([
+            "TikTok Shop-A工程师", "TikTok Shop-B工程师", "tiktok shop-C工程师",
+        ])
+        plan = B.plan_subject_changes(data, [])
+        self.assertIn("TikTok Shop", {row["name"] for row in plan["insert"]})
+
+    def test_existing_row_matched_by_normalized_key_not_display_name(self):
+        """已有行写的是旧写法时，应当 update 同一行（并改名），而不是再插一行。"""
+        data = self._data(["TikTok Shop-A工程师", "TikTok Shop-B工程师"])
+        existing = [{"id": "s1", "company_id": "c1", "kind": "business_unit",
+                     "name": "tiktok shop", "origin": "derived_title", "status": "active"}]
+        plan = B.plan_subject_changes(data, existing)
+        self.assertFalse(any(r["name"].lower() == "tiktok shop" for r in plan["insert"]))
+        updated = [r for r in plan["update"] if r["name"] == "TikTok Shop"]
+        self.assertEqual(len(updated), 1)
+        self.assertEqual(updated[0]["id"], "s1")
+        self.assertEqual(plan["retire"], [])
+
+    def test_pick_display_falls_back_when_no_variant_recorded(self):
+        self.assertEqual(B.pick_display(Counter(), "飞书"), "飞书")

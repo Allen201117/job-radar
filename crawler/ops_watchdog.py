@@ -64,6 +64,8 @@ MODULE_OUTPUT = {
     "campus_cycle_backlog": (("verified", "draft"), ("companies_processed",)),
     "campus_lane": (("snapshots",), ("sources",)),
     "bu_extract": (("kept",), ("companies_scanned",)),
+    # 有主体可算却一条指标都没产出 = 洞察库页面会空着，属零产出。
+    "bu_signals": (("subjects_with_metrics",), ("subjects_scanned",)),
     # run.py 每轮抓取收尾写的台账（2026-09-03）：有源可抓却一个岗都没拿到 = 零产出。
     "daily_crawl": (("jobs_found_total",), ("sources_total",)),
 }

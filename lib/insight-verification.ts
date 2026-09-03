@@ -137,6 +137,27 @@ export function resolveEffectiveAssertion(
   return assertion;
 }
 
+// signal 门（v3）：第一方派生条目走这条，不走 grade 门。
+//
+// 为什么必须单开一条：grade 门对 fact 要求「>=1 个有效来源」，而 signal 的来源**就是我们自己
+// 的岗位库**，永远没有外部 URL 可挂 —— 拿 grade 门去卡它，等于把唯一可信的第一方数据全部挡在
+// 门外（写进库也永远展示不出来，且不报错，是最难发现的那类故障）。
+//
+// 换来的约束是两条硬门：
+//   1) origin 必须真的是 derived。assertion 是**声明**，origin 是**事实**；只看声明的话，
+//      任何写入方把 assertion 填成 'signal' 就能绕过全部来源要求。
+//   2) 必须有样本量且达到最低门。派生层（crawler/bu_signals.py）自己按公司 10 / 业务线 20 把关，
+//      这里再兜一道普适底线，防止将来新写入方忘了把门。
+export const SIGNAL_MIN_SAMPLE = 10;
+
+export function passesSignalGate(
+  item: Pick<InsightItem, "sample_size"> & { origin?: string | null },
+): boolean {
+  if (item.origin !== "derived") return false;
+  const n = item.sample_size;
+  return typeof n === "number" && n >= SIGNAL_MIN_SAMPLE;
+}
+
 // grade 门：
 //   fact    → >=1 有效来源
 //   experience → sample_size>=5（原条件），或 distinct publishers>=2 且 verification.confidence>=0.8（判官置信度，兼容 payload.confidence）
@@ -202,7 +223,13 @@ export function evaluateInsight(
   if (!passesDeidentifiedGate(item, sources)) {
     return { displayable: false, outdated: false, failure_reason: "insight_unverified" };
   }
-  if (!passesGradeGate(item, sources)) {
+  // assertion 门先判：signal 与 fact/claim 的可信依据完全不同，不能共用 grade 门。
+  const effectiveAssertion = resolveEffectiveAssertion(item.assertion, sources);
+  if (effectiveAssertion === "signal") {
+    if (!passesSignalGate(item)) {
+      return { displayable: false, outdated: false, failure_reason: "insight_unverified" };
+    }
+  } else if (!passesGradeGate(item, sources)) {
     return { displayable: false, outdated: false, failure_reason: "insight_unverified" };
   }
   if (!passesAssertionLint(item)) {
@@ -210,7 +237,6 @@ export function evaluateInsight(
   }
   // v3 assertion 门：claim 类必须有时间窗 + ≥2 来源域名（spec §2.2 红线 1）。
   // assertion 为 null（存量）时跳过此门，由 grade 门兜底。
-  const effectiveAssertion = resolveEffectiveAssertion(item.assertion, sources);
   if (effectiveAssertion === "claim" && !passesClaimGate(item, sources)) {
     return { displayable: false, outdated: false, failure_reason: "insight_unverified" };
   }

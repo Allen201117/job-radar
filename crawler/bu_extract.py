@@ -163,6 +163,17 @@ def is_noise(token: str, company: str = "") -> bool:
     return False
 
 
+def pick_display(variants: Counter, fallback: str) -> str:
+    """归一键 → 展示名：取出现最多的原始写法，同频取更长的（保住大小写与空格更完整那份）。
+
+    存在的理由：counts 的键是 casefold 过的归一键（「tiktok shop」），它是**身份**；
+    页面要展示的是**原文**（「TikTok Shop」）。两者分开，改展示不会动身份。
+    """
+    if not variants:
+        return fallback
+    return max(variants.items(), key=lambda kv: (kv[1], len(kv[0])))[0]
+
+
 def eligible_counts(counts: Counter, min_jobs: int) -> dict[str, int]:
     """阈值门：只留下达到下限的业务线及其当前岗位数。"""
     return {name: int(count) for name, count in counts.items() if int(count) >= int(min_jobs)}
@@ -225,6 +236,7 @@ def collect_company_data(job_rows: list[dict], profile_index, min_jobs: int):
             "job_count": 0,
             "candidate_total": 0,
             "counts": Counter(),
+            "display": defaultdict(Counter),
         })
         item["job_count"] += 1
         for candidate in extract_candidates(row.get("title") or ""):
@@ -232,6 +244,9 @@ def collect_company_data(job_rows: list[dict], profile_index, min_jobs: int):
             normalized_candidate = normalize_bu(candidate)
             if normalized_candidate and not is_noise(normalized_candidate, item["company"]):
                 item["counts"][normalized_candidate] += 1
+                # 归一键用于计数与去重；展示名另记，否则「TikTok Shop」会以 casefold 后的
+                # 「tiktok shop」出现在洞察库页面上。见 pick_display。
+                item["display"][normalized_candidate][candidate.strip()] += 1
     for item in data.values():
         item["kept"] = eligible_counts(item["counts"], min_jobs)
     return data, unmatched_companies
@@ -239,8 +254,11 @@ def collect_company_data(job_rows: list[dict], profile_index, min_jobs: int):
 
 def plan_subject_changes(company_data: dict, existing_rows: list[dict]):
     """把当前抽取结果与已有 subject 对账，返回 insert/update/retire 的可测试计划。"""
+    # ⚠️ 已有行按**归一键**索引，不按 name：name 是展示名（「TikTok Shop」），
+    # 展示名的大小写/空格可能随抓到的标题变化；身份必须是稳定的归一键，
+    # 否则同一条业务线会因为一次大小写变化被当成新主体再插一行。
     existing = {
-        (row.get("company_id"), row.get("name")): row
+        (row.get("company_id"), normalize_bu(row.get("name"))): row
         for row in (existing_rows or [])
         if row.get("company_id") and row.get("name")
     }
@@ -251,15 +269,21 @@ def plan_subject_changes(company_data: dict, existing_rows: list[dict]):
         candidates = dict(kept)
         # 阈值只控制「新发现/复活」的候选。已治理过且仍在招的 active subject 即使暂时
         # 降到阈值以下，也应回写真实 job_count；spec 规定的是归零才 retired，不是 < min 就下架。
-        for (existing_company_id, name), row in existing.items():
+        for (existing_company_id, key), row in existing.items():
             if (existing_company_id == company_id and row.get("kind") == "business_unit"
-                    and row.get("status") == "active" and name in raw_counts):
-                candidates[name] = raw_counts[name]
+                    and row.get("status") == "active" and key in raw_counts):
+                candidates[key] = raw_counts[key]
         # 公司本身也是统一的 subject。业务线来自标题，但这里的公司岗位总数同样是自有 jobs 信号。
-        candidates[item["company"]] = int(item.get("job_count") or 0)
-        for name, job_count in candidates.items():
-            kind = "company" if name == item["company"] else "business_unit"
-            row = existing.get((company_id, name))
+        company_key = normalize_bu(item["company"])
+        candidates[company_key] = int(item.get("job_count") or 0)
+        display_variants = item.get("display") or {}
+        for key, job_count in candidates.items():
+            is_company = key == company_key
+            kind = "company" if is_company else "business_unit"
+            name = item["company"] if is_company else pick_display(
+                display_variants.get(key) or Counter(), key
+            )
+            row = existing.get((company_id, key))
             if row and row.get("status") == "rejected":
                 plan["rejected_skipped"] += 1
                 continue
@@ -272,18 +296,19 @@ def plan_subject_changes(company_data: dict, existing_rows: list[dict]):
                 "status": "active",
             }
             if row:
-                plan["update"].append(payload)
+                plan["update"].append({**payload, "id": row.get("id")})
             else:
                 plan["insert"].append(payload)
 
         # 只退役本轮真正扫描到公司的 title-derived 业务线；company subject 不在此治理范围。
         candidate_names = set(raw_counts)
-        for (existing_company_id, name), row in existing.items():
+        for (existing_company_id, key), row in existing.items():
             if existing_company_id != company_id:
                 continue
             if (row.get("kind") == "business_unit" and row.get("origin") == "derived_title"
-                    and row.get("status") == "active" and name not in candidate_names):
-                plan["retire"].append({"id": row.get("id"), "company_id": company_id, "name": name})
+                    and row.get("status") == "active" and key not in candidate_names):
+                plan["retire"].append({"id": row.get("id"), "company_id": company_id,
+                                       "name": row.get("name")})
     return plan
 
 
@@ -317,10 +342,12 @@ def apply_plan(supabase, plan: dict, now: str):
         }).execute()
         inserted += 1
     for payload in plan["update"]:
+        # 按 id 定位：展示名会随抓到的标题写法变化，按 name 定位会更新不到（或更新错行）。
         supabase.table("insight_subjects").update({
-            "kind": payload["kind"], "origin": "derived_title", "job_count": payload["job_count"],
+            "kind": payload["kind"], "name": payload["name"], "origin": "derived_title",
+            "job_count": payload["job_count"],
             "status": "active", "last_seen_at": now, "updated_at": now,
-        }).eq("company_id", payload["company_id"]).eq("name", payload["name"]).execute()
+        }).eq("id", payload["id"]).execute()
         updated += 1
     for payload in plan["retire"]:
         supabase.table("insight_subjects").update({

@@ -412,3 +412,77 @@ test("evaluateInsight: assertion=signal → 不受 claim 门限制（signal 无�
   // 确认当前行为：grade=fact 无来源 → insight_unverified（此为预期行为）
   assert.equal(ev.failure_reason, "insight_unverified");
 });
+
+// ============================================================
+// v3 P0-3：第一方派生 signal 的展示门
+// ============================================================
+
+function makeSignal(over = {}) {
+  return makeItem({
+    dimension: "hiring",
+    grade: "fact",
+    origin: "derived",
+    assertion: "signal",
+    content: "近 30 天新挂出并仍在招的岗位 47 个（基于 320 个在招岗）。",
+    sample_size: 320,
+    time_window: "截至 2026-06-02 的在招岗位",
+    ...over,
+  });
+}
+
+test("signal 门: 第一方派生无需外部来源即可展示（grade 门会把它误杀）", () => {
+  // 这正是必须单开一条门的理由：signal 的来源是我们自己的岗位库，没有外部 URL 可挂。
+  assert.equal(V.passesGradeGate({ grade: "fact" }, []), false);
+  assert.equal(V.evaluateInsight(makeSignal(), [], NOW).displayable, true);
+});
+
+test("signal 门: assertion 是声明、origin 是事实——origin 不是 derived 一律不放行", () => {
+  assert.equal(V.passesSignalGate({ origin: "derived", sample_size: 20 }), true);
+  // 光把 assertion 填成 signal 就想绕过来源要求 → 拒绝
+  assert.equal(V.passesSignalGate({ origin: "public_web", sample_size: 999 }), false);
+  assert.equal(V.passesSignalGate({ origin: null, sample_size: 999 }), false);
+  assert.equal(
+    V.evaluateInsight(makeSignal({ origin: "public_web" }), [], NOW).displayable,
+    false,
+  );
+});
+
+test("signal 门: 样本量不足不展示（不给小样本数字）", () => {
+  assert.equal(V.passesSignalGate({ origin: "derived", sample_size: 9 }), false);
+  assert.equal(V.passesSignalGate({ origin: "derived", sample_size: 10 }), true);
+  assert.equal(V.passesSignalGate({ origin: "derived", sample_size: null }), false);
+  assert.equal(
+    V.evaluateInsight(makeSignal({ sample_size: 3 }), [], NOW).displayable,
+    false,
+  );
+});
+
+test("signal 门: 绝对化措辞仍然拦（signal 不是免检通道）", () => {
+  assert.equal(
+    V.evaluateInsight(makeSignal({ content: "这条业务线必然在扩张。" }), [], NOW).displayable,
+    false,
+  );
+});
+
+test("signal 门: 过期的派生条目标记为 outdated（派生链停跑即自动止损）", () => {
+  const ev = V.evaluateInsight(
+    makeSignal({ valid_until: "2026-05-01" }),
+    [],
+    NOW,
+  );
+  assert.equal(ev.displayable, true);
+  assert.equal(ev.outdated, true);
+});
+
+test("ITEM_COLUMNS 必须带 origin，否则 signal 门永远走不到", () => {
+  const bundle = fs.readFileSync(
+    path.join(__dirname, "..", "lib", "insight-bundle.ts"),
+    "utf8",
+  );
+  const columns = bundle.match(/ITEM_COLUMNS\s*=\s*\n?\s*"([^"]+)"/);
+  assert.ok(columns, "找不到 ITEM_COLUMNS");
+  const list = columns[1].split(",").map((c) => c.trim());
+  for (const col of ["origin", "assertion", "subject_id", "metric_key", "sample_size"]) {
+    assert.ok(list.includes(col), `ITEM_COLUMNS 缺列 ${col}`);
+  }
+});

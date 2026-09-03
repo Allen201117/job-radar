@@ -266,6 +266,16 @@ export interface InsightSource {
 // NULL = 存量条目未回填（展示层回落 grade 逻辑，兼容迁移期）。
 export type InsightAssertion = "fact" | "signal" | "claim";
 
+// 来源层（migration 135/203）。展示门要用它判断「signal 是不是真的来自第一方派生」，
+// 光看 assertion 不够——assertion 是声明，origin 是事实。
+export type InsightOrigin =
+  | "derived"
+  | "wikidata"
+  | "official"
+  | "official_filing"
+  | "public_web"
+  | "manual";
+
 export interface InsightItem {
   id: string;
   company_id: string;
@@ -285,6 +295,7 @@ export interface InsightItem {
   status: InsightStatus;
   created_at: string;
   updated_at: string;
+  origin?: InsightOrigin | null;
   // v3 结构化字段（migration 204，存量行为 NULL）
   assertion?: InsightAssertion | null;
   subject_id?: string | null;
