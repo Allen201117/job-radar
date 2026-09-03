@@ -182,3 +182,51 @@ def dedupe_plan(rows: List[dict]) -> List[str]:
         )
         retire_ids.extend(str(row["id"]) for _index, row in ordered[1:] if row.get("id") is not None)
     return retire_ids
+
+
+# ── 写入端接线用（存量治理与新写入必须共用同一套口径）────────────────────────
+# T3 查询包的主题名 → metric_key。与迁移 209 的标题映射逐字对应，改一处必须改另一处。
+TOPIC_TO_METRIC: Dict[str, str] = {
+    "年终奖": "bonus_months",
+    "加班文化": "overtime_level",
+    "面试难度": "interview_rounds",
+    "晋升发展": "promotion_pace",
+    "实习体验": "intern_experience",
+    "裁员稳定性": "layoff_mention",
+}
+
+# metric_key → 该主题该落在哪个维度。转投时**维度必须跟着改**，
+# 否则「薪资水平」的内容会留在 path（进入路径）维度下，筛维度时又对不上了。
+METRIC_TO_DIMENSION: Dict[str, str] = {
+    "bonus_months": "compensation_intensity",
+    "pay_level": "compensation_intensity",
+    "overtime_level": "culture",
+    "intern_experience": "culture",
+    "interview_rounds": "hiring",
+    "layoff_mention": "hiring",
+    "promotion_pace": "path",
+}
+
+
+def gate_new_claim(content: str, topic: str) -> Tuple[str, Optional[str], Optional[str]]:
+    """写入端的主题门：返回 (动作, metric_key, dimension)。
+
+    为什么写入端也要装这道门（2026-09-04 立）：存量清过一次只解决历史，
+    T3 每天还在按「{公司} 晋升 涨薪 职级」这类查询搜，搜回来的多半是招聘页，
+    写手照实复述一遍就又是一条答非所问的「晋升发展」——不装门等于今天白清。
+    实测存量跑题率 50.9%，其中晋升发展 71.4%。
+
+    动作与 classify_topic 一致：keep / reroute / retire。
+    retire 在写入端的含义是**根本不写**（而不是写进去再退役）——
+    没写进去就不占额度、不占展示位、也不需要以后再清一遍。
+    """
+    metric_key = TOPIC_TO_METRIC.get(str(topic or "").strip())
+    if not metric_key:
+        # 未登记的主题（如「公开讨论」这类兜底包）不参与主题门，原样放行。
+        return "keep", None, None
+    action, target = classify_topic(content or "", metric_key)
+    if action == "keep":
+        return "keep", metric_key, METRIC_TO_DIMENSION.get(metric_key)
+    if action == "reroute" and target:
+        return "reroute", target, METRIC_TO_DIMENSION.get(target)
+    return "retire", None, None
