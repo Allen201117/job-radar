@@ -125,8 +125,7 @@ export default function InsightSubjectsAdmin() {
       <header className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 className="t-h2">洞察主体治理</h2>
         <p className="t-caption ink-3">
-          业务线是从岗位标题抽出来的，停用词总会漏。判为「噪声」后**保留行不删**，
-          下一轮抽取据此跳过——删行的话下次会原样抽回来。
+          业务线是从岗位标题抽出来的，停用词总会漏。判为「噪声」后保留行不删，下一轮抽取据此跳过——删行的话下次会原样抽回来。
         </p>
       </header>
 
