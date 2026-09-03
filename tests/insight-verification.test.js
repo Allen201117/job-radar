@@ -77,28 +77,76 @@ test("grade 门: fact 需 >=1 有效来源", () => {
   );
 });
 
-test("grade 门: experience 需样本达标且 >=2 个不同 publisher", () => {
+test("grade 门: experience 样本达标（>=5）即过，publisher 数量不再是硬要求", () => {
   const twoPub = [
     makeSource({ id: "a", publisher: "脉脉聚合" }),
     makeSource({ id: "b", publisher: "职友集" }),
   ];
+  // sample_size>=5 → 过门
   assert.equal(
     V.passesGradeGate({ grade: "experience", sample_size: 6 }, twoPub),
     true,
   );
-  // 样本不足
+  // sample_size>=5，即使只有 1 个注册域名来源也过（sample_size 满足）
+  assert.equal(
+    V.passesGradeGate({ grade: "experience", sample_size: 9 }, [
+      makeSource({ id: "a", url: "https://www.zhihu.com/a/1" }),
+      makeSource({ id: "b", url: "https://zhuanlan.zhihu.com/p/2" }),
+    ]),
+    true,
+  );
+  // 样本不足且无 confidence → 不过门
   assert.equal(
     V.passesGradeGate({ grade: "experience", sample_size: 3 }, twoPub),
     false,
   );
-  // 仅 1 个 publisher
+});
+
+test("grade 门: experience 备用路径：sample_size=null + 2 不同注册域 + confidence>=0.8 → 过", () => {
+  const twoDomains = [
+    makeSource({ id: "a", url: "https://maimai.cn/article/123" }),
+    makeSource({ id: "b", url: "https://www.zhihu.com/answer/456" }),
+  ];
+  // ① sample_size=null，2 个不同注册域，confidence=0.9 → 过门
   assert.equal(
-    V.passesGradeGate({ grade: "experience", sample_size: 9 }, [
-      makeSource({ id: "a", publisher: "脉脉聚合" }),
-      makeSource({ id: "b", publisher: "脉脉聚合" }),
-    ]),
-    false,
+    V.passesGradeGate(
+      { grade: "experience", sample_size: null, payload: { confidence: 0.9 } },
+      twoDomains,
+    ),
+    true,
+    "2 不同域 + confidence 0.9 应过门",
   );
+  // ② 两个来源同为 zhihu.com 子域 → 只算 1 个 publisher → 不过门
+  const sameZhihu = [
+    makeSource({ id: "a", url: "https://www.zhihu.com/answer/1" }),
+    makeSource({ id: "b", url: "https://zhuanlan.zhihu.com/p/2" }),
+  ];
+  assert.equal(
+    V.passesGradeGate(
+      { grade: "experience", sample_size: null, payload: { confidence: 0.9 } },
+      sameZhihu,
+    ),
+    false,
+    "同 zhihu.com 子域算 1 publisher，不足 2 → 不过门",
+  );
+  // ③ confidence 不足 0.8 → 不过门
+  assert.equal(
+    V.passesGradeGate(
+      { grade: "experience", sample_size: null, payload: { confidence: 0.7 } },
+      twoDomains,
+    ),
+    false,
+    "confidence 0.7 < 0.8 → 不过门",
+  );
+});
+
+test("registrableHost 取注册域名（去子域，国家二级域取三段）", () => {
+  assert.equal(V.registrableHost("https://www.zhihu.com/article/1"), "zhihu.com");
+  assert.equal(V.registrableHost("https://zhuanlan.zhihu.com/p/2"), "zhihu.com");
+  assert.equal(V.registrableHost("https://maimai.cn/feed"), "maimai.cn");
+  assert.equal(V.registrableHost("https://m.baidu.com.cn/s?q=1"), "baidu.com.cn");
+  assert.equal(V.registrableHost("https://www.example.co.uk/page"), "example.co.uk");
+  assert.equal(V.registrableHost("https://example.com/path"), "example.com");
 });
 
 test("grade 门: rumor 永远拦截", () => {
@@ -210,4 +258,15 @@ test("freshnessFromVerifiedAt: 按核实时间相对分级（任务 4.2）", () 
   assert.equal(V.freshnessFromVerifiedAt("2026-05-01T00:00:00.000Z", NOW).text, "近期核实");
   assert.equal(V.freshnessFromVerifiedAt(null, NOW), null);
   assert.equal(V.freshnessFromVerifiedAt("not-a-date", NOW), null);
+});
+
+test("passesGradeGate: 备用路径优先读 verification.confidence（爬虫真正写入的列）", () => {
+  const sources = [
+    { url: "https://www.zhihu.com/question/1", deidentified: true },
+    { url: "https://www.nowcoder.com/discuss/2", deidentified: true },
+  ];
+  const item = { grade: "experience", sample_size: null, payload: {}, verification: { verdict: "entailment", confidence: 0.9 } };
+  assert.equal(V.passesGradeGate(item, sources), true);
+  const low = { ...item, verification: { verdict: "entailment", confidence: 0.7 } };
+  assert.equal(V.passesGradeGate(low, sources), false);
 });

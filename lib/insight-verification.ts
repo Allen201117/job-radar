@@ -53,24 +53,66 @@ function validSources(sources: InsightSource[] | undefined): InsightSource[] {
   return (sources || []).filter((s) => s && s.url && s.deidentified);
 }
 
+// 国家二级域名（country-code SLD）：此类后缀取三段才是注册域，如 baidu.com.cn → com.cn → 需取 baidu.com.cn
+const COUNTRY_2LD = new Set([
+  "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn", "ac.cn",
+  "co.uk", "org.uk", "me.uk", "net.uk", "gov.uk", "ac.uk",
+  "com.au", "net.au", "org.au", "gov.au", "edu.au",
+  "co.jp", "ne.jp", "or.jp", "go.jp", "ac.jp",
+  "co.kr", "or.kr", "go.kr", "ac.kr",
+  "com.hk", "org.hk", "net.hk", "gov.hk",
+  "com.tw", "org.tw", "net.tw", "gov.tw",
+  "co.nz", "net.nz", "org.nz", "govt.nz",
+  "co.za", "org.za", "net.za", "gov.za",
+]);
+
+// 提取 URL 的注册域名（registrable host）：去 www./m. 等通用子域，国家二级域取三段，其余取两段。
+// 目的：zhihu.com 与 zhuanlan.zhihu.com 算同一个 publisher。
+export function registrableHost(url: string): string {
+  try {
+    const { hostname } = new URL(url);
+    const parts = hostname.split(".");
+    if (parts.length <= 2) return hostname.toLowerCase();
+    const last2 = `${parts[parts.length - 2]}.${parts[parts.length - 1]}`;
+    if (COUNTRY_2LD.has(last2) && parts.length >= 3) {
+      return `${parts[parts.length - 3]}.${last2}`.toLowerCase();
+    }
+    return last2.toLowerCase();
+  } catch {
+    return url.trim().toLowerCase();
+  }
+}
+
+// 按注册域名去重：zhihu.com 与 zhuanlan.zhihu.com → 同一 publisher
 export function countDistinctPublishers(sources: InsightSource[] | undefined): number {
   const set = new Set<string>();
   for (const s of validSources(sources)) {
-    set.add((s.publisher || s.url).trim().toLowerCase());
+    set.add(registrableHost(s.url));
   }
   return set.size;
 }
 
-// grade 门：fact 须 >=1 有效来源；experience 须样本达标且来源 >=2 个不同 publisher；rumor 默认拦截
+// grade 门：
+//   fact    → >=1 有效来源
+//   experience → sample_size>=5（原条件），或 distinct publishers>=2 且 verification.confidence>=0.8（判官置信度，兼容 payload.confidence）
+//   rumor   → 永不展示
 export function passesGradeGate(
-  item: Pick<InsightItem, "grade" | "sample_size">,
+  item: Pick<InsightItem, "grade" | "sample_size"> & {
+    payload?: Record<string, unknown> | null;
+    verification?: Record<string, unknown> | null;
+  },
   sources: InsightSource[] | undefined,
 ): boolean {
   const valid = validSources(sources);
   if (item.grade === "fact") return valid.length >= 1;
   if (item.grade === "experience") {
-    const enoughSample = (item.sample_size || 0) >= EXPERIENCE_MIN_SAMPLE;
-    return enoughSample && countDistinctPublishers(sources) >= 2;
+    if ((item.sample_size || 0) >= EXPERIENCE_MIN_SAMPLE) return true;
+    // 备用路径：≥2 个不同注册域名来源，且判官置信度 >= 0.8。
+    // ⚠️ 爬虫把判官结果写在 insight_items.verification 列（{verdict, confidence}），不在 payload；
+    //    ITEM_COLUMNS 必须带上 verification，否则这条路径永远走不到（2026-09-03 复盘时抓到）。
+    const rawConfidence = item.verification?.confidence ?? item.payload?.confidence;
+    const confidence = typeof rawConfidence === "number" ? rawConfidence : null;
+    return countDistinctPublishers(sources) >= 2 && confidence !== null && confidence >= 0.8;
   }
   // rumor：不进入 active 展示
   return false;

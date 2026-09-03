@@ -35,7 +35,7 @@ import type {
   InsightItemView,
 } from "@/lib/types";
 import { FIRST_PARTY_MIN_COUNT, type FirstPartyAggregate, type FirstPartyInsightItem } from "@/lib/insight-submission";
-import { freshnessFromVerifiedAt, type FreshnessLevel } from "@/lib/insight-verification";
+import { countDistinctPublishers, freshnessFromVerifiedAt, type FreshnessLevel } from "@/lib/insight-verification";
 import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
 import CompanyLogo from "@/components/CompanyLogo";
@@ -114,7 +114,7 @@ const DIMENSION_ORDER: InsightDimension[] = [
   "culture",
 ];
 
-function gradeChip(grade: InsightGrade, sampleSize: number | null): {
+function gradeChip(grade: InsightGrade, sampleSize: number | null, publisherCount: number): {
   text: string;
   cls: string;
 } {
@@ -124,8 +124,14 @@ function gradeChip(grade: InsightGrade, sampleSize: number | null): {
       cls: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]",
     };
   }
+  // sample_size 有值→「据约 N 条反馈」；无值→「据 N 个公开来源」（来源数比空文案更诚实）
+  const expText = sampleSize
+    ? `经验 · 据约 ${sampleSize} 条反馈`
+    : publisherCount > 0
+      ? `经验 · 据 ${publisherCount} 个公开来源`
+      : "经验 · 群体反馈";
   return {
-    text: sampleSize ? `经验 · 据约 ${sampleSize} 条反馈` : "经验 · 群体反馈",
+    text: expText,
     cls: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]",
   };
 }
@@ -506,18 +512,78 @@ function PayloadChips({ item }: { item: InsightItemView }) {
   );
 }
 
+// T1 派生 hiring 维度的补充统计行（经验分布/学历分布/占比/在架周期）
+function HiringStats({ payload }: { payload: Record<string, unknown> }) {
+  const lines: string[] = [];
+
+  // 经验分布
+  const expDist = payload.experience_dist;
+  if (expDist && typeof expDist === "object" && !Array.isArray(expDist)) {
+    const entries = Object.entries(expDist as Record<string, number>);
+    const total = entries.reduce((s, [, v]) => s + v, 0);
+    if (total > 0) {
+      const parts = entries
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([k, v]) => `${k} ${Math.round((v / total) * 100)}%`);
+      lines.push(`经验要求：${parts.join(" · ")}`);
+    }
+  }
+
+  // 学历分布
+  const eduDist = payload.education_dist;
+  if (eduDist && typeof eduDist === "object" && !Array.isArray(eduDist)) {
+    const entries = Object.entries(eduDist as Record<string, number>);
+    const total = entries.reduce((s, [, v]) => s + v, 0);
+    if (total > 0) {
+      const parts = entries
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([k, v]) => `${k} ${Math.round((v / total) * 100)}%`);
+      lines.push(`学历要求：${parts.join(" · ")}`);
+    }
+  }
+
+  // 校招/实习/社招占比（只展示 >0 的桶）
+  const share = payload.bucket_share;
+  if (share && typeof share === "object" && !Array.isArray(share)) {
+    const s = share as Record<string, number>;
+    const LABEL: Record<string, string> = { campus: "校招", intern: "实习", social: "社招" };
+    const parts = (["social", "campus", "intern"] as const)
+      .filter((k) => (s[k] || 0) > 0)
+      .map((k) => `${LABEL[k]} ${s[k]}%`);
+    if (parts.length > 0) lines.push(`招聘类型：${parts.join(" · ")}`);
+  }
+
+  // 在架时长中位数
+  const openAge = payload.open_age_days_median;
+  if (typeof openAge === "number" && openAge > 0) {
+    lines.push(`在架时长：中位数约 ${openAge} 天`);
+  }
+
+  if (lines.length === 0) return null;
+  return (
+    <div className="mt-2 space-y-0.5 text-[13px] leading-6 ink-3">
+      {lines.map((line) => (
+        <p key={line}>{line}</p>
+      ))}
+    </div>
+  );
+}
+
 function InsightCard({ item }: { item: InsightItemView }) {
   const [disputing, setDisputing] = useState(false);
   const [reason, setReason] = useState("");
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
+  const publisherCount = countDistinctPublishers(item.sources);
   const chip = item.derived
     ? {
         text: "本平台岗位聚合",
         cls: "border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]",
       }
-    : gradeChip(item.grade, item.sample_size);
+    : gradeChip(item.grade, item.sample_size, publisherCount);
   const freshness = freshnessFromVerifiedAt(item.last_verified_at);
 
   async function submitDispute() {
@@ -565,6 +631,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
 
       {item.title && <p className="mt-2.5 text-base font-semibold ink-1 ">{item.title}</p>}
       <p className="mt-1.5 leading-7 ink-2 ">{item.content}</p>
+      {item.derived && item.dimension === "hiring" && <HiringStats payload={item.payload} />}
       <PayloadChips item={item} />
       <EquityAngle payload={item.payload} />
       <QuoteLink payload={item.payload} />

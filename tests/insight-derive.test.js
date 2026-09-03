@@ -38,6 +38,30 @@ function j(over = {}) {
   };
 }
 
+test("bucketExperience 归桶：覆盖中文常见表述 + 边界", () => {
+  assert.equal(D.bucketExperience("经验不限"), "不限");
+  assert.equal(D.bucketExperience("不要求工作经验"), "不限");
+  assert.equal(D.bucketExperience("应届毕业生"), "应届");
+  assert.equal(D.bucketExperience("1-3年工作经验"), "1-3年");
+  assert.equal(D.bucketExperience("3-5年"), "3-5年");
+  assert.equal(D.bucketExperience("5-10年工作经验"), "5-10年");
+  assert.equal(D.bucketExperience("10年以上"), "10年+");
+  assert.equal(D.bucketExperience("5年以上"), "3-5年");
+  assert.equal(D.bucketExperience("3年以上"), "1-3年");
+  assert.equal(D.bucketExperience(null), null);
+  assert.equal(D.bucketExperience(""), null);
+});
+
+test("bucketEducation 归桶：覆盖中文常见表述", () => {
+  assert.equal(D.bucketEducation("不限学历"), "不限");
+  assert.equal(D.bucketEducation("博士及以上"), "博士");
+  assert.equal(D.bucketEducation("硕士研究生"), "硕士");
+  assert.equal(D.bucketEducation("本科及以上"), "本科");
+  assert.equal(D.bucketEducation("大专"), "大专");
+  assert.equal(D.bucketEducation(null), null);
+  assert.equal(D.bucketEducation(""), null);
+});
+
 test("classifyRecruitment 按关键词归三桶（保守：无明确关键词 = unknown）", () => {
   assert.equal(D.classifyRecruitment("实习", "数据分析实习生"), "intern");
   assert.equal(D.classifyRecruitment("校招", "2026届校园招聘-后端"), "campus");
@@ -134,6 +158,43 @@ test("classifyHiringSignal 相对规模强度（需 headcountBand）", () => {
   assert.equal(D.classifyHiringSignal(20, 0, "5000-1万").intensity, "low"); // ≈0.0027
   assert.equal(D.classifyHiringSignal(200, 0).intensity, undefined); // 无规模档→不给强度
   assert.equal(D.classifyHiringSignal(200, 0, "未知档").intensity, undefined);
+});
+
+test("deriveHiring payload 含 experience_dist/education_dist/bucket_share/open_age_days_median（样本足够时）", () => {
+  // 构造 10 个有 experience + education 字段的岗，触发分布输出
+  const jobs = Array.from({ length: 12 }, (_, i) =>
+    j({
+      status: "active",
+      experience: i < 6 ? "3-5年" : "1-3年",
+      education: i < 8 ? "本科及以上" : "硕士研究生",
+      job_type: i < 4 ? "校招" : "社招",
+      first_seen_at: `2026-05-${String(i + 1).padStart(2, "0")}T00:00:00Z`,
+    }),
+  );
+  const v = D.deriveHiring(jobs, NOW_ISO);
+  assert.ok(v, "应有 hiring 洞察");
+  const p = v.payload;
+  // 经验分布
+  assert.ok(p.experience_dist, "应有 experience_dist");
+  assert.ok(typeof p.experience_dist["3-5年"] === "number", "3-5年桶有值");
+  // 学历分布
+  assert.ok(p.education_dist, "应有 education_dist");
+  assert.ok(typeof p.education_dist["本科"] === "number", "本科桶有值");
+  // 占比
+  assert.ok(p.bucket_share, "应有 bucket_share");
+  assert.ok(typeof p.bucket_share.social === "number");
+  // 在架时长
+  assert.ok(typeof p.open_age_days_median === "number", "应有 open_age_days_median");
+  assert.ok(p.open_age_days_median > 0);
+});
+
+test("deriveHiring payload 样本不足时不输出 experience_dist/education_dist", () => {
+  // 只有 3 个岗且无 experience/education，不触发分布
+  const jobs = [1, 2, 3].map(() => j({ status: "active", experience: null, education: null }));
+  const v = D.deriveHiring(jobs, NOW_ISO);
+  assert.ok(v, "应有 hiring 洞察（count≥3）");
+  assert.equal(v.payload.experience_dist, undefined);
+  assert.equal(v.payload.education_dist, undefined);
 });
 
 test("deriveHiring 带 hiring_signal + 信号写进正文", () => {

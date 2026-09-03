@@ -12,6 +12,56 @@ export type RecruitBucket = "campus" | "intern" | "social" | "unknown";
 const TIMING_MIN_SAMPLE = 5;
 const HIRING_MIN_SAMPLE = 3;
 const SALARY_MIN_SAMPLE = 5;
+// 经验/学历分布最少样本：至少 10 个岗有该字段才输出分布
+const DIST_MIN_SAMPLE = 10;
+
+// 经验要求归桶：覆盖常见中文表述 + 英文
+export function bucketExperience(text: string | null): string | null {
+  if (!text) return null;
+  const t = text.toLowerCase().trim();
+  if (!t) return null;
+  if (/不限|不要求|无要求|no\s*requirement/.test(t)) return "不限";
+  if (/应届|在校|应届毕业|fresh\s*grad|new\s*grad/.test(t)) return "应届";
+  if (/3[-~至到]5|三[至到]五/.test(t)) return "3-5年";
+  if (/1[-~至到]3|一[至到]三/.test(t)) return "1-3年";
+  if (/5[-~至到]10|五[至到]十/.test(t)) return "5-10年";
+  if (/10\s*年以上|10\+|十年以上|\b10\+\s*years?/.test(t)) return "10年+";
+  // 「X年以上」
+  const above = t.match(/(\d+)\s*年(?:以上|及以上|以上经验|years?\s*(?:above|or\s*more|above))?/);
+  if (above) {
+    const y = parseInt(above[1], 10);
+    if (y === 0) return "不限";
+    if (y <= 1) return "1-3年";
+    if (y <= 3) return "1-3年";
+    if (y <= 5) return "3-5年";
+    if (y <= 10) return "5-10年";
+    return "10年+";
+  }
+  // 「X-Y年」区间
+  const rng = t.match(/(\d+)[-~至到](\d+)\s*年/);
+  if (rng) {
+    const lo = parseInt(rng[1], 10);
+    if (lo < 1) return "不限";
+    if (lo < 3) return "1-3年";
+    if (lo < 5) return "3-5年";
+    if (lo < 10) return "5-10年";
+    return "10年+";
+  }
+  return null;
+}
+
+// 学历要求归桶：覆盖常见中文表述
+export function bucketEducation(text: string | null): string | null {
+  if (!text) return null;
+  const t = text.toLowerCase().trim();
+  if (!t) return null;
+  if (/不限|不要求|无学历要求/.test(t)) return "不限";
+  if (/博士|phd|doctorate/.test(t)) return "博士";
+  if (/硕士|master|研究生/.test(t)) return "硕士";
+  if (/本科|bachelor|学士/.test(t)) return "本科";
+  if (/大专|专科|associate|college/.test(t)) return "大专";
+  return null;
+}
 
 // 与 crawler/normalizer.py 三桶同口径：实习 → 校招/应届 → 社招；都不命中 = unknown（不臆测）
 export function classifyRecruitment(jobType: string | null, title: string | null): RecruitBucket {
@@ -301,6 +351,44 @@ export function deriveHiring(
   const tail = [cityStr, fnStr, trendStr].filter(Boolean).join("，");
   const content = `当前在招约 ${active.length} 个岗位${tail ? "，" + tail : ""}。${hiringSignalSentence(signal)}。`;
 
+  // 经验分布（≥DIST_MIN_SAMPLE 个岗有 experience 字段才输出）
+  const expBuckets = active.map((jb) => bucketExperience(jb.experience)).filter(Boolean) as string[];
+  const experience_dist: Record<string, number> | undefined =
+    expBuckets.length >= DIST_MIN_SAMPLE
+      ? Object.fromEntries(topN(expBuckets, 6).map(({ key, count }) => [key, count]))
+      : undefined;
+
+  // 学历分布（≥DIST_MIN_SAMPLE 个岗有 education 字段才输出）
+  const eduBuckets = active.map((jb) => bucketEducation(jb.education)).filter(Boolean) as string[];
+  const education_dist: Record<string, number> | undefined =
+    eduBuckets.length >= DIST_MIN_SAMPLE
+      ? Object.fromEntries(topN(eduBuckets, 5).map(({ key, count }) => [key, count]))
+      : undefined;
+
+  // 校招/实习/社招占比（仅含非 unknown 的桶，避免「unknown=40%」误导）
+  const knownTotal = mix.campus + mix.intern + mix.social;
+  const bucket_share: Record<string, number> | undefined =
+    knownTotal > 0
+      ? {
+          campus: Math.round((mix.campus / knownTotal) * 100),
+          intern: Math.round((mix.intern / knownTotal) * 100),
+          social: Math.round((mix.social / knownTotal) * 100),
+        }
+      : undefined;
+
+  // 在架时长中位数（active 岗 now−first_seen_at 天数；语义=这家公司的岗位平均在架多久）
+  const nowMs = new Date(nowIso).getTime();
+  const openAges = active
+    .map((jb) => {
+      if (!jb.first_seen_at) return null;
+      const t = new Date(jb.first_seen_at).getTime();
+      return Number.isNaN(t) ? null : Math.round((nowMs - t) / 86_400_000);
+    })
+    .filter((d): d is number => d !== null && d >= 0);
+  // ≥5 样本才有代表性
+  const open_age_days_median: number | undefined =
+    openAges.length >= 5 ? median(openAges) : undefined;
+
   return makeDerivedView({
     dimension: "hiring",
     title: "招聘动态 · 据在招岗位",
@@ -308,6 +396,10 @@ export function deriveHiring(
     payload: {
       active_count: active.length, top_cities: cities, top_functions: functions, mix, trend,
       hiring_signal: signal,
+      ...(experience_dist !== undefined && { experience_dist }),
+      ...(education_dist !== undefined && { education_dist }),
+      ...(bucket_share !== undefined && { bucket_share }),
+      ...(open_age_days_median !== undefined && { open_age_days_median }),
     },
     time_window: `截至 ${yyyymm(nowIso)}`,
     nowIso,

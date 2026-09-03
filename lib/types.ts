@@ -270,6 +270,8 @@ export interface InsightItem {
   content: string;
   sample_size: number | null;
   payload: Record<string, unknown>;
+  /** 判官结果 {verdict, confidence, evidence_kind}；爬虫 T3 写入，人工/种子条目可能为空。 */
+  verification?: Record<string, unknown> | null;
   time_window: string | null;
   valid_from: string | null;
   valid_until: string | null;

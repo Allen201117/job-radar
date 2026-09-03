@@ -381,6 +381,32 @@ class TestT3(unittest.TestCase):
         picked = B._pick_sources(results, {"supported_source_idxs": [0]})
         self.assertEqual(picked, [results[0]])
 
+    def test_pick_sources_treats_zhihu_subdomains_as_one_publisher(self):
+        results = [
+            {"url": "https://zhihu.com/question/1", "publisher": "provider-a"},
+            {"url": "https://zhuanlan.zhihu.com/p/2", "publisher": "provider-b"},
+            {"url": "https://example.com/post/3", "publisher": "provider-a"},
+        ]
+        picked = B._pick_sources(results, {"supported_source_idxs": [0, 1, 2]})
+        self.assertEqual(picked, [results[0], results[2]])
+
+    def test_filter_t3_results_drops_default_and_env_denied_hosts(self):
+        results = [
+            {"url": "https://m.zhipin.com/job/1"},
+            {"url": "https://news.example.com/a"},
+        ]
+        kept, denied = B.filter_t3_results(results)
+        self.assertEqual(denied, 1)
+        self.assertEqual(kept, [results[1]])
+        self.assertEqual(B.resolve_t3_host_denylist("example.com"), {"example.com"})
+
+    def test_default_topics_cover_four_user_information_gaps(self):
+        self.assertEqual(B.T3_DEFAULT_TOPICS, ("年终奖", "加班文化", "面试难度", "裁员稳定性"))
+        self.assertEqual(B.T3_TOPIC_CATALOG["裁员稳定性"]["dimension"], "hiring")
+        self.assertIn("加班 强度", B.T3_TOPIC_CATALOG["加班文化"]["query"])
+        for pack in B.T3_TOPIC_CATALOG.values():
+            self.assertIn("某公司 公司", pack["query"].format(c="某公司"))
+
     def test_t3_does_not_backfill_sample_size_from_search_result_count(self):
         B._ROUTER = _FakeRouter([
             {"url": "https://a.example/1", "publisher": "a.example", "text": "t1"},
