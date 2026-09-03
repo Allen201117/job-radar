@@ -36,7 +36,12 @@ _RECRUITMENT_RE = re.compile(
     re.IGNORECASE,
 )
 _JOB_ROLE_RE = re.compile(
-    r"(?:工程师|专家|经理|实习生|顾问|设计师|架构师|策划|运营|开发|分析师|主管|总监|BP|HRBP|助理|专员)$",
+    # 2026-09-03 live：跑到外企源上才暴露——Apple 抽出 manager(30)/genius(23)。
+    # 英文岗位名同样要挡，且英文里岗位名常在**开头**（"Manager - Retail"），故不锚定结尾。
+    r"(?:工程师|专家|经理|实习生|顾问|设计师|架构师|策划|运营|开发|分析师|主管|总监|BP|HRBP|助理|专员)$"
+    r"|^(?:manager|engineer|specialist|analyst|director|lead|intern|associate|consultant"
+    r"|designer|developer|scientist|architect|coordinator|representative|technician"
+    r"|supervisor|advisor|expert|officer|recruiter|genius|advisor)s?$",
     re.IGNORECASE,
 )
 _PURE_SYMBOL_RE = re.compile(r"^[^\w\u4e00-\u9fff]+$", re.UNICODE)
@@ -50,6 +55,8 @@ _GENERIC_TERMS = {
 _COUNTRY_TERMS = {
     "malaysia", "singapore", "japan", "korea", "usa", "uk", "india", "indonesia",
     "thailand", "vietnam", "philippines", "brazil", "mexico", "germany", "france",
+    # 地区缩写（live：Apple 抽出 us(162)）。都是地点不是业务线。
+    "us", "eu", "emea", "apac", "amer", "latam", "anz", "na", "row",
     "马来西亚", "新加坡", "日本", "韩国", "美国", "英国", "印度", "印尼", "泰国", "越南",
 }
 # 纯项目代号：J3 / A1 / UE5 之类（live 实测：腾讯 J3(36)）。
@@ -111,6 +118,12 @@ def extract_candidates(title: str) -> list[str]:
         return []
     out = []
     normalized_seen = set()
+    # ⚠️ 「前缀 X-」「后缀 -X」是**中文招聘站的书写约定**（腾讯云-后端工程师 / 快手【主站】），
+    # 本抽取器也只在 38,491 条中文标题上验证过。英文标题里连字符是**构词符**
+    # （Multi-Channel / Pre-Sales / Mixed-Signal），照搬会把词根当业务线——
+    # 2026-09-03 live 实测：Amazon 抽出 multi(33)/pre(22)、Apple 抽出 us(162)/mixed(20)。
+    # 所以纯英文标题只走 【X】 括号形态，不走连字符。宁可漏抽，不可错抽。
+    has_cjk = bool(re.search(r"[\u4e00-\u9fff]", text))
 
     def add(value):
         value = str(value or "").strip()
@@ -121,6 +134,9 @@ def extract_candidates(title: str) -> list[str]:
 
     for match in _BRACKET_RE.finditer(text):
         add(match.group(1) or match.group(2))
+
+    if not has_cjk:
+        return out
 
     # prefix：开头 X-。后续的岗位名/方向仍由 is_noise 与频次门过滤。
     first_dash = _DASH_RE.search(text)

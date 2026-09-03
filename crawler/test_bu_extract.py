@@ -151,3 +151,33 @@ class DisplayNameTest(unittest.TestCase):
 
     def test_pick_display_falls_back_when_no_variant_recorded(self):
         self.assertEqual(B.pick_display(Counter(), "飞书"), "飞书")
+
+
+class EnglishTitleNoiseTest(unittest.TestCase):
+    """2026-09-03 第一次跑到外企源上才暴露的噪声，逐条钉死。
+
+    此前 38,491 条验证样本全是中文标题；一接上 Amazon / Apple 这类英文源，
+    连字符构词（Multi-Channel / Pre-Sales）就被当成了业务线。
+    """
+
+    def test_english_hyphen_is_word_forming_not_a_separator(self):
+        for title in ("Multi-Channel Sales Specialist",
+                      "Pre-Sales Solutions Architect",
+                      "Mixed-Signal Design Engineer"):
+            self.assertEqual(B.extract_candidates(title), [], title)
+
+    def test_chinese_titles_still_use_hyphen_convention(self):
+        self.assertIn("腾讯云", B.extract_candidates("腾讯云-后端开发工程师"))
+        self.assertIn("TikTok Shop", B.extract_candidates("TikTok Shop-电商产品经理"))
+
+    def test_bracket_form_survives_in_english_titles(self):
+        # 【X】是显式标注，不是构词，英文标题里同样可信
+        self.assertIn("Seed", B.extract_candidates("【Seed】Research Scientist"))
+
+    def test_english_role_nouns_are_noise(self):
+        for token in ("manager", "Genius", "Engineer", "analysts", "director"):
+            self.assertTrue(B.is_noise(token), token)
+
+    def test_region_abbreviations_are_noise(self):
+        for token in ("us", "EMEA", "apac", "latam"):
+            self.assertTrue(B.is_noise(token), token)

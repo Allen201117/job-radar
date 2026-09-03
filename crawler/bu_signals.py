@@ -408,7 +408,10 @@ def fetch_snapshots(supabase, subject_ids: list[str], since_day: str) -> dict[st
         chunk = subject_ids[start:start + 200]
         rows = db.fetch_all_rows(
             lambda chunk=chunk: supabase.table("insight_subject_daily")
-            .select("subject_id,day,active_count").in_("subject_id", chunk).gte("day", since_day)
+            .select("subject_id,day,active_count").in_("subject_id", chunk).gte("day", since_day),
+            # ⚠️ insight_subject_daily 是复合主键 (subject_id, day)，**没有 id 列**；
+            # fetch_all_rows 默认按 id 排序会直接报 42703。分页排序键必须显式给。
+            order_key="subject_id",
         )
         for row in rows:
             out.setdefault(row["subject_id"], []).append(row)
