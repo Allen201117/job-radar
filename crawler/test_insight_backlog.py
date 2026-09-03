@@ -338,6 +338,41 @@ class TestT3(unittest.TestCase):
         self.assertEqual(res, "empty")
         self.assertTrue(any("t3_checked_at" in p for _, p in store.get("company_profiles_updates", [])))
 
+    def test_t3_pending_review_entries_do_not_retire_active_generation(self):
+        B._ROUTER = _FakeRouter([
+            {"url": "https://a.example/1", "publisher": "a.example", "text": "t1"},
+            {"url": "https://b.example/2", "publisher": "b.example", "text": "t2"},
+        ])
+        E.run_pipeline = lambda *a, **k: [{
+            "claim": {"content": "据公开讨论…", "grade": "experience", "sample_size": 8},
+            "judge": {"supported_source_idxs": [0, 1]}, "status": "pending_review",
+        }]
+        store = {}
+        self.assertEqual(
+            B.enrich_company_t3(FakeSB(store), {"id": "c-pending", "company": "待审公司", "aliases": []}),
+            "wrote",
+        )
+        self.assertFalse(any(
+            payload.get("status") == "retired"
+            for _filters, payload in store.get("insight_items_updates", [])
+        ))
+
+    def test_t3_active_entry_retires_previous_active_generation(self):
+        B._ROUTER = _FakeRouter([
+            {"url": "https://a.example/1", "publisher": "a.example", "text": "t1"},
+            {"url": "https://b.example/2", "publisher": "b.example", "text": "t2"},
+        ])
+        E.run_pipeline = lambda *a, **k: [{
+            "claim": {"content": "据公开讨论…", "grade": "experience", "sample_size": 8},
+            "judge": {"supported_source_idxs": [0, 1]}, "status": "active",
+        }]
+        store = {}
+        B.enrich_company_t3(FakeSB(store), {"id": "c-active", "company": "生效公司", "aliases": []})
+        self.assertTrue(any(
+            payload.get("status") == "retired"
+            for _filters, payload in store.get("insight_items_updates", [])
+        ))
+
     def test_pick_sources_never_fills_with_unverified_results(self):
         results = [
             {"url": "https://a.example/1", "publisher": "a.example"},

@@ -60,6 +60,19 @@ class EnrichRowResultRouting(unittest.TestCase):
         self.assertIn("enrich_checked_at", sql)
         self.assertNotIn("status", sql)
 
+    def test_alive_row_without_job_type_backfills_type_from_existing_summary(self):
+        """巡检确认在招时，已有正文的历史薄字段也应补职能类型。"""
+        with mock.patch.object(enrich, "enrich_one", return_value=""), \
+                mock.patch.object(enrich_backlog.normalizer, "extract_job_type", return_value="技术") as extract, \
+                mock.patch.object(enrich_backlog.jobs_db, "execute") as ex:
+            res = enrich_backlog.enrich_row(
+                None, _row(title="后端工程师", summary="已有正文", job_type=None), SRC,
+                dry_run=False, jobs_conn=object(),
+            )
+        self.assertEqual(res, "alive")
+        extract.assert_called_once_with("后端工程师", "已有正文")
+        self.assertIn("job_type", ex.call_args[0][1])
+
 
 class LivenessQueueCooldown(unittest.TestCase):
     def test_hk_sql_filters_recently_checked(self):

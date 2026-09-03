@@ -59,8 +59,9 @@ class _FakeCursor:
         elif "select id from jobs" in s:
             self._last = [(x,) for x in self.cand_ids]
         elif "update jobs set status = 'expired'" in s:
-            ids = list(params[1])
+            ids = list(params[2])
             self.store["updated"] = ids
+            self.store["update_sql"] = sql
             self.rowcount = len(ids)
         else:
             self._last = []
@@ -91,6 +92,7 @@ class SweepAbsentJobsTest(unittest.TestCase):
         self.assertEqual(res["action"], "apply")
         self.assertEqual(res["expired"], 3)
         self.assertEqual(store["updated"], ["u1", "u2", "u3"])
+        self.assertIn("enrich_checked_at", store["update_sql"])
 
     def test_dry_run_does_not_mutate(self):
         store = {}

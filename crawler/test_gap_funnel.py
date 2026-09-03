@@ -725,7 +725,10 @@ class RoundCapTest(unittest.TestCase):
         provider.search.return_value = [{
             "url": "https://acme.mokahr.com/social-recruitment/acme/1"
         }]
-        router = type("Router", (), {"providers": [provider]})()
+        router = type("Router", (), {
+            "providers": [provider],
+            "remaining_above_reserve": lambda _self, supplied_sb: provider.remaining(supplied_sb),
+        })()
         sb = _Sb()
         conn = _Conn()
         queued = {

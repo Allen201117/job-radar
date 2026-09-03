@@ -222,6 +222,21 @@ def find_official_entry(company, supabase, *, router=None, prev_row=None,
     for index in range(limit):
         provider = plan[index]
         query = queries[index]
+        try:
+            remaining = int(router.remaining_above_reserve(supabase))
+        except Exception:
+            remaining = 0
+        if remaining <= 0:
+            return {
+                "found": False,
+                "state": "unknown",
+                "official_entry_url": None,
+                "search_used": search_used,
+                "rounds_no_entry": int((prev_row or {}).get("rounds_no_entry") or 0),
+                "next_retry_at": (now + timedelta(days=1)).isoformat(),
+                "fail_reason": "搜索额度不足（已为校招链预留）",
+                "evidence": {"candidate_urls": evidence, "search_errors": errors},
+            }
         results, error = _search_one(
             provider, supabase, query, top_k, client, consume
         )

@@ -441,6 +441,7 @@ def enrich_company_t3(sb, profile):
     替换旧代：本轮写完后退役本次之前的 public_web active（跨维度），不堆积老聚合（保即时性）。"""
     run_start = _now()
     wrote_any = False
+    wrote_active = False
     # LLM 花费的 86% 在这条链上（2026-08-27 成本审计）。搜索侧本来就有日顶（下面 _ROUTER.remaining），
     # LLM 侧此前**完全没有天花板** → 花多少全看队列多长，账户欠费了都没人察觉。这里补上第二道闸。
     # 记账口径：gate 按主题查（与搜索额度同频），**扣减按 engine 的真实调用数**（不按估算值预扣），
@@ -473,6 +474,7 @@ def enrich_company_t3(sb, profile):
                 write_experience(sb, profile["id"], claim, sources, judge, entry["status"],
                                  dimension=pack["dimension"], topic=pack["topic"])
                 wrote_any = True
+                wrote_active = wrote_active or entry["status"] == "active"
         except Exception as e:
             print(f"  [t3-err] {profile['company']}/{pack['topic']}: {type(e).__name__}: {str(e)[:120]}")
             continue
@@ -482,7 +484,7 @@ def enrich_company_t3(sb, profile):
         llm_budget.check_and_consume(sb, kind="insight_t3", n=_spent)
 
     try:
-        if wrote_any:
+        if wrote_active:
             # 退役本次之前的 public_web active（跨维度），换最新一代
             sb.table("insight_items").update({"status": "retired"}) \
                 .eq("company_id", profile["id"]).eq("origin", "public_web").eq("status", "active") \

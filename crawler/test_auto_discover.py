@@ -100,6 +100,16 @@ class PlanTargetsTest(unittest.TestCase):
         out = ad.plan_targets(curated, {"C"}, set(), cap=10, seed=7)
         self.assertEqual(out[0]["company"], "C")    # 用户点名的排最前
 
+    def test_large_wanted_pool_leaves_capacity_for_must_apply(self):
+        """用户点名再多也只可占半数，必投梯队仍要有本轮探测名额。"""
+        curated = ([{**_t(f"W{i}"), "_priority": True} for i in range(200)]
+                   + [{**_t(f"M{i}"), "_must_apply": True} for i in range(200)])
+        out = ad.plan_targets(
+            curated, {f"W{i}" for i in range(200)}, set(), cap=80, seed=1,
+        )
+        self.assertLessEqual(sum(t["company"].startswith("W") for t in out), 40)
+        self.assertGreater(sum(t.get("_must_apply", False) for t in out), 0)
+
     def test_cap_limits_batch(self):
         curated = [_t(f"C{i}") for i in range(50)]
         out = ad.plan_targets(curated, set(), set(), cap=12, seed=3)

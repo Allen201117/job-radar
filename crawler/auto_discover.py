@@ -35,6 +35,7 @@ DAILY_INSERT_CAP = int(os.environ.get("AUTO_DISCOVER_INSERT_CAP", "40"))   # 每
 TIER_QUOTA_MUST_APPLY = float(os.environ.get("AUTO_DISCOVER_QUOTA_MUST_APPLY", "0.25"))
 TIER_QUOTA_PRIORITY = float(os.environ.get("AUTO_DISCOVER_QUOTA_PRIORITY", "0.50"))
 TIER_QUOTA_REST = float(os.environ.get("AUTO_DISCOVER_QUOTA_REST", "0.25"))
+WANTED_MAX_SHARE = 0.5
 PLATFORMS = {"feishu", "hotjob"}   # httpx-safe（hotjob 内含 wt/wecruit）；beisen/moka 需浏览器，留后置
 # 科技/新经济/消费清单排最前 → load 时标 _priority，plan_targets 里优先探（对齐目标用户，见 CLAUDE.md §3
 # 「保精度逐步扩量」：民营500强 76% 是传统制造，与目标用户错配，别让它淹没科技/消费候选）。
@@ -261,8 +262,9 @@ def plan_targets(curated, user_wanted, existing_companies, cap, seed=0):
     priority = priority_fresh + priority_stale
     rng.shuffle(rest)
 
-    # 用户点名的不占配额（量小、信号最强）；其余名额按梯队配额分，谁也不能吃满。
-    picked = wanted_first[:cap]
+    # 用户点名信号最强，但量大时最多占半数，不能再反填本轮名额而挤掉其它梯队。
+    wanted_cap = int(cap * WANTED_MAX_SHARE)
+    picked = wanted_first[:wanted_cap]
     budget = cap - len(picked)
     pools = ((must_apply, TIER_QUOTA_MUST_APPLY), (priority, TIER_QUOTA_PRIORITY),
              (rest, TIER_QUOTA_REST))

@@ -122,6 +122,9 @@ class _Router:
     def __init__(self, providers):
         self.providers = providers
 
+    def remaining_above_reserve(self, sb):
+        return sum(provider.remaining(sb) for provider in self.providers)
+
 
 class CascadeSearchTest(unittest.TestCase):
     def tearDown(self):
@@ -179,6 +182,15 @@ class CascadeSearchTest(unittest.TestCase):
         self.assertEqual(result["state"], "unknown")
         self.assertEqual(result["rounds_no_entry"], 1)
         self.assertEqual(result["search_used"], 0)
+
+    def test_reserve_exhausted_skips_search_without_calling_provider(self):
+        provider = _Provider("qianfan", [[]], remaining=20)
+        router = _Router([provider])
+        router.remaining_above_reserve = lambda _sb: 0
+        result = ef.find_official_entry("Acme", object(), router=router)
+        self.assertEqual(result["state"], "unknown")
+        self.assertIn("额度不足", result["fail_reason"])
+        self.assertEqual(provider.calls, [])
 
     def test_successful_search_consumes_provider_usage_by_default(self):
         provider = _Provider(
