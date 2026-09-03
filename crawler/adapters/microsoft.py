@@ -58,7 +58,11 @@ def _locations_for_regions(regions):
 
 class MicrosoftAdapter(BaseAdapter):
     name = "microsoft"
-    max_pages = 10  # 每地点 num=20 → 最多 200/地点（count 通常很小，<20 即停）
+    # 每地点安全上限：30 页 × 10 条 = 300 岗/地点。实测单地点最大 "China" 41 岗，留足余量；
+    # 撞上限 = 没抓全 → drained=False → 整源不标 fetch_complete（诚实）。
+    max_pages = 30
+    # pcsx **忽略 num 参数**，恒返 10 条/页（2026-09-04 实测 num=10/20/50/100 结果相同）。
+    _PAGE_SIZE = 10
 
     def should_skip(self, source_url: str):
         return None  # 公开 JSON API，跳过 HEAD 预检
@@ -69,12 +73,17 @@ class MicrosoftAdapter(BaseAdapter):
         headers = {"User-Agent": _BROWSER_UA, "Accept": "application/json"}
         collected: dict = {}  # id -> position（按 id 并集去重）
         locations = _locations_for_regions(getattr(self, "regions", None))
-        location_totals: List[int] = []
+        drained: List[bool] = []
         for loc in locations:
             loc_total: Optional[int] = None
+            loc_seen = 0
+            loc_ids: set = set()
+            ended_naturally = False
             for page in range(self.max_pages):
+                # ⚠️ pcsx **忽略 num**：传 10/20/50/100 一律只返 10 条（2026-09-04 逐个实测）。
+                # 所以 start 必须按真实页长 _PAGE_SIZE 递进，否则每翻一页就跳过 10 个岗。
                 params = {"domain": "microsoft.com", "query": "", "location": loc,
-                          "start": page * 20, "num": 20}
+                          "start": page * self._PAGE_SIZE, "num": self._PAGE_SIZE}
                 try:
                     r = httpx.get(_API, params=params, headers=headers, timeout=self.timeout)
                     r.raise_for_status()
@@ -85,20 +94,36 @@ class MicrosoftAdapter(BaseAdapter):
                     break
                 positions = data.get("positions", []) or []
                 if not positions:
+                    ended_naturally = True
                     break
+                loc_seen += len(positions)
+                fresh = 0
                 for p in positions:
                     pid = str(p.get("id") or p.get("displayJobId") or "").strip()
-                    if pid and pid not in collected:
+                    if not pid or pid in loc_ids:
+                        continue
+                    loc_ids.add(pid)
+                    fresh += 1
+                    if pid not in collected:
                         collected[pid] = p
-                if len(positions) < 20:
+                if loc_total is not None and loc_seen >= loc_total:
+                    ended_naturally = True
                     break
-            if loc_total is not None:
-                location_totals.append(loc_total)
-        if len(location_totals) == len(locations):
-            self.reported_total = sum(location_totals)
-        self.fetch_complete = (
-            self.reported_total is not None and len(collected) >= self.reported_total
-        )
+                # 末页判据看「这一页有没有带来新岗」，不看页长——接口忽略 num 时页长毫无意义。
+                if not fresh:
+                    ended_naturally = True
+                    break
+            # 完整性按**每个地点各自**判：自然收尾（翻到没有新岗/翻满自报数）才算这个地点抓全；
+            # 撞 max_pages 说明还有没翻完的，整源不许标抓全。
+            drained.append(ended_naturally)
+        # ⚠️ 分母绝不能用 sum(各地点 total)：pcsx 的 location 是**文本匹配**，我们查的
+        # "China" 与 "Shanghai"/"Beijing"… 高度重叠，同一个岗在多个查询里各算一次；
+        # 而 collected 按 id 去重。2026-09-04 实测 6 个地点 total 相加=174、首页去重后仅 31 个，
+        # 线上因此报出「自报 3522 / 只入库 92」的假缺口，把 watchdog 规则 G 变成狼来了。
+        # 重叠查询的并集总数无法从接口得知 → 翻全时用**去重后的真实条数**当分母（诚实盲区，
+        # 与 base.paginate_all 的同名兜底一个口径）；没翻全则不给分母。
+        self.fetch_complete = bool(drained) and all(drained)
+        self.reported_total = len(collected) if self.fetch_complete else None
         return json.dumps({"positions": list(collected.values())}, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:
