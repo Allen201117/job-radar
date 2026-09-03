@@ -90,11 +90,25 @@ async function loadIndex(): Promise<LibraryIndex> {
 /**
  * ⚠️ 跨实例缓存（unstable_cache），不要退回进程内 Map：serverless 多实例下命中率≈0。
  * 索引只依赖库里的洞察、与用户无关，所以可以全站共享。
+ *
+ * ⚠️ 缓存键里**带一个时间桶**，不要只靠 `revalidate` 的后台重验证。
+ * 线上实测：光配 revalidate:600 时，`index_built_at` 三个多小时一动不动 ——
+ * 后台重验证要花 ~10s 建索引，在响应已经返回的 serverless 实例上大概率跑不完，
+ * 于是永远在发陈旧数据、而且**不报错**。症状很难看：治理脚本刚判完档，
+ * 页面按「加班强度 ≤ 2」筛却是 0 条（索引里 metric_value 还全是空）。
+ * 时间桶让每个 10 分钟窗口成为**不同的缓存条目**：窗口内第一个请求同步建好（慢一次），
+ * 其余全部命中。不依赖任何后台任务跑完。
  */
-export const getInsightLibraryIndex = unstable_cache(loadIndex, ["insight-library-index-v1"], {
-  revalidate: INDEX_TTL_SECONDS,
-  tags: ["insight-library"],
-});
+const getCachedIndex = unstable_cache(
+  async (_bucket: number) => loadIndex(),
+  ["insight-library-index-v2"],
+  { revalidate: INDEX_TTL_SECONDS * 2, tags: ["insight-library"] },
+);
+
+export async function getInsightLibraryIndex(): Promise<LibraryIndex> {
+  const bucket = Math.floor(Date.now() / (INDEX_TTL_SECONDS * 1000));
+  return getCachedIndex(bucket);
+}
 
 /**
  * 展开某个主体时才取它的全部条目（走 idx_insight_items_subject 部分索引）。
