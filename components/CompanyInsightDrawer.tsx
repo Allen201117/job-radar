@@ -30,12 +30,13 @@ import {
   type InsightChipTone,
 } from "@/lib/insight-chip-format";
 import type {
+  InsightAssertion,
   InsightDimension,
   InsightGrade,
   InsightItemView,
 } from "@/lib/types";
 import { FIRST_PARTY_MIN_COUNT, type FirstPartyAggregate, type FirstPartyInsightItem } from "@/lib/insight-submission";
-import { countDistinctPublishers, freshnessFromVerifiedAt, type FreshnessLevel } from "@/lib/insight-verification";
+import { countDistinctPublishers, freshnessFromVerifiedAt, resolveEffectiveAssertion, type FreshnessLevel } from "@/lib/insight-verification";
 import { formatDateLabel } from "@/lib/relative-time";
 import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
@@ -115,17 +116,52 @@ const DIMENSION_ORDER: InsightDimension[] = [
   "culture",
 ];
 
-function gradeChip(grade: InsightGrade, sampleSize: number | null, publisherCount: number): {
-  text: string;
-  cls: string;
-} {
+// v3 三档承诺芯片（按 assertion 出，兼容存量 assertion=null 时回落 grade）。
+// 文案遵循 spec §1.5：signal 只给数字，claim 明确是转述，fact 可肯定陈述。
+function assertionChip(
+  assertion: InsightAssertion | null | undefined,
+  grade: InsightGrade,
+  sampleSize: number | null,
+  publisherCount: number,
+  payload?: Record<string, unknown>,
+): { text: string; cls: string } {
+  // 取实际 sample_n（v3 派生层写在 payload.sample_n）
+  const sampleN =
+    sampleSize ??
+    (typeof payload?.sample_n === "number" ? payload.sample_n : null) ??
+    (typeof payload?.active_count === "number" ? payload.active_count : null);
+
+  const effectiveAssertion: InsightAssertion | null = assertion ?? null;
+
+  if (effectiveAssertion === "fact") {
+    return {
+      text: "事实 · 据官方披露",
+      cls: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]",
+    };
+  }
+  if (effectiveAssertion === "signal") {
+    // signal：只给数字，不下结论。样本量是核心承诺。
+    const nLabel = sampleN != null ? `基于 ${sampleN} 个在招岗` : "基于在招岗位";
+    return {
+      text: `数据 · ${nLabel}`,
+      cls: "border border-[#a9cfd8] bg-[#dcf0f2] text-[#2f7d8a] dark:border-[#6cc0cf]/[0.30] dark:bg-[#6cc0cf]/[0.15] dark:text-[#6cc0cf]",
+    };
+  }
+  if (effectiveAssertion === "claim") {
+    // claim：必须读起来像转述，来源数是承诺。
+    const claimLabel = publisherCount > 0 ? `据 ${publisherCount} 处公开讨论` : "公开讨论";
+    return {
+      text: `说法 · ${claimLabel}`,
+      cls: "border border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08]",
+    };
+  }
+  // assertion=null：存量行，回落 grade 逻辑（兼容迁移期）
   if (grade === "fact") {
     return {
       text: "事实 · 公开来源",
       cls: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]",
     };
   }
-  // sample_size 有值→「据约 N 条反馈」；无值→「据 N 个公开来源」（来源数比空文案更诚实）
   const expText = sampleSize
     ? `经验 · 据约 ${sampleSize} 条反馈`
     : publisherCount > 0
@@ -283,6 +319,17 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
 
           {!loading && totalItems > 0 && (
             <div className="space-y-8">
+              {/* claim 类一次性说明：整个抽屉只出现一次，不在每张卡上重复（spec §1）*/}
+              {dims && DIMENSION_ORDER.some((d) =>
+                (dims[d] || []).some(
+                  (it) => resolveEffectiveAssertion(it.assertion, it.sources) === "claim" ||
+                    (it.assertion == null && it.grade === "experience"),
+                ),
+              ) && (
+                <div className="rounded-xl border border-black/[0.08] bg-[#f4efe6] px-3.5 py-3 t-caption ink-3 dark:border-white/[0.1] dark:bg-white/[0.05]">
+                  以下「说法」类内容为公开讨论的转述，非本产品结论，仅供参考。
+                </div>
+              )}
               {DIMENSION_ORDER.map((dim) => {
                 const items = dims?.[dim] || [];
                 if (items.length === 0) return null;
@@ -591,13 +638,26 @@ function InsightCard({ item }: { item: InsightItemView }) {
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
   const publisherCount = countDistinctPublishers(item.sources);
-  const chip = item.derived
-    ? {
-        text: "本平台岗位聚合",
-        cls: "border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]",
-      }
-    : gradeChip(item.grade, item.sample_size, publisherCount);
+  // v3：派生条目按 assertion=signal 出芯片（内含样本量），存储型条目按 assertion 出（兼容存量 null）
+  const chip = assertionChip(
+    item.assertion,
+    item.grade,
+    item.sample_size,
+    publisherCount,
+    item.payload,
+  );
   const freshness = freshnessFromVerifiedAt(item.last_verified_at);
+  // 左边框颜色：fact=绿、signal=蓝（中性数据）、claim=灰（弱承诺）、存量=沿用 grade 颜色
+  const effectiveAssertion = resolveEffectiveAssertion(item.assertion, item.sources);
+  const borderL = effectiveAssertion === "fact"
+    ? "border-l-[#6f9a3a] dark:border-l-[#a3d06a]"
+    : effectiveAssertion === "signal"
+    ? "border-l-[#3f7cc0] dark:border-l-[#7fb2e8]"
+    : effectiveAssertion === "claim"
+    ? "border-l-[#a39a8c] dark:border-l-[#8b8478]"
+    : item.grade === "fact"
+    ? "border-l-[#6f9a3a] dark:border-l-[#a3d06a]"
+    : "border-l-[#e0a94e] dark:border-l-[#e0b15a]";
 
   async function submitDispute() {
     setSending(true);
@@ -627,7 +687,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
     <article
       className={cn(
         "rounded-xl border border-black/[0.06] border-l-2 bg-white/60 p-5 pl-4 text-[15px] dark:border-white/[0.1] dark:bg-white/[0.05]",
-        item.grade === "fact" ? "border-l-[#6f9a3a] dark:border-l-[#a3d06a]" : "border-l-[#e0a94e] dark:border-l-[#e0b15a]",
+        borderL,
         item.outdated && "opacity-70",
       )}
     >

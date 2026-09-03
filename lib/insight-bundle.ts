@@ -23,8 +23,10 @@ export const INSIGHT_DIMENSIONS: InsightDimension[] = [
   "culture",
 ];
 
+// ⚠️ 踩过的坑（2026-09-03）：在 verification 判断里加了新逻辑却忘了加进 ITEM_COLUMNS，
+// 导致新字段在查询结果里永远是 undefined，逻辑永远走不到。加新展示门前先确认列在这里。
 export const ITEM_COLUMNS =
-  "id, company_id, dimension, grade, title, content, sample_size, payload, time_window, valid_from, valid_until, last_verified_at, deidentified, status, created_at, updated_at, verification";
+  "id, company_id, dimension, grade, title, content, sample_size, payload, time_window, valid_from, valid_until, last_verified_at, deidentified, status, created_at, updated_at, verification, assertion, subject_id, metric_key, metric_value, metric_unit, scope";
 
 export function emptyDimensions(): Record<InsightDimension, InsightItemView[]> {
   return { timing: [], hiring: [], listing: [], compensation_intensity: [], path: [], culture: [] };

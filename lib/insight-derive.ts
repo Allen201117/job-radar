@@ -8,12 +8,27 @@ import type { InsightDimension, InsightItemView, Job } from "./types";
 
 export type RecruitBucket = "campus" | "intern" | "social" | "unknown";
 
-// 阈值：样本太少不出洞察（宁缺毋滥，避免拿 2 个岗位编节奏）
+// ============================================================
+// 样本量阈值（v3 §1.5 硬规则）：样本不足即整字段/整卡不显示。
+// 导出供展示层单测用，禁止内联数字（改一处就全改）。
+// ============================================================
+/** signal 类招聘动态（公司级分布类）最少样本 */
+export const SIGNAL_MIN_COMPANY = 10;
+/** signal 类招聘动态（业务线级）最少样本 */
+export const SIGNAL_MIN_BU = 20;
+/** signal 类趋势（两期各需满足）最少样本 */
+export const SIGNAL_MIN_TREND = 10;
+/** n < 此值禁止渲染百分比（防小样本百分比误导）*/
+export const SIGNAL_NO_PCT_BELOW = 10;
+
+// 内部用别名（保持代码可读）
 const TIMING_MIN_SAMPLE = 5;
+// 基础招聘卡（count + hiring_signal）门槛低，3 条岗即可出卡（计数是事实，不是分布）。
+// 分布类统计（经验/学历分布）另有 DIST_MIN_SAMPLE 门（见 spec §1.5 「公司级分布类 n≥10」）。
 const HIRING_MIN_SAMPLE = 3;
 const SALARY_MIN_SAMPLE = 5;
-// 经验/学历分布最少样本：至少 10 个岗有该字段才输出分布
-const DIST_MIN_SAMPLE = 10;
+// 经验/学历分布最少样本：至少 10 个岗有该字段才输出分布（spec §1.5 公司级分布类 n≥10）
+const DIST_MIN_SAMPLE = SIGNAL_MIN_COMPANY;
 
 // 经验要求归桶：覆盖常见中文表述 + 英文
 export function bucketExperience(text: string | null): string | null {
@@ -116,7 +131,8 @@ function median(nums: number[]): number {
   return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2);
 }
 
-// 构造派生展示态条目：固定 grade=fact、deidentified=true、status=active、derived=true、无溯源链接
+// 构造派生展示态条目：grade=fact（兼容旧字段），assertion=signal（v3 语义）
+// payload 里必须包含 sample_n（样本量）供展示层「基于 N 个在招岗」标注（v3 §1.5）。
 function makeDerivedView(o: {
   dimension: InsightDimension;
   title: string;
@@ -126,15 +142,17 @@ function makeDerivedView(o: {
   sample_size?: number | null;
   nowIso: string;
 }): InsightItemView {
+  const sn = o.sample_size ?? (o.payload?.active_count as number | undefined) ?? null;
   return {
     id: `derived-${o.dimension}`,
     company_id: "derived",
     dimension: o.dimension,
     grade: "fact",
+    assertion: "signal",  // v3：派生条目属「自有岗位库观测量」，只给数字不下结论
     title: o.title,
     content: o.content,
-    sample_size: o.sample_size ?? null,
-    payload: o.payload ?? {},
+    sample_size: sn,
+    payload: { sample_n: sn, ...(o.payload ?? {}) },
     time_window: o.time_window,
     valid_from: null,
     valid_until: null,
