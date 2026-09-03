@@ -55,7 +55,7 @@ test("must-apply TypeScript API unions patterns, finds all industries, and resol
   assert.deepEqual(M.MUST_APPLY_LIST, json["互联网/科技"]);
   const union = M.mustApplyUnion();
   assert.equal(new Set(union.map((company) => company.pattern)).size, union.length);
-  assert.deepEqual(M.industriesForPattern("%蔚来%"), ["互联网/科技", "汽车/出行"]);
+  assert.deepEqual(M.industriesForPattern("%贝壳%"), ["互联网/科技", "地产/建筑"]);
   assert.deepEqual(M.resolveMustApplyIndustries(["金融科技"]), [canonicalizeUserIndustry("金融科技")]);
   assert.deepEqual(M.resolveMustApplyIndustries([]), ["互联网/科技"]);
   assert.deepEqual(M.resolveMustApplyIndustries(null), ["互联网/科技"]);
@@ -91,4 +91,64 @@ test("only the four approved sub-brands expose parent portal rollup metadata", (
     ],
   );
   assert.equal(M.mustApplyUnion().filter((entry) => entry.parentPattern).length, 4);
+});
+
+// ============================================================
+// 2026-09-03 门禁：必投清单的行业分组必须与 company-industry 分类器一致。
+//
+// 立这道门的原因：清单此前**自己定义了第二套行业归属**，与分类器冲突 20 条 ——
+// 宁德时代/蔚来/理想/小鹏/微众银行/蚂蚁/SHEIN 全被塞进「互联网/科技」，
+// 用户直接看出来了（「宁德时代不算互联网行业，这是最基本的常识」）。
+// 根因不是某个条目写错，是**同一个事实有两个数据源、且没人对账**。
+//
+// 现行口径：`classifyCompanyIndustry` 是公司→行业的**唯一权威**。
+// 清单只负责「这个行业的必投目标是哪 30 家」，不负责判断某家公司属于哪个行业。
+// 分类器判不出（null）的公司不拦——那是覆盖度问题，不是矛盾。
+// ============================================================
+
+const { classifyCompanyIndustry } = require("../lib/company-industry.js");
+
+// 显式豁免：分类器按「实体本身」判，清单按「求职者会去哪个行业的清单里找它」放。
+// 少数公司这两者合理地不同，必须逐条写明理由；不写理由的一律当错处理。
+const INDUSTRY_PLACEMENT_EXEMPTIONS = {
+  // 京东科技是京东的金融科技板块，求职者在金融清单里找它；分类器按母品牌判互联网。
+  京东科技: { listedAs: "金融", classifierSays: "互联网/科技" },
+  // SHEIN 是跨境电商平台：分类器按「卖服装」判消费/零售，求职者按「互联网公司」投算法/供应链数字化岗。
+  // 与宁德时代那类错放不同——这不是常识错误，是同一实体的两个成立视角。
+  SHEIN: { listedAs: "互联网/科技", classifierSays: "消费/零售" },
+  // AMD 是芯片设计公司：清单按半导体归制造/工业（与中芯国际/华虹同档），分类器按科技巨头归互联网。
+  AMD: { listedAs: "制造/工业", classifierSays: "互联网/科技" },
+};
+
+test("必投清单的行业分组不得与 company-industry 分类器冲突", () => {
+  const conflicts = [];
+  for (const [industry, companies] of Object.entries(json).filter(([k]) => !k.startsWith("_"))) {
+    for (const { name } of companies) {
+      const got = classifyCompanyIndustry(name);
+      if (got === null || got === industry) continue;
+      const ex = INDUSTRY_PLACEMENT_EXEMPTIONS[name];
+      if (ex && ex.listedAs === industry && ex.classifierSays === got) continue;
+      conflicts.push(`${name}：清单放在「${industry}」，分类器判「${got}」`);
+    }
+  }
+  assert.deepEqual(
+    conflicts,
+    [],
+    `清单与分类器冲突 ${conflicts.length} 条 —— 要么公司放错行业清单，要么分类器判错，` +
+      `二选一改掉；确属合理差异就写进 INDUSTRY_PLACEMENT_EXEMPTIONS 并注明理由。\n` +
+      conflicts.join("\n"),
+  );
+});
+
+test("海外必投清单同样受行业一致性门禁约束", () => {
+  const conflicts = [];
+  for (const [industry, companies] of Object.entries(overseasJson).filter(([k]) => !k.startsWith("_"))) {
+    for (const { name } of companies || []) {
+      const got = classifyCompanyIndustry(name);
+      if (got === null || got === industry) continue;
+      if (INDUSTRY_PLACEMENT_EXEMPTIONS[name]) continue;
+      conflicts.push(`${name}：清单放在「${industry}」，分类器判「${got}」`);
+    }
+  }
+  assert.deepEqual(conflicts, [], `海外清单冲突 ${conflicts.length} 条\n${conflicts.join("\n")}`);
 });

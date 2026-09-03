@@ -75,7 +75,11 @@ const loadCampusBoard = unstable_cache(
         hasAnySource: src.hasAnySource,
         lastSeenAtMs: z.lastSeenAtMs,
         nearestDeadlineMs: deadlines.length ? Math.min(...deadlines) : null,
-        timeline: obs.length > 0 ? campusTimelineSummary(obs) : null,
+        // ⚠️ 把「当下在招校招岗数」作为事实喂进去：时间线是外部聚合的推测，岗位库是第一手事实，
+        // 打架时（如高途 212 个在招岗 vs「已近尾声」）必须以事实为准，否则同一张卡自相矛盾。
+        timeline: obs.length > 0
+          ? campusTimelineSummary(obs, new Date(), { campusJobCount: campus.totals.get(z.pattern) ?? 0 })
+          : null,
         preciseDates: obs.length > 0 ? campusPreciseDates(obs) : [],
         batchTimingGap: obs.length > 0 ? campusBatchTimingGap(obs) : null,
         cleanDeadlineMs: cleanDl.length ? Math.min(...cleanDl) : null,

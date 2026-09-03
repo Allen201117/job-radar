@@ -445,17 +445,20 @@ test("groupFetchCoverageByIndustry includes cross-industry companies in every re
       fullyFetched: 1,
       avgPct: 90,
       companies: [
-        { name: "蔚来", pattern: "%蔚来%", reportedTotal: 10, fetched: 9, coveragePct: 90, measurable: true, lastRunAt: null },
+        // 贝壳同时在「互联网/科技」和「地产/建筑」两份清单里 —— 跨行业归属的验证样本。
+        // ⚠️ 这里原本用蔚来，因为它当时被错放进「互联网/科技」清单；2026-09-03 行业归属
+        // 治本后蔚来只在「汽车/出行」，跨行业样本换成真正跨行业的贝壳。
+        { name: "贝壳", pattern: "%贝壳%", reportedTotal: 10, fetched: 9, coveragePct: 90, measurable: true, lastRunAt: null },
         { name: "腾讯", pattern: "%腾讯%", reportedTotal: null, fetched: 0, coveragePct: null, measurable: false, lastRunAt: null },
       ],
     },
-    ["互联网/科技", "汽车/出行"],
+    ["互联网/科技", "地产/建筑"],
   );
   assert.equal(grouped["互联网/科技"].total, 30);
-  assert.equal(grouped["汽车/出行"].total, 30);
-  assert.deepEqual(grouped["互联网/科技"].companies.map((company) => company.name), ["蔚来", "腾讯"]);
-  assert.deepEqual(grouped["汽车/出行"].companies.map((company) => company.name), ["蔚来"]);
-  assert.equal(grouped["汽车/出行"].fullyFetched, 1);
+  assert.equal(grouped["地产/建筑"].total, 30);
+  assert.deepEqual(grouped["互联网/科技"].companies.map((company) => company.name), ["贝壳", "腾讯"]);
+  assert.deepEqual(grouped["地产/建筑"].companies.map((company) => company.name), ["贝壳"]);
+  assert.equal(grouped["地产/建筑"].fullyFetched, 1);
 });
 
 test("groupFetchCoverageByIndustry groups overseas patterns with overseas totals", () => {
