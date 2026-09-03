@@ -78,6 +78,14 @@ const classify = (row) => ({
 
 async function main() {
   const pool = makePool();
+  // 全程用同一条连接，并在会话上打「重算任务」的身份标记。
+  // 库里有个触发器（jobs-db/schema.sql 的 jobs_guard_recruitment_class）替这两列把门：
+  // 分类输入没变时，任何人想改这两列都会被驳回 —— 因为写入方算分类用的是「本次 payload」，
+  // 而落库走 COALESCE 保留旧富字段，两者会对不上（2026-09-03 实测 8,140 行）。
+  // 本脚本是唯一例外：它读的就是库里最终那一行，结论必然自洽。
+  // ⚠️ 不打这个标记 = 写库静默变成空操作（不会报错，只会「跑完了但一行没改」）。
+  const client = await pool.connect();
+  await client.query("set jobradar.reclassify = 'on'");
   const t0 = Date.now();
   // keyset 翻页：按 id 顺序推进，避免大 offset 在 42 万行上退化成全扫。
   let cursor = "00000000-0000-0000-0000-000000000000";
@@ -89,7 +97,7 @@ async function main() {
     const take = Math.min(BATCH, LIMIT - seen);
     // --all 或 --check 看全部行；默认 --apply 只补没算过的（NULL）。
     const onlyNull = APPLY && !ALL;
-    const { rows } = await pool.query(
+    const { rows } = await client.query(
       `select ${COLS}, recruitment_category as _cat, recruitment_explicit as _exp
          from jobs
         where id > $1 ${onlyNull ? "and recruitment_category is null" : ""}
@@ -124,7 +132,7 @@ async function main() {
       const vals = updates
         .map((_, i) => `($${i * 3 + 1}::uuid, $${i * 3 + 2}::text, $${i * 3 + 3}::boolean)`)
         .join(",");
-      await pool.query(
+      await client.query(
         `update jobs set recruitment_category = v.cat, recruitment_explicit = v.exp
            from (values ${vals}) as v(id, cat, exp)
           where jobs.id = v.id`,
@@ -150,6 +158,7 @@ async function main() {
     console.log("已存值与现算值：0 处不一致 ✅");
   }
   console.log(`耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  client.release();
   await pool.end();
 }
 

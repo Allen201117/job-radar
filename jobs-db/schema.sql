@@ -212,6 +212,52 @@ create trigger jobs_search_doc_trg
   before insert or update of title, company, location, job_type on jobs
   for each row execute function jobs_set_search_doc();
 
+-- ── 招聘类型物化两列的「所有权」归数据库（2026-09-03）────────────────────────────────
+-- recruitment_category / recruitment_explicit 是**派生数据**：它必须是「库里那一行」的函数。
+-- 但规则本体是七层裁决（lib/china-keyword-expansion.js，几百行正则 + 完整单测），照抄进 SQL
+-- 就是制造第二份会漂移的实现 —— 本库在 canonicalize_jd_url 上吃过这个亏，不再犯。
+-- 所以这个触发器**不算分类，只管作废与保权**：
+--
+--   ① 分类输入变了 → 旧结论作废（置 NULL）。NULL = 「还没算」≠「不是」，检索侧对它退回
+--      安全的信号超集（lib/jobs-store/search.ts），结果照样正确，只是候选略宽。
+--   ② 分类输入没变、却有人想改这两列 → **驳回，保留库里那份**。
+--      这条正是 2026-09-03 那个 bug 的结构性封堵：列表重抓拿「本次抓到的瘦 payload」算分类，
+--      而 summary / job_type / experience 落库走 COALESCE 保留旧值 → 写进来的结论是按瘦数据
+--      算的、和最终那一行对不上。实测 8,140 行 / 1.93% 漂移，其中约 1,161 行是真校招/实习岗被
+--      记成社招 —— 而检索按这两列**排除**候选，等于用户搜「校招」永远搜不到它们。
+--   ③ 唯一有权写值的是重算任务（scripts/backfill-recruitment-category.js）：它读的是库里最终
+--      那一行，结论必然自洽。靠 `set jobradar.reclassify = 'on'` 表明身份。
+--
+-- 为什么用触发器而不是「让每个写入方自己注意」：写入方有 4 条以上（爬虫 upsert / 爬虫富化 /
+-- app upsert / app 富化），还会继续增加，语言也不同。靠自觉 = 下一个新路径原样复发。
+-- INSERT 不拦：新行的 payload 就是整行内容，写入方算出来的必然自洽。
+-- ⚠️ 改分类输入字段清单时，这里与 crawler/recruitment_classify._FIELDS 必须同步
+--    （crawler/test_jobs_db_upsert.py 会拿两边对拍）。
+create or replace function jobs_guard_recruitment_class()
+returns trigger language plpgsql as $function$
+begin
+  if coalesce(current_setting('jobradar.reclassify', true), '') = 'on' then
+    return new;  -- ③ 重算任务：放行
+  end if;
+  if (new.title, new.summary, new.job_type, new.jd_url, new.apply_url, new.company, new.experience)
+     is distinct from
+     (old.title, old.summary, old.job_type, old.jd_url, old.apply_url, old.company, old.experience)
+  then
+    new.recruitment_category := null;  -- ① 依据变了 → 结论作废
+    new.recruitment_explicit := null;
+  else
+    new.recruitment_category := old.recruitment_category;  -- ② 依据没变 → 不许改结论
+    new.recruitment_explicit := old.recruitment_explicit;
+  end if;
+  return new;
+end;
+$function$;
+
+drop trigger if exists jobs_recruitment_class_guard_trg on jobs;
+create trigger jobs_recruitment_class_guard_trg
+  before update on jobs
+  for each row execute function jobs_guard_recruitment_class();
+
 -- ── 招聘阶段谓词（校招 / 实习）：与 lib/jobs-store/opportunities.ts 的 stageRecallPatterns 逐字对齐 ──
 -- 它存在的唯一理由是**给下面两个分区索引写谓词**；应用层 SQL 不调它、也不需要改。
 -- 之所以「不改应用层也能生效」：这是个简单 SQL 函数且标了 immutable，Postgres 建索引时会把它
@@ -285,6 +331,11 @@ create index if not exists jobs_valid_active_idx            on jobs (id) where s
 
 -- ── 中文 bigram 全文检索 GIN（search_doc）：app 搜索主路径（lib/jobs-store/search.ts 的 textSearch）──
 create index if not exists jobs_search_doc_gin on jobs using gin (search_doc);
+
+-- 「等待重算的行」专用小索引：触发器把结论作废后（recruitment_category 置 NULL），
+-- 补算任务要按 id 翻页找出这些行。不建这个索引，它就得为了几百行去全表 42 万行捞一遍。
+-- 部分索引只装 NULL 行，平时几乎不占空间。
+create index if not exists jobs_recruitment_unclassified_idx on jobs (id) where recruitment_category is null;
 
 -- ── 校招 / 实习分区 GIN：治 /today 召回的方向层慢（2026-08-27 加）──
 -- 病因：召回方向层的 tsquery 命中十几万行后，**还要逐行堆扫**才能应用招聘阶段过滤

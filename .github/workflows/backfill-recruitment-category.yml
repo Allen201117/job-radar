@@ -20,11 +20,15 @@ on:
         type: string
         default: ""
   schedule:
-    # 每天 UTC 19:30 跑一次**全量重算**：抓取链之后、避开 21:00 UTC 的连接峰值。
-    # 为什么是全量重算而不是只补 NULL：富化链（enrich-backlog）是**直接 UPDATE summary**、
-    # 不走 upsert，所以不会触发入库时的分类 → 正文变了但存的类型还是旧的。只补 NULL 治不了这种漂移。
-    # 成本可接受：全表 42 万行读一遍约 3 分钟，且脚本只写「算出来和存的不一样」的行，
-    # 没变化的日子实际写入接近 0。
+    # 每 2 小时补一次 NULL（便宜）：库里的触发器一发现「分类依据变了」就把结论置 NULL
+    # （jobs-db/schema.sql 的 jobs_guard_recruitment_class），这条负责把它们重新算出来。
+    # NULL 期间检索会退回安全的信号超集，结果仍然正确、只是候选略宽，所以不必更频繁。
+    # 走部分索引 jobs_recruitment_unclassified_idx，只碰真正待算的那几百行。
+    - cron: "17 */2 * * *"
+    # 每天 UTC 19:30 再跑一次**全量重算**兜底：抓取链之后、避开 21:00 UTC 的连接峰值。
+    # 触发器已经堵住了「写入方算错」这条路，这次全量是防「规则本身改了」——
+    # lib/china-keyword-expansion.js 的裁决逻辑一改，全库存量结论就都该重算一遍。
+    # 成本可接受：全表 42 万行读一遍约 3 分钟，且只写「算出来和存的不一样」的行。
     - cron: "30 19 * * *"
 
 concurrency:
@@ -55,10 +59,11 @@ jobs:
           if [ -z "${JOBS_DATABASE_URL:-}" ]; then
             echo "::error::JOBS_DATABASE_URL 未配置"; exit 1
           fi
-          # 定时触发一律走「全量重算」的 apply（治富化直改 summary 造成的漂移）；手动触发按输入走。
+          # 定时触发一律 apply；只有每天那一次走全量重算，2 小时一次的那条只补 NULL。
+          # ⚠️ 别把两条定时都设成全量：每 2 小时全表扫 42 万行是白烧香港库的 CPU。
           MODE="${{ github.event.inputs.mode || 'apply' }}"
           ARGS="--$MODE"
-          if [ "${{ github.event.inputs.all }}" = "true" ] || [ "${{ github.event_name }}" = "schedule" ]; then
+          if [ "${{ github.event.inputs.all }}" = "true" ] || [ "${{ github.event.schedule }}" = "30 19 * * *" ]; then
             ARGS="$ARGS --all"
           fi
           if [ -n "${{ github.event.inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ github.event.inputs.limit }}"; fi
