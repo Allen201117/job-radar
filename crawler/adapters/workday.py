@@ -15,6 +15,7 @@ CXS detail enrichment 仍用 {cxs_base}{externalPath}（enrich.py:_detail_workda
 """
 import json
 import re
+import time
 from typing import List, Optional
 from urllib.parse import urlparse
 
@@ -38,6 +39,20 @@ _SEARCH_TEXT_BY_REGION = {
     "SG": ("Singapore",),
     "Remote": ("Remote",),
 }
+
+
+def _post_list(source_url, body, headers, timeout):
+    """Workday 列表请求遇 429 时仅按 Retry-After 退避重试一次。"""
+    response = httpx.post(source_url, json=body, headers=headers, timeout=timeout)
+    if response.status_code == 429:
+        try:
+            retry_after = float(response.headers.get("Retry-After", 5))
+        except (TypeError, ValueError):
+            retry_after = 5
+        time.sleep(min(30, max(0, retry_after)))
+        response = httpx.post(source_url, json=body, headers=headers, timeout=timeout)
+    response.raise_for_status()
+    return response
 
 
 def _is_china_facet(desc: str) -> bool:
@@ -109,9 +124,10 @@ class WorkdayAdapter(BaseAdapter):
             "User-Agent": self.user_agent,
         }
         # 1) 取 facets，按 param 分组收集大中华区候选 id
-        r = httpx.post(source_url, json={"appliedFacets": {}, "limit": 1, "offset": 0, "searchText": ""},
-                       headers=headers, timeout=self.timeout)
-        r.raise_for_status()
+        r = _post_list(
+            source_url, {"appliedFacets": {}, "limit": 1, "offset": 0, "searchText": ""},
+            headers, self.timeout,
+        )
         regions = normalizer.source_regions(getattr(self, "regions", None))
         candidates = self._facet_candidates_for_regions(r.json().get("facets", []), regions)
 
@@ -127,8 +143,7 @@ class WorkdayAdapter(BaseAdapter):
                 continue
             def fetch_page(page: int) -> PageResult:
                 body = {"appliedFacets": {param: ids}, "limit": 20, "offset": page * 20, "searchText": ""}
-                rr = httpx.post(source_url, json=body, headers=headers, timeout=self.timeout)
-                rr.raise_for_status()
+                rr = _post_list(source_url, body, headers, self.timeout)
                 posts = rr.json().get("jobPostings", []) or []
                 return PageResult(items=posts, total=None)
 
@@ -158,8 +173,7 @@ class WorkdayAdapter(BaseAdapter):
             for q in _search_texts_for_regions(regions):
                 def fetch_page(page: int) -> PageResult:
                     body = {"appliedFacets": {}, "limit": 20, "offset": page * 20, "searchText": q}
-                    rr = httpx.post(source_url, json=body, headers=headers, timeout=self.timeout)
-                    rr.raise_for_status()
+                    rr = _post_list(source_url, body, headers, self.timeout)
                     posts = rr.json().get("jobPostings", []) or []
                     return PageResult(items=posts, total=None)
 

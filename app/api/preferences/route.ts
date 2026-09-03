@@ -6,9 +6,9 @@ import { requireUser } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
 import { buildRadarProfile, profileReadiness } from "@/lib/opportunities/profile";
 import { parsePreferenceScopeInput, parsePreferencesInput } from "@/lib/opportunities/preferences-input";
-import { normalizeCompany } from "@/lib/company-normalize";
 import { isMissingRelation } from "@/lib/opportunities/schema-errors";
 import { fetchAllSources } from "@/lib/supabase-paginate";
+import { buildCoverageRows } from "@/lib/sync-coverage";
 import type { CandidateProfile, UserPreferences } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -28,76 +28,64 @@ class CoverageError extends Error {
 async function syncCoverage(userId: string, targetCompanies: string[]): Promise<Coverage[]> {
   const service = createServiceClient();
 
+  // Step 1：并行读（fetchAllSources 与 existingRes 互不依赖）。
   // ⚠️ 必须分页拉全量 enabled sources（当前 1079 行，越过 PostgREST 单次 1000 行上限）：
   // 截断后落在尾部的公司会被误判「无源覆盖」→ 用户看到 queued 而不是 covered（用户可见错误）。
+  // existingRes 多取 id 字段，省去后续单独读 stale 行 id 的一次往返。
   let enabledSources: Array<{ id: string; company: string | null }>;
+  let existingRes: { data: Array<{ id: string; normalized_company: string; status: string }> | null; error: any };
   try {
-    enabledSources = await fetchAllSources(service, "id, company", { enabledOnly: true });
+    const [srcs, exRes] = await Promise.all([
+      fetchAllSources<{ id: string; company: string | null }>(service, "id, company", { enabledOnly: true }),
+      service
+        .from("company_watch_requests")
+        .select("id, normalized_company, status")
+        .eq("user_id", userId),
+    ]);
+    enabledSources = srcs;
+    existingRes = exRes as typeof existingRes;
   } catch {
     throw new CoverageError("coverage_sync_failed");
   }
-  const existingRes = await service
-    .from("company_watch_requests")
-    .select("normalized_company, status")
-    .eq("user_id", userId);
   if (existingRes.error)
-    throw new CoverageError(isMissingRelation(existingRes.error) ? "coverage_schema_unavailable" : "coverage_sync_failed");
+    throw new CoverageError(
+      isMissingRelation(existingRes.error) ? "coverage_schema_unavailable" : "coverage_sync_failed",
+    );
 
-  const sourceMap = new Map<string, string[]>();
-  for (const s of enabledSources) {
-    const norm = normalizeCompany(s.company);
-    if (!norm) continue;
-    const arr = sourceMap.get(norm) || [];
-    arr.push(s.id);
-    sourceMap.set(norm, arr);
-  }
-  const existingStatus = new Map<string, string>();
-  for (const e of existingRes.data || []) existingStatus.set(e.normalized_company, e.status);
+  // Step 2：纯计算，无 DB 调用。
+  const updatedAt = new Date().toISOString();
+  const { rows: baseRows, staleIds } = buildCoverageRows(
+    targetCompanies,
+    enabledSources,
+    existingRes.data || [],
+  );
+  const rows = baseRows.map((r) => ({ ...r, user_id: userId, updated_at: updatedAt }));
 
-  const keptNorms = new Set<string>();
-  const rows: any[] = [];
-  for (const company of targetCompanies) {
-    const norm = normalizeCompany(company);
-    if (!norm || keptNorms.has(norm)) continue;
-    keptNorms.add(norm);
-    const matched = sourceMap.get(norm) || [];
-    const prev = existingStatus.get(norm);
-    const status = matched.length
-      ? "covered"
-      : prev === "researching" || prev === "unsupported"
-        ? prev
-        : "queued";
-    rows.push({
-      user_id: userId,
-      company,
-      normalized_company: norm,
-      status,
-      matched_source_ids: matched,
-      updated_at: new Date().toISOString(),
-    });
-  }
-
-  if (rows.length) {
-    const up = await service
-      .from("company_watch_requests")
-      .upsert(rows, { onConflict: "user_id,normalized_company" });
-    if (up.error)
-      throw new CoverageError(isMissingRelation(up.error) ? "coverage_schema_unavailable" : "coverage_sync_failed");
+  // Step 3：并行写（upsert 与 delete 作用于不相交行集，互不冲突）。
+  const writes: Promise<{ error: any }>[] = [];
+  if (rows.length)
+    writes.push(
+      (service
+        .from("company_watch_requests")
+        .upsert(rows, { onConflict: "user_id,normalized_company" }) as unknown) as Promise<{ error: any }>,
+    );
+  if (staleIds.length)
+    writes.push(
+      (service.from("company_watch_requests").delete().in("id", staleIds) as unknown) as Promise<{
+        error: any;
+      }>,
+    );
+  if (writes.length) {
+    const results = await Promise.all(writes);
+    for (const res of results) {
+      if (res.error)
+        throw new CoverageError(
+          isMissingRelation(res.error) ? "coverage_schema_unavailable" : "coverage_sync_failed",
+        );
+    }
   }
 
-  // 删不再 target 的请求
-  const allRes = await service
-    .from("company_watch_requests")
-    .select("id, normalized_company")
-    .eq("user_id", userId);
-  if (allRes.error) throw new CoverageError("coverage_sync_failed");
-  const stale = (allRes.data || []).filter((r: any) => !keptNorms.has(r.normalized_company)).map((r: any) => r.id);
-  if (stale.length) {
-    const del = await service.from("company_watch_requests").delete().in("id", stale);
-    if (del.error) throw new CoverageError("coverage_sync_failed");
-  }
-
-  // 权威 coverage 来自 read-back（不是内存计算）
+  // Step 4：权威 coverage 来自 read-back（不是内存计算）。
   const back = await service
     .from("company_watch_requests")
     .select("company, status, matched_source_ids, resolution_note")

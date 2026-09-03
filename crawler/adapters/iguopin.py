@@ -16,6 +16,7 @@ source_url 约定：``https://www.iguopin.com/job?company={公司全称的 URL �
 """
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -34,6 +35,7 @@ _DETAIL_PAGE = "https://www.iguopin.com/job/detail?id={id}"
 _PAGE_SIZE = 20  # 网站自己的列表页大小；与公开 API 实际响应一致
 _GROUP_CHILD_CAP = 60
 _GROUP_CHILD_PAGE_CAP = 2
+_DETAIL_WORKERS = 3
 
 
 class IguopinAdapter(BaseAdapter):
@@ -65,12 +67,17 @@ class IguopinAdapter(BaseAdapter):
         self.reported_total = total
         self.fetch_complete = complete
         group_short_name = self._expand_group_children(rows, headers)
-        self._enrich_details(rows, headers)
         # 可选 match token：国聘关键词搜索是模糊匹配（搜「中国建筑」会夹带无关公司岗），
-        # 带 &match={token} 时 parse 只放行 company_name 含 token 的岗，保「按公司精准抓取」。
+        # 带 &match={token} 时只放行 company_name 含 token 的岗，保「按公司精准抓取」。
+        match = _match_token(source_url)
+        listed = len(rows)
+        if match:
+            rows[:] = [row for row in rows if _row_passes_match(row, match)]
+        verified = self._enrich_details(rows, headers)
+        print(f"[iguopin] keyword={keyword} listed={listed} matched={len(rows)} verified={verified}")
         return json.dumps({
             "list": rows,
-            "_match": _match_token(source_url),
+            "_match": match,
             "_group_short_name": group_short_name,
         }, ensure_ascii=False)
 
@@ -164,23 +171,21 @@ class IguopinAdapter(BaseAdapter):
                 names.append(name)
         return names
 
-    def _enrich_details(self, rows: List[dict], headers: dict) -> None:
+    def _enrich_details(self, rows: List[dict], headers: dict) -> int:
         """读取每条公开详情；只有确认存在的逐岗详情才在 parse 中放行。"""
-        for row in rows[:resolve_detail_cap(self._DETAIL_CAP)]:
-            if not isinstance(row, dict):
-                continue
+        def enrich_row(row: dict) -> bool:
             job_id = str(row.get("job_id") or "").strip()
             if not job_id:
-                continue
+                return False
             try:
                 response = httpx.get(_DETAIL_API, params={"id": job_id}, headers=headers,
                                      timeout=self.timeout, follow_redirects=True)
                 if response.status_code >= 300:
-                    continue
+                    return False
                 body = response.json() or {}
                 detail = body.get("data") if body.get("code") == 200 else None
                 if not isinstance(detail, dict) or str(detail.get("job_id") or "") != job_id:
-                    continue
+                    return False
                 row["_detail_verified"] = True
                 row["_jd"] = detail.get("contents") or row.get("contents")
                 # Detail 是 title/source of truth，列表的瞬时卡片字段不覆盖它。
@@ -188,8 +193,14 @@ class IguopinAdapter(BaseAdapter):
                             "experience_cn", "end_time", "recruitment_type_cn"):
                     if detail.get(key) not in (None, ""):
                         row[key] = detail[key]
+                return True
             except (httpx.HTTPError, ValueError, TypeError):
-                continue
+                return False
+
+        detail_rows = [row for row in rows[:resolve_detail_cap(self._DETAIL_CAP)]
+                       if isinstance(row, dict)]
+        with ThreadPoolExecutor(max_workers=_DETAIL_WORKERS) as executor:
+            return sum(executor.map(enrich_row, detail_rows))
 
     def parse(self, html: str) -> List[RawJob]:
         try:
@@ -208,7 +219,7 @@ class IguopinAdapter(BaseAdapter):
             if not job_id or not title:
                 continue
             company = str(row.get("company_name") or "").strip()
-            if match and not row.get("_group_child") and not company_name_matches(company, match):
+            if not _row_passes_match(row, match):
                 continue  # 模糊搜索夹带的无关公司岗，精准过滤掉（严格核名，防同名子串张冠李戴）
             company = _company_with_group_brand(company, group_short_name)
             detail_url = _DETAIL_PAGE.format(id=job_id)
@@ -239,6 +250,15 @@ def _match_token(source_url: str) -> str:
     """可选精准过滤词：只放行 company_name 含它的岗（应对国聘关键词的模糊夹带）。"""
     value = (parse_qs(urlparse(source_url).query).get("match") or [""])[0]
     return unquote(value).strip()
+
+
+def _row_passes_match(row: dict, match: str) -> bool:
+    """按可选精准核名词放行列表行；集团子公司结果不受该词限制。"""
+    if not isinstance(row, dict):
+        return False
+    if not match or row.get("_group_child"):
+        return True
+    return company_name_matches(str(row.get("company_name") or "").strip(), match)
 
 
 def _env_cap(name: str, default: int) -> int:

@@ -207,6 +207,10 @@ def enrich_row(sb, row, src, dry_run=False, jobs_conn=None):
             # 巡检专属分支：仍在招、已有正文 → 只盖复检时间戳（不重写 summary，省写入、不扰动正文）。
             # backlog 路径 fetch_queue 不 select summary → row.get("summary") 恒 None，永不进此分支（行为不变）。
             patch = {"enrich_checked_at": _now()}
+            if not row.get("job_type"):
+                jt = normalizer.extract_job_type(row.get("title") or "", row["summary"])
+                if jt:
+                    patch["job_type"] = jt
             result = "alive"
         else:
             patch = {"enrich_fail_count": (row.get("enrich_fail_count") or 0) + 1,

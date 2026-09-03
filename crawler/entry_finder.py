@@ -222,6 +222,24 @@ def find_official_entry(company, supabase, *, router=None, prev_row=None,
     for index in range(limit):
         provider = plan[index]
         query = queries[index]
+        # 成本闸不是安全闸：额度表读不到（Supabase 抖一下）一律 fail-open 放行，
+        # 与 llm_budget 同口径；否则一次抖动就让整条漏斗空转一天。
+        try:
+            remaining = int(router.remaining_above_reserve(supabase))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[entry_finder] 读搜索额度失败，按放行处理：{type(exc).__name__}: {exc}")
+            remaining = 1
+        if remaining <= 0:
+            return {
+                "found": False,
+                "state": "unknown",
+                "official_entry_url": None,
+                "search_used": search_used,
+                "rounds_no_entry": int((prev_row or {}).get("rounds_no_entry") or 0),
+                "next_retry_at": (now + timedelta(days=1)).isoformat(),
+                "fail_reason": "搜索额度不足（已为校招链预留）",
+                "evidence": {"candidate_urls": evidence, "search_errors": errors},
+            }
         results, error = _search_one(
             provider, supabase, query, top_k, client, consume
         )

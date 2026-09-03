@@ -708,6 +708,12 @@ class BeisenAdapter(ChinaSpaAdapter):
             if j:
                 self._detail_route = route
                 return j
+            # httpx 失败且路由已缓存 → 不要穿透到浏览器（CI 环境未装 Playwright 会直接崩溃）。
+            # 正确处理：记 partial_success，等下次 auto-discover 重跑刷新路由缓存。
+            raise RuntimeError(
+                f"beisen: httpx fetch failed for cached route "
+                f"({self._host} → {route!r}); retry after auto-discover refreshes the route"
+            )
 
         # route 未缓存的**首见租户**：先用 httpx 抓**完整列表**（可靠），浏览器只用来探一次路由。
         # 为何：旧实现直接走下面的 _fetch_paginated 抓列表，但浏览器拦截重放对多数租户只捞到 count-probe

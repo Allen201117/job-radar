@@ -341,8 +341,8 @@ def sweep_absent_jobs(conn, source_id, cutoff, *, apply=True, max_expire_fractio
     day = _day(now)
     with conn.cursor() as cur:
         cur.execute(
-            "update jobs set status = 'expired', confirmed_closed_at = %s "
-            "where id = any(%s::uuid[]) and status = 'active'", (now, cand_ids))
+            "update jobs set status = 'expired', confirmed_closed_at = %s, enrich_checked_at = %s "
+            "where id = any(%s::uuid[]) and status = 'active'", (now, now, cand_ids))
         result["expired"] = cur.rowcount
     record_job_events(conn, [plan_close_event(jid, source_id, day) for jid in cand_ids])
     return result

@@ -332,3 +332,45 @@ class PublishTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeadSourceRuleTest(unittest.TestCase):
+    SOURCES = {
+        "s1": {"id": "s1", "adapter_name": "workday", "company": "奥的斯 Otis",
+               "source_url": "https://otis.wd5.myworkdayjobs.com/wday/cxs/otis/REC_Ext_Gateway/jobs", "enabled": True},
+        "s2": {"id": "s2", "adapter_name": "moka", "company": "某公司", "source_url": "https://x", "enabled": True},
+        "s3": {"id": "s3", "adapter_name": "ashby", "company": "已停用", "source_url": "https://y", "enabled": False},
+    }
+
+    @staticmethod
+    def _rows(sid, n, status="failed", error="HTTPStatusError: 422"):
+        return [{"source_id": sid, "status": status, "error_message": error} for _ in range(n)]
+
+    def test_all_failed_source_is_reported_with_top_error(self):
+        rows = self._rows("s1", 20) + self._rows("s2", 20, status="success", error=None)
+        findings = W.evaluate_dead_sources(rows, self.SOURCES, days=5)
+        self.assertEqual([f["subject"] for f in findings], ["workday / 奥的斯 Otis"])
+        self.assertEqual(findings[0]["rule"], "F")
+        self.assertIn("HTTPStatusError: 422", findings[0]["evidence"][0])
+        self.assertIn("REC_Ext_Gateway", findings[0]["evidence"][1])
+
+    def test_one_success_in_window_is_not_dead(self):
+        rows = self._rows("s1", 19) + self._rows("s1", 1, status="success", error=None)
+        self.assertEqual(W.evaluate_dead_sources(rows, self.SOURCES), [])
+
+    def test_partial_success_and_empty_do_not_count_as_failed(self):
+        rows = self._rows("s1", 10, status="partial_success", error=None)
+        self.assertEqual(W.evaluate_dead_sources(rows, self.SOURCES), [])
+
+    def test_too_few_runs_and_disabled_sources_are_skipped(self):
+        rows = self._rows("s1", W.DEAD_SOURCE_MIN_RUNS - 1) + self._rows("s3", 30)
+        self.assertEqual(W.evaluate_dead_sources(rows, self.SOURCES), [])
+
+    def test_issue_title_is_stable_per_source(self):
+        rows = self._rows("s1", 10)
+        [finding] = W.evaluate_dead_sources(rows, self.SOURCES)
+        self.assertEqual(W.issue_title(finding), "[watchdog] 源连续失败：workday / 奥的斯 Otis")
+
+    def test_daily_crawl_module_has_output_spec(self):
+        # run.py 2026-09-03 起写 daily_crawl 台账；没声明口径规则 A 会静默跳过它。
+        self.assertIn("daily_crawl", W.MODULE_OUTPUT)
