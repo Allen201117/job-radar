@@ -1,0 +1,46 @@
+name: search-quota-probe
+
+# 搜索额度余量探针：把「还剩多少」变成会主动叫的数字。
+#
+# 为什么必须有：Serper 的免费额度是 2,500 次**一次性总额**，用完就没了，而且是**静默**的 ——
+# 表现会是「洞察突然不产出」，又一次绿灯零产出（本仓库反复栽在这类故障上）。
+# 在此之前「快用完了」完全靠人事后翻台账推算，没有任何告警。
+#
+# 告警出口 = **CI 标红**：任一「一次性额度」越过 90% 时脚本退出 1，GitHub 会发邮件。
+# 不另建一套通知，也就不会有「日志里写了但没人看」。
+on:
+  schedule:
+    # 每周一 01:20 UTC。额度是按天/按月/一次性变化的，天级频率没必要。
+    - cron: "20 1 * * 1"
+  workflow_dispatch:
+    inputs:
+      no_fail:
+        description: "即使有源越过 90% 也返回成功（只想看数字时用）"
+        required: false
+        default: "false"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # 只有 Tavily 有官方余额接口（2026-09-04 查证）；其余两家只能靠自家台账估算，
+      # 所以这里只需要 Tavily 的 key。给了就用官方口径，没给就整体回退台账。
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+      - name: Probe search quota
+        working-directory: crawler
+        env:
+          INPUT_NO_FAIL: ${{ github.event.inputs.no_fail || 'false' }}
+        run: |
+          ARGS=()
+          if [ "$INPUT_NO_FAIL" = "true" ]; then ARGS+=(--no-fail); fi
+          python3 search_quota_probe.py "${ARGS[@]}"
