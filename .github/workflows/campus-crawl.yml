@@ -87,6 +87,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 入库时算招聘类型要调 scripts/classify-recruitment.js（规则唯一实现在 JS）。
+      # 缺 node 时 recruitment_classify 会**静默降级留空**，等每 2 小时一轮的
+      # backfill-recruitment-category 捡回 —— 但检索是按 recruitment_category **排除**候选的，
+      # 留空期间用户筛「校招」就是搜不到。校招车道恰恰是高频保鲜车道，
+      # 让新校招岗最多等两小时才可被筛出来说不过去，所以这里显式装上。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
