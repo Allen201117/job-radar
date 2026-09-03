@@ -24,7 +24,7 @@ export const INSIGHT_DIMENSIONS: InsightDimension[] = [
 ];
 
 export const ITEM_COLUMNS =
-  "id, company_id, dimension, grade, title, content, sample_size, payload, time_window, valid_from, valid_until, last_verified_at, deidentified, status, created_at, updated_at";
+  "id, company_id, dimension, grade, title, content, sample_size, payload, time_window, valid_from, valid_until, last_verified_at, deidentified, status, created_at, updated_at, verification";
 
 export function emptyDimensions(): Record<InsightDimension, InsightItemView[]> {
   return { timing: [], hiring: [], listing: [], compensation_intensity: [], path: [], culture: [] };
