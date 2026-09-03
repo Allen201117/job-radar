@@ -501,3 +501,30 @@ class TestT3(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class T3QueuePriorityTest(unittest.TestCase):
+    """搜索额度是硬瓶颈（实测每天只够 ~20 家），必须先花在用户真正会投的公司上。"""
+
+    def test_must_apply_companies_come_first(self):
+        import must_apply
+        names = must_apply.all_names()
+        # 从清单里取一个真实公司名，保证用例不依赖某一家特定公司
+        listed = sorted(names)[0]
+        rows = [
+            {"company": "某不在清单的公司", "id": "a"},
+            {"company": listed, "id": "b"},
+        ]
+        counts = {"某不在清单的公司": 9999, listed: 1}
+        rows.sort(key=lambda row: (
+            0 if must_apply.resolve_owner(str(row.get("company") or ""), names) else 1,
+            -counts.get(str(row.get("company") or ""), 0),
+        ))
+        self.assertEqual(rows[0]["id"], "b", "必投清单公司必须排在在招岗更多的非清单公司前面")
+
+    def test_jingdongfang_is_not_treated_as_jingdong(self):
+        """裸子串会把「京东方」算成「京东」——本仓库为此立过碑，这里钉死。"""
+        import must_apply
+        names = must_apply.all_names()
+        self.assertEqual(must_apply.resolve_owner("京东方 BOE", names), "京东方")
+        self.assertEqual(must_apply.resolve_owner("京东集团", names), "京东")

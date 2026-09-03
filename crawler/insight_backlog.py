@@ -24,6 +24,7 @@ import db
 import insight_engine as E
 import jobs_db
 import insight_topic_gate as topic_gate
+import must_apply
 import llm_budget
 import official_cninfo as CN
 import official_edgar as EDG
@@ -483,7 +484,16 @@ def fetch_t3_queue(sb, limit):
             str(item.get("company") or ""): int(item.get("active_count") or 0)
             for item in counts
         }
-        rows.sort(key=lambda row: -active_counts.get(str(row.get("company") or ""), 0))
+        # ⚠️ 必投清单公司**排在最前**（2026-09-04）：洞察库现在只放信息差，而信息差
+        # 全靠这条链产出；搜索额度是硬瓶颈（实测每天只够 ~20 家），所以额度必须先花在
+        # 用户真正会投的公司上，而不是按在招岗多寡排——在招岗最多的常常是央企批量岗。
+        # 归属用 must_apply.resolve_owner（清单名 ⊂ 库里名、最长者胜），
+        # 裸子串会把「京东方」算成「京东」，那是本仓库立过碑的红线。
+        must_apply_names = must_apply.all_names()
+        rows.sort(key=lambda row: (
+            0 if must_apply.resolve_owner(str(row.get("company") or ""), must_apply_names) else 1,
+            -active_counts.get(str(row.get("company") or ""), 0),
+        ))
     except Exception as exc:
         print(f"[t3] 香港 jobs 库岗位计数失败，回退 founded_year 排序: {type(exc).__name__}")
     return rows[:limit] if limit else rows
