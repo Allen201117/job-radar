@@ -363,6 +363,46 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 | 顺丰 | 可用（httpx，最近 50 页诚实 cap） | `hr.sf-express.com/JobSearchById/{id},{positionType}` |
 | 海尔 | **暂不可用** | 只解析到入口页，保持 `partial_success` |
 
+## 🚫「接口返 0 / 403」不能证明「对方没开」（2026-09-04 立，一晚栽三次）
+
+判一家公司有没有开校招，**唯一可信的依据是对方页面自己怎么说**（招聘公告、网申起止日期），
+不是我们某个接口的返回值。同一晚三次误判，全是同一个错：
+
+| 公司 | 当时的「证据」 | 真相 |
+|---|---|---|
+| 哔哩哔哩 | 社招接口传 `recruitType=1/2` 返 `total=0` | 校招在**另一条 API**（`/api/campus/position/positionList`），372 岗；首页当天就挂着「2027届秋季校园招聘正式启动」 |
+| 阿里巴巴 | `campus-talent.alibaba.com` 匿名 POST 返 403，判「login_wall」 | 不是登录，是 **CSRF**：GET 页面拿 `XSRF-TOKEN` cookie → POST 带 `?_csrf=`，1,075 岗 |
+| 小米 | 飞书两个 `storefront_id` 返回**完全相同**的 1887 条，判「私有部署没有校招板块」 | 试错了维度，真正的开关是**请求头 `website-path`**，campus 764 / internship 554 / newretailing 121 |
+
+✅ 正确姿势：① 先渲染对方的校招页，看它自己写没写「XX 届校园招聘启动」+ 网申日期；
+② 再从**页面自己发的请求**里找入口（拦 XHR / 读它的 JS 路由表），不要拿社招接口试参数；
+③ 参数值也要从它的代码里读，别猜——华为校招是 `jobType=**0**`（我们之前只试过 1/2/3）。
+
+## ⚠️ 飞书招聘的校招岗藏在 `website-path` 请求头后面（2026-09-04 立）
+
+同一个飞书租户可挂多个门户，**用哪个门户由请求头 `website-path` 决定**（与 URL 路径同名）：
+不带该头 = 社招全集；`campus` / `internship` / `newretailing` = 各自独立的池子。纯 httpx 可达，
+**不需要浏览器、不需要 `_signature`**（曾以为要签名，是因为重放时把这个头丢了）。
+
+- **加一个租户的校招源零代码**：插一行 `source_url = https://{host}/campus/position` 即可，
+  `FeishuRecruitAdapter` 按路径自动切门户与详情模板（`lib/source-adapters.ts` 不用动）。
+- ⚠️ **`website-path: index` 不是「主门户」，是更小的子集**：蔚来不带头 2055 岗、带 index 只有
+  1801 岗（少 254 个）。库里存量飞书源全是 `/index/position`，派生 index 就是全体缩水——
+  `_bind_website_path` 因此把 index 当「无子门户」，钉在 `tests` 里别改。
+- ⚠️ `portal_type` **不是**开关：带 `website-path: campus` 时传 2 或 6 返回同一批。
+
+## ⚠️ 列表抓取上限与「短页误判末页」（2026-09-04 立）
+
+- 单源列表上限统一走 `adapters/base.resolve_list_cap`（`DEFAULT_LIST_CAP=8000`，
+  env `CRAWL_MAX_JOBS` 可整体调档，出事改 repo variable 即可、不用重新部署）。
+  旧的 600 硬顶让 32 个源每轮漏 10.7 万个岗**且 status 全是 success**。
+- ⚠️ 末页判据一律用「这一页有没有带来新岗位」，**不要用「本页条数 < pageSize」**：
+  北森按 IP 限流（响应头 `X-RateLimit-Limit-<host><ip>-second: 50`），限流时回短页，
+  一撞就整源截断（中国交建自报 2565 只抓到 800）。beisen/feishu 已改并加了退避重试。
+- ⚠️ **上限调高会放大对同一 CDN 的请求量**，进而触发对方限流 → 反而抓得更少。
+  改上限后必须做**逐源前后对比**（不是只看聚合缺口）：2026-09-04 那次聚合是
+  「26 源多抓 3.1 万」，但同一轮里 20 个源少抓了 461 个岗，净值向好把回归洗掉了。
+
 ## ⚠️ 必投清单公司名 ↔ sources.company 的归属匹配（2026-08-27 立）
 
 清单里存的是**品牌短名**（腾讯音乐 / 工商银行），库里 `sources.company` 存的常是**实体全称或带后缀**
