@@ -19,19 +19,19 @@ import {
   GraduationCap,
   List,
   SignOut,
-  SlidersHorizontal,
   UserCircle,
   X,
 } from "@phosphor-icons/react";
 
-// 一级导航（§3.1）：今日机会 / 搜索岗位 / 职业路径 / 关注与偏好 / 值得投 / 已投递。
+// 一级导航：今日机会 / 搜索岗位 / 职业路径 / 校招专区 / 个人主页 / 值得投 / 已投递。
+// 2026-09-03：原「关注与偏好」与「个人主页」功能重复（两处各挂一份简历画像面板），已合并为后者。
 // /me 移入账号菜单。/sources、/admin/* 仅管理员直达。
 const LINKS = [
   { href: "/today", key: "today", icon: Broadcast },
   { href: "/jobs", key: "jobs", icon: Briefcase },
   { href: "/path", key: "path", icon: Compass },
   { href: "/campus", key: "campus", icon: GraduationCap },
-  { href: "/preferences", key: "preferences", icon: SlidersHorizontal },
+  { href: "/me", key: "me", icon: UserCircle },
   { href: "/saved", key: "saved", icon: BookmarkSimple },
   { href: "/applied", key: "applied", icon: CheckCircle },
 ];
@@ -354,21 +354,6 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
                   <p className="truncate text-xs ink-3">{email}</p>
                 </div>
               </div>
-            )}
-            {email && (
-              <Link
-                href="/me"
-                onClick={() => setMenuOpen(false)}
-                className={cn(
-                  "flex items-center gap-3 rounded-2xl px-3.5 py-3 text-[15px] font-medium transition duration-200",
-                  pathname === "/me"
-                    ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                    : "ink-2 hover:bg-black/[0.05] active:scale-[0.99] dark:hover:bg-white/[0.06]",
-                )}
-              >
-                <UserCircle size={20} weight={pathname === "/me" ? "fill" : "regular"} aria-hidden="true" />
-                {t("me", lang)}
-              </Link>
             )}
             <div className="mt-2 border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
               <button

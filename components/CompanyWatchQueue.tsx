@@ -84,7 +84,7 @@ export default function CompanyWatchQueue() {
         <h2 className="text-base font-semibold">用户希望监控的公司</h2>
       </div>
       <p className="mt-1 text-sm ink-3 ">
-        用户在「关注与偏好」里加的公司。已覆盖的会自动标记；其余按请求人数排队，确认官方入口后用上方「添加源」接入，再标「已覆盖」。
+        用户在「个人主页」里加的公司。已覆盖的会自动标记；其余按请求人数排队，确认官方入口后用上方「添加源」接入，再标「已覆盖」。
       </p>
 
       {error && (
