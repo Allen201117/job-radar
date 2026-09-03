@@ -18,8 +18,8 @@ export default async function SourcesPage() {
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
           eyebrow="数据源"
-          title="企业招聘源的状态与抓取日志"
-          description="添加新的招聘源、查看官方源是否启用，以及最近一次抓取结果。全程网页操作，无需写 SQL。"
+          title="每家公司的官方招聘页接得怎么样、最近一次抓取的结果"
+          description="在这里接入新公司的官方招聘页、看哪些已经启用，以及最近一次抓取抓到了什么。全程网页操作，不用写代码。"
           icon={Database}
         />
         <div className="mt-6">

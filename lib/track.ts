@@ -405,3 +405,38 @@ export function buildSearchResultPayload(
     latency_bucket: Number.isFinite(latency) ? bucketLatency(latency) : "pending",
   };
 }
+
+// 事件名 → 人话。管理员看板不该出现 opportunity_official_opened 这种给程序看的字符串。
+// 未登记的事件保留原名（新加埋点忘了登记时，宁可露出英文，也不能显示成「未知」把它藏掉）。
+const EVENT_LABELS: Record<string, string> = {
+  page_view: "打开了某个页面",
+  search: "点了重新搜索",
+  search_result: "搜索出结果",
+  preferences_saved: "保存了求职目标",
+  radar_open: "打开今日推荐",
+  radar_feed_opened: "今日推荐加载完成",
+  radar_onboarding_required: "被「请先设置求职目标」拦下",
+  opportunity_click: "点了推荐的机会",
+  opportunity_official_opened: "跳去了企业官网",
+  opportunity_feedback: "对推荐给了反馈",
+  opportunity_undo: "撤销了刚才的操作",
+  job_click: "点开了岗位",
+  job_action: "对岗位做了标记（收藏/投递/忽略）",
+  job_copy_link: "复制了岗位链接",
+  job_liveness_at_click: "点击时顺带查了岗位还在不在",
+  saved_compare_opened: "打开了岗位对比",
+  insight_drawer_open: "看了公司洞察",
+  company_watch_added: "关注了一家公司",
+  company_watch_removed: "取消关注公司",
+  campus_job_dispute: "反馈校招岗位有问题",
+  refresh_click: "点了刷新公司库",
+  resume_parse_started: "开始解析简历",
+  resume_parse_succeeded: "简历解析成功",
+  resume_parse_fallback_rule: "简历解析降级成规则版",
+  resume_profile_saved: "保存了简历画像",
+  resume_preferences_applied: "把简历同步进了求职目标",
+};
+
+export function eventLabel(event: string): string {
+  return EVENT_LABELS[event] || event;
+}

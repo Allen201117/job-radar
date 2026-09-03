@@ -17,7 +17,7 @@ export const HEALTH_STATUS_META: Record<BandTone, { label: string; symbol: strin
     fill: "bg-[#6f9738] dark:bg-[#a3d06a]",
   },
   warning: {
-    label: "关注",
+    label: "要注意",
     symbol: "◐",
     badge: "bg-[#f7ebd8] text-[#805e28] dark:bg-[#4a381e] dark:text-[#edc978]",
     cell: "border-[#dfbd82] bg-[#f5e5c9] text-[#876126] dark:border-[#9d7332] dark:bg-[#59431f] dark:text-[#f0ce7e]",
@@ -25,7 +25,7 @@ export const HEALTH_STATUS_META: Record<BandTone, { label: string; symbol: strin
     fill: "bg-[#b88337] dark:bg-[#dfb566]",
   },
   danger: {
-    label: "处理",
+    label: "得处理",
     symbol: "×",
     badge: "bg-[#f3e2dc] text-[#914d40] dark:bg-[#4d2923] dark:text-[#e7aaa0]",
     cell: "border-[#d6a39a] bg-[#efd8d1] text-[#944d40] dark:border-[#92594e] dark:bg-[#5b302a] dark:text-[#efb8ae]",
@@ -33,7 +33,7 @@ export const HEALTH_STATUS_META: Record<BandTone, { label: string; symbol: strin
     fill: "bg-[#b4523f] dark:bg-[#e6a99f]",
   },
   muted: {
-    label: "暂无数据",
+    label: "没有数据",
     symbol: "·",
     badge: "bg-[#ece7dd] text-[#625c51] dark:bg-white/[0.08] dark:text-[#c5bbaa]",
     cell: "border-[#d6cfc2] bg-[#e9e4da] text-[#746d62] dark:border-white/[0.12] dark:bg-white/[0.08] dark:text-[#bfb5a5]",
