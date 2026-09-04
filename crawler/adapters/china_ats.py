@@ -203,7 +203,15 @@ class MokaAdapter(PlaywrightAdapter):
     _routes = ("#/jobs", "", "#/campus/jobs", "#/positions")
     # Moka 列表每页仅渲染 ~30 个岗位卡，其余在「sd-Pagination」分页组件后面（非 ant，非滚动加载）。
     # 不翻页只能拿首页，岗位多的租户被截断（如李宁 32/176、SHEIN 34/747）。逐页点「下一页」累加全量。
-    _page_cap = 60  # 30/页 → 封顶约 1800 岗，足够覆盖最大租户（SHEIN ~25 页）且防失控
+    # 单租户抓取条数上限 → 换算成页数上限（env CRAWL_MAX_JOBS 整体调档，见 base.resolve_page_cap）。
+    # ⚠️ 旧实现写死 `_page_cap = 60`（"封顶约 1800 岗，足够覆盖最大租户 SHEIN ~25 页"）——
+    # 那个 60 背后其实是「当时最大的租户多少页」，租户一扩招就悄悄截断且 status 还是 success：
+    # 2026-09-04 live 实测吉利控股自报 86 页/2,580 岗，卡在 60 页只拿到 1,800，漏 780。
+    # 收归同一个旋钮后，页数上限只剩「防失控」的兜底作用，真正的收尾交给分页器自报的总页数。
+    _MAX_JOBS = DEFAULT_LIST_CAP
+    # 显式覆写（只翻前 N 页）的口子，供单测与 verify_sources 的廉价探活用；None = 走共享旋钮。
+    # 同 wt._PAGE_CAP / sf_express.MAX_PAGES 的既有写法。
+    _page_cap = None
     # Moka 自有分页「下一页」按钮：class 前缀稳定（带 build hash 后缀），末页加 disabled 属性。
     _next_sel = "button[class*='sd-Pagination-forward']"
     # 分页器里的页码按钮：末页页码 = 总页数。Moka 列表接口是密文、DOM 里也没有「共 N 个职位」
@@ -226,7 +234,7 @@ class MokaAdapter(PlaywrightAdapter):
         no_growth = 0
         self._last_page = self._read_last_page(page)   # 分页器自报的总页数（拿不到=None）
         pages_done = 0
-        for _ in range(self._page_cap):
+        for _ in range(self._page_cap or resolve_page_cap(self._PAGE_ROWS, self._MAX_JOBS)):
             pages_done += 1
             cards = page.eval_on_selector_all("a[href*='#/job/']", self._cards_js)
             before = len(union)
