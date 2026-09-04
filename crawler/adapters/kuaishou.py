@@ -1,4 +1,15 @@
-"""快手招聘浏览器签名拦截适配器。"""
+"""快手招聘浏览器签名拦截适配器（社招 + 日常实习）。
+
+## 合规边界（红线，别绕）
+- `campus.kuaishou.cn/robots.txt` = `User-agent: * / Disallow: /` → **校招板块一律不抓**。
+  官网「校园招聘」这个 tab 点下去就是跳到那个域名，所以快手校招对我们来说不存在。
+- `zhaopin.kuaishou.cn` 没有 robots.txt（404）→ 社招与**日常实习**都在这个域名下，可抓。
+
+## 为什么要抓「日常实习」
+它和社招同域、同接口、同签名，只差一个 `positionNatureCode`（C001 社招 / C002 实习），
+但此前只配了社招 URL —— 1,087 个实习岗白白漏掉，而实习正是校招专区的核心供给之一。
+岗位行**自带 positionNatureCode**，所以 _map 能逐条判类型，不需要按来源 URL 打标。
+"""
 from typing import Optional
 
 import normalizer
@@ -40,9 +51,17 @@ class KuaishouAdapter(PlaywrightAdapter):
     posts_keys = ("result.list",)
     list_urls = [
         "https://zhaopin.kuaishou.cn/#/official/social/?workLocationCode=domestic",
+        # 日常实习（C002）：同域同接口，只是另一个 tab。校招 tab 指向 campus.kuaishou.cn，
+        # 那个域名 robots 全站禁止，**不要加进来**。
+        "https://zhaopin.kuaishou.cn/#/official/trainee/?workLocationCode=domestic",
     ]
     wait_ms = 6000
-    max_pages = 160  # live 2026-06-19: 国内社招 149 页；留少量增长余量
+    max_pages = 160  # 每个 list_url 各自的翻页上限。live: 社招 1,285 岗≈129 页 / 实习 1,087≈109 页
+
+    # positionNatureCode → (三桶分类要的类型标签, 详情页路由段)。
+    # 详情页两个路由段其实通用（实测拿实习 id 走 /social/ 也能渲染出同一个岗），
+    # 但仍按类型走各自的段：语义正确，且实习岗是新增的、不存在改 canonical_jd_url 把存量打成重复的问题。
+    _NATURE = {"C001": ("社会招聘", "social"), "C002": ("实习", "trainee")}
 
     def _paginate(self, page):
         """Fast Ant pagination: wait for the active page number instead of a fixed 2.5s/page."""
@@ -105,15 +124,19 @@ class KuaishouAdapter(PlaywrightAdapter):
         summary = (
             description + ("\n\n【任职要求】\n" + demand if demand else "")
         ).strip() or None
+        # 岗位行自带 positionNatureCode，逐条判类型——不要按「来自哪个 list_url」推断：
+        # PlaywrightAdapter 把多个 URL 的拦截结果汇成一个 blob，_map 拿不到来源。
+        job_type, route = self._NATURE.get(
+            str(post.get("positionNatureCode") or "").strip().upper(), ("社会招聘", "social"))
         jd_url = (
-            "https://zhaopin.kuaishou.cn/#/official/social/job-info/"
+            f"https://zhaopin.kuaishou.cn/#/official/{route}/job-info/"
             f"{job_id}"
         )
         return RawJob(
             company=self.company_name,
             title=title,
             location="、".join(dict.fromkeys(locations)),
-            job_type="社会招聘",
+            job_type=job_type,
             summary=summary,
             jd_url=jd_url,
             apply_url=jd_url,
