@@ -12,6 +12,7 @@ data.count 给出真实总数。修复：捕获该 POST，用站点自身 sessio
 """
 import json
 import logging
+import re
 from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -87,6 +88,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
     def __init__(self):
         self.official_hosts = (self.host,)
         self.website_path = ""
+        self._detail_prefix_override = ""
         self._apply_website_path("")
         self.fetch_complete = False
         self.reported_total = None
@@ -106,7 +108,10 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         host = (self.official_hosts[0] if getattr(self, "official_hosts", None) else "") or self.host
         if not host:
             return   # host 还没绑定（通用类的 __init__ 阶段）→ 什么都别改，等 _bind_host 之后再来
-        prefix = path or "index"
+        # ⚠️ 修好的前缀必须扛得住这里的重算：`fetch()` 会再调一次 `_bind_website_path`，
+        # 没有 override 时它会把 `_repair_detail_template` 刚修好的模板覆写回 `index`
+        # —— should_skip 不跳了、jd_url 却仍然 404（2026-09-04 端到端实测抓到这个回归）。
+        prefix = getattr(self, "_detail_prefix_override", "") or path or "index"
         self.detail_template = f"https://{host}/{prefix}/position/{{id}}/detail"
         self.list_urls = [
             f"https://{host}/{prefix}/position",
@@ -208,6 +213,66 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         except Exception:
             return False
 
+    def _discover_detail_prefix(self, host: str) -> str:
+        """从租户首页自报的 `website_info.path` 取真实门户路径（拿不到返回空串）。
+
+        飞书租户首页内嵌 `"website_info":{…,"path":"exp"}`，那是这个租户**唯一有效的
+        URL 前缀**；`index` 只是我们的历史默认值，并非所有租户都认。
+        """
+        try:
+            html = httpx.get(
+                f"https://{host}/",
+                timeout=self._HTTPX_TIMEOUT,
+                follow_redirects=True,
+                headers={"User-Agent": _UA},
+            ).text
+        except Exception:
+            return ""
+        m = re.search(r'"website_info":\{.*?"path":"([^"]{1,32})"', html, re.S)
+        return m.group(1) if m else ""
+
+    def _repair_detail_template(self, host: str, post: dict) -> bool:
+        """`index` 前缀的详情页 404 时，改用租户自报的门户前缀再试一次；成功则重绑模板。
+
+        为什么需要（2026-09-04 live 实测，两家实锤）：
+          · 商汤 sensetime —— `/index/position` 连列表页都 404，整源被 should_skip 跳掉，
+            84 个社招岗一个都进不来；真实前缀是 `exp`，换上后详情 5/5 返 200。
+          · 海底捞 haidilao —— 列表正常（119 岗），但 `/index/position/{id}/detail` 全 404，
+            于是 36 个在招岗带着**必然打不开的 jd_url** 躺在库里（数据质量红线：
+            jd_url 准确性高于一切）；真实前缀是 `072846`，换上后返 200。
+
+        ⚠️ **只改详情模板，不动 `website_path`**：这两件事必须解耦。海底捞的 `072846`
+        门户列表返回 0 岗（那批岗没挂在该 storefront 上），而不带 `website-path` 头的默认
+        列表有 119 岗——把发现到的前缀顺手当成子门户塞进请求头，列表会当场从 119 掉到 0。
+        前缀只是 URL 路由，与「查哪个池子」是两回事。
+
+        ⚠️ 修不好才跳过：能修就别跳。跳过 = 整源 0 岗，代价远大于多发两个请求。
+        ⚠️ 全库 85 个飞书租户实测只有这 2 家需要走这条路（其余 `/index/` 路由本来就通，
+           哪怕它们自报的 path 不是 index）——所以这是**兜底**，不是新的默认路径，
+           别把它改成「一律先查自报 path」。
+        """
+        prefix = self._discover_detail_prefix(host)
+        if not prefix or prefix == (self.website_path or "index"):
+            return False
+        pid = str((post or {}).get("id") or (post or {}).get("code") or "").strip()
+        if not pid:
+            return False
+        candidate = f"https://{host}/{prefix}/position/{{id}}/detail"
+        try:
+            response = httpx.get(
+                candidate.format(id=pid),
+                timeout=self._HTTPX_TIMEOUT,
+                follow_redirects=True,
+                headers={"User-Agent": _UA, "Referer": f"https://{host}/{prefix}/position"},
+            )
+        except Exception:
+            return False
+        if response.status_code != 200:
+            return False
+        self._detail_prefix_override = prefix
+        self.detail_template = candidate
+        return True
+
     def should_skip(self, source_url: str) -> Optional[str]:
         """租户详情门户关闭时整源跳过；列表 API 仍吐岗不足以证明可投。"""
         if not getattr(self, "host", "") and hasattr(self, "_bind_host"):
@@ -221,6 +286,9 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
             return None
         self._prefetched = (rows, total, reached)
         if rows and self._detail_portal_closed(host, rows[0]):
+            # 先别急着判「门户关了」——多半只是我们用错了前缀（见 _repair_detail_template）。
+            if self._repair_detail_template(host, rows[0]):
+                return None
             return "feishu tenant detail portal closed (404/Not Found); skip source to avoid unusable jd_url"
         return None
 
