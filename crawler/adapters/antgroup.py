@@ -13,10 +13,12 @@ pageSize 实测 ≤30 稳定（50 返回空）。列表行自带 description+req
 用列表页作 source_url 会把全部社招岗误判「jd_url equals source url」拦掉。
 """
 import json
+import re
 from typing import List, Optional
 
 import httpx
 
+import must_apply
 import normalizer
 from .base import BaseAdapter, RawJob
 
@@ -26,6 +28,57 @@ def _int_or_none(value) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+# ── 子公司归属派生（2026-09-04 加）─────────────────────────────────────────
+# talent.antgroup.com 是蚂蚁系**全部业务线共用的同一个门户**，岗位标题用
+# 「{业务线}-{岗位名}」自报归属。live 实测前缀分布（1604 岗）：
+#   蚂蚁集团 630 / 蚂蚁国际 175 / 网商银行 92 / 蚂蚁数字科技 86 / OceanBase 58 /
+#   研究型实习生 92 / 财富海外业务 27 / 蚂蚁消金 17 / 钱塘征信 7 / CTO 7 …
+# 「网商银行」在必投清单（金融）里是**独立一条**、pattern `%网商银行%`，而此前库里
+# 一个岗都没有 —— 那 92 个岗其实早在库里，只是全被记成「蚂蚁集团」。
+#
+# ⚠️ 两道**独立**门，缺一不可（照抄 netease 的 fail-safe 思路）：
+#   ① `_DERIVABLE_SUBSIDIARIES` 白名单：只有人工核实过「确是独立法人实体、值得单独归属」
+#      的业务线才允许派生。挡住「研究型实习生 / CTO / 产品经理」这类**根本不是公司名**的
+#      前缀 —— 它们同样长得像「{X}-{岗位}」，纯靠正则会把 92 个实习岗打成一家叫
+#      「研究型实习生」的公司。
+#   ② 必投清单里**逐字存在**：派生出来的名字必须是清单规范名。清单哪天删掉「网商银行」，
+#      派生自动关闭、那批岗回落「蚂蚁集团」，绝不会凭空造出一个库里没人认的公司名。
+#
+# ⚠️ 成立前提（2026-09-04 核实）：清单里「蚂蚁集团」pattern 是 `%蚂蚁%`，派生走 92 个岗后
+# 母公司仍有 ~1512 个岗命中，**不会因为派生而掉成缺口**。往白名单加新业务线前必须重算这条。
+_PARENT_COMPANY = "蚂蚁集团"
+_DERIVABLE_SUBSIDIARIES = frozenset({"网商银行"})
+_TITLE_PREFIX = re.compile(r"^\s*([^\s\-—－]{2,12})\s*[-—－]")
+
+
+def _load_derivable_names() -> frozenset:
+    """白名单 ∩ 必投清单规范名。读清单失败 → 空集合 → 派生整体关闭（全部回落母公司）。"""
+    try:
+        grouped = must_apply.by_industry()
+    except Exception:  # noqa: BLE001 —— 清单读不到不许拖垮抓取，退化成「全记蚂蚁集团」
+        return frozenset()
+    listed = {
+        (row.get("name") or "").strip()
+        for companies in grouped.values()
+        for row in companies
+        if isinstance(row, dict)
+    }
+    return frozenset(name for name in _DERIVABLE_SUBSIDIARIES if name in listed)
+
+
+# 模块级只算一次（清单是随仓库走的静态文件）。当前清单实测得到 {"网商银行"}。
+_DERIVABLE_NAMES = _load_derivable_names()
+
+
+def _derive_company(title) -> str:
+    """岗位标题 → 必投清单规范名；派生不出返回 ""（调用方回落「蚂蚁集团」）。"""
+    match = _TITLE_PREFIX.match(title if isinstance(title, str) else "")
+    if not match:
+        return ""
+    prefix = match.group(1).strip()
+    return prefix if prefix in _DERIVABLE_NAMES else ""
 
 
 class AntGroupAdapter(BaseAdapter):
@@ -131,7 +184,7 @@ class AntGroupAdapter(BaseAdapter):
         else:
             job_type = "实习" if "实习" in title else "校招"
         return RawJob(
-            company=self.company_name,
+            company=_derive_company(title) or self.company_name,
             title=title,
             location="、".join(dict.fromkeys(locations)) or None,
             job_type=job_type,
