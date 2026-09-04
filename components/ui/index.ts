@@ -21,6 +21,16 @@ export { Modal, type ModalProps } from "./modal";
 export { Popover, type PopoverProps } from "./popover";
 export { Segmented, type SegmentedOption, type SegmentedProps } from "./segmented";
 export { Spinner, type SpinnerProps } from "./spinner";
+export { Switch, type SwitchProps } from "./switch";
+export { Separator, type SeparatorProps } from "./separator";
+export { Progress, type ProgressProps } from "./progress";
+export { Tooltip, type TooltipProps } from "./tooltip";
+export { Tabs, TabPanel, type TabItem, type TabsProps } from "./tabs";
+export { DropdownMenu, type MenuItem, type DropdownMenuProps } from "./dropdown-menu";
+export { Accordion, type AccordionItem, type AccordionProps } from "./accordion";
+export { Sheet, type SheetProps } from "./sheet";
+export { AlertDialog, type AlertDialogProps } from "./alert-dialog";
+export { Stepper, type Step, type StepperProps } from "./stepper";
 export { AnimateNumber, type AnimateNumberProps } from "./animated-blur-number";
 export { AnimatedStat } from "./animated-stat";
 
