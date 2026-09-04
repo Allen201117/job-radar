@@ -107,9 +107,15 @@ class IguopinAdapterTest(unittest.TestCase):
 
         jobs = IguopinAdapter().parse(payload)
         self.assertEqual(searched, ["国家电网", "国网江苏省电力有限公司", "国网湖北省电力有限公司"])
+        # ⚠️ 2026-09-04 起判据从「名字核名」换成**国聘自己的 group_id**，
+        # 于是 root（国网国际融资租赁有限公司）也被正确收进来了 —— 它本来就是国家电网子公司，
+        # 夹具里 company/index/v1/home 返回的 group_id 就是 group-grid；
+        # 旧的名字规则（"国网国际融资租赁" 不含 "国家电网"）在**漏抓真子公司**。
+        # 反向的坑同样被堵上了，见 test_iguopin_attribution.py。
         self.assertEqual(
             [job.company for job in jobs],
             [
+                "国网国际融资租赁有限公司（国家电网）",
                 "国网江苏省电力有限公司（国家电网）",
                 "国网湖北省电力有限公司（国家电网）",
             ],
@@ -148,7 +154,7 @@ class IguopinAdapterTest(unittest.TestCase):
             self.assertEqual(kwargs["params"]["id"], "matched")
             return _Response({"code": 200, "data": {**matched, "contents": matched["contents"]}})
 
-        with mock.patch.object(IguopinAdapter, "_expand_group_children", return_value=None), \
+        with mock.patch.object(IguopinAdapter, "_expand_group_children", return_value=(None, "")), \
              mock.patch("adapters.iguopin.httpx.post", side_effect=fake_post), \
              mock.patch("adapters.iguopin.httpx.get", side_effect=fake_get) as get:
             IguopinAdapter().fetch("https://www.iguopin.com/job?company=中国石油&match=中国石油")
@@ -163,9 +169,11 @@ class IguopinAdapterTest(unittest.TestCase):
             return _Response({"code": 200, "data": {"total": 1, "list": [root]}})
 
         def add_group_child(rows, _headers):
-            child["_group_child"] = True
+            # 集团展开现在记「是哪个子公司名把它搜回来的」，并返回 (集团简称, group_id)；
+            # group_id 非空 → 走国聘集团归属核验（见 test_iguopin_attribution.py）。
+            child["_group_child"] = "中国石油天然气股份有限公司"
             rows.append(child)
-            return "中国石油"
+            return "中国石油", "grp-cnpc"
 
         def fake_get(_url, **kwargs):
             job_id = kwargs["params"]["id"]
@@ -193,7 +201,7 @@ class IguopinAdapterTest(unittest.TestCase):
             return _Response({"code": 200, "data": {**row, "contents": row["contents"]}})
 
         with mock.patch.object(IguopinAdapter, "_DETAIL_CAP", 2), \
-             mock.patch.object(IguopinAdapter, "_expand_group_children", return_value=None), \
+             mock.patch.object(IguopinAdapter, "_expand_group_children", return_value=(None, "")), \
              mock.patch("adapters.iguopin.httpx.post", side_effect=fake_post), \
              mock.patch("adapters.iguopin.httpx.get", side_effect=fake_get) as get:
             IguopinAdapter().fetch("https://www.iguopin.com/job?company=任意公司")

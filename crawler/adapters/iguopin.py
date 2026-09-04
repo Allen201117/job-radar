@@ -66,13 +66,21 @@ class IguopinAdapter(BaseAdapter):
         rows, total, complete = self._fetch_rows(keyword, headers, self.max_pages)
         self.reported_total = total
         self.fetch_complete = complete
-        group_short_name = self._expand_group_children(rows, headers)
+        group_short_name, group_id = self._expand_group_children(rows, headers)
+        group_ok = self._group_membership_checker(group_id, headers) if group_id else None
         # 可选 match token：国聘关键词搜索是模糊匹配（搜「中国建筑」会夹带无关公司岗），
         # 带 &match={token} 时只放行 company_name 含 token 的岗，保「按公司精准抓取」。
         match = _match_token(source_url)
         listed = len(rows)
-        if match:
-            rows[:] = [row for row in rows if _row_passes_match(row, match)]
+        # 即使没配 match，集团展开进来的行也要过归属核验——旁路必须堵死。
+        if match or group_ok:
+            rows[:] = [row for row in rows if _row_passes_match(row, match, group_ok)]
+        # 归属核验只有 fetch 做得了（要联网查国聘的集团口径），parse 里没有这个能力。
+        # 打个标把结论带下去，否则 parse 的那道复查会按「名字核名」把真子公司再毙一次
+        # （鼎和财产保险/国网江苏 名字里都不含集团名）。
+        for row in rows:
+            if isinstance(row, dict):
+                row["_attribution_ok"] = True
         verified = self._enrich_details(rows, headers)
         print(f"[iguopin] keyword={keyword} listed={listed} matched={len(rows)} verified={verified}")
         return json.dumps({
@@ -102,21 +110,21 @@ class IguopinAdapter(BaseAdapter):
             fetch_page, page_size=_PAGE_SIZE, first_page=1, max_pages=max_pages,
             label=f"iguopin:{keyword}")
 
-    def _expand_group_children(self, rows: List[dict], headers: dict) -> Optional[str]:
-        """集团元数据/子公司列表任一异常均静默回退原关键词结果。"""
+    def _expand_group_children(self, rows: List[dict], headers: dict):
+        """返回 (group_short_name, group_id)；集团元数据/子公司列表任一异常均静默回退原关键词结果。"""
         company_id = next((str(row.get("company_id") or "").strip()
                            for row in rows if isinstance(row, dict) and row.get("company_id")), "")
         if not company_id:
-            return None
+            return None, ""
         try:
             group_id, group_short_name = self._group_info(company_id, headers)
             if not group_id or not group_short_name:
-                return None
+                return None, ""
             children = self._group_children(group_id, headers)
             if not children:
-                return group_short_name
+                return group_short_name, group_id
         except Exception:
-            return None
+            return None, ""
 
         # 默认 60 家、每家最多 2 页（20 条/页）：国网实测 51 家可全覆盖，同时把集团展开
         # 控制在最多 120 次列表调用。两个 cap 均可由环境变量下调/上调，不影响原关键词路径。
@@ -130,10 +138,63 @@ class IguopinAdapter(BaseAdapter):
                 continue
             for row in child_rows:
                 if isinstance(row, dict):
-                    row["_group_child"] = True
+                    # 记**是哪个子公司名把这条搜回来的**，而不是只记一个 True。
+                    # 下游要用它逐条核名——国聘的关键词搜索是模糊的，拿子公司名去搜同样会
+                    # 捞回不相干的公司（见 _row_passes_match 的注释）。
+                    row["_group_child"] = child_name
             expanded.extend(child_rows)
         rows[:] = _dedupe_rows(rows + expanded)
-        return group_short_name
+        return group_short_name, group_id
+
+    def _company_group_id(self, company_id: str, headers: dict):
+        """查这家公司在国聘口径下的集团 id。三种返回值，语义必须分开：
+          · "xxx" = 有集团；  · ""  = **查到了、但它没有集团**（独立公司，定论）；
+          · None = 请求/解析失败（暂时不知道）。
+        把「没有集团」和「查不到」混成一种，正是张冠李戴修不掉的原因：
+        中国（海南）改革发展研究院在国聘上写着「民营企业、无集团」，
+        当成「查不到 → 保守放行」就永远挡不住它。
+        """
+        try:
+            response = httpx.get(_COMPANY_HOME_API, params={"company_id": company_id},
+                                 headers=headers, timeout=self.timeout, follow_redirects=True)
+            response.raise_for_status()
+            body = response.json() or {}
+            if body.get("code") != 200:
+                return None
+            info = (body.get("data") or {}).get("company_info")
+            if not isinstance(info, dict):
+                return None
+            own_id = str(info.get("id") or company_id).strip()
+            group_id = str(info.get("group_id") or "").strip()
+            if not group_id and info.get("classify_cn") == "央企(集团)":
+                group_id = own_id      # 集团本体，自己就是自己的集团
+            return group_id            # 可能是 ""，那是「无集团」的定论
+        except Exception:
+            return None
+
+    def _group_membership_checker(self, group_id: str, headers: dict):
+        """返回 `ok(row) -> bool`：这条岗的公司在**国聘自己的口径**下是否真属于本集团。
+
+        判据是 group_id，不是名字——名字核不住：鼎和财产保险是南方电网真子公司、
+        名字里却没有「南方电网」；反过来「中国（海南）改革发展研究院」名字里有「海南」，
+        被「海南电网有限责任公司」这个关键词搜了回来，实际是民营企业。
+        按 company_id 缓存，一家公司只查一次（单源实测 20~100 家，成本可接受）。
+
+        失败语义：查到「无集团」→ **拒**（定论）；请求失败 → 放行（暂时不知道，下轮重查，
+        宁可多留一条待发现的错归属，也不因为对方接口抖一下就丢掉整源真岗）。
+        """
+        cache: dict = {}
+
+        def ok(row) -> bool:
+            cid = str((row or {}).get("company_id") or "").strip()
+            if not cid:
+                return True
+            if cid not in cache:
+                found = self._company_group_id(cid, headers)
+                cache[cid] = True if found is None else (str(found) == str(group_id))
+            return cache[cid]
+
+        return ok
 
     def _group_info(self, company_id: str, headers: dict):
         response = httpx.get(_COMPANY_HOME_API, params={"company_id": company_id}, headers=headers,
@@ -219,8 +280,10 @@ class IguopinAdapter(BaseAdapter):
             if not job_id or not title:
                 continue
             company = str(row.get("company_name") or "").strip()
-            if not _row_passes_match(row, match):
-                continue  # 模糊搜索夹带的无关公司岗，精准过滤掉（严格核名，防同名子串张冠李戴）
+            # fetch 已按国聘集团口径核过归属的行直接放行；没核过的（非本 adapter 产出的
+            # payload）仍走严格核名，防模糊搜索夹带的同名子串张冠李戴。
+            if not row.get("_attribution_ok") and not _row_passes_match(row, match):
+                continue
             company = _company_with_group_brand(company, group_short_name)
             detail_url = _DETAIL_PAGE.format(id=job_id)
             out.append(RawJob(
@@ -252,13 +315,34 @@ def _match_token(source_url: str) -> str:
     return unquote(value).strip()
 
 
-def _row_passes_match(row: dict, match: str) -> bool:
-    """按可选精准核名词放行列表行；集团子公司结果不受该词限制。"""
+def _row_passes_match(row: dict, match: str, group_ok=None) -> bool:
+    """放行列表行。分两条路，判据不同：
+
+    ① 直接关键词搜出来的行 → 按 source_url 的 `match` 核名（防「搜中国建筑夹带无关公司」）。
+    ② 集团子公司展开出来的行 → **不能豁免**，改用国聘自己的集团归属核验（`group_ok`）。
+
+    ⚠️ 2026-09-04 实测的张冠李戴：南方电网的子公司名单里有「海南电网有限责任公司」，
+    adapter 拿它去关键词搜，而**国聘的搜索是按集团模糊匹配的**，回来的既有真兄弟公司
+    （鼎和财产保险，名字里没有「南方电网」），也有毫不相干的
+    「中国（海南）改革发展研究院有限责任公司」「洋浦国际投资咨询有限公司」「海南健康发展研究院」。
+    国聘自己的公司主页写得很清楚：这三家分别是**民营企业 / 洋浦经济开发区 / 事业单位**，
+    与南方电网无关。旧写法对 `_group_child` 直接 return True、整个跳过核验 →
+    它们被打上「（南方电网）」入库。归属准确性是红线，不能有旁路。
+
+    为什么不能用「子公司名核名」代替：国聘搜索是集团级的，搜「海南电网有限责任公司」
+    返回的鼎和保险是**真兄弟公司但名字对不上**，按名字核会把真岗全毙掉（实测放行 0 条）。
+    唯一可信的判据是国聘自己的 group_id —— 见 `_group_membership_ok`。
+    """
     if not isinstance(row, dict):
         return False
-    if not match or row.get("_group_child"):
+    name = str(row.get("company_name") or "").strip()
+    if group_ok is not None:
+        # 有集团口径时它对**所有**行生效，不只对 _group_child：
+        # 直接关键词搜出来的鼎和财产保险也是南方电网真子公司，按名字核会被误杀。
+        return bool(group_ok(row))
+    if not match:
         return True
-    return company_name_matches(str(row.get("company_name") or "").strip(), match)
+    return company_name_matches(name, match)
 
 
 def _env_cap(name: str, default: int) -> int:
