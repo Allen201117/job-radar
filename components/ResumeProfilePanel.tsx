@@ -137,7 +137,7 @@ export default function ResumeProfilePanel() {
       setStep("preview");
       setMessage(
         data.source === "rule"
-          ? `AI 解析暂不可用（原因：${data.llm_error || "未知"}${data.llm_detail ? "｜" + data.llm_detail : ""}），已用规则给出草稿，请核对补全后再保存。`
+          ? `AI 解析暂不可用（原因：${data.llm_error ||"未知"}${data.llm_detail ?"｜"+ data.llm_detail :""}），已用规则给出草稿，请核对补全后再保存。`
           : "AI 已解析，请核对 / 编辑后点「确认保存」。",
       );
       // 规则降级不是失败，但也不该说「AI 解析完成」——成功态如实说是草稿。
@@ -167,7 +167,7 @@ export default function ResumeProfilePanel() {
       });
       const data = await resp.json();
       if (!data.ok) {
-        setMessage(`保存失败：${data.error || "请重试"}`);
+        setMessage(`保存失败：${data.error ||"请重试"}`);
         setSaveState("error");
         return;
       }
@@ -225,22 +225,22 @@ export default function ResumeProfilePanel() {
     return (
       <div>
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium ink-2 ">{title}</span>
+          <span className="text-sm font-medium ink-2">{title}</span>
           <button
             type="button"
             onClick={() => addItem(listKey, empty)}
-            className="rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-2.5 py-1 text-xs ink-2 transition hover:bg-white dark:hover:bg-white/[0.08] hover:opacity-80 "
+            className="rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-2.5 py-1 text-xs ink-2 transition hover:bg-white dark:hover:bg-white/[0.08] hover:opacity-80"
           >
             + 添加
           </button>
         </div>
         <div className="mt-2 space-y-2">
-          {items.length === 0 && <p className="text-xs ink-3 ">（暂无，可点「添加」补充）</p>}
+          {items.length === 0 && <p className="text-xs ink-3">（暂无，可点「添加」补充）</p>}
           {items.map((it, idx) => (
             <div key={idx} className="surface-soft p-3">
               <div className="grid gap-2 sm:grid-cols-2">
                 {fields.map(([k, label]) => (
-                  <label key={k} className="block text-xs ink-3 ">
+                  <label key={k} className="block text-xs ink-3">
                     {label}
                     <input
                       value={it[k] || ""}
@@ -265,19 +265,19 @@ export default function ResumeProfilePanel() {
   }
 
   return (
-    <section id="resume" className="surface p-5 ink-1 ">
+    <section id="resume" className="surface p-5 ink-1">
       <div className="flex items-center gap-2">
         <div className="grid size-9 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
           <IdentificationCard size={18} weight="fill" aria-hidden="true" />
         </div>
         <h2 className="text-base font-semibold">简历画像</h2>
       </div>
-      <p className="mt-2 text-sm ink-3 ">
+      <p className="mt-2 text-sm ink-3">
         上传或粘贴简历，AI 结构化抽取教育 / 实习 / 项目 / 技能；可预览、编辑后再确认保存，只写入你的账号。
       </p>
 
       {message && step === "input" && (
-        <p className={`mt-3 rounded-xl border px-3 py-2 text-sm ${message.includes("失败") || message.includes("暂不") ? "border-[#e0b4ac] dark:border-[#7a392e]/[0.60] bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]" : "border-[#bcd2ed] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]"}`}>
+        <p className={`mt-3 rounded-xl border px-3 py-2 text-sm ${message.includes("失败") || message.includes("暂不") ?"border-tone-rose-border bg-tone-rose-bg text-tone-rose-fg":"border-[#bcd2ed] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]"}`}>
           {message}
         </p>
       )}
@@ -308,7 +308,7 @@ export default function ResumeProfilePanel() {
               </div>
             </div>
             <div>
-              <label className="inline-flex items-center gap-1.5 text-sm font-medium ink-2 ">
+              <label className="inline-flex items-center gap-1.5 text-sm font-medium ink-2">
                 <UploadSimple size={16} weight="bold" aria-hidden="true" />
                 {variant === "en" ? "上传英文简历（可选）" : "上传简历（.txt / .md / PDF / Word / 图片）"}
               </label>
@@ -335,7 +335,7 @@ export default function ResumeProfilePanel() {
             </div>
 
             <div>
-              <label className="inline-flex items-center gap-1.5 text-sm font-medium ink-2 ">
+              <label className="inline-flex items-center gap-1.5 text-sm font-medium ink-2">
                 <FileText size={16} weight="bold" aria-hidden="true" />
                 或粘贴简历内容
               </label>
@@ -349,13 +349,13 @@ export default function ResumeProfilePanel() {
             </div>
 
             {llmReady === false && (
-              <p className="rounded-xl border border-[#e7c98a] dark:border-[#e0b15a]/[0.40] bg-[#fbf2d8] dark:bg-[#e0b15a]/[0.15] px-3 py-2 text-xs text-[#8a6312] dark:text-[#e0b15a]">
+              <p className="rounded-xl border border-tone-amber-border bg-[#fbf2d8] dark:bg-[#e0b15a]/[0.15] px-3 py-2 text-xs text-tone-amber-fg">
                 未检测到 SILICONFLOW_API_KEY，AI 解析会降级为规则草稿。请在 Vercel → Settings →
                 Environment Variables 添加（勾 Production，禁加 NEXT_PUBLIC_ 前缀），保存后 Redeploy。
               </p>
             )}
             {llmReady === true && (
-              <p className="text-xs ink-3 ">AI 解析已就绪{llmModel ? `（模型 ${llmModel}）` : ""}。</p>
+              <p className="text-xs ink-3">AI 解析已就绪{llmModel ? `（模型 ${llmModel}）` : ""}。</p>
             )}
 
             <button
@@ -370,18 +370,18 @@ export default function ResumeProfilePanel() {
 
           <div className="mt-5 border-t border-black/[0.06] dark:border-white/[0.1] pt-4">
             {loadingSaved ? (
-              <p className="text-sm ink-3 ">加载画像中…</p>
+              <p className="text-sm ink-3">加载画像中…</p>
             ) : saved ? (
               <SavedSummary profile={saved} />
             ) : (
-              <p className="text-sm ink-3 ">还没有简历画像，先上传或粘贴简历开始。</p>
+              <p className="text-sm ink-3">还没有简历画像，先上传或粘贴简历开始。</p>
             )}
           </div>
         </>
       ) : (
         <div className="mt-4 space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block text-sm ink-2 ">
+            <label className="block text-sm ink-2">
               一句话定位
               <input
                 value={draft.headline}
@@ -389,7 +389,7 @@ export default function ResumeProfilePanel() {
                 className="mt-1 field-soft"
               />
             </label>
-            <label className="block text-sm ink-2 ">
+            <label className="block text-sm ink-2">
               求职阶段
               <select
                 value={draft.experience_stage}
@@ -406,7 +406,7 @@ export default function ResumeProfilePanel() {
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3">
-            <label className="block text-sm ink-2 ">
+            <label className="block text-sm ink-2">
               姓名
               <input
                 value={draft.basic_info.name}
@@ -414,7 +414,7 @@ export default function ResumeProfilePanel() {
                 className="mt-1 field-soft"
               />
             </label>
-            <label className="block text-sm ink-2 ">
+            <label className="block text-sm ink-2">
               城市
               <input
                 value={draft.basic_info.city}
@@ -422,7 +422,7 @@ export default function ResumeProfilePanel() {
                 className="mt-1 field-soft"
               />
             </label>
-            <label className="block text-sm ink-2 ">
+            <label className="block text-sm ink-2">
               联系方式（已脱敏）
               <input
                 value={draft.basic_info.contact}
@@ -434,19 +434,19 @@ export default function ResumeProfilePanel() {
 
           <div className="space-y-3">
             <div>
-              <span className="text-sm font-medium ink-2 ">目标岗位方向</span>
+              <span className="text-sm font-medium ink-2">目标岗位方向</span>
               <TagInput values={draft.target_roles} onChange={(v) => setField("target_roles", v)} ariaLabel="简历目标岗位方向标签输入" placeholder="回车添加，如 数据分析" />
             </div>
             <div>
-              <span className="text-sm font-medium ink-2 ">期望城市</span>
+              <span className="text-sm font-medium ink-2">期望城市</span>
               <TagInput values={draft.target_locations} onChange={(v) => setField("target_locations", v)} ariaLabel="简历期望城市标签输入" placeholder="如 上海" />
             </div>
             <div>
-              <span className="text-sm font-medium ink-2 ">技能标签</span>
+              <span className="text-sm font-medium ink-2">技能标签</span>
               <TagInput values={draft.skills} onChange={(v) => setField("skills", v)} ariaLabel="简历技能标签输入" placeholder="如 Python、SQL" />
             </div>
             <div>
-              <span className="text-sm font-medium ink-2 ">行业</span>
+              <span className="text-sm font-medium ink-2">行业</span>
               <TagInput values={draft.industries} onChange={(v) => setField("industries", v)} ariaLabel="简历行业标签输入" placeholder="如 互联网、金融" />
             </div>
           </div>
@@ -456,7 +456,7 @@ export default function ResumeProfilePanel() {
           {renderList("工作 / 项目经历", "projects", [["name", "项目"], ["role", "角色"], ["stack", "技术栈"], ["outcome", "成果"]], EMPTY_PROJECT)}
 
           {variant === "cn" ? (
-            <label className="flex cursor-pointer items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm ink-2 transition duration-200 hover:bg-white dark:hover:bg-white/[0.08] hover:opacity-80 ">
+            <label className="flex cursor-pointer items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm ink-2 transition duration-200 hover:bg-white dark:hover:bg-white/[0.08] hover:opacity-80">
               <input type="checkbox" checked={applyToPreferences} onChange={(e) => setApplyToPreferences(e.target.checked)} className="accent-[#1a1714] dark:accent-[#f3ecdf]" />
               同步到求职偏好（方向 / 城市 / 技能）
             </label>
@@ -467,7 +467,7 @@ export default function ResumeProfilePanel() {
           )}
 
           {message && (
-            <p className={`rounded-xl border px-3 py-2 text-sm ${message.includes("失败") || message.includes("暂不") ? "border-[#e0b4ac] dark:border-[#7a392e]/[0.60] bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]" : "border-[#bcd2ed] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]"}`}>
+            <p className={`rounded-xl border px-3 py-2 text-sm ${message.includes("失败") || message.includes("暂不") ?"border-tone-rose-border bg-tone-rose-bg text-tone-rose-fg":"border-[#bcd2ed] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]"}`}>
               {message}
             </p>
           )}
@@ -526,13 +526,13 @@ function SavedSummary({ profile }: { profile: any }) {
   return (
     <div className="space-y-3">
       <div>
-        <div className="text-xs ink-3 ">当前画像</div>
-        <div className="mt-1 text-sm font-medium ink-1 ">{profile.headline || "未命名画像"}</div>
+        <div className="text-xs ink-3">当前画像</div>
+        <div className="mt-1 text-sm font-medium ink-1">{profile.headline || "未命名画像"}</div>
       </div>
       <ChipGroup label="方向" values={profile.target_roles || []} />
       <ChipGroup label="城市" values={profile.target_locations || []} />
       <ChipGroup label="技能" values={profile.skills || []} />
-      <div className="flex flex-wrap gap-2 text-xs ink-2 ">
+      <div className="flex flex-wrap gap-2 text-xs ink-2">
         <span className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1">教育 {eduCount}</span>
         <span className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1">实习 {internCount}</span>
         <span className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1">项目 {projectCount}</span>
@@ -555,12 +555,12 @@ function ChipGroup({ label, values }: { label: string; values: string[] }) {
   if (!values.length) return null;
   return (
     <div>
-      <div className="text-xs ink-3 ">{label}</div>
+      <div className="text-xs ink-3">{label}</div>
       <div className="mt-1 flex flex-wrap gap-1.5">
         {values.map((value) => (
           <span
             key={value}
-            className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1 text-xs font-medium ink-2 "
+            className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1 text-xs font-medium ink-2"
           >
             {value}
           </span>

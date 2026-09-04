@@ -191,7 +191,7 @@ export default function InsightsClient({
             placeholder="全部主体"
             options={facets.kind.map((b) => ({
               value: b.key,
-              label: `${b.key === "company" ? "公司" : "业务线"}（${b.count}）`,
+              label: `${b.key ==="company"?"公司":"业务线"}（${b.count}）`,
             }))}
           />
           <Select
@@ -367,7 +367,7 @@ export default function InsightsClient({
 /** 卡面正文。正文取不到时退回结构化字段拼一句，绝不显示空白。 */
 function metricText(m: LibraryCardMetric): string {
   if (m.content) return m.content;
-  const value = m.metric_value == null ? "" : `${m.metric_value}${m.metric_unit || ""}`;
+  const value = m.metric_value == null ? "" : `${m.metric_value}${m.metric_unit ||""}`;
   const n = m.sample_size == null ? "" : `（基于 ${m.sample_size} 个在招岗）`;
   return `${METRIC_LABEL[m.metric_key] || m.metric_key} ${value}${n}`.trim();
 }
@@ -502,7 +502,7 @@ function SubjectCard({
         <span
           className={`mt-0.5 grid size-8 shrink-0 place-items-center rounded-xl border ${
             subject.kind === "company"
-              ? "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/15 dark:text-[#7fb2e8]"
+              ? "border-tone-sky-border bg-tone-sky-bg text-[#2f6299] dark:text-[#7fb2e8]"
               : "border-[#a9cfd8] bg-[#dcf0f2] text-[#2f7d8a] dark:border-[#6cc0cf]/30 dark:bg-[#6cc0cf]/15 dark:text-[#6cc0cf]"
           }`}
         >
@@ -523,7 +523,7 @@ function SubjectCard({
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 t-caption ink-3">
             <span>{subject.kind === "company" ? "公司" : "业务线"}</span>
             {subject.industry && <span>{subject.industry}</span>}
-            <Link href={jobsHref} className="inline-flex items-center gap-1 text-[#3f7cc0] hover:underline dark:text-[#7fb2e8]">
+            <Link href={jobsHref} className="inline-flex items-center gap-1 text-tone-sky-fg hover:underline">
               在招 {subject.job_count} 个岗位
               <ArrowSquareOut size={12} />
             </Link>
@@ -575,7 +575,7 @@ function SubjectCard({
           <button
             type="button"
             onClick={() => setContribute((v) => !v)}
-            className="inline-flex items-center gap-1.5 rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-3 py-1.5 t-label text-[#2f8a63] transition hover:bg-[#d2eee1] dark:border-[#6cc99e]/30 dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]"
+            className="inline-flex items-center gap-1.5 rounded-full border border-tone-teal-border bg-tone-teal-bg px-3 py-1.5 t-label text-tone-teal-fg transition hover:bg-[#d2eee1]"
           >
             <ChatCircleText size={14} weight="bold" />
             {contribute ? "收起" : "说一句真实体验"}
@@ -587,7 +587,7 @@ function SubjectCard({
         // 互惠墙：空缺处不写「暂无数据」，写成贡献入口（spec §1.5「把第三层的空缺做成飞轮」）。
         <p className="mt-2.5 t-caption ink-3">
           {/* 撤掉数据层后，这句不再是「岗位数据里没有」，而是「这几栏还没有可信内容」 */}
-          {gaps.map((g) => g.label).join(" / ")} 还没有可信内容。
+          {gaps.map((g) => g.label).join("/")} 还没有可信内容。
           <span className="ink-2"> 你在{subject.company}待过？说一句真实体验，解锁其他人的说法。</span>
         </p>
       )}
@@ -647,7 +647,7 @@ function ItemRow({ item }: { item: InsightItemView }) {
           <span className="t-micro ink-4">
             {METRIC_LABEL[item.metric_key] || item.metric_key}
             {gradeText(item.metric_key, item.metric_value ?? null) &&
-              ` · ${gradeText(item.metric_key, item.metric_value ?? null)}`}
+              `· ${gradeText(item.metric_key, item.metric_value ?? null)}`}
           </span>
         )}
         {item.outdated && <span className="t-micro ink-4">可能已过时</span>}
@@ -661,7 +661,7 @@ function ItemRow({ item }: { item: InsightItemView }) {
               href={s.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 t-micro text-[#3f7cc0] hover:underline dark:text-[#7fb2e8]"
+              className="inline-flex items-center gap-1 t-micro text-tone-sky-fg hover:underline"
             >
               {s.publisher || new URL(s.url).hostname}
               <ArrowSquareOut size={11} />

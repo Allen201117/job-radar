@@ -113,7 +113,7 @@ export default function SavedClient({
       {jobs.length > 0 && (
         <div className="flex flex-col gap-2 rounded-[1.1rem] border border-black/[0.06] bg-white/45 px-4 py-3 text-sm ink-2 sm:flex-row sm:items-center sm:justify-between dark:border-white/[0.1] dark:bg-white/[0.05]">
           <span className="inline-flex items-center gap-2">
-            <Scales size={15} weight="bold" className="text-[#3f7cc0] dark:text-[#7fb2e8]" aria-hidden="true" />
+            <Scales size={15} weight="bold" className="text-tone-sky-fg" aria-hidden="true" />
             选择 2-4 个岗位后，可打开对比决策桌横向查看匹配度、薪资和风险。
           </span>
         </div>
@@ -129,7 +129,7 @@ export default function SavedClient({
               disabled={compareLimitReached && !selectedIds.has(job.id)}
               className={
                 selectedIds.has(job.id)
-                  ? "inline-flex h-8 items-center justify-center gap-1.5 rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-3 text-xs font-semibold text-[#2f8a63] transition hover:bg-[#cdebde] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e] dark:hover:bg-[#6cc99e]/[0.22]"
+                  ? "inline-flex h-8 items-center justify-center gap-1.5 rounded-full border border-tone-teal-border bg-tone-teal-bg px-3 text-xs font-semibold text-tone-teal-fg transition hover:bg-[#cdebde] dark:hover:bg-[#6cc99e]/[0.22]"
                   : "inline-flex h-8 items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3 text-xs font-semibold ink-2 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.12] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
               }
             >

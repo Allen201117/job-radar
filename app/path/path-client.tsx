@@ -16,10 +16,10 @@ import { cn } from "@/lib/utils";
 import { PanelSkeleton } from "@/components/Skeletons";
 
 const TIMING_STYLE: Record<TimingStatusKind, string> = {
-  open: "border border-[#bcdcae] dark:border-[#a3d06a]/[0.30] bg-[#e6f2d6] dark:bg-[#a3d06a]/[0.15] text-[#4f6f2a] dark:text-[#a3d06a]",
-  rolling: "border border-[#b7d2ee] dark:border-[#7fb2e8]/[0.30] bg-[#dceafa] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]",
-  closed: "border border-[#e7c98a] dark:border-[#e0b15a]/[0.30] bg-[#fbeecb] dark:bg-[#e0b15a]/[0.15] text-[#8a6312] dark:text-[#e0b15a]",
-  unknown: "border border-black/[0.08] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] ink-3 ",
+  open: "border border-tone-green-border bg-tone-green-bg text-tone-green-fg",
+  rolling: "border border-tone-sky-border bg-tone-sky-bg text-[#2f6299] dark:text-[#7fb2e8]",
+  closed: "border border-tone-amber-border bg-tone-amber-bg text-tone-amber-fg",
+  unknown: "border border-black/[0.08] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] ink-3",
 };
 
 export default function CareerPathClient() {
@@ -46,7 +46,7 @@ export default function CareerPathClient() {
   if (loading)
     return (
       <div className="mt-8 space-y-3">
-        <p className="text-sm ink-3 ">正在生成职业路径…</p>
+        <p className="text-sm ink-3">正在生成职业路径…</p>
         <div className="grid gap-4">
           <PanelSkeleton />
           <PanelSkeleton />
@@ -55,7 +55,7 @@ export default function CareerPathClient() {
     );
   if (error)
     return (
-      <p className="mt-8 rounded-xl border border-black/[0.06] dark:border-white/[0.1] bg-white/55 dark:bg-white/[0.05] p-4 text-sm ink-2 ">
+      <p className="mt-8 rounded-xl border border-black/[0.06] dark:border-white/[0.1] bg-white/55 dark:bg-white/[0.05] p-4 text-sm ink-2">
         {error}
       </p>
     );
@@ -64,14 +64,14 @@ export default function CareerPathClient() {
   const noData = report.recommendations.length === 0;
 
   return (
-    <div className="mt-8 space-y-8 ink-1 ">
+    <div className="mt-8 space-y-8 ink-1">
       {/* 画像摘要 */}
       <ProfileSummary report={report} />
 
       {report.is_recommended_fallback && report.recommendations.length > 0 && (
         <p className="rounded-xl border border-[#cfe0f5] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] px-4 py-3 text-sm leading-6 text-[#2f6299] dark:text-[#7fb2e8]">
           你还没设置目标公司，以下是按<strong>当前招聘窗口期</strong>给出的推荐。到
-          <Link href="/me" className="mx-1 underline underline-offset-2 hover:opacity-80 ">
+          <Link href="/me" className="mx-1 underline underline-offset-2 hover:opacity-80">
             偏好设置
           </Link>
           里加上目标公司，建议会更贴合你。
@@ -97,7 +97,7 @@ export default function CareerPathClient() {
                   {rec.job_count > 0 && (
                     <Link
                       href="/jobs"
-                      className="inline-flex items-center gap-1 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-2.5 py-1 text-xs ink-2 transition hover:bg-white dark:hover:bg-white/[0.05] hover:opacity-80 "
+                      className="inline-flex items-center gap-1 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-2.5 py-1 text-xs ink-2 transition hover:bg-white dark:hover:bg-white/[0.05] hover:opacity-80"
                     >
                       <Briefcase size={12} weight="bold" />
                       {rec.job_count} 个在招
@@ -105,11 +105,11 @@ export default function CareerPathClient() {
                   )}
                 </div>
                 {rec.timing.detail && (
-                  <p className="mt-1.5 text-xs ink-3 ">招聘节奏：{rec.timing.detail}</p>
+                  <p className="mt-1.5 text-xs ink-3">招聘节奏：{rec.timing.detail}</p>
                 )}
                 <div className="mt-2 grid gap-1.5 text-sm sm:grid-cols-2">
                   {rec.comp_note && (
-                    <span className="inline-flex items-center gap-1.5 ink-2 ">
+                    <span className="inline-flex items-center gap-1.5 ink-2">
                       <Scales size={14} className="text-[#a39a8c] dark:text-[#8b8478]" /> {rec.comp_note}
                     </span>
                   )}
@@ -161,9 +161,9 @@ function ProfileSummary({ report }: { report: CareerPathReport }) {
   ];
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
-      <span className="ink-3 ">你的画像：</span>
+      <span className="ink-3">你的画像：</span>
       {chips.map((c) => (
-        <span key={c} className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-2.5 py-1 text-xs ink-2 ">
+        <span key={c} className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-2.5 py-1 text-xs ink-2">
           {c}
         </span>
       ))}
@@ -178,8 +178,8 @@ function EmptyState({ reason }: { reason: CareerPathReport["failure_reason"] }) 
         <div className="mx-auto grid size-12 place-items-center rounded-2xl bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
           <FileArrowUp size={22} weight="bold" aria-hidden="true" />
         </div>
-        <h3 className="mt-4 text-lg font-semibold ink-1 ">先上传简历，解锁你的职业路径</h3>
-        <p className="mx-auto mt-2 max-w-md text-pretty text-sm leading-6 ink-2 ">
+        <h3 className="mt-4 text-lg font-semibold ink-1">先上传简历，解锁你的职业路径</h3>
+        <p className="mx-auto mt-2 max-w-md text-pretty text-sm leading-6 ink-2">
           上传简历或填写目标岗位 / 城市 / 公司后，我们会结合公司洞察（时机 / 性价比 / 路径 / 文化）给出投递优先级与温馨提示。
         </p>
         <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
@@ -193,7 +193,7 @@ function EmptyState({ reason }: { reason: CareerPathReport["failure_reason"] }) 
     );
   }
   return (
-    <div className="rounded-xl border border-black/[0.06] dark:border-white/[0.1] bg-white/55 dark:bg-white/[0.05] p-5 text-sm leading-6 ink-2 ">
+    <div className="rounded-xl border border-black/[0.06] dark:border-white/[0.1] bg-white/55 dark:bg-white/[0.05] p-5 text-sm leading-6 ink-2">
       你的目标公司暂无经核实的洞察信息。我们只展示通过分级与时效校验的内容，宁缺毋滥。
     </div>
   );
@@ -210,11 +210,11 @@ function SectionTitle({
 }) {
   return (
     <div className="mb-3 flex items-baseline gap-2">
-      <h2 className="flex items-center gap-2 text-sm font-semibold ink-2 ">
+      <h2 className="flex items-center gap-2 text-sm font-semibold ink-2">
         <Icon size={16} weight="bold" className="text-[#6a4fa0] dark:text-[#a98fd6]" />
         {title}
       </h2>
-      {hint && <span className="text-xs ink-3 ">· {hint}</span>}
+      {hint && <span className="text-xs ink-3">· {hint}</span>}
     </div>
   );
 }
@@ -238,10 +238,10 @@ function NoteCard({
       )}
     >
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium ink-3 ">{company}</span>
-        {title && <span className="text-sm font-semibold ink-1 ">{title}</span>}
+        <span className="text-xs font-medium ink-3">{company}</span>
+        {title && <span className="text-sm font-semibold ink-1">{title}</span>}
       </div>
-      <p className="mt-1 leading-6 ink-2 ">{content}</p>
+      <p className="mt-1 leading-6 ink-2">{content}</p>
     </article>
   );
 }

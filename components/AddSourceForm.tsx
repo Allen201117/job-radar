@@ -98,7 +98,7 @@ export default function AddSourceForm({ onAdded }: Props) {
   return (
     <form
       onSubmit={submit}
-      className="surface p-5 ink-1 "
+      className="surface p-5 ink-1"
     >
       <div className="flex items-center justify-between">
         <h3 className="text-base font-semibold">添加招聘源</h3>
@@ -108,7 +108,7 @@ export default function AddSourceForm({ onAdded }: Props) {
             reset();
             setOpen(false);
           }}
-          className="rounded-full bg-black/[0.05] p-1.5 ink-2 transition hover:bg-black/[0.08] hover:opacity-80 dark:bg-white/[0.05] dark:hover:bg-white/[0.08] "
+          className="rounded-full bg-black/[0.05] p-1.5 ink-2 transition hover:bg-black/[0.08] hover:opacity-80 dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
         >
           <X size={16} weight="bold" />
         </button>
@@ -163,7 +163,7 @@ export default function AddSourceForm({ onAdded }: Props) {
         </Field>
 
         <Field label="启用">
-          <label className="inline-flex items-center gap-2 text-sm ink-2 ">
+          <label className="inline-flex items-center gap-2 text-sm ink-2">
             <input
               type="checkbox"
               checked={form.enabled}
@@ -191,7 +191,7 @@ export default function AddSourceForm({ onAdded }: Props) {
       )}
 
       {error && (
-        <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c] dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]">{error}</p>
+        <p className="mt-3 rounded-lg border border-tone-rose-border bg-tone-rose-bg px-3 py-2 text-sm text-tone-rose-fg">{error}</p>
       )}
 
       <div className="mt-4 flex gap-2">
@@ -208,7 +208,7 @@ export default function AddSourceForm({ onAdded }: Props) {
             reset();
             setOpen(false);
           }}
-          className="rounded-full px-4 py-2 text-sm font-medium ink-3 transition hover:bg-black/[0.05] hover:opacity-80 dark:hover:bg-white/[0.05] "
+          className="rounded-full px-4 py-2 text-sm font-medium ink-3 transition hover:bg-black/[0.05] hover:opacity-80 dark:hover:bg-white/[0.05]"
         >
           取消
         </button>
@@ -233,9 +233,9 @@ function Field({
 }) {
   return (
     <div className={className}>
-      <label className="mb-1.5 block text-xs font-medium ink-3 ">{label}</label>
+      <label className="mb-1.5 block text-xs font-medium ink-3">{label}</label>
       {children}
-      {error && <p className="mt-1 text-xs text-[#9c4a3c] dark:text-[#e6a99f]">{error}</p>}
+      {error && <p className="mt-1 text-xs text-tone-rose-fg">{error}</p>}
     </div>
   );
 }

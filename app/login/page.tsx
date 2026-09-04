@@ -220,7 +220,7 @@ function LoginForm() {
   const alerts = (
     <>
       {error && (
-        <p className="rounded-2xl border border-[#e0b4ac] dark:border-[#7a392e]/[0.60] bg-[#f7e6e1] dark:bg-[#3a201a] px-4 py-2.5 text-[13px] text-[#9c4a3c] dark:text-[#e6a99f]">
+        <p className="rounded-2xl border border-tone-rose-border bg-tone-rose-bg px-4 py-2.5 text-[13px] text-tone-rose-fg">
           {error}
         </p>
       )}
@@ -234,9 +234,9 @@ function LoginForm() {
 
   // 验证码步骤共用的「发往哪个邮箱 + 重发」尾部。
   const codeFooter = (
-    <p className="text-center text-[12px] ink-3 ">
-      验证码已发至 <span className="font-medium ink-2 ">{email || "你的邮箱"}</span>
-      {" · "}
+    <p className="text-center text-[12px] ink-3">
+      验证码已发至 <span className="font-medium ink-2">{email || "你的邮箱"}</span>
+      {"·"}
       <button
         type="button"
         onClick={handleResend}
@@ -249,21 +249,21 @@ function LoginForm() {
   );
 
   return (
-    <main className="bg-editorial grain relative min-h-screen overflow-hidden ink-1 ">
+    <main className="bg-editorial grain relative min-h-screen overflow-hidden ink-1">
       <div className="relative z-10 mx-auto grid min-h-screen max-w-6xl items-center gap-12 px-5 py-10 lg:grid-cols-[1.05fr_0.95fr] lg:px-8">
         {/* ——— 左：品牌叙事 + 产品「拍立得」碎片 ——— */}
         <section className="rise relative hidden lg:block">
-          <p className="text-[13px] font-medium tracking-[0.16em] ink-3 ">
+          <p className="text-[13px] font-medium tracking-[0.16em] ink-3">
             职达 · 官方岗位雷达
           </p>
-          <h1 className="display-tight mt-5 text-balance text-[3.4rem] font-medium leading-[1.08] ink-1 ">
+          <h1 className="display-tight mt-5 text-balance text-[3.4rem] font-medium leading-[1.08] ink-1">
             每天打开一次，
             <br />
             只看官方在招的
             <br />
             好岗位。
           </h1>
-          <p className="mt-6 max-w-md text-pretty text-[15px] leading-7 ink-2 ">
+          <p className="mt-6 max-w-md text-pretty text-[15px] leading-7 ink-2">
             聚合企业官方招聘源、过滤第三方水货岗位；再把公开的招聘节奏、薪酬与路径，聚合成分级、标时间的职业洞察。
           </p>
 
@@ -273,15 +273,15 @@ function LoginForm() {
             <figure className="float-soft absolute left-0 top-2" style={{ animationDelay: "0s" }}>
               <div className="polaroid w-[208px] -rotate-[5deg] transition-transform duration-300 ease-out hover:-translate-y-1.5 hover:rotate-0">
                 <div className="rounded-[0.8rem] bg-[#f6f3ec] dark:bg-[#1c1813] p-4">
-                  <p className="text-[11px] font-medium ink-3 ">今日机会</p>
-                  <p className="mt-1 text-xl font-semibold ink-1 ">少量今日机会</p>
-                  <p className="mt-1 text-[12px] ink-3 ">高匹配待处理</p>
+                  <p className="text-[11px] font-medium ink-3">今日机会</p>
+                  <p className="mt-1 text-xl font-semibold ink-1">少量今日机会</p>
+                  <p className="mt-1 text-[12px] ink-3">高匹配待处理</p>
                   <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/[0.06] dark:bg-white/[0.05]">
                     <div className="h-full w-[46%] rounded-full bg-[#7fb2e8]" />
                   </div>
                 </div>
               </div>
-              <figcaption className="mt-2 pl-1 text-[12px] ink-3 ">今日机会</figcaption>
+              <figcaption className="mt-2 pl-1 text-[12px] ink-3">今日机会</figcaption>
             </figure>
 
             {/* 官方岗位卡（沿用真实示例数据） */}
@@ -291,13 +291,13 @@ function LoginForm() {
             >
               <div className="polaroid w-[244px] rotate-[4deg] transition-transform duration-300 ease-out hover:-translate-y-1.5 hover:rotate-0">
                 <div className="rounded-[0.8rem] bg-white dark:bg-[#1e1a15] p-4">
-                  <div className="flex items-center gap-1.5 text-[12px] ink-3 ">
-                    <span className="font-medium ink-1 ">Apple</span>
+                  <div className="flex items-center gap-1.5 text-[12px] ink-3">
+                    <span className="font-medium ink-1">Apple</span>
                     <span>·</span>
                     <MapPin size={12} weight="fill" aria-hidden="true" />
                     <span>上海</span>
                   </div>
-                  <p className="mt-1.5 text-[15px] font-semibold leading-snug ink-1 ">
+                  <p className="mt-1.5 text-[15px] font-semibold leading-snug ink-1">
                     Machine Learning Engineer
                   </p>
                   <div className="mt-3 flex items-center justify-between">
@@ -315,7 +315,7 @@ function LoginForm() {
                   </div>
                 </div>
               </div>
-              <figcaption className="mt-2 pr-1 text-right text-[12px] ink-3 ">
+              <figcaption className="mt-2 pr-1 text-right text-[12px] ink-3">
                 官方岗位详情
               </figcaption>
             </figure>
@@ -327,8 +327,8 @@ function LoginForm() {
             >
               <div className="polaroid w-[230px] rotate-[2.5deg] transition-transform duration-300 ease-out hover:-translate-y-1.5 hover:rotate-0">
                 <div className="rounded-[0.8rem] bg-white dark:bg-[#1e1a15] p-4">
-                  <p className="text-[11px] font-medium ink-3 ">职业洞察 · 分级标时间</p>
-                  <ul className="mt-2.5 grid grid-cols-2 gap-2 text-[12px] ink-2 ">
+                  <p className="text-[11px] font-medium ink-3">职业洞察 · 分级标时间</p>
+                  <ul className="mt-2.5 grid grid-cols-2 gap-2 text-[12px] ink-2">
                     <li className="flex items-center gap-1.5">
                       <span className="size-2 rounded-full bg-[#7fb2e8]" />时机
                     </li>
@@ -344,7 +344,7 @@ function LoginForm() {
                   </ul>
                 </div>
               </div>
-              <figcaption className="mt-2 pl-1 text-[12px] ink-3 ">职业洞察</figcaption>
+              <figcaption className="mt-2 pl-1 text-[12px] ink-3">职业洞察</figcaption>
             </figure>
           </div>
         </section>
@@ -353,10 +353,10 @@ function LoginForm() {
         <section className="rise mx-auto w-full max-w-[420px]" style={{ animationDelay: "0.12s" }}>
           {/* 移动端的极简品牌头（桌面端隐藏，避免与左栏重复） */}
           <div className="mb-7 lg:hidden">
-            <p className="text-[12px] font-medium tracking-[0.16em] ink-3 ">
+            <p className="text-[12px] font-medium tracking-[0.16em] ink-3">
               职达 · 官方岗位雷达
             </p>
-            <h1 className="display-tight mt-3 text-balance text-[2.3rem] font-medium leading-[1.12] ink-1 ">
+            <h1 className="display-tight mt-3 text-balance text-[2.3rem] font-medium leading-[1.12] ink-1">
               只看官方在招的好岗位。
             </h1>
           </div>
@@ -365,16 +365,16 @@ function LoginForm() {
             <div className="flex items-center gap-2.5">
               <BrandMark tile={30} icon={19} wordSize={18} />
             </div>
-            <h2 className="mt-6 text-[1.45rem] font-semibold leading-tight ink-1 ">
+            <h2 className="mt-6 text-[1.45rem] font-semibold leading-tight ink-1">
               {copy.title}
             </h2>
-            <p className="mt-1.5 text-[14px] ink-3 ">{copy.subtitle}</p>
+            <p className="mt-1.5 text-[14px] ink-3">{copy.subtitle}</p>
 
             {/* —— 登录 —— */}
             {mode === "signin" && (
               <form className="mt-6 space-y-4" onSubmit={handleSignIn}>
                 <div>
-                  <label htmlFor="email" className="mb-1.5 block text-[13px] font-medium ink-2 ">
+                  <label htmlFor="email" className="mb-1.5 block text-[13px] font-medium ink-2">
                     邮箱
                   </label>
                   <input
@@ -389,13 +389,13 @@ function LoginForm() {
                 </div>
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">
-                    <label htmlFor="password" className="block text-[13px] font-medium ink-2 ">
+                    <label htmlFor="password" className="block text-[13px] font-medium ink-2">
                       密码
                     </label>
                     <button
                       type="button"
                       onClick={() => goMode("forgot-email")}
-                      className="text-[12px] font-medium ink-3 hover:opacity-80 "
+                      className="text-[12px] font-medium ink-3 hover:opacity-80"
                     >
                       忘记密码？
                     </button>
@@ -436,7 +436,7 @@ function LoginForm() {
             {mode === "forgot-email" && (
               <form className="mt-6 space-y-4" onSubmit={handleForgotEmail}>
                 <div>
-                  <label htmlFor="forgot-email" className="mb-1.5 block text-[13px] font-medium ink-2 ">
+                  <label htmlFor="forgot-email" className="mb-1.5 block text-[13px] font-medium ink-2">
                     注册邮箱
                   </label>
                   <input
@@ -457,7 +457,7 @@ function LoginForm() {
                 <button
                   type="button"
                   onClick={() => goMode("signin")}
-                  className="flex w-full items-center justify-center gap-1 text-[13px] ink-3 hover:opacity-80 "
+                  className="flex w-full items-center justify-center gap-1 text-[13px] ink-3 hover:opacity-80"
                 >
                   <ArrowLeft size={14} weight="bold" aria-hidden="true" />
                   返回登录
@@ -469,7 +469,7 @@ function LoginForm() {
             {mode === "forgot-code" && (
               <form className="mt-6 space-y-4" onSubmit={handleForgotCode}>
                 <div>
-                  <label htmlFor="forgot-code" className="mb-1.5 block text-[13px] font-medium ink-2 ">
+                  <label htmlFor="forgot-code" className="mb-1.5 block text-[13px] font-medium ink-2">
                     验证码
                   </label>
                   <input
@@ -493,7 +493,7 @@ function LoginForm() {
                 <button
                   type="button"
                   onClick={() => goMode("signin")}
-                  className="flex w-full items-center justify-center gap-1 text-[13px] ink-3 hover:opacity-80 "
+                  className="flex w-full items-center justify-center gap-1 text-[13px] ink-3 hover:opacity-80"
                 >
                   <ArrowLeft size={14} weight="bold" aria-hidden="true" />
                   返回登录
@@ -505,7 +505,7 @@ function LoginForm() {
             {mode === "forgot-password" && (
               <form className="mt-6 space-y-4" onSubmit={handleResetPassword}>
                 <div>
-                  <label htmlFor="new-password" className="mb-1.5 block text-[13px] font-medium ink-2 ">
+                  <label htmlFor="new-password" className="mb-1.5 block text-[13px] font-medium ink-2">
                     新密码
                   </label>
                   <input
@@ -519,7 +519,7 @@ function LoginForm() {
                   />
                 </div>
                 <div>
-                  <label htmlFor="confirm-password" className="mb-1.5 block text-[13px] font-medium ink-2 ">
+                  <label htmlFor="confirm-password" className="mb-1.5 block text-[13px] font-medium ink-2">
                     确认新密码
                   </label>
                   <input
@@ -540,7 +540,7 @@ function LoginForm() {
                 <button
                   type="button"
                   onClick={() => goMode("signin")}
-                  className="flex w-full items-center justify-center gap-1 text-[13px] ink-3 hover:opacity-80 "
+                  className="flex w-full items-center justify-center gap-1 text-[13px] ink-3 hover:opacity-80"
                 >
                   <ArrowLeft size={14} weight="bold" aria-hidden="true" />
                   返回登录
@@ -549,7 +549,7 @@ function LoginForm() {
             )}
           </div>
 
-          <p className="mt-5 flex items-center justify-center gap-1.5 text-center text-[12px] leading-5 ink-3 ">
+          <p className="mt-5 flex items-center justify-center gap-1.5 text-center text-[12px] leading-5 ink-3">
             <CheckCircle size={14} weight="fill" aria-hidden="true" />
             岗位仅来自企业官方公开渠道 · 职业洞察聚合去标识
           </p>

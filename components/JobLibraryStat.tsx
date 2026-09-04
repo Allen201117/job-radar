@@ -89,7 +89,7 @@ export default function JobLibraryStat({ initialTotal }: Props) {
   // 旧文案「轮询间隔 60s」诚实但是黑话（走查实测求职者看不懂），所以换成「每分钟更新」：
   // 既保住「这是定时刷新、不是实时」的诚实底线，又不用技术词。契约由 ux-hardening-contract 守。
   const syncLabel = syncedAt
-    ? `${syncedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })} 更新`
+    ? `${syncedAt.toLocaleTimeString("zh-CN", { hour:"2-digit", minute:"2-digit", hour12: false })} 更新`
     : `每分钟更新`;
   const statusText = status === "stale" ? "连接暂不可用" : status === "syncing" ? "更新中" : syncLabel;
 

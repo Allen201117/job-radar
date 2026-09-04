@@ -49,7 +49,7 @@ export default function ProfileEditor({ email }: { email?: string }) {
   }
 
   return (
-    <section className="surface p-5 ink-1 ">
+    <section className="surface p-5 ink-1">
       <div className="flex items-center gap-2">
         <div className="grid size-9 place-items-center rounded-xl bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]">
           <UserCircle size={18} weight="fill" aria-hidden="true" />
@@ -59,7 +59,7 @@ export default function ProfileEditor({ email }: { email?: string }) {
 
       <form onSubmit={save} className="mt-4 space-y-3">
         <div>
-          <label htmlFor="display_name" className="inline-flex items-center gap-1.5 text-sm font-medium ink-2 ">
+          <label htmlFor="display_name" className="inline-flex items-center gap-1.5 text-sm font-medium ink-2">
             <IdentificationBadge size={16} weight="bold" aria-hidden="true" />
             昵称
           </label>
@@ -74,7 +74,7 @@ export default function ProfileEditor({ email }: { email?: string }) {
         </div>
 
         <div>
-          <label htmlFor="bio" className="text-sm font-medium ink-2 ">
+          <label htmlFor="bio" className="text-sm font-medium ink-2">
             个性签名
           </label>
           <textarea
@@ -90,7 +90,7 @@ export default function ProfileEditor({ email }: { email?: string }) {
           </div>
         </div>
 
-        {email && <p className="text-xs ink-3 ">登录邮箱：{email}</p>}
+        {email && <p className="text-xs ink-3">登录邮箱：{email}</p>}
 
         <button
           type="submit"

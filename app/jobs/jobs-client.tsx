@@ -237,7 +237,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
       {officialJobs.length > 0 && (
         <div className="t-body-sm flex flex-wrap items-center gap-2 rounded-2xl border border-[#cfe6b0] dark:border-[#a3d06a]/[0.30] bg-[#eef6e0] dark:bg-[#a3d06a]/[0.15] px-3.5 py-2.5">
           <Sparkle size={16} weight="fill" className="text-[#6f9a3a] dark:text-[#a3d06a]" aria-hidden="true" />
-          <span className="t-label text-[#4f6f2a] dark:text-[#a3d06a]">
+          <span className="t-label text-tone-green-fg">
             本次新增 {officialJobs.length} 个新岗位
             {(filters.city || filters.jobType || filters.keyword) && newMatching.length !== officialJobs.length
               ? `，其中 ${newMatching.length} 个合你当前筛选`
@@ -251,7 +251,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
                 "t-label rounded-full px-3 py-1 transition",
                 newViewActive
                   ? "bg-[#cde8a0] text-[#3f5a1c] dark:bg-[#a3d06a]/[0.25] dark:text-[#a3d06a]"
-                  : "ink-3 hover:bg-black/[0.05] dark:hover:bg-white/[0.05] hover:opacity-80 ",
+                  : "ink-3 hover:bg-black/[0.05] dark:hover:bg-white/[0.05] hover:opacity-80",
               )}
             >
               只看新发现
@@ -263,7 +263,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
                 "t-label rounded-full px-3 py-1 transition",
                 !newViewActive
                   ? "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                  : "ink-3 hover:bg-black/[0.05] dark:hover:bg-white/[0.05] hover:opacity-80 ",
+                  : "ink-3 hover:bg-black/[0.05] dark:hover:bg-white/[0.05] hover:opacity-80",
               )}
             >
               查看全部
@@ -301,7 +301,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
               </div>
               {!newViewActive && searchMetaParts.length > 0 && (
                 <p className="t-caption mt-0.5 ink-3">
-                  {searchMetaParts.join(" · ")}
+                  {searchMetaParts.join("·")}
                 </p>
               )}
             </>
@@ -370,14 +370,14 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
         })}
         {displayJobs.length === 0 &&
           (officialJobs.length > 0 && (filters.city || filters.jobType) ? (
-            <div className="rounded-[1.5rem] border border-dashed border-[#e7c98a] dark:border-[#e0b15a]/[0.30] bg-[#fbf2d8] dark:bg-[#e0b15a]/[0.15] px-6 py-10 text-center">
+            <div className="rounded-[1.5rem] border border-dashed border-tone-amber-border bg-[#fbf2d8] dark:bg-[#e0b15a]/[0.15] px-6 py-10 text-center">
               <h2 className="t-h2 ink-1">
                 本次发现 {officialJobs.length} 个岗位，但 0 个符合当前筛选
               </h2>
               <p className="t-body-sm mx-auto mt-2 max-w-md text-pretty ink-2">
                 发现的岗位未同时满足
-                {filters.city ? ` 城市『${filters.city}』` : ""}
-                {filters.jobType ? ` 类型『${filters.jobType}』` : ""}
+                {filters.city ? `城市『${filters.city}』` : ""}
+                {filters.jobType ? `类型『${filters.jobType}』` : ""}
                 ——它们可能属于其它城市，或为社招 / 校招。放宽这两项即可查看本次发现的全部岗位。
               </p>
               <button
@@ -505,7 +505,7 @@ function formatElapsed(sec: number) {
   const s = Math.max(0, Math.floor(sec));
   const m = Math.floor(s / 60);
   const r = s % 60;
-  return `${m}:${String(r).padStart(2, "0")}`;
+  return `${m}:${String(r).padStart(2,"0")}`;
 }
 
 function ActionTile({
@@ -559,7 +559,7 @@ function ActionTile({
           size={18}
           weight="bold"
           aria-hidden="true"
-          className="pointer-events-none absolute right-4 top-4 -translate-x-1 translate-y-1 ink-3 opacity-0 transition-all duration-300 ease-out group-hover/tile:translate-x-0 group-hover/tile:translate-y-0 group-hover/tile:opacity-100 "
+          className="pointer-events-none absolute right-4 top-4 -translate-x-1 translate-y-1 ink-3 opacity-0 transition-all duration-300 ease-out group-hover/tile:translate-x-0 group-hover/tile:translate-y-0 group-hover/tile:opacity-100"
         />
       </button>
       <span
@@ -592,7 +592,7 @@ function RetrievalDoneBanner({
       <span
         className={cn(
           "mt-0.5 grid size-7 shrink-0 place-items-center rounded-full",
-          success ? "bg-[#dcecbf] dark:bg-[#a3d06a]/[0.20] text-[#5b7d2c] dark:text-[#a3d06a]" : "bg-black/[0.06] dark:bg-white/[0.05] ink-3 ",
+          success ? "bg-[#dcecbf] dark:bg-[#a3d06a]/[0.20] text-[#5b7d2c] dark:text-[#a3d06a]" : "bg-black/[0.06] dark:bg-white/[0.05] ink-3",
         )}
       >
         {success ? (
@@ -602,10 +602,10 @@ function RetrievalDoneBanner({
         )}
       </span>
       <div className="min-w-0 flex-1">
-        <p className={cn("t-label", success ? "text-[#3f5a1c] dark:text-[#a3d06a]" : "ink-2 ")}>
+        <p className={cn("t-label", success ? "text-[#3f5a1c] dark:text-[#a3d06a]" : "ink-2")}>
           {result.title}
         </p>
-        <p className={cn("t-body-sm mt-0.5 text-pretty", success ? "text-[#557029] dark:text-[#a3d06a]" : "ink-2 ")}>
+        <p className={cn("t-body-sm mt-0.5 text-pretty", success ? "text-[#557029] dark:text-[#a3d06a]" : "ink-2")}>
           {result.detail}
         </p>
       </div>
@@ -613,7 +613,7 @@ function RetrievalDoneBanner({
         type="button"
         onClick={onDismiss}
         aria-label="关闭完成提示"
-        className="-mr-1 -mt-1 shrink-0 rounded-full p-1.5 ink-3 transition hover:bg-black/[0.06] dark:hover:bg-white/[0.05] hover:opacity-80 "
+        className="-mr-1 -mt-1 shrink-0 rounded-full p-1.5 ink-3 transition hover:bg-black/[0.06] dark:hover:bg-white/[0.05] hover:opacity-80"
       >
         <X size={15} weight="bold" aria-hidden="true" />
       </button>
@@ -636,12 +636,12 @@ function BrowserDiscoveryProgress({ discovery }: { discovery: BrowserDiscoverySt
   const activeIndex = discovery.phase === "queued" ? 0 : 1;
 
   return (
-    <div className="surface p-4 ink-1 ">
+    <div className="surface p-4 ink-1">
       <div className="flex items-center gap-2.5">
-        <CircleNotch size={18} weight="bold" className="animate-spin text-[#3f7cc0] dark:text-[#7fb2e8]" aria-hidden="true" />
+        <CircleNotch size={18} weight="bold" className="animate-spin text-tone-sky-fg" aria-hidden="true" />
         <span className="t-h3">{isRefresh ? "正在刷新对口公司…" : "正在发掘新公司…"}</span>
         <span className="t-caption t-num ml-auto ink-3">
-          {hasProg ? `已更新 ${prog!.done}/${prog!.total} 家 · ` : ""}已用时 {formatElapsed(discovery.elapsedSec)}
+          {hasProg ? `已更新 ${prog!.done}/${prog!.total} 家 ·` : ""}已用时 {formatElapsed(discovery.elapsedSec)}
         </span>
       </div>
       <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-black/[0.08] dark:bg-white/[0.1]">
@@ -653,19 +653,19 @@ function BrowserDiscoveryProgress({ discovery }: { discovery: BrowserDiscoverySt
           return (
             <li key={label} className="t-body-sm flex items-center gap-2">
               {state === "done" ? (
-                <CheckCircle size={16} weight="fill" className="shrink-0 text-[#3f7cc0] dark:text-[#7fb2e8]" aria-hidden="true" />
+                <CheckCircle size={16} weight="fill" className="shrink-0 text-tone-sky-fg" aria-hidden="true" />
               ) : state === "active" ? (
-                <CircleNotch size={16} weight="bold" className="shrink-0 animate-spin text-[#3f7cc0] dark:text-[#7fb2e8]" aria-hidden="true" />
+                <CircleNotch size={16} weight="bold" className="shrink-0 animate-spin text-tone-sky-fg" aria-hidden="true" />
               ) : (
-                <Circle size={16} className="shrink-0 ink-4 " aria-hidden="true" />
+                <Circle size={16} className="shrink-0 ink-4" aria-hidden="true" />
               )}
               <span
                 className={
                   state === "pending"
-                    ? "ink-3 "
+                    ? "ink-3"
                     : state === "active"
-                      ? "ink-1 "
-                      : "ink-2 "
+                      ? "ink-1"
+                      : "ink-2"
                 }
               >
                 {`${i + 1}. ${label}`}

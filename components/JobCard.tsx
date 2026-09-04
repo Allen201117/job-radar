@@ -88,12 +88,12 @@ function relatedReasonLabel(m?: FilterMatch): string | null {
     else if (f === "education") parts.push("学历要求未知");
     else if (f === "type") parts.push("类型未标注");
   }
-  return parts.length ? parts.join(" · ") : null;
+  return parts.length ? parts.join("·") : null;
 }
 
 // 信号 chip 配色：关键提醒醒目（暖橙），STILL_OPEN 绿（仍在招），CLOSED_OR_STALE 灰。
 const SIGNAL_STYLE: Record<OpportunitySignalType, string> = {
-  STILL_OPEN: "border-[#bcdcae] bg-[#eef6e0] text-[#4d6b2f] dark:border-[#a3d06a]/45 dark:bg-[#a3d06a]/20 dark:text-[#d2f0ad]",
+  STILL_OPEN: "border-tone-green-border bg-[#eef6e0] text-[#4d6b2f] dark:bg-[#a3d06a]/20 dark:text-[#d2f0ad]",
   OPEN_UNVERIFIED: "border-[#e4d1a8] bg-[#f8efd9] text-[#8a6a2a] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/12 dark:text-[#e0b15a]",
   DEADLINE_SOON: "border-[#f0d9a8] bg-[#fbf1de] text-[#9a6a1f] dark:border-[#e8b87f]/30 dark:bg-[#e8b87f]/12 dark:text-[#e8b87f]",
   CLOSED_OR_STALE: "border-black/[0.08] bg-[#f0ece2] ink-2 dark:border-white/10 dark:bg-white/[0.08]",
@@ -108,11 +108,11 @@ const SIGNAL_STYLE: Record<OpportunitySignalType, string> = {
 type KeyTagTone = "campus" | "intern" | "social" | "neutral" | "money" | "warn";
 
 const KEY_TAG_TONE: Record<KeyTagTone, string> = {
-  campus: "border-[#a9d8c4] bg-[#dcf2e8] text-[#256b4d] dark:border-[#6cc99e]/35 dark:bg-[#6cc99e]/[0.14] dark:text-[#8fdcb8]",
+  campus: "border-tone-teal-border bg-tone-teal-bg text-[#256b4d] dark:text-[#8fdcb8]",
   intern: "border-[#c3d9f2] bg-[#e6f0fb] text-[#2f6299] dark:border-[#7fb2e8]/35 dark:bg-[#7fb2e8]/[0.14] dark:text-[#a9cef3]",
   social: "border-[#ddd0b6] bg-[#f4ecdc] text-[#6b5f4c] dark:border-white/[0.16] dark:bg-white/[0.10] dark:text-[#ddd3c4]",
   neutral: "border-black/[0.09] bg-white/75 ink-2 dark:border-white/[0.14] dark:bg-white/[0.08]",
-  money: "border-[#bcdcae] bg-[#eef6e0] text-[#4d6b2f] dark:border-[#a3d06a]/35 dark:bg-[#a3d06a]/[0.14] dark:text-[#cbeba2]",
+  money: "border-tone-green-border bg-[#eef6e0] text-[#4d6b2f] dark:bg-[#a3d06a]/[0.14] dark:text-[#cbeba2]",
   warn: "border-[#f0d9a8] bg-[#fbf1de] text-[#8a6a2a] dark:border-[#e0b15a]/35 dark:bg-[#e0b15a]/[0.14] dark:text-[#e0b15a]",
 };
 
@@ -166,7 +166,7 @@ function insightBadge(avail: InsightAvailability | null): {
     return {
       label: `洞察 ${avail.real}`,
       title: `查看该公司的 ${avail.real} 条职业洞察（实录·已核验）`,
-      cls: "border-[#cfc0e6] bg-[#efe9f8] text-[#6a4fa0] hover:border-[#bba9dd] hover:bg-[#e7def4] dark:border-[#c3b1e6]/[0.30] dark:bg-[#c3b1e6]/[0.15] dark:text-[#c3b1e6] dark:hover:border-[#c3b1e6]/[0.45] dark:hover:bg-[#c3b1e6]/[0.22]",
+      cls: "border-tone-lilac-border bg-tone-lilac-bg text-tone-lilac-fg hover:border-[#bba9dd] hover:bg-[#e7def4] dark:hover:border-[#c3b1e6]/[0.45] dark:hover:bg-[#c3b1e6]/[0.22]",
       derived: false,
     };
   }
@@ -174,7 +174,7 @@ function insightBadge(avail: InsightAvailability | null): {
     return {
       label: "岗位聚合",
       title: "查看据本平台在招岗位聚合出的洞察（暂无实录条目）",
-      cls: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] hover:border-[#9cc3ea] hover:bg-[#cfe0f5] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8] dark:hover:border-[#7fb2e8]/[0.45] dark:hover:bg-[#7fb2e8]/[0.22]",
+      cls: "border-tone-sky-border bg-tone-sky-bg text-[#2f6299] hover:border-[#9cc3ea] hover:bg-[#cfe0f5] dark:text-[#7fb2e8] dark:hover:border-[#7fb2e8]/[0.45] dark:hover:bg-[#7fb2e8]/[0.22]",
       derived: true,
     };
   }
@@ -442,7 +442,7 @@ export default function JobCard({
       key: "sponsorship-available",
       label: "提供 Sponsorship",
       icon: CheckCircle,
-      cls: "border border-[#bcdcae] bg-[#eef6e0] text-[#4d6b2f] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#d2f0ad]",
+      cls: "border border-tone-green-border bg-[#eef6e0] text-[#4d6b2f] dark:bg-[#a3d06a]/[0.15] dark:text-[#d2f0ad]",
     });
   } else if (job.sponsorship_signal === "none") {
     statusChips.push({
@@ -458,7 +458,7 @@ export default function JobCard({
         key: "session-new",
         label: "本次新发现",
         icon: Sparkle,
-        cls: "bg-[#dcefb4] text-[#4f6f2a] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]",
+        cls: "bg-[#dcefb4] text-tone-green-fg dark:bg-[#a3d06a]/[0.15]",
       });
     } else if (isNew) {
       statusChips.push({
@@ -481,7 +481,7 @@ export default function JobCard({
         // 去掉常驻 will-change-transform（几百张卡片各自占一个 GPU 层会撑爆显存→崩页），hover 位移交给 transition。
         "group cursor-target bento-glow cv-auto glass-card rounded-[1.35rem] border p-5 ink-1 transition duration-300 ease-out hover:-translate-y-1 motion-reduce:hover:translate-y-0",
         sessionNew
-          ? "border-[#bcdcae] bg-[#eef6e0]/75 ring-1 ring-[#cfe6b0] hover:bg-[#eef6e0]/90 hover:shadow-[0_26px_56px_-28px_rgba(60,90,30,0.4)] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.08] dark:ring-[#a3d06a]/[0.25] dark:hover:bg-[#a3d06a]/[0.12]"
+          ? "border-tone-green-border bg-[#eef6e0]/75 ring-1 ring-[#cfe6b0] hover:bg-[#eef6e0]/90 hover:shadow-[0_26px_56px_-28px_rgba(60,90,30,0.4)] dark:bg-[#a3d06a]/[0.08] dark:ring-[#a3d06a]/[0.25] dark:hover:bg-[#a3d06a]/[0.12]"
           : "border-black/[0.06] bg-white/55 shadow-[0_18px_44px_-30px_rgba(40,34,28,0.32)] hover:border-black/[0.1] hover:bg-white/80 hover:shadow-[0_26px_56px_-26px_rgba(40,34,28,0.42)] dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:border-white/20 dark:hover:bg-white/[0.08]",
       )}
     >
@@ -587,7 +587,7 @@ export default function JobCard({
                 <button
                   type="button"
                   onClick={() => setExpanded((v) => !v)}
-                  className="t-label mt-2 inline-flex min-h-11 items-center gap-1 text-[#2f8a63] transition-colors hover:opacity-80 dark:text-[#6cc99e] lg:min-h-0"
+                  className="t-label mt-2 inline-flex min-h-11 items-center gap-1 text-tone-teal-fg transition-colors hover:opacity-80 lg:min-h-0"
                 >
                   {expanded ? "收起" : "展开全文"}
                   <CaretDown
@@ -608,7 +608,7 @@ export default function JobCard({
                       key={`${s.type}:${i}`}
                       className={cn("t-micro rounded-full border px-2.5 py-1", SIGNAL_STYLE[s.type])}
                     >
-                      {s.isCritical ? "● " : ""}
+                      {s.isCritical ? "●" : ""}
                       {s.label}
                     </span>
                   ))}
@@ -634,7 +634,7 @@ export default function JobCard({
                   {opportunityReasons.map((r, i) => (
                     <li
                       key={`${r.type}:${i}`}
-                      className="t-label inline-flex items-center gap-1 rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-1 text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.12] dark:text-[#6cc99e]"
+                      className="t-label inline-flex items-center gap-1 rounded-full border border-tone-teal-border bg-tone-teal-bg px-2.5 py-1 text-tone-teal-fg"
                     >
                       <Sparkle size={11} weight="fill" aria-hidden="true" />
                       {r.label}
@@ -663,7 +663,7 @@ export default function JobCard({
                   {job.matched_keywords.slice(0, 3).map((kw) => (
                     <span
                       key={kw}
-                      className="t-label rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-1 text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.12] dark:text-[#6cc99e]"
+                      className="t-label rounded-full border border-tone-teal-border bg-tone-teal-bg px-2.5 py-1 text-tone-teal-fg"
                     >
                       {kw}
                     </span>
@@ -794,7 +794,7 @@ export default function JobCard({
             </div>
           )}
           {actionError && (
-            <span className="t-caption rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-2 py-1 text-[#9c4a3c] lg:text-right dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]">
+            <span className="t-caption rounded-lg border border-tone-rose-border bg-tone-rose-bg px-2 py-1 text-tone-rose-fg lg:text-right">
               {actionError}
             </span>
           )}

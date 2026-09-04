@@ -86,10 +86,10 @@ export function KpiCard({
   const content = (
     <>
       <p className="text-xs font-medium text-[#625c51] dark:text-[#c5bbaa]">{title}</p>
-      <div className="mt-2 min-h-10 text-[1.75rem] font-semibold leading-none tracking-[-0.035em] tabular-nums ink-1 ">{value}</div>
+      <div className="mt-2 min-h-10 text-[1.75rem] font-semibold leading-none tracking-[-0.035em] tabular-nums ink-1">{value}</div>
       <div className="mt-3 min-h-5">{status || <StatusBadge tone={tone} />}</div>
       <p className="mt-2 text-xs leading-5 ink-3">{detail}</p>
-      {footnote && <p className="mt-4 border-t border-black/[0.06] pt-2 text-[10px] leading-4 ink-3 dark:border-white/[0.08] ">{footnote}</p>}
+      {footnote && <p className="mt-4 border-t border-black/[0.06] pt-2 text-[10px] leading-4 ink-3 dark:border-white/[0.08]">{footnote}</p>}
     </>
   );
   const cardClass = cn(
@@ -135,10 +135,10 @@ export function BarList({
                 这一竖条宽度恒定、只由 tone 决定，给「差」一个与数值无关的强调通道。 */}
             <span aria-hidden="true" className={cn("absolute inset-y-0 left-0 w-[3px]", HEALTH_STATUS_META[tone].fill, tone === "muted" && "opacity-40")} />
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium ink-1 ">{item.label}</p>
+              <p className="truncate text-sm font-medium ink-1">{item.label}</p>
               {item.caption && <p className="mt-0.5 truncate text-[11px] ink-3">{item.caption}</p>}
             </div>
-            <div className="text-right tabular-nums text-sm font-semibold ink-2 ">
+            <div className="text-right tabular-nums text-sm font-semibold ink-2">
               {item.value}
               {item.valueDetail && <p className="mt-0.5 text-[11px] font-normal ink-3">{item.valueDetail}</p>}
             </div>
@@ -212,7 +212,7 @@ export function StatRing({
 }
 
 export function Callout({ tone = "muted", children, className }: { tone?: BandTone; children: ReactNode; className?: string }) {
-  return <aside className={cn("flex items-start gap-2 rounded-xl border border-black/[0.07] bg-white/45 px-3.5 py-3 text-sm leading-5 ink-2 dark:border-white/[0.09] dark:bg-white/[0.04] ", className)}><StatusDot tone={tone} className="mt-1" /><p>{children}</p></aside>;
+  return <aside className={cn("flex items-start gap-2 rounded-xl border border-black/[0.07] bg-white/45 px-3.5 py-3 text-sm leading-5 ink-2 dark:border-white/[0.09] dark:bg-white/[0.04]", className)}><StatusDot tone={tone} className="mt-1" /><p>{children}</p></aside>;
 }
 
 // ── 以下三个原语为「用户行为」模块新增（2026-09-03） ──────────────────────
@@ -255,7 +255,7 @@ export function TrendLine({
   const stepX = points.length > 1 ? width / (points.length - 1) : 0;
   const y = (v: number) => padY + (1 - v / max) * (height - padY * 2);
   const coords = points.map((p, i) => [points.length > 1 ? i * stepX : width / 2, y(p.value)] as const);
-  const line = coords.map(([x, yy], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${yy.toFixed(1)}`).join(" ");
+  const line = coords.map(([x, yy], i) => `${i === 0 ?"M":"L"}${x.toFixed(1)},${yy.toFixed(1)}`).join("");
   const area = `${line} L${coords[coords.length - 1][0].toFixed(1)},${height} L${coords[0][0].toFixed(1)},${height} Z`;
   const meta = HEALTH_STATUS_META[tone];
   const last = points[points.length - 1];

@@ -400,7 +400,7 @@ export default function UserBehaviorReport({
                       <td className="px-4 py-2.5"><StatusBadge tone={tone} label={FUNNEL_STEP_LABELS[u.step] || "—"} /></td>
                       <td className="t-caption px-4 py-2.5">
                         {u.industries.length ? u.industries.join("、") : "未填"}
-                        {u.stage ? ` · ${u.stage}` : ""}
+                        {u.stage ? `· ${u.stage}` : ""}
                       </td>
                       <td className="px-4 py-2.5 text-right tabular-nums">{u.activeDays}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums">{u.events}</td>

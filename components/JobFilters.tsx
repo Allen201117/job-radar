@@ -24,6 +24,7 @@ import {
   SlidersHorizontal,
   X,
 } from "@phosphor-icons/react";
+import { useBodyScrollLock, useEscapeKey, useFocusTrap } from "@/lib/ui/hooks";
 
 interface Props {
   filters: Filters;
@@ -420,19 +421,12 @@ function SelectedChips({ chips, onClearAll, onClearOne }: { chips: ActiveChip[];
 function AllFiltersPanel({ origin, filters, onChange, onClearAll, onClose, companies, resultTotalText, overseas }: { origin: PanelOrigin | null; filters: Filters; onChange: (key: keyof Filters, value: Filters[keyof Filters]) => void; onClearAll: () => void; onClose: () => void; companies: string[]; resultTotalText: string; overseas: boolean }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const open = origin !== null;
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => event.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKeyDown);
-    panelRef.current?.focus();
-    // 弹窗打开时锁住背景滚动：否则滚轮会穿透到底下的岗位列表，用户以为弹窗在滚、其实滚的是背景。
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [open, onClose]);
+  useEscapeKey(onClose, open);
+  // 锁住背景滚动：否则滚轮会穿透到底下的岗位列表，用户以为弹窗在滚、其实滚的是背景。
+  useBodyScrollLock(open);
+  // 原本只是 panelRef.current?.focus()，焦点仍能 Tab 出去落到被遮住的列表上。
+  // 换成焦点陷阱后 Tab 在弹窗内循环、关闭时焦点回到「更多」按钮。只改焦点，不改任何像素。
+  useFocusTrap(panelRef, open);
   if (!origin) return null;
   // 把「按钮中心 → 视窗中心」的偏移量喂给 CSS，弹窗就从那颗按钮的位置放大展开（见 globals.css
   // 的 job-filter-grow-in）。只在桌面端生效；移动端是底部 Sheet，用不到这几个变量。
@@ -453,7 +447,7 @@ function CountBadge({ count }: { count: number }) { return <span className="btn-
 type ActiveChip = { id: string; key: keyof Filters; value?: string; label: string };
 function collectActiveChips(filters: Filters, overseas: boolean): ActiveChip[] {
   const values: ActiveChip[] = [];
-  const addMany = (key: "city" | "keyword" | "jobFunction" | "jobRole", prefix = "") => splitMultiValue(filters[key]).forEach((value) => values.push({ id: `${key}-${value}`, key, value, label: `${prefix}${key === "jobRole" ? roleLabel(value) : value}` }));
+  const addMany = (key: "city" | "keyword" | "jobFunction" | "jobRole", prefix = "") => splitMultiValue(filters[key]).forEach((value) => values.push({ id: `${key}-${value}`, key, value, label: `${prefix}${key ==="jobRole"? roleLabel(value) : value}` }));
   addMany("city");
   addMany("keyword");
   addMany("jobFunction");

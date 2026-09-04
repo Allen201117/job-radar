@@ -117,10 +117,10 @@ const CYCLE_STATUS_LABELS: Record<string, string> = {
 };
 function cycleStatusChip(status: string) {
   if (status === "verified")
-    return "border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]";
+    return "border-tone-green-border bg-tone-green-bg text-tone-green-fg";
   if (status === "rejected")
-    return "border-[#e0b4ac] bg-[#f7e6e1] text-[#9c4a3c] dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]";
-  return "border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08] ";
+    return "border-tone-rose-border bg-tone-rose-bg text-tone-rose-fg";
+  return "border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08]";
 }
 const GATE_HELP: Record<string, string> = {
   deidentified: "去标识门未过：请勾选「已去标识」，且每个来源也必须勾选「已去标识」。",
@@ -570,16 +570,16 @@ export default function InsightsAdminClient() {
     showToast({ text: "已提交招聘周期" });
   }
 
-  if (loading) return <p className="mt-8 text-sm ink-3 ">正在加载洞察后台…</p>;
+  if (loading) return <p className="mt-8 text-sm ink-3">正在加载洞察后台…</p>;
   if (error)
     return (
-      <p className="mt-8 rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
+      <p className="mt-8 rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
         {error}
       </p>
     );
 
   return (
-    <div className="mt-8 space-y-8 ink-1 ">
+    <div className="mt-8 space-y-8 ink-1">
       <div className="flex flex-wrap items-center gap-3">
         {!formOpen && (
           <button
@@ -590,7 +590,7 @@ export default function InsightsAdminClient() {
             <Plus size={16} weight="bold" /> 新增洞察条目
           </button>
         )}
-        <span className="text-sm ink-3 ">
+        <span className="text-sm ink-3">
           共 {items.length} 条洞察 · {companies.length} 家公司 · {submissions.length} 条待审提交 · {disputes.length} 条待处理申诉
         </span>
       </div>
@@ -616,7 +616,7 @@ export default function InsightsAdminClient() {
       {/* 待审第一方提交 */}
       {submissions.length > 0 && (
         <section>
-          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#2f8a63] dark:text-[#6cc99e]">
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-tone-teal-fg">
             <CheckCircle size={16} weight="fill" /> 待审提交（{submissions.length}）
           </h2>
           <div className="space-y-3">
@@ -645,23 +645,23 @@ export default function InsightsAdminClient() {
               return (
                 <article
                   key={d.id}
-                  className="rounded-xl border border-[#e7c98a] bg-[#fbf2d8] p-4 text-sm dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15]"
+                  className="rounded-xl border border-tone-amber-border bg-[#fbf2d8] p-4 text-sm dark:bg-[#e0b15a]/[0.15]"
                 >
-                  <p className="ink-1 ">
+                  <p className="ink-1">
                     {it ? (
                       <>
                         <span className="font-medium">
                           {companyById.get(it.company_id)?.display_name ||
                             companyById.get(it.company_id)?.company}
-                        </span>{" "}
+                        </span>{""}
                         · {DIM_LABELS[it.dimension]} · {it.title || it.content.slice(0, 24)}
                       </>
                     ) : (
-                      <span className="ink-3 ">条目已不存在（item_id: {d.item_id.slice(0, 8)}）</span>
+                      <span className="ink-3">条目已不存在（item_id: {d.item_id.slice(0, 8)}）</span>
                     )}
                   </p>
-                  {it && <p className="mt-1 leading-6 ink-2 ">{it.content}</p>}
-                  <p className="mt-2 text-xs ink-3 ">
+                  {it && <p className="mt-1 leading-6 ink-2">{it.content}</p>}
+                  <p className="mt-2 text-xs ink-3">
                     申诉理由：{d.reason || "（未填写）"} · {new Date(d.created_at).toLocaleString("zh-CN")}
                   </p>
                   <div className="mt-3 flex gap-2">
@@ -675,14 +675,14 @@ export default function InsightsAdminClient() {
                         <CircleNotch size={13} weight="bold" className="animate-spin" />
                       ) : (
                         <Trash size={13} weight="bold" />
-                      )}{" "}
+                      )}{""}
                       {busyId === d.id ? "处理中…" : "成立并下架"}
                     </button>
                     <button
                       type="button"
                       disabled={busyId === d.id}
                       onClick={() => resolveDispute(d, "rejected")}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.1] px-3 py-1.5 text-xs font-medium ink-2 transition hover:bg-black/[0.05] hover:opacity-80 disabled:opacity-50 dark:border-white/[0.1] dark:hover:bg-white/[0.05] "
+                      className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.1] px-3 py-1.5 text-xs font-medium ink-2 transition hover:bg-black/[0.05] hover:opacity-80 disabled:opacity-50 dark:border-white/[0.1] dark:hover:bg-white/[0.05]"
                     >
                       {busyId === d.id && <CircleNotch size={13} weight="bold" className="animate-spin" />}
                       {busyId === d.id ? "处理中…" : "驳回"}
@@ -697,7 +697,7 @@ export default function InsightsAdminClient() {
 
       {/* 招聘周期（据往年 · 校招洞察 P2）：新表结构化事实，独立于上面的 insight_items 洞察条目 */}
       <section>
-        <h2 className="mb-3 text-sm font-semibold ink-2 ">
+        <h2 className="mb-3 text-sm font-semibold ink-2">
           招聘周期（据往年 · 校招洞察 P2，{cycles.length} 条观测）
         </h2>
         <div className="space-y-4">
@@ -713,7 +713,7 @@ export default function InsightsAdminClient() {
               />
             ))}
             {cycles.length === 0 && (
-              <p className="rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
+              <p className="rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
                 还没有任何招聘周期观测。用上面的表单新增。
               </p>
             )}
@@ -724,18 +724,18 @@ export default function InsightsAdminClient() {
       {/* 行业覆盖 worklist：按行业看缺口，点公司直接补录 */}
       {companies.length > 0 && (
         <section>
-          <h2 className="mb-3 text-sm font-semibold ink-2 ">
+          <h2 className="mb-3 text-sm font-semibold ink-2">
             行业覆盖（{companies.length} 家公司 · 绿色=已录入，灰色=待补全，点公司直接补录）
           </h2>
           <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
             {industryCoverage.map((g) => (
               <div key={g.industry} className="surface-soft p-3">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium ink-1 ">{g.industry}</span>
+                  <span className="text-sm font-medium ink-1">{g.industry}</span>
                   <span
                     className={cn(
                       "shrink-0 rounded-full px-2 py-0.5 text-[11px]",
-                      g.withInsights ? "bg-[#e6f2d6] text-[#4f6f2a] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]" : "bg-[#f4efe6] ink-3 dark:bg-white/[0.08] ",
+                      g.withInsights ? "bg-tone-green-bg text-tone-green-fg" : "bg-[#f4efe6] ink-3 dark:bg-white/[0.08]",
                     )}
                   >
                     已录入 {g.withInsights}/{g.total}
@@ -751,12 +751,12 @@ export default function InsightsAdminClient() {
                       className={cn(
                         "rounded-full border px-2 py-0.5 text-[11px] transition",
                         c.count > 0
-                          ? "border-[#cfe6b0] bg-[#eef6e0] text-[#4f6f2a] hover:bg-[#e2efce] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a] dark:hover:bg-[#a3d06a]/[0.25]"
-                          : "border-black/[0.08] bg-white/60 ink-3 hover:bg-white hover:opacity-80 dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-[#1e1a15] ",
+                          ? "border-[#cfe6b0] bg-[#eef6e0] text-tone-green-fg hover:bg-[#e2efce] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:hover:bg-[#a3d06a]/[0.25]"
+                          : "border-black/[0.08] bg-white/60 ink-3 hover:bg-white hover:opacity-80 dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-[#1e1a15]",
                       )}
                     >
                       {c.company}
-                      {c.count > 0 ? ` ·${c.count}` : ""}
+                      {c.count > 0 ? `·${c.count}` : ""}
                     </button>
                   ))}
                 </div>
@@ -770,7 +770,7 @@ export default function InsightsAdminClient() {
       <section className="space-y-6">
         {grouped.map((g) => (
           <div key={g.name}>
-            <h3 className="mb-2 text-sm font-semibold ink-2 ">{g.name}</h3>
+            <h3 className="mb-2 text-sm font-semibold ink-2">{g.name}</h3>
             <div className="space-y-2.5">
               {g.items.map((it) => (
                 <ItemRow
@@ -786,7 +786,7 @@ export default function InsightsAdminClient() {
           </div>
         ))}
         {grouped.length === 0 && (
-          <p className="rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
+          <p className="rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
             还没有任何洞察条目。点「新增洞察条目」开始录入。
           </p>
         )}
@@ -809,25 +809,25 @@ function SubmissionRow({
   onReject: () => void;
 }) {
   return (
-    <article className="rounded-xl border border-[#a9d8c4] bg-[#dcf2e8] p-4 text-sm dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15]">
+    <article className="rounded-xl border border-tone-teal-border bg-tone-teal-bg p-4 text-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-semibold ink-1 ">{submission.company}</span>
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
+        <span className="font-semibold ink-1">{submission.company}</span>
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
           {DIM_LABELS[submission.dimension]}
         </span>
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
           {SUBMISSION_TOPIC_LABELS[submission.topic] || submission.topic}
         </span>
         {submission.rating != null && (
-          <span className="rounded-full border border-[#e7c98a] bg-[#fbeecb] px-2 py-0.5 text-[11px] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]">
+          <span className="rounded-full border border-tone-amber-border bg-tone-amber-bg px-2 py-0.5 text-[11px] text-tone-amber-fg">
             {submission.rating}/5
           </span>
         )}
-        <span className="ml-auto text-[11px] ink-3 ">
+        <span className="ml-auto text-[11px] ink-3">
           {new Date(submission.created_at).toLocaleString("zh-CN")}
         </span>
       </div>
-      <p className="mt-2 leading-6 ink-2 ">{submission.content}</p>
+      <p className="mt-2 leading-6 ink-2">{submission.content}</p>
       <div className="mt-3 flex gap-2">
         <button
           type="button"
@@ -835,16 +835,16 @@ function SubmissionRow({
           onClick={onApprove}
           className="inline-flex items-center gap-1.5 rounded-full bg-[#1a1714] px-3 py-1.5 text-xs font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
         >
-          {busy ? <CircleNotch size={13} weight="bold" className="animate-spin" /> : <CheckCircle size={13} weight="bold" />}{" "}
+          {busy ? <CircleNotch size={13} weight="bold" className="animate-spin" /> : <CheckCircle size={13} weight="bold" />}{""}
           {busy ? "处理中…" : "通过"}
         </button>
         <button
           type="button"
           disabled={busy}
           onClick={onReject}
-          className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.1] px-3 py-1.5 text-xs font-medium ink-2 transition hover:bg-black/[0.05] hover:opacity-80 disabled:opacity-50 dark:border-white/[0.1] dark:hover:bg-white/[0.05] "
+          className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.1] px-3 py-1.5 text-xs font-medium ink-2 transition hover:bg-black/[0.05] hover:opacity-80 disabled:opacity-50 dark:border-white/[0.1] dark:hover:bg-white/[0.05]"
         >
-          {busy ? <CircleNotch size={13} weight="bold" className="animate-spin" /> : <XCircle size={13} weight="bold" />}{" "}
+          {busy ? <CircleNotch size={13} weight="bold" className="animate-spin" /> : <XCircle size={13} weight="bold" />}{""}
           {busy ? "处理中…" : "拒绝"}
         </button>
       </div>
@@ -853,9 +853,9 @@ function SubmissionRow({
 }
 
 function statusChip(status: string) {
-  if (status === "active") return "border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]";
-  if (status === "disputed") return "border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]";
-  return "border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08] ";
+  if (status === "active") return "border-tone-green-border bg-tone-green-bg text-tone-green-fg";
+  if (status === "disputed") return "border-tone-amber-border bg-tone-amber-bg text-tone-amber-fg";
+  return "border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08]";
 }
 
 function ItemRow({
@@ -874,17 +874,17 @@ function ItemRow({
   return (
     <article className="surface-soft p-4 text-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
           {DIM_LABELS[item.dimension]}
         </span>
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
           {GRADE_LABELS[item.grade]}
         </span>
         <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", statusChip(item.status))}>
           {STATUS_LABELS[item.status] || item.status}
         </span>
         {!item.deidentified && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-[#e0b4ac] bg-[#f7e6e1] px-2 py-0.5 text-[11px] text-[#9c4a3c] dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]">
+          <span className="inline-flex items-center gap-1 rounded-full border border-tone-rose-border bg-tone-rose-bg px-2 py-0.5 text-[11px] text-tone-rose-fg">
             <Warning size={11} weight="fill" /> 未去标识
           </span>
         )}
@@ -892,7 +892,7 @@ function ItemRow({
           <button
             type="button"
             onClick={onEdit}
-            className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] ink-2 transition hover:bg-black/[0.05] hover:opacity-80 dark:hover:bg-white/[0.05] "
+            className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] ink-2 transition hover:bg-black/[0.05] hover:opacity-80 dark:hover:bg-white/[0.05]"
           >
             <PencilSimple size={13} /> 编辑
           </button>
@@ -901,9 +901,9 @@ function ItemRow({
               type="button"
               disabled={busy}
               onClick={onRetire}
-              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] ink-2 transition hover:bg-black/[0.05] hover:opacity-80 disabled:opacity-50 dark:hover:bg-white/[0.05] "
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] ink-2 transition hover:bg-black/[0.05] hover:opacity-80 disabled:opacity-50 dark:hover:bg-white/[0.05]"
             >
-              {busy ? <CircleNotch size={13} className="animate-spin" /> : <Trash size={13} />}{" "}
+              {busy ? <CircleNotch size={13} className="animate-spin" /> : <Trash size={13} />}{""}
               {busy ? "处理中…" : "下架"}
             </button>
           ) : (
@@ -911,17 +911,17 @@ function ItemRow({
               type="button"
               disabled={busy}
               onClick={onActivate}
-              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#4f6f2a] transition hover:bg-black/[0.05] hover:text-[#3f5a1c] disabled:opacity-50 dark:text-[#a3d06a] dark:hover:bg-white/[0.05] dark:hover:text-[#b8dd85]"
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-tone-green-fg transition hover:bg-black/[0.05] hover:text-[#3f5a1c] disabled:opacity-50 dark:hover:bg-white/[0.05] dark:hover:text-[#b8dd85]"
             >
-              {busy ? <CircleNotch size={13} className="animate-spin" /> : <ArrowCounterClockwise size={13} />}{" "}
+              {busy ? <CircleNotch size={13} className="animate-spin" /> : <ArrowCounterClockwise size={13} />}{""}
               {busy ? "处理中…" : "上架"}
             </button>
           )}
         </div>
       </div>
-      {item.title && <p className="mt-2 font-semibold ink-1 ">{item.title}</p>}
-      <p className="mt-1 leading-6 ink-2 ">{item.content}</p>
-      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] ink-3 ">
+      {item.title && <p className="mt-2 font-semibold ink-1">{item.title}</p>}
+      <p className="mt-1 leading-6 ink-2">{item.content}</p>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] ink-3">
         {item.sample_size != null && <span>样本 {item.sample_size}</span>}
         {item.time_window && <span>{item.time_window}</span>}
         {item.valid_until && <span>有效期至 {item.valid_until}</span>}
@@ -963,7 +963,7 @@ function ItemForm({
   return (
     <form
       onSubmit={onSubmit}
-      className="surface p-5 ink-1 "
+      className="surface p-5 ink-1"
     >
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-base font-semibold">{form.id ? "编辑洞察条目" : "新增洞察条目"}</h3>
@@ -973,7 +973,7 @@ function ItemForm({
             onClick={onAiDraft}
             disabled={aiDrafting}
             title="用 AI 按公司+维度生成草稿（仅辅助，需人工核对+补来源）"
-            className="inline-flex items-center gap-1.5 rounded-full border border-[#b7d2ee] bg-[#dceafa] px-3 py-1.5 text-[12px] font-semibold text-[#2f6299] transition hover:bg-[#cfe2f7] disabled:opacity-50 dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8] dark:hover:bg-[#7fb2e8]/[0.25]"
+            className="inline-flex items-center gap-1.5 rounded-full border border-tone-sky-border bg-tone-sky-bg px-3 py-1.5 text-[12px] font-semibold text-[#2f6299] transition hover:bg-[#cfe2f7] disabled:opacity-50 dark:text-[#7fb2e8] dark:hover:bg-[#7fb2e8]/[0.25]"
           >
             <Sparkle size={13} weight="fill" />
             {aiDrafting ? "AI 起草中…" : "AI 起草"}
@@ -981,7 +981,7 @@ function ItemForm({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-full bg-black/[0.05] p-1.5 ink-2 transition hover:bg-black/[0.08] hover:opacity-80 dark:bg-white/[0.05] dark:hover:bg-white/[0.08] "
+            className="rounded-full bg-black/[0.05] p-1.5 ink-2 transition hover:bg-black/[0.08] hover:opacity-80 dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
           >
             <X size={16} weight="bold" />
           </button>
@@ -1083,7 +1083,7 @@ function ItemForm({
         </FormField>
 
         <FormField label="去标识">
-          <label className="inline-flex items-center gap-2 text-sm ink-2 ">
+          <label className="inline-flex items-center gap-2 text-sm ink-2">
             <input
               type="checkbox"
               checked={form.deidentified}
@@ -1124,7 +1124,7 @@ function ItemForm({
       {/* 来源 */}
       <div className="mt-5">
         <div className="mb-2 flex items-center justify-between">
-          <span className="text-xs font-medium ink-3 ">来源（链接 + 短摘要，禁整段原文）</span>
+          <span className="text-xs font-medium ink-3">来源（链接 + 短摘要，禁整段原文）</span>
           <button type="button" onClick={addSource} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#2f6299] transition hover:bg-black/[0.05] dark:text-[#7fb2e8] dark:hover:bg-white/[0.05]">
             <Plus size={12} weight="bold" /> 加一条来源
           </button>
@@ -1145,7 +1145,7 @@ function ItemForm({
                 <input value={s.excerpt} onChange={(e) => setSource(i, { excerpt: e.target.value })} placeholder="短摘要（选填）" className={inputCls} />
               </div>
               <div className="mt-2 flex items-center justify-between">
-                <label className="inline-flex items-center gap-2 text-xs ink-2 ">
+                <label className="inline-flex items-center gap-2 text-xs ink-2">
                   <input type="checkbox" checked={s.deidentified} onChange={(e) => setSource(i, { deidentified: e.target.checked })} className="size-3.5 accent-[#1a1714]" />
                   已去标识
                 </label>
@@ -1161,12 +1161,12 @@ function ItemForm({
       </div>
 
       {formGate && (
-        <p className="mt-4 rounded-lg border border-[#e7c98a] bg-[#fbf2d8] px-3 py-2 text-xs leading-5 text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]">
+        <p className="mt-4 rounded-lg border border-tone-amber-border bg-[#fbf2d8] px-3 py-2 text-xs leading-5 text-tone-amber-fg dark:bg-[#e0b15a]/[0.15]">
           {formGate}
         </p>
       )}
       {formError && (
-        <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c] dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]">{formError}</p>
+        <p className="mt-3 rounded-lg border border-tone-rose-border bg-tone-rose-bg px-3 py-2 text-sm text-tone-rose-fg">{formError}</p>
       )}
 
       <div className="mt-4 flex gap-2">
@@ -1177,7 +1177,7 @@ function ItemForm({
         >
           {saving ? "保存中…" : form.id ? "保存修改" : "创建条目"}
         </button>
-        <button type="button" onClick={onCancel} className="rounded-full px-4 py-2 text-sm font-medium ink-3 transition hover:bg-black/[0.05] hover:opacity-80 dark:hover:bg-white/[0.05] ">
+        <button type="button" onClick={onCancel} className="rounded-full px-4 py-2 text-sm font-medium ink-3 transition hover:bg-black/[0.05] hover:opacity-80 dark:hover:bg-white/[0.05]">
           取消
         </button>
       </div>
@@ -1196,7 +1196,7 @@ function FormField({
 }) {
   return (
     <div className={className}>
-      <label className="mb-1.5 block text-xs font-medium ink-3 ">{label}</label>
+      <label className="mb-1.5 block text-xs font-medium ink-3">{label}</label>
       {children}
     </div>
   );
@@ -1284,7 +1284,7 @@ function CycleForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="surface p-5 ink-1 ">
+    <form onSubmit={handleSubmit} className="surface p-5 ink-1">
       <h3 className="text-base font-semibold">新增招聘周期观测</h3>
       <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <FormField label="公司">
@@ -1377,7 +1377,7 @@ function CycleForm({
         </FormField>
       </div>
       {formError && (
-        <p className="mt-4 rounded-xl border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c] dark:border-[#7a392e]/[0.6] dark:bg-[#3a201a] dark:text-[#e6a99f]">
+        <p className="mt-4 rounded-xl border border-tone-rose-border bg-tone-rose-bg px-3 py-2 text-sm text-tone-rose-fg">
           {formError}
         </p>
       )}
@@ -1409,13 +1409,13 @@ function CycleRow({
   return (
     <article className="surface-soft p-4 text-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-semibold ink-1 ">
+        <span className="font-semibold ink-1">
           {cycle.company_profiles?.display_name || cycle.company_profiles?.company || "（未知公司）"}
         </span>
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
           {cycle.grad_class}
         </span>
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
           {cycle.season} · {cycle.batch} · {cycle.event}
         </span>
         <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", cycleStatusChip(cycle.verify_status))}>
@@ -1427,9 +1427,9 @@ function CycleRow({
               type="button"
               disabled={busy}
               onClick={onVerify}
-              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-[#4f6f2a] transition hover:bg-black/[0.05] hover:text-[#3f5a1c] disabled:opacity-50 dark:text-[#a3d06a] dark:hover:bg-white/[0.05] dark:hover:text-[#b8dd85]"
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-tone-green-fg transition hover:bg-black/[0.05] hover:text-[#3f5a1c] disabled:opacity-50 dark:hover:bg-white/[0.05] dark:hover:text-[#b8dd85]"
             >
-              {busy ? <CircleNotch size={13} weight="bold" className="animate-spin" /> : <CheckCircle size={13} weight="bold" />}{" "}
+              {busy ? <CircleNotch size={13} weight="bold" className="animate-spin" /> : <CheckCircle size={13} weight="bold" />}{""}
               {busy ? "处理中…" : "设为 verified"}
             </button>
           )}
@@ -1438,16 +1438,16 @@ function CycleRow({
               type="button"
               disabled={busy}
               onClick={onReject}
-              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] ink-2 transition hover:bg-black/[0.05] hover:opacity-80 disabled:opacity-50 dark:hover:bg-white/[0.05] "
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] ink-2 transition hover:bg-black/[0.05] hover:opacity-80 disabled:opacity-50 dark:hover:bg-white/[0.05]"
             >
-              {busy ? <CircleNotch size={13} weight="bold" className="animate-spin" /> : <XCircle size={13} weight="bold" />}{" "}
+              {busy ? <CircleNotch size={13} weight="bold" className="animate-spin" /> : <XCircle size={13} weight="bold" />}{""}
               {busy ? "处理中…" : "设为 rejected"}
             </button>
           )}
         </div>
       </div>
-      <p className="mt-2 leading-6 ink-2 ">{cycle.value_text}</p>
-      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] ink-3 ">
+      <p className="mt-2 leading-6 ink-2">{cycle.value_text}</p>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] ink-3">
         {cycle.confidence && <span>置信度 {cycle.confidence}</span>}
         {cycle.valid_until && <span>有效期至 {cycle.valid_until}</span>}
         {cycle.evidence_url && (

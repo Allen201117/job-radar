@@ -13,7 +13,7 @@ export function ProductPage({
   maxWidth?: string;
 }) {
   return (
-    <div className="bg-editorial grain relative min-h-screen ink-1 ">
+    <div className="bg-editorial grain relative min-h-screen ink-1">
       <div className={cn("relative z-10 mx-auto w-full px-4 pb-16 pt-8 sm:px-6 lg:px-8", maxWidth)}>
         {children}
       </div>
@@ -56,12 +56,12 @@ export function ProductHero({
           {/* 眉标：图标嵌入品牌天蓝小方块 + 克制的段首标签，比浮动的描边胶囊更像刻意的编辑部小节标 */}
           <div className="flex items-center gap-2.5">
             <span
-              className="grid size-7 shrink-0 place-items-center rounded-[0.6rem] bg-[#e6eef8] text-[#3f7cc0] ring-1 ring-inset ring-[#3f7cc0]/[0.12] dark:bg-[#7fb2e8]/[0.14] dark:text-[#7fb2e8] dark:ring-[#7fb2e8]/20"
+              className="grid size-7 shrink-0 place-items-center rounded-[0.6rem] bg-[#e6eef8] text-tone-sky-fg ring-1 ring-inset ring-[#3f7cc0]/[0.12] dark:bg-[#7fb2e8]/[0.14] dark:ring-[#7fb2e8]/20"
               aria-hidden="true"
             >
               <Icon size={15} weight="fill" />
             </span>
-            <span className="text-[13px] font-semibold tracking-[0.01em] ink-3 ">
+            <span className="text-[13px] font-semibold tracking-[0.01em] ink-3">
               {eyebrow}
             </span>
           </div>
@@ -74,7 +74,7 @@ export function ProductHero({
             {title}
           </h1>
           {description && (
-            <p className="mt-3 max-w-2xl text-pretty text-[15px] leading-7 ink-2 ">
+            <p className="mt-3 max-w-2xl text-pretty text-[15px] leading-7 ink-2">
               {description}
             </p>
           )}
@@ -107,7 +107,7 @@ export function MetricTile({
     lime: "bg-[#e6f2d3] text-[#5a7a2f] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]",
     white: "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]",
     orange: "bg-[#fbe6d1] text-[#9a6326] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]",
-    muted: "bg-[#ece7dd] ink-2 dark:bg-white/[0.08] ",
+    muted: "bg-[#ece7dd] ink-2 dark:bg-white/[0.08]",
   }[tone];
 
   return (
@@ -129,7 +129,7 @@ export function MetricTile({
 
 export function CountBadge({ children }: { children: ReactNode }) {
   return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-black/[0.07] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-4 py-2 text-[13px] font-medium ink-2 ">
+    <div className="inline-flex items-center gap-2 rounded-full border border-black/[0.07] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-4 py-2 text-[13px] font-medium ink-2">
       {children}
     </div>
   );
@@ -161,7 +161,7 @@ export function EmptyPanel({
         className={cn(
           "mx-auto grid size-12 place-items-center rounded-2xl",
           resolvedTone === "error"
-            ? "bg-[#f7e6e1] text-[#9c4a3c] dark:bg-[#3a201a] dark:text-[#e6a99f]"
+            ? "bg-tone-rose-bg text-tone-rose-fg"
             : "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]",
         )}
       >
@@ -171,8 +171,8 @@ export function EmptyPanel({
           <ArrowRight size={22} weight="bold" aria-hidden="true" />
         )}
       </div>
-      <h2 className="mt-4 text-lg font-semibold ink-1 ">{title}</h2>
-      <p className="mx-auto mt-2 max-w-md text-pretty text-[14px] leading-6 ink-2 ">
+      <h2 className="mt-4 text-lg font-semibold ink-1">{title}</h2>
+      <p className="mx-auto mt-2 max-w-md text-pretty text-[14px] leading-6 ink-2">
         {description}
       </p>
       {action && <div className="mt-5">{action}</div>}

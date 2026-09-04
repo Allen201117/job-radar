@@ -23,6 +23,7 @@ import {
   UserCircle,
   X,
 } from "@phosphor-icons/react";
+import { useBodyScrollLock, useEscapeKey } from "@/lib/ui/hooks";
 
 // 一级导航：今日机会 / 搜索岗位 / 洞察库 / 职业路径 / 校招专区 / 个人主页 / 值得投 / 已投递。
 // 2026-09-03：原「关注与偏好」与「个人主页」功能重复（两处各挂一份简历画像面板），已合并为后者。
@@ -101,19 +102,8 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
     return () => window.clearTimeout(timer);
   }, [scopeToast]);
 
-  useEffect(() => {
-    if (!menuOpen) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenuOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.body.style.overflow = prev;
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [menuOpen]);
+  useBodyScrollLock(menuOpen);
+  useEscapeKey(() => setMenuOpen(false), menuOpen);
 
   async function handleLogout() {
     if (loggingOut) return;
@@ -286,7 +276,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
                       {t("logout", lang)}
                     </button>
                     {logoutError && (
-                      <p className="px-3 pb-1 text-xs text-[#9c4a3c] dark:text-[#e6a99f]">{logoutError}</p>
+                      <p className="px-3 pb-1 text-xs text-tone-rose-fg">{logoutError}</p>
                     )}
                   </div>
                 </>
@@ -374,7 +364,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
                 {t("logout", lang)}
               </button>
               {logoutError && (
-                <p className="mt-2 text-center text-xs text-[#9c4a3c] dark:text-[#e6a99f]">{logoutError}</p>
+                <p className="mt-2 text-center text-xs text-tone-rose-fg">{logoutError}</p>
               )}
             </div>
           </nav>

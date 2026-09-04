@@ -94,7 +94,7 @@ export default function InsightSubjectsAdmin() {
       await load();
     } catch (e: any) {
       // 失败绝不静默：点了像没反应，比慢更伤信任。
-      show({ text: `处理失败：${e?.message || "未知错误"}`, tone: "error" });
+      show({ text: `处理失败：${e?.message ||"未知错误"}`, tone: "error" });
     } finally {
       setBusy(null);
     }
@@ -114,7 +114,7 @@ export default function InsightSubjectsAdmin() {
       show({ text: `已下架 ${json.affected} 条「${label}」` });
       await load();
     } catch (e: any) {
-      show({ text: `批量处置失败：${e?.message || "未知错误"}`, tone: "error" });
+      show({ text: `批量处置失败：${e?.message ||"未知错误"}`, tone: "error" });
     } finally {
       setBusy(null);
     }
@@ -130,7 +130,7 @@ export default function InsightSubjectsAdmin() {
       </header>
 
       {data && data.pending_review > 0 && (
-        <div className="mb-3 rounded-xl border border-[#e7c98a] bg-[#fbeecb] px-4 py-2.5 t-body-sm text-[#8a6312] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/[0.12] dark:text-[#e0b15a]">
+        <div className="mb-3 rounded-xl border border-tone-amber-border bg-tone-amber-bg px-4 py-2.5 t-body-sm text-tone-amber-fg">
           有 {data.pending_review} 条 pending_review 条目在排队等人工判定（判官矛盾/低置信）。
           它们不展示给用户，但也没人看过。
         </div>
