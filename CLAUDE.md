@@ -375,7 +375,7 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 ## 🚫「接口返 0 / 403」不能证明「对方没开」（2026-09-04 立，一晚栽三次）
 
 判一家公司有没有开校招，**唯一可信的依据是对方页面自己怎么说**（招聘公告、网申起止日期），
-不是我们某个接口的返回值。已经栽了五次，全是同一个错：
+不是我们某个接口的返回值。已经栽了六次，全是同一个错：
 
 | 公司 | 当时的「证据」 | 真相 |
 |---|---|---|
@@ -384,6 +384,7 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 | 小米 | 飞书两个 `storefront_id` 返回**完全相同**的 1887 条，判「私有部署没有校招板块」 | 试错了维度，真正的开关是**请求头 `website-path`**，campus 764 / internship 554 / newretailing 121 |
 | 百度 | 列表接口传 `recruitType=CAMPUS` 返 0 | 校招那一档百度自己叫 **GRADUATE**；传 CAMPUS 接口回 `Illegal argument : recruitType`，adapter 只看到 0 条就跳过。改对之后 157 个校招岗 |
 | 华为 | 老门户 `reccampportal` 传 `jobType=2` 返 `totalRows=0`，判「对方没开」 | 校招 2026 年搬到新站 `career.huawei.com/cn/campus-recruitment` + 另一个网关；官网 2026-08-15 就挂着「2027届应届生招聘启动」。应届 69 + 实习 31 |
+| 商汤 / 海底捞 | 飞书详情页 404 → `should_skip` 判「tenant detail portal closed」，整源跳过 | **门户好好的，是我们把 URL 前缀写死成 `index`**。租户首页自报 `"website_info":{…,"path":"exp"}` 才是唯一有效前缀。商汤 80 岗（原本 0）、海底捞 119 岗；海底捞更坏——列表一直正常，36 个在招岗带着必然 404 的 jd_url 躺在库里 |
 
 ✅ 正确姿势：① 先渲染对方的校招页，看它自己写没写「XX 届校园招聘启动」+ 网申日期；
 ② 再从**页面自己发的请求**里找入口（拦 XHR / 读它的 JS 路由表），不要拿社招接口试参数；
@@ -393,7 +394,14 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 ④ **「HTTP 200 + 空 data」同样是假阴性**：华为新网关少带任意一个 `x-*` 头
    （x-hw-id / x-jalor-tenantalias / x-language / x-alb-gray / x-referer）就返 200 但 data 为空。
    adapter 遇到这种情况必须**抛错记 failed**，不许安静返 0 条——安静返 0 正是错误结论的来源。
-⑤ **确实抓不了的要说清是哪一种**：快手校招 `campus.kuaishou.cn/robots.txt` = `Disallow: /`，
+⑤ **别把「我们配错了」说成「对方关了」**：飞书那两家的教训是——报错信息本身
+   （"portal closed"）就是个未经证实的**结论**，它把「404」直接翻译成了「对方关门」。
+   404 只说明**这个 URL** 不通，不说明这个租户不招人。修法是让探测器先问对方
+   「你的门户路径是什么」再判（`feishu._repair_detail_template`），修不好才跳。
+   ⚠️ 但兜底不等于放开猜：全库 85 个飞书租户逐个 live 探完，只有 2 家需要走这条路，
+   其余 83 家 `/index/` 本来就通——**「自报 path != index」推断出的 22 家坏源里 20 家是假警报**，
+   靠的是逐个真探而不是靠推断。健康租户零额外请求。
+⑥ **确实抓不了的要说清是哪一种**：快手校招 `campus.kuaishou.cn/robots.txt` = `Disallow: /`，
    这是合规红线不是技术问题，不要再去试；但同官网的**日常实习**在 `zhaopin.kuaishou.cn`
    （无 robots 限制、同接口同签名，只差 `positionNatureCode=C002`），1,046 个岗是能抓的。
 
