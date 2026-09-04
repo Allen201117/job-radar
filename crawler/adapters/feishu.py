@@ -11,14 +11,22 @@ data.count 给出真实总数。修复：捕获该 POST，用站点自身 sessio
 捕获不到 POST 则回退被动拦截（super().fetch）。复用站点请求、不破签名、低频。
 """
 import json
+import logging
 from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
 
 import normalizer
-from .base import DEFAULT_LIST_CAP, RawJob, resolve_list_cap
+from .base import DEFAULT_LIST_CAP, RawJob, RepetitionBrake, resolve_list_cap
 from .playwright_base import PlaywrightAdapter, _UA
+
+logger = logging.getLogger(__name__)
+
+
+def _titles_of(rows):
+    """喂给 RepetitionBrake 的标题序列；飞书 job_post 的标题恒在 `title`（见 _map）。"""
+    return [str((r or {}).get("title") or "") for r in (rows or []) if isinstance(r, dict)]
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -142,6 +150,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         try:
             with httpx.Client(timeout=self._HTTPX_TIMEOUT, follow_redirects=True, headers=headers) as cli:
                 cap = resolve_list_cap(self._MAX_JOBS)
+                brake = RepetitionBrake()
                 while len(rows) < cap:
                     body = {"keyword": "", "limit": self._PAGE_SIZE, "offset": offset,
                             "job_category_id_list": [], "tag_id_list": [], "location_code_list": [],
@@ -168,6 +177,12 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                             seen.add(pid)
                             rows.append(post)
                     if total and len(rows) >= total:
+                        break
+                    # 重复度刹车：批量发布源（同一个岗 × N 家门店）翻再多页也只是同质副本。
+                    # 放在「抓全」判定之后 → 能抓全的源一律抓全。刹停 → fetch_complete 天然为 False。
+                    if brake.observe(_titles_of(rows[before:])):
+                        logger.info("%s: 重复度刹车 —— 连续 %d 条没有新角色，停在 %d/%s 条 host=%s",
+                                    self.name, brake.stall_rows, len(rows), total, host)
                         break
                     if not _should_continue(before, len(rows), chunk, total, self._PAGE_SIZE):
                         break
@@ -306,6 +321,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         offset = 0
         hdrs = {"content-type": "application/json"}
         cap = resolve_list_cap(self._MAX_JOBS)
+        brake = RepetitionBrake()
         while len(rows) < cap:
             body["offset"] = offset
             body["limit"] = self._PAGE_SIZE
@@ -329,6 +345,10 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                     seen.add(pid)
                     rows.append(post)
             if total and len(rows) >= total:
+                break
+            if brake.observe(_titles_of(rows[before:])):   # 与 httpx 路径同口径，见那边注释
+                logger.info("%s: 重复度刹车 —— 连续 %d 条没有新角色，停在 %d/%s 条 url=%s",
+                            self.name, brake.stall_rows, len(rows), total, url)
                 break
             if not _should_continue(before, len(rows), chunk, total, self._PAGE_SIZE):
                 break

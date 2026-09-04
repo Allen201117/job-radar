@@ -25,8 +25,8 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 import httpx
 
 import normalizer
-from .base import (DEFAULT_LIST_CAP, PageResult, RawJob, paginate_all, resolve_detail_cap,
-                   resolve_list_cap)
+from .base import (DEFAULT_LIST_CAP, PageResult, RawJob, RepetitionBrake, paginate_all,
+                   resolve_detail_cap, resolve_list_cap)
 from .playwright_base import PlaywrightAdapter
 
 _log = logging.getLogger(__name__)
@@ -691,6 +691,22 @@ def _dedup_new(chunk, seen_ids, id_fields):
     return fresh
 
 
+
+_TITLE_FIELDS = ("JobAdName", "title", "name", "jobTitle", "positionName")
+
+
+def _titles_of(rows):
+    """喂给 RepetitionBrake 的标题序列。北森真岗位恒有 JobAdName（见 _collect 的注释），
+    其余字段是异构租户兼容兜底。取不到标题的行返回空串——RepetitionBrake 会忽略空串，
+    既不算「新角色」也不会误判成重复。"""
+    out = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            out.append("")
+            continue
+        out.append(_first_str(row, _TITLE_FIELDS) or "")
+    return out
+
 def _should_continue(fresh, chunk, total, page_size):
     """还该不该翻下一页。
 
@@ -853,6 +869,7 @@ class BeisenAdapter(ChinaSpaAdapter):
             index = 0
             seen_ids: set = set()
             cap = resolve_list_cap(self._MAX_JOBS)
+            brake = RepetitionBrake()
             while len(rows) < cap:
                 body = {"PageIndex": index, "PageSize": self._PAGE_SIZE, "Category": [],
                         "KeyWords": "", "SpecialType": 0, "PortalId": portal_id,
@@ -873,6 +890,12 @@ class BeisenAdapter(ChinaSpaAdapter):
                 fresh = _dedup_new(chunk, seen_ids, self._ID_FIELDS)
                 rows.extend(fresh)
                 if total and len(rows) >= total:
+                    break
+                # 重复度刹车（批量门店发布源）。放在「抓全」判定之后：能抓全的源一律抓全，
+                # 只有还要继续翻页时才问「再翻还有没有新角色」。刹停 → fetch_complete 天然为 False。
+                if brake.observe(_titles_of(fresh)):
+                    _log.info("%s: 重复度刹车 —— 连续 %d 条没有新角色，停在 %d/%s 条 host=%s",
+                              self.name, brake.stall_rows, len(rows), total, self._host)
                     break
                 if not _should_continue(fresh, chunk, total, self._PAGE_SIZE):
                     break
@@ -1061,6 +1084,7 @@ class BeisenAdapter(ChinaSpaAdapter):
                 index = 0
                 seen_ids = set()
                 cap = resolve_list_cap(self._MAX_JOBS)
+                brake = RepetitionBrake()
                 while len(rows) < cap:
                     body["PageSize"] = self._PAGE_SIZE
                     body["PageIndex"] = index
@@ -1084,6 +1108,10 @@ class BeisenAdapter(ChinaSpaAdapter):
                     fresh = _dedup_new(chunk, seen_ids, self._ID_FIELDS)
                     rows.extend(fresh)
                     if total and len(rows) >= total:
+                        break
+                    if brake.observe(_titles_of(fresh)):   # 与 httpx 路径同口径，见那边注释
+                        _log.info("%s: 重复度刹车 —— 连续 %d 条没有新角色，停在 %d/%s 条 host=%s",
+                                  self.name, brake.stall_rows, len(rows), total, self._host)
                         break
                     if not _should_continue(fresh, chunk, total, self._PAGE_SIZE):
                         break

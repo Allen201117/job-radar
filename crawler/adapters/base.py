@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -60,6 +61,84 @@ def resolve_list_cap(default: int) -> int:
     「没抓到的尾巴」被当成「列表缺席」会整批误判撤岗（CLAUDE.md §4 立碑的误杀在招岗）。
     """
     return _env_int("CRAWL_MAX_JOBS", default)
+
+
+# 重复度刹车（见 RepetitionBrake）：连续这么多条「一个新归一标题都没带来」就停止翻页。
+# 400 = 8 页 × 50，取值依据见 RepetitionBrake 文档字符串里的实测分离度。
+DEFAULT_REPEAT_STALL_ROWS = 400
+
+_BRACKETS_RE = re.compile(r"[（(\[【][^）)\]】]*[）)\]】]")
+_DIGITS_RE = re.compile(r"\d+")
+_LEAD_SEG_RE = re.compile(r"^[^-|/／]{1,6}[-|/／]")
+_SPACE_RE = re.compile(r"\s+")
+
+
+def normalize_title_for_repetition(title) -> str:
+    """把岗位标题压成「角色核」，用于判重复度。去括号内容（含 `(J726033)` 这类岗位号）、
+    去数字、去开头的「姓名-」「城市-」段、去空白。
+
+    这不是给用户看的标题，只用来回答一个问题：**再翻一页还能不能拿到没见过的岗位角色**。"""
+    text = str(title or "")
+    text = _BRACKETS_RE.sub("", text)
+    text = _DIGITS_RE.sub("", text)
+    text = _LEAD_SEG_RE.sub("", text)
+    return _SPACE_RE.sub("", text).strip("-|/／ ")
+
+
+def resolve_repeat_stall_rows(default: int = DEFAULT_REPEAT_STALL_ROWS) -> int:
+    """env CRAWL_REPEAT_STALL_ROWS 调档；设 0 = 关掉重复度刹车（回到「只受 _MAX_JOBS 约束」）。"""
+    return _env_int("CRAWL_REPEAT_STALL_ROWS", default)
+
+
+class RepetitionBrake:
+    """「同一个岗 × N 家门店」批量发布源的刹车。
+
+    为什么需要它：2026-09-04 把单源上限从 600 抬到 8000 之后，一轮就多入库 5.2 万个岗，
+    **其中 2.1 万（41%）是三家门店批量发布**——星巴克 9,044 行归一后只有 34 种标题
+    （96% 是「星级咖啡师」三种），来伊份 7,301 行只有 90 种，喜茶 5,775 行只有 234 种。
+    后果是可测的：杭州 20%、上海 12%、北京 9.7% 的在招岗变成了这三家的门店副本，
+    正是「精准 > 规模」要挡的东西。
+
+    判据 = **连续 stall_rows 条都没带来一个新的归一标题**（`normalize_title_for_repetition`）。
+    用归一标题而不是岗位 id：批量门店岗每条 id 都不同，只有标题能暴露同质。
+    2026-09-04 用库里 41,285 条真实数据量过这条判据的分离度（归一后重复率）：
+      批量：星巴克 99.6%（34 种）/ 来伊份 98.8%（90 种）/ 喜茶 95.9%（234 种）
+      正常：奇瑞 47.7%（3,445 种）/ 新东方 46.4%（2,451 种）/ 我爱我家 42.7%（4,587 种）
+    两组差着一个数量级，中间没有骑墙的源；奇瑞每 50 条能带来 ~26 个新角色，永远刹不住。
+    stall_rows 默认 400（8 页）是刻意保守：连续 400 个岗位零个新角色才算实锤，
+    避免「某几页恰好同部门」的正常源被误刹。
+
+    ⚠️ 刹停 = **没抓全**，调用方必须让 fetch_complete=False。beisen/feishu 都开了
+    list-absence 探活，把「没翻到的尾巴」当成「列表缺席」会整批误判撤岗
+    （CLAUDE.md §4 立碑的误杀在招岗）。现有实现按 `len(rows) >= total` 判定，
+    刹停时天然为 False —— 改这段务必保住这个不变量。
+    """
+
+    def __init__(self, stall_rows: int = None):
+        self.stall_rows = resolve_repeat_stall_rows() if stall_rows is None else stall_rows
+        self._seen = set()
+        self._rows_since_new = 0
+        self.tripped = False
+
+    def observe(self, titles) -> bool:
+        """喂一页的标题，返回「是否该停止翻页」。stall_rows<=0 表示刹车关闭，恒返回 False。"""
+        fresh = 0
+        count = 0
+        for title in titles or []:
+            count += 1
+            key = normalize_title_for_repetition(title)
+            if key and key not in self._seen:
+                self._seen.add(key)
+                fresh += 1
+        if self.stall_rows <= 0:
+            return False
+        if fresh:
+            self._rows_since_new = 0
+        else:
+            self._rows_since_new += count
+        if self._rows_since_new >= self.stall_rows:
+            self.tripped = True
+        return self.tripped
 
 
 @dataclass
