@@ -244,6 +244,12 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填「米哈游」+ https://jobs.mihoyo.com/#/position，直连 ats-portal v1/job/list+info 公开接口（社招+校招一次抓全），crawl_method 选 http",
   },
   {
+    value: "tonghuashun",
+    label: "同花顺（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填「同花顺」+ https://campus.10jqka.com.cn/job/list，直连 apply_list 公开接口（社招+校招+实习共用同一列表，逐岗 /job/detail?id= 详情页），crawl_method 选 http",
+  },
+  {
     value: "gllue",
     label: "Gllue（通用 ATS · 本土企业官网）",
     origin: "domestic",

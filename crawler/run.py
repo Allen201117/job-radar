@@ -67,6 +67,7 @@ from adapters.sf_express import SfExpressAdapter
 from adapters.tencent_music import TencentMusicAdapter
 from adapters.antgroup import AntGroupAdapter
 from adapters.mihoyo import MihoyoAdapter
+from adapters.tonghuashun import TongHuaShunAdapter
 from adapters.gllue import GllueAdapter
 from adapters.cnstaff import CnstaffAdapter
 from adapters.midea import MideaAdapter
@@ -171,6 +172,7 @@ ADAPTERS = {
     "tencent_music": TencentMusicAdapter(),  # 腾讯音乐自建门户：job/list + uc-job/list 公开接口,零浏览器
     "antgroup": AntGroupAdapter(),  # 蚂蚁集团自建门户：hrcareersweb position/search 公开接口,零浏览器
     "mihoyo": MihoyoAdapter(),  # 米哈游自建门户：ats-portal v1/job/list+info 公开接口,零浏览器
+    "tonghuashun": TongHuaShunAdapter(),  # 同花顺自建门户：campus.10jqka apply_list 公开接口,零浏览器
     "gllue": GllueAdapter(),  # Gllue Next.js SSR 通用层，host 从 source_url 动态解析
     "cnstaff": CnstaffAdapter(),  # 聘客 cnstaff joblist API 通用层，host/tenant 动态解析
     "midea": MideaAdapter(),  # 美的集团自建门户：公开 position/list 接口，零浏览器
@@ -186,7 +188,7 @@ DOMESTIC_ADAPTERS = {
     "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier", "iguopin",
     "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",
     "meituan", "meituan_campus", "kuaishou", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "byd", "sf_express",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
-    "tencent_music", "antgroup", "mihoyo", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree",  # 自建门户公开接口（零浏览器；cmb=招商银行，cmbc=中国民生银行）
+    "tencent_music", "antgroup", "mihoyo", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree", "tonghuashun",  # 自建门户公开接口（零浏览器；cmb=招商银行，cmbc=中国民生银行）
 }
 
 
@@ -200,7 +202,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
     "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",
     "meituan", "meituan_campus", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "sf_express",  # 已逐一核实为纯 httpx fetch
-    "tencent_music", "antgroup", "mihoyo", "avature", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree",  # 公开接口/SSR，纯 httpx
+    "tencent_music", "antgroup", "mihoyo", "avature", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree", "tonghuashun",  # 公开接口/SSR，纯 httpx
     # 字节：jobs.bytedance.com posts API 已改为纯 httpx offset/limit 全量翻页；
     # sources.crawl_method 仍由运维侧改库，本白名单只控制代码侧并发档。
     "bytedance", "bytedance_campus",
