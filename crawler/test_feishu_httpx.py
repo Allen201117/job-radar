@@ -197,7 +197,100 @@ class FetchDecisionTest(unittest.TestCase):
                 mock.patch.object(feishu.httpx, "get", return_value=closed) as get:
             reason = a.should_skip("https://nio.jobs.feishu.cn/index/position")
         self.assertIn("detail portal closed", reason)
-        self.assertEqual(get.call_count, 1)
+        # 判死前最多两个请求：① 抽一岗试详情 ② 取首页问租户真实门户前缀（_repair_detail_template）。
+        # 这条断言守的是「别按岗位数扇出去探」，不是守具体次数——但也别让它悄悄涨上去。
+        self.assertEqual(get.call_count, 2)
+
+    def test_wrong_prefix_is_repaired_instead_of_skipping_whole_tenant(self):
+        """`index` 详情 404 但租户自报了别的门户前缀 → 换前缀重试，通了就别跳整源。
+
+        2026-09-04 live 实测的两家：商汤 path=exp（整源被跳、84 岗进不来）、
+        海底捞 path=072846（列表 119 岗正常，但 jd_url 全 404）。
+        """
+        a = feishu.NioAdapter()
+        rows = [{"id": "1", "title": "T"}]
+        root = type("Response", (), {
+            "status_code": 200,
+            "text": '{"website_info":{"id":"7","name":{"i18n":"社招官网"},"language":"zh-CN","path":"exp"}}',
+        })()
+        closed = type("Response", (), {"status_code": 404, "text": "Not Found"})()
+        live = type("Response", (), {"status_code": 200, "text": "job detail"})()
+
+        def fake_get(url, **kw):
+            if url.endswith("/"):
+                return root                      # 租户首页：自报 path=exp
+            return live if "/exp/position/" in url else closed
+
+        with mock.patch.object(a, "_httpx_fetch", return_value=(rows, 1, True)), \
+                mock.patch.object(feishu.httpx, "get", side_effect=fake_get):
+            self.assertIsNone(a.should_skip("https://nio.jobs.feishu.cn/index/position"))
+        self.assertEqual(a.detail_template, "https://nio.jobs.feishu.cn/exp/position/{id}/detail")
+        # ⚠️ 只改详情模板，不动 website_path：海底捞的 072846 门户列表返 0 岗，
+        # 顺手把它当子门户塞进请求头会把列表从 119 打成 0。
+        self.assertEqual(a.website_path, "")
+
+    def test_repaired_prefix_survives_the_rebind_inside_fetch(self):
+        """修好的前缀必须扛住 `fetch()` 里那次 `_bind_website_path` 重算。
+
+        2026-09-04 端到端实测抓到的回归：没有 override 时 should_skip 已经不跳了，
+        但 fetch() 重算把 detail_template 覆写回 `index`，于是 80 个岗照样带着
+        404 的 jd_url 入库 —— 比整源跳过更坏（死链比没有更伤信任）。
+        """
+        a = feishu.NioAdapter()
+        rows = [{"id": "1", "title": "T"}]
+        root = type("Response", (), {
+            "status_code": 200, "text": '{"website_info":{"name":{"i18n":"x"},"path":"exp"}}',
+        })()
+        closed = type("Response", (), {"status_code": 404, "text": "Not Found"})()
+        live = type("Response", (), {"status_code": 200, "text": "job detail"})()
+
+        def fake_get(url, **kw):
+            if url.endswith("/"):
+                return root
+            return live if "/exp/position/" in url else closed
+
+        with mock.patch.object(a, "_httpx_fetch", return_value=(rows, 1, True)), \
+                mock.patch.object(feishu.httpx, "get", side_effect=fake_get):
+            self.assertIsNone(a.should_skip("https://nio.jobs.feishu.cn/index/position"))
+            a.fetch("https://nio.jobs.feishu.cn/index/position")   # 这里会重算一次
+        self.assertEqual(a.detail_template, "https://nio.jobs.feishu.cn/exp/position/{id}/detail")
+
+    def test_untouched_tenants_keep_the_index_prefix(self):
+        """对照组：`index` 详情本来就通的租户，一个字节都不该被改（全库 85 家里 83 家是这种）。"""
+        a = feishu.NioAdapter()
+        rows = [{"id": "1", "title": "T"}]
+        live = type("Response", (), {"status_code": 200, "text": "job detail"})()
+        with mock.patch.object(a, "_httpx_fetch", return_value=(rows, 1, True)), \
+                mock.patch.object(feishu.httpx, "get", return_value=live) as get:
+            self.assertIsNone(a.should_skip("https://nio.jobs.feishu.cn/index/position"))
+        self.assertEqual(a.detail_template, "https://nio.jobs.feishu.cn/index/position/{id}/detail")
+        self.assertEqual(get.call_count, 1, "详情通了就不该再去取首页")
+
+    def test_still_skips_when_repaired_prefix_also_fails(self):
+        """自报前缀也 404 → 这才是真的门户关了，照旧整源跳过。"""
+        a = feishu.NioAdapter()
+        rows = [{"id": "1", "title": "T"}]
+        root = type("Response", (), {
+            "status_code": 200, "text": '{"website_info":{"name":{"i18n":"x"},"path":"exp"}}',
+        })()
+        closed = type("Response", (), {"status_code": 404, "text": "Not Found"})()
+        with mock.patch.object(a, "_httpx_fetch", return_value=(rows, 1, True)), \
+                mock.patch.object(feishu.httpx, "get",
+                                  side_effect=lambda u, **k: root if u.endswith("/") else closed):
+            reason = a.should_skip("https://nio.jobs.feishu.cn/index/position")
+        self.assertIn("detail portal closed", reason)
+
+    def test_no_declared_path_still_skips(self):
+        """首页拿不到 website_info → 没有可试的前缀，不做无根据的猜测，照旧跳过。"""
+        a = feishu.NioAdapter()
+        rows = [{"id": "1", "title": "T"}]
+        blank = type("Response", (), {"status_code": 200, "text": "<html>no portal info</html>"})()
+        closed = type("Response", (), {"status_code": 404, "text": "Not Found"})()
+        with mock.patch.object(a, "_httpx_fetch", return_value=(rows, 1, True)), \
+                mock.patch.object(feishu.httpx, "get",
+                                  side_effect=lambda u, **k: blank if u.endswith("/") else closed):
+            self.assertIn("detail portal closed",
+                          a.should_skip("https://nio.jobs.feishu.cn/index/position"))
 
     def test_reachable_detail_portal_keeps_prefetched_jobs(self):
         a = feishu.NioAdapter()

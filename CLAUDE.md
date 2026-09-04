@@ -75,6 +75,15 @@
      踩坑实录：见华为列表接口只返 13 条而库里 460 个 active，就推断其余是死岗并开了 absence（commit 675e459）→ 逐个核验后**460 个全部在招、0 个撤岗**（`getJob/newHr` 返的是筛选过的子集；例 jobId=30153 列表查不到但详情接口返完整岗位名+正文）。已在 `c9a7e73` 撤回并加断言测试钉死。当时唯一挡住的是 97% 缺席越过 `max_expire_fraction=0.5` 安全闸 → sweep 主动跳过，未实际删数据；**但那道闸是兜底不是设计，别指望它**（存量降到列表规模 2 倍以内它就不拦了，而 expired 当天会被 purge 永久删除）。
      ✅ 正确姿势：拿不准列表是否全集，就走**逐岗** detail 判死（`ENRICH_REGISTRY` + liveness-sweep）。华为即用此法：`…/portalpub/getJobDetail/newHr?jobId={id}&dataSource={ds}`（httpx 零鉴权，既判死又补 `mainBusiness` 正文）；判死要求「jobname 空」**且**「有值字段数 ≤8」双条件（在招 ~32 个字段有值，不存在的 id 返 200+109 字段骨架但只 5 个有值），半截数据一律不判死——**宁可漏判不可错杀**。
      📌 通用规矩：**不可逆操作（标 expired / 删行）前，核验样本量必须匹配影响面**——要清 447 行就得核验 447 行，抽查 2 个不算数。
+     🔎 **怎么判自己在哪一种：`crawler/audit_stale_active.py`（只读，没有也不会有 --apply）**。
+     判据是**源级**的「这个源最近还抓到过东西吗」，分三桶（2026-09-04 全库实测）：
+     **A 源近 2 天仍在抓 → 不可判死**，占 92%（1,213 源 / 113,240 行陈旧）——源活着、我们也在抓，
+       某个岗没被再看到最可能是**列表没翻完**（Amazon 12,470 行里 7,761 行、Wells Fargo 6,958 里 4,967），
+       这是**抓全率**的活（paginate_all / reported_total 契约），不是探活的活，更不是去重的活；
+     **B 近 14 天抓过但已停几天**（5 源 / 146 行）→ 观察；
+     **C 整源停 ≥14 天 → 源健康问题**（93 源 / 9,729 行：武田制药 2,113 行停 34 天、凯莱英 70 天、
+       中国钢研 77 天）→ 去修源。**源坏了 ≠ 对方撤了岗**，仍不能因此判死。
+     ⚠️ 三桶只用来**区分成因**，任何一桶都不构成改 status 的依据；要判死只能逐岗 detail。
    - **expired 死岗 = 永久删除回收空间（2026-06-18 定方针）**：expired 是 sweep/dead-link-audit 逐岗探活**确认撤岗**，不保留 → `purge-expired.yml`（每日 UTC 02:30）`DELETE … WHERE status='expired'` + 普通 VACUUM 持续清。`removed`（抓取漏看可复活）不动。db_size 真正缩小（还盘）由 `maintenance-vacuum -f full=true` 删大批后手动跑。**库再逼近 500MB 上限 → 走 `docs/superpowers/plans/2026-06-14-jobs-database-refactor.md` 的 Phase 1：jobs 热表迁到自建 PostgreSQL（jobs-store 边界），Supabase 只留 Auth/sources/crawl_runs/用户小表。**
      - **⚠️ Phase 1 已切（2026-06-19）：`jobs` 热表现在在自建香港 Postgres 17 上，不在 Supabase。** 腾讯云轻量 2C2G/40GB，免备案。连接串（含公网 IP / 账号 / 密码）只存 **`JOBS_DATABASE_URL` secret**（GitHub Actions + Vercel）+ 本地 `.env.local`；**仓库公开，host/IP/账号/密码一律不入库、不提交、不写进文档**。Supabase 现只管 Auth / `sources` / `crawl_runs` / `discovery_runs` / 用户小表 / 洞察表。
        - **边界层**：app 读+写都走 `lib/jobs-store/`（`client.ts` pg 连接池 / `search.ts` 复刻 FTS / `read.ts` 读：list/count/companies/byIds/byUrls/byCompanies/recallByPrefs / `write.ts` 写：canonical upsert + updateJobSummaryById，镜像 crawler/jobs_db），爬虫写走 `crawler/jobs_db.py`（psycopg2）。两端都 **gated**：配了 `JOBS_DATABASE_URL` 用香港库，否则回退 Supabase（本地无 env / 回滚安全）；**写入端 HK 报错不回退 Supabase**（避免写空库孤儿数据）。**sources/crawl_runs 永远走 Supabase**（jobs_db 只管 jobs）。
@@ -366,7 +375,7 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 ## 🚫「接口返 0 / 403」不能证明「对方没开」（2026-09-04 立，一晚栽三次）
 
 判一家公司有没有开校招，**唯一可信的依据是对方页面自己怎么说**（招聘公告、网申起止日期），
-不是我们某个接口的返回值。已经栽了五次，全是同一个错：
+不是我们某个接口的返回值。已经栽了六次，全是同一个错：
 
 | 公司 | 当时的「证据」 | 真相 |
 |---|---|---|
@@ -375,6 +384,7 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 | 小米 | 飞书两个 `storefront_id` 返回**完全相同**的 1887 条，判「私有部署没有校招板块」 | 试错了维度，真正的开关是**请求头 `website-path`**，campus 764 / internship 554 / newretailing 121 |
 | 百度 | 列表接口传 `recruitType=CAMPUS` 返 0 | 校招那一档百度自己叫 **GRADUATE**；传 CAMPUS 接口回 `Illegal argument : recruitType`，adapter 只看到 0 条就跳过。改对之后 157 个校招岗 |
 | 华为 | 老门户 `reccampportal` 传 `jobType=2` 返 `totalRows=0`，判「对方没开」 | 校招 2026 年搬到新站 `career.huawei.com/cn/campus-recruitment` + 另一个网关；官网 2026-08-15 就挂着「2027届应届生招聘启动」。应届 69 + 实习 31 |
+| 商汤 / 海底捞 | 飞书详情页 404 → `should_skip` 判「tenant detail portal closed」，整源跳过 | **门户好好的，是我们把 URL 前缀写死成 `index`**。租户首页自报 `"website_info":{…,"path":"exp"}` 才是唯一有效前缀。商汤 80 岗（原本 0）、海底捞 119 岗；海底捞更坏——列表一直正常，36 个在招岗带着必然 404 的 jd_url 躺在库里 |
 
 ✅ 正确姿势：① 先渲染对方的校招页，看它自己写没写「XX 届校园招聘启动」+ 网申日期；
 ② 再从**页面自己发的请求**里找入口（拦 XHR / 读它的 JS 路由表），不要拿社招接口试参数；
@@ -384,7 +394,14 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 ④ **「HTTP 200 + 空 data」同样是假阴性**：华为新网关少带任意一个 `x-*` 头
    （x-hw-id / x-jalor-tenantalias / x-language / x-alb-gray / x-referer）就返 200 但 data 为空。
    adapter 遇到这种情况必须**抛错记 failed**，不许安静返 0 条——安静返 0 正是错误结论的来源。
-⑤ **确实抓不了的要说清是哪一种**：快手校招 `campus.kuaishou.cn/robots.txt` = `Disallow: /`，
+⑤ **别把「我们配错了」说成「对方关了」**：飞书那两家的教训是——报错信息本身
+   （"portal closed"）就是个未经证实的**结论**，它把「404」直接翻译成了「对方关门」。
+   404 只说明**这个 URL** 不通，不说明这个租户不招人。修法是让探测器先问对方
+   「你的门户路径是什么」再判（`feishu._repair_detail_template`），修不好才跳。
+   ⚠️ 但兜底不等于放开猜：全库 85 个飞书租户逐个 live 探完，只有 2 家需要走这条路，
+   其余 83 家 `/index/` 本来就通——**「自报 path != index」推断出的 22 家坏源里 20 家是假警报**，
+   靠的是逐个真探而不是靠推断。健康租户零额外请求。
+⑥ **确实抓不了的要说清是哪一种**：快手校招 `campus.kuaishou.cn/robots.txt` = `Disallow: /`，
    这是合规红线不是技术问题，不要再去试；但同官网的**日常实习**在 `zhaopin.kuaishou.cn`
    （无 robots 限制、同接口同签名，只差 `positionNatureCode=C002`），1,046 个岗是能抓的。
 

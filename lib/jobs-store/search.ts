@@ -16,6 +16,8 @@ import {
 import { buildTsquery, annotateAndRank, annotateSourceAdapter } from "@/lib/job-search";
 import { cityMatchTokens, ftsCandidateTerms } from "@/lib/china-keyword-expansion";
 import { appendJobScopeWhere, effectiveJobScope } from "@/lib/job-scope";
+import { collapseBulkStoreJobs } from "@/lib/bulk-store-dedup";
+import { appendCurrentSeasonWhere } from "@/lib/campus-season";
 import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 
 const FTS_CAP = 8000;
@@ -188,6 +190,7 @@ function appendRecruitmentPrefilter(conds: string[], jobType: string) {
   // 而新岗恰恰是用户最想看的。社招本来就不下推（默认态、大头），兜底路直接放行。
   conds.push(`((recruitment_category is not null and ${exact}) or (recruitment_category is null and ${legacyRecruitmentSuperset(jobType)}))`);
 }
+
 
 /**
  * 旧的「正向信号并集」超集，现在只服务于 recruitment_category 尚未算出的行。
@@ -400,6 +403,7 @@ async function searchViaFTS(
   }
   // 校招/实习超集下推：只保留可能命中的行，别把大量社招岗跨洋传过来（JS 仍权威判定）。
   appendRecruitmentPrefilter(conds, filters.jobType);
+  appendCurrentSeasonWhere(conds, params);
   // 走同一份候选缓存：候选集只由 where 决定（已全部进 key），而**翻页是在 JS 里 slice 的**——
   // 第 2 页的 SQL 与第 1 页逐字节相同。不缓存的话每翻一页都要把几千行重新跨库拉一遍再解析一遍，
   // 香港库实测这段占该接口服务端耗时的绝大部分（4354 行 ≈ 4.8MB）。
@@ -414,7 +418,9 @@ async function searchViaFTS(
     ),
     adapterBySource,
   );
-  const ranked = annotateAndRank(rows, filters, prefs, actions);
+  // 批量门店副本折叠放在排序**之后**：留下的是打分最高的那条。折叠后 ranked.length 变小 →
+  // exactTotalWhenCapped 的自检门③ 自动失败 → 计数退回「N+」，这是对的（见 bulk-store-dedup 注释）。
+  const ranked = collapseBulkStoreJobs(annotateAndRank(rows, filters, prefs, actions));
   const breakdown = countMatchBreakdown(ranked);
   const page = ranked.slice(offset, offset + limit);
   const capped = rows.length >= FTS_CAP;
@@ -469,6 +475,7 @@ async function searchViaScan(
   appendJobScopeWhere(conds, params, prefs, filters);
   appendPostedWithinWhere(conds, params, filters.postedWithin);
   appendRecruitmentPrefilter(conds, filters.jobType); // 校招/实习超集下推，扫描也少翻无关行
+  appendCurrentSeasonWhere(conds, params); // 往届校招/实习岗不进默认结果（与 FTS 路径同口径）
   // 候选只取 CANDIDATE_COLUMNS（与 FTS 路径同一套）：JS 打分/精筛只读这些列，纯展示列留到
   // 命中页再回补。此前这里拉的是全量 JOB_COLUMNS —— sortBy=match 默认要看满 SCAN_BUDGET=28000 行，
   // 多传的 6 个展示列 × 2.8 万行是白扔的带宽。
@@ -528,7 +535,8 @@ async function searchViaScan(
       nextOff += DB_PAGE;
     }
   }
-  const ranked = filterAndRankJobs(matched, filters);
+  // 与 FTS 路径同口径：门店副本折叠在排序之后（见 bulk-store-dedup 注释）。
+  const ranked = collapseBulkStoreJobs(filterAndRankJobs(matched, filters));
   const breakdown = countMatchBreakdown(ranked);
   const page = ranked.slice(offset, offset + limit);
   const capped = !exhausted;

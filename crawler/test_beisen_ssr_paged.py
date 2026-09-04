@@ -17,9 +17,10 @@ from adapters.china_ats import BeisenAdapter, _ssr_parse_list
 ORIGIN = "https://tenant.zhiye.com"
 
 
-def _row(job_id, title, jtype, city, date="2026-09-04"):
+def _row(job_id, title, jtype, city, date="2026-09-04", page=1):
     """富瀚微列序：职位名称 / 职位类型 / 工作地点 / 发布时间。"""
-    return (f'<tr><td><a title="{title}" href="/zpdetail/{job_id}" >{title}</a></td>'
+    # 真实锚点会把**列表当前页号**回传进详情链接（联易融实测），故构造器刻意带上它。
+    return (f'<tr><td><a title="{title}" href="/zpdetail/{job_id}?PageIndex={page}" >{title}</a></td>'
             f'<td title="{jtype}">{jtype}</td><td title="{city}">{city}</td><td>{date}</td></tr>')
 
 
@@ -218,6 +219,65 @@ class TestSsrPagedFetch(unittest.TestCase):
         self.assertEqual(jobs[0].location, "四川省-成都市")
         self.assertEqual(jobs[0].job_type, "通用职能类")
         self.assertEqual(jobs[0].jd_url, f"{ORIGIN}/job_show/230861003")
+
+
+
+class TestSsrJobUrlNormalize(unittest.TestCase):
+    """回归：详情锚点带列表页号 `?PageIndex=N`（联易融 live 实测）。
+
+    不剥掉的话有两个后果，都很贵：
+      ① 同一岗从第 1 页和第 3 页抓到 → 两个 canonical_jd_url → 库里同岗多行；
+      ② 与库里已有的干净 URL 对不上 → 老行在 list-absence 里变「缺席」→ 撤岗 + 次日 purge 永久删。
+    canonicalize_jd_url 只去 utm_ 类参数，挡不住 PageIndex。
+    """
+
+    def test_strips_page_index(self):
+        self.assertEqual(
+            china_ats._ssr_normalize_job_url(ORIGIN, "/zpdetail/390725089?PageIndex=1"),
+            f"{ORIGIN}/zpdetail/390725089")
+
+    def test_same_job_from_different_pages_is_one_url(self):
+        n = china_ats._ssr_normalize_job_url
+        self.assertEqual(n(ORIGIN, "/zpdetail/1?PageIndex=1"), n(ORIGIN, "/zpdetail/1?PageIndex=7"))
+
+    def test_absolute_href_kept(self):
+        self.assertEqual(
+            china_ats._ssr_normalize_job_url(ORIGIN, "https://x.zhiye.com/job_show/230861003?PageIndex=9"),
+            "https://x.zhiye.com/job_show/230861003")
+
+    def test_parse_list_emits_clean_urls(self):
+        rows, _, _ = _ssr_parse_list(
+            _list_html([_row(390725089, "方案经理", "研发", "深圳市", page=3)]), ORIGIN)
+        self.assertEqual(rows[0]["jd_url"], f"{ORIGIN}/zpdetail/390725089")
+
+    def test_same_job_across_pages_dedupes_to_one(self):
+        """翻页时同一岗带不同页号出现 → 归一后必须只算一条，否则库里同岗多行。"""
+        html = _list_html([_row(111111, "岗A", "研发", "北京市", page=1),
+                           _row(111111, "岗A", "研发", "北京市", page=2)])
+        rows, _, _ = _ssr_parse_list(html, ORIGIN)
+        self.assertEqual(len(rows), 1)
+
+
+class TestSsrAbsenceLivenessStaysOff(unittest.TestCase):
+    """红线：本路径抓全也**不许**开 list-absence 撤岗。
+
+    「板块列表是全集」为真，但库里压着旧浏览器路径（全页 a[href]，含详情页侧栏「热招职位」）
+    留下的**跨板块脏行**：联易融 /social 的 2 条缺席里，390854070 是在招的校园招聘岗，
+    一旦按缺席撤岗就会 expired → 次日 purge 永久删（CLAUDE.md §4 的误杀在招岗）。
+    """
+
+    def test_ssr_path_turns_absence_off_even_when_complete(self):
+        cli = _FakeClient(_paged_tenant(36, 15, 3))
+        a = _adapter()
+        self.assertTrue(BeisenAdapter.supports_absence_liveness, "类默认仍应为 True")
+        with _patch(cli), mock.patch.object(china_ats, "_beisen_ssr_fill_summaries", lambda jobs: None):
+            a._httpx_fetch_ssr_paged(f"{ORIGIN}/social")
+        self.assertTrue(a.fetch_complete, "抓全了就要如实记，抓全率不能因为怕撤岗而说谎")
+        self.assertFalse(a.supports_absence_liveness, "但绝不许按缺席撤岗")
+
+    def test_other_beisen_paths_keep_absence_on(self):
+        """只降本实例，不动类默认 —— 新版 SPA / theme2 CMS 两条路径行为一字不改。"""
+        self.assertTrue(BeisenAdapter().supports_absence_liveness)
 
 
 if __name__ == "__main__":
