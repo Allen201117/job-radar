@@ -434,3 +434,58 @@ class DeadSourceRuleTest(unittest.TestCase):
     def test_daily_crawl_module_has_output_spec(self):
         # run.py 2026-09-03 起写 daily_crawl 台账；没声明口径规则 A 会静默跳过它。
         self.assertIn("daily_crawl", W.MODULE_OUTPUT)
+
+
+class DuplicatePortalTest(unittest.TestCase):
+    """规则 H：同一个 ATS 门户挂多个 enabled 源 —— 用 2026-09-04 实际踩到的三处做用例。"""
+
+    @staticmethod
+    def _src(company, url, enabled=True):
+        return {"company": company, "source_url": url, "enabled": enabled, "adapter_name": "moka"}
+
+    def test_portal_identity_is_host_independent(self):
+        from ops_watchdog import portal_identity
+        a = portal_identity("https://campus.geely.com/campus-recruitment/geely/78436")
+        b = portal_identity("https://app.mokahr.com/campus-recruitment/geely/78436")
+        self.assertEqual(a, b, "同一 portal 换个域名必须算同一个身份")
+        self.assertEqual(a, "geely/78436")
+
+    def test_different_portals_not_grouped(self):
+        from ops_watchdog import portal_identity
+        self.assertNotEqual(
+            portal_identity("https://app.mokahr.com/campus-recruitment/geely/78436"),
+            portal_identity("https://app.mokahr.com/social-recruitment/geely/96123"),
+            "同一家公司的校招/社招是两个门户，不能算重复")
+
+    def test_flags_the_three_real_duplicates(self):
+        from ops_watchdog import evaluate_duplicate_portals
+        sources = {
+            "1": self._src("吉利汽车", "https://campus.geely.com/campus-recruitment/geely/78436"),
+            "2": self._src("吉利", "https://app.mokahr.com/campus-recruitment/geely/78436"),
+            "3": self._src("大疆创新", "https://apply.careers.dji.com/social-recruitment/dji/170070"),
+            "4": self._src("大疆", "https://app.mokahr.com/social-recruitment/dji/170070"),
+            "5": self._src("网易", "https://app.mokahr.com/social-recruitment/netease/999"),
+        }
+        out = evaluate_duplicate_portals(sources)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["rule"], "H")
+        self.assertIn("2", out[0]["summary"])            # 两个门户重复
+        self.assertTrue(any("geely/78436" in e for e in out[0]["evidence"]))
+        self.assertFalse(any("netease" in e for e in out[0]["evidence"]), "没重复的源不该被报")
+
+    def test_disabled_duplicate_is_not_flagged(self):
+        """已经按规则关掉厂商域名那条之后，就不该再天天喊。"""
+        from ops_watchdog import evaluate_duplicate_portals
+        sources = {
+            "1": self._src("吉利汽车", "https://campus.geely.com/campus-recruitment/geely/78436"),
+            "2": self._src("吉利", "https://app.mokahr.com/campus-recruitment/geely/78436",
+                           enabled=False),
+        }
+        self.assertEqual(evaluate_duplicate_portals(sources), [])
+
+    def test_no_portal_pattern_is_ignored(self):
+        from ops_watchdog import evaluate_duplicate_portals, portal_identity
+        self.assertIsNone(portal_identity("https://fullhan.zhiye.com/social"))
+        self.assertEqual(evaluate_duplicate_portals({
+            "1": self._src("A", "https://a.zhiye.com/social"),
+            "2": self._src("B", "https://b.zhiye.com/social")}), [])

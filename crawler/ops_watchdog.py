@@ -456,6 +456,70 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
     }]
 
 
+# 规则 H：同一个 ATS 门户被登记成多个 enabled 源（公司自有域名 + 厂商域名）。
+# portal 身份 = 「租户 slug / portal id」，与域名无关。
+_PORTAL_KEYS = (
+    # Moka：{host}/{campus|social}-recruitment/{tenant}/{portalId}
+    re.compile(r"/(?:campus|social)-recruitment/([^/?#]+/\d+)", re.I),
+)
+
+
+def portal_identity(source_url: str):
+    """从 source_url 抽「与域名无关的门户身份」；抽不出返回 None（不参与本规则）。"""
+    for pattern in _PORTAL_KEYS:
+        m = pattern.search(source_url or "")
+        if m:
+            return m.group(1).lower()
+    return None
+
+
+def evaluate_duplicate_portals(sources_by_id):
+    """规则 H：同一个门户挂了多个 enabled 源 → 同一个岗在库里存多行，用户看到重复卡片。
+
+    为什么必须自动报：这类重复**不会有任何失败信号**——两个源都 status=success、都抓得好好的，
+    只是抓的是同一批岗。2026-09-04 人肉比对 uuid 才发现三处：吉利 campus.geely.com 与
+    app.mokahr.com 是同一个 portal(geely/78436)，首页 30 个岗位 uuid 30/30 相同、总页数都是 76；
+    连同大疆、58 同城共 **3,366 行纯影子**，其中吉利校招 2,372 行 ——
+    「吉利有 2,595 个校招岗」这个数字里 91% 是重复计数。
+
+    自动扩源（auto_discover）按公司猜 slug 探活，完全可能给一家已有自有域名源的公司再插一条
+    厂商域名的源 → 这个坑会自己长回来，所以要有常设告警而不是一次性清理。
+    """
+    groups = {}
+    for sid, source in (sources_by_id or {}).items():
+        if not source or not source.get("enabled", True):
+            continue
+        ident = portal_identity(source.get("source_url"))
+        if not ident:
+            continue
+        groups.setdefault(ident, []).append(source)
+
+    dupes = {k: v for k, v in groups.items() if len(v) > 1}
+    if not dupes:
+        return []
+
+    evidence = []
+    for ident, items in sorted(dupes.items(), key=lambda kv: -len(kv[1]))[:8]:
+        hosts = "、".join(
+            f"{_host_of(i.get('source_url'))}（{i.get('company') or '?'}）" for i in items)
+        evidence.append(f"{ident}：{len(items)} 个源指向同一门户 → {hosts}")
+    return [{
+        "rule": "H",
+        "subject": "重复源",
+        "summary": f"{len(dupes)} 个 ATS 门户各被登记了多次，同一批岗位在库里存了多份"
+                   f"（两边都 success，不会有任何失败信号）。",
+        "evidence": evidence,
+        "next": "保留**公司自有域名**那条、停用厂商域名那条（产品原则：点击要跳官网详情）；"
+                "再把影子行标成 removed（可复活，别用 expired——那个次日会被 purge 永久删）。"
+                "只标「在保留域名下确有孪生行」的，只在厂商域名出现的岗不要动。",
+    }]
+
+
+def _host_of(url: str) -> str:
+    m = re.search(r"^https?://([^/]+)", url or "")
+    return m.group(1) if m else "?"
+
+
 def evaluate_timeout_kills(runs, jobs_by_run, meta_by_path, ratio=TIMEOUT_KILL_RATIO, min_repeats=2):
     """规则 B：按 **job 级** 判「任务被中途杀掉」。
 
@@ -875,6 +939,7 @@ def main():
                                           days=args.dead_source_days)
         # 规则 G 复用同一批 crawl_rows / sources（多取三列，不多打一次库）。
         findings += evaluate_coverage_shortfall(crawl_rows, sources_by_id)
+        findings += evaluate_duplicate_portals(sources_by_id)
     except Exception as exc:  # noqa: BLE001
         print(f"::warning::[watchdog] 规则 F/G（源连续失败 / 抓不全）本轮没查成："
               f"{type(exc).__name__}: {exc}")
