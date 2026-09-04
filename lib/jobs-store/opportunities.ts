@@ -19,6 +19,8 @@ import {
 } from "@/lib/china-keyword-expansion";
 import { userTargetFunctions } from "@/lib/opportunities/eligibility";
 import { appendJobScopeWhere, effectiveTargetRegions, jobMatchesScope } from "@/lib/job-scope";
+import { appendCurrentSeasonWhere } from "@/lib/campus-season";
+import { collapseBulkStoreJobs } from "@/lib/bulk-store-dedup";
 import type { RadarProfile } from "@/lib/opportunities/types";
 
 type SupabaseLike = { from: (table: string) => any };
@@ -339,6 +341,8 @@ export function buildRecallSql(
   }
   appendJobScopeWhere(base, params, { job_scope: profile.jobScope, target_regions: profile.targetRegions });
   appendStageRecallWhere(profile, base, params);
+  // 往届校招/实习岗不进推荐流（与 /jobs 检索、/campus 专区同一份口径，见 lib/campus-season）。
+  appendCurrentSeasonWhere(base, params);
   const actioned = actionedJobIds.slice(0, ACTIONED_EXCLUDE_CAP);
   if (actioned.length) {
     params.push(actioned);
@@ -522,11 +526,16 @@ export async function recallOpportunityCandidates(
 ): Promise<RecallResult> {
   const sinceIso = new Date(now.getTime() - SEVEN_DAYS_MS).toISOString();
   const budget = options.budget ?? RECALL_BUDGET;
+  // 门店批量副本折叠收在这个出口，两条召回路径（香港库 / Supabase 兜底）一起生效，
+  // 免得日后只改一条。召回已按 tier + 地区/新鲜度排过序，留下的是靠前那条。
+  // 不折叠的话，一个目标是房产经纪的用户当天推荐流会被同一家的几十个门店岗占满。
   if (jobsStoreEnabled()) {
-    return recallViaStore(profile, sinceIso, budget, options.actionedJobIds ?? []);
+    const r = await recallViaStore(profile, sinceIso, budget, options.actionedJobIds ?? []);
+    return { ...r, jobs: collapseBulkStoreJobs(r.jobs) };
   }
   if (supabaseFallback) {
-    return recallViaSupabase(profile, sinceIso, supabaseFallback, budget);
+    const r = await recallViaSupabase(profile, sinceIso, supabaseFallback, budget);
+    return { ...r, jobs: collapseBulkStoreJobs(r.jobs) };
   }
   return { jobs: [], capped: false };
 }
