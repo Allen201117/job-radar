@@ -489,3 +489,51 @@ class DuplicatePortalTest(unittest.TestCase):
         self.assertEqual(evaluate_duplicate_portals({
             "1": self._src("A", "https://a.zhiye.com/social"),
             "2": self._src("B", "https://b.zhiye.com/social")}), [])
+
+    def test_workday_case_only_duplicate_is_caught(self):
+        """Workday 大小写会带进 jd_url，而 canonical_jd_url 区分大小写 → 唯一索引拦不住。
+        live 实测 Visa：visa/Visa 与 visa/visa 两条源并存，703 个岗两边都有。"""
+        from ops_watchdog import evaluate_duplicate_portals, portal_identity
+        self.assertEqual(portal_identity("https://x.wd5.myworkdayjobs.com/wday/cxs/shell/ShellCareers/jobs"),
+                         portal_identity("https://x.wd5.myworkdayjobs.com/wday/cxs/shell/shellcareers/jobs"))
+        out = evaluate_duplicate_portals({
+            "1": {"company": "Visa", "enabled": True, "adapter_name": "workday",
+                  "source_url": "https://visa.wd5.myworkdayjobs.com/wday/cxs/visa/Visa/jobs"},
+            "2": {"company": "Visa", "enabled": True, "adapter_name": "workday",
+                  "source_url": "https://visa.wd5.myworkdayjobs.com/wday/cxs/visa/visa/jobs"}})
+        self.assertEqual(len(out), 1)
+        self.assertTrue(any("visa/visa" in e for e in out[0]["evidence"]))
+
+    def test_moka_apply_and_recruitment_forms_are_same_portal(self):
+        """同一个 tenant/portalId 的两种 URL 写法 —— live 实测特斯拉 1,043 个 uuid 两边都有。"""
+        from ops_watchdog import evaluate_duplicate_portals
+        out = evaluate_duplicate_portals({
+            "1": {"company": "特斯拉中国 Tesla", "enabled": True, "adapter_name": "moka",
+                  "source_url": "https://app.mokahr.com/apply/tesla/46129"},
+            "2": {"company": "特斯拉", "enabled": True, "adapter_name": "moka",
+                  "source_url": "https://app.mokahr.com/social-recruitment/tesla/46129"}})
+        self.assertEqual(len(out), 1)
+        self.assertTrue(any("tesla/46129" in e for e in out[0]["evidence"]))
+
+    def test_beisen_and_feishu_board_pairs_are_not_flagged(self):
+        """🚫 回归：板块段在路径里的平台**不归本规则管**。
+        汇顶 social(64) 与 campus(35) 实测交集为 0，按租户名归一会误杀 72 组合法板块对。"""
+        from ops_watchdog import evaluate_duplicate_portals
+        self.assertEqual(evaluate_duplicate_portals({
+            "1": {"company": "汇顶科技", "enabled": True, "adapter_name": "beisen",
+                  "source_url": "https://goodix.zhiye.com/social"},
+            "2": {"company": "汇顶科技", "enabled": True, "adapter_name": "beisen",
+                  "source_url": "https://goodix.zhiye.com/campus"},
+            "3": {"company": "蔚来", "enabled": True, "adapter_name": "feishu",
+                  "source_url": "https://nio.jobs.feishu.cn/index/position"},
+            "4": {"company": "蔚来", "enabled": True, "adapter_name": "feishu",
+                  "source_url": "https://nio.jobs.feishu.cn/campus/position"}}), [])
+
+    def test_same_company_different_portals_still_not_flagged(self):
+        """吉利校招门户 78436 与社招门户 96123 是两个 portal，不能算重复。"""
+        from ops_watchdog import evaluate_duplicate_portals
+        self.assertEqual(evaluate_duplicate_portals({
+            "1": {"company": "吉利", "enabled": True, "adapter_name": "moka",
+                  "source_url": "https://app.mokahr.com/campus-recruitment/geely/78436"},
+            "2": {"company": "浙江吉利控股集团", "enabled": True, "adapter_name": "moka",
+                  "source_url": "https://app.mokahr.com/social-recruitment/geely/96123"}}), [])

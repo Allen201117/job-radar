@@ -458,9 +458,27 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
 
 # 规则 H：同一个 ATS 门户被登记成多个 enabled 源（公司自有域名 + 厂商域名）。
 # portal 身份 = 「租户 slug / portal id」，与域名无关。
+# **只登记已经 live 核验过「同身份 = 同一批岗」的平台** —— 判据不是 URL 长得像，
+# 而是两边岗位 id/uuid 真的重合（2026-09-04 逐组查过重合率）。
+#
+# 🚫 **beisen / feishu 刻意不在这里，别手痒加**：它们的板块段在路径里
+# （`{t}.zhiye.com/social` vs `/campus`、`{t}.jobs.feishu.cn/index/position` vs `/campus/position`），
+# 只按租户名归一会把 72 组**合法的板块对**判成影子，一清就是删在招岗。
+# 实测佐证：汇顶 goodix 的 social(64 岗) 与 campus(35 岗) **交集为 0**；飞书的 website-path
+# 决定的同样是互不相同的池子（CLAUDE.md 立过碑：index 甚至比不带头更小）。
+# 真要加它们，必须让**板块段参与身份**，且先做重合率抽样。
 _PORTAL_KEYS = (
-    # Moka：{host}/{campus|social}-recruitment/{tenant}/{portalId}
-    re.compile(r"/(?:campus|social)-recruitment/([^/?#]+/\d+)", re.I),
+    # Moka：{host}/{apply|campus_apply|campus-recruitment|social-recruitment}/{tenant}/{portalId}
+    # 身份 = tenant/portalId：portalId 自己就区分校招/社招门户（吉利 78436 校招 vs 96123 社招），
+    # 所以路径段**不**参与身份——同一个 portalId 的两种 URL 写法才是真重复。
+    # live 实测 10 组 /apply/ vs /social-recruitment/ 确实是同一批岗（特斯拉 1,043 个 uuid 两边都有、
+    # 滴滴 832、李宁 326、锐捷 280…），合计约 2,589 行影子。
+    re.compile(r"/(?:apply|campus_apply|campus-recruitment|social-recruitment)/([^/?#]+/\d+)", re.I),
+    # Workday：{host}/wday/cxs/{tenant}/{site}/jobs，身份 = tenant/site（portal_identity 统一转小写）。
+    # 大小写必须归一：它会一路带进 jd_url（/en-US/ShellCareers/job/… vs /en-US/shellcareers/job/…），
+    # 而 canonical_jd_url **区分大小写** ⇒ active 唯一索引拦不住 ⇒ 同一个岗安静地存两行。
+    # live 实测 Visa：visa/Visa 833 个在招、visa/visa 703 个，其中 703 个两边都有。
+    re.compile(r"/wday/cxs/([^/]+/[^/?#]+)", re.I),
 )
 
 
@@ -509,7 +527,10 @@ def evaluate_duplicate_portals(sources_by_id):
         "summary": f"{len(dupes)} 个 ATS 门户各被登记了多次，同一批岗位在库里存了多份"
                    f"（两边都 success，不会有任何失败信号）。",
         "evidence": evidence,
-        "next": "保留**公司自有域名**那条、停用厂商域名那条（产品原则：点击要跳官网详情）；"
+        "next": "先抽样比对两边岗位 id/uuid 的重合率再动手——URL 形态像不代表是同一批岗。"
+                "确认重复后：有自有域名的**保自有域名**（产品原则：点击要跳官网详情）；"
+                "同域名不同写法的保**库里占多数**的那种（moka 现有 334 个 /-recruitment/ vs 62 个 /apply/）；"
+                "Workday 仅大小写不同的保租户注册的那个大小写。"
                 "再把影子行标成 removed（可复活，别用 expired——那个次日会被 purge 永久删）。"
                 "只标「在保留域名下确有孪生行」的，只在厂商域名出现的岗不要动。",
     }]

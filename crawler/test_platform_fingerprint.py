@@ -268,3 +268,92 @@ class ResolveSourceUrlPriorityTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _MultiClient:
+    """按 URL 返回不同响应，用于测「再跳一跳」。"""
+
+    def __init__(self, by_url):
+        self.by_url = by_url
+        self.calls = []
+
+    def get(self, url, timeout):
+        self.calls.append(url)
+        for key, resp in self.by_url.items():
+            if url.startswith(key):
+                return resp
+        return _Response(url, "", status_code=404)
+
+
+class CareersSubdomainHopTest(unittest.TestCase):
+    """公司官网的招聘栏目页 ≠ 岗位所在地。
+
+    2026-09-04 台账实证：no_stable_jd 52 家里 51 家判 unknown_spa，其中 5 家当天被人工接通，
+    形态一致 —— 漏斗停在介绍页上等岗位数据，而岗位在自家招聘子域上，
+    由那个子域的 302 落到真正的 ATS（掌阅 jobs.zhangyue.com→飞书、壳牌 jobs.shell.com→Workday）。
+    巴斯夫与壳牌各因此空撞 30 次，还被误标成 anti_bot。
+    """
+
+    def test_picks_own_careers_subdomain(self):
+        html = '<a href="https://jobs.zhangyue.com/list">社会招聘</a>'
+        self.assertEqual(
+            pf.find_careers_subdomain_hops(html, "http://www.zhangyue.com/careers"),
+            ["https://jobs.zhangyue.com/"],
+        )
+
+    def test_handles_two_level_tld(self):
+        """campus.10jqka.com.cn 与 job.10jqka.com.cn 是同一主域，别被 .com.cn 骗了。"""
+        html = '<a href="https://campus.10jqka.com.cn/job/list">校园招聘</a>'
+        self.assertEqual(
+            pf.find_careers_subdomain_hops(html, "https://job.10jqka.com.cn/"),
+            ["https://campus.10jqka.com.cn/"],
+        )
+
+    def test_ignores_self_other_domains_and_non_careers_subdomains(self):
+        html = (
+            '<a href="https://www.acme.com/about">关于我们</a>'
+            '<a href="https://news.acme.com/2026">新闻</a>'
+            '<a href="https://jobs.other.com/x">别家的职位</a>'
+            '<a href="https://careers.acme.com/list">职位</a>'
+        )
+        self.assertEqual(
+            pf.find_careers_subdomain_hops(html, "https://www.acme.com/careers"),
+            ["https://careers.acme.com/"],
+        )
+
+    def test_fingerprint_follows_subdomain_hop_that_redirects_to_ats(self):
+        """子域本身不是已知 ATS，价值全在跟过去、让它的 302 把我们带到 ATS。"""
+        entry = _Response(
+            "http://www.zhangyue.com/careers",
+            '招聘 职位 <a href="https://jobs.zhangyue.com/">社会招聘</a>',
+        )
+        # 跟过去后落在飞书租户上（httpx follow_redirects 后 final_url 已是飞书）
+        hopped = _Response("https://q7w8vltyes.jobs.feishu.cn/index/position", "<html></html>")
+        client = _MultiClient({
+            "http://www.zhangyue.com": entry,
+            "https://jobs.zhangyue.com": hopped,
+        })
+        out = pf.fingerprint("http://www.zhangyue.com/careers", company="掌阅科技", client=client)
+        self.assertEqual(out["platform"], "feishu")
+        self.assertEqual(out["adapter"], "feishu")
+        self.assertTrue(str(out["reason"]).startswith("careers_subdomain_hop_from:"))
+
+    def test_hop_never_runs_when_platform_already_recognized(self):
+        """已认出 ATS 的页面不该再跳 —— 这一步只许把 unknown 变成已知，不许反向。"""
+        resp = _Response(
+            "https://acme.mokahr.com/jobs", '<a href="https://careers.acme.com/x">职位</a>'
+        )
+        client = _MultiClient({"https://acme.mokahr.com": resp})
+        out = pf.fingerprint("https://acme.mokahr.com/jobs", company="Acme", client=client)
+        self.assertEqual(out["platform"], "moka")
+        self.assertEqual(client.calls, ["https://acme.mokahr.com/jobs"])
+
+    def test_hop_does_not_recurse_beyond_one_level(self):
+        """跳一次就够；再跳下去会把「介绍页互相链接」变成爬全站。"""
+        page = _Response(
+            "https://a.example.com/careers",
+            '招聘 职位 <a href="https://careers.example.com/x">职位</a>',
+        )
+        client = _MultiClient({"https://": page})
+        pf.fingerprint("https://a.example.com/careers", company="Example", client=client)
+        self.assertLessEqual(len(client.calls), 5)
