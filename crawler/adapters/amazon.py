@@ -64,11 +64,24 @@ def _int_or_none(value) -> Optional[int]:
         return None
 
 
+# amazon.jobs 的 `hits` 封顶在 10000（典型的 Elasticsearch `index.max_result_window`）：
+# live 实测 offset=9900 还有数据、offset=10000 直接返 0 条，而 `hits` 恒为 10000。
+# 也就是说 hits==10000 时它**不是总数、是天花板**，把它当分母会造出一个永远补不上的假缺口
+# （抓全率告警会天天指着这 7,000 个并不存在的岗）。
+_HITS_CEILING = 10000
+
+
 def _reported_total_from_payload(data: dict) -> Optional[int]:
     for key in ("total", "count", "totalCount", "totalResults", "total_hits", "hits"):
         total = _int_or_none((data or {}).get(key))
-        if total is not None:
-            return total
+        if total is None:
+            continue
+        if total >= _HITS_CEILING:
+            # 撞天花板 → 真实总数不可知。返回 None = 「诚实盲区」，
+            # coverage_complete 随之为 None（不可判定），规则 G 不会误报。
+            # 不要退而求其次填 10000 或填已抓数：前者是假分母，后者是自欺（永远 100%）。
+            return None
+        return total
     return None
 
 
@@ -83,7 +96,12 @@ def _job_summary(j: dict) -> Optional[str]:
 
 class AmazonAdapter(BaseAdapter):
     name = "amazon"
-    max_pages = 30  # result_limit=100/页 → 最多 3000 岗（覆盖在华全量，<100 即停）
+    # result_limit=100/页 → 最多 3000 岗，<100 即停。
+    # 单独查中国（normalized_country_code[]=CHN）实测只有 291 个岗，30 页绰绰有余；
+    # 3000 这个预算是给 regions 放开到 {CN,US,SG,Remote} 之后用的——那种查询 hits 直接撞
+    # 10000 天花板，真实总数不可知，再往上翻只是多拉美国岗，与本产品重点不符。
+    # 要抓更多美国岗时改这里，同时想清楚是不是真要往库里灌几千条外企岗。
+    max_pages = 30
 
     def should_skip(self, source_url: str):
         return None  # 公开 JSON API，跳过 HEAD 预检

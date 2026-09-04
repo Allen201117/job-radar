@@ -289,3 +289,25 @@ class ReportedTotalTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AmazonHitsCeilingTest(unittest.TestCase):
+    """amazon.jobs 的 hits 封顶 10000 = 天花板不是总数，不许当分母。
+
+    live 实测：offset=9900 还有数据、offset=10000 返 0 条，而 hits 恒为 10000。
+    把它当分母 → 抓全率告警天天指着 7,000 个并不存在的岗，规则 G 永远消不掉。
+    单查中国（CHN）时 hits=291，那是真总数，必须照常上报——否则连真缺口也看不见了。
+    """
+
+    def test_ceiling_hits_reported_as_unknown(self):
+        from adapters.amazon import _reported_total_from_payload
+        self.assertIsNone(_reported_total_from_payload({"hits": 10000}))
+        self.assertIsNone(_reported_total_from_payload({"hits": 12345}))
+
+    def test_real_total_below_ceiling_still_reported(self):
+        from adapters.amazon import _reported_total_from_payload
+        self.assertEqual(_reported_total_from_payload({"hits": 291}), 291)
+
+    def test_missing_total_stays_none(self):
+        from adapters.amazon import _reported_total_from_payload
+        self.assertIsNone(_reported_total_from_payload({}))
