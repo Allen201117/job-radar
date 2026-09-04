@@ -41,6 +41,10 @@ module.exports = {
         // 语义色调（tone）：值住在 app/globals.css 的 CSS 变量里，明暗自动切换。
         // 组件只写 text-tone-<族>-fg / bg-tone-<族>-bg / border-tone-<族>-border，不写 hex。
         overlay: "var(--overlay-backdrop)",
+        action: {
+          ink: "var(--action-ink-bg)",
+          "ink-fg": "var(--action-ink-fg)",
+        },
         tone: {
           sky: {
             fg: "var(--tone-sky-fg)",
@@ -66,6 +70,8 @@ module.exports = {
             fg: "var(--tone-rose-fg)",
             bg: "var(--tone-rose-bg)",
             border: "var(--tone-rose-border)",
+            "bg-soft": "var(--tone-rose-bg-soft)",
+            "border-soft": "var(--tone-rose-border-soft)",
           },
           lilac: {
             fg: "var(--tone-lilac-fg)",

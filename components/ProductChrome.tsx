@@ -135,47 +135,6 @@ export function CountBadge({ children }: { children: ReactNode }) {
   );
 }
 
-export function EmptyPanel({
-  title,
-  description,
-  action,
-  tone,
-}: {
-  title: string;
-  description: string;
-  action?: ReactNode;
-  tone?: "empty" | "error";
-}) {
-  const resolvedTone = tone ?? "empty";
-
-  return (
-    <div
-      className={cn(
-        "rounded-[1.5rem] border px-6 py-14 text-center",
-        resolvedTone === "error"
-          ? "border-[#e7b7ac] bg-[#fff7f4] dark:border-[#e6a99f]/[0.25] dark:bg-[#3a201a]/[0.16]"
-          : "border-dashed border-black/[0.12] bg-white/45 dark:border-white/[0.1] dark:bg-white/[0.05]",
-      )}
-    >
-      <div
-        className={cn(
-          "mx-auto grid size-12 place-items-center rounded-2xl",
-          resolvedTone === "error"
-            ? "bg-tone-rose-bg text-tone-rose-fg"
-            : "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]",
-        )}
-      >
-        {resolvedTone === "error" ? (
-          <WarningCircle size={22} weight="fill" aria-hidden="true" />
-        ) : (
-          <ArrowRight size={22} weight="bold" aria-hidden="true" />
-        )}
-      </div>
-      <h2 className="mt-4 text-lg font-semibold ink-1">{title}</h2>
-      <p className="mx-auto mt-2 max-w-md text-pretty text-[14px] leading-6 ink-2">
-        {description}
-      </p>
-      {action && <div className="mt-5">{action}</div>}
-    </div>
-  );
-}
+// 空状态已收进组件库（components/ui/empty-state.tsx）。这里保留再导出，
+// 是为了让 4 个存量调用方不必在同一次改动里跟着改 import 路径。
+export { EmptyState as EmptyPanel } from "@/components/ui/empty-state";

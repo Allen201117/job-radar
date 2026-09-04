@@ -168,6 +168,17 @@
        在暖纸浅底上几乎看不出来，背景看着还是亮的、像还能点，用户点上去才发现点到的是遮罩。
        现网这三处没有 dark: 变体（明暗同值），这里保持一致，不趁机改深浅。 */
     --overlay-backdrop: rgba(26, 23, 20, 0.45);
+
+    /* 主操作墨色对（.btn-ink 的那一对）。收成令牌是因为它不只按钮在用——空状态图标底、
+       toast、导航当前项都用同一对，此前各处手写 bg-[#1a1714] text-[#f7f1e6] + 一整套 dark:。
+       值逐字节照搬 .btn-ink / .dark .btn-ink，不是新配色。 */
+    --action-ink-bg: #1a1714;
+    --action-ink-fg: #f7f1e6;
+
+    /* rose 的更浅一档：空状态的「出错」底比报错条更淡（整块面积大，用报错条那么浓会压不住）。
+       值照搬原 EmptyPanel 的 #fff7f4 / #e7b7ac。 */
+    --tone-rose-bg-soft: #fff7f4;
+    --tone-rose-border-soft: #e7b7ac;
   }
 
   .dark {
@@ -200,6 +211,10 @@
     --tone-neutral-bg: rgba(255, 255, 255, 0.06);
     --tone-neutral-border: rgba(255, 255, 255, 0.1);
     --overlay-backdrop: rgba(26, 23, 20, 0.45);
+    --action-ink-bg: #f3ecdf;
+    --action-ink-fg: #16130f;
+    --tone-rose-bg-soft: rgba(58, 32, 26, 0.16);
+    --tone-rose-border-soft: rgba(230, 169, 159, 0.25);
   }
 }
 
