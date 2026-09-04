@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChatCircleDots, X } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
+import { useBodyScrollLock, useEscapeKey } from "@/lib/ui/hooks";
 
 // 用户反馈群二维码：微信群码会定期失效，换群时只需替换 public/ 下这张图。
 const QR_SRC = "/wechat-group-qr.png";
@@ -16,19 +17,8 @@ export default function FeedbackButton() {
 
   useEffect(() => setMounted(true), []);
 
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.body.style.overflow = prev;
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  useBodyScrollLock(open);
+  useEscapeKey(() => setOpen(false), open);
 
   return (
     <>

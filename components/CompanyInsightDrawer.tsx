@@ -43,20 +43,17 @@ import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
 import CompanyLogo from "@/components/CompanyLogo";
 import type { RecruitmentObservation } from "@/lib/recruitment-cycle";
+import { useBodyScrollLock, useEscapeKey } from "@/lib/ui/hooks";
+import { INSIGHT_CHIP_TONE_CLASS as PAYLOAD_CHIP_TONE } from "@/lib/insight-chip-format";
 
 // 新鲜度分级配色：越旧越偏琥珀，提示用户谨慎参考。
 const FRESHNESS_TONE: Record<FreshnessLevel, string> = {
-  fresh: "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]",
-  recent: "border border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08] ",
-  aging: "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]",
+  fresh: "border border-tone-green-border bg-tone-green-bg text-tone-green-fg",
+  recent: "border border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08]",
+  aging: "border border-tone-amber-border bg-tone-amber-bg text-tone-amber-fg",
   stale: "border border-[#e0a94e] bg-[#fbe6c4] text-[#8a5a12] dark:border-[#e0b15a]/[0.40] dark:bg-[#e0b15a]/[0.20] dark:text-[#e8bf72]",
 };
 
-const PAYLOAD_CHIP_TONE: Record<InsightChipTone, string> = {
-  positive: "border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]",
-  warning: "border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]",
-  neutral: "border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08] ",
-};
 
 interface Props {
   company: string;
@@ -72,7 +69,7 @@ const DIMENSION_META: Record<
   timing: {
     label: "招聘时机",
     icon: CalendarBlank,
-    accent: "border-[#b7d2ee] bg-[#dceafa] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15]",
+    accent: "border-tone-sky-border bg-tone-sky-bg",
     iconText: "text-[#2f6299] dark:text-[#7fb2e8]",
   },
   hiring: {
@@ -84,20 +81,20 @@ const DIMENSION_META: Record<
   listing: {
     label: "上市 / 股票",
     icon: ChartLineUp,
-    accent: "border-[#a9d8c4] bg-[#dcf2e8] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15]",
-    iconText: "text-[#2f8a63] dark:text-[#6cc99e]",
+    accent: "border-tone-teal-border bg-tone-teal-bg",
+    iconText: "text-tone-teal-fg",
   },
   compensation_intensity: {
     label: "薪资 / 强度",
     icon: Scales,
-    accent: "border-[#e7c98a] bg-[#fbeecb] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15]",
-    iconText: "text-[#8a6312] dark:text-[#e0b15a]",
+    accent: "border-tone-amber-border bg-tone-amber-bg",
+    iconText: "text-tone-amber-fg",
   },
   path: {
     label: "进入路径",
     icon: Path,
-    accent: "border-[#cfc0e6] bg-[#efe9f8] dark:border-[#c3b1e6]/[0.30] dark:bg-[#c3b1e6]/[0.15]",
-    iconText: "text-[#6a4fa0] dark:text-[#c3b1e6]",
+    accent: "border-tone-lilac-border bg-tone-lilac-bg",
+    iconText: "text-tone-lilac-fg",
   },
   // 文化维度：合规上不用「避坑」字样，统一改为「温馨提示」
   culture: {
@@ -140,19 +137,9 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
   }, [open, company]);
 
   // 打开时锁滚动 + 支持 Esc 关闭
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.body.style.overflow = prev;
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open, onClose]);
+  // 锁滚动 + ESC 关闭收编进组件库（改造前这段逻辑在 6 个组件里各写了一份）。
+  useBodyScrollLock(open);
+  useEscapeKey(onClose, open);
 
   // 通过 portal 渲染到 body：避免抽屉成为带 transform 的 JobCard <article> 的后代，
   // 否则 fixed 定位会以卡片为包含块、随 hover transform 抖动（曾导致打开后频繁闪烁）。
@@ -188,14 +175,14 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
         role="dialog"
         aria-modal="true"
         aria-label="公司职业洞察"
-        className="relative flex h-full w-full flex-col border-l border-black/[0.08] bg-[#f4efe6] ink-1 shadow-2xl sm:max-w-xl lg:max-w-2xl dark:border-white/[0.1] dark:bg-[#16130f] "
+        className="relative flex h-full w-full flex-col border-l border-black/[0.08] bg-[#f4efe6] ink-1 shadow-2xl sm:max-w-xl lg:max-w-2xl dark:border-white/[0.1] dark:bg-[#16130f]"
       >
         {/* 头部：明确「社区聚合·非官方」，与官方岗位数据视觉区分 */}
         <div className="border-b border-black/[0.06] bg-gradient-to-b from-white/60 to-transparent px-6 pb-5 pt-6 dark:border-white/[0.1] dark:from-white/[0.05]">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-sm ink-3 ">
-                <Sparkle size={16} weight="fill" className="text-[#6a4fa0] dark:text-[#c3b1e6]" />
+              <div className="flex items-center gap-2 text-sm ink-3">
+                <Sparkle size={16} weight="fill" className="text-tone-lilac-fg" />
                 公司职业洞察
               </div>
               <div className="mt-1.5 flex items-center gap-2.5">
@@ -205,25 +192,25 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
                 </h2>
               </div>
               {firmoBits.length > 0 && (
-                <p className="mt-1 t-caption">{firmoBits.join(" · ")}</p>
+                <p className="mt-1 t-caption">{firmoBits.join("·")}</p>
               )}
             </div>
             <button
               type="button"
               onClick={onClose}
-              className="shrink-0 rounded-full bg-black/[0.05] p-2 ink-2 transition hover:bg-black/[0.08] hover:opacity-80 dark:bg-white/[0.05] dark:hover:bg-white/[0.08] "
+              className="shrink-0 rounded-full bg-black/[0.05] p-2 ink-2 transition hover:bg-black/[0.08] hover:opacity-80 dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
             >
               <X size={18} weight="bold" />
             </button>
           </div>
           {/* 唯一一次「来源聚合·去标识」统一声明（每条卡片正文不再重复罗列媒体名） */}
-          <div className="mt-4 rounded-xl border border-[#cfc0e6] bg-[#efe9f8] px-3.5 py-3 text-[13px] leading-6 text-[#5a4a78] dark:border-[#c3b1e6]/[0.30] dark:bg-[#c3b1e6]/[0.12] dark:text-[#c3b1e6]">
+          <div className="mt-4 rounded-xl border border-tone-lilac-border bg-tone-lilac-bg px-3.5 py-3 text-[13px] leading-6 text-[#5a4a78] dark:text-[#c3b1e6]">
             <div className="flex items-center gap-2.5">
-              <ShieldCheck size={18} weight="fill" className="shrink-0 text-[#6a4fa0] dark:text-[#c3b1e6]" />
+              <ShieldCheck size={18} weight="fill" className="shrink-0 text-tone-lilac-fg" />
               <span className="font-semibold">公开来源聚合 · 去标识 · 仅供参考</span>
             </div>
             <details className="mt-1.5">
-              <summary className="inline-flex cursor-pointer list-none text-xs font-semibold text-[#6a4fa0] transition hover:text-[#4f3b82] [&::-webkit-details-marker]:hidden dark:text-[#c3b1e6] dark:hover:text-[#d9cdf2]">
+              <summary className="inline-flex cursor-pointer list-none text-xs font-semibold text-tone-lilac-fg transition hover:text-[#4f3b82] [&::-webkit-details-marker]:hidden dark:hover:text-[#d9cdf2]">
                 了解更多
               </summary>
               <p className="mt-2 text-xs leading-6 text-[#5a4a78] dark:text-[#c3b1e6]">
@@ -242,7 +229,7 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
           )}
 
           {!loading && totalItems === 0 && !(data?.recruitment_cycles?.length) && (
-            <div className="rounded-xl border border-black/[0.06] bg-white/55 p-5 text-[15px] leading-7 ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
+            <div className="rounded-xl border border-black/[0.06] bg-white/55 p-5 text-[15px] leading-7 ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
               {failureMessage(data?.failure_reason)}
             </div>
           )}
@@ -290,7 +277,7 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
                         <Meta.icon size={17} weight="bold" className={Meta.iconText} />
                       </span>
                       <h3 className="t-h3">{Meta.label}</h3>
-                      <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-xs font-medium ink-3 dark:bg-white/[0.08] ">
+                      <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-xs font-medium ink-3 dark:bg-white/[0.08]">
                         {items.length}
                       </span>
                     </header>
@@ -329,12 +316,12 @@ function FirstPartySection({
   return (
     <section className="mb-8">
       <header className="mb-3 flex flex-wrap items-center gap-2.5">
-        <span className="grid size-8 place-items-center rounded-xl border border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]">
+        <span className="grid size-8 place-items-center rounded-xl border border-tone-teal-border bg-tone-teal-bg text-tone-teal-fg">
           <ChatCircleText size={17} weight="bold" />
         </span>
         <h3 className="t-h3">员工自愿分享</h3>
         {visible && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-2 py-0.5 text-xs font-medium text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]">
+          <span className="inline-flex items-center gap-1 rounded-full border border-tone-teal-border bg-tone-teal-bg px-2 py-0.5 text-xs font-medium text-tone-teal-fg">
             <Star size={12} weight="fill" />
             {aggregate.summary.average_rating ?? "-"} · {count} 条
           </span>
@@ -355,7 +342,7 @@ function FirstPartySection({
           ))}
         </div>
       ) : (
-        <div className="rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm leading-6 ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
+        <div className="rounded-xl border border-black/[0.06] bg-white/55 p-4 text-sm leading-6 ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
           已审核 {count} 条，满 {FIRST_PARTY_MIN_COUNT} 条后才会匿名聚合展示（人数太少容易被认出来，保护每位分享者）。
         </div>
       )}
@@ -373,21 +360,21 @@ function FirstPartyCard({ item }: { item: FirstPartyInsightItem }) {
   return (
     <article className="rounded-xl border border-black/[0.06] border-l-2 border-l-[#6cc99e] bg-white/60 p-5 pl-4 text-[15px] dark:border-white/[0.1] dark:border-l-[#6cc99e] dark:bg-white/[0.05]">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-full border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-0.5 text-[11px] font-semibold text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]">
+        <span className="rounded-full border border-tone-teal-border bg-tone-teal-bg px-2.5 py-0.5 text-[11px] font-semibold text-tone-teal-fg">
           员工自愿分享 · 已审核
         </span>
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
+        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
           匿名 · {item.topic_label}
         </span>
         {item.rating != null && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-[#e7c98a] bg-[#fbeecb] px-2 py-0.5 text-[11px] font-medium text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]">
+          <span className="inline-flex items-center gap-1 rounded-full border border-tone-amber-border bg-tone-amber-bg px-2 py-0.5 text-[11px] font-medium text-tone-amber-fg">
             <Star size={11} weight="fill" />
             {item.rating}/5
           </span>
         )}
       </div>
       <p className="mt-2.5 t-body">{item.content}</p>
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs ink-3 ">
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs ink-3">
         {item.created_month && (
           <span className="inline-flex items-center gap-1">
             <CalendarBlank size={13} />
@@ -413,27 +400,27 @@ const EQUITY_ANGLE: Record<
   { tone: string; label: string; text: string }
 > = {
   listed: {
-    tone: "border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]",
+    tone: "border-tone-teal-border bg-tone-teal-bg text-tone-teal-fg",
     label: "投递视角 · 股权可估值",
     text: "已上市：期权/RSU 可按公开股价估值，含金量较透明。结合下方近期行情自行判断——行情向好通常意味着手中股权更值钱。",
   },
   filed: {
-    tone: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]",
+    tone: "border-tone-sky-border bg-tone-sky-bg text-[#2f6299] dark:text-[#7fb2e8]",
     label: "投递视角 · 临近上市",
     text: "已递交招股书：临近上市，期权有潜在流动性预期，是较好的进入窗口；留意行权价、锁定期与上市不确定性。",
   },
   pre_ipo: {
-    tone: "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]",
+    tone: "border-tone-sky-border bg-tone-sky-bg text-[#2f6299] dark:text-[#7fb2e8]",
     label: "投递视角 · 筹备上市",
     text: "筹备上市：股权有上市后变现预期，适合看好者提前进入；上市时间表未定，存在不确定性。",
   },
   unicorn: {
-    tone: "border-[#cfc0e6] bg-[#efe9f8] text-[#6a4fa0] dark:border-[#c3b1e6]/[0.30] dark:bg-[#c3b1e6]/[0.15] dark:text-[#c3b1e6]",
+    tone: "border-tone-lilac-border bg-tone-lilac-bg text-tone-lilac-fg",
     label: "投递视角 · 独角兽股权",
     text: "未上市独角兽：估值高、市场看好，股权激励潜在含金量高，常是值得投递的标的；但短期不可变现、依赖后续融资或上市兑现。",
   },
   private: {
-    tone: "border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08] ",
+    tone: "border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08]",
     label: "投递视角 · 重看现金",
     text: "未上市且暂无明确上市计划：股权短期难变现，评估 offer 时建议以现金薪酬为主、股权为辅。",
   },
@@ -459,13 +446,13 @@ function QuoteLink({ payload }: { payload: Record<string, unknown> }) {
   if (!quoteUrl || !/^https?:\/\//i.test(quoteUrl)) return null;
   const exchange = typeof payload?.exchange === "string" ? payload.exchange : "";
   const ticker = typeof payload?.ticker === "string" ? payload.ticker : "";
-  const label = [exchange, ticker].filter(Boolean).join(" ") || "公开行情";
+  const label = [exchange, ticker].filter(Boolean).join("") || "公开行情";
   return (
     <a
       href={quoteUrl}
       target="_blank"
       rel="noopener noreferrer"
-      className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-[#a9d8c4] bg-[#dcf2e8] px-2.5 py-1 text-[12px] font-medium text-[#2f8a63] transition hover:bg-[#cdebde] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e] dark:hover:bg-[#6cc99e]/[0.22]"
+      className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-tone-teal-border bg-tone-teal-bg px-2.5 py-1 text-[12px] font-medium text-tone-teal-fg transition hover:bg-[#cdebde] dark:hover:bg-[#6cc99e]/[0.22]"
     >
       <ChartLineUp size={13} weight="bold" />
       近期行情 · {label}
@@ -525,7 +512,7 @@ function HiringStats({ payload }: { payload: Record<string, unknown> }) {
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3)
         .map(([k, v]) => `${k} ${Math.round((v / total) * 100)}%`)
-        .join(" · ");
+        .join("·");
       rows.push({ label: "经验", value });
     }
   }
@@ -540,7 +527,7 @@ function HiringStats({ payload }: { payload: Record<string, unknown> }) {
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3)
         .map(([k, v]) => `${k} ${Math.round((v / total) * 100)}%`)
-        .join(" · ");
+        .join("·");
       rows.push({ label: "学历", value });
     }
   }
@@ -553,7 +540,7 @@ function HiringStats({ payload }: { payload: Record<string, unknown> }) {
     const parts = (["social", "campus", "intern"] as const)
       .filter((k) => (s[k] || 0) > 0)
       .map((k) => `${LABEL[k]} ${s[k]}%`);
-    if (parts.length > 0) rows.push({ label: "类型", value: parts.join(" · ") });
+    if (parts.length > 0) rows.push({ label: "类型", value: parts.join("·") });
   }
 
   // 在架时长中位数
@@ -640,7 +627,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
           {chip.text}
         </span>
         {item.outdated && (
-          <span className="rounded-full border border-black/[0.08] bg-[#f4efe6] px-2 py-0.5 text-[11px] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08] ">
+          <span className="rounded-full border border-black/[0.08] bg-[#f4efe6] px-2 py-0.5 text-[11px] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08]">
             可能已过时
           </span>
         )}
@@ -653,7 +640,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
       <EquityAngle payload={item.payload} />
       <QuoteLink payload={item.payload} />
 
-      <div className="mt-3.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs ink-3 ">
+      <div className="mt-3.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs ink-3">
         {item.time_window && (
           <span className="inline-flex items-center gap-1">
             <CalendarBlank size={13} />
@@ -681,7 +668,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
               href={s.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 rounded-md border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 transition hover:bg-white hover:opacity-80 dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08] "
+              className="inline-flex items-center gap-1 rounded-md border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 transition hover:bg-white hover:opacity-80 dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
             >
               {s.publisher || "来源"}
               <ArrowSquareOut size={11} weight="bold" />
@@ -693,7 +680,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
       {!item.derived && (
       <div className="mt-3.5 border-t border-black/[0.06] pt-2.5 dark:border-white/[0.1]">
         {sent ? (
-          <span className="text-[11px] text-[#4f6f2a] dark:text-[#a3d06a]">已收到反馈，我们会尽快核实。</span>
+          <span className="text-[11px] text-tone-green-fg">已收到反馈，我们会尽快核实。</span>
         ) : disputing ? (
           <div className="space-y-2">
             <textarea
@@ -717,20 +704,20 @@ function InsightCard({ item }: { item: InsightItemView }) {
               <button
                 type="button"
                 onClick={() => setDisputing(false)}
-                className="rounded-full px-3 py-1 text-[11px] ink-3 hover:opacity-80 "
+                className="rounded-full px-3 py-1 text-[11px] ink-3 hover:opacity-80"
               >
                 取消
               </button>
             </div>
             {sendError && (
-              <p className="text-[11px] text-[#9c4a3c] dark:text-[#e6a99f]">{sendError}</p>
+              <p className="text-[11px] text-tone-rose-fg">{sendError}</p>
             )}
           </div>
         ) : (
           <button
             type="button"
             onClick={() => setDisputing(true)}
-            className="inline-flex items-center gap-1 text-[11px] ink-3 transition hover:opacity-80 "
+            className="inline-flex items-center gap-1 text-[11px] ink-3 transition hover:opacity-80"
           >
             <Flag size={12} />
             这条有误?
@@ -757,24 +744,24 @@ function RecruitmentTimeline({ cycles }: { cycles: RecruitmentObservation[] }) {
   return (
     <section className="mb-8">
       <header className="mb-3 flex items-center gap-2.5">
-        <span className="grid size-8 place-items-center rounded-xl border border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
+        <span className="grid size-8 place-items-center rounded-xl border border-tone-sky-border bg-tone-sky-bg text-[#2f6299] dark:text-[#7fb2e8]">
           <CalendarBlank size={17} weight="bold" />
         </span>
         <h3 className="t-h3">招聘周期</h3>
-        <span className="rounded-full border border-[#b7d2ee] bg-[#dceafa] px-2 py-0.5 text-[11px] font-medium text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
+        <span className="rounded-full border border-tone-sky-border bg-tone-sky-bg px-2 py-0.5 text-[11px] font-medium text-[#2f6299] dark:text-[#7fb2e8]">
           据往年 · {gradClass}
         </span>
       </header>
       <div className="space-y-3.5">
         {Array.from(bySeason.entries()).map(([season, rows]) => (
           <div key={season} className="rounded-xl border border-black/[0.06] bg-white/60 p-4 dark:border-white/[0.1] dark:bg-white/[0.05]">
-            <p className="mb-2 text-sm font-semibold ink-2 ">{season}</p>
+            <p className="mb-2 text-sm font-semibold ink-2">{season}</p>
             <ul className="space-y-1.5">
               {rows.map((r, i) => (
-                <li key={i} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] ink-2 ">
+                <li key={i} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] ink-2">
                   <span className="rounded-md bg-black/[0.05] px-1.5 py-0.5 text-[11px] font-medium dark:bg-white/[0.08]">{r.batch}</span>
                   <span>{r.event}</span>
-                  <span className="font-medium ink-1 ">{r.value_text}</span>
+                  <span className="font-medium ink-1">{r.value_text}</span>
                   {r.evidence_url && (
                     <a href={r.evidence_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[11px] text-[#2f6299] hover:underline dark:text-[#7fb2e8]">
                       来源 <ArrowSquareOut size={10} weight="bold" />
@@ -786,7 +773,7 @@ function RecruitmentTimeline({ cycles }: { cycles: RecruitmentObservation[] }) {
           </div>
         ))}
       </div>
-      <p className="mt-2 text-[11px] leading-5 ink-3 ">
+      <p className="mt-2 text-[11px] leading-5 ink-3">
         据往年规律整理（非今年确切日期），今年批次时间以官网当年公告为准。
       </p>
     </section>

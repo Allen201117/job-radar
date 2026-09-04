@@ -233,7 +233,7 @@ export default function PreferenceForm() {
           />
         </div>
         {!coverageAvailable && (
-          <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-xs text-[#9c4a3c] dark:border-[#7a392e]/[0.6] dark:bg-[#3a201a] dark:text-[#e6a99f]">
+          <p className="mt-3 rounded-lg border border-tone-rose-border bg-tone-rose-bg px-3 py-2 text-xs text-tone-rose-fg">
             关注公司状态暂时无法获取，请稍后刷新。
           </p>
         )}
@@ -320,7 +320,7 @@ export default function PreferenceForm() {
                     }
                   >
                     {opt.label}
-                    <span className={`mt-0.5 block text-[11px] font-normal ${selected ? "opacity-80" : "ink-3"}`}>
+                    <span className={`mt-0.5 block text-[11px] font-normal ${selected ?"opacity-80":"ink-3"}`}>
                       {opt.hint}
                     </span>
                   </button>
@@ -345,7 +345,7 @@ export default function PreferenceForm() {
       </details>
 
       {message && (
-        <p className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm ${message.includes("失败") ? "border-[#e0b4ac] dark:border-[#7a392e]/[0.60] bg-[#f7e6e1] dark:bg-[#3a201a] text-[#9c4a3c] dark:text-[#e6a99f]" : "border-[#bcd2ed] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]"}`}>
+        <p className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm ${message.includes("失败") ?"border-tone-rose-border bg-tone-rose-bg text-tone-rose-fg":"border-[#bcd2ed] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]"}`}>
           {!message.includes("失败") && <CheckCircle size={16} weight="fill" aria-hidden="true" />}
           {message}
         </p>

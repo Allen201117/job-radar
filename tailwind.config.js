@@ -38,6 +38,52 @@ module.exports = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        // 语义色调（tone）：值住在 app/globals.css 的 CSS 变量里，明暗自动切换。
+        // 组件只写 text-tone-<族>-fg / bg-tone-<族>-bg / border-tone-<族>-border，不写 hex。
+        overlay: "var(--overlay-backdrop)",
+        action: {
+          ink: "var(--action-ink-bg)",
+          "ink-fg": "var(--action-ink-fg)",
+        },
+        tone: {
+          sky: {
+            fg: "var(--tone-sky-fg)",
+            bg: "var(--tone-sky-bg)",
+            border: "var(--tone-sky-border)",
+          },
+          green: {
+            fg: "var(--tone-green-fg)",
+            bg: "var(--tone-green-bg)",
+            border: "var(--tone-green-border)",
+          },
+          amber: {
+            fg: "var(--tone-amber-fg)",
+            bg: "var(--tone-amber-bg)",
+            border: "var(--tone-amber-border)",
+          },
+          teal: {
+            fg: "var(--tone-teal-fg)",
+            bg: "var(--tone-teal-bg)",
+            border: "var(--tone-teal-border)",
+          },
+          rose: {
+            fg: "var(--tone-rose-fg)",
+            bg: "var(--tone-rose-bg)",
+            border: "var(--tone-rose-border)",
+            "bg-soft": "var(--tone-rose-bg-soft)",
+            "border-soft": "var(--tone-rose-border-soft)",
+          },
+          lilac: {
+            fg: "var(--tone-lilac-fg)",
+            bg: "var(--tone-lilac-bg)",
+            border: "var(--tone-lilac-border)",
+          },
+          neutral: {
+            fg: "var(--tone-neutral-fg)",
+            bg: "var(--tone-neutral-bg)",
+            border: "var(--tone-neutral-border)",
+          },
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

@@ -18,7 +18,7 @@ const STATUS_LABEL: Record<string, { label: string; tone: string }> = {
   queued: { label: "待接入", tone: "bg-[#dbe9fa] text-[#2f6299] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]" },
   researching: { label: "确认入口中", tone: "bg-[#fbe6d1] text-[#9a6326] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]" },
   covered: { label: "已覆盖", tone: "bg-[#e6f2d3] text-[#5a7a2f] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]" },
-  unsupported: { label: "暂不支持", tone: "bg-[#ece7dd] ink-2 dark:bg-white/[0.08] " },
+  unsupported: { label: "暂不支持", tone: "bg-[#ece7dd] ink-2 dark:bg-white/[0.08]" },
 };
 
 function fmtDate(s: string): string {
@@ -78,28 +78,28 @@ export default function CompanyWatchQueue() {
   }
 
   return (
-    <div className="surface p-5 ink-1 ">
+    <div className="surface p-5 ink-1">
       <div className="flex items-center gap-2">
-        <Buildings size={18} weight="fill" className="ink-2 " aria-hidden="true" />
+        <Buildings size={18} weight="fill" className="ink-2" aria-hidden="true" />
         <h2 className="text-base font-semibold">用户希望监控的公司</h2>
       </div>
-      <p className="mt-1 text-sm ink-3 ">
+      <p className="mt-1 text-sm ink-3">
         用户在「个人主页」里加的公司。已覆盖的会自动标记；其余按请求人数排队，确认官方入口后用上方「添加源」接入，再标「已覆盖」。
       </p>
 
       {error && (
-        <p className="mt-3 rounded-xl border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c] dark:border-[#7a392e]/[0.6] dark:bg-[#3a201a] dark:text-[#e6a99f]">
+        <p className="mt-3 rounded-xl border border-tone-rose-border bg-tone-rose-bg px-3 py-2 text-sm text-tone-rose-fg">
           {error}
         </p>
       )}
 
       {loading ? (
-        <div className="mt-4 flex items-center gap-2 text-sm ink-3 ">
+        <div className="mt-4 flex items-center gap-2 text-sm ink-3">
           <CircleNotch size={16} weight="bold" className="animate-spin" aria-hidden="true" />
           加载中…
         </div>
       ) : items.length === 0 ? (
-        <p className="mt-4 text-sm ink-3 ">暂无用户关注请求。</p>
+        <p className="mt-4 text-sm ink-3">暂无用户关注请求。</p>
       ) : (
         <ul className="mt-4 space-y-2.5">
           {items.map((item) => {
@@ -116,13 +116,13 @@ export default function CompanyWatchQueue() {
                     {item.company}
                   </span>
                   <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${meta.tone}`}>{meta.label}</span>
-                  <span className="text-xs ink-3 ">{item.request_count} 人关注</span>
-                  <span className="ml-auto text-xs ink-3 ">
+                  <span className="text-xs ink-3">{item.request_count} 人关注</span>
+                  <span className="ml-auto text-xs ink-3">
                     首次 {fmtDate(item.first_requested)} · 最近 {fmtDate(item.last_requested)}
                   </span>
                 </div>
                 {item.resolution_note && (
-                  <p className="mt-1.5 text-xs leading-5 ink-3 ">说明：{item.resolution_note}</p>
+                  <p className="mt-1.5 text-xs leading-5 ink-3">说明：{item.resolution_note}</p>
                 )}
                 <div className="mt-2.5 flex flex-wrap gap-1.5">
                   <QueueBtn disabled={isBusy} onClick={() => setStatus(item, "researching")}>标记确认入口中</QueueBtn>

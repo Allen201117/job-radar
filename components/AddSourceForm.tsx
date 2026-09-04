@@ -8,6 +8,7 @@ import {
   type AdapterOption,
 } from "@/lib/source-adapters";
 import type { Source } from "@/lib/types";
+import { LEGACY_INPUT_CLASS as inputCls } from "@/components/ui/deprecated/legacy-input-class";
 
 // 抓取方式的取值是给程序用的（http / playwright / manual），下拉里要给人话。
 // 只改显示、不改值——值是 lib/source-adapters.CRAWL_METHODS 的契约，与 crawler 端对齐。
@@ -98,7 +99,7 @@ export default function AddSourceForm({ onAdded }: Props) {
   return (
     <form
       onSubmit={submit}
-      className="surface p-5 ink-1 "
+      className="surface p-5 ink-1"
     >
       <div className="flex items-center justify-between">
         <h3 className="text-base font-semibold">添加招聘源</h3>
@@ -108,7 +109,7 @@ export default function AddSourceForm({ onAdded }: Props) {
             reset();
             setOpen(false);
           }}
-          className="rounded-full bg-black/[0.05] p-1.5 ink-2 transition hover:bg-black/[0.08] hover:opacity-80 dark:bg-white/[0.05] dark:hover:bg-white/[0.08] "
+          className="rounded-full bg-black/[0.05] p-1.5 ink-2 transition hover:bg-black/[0.08] hover:opacity-80 dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
         >
           <X size={16} weight="bold" />
         </button>
@@ -163,7 +164,7 @@ export default function AddSourceForm({ onAdded }: Props) {
         </Field>
 
         <Field label="启用">
-          <label className="inline-flex items-center gap-2 text-sm ink-2 ">
+          <label className="inline-flex items-center gap-2 text-sm ink-2">
             <input
               type="checkbox"
               checked={form.enabled}
@@ -191,7 +192,7 @@ export default function AddSourceForm({ onAdded }: Props) {
       )}
 
       {error && (
-        <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-sm text-[#9c4a3c] dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]">{error}</p>
+        <p className="mt-3 rounded-lg border border-tone-rose-border bg-tone-rose-bg px-3 py-2 text-sm text-tone-rose-fg">{error}</p>
       )}
 
       <div className="mt-4 flex gap-2">
@@ -208,7 +209,7 @@ export default function AddSourceForm({ onAdded }: Props) {
             reset();
             setOpen(false);
           }}
-          className="rounded-full px-4 py-2 text-sm font-medium ink-3 transition hover:bg-black/[0.05] hover:opacity-80 dark:hover:bg-white/[0.05] "
+          className="rounded-full px-4 py-2 text-sm font-medium ink-3 transition hover:bg-black/[0.05] hover:opacity-80 dark:hover:bg-white/[0.05]"
         >
           取消
         </button>
@@ -217,8 +218,6 @@ export default function AddSourceForm({ onAdded }: Props) {
   );
 }
 
-const inputCls =
-  "w-full rounded-lg border border-black/[0.09] bg-white/70 px-3 py-2 text-sm ink-1 outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:placeholder:text-[#8b8478] dark:focus:border-white/40 dark:focus:bg-[#1e1a15]";
 
 function Field({
   label,
@@ -233,9 +232,9 @@ function Field({
 }) {
   return (
     <div className={className}>
-      <label className="mb-1.5 block text-xs font-medium ink-3 ">{label}</label>
+      <label className="mb-1.5 block text-xs font-medium ink-3">{label}</label>
       {children}
-      {error && <p className="mt-1 text-xs text-[#9c4a3c] dark:text-[#e6a99f]">{error}</p>}
+      {error && <p className="mt-1 text-xs text-tone-rose-fg">{error}</p>}
     </div>
   );
 }

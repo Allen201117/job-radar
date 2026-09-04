@@ -141,7 +141,7 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
                   </button>
                 ))}
                 {failedId === item.jobId && (
-                  <span className="text-xs text-[#9c4a3c] dark:text-[#e6a99f]">保存失败，已还原，请重试</span>
+                  <span className="text-xs text-tone-rose-fg">保存失败，已还原，请重试</span>
                 )}
               </div>
             </div>

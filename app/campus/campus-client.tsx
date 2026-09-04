@@ -74,7 +74,7 @@ const WINDOW_BADGE: Record<
     icon: "🟢",
     label: "招聘中",
     className:
-      "border border-[#bcdcae] dark:border-[#a3d06a]/[0.30] bg-[#e6f2d6] dark:bg-[#a3d06a]/[0.15] text-[#4f6f2a] dark:text-[#a3d06a]",
+      "border border-tone-green-border bg-tone-green-bg text-tone-green-fg",
   },
   no_campus_now: {
     icon: "⚪",
@@ -86,13 +86,13 @@ const WINDOW_BADGE: Record<
     icon: "⏳",
     label: "数据待更新",
     className:
-      "border border-[#e7c98a] dark:border-[#e0b15a]/[0.30] bg-[#fbeecb] dark:bg-[#e0b15a]/[0.15] text-[#8a6312] dark:text-[#e0b15a]",
+      "border border-tone-amber-border bg-tone-amber-bg text-tone-amber-fg",
   },
   not_ingested: {
     icon: "⚙️",
     label: "待接入",
     className:
-      "border border-[#b7d2ee] dark:border-[#7fb2e8]/[0.30] bg-[#dceafa] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]",
+      "border border-tone-sky-border bg-tone-sky-bg text-[#2f6299] dark:text-[#7fb2e8]",
   },
 };
 
@@ -448,7 +448,7 @@ export default function CampusClient({
           />
           {hasActiveFilter && (
             <div className="flex items-center gap-2 pb-0.5">
-              <span className="text-xs font-medium text-[#8a6312] dark:text-[#e0b15a]">已筛选 {activeFilterCount} 项</span>
+              <span className="text-xs font-medium text-tone-amber-fg">已筛选 {activeFilterCount} 项</span>
               <button
                 type="button"
                 onClick={() => setFilters(EMPTY_FILTERS)}
@@ -465,7 +465,7 @@ export default function CampusClient({
             有一大半来自这里）；但放行之后必须说清楚，别让用户以为每条都确定符合。 */}
         {unlabeledInMatch > 0 && unlabeledDims.length > 0 && (
           <p className="t-caption ink-3">
-            结果含 {unlabeledInMatch} 个未标注{unlabeledDims.join(" / ")}的岗位 —— 招聘方没写明，已按「可能符合」保留，投递前请看岗位详情确认。
+            结果含 {unlabeledInMatch} 个未标注{unlabeledDims.join("/")}的岗位 —— 招聘方没写明，已按「可能符合」保留，投递前请看岗位详情确认。
           </p>
         )}
       </div>
@@ -518,7 +518,7 @@ export default function CampusClient({
                     <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 ink-3">
                       {/* ⚠️ 措辞由数据的 basis 决定，不写死。写死「据往年」时，卡面渲染出的是
                           「据往年 2027届 · 正式批8-10月」——往年不可能有 2027 届，14 家全中（用户实锤）。 */}
-                      <span className="inline-flex items-center gap-1 rounded-md border border-[#b7d2ee] bg-[#dceafa] px-1.5 py-0.5 font-medium text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]">
+                      <span className="inline-flex items-center gap-1 rounded-md border border-tone-sky-border bg-tone-sky-bg px-1.5 py-0.5 font-medium text-[#2f6299] dark:text-[#7fb2e8]">
                         {TIMELINE_BASIS_LABEL[card.timeline.basis]}
                       </span>
                       <span>{card.timeline.gradClass}</span>
@@ -526,7 +526,7 @@ export default function CampusClient({
                         <span key={bit}>· {bit}</span>
                       ))}
                       {card.timeline.phaseLabel && (
-                        <span className="font-medium text-[#8a6312] dark:text-[#e0b15a]">
+                        <span className="font-medium text-tone-amber-fg">
                           · {card.timeline.phaseLabel}
                         </span>
                       )}
@@ -534,30 +534,30 @@ export default function CampusClient({
                   )}
                   {/* P3：今年精确日期（官方公告，绿系强档）。措辞三档：据官方公告 > 据在招岗位 > 据往年。 */}
                   {card.preciseDates.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 text-[#4f6f2a] dark:text-[#a3d06a]">
-                      <span className="inline-flex items-center gap-1 rounded-md border border-[#bcdcae] bg-[#e6f2d6] px-1.5 py-0.5 font-medium text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]">
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 text-tone-green-fg">
+                      <span className="inline-flex items-center gap-1 rounded-md border border-tone-green-border bg-tone-green-bg px-1.5 py-0.5 font-medium text-tone-green-fg">
                         今年·据官方公告
                       </span>
                       {card.preciseDates.map((p) => (
                         <span key={p.batch}>· {p.label}</span>
                       ))}
                       {card.batchTimingGap && (
-                        <span className="text-[#8a6312] dark:text-[#e0b15a]">· {card.batchTimingGap}</span>
+                        <span className="text-tone-amber-fg">· {card.batchTimingGap}</span>
                       )}
                     </div>
                   )}
                   {/* 快路①：无官方精确日期时，用清洗后的自有岗位 deadline 做弱档提示（灰系）。 */}
                   {card.preciseDates.length === 0 && card.cleanDeadlineMs && (
                     <p className="text-[12px] leading-5 ink-3">
-                      据在招岗位约{" "}
-                      {formatDateLabel(card.cleanDeadlineMs, { month: "long", day: "numeric" })}{" "}
+                      据在招岗位约{""}
+                      {formatDateLabel(card.cleanDeadlineMs, { month: "long", day: "numeric" })}{""}
                       前截止
                     </p>
                   )}
                   <p className="text-sm ink-2">
                     {totalCount > 0
                       ? `${totalCount} 个${modeLabel}在招岗位${
-                          hasActiveFilter && isExpanded ? ` · 筛选后 ${filteredCount} 个` : ""
+                          hasActiveFilter && isExpanded ? `· 筛选后 ${filteredCount} 个` : ""
                         }`
                       : `暂无${modeLabel}在招岗位`}
                   </p>

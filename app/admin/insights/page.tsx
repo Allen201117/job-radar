@@ -51,19 +51,19 @@ export default async function InsightsAdminPage() {
 
         <section className="surface mb-6 p-5 ink-1 sm:p-6">
           <h2 className="text-base font-semibold">最近 7 天，用户都在做什么</h2>
-          <p className="mt-1 text-xs ink-3 ">
+          <p className="mt-1 text-xs ink-3">
             按动作统计最近 7 天的次数，用来判断哪些功能真的有人用、哪些没人碰。更完整的用户行为分析在「运营看板 → 用户行为」。
           </p>
           {stats.error ? (
-            <p className="mt-4 rounded-xl border border-[#e0b4ac] bg-[#f7e6e1] px-3.5 py-2.5 text-sm text-[#9c4a3c] dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]">
+            <p className="mt-4 rounded-xl border border-tone-rose-border bg-tone-rose-bg px-3.5 py-2.5 text-sm text-tone-rose-fg">
               统计暂不可用：{stats.error}
             </p>
           ) : stats.rows.length === 0 ? (
-            <p className="mt-4 text-sm ink-3 ">最近 7 天没有任何用户操作记录。</p>
+            <p className="mt-4 text-sm ink-3">最近 7 天没有任何用户操作记录。</p>
           ) : (
             <table className="mt-4 w-full max-w-md text-sm">
               <thead>
-                <tr className="border-b border-black/[0.08] text-left text-xs ink-3 dark:border-white/[0.1] ">
+                <tr className="border-b border-black/[0.08] text-left text-xs ink-3 dark:border-white/[0.1]">
                   <th className="py-2 font-medium">用户做了什么</th>
                   <th className="py-2 text-right font-medium">近 7 天次数</th>
                 </tr>
@@ -71,7 +71,7 @@ export default async function InsightsAdminPage() {
               <tbody>
                 {stats.rows.map((r) => (
                   <tr key={r.event} className="border-b border-black/[0.05] dark:border-white/[0.1]">
-                    <td className="py-2 ink-2 ">{eventLabel(r.event)}</td>
+                    <td className="py-2 ink-2">{eventLabel(r.event)}</td>
                     <td className="py-2 text-right font-semibold tabular-nums">{r.count}</td>
                   </tr>
                 ))}

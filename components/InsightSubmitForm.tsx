@@ -9,14 +9,13 @@ import {
   type FirstPartyTopic,
 } from "@/lib/insight-submission";
 import { cn } from "@/lib/utils";
+import { LEGACY_INPUT_CLASS as inputCls } from "@/components/ui/deprecated/legacy-input-class";
 
 interface Props {
   company: string;
   onSubmitted?: () => void;
 }
 
-const inputCls =
-  "w-full rounded-lg border border-black/[0.09] bg-white/70 px-3 py-2 text-sm ink-1 outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:placeholder:text-[#8b8478] dark:focus:border-white/40 dark:focus:bg-[#1e1a15]";
 
 const TOPIC_OPTIONS = Object.entries(FIRST_PARTY_TOPICS).map(([value, label]) => ({
   value: value as FirstPartyTopic,
@@ -99,7 +98,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
 
   if (sent) {
     return (
-      <div className="rounded-xl border border-[#bcdcae] bg-[#e6f2d6] p-4 text-sm leading-6 text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]">
+      <div className="rounded-xl border border-tone-green-border bg-tone-green-bg p-4 text-sm leading-6 text-tone-green-fg">
         <span className="inline-flex items-center gap-2 font-semibold">
           <CheckCircle size={17} weight="fill" />
           已提交，审核后匿名展示
@@ -115,7 +114,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
     >
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="space-y-1.5">
-          <span className="text-xs font-medium ink-3 ">主题</span>
+          <span className="text-xs font-medium ink-3">主题</span>
           <select
             value={topic}
             onChange={(e) => setTopic(e.target.value as FirstPartyTopic)}
@@ -130,7 +129,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
         </label>
 
         <div className="space-y-1.5">
-          <span className="text-xs font-medium ink-3 ">评分</span>
+          <span className="text-xs font-medium ink-3">评分</span>
           <div className="grid grid-cols-5 gap-1.5">
             {[1, 2, 3, 4, 5].map((value) => (
               <button
@@ -152,7 +151,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
 
         {topic === "bonus" && (
           <label className="space-y-1.5">
-            <span className="text-xs font-medium ink-3 ">年终奖月数</span>
+            <span className="text-xs font-medium ink-3">年终奖月数</span>
             <input
               type="number"
               min="0"
@@ -167,7 +166,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
         {topic === "interview" && (
           <>
             <label className="space-y-1.5">
-              <span className="text-xs font-medium ink-3 ">面试轮数</span>
+              <span className="text-xs font-medium ink-3">面试轮数</span>
               <input
                 type="number"
                 min="1"
@@ -177,7 +176,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
               />
             </label>
             <label className="space-y-1.5">
-              <span className="text-xs font-medium ink-3 ">结果</span>
+              <span className="text-xs font-medium ink-3">结果</span>
               <select
                 value={interviewResult}
                 onChange={(e) => setInterviewResult(e.target.value)}
@@ -193,7 +192,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
         )}
 
         <label className="space-y-1.5 sm:col-span-2">
-          <span className="flex items-center justify-between gap-3 text-xs font-medium ink-3 ">
+          <span className="flex items-center justify-between gap-3 text-xs font-medium ink-3">
             <span>内容</span>
             <span>{content.length}/{FIRST_PARTY_CONTENT_MAX}</span>
           </span>
@@ -207,7 +206,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
         </label>
       </div>
 
-      <label className="mt-3 flex items-start gap-2 text-xs leading-5 ink-2 ">
+      <label className="mt-3 flex items-start gap-2 text-xs leading-5 ink-2">
         <input
           type="checkbox"
           checked={consent}
@@ -218,7 +217,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
       </label>
 
       {error && (
-        <p className="mt-3 rounded-lg border border-[#e0b4ac] bg-[#f7e6e1] px-3 py-2 text-xs text-[#9c4a3c] dark:border-[#7a392e]/[0.60] dark:bg-[#3a201a] dark:text-[#e6a99f]">
+        <p className="mt-3 rounded-lg border border-tone-rose-border bg-tone-rose-bg px-3 py-2 text-xs text-tone-rose-fg">
           {error}
         </p>
       )}

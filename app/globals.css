@@ -126,6 +126,59 @@
     --ink-2: #4f483e; /* 次文本：正文、说明段落 */
     --ink-3: #6b6355; /* 三级：字段标签、元信息（仍过 AA） */
     --ink-4: #9a9184; /* 四级：占位符、禁用态、纯装饰（不承载信息） */
+
+    /* ═══ 语义色调六族（tone）═══
+       这不是新配色，是把全站已经在用的颜色**原样**收进单一定义点：改造前这六组值被逐字
+       手写了 469 次（蓝130 / 绿93 / 琥珀88 / 玫68 / 青64 / 紫26），每个亮色值的 dark: 用量
+       都是 0、每个暗色值几乎全带 dark: —— 说明它们本来就是「一族两态」，只是没人给它起名字。
+       值全部逐字节照搬自现网代码，**不是重新调色**，所以收编前后像素完全一致。
+
+       亮色 = 三个独立值（深文字 / 浅底 / 中间调描边）。
+       暗色 = 同一个强调色的三档不透明度（文字 100% / 底 15% / 描边 30%）——
+       这是全站已有的约定写法 `dark:text-[#X] dark:bg-[#X]/[0.15] dark:border-[#X]/[0.30]`。
+       例外只有 rose：报错条在暗色下需要实底才压得住，故用实色 #3a201a + 描边 60%，照旧。
+
+       语义分工（沿用现网用法，别改）：
+         sky 社招 / 岗位聚合 / timing   green 校招 / fact / 新鲜   amber 实习 / experience / 转陈
+         teal hiring / 招聘动态          rose  报错 / 失败 / 风险    lilac 职业洞察 / path
+       neutral 是无语义的默认灰（chip 的底色口径），供「有个标签但不表态」的场合用。 */
+    --tone-sky-fg: #3f7cc0;
+    --tone-sky-bg: #dceafa;
+    --tone-sky-border: #b7d2ee;
+    --tone-green-fg: #4f6f2a;
+    --tone-green-bg: #e6f2d6;
+    --tone-green-border: #bcdcae;
+    --tone-amber-fg: #8a6312;
+    --tone-amber-bg: #fbeecb;
+    --tone-amber-border: #e7c98a;
+    --tone-teal-fg: #2f8a63;
+    --tone-teal-bg: #dcf2e8;
+    --tone-teal-border: #a9d8c4;
+    --tone-rose-fg: #9c4a3c;
+    --tone-rose-bg: #f7e6e1;
+    --tone-rose-border: #e0b4ac;
+    --tone-lilac-fg: #6a4fa0;
+    --tone-lilac-bg: #efe9f8;
+    --tone-lilac-border: #cfc0e6;
+    --tone-neutral-fg: #5f594e;
+    --tone-neutral-bg: #f4efe6;
+    --tone-neutral-border: rgba(0, 0, 0, 0.06);
+
+    /* 弹层遮罩。取值照搬现网筛选弹窗的 bg-[#1a1714]/45 —— 此前用过 bg-black/30，
+       在暖纸浅底上几乎看不出来，背景看着还是亮的、像还能点，用户点上去才发现点到的是遮罩。
+       现网这三处没有 dark: 变体（明暗同值），这里保持一致，不趁机改深浅。 */
+    --overlay-backdrop: rgba(26, 23, 20, 0.45);
+
+    /* 主操作墨色对（.btn-ink 的那一对）。收成令牌是因为它不只按钮在用——空状态图标底、
+       toast、导航当前项都用同一对，此前各处手写 bg-[#1a1714] text-[#f7f1e6] + 一整套 dark:。
+       值逐字节照搬 .btn-ink / .dark .btn-ink，不是新配色。 */
+    --action-ink-bg: #1a1714;
+    --action-ink-fg: #f7f1e6;
+
+    /* rose 的更浅一档：空状态的「出错」底比报错条更淡（整块面积大，用报错条那么浓会压不住）。
+       值照搬原 EmptyPanel 的 #fff7f4 / #e7b7ac。 */
+    --tone-rose-bg-soft: #fff7f4;
+    --tone-rose-border-soft: #e7b7ac;
   }
 
   .dark {
@@ -133,6 +186,35 @@
     --ink-2: #c9c0b0;
     --ink-3: #a79e90;
     --ink-4: #7a7368;
+
+    /* 暗色：同一强调色三档不透明度（照搬现网 dark:text-[#X] / dark:bg-[#X]/[0.15] / dark:border-[#X]/[0.30]）*/
+    --tone-sky-fg: #7fb2e8;
+    --tone-sky-bg: rgba(127, 178, 232, 0.15);
+    --tone-sky-border: rgba(127, 178, 232, 0.3);
+    --tone-green-fg: #a3d06a;
+    --tone-green-bg: rgba(163, 208, 106, 0.15);
+    --tone-green-border: rgba(163, 208, 106, 0.3);
+    --tone-amber-fg: #e0b15a;
+    --tone-amber-bg: rgba(224, 177, 90, 0.15);
+    --tone-amber-border: rgba(224, 177, 90, 0.3);
+    --tone-teal-fg: #6cc99e;
+    --tone-teal-bg: rgba(108, 201, 158, 0.15);
+    --tone-teal-border: rgba(108, 201, 158, 0.3);
+    /* rose 例外：报错条在暗色下要实底才压得住，沿用现网 dark:bg-[#3a201a] + dark:border-[#7a392e]/60 */
+    --tone-rose-fg: #e6a99f;
+    --tone-rose-bg: #3a201a;
+    --tone-rose-border: rgba(122, 57, 46, 0.6);
+    --tone-lilac-fg: #c3b1e6;
+    --tone-lilac-bg: rgba(195, 177, 230, 0.15);
+    --tone-lilac-border: rgba(195, 177, 230, 0.3);
+    --tone-neutral-fg: #b6ad9d;
+    --tone-neutral-bg: rgba(255, 255, 255, 0.06);
+    --tone-neutral-border: rgba(255, 255, 255, 0.1);
+    --overlay-backdrop: rgba(26, 23, 20, 0.45);
+    --action-ink-bg: #f3ecdf;
+    --action-ink-fg: #16130f;
+    --tone-rose-bg-soft: rgba(58, 32, 26, 0.16);
+    --tone-rose-border-soft: rgba(230, 169, 159, 0.25);
   }
 }
 

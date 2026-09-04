@@ -18,6 +18,8 @@ import { matchTier } from "@/lib/scoring";
 import type { MatchReason, ScoredJob } from "@/lib/types";
 import { cleanSummary, cn, freshnessLabel } from "@/lib/utils";
 import CompanyLogo from "@/components/CompanyLogo";
+import { useBodyScrollLock, useEscapeKey } from "@/lib/ui/hooks";
+import { INSIGHT_CHIP_TONE_CLASS as CHIP_TONE } from "@/lib/insight-chip-format";
 
 type Props = {
   open: boolean;
@@ -39,17 +41,12 @@ const MATCH_REASON_LABELS = {
   company: "命中目标公司",
 } satisfies Record<Exclude<MatchReason["type"], "freshness">, string>;
 
-const CHIP_TONE: Record<InsightChipTone, string> = {
-  positive: "border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]",
-  warning: "border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]",
-  neutral: "border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08] ",
-};
 
 const LABEL_CELL =
-  "sticky left-0 z-10 w-28 min-w-28 border-b border-r border-black/[0.06] bg-[#f4efe6] px-3 py-4 align-top text-xs font-semibold ink-2 dark:border-white/[0.1] dark:bg-[#16130f] ";
+  "sticky left-0 z-10 w-28 min-w-28 border-b border-r border-black/[0.06] bg-[#f4efe6] px-3 py-4 align-top text-xs font-semibold ink-2 dark:border-white/[0.1] dark:bg-[#16130f]";
 const DATA_CELL =
-  "min-w-[220px] border-b border-r border-black/[0.06] bg-white/45 px-4 py-4 align-top text-sm ink-1 dark:border-white/[0.1] dark:bg-white/[0.04] ";
-const MUTED = "ink-3 ";
+  "min-w-[220px] border-b border-r border-black/[0.06] bg-white/45 px-4 py-4 align-top text-sm ink-1 dark:border-white/[0.1] dark:bg-white/[0.04]";
+const MUTED = "ink-3";
 
 function companyKey(company: string): string {
   return company.trim().toLowerCase();
@@ -62,17 +59,17 @@ function matchReasonText(reason: MatchReason): string {
 
 function recruitTypeStyle(t: string): string {
   if (t === "实习")
-    return "border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]";
+    return "border-tone-amber-border bg-tone-amber-bg text-tone-amber-fg";
   if (t === "校招")
-    return "border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]";
-  return "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]";
+    return "border-tone-green-border bg-tone-green-bg text-tone-green-fg";
+  return "border-tone-sky-border bg-tone-sky-bg text-[#2f6299] dark:text-[#7fb2e8]";
 }
 
 function tierStyle(level: "high" | "related"): string {
   if (level === "high") {
-    return "border-[#a9d8c4] bg-[#dcf2e8] text-[#2f8a63] dark:border-[#6cc99e]/[0.30] dark:bg-[#6cc99e]/[0.15] dark:text-[#6cc99e]";
+    return "border-tone-teal-border bg-tone-teal-bg text-tone-teal-fg";
   }
-  return "border-[#b7d2ee] bg-[#dceafa] text-[#2f6299] dark:border-[#7fb2e8]/[0.30] dark:bg-[#7fb2e8]/[0.15] dark:text-[#7fb2e8]";
+  return "border-tone-sky-border bg-tone-sky-bg text-[#2f6299] dark:text-[#7fb2e8]";
 }
 
 function textOrMuted(value: string | null | undefined, fallback = "未知"): ReactNode {
@@ -146,19 +143,8 @@ export default function SavedCompare({
     return map;
   }, [jobs]);
 
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.body.style.overflow;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.body.style.overflow = prev;
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open, onClose]);
+  useBodyScrollLock(open);
+  useEscapeKey(onClose, open);
 
   useEffect(() => {
     if (!open) return;
@@ -217,7 +203,7 @@ export default function SavedCompare({
           </span>
         )}
         {reasons.length > 0 && (
-          <ul className="space-y-1 text-xs leading-5 ink-2 ">
+          <ul className="space-y-1 text-xs leading-5 ink-2">
             {reasons.map((reason, idx) => (
               <li key={`${reason.type}-${reason.value}-${idx}`}>{matchReasonText(reason)}</li>
             ))}
@@ -231,7 +217,7 @@ export default function SavedCompare({
     const state = insights[companyKey(job.company)];
     if (!state || state.loading) {
       return (
-        <span className="inline-flex items-center gap-2 text-xs ink-3 ">
+        <span className="inline-flex items-center gap-2 text-xs ink-3">
           <CircleNotch size={14} weight="bold" className="animate-spin" aria-hidden="true" />
           正在加载洞察
         </span>
@@ -247,7 +233,7 @@ export default function SavedCompare({
             {chip.text}
           </span>
         )}
-        {comp && <p className="text-xs leading-5 ink-2 ">{comp}</p>}
+        {comp && <p className="text-xs leading-5 ink-2">{comp}</p>}
       </div>
     );
   }
@@ -264,22 +250,22 @@ export default function SavedCompare({
         role="dialog"
         aria-modal="true"
         aria-label="岗位对比决策桌"
-        className="relative flex h-full w-full flex-col bg-[#f4efe6] ink-1 shadow-2xl dark:bg-[#16130f] "
+        className="relative flex h-full w-full flex-col bg-[#f4efe6] ink-1 shadow-2xl dark:bg-[#16130f]"
       >
         <header className="border-b border-black/[0.06] bg-gradient-to-b from-white/70 to-transparent px-4 pb-4 pt-5 sm:px-6 dark:border-white/[0.1] dark:from-white/[0.05]">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-sm ink-3 ">
+              <div className="flex items-center gap-2 text-sm ink-3">
                 <Scales size={17} weight="bold" aria-hidden="true" />
                 对比决策桌
               </div>
               <h2 className="mt-1 text-2xl font-semibold leading-tight">并排看关键决策信息</h2>
-              <p className="mt-1 text-xs ink-3 ">已选 {jobs.length}/4，关闭后选择状态会保留。</p>
+              <p className="mt-1 text-xs ink-3">已选 {jobs.length}/4，关闭后选择状态会保留。</p>
             </div>
             <button
               type="button"
               onClick={onClose}
-              className="shrink-0 rounded-full bg-black/[0.05] p-2 ink-2 transition hover:bg-black/[0.08] hover:opacity-80 dark:bg-white/[0.05] dark:hover:bg-white/[0.08] "
+              className="shrink-0 rounded-full bg-black/[0.05] p-2 ink-2 transition hover:bg-black/[0.08] hover:opacity-80 dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
               aria-label="关闭对比层"
             >
               <X size={18} weight="bold" aria-hidden="true" />
@@ -289,7 +275,7 @@ export default function SavedCompare({
 
         <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
           {jobs.length === 0 ? (
-            <div className="rounded-[1.25rem] border border-dashed border-black/[0.12] bg-white/45 px-6 py-12 text-center text-sm ink-2 dark:border-white/[0.1] dark:bg-white/[0.05] ">
+            <div className="rounded-[1.25rem] border border-dashed border-black/[0.12] bg-white/45 px-6 py-12 text-center text-sm ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
               还没有选择岗位。
             </div>
           ) : (
@@ -301,7 +287,7 @@ export default function SavedCompare({
                       <p className="text-[15px] font-semibold leading-5">{job.title}</p>
                       <div className="flex items-center gap-1.5">
                         <CompanyLogo company={job.company} size={18} />
-                        <p className="truncate text-xs ink-3 ">{job.company}</p>
+                        <p className="truncate text-xs ink-3">{job.company}</p>
                       </div>
                     </div>
                   ))}
@@ -324,8 +310,8 @@ export default function SavedCompare({
                         className={cn(
                           "inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold",
                           freshness.stale
-                            ? "border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]"
-                            : "border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]",
+                            ? "border-tone-amber-border bg-tone-amber-bg text-tone-amber-fg"
+                            : "border-tone-green-border bg-tone-green-bg text-tone-green-fg",
                         )}
                       >
                         {freshness.label}

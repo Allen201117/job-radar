@@ -47,7 +47,7 @@ export default function ActionToast({
         className={cn(
           "action-toast-pop t-body-sm pointer-events-auto flex items-center gap-3 rounded-full border px-4 py-2.5 shadow-lg",
           toast.tone === "error"
-            ? "border-[#e0b4ac] bg-[#f7e6e1] text-[#9c4a3c] dark:border-[#7a392e]/[0.6] dark:bg-[#3a201a] dark:text-[#e6a99f]"
+            ? "border-tone-rose-border bg-tone-rose-bg text-tone-rose-fg"
             : "border-black/[0.1] bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]",
         )}
       >

@@ -357,7 +357,7 @@ function ErrorPanel({ label }: { label: string }) {
   return (
     <div
       role="alert"
-      className="rounded-2xl border border-[#e0b4ac] bg-[#f7e6e1] px-4 py-3 text-sm text-[#9c4a3c] dark:border-[#7a392e]/60 dark:bg-[#3a201a] dark:text-[#e6a99f]"
+      className="rounded-2xl border border-tone-rose-border bg-tone-rose-bg px-4 py-3 text-sm text-tone-rose-fg"
     >
       {label}暂不可用。其他数据区仍可正常查看，请稍后重试。
     </div>
@@ -444,8 +444,8 @@ function OperationCard({ report }: { report: DailyReport }) {
     <article className="surface-soft flex h-full flex-col p-4 sm:p-5">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="font-semibold ink-1 ">{report.title}</h3>
-          <p className="mt-1 text-pretty text-xs leading-5 ink-3 ">
+          <h3 className="font-semibold ink-1">{report.title}</h3>
+          <p className="mt-1 text-pretty text-xs leading-5 ink-3">
             {report.description}
           </p>
         </div>
@@ -469,7 +469,7 @@ function OperationCard({ report }: { report: DailyReport }) {
         />
       </div>
 
-      <div className={`mt-2 grid grid-cols-2 gap-2 ${report.metrics.length >= 3 ? "sm:grid-cols-3" : ""}`}>
+      <div className={`mt-2 grid grid-cols-2 gap-2 ${report.metrics.length >= 3 ?"sm:grid-cols-3":""}`}>
         {report.metrics.map((metric) => (
           <KpiCard
             key={metric.label}
@@ -482,7 +482,7 @@ function OperationCard({ report }: { report: DailyReport }) {
         ))}
       </div>
 
-      <p className="mt-auto flex items-center gap-1.5 pt-4 text-xs ink-3 ">
+      <p className="mt-auto flex items-center gap-1.5 pt-4 text-xs ink-3">
         <Clock size={14} aria-hidden="true" />
         上次运行：{formatRunTime(report.lastRunAt)}
       </p>
@@ -495,10 +495,10 @@ function AccumulatingMetric({ title, description, items = [] }: { title: string;
     <div className="rounded-2xl border border-dashed border-black/10 bg-white/35 p-4 dark:border-white/10 dark:bg-white/[0.03]">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-medium ink-2 ">{title}</p>
-          <p className="mt-2 text-pretty text-xs leading-5 ink-3 ">{description}</p>
+          <p className="text-sm font-medium ink-2">{title}</p>
+          <p className="mt-2 text-pretty text-xs leading-5 ink-3">{description}</p>
         </div>
-        <span className="shrink-0 rounded-full bg-[#ece7dd] px-2.5 py-1 text-[11px] font-semibold ink-2 dark:bg-white/[0.08] ">
+        <span className="shrink-0 rounded-full bg-[#ece7dd] px-2.5 py-1 text-[11px] font-semibold ink-2 dark:bg-white/[0.08]">
           积累中
         </span>
       </div>
@@ -551,7 +551,7 @@ function CoverageBarList({
 }) {
   if (items.length === 0) {
     return (
-      <p className="rounded-2xl border border-dashed border-black/10 bg-white/35 px-4 py-5 text-sm ink-3 dark:border-white/10 dark:bg-white/[0.03] ">
+      <p className="rounded-2xl border border-dashed border-black/10 bg-white/35 px-4 py-5 text-sm ink-3 dark:border-white/10 dark:bg-white/[0.03]">
         {emptyLabel}
       </p>
     );
@@ -603,7 +603,7 @@ function CoverageSection({
             <KpiCard title="没抓全的公司（不到 90%）" value={formatCount(snapshot.underCount)} tone={snapshot.underCount > 0 ? "warning" : "success"} detail="具体是哪几家列在下面" />
             <KpiCard title="算不出的公司" value={formatCount(snapshot.blind)} tone="muted" detail="官网不写总数，所以无从判断抓没抓全——不能当成「抓漏了」" />
           </div>
-          <p className="mt-3 text-xs leading-5 ink-3 ">
+          <p className="mt-3 text-xs leading-5 ink-3">
             盲区=官网接口不报总数，算不出，非抓漏。
           </p>
 
@@ -611,7 +611,7 @@ function CoverageSection({
             <CoverageBarList
               emptyLabel="暂无抓全率低于 90% 的公司。"
               items={snapshot.underSources.map((source) => ({
-                key: `${source.company}-${source.adapter}-${source.lastRunAt || "none"}`,
+                key: `${source.company}-${source.adapter}-${source.lastRunAt ||"none"}`,
                 label: source.company,
                 pct: source.coveragePct,
                 fetched: source.fetched,
@@ -647,8 +647,8 @@ function MustApplyFetchCoverageBlock({ coverage }: { coverage: MustApplyFetchCov
   return (
     <div className="mt-5 border-t border-black/[0.06] pt-5 dark:border-white/[0.08]">
       <div className="mb-3">
-        <h3 className="font-semibold ink-1 ">必投 30 家抓到几成</h3>
-        <p className="mt-1 text-xs leading-5 ink-3 ">
+        <h3 className="font-semibold ink-1">必投 30 家抓到几成</h3>
+        <p className="mt-1 text-xs leading-5 ink-3">
           官网总数 vs 我们抓到；抓全率低于 90% 的公司排在前面。
         </p>
       </div>
@@ -659,10 +659,10 @@ function MustApplyFetchCoverageBlock({ coverage }: { coverage: MustApplyFetchCov
         <>
           <div className="grid gap-4 lg:grid-cols-[8.5rem_1fr] lg:items-center">
             <StatRing pct={percentToRatio(coverage.avgPct)} tone={averageTone} size="section" target={0.9}>
-              <span className="text-lg font-semibold tabular-nums ink-1 ">
+              <span className="text-lg font-semibold tabular-nums ink-1">
                 {coverage.avgPct == null ? "积累中" : `${coverage.avgPct}%`}
               </span>
-              <span className="mt-0.5 text-[10px] ink-3 ">平均抓到几成</span>
+              <span className="mt-0.5 text-[10px] ink-3">平均抓到几成</span>
             </StatRing>
             <div className="grid gap-3 sm:grid-cols-3">
               <KpiCard title="抓全家数" value={`${coverage.fullyFetched}/${total}`} tone="muted" detail="≥90% 才算抓全" className="min-h-0" />
@@ -672,7 +672,7 @@ function MustApplyFetchCoverageBlock({ coverage }: { coverage: MustApplyFetchCov
           </div>
 
           {coverage.measurable === 0 ? (
-            <p className="mt-4 rounded-2xl border border-dashed border-black/10 bg-white/35 px-4 py-5 text-sm ink-3 dark:border-white/10 dark:bg-white/[0.03] ">
+            <p className="mt-4 rounded-2xl border border-dashed border-black/10 bg-white/35 px-4 py-5 text-sm ink-3 dark:border-white/10 dark:bg-white/[0.03]">
               必投清单还没有可计算官网总数的数据，等下一轮抓取填入后展示明细。
             </p>
           ) : (
@@ -744,7 +744,7 @@ function MustApplyIndustryBlock({
     const tone: BandTone = r.healthy === 0 ? "danger" : r.checked72h === 0 ? "warning" : "success";
     return {
       tone,
-      label: `${r.name}｜健康岗 ${r.healthy}·近7天新 ${r.new7d}·72h核验 ${r.checked72h}｜${sourceStatusLabel(r)}${r.coveredViaParentPortal ? "｜通过母公司的招聘页覆盖到" : ""}`,
+      label: `${r.name}｜健康岗 ${r.healthy}·近7天新 ${r.new7d}·72h核验 ${r.checked72h}｜${sourceStatusLabel(r)}${r.coveredViaParentPortal ?"｜通过母公司的招聘页覆盖到":""}`,
     };
   });
   return (
@@ -765,11 +765,11 @@ function MustApplyIndustryBlock({
       <div className="grid gap-5 lg:grid-cols-[11rem_1fr] lg:items-center">
         <div className="flex justify-center lg:justify-start">
           <StatRing pct={share(healthyCount, n)} tone={bandTone(healthBand)} size="section" target={28 / 30}>
-            <span className="inline-flex items-baseline gap-0.5 text-3xl font-semibold tabular-nums ink-1 ">
+            <span className="inline-flex items-baseline gap-0.5 text-3xl font-semibold tabular-nums ink-1">
               <AnimatedStat value={healthyCount} />
               <span className="text-sm">/30</span>
             </span>
-            <span className="mt-1 text-[11px] leading-4 ink-2 ">家有健康岗</span>
+            <span className="mt-1 text-[11px] leading-4 ink-2">家有健康岗</span>
           </StatRing>
         </div>
         <div className="min-w-0">
@@ -786,8 +786,8 @@ function MustApplyIndustryBlock({
       {(gaps.length > 0 || blind.length > 0) && (
         <div className="mt-4 space-y-2 text-sm leading-6">
           {gaps.length > 0 && (
-            <p className="rounded-2xl border border-[#e0b4ac] bg-[#f7e6e1] px-3.5 py-2.5 text-[#9c4a3c] dark:border-[#7a392e]/60 dark:bg-[#3a201a] dark:text-[#e6a99f]">
-              零健康岗：{gaps.map((r) => `${r.name}${r.hasSource ? (r.sourceEnabled ? "（有源不产出）" : "（源已禁用）") : "（从未接入）"}`).join("、")}
+            <p className="rounded-2xl border border-tone-rose-border bg-tone-rose-bg px-3.5 py-2.5 text-tone-rose-fg">
+              零健康岗：{gaps.map((r) => `${r.name}${r.hasSource ? (r.sourceEnabled ?"（有源不产出）":"（源已禁用）") :"（从未接入）"}`).join("、")}
             </p>
           )}
           {blind.length > 0 && (
@@ -937,7 +937,7 @@ function MustApplySection({
           {MUST_APPLY_SCOPES.map((s) => (
             <a
               key={s}
-              href={`/admin/health?tab=supply${s === "domestic" ? "" : "&scope=" + s}`}
+              href={`/admin/health?tab=supply${s ==="domestic"?"":"&scope="+ s}`}
               aria-current={scope === s ? "page" : undefined}
               className={cn(
                 "t-label rounded-full px-4 py-1.5 transition",
@@ -1012,14 +1012,14 @@ function ClickValiditySection({
     <section className="surface-soft p-5 sm:p-6">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold ink-1 ">岗位还在不在（系统自动查，不是用户点击统计）</h2>
-          <p className="mt-1 max-w-3xl text-sm leading-6 ink-2 ">
+          <h2 className="text-xl font-semibold ink-1">岗位还在不在（系统自动查，不是用户点击统计）</h2>
+          <p className="mt-1 max-w-3xl text-sm leading-6 ink-2">
             系统自动去打开看板上这些岗位的链接，看还打不打得开。目标是「能查的岗位里 ≥99% 还正常」；没有数据时显示“—”，不当作 0。
           </p>
         </div>
         <StatusBadge tone={status} />
       </div>
-      <p className="mb-4 text-sm ink-2 ">{summary}</p>
+      <p className="mb-4 text-sm ink-2">{summary}</p>
       {!clickValidity ? (
         <ErrorPanel label="点击有效率" />
       ) : (
@@ -1029,16 +1029,16 @@ function ClickValiditySection({
               <StatRing pct={clickValidity.probeValidityRate} tone={clickTone} size="section" target={0.99}>
                 {clickValidity.probeValidityRate == null ? (
                   <>
-                    <span className="text-lg font-semibold ink-3 ">—</span>
-                    <span className="mt-1 text-[11px] ink-3 ">目标 99%</span>
+                    <span className="text-lg font-semibold ink-3">—</span>
+                    <span className="mt-1 text-[11px] ink-3">目标 99%</span>
                   </>
                 ) : (
                   <>
-                    <span className="inline-flex items-baseline gap-0.5 text-3xl font-semibold tabular-nums ink-1 ">
+                    <span className="inline-flex items-baseline gap-0.5 text-3xl font-semibold tabular-nums ink-1">
                       <AnimatedStat value={Math.round(clickValidity.probeValidityRate * 100)} />
                       <span className="text-sm">%</span>
                     </span>
-                    <span className="mt-1 text-[11px] leading-4 ink-2 ">未发现失效</span>
+                    <span className="mt-1 text-[11px] leading-4 ink-2">未发现失效</span>
                   </>
                 )}
               </StatRing>
@@ -1071,7 +1071,7 @@ function ClickValiditySection({
             </div>
           </div>
 
-          <p className="mt-3 text-xs leading-5 ink-3 ">
+          <p className="mt-3 text-xs leading-5 ink-3">
             目标 99%。「能查的」和「查不了的」分开报，不把查不了的岗位混进成功率里充数。
           </p>
 
@@ -1089,7 +1089,7 @@ function ClickValiditySection({
                   value: formatRate(adapter.validityRate),
                   valueDetail: `正常 ${formatCount(adapter.alive)} · 关闭 ${formatCount(adapter.dead)} · 探不动 ${formatCount(adapter.unknown)}`,
                 }))} />
-                <p className="mt-3 text-xs ink-3 ">这里的名字是抓取方式的内部代号，写出来是为了排查问题时能直接定位。</p>
+                <p className="mt-3 text-xs ink-3">这里的名字是抓取方式的内部代号，写出来是为了排查问题时能直接定位。</p>
               </div>
             </details>
           )}
@@ -1135,10 +1135,10 @@ function JobsLibrarySection({
           <div className="grid gap-5 lg:grid-cols-[12rem_1fr] lg:items-center">
             <div className="flex justify-center lg:justify-start">
               <StatRing pct={share(jobs.validActive, jobs.activeTotal)} tone={bandTone(validActiveShareBand)} size="section">
-                <span className="inline-flex items-baseline gap-0.5 text-3xl font-semibold tabular-nums ink-1 ">
+                <span className="inline-flex items-baseline gap-0.5 text-3xl font-semibold tabular-nums ink-1">
                   <AnimatedStat value={jobs.validActive} />
                 </span>
-                <span className="mt-1 text-[11px] leading-4 ink-2 ">
+                <span className="mt-1 text-[11px] leading-4 ink-2">
                   能投岗位 / 在招 {formatCount(jobs.activeTotal)}
                 </span>
               </StatRing>
@@ -1159,7 +1159,7 @@ function JobsLibrarySection({
             <KpiCard title={translateOperationalTerm("removed")} value={formatCount(jobs.removed)} tone="muted" detail="疑似下线，后续可能恢复" className="min-h-0" />
           </div>
 
-          <p className="mt-3 text-xs leading-5 ink-3 ">
+          <p className="mt-3 text-xs leading-5 ink-3">
             今日下架（今天新判定失效） · 已确认撤岗（探活确认永久移除） · 暂时下线（疑似下线，可能恢复） · 空壳岗（有链接但没岗位正文，质量差） · 待核查（还没探活验证）
           </p>
         </>
@@ -1170,13 +1170,13 @@ function JobsLibrarySection({
           招聘源近 7 天表现
         </summary>
         <div className="border-t border-black/[0.06] p-4 dark:border-white/[0.08]">
-          <p className="mb-3 text-xs leading-5 ink-3 ">
+          <p className="mb-3 text-xs leading-5 ink-3">
             成功率按完成、部分完成、失败三类运行计算；没运行过的招聘源显示“—”。
           </p>
           {!operations ? (
             <ErrorPanel label="招聘源统计" />
           ) : crawlSources.length === 0 ? (
-            <p className="text-sm ink-3 ">暂无启用的招聘源。</p>
+            <p className="text-sm ink-3">暂无启用的招聘源。</p>
           ) : (
             <BarList className="max-h-[34rem] overflow-auto" ariaLabel="招聘源近七天表现" items={crawlSources.map((source) => ({
               key: source.sourceId,
@@ -1258,7 +1258,7 @@ function SprintCards({ users }: { users: NonNullable<SupabaseHealthSnapshot["tod
   return (
     <section>
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-lg font-semibold ink-1 ">两周冲刺 · 用户闭环</h2>
+        <h2 className="text-lg font-semibold ink-1">两周冲刺 · 用户闭环</h2>
         <StatusBadge tone="muted" label="埋点准备中" />
       </div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -1273,7 +1273,7 @@ function SprintCards({ users }: { users: NonNullable<SupabaseHealthSnapshot["tod
 
 function DataNotes({ refreshedAt }: { refreshedAt: string }) {
   return (
-    <div className="text-[11px] leading-5 ink-3 ">
+    <div className="text-[11px] leading-5 ink-3">
       <p>页面打开时间：<span className="tabular-nums">{refreshedAt}</span> 北京时间</p>
       {/* 缓存了就必须说出来。写「数据更新时间 = 现在」而实际是 3 分钟前算的，是另一种说谎。 */}
       <p className="mt-0.5">数据每 {Math.round(ADMIN_DATA_TTL_SECONDS / 60)} 分钟重算一次，所以可能比此刻晚几分钟——运营看板看的是「今天跑得怎么样」，不追秒级实时。</p>
@@ -1332,9 +1332,9 @@ function OverviewTab({
         ? `${idleReports.length} 个今天还没记录`
         : "全部模块今天都有产出";
   const cards: Array<[string, string, BandTone, string, string, string]> = [
-    ["岗位库", "jobs", jobs ? sectionStatusFromBand(band(share(jobs.validActive, jobs.activeTotal), HEALTH_THRESHOLDS.validActiveShare, "higher")) : "muted", jobs ? formatCount(jobs.activeTotal) : "—", jobs ? "有效率 " + formatPercent(jobs.validActive, jobs.activeTotal) + " · 空壳 " + formatCount(jobs.thinActive) : "数据暂不可用", "在招、有效率与空壳岗均来自岗位库快照"],
+    ["岗位库", "jobs", jobs ? sectionStatusFromBand(band(share(jobs.validActive, jobs.activeTotal), HEALTH_THRESHOLDS.validActiveShare, "higher")) : "muted", jobs ? formatCount(jobs.activeTotal) : "—", jobs ? "有效率" + formatPercent(jobs.validActive, jobs.activeTotal) + "· 空壳" + formatCount(jobs.thinActive) : "数据暂不可用", "在招、有效率与空壳岗均来自岗位库快照"],
     ["必投供给", "supply", supplyStatus, rowsByScope ? `${formatCount(worst.healthy)}/${formatCount(worst.total)}` : "—", "最需处理：" + MUST_APPLY_SCOPE_LABEL[worst.scope] + "·" + worst.industry, "按当前用户行业的必投公司逐家计算"],
-    ["用户行为", "users", users ? "success" : "muted", users ? formatCount(users.total_users) : "—", users ? "累计投递 " + formatCount(users.applied_total) + " 次" : "数据暂不可用", "今日汇总，不含未接入的行为埋点"],
+    ["用户行为", "users", users ? "success" : "muted", users ? formatCount(users.total_users) : "—", users ? "累计投递" + formatCount(users.applied_total) + "次" : "数据暂不可用", "今日汇总，不含未接入的行为埋点"],
     // 口径从「今天跑没跑」换成「今天产出正不正常」，与热力图、模块卡走同一个 moduleVerdict。
     ["后台产出", "system", systemStatus, String(healthyReports.length) + "/" + reports.length, systemDetail, "今日产出正常的后台模块数 / 全部模块数"],
   ];
@@ -1347,8 +1347,8 @@ function OverviewTab({
         <p className="text-sm font-medium text-[#625c51] dark:text-[#c5bbaa]">北极星 · 必投健康覆盖</p>
         <div className="mt-4 flex flex-wrap items-end justify-between gap-5">
           <div>
-            <p className="max-w-2xl text-lg font-semibold leading-7 ink-1 ">{rowsByScope ? `${MUST_APPLY_SCOPE_LABEL[worst.scope]}·${worst.industry} 是现在最需要补齐的行业。` : "必投清单数据暂不可用，不能判断今天该补哪一处。"}</p>
-            <p className="mt-4 inline-flex items-baseline gap-2 tabular-nums ink-1 "><span className="text-[4rem] font-semibold leading-none tracking-[-0.05em] sm:text-[4.75rem]">{rowsByScope ? formatCount(worst.healthy) : "—"}</span><span className="text-lg text-[#625c51] dark:text-[#c5bbaa]">/ {formatCount(worst.total)} 家有健康岗</span></p>
+            <p className="max-w-2xl text-lg font-semibold leading-7 ink-1">{rowsByScope ? `${MUST_APPLY_SCOPE_LABEL[worst.scope]}·${worst.industry} 是现在最需要补齐的行业。` : "必投清单数据暂不可用，不能判断今天该补哪一处。"}</p>
+            <p className="mt-4 inline-flex items-baseline gap-2 tabular-nums ink-1"><span className="text-[4rem] font-semibold leading-none tracking-[-0.05em] sm:text-[4.75rem]">{rowsByScope ? formatCount(worst.healthy) : "—"}</span><span className="text-lg text-[#625c51] dark:text-[#c5bbaa]">/ {formatCount(worst.total)} 家有健康岗</span></p>
           </div>
           <div className="text-sm ink-3"><StatusBadge tone={rowsByScope ? supplyStatus : "muted"} /><p className="mt-3">本页读取于 <span className="tabular-nums">{refreshedAt}</span> 北京时间</p></div>
         </div>
@@ -1358,10 +1358,10 @@ function OverviewTab({
       <Callout tone={heroStatus} className="surface">{heroDataMissing ? "今日结论暂不可用，请先查看系统运行。" : health.actions.length ? `今天有 ${health.actions.length} 项需要处理，先做：${health.actions[0]}` : "今日没有系统侧红线，可以按计划推进两周冲刺。"}</Callout>
       <section className="surface p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div><h2 className="font-semibold ink-1 ">今日行动</h2><p className="mt-1 text-xs ink-3">只列今天可以直接处理的事项。</p></div>
+          <div><h2 className="font-semibold ink-1">今日行动</h2><p className="mt-1 text-xs ink-3">只列今天可以直接处理的事项。</p></div>
           <StatusBadge tone={heroStatus} />
         </div>
-        {health.actions.length || (disputesOpen || 0) > 0 ? <div className="mt-3 space-y-2">{health.actions.slice(0, 3).map((action, index) => <a key={action} href={actionAnchor(action)} className="flex items-start gap-2 rounded-xl px-2 py-1.5 text-sm leading-5 ink-2 hover:bg-white/55 dark:hover:bg-white/[0.06]"><StatusDot tone={health.level === "critical" && index === 0 ? "danger" : "warning"} /><span>{action}</span></a>)}{health.actions.length > 3 && <p className="px-2 text-xs ink-3 ">另有 {health.actions.length - 3} 项，见下方各板块</p>}{(disputesOpen || 0) > 0 && <a href="/admin/insights" className="flex items-start gap-2 rounded-xl px-2 py-1.5 text-sm font-medium leading-5 text-[#8f6225] hover:bg-[#fbecd7] dark:text-[#e0b15a] dark:hover:bg-[#825d28]/20"><StatusDot tone="warning" /><span>待处理申诉：{formatCount(disputesOpen)} 条</span></a>}</div> : <p className="mt-3 flex items-center gap-2 text-sm ink-2 "><StatusDot tone="success" />今日无系统侧紧急行动，继续推进两周冲刺。</p>}
+        {health.actions.length || (disputesOpen || 0) > 0 ? <div className="mt-3 space-y-2">{health.actions.slice(0, 3).map((action, index) => <a key={action} href={actionAnchor(action)} className="flex items-start gap-2 rounded-xl px-2 py-1.5 text-sm leading-5 ink-2 hover:bg-white/55 dark:hover:bg-white/[0.06]"><StatusDot tone={health.level === "critical" && index === 0 ? "danger" : "warning"} /><span>{action}</span></a>)}{health.actions.length > 3 && <p className="px-2 text-xs ink-3">另有 {health.actions.length - 3} 项，见下方各板块</p>}{(disputesOpen || 0) > 0 && <a href="/admin/insights" className="flex items-start gap-2 rounded-xl px-2 py-1.5 text-sm font-medium leading-5 text-[#8f6225] hover:bg-[#fbecd7] dark:text-[#e0b15a] dark:hover:bg-[#825d28]/20"><StatusDot tone="warning" /><span>待处理申诉：{formatCount(disputesOpen)} 条</span></a>}</div> : <p className="mt-3 flex items-center gap-2 text-sm ink-2"><StatusDot tone="success" />今日无系统侧紧急行动，继续推进两周冲刺。</p>}
       </section>
       <AccumulatingMetric title="北极星趋势" description={dailySeriesUnavailable ? "趋势序列暂不可用，今天不展示走势。" : firstSnapshot ? `趋势数据从 ${firstSnapshot} 开始积累，目前已有 ${snapshotDays} 天；样本不足时不展示涨跌或折线。` : "每日写入已接入，首条快照将在每日抓取完成后出现。"} items={northStarItems} />
       <SprintCards users={users} />
@@ -1379,10 +1379,10 @@ function JobsTab({ jobs, clickValidity, clickStatus, coverage, operations, today
       <KpiCard title="空壳岗" value={formatCount(jobs.thinActive)} tone="warning" detail="有链接，但没有岗位正文" />
       <KpiCard title="还没查过" value={formatCount(jobs.neverChecked)} tone={bandTone(checkedBand)} detail="还没查过这些岗位现在还在不在" />
     </section> : <ErrorPanel label="岗位库体检" />}
-    {jobs && <section className="surface-soft p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold ink-1 ">库存结构</h2><p className="mt-1 text-xs ink-3">同一个岗位可能既算「在招」、又算「还没查过」，别把这两个数相加。</p></div><StatRing pct={share(jobs.validActive, jobs.activeTotal)} tone={bandTone(validBand)} size="section"><span className="text-lg font-semibold tabular-nums">{formatPercent(jobs.validActive, jobs.activeTotal)}</span><span className="text-[10px] ink-3">能投有效率</span></StatRing></div><BarList className="mt-4" ariaLabel="岗位库存构成" items={[{ key: "valid", label: "能投岗位", ratio: share(jobs.validActive, jobs.activeTotal), tone: "success", value: formatCount(jobs.validActive) }, { key: "thin", label: "空壳岗", ratio: share(jobs.thinActive, jobs.activeTotal), tone: "warning", value: formatCount(jobs.thinActive) }, { key: "unchecked", label: "待核查", ratio: share(jobs.neverChecked, jobs.activeTotal), tone: bandTone(checkedBand), value: formatCount(jobs.neverChecked) }]} /><p className="mt-3 text-[10px] ink-3 ">按今天读到的岗位库现状计算。同一个岗位可能既算「在招」、又算「还没查过」，别把这两个数相加。</p></section>}
-    <section className="surface-soft p-5"><h2 className="font-semibold ink-1 ">抓取运行近 30 天</h2><p className="mt-1 text-xs ink-3">每格一天。一天全挂了显示「得处理」，有挂的或只跑完一半显示「要注意」。与下面每张模块卡用的是同一套标准。</p>{dailySeriesUnavailable ? <div className="mt-4"><ErrorPanel label="每天的抓取记录" /></div> : <Tracker className="mt-4" items={processTrackerItems(dailySeries, "crawl")} ariaLabel="抓取运行近 30 天" />}</section>
+    {jobs && <section className="surface-soft p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold ink-1">库存结构</h2><p className="mt-1 text-xs ink-3">同一个岗位可能既算「在招」、又算「还没查过」，别把这两个数相加。</p></div><StatRing pct={share(jobs.validActive, jobs.activeTotal)} tone={bandTone(validBand)} size="section"><span className="text-lg font-semibold tabular-nums">{formatPercent(jobs.validActive, jobs.activeTotal)}</span><span className="text-[10px] ink-3">能投有效率</span></StatRing></div><BarList className="mt-4" ariaLabel="岗位库存构成" items={[{ key: "valid", label: "能投岗位", ratio: share(jobs.validActive, jobs.activeTotal), tone: "success", value: formatCount(jobs.validActive) }, { key: "thin", label: "空壳岗", ratio: share(jobs.thinActive, jobs.activeTotal), tone: "warning", value: formatCount(jobs.thinActive) }, { key: "unchecked", label: "待核查", ratio: share(jobs.neverChecked, jobs.activeTotal), tone: bandTone(checkedBand), value: formatCount(jobs.neverChecked) }]} /><p className="mt-3 text-[10px] ink-3">按今天读到的岗位库现状计算。同一个岗位可能既算「在招」、又算「还没查过」，别把这两个数相加。</p></section>}
+    <section className="surface-soft p-5"><h2 className="font-semibold ink-1">抓取运行近 30 天</h2><p className="mt-1 text-xs ink-3">每格一天。一天全挂了显示「得处理」，有挂的或只跑完一半显示「要注意」。与下面每张模块卡用的是同一套标准。</p>{dailySeriesUnavailable ? <div className="mt-4"><ErrorPanel label="每天的抓取记录" /></div> : <Tracker className="mt-4" items={processTrackerItems(dailySeries, "crawl")} ariaLabel="抓取运行近 30 天" />}</section>
     <ClickValiditySection clickValidity={clickValidity} status={clickStatus} summary="系统自动查看板上这些岗位还在不在，不是用户真实点击的统计。" />
-    <section className="surface-soft p-5"><h2 className="t-h2 mb-4 ink-1">抓得全不全</h2><CoverageSection snapshot={coverage} /><p className="mt-4 text-[10px] ink-3 ">只算「官网明写共有几个岗」的公司。官网不写的算不出来，不按 0% 处理。</p></section>
+    <section className="surface-soft p-5"><h2 className="t-h2 mb-4 ink-1">抓得全不全</h2><CoverageSection snapshot={coverage} /><p className="mt-4 text-[10px] ink-3">只算「官网明写共有几个岗」的公司。官网不写的算不出来，不按 0% 处理。</p></section>
     <CrawlSourceBreakdown operations={operations} todayRemoved={todayRemoved} validBand={validBand} checkedBand={checkedBand} />
   </div>;
 }
@@ -1433,13 +1433,13 @@ function MustApplyGapLedger({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold">补公司流水线 · 运行记录</h2>
-          <p className="mt-1 text-sm ink-2 ">国内清单版本 {MUST_APPLY_VERSION}；「真的新接入了公司」和「统计规则变了」分开记，不混为一谈。</p>
+          <p className="mt-1 text-sm ink-2">国内清单版本 {MUST_APPLY_VERSION}；「真的新接入了公司」和「统计规则变了」分开记，不混为一谈。</p>
         </div>
         <StatusBadge tone="muted" label={`清单版本 ${MUST_APPLY_VERSION}`} />
       </div>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <KpiCard title="这一轮真的新接入" value={ledger?.realExpansion == null ? "—" : `+${ledger.realExpansion}`} tone="success" detail="取国内流水线最近有记录的那一天，只算验收通过、最终留下来的新公司" className="min-h-0" />
-        <KpiCard title="统计规则变动" value={ledger ? `${ledger.definitionChange >= 0 ? "+" : ""}${ledger.definitionChange}` : "—"} tone="muted" detail="只是改了统计规则后多算进来的（比如通过母公司招聘页覆盖到），不能冒充成新接入" className="min-h-0" />
+        <KpiCard title="统计规则变动" value={ledger ? `${ledger.definitionChange >= 0 ?"+":""}${ledger.definitionChange}` : "—"} tone="muted" detail="只是改了统计规则后多算进来的（比如通过母公司招聘页覆盖到），不能冒充成新接入" className="min-h-0" />
       </div>
       {!summary ? <div className="mt-4"><ErrorPanel label="补公司流水线 · 运行记录" /></div> : (
         <div className="mt-5 grid gap-4 lg:grid-cols-3">
@@ -1453,14 +1453,14 @@ function MustApplyGapLedger({
           </div>
           <div>
             <h3 className="text-sm font-semibold">最近失败原因 Top 5</h3>
-            <ul className="mt-2 space-y-1.5 text-xs ink-2 ">
+            <ul className="mt-2 space-y-1.5 text-xs ink-2">
               {summary.recentFailures.map((failure) => <li key={`${failure.company}-${failure.at}`}>{failure.company}：{failure.reason}</li>)}
               {!summary.recentFailures.length && <li>暂无失败</li>}
             </ul>
           </div>
           <div>
             <h3 className="text-sm font-semibold">需要人工确认的公司</h3>
-            <p className="mt-2 text-xs leading-5 ink-2 ">
+            <p className="mt-2 text-xs leading-5 ink-2">
               {summary.manualReviewCompanies.join("、") || "暂无"}
             </p>
           </div>
@@ -1471,16 +1471,16 @@ function MustApplyGapLedger({
 }
 
 function MustApplyGovernanceList({ items }: { items: MustApplyGovernanceItem[] | null }) {
-  return <section className="surface-soft p-5 sm:p-6"><div><h2 className="text-xl font-semibold">必投清单待治理</h2><p className="mt-1 text-sm ink-2 ">只列出需要你人工拿主意的公司，不会自动改动必投清单。</p></div>{!items ? <div className="mt-4"><ErrorPanel label="必投清单待治理" /></div> : !items.length ? <p className="mt-4 text-sm ink-2 ">当前没有待治理公司。</p> : <div className="mt-4 max-h-[34rem] overflow-auto rounded-2xl border border-black/[0.07] dark:border-white/[0.1]"><table className="w-full min-w-[780px] text-left text-sm"><thead className="sticky top-0 z-10 bg-[#f4efe6] text-xs ink-3 dark:bg-[#1c1813] "><tr><th className="px-4 py-3 font-medium">公司</th><th className="px-4 py-3 font-medium">所属行业</th><th className="px-4 py-3 font-medium">卡在哪</th><th className="px-4 py-3 text-right font-medium">尝试次数</th><th className="px-4 py-3 font-medium">最后一次</th><th className="px-4 py-3 font-medium">建议动作</th></tr></thead><tbody>{items.map((item) => <tr key={item.company} className="border-t border-black/[0.05] ink-2 dark:border-white/[0.08] "><td className="px-4 py-3 font-medium">{item.company}</td><td className="px-4 py-3 text-xs">{item.industries.join("、") || "未标注"}</td><td className="max-w-xs px-4 py-3 text-xs leading-5">{item.blocker}</td><td className="px-4 py-3 text-right tabular-nums">{item.attempts}</td><td className="px-4 py-3 text-xs">{formatRunTime(item.lastAttemptAt)}</td><td className="px-4 py-3 text-xs font-medium">{item.suggestedAction}</td></tr>)}</tbody></table></div>}</section>;
+  return <section className="surface-soft p-5 sm:p-6"><div><h2 className="text-xl font-semibold">必投清单待治理</h2><p className="mt-1 text-sm ink-2">只列出需要你人工拿主意的公司，不会自动改动必投清单。</p></div>{!items ? <div className="mt-4"><ErrorPanel label="必投清单待治理" /></div> : !items.length ? <p className="mt-4 text-sm ink-2">当前没有待治理公司。</p> : <div className="mt-4 max-h-[34rem] overflow-auto rounded-2xl border border-black/[0.07] dark:border-white/[0.1]"><table className="w-full min-w-[780px] text-left text-sm"><thead className="sticky top-0 z-10 bg-[#f4efe6] text-xs ink-3 dark:bg-[#1c1813]"><tr><th className="px-4 py-3 font-medium">公司</th><th className="px-4 py-3 font-medium">所属行业</th><th className="px-4 py-3 font-medium">卡在哪</th><th className="px-4 py-3 text-right font-medium">尝试次数</th><th className="px-4 py-3 font-medium">最后一次</th><th className="px-4 py-3 font-medium">建议动作</th></tr></thead><tbody>{items.map((item) => <tr key={item.company} className="border-t border-black/[0.05] ink-2 dark:border-white/[0.08]"><td className="px-4 py-3 font-medium">{item.company}</td><td className="px-4 py-3 text-xs">{item.industries.join("、") || "未标注"}</td><td className="max-w-xs px-4 py-3 text-xs leading-5">{item.blocker}</td><td className="px-4 py-3 text-right tabular-nums">{item.attempts}</td><td className="px-4 py-3 text-xs">{formatRunTime(item.lastAttemptAt)}</td><td className="px-4 py-3 text-xs font-medium">{item.suggestedAction}</td></tr>)}</tbody></table></div>}</section>;
 }
 
 function SupplyTab({ rowsByScope, fetchByIndustry, activeIndustries, userDistribution, worst, gapSummary, governanceItems, ledger, mustApplyScope }: { rowsByScope: MustApplyRowsByScope | null; fetchByIndustry: Record<MustApplyScope, Record<string, MustApplyFetchCoverage>> | null; activeIndustries: Record<MustApplyScope, string[]>; userDistribution: UserIndustryDistribution; worst: { scope: MustApplyScope; industry: string; healthy: number | null; total: number; zeroHealthyCompanies: string[] }; gapSummary: MustApplyGapSummary | null; governanceItems: MustApplyGovernanceItem[] | null; ledger: { realExpansion: number | null; definitionChange: number } | null; mustApplyScope: MustApplyScope }) {
   const tone = bandTone(mustApplyIndustryBand(rowsByScope?.[worst.scope]?.[worst.industry] || null));
   return <div className="grid gap-5">
-    <section className="surface p-5 sm:p-7"><div className="grid gap-5 lg:grid-cols-[auto_1fr] lg:items-center"><div className="flex justify-center"><StatRing pct={rowsByScope ? share(worst.healthy, worst.total) : null} tone={tone} size="northstar" target={28 / 30}><span className="text-3xl font-semibold tabular-nums">{rowsByScope ? `${formatCount(worst.healthy)}/${formatCount(worst.total)}` : "—"}</span><span className="mt-1 text-[10px] ink-3">家有健康岗</span></StatRing></div><div><p className="text-sm font-medium text-[#625c51] dark:text-[#c5bbaa]">北极星 · 必投健康覆盖</p><h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] ink-1 ">{rowsByScope ? `${MUST_APPLY_SCOPE_LABEL[worst.scope]}·${worst.industry} 现在最需要补齐。` : "必投清单数据暂不可用，不能判断今天该补哪一处。"}</h1><p className="mt-3 max-w-2xl text-sm leading-6 ink-3">先保证目标用户最常投的那些公司有岗可投，再去管「怎么接进来的」和运行记录。</p><div className="mt-4"><StatusBadge tone={rowsByScope ? tone : "muted"} /></div></div></div></section>
+    <section className="surface p-5 sm:p-7"><div className="grid gap-5 lg:grid-cols-[auto_1fr] lg:items-center"><div className="flex justify-center"><StatRing pct={rowsByScope ? share(worst.healthy, worst.total) : null} tone={tone} size="northstar" target={28 / 30}><span className="text-3xl font-semibold tabular-nums">{rowsByScope ? `${formatCount(worst.healthy)}/${formatCount(worst.total)}` : "—"}</span><span className="mt-1 text-[10px] ink-3">家有健康岗</span></StatRing></div><div><p className="text-sm font-medium text-[#625c51] dark:text-[#c5bbaa]">北极星 · 必投健康覆盖</p><h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] ink-1">{rowsByScope ? `${MUST_APPLY_SCOPE_LABEL[worst.scope]}·${worst.industry} 现在最需要补齐。` : "必投清单数据暂不可用，不能判断今天该补哪一处。"}</h1><p className="mt-3 max-w-2xl text-sm leading-6 ink-3">先保证目标用户最常投的那些公司有岗可投，再去管「怎么接进来的」和运行记录。</p><div className="mt-4"><StatusBadge tone={rowsByScope ? tone : "muted"} /></div></div></div></section>
     <section className="grid gap-3 md:grid-cols-2"><KpiCard title="最差行业" value={`${MUST_APPLY_SCOPE_LABEL[worst.scope]}·${worst.industry}`} tone={rowsByScope ? tone : "muted"} detail={rowsByScope ? `${formatCount(worst.healthy)}/${formatCount(worst.total)} 家有健康岗` : "当前无法读取必投覆盖"} footnote="按当前有求职用户的行业计算" /><KpiCard title="零健康岗公司" value={rowsByScope ? formatCount(worst.zeroHealthyCompanies.length) : "—"} tone={worst.zeroHealthyCompanies.length > 0 ? "danger" : rowsByScope ? "success" : "muted"} detail={rowsByScope ? (worst.zeroHealthyCompanies.slice(0, 3).join("、") || "真实 0 家缺口") : "读取失败时不把它当作 0"} footnote="只列当前最差行业中的公司" /></section>
     <MustApplySection rowsByIndustry={rowsByScope} fetchCoverageByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} scope={mustApplyScope} />
-    <section className="grid gap-5 border-t border-black/[0.10] pt-5 dark:border-white/[0.12]"><Callout tone={worst.zeroHealthyCompanies.length > 0 ? "warning" : "success"}>{rowsByScope ? (worst.zeroHealthyCompanies.length > 0 ? `优先处理：${worst.zeroHealthyCompanies.slice(0, 10).join("、")}${worst.zeroHealthyCompanies.length > 10 ? ` 等 ${worst.zeroHealthyCompanies.length} 家` : ""}。` : "当前最差行业没有零健康岗公司。") : "必投清单读取失败，暂不生成缺口结论。"}</Callout><MustApplyGapLedger summary={gapSummary} ledger={ledger} /><MustApplyGovernanceList items={governanceItems} /></section>
+    <section className="grid gap-5 border-t border-black/[0.10] pt-5 dark:border-white/[0.12]"><Callout tone={worst.zeroHealthyCompanies.length > 0 ? "warning" : "success"}>{rowsByScope ? (worst.zeroHealthyCompanies.length > 0 ? `优先处理：${worst.zeroHealthyCompanies.slice(0, 10).join("、")}${worst.zeroHealthyCompanies.length > 10 ?` 等 ${worst.zeroHealthyCompanies.length} 家`:""}。` : "当前最差行业没有零健康岗公司。") : "必投清单读取失败，暂不生成缺口结论。"}</Callout><MustApplyGapLedger summary={gapSummary} ledger={ledger} /><MustApplyGovernanceList items={governanceItems} /></section>
   </div>;
 }
 
@@ -1532,7 +1532,7 @@ function MaintenanceLinks() {
 }
 
 function SystemTab({ operations, reports, refreshedAt, dailySeries, dailySeriesUnavailable, extraOpsUnavailable }: { operations: SupabaseHealthSnapshot | null; reports: DailyReport[]; refreshedAt: string; dailySeries: HealthDailySeries | null; dailySeriesUnavailable: boolean; extraOpsUnavailable: boolean }) {
-  return <div className="grid gap-5"><section className="surface-soft p-5"><h2 className="font-semibold ink-1 ">后台任务近 30 天</h2><p className="mt-1 text-xs ink-3">每格一天。一天全挂了显示「得处理」，有挂的或只跑完一半显示「要注意」，没有记录的单独标出来不伪装成 0。与下面每张模块卡同一套标准。</p>{dailySeriesUnavailable ? <div className="mt-4"><ErrorPanel label="每天的后台任务记录" /></div> : <Tracker className="mt-4" items={processTrackerItems(dailySeries, "ops")} ariaLabel="后台任务近 30 天" />}<p className="mt-3 text-[10px] ink-3 ">按每天的后台运行记录汇总。没有记录就显示「没有记录」，不会伪装成成功或 0；跑完了但一条产出都没有，一律不算正常。</p></section><section className="surface-soft p-5"><DailyReportsSection operations={operations} reports={reports} extraOpsUnavailable={extraOpsUnavailable} /></section><DataNotes refreshedAt={refreshedAt} /><MaintenanceLinks /><p className="text-xs ink-3 ">这一页只有管理员能打开。数据分别来自两个库，一边读不出来时另一边照常显示。</p></div>;
+  return <div className="grid gap-5"><section className="surface-soft p-5"><h2 className="font-semibold ink-1">后台任务近 30 天</h2><p className="mt-1 text-xs ink-3">每格一天。一天全挂了显示「得处理」，有挂的或只跑完一半显示「要注意」，没有记录的单独标出来不伪装成 0。与下面每张模块卡同一套标准。</p>{dailySeriesUnavailable ? <div className="mt-4"><ErrorPanel label="每天的后台任务记录" /></div> : <Tracker className="mt-4" items={processTrackerItems(dailySeries, "ops")} ariaLabel="后台任务近 30 天" />}<p className="mt-3 text-[10px] ink-3">按每天的后台运行记录汇总。没有记录就显示「没有记录」，不会伪装成成功或 0；跑完了但一条产出都没有，一律不算正常。</p></section><section className="surface-soft p-5"><DailyReportsSection operations={operations} reports={reports} extraOpsUnavailable={extraOpsUnavailable} /></section><DataNotes refreshedAt={refreshedAt} /><MaintenanceLinks /><p className="text-xs ink-3">这一页只有管理员能打开。数据分别来自两个库，一边读不出来时另一边照常显示。</p></div>;
 }
 
 export default async function AdminHealthPage({ searchParams }: { searchParams: Promise<{ tab?: string | string[]; staff?: string | string[]; scope?: string | string[] }> }) {
