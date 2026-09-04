@@ -42,3 +42,4 @@ scripts/match-eval/*-judged.json
 # 手工备份文件不进版本库（AGENTS.md.bak-* 之类）
 *.bak-[0-9]*
 *.bak
+runs/

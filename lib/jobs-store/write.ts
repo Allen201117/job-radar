@@ -130,11 +130,22 @@ export async function upsertJob(job: Record<string, any>): Promise<UpsertResult 
  * （jobs-db/schema.sql 的 jobs_guard_recruitment_class）看到依据变了会自动把结论作废，
  * 再由补算任务按最终那一行重算。**别在这里手写分类**——手上只有 summary，
  * 缺 company / apply_url / experience，算出来的会和最终那一行对不上（那正是 2026-09-03 的 bug）。
+ *
+ * 届别（grad_class）是例外，可以在这里补，理由与上面那条警告不冲突：
+ * 它只依赖 title / job_type / summary 这类文本，不需要 company / apply_url / experience，
+ * 而这里手上就有新正文。**这批遗留正是这么来的**：岗位入库时是薄卡（没正文→抽不出届别→
+ * NULL），后来 enrich 把正文补上，而这条 SQL 过去不碰 grad_class，于是永远停在 NULL；
+ * 线上实测约 2,100 个在招校招岗正文里明明写着「20XX届」却没标注。
+ *
+ * ⚠️ 这里**只喂 summary**（title/job_type 不在本函数的入参里，取它们要多打一次库）。
+ * 够用：标题里的届别在主 upsert 路径就已经抽过了，这条路补的是「正文后到」的那部分。
+ * COALESCE 保证已有届别绝不被覆盖；抽不出返回 null，行为与改动前完全一致。
  */
 export async function updateJobSummaryById(id: string, summary: string): Promise<boolean> {
+  const gradClass = extractGradClass({ summary });
   const rows = await jobsQuery(
-    "update jobs set summary = $1, enrich_checked_at = now() where id = $2::uuid returning id",
-    [summary, id],
+    "update jobs set summary = $1, enrich_checked_at = now(), grad_class = coalesce(grad_class, $3) where id = $2::uuid returning id",
+    [summary, id, gradClass],
   );
   return rows.length > 0;
 }

@@ -1,0 +1,39 @@
+name: backfill-grad-class
+
+# 手动补齐「薄卡入库、后补正文」遗留的届别。默认只报数，确认影响面后才传 apply=true。
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "true = 真的写库；留空/false = 只 dry-run 报数"
+        required: false
+        default: "false"
+      limit:
+        description: "最多处理前 N 个候选；留空 = 全量"
+        required: false
+        default: ""
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: crawler/requirements.txt
+      - run: pip install -r crawler/requirements.txt
+
+      - name: 回填届别
+        env:
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "${{ github.event.inputs.apply }}" = "true" ]; then args+=(--apply); fi
+          if [ -n "${{ github.event.inputs.limit }}" ]; then args+=(--limit "${{ github.event.inputs.limit }}"); fi
+          python3 crawler/backfill_grad_class.py "${args[@]}"

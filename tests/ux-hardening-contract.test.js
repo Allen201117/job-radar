@@ -499,11 +499,12 @@ test("每个筛选项都必须显式归类，才允许用 SQL count 算真实总
   }
 });
 
-test("app 侧补正文只写 summary，招聘类型交给库里的触发器", () => {
+test("app 侧补正文不手写招聘类型，届别只补空值", () => {
   // 这两列的所有权在数据库（jobs-db/schema.sql 的 jobs_guard_recruitment_class）：
   // 依据变了它自动作废、依据没变谁都别想改。写入方各自「注意一下」正是 2026-09-03 那次
   // 8,140 行漂移的成因（真校招岗被记成社招 → 搜「校招」搜不到），别再加回来。
   const stmt = stripComments(jobsStoreWrite).match(/update jobs set summary[\s\S]{0,200}?returning id/);
   assert.ok(stmt, "updateJobSummaryById 的 SQL 变了，请重新核对这条不变量");
   assert.doesNotMatch(stmt[0], /recruitment_/i, "别在写入方手写分类，算不准（缺 company/experience 等输入）");
+  assert.match(stmt[0], /grad_class\s*=\s*coalesce\(grad_class, \$3\)/i, "届别只能补空值，不能覆盖已有标注");
 });
