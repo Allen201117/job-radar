@@ -206,8 +206,15 @@ class MokaAdapter(PlaywrightAdapter):
     _page_cap = 60  # 30/页 → 封顶约 1800 岗，足够覆盖最大租户（SHEIN ~25 页）且防失控
     # Moka 自有分页「下一页」按钮：class 前缀稳定（带 build hash 后缀），末页加 disabled 属性。
     _next_sel = "button[class*='sd-Pagination-forward']"
+    # 分页器里的页码按钮：末页页码 = 总页数。Moka 列表接口是密文、DOM 里也没有「共 N 个职位」
+    # （那句只在门户落地页上），**唯一能拿到分母的地方就是这个分页组件**。
+    _page_no_sel = "[class*='sd-Pagination'] [class*='sd-Pagination-item']"
     _cards_js = ("els => els.map(e => ({href: e.getAttribute('href'),"
                  " text: (e.innerText || '').trim()}))")
+    _PAGE_ROWS = 30       # Moka 默认「30 行/页」，分页器上写着
+    # 抓全率可观测契约（190 个 moka 校招源此前 reported_total 恒为 None＝不可判定）
+    reported_total = None
+    fetch_complete = False
 
     def _collect_all_pages(self, page) -> List[dict]:
         """从当前已渲染的列表路由翻页累加全量岗位卡，按 href 去重。
@@ -217,7 +224,10 @@ class MokaAdapter(PlaywrightAdapter):
         """
         union: dict = {}
         no_growth = 0
+        self._last_page = self._read_last_page(page)   # 分页器自报的总页数（拿不到=None）
+        pages_done = 0
         for _ in range(self._page_cap):
+            pages_done += 1
             cards = page.eval_on_selector_all("a[href*='#/job/']", self._cards_js)
             before = len(union)
             for c in cards:
@@ -239,11 +249,31 @@ class MokaAdapter(PlaywrightAdapter):
                 page.wait_for_timeout(1800)  # 等下一页岗位卡渲染
             except Exception:
                 break
+        self._pages_done = pages_done
         return list(union.values())
+
+    def _read_last_page(self, page):
+        """从 Moka 分页组件读总页数。拿不到返回 None（单页租户不渲染分页器，也走这条）。"""
+        try:
+            texts = [(e.inner_text() or "").strip() for e in page.query_selector_all(self._page_no_sel)]
+        except Exception:
+            return None
+        numbers = []
+        for text in texts:
+            for token in re.findall(r"\d+", text):
+                try:
+                    numbers.append(int(token))
+                except ValueError:
+                    continue
+        return max(numbers) if numbers else None
 
     def fetch(self, source_url: str) -> str:
         from playwright.sync_api import sync_playwright
 
+        self.reported_total = None
+        self.fetch_complete = False
+        self._last_page = None
+        self._pages_done = 0
         base = source_url.split("#")[0]
         best: List[dict] = []
         with sync_playwright() as p:
@@ -274,6 +304,23 @@ class MokaAdapter(PlaywrightAdapter):
                         best = []
             finally:
                 browser.close()
+        # 抓全率可观测。Moka 没有任何「总数」字段，分页器的总页数是唯一线索：
+        #   · 翻到了末页 → 算抓全，分母记实际收到的条数（与 base.paginate_all 对「接口不给 total」
+        #     的「诚实盲区」兜底同口径：分母就是抓到数，不编造精度）。
+        #   · 没翻到末页（撞 _page_cap / 连续零新增 / 分页器异常）→ 不算抓全，分母用
+        #     `总页数 × 每页行数` 的**上界估计**，好让抓不全告警看得见这个缺口；
+        #     宁可分母偏大被告警盯上，也不要像过去那样 reported_total=None、190 个源集体「不可判定」。
+        #   · 单页租户（无分页器）→ 只有一页，翻完即抓全。
+        last_page = getattr(self, "_last_page", None)
+        pages_done = getattr(self, "_pages_done", 0)
+        if not best:
+            self.reported_total = None          # 一条都没拿到，别拿 0 当分母
+        elif not last_page or pages_done >= last_page:
+            self.reported_total = len(best)
+            self.fetch_complete = True
+        else:
+            self.reported_total = max(len(best), last_page * self._PAGE_ROWS)
+            self.fetch_complete = False
         return json.dumps({"_base": base, "cards": best}, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:
