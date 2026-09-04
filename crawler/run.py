@@ -31,6 +31,7 @@ from adapters.tencent import TencentAdapter
 from adapters.alibaba_campus_portal import AlibabaCampusPortalAdapter
 from adapters.bilibili_campus import BilibiliCampusAdapter
 from adapters.netease_campus import NeteaseCampusAdapter
+from adapters.huawei_campus import HuaweiCampusAdapter
 from adapters.tencent_campus import TencentCampusAdapter
 from adapters.bytedance import BytedanceAdapter, BytedanceCampusAdapter
 from adapters.feishu import NioAdapter, XpengAdapter, HorizonAdapter, XiaomiAdapter, FeishuGenericAdapter
@@ -118,6 +119,7 @@ ADAPTERS = {
     "tencent": TencentAdapter(),
     # 腾讯校招独立域名 join.qq.com（careers.tencent.com 的 attrId=2 只有 16 个海外岗）
     "tencent_campus": TencentCampusAdapter(),
+    "huawei_campus": HuaweiCampusAdapter(),
     "bilibili_campus": BilibiliCampusAdapter(),
     "netease_campus": NeteaseCampusAdapter(),
     "alibaba_campus_portal": AlibabaCampusPortalAdapter(),
@@ -193,7 +195,7 @@ DOMESTIC_ADAPTERS = {
 # 未知 / 浏览器 adapter 一律落串行档（fail-safe），杜绝把 Playwright（sync API，非线程安全）
 # 的 adapter 误并发跑崩夜间 cron。新增 httpx adapter 时显式加进来才享受并发。
 _HTTPX_SAFE_ADAPTERS = {
-    "apple", "apple_cn", "baidu", "jd", "haier", "iguopin", "siemens", "tencent", "tencent_campus", "bilibili_campus", "netease_campus", "alibaba_campus_portal", "hikvision",
+    "apple", "apple_cn", "baidu", "jd", "haier", "iguopin", "siemens", "tencent", "tencent_campus", "huawei_campus", "bilibili_campus", "netease_campus", "alibaba_campus_portal", "hikvision",
     "greenhouse", "lever", "ashby", "smartrecruiters", "successfactors", "workday", "eightfold",
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
     "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",
