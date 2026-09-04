@@ -29,7 +29,8 @@ from urllib.parse import urlparse
 import httpx
 
 import normalizer
-from .base import DEFAULT_LIST_CAP, PageResult, RawJob, paginate_all, resolve_list_cap
+from .base import (DEFAULT_LIST_CAP, PageResult, RawJob, paginate_all, resolve_list_cap,
+                   resolve_page_cap)
 from .playwright_base import PlaywrightAdapter
 
 
@@ -63,7 +64,10 @@ class WtAdapter(PlaywrightAdapter):
                    "?brandCode=1&safe=Y&recruitType={rt}&postIdsAry={pid}")
     # recruitType 平台常量：校招=1 / 社招=2 / 实习=12（与详情页 recruitType 同口径）。
     _RECRUIT_TYPES = (2, 1, 12)
-    _PAGE_CAP = 200      # 每 recruitType 安全上限（10/页 → 2000 岗/类），靠 rowCount/短页自然收尾
+    # 每 recruitType 的页数上限，只作防死循环兜底（靠 rowCount/短页自然收尾）。
+    # 旧的硬编码 200 页 × 10 条 = 2000 岗/类：长城汽车社招一超过 2000 就被悄悄截断，
+    # 2026-09-04 实测自报 3,421 只抓到 2,617、status 仍是 success。改按 CRAWL_MAX_JOBS 换算。
+    _PAGE_CAP = None
     # 单租户总安全预算（10/页 → 最坏约 800 次请求；env CRAWL_MAX_JOBS 可整体调档）。
     # 长城汽车自报 3420 岗，卡在旧的 3000 就差最后 803 个（2026-09-04 crawl_runs 实测），
     # 这种「差一点点」的截断最不值得留。
@@ -102,13 +106,14 @@ class WtAdapter(PlaywrightAdapter):
         seen_jobs = set()
         budget_exhausted = False
         cap = resolve_list_cap(self._MAX_JOBS)
+        page_cap = self._PAGE_CAP or resolve_page_cap(10)   # 10 条/页，见 fetch_page
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             for rt in self._RECRUIT_TYPES:
                 remaining_jobs = cap - len(seen_jobs)
                 if remaining_jobs <= 0:
                     budget_exhausted = True
                     break
-                max_pages = min(self._PAGE_CAP, max(1, (remaining_jobs + 9) // 10))
+                max_pages = min(page_cap, max(1, (remaining_jobs + 9) // 10))
 
                 def fetch_page(page: int) -> PageResult:
                     resp = client.get(api, params={
@@ -146,7 +151,7 @@ class WtAdapter(PlaywrightAdapter):
                 if len(seen_jobs) >= cap:
                     budget_exhausted = True
                     break
-                if not complete and max_pages < self._PAGE_CAP:
+                if not complete and max_pages < page_cap:
                     budget_exhausted = True
                     break
         if not collected:

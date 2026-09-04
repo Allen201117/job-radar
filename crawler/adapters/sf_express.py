@@ -1,12 +1,15 @@
 """顺丰官方社会招聘公开接口适配器（零登录、零浏览器）。"""
 import json
+import logging
 import time
 from typing import List, Optional
 
 import httpx
 
-from .base import BaseAdapter, RawJob
+from .base import BaseAdapter, RawJob, resolve_page_cap
 from .china_location import is_china_company_location
+
+logger = logging.getLogger(__name__)
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -28,7 +31,11 @@ class SfExpressAdapter(BaseAdapter):
 
     API_URL = "https://hr.sf-express.com/SearchJob.do"
     DETAIL_URL = "https://hr.sf-express.com/JobSearchById/{job_id},{position_type}"
-    MAX_PAGES = 50
+    # 页数上限只作「防死循环」兜底，真正收尾靠接口自报的 totalPage（见 fetch）。
+    # 旧的硬编码 50 页 × 10 条/页 = 500 条：顺丰自报 2,184 岗时只抓到 498，status 还是 success
+    # （2026-09-04 crawl_runs 实测）。现按 CRAWL_MAX_JOBS 换算，与其它源同一个旋钮。
+    MAX_PAGES = None
+    _short_pages: List[tuple] = []
     PAGE_RETRIES = 4
     PAGE_RETRY_DELAY = 0.75
 
@@ -60,6 +67,17 @@ class SfExpressAdapter(BaseAdapter):
         page_number: int,
         expected_rows: Optional[int] = None,
     ) -> dict:
+        """抓一页；短页会重试 PAGE_RETRIES 次（治接口偶发抖动）。
+
+        ⚠️ 重试用尽后**返回拿到的那一页，不抛异常**。旧实现在这里 raise，后果是
+        「最后一页少 2 条 → 整个源 2,164 个岗全部丢掉」：expected_rows 是拿**首页**读到的
+        totalResult 算出来的，而翻 217 页要几分钟，期间顺丰上下架会让真实总数漂移，
+        末页实际条数必然可能小于当初的算术预期（2026-09-04 实测 page 217 expected 6 got 4，
+        整源直接 failed）。少抓几条是「没抓全」，交给 fetch_complete 如实记录即可；
+        把整源炸掉是把 2,164 个在招岗一起扔了，两者代价差三个数量级。
+        真正一条都没拿到（listObj 不是 list）时才抛——那是接口坏了，不是短页。
+        """
+        last_data = None
         last_count = None
         for attempt in range(self.PAGE_RETRIES):
             response = client.post(self.API_URL, json=self._payload(page_number))
@@ -67,6 +85,7 @@ class SfExpressAdapter(BaseAdapter):
             data = (response.json() or {}).get("JobSearchList") or {}
             rows = data.get("listObj")
             if isinstance(rows, list):
+                last_data = data
                 last_count = len(rows)
                 if expected_rows is None or last_count >= expected_rows:
                     return data
@@ -75,6 +94,9 @@ class SfExpressAdapter(BaseAdapter):
                     self.PAGE_RETRY_DELAY * (attempt + 1)
                     + (page_number % 3) * 0.1
                 )
+        if last_data is not None:
+            self._short_pages.append((page_number, last_count, expected_rows))
+            return last_data
         raise RuntimeError(
             f"sf_express: invalid SearchJob page {page_number}; "
             f"expected {expected_rows}, got {last_count}"
@@ -83,6 +105,7 @@ class SfExpressAdapter(BaseAdapter):
     def fetch(self, source_url: str) -> str:
         self.reported_total = None
         self.fetch_complete = False
+        self._short_pages = []   # [(页号, 实际条数, 预期条数)]，重试用尽仍短的页；只用于诚实记账
         with httpx.Client(
             timeout=self.timeout,
             follow_redirects=True,
@@ -94,7 +117,8 @@ class SfExpressAdapter(BaseAdapter):
             if total_result is not None:
                 self.reported_total = total_result
             page_size = int(first_page.get("showCount") or len(first_page.get("listObj") or []))
-            pages = _page_numbers(total_pages, self.MAX_PAGES)
+            max_pages = self.MAX_PAGES or resolve_page_cap(max(1, page_size))
+            pages = _page_numbers(total_pages, max_pages)
             rows = list(first_page.get("listObj") or [])
 
             remaining = pages[1:]
@@ -122,9 +146,14 @@ class SfExpressAdapter(BaseAdapter):
                 rows_by_key[key] = row
         if not rows_by_key:
             raise RuntimeError("sf_express: empty SearchJob response")
+        # 抓全 = 拿到自报总数那么多条。末页短一点（对方在我们翻页期间下架了岗）不算失败，
+        # 只是 fetch_complete=False —— 诚实记账，不伪装成功也不把整源判死。
         self.fetch_complete = (
             self.reported_total is not None and len(rows_by_key) >= self.reported_total
         )
+        if self._short_pages:
+            logger.info("sf_express: %d 页重试后仍短（%s），按已抓到的 %d 条记账",
+                        len(self._short_pages), self._short_pages[:3], len(rows_by_key))
         return json.dumps({"jobs": list(rows_by_key.values())}, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:

@@ -15,7 +15,7 @@ from typing import Optional
 import httpx
 
 import normalizer
-from .base import RawJob
+from .base import RawJob, resolve_page_cap
 from .playwright_base import PlaywrightAdapter
 
 
@@ -53,7 +53,9 @@ class XiaohongshuAdapter(PlaywrightAdapter):
     _API = "https://job.xiaohongshu.com/websiterecruit/position/pageQueryPosition"
     _DETAIL = "https://job.xiaohongshu.com/{path}/position/{id}"
     _PAGE_SIZE = 50
-    _MAX_PAGES = 20   # 50×20=1000/渠道 封顶（社招实有 ~862）
+    # 页数上限只作防死循环兜底，真正收尾靠接口自报 total（见 fetch）。旧的 20 页 = 1000 条/渠道
+    # 是按「社招实有 ~862」定的，公司一扩招就悄悄截断：2026-09-04 实测自报 1,578 只抓到 1,268。
+    _MAX_PAGES = None   # None = 按 CRAWL_MAX_JOBS 换算（resolve_page_cap）
     posts_keys = ("data.list",) + PlaywrightAdapter.posts_keys
 
     def fetch(self, source_url: str) -> str:
@@ -70,11 +72,13 @@ class XiaohongshuAdapter(PlaywrightAdapter):
         collected = []
         seen_ids = set()
         channel_totals = []
+        channels_drained = []   # 完整性逐渠道判，理由见下方 fetch_complete 处的注释
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             for channel in ("social", "campus", "intern"):
                 got = 0
                 total: Optional[int] = None
-                for page in range(1, self._MAX_PAGES + 1):
+                max_pages = self._MAX_PAGES or resolve_page_cap(self._PAGE_SIZE)
+                for page in range(1, max_pages + 1):
                     try:
                         resp = client.post(self._API, json={
                             "pageNum": page, "pageSize": self._PAGE_SIZE,
@@ -105,13 +109,20 @@ class XiaohongshuAdapter(PlaywrightAdapter):
                         break
                 if total is not None:
                     channel_totals.append(total)
+                    channels_drained.append(got >= total)
+                else:
+                    channels_drained.append(False)   # 连总数都没拿到 → 本渠道不算抓全
         if not collected:
             raise RuntimeError("xiaohongshu: empty pageQueryPosition (job.xiaohongshu.com)")
         if len(channel_totals) == 3:
             self.reported_total = sum(channel_totals)
-        self.fetch_complete = (
-            self.reported_total is not None and len(seen_ids) >= self.reported_total
-        )
+        # ⚠️ 完整性必须**逐渠道**判，不能拿「去重后的唯一 id 数」比「各渠道 total 之和」——
+        # 小红书三个渠道**互相重叠**：2026-09-04 实测 social 858 + campus 406 + intern 302 = 1,566，
+        # 但 intern 的 302 个 positionId **全部**已出现在 campus/social 里，去重后只有 1,263。
+        # 旧写法 len(seen_ids) >= sum(totals) 于是恒为 False，每轮都被记成「漏了 300 个岗」——
+        # 是分母重复相加造出来的假缺口，不是真漏抓（与 microsoft 那次同一类病）。
+        # 改成「三个渠道各自都抓到了自报总数」= 本次确实把公开列表抓全了。
+        self.fetch_complete = len(channels_drained) == 3 and all(channels_drained)
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
 
     def _map(self, post: dict) -> Optional[RawJob]:

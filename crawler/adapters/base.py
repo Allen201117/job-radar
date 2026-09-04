@@ -63,6 +63,20 @@ def resolve_list_cap(default: int) -> int:
     return _env_int("CRAWL_MAX_JOBS", default)
 
 
+def resolve_page_cap(page_size: int, default_rows: int = None) -> int:
+    """把「条数上限」换算成「页数上限」，给那些用 max_pages 而不是 max_rows 记账的 adapter。
+
+    为什么要有它：顺丰/小红书/wt 各自硬编码了一个页数上限（50 页 / 20 页 / 200 页），
+    数字背后其实是「当时那家公司大概多少岗」——公司一扩招就悄悄截断，而且 status 还是 success。
+    2026-09-04 实测：顺丰自报 2,184 只抓到 498（50 页 × 10 条），小红书 1,578 只抓到 1,268。
+    换算成同一个 CRAWL_MAX_JOBS 旋钮之后，页数上限只剩「防死循环」的兜底作用，
+    真正的收尾交给接口自报的 totalPage / total（都比这个上限先触发）。
+    """
+    rows = resolve_list_cap(DEFAULT_LIST_CAP if default_rows is None else default_rows)
+    size = max(1, int(page_size or 1))
+    return max(1, -(-rows // size))     # ceil(rows / size)
+
+
 # 重复度刹车（见 RepetitionBrake）：连续这么多条「一个新归一标题都没带来」就停止翻页。
 # 400 = 8 页 × 50，取值依据见 RepetitionBrake 文档字符串里的实测分离度。
 DEFAULT_REPEAT_STALL_ROWS = 400

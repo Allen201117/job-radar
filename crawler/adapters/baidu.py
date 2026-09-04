@@ -19,7 +19,12 @@ class BaiduAdapter(BaseAdapter):
     name = "baidu"
     DEFAULT_URL = "https://talent.baidu.com/jobs/social-list"
     # recruitType 是百度自带的**招聘类型**（拼详情 URL 也用它），比 postType(岗位类别)可靠。
-    _RECRUIT_TYPE = {"SOCIAL": "社招", "CAMPUS": "校招", "INTERN": "实习"}
+    # ⚠️ 校招那一档百度自己叫 **GRADUATE**，不叫 CAMPUS。传 CAMPUS 接口直接回
+    # `Illegal argument : recruitType`（2026-09-04 live 实测），adapter 只看到 0 条就跳过了 ——
+    # 于是百度校招在库里长期只有 2 个岗，看着像「百度没开秋招」，其实 GRADUATE 有 157 个。
+    # 详情页路径用的也是同一个 token（/jobs/detail/{recruitType}/{postId}），且**必须对**：
+    # 拿 SOCIAL 的 postId 去访问 /GRADUATE/ 返回 200 但只有 5.8KB 空壳、不含岗位名。
+    _RECRUIT_TYPE = {"SOCIAL": "社招", "GRADUATE": "校招", "CAMPUS": "校招", "INTERN": "实习"}
 
     # 列表接口（2026-07-28 live 探到）：**form-encoded** POST，JSON body 会被拒
     # （"Illegal argument : recruitType"）。pageSize 被服务端锁死为 10——传 50/100/200 一律返回 0 条，
@@ -27,7 +32,7 @@ class BaiduAdapter(BaseAdapter):
     LIST_API = "https://talent.baidu.com/httservice/getPostListNew"
     PAGE_SIZE = 10
     MAX_PAGES = 400          # 安全上限：社招 1571 岗 ≈ 158 页，留足余量
-    RECRUIT_TYPES = ("SOCIAL", "CAMPUS", "INTERN")
+    RECRUIT_TYPES = ("SOCIAL", "GRADUATE", "INTERN")   # GRADUATE=校招，见 _RECRUIT_TYPE 注释
 
     def fetch(self, source_url: str) -> str:
         """翻全百度三类招聘（社招/校招/实习）的列表接口，返回统一 JSON 信封。
