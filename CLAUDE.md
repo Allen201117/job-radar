@@ -586,6 +586,40 @@ Supabase Auth（邮箱登录）+ cookie session。`middleware.ts` 排除 `/api/*
 - 不吞错（catch 至少记录）。
 - 外部请求只走 lib 层封装与 crawler adapters；遵守合规边界。
 
+### 设计组件库：新代码一律走 `@/components/ui`，别再手写（2026-09-04 立）
+
+产品有自己的组件库了。**写任何前端之前先看一眼有没有现成的**，别再各写各的
+——改造前 28 个文件各写各的 `<button>`、9 个各写各的转圈、6 个各写各的「锁滚动 + ESC」、
+`inputCls` 同一串样式存在**三份**、全站 5 个弹层**一个焦点陷阱都没有**。
+
+- **看长什么样**：`/design`（管理员可见）。那页的组件就是产品里真实跑的那一个、用同一份 CSS，
+  所以它不会说谎。**完整用法与运维规矩见 `DESIGN.md` 的「组件库」一节**，决策来由见
+  `docs/superpowers/specs/2026-09-04-design-system-component-library-design.md`。
+- **现有**：`Button`（ink/soft/ghost/quiet × xs/sm/md/lg）· `Badge`（七族 tone）· `Banner` ·
+  `Field`+`Input`+`Textarea`+`Select` · `Segmented` · `Modal` · `Popover` · `Spinner` · `EmptyState`；
+  hooks 在 `lib/ui/hooks.ts`（`useBodyScrollLock` / `useEscapeKey` / `useFocusTrap` /
+  `useClickOutside` / `useAnchoredPosition` / `useClipboard` / `useAsyncAction`）。
+- ⚠️ **颜色一律用 `--tone-*` 令牌，不要再写 hex**：七族语义色（sky 社招 / green 校招·已核实 /
+  amber 实习·转陈 / teal 招聘动态 / rose 失败·风险 / lilac 职业洞察 / neutral 不表态），
+  写成 `text-tone-sky-fg` / `bg-tone-sky-bg` / `border-tone-sky-border`，明暗自动切换。
+  **要加新颜色 → 先在 `globals.css` 定义变量（明暗各一套）+ `tailwind.config.js` 登记**，
+  再用语义类名。`components/ui` 与 `lib/ui` 内出现 hex 会被契约测试判红。
+- ⚠️ **变体表（cva）写在 `lib/ui/variants.ts` 这个 `.ts` 里，不要写进组件的 `.tsx`**：
+  `tests/_load-ts.js` 只认 `.ts`，放对地方契约测试才能真的加载它做断言，而不是只能 grep 文本。
+- ⚠️ **cva 只加尺寸轴，颜色继续由 `.btn-*` 等既有类提供**（靠 Tailwind 的
+  components→utilities 层序覆盖 padding）。往变体表里抄颜色 = 制造第二份颜色定义，正是要消灭的东西。
+- ⚠️ **可访问性做进原语，不靠调用方记得**：`Modal` 默认带焦点陷阱 + `role="dialog"` +
+  `aria-modal` + 锁滚动 + ESC；`Segmented` 的 `ariaLabel` 是**必填 prop**。凡是「靠人记得写」
+  的 aria 迟早会漏——改造前 4 处分段控件有 3 处漏了组标签。
+- **废弃组件搬进 `components/ui/deprecated/` + 打 `@deprecated`，不要直接删**（学 GitHub Primer）。
+  直接删 = 全站必须同一天跟着改完，几个人的团队做不到，结果就是没人敢改组件库。
+- **存量迁移的节奏 = 新代码必须用库、老代码碰到再换**，不做一次性全站替换
+  （`JobCard` 906 行 / `InsightsAdminClient` 1466 行这些巨型文件回归面太大）。
+  ⚠️ **迁移的判据是「能不能证明像素不变」，不是「看起来差不多」**：只有亮暗成对出现在
+  同一个类串里才换成令牌；只有亮色没有 `dark:` 的地方一律跳过（换了会让它在暗色下变色）。
+  归并「差一点点」的同类颜色属于**有意的视觉改动**，要单独提出来由创始人拍板，不能顺手改掉。
+- 契约测试 `tests/design-system-contract.test.js`（13 条）守着以上规矩，新增组件请顺手补断言。
+
 ### 点击反馈分档：每个异步操作都要有中间态 + 结果态（2026-09-03 立）
 
 创始人定的方向：这个产品的前端是**重交互、重细节**的。凡是「点一下要等服务端」的操作，
