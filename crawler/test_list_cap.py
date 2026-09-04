@@ -46,11 +46,24 @@ class AdapterCapWiringTest(unittest.TestCase):
     """接线检查：改了 base 的档位，三个 adapter 必须跟着走，别再各留各的硬编码。"""
 
     def test_beisen_feishu_wt_all_use_the_shared_cap(self):
-        from adapters.china_ats import BeisenAdapter
+        from adapters.china_ats import BeisenAdapter, MokaAdapter
         from adapters.feishu import FeishuRecruitAdapter, XiaomiAdapter
         from adapters.wt import WtAdapter
-        for cls in (BeisenAdapter, FeishuRecruitAdapter, XiaomiAdapter, WtAdapter):
+        for cls in (BeisenAdapter, MokaAdapter, FeishuRecruitAdapter, XiaomiAdapter, WtAdapter):
             self.assertEqual(cls._MAX_JOBS, DEFAULT_LIST_CAP, cls.__name__)
+
+    def test_moka_page_cap_follows_the_shared_knob(self):
+        """moka 是**页数**记账（浏览器点「下一页」），必须由 CRAWL_MAX_JOBS 换算，别再写死。
+        回归：写死 60 页时吉利控股自报 86 页只抓到 60 页（1,800/2,580）。"""
+        from adapters.base import resolve_page_cap
+        from adapters.china_ats import MokaAdapter
+        self.assertGreaterEqual(
+            resolve_page_cap(MokaAdapter._PAGE_ROWS, MokaAdapter._MAX_JOBS), 86)
+        os.environ["CRAWL_MAX_JOBS"] = "900"
+        try:
+            self.assertEqual(resolve_page_cap(MokaAdapter._PAGE_ROWS, MokaAdapter._MAX_JOBS), 30)
+        finally:
+            os.environ.pop("CRAWL_MAX_JOBS", None)
 
 
 if __name__ == "__main__":

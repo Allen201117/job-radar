@@ -255,6 +255,9 @@ export default function JobCard({
   );
   const gradClass = useMemo(() => gradClassLabel(job.grad_class), [job.grad_class]);
   const earlyBatch = useMemo(() => isEarlyBatch(job.title), [job.title]);
+  // 门店批量副本在检索层已折叠成一条（lib/bulk-store-dedup）。这里如实说明它代表多少家门店，
+  // 否则用户会以为我们只抓到一个店 —— 折叠可以，瞒着不行。
+  const storeCount = Number((job as any).__storeCount) || 1;
   // 新鲜度信任信号：last_seen_at 距今多久 → 「今天/X 天前确认在招」；>14 天转暖橙告警「可能已下线」。
   const freshness = useMemo(() => freshnessLabel(job.last_seen_at), [job.last_seen_at]);
 
@@ -405,6 +408,9 @@ export default function JobCard({
     // classifyJobFunction 兜底值「其他」= 没判出来，做成标签只会误导 → 不显示。
     jobFunction && jobFunction !== "其他"
       ? { key: "function", label: "岗位类型", value: jobFunction, tone: "neutral" }
+      : null,
+    storeCount > 1
+      ? { key: "stores", label: "门店", value: `另有 ${storeCount - 1} 家门店在招`, tone: "neutral" as const }
       : null,
     { key: "location", icon: MapPin, label: "城市", value: jobFieldDisplayValue(job.location), tone: "neutral" },
     { key: "education", icon: GraduationCap, label: "学历", value: jobFieldDisplayValue(edu), tone: "neutral" },
