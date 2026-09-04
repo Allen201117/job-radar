@@ -511,6 +511,25 @@ _SSR_COL_ALIASES = (
 )
 
 
+def _ssr_normalize_job_url(origin: str, href: str) -> str:
+    """列表锚点 → 稳定的逐岗 jd_url：**身份只在 path 里**（/zpdetail/{id}），query 一律剥掉。
+
+    ⚠️ 与 theme2 CMS 的坑②同源、但更毒：这类门户把**列表当前页号**回传进详情链接
+    （联易融实测 `/zpdetail/390725089?PageIndex=1`），于是
+      · 同一个岗从第 1 页和第 3 页抓到 → 算出两个不同的 canonical_jd_url → 库里同岗多行；
+      · 与库里已有的干净 URL 也对不上 → 老行在 list-absence 里变「缺席」→ 撤岗 + 次日 purge 永久删。
+    canonicalize_jd_url 只去 utm_ 类 tracking 参数，PageIndex 会被原样保留，挡不住这个。
+    2026-09-04 live 实测：不剥的话联易融 13 个在招岗会被全量误判撤岗并插 13 行重复。
+    """
+    if not href:
+        return ""
+    href = _html.unescape(href).strip()
+    path = href.split("?", 1)[0].split("#", 1)[0]
+    if not path:
+        return ""
+    return path if path.startswith(("http://", "https://")) else urljoin((origin or "") + "/", path)
+
+
 def _ssr_cell_text(attrs: str, body: str) -> str:
     """单元格取值：优先 title 属性（长文本不会被截断），否则取去标签后的文本。"""
     m = _SSR_TITLE_ATTR_RE.search(attrs or "")
@@ -558,7 +577,7 @@ def _ssr_parse_list(html_text: str, origin: str):
         if not a:
             continue
         title = _ssr_cell_text(a.group("attrs"), a.group("body"))   # 坑③：优先 <a title="…">
-        jd_url = urljoin(origin + "/", href_m.group("href").strip())
+        jd_url = _ssr_normalize_job_url(origin, href_m.group("href"))
         if not title or jd_url in seen:
             continue
         seen.add(jd_url)
@@ -1267,6 +1286,19 @@ class BeisenAdapter(ChinaSpaAdapter):
         self.reported_total = (first_total if first_total is not None
                                else (len(jobs) if complete else None))
         self.fetch_complete = complete
+        # 🚫 抓全 ≠ 可以按缺席撤岗 —— 本路径**单独关掉** list-absence（类默认 True，只降本实例）。
+        # 「这个板块的列表是全集」是真的（收到的条数 == 站点自报），但库里还压着**旧浏览器路径**
+        # 留下的脏行：老的 _fetch_ssr 用 a[href] 全页抓锚点，把详情页侧栏「热招职位/长招职位」里
+        # **别的板块**的岗也收了进来，挂在本源名下。
+        # 2026-09-04 live 实证（联易融 /social，库里 13 行 vs 列表 13 行）：2 行缺席里
+        #   · 390849929 详情页写「对不起，此职位已停用」→ 真撤岗；
+        #   · 390854070 详情页是**在招的校园招聘岗**（发布 2026-08-13，武汉）——它只是不属于
+        #     /social 板块，而 linklogis 并没有 /campus 源，一旦按缺席撤岗就会被 expired、
+        #     次日 purge-expired 永久删除。这正是 CLAUDE.md §4 立碑的「误杀在招岗」。
+        # 抽样一个源的 2 条缺席里就有 1 条是活岗，错杀率太高，不满足「不可逆操作前先核验」的门槛。
+        # 代价可控：beisen 死岗本来就由 dead-link-audit.yml（浏览器 SPA 审计）逐岗判，
+        # 不依赖 list-absence，关掉只是少一条冗余通道，不会让死岗永远挂着。
+        self.supports_absence_liveness = False
         return json.dumps({"_ssr_jobs": jobs}, ensure_ascii=False)
 
     def _fetch_paginated(self, source_url: str) -> str:
