@@ -142,6 +142,57 @@ def detect_page_state(status_code, html):
     return None
 
 
+# ── 「再跳一跳」：公司官网的招聘栏目页 ≠ 岗位所在地 ────────────────────────────
+# 2026-09-04 台账实证：no_stable_jd 52 家里 51 家判成 unknown_spa，而其中 5 家**当天被人工
+# 接通了**——把漏斗看到的入口和真正有岗的地方并排放，形态完全一致：
+#     掌阅科技    zhangyue.com/careers            → 岗位在 jobs.zhangyue.com（302 到飞书租户）
+#     壳牌        shell.com.cn/zh_cn/careers      → 岗位在 jobs.shell.com（302 到 Workday）
+#     同花顺      job.10jqka.com.cn/              → 岗位在 campus.10jqka.com.cn
+# 漏斗停在「招聘介绍页」上等岗位数据，可那种页面**本来就没有岗位数据**，于是浏览器道回报
+# anti_bot_blocked / 未拿到逐岗 URL（巴斯夫、壳牌各因此空撞 30 次）。这个标签是误导：
+# 不是被反爬，是站错了页。
+#
+# ⚠️ 只做**自家招聘子域**这一跳，刻意不做「页面里的 ATS 链接」：
+# detect_platform 已经会扫 HTML 里的第三方 ATS 域名（连不带 scheme 的裸 host 都认），
+# 那条路早就通了，再写一遍是自欺的死代码。这里补的是它覆盖不到的那半 ——
+# 子域名本身不是已知 ATS（jobs.zhangyue.com / jobs.shell.com 都不是），
+# **价值全在「跟过去让它的 302 把我们带到 ATS」**，落地后 final_url 才认得出来。
+_CAREERS_SUBDOMAIN_RE = re.compile(
+    r"^(?:job|jobs|career|careers|hr|campus|zhaopin|recruit|recruitment|talent|join)[a-z0-9-]*$",
+    re.I,
+)
+
+
+def _registrable(host):
+    """够用的主域近似：取末两段（.com.cn 这类取末三段）。只用于判「是不是自家子域」。"""
+    parts = [p for p in str(host or "").lower().split(".") if p]
+    if len(parts) < 2:
+        return ""
+    if len(parts) >= 3 and parts[-2] in {"com", "net", "org", "gov", "edu"} and len(parts[-1]) == 2:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def find_careers_subdomain_hops(html, final_url, limit=3):
+    """入口页 → 同主域下的招聘专用子域候选（去重保序）。抽不出返回 []。"""
+    base_host = (urlparse(final_url or "").hostname or "").lower()
+    base_root = _registrable(base_host)
+    if not base_root:
+        return []
+    hops, seen = [], set()
+    for raw in _URL_RE.findall(str(html or "")):
+        host = (urlparse(raw).hostname or "").lower()
+        if not host or host == base_host or _registrable(host) != base_root:
+            continue
+        if not _CAREERS_SUBDOMAIN_RE.match(host.split(".")[0]):
+            continue
+        url = "https://%s/" % host
+        if url not in seen and len(hops) < limit:
+            seen.add(url)
+            hops.append(url)
+    return hops
+
+
 def _looks_like_recruiting_page(html):
     """自建招聘页信号：有岗位列表形态，或可见文本里招聘词足够密集。"""
     source = str(html or "")
@@ -333,8 +384,12 @@ def resolve_source_url(platform, final_url, html):
     return final_url
 
 
-def fingerprint(url, *, company=None, client=None, timeout=15):
-    """GET 招聘入口并返回平台、adapter、可探活 URL 与判定证据。失败重试一次。"""
+def fingerprint(url, *, company=None, client=None, timeout=15, _hop_depth=0):
+    """GET 招聘入口并返回平台、adapter、可探活 URL 与判定证据。失败重试一次。
+
+    认不出平台时会**再跳一跳**（深度 1）：公司官网的招聘栏目页常常只是介绍页，
+    真正的岗位板在另一个域（第三方 ATS 或自家 job*/campus* 子域）。见 find_ats_hops 的注释。
+    """
     own_client = client is None
     cli = client or httpx.Client(
         timeout=timeout,
@@ -378,6 +433,24 @@ def fingerprint(url, *, company=None, client=None, timeout=15):
             and _looks_like_recruiting_page(html)
         ):
             special = "unknown_spa"
+        # 认不出平台 → 先别急着判 unknown_spa/anti_bot，**从这一页找去岗位板的下一跳**。
+        # 只在深度 0 做，且只接受「跳过去真认出了 ATS」的结果；跳不到就按原路返回，
+        # 不改变任何既有判定（fail-safe：这一步只可能把 unknown 变成已知，不会反过来）。
+        # 前置条件刻意**不要求入口页的身份校验通过**：恰恰是这种「薄介绍页」验不出身份
+        # （掌阅的 zhangyue.com 与「掌阅科技」字面不重叠），要求它就等于把这条路堵死。
+        # 真正的门在下游、而且更硬：gap_funnel 先插 disabled 源 → 真抓一轮 →
+        # 回读香港库确认有健康岗才 enable。这里只负责把候选送到那道门前。
+        if platform == "unknown" and _hop_depth == 0 and _looks_like_recruiting_page(html):
+            for hop in find_careers_subdomain_hops(html, final_url):
+                try:
+                    hopped = fingerprint(
+                        hop, company=company, client=cli, timeout=timeout, _hop_depth=1
+                    )
+                except Exception:  # noqa: BLE001 —— 下一跳探测失败不许拖垮主判定
+                    continue
+                if hopped.get("adapter"):
+                    hopped["reason"] = "careers_subdomain_hop_from:%s" % final_url
+                    return hopped
         # 已识别 ATS 的普通 SPA 壳仍交给 adapter；unknown_spa 只接住认不出的壳。
         if special and (special != "unknown_spa" or platform == "unknown"):
             return {
