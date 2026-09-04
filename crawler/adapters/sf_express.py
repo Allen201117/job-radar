@@ -38,6 +38,10 @@ class SfExpressAdapter(BaseAdapter):
     _short_pages: List[tuple] = []
     PAGE_RETRIES = 4
     PAGE_RETRY_DELAY = 0.75
+    # 翻 200+ 页会被顺丰按量限流（CI 上第 43 页就开始返 listObj=None）。每页之间歇一下，
+    # 换来的是「一轮抓全 2,164 个岗」而不是「抓 420 个然后被限流踢出去」。
+    # 200 页 × 0.35s ≈ 70s，在 daily 快档 50min 预算里可以忽略。
+    PAGE_DELAY = 0.35
 
     def should_skip(self, source_url: str) -> Optional[str]:
         return None
@@ -129,12 +133,24 @@ class SfExpressAdapter(BaseAdapter):
                         page_size,
                         max(0, total_result - (page_number - 1) * page_size),
                     )
-                page_data = self._fetch_page(
-                    client,
-                    page_number,
-                    expected_rows=expected_rows,
-                )
+                # 「尽力而为」翻页（与 base.paginate_all 同口径）：首页失败才上抛记 failed，
+                # 后续页失败 → 保留已抓到的，停止，让 fetch_complete 如实记「没抓全」。
+                # 顺丰会按量限流：本机顺畅翻完 217 页，CI 上（共享出口 IP + 与其它源并发）
+                # 第 43 页就开始返 listObj=None。旧写法在这里 raise → 整源 failed、
+                # 已经抓到的 420 个在招岗一起丢掉，下一轮 HEAD 预检还会因为刚被限流而 skip，
+                # 于是顺丰连着两条 crawl_run 一个岗都没入 —— 这正是 2026-09-04 线上实测到的。
+                try:
+                    page_data = self._fetch_page(
+                        client,
+                        page_number,
+                        expected_rows=expected_rows,
+                    )
+                except RuntimeError:
+                    self._short_pages.append((page_number, None, expected_rows))
+                    break
                 rows.extend(page_data.get("listObj") or [])
+                if self.PAGE_DELAY:
+                    time.sleep(self.PAGE_DELAY)
 
         rows_by_key = {}
         for row in rows:
