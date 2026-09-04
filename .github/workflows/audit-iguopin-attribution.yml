@@ -1,0 +1,43 @@
+name: audit-iguopin-attribution
+
+# 复核国聘存量岗位的公司归属，把张冠李戴的标成 removed（可逆，purge 不删）。
+# 起因见 crawler/audit_iguopin_attribution.py 模块注释：集团展开路径过去跳过核名，
+# 抽样 40 家里 34 家归属是错的（屯昌县劳动就业服务中心（华润集团）之类）。
+# adapter 侧已修、不再新增；这条 workflow 清存量。手动触发，默认 dry-run。
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "true = 真的写库；留空/false = 只 dry-run 报数"
+        required: false
+        default: "false"
+      limit:
+        description: "只处理前 N 家（留空=全部）"
+        required: false
+        default: ""
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: crawler/requirements.txt
+      - run: pip install -r crawler/requirements.txt
+
+      - name: Audit iguopin attribution
+        env:
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "${{ github.event.inputs.apply }}" = "true" ]; then args+=(--apply); fi
+          if [ -n "${{ github.event.inputs.limit }}" ]; then args+=(--limit "${{ github.event.inputs.limit }}"); fi
+          python3 crawler/audit_iguopin_attribution.py "${args[@]}"
