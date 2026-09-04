@@ -8,6 +8,7 @@ import {
   type AdapterOption,
 } from "@/lib/source-adapters";
 import type { Source } from "@/lib/types";
+import { LEGACY_INPUT_CLASS as inputCls } from "@/components/ui/deprecated/legacy-input-class";
 
 // 抓取方式的取值是给程序用的（http / playwright / manual），下拉里要给人话。
 // 只改显示、不改值——值是 lib/source-adapters.CRAWL_METHODS 的契约，与 crawler 端对齐。
@@ -217,8 +218,6 @@ export default function AddSourceForm({ onAdded }: Props) {
   );
 }
 
-const inputCls =
-  "w-full rounded-lg border border-black/[0.09] bg-white/70 px-3 py-2 text-sm ink-1 outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:placeholder:text-[#8b8478] dark:focus:border-white/40 dark:focus:bg-[#1e1a15]";
 
 function Field({
   label,

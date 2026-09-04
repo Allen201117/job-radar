@@ -44,6 +44,7 @@ import { cn } from "@/lib/utils";
 import CompanyLogo from "@/components/CompanyLogo";
 import type { RecruitmentObservation } from "@/lib/recruitment-cycle";
 import { useBodyScrollLock, useEscapeKey } from "@/lib/ui/hooks";
+import { INSIGHT_CHIP_TONE_CLASS as PAYLOAD_CHIP_TONE } from "@/lib/insight-chip-format";
 
 // 新鲜度分级配色：越旧越偏琥珀，提示用户谨慎参考。
 const FRESHNESS_TONE: Record<FreshnessLevel, string> = {
@@ -53,11 +54,6 @@ const FRESHNESS_TONE: Record<FreshnessLevel, string> = {
   stale: "border border-[#e0a94e] bg-[#fbe6c4] text-[#8a5a12] dark:border-[#e0b15a]/[0.40] dark:bg-[#e0b15a]/[0.20] dark:text-[#e8bf72]",
 };
 
-const PAYLOAD_CHIP_TONE: Record<InsightChipTone, string> = {
-  positive: "border-tone-teal-border bg-tone-teal-bg text-tone-teal-fg",
-  warning: "border-tone-amber-border bg-tone-amber-bg text-tone-amber-fg",
-  neutral: "border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08]",
-};
 
 interface Props {
   company: string;

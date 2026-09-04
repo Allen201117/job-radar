@@ -12,6 +12,7 @@ import type {
   InsightStatus,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { LEGACY_INPUT_CLASS as inputCls } from "@/components/ui/deprecated/legacy-input-class";
 
 interface AdminItem {
   id: string;
@@ -179,8 +180,6 @@ const EMPTY_FORM: FormState = {
   quote_url: "",
 };
 
-const inputCls =
-  "w-full rounded-lg border border-black/[0.09] bg-white/70 px-3 py-2 text-sm ink-1 outline-none placeholder:text-[#a39a8c] focus:border-[#1a1714]/55 focus:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:placeholder:text-[#8b8478] dark:focus:border-white/40 dark:focus:bg-[#1e1a15]";
 
 // 从 payload 安全取字符串字段
 function pstr(payload: Record<string, unknown> | null | undefined, key: string): string {

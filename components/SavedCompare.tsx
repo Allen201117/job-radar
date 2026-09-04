@@ -19,6 +19,7 @@ import type { MatchReason, ScoredJob } from "@/lib/types";
 import { cleanSummary, cn, freshnessLabel } from "@/lib/utils";
 import CompanyLogo from "@/components/CompanyLogo";
 import { useBodyScrollLock, useEscapeKey } from "@/lib/ui/hooks";
+import { INSIGHT_CHIP_TONE_CLASS as CHIP_TONE } from "@/lib/insight-chip-format";
 
 type Props = {
   open: boolean;
@@ -40,11 +41,6 @@ const MATCH_REASON_LABELS = {
   company: "命中目标公司",
 } satisfies Record<Exclude<MatchReason["type"], "freshness">, string>;
 
-const CHIP_TONE: Record<InsightChipTone, string> = {
-  positive: "border-tone-teal-border bg-tone-teal-bg text-tone-teal-fg",
-  warning: "border-tone-amber-border bg-tone-amber-bg text-tone-amber-fg",
-  neutral: "border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08]",
-};
 
 const LABEL_CELL =
   "sticky left-0 z-10 w-28 min-w-28 border-b border-r border-black/[0.06] bg-[#f4efe6] px-3 py-4 align-top text-xs font-semibold ink-2 dark:border-white/[0.1] dark:bg-[#16130f]";

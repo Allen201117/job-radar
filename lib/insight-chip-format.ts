@@ -1,5 +1,13 @@
 export type InsightChipTone = "positive" | "warning" | "neutral";
 
+/** 芯片配色。此前在 SavedCompare 与 CompanyInsightDrawer 里逐字复制了两份（连键名都一样，
+ *  只换了变量名），是典型的「改一处漏一处」在等着发生。收到类型旁边，保持单一定义点。 */
+export const INSIGHT_CHIP_TONE_CLASS: Record<InsightChipTone, string> = {
+  positive: "border-tone-teal-border bg-tone-teal-bg text-tone-teal-fg",
+  warning: "border-tone-amber-border bg-tone-amber-bg text-tone-amber-fg",
+  neutral: "border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08]",
+};
+
 export type InsightChip = {
   text: string;
   tone: InsightChipTone;
