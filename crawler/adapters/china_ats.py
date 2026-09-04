@@ -26,7 +26,7 @@ import httpx
 
 import normalizer
 from .base import (DEFAULT_LIST_CAP, PageResult, RawJob, RepetitionBrake, paginate_all,
-                   resolve_detail_cap, resolve_list_cap)
+                   resolve_detail_cap, resolve_list_cap, resolve_page_cap)
 from .playwright_base import PlaywrightAdapter
 
 _log = logging.getLogger(__name__)
@@ -203,7 +203,15 @@ class MokaAdapter(PlaywrightAdapter):
     _routes = ("#/jobs", "", "#/campus/jobs", "#/positions")
     # Moka 列表每页仅渲染 ~30 个岗位卡，其余在「sd-Pagination」分页组件后面（非 ant，非滚动加载）。
     # 不翻页只能拿首页，岗位多的租户被截断（如李宁 32/176、SHEIN 34/747）。逐页点「下一页」累加全量。
-    _page_cap = 60  # 30/页 → 封顶约 1800 岗，足够覆盖最大租户（SHEIN ~25 页）且防失控
+    # 单租户抓取条数上限 → 换算成页数上限（env CRAWL_MAX_JOBS 整体调档，见 base.resolve_page_cap）。
+    # ⚠️ 旧实现写死 `_page_cap = 60`（"封顶约 1800 岗，足够覆盖最大租户 SHEIN ~25 页"）——
+    # 那个 60 背后其实是「当时最大的租户多少页」，租户一扩招就悄悄截断且 status 还是 success：
+    # 2026-09-04 live 实测吉利控股自报 86 页/2,580 岗，卡在 60 页只拿到 1,800，漏 780。
+    # 收归同一个旋钮后，页数上限只剩「防失控」的兜底作用，真正的收尾交给分页器自报的总页数。
+    _MAX_JOBS = DEFAULT_LIST_CAP
+    # 显式覆写（只翻前 N 页）的口子，供单测与 verify_sources 的廉价探活用；None = 走共享旋钮。
+    # 同 wt._PAGE_CAP / sf_express.MAX_PAGES 的既有写法。
+    _page_cap = None
     # Moka 自有分页「下一页」按钮：class 前缀稳定（带 build hash 后缀），末页加 disabled 属性。
     _next_sel = "button[class*='sd-Pagination-forward']"
     # 分页器里的页码按钮：末页页码 = 总页数。Moka 列表接口是密文、DOM 里也没有「共 N 个职位」
@@ -226,7 +234,7 @@ class MokaAdapter(PlaywrightAdapter):
         no_growth = 0
         self._last_page = self._read_last_page(page)   # 分页器自报的总页数（拿不到=None）
         pages_done = 0
-        for _ in range(self._page_cap):
+        for _ in range(self._page_cap or resolve_page_cap(self._PAGE_ROWS, self._MAX_JOBS)):
             pages_done += 1
             cards = page.eval_on_selector_all("a[href*='#/job/']", self._cards_js)
             before = len(union)
@@ -456,6 +464,139 @@ def _beisen_ssr_fill_summaries(jobs: List[dict]) -> None:
                     job["summary"] = body[:4000]
             except Exception:
                 continue
+
+
+# ============================================================================
+# 老版 SSR「jobsTable」门户（路径式详情：/zpdetail/{id}、/job_show/{id}）——纯 httpx，零浏览器
+# ============================================================================
+# 与上面 theme2 CMS 门户的区别（2026-09-04 live 实测 21 个租户）：
+#   theme2 CMS：列表是 <ul><li><a href="/{板块}xq?jobId={id}">，详情走 **查询串**。
+#   jobsTable  ：列表是 <table class="jobsTable"><tr><td><a href="/zpdetail/{id}">，详情走 **路径**，
+#                因此 _CMS_ROW_RE（强制 ?jobId=）一条都匹配不到 → 之前只能掉进浏览器 _fetch_ssr，
+#                而 _fetch_ssr **只渲染首屏、从不翻页、也不报总数** → 21 个源集体
+#                「reported_total=None＝不可判定」，抓全率对它们答不上来。
+#
+# 分母就印在页面上，不用猜（MvcPager 组件，raw HTML 里就有，无需浏览器）：
+#   <div class="counts">共36条记录</div> ... <div class="tablefooter"> 当前第1/3页
+# live 实测 11 个租户有分页条（223 → 1,190 条，漏抓 967），另 10 个只有一页故不渲染分页条。
+#
+# 已 live 确认的坑：
+#   ① **每页行数逐租户不同**（实测 zpdetail 系 15 / job_show 系 10）→ 不写死，按首页行数推断
+#      （同 avature.py「页长各租户不同」的既有处置）。
+#   ② 表头列序逐租户不同（富瀚微＝职位名称/职位类型/工作地点/发布时间，科伦＝职位名称/职能/公司/
+#      招聘人数/工作地点）→ 必须按表头建列映射，**不能按下标硬取**，否则「公司」会被写进 location。
+#   ③ 岗位全名在 `<a title="…">` 属性里，`<a>` 内文本同样是全名但更易被样式标签切碎 → 优先取 title 属性。
+#   ④ 与 theme2 同源的老坑：模板占位假岗藏在 <!-- --> 注释里，解析前必须先剥注释。
+_SSR_TABLE_RE = re.compile(r"<table[^>]*class=\"[^\"]*jobsTable[^\"]*\"[^>]*>(.*?)</table>", re.S | re.I)
+_SSR_TR_RE = re.compile(r"<tr[^>]*>(.*?)</tr>", re.S | re.I)
+_SSR_TD_RE = re.compile(r"<td([^>]*)>(.*?)</td>", re.S | re.I)
+_SSR_TITLE_ATTR_RE = re.compile(r"\btitle=\"([^\"]*)\"", re.I)
+# 路径式详情锚点。与 _BEISEN_SSR_ANCHOR_JS 的第②类同一套路径名，保持两端口径一致。
+# ⚠️ 分两步匹配（先整个 <a> 标签、再在属性串里找 href）而不是一条正则连着写：
+# 实测租户把 `title=` 写在 **href 前面**（`<a title="…" href="/zpdetail/123">`），
+# 一条正则只能捕获 href 之后的属性 → title 取不到 → 退回被样式标签切碎的内文本（坑③失效）。
+_SSR_ANCHOR_TAG_RE = re.compile(r"<a\s(?P<attrs>[^>]*)>(?P<body>.*?)</a>", re.S | re.I)
+_SSR_PATH_HREF_RE = re.compile(
+    r"href=\"(?P<href>[^\"]*/(?:job[_-]?show|zpdetail|jobdetail|job[_-]?detail|positiondetail)"
+    r"/\d{4,}[^\"]*)\"", re.I)
+# 分页条（ASP.NET MvcPager）：总条数与「当前第 X/Y 页」分别在两个 div 里，必须分开匹配。
+_SSR_COUNT_RE = re.compile(r"共\s*(\d{1,6})\s*条记录")
+_SSR_CURPAGE_RE = re.compile(r"当前第\s*(\d{1,4})\s*/\s*(\d{1,4})\s*页")
+_SSR_PAGED_MAX_PAGES = 200      # 安全上限（防翻不停）；命中即 fetch_complete=False。实测最长 32 页。
+# 表头文案 → 规范字段。只认真正能用的三列，其余（发布时间/公司/招聘人数/操作）一律忽略。
+_SSR_COL_ALIASES = (
+    ("location", ("工作地点", "工作城市", "地点", "城市", "工作地区", "所在地")),
+    ("job_type", ("职位类型", "职位类别", "职位分类", "职能", "岗位类别", "职位职能")),
+    ("education", ("学历", "职位学历", "学历要求")),
+)
+
+
+def _ssr_normalize_job_url(origin: str, href: str) -> str:
+    """列表锚点 → 稳定的逐岗 jd_url：**身份只在 path 里**（/zpdetail/{id}），query 一律剥掉。
+
+    ⚠️ 与 theme2 CMS 的坑②同源、但更毒：这类门户把**列表当前页号**回传进详情链接
+    （联易融实测 `/zpdetail/390725089?PageIndex=1`），于是
+      · 同一个岗从第 1 页和第 3 页抓到 → 算出两个不同的 canonical_jd_url → 库里同岗多行；
+      · 与库里已有的干净 URL 也对不上 → 老行在 list-absence 里变「缺席」→ 撤岗 + 次日 purge 永久删。
+    canonicalize_jd_url 只去 utm_ 类 tracking 参数，PageIndex 会被原样保留，挡不住这个。
+    2026-09-04 live 实测：不剥的话联易融 13 个在招岗会被全量误判撤岗并插 13 行重复。
+    """
+    if not href:
+        return ""
+    href = _html.unescape(href).strip()
+    path = href.split("?", 1)[0].split("#", 1)[0]
+    if not path:
+        return ""
+    return path if path.startswith(("http://", "https://")) else urljoin((origin or "") + "/", path)
+
+
+def _ssr_cell_text(attrs: str, body: str) -> str:
+    """单元格取值：优先 title 属性（长文本不会被截断），否则取去标签后的文本。"""
+    m = _SSR_TITLE_ATTR_RE.search(attrs or "")
+    if m and m.group(1).strip():
+        return _cms_text(m.group(1))
+    return _cms_text(body)
+
+
+def _ssr_column_map(table_html: str):
+    """按表头行建「列下标 → 规范字段」映射（列序逐租户不同，见坑②）。"""
+    col_map = {}
+    for row in _SSR_TR_RE.findall(table_html):
+        cells = [_ssr_cell_text(a, b) for a, b in _SSR_TD_RE.findall(row)]
+        if not cells or not any("职位名称" in c or "岗位名称" in c for c in cells):
+            continue
+        for idx, cell in enumerate(cells):
+            for field, names in _SSR_COL_ALIASES:
+                if field in col_map.values():
+                    continue
+                if any(n in cell for n in names):
+                    col_map[idx] = field
+                    break
+        break
+    return col_map
+
+
+def _ssr_parse_list(html_text: str, origin: str):
+    """解析 jobsTable 列表页 → (rows, total, last_page)。
+
+    total / last_page 取自页面分页条（站点自报，不是我们估的）；没有分页条＝只有一页，返回 None。
+    rows 为 [{title, jd_url, location, job_type, education}]，jd_url 已拼成绝对地址。
+    """
+    body = _CMS_COMMENT_RE.sub(" ", html_text or "")       # 坑④：先剥注释里的模板占位假岗
+    table_m = _SSR_TABLE_RE.search(body)
+    table = table_m.group(1) if table_m else body
+    col_map = _ssr_column_map(table)
+    rows, seen = [], set()
+    for tr in _SSR_TR_RE.findall(table):
+        a = href_m = None
+        for cand in _SSR_ANCHOR_TAG_RE.finditer(tr):
+            href_m = _SSR_PATH_HREF_RE.search(cand.group("attrs"))
+            if href_m:
+                a = cand
+                break
+        if not a:
+            continue
+        title = _ssr_cell_text(a.group("attrs"), a.group("body"))   # 坑③：优先 <a title="…">
+        jd_url = _ssr_normalize_job_url(origin, href_m.group("href"))
+        if not title or jd_url in seen:
+            continue
+        seen.add(jd_url)
+        row = {"title": title, "jd_url": jd_url,
+               "location": None, "job_type": None, "education": None}
+        cells = _SSR_TD_RE.findall(tr)
+        for idx, (attrs, cell_body) in enumerate(cells):
+            field = col_map.get(idx)
+            if not field or row.get(field):
+                continue
+            value = _ssr_cell_text(attrs, cell_body)
+            if value and value != title:
+                row[field] = _cms_education(value) if field == "education" else value
+        rows.append(row)
+    flat = re.sub(r"\s+", " ", body)
+    cm, pm = _SSR_COUNT_RE.search(flat), _SSR_CURPAGE_RE.search(flat)
+    total = int(cm.group(1)) if cm else None
+    last_page = int(pm.group(2)) if pm else None
+    return rows, total, last_page
 
 
 # ============================================================================
@@ -843,6 +984,12 @@ class BeisenAdapter(ChinaSpaAdapter):
             if j:
                 self._detail_route = route
                 return j
+            # 老版 SSR「jobsTable」租户（路径式详情）：没有 PortalId → _httpx_fetch 恒为 None。
+            # 必须在下面 raise 之前试一把，否则这类租户被旧路由登记「锁死」在 failed 上
+            # （2026-09-04 实测日立能源 / 华安基金即此症状：错误恒为 "httpx fetch failed for cached route"）。
+            ssr = self._httpx_fetch_ssr_paged(source_url)
+            if ssr:
+                return ssr
             # httpx 失败且路由已缓存 → 不要穿透到浏览器（CI 环境未装 Playwright 会直接崩溃）。
             # 正确处理：记 partial_success，等下次 auto-discover 重跑刷新路由缓存。
             raise RuntimeError(
@@ -879,6 +1026,12 @@ class BeisenAdapter(ChinaSpaAdapter):
                 cms = None
             if cms:
                 return cms
+
+        # 老版 SSR「jobsTable」门户（路径式详情，非 ?jobId= 故 CMS 分支匹配不到）→ 纯 httpx 翻到底。
+        # 放在开浏览器之前：浏览器 _fetch_ssr 只渲染首屏、不翻页、也不报分母。
+        ssr = self._httpx_fetch_ssr_paged(source_url)
+        if ssr:
+            return ssr
 
         # 都没打通 → 回退浏览器全流程（探+缓存 route），再不行落 SSR
         try:
@@ -1064,6 +1217,89 @@ class BeisenAdapter(ChinaSpaAdapter):
             for field in ("summary", "education", "job_type", "location"):
                 if detail.get(field) and not row.get(field):
                     row[field] = detail[field]
+
+    def _httpx_fetch_ssr_paged(self, source_url: str) -> Optional[str]:
+        """老版 SSR「jobsTable」门户（路径式详情）：纯 httpx **翻到底** + 分母取自页面分页条。
+
+        返回值与 _fetch_ssr 同 shape（``{"_ssr_jobs":[…]}``），parse() 不必新增分支。
+        不是这种门户（首页解析不出路径式锚点）→ 返回 None，原样交回原有流程（浏览器 _fetch_ssr），
+        故对其它租户零影响。
+
+        ⚠️ fetch_complete 只在**正面证明抓全**时才置 True（BeisenAdapter 开着 list-absence 撤岗，
+        「抓漏 + 自称抓全」＝误杀在招岗，CLAUDE.md §4 立碑）。三道否决：
+          ① 翻页参数不认账（页页回同一批岗）；② 分页条自报 N 页却没翻到 N 页；③ 收到的条数 < 自报总数。
+        """
+        parsed = urlparse(source_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        seen_urls: set = set()
+        pages_seen = [0]
+        repeated = [False]      # 翻页参数不认账（每页都回同一批岗）时置位
+        cache = {}              # 首页 HTML 复用，别为了探测多打一次
+
+        with httpx.Client(timeout=20, follow_redirects=True,
+                          headers={"User-Agent": PlaywrightAdapter.user_agent}) as cli:
+            try:
+                first = cli.get(self._cms_page_url(parsed, 1))
+                first.raise_for_status()
+            except Exception:
+                return None
+            cache[1] = first.text
+            first_rows, first_total, last_page = _ssr_parse_list(first.text, origin)
+            if not first_rows:
+                return None
+            # 坑①：每页行数逐租户不同（实测 15 / 10），按首页行数推断，别写死。
+            page_size = len(first_rows)
+
+            def fetch_page(page: int) -> PageResult:
+                text = cache.pop(page, None)
+                if text is None:
+                    resp = cli.get(self._cms_page_url(parsed, page))
+                    resp.raise_for_status()   # 首页失败上抛记 failed；后续页由 paginate_all 尽力而为
+                    text = resp.text
+                rows, total, lastp = _ssr_parse_list(text, origin)
+                pages_seen[0] = page
+                # 该租户不认 PageIndex（页页回同一批岗）→ 立刻停，别空转 200 页；
+                # 且此时只看见了第一页，绝不能自称抓全（下面置 complete=False）。
+                fresh = [r for r in rows if r["jd_url"] not in seen_urls]
+                if rows and not fresh:
+                    repeated[0] = True
+                    return PageResult(items=[], total=None, total_pages=None)
+                seen_urls.update(r["jd_url"] for r in rows)
+                return PageResult(items=fresh,
+                                  total=total if page == 1 else None,
+                                  total_pages=lastp if page == 1 else None)
+
+            max_pages = min(resolve_page_cap(page_size, self._MAX_JOBS), _SSR_PAGED_MAX_PAGES)
+            jobs, reported, complete = paginate_all(
+                fetch_page, page_size=page_size, first_page=1,
+                max_pages=max_pages, logger=None,
+                label=f"beisen-ssr {parsed.netloc}")
+
+        if repeated[0] or (last_page and pages_seen[0] < last_page):
+            complete = False
+        if first_total is not None and len(jobs) < first_total:
+            complete = False
+        if not jobs:
+            return None
+        _beisen_ssr_fill_summaries(jobs)
+        # 站点报了总条数就用它当分母；没报（单页租户不渲染分页条）→ 抓全时诚实记「看见的全部」。
+        self.reported_total = (first_total if first_total is not None
+                               else (len(jobs) if complete else None))
+        self.fetch_complete = complete
+        # 🚫 抓全 ≠ 可以按缺席撤岗 —— 本路径**单独关掉** list-absence（类默认 True，只降本实例）。
+        # 「这个板块的列表是全集」是真的（收到的条数 == 站点自报），但库里还压着**旧浏览器路径**
+        # 留下的脏行：老的 _fetch_ssr 用 a[href] 全页抓锚点，把详情页侧栏「热招职位/长招职位」里
+        # **别的板块**的岗也收了进来，挂在本源名下。
+        # 2026-09-04 live 实证（联易融 /social，库里 13 行 vs 列表 13 行）：2 行缺席里
+        #   · 390849929 详情页写「对不起，此职位已停用」→ 真撤岗；
+        #   · 390854070 详情页是**在招的校园招聘岗**（发布 2026-08-13，武汉）——它只是不属于
+        #     /social 板块，而 linklogis 并没有 /campus 源，一旦按缺席撤岗就会被 expired、
+        #     次日 purge-expired 永久删除。这正是 CLAUDE.md §4 立碑的「误杀在招岗」。
+        # 抽样一个源的 2 条缺席里就有 1 条是活岗，错杀率太高，不满足「不可逆操作前先核验」的门槛。
+        # 代价可控：beisen 死岗本来就由 dead-link-audit.yml（浏览器 SPA 审计）逐岗判，
+        # 不依赖 list-absence，关掉只是少一条冗余通道，不会让死岗永远挂着。
+        self.supports_absence_liveness = False
+        return json.dumps({"_ssr_jobs": jobs}, ensure_ascii=False)
 
     def _fetch_paginated(self, source_url: str) -> str:
         """渲染列表页，捕获其 GetJobAdPageList POST 请求，然后用站点自身 session 服务端翻页重放，
