@@ -121,13 +121,55 @@ class SmartRecruitersAdapter(BaseAdapter):
         return out
 
 
+# SmartRecruiters 的 location.country 是 **ISO-3166-1 alpha-2 小写码**（"cn" / "de"），不是国名。
+# geo 只认国名/城市名，于是这个字段一直等于没写：
+#   · "Remote cn"  → derive_country_code=None → 116 个艾伯维中国远程岗被当成「地点不明的远程岗」，
+#                    按源 regions 兜底判成 overseas（源没 CN 时）——中国岗被算成海外岗；
+#   · "Remote de"  → 同样 None → 一旦源 regions 补上 CN，兜底又会把德国远程岗判成 domestic，
+#                    正是 76ce4ff 刚修掉的「裸远程混进国内岗」那个坑；
+#   · "He Fei Shi, An Hui Sheng, cn" → 拼音按音节分写（合肥写成 He Fei Shi），geo 的城市词典
+#                    对不上，全靠这个 cn 才能判出国家 —— 认不出就整条丢掉（大陆集团 29 个中国岗漏 8 个）。
+# 所以在 adapter 出口把 ISO-2 展开成英文国名：这里**确知**该字段的语义（是结构化国家码，不是自由文本），
+# 在 geo 里按自由文本猜两字母码反而危险（"CN Tower, Toronto" / "Remote in the US" 都会误判）。
+# 顺带把用户看到的地点从「Remote de」变成「Remote Germany」，可读性也对。
+#
+# ⚠️ 表里每加一个国家，都必须让 geo 能把它判成 overseas（大中华三地除外）——
+# crawler/test_smartrecruiters_country.py 的契约测试会逐条验，漏一个就红。
+_ISO2_COUNTRY_NAMES = {
+    "cn": "China", "hk": "Hong Kong", "mo": "Macau", "tw": "Taiwan",
+    "us": "United States", "sg": "Singapore",
+    "ae": "United Arab Emirates", "ar": "Argentina", "at": "Austria", "au": "Australia",
+    "ax": "Aland Islands", "be": "Belgium", "bg": "Bulgaria", "br": "Brazil",
+    "ca": "Canada", "ch": "Switzerland", "cl": "Chile", "co": "Colombia",
+    "cr": "Costa Rica", "cz": "Czechia", "de": "Germany", "dk": "Denmark",
+    "do": "Dominican Republic", "dz": "Algeria", "ec": "Ecuador", "ee": "Estonia",
+    "eg": "Egypt", "es": "Spain", "fi": "Finland", "fr": "France",
+    "gb": "United Kingdom", "gt": "Guatemala", "hr": "Croatia", "hu": "Hungary",
+    "id": "Indonesia", "ie": "Ireland", "il": "Israel", "in": "India",
+    "it": "Italy", "jp": "Japan", "kh": "Cambodia", "kr": "South Korea",
+    "lt": "Lithuania", "lv": "Latvia", "ma": "Morocco", "mx": "Mexico",
+    "my": "Malaysia", "nl": "Netherlands", "no": "Norway", "nz": "New Zealand",
+    "ph": "Philippines", "pk": "Pakistan", "pl": "Poland", "pr": "Puerto Rico",
+    "pt": "Portugal", "ro": "Romania", "rs": "Serbia", "ru": "Russia",
+    "sa": "Saudi Arabia", "se": "Sweden", "si": "Slovenia", "sk": "Slovakia",
+    "th": "Thailand", "tn": "Tunisia", "tr": "Turkey", "ua": "Ukraine",
+    "vn": "Vietnam", "za": "South Africa",
+}
+
+
+def _country_label(raw) -> str:
+    """ISO-2 → 英文国名；认不出就原样返回（含 SmartRecruiters 自己的占位码 "xx"）。"""
+    code = str(raw or "").strip()
+    return _ISO2_COUNTRY_NAMES.get(code.lower(), code)
+
+
 def _location_str(loc) -> Optional[str]:
     if not isinstance(loc, dict):
         return None
+    country = _country_label(loc.get("country"))
     if loc.get("remote") is True:
-        # 远程岗位地点串带上国家，便于 keep_for_china_radar 判定是否绑定海外
-        country = loc.get("country") or ""
+        # 远程岗位地点串带上国家，便于 keep_for_china_radar / derive_job_scope 判定是否绑定海外
         return f"Remote {country}".strip()
-    parts = [loc.get("city"), loc.get("region"), loc.get("country")]
+    parts = [loc.get("city"), loc.get("region"), country]
     joined = ", ".join(p for p in parts if p)
     return joined or None
