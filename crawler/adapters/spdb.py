@@ -20,6 +20,7 @@ import httpx
 from selectolax.parser import HTMLParser
 
 from .base import BaseAdapter, PageResult, RawJob, paginate_all, resolve_detail_cap
+from .cn_portal_tls import make_transport
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -82,7 +83,8 @@ class SpdbAdapter(BaseAdapter):
             "Accept": "application/json,text/plain,*/*",
             "Referer": self.LIST_REFERER,   # 缺它整个列表接口 500，见模块 docstring
         }
-        with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
+        with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers,
+                          transport=make_transport()) as client:
             def fetch_page(page: int) -> PageResult:
                 response = client.post(self.LIST_API, data={"pageNo": page})
                 response.raise_for_status()

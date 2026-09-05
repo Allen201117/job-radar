@@ -24,6 +24,7 @@ import httpx
 from selectolax.parser import HTMLParser
 
 from .base import BaseAdapter, PageResult, RawJob, paginate_all, resolve_detail_cap, resolve_page_cap
+from .cn_portal_tls import make_transport
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -93,7 +94,8 @@ class IcbcAdapter(BaseAdapter):
         rows: List[dict] = []
         total_sum = 0
         all_complete = True
-        with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
+        with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers,
+                          transport=make_transport()) as client:
             for recruit_type, job_type, section in self._CHANNELS:
                 def fetch_page(page: int, rt=recruit_type) -> PageResult:
                     response = client.post(self.LIST_API, json={

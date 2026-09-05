@@ -26,6 +26,7 @@ from typing import List, Optional
 import httpx
 
 from .base import BaseAdapter, PageResult, RawJob, paginate_all
+from .cn_portal_tls import make_transport
 
 # 站点 JS（/js/job-center.js 内联的 jsencrypt）里的 JSEncrypt.prototype.pbkey，原样照抄。
 _PUBLIC_KEY_SPKI = (
@@ -141,7 +142,8 @@ class CmccAdapter(BaseAdapter):
             "Content-Type": "application/json",
             "Referer": self.LIST_REFERER,
         }
-        with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
+        with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers,
+                          transport=make_transport()) as client:
             def fetch_page(page: int) -> PageResult:
                 response = client.post(self.LIST_API, json={
                     "serviceName": "searchJobs",

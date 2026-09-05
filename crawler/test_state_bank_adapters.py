@@ -6,6 +6,7 @@
   · 接口用 HTTP 200 表达失败（工行 retCode / 中国移动 code / 交行 TRAN_SUCCESS）
 """
 import json
+import ssl
 import unittest
 from datetime import date, timedelta
 
@@ -14,6 +15,7 @@ from adapters.bankcomm import BankcommAdapter
 from adapters.ccb import CcbAdapter, _repair_json
 from adapters.cmcc import CmccAdapter, _rsa_public_numbers, _PUBLIC_KEY_SPKI
 from adapters.icbc import IcbcAdapter
+from adapters.cn_portal_tls import make_ssl_context, make_transport
 from adapters.spdb import SpdbAdapter
 
 
@@ -190,6 +192,28 @@ class CmccAdapterTest(unittest.TestCase):
         modulus, exponent = _rsa_public_numbers(_PUBLIC_KEY_SPKI)
         self.assertEqual(modulus.bit_length(), 2048)
         self.assertEqual(exponent, 65537)
+
+
+class CnPortalTlsTest(unittest.TestCase):
+    """这两条在本机永远是绿的（LibreSSL 宽松 + 有 IPv6），只有 CI 会炸——所以必须有断言看着。"""
+
+    def test_context_allows_legacy_renegotiation_but_keeps_verification(self):
+        ctx = make_ssl_context()
+        self.assertTrue(ctx.options & 0x4, "缺 OP_LEGACY_SERVER_CONNECT：OpenSSL 3 会拒建行/交行/移动")
+        self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED, "不许为了绕重协商把证书校验也关了")
+        self.assertTrue(ctx.check_hostname)
+
+    def test_transport_pins_ipv4(self):
+        # 这几家都有 AAAA 记录，而 GitHub runner 没有可用 IPv6 出口 → 不钉 IPv4 就是 Errno 101。
+        self.assertEqual(make_transport()._pool._local_address, "0.0.0.0")
+
+    def test_every_httpx_bank_adapter_uses_it(self):
+        import pathlib
+        base = pathlib.Path(__file__).resolve().parent / "adapters"
+        for name in ("spdb", "icbc", "ccb", "bankcomm", "cmcc"):
+            src = (base / f"{name}.py").read_text(encoding="utf-8")
+            self.assertIn("transport=make_transport()", src,
+                          f"{name} 没走兼容 transport，上了 CI 会 SSL/IPv6 失败")
 
 
 class AbchinaAdapterTest(unittest.TestCase):

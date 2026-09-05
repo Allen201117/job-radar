@@ -28,6 +28,7 @@ from typing import List, Optional
 import httpx
 
 from .base import BaseAdapter, PageResult, RawJob, paginate_all, resolve_detail_cap, resolve_page_cap
+from .cn_portal_tls import make_transport
 
 
 _BASE = "https://job3.ccb.com/tran/WCCMainPlatV5"
@@ -97,7 +98,8 @@ class CcbAdapter(BaseAdapter):
         rows: List[dict] = []
         total_sum = 0
         all_complete = True
-        with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
+        with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers,
+                          transport=make_transport()) as client:
             self._get(client, self.WARMUP_TXCODE)   # 见模块 docstring 坑 1：不热身详情接口必失败
 
             for plan_type, job_type in self._CHANNELS:
