@@ -521,10 +521,27 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
 - 🔎 复查同类：`sources`/`jobs` 里纯 ASCII 公司名 × 国内清单（2026-09-04 实测只剩
   Continental=大陆集团、Bayer=拜耳），中文公司名 × 海外清单（实测 18 家，见同日 commit）。
 
-⚠️ **遗留（未修，属另一件事）**：北极星与缺口普查的岗位聚合**不看 `job_scope`**
-（`where status='active'` 而已）。所以国内清单会把大陆集团的 352 个海外岗算进国内覆盖、
-海外清单会把优衣库的 1,918 个国内岗算进海外覆盖。别名只是让这件事**更显眼**，不是它的成因；
-要治得单独立项给两条聚合加 scope 过滤（会改动 329 家的口径，需要拍板）。
+✅ **配套口径变更（2026-09-05 创始人拍板）：必投覆盖率只数「本 scope 自己的岗」。**
+此前北极星与缺口普查的岗位聚合都**不看 `job_scope`**，两份清单共吃一个合计 →
+海外清单的星巴克显示 1,920 个健康岗（实际全是中国门店岗）、国内清单的松下显示 226 个
+（实际 18,318 个岗全在海外）。现在：
+- 北极星 `computeMustApplyCoverage(list, aggregates, scope)` 按 scope 取数；主聚合改成
+  `group by company, job_scope` 后在 JS 合并（live 实测与「加 8 个 count filter」耗时同档，
+  1.71s vs 1.80s，但不必给 43.8 万行每行多算 8 个表达式）。平铺字段仍是**两 scope 合计**，
+  老语义不变；scope 拆分在 `byScope`。
+- 缺口普查 `_JOB_AGGREGATE_SQL` 计数带 `job_scope = %(scope)s`（**参数绑定，不拼字符串**），
+  品牌 rollup 列同样过滤，否则海外岗会从父公司门户后门漏进国内覆盖。
+- **口径影响（live 实测，别再重算）**：国内 329 家 healthy 228→227（松下）；
+  海外 327 家 162→132（星巴克/优衣库/凯德/特斯拉/DHL…共 31 家状态改变）。
+- ⚠️ **「本范围 0」必须解释**，否则会被读成「供给没了」：台账 evidence 记
+  `other_scope_healthy_jobs`，看板每家公司标签追加「另有 N 个岗在海外/国内」
+  （`otherScopeNote`）。两者处置完全不同——前者要补源，后者什么都不用做。
+- ⚠️ `job_scope` 只有 `domestic`/`overseas` 两个取值、无 NULL（2026-09-05 全库实测
+  32.7 万 + 11.1 万 = 43.8 万 active 全覆盖）。真冒出第三种取值时**宁可不计入任一 scope**，
+  也不要偷偷算进国内（`mergeScopeRows` 已如此，有断言钉死）。
+- ⚠️ `unstable_cache` 条目跨部署存活（TTL 180s），上线那一小段缓存里是**旧形状**的行 →
+  `scopedCounts()` 没有 byScope 时回退平铺合计（**不许改成直接 `byScope[scope]`**，会把
+  /admin/health 打挂）。
 
 ## 搜索额度是全局共享的 —— 贪心方必须给校招链留一份（2026-08-28 立）
 

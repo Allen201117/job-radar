@@ -113,6 +113,18 @@ export type MustApplyCoverageRow = {
   directHealthy: number;
   parentPortalHealthy: number;
   coveredViaParentPortal: boolean;
+  /** 这家公司在**另一个** scope 的健康岗数：让「本范围 0」不被读成「这家没岗」。 */
+  otherScopeHealthy: number;
+};
+
+export type ScopedAggregateCounts = {
+  activeTotal: number;
+  healthy: number;
+  new7d: number;
+  checked72h: number;
+  campusJobs: number;
+  internJobs: number;
+  socialJobs: number;
 };
 
 export type CompanyActiveAggregate = {
@@ -126,8 +138,34 @@ export type CompanyActiveAggregate = {
   campusJobs: number;
   internJobs: number;
   socialJobs: number;
+  /**
+   * 按求职范围拆分（上面那几个平铺字段是两个 scope 的**合计**，保持原语义不变）。
+   *
+   * 为什么必须拆：必投清单有国内、海外两份，此前**两份都吃同一个不分 scope 的合计** ——
+   * 于是「海外清单的星巴克有 1,920 个健康岗」实际全是中国门店岗、「国内清单的松下有 226 个」
+   * 实际 18,318 个岗全在海外。指标诚实是本项目最高优先级之一，覆盖率不能拿另一个范围的岗充数。
+   */
+  byScope: Record<JobScopeKey, ScopedAggregateCounts>;
   brandRollups: Record<string, ActiveAggregateCounts>;
 };
+
+export type JobScopeKey = "domestic" | "overseas";
+
+const EMPTY_SCOPED_COUNTS: ScopedAggregateCounts = {
+  activeTotal: 0, healthy: 0, new7d: 0, checked72h: 0,
+  campusJobs: 0, internJobs: 0, socialJobs: 0,
+};
+
+/**
+ * 取某个 scope 的计数；聚合行没有 byScope 时回退到平铺合计。
+ *
+ * ⚠️ 这个回退不是可有可无的兼容代码：`unstable_cache` 的条目会跨部署存活（TTL 180s），
+ * 刚上线那一小段时间里缓存里躺的是**旧形状**（没有 byScope）的行。直接 `byScope[scope]`
+ * 会当场抛异常把 /admin/health 打挂；回退则只是那 3 分钟内继续显示旧口径的数字。
+ */
+function scopedCounts(row: CompanyActiveAggregate, scope: JobScopeKey): ScopedAggregateCounts {
+  return row.byScope?.[scope] ?? row;
+}
 
 type ActiveAggregateCounts = {
   activeTotal: number;
@@ -189,9 +227,12 @@ function brandRollupQuery(rules: BrandRollupRule[], companies: string[]): { sql:
     const parentParam = params.length - 2;
     const directParam = params.length - 1;
     const tokensParam = params.length;
+    // rollup 规则只来自**国内**清单（那 4 个子品牌），所以这里固定按 domestic 过滤 ——
+    // 否则父公司门户里的海外岗会被算进国内清单的覆盖，与主聚合的 scope 口径不一致。
     const matchesBrand = `
           company ilike $${parentParam}
           and company not ilike $${directParam}
+          and job_scope = 'domestic'
           and title ilike any($${tokensParam}::text[])`;
     return `
       count(*) filter (
@@ -244,6 +285,57 @@ const EMPTY_ROLLUP: ActiveAggregateCounts = { activeTotal: 0, healthy: 0, new7d:
  * 别把进程内 Map 当缓存用：serverless 每次请求可能落在不同实例，命中率约等于 0
  * （线上实测同一个 tab 三次分别 2s / 6s / 6s，就是这么来的）。
  */
+type ScopeAggregateRow = {
+  company: string | null;
+  job_scope: string | null;
+  active_total: string | number;
+  healthy: string | number;
+  new_7d: string | number;
+  checked_72h: string | number;
+  campus_jobs: string | number;
+  intern_jobs: string | number;
+  social_jobs: string | number;
+};
+
+/** 把 `company × job_scope` 的行并回「每公司一行」：平铺字段=两个 scope 合计，byScope=各自。 */
+export function mergeScopeRows(
+  rows: ScopeAggregateRow[],
+): Array<Omit<CompanyActiveAggregate, "brandRollups">> {
+  const byCompany = new Map<string | null, Omit<CompanyActiveAggregate, "brandRollups">>();
+  for (const row of rows) {
+    const counts: ScopedAggregateCounts = {
+      activeTotal: Number(row.active_total || 0),
+      healthy: Number(row.healthy || 0),
+      new7d: Number(row.new_7d || 0),
+      checked72h: Number(row.checked_72h || 0),
+      campusJobs: Number(row.campus_jobs || 0),
+      internJobs: Number(row.intern_jobs || 0),
+      socialJobs: Number(row.social_jobs || 0),
+    };
+    let merged = byCompany.get(row.company);
+    if (!merged) {
+      merged = {
+        company: row.company,
+        ...EMPTY_SCOPED_COUNTS,
+        byScope: { domestic: { ...EMPTY_SCOPED_COUNTS }, overseas: { ...EMPTY_SCOPED_COUNTS } },
+      };
+      byCompany.set(row.company, merged);
+    }
+    for (const key of Object.keys(counts) as Array<keyof ScopedAggregateCounts>) {
+      merged[key] += counts[key];
+    }
+    // job_scope 只有 'domestic'/'overseas' 两个取值、无 NULL（2026-09-05 全库实测 32.7 万 + 11.1 万
+    // = 43.8 万 active 全覆盖）。真冒出第三种取值时宁可不计入任一 scope，也不要偷偷算进国内。
+    const scope = row.job_scope === "overseas" ? "overseas" : row.job_scope === "domestic" ? "domestic" : null;
+    if (scope) {
+      for (const key of Object.keys(counts) as Array<keyof ScopedAggregateCounts>) {
+        merged.byScope[scope][key] += counts[key];
+      }
+    }
+  }
+  return Array.from(byCompany.values());
+}
+
 async function fetchCompanyActiveAggregates(): Promise<CompanyActiveAggregate[]> {
   const now = Date.now();
   if (companyActiveAggregatesCache && companyActiveAggregatesCache.expiresAt > now) {
@@ -251,21 +343,16 @@ async function fetchCompanyActiveAggregates(): Promise<CompanyActiveAggregate[]>
   }
   if (companyActiveAggregatesInFlight) return companyActiveAggregatesInFlight;
   const rules = brandRollupRules();
-  type AggregateRow = {
-    company: string | null;
-    active_total: string | number;
-    healthy: string | number;
-    new_7d: string | number;
-    checked_72h: string | number;
-    campus_jobs: string | number;
-    intern_jobs: string | number;
-    social_jobs: string | number;
-  };
+  type AggregateRow = ScopeAggregateRow;
   type RollupRow = { company: string | null; [key: string]: string | number | null };
   // 主聚合先跑；品牌 rollup 用它返回的公司名精确取第二条（不合成一条、也不并行，见 brandRollupQuery 注释）。
+  // 按 company × job_scope 分组，而不是加 8 个 `count(*) filter (where job_scope=…)`：
+  // live 实测两种写法耗时在噪声内（合计 1.71s vs 1.80s，三轮），但分组写法返回 1,570 行
+  // 而不是给 39.6 万行每行再算 8 个表达式，语义也更直白。JS 侧合并回「每公司一行 + byScope」。
   companyActiveAggregatesInFlight = jobsQuery<AggregateRow>(`
       select
         company,
+        job_scope,
         count(*) as active_total,
         count(*) filter (where summary is not null and char_length(btrim(summary)) >= 60) as healthy,
         count(*) filter (where first_seen_at > now() - interval '7 days') as new_7d,
@@ -275,9 +362,10 @@ async function fetchCompanyActiveAggregates(): Promise<CompanyActiveAggregate[]>
         count(*) filter (where recruitment_category = '社招') as social_jobs
       from jobs
       where status = 'active'
-      group by company
+      group by company, job_scope
     `)
-    .then(async (rows) => {
+    .then(async (scopeRows) => {
+      const rows = mergeScopeRows(scopeRows);
       const portals = parentPortalCompanies(rules, rows.map((row) => row.company));
       const rollup = portals.length ? brandRollupQuery(rules, portals) : null;
       const rollupRows = rollup ? await jobsQuery<RollupRow>(rollup.sql, rollup.params) : ([] as RollupRow[]);
@@ -285,14 +373,7 @@ async function fetchCompanyActiveAggregates(): Promise<CompanyActiveAggregate[]>
       return rows.map((row) => {
         const hit = rollupByCompany.get(row.company);
         return {
-          company: row.company,
-          activeTotal: Number(row.active_total || 0),
-          healthy: Number(row.healthy || 0),
-          new7d: Number(row.new_7d || 0),
-          checked72h: Number(row.checked_72h || 0),
-          campusJobs: Number(row.campus_jobs || 0),
-          internJobs: Number(row.intern_jobs || 0),
-          socialJobs: Number(row.social_jobs || 0),
+          ...row,
           brandRollups: Object.fromEntries(
             rules.map((rule) => [rule.pattern, hit
               ? {
@@ -352,9 +433,10 @@ export async function getCompanyActiveAggregates(): Promise<CompanyActiveAggrega
  */
 export async function getMustApplyCoverage(
   list: MustApplyCompany[],
+  scope: JobScopeKey = "domestic",
 ): Promise<MustApplyCoverageRow[]> {
   const aggregates = await getCompanyActiveAggregates();
-  return computeMustApplyCoverage(list, aggregates);
+  return computeMustApplyCoverage(list, aggregates, scope);
 }
 
 /**
@@ -364,16 +446,19 @@ export async function getMustApplyCoverage(
  */
 export async function getCampusSupplyInputs(
   list: MustApplyCompany[],
+  scope: JobScopeKey = "domestic",
 ): Promise<Array<{ company: string; campusJobs: number; internJobs: number; socialJobs: number }>> {
   const aggregates = await getCompanyActiveAggregates();
-  return list.map(({ name, pattern }) => {
-    const matches = ilikeMatcher(pattern);
+  return list.map(({ name, pattern, aliases }) => {
+    const matchers = mustApplyPatterns({ pattern, aliases }).map(ilikeMatcher);
+    const matches = (company: string) => matchers.some((matched) => matched(company));
     return aggregates.reduce(
       (total, c) => {
         if (!c.company || !matches(c.company)) return total;
-        total.campusJobs += c.campusJobs;
-        total.internJobs += c.internJobs;
-        total.socialJobs += c.socialJobs;
+        const counts = scopedCounts(c, scope);
+        total.campusJobs += counts.campusJobs;
+        total.internJobs += counts.internJobs;
+        total.socialJobs += counts.socialJobs;
         return total;
       },
       { company: name, campusJobs: 0, internJobs: 0, socialJobs: 0 },
@@ -381,24 +466,39 @@ export async function getCampusSupplyInputs(
   });
 }
 
+/**
+ * 必投清单覆盖率：**只数该 scope 自己的岗**。
+ *
+ * 2026-09-05 之前两份清单共用不分 scope 的合计，于是海外清单的星巴克显示 1,920 个健康岗
+ * （实际全是中国门店岗）、国内清单的松下显示 226 个（实际 18,318 个岗全在海外）。
+ * 创始人拍板加过滤：口径变更影响国内 1 家、海外 31 家（见 commit）。
+ */
 export function computeMustApplyCoverage(
   list: MustApplyCompany[],
   aggregates: CompanyActiveAggregate[],
+  scope: JobScopeKey = "domestic",
 ): MustApplyCoverageRow[] {
   return list.map(({ name, pattern, aliases, parentPattern, brandTokens }) => {
     // 别名一并参与匹配（壳牌=Shell / 大陆集团=Continental）：库里明明有源有岗、
     // 北极星却显示 0，会驱动人去重复补源。一行公司命中任一模式只计一次，不会重复累加。
     const matchers = mustApplyPatterns({ pattern, aliases }).map(ilikeMatcher);
     const matches = (company: string) => matchers.some((matched) => matched(company));
+    const otherScope: JobScopeKey = scope === "domestic" ? "overseas" : "domestic";
+    const otherScopeHealthy = aggregates.reduce((sum, company) => (
+      company.company && matches(company.company) && company.byScope
+        ? sum + company.byScope[otherScope].healthy
+        : sum
+    ), 0);
     const direct = aggregates.reduce<Omit<
       MustApplyCoverageRow,
-      "directHealthy" | "parentPortalHealthy" | "coveredViaParentPortal"
+      "directHealthy" | "parentPortalHealthy" | "coveredViaParentPortal" | "otherScopeHealthy"
     >>((total, company) => {
       if (!company.company || !matches(company.company)) return total;
-      total.activeTotal += company.activeTotal;
-      total.healthy += company.healthy;
-      total.new7d += company.new7d;
-      total.checked72h += company.checked72h;
+      const counts = scopedCounts(company, scope);
+      total.activeTotal += counts.activeTotal;
+      total.healthy += counts.healthy;
+      total.new7d += counts.new7d;
+      total.checked72h += counts.checked72h;
       return total;
     }, { name, activeTotal: 0, healthy: 0, new7d: 0, checked72h: 0 });
     const parentRollup = parentPattern && brandTokens?.length
@@ -425,6 +525,7 @@ export function computeMustApplyCoverage(
       directHealthy: direct.healthy,
       parentPortalHealthy,
       coveredViaParentPortal: parentPortalHealthy > 0,
+      otherScopeHealthy,
     };
   });
 }

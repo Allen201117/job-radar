@@ -12,17 +12,23 @@ DEFAULT_TARGET_INDUSTRIES = (
     "金融", "教育", "能源/化工", "地产/建筑", "物流/供应链", "传媒/文娱"
 )
 
+# ⚠️ 计数**只算本 scope 的岗**（`job_scope = %(scope)s`）。
+# 2026-09-05 之前不分 scope：国内清单会把大陆集团的 352 个海外岗算成中国供给、
+# 海外清单会把优衣库的 1,918 个中国岗算成海外供给。指标诚实优先于覆盖率好看。
+# `other_scope_healthy` 是**另一个** scope 的健康岗数，只写进台账 evidence 供人判断
+# 「这家公司不是没岗，是岗不在这个范围」——它不参与状态判定。
 _JOB_AGGREGATE_SQL = """
 select
   company,
-  count(*) as active_total,
+  count(*) filter (where job_scope = %(scope)s) as active_total,
   count(*) filter (
-    where summary is not null and char_length(btrim(summary)) >= 60
+    where job_scope = %(scope)s
+      and summary is not null and char_length(btrim(summary)) >= 60
   ) as healthy,
   count(*) filter (
-    where job_scope = 'domestic'
+    where job_scope <> %(scope)s
       and summary is not null and char_length(btrim(summary)) >= 60
-  ) as domestic_healthy
+  ) as other_scope_healthy
   {brand_columns}
 from jobs
 where status = 'active'
@@ -73,8 +79,10 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
     # 改它会一次性动 329+327 家的口径，另案）。所以至少把 scope 拆分如实记进台账——
     # 大陆集团 425 个健康岗里只有 73 个标着 domestic，看台账的人有权知道这件事，
     # 而不是看到「healthy 425」就以为中国岗很多。
-    has_scope_split = any("domestic_healthy" in (row or {}) for row in matched_jobs)
-    direct_healthy_domestic = sum(_as_int(row.get("domestic_healthy")) for row in matched_jobs)
+    # 「这个范围里没岗」不等于「这家公司没岗」：大陆集团国内 73 个、海外还有 352 个。
+    # 记下另一个范围的数，看台账的人才分得清「真没供给」和「供给不在这个范围」。
+    has_other_scope = any("other_scope_healthy" in (row or {}) for row in matched_jobs)
+    other_scope_healthy = sum(_as_int(row.get("other_scope_healthy")) for row in matched_jobs)
     parent_rollup = {"active_total": 0, "healthy": 0}
     if company.get("parentPattern") and company.get("brandTokens"):
         for row in healthy_jobs or []:
@@ -113,10 +121,7 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
         "active_jobs": active_total,
         "healthy_jobs": healthy_total,
         "direct_healthy_jobs": direct_healthy,
-        "direct_healthy_by_scope": {
-            "domestic": direct_healthy_domestic,
-            "overseas": direct_healthy - direct_healthy_domestic,
-        } if has_scope_split else None,
+        "other_scope_healthy_jobs": other_scope_healthy if has_other_scope else None,
         "parent_portal_healthy_jobs": accepted_parent["healthy"],
         "covered_via_parent_portal": accepted_parent["healthy"] > 0,
         "matched_job_companies": sorted({
@@ -298,9 +303,9 @@ def _brand_rules(companies):
     return rules
 
 
-def _job_aggregate_query(companies):
+def _job_aggregate_query(companies, scope="domestic"):
     columns = []
-    params = {}
+    params = {"scope": scope}
     rules = _brand_rules(companies)
     for index, rule in enumerate(rules):
         prefix = "brand_%d" % index
@@ -314,6 +319,7 @@ def _job_aggregate_query(companies):
         matches = (
             "company ilike %({prefix}_parent)s "
             "and company not ilike %({prefix}_direct)s "
+            "and job_scope = %(scope)s "
             "and title ilike any(%({prefix}_tokens)s::text[])"
         ).format(prefix=prefix)
         columns.append(
@@ -332,8 +338,8 @@ def _job_aggregate_query(companies):
     )
 
 
-def fetch_job_aggregates(conn, companies):
-    sql, params, rules = _job_aggregate_query(companies)
+def fetch_job_aggregates(conn, companies, scope="domestic"):
+    sql, params, rules = _job_aggregate_query(companies, scope)
     rows = jobs_db.fetch_all(conn, sql, params)
     for row in rows:
         row["brand_rollups"] = {
@@ -426,7 +432,7 @@ def census(supabase, jobs_conn, *, scope="domestic", cap=20, company=None,
     companies = load_companies(scope)
     if company:
         companies = [row for row in companies if row["name"] == company]
-    aggregates = fetch_job_aggregates(jobs_conn, companies)
+    aggregates = fetch_job_aggregates(jobs_conn, companies, scope)
     sources = fetch_sources(supabase)
     previous = {row.get("company"): row for row in fetch_previous_rows(supabase, scope)}
     rows = []

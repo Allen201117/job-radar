@@ -84,29 +84,27 @@ class ClassifyCompanyTest(unittest.TestCase):
         self.assertEqual(row["state"], "no_active_jobs")  # 有源没岗，不再是「零源 unknown」
         self.assertEqual(row["source_id"], "s-shell")
 
-    def test_evidence_splits_healthy_jobs_by_scope_so_425_does_not_read_as_china_supply(self):
-        """别名把「有源有岗」修好了，但**「有岗」不等于「有中国岗」**。
+    def test_evidence_records_the_other_scope_so_zero_here_is_not_read_as_zero_supply(self):
+        """「这个范围里没岗」≠「这家公司没岗」。
 
-        大陆集团 425 个健康岗里只有 73 个标着 domestic（且多是 location=远程 的美国岗被误判）。
-        普查的岗位聚合历史上不按 job_scope 过滤，改它要一次动 329+327 家的口径 → 另案；
-        在此之前至少把 scope 拆分如实记进台账，别让人看到「healthy 425」就以为中国岗很多。
+        大陆集团国内 73 个、海外还有 352 个；创始人 2026-09-05 拍板普查只数本 scope 的岗，
+        所以台账必须同时记下另一个范围的数，否则下一个人看到国内 73 会以为公司快没岗了。
         """
         row = gc.classify_company(
             {**_company("大陆集团", "%大陆集团%", "汽车/出行"), "aliases": ["%Continental%"]},
-            [{"company": "Continental", "active_total": 425, "healthy": 425,
-              "domestic_healthy": 73}],
+            [{"company": "Continental", "active_total": 73, "healthy": 73,
+              "other_scope_healthy": 352}],
             [], None,
         )
-        self.assertEqual(row["evidence"]["healthy_jobs"], 425)
-        self.assertEqual(row["evidence"]["direct_healthy_by_scope"],
-                         {"domestic": 73, "overseas": 352})
+        self.assertEqual(row["evidence"]["healthy_jobs"], 73)
+        self.assertEqual(row["evidence"]["other_scope_healthy_jobs"], 352)
 
-    def test_scope_split_is_null_not_zero_when_the_column_is_absent(self):
-        """拿不到 scope 列时写 null，不写 0 —— 「不知道」和「一个中国岗都没有」是两回事。"""
+    def test_other_scope_is_null_not_zero_when_the_column_is_absent(self):
+        """拿不到那一列时写 null，不写 0 —— 「不知道」和「另一个范围也没岗」是两回事。"""
         row = gc.classify_company(
             _company(), [{"company": "甲公司集团", "active_total": 3, "healthy": 3}], [], None
         )
-        self.assertIsNone(row["evidence"]["direct_healthy_by_scope"])
+        self.assertIsNone(row["evidence"]["other_scope_healthy_jobs"])
 
     def test_without_aliases_matching_is_byte_for_byte_unchanged(self):
         """没写别名的公司（清单里 300+ 家都是）行为必须与加别名前完全一致。"""
@@ -209,6 +207,33 @@ class ClassifyCompanyTest(unittest.TestCase):
             loaded = {row["name"]: row for row in gc.load_companies("domestic")}
         self.assertEqual(loaded["壳牌"]["aliases"], ["%Shell%"])
         self.assertNotIn("aliases", loaded["大陆集团"])  # 没别名的公司不该凭空长出字段
+
+
+class JobAggregateScopeTest(unittest.TestCase):
+    """岗位聚合只数本 scope 的岗（2026-09-05 创始人拍板的口径变更）。
+
+    改之前两份清单共用不分 scope 的合计：海外清单的星巴克显示 1,920 个健康岗（实际全是中国
+    门店岗）、国内清单的松下显示 226 个（实际 18,318 个岗全在海外）。
+    """
+
+    COMPANY = {"name": "网易云音乐", "pattern": "%网易云音乐%",
+               "parentPattern": "%网易%", "brandTokens": ["云音乐"]}
+
+    def test_scope_is_bound_as_a_parameter_not_interpolated(self):
+        sql, params, _rules = gc._job_aggregate_query([self.COMPANY], "overseas")
+        self.assertEqual(params["scope"], "overseas")
+        self.assertNotIn("'overseas'", sql)  # 走参数绑定，不拼字符串
+        self.assertIn("count(*) filter (where job_scope = %(scope)s) as active_total", sql)
+
+    def test_brand_rollup_columns_are_scope_filtered_too(self):
+        """父公司门户的 rollup 不跟着过滤，海外岗会从后门漏进国内覆盖。"""
+        sql, _params, rules = gc._job_aggregate_query([self.COMPANY], "domestic")
+        self.assertEqual(len(rules), 1)
+        self.assertEqual(sql.count("and job_scope = %(scope)s"), 2)  # rollup 的 active + healthy 各一
+
+    def test_other_scope_column_uses_the_complement_not_a_hardcoded_scope(self):
+        sql, _params, _rules = gc._job_aggregate_query([], "overseas")
+        self.assertIn("where job_scope <> %(scope)s", sql)
 
 
 class QueuePlanningTest(unittest.TestCase):
