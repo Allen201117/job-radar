@@ -321,3 +321,68 @@ class GeoCrossLanguageFixtureTest(unittest.TestCase):
         for case in doc["cases"]:
             with self.subTest(location=case["location"], note=case["note"]):
                 self.assertEqual(derive_country_code(case["location"]), case["expected"])
+
+
+class UsStateTest(unittest.TestCase):
+    """美国州名 / 州缩写（2026-09-05 加）。
+
+    US 词表原本只有十几个大城市，认不出州。live 实测（香港库 active 岗）英文地点 132,876 个岗里
+    24,672 个抽不出国家，**其中 11,753 个被判成 domestic** —— 用户筛「国内」会看到
+    Mossville, Illinois / Irving, Texas / CHARLOTTE, NC。改后 20,579 个岗判出 US，
+    其中 8,192 个从 domestic 翻成 overseas。
+
+    🚫 两字母缩写不能裸认：IN=印度 / DE=德国 / CA=加拿大 / TN=印度泰米尔纳德邦 / GA=格鲁吉亚。
+    只在「City, ST」这个位置、且原串是**大写**时才认。
+    """
+
+    def test_state_codes_at_tail(self):
+        for location in (
+            "CHARLOTTE, NC", "Florence, KY", "Memphis, TN", "Ann, Arbor, MI",
+            "Ann, Arbor, MI 48108", "Merrimack, NH", "Smithfield, RI",
+            # 某个 adapter 会把逗号吃掉，州缩写黏在城市后面
+            "AustinTX", "Santa, ClaraCA", "PhoenixAZ", "GloucesterMA",
+            # 同一个 adapter 还会把 ZIP+4 写成 "55403, 2542"
+            "1000, Nicollet, Mall, MinneapolisMN, 55403, 2542",
+        ):
+            with self.subTest(location=location):
+                self.assertEqual(derive_country_code(location), "US")
+                self.assertEqual(derive_job_scope(location), "overseas")
+
+    def test_state_full_names(self):
+        for location in (
+            "Mossville, Illinois", "Irving, Texas", "Portage, Michigan",
+            "La, Crosse, Wisconsin", "Nashville, Tennessee", "Lafayette, Indiana",
+            "Indiana, , , Indianapolis", "Virginia, , , Mclean", "St, Paul, Minnesota",
+        ):
+            with self.subTest(location=location):
+                self.assertEqual(derive_country_code(location), "US")
+
+    def test_state_codes_do_not_steal_other_countries(self):
+        """改前 ", ca" / ", ma" / ", wa" 是**裸子串** token，把这些全判成了美国。
+
+        ", ca" 命中 ", Capital"、", ma" 命中 ", Manulife" / ", Maharashtra"、
+        ", wa" 命中 ", Wan"（香港湾仔/长沙湾的地址）。线上实测 92 行，其中 43 行是香港地址。
+        """
+        for location in (
+            "Chennai, TN, in", "Pune, Maharashtra, in",          # 印度（TN 也是泰米尔纳德邦）
+            "Montreal, QC, ca", "Toronto, ON, CAN", "Toronto, Canada",
+            "Warsaw, Masovian, PL, 02-677",
+            "Søborg, Capital Region of Denmark, DK",
+            "Buenos Aires, Capital Federal, AR, C1107CBE",
+            "Subang Jaya, Selangor, Malaysia",
+            "Taguig, National, Capital, Region, Manila, Philippines",
+            "Taikoo, Shing, 12, Taikoo, Wan, Road",              # 香港太古城
+            "Sydney, NSW",                                       # 三字母，不该命中
+        ):
+            with self.subTest(location=location):
+                self.assertNotEqual(derive_country_code(location), "US")
+
+    def test_georgia_is_deliberately_not_a_state_name(self):
+        """"georgia" 与格鲁吉亚同名，收了就会把第比利斯的岗算成美国。宁可漏认。"""
+        self.assertIsNone(derive_country_code("Tbilisi, Georgia"))
+
+    def test_chinese_rules_unaffected(self):
+        # 州规则排在最后，任何显式国名/中文地名都优先于它
+        self.assertEqual(derive_country_code("长春市"), "CN")
+        self.assertEqual(derive_country_code("Beijing, China"), "CN")
+        self.assertEqual(derive_country_code("大阪市"), "JP")

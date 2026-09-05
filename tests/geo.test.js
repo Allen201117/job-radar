@@ -143,3 +143,28 @@ test("deriveCountryCode: 与 crawler/geo.py 共读同一份夹具，逐条一致
     assert.equal(deriveCountryCode(c.location), c.expected, `${c.location} (${c.note})`);
   }
 });
+
+// 美国州名 / 州缩写（2026-09-05 加）。背景与红线见 crawler/test_geo.py 的 UsStateTest。
+test("deriveCountryCode: 美国州缩写只在「City, ST」位置且大写时才认", () => {
+  for (const location of [
+    "CHARLOTTE, NC", "Florence, KY", "Memphis, TN", "Ann, Arbor, MI", "Ann, Arbor, MI 48108",
+    "AustinTX", "Santa, ClaraCA", "PhoenixAZ", "GloucesterMA",
+    "1000, Nicollet, Mall, MinneapolisMN, 55403, 2542",
+    "Mossville, Illinois", "Irving, Texas", "Portage, Michigan", "Nashville, Tennessee",
+  ]) {
+    assert.equal(deriveCountryCode(location), "US", location);
+    assert.equal(deriveJobScope(location), "overseas", location);
+  }
+});
+
+// 改前 ", ca" / ", ma" / ", wa" 是裸子串 token（", Capital" / ", Maharashtra" / ", Wan" 全中），
+// 把蒙特利尔、多伦多、华沙、孟买乃至香港太古城的岗判成了美国。
+test("deriveCountryCode: 州缩写不抢别国的州/省缩写", () => {
+  for (const location of [
+    "Chennai, TN, in", "Pune, Maharashtra, in", "Montreal, QC, ca", "Toronto, ON, CAN",
+    "Toronto, Canada", "Warsaw, Masovian, PL, 02-677", "Subang Jaya, Selangor, Malaysia",
+    "Tbilisi, Georgia", "Taikoo, Shing, 12, Taikoo, Wan, Road", "Sydney, NSW",
+  ]) {
+    assert.notEqual(deriveCountryCode(location), "US", location);
+  }
+});

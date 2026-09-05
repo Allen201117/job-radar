@@ -71,10 +71,18 @@ _COUNTRY_TOKENS = {
         "seattle", "西雅图", "sunnyvale", "mountain view", "cupertino", "san jose",
         "santa clara", "palo alto", "austin", "boston", "chicago", "los angeles",
         "washington", "atlanta", "denver", "dallas", "houston", "san diego",
-        "redmond", "menlo park", ", ca", ", ny", ", wa", ", tx", ", ma",
+        "redmond", "menlo park",
+        # ⚠️ 这里**不要**再放 ", ca" / ", ny" / ", wa" 这类「逗号+州缩写」的 token：
+        # 以 "," 开头的 token 在 _contains_token 里走的是**裸子串**，", ca" 会命中
+        # ", Capital" / ", Cargo"，", ma" 命中 ", Manulife" / ", Maharashtra"，
+        # ", wa" 命中 ", Wan" —— 线上实测 92 行被这么判成美国，其中 43 行是香港地址
+        # （"Taikoo, Shing, 12, Taikoo, Wan, Road" / "HK, , , CHEUNG, SHA, WAN, HKCHE"）。
+        # 州缩写改由下面 _US_STATE_* 那套「位置受限 + 必须大写」的规则处理。
     ],
     "SG": ["singapore", "sg", "新加坡"],
 }
+# ⚠️ 州全称在文件下方 _US_STATE_NAMES 定义后才 extend 进 US 词表（那里离州缩写表更近，
+#    两张表的取舍能一眼对照）。所以本表在模块加载完之前是不完整的，别在这中间用它。
 _GREATER_CHINA = {"CN", "HK", "MO"}
 
 # ---------------------------------------------------------------------------
@@ -419,6 +427,60 @@ def is_overseas_unspecified(location: Optional[str]) -> bool:
     return any(seg in _OVERSEAS_UNSPECIFIED_SEGMENTS for seg in _segments(location.strip()))
 
 
+
+# ---------------------------------------------------------------------------
+# 美国州名 / 州缩写（2026-09-05 加）
+#
+# 为什么需要：US 词表只有十几个大城市，认不出州。live 实测（香港库 active 岗）英文地点
+# 132,876 个岗里 24,672 个抽不出国家，**其中 11,753 个判成了 domestic** —— 用户筛「国内」
+# 会看到 Mossville, Illinois / Irving, Texas / Portage, Michigan / CHARLOTTE, NC。
+#
+# 🚫 为什么两字母缩写不能裸着认：它们和别国的州/省缩写、和英文单词大面积重名 ——
+#   IN=印度 / OR、AND 之类的词、DE=德国、CA=加拿大、GA=格鲁吉亚、TN=印度泰米尔纳德邦。
+#   既有测试里就钉着一条 "Chennai, TN, in"（金奈，印度）。
+# ✅ 所以只在**「City, ST」这个位置**认，且必须是原串里的**大写**形态：
+#   - 结尾的 ", ST"（可带 5 位邮编）："CHARLOTTE, NC" / "Ann, Arbor, MI 48108"
+#   - 黏在词尾的 "ST"（某个 adapter 会把逗号吃掉）："AustinTX" / "Santa, ClaraCA"
+#   小写的 "…, in" 一律不认，所以 "Chennai, TN, in" 结尾是小写 in ⇒ 不判 US（仍是 None）。
+# 本规则整体排在所有词表**之后**，任何显式国名都优先于它。
+# ---------------------------------------------------------------------------
+
+_US_STATE_NAMES = (
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut",
+    "delaware", "florida", "idaho", "illinois", "indiana", "iowa", "kansas", "kentucky",
+    "louisiana", "maine", "maryland", "massachusetts", "michigan", "minnesota", "mississippi",
+    "missouri", "montana", "nebraska", "nevada", "new hampshire", "new jersey", "new mexico",
+    "north carolina", "north dakota", "ohio", "oklahoma", "oregon", "pennsylvania",
+    "rhode island", "south carolina", "south dakota", "tennessee", "utah", "vermont",
+    "virginia", "west virginia", "wisconsin", "wyoming", "puerto rico", "texas",
+    # ⚠️ 刻意不收 "georgia"：与格鲁吉亚同名，认了就会把第比利斯的岗算成美国。
+    #    washington / new york 已在上面的 US 词表里（当城市名收的），这里不重复。
+)
+
+_US_STATE_CODES = frozenset(
+    "AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO "
+    "MT NE NV NH NJ NM NY NC ND OH OK OR PA PR RI SC SD TN TX UT VT VA WA WV WI WY".split()
+)
+
+# 「, ST」结尾（可带邮编），或「词尾黏着的 ST」结尾（可带邮编）。都只吃**原串大写**形态。
+# ⚠️ ZIP+4 要认「逗号分隔」的写法：某个 adapter 会把 "55403-2542" 写成 "55403, 2542"
+#    （线上 "1000, Nicollet, Mall, MinneapolisMN, 55403, 2542" 等 278 个岗）。
+_US_STATE_TAIL_RE = re.compile(
+    r"(?:(?<=[,\s])|(?<=[a-z]))([A-Z]{2})\s*,?\s*(?:\d{5}(?:\s*[,-]\s*\d{4})?)?\s*$"
+)
+
+
+# 州全称并进 US 词表，走 _contains_token 的词边界语义（"Mossville, Illinois" 即命中）。
+_COUNTRY_TOKENS["US"].extend(_US_STATE_NAMES)
+
+
+def _has_us_state(location: Optional[str]) -> bool:
+    """「City, ST」位置上的美国州缩写。必须大写、必须在串尾，避免撞英文单词与别国缩写。"""
+    if not location:
+        return False
+    match = _US_STATE_TAIL_RE.search(location.strip())
+    return bool(match) and match.group(1) in _US_STATE_CODES
+
 def _norm(text: Optional[str]) -> str:
     return (text or "").strip().lower()
 
@@ -493,6 +555,9 @@ def derive_country_code(location: Optional[str]) -> Optional[str]:
         return strict
     if _looks_like_cn_admin(text, segs):
         return "CN"
+    # 州缩写排在最后：任何显式国名/城市都优先于它（"Chennai, TN, in" 因此不会判成 US）。
+    if _has_us_state(location):
+        return "US"
     return None
 
 

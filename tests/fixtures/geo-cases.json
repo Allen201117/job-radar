@@ -584,13 +584,153 @@
     },
     {
       "location": "Cincinnati, OH",
-      "expected": null,
+      "expected": "US",
       "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
     },
     {
       "location": "Belarus",
       "expected": null,
       "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
+    },
+    {
+      "location": "CHARLOTTE, NC",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Florence, KY",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Memphis, TN",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Ann, Arbor, MI",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Ann, Arbor, MI 48108",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "AustinTX",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Santa, ClaraCA",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "PhoenixAZ",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "St, PetersburgTampa, FL",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "1000, Nicollet, Mall, MinneapolisMN, 55403, 2542",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Mossville, Illinois",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Irving, Texas",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Portage, Michigan",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Indiana, , , Indianapolis",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "La, Crosse, Wisconsin",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Nashville, Tennessee",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Chennai, TN, in",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Pune, Maharashtra, in",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Montreal, QC, ca",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Toronto, ON, CAN",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Toronto, Canada",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Warsaw, Masovian, PL, 02-677",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Søborg, Capital Region of Denmark, DK",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Buenos Aires, Capital Federal, AR, C1107CBE",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Subang Jaya, Selangor, Malaysia",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Tbilisi, Georgia",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Taikoo, Shing, 12, Taikoo, Wan, Road",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Sydney, NSW",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
     }
   ]
 }
