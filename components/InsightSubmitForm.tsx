@@ -10,6 +10,7 @@ import {
 } from "@/lib/insight-submission";
 import { cn } from "@/lib/utils";
 import { LEGACY_INPUT_CLASS as inputCls } from "@/components/ui/deprecated/legacy-input-class";
+import { buttonVariants } from "@/components/ui";
 
 interface Props {
   company: string;
@@ -226,7 +227,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
         <button
           type="submit"
           disabled={saving}
-          className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+          className={cn(buttonVariants({ variant: "ink", size: "sm" }), "inline-flex items-center gap-2 font-semibold disabled:opacity-50")}
         >
           <PaperPlaneTilt size={15} weight="bold" />
           {saving ? "提交中…" : "提交"}

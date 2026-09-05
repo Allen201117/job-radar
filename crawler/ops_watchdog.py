@@ -479,6 +479,15 @@ _PORTAL_KEYS = (
     # 而 canonical_jd_url **区分大小写** ⇒ active 唯一索引拦不住 ⇒ 同一个岗安静地存两行。
     # live 实测 Visa：visa/Visa 833 个在招、visa/visa 703 个，其中 703 个两边都有。
     re.compile(r"/wday/cxs/([^/]+/[^/?#]+)", re.I),
+    # wt（老版 WinTalent）：身份 = brand code（portal_identity 统一转小写）。
+    # 同一个 brand 有两种等价入口，库里两种都在用：
+    #   自有子域 `gwm.hotjob.cn/wt/GWM/web/index` ／ 共享 host `www.hotjob.cn/wt/GWM/web/index`
+    # live 实测两边 postId **120/120 完全重合**（两边自报 total 都是 2808）＝同一租户同一批岗。
+    # brand 大小写不统一（BASF / CT / cifi / feihe / GALAXYCORE 都有），故必须转小写才归得到一起。
+    # ⚠️ 当前全库 39 个 wt 源、39 个不同 brand，**0 组重复** —— 这条是**防患**不是清存量。
+    # 安全性：brand 后面只有 `/web/index` 一种路径（38/39），**没有校招/社招板块段**，
+    # 所以拿 brand 单独当身份不会重蹈 beisen/feishu 那种「板块对被判成影子」的覆辙。
+    re.compile(r"/wt/([^/?#]+)", re.I),
 )
 
 

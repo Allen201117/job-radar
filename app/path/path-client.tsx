@@ -14,6 +14,7 @@ import {
 import type { CareerPathReport, TimingStatusKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { PanelSkeleton } from "@/components/Skeletons";
+import { badgeVariants } from "@/components/ui";
 
 const TIMING_STYLE: Record<TimingStatusKind, string> = {
   open: "border border-tone-green-border bg-tone-green-bg text-tone-green-fg",
@@ -97,7 +98,7 @@ export default function CareerPathClient() {
                   {rec.job_count > 0 && (
                     <Link
                       href="/jobs"
-                      className="inline-flex items-center gap-1 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-2.5 py-1 text-xs ink-2 transition hover:bg-white dark:hover:bg-white/[0.05] hover:opacity-80"
+                      className={cn(badgeVariants({ tone: "neutral", size: "sm" }), "inline-flex items-center gap-1 hover:opacity-80")}
                     >
                       <Briefcase size={12} weight="bold" />
                       {rec.job_count} 个在招
@@ -163,7 +164,7 @@ function ProfileSummary({ report }: { report: CareerPathReport }) {
     <div className="flex flex-wrap items-center gap-2 text-sm">
       <span className="ink-3">你的画像：</span>
       {chips.map((c) => (
-        <span key={c} className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-2.5 py-1 text-xs ink-2">
+        <span key={c} className={badgeVariants({ tone: "neutral", size: "sm" })}>
           {c}
         </span>
       ))}

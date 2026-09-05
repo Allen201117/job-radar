@@ -24,6 +24,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { useBodyScrollLock, useEscapeKey } from "@/lib/ui/hooks";
+import { buttonVariants } from "@/components/ui";
 
 // 一级导航：今日机会 / 搜索岗位 / 洞察库 / 职业路径 / 校招专区 / 个人主页 / 值得投 / 已投递。
 // 2026-09-03：原「关注与偏好」与「个人主页」功能重复（两处各挂一份简历画像面板），已合并为后者。
@@ -354,7 +355,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
                 onClick={handleLogout}
                 disabled={loggingOut}
                 aria-busy={loggingOut}
-                className="inline-flex w-full items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-4 py-2.5 text-[13px] font-medium ink-2 transition duration-200 hover:bg-white active:scale-[0.98] disabled:opacity-60 dark:border-white/[0.12] dark:bg-white/[0.06] dark:hover:bg-white/[0.12]"
+                className={cn(buttonVariants({ variant: "soft", size: "sm" }), "inline-flex w-full items-center justify-center gap-1.5 active:scale-[0.98] disabled:opacity-60")}
               >
                 {loggingOut ? (
                   <CircleNotch size={16} weight="bold" className="animate-spin" aria-hidden="true" />
