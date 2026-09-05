@@ -78,6 +78,7 @@ from adapters.icbc import IcbcAdapter
 from adapters.ccb import CcbAdapter
 from adapters.bankcomm import BankcommAdapter
 from adapters.cmcc import CmccAdapter
+from adapters.abchina import AbchinaAdapter
 from adapters.gree import GreeAdapter
 
 
@@ -189,6 +190,8 @@ ADAPTERS = {
     "ccb": CcbAdapter(),  # 建设银行自建门户：NHR104/NHR107 公开接口（需先热身会话），零浏览器
     "bankcomm": BankcommAdapter(),  # 交通银行自建门户：REQ_MESSAGE 包裹的公开接口，零浏览器
     "cmcc": CmccAdapter(),  # 中国移动招聘网站：searchJobs 公开接口（RSA 签名头自算），零浏览器
+    # 农业银行：接口响应体是 SM4 密文，明文只存在于浏览器内存 → 只能走 Playwright 读 React state
+    "abchina": AbchinaAdapter(),
 }
 
 # 中国本土公司源（每日后台爬取高优）：本土覆盖优先级 > 外企，排在外企 ATS 前先抓。
@@ -200,6 +203,7 @@ DOMESTIC_ADAPTERS = {
     "meituan", "meituan_campus", "kuaishou", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "byd", "sf_express",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
     "tencent_music", "antgroup", "mihoyo", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree", "tonghuashun",  # 自建门户公开接口（零浏览器；cmb=招商银行，cmbc=中国民生银行）
     "spdb", "icbc", "ccb", "bankcomm", "cmcc",  # 国有大行 + 中国移动自建门户（2026-09-05 live 核实逐岗详情页，零浏览器）
+    "abchina",  # 农业银行（浏览器档：响应体加密，读 React state）
 }
 
 

@@ -288,11 +288,21 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       （HEAD 又是 200，should_skip 拦不住）→ 覆写 user_agent + 空 body 当失败抛；
                          #       ② 工行/中国移动对 **HEAD 恒返 403**（换浏览器 UA 也一样，GET/POST 全正常）→
                          #       不覆写 should_skip 就整源被跳过。**接新源必须逐个跑一遍 adapter.should_skip(url)**。
-                         #     ⏸️ 农业银行未接通：逐岗 jd_url 已确证冷加载可开
-                         #       （career.abchina.com/build/index.html#/PositionDetails/:{jobPublishId}，冒号是字面量），
-                         #       但列表接口响应体是 SM4 密文（new/getInfo 明文发 1024 位 RSA 公钥做密钥交换），
-                         #       纯 httpx 走不通。推荐 Playwright 读机构页岗位卡的 React state posCardInfo；
-                         #       ⚠️ 直接 hash 导航到列表路由渲染是空的（recruitType 从 redux 拿），必须从首页点进去。
+                         #   abchina 农业银行 = **唯一走浏览器的一家**（校招 2,580 岗 / 93 秒，46 个机构）。
+                         #     它不是「没有逐岗详情页」，是**接口响应体加密**：new/getInfo 明文发一把 1024 位 RSA
+                         #     公钥做密钥交换，之后 org/* 与 orgPosition/* 的响应体是 hex 密文（页面用 SM4-ECB 解），
+                         #     明文只存在于浏览器内存 → 只能 Playwright 读页面渲染好的 React state，不拦接口不解密。
+                         #     枚举：`#/{recruitType}` 页的 state.batchCardInfo 出机构 → `#/RecruitmentOrgDetails/{rt}/{orgId}`
+                         #       页的 state.posCardInfo 出岗位（recruitType 99=校招 / 100=社招）。
+                         #     ⚠️ **必须先 goto 一次首页**把会话建起来，否则 hash 路由只渲染 222 字空壳、一条都抓不到。
+                         #     ⚠️ hash 路由是**同文档导航**，换机构必须 `page.reload()`——不然上一家的卡片还在 DOM 里，
+                         #       会把上一家的岗位当成这一家的（第一版就是这么只抓到 2 个岗、还自称抓全了）。
+                         #     ⚠️ 渲染慢且不均：农银人寿 34 个岗要 >8s 才出来，等太短会得到「0 个岗」这种
+                         #       看着正常其实是漏抓的结果 → 轮询到 25s 仍为空才认「这家当期没在招」。
+                         #     ⚠️ jd_url 里的冒号是**字面量**：`#/PositionDetails/:{jobPublishId}`（前端拼串时把
+                         #       路由占位符一起拼进去了），删掉它详情页打不开。详情走 window.open，点一下像没反应。
+                         #     诚实边界：社招靠「热招事项」卡枚举机构，当前站点自报「暂无热招事项」故为 0；
+                         #       哪天社招开了但站点不出热招事项卡，这里会漏——上线后拿 db-report 复核。
                          #   ⬆ 2026-08-27 四处「扩现有 adapter」（都不是新 adapter，故无需接线）：
                          #     china_ats.BeisenAdapter 加**老版 SSR CMS 门户**分支（theme2，无 PortalId/无
                          #       GetJobAdPageList，列表页 HTML 直出 xq?jobId= 锚点）→ 中芯国际 563 岗（社293/校248/海外22）。

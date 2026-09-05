@@ -316,6 +316,12 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填 https://job.10086.cn/personal/job/；适配器直连公开 searchJobs 接口（签名头自算），crawl_method 选 http",
   },
   {
+    value: "abchina",
+    label: "农业银行（自建门户 · 本土 · 浏览器）",
+    origin: "domestic",
+    hint: "填 https://career.abchina.com/build/index.html；接口响应体是 SM4 密文，只能用浏览器读页面渲染结果，crawl_method 选 playwright",
+  },
+  {
     value: "amazon",
     label: "Amazon（自建 · 外企）",
     origin: "foreign",

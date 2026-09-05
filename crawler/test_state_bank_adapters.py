@@ -9,6 +9,7 @@ import json
 import unittest
 from datetime import date, timedelta
 
+from adapters.abchina import AbchinaAdapter
 from adapters.bankcomm import BankcommAdapter
 from adapters.ccb import CcbAdapter, _repair_json
 from adapters.cmcc import CmccAdapter, _rsa_public_numbers, _PUBLIC_KEY_SPKI
@@ -189,6 +190,39 @@ class CmccAdapterTest(unittest.TestCase):
         modulus, exponent = _rsa_public_numbers(_PUBLIC_KEY_SPKI)
         self.assertEqual(modulus.bit_length(), 2048)
         self.assertEqual(exponent, 65537)
+
+
+class AbchinaAdapterTest(unittest.TestCase):
+    def test_jd_url_keeps_the_literal_colon_the_site_puts_there(self):
+        payload = {"jobs": [{
+            "jobPublishId": 155541420, "posName": "软件研发岗", "workplace": "北京",
+            "deadline": "2026-10-08", "orgName": "农银金科", "_job_type": "校招",
+        }]}
+        job = AbchinaAdapter().parse(json.dumps(payload, ensure_ascii=False))[0]
+
+        # 站点自己的 onClick 拼的就是 '#/PositionDetails/:' + jobPublishId —— 冒号是字面量。
+        # 去掉它详情页打不开，所以这条断言钉的是「别自作聪明把冒号当占位符删掉」。
+        self.assertEqual(
+            job.jd_url,
+            "https://career.abchina.com/build/index.html#/PositionDetails/:155541420")
+        self.assertEqual(job.location, "北京")
+        self.assertEqual(job.job_type, "校招")
+        self.assertEqual(job.deadline, "2026-10-08")
+        # 正文只在逐岗详情页，列表侧一个字都没有——不许假装有。
+        self.assertIsNone(job.summary)
+
+    def test_rows_without_id_or_title_are_dropped(self):
+        payload = {"jobs": [{"jobPublishId": 1}, {"posName": "无 id 岗"}, {}]}
+        self.assertEqual(AbchinaAdapter().parse(json.dumps(payload)), [])
+
+    def test_is_not_in_the_httpx_concurrency_lane(self):
+        # 它要起 Playwright（响应体加密，明文只在浏览器里），进并发档会把 sync API 跑崩。
+        import sys, pathlib as _p
+        sys.path.insert(0, str(_p.Path(__file__).resolve().parent))
+        import run
+        self.assertIn("abchina", run.ADAPTERS)
+        self.assertIn("abchina", run.DOMESTIC_ADAPTERS)
+        self.assertFalse(run._is_httpx_safe("abchina"))
 
 
 if __name__ == "__main__":
