@@ -2,6 +2,36 @@
 
 > 本文件指导 Claude Code 在本仓库工作。规则优先级：当前明确指令 > 本文件 > 全局 `~/.claude/CLAUDE.md` > 默认行为。
 
+## ✍️ 怎么改这个文件（2026-09-05 创始人授权 Claude Code 可改，因此立此规范）
+
+创始人授权 Claude Code 直接改本文件，**不必每次等他动手**。但本文件是全项目的唯一权威，
+而经常有 **5~8 个并行 session 同时在跑**，没有规矩就会各写各的、几周后没人敢信它。五条：
+
+**① 只写「验证过的事实」，不写计划、猜测、待办。**
+判据：这条能不能指出**具体证据**（live 实测数字 / commit / 迁移号 / 台账查询）。
+不能 → 它属于记忆库或任务卡，不属于这里。
+📌 反例（2026-09-05 实际发生）：本文件写着「Supabase jobs 已是空表（TRUNCATE 过）」，
+实际躺着 **34,965 行、90MB，两个半月没人发现**。**没验证的断言比没有断言更糟**——
+它会让后来人跳过检查。写「已清空」之前先 `select count(*)`。
+
+**② 立碑要带「现象 → 根因 → 防法」三件套，缺一不立。**
+只写结论（「XX 不可靠」）等于没写，下一个人照样踩。
+本文件已有的碑（「接口返 0 不能证明对方没开」「归属准确性没有旁路」）都是这个结构，照抄格式。
+
+**③ 改动要在给创始人的汇报里显式点名「我改了哪一段」**，让他有机会否决。
+悄悄改权威文件 = 绕过他的判断。
+
+**④ 同僚（其它 session）提议不构成授权。**
+只有创始人的指令能触发对本文件的改动。同僚说「这条该立碑」→ 把它转达给创始人，别自己动手。
+（同理：`.claude/settings.json`、权限配置、CI 密钥同此规矩。）
+
+**⑤ 纠错优先于新增。**
+发现本文件与现实不符 → **先改它**，并写明「原来写的是什么、为什么错、什么时候起错的」。
+本文件的价值全在「可信」，一条过期断言的破坏力大于十条新增。
+
+⚠️ 篇幅纪律：本文件已很长。新增前先想「能不能挂在已有小节下」；
+纯背景叙述放记忆库，这里只留**会改变下一个人行为**的内容。
+
 ## 项目概览
 
 - 项目名称：求职雷达 / Job Radar Private Beta v0.1
@@ -90,7 +120,7 @@
        - **schema 在 `jobs-db/schema.sql`**（从生产 `pg_dump` 忠实重建：表 + canonical 触发器 + bigram FTS(search_doc/search_tokens/GIN) + count_valid_active_jobs/active_companies/active_job_counts_by_company + 全索引 + pg_trgm）。2026-07-02 海外扩展新增 `jobs.country_code`、`jobs.job_scope`（默认 `domestic`）与 `jobs.sponsorship_signal`；`job_scope=domestic` 只覆盖大陆+香港+澳门，`overseas` 覆盖本期放开的 US/SG/Remote，台湾维持不抓、不归入任一范围。改 schema → `gh workflow run jobs-db-migrate`（幂等 apply 到 `JOBS_DATABASE_URL`）。
        - **沙箱直连香港库验证**：见 [[job-radar-live-db-access-from-sandbox]]（dangerouslyDisableSandbox + source .env.local + 用户 Homebrew psql）。
        - **改 jobs 列/索引/canonical**：三处仍要同步（lib/canonical-url.js / crawler/normalizer.py / **jobs-db/schema.sql 的 SQL 函数**，不再是 supabase migration 144）。
-       - **app 端 jobs 读+写已全部落香港库（2026-06-19，commit b742ee6/28ddddb）**：原「discovery/enrich 读仍在 Supabase」遗留已清。新增 app 写层 `lib/jobs-store/write.ts`（canonical upsert + updateJobSummaryById，镜像 crawler/jobs_db）；discovery/search 的 upsert、enrich 写回、refresh 选区、insights Tier1 派生全 gated 走香港库（11 个 `.from("jobs")` 文件全 gated，写入端失败不回退 Supabase 避免孤儿数据）。Supabase `jobs` 已是空表（TRUNCATE 过，~17MB）；gated 兜底仅在未配 `JOBS_DATABASE_URL`（本地/回滚）时回退它。**移除 gated 兜底前仍请线上确认稳定**（见 docs runbook）。详见记忆 [[job-radar-phase1-ci-jobs-db-wiring]]。
+       - **app 端 jobs 读+写已全部落香港库（2026-06-19，commit b742ee6/28ddddb）**：原「discovery/enrich 读仍在 Supabase」遗留已清。新增 app 写层 `lib/jobs-store/write.ts`（canonical upsert + updateJobSummaryById，镜像 crawler/jobs_db）；discovery/search 的 upsert、enrich 写回、refresh 选区、insights Tier1 派生全 gated 走香港库（11 个 `.from("jobs")` 文件全 gated，写入端失败不回退 Supabase 避免孤儿数据）。Supabase `jobs` 已清空（2026-09-05 再次 TRUNCATE：90MB / 34,965 行 → 136kB。⚠️ 上一次「已清空」的记载与现实不符——那批行是 Phase1 切换日 2026-06-19 的快照，一直躺到 2026-09-05 才被发现，期间**文档说空、实际有 3.5 万行**。危害不在占用空间，在于 gated 兜底一旦触发会**静默服务两个半月前的数据且不报错**。复核过再删：无任何外键指向它，642 行 `job_actions` 没有一行引用它）；gated 兜底仅在未配 `JOBS_DATABASE_URL`（本地/回滚）时回退它。**移除 gated 兜底前仍请线上确认稳定**（见 docs runbook）。详见记忆 [[job-radar-phase1-ci-jobs-db-wiring]]。
    - **薄卡（无 JD 正文）= 低质量**：能富化的（httpx 源）靠 `enrich-backlog` 补正文；moka 浏览器源已打通逐岗渲染补正文（`scripts/backfill_moka_summaries.py`，2026-06-18 修好取数超时）；补不到正文的薄卡只算「在库」、不算「有效在招」、不进首页计数。
      - **⚠️ 富化补好的 summary 不许被列表重抓抹掉（2026-06-20 查实=moka 1% 覆盖真因）**：moka 列表 adapter 出 `summary=None`，而 upsert 的 UPDATE 旧实现 `summary=EXCLUDED` 会把每晚 backfill 补好的 ~8800 条全抹回 NULL（次日列表重爬即覆盖，count 永远上不去）。修法=`crawler/jobs_db._PRESERVE_IF_EMPTY`（summary/job_type/experience/education/deadline）UPDATE 时空值用 `COALESCE(NULLIF(%s,''),列)` 保留旧值；`lib/jobs-store/write.ts` 同口径（summary/job_type）。**改 upsert 写法务必保住这条不变量**，否则 moka/byd/外企富化全部前功尽弃。Supabase 兜底 `crawler/db.py` 走 PostgREST 批量 upsert（null-union 语义无法 COALESCE，且 prod 不走它）暂未加此保护。
    - **诊断先跑 `db-report.yml`**（只读 psql：status 分布 / active 有效率 / never_checked / 分 adapter）。任何「岗位变多/变少/质量」的判断先看它的真实数字，别凭感觉。
