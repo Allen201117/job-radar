@@ -45,6 +45,7 @@ import CompanyLogo from "@/components/CompanyLogo";
 import type { RecruitmentObservation } from "@/lib/recruitment-cycle";
 import { useBodyScrollLock, useEscapeKey } from "@/lib/ui/hooks";
 import { INSIGHT_CHIP_TONE_CLASS as PAYLOAD_CHIP_TONE } from "@/lib/insight-chip-format";
+import { buttonVariants, badgeVariants } from "@/components/ui";
 
 // 新鲜度分级配色：越旧越偏琥珀，提示用户谨慎参考。
 const FRESHNESS_TONE: Record<FreshnessLevel, string> = {
@@ -321,7 +322,7 @@ function FirstPartySection({
         </span>
         <h3 className="t-h3">员工自愿分享</h3>
         {visible && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-tone-teal-border bg-tone-teal-bg px-2 py-0.5 text-xs font-medium text-tone-teal-fg">
+          <span className={cn(badgeVariants({ tone: "teal", size: "xs" }), "inline-flex items-center gap-1")}>
             <Star size={12} weight="fill" />
             {aggregate.summary.average_rating ?? "-"} · {count} 条
           </span>
@@ -329,7 +330,7 @@ function FirstPartySection({
         <button
           type="button"
           onClick={onToggleSubmit}
-          className="ml-auto rounded-full border border-black/[0.08] bg-white/70 px-3 py-1.5 text-xs font-semibold ink-2 transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
+          className={cn(buttonVariants({ variant: "soft", size: "xs" }), "ml-auto font-semibold")}
         >
           {submitOpen ? "收起" : "贡献一条"}
         </button>
@@ -360,14 +361,14 @@ function FirstPartyCard({ item }: { item: FirstPartyInsightItem }) {
   return (
     <article className="rounded-xl border border-black/[0.06] border-l-2 border-l-[#6cc99e] bg-white/60 p-5 pl-4 text-[15px] dark:border-white/[0.1] dark:border-l-[#6cc99e] dark:bg-white/[0.05]">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-full border border-tone-teal-border bg-tone-teal-bg px-2.5 py-0.5 text-[11px] font-semibold text-tone-teal-fg">
+        <span className={cn(badgeVariants({ tone: "teal", size: "xs" }), "font-semibold")}>
           员工自愿分享 · 已审核
         </span>
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
+        <span className={badgeVariants({ tone: "neutral", size: "xs" })}>
           匿名 · {item.topic_label}
         </span>
         {item.rating != null && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-tone-amber-border bg-tone-amber-bg px-2 py-0.5 text-[11px] font-medium text-tone-amber-fg">
+          <span className={cn(badgeVariants({ tone: "amber", size: "xs" }), "inline-flex items-center gap-1")}>
             <Star size={11} weight="fill" />
             {item.rating}/5
           </span>
@@ -627,7 +628,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
           {chip.text}
         </span>
         {item.outdated && (
-          <span className="rounded-full border border-black/[0.08] bg-[#f4efe6] px-2 py-0.5 text-[11px] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08]">
+          <span className={badgeVariants({ tone: "neutral", size: "xs" })}>
             可能已过时
           </span>
         )}
@@ -696,7 +697,7 @@ function InsightCard({ item }: { item: InsightItemView }) {
                 disabled={sending}
                 aria-busy={sending}
                 onClick={submitDispute}
-                className="inline-flex items-center gap-1 rounded-full bg-[#1a1714] px-3 py-1 text-[11px] font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+                className={cn(buttonVariants({ variant: "ink", size: "xs" }), "inline-flex items-center gap-1 font-semibold disabled:opacity-50")}
               >
                 {sending && <CircleNotch size={11} weight="bold" className="animate-spin" aria-hidden="true" />}
                 {sending ? "提交中…" : "提交"}
@@ -748,7 +749,7 @@ function RecruitmentTimeline({ cycles }: { cycles: RecruitmentObservation[] }) {
           <CalendarBlank size={17} weight="bold" />
         </span>
         <h3 className="t-h3">招聘周期</h3>
-        <span className="rounded-full border border-tone-sky-border bg-tone-sky-bg px-2 py-0.5 text-[11px] font-medium text-[#2f6299] dark:text-[#7fb2e8]">
+        <span className={badgeVariants({ tone: "sky", size: "xs" })}>
           据往年 · {gradClass}
         </span>
       </header>

@@ -13,6 +13,8 @@ import {
 } from "@phosphor-icons/react";
 import SaveToast, { type SaveState } from "@/components/SaveToast";
 import TagInput from "./TagInput";
+import { cn } from "@/lib/utils";
+import { buttonVariants, badgeVariants } from "@/components/ui";
 
 type EduItem = { school: string; degree: string; major: string; start: string; end: string };
 type InternItem = { company: string; role: string; start: string; end: string; summary: string };
@@ -533,11 +535,11 @@ function SavedSummary({ profile }: { profile: any }) {
       <ChipGroup label="城市" values={profile.target_locations || []} />
       <ChipGroup label="技能" values={profile.skills || []} />
       <div className="flex flex-wrap gap-2 text-xs ink-2">
-        <span className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1">教育 {eduCount}</span>
-        <span className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1">实习 {internCount}</span>
-        <span className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1">项目 {projectCount}</span>
+        <span className={badgeVariants({ tone: "neutral", size: "sm" })}>教育 {eduCount}</span>
+        <span className={badgeVariants({ tone: "neutral", size: "sm" })}>实习 {internCount}</span>
+        <span className={badgeVariants({ tone: "neutral", size: "sm" })}>项目 {projectCount}</span>
         {(profile.experience_stage || profile.seniority) && (
-          <span className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1">
+          <span className={badgeVariants({ tone: "neutral", size: "sm" })}>
             阶段 {profile.experience_stage || profile.seniority}
           </span>
         )}
@@ -560,7 +562,7 @@ function ChipGroup({ label, values }: { label: string; values: string[] }) {
         {values.map((value) => (
           <span
             key={value}
-            className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1 text-xs font-medium ink-2"
+            className={badgeVariants({ tone: "neutral", size: "sm" })}
           >
             {value}
           </span>

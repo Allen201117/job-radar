@@ -9,6 +9,8 @@ import { formatDateLabel } from "@/lib/relative-time";
 import { track } from "@/lib/track";
 import type { ScoredJob } from "@/lib/types";
 import { CheckCircle, MapPin, Scales } from "@phosphor-icons/react";
+import { cn } from "@/lib/utils";
+import { badgeVariants } from "@/components/ui";
 
 type PrimaryAction = "saved" | "ignored" | "applied";
 
@@ -155,7 +157,7 @@ export default function SavedClient({
               <h3 className="mt-1 text-lg font-semibold">{d.title}</h3>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs ink-3">
                 {d.location && (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-black/[0.06] bg-[#f4efe6] px-2 py-1 dark:border-white/[0.1] dark:bg-[#16130f]">
+                  <span className={cn(badgeVariants({ tone: "neutral", size: "xs" }), "inline-flex items-center gap-1")}>
                     <MapPin size={13} weight="fill" aria-hidden="true" />
                     {d.location}
                   </span>
