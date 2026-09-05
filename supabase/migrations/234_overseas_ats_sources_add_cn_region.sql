@@ -59,6 +59,19 @@
 --   （20 条/页）。17 个 workday 源合计新增 638 个岗，约多 30-60 个列表请求/轮，在 daily 预算内。
 --   大头是星展银行 361 个（以香港分行为主），它一家就占了这次总量的 42%。
 --
+-- ── 已知残留（量过了，不打算在这条迁移里治）────────────────────────────────────
+-- 1. **868 个里有 2 个其实不在大中华区**：捷普的 'Penang'（马来西亚槟城）、Wiley 的
+--    'Oxford, GBR'（英国牛津）。成因是 workday 的 facet 路径把服务端已过滤的岗当作可信、
+--    parse 不再复过滤（adapter 既有设计），而这两条被对方自己挂在了中国 facet 下。
+--    占比 0.2%，不值得为它关掉 trusted 路径（关掉会让星展那 361 个全部要重新逐条判地点）。
+-- 2. **香港楼宇名判不出 country_code**：星展 286 个岗的地点是 'One, Island, East'（港岛东中心）、
+--    'Kwun, Tong'（观塘）、'Mira, Place, Tower, A'（美丽华广场）这类**楼宇/地铁站名**，
+--    geo 的词表里没有 ⇒ country_code 留 NULL。job_scope 仍然正确（走 workday 的香港 facet +
+--    源 regions 兜底判 domestic），只是「按国家/地区筛」这一维对它们是空的。
+--    要治得往 geo 加香港地名词表，属独立一件事，别混进这条迁移。
+-- 3. 合并 origin/main（geo 新增中文行政区/美国州名识别 + is_overseas_unspecified）之后
+--    **重算过一遍**：库里**已有**的岗被本次补 CN 改判成国内岗的 = **0**。这是最要紧的那条。
+--
 update sources s
    set regions = array['CN', 'US', 'SG', 'Remote'],
        notes = coalesce(s.notes || ' ｜ ', '')
