@@ -46,6 +46,21 @@ def _deep_find_job_list(obj, depth: int = 0) -> list:
     return best
 
 
+def _ats_hint(final_url, html):
+    """渲染后的页面里认出的第三方 ATS。认不出、或解析不出真正属于该平台的地址 → None。
+
+    ⚠️ 必须回验 `detect_platform(resolved, "") == platform`：resolve_source_url 兜底会原样返回
+    final_url（= 公司自己的招聘介绍页），不回验就等于把「没找到」当成「找到了」。
+    """
+    platform, adapter = platform_fingerprint.detect_platform(final_url, html)
+    if not adapter:
+        return None
+    resolved = platform_fingerprint.resolve_source_url(platform, final_url, html)
+    if not resolved or platform_fingerprint.detect_platform(resolved, "")[0] != platform:
+        return None
+    return {"platform": platform, "adapter": adapter, "source_url": resolved}
+
+
 def _nav_evidence(records):
     """导航证据只留判因需要的字段——**整页 HTML 绝不进台账**（体积 + 噪音）。"""
     return [
@@ -66,14 +81,19 @@ class InterceptFailure(RuntimeError):
       · ``no_job_data_on_entry``  页面正常打开，但这一页就是没有岗位数据（多半站错了页）
       · ``entry_unreachable``     页面压根没打开（导航全部失败）
 
-    ``hops`` 只在 no_job_data_on_entry 时有值：从**渲染后**的页面里抽出的自家招聘子域候选，
-    供 gap_funnel_browser 跟下一跳（httpx 道靠原始 HTML 抽不到 SPA 壳里的链接，这半只能在这里做）。
+    no_job_data_on_entry 时额外带两样「下一跳」线索，都是**只有渲染后才拿得到**的
+    （httpx 道看到的原始 HTML 里，SPA 壳往往一个链接都没有）：
+      · ``ats_hint``  渲染后的页面里认出的第三方 ATS（跨主域那半，如 basf.jobs→hotjob、
+                      shell→myworkdayjobs）。2026-09-05 实测：find_careers_subdomain_hops
+                      **只收同主域**，巴斯夫/壳牌这类的目标全被它丢掉，所以这条不能省。
+      · ``hops``      自家招聘子域候选（同主域那半，如 job.10jqka→campus.10jqka）。
     """
 
-    def __init__(self, message, *, block_kind, hops=(), evidence=None):
+    def __init__(self, message, *, block_kind, hops=(), ats_hint=None, evidence=None):
         super().__init__(message)
         self.block_kind = block_kind
         self.hops = list(hops or ())
+        self.ats_hint = dict(ats_hint) if ats_hint else None
         self.evidence = dict(evidence or {})
 
 
@@ -196,19 +216,23 @@ class PlaywrightAdapter(BaseAdapter):
                     block_kind="anti_bot",
                     evidence={"navigations": _nav_evidence(records)},
                 )
-        hops = []
+        hops, ats_hint = [], None
         for record in opened:
-            for hop in platform_fingerprint.find_careers_subdomain_hops(
-                record.get("html") or "", record.get("final_url") or record.get("url")
-            ):
+            html = record.get("html") or ""
+            final_url = record.get("final_url") or record.get("url")
+            if ats_hint is None:
+                ats_hint = _ats_hint(final_url, html)
+            for hop in platform_fingerprint.find_careers_subdomain_hops(html, final_url):
                 if hop not in hops:
                     hops.append(hop)
         return InterceptFailure(
             f"{cls.name}: no_job_data_on_entry — 入口页正常打开"
             f"（HTTP {opened[0].get('status')}）但这一页没有岗位数据，很可能站错了页；"
+            f"渲染后认出 ATS={(ats_hint or {}).get('platform') or '无'}、"
             f"自家招聘子域候选 {len(hops)} 个 ({matcher_text})",
             block_kind="no_job_data_on_entry",
             hops=hops,
+            ats_hint=ats_hint,
             evidence={"navigations": _nav_evidence(records)},
         )
 

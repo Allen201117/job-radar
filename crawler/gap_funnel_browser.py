@@ -297,6 +297,28 @@ def process_browser_company(
         and not _probe_ok(probe_result)
         and probe_result.get("block_kind") == "no_job_data_on_entry"
     ):
+        # ① 渲染后的页面里直接认出第三方 ATS —— 零额外请求，且覆盖 find_careers_subdomain_hops
+        #    够不着的跨主域那半（2026-09-05 实测：它只收同主域，巴斯夫 basf.jobs、
+        #    壳牌 myworkdayjobs.com 这类目标全被丢掉）。
+        ats_hint = probe_result.get("ats_hint") or {}
+        if ats_hint.get("adapter") and ats_hint.get("source_url"):
+            hop_trail.append({**ats_hint, "via": "rendered_html_ats"})
+            return {
+                "state": "platform_known",
+                "official_entry_url": ats_hint["source_url"],
+                "detected_platform": ats_hint.get("platform"),
+                "next_retry_at": gap_funnel._iso(now),
+                "fail_reason": (
+                    "no_job_data_on_entry：入口页没有岗位数据，渲染后认出 %s"
+                    % ats_hint.get("platform")
+                ),
+                "evidence": {
+                    "probe": probe_result,
+                    "entry_hops": hop_trail,
+                    "entry_hop_from": source_url,
+                },
+            }
+        # ② 同主域的自家招聘子域候选，跟过去看它把我们带到哪儿。
         for hop in _hop_candidates(probe_result, source_url):
             try:
                 hop_fingerprint = fingerprinter(hop, company=row["company"])

@@ -160,6 +160,36 @@ class BrowserCompanyTest(unittest.TestCase):
         self.assertIn("no_job_data_on_entry", result["fail_reason"])
         self.assertNotIn("anti_bot", result["fail_reason"])
 
+    def test_rendered_html_ats_hint_hands_back_to_p1_without_extra_requests(self):
+        """渲染后直接认出的 ATS 优先于子域候选：零额外请求，且覆盖跨主域那半。"""
+        result = browser.process_browser_company(
+            _row(),
+            supabase=object(),
+            jobs_conn=object(),
+            apply=True,
+            now=NOW,
+            prober=lambda _c: {
+                "ok": False,
+                "valid": 0,
+                "block_kind": "no_job_data_on_entry",
+                "ats_hint": {
+                    "platform": "hotjob",
+                    "adapter": "hotjob",
+                    "source_url": "https://www.hotjob.cn/BASF/pb/social.html",
+                },
+                "hops": ["https://careers.example.com/"],
+                "reason": "InterceptFailure: company_spa: no_job_data_on_entry",
+            },
+            acceptance_gate=lambda *a, **k: self.fail("认出平台后应交回 P1"),
+            fingerprinter=lambda *a, **k: self.fail("有 ats_hint 时不该再跟子域跳"),
+        )
+        self.assertEqual(result["state"], "platform_known")
+        self.assertEqual(
+            result["official_entry_url"], "https://www.hotjob.cn/BASF/pb/social.html"
+        )
+        self.assertEqual(result["detected_platform"], "hotjob")
+        self.assertEqual(result["next_retry_at"], gap_funnel._iso(NOW))
+
     def test_follows_rendered_careers_hop_and_hands_a_known_ats_back_to_p1(self):
         """跟到的下一跳认出真平台 → 交回 P1 httpx 道，且立即可重试（不按失败退避压 45 天）。"""
         seen = []

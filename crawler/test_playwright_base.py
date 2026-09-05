@@ -102,6 +102,31 @@ class ClassifyEmptyCaptureTests(unittest.TestCase):
         self.assertEqual(error.block_kind, "no_job_data_on_entry")
         self.assertEqual(error.hops, ["https://jobs.zhangyue.com/"])
 
+    def test_recognizes_cross_domain_ats_from_rendered_html(self):
+        """跨主域那半只能靠渲染后的页面认 ATS —— find_careers_subdomain_hops 只收同主域，
+        巴斯夫（basf.jobs→hotjob）、壳牌（→myworkdayjobs）这类目标全被它丢掉
+        （2026-09-05 另一路实测结论）。"""
+        error = PlaywrightAdapter.classify_empty_capture([{
+            "url": "https://www.acme.com/career/cn",
+            "status": 200,
+            "final_url": "https://www.acme.com/career/cn",
+            "html": '<a href="https://acme.zhiye.com/social/jobs">社会招聘</a>',
+        }])
+        self.assertEqual(error.block_kind, "no_job_data_on_entry")
+        self.assertEqual(error.ats_hint["adapter"], "beisen")
+        self.assertEqual(error.ats_hint["source_url"], "https://acme.zhiye.com/social/jobs")
+
+    def test_ats_hint_is_none_when_resolution_falls_back_to_the_entry_page(self):
+        """认不出就得说认不出：resolve_source_url 兜底会原样返回入口页，
+        不回验 host 就等于把「没找到」当成「找到了」。"""
+        error = PlaywrightAdapter.classify_empty_capture([{
+            "url": "https://www.acme.com/careers",
+            "status": 200,
+            "final_url": "https://www.acme.com/careers",
+            "html": "<title>Acme 招聘</title><h1>加入我们</h1>",
+        }])
+        self.assertIsNone(error.ats_hint)
+
     def test_真被拒的仍然记_anti_bot(self):
         for status, html in (
             (403, "<html></html>"),

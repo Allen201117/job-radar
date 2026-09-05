@@ -343,6 +343,9 @@ def probe_one(cand: dict, timeout: int = 15):
             hops = [str(h) for h in (getattr(e, "hops", None) or []) if h]
             if hops:
                 failed["hops"] = hops
+            ats_hint = getattr(e, "ats_hint", None)
+            if ats_hint:
+                failed["ats_hint"] = dict(ats_hint)
         return failed
 
     valid = 0
