@@ -197,6 +197,59 @@ class SpecialStateTest(unittest.TestCase):
             pf.detect_page_state(200, "<title>Cloudflare challenge</title>"), "anti_bot"
         )
 
+    def test_normal_page_without_job_data_is_never_anti_bot(self):
+        """页面正常打开、只是这一页没有岗位数据 —— 那是**我们站错了页**，不是对方拒了我们。
+
+        2026-09-04 台账里 21 家必投公司被标 anti_bot，逐个核查全部只是漏斗停在
+        「公司官网的招聘介绍页」上；2026-09-05 复测其中 8 家入口全是 HTTP 200 零拦截信号。
+        这个标签把排查方向带去了「怎么绕反爬」，巴斯夫、壳牌各空撞 30 次。
+        """
+        intro = "<title>某集团招聘</title><h1>加入我们</h1><p>人才理念与招聘流程介绍</p>"
+        self.assertIsNone(pf.detect_block_signal(200, intro))
+        self.assertNotEqual(pf.detect_page_state(200, intro), "anti_bot")
+
+    def test_job_content_mentioning_akamai_denied_is_not_anti_bot(self):
+        """裸子串判据的实测假阳性：greenhouse 的 hasbro job board（HTTP 200 的正常岗位 JSON）
+        因为岗位正文提到 Akamai、条款里出现 denied 被判反爬（2026-09-05，105 个健康页面里 1 个）。"""
+        board = (
+            '{"jobs":[{"title":"Senior Engineer","content":"Experience with '
+            'Akamai CDN required. Requests may be denied at the edge."}]}'
+        )
+        self.assertIsNone(pf.detect_block_signal(200, board))
+
+    def test_login_form_captcha_wording_is_not_anti_bot(self):
+        """『验证码』在 41/105（39%）健康线上页面里出现——北森/Moka 门户的登录框本来就带短信验证码。
+        所以它永远不能单独作为反爬判据。"""
+        portal = (
+            "<title>某公司社会招聘</title><h1>在招职位</h1>"
+            "<form><input name='code' placeholder='请输入短信验证码'></form>"
+        )
+        self.assertIsNone(pf.detect_block_signal(200, portal))
+
+    def test_spa_noscript_notice_is_spa_not_anti_bot(self):
+        """<noscript> 的『请开启 JavaScript』是所有 SPA 的兜底文案，是「这页要 JS」不是「对方拒了我们」。"""
+        shell = (
+            '<html><body><noscript>请开启JavaScript后继续</noscript>'
+            '<div id="app"></div></body></html>'
+        )
+        self.assertIsNone(pf.detect_block_signal(200, shell))
+        self.assertEqual(pf.detect_page_state(200, shell), "unknown_spa")
+
+    def test_real_block_pages_still_detected(self):
+        self.assertEqual(
+            pf.detect_block_signal(200, "<title>Access Denied</title>"
+                                        "<p>You don't have permission to access this resource.</p>"),
+            "anti_bot",
+        )
+        self.assertEqual(
+            pf.detect_block_signal(
+                200, '<script src="/cdn-cgi/challenge-platform/h/b/orchestrate/jsch/v1"></script>'
+            ),
+            "anti_bot",
+        )
+        for status in (403, 412, 503):
+            self.assertEqual(pf.detect_block_signal(status, "<html></html>"), "anti_bot")
+
     def test_detects_login_wall(self):
         html = '<form><input type="password" name="password"><button>登录</button></form>'
         self.assertEqual(pf.detect_page_state(200, html), "login_wall")

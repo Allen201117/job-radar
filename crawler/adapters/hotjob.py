@@ -54,6 +54,10 @@ class HotJobAdapter(PlaywrightAdapter):
     _DETAIL_API = "/wecruit/positionInfo/listPositionDetail/"
     # 渠道发布门：前端各页 bootstrap 时读它的 data.searchDisplayItem 渲染筛选器与列表。
     _CONDITION_API = "/wecruit/suite/post/search/condition/"
+    # 门户存在门：租户整站被下掉时此接口仍返 data（含 companyName 等基础信息），
+    # 但缺少「后台配过站点」才会有的这几个键 —— 见 should_skip 的门 1。
+    _CONFIG_API = "/wecruit/suite/config/"
+    _SITE_CFG_KEYS = ("websiteTitlePicUrl", "keywords", "description")
     _DETAIL_CAP = 150    # 单源逐岗 detail 补摘要上限（覆盖绝大多数源；超大源部分覆盖，避免拖垮夜间全量）
     # 逐岗 detail 并发数：wecruit 单 host 对并发敏感（enrich_backlog 实测 8 worker 被限流、PER_HOST=3 才恢复）
     # → 保守 4（≈ 已验证安全上限，串行 150 岗 ~20s → ~5s）。若 CI 见限流(miss) 降回 3。
@@ -87,41 +91,63 @@ class HotJobAdapter(PlaywrightAdapter):
         self.list_urls = [entry]
         return suite_key
 
-    def should_skip(self, source_url: str) -> Optional[str]:
-        """渠道发布门：租户没在后台发布该渠道页面时，整条源跳过、一个岗都不入库。
-
-        wecruit 前端（列表页与逐岗 posDetail 共用）bootstrap 时要读
-        GET {origin}/wecruit/suite/post/search/condition/{suiteKey}?recruitType=N
-        的 data.searchDisplayItem。租户未发布该渠道时此接口只回
-        {"state":"200","type":"success"}（**无 data 键**），前端读 undefined 崩掉：
-        列表页停在「内部处理中，请稍后再试」，逐岗 posDetail 永远转「正在加载中...」。
-
-        坑在于 listPosition / listPositionDetail 这两个数据接口**照常返回岗位**，
-        所以纯看抓取侧一切正常，抓下来的 jd_url 却是用户点开转圈到死的页面
-        —— 违反项目「jd_url 准确性高于一切」红线。故抓取前先探这道门。
-
-        2026-08-26 live 实测（10 条渠道，浏览器逐个复核 10/10 转圈；另取 3 条
-        探测通过的源复核 3/3 正常渲染）：新城控股 society 1258 岗、荣耀 411 岗、
-        歌尔 402 岗、宁德新能源 148 岗等。探测通过与否与租户 suite/config 里
-        有无 society/campus 页面配置一致。
-
-        自愈：租户日后发布该渠道，本探测自然放行、无需人工改库。
-        探测本身失败（网络/限流）一律放行——宁可漏判不可错杀。
-        """
-        self._bind_source(source_url)
-        api = f"{self._origin}{self._CONDITION_API}{self._suite_key}"
+    def _probe_json(self, api: str, params: Optional[dict], referer: str):
+        """探一个只读 JSON 接口。任何失败一律返回 None = 放行（宁可漏判不可错杀）。"""
         try:
             resp = httpx.get(
                 api,
-                params={"recruitType": self._recruit_type},
-                headers={"User-Agent": self.user_agent, "Referer": source_url},
+                params=params,
+                headers={"User-Agent": self.user_agent, "Referer": referer},
                 timeout=self.timeout,
                 follow_redirects=True,
             )
             resp.raise_for_status()
-            payload = resp.json()
+            return resp.json()
         except Exception:
             return None
+
+    def should_skip(self, source_url: str) -> Optional[str]:
+        """两道门，任一不过就整源跳过、一个岗都不入库。
+
+        共同的坑：listPosition / listPositionDetail 这两个**数据**接口在两种情况下都照常
+        返回岗位，所以纯看抓取侧一切正常，抓下来的 jd_url 却是用户永远打不开的页面
+        —— 违反项目「jd_url 准确性高于一切」红线。故抓取前先探这两道门。
+
+        门 1 · 门户是否存在（2026-09-05 加）：租户整站被下掉后，`suite/config` **仍返 data**
+        （companyName / suitOrgInfoPOs / recruitTypeNameMap 等基础信息都在），但缺少
+        「后台真配过站点」才会写入的 websiteTitlePicUrl / keywords / description。
+        此时所有页面（列表页与逐岗 posDetail）都直接显示「官网不存在，无法继续访问!」。
+        ⚠️ 这种租户**门 2 是过的**（search/condition 正常返 data），所以门 2 拦不住它 ——
+        2026-09-05 live 实测 7 个这类租户、993 个 active 岗全是死链。
+
+        门 2 · 渠道是否发布（2026-08-26 加）：wecruit 租户可**逐渠道**决定发不发布门户页面。
+        前端各页 bootstrap 时要读 search/condition 的 data.searchDisplayItem，租户未发布该渠道时
+        此接口只回 {"state":"200","type":"success"}（**无 data 键**），前端读 undefined 崩掉：
+        列表页停在「内部处理中，请稍后再试」，逐岗 posDetail 永远转「正在加载中...」。
+
+        两道门的判据都经 live 双向验证（命中侧逐个浏览器复核 + 判为健康的取样复核），
+        方法见 [[job-radar-wecruit-channel-publication-gate]]：数据接口健康 ≠ 页面能打开。
+
+        自愈：租户日后重开站点 / 发布该渠道，探测自然放行，无需人工改库。
+        探测本身失败（网络/限流）一律放行 —— 宁可漏判不可错杀。
+        """
+        self._bind_source(source_url)
+
+        # 门 1：门户存在吗（租户级）
+        cfg = self._probe_json(
+            f"{self._origin}{self._CONFIG_API}{self._suite_key}", None, source_url)
+        if isinstance(cfg, dict):
+            data = cfg.get("data")
+            if not isinstance(data, dict) or not any(k in data for k in self._SITE_CFG_KEYS):
+                return (
+                    "wecruit portal does not exist (suite/config has no site settings): "
+                    "pages show 官网不存在 — jd_url unusable"
+                )
+
+        # 门 2：本渠道发布了吗（渠道级）
+        payload = self._probe_json(
+            f"{self._origin}{self._CONDITION_API}{self._suite_key}",
+            {"recruitType": self._recruit_type}, source_url)
         if isinstance(payload, dict) and "data" not in payload:
             return (
                 f"wecruit channel not published (recruitType={self._recruit_type}): "

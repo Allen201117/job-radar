@@ -136,3 +136,38 @@ class TaiwanWithChinaSuffixTest(unittest.TestCase):
         self.assertEqual(derive_country_code("Hong Kong"), "HK")
         self.assertTrue(location_in_scope("Wuxi, Jiangsu Sheng, China", {"CN"}))
         self.assertTrue(location_in_scope("Hong Kong", {"CN"}))
+
+
+class BareRemoteScopeBySourceRegionsTest(unittest.TestCase):
+    """裸「远程」按**源的 regions** 兜底判归属。
+
+    2026-09-04 实测：全库 9,873 个「裸远程 + 判 domestic」的在招岗里，**9,863 个来自
+    regions 不含 CN 的海外源**（AbbVie 1,512 / ServiceNow 576 / Samsara 483 / NVIDIA 360…），
+    只有 10 个来自纯 CN 源 —— 用户筛「国内」时看到的是一片美国远程岗。分离度 99.9%。
+    （带国家写法的「Remote - US」早已由 f306271 修好，这里补的是裸远程那一半。）
+    """
+
+    def test_bare_remote_from_overseas_source_is_overseas(self):
+        self.assertEqual(derive_job_scope("远程", {"US", "SG", "Remote"}), "overseas")
+        self.assertEqual(derive_job_scope("Remote", {"US", "SG", "Remote"}), "overseas")
+
+    def test_bare_remote_from_source_including_cn_stays_domestic(self):
+        """源含 CN 就可能是真国内远程岗，不许判 overseas（宁可漏判不可错杀）。"""
+        self.assertEqual(derive_job_scope("远程", {"CN", "US", "SG", "Remote"}), "domestic")
+        self.assertEqual(derive_job_scope("远程", {"CN"}), "domestic")
+
+    def test_omitting_regions_keeps_legacy_behaviour(self):
+        """老调用方不传 regions → 行为一字不变，避免这次改动波及别的链路。"""
+        self.assertEqual(derive_job_scope("远程"), "domestic")
+        self.assertEqual(derive_job_scope(""), "domestic")
+
+    def test_explicit_location_always_wins_over_source_regions(self):
+        """地点能抽出国家时以地点为准 —— 海外源里的北京岗仍是国内岗，反之亦然。"""
+        self.assertEqual(derive_job_scope("Beijing, China", {"US", "SG"}), "domestic")
+        self.assertEqual(derive_job_scope("香港", {"US"}), "domestic")
+        self.assertEqual(derive_job_scope("New York, NY", {"CN", "US"}), "overseas")
+
+    def test_unknown_location_from_overseas_source_is_overseas(self):
+        """空地点 / Multiple Locations 与裸远程同理，都走源兜底。"""
+        self.assertEqual(derive_job_scope("", {"US"}), "overseas")
+        self.assertEqual(derive_job_scope("Multiple Locations", {"US"}), "overseas")

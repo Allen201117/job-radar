@@ -334,7 +334,19 @@ def probe_one(cand: dict, timeout: int = 15):
         html = adapter.fetch(cand["url"])
         raw_jobs = adapter.parse(html)
     except Exception as e:  # 探活失败（网络/反爬/结构不符）→ 丢弃，不入库
-        return {"ok": False, "valid": 0, "china": 0, "reason": f"{type(e).__name__}: {e}"}
+        failed = {"ok": False, "valid": 0, "china": 0, "reason": f"{type(e).__name__}: {e}"}
+        # adapter 已经判过因的（见 adapters.playwright_base.InterceptFailure）把结论原样带出去。
+        # 让调用方去 reason 字符串里猜，正是「站错了页」被写成「被反爬」的来源。
+        kind = getattr(e, "block_kind", None)
+        if kind:
+            failed["block_kind"] = kind
+            hops = [str(h) for h in (getattr(e, "hops", None) or []) if h]
+            if hops:
+                failed["hops"] = hops
+            ats_hint = getattr(e, "ats_hint", None)
+            if ats_hint:
+                failed["ats_hint"] = dict(ats_hint)
+        return failed
 
     valid = 0
     china = 0
