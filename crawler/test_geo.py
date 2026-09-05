@@ -297,11 +297,15 @@ class ChineseAdminDivisionTest(unittest.TestCase):
 
     def test_overseas_unspecified(self):
         """自报「海外」「国外」：没有国家可给，但绝不能走 source.regions 兜底算成国内供给。"""
-        for location in ("海外", "国外", "境外"):
+        for location in ("海外", "国外", "境外", "海外区域", "国外区域", "境外区域"):
             with self.subTest(location=location):
                 self.assertIsNone(derive_country_code(location))
                 self.assertTrue(is_overseas_unspecified(location))
                 self.assertEqual(derive_job_scope(location, {"CN"}), "overseas")
+        # 「海外区域」是 live 缺口：中控技术 26 个在招岗这么写，补前判 domestic。
+        # 「保定市,海外」这类**混写**仍判 domestic —— 串里有大陆城市，那是对的，别一起改掉。
+        self.assertEqual(derive_job_scope("保定市,海外", {"CN"}), "domestic")
+        self.assertEqual(derive_country_code("保定市,海外"), "CN")
         self.assertFalse(is_overseas_unspecified("上海"))
         self.assertFalse(is_overseas_unspecified("海外市场部经理"))  # 整段匹配，不是子串
         # ⚠️「全球」刻意**不算** overseas：它字面包含中国，判 overseas 会把国内岗踢走。
