@@ -184,6 +184,18 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填「携程」+ https://careers.ctrip.com/，直连 getJobAd 公开接口（社招/校招/实习，hash 路由详情页），crawl_method 选 http",
   },
   {
+    value: "zto",
+    label: "中通快递 社招（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填「中通快递」+ https://hr.zto.com/social，直连 getPostInfoPageList 公开接口（网关 recruiting.gw.zt-express.com），逐岗详情 hr.zto.com/position-detail?id=，crawl_method 选 http",
+  },
+  {
+    value: "zto_campus",
+    label: "中通快递 校招（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填「中通快递」+ https://hr.zto.com/campus-position（路径必须含 campus，board 判定靠它），与社招同接口、postType=2 区分，crawl_method 选 http",
+  },
+  {
     value: "meituan",
     label: "美团（自建门户 · 本土）",
     origin: "domestic",
