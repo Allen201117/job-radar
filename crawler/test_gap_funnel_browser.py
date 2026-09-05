@@ -176,6 +176,8 @@ class BrowserCompanyTest(unittest.TestCase):
                     "platform": "hotjob",
                     "adapter": "hotjob",
                     "source_url": "https://www.hotjob.cn/BASF/pb/social.html",
+                    # 跨主域 → 只能靠「渲染后的页面自己核出公司名」过身份门
+                    "identity_text": "甲公司 社会招聘",
                 },
                 "hops": ["https://careers.example.com/"],
                 "reason": "InterceptFailure: company_spa: no_job_data_on_entry",
@@ -190,8 +192,8 @@ class BrowserCompanyTest(unittest.TestCase):
         self.assertEqual(result["detected_platform"], "hotjob")
         self.assertEqual(result["next_retry_at"], gap_funnel._iso(NOW))
 
-    def test_follows_rendered_careers_hop_and_hands_a_known_ats_back_to_p1(self):
-        """跟到的下一跳认出真平台 → 交回 P1 httpx 道，且立即可重试（不按失败退避压 45 天）。"""
+    def test_follows_rendered_careers_hop_and_routes_a_known_ats(self):
+        """跟到的下一跳认出真平台就换过去；feishu 属浏览器平台 → P2 自己接，不交回 P1。"""
         seen = []
 
         def fingerprinter(url, company=None):
@@ -201,34 +203,45 @@ class BrowserCompanyTest(unittest.TestCase):
                 "adapter": "feishu",
                 "source_url": "https://tenant.jobs.feishu.cn/index/position",
                 "reason": "host_or_html_fingerprint",
+                "identity_ok": True,
             }
 
-        result = browser.process_browser_company(
-            _row(),
-            supabase=object(),
-            jobs_conn=object(),
-            apply=True,
-            now=NOW,
-            prober=lambda _c: {
+        gate_calls = []
+
+        def prober(candidate):
+            if candidate["url"] == "https://tenant.jobs.feishu.cn/index/position":
+                return {"ok": True, "valid": 7}
+            return {
                 "ok": False,
                 "valid": 0,
                 "block_kind": "no_job_data_on_entry",
                 "hops": ["https://jobs.example.com/"],
                 "reason": "InterceptFailure: company_spa: no_job_data_on_entry",
-            },
-            acceptance_gate=lambda *a, **k: self.fail("认出平台后应交回 P1，不在 P2 抓"),
+            }
+
+        def gate(_entry, **kwargs):
+            gate_calls.append(kwargs)
+            return {"state": "healthy", "kept_source": True, "source_id": "s1",
+                    "next_retry_at": None, "evidence": {}}
+
+        result = browser.process_browser_company(
+            _row(),
+            supabase="sb",
+            jobs_conn="conn",
+            apply=True,
+            now=NOW,
+            prober=prober,
+            acceptance_gate=gate,
             fingerprinter=fingerprinter,
         )
         self.assertEqual(seen, [("https://jobs.example.com/", "甲公司")])
-        self.assertEqual(result["state"], "platform_known")
-        self.assertEqual(result["official_entry_url"], "https://jobs.example.com/")
-        # detected_platform 写真平台 → 这行自动离开只收 unknown_spa 的 P2 队列
-        self.assertEqual(result["detected_platform"], "feishu")
-        self.assertEqual(result["next_retry_at"], gap_funnel._iso(NOW))
+        self.assertEqual(result["state"], "healthy")
+        self.assertEqual(gate_calls[0]["adapter"], "feishu")
         self.assertEqual(
-            [step["url"] for step in result["evidence"]["entry_hops"]],
-            ["https://jobs.example.com/"],
+            gate_calls[0]["source_url"], "https://tenant.jobs.feishu.cn/index/position"
         )
+        # 认出的平台落进 evidence.fingerprint.real_*：下一轮 resolve_browser_adapter 直接短路
+        self.assertEqual(result["evidence"]["fingerprint"]["real_adapter"], "feishu")
 
     def test_reprobes_unknown_spa_hop_and_accepts_it_as_the_real_entry(self):
         """下一跳仍认不出平台，但浏览器在那儿真拿到了岗位 → 用它当入口继续走验收门。"""
@@ -398,6 +411,220 @@ class BrowserCompanyTest(unittest.TestCase):
         record_ops.assert_not_called()
 
 
+class RecognizedAtsIdentityGateTest(unittest.TestCase):
+    """认出的 ATS 能不能用，两条实证放行路各守一半（2026-09-05 逐家 live 实测）。
+
+    · 宝洁 careers.pg.com.cn → app.mokahr.com/social-recruitment/pg/91934 是**跨主域**，
+      httpx 只拿得到 moka 壳、核不出「宝洁」→ 只能靠「渲染后的页面自己核出公司名」。
+    · 埃斯顿 estun1.zhiye.com **渲染后也核不出**「埃斯顿」三个字 → 只能靠
+      「P1 已核过入口页身份 + 候选同主域」。
+    ⚠️「同主域」那半不能省：入口页身份只为**这个域名**背书，不能替页面上任意一条
+      第三方 ATS 链接背书。
+    """
+
+    def _run(self, row, ats_hint, prober_ok=True):
+        gate_calls = []
+
+        def prober(candidate):
+            # 按 adapter 分流，不按 URL —— 换 adapter 后 URL 可能**和入口完全相同**
+            # （广汽就是：company_spa 在 gacrnd.zhiye.com 上 0 个岗，beisen 在同一 URL 上 225 个）。
+            if candidate["adapter"] == "company_spa":
+                return {
+                    "ok": False, "valid": 0,
+                    "ats_hint": dict(ats_hint),
+                    "reason": "company_spa 拼不出逐岗 URL",
+                }
+            return {"ok": prober_ok, "valid": 42 if prober_ok else 0}
+
+        def gate(_entry, **kwargs):
+            gate_calls.append(kwargs)
+            return {"state": "healthy", "kept_source": True, "source_id": "s1",
+                    "next_retry_at": None, "evidence": {}}
+
+        result = browser.process_browser_company(
+            row, supabase="sb", jobs_conn="conn", apply=True, now=NOW,
+            prober=prober, acceptance_gate=gate,
+            fingerprinter=lambda *a, **k: self.fail("本用例不该跟子域跳"),
+        )
+        return result, gate_calls
+
+    def test_cross_domain_ats_passes_on_rendered_company_name(self):
+        row = {**_row("宝洁"), "official_entry_url": "https://careers.pg.com.cn/"}
+        result, gate_calls = self._run(row, {
+            "platform": "moka", "adapter": "moka",
+            "source_url": "https://app.mokahr.com/social-recruitment/pg/91934",
+            "identity_text": "宝洁公司 社会招聘 在招职位",
+        })
+        self.assertEqual(result["state"], "healthy")
+        self.assertEqual(gate_calls[0]["adapter"], "moka")
+
+    def test_swap_fires_without_any_exception(self):
+        """触发条件不能只看 block_kind：广汽/埃斯顿/华虹三家 fetch 成功、parse 0 个岗，
+        压根不抛异常（block_kind 是 None），只看异常就永远换不了 adapter。"""
+        row = {
+            **_row("广汽"),
+            "official_entry_url": "https://gacrnd.zhiye.com/social/jobs",
+            "evidence": {"fingerprint": {"identity_ok": True}},
+        }
+        result, gate_calls = self._run(row, {
+            "platform": "beisen", "adapter": "beisen",
+            "source_url": "https://gacrnd.zhiye.com/social/jobs",
+            "identity_text": "广汽研究院 社会招聘",
+        })
+        self.assertEqual(result["state"], "healthy")
+        self.assertEqual(gate_calls[0]["adapter"], "beisen")
+
+    def test_lucky_partial_hit_by_company_spa_does_not_short_circuit(self):
+        """宝洁实录：company_spa 侥幸解析出 1 个岗 → 探活「成功」→ 源被 enable、1 个岗入库，
+        而真身是 moka 租户 pg/91934、实测 42 个。company_spa 是通用盲抓兜底不是真 adapter，
+        它「成功」也不算数。"""
+        row = {**_row("宝洁"), "official_entry_url": "https://careers.pg.com.cn/cn/zh/"}
+        gate_calls = []
+
+        def prober(candidate):
+            if candidate["adapter"] == "company_spa":
+                return {"ok": True, "valid": 1, "sample": "https://recruit.pg.com.cn/x",
+                        "ats_hint": {"platform": "moka", "adapter": "moka",
+                                     "source_url": "https://app.mokahr.com/social-recruitment/pg/91934",
+                                     "identity_text": "宝洁公司 社会招聘"}}
+            return {"ok": True, "valid": 42}
+
+        def gate(_entry, **kwargs):
+            gate_calls.append(kwargs)
+            return {"state": "healthy", "kept_source": True, "source_id": "s1",
+                    "next_retry_at": None, "evidence": {}}
+
+        result = browser.process_browser_company(
+            row, supabase="sb", jobs_conn="conn", apply=True, now=NOW,
+            prober=prober, acceptance_gate=gate,
+            fingerprinter=lambda *a, **k: self.fail("有 ats_hint 时不该跟子域跳"))
+        self.assertEqual(result["state"], "healthy")
+        self.assertEqual(gate_calls[0]["adapter"], "moka")
+        self.assertEqual(
+            gate_calls[0]["source_url"],
+            "https://app.mokahr.com/social-recruitment/pg/91934")
+
+    def test_swap_is_a_measurement_not_a_gamble(self):
+        """认出的真平台探出来更少 → 保留 company_spa 已确认的产出，绝不倒退。"""
+        row = {**_row("某公司"), "official_entry_url": "https://careers.example.com/"}
+        gate_calls = []
+
+        def prober(candidate):
+            if candidate["adapter"] == "company_spa":
+                return {"ok": True, "valid": 9,
+                        "ats_hint": {"platform": "moka", "adapter": "moka",
+                                     "source_url": "https://app.mokahr.com/x/1",
+                                     "identity_text": "某公司 招聘"}}
+            return {"ok": True, "valid": 2}   # 真 adapter 反而更少
+
+        def gate(_entry, **kwargs):
+            gate_calls.append(kwargs)
+            return {"state": "healthy", "kept_source": True, "source_id": "s1",
+                    "next_retry_at": None, "evidence": {}}
+
+        result = browser.process_browser_company(
+            row, supabase="sb", jobs_conn="conn", apply=True, now=NOW,
+            prober=prober, acceptance_gate=gate,
+            fingerprinter=lambda *a, **k: {"platform": "unknown", "adapter": None})
+        self.assertEqual(result["state"], "healthy")
+        self.assertEqual(gate_calls[0]["adapter"], "company_spa")
+        self.assertEqual(gate_calls[0]["source_url"], "https://careers.example.com/")
+
+    def test_a_working_real_adapter_is_never_second_guessed(self):
+        """已经用着真 adapter 且探活成功 → 维持现状，不多花一次浏览器复探。"""
+        row = {
+            **_row("丁公司"),
+            "official_entry_url": "https://tenant.mokahr.com/x",
+            "evidence": {"fingerprint": {"real_adapter": "moka",
+                                         "real_source_url": "https://tenant.mokahr.com/x"}},
+        }
+        calls = []
+
+        def prober(candidate):
+            calls.append(candidate["adapter"])
+            return {"ok": True, "valid": 5,
+                    "ats_hint": {"platform": "beisen", "adapter": "beisen",
+                                 "source_url": "https://x.zhiye.com/social",
+                                 "identity_text": "丁公司"}}
+
+        browser.process_browser_company(
+            row, supabase="sb", jobs_conn="conn", apply=True, now=NOW,
+            prober=prober,
+            acceptance_gate=lambda *a, **k: {
+                "state": "healthy", "kept_source": True, "source_id": "s",
+                "next_retry_at": None, "evidence": {}},
+            fingerprinter=lambda *a, **k: self.fail("不该跟跳"))
+        self.assertEqual(calls, ["moka"])   # 只探了一次，没被 ats_hint 折腾
+
+    def test_anti_bot_never_triggers_an_adapter_swap(self):
+        row = {**_row("某公司"), "evidence": {"fingerprint": {"identity_ok": True}}}
+
+        def prober(_candidate):
+            return {"ok": False, "valid": 0, "block_kind": "anti_bot",
+                    "ats_hint": {"platform": "moka", "adapter": "moka",
+                                 "source_url": "https://app.mokahr.com/x/1"},
+                    "reason": "anti_bot_blocked"}
+
+        result = browser.process_browser_company(
+            row, supabase=object(), jobs_conn=object(), apply=True, now=NOW,
+            prober=prober,
+            acceptance_gate=lambda *a, **k: self.fail("被拒时不该换 adapter 重抓"),
+            fingerprinter=lambda *a, **k: self.fail("被拒时不该跟跳"),
+        )
+        self.assertEqual(result["state"], "no_stable_jd")
+
+    def test_cross_domain_ats_without_any_identity_is_rejected(self):
+        row = {**_row("宝洁"), "official_entry_url": "https://careers.pg.com.cn/"}
+        result, gate_calls = self._run(row, {
+            "platform": "moka", "adapter": "moka",
+            "source_url": "https://app.mokahr.com/social-recruitment/pg/91934",
+            "identity_text": "登录 注册 职位搜索",
+        })
+        self.assertEqual(result["state"], "no_stable_jd")
+        self.assertEqual(gate_calls, [])
+        step = result["evidence"]["entry_hops"][0]
+        self.assertFalse(step["trusted"])
+        self.assertEqual(step["identity"], "identity_unverified")
+
+    def test_same_domain_candidate_rides_on_the_entry_page_identity(self):
+        row = {
+            **_row("埃斯顿"),
+            "official_entry_url": "https://estun1.zhiye.com/",
+            "evidence": {"fingerprint": {"identity_ok": True}},
+        }
+        result, gate_calls = self._run(row, {
+            "platform": "beisen", "adapter": "beisen",
+            "source_url": "https://estun1.zhiye.com/campus/jobs",
+            "identity_text": "招聘 职位列表",  # 渲染后也核不出「埃斯顿」
+        })
+        self.assertEqual(result["state"], "healthy")
+        self.assertEqual(gate_calls[0]["adapter"], "beisen")
+
+    def test_entry_identity_does_not_vouch_for_a_third_party_domain(self):
+        """入口页核过 ≠ 页面上任意第三方 ATS 链接也算核过。"""
+        row = {
+            **_row("某公司"),
+            "official_entry_url": "https://www.example.com/careers",
+            "evidence": {"fingerprint": {"identity_ok": True}},
+        }
+        result, _gate_calls = self._run(row, {
+            "platform": "moka", "adapter": "moka",
+            "source_url": "https://app.mokahr.com/social-recruitment/other/1",
+            "identity_text": "招聘",
+        })
+        self.assertEqual(result["state"], "no_stable_jd")
+
+    def test_identity_text_never_reaches_the_ledger(self):
+        """身份素材只在内存流转：probe_result 整份会被写进 evidence，不摘掉就泄进台账。"""
+        row = {**_row("宝洁"), "official_entry_url": "https://careers.pg.com.cn/"}
+        result, _ = self._run(row, {
+            "platform": "moka", "adapter": "moka",
+            "source_url": "https://app.mokahr.com/social-recruitment/pg/91934",
+            "identity_text": "宝洁公司 社会招聘 " + "语料" * 500,
+        })
+        self.assertNotIn("语料", json.dumps(result["evidence"], ensure_ascii=False))
+
+
 class ProbeBlockKindPassthroughTest(unittest.TestCase):
     """adapter 判过的因必须原样传到调用方；让调用方对着 reason 字符串猜就是老毛病的来源。"""
 
@@ -415,6 +642,78 @@ class ProbeBlockKindPassthroughTest(unittest.TestCase):
                 "adapter": "company_spa",
                 "url": "https://www.acme.com/careers",
             })
+
+    def test_surfaces_entry_hint_when_nothing_parsed(self):
+        """比异常那条更常见的一类：fetch 成功、parse 出 0 个岗，**不抛异常**。
+        2026-09-05 live 实测广汽/埃斯顿/华虹三家 company_spa 全是这样；只看异常就永远认不出它们。
+        """
+        class _Empty:
+            entry_hint = None
+
+            def fetch(self, _url):
+                # 真实的 PlaywrightAdapter.fetch 就是在这一步从渲染后的页面认出平台的
+                self.entry_hint = {"platform": "beisen", "adapter": "beisen",
+                                   "source_url": "https://gacrnd.zhiye.com/social/jobs"}
+                return "{}"
+
+            def parse(self, _html):
+                return []
+
+        with mock.patch.dict(probe.ADAPTERS, {"company_spa": _Empty()}, clear=False):
+            result = probe.probe_one({
+                "company": "广汽", "adapter": "company_spa",
+                "url": "https://gacrnd.zhiye.com/social/jobs",
+            })
+        self.assertEqual(result["valid"], 0)
+        self.assertIsNone(result.get("block_kind"))
+        self.assertEqual(result["ats_hint"]["adapter"], "beisen")
+
+    def test_stale_entry_hint_never_leaks_to_the_next_company(self):
+        """ADAPTERS 是共享单例：上一家认出的平台留在实例上就会安到下一家头上。"""
+        class _Stale:
+            entry_hint = {"platform": "moka", "adapter": "moka",
+                          "source_url": "https://app.mokahr.com/x/1"}
+
+            def fetch(self, _url):
+                return "{}"      # 本次没认出任何平台，也没重置 —— 全靠 probe_one 那道保险
+
+            def parse(self, _html):
+                return []
+
+        with mock.patch.dict(probe.ADAPTERS, {"company_spa": _Stale()}, clear=False):
+            result = probe.probe_one({
+                "company": "乙公司", "adapter": "company_spa",
+                "url": "https://www.other.com/careers",
+            })
+        self.assertNotIn("ats_hint", result)
+
+    def test_entry_hint_is_surfaced_even_when_jobs_were_found(self):
+        """探活「成功」也要把认出的平台交出去 —— 换不换由调用方按 valid 多少决定。
+
+        曾经只在 valid==0 时才带，漏掉了更坏的一种：宝洁 company_spa 侥幸解析出 1 个岗 →
+        探活成功 → 源被 enable、1 个岗入库，而真身 moka 租户有 42 个。
+        「抓到了一点点」比「一个都没抓到」更危险：绿灯、有源、北极星算它有货，没有告警会响。
+        """
+        class _Works:
+            entry_hint = None
+
+            def fetch(self, _url):
+                self.entry_hint = {"platform": "moka", "adapter": "moka",
+                                   "source_url": "https://app.mokahr.com/x/1"}
+                return "{}"
+
+            def parse(self, _html):
+                return [RawJob(company="丙公司", title="工程师",
+                               jd_url="https://recruit.example.com/job/1",
+                               location="上海")]
+
+        with mock.patch.dict(probe.ADAPTERS, {"company_spa": _Works()}, clear=False):
+            result = probe.probe_one({
+                "company": "丙公司", "adapter": "company_spa",
+                "url": "https://recruit.example.com/list",
+            })
+        self.assertEqual(result["valid"], 1)
+        self.assertEqual(result["ats_hint"]["adapter"], "moka")
 
     def test_surfaces_kind_and_hops(self):
         result = self._probe_with(InterceptFailure(
