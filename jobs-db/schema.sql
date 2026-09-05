@@ -51,25 +51,6 @@ alter table jobs add column if not exists job_scope text;
 alter table jobs alter column job_scope set default 'domestic';
 update jobs set job_scope = 'domestic' where job_scope is null;
 alter table jobs alter column job_scope set not null;
-
--- ── 回填：没写国家的远程岗归 overseas（2026-09-05）──────────────────────────────────
--- 与 crawler/geo.py / lib/geo.js 的 derive_job_scope 新口径对齐。country_code 与 job_scope
--- 由同一次 derive_country_code(location) 派生（crawler/normalizer.py:222 与 lib/jobs-store/write.ts
--- 的 withDerivedFields 都是这么写的）⇒ 「country_code is null」在库里就等价于
--- 「derive_country_code 判不出国家」，所以这条 where 与新函数逐字等价、不是近似。
--- 影响面（2026-09-05 live 实测）：10,348 行命中，其中 9,873 行 active，占 domestic 总量
--- 327,086 的 3.0%。逐个核过没有一个中国岗——按公司排前 30 全是 AbbVie / ServiceNow /
--- NVIDIA / Pfizer 这类外企，唯一的本土公司腾讯那 7 个的 jd_url 里写着 Warsaw / Thailand。
--- 幂等：跑完这些行 job_scope 已是 'overseas'，重跑命中 0 行。
--- ⚠️ 谓词必须与 geo 的 REMOTE_MARKERS 逐条一致（remote/anywhere/distributed/work from home/
--- wfh/远程/远端），且用子串匹配（Python 那边就是 `marker in location.lower()`，不是词边界）。
-update jobs
-   set job_scope = 'overseas'
- where job_scope is distinct from 'overseas'
-   and country_code is null
-   and lower(coalesce(location, '')) like any (array[
-     '%remote%', '%anywhere%', '%distributed%', '%work from home%', '%wfh%', '%远程%', '%远端%'
-   ]);
 alter table jobs add column if not exists sponsorship_signal text;
 
 -- ── 招聘类型物化（2026-09-03，第1步：只加列 + 回填，暂不改任何读写行为）──────────────

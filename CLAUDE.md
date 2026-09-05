@@ -361,14 +361,14 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 
 `sources.regions` 不只决定「额外抓哪些海外地区」，它同时是**后置过滤的白名单** ——
 adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一票否决。
-所以一条 `regions={US,SG,Remote}`（**漏了 CN**）的源，会把自己抓回来的中国岗当场丢掉，
-而 status 照样 success、没有任何失败信号。
+一条漏了 CN 的源会把自己抓回来的中国岗当场丢掉，而 status 照样 success、**没有任何失败信号**。
 
-实录：**大陆集团（Continental）**必投长期显示零源零岗，一路查下来根本不是没有中国入口 ——
+实录：**大陆集团（Continental）**必投长期显示零源零岗，查下来根本不是没有中国入口 ——
 `api.smartrecruiters.com/…/continental/postings?country=cn` 有 29 个岗，
 官网 `jobs.continental.com` 每条岗位都带 `smartRecruitersId`+`client:continental`
-（**官网就是 SmartRecruiters 的皮，同一个池子**，736 条里 countryLabel=China 也正好 29 条、
-REF 号逐个对得上）。补上 CN 即得（迁移 228），**不需要也不该新增源**（会变成迁移 225 壳牌那种影子源）。
+（**官网就是 SmartRecruiters 的皮，同一个池子**：POST `tx_conjobs_api[itemsPerPage]=100` 翻完
+8 页 736 条，`countryLabel=China` 也正好 29 条、REF 号逐个对得上）。
+补上 CN 即得（迁移 229），**不需要也不该新增源**（会变成迁移 225 壳牌那种影子源）。
 
 ⚠️ **不是个案**：全库 1,333 个 enabled 源里 **50 个 regions 不含 CN**
 （workday 27 / greenhouse 9 / smartrecruiters 8 / ashby 4 / lever 1 / eightfold 1），
@@ -379,44 +379,14 @@ REF 号逐个对得上）。补上 CN 即得（迁移 228），**不需要也不
 ⚠️ 查 `sources` 必须分页：PostgREST 默认 1000 行截断，不分页会数出「1,000 个源、50 家漏配」
 这种一眼假的整数（真值 1,333 / 50）。
 
-### ⚠️ 地点没写国家的远程岗算 overseas，不算国内供给（2026-09-05 立）
-
-`derive_country_code` 判不出国家时，`derive_job_scope` 曾一律返回 `domestic` ——
-于是外企的远程岗全被算成中国供给。live 实测全库 **9,873 个 active 岗**地点是光秃秃的「远程」
-（占 domestic 总量 327,086 的 3.0%），逐个核过**一个中国岗都没有**：按公司排前 30 全是
-AbbVie 1512 / ServiceNow 576 / NVIDIA 360 这类外企，连唯一的本土公司腾讯那 7 个，
-jd_url 里都写着 Warsaw / Thailand / Vietnam。
-- ✅ 现行：判不出国家时看 `is_remote_location` —— 远程 → overseas；**地点为空仍是 domestic**
-  （本土 ATS 大量岗位不填地点，推去海外会让国内看板凭空少岗）。`crawler/geo.py` 与 `lib/geo.js` 同口径。
-- 📌 它同时修好了一个**从上线起就没生效过的筛选项**：`lib/job-scope.ts` 的 Remote 档要求
-  `job_scope='overseas' && country_code is null`，旧规则永远产不出这个组合（live 实测 0 行）
-  ⇒ 用户勾「海外 + 远程」必然空手而归。**加筛选项前先查该组合在真库里有没有行**，
-  同 §「新筛选项上线前先查该字段真库覆盖率」。
-- ⚠️ geo 认小写 ISO 国别码 `cn`：外企 ATS 的城市是**空格分词拼音**（"He Fei Shi" / "Ning Bo Shi"），
-  拼音表按词边界一个都对不上（大陆集团 29 个中国岗里 8 个因此判 None）。
-  全库 596 行含独立 "cn" 词的 active 岗现判定 100% 已是 CN ⇒ 零误伤。
-
-### 必投覆盖只算同范围的岗（2026-09-05 改口径，指标会跳变）
-
-必投清单**有两份**（`mustApplyUnion("domestic")` / `("overseas")`），岗位也分
-`job_scope` —— **两边必须对齐**。此前 `computeMustApplyCoverage` 不看 `job_scope`，
-于是拿另一半的岗位给这一半的覆盖率背书，生产实测两个方向都在虚高：
-- 国内清单里的**松下**记 234 个健康岗判「已覆盖」——那 234 个全在**美国堪萨斯**，中国岗 0；
-- 海外清单里的**星巴克**记 1,935 个判「已覆盖海外」——它 9,078 个岗**全在中国**。
-
-✅ 现行：`getMustApplyCoverage(list, scope)` / `computeMustApplyCoverage(list, aggregates, scope)`
-只累加 `row.scope === scope` 的行；父门户 rollup 与 `getCampusSupplyInputs` 同口径。
-- **实现方式是给那条全表聚合加一个分组键**（`group by company, job_scope`），
-  **不是再查一遍**。1,051 组变 ~1,516 组，live EXPLAIN 五轮实测耗时差落在噪音里
-  （同一条查询自身波动 1646–2689ms，两版最小值 1646 vs 1675）。
-  ⚠️ 别改成「按 scope 各查一次」——香港库 2 vCPU，两条全扫并行会各自从 1.1s 涨到 2.1s，总时间一点没省。
-- ⚠️ rollup 的回挂 Map **键必须带 scope**（`aggregateKey`）：主聚合已按 (company, job_scope) 拆行，
-  只按 company 取会让同一家的国内行与海外行拿到同一份 rollup、双重计入。
-- **上线时指标会下跌，这是修正不是退步**：生产快照实测国内「有健康岗」228→227 家、
-  海外 143→134 家（另有国内 48 家 / 海外 98 家数字变小但仍 >0）。**别看到掉了就回滚。**
-- ⏳ **未同步**：`crawler/gap_census.py` 的 `_JOB_AGGREGATE_SQL` 仍是 `group by company` 不看
-  `job_scope`，所以缺口台账的 `state` 还会被另一半的岗位撑成 `healthy`。改法与上面同形
-  （select + group by 加 `job_scope`，`classify_company` 按 scope 过滤 `healthy_jobs`）。
+**⚠️ 补了 CN 还可能丢岗：geo 必须认小写 ISO 国别码 `cn`。**
+外企 ATS 的 `location.country` 给的是 `cn`，而城市名是**空格分词的拼音**
+（"He Fei Shi" / "Ning Bo Shi" / "Zhe Jiang Sheng" / "Yang Pu Qu"），
+与 `CHINA_LOCATION_MARKERS` 里的 `hefei`/`ningbo` 按词边界**一个都对不上**
+⇒ `derive_country_code` 返回 None ⇒ `location_in_scope` 落「非远程且无国家」的 False 分支
+⇒ 中国岗被当成非中国岗丢掉。大陆集团 29 个中国岗里 8 个（28%）就是这么丢的。
+全库 596 行含独立 `cn` 词的 active 岗逐行核过，现判定 100% 已是 CN ⇒ 加它零误伤。
+改这条要 `crawler/geo.py` 与 `lib/geo.js` **两边同改**（回归钉在 test_geo.py / geo.test.js）。
 
 | Source | 状态 | 详情链接格式 |
 |---|---|---|
@@ -557,6 +527,52 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
   如「北京华晋中通电力」≠ 中通），对「京东方 vs 京东」返回 True，挡不住这个。
 - ⚠️ **只认单方向**（清单名 ⊂ 库里名）。写成双向包含会让库里的「京东」被更长的「京东科技」抢走
   —— 这个 bug 在实现时被单测当场抓到，用例已钉在 `crawler/test_must_apply_owner.py`。
+
+## ⚠️ 名字对不上 ≠ 没有源：必投清单的别名 aliases（2026-09-04 立）
+
+`resolve_owner` 那套是**单向子串**（清单名 ⊂ 库里名），救不了「字面完全不重叠」这一类：
+壳牌在库里记的是英文 `Shell`，缺口普查拿中文「壳牌」匹配 `sources.company` 匹配不上
+→ 判「零源缺口」→ **插了第二条源** → 与已有源是同一个 Workday 站点仅大小写不同
+（`shell/ShellCareers` vs `shell/shellcareers`）→ 大小写带进 jd_url、`canonical_jd_url` 区分大小写
+→ 唯一索引拦不住 → **同一个岗在库里存两行**（迁移 225 已修）。
+📌 **「有岗但指标显示 0」比「真没岗」更危险——它会驱动人去重复补源。**
+
+✅ 修法 = 清单条目可选 `"aliases": ["%Continental%"]`（ILIKE 模式，与 `pattern` 同语义）：
+- 两端共读同一份 JSON：TS `mustApplyPatterns()` / Python `must_apply.company_patterns()`，
+  **改一边的语义必须同改另一边**，否则北极星与缺口台账会给出两个互相打架的数字。
+- 生效点：`gap_census.classify_company`（源 + 岗）、北极星 `computeMustApplyCoverage`、
+  `must_apply.patterns()`（探活倾斜/富化的成员判断）、缺口漏斗验收门 `_sample_that_passes`
+  （新源抓回英文公司名时不再被当张冠李戴删掉）、`owner_index()`（归属判定认英文名）。
+- ⚠️ `owner_index()` 不传 scope = 国内+海外并集，此时**规范名恒压过别名**（同一家公司
+  两份清单两个名字：国内「大陆集团」/ 海外「Continental」）；要跨语言归属就明确传 `scope`。
+- ⚠️ 加别名 = **改北极星口径**，必须逐条有据（库里真有这一行公司名）。
+  `tests/must-apply-list.test.js` 把当前别名清单钉死 + 张冠李戴门（别名不得命中同清单另一家）。
+- ⚠️ **别拿改名当修法**：把清单里的「大陆集团」改成 `Continental` 会把 352 个海外岗
+  算成国内供给。别名只改「怎么匹配」，不改「这家公司归哪份清单」。
+- 🔎 复查同类：`sources`/`jobs` 里纯 ASCII 公司名 × 国内清单（2026-09-04 实测只剩
+  Continental=大陆集团、Bayer=拜耳），中文公司名 × 海外清单（实测 18 家，见同日 commit）。
+
+✅ **配套口径变更（2026-09-05 创始人拍板）：必投覆盖率只数「本 scope 自己的岗」。**
+此前北极星与缺口普查的岗位聚合都**不看 `job_scope`**，两份清单共吃一个合计 →
+海外清单的星巴克显示 1,920 个健康岗（实际全是中国门店岗）、国内清单的松下显示 226 个
+（实际 18,318 个岗全在海外）。现在：
+- 北极星 `computeMustApplyCoverage(list, aggregates, scope)` 按 scope 取数；主聚合改成
+  `group by company, job_scope` 后在 JS 合并（live 实测与「加 8 个 count filter」耗时同档，
+  1.71s vs 1.80s，但不必给 43.8 万行每行多算 8 个表达式）。平铺字段仍是**两 scope 合计**，
+  老语义不变；scope 拆分在 `byScope`。
+- 缺口普查 `_JOB_AGGREGATE_SQL` 计数带 `job_scope = %(scope)s`（**参数绑定，不拼字符串**），
+  品牌 rollup 列同样过滤，否则海外岗会从父公司门户后门漏进国内覆盖。
+- **口径影响（live 实测，别再重算）**：国内 329 家 healthy 228→227（松下）；
+  海外 327 家 162→132（星巴克/优衣库/凯德/特斯拉/DHL…共 31 家状态改变）。
+- ⚠️ **「本范围 0」必须解释**，否则会被读成「供给没了」：台账 evidence 记
+  `other_scope_healthy_jobs`，看板每家公司标签追加「另有 N 个岗在海外/国内」
+  （`otherScopeNote`）。两者处置完全不同——前者要补源，后者什么都不用做。
+- ⚠️ `job_scope` 只有 `domestic`/`overseas` 两个取值、无 NULL（2026-09-05 全库实测
+  32.7 万 + 11.1 万 = 43.8 万 active 全覆盖）。真冒出第三种取值时**宁可不计入任一 scope**，
+  也不要偷偷算进国内（`mergeScopeRows` 已如此，有断言钉死）。
+- ⚠️ `unstable_cache` 条目跨部署存活（TTL 180s），上线那一小段缓存里是**旧形状**的行 →
+  `scopedCounts()` 没有 byScope 时回退平铺合计（**不许改成直接 `byScope[scope]`**，会把
+  /admin/health 打挂）。
 
 ## 搜索额度是全局共享的 —— 贪心方必须给校招链留一份（2026-08-28 立）
 

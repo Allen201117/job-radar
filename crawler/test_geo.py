@@ -50,11 +50,12 @@ class TestDeriveCountryCode(unittest.TestCase):
         self.assertIsNone(derive_country_code("Multiple Locations"))
 
     def test_iso_country_code_cn(self):
-        """外企 ATS 直接给小写国别码 + 空格分词拼音城市，只有认 "cn" 才判得出。
+        """外企 ATS 给小写国别码 + 空格分词拼音城市，只有认 "cn" 才判得出中国。
 
-        这几个串来自 SmartRecruiters 的大陆集团中国岗（2026-09-05 live 原样抓取）：
-        城市 "He Fei Shi" 不等于拼音表里的 "hefei"，按词边界一个都对不上，
-        29 个中国岗里有 8 个因此被判 None、被当成非中国岗丢掉。
+        这几个串是 SmartRecruiters 上大陆集团中国岗的原样地点（2026-09-05 live 抓取）。
+        城市 "He Fei Shi" 与拼音表里的 "hefei" 按词边界对不上 ⇒ code=None ⇒
+        location_in_scope 落「非远程且无国家」的 False 分支 ⇒ 中国岗被当成非中国岗丢掉。
+        29 个中国岗里 8 个（28%）就是这么丢的。
         """
         for location in (
             "He Fei Shi, An Hui Sheng, cn",
@@ -65,12 +66,14 @@ class TestDeriveCountryCode(unittest.TestCase):
         ):
             with self.subTest(location=location):
                 self.assertEqual(derive_country_code(location), "CN")
+                self.assertTrue(location_in_scope(location, {"CN", "US", "SG", "Remote"}))
 
-    def test_iso_cn_does_not_leak_into_other_countries(self):
-        # "cn" 只在独立成词时算国别码，不许撞进别的地名
+    def test_iso_cn_does_not_leak_into_other_places(self):
+        # "cn" 只在独立成词时算国别码；也别抢走港澳台的归属
         self.assertNotEqual(derive_country_code("Cincinnati, OH"), "CN")
         self.assertNotEqual(derive_country_code("Chennai, TN, in"), "CN")
         self.assertEqual(derive_country_code("Hong Kong, cn"), "HK")
+        self.assertEqual(derive_country_code("Taipei, Taiwan, Province of China"), "TW")
 
 
 class TestDeriveJobScope(unittest.TestCase):
@@ -86,22 +89,8 @@ class TestDeriveJobScope(unittest.TestCase):
             with self.subTest(location=location):
                 self.assertEqual(derive_job_scope(location), "overseas")
 
-    def test_bare_remote_is_overseas(self):
-        """光秃秃的「远程」算海外，不算国内供给。
-
-        2026-09-05 live：全库 9,873 个 active 岗地点正是「远程」，逐个核过一个中国岗都没有
-        （AbbVie 1512 / ServiceNow 576 / NVIDIA 360…，连腾讯那 7 个的 jd_url 都写着
-        Warsaw / Thailand / Vietnam）。旧规则把它们算进 domestic = 拿外企岗充中国供给。
-        """
-        for location in ("Remote", "远程", "远端", "Anywhere", "Work from home"):
-            with self.subTest(location=location):
-                self.assertEqual(derive_job_scope(location), "overseas")
-
-    def test_remote_pinned_to_china_stays_domestic(self):
-        # 别为了赶走裸远程岗误伤真的中国远程岗
-        for location in ("Remote - China", "远程 上海", "Remote, cn"):
-            with self.subTest(location=location):
-                self.assertEqual(derive_job_scope(location), "domestic")
+    def test_bare_remote_defaults_domestic(self):
+        self.assertEqual(derive_job_scope("Remote"), "domestic")
 
     def test_unknown_defaults_domestic(self):
         self.assertEqual(derive_job_scope(""), "domestic")
@@ -173,3 +162,38 @@ class TaiwanWithChinaSuffixTest(unittest.TestCase):
         self.assertEqual(derive_country_code("Hong Kong"), "HK")
         self.assertTrue(location_in_scope("Wuxi, Jiangsu Sheng, China", {"CN"}))
         self.assertTrue(location_in_scope("Hong Kong", {"CN"}))
+
+
+class BareRemoteScopeBySourceRegionsTest(unittest.TestCase):
+    """裸「远程」按**源的 regions** 兜底判归属。
+
+    2026-09-04 实测：全库 9,873 个「裸远程 + 判 domestic」的在招岗里，**9,863 个来自
+    regions 不含 CN 的海外源**（AbbVie 1,512 / ServiceNow 576 / Samsara 483 / NVIDIA 360…），
+    只有 10 个来自纯 CN 源 —— 用户筛「国内」时看到的是一片美国远程岗。分离度 99.9%。
+    （带国家写法的「Remote - US」早已由 f306271 修好，这里补的是裸远程那一半。）
+    """
+
+    def test_bare_remote_from_overseas_source_is_overseas(self):
+        self.assertEqual(derive_job_scope("远程", {"US", "SG", "Remote"}), "overseas")
+        self.assertEqual(derive_job_scope("Remote", {"US", "SG", "Remote"}), "overseas")
+
+    def test_bare_remote_from_source_including_cn_stays_domestic(self):
+        """源含 CN 就可能是真国内远程岗，不许判 overseas（宁可漏判不可错杀）。"""
+        self.assertEqual(derive_job_scope("远程", {"CN", "US", "SG", "Remote"}), "domestic")
+        self.assertEqual(derive_job_scope("远程", {"CN"}), "domestic")
+
+    def test_omitting_regions_keeps_legacy_behaviour(self):
+        """老调用方不传 regions → 行为一字不变，避免这次改动波及别的链路。"""
+        self.assertEqual(derive_job_scope("远程"), "domestic")
+        self.assertEqual(derive_job_scope(""), "domestic")
+
+    def test_explicit_location_always_wins_over_source_regions(self):
+        """地点能抽出国家时以地点为准 —— 海外源里的北京岗仍是国内岗，反之亦然。"""
+        self.assertEqual(derive_job_scope("Beijing, China", {"US", "SG"}), "domestic")
+        self.assertEqual(derive_job_scope("香港", {"US"}), "domestic")
+        self.assertEqual(derive_job_scope("New York, NY", {"CN", "US"}), "overseas")
+
+    def test_unknown_location_from_overseas_source_is_overseas(self):
+        """空地点 / Multiple Locations 与裸远程同理，都走源兜底。"""
+        self.assertEqual(derive_job_scope("", {"US"}), "overseas")
+        self.assertEqual(derive_job_scope("Multiple Locations", {"US"}), "overseas")

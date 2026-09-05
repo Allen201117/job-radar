@@ -445,7 +445,8 @@ def _process_one_source(source, supabase) -> dict:
         #    整源攒成一批，db.upsert_jobs_batch 压成「1 次批量 select + 分块 upsert/insert」。
         job_batch = []
         for raw in valid_jobs:
-            job_data = normalizer.normalize(raw, source_id=source_id, company=company)
+            job_data = normalizer.normalize(raw, source_id=source_id, company=company,
+                                            regions=_source_regions(source))
             job_data["summary"] = cap_summary_for_storage(job_data.get("summary"))
 
             job_batch.append(job_data)

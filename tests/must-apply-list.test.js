@@ -94,6 +94,106 @@ test("only the four approved sub-brands expose parent portal rollup metadata", (
 });
 
 // ============================================================
+// 2026-09-04 门禁：别名（aliases）——同一家公司在库里的其它写法。
+//
+// 立这道门的原因：壳牌在库里记的是英文 `Shell`，缺口普查拿中文「壳牌」去匹配
+// sources.company 匹配不上 → 判「零源缺口」→ 插了第二条源 → 与已有源是同一个
+// Workday 站点仅大小写不同 → 大小写带进 jd_url、canonical 区分大小写、唯一索引拦不住
+// → 同一个岗在库里存了两行（迁移 225 已修）。
+// **「有岗但指标显示 0」比「真没岗」更危险：它会驱动人去重复补源。**
+// ============================================================
+
+const ALIAS_PATTERN_SHAPE = /^(%[^%]+%|[^%]+)$/;
+
+test("aliases 与 pattern 同语义（ILIKE 模式），且不与自身 pattern 重复", () => {
+  for (const [label, list] of [["国内", json], ["海外", overseasJson]]) {
+    for (const [industry, companies] of Object.entries(list).filter(([k]) => !k.startsWith("_"))) {
+      for (const company of companies) {
+        if (company.aliases === undefined) continue;
+        assert.ok(Array.isArray(company.aliases) && company.aliases.length,
+          `${label}/${industry}/${company.name}: aliases 要么不写，要么是非空数组`);
+        for (const alias of company.aliases) {
+          assert.match(alias, ALIAS_PATTERN_SHAPE, `${label}/${company.name} 的别名 ${alias} 形状非法`);
+          assert.notEqual(alias, company.pattern, `${label}/${company.name} 的别名与 pattern 重复`);
+        }
+        assert.equal(new Set(company.aliases).size, company.aliases.length,
+          `${label}/${company.name} 的别名有重复`);
+      }
+    }
+  }
+});
+
+test("别名不得命中同一清单里的另一家公司（张冠李戴门）", () => {
+  for (const [label, list] of [["国内", json], ["海外", overseasJson]]) {
+    const entries = Object.entries(list).filter(([k]) => !k.startsWith("_")).flatMap(([, v]) => v);
+    const conflicts = [];
+    for (const company of entries) {
+      for (const alias of company.aliases || []) {
+        const matches = R.ilikeMatcher(alias);
+        for (const other of entries) {
+          if (other.name === company.name) continue;
+          // 不只比「别名 == 别人的 pattern」，还要按**子串**互查别人的名字与别名：
+          // 短别名是最容易误伤的形态（CLAUDE.md 立过碑的 `%京东%` 会吃掉京东方 BOE）。
+          const hits = [other.name, other.pattern, ...(other.aliases || [])]
+            .filter((token) => matches(String(token).replace(/%/g, "")));
+          if (hits.length) {
+            conflicts.push(`${label}：${company.name} 的别名 ${alias} 撞上了 ${other.name}（${hits.join("/")}）`);
+          }
+        }
+      }
+    }
+    assert.deepEqual(conflicts, [], conflicts.join("\n"));
+  }
+});
+
+test("mustApplyPatterns = pattern + 别名，无别名时行为不变", () => {
+  assert.deepEqual(M.mustApplyPatterns({ pattern: "%甲%" }), ["%甲%"]);
+  assert.deepEqual(M.mustApplyPatterns({ pattern: "%甲%", aliases: [] }), ["%甲%"]);
+  assert.deepEqual(M.mustApplyPatterns({ pattern: "%壳牌%", aliases: ["%Shell%"] }), ["%壳牌%", "%Shell%"]);
+  // 空白/重复项不该污染匹配集
+  assert.deepEqual(M.mustApplyPatterns({ pattern: "%甲%", aliases: [" ", "%甲%", "%A%"] }), ["%甲%", "%A%"]);
+});
+
+// 别名是**口径**：加一条就等于改北极星与缺口台账的判定，必须逐条有据（库里真有这个名字）。
+// 所以这里把当前全量别名钉死，改动会红——红了就去 commit message 里写清「库里哪一行叫这个名字」。
+test("当前别名清单逐条钉死（国内：库里记的是英文名）", () => {
+  const rows = Object.entries(json).filter(([k]) => !k.startsWith("_")).flatMap(([, v]) => v)
+    .filter((entry) => entry.aliases).map((entry) => [entry.name, entry.aliases]);
+  assert.deepEqual(rows, [
+    ["大陆集团", ["%Continental%"]],  // sources/jobs 记作 Continental（425 个 active）
+    ["拜耳", ["%Bayer%"]],            // jobs 里 Bayer 622 个 + 拜耳 Bayer 76 个
+    ["壳牌", ["%Shell%"]],            // 2026-09-04 事故当事人：库里一度记作 Shell
+  ]);
+});
+
+test("当前别名清单逐条钉死（海外：库里记的是中文名）", () => {
+  const rows = Object.entries(overseasJson).filter(([k]) => !k.startsWith("_")).flatMap(([, v]) => v)
+    .filter((entry) => entry.aliases).map((entry) => [entry.name, entry.aliases]);
+  assert.deepEqual(rows, [
+    ["Walmart", ["%沃尔玛%"]],
+    ["McDonald's", ["%麦当劳%"]],
+    ["Fast Retailing (Uniqlo)", ["%优衣库%"]],
+    ["Eaton", ["%伊顿%"]],
+    ["Volkswagen", ["%大众汽车%"]],
+    ["Mercedes-Benz", ["%奔驰%"]],
+    ["General Motors", ["%通用汽车%"]],
+    ["Hyundai", ["%现代汽车%"]],
+    ["ZF", ["%采埃孚%"]],
+    ["Continental", ["%大陆集团%"]],
+    ["Merck", ["%默沙东%"]],
+    ["Bristol Myers Squibb", ["%百时美施贵宝%"]],
+    ["Shell", ["%壳牌%"]],
+    ["TotalEnergies", ["%道达尔%"]],
+    ["BASF", ["%巴斯夫%"]],
+    ["Prologis", ["%普洛斯%"]],
+    ["CapitaLand", ["%凯德%"]],
+    ["J&T Express", ["%极兔%"]],
+    ["A.P. Moller", ["%马士基%"]],
+    ["Bandai Namco", ["%万代南梦宫%"]],
+  ]);
+});
+
+// ============================================================
 // 2026-09-03 门禁：必投清单的行业分组必须与 company-industry 分类器一致。
 //
 // 立这道门的原因：清单此前**自己定义了第二套行业归属**，与分类器冲突 20 条 ——
