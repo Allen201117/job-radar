@@ -202,7 +202,7 @@ async function fetchAppleLiveAndUpsert(
 
   const upserted = [];
   for (const job of validJobs) {
-    const row = await upsertLiveJob({ ...job, source_id: source.id });
+    const row = await upsertLiveJob({ ...job, source_id: source.id, source_regions: source.regions });
     if (row) upserted.push({ ...row, __live: true, __sourceKey: "apple" });
   }
 
@@ -231,7 +231,7 @@ async function fetchBaiduLiveAndUpsert(
 
   const upserted = [];
   for (const job of validJobs) {
-    const row = await upsertLiveJob({ ...job, source_id: source.id });
+    const row = await upsertLiveJob({ ...job, source_id: source.id, source_regions: source.regions });
     if (row) upserted.push({ ...row, __live: true, __sourceKey: "baidu" });
   }
 
@@ -260,7 +260,7 @@ async function fetchJdLiveAndUpsert(
 
   const upserted = [];
   for (const job of validJobs) {
-    const row = await upsertLiveJob({ ...job, source_id: source.id });
+    const row = await upsertLiveJob({ ...job, source_id: source.id, source_regions: source.regions });
     if (row) upserted.push({ ...row, __live: true, __sourceKey: "jd" });
   }
 
@@ -284,7 +284,9 @@ async function fetchRelevantAtsLiveAndUpsert(
   const service = createServiceClient();
   const { data: sources, error } = await service
     .from("sources")
-    .select("id, company, adapter_name, source_url, industry, segment")
+    // regions：源自己的抓取地区，随岗位一路带到 jobs-store 的 job_scope 判定（同 crawler/normalizer）。
+    // 少了它，外企 ATS 的裸「远程」岗会按默认落 domestic，混进用户的「国内」筛选结果。
+    .select("id, company, adapter_name, source_url, industry, segment, regions")
     .eq("enabled", true)
     .in("adapter_name", ["greenhouse", "lever"]);
   if (error) {
@@ -331,7 +333,7 @@ async function fetchOneAtsSourceAndUpsert(
 
   const upserted = [];
   for (const job of filtered) {
-    const row = await upsertLiveJob({ ...job, source_id: source.id });
+    const row = await upsertLiveJob({ ...job, source_id: source.id, source_regions: source.regions });
     if (row) {
       upserted.push({
         ...row,
@@ -487,7 +489,7 @@ async function getSource(adapterName: string) {
   const service = createServiceClient();
   const { data, error } = await service
     .from("sources")
-    .select("id")
+    .select("id, regions")
     .eq("adapter_name", adapterName)
     .eq("enabled", true)
     .single();
@@ -511,6 +513,9 @@ async function upsertLiveJob(job: any) {
       return null;
     }
   }
+  // ⚠️ 回退到 Supabase 这条路是整行 spread 进 PostgREST 的，只能带**真实列**：
+  // source_regions 是喂给 jobs-store 判 job_scope 的非列字段，漏进去 PostgREST 直接 400。
+  const { source_regions: _sourceRegions, ...jobCols } = job;
   const service = createServiceClient();
   const now = new Date().toISOString();
   const { data: existing, error: existingError } = await service
@@ -555,7 +560,7 @@ async function upsertLiveJob(job: any) {
   const { data, error } = await service
     .from("jobs")
     .insert({
-      ...job,
+      ...jobCols,
       first_seen_at: now,
       last_seen_at: now,
       status: "active",

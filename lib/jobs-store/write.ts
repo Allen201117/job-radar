@@ -18,9 +18,13 @@ import { extractGradClass } from "@/lib/grad-class";
 const { canonicalizeJdUrl } = canonicalUrl as {
   canonicalizeJdUrl: (u: string | null | undefined) => string | null;
 };
-const { deriveCountryCode, deriveJobScope } = geo as {
+const { deriveCountryCode, deriveJobScope, normalizeRegions } = geo as {
   deriveCountryCode: (location: string | null | undefined) => string | null;
-  deriveJobScope: (location: string | null | undefined) => "domestic" | "overseas";
+  deriveJobScope: (
+    location: string | null | undefined,
+    regions?: string[] | string | null,
+  ) => "domestic" | "overseas";
+  normalizeRegions: (regions: string[] | string | null | undefined) => string[];
 };
 const { sponsorshipSignal } = sponsorship as {
   sponsorshipSignal: (text: string | null | undefined) => "available" | "none" | "unknown";
@@ -44,14 +48,29 @@ const PRESERVE_IF_EMPTY = new Set<string>(["summary", "job_type", "salary_text"]
 // 同样要防「刷新抹掉」，但列是非文本类型 → 不能套 NULLIF(x,'')（'' 往 smallint 强转会报错）。
 // 非文本列的「空」就是 NULL，直接 COALESCE(x, 列)。与 crawler/jobs_db._PRESERVE_IF_NULL 同口径。
 const PRESERVE_IF_NULL = new Set<string>(["grad_class"]);
+// job_scope 还有第三种保护：**拿不出依据时不许写**。
+// deriveJobScope 在「地点抽不出国家 + 又没拿到源 regions」时返回的 'domestic' 是**默认值不是结论**，
+// 而库里那一行很可能是爬虫按源 regions 算出来的 overseas（爬虫永远有 regions 可用，app 不一定：
+// discovery 那条链写 source_id=null，压根没有 sources 行可查）。让默认值盖掉结论 =
+// 刷一次就把海外裸远程岗打回国内看板（2026-09-05 香港库实测这批在招 16,159 个）。
+// 实现：无依据时把该列的值传 null，靠 COALESCE 回退旧值 —— job_scope 是 not null 列，
+// 所以只有「app 拿不出依据」这一种情况会走到回退分支，正常写入行为一字不变。
+const SCOPE_COL = "job_scope";
+const SCOPE_EVIDENCED = "__job_scope_evidenced";
 
 export type UpsertResult = { row: any; action: "created" | "updated" };
 
 function withDerivedFields(job: Record<string, any>): Record<string, any> {
+  // source_regions 是调用方挂上来的**非列**字段（app/api/search 从 sources 行带下来）：
+  // 让 app 侧的求职范围判定与 crawler/normalizer 逐字同口径（都把源 regions 喂给 deriveJobScope）。
+  // INSERT/UPDATE 的列都是显式枚举的，所以它不会漏进 SQL。
+  const regions = normalizeRegions(job.source_regions);
   return {
     ...job,
     country_code: job.country_code ?? deriveCountryCode(job.location),
-    job_scope: job.job_scope ?? deriveJobScope(job.location),
+    job_scope: job.job_scope ?? deriveJobScope(job.location, regions),
+    [SCOPE_EVIDENCED]:
+      job.job_scope != null || deriveCountryCode(job.location) !== null || regions.length > 0,
     sponsorship_signal:
       job.sponsorship_signal ?? sponsorshipSignal([job.title, job.summary].filter(Boolean).join(" ")),
     // 届别只认硬信号，抽不出留 null（与 crawler/grad_class.py 同口径，改规则两边同改）
@@ -73,7 +92,7 @@ async function findIdByCanonical(canon: string | null): Promise<string | null> {
 async function updateById(id: string, job: Record<string, any>): Promise<any | null> {
   const setParts = UPDATE_DATA_COLS.map((c, i) => {
     if (PRESERVE_IF_EMPTY.has(c)) return `${c} = COALESCE(NULLIF($${i + 1}, ''), ${c})`;
-    if (PRESERVE_IF_NULL.has(c)) return `${c} = COALESCE($${i + 1}, ${c})`;
+    if (PRESERVE_IF_NULL.has(c) || c === SCOPE_COL) return `${c} = COALESCE($${i + 1}, ${c})`;
     return `${c} = $${i + 1}`;
   });
   // expired = detail 探活确认撤岗的强信号；列表/发现重抓不得复活它（否则点开 404/已下线）。
@@ -81,7 +100,10 @@ async function updateById(id: string, job: Record<string, any>): Promise<any | n
   setParts.push("status = CASE WHEN jobs.status = 'expired' THEN 'expired' ELSE 'active' END", "last_seen_at = now()");
   const sql =
     `update jobs set ${setParts.join(", ")} where id = $${UPDATE_DATA_COLS.length + 1}::uuid returning ${JOB_COLUMNS}`;
-  const vals = [...UPDATE_DATA_COLS.map((c) => job[c] ?? null), id];
+  const vals = [
+    ...UPDATE_DATA_COLS.map((c) => (c === SCOPE_COL && !job[SCOPE_EVIDENCED] ? null : job[c] ?? null)),
+    id,
+  ];
   const rows = await jobsQuery(sql, vals);
   return rows[0] ?? null;
 }
