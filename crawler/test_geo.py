@@ -1,6 +1,11 @@
 import unittest
 
-from geo import derive_country_code, derive_job_scope, location_in_scope
+from geo import (
+    derive_country_code,
+    derive_job_scope,
+    is_overseas_unspecified,
+    location_in_scope,
+)
 
 
 class TestDeriveCountryCode(unittest.TestCase):
@@ -197,3 +202,122 @@ class BareRemoteScopeBySourceRegionsTest(unittest.TestCase):
         """空地点 / Multiple Locations 与裸远程同理，都走源兜底。"""
         self.assertEqual(derive_job_scope("", {"US"}), "overseas")
         self.assertEqual(derive_job_scope("Multiple Locations", {"US"}), "overseas")
+
+
+class ChineseAdminDivisionTest(unittest.TestCase):
+    """中文行政区地名识别（2026-09-05 加）。
+
+    背景：CHINA_LOCATION_MARKERS 以拼音为主，中文标记只有十几个直辖市/省会 + 「中国」，
+    所以 "Changchun" 认得、「长春市」认不得。live 实测（香港库 active 岗）中文地点（非远程）
+    269,431 个岗里 **68,838 个（25.5%）抽不出国家**，只能靠 source.regions 兜底 ——
+    哪天某个源被放开 US，这些中国岗会静默翻成 overseas，且不报错。
+
+    🚫 本类存在的首要理由是**红线**，不是覆盖率：直接写「含 省/市/区/县 后缀 → CN」会把
+    新北市/大阪市/首尔市/蔚山广域市/平壤市/胡志明市 全判成中国。台日韩朝越那几条断言
+    删一条都不行。
+    """
+
+    def test_foreign_admin_suffix_never_becomes_cn(self):
+        for location, expected in (
+            ("新北市", "TW"), ("台北市", "TW"), ("高雄市", "TW"), ("台中市", "TW"), ("桃园市", "TW"),
+            ("大阪市", "JP"), ("東京都", "JP"), ("东京都", "JP"), ("京都市", "JP"), ("横滨市", "JP"),
+            ("首尔市", "KR"), ("蔚山广域市", "KR"), ("大田广域市", "KR"), ("光州广域市", "KR"),
+            ("韩国·忠清北道·忠州市", "KR"),
+            ("平壤市", "KP"),
+            ("胡志明市", "VN"), ("越南·胡志明市", "VN"),
+        ):
+            with self.subTest(location=location):
+                self.assertEqual(derive_country_code(location), expected)
+                self.assertNotEqual(derive_country_code(location), "CN")
+                # 台湾按项目口径不归入任一范围；日韩朝越也不该混进国内看板
+                self.assertFalse(location_in_scope(location, {"CN"}))
+                self.assertEqual(derive_job_scope(location), "overseas")
+
+    def test_four_chinese_writing_forms(self):
+        """founder 报的四类缺失写法，各给正例（岗数取自 2026-09-05 香港库实测）。"""
+        cases = {
+            # ① 省·市间隔号
+            "安徽省·芜湖市": "CN", "福建·宁德市": "CN", "山东省·潍坊市·高密市": "CN",
+            # ② 裸市名不带省
+            "长春市": "CN", "嘉兴": "CN", "惠州市": "CN", "东莞": "CN", "济南": "CN",
+            # ③ 市-区连字符
+            "保定市-莲池区": "CN", "衡阳市-衡南县": "CN", "泰州市-高港区": "CN",
+            # ④ 省级与自治州
+            "广东省": "CN", "内蒙古自治区": "CN", "昌吉回族自治州": "CN",
+            "昌吉回族自治州-昌吉市": "CN", "大理白族自治州": "CN",
+            "红河哈尼族彝族自治州-弥勒市": "CN", "西藏·阿里地区": "CN", "雄安新区": "CN",
+        }
+        for location, expected in cases.items():
+            with self.subTest(location=location):
+                self.assertEqual(derive_country_code(location), expected)
+                self.assertTrue(location_in_scope(location, {"CN"}))
+
+    def test_chinese_places_are_not_stolen_by_foreign_tables(self):
+        """中文地名互为子串的坑 —— 这些全是线上真实岗，判错就是把中国岗踢出国内看板。
+
+        「新北」→ 江苏常州有新北区（25 岗）；「朝鲜」→ 吉林延边朝鲜族自治州（32 岗）；
+        「连江」→ 福州连江县（4 岗，而台湾马祖也叫连江县）；「九龙」→ 重庆九龙坡区（30 岗）。
+        所以境外中文地名一律**整段精确匹配**，且只收含后缀的完整形态（"新北市" 而非 "新北"）。
+        """
+        for location in (
+            "江苏省·常州市·新北区", "常州市-新北区",
+            "吉林省·延边朝鲜族自治州·延吉市", "延边朝鲜族自治州",
+            "吉林省·白山市·长白朝鲜族自治县", "福建省·福州市·连江县",
+            "重庆市-九龙坡区", "重庆市·九龙坡区",
+        ):
+            with self.subTest(location=location):
+                self.assertEqual(derive_country_code(location), "CN")
+
+    def test_non_place_strings_stay_unknown(self):
+        """「全国」「其他」「发行市场类」不是地名，硬塞进 CN 就是造假。
+
+        「全国」保持 None 交给 source.regions 兜底（CN 源 → domestic），比拍脑袋判 CN 诚实。
+        「发行市场类」「销售及市场」是漏进 location 字段的部门名，含「市」但不是地名 ——
+        这正是「不能写裸后缀规则」的另一半理由。
+        """
+        for location in ("全国", "全部地区", "其他", "其它", "不限",
+                         "发行市场类", "销售及市场", "阿里巴巴园区", "山东京博"):
+            with self.subTest(location=location):
+                self.assertIsNone(derive_country_code(location))
+
+    def test_overseas_unspecified(self):
+        """自报「海外」「国外」：没有国家可给，但绝不能走 source.regions 兜底算成国内供给。"""
+        for location in ("海外", "国外", "境外"):
+            with self.subTest(location=location):
+                self.assertIsNone(derive_country_code(location))
+                self.assertTrue(is_overseas_unspecified(location))
+                self.assertEqual(derive_job_scope(location, {"CN"}), "overseas")
+        self.assertFalse(is_overseas_unspecified("上海"))
+        self.assertFalse(is_overseas_unspecified("海外市场部经理"))  # 整段匹配，不是子串
+        # ⚠️「全球」刻意**不算** overseas：它字面包含中国，判 overseas 会把国内岗踢走。
+        # 与「全国」同归非地名，交给 source.regions 决定 —— 宁可不表态，不要表错态。
+        self.assertFalse(is_overseas_unspecified("全球"))
+        self.assertEqual(derive_job_scope("全球", {"CN"}), "domestic")
+
+    def test_hongkong_segments(self):
+        self.assertEqual(derive_country_code("新界"), "HK")
+        self.assertEqual(derive_country_code("九龙"), "HK")
+        self.assertEqual(derive_job_scope("新界"), "domestic")
+
+
+class GeoCrossLanguageFixtureTest(unittest.TestCase):
+    """与 lib/geo.js 共读同一份夹具，逐条断言两侧输出一致。
+
+    只靠注释「改一边必须改另一边」挡不住漂移，线上已经出过一次：TW 在 Python 侧
+    2026-07-28 就补了，JS 侧一直缺 → "Taipei, Taiwan, Province of China" 在 JS 里判成 CN。
+    夹具在 tests/fixtures/geo-cases.json，JS 侧断言在 tests/geo.test.js。
+    """
+
+    def test_matches_shared_fixture(self):
+        import json
+        import os
+
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "tests", "fixtures", "geo-cases.json"
+        )
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        self.assertGreater(len(doc["cases"]), 100, "夹具被清空了？")
+        for case in doc["cases"]:
+            with self.subTest(location=case["location"], note=case["note"]):
+                self.assertEqual(derive_country_code(case["location"]), case["expected"])
