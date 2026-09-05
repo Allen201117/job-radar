@@ -124,12 +124,16 @@ class CcbAdapter(BaseAdapter):
                 total_sum += channel_total or 0
                 all_complete = all_complete and complete
                 for row in channel_rows:
-                    if isinstance(row, dict) and str(row.get("planStatus") or "") != "2":
+                    if isinstance(row, dict):
                         row["_job_type"] = job_type
                         rows.append(row)
 
+            # ⚠️ 「报名结束」的过滤放在这里，不能边聚合边做：招聘窗口刚结束那几天所有岗都是
+            # planStatus=2，那样 rows 会是空的 → 下面 `if not rows` 抛 RuntimeError → 源被记
+            # failed 并告警，可接口其实好好的。「没有在招岗」是正常状态，不是故障。
+            open_rows = [r for r in rows if str(r.get("planStatus") or "") != "2"]
             cap = resolve_detail_cap(self._DETAIL_CAP)
-            for row in rows[:cap] if cap else []:
+            for row in open_rows[:cap] if cap else []:
                 try:
                     response = self._get(
                         client, self.DETAIL_TXCODE,
@@ -139,15 +143,21 @@ class CcbAdapter(BaseAdapter):
                         orgId=_clean(row.get("secondOrgId")),
                     )
                     detail = _repair_json(response.text)
-                    if detail.get("SUCCESS") != "false":
+                    # 只认明确成功。缺 SUCCESS 字段的错误骨架也别往 _detail 里塞。
+                    if detail.get("SUCCESS") == "true":
                         row["_detail"] = detail
-                except (httpx.HTTPError, json.JSONDecodeError):
+                # ⚠️ RuntimeError 必须一起捕：_repair_json 遇空 body 就抛它（detail 要打 3,799 次，
+                # 被限速返空的概率远高于列表）。漏捕的话一次空响应就穿透整个 fetch，
+                # **列表明明已经全抓到了，run.py 也会记 failed 并把这批全丢掉**。
+                except (httpx.HTTPError, json.JSONDecodeError, RuntimeError):
                     continue
         if not rows:
             raise RuntimeError("ccb: NHR104 returned no jobs")
-        self.reported_total = total_sum or None
+        # 分母用「还能报名的岗数」而不是接口自报总数（3,818 里有 19 条已报名结束）：
+        # 那 19 条是我们主动丢的，拿它们当分母会在抓全率上永远挂个假缺口。
+        self.reported_total = len(open_rows)
         self.fetch_complete = all_complete
-        return json.dumps({"jobs": rows}, ensure_ascii=False)
+        return json.dumps({"jobs": open_rows}, ensure_ascii=False)
 
     @staticmethod
     def _summary_of(row: dict) -> Optional[str]:

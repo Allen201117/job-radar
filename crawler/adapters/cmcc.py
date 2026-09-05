@@ -86,6 +86,13 @@ def _sign_header() -> dict:
     }
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _clean(value) -> str:
     return str(value or "").strip()
 
@@ -197,9 +204,3 @@ class CmccAdapter(BaseAdapter):
             ))
         return jobs
 
-
-def _int_or_none(value) -> Optional[int]:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
