@@ -357,6 +357,45 @@ AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用
 
 2026-07-02 海外扩展：`sources.regions` 默认 `{CN}`，迁移 `169_seed_overseas_regions.sql` 仅把已验证且 enabled 的 http 外企 ATS 源保守放开到 `{CN,US,SG,Remote}`；浏览器/Playwright 源暂不一次性放开，需单独评估容量。台湾不在 seed 范围内，normalizer 继续拒收台湾地点。
 
+### 🚫「必投某家零岗」先查这条源的 `regions` 有没有 CN，再去找入口（2026-09-05 立）
+
+`sources.regions` 不只决定「额外抓哪些海外地区」，它同时是**后置过滤的白名单** ——
+adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一票否决。
+所以一条 `regions={US,SG,Remote}`（**漏了 CN**）的源，会把自己抓回来的中国岗当场丢掉，
+而 status 照样 success、没有任何失败信号。
+
+实录：**大陆集团（Continental）**必投长期显示零源零岗，一路查下来根本不是没有中国入口 ——
+`api.smartrecruiters.com/…/continental/postings?country=cn` 有 29 个岗，
+官网 `jobs.continental.com` 每条岗位都带 `smartRecruitersId`+`client:continental`
+（**官网就是 SmartRecruiters 的皮，同一个池子**，736 条里 countryLabel=China 也正好 29 条、
+REF 号逐个对得上）。补上 CN 即得（迁移 228），**不需要也不该新增源**（会变成迁移 225 壳牌那种影子源）。
+
+⚠️ **不是个案**：全库 1,333 个 enabled 源里 **50 个 regions 不含 CN**
+（workday 27 / greenhouse 9 / smartrecruiters 8 / ashby 4 / lever 1 / eightfold 1），
+名单含 迪士尼·Adobe·Salesforce·Boeing·Samsung·百威·玛氏·富达。
+光 smartrecruiters 那 8 家实测就有 237 个中国岗天天被抓回来又扔掉
+（AbbVie 169 / Continental 29 / Grab 14 / Expeditors 14 / Ubisoft 11）。
+✅ 排查顺序：**先看 regions，再看 adapter，最后才去找入口**。反过来会白跑一天。
+⚠️ 查 `sources` 必须分页：PostgREST 默认 1000 行截断，不分页会数出「1,000 个源、50 家漏配」
+这种一眼假的整数（真值 1,333 / 50）。
+
+### ⚠️ 地点没写国家的远程岗算 overseas，不算国内供给（2026-09-05 立）
+
+`derive_country_code` 判不出国家时，`derive_job_scope` 曾一律返回 `domestic` ——
+于是外企的远程岗全被算成中国供给。live 实测全库 **9,873 个 active 岗**地点是光秃秃的「远程」
+（占 domestic 总量 327,086 的 3.0%），逐个核过**一个中国岗都没有**：按公司排前 30 全是
+AbbVie 1512 / ServiceNow 576 / NVIDIA 360 这类外企，连唯一的本土公司腾讯那 7 个，
+jd_url 里都写着 Warsaw / Thailand / Vietnam。
+- ✅ 现行：判不出国家时看 `is_remote_location` —— 远程 → overseas；**地点为空仍是 domestic**
+  （本土 ATS 大量岗位不填地点，推去海外会让国内看板凭空少岗）。`crawler/geo.py` 与 `lib/geo.js` 同口径。
+- 📌 它同时修好了一个**从上线起就没生效过的筛选项**：`lib/job-scope.ts` 的 Remote 档要求
+  `job_scope='overseas' && country_code is null`，旧规则永远产不出这个组合（live 实测 0 行）
+  ⇒ 用户勾「海外 + 远程」必然空手而归。**加筛选项前先查该组合在真库里有没有行**，
+  同 §「新筛选项上线前先查该字段真库覆盖率」。
+- ⚠️ geo 认小写 ISO 国别码 `cn`：外企 ATS 的城市是**空格分词拼音**（"He Fei Shi" / "Ning Bo Shi"），
+  拼音表按词边界一个都对不上（大陆集团 29 个中国岗里 8 个因此判 None）。
+  全库 596 行含独立 "cn" 词的 active 岗现判定 100% 已是 CN ⇒ 零误伤。
+
 | Source | 状态 | 详情链接格式 |
 |---|---|---|
 | Apple | 可用（crawler + 已知源刷新） | `jobs.apple.com/en-us/details/...` |
