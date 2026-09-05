@@ -79,6 +79,44 @@ class MustApplyListTest(unittest.TestCase):
             self.assertEqual(must_apply.patterns(), ["%京东物流%"])
             self.assertEqual(must_apply.version(), "2026Q3-v1")
 
+    def test_company_patterns_are_pattern_plus_aliases(self):
+        """别名 = 同一家公司在库里的其它写法（壳牌 ↔ Shell），与 pattern 同语义。"""
+        self.assertEqual(
+            must_apply.company_patterns({"pattern": "%壳牌%", "aliases": ["%Shell%"]}),
+            ["%壳牌%", "%Shell%"],
+        )
+        # 没写别名 / 别名为空 → 行为与加别名前逐字一致
+        self.assertEqual(must_apply.company_patterns({"pattern": "%甲%"}), ["%甲%"])
+        self.assertEqual(must_apply.company_patterns({"pattern": "%甲%", "aliases": []}), ["%甲%"])
+        # 空白、重复、非字符串一律不进匹配集（脏数据不该悄悄放宽匹配面）
+        self.assertEqual(
+            must_apply.company_patterns({"pattern": "%甲%", "aliases": [" ", "%甲%", None, "%A%"]}),
+            ["%甲%", "%A%"],
+        )
+        self.assertEqual(must_apply.company_patterns(None), [])
+
+    def test_patterns_include_aliases_so_membership_tests_see_english_names(self):
+        path = self._json_file({
+            "能源": [{"name": "壳牌", "pattern": "%壳牌%", "aliases": ["%Shell%"]}],
+            "汽车": [{"name": "大陆集团", "pattern": "%大陆集团%", "aliases": ["%Continental%"]}],
+        })
+        with mock.patch.object(must_apply, "MUST_APPLY_JSON", path):
+            self.assertEqual(must_apply.patterns(),
+                             ["%壳牌%", "%Shell%", "%大陆集团%", "%Continental%"])
+            # 探活倾斜/富化优先级都靠这个布尔判断，英文名不能再被漏掉
+            self.assertTrue(must_apply.match_company("Shell China"))
+            self.assertTrue(must_apply.match_company("Continental Automotive"))
+            self.assertFalse(must_apply.match_company("随便公司"))
+
+    def test_patterns_for_company_looks_up_aliases_by_list_name(self):
+        path = self._json_file({
+            "能源": [{"name": "壳牌", "pattern": "%壳牌%", "aliases": ["%Shell%"]}],
+        })
+        with mock.patch.object(must_apply, "MUST_APPLY_JSON", path):
+            self.assertEqual(must_apply.patterns_for_company("壳牌"), ["%壳牌%", "%Shell%"])
+            self.assertEqual(must_apply.patterns_for_company("不在清单里"), [])
+            self.assertEqual(must_apply.patterns_for_company(""), [])
+
     def test_match_company_is_case_insensitive_substring(self):
         path = self._json_file([
             {"name": "字节跳动", "pattern": "%字节%"},

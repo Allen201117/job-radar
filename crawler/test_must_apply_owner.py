@@ -72,6 +72,50 @@ class SourcesForTest(unittest.TestCase):
         self.assertEqual(len(M.sources_for("京东", rows, NAMES)), 1)
 
 
+class OwnerIndexAliasTest(unittest.TestCase):
+    """别名感知归属：库里用英文名记着这家公司时，也要能归到清单的中文名下。
+
+    `resolve_owner` 是**单向子串**（清单名 ⊂ 库里名），救不了「Shell vs 壳牌」这种
+    字面完全不重叠的 —— 2026-09-04 因此把壳牌判成零源、重复插了一条源。
+    """
+
+    INDEX = {"壳牌": "壳牌", "Shell": "壳牌", "大陆集团": "大陆集团",
+             "Continental": "大陆集团", "京东": "京东", "京东方": "京东方"}
+
+    def test_english_alias_resolves_to_list_name(self):
+        self.assertEqual(M.resolve_owner("Shell", self.INDEX), "壳牌")
+        self.assertEqual(M.resolve_owner("Continental Automotive", self.INDEX), "大陆集团")
+
+    def test_mapping_keeps_longest_wins_so_boe_is_not_jd(self):
+        self.assertEqual(M.resolve_owner("京东方科技集团", self.INDEX), "京东方")
+        self.assertEqual(M.resolve_owner("京东", self.INDEX), "京东")
+
+    def test_plain_name_list_behaviour_is_unchanged(self):
+        """老调用方（传名字列表）行为必须逐字不变。"""
+        self.assertEqual(M.resolve_owner("腾讯音乐 TME", NAMES), "腾讯音乐")
+        self.assertEqual(M.resolve_owner("某不相干公司", NAMES), "")
+
+    def test_sources_for_accepts_the_alias_index(self):
+        rows = [{"company": "Shell", "source_url": "https://shell.wd3.myworkdayjobs.com/x"},
+                {"company": "无关公司", "source_url": "https://other.com/z"}]
+        urls = [r["source_url"] for r in M.sources_for("壳牌", rows, self.INDEX)]
+        self.assertEqual(urls, ["https://shell.wd3.myworkdayjobs.com/x"])
+
+    def test_real_owner_index_covers_the_two_known_pairs(self):
+        index = M.owner_index("domestic")
+        self.assertEqual(index.get("Continental"), "大陆集团")
+        self.assertEqual(index.get("Shell"), "壳牌")
+        self.assertEqual(M.resolve_owner("Continental", index), "大陆集团")
+
+    def test_canonical_names_always_beat_aliases_in_the_merged_index(self):
+        """同一家公司在两份清单里叫两个名字（国内「大陆集团」/ 海外「Continental」）。
+        并集索引里规范名必须压过别名，否则归属会随清单读取顺序漂。"""
+        index = M.owner_index()
+        for name in M.all_names():
+            self.assertEqual(index.get(name), name)
+        self.assertEqual(index.get("Continental"), "Continental")
+
+
 class AllNamesTest(unittest.TestCase):
     def test_returns_real_list_and_is_deduped(self):
         names = M.all_names()

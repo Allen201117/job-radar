@@ -158,3 +158,126 @@ test("brand rollup is a second query keyed by exact company name", async () => {
   assert.equal(other.activeTotal, 7);
   assert.equal(other.healthy, 6);
 });
+
+test("北极星覆盖按 pattern + 别名匹配，同一行公司只计一次", async () => {
+  // 库里用英文名记着这家公司（壳牌=Shell / 大陆集团=Continental）时，只按中文 pattern 匹配
+  // 会让「有源有岗」的公司在北极星上显示 0 —— 而「有岗但指标显示 0」比「真没岗」更危险：
+  // 它会驱动人去重复补源（2026-09-04 因此插了第二条壳牌源，同一个岗在库里存了两行）。
+  const R = loadReader();
+  const list = [
+    { name: "大陆集团", pattern: "%大陆集团%", aliases: ["%Continental%"] },
+    { name: "壳牌", pattern: "%壳牌%", aliases: ["%Shell%"] },
+    { name: "无别名公司", pattern: "%无别名%" },
+  ];
+  const agg = (company, n) => ({
+    company, activeTotal: n, healthy: n, new7d: n, checked72h: n,
+    campusJobs: 0, internJobs: 0, socialJobs: 0, brandRollups: {},
+  });
+  const rows = R.computeMustApplyCoverage(list, [
+    agg("Continental", 425),
+    agg("大陆集团（中国）", 3),
+    agg("Shell", 21),
+    agg("无别名公司", 5),
+    agg("Continental Grain 不相干", 0),
+  ]);
+  const by = Object.fromEntries(rows.map((row) => [row.name, row]));
+  // pattern 与别名各命中一行 → 相加，不是二选一
+  assert.equal(by["大陆集团"].healthy, 428);
+  assert.equal(by["壳牌"].healthy, 21);
+  // 没写别名的公司行为逐字不变
+  assert.equal(by["无别名公司"].healthy, 5);
+});
+
+test("同时命中 pattern 与别名的同一行公司不会被重复累加", async () => {
+  const R = loadReader();
+  const rows = R.computeMustApplyCoverage(
+    [{ name: "拜耳", pattern: "%拜耳%", aliases: ["%Bayer%"] }],
+    [{
+      company: "拜耳 Bayer", activeTotal: 76, healthy: 76, new7d: 1, checked72h: 2,
+      campusJobs: 0, internJobs: 0, socialJobs: 0, brandRollups: {},
+    }],
+  );
+  assert.equal(rows[0].healthy, 76);
+  assert.equal(rows[0].activeTotal, 76);
+});
+
+// ============================================================
+// 2026-09-05 口径变更（创始人拍板）：必投覆盖率只数**该 scope 自己的岗**。
+// 改之前两份清单共用不分 scope 的合计 → 海外清单的星巴克 1,920 个健康岗实际全是中国门店岗，
+// 国内清单的松下 226 个实际 18,318 个岗全在海外。指标诚实优先于覆盖率好看。
+// ============================================================
+
+const scopeRow = (company, job_scope, n) => ({
+  company, job_scope, active_total: n, healthy: n, new_7d: n, checked_72h: n,
+  campus_jobs: 0, intern_jobs: 0, social_jobs: 0,
+});
+
+test("mergeScopeRows 把 company×scope 并成每公司一行：平铺是合计，byScope 是各自", () => {
+  const R = loadReader();
+  const [row] = R.mergeScopeRows([
+    scopeRow("松下", "domestic", 226),
+    scopeRow("松下", "overseas", 18318),
+  ]);
+  assert.equal(row.activeTotal, 18544);              // 平铺 = 合计，老语义不变
+  assert.equal(row.byScope.domestic.healthy, 226);
+  assert.equal(row.byScope.overseas.healthy, 18318);
+});
+
+test("只有一个 scope 有岗时，另一个 scope 是 0 而不是 undefined", () => {
+  const R = loadReader();
+  const [row] = R.mergeScopeRows([scopeRow("优衣库", "domestic", 1918)]);
+  assert.equal(row.byScope.overseas.healthy, 0);
+  assert.equal(row.byScope.domestic.healthy, 1918);
+});
+
+test("job_scope 冒出未知取值时不计入任何 scope，绝不偷偷算进国内", () => {
+  const R = loadReader();
+  const [row] = R.mergeScopeRows([scopeRow("某公司", "taiwan", 7), scopeRow("某公司", null, 3)]);
+  assert.equal(row.activeTotal, 10);                  // 合计仍然如实
+  assert.equal(row.byScope.domestic.healthy, 0);
+  assert.equal(row.byScope.overseas.healthy, 0);
+});
+
+test("覆盖率按 scope 取数：同一份聚合，国内与海外各看各的", () => {
+  const R = loadReader();
+  const aggregates = R.mergeScopeRows([
+    scopeRow("优衣库", "domestic", 1918),
+    scopeRow("Continental", "overseas", 352),
+    scopeRow("Continental", "domestic", 73),
+  ]);
+  const overseas = R.computeMustApplyCoverage(
+    [{ name: "Fast Retailing (Uniqlo)", pattern: "%Fast Retailing%", aliases: ["%优衣库%"] }],
+    aggregates, "overseas",
+  );
+  assert.equal(overseas[0].healthy, 0);   // 优衣库那 1918 个岗全在国内，不算海外供给
+  const domestic = R.computeMustApplyCoverage(
+    [{ name: "大陆集团", pattern: "%大陆集团%", aliases: ["%Continental%"] }],
+    aggregates, "domestic",
+  );
+  assert.equal(domestic[0].healthy, 73);  // 425 里只有 73 个标 domestic
+});
+
+test("聚合行没有 byScope 时回退到平铺合计（部署窗口里缓存还是旧形状）", () => {
+  const R = loadReader();
+  const rows = R.computeMustApplyCoverage(
+    [{ name: "老缓存公司", pattern: "%老缓存%" }],
+    [{
+      company: "老缓存公司", activeTotal: 9, healthy: 9, new7d: 0, checked72h: 0,
+      campusJobs: 0, internJobs: 0, socialJobs: 0, brandRollups: {},
+    }],
+    "domestic",
+  );
+  assert.equal(rows[0].healthy, 9);  // 不抛异常、不归零，只是那 3 分钟内还是旧口径
+});
+
+test("品牌 rollup 查询也按 domestic 过滤，海外岗不能从父公司门户漏进国内覆盖", async () => {
+  const calls = [];
+  const R = loadReader(async (sql, params) => {
+    calls.push({ sql, params });
+    if (sql.includes("brand_healthy_0_active")) return [];
+    return [scopeRow("京东集团", "domestic", 9)];
+  });
+  await R.getCompanyActiveAggregates();
+  const rollup = calls[1].sql;
+  assert.equal((rollup.match(/job_scope = 'domestic'/g) || []).length, 4 * 4);
+});
