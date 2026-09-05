@@ -72,6 +72,16 @@ function withDerivedFields(job: Record<string, any>): Record<string, any> {
   // source_regions 是调用方挂上来的**非列**字段（app/api/search 从 sources 行带下来）：
   // 让 app 侧的求职范围判定与 crawler/normalizer 逐字同口径（都把源 regions 喂给 deriveJobScope）。
   // INSERT/UPDATE 的列都是显式枚举的，所以它不会漏进 SQL。
+  //
+  // ⚠️ /api/discovery 那条链**刻意没接**：它写 source_id=null（官方源发现的岗还没有 sources 行），
+  // 拿不到 regions，新插入的裸远程岗因此仍按兜底落 domestic。为什么不修——先量了再决定：
+  //   · 香港库里 source_id is null 的行 **全表 0 条**（2026-09-05 实测，不分状态）
+  //     ⇒ 这条链**从来没有真的插进过一个岗**；
+  //   · discovery_runs 里 mode='web_search'（官方源发现）最后一次是 **2026-06-05**，
+  //     company_refresh 最后一次 2026-06-22 —— 三个月没跑过。
+  // 所以这是个**理论上的洞**，为它把源信息一路穿到 discovery 那条链上不划算。
+  // 什么时候该做：上面两个数字任意一个涨起来（有 source_id is null 的行进来，或 web_search
+  // 恢复日常运行）。「覆盖已有结论」那一半已经由下面的 SCOPE_EVIDENCED 堵死，与本条无关。
   const regions = normalizeRegions(job.source_regions);
   const countryCode = job.country_code ?? deriveCountryCode(job.location);
   const jobScope = job.job_scope ?? deriveJobScope(job.location, regions);
