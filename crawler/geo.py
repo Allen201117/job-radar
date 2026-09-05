@@ -393,10 +393,20 @@ def _segments(text: str):
     return [s for s in _SEGMENT_SPLIT_RE.split(text) if s]
 
 
+# 预先建好每个国家的 frozenset。derive_country_code 是**逐岗**调用的热路径，
+# 原来每次调用给每个国家现建一次 frozenset（~90 个）纯属浪费。
+# ⚠️ 刻意保持「按国家顺序逐个试」而不是摊平成「地名 → code」的单张表：
+#    摊平会把多国混写串（"印度、越南" / "加纳、赞比亚"）的语义从「表里靠前的国家胜」
+#    变成「串里靠前的段胜」，实测 19,419 个真实地点里有 16 个会因此改判 ——
+#    lib/geo.js 是逐条镜像的，语义一漂两侧就对不上（跨语言夹具当场抓到了这个）。
+_STRICT_CJK_PLACE_SETS = tuple(
+    (code, frozenset(places)) for code, places in _STRICT_CJK_PLACES.items()
+)
+
+
 def _strict_cjk_country(segs) -> Optional[str]:
     """境外中文地名：整段精确匹配。子串匹配会踩「新北区/延边朝鲜族/山东京博」的坑。"""
-    for code, places in _STRICT_CJK_PLACES.items():
-        place_set = frozenset(places)
+    for code, place_set in _STRICT_CJK_PLACE_SETS:
         if any(seg in place_set for seg in segs):
             return code
     return None
@@ -485,14 +495,29 @@ def _norm(text: Optional[str]) -> str:
     return (text or "").strip().lower()
 
 
+# token → 已编译正则。之前每次调用都要给每个 token 重新拼一次 pattern 字符串
+# （US 词表加了 46 个州全称之后有 200+ 个 token），而 token 表是模块级常量、结果恒定。
+# 实测 211 µs/次 → 89 µs/次（19,419 个真实地点 ×3 轮；改动前基线 180 µs），行为逐条不变。
+_TOKEN_RE_CACHE: dict = {}
+
+
+def _token_regex(token: str):
+    cached = _TOKEN_RE_CACHE.get(token)
+    if cached is None:
+        parts = [re.escape(p) for p in re.split(r"[^a-z0-9]+", token.lower()) if p]
+        pattern = r"[^a-z0-9]+".join(parts)
+        cached = re.compile(r"(?<![a-z0-9])" + pattern + r"(?![a-z0-9])") if parts else False
+        _TOKEN_RE_CACHE[token] = cached
+    return cached
+
+
 def _contains_token(text: str, token: str) -> bool:
     if any("一" <= ch <= "鿿" for ch in token) or token.startswith(","):
         return token in text
-    parts = [re.escape(p) for p in re.split(r"[^a-z0-9]+", token.lower()) if p]
-    if not parts:
+    regex = _token_regex(token)
+    if regex is False:
         return False
-    pattern = r"[^a-z0-9]+".join(parts)
-    return bool(re.search(r"(?<![a-z0-9])" + pattern + r"(?![a-z0-9])", text))
+    return bool(regex.search(text))
 
 
 def is_china_location(location: Optional[str]) -> bool:

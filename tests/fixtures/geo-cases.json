@@ -731,6 +731,31 @@
       "location": "Sydney, NSW",
       "expected": null,
       "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "印度、越南",
+      "expected": "VN",
+      "note": "多国混写串：按**词表里国家的顺序**判，不是按串里段的顺序（把 _STRICT_CJK_PLACES 摊平成单张表就会改判，两侧会对不上）"
+    },
+    {
+      "location": "雅加达、吉隆坡",
+      "expected": "MY",
+      "note": "多国混写串：按**词表里国家的顺序**判，不是按串里段的顺序（把 _STRICT_CJK_PLACES 摊平成单张表就会改判，两侧会对不上）"
+    },
+    {
+      "location": "加纳、赞比亚",
+      "expected": "ZM",
+      "note": "多国混写串：按**词表里国家的顺序**判，不是按串里段的顺序（把 _STRICT_CJK_PLACES 摊平成单张表就会改判，两侧会对不上）"
+    },
+    {
+      "location": "雅加达、马尼拉、曼谷",
+      "expected": "TH",
+      "note": "多国混写串：按**词表里国家的顺序**判，不是按串里段的顺序（把 _STRICT_CJK_PLACES 摊平成单张表就会改判，两侧会对不上）"
+    },
+    {
+      "location": "摩洛哥,阿根廷,美国,德国,海外",
+      "expected": "US",
+      "note": "多国混写串：按**词表里国家的顺序**判，不是按串里段的顺序（把 _STRICT_CJK_PLACES 摊平成单张表就会改判，两侧会对不上）"
     }
   ]
 }
