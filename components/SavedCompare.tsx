@@ -20,6 +20,7 @@ import { cleanSummary, cn, freshnessLabel } from "@/lib/utils";
 import CompanyLogo from "@/components/CompanyLogo";
 import { useBodyScrollLock, useEscapeKey } from "@/lib/ui/hooks";
 import { INSIGHT_CHIP_TONE_CLASS as CHIP_TONE } from "@/lib/insight-chip-format";
+import { buttonVariants } from "@/components/ui";
 
 type Props = {
   open: boolean;
@@ -325,7 +326,7 @@ export default function SavedCompare({
                         href={job.jd_url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-full bg-[#1a1714] px-3 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+                        className={cn(buttonVariants({ variant: "ink", size: "xs" }), "inline-flex min-h-10 items-center justify-center gap-1.5 font-semibold")}
                       >
                         查看官网
                         <ArrowSquareOut size={14} weight="bold" aria-hidden="true" />

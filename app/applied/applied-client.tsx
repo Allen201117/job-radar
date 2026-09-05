@@ -6,6 +6,8 @@
 import { useMemo, useState } from "react";
 import { ArrowSquareOut, MapPin } from "@phosphor-icons/react";
 import { formatDateLabel } from "@/lib/relative-time";
+import { cn } from "@/lib/utils";
+import { buttonVariants, badgeVariants } from "@/components/ui";
 
 export type AppliedItem = {
   jobId: string;
@@ -74,13 +76,13 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
           {FUNNEL_STAGES.map((s) => (
             <span
               key={s}
-              className="rounded-full border border-black/[0.06] bg-white/60 px-2.5 py-1 tabular-nums dark:border-white/[0.1] dark:bg-white/[0.05]"
+              className={cn(badgeVariants({ tone: "neutral", size: "sm" }), "tabular-nums")}
             >
               {STAGE_LABEL[s]} {funnel[s]}
             </span>
           ))}
           {funnel.closed > 0 && (
-            <span className="rounded-full border border-black/[0.06] bg-white/40 px-2.5 py-1 tabular-nums ink-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+            <span className={cn(badgeVariants({ tone: "neutral", size: "sm" }), "tabular-nums")}>
               已结束 {funnel.closed}
             </span>
           )}
@@ -98,7 +100,7 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
                   <h3 className="mt-1 text-lg font-semibold">{item.title}</h3>
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-xs ink-3">
                     {item.location && (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2 py-1">
+                      <span className={cn(badgeVariants({ tone: "neutral", size: "xs" }), "inline-flex items-center gap-1")}>
                         <MapPin size={13} weight="fill" aria-hidden="true" />
                         {item.location}
                       </span>
@@ -115,7 +117,7 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
                     href={item.jdUrl!}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex w-full shrink-0 items-center justify-center gap-2 rounded-full bg-[#1a1714] dark:bg-[#f3ecdf] px-4 py-2.5 text-sm font-semibold text-[#f7f1e6] dark:text-[#16130f] transition duration-200 hover:bg-[#2b2520] dark:hover:bg-[#e8ddca] active:scale-[0.98] sm:w-auto sm:py-2"
+                    className={cn(buttonVariants({ variant: "ink", size: "sm" }), "inline-flex w-full shrink-0 items-center justify-center gap-2 font-semibold active:scale-[0.98] sm:w-auto sm:py-2")}
                   >
                     查看官网
                     <ArrowSquareOut size={16} weight="bold" aria-hidden="true" />
