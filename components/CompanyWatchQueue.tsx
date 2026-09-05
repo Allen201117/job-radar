@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Buildings, CircleNotch } from "@phosphor-icons/react";
 import CompanyLogo from "@/components/CompanyLogo";
+import { cn } from "@/lib/utils";
+import { buttonVariants } from "@/components/ui";
 
 type WatchItem = {
   normalized_company: string;
@@ -144,7 +146,7 @@ function QueueBtn({ children, onClick, disabled }: { children: React.ReactNode; 
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="rounded-full border border-black/[0.08] bg-white/70 px-3 py-1.5 text-xs font-medium ink-2 transition hover:bg-white active:scale-[0.98] disabled:opacity-50 dark:border-white/[0.12] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
+      className={cn(buttonVariants({ variant: "soft", size: "xs" }), "active:scale-[0.98] disabled:opacity-50")}
     >
       {children}
     </button>
