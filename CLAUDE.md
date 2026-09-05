@@ -268,6 +268,31 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     gree 格力 64（GET api/apply/jobs，**property=1 校招/博士 + 2 社招两个板块都要抓**；
                          #       ⚠️ 返回带 HR 真人姓名 PubName，一律忽略不入库；错误入口：gie.gree.com 是子公司、
                          #       recruit.gree.com 是内部登录墙）
+                         #   spdb/icbc/ccb/bankcomm/cmcc = 国有大行 + 中国移动自建门户（2026-09-05 live，纯 httpx 零浏览器）。
+                         #     ⚠️ **推翻旧结论「国有大行=公告制、没有逐岗详情页」**——那是只点了几下首页、
+                         #       没读列表页 onClick 就下的判断。工行/农行/交行的详情走 `window.open`，
+                         #       在自动化浏览器里点一下**像没反应**，别再据此判它没有详情页。
+                         #     spdb 浦发 633（社343/校290；socialJobJsonList 不带 Referer 直接 500；pageSize 无效恒 10 条/页；
+                         #       recuitType 11/12 ↔ 详情 type 1/2 必须对应；closeDt=2100-12-31 是「无截止」哨兵值）
+                         #     icbc 工行 2,615（校2567/社48；qryPostList/qryPostById；postDepict 是
+                         #       **base64→urlencode→HTML** 三层包；列表夹带报名已截止的岗要按 enterEndTime 剔）
+                         #     ccb 建行 3,799（校3784/社15；NHR104/NHR107，**必须先 TXCODE=100119 热身会话**否则详情返
+                         #       「请重新登录」；响应不是合法 JSON 要复刻前端 repairJSON；jd_url **必须五参数全**
+                         #       planId/planPost/planType/orgId/secondOrgId，少一个前端就 alert+history.go(-1)）
+                         #     bankcomm 交行 16（社招；校招 0 与官网自报「暂无职位数据」一致。form-urlencoded 单字段
+                         #       REQ_MESSAGE，业务参数**必须再包一层 params**，少了返 200+JUMPTESTBP9001「系统异常」）
+                         #     cmcc 中国移动 2,205（校2110/社89/实习6；header.digest 自算
+                         #       base64(md5(ts+secret))+";"+RSA_PKCS1v15(secret,站点公钥)，RSA 用标准库手写不加依赖；
+                         #       签名错返 **HTTP 200 + code=9999** 必须按 code 判成败。⚠️ 它不在必投清单里）
+                         #     ⚠️ **两个「静默 0 产出」的坑**：① 建行对本项目 Bot UA 返 **HTTP 200 + 零字节 body**
+                         #       （HEAD 又是 200，should_skip 拦不住）→ 覆写 user_agent + 空 body 当失败抛；
+                         #       ② 工行/中国移动对 **HEAD 恒返 403**（换浏览器 UA 也一样，GET/POST 全正常）→
+                         #       不覆写 should_skip 就整源被跳过。**接新源必须逐个跑一遍 adapter.should_skip(url)**。
+                         #     ⏸️ 农业银行未接通：逐岗 jd_url 已确证冷加载可开
+                         #       （career.abchina.com/build/index.html#/PositionDetails/:{jobPublishId}，冒号是字面量），
+                         #       但列表接口响应体是 SM4 密文（new/getInfo 明文发 1024 位 RSA 公钥做密钥交换），
+                         #       纯 httpx 走不通。推荐 Playwright 读机构页岗位卡的 React state posCardInfo；
+                         #       ⚠️ 直接 hash 导航到列表路由渲染是空的（recruitType 从 redux 拿），必须从首页点进去。
                          #   ⬆ 2026-08-27 四处「扩现有 adapter」（都不是新 adapter，故无需接线）：
                          #     china_ats.BeisenAdapter 加**老版 SSR CMS 门户**分支（theme2，无 PortalId/无
                          #       GetJobAdPageList，列表页 HTML 直出 xq?jobId= 锚点）→ 中芯国际 563 岗（社293/校248/海外22）。
