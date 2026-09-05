@@ -46,6 +46,17 @@ update sources
 --   属跨 session 共用口径，改前需协调；③ 让必投覆盖只认 domestic，之后 ① 才安全。
 -- 所以这里记 manual_review + next_retry_at=NULL：技术侧已解决，别再让漏斗每 45 天
 -- 拿「大陆集团」去搜一次、再搜出一个联想来。
+--
+-- 📌 与「清单别名 aliases」那条工作的关系（写于 2026-09-05，届时 aliases 还没进 main，
+-- lib/must-apply-list.json 里 0 处 aliases，线上台账也确实还是 healthy_jobs=0）：
+-- 等 aliases 合进来后 '%大陆集团%' 就能匹配上 'Continental'，gap_census.classify_company
+-- 会按 healthy_total>0 把这一行正当地改写成 healthy 并自己清空 next_retry_at ——
+-- 那是对的，**不要为了保住 manual_review 去加粘性**。
+-- 但那一刻要看清楚：届时算进来的 425 岗（346 US + 6 SG + 73 远程）在本次修复后
+-- **全部是 overseas**，真正的国内供给是新进来的 29 个中国岗 + 芜湖那条源的 32 个。
+-- 必投覆盖聚合仍然 `where status='active'` 不看 job_scope ⇒ 指标会把 425 个海外岗
+-- 当成「大陆集团在国内有供给」。本次修复只是让 job_scope 这一列终于说了真话，
+-- 让「给聚合加 scope 过滤」这件事变得可做；加不加是 329 家一起的口径决定，仍待拍板。
 update must_apply_gap_attempts
    set state = 'manual_review',
        official_entry_url = 'https://jobs.continental.com/en/',
