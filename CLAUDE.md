@@ -619,6 +619,40 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 ✅ 统一口径：**逐渠道判**「这个渠道抓到它自报的总数了吗」，全部为真才算抓全。
 huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 adapter 照抄。
 
+## ⚠️ crawl_runs：`running` 是占位符不是状态，`skipped` 里还混着第三类（2026-09-05 立，迁移 234）
+
+`create_crawl_run` **在 insert 那一刻就写一个占位符**，跑完才由 `update_crawl_run` 覆盖成终态。
+进程半途死掉（CI 超时/取消、OOM、被 kill）这行就再没人回写。占位符原来是 `'skipped'`，
+于是「跑崩了」和「按设计跳过」**在 status 上完全同形**，而规则 F 只认 `failed` → 静默丢源。
+迁移 234 把占位符改成 `'running'`（对齐 `discovery_runs` 早就有的 queued/running）。
+
+- **判「没收尾」用 `finished_at is null`，不要只认 `status='running'`**：存量 72 条历史孤儿
+  没有回填，至今仍是 `skipped`+`finished_at is null`。只认新占位符会漏掉它们。
+  告警在 `ops_watchdog` 规则 I（`evaluate_unfinished_crawls`，宽限期 `UNFINISHED_CRAWL_HOURS=6`）。
+- ❌ **快照里的「空记录」不等于崩溃**：2026-09-05 当场看到 10 个源（华为/字节跳动/伊利/顺丰…）
+  留着空记录，**1~3 分钟后全部 success 收尾** —— 它们只是查询那一瞬间在飞。
+  ✅ 防：判据必须带宽限期，别把 `finished_at is null` 单独当证据（迁移 234 注释把这 10 条
+  当成 CI 被杀的例子，**那条是错的**，已在规则 I 的 docstring 里更正）。
+- ❌ **CI 全绿照样丢源，别直奔 workflow 超时**：2026-09-04 两批成因相反 ——
+  19:11 的 `daily-job-crawl` 确实 failure+步骤被中断（3 条）；而 09:32 的 `enrichment-crawl`
+  **六片全 success、guard 也 success**，照样有 7 个 workday 源开跑后再无下文。
+  ✅ 防：看到规则 I 的告警，先确认那次 run 到底红没红，再决定查 CI 还是查 adapter。
+
+### 🚫 第三类：连不上被 `should_skip` 吞成 `skipped`（同一个病，低一层）
+
+全表 3,455 条 `skipped` 拆开（2026-09-05 实测）：**3,383 真跳过 + 72 没收尾 + 0 第三形态**
+（`finished_at`/`error_message` 两个判据完全同构，不存在「有收尾无原因」或「无收尾有原因」）。
+但在那 3,383「真跳过」**内部**藏着 **54 条（1.6%）根本不是设计跳过**：
+`Connection failed: timed out` / `_ssl.c:999 handshake timed out` / `Errno 101 Network is unreachable`
+—— 是 `BaseAdapter.should_skip` 的 HEAD 预检连不上对方，被记成了「跳过」。
+真正的设计跳过是这几种：iguopin 详情核验 2,046 / wecruit 板块未发布 506 / feishu 门户 404 504 /
+robots 禁止 218 / wecruit 门户不存在 55。
+
+⚠️ **洞在哪：规则 F「源连续失败」只认 `status='failed'`**，被吞成 `skipped` 的源永远凑不满
+「全部 failed」→ 一个**永久连不上**的源可以无限期静默。今天没爆是因为这 54 条是瞬时抖动
+（涉及的 bilibili / 美团 / 腾讯 / 腾讯音乐 / 拼多多同期各成功 191~199 轮），**不是因为判据没问题**。
+✅ 要修就在写入端分开记（网络失败 ≠ 主动跳过），别让下游各自去正则猜 `error_message`。
+
 ## 🚫 归属准确性没有旁路 —— 国聘集团展开曾 84% 挂错公司（2026-09-04 立）
 
 `crawler/adapters/iguopin.py` 的「集团子公司展开」这条路径过去对 `_group_child` 行

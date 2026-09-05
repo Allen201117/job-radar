@@ -388,8 +388,17 @@ def evaluate_unfinished_crawls(crawl_rows, sources_by_id, now=None,
     为什么必须自动报：`db.create_crawl_run` 先插一行占位、跑完才 update 成终态。进程被
     CI 超时/取消、OOM、kill 掉时，这一行就**再没人回写**。历史上占位符是 'skipped'
     （迁移 234 改成 'running'），于是「跑崩了」和「按设计跳过」在 status 上完全同形，
-    而规则 F 只认 status='failed' → 一次 CI 超时吞掉 10 个源，台账上一点异常都看不见。
-    2026-09-05 实测近 7 天 25 条中招，其中 09-05 05:06 有 10 个源在约 30 秒内集体留空。
+    而规则 F 只认 status='failed' → 一次 CI 超时吞掉一批源，台账上一点异常都看不见。
+
+    📌 成因**不止 CI 被杀**，两种都实测到过（2026-09-05 逐条核过 GitHub run）：
+      · 2026-09-04 19:30 那 3 条 → daily-job-crawl run 33909832797 conclusion=failure、
+        crawler 步骤被中断，确实是被杀，规则 B 也看得见；
+      · 2026-09-04 09:57~10:46 那 7 条（全 workday）→ enrichment-crawl run 33858818203
+        **六个分片全 success、guard 也 success**。CI 全绿照样丢源 —— 所以看到本告警不要
+        直奔 workflow 超时，先确认那次 run 到底红没红。
+    ⚠️ **迁移 234 注释里举的「09-05 05:06 十个源集体留空」那个例子是错的**：那 10 条
+    （华为 / 字节跳动 / 伊利 / 顺丰…）1~3 分钟后全部 success 收尾了，它们只是当时正在飞。
+    快照里的空记录不等于崩溃 —— 这正是下面 hours 宽限期存在的理由，别把它调小。
 
     ⚠️ 判据是 **finished_at 为空**，刻意**不看 status**：status 正是那个已经被证明会骗人的字段，
     而且新旧两种占位符（旧 'skipped' / 新 'running'）都得认得出，只认一种等于修了个寂寞。
