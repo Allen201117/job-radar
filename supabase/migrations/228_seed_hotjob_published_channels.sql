@@ -14,12 +14,15 @@
 --     页面显示「官网不存在，无法继续访问!」（浏览器实测，非瞬时）；
 --   · 华润电力 校招 / 赢家时尚 校招 / 郑州银行 校招 —— 渠道发布但 0 个在招岗。
 --
+-- ⚠️ 不要写 board 列：它是 GENERATED ALWAYS AS classify_source_board(adapter_name, source_url)，
+--    显式赋值会报 cannot insert a non-DEFAULT value into column "board" 并让**整个文件一起回滚**。
+--    该函数已能从 interns.html / school.html 正确推出 intern / campus（本次 live 验过）。
 -- Idempotent: guarded by source_url。
 
-insert into sources (company, source_url, source_type, adapter_name, crawl_method, segment, industry, board, notes)
-select '荣耀 Honor 实习', 'https://career.honor.com/SU61b9b9992f9d24431f5050a5/pb/interns.html', 'official', 'hotjob', 'http', 'private', '手机/智能终端', 'intern', '荣耀 Honor 实习（intern 渠道已发布；2026-09-05 live 15 岗 + 浏览器验证详情页渲染完整 JD。同租户 society/campus 两渠道未发布，故只接 intern）'
+insert into sources (company, source_url, source_type, adapter_name, crawl_method, segment, industry, notes)
+select '荣耀 Honor 实习', 'https://career.honor.com/SU61b9b9992f9d24431f5050a5/pb/interns.html', 'official', 'hotjob', 'http', 'private', '手机/智能终端', '荣耀 Honor 实习（intern 渠道已发布；2026-09-05 live 15 岗 + 浏览器验证详情页渲染完整 JD。同租户 society/campus 两渠道未发布，故只接 intern）'
 where not exists (select 1 from sources where source_url = 'https://career.honor.com/SU61b9b9992f9d24431f5050a5/pb/interns.html');
 
-insert into sources (company, source_url, source_type, adapter_name, crawl_method, segment, industry, board, notes)
-select '易方达基金 校招', 'https://wecruit.hotjob.cn/SU67ac68866202cc7916aea66e/pb/school.html', 'official', 'hotjob', 'http', 'private', '基金·资管', 'campus', '易方达基金 校招（campus 渠道已发布；2026-09-05 live 113 岗 + 浏览器验证详情页渲染完整 JD。同租户 intern 渠道未发布，那条源按设计一直被跳过）'
+insert into sources (company, source_url, source_type, adapter_name, crawl_method, segment, industry, notes)
+select '易方达基金 校招', 'https://wecruit.hotjob.cn/SU67ac68866202cc7916aea66e/pb/school.html', 'official', 'hotjob', 'http', 'private', '基金·资管', '易方达基金 校招（campus 渠道已发布；2026-09-05 live 113 岗 + 浏览器验证详情页渲染完整 JD。同租户 intern 渠道未发布，那条源按设计一直被跳过）'
 where not exists (select 1 from sources where source_url = 'https://wecruit.hotjob.cn/SU67ac68866202cc7916aea66e/pb/school.html');
