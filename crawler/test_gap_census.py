@@ -52,6 +52,55 @@ class ClassifyCompanyTest(unittest.TestCase):
         scheduled = gc.schedule_initial_retry(row, NOW)
         self.assertEqual(scheduled["next_retry_at"], NOW.isoformat())
 
+    def test_alias_matches_jobs_and_sources_recorded_under_the_english_name(self):
+        """库里用英文名记着这家公司时，别名要能把源和岗都认回来。
+
+        2026-09-04 事故：壳牌库里记作 `Shell`，中文 pattern 匹配不上 → 判「零源缺口」
+        → 插了第二条源（同一个 Workday 站点仅大小写不同）→ 同一个岗在库里存了两行。
+        **「有岗但指标显示 0」比「真没岗」更危险：它会驱动人去重复补源。**
+        """
+        company = {**_company("大陆集团", "%大陆集团%", "汽车/出行"),
+                   "aliases": ["%Continental%"]}
+        row = gc.classify_company(
+            company,
+            [{"company": "Continental", "active_total": 425, "healthy": 425}],
+            [{"company": "Continental", "enabled": True, "id": "s-continental"}],
+            None,
+        )
+        self.assertEqual(row["state"], "healthy")
+        self.assertEqual(row["evidence"]["healthy_jobs"], 425)
+        self.assertEqual(row["evidence"]["matched_job_companies"], ["Continental"])
+        self.assertEqual(row["source_id"], "s-continental")
+        # 台账要能自己解释「为什么这家不再是零源」，否则下一个人还是会去搜中文名、再插一条源
+        self.assertEqual(row["evidence"]["matched_alias_patterns"], ["%Continental%"])
+
+    def test_alias_only_source_lifts_zero_source_company_out_of_unknown(self):
+        row = gc.classify_company(
+            {**_company("壳牌", "%壳牌%", "能源/化工"), "aliases": ["%Shell%"]},
+            [],
+            [{"company": "Shell", "enabled": True, "id": "s-shell"}],
+            None,
+        )
+        self.assertEqual(row["state"], "no_active_jobs")  # 有源没岗，不再是「零源 unknown」
+        self.assertEqual(row["source_id"], "s-shell")
+
+    def test_without_aliases_matching_is_byte_for_byte_unchanged(self):
+        """没写别名的公司（清单里 300+ 家都是）行为必须与加别名前完全一致。"""
+        row = gc.classify_company(
+            _company(), [{"company": "Continental", "active_total": 9, "healthy": 9}], [], None
+        )
+        self.assertEqual(row["state"], "unknown")
+        self.assertEqual(row["evidence"]["healthy_jobs"], 0)
+        self.assertEqual(row["evidence"]["matched_alias_patterns"], [])
+
+    def test_alias_that_matches_nothing_is_not_reported_as_evidence(self):
+        row = gc.classify_company(
+            {**_company(), "aliases": ["%NeverSeen%"]},
+            [{"company": "甲公司集团", "active_total": 3, "healthy": 1}], [], None,
+        )
+        self.assertEqual(row["state"], "healthy")
+        self.assertEqual(row["evidence"]["matched_alias_patterns"], [])
+
     def test_parent_portal_brand_with_three_healthy_titles_is_healthy_and_not_queued(self):
         company = {
             **_company("网易云音乐", "%网易云音乐%", "传媒/文娱"),
@@ -127,6 +176,15 @@ class ClassifyCompanyTest(unittest.TestCase):
             loaded = gc.load_companies("domestic")
         self.assertEqual(loaded[0]["parentPattern"], "%网易%")
         self.assertEqual(loaded[0]["brandTokens"], ["云音乐"])
+
+    def test_load_companies_carries_aliases_and_skips_blank_ones(self):
+        with mock.patch.object(gc.must_apply, "by_industry", return_value={
+            "能源/化工": [{"name": "壳牌", "pattern": "%壳牌%", "aliases": ["%Shell%", " "]}],
+            "汽车/出行": [{"name": "大陆集团", "pattern": "%大陆集团%"}],
+        }):
+            loaded = {row["name"]: row for row in gc.load_companies("domestic")}
+        self.assertEqual(loaded["壳牌"]["aliases"], ["%Shell%"])
+        self.assertNotIn("aliases", loaded["大陆集团"])  # 没别名的公司不该凭空长出字段
 
 
 class QueuePlanningTest(unittest.TestCase):

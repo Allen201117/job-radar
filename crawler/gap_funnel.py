@@ -238,13 +238,17 @@ def _sample_validation(sample, *, adapter, source_url, validate_jd, company):
     return "browser_review"
 
 
-def _sample_that_passes(samples, validate_jd, pattern, company, *, adapter, source_url):
+def _sample_that_passes(samples, validate_jd, patterns, company, *, adapter, source_url):
+    """`patterns` 收 pattern 或 pattern+别名列表：新源抓回来的公司名可能是英文
+    （Workday 站点回 `Continental` 而清单写「大陆集团」），只按中文 pattern 核就会把
+    **抓通了的源当成张冠李戴删掉**——比判错覆盖率更贵。"""
+    pats = [patterns] if isinstance(patterns, str) else [p for p in (patterns or []) if p]
     browser_review = False
     for sample in samples or []:
         url = sample.get("jd_url")
         title = sample.get("title")
         company_matches = must_apply.match_company_against_patterns(
-            sample.get("company"), [pattern]
+            sample.get("company"), pats
         )
         if company_matches and url and title:
             verdict = _sample_validation(
@@ -332,7 +336,9 @@ def run_acceptance_gate(entry, *, adapter, source_url, supabase, jobs_conn,
         samples = read_samples(jobs_conn, source_id) if total > 0 else []
         passed_sample, needs_browser_review = (
             _sample_that_passes(
-                samples, validate_jd, entry["pattern"], entry["company"],
+                samples, validate_jd,
+                must_apply.patterns_for_company(entry["company"]) or [entry["pattern"]],
+                entry["company"],
                 adapter=adapter, source_url=source_url,
             )
             if total > 0 else (None, False)

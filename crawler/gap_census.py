@@ -26,8 +26,11 @@ group by company
 """
 
 
-def _matches(value, pattern):
-    return must_apply.match_company_against_patterns(value, [pattern])
+def _matches(value, patterns):
+    """库里这行公司名是不是这家清单公司；`patterns` = pattern + 别名（见 must_apply.company_patterns）。"""
+    if isinstance(patterns, str):
+        patterns = [patterns]
+    return must_apply.match_company_against_patterns(value, patterns)
 
 
 def _as_int(value):
@@ -51,9 +54,14 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
     """纯函数：给单个清单槽位计算当前台账状态，不执行任何 IO。"""
     base = _base_company(company)
     pattern = base["pattern"]
+    # 别名一并参与匹配：库里可能用英文名记着这家公司（壳牌=Shell / 大陆集团=Continental），
+    # 只按中文 pattern 匹配就会「有源有岗却判零源」，进而驱动人去重复插源（迁移 225 的同岗两行即此）。
+    patterns = must_apply.company_patterns({
+        "pattern": pattern, "aliases": company.get("aliases"),
+    })
     matched_jobs = [
         row for row in (healthy_jobs or [])
-        if _matches((row or {}).get("company"), pattern)
+        if _matches((row or {}).get("company"), patterns)
     ]
     direct_active = sum(_as_int(row.get("active_total")) for row in matched_jobs)
     direct_healthy = sum(_as_int(row.get("healthy")) for row in matched_jobs)
@@ -72,7 +80,7 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
     healthy_total = direct_healthy + accepted_parent["healthy"]
     matched_sources = [
         row for row in (sources_rows or [])
-        if _matches((row or {}).get("company"), pattern)
+        if _matches((row or {}).get("company"), patterns)
     ]
     enabled_sources = [row for row in matched_sources if row.get("enabled")]
     prev = dict(prev_row or {})
@@ -102,6 +110,15 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
         }),
         "matched_source_ids": [
             str(row.get("id")) for row in matched_sources if row.get("id")
+        ],
+        # 靠别名（而非清单名本身）命中的模式：台账要能自己解释「为什么这家不再是零源」，
+        # 否则下一个人看到「大陆集团 healthy」还是会去 sources 里搜中文名、搜不到又插一条。
+        "matched_alias_patterns": [
+            alias for alias in patterns[1:]
+            if any(
+                _matches((row or {}).get("company"), [alias])
+                for row in matched_jobs + matched_sources
+            )
         ],
     })
     source_id = None
@@ -227,6 +244,12 @@ def load_companies(scope="domestic"):
                 "pattern": pattern,
                 "industries": [],
             })
+            if entry.get("aliases"):
+                row["aliases"] = [
+                    str(alias).strip()
+                    for alias in entry["aliases"]
+                    if str(alias).strip()
+                ]
             if entry.get("parentPattern"):
                 row["parentPattern"] = str(entry["parentPattern"]).strip()
             if entry.get("brandTokens"):

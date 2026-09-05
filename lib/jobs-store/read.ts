@@ -9,7 +9,7 @@ import { ilikeMatcher } from "@/lib/ilike-matcher";
 import { campusAdmission, compareCampusJobs } from "@/lib/campus-zone";
 import { isCurrentSeasonGradClass } from "@/lib/grad-class";
 import { classifyJobFunction } from "@/lib/china-keyword-expansion";
-import { mustApplyUnion, type MustApplyCompany } from "@/lib/must-apply-list";
+import { mustApplyPatterns, mustApplyUnion, type MustApplyCompany } from "@/lib/must-apply-list";
 import { unstable_cache } from "next/cache";
 
 export { ilikeMatcher } from "@/lib/ilike-matcher";
@@ -385,8 +385,11 @@ export function computeMustApplyCoverage(
   list: MustApplyCompany[],
   aggregates: CompanyActiveAggregate[],
 ): MustApplyCoverageRow[] {
-  return list.map(({ name, pattern, parentPattern, brandTokens }) => {
-    const matches = ilikeMatcher(pattern);
+  return list.map(({ name, pattern, aliases, parentPattern, brandTokens }) => {
+    // 别名一并参与匹配（壳牌=Shell / 大陆集团=Continental）：库里明明有源有岗、
+    // 北极星却显示 0，会驱动人去重复补源。一行公司命中任一模式只计一次，不会重复累加。
+    const matchers = mustApplyPatterns({ pattern, aliases }).map(ilikeMatcher);
+    const matches = (company: string) => matchers.some((matched) => matched(company));
     const direct = aggregates.reduce<Omit<
       MustApplyCoverageRow,
       "directHealthy" | "parentPortalHealthy" | "coveredViaParentPortal"

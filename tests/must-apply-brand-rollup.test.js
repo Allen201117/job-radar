@@ -158,3 +158,45 @@ test("brand rollup is a second query keyed by exact company name", async () => {
   assert.equal(other.activeTotal, 7);
   assert.equal(other.healthy, 6);
 });
+
+test("北极星覆盖按 pattern + 别名匹配，同一行公司只计一次", async () => {
+  // 库里用英文名记着这家公司（壳牌=Shell / 大陆集团=Continental）时，只按中文 pattern 匹配
+  // 会让「有源有岗」的公司在北极星上显示 0 —— 而「有岗但指标显示 0」比「真没岗」更危险：
+  // 它会驱动人去重复补源（2026-09-04 因此插了第二条壳牌源，同一个岗在库里存了两行）。
+  const R = loadReader();
+  const list = [
+    { name: "大陆集团", pattern: "%大陆集团%", aliases: ["%Continental%"] },
+    { name: "壳牌", pattern: "%壳牌%", aliases: ["%Shell%"] },
+    { name: "无别名公司", pattern: "%无别名%" },
+  ];
+  const agg = (company, n) => ({
+    company, activeTotal: n, healthy: n, new7d: n, checked72h: n,
+    campusJobs: 0, internJobs: 0, socialJobs: 0, brandRollups: {},
+  });
+  const rows = R.computeMustApplyCoverage(list, [
+    agg("Continental", 425),
+    agg("大陆集团（中国）", 3),
+    agg("Shell", 21),
+    agg("无别名公司", 5),
+    agg("Continental Grain 不相干", 0),
+  ]);
+  const by = Object.fromEntries(rows.map((row) => [row.name, row]));
+  // pattern 与别名各命中一行 → 相加，不是二选一
+  assert.equal(by["大陆集团"].healthy, 428);
+  assert.equal(by["壳牌"].healthy, 21);
+  // 没写别名的公司行为逐字不变
+  assert.equal(by["无别名公司"].healthy, 5);
+});
+
+test("同时命中 pattern 与别名的同一行公司不会被重复累加", async () => {
+  const R = loadReader();
+  const rows = R.computeMustApplyCoverage(
+    [{ name: "拜耳", pattern: "%拜耳%", aliases: ["%Bayer%"] }],
+    [{
+      company: "拜耳 Bayer", activeTotal: 76, healthy: 76, new7d: 1, checked72h: 2,
+      campusJobs: 0, internJobs: 0, socialJobs: 0, brandRollups: {},
+    }],
+  );
+  assert.equal(rows[0].healthy, 76);
+  assert.equal(rows[0].activeTotal, 76);
+});

@@ -8,6 +8,8 @@ import { canonicalizeUserIndustry } from "./company-industry";
 export interface MustApplyCompany {
   name: string;
   pattern: string;
+  /** 同一家公司在库里的其它写法（ILIKE 模式，与 pattern 同语义）。见 mustApplyPatterns。 */
+  aliases?: string[];
   parentPattern?: string;
   brandTokens?: string[];
 }
@@ -35,6 +37,28 @@ export const MUST_APPLY_OVERSEAS_BY_INDUSTRY = withoutMetadata(overseasJson);
 export const MUST_APPLY_INDUSTRIES = Object.keys(MUST_APPLY_BY_INDUSTRY);
 export const DEFAULT_MUST_APPLY_INDUSTRY = "互联网/科技";
 export const MUST_APPLY_LIST = MUST_APPLY_BY_INDUSTRY[DEFAULT_MUST_APPLY_INDUSTRY];
+
+/**
+ * 一家公司**在库里可能用的全部名字模式** = `pattern` + `aliases`（别名）。
+ *
+ * 为什么要别名：`sources.company` / `jobs.company` 存的是抓取时对方门户自报的名字，
+ * 可能是英文（壳牌记成 `Shell`、大陆集团记成 `Continental`），清单存的是中文品牌名。
+ * 只按清单名匹配 ⇒「有源有岗却显示 0」⇒ 驱动人去重复补源（2026-09-04 因此插了第二条
+ * 壳牌源，与已有源同一个 Workday 站点仅大小写不同，同一个岗在库里存了两行）。
+ *
+ * ⚠️ 与 `crawler/must_apply.company_patterns()` 是**同一口径**，两端共读 must-apply-list.json；
+ * 改这里的语义必须同改 Python 侧，否则台账与北极星会给出两个互相打架的数字。
+ */
+export function mustApplyPatterns(
+  company: Pick<MustApplyCompany, "pattern" | "aliases">,
+): string[] {
+  const out: string[] = [];
+  for (const raw of [company.pattern, ...(company.aliases || [])]) {
+    const pattern = typeof raw === "string" ? raw.trim() : "";
+    if (pattern && !out.includes(pattern)) out.push(pattern);
+  }
+  return out;
+}
 
 export function mustApplyByIndustry(scope: MustApplyScope): MustApplyListByIndustry {
   return scope === "overseas" ? MUST_APPLY_OVERSEAS_BY_INDUSTRY : MUST_APPLY_BY_INDUSTRY;

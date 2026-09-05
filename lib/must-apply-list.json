@@ -587,7 +587,10 @@
     },
     {
       "name": "大陆集团",
-      "pattern": "%大陆集团%"
+      "pattern": "%大陆集团%",
+      "aliases": [
+        "%Continental%"
+      ]
     },
     {
       "name": "采埃孚",
@@ -729,7 +732,10 @@
     },
     {
       "name": "拜耳",
-      "pattern": "%拜耳%"
+      "pattern": "%拜耳%",
+      "aliases": [
+        "%Bayer%"
+      ]
     },
     {
       "name": "诺和诺德",
@@ -855,7 +861,10 @@
     },
     {
       "name": "壳牌",
-      "pattern": "%壳牌%"
+      "pattern": "%壳牌%",
+      "aliases": [
+        "%Shell%"
+      ]
     },
     {
       "name": "中化集团",

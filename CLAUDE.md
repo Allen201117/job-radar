@@ -497,6 +497,35 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
 - ⚠️ **只认单方向**（清单名 ⊂ 库里名）。写成双向包含会让库里的「京东」被更长的「京东科技」抢走
   —— 这个 bug 在实现时被单测当场抓到，用例已钉在 `crawler/test_must_apply_owner.py`。
 
+## ⚠️ 名字对不上 ≠ 没有源：必投清单的别名 aliases（2026-09-04 立）
+
+`resolve_owner` 那套是**单向子串**（清单名 ⊂ 库里名），救不了「字面完全不重叠」这一类：
+壳牌在库里记的是英文 `Shell`，缺口普查拿中文「壳牌」匹配 `sources.company` 匹配不上
+→ 判「零源缺口」→ **插了第二条源** → 与已有源是同一个 Workday 站点仅大小写不同
+（`shell/ShellCareers` vs `shell/shellcareers`）→ 大小写带进 jd_url、`canonical_jd_url` 区分大小写
+→ 唯一索引拦不住 → **同一个岗在库里存两行**（迁移 225 已修）。
+📌 **「有岗但指标显示 0」比「真没岗」更危险——它会驱动人去重复补源。**
+
+✅ 修法 = 清单条目可选 `"aliases": ["%Continental%"]`（ILIKE 模式，与 `pattern` 同语义）：
+- 两端共读同一份 JSON：TS `mustApplyPatterns()` / Python `must_apply.company_patterns()`，
+  **改一边的语义必须同改另一边**，否则北极星与缺口台账会给出两个互相打架的数字。
+- 生效点：`gap_census.classify_company`（源 + 岗）、北极星 `computeMustApplyCoverage`、
+  `must_apply.patterns()`（探活倾斜/富化的成员判断）、缺口漏斗验收门 `_sample_that_passes`
+  （新源抓回英文公司名时不再被当张冠李戴删掉）、`owner_index()`（归属判定认英文名）。
+- ⚠️ `owner_index()` 不传 scope = 国内+海外并集，此时**规范名恒压过别名**（同一家公司
+  两份清单两个名字：国内「大陆集团」/ 海外「Continental」）；要跨语言归属就明确传 `scope`。
+- ⚠️ 加别名 = **改北极星口径**，必须逐条有据（库里真有这一行公司名）。
+  `tests/must-apply-list.test.js` 把当前别名清单钉死 + 张冠李戴门（别名不得命中同清单另一家）。
+- ⚠️ **别拿改名当修法**：把清单里的「大陆集团」改成 `Continental` 会把 352 个海外岗
+  算成国内供给。别名只改「怎么匹配」，不改「这家公司归哪份清单」。
+- 🔎 复查同类：`sources`/`jobs` 里纯 ASCII 公司名 × 国内清单（2026-09-04 实测只剩
+  Continental=大陆集团、Bayer=拜耳），中文公司名 × 海外清单（实测 18 家，见同日 commit）。
+
+⚠️ **遗留（未修，属另一件事）**：北极星与缺口普查的岗位聚合**不看 `job_scope`**
+（`where status='active'` 而已）。所以国内清单会把大陆集团的 352 个海外岗算进国内覆盖、
+海外清单会把优衣库的 1,918 个国内岗算进海外覆盖。别名只是让这件事**更显眼**，不是它的成因；
+要治得单独立项给两条聚合加 scope 过滤（会改动 329 家的口径，需要拍板）。
+
 ## 搜索额度是全局共享的 —— 贪心方必须给校招链留一份（2026-08-28 立）
 
 `search_usage` 的每日额度是**所有链共用一个池子**。T3 洞察 drain 会一路吃到 0
