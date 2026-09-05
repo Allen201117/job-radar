@@ -270,6 +270,11 @@ _NON_PLACE_SEGMENTS = frozenset({
 # 但 derive_job_scope 必须判 overseas —— 不能让它走 source.regions 兜底被算成国内供给。
 _OVERSEAS_UNSPECIFIED_SEGMENTS = frozenset({
     "海外", "国外", "境外", "海外地区", "国外地区", "海外国家", "境外地区",
+    # 「X区域」与上面的「X地区」同构。证据：中控技术把 26 个在招岗的地点写成「海外区域」，
+    # 补前它们落回 source.regions 兜底 → CN 源 → 判 domestic，正是这条规则要治的病
+    # （2026-09-05 全库 19,728 个地点写法扫完，自报境外却仍判 domestic 的只剩这一种写法；
+    #  其余如「保定市,海外」含大陆城市，判 domestic 本来就是对的）。
+    "海外区域", "国外区域", "境外区域",
 })
 
 # 境外中文地名：**整段精确匹配**，含后缀的完整形态一并列出（见上面的红线说明）。
