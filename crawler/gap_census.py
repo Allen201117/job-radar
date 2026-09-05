@@ -84,8 +84,15 @@ def _base_company(company):
     }
 
 
-def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
-    """纯函数：给单个清单槽位计算当前台账状态，不执行任何 IO。"""
+def classify_company(company, healthy_jobs, sources_rows, prev_row=None,
+                     program_companies=()):
+    """纯函数：给单个清单槽位计算当前台账状态，不执行任何 IO。
+
+    program_companies = 已在 `apply_programs` 里**已核实且启用**的公司名。这类公司
+    （公告制央企 / 项目制校招 / 人才库）**客观不存在逐岗链接**，不是我们抓不到；
+    产品侧已由 /programs 诚实承载，台账再天天重试就是纯空烧——2026-09-05 实测
+    国家能源集团已空撞 31 次、国家电网 21 次、中国银行 7 次。
+    """
     base = _base_company(company)
     pattern = base["pattern"]
     # 别名一并参与匹配：库里可能用英文名记着这家公司（壳牌=Shell / 大陆集团=Continental），
@@ -127,12 +134,26 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
     enabled_sources = [row for row in matched_sources if row.get("enabled")]
     prev = dict(prev_row or {})
 
+    # program_companies 传进来的已经是**清单规范名**（归属由 resolve_program_owners 在
+    # census 里用全量清单名解好），这里只做精确比对。刻意不在这个纯函数里做子串匹配：
+    # `%京东%` 会把 /programs 里的「京东方」判成「京东已承载」——正是 resolve_owner
+    # 存在的理由，而 resolve_owner 需要全量清单名，纯函数这一层拿不到。
+    covering_program = (
+        base["company"] if base["company"] in set(program_companies or ()) else None
+    )
+
     if healthy_total > 0:
         state = "healthy"
     elif active_total > 0:
         state = "thin_only"
     elif enabled_sources:
         state = "no_active_jobs"
+    elif covering_program:
+        # ⚠️ 这一档**必须排在上面三档之后**，否则会制造第二个「自我锁死」：
+        # 国有大行这类公司日后被接通成源（2026-09-05 已有并行 session 在接），
+        # enabled_sources 一非空就回到 no_active_jobs 正常重试轨道，不会被永久钉死。
+        # 也刻意不判 healthy——它确实没有可投的岗位记录，指标诚实优先于覆盖率好看。
+        state = "manual_review"
     elif prev.get("state") not in (None, "", "healthy", "thin_only", "no_active_jobs"):
         # 搜索/指纹失败态是历史尝试结果；census 只在新证据推翻它时改写。
         state = prev["state"]
@@ -164,6 +185,12 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
             )
         ],
     })
+    if covering_program and state == "manual_review":
+        evidence["covered_via_apply_program"] = covering_program
+    else:
+        # 日后被接通成源（或抓到岗）就要自动摘掉这个标记，
+        # 否则台账会一直显示「已由 /programs 承载」，掩盖真实供给。
+        evidence.pop("covered_via_apply_program", None)
     source_id = None
     if enabled_sources:
         source_id = enabled_sources[0].get("id")
@@ -186,6 +213,10 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
     if state == "healthy":
         out["fail_reason"] = None
         out["next_retry_at"] = None
+    if state == "manual_review" and covering_program:
+        # next_retry_at=None 才是真的停：plan_queue 的到期判定与复验车道都要求它非空。
+        out["next_retry_at"] = None
+        out["fail_reason"] = "对方无逐岗链接，已由 /programs 承载（%s）" % covering_program
     return out
 
 
@@ -418,6 +449,43 @@ def fetch_sources(supabase):
     )
 
 
+def fetch_apply_program_companies(supabase):
+    """/programs 里**已核实且启用**的公司名。取不到就返回 []（宁可多跑一轮，不冒错停的险）。"""
+    try:
+        rows = db.fetch_all_rows(
+            lambda: supabase.table("apply_programs")
+            .select("company,enabled,verified_at")
+            .eq("enabled", True)
+            .not_.is_("verified_at", "null")
+        )
+    except Exception as exc:  # noqa: BLE001 —— 读不到 /programs 不该拖垮整轮普查
+        print("[gap_census] apply_programs 读取失败，本轮不做 /programs 承载判定：%s" % exc)
+        return []
+    return [
+        str((row or {}).get("company") or "").strip()
+        for row in rows or []
+        if str((row or {}).get("company") or "").strip()
+    ]
+
+
+def resolve_program_owners(program_companies, names=None):
+    """/programs 里的公司名 → 必投清单规范名（`resolve_owner`，最长清单名胜出）。
+
+    ⚠️ 这里是防张冠李戴的**唯一一道门**：`apply_programs.company` 存的是实体名
+    （中通快递 / 韵达速递），清单名是品牌短名（中通 / 韵达）；而裸子串会把「京东方」
+    判成「京东已承载」，把还能抓的京东永久停掉。resolve_owner 需要全量清单名，
+    所以解析放在这里、不放进 classify_company 那个纯函数。
+    清单里没有的（中国华能 / 国家开发银行等）解析为空，直接忽略——它们不在必投口径内。
+    """
+    names = names if names is not None else must_apply.all_names()
+    owners = set()
+    for name in program_companies or []:
+        owner = must_apply.resolve_owner(name, names)
+        if owner:
+            owners.add(owner)
+    return owners
+
+
 def fetch_previous_rows(supabase, scope):
     return db.fetch_all_rows(
         lambda: supabase.table("must_apply_gap_attempts").select("*").eq("scope", scope)
@@ -495,10 +563,12 @@ def census(supabase, jobs_conn, *, scope="domestic", cap=20, company=None,
     aggregates = fetch_job_aggregates(jobs_conn, companies, scope)
     sources = fetch_sources(supabase)
     previous = {row.get("company"): row for row in fetch_previous_rows(supabase, scope)}
+    program_owners = resolve_program_owners(fetch_apply_program_companies(supabase))
     rows = []
     for item in companies:
         prev = previous.get(item["name"])
-        row = classify_company(item, aggregates, sources, prev)
+        row = classify_company(item, aggregates, sources, prev,
+                               program_companies=program_owners)
         rows.append(schedule_initial_retry(row, now))
     coverage = compute_industry_coverage(rows, companies)
     wanted = fetch_user_wanted(supabase)

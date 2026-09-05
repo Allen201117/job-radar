@@ -791,6 +791,16 @@
       "location": "韩国·庆尚南道·咸阳郡",
       "expected": "KR",
       "note": "韩国的郡不是中国的市：「咸阳」是陕西地级市，但「咸阳郡」在庆尚南道 —— 郡不在 _ADMIN_SUFFIXES 里，所以 CN 规则命中不了"
+    },
+    {
+      "location": "海外区域",
+      "expected": null,
+      "note": "自报境外但没说哪国：code 仍是 None，靠 is_overseas_unspecified 判 overseas（中控技术 26 个在招岗这么写）"
+    },
+    {
+      "location": "保定市,海外",
+      "expected": "CN",
+      "note": "混写「大陆城市 + 海外」仍判 CN —— 自报境外那条规则不许把这类岗带走"
     }
   ]
 }

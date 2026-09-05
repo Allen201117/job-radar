@@ -1,6 +1,10 @@
 import unittest
 
 from geo import (
+    CHINA_CJK_PLACE_MARKERS,
+    KOREA_CJK_MARKERS,
+    TAIWAN_CJK_MARKERS,
+    _STRICT_CJK_PLACES,
     derive_country_code,
     derive_job_scope,
     is_china_location,
@@ -293,11 +297,15 @@ class ChineseAdminDivisionTest(unittest.TestCase):
 
     def test_overseas_unspecified(self):
         """自报「海外」「国外」：没有国家可给，但绝不能走 source.regions 兜底算成国内供给。"""
-        for location in ("海外", "国外", "境外"):
+        for location in ("海外", "国外", "境外", "海外区域", "国外区域", "境外区域"):
             with self.subTest(location=location):
                 self.assertIsNone(derive_country_code(location))
                 self.assertTrue(is_overseas_unspecified(location))
                 self.assertEqual(derive_job_scope(location, {"CN"}), "overseas")
+        # 「海外区域」是 live 缺口：中控技术 26 个在招岗这么写，补前判 domestic。
+        # 「保定市,海外」这类**混写**仍判 domestic —— 串里有大陆城市，那是对的，别一起改掉。
+        self.assertEqual(derive_job_scope("保定市,海外", {"CN"}), "domestic")
+        self.assertEqual(derive_country_code("保定市,海外"), "CN")
         self.assertFalse(is_overseas_unspecified("上海"))
         self.assertFalse(is_overseas_unspecified("海外市场部经理"))  # 整段匹配，不是子串
         # ⚠️「全球」刻意**不算** overseas：它字面包含中国，判 overseas 会把国内岗踢走。
@@ -547,3 +555,91 @@ class MainlandLookalikeTest(unittest.TestCase):
             with self.subTest(loc=loc):
                 self.assertEqual(derive_country_code(loc), "CN")
                 self.assertEqual(derive_job_scope(loc), "domestic")
+
+
+class FailSafeExclusionsSurviveMergeTest(unittest.TestCase):
+    """「宁可漏判、不可错杀」那几条选词，合并两套实现后必须还在。
+
+    它们不是风格问题：**错判一个大陆岗为境外 = 静默删掉一个在招岗**（location_in_scope
+    当场丢弃），而漏判一个境外岗只是回到 code=None、走源 regions 兜底，无害。
+    2026-09-05 两个并行 session 各写了一套中文地名实现并合并，本类是那次合并的验收断言 ——
+    合并很容易把这种「刻意不收某个词」的决定悄悄冲掉，而它不会报错，只会让岗位消失。
+    """
+
+    def test_bare_names_are_not_in_word_lists(self):
+        """有重叠风险的地名只收「带后缀」或「繁体」写法，裸名一个都不许进词表。"""
+        for bare, table, tname in (
+            ("新北", TAIWAN_CJK_MARKERS, "TW"),   # 江苏常州有新北区
+            ("连江", TAIWAN_CJK_MARKERS, "TW"),   # 福建福州有连江县
+            ("台南", TAIWAN_CJK_MARKERS, "TW"),   # 「邢台南和区」含「台南」
+            ("台中", TAIWAN_CJK_MARKERS, "TW"),
+            ("台东", TAIWAN_CJK_MARKERS, "TW"),
+            ("北海", CHINA_CJK_PLACE_MARKERS, "CN"),  # 日本北海道含「北海」
+        ):
+            with self.subTest(bare=bare, table=tname):
+                self.assertNotIn(bare, table, f"裸「{bare}」不该出现在 {tname} 词表（子串匹配会误杀）")
+        # 对应的安全写法必须还在，否则等于把这些地名整个漏掉
+        for kept, table in (("新北市", TAIWAN_CJK_MARKERS), ("連江", TAIWAN_CJK_MARKERS),
+                            ("台南市", TAIWAN_CJK_MARKERS), ("台中市", TAIWAN_CJK_MARKERS),
+                            ("北海市", CHINA_CJK_PLACE_MARKERS)):
+            with self.subTest(kept=kept):
+                self.assertIn(kept, table)
+
+    def test_korea_deliberately_omits_ambiguous_cities(self):
+        """福建有大田县、河南潢川古称光州 —— 少认几个韩国城市无害，认错大陆岗有害。"""
+        for name in ("大田", "光州", "汉城"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, KOREA_CJK_MARKERS)
+
+    def test_strict_table_whole_segment_matching_neutralises_bare_names(self):
+        """_STRICT_CJK_PLACES 里确实收了裸「汉城」（首尔旧称），靠**整段精确匹配**才没出事。
+
+        ⚠️ 这是一个只在「整段匹配」前提下才安全的词条：一旦有人把 _strict_cjk_country
+        改成子串匹配，「武汉城市圈」会立刻被判成韩国。本测试就是那道闸。
+        """
+        self.assertIn("汉城", _STRICT_CJK_PLACES["KR"])
+        for location in ("武汉城市圈", "武汉城市圈产业基地", "湖北省·武汉市"):
+            with self.subTest(location=location):
+                self.assertEqual(derive_country_code(location), "CN")
+
+    def test_live_strings_that_would_break_if_exclusions_were_dropped(self):
+        """线上真实地点串（2026-09-05 香港库实测），任一排除项被冲掉就会变成境外。"""
+        for location, jobs in (
+            ("江苏省·常州市·新北区", 19), ("常州市-新北区", 6),
+            ("福建省·福州市·连江县", 3),
+            ("广西壮族自治区·北海市", 22), ("广西·北海市", 5), ("北海市", 5),
+            ("邢台南和区", None), ("福建省·三明市·大田县", None),
+        ):
+            with self.subTest(location=location, jobs=jobs):
+                self.assertEqual(derive_country_code(location), "CN")
+        # 反向：真正的境外同名地必须仍判境外
+        self.assertEqual(derive_country_code("北海道"), "JP")
+        self.assertEqual(derive_country_code("日本·北海道"), "JP")
+        self.assertEqual(derive_country_code("新北市"), "TW")
+
+
+class UsStateAbbrMustBeUppercaseTest(unittest.TestCase):
+    """州缩写必须**大写**这条不是洁癖，是挡住一整类误判的唯一依据。
+
+    2026-09-05 实测：把规则放宽到小写，全库仍无国家的在招岗里会有 802 个被误命中 ——
+        "Melbourne" → ne=内布拉斯加     "Mollsfeld, Meerbusch, Germany" → ny=纽约
+        "Gurgaon, Haryana, India" → ia=爱荷华   "Bangkok, Bangkok, Thailand" → nd=北达科他
+        "Bogot, Bogota, Colombia" → ia   "Work, From, Home" → me=缅因   "Lehi" → hi=夏威夷
+    而真正的小写「City, st」槽位在全库是 **0 条**（同日实测）——
+    也就是说要求大写**零代价**，放宽则立刻把哥伦比亚/德国/印度/泰国的岗算成美国。
+    """
+
+    def test_lowercase_tail_is_not_a_state(self):
+        for location in (
+            "Melbourne", "Irvine", "Lehi", "Work, From, Home",
+            "Mollsfeld, Meerbusch, Germany", "Gurgaon, Haryana, India",
+            "Bangkok, Bangkok, Thailand", "Bogot, Bogota, Colombia",
+            "Johns, Creek, Georgia",
+        ):
+            with self.subTest(location=location):
+                self.assertNotEqual(derive_country_code(location), "US")
+
+    def test_uppercase_tail_still_works(self):
+        for location in ("CHARLOTTE, NC", "Ann, Arbor, MI 48108", "AustinTX"):
+            with self.subTest(location=location):
+                self.assertEqual(derive_country_code(location), "US")

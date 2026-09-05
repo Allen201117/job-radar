@@ -70,6 +70,7 @@ from adapters.mihoyo import MihoyoAdapter
 from adapters.tonghuashun import TongHuaShunAdapter
 from adapters.gllue import GllueAdapter
 from adapters.cnstaff import CnstaffAdapter
+from adapters.chnenergy import ChnenergyAdapter
 from adapters.midea import MideaAdapter
 from adapters.cmb import CmbAdapter
 from adapters.cmbc import CmbcAdapter
@@ -180,6 +181,7 @@ ADAPTERS = {
     "mihoyo": MihoyoAdapter(),  # 米哈游自建门户：ats-portal v1/job/list+info 公开接口,零浏览器
     "tonghuashun": TongHuaShunAdapter(),  # 同花顺自建门户：campus.10jqka apply_list 公开接口,零浏览器
     "gllue": GllueAdapter(),  # Gllue Next.js SSR 通用层，host 从 source_url 动态解析
+    "chnenergy": ChnenergyAdapter(),  # 国家能源集团自建门户：recTypeSerch 列表 + showgw 逐岗详情
     "cnstaff": CnstaffAdapter(),  # 聘客 cnstaff joblist API 通用层，host/tenant 动态解析
     "midea": MideaAdapter(),  # 美的集团自建门户：公开 position/list 接口，零浏览器
     "cmb": CmbAdapter(),  # 招商银行自建门户：公开社会招聘接口，零浏览器
@@ -203,6 +205,7 @@ DOMESTIC_ADAPTERS = {
     "meituan", "meituan_campus", "kuaishou", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "byd", "sf_express",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
     "tencent_music", "antgroup", "mihoyo", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree", "tonghuashun",  # 自建门户公开接口（零浏览器；cmb=招商银行，cmbc=中国民生银行）
     "spdb", "icbc", "ccb", "bankcomm", "cmcc",  # 国有大行 + 中国移动自建门户（2026-09-05 live 核实逐岗详情页，零浏览器）
+    "chnenergy",  # 国家能源集团（2026-09-05 live 核实逐岗详情页；曾被误当公告制）
     "abchina",  # 农业银行（浏览器档：响应体加密，读 React state）
 }
 
@@ -219,6 +222,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "meituan", "meituan_campus", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "sf_express",  # 已逐一核实为纯 httpx fetch
     "tencent_music", "antgroup", "mihoyo", "avature", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree", "tonghuashun",  # 公开接口/SSR，纯 httpx
     "spdb", "icbc", "ccb", "bankcomm", "cmcc",  # 国有大行 + 中国移动自建门户，纯 httpx（无浏览器、无共享状态）
+    "chnenergy",  # 国家能源集团自建门户，纯 httpx（POST 列表 + GET 详情）
     # 字节：jobs.bytedance.com posts API 已改为纯 httpx offset/limit 全量翻页；
     # sources.crawl_method 仍由运维侧改库，本白名单只控制代码侧并发档。
     "bytedance", "bytedance_campus",
