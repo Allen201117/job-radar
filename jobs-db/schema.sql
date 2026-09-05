@@ -53,6 +53,29 @@ update jobs set job_scope = 'domestic' where job_scope is null;
 alter table jobs alter column job_scope set not null;
 alter table jobs add column if not exists sponsorship_signal text;
 
+-- ── 台湾岗归属回填（2026-09-05，幂等）───────────────────────────────────────────────
+-- 项目口径：台湾**不抓、不归入任一范围**（TW ∉ 任何 source regions 且 TW ∉ 大中华）。
+-- 但 lib/geo.js 的 COUNTRY_TOKENS 长期漏了 TW（crawler/geo.py 2026-07-28 就补上了），
+-- 于是 app 写入路径（lib/jobs-store/write.ts 的 withDerivedFields，discovery / refresh /
+-- search 三条链都过它）把台湾岗写成 country_code=NULL 或 'CN' + job_scope='domestic'，
+-- 用户筛「国内」时会看到台北岗。JS 侧已补齐 TW（与 geo.py 逐字一致、同样排在 CN 前面），
+-- 这里把存量那批算错的行改对 —— 新写入不会再产生，所以这条 update 跑第一次之后恒 0 行。
+--
+-- 只改 country_code / job_scope 这两个**由 location 派生**的列，绝不碰 status：
+-- 「地点判错」和「岗位是否还在招」是两回事，探活的活不在这里（见 CLAUDE.md 的立碑）。
+-- 影响面已 live 逐条核验（2026-09-05）：命中 76 行、24 个不同 location，
+-- 全部是 Taipei / Taichung / Hsinchu / 台北市 / 台湾省 这类无歧义写法，零误伤；
+-- 其中 9 行是 active（惠普 HP 1 + 雅培 Abbott 8，均为 Workday 源），另 67 行是 removed。
+-- 谓词与 geo 的 TW token 表同口径：拉丁词加词边界（避免 Taiwanese 之类误伤），CJK 直接子串。
+update jobs
+   set country_code = 'TW',
+       job_scope    = 'overseas'
+ where country_code is distinct from 'TW'
+   and (location ~* '(^|[^a-z0-9])(taiwan|taipei|kaohsiung|hsinchu)([^a-z0-9]|$)'
+     or location like '%台湾%' or location like '%臺灣%'
+     or location like '%台北%' or location like '%臺北%'
+     or location like '%高雄%' or location like '%新竹%');
+
 -- ── 招聘类型物化（2026-09-03，第1步：只加列 + 回填，暂不改任何读写行为）──────────────
 -- 为什么要存：判「社招/校招/实习」的规则只有一份权威实现，在 JS（lib/china-keyword-expansion.js
 -- 的 recruitmentCategory，七层裁决 + 完整单测）。而检索侧只能用「正向信号并集」的 SQL 近似去捞，
