@@ -166,14 +166,53 @@ pages are translated (avoid a half-translated illusion).
 
 调用一律从 barrel 进：`import { Button, Badge } from "@/components/ui"`，不要深链到具体文件。
 
-## 现有组件
+## 动效基座（先读这段，它决定所有组件的手感）
 
-`Button`（ink / soft / ghost / quiet × xs / sm / md / lg）· `Badge`（七族 tone × 四档）·
-`Banner` · `Field` + `Input` + `Textarea` + `Select` · `Segmented` · `Modal` · `Popover` ·
-`Spinner` · `EmptyState` · `AnimateNumber` · `AnimatedStat`
+**标杆是 iPhone。** iOS 动效有质感的核心不是「时长调得好」，而是**用弹簧而不是贝塞尔**
+——加速减速的方式符合物理直觉。所以基座里给的是四条弹簧曲线，不是几个 ease-out：
+
+| 令牌 | 过冲 | 用在哪 |
+|---|---|---|
+| `--spring-smooth` | 0% | 状态切换 / 淡入淡出 / 颜色过渡（回弹会让「变了个色」显得轻浮）|
+| `--spring-snappy` | 0.6% | 开关 / 弹层进场 / 折叠展开 —— 最常用 |
+| `--spring-bouncy` | 8.3% | 数字变化 / 收藏点赞类正反馈 —— 回弹传达「成了」|
+| `--spring-press` | 1.5% | 按压松手回弹，最短 |
+
+时长档：`--dur-press` 100ms · `--dur-toggle` 180ms · `--dur-panel` 300ms · `--dur-sheet` 450ms。
+超过 400ms 用户开始感到「卡」，所以只有模态呈现敢到 450ms（它伴随大面积位移，太快看不清从哪来）。
+
+曲线是**按 SwiftUI 的 `spring(response:dampingFraction:)` 方程解出来的**，不是抄的数值。
+要调手感 → 改 `scripts/gen-spring-easing.py` 里的档位参数跑一次，把输出粘回 globals.css。
+
+**按压反馈**：`.press-feedback`（scale 0.97）/ `.press-feedback-subtle`（0.99，整卡可点时用）。
+按下用 ease-out 100ms 跟手，松手用 press 弹簧回弹——两段不同曲线是刻意的，这正是 iOS 的做法。
+为什么是缩放不是变色：缩放模拟物理按压；变色是**状态**信号（选中），用变色做按压会让用户
+以为自己选中了什么。为什么是 0.97 不是 0.9：0.9 会读成「这东西要被删掉了」。
+
+## 现有组件（21 个）
+
+**基础**：`Button`（ink / soft / ghost / quiet × xs / sm / md / lg）· `Badge`（七族 tone × 四档）·
+`Banner` · `Separator` · `Spinner` · `Progress` · `EmptyState` · `AnimateNumber` · `AnimatedStat`
+
+**表单**：`Field` + `Input` + `Textarea` + `Select` · `Switch` · `Segmented` · `TagInput`
+
+**导航与容器**：`Tabs` + `TabPanel` · `Accordion` · `Stepper`
+
+**浮层**：`Modal` · `Sheet`（底部抽屉，可拖拽关闭）· `Popover` · `Tooltip` ·
+`DropdownMenu` · `AlertDialog`（替掉 `window.confirm`）
 
 Hooks：`useBodyScrollLock` · `useEscapeKey` · `useFocusTrap` · `useClickOutside` ·
 `useAnchoredPosition` · `useClipboard` · `useAsyncAction`
+
+### 哪些用了第三方，为什么
+
+只有四个组件的**行为层**用 Radix（MIT，见 `LICENSES/`）：`Tooltip` / `DropdownMenu` /
+`Tabs` / `Accordion`。选它们不是因为省事，是因为这四个自己写**一定会漏**：
+tooltip 的贴边翻转与触屏触发、菜单的首字母跳转与焦点归还、tabs 的 roving tabindex、
+accordion 的 aria-controls 配对。视觉 100% 是我们自己的皮肤，Radix 只提供行为。
+
+`Switch` / `Sheet` / `AlertDialog` / `Progress` / `Separator` / `Stepper` **刻意不用 Radix**：
+它们的价值在动效与手感（开关滑块的形变、抽屉的速度判定），引依赖没有收益。
 
 **活文档在 `/design`**（需要管理员）。那一页的组件就是产品里真实运行的那一个、用的是同一份
 CSS，所以它不会说谎——改了组件库，那一页立刻跟着变。

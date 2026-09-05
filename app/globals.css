@@ -87,6 +87,48 @@
 }
 
 @layer utilities {
+  /* ═══ 按压反馈（press feedback）═══
+     iOS 手感里性价比最高的一条：手指按下去**立刻**有反应，不等 click 事件。
+     Web 上默认要等 pointerdown→pointerup→click 一整轮才有视觉变化，中间那 100-200ms
+     用户会觉得「点了没反应」——这是「Web 感」与「App 感」最直接的差别。
+
+     为什么是缩放不是变色：缩放模拟「弹性材质被压下去又弹回来」的物理感；变色是**状态**信号
+     （选中/激活），用变色做按压会让用户以为自己选中了什么。
+
+     为什么是 0.97 不是 0.9：0.97 是 iOS 的量级，克制到几乎只在余光里感觉到；
+     缩到 0.9 会读成「这个东西要被删掉了」，传达的是破坏性而不是按压。
+
+     按下用 ease-out 直接到位（100ms，要跟手），松手用 press 弹簧回弹（206ms，才有弹性感）。
+     两段用不同曲线是刻意的：按下跟手、松手有回弹，这正是 iOS 的做法。 */
+  .press-feedback {
+    transition: transform var(--spring-press-dur, 206ms) cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition-timing-function: var(--spring-press, cubic-bezier(0.34, 1.56, 0.64, 1));
+    touch-action: manipulation; /* 去掉移动端 300ms 点击延迟，且不吃掉滚动 */
+  }
+  .press-feedback:active {
+    transform: scale(0.97);
+    transition: transform var(--dur-press, 100ms) ease-out;
+  }
+  /* 更轻的一档：整行/整卡可点时用，卡片面积大，0.97 会显得整页在抖 */
+  .press-feedback-subtle:active {
+    transform: scale(0.99);
+    transition: transform var(--dur-press, 100ms) ease-out;
+  }
+  .press-feedback-subtle {
+    transition: transform var(--spring-press-dur, 206ms) cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition-timing-function: var(--spring-press, cubic-bezier(0.34, 1.56, 0.64, 1));
+    touch-action: manipulation;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .press-feedback,
+    .press-feedback:active,
+    .press-feedback-subtle,
+    .press-feedback-subtle:active {
+      transform: none;
+      transition: none;
+    }
+  }
+
   /* 隐藏横向滚动条但保留滚动能力（顶部导航在窄屏溢出时用） */
   .scrollbar-hide {
     -ms-overflow-style: none;
@@ -95,6 +137,30 @@
 
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
+  }
+}
+
+/* 折叠面板的高度动画。height:auto 不可动画，所以 Radix 在展开时把真实高度写进
+   --radix-accordion-content-height，这里用它做 0 <-> 实高 的过渡。
+   自己写就得先量 scrollHeight，量的时机稍有不对就会闪一下。 */
+@keyframes accordion-down {
+  from { height: 0; opacity: 0; }
+  to { height: var(--radix-accordion-content-height); opacity: 1; }
+}
+@keyframes accordion-up {
+  from { height: var(--radix-accordion-content-height); opacity: 1; }
+  to { height: 0; opacity: 0; }
+}
+.accordion-content[data-state="open"] {
+  animation: accordion-down var(--dur-panel, 300ms) var(--spring-snappy, cubic-bezier(0.38, 1.21, 0.22, 1));
+}
+.accordion-content[data-state="closed"] {
+  animation: accordion-up var(--dur-toggle, 180ms) cubic-bezier(0.4, 0, 1, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .accordion-content[data-state="open"],
+  .accordion-content[data-state="closed"] {
+    animation: none;
   }
 }
 
@@ -179,6 +245,58 @@
        值照搬原 EmptyPanel 的 #fff7f4 / #e7b7ac。 */
     --tone-rose-bg-soft: #fff7f4;
     --tone-rose-border-soft: #e7b7ac;
+
+    /* 抬起面板（弹窗 / 底部抽屉 / 全屏筛选）的底色。比页面暖纸底更实，用来盖住下层内容。
+       取值照搬现网筛选弹窗的 bg-[#f4efe6] / dark:bg-[#16130f]。 */
+    --surface-panel-bg: #f4efe6;
+
+    /* 开关滑块「关」态的颜色。「开」态直接用 --action-ink-fg（永远是轨道色的反色，
+       所以明暗两套都自动有对比）。
+       WARN: 这里踩过一个真 bug——原本「开」态滑块写死白色，而暗色模式下轨道是米白
+       #f3ecdf，白滑块落在米白轨道上等于看不见。滑块颜色必须跟着轨道走，不能写死。 */
+    --switch-knob-off: #ffffff;
+
+    /* ═══ 动效基座（motion）═══
+       标杆是 iOS：创始人定的总原则是「重交互、细节性动效都要有」。iOS 动效之所以有质感，
+       核心不是「时长调得好」，而是**用弹簧而不是贝塞尔**——加速减速的方式符合物理直觉。
+
+       下面四条曲线是**按 SwiftUI 的 spring(response:dampingFraction:) 方程直接解出来的**，
+       不是从博客抄的数值（那些来源不明、也对不上我们要的档位）。欠阻尼解：
+         x(t) = 1 - e^(-Zw0t) * [cos(wd*t) + (Zw0/wd) * sin(wd*t)]，wd = w0*sqrt(1-Z^2)
+       采样 41 点写成 CSS 的 linear()。生成脚本 scripts/gen-spring-easing.py，改档位跑它重生成。
+
+       什么时候用哪档：
+         smooth  状态切换 / 淡入淡出 / 颜色过渡 —— 不能有回弹，回弹会让「变了个色」显得轻浮
+         snappy  开关 / 弹层进场 / 折叠展开 —— 极小过冲，干脆利落，最常用
+         bouncy  数字变化 / 收藏点赞这类正反馈 —— 明显回弹传达「成了」的愉悦感
+         press   按压松手回弹 —— 最短，只用于 :active 之后的回弹
+
+       WARN: linear() 需 Chrome 113+ / Safari 17.2+；低版本会忽略这条声明、
+       回落到写在它前面的 cubic-bezier 兜底值，所以每处用它的地方都要先写兜底。 */
+    /* smooth — 状态切换 / 淡入淡出：不能有回弹（过冲 -0.8%）*/
+    --spring-smooth: linear(0, 0.0133, 0.04754, 0.09574, 0.1526, 0.2142, 0.2775, 0.3406, 0.4018, 0.4602, 0.5151, 0.5661, 0.6132, 0.6563, 0.6954, 0.7308, 0.7626, 0.7911, 0.8165, 0.8391, 0.8592, 0.8769, 0.8926, 0.9063, 0.9185, 0.9291, 0.9384, 0.9465, 0.9536, 0.9598, 0.9652, 0.9699, 0.974, 0.9776, 0.9806, 0.9833, 0.9856, 0.9876, 0.9893, 0.9908, 0.9921);
+    --spring-smooth-dur: 330ms;
+
+    /* snappy — 开关 / 弹层进场 / 折叠：极小过冲，最常用（过冲 0.6%）*/
+    --spring-snappy: linear(0, 0.01839, 0.06556, 0.1315, 0.2083, 0.2903, 0.373, 0.4533, 0.5292, 0.5994, 0.6629, 0.7197, 0.7696, 0.8129, 0.8501, 0.8817, 0.9081, 0.93, 0.948, 0.9625, 0.9741, 0.9832, 0.9902, 0.9955, 0.9995, 1.002, 1.004, 1.005, 1.006, 1.006, 1.006, 1.006, 1.006, 1.005, 1.005, 1.004, 1.004, 1.003, 1.003, 1.002, 1.002);
+    --spring-snappy-dur: 323ms;
+
+    /* bouncy — 数字变化 / 正反馈：明显回弹（过冲 8.3%）*/
+    --spring-bouncy: linear(0, 0.03447, 0.1218, 0.2409, 0.3747, 0.5101, 0.638, 0.7521, 0.849, 0.9275, 0.9877, 1.031, 1.06, 1.076, 1.083, 1.082, 1.076, 1.067, 1.056, 1.045, 1.034, 1.024, 1.015, 1.008, 1.003, 0.9986, 0.9958, 0.994, 0.9932, 0.993, 0.9934, 0.9941, 0.9949, 0.9959, 0.9968, 0.9977, 0.9985, 0.9991, 0.9996, 1, 1);
+    --spring-bouncy-dur: 532ms;
+
+    /* press — 按压松手回弹：最短（过冲 1.5%）*/
+    --spring-press: linear(0, 0.02075, 0.07388, 0.1478, 0.2337, 0.3245, 0.4153, 0.5025, 0.5838, 0.6577, 0.7235, 0.7808, 0.8301, 0.8716, 0.906, 0.9341, 0.9566, 0.9742, 0.9876, 0.9977, 1.005, 1.01, 1.013, 1.015, 1.015, 1.015, 1.014, 1.013, 1.012, 1.011, 1.009, 1.008, 1.007, 1.005, 1.004, 1.004, 1.003, 1.002, 1.002, 1.001, 1.001);
+    --spring-press-dur: 206ms;
+
+    /* 时长档位（取自 iOS 的实际观感区间）：
+       按压反馈 100ms / 状态切换 180ms / 面板展开 300ms / 模态呈现 450ms。
+       WARN: 超过 400ms 用户开始感到「卡」（NN/g 动效时长研究），所以只有模态呈现敢到 450ms
+       —— 它伴随大面积位移，太快反而看不清「从哪儿来」。 */
+    --dur-press: 100ms;
+    --dur-toggle: 180ms;
+    --dur-panel: 300ms;
+    --dur-sheet: 450ms;
   }
 
   .dark {
@@ -215,6 +333,8 @@
     --action-ink-fg: #16130f;
     --tone-rose-bg-soft: rgba(58, 32, 26, 0.16);
     --tone-rose-border-soft: rgba(230, 169, 159, 0.25);
+    --surface-panel-bg: #16130f;
+    --switch-knob-off: #a79e90;
   }
 }
 
