@@ -364,8 +364,8 @@
     },
     {
       "location": "全国",
-      "expected": null,
-      "note": "反向：不是地名的字符串不许判成任何国家"
+      "expected": "CN",
+      "note": "「全国」判 CN 是刻意的：留 None 会让 location_in_scope 把 2,002 个本土岗在 adapter 后置过滤里丢掉（af974a3 实测）"
     },
     {
       "location": "全部地区",
@@ -399,8 +399,8 @@
     },
     {
       "location": "山东京博",
-      "expected": null,
-      "note": "反向：不是地名的字符串不许判成任何国家"
+      "expected": "CN",
+      "note": "含省名「山东」的子串命中：CHINA_CJK_PLACE_MARKERS 是子串语义，与 _CN_ADMIN_NAMES 的整段语义并存"
     },
     {
       "location": "不限",

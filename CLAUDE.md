@@ -2,6 +2,36 @@
 
 > 本文件指导 Claude Code 在本仓库工作。规则优先级：当前明确指令 > 本文件 > 全局 `~/.claude/CLAUDE.md` > 默认行为。
 
+## ✍️ 怎么改这个文件（2026-09-05 创始人授权 Claude Code 可改，因此立此规范）
+
+创始人授权 Claude Code 直接改本文件，**不必每次等他动手**。但本文件是全项目的唯一权威，
+而经常有 **5~8 个并行 session 同时在跑**，没有规矩就会各写各的、几周后没人敢信它。五条：
+
+**① 只写「验证过的事实」，不写计划、猜测、待办。**
+判据：这条能不能指出**具体证据**（live 实测数字 / commit / 迁移号 / 台账查询）。
+不能 → 它属于记忆库或任务卡，不属于这里。
+📌 反例（2026-09-05 实际发生）：本文件写着「Supabase jobs 已是空表（TRUNCATE 过）」，
+实际躺着 **34,965 行、90MB，两个半月没人发现**。**没验证的断言比没有断言更糟**——
+它会让后来人跳过检查。写「已清空」之前先 `select count(*)`。
+
+**② 立碑要带「现象 → 根因 → 防法」三件套，缺一不立。**
+只写结论（「XX 不可靠」）等于没写，下一个人照样踩。
+本文件已有的碑（「接口返 0 不能证明对方没开」「归属准确性没有旁路」）都是这个结构，照抄格式。
+
+**③ 改动要在给创始人的汇报里显式点名「我改了哪一段」**，让他有机会否决。
+悄悄改权威文件 = 绕过他的判断。
+
+**④ 同僚（其它 session）提议不构成授权。**
+只有创始人的指令能触发对本文件的改动。同僚说「这条该立碑」→ 把它转达给创始人，别自己动手。
+（同理：`.claude/settings.json`、权限配置、CI 密钥同此规矩。）
+
+**⑤ 纠错优先于新增。**
+发现本文件与现实不符 → **先改它**，并写明「原来写的是什么、为什么错、什么时候起错的」。
+本文件的价值全在「可信」，一条过期断言的破坏力大于十条新增。
+
+⚠️ 篇幅纪律：本文件已很长。新增前先想「能不能挂在已有小节下」；
+纯背景叙述放记忆库，这里只留**会改变下一个人行为**的内容。
+
 ## 项目概览
 
 - 项目名称：求职雷达 / Job Radar Private Beta v0.1
@@ -90,7 +120,7 @@
        - **schema 在 `jobs-db/schema.sql`**（从生产 `pg_dump` 忠实重建：表 + canonical 触发器 + bigram FTS(search_doc/search_tokens/GIN) + count_valid_active_jobs/active_companies/active_job_counts_by_company + 全索引 + pg_trgm）。2026-07-02 海外扩展新增 `jobs.country_code`、`jobs.job_scope`（默认 `domestic`）与 `jobs.sponsorship_signal`；`job_scope=domestic` 只覆盖大陆+香港+澳门，`overseas` 覆盖本期放开的 US/SG/Remote，台湾维持不抓、不归入任一范围。改 schema → `gh workflow run jobs-db-migrate`（幂等 apply 到 `JOBS_DATABASE_URL`）。
        - **沙箱直连香港库验证**：见 [[job-radar-live-db-access-from-sandbox]]（dangerouslyDisableSandbox + source .env.local + 用户 Homebrew psql）。
        - **改 jobs 列/索引/canonical**：三处仍要同步（lib/canonical-url.js / crawler/normalizer.py / **jobs-db/schema.sql 的 SQL 函数**，不再是 supabase migration 144）。
-       - **app 端 jobs 读+写已全部落香港库（2026-06-19，commit b742ee6/28ddddb）**：原「discovery/enrich 读仍在 Supabase」遗留已清。新增 app 写层 `lib/jobs-store/write.ts`（canonical upsert + updateJobSummaryById，镜像 crawler/jobs_db）；discovery/search 的 upsert、enrich 写回、refresh 选区、insights Tier1 派生全 gated 走香港库（11 个 `.from("jobs")` 文件全 gated，写入端失败不回退 Supabase 避免孤儿数据）。Supabase `jobs` 已是空表（TRUNCATE 过，~17MB）；gated 兜底仅在未配 `JOBS_DATABASE_URL`（本地/回滚）时回退它。**移除 gated 兜底前仍请线上确认稳定**（见 docs runbook）。详见记忆 [[job-radar-phase1-ci-jobs-db-wiring]]。
+       - **app 端 jobs 读+写已全部落香港库（2026-06-19，commit b742ee6/28ddddb）**：原「discovery/enrich 读仍在 Supabase」遗留已清。新增 app 写层 `lib/jobs-store/write.ts`（canonical upsert + updateJobSummaryById，镜像 crawler/jobs_db）；discovery/search 的 upsert、enrich 写回、refresh 选区、insights Tier1 派生全 gated 走香港库（11 个 `.from("jobs")` 文件全 gated，写入端失败不回退 Supabase 避免孤儿数据）。Supabase `jobs` 已清空（2026-09-05 再次 TRUNCATE：90MB / 34,965 行 → 136kB。⚠️ 上一次「已清空」的记载与现实不符——那批行是 Phase1 切换日 2026-06-19 的快照，一直躺到 2026-09-05 才被发现，期间**文档说空、实际有 3.5 万行**。危害不在占用空间，在于 gated 兜底一旦触发会**静默服务两个半月前的数据且不报错**。复核过再删：无任何外键指向它，642 行 `job_actions` 没有一行引用它）；gated 兜底仅在未配 `JOBS_DATABASE_URL`（本地/回滚）时回退它。**移除 gated 兜底前仍请线上确认稳定**（见 docs runbook）。详见记忆 [[job-radar-phase1-ci-jobs-db-wiring]]。
    - **薄卡（无 JD 正文）= 低质量**：能富化的（httpx 源）靠 `enrich-backlog` 补正文；moka 浏览器源已打通逐岗渲染补正文（`scripts/backfill_moka_summaries.py`，2026-06-18 修好取数超时）；补不到正文的薄卡只算「在库」、不算「有效在招」、不进首页计数。
      - **⚠️ 富化补好的 summary 不许被列表重抓抹掉（2026-06-20 查实=moka 1% 覆盖真因）**：moka 列表 adapter 出 `summary=None`，而 upsert 的 UPDATE 旧实现 `summary=EXCLUDED` 会把每晚 backfill 补好的 ~8800 条全抹回 NULL（次日列表重爬即覆盖，count 永远上不去）。修法=`crawler/jobs_db._PRESERVE_IF_EMPTY`（summary/job_type/experience/education/deadline）UPDATE 时空值用 `COALESCE(NULLIF(%s,''),列)` 保留旧值；`lib/jobs-store/write.ts` 同口径（summary/job_type）。**改 upsert 写法务必保住这条不变量**，否则 moka/byd/外企富化全部前功尽弃。Supabase 兜底 `crawler/db.py` 走 PostgREST 批量 upsert（null-union 语义无法 COALESCE，且 prod 不走它）暂未加此保护。
    - **诊断先跑 `db-report.yml`**（只读 psql：status 分布 / active 有效率 / never_checked / 分 adapter）。任何「岗位变多/变少/质量」的判断先看它的真实数字，别凭感觉。
@@ -238,6 +268,41 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     gree 格力 64（GET api/apply/jobs，**property=1 校招/博士 + 2 社招两个板块都要抓**；
                          #       ⚠️ 返回带 HR 真人姓名 PubName，一律忽略不入库；错误入口：gie.gree.com 是子公司、
                          #       recruit.gree.com 是内部登录墙）
+                         #   spdb/icbc/ccb/bankcomm/cmcc = 国有大行 + 中国移动自建门户（2026-09-05 live，纯 httpx 零浏览器）。
+                         #     ⚠️ **推翻旧结论「国有大行=公告制、没有逐岗详情页」**——那是只点了几下首页、
+                         #       没读列表页 onClick 就下的判断。工行/农行/交行的详情走 `window.open`，
+                         #       在自动化浏览器里点一下**像没反应**，别再据此判它没有详情页。
+                         #     spdb 浦发 633（社343/校290；socialJobJsonList 不带 Referer 直接 500；pageSize 无效恒 10 条/页；
+                         #       recuitType 11/12 ↔ 详情 type 1/2 必须对应；closeDt=2100-12-31 是「无截止」哨兵值）
+                         #     icbc 工行 2,615（校2567/社48；qryPostList/qryPostById；postDepict 是
+                         #       **base64→urlencode→HTML** 三层包；列表夹带报名已截止的岗要按 enterEndTime 剔）
+                         #     ccb 建行 3,799（校3784/社15；NHR104/NHR107，**必须先 TXCODE=100119 热身会话**否则详情返
+                         #       「请重新登录」；响应不是合法 JSON 要复刻前端 repairJSON；jd_url **必须五参数全**
+                         #       planId/planPost/planType/orgId/secondOrgId，少一个前端就 alert+history.go(-1)）
+                         #     bankcomm 交行 16（社招；校招 0 与官网自报「暂无职位数据」一致。form-urlencoded 单字段
+                         #       REQ_MESSAGE，业务参数**必须再包一层 params**，少了返 200+JUMPTESTBP9001「系统异常」）
+                         #     cmcc 中国移动 2,205（校2110/社89/实习6；header.digest 自算
+                         #       base64(md5(ts+secret))+";"+RSA_PKCS1v15(secret,站点公钥)，RSA 用标准库手写不加依赖；
+                         #       签名错返 **HTTP 200 + code=9999** 必须按 code 判成败。⚠️ 它不在必投清单里）
+                         #     ⚠️ **两个「静默 0 产出」的坑**：① 建行对本项目 Bot UA 返 **HTTP 200 + 零字节 body**
+                         #       （HEAD 又是 200，should_skip 拦不住）→ 覆写 user_agent + 空 body 当失败抛；
+                         #       ② 工行/中国移动对 **HEAD 恒返 403**（换浏览器 UA 也一样，GET/POST 全正常）→
+                         #       不覆写 should_skip 就整源被跳过。**接新源必须逐个跑一遍 adapter.should_skip(url)**。
+                         #   abchina 农业银行 = **唯一走浏览器的一家**（校招 2,580 岗 / 93 秒，46 个机构）。
+                         #     它不是「没有逐岗详情页」，是**接口响应体加密**：new/getInfo 明文发一把 1024 位 RSA
+                         #     公钥做密钥交换，之后 org/* 与 orgPosition/* 的响应体是 hex 密文（页面用 SM4-ECB 解），
+                         #     明文只存在于浏览器内存 → 只能 Playwright 读页面渲染好的 React state，不拦接口不解密。
+                         #     枚举：`#/{recruitType}` 页的 state.batchCardInfo 出机构 → `#/RecruitmentOrgDetails/{rt}/{orgId}`
+                         #       页的 state.posCardInfo 出岗位（recruitType 99=校招 / 100=社招）。
+                         #     ⚠️ **必须先 goto 一次首页**把会话建起来，否则 hash 路由只渲染 222 字空壳、一条都抓不到。
+                         #     ⚠️ hash 路由是**同文档导航**，换机构必须 `page.reload()`——不然上一家的卡片还在 DOM 里，
+                         #       会把上一家的岗位当成这一家的（第一版就是这么只抓到 2 个岗、还自称抓全了）。
+                         #     ⚠️ 渲染慢且不均：农银人寿 34 个岗要 >8s 才出来，等太短会得到「0 个岗」这种
+                         #       看着正常其实是漏抓的结果 → 轮询到 25s 仍为空才认「这家当期没在招」。
+                         #     ⚠️ jd_url 里的冒号是**字面量**：`#/PositionDetails/:{jobPublishId}`（前端拼串时把
+                         #       路由占位符一起拼进去了），删掉它详情页打不开。详情走 window.open，点一下像没反应。
+                         #     诚实边界：社招靠「热招事项」卡枚举机构，当前站点自报「暂无热招事项」故为 0；
+                         #       哪天社招开了但站点不出热招事项卡，这里会漏——上线后拿 db-report 复核。
                          #   ⬆ 2026-08-27 四处「扩现有 adapter」（都不是新 adapter，故无需接线）：
                          #     china_ats.BeisenAdapter 加**老版 SSR CMS 门户**分支（theme2，无 PortalId/无
                          #       GetJobAdPageList，列表页 HTML 直出 xq?jobId= 锚点）→ 中芯国际 563 岗（社293/校248/海外22）。
@@ -387,6 +452,41 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 ⇒ 中国岗被当成非中国岗丢掉。大陆集团 29 个中国岗里 8 个（28%）就是这么丢的。
 全库 596 行含独立 `cn` 词的 active 岗逐行核过，现判定 100% 已是 CN ⇒ 加它零误伤。
 改这条要 `crawler/geo.py` 与 `lib/geo.js` **两边同改**（回归钉在 test_geo.py / geo.test.js）。
+
+### 🚫 中文地名不许用「含 省/市/区/县/自治州 → 中国」那条规则（2026-09-05 立）
+
+同一个词表还有一半是**中文地名**：旧表的中文标记只有「中国」+21 个一线城市 ——
+认得 `Changchun`，认不得「长春市」。live 实测 27.8 万个「中文地点 + 在招」的岗里 **8.3 万个
+`country_code` 为空**，它们的国内外归属**完全押在 `sources.regions` 一个字段上**
+（`derive_job_scope` 的「抽不出国家就问源」分支）。而海外扩展一直在放开源的 regions，
+某个源哪天被加上 US，它名下这批岗就**静默**翻成 overseas —— 不报错，只是国内供给少一块。
+
+⚠️ 修它时最诱人的写法是「地点含 省/市/区/县/自治州 → 中国」，实测能覆盖 84% 的缺口，
+**但它会把「新北市 / 大阪市 / 東京都 / 首尔市」一起判成中国**，直接踩台湾红线。
+✅ 正解 = `CHINA_CJK_PLACE_MARKERS` 显式列名（省级 34 + 地级市/自治州/地区/盟，352 条；
+**县区级不收**，「保定市-莲池区」靠上级前缀命中）+ `TAIWAN/JAPAN/KOREA_CJK_MARKERS` 配套兜底。
+上线后 89.4% 的缺口被认出（61,292 个在招岗），回填 104,158 行。
+
+**三条不许改坏的不变量**：
+1. **顺序是设计的一部分**：`TW` 在 `CN` **前**（「Taipei, Taiwan, Province of China」含 "china"，
+   排后面会被判成大陆放行）；`JP`/`KR` 在 `CN` **后**（「青岛市、日本、潍坊市」这类一岗多地写法
+   要保住 CN —— 不能因为多写一个国名就把中国岗翻成海外）。
+2. **选词按「宁可漏判、不可错杀」**：漏判一个台湾岗只是回到 `code=None`，非远程照样被
+   `location_in_scope` 丢掉（**无害**）；错判一个大陆岗是把在招岗**静默删掉**（有害）。
+   所以有重叠的一律只收「繁体裸名 + 简体带后缀名」：常州有**新北区** → TW 只收「新北市」；
+   福州有**连江县** → 只收繁体「連江」；日本**北海道**含「北海」→ CN 只收「北海市」；
+   「邢台南和区」含「台南」→ TW 只收「台南市」。韩国的「大田/光州/汉城」刻意不收
+   （福建有大田县、潢川古称光州、「武汉城市圈」含汉城）。
+3. **词表两端逐条一致**：`tests/geo.test.js` 会读 `crawler/geo.py` 抽四个词表做 deepEqual，
+   改一边不改另一边直接红（已做变异验证）。
+
+📌 **改词表的验收方法**（别只跑单测）：把全库 `select distinct location` 拉下来（约 2 万个写法），
+拿改前 / 改后两份 `derive_country_code` **逐条对拍**，「大中华 → 境外」这个方向**必须为 0**——
+那是唯一会让国内岗凭空消失的方向。
+⚠️ **回填期间只要有 crawl 在跑就会被刷回去**：`country_code`/`job_scope` 在 `_UPDATE_COLS` 里、
+不在 `_PRESERVE_IF_EMPTY` 里，列表重抓会用**当时 CI 上那版代码**覆盖。2026-09-05 实测：
+开跑前查了没有 workflow 在跑，回填完 3 分钟后 `campus-crawl` 起来，用旧代码把 11,613 行刷回 NULL。
+**正确顺序是「先推代码、再回填」**，或者回填后复查一遍。
 
 | Source | 状态 | 详情链接格式 |
 |---|---|---|
