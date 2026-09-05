@@ -78,7 +78,11 @@ class CcbAdapter(BaseAdapter):
                   "?planId={planId}&planPost={planPost}&planType={planType}"
                   "&orgId={orgId}&secondOrgId={secondOrgId}")
     PAGE_SIZE = 200
-    _DETAIL_CAP = 400
+    # 2026-09-05 实测约 65ms/次 → 3,799 个岗全量补约 4.1 分钟（本机口径，CI 跨境会更久）。
+    # ⚠️ **不能按 (planId, planPost) 去重来省请求**：同一个岗位类型在不同二级机构下的
+    # 岗位职责/要求是**不一样的**（实测同一 planPost 的北京/天津/石家庄三份正文各不相同），
+    # 去重就是给岗位挂错的 JD。真正的键是 secondOrgId，而它 3,799 行行行不同 → 省不掉。
+    _DETAIL_CAP = 4000
 
     _CHANNELS = (("XY", "校招"), ("SH", "社招"), ("SX", "实习"))
 

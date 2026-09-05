@@ -42,7 +42,10 @@ class SpdbAdapter(BaseAdapter):
     DETAIL_URL = "https://job.spdb.com.cn/jobDetail?jobId={job_id}&type={type_code}"
     PAGE_SIZE = 10          # 服务端硬定 10 条/页，pageSize 参数无效（2026-09-05 live 实测）
     MAX_PAGES = 200
-    _DETAIL_CAP = 250
+    # 正文只在详情页 → 不补正文的岗全是薄卡（进不了 count_valid_active_jobs）。
+    # 2026-09-05 实测本机约 65ms/次，633 个岗全量补也就 1 分钟内 → 直接覆盖全源。
+    # 快档 daily 仍用 CRAWL_DETAIL_CAP=0 跳过（resolve_detail_cap），只抓列表骨架。
+    _DETAIL_CAP = 800
 
     # 详情页正文夹在「返回列表」导航与页脚版权之间；两个锚点都是站点模板固定文案。
     _BODY_START = "返回列表"
