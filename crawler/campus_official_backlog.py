@@ -54,7 +54,8 @@ def drain_official_one(sb, company, now, all_rows=None, names=None):
     try:
         rows = all_rows if all_rows is not None else db.fetch_all_rows(
             lambda: sb.table("sources").select("company,source_url"))
-        source_rows = must_apply.sources_for(company, rows, names or must_apply.all_names())
+        source_rows = must_apply.sources_for(
+            company, rows, names or must_apply.owner_index("domestic"))
     except Exception as e:
         print(f"  [campus-official-err] {company} 查源失败: {type(e).__name__}: {str(e)[:120]}")
         return {"company": company, "skipped": "sources_error"}
@@ -152,7 +153,9 @@ def main():
         print(f"[campus_official_backlog] 目标 {len(targets)} 家（已覆盖 {len(covered)} 家跳过），workers={args.workers}")
         all_rows = db.fetch_all_rows(
             lambda: sb.table("sources").select("company,source_url"))
-        names = must_apply.all_names()
+        # owner_index 而不是 all_names：库里可能用英文名记着这家公司（大陆集团=Continental），
+        # 只按中文清单名判归属 = 有源也当没有，整家公司的校招接地白跑。
+        names = must_apply.owner_index("domestic")
         results = []
         with ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
             futs = {ex.submit(drain_official_one, sb, name, now, all_rows, names): name
