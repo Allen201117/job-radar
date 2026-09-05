@@ -42,6 +42,12 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 _RECRUIT_TYPES = ((99, "校招"), (100, "社招"))
 
 # 从已渲染的 React 组件里取 state 的公共前缀（React 16 是 __reactInternalInstance$，17+ 是 __reactFiber$）。
+# 两个页面各自的固定文案：只要页面真渲染完了，这段一定在。用它把「这家确实没在招」
+# 和「页面根本没渲染出来」区分开 —— 两者都表现为「0 个岗」，但一个正常、一个是漏抓。
+# ⚠️ 两页的文案不一样，别混用：列表页没有「在招岗位」四个字，拿它去判会把每一轮都误判成漏抓。
+_LIST_RENDERED_MARKER = "招聘机构"   # `#/{recruitType}` 列表页（社招当期没岗时也有这块）
+_ORG_RENDERED_MARKER = "在招岗位"    # `#/RecruitmentOrgDetails/...` 机构页
+
 _COLLECT_JS = """
 (stateKey) => {
   const seen = new Map();
@@ -85,7 +91,7 @@ class AbchinaAdapter(BaseAdapter):
         return None  # SPA 入口页，HEAD 预检没有意义
 
     @classmethod
-    def _collect(cls, page, state_key: str) -> list:
+    def _collect(cls, page, state_key: str, marker: str = None):
         """轮询到页面把带 state_key 的组件渲染出来，再把这些 state 取回来。
 
         ⚠️ 不能用 `wait_for_function` 一等了之：hash 路由是**同文档导航**，上一个机构的卡片
@@ -94,13 +100,42 @@ class AbchinaAdapter(BaseAdapter):
 
         ⚠️ 等待要给够：农银人寿 34 个岗实测 >8s 才渲染出来，只等 8s 会得到「0 个岗」这种
         看着正常、其实是漏抓的结果。等满 RENDER_TIMEOUT_MS 仍为空，才认「这家当期没在招」。
+
+        返回 `(找到的 state 列表, 页面是否确实渲染完了)`。第二个值是**诚实度开关**：
+        CI 比本机慢，2026-09-05 首轮线上就比本机少抓了 162 个岗（2,418 vs 2,580），
+        而当时 fetch_complete 还是 True —— 正是「没抓全却自称抓全」。有了它，
+        渲染没等到的机构会把 fetch_complete 打成 False，不再假装抓全。
         """
         deadline = time.monotonic() + cls.RENDER_TIMEOUT_MS / 1000.0
         while True:
             found = page.evaluate(_COLLECT_JS, state_key) or []
-            if found or time.monotonic() >= deadline:
-                return found
+            if found:
+                return found, True
+            if time.monotonic() >= deadline:
+                # 等到头还是 0 个 —— 是「这家真没在招」还是「页面压根没渲染出来」？
+                # 靠页面固定文案区分：marker 在 = 渲染完了、就是没岗（正常）；
+                # marker 不在 = 我们没等到 = **漏抓**，调用方据此把 fetch_complete 打成 False。
+                try:
+                    rendered = marker in page.inner_text("body") if marker else True
+                except Exception:
+                    rendered = False
+                return [], rendered
             page.wait_for_timeout(cls.POLL_INTERVAL_MS)
+
+    def _scan_org(self, page, recruit_type, org):
+        """打开一个机构页并取回岗位卡的 state。返回 (岗位列表, 页面是否确实渲染完了)。"""
+        org_id = _clean(org.get("orgId"))
+        try:
+            page.goto(self.ORG_URL.format(recruit_type=recruit_type, org_id=org_id),
+                      wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
+            # 只改 hash 是同文档导航，上一家的卡片会留在 DOM 里 → 必须真的重载。
+            page.reload(wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
+            return self._collect(page, "posCardInfo", _ORG_RENDERED_MARKER)
+        except Exception as exc:
+            # ⚠️ 单个机构页抖一下（实测撞到过 net::ERR_EMPTY_RESPONSE）不该炸掉整轮 ——
+            # 前面几十家已经抓到的岗会跟着一起丢，run.py 还会把整个源记成 failed。
+            print(f"[abchina] 机构 {org.get('orgName') or org_id} 打开失败：{type(exc).__name__}")
+            return [], False
 
     def fetch(self, source_url: str) -> str:
         from playwright.sync_api import sync_playwright
@@ -111,6 +146,9 @@ class AbchinaAdapter(BaseAdapter):
         rows: List[dict] = []
         seen_jobs = set()
         truncated = False
+        all_rendered = True
+        missed_orgs: List[str] = []
+        pending: List[tuple] = []   # 第一轮没渲染出来的机构，留给下面的重试轮
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -123,16 +161,18 @@ class AbchinaAdapter(BaseAdapter):
                 for recruit_type, job_type in _RECRUIT_TYPES:
                     page.goto(self.LIST_URL.format(recruit_type=recruit_type),
                               wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
-                    orgs = self._collect(page, "batchCardInfo")
+                    orgs, orgs_rendered = self._collect(page, "batchCardInfo", _LIST_RENDERED_MARKER)
+                    if not orgs_rendered:
+                        all_rendered = False
                     for org in orgs:
                         org_id = _clean(org.get("orgId"))
                         if not org_id:
                             continue
-                        page.goto(self.ORG_URL.format(recruit_type=recruit_type, org_id=org_id),
-                                  wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
-                        # 只改 hash 是同文档导航，上一家的卡片会留在 DOM 里 → 必须真的重载。
-                        page.reload(wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
-                        for pos in self._collect(page, "posCardInfo"):
+                        positions, rendered = self._scan_org(page, recruit_type, org)
+                        if not rendered:
+                            # 这家没等到渲染 —— 它有多少岗我们不知道，别当成 0，留给重试轮。
+                            pending.append((recruit_type, job_type, org))
+                        for pos in positions:
                             job_id = _clean(pos.get("jobPublishId"))
                             if not job_id or job_id in seen_jobs:
                                 continue
@@ -147,14 +187,41 @@ class AbchinaAdapter(BaseAdapter):
                             break
                     if truncated:
                         break
+
+                # ⚠️ 重试轮：这个站慢且不稳，同一轮里 9 个机构页等 25s 都没渲染出来是实测发生过的
+                # （线上首轮因此比本机少抓 162 个岗）。等所有机构走完再回头补一次 —— 那会儿
+                # 瞬时拥塞多半过去了，而且不会在原地反复空等。只补一次，不做无限重试。
+                for recruit_type, job_type, org in list(pending):
+                    if truncated:
+                        break
+                    positions, rendered = self._scan_org(page, recruit_type, org)
+                    if not rendered:
+                        all_rendered = False
+                        missed_orgs.append(_clean(org.get("orgName")) or _clean(org.get("orgId")))
+                        continue
+                    for pos in positions:
+                        job_id = _clean(pos.get("jobPublishId"))
+                        if not job_id or job_id in seen_jobs:
+                            continue
+                        if len(rows) >= cap:
+                            truncated = True
+                            break
+                        seen_jobs.add(job_id)
+                        pos["_job_type"] = job_type
+                        pos["_batch_name"] = _clean(org.get("batchName")) or None
+                        rows.append(pos)
             finally:
                 browser.close()
 
         if not rows:
             raise RuntimeError("abchina: no positions found on any org page")
+        if missed_orgs:
+            print(f"[abchina] {len(missed_orgs)} 个机构页没等到渲染（本轮不算抓全）："
+                  f"{'、'.join(missed_orgs[:8])}{' …' if len(missed_orgs) > 8 else ''}")
         self.reported_total = len(rows)
-        # 站点不自报总数（接口是密文），只能诚实记「看见的全部」；撞上限时不算抓全。
-        self.fetch_complete = not truncated
+        # 站点不自报总数（接口是密文），只能诚实记「看见的全部」。
+        # 撞上限、或有机构页没等到渲染 → 都不算抓全（后者是线上实测过的漏抓来源）。
+        self.fetch_complete = (not truncated) and all_rendered
         return json.dumps({"jobs": rows}, ensure_ascii=False)
 
     def parse(self, payload: str) -> List[RawJob]:

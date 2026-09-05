@@ -99,13 +99,17 @@ class BankcommAdapter(BaseAdapter):
                 total_sum += channel_total or 0
                 all_complete = all_complete and complete
                 for row in channel_rows:
-                    if isinstance(row, dict) and self._is_open(row, today):
+                    if isinstance(row, dict):
                         row["_job_type"] = job_type
                         row["_section"] = section
                         rows.append(row)
 
+            # ⚠️ 过期过滤必须在这里做、不能在上面边聚合边做：招聘窗口刚结束那几天所有岗都过期，
+            # 那样 rows 会是空的 → 下面 `if not rows` 抛 RuntimeError → 源被记 failed 并触发告警，
+            # 可接口其实工作得好好的。「没有在招岗」是正常状态，不是故障。
+            open_rows = [r for r in rows if self._is_open(r, today)]
             cap = resolve_detail_cap(self._DETAIL_CAP)
-            for row in rows[:cap] if cap else []:
+            for row in open_rows[:cap] if cap else []:
                 position_id = row.get("positionId")
                 if position_id in (None, ""):
                     continue
@@ -118,9 +122,11 @@ class BankcommAdapter(BaseAdapter):
                     continue
         if not rows:
             raise RuntimeError("bankcomm: querySocietyRecruitInfo returned no jobs")
-        self.reported_total = total_sum or None
+        # 分母用「还能投的岗数」而不是接口自报总数：过期岗是我们主动丢的，
+        # 拿含过期岗的总数当分母会让抓全率上永远挂着一个假缺口。
+        self.reported_total = len(open_rows)
         self.fetch_complete = all_complete
-        return json.dumps({"jobs": rows}, ensure_ascii=False)
+        return json.dumps({"jobs": open_rows}, ensure_ascii=False)
 
     @staticmethod
     def _summary_of(row: dict) -> Optional[str]:

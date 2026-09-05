@@ -155,7 +155,10 @@ class IcbcAdapter(BaseAdapter):
                     continue
         if not rows:
             raise RuntimeError("icbc: qryPostList returned no jobs")
-        self.reported_total = total_sum or None
+        # 分母用 len(open_rows) 而不是接口自报的 total_sum：官网把报名已截止的岗也列在列表里
+        # （实测社招 63 条里 15 条已截止），拿它当分母会让 crawl_runs 上永远挂着
+        # 「自报 2630、只入库 2615」这个**假缺口**——那 15 条是我们主动丢的，不是漏抓的。
+        self.reported_total = len(open_rows)
         self.fetch_complete = all_complete
         return json.dumps({"jobs": open_rows}, ensure_ascii=False)
 
