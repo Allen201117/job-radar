@@ -537,3 +537,31 @@ class DuplicatePortalTest(unittest.TestCase):
                   "source_url": "https://app.mokahr.com/campus-recruitment/geely/78436"},
             "2": {"company": "浙江吉利控股集团", "enabled": True, "adapter_name": "moka",
                   "source_url": "https://app.mokahr.com/social-recruitment/geely/96123"}}), [])
+
+    def test_wt_brand_identity_is_host_and_case_independent(self):
+        """wt 同一 brand 两种入口等价：live 实测 GWM 自有子域与共享 host 的 postId 120/120 重合。
+        brand 大小写不统一（BASF/CT/cifi/feihe），必须转小写才归得到一起。"""
+        from ops_watchdog import portal_identity
+        self.assertEqual(portal_identity("https://gwm.hotjob.cn/wt/GWM/web/index"),
+                         portal_identity("https://www.hotjob.cn/wt/gwm/web/index"))
+        self.assertEqual(portal_identity("https://www.hotjob.cn/wt/BASF/web/index"), "basf")
+
+    def test_wt_different_brands_not_grouped(self):
+        from ops_watchdog import evaluate_duplicate_portals
+        self.assertEqual(evaluate_duplicate_portals({
+            "1": {"company": "长城汽车", "enabled": True, "adapter_name": "wt",
+                  "source_url": "https://gwm.hotjob.cn/wt/GWM/web/index"},
+            "2": {"company": "中国电信", "enabled": True, "adapter_name": "wt",
+                  "source_url": "https://www.hotjob.cn/wt/CT/web/index"}}), [])
+
+    def test_wt_same_brand_two_entrances_is_flagged(self):
+        """防患用例：同一 brand 各插一条（自有子域 + 共享 host）必须报出来。
+        全库当前 39 brand / 39 源、0 组重复，这条是防它长回来。"""
+        from ops_watchdog import evaluate_duplicate_portals
+        out = evaluate_duplicate_portals({
+            "1": {"company": "长城汽车", "enabled": True, "adapter_name": "wt",
+                  "source_url": "https://gwm.hotjob.cn/wt/GWM/web/index"},
+            "2": {"company": "长城", "enabled": True, "adapter_name": "wt",
+                  "source_url": "https://www.hotjob.cn/wt/gwm/web/index"}})
+        self.assertEqual(len(out), 1)
+        self.assertTrue(any("gwm" in e for e in out[0]["evidence"]))
