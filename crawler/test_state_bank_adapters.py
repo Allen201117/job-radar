@@ -277,6 +277,53 @@ class AbchinaAdapterTest(unittest.TestCase):
         payload = {"jobs": [{"jobPublishId": 1}, {"posName": "无 id 岗"}, {}]}
         self.assertEqual(AbchinaAdapter().parse(json.dumps(payload)), [])
 
+    def test_collect_tells_empty_apart_from_not_rendered(self):
+        """「0 个岗」有两种：这家真没在招（正常）/ 页面没渲染出来（漏抓）。混成一种就会
+        「没抓全却自称抓全」—— 线上首轮正是这样比本机少了 162 个岗。"""
+
+        class FakePage:
+            def __init__(self, state, body):
+                self._state, self._body, self.waits = state, body, 0
+
+            def evaluate(self, _js, _key):
+                return self._state
+
+            def inner_text(self, _sel):
+                return self._body
+
+            def wait_for_timeout(self, _ms):
+                self.waits += 1
+
+        # ① 有卡片 → 立刻返回，且算渲染成功
+        found, rendered = AbchinaAdapter._collect(
+            FakePage([{"jobPublishId": 1}], "在招岗位"), "posCardInfo", "在招岗位")
+        self.assertEqual(len(found), 1)
+        self.assertTrue(rendered)
+
+        # ② 没卡片但页面渲染完了 → 这家真没在招，不该拖累 fetch_complete
+        AbchinaAdapter.RENDER_TIMEOUT_MS, saved = 0, AbchinaAdapter.RENDER_TIMEOUT_MS
+        try:
+            found, rendered = AbchinaAdapter._collect(
+                FakePage([], "机构公告 在招岗位 岗位类别"), "posCardInfo", "在招岗位")
+            self.assertEqual(found, [])
+            self.assertTrue(rendered)
+
+            # ③ 没卡片且连页面骨架都没出来 → 是漏抓，必须报 rendered=False
+            found, rendered = AbchinaAdapter._collect(
+                FakePage([], "人才招聘 个人中心"), "posCardInfo", "在招岗位")
+            self.assertEqual(found, [])
+            self.assertFalse(rendered)
+        finally:
+            AbchinaAdapter.RENDER_TIMEOUT_MS = saved
+
+    def test_missed_orgs_get_one_retry_and_then_break_fetch_complete(self):
+        src = (pathlib.Path(__file__).resolve().parent / "adapters" / "abchina.py").read_text(encoding="utf-8")
+        # 没渲染出来的机构先进 pending，走完所有机构后补一轮（那会儿瞬时拥塞多半过去了）
+        self.assertIn("pending.append((recruit_type, job_type, org))", src)
+        self.assertIn("for recruit_type, job_type, org in list(pending):", src)
+        # 重试还不行才认漏抓，并且**不许再自称抓全**
+        self.assertIn("self.fetch_complete = (not truncated) and all_rendered", src)
+
     def test_is_not_in_the_httpx_concurrency_lane(self):
         # 它要起 Playwright（响应体加密，明文只在浏览器里），进并发档会把 sync API 跑崩。
         import sys, pathlib as _p
