@@ -368,7 +368,7 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 官网 `jobs.continental.com` 每条岗位都带 `smartRecruitersId`+`client:continental`
 （**官网就是 SmartRecruiters 的皮，同一个池子**：POST `tx_conjobs_api[itemsPerPage]=100` 翻完
 8 页 736 条，`countryLabel=China` 也正好 29 条、REF 号逐个对得上）。
-补上 CN 即得（迁移 229），**不需要也不该新增源**（会变成迁移 225 壳牌那种影子源）。
+补上 CN 即得（迁移 230），**不需要也不该新增源**（会变成迁移 225 壳牌那种影子源）。
 
 ⚠️ **不是个案**：全库 1,333 个 enabled 源里 **50 个 regions 不含 CN**
 （workday 27 / greenhouse 9 / smartrecruiters 8 / ashby 4 / lever 1 / eightfold 1），

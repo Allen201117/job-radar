@@ -42,7 +42,7 @@ update must_apply_gap_attempts
        detected_platform = 'smartrecruiters',
        source_id = 'a3e25d62-b7c4-4252-9e3a-c39d4df39fa5'::uuid,
        fail_reason = '此前记的「无可用 adapter」是错的：adapter 与源一直都在，是 regions 缺 CN '
-                     || '把中国岗过滤掉了（迁移 229 已补）。此前记的官方入口是联想的招聘页，搜错了公司。',
+                     || '把中国岗过滤掉了（迁移 230 已补）。此前记的官方入口是联想的招聘页，搜错了公司。',
        evidence = evidence || jsonb_build_object(
          'manual_note_2026_09_05', jsonb_build_object(
            'root_cause', 'sources.regions missing CN, not a missing entry',
