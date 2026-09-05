@@ -13,6 +13,7 @@ import gap_funnel
 import jobs_db
 import must_apply
 import ops_runs
+import platform_fingerprint
 import probe
 
 
@@ -226,6 +227,26 @@ def make_thin_rescue(adapter, *, scraper=None):
     return rescue
 
 
+# 「站错了页」时最多跟几跳自家招聘子域。跟一跳只是一次 httpx 指纹（便宜），
+# 但每跳都可能触发一次浏览器复探（贵），所以设硬上限。
+_ENTRY_HOP_LIMIT = 2
+
+
+def _hop_candidates(probe_result, current_url, limit=_ENTRY_HOP_LIMIT):
+    """渲染后页面里抽到的招聘子域候选，去掉当前入口本身，保序去重。"""
+    seen = {str(current_url or "").rstrip("/")}
+    out = []
+    for hop in (probe_result or {}).get("hops") or []:
+        key = str(hop or "").rstrip("/")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(hop)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def process_browser_company(
     row,
     *,
@@ -236,34 +257,97 @@ def process_browser_company(
     prober=probe.probe_one,
     acceptance_gate=gap_funnel.run_acceptance_gate,
     jd_validator=validate_jd_url_browser,
+    fingerprinter=platform_fingerprint.fingerprint,
 ):
     """拦截探活后调用 P1/P2 共用的真抓验收门。"""
     now = now or datetime.now(timezone.utc)
     source_url = row.get("official_entry_url")
     adapter, source_url = resolve_browser_adapter(row, source_url)
-    candidate = {
-        "company": row["company"],
-        "adapter": adapter,
-        "url": source_url,
-        "industry": (row.get("industries") or [None])[0],
-    }
-    try:
-        probe_result = (
-            prober(candidate)
-            if source_url
-            else {"ok": False, "valid": 0, "reason": "缺少官方招聘入口"}
-        )
-    except Exception as exc:
-        probe_result = {
-            "ok": False,
-            "valid": 0,
-            "reason": "%s: %s" % (type(exc).__name__, str(exc)[:500]),
-        }
+
+    def _probe(url):
+        try:
+            return prober({
+                "company": row["company"],
+                "adapter": adapter,
+                "url": url,
+                "industry": (row.get("industries") or [None])[0],
+            })
+        except Exception as exc:
+            return {
+                "ok": False,
+                "valid": 0,
+                "reason": "%s: %s" % (type(exc).__name__, str(exc)[:500]),
+            }
+
+    probe_result = (
+        _probe(source_url)
+        if source_url
+        else {"ok": False, "valid": 0, "reason": "缺少官方招聘入口"}
+    )
+
+    def _probe_ok(result):
+        return bool(result.get("ok")) and int(result.get("valid") or 0) > 0
+
+    hop_trail = []
+    # 「页面正常但这一页没有岗位数据」= 站错了页，不是被反爬 → 跟一跳自家招聘子域。
+    # 候选是从**渲染后**的页面抽的：httpx 道（platform_fingerprint.fingerprint）只能救
+    # 「服务端渲染、原始 HTML 里就有链接」那半，空 SPA 壳那半只有渲染后才有链接。
     if (
-        not source_url
-        or not probe_result.get("ok")
-        or int(probe_result.get("valid") or 0) <= 0
+        source_url
+        and not _probe_ok(probe_result)
+        and probe_result.get("block_kind") == "no_job_data_on_entry"
     ):
+        for hop in _hop_candidates(probe_result, source_url):
+            try:
+                hop_fingerprint = fingerprinter(hop, company=row["company"])
+            except Exception as exc:
+                hop_trail.append({
+                    "url": hop,
+                    "error": "%s: %s" % (type(exc).__name__, str(exc)[:200]),
+                })
+                continue
+            step = {
+                "url": hop,
+                "platform": hop_fingerprint.get("platform"),
+                "adapter": hop_fingerprint.get("adapter"),
+                "reason": hop_fingerprint.get("reason"),
+            }
+            hop_trail.append(step)
+            if hop_fingerprint.get("adapter"):
+                # 跟过去认出了真平台 → 交回 P1 httpx 道（那边有完整路由 + 验收门），立即可重试。
+                # detected_platform 写真平台，这行就自动离开 P2 队列（它只收 unknown_spa）。
+                return {
+                    "state": "platform_known",
+                    "official_entry_url": hop,
+                    "detected_platform": hop_fingerprint.get("platform"),
+                    "next_retry_at": gap_funnel._iso(now),
+                    "fail_reason": (
+                        "no_job_data_on_entry：入口页没有岗位数据，已跟到 %s（%s）"
+                        % (hop, hop_fingerprint.get("platform"))
+                    ),
+                    "evidence": {
+                        "probe": probe_result,
+                        "entry_hops": hop_trail,
+                        "entry_hop_from": source_url,
+                    },
+                }
+            if hop_fingerprint.get("platform") in ("unknown", "unknown_spa"):
+                retried = _probe(hop)
+                step["probe"] = {
+                    key: retried.get(key)
+                    for key in ("ok", "valid", "reason", "block_kind")
+                    if retried.get(key) is not None
+                }
+                if _probe_ok(retried):
+                    source_url, probe_result = hop, retried
+                    break
+
+    if not source_url or not _probe_ok(probe_result):
+        # fail_reason 必须说清是哪一种失败。以前不论真假一律带出 adapter 的
+        # `anti_bot_blocked` 字样，21 家必投公司因此被当成「被反爬」排查（实为站错了页）。
+        evidence = {"probe": probe_result, "manual_review": True}
+        if hop_trail:
+            evidence["entry_hops"] = hop_trail
         return {
             "state": "no_stable_jd",
             "official_entry_url": source_url,
@@ -272,10 +356,7 @@ def process_browser_company(
                 now, gap_funnel._NO_STABLE_JD_RETRY_DAYS, row.get("company")
             ),
             "fail_reason": probe_result.get("reason") or "浏览器拦截未拿到真实逐岗 URL",
-            "evidence": {
-                "probe": probe_result,
-                "manual_review": True,
-            },
+            "evidence": evidence,
         }
 
     result = acceptance_gate(
@@ -297,6 +378,7 @@ def process_browser_company(
         "evidence": {
             **result.get("evidence", {}),
             "probe": probe_result,
+            **({"entry_hops": hop_trail} if hop_trail else {}),
         },
     })
     if not apply:

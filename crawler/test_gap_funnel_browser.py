@@ -11,8 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gap_funnel
 import gap_funnel_browser as browser
 import normalizer
+import probe
 from adapters.base import RawJob
 from adapters.china_ats import CompanySpaAdapter
+from adapters.playwright_base import InterceptFailure
 
 
 NOW = datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc)
@@ -131,6 +133,154 @@ class BrowserCompanyTest(unittest.TestCase):
         self.assertEqual(gate_calls, [])
         self.assertTrue(result["evidence"]["manual_review"])
 
+    def test_no_job_data_on_entry_is_not_reported_as_anti_bot(self):
+        """入口页正常、只是这一页没有岗位数据 —— 台账必须如实写，不许沿用 anti_bot 字样。
+
+        2026-09-04 台账里 21 家必投公司的 fail_reason 是
+        `company_spa: anti_bot_blocked — 未拦截到任何岗位接口 JSON`，逐个核查后无一被反爬：
+        漏斗停在「公司官网的招聘介绍页」上，那种页面本来就没有岗位数据。
+        标签骗人的代价是排查方向整个错掉（巴斯夫、壳牌各空撞 30 次去研究怎么绕反爬）。
+        """
+        result = browser.process_browser_company(
+            _row(),
+            supabase=object(),
+            jobs_conn=object(),
+            apply=True,
+            now=NOW,
+            prober=lambda _c: {
+                "ok": False,
+                "valid": 0,
+                "block_kind": "no_job_data_on_entry",
+                "reason": "InterceptFailure: company_spa: no_job_data_on_entry — 入口页正常打开",
+            },
+            acceptance_gate=lambda *a, **k: self.fail("不该跑验收门"),
+            fingerprinter=lambda *a, **k: self.fail("没有候选就不该跟跳"),
+        )
+        self.assertEqual(result["state"], "no_stable_jd")
+        self.assertIn("no_job_data_on_entry", result["fail_reason"])
+        self.assertNotIn("anti_bot", result["fail_reason"])
+
+    def test_follows_rendered_careers_hop_and_hands_a_known_ats_back_to_p1(self):
+        """跟到的下一跳认出真平台 → 交回 P1 httpx 道，且立即可重试（不按失败退避压 45 天）。"""
+        seen = []
+
+        def fingerprinter(url, company=None):
+            seen.append((url, company))
+            return {
+                "platform": "feishu",
+                "adapter": "feishu",
+                "source_url": "https://tenant.jobs.feishu.cn/index/position",
+                "reason": "host_or_html_fingerprint",
+            }
+
+        result = browser.process_browser_company(
+            _row(),
+            supabase=object(),
+            jobs_conn=object(),
+            apply=True,
+            now=NOW,
+            prober=lambda _c: {
+                "ok": False,
+                "valid": 0,
+                "block_kind": "no_job_data_on_entry",
+                "hops": ["https://jobs.example.com/"],
+                "reason": "InterceptFailure: company_spa: no_job_data_on_entry",
+            },
+            acceptance_gate=lambda *a, **k: self.fail("认出平台后应交回 P1，不在 P2 抓"),
+            fingerprinter=fingerprinter,
+        )
+        self.assertEqual(seen, [("https://jobs.example.com/", "甲公司")])
+        self.assertEqual(result["state"], "platform_known")
+        self.assertEqual(result["official_entry_url"], "https://jobs.example.com/")
+        # detected_platform 写真平台 → 这行自动离开只收 unknown_spa 的 P2 队列
+        self.assertEqual(result["detected_platform"], "feishu")
+        self.assertEqual(result["next_retry_at"], gap_funnel._iso(NOW))
+        self.assertEqual(
+            [step["url"] for step in result["evidence"]["entry_hops"]],
+            ["https://jobs.example.com/"],
+        )
+
+    def test_reprobes_unknown_spa_hop_and_accepts_it_as_the_real_entry(self):
+        """下一跳仍认不出平台，但浏览器在那儿真拿到了岗位 → 用它当入口继续走验收门。"""
+        gate_calls = []
+
+        def prober(candidate):
+            if candidate["url"] == "https://careers.example.com/":
+                return {"ok": True, "valid": 12}
+            return {
+                "ok": False,
+                "valid": 0,
+                "block_kind": "no_job_data_on_entry",
+                "hops": ["https://careers.example.com/"],
+                "reason": "InterceptFailure: company_spa: no_job_data_on_entry",
+            }
+
+        def gate(entry, **kwargs):
+            gate_calls.append(kwargs)
+            return {"state": "healthy", "kept_source": True, "source_id": "s1",
+                    "next_retry_at": None, "evidence": {}}
+
+        result = browser.process_browser_company(
+            _row(),
+            supabase="sb",
+            jobs_conn="conn",
+            apply=True,
+            now=NOW,
+            prober=prober,
+            acceptance_gate=gate,
+            fingerprinter=lambda *a, **k: {
+                "platform": "unknown_spa", "adapter": None, "reason": "unknown_spa",
+            },
+        )
+        self.assertEqual(result["state"], "healthy")
+        self.assertEqual(gate_calls[0]["source_url"], "https://careers.example.com/")
+        self.assertEqual(result["official_entry_url"], "https://careers.example.com/")
+
+    def test_hop_following_is_capped_and_skips_the_current_entry(self):
+        tried = []
+        result = browser.process_browser_company(
+            _row(),
+            supabase=object(),
+            jobs_conn=object(),
+            apply=True,
+            now=NOW,
+            prober=lambda _c: {
+                "ok": False,
+                "valid": 0,
+                "block_kind": "no_job_data_on_entry",
+                # 第一项就是当前入口本身，不该被当成「下一跳」白跑一次
+                "hops": ["https://jobs.example.com/甲公司",
+                         "https://a.example.com/", "https://b.example.com/",
+                         "https://c.example.com/"],
+                "reason": "no_job_data_on_entry",
+            },
+            acceptance_gate=lambda *a, **k: self.fail("不该跑验收门"),
+            fingerprinter=lambda url, company=None: tried.append(url) or {
+                "platform": "wrong_platform_x", "adapter": None, "reason": "unrecognized",
+            },
+        )
+        self.assertEqual(tried, ["https://a.example.com/", "https://b.example.com/"])
+        self.assertEqual(result["state"], "no_stable_jd")
+
+    def test_anti_bot_probe_result_does_not_trigger_hop_following(self):
+        """真被拒的不跟跳：那不是「站错了页」，跟跳只是白烧一轮浏览器。"""
+        result = browser.process_browser_company(
+            _row(),
+            supabase=object(),
+            jobs_conn=object(),
+            apply=True,
+            now=NOW,
+            prober=lambda _c: {
+                "ok": False, "valid": 0, "block_kind": "anti_bot",
+                "hops": ["https://jobs.example.com/x"],
+                "reason": "InterceptFailure: company_spa: anti_bot_blocked — 对方拒绝访问（HTTP 403）",
+            },
+            acceptance_gate=lambda *a, **k: self.fail("不该跑验收门"),
+            fingerprinter=lambda *a, **k: self.fail("被拒时不该跟跳"),
+        )
+        self.assertEqual(result["state"], "no_stable_jd")
+        self.assertIn("anti_bot_blocked", result["fail_reason"])
+
     def test_browser_lane_calls_the_shared_acceptance_gate(self):
         gate_calls = []
 
@@ -216,6 +366,41 @@ class BrowserCompanyTest(unittest.TestCase):
         self.assertEqual(result["metrics"]["processed"], 1)
         write_attempt.assert_not_called()
         record_ops.assert_not_called()
+
+
+class ProbeBlockKindPassthroughTest(unittest.TestCase):
+    """adapter 判过的因必须原样传到调用方；让调用方对着 reason 字符串猜就是老毛病的来源。"""
+
+    def _probe_with(self, error):
+        class _Boom:
+            def fetch(self, _url):
+                raise error
+
+            def parse(self, _html):  # pragma: no cover - fetch 先抛
+                return []
+
+        with mock.patch.dict(probe.ADAPTERS, {"company_spa": _Boom()}, clear=False):
+            return probe.probe_one({
+                "company": "甲公司",
+                "adapter": "company_spa",
+                "url": "https://www.acme.com/careers",
+            })
+
+    def test_surfaces_kind_and_hops(self):
+        result = self._probe_with(InterceptFailure(
+            "company_spa: no_job_data_on_entry — 入口页正常打开",
+            block_kind="no_job_data_on_entry",
+            hops=["https://jobs.acme.com/"],
+        ))
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["block_kind"], "no_job_data_on_entry")
+        self.assertEqual(result["hops"], ["https://jobs.acme.com/"])
+
+    def test_plain_errors_keep_the_old_shape(self):
+        result = self._probe_with(RuntimeError("boom"))
+        self.assertNotIn("block_kind", result)
+        self.assertNotIn("hops", result)
+        self.assertEqual(result["reason"], "RuntimeError: boom")
 
 
 class ResolveBrowserAdapterTest(unittest.TestCase):

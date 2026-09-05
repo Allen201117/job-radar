@@ -357,6 +357,13 @@ def _classify_exc(exc) -> tuple:
         dns = any(m in low for m in ("getaddrinfo", "name or service", "nodename", "name resolution"))
         return ("dns" if dns else "network"), "blocked", f"{name}: {msg[:160]}"
 
+    # adapter 已经判过「不是被拒、只是这一页没有岗位数据」→ 是我们站错了页，不许算反爬。
+    # 混进 antibot 桶会把排查方向带去「怎么绕反爬」（21 家必投公司踩过，见 playwright_base）。
+    if "no_job_data_on_entry" in low:
+        return "no_job_data", "fail", f"{name}: {msg[:160]}"
+    if "entry_unreachable" in low:
+        return "network", "blocked", f"{name}: {msg[:160]}"
+
     # adapter 主动报「被拦截」（RuntimeError blocked / anti_bot）→ 反爬，blocked
     if "blocked" in low or "anti_bot" in low or "访问受限" in msg or "请求过于频繁" in msg:
         return "antibot", "blocked", f"{name}: {msg[:160]}"

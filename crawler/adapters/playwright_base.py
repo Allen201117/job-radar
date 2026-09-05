@@ -11,6 +11,8 @@ playwright 仅在 fetch() 内惰性导入——未跑 fetch 的单元测试无�
 import json
 from typing import List, Optional
 
+import platform_fingerprint
+
 from .base import BaseAdapter, RawJob
 
 _UA = (
@@ -42,6 +44,37 @@ def _deep_find_job_list(obj, depth: int = 0) -> list:
             if len(cand) > len(best):
                 best = cand
     return best
+
+
+def _nav_evidence(records):
+    """导航证据只留判因需要的字段——**整页 HTML 绝不进台账**（体积 + 噪音）。"""
+    return [
+        {
+            key: record.get(key)
+            for key in ("url", "final_url", "status", "error")
+            if record.get(key) is not None
+        }
+        for record in (records or [])[:4]
+    ]
+
+
+class InterceptFailure(RuntimeError):
+    """浏览器道一个岗位接口都没拦到 —— 把**为什么**带出去，别让调用方对着字符串猜。
+
+    block_kind：
+      · ``anti_bot``              对方真的拒了我们（403/412/503，或 WAF/验证码厂商的挑战页）
+      · ``no_job_data_on_entry``  页面正常打开，但这一页就是没有岗位数据（多半站错了页）
+      · ``entry_unreachable``     页面压根没打开（导航全部失败）
+
+    ``hops`` 只在 no_job_data_on_entry 时有值：从**渲染后**的页面里抽出的自家招聘子域候选，
+    供 gap_funnel_browser 跟下一跳（httpx 道靠原始 HTML 抽不到 SPA 壳里的链接，这半只能在这里做）。
+    """
+
+    def __init__(self, message, *, block_kind, hops=(), evidence=None):
+        super().__init__(message)
+        self.block_kind = block_kind
+        self.hops = list(hops or ())
+        self.evidence = dict(evidence or {})
 
 
 class PlaywrightAdapter(BaseAdapter):
@@ -97,22 +130,87 @@ class PlaywrightAdapter(BaseAdapter):
             page.on("response", on_response)
 
             urls = self.list_urls or [source_url]
+            navigations = []
             for u in urls:
+                record = {"url": u}
                 try:
-                    page.goto(u, wait_until="domcontentloaded", timeout=self.pw_timeout)
+                    response = page.goto(
+                        u, wait_until="domcontentloaded", timeout=self.pw_timeout
+                    )
+                    record["status"] = (
+                        int(getattr(response, "status", 0) or 0) if response else None
+                    )
                     self._await_list_capture(page, collected, matchers)
                     self._paginate(page)
-                except Exception:
-                    continue
+                except Exception as exc:
+                    record["error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
+                # 只有「一个岗位接口都没拦到」时才多花一次 content()/url 去取判因证据，
+                # 正常路径零额外开销。
+                if not collected:
+                    try:
+                        record["final_url"] = page.url
+                        record["html"] = page.content()
+                    except Exception:
+                        pass
+                navigations.append(record)
             browser.close()
 
         if not collected:
-            # 一条接口都没拦到 → 多半被反爬识别或站点改版；交给 run.py 记为 partial（不伪装成功）
-            raise RuntimeError(
-                f"{self.name}: anti_bot_blocked — 未拦截到任何岗位接口 JSON 响应 "
-                f"(matchers={matchers or 'ALL_JSON'})"
-            )
+            raise self.classify_empty_capture(navigations, matchers)
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
+
+    @classmethod
+    def classify_empty_capture(cls, navigations, matchers=()):
+        """一个岗位接口都没拦到 —— 判因并返回待抛的 InterceptFailure（纯函数，可单测）。
+
+        ⚠️ 这里以前**一律**记 `anti_bot_blocked`。那是把我们自己的判断失误说成对方的行为：
+        2026-09-04 台账里 21 家必投公司因此被标「被反爬」，逐个核查后无一被拒——
+        漏斗只是停在「公司官网的招聘介绍页」上，而那种页面本来就没有岗位数据
+        （巴斯夫、壳牌各空撞 30 次，排查方向被带去研究怎么绕反爬）。
+        2026-09-05 复测其中 8 家入口：全部 HTTP 200、零拦截信号。
+        判「是否真被拒」的唯一判据在 platform_fingerprint.detect_block_signal，两道共用。
+        """
+        records = list(navigations or [])
+        opened = [
+            record for record in records
+            if record.get("status") is not None or record.get("html")
+        ]
+        matcher_text = "matchers=%s" % (tuple(matchers) if matchers else "ALL_JSON")
+        if not opened:
+            errors = "; ".join(
+                str(record.get("error") or "no_response") for record in records[:3]
+            ) or "no_navigation"
+            return InterceptFailure(
+                f"{cls.name}: entry_unreachable — 入口页没能打开（{errors}）",
+                block_kind="entry_unreachable",
+                evidence={"navigations": _nav_evidence(records)},
+            )
+        for record in opened:
+            if platform_fingerprint.detect_block_signal(
+                record.get("status"), record.get("html") or ""
+            ):
+                return InterceptFailure(
+                    f"{cls.name}: anti_bot_blocked — 对方拒绝访问"
+                    f"（HTTP {record.get('status')}），未拦截到任何岗位接口 JSON "
+                    f"({matcher_text})",
+                    block_kind="anti_bot",
+                    evidence={"navigations": _nav_evidence(records)},
+                )
+        hops = []
+        for record in opened:
+            for hop in platform_fingerprint.find_careers_subdomain_hops(
+                record.get("html") or "", record.get("final_url") or record.get("url")
+            ):
+                if hop not in hops:
+                    hops.append(hop)
+        return InterceptFailure(
+            f"{cls.name}: no_job_data_on_entry — 入口页正常打开"
+            f"（HTTP {opened[0].get('status')}）但这一页没有岗位数据，很可能站错了页；"
+            f"自家招聘子域候选 {len(hops)} 个 ({matcher_text})",
+            block_kind="no_job_data_on_entry",
+            hops=hops,
+            evidence={"navigations": _nav_evidence(records)},
+        )
 
     def _await_list_capture(self, page, collected, matchers) -> None:
         """智能等待岗位接口响应：命中拦截（collected 增长）后再静默 quiet_after_capture_ms（兜住紧随的

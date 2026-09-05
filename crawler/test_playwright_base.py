@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from adapters.playwright_base import PlaywrightAdapter
+from adapters.playwright_base import InterceptFailure, PlaywrightAdapter
 
 
 class _FakePage:
@@ -69,6 +69,66 @@ class AwaitListCaptureTests(unittest.TestCase):
         # 第二波(900)重置静默 → 至少等到 900+900=1800，证明没在 300+900=1200 处误提前返回
         self.assertGreaterEqual(page.elapsed, 1800)
         self.assertLess(page.elapsed, a.wait_ms)  # 且第二波后静默够久即返回，没死等到 wait_ms 上限
+
+
+class ClassifyEmptyCaptureTests(unittest.TestCase):
+    """一个岗位接口都没拦到，到底是被拒、站错了页、还是页面压根没打开。
+
+    这里以前**一律**记 anti_bot_blocked。2026-09-04 台账里 21 家必投公司因此被标「被反爬」，
+    逐个核查后无一被拒 —— 漏斗只是停在「公司官网的招聘介绍页」上，那种页面本来就没有岗位数据
+    （巴斯夫、壳牌各空撞 30 次，排查方向被带去研究怎么绕反爬）。
+    """
+
+    def test_normal_page_without_job_json_is_not_anti_bot(self):
+        error = PlaywrightAdapter.classify_empty_capture([{
+            "url": "https://www.acme.com/careers",
+            "status": 200,
+            "final_url": "https://www.acme.com/careers",
+            "html": "<title>Acme 招聘</title><h1>加入我们</h1><p>人才理念介绍</p>",
+        }])
+        self.assertIsInstance(error, InterceptFailure)
+        self.assertEqual(error.block_kind, "no_job_data_on_entry")
+        self.assertNotIn("anti_bot", str(error))
+        self.assertEqual(error.hops, [])
+
+    def test_carries_rendered_careers_subdomain_hops(self):
+        """候选必须从**渲染后**的页面抽——空 SPA 壳那半，httpx 道的原始 HTML 里根本没有链接。"""
+        error = PlaywrightAdapter.classify_empty_capture([{
+            "url": "https://www.zhangyue.com/careers",
+            "status": 200,
+            "final_url": "https://www.zhangyue.com/careers",
+            "html": '<h1>招聘</h1><a href="https://jobs.zhangyue.com/list">社会招聘</a>',
+        }])
+        self.assertEqual(error.block_kind, "no_job_data_on_entry")
+        self.assertEqual(error.hops, ["https://jobs.zhangyue.com/"])
+
+    def test_真被拒的仍然记_anti_bot(self):
+        for status, html in (
+            (403, "<html></html>"),
+            (200, "<title>Access Denied</title><p>You don't have permission to access it.</p>"),
+        ):
+            error = PlaywrightAdapter.classify_empty_capture([
+                {"url": "https://blocked.example/jobs", "status": status, "html": html}
+            ])
+            self.assertEqual(error.block_kind, "anti_bot")
+            self.assertIn("anti_bot_blocked", str(error))
+
+    def test_navigation_failure_is_unreachable_not_anti_bot(self):
+        error = PlaywrightAdapter.classify_empty_capture([
+            {"url": "https://down.example/jobs", "error": "TimeoutError: navigation"}
+        ])
+        self.assertEqual(error.block_kind, "entry_unreachable")
+
+    def test_evidence_never_carries_page_html(self):
+        error = PlaywrightAdapter.classify_empty_capture([{
+            "url": "https://www.acme.com/careers",
+            "status": 200,
+            "final_url": "https://www.acme.com/careers",
+            "html": "<html>" + ("x" * 50000) + "</html>",
+        }])
+        serialized = repr(error.evidence)
+        self.assertNotIn("xxxx", serialized)
+        self.assertIn("https://www.acme.com/careers", serialized)
 
 
 if __name__ == "__main__":
