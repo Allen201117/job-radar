@@ -288,7 +288,7 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       （HEAD 又是 200，should_skip 拦不住）→ 覆写 user_agent + 空 body 当失败抛；
                          #       ② 工行/中国移动对 **HEAD 恒返 403**（换浏览器 UA 也一样，GET/POST 全正常）→
                          #       不覆写 should_skip 就整源被跳过。**接新源必须逐个跑一遍 adapter.should_skip(url)**。
-                         #   abchina 农业银行 = **唯一走浏览器的一家**（校招 2,580 岗 / 93 秒，46 个机构）。
+                         #   abchina 农业银行 = **唯一走浏览器的一家**（校招 2,603 岗 / 列表 346 秒，46 个机构；2026-09-05 实测）。
                          #     它不是「没有逐岗详情页」，是**接口响应体加密**：new/getInfo 明文发一把 1024 位 RSA
                          #     公钥做密钥交换，之后 org/* 与 orgPosition/* 的响应体是 hex 密文（页面用 SM4-ECB 解），
                          #     明文只存在于浏览器内存 → 只能 Playwright 读页面渲染好的 React state，不拦接口不解密。
@@ -298,7 +298,24 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     ⚠️ hash 路由是**同文档导航**，换机构必须 `page.reload()`——不然上一家的卡片还在 DOM 里，
                          #       会把上一家的岗位当成这一家的（第一版就是这么只抓到 2 个岗、还自称抓全了）。
                          #     ⚠️ 渲染慢且不均：农银人寿 34 个岗要 >8s 才出来，等太短会得到「0 个岗」这种
-                         #       看着正常其实是漏抓的结果 → 轮询到 25s 仍为空才认「这家当期没在招」。
+                         #       看着正常其实是漏抓的结果 → 轮询到 25s 仍为空**也不能**直接认「这家当期没在招」。
+                         #       ⚠️ **纠错（2026-09-05 实测）：原来写的「等满 25s 仍为空 = 这家没在招」是错的。**
+                         #       这个站会间歇性地把整页渲染成**完全空白**（document.body.innerText 长度为 0），
+                         #       等多久都不会出卡片，reload 一次就好。一轮 45 家里撞上 9 次，其中 6 家重试后
+                         #       拿到了真岗位（34/129/91/189/20/16 = 479 个岗）——原实现把这些**静默丢掉**，
+                         #       且 fetch_complete 照样是 True。同 CLAUDE.md「接口返 0 不能证明对方没开」那条碑。
+                         #       ✅ 判据要分两种：**整页空白**（body 空）→ 重试；**渲染了但没有卡片**（有导航栏
+                         #       文案）→ 这家真的没在招，别重试（重试要在每家身上白等一整个 25s）。
+                         #     ⚠️ 它也会间歇性掐连接（net::ERR_EMPTY_RESPONSE，同一轮里撞到 1 次）。一家机构
+                         #       打不开就 raise = 把整源 2,600 个岗全扔掉（同 sf_express「末页少 2 条丢 2,164 岗」）。
+                         #       正解 = 记 fetch_complete=False，把已经拿到的交出去。
+                         #     ⚠️ **列表卡里一个字正文都没有**（posCardInfo 只有岗位名/地点/人数/截止）→ 不补正文
+                         #       就是 100% 薄卡、进不了 count_valid_active_jobs，这家在必投健康覆盖里恒为 0
+                         #       （2026-09-05 实测线上 2,418 个岗**全部** summary 为 NULL）。正文在逐岗详情页的
+                         #       state.posDetails：responsibilities / qualifications / requirements 三段。
+                         #       ⚠️ 不要收 posDetails.phone（HR 联系方式，同 gree 忽略 PubName）。
+                         #       逐岗约 0.7s，受 _DETAIL_CAP + 墙钟预算双闸，起点按天轮转（预算用完就停的话，
+                         #       恒从第 0 个开始会让尾部的岗永远补不到；summary 在 upsert 里空值不覆盖，故能累积）。
                          #     ⚠️ jd_url 里的冒号是**字面量**：`#/PositionDetails/:{jobPublishId}`（前端拼串时把
                          #       路由占位符一起拼进去了），删掉它详情页打不开。详情走 window.open，点一下像没反应。
                          #     诚实边界：社招靠「热招事项」卡枚举机构，当前站点自报「暂无热招事项」故为 0；
