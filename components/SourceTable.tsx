@@ -11,7 +11,23 @@ const RUN_STATUS_LABEL: Record<string, string> = {
   success: "抓到了",
   partial_success: "只抓到一部分",
   failed: "抓失败",
+  skipped: "按规则跳过",
 };
+
+// crawl_runs 的 running 是「已开跑未收尾」的占位符（迁移 234）。同一个值有两种含义，
+// 差别只在时间：刚开跑 = 真的在抓；过了宽限期还是它 = 那轮进程死了，这个源就地失踪。
+// 宽限期与 crawler/ops_watchdog.UNFINISHED_GRACE_MINUTES 同口径（近 30 天最长一轮 27 分钟）。
+const RUN_UNFINISHED_GRACE_MS = 90 * 60 * 1000;
+
+function runStatusLabel(run: CrawlRun): string {
+  if (run.status === "running") {
+    const startedAt = run.started_at ? new Date(run.started_at).getTime() : NaN;
+    return Number.isFinite(startedAt) && Date.now() - startedAt < RUN_UNFINISHED_GRACE_MS
+      ? "正在抓"
+      : "跑到一半没收尾";
+  }
+  return (run.status && RUN_STATUS_LABEL[run.status]) || run.status || "—";
+}
 
 export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: number }) {
   const [sources, setSources] = useState<Source[]>([]);
@@ -152,7 +168,7 @@ export default function SourceTable({ reloadSignal = 0 }: { reloadSignal?: numbe
                             : "bg-[#f3d9d2] text-tone-rose-fg dark:bg-[#3a201a]"
                       }`}
                     >
-                      {(run.status && RUN_STATUS_LABEL[run.status]) || run.status || "—"}
+                      {runStatusLabel(run)}
                       {run.jobs_found > 0 && `(${run.jobs_found})`}
                     </span>
                   ) : (

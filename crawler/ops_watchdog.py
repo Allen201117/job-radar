@@ -8,7 +8,7 @@
   · 29 个 workflow 零告警出口，谁都不会主动叫。
 所以判据只问「跑没跑」不够，必须问「产出了什么」，而且必须有一个会主动叫的出口。
 
-五条规则（方案见 docs/superpowers/specs/2026-08-27-observability-and-ux-plan.md §2.2）：
+九条规则（A-E 方案见 docs/superpowers/specs/2026-08-27-observability-and-ux-plan.md §2.2）：
   A 连续零产出：某模块连续 N 天（默认 2）**有处理量却零产出**，或当天所有 run 全失败。
     ⚠️ 空队列（处理量=0）产出 0 是正常的，一律不告——否则天天喊狼来了，等于没有告警。
   B 被中途杀掉：**按 job 级判**（run 级会骗人）——① job cancelled 且时长 ≥ 声明 timeout 的 95%
@@ -16,6 +16,13 @@
   C 台账不回写：discovery_runs 里 queued 超过 6 小时的行。
   D 账户级错误：401/402/403，或 429 且正文含 quota/insufficient——欠费返 **402**，只认 401/403 会漏。
   E 关键任务超期未跑：cron 声明周期 ×2（下限 24h，容忍 GitHub 偶尔丢触发）仍无运行记录。
+  F 源连续失败：某个 enabled 源近 N 天跑了 ≥8 轮且**全部** failed。
+  G 源抓不全：官网自报 N 个岗、我们只入库远少于 N 个（status 全 success，唯一痕迹是 coverage_complete=false）。
+  H 重复源：同一个 ATS 门户被登记成多个源，同一批岗位在库里存了多份（两边都 success）。
+  I 抓取记录没收尾：crawl_runs 停在占位符 running —— 开跑了却没留下任何结论。
+    ⚠️ 它和 B 是两个视角：B 问「workflow 有没有被杀」，I 问「有没有源就地失踪」。
+    CI 全绿照样会掉源（2026-09-04 enrichment-crawl 六片全 success，7 个 workday 源无下文），
+    所以只靠 B 看不见这类损失。
 
 出口 = 本仓库 GitHub Issue。防刷屏：每类告警标题固定，已有同标题的 open issue 就**追评论、不新开**。
 默认 dry-run（只打印会开什么 issue，零写入）；--apply / OPS_WATCHDOG_APPLY=true 才真开。
@@ -43,6 +50,8 @@ RULE_TITLES = {
     "E": "关键任务超期未跑",
     "F": "源连续失败",
     "G": "源抓不全",
+    "H": "重复源",
+    "I": "抓取记录没收尾",
 }
 
 # ── 规则 A：每个模块的「产出口径」与「处理量口径」────────────────────────────
@@ -103,6 +112,14 @@ OVERDUE_FLOOR_MIN = 1440
 COVERAGE_RATIO_FLOOR = 0.9
 COVERAGE_MIN_GAP = 200      # 单源少抓这么多才值得开口（约等于「一个源整整少了 4 页」）
 COVERAGE_TOTAL_GAP = 2000   # 全站累计缺口低于这个数就先不吵（正常抖动区间）
+
+# 规则 I：抓取记录没收尾（crawl_runs.status 停在占位符 running）。
+# 宽限期取 90min：近 30 天最长的一轮 27m16s、p99.9=6m38s、超过 30min 的 0 轮（2026-09-05 实测），
+# 3 倍余量足够，且远短于最长的 job timeout（enrichment 180min）——不会把正在飞的轮次冤枉成事故。
+UNFINISHED_GRACE_MINUTES = 90
+# 窗口内累计到这个数才开 issue。实测 5 天滚动基线 0-5 条（长尾偶发，单条不值得开 issue），
+# 2026-09-04 那次真事故是 13 条 —— 8 把两者分得干净。低于门槛仍会打印，不会没人知道。
+UNFINISHED_MIN_TOTAL = 8
 
 
 # ══════════════════ 纯函数层（可单测、不打网络）══════════════════
@@ -550,6 +567,84 @@ def _host_of(url: str) -> str:
     return m.group(1) if m else "?"
 
 
+def summarize_unfinished_runs(crawl_rows, sources_by_id, now=None,
+                              grace_minutes=UNFINISHED_GRACE_MINUTES):
+    """挑出「开跑了却没收尾」的抓取记录，按天 / 按 adapter 归档。纯函数，规则 I 与日志共用。
+
+    两条判据缺一不可：
+      · status == 'running'：占位符从没被 update_crawl_run 覆盖过（迁移 234 起 running 专指这个）。
+      · started_at 早于 now - grace：**少了这条就会把此刻正在飞的轮次当成事故**——2026-09-05
+        当场看到的 10 条空记录（华为 / 字节跳动 / 伊利…）1~3 分钟后全部 success 收尾了。
+
+    ⚠️ 这里**不按 sources.enabled 过滤**（与规则 F/G 相反）：F/G 的主语是「这个源坏了」，
+    而这条的主语是「跑抓取的那个进程死了」——源停用与否不改变这个事实，滤掉只会把证据变少。
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=grace_minutes)
+    by_day, by_adapter, items = Counter(), Counter(), []
+    for row in crawl_rows or []:
+        if (row.get("status") or "") != "running":
+            continue
+        started = _as_dt(row.get("started_at"))
+        if started is None or started >= cutoff:
+            continue                      # 还在宽限期内 = 可能正在飞，不算
+        source = sources_by_id.get(row.get("source_id")) or {}
+        adapter = source.get("adapter_name") or "unknown"
+        by_day[started.astimezone(SHANGHAI).date().isoformat()] += 1
+        by_adapter[adapter] += 1
+        items.append({"started": started, "adapter": adapter,
+                      "company": source.get("company") or str(row.get("source_id") or "?")})
+    items.sort(key=lambda x: x["started"])
+    return {"total": len(items), "by_day": by_day, "by_adapter": by_adapter, "items": items}
+
+
+def evaluate_unfinished_runs(crawl_rows, sources_by_id, now=None, days=5,
+                             grace_minutes=UNFINISHED_GRACE_MINUTES,
+                             min_total=UNFINISHED_MIN_TOTAL):
+    """规则 I：抓取开跑了没收尾 —— 一批源在台账上连「跑过」都留不下结论。
+
+    为什么必须自动报（2026-09-05 实测）：这类记录此前一律长成 status='skipped'，与 robots 拦截 /
+    adapter.should_skip 主动跳过一模一样 → 72 条孤儿在库里冒充「按设计跳过」躺了三个月没人发现。
+    两种真实成因都完全静默：
+      · CI 被杀：2026-09-04 19:11 那次 daily-job-crawl 的 crawler 步骤被中断，3 个源就地失踪；
+      · **CI 全绿也会有**：同日 09:32 的 enrichment-crawl 六片全 success、guard 也 success，
+        却有 7 个 workday 源开跑后再无下文 —— 模块级、源级、run 级三层绿灯，一个信号都没有。
+    这正是本模块要治的「绿灯零产出」，所以判据不能只问「跑没跑成功」，还要问「有没有收尾」。
+
+    输出**一条聚合 finding**（不是每源一条）：一次进程死亡会同时打掉一批源，逐源开 issue 只会刷屏，
+    而按天分布恰好能区分两种成因 —— 集中在几分钟内 = 被杀；天天掉几个 = 收尾写库在偶发失败。
+    """
+    stat = summarize_unfinished_runs(crawl_rows, sources_by_id, now=now, grace_minutes=grace_minutes)
+    if stat["total"] < min_total:
+        return []
+
+    evidence = [
+        f"近 {days} 天共 {stat['total']} 条抓取记录停在 running（开跑超过 {grace_minutes} 分钟仍没收尾）。",
+        "按天（北京时间）：" + "、".join(
+            f"{day} {n} 条" for day, n in sorted(stat["by_day"].items())),
+        "按 adapter：" + "、".join(
+            f"{name} {n} 条" for name, n in stat["by_adapter"].most_common(6)),
+    ]
+    evidence.append("最早几条（北京时间）：" + "；".join(
+        f"{it['started'].astimezone(SHANGHAI).strftime('%m-%d %H:%M')} "
+        f"{it['adapter']} / {it['company']}"
+        for it in stat["items"][:5]))
+    return [{
+        "rule": "I",
+        "subject": "crawl_runs",
+        "summary": f"{stat['total']} 个源开跑后没在台账里留下任何结论"
+                   f"（status 停在 running）——这批源当轮抓没抓到、为什么没抓到，全部无从得知。",
+        "evidence": evidence,
+        "next": "先看这些时间点落在哪次 workflow 里："
+                "① 若集中在几分钟内且那次 run 是 failure/cancelled → 是被超时或取消杀的，"
+                "调该 workflow 的 timeout-minutes / 分片数（规则 B 通常会同时报出来）；"
+                "② 若那次 run 全绿却照样丢源 → 是进程内部的问题（收尾写库连抛两次、线程被吞），"
+                "查该 adapter 当轮日志里有没有『crawl_run 记录失败』；"
+                "③ 天天零星掉几个而不成堆 → 优先怀疑 Supabase 写入抖动，不是 CI。"
+                "别把它当成『按设计跳过』——真跳过一定带 finished_at 和 error_message。",
+    }]
+
+
 def evaluate_timeout_kills(runs, jobs_by_run, meta_by_path, ratio=TIMEOUT_KILL_RATIO, min_repeats=2):
     """规则 B：按 **job 级** 判「任务被中途杀掉」。
 
@@ -951,7 +1046,7 @@ def main():
     findings += zero
     findings += evaluate_stuck_ledger(discovery_rows, now=now, hours=args.stuck_hours)
     findings += evaluate_account_errors(event_rows, ops_rows, now=now)
-    # 规则 F 单独包住：crawl_runs 是最大的一张表（1,400 源 × 4 轮/天），取不到不能拖垮 A/C/D。
+    # 规则 F/G/H/I 单独包住：crawl_runs 是最大的一张表（1,400 源 × 4 轮/天），取不到不能拖垮 A/C/D。
     try:
         dead_since = (now - timedelta(days=args.dead_source_days)).isoformat()
         crawl_rows = db.fetch_all_rows(
@@ -970,8 +1065,16 @@ def main():
         # 规则 G 复用同一批 crawl_rows / sources（多取三列，不多打一次库）。
         findings += evaluate_coverage_shortfall(crawl_rows, sources_by_id)
         findings += evaluate_duplicate_portals(sources_by_id)
+        # 规则 I 同样复用这批 crawl_rows。统计**每轮都打印**（哪怕没到开 issue 的门槛）——
+        # 没有度量的指标等于没有指标，长尾的零星失踪也该看得见。
+        unfinished = summarize_unfinished_runs(crawl_rows, sources_by_id, now=now)
+        print(f"[watchdog] 没收尾的抓取记录（近 {args.dead_source_days} 天 / 停在 running 超过 "
+              f"{UNFINISHED_GRACE_MINUTES} 分钟）：{unfinished['total']} 条"
+              + (f"　按天 {dict(sorted(unfinished['by_day'].items()))}" if unfinished["total"] else ""))
+        findings += evaluate_unfinished_runs(crawl_rows, sources_by_id, now=now,
+                                             days=args.dead_source_days)
     except Exception as exc:  # noqa: BLE001
-        print(f"::warning::[watchdog] 规则 F/G（源连续失败 / 抓不全）本轮没查成："
+        print(f"::warning::[watchdog] 规则 F/G/H/I（源连续失败 / 抓不全 / 重复源 / 没收尾）本轮没查成："
               f"{type(exc).__name__}: {exc}")
 
     meta_by_path = load_workflow_meta(root)

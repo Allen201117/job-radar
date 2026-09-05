@@ -587,6 +587,31 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 ✅ 统一口径：**逐渠道判**「这个渠道抓到它自报的总数了吗」，全部为真才算抓全。
 huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 adapter 照抄。
 
+## ⚠️ crawl_runs 的 `running` = 没收尾，不是一种「跳过」（2026-09-05 立，迁移 234）
+
+`crawler/db.py` 的 `create_crawl_run` **在 insert 那一刻就写死一个占位符**，之后才由 `run.py`
+按结果 `update_crawl_run` 覆盖成终态。所以进程中途没了（CI 超时/取消、OOM、被 kill、收尾那次
+写库连抛两次），这一行就永远停在占位符 —— 这个源当轮抓没抓到、为什么没抓到，**台账上一片空白**。
+
+❌ 坑：占位符原本写的是 `'skipped'`，与 robots 拦截 / `adapter.should_skip` 主动跳过
+   **在 status 上一模一样**。全表 72 条这样的孤儿（最早 2026-06-09）就这么冒充「按设计跳过」
+   躺了三个月；一次 CI 被杀吞掉 10 个源，台账上不留任何异常信号。
+✅ 防：占位符改成 `'running'`（CHECK 已扩，与 `discovery_runs` 同一套生命周期词汇）。
+   `running` **只能**由占位符产生 —— 谁把它当结论写回去，「没收尾」这个判据当场失效
+   （`crawler/test_crawl_run_status.py` 钉死）。判「按设计跳过」认 `status='skipped'`，
+   它一定带 `finished_at` + `error_message`。
+📄 见：`crawler/ops_watchdog.py` 规则 I（聚合告警）、`components/SourceTable.tsx`（源管理页标签）。
+
+⚠️ **`finished_at is null` 单独用会把「正在飞」当成「事故」**：2026-09-05 当场看到的 10 条空记录
+（华为 / 字节跳动 / 伊利…）1~3 分钟后全部 success 收尾了 —— 它们只是查询那一瞬间在跑。
+判「没收尾」必须是 **`running` + `started_at` 早于宽限期**。宽限期 90 分钟有据：近 30 天最长的
+一轮 27m16s、p99.9 = 6m38s、超过 30 分钟的 0 轮（改这个数先重新量，别拍脑袋）。
+
+⚠️ **CI 全绿照样会掉源，别只盯 workflow 结论**：2026-09-04 两批孤儿成因完全不同 ——
+19:11 那次 `daily-job-crawl` 是 crawler 步骤被中断（run 级 failure，规则 B 看得见）；
+而同日 09:32 的 `enrichment-crawl` **六个分片全 success、guard 也 success**，却有 7 个 workday
+源开跑后再无下文。模块级、源级、run 级三层绿灯，一个信号都没有 —— 这正是规则 I 存在的理由。
+
 ## 🚫 归属准确性没有旁路 —— 国聘集团展开曾 84% 挂错公司（2026-09-04 立）
 
 `crawler/adapters/iguopin.py` 的「集团子公司展开」这条路径过去对 `_group_child` 行

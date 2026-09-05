@@ -99,13 +99,20 @@ def get_sources(supabase: Client) -> list[dict]:
 
 
 def create_crawl_run(supabase: Client, source_id: str) -> str:
-    """创建抓取日志，返回 run_id。"""
+    """创建抓取日志，返回 run_id。占位状态 running=已开跑未收尾，由 update_crawl_run 覆盖成终态。
+
+    ⚠️ 占位符**绝不能**再用 'skipped'（2026-09-05 修，迁移 234）：进程中途没了（CI 超时/取消、
+    OOM、被 kill、或收尾那次写库连抛两次）时这行永远停在占位符，而 'skipped' 与 robots 拦截 /
+    adapter.should_skip 主动跳过**在 status 上完全无法区分** —— 全表 72 行这样的孤儿就这么
+    在台账里冒充「按设计跳过」躺了三个月，一次 CI 被杀吞掉 10 个源也不留任何异常信号。
+    running 让「没收尾」自己说出来：ops_watchdog 规则 I 按「running 且超过宽限期」告警。
+    """
     run_id = str(uuid.uuid4())
     supabase.table("crawl_runs").insert({
         "id": run_id,
         "source_id": source_id,
         "started_at": datetime.now(timezone.utc).isoformat(),
-        "status": "skipped",
+        "status": "running",
     }).execute()
     return run_id
 

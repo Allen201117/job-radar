@@ -565,3 +565,80 @@ class DuplicatePortalTest(unittest.TestCase):
                   "source_url": "https://www.hotjob.cn/wt/gwm/web/index"}})
         self.assertEqual(len(out), 1)
         self.assertTrue(any("gwm" in e for e in out[0]["evidence"]))
+
+
+class UnfinishedRunRuleTest(unittest.TestCase):
+    """规则 I：抓取记录没收尾（crawl_runs 停在占位符 running）。"""
+
+    NOW = datetime(2026, 9, 5, 6, 0, tzinfo=timezone.utc)
+    SOURCES = {
+        "s1": {"id": "s1", "adapter_name": "workday", "company": "Wells Fargo", "enabled": True},
+        "s2": {"id": "s2", "adapter_name": "moka", "company": "华虹", "enabled": True},
+        "s3": {"id": "s3", "adapter_name": "beisen", "company": "已停用", "enabled": False},
+    }
+
+    def _row(self, sid, minutes_ago, status="running"):
+        return {"source_id": sid, "status": status,
+                "started_at": (self.NOW - timedelta(minutes=minutes_ago)).isoformat()}
+
+    def _rows(self, sid, n, minutes_ago=600, status="running"):
+        return [self._row(sid, minutes_ago + i, status=status) for i in range(n)]
+
+    def test_stale_running_rows_are_reported(self):
+        rows = self._rows("s1", 7) + self._rows("s2", 3, minutes_ago=2000)
+        [finding] = W.evaluate_unfinished_runs(rows, self.SOURCES, now=self.NOW)
+        self.assertEqual(finding["rule"], "I")
+        self.assertIn("10 个源", finding["summary"])
+        self.assertTrue(any("workday 7 条" in e for e in finding["evidence"]))
+        self.assertEqual(W.issue_title(finding), "[watchdog] 抓取记录没收尾：crawl_runs")
+
+    def test_in_flight_runs_are_never_counted(self):
+        """最关键的一条：2026-09-05 当场看到的 10 条『空记录』1~3 分钟后全部 success 收尾了。
+        没有宽限期，这条规则每天都会把正在飞的轮次报成事故。"""
+        rows = self._rows("s1", 30, minutes_ago=1)          # 刚开跑
+        self.assertEqual(W.evaluate_unfinished_runs(rows, self.SOURCES, now=self.NOW), [])
+        self.assertEqual(
+            W.summarize_unfinished_runs(rows, self.SOURCES, now=self.NOW)["total"], 0)
+
+    def test_grace_boundary_is_exclusive_on_the_young_side(self):
+        just_inside = [self._row("s1", W.UNFINISHED_GRACE_MINUTES - 1)] * 20
+        just_outside = [self._row("s1", W.UNFINISHED_GRACE_MINUTES + 1)] * 20
+        self.assertEqual(W.summarize_unfinished_runs(just_inside, self.SOURCES, now=self.NOW)["total"], 0)
+        self.assertEqual(W.summarize_unfinished_runs(just_outside, self.SOURCES, now=self.NOW)["total"], 20)
+
+    def test_terminal_statuses_are_ignored(self):
+        """跑完的轮次一律不算，包括**真正的**按设计跳过（robots / should_skip）。"""
+        rows = (self._rows("s1", 20, status="skipped")
+                + self._rows("s1", 20, status="failed")
+                + self._rows("s2", 20, status="success"))
+        self.assertEqual(W.evaluate_unfinished_runs(rows, self.SOURCES, now=self.NOW), [])
+
+    def test_below_threshold_stays_quiet(self):
+        """实测 5 天滚动基线 0-5 条零星失踪，逐条开 issue 只会把告警变成噪音。"""
+        rows = self._rows("s1", W.UNFINISHED_MIN_TOTAL - 1)
+        self.assertEqual(W.evaluate_unfinished_runs(rows, self.SOURCES, now=self.NOW), [])
+
+    def test_disabled_sources_still_count(self):
+        """与规则 F/G 相反：这条的主语是『跑抓取的进程死了』，源停不停用不改变这个事实。"""
+        rows = self._rows("s3", 10)
+        [finding] = W.evaluate_unfinished_runs(rows, self.SOURCES, now=self.NOW)
+        self.assertIn("10 个源", finding["summary"])
+
+    def test_unknown_source_id_does_not_crash(self):
+        rows = self._rows("ghost", 10)
+        [finding] = W.evaluate_unfinished_runs(rows, self.SOURCES, now=self.NOW)
+        self.assertTrue(any("unknown 10 条" in e for e in finding["evidence"]))
+
+    def test_rows_without_started_at_are_skipped(self):
+        rows = [{"source_id": "s1", "status": "running", "started_at": None}] * 20
+        self.assertEqual(W.summarize_unfinished_runs(rows, self.SOURCES, now=self.NOW)["total"], 0)
+
+    def test_by_day_uses_shanghai_dates_not_utc(self):
+        """按天分布是用来区分『一次被杀』和『天天掉几个』的；按 UTC 分会把同一晚劈成两天。
+
+        NOW=2026-09-05 06:00Z，往前 13h = 2026-09-04 17:00Z = **北京时间 09-05 01:00**。
+        期望 09-05：拿到 09-04 就说明忘了转时区（本仓库其它告警一律以北京时间口径说话）。
+        """
+        rows = [self._row("s1", 13 * 60)] * 10
+        stat = W.summarize_unfinished_runs(rows, self.SOURCES, now=self.NOW)
+        self.assertEqual(list(stat["by_day"]), ["2026-09-05"])
