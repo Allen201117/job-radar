@@ -81,6 +81,11 @@ class IcbcAdapterTest(unittest.TestCase):
         # 缺截止日不代表已过期——保守放行，交给下游探活判死。
         self.assertTrue(IcbcAdapter._is_open({}, today))
 
+    def test_head_precheck_is_disabled(self):
+        # job.icbc.com.cn 对 HEAD 恒返 403（换浏览器 UA 也一样），GET/POST 正常。
+        # 不覆写 should_skip 就会被判「被拒」而整源跳过、永远抓不到岗。
+        self.assertIsNone(IcbcAdapter().should_skip("https://job.icbc.com.cn/pc/index.html"))
+
     def test_depict_is_base64_urlencoded_html(self):
         import base64
         import urllib.parse
@@ -175,6 +180,10 @@ class CmccAdapterTest(unittest.TestCase):
                          "https://job.10086.cn/personal/job/detail.html?id=uuid-social")
         # 省市同名时不重复拼接。
         self.assertEqual(social.location, "北京市")
+
+    def test_head_precheck_is_disabled(self):
+        # job.10086.cn 对 HEAD 恒返 403（换 UA 无效），不覆写就整源被跳过。
+        self.assertIsNone(CmccAdapter().should_skip("https://job.10086.cn/personal/job/"))
 
     def test_public_key_parses_to_the_sites_2048_bit_rsa_key(self):
         modulus, exponent = _rsa_public_numbers(_PUBLIC_KEY_SPKI)

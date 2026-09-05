@@ -103,6 +103,11 @@ class CmccAdapter(BaseAdapter):
     # type 取值来自列表页筛选器「招聘类型」：1=校园招聘 / 2=社会招聘 / 3=实习生招聘。
     _JOB_TYPES = {"1": "校招", "2": "社招", "3": "实习"}
 
+    def should_skip(self, source_url: str) -> Optional[str]:
+        # ⚠️ job.10086.cn 对 **HEAD 一律返 403**（换 UA 无效，2026-09-05 实测），GET/POST 都正常。
+        # 不覆写就会被 BaseAdapter.should_skip 判成「被拒」而整源跳过。
+        return None
+
     @classmethod
     def _detail_url(cls, row: dict) -> str:
         job_id = _clean(row.get("id"))

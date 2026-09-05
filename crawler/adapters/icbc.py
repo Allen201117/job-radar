@@ -55,6 +55,12 @@ class IcbcAdapter(BaseAdapter):
         ("R00302", "社招", "social"),
     )
 
+    def should_skip(self, source_url: str) -> Optional[str]:
+        # ⚠️ job.icbc.com.cn 对 **HEAD 一律返 403**（换成浏览器 UA 也一样，2026-09-05 实测），
+        # 而 GET 页面 / POST 接口都是 200 —— 它只是不支持 HEAD，不是在拒绝我们。
+        # 不覆写的话 BaseAdapter.should_skip 会把整个源跳过、永远抓不到岗（同 cmbc 那个坑）。
+        return None
+
     @staticmethod
     def _decode_depict(value) -> str:
         """postDepict = base64( urlencode( 富文本 HTML ) )。解不开就当没有正文，不抛。"""
