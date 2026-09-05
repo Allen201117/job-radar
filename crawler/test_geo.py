@@ -49,6 +49,29 @@ class TestDeriveCountryCode(unittest.TestCase):
         self.assertIsNone(derive_country_code(""))
         self.assertIsNone(derive_country_code("Multiple Locations"))
 
+    def test_iso_country_code_cn(self):
+        """外企 ATS 直接给小写国别码 + 空格分词拼音城市，只有认 "cn" 才判得出。
+
+        这几个串来自 SmartRecruiters 的大陆集团中国岗（2026-09-05 live 原样抓取）：
+        城市 "He Fei Shi" 不等于拼音表里的 "hefei"，按词边界一个都对不上，
+        29 个中国岗里有 8 个因此被判 None、被当成非中国岗丢掉。
+        """
+        for location in (
+            "He Fei Shi, An Hui Sheng, cn",
+            "Ning Bo Shi, Zhe Jiang Sheng, cn",
+            "Ji Ning Shi, Shan Dong Sheng, cn",
+            "Yang Pu Qu, Shang Hai Shi, cn",
+            "Zhangjiagang, cn",
+        ):
+            with self.subTest(location=location):
+                self.assertEqual(derive_country_code(location), "CN")
+
+    def test_iso_cn_does_not_leak_into_other_countries(self):
+        # "cn" 只在独立成词时算国别码，不许撞进别的地名
+        self.assertNotEqual(derive_country_code("Cincinnati, OH"), "CN")
+        self.assertNotEqual(derive_country_code("Chennai, TN, in"), "CN")
+        self.assertEqual(derive_country_code("Hong Kong, cn"), "HK")
+
 
 class TestDeriveJobScope(unittest.TestCase):
     def test_greater_china_is_domestic(self):
@@ -63,8 +86,22 @@ class TestDeriveJobScope(unittest.TestCase):
             with self.subTest(location=location):
                 self.assertEqual(derive_job_scope(location), "overseas")
 
-    def test_bare_remote_defaults_domestic(self):
-        self.assertEqual(derive_job_scope("Remote"), "domestic")
+    def test_bare_remote_is_overseas(self):
+        """光秃秃的「远程」算海外，不算国内供给。
+
+        2026-09-05 live：全库 9,873 个 active 岗地点正是「远程」，逐个核过一个中国岗都没有
+        （AbbVie 1512 / ServiceNow 576 / NVIDIA 360…，连腾讯那 7 个的 jd_url 都写着
+        Warsaw / Thailand / Vietnam）。旧规则把它们算进 domestic = 拿外企岗充中国供给。
+        """
+        for location in ("Remote", "远程", "远端", "Anywhere", "Work from home"):
+            with self.subTest(location=location):
+                self.assertEqual(derive_job_scope(location), "overseas")
+
+    def test_remote_pinned_to_china_stays_domestic(self):
+        # 别为了赶走裸远程岗误伤真的中国远程岗
+        for location in ("Remote - China", "远程 上海", "Remote, cn"):
+            with self.subTest(location=location):
+                self.assertEqual(derive_job_scope(location), "domestic")
 
     def test_unknown_defaults_domestic(self):
         self.assertEqual(derive_job_scope(""), "domestic")

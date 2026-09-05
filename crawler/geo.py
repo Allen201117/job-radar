@@ -4,6 +4,12 @@ from typing import Optional
 
 CHINA_LOCATION_MARKERS = (
     "china", "中国", "prc", "greater china",
+    # ISO-2 国家码。外企 ATS（SmartRecruiters / Greenhouse 等）的 location.country 直接给
+    # 小写国别码，城市名却是**空格分词的拼音**（"He Fei Shi" / "Ning Bo Shi" / "Zhe Jiang Sheng"），
+    # 拼音表按 \b 匹配一个都对不上 —— 大陆集团 29 个中国岗里 8 个（28%）就这么被判成 None。
+    # 认这个码是**对方自己声明的国别**，不是我们猜的；全库 596 行含独立 "cn" 词的 active 岗
+    # 逐行核过，现判定 100% 已经是 CN，加它零误伤（2026-09-05 live 实测）。
+    "cn",
     # First/new first-tier and major industrial cities. Foreign ATS boards often
     # provide only a city/province name without an explicit "China" suffix.
     "beijing", "shanghai", "shenzhen", "guangzhou", "hangzhou", "chengdu",
@@ -131,10 +137,24 @@ def derive_country_code(location: Optional[str]) -> Optional[str]:
 
 
 def derive_job_scope(location: Optional[str]) -> str:
-    """domestic for greater China and unknown/bare remote; overseas otherwise."""
+    """domestic for greater China and location-less jobs; bare remote counts as overseas.
+
+    ⚠️ 「没写国家的远程岗」曾一律算 domestic，等于把外企的远程岗当成中国供给：
+    2026-09-05 live 实测全库 9,873 个 active 岗地点是光秃秃的「远程」，逐个核过
+    **一个中国岗都没有** —— 前 30 家全是 AbbVie / ServiceNow / NVIDIA / Pfizer 这类外企，
+    连唯一一家本土公司（腾讯 7 个）的 jd_url 里也明写着 Warsaw / Thailand / Vietnam。
+    这批岗占 domestic 总量 327,086 的 3.0%，属「指标诚实」红线里的注水。
+
+    同时这修好了一个**从来没生效过的筛选项**：lib/job-scope.ts 的 Remote 档要求
+    `job_scope='overseas' and country_code is null`，而旧规则永远产不出这个组合 ——
+    live 实测该组合 0 行，即用户勾「海外 + 远程」必然空手而归。
+
+    地点为空/unknown 仍算 domestic：本土 ATS（moka 等）大量岗位不填地点，
+    把它们推去海外会让国内看板凭空少掉一批真岗。
+    """
     code = derive_country_code(location)
     if code is None:
-        return "domestic"
+        return "overseas" if is_remote_location(location) else "domestic"
     return "domestic" if code in _GREATER_CHINA else "overseas"
 
 
