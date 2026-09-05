@@ -240,7 +240,9 @@ const loadMustApplyCoverage = cachedLoader<MustApplyRowsByScope>("must-apply-cov
   // getMustApplyCoverage 内部共用同一份公司聚合（in-flight 合并），两个 scope 只查一次库。
   const [sources, coverages] = await Promise.all([
     loadAllSources(),
-    Promise.all(MUST_APPLY_SCOPES.map((scope) => getMustApplyCoverage(mustApplyUnion(scope)))),
+    // ⚠️ scope 要同时传给「取哪份清单」和「算哪半岗位」——只传前者就是拿海外岗
+    // 给国内覆盖率背书（松下 234 个堪萨斯岗曾被算成「国内已覆盖」）。
+    Promise.all(MUST_APPLY_SCOPES.map((scope) => getMustApplyCoverage(mustApplyUnion(scope), scope))),
   ]);
   return Object.fromEntries(
     MUST_APPLY_SCOPES.map((scope, i) => [scope, buildMustApplyRowsForScope(scope, sources, coverages[i])]),

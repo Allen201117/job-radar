@@ -396,6 +396,28 @@ jd_url 里都写着 Warsaw / Thailand / Vietnam。
   拼音表按词边界一个都对不上（大陆集团 29 个中国岗里 8 个因此判 None）。
   全库 596 行含独立 "cn" 词的 active 岗现判定 100% 已是 CN ⇒ 零误伤。
 
+### 必投覆盖只算同范围的岗（2026-09-05 改口径，指标会跳变）
+
+必投清单**有两份**（`mustApplyUnion("domestic")` / `("overseas")`），岗位也分
+`job_scope` —— **两边必须对齐**。此前 `computeMustApplyCoverage` 不看 `job_scope`，
+于是拿另一半的岗位给这一半的覆盖率背书，生产实测两个方向都在虚高：
+- 国内清单里的**松下**记 234 个健康岗判「已覆盖」——那 234 个全在**美国堪萨斯**，中国岗 0；
+- 海外清单里的**星巴克**记 1,935 个判「已覆盖海外」——它 9,078 个岗**全在中国**。
+
+✅ 现行：`getMustApplyCoverage(list, scope)` / `computeMustApplyCoverage(list, aggregates, scope)`
+只累加 `row.scope === scope` 的行；父门户 rollup 与 `getCampusSupplyInputs` 同口径。
+- **实现方式是给那条全表聚合加一个分组键**（`group by company, job_scope`），
+  **不是再查一遍**。1,051 组变 ~1,516 组，live EXPLAIN 五轮实测耗时差落在噪音里
+  （同一条查询自身波动 1646–2689ms，两版最小值 1646 vs 1675）。
+  ⚠️ 别改成「按 scope 各查一次」——香港库 2 vCPU，两条全扫并行会各自从 1.1s 涨到 2.1s，总时间一点没省。
+- ⚠️ rollup 的回挂 Map **键必须带 scope**（`aggregateKey`）：主聚合已按 (company, job_scope) 拆行，
+  只按 company 取会让同一家的国内行与海外行拿到同一份 rollup、双重计入。
+- **上线时指标会下跌，这是修正不是退步**：生产快照实测国内「有健康岗」228→227 家、
+  海外 143→134 家（另有国内 48 家 / 海外 98 家数字变小但仍 >0）。**别看到掉了就回滚。**
+- ⏳ **未同步**：`crawler/gap_census.py` 的 `_JOB_AGGREGATE_SQL` 仍是 `group by company` 不看
+  `job_scope`，所以缺口台账的 `state` 还会被另一半的岗位撑成 `healthy`。改法与上面同形
+  （select + group by 加 `job_scope`，`classify_company` 按 scope 过滤 `healthy_jobs`）。
+
 | Source | 状态 | 详情链接格式 |
 |---|---|---|
 | Apple | 可用（crawler + 已知源刷新） | `jobs.apple.com/en-us/details/...` |
