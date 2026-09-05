@@ -27,14 +27,38 @@ def _load_overseas_rows():
         return None
 
 
-def _unique_patterns(rows):
-    """按首次出现顺序提取有效 ILIKE 模式。"""
+def company_patterns(entry) -> list[str]:
+    """一家公司**在库里可能用的全部名字模式** = `pattern` + `aliases`（别名），按序去重。
+
+    为什么要别名：`sources.company` / `jobs.company` 记的是抓取时对方门户自报的名字，
+    可能是英文（壳牌记成 `Shell`、大陆集团记成 `Continental`），而清单存的是中文品牌名。
+    单向子串（`resolve_owner`）救不了「字面完全不重叠」这一类 —— 2026-09-04 因此
+    把壳牌判成「零源缺口」→ 重复插了第二条源 → 同一个 Workday 站点仅大小写不同
+    → canonical_jd_url 区分大小写、唯一索引拦不住 → 同一个岗在库里存两行（迁移 225 已修）。
+    **「有岗但指标显示 0」比「真没岗」更危险：它会驱动人去重复补源。**
+
+    别名与 `pattern` 同语义（SQL ILIKE 模式：`%子串%`，或无通配的精确匹配），
+    所以匹配侧不需要第二套规则，`match_company_against_patterns` 原样吃。
+    """
+    if not isinstance(entry, dict):
+        return []
     out, seen = [], set()
-    for row in rows:
-        pattern = row.get("pattern") if isinstance(row, dict) else None
-        if isinstance(pattern, str) and pattern not in seen:
+    for raw in [entry.get("pattern")] + list(entry.get("aliases") or []):
+        pattern = raw.strip() if isinstance(raw, str) else ""
+        if pattern and pattern not in seen:
             seen.add(pattern)
             out.append(pattern)
+    return out
+
+
+def _unique_patterns(rows):
+    """按首次出现顺序提取有效 ILIKE 模式（含别名）。"""
+    out, seen = [], set()
+    for row in rows:
+        for pattern in company_patterns(row):
+            if pattern not in seen:
+                seen.add(pattern)
+                out.append(pattern)
     return out
 
 
@@ -148,12 +172,15 @@ def resolve_owner(company_name: str, names) -> str:
     low = str(company_name or "").strip().lower()
     if not low:
         return ""
-    best = ""
-    for raw in names or []:
+    # names 可以是「清单名列表」（老调用方，token 即归属名），也可以是 owner_index() 那种
+    # 「{库里可能出现的名字片段: 清单规范名}」映射（别名感知）。两者共用同一条「最长者胜」规则。
+    items = names.items() if isinstance(names, dict) else [(n, n) for n in (names or [])]
+    best_token, best_owner = "", ""
+    for raw, owner in items:
         token = str(raw or "").strip()
-        if token and token.lower() in low and len(token) > len(best):
-            best = token
-    return best
+        if token and token.lower() in low and len(token) > len(best_token):
+            best_token, best_owner = token, str(owner or "").strip()
+    return best_owner
 
 
 def sources_for(target: str, rows, names) -> list:
@@ -167,6 +194,59 @@ def sources_for(target: str, rows, names) -> list:
         if resolve_owner((row or {}).get("company"), names) == target:
             out.append(row)
     return out
+
+
+def patterns_for_company(name: str) -> list[str]:
+    """按清单规范名取「pattern + 别名」。
+
+    给**只存了 pattern 的调用方**补齐别名用（`must_apply_gap_attempts` 台账没有 aliases 列，
+    缺口漏斗的验收门只能拿到 `row["pattern"]`）。找不到该公司时返回空表，调用方自行兜底。
+    """
+    target = str(name or "").strip()
+    if not target:
+        return []
+    for bucket in (by_industry(), overseas_by_industry()):
+        for _industry, entries in (bucket or {}).items():
+            for entry in entries or []:
+                if isinstance(entry, dict) and str(entry.get("name") or "").strip() == target:
+                    return company_patterns(entry)
+    return []
+
+
+def owner_index(scope=None) -> dict:
+    """{库里可能出现的名字片段: 清单规范名}，**含别名**；供 resolve_owner / sources_for 认英文名。
+
+    传它而不是 `all_names()`，`Continental` 这行源才能归到「大陆集团」名下。
+    别名与规范名共用「最长者胜」，所以 `拜耳 Bayer` 这种中英混排也只会归到一家。
+
+    ⚠️ `scope` 不给就是国内+海外并集，此时**规范名恒压过别名**：同一家公司在两份清单里
+    叫两个名字（国内「大陆集团」/ 海外「Continental」），并集里 `Continental` 必须归到
+    海外那条的规范名，否则归属会随清单读取顺序漂。要「英文名 → 中文清单名」这种跨语言
+    归属，就明确传 `scope="domestic"`（只在那份清单的命名空间里判）。
+    """
+    buckets = {"domestic": [by_industry()], "overseas": [overseas_by_industry()]}.get(
+        scope, [by_industry(), overseas_by_industry()]
+    )
+    index = {}
+    for bucket in buckets:
+        for _industry, entries in (bucket or {}).items():
+            for entry in entries or []:
+                name = str(entry.get("name") or "").strip() if isinstance(entry, dict) else ""
+                if name:
+                    index[name] = name
+    for bucket in buckets:
+        for _industry, entries in (bucket or {}).items():
+            for entry in entries or []:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get("name") or "").strip()
+                if not name:
+                    continue
+                for pattern in company_patterns(entry)[1:]:
+                    token = pattern.replace("%", "").strip()
+                    if token:
+                        index.setdefault(token, name)
+    return index
 
 
 def all_names() -> list:
