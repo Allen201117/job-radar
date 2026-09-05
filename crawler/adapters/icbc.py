@@ -47,7 +47,11 @@ class IcbcAdapter(BaseAdapter):
     # 详情是 hash 路由，两个招聘类型走不同前缀；jd_url 带 `#` → canonical 归一会原样保留（规则 2）。
     DETAIL_URL = "https://job.icbc.com.cn/pc/index.html#/main/{section}/postDetail/{post_id}"
     PAGE_SIZE = 200
-    _DETAIL_CAP = 400
+    # 2026-09-05 实测约 51ms/次 → 2,615 个岗全量补约 2.2 分钟（本机口径，CI 跨境会更久）。
+    # 沿用 byd 的判断：只补前 N 个 = 其余全是无正文薄卡，不进「有效在招」计数，不如一次补全。
+    # ⚠️ 诚实边界：工行**校招**岗的 postDepict 本来就短（实测 52~97 字），补了也多半过不了
+    # 「正文 ≥60 字」那道门；补的主要价值在社招岗（数百字的职责+要求）。
+    _DETAIL_CAP = 3000
 
     # recruitType 取值来自站点顶栏：R00301 校园招聘 / R00302 社会招聘。
     # R00303~R00305（专项/实习等）2026-09-05 实测都是 0 条，不去猜别的码。
