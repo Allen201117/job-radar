@@ -1,0 +1,806 @@
+{
+  "_readme": [
+    "crawler/geo.py 与 lib/geo.js 的**跨语言一致性夹具**：两侧测试读同一份，逐条断言 derive_country_code 输出相同。",
+    "为什么要有它：这两份实现是手工镜像的，只靠注释「改一边必须改另一边」挡不住漂移——",
+    "线上已经出过一次（TW 在 Python 侧 2026-07-28 就补了，JS 侧一直缺，台湾岗在 JS 里判成 CN）。",
+    "改地名表 → 先跑 node --test tests/geo.test.js 与 crawler/test_geo.py，任一侧漂了这里就红。",
+    "expected 由 crawler/geo.py 生成后**人工逐条核对过**，不是把当前行为原样固化。"
+  ],
+  "cases": [
+    {
+      "location": "新北市",
+      "expected": "TW",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "台北市",
+      "expected": "TW",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "高雄市",
+      "expected": "TW",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "台中市",
+      "expected": "TW",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "桃园市",
+      "expected": "TW",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "台湾",
+      "expected": "TW",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "臺灣",
+      "expected": "TW",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "Taipei, Taiwan, Province of China",
+      "expected": "TW",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "大阪市",
+      "expected": "JP",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "大阪",
+      "expected": "JP",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "东京",
+      "expected": "JP",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "東京都",
+      "expected": "JP",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "东京都",
+      "expected": "JP",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "日本·东京",
+      "expected": "JP",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "京都市",
+      "expected": "JP",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "横滨市",
+      "expected": "JP",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "札幌市",
+      "expected": "JP",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "名古屋市",
+      "expected": "JP",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "首尔",
+      "expected": "KR",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "首尔市",
+      "expected": "KR",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "釜山广域市",
+      "expected": "KR",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "蔚山广域市",
+      "expected": "KR",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "大田广域市",
+      "expected": "KR",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "光州广域市",
+      "expected": "KR",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "韩国·忠清北道·忠州市",
+      "expected": "KR",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "韩国·首尔",
+      "expected": "KR",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "平壤",
+      "expected": "KP",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "平壤市",
+      "expected": "KP",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "朝鲜民主主义人民共和国",
+      "expected": "KP",
+      "note": "红线：中文行政区后缀绝不能把台日韩朝判成 CN（founder 2026-09-05 逐个 live 核过）"
+    },
+    {
+      "location": "安徽省·芜湖市",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "福建·宁德市",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "安徽省·芜湖市·鸠江区",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "山东省·潍坊市·高密市",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "长春市",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "嘉兴",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "惠州市",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "东莞",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "济南",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "常州",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "珠海",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "柳州市",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "保定市-莲池区",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "昌吉回族自治州-昌吉市",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "衡阳市-衡南县",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "泰州市-高港区",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "山东省-济南市",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "广东省",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "江苏省",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "山西省",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "内蒙古自治区",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "广西壮族自治区",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "内蒙古自治区·呼和浩特市",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "昌吉回族自治州",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "大理白族自治州",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "红河哈尼族彝族自治州-弥勒市",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "西双版纳傣族自治州",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "怒江傈僳族自治州-兰坪白族普米族自治县",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "新疆维吾尔自治区·伊犁哈萨克自治州",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "西藏·阿里地区",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "大兴安岭地区",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "雄安新区",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "雄安新区-雄县",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "上海市浦东新区",
+      "expected": "CN",
+      "note": "中文四类写法：省·市间隔号 / 裸市名 / 市-区连字符 / 省级与自治州"
+    },
+    {
+      "location": "江苏省·常州市·新北区",
+      "expected": "CN",
+      "note": "中文地名互为子串的坑：这些是中国的，不许被境外词表抢走"
+    },
+    {
+      "location": "常州市-新北区",
+      "expected": "CN",
+      "note": "中文地名互为子串的坑：这些是中国的，不许被境外词表抢走"
+    },
+    {
+      "location": "吉林省·延边朝鲜族自治州·延吉市",
+      "expected": "CN",
+      "note": "中文地名互为子串的坑：这些是中国的，不许被境外词表抢走"
+    },
+    {
+      "location": "延边朝鲜族自治州",
+      "expected": "CN",
+      "note": "中文地名互为子串的坑：这些是中国的，不许被境外词表抢走"
+    },
+    {
+      "location": "吉林省·白山市·长白朝鲜族自治县",
+      "expected": "CN",
+      "note": "中文地名互为子串的坑：这些是中国的，不许被境外词表抢走"
+    },
+    {
+      "location": "福建省·福州市·连江县",
+      "expected": "CN",
+      "note": "中文地名互为子串的坑：这些是中国的，不许被境外词表抢走"
+    },
+    {
+      "location": "重庆市-九龙坡区",
+      "expected": "CN",
+      "note": "中文地名互为子串的坑：这些是中国的，不许被境外词表抢走"
+    },
+    {
+      "location": "重庆市·九龙坡区",
+      "expected": "CN",
+      "note": "中文地名互为子串的坑：这些是中国的，不许被境外词表抢走"
+    },
+    {
+      "location": "全国",
+      "expected": "CN",
+      "note": "「全国」判 CN 是刻意的：留 None 会让 location_in_scope 把 2,002 个本土岗在 adapter 后置过滤里丢掉（af974a3 实测）"
+    },
+    {
+      "location": "全部地区",
+      "expected": null,
+      "note": "反向：不是地名的字符串不许判成任何国家"
+    },
+    {
+      "location": "其他",
+      "expected": null,
+      "note": "反向：不是地名的字符串不许判成任何国家"
+    },
+    {
+      "location": "其它",
+      "expected": null,
+      "note": "反向：不是地名的字符串不许判成任何国家"
+    },
+    {
+      "location": "发行市场类",
+      "expected": null,
+      "note": "反向：不是地名的字符串不许判成任何国家"
+    },
+    {
+      "location": "销售及市场",
+      "expected": null,
+      "note": "反向：不是地名的字符串不许判成任何国家"
+    },
+    {
+      "location": "阿里巴巴园区",
+      "expected": null,
+      "note": "反向：不是地名的字符串不许判成任何国家"
+    },
+    {
+      "location": "山东京博",
+      "expected": "CN",
+      "note": "含省名「山东」的子串命中：CHINA_CJK_PLACE_MARKERS 是子串语义，与 _CN_ADMIN_NAMES 的整段语义并存"
+    },
+    {
+      "location": "不限",
+      "expected": null,
+      "note": "反向：不是地名的字符串不许判成任何国家"
+    },
+    {
+      "location": "海外",
+      "expected": null,
+      "note": "自报境外但没说哪国：code 仍是 None，靠 is_overseas_unspecified 判 overseas（「全球」除外，见反向那组）"
+    },
+    {
+      "location": "国外",
+      "expected": null,
+      "note": "自报境外但没说哪国：code 仍是 None，靠 is_overseas_unspecified 判 overseas（「全球」除外，见反向那组）"
+    },
+    {
+      "location": "境外",
+      "expected": null,
+      "note": "自报境外但没说哪国：code 仍是 None，靠 is_overseas_unspecified 判 overseas（「全球」除外，见反向那组）"
+    },
+    {
+      "location": "全球",
+      "expected": null,
+      "note": "反向：不是地名的字符串不许判成任何国家"
+    },
+    {
+      "location": "胡志明市",
+      "expected": "VN",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "越南·胡志明市",
+      "expected": "VN",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "越南",
+      "expected": "VN",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "曼谷",
+      "expected": "TH",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "吉隆坡",
+      "expected": "MY",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "雅加达",
+      "expected": "ID",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "马尼拉",
+      "expected": "PH",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "迪拜",
+      "expected": "AE",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "印度尼西亚",
+      "expected": "ID",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "印度",
+      "expected": "IN",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "美国",
+      "expected": "US",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "圣何塞",
+      "expected": "US",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "洛杉矶",
+      "expected": "US",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "伦敦",
+      "expected": "GB",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "慕尼黑",
+      "expected": "DE",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "巴黎",
+      "expected": "FR",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "墨西哥城",
+      "expected": "MX",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "莫斯科",
+      "expected": "RU",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "蒙古国",
+      "expected": "MN",
+      "note": "境外中文地名（含会被后缀规则误判成 CN 的 …市 形态）"
+    },
+    {
+      "location": "新界",
+      "expected": "HK",
+      "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
+    },
+    {
+      "location": "九龙",
+      "expected": "HK",
+      "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
+    },
+    {
+      "location": "香港",
+      "expected": "HK",
+      "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
+    },
+    {
+      "location": "Hong Kong",
+      "expected": "HK",
+      "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
+    },
+    {
+      "location": "澳门",
+      "expected": "MO",
+      "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
+    },
+    {
+      "location": "Beijing, China",
+      "expected": "CN",
+      "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
+    },
+    {
+      "location": "上海",
+      "expected": "CN",
+      "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
+    },
+    {
+      "location": "New York, NY",
+      "expected": "US",
+      "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
+    },
+    {
+      "location": "Singapore",
+      "expected": "SG",
+      "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
+    },
+    {
+      "location": "Remote",
+      "expected": null,
+      "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
+    },
+    {
+      "location": "Multiple Locations",
+      "expected": null,
+      "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
+    },
+    {
+      "location": "He Fei Shi, An Hui Sheng, cn",
+      "expected": "CN",
+      "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
+    },
+    {
+      "location": "Cincinnati, OH",
+      "expected": "US",
+      "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
+    },
+    {
+      "location": "Belarus",
+      "expected": null,
+      "note": "港澳与既有英文行为（回归基线，不许被这次改动动到）"
+    },
+    {
+      "location": "CHARLOTTE, NC",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Florence, KY",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Memphis, TN",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Ann, Arbor, MI",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Ann, Arbor, MI 48108",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "AustinTX",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Santa, ClaraCA",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "PhoenixAZ",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "St, PetersburgTampa, FL",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "1000, Nicollet, Mall, MinneapolisMN, 55403, 2542",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Mossville, Illinois",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Irving, Texas",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Portage, Michigan",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Indiana, , , Indianapolis",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "La, Crosse, Wisconsin",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Nashville, Tennessee",
+      "expected": "US",
+      "note": "美国州名/州缩写：只在「City, ST」位置且原串大写才认（线上真实写法）"
+    },
+    {
+      "location": "Chennai, TN, in",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Pune, Maharashtra, in",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Montreal, QC, ca",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Toronto, ON, CAN",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Toronto, Canada",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Warsaw, Masovian, PL, 02-677",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Søborg, Capital Region of Denmark, DK",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Buenos Aires, Capital Federal, AR, C1107CBE",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Subang Jaya, Selangor, Malaysia",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Tbilisi, Georgia",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Taikoo, Shing, 12, Taikoo, Wan, Road",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "Sydney, NSW",
+      "expected": null,
+      "note": "州缩写不许撞别国的州/省缩写与英文单词（改前 ', ca'/', ma' 子串把这些判成了美国）"
+    },
+    {
+      "location": "印度、越南",
+      "expected": "VN",
+      "note": "多国混写串：按**词表里国家的顺序**判，不是按串里段的顺序（把 _STRICT_CJK_PLACES 摊平成单张表就会改判，两侧会对不上）"
+    },
+    {
+      "location": "雅加达、吉隆坡",
+      "expected": "MY",
+      "note": "多国混写串：按**词表里国家的顺序**判，不是按串里段的顺序（把 _STRICT_CJK_PLACES 摊平成单张表就会改判，两侧会对不上）"
+    },
+    {
+      "location": "加纳、赞比亚",
+      "expected": "ZM",
+      "note": "多国混写串：按**词表里国家的顺序**判，不是按串里段的顺序（把 _STRICT_CJK_PLACES 摊平成单张表就会改判，两侧会对不上）"
+    },
+    {
+      "location": "雅加达、马尼拉、曼谷",
+      "expected": "TH",
+      "note": "多国混写串：按**词表里国家的顺序**判，不是按串里段的顺序（把 _STRICT_CJK_PLACES 摊平成单张表就会改判，两侧会对不上）"
+    },
+    {
+      "location": "摩洛哥,阿根廷,美国,德国,海外",
+      "expected": "US",
+      "note": "多国混写串：按**词表里国家的顺序**判，不是按串里段的顺序（把 _STRICT_CJK_PLACES 摊平成单张表就会改判，两侧会对不上）"
+    },
+    {
+      "location": "柳州市、南非",
+      "expected": "CN",
+      "note": "一岗多地：只要有一段是大陆地名就判 CN（那种岗确实有一部分在国内，判成境外等于抹掉国内供给）"
+    },
+    {
+      "location": "保定市,俄罗斯",
+      "expected": "CN",
+      "note": "一岗多地：只要有一段是大陆地名就判 CN（那种岗确实有一部分在国内，判成境外等于抹掉国内供给）"
+    },
+    {
+      "location": "墨西哥,长春市",
+      "expected": "CN",
+      "note": "一岗多地：只要有一段是大陆地名就判 CN（那种岗确实有一部分在国内，判成境外等于抹掉国内供给）"
+    },
+    {
+      "location": "菲律宾、柳州市",
+      "expected": "CN",
+      "note": "一岗多地：只要有一段是大陆地名就判 CN（那种岗确实有一部分在国内，判成境外等于抹掉国内供给）"
+    },
+    {
+      "location": "池州市、九江市、摩洛哥",
+      "expected": "CN",
+      "note": "一岗多地：只要有一段是大陆地名就判 CN（那种岗确实有一部分在国内，判成境外等于抹掉国内供给）"
+    },
+    {
+      "location": "青岛市、日本、潍坊市",
+      "expected": "CN",
+      "note": "一岗多地：只要有一段是大陆地名就判 CN（那种岗确实有一部分在国内，判成境外等于抹掉国内供给）"
+    },
+    {
+      "location": "韩国·庆尚南道·咸阳郡",
+      "expected": "KR",
+      "note": "韩国的郡不是中国的市：「咸阳」是陕西地级市，但「咸阳郡」在庆尚南道 —— 郡不在 _ADMIN_SUFFIXES 里，所以 CN 规则命中不了"
+    },
+    {
+      "location": "海外区域",
+      "expected": null,
+      "note": "自报境外但没说哪国：code 仍是 None，靠 is_overseas_unspecified 判 overseas（中控技术 26 个在招岗这么写）"
+    },
+    {
+      "location": "保定市,海外",
+      "expected": "CN",
+      "note": "混写「大陆城市 + 海外」仍判 CN —— 自报境外那条规则不许把这类岗带走"
+    }
+  ]
+}
