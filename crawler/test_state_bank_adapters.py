@@ -301,9 +301,9 @@ class _FakePage:
     def evaluate(self, script, arg=None):
         if "document.body" in script:
             return self.body_text
-        if arg == "posCardInfo":
+        if arg is not None:                       # _collect 传 state_key（posCardInfo / batchCardInfo）
             return self._for_load(self.cards_per_load) or []
-        return self._for_load(self.details_per_load)
+        return self._for_load(self.details_per_load)   # _DETAIL_JS 不带参数
 
 
 class _FastAbchina(AbchinaAdapter):
@@ -325,8 +325,9 @@ class AbchinaBlankRenderTest(unittest.TestCase):
     def test_blank_page_is_retried_and_recovers_the_org(self):
         page = _FakePage(cards_per_load=[[], [{"jobPublishId": 1, "posName": "岗"}]],
                          body_text="")
-        got = self.adapter._collect_positions(page, "https://example.invalid/#/org")
+        got, seen = self.adapter._collect_positions(page, "https://example.invalid/#/org")
         self.assertEqual(len(got), 1)
+        self.assertTrue(seen)
         self.assertEqual(page.opens, 2)          # 第一次空白 → 重开一次才拿到
 
     def test_rendered_page_without_cards_is_not_retried(self):
@@ -334,8 +335,24 @@ class AbchinaBlankRenderTest(unittest.TestCase):
         # 对它重试只会在每家机构身上白等一个 RENDER_TIMEOUT_MS。
         page = _FakePage(cards_per_load=[[], [{"jobPublishId": 1, "posName": "岗"}]],
                          body_text="人才招聘 个人中心 首页 校园招聘 社会招聘 专项招聘 帮助")
-        self.assertEqual(self.adapter._collect_positions(page, "https://example.invalid/#/org"), [])
+        got, seen = self.adapter._collect_positions(page, "https://example.invalid/#/org")
+        self.assertEqual(got, [])
+        self.assertTrue(seen, "渲染了但没有卡片 = 这家真的没在招，是结论，不该记成没抓全")
         self.assertEqual(page.opens, 1)
+
+    def test_persistently_blank_org_is_reported_as_not_seen(self):
+        """两次都整页空白 → 这家有没有岗我们**不知道**。
+
+        ⚠️ 这条是最关键的一条：只重试一次并不能消灭「静默漏一整家机构」，只是把概率降低了。
+        返回空列表而不声明「没看见」，调用方就会把它当成「这家没在招」，
+        fetch_complete 照样是 True —— 而 fetch_complete=True 是对下游（list-absence 撤岗）
+        的一个承诺：剩下没看到的都可以当撤岗处理。谎报它会误杀在招岗。
+        """
+        page = _FakePage(cards_per_load=[[], []], body_text="")
+        got, seen = self.adapter._collect_positions(page, "https://example.invalid/#/org")
+        self.assertEqual(got, [])
+        self.assertFalse(seen)
+        self.assertEqual(page.opens, 2)          # 试满两次才放弃
 
     def test_detail_belonging_to_another_job_is_refused(self):
         """详情页的 posName 与列表卡对不上就不要 —— 宁可留薄卡，也不能把 A 岗的正文挂到 B 岗。"""

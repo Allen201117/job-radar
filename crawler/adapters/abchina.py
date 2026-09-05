@@ -177,26 +177,29 @@ class AbchinaAdapter(BaseAdapter):
         page.goto(url, wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
         page.reload(wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
 
-    def _collect_positions(self, page, url: str) -> list:
-        """取一家机构的岗位卡，**整页空白时重试一次**。
+    def _collect_positions(self, page, url: str):
+        """取一家机构的岗位卡。返回 **(岗位卡, 这家是不是真看见了)**。
 
-        ⚠️ 为什么要这层重试：这个站会间歇性地把详情/机构页渲染成完全空白（body 长度为 0），
-        实测 14 家里撞上好几家，reload 一次基本就好。原实现只要 `_collect` 返回空就当
-        「这家当期没在招」，于是这些机构的岗位**静默消失**、而 fetch_complete 还是 True ——
-        正是 CLAUDE.md「接口返 0 不能证明对方没开」那条碑的同一个病。
+        ⚠️ 第二个值就是这个方法存在的理由：不能只返回一个列表。空列表有两种含义，处置相反 ——
+        「页面渲染出来了、确实没有岗」是**结论**（这家当期没在招）；
+        「整页空白，等多久都不出卡片」是**我们没看见**，必须让 fetch_complete 记成 False。
+        把后者当成前者，就是 CLAUDE.md「接口返 0 不能证明对方没开」那条碑的同一个病：
+        岗位静默消失，而这一轮还自称抓全了。
 
-        ⚠️ 只在**整页空白**时重试：页面确实渲染出来了、只是没有卡片，那才是真的没在招；
-        对这种情况重试只会在每家身上白等一整个 RENDER_TIMEOUT_MS。
+        ⚠️ 只在**整页空白**时重试：页面渲染了但没有卡片那是真没在招，重试只会在每家身上
+        白等一整个 RENDER_TIMEOUT_MS（一轮 45 家里实测有 2 家属于此类）。
         """
         for attempt in (1, 2):
             self._open(page, url)
             found = self._collect(page, "posCardInfo")
             if found:
-                return found
+                return found, True
             if not self._page_is_blank(page):
-                return []          # 渲染了、就是没岗
+                return [], True          # 渲染了、就是没岗 —— 这是结论
             logger.info("abchina: blank render on %s (attempt %d)", url, attempt)
-        return []
+        # 两次都整页空白：这家到底有没有岗，我们**不知道**。不许当成「没在招」。
+        logger.warning("abchina: %s stayed blank on every attempt; counting this run as incomplete", url)
+        return [], False
 
     def _detail_of(self, page, job_id: str, want_name: str) -> Optional[dict]:
         """打开逐岗详情页，把解密后的 posDetails 读回来；拿不到就返回 None（留薄卡，不编）。
@@ -295,8 +298,10 @@ class AbchinaAdapter(BaseAdapter):
                         if not org_id:
                             continue
                         try:
-                            found = self._collect_positions(
+                            found, org_seen = self._collect_positions(
                                 page, self.ORG_URL.format(recruit_type=recruit_type, org_id=org_id))
+                            if not org_seen:
+                                incomplete = True
                         except Exception as exc:
                             # 这个站会间歇性掐连接（net::ERR_EMPTY_RESPONSE）。一家机构打不开
                             # 就把整源扔掉是错的取舍（同 sf_express 那次「末页少 2 条 → 2,164 个

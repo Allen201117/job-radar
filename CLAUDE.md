@@ -304,8 +304,13 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       等多久都不会出卡片，reload 一次就好。一轮 45 家里撞上 9 次，其中 6 家重试后
                          #       拿到了真岗位（34/129/91/189/20/16 = 479 个岗）——原实现把这些**静默丢掉**，
                          #       且 fetch_complete 照样是 True。同 CLAUDE.md「接口返 0 不能证明对方没开」那条碑。
-                         #       ✅ 判据要分两种：**整页空白**（body 空）→ 重试；**渲染了但没有卡片**（有导航栏
-                         #       文案）→ 这家真的没在招，别重试（重试要在每家身上白等一整个 25s）。
+                         #       ✅ 判据要分**三**种，缺一不可：**整页空白**（body 空）→ 重试；**渲染了但没有
+                         #       卡片**（有导航栏文案）→ 这家真的没在招，别重试（重试要在每家身上白等一整个 25s）；
+                         #       **重试后仍整页空白** → 这家有没有岗我们**不知道**，必须记 fetch_complete=False。
+                         #       ⚠️ 只加重试是不够的（我第一版就是这样，被 code review 抓出来）：那只把「静默漏
+                         #       一整家」的概率降低了，没消除 —— 空列表若不带「没看见」这个信号，调用方照样当成
+                         #       「这家没在招」。而 fetch_complete=True 是对 list-absence 撤岗的承诺（没看到的都可
+                         #       当撤岗），谎报它会误杀在招岗。判据钉在 test_persistently_blank_org_is_reported_as_not_seen。
                          #     ⚠️ 它也会间歇性掐连接（net::ERR_EMPTY_RESPONSE，同一轮里撞到 1 次）。一家机构
                          #       打不开就 raise = 把整源 2,600 个岗全扔掉（同 sf_express「末页少 2 条丢 2,164 岗」）。
                          #       正解 = 记 fetch_complete=False，把已经拿到的交出去。
