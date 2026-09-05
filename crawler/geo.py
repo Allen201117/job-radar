@@ -611,16 +611,95 @@ _US_STATE_TAIL_RE = re.compile(
 )
 
 
+# 只写城市名、不带州的写法（Apple / 诺华 / NXP 的岗位板整批这么写：
+# "Beaverton" / "Culver City" / "Phoenix, , , E, Camelback" / "Cary, 3000, CentreGreen, Way"）。
+# 州缩写那套规则对它们无能为力（串里根本没有州），live 实测 298 个地点 / 1,972 个在招岗
+# 因此抽不出国家 → 按源 regions 兜底 → 源含 CN 就算进国内供给。
+# ⚠️ 城市名是**无条件 token**，不受任何位置/大小写限制，所以只收「没有知名同名外国城市」的：
+#    Cambridge / Durham / Birmingham / Richmond / Melbourne / Vienna / Dublin / Athens /
+#    Manchester / Milton / Markham 这类英美加澳重名的**一律不收**——收错一个就是把
+#    英国岗判成美国岗。Ontario 同理不收（Ontario 既是加拿大省份也是加州城市）。
+_US_CITY_NAMES = (
+    "indianapolis", "orlando", "pittsburgh", "boulder", "clearwater",
+    "scottsdale", "white plains", "fort lauderdale", "aliso viejo",
+    "palm beach gardens", "columbus", "philadelphia", "leawood", "raleigh",
+    "carlsbad", "las vegas", "overland park", "waukesha", "morristown",
+    "minneapolis", "fort worth", "fargo", "charlotte", "golden valley",
+    "walnut creek", "urbandale", "van nuys", "louisville", "chesterfield",
+    "schaumburg", "phoenix", "cary", "alpharetta", "chandler", "jacksonville",
+    "beaverton", "culver city", "waltham", "lehi", "irvine", "reston",
+    "milwaukee", "detroit", "kansas city", "salt lake city", "saint louis",
+    "st. louis", "memphis", "nashville", "tampa", "miami", "baltimore",
+    "sacramento", "san antonio", "santa monica", "tucson", "albuquerque",
+    "boise", "omaha", "des moines", "wichita", "oklahoma city", "tulsa",
+    "new orleans", "colorado springs", "fort collins", "grand rapids",
+    "ann arbor", "kalamazoo", "peoria", "sioux falls", "cincinnati",
+    "cleveland", "el paso", "plano", "irving", "richardson", "round rock",
+    "greenville", "hunt valley", "morris plains", "east hanover", "rahway",
+    "troy", "mossville", "portage", "lafayette", "batesville", "noblesville",
+    "smithfield", "merrimack", "glenview", "deerfield", "swiftwater",
+    "allentown", "mahwah", "maitland", "miramar", "livonia", "menominee",
+    "seguin", "waco", "tyler", "griffin", "corinth", "clarksville",
+)
+
+# 串尾两字母码撞别国国别码时的护栏（本规则只减不增：命中就**不判美国**，落回 None）。
+# ⚠️ 加拿大只认**省码**、不认省份全称：Ontario 既是加拿大省份也是加州的城市，
+#    live 实测 "ONTARIO, CA"/"Ontario, CA" 23 个岗是加州安大略市、
+#    "Mississauga, Ontario, CA" 35 个岗是加拿大安大略省 —— 认全称会把前者误杀。
+#    省码没有这个问题："Toronto, ON, CA" / "Calgary, AB, CA" 里的 CA 必是加拿大。
+_CA_PROVINCE_CODES = frozenset("AB BC MB NB NL NS NT NU ON PE QC SK YT".split())
+# ⚠️ 印度反过来：邦名不与任何美国地名重名，所以码和全称都能收。
+#    main 原注释只挡住了小写的 "Chennai, TN, in"，**大写的 "Mumbai, Maharashtra, IN"
+#    仍然会被判成印第安纳**（live 实测 2 个在招岗），这里补上。
+_IN_REGION_CODES = frozenset("AP AR AS BR CG DL GA GJ HP HR JH JK KA KL MH ML MN MP MZ NL "
+                             "OD PB RJ SK TN TS UK UP WB".split())
+_IN_REGION_NAMES = (
+    "maharashtra", "karnataka", "telangana", "tamil nadu", "haryana", "gujarat",
+    "kerala", "punjab", "rajasthan", "bengaluru", "bangalore", "mumbai",
+    "chennai", "hyderabad", "gurgaon", "gurugram", "noida", "kolkata", "ahmedabad",
+)
+_TAIL_CODE_GUARDS = {"CA": "_ca", "IN": "_in"}
+
 # 州全称并进 US 词表，走 _contains_token 的词边界语义（"Mossville, Illinois" 即命中）。
 _COUNTRY_TOKENS["US"].extend(_US_STATE_NAMES)
+# 城市名同样并进 US 词表（同为词边界语义）。
+_COUNTRY_TOKENS["US"].extend(_US_CITY_NAMES)
+
+
+def _foreign_tail_code(text: str, upper_tokens: set, code: str) -> bool:
+    """串尾那个两字母码其实是别国国别码吗？只对 CA / IN 这两个真撞车的做判定。"""
+    if code == "CA":
+        return bool(upper_tokens & _CA_PROVINCE_CODES)
+    if code == "IN":
+        if upper_tokens & _IN_REGION_CODES:
+            return True
+        return any(_contains_token(text, name) for name in _IN_REGION_NAMES)
+    return False
 
 
 def _has_us_state(location: Optional[str]) -> bool:
-    """「City, ST」位置上的美国州缩写。必须大写、必须在串尾，避免撞英文单词与别国缩写。"""
+    """「City, ST」位置上的美国州缩写。必须大写、必须在串尾，避免撞英文单词与别国缩写。
+
+    ⚠️ 大写 + 串尾仍挡不住两个真撞车的国别码，live 实测都在库里：
+      · "Toronto, ON, CA" / "Calgary, AB, CA" —— CA 是加拿大不是加州（42 个在招岗）
+      · "Mumbai, Maharashtra, IN" —— IN 是印度不是印第安纳（2 个）
+    所以再加一道**只减不增**的护栏：串里另有该国的省/邦标识就不判美国。
+    """
     if not location:
         return False
-    match = _US_STATE_TAIL_RE.search(location.strip())
-    return bool(match) and match.group(1) in _US_STATE_CODES
+    stripped = location.strip()
+    match = _US_STATE_TAIL_RE.search(stripped)
+    if not match:
+        return False
+    code = match.group(1)
+    if code not in _US_STATE_CODES:
+        return False
+    if code in _TAIL_CODE_GUARDS:
+        upper = {t for t in re.split(r"[^A-Za-z]+", stripped) if t.isupper()}
+        upper.discard(code)
+        if _foreign_tail_code(_norm(stripped), upper, code):
+            return False
+    return True
 
 def _norm(text: Optional[str]) -> str:
     return (text or "").strip().lower()
