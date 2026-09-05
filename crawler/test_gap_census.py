@@ -325,3 +325,108 @@ class QueuePlanningTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RevalidateLaneTest(unittest.TestCase):
+    """退避复验车道：adapter 修好后，受益公司不该干等一个月才被重测。
+
+    实证（2026-09-05）：埃斯顿 8-28 判 no_stable_jd、退避到 9-30，而 8-27 落地的 beisen
+    改动当天就能从同一个 URL 抓到 63 个健康岗——期间 8 次定时跑一次都没复测它。
+    """
+
+    def _row(self, company, state, *, days_ago, retry_days):
+        return {
+            "company": company,
+            "industries": ["金融"],
+            "state": state,
+            "last_attempt_at": (NOW - timedelta(days=days_ago)).isoformat(),
+            "next_retry_at": (NOW + timedelta(days=retry_days)).isoformat(),
+        }
+
+    def test_spare_capacity_revalidates_longest_waiting_first(self):
+        rows = [
+            self._row("等最久", "no_stable_jd", days_ago=30, retry_days=25),
+            self._row("等中等", "no_stable_jd", days_ago=10, retry_days=25),
+            self._row("刚跑过", "no_stable_jd", days_ago=1, retry_days=25),
+        ]
+        queue = gc.plan_queue(
+            rows, {"金融"}, set(), {"金融": 0.1}, now=NOW, cap=20,
+            revalidate_slots=2,
+        )
+        self.assertEqual([r["company"] for r in queue], ["等最久", "等中等"])
+
+    def test_due_rows_keep_priority_over_revalidation(self):
+        rows = [
+            self._row("退避中", "no_stable_jd", days_ago=30, retry_days=25),
+            {"company": "已到期", "industries": ["金融"], "state": "no_stable_jd",
+             "next_retry_at": (NOW - timedelta(seconds=1)).isoformat()},
+        ]
+        queue = gc.plan_queue(
+            rows, {"金融"}, set(), {"金融": 0.1}, now=NOW, cap=20,
+            revalidate_slots=5,
+        )
+        self.assertEqual(queue[0]["company"], "已到期")
+        self.assertEqual(len(queue), 2)
+
+    def test_revalidation_never_exceeds_cap(self):
+        rows = [
+            {"company": f"到期{i}", "industries": ["金融"], "state": "unknown"}
+            for i in range(4)
+        ] + [self._row("退避中", "no_stable_jd", days_ago=99, retry_days=25)]
+        queue = gc.plan_queue(
+            rows, {"金融"}, set(), {"金融": 0.1}, now=NOW, cap=4,
+            revalidate_slots=3,
+        )
+        self.assertEqual(len(queue), 4)
+        self.assertNotIn("退避中", [r["company"] for r in queue])
+
+    def test_terminal_and_manual_states_are_never_revalidated(self):
+        """治理/登录墙/反爬是「人工或对方的问题」，不会因我们改 adapter 而变化。"""
+        rows = [
+            self._row("治理", "governance_candidate", days_ago=99, retry_days=25),
+            self._row("登录墙", "login_wall", days_ago=99, retry_days=25),
+            self._row("反爬", "anti_bot", days_ago=99, retry_days=25),
+            self._row("人工", "manual_review", days_ago=99, retry_days=25),
+            self._row("健康", "healthy", days_ago=99, retry_days=25),
+        ]
+        queue = gc.plan_queue(
+            rows, {"金融"}, set(), {"金融": 0.1}, now=NOW, cap=20,
+            revalidate_slots=5,
+        )
+        self.assertEqual(queue, [])
+
+    def test_slots_zero_disables_the_lane(self):
+        rows = [self._row("退避中", "no_stable_jd", days_ago=99, retry_days=25)]
+        self.assertEqual(
+            gc.plan_queue(rows, {"金融"}, set(), {"金融": 0.1},
+                          now=NOW, cap=20, revalidate_slots=0),
+            [],
+        )
+
+    def test_ignore_backoff_still_wins_and_does_not_double_count(self):
+        rows = [self._row("点名", "no_stable_jd", days_ago=99, retry_days=25)]
+        queue = gc.plan_queue(
+            rows, {"金融"}, set(), {"金融": 0.1}, now=NOW, cap=20,
+            ignore_backoff=True, revalidate_slots=3,
+        )
+        self.assertEqual([r["company"] for r in queue], ["点名"])
+
+    def test_never_attempted_rows_are_not_treated_as_long_waiting(self):
+        """last_attempt_at 缺失 = 排了期但没跑过，不是「等了很久」，退避照常生效。"""
+        rows = [{
+            "company": "排期未跑", "industries": ["金融"], "state": "no_stable_jd",
+            "next_retry_at": (NOW + timedelta(days=1)).isoformat(),
+        }]
+        self.assertEqual(
+            gc.plan_queue(rows, {"金融"}, set(), {"金融": 0.1},
+                          now=NOW, cap=20, revalidate_slots=3),
+            [],
+        )
+
+    def test_recent_attempt_is_not_revalidated(self):
+        rows = [self._row("刚跑过", "no_stable_jd", days_ago=2, retry_days=25)]
+        self.assertEqual(
+            gc.plan_queue(rows, {"金融"}, set(), {"金融": 0.1},
+                          now=NOW, cap=20, revalidate_slots=3),
+            [],
+        )

@@ -49,6 +49,32 @@ class TestDeriveCountryCode(unittest.TestCase):
         self.assertIsNone(derive_country_code(""))
         self.assertIsNone(derive_country_code("Multiple Locations"))
 
+    def test_iso_country_code_cn(self):
+        """外企 ATS 给小写国别码 + 空格分词拼音城市，只有认 "cn" 才判得出中国。
+
+        这几个串是 SmartRecruiters 上大陆集团中国岗的原样地点（2026-09-05 live 抓取）。
+        城市 "He Fei Shi" 与拼音表里的 "hefei" 按词边界对不上 ⇒ code=None ⇒
+        location_in_scope 落「非远程且无国家」的 False 分支 ⇒ 中国岗被当成非中国岗丢掉。
+        29 个中国岗里 8 个（28%）就是这么丢的。
+        """
+        for location in (
+            "He Fei Shi, An Hui Sheng, cn",
+            "Ning Bo Shi, Zhe Jiang Sheng, cn",
+            "Ji Ning Shi, Shan Dong Sheng, cn",
+            "Yang Pu Qu, Shang Hai Shi, cn",
+            "Zhangjiagang, cn",
+        ):
+            with self.subTest(location=location):
+                self.assertEqual(derive_country_code(location), "CN")
+                self.assertTrue(location_in_scope(location, {"CN", "US", "SG", "Remote"}))
+
+    def test_iso_cn_does_not_leak_into_other_places(self):
+        # "cn" 只在独立成词时算国别码；也别抢走港澳台的归属
+        self.assertNotEqual(derive_country_code("Cincinnati, OH"), "CN")
+        self.assertNotEqual(derive_country_code("Chennai, TN, in"), "CN")
+        self.assertEqual(derive_country_code("Hong Kong, cn"), "HK")
+        self.assertEqual(derive_country_code("Taipei, Taiwan, Province of China"), "TW")
+
 
 class TestDeriveJobScope(unittest.TestCase):
     def test_greater_china_is_domestic(self):

@@ -4,6 +4,14 @@ from typing import Optional
 
 CHINA_LOCATION_MARKERS = (
     "china", "中国", "prc", "greater china",
+    # ISO-2 国家码。外企 ATS（SmartRecruiters / Greenhouse 等）的 location.country 直接给
+    # 小写国别码，而城市名是**空格分词的拼音**（"He Fei Shi" / "Ning Bo Shi" / "Zhe Jiang Sheng"），
+    # 拼音表按词边界一个都对不上 ⇒ derive_country_code 返回 None ⇒ location_in_scope 落
+    # 「非远程且无国家」的 False 分支 ⇒ **中国岗被当成非中国岗直接丢弃**。
+    # 大陆集团 29 个中国岗里 8 个（28%）就是这么丢的（2026-09-05 live 实测）。
+    # 认这个码是**对方自己声明的国别**，不是我们猜的；全库 596 行含独立 "cn" 词的 active 岗
+    # 逐行核过，现判定 100% 已经是 CN，加它零误伤。
+    "cn",
     # First/new first-tier and major industrial cities. Foreign ATS boards often
     # provide only a city/province name without an explicit "China" suffix.
     "beijing", "shanghai", "shenzhen", "guangzhou", "hangzhou", "chengdu",
