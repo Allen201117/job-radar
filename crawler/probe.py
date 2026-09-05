@@ -40,6 +40,8 @@ _HTTPX_ADAPTERS = {
     # 不列在这里会导致 --emit 出来的迁移把 crawl_method 写成 playwright（误导运维），
     # 也会让默认（不带 --all）的探活白白跳过一整类最容易扩的源。
     "feishu", "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu",
+    # 国有大行 + 中国移动自建门户（2026-09-05 接入）：全部纯 httpx，探活出来的迁移应写 crawl_method=http
+    "spdb", "icbc", "ccb", "bankcomm", "cmcc",
     "netease",  # 网易自建：hr.163.com queryPage httpx 直连（详见 adapters/netease.py）
     "oppo",  # OPPO 校招门户：careers.oppo.com openapi httpx 直连（详见 adapters/oppo.py）
     "xiaohongshu",  # 小红书自建：job.xiaohongshu.com pageQueryPosition httpx 直连（详见 adapters/xiaohongshu.py）
@@ -55,6 +57,7 @@ _HTTPX_ADAPTERS = {
     "tencent_music",  # 腾讯音乐自建：job/list + uc-job/list 公开接口,零浏览器
     "antgroup",  # 蚂蚁集团自建：hrcareersweb position/search 公开接口,零浏览器
     "mihoyo", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree",  # 自建门户公开接口/SSR，零浏览器
+    "chnenergy",  # 国家能源集团自建门户：POST recTypeSerch 列表，零浏览器
 }
 
 # 通用 ATS 的 URL 模板：给定 slug 即可拼出公开 JSON 接口地址。
@@ -330,6 +333,12 @@ def probe_one(cand: dict, timeout: int = 15):
         adapter.timeout = timeout
     except Exception:
         pass
+    # ADAPTERS 是**共享单例**：上一家认出的平台必须清掉，否则会安到下一家头上（张冠李戴）。
+    # PlaywrightAdapter.fetch 自己也重置一次，这里是不依赖某个子类记得做的那道保险。
+    try:
+        adapter.entry_hint = None
+    except Exception:
+        pass
     try:
         html = adapter.fetch(cand["url"])
         raw_jobs = adapter.parse(html)
@@ -367,7 +376,19 @@ def probe_one(cand: dict, timeout: int = 15):
 
     # 外企看板要求真实在华岗位；本土看板按构造即在华，valid 即可。
     ok = china > 0 if cand["adapter"] in _FOREIGN_ATS else valid > 0
-    return {"ok": ok, "valid": valid, "china": china, "parsed": len(raw_jobs), "sample": sample}
+    result = {"ok": ok, "valid": valid, "china": china, "parsed": len(raw_jobs), "sample": sample}
+    # 把 adapter 从渲染后的入口页认出的真实平台带出去，**不管这次探活成没成**。
+    # ⚠️ 曾经只在 valid == 0 时才带（怕「拿确定产出赌一个更好的」），结果漏掉了更坏的一种：
+    # 宝洁的 company_spa 通用盲抓**侥幸解析出 1 个岗** → 探活「成功」→ 直接进验收门 →
+    # 源被 enable、1 个岗入库，而这家真身是 moka 租户 pg/91934、实测 42 个岗。
+    # 「抓到了一点点」比「一个都没抓到」更危险：源 enabled、crawl_runs success、
+    # 北极星把它算成「有货」，另外 41 个岗永远不会来，且没有任何告警会响。
+    # 换不换由调用方决定（gap_funnel_browser 会真去探一次、按 valid 多的那个选），
+    # 这里只负责把线索交出去。
+    entry_hint = getattr(adapter, "entry_hint", None)
+    if entry_hint:
+        result["ats_hint"] = dict(entry_hint)
+    return result
 
 
 def emit_sql(prefix: str, passed: list):

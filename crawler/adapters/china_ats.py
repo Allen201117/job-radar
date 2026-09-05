@@ -1678,3 +1678,6 @@ class CompanySpaAdapter(ChinaSpaAdapter):
     name = "company_spa"
     intercept_matches = ()  # 拦截所有 JSON
     detail_template = ""    # 不拼链接，只用接口里的真实 URL
+    # 通用盲抓 = 「不知道对方是什么平台」，所以每次都从渲染后的页面认一次真实 ATS。
+    # 认出来后由 gap_funnel_browser 换成真 adapter 重抓（万泰生物同一 URL：本类 0 个岗，moka 15 个）。
+    capture_entry_hint = True

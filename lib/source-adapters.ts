@@ -268,6 +268,12 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填企业 Gllue 列表地址（https://{company}.career.gllue.com/jobs）；适配器按 page 翻页并限量抓公开详情正文，crawl_method 选 http",
   },
   {
+    value: "chnenergy",
+    label: "国家能源集团（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填 https://zhaopin.chnenergy.com.cn/index1；适配器直连公开 recTypeSerch 列表（校招 5 个子渠道 + 社招，内部招聘不抓）并逐岗抓 /annc/showgw 详情，crawl_method 选 http",
+  },
+  {
     value: "cnstaff",
     label: "聘客 cnstaff（通用 ATS · 本土企业官网）",
     origin: "domestic",
@@ -296,6 +302,42 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     label: "格力（自建门户 · 本土）",
     origin: "domestic",
     hint: "填 https://zhaopin.greeyun.com/；适配器直连公开校招和社招接口，crawl_method 选 http",
+  },
+  {
+    value: "spdb",
+    label: "浦发银行（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填 https://job.spdb.com.cn/socialJob；适配器直连公开社招/校招列表并逐岗抓详情页正文，crawl_method 选 http",
+  },
+  {
+    value: "icbc",
+    label: "工商银行（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填 https://job.icbc.com.cn/pc/index.html；适配器直连公开 qryPostList/qryPostById 接口（校招+社招），crawl_method 选 http",
+  },
+  {
+    value: "ccb",
+    label: "建设银行（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填 https://job3.ccb.com/cn/job/job_list.html；适配器直连公开职务信息列表/岗位详情接口（校招+社招+实习），crawl_method 选 http",
+  },
+  {
+    value: "bankcomm",
+    label: "交通银行（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填 https://job.bankcomm.com/#/social；适配器直连公开 querySocietyRecruitInfo/queryPositionDetail 接口，crawl_method 选 http",
+  },
+  {
+    value: "cmcc",
+    label: "中国移动（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填 https://job.10086.cn/personal/job/；适配器直连公开 searchJobs 接口（签名头自算），crawl_method 选 http",
+  },
+  {
+    value: "abchina",
+    label: "农业银行（自建门户 · 本土 · 浏览器）",
+    origin: "domestic",
+    hint: "填 https://career.abchina.com/build/index.html；接口响应体是 SM4 密文，只能用浏览器读页面渲染结果，crawl_method 选 playwright",
   },
   {
     value: "amazon",
