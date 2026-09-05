@@ -99,13 +99,21 @@ def get_sources(supabase: Client) -> list[dict]:
 
 
 def create_crawl_run(supabase: Client, source_id: str) -> str:
-    """创建抓取日志，返回 run_id。"""
+    """创建抓取日志，返回 run_id。
+
+    ⚠️ 占位状态必须是 `running`，**不能**是任何终态（迁移 234）。
+    这行在开抓前就插入、跑完才被 update_crawl_run 覆盖成终态；占位符若用 'skipped'，
+    进程半途死掉（CI 超时/取消、OOM、被 kill）的源就会**永远停在 skipped**，
+    跟 robots 拦截 / adapter should_skip 主动跳过的源在台账里长得一模一样 ——
+    而规则 F 只认 status='failed'，于是一次 CI 超时吞掉 10 个源、台账上一点异常都看不见
+    （2026-09-05 实测近 7 天 25 条中招）。姊妹表 discovery_runs 的 CHECK 早就有 running。
+    """
     run_id = str(uuid.uuid4())
     supabase.table("crawl_runs").insert({
         "id": run_id,
         "source_id": source_id,
         "started_at": datetime.now(timezone.utc).isoformat(),
-        "status": "skipped",
+        "status": "running",
     }).execute()
     return run_id
 
