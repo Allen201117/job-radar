@@ -376,14 +376,17 @@ def probe_one(cand: dict, timeout: int = 15):
     # 外企看板要求真实在华岗位；本土看板按构造即在华，valid 即可。
     ok = china > 0 if cand["adapter"] in _FOREIGN_ATS else valid > 0
     result = {"ok": ok, "valid": valid, "china": china, "parsed": len(raw_jobs), "sample": sample}
-    # 一个可用岗都没拿到时，把 adapter 从渲染后的入口页认出的真实平台带出去。
-    # ⚠️ 这条**比异常那条更常见**：广汽/埃斯顿/华虹三家 company_spa 都是 fetch 成功、
-    # parse 出 0 个岗（拼不出逐岗 URL），不抛异常 —— 只看异常就永远认不出它们。
-    # ⚠️ 只在 valid == 0 时才换平台：已经抓到可用岗还去换，是拿确定的产出赌一个更好的。
-    if valid == 0:
-        entry_hint = getattr(adapter, "entry_hint", None)
-        if entry_hint:
-            result["ats_hint"] = dict(entry_hint)
+    # 把 adapter 从渲染后的入口页认出的真实平台带出去，**不管这次探活成没成**。
+    # ⚠️ 曾经只在 valid == 0 时才带（怕「拿确定产出赌一个更好的」），结果漏掉了更坏的一种：
+    # 宝洁的 company_spa 通用盲抓**侥幸解析出 1 个岗** → 探活「成功」→ 直接进验收门 →
+    # 源被 enable、1 个岗入库，而这家真身是 moka 租户 pg/91934、实测 42 个岗。
+    # 「抓到了一点点」比「一个都没抓到」更危险：源 enabled、crawl_runs success、
+    # 北极星把它算成「有货」，另外 41 个岗永远不会来，且没有任何告警会响。
+    # 换不换由调用方决定（gap_funnel_browser 会真去探一次、按 valid 多的那个选），
+    # 这里只负责把线索交出去。
+    entry_hint = getattr(adapter, "entry_hint", None)
+    if entry_hint:
+        result["ats_hint"] = dict(entry_hint)
     return result
 
 

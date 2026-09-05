@@ -474,6 +474,88 @@ class RecognizedAtsIdentityGateTest(unittest.TestCase):
         self.assertEqual(result["state"], "healthy")
         self.assertEqual(gate_calls[0]["adapter"], "beisen")
 
+    def test_lucky_partial_hit_by_company_spa_does_not_short_circuit(self):
+        """宝洁实录：company_spa 侥幸解析出 1 个岗 → 探活「成功」→ 源被 enable、1 个岗入库，
+        而真身是 moka 租户 pg/91934、实测 42 个。company_spa 是通用盲抓兜底不是真 adapter，
+        它「成功」也不算数。"""
+        row = {**_row("宝洁"), "official_entry_url": "https://careers.pg.com.cn/cn/zh/"}
+        gate_calls = []
+
+        def prober(candidate):
+            if candidate["adapter"] == "company_spa":
+                return {"ok": True, "valid": 1, "sample": "https://recruit.pg.com.cn/x",
+                        "ats_hint": {"platform": "moka", "adapter": "moka",
+                                     "source_url": "https://app.mokahr.com/social-recruitment/pg/91934",
+                                     "identity_text": "宝洁公司 社会招聘"}}
+            return {"ok": True, "valid": 42}
+
+        def gate(_entry, **kwargs):
+            gate_calls.append(kwargs)
+            return {"state": "healthy", "kept_source": True, "source_id": "s1",
+                    "next_retry_at": None, "evidence": {}}
+
+        result = browser.process_browser_company(
+            row, supabase="sb", jobs_conn="conn", apply=True, now=NOW,
+            prober=prober, acceptance_gate=gate,
+            fingerprinter=lambda *a, **k: self.fail("有 ats_hint 时不该跟子域跳"))
+        self.assertEqual(result["state"], "healthy")
+        self.assertEqual(gate_calls[0]["adapter"], "moka")
+        self.assertEqual(
+            gate_calls[0]["source_url"],
+            "https://app.mokahr.com/social-recruitment/pg/91934")
+
+    def test_swap_is_a_measurement_not_a_gamble(self):
+        """认出的真平台探出来更少 → 保留 company_spa 已确认的产出，绝不倒退。"""
+        row = {**_row("某公司"), "official_entry_url": "https://careers.example.com/"}
+        gate_calls = []
+
+        def prober(candidate):
+            if candidate["adapter"] == "company_spa":
+                return {"ok": True, "valid": 9,
+                        "ats_hint": {"platform": "moka", "adapter": "moka",
+                                     "source_url": "https://app.mokahr.com/x/1",
+                                     "identity_text": "某公司 招聘"}}
+            return {"ok": True, "valid": 2}   # 真 adapter 反而更少
+
+        def gate(_entry, **kwargs):
+            gate_calls.append(kwargs)
+            return {"state": "healthy", "kept_source": True, "source_id": "s1",
+                    "next_retry_at": None, "evidence": {}}
+
+        result = browser.process_browser_company(
+            row, supabase="sb", jobs_conn="conn", apply=True, now=NOW,
+            prober=prober, acceptance_gate=gate,
+            fingerprinter=lambda *a, **k: {"platform": "unknown", "adapter": None})
+        self.assertEqual(result["state"], "healthy")
+        self.assertEqual(gate_calls[0]["adapter"], "company_spa")
+        self.assertEqual(gate_calls[0]["source_url"], "https://careers.example.com/")
+
+    def test_a_working_real_adapter_is_never_second_guessed(self):
+        """已经用着真 adapter 且探活成功 → 维持现状，不多花一次浏览器复探。"""
+        row = {
+            **_row("丁公司"),
+            "official_entry_url": "https://tenant.mokahr.com/x",
+            "evidence": {"fingerprint": {"real_adapter": "moka",
+                                         "real_source_url": "https://tenant.mokahr.com/x"}},
+        }
+        calls = []
+
+        def prober(candidate):
+            calls.append(candidate["adapter"])
+            return {"ok": True, "valid": 5,
+                    "ats_hint": {"platform": "beisen", "adapter": "beisen",
+                                 "source_url": "https://x.zhiye.com/social",
+                                 "identity_text": "丁公司"}}
+
+        browser.process_browser_company(
+            row, supabase="sb", jobs_conn="conn", apply=True, now=NOW,
+            prober=prober,
+            acceptance_gate=lambda *a, **k: {
+                "state": "healthy", "kept_source": True, "source_id": "s",
+                "next_retry_at": None, "evidence": {}},
+            fingerprinter=lambda *a, **k: self.fail("不该跟跳"))
+        self.assertEqual(calls, ["moka"])   # 只探了一次，没被 ats_hint 折腾
+
     def test_anti_bot_never_triggers_an_adapter_swap(self):
         row = {**_row("某公司"), "evidence": {"fingerprint": {"identity_ok": True}}}
 
@@ -605,8 +687,13 @@ class ProbeBlockKindPassthroughTest(unittest.TestCase):
             })
         self.assertNotIn("ats_hint", result)
 
-    def test_entry_hint_is_ignored_once_real_jobs_were_found(self):
-        """已经抓到可用岗还去换平台，是拿确定的产出赌一个更好的。"""
+    def test_entry_hint_is_surfaced_even_when_jobs_were_found(self):
+        """探活「成功」也要把认出的平台交出去 —— 换不换由调用方按 valid 多少决定。
+
+        曾经只在 valid==0 时才带，漏掉了更坏的一种：宝洁 company_spa 侥幸解析出 1 个岗 →
+        探活成功 → 源被 enable、1 个岗入库，而真身 moka 租户有 42 个。
+        「抓到了一点点」比「一个都没抓到」更危险：绿灯、有源、北极星算它有货，没有告警会响。
+        """
         class _Works:
             entry_hint = None
 
@@ -626,7 +713,7 @@ class ProbeBlockKindPassthroughTest(unittest.TestCase):
                 "url": "https://recruit.example.com/list",
             })
         self.assertEqual(result["valid"], 1)
-        self.assertNotIn("ats_hint", result)
+        self.assertEqual(result["ats_hint"]["adapter"], "moka")
 
     def test_surfaces_kind_and_hops(self):
         result = self._probe_with(InterceptFailure(
