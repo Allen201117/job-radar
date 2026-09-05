@@ -9,6 +9,8 @@ import {
 } from "@/lib/source-adapters";
 import type { Source } from "@/lib/types";
 import { LEGACY_INPUT_CLASS as inputCls } from "@/components/ui/deprecated/legacy-input-class";
+import { cn } from "@/lib/utils";
+import { buttonVariants } from "@/components/ui";
 
 // 抓取方式的取值是给程序用的（http / playwright / manual），下拉里要给人话。
 // 只改显示、不改值——值是 lib/source-adapters.CRAWL_METHODS 的契约，与 crawler 端对齐。
@@ -199,7 +201,7 @@ export default function AddSourceForm({ onAdded }: Props) {
         <button
           type="submit"
           disabled={submitting}
-          className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] active:scale-[0.98] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+          className={cn(buttonVariants({ variant: "ink", size: "sm" }), "inline-flex items-center gap-2 font-semibold active:scale-[0.98] disabled:opacity-50")}
         >
           {submitting ? "保存中…" : "保存源"}
         </button>

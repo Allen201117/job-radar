@@ -196,7 +196,7 @@ def make_content_hash(title: str, location: Optional[str], summary: Optional[str
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def normalize(raw: RawJob, *, source_id: str, company: str) -> dict:
+def normalize(raw: RawJob, *, source_id: str, company: str, regions=None) -> dict:
     title = clean_title(raw.title)
     location = clean_location(raw.location)
     full_summary = clean_summary(raw.summary)
@@ -220,7 +220,7 @@ def normalize(raw: RawJob, *, source_id: str, company: str) -> dict:
         "title": title,
         "location": location,
         "country_code": derive_country_code(location),
-        "job_scope": derive_job_scope(location),
+        "job_scope": derive_job_scope(location, source_regions(regions)),
         "job_type": job_type,
         # 届别只认硬信号（2027届/27届/2027校招/Class of 2027…），抽不出留 None。
         # 绝不靠入库时间兜底——8 月同时在抓 2027 届新岗与 2026 届收尾岗，猜错=把往届岗

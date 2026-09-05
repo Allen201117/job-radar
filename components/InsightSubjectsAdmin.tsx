@@ -6,6 +6,8 @@ import ActionToast, { useActionToast } from "@/components/ActionToast";
 import { METRIC_LABEL } from "@/lib/insight-library";
 import { ASSERTION_LABEL } from "@/lib/insight-assertion-chip";
 import { formatDateLabel } from "@/lib/relative-time";
+import { cn } from "@/lib/utils";
+import { buttonVariants } from "@/components/ui";
 
 type Subject = {
   id: string;
@@ -211,7 +213,7 @@ export default function InsightSubjectsAdmin() {
         <button
           type="button"
           onClick={load}
-          className="rounded-full border border-black/[0.08] bg-white/70 px-3 py-1.5 t-label ink-2 dark:border-white/[0.1] dark:bg-white/[0.06]"
+          className={buttonVariants({ variant: "soft", size: "xs" })}
         >
           刷新
         </button>

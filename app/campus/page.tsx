@@ -2,9 +2,10 @@ export const dynamic = "force-dynamic";
 
 import { unstable_cache } from "next/cache";
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
-import { GraduationCap } from "@phosphor-icons/react/ssr";
+import { ArrowRight, GraduationCap } from "@phosphor-icons/react/ssr";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { companiesForIndustries, getUserCampusScope } from "@/lib/campus-user-industries";
 import { getCampusZone } from "@/lib/jobs-store/read";
@@ -138,6 +139,18 @@ export default async function CampusPage() {
       <Navbar />
       <ProductPage>
         <ProductHero eyebrow={HERO.eyebrow} title={HERO.title} description={HERO.description} icon={GraduationCap} />
+        {/* 有一类公司客观上没有「一岗一页」（中通校招=蓝天计划项目制、国有大行=公告制），
+            进不了岗位库、此前在产品里等于不存在。给它们一个显式入口，别让用户以为对方没在招。
+            刻意只放一行链接、不加一级导航：它是补充，不该和岗位库平级。 */}
+        <div className="mt-4">
+          <Link
+            href="/programs"
+            className="t-body-sm ink-2 hover:ink-1 inline-flex items-center gap-1.5 underline underline-offset-4"
+          >
+            有些公司不按岗位挂（校招项目 / 招聘公告），从这里投
+            <ArrowRight size={14} weight="bold" aria-hidden />
+          </Link>
+        </div>
         <CampusClient
           cards={cards}
           industries={industries}

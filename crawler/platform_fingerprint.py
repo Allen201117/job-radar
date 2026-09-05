@@ -111,20 +111,68 @@ def detect_platform(final_url, html):
     return ("unknown", None)
 
 
+# ── 「对方是不是真的拒了我们」的唯一判据 ──────────────────────────────────────
+# ⚠️ 只认三种证据：状态码 / WAF 与验证码厂商写进页面的基础设施标记 / **可见文本**里的拦截文案。
+# 绝不对整段 HTML 做裸子串匹配——2026-09-05 拿 105 个线上健康页面实测过旧判据的假阳性：
+#   · `akamai` + `denied`：greenhouse 的 hasbro job board（HTTP 200 的正常岗位 JSON）被判反爬，
+#     只因岗位正文提到 Akamai、条款里出现 denied。1/105。
+#   · `验证码` / `captcha`：**41/105（39%）** 命中——北森 / Moka 门户的登录框本来就带短信验证码。
+#     所以「页面里出现验证码字样」永远不能单独作为反爬判据，只有厂商基础设施标记才算数。
+#   · `请开启JavaScript`：那是**所有** SPA 的 <noscript> 兜底文案，是「这页要 JS」不是「对方拒了我们」，
+#     该走 unknown_spa 交给浏览器道，已删除。
+# 为什么较真：把我们自己的判断失误说成对方的行为，会把排查引向完全错误的方向——
+# 21 家必投公司被标 anti_bot（去研究怎么绕反爬），逐个核查后全部只是漏斗停在
+# 「公司官网的招聘介绍页」上，那种页面本来就没有岗位数据。同类见 CLAUDE.md
+# 「接口返 0 / 403 不能证明对方没开」。
+_BLOCK_STATUS = (403, 412, 503)
+_CHALLENGE_INFRA_RE = re.compile(
+    r"(cf-chl-|/cdn-cgi/challenge-platform/|cloudflare challenge|"
+    r"_incapsula_resource|incapsula incident|distil_r_captcha|"
+    r"captcha-delivery\.com|geetest\.com|c\.dun\.163\.com|aliyun[a-z]*captcha)",
+    re.I,
+)
+# 拦截页的可见文案。**只在「这一页不像招聘页」时才作数**：招聘页里出现这些词
+# 多半来自岗位正文或登录框，不是拦截。
+_BLOCK_TEXT_RE = re.compile(
+    r"(access denied|permission to access|unusual traffic|"
+    r"访问被拒绝|拒绝访问|请求被拒绝|访问受限|人机验证|滑动验证)",
+    re.I,
+)
+
+
+def _visible_text(html, limit=12000):
+    """去掉 script/style 与标签后的可见文本（判据只看人能看见的部分）。"""
+    visible = _SCRIPT_STYLE_RE.sub(" ", str(html or ""))
+    return unescape(_TAG_RE.sub(" ", visible))[:limit]
+
+
+def detect_block_signal(status_code, html):
+    """纯函数：这一页是不是**真的被对方拒了**。是 → 'anti_bot'；否 → None。
+
+    浏览器道（adapters/playwright_base）与 httpx 道（detect_page_state）共用这一份判据，
+    避免两边各写各的、对同一页给出不同结论。
+    """
+    text = str(html or "")
+    if status_code in _BLOCK_STATUS:
+        return "anti_bot"
+    if _CHALLENGE_INFRA_RE.search(text):
+        return "anti_bot"
+    if _looks_like_recruiting_page(text):
+        return None
+    title_match = _TITLE_RE.search(text)
+    title = unescape(_TAG_RE.sub(" ", title_match.group(1))) if title_match else ""
+    if _BLOCK_TEXT_RE.search(title) or _BLOCK_TEXT_RE.search(_visible_text(text, 4000)):
+        return "anti_bot"
+    return None
+
+
 def detect_page_state(status_code, html):
     """纯函数：识别反爬、登录墙、公告/PDF 与未知 SPA 特殊态。"""
     text = str(html or "")
     lower = text.lower()
-    if status_code in (403, 412, 503):
-        return "anti_bot"
-    if (
-        "access denied" in lower
-        or "cloudflare challenge" in lower
-        or "cf-chl-" in lower
-        or ("akamai" in lower and ("challenge" in lower or "denied" in lower))
-        or ("请开启javascript" in lower and "/api/" not in lower)
-    ):
-        return "anti_bot"
+    blocked = detect_block_signal(status_code, text)
+    if blocked:
+        return blocked
     has_password = bool(re.search(r"<input[^>]+type=[\"']?password", text, re.I))
     has_login = bool(re.search(r"(登录|sign[ -]?in|log[ -]?in)", text, re.I))
     if has_password and has_login and not _JOB_SHAPE_RE.search(text):
