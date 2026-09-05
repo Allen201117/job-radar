@@ -74,6 +74,26 @@ class TestParseKeepsChinaRows(unittest.TestCase):
         self.assertEqual([j.location for j in jobs], ["Remote Germany"])
         self.assertEqual(geo.derive_job_scope(jobs[0].location, _OVERSEAS_SOURCE_WITH_CN), "overseas")
 
+    def test_every_foreign_remote_shape_seen_live_stays_overseas(self):
+        """把 2026-09-05 线上真实出现过的「Remote {ISO2}」写法全部钉死。
+
+        为什么要逐条钉：geo 的判定链被并行改动重排过好几次（中文行政区、美国州名、
+        is_overseas_unspecified 都插在这条链上），**单测绿不代表这条不变量还在**。
+        这里量过的实况是：补 CN 之后若少了「先判钉死海外」这一步，
+        艾伯维 / 大陆集团 / Grab / Expeditors / 育碧 上共 125 个海外远程岗会被判成国内岗。
+        注意 main 的 geo 只认了 "cn" 一个码，下面这些码它一个都不认 ——
+        全靠 adapter 出口展开成国名 + derive_job_scope 的 _is_overseas_pinned 兜住。
+        """
+        for code in ("de", "ro", "lv", "cz", "my", "vn", "th", "hu", "rs", "si",
+                     "bg", "hr", "ru", "ee", "ca", "pl", "es", "tr", "kr", "br"):
+            location = _location_str({"remote": True, "country": code})
+            with self.subTest(code=code, location=location):
+                self.assertEqual(
+                    geo.derive_job_scope(location, _OVERSEAS_SOURCE_WITH_CN), "overseas",
+                    f"{location!r} 被判成国内岗了 —— 补了 CN 的外企源上，"
+                    f"「地点已钉死在海外」必须优先于 source.regions 兜底",
+                )
+
     def test_china_row_dropped_when_source_regions_exclude_cn(self):
         rows = [self._row("CN Remote", {"remote": True, "country": "cn"})]
         self.assertEqual(self._parse(rows, {"US", "SG", "Remote"}), [])
