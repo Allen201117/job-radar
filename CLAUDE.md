@@ -321,8 +321,20 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       看着正常其实是漏抓的结果 → 轮询到 25s 仍为空才认「这家当期没在招」。
                          #     ⚠️ jd_url 里的冒号是**字面量**：`#/PositionDetails/:{jobPublishId}`（前端拼串时把
                          #       路由占位符一起拼进去了），删掉它详情页打不开。详情走 window.open，点一下像没反应。
+                         #     ⚠️ **「页面没渲染出来」会伪装成「这家没在招」**：线上首轮比本机少 162 个岗
+                         #       （2,418 vs 2,580）而 fetch_complete 还是 True。判据改成页面固定文案
+                         #       （列表页「招聘机构」/ 机构页「在招岗位」，两页不一样别混用）：有 marker+0 岗
+                         #       = 真没在招；没 marker = 没等到 = 漏抓。没等到的机构走完一圈后**补一轮重试**，
+                         #       还不行才 fetch_complete=False 并日志点名。单机构页抖一下（ERR_EMPTY_RESPONSE）
+                         #       各自 try/except，不许炸掉整轮（否则前面几十家已抓的岗一起丢 + 整源记 failed）。
                          #     诚实边界：社招靠「热招事项」卡枚举机构，当前站点自报「暂无热招事项」故为 0；
                          #       哪天社招开了但站点不出热招事项卡，这里会漏——上线后拿 db-report 复核。
+                         #   ⚠️ **这五家 httpx 的共性坑（cn_portal_tls.py）**：本机 macOS 是 LibreSSL + 有 IPv6、
+                         #     GitHub runner 是 OpenSSL 3 + 无 IPv6 出口 → **本机全绿、上 CI 四个源全 failed**
+                         #     （建行/交行/移动 UNSAFE_LEGACY_RENEGOTIATION_DISABLED、工行 Errno 101）。
+                         #     修法=强制 IPv4(local_address=0.0.0.0) + OP_LEGACY_SERVER_CONNECT(0x4)，
+                         #     **证书校验保持开启不用 verify=False**。这两条本机永远测不出来，靠单测断言看着。
+                         #     📌 接完源必须回读线上 crawl_runs 的 status/error_message，别拿本机跑通当交付。
                          #   ⬆ 2026-08-27 四处「扩现有 adapter」（都不是新 adapter，故无需接线）：
                          #     china_ats.BeisenAdapter 加**老版 SSR CMS 门户**分支（theme2，无 PortalId/无
                          #       GetJobAdPageList，列表页 HTML 直出 xq?jobId= 锚点）→ 中芯国际 563 岗（社293/校248/海外22）。
