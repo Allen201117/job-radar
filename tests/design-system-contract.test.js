@@ -199,3 +199,113 @@ test("每个 --tone-* 变量都在 globals.css 的明暗两套里各定义一次
     }
   }
 });
+
+/* ─────────── 7. 动效基座（iOS 手感的物理基础） ─────────── */
+
+test("四条弹簧曲线齐全，且过冲量符合各自的用途", () => {
+  const css = read(path.join(repoRoot, "app/globals.css"));
+  for (const name of ["smooth", "snappy", "bouncy", "press"]) {
+    assert.match(css, new RegExp(`--spring-${name}: linear\\(`), `缺 --spring-${name}`);
+    assert.match(css, new RegExp(`--spring-${name}-dur:`), `缺 --spring-${name}-dur`);
+  }
+  // smooth 用于颜色/状态切换，**绝不能过冲**——颜色回弹会让「变了个色」显得轻浮。
+  const smooth = css.match(/--spring-smooth: linear\(([^)]*)\)/)?.[1] ?? "";
+  const smoothPeak = Math.max(...smooth.split(",").map((n) => parseFloat(n)));
+  assert.ok(smoothPeak <= 1.0001, `smooth 不该过冲，实测峰值 ${smoothPeak}`);
+  // bouncy 用于正反馈，**必须**看得出回弹，否则和 smooth 没区别、白留一档。
+  const bouncy = css.match(/--spring-bouncy: linear\(([^)]*)\)/)?.[1] ?? "";
+  const bouncyPeak = Math.max(...bouncy.split(",").map((n) => parseFloat(n)));
+  assert.ok(bouncyPeak > 1.03, `bouncy 过冲太小（${bouncyPeak}），和 smooth 就没区别了`);
+});
+
+test("按压反馈存在、克制（0.97 不是 0.9）、且尊重 reduced-motion", () => {
+  const css = read(path.join(repoRoot, "app/globals.css"));
+  assert.match(css, /\.press-feedback:active\s*\{[^}]*transform:\s*scale\(0\.97\)/);
+  // 缩到 0.9 会读成「这东西要被删掉了」，传达破坏性而不是按压。
+  assert.ok(
+    !/\.press-feedback(-subtle)?:active\s*\{[^}]*scale\(0\.[0-8]\d?\)/.test(css),
+    "按压缩放过大：iOS 的量级是 0.97，克制到几乎只在余光里感觉到",
+  );
+  assert.match(css, /prefers-reduced-motion[\s\S]{0,400}press-feedback/);
+});
+
+test("动效一律走令牌，组件里不许写死毫秒数或贝塞尔曲线", () => {
+  const offenders = [];
+  // animated-blur-number 自己注入一整份样式表、且已经用了自己调好的 linear() 弹簧曲线，
+  // 建令牌层之前就在线上跑了。把它的曲线改成公共令牌会改变动画观感，属于有意的视觉改动，
+  // 不能在「加一条 lint 规则」时顺手做掉。豁免它，等哪天要统一动效再单独处理。
+  const MOTION_GRANDFATHERED = new Set(["animated-blur-number.tsx"]);
+  for (const name of componentFiles()) {
+    if (MOTION_GRANDFATHERED.has(name)) continue;
+    const code = read(path.join(uiDir, name))
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    // 允许 cubic-bezier 作为 var() 的兜底值（linear() 在旧浏览器不支持），
+    // 但不允许脱离 var() 单独出现——那就是绕过令牌自己调曲线了。
+    for (const m of code.matchAll(/cubic-bezier\([^)]*\)/g)) {
+      const before = code.slice(Math.max(0, m.index - 80), m.index);
+      if (!before.includes("var(--spring-")) offenders.push(`${name}: ${m[0]}`);
+    }
+    for (const m of code.matchAll(/(?:transitionDuration|animationDuration):\s*"(\d+m?s)"/g)) {
+      offenders.push(`${name}: 写死时长 ${m[1]}`);
+    }
+  }
+  assert.deepEqual(offenders, [], `动效要走 --spring-* / --dur-* 令牌：\n${offenders.join("\n")}`);
+});
+
+/* ─────────── 8. 新增交互组件的行为底线 ─────────── */
+
+test("Switch 的滑块颜色必须跟着轨道走，不能写死", () => {
+  const sw = read(path.join(uiDir, "switch.tsx"));
+  assert.match(sw, /role="switch"/);
+  assert.match(sw, /aria-checked=\{checked\}/);
+  // 踩过的坑：开态滑块写死白色，而暗色下轨道是米白 #f3ecdf → 白滑块躺在米白轨道上，看不见。
+  // 只禁裸 bg-white；bg-white/[0.08] 是暗色轨道底，与滑块无关，别误伤。
+  assert.ok(!/bg-white(?![/\w])/.test(sw), "滑块不能写死 bg-white，暗色轨道是浅色时会看不见");
+  assert.match(sw, /checked \? "bg-action-ink-fg" : "bg-switch-knob"/);
+});
+
+test("Sheet 的关闭判定是「距离或速度」，不是只看距离", () => {
+  const sheet = read(path.join(uiDir, "sheet.tsx"));
+  // 只看距离：快速下甩只拖了 40px 也该关，却不关；只看速度：慢慢拖到底不关，很别扭。
+  assert.match(sheet, /DISMISS_DISTANCE_RATIO/);
+  assert.match(sheet, /DISMISS_VELOCITY/);
+  assert.match(sheet, /dy > height \* DISMISS_DISTANCE_RATIO \|\| velocity > DISMISS_VELOCITY/);
+  // 内容没滚到顶就接管拖拽 = 用户想滚列表却把面板拖走了。
+  assert.match(sheet, /scrollRef\.current\?\.scrollTop \?\? 0\) > 0\) return/);
+  // 拖拽中不能有 transition，否则不跟手。
+  assert.match(sheet, /dragging\s*\?\s*"none"/);
+});
+
+test("AlertDialog 的破坏性操作默认焦点在「取消」上", () => {
+  const dlg = read(path.join(uiDir, "alert-dialog.tsx"));
+  // 连按回车不该误删；想删的人多按一次 Tab，代价不对等才是对的。
+  assert.match(dlg, /if \(open && destructive\) cancelRef\.current\?\.focus\(\)/);
+  // 提交中不许点遮罩/ESC 关掉，否则半路丢状态。
+  assert.match(dlg, /closeOnBackdrop=\{!pending\}/);
+  assert.match(dlg, /closeOnEscape=\{!pending\}/);
+});
+
+test("Progress 的不确定态必须说人话，不能让读屏念「进度 0%」", () => {
+  const pg = read(path.join(uiDir, "progress.tsx"));
+  assert.match(pg, /role="progressbar"/);
+  assert.match(pg, /aria-valuetext=\{indeterminate \?/);
+  assert.match(pg, /aria-valuenow=\{indeterminate \? undefined/);
+});
+
+test("Stepper 用有序列表 + 对勾，不靠颜色单独传达完成态", () => {
+  const st = read(path.join(uiDir, "stepper.tsx"));
+  assert.match(st, /<ol/, "步骤天然有顺序，读屏要能念「共 4 项，第 2 项」");
+  assert.match(st, /aria-current=\{active \? "step" : undefined\}/);
+  // WCAG 1.4.1：不能只用颜色传达信息，色觉障碍用户读不出来。
+  assert.match(st, /done \? <Check/);
+});
+
+test("借鉴的第三方许可有留存（MIT 唯一强制要求就是保留版权声明）", () => {
+  assert.ok(fs.existsSync(path.join(repoRoot, "LICENSES/LICENSE-radix-ui.txt")));
+  const readme = read(path.join(repoRoot, "LICENSES/README.md"));
+  // 这三个是明确不能用的，写进文档免得以后有人踩
+  for (const banned of ["Tailwind UI", "Aceternity", "Magic UI"]) {
+    assert.ok(readme.includes(banned), `LICENSES/README.md 要写明 ${banned} 不能用及原因`);
+  }
+});

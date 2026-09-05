@@ -2,6 +2,8 @@
 
 import * as React from "react";
 import {
+  Accordion,
+  AlertDialog,
   Badge,
   Banner,
   Button,
@@ -10,16 +12,25 @@ import {
   Input,
   Modal,
   Popover,
+  DropdownMenu,
+  Progress,
   Segmented,
   Select,
+  Separator,
+  Sheet,
   Spinner,
+  Stepper,
+  Switch,
+  TabPanel,
+  Tabs,
   Textarea,
+  Tooltip,
   TONES,
   type Tone,
 } from "@/components/ui";
 import { useAsyncAction, useClipboard } from "@/lib/ui/hooks";
 import { cn } from "@/lib/utils";
-import { Compass, Warning } from "@phosphor-icons/react";
+import { Compass, DotsThree, PencilSimple, Trash, Warning } from "@phosphor-icons/react";
 
 /** 每个区块统一的外壳：标题 + 一句「什么时候用它」+ 展示区。 */
 function Section({
@@ -69,6 +80,13 @@ export default function DesignSystemClient() {
   const [stage, setStage] = React.useState<"intern" | "campus" | "social">("campus");
   const [fieldValue, setFieldValue] = React.useState("");
   const { copied, copy } = useClipboard();
+  const [sheetOpen, setSheetOpen] = React.useState(false);
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const [confirmPending, setConfirmPending] = React.useState(false);
+  const [switchA, setSwitchA] = React.useState(true);
+  const [switchB, setSwitchB] = React.useState(false);
+  const [tab, setTab] = React.useState("today");
+  const [progress, setProgress] = React.useState(38);
 
   // 演示三态用：随机成功 / 失败，好让人看清失败长什么样。
   const demoSubmit = React.useCallback(async () => {
@@ -351,6 +369,199 @@ export default function DesignSystemClient() {
             滚一下页面：它会跟着触发按钮走。再点一次那颗按钮能关掉（触发按钮被豁免了「点外部关闭」）。
           </p>
         </Popover>
+      </Section>
+
+
+      {/* ─────────────── 动效基座 ─────────────── */}
+      <Section
+        id="motion"
+        title="动效基座（弹簧曲线 + 按压反馈）"
+        usage="标杆是 iPhone。iOS 动效有质感的核心不是「时长调得好」，是用弹簧而不是贝塞尔——加速减速符合物理直觉。下面四条曲线是按 SwiftUI 的 spring(response:dampingFraction:) 方程解出来的，不是抄的。"
+      >
+        <Row label="按住看看">
+          <button className="press-feedback btn-ink-sm px-5 py-2.5">按住我（scale 0.97）</button>
+          <button className="press-feedback-subtle surface-soft rounded-xl px-5 py-3">
+            整卡可点时用更轻的一档（0.99）
+          </button>
+        </Row>
+        <div className="space-y-2">
+          {(
+            [
+              ["smooth", "状态切换 / 淡入淡出", "不过冲——回弹会让「变了个色」显得轻浮"],
+              ["snappy", "开关 / 弹层 / 折叠", "过冲 0.6%，干脆，最常用"],
+              ["bouncy", "数字变化 / 正反馈", "过冲 8.3%，传达「成了」的愉悦"],
+              ["press", "按压松手回弹", "最短，只用于 :active 之后"],
+            ] as const
+          ).map(([name, use, note]) => (
+            <div key={name} className="surface-soft flex items-center gap-3 p-3">
+              <code className="t-caption w-20 shrink-0">--spring-{name}</code>
+              <span className="t-body-sm ink-2 w-40 shrink-0">{use}</span>
+              <span className="t-caption min-w-0">{note}</span>
+            </div>
+          ))}
+        </div>
+        <p className="t-caption">
+          调手感改 <code>scripts/gen-spring-easing.py</code> 里的档位参数跑一次，把输出粘回 globals.css。
+        </p>
+      </Section>
+
+      {/* ─────────────── 开关 ─────────────── */}
+      <Section
+        id="switch"
+        title="开关 Switch"
+        usage="按住滑块看细节：它会横向拉长再回圆——这是 iOS 开关最标志性的一处，只做位移不做形变就没有「被推着走」的感觉。"
+      >
+        <Row label="两档尺寸">
+          <Switch checked={switchA} onChange={setSwitchA} ariaLabel="示例开关大" />
+          <Switch checked={switchB} onChange={setSwitchB} ariaLabel="示例开关小" size="sm" />
+        </Row>
+        <Row label="忙碌 / 禁用">
+          <Switch checked busy onChange={() => {}} ariaLabel="正在保存" />
+          <Switch checked={false} disabled onChange={() => {}} ariaLabel="不可用" />
+        </Row>
+      </Section>
+
+      {/* ─────────────── 标签页与折叠 ─────────────── */}
+      <Section
+        id="tabs"
+        title="标签页 Tabs / 折叠面板 Accordion"
+        usage="Tabs 的选中态用下划线不用实心块——一屏只允许一个墨色实心块，那是主操作的信号。方向键可以在 tab 间移动。"
+      >
+        <Tabs
+          ariaLabel="示例视图切换"
+          value={tab}
+          onChange={setTab}
+          items={[
+            { value: "today", label: "今日", badge: 12 },
+            { value: "jobs", label: "岗位库", badge: 348 },
+            { value: "campus", label: "校招" },
+            { value: "off", label: "已停用", disabled: true },
+          ]}
+        >
+          <TabPanel value="today" className="t-body-sm ink-2 pt-4">
+            当前是「今日」面板。用左右方向键试试切换。
+          </TabPanel>
+          <TabPanel value="jobs" className="t-body-sm ink-2 pt-4">
+            当前是「岗位库」面板。
+          </TabPanel>
+          <TabPanel value="campus" className="t-body-sm ink-2 pt-4">
+            当前是「校招」面板。
+          </TabPanel>
+        </Tabs>
+        <Accordion
+          items={[
+            {
+              value: "a",
+              title: "这家公司的招聘节奏",
+              meta: <Badge tone="teal" size="xs">招聘动态</Badge>,
+              content: "展开时高度是弹簧过渡的，不是直接跳出来。",
+            },
+            { value: "b", title: "薪酬与强度", content: "一次只能开一个（mode=single）。" },
+          ]}
+        />
+      </Section>
+
+      {/* ─────────────── 浮层 ─────────────── */}
+      <Section
+        id="overlay2"
+        title="提示 Tooltip / 菜单 DropdownMenu / 抽屉 Sheet / 确认 AlertDialog"
+        usage="Sheet 是移动端主力弹层，可以按住把手往下拖——松手时按「距离 + 速度」判定去留，快速下甩即使没拖多远也会关。"
+      >
+        <Row label="试一下">
+          <Tooltip content="这条岗位最近一次被确认在招是 2 天前">
+            <button className="press-feedback btn-soft">悬停我看提示</button>
+          </Tooltip>
+          <DropdownMenu
+            ariaLabel="示例操作菜单"
+            trigger={
+              <button
+                aria-label="更多操作"
+                className="press-feedback btn-soft grid size-9 place-items-center p-0"
+              >
+                <DotsThree size={18} weight="bold" />
+              </button>
+            }
+            items={[
+              { key: "e", label: "编辑", icon: <PencilSimple size={15} /> },
+              { key: "d", label: "删除", icon: <Trash size={15} />, destructive: true },
+            ]}
+          />
+          <Button variant="soft" size="sm" onClick={() => setSheetOpen(true)}>
+            打开底部抽屉
+          </Button>
+          <Button variant="soft" size="sm" onClick={() => setConfirmOpen(true)}>
+            打开确认框
+          </Button>
+        </Row>
+        <p className="t-caption">
+          确认框里「取消」是默认焦点（破坏性操作时）——连按回车不会误删，想删的人多按一次 Tab。
+        </p>
+
+        <Sheet open={sheetOpen} onClose={() => setSheetOpen(false)} ariaLabel="示例底部抽屉">
+          <h3 className="t-h3 ink-1">按住上面的把手往下拖</h3>
+          <p className="t-body-sm ink-2 mt-2">
+            往上拖会有橡皮筋阻尼（拉得动但明显在抗拒）。内容没滚到顶时不会接管拖拽——
+            否则你想滚列表却把整个面板拖走了。
+          </p>
+          <div className="mt-4 space-y-2">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="surface-soft t-body-sm p-3">
+                列表项 {i + 1}
+              </div>
+            ))}
+          </div>
+        </Sheet>
+
+        <AlertDialog
+          open={confirmOpen}
+          destructive
+          pending={confirmPending}
+          title="确定要下架这条洞察吗"
+          description="下架后用户不再看得到它。这个操作可以在后台恢复，但已经看过的用户不会收到更正。"
+          confirmLabel="下架"
+          onCancel={() => setConfirmOpen(false)}
+          onConfirm={async () => {
+            setConfirmPending(true);
+            await new Promise((r) => setTimeout(r, 900));
+            setConfirmPending(false);
+            setConfirmOpen(false);
+          }}
+        />
+      </Section>
+
+      {/* ─────────────── 进度与步骤 ─────────────── */}
+      <Section
+        id="progress"
+        title="进度 Progress / 步骤条 Stepper / 分隔线 Separator"
+        usage="进度条只在能给出真实百分比时用。给不出却硬放一条，走到 90% 卡住比转圈更伤信任——不确定时长传 value=null 走扫掠态。"
+      >
+        <Row label="确定 / 不确定">
+          <div className="w-48 space-y-2">
+            <Progress value={progress} ariaLabel="简历解析进度" />
+            <Progress value={null} ariaLabel="正在刷新公司库" size="sm" />
+          </div>
+          <Button
+            variant="quiet"
+            size="xs"
+            onClick={() => setProgress((v) => (v >= 100 ? 0 : v + 22))}
+          >
+            推进一格
+          </Button>
+        </Row>
+        <Separator />
+        <Row label="投递进展">
+          <Stepper
+            ariaLabel="投递进展"
+            current={2}
+            className="w-full max-w-md"
+            steps={[
+              { key: "1", label: "已投递", meta: "8/21" },
+              { key: "2", label: "笔试", meta: "8/26" },
+              { key: "3", label: "面试" },
+              { key: "4", label: "offer" },
+            ]}
+          />
+        </Row>
       </Section>
 
       {/* ─────────────── 状态 ─────────────── */}

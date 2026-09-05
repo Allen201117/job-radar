@@ -612,10 +612,23 @@ Supabase Auth（邮箱登录）+ cookie session。`middleware.ts` 排除 `/api/*
 - **看长什么样**：`/design`（管理员可见）。那页的组件就是产品里真实跑的那一个、用同一份 CSS，
   所以它不会说谎。**完整用法与运维规矩见 `DESIGN.md` 的「组件库」一节**，决策来由见
   `docs/superpowers/specs/2026-09-04-design-system-component-library-design.md`。
-- **现有**：`Button`（ink/soft/ghost/quiet × xs/sm/md/lg）· `Badge`（七族 tone）· `Banner` ·
-  `Field`+`Input`+`Textarea`+`Select` · `Segmented` · `Modal` · `Popover` · `Spinner` · `EmptyState`；
+- **现有 21 个**：`Button` · `Badge` · `Banner` · `Separator` · `Spinner` · `Progress` ·
+  `EmptyState` · `Field`+`Input`+`Textarea`+`Select` · `Switch` · `Segmented` · `TagInput` ·
+  `Tabs`+`TabPanel` · `Accordion` · `Stepper` · `Modal` · `Sheet`（底部抽屉可拖拽关闭）·
+  `Popover` · `Tooltip` · `DropdownMenu` · `AlertDialog`（替掉 `window.confirm`）；
   hooks 在 `lib/ui/hooks.ts`（`useBodyScrollLock` / `useEscapeKey` / `useFocusTrap` /
   `useClickOutside` / `useAnchoredPosition` / `useClipboard` / `useAsyncAction`）。
+- ⚠️ **动效一律走令牌，别写死毫秒和贝塞尔**：四条弹簧曲线 `--spring-{smooth,snappy,bouncy,press}`
+  + 四档时长 `--dur-{press,toggle,panel,sheet}`。标杆是 iPhone —— iOS 动效的核心是**用弹簧
+  不用贝塞尔**。曲线按 SwiftUI 的 `spring(response:dampingFraction:)` 方程解出来的，
+  调手感改 `scripts/gen-spring-easing.py` 跑一次。按压反馈用 `.press-feedback`（scale 0.97，
+  不是 0.9——0.9 会读成「这东西要被删掉了」）。契约测试会拦写死的时长与曲线。
+- ⚠️ **只有 4 个组件用 Radix**（Tooltip/DropdownMenu/Tabs/Accordion），因为这四个自己写
+  一定会漏（贴边翻转、首字母跳转、roving tabindex、aria-controls 配对）。视觉全是自己的皮肤。
+  Switch/Sheet/AlertDialog/Progress/Separator/Stepper **刻意不用**——价值在手感，引依赖无收益。
+- 🚫 **Tailwind UI 是商业授权**（很多人误以为开源）、**Aceternity** 禁止转售衍生品且风格冲突、
+  **Magic UI / Motion Primitives** 要装 `motion` 包（已有 GSAP，不引第二个动画运行时）。
+  抄 MIT 代码进仓库必须在 `LICENSES/` 留版权声明——那是 MIT 唯一的强制要求。
 - ⚠️ **颜色一律用 `--tone-*` 令牌，不要再写 hex**：七族语义色（sky 社招 / green 校招·已核实 /
   amber 实习·转陈 / teal 招聘动态 / rose 失败·风险 / lilac 职业洞察 / neutral 不表态），
   写成 `text-tone-sky-fg` / `bg-tone-sky-bg` / `border-tone-sky-border`，明暗自动切换。
