@@ -402,7 +402,7 @@ def _strict_cjk_country(segs) -> Optional[str]:
     return None
 
 
-def _looks_like_cn_admin(text: str, segs) -> bool:
+def _looks_like_cn_admin(segs) -> bool:
     """中文行政区通用规则。**只在境外词表全部落空之后才允许调用**（见本段顶部的顺序说明）。"""
     for seg in segs:
         if seg in _NON_PLACE_SEGMENTS or seg in _OVERSEAS_UNSPECIFIED_SEGMENTS:
@@ -536,12 +536,14 @@ def keep_for_china_radar(location: Optional[str]) -> bool:
 def derive_country_code(location: Optional[str]) -> Optional[str]:
     """Derive an ISO-2 country/region code from free-form location text.
 
-    三阶段短路，**顺序不可调换**（详见文件中部「中文行政区地名识别」那段的红线说明）：
-      ① `_COUNTRY_TOKENS`  既有词表，语义一字未动 → 存量判定零回归
+    四阶段短路，**顺序不可调换**（红线说明见文件中部「中文行政区地名识别」「美国州名」两段）：
+      ① `_COUNTRY_TOKENS`    既有词表 + 州全称，语义一字未动 → 存量判定零回归
       ② `_STRICT_CJK_PLACES` 境外中文地名，整段精确匹配 → 先把非 CN 排除掉
-      ③ `_looks_like_cn_admin` 中文行政区通用规则 → 最后才判 CN
-    ②在③之前是本函数的核心不变量：反过来「大阪市」「首尔市」「新北市」会被③的
-    通用后缀规则抢走判成 CN，一次就把台日韩的岗塞进国内看板。
+      ③ `_looks_like_cn_admin` 中文行政区规则 → 才判 CN
+      ④ `_has_us_state`      美国州缩写，位置受限 + 必须大写 → 最后兜底
+    ②在③之前是核心不变量：反过来「大阪市」「首尔市」「新北市」会被③的后缀规则抢走判成 CN，
+    一次就把台日韩的岗塞进国内看板。④在最末同理：任何显式国名都必须优先于两字母缩写，
+    否则 "Chennai, TN, in"（金奈，印度）会因为 TN 被判成美国。
     """
     text = _norm(location)
     if not text or text in ("unknown", "multiple locations"):
@@ -553,7 +555,7 @@ def derive_country_code(location: Optional[str]) -> Optional[str]:
     strict = _strict_cjk_country(segs)
     if strict is not None:
         return strict
-    if _looks_like_cn_admin(text, segs):
+    if _looks_like_cn_admin(segs):
         return "CN"
     # 州缩写排在最后：任何显式国名/城市都优先于它（"Chennai, TN, in" 因此不会判成 US）。
     if _has_us_state(location):
