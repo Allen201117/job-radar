@@ -430,3 +430,89 @@ class RevalidateLaneTest(unittest.TestCase):
                           now=NOW, cap=20, revalidate_slots=3),
             [],
         )
+
+
+class ApplyProgramCoverageTest(unittest.TestCase):
+    """已由 /programs 诚实承载的公司，不该在台账里天天空烧。
+
+    实证（2026-09-05）：apply_programs 里 11 家已核实，可国家能源集团仍空撞 31 次、
+    国家电网 21 次、中国银行 7 次 —— 这些公司**客观没有逐岗链接**（公告制/项目制/人才库），
+    再重试多少轮都不会变好。
+    """
+
+    # 传进 classify_company 的已是**清单规范名**（apply_programs 的实体名由
+    # resolve_program_owners 解析：中通快递→中通、韵达速递→韵达）。
+    PROGRAMS = ("中通", "国家能源集团", "中国银行")
+
+    def test_program_covered_company_stops_retrying(self):
+        row = gc.classify_company(
+            _company("中通", "%中通%"), [], [], {"state": "no_stable_jd", "attempts": 6},
+            program_companies=self.PROGRAMS,
+        )
+        self.assertEqual(row["state"], "manual_review")
+        self.assertIsNone(row["next_retry_at"])
+        self.assertEqual(row["evidence"]["covered_via_apply_program"], "中通")
+
+    def test_healthy_jobs_always_win_over_program_coverage(self):
+        """真抓到岗就按岗算——/programs 只是没岗时的兜底，不能盖住真实供给。"""
+        row = gc.classify_company(
+            _company("中国银行", "%中国银行%"),
+            [{"company": "中国银行", "active_total": 9, "healthy": 5}], [],
+            {"state": "no_stable_jd"}, program_companies=self.PROGRAMS,
+        )
+        self.assertEqual(row["state"], "healthy")
+
+    def test_enabled_source_reopens_the_funnel_for_a_program_company(self):
+        """⚠️ 防第二个自我锁死：银行日后被接通成源，必须自动回到正常重试轨道。"""
+        row = gc.classify_company(
+            _company("中国银行", "%中国银行%"), [],
+            [{"company": "中国银行", "enabled": True, "id": "s9"}],
+            {"state": "no_stable_jd"}, program_companies=self.PROGRAMS,
+        )
+        self.assertEqual(row["state"], "no_active_jobs")
+        self.assertNotIn("covered_via_apply_program", row["evidence"])
+
+    def test_thin_jobs_also_win_over_program_coverage(self):
+        row = gc.classify_company(
+            _company("中通", "%中通%"),
+            [{"company": "中通快递", "active_total": 4, "healthy": 0}], [],
+            {"state": "no_stable_jd"}, program_companies=self.PROGRAMS,
+        )
+        self.assertEqual(row["state"], "thin_only")
+
+    def test_unrelated_company_is_untouched(self):
+        row = gc.classify_company(
+            _company(), [], [], {"state": "no_stable_jd"},
+            program_companies=self.PROGRAMS,
+        )
+        self.assertEqual(row["state"], "no_stable_jd")
+
+    def test_program_owner_resolution_does_not_leak_across_brands(self):
+        """京东方 ≠ 京东：/programs 里写京东方，不能把还能抓的京东永久停掉。
+
+        这道门在 resolve_program_owners（它拿得到全量清单名），不在纯函数里——
+        裸子串 `%京东%` 命中京东方，正是 must_apply.resolve_owner 存在的理由。
+        """
+        owners = gc.resolve_program_owners(["京东方"])
+        self.assertIn("京东方", owners)
+        self.assertNotIn("京东", owners)
+
+    def test_program_owner_resolution_maps_entity_name_to_list_name(self):
+        owners = gc.resolve_program_owners(["中通快递", "韵达速递"])
+        self.assertEqual(owners, {"中通", "韵达"})
+
+    def test_program_outside_must_apply_list_is_ignored(self):
+        """中国华能 / 国家开发银行不在必投清单里，解析为空，不影响任何槽位。"""
+        self.assertEqual(gc.resolve_program_owners(["中国华能", "国家开发银行"]), set())
+
+    def test_program_covered_row_never_enters_queue(self):
+        row = gc.classify_company(
+            _company("中通", "%中通%"), [], [], {"state": "no_stable_jd"},
+            program_companies=self.PROGRAMS,
+        )
+        row["industries"] = ["金融"]
+        self.assertEqual(
+            gc.plan_queue([row], {"金融"}, set(), {"金融": 0.1},
+                          now=NOW, cap=20, revalidate_slots=5),
+            [],
+        )
