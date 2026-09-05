@@ -54,6 +54,7 @@ import type {
 } from "@/lib/opportunities/types";
 import { IGNORE_REASONS } from "@/lib/opportunities/feedback";
 import { cleanSummary, cn, freshnessLabel } from "@/lib/utils";
+import { buttonVariants, badgeVariants } from "@/components/ui";
 
 interface Props {
   job: ScoredJob;
@@ -551,7 +552,7 @@ export default function JobCard({
               {relatedReason && (
                 <span
                   title={`该岗因匹配稍弱被归入「相关」：${relatedReason}`}
-                  className="inline-flex items-center rounded-full border border-black/[0.08] px-2 py-0.5 ink-3 dark:border-white/[0.12]"
+                  className={cn(badgeVariants({ tone: "neutral", size: "xs" }), "inline-flex items-center")}
                 >
                   {relatedReason}
                 </span>
@@ -640,7 +641,7 @@ export default function JobCard({
                   {opportunityReasons.map((r, i) => (
                     <li
                       key={`${r.type}:${i}`}
-                      className="t-label inline-flex items-center gap-1 rounded-full border border-tone-teal-border bg-tone-teal-bg px-2.5 py-1 text-tone-teal-fg"
+                      className={cn(badgeVariants({ tone: "teal", size: "sm" }), "inline-flex items-center gap-1")}
                     >
                       <Sparkle size={11} weight="fill" aria-hidden="true" />
                       {r.label}
@@ -669,7 +670,7 @@ export default function JobCard({
                   {job.matched_keywords.slice(0, 3).map((kw) => (
                     <span
                       key={kw}
-                      className="t-label rounded-full border border-tone-teal-border bg-tone-teal-bg px-2.5 py-1 text-tone-teal-fg"
+                      className={badgeVariants({ tone: "teal", size: "sm" })}
                     >
                       {kw}
                     </span>
@@ -715,7 +716,7 @@ export default function JobCard({
           <button
             type="button"
             onClick={handleView}
-            className="t-label inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-[#1a1714] px-4 py-2.5 text-[#f7f1e6] transition duration-200 hover:bg-[#2b2520] active:scale-[0.98] lg:min-h-0 lg:py-2 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+            className={cn(buttonVariants({ variant: "ink", size: "sm" }), "inline-flex min-h-11 items-center justify-center gap-2 active:scale-[0.98] lg:min-h-0 lg:py-2")}
           >
             官网详情
             <ArrowSquareOut size={16} weight="bold" aria-hidden="true" />

@@ -26,6 +26,8 @@ import {
 } from "@/lib/insight-library";
 import { formatDateLabel } from "@/lib/relative-time";
 import type { InsightAssertion, InsightItemView } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import { buttonVariants } from "@/components/ui";
 
 type Props = {
   initialSubjects: LibrarySubject[];
@@ -567,7 +569,7 @@ function SubjectCard({
         <button
           type="button"
           onClick={toggle}
-          className="rounded-full border border-black/[0.08] bg-white/70 px-3 py-1.5 t-label ink-2 transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.06]"
+          className={buttonVariants({ variant: "soft", size: "xs" })}
         >
           {open ? "收起" : `展开全部 ${subject.item_count} 条`}
         </button>

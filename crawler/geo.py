@@ -130,12 +130,27 @@ def derive_country_code(location: Optional[str]) -> Optional[str]:
     return None
 
 
-def derive_job_scope(location: Optional[str]) -> str:
-    """domestic for greater China and unknown/bare remote; overseas otherwise."""
+def derive_job_scope(location: Optional[str], regions=None) -> str:
+    """domestic for greater China; overseas otherwise.
+
+    地点**抽不出国家**时（空 / "Multiple Locations" / 裸「远程」「Remote」），按**源自己的
+    regions** 兜底判定；没传 regions 则维持旧默认 domestic，故老调用方行为一字不变。
+
+    ⚠️ 为什么必须看源：裸「远程」默认判 domestic 是**海外扩展之前**的合理默认（那时库里
+    只有 CN 源，远程岗几乎必然在国内）。2026-07-02 放开 US/SG/Remote 之后这个默认就反了 ——
+    2026-09-04 实测全库 9,873 个「裸远程 + 判 domestic」的在招岗里，**9,863 个来自 regions
+    不含 CN 的海外源**（AbbVie 1,512 / ServiceNow 576 / Samsara 483 / NVIDIA 360…），
+    只有 10 个来自纯 CN 源。用户筛「国内」时看到的是一片美国远程岗，这是筛选准确性红线。
+    分离度 99.9%，所以按源判是干净的。
+    （带国家写法的远程「Remote - US」早已由 f306271 修好，这里补的是**裸远程**那一半。）
+    """
     code = derive_country_code(location)
-    if code is None:
-        return "domestic"
-    return "domestic" if code in _GREATER_CHINA else "overseas"
+    if code is not None:
+        return "domestic" if code in _GREATER_CHINA else "overseas"
+    if regions:
+        if "CN" not in {str(r).strip() for r in regions}:
+            return "overseas"
+    return "domestic"
 
 
 def location_in_scope(location: Optional[str], regions) -> bool:

@@ -51,6 +51,7 @@ import {
   mustApplyByIndustry,
   MUST_APPLY_BY_INDUSTRY,
   MUST_APPLY_INDUSTRIES,
+  mustApplyPatterns,
   MUST_APPLY_VERSION,
   mustApplyUnion,
   resolveMustApplyIndustries,
@@ -216,8 +217,10 @@ function buildMustApplyRowsForScope(
 ): MustApplyRowsByIndustry {
   const union = mustApplyUnion(scope);
   const rows = union.map((c, i) => {
-    const needle = c.pattern.replace(/%/g, "").toLowerCase();
-    const matched = sources.filter((s) => (s.company || "").toLowerCase().includes(needle));
+    // 别名一并认（壳牌=Shell / 大陆集团=Continental）：只按清单名找源，会把「已接入」显示成
+    // 「从未接入」，而这个假象正是重复补源的起点。与 computeMustApplyCoverage 同一套模式集。
+    const matchers = mustApplyPatterns(c).map(ilikeMatcher);
+    const matched = sources.filter((s) => s.company && matchers.some((m) => m(s.company as string)));
     return {
       ...coverage[i],
       pattern: c.pattern,
@@ -240,7 +243,7 @@ const loadMustApplyCoverage = cachedLoader<MustApplyRowsByScope>("must-apply-cov
   // getMustApplyCoverage 内部共用同一份公司聚合（in-flight 合并），两个 scope 只查一次库。
   const [sources, coverages] = await Promise.all([
     loadAllSources(),
-    Promise.all(MUST_APPLY_SCOPES.map((scope) => getMustApplyCoverage(mustApplyUnion(scope)))),
+    Promise.all(MUST_APPLY_SCOPES.map((scope) => getMustApplyCoverage(mustApplyUnion(scope), scope))),
   ]);
   return Object.fromEntries(
     MUST_APPLY_SCOPES.map((scope, i) => [scope, buildMustApplyRowsForScope(scope, sources, coverages[i])]),
@@ -406,6 +409,18 @@ function parsePercentRatio(value: string): number | null {
   if (value === "—") return null;
   const n = Number(value.replace("%", ""));
   return Number.isFinite(n) ? n / 100 : null;
+}
+
+/**
+ * 「本范围 0 个健康岗」但另一个范围有岗时的说明。
+ *
+ * 2026-09-05 覆盖率改成只数本范围的岗后，海外清单有 31 家从 healthy 变成 0
+ * （星巴克 1,920 个岗全在中国、优衣库 1,918 个同理）。**不解释的 0 会被读成「供给没了」**，
+ * 而事实是「岗在另一个范围」——这两件事的处置完全不同（前者要补源，后者什么都不用做）。
+ */
+function otherScopeNote(row: Pick<MustApplyRow, "healthy" | "otherScopeHealthy">, scope: MustApplyScope): string {
+  if (row.healthy > 0 || !row.otherScopeHealthy) return "";
+  return `｜另有 ${row.otherScopeHealthy} 个岗在${scope === "domestic" ? "海外" : "国内"}`;
 }
 
 function sourceStatusLabel(row: Pick<MustApplyRow, "hasSource" | "sourceEnabled">): string {
@@ -744,7 +759,7 @@ function MustApplyIndustryBlock({
     const tone: BandTone = r.healthy === 0 ? "danger" : r.checked72h === 0 ? "warning" : "success";
     return {
       tone,
-      label: `${r.name}｜健康岗 ${r.healthy}·近7天新 ${r.new7d}·72h核验 ${r.checked72h}｜${sourceStatusLabel(r)}${r.coveredViaParentPortal ?"｜通过母公司的招聘页覆盖到":""}`,
+      label: `${r.name}｜健康岗 ${r.healthy}·近7天新 ${r.new7d}·72h核验 ${r.checked72h}｜${sourceStatusLabel(r)}${r.coveredViaParentPortal ? "｜通过母公司的招聘页覆盖到" : ""}${otherScopeNote(r, scope)}`,
     };
   });
   return (

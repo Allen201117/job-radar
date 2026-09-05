@@ -36,13 +36,23 @@ def _revalidate_slots(value=None):
     except ValueError:
         return _DEFAULT_REVALIDATE_SLOTS
 
+# ⚠️ 计数**只算本 scope 的岗**（`job_scope = %(scope)s`）。
+# 2026-09-05 之前不分 scope：国内清单会把大陆集团的 352 个海外岗算成中国供给、
+# 海外清单会把优衣库的 1,918 个中国岗算成海外供给。指标诚实优先于覆盖率好看。
+# `other_scope_healthy` 是**另一个** scope 的健康岗数，只写进台账 evidence 供人判断
+# 「这家公司不是没岗，是岗不在这个范围」——它不参与状态判定。
 _JOB_AGGREGATE_SQL = """
 select
   company,
-  count(*) as active_total,
+  count(*) filter (where job_scope = %(scope)s) as active_total,
   count(*) filter (
-    where summary is not null and char_length(btrim(summary)) >= 60
-  ) as healthy
+    where job_scope = %(scope)s
+      and summary is not null and char_length(btrim(summary)) >= 60
+  ) as healthy,
+  count(*) filter (
+    where job_scope <> %(scope)s
+      and summary is not null and char_length(btrim(summary)) >= 60
+  ) as other_scope_healthy
   {brand_columns}
 from jobs
 where status = 'active'
@@ -50,8 +60,11 @@ group by company
 """
 
 
-def _matches(value, pattern):
-    return must_apply.match_company_against_patterns(value, [pattern])
+def _matches(value, patterns):
+    """库里这行公司名是不是这家清单公司；`patterns` = pattern + 别名（见 must_apply.company_patterns）。"""
+    if isinstance(patterns, str):
+        patterns = [patterns]
+    return must_apply.match_company_against_patterns(value, patterns)
 
 
 def _as_int(value):
@@ -75,12 +88,25 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
     """纯函数：给单个清单槽位计算当前台账状态，不执行任何 IO。"""
     base = _base_company(company)
     pattern = base["pattern"]
+    # 别名一并参与匹配：库里可能用英文名记着这家公司（壳牌=Shell / 大陆集团=Continental），
+    # 只按中文 pattern 匹配就会「有源有岗却判零源」，进而驱动人去重复插源（迁移 225 的同岗两行即此）。
+    patterns = must_apply.company_patterns({
+        "pattern": pattern, "aliases": company.get("aliases"),
+    })
     matched_jobs = [
         row for row in (healthy_jobs or [])
-        if _matches((row or {}).get("company"), pattern)
+        if _matches((row or {}).get("company"), patterns)
     ]
     direct_active = sum(_as_int(row.get("active_total")) for row in matched_jobs)
     direct_healthy = sum(_as_int(row.get("healthy")) for row in matched_jobs)
+    # 「有源有岗」不等于「有中国岗」：普查的岗位聚合**不按 job_scope 过滤**（历史如此，
+    # 改它会一次性动 329+327 家的口径，另案）。所以至少把 scope 拆分如实记进台账——
+    # 大陆集团 425 个健康岗里只有 73 个标着 domestic，看台账的人有权知道这件事，
+    # 而不是看到「healthy 425」就以为中国岗很多。
+    # 「这个范围里没岗」不等于「这家公司没岗」：大陆集团国内 73 个、海外还有 352 个。
+    # 记下另一个范围的数，看台账的人才分得清「真没供给」和「供给不在这个范围」。
+    has_other_scope = any("other_scope_healthy" in (row or {}) for row in matched_jobs)
+    other_scope_healthy = sum(_as_int(row.get("other_scope_healthy")) for row in matched_jobs)
     parent_rollup = {"active_total": 0, "healthy": 0}
     if company.get("parentPattern") and company.get("brandTokens"):
         for row in healthy_jobs or []:
@@ -96,7 +122,7 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
     healthy_total = direct_healthy + accepted_parent["healthy"]
     matched_sources = [
         row for row in (sources_rows or [])
-        if _matches((row or {}).get("company"), pattern)
+        if _matches((row or {}).get("company"), patterns)
     ]
     enabled_sources = [row for row in matched_sources if row.get("enabled")]
     prev = dict(prev_row or {})
@@ -119,6 +145,7 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
         "active_jobs": active_total,
         "healthy_jobs": healthy_total,
         "direct_healthy_jobs": direct_healthy,
+        "other_scope_healthy_jobs": other_scope_healthy if has_other_scope else None,
         "parent_portal_healthy_jobs": accepted_parent["healthy"],
         "covered_via_parent_portal": accepted_parent["healthy"] > 0,
         "matched_job_companies": sorted({
@@ -126,6 +153,15 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
         }),
         "matched_source_ids": [
             str(row.get("id")) for row in matched_sources if row.get("id")
+        ],
+        # 靠别名（而非清单名本身）命中的模式：台账要能自己解释「为什么这家不再是零源」，
+        # 否则下一个人看到「大陆集团 healthy」还是会去 sources 里搜中文名、搜不到又插一条。
+        "matched_alias_patterns": [
+            alias for alias in patterns[1:]
+            if any(
+                _matches((row or {}).get("company"), [alias])
+                for row in matched_jobs + matched_sources
+            )
         ],
     })
     source_id = None
@@ -287,6 +323,12 @@ def load_companies(scope="domestic"):
                 "pattern": pattern,
                 "industries": [],
             })
+            if entry.get("aliases"):
+                row["aliases"] = [
+                    str(alias).strip()
+                    for alias in entry["aliases"]
+                    if str(alias).strip()
+                ]
             if entry.get("parentPattern"):
                 row["parentPattern"] = str(entry["parentPattern"]).strip()
             if entry.get("brandTokens"):
@@ -321,9 +363,9 @@ def _brand_rules(companies):
     return rules
 
 
-def _job_aggregate_query(companies):
+def _job_aggregate_query(companies, scope="domestic"):
     columns = []
-    params = {}
+    params = {"scope": scope}
     rules = _brand_rules(companies)
     for index, rule in enumerate(rules):
         prefix = "brand_%d" % index
@@ -337,6 +379,7 @@ def _job_aggregate_query(companies):
         matches = (
             "company ilike %({prefix}_parent)s "
             "and company not ilike %({prefix}_direct)s "
+            "and job_scope = %(scope)s "
             "and title ilike any(%({prefix}_tokens)s::text[])"
         ).format(prefix=prefix)
         columns.append(
@@ -355,8 +398,8 @@ def _job_aggregate_query(companies):
     )
 
 
-def fetch_job_aggregates(conn, companies):
-    sql, params, rules = _job_aggregate_query(companies)
+def fetch_job_aggregates(conn, companies, scope="domestic"):
+    sql, params, rules = _job_aggregate_query(companies, scope)
     rows = jobs_db.fetch_all(conn, sql, params)
     for row in rows:
         row["brand_rollups"] = {
@@ -449,7 +492,7 @@ def census(supabase, jobs_conn, *, scope="domestic", cap=20, company=None,
     companies = load_companies(scope)
     if company:
         companies = [row for row in companies if row["name"] == company]
-    aggregates = fetch_job_aggregates(jobs_conn, companies)
+    aggregates = fetch_job_aggregates(jobs_conn, companies, scope)
     sources = fetch_sources(supabase)
     previous = {row.get("company"): row for row in fetch_previous_rows(supabase, scope)}
     rows = []
