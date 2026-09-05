@@ -13,6 +13,7 @@ import type {
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { LEGACY_INPUT_CLASS as inputCls } from "@/components/ui/deprecated/legacy-input-class";
+import { buttonVariants, badgeVariants } from "@/components/ui";
 
 interface AdminItem {
   id: string;
@@ -584,7 +585,7 @@ export default function InsightsAdminClient() {
           <button
             type="button"
             onClick={openCreate}
-            className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] active:scale-[0.98] dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+            className={cn(buttonVariants({ variant: "ink", size: "sm" }), "inline-flex items-center gap-2 font-semibold active:scale-[0.98]")}
           >
             <Plus size={16} weight="bold" /> 新增洞察条目
           </button>
@@ -811,14 +812,14 @@ function SubmissionRow({
     <article className="rounded-xl border border-tone-teal-border bg-tone-teal-bg p-4 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-semibold ink-1">{submission.company}</span>
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
+        <span className={badgeVariants({ tone: "neutral", size: "xs" })}>
           {DIM_LABELS[submission.dimension]}
         </span>
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
+        <span className={badgeVariants({ tone: "neutral", size: "xs" })}>
           {SUBMISSION_TOPIC_LABELS[submission.topic] || submission.topic}
         </span>
         {submission.rating != null && (
-          <span className="rounded-full border border-tone-amber-border bg-tone-amber-bg px-2 py-0.5 text-[11px] text-tone-amber-fg">
+          <span className={badgeVariants({ tone: "amber", size: "xs" })}>
             {submission.rating}/5
           </span>
         )}
@@ -832,7 +833,7 @@ function SubmissionRow({
           type="button"
           disabled={busy}
           onClick={onApprove}
-          className="inline-flex items-center gap-1.5 rounded-full bg-[#1a1714] px-3 py-1.5 text-xs font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+          className={cn(buttonVariants({ variant: "ink", size: "xs" }), "inline-flex items-center gap-1.5 font-semibold disabled:opacity-50")}
         >
           {busy ? <CircleNotch size={13} weight="bold" className="animate-spin" /> : <CheckCircle size={13} weight="bold" />}{""}
           {busy ? "处理中…" : "通过"}
@@ -873,17 +874,17 @@ function ItemRow({
   return (
     <article className="surface-soft p-4 text-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
+        <span className={badgeVariants({ tone: "neutral", size: "xs" })}>
           {DIM_LABELS[item.dimension]}
         </span>
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
+        <span className={badgeVariants({ tone: "neutral", size: "xs" })}>
           {GRADE_LABELS[item.grade]}
         </span>
         <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", statusChip(item.status))}>
           {STATUS_LABELS[item.status] || item.status}
         </span>
         {!item.deidentified && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-tone-rose-border bg-tone-rose-bg px-2 py-0.5 text-[11px] text-tone-rose-fg">
+          <span className={cn(badgeVariants({ tone: "rose", size: "xs" }), "inline-flex items-center gap-1")}>
             <Warning size={11} weight="fill" /> 未去标识
           </span>
         )}
@@ -972,7 +973,7 @@ function ItemForm({
             onClick={onAiDraft}
             disabled={aiDrafting}
             title="用 AI 按公司+维度生成草稿（仅辅助，需人工核对+补来源）"
-            className="inline-flex items-center gap-1.5 rounded-full border border-tone-sky-border bg-tone-sky-bg px-3 py-1.5 text-[12px] font-semibold text-[#2f6299] transition hover:bg-[#cfe2f7] disabled:opacity-50 dark:text-[#7fb2e8] dark:hover:bg-[#7fb2e8]/[0.25]"
+            className={cn(badgeVariants({ tone: "sky", size: "md" }), "inline-flex items-center gap-1.5 font-semibold disabled:opacity-50")}
           >
             <Sparkle size={13} weight="fill" />
             {aiDrafting ? "AI 起草中…" : "AI 起草"}
@@ -1172,7 +1173,7 @@ function ItemForm({
         <button
           type="submit"
           disabled={saving}
-          className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] active:scale-[0.98] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+          className={cn(buttonVariants({ variant: "ink", size: "sm" }), "inline-flex items-center gap-2 font-semibold active:scale-[0.98] disabled:opacity-50")}
         >
           {saving ? "保存中…" : form.id ? "保存修改" : "创建条目"}
         </button>
@@ -1384,7 +1385,7 @@ function CycleForm({
         <button
           type="submit"
           disabled={submitting}
-          className="inline-flex items-center gap-2 rounded-full bg-[#1a1714] px-4 py-2 text-sm font-semibold text-[#f7f1e6] transition hover:bg-[#2b2520] active:scale-[0.98] disabled:opacity-50 dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+          className={cn(buttonVariants({ variant: "ink", size: "sm" }), "inline-flex items-center gap-2 font-semibold active:scale-[0.98] disabled:opacity-50")}
         >
           {submitting && <CircleNotch size={15} weight="bold" className="animate-spin" aria-hidden="true" />}
           {submitting ? "提交中…" : "新增观测"}
@@ -1411,10 +1412,10 @@ function CycleRow({
         <span className="font-semibold ink-1">
           {cycle.company_profiles?.display_name || cycle.company_profiles?.company || "（未知公司）"}
         </span>
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
+        <span className={badgeVariants({ tone: "neutral", size: "xs" })}>
           {cycle.grad_class}
         </span>
-        <span className="rounded-full border border-black/[0.08] bg-white/70 px-2 py-0.5 text-[11px] ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
+        <span className={badgeVariants({ tone: "neutral", size: "xs" })}>
           {cycle.season} · {cycle.batch} · {cycle.event}
         </span>
         <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", cycleStatusChip(cycle.verify_status))}>

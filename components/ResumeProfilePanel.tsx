@@ -13,6 +13,8 @@ import {
 } from "@phosphor-icons/react";
 import SaveToast, { type SaveState } from "@/components/SaveToast";
 import TagInput from "./TagInput";
+import { cn } from "@/lib/utils";
+import { buttonVariants, badgeVariants } from "@/components/ui";
 
 type EduItem = { school: string; degree: string; major: string; start: string; end: string };
 type InternItem = { company: string; role: string; start: string; end: string; summary: string };
@@ -456,7 +458,7 @@ export default function ResumeProfilePanel() {
           {renderList("工作 / 项目经历", "projects", [["name", "项目"], ["role", "角色"], ["stack", "技术栈"], ["outcome", "成果"]], EMPTY_PROJECT)}
 
           {variant === "cn" ? (
-            <label className="flex cursor-pointer items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm ink-2 transition duration-200 hover:bg-white dark:hover:bg-white/[0.08] hover:opacity-80">
+            <label className={cn(buttonVariants({ variant: "soft", size: "xs" }), "flex cursor-pointer items-center gap-2 hover:opacity-80")}>
               <input type="checkbox" checked={applyToPreferences} onChange={(e) => setApplyToPreferences(e.target.checked)} className="accent-[#1a1714] dark:accent-[#f3ecdf]" />
               同步到求职偏好（方向 / 城市 / 技能）
             </label>
@@ -533,11 +535,11 @@ function SavedSummary({ profile }: { profile: any }) {
       <ChipGroup label="城市" values={profile.target_locations || []} />
       <ChipGroup label="技能" values={profile.skills || []} />
       <div className="flex flex-wrap gap-2 text-xs ink-2">
-        <span className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1">教育 {eduCount}</span>
-        <span className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1">实习 {internCount}</span>
-        <span className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1">项目 {projectCount}</span>
+        <span className={badgeVariants({ tone: "neutral", size: "sm" })}>教育 {eduCount}</span>
+        <span className={badgeVariants({ tone: "neutral", size: "sm" })}>实习 {internCount}</span>
+        <span className={badgeVariants({ tone: "neutral", size: "sm" })}>项目 {projectCount}</span>
         {(profile.experience_stage || profile.seniority) && (
-          <span className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1">
+          <span className={badgeVariants({ tone: "neutral", size: "sm" })}>
             阶段 {profile.experience_stage || profile.seniority}
           </span>
         )}
@@ -560,7 +562,7 @@ function ChipGroup({ label, values }: { label: string; values: string[] }) {
         {values.map((value) => (
           <span
             key={value}
-            className="rounded-full border border-black/[0.06] dark:border-white/[0.1] bg-[#f4efe6] dark:bg-[#16130f] px-2.5 py-1 text-xs font-medium ink-2"
+            className={badgeVariants({ tone: "neutral", size: "sm" })}
           >
             {value}
           </span>

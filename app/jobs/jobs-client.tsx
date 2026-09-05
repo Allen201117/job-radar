@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { MANUAL_CRAWL_UI_ENABLED } from "@/lib/product-flags";
 import type { ScoredJob } from "@/lib/types";
 import { useJobFilters } from "@/hooks/useJobFilters";
+import { buttonVariants, badgeVariants } from "@/components/ui";
 import {
   useDiscoveryPoll,
   type BrowserDiscoveryState,
@@ -294,7 +295,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
                     : `${matchTotal.text} 个匹配岗位 · 已展示 ${visibleJobs.length}`}
                 </p>
                 {deadIds.size > 0 && (
-                  <span className="t-caption rounded-full border border-black/[0.08] bg-white/55 px-2 py-0.5 ink-3 dark:border-white/[0.1] dark:bg-white/[0.05]">
+                  <span className={badgeVariants({ tone: "neutral", size: "xs" })}>
                     实时复核拦下 {deadIds.size} 个
                   </span>
                 )}
@@ -383,7 +384,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
               <button
                 type="button"
                 onClick={relaxLocationAndType}
-                className="t-label mt-4 inline-flex items-center gap-2 rounded-full bg-[#1a1714] dark:bg-[#f3ecdf] px-5 py-2 text-[#f7f1e6] dark:text-[#16130f] transition duration-200 hover:bg-[#2b2520] dark:hover:bg-[#e8ddca] active:scale-[0.98]"
+                className={cn(buttonVariants({ variant: "ink", size: "md" }), "mt-4 inline-flex items-center gap-2 active:scale-[0.98]")}
               >
                 放宽城市 / 类型，查看全部 {officialJobs.length} 个发现
               </button>
@@ -398,13 +399,13 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
                 <button
                   type="button"
                   onClick={broadenFilters}
-                  className="t-label rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]"
+                  className={buttonVariants({ variant: "soft", size: "sm" })}
                 >
                   放宽筛选条件
                 </button>
                 <Link
                   href="/me"
-                  className="t-label rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]"
+                  className={buttonVariants({ variant: "soft", size: "sm" })}
                 >
                   添加关注公司
                 </Link>
@@ -420,7 +421,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
             type="button"
             onClick={loadMore}
             disabled={loadingMore}
-            className="t-label inline-flex items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-5 py-2.5 ink-2 transition duration-200 hover:bg-white dark:hover:bg-[#1e1a15] active:scale-[0.98] disabled:opacity-50"
+            className={cn(buttonVariants({ variant: "soft", size: "md" }), "inline-flex items-center gap-2 active:scale-[0.98] disabled:opacity-50")}
           >
             {loadingMore ? (
               <>

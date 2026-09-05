@@ -6,6 +6,8 @@ import JobCard from "@/components/JobCard";
 import { track } from "@/lib/track";
 import type { ScoredJob } from "@/lib/types";
 import type { Opportunity, OpportunityFeed, OpportunitySignal } from "@/lib/opportunities/types";
+import { cn } from "@/lib/utils";
+import { buttonVariants } from "@/components/ui";
 import {
   todayReducer,
   initTodayState,
@@ -85,13 +87,13 @@ export function OnboardingPanel({
       <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
         <Link
           href="/me"
-          className="t-label inline-flex items-center justify-center rounded-full bg-[#1a1714] px-5 py-2.5 text-[#f7f1e6] transition hover:bg-[#2b2520] dark:bg-[#f3ecdf] dark:text-[#16130f] dark:hover:bg-[#e8ddca]"
+          className={cn(buttonVariants({ variant: "ink", size: "md" }), "inline-flex items-center justify-center")}
         >
           设置求职目标
         </Link>
         <Link
           href="/preferences#resume"
-          className="t-label inline-flex items-center justify-center rounded-full border border-black/[0.1] bg-white/70 px-5 py-2.5 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
+          className={cn(buttonVariants({ variant: "soft", size: "md" }), "inline-flex items-center justify-center")}
         >
           上传简历生成画像
         </Link>
@@ -123,13 +125,13 @@ function EmptyQueue({ counts }: { counts?: OpportunityFeed["counts"] }) {
         {explain}
       </p>
       <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
-        <Link href="/me" className="t-label rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]">
+        <Link href="/me" className={buttonVariants({ variant: "soft", size: "sm" })}>
           调整求职目标
         </Link>
-        <Link href="/jobs" className="t-label rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]">
+        <Link href="/jobs" className={buttonVariants({ variant: "soft", size: "sm" })}>
           搜索完整岗位库
         </Link>
-        <Link href="/me" className="t-label rounded-full border border-black/[0.1] bg-white/70 px-4 py-2 ink-2 transition hover:bg-white dark:border-white/[0.12] dark:bg-white/[0.05]">
+        <Link href="/me" className={buttonVariants({ variant: "soft", size: "sm" })}>
           添加关注公司
         </Link>
       </div>
