@@ -49,10 +49,18 @@ const PRESERVE_IF_EMPTY = new Set<string>(["summary", "job_type", "salary_text"]
 // 非文本列的「空」就是 NULL，直接 COALESCE(x, 列)。与 crawler/jobs_db._PRESERVE_IF_NULL 同口径。
 const PRESERVE_IF_NULL = new Set<string>(["grad_class"]);
 // job_scope 还有第三种保护：**拿不出依据时不许写**。
-// deriveJobScope 在「地点抽不出国家 + 又没拿到源 regions」时返回的 'domestic' 是**默认值不是结论**，
-// 而库里那一行很可能是爬虫按源 regions 算出来的 overseas（爬虫永远有 regions 可用，app 不一定：
-// discovery 那条链写 source_id=null，压根没有 sources 行可查）。让默认值盖掉结论 =
-// 刷一次就把海外裸远程岗打回国内看板（2026-09-05 香港库实测这批在招 16,159 个）。
+// deriveJobScope 走到函数末尾返回的 'domestic' 是**兜底默认值不是结论**，而库里那一行
+// 很可能是有依据的 overseas。让默认值盖掉结论 = 刷一次就把海外岗打回国内看板。
+// 2026-09-05 香港库实测，在招且「地点抽不出国家」却已判 overseas 的有 6,313 个：
+// 4,312 个来自 regions 不含 CN 的源（AbbVie 1,576 / ServiceNow 608 / Ubisoft 272…），
+// 另外 2,001 个来自含 CN 的源、地点是 "Toronto, Canada" / "Warsaw, …, PL" /
+// "Søborg, …, DK" 这类**国别码还没进词表**的写法 —— 它们确确实实在海外。
+// 判据只认「不是兜底那一行」：deriveJobScope 只有两条路返回 domestic ——
+// 地点抽出了大中华国家码（有依据），或走到末尾兜底（没依据）；返回 overseas 则必然
+// 来自三个正向分支之一（国家码 / 自报海外 / 源 regions 不含 CN）。所以
+// 「显式传了 job_scope」「抽得出国家码」「结论是 overseas」三者有其一才算有依据。
+// ⚠️ 别把「拿到了 regions」当依据：regions 含 CN 时函数是**穿过** regions 分支落到兜底的，
+// 那一步没产生任何结论 —— 上面那 2,001 行正是这么被覆盖掉的。
 // 实现：无依据时把该列的值传 null，靠 COALESCE 回退旧值 —— job_scope 是 not null 列，
 // 所以只有「app 拿不出依据」这一种情况会走到回退分支，正常写入行为一字不变。
 const SCOPE_COL = "job_scope";
@@ -65,12 +73,14 @@ function withDerivedFields(job: Record<string, any>): Record<string, any> {
   // 让 app 侧的求职范围判定与 crawler/normalizer 逐字同口径（都把源 regions 喂给 deriveJobScope）。
   // INSERT/UPDATE 的列都是显式枚举的，所以它不会漏进 SQL。
   const regions = normalizeRegions(job.source_regions);
+  const countryCode = job.country_code ?? deriveCountryCode(job.location);
+  const jobScope = job.job_scope ?? deriveJobScope(job.location, regions);
   return {
     ...job,
-    country_code: job.country_code ?? deriveCountryCode(job.location),
-    job_scope: job.job_scope ?? deriveJobScope(job.location, regions),
+    country_code: countryCode,
+    job_scope: jobScope,
     [SCOPE_EVIDENCED]:
-      job.job_scope != null || deriveCountryCode(job.location) !== null || regions.length > 0,
+      job.job_scope != null || jobScope === "overseas" || deriveCountryCode(job.location) !== null,
     sponsorship_signal:
       job.sponsorship_signal ?? sponsorshipSignal([job.title, job.summary].filter(Boolean).join(" ")),
     // 届别只认硬信号，抽不出留 null（与 crawler/grad_class.py 同口径，改规则两边同改）

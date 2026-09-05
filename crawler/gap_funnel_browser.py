@@ -266,6 +266,13 @@ def _candidate_trusted(row, entry_url, candidate, identity_text=""):
     return False, "identity_unverified"
 
 
+def _valid_count(probe_result):
+    try:
+        return int((probe_result or {}).get("valid") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _probe_digest(probe_result):
     """探活结果的台账摘要。刻意不整份塞进 evidence（含 identity_text 之类只在内存流转的素材）。"""
     return {
@@ -349,11 +356,13 @@ def process_browser_company(
     source_url = row.get("official_entry_url")
     adapter, source_url = resolve_browser_adapter(row, source_url)
 
-    def _probe(url):
+    def _probe(url, use_adapter=None):
+        # ⚠️ 换平台后必须用**新** adapter 探，别用闭包里那个旧的 —— 否则「换 adapter」这件事
+        # 根本没发生，只是拿同一个 company_spa 又探了一遍同一个 URL。
         try:
             return prober({
                 "company": row["company"],
-                "adapter": adapter,
+                "adapter": use_adapter or adapter,
                 "url": url,
                 "industry": (row.get("industries") or [None])[0],
             })
@@ -375,15 +384,20 @@ def process_browser_company(
 
     hop_trail = []
     discovered = None
-    # 探活没拿到可用岗 → 先别急着记失败，看看是不是「站错了页 / 用错了 adapter」。
-    # 候选是从**渲染后**的页面抽的：httpx 道（platform_fingerprint.fingerprint）只能救
-    # 「服务端渲染、原始 HTML 里就有链接」那半，空 SPA 壳那半只有渲染后才有链接。
-    # ⚠️ 触发条件**不能只看 block_kind**：广汽/埃斯顿/华虹三家 company_spa 都是 fetch 成功
-    # （JSON 拦到了）、parse 出 0 个岗，压根不抛异常，block_kind 是 None。
-    # 真被拒（anti_bot）和页面没打开（entry_unreachable）才不折腾，那两种换 adapter 也没用。
+    # company_spa 是**通用盲抓兜底**，不是一个真 adapter：它「成功了」也不能算数，
+    # 必须看一眼渲染后有没有认出真平台。宝洁实测：company_spa 侥幸解析出 1 个岗 →
+    # 探活成功 → 直接进验收门 → 源 enabled、1 个岗入库，而真身 moka 租户有 42 个。
+    # 「抓到了一点点」比「一个都没抓到」更危险：源 enabled、crawl_runs success、
+    # 北极星算它「有货」，另外 41 个岗永远不来，也没有任何告警会响。
+    # ⚠️ 触发条件**不能只看 block_kind、也不能只看探活成没成**，这两半是同一类坑：
+    #   · 广汽/埃斯顿/华虹：fetch 成功、parse 出 0 个岗、不抛异常（block_kind 是 None）
+    #   · 宝洁：parse 出 1 个岗，_probe_ok 为真，把整条认平台的路短路了
+    # 真被拒（anti_bot）和页面没打开（entry_unreachable）才不折腾——换 adapter 也没用。
+    # 已经用着真 adapter（moka/beisen/…）且探活成功时维持现状、不折腾。
+    baseline = (source_url, probe_result) if _probe_ok(probe_result) else None
     if (
         source_url
-        and not _probe_ok(probe_result)
+        and (baseline is None or adapter == "company_spa")
         and probe_result.get("block_kind") not in ("anti_bot", "entry_unreachable")
     ):
         entry_url = source_url
@@ -411,12 +425,25 @@ def process_browser_company(
                     hop_trail=hop_trail, entry_url=entry_url,
                 )
                 if routed.get("handoff"):
-                    return routed["handoff"]
-                adapter, source_url = routed["adapter"], routed["source_url"]
-                discovered = routed["discovered"]
-                probe_result = _probe(source_url)
-                hop_trail[-1]["probe"] = _probe_digest(probe_result)
+                    # 手上已有确认产出时不能一走了之 —— 交回 P1 万一被拒就白丢了。
+                    # 把认出的平台记进 evidence，下一轮再由 P1 走它的完整门。
+                    if baseline is None:
+                        return routed["handoff"]
+                    discovered = {**(((row or {}).get("evidence") or {}).get("fingerprint") or {}),
+                                  "real_platform": ats_hint.get("platform"),
+                                  "discovered_by": "browser_rendered_entry"}
+                else:
+                    candidate_probe = _probe(routed["source_url"], routed["adapter"])
+                    hop_trail[-1]["probe"] = _probe_digest(candidate_probe)
+                    # 比出来哪边多用哪边：这是**测量**不是赌博，最坏也只是维持现状。
+                    if _valid_count(candidate_probe) > _valid_count(probe_result):
+                        adapter, source_url = routed["adapter"], routed["source_url"]
+                        discovered = routed["discovered"]
+                        probe_result = candidate_probe
+                    else:
+                        hop_trail[-1]["kept_baseline"] = True
         # ② 同主域的自家招聘子域候选，跟过去看它把我们带到哪儿。
+        #    手上已有产出就不必再跳（子域候选只可能带来另一个入口，不解决 adapter 选型）。
         if not _probe_ok(probe_result):
             for hop in _hop_candidates(probe_result, entry_url):
                 try:
@@ -450,13 +477,17 @@ def process_browser_company(
                         hop_trail=hop_trail, entry_url=entry_url,
                     )
                     if routed.get("handoff"):
-                        return routed["handoff"]
-                    adapter, source_url = routed["adapter"], routed["source_url"]
-                    discovered = routed["discovered"]
-                    probe_result = _probe(source_url)
-                    step["probe"] = _probe_digest(probe_result)
-                    if _probe_ok(probe_result):
+                        if baseline is None:
+                            return routed["handoff"]
+                        continue
+                    candidate_probe = _probe(routed["source_url"], routed["adapter"])
+                    step["probe"] = _probe_digest(candidate_probe)
+                    if _valid_count(candidate_probe) > _valid_count(probe_result):
+                        adapter, source_url = routed["adapter"], routed["source_url"]
+                        discovered = routed["discovered"]
+                        probe_result = candidate_probe
                         break
+                    step["kept_baseline"] = True
                     continue
                 if hop_fingerprint.get("platform") in ("unknown", "unknown_spa"):
                     retried = _probe(hop)
@@ -556,8 +587,12 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
             )
             payload = gap_funnel._attempt_payload(scoped, result, now)
         except Exception as exc:
+            # ⚠️ 别把已知的 source_id 抹掉：源可能**已经建好、岗也已入库**，只是收尾抛了异常
+            # （华虹实测：重复 dispatch 撞 "source_url 已由 enabled source 占用"，
+            #  台账被覆盖成 source_id 为空的假失败，按 source_id 统计的地方就当它没打通）。
             payload = gap_funnel._attempt_payload(scoped, {
                 "state": scoped.get("state") or "wrong_platform",
+                "source_id": scoped.get("source_id"),
                 "next_retry_at": gap_funnel._after(now, 1),
                 "fail_reason": "%s: %s" % (type(exc).__name__, str(exc)[:500]),
                 "evidence": {"exception_type": type(exc).__name__},

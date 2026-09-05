@@ -98,6 +98,18 @@ test("更新：拿不出依据时把 job_scope 传 null + COALESCE 回退，绝�
   assert.match(b.clause, /^COALESCE\(\$\d+, job_scope\)$/);
 });
 
+test("更新：源 regions 含 CN + 地点判不出国家 —— 那是穿过 regions 落到兜底，不算依据", async () => {
+  // ⚠️ 这条最容易写错：拿到了 regions ≠ regions 给出了结论。regions 含 CN 时函数是**穿过**
+  // 那个分支落到末尾兜底的，结论仍是默认 domestic。库里 2,001 个在招岗地点写成
+  // "Toronto, Canada" / "Warsaw, …, PL"（国别码还没进词表）、已判 overseas，
+  // 拿这个默认值去盖就是把真海外岗打回国内。
+  const { mod, calls } = loadWriteWithFakeDb({ existingId: "11111111-1111-1111-1111-111111111111" });
+  await mod.upsertJob({ ...baseJob, location: "Toronto, Canada", source_regions: ["CN", "US", "SG", "Remote"] });
+  const b = updateBinding(findCall(calls, /^update jobs set/), "job_scope");
+  assert.equal(b.value, null);
+  assert.match(b.clause, /^COALESCE\(\$\d+, job_scope\)$/);
+});
+
 test("更新：地点本身能抽出国家时，它就是依据，照常覆写", async () => {
   const { mod, calls } = loadWriteWithFakeDb({ existingId: "11111111-1111-1111-1111-111111111111" });
   await mod.upsertJob({ ...baseJob, location: "Beijing, China" });
