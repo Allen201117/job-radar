@@ -1,7 +1,7 @@
 """必投清单缺口台账：一次聚合 jobs，再在 Python 内按清单 pattern 归属公司。"""
 import os
 from math import ceil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import db
 import jobs_db
@@ -11,6 +11,30 @@ import must_apply
 DEFAULT_TARGET_INDUSTRIES = (
     "金融", "教育", "能源/化工", "地产/建筑", "物流/供应链", "传媒/文娱"
 )
+
+# 复验车道只回捞「我们改代码就可能变好」的失败态。
+# 刻意不含 governance_candidate / login_wall / anti_bot / manual_review / healthy：
+# 前四个是人工或对方的问题（改 adapter 不会让登录墙消失），healthy 没什么可复验的。
+_REVALIDATE_STATES = frozenset({
+    "no_stable_jd", "wrong_platform", "no_active_jobs", "thin_only",
+})
+_DEFAULT_REVALIDATE_SLOTS = 3
+# 上次尝试至少隔这么久才回捞。没有这道门，短退避（失败后 1 天重试那种）会被复验车道
+# 当场抵消 = 退避形同虚设，且每天重复敲同一批站点。7 天足够覆盖「改了 adapter」的节奏。
+_REVALIDATE_MIN_AGE_DAYS = 7
+
+
+def _revalidate_slots(value=None):
+    """每轮最多回捞几家。env `GAP_FUNNEL_REVALIDATE_SLOTS`，设 0 = 关掉这条车道。"""
+    if value is not None:
+        return max(0, int(value))
+    raw = str(os.environ.get("GAP_FUNNEL_REVALIDATE_SLOTS", "")).strip()
+    if not raw:
+        return _DEFAULT_REVALIDATE_SLOTS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return _DEFAULT_REVALIDATE_SLOTS
 
 # ⚠️ 计数**只算本 scope 的岗**（`job_scope = %(scope)s`）。
 # 2026-09-05 之前不分 scope：国内清单会把大陆集团的 352 个海外岗算成中国供给、
@@ -198,17 +222,26 @@ def _coverage_for(row, industry_coverage):
 
 
 def plan_queue(rows, target_industries, user_wanted, industry_coverage, *,
-               now=None, cap=20, ignore_backoff=False):
+               now=None, cap=20, ignore_backoff=False, revalidate_slots=None):
     """纯函数：过滤到期项，优先首跑并避免单行业长期占满队列。
 
     ignore_backoff=True 用于**人工点名单家公司**（CLI/workflow 的 --company）：
     点名却因退避不跑，会让人以为系统坏了，更要命的是会锁死自我修复——
     公司因某个 bug 失败 → 退避 45 天 → 修好 bug 想验证却跑不动 → 只能干等。
     定时任务默认 False，退避照常生效。
+
+    revalidate_slots = 复验车道：用**剩余配额**回捞等得最久的退避项，治的正是上面那句
+    「只能干等」在定时跑里的版本——ignore_backoff 只救得了「有人想起来点名」的公司。
+    2026-09-05 实证：埃斯顿 8-28 判 no_stable_jd 退避到 9-30，而 8-27 落地的 beisen 改动
+    当天就能从同一个 URL 抓到 63 个健康岗；期间 8 次定时跑一次都没复测它，63 个岗白白
+    锁了 8 天。**adapter 是持续在改的，退避却假设「失败原因不会变」，这个假设是错的。**
+    ⚠️ 只回捞「能力相关」的失败态（我们改代码就可能变好的）；治理/登录墙/反爬是人工或
+    对方的问题，改 adapter 不会让它们变好，回捞它们只是每天空烧。
     """
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     targets = {str(x).strip() for x in (target_industries or set()) if str(x).strip()}
     eligible = []
+    backed_off = []
     for row in rows or []:
         state = row.get("state") or "unknown"
         retry_at = _parse_datetime(row.get("next_retry_at"))
@@ -218,6 +251,8 @@ def plan_queue(rows, target_industries, user_wanted, industry_coverage, *,
             or (retry_at is not None and retry_at <= now)
         ):
             eligible.append(row)
+        elif retry_at is not None and state in _REVALIDATE_STATES:
+            backed_off.append(row)
 
     def key(row):
         industries = set(row.get("industries") or [])
@@ -246,7 +281,32 @@ def plan_queue(rows, target_industries, user_wanted, industry_coverage, *,
             deferred.append(row)
         if len(selected) >= limit:
             return selected
-    return (selected + deferred)[:limit]
+    queue = (selected + deferred)[:limit]
+    return queue + _revalidation_picks(
+        backed_off, queue, limit=limit, slots=revalidate_slots, now=now
+    )
+
+
+def _revalidation_picks(backed_off, queue, *, limit, slots, now):
+    """用剩余配额回捞等得最久的退避项。到期项永远优先——这里只吃它们剩下的。"""
+    slots = _revalidate_slots(slots)
+    room = min(slots, limit - len(queue))
+    if room <= 0 or not backed_off:
+        return []
+    already = {id(row) for row in queue}
+    cutoff = now - timedelta(days=_REVALIDATE_MIN_AGE_DAYS)
+    pool = []
+    for row in backed_off:
+        if id(row) in already:
+            continue
+        last = _parse_datetime(row.get("last_attempt_at"))
+        # ⚠️ last_attempt_at 缺失**不算**「等了很久」：那是「排了期但还没跑过」，
+        # 退避该照常生效。当成 1970 会让每一条这样的行天天被回捞。
+        if last is None or last > cutoff:
+            continue
+        pool.append((last, str(row.get("company") or "").casefold(), row))
+    pool.sort(key=lambda item: item[:2])          # 等得最久的先回捞
+    return [row for _last, _name, row in pool[:room]]
 
 
 def load_companies(scope="domestic"):
