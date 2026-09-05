@@ -625,6 +625,50 @@ class RecognizedAtsIdentityGateTest(unittest.TestCase):
         self.assertNotIn("语料", json.dumps(result["evidence"], ensure_ascii=False))
 
 
+class RenderedRouteMetricTest(unittest.TestCase):
+    """「渲染后改道救回几家」要进 ops_runs —— 这是这条链唯一的新增产出口径。
+
+    ⚠️ 判据必须是「**真的换过去了**」。用 `trusted is True` 会把两类没改道的也算进来：
+    认出来但真抓更少而保留原产出（kept_baseline）、认出 httpx 平台只记进 evidence 留给下一轮。
+    数字刷虚了，「绿灯零产出」的告警就失效了。
+    """
+
+    def _metric(self, hops):
+        outcomes = [{"state": "healthy", "evidence": {"entry_hops": hops}}]
+        return sum(
+            1
+            for row in outcomes
+            if any(step.get("adopted") is True
+                   for step in ((row.get("evidence") or {}).get("entry_hops") or []))
+        )
+
+    def test_counts_only_adopted_routes(self):
+        self.assertEqual(self._metric([{"trusted": True, "adopted": True}]), 1)
+        # 过了信任门但真抓更少 → 保留原产出，没有改道
+        self.assertEqual(self._metric([{"trusted": True, "kept_baseline": True}]), 0)
+        # 认出来了但身份门拒了
+        self.assertEqual(self._metric([{"trusted": False}]), 0)
+        self.assertEqual(self._metric([]), 0)
+
+    def test_run_round_reports_the_metric_and_prints_it(self):
+        row = _row("甲公司")
+        adopted = {
+            "state": "healthy", "official_entry_url": row["official_entry_url"],
+            "detected_platform": "unknown_spa", "next_retry_at": None, "source_id": "s1",
+            "evidence": {"entry_hops": [{"trusted": True, "adopted": True}]},
+        }
+        with mock.patch.object(
+            browser.gap_census, "census",
+            return_value={"rows": [row], "queue": [], "industry_coverage": {}},
+        ), mock.patch.object(
+            browser, "process_browser_company", return_value=adopted
+        ), mock.patch.object(browser.gap_funnel, "_write_attempt"), \
+                mock.patch.object(browser.ops_runs, "record_ops_run"):
+            result = browser.run_round(
+                supabase=object(), jobs_conn=object(), apply=True, limit=5, now=NOW)
+        self.assertEqual(result["metrics"]["rendered_route_adopted"], 1)
+
+
 class ProbeBlockKindPassthroughTest(unittest.TestCase):
     """adapter 判过的因必须原样传到调用方；让调用方对着 reason 字符串猜就是老毛病的来源。"""
 
