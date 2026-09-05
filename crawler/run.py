@@ -73,6 +73,11 @@ from adapters.cnstaff import CnstaffAdapter
 from adapters.midea import MideaAdapter
 from adapters.cmb import CmbAdapter
 from adapters.cmbc import CmbcAdapter
+from adapters.spdb import SpdbAdapter
+from adapters.icbc import IcbcAdapter
+from adapters.ccb import CcbAdapter
+from adapters.bankcomm import BankcommAdapter
+from adapters.cmcc import CmccAdapter
 from adapters.gree import GreeAdapter
 
 
@@ -179,6 +184,11 @@ ADAPTERS = {
     "cmb": CmbAdapter(),  # 招商银行自建门户：公开社会招聘接口，零浏览器
     "cmbc": CmbcAdapter(),  # 中国民生银行自建门户：公开社会招聘接口，零浏览器
     "gree": GreeAdapter(),  # 格力自建门户：公开校招/社招接口，零浏览器
+    "spdb": SpdbAdapter(),  # 浦发银行自建门户：公开社招/校招列表 + 逐岗详情页正文，零浏览器
+    "icbc": IcbcAdapter(),  # 工商银行自建门户：qryPostList/qryPostById 公开接口，零浏览器
+    "ccb": CcbAdapter(),  # 建设银行自建门户：NHR104/NHR107 公开接口（需先热身会话），零浏览器
+    "bankcomm": BankcommAdapter(),  # 交通银行自建门户：REQ_MESSAGE 包裹的公开接口，零浏览器
+    "cmcc": CmccAdapter(),  # 中国移动招聘网站：searchJobs 公开接口（RSA 签名头自算），零浏览器
 }
 
 # 中国本土公司源（每日后台爬取高优）：本土覆盖优先级 > 外企，排在外企 ATS 前先抓。
@@ -189,6 +199,7 @@ DOMESTIC_ADAPTERS = {
     "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",
     "meituan", "meituan_campus", "kuaishou", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "byd", "sf_express",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
     "tencent_music", "antgroup", "mihoyo", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree", "tonghuashun",  # 自建门户公开接口（零浏览器；cmb=招商银行，cmbc=中国民生银行）
+    "spdb", "icbc", "ccb", "bankcomm", "cmcc",  # 国有大行 + 中国移动自建门户（2026-09-05 live 核实逐岗详情页，零浏览器）
 }
 
 
@@ -203,6 +214,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",
     "meituan", "meituan_campus", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "sf_express",  # 已逐一核实为纯 httpx fetch
     "tencent_music", "antgroup", "mihoyo", "avature", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree", "tonghuashun",  # 公开接口/SSR，纯 httpx
+    "spdb", "icbc", "ccb", "bankcomm", "cmcc",  # 国有大行 + 中国移动自建门户，纯 httpx（无浏览器、无共享状态）
     # 字节：jobs.bytedance.com posts API 已改为纯 httpx offset/limit 全量翻页；
     # sources.crawl_method 仍由运维侧改库，本白名单只控制代码侧并发档。
     "bytedance", "bytedance_campus",

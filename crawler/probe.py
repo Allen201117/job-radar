@@ -40,6 +40,8 @@ _HTTPX_ADAPTERS = {
     # 不列在这里会导致 --emit 出来的迁移把 crawl_method 写成 playwright（误导运维），
     # 也会让默认（不带 --all）的探活白白跳过一整类最容易扩的源。
     "feishu", "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu",
+    # 国有大行 + 中国移动自建门户（2026-09-05 接入）：全部纯 httpx，探活出来的迁移应写 crawl_method=http
+    "spdb", "icbc", "ccb", "bankcomm", "cmcc",
     "netease",  # 网易自建：hr.163.com queryPage httpx 直连（详见 adapters/netease.py）
     "oppo",  # OPPO 校招门户：careers.oppo.com openapi httpx 直连（详见 adapters/oppo.py）
     "xiaohongshu",  # 小红书自建：job.xiaohongshu.com pageQueryPosition httpx 直连（详见 adapters/xiaohongshu.py）
