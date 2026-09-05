@@ -268,6 +268,41 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     gree 格力 64（GET api/apply/jobs，**property=1 校招/博士 + 2 社招两个板块都要抓**；
                          #       ⚠️ 返回带 HR 真人姓名 PubName，一律忽略不入库；错误入口：gie.gree.com 是子公司、
                          #       recruit.gree.com 是内部登录墙）
+                         #   spdb/icbc/ccb/bankcomm/cmcc = 国有大行 + 中国移动自建门户（2026-09-05 live，纯 httpx 零浏览器）。
+                         #     ⚠️ **推翻旧结论「国有大行=公告制、没有逐岗详情页」**——那是只点了几下首页、
+                         #       没读列表页 onClick 就下的判断。工行/农行/交行的详情走 `window.open`，
+                         #       在自动化浏览器里点一下**像没反应**，别再据此判它没有详情页。
+                         #     spdb 浦发 633（社343/校290；socialJobJsonList 不带 Referer 直接 500；pageSize 无效恒 10 条/页；
+                         #       recuitType 11/12 ↔ 详情 type 1/2 必须对应；closeDt=2100-12-31 是「无截止」哨兵值）
+                         #     icbc 工行 2,615（校2567/社48；qryPostList/qryPostById；postDepict 是
+                         #       **base64→urlencode→HTML** 三层包；列表夹带报名已截止的岗要按 enterEndTime 剔）
+                         #     ccb 建行 3,799（校3784/社15；NHR104/NHR107，**必须先 TXCODE=100119 热身会话**否则详情返
+                         #       「请重新登录」；响应不是合法 JSON 要复刻前端 repairJSON；jd_url **必须五参数全**
+                         #       planId/planPost/planType/orgId/secondOrgId，少一个前端就 alert+history.go(-1)）
+                         #     bankcomm 交行 16（社招；校招 0 与官网自报「暂无职位数据」一致。form-urlencoded 单字段
+                         #       REQ_MESSAGE，业务参数**必须再包一层 params**，少了返 200+JUMPTESTBP9001「系统异常」）
+                         #     cmcc 中国移动 2,205（校2110/社89/实习6；header.digest 自算
+                         #       base64(md5(ts+secret))+";"+RSA_PKCS1v15(secret,站点公钥)，RSA 用标准库手写不加依赖；
+                         #       签名错返 **HTTP 200 + code=9999** 必须按 code 判成败。⚠️ 它不在必投清单里）
+                         #     ⚠️ **两个「静默 0 产出」的坑**：① 建行对本项目 Bot UA 返 **HTTP 200 + 零字节 body**
+                         #       （HEAD 又是 200，should_skip 拦不住）→ 覆写 user_agent + 空 body 当失败抛；
+                         #       ② 工行/中国移动对 **HEAD 恒返 403**（换浏览器 UA 也一样，GET/POST 全正常）→
+                         #       不覆写 should_skip 就整源被跳过。**接新源必须逐个跑一遍 adapter.should_skip(url)**。
+                         #   abchina 农业银行 = **唯一走浏览器的一家**（校招 2,580 岗 / 93 秒，46 个机构）。
+                         #     它不是「没有逐岗详情页」，是**接口响应体加密**：new/getInfo 明文发一把 1024 位 RSA
+                         #     公钥做密钥交换，之后 org/* 与 orgPosition/* 的响应体是 hex 密文（页面用 SM4-ECB 解），
+                         #     明文只存在于浏览器内存 → 只能 Playwright 读页面渲染好的 React state，不拦接口不解密。
+                         #     枚举：`#/{recruitType}` 页的 state.batchCardInfo 出机构 → `#/RecruitmentOrgDetails/{rt}/{orgId}`
+                         #       页的 state.posCardInfo 出岗位（recruitType 99=校招 / 100=社招）。
+                         #     ⚠️ **必须先 goto 一次首页**把会话建起来，否则 hash 路由只渲染 222 字空壳、一条都抓不到。
+                         #     ⚠️ hash 路由是**同文档导航**，换机构必须 `page.reload()`——不然上一家的卡片还在 DOM 里，
+                         #       会把上一家的岗位当成这一家的（第一版就是这么只抓到 2 个岗、还自称抓全了）。
+                         #     ⚠️ 渲染慢且不均：农银人寿 34 个岗要 >8s 才出来，等太短会得到「0 个岗」这种
+                         #       看着正常其实是漏抓的结果 → 轮询到 25s 仍为空才认「这家当期没在招」。
+                         #     ⚠️ jd_url 里的冒号是**字面量**：`#/PositionDetails/:{jobPublishId}`（前端拼串时把
+                         #       路由占位符一起拼进去了），删掉它详情页打不开。详情走 window.open，点一下像没反应。
+                         #     诚实边界：社招靠「热招事项」卡枚举机构，当前站点自报「暂无热招事项」故为 0；
+                         #       哪天社招开了但站点不出热招事项卡，这里会漏——上线后拿 db-report 复核。
                          #   ⬆ 2026-08-27 四处「扩现有 adapter」（都不是新 adapter，故无需接线）：
                          #     china_ats.BeisenAdapter 加**老版 SSR CMS 门户**分支（theme2，无 PortalId/无
                          #       GetJobAdPageList，列表页 HTML 直出 xq?jobId= 锚点）→ 中芯国际 563 岗（社293/校248/海外22）。
@@ -417,6 +452,41 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 ⇒ 中国岗被当成非中国岗丢掉。大陆集团 29 个中国岗里 8 个（28%）就是这么丢的。
 全库 596 行含独立 `cn` 词的 active 岗逐行核过，现判定 100% 已是 CN ⇒ 加它零误伤。
 改这条要 `crawler/geo.py` 与 `lib/geo.js` **两边同改**（回归钉在 test_geo.py / geo.test.js）。
+
+### 🚫 中文地名不许用「含 省/市/区/县/自治州 → 中国」那条规则（2026-09-05 立）
+
+同一个词表还有一半是**中文地名**：旧表的中文标记只有「中国」+21 个一线城市 ——
+认得 `Changchun`，认不得「长春市」。live 实测 27.8 万个「中文地点 + 在招」的岗里 **8.3 万个
+`country_code` 为空**，它们的国内外归属**完全押在 `sources.regions` 一个字段上**
+（`derive_job_scope` 的「抽不出国家就问源」分支）。而海外扩展一直在放开源的 regions，
+某个源哪天被加上 US，它名下这批岗就**静默**翻成 overseas —— 不报错，只是国内供给少一块。
+
+⚠️ 修它时最诱人的写法是「地点含 省/市/区/县/自治州 → 中国」，实测能覆盖 84% 的缺口，
+**但它会把「新北市 / 大阪市 / 東京都 / 首尔市」一起判成中国**，直接踩台湾红线。
+✅ 正解 = `CHINA_CJK_PLACE_MARKERS` 显式列名（省级 34 + 地级市/自治州/地区/盟，352 条；
+**县区级不收**，「保定市-莲池区」靠上级前缀命中）+ `TAIWAN/JAPAN/KOREA_CJK_MARKERS` 配套兜底。
+上线后 89.4% 的缺口被认出（61,292 个在招岗），回填 104,158 行。
+
+**三条不许改坏的不变量**：
+1. **顺序是设计的一部分**：`TW` 在 `CN` **前**（「Taipei, Taiwan, Province of China」含 "china"，
+   排后面会被判成大陆放行）；`JP`/`KR` 在 `CN` **后**（「青岛市、日本、潍坊市」这类一岗多地写法
+   要保住 CN —— 不能因为多写一个国名就把中国岗翻成海外）。
+2. **选词按「宁可漏判、不可错杀」**：漏判一个台湾岗只是回到 `code=None`，非远程照样被
+   `location_in_scope` 丢掉（**无害**）；错判一个大陆岗是把在招岗**静默删掉**（有害）。
+   所以有重叠的一律只收「繁体裸名 + 简体带后缀名」：常州有**新北区** → TW 只收「新北市」；
+   福州有**连江县** → 只收繁体「連江」；日本**北海道**含「北海」→ CN 只收「北海市」；
+   「邢台南和区」含「台南」→ TW 只收「台南市」。韩国的「大田/光州/汉城」刻意不收
+   （福建有大田县、潢川古称光州、「武汉城市圈」含汉城）。
+3. **词表两端逐条一致**：`tests/geo.test.js` 会读 `crawler/geo.py` 抽四个词表做 deepEqual，
+   改一边不改另一边直接红（已做变异验证）。
+
+📌 **改词表的验收方法**（别只跑单测）：把全库 `select distinct location` 拉下来（约 2 万个写法），
+拿改前 / 改后两份 `derive_country_code` **逐条对拍**，「大中华 → 境外」这个方向**必须为 0**——
+那是唯一会让国内岗凭空消失的方向。
+⚠️ **回填期间只要有 crawl 在跑就会被刷回去**：`country_code`/`job_scope` 在 `_UPDATE_COLS` 里、
+不在 `_PRESERVE_IF_EMPTY` 里，列表重抓会用**当时 CI 上那版代码**覆盖。2026-09-05 实测：
+开跑前查了没有 workflow 在跑，回填完 3 分钟后 `campus-crawl` 起来，用旧代码把 11,613 行刷回 NULL。
+**正确顺序是「先推代码、再回填」**，或者回填后复查一遍。
 
 | Source | 状态 | 详情链接格式 |
 |---|---|---|
