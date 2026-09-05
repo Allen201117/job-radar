@@ -642,6 +642,32 @@ class RenderedRouteMetricTest(unittest.TestCase):
                    for step in ((row.get("evidence") or {}).get("entry_hops") or []))
         )
 
+    def test_recognized_and_adopted_separate_two_very_different_zeros(self):
+        """只记一个数会把两种情况混成同一个 0，而它们的处置完全相反：
+        recognized=0 → 队列里就没有能认出平台的公司（正常）；
+        recognized>0 且 adopted=0 → 认出来了却一个都没换成（指纹/身份门/探活坏了，该看）。
+        """
+        # 认出来了、但真抓更少所以保留了原产出 → 认出=1、改道=0
+        hops = [{"via": "rendered_html_ats", "trusted": True, "kept_baseline": True}]
+        self.assertEqual(self._recognized(hops), 1)
+        self.assertEqual(self._metric(hops), 0)
+        # 认出来了、身份门拒了 → 同样是 认出=1、改道=0
+        rejected = [{"via": "rendered_html_ats", "trusted": False}]
+        self.assertEqual(self._recognized(rejected), 1)
+        self.assertEqual(self._metric(rejected), 0)
+        # 压根没认出任何平台（只有子域跟跳）→ 认出=0
+        subdomain_only = [{"url": "https://jobs.x.com/", "platform": "unknown"}]
+        self.assertEqual(self._recognized(subdomain_only), 0)
+
+    def _recognized(self, hops):
+        outcomes = [{"state": "healthy", "evidence": {"entry_hops": hops}}]
+        return sum(
+            1
+            for row in outcomes
+            if any(step.get("via") == "rendered_html_ats"
+                   for step in ((row.get("evidence") or {}).get("entry_hops") or []))
+        )
+
     def test_counts_only_adopted_routes(self):
         self.assertEqual(self._metric([{"trusted": True, "adopted": True}]), 1)
         # 过了信任门但真抓更少 → 保留原产出，没有改道
@@ -655,7 +681,8 @@ class RenderedRouteMetricTest(unittest.TestCase):
         adopted = {
             "state": "healthy", "official_entry_url": row["official_entry_url"],
             "detected_platform": "unknown_spa", "next_retry_at": None, "source_id": "s1",
-            "evidence": {"entry_hops": [{"trusted": True, "adopted": True}]},
+            "evidence": {"entry_hops": [
+                {"via": "rendered_html_ats", "trusted": True, "adopted": True}]},
         }
         with mock.patch.object(
             browser.gap_census, "census",
@@ -667,6 +694,7 @@ class RenderedRouteMetricTest(unittest.TestCase):
             result = browser.run_round(
                 supabase=object(), jobs_conn=object(), apply=True, limit=5, now=NOW)
         self.assertEqual(result["metrics"]["rendered_route_adopted"], 1)
+        self.assertEqual(result["metrics"]["rendered_route_recognized"], 1)
 
 
 class ProbeBlockKindPassthroughTest(unittest.TestCase):
