@@ -9,7 +9,9 @@ SPA 招聘站通用浏览器抓取层（Tier-2）。
 playwright 仅在 fetch() 内惰性导入——未跑 fetch 的单元测试无需安装 playwright。
 """
 import json
+import re
 from typing import List, Optional
+from urllib.parse import urlparse
 
 import platform_fingerprint
 
@@ -46,19 +48,58 @@ def _deep_find_job_list(obj, depth: int = 0) -> list:
     return best
 
 
+# 静态资源不是招聘列表页。台账里真出现过入口 URL 就是一张图的情况（京东方的
+# official_entry_url = portal-oss.zhiye.com/…/xxx.jpg，早先某轮搜来的垃圾）：
+# chromium goto 一张图也返 200、content() 给个 <img> 包壳，而 host 带 zhiye.com
+# 就足以让 detect_platform 一口咬定 beisen —— **回验 host 挡不住它，host 本来就是对的**。
+# ⚠️ 只匹配 path，不匹配整串：query 里带 .jpg 的正常接口会被误伤。
+# （`.json` 不会命中：`js` 后面跟着 `o`，cnstaff 的 joblist.json 安全。）
+_STATIC_ASSET_RE = re.compile(
+    r"\.(?:jpe?g|png|gif|webp|svg|ico|bmp|css|js|mjs|woff2?|ttf|otf|eot"
+    r"|mp4|webm|mp3|pdf|zip|rar|gz)$",
+    re.I,
+)
+
+
+def _is_static_asset(url):
+    return bool(_STATIC_ASSET_RE.search(urlparse(str(url or "")).path or ""))
+
+
 def _ats_hint(final_url, html):
     """渲染后的页面里认出的第三方 ATS。认不出、或解析不出真正属于该平台的地址 → None。
 
     ⚠️ 必须回验 `detect_platform(resolved, "") == platform`：resolve_source_url 兜底会原样返回
     final_url（= 公司自己的招聘介绍页），不回验就等于把「没找到」当成「找到了」。
+
+    附带 `identity_text`（标题 + 可见文本前 3000 字）：**身份结论只有这里做得出来**——
+    httpx 对 moka/beisen 租户页只拿得到壳，核不出公司名（宝洁 app.mokahr.com/…/pg/91934
+    实测 page_company_not_found），而 P1 的候选门是 identity_ok 不为 True 就拒。
+    把这段素材带给持有 row["company"] 的那一层去核，别让 P1 拿壳重判。
+    ⚠️ 它**只在内存里传，绝不进台账**（gap_funnel_browser 收到后立刻 pop 掉）。
+    ⚠️ 也不能改走 adapter.company_name：probe_one 与 run.py 都不设它，
+    verify_page_identity("") 直接返回 (True, "company_not_provided") —— 门形同虚设。
     """
+    if _is_static_asset(final_url):
+        return None
     platform, adapter = platform_fingerprint.detect_platform(final_url, html)
     if not adapter:
         return None
     resolved = platform_fingerprint.resolve_source_url(platform, final_url, html)
-    if not resolved or platform_fingerprint.detect_platform(resolved, "")[0] != platform:
+    if (
+        not resolved
+        or _is_static_asset(resolved)
+        or platform_fingerprint.detect_platform(resolved, "")[0] != platform
+    ):
         return None
-    return {"platform": platform, "adapter": adapter, "source_url": resolved}
+    title = platform_fingerprint._TITLE_RE.search(str(html or ""))
+    title_text = platform_fingerprint._visible_text(title.group(1), 200) if title else ""
+    return {
+        "platform": platform,
+        "adapter": adapter,
+        "source_url": resolved,
+        # 标题排在前面：verify_page_identity 只读可见文本前 3000 字。
+        "identity_text": (title_text + " " + platform_fingerprint._visible_text(html, 3000))[:3200],
+    }
 
 
 def _nav_evidence(records):
@@ -102,6 +143,7 @@ class PlaywrightAdapter(BaseAdapter):
 
     # ---- 子类配置 ----
     company_name: str = ""
+    entry_hint = None                # 见 capture_entry_hint；每次 fetch 重置
     list_urls: List[str] = []
     intercept_match: str = ""           # 要拦截的接口 URL 单个子串（向后兼容）
     intercept_matches: tuple = ()       # 多个候选子串（任一命中即拦截）；两者皆空 = 拦截所有 JSON
@@ -111,6 +153,12 @@ class PlaywrightAdapter(BaseAdapter):
                   "Data", "Data.Posts", "Data.List", "Data.Rows")  # 北森 GetJobAdPageList: 顶层 Data 列表
     detail_template: str = ""           # 含 {id}
     official_hosts: tuple = ()
+    # 每次 fetch 都从渲染后的入口页认一次第三方 ATS（结果放 self.entry_hint）。
+    # 只给「不知道对方是什么平台」的通用盲抓开（company_spa）——它多花一次 page.content()，
+    # 对已知平台的子类没有收益。⚠️ 光靠「一个 JSON 都没拦到」那条路**认不出最常见的那一类**：
+    # 2026-09-05 实测广汽/埃斯顿/华虹三家，company_spa 的 fetch 全部成功（JSON 拦到了），
+    # 但 parse 出 0 个岗（拼不出逐岗 URL）—— 不抛异常，于是判因逻辑一次都没跑到。
+    capture_entry_hint: bool = False
     wait_ms: int = 6000              # 等待列表接口响应的上限（智能等待命中后提前返回，绝不超此值）
     quiet_after_capture_ms: int = 1800  # 命中拦截后需连续静默这么久才算「列表加载停当」（兜住紧随的二次 XHR）
     pw_timeout: int = 45000
@@ -124,6 +172,9 @@ class PlaywrightAdapter(BaseAdapter):
         """启动无头浏览器，遍历 list_urls，拦截官方岗位接口响应，返回汇总 JSON 文本。"""
         from playwright.sync_api import sync_playwright
 
+        # ⚠️ 必须每次 fetch 重置：probe.py 用的是 ADAPTERS 里的**共享单例**，
+        # 不重置会把上一个源认出的平台安到下一家头上（张冠李戴，同 list_urls 那个坑）。
+        self.entry_hint = None
         collected: List[dict] = []
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -164,9 +215,9 @@ class PlaywrightAdapter(BaseAdapter):
                     self._paginate(page)
                 except Exception as exc:
                     record["error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
-                # 只有「一个岗位接口都没拦到」时才多花一次 content()/url 去取判因证据，
-                # 正常路径零额外开销。
-                if not collected:
+                # 取判因证据要多花一次 content()/url：一个岗位接口都没拦到时必取；
+                # 通用盲抓（capture_entry_hint）即使拦到了也取，用来认真实平台。
+                if not collected or self.capture_entry_hint:
                     try:
                         record["final_url"] = page.url
                         record["html"] = page.content()
@@ -175,6 +226,21 @@ class PlaywrightAdapter(BaseAdapter):
                 navigations.append(record)
             browser.close()
 
+        if self.capture_entry_hint:
+            self.entry_hint = next(
+                (
+                    hint
+                    for hint in (
+                        _ats_hint(
+                            record.get("final_url") or record.get("url"),
+                            record.get("html") or "",
+                        )
+                        for record in navigations
+                    )
+                    if hint
+                ),
+                None,
+            )
         if not collected:
             raise self.classify_empty_capture(navigations, matchers)
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)

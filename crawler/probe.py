@@ -330,6 +330,12 @@ def probe_one(cand: dict, timeout: int = 15):
         adapter.timeout = timeout
     except Exception:
         pass
+    # ADAPTERS 是**共享单例**：上一家认出的平台必须清掉，否则会安到下一家头上（张冠李戴）。
+    # PlaywrightAdapter.fetch 自己也重置一次，这里是不依赖某个子类记得做的那道保险。
+    try:
+        adapter.entry_hint = None
+    except Exception:
+        pass
     try:
         html = adapter.fetch(cand["url"])
         raw_jobs = adapter.parse(html)
@@ -367,7 +373,16 @@ def probe_one(cand: dict, timeout: int = 15):
 
     # 外企看板要求真实在华岗位；本土看板按构造即在华，valid 即可。
     ok = china > 0 if cand["adapter"] in _FOREIGN_ATS else valid > 0
-    return {"ok": ok, "valid": valid, "china": china, "parsed": len(raw_jobs), "sample": sample}
+    result = {"ok": ok, "valid": valid, "china": china, "parsed": len(raw_jobs), "sample": sample}
+    # 一个可用岗都没拿到时，把 adapter 从渲染后的入口页认出的真实平台带出去。
+    # ⚠️ 这条**比异常那条更常见**：广汽/埃斯顿/华虹三家 company_spa 都是 fetch 成功、
+    # parse 出 0 个岗（拼不出逐岗 URL），不抛异常 —— 只看异常就永远认不出它们。
+    # ⚠️ 只在 valid == 0 时才换平台：已经抓到可用岗还去换，是拿确定的产出赌一个更好的。
+    if valid == 0:
+        entry_hint = getattr(adapter, "entry_hint", None)
+        if entry_hint:
+            result["ats_hint"] = dict(entry_hint)
+    return result
 
 
 def emit_sql(prefix: str, passed: list):

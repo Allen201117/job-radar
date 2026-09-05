@@ -5,6 +5,7 @@ import os
 import re
 from collections import Counter
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import db
 import entry_finder
@@ -232,6 +233,90 @@ def make_thin_rescue(adapter, *, scraper=None):
 _ENTRY_HOP_LIMIT = 2
 
 
+def _candidate_trusted(row, entry_url, candidate, identity_text=""):
+    """认出的平台能不能用。返回 (放行?, 理由)。
+
+    放行两条路，缺一不可：
+      ① **这一页自己核出了公司名**（拿渲染后的文本核，不是拿 httpx 的壳核）；
+      ② **P1 已核过入口页身份，且候选与入口页同主域**。
+
+    ⚠️ ② 里「同主域」那半不能省：入口页身份只为**这个域名**背书，不能替页面上任意一条
+    第三方 ATS 链接背书。两侧都有实证——宝洁 careers.pg.com.cn → app.mokahr.com 是跨域，
+    只能靠 ①；埃斯顿 estun1.zhiye.com 渲染后核不出「埃斯顿」三个字，只能靠 ②。
+    """
+    company = str((row or {}).get("company") or "").strip()
+    source_url = str((candidate or {}).get("source_url") or "")
+    if candidate.get("identity_ok") is True:
+        return True, "candidate_identity_ok"
+    if company and identity_text:
+        ok, reason = platform_fingerprint.verify_page_identity(
+            company, source_url, identity_text
+        )
+        if ok:
+            return True, "rendered_%s" % reason
+    entry_fingerprint = ((row or {}).get("evidence") or {}).get("fingerprint") or {}
+    if entry_fingerprint.get("identity_ok") is True:
+        entry_root = platform_fingerprint._registrable(
+            urlparse(str(entry_url or "")).hostname
+        )
+        if entry_root and entry_root == platform_fingerprint._registrable(
+            urlparse(source_url).hostname
+        ):
+            return True, "entry_verified_same_domain"
+    return False, "identity_unverified"
+
+
+def _probe_digest(probe_result):
+    """探活结果的台账摘要。刻意不整份塞进 evidence（含 identity_text 之类只在内存流转的素材）。"""
+    return {
+        key: (probe_result or {}).get(key)
+        for key in ("ok", "valid", "reason", "block_kind")
+        if (probe_result or {}).get(key) is not None
+    }
+
+
+def _route_recognized(row, candidate, *, now, probe_result, hop_trail, entry_url):
+    """认出真平台之后交给谁跑。
+
+    · **httpx 平台**（workday / hotjob / greenhouse…）→ 交回 P1，那边有完整路由 + 验收门。
+    · **浏览器平台**（moka / beisen / feishu）→ **P2 自己接，不交回去**。两条理由都是实测的：
+      P1 的候选门要求 identity_ok is True，而 httpx 对这些平台只拿得到壳核不出公司名
+      （宝洁 app.mokahr.com/…/pg/91934 实测 page_company_not_found，42 个岗会被拒掉）；
+      且 `_strict_httpx_probe_safe` 对它们恒 False，交回去也只会被再踢回 P2，白跑一轮。
+      顺带把认出的平台写进 evidence.fingerprint.real_*，下一轮 resolve_browser_adapter
+      直接短路，不用再渲染一次。
+    """
+    adapter = candidate["adapter"]
+    source_url = candidate["source_url"]
+    if adapter not in _BROWSER_ADAPTER_WHITELIST:
+        return {"handoff": {
+            "state": "platform_known",
+            "official_entry_url": source_url,
+            "detected_platform": candidate.get("platform"),
+            "next_retry_at": gap_funnel._iso(now),
+            "fail_reason": (
+                "no_job_data_on_entry：入口页没有岗位数据，已认出 %s，交回 P1"
+                % candidate.get("platform")
+            ),
+            "evidence": {
+                "probe": _probe_digest(probe_result),
+                "entry_hops": hop_trail,
+                "entry_hop_from": entry_url,
+            },
+        }}
+    entry_fingerprint = ((row or {}).get("evidence") or {}).get("fingerprint") or {}
+    return {
+        "adapter": adapter,
+        "source_url": source_url,
+        # 与 P1 交接用的既有字段，别换名字：resolve_browser_adapter 只认 real_adapter/real_source_url。
+        "discovered": {**entry_fingerprint,
+                       "real_adapter": adapter,
+                       "real_source_url": source_url,
+                       "real_platform": candidate.get("platform"),
+                       "discovered_by": "browser_rendered_entry"},
+    }
+
+
 def _hop_candidates(probe_result, current_url, limit=_ENTRY_HOP_LIMIT):
     """渲染后页面里抽到的招聘子域候选，去掉当前入口本身，保序去重。"""
     seen = {str(current_url or "").rstrip("/")}
@@ -289,80 +374,96 @@ def process_browser_company(
         return bool(result.get("ok")) and int(result.get("valid") or 0) > 0
 
     hop_trail = []
-    # 「页面正常但这一页没有岗位数据」= 站错了页，不是被反爬 → 跟一跳自家招聘子域。
+    discovered = None
+    # 探活没拿到可用岗 → 先别急着记失败，看看是不是「站错了页 / 用错了 adapter」。
     # 候选是从**渲染后**的页面抽的：httpx 道（platform_fingerprint.fingerprint）只能救
     # 「服务端渲染、原始 HTML 里就有链接」那半，空 SPA 壳那半只有渲染后才有链接。
+    # ⚠️ 触发条件**不能只看 block_kind**：广汽/埃斯顿/华虹三家 company_spa 都是 fetch 成功
+    # （JSON 拦到了）、parse 出 0 个岗，压根不抛异常，block_kind 是 None。
+    # 真被拒（anti_bot）和页面没打开（entry_unreachable）才不折腾，那两种换 adapter 也没用。
     if (
         source_url
         and not _probe_ok(probe_result)
-        and probe_result.get("block_kind") == "no_job_data_on_entry"
+        and probe_result.get("block_kind") not in ("anti_bot", "entry_unreachable")
     ):
+        entry_url = source_url
         # ① 渲染后的页面里直接认出第三方 ATS —— 零额外请求，且覆盖 find_careers_subdomain_hops
-        #    够不着的跨主域那半（2026-09-05 实测：它只收同主域，巴斯夫 basf.jobs、
-        #    壳牌 myworkdayjobs.com 这类目标全被丢掉）。
-        ats_hint = probe_result.get("ats_hint") or {}
+        #    够不着的跨主域那半。2026-09-05 对整个 P2 队列 54 家逐个渲染实测：
+        #    渲染后认 ATS 命中 11/54，其中 4 家当场抓到真岗共 340 个
+        #    （广汽 beisen 225 / 埃斯顿 beisen 63 / 宝洁 moka 42 / 华虹 moka 10）；
+        #    而子域候选只有 3/54 抽得出、且全都指纹认不出。两条都留着，但主力是这条。
+        ats_hint = dict(probe_result.get("ats_hint") or {})
+        # 身份素材只在内存里用，**立刻摘掉**：probe_result 整个会被写进台账 evidence。
+        identity_text = ats_hint.pop("identity_text", "")
+        if probe_result.get("ats_hint") is not None:
+            probe_result["ats_hint"] = ats_hint
         if ats_hint.get("adapter") and ats_hint.get("source_url"):
-            hop_trail.append({**ats_hint, "via": "rendered_html_ats"})
-            return {
-                "state": "platform_known",
-                "official_entry_url": ats_hint["source_url"],
-                "detected_platform": ats_hint.get("platform"),
-                "next_retry_at": gap_funnel._iso(now),
-                "fail_reason": (
-                    "no_job_data_on_entry：入口页没有岗位数据，渲染后认出 %s"
-                    % ats_hint.get("platform")
-                ),
-                "evidence": {
-                    "probe": probe_result,
-                    "entry_hops": hop_trail,
-                    "entry_hop_from": source_url,
-                },
-            }
+            trusted, identity_reason = _candidate_trusted(
+                row, entry_url, ats_hint, identity_text
+            )
+            hop_trail.append({
+                **ats_hint, "via": "rendered_html_ats",
+                "trusted": trusted, "identity": identity_reason,
+            })
+            if trusted:
+                routed = _route_recognized(
+                    row, ats_hint, now=now, probe_result=probe_result,
+                    hop_trail=hop_trail, entry_url=entry_url,
+                )
+                if routed.get("handoff"):
+                    return routed["handoff"]
+                adapter, source_url = routed["adapter"], routed["source_url"]
+                discovered = routed["discovered"]
+                probe_result = _probe(source_url)
+                hop_trail[-1]["probe"] = _probe_digest(probe_result)
         # ② 同主域的自家招聘子域候选，跟过去看它把我们带到哪儿。
-        for hop in _hop_candidates(probe_result, source_url):
-            try:
-                hop_fingerprint = fingerprinter(hop, company=row["company"])
-            except Exception as exc:
-                hop_trail.append({
+        if not _probe_ok(probe_result):
+            for hop in _hop_candidates(probe_result, entry_url):
+                try:
+                    hop_fingerprint = fingerprinter(hop, company=row["company"])
+                except Exception as exc:
+                    hop_trail.append({
+                        "url": hop,
+                        "error": "%s: %s" % (type(exc).__name__, str(exc)[:200]),
+                    })
+                    continue
+                step = {
                     "url": hop,
-                    "error": "%s: %s" % (type(exc).__name__, str(exc)[:200]),
-                })
-                continue
-            step = {
-                "url": hop,
-                "platform": hop_fingerprint.get("platform"),
-                "adapter": hop_fingerprint.get("adapter"),
-                "reason": hop_fingerprint.get("reason"),
-            }
-            hop_trail.append(step)
-            if hop_fingerprint.get("adapter"):
-                # 跟过去认出了真平台 → 交回 P1 httpx 道（那边有完整路由 + 验收门），立即可重试。
-                # detected_platform 写真平台，这行就自动离开 P2 队列（它只收 unknown_spa）。
-                return {
-                    "state": "platform_known",
-                    "official_entry_url": hop,
-                    "detected_platform": hop_fingerprint.get("platform"),
-                    "next_retry_at": gap_funnel._iso(now),
-                    "fail_reason": (
-                        "no_job_data_on_entry：入口页没有岗位数据，已跟到 %s（%s）"
-                        % (hop, hop_fingerprint.get("platform"))
-                    ),
-                    "evidence": {
-                        "probe": probe_result,
-                        "entry_hops": hop_trail,
-                        "entry_hop_from": source_url,
-                    },
+                    "platform": hop_fingerprint.get("platform"),
+                    "adapter": hop_fingerprint.get("adapter"),
+                    "reason": hop_fingerprint.get("reason"),
                 }
-            if hop_fingerprint.get("platform") in ("unknown", "unknown_spa"):
-                retried = _probe(hop)
-                step["probe"] = {
-                    key: retried.get(key)
-                    for key in ("ok", "valid", "reason", "block_kind")
-                    if retried.get(key) is not None
-                }
-                if _probe_ok(retried):
-                    source_url, probe_result = hop, retried
-                    break
+                hop_trail.append(step)
+                if hop_fingerprint.get("adapter"):
+                    candidate = {
+                        "platform": hop_fingerprint.get("platform"),
+                        "adapter": hop_fingerprint.get("adapter"),
+                        "source_url": hop_fingerprint.get("source_url") or hop,
+                        "identity_ok": hop_fingerprint.get("identity_ok"),
+                    }
+                    trusted, identity_reason = _candidate_trusted(row, entry_url, candidate)
+                    step.update(trusted=trusted, identity=identity_reason)
+                    if not trusted:
+                        continue
+                    routed = _route_recognized(
+                        row, candidate, now=now, probe_result=probe_result,
+                        hop_trail=hop_trail, entry_url=entry_url,
+                    )
+                    if routed.get("handoff"):
+                        return routed["handoff"]
+                    adapter, source_url = routed["adapter"], routed["source_url"]
+                    discovered = routed["discovered"]
+                    probe_result = _probe(source_url)
+                    step["probe"] = _probe_digest(probe_result)
+                    if _probe_ok(probe_result):
+                        break
+                    continue
+                if hop_fingerprint.get("platform") in ("unknown", "unknown_spa"):
+                    retried = _probe(hop)
+                    step["probe"] = _probe_digest(retried)
+                    if _probe_ok(retried):
+                        source_url, probe_result = hop, retried
+                        break
 
     if not source_url or not _probe_ok(probe_result):
         # fail_reason 必须说清是哪一种失败。以前不论真假一律带出 adapter 的
@@ -370,6 +471,9 @@ def process_browser_company(
         evidence = {"probe": probe_result, "manual_review": True}
         if hop_trail:
             evidence["entry_hops"] = hop_trail
+        # 这轮认出来的平台即使没抓成也要落盘：下一轮直接用它，不必再渲染一次入口页。
+        if discovered:
+            evidence["fingerprint"] = discovered
         return {
             "state": "no_stable_jd",
             "official_entry_url": source_url,
@@ -401,6 +505,7 @@ def process_browser_company(
             **result.get("evidence", {}),
             "probe": probe_result,
             **({"entry_hops": hop_trail} if hop_trail else {}),
+            **({"fingerprint": discovered} if discovered else {}),
         },
     })
     if not apply:
