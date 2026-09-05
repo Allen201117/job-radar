@@ -116,6 +116,41 @@ class ClassifyEmptyCaptureTests(unittest.TestCase):
         self.assertEqual(error.ats_hint["adapter"], "beisen")
         self.assertEqual(error.ats_hint["source_url"], "https://acme.zhiye.com/social/jobs")
 
+    def test_static_asset_entry_is_never_called_an_ats(self):
+        """台账里真有入口 URL 就是一张图的（京东方 portal-oss.zhiye.com/…/x.jpg）。
+        chromium goto 一张图也返 200，而 host 带 zhiye.com 就够 detect_platform 咬定 beisen ——
+        **回验 host 挡不住它，host 本来就是对的**，只能靠后缀门。"""
+        error = PlaywrightAdapter.classify_empty_capture([{
+            "url": "https://portal-oss.zhiye.com/10000/image/7a9427e1-x.jpg",
+            "status": 200,
+            "final_url": "https://portal-oss.zhiye.com/10000/image/7a9427e1-x.jpg",
+            "html": '<html><body><img src="7a9427e1-x.jpg"></body></html>',
+        }])
+        self.assertIsNone(error.ats_hint)
+
+    def test_page_embedding_only_a_static_asset_is_not_an_ats(self):
+        error = PlaywrightAdapter.classify_empty_capture([{
+            "url": "https://www.boe.com/careers",
+            "status": 200,
+            "final_url": "https://www.boe.com/careers",
+            "html": '<img src="https://portal-oss.zhiye.com/1/image/banner.jpg">',
+        }])
+        self.assertIsNone(error.ats_hint)
+
+    def test_ats_hint_carries_rendered_identity_material(self):
+        """身份结论只有渲染后做得出来：httpx 对 moka/beisen 租户页只拿得到壳。
+        ⚠️ 不能改走 adapter.company_name —— probe_one 与 run.py 都不设它，
+        verify_page_identity("") 直接返回 (True, 'company_not_provided')，门形同虚设。"""
+        error = PlaywrightAdapter.classify_empty_capture([{
+            "url": "https://careers.pg.com.cn/",
+            "status": 200,
+            "final_url": "https://careers.pg.com.cn/",
+            "html": ('<title>宝洁公司招聘</title>'
+                     '<a href="https://app.mokahr.com/social-recruitment/pg/91934">社招</a>'),
+        }])
+        self.assertEqual(error.ats_hint["adapter"], "moka")
+        self.assertIn("宝洁", error.ats_hint["identity_text"])
+
     def test_ats_hint_is_none_when_resolution_falls_back_to_the_entry_page(self):
         """认不出就得说认不出：resolve_source_url 兜底会原样返回入口页，
         不回验 host 就等于把「没找到」当成「找到了」。"""

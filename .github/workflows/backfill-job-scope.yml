@@ -1,0 +1,43 @@
+name: backfill-job-scope
+
+# 按新的中文地名规则回填存量岗的 country_code / job_scope（crawler/geo.py 2026-09-05 改动的存量部分）。
+# 默认 dry-run；确认影响面后再传 apply=true。
+#
+# ⚠️ 必须排在 daily-crawl（UTC 01/07/13/17）之后手动跑。抢在前面 = 那一轮跑的还是旧代码，
+# upsert 会把刚回填好的值原样刷回去。
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "true = 真的写库；留空/false = 只 dry-run 报数"
+        required: false
+        default: "false"
+      status:
+        description: "只处理某个 status（如 active）；留空 = 全部"
+        required: false
+        default: ""
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: crawler/requirements.txt
+      - run: pip install -r crawler/requirements.txt
+
+      - name: 回填 country_code / job_scope
+        env:
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "${{ github.event.inputs.apply }}" = "true" ]; then args+=(--apply); fi
+          if [ -n "${{ github.event.inputs.status }}" ]; then args+=(--status "${{ github.event.inputs.status }}"); fi
+          python3 crawler/backfill_job_scope.py "${args[@]}"
