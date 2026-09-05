@@ -386,3 +386,34 @@ class UsStateTest(unittest.TestCase):
         self.assertEqual(derive_country_code("长春市"), "CN")
         self.assertEqual(derive_country_code("Beijing, China"), "CN")
         self.assertEqual(derive_country_code("大阪市"), "JP")
+
+
+class MultiLocationChinaWinsTest(unittest.TestCase):
+    """一岗多地写法里中国优先 —— 那种岗确实有一部分在国内，判成境外等于抹掉国内供给。
+
+    所以 `_looks_like_cn_admin` 排在 `_strict_cjk_country` **之前**。
+    这个顺序之所以安全，全靠中文行政区规则是**白名单锚定**的（必须命中大陆省级/地级行政区名），
+    而不是「任何 X市 → CN」的裸后缀规则：「大阪市」「新北市」「首尔市」「胡志明市」里
+    一个大陆地名都没有，命中不了它，照样落到境外词表。
+    ⚠️ 谁把白名单放宽成裸后缀规则，这个顺序立刻就错 —— ChineseAdminDivisionTest
+    的红线用例会当场变红，别去改顺序绕过它。
+    """
+
+    def test_china_segment_wins_over_foreign_segment(self):
+        for location in (
+            "柳州市、南非", "保定市,俄罗斯", "墨西哥,长春市", "菲律宾、柳州市",
+            "池州市、九江市、摩洛哥", "青岛市、日本、潍坊市",
+        ):
+            with self.subTest(location=location):
+                self.assertEqual(derive_country_code(location), "CN")
+                self.assertEqual(derive_job_scope(location), "domestic")
+
+    def test_pure_foreign_still_foreign(self):
+        # 没有任何大陆地名的串不受影响
+        for location, expected in (
+            ("大阪市", "JP"), ("新北市", "TW"), ("首尔市", "KR"), ("胡志明市", "VN"),
+            # 「咸阳」是陕西地级市，但「咸阳郡」在韩国庆尚南道 —— 郡不在 _ADMIN_SUFFIXES 里
+            ("韩国·庆尚南道·咸阳郡", "KR"),
+        ):
+            with self.subTest(location=location):
+                self.assertEqual(derive_country_code(location), expected)

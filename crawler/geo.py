@@ -563,12 +563,13 @@ def derive_country_code(location: Optional[str]) -> Optional[str]:
 
     四阶段短路，**顺序不可调换**（红线说明见文件中部「中文行政区地名识别」「美国州名」两段）：
       ① `_COUNTRY_TOKENS`    既有词表 + 州全称，语义一字未动 → 存量判定零回归
-      ② `_STRICT_CJK_PLACES` 境外中文地名，整段精确匹配 → 先把非 CN 排除掉
-      ③ `_looks_like_cn_admin` 中文行政区规则 → 才判 CN
+      ② `_looks_like_cn_admin` 中文行政区规则（**白名单锚定**）
+      ③ `_STRICT_CJK_PLACES` 境外中文地名，整段精确匹配
       ④ `_has_us_state`      美国州缩写，位置受限 + 必须大写 → 最后兜底
-    ②在③之前是核心不变量：反过来「大阪市」「首尔市」「新北市」会被③的后缀规则抢走判成 CN，
-    一次就把台日韩的岗塞进国内看板。④在最末同理：任何显式国名都必须优先于两字母缩写，
-    否则 "Chennai, TN, in"（金奈，印度）会因为 TN 被判成美国。
+    ②在③之前是为了让一岗多地写法（"柳州市、南非"）保住 CN —— 那种岗确实有一部分在国内。
+    它成立的前提是②必须白名单锚定：「大阪市」里没有大陆地名所以命中不了②，照样落③判 JP。
+    ④在最末同理：任何显式国名都必须优先于两字母缩写，否则 "Chennai, TN, in"（金奈，印度）
+    会因为 TN 被判成美国。
     """
     text = _norm(location)
     if not text or text in ("unknown", "multiple locations"):
@@ -577,11 +578,17 @@ def derive_country_code(location: Optional[str]) -> Optional[str]:
         if any(_contains_token(text, token) for token in tokens):
             return code
     segs = _segments(location.strip())
+    # ⚠️ 一岗多地写法（"柳州市、南非" / "保定市,俄罗斯"）里**中国优先**：这种岗确实有一部分
+    # 在国内，判成境外就把它从国内供给里抹掉了。所以中文行政区规则排在境外词表之前。
+    # 这一步之所以安全，全靠③是**白名单锚定**（必须命中大陆省级/地级行政区名）而不是裸后缀
+    # 规则 —— "大阪市"/"新北市"/"首尔市"/"胡志明市" 里没有任何大陆地名，命中不了③，
+    # 照样落到④判成 JP/TW/KR/VN。**谁要是把③放宽成「任何 X市 → CN」，这个顺序立刻就错**，
+    # 届时 tests/fixtures/geo-cases.json 里那批红线用例会当场变红。
+    if _looks_like_cn_admin(segs):
+        return "CN"
     strict = _strict_cjk_country(segs)
     if strict is not None:
         return strict
-    if _looks_like_cn_admin(segs):
-        return "CN"
     # 州缩写排在最后：任何显式国名/城市都优先于它（"Chennai, TN, in" 因此不会判成 US）。
     if _has_us_state(location):
         return "US"
