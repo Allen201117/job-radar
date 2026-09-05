@@ -18,7 +18,11 @@ select
   count(*) as active_total,
   count(*) filter (
     where summary is not null and char_length(btrim(summary)) >= 60
-  ) as healthy
+  ) as healthy,
+  count(*) filter (
+    where job_scope = 'domestic'
+      and summary is not null and char_length(btrim(summary)) >= 60
+  ) as domestic_healthy
   {brand_columns}
 from jobs
 where status = 'active'
@@ -65,6 +69,12 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
     ]
     direct_active = sum(_as_int(row.get("active_total")) for row in matched_jobs)
     direct_healthy = sum(_as_int(row.get("healthy")) for row in matched_jobs)
+    # 「有源有岗」不等于「有中国岗」：普查的岗位聚合**不按 job_scope 过滤**（历史如此，
+    # 改它会一次性动 329+327 家的口径，另案）。所以至少把 scope 拆分如实记进台账——
+    # 大陆集团 425 个健康岗里只有 73 个标着 domestic，看台账的人有权知道这件事，
+    # 而不是看到「healthy 425」就以为中国岗很多。
+    has_scope_split = any("domestic_healthy" in (row or {}) for row in matched_jobs)
+    direct_healthy_domestic = sum(_as_int(row.get("domestic_healthy")) for row in matched_jobs)
     parent_rollup = {"active_total": 0, "healthy": 0}
     if company.get("parentPattern") and company.get("brandTokens"):
         for row in healthy_jobs or []:
@@ -103,6 +113,10 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None):
         "active_jobs": active_total,
         "healthy_jobs": healthy_total,
         "direct_healthy_jobs": direct_healthy,
+        "direct_healthy_by_scope": {
+            "domestic": direct_healthy_domestic,
+            "overseas": direct_healthy - direct_healthy_domestic,
+        } if has_scope_split else None,
         "parent_portal_healthy_jobs": accepted_parent["healthy"],
         "covered_via_parent_portal": accepted_parent["healthy"] > 0,
         "matched_job_companies": sorted({

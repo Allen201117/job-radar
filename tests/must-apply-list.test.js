@@ -132,8 +132,12 @@ test("别名不得命中同一清单里的另一家公司（张冠李戴门）",
         const matches = R.ilikeMatcher(alias);
         for (const other of entries) {
           if (other.name === company.name) continue;
-          if (matches(other.name) || alias === other.pattern || (other.aliases || []).includes(alias)) {
-            conflicts.push(`${label}：${company.name} 的别名 ${alias} 撞上了 ${other.name}`);
+          // 不只比「别名 == 别人的 pattern」，还要按**子串**互查别人的名字与别名：
+          // 短别名是最容易误伤的形态（CLAUDE.md 立过碑的 `%京东%` 会吃掉京东方 BOE）。
+          const hits = [other.name, other.pattern, ...(other.aliases || [])]
+            .filter((token) => matches(String(token).replace(/%/g, "")));
+          if (hits.length) {
+            conflicts.push(`${label}：${company.name} 的别名 ${alias} 撞上了 ${other.name}（${hits.join("/")}）`);
           }
         }
       }
