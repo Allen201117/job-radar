@@ -193,11 +193,13 @@ test("deriveCountryCode: 非地名与自报境外", () => {
     assert.equal(deriveCountryCode(location), null, location);
     assert.equal(isOverseasUnspecified(location), false, location);
   }
-  for (const location of ["海外", "国外", "境外"]) {
+  for (const location of ["海外", "国外", "境外", "海外区域", "国外区域", "境外区域"]) {
     assert.equal(deriveCountryCode(location), null, location);
     assert.equal(isOverseasUnspecified(location), true, location);
     assert.equal(deriveJobScope(location), "overseas", location);
   }
+  // 混写仍是 CN：串里有大陆城市，判 domestic 是对的，别被上面这条一起带走。
+  assert.equal(deriveCountryCode("保定市,海外"), "CN");
   assert.equal(isOverseasUnspecified("海外市场部经理"), false); // 整段匹配，不是子串
 });
 
