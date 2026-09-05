@@ -157,6 +157,19 @@ def detect_page_state(status_code, html):
 # 那条路早就通了，再写一遍是自欺的死代码。这里补的是它覆盖不到的那半 ——
 # 子域名本身不是已知 ATS（jobs.zhangyue.com / jobs.shell.com 都不是），
 # **价值全在「跟过去让它的 302 把我们带到 ATS」**，落地后 final_url 才认得出来。
+#
+# 🚫 2026-09-05 实网复盘：这一跳**对存量缺口基本没有产出，别再往这个方向加戏**。
+# 逐个真探（httpx + 无头渲染各跑一遍）当时 46 家 no_stable_jd 的结果：
+#   · httpx 原始 HTML：45 家抽出 0 个候选；唯一有候选的编程猫跳过去仍是 unknown_spa。
+#   · 渲染之后再抽：**0 家**能跳到真 adapter（渲染只多救出同花顺一个候选域名）。
+#   · 立项时举的 4 个例子全部失败，且是**两种它治不了的形态**：
+#       巴斯夫/壳牌 = 岗位在**别的主域**（basf.jobs → successfactors、myworkdayjobs.com），
+#                     被下面「同主域」这条规则按设计丢掉；
+#       掌阅/同花顺 = 入口页是 SPA 空壳（原始 HTML 1.2~4.2 KB、外链 0~1 个），链接压根不在里面。
+#   · 试过「同品牌跨顶级域」（basf.com → basf.jobs）的原型：50 家里只多救 1 家，而那家已人工接通。
+# 真正卡住这批的不是「找不到岗位页」，是**浏览器道拿不到逐岗 URL**（19 家「未拦截到任何岗位
+# 接口 JSON」+ 24 家「未拿到真实逐岗 URL」）。要提产出请去修 P2 与各 adapter，不是加 hop。
+# 保留本函数：它对「链接确实在原始 HTML 里」的形态仍然正确，且已有单测钉住行为。
 _CAREERS_SUBDOMAIN_RE = re.compile(
     r"^(?:job|jobs|career|careers|hr|campus|zhaopin|recruit|recruitment|talent|join)[a-z0-9-]*$",
     re.I,
@@ -388,7 +401,8 @@ def fingerprint(url, *, company=None, client=None, timeout=15, _hop_depth=0):
     """GET 招聘入口并返回平台、adapter、可探活 URL 与判定证据。失败重试一次。
 
     认不出平台时会**再跳一跳**（深度 1）：公司官网的招聘栏目页常常只是介绍页，
-    真正的岗位板在另一个域（第三方 ATS 或自家 job*/campus* 子域）。见 find_ats_hops 的注释。
+    真正的岗位板常在另一个域（自家 job*/campus* 子域）。适用范围与实测产出见
+    find_careers_subdomain_hops 上方的注释——**它对存量缺口产出接近 0，别再加戏**。
     """
     own_client = client is None
     cli = client or httpx.Client(
