@@ -234,7 +234,7 @@ export default function InsightsClient({
             }))}
           />
           {filters.metric && (
-            <label className={cn(buttonVariants({ variant: "soft", size: "xs" }), "inline-flex items-center gap-1.5")}>
+            <label className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3 py-1.5 dark:border-white/[0.1] dark:bg-white/[0.06]">
               <span className="t-label ink-3">≥</span>
               <input
                 type="number"

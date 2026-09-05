@@ -973,7 +973,7 @@ function ItemForm({
             onClick={onAiDraft}
             disabled={aiDrafting}
             title="用 AI 按公司+维度生成草稿（仅辅助，需人工核对+补来源）"
-            className={cn(badgeVariants({ tone: "sky", size: "md" }), "inline-flex items-center gap-1.5 font-semibold disabled:opacity-50")}
+            className="inline-flex items-center gap-1.5 rounded-full border border-tone-sky-border bg-tone-sky-bg px-3 py-1.5 text-[12px] font-semibold text-[#2f6299] transition hover:bg-[#cfe2f7] disabled:opacity-50 dark:text-[#7fb2e8] dark:hover:bg-[#7fb2e8]/[0.25]"
           >
             <Sparkle size={13} weight="fill" />
             {aiDrafting ? "AI 起草中…" : "AI 起草"}

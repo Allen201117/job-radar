@@ -458,7 +458,7 @@ export default function ResumeProfilePanel() {
           {renderList("工作 / 项目经历", "projects", [["name", "项目"], ["role", "角色"], ["stack", "技术栈"], ["outcome", "成果"]], EMPTY_PROJECT)}
 
           {variant === "cn" ? (
-            <label className={cn(buttonVariants({ variant: "soft", size: "xs" }), "flex cursor-pointer items-center gap-2 hover:opacity-80")}>
+            <label className="flex cursor-pointer items-center gap-2 rounded-full border border-black/[0.08] dark:border-white/[0.1] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm ink-2 transition duration-200 hover:bg-white dark:hover:bg-white/[0.08] hover:opacity-80">
               <input type="checkbox" checked={applyToPreferences} onChange={(e) => setApplyToPreferences(e.target.checked)} className="accent-[#1a1714] dark:accent-[#f3ecdf]" />
               同步到求职偏好（方向 / 城市 / 技能）
             </label>
