@@ -8,9 +8,12 @@
 import json
 import pathlib
 import ssl
+import time
 import unittest
 from datetime import date, timedelta
+from unittest import mock
 
+from adapters import abchina
 from adapters.abchina import AbchinaAdapter
 from adapters.bankcomm import BankcommAdapter
 from adapters.ccb import CcbAdapter, _repair_json
@@ -324,6 +327,33 @@ class AbchinaAdapterTest(unittest.TestCase):
         # 重试还不行才认漏抓，并且**不许再自称抓全**
         self.assertIn("self.fetch_complete = (not truncated) and all_rendered", src)
 
+    def test_summary_is_composed_from_the_three_detail_sections(self):
+        payload = {"jobs": [{
+            "jobPublishId": 155541019, "posName": "助理研究员岗", "_job_type": "校招",
+            "_detail": {"posName": "助理研究员岗",
+                        "responsibilities": "为各类投资组合提供研究支持。",
+                        "qualifications": "境内外院校本科及以上学历。",
+                        "requirements": "经济学类、金融学类相关专业。",
+                        "phone": "hr@abc-ca.com"},
+        }]}
+        job = AbchinaAdapter().parse(json.dumps(payload, ensure_ascii=False))[0]
+
+        self.assertIn("主要职责", job.summary)
+        self.assertIn("为各类投资组合提供研究支持。", job.summary)
+        self.assertIn("基本条件", job.summary)
+        self.assertIn("具体要求", job.summary)
+        # 薄卡门是 60 字：拼出来的正文必须真的过得去，否则补了等于没补。
+        self.assertGreaterEqual(len(job.summary), 60)
+        # ⚠️ posDetails.phone 是 HR 的联系方式，属于个人联系信息，不许进库（同 gree 的 PubName）。
+        self.assertNotIn("hr@abc-ca.com", job.summary)
+
+    def test_missing_sections_do_not_fabricate_a_summary(self):
+        """快档（CRAWL_DETAIL_CAP=0）不跑详情 → 没有 _detail → summary 必须是 None，不许编。"""
+        self.assertIsNone(AbchinaAdapter._summary_of({"posName": "软件研发岗"}))
+        self.assertIsNone(AbchinaAdapter._summary_of({"_detail": {"phone": "hr@abc.com"}}))
+        only_one = AbchinaAdapter._summary_of({"_detail": {"requirements": "计算机相关专业。"}})
+        self.assertEqual(only_one, "具体要求\n计算机相关专业。")
+
     def test_is_not_in_the_httpx_concurrency_lane(self):
         # 它要起 Playwright（响应体加密，明文只在浏览器里），进并发档会把 sync API 跑崩。
         import sys, pathlib as _p
@@ -332,6 +362,121 @@ class AbchinaAdapterTest(unittest.TestCase):
         self.assertIn("abchina", run.ADAPTERS)
         self.assertIn("abchina", run.DOMESTIC_ADAPTERS)
         self.assertFalse(run._is_httpx_safe("abchina"))
+
+
+
+class _DetailFakePage:
+    """够用的 Playwright page 替身（只服务正文那一段）。
+
+    ⚠️ 建模的是「**每次页面加载**内容固定」——不是「每次 evaluate 换一个答案」。
+    _detail_of 在同一次加载里会反复轮询 evaluate，按调用次数发答案会让「重试了几次」这类
+    断言静默失真。所以这里按 reload 代次取值。
+    """
+
+    def __init__(self, details_per_load=()):
+        self.details_per_load = list(details_per_load)
+        self.opens = 0
+
+    def goto(self, url, **kw):
+        pass
+
+    def reload(self, **kw):
+        self.opens += 1
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def evaluate(self, script, arg=None):
+        if not self.details_per_load:
+            return None
+        return self.details_per_load[min(max(self.opens - 1, 0), len(self.details_per_load) - 1)]
+
+
+class _FastAbchina(AbchinaAdapter):
+    """轮询立刻到期，测试不去真的等 9 秒。
+    ⚠️ 必须在**类**上覆盖：_collect 是 classmethod、读的是 cls.RENDER_TIMEOUT_MS，
+    在实例上赋值不起作用。"""
+    RENDER_TIMEOUT_MS = 0
+    DETAIL_TIMEOUT_MS = 0
+
+
+class _RecordingAbchina(_FastAbchina):
+    """记下正文那一段问过哪些岗（把联网那一步换掉，只测 _fill_bodies 的调度逻辑）。"""
+
+    def __init__(self):
+        super().__init__()
+        self.asked = []
+
+    def _detail_of(self, page, job_id, want_name):
+        self.asked.append(job_id)
+        return {"posName": want_name, "responsibilities": "职责"}
+
+
+class AbchinaBodyPassTest(unittest.TestCase):
+    """逐岗正文：不补就是 100% 薄卡（线上实测 2,418 个岗 summary 全为 NULL），
+    这家在必投健康覆盖里恒为 0。"""
+
+    @staticmethod
+    def _rows(n):
+        return [{"jobPublishId": str(i), "posName": "岗%d" % i} for i in range(n)]
+
+    def test_detail_belonging_to_another_job_is_refused(self):
+        """详情页的 posName 与列表卡对不上就不要 —— 宁可留薄卡，也不能把 A 岗的正文挂到 B 岗。"""
+        page = _DetailFakePage(details_per_load=[{"posName": "另一个岗", "responsibilities": "别人的职责"}])
+        self.assertIsNone(_FastAbchina()._detail_of(page, "155541019", "助理研究员岗"))
+
+    def test_detail_matching_the_card_is_accepted(self):
+        page = _DetailFakePage(details_per_load=[{"posName": "助理研究员岗", "responsibilities": "研究支持"}])
+        detail = _FastAbchina()._detail_of(page, "155541019", "助理研究员岗")
+        self.assertEqual(detail["responsibilities"], "研究支持")
+
+    def test_rotates_start_across_days_so_the_tail_is_not_starved(self):
+        """预算/条数用完就停；若每晚都从第 0 个开始，后面的岗**永远**补不到正文。
+        summary 在 upsert 里空值不覆盖，所以轮转几晚就能把全源覆盖一遍。"""
+        seen = []
+        for yday in (1, 2):
+            adapter = _RecordingAbchina()
+            with mock.patch.object(abchina.time, "gmtime",
+                                   return_value=time.struct_time((2026, 1, 1, 0, 0, 0, 0, yday, 0))):
+                adapter._fill_bodies(None, self._rows(7), cap=3)
+            seen.append(adapter.asked)
+
+        self.assertEqual([len(x) for x in seen], [3, 3])
+        self.assertNotEqual(seen[0], seen[1], "两天起点相同 = 尾部岗位永远补不到正文")
+
+    def test_wraps_around_instead_of_running_off_the_end(self):
+        adapter = _RecordingAbchina()
+        with mock.patch.object(abchina.time, "gmtime",
+                               return_value=time.struct_time((2026, 1, 1, 0, 0, 0, 0, 1, 0))):
+            adapter._fill_bodies(None, self._rows(7), cap=7)
+        # 起点在中间也要覆盖全部 7 个，不能只补到末尾就停。
+        self.assertEqual(sorted(adapter.asked, key=int), [str(i) for i in range(7)])
+
+    def test_fast_lane_cap_zero_skips_the_body_pass_entirely(self):
+        adapter = _RecordingAbchina()
+        adapter._fill_bodies(None, self._rows(5), cap=0)
+        self.assertEqual(adapter.asked, [])
+
+    def test_body_pass_stops_after_a_run_of_failures(self):
+        """站点掐连接时别把剩下两千多个岗每个都耗满两次 goto 超时。"""
+        class _AlwaysMisses(_FastAbchina):
+            def __init__(self):
+                super().__init__()
+                self.tries = 0
+
+            def _detail_of(self, page, job_id, want_name):
+                self.tries += 1
+                return None
+
+        adapter = _AlwaysMisses()
+        adapter._fill_bodies(None, self._rows(500), cap=500)
+        self.assertEqual(adapter.tries, AbchinaAdapter._DETAIL_ABORT_AFTER_FAILURES)
+
+    def test_body_pass_runs_after_the_list_retry_round(self):
+        """正文是锦上添花，绝不能挤掉列表的完整性 —— 调用点必须在重试轮之后。"""
+        src = (pathlib.Path(__file__).resolve().parent / "adapters" / "abchina.py").read_text(encoding="utf-8")
+        self.assertLess(src.index("for recruit_type, job_type, org in list(pending):"),
+                        src.index("self._fill_bodies(page, rows,"))
 
 
 if __name__ == "__main__":

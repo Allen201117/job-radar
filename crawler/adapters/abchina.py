@@ -16,6 +16,12 @@ URL 里那个冒号是**字面量**（前端拼串时把路由占位符一起拼
   2. `#/RecruitmentOrgDetails/{recruitType}/{orgId}` → 每张岗位卡 `.cardWrapper111` 的
      state.posCardInfo = {posName, deadline, numbers, workplace, jobPublishId, orgName, jobTypeName}
   3. jd_url 用模板拼（与站点 onClick 逐字一致）
+  4. 逐岗 `#/PositionDetails/:{jobPublishId}` → state.posDetails 的
+     responsibilities / qualifications / requirements 三段 = 正文（快档 CRAWL_DETAIL_CAP=0 跳过）
+
+⚠️ **列表卡里一个字正文都没有**（posCardInfo 只有岗位名/地点/人数/截止）。不补正文就是
+100% 薄卡：进不了 count_valid_active_jobs，这家在必投健康覆盖里恒为 0
+（2026-09-05 实测线上 2,418 个在招岗 **全部** summary 为 NULL）。正文只在逐岗详情页。
 
 ⚠️ **必须先加载一次首页把会话建起来**（首页会自己打 `new/getInfo` 换密钥 + 拿 SESSION cookie）。
 冷启动直接 goto `#/99` 只会渲染出 222 字的空壳、永远等不到卡片——实测就是这样一次都不出数据。
@@ -25,10 +31,13 @@ URL 里那个冒号是**字面量**（前端拼串时把路由占位符一起拼
 等到真出现卡片，不要用固定 sleep（我第一次等 6 秒看到空壳，据此错判「直接 hash 导航打不开」）。
 """
 import json
+import logging
 import time
 from typing import List, Optional
 
-from .base import BaseAdapter, RawJob, resolve_list_cap
+from .base import BaseAdapter, RawJob, resolve_detail_cap, resolve_list_cap
+
+logger = logging.getLogger(__name__)
 
 _ENTRY = "https://career.abchina.com/build/index.html"
 
@@ -70,6 +79,30 @@ _COLLECT_JS = """
 """
 
 
+# 详情页把**解密后**的岗位详情挂在 React state 的 posDetails 上，三段正文
+# responsibilities / qualifications / requirements 就是页面上的「主要职责 / 基本条件 / 具体要求」。
+# 读 state 而不是抓 innerText：innerText 会把顶部导航、「申请岗位收藏」按钮、页脚一起裹进来，
+# 那些模板文案对每个岗都一样，混进 summary 只会污染检索。
+_DETAIL_JS = """
+() => {
+  for (const el of document.querySelectorAll('*')) {
+    const fk = Object.keys(el).find(k => k.startsWith('__reactInternalInstance$') || k.startsWith('__reactFiber$'));
+    if (!fk) continue;
+    let fiber = el[fk];
+    for (let i = 0; i < 4 && fiber; i++) {
+      const st = fiber.stateNode && fiber.stateNode.state;
+      const d = st && st.posDetails;
+      if (d && (d.responsibilities || d.qualifications || d.requirements)) {
+        return JSON.parse(JSON.stringify(d));
+      }
+      fiber = fiber.return;
+    }
+  }
+  return null;
+}
+"""
+
+
 
 def _clean(value) -> str:
     return str(value or "").strip()
@@ -86,6 +119,33 @@ class AbchinaAdapter(BaseAdapter):
     POLL_INTERVAL_MS = 700
     GOTO_TIMEOUT_MS = 45000
     _MAX_JOBS = 4000
+    # 详情页比机构页快一个数量级（本机实测中位 0.69s），不需要 25s 的耐心。
+    DETAIL_TIMEOUT_MS = 9000
+    # 逐岗正文条数上限：2026-09-05 live 全源 2,603 个岗 → 设 3000 覆盖全源。
+    # 快档 daily 用 CRAWL_DETAIL_CAP=0 跳过（resolve_detail_cap），只抓列表骨架。
+    _DETAIL_CAP = 3000
+    # 连续这么多个岗都拿不到正文 → 认为站点这一轮不让抓了（它会掐连接），停掉正文这一段。
+    # 列表已经拿到手，没必要为了正文把剩下两千多个岗每个都耗满两次 goto 超时。
+    _DETAIL_ABORT_AFTER_FAILURES = 25
+    # 正文这一段最多花多久。**这个数字是量出来的，不是拍的**（2026-09-05 查 enrich-crawl 台账）：
+    #   · 农行落在 shard 1，最近两轮 61 / 57 分钟，离 180min 超时上限有约 120 分钟余量；
+    #   · 但同期 shard 2 是 172 / 148 分钟 —— 2026-09-01 那轮 181 分钟**被 GitHub 取消**。
+    #     分片是按源数贪心装箱的，成员会随源增减漂移，所以别把「今天有余量」当永久事实。
+    # 取 15 分钟：占上限 8%，即便耗时整体上浮也不会是压垮某一片的那根稻草。
+    # 覆盖速度：CI 到这个站按 1.5~2.5s/岗算 ≈ 360~600 岗/晚 → 2,603 个岗约 5~7 晚补齐。
+    # 这是刻意的取舍：**限速优先于覆盖速度**——一周覆盖全量可以接受，挤掉别的浏览器任务不行。
+    _DETAIL_BUDGET_S = 900
+    # 每晚往后挪这么多作为起点。预算用完就停，若恒从第 0 个开始，尾部的岗**永远**补不到正文。
+    # summary 在 upsert 里是「空值不覆盖」（jobs_db._PRESERVE_IF_EMPTY），所以轮转几晚就能
+    # 覆盖全源，且已经补好的不会被后面的空值抹掉。
+    _DETAIL_ROTATE_STRIDE = 600
+
+    # 正文三段（页面上的小标题 ↔ posDetails 的字段名）。
+    # ⚠️ 刻意不收 posDetails.phone：那是 HR 的联系邮箱/电话，属于个人联系方式，不入库
+    #    （同 gree adapter 忽略 PubName 的理由）。
+    _BODY_SECTIONS = (("主要职责", "responsibilities"),
+                      ("基本条件", "qualifications"),
+                      ("具体要求", "requirements"))
 
     def should_skip(self, source_url: str) -> Optional[str]:
         return None  # SPA 入口页，HEAD 预检没有意义
@@ -136,6 +196,80 @@ class AbchinaAdapter(BaseAdapter):
             # 前面几十家已经抓到的岗会跟着一起丢，run.py 还会把整个源记成 failed。
             print(f"[abchina] 机构 {org.get('orgName') or org_id} 打开失败：{type(exc).__name__}")
             return [], False
+
+    def _detail_of(self, page, job_id: str, want_name: str) -> Optional[dict]:
+        """打开逐岗详情页，把解密后的 posDetails 读回来；拿不到就返回 None（留薄卡，不编）。
+
+        ⚠️ 归属校验：详情里的 posName 必须与列表卡一致才收。reload 已经换了文档、正常不会
+        串味，但「宁可漏一条正文，也不能把 A 岗的正文挂到 B 岗上」——这是产品红线。
+        """
+        for attempt in (1, 2):
+            try:
+                page.goto(self.DETAIL_URL.format(job_publish_id=job_id),
+                          wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
+                # 同 _scan_org：只改 hash 是同文档导航，上一个岗的正文会留在 DOM 里。
+                page.reload(wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
+                deadline = time.monotonic() + self.DETAIL_TIMEOUT_MS / 1000.0
+                detail = None
+                while True:
+                    detail = page.evaluate(_DETAIL_JS)
+                    if detail or time.monotonic() >= deadline:
+                        break
+                    page.wait_for_timeout(self.POLL_INTERVAL_MS)
+            except Exception as exc:                      # 单个岗的失败不该拖垮整源
+                logger.info("abchina: detail %s failed (attempt %d): %s", job_id, attempt, exc)
+                continue
+            if detail:
+                got = _clean(detail.get("posName"))
+                if want_name and got and got != want_name:
+                    logger.warning("abchina: detail/list posName mismatch for %s (%r vs %r), skipped",
+                                   job_id, got, want_name)
+                    return None
+                return detail
+        return None
+
+    def _fill_bodies(self, page, rows: list, cap: int) -> None:
+        """逐岗补正文，就地写进 row["_detail"]。受 cap（条数）与 _DETAIL_BUDGET_S（墙钟）双重约束。
+
+        起点按天轮转（_DETAIL_ROTATE_STRIDE）：预算用完就停的话，恒从第 0 个开始会让尾部的岗
+        永远是薄卡。
+
+        ⚠️ 不许为了让台账翻绿去补个位数 —— 那是刷指标。这里要么按预算真补一批，要么不补。
+        """
+        total = len(rows)
+        if not cap or not total:
+            return
+        start = (time.gmtime().tm_yday * self._DETAIL_ROTATE_STRIDE) % total
+        deadline = time.monotonic() + self._DETAIL_BUDGET_S
+        filled = misses = 0
+        for offset in range(min(cap, total)):
+            if time.monotonic() >= deadline:
+                logger.info("abchina: detail budget spent, %d/%d bodies this run "
+                            "(rest picked up on later runs)", filled, total)
+                break
+            row = rows[(start + offset) % total]
+            detail = self._detail_of(page, _clean(row.get("jobPublishId")),
+                                     _clean(row.get("posName")))
+            if detail:
+                row["_detail"] = detail
+                filled += 1
+                misses = 0
+                continue
+            misses += 1
+            if misses >= self._DETAIL_ABORT_AFTER_FAILURES:
+                logger.warning("abchina: %d consecutive detail misses, stopping body pass "
+                               "(list data kept, %d bodies filled)", misses, filled)
+                break
+
+    @classmethod
+    def _summary_of(cls, row: dict) -> Optional[str]:
+        detail = (row or {}).get("_detail") or {}
+        parts = []
+        for label, key in cls._BODY_SECTIONS:
+            text = _clean(detail.get(key))
+            if text:
+                parts.append("%s\n%s" % (label, text))
+        return "\n\n".join(parts) or None
 
     def fetch(self, source_url: str) -> str:
         from playwright.sync_api import sync_playwright
@@ -210,6 +344,11 @@ class AbchinaAdapter(BaseAdapter):
                         pos["_job_type"] = job_type
                         pos["_batch_name"] = _clean(org.get("batchName")) or None
                         rows.append(pos)
+
+                # ── 逐岗正文 ──────────────────────────────────────────────────
+                # 放在列表（含重试轮）之后：正文是「锦上添花」，绝不能因为它挤掉列表的完整性。
+                # 快档 CRAWL_DETAIL_CAP=0 时这一步整段跳过。
+                self._fill_bodies(page, rows, resolve_detail_cap(self._DETAIL_CAP))
             finally:
                 browser.close()
 
@@ -242,7 +381,8 @@ class AbchinaAdapter(BaseAdapter):
                 company="", title=title,
                 location=_clean(row.get("workplace")) or None,
                 job_type=_clean(row.get("_job_type")) or None,
-                summary=None,     # 正文只在逐岗详情页，由 enrich 链另行补
+                # 正文来自逐岗详情页的 posDetails（快档 CRAWL_DETAIL_CAP=0 时没跑详情 → None）。
+                summary=self._summary_of(row),
                 jd_url=jd_url, apply_url=jd_url,
                 deadline=_clean(row.get("deadline"))[:10] or None,
             ))
