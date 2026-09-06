@@ -716,7 +716,8 @@ def _detail_chnenergy(row, src):
     return (m.group(1) if m else "").split("国家能源投资集团有限责任公司")[0].strip()
 
 
-# --- 国有大行 + 中国移动自建门户（2026-09-06 真伪 id live 对拍；此前 11,686 岗零撤岗路径）---
+# --- 国有大行 + 中国移动自建门户（2026-09-06 真伪 id live 对拍）---
+# 接入前这五家 9,292 个 active 岗零撤岗路径（连同农行 2,418 共 11,710，2026-09-06 实测）。
 # 五家共用 adapters/cn_portal_tls.make_transport()：强制 IPv4 + 允许 TLS 传统重协商。
 # ⚠️ **不走它的话本机全绿、上 GitHub runner 全炸**（建行/交行/移动 UNSAFE_LEGACY_RENEGOTIATION_DISABLED、
 # 工行 Errno 101）——这两条毛病本机永远测不出来，见 adapters/cn_portal_tls.py 的立碑。
@@ -1099,7 +1100,7 @@ ENRICH_REGISTRY = {
     # 伪 id 返 status=0+「职位已下线或不存在！」与 _detail_meituan 判死逻辑逐字节吻合）：
     "meituan_campus": _detail_meituan,
     # 国有大行 + 中国移动自建门户（2026-09-06，真伪 id live 对拍，见各函数注释）：
-    # 接入前这六个源的 11,686 个 active 岗**零撤岗路径**——既不在 ENRICH_REGISTRY（sweep 够不着）、
+    # 接入前这五个源的 9,292 个 active 岗**零撤岗路径**——既不在 ENRICH_REGISTRY（sweep 够不着）、
     # supports_absence_liveness 也全是默认 False，岗位只进不出。
     # ⚠️ abchina（农行 2,418 岗）刻意不在这里：它走浏览器，且它的详情页判死另有坑，见 docstring 顶部。
     "spdb": _detail_spdb,

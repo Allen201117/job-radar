@@ -46,7 +46,7 @@ jobs:
         # 但 matrix 只有别名 siemens 分片 → avature 源此前既不被探活也不被富化（审阅 P1-3 盲区）。
         # 2026-08-28 盲区六家（jd/antgroup/haier/ashby/mihoyo/tencent_music，共 ~10,700 岗此前零探活）：
         # 判死信号全部真伪 id live 对拍过（见 crawler/enrich.py 注释），宁可漏判不可错杀。
-        # 2026-09-06 国有大行 + 中国移动（spdb/icbc/ccb/bankcomm/cmcc，共 9,268 岗此前零探活）：
+        # 2026-09-06 国有大行 + 中国移动（spdb/icbc/ccb/bankcomm/cmcc，共 9,292 岗此前零探活，2026-09-06 实测）：
         # 判死信号真伪 id live 对拍过，全部双条件（见 crawler/enrich.py 各 _detail_xxx 注释）。
         # 同批补上 chnenergy——它 2026-09-05 就进了 ENRICH_REGISTRY，但漏加进本 matrix，
         # 于是只被 enrich-backlog 补正文、从来没被探活过（同一类漏配，别再漏）。

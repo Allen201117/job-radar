@@ -42,7 +42,7 @@ jobs:
         # meituan_campus 不进本矩阵：_detail_meituan 是 liveness-only（正文列表自带、detail 恒空），
         # 进富化队列只会空转烧 fail_count；它在 liveness-sweep 矩阵里做探活。
         # 同理 spdb/icbc/ccb/bankcomm/cmcc/chnenergy 也不进：这几家 adapter 抓列表时就把正文补齐了
-        # （2026-09-06 实测 9,268 个 active 岗里只有 7 张薄卡），富化队列几乎恒空。
+        # （2026-09-06 实测 9,292 个 active 岗里只有 7 张薄卡），富化队列几乎恒空。
         # 它们**在 liveness-sweep 矩阵里**做探活——那才是这批源需要的东西（此前只进不出）。
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
