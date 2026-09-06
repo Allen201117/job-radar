@@ -132,10 +132,18 @@ OVERSEAS_LOCATION_TOKENS = {
     "europe", "emea", "americas", "latam", "brazil", "mexico", "argentina", "colombia",
     "india", "japan", "korea", "singapore", "malaysia", "thailand", "vietnam", "indonesia",
     "philippines", "australia", "nz", "uae", "dubai", "israel", "egypt", "turkey", "africa",
+    # 下面这批是 2026-09-05 补的：外企 ATS（SmartRecruiters）把国家写成 ISO-2 码，adapter 出口
+    # 已展开成国名，这里必须认得出来，否则「Remote Romania」这类岗在 regions 含 CN 的源上会被
+    # derive_job_scope 的兜底判成 domestic —— 正是 76ce4ff 修掉的那个坑。名单由
+    # crawler/adapters/smartrecruiters._ISO2_COUNTRY_NAMES 决定，契约测试逐条对齐。
+    "algeria", "bulgaria", "cambodia", "chile", "croatia", "czechia", "denmark", "ecuador",
+    "estonia", "finland", "guatemala", "hungary", "latvia", "lithuania", "morocco", "norway",
+    "pakistan", "romania", "russia", "serbia", "slovakia", "slovenia", "tunisia", "ukraine",
 }
 OVERSEAS_LOCATION_PHRASES = (
     "united states", "united kingdom", "new zealand", "south korea", "saudi arabia",
     "sri lanka", "costa rica", "south africa",
+    "united arab emirates", "dominican republic", "puerto rico", "aland islands",
 )
 
 # 台湾（县市级）。⚠️ 台湾按项目口径**不抓、不归入任一范围**：TW ∉ 任何 source regions
@@ -850,9 +858,19 @@ def derive_job_scope(location: Optional[str], regions=None) -> str:
     code = derive_country_code(location)
     if code is not None:
         return "domestic" if code in _GREATER_CHINA else "overseas"
-    # 地点自报「海外」「国外」——没有国家可给，但绝不能走下面的 source.regions 兜底：
-    # CN 源下的「海外」岗会被算成国内供给（线上 1,119 个 active 岗是这么写的）。
+    # 下面两条都是「抽不出国家码、但地点已经说明白它在境外」——**都必须排在 source.regions
+    # 兜底之前**，兜底只该服务「真的什么都没说」的地点（裸「远程」/ 空 / Multiple Locations）。
+    # 两条各治一种写法，缺一不可：
+    #
+    # ① 地点自报「海外」「国外」——没有国家可给，但绝不能走 regions 兜底：
+    #    CN 源下的「海外」岗会被算成国内供给（线上 1,119 个 active 岗是这么写的）。
     if is_overseas_unspecified(location):
+        return "overseas"
+    # ② 地点里**明确钉着一个境外地名**（"Remote Germany" / "India (Remote)" / "Minato-ku, Japan"）：
+    #    少了这一层，给外企源补 CN（迁移 232）会让它名下所有海外远程岗一起变成国内岗 ——
+    #    2026-09-05 实测那批源上有 121 个（艾伯维 102 / 大陆集团 13 / Grab 4 / Expeditors 1 / 育碧 1）。
+    #    注意顺序：code 优先。地点能判出国家就以国家为准，这里只管「有地名、但不在 geo 的国家词典里」。
+    if _is_overseas_pinned(location):
         return "overseas"
     if regions:
         if "CN" not in {str(r).strip() for r in regions}:
