@@ -2,7 +2,8 @@
 import json
 import unittest
 
-from adapters.chnenergy import ChnenergyAdapter, _parse_detail, _parse_list_items
+from adapters.chnenergy import (ChnenergyAdapter, _coverage_total, _is_open,
+                                _parse_detail, _parse_list_items)
 
 
 # 取自 2026-09-05 线上列表页的真实卡片结构（含那份注释掉的同构 <a>、以及 `title =` 带空格的写法）。
@@ -99,6 +100,28 @@ class ChnenergyAdapterTest(unittest.TestCase):
         # 错误壳文案 + 仍有「招聘岗位」= 半截数据，宁可漏判不可错杀。
         half = DETAIL_GONE.replace("</body>", "<div>招聘岗位：仪表检维修</div><div>岗位职责 X</div></body>")
         self.assertIsNotNone(_parse_detail(half))
+
+    def test_报名已截止的岗不入库(self):
+        # 2026-09-05 实测：列表夹带 164 条截止日已过的岗（全在社招，最老 2025-07-11）。
+        self.assertTrue(_is_open({"deadline": "2026-10-07"}, "2026-09-05"))
+        self.assertTrue(_is_open({"deadline": "2026-09-05"}, "2026-09-05"))   # 当天仍可报名
+        self.assertFalse(_is_open({"deadline": "2025-07-11"}, "2026-09-05"))
+
+    def test_读不出截止日时保守放行(self):
+        # 宁可漏判不可错杀：交给 enrich 探活，别在这里凭空判死。
+        self.assertTrue(_is_open({"deadline": ""}, "2026-09-05"))
+        self.assertTrue(_is_open({}, "2026-09-05"))
+
+    def test_抓全率分母扣掉主动剔除的过期岗(self):
+        # 线上真实一轮：自报 3,276、剔除 164、入库 3,112。分母照抄 3,276 会永远显示 95% 抓全率，
+        # 把一次按口径的过滤读成抓取缺口，还和 fetch_complete=True 自相矛盾。
+        self.assertEqual(_coverage_total(3276, 164, 3112), 3112)
+        self.assertEqual(_coverage_total(3276, 0, 3276), 3276)
+
+    def test_分母不会低于实际抓到的条数(self):
+        # 某渠道失败会让自报总数偏小，分母不能反过来小于已抓条数。
+        self.assertEqual(_coverage_total(50, 0, 280), 280)
+        self.assertIsNone(_coverage_total(None, 164, 3112))
 
     def test_parse_容忍脏输入(self):
         adapter = ChnenergyAdapter()
