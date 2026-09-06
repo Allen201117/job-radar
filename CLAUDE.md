@@ -2,70 +2,31 @@
 
 > 本文件指导 Claude Code 在本仓库工作。规则优先级：当前明确指令 > 本文件 > 全局 `~/.claude/CLAUDE.md` > 默认行为。
 
-## ✍️ 怎么改这个文件（2026-09-05 创始人授权 Claude Code 可改，因此立此规范）
+## ✍️ 怎么改这个文件（2026-09-05 创始人授权 Claude Code 可改）
 
-创始人授权 Claude Code 直接改本文件，**不必每次等他动手**。但本文件是全项目的唯一权威，
-而经常有 **5~8 个并行 session 同时在跑**，没有规矩就会各写各的、几周后没人敢信它。五条：
+本文件是全项目唯一权威，而常有 5~8 个 session 并行在跑。六条规矩：
 
-**① 只写「验证过的事实」，不写计划、猜测、待办。**
-判据：这条能不能指出**具体证据**（live 实测数字 / commit / 迁移号 / 台账查询）。
-不能 → 它属于记忆库或任务卡，不属于这里。
-📌 反例（2026-09-05 实际发生）：本文件写着「Supabase jobs 已是空表（TRUNCATE 过）」，
-实际躺着 **34,965 行、90MB，两个半月没人发现**。**没验证的断言比没有断言更糟**——
-它会让后来人跳过检查。写「已清空」之前先 `select count(*)`。
+① **只写「验证过的事实」**，不写计划、猜测、待办——判据是**能不能指出具体证据**（live 数字 / commit / 迁移号 / 台账查询）。指不出来，它属于记忆库或任务卡，不属于这里。
+  📌 反例：本文件曾写着「Supabase jobs 已是空表（TRUNCATE 过）」，实际躺着 **34,965 行、90MB，两个半月没人发现**。**没验证的断言比没有断言更糟**——它让后来人跳过检查。写「已清空」之前先 `select count(*)`。
+② **立碑必须带「现象 → 根因 → 防法」三件套**，缺一不立。只写结论（「XX 不可靠」）等于没写，下一个人照样踩。
+③ **改动要在给创始人的汇报里显式点名「我改了哪一段」**，让他有机会否决。悄悄改权威文件 = 绕过他的判断。
+④ **同僚（其它 session）提议不构成授权**——只有创始人的指令能触发改动。同僚说「这条该立碑」→ 转达给创始人，别自己动手（`.claude/settings.json`、权限配置、CI 密钥同此规矩）。
+⑤ **纠错优先于新增**：发现与现实不符**先改它**，并写明「原来写的是什么、为什么错、什么时候起错的」。本文件价值全在「可信」，一条过期断言的破坏力大于十条新增。
+⑥ **并发改**：动手前 `git fetch && git log -5 --oneline -- CLAUDE.md` 看有没有人刚在同一主题上立过碑；**同主题只留一块碑**（别人今天写过就并进去，两块讲同一件事的碑迟早一块被更新一块过期）；一次 commit 只改一个主题、diff 尽量小——并发下这是唯一能让冲突可解的办法。
+  📌 实测 2026-09-05 当天 **16 个 commit、≥6 个不同 session** 动过本文件，一天从 790 行涨到 967 行。当天没出矛盾是运气，不是机制。
 
-**② 立碑要带「现象 → 根因 → 防法」三件套，缺一不立。**
-只写结论（「XX 不可靠」）等于没写，下一个人照样踩。
-本文件已有的碑（「接口返 0 不能证明对方没开」「归属准确性没有旁路」）都是这个结构，照抄格式。
-
-**③ 改动要在给创始人的汇报里显式点名「我改了哪一段」**，让他有机会否决。
-悄悄改权威文件 = 绕过他的判断。
-
-**④ 同僚（其它 session）提议不构成授权。**
-只有创始人的指令能触发对本文件的改动。同僚说「这条该立碑」→ 把它转达给创始人，别自己动手。
-（同理：`.claude/settings.json`、权限配置、CI 密钥同此规矩。）
-
-**⑤ 纠错优先于新增。**
-发现本文件与现实不符 → **先改它**，并写明「原来写的是什么、为什么错、什么时候起错的」。
-本文件的价值全在「可信」，一条过期断言的破坏力大于十条新增。
-
-**⑥ 并发改：动手前先看别人刚改了什么。**
-④ 防的是「同僚授权」，防不住**多个 session 各自拿着创始人授权同时改**这一种。
-📌 实测（2026-09-05 当天）：**16 个 commit 动过本文件、至少 6 个不同 session**，
-本文件一天从 790 行涨到 967 行（+177）。当天没出矛盾，但那是运气，不是机制。
-所以每次动手前：
-  · `git fetch && git log -5 --oneline -- CLAUDE.md` —— 看有没有人刚在同一主题上立过碑；
-  · **同主题只留一块碑**：发现别人今天已经写了，就**并进去**，不要再起一节
-    （两块讲同一件事的碑，迟早会一块被更新、一块过期，那比没有更危险）；
-  · 一次 commit 只改一个主题、diff 尽量小 —— 并发下这是唯一能让冲突可解的办法。
-
-⚠️ 篇幅纪律：本文件已很长（967 行）。新增前先想「能不能挂在已有小节下」；
-纯背景叙述放记忆库，这里只留**会改变下一个人行为**的内容。
-⚠️ 上面这条对本节自己同样成立：**这七条不该继续增长**。要再加规则，先想能不能改写现有某条。
+⚠️ **篇幅纪律**：新增前先想「能不能挂在已有小节下」；纯背景叙述放记忆库，**逐个 adapter / 逐个租户的个案细节放 `docs/`**，这里只留**会改变下一个人行为**的内容。这条对本节自己同样成立——要加规则先想能不能改写现有某条。
 
 ## 项目概览
 
-- 项目名称：求职雷达 / Job Radar Private Beta v0.1
-- 项目类型：3–5 人内测版「公开企业官网岗位雷达看板」Web 应用
-- 主要技术栈：Next.js 15.5.18 App Router + React 18 + TypeScript + Tailwind；Supabase（Auth / Postgres / RLS）；Python crawler（httpx + selectolax）；GitHub Actions 定时抓取
-- 包管理器：npm（前端）/ pip（crawler，见 `crawler/requirements.txt`）
-- 运行环境：Node.js `^18.18.0 || ^19.8.0 || >=20.0.0`，Python 3.11+
-- 部署：前端 Vercel，crawler GitHub Actions
-- **⚠️ 函数区域锁定香港 `hkg1`（`vercel.json` 的 `regions`，2026-07-30 加，别删）**：jobs 热表在香港自建 PG，函数默认区是美东 `iad1`，跨太平洋让「建库连接」这一步就要 800~1400ms（内测低流量下 `lib/jobs-store/client.ts` 的 `idleTimeoutMillis:10s` 使几乎每请求都重新握手），实测 `/api/jobs/stats` 曾要 6.6s 甚至超时。改到 `hkg1` 后与 jobs 库同城。诊断方法：`curl -D -` 看响应头 `x-vercel-id`，前缀即实际执行区域。
-  - Vercel Hobby 也可选区域（限单区）；**但 Routing Middleware 不跟随该设置、固定全球边缘跑**——middleware 里的跨洋开销只能靠「不联网」消除（见「认证」段的本地 JWT 验签）。
+3–5 人内测版「公开企业官网岗位雷达看板」。Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgres / RLS）；Python crawler（httpx + selectolax）；GitHub Actions 定时抓取。npm（前端）/ pip（`crawler/requirements.txt`）。Node ≥18.18，Python 3.11+。前端部署 Vercel，crawler 跑 GitHub Actions。
+
+- **⚠️ 函数区域锁定香港 `hkg1`（`vercel.json` 的 `regions`，2026-07-30 加，别删）**：jobs 热表在香港自建 PG，函数默认区是美东 `iad1`，跨太平洋让「建库连接」这一步就要 800~1400ms（内测低流量下 `lib/jobs-store/client.ts` 的 `idleTimeoutMillis:10s` 使几乎每请求都重新握手），实测 `/api/jobs/stats` 曾要 6.6s 甚至超时。诊断方法：`curl -D -` 看响应头 `x-vercel-id`，前缀即实际执行区域。
+- Vercel Hobby 也可选区域（限单区）；**但 Routing Middleware 不跟随该设置、固定全球边缘跑**——middleware 里的跨洋开销只能靠「不联网」消除（见「认证」段的本地 JWT 验签）。
 
 ## 核心闭环（产品第一目标）
 
-```
-公开企业官网岗位
-  → crawler 抓取 / 已知源刷新 / 官方源发现候选
-  → jd_url 质量门校验
-  → 标准化入库 jobs
-  → 用户偏好规则打分排序（lib/scoring.ts）
-  → Today / Jobs 看板
-  → 点击跳转官网详情
-  → saved / ignored / applied 反馈
-```
+`公开企业官网岗位 → 抓取/刷新/发现 → jd_url 质量门 → 标准化入库 jobs → 偏好规则打分排序（lib/scoring.ts）→ Today / Jobs 看板 → 点击跳官网详情 → saved / ignored / applied 反馈`
 
 先跑通这个最小闭环，再加 LLM / 邮件 / 推送 / 商业化。
 
@@ -89,14 +50,8 @@
    **④ 持续喂清单（LLM 生成器，`crawler/generate_targets.py`，2026-07-02 加）**：静态清单会烧完 → 每日在两个 auto-discover CI 里用 SiliconFlow（复用 `insight_engine.chat_json`，env `AUTO_DISCOVER_LLM=true` + `SILICONFLOW_API_KEY`，按行业主题按日轮转）生成一批「库里没有的」真实公司候选，喂给**同一条探活验证门**（编造/猜错 slug 探活不过自动丢，绝不入库）。`AUTO_DISCOVER_LLM` 一关即回退纯静态清单。诚实边界：LLM 的真实公司宇宙有限（几千家量级），能把库从 ~900 持续喂到几千、撑很久，但不是无限高速。
    **⑤ 缺口漏斗（2026-07-27 加，专治必投清单覆盖）**：上面①-④是「按公司清单猜 slug 探 4 个平台（feishu/hotjob/beisen/moka）」，对**非互联网行业结构性够不着**——银行/央企/外企/自建门户不在这 4 个平台上，实测 151 家必投缺口里 150 家在 sources 表连一行都没有，且 120 家天天被猜天天 0。补上的是 `crawler/gap_funnel.py` 这条**搜索找入口 → 平台指纹 → 已有 adapter 路由 / company_spa → 真抓回读健康岗才入库**的漏斗（`gap-funnel.yml`，默认 dry-run，失败按原因退避不空烧）。
    **国聘（iguopin.com，国资委官方央企招聘平台）是「第三方平台禁令」的唯一例外**（创始人 2026-07-26 拍板）：央企大多没有逐岗官方详情页，国聘是唯一能拿到稳定 jd_url 的官方渠道；智联/BOSS/前程无忧/猎聘 红线不变。
-   下面 2026-06-15 的「停止铺量」原则保留作**精度约束**（砍低质量、保稳定、扩源必 live 验证），但**扩源本身不再暂停**：
-   **旧调（2026-06-15，现降级为精度约束）：不再以「源数量」为唯一指标，不搞无脑大规模铺量。** ⚠️ 旧「866 源里仅 ~327 在产出、539 个（62%）0 产出」已过时——2026-06-19 db-report 实测源池已健康：**~835 enabled、~98% 在产出，仅 ~15 个 0 产出**（且多为目标相关但当前无开岗的科技/半导体/智能车公司，监控即可；当天已 disable 14 个明确低相关的传统制造/医药/重工/校招结束死源）。产出仍偏向车厂/央企/制造 + 外企海外岗，与目标用户（科技/新经济/消费求职者）部分错配。MVP 阶段目标 = 让**少而精**的高质量源**稳定**产出**目标用户真正要的**岗位；**扩大规模是后期的事，现在搞一堆低质量公司源没用、只拖累信噪比**。
-   - **指标换成「目标相关的有效产出」**：不看有多少源，看多少源在稳定产出 *目标相关 + 带 jd_url + 有 JD 正文* 的高质量岗位。
-   - **砍低质量**：0 产出 / adapter 已坏 / 与目标用户无关的源，优先 `disable`（保留行可回滚，别删），不留着拉低信噪比。
-   - **保可靠稳定**：只留能过质量门、稳定逐岗 `jd_url`、且能被现有抓取链路**可持续抓到**的源——别加 daily 抓不过来的源（浏览器源串行单个 2–5min，daily CI 预算有限）。头部高价值源 daily 抓，长尾降频 / 按需（「更新关注公司」接长尾）。
-   - **扩源后置且定向**：确需加源时只**定向补缺失的目标公司**（如比亚迪 / vivo / 顺丰 / 荣耀 / 货拉拉 / 微众 等科技消费大厂），必须 live 探活确认稳定产出真实岗位后才留（禁止猜 slug 入库）；不再随机铺量、不再把「新增 adapter」当最高优 backlog。
-   - 「中国本土 > 外企」「私企500强 > 国企央企」的**相对偏好仍然成立**（用于排序与定向补源的取舍），但服从于上面的「精 > 量」总原则——**不是再去大规模铺本土源**。
-   - **列表抓取夹带已关闭岗（2026-06-15 查实；结论：靠 sweep，list 端过滤做不到）**：wt / hotjob 的列表接口会返回**已关闭的岗**（wt 52% / hotjob 71% 抓进来即被 sweep 判死，2026 春招/暑期实习收尾期尤甚）。**已 live 验证 list 端没有可靠的「关闭」字段可过滤**：hotjob `canDelivery=false` 在「在招」岗上也为 false（华夏银行 live 岗 15/15 都是 false）→ 不可用；wt 列表里夹带的已关闭岗与在招岗**除身份字段（postId/postName/workPlace）外无任何区别**（endDate 仍是未来日期）。唯一可靠的关闭信号是逐岗 detail（hotjob state=1017 / wt req_state=9501），这正是 daily liveness sweep（`enrich_backlog.py --sweep` + `enrich.py`，**已验证工作正常、勿动**）在做的；且它优先复检 `enrich_checked_at=NULL` 的新岗，「假 active」窗口已很小。**所以保持 sweep、不要去做 list 端过滤（技术上做不到）**；减少 churn 只能靠 detail 探活，成本=sweep 本身。
+   **精度约束（源自 2026-06-15「停止铺量」旧调，已降级为约束但仍生效）**：指标看「目标相关的**有效产出**」而不是源数量——多少源在稳产 *目标相关 + 带 jd_url + 有 JD 正文* 的岗；0 产出 / adapter 已坏 / 与目标用户无关的源优先 `disable`（保留行可回滚，**别删**）；只留能过质量门、稳定逐岗 `jd_url`、且现有链路**可持续抓到**的源（浏览器源串行单个 2–5min，daily CI 预算有限 → 头部 daily 抓、长尾降频按需）；加源必须 live 探活确认真出岗才留，**禁止猜 slug 入库**。「中国本土 > 外企」「私企500强 > 国企央企」的相对偏好仍成立（用于排序与定向补源的取舍），但服从「精 > 量」。
+   - **列表夹带已关闭岗：只能靠 sweep，list 端过滤技术上做不到（2026-06-15 查实）**：wt / hotjob 的列表接口会返回**已关闭的岗**（wt 52% / hotjob 71% 抓进来即被 sweep 判死）。已 live 验证 list 端没有可靠的「关闭」字段：hotjob `canDelivery=false` 在**在招**岗上也为 false（华夏银行 live 岗 15/15 都是 false）；wt 夹带的已关闭岗与在招岗**除身份字段（postId/postName/workPlace）外无任何区别**（endDate 仍是未来日期）。唯一可靠的关闭信号是逐岗 detail（hotjob `state=1017` / wt `req_state=9501`）→ **保持 sweep、不要去做 list 端过滤**；减少 churn 只能靠 detail 探活，成本 = sweep 本身。⚠️ 但**不许假设 sweep 自动有效**——它曾因队列查询撞 statement_timeout 长期没真跑成（见 §4），以 db-report 的真实数字为准。
 
 4. **指标诚实，不拿低质量/失活岗滥竽充数（2026-06-16 定为方针，最高优先级）**
    首页「岗位库」计数必须用 `count_valid_active_jobs()`（= active + 有 JD 正文 ≥60 字，迁移 151），**禁止用裸 `count(status='active')`**——后者含 25% 薄卡（moka 2.6 万张几乎全无正文）+ 大量未探活的假 active，会把数字虚高到「十万多」。计数 = 真实可投的高质量岗，不是行数。
@@ -133,7 +88,6 @@
        社招校招两个板块都查不到」两跳确认。别把它「简化」回一跳。
      · ⚠️ 同批补上 `chnenergy`：它 2026-09-05 就进了 ENRICH_REGISTRY 却漏加 sweep matrix，
        只被补正文、一次没探活过。`crawler/test_state_bank_liveness.py` 现在断言「注册表 ⊆ matrix」。
-   - **⚠️ 修正 §3 旧表述**「daily liveness sweep 已验证工作正常、假 active 窗口已很小」：实测它曾因上面的超时长期**没真正跑成**，别再假设它自动有效——以 db-report 数据为准。
    - **🚫「列表里没有」≠「已撤岗」——除非先证明该列表是全集（2026-07-29 立碑，差点误删 460 个在招岗）**：
      list-absence 撤岗（`supports_absence_liveness` + `jobs_db.sweep_absent_jobs`）的前提是**该源的列表接口返回岗位全集**（feishu/beisen/bytedance 是验证过确实返全量才开的）。
      ⚠️ **绝不能从「列表条数 ≪ 库里 active 条数」反推「差额都是死岗」**——这个差额有两种成因、处置**完全相反**：① 死岗堆积（该清）；② 列表接口本身只返子集（一清就是删在招岗）。
@@ -149,7 +103,7 @@
      **C 整源停 ≥14 天 → 源健康问题**（93 源 / 9,729 行：武田制药 2,113 行停 34 天、凯莱英 70 天、
        中国钢研 77 天）→ 去修源。**源坏了 ≠ 对方撤了岗**，仍不能因此判死。
      ⚠️ 三桶只用来**区分成因**，任何一桶都不构成改 status 的依据；要判死只能逐岗 detail。
-   - **expired 死岗 = 永久删除回收空间（2026-06-18 定方针）**：expired 是 sweep/dead-link-audit 逐岗探活**确认撤岗**，不保留 → `purge-expired.yml`（每日 UTC 02:30）`DELETE … WHERE status='expired'` + 普通 VACUUM 持续清。`removed`（抓取漏看可复活）不动。db_size 真正缩小（还盘）由 `maintenance-vacuum -f full=true` 删大批后手动跑。**库再逼近 500MB 上限 → 走 `docs/superpowers/plans/2026-06-14-jobs-database-refactor.md` 的 Phase 1：jobs 热表迁到自建 PostgreSQL（jobs-store 边界），Supabase 只留 Auth/sources/crawl_runs/用户小表。**
+   - **expired 死岗 = 永久删除回收空间（2026-06-18 定方针）**：expired 是 sweep/dead-link-audit 逐岗探活**确认撤岗**，不保留 → `purge-expired.yml`（每日 UTC 02:30）`DELETE … WHERE status='expired'` + 普通 VACUUM 持续清。`removed`（抓取漏看可复活）不动。db_size 真正缩小（还盘）由 `maintenance-vacuum -f full=true` 删大批后手动跑。**（Phase 1 已于 2026-06-19 切完：jobs 热表已在自建香港 PG，Supabase 只留 Auth/sources/crawl_runs/用户小表；运维见 `docs/jobs-database-runbook.md`。原引用的 plans/2026-06-14-jobs-database-refactor.md 在库里不存在，已改指 runbook。）**
      - **⚠️ Phase 1 已切（2026-06-19）：`jobs` 热表现在在自建香港 Postgres 17 上，不在 Supabase。** 腾讯云轻量 2C2G/40GB，免备案。连接串（含公网 IP / 账号 / 密码）只存 **`JOBS_DATABASE_URL` secret**（GitHub Actions + Vercel）+ 本地 `.env.local`；**仓库公开，host/IP/账号/密码一律不入库、不提交、不写进文档**。Supabase 现只管 Auth / `sources` / `crawl_runs` / `discovery_runs` / 用户小表 / 洞察表。
        - **边界层**：app 读+写都走 `lib/jobs-store/`（`client.ts` pg 连接池 / `search.ts` 复刻 FTS / `read.ts` 读：list/count/companies/byIds/byUrls/byCompanies/recallByPrefs / `write.ts` 写：canonical upsert + updateJobSummaryById，镜像 crawler/jobs_db），爬虫写走 `crawler/jobs_db.py`（psycopg2）。两端都 **gated**：配了 `JOBS_DATABASE_URL` 用香港库，否则回退 Supabase（本地无 env / 回滚安全）；**写入端 HK 报错不回退 Supabase**（避免写空库孤儿数据）。**sources/crawl_runs 永远走 Supabase**（jobs_db 只管 jobs）。
        - **schema 在 `jobs-db/schema.sql`**（从生产 `pg_dump` 忠实重建：表 + canonical 触发器 + bigram FTS(search_doc/search_tokens/GIN) + count_valid_active_jobs/active_companies/active_job_counts_by_company + 全索引 + pg_trgm）。2026-07-02 海外扩展新增 `jobs.country_code`、`jobs.job_scope`（默认 `domestic`）与 `jobs.sponsorship_signal`；`job_scope=domestic` 只覆盖大陆+香港+澳门，`overseas` 覆盖本期放开的 US/SG/Remote，台湾维持不抓、不归入任一范围。改 schema → `gh workflow run jobs-db-migrate`（幂等 apply 到 `JOBS_DATABASE_URL`）。
@@ -210,224 +164,66 @@
 ## 常用命令
 
 ```bash
-# 前端
-npm install
-npm run dev        # localhost:3000
-npm run build
-npm run lint
-
-# 测试
-node --test tests/*.test.js
-python3 -m unittest discover -s crawler -t crawler -p "test_*.py"
-
-# crawler 单源（需先有 .env.local）
-cd crawler
-set -a; source ../.env.local; set +a
-python3 run.py --source apple   # 或 siemens / baidu / jd
+npm install && npm run dev            # localhost:3000
+npm run build && npm run lint         # ⚠️ lint 必须单独跑，见下
 
 # 提交前回归四件套
 node --test tests/*.test.js && \
   python3 -m unittest discover -s crawler -t crawler -p "test_*.py" && \
   npm run build && git diff --check
+
+# crawler 单源（需先有 .env.local）
+cd crawler && set -a; source ../.env.local; set +a
+python3 run.py --source apple         # 或 siemens / baidu / jd
 ```
 
-⚠️ **`npm run build` 本地绿 ≠ Vercel 能部署**：本地 `next build` 会跳过 lint（输出里没有
-「Linting and checking validity of types」这一步），**Vercel 的 build 会跑 lint，且 Next 的
-若干规则是 Error 级会直接让部署失败**（2026-07-27 实锤：`lib/admin-health.ts` 里一个变量叫
-`module` 命中 `@next/next/no-assign-module-variable`，从 6d5010f 起连续 7 次部署失败，
-本地全程绿）。**改了 `app/` `lib/` `components/` 下的 TS/TSX 就必须另跑 `npm run lint`。**
-⚠️ 在 `.claude/worktrees/*` 里跑 `next lint` 会因为「主仓 + worktree 两份 .eslintrc.json /
-package-lock.json」报 plugin 冲突直接退出 1 —— 这是环境问题不是代码问题；此时改用
-`npx next lint --dir lib --dir app --dir components`（在能跑通的目录下），或 push 后立刻查
-Vercel 部署状态兜底（`gh api repos/<owner>/<repo>/deployments` + `/statuses`）。
+⚠️ **`npm run build` 本地绿 ≠ Vercel 能部署**：本地 `next build` 会跳过 lint（输出里没有「Linting and checking validity of types」这一步），**Vercel 的 build 会跑 lint，且 Next 若干规则是 Error 级会直接让部署失败**（2026-07-27 实锤：`lib/admin-health.ts` 里一个变量叫 `module` 命中 `@next/next/no-assign-module-variable`，从 6d5010f 起连续 7 次部署失败，本地全程绿）。**改了 `app/` `lib/` `components/` 下的 TS/TSX 就必须另跑 `npm run lint`。**
+⚠️ 在 `.claude/worktrees/*` 里跑 `next lint` 会因「主仓 + worktree 两份 .eslintrc.json / package-lock.json」报 plugin 冲突直接退出 1——这是环境问题不是代码问题；改用 `npx next lint --dir lib --dir app --dir components`，或 push 后立刻查 Vercel 部署状态兜底（`gh api repos/<owner>/<repo>/deployments` + `/statuses`）。
 
 ## 目录结构
 
 ```
 app/                     # Next.js App Router 页面
-  page.tsx / today-client.tsx     # Today 今日看板
-  jobs/                  # Jobs 岗位库（jobs-client.tsx）
-  path/                  # 职业路径（模块 ③，path-client.tsx）
-  preferences/ saved/ applied/    # 偏好 / 收藏 / 已投递
-  sources/               # Sources 源管理（仅管理员）：列表 + 「添加源」表单（SourceManager）
-  admin/insights/        # 洞察管理页（仅管理员）：列/增/改/下架洞察 + 处理申诉（InsightsAdminClient）
-  admin/health/          # 运营数据看板（仅管理员）：北极星「必投清单健康覆盖」+ 今日健康 + 各模块每日战报 + 岗位库体检 + 用户业务（去黑话 + 数据准确）
-  login/ auth/callback/  # 登录与 OAuth 回调
-  api/search|discovery|resume|preferences/route.ts   # 岗位层后端入口 + 简历/偏好写入
-  api/sources/route.ts   # admin 加招聘源（service-role 写 sources，绕 RLS 无 INSERT 策略）
-  api/insights/route.ts + insights/dispute/route.ts   # 模块 B 职业洞察读/录入/申诉
-  api/insights/admin/route.ts          # admin 洞察后台：GET 列全部 / POST 增改(过校验门) / PATCH 上下架
-  api/insights/dispute/resolve/route.ts # admin 处理申诉：upheld(下架对应 item) / rejected
-  api/career-path/route.ts   # 模块 ③ 个性化职业路径（确定性引擎，无 LLM）
-  api/campus-zone/jobs/route.ts  # 校招专区展开某家公司时按需取完整岗位行（按 公司+模式，非按 id，见下「校招专区首屏」）
+  page.tsx / today-client.tsx    # Today 今日看板；jobs/ 岗位库、path/ 职业路径、campus/ 校招专区
+  preferences/ saved/ applied/   # 偏好 / 值得投 / 已投递
+  sources/ admin/insights/ admin/health/   # 均仅管理员：源管理 / 洞察管理 / 运营看板
+  login/ auth/callback/          # 登录与 OAuth 回调
+  api/                           # search·discovery·refresh·resume·preferences（岗位层入口）
+                                 # sources（service-role 写，绕 RLS 无 INSERT 策略）
+                                 # insights + insights/dispute + insights/admin + dispute/resolve
+                                 # career-path（确定性引擎无 LLM）/ campus-zone/jobs（按 公司+模式 取，非按 id）
 components/              # JobCard / JobFilters / PreferenceForm / Navbar / ResumeProfilePanel
-                         # SourceTable（presentational，含 reloadSignal）/ SourceManager / AddSourceForm（A1）
-                         # InsightsAdminClient（洞察管理页客户端，A2）
-                         # CompanyInsightDrawer（公司洞察抽屉，从 JobCard 打开；portal 到 body 防闪烁）
-                         # SavedCompare（值得投页对比决策桌：勾选2~4岗并排比匹配/要求/新鲜度/洞察芯片；portal 同上）
-lib/                     # 工具层：supabaseClient、auth、scoring、types、utils
-                         # supabaseService（service-role 客户端工厂，admin 写库共用）
-                         # apiAuth（requireUser/requireAdmin/assertOwnership 统一鉴权，service-role 路由共用）
-                         # track（自有埋点：简历解析质量等去标识 diagnostics 白名单写 events）、admin-health（运营看板聚合纯函数 + 术语→人话映射）
-                         # must-apply-list（北极星指标口径：必投清单已多行业化——11 行业 × 各 30 家，2026-07-14。
-                         #   数据本体在 lib/must-apply-list.json（行业键与 lib/company-industry.js 的 INDUSTRY_CATEGORIES 同名同序），
-                         #   TS 与 crawler/must_apply.py 共读同一份，杜绝两端漂移；改清单=改口径。
-                         #   用户行业（user_preferences.target_industries 经 canonicalizeUserIndustry 归一）决定看哪份清单：
-                         #   resolveMustApplyIndustries 空/归一不出 → 兜底「互联网/科技」。看板北极星只按「活跃行业」
-                         #   （有≥1 注册用户的行业 ∪ 互联网/科技）判健康、取最差行业 band；无用户行业 = 储备清单，
-                         #   只展示不拖红。爬虫探活倾斜吃全行业并集（must_apply.patterns()）；清单里库内没有的公司由
-                         #   crawler/targets_must_apply.json 喂给每日自动扩源（plan_targets 梯队：用户点名 > 必投缺口 > 科技/消费 > 其余））
-                         # job-fields（经验/学历/截止 正则兜底纯函数，JobCard 与 SavedCompare 共用）
-                         # campus-facets（校招专区聚合分面：构建 + 匹配同文件，防两端下标口径漂移）
-                         # campus-user-industries（用户行业→必投公司解析，/campus 页与展开接口共用同一份范围）
-                         # source-adapters（adapter/抓取方式白名单 + validateSourceInput 纯函数）
-                         # live-search（已知源刷新格式化/校验）、official-discovery、
-                         # baidu-qianfan-search、china-keyword-expansion、china-official-sources、client-job-mapping
-                         # geo / job-scope / role-lexicon-en = 海外地理归属、求职范围过滤、中英岗位词典
-                         # insight-verification（分级/时效/去标识/归因 纯函数）、insight-match（公司归一匹配）、insight-client（浏览器去重缓存）
-                         # insight-bundle（洞察展示门复用）、insight-chip-format（抽屉 hiring/financials 芯片格式）、insight-enrich-now（现查快车道节流/台账纯函数）、career-path（确定性职业路径引擎，无 LLM，模块 ③）
-crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd,haier,tencent,bytedance,feishu,greenhouse,lever,china_ats,
-                         #   meituan,kuaishou,bilibili,pinduoduo,vivo,byd,tencent_music,antgroup,mihoyo}.py
-                         #   china_ats.py = 本土通用 ATS（moka / beisen / company_spa；host 从 source_url 动态解析，浏览器拦截 SPA）
-                         #   tencent_music/antgroup/mihoyo = 必投清单大厂自建 SPA 门户（2026-07-06 live 验证：均有公开 JSON 接口，
-                         #     纯 httpx 零浏览器，社招+校招一次抓全；company_spa 吃不掉——接口不返回 per-job URL，须模板拼已验证详情路由）
-                         #   avature.py = Avature SearchJobs 通用层（siemens.py 是它的子类）：offset 翻页，
-                         #     **页长各租户不同**（西门子 6 / 欧莱雅 20）故按首页卡片数自动推断；详情链接一律取卡片
-                         #     href（各租户路径形态不同，禁止正则猜）；source_url 的服务端地区 facet 必须保留。
-                         #     ⚠️ 地区后置过滤分两档：facet 源（DROP_UNKNOWN_LOCATION=False）只丢「能确证在境外」的岗，
-                         #     Siemens 靠 search=China 全文收窄不可信故保持「地点存疑即丢」——详见 avature._in_regions。
-                         #   gllue.py = Gllue Next.js SSR 通用层（龙湖等自有域）：?page= 1-based 10 条/页，
-                         #     正文只在详情页（列表页没有），逐岗抓、走 resolve_detail_cap 由快/重档决定抓不抓。
-                         #   cnstaff.py = 聘客 cnstaff 通用层：POST /api/{tenant}/joblist.json（form `jt=0`）零鉴权，
-                         #     ⚠️「全部」职类被截断到 20 条 → 必须遍历所有分组×职类取并集按 job_id 去重；
-                         #     ⚠️ 正文只能取列表的 job_desc（详情页的「职位详情」区块公开态是空的）。
-                         #   midea/cmb/cmbc/gree.py = 必投缺口自建门户（2026-08-27 live，纯 httpx 零浏览器）：
-                         #     midea 美的 748（POST 后端 position/list，**form-encoded**，列表自带 postDuties/qualification 全文）
-                         #     cmb 招商银行 138（POST job/getList，⚠️ body 必须含 jobTypeIdList/orgIdList 两个空数组，
-                         #       少了返 EZPREC0005；returnCode!=SUC0000 要当失败抛）
-                         #     cmbc 民生银行 100（POST search.view **必须 form-encoded**；⚠️ 该站对本项目 Bot UA 返 507，
-                         #       **必须覆写 user_agent 类属性**——否则 BaseAdapter.should_skip 的 HEAD 预检就把整个源跳过、
-                         #       永远抓不到岗；jd_url **必须带 `#`**（前端 useHash）；正文走详情接口
-                         #       /portal/rest/careerrecruitment/view/{id}.view?view=careerRecruitmentView，伪 id 返空 data）
-                         #     gree 格力 64（GET api/apply/jobs，**property=1 校招/博士 + 2 社招两个板块都要抓**；
-                         #       ⚠️ 返回带 HR 真人姓名 PubName，一律忽略不入库；错误入口：gie.gree.com 是子公司、
-                         #       recruit.gree.com 是内部登录墙）
-                         #   spdb/icbc/ccb/bankcomm/cmcc = 国有大行 + 中国移动自建门户（2026-09-05 live，纯 httpx 零浏览器）。
-                         #     ⚠️ **推翻旧结论「国有大行=公告制、没有逐岗详情页」**——那是只点了几下首页、
-                         #       没读列表页 onClick 就下的判断。工行/农行/交行的详情走 `window.open`，
-                         #       在自动化浏览器里点一下**像没反应**，别再据此判它没有详情页。
-                         #     spdb 浦发 633（社343/校290；socialJobJsonList 不带 Referer 直接 500；pageSize 无效恒 10 条/页；
-                         #       recuitType 11/12 ↔ 详情 type 1/2 必须对应；closeDt=2100-12-31 是「无截止」哨兵值）
-                         #     icbc 工行 2,615（校2567/社48；qryPostList/qryPostById；postDepict 是
-                         #       **base64→urlencode→HTML** 三层包；列表夹带报名已截止的岗要按 enterEndTime 剔）
-                         #     ccb 建行 3,799（校3784/社15；NHR104/NHR107，**必须先 TXCODE=100119 热身会话**否则详情返
-                         #       「请重新登录」；响应不是合法 JSON 要复刻前端 repairJSON；jd_url **必须五参数全**
-                         #       planId/planPost/planType/orgId/secondOrgId，少一个前端就 alert+history.go(-1)）
-                         #     bankcomm 交行 16（社招；校招 0 与官网自报「暂无职位数据」一致。form-urlencoded 单字段
-                         #       REQ_MESSAGE，业务参数**必须再包一层 params**，少了返 200+JUMPTESTBP9001「系统异常」）
-                         #     cmcc 中国移动 2,205（校2110/社89/实习6；header.digest 自算
-                         #       base64(md5(ts+secret))+";"+RSA_PKCS1v15(secret,站点公钥)，RSA 用标准库手写不加依赖；
-                         #       签名错返 **HTTP 200 + code=9999** 必须按 code 判成败。⚠️ 它不在必投清单里）
-                         #     ⚠️ **两个「静默 0 产出」的坑**：① 建行对本项目 Bot UA 返 **HTTP 200 + 零字节 body**
-                         #       （HEAD 又是 200，should_skip 拦不住）→ 覆写 user_agent + 空 body 当失败抛；
-                         #       ② 工行/中国移动对 **HEAD 恒返 403**（换浏览器 UA 也一样，GET/POST 全正常）→
-                         #       不覆写 should_skip 就整源被跳过。**接新源必须逐个跑一遍 adapter.should_skip(url)**。
-                         #   abchina 农业银行 = **唯一走浏览器的一家**（校招 2,603 岗 / 列表 346 秒，46 个机构；2026-09-05 实测）。
-                         #     它不是「没有逐岗详情页」，是**接口响应体加密**：new/getInfo 明文发一把 1024 位 RSA
-                         #     公钥做密钥交换，之后 org/* 与 orgPosition/* 的响应体是 hex 密文（页面用 SM4-ECB 解），
-                         #     明文只存在于浏览器内存 → 只能 Playwright 读页面渲染好的 React state，不拦接口不解密。
-                         #     枚举：`#/{recruitType}` 页的 state.batchCardInfo 出机构 → `#/RecruitmentOrgDetails/{rt}/{orgId}`
-                         #       页的 state.posCardInfo 出岗位（recruitType 99=校招 / 100=社招）。
-                         #     ⚠️ **必须先 goto 一次首页**把会话建起来，否则 hash 路由只渲染 222 字空壳、一条都抓不到。
-                         #     ⚠️ hash 路由是**同文档导航**，换机构必须 `page.reload()`——不然上一家的卡片还在 DOM 里，
-                         #       会把上一家的岗位当成这一家的（第一版就是这么只抓到 2 个岗、还自称抓全了）。
-                         #     ⚠️ 渲染慢且不均：农银人寿 34 个岗要 >8s 才出来，等太短会得到「0 个岗」这种
-                         #       看着正常其实是漏抓的结果 → 轮询到 25s 仍为空**也不能**直接认「这家当期没在招」
-                         #       （判据见下面 marker 那条）。**这不是罕见情况**：2026-09-05 一轮 45 家里
-                         #       9 家没渲染出来，补一轮重试后 6 家拿到真岗位（34/129/91/189/20/16 = 479 个）。
-                         #       所以「补一轮重试」不是保险丝而是主路径，别当成可选优化删掉。
-                         #     ⚠️ **列表卡里一个字正文都没有**（posCardInfo 只有岗位名/地点/人数/截止）→ 不补正文
-                         #       就是 100% 薄卡、进不了 count_valid_active_jobs，这家在必投健康覆盖里恒为 0
-                         #       （2026-09-05 实测线上 2,418 个岗**全部** summary 为 NULL）。正文在逐岗详情页的
-                         #       state.posDetails：responsibilities / qualifications / requirements 三段。
-                         #       ⚠️ 不要收 posDetails.phone（HR 联系方式，同 gree 忽略 PubName）。
-                         #       逐岗约 0.7s，受 _DETAIL_CAP + 墙钟预算双闸，起点按天轮转（预算用完就停的话，
-                         #       恒从第 0 个开始会让尾部的岗永远补不到；summary 在 upsert 里空值不覆盖，故能累积）。
-                         #       ⚠️ 墙钟预算 15min 是**量出来的**：农行在 enrich shard 1（实测 61/57min），
-                         #       而 shard 2 已经 172/148min、2026-09-01 那轮 181min 被 GitHub 取消（超时上限 180）。
-                         #       想调大它先去 enrich-crawl 台账看**当期**各片耗时，别照着「今天还有余量」拍。
-                         #     ⚠️ jd_url 里的冒号是**字面量**：`#/PositionDetails/:{jobPublishId}`（前端拼串时把
-                         #       路由占位符一起拼进去了），删掉它详情页打不开。详情走 window.open，点一下像没反应。
-                         #     ⚠️ **「页面没渲染出来」会伪装成「这家没在招」**：线上首轮比本机少 162 个岗
-                         #       （2,418 vs 2,580）而 fetch_complete 还是 True。判据改成页面固定文案
-                         #       （列表页「招聘机构」/ 机构页「在招岗位」，两页不一样别混用）：有 marker+0 岗
-                         #       = 真没在招；没 marker = 没等到 = 漏抓。没等到的机构走完一圈后**补一轮重试**，
-                         #       还不行才 fetch_complete=False 并日志点名。单机构页抖一下（ERR_EMPTY_RESPONSE）
-                         #       各自 try/except，不许炸掉整轮（否则前面几十家已抓的岗一起丢 + 整源记 failed）。
-                         #     诚实边界：社招靠「热招事项」卡枚举机构，当前站点自报「暂无热招事项」故为 0；
-                         #       哪天社招开了但站点不出热招事项卡，这里会漏——上线后拿 db-report 复核。
-                         #   ⚠️ **这五家 httpx 的共性坑（cn_portal_tls.py）**：本机 macOS 是 LibreSSL + 有 IPv6、
-                         #     GitHub runner 是 OpenSSL 3 + 无 IPv6 出口 → **本机全绿、上 CI 四个源全 failed**
-                         #     （建行/交行/移动 UNSAFE_LEGACY_RENEGOTIATION_DISABLED、工行 Errno 101）。
-                         #     修法=强制 IPv4(local_address=0.0.0.0) + OP_LEGACY_SERVER_CONNECT(0x4)，
-                         #     **证书校验保持开启不用 verify=False**。这两条本机永远测不出来，靠单测断言看着。
-                         #     📌 接完源必须回读线上 crawl_runs 的 status/error_message，别拿本机跑通当交付。
-                         #   ⬆ 2026-08-27 四处「扩现有 adapter」（都不是新 adapter，故无需接线）：
-                         #     china_ats.BeisenAdapter 加**老版 SSR CMS 门户**分支（theme2，无 PortalId/无
-                         #       GetJobAdPageList，列表页 HTML 直出 xq?jobId= 锚点）→ 中芯国际 563 岗（社293/校248/海外22）。
-                         #       ⚠️ 租户是 **smics** 不是 smic（台账猜错 slug 才一直抓不到）；⚠️ 列表锚点带筛选态参数
-                         #       c/p/ky，**必须归一只留 jobId+jc**否则 canonical_jd_url 重复；⚠️ 末页判定只能靠
-                         #       「页内锚点数=0」（超出末页仍返 200+完整骨架）；⚠️ beisen_routes.json 里 {"cms":true}
-                         #       登记过时时必须**把该 host 踢出路由缓存**，否则「首见租户」分支被跳过 → 0 岗+自称抓全。
-                         #     jd.py 按 `positionDeptName` 派生子公司 company → 京东科技 209 + 京东物流 629；
-                         #     netease.py 按 `productName` 派生 → 网易有道 115 + 网易云音乐 157。
-                         #       两者**都不新增 source**（那些岗本就在现有源里，新增源会抢同一行 upsert）；靠
-                         #       normalizer 的 `raw.company or company` 覆盖 sources.company。前提=母公司在必投清单里
-                         #       是 `%子串%` 匹配，派生子公司后母公司仍覆盖（netease 侧已编成运行时守卫，前提不成立就整体关闭）。
-                         #       ⚠️ 只映**清单里逐字存在**的子公司：京东「国际事业部/探索研究院」名字不含「京东」，
-                         #       派生反而会掉出 `%京东%` 统计；网易「网易元气」子串会撞上清单里的元气森林（故用精确匹配）。
-                         #     phenom.py 加 **POST /widgets**（ddoKey=refineSearch）分支 → DHL 130 岗（租户 DPDHGLOBAL
-                         #       的 /api/jobs 恒 500）。选路不看域名：只有「首个请求就失败」才回退 widgets；
-                         #       ⚠️ 总数在 `refineSearch.totalHits` 不在 data 里；⚠️ country facet 字面量带后缀
-                         #       （"Hong Kong" 返 0，要 "Hong Kong, China"）；⚠️ 根路径按 IP 地理跳转，必须显式走 /global/en。
-                         #   iguopin.py = 国聘（国资委官方央企招聘平台）：recom-job 列表 + info 详情公开 API，纯 httpx。
-                         #     source_url 约定 https://www.iguopin.com/job?company={检索词}&match={核名词}，一源=一集团。
-                         #     ⚠️ match 走 company_name_match 严格核名（token 必须在实体名开头或只隔地名前缀），
-                         #     朴素子串会把「北京华晋中通电力」当中通快递（2026-07-26 实测），一入库就是张冠李戴。
-                         # run.py / db.py / normalizer.py / robots.py / discovery.py
-                         # company_name_match.py = 公司名归属核验纯函数（关键词类源防同名子串张冠李戴，见上）
-                         # 缺口漏斗（必投清单补供给主链路，见 docs/superpowers/specs/2026-07-26-must-apply-gap-funnel-design.md）：
-                         #   gap_census.py(清单×jobs×sources → 台账 must_apply_gap_attempts + 工作队列)
-                         #   entry_finder.py(级联搜索找官方招聘入口，每家最多 2 次、首个可信即停，非扇出)
-                         #   platform_fingerprint.py(入口页 → ATS 平台指纹 → 路由 adapter / unknown_spa / anti_bot / login_wall)
-                         #   gap_funnel.py(编排 + 验收门：插 disabled 源 → 真抓 → 回读香港库健康岗 ≥1 才 enable，
-                         #     否则删源+删本次脏岗；失败按原因退避：平台猜错 30d / 无岗 14d / 反爬·登录墙转人工不再跑)
-                         # ops_runs.py = 后台任务每日台账旁路写入（写 ops_runs 表，失败不阻断主任务；运营看板②每日战报数据源）
-                         # probe.py = 扩源探活器：批量 live 探活候选源，仅把「真返回岗位」的写进迁移（本机跑 python3 probe.py --all --emit 025）
-                         # 企业 logo：fetch_company_logos.py + logo_util.py（海外 CI `company-logos.yml` 每周跑）。
-                         #   公司范围 = sources.company ∪ 必投清单品牌短名（校招专区/看板按短名展示，不补进来就只能首字母兜底）；
-                         #   三源取最清晰者且都过图片内容嗅探：① DuckDuckGo（干净但收录率低，live 实测 65/205）
-                         #   ② 公司官网自有图标 apple-touch-icon/icon//favicon.ico（覆盖率主力 166/205，公司自证、常 180px）
-                         #   ③ icon.horse 仅兜底。⚠️ icon.horse 的 fallback 是**按域名首字符生成的灰底字母块**，
-                         #   指纹必须 a-z0-9 各取一遍（旧实现只取 2 个 → 303/538 张假 logo 入库）；
-                         #   `--repair-placeholders` 复检存量（命中占位指纹 或 同图跨多域名出现 = 假 logo）并重抓。
-                         #   域名来自 logo_util.COMPANY_DOMAIN_OVERRIDES（每条须 live 核验官网 title 自证，核验不过一律不收）。
-                         # 洞察供给：insight_backlog.py(T2 Wikidata+EDGAR+巨潮 / T3 多维查询包 drain：**默认 3 主题** 年终奖/加班文化/晋升发展→各维度（2026-08-27 由 5 砍到 3 控成本：砍掉的「面试难度」其维度 hiring 已由 T1 派生免费供给、「实习体验」与加班文化同属 culture 重复；五个主题都还在 T3_TOPIC_CATALOG 里，env `INSIGHT_T3_TOPICS` 可随时调回）；支持 --company 单公司现查；EDGAR 财报员工数会覆盖 headcount_band) / insight_engine.py(接地→判官→共识) / wikidata.py / official_edgar.py(SEC 美股上市+业绩 XBRL companyfacts) / official_cninfo.py(巨潮 A股,默认关需 INSIGHT_CNINFO_ENABLED；2026-07-02 live 验过 stockList 结构与比亚迪/顺丰匹配，但 repo Variable 仍需有效 GitHub 凭据启用) / insight_sweep.py(过期下架)
-                         # geo.py / sponsorship.py = country_code/job_scope/地区过滤 + visa/sponsorship 信号派生
-                         # search_router.py = T3 多源搜索路由：search_{bocha,tavily,serper,qianfan} provider + search_budget(每源日顶 search_usage 表)；配哪个 key 用哪个、未配跳过、多源并取喂≥2 publisher 共识门
-supabase/migrations/     # 001_init → 002_rls → … → 007_candidate_profile_summaries
-                         # → 008_discovery_run_diagnostics → 009_discovery_async_runs → 010_seed_spa_sources
-                         # → 011_seed_foreign_ats_sources → 012_seed_apple_china_source
-                         # → 013_career_insights（模块 B 5 表 + RLS）→ 014_seed_career_insights（四维种子草稿）
-                         # → 015_verify_experience_sources（experience 真实来源核验）
-                         # → 016_rewrite_culture_and_experience_copy（去「避坑」+ 9 条 experience 正文改通俗）
-                         # → …（前缀递增，详见目录）→ 158_admin_health_snapshot → 159_admin_ops_dashboard（ops_runs 台账表 + 运营看板聚合函数）→ 165_insight_enrich_now_and_hiring_monthly
-                         # → 184_company_logos → 185_must_apply_gap_attempts（必投缺口漏斗台账）
-                         # → 166_insight_submissions → 167_overseas_prefs → 168_sources_regions → 169_seed_overseas_regions → 172_user_pref_experience_stage（求职阶段字段）
-.github/workflows/daily-crawl.yml   # 每日 + 手动抓取
-.github/workflows/gap-funnel.yml    # 必投缺口漏斗（每日 UTC 22:40；默认 dry-run，apply=true 才写库）
-tests/                   # node --test 单测
+                         # SourceTable(presentational,含 reloadSignal) / SourceManager / AddSourceForm
+                         # InsightsAdminClient / CompanyInsightDrawer / SavedCompare（后两者 portal 到 body 防闪烁）
+                         # ui/  ← 设计组件库 21 个原语（见下「设计组件库」一节）
+lib/                     # supabaseClient / supabaseService / auth / auth-claims / apiAuth / scoring / types / utils
+                         # jobs-store/{client,search,read,write}  ← 香港 jobs 库唯一出入口
+                         # must-apply-list(.ts+.json 北极星口径) / admin-health / track / match-total / job-filter
+                         # campus-{facets,user-industries,zone,season} / job-fields / relative-time
+                         # geo / job-scope / sponsorship / role-lexicon-en / china-keyword-expansion / canonical-url
+                         # insight-{verification,match,client,bundle,chip-format,enrich-now,library} / career-path
+                         # source-adapters / live-search / official-discovery / baidu-qianfan-search / liveness-client
+                         # ui/{variants,hooks}  ← 组件库变体表与 hooks（变体表必须放 .ts，见「设计组件库」）
+crawler/                 # ⚠️ adapters/ 逐个 adapter 的接口细节与坑 → `docs/crawler-adapter-notes.md`（改/接前必读）
+                         # run.py / db.py / jobs_db.py(香港库写) / normalizer.py / robots.py / discovery.py
+                         # enrich.py + enrich_backlog.py(补正文 / 逐岗探活) / audit_dead_links.py(浏览器巡检)
+                         # gap_census.py → entry_finder.py → platform_fingerprint.py → gap_funnel.py(必投缺口漏斗)
+                         # must_apply.py(清单口径,与 lib/must-apply-list.json 同源) / company_name_match.py(归属核名)
+                         # insight_backlog.py / insight_engine.py / search_router.py / llm_budget.py(洞察供给与成本闸)
+                         # ops_runs.py(台账) / ops_watchdog.py(告警规则) / probe.py(扩源探活) / audit_stale_active.py
+                         # geo.py / sponsorship.py / cn_portal_tls.py(国内门户 TLS 兼容,见下红线)
+supabase/migrations/     # 已到 238+（`ls supabase/migrations` 看全量，历史脉络见 docs/crawler-adapter-notes.md）
+                         # 前缀递增且不得重复；seed 类文件名必须带 _seed_（CI 硬校验）
+.github/workflows/       # daily-crawl / campus-crawl / enrich-crawl / enrich-backlog / liveness-sweep
+                         # dead-link-audit / purge-expired / db-report / ops-watchdog / gap-funnel
+                         # auto-discover(-browser/-overseas) / migrate / jobs-db-migrate / maintenance-vacuum
+tests/                   # node --test 单测（*.test.js）；crawler 侧 unittest 在 crawler/test_*.py
 ```
+
+**接新 adapter / 改 adapter 前必看的三条通用红线**（个案细节全在 `docs/crawler-adapter-notes.md`）：
+- **必须逐个跑一遍 `adapter.should_skip(url)`**：工行 / 中国移动对 HEAD 恒返 403，建行对本项目 Bot UA 返「HTTP 200 + 零字节 body」——不覆写就整源被静默跳过、永远 0 产出且不报错。
+- **本机绿 ≠ CI 绿**：本机 macOS 是 LibreSSL + 有 IPv6，GitHub runner 是 OpenSSL 3 + 无 IPv6 出口 → 国内门户常「本机全通、CI 四个源全 failed」。修法在 `crawler/cn_portal_tls.py`（强制 IPv4 + OP_LEGACY_SERVER_CONNECT，**证书校验保持开启、不许 verify=False**），这两条本机永远测不出来，靠单测断言看着。
+- **接完源必须回读线上 `crawl_runs` 的 status / error_message**，别拿本机跑通当交付。
 
 ## 数据库表（核心表，权限见 002_rls.sql）
 
@@ -448,23 +244,14 @@ tests/                   # node --test 单测
 
 共享 `jobs`，偏好与操作按 `user_id` 隔离（同一岗位可被 A 标投递、B 标收藏）。
 
-### 模块 B 职业洞察层（migration 013/014，与岗位层严格分离）
+### 模块 B 职业洞察层（与岗位层严格分离，migration 013/014）
 
-| 表 | 用途 | 权限 |
-|---|---|---|
-| company_profiles | 公司画像（company 唯一 + aliases 对齐 jobs.company） | 所有人读，admin/service 写 |
-| insight_items | 洞察条目（dimension/grade/content/时效/payload） | 读仅 `active+deidentified`，admin/service 写 |
-| insight_sources | 溯源（链接 + 短摘要，禁整段原文） | 读仅 `deidentified`，admin/service 写 |
-| insight_item_sources | 条目↔来源 多对多 | 所有人读，admin/service 写 |
-| insight_disputes | 通知-删除申诉（§7.3） | 用户可插/读自己，admin 读全部+改状态 |
-| company_hiring_monthly | 月度招聘量聚合结构（年度大小年历史底座；数据不足一年时不得用于 YoY 结论） | service_role 写，admin 读 |
-
-五维 `dimension`：`timing`(事实为主) / `listing`(上市/股票，事实，migration 023/024，易变行情不落库数字只存 payload.quote_url 链接) / `compensation_intensity` / `path` / `culture`(做浅重免责)。
-AI 辅助录入：`/api/insights/admin/ai-draft`（仅 admin、单次 LLM 调用、复用 lib/llm，产出仅草稿强制 status=retired，必人工核对+补真实来源过门后才展示；不进 cron、不按用户触发，控账单）。
-三级 `grade`：`fact`(须带来源) / `experience`(须 sample_size≥5 且多源) / `rumor`(默认拦截)。
-展示前必过 `lib/insight-verification.ts` 的分级/时效/去标识/归因门；无可信结果返回 `insight_unverified` / `insight_outdated`。
-**数据来源（v2.0 三层供给）= T1 派生（自有岗位库现算 timing/hiring/salary，读时零成本）+ T2 官方事实（Wikidata + SEC EDGAR 上市，cron）+ T3 经验（多源搜索 `search_router`→判官核验，cron）+ 人工策展 seed/admin 录入。合规线不变：官方源=fact、搜索源=去标识聚合+判官+≥2源，不直接爬社区；admin AI 辅助草稿仍须人工核对过门才展示。** **供给自动化（2026-06-20 升级，2026-07-02 补现查快车道）**：T3 检索多源化（`search_router`，见「百度千帆额度」段）；T2 加 SEC EDGAR 官方上市源；**现查触发**（`/api/insights` GET 对有在招岗位但无新鲜存储型洞察的公司，先幂等 upsert 画像，再按 `INSIGHT_ENRICH_COOLDOWN_HOURS` / `INSIGHT_ENRICH_HOURLY_CAP` 通过 `discovery_runs(mode='insight_enrich')` 节流台账触发 `insight-enrich.yml` 单公司 `workflow_dispatch`；workflow 跑 `insight_backlog.py --company` 的 T2 + T3，缺 service role/GitHub dispatch 配置时只返回 `enrich_now.skipped`，不影响抽屉展示）；**过期下架**（`insight-staleness-sweep.yml` 每日把 `valid_until` 过期的 active → retired，治「又旧」）；**即时性窗**（搜索四源统一限**近 3 年**：Tavily `start_date`/Serper `tbs` 加时间窗，千帆/博查本就 ≤1 年；T3 经验洞察写入带 `valid_until`=+1 年 → 过期巡检自动退役、180 天复核续期；重富化先退役旧代 public_web culture，不堆积老聚合）。设计见 `docs/superpowers/specs/2026-06-20-career-insights-supply-upgrade-design.md`。 014 种子为待人工核实草稿；015 已用真实公开链接核验 experience 来源；016 把 culture 的「（避坑提示）」改「温馨提示」、9 条 experience 正文改通俗（去掉逐条媒体罗列，正文只留一句轻量归因「据公开讨论/据公开报道」以过 `passesAssertionLint`，统一「来源聚合·去标识」声明只在抽屉顶部 banner 出现一次）。抽屉会把 `payload.hiring_signal` 渲染为招聘动态芯片，把 listing `payload.financials` 渲染为业绩芯片。
-**日常维护全程网页、零 SQL**：admin 在 `/admin/insights` 增/改/下架洞察、贴来源、处理申诉（走 `/api/insights/admin` + `/api/insights/dispute/resolve`，service-role 写、必过校验门）；在 `/sources` 用「添加源」表单加招聘源（走 `/api/sources`）。`adapter_name` 取值见 `lib/source-adapters.ts`（须与 `crawler/run.py` 的 ADAPTERS 对齐；greenhouse/lever 是通用 ATS，填公司名+ATS 地址即可）。
+六张表（company_profiles / insight_items / insight_sources / insight_item_sources / insight_disputes / company_hiring_monthly）、五维 dimension、三层供给（T1 自有岗位库派生 / T2 官方事实 Wikidata+EDGAR / T3 多源搜索+判官）、admin 网页维护零 SQL——**细节全在 `docs/insights-module.md`，做这个模块前必读**。正文只留四条不可越的红线：
+- **三级 `grade`**：`fact` 须带来源 / `experience` 须 sample_size≥5 且多源 / `rumor` **默认拦截**。
+- **展示前必过 `lib/insight-verification.ts`** 的分级 / 时效 / 去标识 / 归因门；无可信结果返回 `insight_unverified` / `insight_outdated`，**不许降级放行**。
+- **只走搜索 API 取去标识聚合 + 判官核验 + ≥2 源，不直接爬社区**；官方源=fact，搜索源必须聚合去标识。
+- **AI 辅助草稿强制 `status=retired`**，必须人工核对 + 补真实来源过门才展示；不进 cron、不按用户触发（控账单）。
+- 检索额度是**全局共享**的（见「搜索额度是全局共享的」一节）；千帆免费额度 50/天，耗尽时设 `BAIDU_QIANFAN_SEARCH_DISABLED=true`，**不要反复点「发现」或跑 5-query live 验证**。
 
 ## 四层「搜索/刷新」必须区分（高频踩坑点）
 
@@ -522,55 +309,16 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 全库 596 行含独立 `cn` 词的 active 岗逐行核过，现判定 100% 已是 CN ⇒ 加它零误伤。
 改这条要 `crawler/geo.py` 与 `lib/geo.js` **两边同改**（回归钉在 test_geo.py / geo.test.js）。
 
-### 🚫 中文地名不许用「含 省/市/区/县/自治州 → 中国」那条规则（2026-09-05 立）
+### 🚫 中文地名归属：宁可漏判，不可错杀（2026-09-05 立）
 
-同一个词表还有一半是**中文地名**：旧表的中文标记只有「中国」+21 个一线城市 ——
-认得 `Changchun`，认不得「长春市」。live 实测 27.8 万个「中文地点 + 在招」的岗里 **8.3 万个
-`country_code` 为空**，它们的国内外归属**完全押在 `sources.regions` 一个字段上**
-（`derive_job_scope` 的「抽不出国家就问源」分支）。而海外扩展一直在放开源的 regions，
-某个源哪天被加上 US，它名下这批岗就**静默**翻成 overseas —— 不报错，只是国内供给少一块。
-
-⚠️ 修它时最诱人的写法是「地点含 省/市/区/县/自治州 → 中国」，实测能覆盖 84% 的缺口，
-**但它会把「新北市 / 大阪市 / 東京都 / 首尔市」一起判成中国**，直接踩台湾红线。
-✅ 正解 = `CHINA_CJK_PLACE_MARKERS` 显式列名（省级 34 + 地级市/自治州/地区/盟，352 条；
-**县区级不收**，「保定市-莲池区」靠上级前缀命中）+ `TAIWAN/JAPAN/KOREA_CJK_MARKERS` 配套兜底。
-上线后 89.4% 的缺口被认出（61,292 个在招岗），回填 104,158 行。
-
-**三条不许改坏的不变量**：
-1. **顺序是设计的一部分**：`TW` 在 `CN` **前**（「Taipei, Taiwan, Province of China」含 "china"，
-   排后面会被判成大陆放行）；`JP`/`KR` 在 `CN` **后**（「青岛市、日本、潍坊市」这类一岗多地写法
-   要保住 CN —— 不能因为多写一个国名就把中国岗翻成海外）。
-2. **选词按「宁可漏判、不可错杀」**：漏判一个台湾岗只是回到 `code=None`，非远程照样被
-   `location_in_scope` 丢掉（**无害**）；错判一个大陆岗是把在招岗**静默删掉**（有害）。
-   所以有重叠的一律只收「繁体裸名 + 简体带后缀名」：常州有**新北区** → TW 只收「新北市」；
-   福州有**连江县** → 只收繁体「連江」；日本**北海道**含「北海」→ CN 只收「北海市」；
-   「邢台南和区」含「台南」→ TW 只收「台南市」。韩国的「大田/光州/汉城」刻意不收
-   （福建有大田县、潢川古称光州、「武汉城市圈」含汉城）。
-3. **词表两端逐条一致**：`tests/geo.test.js` 会读 `crawler/geo.py` 抽四个词表做 deepEqual，
-   改一边不改另一边直接红（已做变异验证）。
-
-📌 **改词表的验收方法**（别只跑单测）：把全库 `select distinct location` 拉下来（约 2 万个写法），
-拿改前 / 改后两份 `derive_country_code` **逐条对拍**，「大中华 → 境外」这个方向**必须为 0**——
-那是唯一会让国内岗凭空消失的方向。
-⚠️ **回填期间只要有 crawl 在跑就会被刷回去**：`country_code`/`job_scope` 在 `_UPDATE_COLS` 里、
-不在 `_PRESERVE_IF_EMPTY` 里，列表重抓会用**当时 CI 上那版代码**覆盖。2026-09-05 实测：
-开跑前查了没有 workflow 在跑，回填完 3 分钟后 `campus-crawl` 起来，用旧代码把 11,613 行刷回 NULL。
-**正确顺序是「先推代码、再回填」**，或者回填后复查一遍。
-
-| Source | 状态 | 详情链接格式 |
-|---|---|---|
-| Apple | 可用（crawler + 已知源刷新） | `jobs.apple.com/en-us/details/...` |
-| Siemens | 可用（crawler） | `jobs.siemens.com/en_US/externaljobs/JobDetail/...` |
-| 百度 | 可用 | `talent.baidu.com/jobs/detail/{recruitType}/{postId}` |
-| 京东 | 可用 | `zhaopin.jd.com/web/job-info-detail?requementId=...` |
-| 美团 | 可用（httpx） | `zhaopin.meituan.com/web/position/detail?jobUnionId=...` |
-| 快手 | 可用（Playwright 签名拦截 + 全分页） | `zhaopin.kuaishou.cn/#/official/social/job-info/{id}` |
-| 哔哩哔哩 | 可用（匿名 CSRF + httpx） | `jobs.bilibili.com/social/positions/{id}` |
-| 拼多多 | 可用（httpx，校招） | `careers.pddglobalhr.com/campus/grad/detail?positionId=...` |
-| vivo | 可用（httpx） | `hr.vivo.com/job-detail?_irjc=...&_irjid=...` |
-| 比亚迪 | 可用（公开全列表 + Playwright 批量加密 URL） | `job.byd.com/portal/pc/#/social/socialPositionDetails?...` |
-| 顺丰 | 可用（httpx，最近 50 页诚实 cap） | `hr.sf-express.com/JobSearchById/{id},{positionType}` |
-| 海尔 | **暂不可用** | 只解析到入口页，保持 `partial_success` |
+`derive_country_code` 认不出地名时，岗位的国内外归属**完全押在 `sources.regions` 一个字段上**——某个源哪天被放开 US，它名下这批岗就**静默**翻成 overseas，不报错、只是国内供给少一块（live 实测曾有 8.3 万个「中文地点 + 在招」的岗 `country_code` 为空）。所以词表必须认中文地名：`CHINA_CJK_PLACE_MARKERS`（省级 34 + 地级市 / 自治州 / 地区 / 盟 352 条，**县区级不收**，「保定市-莲池区」靠上级前缀命中）+ `TAIWAN/JAPAN/KOREA_CJK_MARKERS` 配套兜底。
+- 🚫 **不许用「地点含 省/市/区/县/自治州 → 中国」这条规则**：它能覆盖 84% 缺口，但会把「新北市 / 大阪市 / 東京都 / 首尔市」一起判成中国，**直接踩台湾红线**。
+- **顺序是设计的一部分**：`TW` 必须排在 `CN` **前**（「Taipei, Taiwan, Province of China」含 "china"，排后面会被当大陆放行）；`JP`/`KR` 必须排在 `CN` **后**（「青岛市、日本、潍坊市」这类一岗多地写法要保住 CN）。
+- **选词只收「繁体裸名 + 简体带后缀名」**：常州有新北区 → TW 只收「新北市」；福州有连江县 → 只收繁体「連江」；日本北海道含「北海」→ CN 只收「北海市」；「邢台南和区」含「台南」→ TW 只收「台南市」。**漏判一个台湾岗无害**（回到 `code=None`，非远程照样被 `location_in_scope` 丢掉），**错判一个大陆岗是把在招岗静默删掉**。
+- **外企 ATS 给的小写 `cn` 国别码也必须认**：它们的城市名是空格分词拼音（"He Fei Shi" / "Ning Bo Shi"），与词表按词边界一个都对不上 → 不认 `cn` 就把中国岗当非中国岗丢了。
+- **词表两端逐条一致**：`tests/geo.test.js` 会读 `crawler/geo.py` 抽词表做 deepEqual，改一边不改另一边直接红。改 `crawler/geo.py` 必须同改 `lib/geo.js`。
+- ⚠️ **顺序必须是「先推代码、再回填」**：`country_code`/`job_scope` 在 `_UPDATE_COLS` 里、不在 `_PRESERVE_IF_EMPTY` 里，列表重抓会用**当时 CI 上那版代码**覆盖——2026-09-05 回填完 3 分钟 `campus-crawl` 起来，用旧代码把 11,613 行刷回 NULL。
+- 📌 验收方法：拉全库 `distinct location`（约 2 万个写法）**逐条对拍改前 / 改后**，「大中华 → 境外」这个方向**必须为 0**。逐条选词理由与实测数字 → `docs/module-deep-notes.md`。
 
 ## 🚫「接口返 0 / 403」不能证明「对方没开」（2026-09-04 立，一晚栽三次）
 
@@ -668,57 +416,17 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 ✅ 统一口径：**逐渠道判**「这个渠道抓到它自报的总数了吗」，全部为真才算抓全。
 huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 adapter 照抄。
 
-## ⚠️ crawl_runs：`running` 是占位符不是状态，`skipped` 里还混着第三类（2026-09-05 立，迁移 234）
+## ⚠️ crawl_runs：`running` 是占位符不是状态（2026-09-05 立，迁移 234）
 
-`create_crawl_run` **在 insert 那一刻就写一个占位符**，跑完才由 `update_crawl_run` 覆盖成终态。
-进程半途死掉（CI 超时/取消、OOM、被 kill）这行就再没人回写。占位符原来是 `'skipped'`，
-于是「跑崩了」和「按设计跳过」**在 status 上完全同形**，而规则 F 只认 `failed` → 静默丢源。
-迁移 234 把占位符改成 `'running'`（对齐 `discovery_runs` 早就有的 queued/running）。
+`create_crawl_run` **在 insert 那一刻就写一个占位符**，跑完才由 `update_crawl_run` 覆盖成终态。进程半途死掉（CI 超时 / 取消、OOM、被 kill）这行就再没人回写。占位符原来是 `'skipped'`，于是「跑崩了」和「按设计跳过」**在 status 上完全同形**，而规则 F 只认 `failed` → 静默丢源。迁移 234 把占位符改成 `'running'`（对齐 `discovery_runs` 早有的 queued/running）。
 
-- **判「没收尾」用 `finished_at is null`，不要只认 `status='running'`**：存量 72 条历史孤儿
-  没有回填，至今仍是 `skipped`+`finished_at is null`。只认新占位符会漏掉它们。
-  告警在 `ops_watchdog` 规则 I（`evaluate_unfinished_crawls`，宽限期 `UNFINISHED_CRAWL_HOURS=6`）。
-- ❌ **快照里的「空记录」不等于崩溃**：2026-09-05 当场看到 10 个源（华为/字节跳动/伊利/顺丰…）
-  留着空记录，**1~3 分钟后全部 success 收尾** —— 它们只是查询那一瞬间在飞。
-  ✅ 防：判据必须带宽限期，别把 `finished_at is null` 单独当证据（迁移 234 注释把这 10 条
-  当成 CI 被杀的例子，**那条是错的**，已在规则 I 的 docstring 里更正）。
-- ❌ **CI 全绿照样丢源，别直奔 workflow 超时**：2026-09-04 两批成因相反 ——
-  19:11 的 `daily-job-crawl` 确实 failure+步骤被中断（3 条）；而 09:32 的 `enrichment-crawl`
-  **六片全 success、guard 也 success**，照样有 7 个 workday 源开跑后再无下文。
-  ✅ 防：看到规则 I 的告警，先确认那次 run 到底红没红，再决定查 CI 还是查 adapter。
+- **判「没收尾」用 `finished_at is null`，不要只认 `status='running'`**：72 条历史孤儿没回填，至今仍是 `skipped` + `finished_at is null`，只认新占位符会漏掉它们。告警在 `ops_watchdog` 规则 I（`evaluate_unfinished_crawls`，宽限期 `UNFINISHED_CRAWL_HOURS=6`）。
+- ❌ **快照里的「空记录」不等于崩溃**：2026-09-05 当场看到 10 个源（华为 / 字节跳动 / 伊利 / 顺丰…）留着空记录，**1~3 分钟后全部 success 收尾**——它们只是查询那一瞬间在飞。✅ 防：判据必须带宽限期，别把 `finished_at is null` 单独当证据（迁移 234 注释把这 10 条当成 CI 被杀的例子，**那条是错的**，已在规则 I 的 docstring 里更正）。
+- ❌ **CI 全绿照样丢源，别直奔 workflow 超时**：2026-09-04 两批成因相反——19:11 的 `daily-job-crawl` 确实 failure + 步骤被中断（3 条）；而 09:32 的 `enrichment-crawl` **六片全 success、guard 也 success**，照样有 7 个 workday 源开跑后再无下文。✅ 防：看到规则 I 的告警，先确认那次 run 到底红没红，再决定查 CI 还是查 adapter。
+- **终态两次都没写成**（成功路径 `update_crawl_run` 抛错落进 except、except 里再写 `failed` 又失败）→ 计进 `daily_crawl` 台账的 `ops_runs.metrics.crawl_run_unrecorded` 并打一条 `::warning::`。它是**唯一**能区分「进程被杀」和「进程活着但回写失败」的证据（上面 7 个 workday 源正卡在这个岔口，GitHub 日志已截断、事后无从复原）。⚠️ 目前没有告警规则读这个指标，排查规则 I 时要手动对读。
+- **`skipped` 里曾混着「连不上」**：HEAD 预检失败被 `return f"Connection failed: {e}"` 记成「跳过」，而规则 F 只认 `failed` → 一个永久连不上的源可以无限期静默。已于 `729df39`（2026-08-28）改成 `except Exception: return None`（fail-open 且不进 host 缓存），live 复核修复前 53 条、**修复后 0 条**；AST 扫过全部 36 个 `should_skip` 覆写确认无一在 except 里 return 跳过原因，路径已封死。
 
-### 第三类：连不上曾被 `should_skip` 吞成 `skipped`（已修，留碑是为了另一个教训）
-
-全表 3,455 条 `skipped` 拆开（2026-09-05 实测）：**3,383 真跳过 + 72 没收尾 + 0 第三形态**
-（`finished_at`/`error_message` 两个判据完全同构，不存在「有收尾无原因」或「无收尾有原因」）。
-但在那 3,383「真跳过」内部有 **53 条根本不是设计跳过**：`Connection failed: timed out` /
-`_ssl.c:999 handshake timed out` / `Errno 101 Network is unreachable` —— 是 HEAD 预检连不上对方，
-被 `return f"Connection failed: {e}"` 记成了「跳过」。
-真正的设计跳过是这几种：iguopin 详情核验 2,046 / wecruit 板块未发布 506 / feishu 门户 404 504 /
-robots 禁止 218 / wecruit 门户不存在 55。
-
-危险在于：**规则 F「源连续失败」只认 `status='failed'`**，被吞成 `skipped` 的源永远凑不满
-「全部 failed」→ 一个永久连不上的源可以无限期静默。
-
-✅ **已修**：`729df39`（2026-08-28 02:00）把那行改成 `except Exception: return None`
-（fail-open 且不进 host 缓存）→ 连不上就照常往下抓、抓不动落 `failed`，规则 F 认得出。
-live 复核：修复前 53 条、**修复后 0 条**，最后一次 2026-08-27 07:59。
-AST 扫过全部 36 个 `should_skip` 覆写，**没有一个**在 `except` 里 return 跳过原因，路径已封死。
-
-⚠️ **真正要记的教训是别的：我差点把这个已修的洞又修一遍。**
-症状是从**线上存量数据**里查出来的（54 条历史行还躺在表里），读起来像「现在还在发生」，
-而它其实 9 天前就停了。**看到存量里的坏数据，第一件事是查「最后一次发生是什么时候」**，
-不是直接去改代码 —— `select max(started_at)` 一句话的事，能省掉一整轮返工，
-更能避免「修一个不存在的问题」顺手把好代码改坏。
-
-### `crawl_runs` 终态没写成 → 看 `ops_runs.metrics.crawl_run_unrecorded`（2026-09-05 加）
-
-`_process_one_source` 里成功路径的 `update_crawl_run` 抛错会落进 `except`，那里再写一次 `failed`；
-**两次都失败**时旧代码只 `print` 一行就放过 —— 行停在 `running` 占位符上，规则 I 能看见这条孤儿，
-却看不出成因。现在这种情况会计进 `daily_crawl` 台账的 `crawl_run_unrecorded`，并打一条
-`::warning::`。它是**唯一**能区分「进程被杀」和「进程活着但回写失败」的证据：
-2026-09-04 那 7 个 workday 源就卡在这个岔口 —— enrichment-crawl 六片全 success、guard 也 success，
-GitHub 日志又已被截断，事后无从复原。⚠️ 目前没有告警规则读这个指标，排查规则 I 时要手动对读。
+🪞 **这块碑真正要记的教训**：我差点把这个**已修**的洞又修一遍。症状是从**线上存量数据**里查出来的（54 条历史行还躺在表里），读起来像「现在还在发生」，其实它 9 天前就停了。**看到存量里的坏数据，第一件事是查「最后一次发生是什么时候」**（`select max(started_at)` 一句话的事），不是直接去改代码——否则会「修一个不存在的问题」，还可能顺手把好代码改坏。
 
 ## 🚫 归属准确性没有旁路 —— 国聘集团展开曾 84% 挂错公司（2026-09-04 立）
 
@@ -763,49 +471,17 @@ GitHub 日志又已被截断，事后无从复原。⚠️ 目前没有告警规
 
 ## ⚠️ 名字对不上 ≠ 没有源：必投清单的别名 aliases（2026-09-04 立）
 
-`resolve_owner` 那套是**单向子串**（清单名 ⊂ 库里名），救不了「字面完全不重叠」这一类：
-壳牌在库里记的是英文 `Shell`，缺口普查拿中文「壳牌」匹配 `sources.company` 匹配不上
-→ 判「零源缺口」→ **插了第二条源** → 与已有源是同一个 Workday 站点仅大小写不同
-（`shell/ShellCareers` vs `shell/shellcareers`）→ 大小写带进 jd_url、`canonical_jd_url` 区分大小写
-→ 唯一索引拦不住 → **同一个岗在库里存两行**（迁移 225 已修）。
+`resolve_owner` 是**单向子串**（清单名 ⊂ 库里名），救不了「字面完全不重叠」这一类：壳牌在库里记的是英文 `Shell`，缺口普查拿中文「壳牌」匹配不上 → 判「零源缺口」→ **插了第二条源** → 与已有源是同一个 Workday 站点仅大小写不同 → 大小写带进 jd_url、`canonical_jd_url` 区分大小写 → 唯一索引拦不住 → **同一个岗在库里存两行**（迁移 225 已修）。
 📌 **「有岗但指标显示 0」比「真没岗」更危险——它会驱动人去重复补源。**
-
-✅ 修法 = 清单条目可选 `"aliases": ["%Continental%"]`（ILIKE 模式，与 `pattern` 同语义）：
-- 两端共读同一份 JSON：TS `mustApplyPatterns()` / Python `must_apply.company_patterns()`，
-  **改一边的语义必须同改另一边**，否则北极星与缺口台账会给出两个互相打架的数字。
-- 生效点：`gap_census.classify_company`（源 + 岗）、北极星 `computeMustApplyCoverage`、
-  `must_apply.patterns()`（探活倾斜/富化的成员判断）、缺口漏斗验收门 `_sample_that_passes`
-  （新源抓回英文公司名时不再被当张冠李戴删掉）、`owner_index()`（归属判定认英文名）。
-- ⚠️ `owner_index()` 不传 scope = 国内+海外并集，此时**规范名恒压过别名**（同一家公司
-  两份清单两个名字：国内「大陆集团」/ 海外「Continental」）；要跨语言归属就明确传 `scope`。
-- ⚠️ 加别名 = **改北极星口径**，必须逐条有据（库里真有这一行公司名）。
-  `tests/must-apply-list.test.js` 把当前别名清单钉死 + 张冠李戴门（别名不得命中同清单另一家）。
-- ⚠️ **别拿改名当修法**：把清单里的「大陆集团」改成 `Continental` 会把 352 个海外岗
-  算成国内供给。别名只改「怎么匹配」，不改「这家公司归哪份清单」。
-- 🔎 复查同类：`sources`/`jobs` 里纯 ASCII 公司名 × 国内清单（2026-09-04 实测只剩
-  Continental=大陆集团、Bayer=拜耳），中文公司名 × 海外清单（实测 18 家，见同日 commit）。
-
-✅ **配套口径变更（2026-09-05 创始人拍板）：必投覆盖率只数「本 scope 自己的岗」。**
-此前北极星与缺口普查的岗位聚合都**不看 `job_scope`**，两份清单共吃一个合计 →
-海外清单的星巴克显示 1,920 个健康岗（实际全是中国门店岗）、国内清单的松下显示 226 个
-（实际 18,318 个岗全在海外）。现在：
-- 北极星 `computeMustApplyCoverage(list, aggregates, scope)` 按 scope 取数；主聚合改成
-  `group by company, job_scope` 后在 JS 合并（live 实测与「加 8 个 count filter」耗时同档，
-  1.71s vs 1.80s，但不必给 43.8 万行每行多算 8 个表达式）。平铺字段仍是**两 scope 合计**，
-  老语义不变；scope 拆分在 `byScope`。
-- 缺口普查 `_JOB_AGGREGATE_SQL` 计数带 `job_scope = %(scope)s`（**参数绑定，不拼字符串**），
-  品牌 rollup 列同样过滤，否则海外岗会从父公司门户后门漏进国内覆盖。
-- **口径影响（live 实测，别再重算）**：国内 329 家 healthy 228→227（松下）；
-  海外 327 家 162→132（星巴克/优衣库/凯德/特斯拉/DHL…共 31 家状态改变）。
-- ⚠️ **「本范围 0」必须解释**，否则会被读成「供给没了」：台账 evidence 记
-  `other_scope_healthy_jobs`，看板每家公司标签追加「另有 N 个岗在海外/国内」
-  （`otherScopeNote`）。两者处置完全不同——前者要补源，后者什么都不用做。
-- ⚠️ `job_scope` 只有 `domestic`/`overseas` 两个取值、无 NULL（2026-09-05 全库实测
-  32.7 万 + 11.1 万 = 43.8 万 active 全覆盖）。真冒出第三种取值时**宁可不计入任一 scope**，
-  也不要偷偷算进国内（`mergeScopeRows` 已如此，有断言钉死）。
-- ⚠️ `unstable_cache` 条目跨部署存活（TTL 180s），上线那一小段缓存里是**旧形状**的行 →
-  `scopedCounts()` 没有 byScope 时回退平铺合计（**不许改成直接 `byScope[scope]`**，会把
-  /admin/health 打挂）。
+- ✅ 修法 = 清单条目可选 `"aliases": ["%Continental%"]`（ILIKE 模式，与 `pattern` 同语义）。**TS `mustApplyPatterns()` 与 Python `must_apply.company_patterns()` 共读同一份 JSON，改一边的语义必须同改另一边**，否则北极星与缺口台账会给出两个互相打架的数字。
+- ⚠️ **加别名 = 改北极星口径**，必须逐条有据（库里真有这行公司名）；`tests/must-apply-list.test.js` 把当前别名清单钉死 + 张冠李戴门（别名不得命中同清单另一家）。
+- ⚠️ **别拿改名当修法**：把清单里的「大陆集团」改成 `Continental` 会把 352 个海外岗算成国内供给。别名只改「怎么匹配」，不改「这家归哪份清单」。
+- ⚠️ `owner_index()` 不传 scope = 国内+海外并集，此时**规范名恒压过别名**；要跨语言归属就明确传 `scope`。
+- ✅ **必投覆盖率只数「本 scope 自己的岗」**（2026-09-05 创始人拍板）：此前两份清单共吃一个合计 → 海外清单的星巴克显示 1,920 个健康岗（实际全是中国门店岗）。缺口普查 `_JOB_AGGREGATE_SQL` 的 `job_scope` 必须**参数绑定、不拼字符串**；品牌 rollup 列同样过滤，否则海外岗会从父公司门户后门漏进国内覆盖。
+- ⚠️ **「本范围 0」必须解释**，否则会被读成「供给没了」：台账记 `other_scope_healthy_jobs`，看板标「另有 N 个岗在海外/国内」（`otherScopeNote`）——前者要补源，后者什么都不用做。
+- ⚠️ `job_scope` 只有 `domestic`/`overseas` 两个取值、无 NULL。真冒出第三种取值时**宁可不计入任一 scope**，也不要偷偷算进国内（`mergeScopeRows` 有断言钉死）。
+- ⚠️ `unstable_cache` 条目**跨部署存活**（TTL 180s），上线那一小段缓存里是**旧形状**的行 → `scopedCounts()` 没有 byScope 时必须回退平铺合计，**不许改成直接 `byScope[scope]`**（会把 /admin/health 打挂）。
+- 壳牌影子源全过程、口径切换的逐家实测数字、同类复查方法 → `docs/module-deep-notes.md`。
 
 ## 搜索额度是全局共享的 —— 贪心方必须给校招链留一份（2026-08-28 立）
 
@@ -844,45 +520,14 @@ GitHub 日志又已被截断，事后无从复原。⚠️ 目前没有告警规
 4. **省调用的两处**：writer 只喂前 8 条来源（`INSIGHT_WRITER_MAX_SOURCES`）；judge 之前先做引文子串
    预筛（`quote_supported()`，归一后比子串，空白/标点/全半角差异一律容忍——**宁可多花一次判官也不误杀**）。
 
-## 百度千帆额度
-
-免费「百度搜索」每日 50 次。控制台 0/50 或未付费时设 `BAIDU_QIANFAN_SEARCH_DISABLED=true`，`/api/discovery` 直接返回 `provider_rate_limited` / `rate_limited=true`，前端稳定展示不崩。额度耗尽时不要反复点「发现」或跑 5-query live 验证。
-
-**职业洞察 T3 检索已扩为多源路由**（`crawler/search_router.py`：博查/Tavily/Serper/千帆，配哪个 key 用哪个、未配自动跳过、各源 `*_DAILY_CAP` 日顶走 `search_usage` 表 + 迁移 156；**免费额度保守日顶**=代码默认 tavily 30 / serper 20 / bocha 50、千帆 40，**绝不一次性用完**［Serper 2500 为一次性总额、Tavily 1000/月、千帆 50/天每日重置=常驻主力］，可在 repo Variables 上调）。千帆仍受上面 50/天全局额度（`qianfan_usage`），但**不再是唯一检索源** → T3 富化吞吐不再被它单独卡死。新增 env（GitHub Secrets + 本地 `.env.local`）：`BOCHA_API_KEY` / `TAVILY_API_KEY` / `SERPER_API_KEY`（+ 可选 `*_DAILY_CAP`）。合规不变：仍只走搜索 API 取去标识聚合 + 判官核验 + ≥2 源，不直接爬社区。设计见 `docs/superpowers/specs/2026-06-20-career-insights-supply-upgrade-design.md`。
-
 ## ⚠️ 校招专区首屏：只下发聚合分面，绝不逐条下发岗位（2026-09-02 立）
 
-`/campus` 首屏曾 **responseEnd 10.1s / 单页 2.09 MB HTML**，而 TTFB 只有 189ms ——
-**慢的不是取数排队，是 SSR 那一段本身**：把 30 家必投公司的 16,494 个校招岗逐条序列化进 props。
-判读法记住：`TTFB 快 + responseEnd 慢` = 生成/传输页面本身的问题，别去查连接池和数据库排队。
-
-现行形态（改动前务必读懂，别改回去）：
-1. **页面一条岗位记录都不下发**，只下发 `lib/campus-facets.ts` 的聚合分面
-   `[城市下标, 学历下标, 职能下标, 届别, 计数]`。依据：客户端拿逐条记录只做两件事——填筛选下拉、
-   算「当前筛选下有几个岗」，**两件事都只依赖这四个维度**，与具体是哪个岗无关。
-   live 实测 16,494 条压成 1,917 个四元组，props 2,086 KB → 52.6 KB。
-   ⚠️ **构建（buildCampusFacets）与匹配（countMatchingFacets）刻意放同一文件**：下标口径两端一漂，
-   卡面就安静地报错数字——不报错、不崩，只骗用户。等价性由 `tests/campus-facets.test.js`
-   穷举全部筛选组合钉死，改分面必须让它继续绿。
-2. **重活按行业清单缓存**（`unstable_cache`，10 分钟）。它只依赖必投清单、不含用户私有数据，所以能跨请求共享。
-   ⚠️ `windowStatus` 与排序**刻意留在缓存外每请求现算**——它们依赖「此刻」（72h 新鲜度阈值），
-   一起缓存会把徽章冻住。缓存里只放 `lastSeenAtMs` 这类原始输入。
-   ⚠️ 缓存函数体内不得读 `cookies()`/`headers()`（unstable_cache 限制）。
-3. **聚合 SQL 不用 `company ilike any()`**：带前导 % 用不了任何索引 → 39 万 active 行并行全表扫
-   （live EXPLAIN 2567ms / 127,726 buffers）。改成先用 `jobs_active_company_idx` 取全部 active
-   公司名（`allActiveCompanyNames`，5 分钟进程内缓存），JS 按同样的「不区分大小写子串」语义解析出
-   确切名字，再 `company = any()` 走 Bitmap Index Scan（957ms / 46,413 buffers，结果集逐行相同）。
-4. **展开某家公司走 `/api/campus-zone/jobs`（按 公司+模式），不按 id**：按 id 取就得先把 16,494 个
-   uuid 下发到浏览器，光 uuid 就 0.59 MB，白白抵消收益。
-   ⚠️ 旧的 by-ids 调法有个真 bug：把 campus 与 intern 的 id 拼一起再截前 200 →
-   **大厂的实习桶被校招桶挤没，实习模式展开必然空白**。按模式取从根上没有这个问题。
-   ⚠️ 取数分两段：准入门 `campusAdmission` 要看 JD 正文，但**排序键 deadline/first_seen_at 与
-   归属键 company 都是轻字段** → 先只取轻字段排好序，再顺着顺序分批（500）取完整行跑准入门，
-   收满 200 就停。一次性拉完整行 live 实测字节 5.8s，分段后 0.5~0.9s，语义完全一致。
-5. **归属规则三处必须一致**（getCampusZone / getCampusCompanyJobs / 分面计数）：
-   list 里第一个 pattern 命中者得（`腾讯音乐 TME` 归 `%腾讯音乐%` 不归 `%腾讯%`）。
-   任一处漂移 → 卡面计数与展开列表对不上。live 交叉验证法：卡面计数（来自分面）与
-   `/api/campus-zone/jobs` 返回条数（独立重算）在未截断的公司上必须逐个相等。
+`/campus` 首屏曾 **responseEnd 10.1s / 单页 2.09 MB HTML**，而 TTFB 只有 189ms——**慢的不是取数排队，是 SSR 那一段本身**（把 30 家公司的 16,494 个校招岗逐条序列化进 props）。判读法记住：**`TTFB 快 + responseEnd 慢` = 生成 / 传输页面本身的问题**，别去查连接池和数据库。改动前务必读懂现行形态，别改回去：
+1. **页面一条岗位记录都不下发**，只下发 `lib/campus-facets.ts` 的聚合分面 `[城市下标, 学历下标, 职能下标, 届别, 计数]`——客户端只用这四个维度填下拉和算计数（live 实测 16,494 条压成 1,917 个四元组，props 2,086 KB → 52.6 KB）。⚠️ **构建 `buildCampusFacets` 与匹配 `countMatchingFacets` 刻意放同一文件**：下标口径两端一漂，卡面就安静地报错数字——不报错、不崩，只骗用户；等价性由 `tests/campus-facets.test.js` 穷举全部筛选组合钉死。
+2. **重活按行业清单缓存**（`unstable_cache` 10 分钟，只依赖必投清单、不含用户私有数据）。⚠️ `windowStatus` 与排序**刻意留在缓存外每请求现算**（依赖「此刻」的 72h 新鲜度阈值，一起缓存会把徽章冻住）；⚠️ 缓存函数体内**不得读 `cookies()`/`headers()`**。
+3. **聚合 SQL 不用 `company ilike any()`**：带前导 % 用不了任何索引 → 39 万 active 行并行全表扫（live EXPLAIN 2567ms / 127,726 buffers）。改成先取全部 active 公司名走索引、JS 解析出确切名字、再 `company = any()`（957ms / 46,413 buffers，结果集逐行相同）。
+4. **展开某家公司走 `/api/campus-zone/jobs`（按 公司+模式），不按 id**：按 id 取要先把 16,494 个 uuid 下发到浏览器（光 uuid 就 0.59 MB）。⚠️ 旧的 by-ids 调法有个真 bug——把 campus 与 intern 的 id 拼一起再截前 200，**大厂的实习桶被校招桶挤没、实习模式展开必然空白**。⚠️ 取数分两段：先只取轻字段（排序键 + company）排好序，再顺着顺序分批（500）取完整行跑准入门，收满 200 就停（一次性拉完整行 live 实测 5.8s，分段后 0.5~0.9s）。
+5. **归属规则三处必须一致**（getCampusZone / getCampusCompanyJobs / 分面计数）：list 里**第一个 pattern 命中者得**（`腾讯音乐 TME` 归 `%腾讯音乐%` 不归 `%腾讯%`）。任一处漂移 → 卡面计数与展开列表对不上；live 交叉验证法：卡面计数与接口返回条数在未截断的公司上必须逐个相等。
 
 ## 认证
 
@@ -915,50 +560,16 @@ Supabase Auth（邮箱登录）+ cookie session。`middleware.ts` 排除 `/api/*
 
 ### 设计组件库：新代码一律走 `@/components/ui`，别再手写（2026-09-04 立）
 
-产品有自己的组件库了。**写任何前端之前先看一眼有没有现成的**，别再各写各的
-——改造前 28 个文件各写各的 `<button>`、9 个各写各的转圈、6 个各写各的「锁滚动 + ESC」、
-`inputCls` 同一串样式存在**三份**、全站 5 个弹层**一个焦点陷阱都没有**。
-
-- **看长什么样**：`/design`（管理员可见）。那页的组件就是产品里真实跑的那一个、用同一份 CSS，
-  所以它不会说谎。**完整用法与运维规矩见 `DESIGN.md` 的「组件库」一节**，决策来由见
-  `docs/superpowers/specs/2026-09-04-design-system-component-library-design.md`。
-- **现有 21 个**：`Button` · `Badge` · `Banner` · `Separator` · `Spinner` · `Progress` ·
-  `EmptyState` · `Field`+`Input`+`Textarea`+`Select` · `Switch` · `Segmented` · `TagInput` ·
-  `Tabs`+`TabPanel` · `Accordion` · `Stepper` · `Modal` · `Sheet`（底部抽屉可拖拽关闭）·
-  `Popover` · `Tooltip` · `DropdownMenu` · `AlertDialog`（替掉 `window.confirm`）；
-  hooks 在 `lib/ui/hooks.ts`（`useBodyScrollLock` / `useEscapeKey` / `useFocusTrap` /
-  `useClickOutside` / `useAnchoredPosition` / `useClipboard` / `useAsyncAction`）。
-- ⚠️ **动效一律走令牌，别写死毫秒和贝塞尔**：四条弹簧曲线 `--spring-{smooth,snappy,bouncy,press}`
-  + 四档时长 `--dur-{press,toggle,panel,sheet}`。标杆是 iPhone —— iOS 动效的核心是**用弹簧
-  不用贝塞尔**。曲线按 SwiftUI 的 `spring(response:dampingFraction:)` 方程解出来的，
-  调手感改 `scripts/gen-spring-easing.py` 跑一次。按压反馈用 `.press-feedback`（scale 0.97，
-  不是 0.9——0.9 会读成「这东西要被删掉了」）。契约测试会拦写死的时长与曲线。
-- ⚠️ **只有 4 个组件用 Radix**（Tooltip/DropdownMenu/Tabs/Accordion），因为这四个自己写
-  一定会漏（贴边翻转、首字母跳转、roving tabindex、aria-controls 配对）。视觉全是自己的皮肤。
-  Switch/Sheet/AlertDialog/Progress/Separator/Stepper **刻意不用**——价值在手感，引依赖无收益。
-- 🚫 **Tailwind UI 是商业授权**（很多人误以为开源）、**Aceternity** 禁止转售衍生品且风格冲突、
-  **Magic UI / Motion Primitives** 要装 `motion` 包（已有 GSAP，不引第二个动画运行时）。
-  抄 MIT 代码进仓库必须在 `LICENSES/` 留版权声明——那是 MIT 唯一的强制要求。
-- ⚠️ **颜色一律用 `--tone-*` 令牌，不要再写 hex**：七族语义色（sky 社招 / green 校招·已核实 /
-  amber 实习·转陈 / teal 招聘动态 / rose 失败·风险 / lilac 职业洞察 / neutral 不表态），
-  写成 `text-tone-sky-fg` / `bg-tone-sky-bg` / `border-tone-sky-border`，明暗自动切换。
-  **要加新颜色 → 先在 `globals.css` 定义变量（明暗各一套）+ `tailwind.config.js` 登记**，
-  再用语义类名。`components/ui` 与 `lib/ui` 内出现 hex 会被契约测试判红。
-- ⚠️ **变体表（cva）写在 `lib/ui/variants.ts` 这个 `.ts` 里，不要写进组件的 `.tsx`**：
-  `tests/_load-ts.js` 只认 `.ts`，放对地方契约测试才能真的加载它做断言，而不是只能 grep 文本。
-- ⚠️ **cva 只加尺寸轴，颜色继续由 `.btn-*` 等既有类提供**（靠 Tailwind 的
-  components→utilities 层序覆盖 padding）。往变体表里抄颜色 = 制造第二份颜色定义，正是要消灭的东西。
-- ⚠️ **可访问性做进原语，不靠调用方记得**：`Modal` 默认带焦点陷阱 + `role="dialog"` +
-  `aria-modal` + 锁滚动 + ESC；`Segmented` 的 `ariaLabel` 是**必填 prop**。凡是「靠人记得写」
-  的 aria 迟早会漏——改造前 4 处分段控件有 3 处漏了组标签。
-- **废弃组件搬进 `components/ui/deprecated/` + 打 `@deprecated`，不要直接删**（学 GitHub Primer）。
-  直接删 = 全站必须同一天跟着改完，几个人的团队做不到，结果就是没人敢改组件库。
-- **存量迁移的节奏 = 新代码必须用库、老代码碰到再换**，不做一次性全站替换
-  （`JobCard` 906 行 / `InsightsAdminClient` 1466 行这些巨型文件回归面太大）。
-  ⚠️ **迁移的判据是「能不能证明像素不变」，不是「看起来差不多」**：只有亮暗成对出现在
-  同一个类串里才换成令牌；只有亮色没有 `dark:` 的地方一律跳过（换了会让它在暗色下变色）。
-  归并「差一点点」的同类颜色属于**有意的视觉改动**，要单独提出来由创始人拍板，不能顺手改掉。
-- 契约测试 `tests/design-system-contract.test.js`（13 条）守着以上规矩，新增组件请顺手补断言。
+产品有自己的组件库（21 个原语 + `lib/ui/hooks.ts`）。**写任何前端之前先看一眼有没有现成的**——改造前 28 个文件各写各的 `<button>`、9 个各写各的转圈、6 个各写各的「锁滚动 + ESC」、`inputCls` 同一串样式存在**三份**、全站 5 个弹层**一个焦点陷阱都没有**。
+**完整用法、加 / 退役组件的规矩、Radix 取舍、动效令牌全在 `DESIGN.md` 的「组件库」一节**（`/design` 页跑的就是产品里真实那一个组件、同一份 CSS，所以它不会说谎），决策来由见 `docs/superpowers/specs/2026-09-04-design-system-component-library-design.md`。正文只留七条硬红线：
+- **一律从 barrel 进**：`import { Button } from "@/components/ui"`，不深链具体文件。
+- **组件库内禁止出现 hex 色值**：颜色一律走 `--tone-*` / `--ink-*` 令牌（七族语义色，明暗自动切换）；要加新色**先在 `globals.css` 定义明暗两套 + `tailwind.config.js` 登记**，再用语义类名。
+- **动效不许写死毫秒和贝塞尔**：用 `--spring-{smooth,snappy,bouncy,press}` + `--dur-{press,toggle,panel,sheet}`（按 SwiftUI 弹簧方程解出来的，调手感跑 `scripts/gen-spring-easing.py`）；按压反馈用 `.press-feedback`（scale 0.97，**不是 0.9**——0.9 会读成「这东西要被删掉了」）。
+- **变体表写在 `lib/ui/variants.ts` 这个 `.ts` 里**，不要写进组件的 `.tsx`：`tests/_load-ts.js` 只认 `.ts`，放对地方契约测试才能真加载它做断言。cva **只加尺寸轴**，颜色继续由 `.btn-*` 等既有类提供——往变体表里抄颜色 = 制造第二份颜色定义。
+- **可访问性做进原语，不靠调用方记得**：`Modal` 默认带焦点陷阱 + `role="dialog"` + `aria-modal` + 锁滚动 + ESC；`Segmented` 的 `ariaLabel` 是**必填 prop**。靠人记得写的 aria 迟早会漏。
+- **废弃组件搬进 `components/ui/deprecated/` + 打 `@deprecated`，不要直接删**（学 GitHub Primer）；存量迁移 = **新代码必须用库、老代码碰到再换**，不做一次性全站替换。迁移判据是**「能不能证明像素不变」**：只有亮暗成对出现在同一类串里才换令牌，只有亮色没 `dark:` 的一律跳过；归并「差一点点」的同类颜色属于**有意的视觉改动**，要创始人拍板。
+- 🚫 **Tailwind UI 是商业授权**（常被误认为开源）、**Aceternity** 禁止转售衍生品、**Magic UI / Motion Primitives** 要装第二个动画运行时（已有 GSAP）——都不用。抄 MIT 代码进仓库必须在 `LICENSES/` 留版权声明。
+契约测试 `tests/design-system-contract.test.js`（13 条）守着以上规矩，新增组件请顺手补断言。
 
 ### 点击反馈分档：每个异步操作都要有中间态 + 结果态（2026-09-03 立）
 
