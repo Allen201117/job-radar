@@ -100,11 +100,16 @@ test("更新：拿不出依据时把 job_scope 传 null + COALESCE 回退，绝�
 
 test("更新：源 regions 含 CN + 地点判不出国家 —— 那是穿过 regions 落到兜底，不算依据", async () => {
   // ⚠️ 这条最容易写错：拿到了 regions ≠ regions 给出了结论。regions 含 CN 时函数是**穿过**
-  // 那个分支落到末尾兜底的，结论仍是默认 domestic。库里 2,001 个在招岗地点写成
-  // "Toronto, Canada" / "Warsaw, …, PL"（国别码还没进词表）、已判 overseas，
-  // 拿这个默认值去盖就是把真海外岗打回国内。
+  // 那个分支落到末尾兜底的，结论仍是默认 domestic。拿这个默认值去盖，就是把库里已判
+  // overseas 的真海外岗打回国内。
+  //
+  // ⚠️ 用例原本是 "Toronto, Canada"，2026-09-06 合并时换掉了：`isOverseasPinned`
+  // （镜像 crawler/geo.py）上线后，`canada` 已在 OVERSEAS_LOCATION_TOKENS 里，
+  // 那条地点现在**直接判 overseas**——它有依据了，不再是本用例要测的「无依据」形态。
+  // 这是改进不是回归：那批岗从此靠正判保护，不必再靠「不写」兜着。
+  // 换成 "Multiple Locations"：抽不出国家、也钉不出境外，是真正只能落兜底的形态。
   const { mod, calls } = loadWriteWithFakeDb({ existingId: "11111111-1111-1111-1111-111111111111" });
-  await mod.upsertJob({ ...baseJob, location: "Toronto, Canada", source_regions: ["CN", "US", "SG", "Remote"] });
+  await mod.upsertJob({ ...baseJob, location: "Multiple Locations", source_regions: ["CN", "US", "SG", "Remote"] });
   const b = updateBinding(findCall(calls, /^update jobs set/), "job_scope");
   assert.equal(b.value, null);
   assert.match(b.clause, /^COALESCE\(\$\d+, job_scope\)$/);
