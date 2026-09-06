@@ -686,6 +686,81 @@ _IN_REGION_NAMES = (
 )
 _TAIL_CODE_GUARDS = {"CA": "_ca", "IN": "_in"}
 
+# ---------------------------------------------------------------------------
+# 「国别码写在最前面」的写法 —— Workday 系外企 ATS 的第二种地点格式（2026-09-06 加）。
+# ⚠️ ISO_ALPHA2_CODES 必须与 lib/geo.js 的同名表逐条一致（tests/geo.test.js 会 deepEqual 对拍）。
+#
+# 现象：`MY, JOHOR, VIRTUAL` / `SE, Solna` / `IE, Dublin, Carrickmines, Co, Dublin`
+# 这三个改前全部返回 None → job_scope 落回默认 domestic → 境外岗混进国内池。
+#
+# ⚠️ **开头位置的语义和结尾位置完全不同，不许复用 _US_STATE_TAIL_RE 那张表**：
+#    同一批数据里开头那个两字母码**更常见的是美国州缩写**而不是国别码 ——
+#    live 全库实测（2026-09-06，456,408 个在招岗）开头两字母 + 逗号的写法共 7,403 行，
+#    其中 `GA, Atlanta, 1050, Techwood, Drive, NW`（117）/ `NY, BROADWAY, , MARCY`（116）
+#    / `CA, Burbank, Bldg, 11, Admin, Offices`（50）/ `NC, CHARLOTTE, BALLANTYNE`（48）
+#    全是「州, 城市, 门牌」。所以：
+#      · 码同时是美国州缩写 → **一律弃权**（MO=密苏里 不是澳门、IN=印第安纳 不是印度、
+#        CA=加州 不是加拿大、DE=特拉华 不是德国、CO=科罗拉多 不是哥伦比亚）。
+#        代价是漏判 `DE, Neuss`（德国）/ `CO, Bogota`（哥伦比亚）/ `PA, Panam, Oeste,
+#        Arraijan`（巴拿马）这 3 行，方向正确：漏判只是回到 None，错杀是把在招岗判错国。
+#      · 唯二的例外是 CA / IN —— 串里另有该国的省/邦硬证据时才认（复用 _foreign_tail_code，
+#        与串尾那道护栏同一份词表）：`CA, ALBERTA, VIRTUAL` → 加拿大，
+#        `IN, Tamil, Nadu, Chennai` → 印度；而 `CA, Burbank…`（无加拿大证据）继续弃权。
+#      · 本规则整体排在 _has_us_state **之后**（= 全表最后一步），所以只有「其它规则全都
+#        认不出来」的串才会走到这里。`SE, Bothell, Washington, United, States`（波音的
+#        西雅图东厂区，SE 是厂区代号不是瑞典）因为串里有 "United States" 早就判了 US，
+#        根本走不到这一步 —— 这道顺序是本规则安全性的一半。
+# ⚠️ 只认**逗号**分隔：live 实测 121 个受影响写法里 119 个是逗号、1 个是连字符
+#    （`CA-Toronto, CA-Montreal, CA-Vancouver`，CA 本来就弃权）、0 个是空格。
+#    放开空格会把 "NO ONE" / "MY TEAM" 这类词组当成国别码。
+# ⚠️ 必须是原串里的**大写**形态（与 _US_STATE_TAIL_RE 同一条纪律）：小写的 "la, Défense"
+#    "de, Cergy" 是法语地址里的介词/冠词，不是老挝和德国。
+ISO_ALPHA2_CODES = (
+    "AD", "AE", "AF", "AG", "AI", "AL", "AM", "AO", "AQ", "AR", "AS", "AT", "AU", "AW", "AX", "AZ",
+    "BA", "BB", "BD", "BE", "BF", "BG", "BH", "BI", "BJ", "BL", "BM", "BN", "BO", "BQ", "BR", "BS",
+    "BT", "BV", "BW", "BY", "BZ",
+    "CA", "CC", "CD", "CF", "CG", "CH", "CI", "CK", "CL", "CM", "CN", "CO", "CR", "CU", "CV", "CW",
+    "CX", "CY", "CZ",
+    "DE", "DJ", "DK", "DM", "DO", "DZ",
+    "EC", "EE", "EG", "EH", "ER", "ES", "ET",
+    "FI", "FJ", "FK", "FM", "FO", "FR",
+    "GA", "GB", "GD", "GE", "GF", "GG", "GH", "GI", "GL", "GM", "GN", "GP", "GQ", "GR", "GS", "GT",
+    "GU", "GW", "GY",
+    "HK", "HM", "HN", "HR", "HT", "HU",
+    "ID", "IE", "IL", "IM", "IN", "IO", "IQ", "IR", "IS", "IT",
+    "JE", "JM", "JO", "JP",
+    "KE", "KG", "KH", "KI", "KM", "KN", "KP", "KR", "KW", "KY", "KZ",
+    "LA", "LB", "LC", "LI", "LK", "LR", "LS", "LT", "LU", "LV", "LY",
+    "MA", "MC", "MD", "ME", "MF", "MG", "MH", "MK", "ML", "MM", "MN", "MO", "MP", "MQ", "MR", "MS",
+    "MT", "MU", "MV", "MW", "MX", "MY", "MZ",
+    "NA", "NC", "NE", "NF", "NG", "NI", "NL", "NO", "NP", "NR", "NU", "NZ",
+    "OM",
+    "PA", "PE", "PF", "PG", "PH", "PK", "PL", "PM", "PN", "PR", "PS", "PT", "PW", "PY",
+    "QA",
+    "RE", "RO", "RS", "RU", "RW",
+    "SA", "SB", "SC", "SD", "SE", "SG", "SH", "SI", "SJ", "SK", "SL", "SM", "SN", "SO", "SR", "SS",
+    "ST", "SV", "SX", "SY", "SZ",
+    "TC", "TD", "TF", "TG", "TH", "TJ", "TK", "TL", "TM", "TN", "TO", "TR", "TT", "TV", "TW", "TZ",
+    "UA", "UG", "UM", "US", "UY", "UZ",
+    "VA", "VC", "VE", "VG", "VI", "VN", "VU",
+    "WF", "WS",
+    "YE", "YT",
+    "ZA", "ZM", "ZW",
+)
+_ISO_ALPHA2 = frozenset(ISO_ALPHA2_CODES)
+
+# UK 不是 ISO-2（英国是 GB），但外企 ATS 大量这么写（live 30 行：`UK, Cambridge` /
+# `UK, , London, , New, Oxford, Street`）。归一到 GB，别往库里塞第二种英国写法。
+_LEADING_CODE_ALIASES = {"UK": "GB"}
+
+# 开头那两个大写字母**不是**国别码的实证反例。只收「live 库里真见过」的，不凭想象加：
+#   · GM = 通用汽车的厂区前缀（`GM, Global, Technical, Center, , , 7000, Bldg`，
+#     jd_url 是 generalmotors.wd5.myworkdayjobs.com，实际在密歇根 Warren）——不是冈比亚。
+#   · NA = 卡夫亨氏写的「North America」占位（location 字面就是裸 `NA`）——不是纳米比亚。
+_LEADING_CODE_BLOCKLIST = frozenset({"GM", "NA"})
+
+_LEADING_COUNTRY_RE = re.compile(r"^([A-Z]{2})\s*[,，]")
+
 # 州全称并进 US 词表，走 _contains_token 的词边界语义（"Mossville, Illinois" 即命中）。
 _COUNTRY_TOKENS["US"].extend(_US_STATE_NAMES)
 # 城市名同样并进 US 词表（同为词边界语义）。
@@ -728,6 +803,36 @@ def _has_us_state(location: Optional[str]) -> bool:
         if _foreign_tail_code(_norm(stripped), upper, code):
             return False
     return True
+
+
+def _leading_country_code(location):
+    """开头的两字母大写国别码（`MY, JOHOR, VIRTUAL` / `SE, Solna` / `HK, , , CHEK, LAP, KOK`）。
+
+    只有**其它所有规则都认不出来**时才会走到这里（见 derive_country_code 的第⑤步）。
+    取舍与实测数字写在上面 ISO_ALPHA2_CODES 那段注释里，改之前先读。
+    """
+    if not location:
+        return None
+    match = _LEADING_COUNTRY_RE.match(location.strip())
+    if not match:
+        return None
+    code = match.group(1)
+    if code in _LEADING_CODE_BLOCKLIST:
+        return None
+    code = _LEADING_CODE_ALIASES.get(code, code)
+    if code not in _ISO_ALPHA2:
+        return None
+    if code in _US_STATE_CODES:
+        # 州缩写与国别码撞车：只有串里另有该国省/邦硬证据才认，否则一律弃权。
+        if code not in _TAIL_CODE_GUARDS:
+            return None
+        stripped = location.strip()
+        upper = {t for t in re.split(r"[^A-Za-z]+", stripped) if t.isupper()}
+        upper.discard(code)
+        if not _foreign_tail_code(_norm(stripped), upper, code):
+            return None
+    return code
+
 
 def _norm(text: Optional[str]) -> str:
     return (text or "").strip().lower()
@@ -807,11 +912,12 @@ def keep_for_china_radar(location: Optional[str]) -> bool:
 def derive_country_code(location: Optional[str]) -> Optional[str]:
     """Derive an ISO-2 country/region code from free-form location text.
 
-    四阶段短路，**顺序不可调换**（红线说明见文件中部「中文行政区地名识别」「美国州名」两段）：
+    五阶段短路，**顺序不可调换**（红线说明见文件中部「中文行政区地名识别」「美国州名」两段）：
       ① `_COUNTRY_TOKENS`    既有词表 + 州全称，语义一字未动 → 存量判定零回归
       ② `_looks_like_cn_admin` 中文行政区规则（**白名单锚定**）
       ③ `_STRICT_CJK_PLACES` 境外中文地名，整段精确匹配
-      ④ `_has_us_state`      美国州缩写，位置受限 + 必须大写 → 最后兜底
+      ④ `_has_us_state`      美国州缩写，位置受限 + 必须大写
+      ⑤ `_leading_country_code` 开头的两字母国别码（`MY, JOHOR, …`）→ 最后兜底
     ②在③之前是为了让一岗多地写法（"柳州市、南非"）保住 CN —— 那种岗确实有一部分在国内。
     它成立的前提是②必须白名单锚定：「大阪市」里没有大陆地名所以命中不了②，照样落③判 JP。
     ④在最末同理：任何显式国名都必须优先于两字母缩写，否则 "Chennai, TN, in"（金奈，印度）
@@ -838,7 +944,9 @@ def derive_country_code(location: Optional[str]) -> Optional[str]:
     # 州缩写排在最后：任何显式国名/城市都优先于它（"Chennai, TN, in" 因此不会判成 US）。
     if _has_us_state(location):
         return "US"
-    return None
+    # ⑤ 开头的两字母国别码。**必须是全表最后一步**：这个位置上「州缩写」比「国别码」更常见，
+    #    所以它只配捡别人都不要的串（理由与 live 数字见 ISO_ALPHA2_CODES 那段注释）。
+    return _leading_country_code(location)
 
 
 def derive_job_scope(location: Optional[str], regions=None) -> str:
