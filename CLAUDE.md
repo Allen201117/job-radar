@@ -567,6 +567,18 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 ⑥ **确实抓不了的要说清是哪一种**：快手校招 `campus.kuaishou.cn/robots.txt` = `Disallow: /`，
    这是合规红线不是技术问题，不要再去试；但同官网的**日常实习**在 `zhaopin.kuaishou.cn`
    （无 robots 限制、同接口同签名，只差 `positionNatureCode=C002`），1,046 个岗是能抓的。
+⑦ 🔑 **点击只能证伪你走的那条路，证明不了全集**（2026-09-06 立，这是本节所有案例的共同根）。
+   把「我没找到」升级成「确实不存在」只有一个办法：**捞出全站页面/路由清单再逐个看**。
+   - 站点上了 Akamai（国家电网 `curl` 直接 412）时，**在已打开的页面里同源 `fetch` 它自己的 JS**
+     就能绕过，同一招还能把全站页面清单捞全。国家电网正是这么判死的（12 个页面逐个看，
+     `jobSearch/jobPost/jobColl/jobConc/jobJust` 全在登录区，清单里没有任何 jobDetail 类页面）。
+   - 反例（同一天，同一个人）：国家能源集团看到公告页 `/annc/showg**g**?id=` 就以为摸清了
+     `annc` 这条路径，真正的岗位页是 `/annc/showg**w**?id=`，**只差一个字母，3000+ 岗匿名可开**。
+     ⇒ 见到「相邻路径」不等于摸清整条路径。
+⑧ **「POST 回 405」= 打错主机，不是接口不存在**：中通打 `hr.zto.com` 任何 POST 都返 405，
+   真网关写在 bundle 的 webpack 模块里（`PROD.HostName`），根本不在主域上。
+   配套手法：network 面板抓不到 XHR 时去读 `js/app.*.js` 的路由表与接口名；
+   **API 域名可能不在主域上**。中通由此从「无逐岗页」翻成 101 个岗（社招 79 + 校招 22）。
 
 ## ⚠️ 飞书招聘的校招岗藏在 `website-path` 请求头后面（2026-09-04 立）
 

@@ -14,12 +14,17 @@
 ⚠️ 岗位 id 是 Oracle 式 GUID，**前 8 位是共享前缀**（5a798bfe-…）。去重、日志比对、单测断言
    一律用全串——按前 8 位截断会得出「每页首个岗位都一样」的假结论（2026-09-05 实测踩过）。
 ⚠️ ``kinds=2``（内部招聘）刻意不抓：那是在职员工内部竞聘，不对外。
+⚠️ 列表**夹带报名已截止的岗**：2026-09-05 实测 3,276 条里 164 条截止日已过（最老 2025-07-11，
+   **全部落在社招渠道**），官网自己也照列。必须按截止日剔掉再入库（见 ``_is_open``）——
+   这批岗**指望不上探活兜底**：它们的详情页照常渲染出完整正文，``enrich._detail_chnenergy``
+   抽查 8/8 全部判活，一旦入库就会永远挂在 active、还因为正文 ≥60 字被算进「有效在招」。
 ⚠️ 完整性**逐渠道**判，不能拿「去重后条数」比「各渠道 total 之和」——渠道间可能重叠，
    那样算 fetch_complete 会恒 False（CLAUDE.md 为华为/小红书立过碑）。
 ⚠️ ``RawJob.company`` 刻意留空以继承 sources.company（「国家能源集团」）：列表里的招聘单位是
    「中国神华煤制油化工有限公司…」这类子公司，名字里没有「国家能源」，写进 company 会让这些岗
    掉出必投清单 ``%国家能源%`` 的统计口径。子公司名改放进 summary 抬头，信息不丢。
 """
+import datetime
 import json
 import re
 from typing import List, Optional
@@ -126,8 +131,16 @@ class ChnenergyAdapter(BaseAdapter):
                     row["_channel"], row["_job_type"] = channel, job_type
                     out.append(row)
 
+            # 剔掉报名已截止的岗。放在翻页之后、补正文之前：fetch_complete 仍表示「翻完了没有」，
+            # 过滤是**入库口径**不是抓取完整性，两者别混（同 icbc._is_open 的处置）。
+            today = datetime.date.today().isoformat()
+            kept = [row for row in out if _is_open(row, today)]
+            dropped = len(out) - len(kept)
+            if dropped:
+                print(f"[chnenergy] 剔除报名已截止的岗 {dropped} 条（列表夹带，官网自己也照列）")
+            out = kept
             if len(totals) == len(_CHANNELS):
-                self.reported_total = sum(totals)
+                self.reported_total = _coverage_total(sum(totals), dropped, len(out))
             # ⚠️ 逐渠道判，不拿去重后条数比 total 之和（渠道重叠会让它恒 False）。
             self.fetch_complete = len(drained) == len(_CHANNELS) and all(drained)
             self._enrich_details(client, out)
@@ -191,6 +204,28 @@ class ChnenergyAdapter(BaseAdapter):
                 deadline=str(row.get("deadline") or "").strip() or None,
             ))
         return out
+
+
+def _is_open(row: dict, today: str) -> bool:
+    """报名截止日已过的岗不入库（列表会夹带，见模块 docstring）。
+
+    读不出截止日时**保守放行**，交给 enrich 探活——宁可漏判不可错杀。
+    与 icbc 的 ``enterEndTime`` / ccb 的 ``planStatus=2`` 同口径。
+    """
+    deadline = str((row or {}).get("deadline") or "").strip()
+    return len(deadline) < 10 or deadline[:10] >= today
+
+
+def _coverage_total(reported: Optional[int], dropped: int, kept: int) -> Optional[int]:
+    """抓全率分母 = 站点自报总数 **减去我们按口径主动剔掉的过期岗**。
+
+    不减的话分母永远比入库数多出那 164 条（3,112/3,276 ≈ 95%），把一次正常过滤读成 5% 的
+    抓取缺口，而且与 ``fetch_complete=True`` 自相矛盾（嘴上说抓全了、数字又对不上）。
+    下限钉在 kept：某渠道失败让 reported 偏小时，分母也不能反过来小于实际抓到的条数。
+    """
+    if reported is None:
+        return None
+    return max(reported - max(dropped, 0), kept) or None
 
 
 def _attr_or_text(node) -> str:

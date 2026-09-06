@@ -629,12 +629,30 @@ class UsStateAbbrMustBeUppercaseTest(unittest.TestCase):
     也就是说要求大写**零代价**，放宽则立刻把哥伦比亚/德国/印度/泰国的岗算成美国。
     """
 
+    # ⚠️ 断言对象是 _has_us_state（州缩写规则本身），不是 derive_country_code：
+    # "Irvine"（加州尔湾）和 "Lehi"（犹他州利希）**本来就是美国城市**，2026-09-05 补进
+    # US 城市名词表后 derive_country_code 会经由**城市名**判成 US —— 这与本用例要守的
+    # 「小写词尾不许被当成州缩写」毫无关系。拿 derive_country_code 做代理断言会把两件事
+    # 混在一起，一个正确的改动就会让它变红。直接断言规则本身，语义更准也更强
+    # （它不会被别的规则「凑巧满足」）。
     def test_lowercase_tail_is_not_a_state(self):
+        from geo import _has_us_state
+
         for location in (
             "Melbourne", "Irvine", "Lehi", "Work, From, Home",
             "Mollsfeld, Meerbusch, Germany", "Gurgaon, Haryana, India",
             "Bangkok, Bangkok, Thailand", "Bogot, Bogota, Colombia",
             "Johns, Creek, Georgia",
+        ):
+            with self.subTest(location=location):
+                self.assertFalse(_has_us_state(location))
+
+    def test_lowercase_tail_locations_stay_non_us_end_to_end(self):
+        """上面那批里**不是美国地名**的，整条链路也必须仍然判不出美国。"""
+        for location in (
+            "Melbourne", "Work, From, Home", "Mollsfeld, Meerbusch, Germany",
+            "Gurgaon, Haryana, India", "Bangkok, Bangkok, Thailand",
+            "Bogot, Bogota, Colombia", "Johns, Creek, Georgia",
         ):
             with self.subTest(location=location):
                 self.assertNotEqual(derive_country_code(location), "US")
