@@ -27,6 +27,8 @@ type TodayBundle = {
   feed: OpportunityFeed | null;
   /** 画像未就绪时的「热门在招」兜底清单；画像就绪时为 null（不白付一次查询）。 */
   popular: PopularFeed | null;
+  /** 用户已存过的目标行业（兜底位的「设为我的行业」用它避免重复追问）。 */
+  savedIndustries: string[];
   /** shell 之前那 4 条 Supabase(悉尼) 并行查询耗时，诊断用。 */
   userRowsMs: number;
 };
@@ -61,7 +63,13 @@ async function loadTodayBundle(
   // 画像未就绪 → 不做个人召回（没有目标可召回），改取与用户无关、跨请求共享缓存的「热门在招」。
   // 这是新用户的第一屏：给不出对口机会，也要给得出**能点开的真岗位**，而不是一堵表单墙。
   if (!readiness.ready) {
-    return { readiness, feed: null, popular: await getPopularFeed(), userRowsMs };
+    return {
+      readiness,
+      feed: null,
+      popular: await getPopularFeed(),
+      savedIndustries: profile.targetIndustries,
+      userRowsMs,
+    };
   }
 
   // radar/open 由客户端首渲后异步记录，不提前清零当次新增。
@@ -83,7 +91,7 @@ async function loadTodayBundle(
     console.error("[today] feed build failed:", (e as Error).message);
     return null;
   });
-  return { readiness, feed, popular: null, userRowsMs };
+  return { readiness, feed, popular: null, savedIndustries: profile.targetIndustries, userRowsMs };
 }
 
 // 流式：先出页面骨架（导航 + 标题），用户小表查询与慢的跨区机会召回都在 Suspense 边界里流入，不阻塞整页。
@@ -186,6 +194,7 @@ async function TodayBody({ bundlePromise }: { bundlePromise: Promise<TodayBundle
         <TodayPopularClient
           items={popular.jobs.map((p) => ({ job: p.job, industry: p.industry }))}
           industries={popular.industries}
+          savedIndustries={bundle.savedIndustries}
         />
       );
     }

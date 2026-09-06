@@ -13,6 +13,7 @@ import Link from "next/link";
 import JobCard from "@/components/JobCard";
 import ActionToast, { jobActionToastText, useActionToast } from "@/components/ActionToast";
 import { Segmented, buttonVariants } from "@/components/ui";
+import QuickStartGoalBar from "@/components/QuickStartGoalBar";
 import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
 import type { Job, ScoredJob } from "@/lib/types";
@@ -75,9 +76,12 @@ function GoalPrompt({ jobCount }: { jobCount: number }) {
 export default function TodayPopularClient({
   items,
   industries,
+  savedIndustries = [],
 }: {
   items: PopularJobItem[];
   industries: string[];
+  /** 用户已存过的目标行业：用来避免对同一个行业重复追问「设为你的行业吗」。 */
+  savedIndustries?: string[];
 }) {
   const [industry, setIndustry] = useState<string>(ALL);
   const [shown, setShown] = useState(PAGE_SIZE);
@@ -168,6 +172,8 @@ export default function TodayPopularClient({
           />
         </div>
       )}
+
+      <QuickStartGoalBar industry={industry === ALL ? null : industry} savedIndustries={savedIndustries} />
 
       <section>
         <div className="mb-3 flex items-baseline gap-2">
