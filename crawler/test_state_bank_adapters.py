@@ -6,6 +6,7 @@
   · 接口用 HTTP 200 表达失败（工行 retCode / 中国移动 code / 交行 TRAN_SUCCESS）
 """
 import json
+import pathlib
 import ssl
 import unittest
 from datetime import date, timedelta
@@ -89,6 +90,13 @@ class IcbcAdapterTest(unittest.TestCase):
         # 不覆写 should_skip 就会被判「被拒」而整源跳过、永远抓不到岗。
         self.assertIsNone(IcbcAdapter().should_skip("https://job.icbc.com.cn/pc/index.html"))
 
+    def test_reported_total_counts_only_what_we_keep(self):
+        # 官网把报名已截止的岗也列在列表里（社招 63 条里 15 条已截止）。拿含过期岗的
+        # 自报总数当分母，crawl_runs 上会永远挂着「自报 2630 / 只入库 2615」这个**假缺口** ——
+        # 那 15 条是我们主动丢的，不是漏抓的。
+        src = pathlib.Path(__file__).resolve().parent / "adapters" / "icbc.py"
+        self.assertIn("self.reported_total = len(open_rows)", src.read_text(encoding="utf-8"))
+
     def test_depict_is_base64_urlencoded_html(self):
         import base64
         import urllib.parse
@@ -129,6 +137,27 @@ class CcbAdapterTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             _repair_json("   ")
 
+    def test_closed_postings_are_filtered_after_aggregation(self):
+        # 与 bankcomm/icbc 同一条不变量：全部报名结束时不能抛异常（那是正常状态不是故障），
+        # 且分母只算还能报名的岗，免得抓全率上永远挂个假缺口。
+        src = pathlib.Path(__file__).resolve().parent / "adapters" / "ccb.py"
+        text = src.read_text(encoding="utf-8")
+        self.assertIn('open_rows = [r for r in rows if str(r.get("planStatus") or "") != "2"]', text)
+        self.assertIn("self.reported_total = len(open_rows)", text)
+        self.assertIn('return json.dumps({"jobs": open_rows}', text)
+
+    def test_detail_empty_body_does_not_kill_the_whole_run(self):
+        # _repair_json 空 body 抛的是 RuntimeError；detail 循环要是漏捕它，
+        # 一次限速空响应就会穿透 fetch，把**已经抓全的 3,799 条列表**一起作废、记 failed。
+        src = pathlib.Path(__file__).resolve().parent / "adapters" / "ccb.py"
+        text = src.read_text(encoding="utf-8")
+        self.assertIn("except (httpx.HTTPError, json.JSONDecodeError, RuntimeError):", text)
+
+    def test_detail_only_accepts_explicit_success(self):
+        # 缺 SUCCESS 字段的错误骨架不能被当成详情塞进 _detail。
+        src = pathlib.Path(__file__).resolve().parent / "adapters" / "ccb.py"
+        self.assertIn('detail.get("SUCCESS") == "true"', src.read_text(encoding="utf-8"))
+
     def test_bot_user_agent_is_overridden(self):
         self.assertNotIn("JobRadarBot", CcbAdapter.user_agent)
 
@@ -157,6 +186,15 @@ class BankcommAdapterTest(unittest.TestCase):
         yesterday = (date.today() - timedelta(days=1)).isoformat()
         self.assertFalse(BankcommAdapter._is_open({"endDate": yesterday}, today))
         self.assertTrue(BankcommAdapter._is_open({"endDate": today}, today))
+
+    def test_all_expired_is_not_a_failure(self):
+        # 招聘窗口刚结束那几天所有岗都过期。若过期过滤放在聚合处做，rows 会是空的 →
+        # 抛 RuntimeError → 源被记 failed 并触发告警，而接口其实好好的。
+        # 「没有在招岗」是正常状态，不是故障 —— 所以 `if not rows` 必须看**未过滤**的行。
+        src = pathlib.Path(__file__).resolve().parent / "adapters" / "bankcomm.py"
+        text = src.read_text(encoding="utf-8")
+        self.assertIn("open_rows = [r for r in rows if self._is_open(r, today)]", text)
+        self.assertIn('return json.dumps({"jobs": open_rows}', text)
 
 
 class CmccAdapterTest(unittest.TestCase):
@@ -238,6 +276,53 @@ class AbchinaAdapterTest(unittest.TestCase):
     def test_rows_without_id_or_title_are_dropped(self):
         payload = {"jobs": [{"jobPublishId": 1}, {"posName": "无 id 岗"}, {}]}
         self.assertEqual(AbchinaAdapter().parse(json.dumps(payload)), [])
+
+    def test_collect_tells_empty_apart_from_not_rendered(self):
+        """「0 个岗」有两种：这家真没在招（正常）/ 页面没渲染出来（漏抓）。混成一种就会
+        「没抓全却自称抓全」—— 线上首轮正是这样比本机少了 162 个岗。"""
+
+        class FakePage:
+            def __init__(self, state, body):
+                self._state, self._body, self.waits = state, body, 0
+
+            def evaluate(self, _js, _key):
+                return self._state
+
+            def inner_text(self, _sel):
+                return self._body
+
+            def wait_for_timeout(self, _ms):
+                self.waits += 1
+
+        # ① 有卡片 → 立刻返回，且算渲染成功
+        found, rendered = AbchinaAdapter._collect(
+            FakePage([{"jobPublishId": 1}], "在招岗位"), "posCardInfo", "在招岗位")
+        self.assertEqual(len(found), 1)
+        self.assertTrue(rendered)
+
+        # ② 没卡片但页面渲染完了 → 这家真没在招，不该拖累 fetch_complete
+        AbchinaAdapter.RENDER_TIMEOUT_MS, saved = 0, AbchinaAdapter.RENDER_TIMEOUT_MS
+        try:
+            found, rendered = AbchinaAdapter._collect(
+                FakePage([], "机构公告 在招岗位 岗位类别"), "posCardInfo", "在招岗位")
+            self.assertEqual(found, [])
+            self.assertTrue(rendered)
+
+            # ③ 没卡片且连页面骨架都没出来 → 是漏抓，必须报 rendered=False
+            found, rendered = AbchinaAdapter._collect(
+                FakePage([], "人才招聘 个人中心"), "posCardInfo", "在招岗位")
+            self.assertEqual(found, [])
+            self.assertFalse(rendered)
+        finally:
+            AbchinaAdapter.RENDER_TIMEOUT_MS = saved
+
+    def test_missed_orgs_get_one_retry_and_then_break_fetch_complete(self):
+        src = (pathlib.Path(__file__).resolve().parent / "adapters" / "abchina.py").read_text(encoding="utf-8")
+        # 没渲染出来的机构先进 pending，走完所有机构后补一轮（那会儿瞬时拥塞多半过去了）
+        self.assertIn("pending.append((recruit_type, job_type, org))", src)
+        self.assertIn("for recruit_type, job_type, org in list(pending):", src)
+        # 重试还不行才认漏抓，并且**不许再自称抓全**
+        self.assertIn("self.fetch_complete = (not truncated) and all_rendered", src)
 
     def test_is_not_in_the_httpx_concurrency_lane(self):
         # 它要起 Playwright（响应体加密，明文只在浏览器里），进并发档会把 sync API 跑崩。

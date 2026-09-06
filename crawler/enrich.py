@@ -682,6 +682,32 @@ def _detail_pinduoduo(row, src):
     return (duty + ("\n\n【任职要求】\n" + req if req else "")).strip()
 
 
+def _detail_chnenergy(row, src):
+    # jd_url = zhaopin.chnenergy.com.cn/annc/showgw?id={uuid}（showgw=岗位，showgg=公告，别混）。
+    # 2026-09-05 live 标定：在招 → 200 + ~60KB 页面且含「招聘岗位：」；不存在/撤岗 → 200 + 恰好
+    # 738 字节错误壳「查看岗位信息发生错误，请重试或者联系管理员。」（伪造同前缀 uuid / 随机 uuid /
+    # 非 uuid 三种输入签名完全一致）。判死要求**错误壳出现且「招聘岗位」缺席**两个条件同时成立，
+    # 半截页面一律不判死（宁可漏判不可错杀）。
+    job_id = (parse_qs(urlparse(row["jd_url"]).query).get("id") or [""])[0]
+    if not job_id:
+        return ""
+    r = httpx.get("https://zhaopin.chnenergy.com.cn/annc/showgw",
+                  params={"id": job_id},
+                  headers={**UA, "Accept": "text/html,application/xhtml+xml,*/*"},
+                  timeout=TIMEOUT, follow_redirects=True)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    html = r.text
+    if "查看岗位信息发生错误" in html and "招聘岗位" not in html:
+        raise JobClosedError(f"chnenergy id={job_id} closed (error shell)")
+    text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html, flags=re.S | re.I)
+    text = re.sub(r"\s+", " ", HTMLParser(text).text()).strip()
+    m = re.search(r"岗位职责(.*)", text, re.S)
+    # 页面尾部固定挂着「国家能源投资集团有限责任公司」版权行，截掉，别当正文存进去。
+    return (m.group(1) if m else "").split("国家能源投资集团有限责任公司")[0].strip()
+
+
 ENRICH_REGISTRY = {
     "huawei": _detail_huawei,
     "workday": _detail_workday,
@@ -717,6 +743,7 @@ ENRICH_REGISTRY = {
     "tencent_music": _detail_tencent_music,
     "iguopin": _detail_iguopin,
     "pinduoduo": _detail_pinduoduo,
+    "chnenergy": _detail_chnenergy,
     # meituan_campus 的 jd_url 与 meituan 完全同构（同 jobUnionId 参数、同接口；live 验证
     # 伪 id 返 status=0+「职位已下线或不存在！」与 _detail_meituan 判死逻辑逐字节吻合）：
     "meituan_campus": _detail_meituan,
