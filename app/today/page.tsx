@@ -12,21 +12,13 @@ import type { OpportunityFeed } from "@/lib/opportunities/types";
 import type { CandidateProfile, JobAction, UserPreferences } from "@/lib/types";
 import TodayClient, { OnboardingPanel } from "../today-client";
 import TodayPopularClient from "../today-popular-client";
+import { TODAY_HERO } from "./hero";
 import { Broadcast } from "@phosphor-icons/react/ssr";
 
 export const dynamic = "force-dynamic";
 // 须 ≥ jobs 池 statement_timeout(25s)：否则慢的跨区召回会先撞函数时限被杀（平台 504、不被页面 catch），
 // 用户看到的就不是「机会队列暂时无法更新」而是白屏错误页。给足余量到 30s（plan 支持，见 /api/jobs/search=60）。
 export const maxDuration = 30;
-
-const HERO = {
-  eyebrow: "今日机会",
-  title: "今天值得处理的官方岗位",
-  // ⚠️ 页头在 Suspense 之外、先于画像就绪与否被渲染，所以这句话**必须对两种人都成立**：
-  // 设过目标的看到的是精筛结果，没设过的看到的是「热门在招」兜底。原文案写着「已按你的目标、
-  // 简历完成筛选」，对后者是假话——而后者恰恰是新用户的第一屏。具体是哪一种由正文自己说清。
-  description: "这里只放企业官网的公开岗位，每天核对在招状态，点开即是官方详情页。",
-};
 
 /** 页面主体所需的一切；一次构建、各 Suspense 边界共用。构建过程中的失败都在内部兜住，promise 永不 reject。 */
 type TodayBundle = {
@@ -126,7 +118,12 @@ export default async function TodayPage({
             的计分板。2026-09-02 创始人明确要求下线：它把内部漏斗的中间数当卖点讲给用户听，
             而用户只关心「今天有什么值得投的」——「剔除 1,274 个」既不可验证，也容易让人觉得
             系统在自夸工作量。要衡量漏斗健康度请看 /admin/health，别放在用户面前。 */}
-        <ProductHero eyebrow={HERO.eyebrow} title={HERO.title} description={HERO.description} icon={Broadcast} />
+        <ProductHero
+          eyebrow={TODAY_HERO.eyebrow}
+          title={TODAY_HERO.title}
+          description={TODAY_HERO.description}
+          icon={Broadcast}
+        />
 
         <section className="mt-8">
           <Suspense fallback={<JobListSkeleton count={6} />}>
