@@ -801,6 +801,176 @@
       "location": "保定市,海外",
       "expected": "CN",
       "note": "混写「大陆城市 + 海外」仍判 CN —— 自报境外那条规则不许把这类岗带走"
+    },
+    {
+      "location": "Beaverton",
+      "expected": "US",
+      "note": "只写城市名不带州的写法：州缩写规则够不着（串里没有州），live 实测 1,972 个在招岗因此抽不出国家"
+    },
+    {
+      "location": "Culver City",
+      "expected": "US",
+      "note": "只写城市名不带州的写法：州缩写规则够不着（串里没有州），live 实测 1,972 个在招岗因此抽不出国家"
+    },
+    {
+      "location": "Waltham",
+      "expected": "US",
+      "note": "只写城市名不带州的写法：州缩写规则够不着（串里没有州），live 实测 1,972 个在招岗因此抽不出国家"
+    },
+    {
+      "location": "Lehi",
+      "expected": "US",
+      "note": "只写城市名不带州的写法：州缩写规则够不着（串里没有州），live 实测 1,972 个在招岗因此抽不出国家"
+    },
+    {
+      "location": "Irvine",
+      "expected": "US",
+      "note": "只写城市名不带州的写法：州缩写规则够不着（串里没有州），live 实测 1,972 个在招岗因此抽不出国家"
+    },
+    {
+      "location": "Phoenix, , , E, Camelback",
+      "expected": "US",
+      "note": "只写城市名不带州的写法：州缩写规则够不着（串里没有州），live 实测 1,972 个在招岗因此抽不出国家"
+    },
+    {
+      "location": "Cary, 3000, CentreGreen, Way",
+      "expected": "US",
+      "note": "只写城市名不带州的写法：州缩写规则够不着（串里没有州），live 实测 1,972 个在招岗因此抽不出国家"
+    },
+    {
+      "location": "NC, CHARLOTTE, BALLANTYNE",
+      "expected": "US",
+      "note": "只写城市名不带州的写法：州缩写规则够不着（串里没有州），live 实测 1,972 个在招岗因此抽不出国家"
+    },
+    {
+      "location": "East, Hanover",
+      "expected": "US",
+      "note": "只写城市名不带州的写法：州缩写规则够不着（串里没有州），live 实测 1,972 个在招岗因此抽不出国家"
+    },
+    {
+      "location": "Sioux, Falls, , , Cherapa",
+      "expected": "US",
+      "note": "只写城市名不带州的写法：州缩写规则够不着（串里没有州），live 实测 1,972 个在招岗因此抽不出国家"
+    },
+    {
+      "location": "Toronto, ON, CA",
+      "expected": null,
+      "note": "串尾 CA 是加拿大不是加州：另有省码 ON/QC/AB/NS 即判定为加拿大（live 实测 42 个在招岗被误判成美国）"
+    },
+    {
+      "location": "Calgary, AB, CA",
+      "expected": null,
+      "note": "串尾 CA 是加拿大不是加州：另有省码 ON/QC/AB/NS 即判定为加拿大（live 实测 42 个在招岗被误判成美国）"
+    },
+    {
+      "location": "Montreal, QC, CA",
+      "expected": null,
+      "note": "串尾 CA 是加拿大不是加州：另有省码 ON/QC/AB/NS 即判定为加拿大（live 实测 42 个在招岗被误判成美国）"
+    },
+    {
+      "location": "Nova Scotia, NS, CA",
+      "expected": null,
+      "note": "串尾 CA 是加拿大不是加州：另有省码 ON/QC/AB/NS 即判定为加拿大（live 实测 42 个在招岗被误判成美国）"
+    },
+    {
+      "location": "Ontario, CA",
+      "expected": "US",
+      "note": "红线：Ontario 既是加拿大省份也是加州城市，所以护栏只认省码不认省份全称，'ONTARIO, CA' 必须仍是美国"
+    },
+    {
+      "location": "ONTARIO, CA",
+      "expected": "US",
+      "note": "红线：Ontario 既是加拿大省份也是加州城市，所以护栏只认省码不认省份全称，'ONTARIO, CA' 必须仍是美国"
+    },
+    {
+      "location": "4200, E, 4th, St, OntarioCA, 91764, 5250",
+      "expected": "US",
+      "note": "红线：Ontario 既是加拿大省份也是加州城市，所以护栏只认省码不认省份全称，'ONTARIO, CA' 必须仍是美国"
+    },
+    {
+      "location": "Mumbai, Maharashtra, IN",
+      "expected": null,
+      "note": "串尾 IN 是印度不是印第安纳：另有邦名/邦码即判定为印度（原规则只挡住小写的 'Chennai, TN, in'）"
+    },
+    {
+      "location": "Hyderabad, , , TS, , , IN",
+      "expected": null,
+      "note": "串尾 IN 是印度不是印第安纳：另有邦名/邦码即判定为印度（原规则只挡住小写的 'Chennai, TN, in'）"
+    },
+    {
+      "location": "Bloomington, IN",
+      "expected": "US",
+      "note": "串尾 IN 是印度不是印第安纳：另有邦名/邦码即判定为印度（原规则只挡住小写的 'Chennai, TN, in'）"
+    },
+    {
+      "location": "Fort Wayne, IN, US, 46816",
+      "expected": "US",
+      "note": "串尾 IN 是印度不是印第安纳：另有邦名/邦码即判定为印度（原规则只挡住小写的 'Chennai, TN, in'）"
+    },
+    {
+      "location": "Cambridge",
+      "expected": null,
+      "note": "反向：有知名同名外国城市的一律不收进 US 城市表，宁可判不出也不能把英国岗判成美国"
+    },
+    {
+      "location": "Durham",
+      "expected": null,
+      "note": "反向：有知名同名外国城市的一律不收进 US 城市表，宁可判不出也不能把英国岗判成美国"
+    },
+    {
+      "location": "Melbourne",
+      "expected": null,
+      "note": "反向：有知名同名外国城市的一律不收进 US 城市表，宁可判不出也不能把英国岗判成美国"
+    },
+    {
+      "location": "Québec City, Quebec, CA",
+      "expected": null,
+      "note": "串尾 CA + 加拿大省份全称 ⇒ 加拿大（省码之外再收全称，2026-09-05 实测净赚 24 岗、误伤 0）"
+    },
+    {
+      "location": "Stellarton, Nova Scotia, CA",
+      "expected": null,
+      "note": "串尾 CA + 加拿大省份全称 ⇒ 加拿大（省码之外再收全称，2026-09-05 实测净赚 24 岗、误伤 0）"
+    },
+    {
+      "location": "Chetwynd, British Columbia, CA",
+      "expected": null,
+      "note": "串尾 CA + 加拿大省份全称 ⇒ 加拿大（省码之外再收全称，2026-09-05 实测净赚 24 岗、误伤 0）"
+    },
+    {
+      "location": "Charlottetown, Prince Edward Island, CA",
+      "expected": null,
+      "note": "串尾 CA + 加拿大省份全称 ⇒ 加拿大（省码之外再收全称，2026-09-05 实测净赚 24 岗、误伤 0）"
+    },
+    {
+      "location": "Hay River, Northwest Territories, CA",
+      "expected": null,
+      "note": "串尾 CA + 加拿大省份全称 ⇒ 加拿大（省码之外再收全称，2026-09-05 实测净赚 24 岗、误伤 0）"
+    },
+    {
+      "location": "Mississauga, Ontario, CA",
+      "expected": "US",
+      "note": "红线：ontario 是唯一不收全称的省 —— 含 ontario 且串尾 CA 的 33 岗里 19 岗是加州安大略市"
+    },
+    {
+      "location": "New, Brunswick, , , NJ",
+      "expected": "US",
+      "note": "红线：new brunswick / yukon / quebec 同时是美国地名（强生总部 New Brunswick NJ 等 ~220 岗），本护栏只在串尾码是 CA 时才查，泛化即炸"
+    },
+    {
+      "location": "Yukon, OK, US",
+      "expected": "US",
+      "note": "红线：new brunswick / yukon / quebec 同时是美国地名（强生总部 New Brunswick NJ 等 ~220 岗），本护栏只在串尾码是 CA 时才查，泛化即炸"
+    },
+    {
+      "location": "93, N, Quebec, St, DenverCO, 80230",
+      "expected": "US",
+      "note": "红线：new brunswick / yukon / quebec 同时是美国地名（强生总部 New Brunswick NJ 等 ~220 岗），本护栏只在串尾码是 CA 时才查，泛化即炸"
+    },
+    {
+      "location": "965, Town, Center, Dr, La, Canada, FlintridgeCA, 91011, 1638",
+      "expected": "US",
+      "note": "红线：new brunswick / yukon / quebec 同时是美国地名（强生总部 New Brunswick NJ 等 ~220 岗），本护栏只在串尾码是 CA 时才查，泛化即炸"
     }
   ]
 }
