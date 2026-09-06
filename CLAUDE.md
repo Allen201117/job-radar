@@ -631,6 +631,58 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 ✅ 统一口径：**逐渠道判**「这个渠道抓到它自报的总数了吗」，全部为真才算抓全。
 huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 adapter 照抄。
 
+## ⚠️ crawl_runs：`running` 是占位符不是状态，`skipped` 里还混着第三类（2026-09-05 立，迁移 234）
+
+`create_crawl_run` **在 insert 那一刻就写一个占位符**，跑完才由 `update_crawl_run` 覆盖成终态。
+进程半途死掉（CI 超时/取消、OOM、被 kill）这行就再没人回写。占位符原来是 `'skipped'`，
+于是「跑崩了」和「按设计跳过」**在 status 上完全同形**，而规则 F 只认 `failed` → 静默丢源。
+迁移 234 把占位符改成 `'running'`（对齐 `discovery_runs` 早就有的 queued/running）。
+
+- **判「没收尾」用 `finished_at is null`，不要只认 `status='running'`**：存量 72 条历史孤儿
+  没有回填，至今仍是 `skipped`+`finished_at is null`。只认新占位符会漏掉它们。
+  告警在 `ops_watchdog` 规则 I（`evaluate_unfinished_crawls`，宽限期 `UNFINISHED_CRAWL_HOURS=6`）。
+- ❌ **快照里的「空记录」不等于崩溃**：2026-09-05 当场看到 10 个源（华为/字节跳动/伊利/顺丰…）
+  留着空记录，**1~3 分钟后全部 success 收尾** —— 它们只是查询那一瞬间在飞。
+  ✅ 防：判据必须带宽限期，别把 `finished_at is null` 单独当证据（迁移 234 注释把这 10 条
+  当成 CI 被杀的例子，**那条是错的**，已在规则 I 的 docstring 里更正）。
+- ❌ **CI 全绿照样丢源，别直奔 workflow 超时**：2026-09-04 两批成因相反 ——
+  19:11 的 `daily-job-crawl` 确实 failure+步骤被中断（3 条）；而 09:32 的 `enrichment-crawl`
+  **六片全 success、guard 也 success**，照样有 7 个 workday 源开跑后再无下文。
+  ✅ 防：看到规则 I 的告警，先确认那次 run 到底红没红，再决定查 CI 还是查 adapter。
+
+### 第三类：连不上曾被 `should_skip` 吞成 `skipped`（已修，留碑是为了另一个教训）
+
+全表 3,455 条 `skipped` 拆开（2026-09-05 实测）：**3,383 真跳过 + 72 没收尾 + 0 第三形态**
+（`finished_at`/`error_message` 两个判据完全同构，不存在「有收尾无原因」或「无收尾有原因」）。
+但在那 3,383「真跳过」内部有 **53 条根本不是设计跳过**：`Connection failed: timed out` /
+`_ssl.c:999 handshake timed out` / `Errno 101 Network is unreachable` —— 是 HEAD 预检连不上对方，
+被 `return f"Connection failed: {e}"` 记成了「跳过」。
+真正的设计跳过是这几种：iguopin 详情核验 2,046 / wecruit 板块未发布 506 / feishu 门户 404 504 /
+robots 禁止 218 / wecruit 门户不存在 55。
+
+危险在于：**规则 F「源连续失败」只认 `status='failed'`**，被吞成 `skipped` 的源永远凑不满
+「全部 failed」→ 一个永久连不上的源可以无限期静默。
+
+✅ **已修**：`729df39`（2026-08-28 02:00）把那行改成 `except Exception: return None`
+（fail-open 且不进 host 缓存）→ 连不上就照常往下抓、抓不动落 `failed`，规则 F 认得出。
+live 复核：修复前 53 条、**修复后 0 条**，最后一次 2026-08-27 07:59。
+AST 扫过全部 36 个 `should_skip` 覆写，**没有一个**在 `except` 里 return 跳过原因，路径已封死。
+
+⚠️ **真正要记的教训是别的：我差点把这个已修的洞又修一遍。**
+症状是从**线上存量数据**里查出来的（54 条历史行还躺在表里），读起来像「现在还在发生」，
+而它其实 9 天前就停了。**看到存量里的坏数据，第一件事是查「最后一次发生是什么时候」**，
+不是直接去改代码 —— `select max(started_at)` 一句话的事，能省掉一整轮返工，
+更能避免「修一个不存在的问题」顺手把好代码改坏。
+
+### `crawl_runs` 终态没写成 → 看 `ops_runs.metrics.crawl_run_unrecorded`（2026-09-05 加）
+
+`_process_one_source` 里成功路径的 `update_crawl_run` 抛错会落进 `except`，那里再写一次 `failed`；
+**两次都失败**时旧代码只 `print` 一行就放过 —— 行停在 `running` 占位符上，规则 I 能看见这条孤儿，
+却看不出成因。现在这种情况会计进 `daily_crawl` 台账的 `crawl_run_unrecorded`，并打一条
+`::warning::`。它是**唯一**能区分「进程被杀」和「进程活着但回写失败」的证据：
+2026-09-04 那 7 个 workday 源就卡在这个岔口 —— enrichment-crawl 六片全 success、guard 也 success，
+GitHub 日志又已被截断，事后无从复原。⚠️ 目前没有告警规则读这个指标，排查规则 I 时要手动对读。
+
 ## 🚫 归属准确性没有旁路 —— 国聘集团展开曾 84% 挂错公司（2026-09-04 立）
 
 `crawler/adapters/iguopin.py` 的「集团子公司展开」这条路径过去对 `_group_child` 行
