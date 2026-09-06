@@ -340,6 +340,10 @@ def evaluate_zero_output(rows, today, days=2, muted=()):
     return findings, skipped
 
 
+# 规则 I：跑了这么久还没回写终态就当它崩了。必须显著大于一轮抓取耗时，否则会把在跑的源误报。
+UNFINISHED_CRAWL_HOURS = 6
+
+
 def evaluate_dead_sources(crawl_rows, sources_by_id, days=5, min_runs=DEAD_SOURCE_MIN_RUNS):
     """规则 F：某个 enabled 源在近 days 天内跑了 ≥ min_runs 次且**全部** failed → 告警。
 
@@ -375,6 +379,63 @@ def evaluate_dead_sources(crawl_rows, sources_by_id, days=5, min_runs=DEAD_SOURC
                     "环境缺件（浏览器不存在等）→ 修 workflow；其它 → 修 adapter。别让它继续每轮白跑。",
         })
     return findings
+
+
+def evaluate_unfinished_crawls(crawl_rows, sources_by_id, now=None,
+                               hours=UNFINISHED_CRAWL_HOURS):
+    """规则 I：抓取跑到一半死了 —— crawl_runs 有 started_at 却永远等不到 finished_at。
+
+    为什么必须自动报：`db.create_crawl_run` 先插一行占位、跑完才 update 成终态。进程被
+    CI 超时/取消、OOM、kill 掉时，这一行就**再没人回写**。历史上占位符是 'skipped'
+    （迁移 234 改成 'running'），于是「跑崩了」和「按设计跳过」在 status 上完全同形，
+    而规则 F 只认 status='failed' → 一次 CI 超时吞掉 10 个源，台账上一点异常都看不见。
+    2026-09-05 实测近 7 天 25 条中招，其中 09-05 05:06 有 10 个源在约 30 秒内集体留空。
+
+    ⚠️ 判据是 **finished_at 为空**，刻意**不看 status**：status 正是那个已经被证明会骗人的字段，
+    而且新旧两种占位符（旧 'skipped' / 新 'running'）都得认得出，只认一种等于修了个寂寞。
+
+    ⚠️ hours 要显著大于一轮抓取的正常耗时，否则**正在跑的源**会被当成崩溃
+    （daily-crawl 每 6h 一轮，浏览器源单个 2–5min）。默认 6h：跑了 6 小时还没回写的，
+    那一轮早就结束了。
+
+    输出**一条聚合 finding**：这类故障天然成簇（一次超时带走一批），每源一条会把告警刷屏。
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=hours)
+    stuck = []
+    for row in crawl_rows or []:
+        if (row or {}).get("finished_at"):
+            continue
+        started = _as_dt(row.get("started_at"))
+        if not started or started > cutoff:
+            continue
+        source = sources_by_id.get(row.get("source_id"))
+        if not source or not source.get("enabled", True):
+            continue
+        stuck.append((started, source))
+    if not stuck:
+        return []
+    stuck.sort(key=lambda item: item[0])
+    by_adapter = Counter(str(src.get("adapter_name") or "?") for _, src in stuck)
+    # 同一分钟内集体留空 = 整批被掐（CI 超时/取消），比零散崩溃更值得先看。
+    by_minute = Counter(started.strftime("%Y-%m-%d %H:%M") for started, _ in stuck)
+    worst_minute, worst_n = by_minute.most_common(1)[0]
+    return [{
+        "rule": "I",
+        "subject": "crawl_runs 未收尾",
+        "summary": (f"`crawl_runs` 有 {len(stuck)} 条跑了超过 {hours} 小时还没回写终态，"
+                    f"= 这些源的抓取半途死了（不是被跳过）。"),
+        "evidence": [
+            f"按 adapter 分：{dict(by_adapter)}",
+            f"最密集的一分钟：{worst_minute} 有 {worst_n} 条同时留空"
+            + ("（像一次 CI 超时/取消带走一整批）" if worst_n >= 3 else ""),
+        ] + [
+            f"{started.isoformat()} {src.get('adapter_name') or '?'} / {src.get('company') or '?'}"
+            for started, src in stuck[:10]
+        ],
+        "next": "去对应 workflow run 看是不是超时/被取消：是就调该档的超时或分片；"
+                "不是就查 adapter 有没有卡死在某个请求上。别让它继续每轮静默丢源。",
+    }]
 
 
 def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
@@ -956,7 +1017,7 @@ def main():
         dead_since = (now - timedelta(days=args.dead_source_days)).isoformat()
         crawl_rows = db.fetch_all_rows(
             lambda: sb.table("crawl_runs")
-                      .select("source_id,status,error_message,started_at,"
+                      .select("source_id,status,error_message,started_at,finished_at,"
                               "reported_total,coverage_complete,jobs_found")
                       .gte("started_at", dead_since)
         )
@@ -969,6 +1030,8 @@ def main():
                                           days=args.dead_source_days)
         # 规则 G 复用同一批 crawl_rows / sources（多取三列，不多打一次库）。
         findings += evaluate_coverage_shortfall(crawl_rows, sources_by_id)
+        # 规则 I 复用同一批 crawl_rows（多取 finished_at 一列，不多打一次库）。
+        findings += evaluate_unfinished_crawls(crawl_rows, sources_by_id, now=now)
         findings += evaluate_duplicate_portals(sources_by_id)
     except Exception as exc:  # noqa: BLE001
         print(f"::warning::[watchdog] 规则 F/G（源连续失败 / 抓不全）本轮没查成："

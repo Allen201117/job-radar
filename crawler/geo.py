@@ -132,10 +132,18 @@ OVERSEAS_LOCATION_TOKENS = {
     "europe", "emea", "americas", "latam", "brazil", "mexico", "argentina", "colombia",
     "india", "japan", "korea", "singapore", "malaysia", "thailand", "vietnam", "indonesia",
     "philippines", "australia", "nz", "uae", "dubai", "israel", "egypt", "turkey", "africa",
+    # 下面这批是 2026-09-05 补的：外企 ATS（SmartRecruiters）把国家写成 ISO-2 码，adapter 出口
+    # 已展开成国名，这里必须认得出来，否则「Remote Romania」这类岗在 regions 含 CN 的源上会被
+    # derive_job_scope 的兜底判成 domestic —— 正是 76ce4ff 修掉的那个坑。名单由
+    # crawler/adapters/smartrecruiters._ISO2_COUNTRY_NAMES 决定，契约测试逐条对齐。
+    "algeria", "bulgaria", "cambodia", "chile", "croatia", "czechia", "denmark", "ecuador",
+    "estonia", "finland", "guatemala", "hungary", "latvia", "lithuania", "morocco", "norway",
+    "pakistan", "romania", "russia", "serbia", "slovakia", "slovenia", "tunisia", "ukraine",
 }
 OVERSEAS_LOCATION_PHRASES = (
     "united states", "united kingdom", "new zealand", "south korea", "saudi arabia",
     "sri lanka", "costa rica", "south africa",
+    "united arab emirates", "dominican republic", "puerto rico", "aland islands",
 )
 
 # 台湾（县市级）。⚠️ 台湾按项目口径**不抓、不归入任一范围**：TW ∉ 任何 source regions
@@ -270,6 +278,11 @@ _NON_PLACE_SEGMENTS = frozenset({
 # 但 derive_job_scope 必须判 overseas —— 不能让它走 source.regions 兜底被算成国内供给。
 _OVERSEAS_UNSPECIFIED_SEGMENTS = frozenset({
     "海外", "国外", "境外", "海外地区", "国外地区", "海外国家", "境外地区",
+    # 「X区域」与上面的「X地区」同构。证据：中控技术把 26 个在招岗的地点写成「海外区域」，
+    # 补前它们落回 source.regions 兜底 → CN 源 → 判 domestic，正是这条规则要治的病
+    # （2026-09-05 全库 19,728 个地点写法扫完，自报境外却仍判 domestic 的只剩这一种写法；
+    #  其余如「保定市,海外」含大陆城市，判 domestic 本来就是对的）。
+    "海外区域", "国外区域", "境外区域",
 })
 
 # 境外中文地名：**整段精确匹配**，含后缀的完整形态一并列出（见上面的红线说明）。
@@ -611,16 +624,110 @@ _US_STATE_TAIL_RE = re.compile(
 )
 
 
+# 只写城市名、不带州的写法（Apple / 诺华 / NXP 的岗位板整批这么写：
+# "Beaverton" / "Culver City" / "Phoenix, , , E, Camelback" / "Cary, 3000, CentreGreen, Way"）。
+# 州缩写那套规则对它们无能为力（串里根本没有州），live 实测 298 个地点 / 1,972 个在招岗
+# 因此抽不出国家 → 按源 regions 兜底 → 源含 CN 就算进国内供给。
+# ⚠️ 城市名是**无条件 token**，不受任何位置/大小写限制，所以只收「没有知名同名外国城市」的：
+#    Cambridge / Durham / Birmingham / Richmond / Melbourne / Vienna / Dublin / Athens /
+#    Manchester / Milton / Markham 这类英美加澳重名的**一律不收**——收错一个就是把
+#    英国岗判成美国岗。Ontario 同理不收（Ontario 既是加拿大省份也是加州城市）。
+_US_CITY_NAMES = (
+    "indianapolis", "orlando", "pittsburgh", "boulder", "clearwater",
+    "scottsdale", "white plains", "fort lauderdale", "aliso viejo",
+    "palm beach gardens", "columbus", "philadelphia", "leawood", "raleigh",
+    "carlsbad", "las vegas", "overland park", "waukesha", "morristown",
+    "minneapolis", "fort worth", "fargo", "charlotte", "golden valley",
+    "walnut creek", "urbandale", "van nuys", "louisville", "chesterfield",
+    "schaumburg", "phoenix", "cary", "alpharetta", "chandler", "jacksonville",
+    "beaverton", "culver city", "waltham", "lehi", "irvine", "reston",
+    "milwaukee", "detroit", "kansas city", "salt lake city", "saint louis",
+    "st. louis", "memphis", "nashville", "tampa", "miami", "baltimore",
+    "sacramento", "san antonio", "santa monica", "tucson", "albuquerque",
+    "boise", "omaha", "des moines", "wichita", "oklahoma city", "tulsa",
+    "new orleans", "colorado springs", "fort collins", "grand rapids",
+    "ann arbor", "kalamazoo", "peoria", "sioux falls", "cincinnati",
+    "cleveland", "el paso", "plano", "irving", "richardson", "round rock",
+    "greenville", "hunt valley", "morris plains", "east hanover", "rahway",
+    "troy", "mossville", "portage", "lafayette", "batesville", "noblesville",
+    "smithfield", "merrimack", "glenview", "deerfield", "swiftwater",
+    "allentown", "mahwah", "maitland", "miramar", "livonia", "menominee",
+    "seguin", "waco", "tyler", "griffin", "corinth", "clarksville",
+)
+
+# 串尾两字母码撞别国国别码时的护栏（本规则只减不增：命中就**不判美国**，落回 None）。
+# ⚠️ **Ontario 是唯一不能收全称的省**：它既是加拿大省份也是加州的城市。
+#    live 实测「含 ontario 且串尾码是 CA」共 33 个在招岗，**19 个是加州安大略市**
+#    （"ONTARIO, CA" 13 + "Ontario, CA" 6）、只有 14 个是加拿大安大略省
+#    （"Mississauga, Ontario, CA" 9 / "Newmarket, Ontario, CA" 4 / "Aurora, Ontario, CA" 1）——
+#    收它净亏 5 个岗，而且亏的方向是「把真美国岗判错」，比漏判更糟。
+#    其余省份全称不撞美国地名，收进来净赚 24 个岗、误伤 0（2026-09-05 全库实测）。
+_CA_PROVINCE_CODES = frozenset("AB BC MB NB NL NS NT NU ON PE QC SK YT".split())
+# ⚠️ 这里也**不收裸 "canada"**：实测会当场打中
+#    "965, Town, Center, Dr, La, Canada, FlintridgeCA, 91011"（加州 La Cañada Flintridge）。
+# ⚠️ 更要命的是：new brunswick / yukon / quebec 三个**同时是美国地名**
+#    （新泽西州 New Brunswick 是强生总部所在地，全库 ~220 个岗；俄克拉荷马州 Yukon；
+#    丹佛有 Quebec St）。本表**只在「串尾码恰好是 CA」时才被查**，那 220 个岗的串尾是
+#    NJ / US / OK / CO，碰不到这里 —— 谁要是把它泛化成「串里出现省名就否决」，当场炸这 220 个。
+_CA_PROVINCE_NAMES = (
+    "quebec", "québec", "british columbia", "alberta", "manitoba", "saskatchewan",
+    "nova scotia", "new brunswick", "newfoundland", "prince edward island",
+    "yukon", "nunavut", "northwest territories",
+)
+# ⚠️ 印度反过来：邦名不与任何美国地名重名，所以码和全称都能收。
+#    main 原注释只挡住了小写的 "Chennai, TN, in"，**大写的 "Mumbai, Maharashtra, IN"
+#    仍然会被判成印第安纳**（live 实测 2 个在招岗），这里补上。
+_IN_REGION_CODES = frozenset("AP AR AS BR CG DL GA GJ HP HR JH JK KA KL MH ML MN MP MZ NL "
+                             "OD PB RJ SK TN TS UK UP WB".split())
+_IN_REGION_NAMES = (
+    "maharashtra", "karnataka", "telangana", "tamil nadu", "haryana", "gujarat",
+    "kerala", "punjab", "rajasthan", "bengaluru", "bangalore", "mumbai",
+    "chennai", "hyderabad", "gurgaon", "gurugram", "noida", "kolkata", "ahmedabad",
+)
+_TAIL_CODE_GUARDS = {"CA": "_ca", "IN": "_in"}
+
 # 州全称并进 US 词表，走 _contains_token 的词边界语义（"Mossville, Illinois" 即命中）。
 _COUNTRY_TOKENS["US"].extend(_US_STATE_NAMES)
+# 城市名同样并进 US 词表（同为词边界语义）。
+_COUNTRY_TOKENS["US"].extend(_US_CITY_NAMES)
+
+
+def _foreign_tail_code(text: str, upper_tokens: set, code: str) -> bool:
+    """串尾那个两字母码其实是别国国别码吗？只对 CA / IN 这两个真撞车的做判定。"""
+    if code == "CA":
+        if upper_tokens & _CA_PROVINCE_CODES:
+            return True
+        return any(_contains_token(text, name) for name in _CA_PROVINCE_NAMES)
+    if code == "IN":
+        if upper_tokens & _IN_REGION_CODES:
+            return True
+        return any(_contains_token(text, name) for name in _IN_REGION_NAMES)
+    return False
 
 
 def _has_us_state(location: Optional[str]) -> bool:
-    """「City, ST」位置上的美国州缩写。必须大写、必须在串尾，避免撞英文单词与别国缩写。"""
+    """「City, ST」位置上的美国州缩写。必须大写、必须在串尾，避免撞英文单词与别国缩写。
+
+    ⚠️ 大写 + 串尾仍挡不住两个真撞车的国别码，live 实测都在库里：
+      · "Toronto, ON, CA" / "Calgary, AB, CA" —— CA 是加拿大不是加州（42 个在招岗）
+      · "Mumbai, Maharashtra, IN" —— IN 是印度不是印第安纳（2 个）
+    所以再加一道**只减不增**的护栏：串里另有该国的省/邦标识就不判美国。
+    """
     if not location:
         return False
-    match = _US_STATE_TAIL_RE.search(location.strip())
-    return bool(match) and match.group(1) in _US_STATE_CODES
+    stripped = location.strip()
+    match = _US_STATE_TAIL_RE.search(stripped)
+    if not match:
+        return False
+    code = match.group(1)
+    if code not in _US_STATE_CODES:
+        return False
+    if code in _TAIL_CODE_GUARDS:
+        upper = {t for t in re.split(r"[^A-Za-z]+", stripped) if t.isupper()}
+        upper.discard(code)
+        if _foreign_tail_code(_norm(stripped), upper, code):
+            return False
+    return True
 
 def _norm(text: Optional[str]) -> str:
     return (text or "").strip().lower()
@@ -751,9 +858,19 @@ def derive_job_scope(location: Optional[str], regions=None) -> str:
     code = derive_country_code(location)
     if code is not None:
         return "domestic" if code in _GREATER_CHINA else "overseas"
-    # 地点自报「海外」「国外」——没有国家可给，但绝不能走下面的 source.regions 兜底：
-    # CN 源下的「海外」岗会被算成国内供给（线上 1,119 个 active 岗是这么写的）。
+    # 下面两条都是「抽不出国家码、但地点已经说明白它在境外」——**都必须排在 source.regions
+    # 兜底之前**，兜底只该服务「真的什么都没说」的地点（裸「远程」/ 空 / Multiple Locations）。
+    # 两条各治一种写法，缺一不可：
+    #
+    # ① 地点自报「海外」「国外」——没有国家可给，但绝不能走 regions 兜底：
+    #    CN 源下的「海外」岗会被算成国内供给（线上 1,119 个 active 岗是这么写的）。
     if is_overseas_unspecified(location):
+        return "overseas"
+    # ② 地点里**明确钉着一个境外地名**（"Remote Germany" / "India (Remote)" / "Minato-ku, Japan"）：
+    #    少了这一层，给外企源补 CN（迁移 232）会让它名下所有海外远程岗一起变成国内岗 ——
+    #    2026-09-05 实测那批源上有 121 个（艾伯维 102 / 大陆集团 13 / Grab 4 / Expeditors 1 / 育碧 1）。
+    #    注意顺序：code 优先。地点能判出国家就以国家为准，这里只管「有地名、但不在 geo 的国家词典里」。
+    if _is_overseas_pinned(location):
         return "overseas"
     if regions:
         if "CN" not in {str(r).strip() for r in regions}:

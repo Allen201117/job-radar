@@ -330,6 +330,76 @@ class PublishTest(unittest.TestCase):
         self.assertEqual((opened, commented, calls), (0, 0, []))
 
 
+class TestUnfinishedCrawls(unittest.TestCase):
+    """规则 I：抓取半途死了 —— 有 started_at 没 finished_at。
+
+    真实病例：2026-09-05 05:06 前后 10 个源在约 30 秒内集体留下空记录（像一次 CI 超时），
+    而它们的 status 全是当时的占位符 'skipped'，与「按设计跳过」同形 → 规则 F 看不见、
+    模块级绿灯，没有任何告警。
+    """
+
+    NOW = datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc)
+    SOURCES = {
+        "s1": {"adapter_name": "beisen", "company": "诺禾致源", "enabled": True},
+        "s2": {"adapter_name": "workday", "company": "Visa", "enabled": True},
+        "s3": {"adapter_name": "moka", "company": "正泰集团", "enabled": False},
+    }
+
+    def _row(self, sid, hours_ago, finished=False, status="running"):
+        started = self.NOW - timedelta(hours=hours_ago)
+        return {
+            "source_id": sid,
+            "status": status,
+            "started_at": started.isoformat(),
+            "finished_at": (started + timedelta(seconds=3)).isoformat() if finished else None,
+        }
+
+    def test_flags_runs_that_never_wrote_a_terminal_status(self):
+        rows = [self._row("s1", 8), self._row("s2", 9)]
+        [finding] = W.evaluate_unfinished_crawls(rows, self.SOURCES, now=self.NOW)
+        self.assertEqual(finding["rule"], "I")
+        self.assertIn("2", finding["summary"])
+
+    def test_ignores_finished_runs(self):
+        rows = [self._row("s1", 8, finished=True), self._row("s2", 9, finished=True)]
+        self.assertEqual(W.evaluate_unfinished_crawls(rows, self.SOURCES, now=self.NOW), [])
+
+    def test_does_not_flag_in_flight_runs(self):
+        """正在跑的源 finished_at 也是空 —— 不许把它们报成崩溃。"""
+        rows = [self._row("s1", 0.1), self._row("s2", 1)]
+        self.assertEqual(W.evaluate_unfinished_crawls(rows, self.SOURCES, now=self.NOW), [])
+
+    def test_catches_legacy_skipped_placeholder(self):
+        """迁移 234 之前的占位符是 'skipped' —— 判据不看 status，这类必须照样抓得到。
+
+        这正是规则 I 存在的理由：只认 'running' 等于只修了新数据，
+        而线上历史孤儿全是 'skipped'。
+        """
+        rows = [self._row("s1", 8, status="skipped")]
+        self.assertEqual(len(W.evaluate_unfinished_crawls(rows, self.SOURCES, now=self.NOW)), 1)
+
+    def test_ignores_disabled_sources(self):
+        self.assertEqual(
+            W.evaluate_unfinished_crawls([self._row("s3", 8)], self.SOURCES, now=self.NOW), [])
+
+    def test_ignores_unknown_source_id(self):
+        self.assertEqual(
+            W.evaluate_unfinished_crawls([self._row("nope", 8)], self.SOURCES, now=self.NOW), [])
+
+    def test_reports_the_densest_minute_as_a_batch_kill(self):
+        """一次超时带走一整批 —— 证据里要点出「同一分钟 N 条」，否则看不出是批量事故。"""
+        rows = [self._row("s1", 8), self._row("s2", 8), self._row("s1", 8)]
+        [finding] = W.evaluate_unfinished_crawls(rows, self.SOURCES, now=self.NOW)
+        joined = " ".join(finding["evidence"])
+        self.assertIn("3 条同时留空", joined)
+        self.assertIn("CI 超时", joined)
+
+    def test_single_stragglers_are_not_called_a_batch_kill(self):
+        rows = [self._row("s1", 8), self._row("s2", 9)]
+        [finding] = W.evaluate_unfinished_crawls(rows, self.SOURCES, now=self.NOW)
+        self.assertNotIn("CI 超时", " ".join(finding["evidence"]))
+
+
 if __name__ == "__main__":
     unittest.main()
 

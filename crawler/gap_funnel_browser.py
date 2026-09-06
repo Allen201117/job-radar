@@ -440,6 +440,7 @@ def process_browser_company(
                         adapter, source_url = routed["adapter"], routed["source_url"]
                         discovered = routed["discovered"]
                         probe_result = candidate_probe
+                        hop_trail[-1]["adopted"] = True
                     else:
                         hop_trail[-1]["kept_baseline"] = True
         # ② 同主域的自家招聘子域候选，跟过去看它把我们带到哪儿。
@@ -486,6 +487,7 @@ def process_browser_company(
                         adapter, source_url = routed["adapter"], routed["source_url"]
                         discovered = routed["discovered"]
                         probe_result = candidate_probe
+                        step["adopted"] = True
                         break
                     step["kept_baseline"] = True
                     continue
@@ -628,6 +630,29 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
             and row.get("source_id")
             and row.get("evidence", {}).get("source_inserted_new") is True
         ),
+        # 渲染后改道的两个数**必须成对看**，只记一个总数会把两种完全不同的情况混成同一个 0：
+        #   recognized=0            → 这轮队列里就没有「渲染后能认出真平台」的公司（正常，队列组成问题）
+        #   recognized>0, adopted=0 → 认出来了却一个都没换成 → 指纹/身份门/探活出问题（该看）
+        # 这正是 CLAUDE.md「绿灯零产出」那条碑要防的：分不清就只能看到一个不会说话的 0。
+        "rendered_route_recognized": sum(
+            1
+            for row in outcomes
+            if any(
+                step.get("via") == "rendered_html_ats"
+                for step in ((row.get("evidence") or {}).get("entry_hops") or [])
+            )
+        ),
+        # ⚠️ 判据用显式的 `adopted`，不能用 `trusted is True`：过了信任门 ≠ 采用了。
+        # 认出来但真抓更少而保留了原产出（kept_baseline）、以及认出 httpx 平台只记进
+        # evidence 留给下一轮的，都**没有改道**，算进去就是把数字刷虚。
+        "rendered_route_adopted": sum(
+            1
+            for row in outcomes
+            if any(
+                step.get("adopted") is True
+                for step in ((row.get("evidence") or {}).get("entry_hops") or [])
+            )
+        ),
         "states": dict(counts),
         "dry_run": not apply,
         "list_version": must_apply.version(),
@@ -648,11 +673,14 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
         if item[0] not in _NOT_FAILURE
     ) or "无"
     print(
-        "[gap_funnel_browser] 处理=%d 新增healthy=%d thin_only=%d 失败态=%s apply=%s"
+        "[gap_funnel_browser] 处理=%d 新增healthy=%d thin_only=%d 渲染后认出=%d/改道=%d "
+        "失败态=%s apply=%s"
         % (
             len(outcomes),
             counts.get("healthy", 0),
             counts.get("thin_only", 0),
+            metrics["rendered_route_recognized"],
+            metrics["rendered_route_adopted"],
             failures,
             apply,
         )

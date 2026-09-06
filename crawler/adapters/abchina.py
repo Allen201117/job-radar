@@ -19,10 +19,9 @@ URL 里那个冒号是**字面量**（前端拼串时把路由占位符一起拼
   4. 逐岗 `#/PositionDetails/:{jobPublishId}` → state.posDetails 的
      responsibilities / qualifications / requirements 三段 = 正文（快档 CRAWL_DETAIL_CAP=0 跳过）
 
-⚠️ **这个站会间歇性地把页面渲染成完全空白**（body innerText 长度为 0），机构页和详情页都会。
-撞上时「0 个岗」不是「这家没在招」，是我们没看见 —— reload 一次基本就好。所以取岗位卡要区分
-「整页空白」（重试）和「渲染了但没有卡片」（真的没在招，别白等）。同理，它也会间歇性掐连接
-（net::ERR_EMPTY_RESPONSE），单家机构打不开只记 fetch_complete=False，不许拖垮整源。
+⚠️ **列表卡里一个字正文都没有**（posCardInfo 只有岗位名/地点/人数/截止）。不补正文就是
+100% 薄卡：进不了 count_valid_active_jobs，这家在必投健康覆盖里恒为 0
+（2026-09-05 实测线上 2,418 个在招岗 **全部** summary 为 NULL）。正文只在逐岗详情页。
 
 ⚠️ **必须先加载一次首页把会话建起来**（首页会自己打 `new/getInfo` 换密钥 + 拿 SESSION cookie）。
 冷启动直接 goto `#/99` 只会渲染出 222 字的空壳、永远等不到卡片——实测就是这样一次都不出数据。
@@ -52,6 +51,12 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 _RECRUIT_TYPES = ((99, "校招"), (100, "社招"))
 
 # 从已渲染的 React 组件里取 state 的公共前缀（React 16 是 __reactInternalInstance$，17+ 是 __reactFiber$）。
+# 两个页面各自的固定文案：只要页面真渲染完了，这段一定在。用它把「这家确实没在招」
+# 和「页面根本没渲染出来」区分开 —— 两者都表现为「0 个岗」，但一个正常、一个是漏抓。
+# ⚠️ 两页的文案不一样，别混用：列表页没有「在招岗位」四个字，拿它去判会把每一轮都误判成漏抓。
+_LIST_RENDERED_MARKER = "招聘机构"   # `#/{recruitType}` 列表页（社招当期没岗时也有这块）
+_ORG_RENDERED_MARKER = "在招岗位"    # `#/RecruitmentOrgDetails/...` 机构页
+
 _COLLECT_JS = """
 (stateKey) => {
   const seen = new Map();
@@ -114,25 +119,26 @@ class AbchinaAdapter(BaseAdapter):
     POLL_INTERVAL_MS = 700
     GOTO_TIMEOUT_MS = 45000
     _MAX_JOBS = 4000
-    # 详情页比机构页快一个数量级（实测中位 0.69s），不需要 25s 的耐心。
+    # 详情页比机构页快一个数量级（本机实测中位 0.69s），不需要 25s 的耐心。
     DETAIL_TIMEOUT_MS = 9000
-    # 逐岗正文上限：2026-09-05 live 全源 2,418 个岗 → 设 3000 覆盖全源。
+    # 逐岗正文条数上限：2026-09-05 live 全源 2,603 个岗 → 设 3000 覆盖全源。
     # 快档 daily 用 CRAWL_DETAIL_CAP=0 跳过（resolve_detail_cap），只抓列表骨架。
     _DETAIL_CAP = 3000
     # 连续这么多个岗都拿不到正文 → 认为站点这一轮不让抓了（它会掐连接），停掉正文这一段。
     # 列表已经拿到手，没必要为了正文把剩下两千多个岗每个都耗满两次 goto 超时。
     _DETAIL_ABORT_AFTER_FAILURES = 25
-    # 正文这一段最多花多久。本机实测中位 0.69s/岗、2,418 个岗约 28 分钟，但 CI runner 在美国、
-    # 每一跳都更慢 —— 没有闸就可能把整片 enrich shard 拖过 180min 超时，**连同这一片里另外
-    # 一百多个源一起挂掉**。宁可这一晚少补一些正文，也不能拖垮一整片。
-    _DETAIL_BUDGET_S = 1800
+    # 正文这一段最多花多久。**这个数字是量出来的，不是拍的**（2026-09-05 查 enrich-crawl 台账）：
+    #   · 农行落在 shard 1，最近两轮 61 / 57 分钟，离 180min 超时上限有约 120 分钟余量；
+    #   · 但同期 shard 2 是 172 / 148 分钟 —— 2026-09-01 那轮 181 分钟**被 GitHub 取消**。
+    #     分片是按源数贪心装箱的，成员会随源增减漂移，所以别把「今天有余量」当永久事实。
+    # 取 15 分钟：占上限 8%，即便耗时整体上浮也不会是压垮某一片的那根稻草。
+    # 覆盖速度：CI 到这个站按 1.5~2.5s/岗算 ≈ 360~600 岗/晚 → 2,603 个岗约 5~7 晚补齐。
+    # 这是刻意的取舍：**限速优先于覆盖速度**——一周覆盖全量可以接受，挤掉别的浏览器任务不行。
+    _DETAIL_BUDGET_S = 900
     # 每晚往后挪这么多作为起点。预算用完就停，若恒从第 0 个开始，尾部的岗**永远**补不到正文。
     # summary 在 upsert 里是「空值不覆盖」（jobs_db._PRESERVE_IF_EMPTY），所以轮转几晚就能
     # 覆盖全源，且已经补好的不会被后面的空值抹掉。
     _DETAIL_ROTATE_STRIDE = 600
-    # 「整页没渲染出来」的判据：body 一个字都没有。实测空白页 innerText 长度恰为 0，
-    # 而正常渲染的页面光顶部导航就有几十字 —— 所以这个阈值不会把「渲染了但没岗」误判成空白。
-    _RENDERED_MIN_CHARS = 30
 
     # 正文三段（页面上的小标题 ↔ posDetails 的字段名）。
     # ⚠️ 刻意不收 posDetails.phone：那是 HR 的联系邮箱/电话，属于个人联系方式，不入库
@@ -145,7 +151,7 @@ class AbchinaAdapter(BaseAdapter):
         return None  # SPA 入口页，HEAD 预检没有意义
 
     @classmethod
-    def _collect(cls, page, state_key: str) -> list:
+    def _collect(cls, page, state_key: str, marker: str = None):
         """轮询到页面把带 state_key 的组件渲染出来，再把这些 state 取回来。
 
         ⚠️ 不能用 `wait_for_function` 一等了之：hash 路由是**同文档导航**，上一个机构的卡片
@@ -154,52 +160,42 @@ class AbchinaAdapter(BaseAdapter):
 
         ⚠️ 等待要给够：农银人寿 34 个岗实测 >8s 才渲染出来，只等 8s 会得到「0 个岗」这种
         看着正常、其实是漏抓的结果。等满 RENDER_TIMEOUT_MS 仍为空，才认「这家当期没在招」。
+
+        返回 `(找到的 state 列表, 页面是否确实渲染完了)`。第二个值是**诚实度开关**：
+        CI 比本机慢，2026-09-05 首轮线上就比本机少抓了 162 个岗（2,418 vs 2,580），
+        而当时 fetch_complete 还是 True —— 正是「没抓全却自称抓全」。有了它，
+        渲染没等到的机构会把 fetch_complete 打成 False，不再假装抓全。
         """
         deadline = time.monotonic() + cls.RENDER_TIMEOUT_MS / 1000.0
         while True:
             found = page.evaluate(_COLLECT_JS, state_key) or []
-            if found or time.monotonic() >= deadline:
-                return found
-            page.wait_for_timeout(cls.POLL_INTERVAL_MS)
-
-    @classmethod
-    def _page_is_blank(cls, page) -> bool:
-        """整页一个字都没渲染出来 —— 此时「0 个岗」是我们没看见，不是对方没在招。"""
-        try:
-            text = page.evaluate("document.body ? (document.body.innerText || '') : ''") or ""
-        except Exception:
-            return True
-        return len(text.strip()) < cls._RENDERED_MIN_CHARS
-
-    def _open(self, page, url: str) -> None:
-        """打开 hash 路由。hash 是**同文档导航**，不 reload 的话上一页的卡片还留在 DOM 里，
-        会把上一家的岗位当成这一家的（模块 docstring 里那个「只抓到 2 个岗还自称抓全」）。"""
-        page.goto(url, wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
-        page.reload(wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
-
-    def _collect_positions(self, page, url: str):
-        """取一家机构的岗位卡。返回 **(岗位卡, 这家是不是真看见了)**。
-
-        ⚠️ 第二个值就是这个方法存在的理由：不能只返回一个列表。空列表有两种含义，处置相反 ——
-        「页面渲染出来了、确实没有岗」是**结论**（这家当期没在招）；
-        「整页空白，等多久都不出卡片」是**我们没看见**，必须让 fetch_complete 记成 False。
-        把后者当成前者，就是 CLAUDE.md「接口返 0 不能证明对方没开」那条碑的同一个病：
-        岗位静默消失，而这一轮还自称抓全了。
-
-        ⚠️ 只在**整页空白**时重试：页面渲染了但没有卡片那是真没在招，重试只会在每家身上
-        白等一整个 RENDER_TIMEOUT_MS（一轮 45 家里实测有 2 家属于此类）。
-        """
-        for attempt in (1, 2):
-            self._open(page, url)
-            found = self._collect(page, "posCardInfo")
             if found:
                 return found, True
-            if not self._page_is_blank(page):
-                return [], True          # 渲染了、就是没岗 —— 这是结论
-            logger.info("abchina: blank render on %s (attempt %d)", url, attempt)
-        # 两次都整页空白：这家到底有没有岗，我们**不知道**。不许当成「没在招」。
-        logger.warning("abchina: %s stayed blank on every attempt; counting this run as incomplete", url)
-        return [], False
+            if time.monotonic() >= deadline:
+                # 等到头还是 0 个 —— 是「这家真没在招」还是「页面压根没渲染出来」？
+                # 靠页面固定文案区分：marker 在 = 渲染完了、就是没岗（正常）；
+                # marker 不在 = 我们没等到 = **漏抓**，调用方据此把 fetch_complete 打成 False。
+                try:
+                    rendered = marker in page.inner_text("body") if marker else True
+                except Exception:
+                    rendered = False
+                return [], rendered
+            page.wait_for_timeout(cls.POLL_INTERVAL_MS)
+
+    def _scan_org(self, page, recruit_type, org):
+        """打开一个机构页并取回岗位卡的 state。返回 (岗位列表, 页面是否确实渲染完了)。"""
+        org_id = _clean(org.get("orgId"))
+        try:
+            page.goto(self.ORG_URL.format(recruit_type=recruit_type, org_id=org_id),
+                      wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
+            # 只改 hash 是同文档导航，上一家的卡片会留在 DOM 里 → 必须真的重载。
+            page.reload(wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
+            return self._collect(page, "posCardInfo", _ORG_RENDERED_MARKER)
+        except Exception as exc:
+            # ⚠️ 单个机构页抖一下（实测撞到过 net::ERR_EMPTY_RESPONSE）不该炸掉整轮 ——
+            # 前面几十家已经抓到的岗会跟着一起丢，run.py 还会把整个源记成 failed。
+            print(f"[abchina] 机构 {org.get('orgName') or org_id} 打开失败：{type(exc).__name__}")
+            return [], False
 
     def _detail_of(self, page, job_id: str, want_name: str) -> Optional[dict]:
         """打开逐岗详情页，把解密后的 posDetails 读回来；拿不到就返回 None（留薄卡，不编）。
@@ -209,7 +205,10 @@ class AbchinaAdapter(BaseAdapter):
         """
         for attempt in (1, 2):
             try:
-                self._open(page, self.DETAIL_URL.format(job_publish_id=job_id))
+                page.goto(self.DETAIL_URL.format(job_publish_id=job_id),
+                          wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
+                # 同 _scan_org：只改 hash 是同文档导航，上一个岗的正文会留在 DOM 里。
+                page.reload(wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
                 deadline = time.monotonic() + self.DETAIL_TIMEOUT_MS / 1000.0
                 detail = None
                 while True:
@@ -232,8 +231,10 @@ class AbchinaAdapter(BaseAdapter):
     def _fill_bodies(self, page, rows: list, cap: int) -> None:
         """逐岗补正文，就地写进 row["_detail"]。受 cap（条数）与 _DETAIL_BUDGET_S（墙钟）双重约束。
 
-        起点按天轮转，见 _DETAIL_ROTATE_STRIDE：预算用完就停的话，恒从头开始会让尾部的岗
+        起点按天轮转（_DETAIL_ROTATE_STRIDE）：预算用完就停的话，恒从第 0 个开始会让尾部的岗
         永远是薄卡。
+
+        ⚠️ 不许为了让台账翻绿去补个位数 —— 那是刷指标。这里要么按预算真补一批，要么不补。
         """
         total = len(rows)
         if not cap or not total:
@@ -279,7 +280,9 @@ class AbchinaAdapter(BaseAdapter):
         rows: List[dict] = []
         seen_jobs = set()
         truncated = False
-        incomplete = False      # 有机构页打不开 → 这一轮不算抓全（见文末 fetch_complete）
+        all_rendered = True
+        missed_orgs: List[str] = []
+        pending: List[tuple] = []   # 第一轮没渲染出来的机构，留给下面的重试轮
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -292,24 +295,18 @@ class AbchinaAdapter(BaseAdapter):
                 for recruit_type, job_type in _RECRUIT_TYPES:
                     page.goto(self.LIST_URL.format(recruit_type=recruit_type),
                               wait_until="domcontentloaded", timeout=self.GOTO_TIMEOUT_MS)
-                    orgs = self._collect(page, "batchCardInfo")
+                    orgs, orgs_rendered = self._collect(page, "batchCardInfo", _LIST_RENDERED_MARKER)
+                    if not orgs_rendered:
+                        all_rendered = False
                     for org in orgs:
                         org_id = _clean(org.get("orgId"))
                         if not org_id:
                             continue
-                        try:
-                            found, org_seen = self._collect_positions(
-                                page, self.ORG_URL.format(recruit_type=recruit_type, org_id=org_id))
-                            if not org_seen:
-                                incomplete = True
-                        except Exception as exc:
-                            # 这个站会间歇性掐连接（net::ERR_EMPTY_RESPONSE）。一家机构打不开
-                            # 就把整源扔掉是错的取舍（同 sf_express 那次「末页少 2 条 → 2,164 个
-                            # 在招岗全丢」）：记下没抓全，把已经拿到的交出去。
-                            logger.warning("abchina: org %s (%s) failed: %s", org_id, recruit_type, exc)
-                            incomplete = True
-                            continue
-                        for pos in found:
+                        positions, rendered = self._scan_org(page, recruit_type, org)
+                        if not rendered:
+                            # 这家没等到渲染 —— 它有多少岗我们不知道，别当成 0，留给重试轮。
+                            pending.append((recruit_type, job_type, org))
+                        for pos in positions:
                             job_id = _clean(pos.get("jobPublishId"))
                             if not job_id or job_id in seen_jobs:
                                 continue
@@ -325,21 +322,45 @@ class AbchinaAdapter(BaseAdapter):
                     if truncated:
                         break
 
+                # ⚠️ 重试轮：这个站慢且不稳，同一轮里 9 个机构页等 25s 都没渲染出来是实测发生过的
+                # （线上首轮因此比本机少抓 162 个岗）。等所有机构走完再回头补一次 —— 那会儿
+                # 瞬时拥塞多半过去了，而且不会在原地反复空等。只补一次，不做无限重试。
+                for recruit_type, job_type, org in list(pending):
+                    if truncated:
+                        break
+                    positions, rendered = self._scan_org(page, recruit_type, org)
+                    if not rendered:
+                        all_rendered = False
+                        missed_orgs.append(_clean(org.get("orgName")) or _clean(org.get("orgId")))
+                        continue
+                    for pos in positions:
+                        job_id = _clean(pos.get("jobPublishId"))
+                        if not job_id or job_id in seen_jobs:
+                            continue
+                        if len(rows) >= cap:
+                            truncated = True
+                            break
+                        seen_jobs.add(job_id)
+                        pos["_job_type"] = job_type
+                        pos["_batch_name"] = _clean(org.get("batchName")) or None
+                        rows.append(pos)
+
                 # ── 逐岗正文 ──────────────────────────────────────────────────
-                # 列表卡里一个字的正文都没有（posCardInfo 只有岗位名/地点/人数/截止），
-                # 不补就是 100% 薄卡 —— 进不了 count_valid_active_jobs，等于这家公司
-                # 在「必投清单健康覆盖」里恒为 0。正文只在详情页的 posDetails 里。
+                # 放在列表（含重试轮）之后：正文是「锦上添花」，绝不能因为它挤掉列表的完整性。
+                # 快档 CRAWL_DETAIL_CAP=0 时这一步整段跳过。
                 self._fill_bodies(page, rows, resolve_detail_cap(self._DETAIL_CAP))
             finally:
                 browser.close()
 
         if not rows:
             raise RuntimeError("abchina: no positions found on any org page")
+        if missed_orgs:
+            print(f"[abchina] {len(missed_orgs)} 个机构页没等到渲染（本轮不算抓全）："
+                  f"{'、'.join(missed_orgs[:8])}{' …' if len(missed_orgs) > 8 else ''}")
         self.reported_total = len(rows)
-        # 站点不自报总数（接口是密文），只能诚实记「看见的全部」；撞上限 / 有机构没打开时不算抓全。
-        # ⚠️ fetch_complete=False 是有下游后果的（list-absence 撤岗会跳过这一轮），这正是我们要的：
-        #    没抓全的那一轮绝不能被当成「剩下的都撤岗了」。
-        self.fetch_complete = not truncated and not incomplete
+        # 站点不自报总数（接口是密文），只能诚实记「看见的全部」。
+        # 撞上限、或有机构页没等到渲染 → 都不算抓全（后者是线上实测过的漏抓来源）。
+        self.fetch_complete = (not truncated) and all_rendered
         return json.dumps({"jobs": rows}, ensure_ascii=False)
 
     def parse(self, payload: str) -> List[RawJob]:

@@ -6,6 +6,7 @@
   · 接口用 HTTP 200 表达失败（工行 retCode / 中国移动 code / 交行 TRAN_SUCCESS）
 """
 import json
+import pathlib
 import ssl
 import time
 import unittest
@@ -92,6 +93,13 @@ class IcbcAdapterTest(unittest.TestCase):
         # 不覆写 should_skip 就会被判「被拒」而整源跳过、永远抓不到岗。
         self.assertIsNone(IcbcAdapter().should_skip("https://job.icbc.com.cn/pc/index.html"))
 
+    def test_reported_total_counts_only_what_we_keep(self):
+        # 官网把报名已截止的岗也列在列表里（社招 63 条里 15 条已截止）。拿含过期岗的
+        # 自报总数当分母，crawl_runs 上会永远挂着「自报 2630 / 只入库 2615」这个**假缺口** ——
+        # 那 15 条是我们主动丢的，不是漏抓的。
+        src = pathlib.Path(__file__).resolve().parent / "adapters" / "icbc.py"
+        self.assertIn("self.reported_total = len(open_rows)", src.read_text(encoding="utf-8"))
+
     def test_depict_is_base64_urlencoded_html(self):
         import base64
         import urllib.parse
@@ -132,6 +140,27 @@ class CcbAdapterTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             _repair_json("   ")
 
+    def test_closed_postings_are_filtered_after_aggregation(self):
+        # 与 bankcomm/icbc 同一条不变量：全部报名结束时不能抛异常（那是正常状态不是故障），
+        # 且分母只算还能报名的岗，免得抓全率上永远挂个假缺口。
+        src = pathlib.Path(__file__).resolve().parent / "adapters" / "ccb.py"
+        text = src.read_text(encoding="utf-8")
+        self.assertIn('open_rows = [r for r in rows if str(r.get("planStatus") or "") != "2"]', text)
+        self.assertIn("self.reported_total = len(open_rows)", text)
+        self.assertIn('return json.dumps({"jobs": open_rows}', text)
+
+    def test_detail_empty_body_does_not_kill_the_whole_run(self):
+        # _repair_json 空 body 抛的是 RuntimeError；detail 循环要是漏捕它，
+        # 一次限速空响应就会穿透 fetch，把**已经抓全的 3,799 条列表**一起作废、记 failed。
+        src = pathlib.Path(__file__).resolve().parent / "adapters" / "ccb.py"
+        text = src.read_text(encoding="utf-8")
+        self.assertIn("except (httpx.HTTPError, json.JSONDecodeError, RuntimeError):", text)
+
+    def test_detail_only_accepts_explicit_success(self):
+        # 缺 SUCCESS 字段的错误骨架不能被当成详情塞进 _detail。
+        src = pathlib.Path(__file__).resolve().parent / "adapters" / "ccb.py"
+        self.assertIn('detail.get("SUCCESS") == "true"', src.read_text(encoding="utf-8"))
+
     def test_bot_user_agent_is_overridden(self):
         self.assertNotIn("JobRadarBot", CcbAdapter.user_agent)
 
@@ -160,6 +189,15 @@ class BankcommAdapterTest(unittest.TestCase):
         yesterday = (date.today() - timedelta(days=1)).isoformat()
         self.assertFalse(BankcommAdapter._is_open({"endDate": yesterday}, today))
         self.assertTrue(BankcommAdapter._is_open({"endDate": today}, today))
+
+    def test_all_expired_is_not_a_failure(self):
+        # 招聘窗口刚结束那几天所有岗都过期。若过期过滤放在聚合处做，rows 会是空的 →
+        # 抛 RuntimeError → 源被记 failed 并触发告警，而接口其实好好的。
+        # 「没有在招岗」是正常状态，不是故障 —— 所以 `if not rows` 必须看**未过滤**的行。
+        src = pathlib.Path(__file__).resolve().parent / "adapters" / "bankcomm.py"
+        text = src.read_text(encoding="utf-8")
+        self.assertIn("open_rows = [r for r in rows if self._is_open(r, today)]", text)
+        self.assertIn('return json.dumps({"jobs": open_rows}', text)
 
 
 class CmccAdapterTest(unittest.TestCase):
@@ -242,6 +280,53 @@ class AbchinaAdapterTest(unittest.TestCase):
         payload = {"jobs": [{"jobPublishId": 1}, {"posName": "无 id 岗"}, {}]}
         self.assertEqual(AbchinaAdapter().parse(json.dumps(payload)), [])
 
+    def test_collect_tells_empty_apart_from_not_rendered(self):
+        """「0 个岗」有两种：这家真没在招（正常）/ 页面没渲染出来（漏抓）。混成一种就会
+        「没抓全却自称抓全」—— 线上首轮正是这样比本机少了 162 个岗。"""
+
+        class FakePage:
+            def __init__(self, state, body):
+                self._state, self._body, self.waits = state, body, 0
+
+            def evaluate(self, _js, _key):
+                return self._state
+
+            def inner_text(self, _sel):
+                return self._body
+
+            def wait_for_timeout(self, _ms):
+                self.waits += 1
+
+        # ① 有卡片 → 立刻返回，且算渲染成功
+        found, rendered = AbchinaAdapter._collect(
+            FakePage([{"jobPublishId": 1}], "在招岗位"), "posCardInfo", "在招岗位")
+        self.assertEqual(len(found), 1)
+        self.assertTrue(rendered)
+
+        # ② 没卡片但页面渲染完了 → 这家真没在招，不该拖累 fetch_complete
+        AbchinaAdapter.RENDER_TIMEOUT_MS, saved = 0, AbchinaAdapter.RENDER_TIMEOUT_MS
+        try:
+            found, rendered = AbchinaAdapter._collect(
+                FakePage([], "机构公告 在招岗位 岗位类别"), "posCardInfo", "在招岗位")
+            self.assertEqual(found, [])
+            self.assertTrue(rendered)
+
+            # ③ 没卡片且连页面骨架都没出来 → 是漏抓，必须报 rendered=False
+            found, rendered = AbchinaAdapter._collect(
+                FakePage([], "人才招聘 个人中心"), "posCardInfo", "在招岗位")
+            self.assertEqual(found, [])
+            self.assertFalse(rendered)
+        finally:
+            AbchinaAdapter.RENDER_TIMEOUT_MS = saved
+
+    def test_missed_orgs_get_one_retry_and_then_break_fetch_complete(self):
+        src = (pathlib.Path(__file__).resolve().parent / "adapters" / "abchina.py").read_text(encoding="utf-8")
+        # 没渲染出来的机构先进 pending，走完所有机构后补一轮（那会儿瞬时拥塞多半过去了）
+        self.assertIn("pending.append((recruit_type, job_type, org))", src)
+        self.assertIn("for recruit_type, job_type, org in list(pending):", src)
+        # 重试还不行才认漏抓，并且**不许再自称抓全**
+        self.assertIn("self.fetch_complete = (not truncated) and all_rendered", src)
+
     def test_summary_is_composed_from_the_three_detail_sections(self):
         payload = {"jobs": [{
             "jobPublishId": 155541019, "posName": "助理研究员岗", "_job_type": "校招",
@@ -259,7 +344,7 @@ class AbchinaAdapterTest(unittest.TestCase):
         self.assertIn("具体要求", job.summary)
         # 薄卡门是 60 字：拼出来的正文必须真的过得去，否则补了等于没补。
         self.assertGreaterEqual(len(job.summary), 60)
-        # ⚠️ posDetails.phone 是 HR 的联系方式，属于个人联系信息，不许进库。
+        # ⚠️ posDetails.phone 是 HR 的联系方式，属于个人联系信息，不许进库（同 gree 的 PubName）。
         self.assertNotIn("hr@abc-ca.com", job.summary)
 
     def test_missing_sections_do_not_fabricate_a_summary(self):
@@ -269,19 +354,27 @@ class AbchinaAdapterTest(unittest.TestCase):
         only_one = AbchinaAdapter._summary_of({"_detail": {"requirements": "计算机相关专业。"}})
         self.assertEqual(only_one, "具体要求\n计算机相关专业。")
 
+    def test_is_not_in_the_httpx_concurrency_lane(self):
+        # 它要起 Playwright（响应体加密，明文只在浏览器里），进并发档会把 sync API 跑崩。
+        import sys, pathlib as _p
+        sys.path.insert(0, str(_p.Path(__file__).resolve().parent))
+        import run
+        self.assertIn("abchina", run.ADAPTERS)
+        self.assertIn("abchina", run.DOMESTIC_ADAPTERS)
+        self.assertFalse(run._is_httpx_safe("abchina"))
 
-class _FakePage:
-    """够用的 Playwright page 替身。
+
+
+class _DetailFakePage:
+    """够用的 Playwright page 替身（只服务正文那一段）。
 
     ⚠️ 建模的是「**每次页面加载**内容固定」——不是「每次 evaluate 换一个答案」。
-    `_collect` 在同一次加载里会反复轮询 evaluate，按调用次数发答案会让「重试了几次」这类
-    断言静默失真（我第一版就是这么写错的）。所以这里按 reload 代次取值。
+    _detail_of 在同一次加载里会反复轮询 evaluate，按调用次数发答案会让「重试了几次」这类
+    断言静默失真。所以这里按 reload 代次取值。
     """
 
-    def __init__(self, cards_per_load=(), details_per_load=(), body_text=""):
-        self.cards_per_load = list(cards_per_load)
+    def __init__(self, details_per_load=()):
         self.details_per_load = list(details_per_load)
-        self.body_text = body_text
         self.opens = 0
 
     def goto(self, url, **kw):
@@ -293,80 +386,22 @@ class _FakePage:
     def wait_for_timeout(self, ms):
         pass
 
-    def _for_load(self, seq):
-        if not seq:
-            return None
-        return seq[min(max(self.opens - 1, 0), len(seq) - 1)]
-
     def evaluate(self, script, arg=None):
-        if "document.body" in script:
-            return self.body_text
-        if arg is not None:                       # _collect 传 state_key（posCardInfo / batchCardInfo）
-            return self._for_load(self.cards_per_load) or []
-        return self._for_load(self.details_per_load)   # _DETAIL_JS 不带参数
+        if not self.details_per_load:
+            return None
+        return self.details_per_load[min(max(self.opens - 1, 0), len(self.details_per_load) - 1)]
 
 
 class _FastAbchina(AbchinaAdapter):
-    """轮询立刻到期，测试不去真的等 25 秒。
+    """轮询立刻到期，测试不去真的等 9 秒。
     ⚠️ 必须在**类**上覆盖：_collect 是 classmethod、读的是 cls.RENDER_TIMEOUT_MS，
-    在实例上赋值不起作用（第一版就是这么写的，两条断言当场变绿谎）。"""
+    在实例上赋值不起作用。"""
     RENDER_TIMEOUT_MS = 0
     DETAIL_TIMEOUT_MS = 0
 
 
-class AbchinaBlankRenderTest(unittest.TestCase):
-    """这个站会把页面渲染成完全空白（body 长度 0），机构页和详情页都会。
-    那时候「0 个岗」是我们没看见，不是对方没在招 —— 原实现会静默漏掉一整家机构，
-    而 fetch_complete 还是 True。"""
-
-    def setUp(self):
-        self.adapter = _FastAbchina()
-
-    def test_blank_page_is_retried_and_recovers_the_org(self):
-        page = _FakePage(cards_per_load=[[], [{"jobPublishId": 1, "posName": "岗"}]],
-                         body_text="")
-        got, seen = self.adapter._collect_positions(page, "https://example.invalid/#/org")
-        self.assertEqual(len(got), 1)
-        self.assertTrue(seen)
-        self.assertEqual(page.opens, 2)          # 第一次空白 → 重开一次才拿到
-
-    def test_rendered_page_without_cards_is_not_retried(self):
-        # 页面渲染出来了（有导航栏文案）但没有岗位卡 = 这家当期真的没在招。
-        # 对它重试只会在每家机构身上白等一个 RENDER_TIMEOUT_MS。
-        page = _FakePage(cards_per_load=[[], [{"jobPublishId": 1, "posName": "岗"}]],
-                         body_text="人才招聘 个人中心 首页 校园招聘 社会招聘 专项招聘 帮助")
-        got, seen = self.adapter._collect_positions(page, "https://example.invalid/#/org")
-        self.assertEqual(got, [])
-        self.assertTrue(seen, "渲染了但没有卡片 = 这家真的没在招，是结论，不该记成没抓全")
-        self.assertEqual(page.opens, 1)
-
-    def test_persistently_blank_org_is_reported_as_not_seen(self):
-        """两次都整页空白 → 这家有没有岗我们**不知道**。
-
-        ⚠️ 这条是最关键的一条：只重试一次并不能消灭「静默漏一整家机构」，只是把概率降低了。
-        返回空列表而不声明「没看见」，调用方就会把它当成「这家没在招」，
-        fetch_complete 照样是 True —— 而 fetch_complete=True 是对下游（list-absence 撤岗）
-        的一个承诺：剩下没看到的都可以当撤岗处理。谎报它会误杀在招岗。
-        """
-        page = _FakePage(cards_per_load=[[], []], body_text="")
-        got, seen = self.adapter._collect_positions(page, "https://example.invalid/#/org")
-        self.assertEqual(got, [])
-        self.assertFalse(seen)
-        self.assertEqual(page.opens, 2)          # 试满两次才放弃
-
-    def test_detail_belonging_to_another_job_is_refused(self):
-        """详情页的 posName 与列表卡对不上就不要 —— 宁可留薄卡，也不能把 A 岗的正文挂到 B 岗。"""
-        page = _FakePage(details_per_load=[{"posName": "另一个岗", "responsibilities": "别人的职责"}])
-        self.assertIsNone(self.adapter._detail_of(page, "155541019", "助理研究员岗"))
-
-    def test_detail_matching_the_card_is_accepted(self):
-        page = _FakePage(details_per_load=[{"posName": "助理研究员岗", "responsibilities": "研究支持"}])
-        detail = self.adapter._detail_of(page, "155541019", "助理研究员岗")
-        self.assertEqual(detail["responsibilities"], "研究支持")
-
-
 class _RecordingAbchina(_FastAbchina):
-    """记下正文这一段问过哪些岗（把联网那一步换掉，只测 _fill_bodies 的调度逻辑）。"""
+    """记下正文那一段问过哪些岗（把联网那一步换掉，只测 _fill_bodies 的调度逻辑）。"""
 
     def __init__(self):
         super().__init__()
@@ -378,9 +413,22 @@ class _RecordingAbchina(_FastAbchina):
 
 
 class AbchinaBodyPassTest(unittest.TestCase):
+    """逐岗正文：不补就是 100% 薄卡（线上实测 2,418 个岗 summary 全为 NULL），
+    这家在必投健康覆盖里恒为 0。"""
+
     @staticmethod
     def _rows(n):
         return [{"jobPublishId": str(i), "posName": "岗%d" % i} for i in range(n)]
+
+    def test_detail_belonging_to_another_job_is_refused(self):
+        """详情页的 posName 与列表卡对不上就不要 —— 宁可留薄卡，也不能把 A 岗的正文挂到 B 岗。"""
+        page = _DetailFakePage(details_per_load=[{"posName": "另一个岗", "responsibilities": "别人的职责"}])
+        self.assertIsNone(_FastAbchina()._detail_of(page, "155541019", "助理研究员岗"))
+
+    def test_detail_matching_the_card_is_accepted(self):
+        page = _DetailFakePage(details_per_load=[{"posName": "助理研究员岗", "responsibilities": "研究支持"}])
+        detail = _FastAbchina()._detail_of(page, "155541019", "助理研究员岗")
+        self.assertEqual(detail["responsibilities"], "研究支持")
 
     def test_rotates_start_across_days_so_the_tail_is_not_starved(self):
         """预算/条数用完就停；若每晚都从第 0 个开始，后面的岗**永远**补不到正文。
@@ -424,14 +472,11 @@ class AbchinaBodyPassTest(unittest.TestCase):
         adapter._fill_bodies(None, self._rows(500), cap=500)
         self.assertEqual(adapter.tries, AbchinaAdapter._DETAIL_ABORT_AFTER_FAILURES)
 
-    def test_is_not_in_the_httpx_concurrency_lane(self):
-        # 它要起 Playwright（响应体加密，明文只在浏览器里），进并发档会把 sync API 跑崩。
-        import sys, pathlib as _p
-        sys.path.insert(0, str(_p.Path(__file__).resolve().parent))
-        import run
-        self.assertIn("abchina", run.ADAPTERS)
-        self.assertIn("abchina", run.DOMESTIC_ADAPTERS)
-        self.assertFalse(run._is_httpx_safe("abchina"))
+    def test_body_pass_runs_after_the_list_retry_round(self):
+        """正文是锦上添花，绝不能挤掉列表的完整性 —— 调用点必须在重试轮之后。"""
+        src = (pathlib.Path(__file__).resolve().parent / "adapters" / "abchina.py").read_text(encoding="utf-8")
+        self.assertLess(src.index("for recruit_type, job_type, org in list(pending):"),
+                        src.index("self._fill_bodies(page, rows,"))
 
 
 if __name__ == "__main__":
