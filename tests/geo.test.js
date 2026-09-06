@@ -288,6 +288,30 @@ test("deriveCountryCode: 大陆的新北区/连江县/北海市/邢台南和区�
   }
 });
 
+// 开头的两字母国别码（2026-09-06 加）。逐条用例在 tests/fixtures/geo-cases.json 里两端共读，
+// 这里只钉三条**结构性**不变量 —— 它们靠单个用例钉不住，改实现时最容易被顺手破坏。
+test("deriveCountryCode: 开头国别码只在「其它规则全不认」时兜底，且不碰已有答案", () => {
+  // ① 排在全表最后：任何显式国名/州名都优先。改动前后这批的答案必须一字不变。
+  for (const [loc, expected] of [
+    ["SE, Bothell, Washington, United, States", "US"],  // SE 是波音厂区代号，不是瑞典
+    ["GA, Atlanta, 1050, Techwood, Drive, NW", "US"],   // GA 是佐治亚州，不是加蓬
+    ["CN, Shanghai", "CN"],
+  ]) {
+    assert.equal(deriveCountryCode(loc), expected, loc);
+  }
+  // ② 与美国州缩写撞车的码一律弃权 —— live 全库这个位置上州缩写比国别码更常见
+  //    （GA 117 行 / NY 116 / CA 50 / NC 48 全是「州, 城市, 门牌」）。
+  const US_STATE_CODES = "AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA PR RI SC SD TN TX UT VT VA WA WV WI WY".split(" ");
+  for (const code of US_STATE_CODES) {
+    // 用一个「除了这个开头码之外什么线索都没有」的串，确保弃权而不是判成国家。
+    const loc = `${code}, Work, From, Home`;
+    assert.equal(deriveCountryCode(loc), null, `${loc} 不许被当成国别码`);
+  }
+  // ③ 只认逗号 + 原串大写。live 121 个受影响写法里 119 个逗号、0 个空格。
+  assert.equal(deriveCountryCode("MY JOHOR VIRTUAL"), null);
+  assert.equal(deriveCountryCode("my, johor, virtual"), null);
+});
+
 // 两端词表必须逐条一致：normalizer（Python 爬虫写入）与 lib/jobs-store/write.ts（app 写入）
 // 各自算 country_code / job_scope，词表一漂，同一个岗从两条链进来会得到两个归属。
 test("geo 词表与 crawler/geo.py 逐条一致", () => {
@@ -299,6 +323,7 @@ test("geo 词表与 crawler/geo.py 逐条一致", () => {
   };
   for (const name of [
     "CHINA_CJK_PLACE_MARKERS", "TAIWAN_CJK_MARKERS", "JAPAN_CJK_MARKERS", "KOREA_CJK_MARKERS",
+    "ISO_ALPHA2_CODES",
   ]) {
     assert.deepEqual(geo[name], pick(name), `${name} 与 crawler/geo.py 不一致`);
   }

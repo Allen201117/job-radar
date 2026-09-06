@@ -971,6 +971,121 @@
       "location": "965, Town, Center, Dr, La, Canada, FlintridgeCA, 91011, 1638",
       "expected": "US",
       "note": "红线：new brunswick / yukon / quebec 同时是美国地名（强生总部 New Brunswick NJ 等 ~220 岗），本护栏只在串尾码是 CA 时才查，泛化即炸"
+    },
+    {
+      "location": "MY, JOHOR, VIRTUAL",
+      "expected": "MY",
+      "note": "开头的两字母国别码（Workday 外企 ATS 第二种写法，2026-09-06 live 全库核过）"
+    },
+    {
+      "location": "SE, Solna",
+      "expected": "SE",
+      "note": "开头的两字母国别码（Workday 外企 ATS 第二种写法，2026-09-06 live 全库核过）"
+    },
+    {
+      "location": "IE, Dublin, Carrickmines, Co, Dublin",
+      "expected": "IE",
+      "note": "开头的两字母国别码（Workday 外企 ATS 第二种写法，2026-09-06 live 全库核过）"
+    },
+    {
+      "location": "HK, , , CHEK, LAP, KOK, HKCLK",
+      "expected": "HK",
+      "note": "开头的两字母国别码（Workday 外企 ATS 第二种写法，2026-09-06 live 全库核过）：UPS 的香港机场货站，大中华算 domestic"
+    },
+    {
+      "location": "GB, Bracknell, Berks",
+      "expected": "GB",
+      "note": "开头的两字母国别码（Workday 外企 ATS 第二种写法，2026-09-06 live 全库核过）"
+    },
+    {
+      "location": "UK, Cambridge",
+      "expected": "GB",
+      "note": "开头的两字母国别码（Workday 外企 ATS 第二种写法，2026-09-06 live 全库核过）：UK 不是 ISO-2，归一到 GB"
+    },
+    {
+      "location": "MX, Mexico, City",
+      "expected": "MX",
+      "note": "开头的两字母国别码（Workday 外企 ATS 第二种写法，2026-09-06 live 全库核过）"
+    },
+    {
+      "location": "PH, TAGUIG",
+      "expected": "PH",
+      "note": "开头的两字母国别码（Workday 外企 ATS 第二种写法，2026-09-06 live 全库核过）"
+    },
+    {
+      "location": "BR, So, Paulo, Sumare",
+      "expected": "BR",
+      "note": "开头的两字母国别码（Workday 外企 ATS 第二种写法，2026-09-06 live 全库核过）"
+    },
+    {
+      "location": "MO, Work, From, Home",
+      "expected": null,
+      "note": "红线：开头位置上州缩写比国别码更常见，撞车的一律弃权（MO=密苏里 不是澳门）"
+    },
+    {
+      "location": "CA, Burbank, Bldg, 11, Admin, Offices",
+      "expected": null,
+      "note": "红线：开头位置上州缩写比国别码更常见，撞车的一律弃权（MO=密苏里 不是澳门）；CA 是加州不是加拿大"
+    },
+    {
+      "location": "NC, Sanford, BCP, 5016, Womack, Road, Plant",
+      "expected": null,
+      "note": "红线：开头位置上州缩写比国别码更常见，撞车的一律弃权（MO=密苏里 不是澳门）；NC 是北卡不是新喀里多尼亚"
+    },
+    {
+      "location": "DE, Neuss",
+      "expected": null,
+      "note": "红线：开头位置上州缩写比国别码更常见，撞车的一律弃权（MO=密苏里 不是澳门）；代价是漏判这个真德国岗，方向正确（漏判 < 错杀）"
+    },
+    {
+      "location": "CO, Bogota",
+      "expected": null,
+      "note": "红线：开头位置上州缩写比国别码更常见，撞车的一律弃权（MO=密苏里 不是澳门）；同理漏判这个真哥伦比亚岗"
+    },
+    {
+      "location": "PA, Panam, Oeste, Arraijan",
+      "expected": null,
+      "note": "红线：开头位置上州缩写比国别码更常见，撞车的一律弃权（MO=密苏里 不是澳门）；同理漏判这个真巴拿马岗"
+    },
+    {
+      "location": "IN, Tamil, Nadu, Chennai",
+      "expected": "IN",
+      "note": "撞车码的唯一例外：串里另有该国省/邦硬证据才认（复用串尾那道护栏的词表）"
+    },
+    {
+      "location": "CA, ALBERTA, VIRTUAL",
+      "expected": "CA",
+      "note": "撞车码的唯一例外：串里另有该国省/邦硬证据才认（复用串尾那道护栏的词表）"
+    },
+    {
+      "location": "CA, ONTARIO, FIELD, SALES, VIRTUAL",
+      "expected": null,
+      "note": "撞车码的唯一例外：串里另有该国省/邦硬证据才认（复用串尾那道护栏的词表）；Ontario 既是加拿大省也是加州城市，刻意不收"
+    },
+    {
+      "location": "GM, Global, Technical, Center, , , 7000, Bldg",
+      "expected": null,
+      "note": "开头两字母不是国别码的实证反例（live 库里真见过）：通用汽车厂区前缀，不是冈比亚"
+    },
+    {
+      "location": "NA",
+      "expected": null,
+      "note": "开头两字母不是国别码的实证反例（live 库里真见过）：卡夫亨氏的 North America 占位，不是纳米比亚"
+    },
+    {
+      "location": "my, johor, virtual",
+      "expected": null,
+      "note": "必须是原串大写形态：小写的两字母是法语介词/普通词，不是国别码"
+    },
+    {
+      "location": "SE, Bothell, Washington, United, States",
+      "expected": "US",
+      "note": "显式国名/城市优先于开头缩写 —— 本规则排在全表最后一步的证据：SE 是波音厂区代号不是瑞典"
+    },
+    {
+      "location": "GA, Atlanta, 1050, Techwood, Drive, NW",
+      "expected": "US",
+      "note": "显式国名/城市优先于开头缩写 —— 本规则排在全表最后一步的证据：GA 是佐治亚州不是加蓬"
     }
   ]
 }
