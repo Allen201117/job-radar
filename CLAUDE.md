@@ -638,20 +638,38 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
   **六片全 success、guard 也 success**，照样有 7 个 workday 源开跑后再无下文。
   ✅ 防：看到规则 I 的告警，先确认那次 run 到底红没红，再决定查 CI 还是查 adapter。
 
-### 🚫 第三类：连不上被 `should_skip` 吞成 `skipped`（同一个病，低一层）
+### 第三类：连不上曾被 `should_skip` 吞成 `skipped`（已修，留碑是为了另一个教训）
 
 全表 3,455 条 `skipped` 拆开（2026-09-05 实测）：**3,383 真跳过 + 72 没收尾 + 0 第三形态**
 （`finished_at`/`error_message` 两个判据完全同构，不存在「有收尾无原因」或「无收尾有原因」）。
-但在那 3,383「真跳过」**内部**藏着 **54 条（1.6%）根本不是设计跳过**：
-`Connection failed: timed out` / `_ssl.c:999 handshake timed out` / `Errno 101 Network is unreachable`
-—— 是 `BaseAdapter.should_skip` 的 HEAD 预检连不上对方，被记成了「跳过」。
+但在那 3,383「真跳过」内部有 **53 条根本不是设计跳过**：`Connection failed: timed out` /
+`_ssl.c:999 handshake timed out` / `Errno 101 Network is unreachable` —— 是 HEAD 预检连不上对方，
+被 `return f"Connection failed: {e}"` 记成了「跳过」。
 真正的设计跳过是这几种：iguopin 详情核验 2,046 / wecruit 板块未发布 506 / feishu 门户 404 504 /
 robots 禁止 218 / wecruit 门户不存在 55。
 
-⚠️ **洞在哪：规则 F「源连续失败」只认 `status='failed'`**，被吞成 `skipped` 的源永远凑不满
-「全部 failed」→ 一个**永久连不上**的源可以无限期静默。今天没爆是因为这 54 条是瞬时抖动
-（涉及的 bilibili / 美团 / 腾讯 / 腾讯音乐 / 拼多多同期各成功 191~199 轮），**不是因为判据没问题**。
-✅ 要修就在写入端分开记（网络失败 ≠ 主动跳过），别让下游各自去正则猜 `error_message`。
+危险在于：**规则 F「源连续失败」只认 `status='failed'`**，被吞成 `skipped` 的源永远凑不满
+「全部 failed」→ 一个永久连不上的源可以无限期静默。
+
+✅ **已修**：`729df39`（2026-08-28 02:00）把那行改成 `except Exception: return None`
+（fail-open 且不进 host 缓存）→ 连不上就照常往下抓、抓不动落 `failed`，规则 F 认得出。
+live 复核：修复前 53 条、**修复后 0 条**，最后一次 2026-08-27 07:59。
+AST 扫过全部 36 个 `should_skip` 覆写，**没有一个**在 `except` 里 return 跳过原因，路径已封死。
+
+⚠️ **真正要记的教训是别的：我差点把这个已修的洞又修一遍。**
+症状是从**线上存量数据**里查出来的（54 条历史行还躺在表里），读起来像「现在还在发生」，
+而它其实 9 天前就停了。**看到存量里的坏数据，第一件事是查「最后一次发生是什么时候」**，
+不是直接去改代码 —— `select max(started_at)` 一句话的事，能省掉一整轮返工，
+更能避免「修一个不存在的问题」顺手把好代码改坏。
+
+### `crawl_runs` 终态没写成 → 看 `ops_runs.metrics.crawl_run_unrecorded`（2026-09-05 加）
+
+`_process_one_source` 里成功路径的 `update_crawl_run` 抛错会落进 `except`，那里再写一次 `failed`；
+**两次都失败**时旧代码只 `print` 一行就放过 —— 行停在 `running` 占位符上，规则 I 能看见这条孤儿，
+却看不出成因。现在这种情况会计进 `daily_crawl` 台账的 `crawl_run_unrecorded`，并打一条
+`::warning::`。它是**唯一**能区分「进程被杀」和「进程活着但回写失败」的证据：
+2026-09-04 那 7 个 workday 源就卡在这个岔口 —— enrichment-crawl 六片全 success、guard 也 success，
+GitHub 日志又已被截断，事后无从复原。⚠️ 目前没有告警规则读这个指标，排查规则 I 时要手动对读。
 
 ## 🚫 归属准确性没有旁路 —— 国聘集团展开曾 84% 挂错公司（2026-09-04 立）
 

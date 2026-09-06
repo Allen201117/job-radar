@@ -377,13 +377,18 @@ def _process_one_source(source, supabase) -> dict:
     adapter = ADAPTERS.get(adapter_name)
     if not adapter:
         print(f"  [skip] {company}: 未找到 adapter '{adapter_name}'")
+        run_id = None
+        unrecorded = False
         try:
             run_id = db.create_crawl_run(supabase, source_id)
             db.update_crawl_run(supabase, run_id, "failed",
                                 error_message=f"Unknown adapter: {adapter_name}")
         except Exception as e:  # DB 瞬时错误（如 Errno 35）也不许炸穿
             print(f"    crawl_run 记录失败: {e}")
-        return {"status": "failed", "created": 0, "updated": 0}
+            # 行已经插进去了、终态却没写成 → 留下一条永远收不了尾的占位符。
+            unrecorded = run_id is not None
+        return {"status": "failed", "created": 0, "updated": 0,
+                "run_unrecorded": unrecorded}
 
     # 每源独立 adapter 实例 —— 并发正确性根治。adapter 实例持有 per-source 可变状态（workday/oracle
     # 在 fetch 里按 source_url 设 self._host/_site/_cxs_base，末尾把 self._host 打进返回 payload）。
@@ -532,13 +537,18 @@ def _process_one_source(source, supabase) -> dict:
         error_msg = f"{type(e).__name__}: {e}"
         print(f"    FAILED: {error_msg}")
         traceback.print_exc()
+        # 先当成「没记上」，回写成功才清掉：成功路径的 update 抛错也会落到这里，
+        # 两次写都失败时这一行就永远停在 running 占位符上（2026-09-04 workday 那 7 条的唯一候选成因）。
+        unrecorded = run_id is not None
         try:
             if run_id is not None:
                 db.update_crawl_run(supabase, run_id, "failed",
                                     error_message=error_msg[:1000])
+            unrecorded = False
         except Exception as e2:  # 失败路径里 DB 再抛（同类瞬时错误）也不许炸穿
             print(f"    crawl_run 记录失败: {e2}")
-        return {"status": "failed", "created": 0, "updated": 0}
+        return {"status": "failed", "created": 0, "updated": 0,
+                "run_unrecorded": unrecorded}
 
 
 def run_crawl(filter_adapter: str = None, tier: str = "all",
@@ -612,6 +622,11 @@ def run_crawl(filter_adapter: str = None, tier: str = "all",
     empty_count = sum(1 for r in results if r["status"] == "empty")
     skipped_count = sum(1 for r in results if r["status"] == "skipped")
     partial_count = sum(1 for r in results if r["status"] in ("partial_success", "no_valid"))
+    # 「行插进去了、终态没写成」= crawl_runs 里多一条永远收不了尾的 running 占位符。
+    # 规则 I 能看见那条孤儿，但看不出成因；这个计数是**唯一**能区分「进程被杀」和
+    # 「进程活着但两次回写都失败」的证据（2026-09-04 那 7 个 workday 源就卡在这个岔口上，
+    # 当时 CI 六片全绿，日志又已被 GitHub 截断，事后无从复原）。
+    unrecorded_count = sum(1 for r in results if r.get("run_unrecorded"))
     failed_ratio = (fail_count / active_n) if active_n else 0
     all_empty = active_n > 0 and empty_count == active_n
     # ops_runs 只允许 success/partial/failed；全空是可观测预警而不是执行失败，
@@ -628,6 +643,7 @@ def run_crawl(filter_adapter: str = None, tier: str = "all",
             "partial_count": partial_count,
             "jobs_found_total": total_created + total_updated,
             "all_empty": all_empty,
+            "crawl_run_unrecorded": unrecorded_count,
         },
         status=ops_status,
     )
@@ -635,6 +651,9 @@ def run_crawl(filter_adapter: str = None, tier: str = "all",
     print(f"\n[crawler] 完成: {success_count} 成功, {fail_count} 失败, "
           f"{empty_count} 空源, {skipped_count} 跳过, "
           f"created={total_created}, updated={total_updated}")
+    if unrecorded_count:
+        print(f"::warning::[crawler] {unrecorded_count} 个源的 crawl_runs 终态没写成 "
+              f"（两次回写都失败），这些行会停在 running 占位符上、被 ops-watchdog 规则 I 捞出来。")
     return {"created": total_created, "updated": total_updated,
             "success": success_count, "failed": fail_count,
             "empty": empty_count, "skipped": skipped_count}
