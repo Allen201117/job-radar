@@ -13,10 +13,18 @@ fetcher 签名：f(row: dict, src: dict) -> str（空串 = 无正文/已撤岗/4
 import html as html_lib
 import json
 import re
+from datetime import date
 from urllib.parse import urlparse, parse_qs
 
 import httpx
 from selectolax.parser import HTMLParser
+
+from adapters.bankcomm import BankcommAdapter
+from adapters.ccb import CcbAdapter, _repair_json as _ccb_repair_json
+from adapters.cmcc import CmccAdapter, _sign_header as _cmcc_sign_header
+from adapters.cn_portal_tls import make_transport
+from adapters.icbc import IcbcAdapter
+from adapters.spdb import SpdbAdapter
 
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
       "Accept": "application/json"}
@@ -708,6 +716,349 @@ def _detail_chnenergy(row, src):
     return (m.group(1) if m else "").split("国家能源投资集团有限责任公司")[0].strip()
 
 
+# --- 国有大行 + 中国移动自建门户（2026-09-06 真伪 id live 对拍；此前 11,686 岗零撤岗路径）---
+# 五家共用 adapters/cn_portal_tls.make_transport()：强制 IPv4 + 允许 TLS 传统重协商。
+# ⚠️ **不走它的话本机全绿、上 GitHub runner 全炸**（建行/交行/移动 UNSAFE_LEGACY_RENEGOTIATION_DISABLED、
+# 工行 Errno 101）——这两条毛病本机永远测不出来，见 adapters/cn_portal_tls.py 的立碑。
+# 判死一律双条件、宁可漏判不可错杀：半截数据 / 超时 / 空 body / 通用系统异常一律返 ""，不判死。
+
+
+def _cn_portal_client(headers, timeout=TIMEOUT):
+    """五家自建门户共用的 httpx.Client（IPv4 + 传统重协商，证书校验保持开启）。
+    单独抽出来是为了让单测能整体 patch 掉网络层（这五家都不是 httpx.get 一发了事的形状：
+    建行要热身会话、交行要两跳确认、移动每次要重新签名）。"""
+    return httpx.Client(timeout=timeout, follow_redirects=True, headers=headers,
+                        transport=make_transport())
+
+
+def _int_or_none(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+_DATE10 = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _is_past_date(value, today=None):
+    """value 的前 10 位是不是一个「已经过去的日期」。非日期一律 False（不构成判死依据）。
+    ⚠️ 用 UTC 的今天与北京时间的站点字段比：UTC 落后北京 8 小时 → 只会把刚过期的岗多留几小时，
+    偏向漏判，与各 adapter 入库时的 `date.today()` 口径一致。"""
+    head = str(value or "").strip()[:10]
+    if not _DATE10.match(head):
+        return False
+    return head < (today or date.today().isoformat())
+
+
+def _loads_object(response):
+    """把响应解析成 dict；解不出对象一律返回 None（调用方当「没查成」，绝不判死）。
+
+    容忍**双层编码**：有的门户把 JSON 再 json.dumps 一次当字符串发（中国移动 viewJob.do
+    在带 Accept: application/json 时就这样），`r.json()` 会拿到 str 而不是 dict。"""
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
+_SPDB_DETAIL_URL = "https://job.spdb.com.cn/jobDetail"
+# 不存在的 jobId 返回的固定错误壳（936 字节，`class="my404"` + 「500 您访问的页面出错了！」）。
+_SPDB_GONE_MARKERS = ('class="my404"', "您访问的页面出错了")
+
+
+def _detail_spdb(row, src):
+    """浦发 job.spdb.com.cn：详情页是 SSR HTML，零鉴权（2026-09-06 实测连 Referer 都不用带，
+    与列表接口不同——列表少了 Referer 会 500）。
+
+    撤岗信号：不存在的 jobId → HTTP 200 + 936 字节固定错误壳（三种伪 id：越界数字 / 乱码 /
+    空值，返回的页面逐字节相同）；在招岗 → 70~80KB 完整页面。判死要求**错误壳出现**
+    且**抽不出正文**两个条件同时成立，半截页面一律不判死。
+
+    ⚠️ **诚实边界：浦发的详情页不随撤岗消失，所以这里抓不到「岗位已关闭」。**
+    2026-09-06 实测：一个当天刚掉出列表、截止日已过的岗（jobId=10023082）仍渲染出完整 JD；
+    2020 年发布的老岗（10005198）也照样在。本探活只能抓到「id 彻底不存在」这一种。
+    浦发真正的下架信号只有列表缺席看得见，而 list-absence 撤岗按 CLAUDE.md
+    「列表里没有 ≠ 已撤岗」那条碑需要单独论证全集性，本次刻意没开。
+    """
+    job_id = (parse_qs(urlparse(row["jd_url"]).query).get("jobId") or [""])[0]
+    if not job_id:
+        return ""
+    with _cn_portal_client({**UA, "Accept": "text/html,application/xhtml+xml,*/*"}) as client:
+        r = client.get(_SPDB_DETAIL_URL, params={"jobId": job_id, "type": _spdb_type_code(row)})
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    # 正文夹在「返回列表」导航与页脚版权之间——直接复用 adapter 的锚点，别抄第二份。
+    body = SpdbAdapter._detail_body(r.text)
+    if not body and all(m in r.text for m in _SPDB_GONE_MARKERS):
+        raise JobClosedError(f"spdb jobId={job_id} not found (my404 shell)")
+    return body
+
+
+def _spdb_type_code(row):
+    """详情 URL 的 type：1=社招 / 2=校招，用错打不开。jd_url 里就带着，直接沿用。"""
+    q = parse_qs(urlparse(row["jd_url"]).query)
+    return (q.get("type") or ["1"])[0]
+
+
+_ICBC_DETAIL_API = "https://job.icbc.com.cn/icbc/trmo/post/qryPostById"
+_ICBC_GONE_MSG = "岗位已失效"
+_ICBC_APPLY_CLOSED = 2
+
+
+def _icbc_post_id(jd_url):
+    # jd_url = .../pc/index.html#/main/{school|social}/postDetail/{postId}（hash 路由，不在 query 里）
+    m = re.search(r"/postDetail/([A-Za-z0-9]+)", jd_url or "")
+    return m.group(1) if m else ""
+
+
+def _icbc_apply_closed(data, today=None):
+    """报名已截止：站点自己的 applyState=2 **且** enterEndTime 确实已过。
+
+    双条件是刻意的——只认 applyState 的话，接口某次返半截数据（字段缺省成 2）就会误杀在招岗。
+    这条与 adapters/icbc.py 入库时的 `_is_open`（按 enterEndTime 剔已截止岗）是同一口径：
+    列表本来就会照列已截止的岗，入库时丢掉、存量也该跟着下架，否则只进不出。"""
+    if _int_or_none(data.get("applyState")) != _ICBC_APPLY_CLOSED:
+        return False
+    return _is_past_date(data.get("enterEndTime"), today)
+
+
+def _detail_icbc(row, src):
+    """工行 job.icbc.com.cn：POST qryPostById，公开零鉴权（2026-09-06 真伪 id live 对拍）。
+
+    两种撤岗信号，各自双条件：
+      1. 岗位不存在 → `retCode="9"` + `retMsg="岗位已失效"`（越界 id / 全零 id / 短 id 三种
+         伪值签名一致）。⚠️ **不能只看 retCode=9**：空 postId 同样返 retCode=9，但 retMsg 是
+         「请求参数错误」——那是我们自己传错了，不是对方撤岗，所以必须连 retMsg 一起认。
+      2. 报名已截止 → `retCode="0"` + `applyState=2` + enterEndTime 已过（见 _icbc_apply_closed；
+         live 实测在招岗 applyState=1，30 个截止日已过的岗全部 applyState=2）。
+    在招岗返 25 个字段全有值，正文在 postDepict（base64→urlencode→HTML 三层包）。"""
+    post_id = _icbc_post_id(row["jd_url"])
+    if not post_id:
+        return ""
+    headers = {**UA, "Content-Type": "application/json;charset=UTF-8",
+               "Referer": IcbcAdapter.REFERER}
+    with _cn_portal_client(headers) as client:
+        r = client.post(_ICBC_DETAIL_API,
+                        json={"public": {"call_app": "F-TRM"}, "private": {"postId": post_id}})
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    payload = _loads_object(r)
+    if payload is None:
+        return ""
+    ret_code = str(payload.get("retCode") or "")
+    ret_msg = str(payload.get("retMsg") or "")
+    if ret_code == "9":
+        if _ICBC_GONE_MSG in ret_msg:
+            raise JobClosedError(f"icbc postId={post_id} closed: {ret_msg}")
+        return ""      # 「请求参数错误」也是 retCode=9 —— 我们传错了，不是对方撤岗
+    if ret_code != "0":
+        return ""
+    data = payload.get("data")
+    if not isinstance(data, dict) or not data:
+        return ""
+    if _icbc_apply_closed(data):
+        raise JobClosedError(
+            f"icbc postId={post_id} closed: applyState=2 enterEndTime={data.get('enterEndTime')}")
+    return IcbcAdapter._decode_depict(data.get("postDepict"))
+
+
+_CCB_BASE = "https://job3.ccb.com/tran/WCCMainPlatV5"
+_CCB_COMMON = {"CCB_IBSVersion": "V5", "isAjaxRequest": "true", "SERVLET_NAME": "WCCMainPlatV5"}
+_CCB_CLOSED_STATUS = "2"
+# 「这条详情真的有内容」的判据：这四个业务字段全空 = 空骨架（伪 id 的签名）。
+_CCB_CONTENT_FIELDS = ("planPostName", "planStatus", "planName", "postDate")
+
+
+def _ccb_params(jd_url):
+    q = parse_qs(urlparse(jd_url or "").query)
+    return {k: (q.get(k) or [""])[0]
+            for k in ("planId", "planPost", "planType", "orgId", "secondOrgId")}
+
+
+def _ccb_empty_skeleton(detail):
+    """四个业务字段全空 = 这条岗位不存在（伪 planId / 伪 planPost / 伪 orgId / 全伪，
+    2026-09-06 live 四种伪值返回的都是同一个 533 字节空骨架）。
+    只要有任意一个字段有值就不判死——半截数据宁可漏判。"""
+    return all(not str(detail.get(k) or "").strip() for k in _CCB_CONTENT_FIELDS)
+
+
+def _detail_ccb(row, src):
+    """建行 job3.ccb.com：GET NHR107，公开零鉴权，但**必须先热身会话**。
+
+    ⚠️ 热身（TXCODE=100119）不是可选项：2026-09-06 实测全新 client 直接打 NHR107 会拿到
+    `SUCCESS=false` +「暂时未能处理您的请求，请重新登录。」——**这既不是登录墙也不是撤岗**，
+    所以 SUCCESS!=true 一律返 ""、绝不判死（否则冷会话会把整个源清空）。
+    详情接口的 orgId 传的是**二级机构 id**（与 adapters/ccb.py 同口径，前端就是这么传的）。
+
+    两种撤岗信号：
+      1. 报名结束 → `planStatus="2"`（站点自己的状态位，与 adapters/ccb.py 入库时丢弃
+         planStatus=2 是同一口径；live 用列表里 19 条已结束的岗验过，详情逐条复现）。
+      2. 岗位不存在 → SUCCESS=true 但四个业务字段全空的 533 字节空骨架（见 _ccb_empty_skeleton）。
+
+    ⚠️ UA 必须用 adapters/ccb.py 那个浏览器 UA：本项目默认 Bot UA 会换来 HTTP 200 + 零字节
+    body（不是 403），_repair_json 会抛 RuntimeError → 这里当作「没查成」返 ""，不判死。"""
+    p = _ccb_params(row["jd_url"])
+    if not (p["planId"] and p["planPost"] and p["secondOrgId"]):
+        return ""
+    headers = {"User-Agent": CcbAdapter.user_agent, "Accept": "application/json,text/plain,*/*",
+               "Referer": "https://job3.ccb.com/cn/job/job_list.html"}
+    with _cn_portal_client(headers) as client:
+        client.get(_CCB_BASE, params={**_CCB_COMMON, "TXCODE": "100119"})   # 热身，见 docstring
+        r = client.get(_CCB_BASE, params={
+            **_CCB_COMMON, "TXCODE": "NHR107", "planId": p["planId"], "planPost": p["planPost"],
+            "planType": p["planType"], "orgId": p["secondOrgId"]})
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    try:
+        detail = _ccb_repair_json(r.text)
+    except (ValueError, RuntimeError):
+        return ""   # 空 body / 修不好的 JSON = 没查成，不是撤岗
+    if str(detail.get("SUCCESS")) != "true":
+        return ""   # 冷会话「请重新登录」/「要素不完整」都长这样
+    if str(detail.get("planStatus") or "").strip() == _CCB_CLOSED_STATUS:
+        raise JobClosedError(f"ccb planPost={p['planPost']} closed (planStatus=2)")
+    if _ccb_empty_skeleton(detail):
+        raise JobClosedError(f"ccb planPost={p['planPost']} not found (empty skeleton)")
+    return CcbAdapter._summary_of({"_detail": detail}) or ""
+
+
+_BANKCOMM_API = "https://job.bankcomm.com/api/GTMS.GTMS-PORTAL.V-1.0/"
+# jd_url 的 hash 前缀 → 列表接口的 engageType（3=社会招聘 / 1=校园招聘）。
+_BANKCOMM_ENGAGE = {"social": 3, "school": 1}
+
+
+def _bankcomm_target(jd_url):
+    """从 `https://job.bankcomm.com/#/{section}/recruitmentInfo/?positionId=N` 取 (id, section)。
+    ⚠️ id 与 section 都在 **hash 片段**里，urlparse().query 是空的，必须解 fragment。"""
+    fragment = urlparse(jd_url or "").fragment
+    position_id = (parse_qs(urlparse(fragment).query).get("positionId") or [""])[0]
+    section = next((x for x in (fragment or "").split("/") if x), "")
+    return position_id.strip(), section
+
+
+def _bankcomm_call(client, op, params):
+    """照抄前端 jumpRequest：form-urlencoded 单字段 REQ_MESSAGE，业务参数再包一层 params。"""
+    message = {"REQ_HEAD": {"TRAN_PROCESS": "", "TRAN_ID": "", "ACCESS_TOKEN": "",
+                            "REFRESH_TOKEN": ""},
+               "REQ_BODY": {"unnessaryLogin": True, "params": params}}
+    r = client.post(f"{_BANKCOMM_API}{op}.do",
+                    data={"REQ_MESSAGE": json.dumps(message, ensure_ascii=False)})
+    _raise_if_gone(r)
+    r.raise_for_status()
+    # 解不出对象 → 返 {}：TRAN_SUCCESS 缺席 = 「没答成」，走不判死的分支。
+    return _loads_object(r) or {}
+
+
+def _bankcomm_listed(client, position_id, engage_type):
+    """按 positionId 精确查列表：True=还挂着 / False=接口答成了但没有这个岗 / None=没答成。
+    None 与 False 必须分开——「没答成」不构成撤岗证据。"""
+    payload = _bankcomm_call(client, "querySocietyRecruitInfo", {
+        "businessPara": {"workPlace": "", "pubName": "", "positionId": position_id,
+                         "engageType": engage_type},
+        "pagePara": {"pageNum": 1, "pageSize": 10}})
+    if str((payload.get("RSP_HEAD") or {}).get("TRAN_SUCCESS")) != "1":
+        return None
+    results = ((payload.get("RSP_BODY") or {}).get("results") or {})
+    rows = results.get("policyList") or []
+    return any(str(x.get("positionId")) == str(position_id) for x in rows)
+
+
+def _detail_bankcomm(row, src):
+    """交行 job.bankcomm.com：POST queryPositionDetail 拿正文，撤岗要**两跳确认**。
+
+    ⚠️ **不能拿详情接口的错误码判死**：不存在的 positionId 返回的是
+    `TRAN_SUCCESS=0` + `ERROR_CODE=JUMPTESTBP9001` +「系统异常」——而这正是这个站的
+    **通用系统异常码**（adapters/bankcomm.py 的 docstring 记着：业务参数少包一层 params
+    也返同一个码）。光凭它判死，对方后端抖一下就会把整个源清空。
+
+    所以死亡判定走第二跳：**按 positionId 精确查列表**（列表接口支持 positionId 过滤，
+    2026-09-06 live 验证：真 id → total=1 且 id 对得上；伪/相邻/陈旧 id → TRAN_SUCCESS=1 + total=0）。
+    只有「列表接口答成了、且社招校招两个板块都查不到这个 id」才判死。
+    ⚠️ 两个板块都查是必须的：live 实测同一个真 id 传错 engageType 就返 total=0——
+    只查一个板块的话，岗位换了板块就会被误杀。
+    ⚠️ positionId 为空时**绝不能发这个查询**：空值会返回整版岗位（total=15），把「没查到」
+    伪装成「查到了」。所以最前面就 return。"""
+    position_id, section = _bankcomm_target(row["jd_url"])
+    if not position_id:
+        return ""
+    headers = {**UA, "Content-Type": "application/x-www-form-urlencoded",
+               "Referer": BankcommAdapter.REFERER}
+    with _cn_portal_client(headers) as client:
+        payload = _bankcomm_call(client, "queryPositionDetail", {"positionId": position_id})
+        if str((payload.get("RSP_HEAD") or {}).get("TRAN_SUCCESS")) == "1":
+            detail = (payload.get("RSP_BODY") or {}).get("results")
+            if not isinstance(detail, dict):
+                return ""
+            return BankcommAdapter._summary_of({"_detail": detail}) or ""
+        primary = _BANKCOMM_ENGAGE.get(section, 3)
+        for engage_type in (primary, *(v for v in (3, 1) if v != primary)):
+            listed = _bankcomm_listed(client, position_id, engage_type)
+            if listed is None:
+                return ""    # 列表接口也没答成 → 站点不在状态，不判死
+            if listed:
+                return ""    # 岗还挂着（只是详情这一跳没给）→ 绝不判死
+    raise JobClosedError(f"bankcomm positionId={position_id} closed (not listed on either board)")
+
+
+_CMCC_VIEW_API = "https://job.10086.cn/job-app/job/viewJob.do"
+_CMCC_NOT_FOUND_CODE = "2000"
+_CMCC_NOT_FOUND_MSG = "未查询到职位信息"
+_CMCC_OK_CODE = "0000"
+
+
+def _detail_cmcc(row, src):
+    """中国移动 job.10086.cn：POST viewJob.do，签名头与列表接口同一套（_sign_header）。
+
+    撤岗信号：`code="2000"` + `message="未查询到职位信息"`（2026-09-06 live：全零 uuid /
+    改一位的 uuid / 非 uuid 三种伪值签名一致，且同一个伪 id 连打三次结果稳定）。
+    在招岗 → `code="0000"` + data 全量字段（含 status=1）。
+
+    ⚠️ 这个站**用 HTTP 200 表达失败**，必须按 code 判：签名错返 code=9999、空 id 返
+    code=1001「必填项为空」——两者都不是撤岗，一律返 ""。判死要求 code 与 message
+    同时对上，只认 code=2000 的话，哪天它把这个码复用成别的语义就会误杀。
+    ⚠️ 每次调用都要重新签名（digest 里带毫秒时间戳），不能缓存 header。
+    ⚠️ **不要带 `Accept: application/json`**：带上之后 viewJob.do 会返回**双层编码**的 JSON
+    （body 是一个 JSON 字符串，里面才是对象），`r.json()` 拿到的是 str 而不是 dict
+    （2026-09-06 实测；adapters/cmcc.py 的列表调用不带 Accept，所以从没撞上这个）。
+    这里两手都做：请求头对齐 adapter，解析再用 _loads_object 兜住双层编码——否则一个
+    AttributeError 会把整源探活都变成 'err'，看起来像网络抖动、实则永远不会自己好。"""
+    job_id = (parse_qs(urlparse(row["jd_url"]).query).get("id") or [""])[0]
+    if not job_id:
+        return ""
+    headers = {"User-Agent": UA["User-Agent"], "Content-Type": "application/json",
+               "Referer": CmccAdapter.LIST_REFERER}
+    with _cn_portal_client(headers) as client:
+        r = client.post(_CMCC_VIEW_API, json={"serviceName": "viewJob",
+                                              "header": _cmcc_sign_header(),
+                                              "data": {"id": job_id}})
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    payload = _loads_object(r)
+    if payload is None:
+        return ""
+    code = str(payload.get("code") or "")
+    message = str(payload.get("message") or "")
+    if code == _CMCC_NOT_FOUND_CODE and _CMCC_NOT_FOUND_MSG in message:
+        raise JobClosedError(f"cmcc id={job_id} closed: {message}")
+    if code != _CMCC_OK_CODE:
+        return ""      # 9999 签名无效 / 1001 必填项为空 —— 都是我们这边的问题，不是撤岗
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return ""
+    return CmccAdapter._summary_of(data) or ""
+
+
 ENRICH_REGISTRY = {
     "huawei": _detail_huawei,
     "workday": _detail_workday,
@@ -747,6 +1098,15 @@ ENRICH_REGISTRY = {
     # meituan_campus 的 jd_url 与 meituan 完全同构（同 jobUnionId 参数、同接口；live 验证
     # 伪 id 返 status=0+「职位已下线或不存在！」与 _detail_meituan 判死逻辑逐字节吻合）：
     "meituan_campus": _detail_meituan,
+    # 国有大行 + 中国移动自建门户（2026-09-06，真伪 id live 对拍，见各函数注释）：
+    # 接入前这六个源的 11,686 个 active 岗**零撤岗路径**——既不在 ENRICH_REGISTRY（sweep 够不着）、
+    # supports_absence_liveness 也全是默认 False，岗位只进不出。
+    # ⚠️ abchina（农行 2,418 岗）刻意不在这里：它走浏览器，且它的详情页判死另有坑，见 docstring 顶部。
+    "spdb": _detail_spdb,
+    "icbc": _detail_icbc,
+    "ccb": _detail_ccb,
+    "bankcomm": _detail_bankcomm,
+    "cmcc": _detail_cmcc,
     # alibaba_campus 暂缺：13 个 BU 白标域名各自独立 cookie+CSRF 会话，详情接口已 live 验证
     # （POST /position/detail，content:null=撤岗），需 per-host session 管理，单独排期。
 }

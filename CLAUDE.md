@@ -109,6 +109,28 @@
      - **② 展示时校验（非阻塞）**：看板（Today/Jobs）加载后**异步**批量探活当下可见岗（`POST /api/jobs/liveness-check` → `lib/liveness-client.js`，复刻 enrich.py 的 wt `req_state=9501`/hotjob `state=1017`/workday 404，封顶 2.5s、并发 6、跳过 24h 内刚探过的、`hasSessionCookie` 廉价判登录态不走 getUser）；死的标 expired + 当场从看板隐藏（deadIds 过滤渲染），活的盖 `enrich_checked_at`。看板先渲染、不被它阻塞；它只让死岗随后悄悄消失。
      - **③ 后台 sweep / 浏览器审计**：大盘卫生主力（见上）。
      - 残留：岗在「加载后→点击前」那几秒死掉、或 SPA 源死岗 ② 没覆盖 → 偶发一次快速 404（可接受，远好过每次点击等数秒）。`lib/liveness-client.js` + 写助手 `markJobExpiredById`/`touchJobCheckedById` 仍由 ② 复用。
+   - **🚫 hash 路由的岗位页在浏览器巡检里必须 reload()，否则会删掉在招岗（2026-09-06 立）**：
+     浏览器对「只有 `#` 后面不同」的 `goto` 是**同文档导航、不重新渲染**，屏幕上留着的还是上一个岗。
+     实测（复刻 `audit_dead_links` 的 goto+2500ms）：先探一个已下线的快手岗、再探**在招**的
+     `job-info/31711`，第二个读到的是第一个的「该职位已下线」→ 判 dead → `--apply` 置 expired
+     → 次日被 `purge-expired` **永久删除**。加 reload 后 31711 正常渲染出自己的正文，判回 alive。
+     影响面：byd 6,362 + kuaishou 2,830 个 active 岗的 jd_url 都是「同一个 base + 不同 hash」，
+     两者都在 `_BROWSER_ADAPTERS` 里、每天带 `--apply` 跑。
+     ✅ 防：`audit_dead_links.is_same_document_nav(prev, url)` —— 只在真的同文档跳转上多花一次
+     reload；浏览器重建 / 上一跳失败时清空 prev。回归钉在 `crawler/test_audit_hash_route_nav.py`。
+     ⚠️ **农行（abchina）刻意没加进浏览器巡检**：它的死岗文案是「该岗位已过期」，`DEAD_MARKERS`
+     一条都不匹配 → 光加 adapter 只会白烧浏览器预算；而「先加文案、后修导航」的顺序会当场误杀
+     （2026-09-06 实测：不 reload 时 3 个在招岗全部读到上一个岗的过期页）。
+   - **国有大行 + 中国移动已有逐岗探活（2026-09-06 接入，此前 11,686 岗只进不出）**：
+     spdb/icbc/ccb/bankcomm/cmcc 进 `ENRICH_REGISTRY` + liveness-sweep matrix；判死信号真伪 id
+     live 对拍、**一律双条件**（见 `crawler/enrich.py` 各 `_detail_xxx` 注释）。三条诚实边界：
+     · **浦发的详情页不随撤岗消失**——刚掉出列表、截止日已过的岗仍渲染完整 JD，2020 年的老岗也在
+       → spdb 只抓得到「id 彻底不存在」，抓不到「岗位已关闭」，别指望它下架多少岗。
+     · **交行不许拿详情接口的错误码判死**：不存在的 id 返 `JUMPTESTBP9001`「系统异常」，而那是它的
+       **通用**异常码（业务参数少包一层 params 也返它）→ 判死改走「按 positionId 精确查列表、
+       社招校招两个板块都查不到」两跳确认。别把它「简化」回一跳。
+     · ⚠️ 同批补上 `chnenergy`：它 2026-09-05 就进了 ENRICH_REGISTRY 却漏加 sweep matrix，
+       只被补正文、一次没探活过。`crawler/test_state_bank_liveness.py` 现在断言「注册表 ⊆ matrix」。
    - **⚠️ 修正 §3 旧表述**「daily liveness sweep 已验证工作正常、假 active 窗口已很小」：实测它曾因上面的超时长期**没真正跑成**，别再假设它自动有效——以 db-report 数据为准。
    - **🚫「列表里没有」≠「已撤岗」——除非先证明该列表是全集（2026-07-29 立碑，差点误删 460 个在招岗）**：
      list-absence 撤岗（`supports_absence_liveness` + `jobs_db.sweep_absent_jobs`）的前提是**该源的列表接口返回岗位全集**（feishu/beisen/bytedance 是验证过确实返全量才开的）。

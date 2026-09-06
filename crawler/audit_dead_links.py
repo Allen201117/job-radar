@@ -91,6 +91,24 @@ def host_of(u):
         return None
 
 
+def is_same_document_nav(previous_url, url):
+    """从 previous_url 跳到 url 是不是「同文档导航」（只有 # 后面不同）。
+
+    ⚠️ 这是个会**删掉在招岗**的坑，不是洁癖：浏览器对只改 hash 的 goto **不重新渲染**，
+    页面上留着的还是上一个岗的内容。2026-09-06 实测（复刻本文件的导航方式）：
+    先探一个已下线的快手岗、再探 zhaopin.kuaishou.cn/#/official/social/job-info/31711，
+    第二个岗**明明在招**，classify() 读到的却是上一个岗的「该职位已下线」→ 判 dead →
+    --apply 置 expired → 次日被 purge-expired 永久删除。加 reload() 之后 31711 正常渲染出
+    自己的「头部达人运营-【电商】」，判定回到 alive。
+
+    影响面：byd 6,362 + kuaishou 2,830 个 active 岗的 jd_url 都是「同一个 base + 不同 hash」，
+    两者都在 _BROWSER_ADAPTERS 里、每天带 --apply 跑。
+    只在真正的同文档跳转上多花一次 reload，其余源一次都不多花。"""
+    if not previous_url or not url:
+        return False
+    return previous_url.split("#", 1)[0] == url.split("#", 1)[0]
+
+
 def _shard_rows(rows, limit, shard):
     k, n = (int(x) for x in shard.split("/"))
     return [r for i, r in enumerate(rows) if i % n == k][:limit]
@@ -364,17 +382,25 @@ def main():
                 user_agent=UA, viewport={"width": 1280, "height": 900}).new_page()
 
         fresh()
+        previous_url = None
         for i, j in enumerate(sample, 1):
             if i > 1 and i % RESTART_EVERY == 1:
                 fresh()
+                previous_url = None   # 换了浏览器 = 空白页，下一跳不可能是同文档
             h = host_of(j["jd_url"])
             verdict, why = "unsure", "nav-fail"
             try:
+                same_document = is_same_document_nav(previous_url, j["jd_url"])
                 hold["pg"].goto(j["jd_url"], wait_until="domcontentloaded", timeout=20000)
+                if same_document:
+                    # 只改 hash 的 goto 不重新渲染 → 不 reload 就会拿上一个岗的页面判这一个岗。
+                    hold["pg"].reload(wait_until="domcontentloaded", timeout=20000)
+                previous_url = j["jd_url"]
                 hold["pg"].wait_for_timeout(2500)  # 给 SPA 渲染时间
                 verdict, why = classify(hold["pg"], j.get("title"))
             except Exception as e:
                 verdict, why = "unsure", type(e).__name__
+                previous_url = None   # 这一跳没跳成，页面停在哪儿不确定
                 try:
                     fresh()  # 可能浏览器崩了 → 重建后继续
                 except Exception:
