@@ -118,6 +118,8 @@
      两者都在 `_BROWSER_ADAPTERS` 里、每天带 `--apply` 跑。
      ✅ 防：`audit_dead_links.is_same_document_nav(prev, url)` —— 只在真的同文档跳转上多花一次
      reload；浏览器重建 / 上一跳失败时清空 prev。回归钉在 `crawler/test_audit_hash_route_nav.py`。
+     📌 同一个机制在农行 adapter 里也咬过一次（「换机构必须 page.reload()」，见目录结构里 abchina
+     那条）——**凡是自己拼 hash 路由做连续导航的地方都要想到它**，不只是这两处。
      ⚠️ **农行（abchina）刻意没加进浏览器巡检**：它的死岗文案是「该岗位已过期」，`DEAD_MARKERS`
      一条都不匹配 → 光加 adapter 只会白烧浏览器预算；而「先加文案、后修导航」的顺序会当场误杀
      （2026-09-06 实测：不 reload 时 3 个在招岗全部读到上一个岗的过期页）。
