@@ -648,11 +648,24 @@ _US_CITY_NAMES = (
 )
 
 # 串尾两字母码撞别国国别码时的护栏（本规则只减不增：命中就**不判美国**，落回 None）。
-# ⚠️ 加拿大只认**省码**、不认省份全称：Ontario 既是加拿大省份也是加州的城市，
-#    live 实测 "ONTARIO, CA"/"Ontario, CA" 23 个岗是加州安大略市、
-#    "Mississauga, Ontario, CA" 35 个岗是加拿大安大略省 —— 认全称会把前者误杀。
-#    省码没有这个问题："Toronto, ON, CA" / "Calgary, AB, CA" 里的 CA 必是加拿大。
+# ⚠️ **Ontario 是唯一不能收全称的省**：它既是加拿大省份也是加州的城市。
+#    live 实测「含 ontario 且串尾码是 CA」共 33 个在招岗，**19 个是加州安大略市**
+#    （"ONTARIO, CA" 13 + "Ontario, CA" 6）、只有 14 个是加拿大安大略省
+#    （"Mississauga, Ontario, CA" 9 / "Newmarket, Ontario, CA" 4 / "Aurora, Ontario, CA" 1）——
+#    收它净亏 5 个岗，而且亏的方向是「把真美国岗判错」，比漏判更糟。
+#    其余省份全称不撞美国地名，收进来净赚 24 个岗、误伤 0（2026-09-05 全库实测）。
 _CA_PROVINCE_CODES = frozenset("AB BC MB NB NL NS NT NU ON PE QC SK YT".split())
+# ⚠️ 这里也**不收裸 "canada"**：实测会当场打中
+#    "965, Town, Center, Dr, La, Canada, FlintridgeCA, 91011"（加州 La Cañada Flintridge）。
+# ⚠️ 更要命的是：new brunswick / yukon / quebec 三个**同时是美国地名**
+#    （新泽西州 New Brunswick 是强生总部所在地，全库 ~220 个岗；俄克拉荷马州 Yukon；
+#    丹佛有 Quebec St）。本表**只在「串尾码恰好是 CA」时才被查**，那 220 个岗的串尾是
+#    NJ / US / OK / CO，碰不到这里 —— 谁要是把它泛化成「串里出现省名就否决」，当场炸这 220 个。
+_CA_PROVINCE_NAMES = (
+    "quebec", "québec", "british columbia", "alberta", "manitoba", "saskatchewan",
+    "nova scotia", "new brunswick", "newfoundland", "prince edward island",
+    "yukon", "nunavut", "northwest territories",
+)
 # ⚠️ 印度反过来：邦名不与任何美国地名重名，所以码和全称都能收。
 #    main 原注释只挡住了小写的 "Chennai, TN, in"，**大写的 "Mumbai, Maharashtra, IN"
 #    仍然会被判成印第安纳**（live 实测 2 个在招岗），这里补上。
@@ -674,7 +687,9 @@ _COUNTRY_TOKENS["US"].extend(_US_CITY_NAMES)
 def _foreign_tail_code(text: str, upper_tokens: set, code: str) -> bool:
     """串尾那个两字母码其实是别国国别码吗？只对 CA / IN 这两个真撞车的做判定。"""
     if code == "CA":
-        return bool(upper_tokens & _CA_PROVINCE_CODES)
+        if upper_tokens & _CA_PROVINCE_CODES:
+            return True
+        return any(_contains_token(text, name) for name in _CA_PROVINCE_NAMES)
     if code == "IN":
         if upper_tokens & _IN_REGION_CODES:
             return True

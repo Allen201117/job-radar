@@ -921,6 +921,56 @@
       "location": "Melbourne",
       "expected": null,
       "note": "反向：有知名同名外国城市的一律不收进 US 城市表，宁可判不出也不能把英国岗判成美国"
+    },
+    {
+      "location": "Québec City, Quebec, CA",
+      "expected": null,
+      "note": "串尾 CA + 加拿大省份全称 ⇒ 加拿大（省码之外再收全称，2026-09-05 实测净赚 24 岗、误伤 0）"
+    },
+    {
+      "location": "Stellarton, Nova Scotia, CA",
+      "expected": null,
+      "note": "串尾 CA + 加拿大省份全称 ⇒ 加拿大（省码之外再收全称，2026-09-05 实测净赚 24 岗、误伤 0）"
+    },
+    {
+      "location": "Chetwynd, British Columbia, CA",
+      "expected": null,
+      "note": "串尾 CA + 加拿大省份全称 ⇒ 加拿大（省码之外再收全称，2026-09-05 实测净赚 24 岗、误伤 0）"
+    },
+    {
+      "location": "Charlottetown, Prince Edward Island, CA",
+      "expected": null,
+      "note": "串尾 CA + 加拿大省份全称 ⇒ 加拿大（省码之外再收全称，2026-09-05 实测净赚 24 岗、误伤 0）"
+    },
+    {
+      "location": "Hay River, Northwest Territories, CA",
+      "expected": null,
+      "note": "串尾 CA + 加拿大省份全称 ⇒ 加拿大（省码之外再收全称，2026-09-05 实测净赚 24 岗、误伤 0）"
+    },
+    {
+      "location": "Mississauga, Ontario, CA",
+      "expected": "US",
+      "note": "红线：ontario 是唯一不收全称的省 —— 含 ontario 且串尾 CA 的 33 岗里 19 岗是加州安大略市"
+    },
+    {
+      "location": "New, Brunswick, , , NJ",
+      "expected": "US",
+      "note": "红线：new brunswick / yukon / quebec 同时是美国地名（强生总部 New Brunswick NJ 等 ~220 岗），本护栏只在串尾码是 CA 时才查，泛化即炸"
+    },
+    {
+      "location": "Yukon, OK, US",
+      "expected": "US",
+      "note": "红线：new brunswick / yukon / quebec 同时是美国地名（强生总部 New Brunswick NJ 等 ~220 岗），本护栏只在串尾码是 CA 时才查，泛化即炸"
+    },
+    {
+      "location": "93, N, Quebec, St, DenverCO, 80230",
+      "expected": "US",
+      "note": "红线：new brunswick / yukon / quebec 同时是美国地名（强生总部 New Brunswick NJ 等 ~220 岗），本护栏只在串尾码是 CA 时才查，泛化即炸"
+    },
+    {
+      "location": "965, Town, Center, Dr, La, Canada, FlintridgeCA, 91011, 1638",
+      "expected": "US",
+      "note": "红线：new brunswick / yukon / quebec 同时是美国地名（强生总部 New Brunswick NJ 等 ~220 岗），本护栏只在串尾码是 CA 时才查，泛化即炸"
     }
   ]
 }
