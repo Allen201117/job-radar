@@ -64,6 +64,19 @@
      - **② 展示时校验（非阻塞）**：看板（Today/Jobs）加载后**异步**批量探活当下可见岗（`POST /api/jobs/liveness-check` → `lib/liveness-client.js`，复刻 enrich.py 的 wt `req_state=9501`/hotjob `state=1017`/workday 404，封顶 2.5s、并发 6、跳过 24h 内刚探过的、`hasSessionCookie` 廉价判登录态不走 getUser）；死的标 expired + 当场从看板隐藏（deadIds 过滤渲染），活的盖 `enrich_checked_at`。看板先渲染、不被它阻塞；它只让死岗随后悄悄消失。
      - **③ 后台 sweep / 浏览器审计**：大盘卫生主力（见上）。
      - 残留：岗在「加载后→点击前」那几秒死掉、或 SPA 源死岗 ② 没覆盖 → 偶发一次快速 404（可接受，远好过每次点击等数秒）。`lib/liveness-client.js` + 写助手 `markJobExpiredById`/`touchJobCheckedById` 仍由 ② 复用。
+   - **🚫 主动挑岗给用户看时，「能点开」的判据是 `last_seen_at` 新，不是 `enrich_checked_at`（2026-09-06 立）**：
+     ❌ 现象：按「`enrich_checked_at` ≤14 天 = 已探活」挑出来的岗，点开是「该职位已停止招聘」。
+     ✅ 根因：`enrich_checked_at` 只说明**我们那天补过正文/探过一次**，之后关掉没人知道；
+     `last_seen_at` 新 = **官网列表昨天还挂着它**，是第一手在招证据。
+     📊 Playwright 真渲染对拍（两池各随机抽 120 条、跨公司铺开、同一套 `DEAD_MARKERS`）：
+     `last_seen_at ≤30h` → **死岗 0**；`enrich_checked_at ≤14d` → **死岗 5（4.2%）**
+     （人保 / 恒力石化 / 泡泡玛特 / 阅文 / 零跑，文案「停止招聘」「职位不存在」）。
+     📄 防：`lib/jobs-store/popular.ts` 的 `LAST_SEEN_WINDOW`（30h 不是 24h，给日更 CI 抖动留余量）。
+     ⚠️ 它**不能单独用**：wt/hotjob 的列表本身夹带已关闭岗（52%/71%，见上文），对这两类源 last_seen_at 最弱
+     —— 正好 `lib/liveness-client.js` 覆盖它们；反过来 moka 系 SPA 列表可信但探活覆盖不到，靠 dead-link-audit。
+     两层互补，别只留一层。
+     ⚠️ **curl 判不了死活**：中国 ATS 详情页 76% 是 JS 渲染（实测 124 条「普通页」只有 38 条把标题渲进 HTML），
+     moka 系还会对裸 curl 无限 302 → 判死活必须真渲染，Workday / 慢 SPA 要等到 12s 否则假报 unknown。
    - **🚫 hash 路由的岗位页在浏览器巡检里必须 reload()，否则会删掉在招岗（2026-09-06 立）**：
      浏览器对「只有 `#` 后面不同」的 `goto` 是**同文档导航、不重新渲染**，屏幕上留着的还是上一个岗。
      实测（复刻 `audit_dead_links` 的 goto+2500ms）：先探一个已下线的快手岗、再探**在招**的
