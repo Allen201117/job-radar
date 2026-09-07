@@ -27,7 +27,17 @@
 --    没有这一行，BeisenAdapter 会落进浏览器慢车道（daily-crawl 没装 Playwright → 直接 failed）。
 --    路由登记后 beisen_httpx_ready() 返 True，进 httpx 并发快车道，零浏览器。
 
-insert into sources (company, source_url, source_type, adapter_name, crawl_method, enabled, segment, industry, regions, board, notes)
+-- 🚩 本文件第一版在生产上失败过一次，成因值得记：
+--    `ERROR: cannot insert a non-DEFAULT value into column "board"`
+--    —— board 是 GENERATED ALWAYS AS classify_source_board(adapter_name, source_url) STORED（迁移 187/212/220），
+--    显式赋值会让整个迁移文件回滚。迁移 223 / 228 / 232 的抬头都已经写着「不要写 board 列」，
+--    我照着 SELECT 出来的**值**去复刻临时表做校验，复刻件里 board 是普通列 → 本地绿、线上红。
+--    ✅ 教训：拿临时表验 SQL 时，**必须照 DDL 复刻（生成列 / 约束 / 默认值），不能照查询结果复刻**，
+--       否则校验件比被校验的东西还宽松，等于没验。
+--    beisen 命中 classify_source_board 规则①（adapter 一次抓全社招+校招+实习）→ 自动得 board='mixed'，
+--    正是本源想要的，所以不写这一列就够了。
+
+insert into sources (company, source_url, source_type, adapter_name, crawl_method, enabled, segment, industry, regions, notes)
 values (
   '中国兵器工业',
   'https://norincogroupzhaopin.zhiye.com/jobs',
@@ -38,7 +48,6 @@ values (
   'soe',
   '军工·央企',
   '{CN}',
-  'mixed',
   $md$2026-09-07 接入：集团级北森门户（不是某个下属院所），live 实测 Count=1733、端到端 parse 出 1732 岗，100% 带 jd_url、95% 有正文、fetch_complete=True。
 Category:[] 一次返全部板块（社招/校招/实习），故只开这一行、board=mixed，别再加 /social 或 /campus 行（会成重复源）。
 详情路由已登记进 beisen_routes.json（/campus/detail?jobAdId={Id}），换 id 换内容已核。$md$
