@@ -44,6 +44,47 @@ export const PROGRAM_TYPE_TONE: Record<ApplyProgramType, "green" | "amber" | "ne
   talent_pool: "neutral",
 };
 
+/**
+ * 公告制入口里，**允许**停在门户根的例外。
+ *
+ * 现象（2026-09-07 创始人反馈）：「公告制的入口那里你给的链接都是点击跳转到企业官网，
+ *   但不是具体的公告页面，这里不准。」13 条里有 6 条落在门户根 / 平台首页上。
+ * 根因：上一批核验回答的是「这家有没有逐岗页」（答案没错），没回答「用户点下去看到什么」，
+ *   于是「没有逐岗页」被直接写成了「填门户根」。
+ * 防法：announcement 类必须指到**打开就能看见公告条目**的那一层。技术上「有没有路径」
+ *   是唯一能自动判的近似，所以这里只拦最粗的那种——门户根——并要求例外显式登记。
+ *
+ * ⚠️ 例外是真实存在的，不能一刀切成「根一律不合法」：华能的根页面本身就是招聘公告列表
+ *   （167 条），它的 /CampusRecruit 等更深路由反而是「暂无数据」。把它挡掉 =
+ *   用一个能用的入口换一条规则，属于「宁可漏判不可错杀」里错杀的那一侧。
+ *   要加新例外，必须先真渲染确认根页面第一屏就有公告条目，再写进这里（附一句证据）。
+ */
+export const PORTAL_ROOT_IS_ANNOUNCEMENT_LIST: ReadonlySet<string> = new Set([
+  // 中国华能：根视图默认就是「招聘公告」列表（共 167 条）；更深路由实测无数据。
+  "https://zhaopin.chng.com.cn/",
+]);
+
+/** URL 是不是「只有域名」——没有路径段、没有查询串、没有 hash。 */
+function isBareOrigin(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname.replace(/\/+$/, "") === "" && !parsed.search && !parsed.hash;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 这条公告制入口是不是「只指到了门户首页」——即需要人去补一个更深的公告页。
+ * 返回 true **不代表要丢掉这一行**：丢掉等于让用户连门户都进不去，比落在首页更糟。
+ * 它的用途是让这类错**出声**（取数层打 warn），而不是像上一版那样安静地上线。
+ */
+export function needsDeeperAnnouncementLink(program: ApplyProgram): boolean {
+  if (program.programType !== "announcement") return false;
+  if (PORTAL_ROOT_IS_ANNOUNCEMENT_LIST.has(program.entryUrl)) return false;
+  return isBareOrigin(program.entryUrl);
+}
+
 function isProgramType(value: unknown): value is ApplyProgramType {
   return value === "campus_program" || value === "announcement" || value === "talent_pool";
 }
