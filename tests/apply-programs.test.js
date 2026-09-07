@@ -133,3 +133,17 @@ test("项目制 / 人才库不受这条约束（它们本来就投在一个入�
   assert.equal(P.needsDeeperAnnouncementLink(pool), false);
   assert.equal(P.needsDeeperAnnouncementLink(P.toApplyProgram(ROW)), false);
 });
+
+// ── 取数层的缓存必须带时间桶 ─────────────────────────────────────────────
+// 2026-09-07 线上复现：迁移落库 16 分钟后 /programs 仍在发改前的整表快照
+// （华能那条核实日期还写着 9/5），而 revalidate:600 一次都没触发重建、且不报错。
+// 这一页的全部价值就是「入口是人工核实过的、最新的」，陈旧几小时正好打在要害上。
+test("apply-programs 缓存带时间桶，不只靠 revalidate 的后台重验证", () => {
+  const fs = require("node:fs");
+  const src = fs.readFileSync(
+    require("node:path").join(__dirname, "..", "lib", "apply-programs-store.ts"), "utf8",
+  );
+  assert.match(src, /Math\.floor\(Date\.now\(\) \/ \(TTL_SECONDS \* 1000\)\)/,
+    "缓存键必须带时间桶（见 lib/insight-library-store 同一个坑）");
+  assert.match(src, /async \(_bucket: number\)/, "桶要真的进 unstable_cache 的参数，否则等于没加");
+});
