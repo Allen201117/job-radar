@@ -197,7 +197,7 @@ python3 run.py --source apple         # 或 siemens / baidu / jd
 
 ```
 app/                     # Next.js App Router 页面
-  page.tsx / today-client.tsx    # Today 今日看板；jobs/ 岗位库、campus/ 校招专区、programs/ 项目制投递
+  page.tsx / today-client.tsx    # Today 今日看板；jobs/ 岗位库、campus/ 校招专区、programs/ 公告制招聘
   preferences/ saved/ applied/   # 偏好 / 值得投 / 已投递
   sources/ admin/insights/ admin/health/   # 均仅管理员：源管理 / 洞察管理 / 运营看板
   login/ auth/callback/          # 登录与 OAuth 回调

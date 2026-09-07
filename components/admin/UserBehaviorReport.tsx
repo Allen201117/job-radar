@@ -425,7 +425,7 @@ const PAGE_LABELS: Record<string, string> = {
   "/jobs": "岗位库",
   "/insights": "洞察库",
   "/campus": "校招专区",
-  "/programs": "项目制投递",
+  "/programs": "公告制招聘",
   "/saved": "值得投",
   "/applied": "已投递",
   "/preferences": "求职目标",
