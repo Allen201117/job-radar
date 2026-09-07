@@ -22,6 +22,36 @@ import type {
   InsightSource,
 } from "./types";
 
+// ── 洞察库收什么 / 不收什么（唯一定义点）────────────────────────────────
+//
+// 判据只有一条：**用户自己查一下就有的，不算信息差**。
+// 洞察库只承载「别人的经验感受」与「只有亲历者/官方公告才知道的事」。
+//
+//   · origin=derived         —— 我们从自有岗位库算出的结构分布（城市/职能/学历/经验年限/
+//                                在架时长/近 30 天新挂出…）。用户在岗位库筛一下就有。
+//   · origin=official_filing —— 年报派生的在职员工数、技术人员占比、人均薪酬。年报里写着。
+//   · dimension=listing      —— 上市状态 / 股票。百度一下就有，且答不了「好不好进、待着怎么样」。
+//
+// 派生链与年报链**照常在后台跑**（趋势要攒够 30 天快照才有意义），
+// 等「同比在缩招」这类真信息差出来了，再按主题单独放回，而不是把整层倒回来。
+//
+// ⚠️ 这份名单必须被**取数的每一个点**共用（索引 / 卡面正文 / 展开全部）。
+//    2026-09-07 线上实测：只有前两个点加了 `.neq("origin","derived")`，展开那条路漏了 ——
+//    波克城市卡面写「说法 1 条」，点开却是 7 条清一色的数据层（城市分布、职能分布、
+//    学历要求…）。计数与内容对不上，且不报错，是本仓库最忌讳的那类故障。
+export const LIBRARY_EXCLUDED_ORIGINS = ["derived", "official_filing"] as const;
+export const LIBRARY_EXCLUDED_DIMENSIONS: InsightDimension[] = ["listing"];
+
+/** 单条是否属于洞察库该收的内容。DB 侧过滤与内存侧复核共用同一判据。 */
+export function isLibraryContent(
+  item: Pick<InsightItem, "dimension"> & { origin?: string | null },
+): boolean {
+  if (item.origin && (LIBRARY_EXCLUDED_ORIGINS as readonly string[]).includes(item.origin)) {
+    return false;
+  }
+  return !LIBRARY_EXCLUDED_DIMENSIONS.includes(item.dimension);
+}
+
 /**
  * 主体卡上直接展示的指标。
  *
@@ -351,9 +381,11 @@ function toNumber(value: string | null): number | null {
 const SORTS: LibrarySort[] = ["fresh", "sample", "jobs", "insights"];
 const KINDS = ["company", "business_unit"] as const;
 const ASSERTIONS: InsightAssertion[] = ["fact", "signal", "claim"];
-const DIMENSIONS: InsightDimension[] = [
-  "timing", "hiring", "listing", "compensation_intensity", "path", "culture",
-];
+// 只放行洞察库真的会收的维度：`?dimension=listing` 已经必然是 0 条
+// （上市状态整维撤下，见 LIBRARY_EXCLUDED_DIMENSIONS），透传它等于让用户读成「这家没数据」。
+const DIMENSIONS: InsightDimension[] = (
+  ["timing", "hiring", "listing", "compensation_intensity", "path", "culture"] as InsightDimension[]
+).filter((d) => !LIBRARY_EXCLUDED_DIMENSIONS.includes(d));
 const FRESHNESS: FreshnessLevel[] = ["fresh", "recent", "aging", "stale"];
 
 function pick<T extends string>(value: string | null, allowed: readonly T[]): T | undefined {
@@ -432,6 +464,52 @@ export const METRIC_LABEL: Record<string, string> = {
   listing_status: "上市状态",
   revenue_yoy: "营收同比",
 };
+
+/**
+ * 主题标签的语义色族。给标签上色不是装饰 ——
+ * 卡面一屏十几张，用户是**扫**不是读；同色 = 同主题，一眼就能挑出「这张讲加班」。
+ *
+ * 2026-09-07 创始人反馈「标签不容易察觉」，量出来的原因：改前是 11px 的 `ink-3`
+ * 配 6% 黑发丝边，落在 `white/60` 的卡面上，文字对比度约 3:1（低于 AA 的 4.5:1），
+ * 边框几乎不可见 —— 等于没有标签。现在改成「有底色 + 有边 + 12px + ink-1 文字」。
+ *
+ * ⚠️ 文字一律用 `ink-1`，不要用同族的 `text-tone-*-fg`：实测 sky 3.54:1 / teal 3.63:1
+ *    在各自的浅底上**过不了 AA**，而 12px 半粗体不够格用大字号那档放宽标准。
+ *    色相由底色与边框承载，文字只管读得清。
+ */
+export type MetricTone = "amber" | "green" | "sky" | "teal" | "lilac" | "neutral";
+
+/** 归族按「用户脑子里的类目」（钱 / 强度 / 流程 / 成长），不按 dimension 枚举。 */
+export const METRIC_TONE: Record<string, MetricTone> = {
+  overtime_level: "amber",
+  hiring_freeze_signal: "amber",
+  layoff_mention: "amber",
+  bonus_months: "green",
+  pay_level: "green",
+  salary_range_k: "green",
+  interview_rounds: "sky",
+  intern_experience: "teal",
+  promotion_pace: "lilac",
+};
+
+export function metricTone(key: string): MetricTone {
+  return METRIC_TONE[key] || "neutral";
+}
+
+/** 标签类名。调用方只取这里，不自己写 hex（DESIGN.md 组件库红线）。 */
+export const METRIC_TONE_CLASS: Record<MetricTone, string> = {
+  amber: "border-tone-amber-border bg-tone-amber-bg",
+  green: "border-tone-green-border bg-tone-green-bg",
+  sky: "border-tone-sky-border bg-tone-sky-bg",
+  teal: "border-tone-teal-border bg-tone-teal-bg",
+  lilac: "border-tone-lilac-border bg-tone-lilac-bg",
+  neutral: "border-black/[0.14] bg-black/[0.05] dark:border-white/[0.18] dark:bg-white/[0.1]",
+};
+
+/** 一个主题标签的完整类名（含字号与墨色），页面直接用，别在 UI 里拼第二份。 */
+export function metricChipClass(key: string): string {
+  return `inline-flex items-center rounded-md border px-2 py-[3px] t-caption font-semibold ink-1 ${METRIC_TONE_CLASS[metricTone(key)]}`;
+}
 
 export const FRESHNESS_LABEL: Record<string, string> = {
   fresh: "近期核实",

@@ -8,6 +8,9 @@ import { fetchAllPages } from "./supabase-paginate";
 import { ITEM_COLUMNS, flattenSources } from "./insight-bundle";
 import {
   buildLibraryIndex,
+  isLibraryContent,
+  LIBRARY_EXCLUDED_DIMENSIONS,
+  LIBRARY_EXCLUDED_ORIGINS,
   type LibraryCardMetric,
   type LibrarySubject,
   type RawItemRow,
@@ -21,6 +24,17 @@ const INDEX_TTL_SECONDS = 600;
 
 const SOURCE_SELECT =
   "insight_item_sources(insight_sources(id, url, publisher, source_kind, excerpt, collected_at, deidentified, created_at))";
+
+/**
+ * 洞察库的取数过滤：**四个取数点共用这一个**（索引 / 卡面按 subject / 卡面按公司 / 展开全部）。
+ * 别在任何一处手写 `.neq("origin", "derived")` —— 上一版就是漏了「展开全部」那一处，
+ * 卡面写「1 条」点开却出 7 条数据层（见 lib/insight-library 的排除名单注释）。
+ */
+function libraryScope<T extends { not: Function }>(query: T): T {
+  const origins = LIBRARY_EXCLUDED_ORIGINS.join(",");
+  const dims = LIBRARY_EXCLUDED_DIMENSIONS.join(",");
+  return (query as any).not("origin", "in", `(${origins})`).not("dimension", "in", `(${dims})`) as T;
+}
 
 export interface LibraryIndex {
   subjects: LibrarySubject[];
@@ -43,15 +57,12 @@ async function loadIndex(): Promise<LibraryIndex> {
   // 条目 + 来源。来源是 claim 展示门的必需输入（时间窗 + ≥2 独立域名）；
   // 不带来源就没法判断「这条能不能展示」，卡面计数会比点进去看到的多。
   const itemRows = await fetchAllPages<any>((from, to) =>
-    supabase
-      .from("insight_items")
-      .select(`${ITEM_COLUMNS}, ${SOURCE_SELECT}`)
-      .eq("status", "active")
-      // ⚠️ 洞察库不放「数据层」（2026-09-03 创始人定调）：城市分布、学历要求这类
-      // 用户自己在岗位库筛一下就有，不算信息差。洞察库只承载「别人的经验感受」
-      // 与官方事实。派生链**照常在后台跑**（快照要攒够 30 天才有趋势），
-      // 等趋势这类真信息差出来了再单独放回。
-      .neq("origin", "derived")
+    libraryScope(
+      supabase
+        .from("insight_items")
+        .select(`${ITEM_COLUMNS}, ${SOURCE_SELECT}`)
+        .eq("status", "active"),
+    )
       // 不按 subject_id 过滤：NULL 是「公司级」，由 buildLibraryIndex 挂到公司主体上。
       .order("id", { ascending: true })
       .range(from, to),
@@ -111,28 +122,81 @@ export async function getInsightLibraryIndex(): Promise<LibraryIndex> {
 }
 
 /**
- * 展开某个主体时才取它的全部条目（走 idx_insight_items_subject 部分索引）。
- * 刻意不进索引缓存：条目全文 + 来源体积远大于卡面所需，放进去等于把首屏又做回逐条下发。
+ * 一批主体的「可展示条目」。**卡面正文与「展开全部」共用这一个取数点。**
+ *
+ * 两路取：命中 subject_id 的（业务线条目）+ 公司级的（subject_id 为 NULL，
+ * 迁移 204 的定义，挂到该公司的 company 主体上）。
+ *
+ * ⚠️ 为什么非合并不可：旧的 getSubjectItems 只走 subject_id 那一路、且没过滤 origin，
+ *    而库里**带 subject_id 的行全部是 origin=derived**（2026-09-07 live 复核：company 6,642 +
+ *    business_unit 3,933，非派生行一条都没有）。于是卡面写「说法 1 条」，点开是 7 条
+ *    清一色的数据层（城市分布 / 职能分布 / 学历要求…）。一个取数点 + 一道门，
+ *    才能保证「卡面写几条，点开就是几条」。
  */
-export async function getSubjectItems(subjectId: string): Promise<InsightItemView[]> {
+async function loadDisplayableItems(
+  subjects: Pick<LibrarySubject, "id" | "kind" | "company_id">[],
+): Promise<Map<string, InsightItemView[]>> {
+  const bySubject = new Map<string, InsightItemView[]>();
+  const ids = subjects.map((s) => s.id);
+  if (ids.length === 0) return bySubject;
+
   const supabase = createServiceClient();
-  const { data, error } = await supabase
-    .from("insight_items")
-    .select(`${ITEM_COLUMNS}, ${SOURCE_SELECT}`)
-    .eq("subject_id", subjectId)
-    .eq("status", "active");
+  const companyIds = subjects.filter((s) => s.kind === "company").map((s) => s.company_id);
+  const select = `${ITEM_COLUMNS}, ${SOURCE_SELECT}`;
+  const [bySubjectRes, byCompanyRes] = await Promise.all([
+    libraryScope(
+      supabase.from("insight_items").select(select).in("subject_id", ids).eq("status", "active"),
+    ),
+    companyIds.length
+      ? libraryScope(
+          supabase
+            .from("insight_items")
+            .select(select)
+            .in("company_id", companyIds)
+            .is("subject_id", null)
+            .eq("status", "active"),
+        )
+      : Promise.resolve({ data: [], error: null } as any),
+  ]);
+  const error = bySubjectRes.error || byCompanyRes.error;
   if (error) throw new Error(error.message);
+
+  const subjectIdByCompany = new Map(
+    subjects.filter((s) => s.kind === "company").map((s) => [s.company_id, s.id]),
+  );
   const now = new Date();
-  const out: InsightItemView[] = [];
-  for (const raw of data || []) {
+  for (const raw of [...(bySubjectRes.data || []), ...(byCompanyRes.data || [])]) {
+    const key = (raw as any).subject_id || subjectIdByCompany.get((raw as any).company_id);
+    if (!key) continue;
+    // 内存侧再复核一次排除名单：DB 过滤写错（或将来有人绕过 libraryScope）时，
+    // 这一道让数据层至多漏进日志、漏不进页面。
+    if (!isLibraryContent(raw as any)) continue;
     const sources = flattenSources(raw);
+    // ⚠️ 与索引走**同一道展示门**：卡面写几条，点开就必须是几条。
     const ev = evaluateInsight(raw as any, sources, now);
-    // 与索引计数同一道门：卡面写几条，展开就必须是几条。
     if (!ev.displayable) continue;
-    out.push({ ...(raw as any), sources, outdated: ev.outdated });
+    const view = { ...(raw as any), sources, outdated: ev.outdated } as InsightItemView;
+    const list = bySubject.get(key);
+    if (list) list.push(view);
+    else bySubject.set(key, [view]);
   }
-  // signal 在前（第一方最可信），再按样本量。
-  const rank: Record<string, number> = { signal: 0, fact: 1, claim: 2 };
+  return bySubject;
+}
+
+/**
+ * 展开某个主体时才取它的全部条目。
+ * 刻意不进索引缓存：条目全文 + 来源体积远大于卡面所需，放进去等于把首屏又做回逐条下发。
+ *
+ * 入参是**整个主体**而不是 id：公司级条目要靠 company_id 才取得到（见 loadDisplayableItems）。
+ */
+export async function getSubjectItems(
+  subject: Pick<LibrarySubject, "id" | "kind" | "company_id">,
+): Promise<InsightItemView[]> {
+  const bySubject = await loadDisplayableItems([subject]);
+  const out = bySubject.get(subject.id) || [];
+  // fact 在前（有官方出处最硬），再按样本量 —— 与卡面挑选同序，避免「卡面第一条」
+  // 和「展开第一条」是两条不同的内容。
+  const rank: Record<string, number> = { fact: 0, claim: 1, signal: 2 };
   return out.sort(
     (a, b) =>
       (rank[a.assertion || "claim"] ?? 9) - (rank[b.assertion || "claim"] ?? 9) ||
@@ -153,45 +217,15 @@ export async function attachCardContents(
   /** 当前筛选选中的主题：卡面把它排最前。用户筛「加班少的公司」却先看到年终奖，很别扭。 */
   focusMetric?: string | null,
 ): Promise<LibrarySubject[]> {
-  const ids = subjects.map((s) => s.id);
-  if (ids.length === 0) return subjects;
+  if (subjects.length === 0) return subjects;
 
-  const supabase = createServiceClient();
-  // 公司主体的条目可能是公司级写入的（subject_id 为 NULL），所以两路都要取。
-  const companyIds = subjects.filter((s) => s.kind === "company").map((s) => s.company_id);
-  const select = `${ITEM_COLUMNS}, ${SOURCE_SELECT}`;
-  const [bySubjectRes, byCompanyRes] = await Promise.all([
-    supabase.from("insight_items").select(select)
-      .in("subject_id", ids).eq("status", "active").neq("origin", "derived"),
-    companyIds.length
-      ? supabase.from("insight_items").select(select)
-        .in("company_id", companyIds).is("subject_id", null)
-        .eq("status", "active").neq("origin", "derived")
-      : Promise.resolve({ data: [], error: null } as any),
-  ]);
-  const error = bySubjectRes.error || byCompanyRes.error;
-  if (error) {
+  let bySubject: Map<string, InsightItemView[]>;
+  try {
+    bySubject = await loadDisplayableItems(subjects);
+  } catch (error: any) {
     // 取不到就退回索引里的数字：卡面会略旧，但不会整页空掉。
-    console.error("[insight-library] 取卡面内容失败", error.message);
+    console.error("[insight-library] 取卡面内容失败", error?.message || error);
     return subjects;
-  }
-
-  const subjectIdByCompany = new Map(
-    subjects.filter((s) => s.kind === "company").map((s) => [s.company_id, s.id]),
-  );
-  const now = new Date();
-  const bySubject = new Map<string, InsightItemView[]>();
-  for (const raw of [...(bySubjectRes.data || []), ...(byCompanyRes.data || [])]) {
-    const key = (raw as any).subject_id || subjectIdByCompany.get((raw as any).company_id);
-    if (!key) continue;
-    const sources = flattenSources(raw);
-    // ⚠️ 与索引、与展开视图走**同一道展示门**：卡面写几条，点开就必须是几条。
-    const ev = evaluateInsight(raw as any, sources, now);
-    if (!ev.displayable) continue;
-    const list = bySubject.get(key);
-    const view = { ...(raw as any), sources, outdated: ev.outdated } as InsightItemView;
-    if (list) list.push(view);
-    else bySubject.set(key, [view]);
   }
 
   const rank: Record<string, number> = { fact: 0, claim: 1, signal: 2 };
