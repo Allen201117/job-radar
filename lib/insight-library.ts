@@ -10,6 +10,7 @@
 //    绝不逐条下发全部洞察。展开某个主体时再按 subject_id 取它的条目。
 // ============================================================
 
+import { DATA_LAYER_ORIGINS, isDataLayerItem } from "./insight-bundle";
 import {
   evaluateInsight,
   freshnessFromVerifiedAt,
@@ -39,16 +40,18 @@ import type {
 //    2026-09-07 线上实测：只有前两个点加了 `.neq("origin","derived")`，展开那条路漏了 ——
 //    波克城市卡面写「说法 1 条」，点开却是 7 条清一色的数据层（城市分布、职能分布、
 //    学历要求…）。计数与内容对不上，且不报错，是本仓库最忌讳的那类故障。
-export const LIBRARY_EXCLUDED_ORIGINS = ["derived", "official_filing"] as const;
+// origin 那两类（派生结构分布 / 年报数字）与抽屉共用一份定义，见 lib/insight-bundle
+// 的 DATA_LAYER_ORIGINS —— 两个面各写一份，迟早一个撤了另一个还留着。
+export const LIBRARY_EXCLUDED_ORIGINS = DATA_LAYER_ORIGINS;
+// 洞察库比抽屉多撤一维：上市状态 / 股票。百度一下就有，且答不了「好不好进、待着怎么样」。
+// （抽屉是「看着某个岗位顺手了解这家公司」的场景，上市与否还算上下文，故不在共用名单里。）
 export const LIBRARY_EXCLUDED_DIMENSIONS: InsightDimension[] = ["listing"];
 
 /** 单条是否属于洞察库该收的内容。DB 侧过滤与内存侧复核共用同一判据。 */
 export function isLibraryContent(
   item: Pick<InsightItem, "dimension"> & { origin?: string | null },
 ): boolean {
-  if (item.origin && (LIBRARY_EXCLUDED_ORIGINS as readonly string[]).includes(item.origin)) {
-    return false;
-  }
+  if (isDataLayerItem(item)) return false;
   return !LIBRARY_EXCLUDED_DIMENSIONS.includes(item.dimension);
 }
 

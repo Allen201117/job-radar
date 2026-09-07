@@ -30,7 +30,13 @@ function loadTsModule(relPath, deps = {}) {
 }
 
 const V = loadTsModule(path.join("lib", "insight-verification.ts"));
+// 数据层名单与抽屉共用，住在 insight-bundle 里 —— 这个 shim 得把它一并转译进来。
+const B = loadTsModule(path.join("lib", "insight-bundle.ts"), {
+  "./insight-verification": V,
+  "./types": {},
+});
 const L = loadTsModule(path.join("lib", "insight-library.ts"), {
+  "./insight-bundle": B,
   "./insight-verification": V,
   "./types": {},
 });
@@ -464,3 +470,44 @@ test("主题标签有语义色且文字用 ink-1（同族 fg 在浅底上过不�
   assert.match(cls, /\bink-1\b/, "标签文字必须是 ink-1，别退回 text-tone-*-fg / ink-3");
   assert.equal(/t-micro/.test(cls), false, "11px 是改前那版看不见的字号");
 });
+
+// ── 数据层名单必须被「洞察库」与「岗位卡抽屉」两个面共用 ──────────────────
+// 2026-09-07 创始人先撤洞察库的数据层，再撤抽屉里的年报数字。两处各写一份名单，
+// 迟早出现「一个面撤了、另一个面还在显示」。名单住在 lib/insight-bundle。
+
+test("洞察库的 origin 排除名单就是共用的那一份，不许在库这边另写一份", () => {
+  const bundle = fs.readFileSync(path.join(__dirname, "..", "lib", "insight-bundle.ts"), "utf8");
+  assert.match(bundle, /export const DATA_LAYER_ORIGINS = \["derived", "official_filing"\]/);
+  assert.deepEqual([...L.LIBRARY_EXCLUDED_ORIGINS], ["derived", "official_filing"]);
+});
+
+test("抽屉与徽章计数两条读路都过同一份名单（否则徽章说有洞察、点开是空的）", () => {
+  const drawer = fs.readFileSync(path.join(__dirname, "..", "app", "api", "insights", "route.ts"), "utf8");
+  const availability = fs.readFileSync(
+    path.join(__dirname, "..", "app", "api", "insights", "availability", "route.ts"), "utf8",
+  );
+  for (const [name, src] of [["抽屉 /api/insights", drawer], ["徽章计数 /api/insights/availability", availability]]) {
+    assert.match(src, /DATA_LAYER_ORIGINS_FILTER/, `${name} 必须用共用的数据层过滤`);
+    const code = src.split("\n").filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line)).join("\n");
+    assert.equal(
+      /\.neq\(\s*["']origin["']/.test(code),
+      false,
+      `${name} 别再手写 neq(origin, derived)`,
+    );
+  }
+});
+
+test("洞察库比抽屉多撤上市状态那一维（抽屉是看岗位顺带了解公司，上市与否还算上下文）", () => {
+  const listing = { origin: "wikidata", dimension: "listing", metric_key: "listing_status" };
+  assert.equal(L.isLibraryContent(listing), false);
+  // 但它不属于共用的数据层名单 —— 抽屉照常显示。
+  assert.equal(B_isDataLayer(listing), false);
+});
+
+function B_isDataLayer(item) {
+  const B = loadTsModule(path.join("lib", "insight-bundle.ts"), {
+    "./insight-verification": V,
+    "./types": {},
+  });
+  return B.isDataLayerItem(item);
+}

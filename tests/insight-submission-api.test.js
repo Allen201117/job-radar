@@ -45,6 +45,11 @@ function chain(result, onCall = {}) {
       filters.push(["neq", column, value]);
       return this;
     },
+    // 数据层过滤走 not(column,"in","(a,b)")（见 lib/insight-bundle 的 DATA_LAYER_ORIGINS_FILTER）。
+    not(column, operator, value) {
+      filters.push(["not", column, operator, value]);
+      return this;
+    },
     in(column, value) {
       filters.push(["in", column, value]);
       return this;
