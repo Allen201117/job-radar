@@ -1,4 +1,5 @@
-// 项目制投递入口的读侧纯函数（无网络、无 DB）。
+// 公告制招聘（/programs）入口的读侧纯函数（无网络、无 DB）。
+// 页面 2026-09-07 由「项目制投递」改名「公告制招聘」；三种 program_type 的分档没变。
 //
 // 这一层承载的是**一类客观事实**：有些公司不存在「一岗一页」，
 // 我们再怎么改抓取也拿不到 jd_url —— 中通校招是「蓝天计划」项目制投递
@@ -24,9 +25,11 @@ export interface ApplyProgram {
 }
 
 /** 徽章文案：说清「这是什么」，不是岗位。 */
+// ⚠️ announcement 这一档叫「招聘公告」而不是「公告制招聘」：整个页面 2026-09-07 已改名为
+// 「公告制招聘」，分区再叫同一个名字会变成「公告制招聘 › 公告制招聘 14 家」。
 export const PROGRAM_TYPE_LABEL: Record<ApplyProgramType, string> = {
   campus_program: "项目制投递",
-  announcement: "公告制招聘",
+  announcement: "招聘公告",
   talent_pool: "人才库",
 };
 

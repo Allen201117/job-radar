@@ -9,7 +9,7 @@ const DICT: Record<string, { zh: string; en: string }> = {
   jobs: { zh: "搜索岗位", en: "Jobs" },
   campus: { zh: "校招专区", en: "Campus" },
   insights: { zh: "洞察库", en: "Insights" },
-  programs: { zh: "项目制投递", en: "Programs" },
+  programs: { zh: "公告制招聘", en: "Announcements" },
   me: { zh: "个人主页", en: "Profile" },
   saved: { zh: "值得投", en: "Saved" },
   applied: { zh: "已投递", en: "Applied" },

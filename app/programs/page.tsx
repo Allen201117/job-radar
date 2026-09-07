@@ -19,7 +19,7 @@ import { getRequestUser } from "@/lib/auth";
 import { getApplyPrograms } from "@/lib/apply-programs-store";
 import { groupByType, PROGRAM_TYPE_TONE, type ApplyProgramType } from "@/lib/apply-programs";
 
-export const metadata = { title: "项目制投递 · 求职雷达" };
+export const metadata = { title: "公告制招聘 · 求职雷达" };
 
 // 为什么单独一个入口：有一类公司**客观上不存在「一岗一页」** —— 中通校招是「蓝天计划」
 // 项目制投递（整页只有项目介绍 + 宣讲会 + 一个投递按钮，没有岗位列表），国有大行是公告制。
@@ -61,7 +61,7 @@ export default async function ProgramsPage() {
       <Navbar />
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
-          eyebrow="项目制投递"
+          eyebrow="公告制招聘"
           title="有些公司不按岗位挂，得从这里投"
           icon={Megaphone}
           description="招聘公告、校招项目、人才库——这些公司的官网没有逐个岗位的详情页，所以它们不会出现在岗位库里，你搜也搜不到。但对方确实在招，官方投递入口都在下面，每条链接都人工打开核实过。"

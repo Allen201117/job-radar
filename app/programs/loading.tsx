@@ -12,7 +12,7 @@ export default function Loading() {
       <Navbar />
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
-          eyebrow="项目制投递"
+          eyebrow="公告制招聘"
           title="有些公司不按岗位挂，得从这里投"
           icon={Megaphone}
           description="招聘公告、校招项目、人才库——这些公司的官网没有逐个岗位的详情页，所以它们不会出现在岗位库里，你搜也搜不到。但对方确实在招，官方投递入口都在下面，每条链接都人工打开核实过。"
