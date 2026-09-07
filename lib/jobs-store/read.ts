@@ -683,7 +683,7 @@ async function allActiveCompanyNames(): Promise<string[]> {
   }
 }
 
-async function resolveActiveCompanyNames(patterns: string[]): Promise<string[]> {
+export async function resolveActiveCompanyNames(patterns: string[]): Promise<string[]> {
   const needles = patterns
     .map((p) => p.replace(/%/g, "").toLowerCase())
     .filter(Boolean);

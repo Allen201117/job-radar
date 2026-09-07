@@ -1,5 +1,6 @@
 import unittest
 
+import geo
 from geo import (
     CHINA_CJK_PLACE_MARKERS,
     KOREA_CJK_MARKERS,
@@ -340,6 +341,52 @@ class GeoCrossLanguageFixtureTest(unittest.TestCase):
         for case in doc["cases"]:
             with self.subTest(location=case["location"], note=case["note"]):
                 self.assertEqual(derive_country_code(case["location"]), case["expected"])
+
+
+class LeadingCountryCodeTest(unittest.TestCase):
+    """开头的两字母国别码（2026-09-06 加）。逐条用例在共享夹具 tests/fixtures/geo-cases.json，
+    这里只钉**结构性**不变量 —— 靠单个用例钉不住、改实现时最容易被顺手破坏的那三条。
+
+    背景：Workday 系外企 ATS 有第二种地点写法把国别码放最前面（`MY, JOHOR, VIRTUAL` /
+    `SE, Solna` / `IE, Dublin, …`），改前全部返回 None → job_scope 落回默认 domestic →
+    境外岗混进国内池。全库实测影响面 120 行（国内→境外 69 / 只补 country_code 51 /
+    境外→国内 0）。
+    """
+
+    def test_ranks_last_so_explicit_names_win(self):
+        # 排在全表最后一步：任何显式国名/州名/城市都优先于开头那两个字母。
+        # 这三条是本规则安全性的一半 —— 顺序一换，波音的西雅图东厂区就会被判成瑞典。
+        self.assertEqual(derive_country_code("SE, Bothell, Washington, United, States"), "US")
+        self.assertEqual(derive_country_code("GA, Atlanta, 1050, Techwood, Drive, NW"), "US")
+        self.assertEqual(derive_country_code("CN, Shanghai"), "CN")
+
+    def test_us_state_codes_always_abstain(self):
+        """与美国州缩写撞车的码一律弃权 —— 这个位置上州缩写比国别码更常见。
+
+        live 全库（2026-09-06，456,408 个在招岗）「开头两字母 + 逗号」7,403 行里，
+        `GA, Atlanta…` 117 / `NY, BROADWAY…` 116 / `CA, Burbank…` 50 / `NC, CHARLOTTE…` 48
+        全是「州, 城市, 门牌」。所以 MO 是密苏里不是澳门、IN 是印第安纳不是印度、
+        CA 是加州不是加拿大 —— 一个都不许按国别码认。
+        """
+        for code in sorted(geo._US_STATE_CODES):
+            loc = f"{code}, Work, From, Home"
+            self.assertIsNone(derive_country_code(loc), f"{loc} 不许被当成国别码")
+
+    def test_only_uppercase_and_comma(self):
+        # 只认逗号分隔（live 121 个受影响写法里 119 个逗号、1 个连字符、0 个空格），
+        # 且必须是原串大写形态（小写 "la," / "de," 是法语地址里的介词/冠词）。
+        self.assertIsNone(derive_country_code("MY JOHOR VIRTUAL"))
+        self.assertIsNone(derive_country_code("my, johor, virtual"))
+
+    def test_iso_table_is_the_official_249(self):
+        # 表本身是 ISO 3166-1 alpha-2 的**正式分配**全集，不是手挑的。手挑会随时间漂，
+        # 而判断留在两个显式排除集里（美国州缩写 + 实证反例黑名单），有据可查。
+        self.assertEqual(len(geo.ISO_ALPHA2_CODES), 249)
+        self.assertEqual(len(set(geo.ISO_ALPHA2_CODES)), 249)
+        self.assertEqual(list(geo.ISO_ALPHA2_CODES), sorted(geo.ISO_ALPHA2_CODES))
+        for code in ("CN", "HK", "MO", "TW", "US", "GB"):
+            self.assertIn(code, geo.ISO_ALPHA2_CODES)
+        self.assertNotIn("UK", geo.ISO_ALPHA2_CODES)  # UK 不是 ISO-2，走别名映射到 GB
 
 
 class UsStateTest(unittest.TestCase):

@@ -7,9 +7,12 @@ import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { buildRadarProfile, profileReadiness } from "@/lib/opportunities/profile";
 import { resolveIntensityForUser } from "@/lib/opportunities/intensity";
 import { buildOpportunityFeed } from "@/lib/opportunities/service";
+import { getPopularFeed, type PopularFeed } from "@/lib/popular-feed";
 import type { OpportunityFeed } from "@/lib/opportunities/types";
 import type { CandidateProfile, JobAction, UserPreferences } from "@/lib/types";
 import TodayClient, { OnboardingPanel } from "../today-client";
+import TodayPopularClient from "../today-popular-client";
+import { TODAY_HERO } from "./hero";
 import { Broadcast } from "@phosphor-icons/react/ssr";
 
 export const dynamic = "force-dynamic";
@@ -17,18 +20,15 @@ export const dynamic = "force-dynamic";
 // 用户看到的就不是「机会队列暂时无法更新」而是白屏错误页。给足余量到 30s（plan 支持，见 /api/jobs/search=60）。
 export const maxDuration = 30;
 
-const HERO = {
-  eyebrow: "今日机会",
-  title: "今天值得处理的官方岗位",
-  description:
-    "系统已按你的目标、简历和岗位新鲜度完成筛选。先处理最相关的，再决定是否扩大搜索。",
-};
-
 /** 页面主体所需的一切；一次构建、各 Suspense 边界共用。构建过程中的失败都在内部兜住，promise 永不 reject。 */
 type TodayBundle = {
   readiness: ReturnType<typeof profileReadiness>;
-  /** 画像未就绪时为 null（onboarding 不展示任何岗位，也就不该发召回）。 */
+  /** 画像未就绪时为 null（此时不发个人召回，改走 popular 兜底）。 */
   feed: OpportunityFeed | null;
+  /** 画像未就绪时的「热门在招」兜底清单；画像就绪时为 null（不白付一次查询）。 */
+  popular: PopularFeed | null;
+  /** 用户已存过的目标行业（兜底位的「设为我的行业」用它避免重复追问）。 */
+  savedIndustries: string[];
   /** shell 之前那 4 条 Supabase(悉尼) 并行查询耗时，诊断用。 */
   userRowsMs: number;
 };
@@ -60,7 +60,17 @@ async function loadTodayBundle(
     candRes.data as CandidateProfile | null,
   );
   const readiness = profileReadiness(profile);
-  if (!readiness.ready) return { readiness, feed: null, userRowsMs };
+  // 画像未就绪 → 不做个人召回（没有目标可召回），改取与用户无关、跨请求共享缓存的「热门在招」。
+  // 这是新用户的第一屏：给不出对口机会，也要给得出**能点开的真岗位**，而不是一堵表单墙。
+  if (!readiness.ready) {
+    return {
+      readiness,
+      feed: null,
+      popular: await getPopularFeed(),
+      savedIndustries: profile.targetIndustries,
+      userRowsMs,
+    };
+  }
 
   // radar/open 由客户端首渲后异步记录，不提前清零当次新增。
   const actions = (actsRes.data as JobAction[]) || [];
@@ -81,7 +91,7 @@ async function loadTodayBundle(
     console.error("[today] feed build failed:", (e as Error).message);
     return null;
   });
-  return { readiness, feed, userRowsMs };
+  return { readiness, feed, popular: null, savedIndustries: profile.targetIndustries, userRowsMs };
 }
 
 // 流式：先出页面骨架（导航 + 标题），用户小表查询与慢的跨区机会召回都在 Suspense 边界里流入，不阻塞整页。
@@ -116,7 +126,12 @@ export default async function TodayPage({
             的计分板。2026-09-02 创始人明确要求下线：它把内部漏斗的中间数当卖点讲给用户听，
             而用户只关心「今天有什么值得投的」——「剔除 1,274 个」既不可验证，也容易让人觉得
             系统在自夸工作量。要衡量漏斗健康度请看 /admin/health，别放在用户面前。 */}
-        <ProductHero eyebrow={HERO.eyebrow} title={HERO.title} description={HERO.description} icon={Broadcast} />
+        <ProductHero
+          eyebrow={TODAY_HERO.eyebrow}
+          title={TODAY_HERO.title}
+          description={TODAY_HERO.description}
+          icon={Broadcast}
+        />
 
         <section className="mt-8">
           <Suspense fallback={<JobListSkeleton count={6} />}>
@@ -172,6 +187,17 @@ async function TodayBody({ bundlePromise }: { bundlePromise: Promise<TodayBundle
     );
   }
   if (!bundle.readiness.ready) {
+    // 有热门岗位就先给东西看（细引导条在清单顶部）；一条都取不到才退回纯引导页。
+    const popular = bundle.popular;
+    if (popular && popular.jobs.length > 0) {
+      return (
+        <TodayPopularClient
+          items={popular.jobs.map((p) => ({ job: p.job, industry: p.industry }))}
+          industries={popular.industries}
+          savedIndustries={bundle.savedIndustries}
+        />
+      );
+    }
     return (
       <OnboardingPanel
         missingContent={bundle.readiness.missingContent}
