@@ -1,6 +1,6 @@
 // 跨请求缓存：company_profiles 轻列 + activeJobCountsByCompany 聚合。
 //
-// 两者是 availability / career-path 接口里最重的共享读，且对所有用户一样（无用户私有数据）。
+// 两者是 availability 接口里最重的共享读，且对所有用户一样（无用户私有数据）。
 // ⚠️ unstable_cache 函数体内不能读 cookies()/headers()；supabase 客户端必须在函数内部用
 //    service-role 新建（createServiceClient），不能从外部传入请求级客户端。
 
@@ -9,7 +9,7 @@ import { createServiceClient } from "@/lib/supabaseService";
 import { fetchAllPages } from "@/lib/supabase-paginate";
 import { activeJobCountsByCompany, jobsStoreEnabled } from "@/lib/jobs-store/read";
 
-/** company_profiles 轻列（供 findCompanyProfile / companyMatches / career-path 使用）。*/
+/** company_profiles 轻列（供 findCompanyProfile / companyMatches 使用）。*/
 export interface CompanyProfileLight {
   id: string;
   company: string;

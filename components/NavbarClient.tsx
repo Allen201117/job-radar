@@ -18,7 +18,7 @@ import {
   Compass,
   GraduationCap,
   List,
-  Path,
+  Megaphone,
   SignOut,
   UserCircle,
   X,
@@ -26,20 +26,33 @@ import {
 import { useBodyScrollLock, useEscapeKey } from "@/lib/ui/hooks";
 import { buttonVariants } from "@/components/ui";
 
-// 一级导航：今日机会 / 搜索岗位 / 洞察库 / 职业路径 / 校招专区 / 个人主页 / 值得投 / 已投递。
+// 一级导航：今日机会 / 搜索岗位 / 洞察库 / 校招专区 / 项目制投递 / 个人主页 / 值得投 / 已投递。
 // 2026-09-03：原「关注与偏好」与「个人主页」功能重复（两处各挂一份简历画像面板），已合并为后者。
 // /me 移入账号菜单。/sources、/admin/* 仅管理员直达。
+// 2026-09-07：「职业路径」下线（5 天实测 9 PV / 7 人，人均 1.3 次、无一人回访，
+//   同期 /today 5.0 次/人）；腾出的位置给「项目制投递」——它原来只是校招专区里的一行文字链，
+//   而它承载的是**一整类岗位库天然覆盖不到的公司**（公告制 / 项目制 / 人才库），值得一级入口。
+//
+// `hint` 是导航图标的悬停说明。图标化导航省了空间，代价是**光看图标猜不出功能**——
+// 「项目制投递」尤其如此（创始人反馈：用户不知道这是干嘛的）。所以每条都配一句人话，
+// 桌面端进 hover 气泡、移动端直接写在抽屉里当第二行（tooltip 在触屏上触发不了，
+// 不能让它成为唯一出处，见 components/ui/tooltip.tsx 的同一条告诫）。
 const LINKS = [
-  { href: "/today", key: "today", icon: Broadcast },
-  { href: "/jobs", key: "jobs", icon: Briefcase },
+  { href: "/today", key: "today", icon: Broadcast, hint: "今天值得先处理的官方岗位，按你的偏好排过序" },
+  { href: "/jobs", key: "jobs", icon: Briefcase, hint: "完整官方岗位库，按城市 / 职能 / 学历细筛" },
   // 洞察库与岗位库平级：产品是「岗位信息」与「洞察信息」两个维度，
   // 洞察不该只活在岗位卡点开的抽屉里（创始人 2026-09-03 定调）。
-  { href: "/insights", key: "insights", icon: Compass },
-  { href: "/path", key: "path", icon: Path },
-  { href: "/campus", key: "campus", icon: GraduationCap },
-  { href: "/me", key: "me", icon: UserCircle },
-  { href: "/saved", key: "saved", icon: BookmarkSimple },
-  { href: "/applied", key: "applied", icon: CheckCircle },
+  { href: "/insights", key: "insights", icon: Compass, hint: "年终奖、加班、晋升——岗位描述里看不到的那部分" },
+  { href: "/campus", key: "campus", icon: GraduationCap, hint: "按公司看校招 / 实习开没开，盯住网申时间窗" },
+  {
+    href: "/programs",
+    key: "programs",
+    icon: Megaphone,
+    hint: "有些公司不按岗位挂（招聘公告 / 校招项目 / 人才库），官方投递入口收在这儿",
+  },
+  { href: "/me", key: "me", icon: UserCircle, hint: "简历画像与求职目标，决定推荐给你看什么" },
+  { href: "/saved", key: "saved", icon: BookmarkSimple, hint: "标了「值得投」的岗位，回头集中处理" },
+  { href: "/applied", key: "applied", icon: CheckCircle, hint: "已投递的岗位与进展：笔试 / 面试 / offer" },
 ];
 
 // 移动端先给用户最常用的四步路，次级入口仍留在汉堡菜单，避免把所有路径都挤成难点的图标。
@@ -184,16 +197,20 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
                   )}
                 >
                   <link.icon size={19} weight={active ? "fill" : "regular"} aria-hidden="true" />
-                  {/* 气泡标签：纯视觉，真实无障碍名走 aria-label；默认隐藏，hover / 聚焦时升起 */}
+                  {/* 气泡标签：纯视觉，真实无障碍名走 aria-label；默认隐藏，hover / 聚焦时升起。
+                      刻意没换成组件库的 Radix <Tooltip/>：那个默认 300ms 延迟且每个实例自带
+                      Provider，在这种密排图标行里会变成「每划过一个都要等一下」；这里要的是
+                      零延迟的纯 CSS 揭示。说明文字同时写进移动端抽屉，不让气泡成为唯一出处。 */}
                   <span
                     role="tooltip"
-                    className="pointer-events-none absolute left-1/2 top-full z-50 mt-2.5 -translate-x-1/2 translate-y-1 whitespace-nowrap rounded-lg bg-[#1a1714] px-2.5 py-1 text-xs font-medium text-[#f7f1e6] opacity-0 shadow-[0_12px_30px_-14px_rgba(26,23,20,0.7)] transition duration-200 ease-out group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100 dark:bg-[#f3ecdf] dark:text-[#16130f]"
+                    className="pointer-events-none absolute left-1/2 top-full z-50 mt-2.5 w-max max-w-[15.5rem] -translate-x-1/2 translate-y-1 rounded-xl bg-[#1a1714] px-3 py-2 text-left text-[#f7f1e6] opacity-0 shadow-[0_12px_30px_-14px_rgba(26,23,20,0.7)] transition duration-200 ease-out group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100 dark:bg-[#f3ecdf] dark:text-[#16130f]"
                   >
                     <span
                       aria-hidden="true"
                       className="absolute -top-1 left-1/2 size-2 -translate-x-1/2 rotate-45 rounded-[2px] bg-[#1a1714] dark:bg-[#f3ecdf]"
                     />
-                    {label}
+                    <span className="block text-xs font-semibold leading-tight">{label}</span>
+                    <span className="mt-1 block text-[11px] leading-[1.5] opacity-70">{link.hint}</span>
                   </span>
                 </Link>
               );
@@ -305,7 +322,9 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
             onClick={() => setMenuOpen(false)}
             className="fixed inset-0 top-14 z-30 bg-[#1a1714]/20 backdrop-blur-sm lg:hidden dark:bg-black/50"
           />
-          <nav className="relative z-40 border-t border-black/[0.06] bg-[#f4efe6]/95 px-4 pb-4 pt-2 backdrop-blur-xl lg:hidden dark:border-white/[0.08] dark:bg-[#16130f]/[0.95]">
+          {/* 每条多一行说明后抽屉会更高，小屏（iPhone SE 一档）必然超出视窗 →
+              显式给它一个滚动容器，否则底部的退出按钮会被挤出屏幕点不到。 */}
+          <nav className="relative z-40 max-h-[calc(100dvh-3.5rem)] overflow-y-auto overscroll-contain border-t border-black/[0.06] bg-[#f4efe6]/95 px-4 pb-4 pt-2 backdrop-blur-xl lg:hidden dark:border-white/[0.08] dark:bg-[#16130f]/[0.95]">
             {LINKS.map((link) => {
               const active = pathname === link.href;
               return (
@@ -314,14 +333,29 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
                   href={link.href}
                   onClick={() => setMenuOpen(false)}
                   className={cn(
-                    "flex items-center gap-3 rounded-2xl px-3.5 py-3 text-[15px] font-medium transition duration-200",
+                    "flex items-start gap-3 rounded-2xl px-3.5 py-2.5 transition duration-200",
                     active
                       ? "bento-selected bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
                       : "ink-2 hover:bg-black/[0.05] active:scale-[0.99] dark:hover:bg-white/[0.06]",
                   )}
                 >
-                  <link.icon size={20} weight={active ? "fill" : "regular"} aria-hidden="true" />
-                  {t(link.key, lang)}
+                  <link.icon
+                    size={20}
+                    weight={active ? "fill" : "regular"}
+                    aria-hidden="true"
+                    className="mt-0.5 shrink-0"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-[15px] font-medium leading-tight">{t(link.key, lang)}</span>
+                    <span
+                      className={cn(
+                        "mt-1 block text-[12px] leading-[1.5]",
+                        active ? "opacity-70" : "ink-3",
+                      )}
+                    >
+                      {link.hint}
+                    </span>
+                  </span>
                 </Link>
               );
             })}

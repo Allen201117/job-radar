@@ -59,7 +59,6 @@ const FILES = [
   "app/api/insights/availability/route.ts",
   "app/api/insights/route.ts",
   "app/api/insights/submit/route.ts",
-  "app/api/career-path/route.ts",
   "app/api/insights/admin/route.ts",
   "app/api/insights/admin/cycles/route.ts",
   "app/api/insights/admin/submissions/route.ts",
@@ -130,12 +129,6 @@ test("availability/route.ts 不再对 company_profiles 做整表 select *", () =
 test("availability/route.ts 引用 getCachedCompanyProfilesLight 和 getCachedActiveJobCounts", () => {
   const src = read("app/api/insights/availability/route.ts");
   assert.ok(src.includes("getCachedCompanyProfilesLight"), "应引用 getCachedCompanyProfilesLight");
-  assert.ok(src.includes("getCachedActiveJobCounts"), "应引用 getCachedActiveJobCounts");
-});
-
-test("career-path/route.ts 不再直接调 activeJobCountsByCompany，改走缓存", () => {
-  const src = read("app/api/career-path/route.ts");
-  assert.ok(!src.includes("activeJobCountsByCompany"), "career-path 应改走 getCachedActiveJobCounts，不直接调 activeJobCountsByCompany");
   assert.ok(src.includes("getCachedActiveJobCounts"), "应引用 getCachedActiveJobCounts");
 });
 

@@ -184,14 +184,14 @@ python3 run.py --source apple         # 或 siemens / baidu / jd
 
 ```
 app/                     # Next.js App Router 页面
-  page.tsx / today-client.tsx    # Today 今日看板；jobs/ 岗位库、path/ 职业路径、campus/ 校招专区
+  page.tsx / today-client.tsx    # Today 今日看板；jobs/ 岗位库、campus/ 校招专区、programs/ 项目制投递
   preferences/ saved/ applied/   # 偏好 / 值得投 / 已投递
   sources/ admin/insights/ admin/health/   # 均仅管理员：源管理 / 洞察管理 / 运营看板
   login/ auth/callback/          # 登录与 OAuth 回调
   api/                           # search·discovery·refresh·resume·preferences（岗位层入口）
                                  # sources（service-role 写，绕 RLS 无 INSERT 策略）
                                  # insights + insights/dispute + insights/admin + dispute/resolve
-                                 # career-path（确定性引擎无 LLM）/ campus-zone/jobs（按 公司+模式 取，非按 id）
+                                 # campus-zone/jobs（按 公司+模式 取，非按 id）
 components/              # JobCard / JobFilters / PreferenceForm / Navbar / ResumeProfilePanel
                          # SourceTable(presentational,含 reloadSignal) / SourceManager / AddSourceForm
                          # InsightsAdminClient / CompanyInsightDrawer / SavedCompare（后两者 portal 到 body 防闪烁）
@@ -201,7 +201,7 @@ lib/                     # supabaseClient / supabaseService / auth / auth-claims
                          # must-apply-list(.ts+.json 北极星口径) / admin-health / track / match-total / job-filter
                          # campus-{facets,user-industries,zone,season} / job-fields / relative-time
                          # geo / job-scope / sponsorship / role-lexicon-en / china-keyword-expansion / canonical-url
-                         # insight-{verification,match,client,bundle,chip-format,enrich-now,library} / career-path
+                         # insight-{verification,match,client,bundle,chip-format,enrich-now,library}
                          # source-adapters / live-search / official-discovery / baidu-qianfan-search / liveness-client
                          # ui/{variants,hooks}  ← 组件库变体表与 hooks（变体表必须放 .ts，见「设计组件库」）
 crawler/                 # ⚠️ adapters/ 逐个 adapter 的接口细节与坑 → `docs/crawler-adapter-notes.md`（改/接前必读）

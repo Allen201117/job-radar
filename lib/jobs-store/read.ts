@@ -1,4 +1,4 @@
-// 自建香港 jobs 库的简单读取（非搜索）。供 jobs 页 SSR / companies / saved / applied / career-path 等用。
+// 自建香港 jobs 库的简单读取（非搜索）。供 jobs 页 SSR / companies / saved / applied / 洞察可用性 等用。
 // 返回的行是 snake_case 列（与 supabase.from("jobs").select("*") 同形），下游 scoring/job-filter 直接吃。
 import "server-only";
 import { jobsQuery, jobsScalar } from "./client";
@@ -568,7 +568,7 @@ export async function activeCompanies(): Promise<string[]> {
   return rows.map((r) => r.company);
 }
 
-/** 在招岗位按公司计数（career-path 用）。 */
+/** 在招岗位按公司计数（洞察可用性 / 洞察库用）。 */
 export async function activeJobCountsByCompany(): Promise<Array<{ company: string; job_count: number }>> {
   return jobsQuery("select company, job_count from active_job_counts_by_company()");
 }
