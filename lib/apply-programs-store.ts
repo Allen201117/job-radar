@@ -1,4 +1,5 @@
-// 项目制投递入口的取数层。表极小（当前 2 行，长期也就几十行），跨实例缓存 10 分钟。
+// 公告制招聘（/programs）入口的取数层。表极小（2026-09-07 实测 18 行、16 行 enabled，
+// 长期也就几十行），跨实例缓存 10 分钟。
 import { unstable_cache } from "next/cache";
 import { createServiceClient } from "./supabaseService";
 import { toApplyPrograms, type ApplyProgram } from "./apply-programs";
