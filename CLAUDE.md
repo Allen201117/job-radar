@@ -173,6 +173,14 @@
   ✅ 排查顺序：先看 migrate CI 日志里 `psql:...: ERROR:` 那一行指的是**哪一行 SQL**，再谈别的。
   ✅ 写 seed 前先确认目标列的 CHECK：`select pg_get_constraintdef(oid) from pg_constraint where conname='<表>_<列>_check';`
   ✅ 改 CHECK 时注意它是「全量重建而非增量」的写法——新迁移必须把旧枚举值一个不落抄全，漏一个会把存量行打成非法。
+  ✅ **上线前拿「临时表 + ROLLBACK」在真库上整份跑一遍**——但临时表必须
+     `create temp table x (like public.x **including all**)`。
+     🚩 用 `including defaults including constraints` 会给**假绿灯**：`LIKE` 默认不复制
+     GENERATED 表达式，`sources.board`（`generated always as classify_source_board(...)`）
+     在临时表里变成普通可写列。2026-09-07 实测同一份迁移 241（显式写了 `board`）：
+     旧写法 `INSERT 0 1` 通过、`including all` 当场 `ERROR: cannot insert a non-DEFAULT
+     value into column "board"`——而线上 migrate CI 报的正是后者，整批回滚。
+     同理漏掉的还有 identity 列、索引、注释；**只要不是 `including all`，绿了也不算数**。
 
 ## 常用命令
 
@@ -197,7 +205,7 @@ python3 run.py --source apple         # 或 siemens / baidu / jd
 
 ```
 app/                     # Next.js App Router 页面
-  page.tsx / today-client.tsx    # Today 今日看板；jobs/ 岗位库、campus/ 校招专区、programs/ 项目制投递
+  page.tsx / today-client.tsx    # Today 今日看板；jobs/ 岗位库、campus/ 校招专区、programs/ 公告制招聘
   preferences/ saved/ applied/   # 偏好 / 值得投 / 已投递
   sources/ admin/insights/ admin/health/   # 均仅管理员：源管理 / 洞察管理 / 运营看板
   login/ auth/callback/          # 登录与 OAuth 回调

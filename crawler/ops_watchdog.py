@@ -43,6 +43,10 @@ RULE_TITLES = {
     "E": "关键任务超期未跑",
     "F": "源连续失败",
     "G": "源抓不全",
+    # H / I 早就在用了，标题一直没登记 —— issue 标题会退化成「[watchdog] H：…」，顺手补上。
+    "H": "多个源指向同一门户",
+    "I": "抓取没收尾",
+    "J": "投递入口该复查了",
 }
 
 # ── 规则 A：每个模块的「产出口径」与「处理量口径」────────────────────────────
@@ -708,6 +712,69 @@ def evaluate_stuck_ledger(rows, now=None, hours=6):
     }]
 
 
+APPLY_PROGRAM_STALE_DAYS = 45
+
+
+def evaluate_stale_apply_programs(rows, today=None, stale_days=APPLY_PROGRAM_STALE_DAYS):
+    """规则 J：/programs 的投递入口该重新人工核实了。
+
+    为什么需要它（2026-09-07）：创始人反馈公告制入口「不是具体的公告页面，不准」，
+    修法是把中行 / 邮储 / 中国邮政指到**当期公告全文**——那是最准的形态，
+    代价是**它会随报名窗口过期变旧**，而 apply_programs 没有任何自动复查机制
+    （gap_census.classify_company 把这类公司钉在 manual_review 且 next_retry_at=None）。
+    复查时点原本只写在 notes 里，而 notes 没人读就等于没写。
+
+    两条判据（任一成立就报）：
+      · recheck_after 到期 —— 人填的明确到期日（多为报名截止日 +1 天，迁移 243）。
+      · verified_at 超过 stale_days 没更新 —— 兜住没填到期日的行；链接烂掉是**慢性**的，
+        不给兜底就只有「有人正好点进去」才发现。
+
+    ⚠️ 判据刻意**不解析 window_text**：那一列是原文照抄（迁移 226 的设计，各家写法不一），
+       硬解析会在「已经过期」和「还没到期」两个方向上都出错。要机器判就用单独的日期列。
+    """
+    today = today or datetime.now(SHANGHAI).date()
+    if isinstance(today, str):
+        today = datetime.fromisoformat(today).date()
+    due, stale = [], []
+    for row in rows or []:
+        if not (row or {}).get("enabled", True):
+            continue
+        company = row.get("company") or "?"
+        recheck = row.get("recheck_after")
+        if recheck:
+            try:
+                if datetime.fromisoformat(str(recheck)).date() <= today:
+                    due.append((company, str(recheck), row.get("entry_url") or ""))
+                    continue
+            except ValueError:
+                pass  # 日期写坏了不该拖垮整条规则，交给下面的 verified_at 兜底
+        verified = _as_dt(row.get("verified_at"))
+        if verified is None:
+            continue
+        age = (datetime.now(timezone.utc) - verified).days
+        if age >= stale_days:
+            stale.append((company, age, row.get("entry_url") or ""))
+    if not due and not stale:
+        return []
+    evidence = [f"{c}：到期日 {d} 已到 → {u}" for c, d, u in sorted(due)]
+    evidence += [f"{c}：{age} 天没重新核实 → {u}" for c, age, u in sorted(stale, key=lambda x: -x[1])[:10]]
+    parts = []
+    if due:
+        parts.append(f"{len(due)} 条到了明确的复查日")
+    if stale:
+        parts.append(f"{len(stale)} 条超过 {stale_days} 天没人核实")
+    return [{
+        "rule": "J",
+        "subject": "apply_programs",
+        "summary": ("/programs 的投递入口需要人工复查：" + "、".join(parts) +
+                    "。指向具体公告的入口会随报名窗口过期，过期后用户点进去就是往期公告。"),
+        "evidence": evidence,
+        "next": ("逐条真渲染打开：还有在窗公告就把 verified_at / recheck_after 往后推；"
+                 "已经过期就改指该栏目的当期公告或公告列表页（判据见 "
+                 "lib/apply-programs.needsDeeperAnnouncementLink：必须打开就看得见公告条目）。"),
+    }]
+
+
 def evaluate_account_errors(events, ops_rows, now=None, hours=48):
     """规则 D：已落库的账户级错误信号（欠费 / key 失效），一条都不该被绿灯盖住。"""
     now = now or datetime.now(timezone.utc)
@@ -1021,6 +1088,16 @@ def main():
     findings += zero
     findings += evaluate_stuck_ledger(discovery_rows, now=now, hours=args.stuck_hours)
     findings += evaluate_account_errors(event_rows, ops_rows, now=now)
+    # 规则 J 单独包住：apply_programs 是张十几行的小表，取不到也不该拖垮别的规则。
+    try:
+        program_rows = db.fetch_all_rows(
+            lambda: sb.table("apply_programs")
+                      .select("company,program_type,entry_url,enabled,verified_at,recheck_after")
+                      .eq("enabled", True)
+        )
+        findings += evaluate_stale_apply_programs(program_rows, today=now.astimezone(SHANGHAI).date())
+    except Exception as exc:  # noqa: BLE001
+        print(f"[watchdog] 规则 J 取 apply_programs 失败，跳过：{exc}")
     # 规则 F 单独包住：crawl_runs 是最大的一张表（1,400 源 × 4 轮/天），取不到不能拖垮 A/C/D。
     try:
         dead_since = (now - timedelta(days=args.dead_source_days)).isoformat()

@@ -17,8 +17,12 @@ const FACT_CLS =
   "border border-[#bcdcae] bg-[#e6f2d6] text-[#4f6f2a] dark:border-[#a3d06a]/[0.30] dark:bg-[#a3d06a]/[0.15] dark:text-[#a3d06a]";
 const SIGNAL_CLS =
   "border border-[#a9cfd8] bg-[#dcf0f2] text-[#2f7d8a] dark:border-[#6cc0cf]/[0.30] dark:bg-[#6cc0cf]/[0.15] dark:text-[#6cc0cf]";
+// 「说法」是最弱的一档承诺，所以刻意最素 —— 但**素不等于看不见**。
+// 改前：底色 #f4efe6 与卡面 white/60 几乎同色、边框只有 8% 黑，芯片整体读不出来
+// （2026-09-07 创始人反馈「标签不容易察觉」）。现在底色压深、边框加重，
+// 文字 #433d33 在新底色上对比度 8.1:1；层级仍低于「事实」的绿，只是过了可见性下限。
 const CLAIM_CLS =
-  "border border-black/[0.08] bg-[#f4efe6] ink-3 dark:border-white/[0.1] dark:bg-white/[0.08]";
+  "border border-black/[0.16] bg-[#e8dfcd] text-[#433d33] dark:border-white/[0.22] dark:bg-white/[0.14] dark:text-[#e2d9c8]";
 const LEGACY_EXPERIENCE_CLS =
   "border border-[#e7c98a] bg-[#fbeecb] text-[#8a6312] dark:border-[#e0b15a]/[0.30] dark:bg-[#e0b15a]/[0.15] dark:text-[#e0b15a]";
 

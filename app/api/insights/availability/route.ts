@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/auth";
 import { verifyRequestClaims } from "@/lib/auth-claims";
 import { companyMatches, findCompanyProfile } from "@/lib/insight-match";
-import { ITEM_COLUMNS, INSIGHT_DIMENSIONS, groupGatedInsights } from "@/lib/insight-bundle";
+import {
+  DATA_LAYER_ORIGINS_FILTER,
+  ITEM_COLUMNS,
+  INSIGHT_DIMENSIONS,
+  groupGatedInsights,
+} from "@/lib/insight-bundle";
 import { fetchAllPages } from "@/lib/supabase-paginate";
 import { getCachedCompanyProfilesLight, getCachedActiveJobCounts } from "@/lib/insight-availability-cache";
 import type { CompanyProfile } from "@/lib/types";
@@ -58,6 +63,10 @@ export async function GET(request: NextRequest) {
           .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
           .in("company_id", profileIds)
           .eq("status", "active")
+          // ⚠️ 必须与抽屉（/api/insights）用同一份数据层名单：这里算的 `real` 决定岗位卡上
+          // 要不要挂洞察徽章，抽屉不显示的东西在这里计数 = 徽章说「有洞察」、点开却是空的。
+          // 派生层另有 `derived` 标志单独表达，不该在 `real` 里再数一遍。
+          .not("origin", "in", DATA_LAYER_ORIGINS_FILTER)
           .order("id", { ascending: true })
           .range(from, to),
     ).catch(() => []);

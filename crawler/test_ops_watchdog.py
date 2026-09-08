@@ -635,3 +635,61 @@ class DuplicatePortalTest(unittest.TestCase):
                   "source_url": "https://www.hotjob.cn/wt/gwm/web/index"}})
         self.assertEqual(len(out), 1)
         self.assertTrue(any("gwm" in e for e in out[0]["evidence"]))
+
+
+class StaleApplyProgramsTest(unittest.TestCase):
+    """规则 J：/programs 投递入口该复查了（2026-09-07 加）。
+
+    背景：公告制入口改指「当期公告全文」后会随报名窗口过期变旧，而这张表没有任何
+    自动复查机制。复查时点原本只写在 notes 里 —— 没人读就等于没写。
+    """
+
+    def _row(self, **over):
+        row = {
+            "company": "中国银行",
+            "program_type": "announcement",
+            "entry_url": "https://example.com/a/202609/t1.html",
+            "enabled": True,
+            "verified_at": "2026-09-07T00:00:00+00:00",
+            "recheck_after": None,
+        }
+        row.update(over)
+        return row
+
+    def test_到期日已到就报(self):
+        rows = [self._row(recheck_after="2026-10-09")]
+        found = W.evaluate_stale_apply_programs(rows, today="2026-10-09")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["rule"], "J")
+        self.assertIn("中国银行", found[0]["evidence"][0])
+
+    def test_到期日没到就不报(self):
+        rows = [self._row(recheck_after="2026-10-09")]
+        self.assertEqual(W.evaluate_stale_apply_programs(rows, today="2026-10-08"), [])
+
+    def test_没填到期日的靠核实时间兜底(self):
+        # 90 天没重新核实 → 该报；刚核实过 → 不报。别让「没填到期日」变成永远不叫。
+        old = self._row(company="东方电气", verified_at="2026-05-01T00:00:00+00:00")
+        fresh = self._row(company="中国烟草")
+        found = W.evaluate_stale_apply_programs([old, fresh], today="2026-09-07")
+        self.assertEqual(len(found), 1)
+        joined = " ".join(found[0]["evidence"])
+        self.assertIn("东方电气", joined)
+        self.assertNotIn("中国烟草", joined)
+
+    def test_停用的行不报(self):
+        rows = [self._row(enabled=False, recheck_after="2020-01-01")]
+        self.assertEqual(W.evaluate_stale_apply_programs(rows, today="2026-09-07"), [])
+
+    def test_到期日写坏了不拖垮整条规则(self):
+        # 一行日期写错不该让别的行也不报 —— 坏行退回 verified_at 兜底判据。
+        broken = self._row(company="坏行", recheck_after="不是日期",
+                           verified_at="2026-01-01T00:00:00+00:00")
+        found = W.evaluate_stale_apply_programs([broken], today="2026-09-07")
+        self.assertEqual(len(found), 1)
+        self.assertIn("坏行", " ".join(found[0]["evidence"]))
+
+    def test_规则字母都登记了标题(self):
+        # H / I 曾经在用却没登记，issue 标题会退化成裸字母。
+        for letter in ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J"):
+            self.assertIn(letter, W.RULE_TITLES)

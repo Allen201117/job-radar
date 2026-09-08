@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
     const hit = index.subjects.find((s) => s.id === subjectId);
     if (!hit) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
     try {
-      const items = await getSubjectItems(subjectId);
+      const items = await getSubjectItems(hit);
       return NextResponse.json({ ok: true, subject: hit, items });
     } catch (error: any) {
       console.error("[insights/library] 取主体条目失败", error?.message || error);
