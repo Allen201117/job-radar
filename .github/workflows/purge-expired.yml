@@ -38,10 +38,38 @@ jobs:
           fi
           source scripts/enable-jobs-db-strict-tls.sh
           started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          # ⚠️ 墓碑与删除**必须同一事务**（2026-09-08 加，修 F1）：先把「这个岗曾被确认关闭」写进
+          # job_closures，再删 jobs 行；墓碑写失败就整体回滚、一行都不删。
+          # 「删了但没留下证据」正是死岗以全新 uuid 复活的成因——jobs 行没了，按 canonical 查不到任何
+          # 东西，下次列表再见到同一个链接就走 fresh INSERT 变回 active（近 14 天实测均值 2,871 行/天）。
+          # 🔑 单个 -c 里的多条语句 psql 会**当成一个事务**执行（无显式 BEGIN 时的默认行为）。
+          #    别把它拆成两个 -c —— 那就是两个独立事务，前一个成功后一个失败照样留下不一致。
+          # 排除「同 canonical 还有 active 行」：canonical 唯一约束只作用于 active，已关闭的旧行与
+          # 在招的新行可以并存，给它立墓碑会把一个在招岗记成已关闭。
           deleted_count="$(
             PGOPTIONS="-c statement_timeout=1800000" \
-            psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -qAt -c \
-              "with deleted as (delete from jobs where status = 'expired' returning 1) select count(*) from deleted"
+            psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -qAt -c "
+              insert into job_closures (
+                canonical_jd_url, job_id, source_id, company, title, first_seen_at, closed_at, reason)
+              select j.canonical_jd_url, j.id, j.source_id, j.company, j.title, j.first_seen_at,
+                     coalesce(j.confirmed_closed_at, now()), 'purge_expired'
+              from jobs j
+              where j.status = 'expired'
+                and j.canonical_jd_url is not null
+                and not exists (select 1 from jobs a
+                                where a.canonical_jd_url = j.canonical_jd_url and a.status = 'active')
+              on conflict (canonical_jd_url) do update set
+                job_id        = excluded.job_id,
+                source_id     = excluded.source_id,
+                company       = excluded.company,
+                title         = excluded.title,
+                first_seen_at = excluded.first_seen_at,
+                closed_at     = excluded.closed_at,
+                purged_at     = now(),
+                reason        = excluded.reason;
+              with deleted as (delete from jobs where status = 'expired' returning 1)
+              select count(*) from deleted;
+            "
           )"
           echo "=== 本轮精确删除量 ==="
           echo "$deleted_count"

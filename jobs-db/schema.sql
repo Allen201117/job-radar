@@ -96,6 +96,33 @@ create table if not exists job_events (
 create index if not exists idx_job_events_job_time on job_events (job_id, occurred_at desc);
 create index if not exists idx_job_events_type_time on job_events (event_type, occurred_at desc);
 
+-- ── 撤岗墓碑：岗位行被 purge 物理删除后，唯一活下来的「这个岗曾被确认关闭」的证据 ──────────
+-- 为什么需要它（2026-09-08 立，修 F1）：
+--   purge-expired 每天 `delete from jobs where status='expired'`（近 14 天实测均值 **2,871 行/天**、
+--   合计 40,199 行），而 job_events.job_id 是 ON DELETE CASCADE → CLOSED 事件跟着一起没。
+--   于是 jobs_db._find_existing_id_by_canonical 按 canonical 查不到任何行 → 走 fresh INSERT →
+--   同一个岗以**全新 uuid + 全新 first_seen_at** 变回 active。
+--   而 wt/hotjob 的列表本来就夹带已关闭岗（52% / 71%，见 CLAUDE.md），所以这条链是真能跑通的：
+--   判死 → purge → 列表再见 → 又变新岗。sticky-expired 只保护「行还在」的情况，救不了已删的身份。
+-- ⚠️ 刻意**不做**「命中墓碑就拒绝入库」：公司确实会重开同一个岗位链接，一刀切拒收 = 把真机会永久
+--   删掉，违反「宁可漏判不可错杀」。所以本表先只做两件事：① 保住关闭证据；② 用 reopen_count/
+--   reopened_at 把「复活率」变成**可查询的数字**——在拿到这个数字之前，任何拦截策略都是拍脑袋。
+create table if not exists job_closures (
+  canonical_jd_url text primary key,
+  job_id           uuid not null,          -- 被删那一行的 id；**刻意不做外键**（那一行马上就要被删掉）
+  source_id        uuid,
+  company          text,
+  title            text,
+  first_seen_at    timestamptz,            -- 原始首次见到时间，复活时可用来判断「这真是新岗吗」
+  closed_at        timestamptz not null,   -- 探活确认撤岗的时刻（confirmed_closed_at，缺失则用 purge 时刻）
+  purged_at        timestamptz not null default now(),
+  reason           text,
+  reopened_at      timestamptz,            -- 最近一次「同 canonical 又被当新岗插进来」的时刻
+  reopen_count     integer not null default 0
+);
+create index if not exists job_closures_closed_at_idx on job_closures (closed_at desc);
+create index if not exists job_closures_reopened_idx on job_closures (reopened_at desc) where reopened_at is not null;
+
 -- ── canonical_jd_url 归一（与 lib/canonical-url.js / crawler/normalizer.py / 迁移144 字节级一致；改一处必同改）──
 create or replace function canonicalize_jd_url(u text)
 returns text language plpgsql immutable as $function$

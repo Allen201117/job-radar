@@ -376,6 +376,34 @@ def record_job_events(conn, events) -> int:
         return 0
 
 
+def mark_reopened_from_closures(cur, canons) -> int:
+    """把「刚以新 uuid 插进来、但 canonical 在墓碑里」的岗记一笔，返回命中条数。
+
+    这是 F1 的**度量**那一半（2026-09-08）：purge 每天物理删掉约 2,871 行，删掉的同时
+    `job_events` 的 CLOSED 事件被 CASCADE 一起带走 → 按 canonical 查不到任何东西 →
+    列表下次再见到同一个链接就当新岗插入。job_closures 保住了关闭证据，这里负责数「它真的回来了几次」。
+
+    ⚠️ 刻意**只记不拦**：公司确实会重开同一个岗位链接，命中墓碑就拒收 = 把真机会永久删掉，
+    违反「宁可漏判不可错杀」。先拿到真实复活率，再谈要不要拦——没有数字的拦截策略都是拍脑袋。
+    ⚠️ fail-open：墓碑表还没建（迁移未跑）或写失败一律吞掉，绝不能因为一个观测功能拖垮入库主链路。
+    """
+    canons = [c for c in (canons or []) if c]
+    if not canons:
+        return 0
+    try:
+        cur.execute(
+            "update job_closures set reopened_at = now(), reopen_count = reopen_count + 1 "
+            "where canonical_jd_url = any(%s) returning canonical_jd_url", (canons,))
+        hits = cur.fetchall()
+    except Exception as e:
+        print(f"[job_closures] 复活标记跳过（不影响入库）：{type(e).__name__}: {str(e)[:80]}")
+        return 0
+    if hits:
+        print(f"::warning::[job_closures] {len(hits)} 个已确认撤岗的链接又被当新岗插入 "
+              f"（F1 复活；例：{hits[0][0][:110]}）")
+    return len(hits)
+
+
 def _find_existing_id_by_canonical(cur, canon):
     """按 canonical_jd_url 跨状态查既有行 id；多行优先 active（同旧 db.py，保复活语义）。"""
     cur.execute("select id, status from jobs where canonical_jd_url = %s", (canon,))
@@ -499,6 +527,8 @@ def upsert_jobs_batch(conn, jobs: list, page_size: int = 500) -> tuple:
                     cur, f"insert into jobs ({cols}) values %s", to_insert, page_size=page_size)
                 created = len(to_insert)
                 insert_ok = True
+                # 这批新岗里有多少其实是「已确认撤岗、被 purge 删过身份」的老岗又回来了（只记不拦）
+                mark_reopened_from_closures(cur, [c for c, _j in items if not existing.get(c)])
             except psycopg2.errors.UniqueViolation:
                 # 极少见（并发插同一新 canonical / 撞 4 元组唯一键）→ 逐行 upsert_job 兜底（幂等：
                 # 已提交的页重查命中转 update，不会重插）。autocommit 下失败语句自身已回滚。
