@@ -19,7 +19,10 @@ const GRADES = ["fact", "experience", "rumor"];
 const STATUSES = ["active", "disputed", "retired"];
 
 // 把表单里的 sources 数组写成 insight_sources + 关联 insight_item_sources。
-async function attachSources(service: any, itemId: string, sources: any[]) {
+// 返回失败条数（0 = 全部成功）：I3 修复前调用方无论失败多少条都吞掉、原样返回
+// ok:true，admin 表单提交成功后以为来源全部保存了，实际有条来源悄悄没写进去。
+async function attachSources(service: any, itemId: string, sources: any[]): Promise<number> {
+  let failed = 0;
   for (const s of sources) {
     const url = String(s.url || "").trim();
     if (!url) continue;
@@ -37,10 +40,18 @@ async function attachSources(service: any, itemId: string, sources: any[]) {
       .single();
     if (srcError) {
       console.error("[insights-admin] 插入 insight_sources 失败", srcError.message);
+      failed += 1;
       continue;
     }
-    await service.from("insight_item_sources").insert({ item_id: itemId, source_id: srcRow.id });
+    const { error: linkError } = await service
+      .from("insight_item_sources")
+      .insert({ item_id: itemId, source_id: srcRow.id });
+    if (linkError) {
+      console.error("[insights-admin] 关联 insight_item_sources 失败", linkError.message);
+      failed += 1;
+    }
   }
+  return failed;
 }
 
 // 删除某条目现有来源（先删关联再删 source 本身），用于编辑时整体替换。
@@ -238,7 +249,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: false, error: upErr.message }, { status: 500 });
     }
     await detachSources(service, body.id);
-    await attachSources(service, body.id, sources);
+    const failedSources = await attachSources(service, body.id, sources);
+    // 有来源没写进去就不能说 ok:true——条目本身确实存了，但调用方（admin 表单）
+    // 得知道来源不全，而不是以为提交完全成功。
+    if (failedSources > 0) {
+      return NextResponse.json(
+        { ok: false, error: "sources_partially_failed", item_id: body.id, failed_sources: failedSources },
+        { status: 207 },
+      );
+    }
     return NextResponse.json({ ok: true, item_id: body.id });
   }
 
@@ -263,7 +282,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: insertError.message }, { status: 500 });
   }
 
-  await attachSources(service, itemRow.id, sources);
+  const failedSources = await attachSources(service, itemRow.id, sources);
+  if (failedSources > 0) {
+    return NextResponse.json(
+      { ok: false, error: "sources_partially_failed", item_id: itemRow.id, failed_sources: failedSources },
+      { status: 207 },
+    );
+  }
   return NextResponse.json({ ok: true, item_id: itemRow.id });
 }
 

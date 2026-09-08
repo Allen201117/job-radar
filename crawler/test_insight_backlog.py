@@ -437,6 +437,82 @@ class TestT3(unittest.TestCase):
                     if "t3_checked_at" in payload]
         self.assertEqual(advanced, [], "零主题这轮不得推进 t3_checked_at")
 
+    def test_dispute_gate_downgrades_matching_dimension_metric_to_pending_review(self):
+        """I4b 回归：命中同一 (dimension, metric_key) 的已成立申诉时，判官判 active
+        也只能落 pending_review，不许原样重新对外展示。"""
+        B._ROUTER = _FakeRouter([
+            {"url": "https://a.example/1", "publisher": "a.example", "text": "t1", "snippet": "t1"},
+            {"url": "https://b.example/2", "publisher": "b.example", "text": "t2", "snippet": "t2"},
+        ])
+        E.run_pipeline = lambda c, d, *a, **k: [{
+            "claim": {"content": _on_topic(d), "grade": "experience", "sample_size": 8},
+            "judge": {"supported_source_idxs": [0, 1]}, "status": "active",
+        }]
+        store = {
+            "_canned_insight_disputes": [{"item_id": "old-item"}],
+            "_canned_insight_items": [
+                {"id": "old-item", "company_id": "c-disputed", "dimension": "culture",
+                 "metric_key": "overtime_level"},
+            ],
+        }
+        res = B.enrich_company_t3(FakeSB(store), {"id": "c-disputed", "company": "曾被投诉公司", "aliases": []})
+        self.assertEqual(res, "wrote")
+        culture_rows = [row for op, row in store.get("insight_items", [])
+                        if op == "insert" and row["dimension"] == "culture"]
+        self.assertTrue(culture_rows, "加班文化主题应该有写入，只是状态要降级")
+        for row in culture_rows:
+            self.assertEqual(row["status"], "pending_review",
+                             "命中已成立申诉的 (dimension, metric_key) 必须降级为 pending_review")
+        # 没命中的维度（如年终奖/compensation_intensity）不受影响，仍可正常 active。
+        other_rows = [row for op, row in store.get("insight_items", [])
+                      if op == "insert" and row["dimension"] == "compensation_intensity"]
+        self.assertTrue(other_rows)
+        self.assertTrue(any(row["status"] == "active" for row in other_rows),
+                        "未命中申诉的维度不该被连坐降级")
+
+    def test_dispute_gate_ignores_disputes_from_other_companies(self):
+        """粒度必须是同一家公司同一断言，不能把别家公司的申诉也拿来挡。"""
+        B._ROUTER = _FakeRouter([
+            {"url": "https://a.example/1", "publisher": "a.example", "text": "t1", "snippet": "t1"},
+            {"url": "https://b.example/2", "publisher": "b.example", "text": "t2", "snippet": "t2"},
+        ])
+        E.run_pipeline = lambda c, d, *a, **k: [{
+            "claim": {"content": _on_topic(d), "grade": "experience", "sample_size": 8},
+            "judge": {"supported_source_idxs": [0, 1]}, "status": "active",
+        }]
+        store = {
+            "_canned_insight_disputes": [{"item_id": "old-item-other-co"}],
+            "_canned_insight_items": [
+                # 属于别家公司（company_id 不同），不该影响本轮这家公司的写入。
+                {"id": "old-item-other-co", "company_id": "some-other-company",
+                 "dimension": "culture", "metric_key": "overtime_level"},
+            ],
+        }
+        res = B.enrich_company_t3(FakeSB(store), {"id": "c-unrelated", "company": "无关公司", "aliases": []})
+        self.assertEqual(res, "wrote")
+        culture_rows = [row for op, row in store.get("insight_items", [])
+                        if op == "insert" and row["dimension"] == "culture"]
+        self.assertTrue(culture_rows)
+        self.assertTrue(all(row["status"] == "active" for row in culture_rows),
+                        "别家公司的申诉不该拦下本公司的写入")
+
+    def test_fetch_upheld_dispute_keys_maps_disputed_items_to_dimension_metric_pairs(self):
+        store = {
+            "_canned_insight_disputes": [{"item_id": "item-1"}, {"item_id": "item-2"}],
+            "_canned_insight_items": [
+                {"id": "item-1", "company_id": "c1", "dimension": "culture", "metric_key": "overtime_level"},
+                # metric_key 缺失的历史行不该产出一个 (dimension, None) 的宽泛拦截键。
+                {"id": "item-2", "company_id": "c1", "dimension": "compensation_intensity", "metric_key": None},
+            ],
+        }
+        keys = B.fetch_upheld_dispute_keys(FakeSB(store), "c1")
+        self.assertEqual(keys, {("culture", "overtime_level")})
+
+    def test_fetch_upheld_dispute_keys_empty_when_no_upheld_disputes(self):
+        store = {"_canned_insight_disputes": []}
+        keys = B.fetch_upheld_dispute_keys(FakeSB(store), "c1")
+        self.assertEqual(keys, set())
+
     def test_pick_sources_never_fills_with_unverified_results(self):
         results = [
             {"url": "https://a.example/1", "publisher": "a.example"},
@@ -572,3 +648,38 @@ class T3QueuePriorityTest(unittest.TestCase):
         names = must_apply.all_names()
         self.assertEqual(must_apply.resolve_owner("京东方 BOE", names), "京东方")
         self.assertEqual(must_apply.resolve_owner("京东集团", names), "京东")
+
+
+class WriteExperienceExcerptTest(unittest.TestCase):
+    """I3 回归：excerpt 必须逐 source 判断引文是否真出自它自己的正文。"""
+
+    def test_quote_only_attached_to_the_source_that_actually_contains_it(self):
+        store = {}
+        claim = {"content": "据公开讨论该公司加班偏多", "grade": "experience",
+                 "sample_size": 6, "quote": "加班偏多"}
+        sources = [
+            {"url": "https://a.example/1", "publisher": "a.example",
+             "text": "网友称加班偏多，节奏很快", "snippet": "网友称加班偏多"},
+            {"url": "https://b.example/2", "publisher": "b.example",
+             "text": "公司氛围不错，团队友善", "snippet": "氛围不错"},
+        ]
+        judge = {"verdict": "entailment", "confidence": 0.8}
+        B.write_experience(FakeSB(store), "company-1", claim, sources, judge, "active",
+                           dimension="culture", topic="加班文化", metric_key="overtime_level")
+        inserted = [row for op, row in store.get("insight_sources", []) if op == "insert"]
+        self.assertEqual(len(inserted), 2)
+        by_url = {row["url"]: row["excerpt"] for row in inserted}
+        self.assertEqual(by_url["https://a.example/1"], "加班偏多")
+        # source 2 的正文里根本没有这句引文，不能被安上——必须退回它自己的 snippet。
+        self.assertEqual(by_url["https://b.example/2"], "氛围不错")
+
+    def test_falls_back_to_snippet_when_no_quote_given(self):
+        store = {}
+        claim = {"content": "据公开讨论该公司节奏偏快", "grade": "experience", "sample_size": 6}
+        sources = [{"url": "https://a.example/1", "publisher": "a.example",
+                    "text": "正文与摘要不同", "snippet": "摘要文本"}]
+        judge = {"verdict": "entailment", "confidence": 0.8}
+        B.write_experience(FakeSB(store), "company-1", claim, sources, judge, "active",
+                           dimension="culture", topic="加班文化", metric_key="overtime_level")
+        inserted = [row for op, row in store.get("insight_sources", []) if op == "insert"]
+        self.assertEqual(inserted[0]["excerpt"], "摘要文本")

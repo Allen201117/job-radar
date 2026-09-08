@@ -80,5 +80,30 @@ class TestPurgeWorkflowContract(unittest.TestCase):
         self.assertNotIn("references jobs", tbl)
 
 
+class TestBothWritersMarkReopen(unittest.TestCase):
+    """两条入库路径都要记复活，漏一条 = 指标被低估。
+
+    会静默漏计的指标比没有指标更糟：它会让人以为「复活很少」而放弃治理。
+    爬虫（crawler/jobs_db.py）负责日常大批量；app（lib/jobs-store/write.ts）负责
+    /api/refresh 与 /api/discovery 触发的新建。
+    """
+
+    def test_crawler_writer_marks(self):
+        src = (ROOT / "crawler" / "jobs_db.py").read_text(encoding="utf-8")
+        self.assertIn("mark_reopened_from_closures(cur,", src)
+
+    def test_app_writer_marks(self):
+        src = (ROOT / "lib" / "jobs-store" / "write.ts").read_text(encoding="utf-8")
+        self.assertIn("markReopenedFromClosure(canon)", src)
+        self.assertIn("update job_closures set reopened_at", src)
+
+    def test_app_writer_is_best_effort(self):
+        """墓碑表未建/写失败绝不能影响入库结果。"""
+        src = (ROOT / "lib" / "jobs-store" / "write.ts").read_text(encoding="utf-8")
+        fn = src.split("async function markReopenedFromClosure")[1].split("\n}")[0]
+        self.assertIn("catch", fn)
+        self.assertNotIn("throw", fn)
+
+
 if __name__ == "__main__":
     unittest.main()
