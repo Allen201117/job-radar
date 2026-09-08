@@ -173,13 +173,24 @@ def _listing_without_exchange(li, company):
 
 def enrich_company(sb, profile):
     """富化单家公司并回写。返回 'ok' | 'noface'（Wikidata 查无）| 'err'。永不抛。"""
+    # ⚠️「请求挂了」和「请求成功但查无此公司」是两件事，混成一种就是 I1（2026-09-08 修）：
+    #   原实现把 Wikidata 异常也转成 facts=None，走同一个分支盖上 insight_checked_at，
+    #   于是一次网络抖动就把这家公司排除出常规队列 **90 天**（TTL_DAYS），且不计失败、无人知晓。
     try:
         facts = wikidata.get_company_facts(profile["company"], profile.get("aliases"))
     except Exception as e:
         print(f"  [wd-err] {profile['company']}: {type(e).__name__}: {str(e)[:140]}")
-        facts = None
+        # 只记失败、**不盖 checked 戳** → 下一轮还会被取到（短重试）；
+        # 连续失败到 MAX_FAIL 自然掉出队列，所以不会一直卡在队首（队列按 insight_fail_count < MAX_FAIL 过滤）。
+        try:
+            sb.table("company_profiles").update({
+                "insight_fail_count": (profile.get("insight_fail_count") or 0) + 1,
+            }).eq("id", profile["id"]).execute()
+        except Exception:
+            pass
+        return "err"
     if not facts:
-        # 查无也记一轮 checked_at（避免每次重试查无的公司）；不算硬失败
+        # 真正「请求成功但查无」才记一轮 checked_at（避免每次重试查无的公司）；不算硬失败
         try:
             sb.table("company_profiles").update({"insight_checked_at": _now()}).eq("id", profile["id"]).execute()
         except Exception:
@@ -506,6 +517,8 @@ def enrich_company_t3(sb, profile):
     run_start = _now()
     wrote_any = False
     wrote_active = False
+    written_dims = set()   # 本轮真正写出 active 的维度 —— 退役只许波及这些维度（见下方 I2 注释）
+    topics_attempted = 0   # 真进过检索的主题数；全程 0 = 这轮什么都没做，不能假装「已复核」
     # 主题门的计数：拦掉多少、转投多少。绝不静默——「跑绿了」不等于「产出是对的」。
     off_topic_blocked = 0
     rerouted = 0
@@ -521,6 +534,7 @@ def enrich_company_t3(sb, profile):
         if llm_budget.remaining(sb) <= 0:
             print(f"  [t3] {profile['company']}: LLM 日顶已到，剩余主题留到下轮")
             break
+        topics_attempted += 1
         try:
             results = _ROUTER.search(sb, pack["query"].format(c=profile["company"]))
             results, host_denied = filter_t3_results(results)
@@ -561,7 +575,9 @@ def enrich_company_t3(sb, profile):
                                  dimension=routed_dim or pack["dimension"], topic=pack["topic"],
                                  metric_key=metric_key)
                 wrote_any = True
-                wrote_active = wrote_active or entry["status"] == "active"
+                if entry["status"] == "active":
+                    wrote_active = True
+                    written_dims.add(routed_dim or pack["dimension"])
         except Exception as e:
             print(f"  [t3-err] {profile['company']}/{pack['topic']}: {type(e).__name__}: {str(e)[:120]}")
             continue
@@ -574,11 +590,23 @@ def enrich_company_t3(sb, profile):
         llm_budget.check_and_consume(sb, kind="insight_t3", n=_spent)
 
     try:
-        if wrote_active:
-            # 退役本次之前的 public_web active（跨维度），换最新一代
+        if written_dims:
+            # 换代只替换**本轮真正写出新版的那些维度**（2026-09-08 修 I2）。
+            # 原实现只要本轮任意一条 active 落库，就按「公司 + origin + status + 时间」把该公司
+            # 之前所有 public_web active 一律退役，**没有维度限定**。于是「加班文化」这一个主题成功、
+            # 「晋升发展」那个主题因搜索异常/额度耗尽/主题门拦截没产出时，晋升发展上一轮的有效内容
+            # 会被连坐退掉 —— 用户那一栏直接变空，而我们并没有任何新证据说它不成立。
+            # 请求失败不能解释成「旧信息不成立」。
             sb.table("insight_items").update({"status": "retired"}) \
                 .eq("company_id", profile["id"]).eq("origin", "public_web").eq("status", "active") \
+                .in_("dimension", sorted(written_dims)) \
                 .lt("last_verified_at", run_start).execute()
+        if topics_attempted == 0:
+            # 一个主题都没进过检索（开跑就撞额度）= 这轮什么都没做。盖 t3_checked_at 会把这家公司
+            # 排除出队列 180 天（T3_TTL_DAYS）却零产出 —— 那正是 I1。不盖戳，下轮额度恢复后接着取。
+            # 注：只在「零主题」这一种情形下不盖戳，所以不存在「永远重做同一家」的死循环。
+            print(f"  [t3] {profile['company']}: 额度不足，本轮零主题，不推进复核时间")
+            return "empty"
         sb.table("company_profiles").update({"t3_checked_at": _now()}).eq("id", profile["id"]).execute()
     except Exception:
         try:

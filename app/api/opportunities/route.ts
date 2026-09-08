@@ -5,7 +5,7 @@ import { requireUser } from "@/lib/apiAuth";
 import { buildRadarProfile } from "@/lib/opportunities/profile";
 import { resolveIntensityForUser } from "@/lib/opportunities/intensity";
 import { buildOpportunityFeed } from "@/lib/opportunities/service";
-import type { UserPreferences, CandidateProfile, JobAction } from "@/lib/types";
+import { loadRadarContext } from "@/lib/opportunities/context";
 
 export const runtime = "nodejs";
 // 须 ≥ jobs 池 statement_timeout(25s)，同 today 页：慢召回要能以 503 feed_unavailable 返回，而非函数被杀。
@@ -16,23 +16,22 @@ export async function GET() {
   if (auth.error) return auth.error;
   const { supabase, user } = auth;
 
-  const [prefsRes, candRes, actsRes, stateRes] = await Promise.all([
-    supabase.from("user_preferences").select("*").eq("user_id", user.id).maybeSingle(),
-    supabase.from("candidate_profiles").select("*").eq("user_id", user.id).maybeSingle(),
-    supabase.from("job_actions").select("*").eq("user_id", user.id),
-    supabase.from("user_radar_state").select("last_opened_at").eq("user_id", user.id).maybeSingle(),
-  ]);
+  // 上下文读取失败 ≠ 用户没填。失败必须显式 503，让前端重试；静默当空值会丢掉排除词与已处理记录
+  // （见 lib/opportunities/context.ts 的口径说明）。
+  let ctx;
+  try {
+    ctx = await loadRadarContext(supabase, user.id);
+  } catch (e) {
+    console.error("[opportunities] context load failed:", (e as Error).message);
+    return NextResponse.json({ ok: false, error: "context_unavailable" }, { status: 503 });
+  }
 
-  const profile = buildRadarProfile(
-    user.id,
-    prefsRes.data as UserPreferences | null,
-    candRes.data as CandidateProfile | null,
-  );
-  const actions = (actsRes.data as JobAction[]) || [];
-  const radarState = (stateRes.data as { last_opened_at: string | null } | null) ?? null;
+  const profile = buildRadarProfile(user.id, ctx.preferences, ctx.candidate);
+  const actions = ctx.actions;
+  const radarState = ctx.radarState;
   const now = new Date();
   const { intensity } = resolveIntensityForUser(
-    prefsRes.data as UserPreferences | null,
+    ctx.preferences,
     radarState,
     actions,
     profile.targetCompanies.length > 0,

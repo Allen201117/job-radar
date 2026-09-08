@@ -136,7 +136,7 @@ test("deriveHiring 概括在招规模/城市/方向（排除非 active）", () =
   assert.equal(v.dimension, "hiring");
   assert.equal(v.derived, true);
   assert.equal(v.payload.active_count, 3);
-  assert.match(v.content, /当前在招约 3 个岗位/);
+  assert.match(v.content, /本平台当前收录 3 个在招岗位/);
   assert.match(v.content, /北京/);
 });
 
@@ -149,7 +149,8 @@ test("classifyHiringSignal 趋势分级 expanding/steady/tightening", () => {
   assert.equal(D.classifyHiringSignal(100, 30).momentum, "expanding");
   assert.equal(D.classifyHiringSignal(100, -30).momentum, "tightening");
   assert.equal(D.classifyHiringSignal(100, 5).momentum, "steady");
-  assert.equal(D.classifyHiringSignal(100, null).momentum, "steady"); // 无趋势→平稳
+  // F4：无趋势 → unknown，**不许**退化成「平稳」。「平稳」是有内容的结论，说它需要基线。
+  assert.equal(D.classifyHiringSignal(100, null).momentum, "unknown");
 });
 
 test("classifyHiringSignal 相对规模强度（需 headcountBand）", () => {
@@ -219,4 +220,34 @@ test("deriveCompanyInsights 只返回算得出的维度", () => {
 
 test("deriveCompanyInsights 空数据返回空对象", () => {
   assert.deepEqual(D.deriveCompanyInsights([], NOW), {});
+});
+
+// ---- F4 回归：幸存者偏差不得再造出「招聘扩张」 ----
+test("只关闭旧岗、一个新岗都没发，不得算出扩张（F4 回归）", () => {
+  // 复刻审查反例：两个 30 天窗口各真实发布 30 个岗（真实趋势 0%），
+  // 然后把旧窗关掉 27 个。旧实现只看当前 active，算出 +900% 扩张并推出「HC 较充足」。
+  const nowMs = new Date(NOW_ISO).getTime();
+  const D30 = 30 * 86400000;
+  const jobs = [];
+  for (let i = 0; i < 30; i++) {
+    jobs.push(j({ status: "active", first_seen_at: new Date(nowMs - D30 / 2).toISOString() }));
+  }
+  for (let i = 0; i < 3; i++) {
+    jobs.push(j({ status: "active", first_seen_at: new Date(nowMs - D30 * 1.5).toISOString() }));
+  }
+  const v = D.deriveHiring(jobs, NOW_ISO, { headcountBand: "5000-1万" });
+  assert.ok(v);
+  assert.equal(v.payload.hiring_signal.trend, null, "读时派生不得自产趋势");
+  assert.equal(v.payload.hiring_signal.momentum, "unknown");
+  assert.doesNotMatch(v.content, /扩张|增加/, "不得宣称扩张");
+  assert.doesNotMatch(v.content, /HC|窗口|竞争/, "不得从岗位条数外推 HC/投递窗口/竞争强度");
+});
+
+test("趋势只接受外部快照注入（F4 回归）", () => {
+  const jobs = [j({ status: "active" }), j({ status: "active" }), j({ status: "active" })];
+  const injected = D.deriveHiring(jobs, NOW_ISO, { trendPct: 40 });
+  assert.equal(injected.payload.hiring_signal.trend, 40);
+  assert.equal(injected.payload.hiring_signal.momentum, "expanding");
+  // 措辞必须限定在「本平台收录」范围内，不能说成企业行为
+  assert.match(injected.content, /本平台收录的在招岗位数近月明显增加/);
 });

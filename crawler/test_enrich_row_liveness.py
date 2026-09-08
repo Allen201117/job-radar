@@ -130,3 +130,42 @@ class EnrichLeavesRecruitmentColumnsToTheDatabase(unittest.TestCase):
                 mock.patch.object(enrich_backlog.jobs_db, "execute") as ex:
             enrich_backlog.enrich_row(None, _row(), SRC, dry_run=True, jobs_conn=object())
         ex.assert_not_called()
+
+
+class TestUnknownIsNotAlive(unittest.TestCase):
+    """F3 回归：探测失败不得被写成「刚确认仍在招」。
+
+    修复前 amazon/apple 这类 liveness-only 探活器对非 404/410 的任何状态码都 return ""，
+    而空串同时表示「确认在招、无正文」与「没探到」→ enrich_backlog 对 403/429/5xx 也照样
+    走 alive 分支盖 enrich_checked_at。产品侧「最近确认仍在招」和治理看板「已核验率」双双灌水。
+    """
+
+    def _resp(self, status):
+        class R:
+            status_code = status
+
+            @staticmethod
+            def json():
+                return {}
+        return R()
+
+    def test_gone_still_raises_closed(self):
+        for code in (404, 410):
+            with self.subTest(code=code):
+                with self.assertRaises(enrich.JobClosedError):
+                    enrich._raise_if_gone(self._resp(code))
+
+    def test_non_2xx_is_unknown_not_alive(self):
+        for code in (403, 429, 500, 502, 503):
+            with self.subTest(code=code):
+                with self.assertRaises(enrich.DetailUnknownError):
+                    enrich._raise_if_unknown(self._resp(code))
+
+    def test_2xx_passes_through(self):
+        for code in (200, 204):
+            with self.subTest(code=code):
+                enrich._raise_if_unknown(self._resp(code))  # 不抛即可
+
+    def test_unknown_is_not_closed(self):
+        """unknown 绝不能被当成撤岗信号——错杀在招岗是不可逆的。"""
+        self.assertFalse(issubclass(enrich.DetailUnknownError, enrich.JobClosedError))

@@ -93,3 +93,41 @@ class RobotsCacheTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWildcardAndQuery(unittest.TestCase):
+    """F6 回归：`*` 通配与 query 参与匹配。
+
+    修复前 `*` 被当普通字符字面比较，`Disallow: /*.pdf$` 退化成「路径恰好等于 /*.pdf」→
+    永远匹配不上 → `/jobs/cv.pdf` 被错误放行。方向上这次改动只会「多拦」不会「少拦」。
+    """
+
+    def test_wildcard_suffix_anchor_blocks_pdf(self):
+        txt = "User-agent: *\nDisallow: /*.pdf$\n"
+        self.assertFalse(_parse_robots(txt, "/jobs/cv.pdf")["allowed"])
+        self.assertTrue(_parse_robots(txt, "/jobs/cv.html")["allowed"])
+
+    def test_wildcard_anchor_does_not_block_when_suffix_differs(self):
+        txt = "User-agent: *\nDisallow: /*.pdf$\n"
+        self.assertTrue(_parse_robots(txt, "/jobs/cv.pdf.html")["allowed"])
+
+    def test_wildcard_in_middle(self):
+        txt = "User-agent: *\nDisallow: /admin/*/secret\n"
+        self.assertFalse(_parse_robots(txt, "/admin/a/secret")["allowed"])
+        self.assertFalse(_parse_robots(txt, "/admin/a/b/secret/x")["allowed"])
+        self.assertTrue(_parse_robots(txt, "/admin/secret")["allowed"])
+
+    def test_query_participates_in_match(self):
+        txt = "User-agent: *\nDisallow: /*?sort=\n"
+        self.assertFalse(_parse_robots(txt, "/jobs", "sort=date")["allowed"])
+        self.assertTrue(_parse_robots(txt, "/jobs", "page=2")["allowed"])
+
+    def test_anchored_rule_still_blocks_when_query_present(self):
+        # 刻意比规范保守：规范只匹配 path+query 会放行 /private?x=1，这里仍拦。
+        txt = "User-agent: *\nDisallow: /private$\n"
+        self.assertFalse(_parse_robots(txt, "/private", "x=1")["allowed"])
+
+    def test_allow_longer_wildcard_rule_wins(self):
+        txt = "User-agent: *\nDisallow: /\nAllow: /api/*/search\n"
+        self.assertTrue(_parse_robots(txt, "/api/pcsx/search")["allowed"])
+        self.assertFalse(_parse_robots(txt, "/api/pcsx/list")["allowed"])

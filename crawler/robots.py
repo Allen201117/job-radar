@@ -1,4 +1,5 @@
 import httpx
+import re
 import threading
 from urllib.parse import urlparse
 
@@ -68,13 +69,28 @@ def check_robots(source_url: str) -> dict:
     text, reason = cached
     if text is None:
         return {"allowed": True, "reason": reason}
-    return _parse_robots(text, parsed.path)
+    return _parse_robots(text, parsed.path, parsed.query)
 
 
 _ME_AGENTS = ("jobradarbot", "jobradar")
 
+_RULE_RE_CACHE: dict = {}
 
-def _parse_robots(text: str, path: str) -> dict:
+
+def _rule_matches(core: str, anchored: bool, target: str) -> bool:
+    """规则路径（含 `*` 通配）是否匹配目标串。anchored=True 时要求匹配到末尾。"""
+    if "*" not in core:
+        return target == core if anchored else target.startswith(core)
+    key = (core, anchored)
+    rx = _RULE_RE_CACHE.get(key)
+    if rx is None:
+        body = ".*".join(re.escape(part) for part in core.split("*"))
+        rx = re.compile("^" + body + ("$" if anchored else ""))
+        _RULE_RE_CACHE[key] = rx
+    return bool(rx.search(target))
+
+
+def _parse_robots(text: str, path: str, query: str = "") -> dict:
     """解析 robots.txt，按标准语义判定目标路径是否可抓。
 
     关键点（修正旧版只看 Disallow、无视 Allow 的 bug）：
@@ -82,7 +98,15 @@ def _parse_robots(text: str, path: str) -> dict:
     - **最长匹配优先**：匹配目标路径的规则里，路径前缀最长者生效；长度相同则 Allow 胜
       （Google robots 规范）。例：`Disallow: /` + `Allow: /api/pcsx` → `/api/pcsx/search` 允许。
     - user-agent 组优先：若有针对本 bot 具名的组则只用该组，否则用 `*` 组；
-    - 末尾 `$` 视为路径结束锚点（精确匹配）。
+    - `*` 通配任意字符序列，末尾 `$` 为路径结束锚点（Google robots 规范）。
+      ⚠️ 2026-09-08 补：此前 `*` 被当普通字符字面比较，于是 `Disallow: /*.pdf$` 退化成
+      「路径必须恰好等于字符串 /*.pdf」→ 永远匹配不上 → `/jobs/cv.pdf` 被**错误放行**。
+    - 匹配串同时试 `path` 与 `path?query` 两种形态，任一命中即算命中。
+      ⚠️ 这是**刻意比规范更保守**：规范说匹配串是 path+query，只试它会让
+      `Disallow: /private$` 放行 `/private?x=1`。两种都试 ⇒ 本函数的拦截集合恒为规范的超集，
+      改动方向只会「多拦」不会「少拦」——合规上宁可少抓，不可多抓。
+    - 路径比较保持大小写不敏感：规范其实是大小写敏感的，但改成敏感只会**放松**拦截
+      （`Disallow: /Jobs` 将不再挡 `/jobs`），与上一条同理，故刻意不改。
     """
     groups: list = []  # [{"agents": set[str], "rules": [(is_allow, rule)]}]
     cur = None
@@ -112,18 +136,18 @@ def _parse_robots(text: str, path: str) -> dict:
     rules = [r for g in applicable for r in g["rules"]]
 
     path_l = (path or "/").lower()
+    targets = [path_l]
+    if query:
+        targets.append(f"{path_l}?{query.lower()}")
     best = None  # (specificity, is_allow, rule)
     for is_allow, rule in rules:
         rl = rule.lower()
         if not rl:
             continue  # 空 Disallow = 允许全部，不构成匹配
-        if rl.endswith("$"):
-            pat = rl[:-1]
-            matched = path_l == pat
-            spec = len(pat)
-        else:
-            matched = path_l.startswith(rl)
-            spec = len(rl)
+        anchored = rl.endswith("$")
+        core = rl[:-1] if anchored else rl
+        matched = any(_rule_matches(core, anchored, t) for t in targets)
+        spec = len(core)
         if matched and (best is None or spec > best[0] or (spec == best[0] and is_allow)):
             best = (spec, is_allow, rule)
 

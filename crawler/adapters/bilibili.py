@@ -1,5 +1,6 @@
 """哔哩哔哩招聘公开 API 适配器（匿名 CSRF 会话，零浏览器）。"""
 import json
+import logging
 import time
 from typing import List, Optional
 
@@ -7,6 +8,8 @@ import httpx
 
 from .base import BaseAdapter, RawJob
 from .china_location import is_china_company_location
+
+logger = logging.getLogger(__name__)
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -67,11 +70,19 @@ class BilibiliAdapter(BaseAdapter):
                     "practiceTypes": [],
                     "onlyHotRecruit": 0,
                 }
-                response = client.post(self.LIST_URL, json=payload, headers=headers)
-                response.raise_for_status()
-                body = response.json() or {}
-                if body.get("code") != 0:
-                    raise RuntimeError(f"bilibili: list error {body.get('message')}")
+                try:
+                    response = client.post(self.LIST_URL, json=payload, headers=headers)
+                    response.raise_for_status()
+                    body = response.json() or {}
+                    if body.get("code") != 0:
+                        raise RuntimeError(f"bilibili: list error {body.get('message')}")
+                except Exception:
+                    if page_no == 1:
+                        raise  # 首页失败交给 run.py 记录为 failed
+                    logger.warning(
+                        "bilibili: 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）", page_no, len(rows)
+                    )
+                    break  # 后续页尽力而为，保留已抓的行；fetch_complete 由下方与 reported_total 比对天然置 False
                 data = body.get("data") or {}
                 if self.reported_total is None:
                     total = _int_or_none(data.get("total"))

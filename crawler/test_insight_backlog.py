@@ -31,6 +31,10 @@ class FakeQuery:
     def lt(self, *a, **k):
         return self
 
+    def in_(self, col, values):
+        # 记录进 filters：I2 的退役语句靠它限定维度，测试要能断言这个限定真的下发了。
+        self._filters[col] = list(values); return self
+
     def or_(self, *a, **k):
         return self
 
@@ -392,6 +396,46 @@ class TestT3(unittest.TestCase):
             payload.get("status") == "retired"
             for _filters, payload in store.get("insight_items_updates", [])
         ))
+
+    def test_t3_retire_is_scoped_to_dimensions_written_this_round(self):
+        """I2 回归：退役必须带 dimension 限定，不能一条成功就把整家公司其它主题连坐退掉。
+
+        原实现的退役条件只有 company_id + origin + status + last_verified_at，没有维度维度。
+        于是「加班文化」写成功、「晋升发展」这轮因异常/额度没产出时，晋升发展上一轮的有效内容
+        会被一起退役 —— 用户那一栏直接变空，而我们并没有任何新证据说它不成立。
+        """
+        B._ROUTER = _FakeRouter([
+            {"url": "https://a.example/1", "publisher": "a.example", "text": "t1"},
+            {"url": "https://b.example/2", "publisher": "b.example", "text": "t2"},
+        ])
+        E.run_pipeline = lambda c, d, *a, **k: [{
+            "claim": {"content": _on_topic(d), "grade": "experience", "sample_size": 8},
+            "judge": {"supported_source_idxs": [0, 1]}, "status": "active",
+        }]
+        store = {}
+        B.enrich_company_t3(FakeSB(store), {"id": "c-scope", "company": "限定公司", "aliases": []})
+        retires = [f for f, payload in store.get("insight_items_updates", [])
+                   if payload.get("status") == "retired"]
+        self.assertTrue(retires, "本轮写出 active 后应有退役语句")
+        for filters in retires:
+            self.assertIn("dimension", filters,
+                          "退役语句必须带 dimension 限定，否则会连坐退掉本轮没复核的主题")
+            self.assertTrue(filters["dimension"], "dimension 限定不能为空集合")
+
+    def test_t3_zero_topics_attempted_does_not_advance_checked_at(self):
+        """I1 回归：开跑就撞额度、一个主题都没检索 → 不许盖 t3_checked_at。
+
+        盖了就等于把这家公司排除出常规队列 180 天（T3_TTL_DAYS）而本轮零产出，
+        且不抛异常、不计失败，没有任何人会发现。
+        """
+        B._ROUTER = _FakeRouter([])
+        B._ROUTER.remaining_above_reserve = lambda sb: 0
+        store = {}
+        res = B.enrich_company_t3(FakeSB(store), {"id": "c-zero", "company": "零额度公司", "aliases": []})
+        self.assertEqual(res, "empty")
+        advanced = [payload for _f, payload in store.get("company_profiles_updates", [])
+                    if "t3_checked_at" in payload]
+        self.assertEqual(advanced, [], "零主题这轮不得推进 t3_checked_at")
 
     def test_pick_sources_never_fills_with_unverified_results(self):
         results = [

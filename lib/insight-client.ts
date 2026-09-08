@@ -39,15 +39,46 @@ const EMPTY_FIRST_PARTY = (): FirstPartyAggregate => ({
   items: [],
 });
 
-const cache = new Map<string, CompanyInsightResponse>();
+// 浏览器端缓存（2026-09-08 加 TTL，修 I5）。
+//
+// 原实现是一个**永不过期、无版本、无清理入口**的 Map：命中即返回。后果有两条，都在生产路径上——
+//   ① 管理员/申诉把某条洞察下架后，**同一个页面会话里**再打开公司抽屉仍然拿到旧对象，
+//      HTTP 只发过一次；撤回到不了这个展示出口。
+//   ② `{ok:false}` 这类错误响应也被 set 进去（只有 fetch 本身抛异常才不写），
+//      于是一次后端 500 会把「这家公司没有洞察」永久钉在这个会话里。
+// 修法保持最小：给缓存加 TTL，并且只缓存成功响应。TTL 对齐服务端 unstable_cache 的 600s
+// （lib/insight-availability-cache.ts / insight-library-store.ts 都是这个量级），
+// 再短只是徒增跨洋请求，再长撤回就传不到。
+const CACHE_TTL_MS = 600_000;
+
+const cache = new Map<string, { at: number; value: CompanyInsightResponse }>();
 const inflight = new Map<string, Promise<CompanyInsightResponse>>();
+
+function readCache(key: string): CompanyInsightResponse | null {
+  const hit = cache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > CACHE_TTL_MS) {
+    cache.delete(key);
+    return null;
+  }
+  return hit.value;
+}
+
+/** 发布/撤回/申诉后由调用方主动失效；不传 company 清空全部。 */
+export function invalidateCompanyInsights(company?: string): void {
+  if (company === undefined) {
+    cache.clear();
+    return;
+  }
+  cache.delete(keyOf(company));
+}
 
 function keyOf(company: string): string {
   return (company || "").trim().toLowerCase();
 }
 
 export function getCachedInsights(company: string): CompanyInsightResponse | null {
-  return cache.get(keyOf(company)) || null;
+  return readCache(keyOf(company));
 }
 
 export async function fetchCompanyInsights(
@@ -65,7 +96,7 @@ export async function fetchCompanyInsights(
       recruitment_cycles: [],
     };
   }
-  const cached = cache.get(key);
+  const cached = readCache(key);
   if (cached) return cached;
   const pending = inflight.get(key);
   if (pending) return pending;
@@ -85,7 +116,8 @@ export async function fetchCompanyInsights(
         recruitment_cycles: data.recruitment_cycles || [],
         error: data.error,
       };
-      cache.set(key, normalized);
+      // 只缓存成功响应：错误响应缓存下来 = 一次后端抖动把「查无洞察」钉死一整个会话。
+      if (normalized.ok) cache.set(key, { at: Date.now(), value: normalized });
       return normalized;
     } catch (e) {
       console.error("[insight-client] 拉取失败", (e as Error).message);

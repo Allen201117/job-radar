@@ -14,12 +14,15 @@ jobs.mihoyo.com 是 UMI/React 空壳 SPA，岗位数据走 ats.openout.mihoyo.co
 岗位含新加坡/美国/日本等海外地点，交由 normalizer/geo 按 sources.regions 门控。
 """
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 import httpx
 
 from .base import BaseAdapter, RawJob, resolve_detail_cap
+
+logger = logging.getLogger(__name__)
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -71,9 +74,18 @@ class MihoyoAdapter(BaseAdapter):
         for page in range(1, self.MAX_PAGES + 1):
             payload = {"pageNo": page, "pageSize": self.PAGE_SIZE,
                        "channelDetailIds": [1], "hireType": hire_type}
-            resp = client.post(self.LIST_API, json=payload)
-            resp.raise_for_status()
-            data = (resp.json() or {}).get("data") or {}
+            try:
+                resp = client.post(self.LIST_API, json=payload)
+                resp.raise_for_status()
+                data = (resp.json() or {}).get("data") or {}
+            except Exception:
+                if page == 1:
+                    raise  # 该板块首页失败交给 run.py 记录为 failed
+                logger.warning(
+                    "mihoyo: %s 板块第 %d 页抓取失败，保留已抓 %d 条（尽力而为）",
+                    board, page, len(rows),
+                )
+                break  # 后续页尽力而为，保留已抓的行；fetch_complete 由 fetch() 与 reported_total 比对天然置 False
             if total is None:
                 total = _int_or_none(data.get("total"))
             chunk = data.get("list") or []

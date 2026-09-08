@@ -264,16 +264,24 @@ create trigger jobs_recruitment_class_guard_trg
 -- **内联**成常量折叠后的那串 OR-of-LIKE，与召回 SQL 里的 where 子句结构完全相同 → 谓词匹配成立。
 -- ⚠️ 改这里必须同步改 lib/jobs-store/opportunities.ts 的 stageRecallPatterns，否则谓词不再匹配、
 -- 索引会被 planner 静默忽略（不报错，只是又变慢）。改完用 EXPLAIN 确认仍走 *_campus_gin / *_intern_gin。
+-- ⚠️ 这里的词表必须是 lib/china-keyword-expansion.js 里 sourceDeclaredCategory + hasStrongCampusSignal
+-- + hasInternSignal 在 **title / job_type / jd_url 三个字段上**全部正向信号的**超集**，
+-- 否则「后置判它符合、前置压根没召回」（2026-09-08 修的 F8）：标题叫「管培生」的在招校招岗
+-- 六个旧词一个都不含 → 校招用户在 /today 永远看不见它，而 /jobs 页筛得到（那条链走物化列）。
+-- 只许加词、不许减词：加词只会让候选变多（后置门照样精筛），减词=静默漏掉真岗，精度红线。
+-- 📌 已知残差（刻意不修）：hasStrongCampusSignal 还扫 summary，本函数只看三个短字段——
+--    「标题看不出、只有正文写着应届」的岗仍会漏。把 summary 加进索引谓词会显著放大这两个
+--    分区索引，属于要先量后改的容量决策，不在本次修复范围。
 create or replace function job_stage_match(p_title text, p_job_type text, p_jd_url text, p_stage text)
 returns boolean language sql immutable parallel safe as $function$
   select case p_stage
     when 'campus' then
-         lower(p_title) like any(array['%校招%','%校园%','%应届%','%campus%','%graduate%','%届%'])
-      or lower(coalesce(p_job_type,'')) like any(array['%校招%','%校园%','%应届%','%campus%','%graduate%','%届%'])
-      or lower(coalesce(p_jd_url,'')) like any(array['%campus%'])
+         lower(p_title) like any(array['%校招%','%校园%','%应届%','%campus%','%graduate%','%届%','%管培生%','%管理培训生%','%留学生专项%','%new grad%','%entry-level%','%entry level%'])
+      or lower(coalesce(p_job_type,'')) like any(array['%校招%','%校园%','%应届%','%campus%','%graduate%','%届%','%管培生%','%管理培训生%','%留学生专项%','%new grad%','%entry-level%','%entry level%'])
+      or lower(coalesce(p_jd_url,'')) like any(array['%campus%','%xiaozhao%'])
     when 'intern' then
-         lower(p_title) like any(array['%实习%','%intern%'])
-      or lower(coalesce(p_job_type,'')) like any(array['%实习%','%intern%'])
+         lower(p_title) like any(array['%实习%','%intern%','%shixi%'])
+      or lower(coalesce(p_job_type,'')) like any(array['%实习%','%intern%','%shixi%'])
       or lower(coalesce(p_jd_url,'')) like any(array['%shixi%','%intern%'])
     else true
   end
@@ -346,6 +354,12 @@ create index if not exists jobs_recruitment_unclassified_idx on jobs (id) where 
 -- ⚠️ 应用层 SQL 一行没改就生效（靠 job_stage_match 被内联后与 where 子句结构相同）。
 -- 社招（无阶段过滤）用不到这两个索引，仍走全量 jobs_search_doc_gin —— 已知边界，不是漏配。
 -- 生产上首次创建请用 CONCURRENTLY；本文件是幂等重建用，普通 create 即可。
+-- ⚠️ **改了 job_stage_match 的词表就必须重建这两个索引**，所以这里先 drop 再 create。
+-- 原因：索引条目是按**建索引那一刻**的谓词算出来的，`create or replace function` 不会回头
+-- 重算它们。只换函数不重建 = 新词命中的行根本不在索引里，而 planner 仍然认为这个部分索引
+-- 覆盖了整个 where 条件 → **静默少返回岗位**，不报错、不变慢，只是查不到（比漂移更隐蔽）。
+drop index if exists jobs_search_doc_campus_gin;
+drop index if exists jobs_search_doc_intern_gin;
 create index if not exists jobs_search_doc_campus_gin on jobs using gin (search_doc)
   where status = 'active' and job_stage_match(title, job_type, jd_url, 'campus');
 create index if not exists jobs_search_doc_intern_gin on jobs using gin (search_doc)

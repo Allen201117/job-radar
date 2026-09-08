@@ -274,22 +274,16 @@ function coarseFunction(title: string | null): string | null {
   return "其他";
 }
 
-// 近 30 天新增岗位环比（first_seen_at）；前一窗口样本 <3 不报趋势（null）
-function trendPct(jobs: Job[], nowIso: string): number | null {
-  const now = new Date(nowIso).getTime();
-  const D30 = 30 * 86_400_000;
-  let recent = 0;
-  let prior = 0;
-  for (const jb of jobs) {
-    if (!jb.first_seen_at) continue;
-    const t = new Date(jb.first_seen_at).getTime();
-    if (Number.isNaN(t)) continue;
-    if (t >= now - D30) recent++;
-    else if (t >= now - 2 * D30) prior++;
-  }
-  if (prior < 3) return null;
-  return Math.round(((recent - prior) / prior) * 100);
-}
+// 🚫 这里**不能**用 first_seen_at 在当前 active 岗上算「近 30 天环比」（2026-09-08 删除，修 F4）。
+//
+// 原因是幸存者偏差，而且偏差方向恒为正：能被读到的只有**此刻仍 active** 的岗，
+// 已关闭的岗每天被 purge-expired 物理删除 → 越早的窗口被删得越干净 → 分母单调缩水。
+// 实测反例：两个窗口各真实发布 30 个岗（真实趋势 0%），只把旧窗关掉 27 个、一个新岗都没发，
+// 算出来就是 **+900% 扩张**，还会进一步推出「HC 较充足」。用户看到的是一个凭空造出来的结论。
+//
+// 正确的趋势只能来自**跨日快照**（crawler/bu_signals.py 的 insight_subject_daily，
+// 那边的模块注释专门写了「趋势为什么不在这里由 first_seen_at 直接算」）。
+// 所以读时派生这条链一律不自产趋势：由 opts.trendPct 从快照派生结果注入，注入不了就是 null=未知。
 
 // 公司规模档（wikidata headcount_band）→ 约数员工，用于「相对规模」招聘强度。启发式、抗小幅变动。
 const HEADCOUNT_APPROX: Record<string, number> = {
@@ -298,7 +292,9 @@ const HEADCOUNT_APPROX: Record<string, number> = {
 };
 
 export type HiringSignal = {
-  momentum: "expanding" | "steady" | "tightening";
+  // unknown = 没有可比基线。**不许**在这种情况下退化成 "steady"——「平稳」是一个有内容的结论，
+  // 说它需要证据；没有证据时唯一诚实的输出是「不知道」（chip 侧会因此不渲染任何断言）。
+  momentum: "expanding" | "steady" | "tightening" | "unknown";
   intensity?: "high" | "mid" | "low";
   trend: number | null;
   active_count: number;
@@ -311,10 +307,11 @@ export function classifyHiringSignal(
   trend: number | null,
   headcountBand?: string | null,
 ): HiringSignal {
-  let momentum: HiringSignal["momentum"] = "steady";
+  let momentum: HiringSignal["momentum"] = "unknown";
   if (typeof trend === "number") {
     if (trend >= 25) momentum = "expanding";
     else if (trend <= -25) momentum = "tightening";
+    else momentum = "steady";
   }
   const emp = headcountBand ? HEADCOUNT_APPROX[headcountBand] : undefined;
   let intensity: HiringSignal["intensity"];
@@ -325,25 +322,31 @@ export function classifyHiringSignal(
   return { momentum, intensity, trend, active_count: activeCount };
 }
 
-const _MOM_CN = { expanding: "近月招聘明显扩张", steady: "近月招聘平稳", tightening: "近月招聘收紧" };
+const _MOM_CN: Record<HiringSignal["momentum"], string> = {
+  expanding: "本平台收录的在招岗位数近月明显增加",
+  steady: "本平台收录的在招岗位数近月基本持平",
+  tightening: "本平台收录的在招岗位数近月减少",
+  unknown: "近月变化暂无可比基线",
+};
 const _INT_CN = { high: "高", mid: "中", low: "低" };
 
+// ⚠️ 措辞是刻意的，别改回去（2026-09-08，修 F4）：
+//   ① 我们只观测得到**本平台收录到的岗位**，说「这家公司在扩张」超出了证据能支撑的范围
+//      —— 源覆盖变动、抓取截断、旧岗退出都会让这个数字动，跟企业招聘预算不是一回事。
+//   ② 删掉了原来的「（HC 较充足、进入窗口相对宽）/（HC 偏紧、竞争或更激烈）」：
+//      从「岗位条数」推不出 HC 余量或竞争强度，中间缺了一整条因果链，属于无据外推。
 function hiringSignalSentence(sig: HiringSignal): string {
-  const intens = sig.intensity ? `，相对其规模属${_INT_CN[sig.intensity]}强度招聘` : "";
-  const read =
-    sig.momentum === "expanding" && (sig.intensity === "high" || sig.intensity === "mid")
-      ? "（HC 较充足、进入窗口相对宽）"
-      : sig.momentum === "tightening"
-        ? "（HC 偏紧、竞争或更激烈）"
-        : "";
-  return `招聘信号：${_MOM_CN[sig.momentum]}${intens}${read}`;
+  const intens = sig.intensity
+    ? `，相对其公司规模档属${_INT_CN[sig.intensity]}密度`
+    : "";
+  return `招聘信号：${_MOM_CN[sig.momentum]}${intens}`;
 }
 
 // 招聘动态（hiring, fact）：在招规模 + 热门城市/方向 + 校社占比 + 新增趋势 + 大小年/HC 强度信号。
 export function deriveHiring(
   jobs: Job[],
   nowIso: string,
-  opts: { headcountBand?: string | null } = {},
+  opts: { headcountBand?: string | null; trendPct?: number | null } = {},
 ): InsightItemView | null {
   const active = jobs.filter((jb) => jb.status === "active");
   if (active.length < HIRING_MIN_SAMPLE) return null;
@@ -360,14 +363,15 @@ export function deriveHiring(
   );
   const mix = { campus: 0, intern: 0, social: 0, unknown: 0 };
   for (const jb of active) mix[classifyRecruitment(jb.job_type, jb.title)]++;
-  const trend = trendPct(active, nowIso);
+  // 趋势只接受外部注入的快照派生值；本函数手里只有「当前 active」，算不出无偏趋势（见上方 F4 注释）。
+  const trend = typeof opts.trendPct === "number" ? opts.trendPct : null;
   const signal = classifyHiringSignal(active.length, trend, opts.headcountBand);
 
   const cityStr = cities.length ? `主要在 ${cities.map((c) => c.key).join("、")}` : "";
   const fnStr = functions.length ? `热门方向 ${functions.map((f) => f.key).join("、")}` : "";
-  const trendStr = trend !== null ? `近一月新增岗位环比 ${trend > 0 ? "+" : ""}${trend}%` : "";
+  const trendStr = trend !== null ? `近一月收录岗位环比 ${trend > 0 ? "+" : ""}${trend}%` : "";
   const tail = [cityStr, fnStr, trendStr].filter(Boolean).join("，");
-  const content = `当前在招约 ${active.length} 个岗位${tail ? "，" + tail : ""}。${hiringSignalSentence(signal)}。`;
+  const content = `本平台当前收录 ${active.length} 个在招岗位${tail ? "，" + tail : ""}。${hiringSignalSentence(signal)}。`;
 
   // 经验分布（≥DIST_MIN_SAMPLE 个岗有 experience 字段才输出）
   const expBuckets = active.map((jb) => bucketExperience(jb.experience)).filter(Boolean) as string[];
