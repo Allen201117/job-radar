@@ -10,8 +10,7 @@ export default function Loading() {
       <Navbar />
       <ProductPage>
         <ProductHero
-          eyebrow="洞察库"
-          title="岗位描述里不会写的事"
+          title="洞察库"
           icon={Compass}
         />
         <div className="mt-8 grid gap-4">

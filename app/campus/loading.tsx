@@ -10,8 +10,7 @@ export default function Loading() {
       <Navbar />
       <ProductPage>
         <ProductHero
-          eyebrow="校招专区"
-          title="必投公司开没开校招"
+          title="校招专区"
           icon={GraduationCap}
         />
         <div className="mt-8 grid gap-4">

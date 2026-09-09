@@ -9,7 +9,6 @@ export default function Loading() {
       <AdminNav />
       <ProductPage maxWidth="max-w-6xl">
         <ProductHero
-          eyebrow="运营健康"
           title="管理员看板"
           icon={ShieldCheck}
         >

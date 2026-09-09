@@ -18,11 +18,6 @@ import InsightsClient from "./insights-client";
 
 export const metadata = { title: "洞察库 · 求职雷达" };
 
-const HERO = {
-  eyebrow: "洞察库",
-  title: "岗位描述里不会写的事",
-};
-
 export default async function InsightsPage({
   searchParams,
 }: {
@@ -56,7 +51,7 @@ export default async function InsightsPage({
     <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage>
-        <ProductHero {...HERO} icon={Compass} />
+        <ProductHero title="洞察库" icon={Compass} />
         <InsightsClient
           initialSubjects={firstPage}
           initialTotal={sorted.length}

@@ -101,11 +101,6 @@ const loadCampusBoard = unstable_cache(
   { revalidate: 600, tags: ["campus-board"] },
 );
 
-const HERO = {
-  eyebrow: "校招专区",
-  title: "必投公司开没开校招",
-};
-
 export default async function CampusPage() {
   const user = await getRequestUser();
   if (!user) redirect("/login?next=/campus");
@@ -135,7 +130,7 @@ export default async function CampusPage() {
     <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage>
-        <ProductHero eyebrow={HERO.eyebrow} title={HERO.title} icon={GraduationCap} />
+        <ProductHero title="校招专区" icon={GraduationCap} />
         <CampusClient
           cards={cards}
           industries={industries}

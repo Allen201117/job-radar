@@ -12,8 +12,7 @@ export default function Loading() {
       <Navbar />
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
-          eyebrow="公告制招聘"
-          title="这些公司不挂岗位，只能从这里投"
+          title="公告制招聘"
           icon={Megaphone}
           align="center"
           action={<MetricTilesSkeleton count={1} gridClassName="grid w-full sm:w-[200px]" />}

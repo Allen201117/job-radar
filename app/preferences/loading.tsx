@@ -9,7 +9,7 @@ export default function Loading() {
     <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage>
-        <ProductHero eyebrow="个人主页" title="你的资料和投递记录" icon={UserCircle} />
+        <ProductHero title="个人主页" icon={UserCircle} />
         <div className="mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)]">
           <PanelSkeleton />
           <PanelSkeleton />

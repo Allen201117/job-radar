@@ -17,8 +17,7 @@ export default async function SourcesPage() {
       <AdminNav />
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
-          eyebrow="数据源"
-          title="接了哪些官网，抓得怎么样"
+          title="源管理"
           icon={Database}
         />
         <div className="mt-6">

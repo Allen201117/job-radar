@@ -29,8 +29,7 @@ export default async function DesignSystemPage() {
       <AdminNav />
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
-          eyebrow="设计组件库"
-          title="产品里真实在跑的组件"
+          title="设计组件库"
           icon={Palette}
         />
         <DesignSystemClient />

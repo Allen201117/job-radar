@@ -11,7 +11,6 @@ export default function Loading() {
       <Navbar />
       <ProductPage>
         <ProductHero
-          eyebrow={TODAY_HERO.eyebrow}
           title={TODAY_HERO.title}
           icon={Broadcast}
         >

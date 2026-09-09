@@ -43,8 +43,7 @@ export default async function InsightsAdminPage() {
       <AdminNav />
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
-          eyebrow="洞察管理"
-          title="改洞察，处理申诉"
+          title="洞察管理"
           icon={Sparkle}
         />
 

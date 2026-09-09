@@ -121,7 +121,6 @@ export default async function TodayPage({
             而用户只关心「今天有什么值得投的」——「剔除 1,274 个」既不可验证，也容易让人觉得
             系统在自夸工作量。要衡量漏斗健康度请看 /admin/health，别放在用户面前。 */}
         <ProductHero
-          eyebrow={TODAY_HERO.eyebrow}
           title={TODAY_HERO.title}
           icon={Broadcast}
         />

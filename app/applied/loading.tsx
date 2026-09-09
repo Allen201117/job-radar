@@ -9,7 +9,7 @@ export default function Loading() {
     <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage maxWidth="max-w-5xl">
-        <ProductHero eyebrow="已投递" title="投过的岗位" icon={CheckCircle} />
+        <ProductHero title="已投递" icon={CheckCircle} />
         <div className="mt-6">
           <JobListSkeleton count={5} />
         </div>
