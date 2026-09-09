@@ -7,7 +7,12 @@ export type CampusAdmission = "campus" | "intern" | "reject";
 // 专区准入门：直接复用 recruitmentCategory（已精度优先，弱词不判校招）。
 // campus = 进默认列表；intern = 单独可筛桶；reject = 不进专区（社招/无信号）。
 export function campusAdmission(job: any = {}): CampusAdmission {
-  const cat = recruitmentCategory(job);
+  // 库里的 recruitment_category 就是同一份 JS 分类器算出来的（crawler/recruitment_classify.py 隔进程调
+  // lib/china-keyword-expansion.js；触发器 jobs_guard_recruitment_class 在分类依据变化时置 NULL）。
+  // 2026-09-09 live 对拍互联网清单 30 家 20,311 行：列与现算**零不一致**。有值就直接认，
+  // 现算只兜 NULL（全库 36 行）——这样专区取数不必为了判桶把 6.5MB 正文拖回函数。
+  const stored = job?.recruitment_category;
+  const cat = stored === "校招" || stored === "实习" || stored === "社招" ? stored : recruitmentCategory(job);
   if (cat === "实习") return "intern";
   if (cat === "校招") return "campus";
   return "reject";

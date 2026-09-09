@@ -180,11 +180,14 @@ export default function CampusClient({
   cards,
   industries,
   hasIndustry,
+  generatedLabel = null,
   filterOptions,
 }: {
   cards: CampusBoardCard[];
   industries: string[];
   hasIndustry: boolean;
+  /** 看板快照的年龄（服务端算好的文案，如「12 分钟前」）；null 时不渲染。 */
+  generatedLabel?: string | null;
   filterOptions: { campus: CampusFilterOptions; intern: CampusFilterOptions };
 }) {
   const [mode, setMode] = useState<RecruitMode>("campus");
@@ -384,7 +387,7 @@ export default function CampusClient({
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm ink-2">
-          已接入官方校招源并持续验证的岗位 · 按行业「{industries.join("、")}」匹配 {cards.length} 家必投目标公司
+          已接入官方校招源并持续验证的岗位 · 按行业「{industries.join("、")}」匹配 {cards.length} 家必投目标公司{generatedLabel ? ` · 数据更新于 ${generatedLabel}` : ""}
         </p>
       </div>
 

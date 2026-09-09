@@ -91,3 +91,13 @@ test("groupCampusJobs: 按城市归组，组内排序，组按岗位数降序", 
   assert.deepEqual(groups[0].jobs.map((j) => j.title), ["C", "A"]); // 8-01 早于 8-10
   assert.equal(groups[1].label, "上海");
 });
+
+test("campusAdmission: 库里已有 recruitment_category 时直接认列，不再靠现算（列与现算同源）", () => {
+  // 没有任何文本信号、只有列 → 以列为准
+  assert.equal(campusAdmission({ title: "大模型算法工程师", job_type: "研发类", recruitment_category: "实习" }), "intern");
+  assert.equal(campusAdmission({ title: "研发工艺工程师", recruitment_category: "校招" }), "campus");
+  assert.equal(campusAdmission({ title: "2027届校园招聘-产品", recruitment_category: "社招" }), "reject");
+  // 列为空 / 非法值 → 退回现算
+  assert.equal(campusAdmission({ title: "2027届校园招聘-产品", recruitment_category: null }), "campus");
+  assert.equal(campusAdmission({ title: "产品实习生", recruitment_category: "未知" }), "intern");
+});

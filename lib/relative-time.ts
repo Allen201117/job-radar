@@ -45,3 +45,18 @@ export function formatDateLabel(
 
   return new Intl.DateTimeFormat("zh-CN", { timeZone: DISPLAY_TIME_ZONE, ...options }).format(date);
 }
+
+/**
+ * 快照年龄文案（「刚刚 / 12 分钟前 / 3 小时前 / 2 天前」）。给校招看板这类「服务端缓存的快照」用：
+ * 服务端算成字符串再下发，客户端原样渲染，避免两端各算一次分钟数导致水合不一致。
+ * 用途是**把缓存卡死暴露出来**（2026-09-09 /campus 静默服务了 6 天前的快照），不是装饰。
+ */
+export function snapshotAgeLabel(generatedAtMs: number | null | undefined, nowMs: number): string | null {
+  if (!generatedAtMs || !Number.isFinite(generatedAtMs) || !Number.isFinite(nowMs)) return null;
+  const mins = Math.max(0, Math.floor((nowMs - generatedAtMs) / 60_000));
+  if (mins < 1) return "刚刚";
+  if (mins < 60) return `${mins} 分钟前`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 48) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
+}

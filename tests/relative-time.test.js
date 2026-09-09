@@ -3,7 +3,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { loadTs } = require("./_load-ts");
 
-const { relativeTimeLabel, formatDateLabel } = loadTs(path.join(__dirname, "..", "lib", "relative-time.ts"));
+const { relativeTimeLabel, formatDateLabel, snapshotAgeLabel } = loadTs(path.join(__dirname, "..", "lib", "relative-time.ts"));
 const now = new Date("2026-07-13T12:00:00.000Z");
 
 test("relativeTimeLabel handles same-day and recent day boundaries", () => {
@@ -69,4 +69,13 @@ test("formatDateLabel 传 Intl 选项时仍钉死北京时间", () => {
       `TZ=${tz}`,
     );
   }
+});
+
+test("snapshotAgeLabel: 刚刚 / 分钟 / 小时 / 天 四档", () => {
+  const now = Date.parse("2026-09-09T10:00:00Z");
+  assert.equal(snapshotAgeLabel(now - 20_000, now), "刚刚");
+  assert.equal(snapshotAgeLabel(now - 12 * 60_000, now), "12 分钟前");
+  assert.equal(snapshotAgeLabel(now - 3 * 3600_000, now), "3 小时前");
+  assert.equal(snapshotAgeLabel(now - 6 * 86400_000, now), "6 天前");
+  assert.equal(snapshotAgeLabel(null, now), null);
 });

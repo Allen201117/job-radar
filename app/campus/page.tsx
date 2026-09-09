@@ -1,4 +1,9 @@
 export const dynamic = "force-dynamic";
+// ⚠️ 看板重算（30 家 ~2 万岗、含 JD 正文取回跑职能分类）live 实测数秒到十几秒。Hobby 档函数默认
+// 10s：unstable_cache 的后台重算一旦被杀，Next 会**永远**继续服务旧快照且不报错——2026-09-09 线上
+// /campus 就卡在 09-03 之前的快照上（京东 0 / 小米 6 / 百度 2，而库里是 127 / 852 / 158，接口
+// /api/campus-zone/jobs 不走缓存返回的正是库里的数）。抬到 60s（Hobby 上限）给重算留足余量。
+export const maxDuration = 60;
 
 import { unstable_cache } from "next/cache";
 import { redirect } from "next/navigation";
@@ -20,10 +25,13 @@ import {
   cleanCampusDeadlineMs,
 } from "@/lib/recruitment-cycle";
 import CampusClient, { type CampusBoardCard } from "./campus-client";
+import { snapshotAgeLabel } from "@/lib/relative-time";
 
 export type CampusBoard = {
   cards: CampusBoardCard[];
   filterOptions: { campus: CampusFilterOptions; intern: CampusFilterOptions };
+  /** 这份快照算出来的时刻。页面渲染成「数据更新于 …」，缓存卡死时用户和我们都能一眼看出来。 */
+  generatedAtMs: number;
 };
 
 /**
@@ -40,6 +48,7 @@ export type CampusBoard = {
  */
 const loadCampusBoard = unstable_cache(
   async (industries: string[]): Promise<CampusBoard> => {
+    const startedAt = Date.now();
     const companies = companiesForIndustries(industries);
     const [zone, sourceCov, cyclesByPattern, surgesByPattern] = await Promise.all([
       getCampusZone(companies),
@@ -93,9 +102,13 @@ const loadCampusBoard = unstable_cache(
       };
     });
 
-    return { cards, filterOptions: { campus: campus.options, intern: intern.options } };
+    const generatedAtMs = Date.now();
+    // 留一条可 grep 的耗时日志：下次再「卡在旧快照」，Vercel 日志里能直接看到重算到底跑了多久 / 有没有跑完。
+    console.log(`[campus-board] rebuilt industries=${industries.join(",")} companies=${companies.length} ms=${generatedAtMs - startedAt}`);
+    return { cards, filterOptions: { campus: campus.options, intern: intern.options }, generatedAtMs };
   },
-  ["campus-board-v1"],
+  // v2：换 key 让线上那份卡死的 v1 快照立刻失效（Vercel 数据缓存跨部署存活，光部署不会刷掉它）。
+  ["campus-board-v2"],
   // 10 分钟：校招看板的数据由每日 / 每小时的抓取车道产出，10 分钟的滞后用户感知不到，
   // 但足以让绝大多数请求走缓存、不再逐次重算这坨重活。
   { revalidate: 600, tags: ["campus-board"] },
@@ -143,6 +156,7 @@ export default async function CampusPage() {
           industries={industries}
           hasIndustry={rawIndustries.length > 0}
           filterOptions={board.filterOptions}
+          generatedLabel={snapshotAgeLabel(board.generatedAtMs, nowMs)}
         />
       </ProductPage>
     </div>
