@@ -140,6 +140,29 @@ async function insertNew(job: Record<string, any>): Promise<any | null> {
   return rows[0] ?? null;
 }
 
+/**
+ * 新岗入库时，若 canonical 命中撤岗墓碑，累加一次「复活」计数（F1 的度量那一半）。
+ *
+ * 为什么这里也要加：purge 每天物理删掉约 2,871 行，删掉后按 canonical 查不到任何行 → 走 insertNew。
+ * 爬虫侧已有 crawler/jobs_db.mark_reopened_from_closures；app 侧的 /api/refresh、/api/discovery
+ * 同样会创建新岗，**漏掉这条路径 = 复活率被低估**，而一个会静默漏计的指标比没有指标更糟。
+ * ⚠️ 与爬虫侧同口径：**只记不拦**（公司确实会重开同一链接，拒收 = 把真机会永久删掉）。
+ * ⚠️ best-effort：墓碑表未建或写失败一律吞掉，绝不影响入库结果。
+ */
+async function markReopenedFromClosure(canon: string | null): Promise<void> {
+  if (!canon) return;
+  try {
+    const rows = await jobsQuery(
+      "update job_closures set reopened_at = now(), reopen_count = reopen_count + 1 " +
+        "where canonical_jd_url = $1 returning canonical_jd_url",
+      [canon],
+    );
+    if (rows.length) console.warn("[job_closures] 已确认撤岗的链接又被当新岗插入（F1 复活）:", canon);
+  } catch (e) {
+    console.warn("[job_closures] 复活标记跳过（不影响入库）:", (e as Error).message);
+  }
+}
+
 /** 单条 upsert 到香港库（canonical 冲突键，复活语义同 crawler）。返回写后整行 + created/updated；失败返回 null。 */
 export async function upsertJob(job: Record<string, any>): Promise<UpsertResult | null> {
   job = withDerivedFields(job);
@@ -151,6 +174,7 @@ export async function upsertJob(job: Record<string, any>): Promise<UpsertResult 
   }
   try {
     const row = await insertNew(job);
+    if (row) void markReopenedFromClosure(canon);
     return row ? { row, action: "created" } : null;
   } catch (e: any) {
     // 并发下撞 active-canonical 唯一键(23505) → 按 canonical 重查命中转 update（幂等兜底，同 jobs_db.upsert_job）

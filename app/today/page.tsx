@@ -5,11 +5,11 @@ import { EmptyPanel, ProductHero, ProductPage } from "@/components/ProductChrome
 import { JobListSkeleton } from "@/components/Skeletons";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { buildRadarProfile, profileReadiness } from "@/lib/opportunities/profile";
+import { loadRadarContext } from "@/lib/opportunities/context";
 import { resolveIntensityForUser } from "@/lib/opportunities/intensity";
 import { buildOpportunityFeed } from "@/lib/opportunities/service";
 import { getPopularFeed, type PopularFeed } from "@/lib/popular-feed";
 import type { OpportunityFeed } from "@/lib/opportunities/types";
-import type { CandidateProfile, JobAction, UserPreferences } from "@/lib/types";
 import TodayClient, { OnboardingPanel } from "../today-client";
 import TodayPopularClient from "../today-popular-client";
 import { TODAY_HERO } from "./hero";
@@ -46,19 +46,13 @@ async function loadTodayBundle(
   now: Date,
 ): Promise<TodayBundle> {
   const tUserRows = performance.now();
-  const [prefsRes, candRes, actsRes, stateRes] = await Promise.all([
-    supabase.from("user_preferences").select("*").eq("user_id", userId).maybeSingle(),
-    supabase.from("candidate_profiles").select("*").eq("user_id", userId).maybeSingle(),
-    supabase.from("job_actions").select("*").eq("user_id", userId),
-    supabase.from("user_radar_state").select("last_opened_at").eq("user_id", userId).maybeSingle(),
-  ]);
+  // 读取失败必须抛（见 lib/opportunities/context.ts）：外层 .catch 会把它变成「暂时无法更新，
+  // 请稍后重试」的错误面板。**不能**像以前那样把失败当成空偏好继续往下走——那会静默丢掉
+  // 排除词与已处理记录，还会把老用户打回填表引导页。
+  const ctx = await loadRadarContext(supabase, userId);
   const userRowsMs = Math.round(performance.now() - tUserRows);
 
-  const profile = buildRadarProfile(
-    userId,
-    prefsRes.data as UserPreferences | null,
-    candRes.data as CandidateProfile | null,
-  );
+  const profile = buildRadarProfile(userId, ctx.preferences, ctx.candidate);
   const readiness = profileReadiness(profile);
   // 画像未就绪 → 不做个人召回（没有目标可召回），改取与用户无关、跨请求共享缓存的「热门在招」。
   // 这是新用户的第一屏：给不出对口机会，也要给得出**能点开的真岗位**，而不是一堵表单墙。
@@ -73,10 +67,10 @@ async function loadTodayBundle(
   }
 
   // radar/open 由客户端首渲后异步记录，不提前清零当次新增。
-  const actions = (actsRes.data as JobAction[]) || [];
-  const radarState = (stateRes.data as { last_opened_at: string | null } | null) ?? null;
+  const actions = ctx.actions;
+  const radarState = ctx.radarState;
   const { intensity } = resolveIntensityForUser(
-    prefsRes.data as UserPreferences | null,
+    ctx.preferences,
     radarState,
     actions,
     profile.targetCompanies.length > 0,

@@ -5,6 +5,7 @@ queryList 按行偏移量拉全列表，再让官方页面的 Vue Router 批量�
 详情 URL；无需逐个点击。queryDetail 只用于有限正文富化，不限制列表岗位产出。
 """
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 
@@ -12,6 +13,8 @@ import httpx
 
 from .base import BaseAdapter, RawJob, resolve_detail_cap
 from .china_location import is_china_company_location
+
+logger = logging.getLogger(__name__)
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -70,10 +73,20 @@ class BydAdapter(BaseAdapter):
         rows_by_id = {}
         total = 0
         offsets = [0]
+        complete = True  # 翻页途中失败会置 False；只有它仍为 True 时下面的一致性检查才有意义
         for offset in offsets:
-            response = client.post(self.LIST_API, json=self._list_payload(offset))
-            response.raise_for_status()
-            body = response.json() or {}
+            try:
+                response = client.post(self.LIST_API, json=self._list_payload(offset))
+                response.raise_for_status()
+                body = response.json() or {}
+            except Exception:
+                if offset == 0:
+                    raise  # 首页（offset=0）失败交给 run.py 记录为 failed
+                logger.warning(
+                    "byd: offset=%d 抓取失败，保留已抓 %d 条（尽力而为）", offset, len(rows_by_id)
+                )
+                complete = False
+                break  # 后续页尽力而为，保留已抓的行；不再触发下面的一致性检查
             data = body.get("data") or {}
             rows = data.get("data") or []
             if offset == 0:
@@ -86,7 +99,10 @@ class BydAdapter(BaseAdapter):
                 job_id = str((row or {}).get("id") or "").strip()
                 if job_id:
                     rows_by_id[job_id] = row
-        if total and len(rows_by_id) < total:
+        # 这条一致性检查只在「全部翻页请求都成功、但去重后仍凑不齐官方自报总数」时才有意义
+        # （原本就存在的数据完整性断言，与本次翻页异常处理无关）；途中失败已经 break+置 complete=False，
+        # 不应再被这里二次 raise 掉——那会把刚保留下来的部分页又白白丢掉。
+        if complete and total and len(rows_by_id) < total:
             raise RuntimeError(
                 f"byd: queryList returned {len(rows_by_id)} unique rows, expected {total}"
             )

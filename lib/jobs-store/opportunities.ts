@@ -246,14 +246,27 @@ function excludePatterns(profile: RadarProfile): string[] {
     .map((k) => `%${k}%`);
 }
 
+// 阶段召回词表。**两条硬约束，改之前先读完**：
+//   ① 必须与 jobs-db/schema.sql 的 job_stage_match 逐字一致 —— 那两个分区 GIN 索引的谓词就是它，
+//      漂移一个字符 planner 就静默不用索引（不报错，只是又慢回 3~5s）。哨兵：
+//      tests/recall-stage-index-alignment.test.js。
+//   ② 必须是后置门（checkEligibility → recruitmentCategory）在 title/job_type/jd_url 上全部正向
+//      信号的**超集**。2026-09-08 修 F8 前只有六个词，标题叫「管培生」的校招岗一个都不含 →
+//      后置明明判它「校招·符合」，前置却根本没召回，用户在 /today 永远看不见。
+//      只许加词、不许减词：加词只是多几个候选（后置门照样精筛），减词 = 静默漏掉真岗。
+// 📌 已知残差：hasStrongCampusSignal 还扫 summary，这里只看三个短字段 → 「标题看不出、只有正文
+//    写着应届」的岗仍会漏。补它要把 summary 放进索引谓词，属容量决策，先量后改，本次不做。
 function stageRecallPatterns(profile: RadarProfile): { text: string[]; url: string[] } | null {
   if (profile.experienceStage === "实习") {
-    return { text: ["%实习%", "%intern%"], url: ["%shixi%", "%intern%"] };
+    return { text: ["%实习%", "%intern%", "%shixi%"], url: ["%shixi%", "%intern%"] };
   }
   if (profile.experienceStage === "校招") {
     return {
-      text: ["%校招%", "%校园%", "%应届%", "%campus%", "%graduate%", "%届%"],
-      url: ["%campus%"],
+      text: [
+        "%校招%", "%校园%", "%应届%", "%campus%", "%graduate%", "%届%",
+        "%管培生%", "%管理培训生%", "%留学生专项%", "%new grad%", "%entry-level%", "%entry level%",
+      ],
+      url: ["%campus%", "%xiaozhao%"],
     };
   }
   return null;

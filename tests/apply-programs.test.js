@@ -92,3 +92,58 @@ test("分组按固定顺序、空组不出现", () => {
   assert.deepEqual(groups.map((g) => g.type), ["campus_program", "announcement"]);
   assert.deepEqual(groups.map((g) => g.items.length), [1, 1]);
 });
+
+// ── 公告制入口必须指到「打开就看得见公告」的那一层 ────────────────────────
+// 2026-09-07 创始人反馈：13 条公告制里 6 条点进去是企业官网/平台首页，不是公告页。
+// 这里钉的是「这类错必须出声」，不是「自动丢行」——丢了用户连门户都进不去，更糟。
+
+function announcement(entryUrl) {
+  return P.toApplyProgram({ ...ROW, program_type: "announcement", entry_url: entryUrl });
+}
+
+test("公告制入口停在门户根 = 需要补更深的公告页", () => {
+  assert.equal(P.needsDeeperAnnouncementLink(announcement("https://zhaopin.china-cdt.com")), true);
+  assert.equal(P.needsDeeperAnnouncementLink(announcement("https://rencaishichang.chd.com.cn/")), true);
+});
+
+test("指到公告列表 / 公告全文 / hash 路由公告页都算合格", () => {
+  const ok = [
+    "https://zhaopin.chinacoal.com/notice",
+    "https://zhaopin.china-cdt.com/zpgg_index.html",
+    "https://zhaopin.sgcc.com.cn/sgcchr/static/recrAument.html",
+    "https://www.bankofchina.com/aboutboc/bi4/202609/t20260903_25689311.html",
+    // 华电是 hash 路由：路径在 # 后面，不能因为 pathname 是 /w3/ 就判它浅。
+    "https://rencaishichang.chd.com.cn/w3/#/w3/notice/main_view?class_item_pk=10001",
+  ];
+  for (const url of ok) {
+    assert.equal(P.needsDeeperAnnouncementLink(announcement(url)), false, url);
+  }
+});
+
+test("门户根例外必须显式登记，且只对登记过的那一条生效", () => {
+  // 华能：根视图本身就是招聘公告列表，更深路由反而无数据 —— 唯一的合法例外。
+  assert.ok(P.PORTAL_ROOT_IS_ANNOUNCEMENT_LIST.has("https://zhaopin.chng.com.cn/"));
+  assert.equal(P.needsDeeperAnnouncementLink(announcement("https://zhaopin.chng.com.cn/")), false);
+  // 没登记的同类写法不因此被放过。
+  assert.equal(P.needsDeeperAnnouncementLink(announcement("https://zhaopin.chng.com.cn")), true);
+});
+
+test("项目制 / 人才库不受这条约束（它们本来就投在一个入口上）", () => {
+  const pool = P.toApplyProgram({ ...ROW, program_type: "talent_pool", entry_url: "https://www.bosideng.com" });
+  assert.equal(P.needsDeeperAnnouncementLink(pool), false);
+  assert.equal(P.needsDeeperAnnouncementLink(P.toApplyProgram(ROW)), false);
+});
+
+// ── 取数层的缓存必须带时间桶 ─────────────────────────────────────────────
+// 2026-09-07 线上复现：迁移落库 16 分钟后 /programs 仍在发改前的整表快照
+// （华能那条核实日期还写着 9/5），而 revalidate:600 一次都没触发重建、且不报错。
+// 这一页的全部价值就是「入口是人工核实过的、最新的」，陈旧几小时正好打在要害上。
+test("apply-programs 缓存带时间桶，不只靠 revalidate 的后台重验证", () => {
+  const fs = require("node:fs");
+  const src = fs.readFileSync(
+    require("node:path").join(__dirname, "..", "lib", "apply-programs-store.ts"), "utf8",
+  );
+  assert.match(src, /Math\.floor\(Date\.now\(\) \/ \(TTL_SECONDS \* 1000\)\)/,
+    "缓存键必须带时间桶（见 lib/insight-library-store 同一个坑）");
+  assert.match(src, /async \(_bucket: number\)/, "桶要真的进 unstable_cache 的参数，否则等于没加");
+});

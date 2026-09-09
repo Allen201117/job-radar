@@ -21,11 +21,14 @@
   （live 对拍 5 条，4 条 postId 一致、第 5 条 postId 变了而标题正文不变）。
 """
 import json
+import logging
 from typing import List, Optional
 
 import httpx
 
 from .base import BaseAdapter, RawJob, resolve_detail_cap
+
+logger = logging.getLogger(__name__)
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -72,12 +75,20 @@ class TencentCampusAdapter(BaseAdapter):
                 # ⚠️ 分页参数是 **pageIndex**，不是 pageNum/page/pageNo —— 后三者一律被静默忽略、
                 # 每页都返回同一批 50 条（live 逐个对拍过：只有 pageIndex 会让首条 position 从 783 变 191）。
                 # 被忽略时接口照样 200 + count=869，不翻页自检就会只入库首页 50 条还以为成功了。
-                response = client.post(self.LIST_URL, json={
-                    "pageIndex": page_no, "pageSize": self.PAGE_SIZE,
-                    "keyword": "", "workCity": "", "positionType": "", "recruitType": 0,
-                })
-                response.raise_for_status()
-                data = (response.json() or {}).get("data") or {}
+                try:
+                    response = client.post(self.LIST_URL, json={
+                        "pageIndex": page_no, "pageSize": self.PAGE_SIZE,
+                        "keyword": "", "workCity": "", "positionType": "", "recruitType": 0,
+                    })
+                    response.raise_for_status()
+                    data = (response.json() or {}).get("data") or {}
+                except Exception:
+                    if page_no == 1:
+                        raise  # 首页失败交给 run.py 记录为 failed
+                    logger.warning(
+                        "tencent_campus: 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）", page_no, len(rows)
+                    )
+                    break  # 后续页尽力而为，保留已抓的行；fetch_complete 由下方与 reported_total 比对天然置 False
                 if self.reported_total is None:
                     self.reported_total = _int_or_none(data.get("count"))
                 page_rows = data.get("positionList") or []

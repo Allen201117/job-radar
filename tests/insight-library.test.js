@@ -30,7 +30,13 @@ function loadTsModule(relPath, deps = {}) {
 }
 
 const V = loadTsModule(path.join("lib", "insight-verification.ts"));
+// 数据层名单与抽屉共用，住在 insight-bundle 里 —— 这个 shim 得把它一并转译进来。
+const B = loadTsModule(path.join("lib", "insight-bundle.ts"), {
+  "./insight-verification": V,
+  "./types": {},
+});
 const L = loadTsModule(path.join("lib", "insight-library.ts"), {
+  "./insight-bundle": B,
   "./insight-verification": V,
   "./types": {},
 });
@@ -376,3 +382,132 @@ test("单条时中位数就是它自己（不能因为改了聚合口径把正�
   const index = L.buildLibraryIndex([subject()], [one], COMPANIES, NOW);
   assert.equal(L.filterSubjects(index, { metric: "overtime_level", metricMax: 2 }).length, 1);
 });
+
+// ── 洞察库只收信息差：数据层的排除名单 ─────────────────────────────────
+// 2026-09-07 线上实测的故障：只有「索引 / 卡面」两处过滤了 origin=derived，
+// 「展开全部」那一处漏了 —— 而库里带 subject_id 的行全部是 derived，
+// 于是波克城市卡面写「说法 1 条」，点开是 7 条清一色的数据层。
+// 下面三条把「排除名单」「取数点共用」「筛选项不透传已撤维度」钉死。
+
+test("数据层三类一律不收：派生结构分布 / 年报数字 / 上市状态", () => {
+  const derived = signalItem();
+  const filing = signalItem({
+    origin: "official_filing",
+    assertion: "fact",
+    subject_id: null,
+    metric_key: null,
+    content: "据 2025 年年报，在职员工 31,213 人；技术人员占 21%。",
+  });
+  const listing = signalItem({
+    origin: "wikidata",
+    assertion: "fact",
+    dimension: "listing",
+    metric_key: "listing_status",
+    content: "据 Wikidata 公开资料，58同城 为已上市公司。",
+  });
+  for (const item of [derived, filing, listing]) {
+    assert.equal(L.isLibraryContent(item), false, `${item.origin}/${item.dimension} 应被排除`);
+  }
+});
+
+test("真信息差照收：公开说法、以及人工录入的招聘时机", () => {
+  const claim = signalItem({
+    origin: "public_web",
+    assertion: "claim",
+    dimension: "culture",
+    metric_key: "overtime_level",
+    content: "据公开讨论，加班较多。",
+  });
+  const timing = signalItem({
+    origin: "manual",
+    assertion: "fact",
+    dimension: "timing",
+    metric_key: null,
+    content: "据公开信息，财年切换前后 HC 相对偏紧。",
+  });
+  assert.equal(L.isLibraryContent(claim), true);
+  assert.equal(L.isLibraryContent(timing), true);
+});
+
+test("已撤下的维度不许再从查询串进来（否则用户读成「这家没数据」）", () => {
+  assert.ok(L.LIBRARY_EXCLUDED_DIMENSIONS.includes("listing"));
+  const f = L.parseLibraryFilters(new URLSearchParams("dimension=listing"));
+  assert.equal(f.dimension, undefined, "listing 已整维撤下，透传它必然筛出 0 条");
+  const ok = L.parseLibraryFilters(new URLSearchParams("dimension=culture"));
+  assert.equal(ok.dimension, "culture");
+});
+
+test("取数层的四个点共用同一份排除名单，不许再手写 neq(origin, derived)", () => {
+  const store = fs.readFileSync(path.join(__dirname, "..", "lib", "insight-library-store.ts"), "utf8");
+  // 只看代码行：注释里刻意留着这个写法当反面教材。
+  const code = store
+    .split("\n")
+    .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .join("\n");
+  assert.equal(
+    /\.neq\(\s*["']origin["']/.test(code),
+    false,
+    "别在取数点手写 origin 过滤，一律走 libraryScope（上一版就是漏了一处）",
+  );
+  // 三条 insight_items 查询（索引 / 按 subject / 按 company）都必须被 libraryScope 包住。
+  const queries = store.match(/from\("insight_items"\)/g) || [];
+  const scoped = store.match(/libraryScope\(/g) || [];
+  assert.equal(queries.length, 3, "insight_items 的取数点数量变了，请确认每一处都过了 libraryScope");
+  assert.equal(
+    scoped.length,
+    queries.length,
+    "libraryScope 的调用点数 ≠ insight_items 取数点数，必有一处漏过滤",
+  );
+});
+
+test("主题标签有语义色且文字用 ink-1（同族 fg 在浅底上过不了 AA）", () => {
+  assert.equal(L.metricTone("overtime_level"), "amber");
+  assert.equal(L.metricTone("interview_rounds"), "sky");
+  assert.equal(L.metricTone("bonus_months"), "green");
+  assert.equal(L.metricTone("从没见过的键"), "neutral");
+  const cls = L.metricChipClass("overtime_level");
+  assert.match(cls, /bg-tone-amber-bg/);
+  assert.match(cls, /\bink-1\b/, "标签文字必须是 ink-1，别退回 text-tone-*-fg / ink-3");
+  assert.equal(/t-micro/.test(cls), false, "11px 是改前那版看不见的字号");
+});
+
+// ── 数据层名单必须被「洞察库」与「岗位卡抽屉」两个面共用 ──────────────────
+// 2026-09-07 创始人先撤洞察库的数据层，再撤抽屉里的年报数字。两处各写一份名单，
+// 迟早出现「一个面撤了、另一个面还在显示」。名单住在 lib/insight-bundle。
+
+test("洞察库的 origin 排除名单就是共用的那一份，不许在库这边另写一份", () => {
+  const bundle = fs.readFileSync(path.join(__dirname, "..", "lib", "insight-bundle.ts"), "utf8");
+  assert.match(bundle, /export const DATA_LAYER_ORIGINS = \["derived", "official_filing"\]/);
+  assert.deepEqual([...L.LIBRARY_EXCLUDED_ORIGINS], ["derived", "official_filing"]);
+});
+
+test("抽屉与徽章计数两条读路都过同一份名单（否则徽章说有洞察、点开是空的）", () => {
+  const drawer = fs.readFileSync(path.join(__dirname, "..", "app", "api", "insights", "route.ts"), "utf8");
+  const availability = fs.readFileSync(
+    path.join(__dirname, "..", "app", "api", "insights", "availability", "route.ts"), "utf8",
+  );
+  for (const [name, src] of [["抽屉 /api/insights", drawer], ["徽章计数 /api/insights/availability", availability]]) {
+    assert.match(src, /DATA_LAYER_ORIGINS_FILTER/, `${name} 必须用共用的数据层过滤`);
+    const code = src.split("\n").filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line)).join("\n");
+    assert.equal(
+      /\.neq\(\s*["']origin["']/.test(code),
+      false,
+      `${name} 别再手写 neq(origin, derived)`,
+    );
+  }
+});
+
+test("洞察库比抽屉多撤上市状态那一维（抽屉是看岗位顺带了解公司，上市与否还算上下文）", () => {
+  const listing = { origin: "wikidata", dimension: "listing", metric_key: "listing_status" };
+  assert.equal(L.isLibraryContent(listing), false);
+  // 但它不属于共用的数据层名单 —— 抽屉照常显示。
+  assert.equal(B_isDataLayer(listing), false);
+});
+
+function B_isDataLayer(item) {
+  const B = loadTsModule(path.join("lib", "insight-bundle.ts"), {
+    "./insight-verification": V,
+    "./types": {},
+  });
+  return B.isDataLayerItem(item);
+}

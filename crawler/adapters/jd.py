@@ -60,15 +60,25 @@ class JdAdapter(BaseAdapter):
                 "jobSearch": "",
                 "depTypeJson": "[]",
             }
-            resp = httpx.post(
-                self.API_URL,
-                headers=headers,
-                data=data,
-                timeout=self.timeout,
-                follow_redirects=True,
-            )
-            resp.raise_for_status()
-            payload = resp.json()
+            try:
+                resp = httpx.post(
+                    self.API_URL,
+                    headers=headers,
+                    data=data,
+                    timeout=self.timeout,
+                    follow_redirects=True,
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+            except Exception:
+                if page == 1:
+                    raise  # 首页失败交给 run.py 记录为 failed
+                logger.warning(
+                    "jd: 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）", page, len(rows)
+                )
+                self.reported_total = None
+                self.fetch_complete = False
+                break  # 后续页尽力而为，保留已抓的行
             page_rows = payload if isinstance(payload, list) else _find_job_list(payload)
             rows.extend(page_rows)
             if len(page_rows) < self.PAGE_SIZE:

@@ -1,5 +1,6 @@
 """美团招聘公开岗位 API 适配器（零登录、零浏览器）。"""
 import json
+import logging
 import re
 import time
 import uuid
@@ -10,6 +11,8 @@ import httpx
 import normalizer
 from .base import BaseAdapter, RawJob
 from .china_location import is_china_company_location
+
+logger = logging.getLogger(__name__)
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -66,9 +69,17 @@ class MeituanAdapter(BaseAdapter):
                     "u_query_id": uuid.uuid4().hex,
                     "r_query_id": f"{int(time.time() * 1000)}{page_no}",
                 }
-                response = client.post(self.API_URL, json=payload)
-                response.raise_for_status()
-                data = ((response.json() or {}).get("data") or {})
+                try:
+                    response = client.post(self.API_URL, json=payload)
+                    response.raise_for_status()
+                    data = ((response.json() or {}).get("data") or {})
+                except Exception:
+                    if page_no == 1:
+                        raise  # 首页失败交给 run.py 记录为 failed
+                    logger.warning(
+                        "meituan: 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）", page_no, len(rows)
+                    )
+                    break  # 后续页尽力而为，保留已抓的行；fetch_complete 由下方与 reported_total 比对天然置 False
                 if self.reported_total is None:
                     page = data.get("page") if isinstance(data.get("page"), dict) else {}
                     total = _int_or_none(page.get("totalCount"))

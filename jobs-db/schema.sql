@@ -96,6 +96,33 @@ create table if not exists job_events (
 create index if not exists idx_job_events_job_time on job_events (job_id, occurred_at desc);
 create index if not exists idx_job_events_type_time on job_events (event_type, occurred_at desc);
 
+-- ── 撤岗墓碑：岗位行被 purge 物理删除后，唯一活下来的「这个岗曾被确认关闭」的证据 ──────────
+-- 为什么需要它（2026-09-08 立，修 F1）：
+--   purge-expired 每天 `delete from jobs where status='expired'`（近 14 天实测均值 **2,871 行/天**、
+--   合计 40,199 行），而 job_events.job_id 是 ON DELETE CASCADE → CLOSED 事件跟着一起没。
+--   于是 jobs_db._find_existing_id_by_canonical 按 canonical 查不到任何行 → 走 fresh INSERT →
+--   同一个岗以**全新 uuid + 全新 first_seen_at** 变回 active。
+--   而 wt/hotjob 的列表本来就夹带已关闭岗（52% / 71%，见 CLAUDE.md），所以这条链是真能跑通的：
+--   判死 → purge → 列表再见 → 又变新岗。sticky-expired 只保护「行还在」的情况，救不了已删的身份。
+-- ⚠️ 刻意**不做**「命中墓碑就拒绝入库」：公司确实会重开同一个岗位链接，一刀切拒收 = 把真机会永久
+--   删掉，违反「宁可漏判不可错杀」。所以本表先只做两件事：① 保住关闭证据；② 用 reopen_count/
+--   reopened_at 把「复活率」变成**可查询的数字**——在拿到这个数字之前，任何拦截策略都是拍脑袋。
+create table if not exists job_closures (
+  canonical_jd_url text primary key,
+  job_id           uuid not null,          -- 被删那一行的 id；**刻意不做外键**（那一行马上就要被删掉）
+  source_id        uuid,
+  company          text,
+  title            text,
+  first_seen_at    timestamptz,            -- 原始首次见到时间，复活时可用来判断「这真是新岗吗」
+  closed_at        timestamptz not null,   -- 探活确认撤岗的时刻（confirmed_closed_at，缺失则用 purge 时刻）
+  purged_at        timestamptz not null default now(),
+  reason           text,
+  reopened_at      timestamptz,            -- 最近一次「同 canonical 又被当新岗插进来」的时刻
+  reopen_count     integer not null default 0
+);
+create index if not exists job_closures_closed_at_idx on job_closures (closed_at desc);
+create index if not exists job_closures_reopened_idx on job_closures (reopened_at desc) where reopened_at is not null;
+
 -- ── canonical_jd_url 归一（与 lib/canonical-url.js / crawler/normalizer.py / 迁移144 字节级一致；改一处必同改）──
 create or replace function canonicalize_jd_url(u text)
 returns text language plpgsql immutable as $function$
@@ -264,16 +291,24 @@ create trigger jobs_recruitment_class_guard_trg
 -- **内联**成常量折叠后的那串 OR-of-LIKE，与召回 SQL 里的 where 子句结构完全相同 → 谓词匹配成立。
 -- ⚠️ 改这里必须同步改 lib/jobs-store/opportunities.ts 的 stageRecallPatterns，否则谓词不再匹配、
 -- 索引会被 planner 静默忽略（不报错，只是又变慢）。改完用 EXPLAIN 确认仍走 *_campus_gin / *_intern_gin。
+-- ⚠️ 这里的词表必须是 lib/china-keyword-expansion.js 里 sourceDeclaredCategory + hasStrongCampusSignal
+-- + hasInternSignal 在 **title / job_type / jd_url 三个字段上**全部正向信号的**超集**，
+-- 否则「后置判它符合、前置压根没召回」（2026-09-08 修的 F8）：标题叫「管培生」的在招校招岗
+-- 六个旧词一个都不含 → 校招用户在 /today 永远看不见它，而 /jobs 页筛得到（那条链走物化列）。
+-- 只许加词、不许减词：加词只会让候选变多（后置门照样精筛），减词=静默漏掉真岗，精度红线。
+-- 📌 已知残差（刻意不修）：hasStrongCampusSignal 还扫 summary，本函数只看三个短字段——
+--    「标题看不出、只有正文写着应届」的岗仍会漏。把 summary 加进索引谓词会显著放大这两个
+--    分区索引，属于要先量后改的容量决策，不在本次修复范围。
 create or replace function job_stage_match(p_title text, p_job_type text, p_jd_url text, p_stage text)
 returns boolean language sql immutable parallel safe as $function$
   select case p_stage
     when 'campus' then
-         lower(p_title) like any(array['%校招%','%校园%','%应届%','%campus%','%graduate%','%届%'])
-      or lower(coalesce(p_job_type,'')) like any(array['%校招%','%校园%','%应届%','%campus%','%graduate%','%届%'])
-      or lower(coalesce(p_jd_url,'')) like any(array['%campus%'])
+         lower(p_title) like any(array['%校招%','%校园%','%应届%','%campus%','%graduate%','%届%','%管培生%','%管理培训生%','%留学生专项%','%new grad%','%entry-level%','%entry level%'])
+      or lower(coalesce(p_job_type,'')) like any(array['%校招%','%校园%','%应届%','%campus%','%graduate%','%届%','%管培生%','%管理培训生%','%留学生专项%','%new grad%','%entry-level%','%entry level%'])
+      or lower(coalesce(p_jd_url,'')) like any(array['%campus%','%xiaozhao%'])
     when 'intern' then
-         lower(p_title) like any(array['%实习%','%intern%'])
-      or lower(coalesce(p_job_type,'')) like any(array['%实习%','%intern%'])
+         lower(p_title) like any(array['%实习%','%intern%','%shixi%'])
+      or lower(coalesce(p_job_type,'')) like any(array['%实习%','%intern%','%shixi%'])
       or lower(coalesce(p_jd_url,'')) like any(array['%shixi%','%intern%'])
     else true
   end
@@ -346,6 +381,12 @@ create index if not exists jobs_recruitment_unclassified_idx on jobs (id) where 
 -- ⚠️ 应用层 SQL 一行没改就生效（靠 job_stage_match 被内联后与 where 子句结构相同）。
 -- 社招（无阶段过滤）用不到这两个索引，仍走全量 jobs_search_doc_gin —— 已知边界，不是漏配。
 -- 生产上首次创建请用 CONCURRENTLY；本文件是幂等重建用，普通 create 即可。
+-- ⚠️ **改了 job_stage_match 的词表就必须重建这两个索引**，所以这里先 drop 再 create。
+-- 原因：索引条目是按**建索引那一刻**的谓词算出来的，`create or replace function` 不会回头
+-- 重算它们。只换函数不重建 = 新词命中的行根本不在索引里，而 planner 仍然认为这个部分索引
+-- 覆盖了整个 where 条件 → **静默少返回岗位**，不报错、不变慢，只是查不到（比漂移更隐蔽）。
+drop index if exists jobs_search_doc_campus_gin;
+drop index if exists jobs_search_doc_intern_gin;
 create index if not exists jobs_search_doc_campus_gin on jobs using gin (search_doc)
   where status = 'active' and job_stage_match(title, job_type, jd_url, 'campus');
 create index if not exists jobs_search_doc_intern_gin on jobs using gin (search_doc)

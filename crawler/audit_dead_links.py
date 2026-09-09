@@ -20,6 +20,7 @@
   python3 audit_dead_links.py --sweep agirobot --apply # 全量逐岗审计某源(source_url 子串)
 只读为主；仅 --apply 写 status / enrich_checked_at。绝不打印密钥。
 """
+import re
 import sys
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -63,12 +64,36 @@ _BROWSER_ADAPTERS = (
     "xiaohongshu", "oppo", "baidu",
 )
 
-DEAD_MARKERS = [
-    "职位不存在", "岗位不存在", "该职位不存在", "职位已下线", "已下线", "职位已关闭",
-    "岗位已关闭", "已结束", "停止招聘", "已招满", "职位已过期", "岗位不存在",
-    "职位不见了", "page not found", "not found", "404", "this job is no longer",
-    "position is no longer", "no longer available", "已失效", "招聘已结束",
+# 判死信号分两档（2026-09-08 拆分，修 F2）。
+#
+# 拆分前是一张扁平表，对**整个 body 全文**做裸子串匹配，于是一个正常在招的岗位——
+# 标题「软件工程师」、正文「…职位编号 404123，负责推荐系统研发…」——会命中裸词 "404" 被判 dead，
+# 而 dead 在 --apply 下当场置 expired，次日被 purge-expired **永久删除**。
+# 这直接违反 CLAUDE.md 的红线「宁可漏判不可错杀」：漏判一个死岗只是脏数据，错杀一个在招岗是把
+# 用户真能投的机会删掉，且不可逆。
+#
+# 强信号：整句话语义上只可能是「这个岗没了」，正常 JD 正文里不会出现 → 即使页面同时渲染出岗位标题也判死。
+DEAD_MARKERS_STRONG = [
+    "职位不存在", "岗位不存在", "该职位不存在", "职位已下线", "职位已关闭",
+    "岗位已关闭", "停止招聘", "已招满", "职位已过期", "职位不见了",
+    "page not found", "this job is no longer", "position is no longer",
+    "no longer available", "招聘已结束",
 ]
+# 弱信号：**正常在招页面里也可能出现**，只有在「页面根本没渲染出这个岗的标题」时才敢用。
+#   · "404"    → 职位编号 / 门牌号 / 邮编里都有；真 404 页几乎不会同时渲染出岗位标题
+#   · "已结束" → 页脚「活动已结束」「报名已结束」是常见运营文案
+#   · "已下线" → 页面上别的条目下线也会出现（强信号里已有「职位已下线」）
+#   · "已失效" / "not found" → 同理，多为片段文案（强信号里已有「page not found」）
+DEAD_MARKERS_WEAK = ["404", "not found", "已结束", "已下线", "已失效"]
+
+# "404" 必须是独立数字，不能是更长数字的一截（职位编号 404123 / 邮编 404100 一律不算）。
+_BARE_404 = re.compile(r"(?<!\d)404(?!\d)")
+
+
+def _weak_marker_hit(marker, text, low):
+    if marker == "404":
+        return bool(_BARE_404.search(text))
+    return marker in text or marker.lower() in low
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
@@ -271,20 +296,29 @@ def fetch_browser_liveness(sb, limit, shard="0/1", host_filter=None, jobs_conn=N
 
 
 def classify(page, title):
+    """渲染后判活死。顺序是设计的一部分：强信号 → （标题不在场时才看）弱信号 → 标题在场=alive。
+
+    ⚠️ 不要把弱信号提到标题检查之前——那正是 F2 的原始缺陷：正文里一个 "404" 就能把在招岗
+    判死并在次日被永久删除。判死是不可逆操作，证据不足时必须落到 suspect/unsure 而不是 dead。"""
     try:
         text = page.inner_text("body", timeout=4000) or ""
     except Exception:
         text = ""
     low = text.lower()
-    for m in DEAD_MARKERS:
+    key = (title or "").strip()[:8]
+    title_present = bool(key) and key in text
+
+    for m in DEAD_MARKERS_STRONG:
         if m in text or m.lower() in low:
             return "dead", m
-    key = (title or "").strip()[:8]
-    if key and key in text:
-        return "alive", "title-present"
-    if len(text.strip()) < 40:
-        return "unsure", "empty/blocked"
-    return "suspect", "title-absent"
+    if not title_present:
+        for m in DEAD_MARKERS_WEAK:
+            if _weak_marker_hit(m, text, low):
+                return "dead", m
+        if len(text.strip()) < 40:
+            return "unsure", "empty/blocked"
+        return "suspect", "title-absent"
+    return "alive", "title-present"
 
 
 def main():

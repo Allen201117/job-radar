@@ -284,13 +284,22 @@ def compute_trends(snapshots: list[dict], today_active: int, now: datetime) -> l
 
 # ── IO 区 ────────────────────────────────────────────────────────────────
 def fetch_subjects(supabase) -> list[dict]:
-    """所有非 rejected 的主体。rejected 是人工治理结论，不该被派生层复活。"""
+    """只取 active 主体。rejected 与 retired 都是治理结论，不该被派生层复活（I4c 修复）。
+
+    retired 有两种来源：bu_extract 判该业务线本轮岗位标题里已扫不到 → 自动退役；
+    或 admin 在 /api/insights/admin/subjects 手动下架（同时会把该主体名下条目一起退役）。
+    旧实现把 retired 与 active 同等对待纳入派生，于是只要当前在招岗数仍达标（比如
+    admin 因噪声下架的业务线，job 标题其实还在），plan_subject_rows 复用旧行 id、
+    _item_row 无脑写 status='active'，下一轮重算就把刚被下架的条目原地写回 active——
+    治理动作等于白做。重新激活是 bu_extract.apply_plan 的职责（业务线重新进入候选名单
+    时会把 subject 状态改回 active），不该由这条派生链越权决定。
+    """
     rows = db.fetch_all_rows(
         lambda: supabase.table("insight_subjects").select(
             "id,company_id,kind,name,job_count,status"
         )
     )
-    return [r for r in rows if r.get("status") in ("active", "retired")]
+    return [r for r in rows if r.get("status") == "active"]
 
 
 def fetch_company_names(supabase) -> dict:

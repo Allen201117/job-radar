@@ -39,6 +39,24 @@ class JobClosedError(Exception):
     """
 
 
+class DetailUnknownError(RuntimeError):
+    """detail 探测没拿到可判读的响应（403 / 429 / 5xx / 非 JSON / 半截页）。
+
+    ⚠️ 它既不是「在招」也不是「撤岗」（2026-09-08 加，修 F3）。
+    在此之前，liveness-only 的探活器对非 404/410 的任何状态码都 `return ""`，
+    而空串在调用方那里同时表示「已确认在招、只是没有正文」和「这次没探到」——
+    于是 enrich_backlog 对一个 403/限流的响应也照样盖上 enrich_checked_at，
+    产品侧的「最近确认仍在招」和治理看板的「已核验率」双双被灌水：
+    我们把「没探到」写成了「刚确认过」。
+    抛出它 → 调用方的 `except Exception: fetch_err = True` 分支 → 记 miss 重试，不盖戳、不改状态。"""
+
+
+def _raise_if_unknown(r):
+    """非 2xx（且已排除 404/410 撤岗）一律判 unknown。**先调 _raise_if_gone 再调它。**"""
+    if r.status_code >= 300:
+        raise DetailUnknownError(f"detail unknown (HTTP {r.status_code})")
+
+
 def _raise_if_gone(r):
     """通用撤岗约定：任何 ATS 的 detail 端点返回 404/410 = 岗位已下架 → JobClosedError。
     每个 fetcher 拿到响应后调一行即继承该约定，杜绝逐源遗漏（统一底座）。
@@ -224,7 +242,8 @@ def _detail_amazon(row, src):
     # amazon.jobs 逐岗 .json 被 Akamai 拦（404/406）；但 HTML 逐岗页 httpx 可直连：
     # 在招→200，撤岗/不存在→404（live 验证 bogus id 直接 404）。liveness-only（正文由列表自带）。
     r = httpx.get(row["jd_url"], headers={**UA, "Accept": "text/html,application/xhtml+xml"}, timeout=TIMEOUT)
-    _raise_if_gone(r)  # 404/410 = 岗位已撤
+    _raise_if_gone(r)      # 404/410 = 岗位已撤
+    _raise_if_unknown(r)   # 403/429/5xx = 没探到，不是「确认在招」（Akamai 拦截在这条链上很常见）
     return ""
 
 
@@ -236,7 +255,8 @@ def _detail_apple(row, src):
         return ""
     r = httpx.get(f"https://jobs.apple.com/api/v1/jobDetails/{m.group(1)}",
                   headers={**UA, "Referer": "https://jobs.apple.com/"}, timeout=TIMEOUT)
-    _raise_if_gone(r)  # 404 = 岗位已撤
+    _raise_if_gone(r)      # 404 = 岗位已撤
+    _raise_if_unknown(r)   # 其余非 2xx = 没探到，不是「确认在招」
     return ""
 
 
@@ -351,7 +371,8 @@ def _detail_tencent(row, src):
     try:
         j = r.json() or {}
     except Exception:
-        return ""  # 非 JSON（真 5xx/限流）→ miss，不判死
+        # 非 JSON（真 5xx/限流）→ unknown：既不判死，也不许当成「确认在招」盖戳。
+        raise DetailUnknownError("tencent detail non-JSON response")
     if str(j.get("Code")) == "500" and str(j.get("Data")) == "E1005":
         raise JobClosedError(f"tencent postId={pid} closed (E1005)")
     data = j.get("Data")

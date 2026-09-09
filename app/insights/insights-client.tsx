@@ -19,6 +19,7 @@ import {
   FRESHNESS_LABEL,
   GRADE_LABEL,
   METRIC_LABEL,
+  metricChipClass,
   missingContributionTopics,
   type LibraryCardMetric,
   type LibraryFacets,
@@ -444,7 +445,7 @@ function PromiseLegend() {
           return (
             <div key={a} className="flex items-start gap-2">
               <span
-                className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 t-micro font-semibold ${chip.cls}`}
+                className={`mt-px shrink-0 rounded-full px-2.5 py-1 t-caption font-semibold ${chip.cls}`}
               >
                 {ASSERTION_LABEL[a]}
               </span>
@@ -538,7 +539,10 @@ function SubjectCard({
           {ASSERTION_ORDER.filter((a) => subject.assertion_counts[a] > 0).map((a) => {
             const chip = assertionChip(a, "fact", null, 2, null);
             return (
-              <span key={a} className={`rounded-full px-2 py-0.5 t-micro font-semibold ${chip.cls}`}>
+              <span
+                key={a}
+                className={`rounded-full px-2.5 py-1 t-caption font-semibold ${chip.cls}`}
+              >
                 {ASSERTION_LABEL[a]} {subject.assertion_counts[a]}
               </span>
             );
@@ -550,12 +554,13 @@ function SubjectCard({
         <ul className="mt-3.5 grid gap-2">
           {(subject.cards || []).map((m) => (
             <li key={`${m.metric_key}-${m.content.slice(0, 12)}`} className="flex items-start gap-2">
-              {/* 官方年报这类事实没有主题键，别渲染成一个空芯片 */}
+              {/* 主题标签是卡面的扫读锚点：有底色、有边、12px（见 metricChipClass 的注释）。
+                  没有主题键的条目（如人工录入的招聘时机）不渲染空芯片。 */}
               {m.metric_key && (
-                <span className="mt-[3px] shrink-0 rounded px-1.5 py-0.5 t-micro ink-3 ring-1 ring-inset ring-black/[0.06] dark:ring-white/[0.1]">
+                <span className={`mt-px shrink-0 ${metricChipClass(m.metric_key)}`}>
                   {METRIC_LABEL[m.metric_key] || m.metric_key}
                   {gradeText(m.metric_key, m.metric_value) && (
-                    <span className="ink-1"> · {gradeText(m.metric_key, m.metric_value)}</span>
+                    <span className="font-bold"> · {gradeText(m.metric_key, m.metric_value)}</span>
                   )}
                 </span>
               )}
@@ -639,20 +644,22 @@ function ItemRow({ item }: { item: InsightItemView }) {
   return (
     <li className="rounded-xl border border-black/[0.06] bg-white/55 p-3.5 dark:border-white/[0.1] dark:bg-white/[0.04]">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className={`rounded-full px-2 py-0.5 t-micro font-semibold ${chip.cls}`}>
-          {chip.text}
-        </span>
-        <span className="t-micro ink-3">
-          {DIMENSION_LABEL[item.dimension] || item.dimension}
-        </span>
+        {/* 展开视图与卡面用同一套标签，否则同一条洞察在两处读起来像两条。 */}
         {item.metric_key && (
-          <span className="t-micro ink-4">
+          <span className={metricChipClass(item.metric_key)}>
             {METRIC_LABEL[item.metric_key] || item.metric_key}
-            {gradeText(item.metric_key, item.metric_value ?? null) &&
-              `· ${gradeText(item.metric_key, item.metric_value ?? null)}`}
+            {gradeText(item.metric_key, item.metric_value ?? null) && (
+              <span className="font-bold"> · {gradeText(item.metric_key, item.metric_value ?? null)}</span>
+            )}
           </span>
         )}
-        {item.outdated && <span className="t-micro ink-4">可能已过时</span>}
+        <span className={`rounded-full px-2.5 py-1 t-caption font-semibold ${chip.cls}`}>
+          {chip.text}
+        </span>
+        <span className="t-caption ink-3">
+          {DIMENSION_LABEL[item.dimension] || item.dimension}
+        </span>
+        {item.outdated && <span className="t-caption ink-4">可能已过时</span>}
       </div>
       <p className="mt-2 t-body-sm ink-1">{item.content}</p>
       {(item.sources || []).length > 0 && (

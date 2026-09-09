@@ -21,6 +21,13 @@
 
 3–5 人内测版「公开企业官网岗位雷达看板」。Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgres / RLS）；Python crawler（httpx + selectolax）；GitHub Actions 定时抓取。npm（前端）/ pip（`crawler/requirements.txt`）。Node ≥18.18，Python 3.11+。前端部署 Vercel，crawler 跑 GitHub Actions。
 
+**线上地址 = https://www.myjobradar.top**（创始人 2026-09-08 授权写入，别再问）。实测要点：
+① 页面（/today /jobs /campus…）**要登录**，匿名一律 307 跳 /login —— 只能用创始人已登录的 Chrome 看，
+   Vercel 的 `*.vercel.app` 预览域被部署保护挡着（302 到 Vercel 登录页），不是产品的问题。
+② `/api/jobs/search`、`/api/jobs/stats` **允许匿名**（`app/api/jobs/search/route.ts` 有显式注释说明这是
+   有意为之），所以 curl 就能测这两条，做性能对拍不必开浏览器。
+③ 响应头 `x-vercel-id` 前缀即实际执行区域，正常应看到 `hkg1`（见上文函数区域锁定那条）。
+
 - **⚠️ 函数区域锁定香港 `hkg1`（`vercel.json` 的 `regions`，2026-07-30 加，别删）**：jobs 热表在香港自建 PG，函数默认区是美东 `iad1`，跨太平洋让「建库连接」这一步就要 800~1400ms（内测低流量下 `lib/jobs-store/client.ts` 的 `idleTimeoutMillis:10s` 使几乎每请求都重新握手），实测 `/api/jobs/stats` 曾要 6.6s 甚至超时。诊断方法：`curl -D -` 看响应头 `x-vercel-id`，前缀即实际执行区域。
 - Vercel Hobby 也可选区域（限单区）；**但 Routing Middleware 不跟随该设置、固定全球边缘跑**——middleware 里的跨洋开销只能靠「不联网」消除（见「认证」段的本地 JWT 验签）。
 
@@ -158,6 +165,43 @@
 → 验收报**分项**（A→B 多少条、B→A 多少条），**不许只报净值或总数**；
 → 聚合指标向好时，必须同时确认**没有分项在回归**（逐源/逐类对拍，不是抽样）。
 
+## ⚠️ 撤岗身份：purge 删行前必须先立墓碑（2026-09-08 立，修 F1）
+
+`purge-expired.yml` 每天 `delete from jobs where status='expired'`，**近 14 天实测均值 2,871 行/天、
+合计 40,199 行**。而 `job_events.job_id` 是 `ON DELETE CASCADE` → CLOSED 事件跟着一起没。
+于是 `jobs_db._find_existing_id_by_canonical` 按 canonical 查不到任何行 → 走 fresh INSERT →
+同一个岗以**全新 uuid + 全新 first_seen_at** 变回 active。sticky-expired 只保护「行还在」的情况。
+配合 wt/hotjob 列表本来就夹带已关闭岗（52%/71%），这条链是真能跑通的。
+
+- ✅ 防：`jobs-db/schema.sql` 的 `job_closures` 墓碑表；purge 的**墓碑写入与删除在同一个 `psql -c` 里**
+  （= 同一事务），墓碑失败就整体回滚、一行都不删。**别把它拆成两个 `-c`**——那是两个独立事务。
+- ⚠️ 立墓碑要排除「同 canonical 还有 active 行」：canonical 唯一约束只作用于 active，
+  已关闭旧行与在招新行可并存，给它立墓碑会把一个在招岗记成已关闭。
+- ⚠️ **刻意只记不拦**：命中墓碑就拒收 = 把公司真重开的岗永久删掉，违反「宁可漏判不可错杀」。
+  `jobs_db.mark_reopened_from_closures` 只累加 `reopen_count`/`reopened_at`。
+  **复活率是多少，查 `job_closures` 就知道**——在拿到这个数字之前，任何拦截策略都是拍脑袋。
+- 回归钉在 `crawler/test_job_closures.py`（含「同一事务」与「不加外键」的契约断言）。
+
+## ⚠️ /jobs 默认排序（sortBy=match）冷路径 14~16s，病根是候选传输不是 SQL（2026-09-08 实测）
+
+线上 `https://www.myjobradar.top/api/jobs/search` 实测（匿名、可 curl）：
+
+| 请求 | TTFB |
+|---|---:|
+| `sortBy=newest&limit=10` | 3.25s |
+| `sortBy=match&limit=10`（**= 打开 /jobs 的默认态**） | **14.1~16.6s** |
+| 紧接着同条件 `limit=60`（命中进程内 5 分钟缓存） | 0.56s |
+| `sortBy=match` + `city=北京` | 4.37s |
+
+**别去查数据库和连接池**：同文件注释里的 EXPLAIN ANALYZE 是 **45~73ms**，函数与库都在 `hkg1`、不跨洋。
+大头是**把 28,000 行候选传回函数**——其中 `summary` 占 15MB、其余关键列 4.3MB。
+- 🚫 `summary` 砍不掉：`classifyJobFunction` / `keywordMatchTier` 的兄弟组排除都要读它，
+  砍了是**静默改坏匹配精度**（不报错、不变慢，只是推荐变差）。
+- 🚫 别指望那个进程内 Map 缓存：serverless 多实例命中率≈0，上表 0.56s 那一行是同实例连打才有的。
+  也**别改成 `unstable_cache`**：Next 数据缓存单条约 2MB 上限，19MB 的候选集根本放不进去。
+- ✅ 真正的解法是**物化派生字段**（`job_function` 等落成列，写入时算好，照 `recruitment_category` 的先例），
+  让候选取数根本不需要 summary。属 schema + 全表回填 + 等价性验收，**单独立项**，别顺手改。
+
 ## 数据库迁移（已自动化，勿再手动跑 Supabase）
 
 迁移**不需要再手动进 Supabase SQL Editor 跑**。机制：push 到 `main` 且改动 `supabase/migrations/**` 时，
@@ -173,6 +217,14 @@
   ✅ 排查顺序：先看 migrate CI 日志里 `psql:...: ERROR:` 那一行指的是**哪一行 SQL**，再谈别的。
   ✅ 写 seed 前先确认目标列的 CHECK：`select pg_get_constraintdef(oid) from pg_constraint where conname='<表>_<列>_check';`
   ✅ 改 CHECK 时注意它是「全量重建而非增量」的写法——新迁移必须把旧枚举值一个不落抄全，漏一个会把存量行打成非法。
+  ✅ **上线前拿「临时表 + ROLLBACK」在真库上整份跑一遍**——但临时表必须
+     `create temp table x (like public.x **including all**)`。
+     🚩 用 `including defaults including constraints` 会给**假绿灯**：`LIKE` 默认不复制
+     GENERATED 表达式，`sources.board`（`generated always as classify_source_board(...)`）
+     在临时表里变成普通可写列。2026-09-07 实测同一份迁移 241（显式写了 `board`）：
+     旧写法 `INSERT 0 1` 通过、`including all` 当场 `ERROR: cannot insert a non-DEFAULT
+     value into column "board"`——而线上 migrate CI 报的正是后者，整批回滚。
+     同理漏掉的还有 identity 列、索引、注释；**只要不是 `including all`，绿了也不算数**。
 
 ## 常用命令
 
@@ -197,7 +249,7 @@ python3 run.py --source apple         # 或 siemens / baidu / jd
 
 ```
 app/                     # Next.js App Router 页面
-  page.tsx / today-client.tsx    # Today 今日看板；jobs/ 岗位库、campus/ 校招专区、programs/ 项目制投递
+  page.tsx / today-client.tsx    # Today 今日看板；jobs/ 岗位库、campus/ 校招专区、programs/ 公告制招聘
   preferences/ saved/ applied/   # 偏好 / 值得投 / 已投递
   sources/ admin/insights/ admin/health/   # 均仅管理员：源管理 / 洞察管理 / 运营看板
   login/ auth/callback/          # 登录与 OAuth 回调

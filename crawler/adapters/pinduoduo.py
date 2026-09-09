@@ -1,5 +1,6 @@
 """拼多多校园招聘公开 API 适配器（零登录、零浏览器）。"""
 import json
+import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -7,6 +8,8 @@ import httpx
 
 from .base import BaseAdapter, RawJob
 from .china_location import is_china_company_location
+
+logger = logging.getLogger(__name__)
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -54,16 +57,24 @@ class PinduoduoAdapter(BaseAdapter):
         rows = []
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             for page_no in range(1, self.MAX_PAGES + 1):
-                response = client.post(
-                    self.LIST_URL,
-                    json={"page": page_no, "pageSize": self.PAGE_SIZE, "t": None},
-                )
-                response.raise_for_status()
-                body = response.json() or {}
-                if not body.get("success"):
-                    raise RuntimeError(
-                        f"pinduoduo: list error {body.get('errorCode')} {body.get('errorMsg')}"
+                try:
+                    response = client.post(
+                        self.LIST_URL,
+                        json={"page": page_no, "pageSize": self.PAGE_SIZE, "t": None},
                     )
+                    response.raise_for_status()
+                    body = response.json() or {}
+                    if not body.get("success"):
+                        raise RuntimeError(
+                            f"pinduoduo: list error {body.get('errorCode')} {body.get('errorMsg')}"
+                        )
+                except Exception:
+                    if page_no == 1:
+                        raise  # 首页失败交给 run.py 记录为 failed
+                    logger.warning(
+                        "pinduoduo: 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）", page_no, len(rows)
+                    )
+                    break  # 后续页尽力而为，保留已抓的行；fetch_complete 由下方与 reported_total 比对天然置 False
                 result = body.get("result") or {}
                 if self.reported_total is None:
                     total = _int_or_none(result.get("total"))

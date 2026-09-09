@@ -18,11 +18,14 @@
 live 验证：该 URL 渲染出「【2027校园招聘】AI加速算法工程师」+ 工作性质/职位描述/职位要求全文。
 """
 import json
+import logging
 from typing import List, Optional
 
 import httpx
 
 from .base import BaseAdapter, RawJob
+
+logger = logging.getLogger(__name__)
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -58,13 +61,21 @@ class HikvisionAdapter(BaseAdapter):
                 # ⚠️ 分页参数走 **URL query**，放进 JSON body 会被静默忽略、每页恒返首批 10 条
                 # （live 逐个试过：body 里的 pageNum/pageIndex/current/start 全无效，
                 #  只有 ?pageNum=&pageSize= 能让首条从「AI加速算法工程师」变成「工业设计师」）。
-                response = client.post(
-                    self.LIST_URL,
-                    params={"pageNum": page_no, "pageSize": self.PAGE_SIZE},
-                    json={},
-                )
-                response.raise_for_status()
-                data = (response.json() or {}).get("data") or {}
+                try:
+                    response = client.post(
+                        self.LIST_URL,
+                        params={"pageNum": page_no, "pageSize": self.PAGE_SIZE},
+                        json={},
+                    )
+                    response.raise_for_status()
+                    data = (response.json() or {}).get("data") or {}
+                except Exception:
+                    if page_no == 1:
+                        raise  # 首页失败交给 run.py 记录为 failed
+                    logger.warning(
+                        "hikvision: 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）", page_no, len(rows)
+                    )
+                    break  # 后续页尽力而为，保留已抓的行；fetch_complete 由下方与 reported_total 比对天然置 False
                 if self.reported_total is None:
                     self.reported_total = _int_or_none(data.get("total"))
                 page_rows = data.get("list") or data.get("records") or []

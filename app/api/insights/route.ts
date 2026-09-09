@@ -8,6 +8,7 @@ import { findCompanyProfile } from "@/lib/insight-match";
 import { evaluateInsight, resolveInsightFailure } from "@/lib/insight-verification";
 import {
   INSIGHT_DIMENSIONS,
+  DATA_LAYER_ORIGINS_FILTER,
   ITEM_COLUMNS,
   emptyDimensions,
   groupGatedInsights,
@@ -138,11 +139,15 @@ export async function GET(request: NextRequest) {
       .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
       .eq("company_id", profile.id)
       .eq("status", "active")
-      // ⚠️ 排除 origin='derived'：抽屉的第一方数字由上面 deriveCompanyInsights 读时算，
-      // 而 crawler/bu_signals.py 把同一批指标物化进 insight_items 供洞察库页面按指标筛选。
-      // 两者同源，不排除就会在抽屉里把同一个数字显示两遍。
-      // （后续若把抽屉也切成读物化行，删掉这一行并同时去掉读时派生，不要两者都留。）
-      .neq("origin", "derived");
+      // 排除「数据层」两类 origin（共用 lib/insight-bundle 的 DATA_LAYER_ORIGINS）：
+      //   · derived —— 抽屉的第一方数字由上面 deriveCompanyInsights 读时算，而
+      //     crawler/bu_signals.py 把同一批指标物化进 insight_items 供洞察库按指标筛选。
+      //     两者同源，不排除就会在抽屉里把同一个数字显示两遍。
+      //     （后续若把抽屉也切成读物化行，删掉这一行并同时去掉读时派生，不要两者都留。）
+      //   · official_filing —— 年报数字（在职员工数 / 技术人员占比 / 人均薪酬）。
+      //     2026-09-07 创始人定：这类「年报里写着、自己查一下就有」的不算信息差，
+      //     洞察库撤了之后抽屉也一并撤，两个面共用同一份名单。
+      .not("origin", "in", DATA_LAYER_ORIGINS_FILTER);
     if (itemError) {
       console.error("[insights] 读取 insight_items 失败", itemError.message);
       return NextResponse.json(

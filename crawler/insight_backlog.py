@@ -173,13 +173,24 @@ def _listing_without_exchange(li, company):
 
 def enrich_company(sb, profile):
     """富化单家公司并回写。返回 'ok' | 'noface'（Wikidata 查无）| 'err'。永不抛。"""
+    # ⚠️「请求挂了」和「请求成功但查无此公司」是两件事，混成一种就是 I1（2026-09-08 修）：
+    #   原实现把 Wikidata 异常也转成 facts=None，走同一个分支盖上 insight_checked_at，
+    #   于是一次网络抖动就把这家公司排除出常规队列 **90 天**（TTL_DAYS），且不计失败、无人知晓。
     try:
         facts = wikidata.get_company_facts(profile["company"], profile.get("aliases"))
     except Exception as e:
         print(f"  [wd-err] {profile['company']}: {type(e).__name__}: {str(e)[:140]}")
-        facts = None
+        # 只记失败、**不盖 checked 戳** → 下一轮还会被取到（短重试）；
+        # 连续失败到 MAX_FAIL 自然掉出队列，所以不会一直卡在队首（队列按 insight_fail_count < MAX_FAIL 过滤）。
+        try:
+            sb.table("company_profiles").update({
+                "insight_fail_count": (profile.get("insight_fail_count") or 0) + 1,
+            }).eq("id", profile["id"]).execute()
+        except Exception:
+            pass
+        return "err"
     if not facts:
-        # 查无也记一轮 checked_at（避免每次重试查无的公司）；不算硬失败
+        # 真正「请求成功但查无」才记一轮 checked_at（避免每次重试查无的公司）；不算硬失败
         try:
             sb.table("company_profiles").update({"insight_checked_at": _now()}).eq("id", profile["id"]).execute()
         except Exception:
@@ -390,6 +401,34 @@ GATE_STATS = {"off_topic_blocked": 0, "rerouted": 0}
 _ROUTER = search_router.default_router()  # 多源搜索；未配 key 的源自动跳过（配哪个用哪个）
 
 
+def fetch_upheld_dispute_keys(sb, company_id):
+    """该公司「已成立」申诉命中过的 (dimension, metric_key) 集合（I4b，2026-09-08）。
+
+    只挡「同一断言」这一粒度——申诉证明的是某一条具体结论有问题，不能升级成
+    「这家公司这个维度什么都不能说」，更不能整家公司封禁。判据故意用结构化的
+    (dimension, metric_key)，不用文本哈希：换个措辞复述同一个结论就能绕过哈希，
+    但绕不开它落在同一个指标上这件事。
+    读失败 fail-open（返回空集合、不拦截）——这是成本/可用性闸，不是安全闸，
+    宁可这一轮漏挡一条，也不能因为申诉表读不到就让整条 T3 链停摆。
+    """
+    try:
+        disputes = db.fetch_all_rows(
+            lambda: sb.table("insight_disputes").select("item_id").eq("status", "upheld"))
+        item_ids = [d["item_id"] for d in disputes if d.get("item_id")]
+        if not item_ids:
+            return set()
+        items = db.fetch_all_rows(
+            lambda: sb.table("insight_items").select("id,company_id,dimension,metric_key")
+            .eq("company_id", company_id).in_("id", item_ids))
+        # company_id 再判一次（不只靠查询里的 .eq）：这是跨公司误伤的最后一道防线，
+        # 不依赖任何人记得给查询也带上这个过滤条件。
+        return {(it.get("dimension"), it.get("metric_key")) for it in items
+                if it.get("metric_key") and it.get("company_id") == company_id}
+    except Exception as exc:
+        print(f"  [t3-dispute-gate] 读取已成立申诉失败，本轮不拦截: {type(exc).__name__}: {str(exc)[:120]}")
+        return set()
+
+
 def _pick_sources(results, judge, max_n=3):
     """只取判官明确认定支持该 claim 的来源；绝不拿搜索结果凑展示门。"""
     chosen, seen = [], set()
@@ -436,12 +475,19 @@ def write_experience(sb, company_id, claim, sources, judge, status, dimension="c
         # 保鲜：1 年后过期 → 过期下架巡检(insight_sweep)自动退役；180 天复核会续期。不长期滞留老聚合。
         "valid_until": (datetime.now(timezone.utc) + timedelta(days=365)).date().isoformat(),
     }).execute()
+    quote = claim.get("quote")
     for s in sources:
         sid = str(uuid.uuid4())
+        # I3 修复（2026-09-08）：引文必须真出自「这一条」来源的正文，才能当它的 excerpt。
+        # 旧实现把同一句 claim["quote"] 无差别地复制给 _pick_sources 选中的每一个来源，
+        # 而那句话实际上可能只出自其中一个——其余来源被安上了它们并没有说过的话。
+        # 判据复用 E.quote_supported()（归一 + 子串判定，容忍空白/标点/全半角），
+        # 与 run_pipeline 抽取阶段同一口径，不另造一份。
+        excerpt_text = quote if quote and E.quote_supported(quote, [s.get("text")]) else s.get("snippet")
         sb.table("insight_sources").insert({
             "id": sid, "url": s["url"], "publisher": s.get("publisher"),
             "source_kind": "community_deidentified",
-            "excerpt": (claim.get("quote") or s.get("snippet") or "")[:200],
+            "excerpt": (excerpt_text or "")[:200],
             "deidentified": True,
         }).execute()
         sb.table("insight_item_sources").insert({"item_id": item_id, "source_id": sid}).execute()
@@ -506,6 +552,8 @@ def enrich_company_t3(sb, profile):
     run_start = _now()
     wrote_any = False
     wrote_active = False
+    written_dims = set()   # 本轮真正写出 active 的维度 —— 退役只许波及这些维度（见下方 I2 注释）
+    topics_attempted = 0   # 真进过检索的主题数；全程 0 = 这轮什么都没做，不能假装「已复核」
     # 主题门的计数：拦掉多少、转投多少。绝不静默——「跑绿了」不等于「产出是对的」。
     off_topic_blocked = 0
     rerouted = 0
@@ -515,12 +563,16 @@ def enrich_company_t3(sb, profile):
     # 所以 cap 的单位就是「真实 LLM 调用次数」，与 llm_budget 语义一致。
     # 粒度取「每公司结算一次」：最坏超出一家公司的用量（~11 次），换掉逐次调用的跨洋往返。
     llm_calls_before = E.llm_usage_totals().get("calls", 0)
+    # I4b：该公司此前已成立的申诉命中过哪些 (dimension, metric_key)——命中的断言
+    # 本轮即使判官判 active，也只能降级为 pending_review，不能直接重新对外展示。
+    blocked_dispute_keys = fetch_upheld_dispute_keys(sb, profile["id"])
     for pack in T3_QUERY_PACK:
         if _ROUTER.remaining_above_reserve(sb) <= 0:
             break  # 搜索额度触到「校招预留线」→ 剩余主题留到下轮（见 search_router.campus_reserve）
         if llm_budget.remaining(sb) <= 0:
             print(f"  [t3] {profile['company']}: LLM 日顶已到，剩余主题留到下轮")
             break
+        topics_attempted += 1
         try:
             results = _ROUTER.search(sb, pack["query"].format(c=profile["company"]))
             results, host_denied = filter_t3_results(results)
@@ -557,11 +609,22 @@ def enrich_company_t3(sb, profile):
                     rerouted += 1
                     GATE_STATS["rerouted"] += 1
                     print(f"  [t3-gate] {profile['company']}/{pack['topic']} → 转投 {metric_key}")
-                write_experience(sb, profile["id"], claim, sources, judge, entry["status"],
-                                 dimension=routed_dim or pack["dimension"], topic=pack["topic"],
+                dimension = routed_dim or pack["dimension"]
+                entry_status = entry["status"]
+                # I4b：同一断言曾被申诉且申诉成立过 → 这轮判官再判 active 也只能先落
+                # pending_review，等人工复核，不许原样重新对外展示（粒度=dimension+metric_key，
+                # 不是整个维度/整家公司封禁）。
+                if entry_status == "active" and (dimension, metric_key) in blocked_dispute_keys:
+                    entry_status = "pending_review"
+                    print(f"  [t3-dispute-gate] {profile['company']}/{pack['topic']} "
+                          f"命中已成立申诉（{dimension}/{metric_key}），降级为 pending_review")
+                write_experience(sb, profile["id"], claim, sources, judge, entry_status,
+                                 dimension=dimension, topic=pack["topic"],
                                  metric_key=metric_key)
                 wrote_any = True
-                wrote_active = wrote_active or entry["status"] == "active"
+                if entry_status == "active":
+                    wrote_active = True
+                    written_dims.add(dimension)
         except Exception as e:
             print(f"  [t3-err] {profile['company']}/{pack['topic']}: {type(e).__name__}: {str(e)[:120]}")
             continue
@@ -574,11 +637,23 @@ def enrich_company_t3(sb, profile):
         llm_budget.check_and_consume(sb, kind="insight_t3", n=_spent)
 
     try:
-        if wrote_active:
-            # 退役本次之前的 public_web active（跨维度），换最新一代
+        if written_dims:
+            # 换代只替换**本轮真正写出新版的那些维度**（2026-09-08 修 I2）。
+            # 原实现只要本轮任意一条 active 落库，就按「公司 + origin + status + 时间」把该公司
+            # 之前所有 public_web active 一律退役，**没有维度限定**。于是「加班文化」这一个主题成功、
+            # 「晋升发展」那个主题因搜索异常/额度耗尽/主题门拦截没产出时，晋升发展上一轮的有效内容
+            # 会被连坐退掉 —— 用户那一栏直接变空，而我们并没有任何新证据说它不成立。
+            # 请求失败不能解释成「旧信息不成立」。
             sb.table("insight_items").update({"status": "retired"}) \
                 .eq("company_id", profile["id"]).eq("origin", "public_web").eq("status", "active") \
+                .in_("dimension", sorted(written_dims)) \
                 .lt("last_verified_at", run_start).execute()
+        if topics_attempted == 0:
+            # 一个主题都没进过检索（开跑就撞额度）= 这轮什么都没做。盖 t3_checked_at 会把这家公司
+            # 排除出队列 180 天（T3_TTL_DAYS）却零产出 —— 那正是 I1。不盖戳，下轮额度恢复后接着取。
+            # 注：只在「零主题」这一种情形下不盖戳，所以不存在「永远重做同一家」的死循环。
+            print(f"  [t3] {profile['company']}: 额度不足，本轮零主题，不推进复核时间")
+            return "empty"
         sb.table("company_profiles").update({"t3_checked_at": _now()}).eq("id", profile["id"]).execute()
     except Exception:
         try:

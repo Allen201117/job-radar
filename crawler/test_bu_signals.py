@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 import bu_extract
 import bu_signals as S
@@ -166,6 +167,27 @@ class OwnershipConsistencyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FetchSubjectsTest(unittest.TestCase):
+    """I4c 回归：retired 主体必须跟 rejected 一样被派生层排除。
+
+    旧实现把 status in ('active','retired') 都纳入派生：一个被 admin 治理下架（或被
+    bu_extract 自动退役）的主体，只要当前在招岗数仍达标，plan_subject_rows 就会复用
+    旧行 id、把它的 insight_items 原地写回 status='active'——治理动作被下一轮派生
+    悄悄撤销。重新激活应由 bu_extract（业务线重新进入候选名单时）决定，不该由这条
+    派生链越权。
+    """
+
+    def test_only_active_subjects_survive_the_filter(self):
+        rows = [
+            {"id": "s-active", "status": "active"},
+            {"id": "s-retired", "status": "retired"},
+            {"id": "s-rejected", "status": "rejected"},
+        ]
+        with mock.patch.object(S.db, "fetch_all_rows", return_value=rows):
+            result = S.fetch_subjects(None)
+        self.assertEqual([r["id"] for r in result], ["s-active"])
 
 
 class WritePlanTest(unittest.TestCase):

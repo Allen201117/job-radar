@@ -7,12 +7,15 @@ join.tencentmusic.com 是 Nuxt SSR+SPA，但岗位数据走公开 JSON 接口（
 列表行自带 duty（岗位描述）作 summary，无需逐岗 detail。
 """
 import json
+import logging
 from typing import List, Optional
 
 import httpx
 
 import normalizer
 from .base import BaseAdapter, RawJob
+
+logger = logging.getLogger(__name__)
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -43,9 +46,17 @@ class TencentMusicAdapter(BaseAdapter):
         total: Optional[int] = None
         for page in range(1, self.MAX_PAGES + 1):
             payload = dict(payload_base, page=page, ss=self.PAGE_SIZE)
-            resp = client.post(api, json=payload)
-            resp.raise_for_status()
-            data = (resp.json() or {}).get("data") or {}
+            try:
+                resp = client.post(api, json=payload)
+                resp.raise_for_status()
+                data = (resp.json() or {}).get("data") or {}
+            except Exception:
+                if page == 1:
+                    raise  # 该板块首页失败交给 run.py 记录为 failed
+                logger.warning(
+                    "tencent_music: %s 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）", api, page, len(rows)
+                )
+                break  # 后续页尽力而为，保留已抓的行；fetch_complete 由 fetch() 与 reported_total 比对天然置 False
             items = data.get("items") or []
             meta = data.get("_meta") or {}
             if total is None:
