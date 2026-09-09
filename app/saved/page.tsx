@@ -18,7 +18,7 @@ export default async function SavedPage() {
       <div className="min-h-screen bg-editorial">
         <Navbar />
         <ProductPage maxWidth="max-w-5xl">
-          <ProductHero eyebrow="值得投" title="待进一步比较的岗位" icon={BookmarkSimple} />
+          <ProductHero eyebrow="值得投" title="先存下来的岗位" icon={BookmarkSimple} />
           <div className="mt-6">
             <EmptyPanel title="加载中，请稍候" description="正在读取你的「值得投」岗位。" />
           </div>
@@ -44,7 +44,7 @@ export default async function SavedPage() {
       <div className="min-h-screen bg-editorial">
         <Navbar />
         <ProductPage maxWidth="max-w-5xl">
-          <ProductHero eyebrow="值得投" title="待进一步比较的岗位" icon={BookmarkSimple} />
+          <ProductHero eyebrow="值得投" title="先存下来的岗位" icon={BookmarkSimple} />
           <div className="mt-6">
             <EmptyPanel title="还没有「值得投」的岗位" description="在今日机会或搜索岗位里点「值得投」后，岗位会出现在这里。" />
           </div>
@@ -92,7 +92,7 @@ export default async function SavedPage() {
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
           eyebrow="值得投"
-          title="待进一步比较的岗位"
+          title="先存下来的岗位"
           icon={BookmarkSimple}
           action={
             <CountBadge>

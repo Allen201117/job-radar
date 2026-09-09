@@ -25,7 +25,6 @@ export function ProductHero({
   eyebrow,
   title,
   titleClassName,
-  description,
   icon: Icon = Sparkle,
   action,
   align = "end",
@@ -34,7 +33,6 @@ export function ProductHero({
   eyebrow: string;
   title: string;
   titleClassName?: string;
-  description?: string;
   icon?: IconComponent;
   action?: ReactNode;
   // 标题块与 action 在 lg 下的纵向对齐：默认 end（底对齐）；start = 标题上提（action 较高时更省空间）。
@@ -48,8 +46,12 @@ export function ProductHero({
   }[align];
   return (
     // 页头改为「编辑部报头」式排版：不再套大卡片 + 四色径向渐变（那是本页最丑的部分），
-    // 标题/说明这类导航性文字直接落在暖纸背景上，靠底部细分隔线收边；
+    // 标题这类导航性文字直接落在暖纸背景上，靠底部细分隔线收边；
     // 真正承载「数据」的部分（岗位库计数 / 指标卡）仍走卡片，从 action / children 传入。
+    //
+    // ⚠️ 刻意没有 description 槽位（2026-09-09 创始人拍板删除）：13 个页头原本各挂一段
+    // 「这一页是干什么的」的说明小字，读起来像产品自己在解释自己，且与眉标 + 标题重复。
+    // 页头只留「眉标 + 一句标题」，说明该由正文自己说清。要加回来先问创始人，别直接补 prop。
     <section className="relative">
       <div className={cn("flex flex-col gap-5 lg:flex-row lg:justify-between lg:gap-8", alignClass)}>
         <div className="max-w-3xl">
@@ -73,11 +75,6 @@ export function ProductHero({
           >
             {title}
           </h1>
-          {description && (
-            <p className="mt-3 max-w-2xl text-pretty text-[15px] leading-7 ink-2">
-              {description}
-            </p>
-          )}
         </div>
         {action && <div className="shrink-0">{action}</div>}
       </div>

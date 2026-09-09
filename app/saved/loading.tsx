@@ -9,7 +9,7 @@ export default function Loading() {
     <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage maxWidth="max-w-5xl">
-        <ProductHero eyebrow="值得投" title="待进一步比较的岗位" icon={BookmarkSimple} />
+        <ProductHero eyebrow="值得投" title="先存下来的岗位" icon={BookmarkSimple} />
         <div className="mt-8">
           <JobListSkeleton count={5} />
         </div>

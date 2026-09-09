@@ -37,8 +37,7 @@ export default async function MePage() {
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
           eyebrow="个人主页"
-          title="你的职达状态"
-          description={user?.email || "账号、匹配偏好与简历画像都在这里。"}
+          title="你的资料和投递记录"
           icon={UserCircle}
         >
           <div className="grid gap-3 sm:grid-cols-3">

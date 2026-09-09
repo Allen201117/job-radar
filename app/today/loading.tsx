@@ -13,7 +13,6 @@ export default function Loading() {
         <ProductHero
           eyebrow={TODAY_HERO.eyebrow}
           title={TODAY_HERO.title}
-          description={TODAY_HERO.description}
           icon={Broadcast}
         >
           <MetricTilesSkeleton count={3} />

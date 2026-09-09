@@ -11,8 +11,7 @@ export default function Loading() {
       <ProductPage>
         <ProductHero
           eyebrow="校招专区"
-          title="按你的行业锁定必投目标公司的校招窗口"
-          description="已接入官方校招源并持续验证的岗位；据公开信息追踪聚合必投清单公司的校招/实习岗与窗口状态，非官方、仅供参考。"
+          title="必投公司开没开校招"
           icon={GraduationCap}
         />
         <div className="mt-8 grid gap-4">

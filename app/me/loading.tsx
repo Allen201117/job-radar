@@ -11,8 +11,7 @@ export default function Loading() {
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
           eyebrow="个人主页"
-          title="你的职达状态"
-          description="查看收藏、投递与简历画像状态。"
+          title="你的资料和投递记录"
           icon={UserCircle}
         >
           <MetricTilesSkeleton count={3} gridClassName="grid gap-3 sm:grid-cols-3" />

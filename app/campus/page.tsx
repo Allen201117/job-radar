@@ -103,9 +103,7 @@ const loadCampusBoard = unstable_cache(
 
 const HERO = {
   eyebrow: "校招专区",
-  title: "按你的行业锁定必投目标公司的校招窗口",
-  description:
-    "已接入官方校招源并持续验证的岗位；据公开信息追踪聚合必投清单公司的校招/实习岗与窗口状态，非官方、仅供参考。",
+  title: "必投公司开没开校招",
 };
 
 export default async function CampusPage() {
@@ -137,7 +135,7 @@ export default async function CampusPage() {
     <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage>
-        <ProductHero eyebrow={HERO.eyebrow} title={HERO.title} description={HERO.description} icon={GraduationCap} />
+        <ProductHero eyebrow={HERO.eyebrow} title={HERO.title} icon={GraduationCap} />
         <CampusClient
           cards={cards}
           industries={industries}

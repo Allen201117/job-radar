@@ -44,8 +44,7 @@ export default async function InsightsAdminPage() {
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
           eyebrow="洞察管理"
-          title="录入、编辑、下架职业洞察，处理申诉"
-          description="新增或修改一条洞察时，会先自动检查：可信度分级够不够、有没有暴露个人信息、来源标注全不全、内容是不是过期了。任何一项不过关都会直接告诉你卡在哪。全程网页操作，不用写代码。"
+          title="改洞察，处理申诉"
           icon={Sparkle}
         />
 

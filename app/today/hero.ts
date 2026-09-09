@@ -10,6 +10,5 @@
 // 具体是哪一种，由正文自己说清。
 export const TODAY_HERO = {
   eyebrow: "今日机会",
-  title: "今天值得处理的官方岗位",
-  description: "这里只放企业官网的公开岗位，每天核对在招状态，点开即是官方详情页。",
+  title: "今天先看这些",
 } as const;
