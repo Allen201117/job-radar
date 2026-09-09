@@ -645,8 +645,10 @@ function ItemRow({ item }: { item: InsightItemView }) {
           </span>
         )}
         <span className={`rounded-full px-2.5 py-1 t-caption font-semibold ${chip.cls}`}>
-          {chip.text}
+          {chip.label}
         </span>
+        {/* 承诺依据（样本量 / 来源数）留在芯片外：芯片只说这是哪一档，依据是元信息。 */}
+        <span className="t-caption ink-3">{chip.basis}</span>
         <span className="t-caption ink-3">
           {DIMENSION_LABEL[item.dimension] || item.dimension}
         </span>

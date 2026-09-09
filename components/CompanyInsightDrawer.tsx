@@ -625,8 +625,10 @@ function InsightCard({ item }: { item: InsightItemView }) {
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", chip.cls)}>
-          {chip.text}
+          {chip.label}
         </span>
+        {/* 承诺依据（样本量 / 来源数）留在芯片外，与 /insights 同一形态。 */}
+        <span className="text-[11px] ink-3">{chip.basis}</span>
         {item.outdated && (
           <span className={badgeVariants({ tone: "neutral", size: "xs" })}>
             可能已过时
