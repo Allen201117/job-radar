@@ -109,5 +109,110 @@ class JdCampusWiringTest(unittest.TestCase):
         self.assertNotIn("jd_campus", run._HTTPX_SAFE_ADAPTERS)
 
 
+# live 2026-09-09 从 campus.jd.com 三个渠道实际抓到的样本（截断保留结构）
+INTERNSHIP_ITEM = {
+    "publishId": 9364,
+    "reqId": 2505,
+    "positionName": "技术支持工程师",
+    "jobDirection": "一线专业方向",
+    "jobCategory": "运维支持类",
+    "workContent": "1、负责各类IT/产品服务支持。",
+    "qualification": "1、2026年10月及之后毕业的在校生，本科及以上学历。",
+    "requirementVoList": [
+        {"workCity": "北京市-北京市", "positionBg": "京东集团", "reqId": 2505},
+    ],
+}
+
+TALENT_INTERN_ITEM = {
+    "publishId": 8900,
+    "reqId": 1990,
+    "positionName": "TGT算法实习生",
+    "jobDirection": "TGT实习生",
+    "jobCategory": "AI Infra方向",
+    "workContent": "参与大模型推理优化。",
+    "qualification": "统招本硕博在校生。",
+    "requirementVoList": [
+        {"workCity": "北京市-北京市", "positionBg": "京东零售", "reqId": 1990},
+    ],
+}
+
+TALENT_FULLTIME_ITEM = {
+    "publishId": 8746,
+    "reqId": 1983,
+    "positionName": "新一代大模型推理技术优化研究",
+    "jobDirection": "TGT",
+    "jobCategory": "AI Infra方向",
+    "workContent": "负责基于xLLM构建面向大模型的推理优化技术体系。",
+    "qualification": "获得本科及以上学历，计算机科学、电子工程等相关专业。",
+    "requirementVoList": [
+        {"workCity": "北京市-北京市", "positionBg": "京东零售", "reqId": 1983},
+    ],
+}
+
+
+class JdCampusChannelJobTypeTest(unittest.TestCase):
+    """实习/专项两个新渠道的 job_type 判定：整体按渠道，talent 渠道内再按单条 jobDirection 精修。"""
+
+    def test_internship渠道整体判实习(self):
+        item = {**INTERNSHIP_ITEM, "_channel": "internship"}
+        job = JdCampusAdapter()._map(item)
+        self.assertEqual(job.job_type, "实习")
+        self.assertEqual(job.jd_url, "https://campus.jd.com/#/details?id=9364")
+
+    def test_talent渠道内_TGT实习生判实习(self):
+        item = {**TALENT_INTERN_ITEM, "_channel": "talent"}
+        job = JdCampusAdapter()._map(item)
+        self.assertEqual(job.job_type, "实习")
+
+    def test_talent渠道内_TGT全职判校园招聘(self):
+        item = {**TALENT_FULLTIME_ITEM, "_channel": "talent"}
+        job = JdCampusAdapter()._map(item)
+        self.assertEqual(job.job_type, "校园招聘")
+
+    def test_present渠道判校园招聘(self):
+        item = {**REAL_ITEM, "_channel": "present"}
+        job = JdCampusAdapter()._map(item)
+        self.assertEqual(job.job_type, "校园招聘")
+
+    def test_没有_channel标记时兜底校园招聘(self):
+        # 正常运行时三渠道零重叠、_channel 必被打上；这里只保证缺失时不炸、不误判成实习。
+        job = JdCampusAdapter()._map(dict(REAL_ITEM))
+        self.assertEqual(job.job_type, "校园招聘")
+
+
+class JdCampusTagAndCollectTest(unittest.TestCase):
+    """_tag_and_collect：给已捕获响应里的每条岗位打渠道标记 + 收集 publishId + 取总数。"""
+
+    def test_打标记并收集id与总数(self):
+        a = JdCampusAdapter()
+        responses = [_resp([REAL_ITEM, {**REAL_ITEM, "publishId": 2}], total=68)]
+        seen = set()
+        total = a._tag_and_collect(responses, seen, "internship")
+        self.assertEqual(total, 68)
+        self.assertEqual(seen, {"9073", "2"})
+        for resp in responses:
+            for item in resp["body"]["items"]:
+                self.assertEqual(item["_channel"], "internship")
+
+    def test_渠道之间用channel区分不互相污染(self):
+        a = JdCampusAdapter()
+        present_resp = [_resp([REAL_ITEM], total=126)]
+        talent_resp = [_resp([TALENT_FULLTIME_ITEM], total=123)]
+        a._tag_and_collect(present_resp, set(), "present")
+        a._tag_and_collect(talent_resp, set(), "talent")
+        self.assertEqual(present_resp[0]["body"]["items"][0]["_channel"], "present")
+        self.assertEqual(talent_resp[0]["body"]["items"][0]["_channel"], "talent")
+
+
+class JdCampusChannelsWiringTest(unittest.TestCase):
+    def test_三渠道类型齐全且各有独立列表URL(self):
+        types = [c[0] for c in JdCampusAdapter._CHANNELS]
+        self.assertEqual(types, ["present", "internship", "talent"])
+        urls = [c[1] for c in JdCampusAdapter._CHANNELS]
+        self.assertEqual(len(set(urls)), 3, "三个渠道的列表 URL 必须互不相同")
+        for ptype, url, _ in JdCampusAdapter._CHANNELS:
+            self.assertIn(f"type={ptype}", url)
+
+
 if __name__ == "__main__":
     unittest.main()
