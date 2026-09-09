@@ -64,6 +64,7 @@ from adapters.kuaishou_campus import KuaishouCampusAdapter
 from adapters.bilibili import BilibiliAdapter
 from adapters.pinduoduo import PinduoduoAdapter
 from adapters.vivo import VivoAdapter
+from adapters.lenovo import LenovoAdapter
 from adapters.byd import BydAdapter
 from adapters.sf_express import SfExpressAdapter
 from adapters.tencent_music import TencentMusicAdapter
@@ -181,6 +182,7 @@ ADAPTERS = {
     "bilibili": BilibiliAdapter(),  # B站自建门户：匿名 CSRF + positionList 公开接口,零浏览器
     "pinduoduo": PinduoduoAdapter(),  # 拼多多校招门户：position/list 公开接口,零浏览器
     "vivo": VivoAdapter(),  # vivo 社招门户：portal/page 公开接口,零浏览器
+    "lenovo": LenovoAdapter(),  # 联想校招门户：jobBase/list 公开接口,零浏览器（2026-09-09 live）
     "byd": BydAdapter(),  # 比亚迪社招：公开列表 + 浏览器批量生成前端加密详情 URL
     "sf_express": SfExpressAdapter(),  # 顺丰社招：SearchJob.do 公开接口,零浏览器
     "tencent_music": TencentMusicAdapter(),  # 腾讯音乐自建门户：job/list + uc-job/list 公开接口,零浏览器
@@ -209,7 +211,7 @@ DOMESTIC_ADAPTERS = {
     "baidu", "jd", "bytedance", "bytedance_campus", "tencent",
     "nio_feishu", "xpeng_feishu", "horizon_feishu", "xiaomi_feishu", "haier", "iguopin",
     "moka", "beisen", "company_spa", "feishu", "hotjob", "wt", "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",
-    "meituan", "meituan_campus", "kuaishou", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "byd", "sf_express",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
+    "meituan", "meituan_campus", "kuaishou", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "byd", "sf_express", "lenovo",  # 本土 ATS / 企业官网 SPA（扩覆盖主攻方向）
     "tencent_music", "antgroup", "mihoyo", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree", "tonghuashun",  # 自建门户公开接口（零浏览器；cmb=招商银行，cmbc=中国民生银行）
     "spdb", "icbc", "ccb", "bankcomm", "cmcc",  # 国有大行 + 中国移动自建门户（2026-09-05 live 核实逐岗详情页，零浏览器）
     "chnenergy",  # 国家能源集团（2026-09-05 live 核实逐岗详情页；曾被误当公告制）
@@ -227,7 +229,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "greenhouse", "lever", "ashby", "smartrecruiters", "successfactors", "workday", "eightfold",
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
     "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",
-    "meituan", "meituan_campus", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "sf_express",  # 已逐一核实为纯 httpx fetch
+    "meituan", "meituan_campus", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "sf_express", "lenovo",  # 已逐一核实为纯 httpx fetch
     "tencent_music", "antgroup", "mihoyo", "avature", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree", "tonghuashun",  # 公开接口/SSR，纯 httpx
     "zto", "zto_campus",  # 中通：列表+详情均为公开 JSON，零浏览器
     "spdb", "icbc", "ccb", "bankcomm", "cmcc",  # 国有大行 + 中国移动自建门户，纯 httpx（无浏览器、无共享状态）
