@@ -26,8 +26,8 @@ import {
 import { useBodyScrollLock, useEscapeKey } from "@/lib/ui/hooks";
 import { buttonVariants } from "@/components/ui";
 
-// 一级导航：今日机会 / 搜索岗位 / 洞察库 / 校招专区 / 公告制招聘 / 个人主页 / 值得投 / 已投递。
-// 2026-09-03：原「关注与偏好」与「个人主页」功能重复（两处各挂一份简历画像面板），已合并为后者。
+// 一级导航：推荐 / 职位 / 洞察库 / 校园招聘 / 公告制招聘 / 个人中心 / 收藏 / 已投递。
+// 2026-09-03：原「关注与偏好」与「个人中心」功能重复（两处各挂一份简历画像面板），已合并为后者。
 // /me 移入账号菜单。/sources、/admin/* 仅管理员直达。
 // 2026-09-07：「职业路径」下线（5 天实测 9 PV / 7 人，人均 1.3 次、无一人回访，
 //   同期 /today 5.0 次/人）；腾出的位置给「项目制投递」——它原来只是校招专区里的一行文字链，
@@ -52,7 +52,7 @@ const LINKS = [
     hint: "央企/银行这类只发招聘公告、不挂单个岗位的公司，投递入口在这儿",
   },
   { href: "/me", key: "me", icon: UserCircle, hint: "简历画像与求职目标，决定推荐给你看什么" },
-  { href: "/saved", key: "saved", icon: BookmarkSimple, hint: "标了「值得投」的岗位，回头集中处理" },
+  { href: "/saved", key: "saved", icon: BookmarkSimple, hint: "收藏起来的岗位，回头集中处理" },
   { href: "/applied", key: "applied", icon: CheckCircle, hint: "已投递的岗位与进展：笔试 / 面试 / offer" },
 ];
 
@@ -171,7 +171,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
       <header className="sticky top-0 z-40 w-full border-b border-black/[0.06] bg-[#f4efe6]/80 ink-1 backdrop-blur-xl supports-[backdrop-filter]:bg-[#f4efe6]/70 dark:border-white/[0.08] dark:bg-[#16130f]/[0.85] dark:supports-[backdrop-filter]:bg-[#16130f]/[0.70]">
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6 lg:gap-6 lg:px-8">
         <div className="flex min-w-0 items-center gap-7">
-          {/* 登录后 Logo 跳今日机会；未登录跳公开 Landing */}
+          {/* 登录后 Logo 跳「推荐」；未登录跳公开 Landing */}
           <Link
             href={email ? "/today" : "/"}
             className="inline-flex shrink-0 items-center transition-opacity hover:opacity-70"
@@ -230,7 +230,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
           {/* 用户反馈：顶栏常驻入口，点开是微信反馈群二维码 */}
           <FeedbackButton />
           <ThemeToggle className="size-11 lg:size-9" />
-          {/* 桌面端账号菜单：个人主页 + 退出（/me 不再占一级导航） */}
+          {/* 桌面端账号菜单：个人中心 + 退出（/me 不再占一级导航） */}
           {email && (
             <div className="relative hidden lg:block">
               <button
@@ -278,7 +278,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
                       className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium ink-2 transition hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
                     >
                       <UserCircle size={16} aria-hidden="true" />
-                      个人主页
+                      个人中心
                     </Link>
                     <button
                       type="button"

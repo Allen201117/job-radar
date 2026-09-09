@@ -19,7 +19,7 @@ export default async function AppliedPage() {
       <div className="min-h-screen bg-editorial">
         <Navbar />
         <ProductPage maxWidth="max-w-5xl">
-          <ProductHero title="已投递" icon={CheckCircle} />
+          <ProductHero title="投递记录" icon={CheckCircle} />
           <div className="mt-6">
             <EmptyPanel title="加载中，请稍候" description="正在读取你的投递记录。" />
           </div>
@@ -41,14 +41,14 @@ export default async function AppliedPage() {
       <div className="min-h-screen bg-editorial">
         <Navbar />
         <ProductPage maxWidth="max-w-5xl">
-          <ProductHero title="已投递" icon={CheckCircle} />
+          <ProductHero title="投递记录" icon={CheckCircle} />
           <div className="mt-6">
             <EmptyPanel
               title="还没有标记任何已投递岗位"
               description="在岗位卡片里点击「标记投递」，这里会形成你的投递记录。"
               action={
                 <Link href="/today" className="btn-ink">
-                  返回今日机会
+                  返回推荐
                 </Link>
               }
             />
@@ -87,7 +87,7 @@ export default async function AppliedPage() {
       <Navbar />
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
-          title="已投递"
+          title="投递记录"
           icon={CheckCircle}
           action={
             <CountBadge>

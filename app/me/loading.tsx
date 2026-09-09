@@ -10,7 +10,7 @@ export default function Loading() {
       <Navbar />
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
-          title="个人主页"
+          title="个人中心"
           icon={UserCircle}
         >
           <MetricTilesSkeleton count={3} gridClassName="grid gap-3 sm:grid-cols-3" />

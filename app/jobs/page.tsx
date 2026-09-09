@@ -147,7 +147,7 @@ export default async function JobsPage({
       <Navbar />
       <ProductPage>
         <ProductHero
-          title="搜索岗位"
+          title="职位"
           icon={Database}
           align="start"
         >

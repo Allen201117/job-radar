@@ -52,7 +52,7 @@ export function ProductHero({
     // 实测 BOSS直聘 / 智联招聘 / 猎聘的岗位列表页**连大标题都没有**，页面身份全靠导航项那
     // 两三个字承载（BOSS 列表页就一个「推荐」）；GitHub 的 PR 页 h1 是「Pull requests:
     // vercel/next.js」——名词 + 归属，同样没有说明句。所以这里收敛成一层：图标 + 页面名。
-    // ⚠️ 页面名必须与导航项（lib/i18n.ts 的 DICT）逐字一致——点「值得投」进来看到「收藏」是割裂，
+    // ⚠️ 页面名必须与导航项（lib/i18n.ts 的 DICT）逐字一致——点「收藏」进来看到「值得投」是割裂，
     // 这条由 tests/loading-copy.test.js 钉着。要把眉标 / 说明加回来先问创始人，别直接补 prop。
     <section className="relative">
       <div className={cn("flex flex-col gap-5 lg:flex-row lg:justify-between lg:gap-8", alignClass)}>

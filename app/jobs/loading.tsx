@@ -9,7 +9,7 @@ export default function Loading() {
     <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage>
-        <ProductHero title="搜索岗位" icon={Database} action={<HeroStatSkeleton />} />
+        <ProductHero title="职位" icon={Database} action={<HeroStatSkeleton />} />
         <div className="mt-8 space-y-4">
           <div className="surface h-14 w-full animate-pulse" aria-hidden="true" />
           <JobListSkeleton count={6} />

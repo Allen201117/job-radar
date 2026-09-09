@@ -130,7 +130,7 @@ export default async function CampusPage() {
     <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage>
-        <ProductHero title="校招专区" icon={GraduationCap} />
+        <ProductHero title="校园招聘" icon={GraduationCap} />
         <CampusClient
           cards={cards}
           industries={industries}

@@ -9,5 +9,5 @@
 // （见 app/today-popular-client.tsx）——所以它不能声称「已按你的目标筛过」，对新用户那是假话，
 // 而新用户恰恰是第一屏。具体是哪一种，由正文自己说清。
 export const TODAY_HERO = {
-  title: "今日机会",
+  title: "推荐",
 } as const;

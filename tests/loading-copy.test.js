@@ -33,14 +33,16 @@ test("today loading copy matches real page", () => {
 });
 
 test("jobs loading copy matches real page and avoids refresh/discovery wording", () => {
-  assert.ok(jobsLoading.includes("搜索岗位"), "jobs loading missing title");
+  assert.ok(jobsLoading.includes("职位"), "jobs loading missing title");
   assert.ok(!jobsLoading.includes("刷新"), "jobs loading must not say 刷新");
   assert.ok(!jobsLoading.includes("发掘"), "jobs loading must not say 发掘");
 });
 
-test("saved loading uses 值得投, not 已收藏", () => {
-  assert.ok(savedLoading.includes("值得投"), "saved loading missing 值得投");
-  assert.ok(!savedLoading.includes("已收藏"), "saved loading must not say 已收藏");
+// 2026-09-09「和大厂对齐」后 saved 的叫法从「值得投」改成「收藏」——这条断言的方向也跟着反了。
+// 旧断言（必须是「值得投」、不许出现「收藏」）保留在 git 历史里，别照着它改回去。
+test("saved loading uses 收藏, not 值得投", () => {
+  assert.ok(savedLoading.includes("收藏"), "saved loading missing 收藏");
+  assert.ok(!savedLoading.includes("值得投"), "saved loading must not say 值得投");
 });
 
 const heroTitles = (src) =>
@@ -74,7 +76,7 @@ test("页头只剩一个页面名，没有眉标和说明小字", () => {
   assert.ok(checked >= 15, `只扫到 ${checked} 个 ProductHero，正则可能没匹配上`);
 });
 
-// 大厂铁律：页面名 == 导航项名。点「值得投」进来看到「收藏」是割裂。
+// 大厂铁律：页面名 == 导航项名。点「收藏」进来看到「值得投」是割裂。
 // 所以页头标题直接钉在 lib/i18n.ts 的导航词表上——改了导航名而没改页头，这里直接红。
 const NAV_TITLE_PAGES = {
   jobs: "app/jobs",

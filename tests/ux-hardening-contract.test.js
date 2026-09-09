@@ -331,9 +331,9 @@ test("applied empty state explains the real action and has one primary Today CTA
   assert.ok(emptyState.includes("点击「标记投递」"), "empty-state copy must name the actual action");
   assert.match(
     emptyState,
-    /<EmptyPanel\b[\s\S]*?action=\{[\s\S]*?<Link\s+href=["']\/today["']\s+className=["']btn-ink["']>[\s\S]*?返回今日机会[\s\S]*?<\/Link>[\s\S]*?\}/,
+    /<EmptyPanel\b[\s\S]*?action=\{[\s\S]*?<Link\s+href=["']\/today["']\s+className=["']btn-ink["']>[\s\S]*?返回推荐[\s\S]*?<\/Link>[\s\S]*?\}/,
   );
-  assert.equal((appliedPage.match(/返回今日机会/g) ?? []).length, 1, "Today CTA must be unique");
+  assert.equal((appliedPage.match(/返回推荐/g) ?? []).length, 1, "Today CTA must be unique");
 });
 
 // ───────────────────────────────────────────────────────────────
@@ -376,14 +376,14 @@ test("岗位卡动作在落库后才回调 onActionResult，页面据此弹就�
   assert.match(actionToast, /export function jobActionToastText/);
 });
 
-test("失败不许静默：源开关 / 取消值得投 / 洞察申诉都要说出来", () => {
+test("失败不许静默：源开关 / 取消收藏 / 洞察申诉都要说出来", () => {
   // 源开关：以前失败什么也不做，用户以为切成功了。
   assert.match(sourceTable, /setToggleError\(/);
   assert.match(sourceTable, /disabled=\{togglingId !== null\}/);
   assert.match(sourceTable, /切换中/);
-  // 已下线岗位的「取消值得投」：以前失败只是把卡片悄悄放回去。
+  // 已下线岗位的「取消收藏」：以前失败只是把卡片悄悄放回去。
   assert.match(savedClient, /取消失败，请重试/);
-  assert.match(savedClient, /cancelingId === d\.jobId \? "取消中…" : "取消值得投"/);
+  assert.match(savedClient, /cancelingId === d\.jobId \? "取消中…" : "取消收藏"/);
   // 洞察申诉：以前 !res.ok 直接吞掉。
   assert.match(insightDrawer, /setSendError\("提交失败/);
   assert.match(insightDrawer, /sending \? "提交中…" : "提交"/);

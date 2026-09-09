@@ -1521,7 +1521,7 @@ function UserTab({
         <p className="t-body-sm mt-1 ink-2">这几个数看「今天」，上面的四问报告看「最近 30 天」，别把两边的数字对着减。</p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <KpiCard title="今天新注册" value={users ? formatCount(users.today_users) : "—"} tone="muted" detail="今天完成注册的人数" />
-          <KpiCard title="收藏（累计 + 今天）" value={users ? `${formatCount(users.saved_total)} + ${formatCount(users.saved_today)}` : "—"} tone="muted" detail="用户点「值得投」的次数" />
+          <KpiCard title="收藏（累计 + 今天）" value={users ? `${formatCount(users.saved_total)} + ${formatCount(users.saved_today)}` : "—"} tone="muted" detail="用户点「收藏」的次数" />
           <KpiCard title="标记投递（累计 + 今天）" value={users ? `${formatCount(users.applied_total)} + ${formatCount(users.applied_today)}` : "—"} tone="muted" detail="用户自己标记为已投递的次数" />
           <KpiCard title="简历解析（今天）" value={resume ? `${formatCount(resume.succeeded)}/${formatCount(resume.started)}` : "—"} tone="muted" detail="解析成功 / 发起次数" />
         </div>

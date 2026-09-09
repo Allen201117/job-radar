@@ -30,7 +30,7 @@ const SECTION_META: Record<DisplaySectionKey, { title: string; subtitle?: string
 const ORDER: DisplaySectionKey[] = ["critical", "main", "explore", "momentum"];
 
 const ACTION_LABEL: Record<PrimaryAction, string> = {
-  saved: "已加入「值得投」",
+  saved: "已收藏",
   applied: "已记为「已投递」",
   ignored: "已标记不适合",
 };

@@ -273,15 +273,15 @@ function LoginForm() {
             <figure className="float-soft absolute left-0 top-2" style={{ animationDelay: "0s" }}>
               <div className="polaroid w-[208px] -rotate-[5deg] transition-transform duration-300 ease-out hover:-translate-y-1.5 hover:rotate-0">
                 <div className="rounded-[0.8rem] bg-[#f6f3ec] dark:bg-[#1c1813] p-4">
-                  <p className="text-[11px] font-medium ink-3">今日机会</p>
-                  <p className="mt-1 text-xl font-semibold ink-1">少量今日机会</p>
+                  <p className="text-[11px] font-medium ink-3">推荐</p>
+                  <p className="mt-1 text-xl font-semibold ink-1">少量今日推荐</p>
                   <p className="mt-1 text-[12px] ink-3">高匹配待处理</p>
                   <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/[0.06] dark:bg-white/[0.05]">
                     <div className="h-full w-[46%] rounded-full bg-[#7fb2e8]" />
                   </div>
                 </div>
               </div>
-              <figcaption className="mt-2 pl-1 text-[12px] ink-3">今日机会</figcaption>
+              <figcaption className="mt-2 pl-1 text-[12px] ink-3">推荐</figcaption>
             </figure>
 
             {/* 官方岗位卡（沿用真实示例数据） */}
