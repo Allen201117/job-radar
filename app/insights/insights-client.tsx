@@ -647,10 +647,11 @@ function ItemRow({ item }: { item: InsightItemView }) {
         <span className={`rounded-full px-2.5 py-1 t-caption font-semibold ${chip.cls}`}>
           {chip.label}
         </span>
-        {/* 承诺依据（样本量 / 来源数）留在芯片外：芯片只说这是哪一档，依据是元信息。 */}
-        <span className="t-caption ink-3">{chip.basis}</span>
+        {/* 承诺依据（样本量 / 来源数）留在芯片外：芯片只说这是哪一档，依据是元信息。
+            与维度之间要有分隔号 —— 两段同色 caption 挨着会读成一句
+            （线上实测「据 3 处公开讨论 公司文化」）。 */}
         <span className="t-caption ink-3">
-          {DIMENSION_LABEL[item.dimension] || item.dimension}
+          {chip.basis} · {DIMENSION_LABEL[item.dimension] || item.dimension}
         </span>
         {item.outdated && <span className="t-caption ink-4">可能已过时</span>}
       </div>
