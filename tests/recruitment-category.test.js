@@ -238,3 +238,16 @@ test("hasExplicitRecruitmentType：≥2 年经验硬要求算『明确类型』�
   // 纯信息不足（无类型、无年限）仍是『类型未知』→ 筛选时放行降级，不误杀
   assert.equal(hasExplicitRecruitmentType({ title: "后端开发工程师" }), false);
 });
+
+test("wecruit/hotjob 查询参数 postType 是门户自报渠道：campus→校招、intern→实习、society→社招", () => {
+  const base = "https://career.honor.com/SU60eea919bef57c1023f6fe78/pb/posDetail.html?postId=6a83c53a&postType=";
+  assert.strictEqual(recruitmentCategory({ title: "大模型算法工程师", job_type: "研发类", jd_url: base + "campus" }), "校招");
+  assert.strictEqual(recruitmentCategory({ title: "大模型算法工程师", job_type: "研发类", jd_url: base + "intern" }), "实习");
+  assert.strictEqual(recruitmentCategory({ title: "大模型算法工程师", job_type: "研发类", jd_url: base + "society" }), "社招");
+  // society 不做对称规则：社招门户里标题写明届别的岗仍按标题判校招（宁可信标题，也别把改动做成双向）
+  assert.strictEqual(recruitmentCategory({ title: "硬件工程师（研发）-27届", jd_url: base + "society" }), "校招");
+  // 层2 仍在前：校招门户里要 3 年经验的岗照样判社招（源头错标不放行）
+  assert.strictEqual(recruitmentCategory({ title: "资深架构师", jd_url: base + "campus", experience: "3年以上工作经验" }), "社招");
+  // 层1 仍在前：校招门户里标题写明实习的判实习
+  assert.strictEqual(recruitmentCategory({ title: "算法实习生", jd_url: base + "campus" }), "实习");
+});
