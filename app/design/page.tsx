@@ -29,9 +29,7 @@ export default async function DesignSystemPage() {
       <AdminNav />
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
-          eyebrow="设计组件库"
-          title="全站在用的组件长什么样、有哪些变体、该在什么时候用哪个"
-          description="这一页里的每个组件都是产品里真实运行的那一个，用的是同一份样式。改了组件库，这里立刻跟着变——所以它不会说谎。"
+          title="设计组件库"
           icon={Palette}
         />
         <DesignSystemClient />

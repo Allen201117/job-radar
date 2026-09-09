@@ -17,9 +17,7 @@ export default async function SourcesPage() {
       <AdminNav />
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
-          eyebrow="数据源"
-          title="每家公司的官方招聘页接得怎么样、最近一次抓取的结果"
-          description="在这里接入新公司的官方招聘页、看哪些已经启用，以及最近一次抓取抓到了什么。全程网页操作，不用写代码。"
+          title="源管理"
           icon={Database}
         />
         <div className="mt-6">

@@ -1,4 +1,4 @@
-// 主动作写入（§8.1）：值得投/不适合/已投递/取消。停止 JobCard 直接操作 Supabase。
+// 主动作写入（§8.1）：收藏/不适合/已投递/取消。停止 JobCard 直接操作 Supabase。
 // 岗位存在性用权威 jobs 库（香港，gated）校验；snapshot 由服务端从权威行生成（忽略客户端同名字段）。
 // 写入走 set_job_primary_action RPC（auth.uid()，单事务：删旧主动作→视情况插新；viewed 不动）。
 import { NextRequest, NextResponse } from "next/server";

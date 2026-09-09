@@ -58,7 +58,7 @@ const cardBase =
 
 export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
   const primaryHref = loggedIn ? "/today" : "/login";
-  const primaryLabel = loggedIn ? "查看今日机会" : "开始设置我的雷达";
+  const primaryLabel = loggedIn ? "查看今日推荐" : "开始设置我的雷达";
 
   useEffect(() => {
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -143,7 +143,7 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
             <ThemeToggle />
             <Link href={primaryHref} className="btn-ink-sm cursor-target whitespace-nowrap">
               {/* 移动端用短标，避免与 logo+主题切换挤在一行时折成两行 */}
-              <span className="sm:hidden">{loggedIn ? "今日机会" : "设置雷达"}</span>
+              <span className="sm:hidden">{loggedIn ? "推荐" : "设置雷达"}</span>
               <span className="hidden sm:inline">{primaryLabel}</span>
               <ArrowRight size={14} weight="bold" aria-hidden="true" />
             </Link>
@@ -159,13 +159,13 @@ export default function LandingClient({ loggedIn }: { loggedIn: boolean }) {
           <figure className="lp-float absolute left-[-12px] top-[54px]" style={{ ["--fd" as string]: 42 } as CSSProperties}>
             <div className="float-soft">
               <div className={`lp-fcard ${cardBase} w-[200px] p-3.5`} style={{ ["--rot" as string]: "-6deg" } as CSSProperties}>
-                <p className="m-0 text-[11px] font-semibold ink-3">今日机会</p>
+                <p className="m-0 text-[11px] font-semibold ink-3">推荐</p>
                 <p className="mb-0 mt-1.5 text-[1.45rem] font-extrabold leading-tight">3 条待处理</p>
                 <p className="mb-0 mt-1.5 text-[12px] ink-3">高匹配待处理</p>
                 <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/[0.07] dark:bg-white/[0.08]"><div className="h-full w-[46%] rounded-full bg-[#7fb2e8]" /></div>
               </div>
             </div>
-            <figcaption className="mt-2 text-[12px] ink-3">今日机会</figcaption>
+            <figcaption className="mt-2 text-[12px] ink-3">推荐</figcaption>
           </figure>
 
           <figure className="lp-float absolute right-[-16px] top-[30px]" style={{ ["--fd" as string]: 30 } as CSSProperties}>

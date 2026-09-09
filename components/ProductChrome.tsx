@@ -22,19 +22,15 @@ export function ProductPage({
 }
 
 export function ProductHero({
-  eyebrow,
   title,
   titleClassName,
-  description,
   icon: Icon = Sparkle,
   action,
   align = "end",
   children,
 }: {
-  eyebrow: string;
   title: string;
   titleClassName?: string;
-  description?: string;
   icon?: IconComponent;
   action?: ReactNode;
   // 标题块与 action 在 lg 下的纵向对齐：默认 end（底对齐）；start = 标题上提（action 较高时更省空间）。
@@ -48,36 +44,35 @@ export function ProductHero({
   }[align];
   return (
     // 页头改为「编辑部报头」式排版：不再套大卡片 + 四色径向渐变（那是本页最丑的部分），
-    // 标题/说明这类导航性文字直接落在暖纸背景上，靠底部细分隔线收边；
+    // 标题直接落在暖纸背景上，靠底部细分隔线收边；
     // 真正承载「数据」的部分（岗位库计数 / 指标卡）仍走卡片，从 action / children 传入。
+    //
+    // ⚠️ 页头**只有一个页面名**：没有眉标、没有说明小字（2026-09-09 创始人拍板，照大厂做法改）。
+    // 原来是三层：眉标「今日机会」+ 标题「今天值得处理的官方岗位」+ 一段说明小字。
+    // 实测 BOSS直聘 / 智联招聘 / 猎聘的岗位列表页**连大标题都没有**，页面身份全靠导航项那
+    // 两三个字承载（BOSS 列表页就一个「推荐」）；GitHub 的 PR 页 h1 是「Pull requests:
+    // vercel/next.js」——名词 + 归属，同样没有说明句。所以这里收敛成一层：图标 + 页面名。
+    // ⚠️ 页面名必须与导航项（lib/i18n.ts 的 DICT）逐字一致——点「收藏」进来看到「值得投」是割裂，
+    // 这条由 tests/loading-copy.test.js 钉着。要把眉标 / 说明加回来先问创始人，别直接补 prop。
     <section className="relative">
       <div className={cn("flex flex-col gap-5 lg:flex-row lg:justify-between lg:gap-8", alignClass)}>
-        <div className="max-w-3xl">
-          {/* 眉标：图标嵌入品牌天蓝小方块 + 克制的段首标签，比浮动的描边胶囊更像刻意的编辑部小节标 */}
-          <div className="flex items-center gap-2.5">
-            <span
-              className="grid size-7 shrink-0 place-items-center rounded-[0.6rem] bg-[#e6eef8] text-tone-sky-fg ring-1 ring-inset ring-[#3f7cc0]/[0.12] dark:bg-[#7fb2e8]/[0.14] dark:ring-[#7fb2e8]/20"
-              aria-hidden="true"
-            >
-              <Icon size={15} weight="fill" />
-            </span>
-            <span className="text-[13px] font-semibold tracking-[0.01em] ink-3">
-              {eyebrow}
-            </span>
-          </div>
+        {/* 图标与页面名同行：页面名短（多为 3-5 字），图标独占一行会让页头显得空。
+            图标尺寸跟着标题走，别缩成脚注。 */}
+        <div className="flex min-w-0 items-center gap-3">
+          <span
+            className="grid size-10 shrink-0 place-items-center rounded-[0.7rem] bg-[#e6eef8] text-tone-sky-fg ring-1 ring-inset ring-[#3f7cc0]/[0.12] dark:bg-[#7fb2e8]/[0.14] dark:ring-[#7fb2e8]/20 sm:size-11"
+            aria-hidden="true"
+          >
+            <Icon size={21} weight="fill" />
+          </span>
           <h1
             className={cn(
-              "display-tight mt-4 text-balance text-[1.85rem] font-semibold leading-[1.18] ink-1 sm:text-[2.15rem] lg:text-[2.4rem]",
+              "display-tight min-w-0 text-balance text-[1.6rem] font-semibold leading-[1.2] ink-1 sm:text-[1.8rem]",
               titleClassName,
             )}
           >
             {title}
           </h1>
-          {description && (
-            <p className="mt-3 max-w-2xl text-pretty text-[15px] leading-7 ink-2">
-              {description}
-            </p>
-          )}
         </div>
         {action && <div className="shrink-0">{action}</div>}
       </div>

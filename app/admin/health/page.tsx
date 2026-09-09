@@ -1521,7 +1521,7 @@ function UserTab({
         <p className="t-body-sm mt-1 ink-2">这几个数看「今天」，上面的四问报告看「最近 30 天」，别把两边的数字对着减。</p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <KpiCard title="今天新注册" value={users ? formatCount(users.today_users) : "—"} tone="muted" detail="今天完成注册的人数" />
-          <KpiCard title="收藏（累计 + 今天）" value={users ? `${formatCount(users.saved_total)} + ${formatCount(users.saved_today)}` : "—"} tone="muted" detail="用户点「值得投」的次数" />
+          <KpiCard title="收藏（累计 + 今天）" value={users ? `${formatCount(users.saved_total)} + ${formatCount(users.saved_today)}` : "—"} tone="muted" detail="用户点「收藏」的次数" />
           <KpiCard title="标记投递（累计 + 今天）" value={users ? `${formatCount(users.applied_total)} + ${formatCount(users.applied_today)}` : "—"} tone="muted" detail="用户自己标记为已投递的次数" />
           <KpiCard title="简历解析（今天）" value={resume ? `${formatCount(resume.succeeded)}/${formatCount(resume.started)}` : "—"} tone="muted" detail="解析成功 / 发起次数" />
         </div>
@@ -1630,5 +1630,5 @@ export default async function AdminHealthPage({ searchParams }: { searchParams: 
   const content = tab === "overview" ? <OverviewTab health={health} heroStatus={heroStatus} heroDataMissing={heroDataMissing} jobs={jobs} users={users} supplyStatus={supplyStatus} systemStatus={systemStatus} worst={worst} rowsByScope={rowsByScope} reports={reports} refreshedAt={refreshedAt} disputesOpen={operations?.insight?.disputes_open} dailySeries={dailySeries} dailySeriesUnavailable={dailySeriesUnavailable} /> : tab === "jobs" ? <JobsTab jobs={jobs} clickValidity={clickValidity} clickStatus={clickStatus} coverage={coverage} operations={operations} todayRemoved={todayRemoved} validBand={validBand} checkedBand={checkedBand} dailySeries={dailySeries} dailySeriesUnavailable={dailySeriesUnavailable} /> : tab === "supply" ? <SupplyTab rowsByScope={rowsByScope} fetchByIndustry={fetchByIndustry} activeIndustries={activeIndustries} userDistribution={userDistribution} worst={worst} gapSummary={gapSummary} governanceItems={governanceItems} ledger={supplyLedger} mustApplyScope={mustApplyScope} /> : tab === "users" ? <UserTab analytics={userAnalytics} includeStaff={includeStaff} users={users} resume={resume} /> : <SystemTab operations={operations} reports={reports} refreshedAt={refreshedAt} dailySeries={dailySeries} dailySeriesUnavailable={dailySeriesUnavailable} extraOpsUnavailable={extraOpsResult.status === "rejected"} />;
   // 模块切换已经上移到顶栏（AdminNav），页头不再重复一排一模一样的胶囊。
   const tabLabel = tabs.find(([key]) => key === tab)?.[1] || "总览";
-  return <div className="min-h-screen bg-editorial"><AdminNav activeTab={tab} /><ProductPage maxWidth="max-w-6xl"><ProductHero eyebrow="运营健康" title={`管理员看板 · ${tabLabel}`} description="今天真实的运行与供给情况。" icon={ShieldCheck} /><main className="mt-6">{content}</main></ProductPage></div>;
+  return <div className="min-h-screen bg-editorial"><AdminNav activeTab={tab} /><ProductPage maxWidth="max-w-6xl"><ProductHero title={`管理员看板 · ${tabLabel}`} icon={ShieldCheck} /><main className="mt-6">{content}</main></ProductPage></div>;
 }

@@ -14,7 +14,7 @@ import { badgeVariants } from "@/components/ui";
 
 type PrimaryAction = "saved" | "ignored" | "applied";
 
-// 已被物理清理、只剩 job_snapshot 的「值得投」记录
+// 已被物理清理、只剩 job_snapshot 的「收藏」记录
 export type DeletedSaved = {
   jobId: string;
   company: string;
@@ -50,7 +50,7 @@ export default function SavedClient({
   }, [deletedSaved]);
 
   const { toast, show: showToast, dismiss: dismissToast } = useActionToast();
-  // 已下线岗位的「取消值得投」正在提交的 id：给按钮一个 pending 态，别让用户以为没点上。
+  // 已下线岗位的「取消收藏」正在提交的 id：给按钮一个 pending 态，别让用户以为没点上。
   const [cancelingId, setCancelingId] = useState<string | null>(null);
 
   const selectedJobs = jobs.filter((job) => selectedIds.has(job.id));
@@ -87,7 +87,7 @@ export default function SavedClient({
     setCompareOpen(true);
   }
 
-  // 下线岗位仍可取消「值得投」（action=null）。乐观移除；失败则恢复。
+  // 下线岗位仍可取消「收藏」（action=null）。乐观移除；失败则恢复。
   async function cancelDeleted(jobId: string) {
     if (cancelingId) return;
     const prev = deleted;
@@ -100,7 +100,7 @@ export default function SavedClient({
         body: JSON.stringify({ action: null }),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      showToast({ text: "已取消值得投" });
+      showToast({ text: "已取消收藏" });
     } catch {
       setDeleted(prev); // 恢复
       // 之前失败是静默回滚的：卡片自己跳回来，用户只会以为「点了没用」。
@@ -175,7 +175,7 @@ export default function SavedClient({
                 disabled={cancelingId === d.jobId}
                 className="text-xs font-medium ink-3 underline underline-offset-2 transition hover:opacity-80 disabled:opacity-50"
               >
-                {cancelingId === d.jobId ? "取消中…" : "取消值得投"}
+                {cancelingId === d.jobId ? "取消中…" : "取消收藏"}
               </button>
             </div>
           </div>

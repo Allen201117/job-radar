@@ -36,24 +36,22 @@ export default async function MePage() {
       <Navbar />
       <ProductPage maxWidth="max-w-5xl">
         <ProductHero
-          eyebrow="个人主页"
-          title="你的职达状态"
-          description={user?.email || "账号、匹配偏好与简历画像都在这里。"}
+          title="个人中心"
           icon={UserCircle}
         >
           <div className="grid gap-3 sm:grid-cols-3">
             <Link href="/saved" className="block transition duration-200 hover:-translate-y-0.5">
-              <MetricTile icon={BookmarkSimple} label="值得投 →" value={savedCount} tone="white" />
+              <MetricTile icon={BookmarkSimple} label="收藏 →" value={savedCount} tone="white" />
             </Link>
             <Link href="/applied" className="block transition duration-200 hover:-translate-y-0.5">
-              <MetricTile icon={CheckCircle} label="我的投递 →" value={appliedCount} tone="orange" />
+              <MetricTile icon={CheckCircle} label="投递记录 →" value={appliedCount} tone="orange" />
             </Link>
             <MetricTile icon={EyeSlash} label="已忽略" value={ignoredCount} tone="muted" />
           </div>
         </ProductHero>
 
         {/* 2026-09-03 合并「关注与偏好」进本页：两处原本各挂一份 ResumeProfilePanel，功能重复。
-            /preferences 现重定向到这里，导航入口也统一成「个人主页」。
+            /preferences 现重定向到这里，导航入口也统一成「个人中心」。
             左栏放"我要什么"（账号 + 匹配偏好），右栏放"我是谁"（简历画像），简历面板只留一份。 */}
         <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)] lg:items-start">
           <div className="grid gap-4">

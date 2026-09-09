@@ -5,11 +5,19 @@
 // 同一条洞察在两个地方读起来承诺不同，比没有承诺更糟——用户会以为是两回事。
 // 文案遵循 spec §1.5：signal 只给数字（样本量是核心承诺），claim 必须读起来像转述，
 // fact 才可以肯定陈述。
+//
+// ⚠️ 2026-09-09 创始人定：**标签只承载类型，不承载取值**，所以这里返回 label / basis 两段，
+//    不再返回拼好的一句 text。label 进芯片（事实 / 数据 / 说法），basis 是这一档的承诺依据
+//    （样本量 / 来源数 / 官方出处）——它**必须继续显示**、只是挪到芯片旁的元信息位：
+//    signal 丢掉样本量就等于把「只给数字」的承诺也丢了，那是 spec §1.5 的红线。
 // ============================================================
 import type { InsightAssertion, InsightGrade } from "./types";
 
 export interface AssertionChip {
-  text: string;
+  /** 芯片文字：只有档位名（事实 / 数据 / 说法 / 经验），不含任何取值。 */
+  label: string;
+  /** 承诺依据，展示层渲染在芯片旁的元信息位，不许拼回 label 里。 */
+  basis: string;
   cls: string;
 }
 
@@ -53,26 +61,32 @@ export function assertionChip(
     (typeof payload?.active_count === "number" ? payload.active_count : null);
 
   if (assertion === "fact") {
-    return { text: "事实 · 据官方披露", cls: FACT_CLS };
+    return { label: "事实", basis: "据官方披露", cls: FACT_CLS };
   }
   if (assertion === "signal") {
-    // signal：只给数字，不下结论。样本量是核心承诺。
-    const nLabel = sampleN != null ? `基于 ${sampleN} 个在招岗` : "基于在招岗位";
-    return { text: `数据 · ${nLabel}`, cls: SIGNAL_CLS };
+    // signal：只给数字，不下结论。样本量是核心承诺，不许省。
+    return {
+      label: "数据",
+      basis: sampleN != null ? `基于 ${sampleN} 个在招岗` : "基于在招岗位",
+      cls: SIGNAL_CLS,
+    };
   }
   if (assertion === "claim") {
     // claim：必须读起来像转述，来源数是承诺。
-    const claimLabel = publisherCount > 0 ? `据 ${publisherCount} 处公开讨论` : "公开讨论";
-    return { text: `说法 · ${claimLabel}`, cls: CLAIM_CLS };
+    return {
+      label: "说法",
+      basis: publisherCount > 0 ? `据 ${publisherCount} 处公开讨论` : "据公开讨论",
+      cls: CLAIM_CLS,
+    };
   }
   // assertion=null：存量行，回落 grade 逻辑（兼容迁移期）
   if (grade === "fact") {
-    return { text: "事实 · 公开来源", cls: FACT_CLS };
+    return { label: "事实", basis: "据公开来源", cls: FACT_CLS };
   }
-  const expText = sampleSize
-    ? `经验 · 据约 ${sampleSize} 条反馈`
+  const expBasis = sampleSize
+    ? `据约 ${sampleSize} 条反馈`
     : publisherCount > 0
-      ? `经验 · 据 ${publisherCount} 个公开来源`
-      : "经验 · 群体反馈";
-  return { text: expText, cls: LEGACY_EXPERIENCE_CLS };
+      ? `据 ${publisherCount} 个公开来源`
+      : "据群体反馈";
+  return { label: "经验", basis: expBasis, cls: LEGACY_EXPERIENCE_CLS };
 }

@@ -349,7 +349,7 @@ export default function CampusClient({
   }, [expandedPattern, mode, fullJobs, filters]);
 
   // JobCard 要求的回调；本区岗位不预取 job_actions（专区场景无需个性化打分/回填 user_action），
-  // 值得投/已投递/忽略仍会经 JobCard 内部走 /api/job-actions 真实写库，只是不需要在此处再镜像一份状态。
+  // 收藏/已投递/忽略仍会经 JobCard 内部走 /api/job-actions 真实写库，只是不需要在此处再镜像一份状态。
   function handleActionChange(_jobId: string, _action: PrimaryAction | null) {}
 
   // 用户纠错入口（这不是校招/链接失效/已结束）：写 /api/campus-zone/dispute → events 复核队列。

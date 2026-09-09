@@ -578,8 +578,8 @@ export default function DesignSystemClient() {
         <div className="surface-soft">
           <EmptyState
             icon={<Compass size={28} weight="light" />}
-            title="还没有值得投的岗位"
-            description="在「今日」里看到合适的岗位时点一下「值得投」，它就会出现在这里，方便你集中投递。"
+            title="还没有收藏的岗位"
+            description="在「推荐」里看到合适的岗位时点一下「收藏」，它就会出现在这里，方便你集中投递。"
             action={<Button size="sm">去今日看看</Button>}
           />
         </div>

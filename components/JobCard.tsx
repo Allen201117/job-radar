@@ -59,14 +59,16 @@ import { buttonVariants, badgeVariants } from "@/components/ui";
 interface Props {
   job: ScoredJob;
   onActionChange: (jobId: string, action: PrimaryAction | null) => void;
-  /** 动作真正落库（或失败回滚）之后回调一次，页面用它弹「已加入值得投」这类就地反馈。
+  /** 动作真正落库（或失败回滚）之后回调一次，页面用它弹「已收藏」这类就地反馈。
       注意别用 onActionChange 代劳——那个在乐观更新和回滚时各调一次，拿它弹提示会把回滚说成成功。 */
   onActionResult?: (result: { jobId: string; action: PrimaryAction | null; ok: boolean }) => void;
   // 本次会话刷新/发现新拿到的岗位 → 绿色高亮 + 「本次新发现」标
   sessionNew?: boolean;
-  // 'opportunity' = 今日机会卡（档位/原因来自引擎，按钮=值得投/不适合/已投递）；
-  // 'library'（默认）= 岗位库卡（matchTier 徽标 + match_reasons，按钮=值得投/标记投递/忽略）。
-  // 命名统一：saved 动作全站统一叫「值得投」（与导航/saved 页同名），不再出现「收藏」双名。
+  // 'opportunity' = 「推荐」卡（档位/原因来自引擎，按钮=收藏/不适合/已投递）；
+  // 'library'（默认）= 岗位库卡（matchTier 徽标 + match_reasons，按钮=收藏/标记投递/忽略）。
+  // 命名统一：saved 动作全站统一叫「收藏」（与导航/saved 页同名），不再出现「值得投」双名。
+  // ⚠️ 2026-09-09 由「值得投」改名成「收藏」（创始人「和大厂对齐」）——这条规则的方向被**反过来**了，
+  //    改名时动作词与导航名是一起换的，理由与出处见 lib/i18n.ts 的词表注释。
   variant?: "library" | "opportunity";
   opportunityTier?: OpportunityTier;
   opportunityReasons?: OpportunityReason[];
@@ -75,7 +77,7 @@ interface Props {
   opportunitySignals?: OpportunitySignal[];
   opportunityCheckedAgeHours?: number | null;
   // 岗位库搜索结果的「为何相关」结构化原因（同职能 / 因某字段缺失被放行）；
-  // 只有 jobs 列表按筛选传入，其余场景（今日机会/收藏/已投）不传 → 不显示。
+  // 只有 jobs 列表按筛选传入，其余场景（推荐/收藏/已投）不传 → 不显示。
   matchReason?: FilterMatch;
 }
 
@@ -310,7 +312,7 @@ export default function JobCard({
     }
   }
 
-  // 值得投 / 已投递：点已选则取消（action=null）
+  // 收藏 / 已投递：点已选则取消（action=null）
   function handlePrimary(action: "saved" | "applied") {
     if (acting) return;
     setMoreOpen(false);
@@ -431,7 +433,7 @@ export default function JobCard({
   }> = [];
   const currentActionLabel =
     currentAction === "saved"
-      ? "已加入值得投"
+      ? "已收藏"
       : currentAction === "applied"
         ? "已投递"
         : currentAction === "ignored"
@@ -710,8 +712,8 @@ export default function JobCard({
           )}
         </div>
 
-        {/* 只露 2 个主动作（官网详情 / 值得投），其余收进「更多」——功能一个不少，只是不再占 5 行高度。
-            移动端：官网详情整宽 + 值得投·更多并排一行；桌面端（lg）回到右侧竖排。 */}
+        {/* 只露 2 个主动作（官网详情 / 收藏），其余收进「更多」——功能一个不少，只是不再占 5 行高度。
+            移动端：官网详情整宽 + 收藏·更多并排一行；桌面端（lg）回到右侧竖排。 */}
         <div className="flex shrink-0 flex-col gap-2 lg:w-36">
           <button
             type="button"
@@ -727,7 +729,7 @@ export default function JobCard({
               disabled={acting}
               onClick={() => handlePrimary("saved")}
               icon={BookmarkSimple}
-              label={currentAction === "saved" ? "已加入值得投" : "值得投"}
+              label={currentAction === "saved" ? "已收藏" : "收藏"}
             />
             <ActionButton
               active={false}

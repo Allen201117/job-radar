@@ -874,7 +874,8 @@ test("admin health page authenticates before parallel cross-database reads and r
   assert.match(source, /getJobsHealthSnapshot/);
   assert.match(source, /\.rpc\("admin_health_snapshot",\s*\{\s*p_window:\s*"7 days"\s*\}\)/s);
   assert.match(source, /Promise\.allSettled/);
-  assert.match(source, /运营健康/);
+  // 原来这里还断言页头眉标「运营健康」。2026-09-09 页头收敛成「图标 + 一个页面名」后眉标整体取消
+  // （见 components/ProductChrome.tsx 的注释），页面名只剩「管理员看板 · {tab}」。
   assert.match(source, /管理员看板/);
   assert.match(source, /两周冲刺 · 用户闭环/);
   assert.match(source, /这些数字怎么来的/);

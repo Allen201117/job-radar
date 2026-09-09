@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 export type TabItem = {
   value: string;
   label: React.ReactNode;
-  /** 右侧计数徽标，如「值得投 12」。 */
+  /** 右侧计数徽标，如「收藏 12」。 */
   badge?: React.ReactNode;
   disabled?: boolean;
 };

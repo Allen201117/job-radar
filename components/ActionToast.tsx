@@ -69,7 +69,7 @@ export default function ActionToast({
 /** 岗位卡三个主动作的反馈文案（/jobs /saved /campus 共用一份，别各写各的）。 */
 export function jobActionToastText(action: "saved" | "applied" | "ignored" | null, ok: boolean) {
   if (!ok) return "操作失败，已恢复原状态";
-  if (action === "saved") return "已加入值得投";
+  if (action === "saved") return "已收藏";
   if (action === "applied") return "已标记投递";
   if (action === "ignored") return "已忽略，不再推荐";
   return "已撤销";
