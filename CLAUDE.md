@@ -594,6 +594,20 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
 3. **聚合 SQL 不用 `company ilike any()`**：带前导 % 用不了任何索引 → 39 万 active 行并行全表扫（live EXPLAIN 2567ms / 127,726 buffers）。改成先取全部 active 公司名走索引、JS 解析出确切名字、再 `company = any()`（957ms / 46,413 buffers，结果集逐行相同）。
 4. **展开某家公司走 `/api/campus-zone/jobs`（按 公司+模式），不按 id**：按 id 取要先把 16,494 个 uuid 下发到浏览器（光 uuid 就 0.59 MB）。⚠️ 旧的 by-ids 调法有个真 bug——把 campus 与 intern 的 id 拼一起再截前 200，**大厂的实习桶被校招桶挤没、实习模式展开必然空白**。⚠️ 取数分两段：先只取轻字段（排序键 + company）排好序，再顺着顺序分批（500）取完整行跑准入门，收满 200 就停（一次性拉完整行 live 实测 5.8s，分段后 0.5~0.9s）。
 5. **归属规则三处必须一致**（getCampusZone / getCampusCompanyJobs / 分面计数）：list 里**第一个 pattern 命中者得**（`腾讯音乐 TME` 归 `%腾讯音乐%` 不归 `%腾讯%`）。任一处漂移 → 卡面计数与展开列表对不上；live 交叉验证法：卡面计数与接口返回条数在未截断的公司上必须逐个相等。
+6. **🚫 `unstable_cache` 的重算被杀 = 永远服务旧快照且不报错（2026-09-09 线上实锤，卡了 6 天）**：
+   ❌ 现象：/campus 卡面 京东 0 / 小米 6 / 百度 2 / vivo 0、全部「数据待更新」，而库里是 127 / 852 / 158 / 166、
+   `last_seen_at` 当天；不走缓存的 `/api/campus-zone/jobs` 返回的就是库里的数。卡面数字正好等于 09-03 打通前的快照。
+   ✅ 根因：`loadCampusBoard` 重算要把 30 家 ~2 万岗**含 JD 正文（6.5MB）**拖回函数跑分类，live 数秒到十几秒；
+   Hobby 档函数默认 10s，后台重算被杀后 Next 继续服务旧条目，且 Vercel 数据缓存**跨部署存活**——部署也刷不掉。
+   ✅ 防：① page `maxDuration = 60`；② 快照带 `generatedAtMs`，页面渲染「数据更新于 N 分钟前」（服务端算成字符串再下发，
+   见 `lib/relative-time.snapshotAgeLabel`）——**任何 `unstable_cache` 包着的重活都该这么做**，否则卡死无人知；
+   ③ 重算打 `[campus-board] … ms=` 日志；④ 要刷掉卡死的条目，**换 cache key**（v1→v2），别指望 revalidate。
+   ⚠️ 别顺手把 `summary` 从取数里砍掉：`buildCampusFacets` 的职能分面要靠它算 `fn`；真正的解法是物化 `job_function`
+   （见「/jobs 默认排序冷路径」那节，单独立项）。
+7. **SQL 粗筛必须是 JS 准入门的超集，且直接认 `recruitment_category` 列**：`CAMPUS_PREFILTER_SQL` 曾停在 2026-08-07
+   之前的 url 正则（不认 moka 的 `-recruitment` / `_apply` 后缀、不认 `/internship/`），大疆 131/139、中兴 60/60 个
+   「校招」在专区里静默消失。列与 JS 现算同源（`crawler/recruitment_classify.py` 隔进程调同一份 JS；live 对拍
+   20,311 行零不一致），`campusAdmission` 有列就认列，正则只兜 NULL。契约测试 `tests/campus-zone-prefilter.test.js`。
 
 ## 认证
 
