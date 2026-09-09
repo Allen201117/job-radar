@@ -511,3 +511,56 @@ function B_isDataLayer(item) {
   });
   return B.isDataLayerItem(item);
 }
+
+// ============================================================
+// 标签只承载类型，不承载取值（2026-09-09 创始人定）
+// 上线前的形态是「加班强度 · 996/大小周」「数据 · 基于 217 个在招岗」：同一主体同时挂着
+// 相反档位时，两张同名标签会自相矛盾。判据写成机器可查的两条，避免下次有人拼回去。
+// ============================================================
+const AC = loadTsModule(path.join("lib", "insight-assertion-chip.ts"), { "./types": {} });
+
+test("承诺芯片的 label 只有档位名：不含取值、不含分隔号", () => {
+  const cases = [
+    AC.assertionChip("fact", "fact", null, 3, null),
+    AC.assertionChip("signal", "experience", null, 0, { sample_n: 217 }),
+    AC.assertionChip("claim", "experience", null, 4, null),
+    AC.assertionChip(null, "fact", null, 0, null),        // 存量行回落
+    AC.assertionChip(null, "experience", 12, 0, null),    // 存量行回落
+  ];
+  for (const chip of cases) {
+    assert.match(chip.label, /^(事实|数据|说法|经验)$/, `label 必须只有档位名，实际是「${chip.label}」`);
+    assert.equal(/\d/.test(chip.label), false, `label 里不许出现数字：${chip.label}`);
+    assert.equal(chip.label.includes("·"), false, `label 里不许拼依据：${chip.label}`);
+  }
+});
+
+test("承诺依据没被删掉，只是挪出芯片：样本量 / 来源数仍在 basis 里", () => {
+  // signal 丢掉样本量 = 丢掉「只给数字」这个承诺本身（spec §1.5 红线）。
+  assert.equal(AC.assertionChip("signal", "experience", null, 0, { sample_n: 217 }).basis, "基于 217 个在招岗");
+  assert.equal(AC.assertionChip("signal", "experience", 320, 0, null).basis, "基于 320 个在招岗");
+  assert.equal(AC.assertionChip("signal", "experience", null, 0, null).basis, "基于在招岗位");
+  assert.equal(AC.assertionChip("claim", "experience", null, 4, null).basis, "据 4 处公开讨论");
+  assert.equal(AC.assertionChip("fact", "fact", null, 0, null).basis, "据官方披露");
+});
+
+test("两个展示面用同一份 label + basis，不许任一处把依据拼回芯片", () => {
+  for (const rel of [path.join("app", "insights", "insights-client.tsx"), path.join("components", "CompanyInsightDrawer.tsx")]) {
+    const src = fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
+    assert.match(src, /\{chip\.label\}/, `${rel} 芯片必须只渲染 chip.label`);
+    assert.match(src, /\{chip\.basis\}/, `${rel} 承诺依据必须仍然渲染在芯片外`);
+  }
+});
+
+test("主题标签同样只有类型名：档位取值不许进标签", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "app", "insights", "insights-client.tsx"), "utf8");
+  // 档位取值（准时下班 / 996 …）来自 GRADE_LABEL；页面一旦引它就是又拼回标签了。
+  assert.equal(/GRADE_LABEL/.test(src), false, "洞察库页面不该再用 GRADE_LABEL 拼标签");
+  // 卡面与展开视图两处：标签文字之后必须直接闭合，不许再挂任何东西。
+  const flat = src.replace(/\s/g, "");
+  for (const who of ["m", "item"]) {
+    assert.ok(
+      flat.includes(`{METRIC_LABEL[${who}.metric_key]||${who}.metric_key}</span>`),
+      `${who} 那处主题标签后面被拼了东西（标签只放类型名）`,
+    );
+  }
+});

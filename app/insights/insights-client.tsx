@@ -17,7 +17,6 @@ import { assertionChip, ASSERTION_LABEL, ASSERTION_PROMISE } from "@/lib/insight
 import {
   DIMENSION_LABEL,
   FRESHNESS_LABEL,
-  GRADE_LABEL,
   METRIC_LABEL,
   metricChipClass,
   missingContributionTopics,
@@ -375,12 +374,6 @@ function metricText(m: LibraryCardMetric): string {
   return `${METRIC_LABEL[m.metric_key] || m.metric_key} ${value}${n}`.trim();
 }
 
-/** 档位类指标（加班强度/晋升节奏/实习体验）把 1–5 翻成人话，直接贴在指标名后面。 */
-function gradeText(metricKey: string, value: number | null): string {
-  if (value == null) return "";
-  return GRADE_LABEL[metricKey]?.[Math.round(value)] || "";
-}
-
 function labelFor(key: keyof Filters, filters: Filters): string {
   const value = filters[key];
   if (key === "q") return `搜索「${value}」`;
@@ -555,13 +548,14 @@ function SubjectCard({
           {(subject.cards || []).map((m) => (
             <li key={`${m.metric_key}-${m.content.slice(0, 12)}`} className="flex items-start gap-2">
               {/* 主题标签是卡面的扫读锚点：有底色、有边、12px（见 metricChipClass 的注释）。
-                  没有主题键的条目（如人工录入的招聘时机）不渲染空芯片。 */}
+                  没有主题键的条目（如人工录入的招聘时机）不渲染空芯片。
+                  ⚠️ 标签**只承载类型，不承载取值**（2026-09-09 创始人定）：同一主体常同时挂着
+                  相反档位（线上实测滴滴既有「加班强度(1)」又有两条「加班强度(4)」），把取值
+                  拼进标签会出现两张同名标签自相矛盾。取值不会因此丢失——档位本来就是
+                  crawler/insight_grade_scale.py 从正文那句话映射出来的，正文就在标签右边。 */}
               {m.metric_key && (
                 <span className={`mt-px shrink-0 ${metricChipClass(m.metric_key)}`}>
                   {METRIC_LABEL[m.metric_key] || m.metric_key}
-                  {gradeText(m.metric_key, m.metric_value) && (
-                    <span className="font-bold"> · {gradeText(m.metric_key, m.metric_value)}</span>
-                  )}
                 </span>
               )}
               <span className="t-body-sm ink-2">{metricText(m)}</span>
@@ -648,16 +642,16 @@ function ItemRow({ item }: { item: InsightItemView }) {
         {item.metric_key && (
           <span className={metricChipClass(item.metric_key)}>
             {METRIC_LABEL[item.metric_key] || item.metric_key}
-            {gradeText(item.metric_key, item.metric_value ?? null) && (
-              <span className="font-bold"> · {gradeText(item.metric_key, item.metric_value ?? null)}</span>
-            )}
           </span>
         )}
         <span className={`rounded-full px-2.5 py-1 t-caption font-semibold ${chip.cls}`}>
-          {chip.text}
+          {chip.label}
         </span>
+        {/* 承诺依据（样本量 / 来源数）留在芯片外：芯片只说这是哪一档，依据是元信息。
+            与维度之间要有分隔号 —— 两段同色 caption 挨着会读成一句
+            （线上实测「据 3 处公开讨论 公司文化」）。 */}
         <span className="t-caption ink-3">
-          {DIMENSION_LABEL[item.dimension] || item.dimension}
+          {chip.basis} · {DIMENSION_LABEL[item.dimension] || item.dimension}
         </span>
         {item.outdated && <span className="t-caption ink-4">可能已过时</span>}
       </div>
