@@ -638,10 +638,19 @@ export type CampusCompanyRow = {
 /** 校招专区粗筛条件：job_type / title / jd_url 任一命中校招或实习关键词。
  *  getCampusZone（全清单聚合）与 getCampusCompanyJobs（展开单家取完整行）共用同一份，
  *  两边口径必须逐字一致——否则卡面计数与展开区列表会对不上。 */
-const CAMPUS_PREFILTER_SQL = `(
-          coalesce(j.job_type,'') ~* '校|campus|应届|管培|培训生|graduate|new.?grad|实习|intern'
+// ⚠️ 粗筛必须是 campusAdmission 的**超集**，漏一条 = 库里明明是校招、专区却看不见（不报错、不崩）。
+//   2026-09-09 实测：这里的 url 正则少了 moka 门户的 `-recruitment` / `_apply` 后缀（层4 在
+//   2026-08-07 就放宽了，粗筛没跟上），大疆 131/139、中兴 60/60 个「校招」岗被静默丢掉；
+//   `/internship/` 同理（`intern(/|\?|$)` 对 internship 不成立）。
+//   现在第一条件直接认库里的 recruitment_category（与 campusAdmission 同一份 JS 分类器算出来的，
+//   见 crawler/recruitment_classify.py），正则只兜「列还没算出来（NULL）/ 分类器改了口径列还没重算」的行。
+//   契约测试：tests/campus-zone-prefilter.test.js。
+export const CAMPUS_PREFILTER_SQL = `(
+          j.recruitment_category in ('校招','实习')
+          or coalesce(j.job_type,'') ~* '校|campus|应届|管培|培训生|graduate|new.?grad|实习|intern'
           or coalesce(j.title,'') ~* '校|应届|届|管培|培训生|graduate|campus|new.?grad|实习|intern'
-          or coalesce(j.jd_url,'') ~* '/(xiaozhao|campus|shixi|intern)(/|\\?|$)'
+          or coalesce(j.jd_url,'') ~* '/(xiaozhao|campus|shixi|intern)([-_a-z]*)(/|\\?|$)'
+          or coalesce(j.apply_url,'') ~* '/(xiaozhao|campus|shixi|intern)([-_a-z]*)(/|\\?|$)'
         )`;
 
 /**
