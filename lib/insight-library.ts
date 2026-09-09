@@ -540,9 +540,11 @@ export function missingContributionTopics(subject: LibrarySubject): typeof CONTR
 }
 
 /**
- * 档位的**短标签**，只用于芯片与筛选项显示。
- * ⚠️ 完整口径（判档依据）在 crawler/insight_grade_scale.py 的 GRADE_SCALES，
- *    那份才是喂给模型的真相；这里改文案不等于改口径，两边语义必须一致。
+ * 档位的**短标签**。完整口径（判档依据）在 crawler/insight_grade_scale.py 的 GRADE_SCALES，
+ * 那份才是喂给模型的真相；这里改文案不等于改口径，两边语义必须一致。
+ * ⚠️ 2026-09-09 起**没有任何 UI 在用它**：主题标签只显示类型不显示取值（见
+ *    app/insights/insights-client.tsx 卡面标签处的注释），档位取值只用于筛选（数值区间）。
+ *    要给筛选器加人话选项时从这里取，别在 UI 里再抄一份。
  */
 export const GRADE_LABEL: Record<string, Record<number, string>> = {
   overtime_level: {
