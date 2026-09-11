@@ -2,6 +2,8 @@
 
 **公开企业官网岗位雷达看板**。自 2026-06-20 起为正式版（此前为内测）。
 
+**关于仓库里的数字**：`docs/`、`supabase/migrations/` 等处出现的注册用户数、岗位数、公司数，都是**文档撰写当天的快照**，不随产品更新（仓库没有数据同步机制）。岗位库与官方源的实时数字以线上 `/jobs` 页为准；用户规模截至 2026-09 为 100 名以上。
+
 **目标**：每天自动监控一批企业招聘官网，把公开岗位整理进共享岗位库，每个用户按自己的偏好看到不同排序，点击直达官网原始岗位页。
 
 **技术栈**：Next.js 15 App Router + React 18 + TypeScript + Tailwind；Supabase（Auth / sources / crawl_runs / 用户小表）；独立 PostgreSQL 岗位热表；Python crawler（httpx + selectolax，少量 Playwright）；GitHub Actions 定时任务；Vercel 部署。
