@@ -20,8 +20,11 @@
   python3 audit_dead_links.py --sweep agirobot --apply # 全量逐岗审计某源(source_url 子串)
 只读为主；仅 --apply 写 status / enrich_checked_at。绝不打印密钥。
 """
+import os
 import re
 import sys
+import threading
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
@@ -132,6 +135,114 @@ def is_same_document_nav(previous_url, url):
     if not previous_url or not url:
         return False
     return previous_url.split("#", 1)[0] == url.split("#", 1)[0]
+
+
+def _install_dialog_guard(page):
+    """页面自己弹的 JS 对话框(alert/confirm/beforeunload)必须显式接管，否则整个分片会被拖死。
+
+    2026-09-13 查实（3 次分片取消，日志与成因逐字一致）：北森 zhiye 站(如本文件覆盖的
+    ccccltd.zhiye.com)对已下架的岗位会在详情页用 `window.alert('职位已下架')` 提示——这是
+    页面自己的正常 UI 行为，不是攻击也不是我们代码的 bug。但本文件此前从未注册
+    `page.on("dialog", ...)`：没有监听器时，Playwright 默认由 Node 驱动进程自己在内部
+    自动 dismiss 该对话框；一旦这次自动 dismiss 与我们紧接着发起的下一跳
+    `goto()`（同一个 page 对象）发生并发——对话框刚弹出、页面/frame 却已经因为导航被
+    detach——驱动内部这次 `Page.handleJavaScriptDialog` 调用会抛出
+    "Not attached to an active page"，这是一个未被驱动自身捕获的 promise rejection，
+    Node 对未捕获的 rejection 默认整进程崩溃（`node:internal/process/promises:394
+    triggerUncaughtException`）退出。三次取消的 CI 日志逐字一致地卡在这一行之后。
+
+    修法 = 主动注册 dialog 监听器，让"是否需要处理这个对话框"这件事从驱动内部的黑盒
+    转移到我们自己的 Python 代码：一旦注册了监听器，Playwright 就不再由驱动自动
+    dismiss，而是要求我们显式调用 accept()/dismiss()——即使我们这次调用本身失败
+    (比如页面已经导航走、目标已 detach)，playwright-python 的 sync 事件分发
+    (`Connection.dispatch()` 的 `_is_sync` 分支，用 EventGreenlet 包一层再由
+    `_on_event_listener_error` 收敛)会把这个异常安全地存起来、在下一次 API 调用时
+    抛给我们的 Python 代码，而不会让 Node 驱动进程本身崩溃退出。
+
+    我们自己的处理逻辑必须绝不外抛：宁可漏判（这一岗当场渲染不出内容，classify()
+    会落到 unsure/suspect，绝不会被误判 dead）也不可让驱动死循环/崩溃拖死整个分片。"""
+
+    def _on_dialog(dialog):
+        try:
+            # beforeunload 的语义是"是否允许离开当前页"：dismiss=留在原地会顶住我们自己
+            # 发起的 goto()/reload()；我们才是发起导航的一方，理应放行。alert/confirm/
+            # prompt 没有这层含义，用 dismiss（相当于取消/关闭，不触发任何潜在副作用）。
+            if dialog.type == "beforeunload":
+                dialog.accept()
+            else:
+                dialog.dismiss()
+        except Exception as e:
+            sys.stderr.write(
+                f"\n  [dialog] 处理 {dialog.type}({dialog.message[:20]!r}) 失败(已忽略): "
+                f"{type(e).__name__}\n")
+
+    page.on("dialog", _on_dialog)
+
+
+def _start_watchdog(heartbeat, stop_event, timeout_s=None, poll_s=5, exit_fn=None):
+    """兜底：即使驱动仍因别的原因崩溃/死锁，也不许再像 2026-09-13 那三次分片一样
+    干等到 workflow 150 分钟超时才被外部杀掉。
+
+    背景（读 playwright-python 1.52/1.60 源码逐行核实，`_context_manager.py` /
+    `_sync_base.py` / `_connection.py`）：sync API 没有独立线程驱动 asyncio 事件循环，
+    而是用同一 OS 线程上的 greenlet 协作切换——应用代码每发起一次 Playwright 调用，
+    才会把控制权切给"dispatcher fiber"去推进事件循环；应用代码在两次调用之间
+    (纯 Python 计算/打印)时，事件循环是完全冻结的。若 Node 驱动进程在这个间隙里
+    崩溃，`dispatcher fiber` 对该崩溃的收尾处理（等子进程真正被 reap）在某些环境下
+    可能长时间拿不到结果；届时任何新发起的 Playwright 调用都拿不到明确的异常，
+    我们自己 for 循环里的 try/except 完全捕不到——本地沙箱多次尝试复现这个具体挂起
+    未能稳定命中(见交付报告)，但 CI 三次取消的现象（该行之后再无任何输出、
+    orphan python3 进程撑到 150 分钟）除了"卡在某个阻塞调用里出不来"没有别的解释。
+
+    这个 watchdog 是独立的 Python 线程，只依赖主循环按 heartbeat[0] 汇报的心跳时间戳，
+    不依赖对方是否还能响应——即使主线程真的卡死在某个阻塞调用里，CPython 的阻塞
+    syscall（select/read/os.waitpid 等）都会在阻塞前释放 GIL，这个线程仍能被调度到、
+    仍能判断超时并强制退出整个进程，把"干等 150 分钟"变成"几十秒内明确失败退出"。"""
+    timeout_s = float(os.environ.get("AUDIT_WATCHDOG_TIMEOUT_S", "150")) if timeout_s is None else timeout_s
+    exit_fn = exit_fn or os._exit
+
+    def _watch():
+        while not stop_event.wait(poll_s):
+            idle = time.time() - heartbeat[0]
+            if idle > timeout_s:
+                sys.stderr.write(
+                    f"\n[WATCHDOG] 单岗处理已 {idle:.0f}s 无心跳(阈值 {timeout_s:.0f}s)，"
+                    "判定 Playwright 驱动已崩溃/死锁且无法恢复，强制退出进程"
+                    "（避免拖到 workflow 150min 超时才被外部杀掉）。\n")
+                sys.stderr.flush()
+                exit_fn(3)
+                return
+
+    t = threading.Thread(target=_watch, name="audit-watchdog", daemon=True)
+    t.start()
+    return t
+
+
+def _process_job(hold, fresh, j, previous_url):
+    """处理单个岗位：导航 +（同文档跳转时）reload + 等待渲染 + 判定。
+
+    任何异常（含对话框处理失败、驱动/页面崩溃）一律落 unsure，绝不能判 dead——
+    「宁可漏判不可错杀」：dead 在 --apply 下会置 expired，次日被 purge-expired 永久删除。
+    异常后尝试 fresh() 重建浏览器兜底继续巡检；重建本身失败也不外抛，留给下一岗再试。
+    返回 (host, verdict, why, new_previous_url)。"""
+    h = host_of(j["jd_url"])
+    try:
+        same_document = is_same_document_nav(previous_url, j["jd_url"])
+        hold["pg"].goto(j["jd_url"], wait_until="domcontentloaded", timeout=20000)
+        if same_document:
+            # 只改 hash 的 goto 不重新渲染 → 不 reload 就会拿上一个岗的页面判这一个岗。
+            hold["pg"].reload(wait_until="domcontentloaded", timeout=20000)
+        new_previous_url = j["jd_url"]
+        hold["pg"].wait_for_timeout(2500)  # 给 SPA 渲染时间
+        verdict, why = classify(hold["pg"], j.get("title"))
+    except Exception as e:
+        verdict, why = "unsure", type(e).__name__
+        new_previous_url = None  # 这一跳没跳成，页面停在哪儿不确定
+        try:
+            fresh()  # 可能浏览器崩了 → 重建后继续
+        except Exception:
+            pass
+    return h, verdict, why, new_previous_url
 
 
 def _shard_rows(rows, limit, shard):
@@ -402,6 +513,10 @@ def main():
             write_fail[0] += 1
             sys.stderr.write(f"\n  写失败 {jid}: {str(e)[:60]}\n")
 
+    heartbeat = [time.time()]
+    watchdog_stop = threading.Event()
+    _start_watchdog(heartbeat, watchdog_stop)
+
     with sync_playwright() as p:
         hold = {"b": None, "pg": None}
 
@@ -414,31 +529,16 @@ def main():
             hold["b"] = p.chromium.launch(headless=True)
             hold["pg"] = hold["b"].new_context(
                 user_agent=UA, viewport={"width": 1280, "height": 900}).new_page()
+            _install_dialog_guard(hold["pg"])  # 见函数注释：防页面自己弹的对话框拖死驱动进程
 
         fresh()
         previous_url = None
         for i, j in enumerate(sample, 1):
+            heartbeat[0] = time.time()  # watchdog 心跳：本岗开始处理
             if i > 1 and i % RESTART_EVERY == 1:
                 fresh()
                 previous_url = None   # 换了浏览器 = 空白页，下一跳不可能是同文档
-            h = host_of(j["jd_url"])
-            verdict, why = "unsure", "nav-fail"
-            try:
-                same_document = is_same_document_nav(previous_url, j["jd_url"])
-                hold["pg"].goto(j["jd_url"], wait_until="domcontentloaded", timeout=20000)
-                if same_document:
-                    # 只改 hash 的 goto 不重新渲染 → 不 reload 就会拿上一个岗的页面判这一个岗。
-                    hold["pg"].reload(wait_until="domcontentloaded", timeout=20000)
-                previous_url = j["jd_url"]
-                hold["pg"].wait_for_timeout(2500)  # 给 SPA 渲染时间
-                verdict, why = classify(hold["pg"], j.get("title"))
-            except Exception as e:
-                verdict, why = "unsure", type(e).__name__
-                previous_url = None   # 这一跳没跳成，页面停在哪儿不确定
-                try:
-                    fresh()  # 可能浏览器崩了 → 重建后继续
-                except Exception:
-                    pass
+            h, verdict, why, previous_url = _process_job(hold, fresh, j, previous_url)
             agg[h][verdict] += 1
             if apply:
                 mark(j["id"], verdict == "dead")  # dead→下架；其余盖巡检时间戳轮转。边扫边写，中途崩了不丢
@@ -447,6 +547,7 @@ def main():
             hold["b"].close()
         except Exception:
             pass
+    watchdog_stop.set()  # 正常收尾，撤掉 watchdog——后面的报告/ops_runs 网络调用不受它管
     sys.stderr.write("\n\n")
 
     rows = sorted(agg.items(), key=lambda kv: -(kv[1]["dead"] + kv[1]["suspect"]))
