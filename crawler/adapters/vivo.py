@@ -69,7 +69,12 @@ class VivoAdapter(BaseAdapter):
                     )
                     break  # 后续页尽力而为，保留已抓的行；fetch_complete 由下方与 reported_total 比对天然置 False
                 if self.reported_total is None:
-                    total = _int_or_none(body.get("total"))
+                    # 2026-09-13 live：总数只在 meta.total（data 是 list）。此前没读它，reported_total
+                    # 恒为 None → crawl_runs 缺分母，岗位数掉 66% 时分不清是对方撤岗还是我们漏抓。
+                    meta = body.get("meta")
+                    total = _int_or_none(meta.get("total")) if isinstance(meta, dict) else None
+                    if total is None:
+                        total = _int_or_none(body.get("total"))
                     if total is None:
                         total = _int_or_none(body.get("totalCount"))
                     if total is None:
