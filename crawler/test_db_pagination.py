@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import httpx  # noqa: E402
+from postgrest.exceptions import APIError  # noqa: E402
 
 import db  # noqa: E402
 
@@ -181,6 +182,113 @@ class SupabaseReadRetryTest(unittest.TestCase):
             lambda: sb.table("sources").select("*").eq("enabled", True))
         self.assertEqual(len(rows), 1079, "重试后过滤+分页结果应和没抖动时一致")
         self.assertTrue(all(r["enabled"] for r in rows))
+
+
+class SupabaseGatewayRetryTest(unittest.TestCase):
+    """网关类 5xx（504 等）也要按 _READ_BACKOFF 重试，不能让整个 CI 分片 exit 1。
+
+    2026-09-13 线上（近 3 天 4 次独立失败：enrich-backlog run 34630633252/34693775151，
+    liveness-sweep run 34696387721/34726477783，共 7 个分片）：读 sources 时撞到 Supabase
+    前面网关的瞬时 `504 Gateway Timeout`，postgrest-py 把它包成
+    `postgrest.exceptions.APIError({'message': 'JSON could not be generated', 'code': 504, ...})`——
+    这条落在 httpx.TransportError 完全捕不到的分支，旧逻辑一次网关抖动就让整片挂掉。
+    区分「网关暂时性错误」与「真正的 SQL/业务错」的判据是 `.code` 的类型：
+    postgrest-py 只有在响应体不是合规 PostgREST 错误 JSON 时才会退回用 HTTP 状态码填 `.code`
+    （int）；真正的 PG/PostgREST 业务错（SQLSTATE、PGRST 码）永远是字符串。"""
+
+    def setUp(self):
+        self._orig_sleep = db.time.sleep
+        db.time.sleep = lambda _s: None
+
+    def tearDown(self):
+        db.time.sleep = self._orig_sleep
+
+    def _flaky_sb(self, rows, fail_times, exc):
+        state = {"n": 0}
+
+        class Q(_FakeQuery):
+            def execute(self):
+                state["n"] += 1
+                if state["n"] <= fail_times:
+                    raise exc
+                return super().execute()
+
+        class Sb(_FakeSb):
+            def table(self, _name):
+                return Q(list(self.rows), self.order_log)
+
+        return Sb(rows), state
+
+    def _gateway_error(self, status_code: int) -> APIError:
+        """复刻 postgrest-py generate_default_error_message() 在响应体不合规时的产物：
+        .code 是 int，直接等于 HTTP 状态码。"""
+        return APIError({
+            "message": "JSON could not be generated",
+            "code": status_code,
+            "hint": "Refer to full message for details",
+            "details": "b'{\"message\":\"Gateway Timeout\"}'",
+        })
+
+    def _sql_error(self, sqlstate: str) -> APIError:
+        """真正的 PostgREST/PG 业务错：.code 是字符串 SQLSTATE。"""
+        return APIError({
+            "message": "boom",
+            "code": sqlstate,
+            "hint": None,
+            "details": None,
+        })
+
+    def test_retries_504_gateway_timeout_then_succeeds(self):
+        """① 该重试的没重试就是漏——504 两次后第 3 次成功，必须重试到底拿到数据。"""
+        sb, state = self._flaky_sb(_sources(10), fail_times=2, exc=self._gateway_error(504))
+        rows = db.fetch_all_rows(lambda: sb.table("sources").select("*"))
+        self.assertEqual(len(rows), 10, "重试后应拿到完整数据")
+        self.assertEqual(state["n"], 3, "应在第 3 次尝试成功（前 2 次网关抖动）")
+
+    def test_gives_up_after_attempt_cap_and_raises_last_api_error(self):
+        """504 连续耗尽 4 次尝试后，必须如实抛出最后一次的 APIError（不能吞掉或换成别的异常）。"""
+        sb, state = self._flaky_sb(_sources(10), fail_times=99, exc=self._gateway_error(504))
+        with self.assertRaises(APIError) as ctx:
+            db.fetch_all_rows(lambda: sb.table("sources").select("*"))
+        self.assertEqual(ctx.exception.code, 504)
+        self.assertEqual(state["n"], db._READ_ATTEMPTS, "重试次数应等于 _READ_ATTEMPTS")
+
+    def test_does_not_retry_4xx_api_error(self):
+        """② 不该重试的被重试了就是误——普通 400 立刻抛，不进重试循环。"""
+        sb, state = self._flaky_sb(_sources(10), fail_times=99, exc=self._gateway_error(400))
+        with self.assertRaises(APIError):
+            db.fetch_all_rows(lambda: sb.table("sources").select("*"))
+        self.assertEqual(state["n"], 1, "非网关状态码不该重试")
+
+    def test_does_not_retry_undefined_column_sqlstate(self):
+        """SQLSTATE 42703（列不存在）是业务/SQL 错，字符串 code，立刻抛不重试。"""
+        sb, state = self._flaky_sb(_sources(10), fail_times=99, exc=self._sql_error("42703"))
+        with self.assertRaises(APIError):
+            db.fetch_all_rows(lambda: sb.table("sources").select("*"))
+        self.assertEqual(state["n"], 1, "字符串 SQLSTATE 业务错不该重试")
+
+    def test_does_not_retry_statement_timeout_sqlstate(self):
+        """SQLSTATE 57014（statement_timeout）重试只会原地再等一次超时，必须立刻抛。"""
+        sb, state = self._flaky_sb(_sources(10), fail_times=99, exc=self._sql_error("57014"))
+        with self.assertRaises(APIError):
+            db.fetch_all_rows(lambda: sb.table("sources").select("*"))
+        self.assertEqual(state["n"], 1, "57014 statement_timeout 不该重试")
+
+    def test_does_not_retry_non_gateway_500(self):
+        """非网关的 500（int code 但不在网关码集合里）没有证据是瞬时的，不重试。"""
+        sb, state = self._flaky_sb(_sources(10), fail_times=99, exc=self._gateway_error(500))
+        with self.assertRaises(APIError):
+            db.fetch_all_rows(lambda: sb.table("sources").select("*"))
+        self.assertEqual(state["n"], 1, "非网关 500 不该重试")
+
+    def test_still_retries_transport_error_alongside_gateway_error(self):
+        """④ 原有 httpx.TransportError 重试行为不能被这次改动动到。"""
+        sb, state = self._flaky_sb(
+            _sources(10), fail_times=2,
+            exc=httpx.ConnectError("[Errno 104] Connection reset by peer"))
+        rows = db.fetch_all_rows(lambda: sb.table("sources").select("*"))
+        self.assertEqual(len(rows), 10)
+        self.assertEqual(state["n"], 3, "httpx.TransportError 的重试行为应与改动前一致")
 
 
 class GetSourcesPaginationTest(unittest.TestCase):

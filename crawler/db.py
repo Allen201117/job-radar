@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
+from postgrest.exceptions import APIError
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
@@ -30,20 +31,41 @@ def get_supabase() -> Client:
 # PostgREST 单次 select 的行数硬顶。超过它的表必须分页拉，否则静默只拿到前 1000 行。
 _PAGE_SIZE = 1000
 
-# ── Supabase 读的链路自愈（2026-07-28 加）─────────────────────────────────
+# ── Supabase 读的链路自愈（2026-07-28 加，2026-09-13 扩展网关 5xx）───────────
 # 爬虫跑在 GitHub Actions（Azure 海外）连 Supabase，这条链路和连香港库一样会偶发被掐断。
 # 实测（run 30363519599，enrich-backlog 的 hotjob 片）：读 sources 时
 # `httpx.ConnectError: [Errno 104] Connection reset by peer` → 整片 exit 1，
 # 而同一时刻其余 11 片读得好好的 = 不是 Supabase 挂了，是单次 TCP 抖动。
 # jobs_db.get_conn 早已有同类重试（治香港库），Supabase 这条路当时漏了 —— 这里补齐。
-# 只重试 httpx.TransportError（连接/读写/超时等网络层）；PostgREST 的 APIError（4xx/5xx 业务错、
-# 权限错、SQL 错）不重试——那些重试多少次都是同样的错，只会拖慢失败。
+#
+# 2026-09-13 再实测（近 3 天 4 次独立失败：enrich-backlog run 34630633252/34693775151，
+# liveness-sweep run 34696387721/34726477783，共 7 个分片）：这次不是连接层抖动，而是
+# postgrest-py 把 Supabase 前面网关的 `504 Gateway Timeout` 包成了 `postgrest.exceptions.APIError`
+# （`{'message': 'JSON could not be generated', 'code': 504, ...}`），落在 httpx.TransportError
+# 完全捕不到的分支，一次网关抖动照样让整片 exit 1；504 在进程启动几秒内就返回、同一 run 里
+# 其它分片同一时刻读得正常，说明就是瞬时网关抖动，不是 Supabase 真的挂了。
+#
+# 怎么识别「网关类暂时性错误」而不误伤真正的 SQL/业务错：postgrest-py 只有在响应体不是标准
+# PostgREST 错误 JSON（校验 message/code/hint/details 四个字段失败）时，才会退回
+# `generate_default_error_message()`，直接拿 HTTP 状态码本身填 `.code`——此时 `.code` 是 **int**。
+# 真正的 PostgREST/PG 业务错（4xx 参数错、SQL 报的 SQLSTATE 如 42703/57014）都是 PostgREST 自己吐出的
+# 合规 JSON，`.code` 永远是**字符串**（PG SQLSTATE 恒 5 位、PGRST 码恒 "PGRST" 前缀，没有一个会等于
+# 下面这几个 int）。所以「`.code` 是 int 且属于网关状态码」能精确区分两者，不需要猜错误文案。
+# 只重试 502/503/504 与 Cloudflare 扩展的网关码 520-524；不重试：4xx、带 SQLSTATE 的业务/SQL 错
+# （含 57014 statement_timeout——查询本身就慢，重试只是原地再等一次超时，不会变快）、以及非网关的
+# 500（没有证据是瞬时的，可能是真正的服务端 bug，重试只会掩盖它）。
 _READ_ATTEMPTS = 4
 _READ_BACKOFF = (2, 5, 10)  # 第 n 次失败后等几秒再试；长度 = _READ_ATTEMPTS - 1
+_GATEWAY_RETRY_STATUS_CODES = frozenset({502, 503, 504, 520, 521, 522, 523, 524})
+
+
+def _is_retryable_gateway_error(exc: APIError) -> bool:
+    """`.code` 是 int 且落在网关状态码集合里，才判定为可重试的网关暂时性错误。"""
+    return isinstance(exc.code, int) and exc.code in _GATEWAY_RETRY_STATUS_CODES
 
 
 def _execute_with_retry(build_query, what: str = "Supabase 读"):
-    """执行一次 PostgREST 请求，网络层抖动按 _READ_BACKOFF 重试。
+    """执行一次 PostgREST 请求，网络层抖动与网关 5xx 按 _READ_BACKOFF 重试。
 
     build_query 必须每次返回一个**新**的 query builder（builder 有状态，重试复用会把条件叠加）。"""
     last_exc = None
@@ -51,16 +73,20 @@ def _execute_with_retry(build_query, what: str = "Supabase 读"):
         try:
             resp = build_query().execute()
             if attempt:
-                print(f"[db] {what} 第 {attempt + 1} 次尝试成功（前 {attempt} 次网络抖动已重试）")
+                print(f"[db] {what} 第 {attempt + 1} 次尝试成功（前 {attempt} 次已重试）")
             return resp
         except httpx.TransportError as exc:
             last_exc = exc
-            if attempt >= _READ_ATTEMPTS - 1:
-                break
-            wait = _READ_BACKOFF[attempt]
-            print(f"[db] {what} 失败({type(exc).__name__}: {exc})，{wait}s 后重试 "
-                  f"({attempt + 2}/{_READ_ATTEMPTS})")
-            time.sleep(wait)
+        except APIError as exc:
+            if not _is_retryable_gateway_error(exc):
+                raise
+            last_exc = exc
+        if attempt >= _READ_ATTEMPTS - 1:
+            break
+        wait = _READ_BACKOFF[attempt]
+        print(f"[db] {what} 失败({type(last_exc).__name__}: {last_exc})，{wait}s 后重试 "
+              f"({attempt + 2}/{_READ_ATTEMPTS})")
+        time.sleep(wait)
     raise last_exc
 
 
