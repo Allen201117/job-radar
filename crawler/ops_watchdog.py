@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import re
+import statistics
 import subprocess
 import sys
 import time
@@ -47,6 +48,7 @@ RULE_TITLES = {
     "H": "多个源指向同一门户",
     "I": "抓取没收尾",
     "J": "投递入口该复查了",
+    "K": "adapter 产出骤降",
 }
 
 # ── 规则 A：每个模块的「产出口径」与「处理量口径」────────────────────────────
@@ -449,6 +451,153 @@ def evaluate_unfinished_crawls(crawl_rows, sources_by_id, now=None,
         "next": "去对应 workflow run 看是不是超时/被取消：是就调该档的超时或分片；"
                 "不是就查 adapter 有没有卡死在某个请求上。别让它继续每轮静默丢源。",
     }]
+
+
+# 规则 K 的阈值是拿 2026-08-12~09-13 共 188,765 行 crawl_runs 回测定的
+# （模拟 watchdog 在 08-21~09-13 每天 UTC 01:00 各跑一次，共 24 次），改之前先重跑回测，别凭感觉调。
+COLLAPSE_BASELINE_DAYS = 7          # 基线 = 最近窗之前的 7 个 24h 窗
+COLLAPSE_MIN_BASELINE_WINDOWS = 3   # 源在基线里至少有 3 个窗跑完过才进对照组（新源、低频源不冤枉）
+COLLAPSE_MAX_RATIO = 0.3            # 只剩基线的 30% 以下……
+COLLAPSE_MIN_DROP = 300             # ……且绝对少了 ≥300 个岗，两个条件缺一不可
+COLLAPSE_DURATION_JUMP = 3.0        # 单轮耗时中位数 ×3：只写进依据，不单独告警
+
+
+def rows_started_since(rows, cutoff):
+    """按 started_at 截取回看窗。解析不出时间的行**保留**——与服务端 gte 过滤的旧行为一致，
+    免得规则 F/G/I 因为共用了更长的一次取数而悄悄少看几行。"""
+    return [r for r in rows or [] if (_as_dt((r or {}).get("started_at")) or cutoff) >= cutoff]
+
+
+def evaluate_adapter_collapse(crawl_rows, sources_by_id, now=None, recent_days=1,
+                              baseline_days=COLLAPSE_BASELINE_DAYS,
+                              max_ratio=COLLAPSE_MAX_RATIO, min_drop=COLLAPSE_MIN_DROP,
+                              min_baseline_windows=COLLAPSE_MIN_BASELINE_WINDOWS, muted=()):
+    """规则 K：某个 adapter 的抓取产出整体塌了，而 status 照样 success。
+
+    为什么必须有它（2026-09-13）：moka（410 源）09-07~09 每天 jobs_found 合计 38,006 / 31,493 / 36,163，
+    09-10 起 535 / 642 / 490，几乎每一轮都记 success，单轮耗时中位数 22s → 141s——前端新加的 sentry 主机
+    从 runner 连不上，networkidle 永远等不到，超时被 except 吞成 0 岗（修于 f0d900a）。三天零告警：
+    规则 A 只看整个模块连续两天为 0，规则 F 只认 status='failed'。
+
+    判据：以 now 为终点切 24h 窗。每个源每窗取**最好的一轮** jobs_found；源的基线 = 它在前 baseline_days
+    个窗里的中位数。按 adapter 只加总「最近窗跑完过、且有基线」的那批源（同一批源自己跟自己比），
+    最近 ≤ 基线 × max_ratio **且** 少了 ≥ min_drop 才报；recent_days>1 时每个最近窗都要成立。
+
+    ⚠️ 不能直接比「adapter 每天的 jobs_found 合计」（同一份回测实测，别改回去）：朴素日合计 24 次开出
+      55 条告警，只有 moka 那 3 条是 adapter 真塌了——08-27 夜档整个没跑，08-28 一天就误报 26 个 adapter
+      （bytedance 62,623 vs 276,509）。成因三种：一天跑好几轮的源丢一轮，合计就少一截；夜档漂过日界，
+      一天 0 轮、次日 2 轮；手动重跑让合计翻倍。「每源每窗取最好一轮 + 只比同一批源」对三种都免疫：
+      没跑的源不进对照组，重跑取 max 不会翻倍。所以窗口用「以 now 为终点的 24h」还是自然日都无所谓。
+      同一份数据本判据共报 5 条：moka 3 条（真）；iguopin 08-28 1 条（夜档没跑，只剩白天那几轮本来就是 0 岗，
+      当天产出确实归零，只是病根在调度不在 adapter）；microsoft 09-12 1 条（单源一天 700→114、次日自愈，算噪音）。
+
+    ⚠️ 刻意不设「至少 N 个源」门槛：bytedance / bytedance_campus / apple / ccb 都是单源 adapter、每天几千到
+      上万岗。设 ≥3 源的门槛，74 个 adapter 只剩 14 个看得见（占总产出 72.9%）；现行阈值看得见 46 个（98.7%）。
+      0↔15 那种小 adapter 靠 min_drop 挡。
+
+    ⚠️ 已知盲区，别当它全能：
+      · 源一窗里只要有一轮是好的就不报——只塌部分轮次时岗位当天仍刷新过，产品影响小；
+      · adapter 整窗一轮都没跑完不归本规则（kuaishou 09-10/11 两天 0 行）——那是「没跑」，不是「跑了没产出」；
+      · 基线是中位数：连塌满 4 天后基线自己也塌了，**本规则就不再复报**。issue 不会自动关，但别指望它天天提醒。
+
+    耗时暴涨只写进依据、不单独开 issue：回测按「中位数 ×3 且多 60s」单独报会开 7 条，4 条是 sf_express 在
+    09-04 改了翻页重试后的正常变慢（406s vs 88s，产出没掉）。
+    """
+    now = now or datetime.now(timezone.utc)
+    horizon = recent_days + baseline_days
+    muted = {str(m).strip() for m in (muted or []) if str(m).strip()}
+    best = {}                          # (source_id, 窗号) -> 该源该窗最好的一轮 jobs_found
+    adapter_of = {}
+    durations = defaultdict(list)      # (adapter, 窗号) -> 每轮耗时（秒）
+    statuses = defaultdict(Counter)    # (adapter, 最近窗号) -> status 分布
+    for row in crawl_rows or []:
+        started = _as_dt((row or {}).get("started_at"))
+        finished = _as_dt(row.get("finished_at"))
+        if not started or not finished:
+            continue   # 没收尾的行 jobs_found 还是默认 0，算进来就是假骤降；它们归规则 I 管
+        source = sources_by_id.get(row.get("source_id"))
+        if not source or not source.get("enabled", True):
+            continue
+        adapter = str(source.get("adapter_name") or "")
+        if not adapter or adapter in muted:
+            continue
+        age = (now - started).total_seconds()
+        if age < 0 or age >= horizon * 86400:
+            continue
+        window = int(age // 86400)     # 0 = 离 now 最近的 24h
+        sid = row.get("source_id")
+        adapter_of[sid] = adapter
+        best[(sid, window)] = max(best.get((sid, window), 0), _num(row.get("jobs_found")))
+        durations[(adapter, window)].append(max((finished - started).total_seconds(), 0.0))
+        if window < recent_days:
+            statuses[(adapter, window)][str(row.get("status") or "?")] += 1
+
+    panels = defaultdict(lambda: defaultdict(list))   # adapter -> 最近窗号 -> [(sid, 最近, 基线)]
+    for sid, adapter in adapter_of.items():
+        history = [best[(sid, w)] for w in range(recent_days, horizon) if (sid, w) in best]
+        if len(history) < min_baseline_windows:
+            continue
+        baseline = statistics.median(history)
+        for window in range(recent_days):
+            if (sid, window) in best:
+                panels[adapter][window].append((sid, best[(sid, window)], baseline))
+
+    findings = []
+    for adapter in sorted(panels):
+        collapsed = []
+        for window in range(recent_days):
+            members = panels[adapter].get(window) or []
+            recent = sum(m[1] for m in members)
+            base = sum(m[2] for m in members)
+            if not members or base <= 0 or recent > base * max_ratio or base - recent < min_drop:
+                break
+            collapsed.append((window, members, recent, base))
+        if len(collapsed) < recent_days:
+            continue
+
+        evidence = []
+        for window, members, recent, base in collapsed:
+            dropped = sum(1 for _, r, b in members if b > 0 and r <= b * 0.5)
+            span = (f"{(now - timedelta(days=window + 1)):%m-%d %H:%M}~"
+                    f"{(now - timedelta(days=window)):%m-%d %H:%M} UTC")
+            status_mix = statuses[(adapter, window)]
+            evidence.append(
+                f"{span}：{len(members)} 个源各取当窗最好的一轮，合计 jobs_found={recent:.0f}；"
+                f"同一批源前 {baseline_days} 天的中位数合计 {base:.0f}（只剩 {recent / base:.1%}，"
+                f"其中 {dropped} 个源自身掉到一半以下）")
+            evidence.append(
+                f"{span} 的 status 分布：{dict(status_mix)}"
+                + ("——全是成功，异常多半在 adapter 里被吞成了空列表"
+                   if set(status_mix) <= {"success", "partial_success"} else ""))
+
+        recent_durations = durations.get((adapter, 0)) or []
+        baseline_medians = [statistics.median(durations[(adapter, w)])
+                            for w in range(recent_days, horizon) if durations.get((adapter, w))]
+        if recent_durations and baseline_medians:
+            recent_med = statistics.median(recent_durations)
+            base_med = statistics.median(baseline_medians)
+            line = f"单轮耗时中位数 {recent_med:.0f}s，前 {baseline_days} 天是 {base_med:.0f}s"
+            if base_med > 0 and recent_med >= base_med * COLLAPSE_DURATION_JUMP:
+                line += (f"（×{recent_med / base_med:.1f}：产出掉了耗时反而暴涨，"
+                         "像是在等一个永远等不到的东西，超时后被当成 0 岗）")
+            evidence.append(line)
+
+        _, members, recent, base = collapsed[0]
+        worst = sorted(members, key=lambda m: m[1] - m[2])[:5]
+        evidence.append("掉得最多的源：" + "；".join(
+            f"{(sources_by_id.get(sid) or {}).get('company') or sid} {b:.0f}→{r:.0f}"
+            for sid, r, b in worst))
+        findings.append({
+            "rule": "K",
+            "subject": adapter,
+            "summary": (f"adapter `{adapter}` 最近 {recent_days * 24} 小时的抓取产出只剩基线的 "
+                        f"{recent / base:.1%}（{recent:.0f} vs {base:.0f}），而这些源都还在照常跑。"),
+            "evidence": evidence,
+            "next": ("先看这个 adapter 最近一轮的抓取日志：status 全 success 却只剩零头 = 异常被吞成了空列表"
+                     "（09-10 moka 就是等 networkidle 等到超时）；再真渲染打开一两个掉得最多的源，"
+                     "确认官网是不是真撤了岗。修好后回读 crawl_runs，确认 jobs_found 回到基线。"),
+        })
+    return findings
 
 
 def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
@@ -1061,6 +1210,8 @@ def main():
 
     apply = args.apply or os.environ.get("OPS_WATCHDOG_APPLY", "").strip().lower() in _TRUE
     muted = [m for m in os.environ.get("OPS_WATCHDOG_MUTE_MODULES", "").split(",") if m.strip()]
+    # 规则 K 按 adapter 静音：与模块名不是一个命名空间（moka / workday vs daily_crawl），分开配。
+    muted_adapters = [m for m in os.environ.get("OPS_WATCHDOG_MUTE_ADAPTERS", "").split(",") if m.strip()]
     now = datetime.now(timezone.utc)
     today = now.astimezone(SHANGHAI).date().isoformat()
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1100,13 +1251,17 @@ def main():
         print(f"[watchdog] 规则 J 取 apply_programs 失败，跳过：{exc}")
     # 规则 F 单独包住：crawl_runs 是最大的一张表（1,400 源 × 4 轮/天），取不到不能拖垮 A/C/D。
     try:
-        dead_since = (now - timedelta(days=args.dead_source_days)).isoformat()
-        crawl_rows = db.fetch_all_rows(
+        # 规则 K 要 1 个最近窗 + 7 天基线，一次取够；F/G/I 仍只看自己那 dead_source_days 天
+        # （2026-09-13 实测 8 天 51,971 行 / 45s，5 天 30,066 行 / 32s，都远在 job 超时之内）。
+        crawl_days = max(args.dead_source_days, 1 + COLLAPSE_BASELINE_DAYS)
+        crawl_since = (now - timedelta(days=crawl_days)).isoformat()
+        all_crawl_rows = db.fetch_all_rows(
             lambda: sb.table("crawl_runs")
                       .select("source_id,status,error_message,started_at,finished_at,"
                               "reported_total,coverage_complete,jobs_found")
-                      .gte("started_at", dead_since)
+                      .gte("started_at", crawl_since)
         )
+        crawl_rows = rows_started_since(all_crawl_rows, now - timedelta(days=args.dead_source_days))
         source_rows = db.fetch_all_rows(
             lambda: sb.table("sources").select("id,adapter_name,company,source_url,enabled")
                       .eq("enabled", True)
@@ -1119,8 +1274,10 @@ def main():
         # 规则 I 复用同一批 crawl_rows（多取 finished_at 一列，不多打一次库）。
         findings += evaluate_unfinished_crawls(crawl_rows, sources_by_id, now=now)
         findings += evaluate_duplicate_portals(sources_by_id)
+        findings += evaluate_adapter_collapse(all_crawl_rows, sources_by_id, now=now,
+                                              muted=muted_adapters)
     except Exception as exc:  # noqa: BLE001
-        print(f"::warning::[watchdog] 规则 F/G（源连续失败 / 抓不全）本轮没查成："
+        print(f"::warning::[watchdog] 规则 F/G/H/I/K（源级 / adapter 级抓取告警）本轮没查成："
               f"{type(exc).__name__}: {exc}")
 
     meta_by_path = load_workflow_meta(root)

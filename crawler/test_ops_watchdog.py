@@ -691,5 +691,153 @@ class StaleApplyProgramsTest(unittest.TestCase):
 
     def test_规则字母都登记了标题(self):
         # H / I 曾经在用却没登记，issue 标题会退化成裸字母。
-        for letter in ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J"):
+        for letter in ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K"):
             self.assertIn(letter, W.RULE_TITLES)
+
+
+class AdapterCollapseTest(unittest.TestCase):
+    """规则 K：adapter 整体产出塌了，status 却照样 success（2026-09-13 加）。
+
+    真实病例：moka 410 源 09-07~09 日产 3.1~3.8 万岗，09-10 起 490~642，几乎全记 success，
+    单轮耗时 22s → 141s。规则 A 看模块、规则 F 看 failed，三天一声不吭。
+    这里多数用例测「不该报」：一天跑几轮的源丢一轮、夜档漂出窗口、手动重跑翻倍——
+    朴素的「adapter 日合计」回测在这些情况下 24 天误报了 50 多条。
+    """
+
+    NOW = datetime(2026, 9, 11, 1, 0, tzinfo=timezone.utc)
+
+    def _sources(self, adapter, n, enabled=True):
+        return {f"{adapter}-{i}": {"adapter_name": adapter, "company": f"{adapter}公司{i}",
+                                   "enabled": enabled} for i in range(n)}
+
+    def _run(self, sid, window, jobs, hour=4, seconds=22, status="success", finished=True):
+        """window=0 是离 NOW 最近的 24h；hour 是该窗里往前推几小时（0<hour<24）。"""
+        started = self.NOW - timedelta(days=window, hours=hour)
+        return {
+            "source_id": sid,
+            "status": status,
+            "jobs_found": jobs,
+            "started_at": started.isoformat(),
+            "finished_at": (started + timedelta(seconds=seconds)).isoformat() if finished else None,
+        }
+
+    def _history(self, sources, jobs, windows=range(1, 8), rounds=1, seconds=22):
+        return [self._run(sid, w, jobs, hour=4 + 5 * r, seconds=seconds)
+                for sid in sources for w in windows for r in range(rounds)]
+
+    def test_moka_式骤降要报且依据里点出全是成功和耗时暴涨(self):
+        sources = self._sources("moka", 20)
+        rows = self._history(sources, 100)
+        rows += [self._run(sid, 0, 1, seconds=141) for sid in sources]
+        [finding] = W.evaluate_adapter_collapse(rows, sources, now=self.NOW)
+        self.assertEqual((finding["rule"], finding["subject"]), ("K", "moka"))
+        self.assertIn("20 vs 2000", finding["summary"])
+        joined = "\n".join(finding["evidence"])
+        self.assertIn("全是成功", joined)
+        self.assertIn("×6.4", joined)
+        self.assertIn("20 个源自身掉到一半以下", joined)
+        self.assertEqual(W.issue_title(finding), "[watchdog] adapter 产出骤降：moka")
+
+    def test_一天跑四轮的源丢了三轮不算骤降(self):
+        # 朴素日合计会少 75%；按源取当窗最好一轮就不受影响。
+        sources = self._sources("wt", 10)
+        rows = self._history(sources, 500, rounds=4)
+        rows += [self._run(sid, 0, 500) for sid in sources]
+        self.assertEqual(W.evaluate_adapter_collapse(rows, sources, now=self.NOW), [])
+
+    def test_手动重跑让基线翻倍也不会造出假骤降(self):
+        # 09-03~05 moka 手动重跑过一天 4 轮：朴素日合计的基线中位数被抬到 4 倍，最近一天正常也像「掉了 75%」。
+        sources = self._sources("beisen", 10)
+        rows = self._history(sources, 300, windows=(1, 2, 3, 4), rounds=4)
+        rows += self._history(sources, 300, windows=(5, 6, 7))
+        rows += [self._run(sid, 0, 300) for sid in sources]
+        self.assertEqual(W.evaluate_adapter_collapse(rows, sources, now=self.NOW), [])
+
+    def test_最近窗整个没跑不归本规则(self):
+        # 夜档漂出窗口 / workflow 没触发 = 「没跑」，不是「跑了没产出」（规则 E / I 的事）。
+        sources = self._sources("moka", 20)
+        rows = self._history(sources, 100)
+        self.assertEqual(W.evaluate_adapter_collapse(rows, sources, now=self.NOW), [])
+
+    def test_没收尾的行不当成零产出(self):
+        sources = self._sources("moka", 20)
+        rows = self._history(sources, 100)
+        rows += [self._run(sid, 0, 0, finished=False, status="running") for sid in sources]
+        self.assertEqual(W.evaluate_adapter_collapse(rows, sources, now=self.NOW), [])
+        rows += [self._run(sid, 0, 100, hour=10) for sid in sources]
+        self.assertEqual(W.evaluate_adapter_collapse(rows, sources, now=self.NOW), [])
+
+    def test_小_adapter_在零和十几之间抖不报(self):
+        sources = self._sources("company_spa", 1)
+        rows = self._history(sources, 15)
+        rows += [self._run(sid, 0, 0) for sid in sources]
+        self.assertEqual(W.evaluate_adapter_collapse(rows, sources, now=self.NOW), [])
+
+    def test_绝对量大但只腰斩一半不报(self):
+        sources = self._sources("workday", 10)
+        rows = self._history(sources, 1000)
+        rows += [self._run(sid, 0, 500) for sid in sources]
+        self.assertEqual(W.evaluate_adapter_collapse(rows, sources, now=self.NOW), [])
+
+    def test_单源大_adapter_照样看得见(self):
+        # bytedance / apple / ccb 都是单源 adapter；设「至少 3 个源」门槛会让它们全瞎。
+        sources = self._sources("bytedance", 1)
+        rows = self._history(sources, 12000)
+        rows += [self._run(sid, 0, 0) for sid in sources]
+        [finding] = W.evaluate_adapter_collapse(rows, sources, now=self.NOW)
+        self.assertEqual(finding["subject"], "bytedance")
+
+    def test_新源不进对照组_既不凑数也不掩盖(self):
+        old = self._sources("moka", 10)
+        new = {"moka-new": {"adapter_name": "moka", "company": "新源", "enabled": True}}
+        young = {"moka-young": {"adapter_name": "moka", "company": "只跑过两窗", "enabled": True}}
+        sources = {**old, **new, **young}
+        rows = self._history(old, 100)
+        rows += self._history(young, 100, windows=(1, 2))
+        rows += [self._run(sid, 0, 0) for sid in old]
+        rows += [self._run("moka-new", 0, 5000), self._run("moka-young", 0, 100)]
+        [finding] = W.evaluate_adapter_collapse(rows, sources, now=self.NOW)
+        self.assertIn("0 vs 1000", finding["summary"])
+        self.assertIn("10 个源各取", finding["evidence"][0])
+
+    def test_基线少于三窗的源不参与判定(self):
+        sources = self._sources("moka", 20)
+        rows = self._history(sources, 100, windows=(1, 2))
+        rows += [self._run(sid, 0, 0) for sid in sources]
+        self.assertEqual(W.evaluate_adapter_collapse(rows, sources, now=self.NOW), [])
+
+    def test_停用的源和静音的_adapter_不报(self):
+        rows_sources = self._sources("moka", 20)
+        rows = self._history(rows_sources, 100) + [self._run(sid, 0, 0) for sid in rows_sources]
+        disabled = self._sources("moka", 20, enabled=False)
+        self.assertEqual(W.evaluate_adapter_collapse(rows, disabled, now=self.NOW), [])
+        self.assertEqual(W.evaluate_adapter_collapse(rows, rows_sources, now=self.NOW,
+                                                     muted=["moka"]), [])
+
+    def test_要求连续两窗时两窗都得塌(self):
+        sources = self._sources("moka", 20)
+        baseline = self._history(sources, 100, windows=range(2, 9))
+        today_zero = [self._run(sid, 0, 0) for sid in sources]
+        one_bad = baseline + [self._run(sid, 1, 100) for sid in sources] + today_zero
+        self.assertEqual(
+            W.evaluate_adapter_collapse(one_bad, sources, now=self.NOW, recent_days=2), [])
+        two_bad = baseline + [self._run(sid, 1, 0) for sid in sources] + today_zero
+        [finding] = W.evaluate_adapter_collapse(two_bad, sources, now=self.NOW, recent_days=2)
+        self.assertIn("48 小时", finding["summary"])
+        self.assertEqual(sum("status 分布" in line for line in finding["evidence"]), 2)
+
+    def test_窗外的行和未来时间的行都不算(self):
+        # 最近窗里只有「晚于 NOW」的 0 岗行（started_at 是库端时钟，runner 时钟落后时会出现）→ 不能当成最近一窗塌了。
+        sources = self._sources("moka", 20)
+        rows = self._history(sources, 100)
+        rows += [self._run(sid, -1, 0) for sid in sources]
+        rows += [self._run(sid, 9, 0) for sid in sources]      # 早于 1+7 个窗，也不该进基线
+        self.assertEqual(W.evaluate_adapter_collapse(rows, sources, now=self.NOW), [])
+
+    def test_加长取数后规则_FGI_仍只看自己的回看窗(self):
+        cutoff = self.NOW - timedelta(days=5)
+        rows = [{"started_at": (cutoff + timedelta(hours=1)).isoformat()},
+                {"started_at": (cutoff - timedelta(hours=1)).isoformat()},
+                {"started_at": "不是时间"}]
+        kept = W.rows_started_since(rows, cutoff)
+        self.assertEqual([r["started_at"] for r in kept], [rows[0]["started_at"], "不是时间"])
