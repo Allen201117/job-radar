@@ -691,7 +691,7 @@ class StaleApplyProgramsTest(unittest.TestCase):
 
     def test_规则字母都登记了标题(self):
         # H / I 曾经在用却没登记，issue 标题会退化成裸字母。
-        for letter in ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K"):
+        for letter in ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"):
             self.assertIn(letter, W.RULE_TITLES)
 
 
@@ -841,3 +841,123 @@ class AdapterCollapseTest(unittest.TestCase):
                 {"started_at": "不是时间"}]
         kept = W.rows_started_since(rows, cutoff)
         self.assertEqual([r["started_at"] for r in kept], [rows[0]["started_at"], "不是时间"])
+
+
+class SilentSourcesTest(unittest.TestCase):
+    """规则 L：本来每天都抓的 enabled 源，连一行 crawl_runs 都没有了（2026-09-13 加）。
+
+    真实病例：快手 09-09 21:18 之后到 09-12 22:15 零行——enrich-crawl 的 enrich (2) 分片连续几晚撞 180 分钟
+    被杀，排在串行浏览器档队尾的源根本没轮到。没有行，F / I / K 都看不见。
+    多数用例测「不该报」：夜档被 GitHub 推迟、新源、停用、刚被抓过。
+    """
+
+    NOW = datetime(2026, 9, 12, 5, 40, tzinfo=timezone.utc)
+
+    def _sources(self, adapter, n, enabled=True, prefix=None):
+        prefix = prefix or adapter
+        return {f"{prefix}-{i}": {"adapter_name": adapter, "company": f"{prefix}公司{i}",
+                                  "enabled": enabled} for i in range(n)}
+
+    def _rows(self, sources, hours_ago, status="success", finished=True):
+        """每个源在「NOW 之前 hours_ago 小时」各一行。"""
+        out = []
+        for sid in sources:
+            for h in hours_ago:
+                started = self.NOW - timedelta(hours=h)
+                out.append({"source_id": sid, "status": status, "started_at": started.isoformat(),
+                            "finished_at": started.isoformat() if finished else None})
+        return out
+
+    @staticmethod
+    def _nightly(from_hours, nights):
+        """从 from_hours 小时前开始往前，每 24h 一晚。"""
+        return [from_hours + 24 * k for k in range(nights)]
+
+    def test_快手式断抓要报且标题稳定(self):
+        sources = {"ks": {"adapter_name": "kuaishou", "company": "快手 Kuaishou", "enabled": True}}
+        rows = self._rows(sources, self._nightly(56, 8))      # 最后一次 56 小时前，此前每晚都有
+        [finding] = W.evaluate_silent_sources(rows, sources, now=self.NOW)
+        self.assertEqual(finding["rule"], "L")
+        self.assertEqual(W.issue_title(finding), "[watchdog] 源断抓：每天都抓的源没被轮到")
+        self.assertIn("1 个本来每天都被抓", finding["summary"])
+        joined = "\n".join(finding["evidence"])
+        self.assertIn("{'kuaishou': 1}", joined)
+        self.assertIn("kuaishou / 快手 Kuaishou：最后一次", joined)
+        self.assertIn("已 56 小时", joined)
+        self.assertIn("create_crawl_run", finding["next"])
+
+    def test_夜档被推迟八小时的正常间隔不报(self):
+        # 回测里夜档全部正常时，相邻两次被抓最长 32.2h（08-27 夜档推迟到次日 01:59）。
+        sources = self._sources("moka", 5)
+        rows = self._rows(sources, self._nightly(33, 8))
+        self.assertEqual(W.evaluate_silent_sources(rows, sources, now=self.NOW), [])
+
+    def test_基线锚在断抓之前_夜夜被饿死的源照样报(self):
+        # 断抓 3 天多，更早还缺过一晚：锚在 now 的「前 7 天 ≥5 天」会让它掉出资格（09-13 华虹 / 华安基金）。
+        sources = {"hh": {"adapter_name": "moka", "company": "华虹", "enabled": True}}
+        hours = [76] + [76 + 24 * k for k in range(2, 8)]     # 76h 前最后一次，再往前缺一晚，其余都有
+        [finding] = W.evaluate_silent_sources(self._rows(sources, hours), sources, now=self.NOW)
+        self.assertIn("断抓前 7 天里 6 天抓到过", "\n".join(finding["evidence"]))
+
+    def test_断抓前不够每天抓的源不报(self):
+        sources = self._sources("beisen", 1)
+        young = self._rows(sources, [50, 74])                 # 新源：只被抓过两晚
+        self.assertEqual(W.evaluate_silent_sources(young, sources, now=self.NOW), [])
+        sparse = self._rows(sources, [50, 98, 146, 194])      # 隔天抓一次（窗内 4 个窗有行）
+        self.assertEqual(W.evaluate_silent_sources(sparse, sources, now=self.NOW), [])
+
+    def test_窗内一行都没有的源不判(self):
+        # 新加的、停用后刚重新启用的：没有「本来每天抓」的依据，别冤枉。
+        sources = self._sources("feishu", 3)
+        self.assertEqual(W.evaluate_silent_sources([], sources, now=self.NOW), [])
+
+    def test_任何_status_的行都算轮到过(self):
+        # failed / skipped / 没收尾的占位符都说明源被选中了——那是 F / I 的事，不是断抓。
+        sources = self._sources("moka", 3)
+        history = self._rows(sources, self._nightly(56, 8))
+        for status, finished in (("failed", True), ("skipped", True), ("running", False)):
+            rows = history + self._rows(sources, [10], status=status, finished=finished)
+            self.assertEqual(W.evaluate_silent_sources(rows, sources, now=self.NOW), [], status)
+
+    def test_晚于_now_的行说明刚被抓过(self):
+        # started_at 是库端时钟，runner 时钟落后时最新一行会「晚于 now」。
+        sources = self._sources("moka", 1)
+        rows = self._rows(sources, self._nightly(56, 8)) + self._rows(sources, [-0.2])
+        self.assertEqual(W.evaluate_silent_sources(rows, sources, now=self.NOW), [])
+
+    def test_停用的源_静音的_adapter_未知源都不报(self):
+        live = self._sources("moka", 2)
+        rows = self._rows(live, self._nightly(56, 8)) + self._rows({"ghost": {}}, self._nightly(56, 8))
+        disabled = self._sources("moka", 2, enabled=False)
+        self.assertEqual(W.evaluate_silent_sources(rows, disabled, now=self.NOW), [])
+        self.assertEqual(W.evaluate_silent_sources(rows, live, now=self.NOW, muted=["moka"]), [])
+        [finding] = W.evaluate_silent_sources(rows, live, now=self.NOW, muted=["", " "])
+        self.assertIn("2 个本来每天都被抓", finding["summary"])
+
+    def test_一批源聚合成一条_最久的排前面并点出同日扎堆(self):
+        tail = self._sources("moka", 4)
+        other = {"ks": {"adapter_name": "kuaishou", "company": "快手", "enabled": True}}
+        healthy = self._sources("wt", 3)
+        rows = (self._rows(tail, self._nightly(56, 8)) + self._rows(other, self._nightly(80, 8))
+                + self._rows(healthy, self._nightly(2, 8)))
+        [finding] = W.evaluate_silent_sources(rows, {**tail, **other, **healthy}, now=self.NOW)
+        self.assertIn("5 个本来每天都被抓", finding["summary"])
+        self.assertIn("最久 80 小时", finding["summary"])
+        self.assertIn("{'moka': 4, 'kuaishou': 1}", finding["evidence"][0])
+        self.assertIn("4 个停在同一天", finding["evidence"][1])
+        self.assertTrue(finding["evidence"][2].startswith("kuaishou / 快手"))
+
+    def test_断抓太久基线落到取数窗外就掉出视野(self):
+        # 已知盲区，钉住它免得被当成 bug「修」掉：main() 只取 SILENT_LOOKBACK_DAYS 天。
+        sources = self._sources("moka", 1)
+        rows = self._rows(sources, self._nightly(24 * 6 + 2, 8))
+        cutoff = self.NOW - timedelta(days=W.SILENT_LOOKBACK_DAYS)
+        self.assertEqual(W.evaluate_silent_sources(W.rows_started_since(rows, cutoff), sources,
+                                                   now=self.NOW), [])
+        self.assertEqual(len(W.evaluate_silent_sources(rows, sources, now=self.NOW)), 1)
+
+    def test_取数回看至少装得下阈值加基线(self):
+        # 谁把 hours 或 min_days 调大却忘了加回看天数，这条规则就会永远不报、也不报错。
+        room = W.SILENT_LOOKBACK_DAYS - (W.SILENT_SOURCE_HOURS // 24)
+        self.assertGreaterEqual(room, W.SILENT_MIN_DAYS)
+        self.assertGreaterEqual(W.SILENT_SOURCE_HOURS, 36)   # 低于正常最长间隔 32.2h + 余量就会被调度漂移误报

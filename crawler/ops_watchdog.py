@@ -49,6 +49,7 @@ RULE_TITLES = {
     "I": "抓取没收尾",
     "J": "投递入口该复查了",
     "K": "adapter 产出骤降",
+    "L": "源断抓",
 }
 
 # ── 规则 A：每个模块的「产出口径」与「处理量口径」────────────────────────────
@@ -598,6 +599,106 @@ def evaluate_adapter_collapse(crawl_rows, sources_by_id, now=None, recent_days=1
                      "确认官网是不是真撤了岗。修好后回读 crawl_runs，确认 jobs_found 回到基线。"),
         })
     return findings
+
+
+# 规则 L 的阈值是拿 2026-08-08~09-13 共 211,833 行 crawl_runs 回测定的（模拟 watchdog 在 08-22~09-13
+# 每天 UTC 05:40 各跑一次——cron 写的 01:00，GitHub 实际推迟到 05:25~05:43 才开跑），改之前先重跑回测，别凭感觉调。
+SILENT_SOURCE_HOURS = 42      # 同一个源相邻两次被抓：夜档全部正常时最长 32.2h（08-27 夜档被推迟 8 小时那次），
+                              # 中间夜档有分片被杀时最短 42h —— 两堆之间没有样本，阈值放在空档的上沿
+SILENT_BASELINE_DAYS = 7      # 「本来每天都抓」= 断抓之前的 7 个 24h 窗里……
+SILENT_MIN_DAYS = 5           # ……至少 5 个窗有行（新源、低频源不冤枉）
+SILENT_LOOKBACK_DAYS = 10     # 取数回看。回测里 10 天与 14 天报的完全一样；代价是断抓满 6 天后基线落到窗外、掉出视野
+
+
+def evaluate_silent_sources(crawl_rows, sources_by_id, now=None, hours=SILENT_SOURCE_HOURS,
+                            baseline_days=SILENT_BASELINE_DAYS, min_days=SILENT_MIN_DAYS,
+                            muted=()):
+    """规则 L：本来每天都被抓的 enabled 源，连一行 crawl_runs 都没有了 —— 不是抓失败，是根本没轮到它。
+
+    为什么必须有它（2026-09-13）：快手 09-09 21:18 之后到 09-12 22:15 一行都没有，京东校招 / 华虹 / 华安基金
+    同病。成因是 enrich-crawl 的 enrich (2) 分片 09-08、09-10、09-11、09-12 四晚撞 180 分钟被杀，串行浏览器档
+    排在队尾的源一个都没轮到（09-10/11/12 三晚那一片的日志都只列到 146 个源，别的片 226~228 个；09-12 该报的
+    27 个源在 09-10、09-11 六个分片的日志里一次都没出现）。快手 09-12 能回来，是 09-11 新加的源让装箱重排、
+    把它挪去了另一片——换了另一批源进队尾接着饿。
+    规则 B 的「enrich-crawl 被杀」issue 从 08-29 起已追评 13 次，但说不出**哪些源、连续几天**没被抓；
+    F 只认 failed 行、I 只认没收尾的行、K 刻意不管整窗没跑的 adapter —— 没有行，谁都看不见。
+    同一类还有：`create_crawl_run` 本身写库失败（09-12 两个 moka 源 Supabase 504，日志里 FAILED、库里无行，
+    `crawl_run_unrecorded` 也不计它），以及 db.get_sources 注释里实测过的「不分页时尾部 79 个源每天不会被抓」
+    —— 这些时候 workflow 全绿。
+
+    判据：源最后一行（任意 status，没收尾的也算——有行就说明轮到过）距 now ≥ hours，且在它最后一行
+    所在的 24h 窗往前共 baseline_days 个窗里至少 min_days 个窗有行。
+
+    回测（23 次模拟运行）两个方向都数了：报了 5 天、36 个源次，每一个的断档里都有一晚夜档分片被杀，
+    **没有一条报在非故障上**；断档里夜档缺了 ≥2 晚的 31 个全部报到；只缺一晚的 166 个一个不报（设计如此）。
+    ⚠️ 基线必须锚在「断抓之前」，不能锚在 now（同一份回测，别改回去）：按「now 之前 7 天里 ≥5 天有行」判，
+      夜夜被饿死的源正好因为缺的天数多而**掉出**资格——09-13 华虹 / 华安基金已断抓 3 天多，那种写法不报，
+      最该报的时候反而闭嘴。
+    ⚠️ hours 别调到 36 以下：32.2h 的正常间隔是 GitHub 把夜档推迟 8 小时造成的，推迟再多几小时就是误报。
+      也别为了「只缺一晚的」调到 24h：按 01:00 跑会在 08-28 把 390 个源报成断抓（夜档被推迟到 01:59 才开跑），
+      按 05:40 跑能躲过去全靠 watchdog 自己也被推迟，别押这个运气；而且那 9 天 233 个源次全是规则 B 已经在报的
+      「分片被杀一晚」。36 / 42 / 48 在这份回测里报的完全一样，选 42 是为了离正常间隔的上限远一点。
+    ⚠️ 已知盲区：窗内一行都没有的源不判（新加的、停用后刚重新启用的，都没有「本来每天抓」的依据）；
+      断抓满 6 天基线落到取数窗外会掉出视野（issue 不会自动关，但不再追评）；
+      源停用几天后重新启用、正好卡在夜档之前被 watchdog 看到，会误报一次（sources 表没有启用时间，判不出）。
+
+    输出**一条聚合 finding**：这类故障天然成簇（一个分片被杀就是一串源），每源一条会刷屏。
+    """
+    now = now or datetime.now(timezone.utc)
+    muted = {str(m).strip() for m in (muted or []) if str(m).strip()}
+    last_seen = {}
+    windows = defaultdict(set)         # source_id -> 有行的窗号（0 = 离 now 最近的 24h）
+    for row in crawl_rows or []:
+        sid = (row or {}).get("source_id")
+        started = _as_dt(row.get("started_at")) if sid else None
+        if not started:
+            continue
+        if sid not in last_seen or started > last_seen[sid]:
+            last_seen[sid] = started
+        if started <= now:
+            windows[sid].add(int((now - started).total_seconds() // 86400))
+
+    silent = []
+    for sid, last in last_seen.items():
+        source = sources_by_id.get(sid)
+        if not source or not source.get("enabled", True):
+            continue
+        if str(source.get("adapter_name") or "") in muted:
+            continue
+        gap_hours = (now - last).total_seconds() / 3600
+        if gap_hours < hours:
+            continue                   # 也挡住了「晚于 now」的行：库端时钟比 runner 快 = 刚被抓过
+        first = int((now - last).total_seconds() // 86400)
+        present = sum(1 for w in range(first, first + baseline_days) if w in windows[sid])
+        if present < min_days:
+            continue
+        silent.append((gap_hours, last, source, present))
+    if not silent:
+        return []
+
+    silent.sort(key=lambda item: (-item[0], str(item[2].get("company") or "")))
+    by_adapter = Counter(str(src.get("adapter_name") or "?") for _, _, src, _ in silent)
+    by_last_day = Counter(f"{last:%m-%d}" for _, last, _, _ in silent)
+    worst_day, worst_n = by_last_day.most_common(1)[0]
+    return [{
+        "rule": "L",
+        "subject": "每天都抓的源没被轮到",
+        "summary": (f"{len(silent)} 个本来每天都被抓的 enabled 源，已经 {hours} 小时以上一行 `crawl_runs` 都没有"
+                    f"（最久 {silent[0][0]:.0f} 小时）= 它们根本没被轮到，不是抓失败——失败也会留一行。"),
+        "evidence": [
+            f"按 adapter 分：{dict(by_adapter.most_common())}",
+            f"最后一次被抓的日期（UTC）：{dict(sorted(by_last_day.items()))}"
+            + (f"——{worst_n} 个停在同一天，像同一轮里排在后面的一截没轮到" if worst_n >= 3 else ""),
+        ] + [
+            f"{src.get('adapter_name') or '?'} / {src.get('company') or '?'}：最后一次 {last:%m-%d %H:%M} UTC，"
+            f"已 {gap:.0f} 小时；断抓前 {baseline_days} 天里 {present} 天抓到过"
+            for gap, last, src, present in silent[:15]
+        ],
+        "next": ("先看最后一次抓到它们之后那几晚的 enrich-crawl：某个分片撞 180 分钟被杀时，串行浏览器档排在队尾的源"
+                 "一个都轮不到，而且夜夜是同一批——要拆片 / 减负，别等它自愈（规则 B 的 issue 只说被杀，不说饿死了谁）。"
+                 "分片都正常跑完却还是没行：查源有没有被选中（取源分页、分片装箱、分档），"
+                 "或 run 日志里有没有 `FAILED: APIError` 却没留行（create_crawl_run 本身写库失败）。"),
+    }]
 
 
 def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
@@ -1210,7 +1311,7 @@ def main():
 
     apply = args.apply or os.environ.get("OPS_WATCHDOG_APPLY", "").strip().lower() in _TRUE
     muted = [m for m in os.environ.get("OPS_WATCHDOG_MUTE_MODULES", "").split(",") if m.strip()]
-    # 规则 K 按 adapter 静音：与模块名不是一个命名空间（moka / workday vs daily_crawl），分开配。
+    # 规则 K / L 按 adapter 静音：与模块名不是一个命名空间（moka / workday vs daily_crawl），分开配。
     muted_adapters = [m for m in os.environ.get("OPS_WATCHDOG_MUTE_ADAPTERS", "").split(",") if m.strip()]
     now = datetime.now(timezone.utc)
     today = now.astimezone(SHANGHAI).date().isoformat()
@@ -1251,9 +1352,10 @@ def main():
         print(f"[watchdog] 规则 J 取 apply_programs 失败，跳过：{exc}")
     # 规则 F 单独包住：crawl_runs 是最大的一张表（1,400 源 × 4 轮/天），取不到不能拖垮 A/C/D。
     try:
-        # 规则 K 要 1 个最近窗 + 7 天基线，一次取够；F/G/I 仍只看自己那 dead_source_days 天
-        # （2026-09-13 实测 8 天 51,971 行 / 45s，5 天 30,066 行 / 32s，都远在 job 超时之内）。
-        crawl_days = max(args.dead_source_days, 1 + COLLAPSE_BASELINE_DAYS)
+        # 规则 K 要 1 个最近窗 + 7 天基线、规则 L 要 10 天，一次取够；F/G/I 仍只看自己那 dead_source_days 天
+        # （2026-09-13 实测 8 天 51,971 行 / 45s，5 天 30,066 行 / 32s，都远在 job 超时之内；
+        #  整个 watchdog job 在 CI 上 1.5~1.8 分钟跑完。本机从国内连同一查询 8 天要 463s，别拿本机耗时当 CI 的）。
+        crawl_days = max(args.dead_source_days, 1 + COLLAPSE_BASELINE_DAYS, SILENT_LOOKBACK_DAYS)
         crawl_since = (now - timedelta(days=crawl_days)).isoformat()
         all_crawl_rows = db.fetch_all_rows(
             lambda: sb.table("crawl_runs")
@@ -1276,8 +1378,11 @@ def main():
         findings += evaluate_duplicate_portals(sources_by_id)
         findings += evaluate_adapter_collapse(all_crawl_rows, sources_by_id, now=now,
                                               muted=muted_adapters)
+        findings += evaluate_silent_sources(
+            rows_started_since(all_crawl_rows, now - timedelta(days=SILENT_LOOKBACK_DAYS)),
+            sources_by_id, now=now, muted=muted_adapters)
     except Exception as exc:  # noqa: BLE001
-        print(f"::warning::[watchdog] 规则 F/G/H/I/K（源级 / adapter 级抓取告警）本轮没查成："
+        print(f"::warning::[watchdog] 规则 F/G/H/I/K/L（源级 / adapter 级抓取告警）本轮没查成："
               f"{type(exc).__name__}: {exc}")
 
     meta_by_path = load_workflow_meta(root)

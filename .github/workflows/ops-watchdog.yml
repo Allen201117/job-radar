@@ -43,7 +43,7 @@ jobs:
       OPS_WATCHDOG_APPLY: ${{ github.event.inputs.apply || vars.OPS_WATCHDOG_APPLY || 'false' }}
       # 已知在停摆、不想被反复提醒的模块（逗号分隔）。留空即全查。
       OPS_WATCHDOG_MUTE_MODULES: ${{ vars.OPS_WATCHDOG_MUTE_MODULES }}
-      # 规则 K（adapter 产出骤降）已知在修、不想被反复提醒的 adapter（逗号分隔，如 moka）。留空即全查。
+      # 规则 K（adapter 产出骤降）/ L（源断抓）已知在修、不想被反复提醒的 adapter（逗号分隔，如 moka）。留空即全查。
       OPS_WATCHDOG_MUTE_ADAPTERS: ${{ vars.OPS_WATCHDOG_MUTE_ADAPTERS }}
       DISPATCH_DAYS: ${{ github.event.inputs.days || '2' }}
 
