@@ -201,6 +201,22 @@ class MokaAdapter(PlaywrightAdapter):
     wait_ms = 5500
     # 不同 Moka 页岗位列表挂在不同 hash 子路由，逐个试取岗位最多的
     _routes = ("#/jobs", "", "#/campus/jobs", "#/positions")
+    # 「列表渲染完」的判据 = 岗位卡出现，或出现 Moka 自己的空态文案。**不等 networkidle**：
+    # 2026-09-10 起 Moka 新版前端（recruitmentWeb-20260910-*）每页都 POST sentry-fe.mokahr.com，
+    # 该主机从 GitHub runner 连不上且不断开（runner 上 curl 20s 超时），请求永远挂着 →
+    # networkidle 永远等不到 → 4 个路由 ×35s 全超时被吞 → 0 岗记 success（410 个源日产 3.6 万 → 535）。
+    # 而同一页面岗位卡在 commit 后 4~8s 就渲染出来了。
+    # 空态文案取自真实空租户：新版「暂无匹配职位」（科沃斯）、老版「尚无任何相关职位」（知乎）。
+    _EMPTY_MARKERS = ("暂无匹配职位", "尚无任何相关职位")
+    # 租户门户被 Moka 关停时整页只有这一句（人福医药 / 观远数据 / 真格基金等，标题同文）。
+    # 它既不是「0 岗」也不是「没渲染出来」，单独报出来，好让人去停用这条源。
+    _CLOSED_MARKER = "当前网页已关停"
+    _READY_TIMEOUT_MS = 20000
+    _READY_JS = ("([markers, closed]) => {"
+                 " if (document.querySelectorAll(\"a[href*='#/job/']\").length > 0) return 'cards';"
+                 " const t = (document.body && document.body.innerText) || '';"
+                 " if (t.includes(closed)) return 'closed';"
+                 " return markers.some(m => t.includes(m)) ? 'empty' : false; }")
     # Moka 列表每页仅渲染 ~30 个岗位卡，其余在「sd-Pagination」分页组件后面（非 ant，非滚动加载）。
     # 不翻页只能拿首页，岗位多的租户被截断（如李宁 32/176、SHEIN 34/747）。逐页点「下一页」累加全量。
     # 单租户抓取条数上限 → 换算成页数上限（env CRAWL_MAX_JOBS 整体调档，见 base.resolve_page_cap）。
@@ -275,6 +291,22 @@ class MokaAdapter(PlaywrightAdapter):
                     continue
         return max(numbers) if numbers else None
 
+    def _open_route(self, page, url: str):
+        """打开一个列表路由并等它渲染完，返回 (状态, 岗位卡列表)，状态 ∈ {"cards", "empty", "closed"}。
+
+        既没出岗位卡、也没出空态 / 关停页 → 抛异常（由调用方记成「该路由上没有列表」）。
+        渲染出来后仍等 wait_ms 再数卡：一是等整页卡片渲染齐，二是防「数据回来前先闪一下空态」。
+        """
+        page.goto(url, wait_until="domcontentloaded", timeout=35000)
+        handle = page.wait_for_function(self._READY_JS,
+                                        arg=[list(self._EMPTY_MARKERS), self._CLOSED_MARKER],
+                                        timeout=self._READY_TIMEOUT_MS, polling=250)
+        if handle.json_value() == "closed":
+            return "closed", []
+        page.wait_for_timeout(self.wait_ms)
+        cards = page.eval_on_selector_all("a[href*='#/job/']", self._cards_js)
+        return ("cards" if cards else "empty"), cards
+
     def fetch(self, source_url: str) -> str:
         from playwright.sync_api import sync_playwright
 
@@ -291,25 +323,39 @@ class MokaAdapter(PlaywrightAdapter):
                 # 先按首页岗位数挑出正确的列表路由（不同 Moka 页挂不同 hash 子路由），
                 # 再在该路由上翻页累加全量（多数租户岗位都在 #/jobs，空路由很快返回单页）。
                 best_route = None
-                best_first = -1
+                best_first = 0
+                rendered_empty = False
+                route_errors = []
+                last_route = None   # 页面当前停在哪个路由（且已渲染完）
                 for route in self._routes:
+                    last_route = None
                     try:
-                        page.goto(base + route, wait_until="networkidle", timeout=35000)
-                        page.wait_for_timeout(self.wait_ms)
-                        first = page.eval_on_selector_all("a[href*='#/job/']", self._cards_js)
-                        if len(first) > best_first:
-                            best_first, best_route = len(first), route
-                        if best_first >= 3:
-                            break  # 命中有岗位的路由即可，无需续试空路由
-                    except Exception:
+                        state, first = self._open_route(page, base + route)
+                    except Exception as e:  # noqa: BLE001 —— 记下来，全军覆没时要带着它报错
+                        route_errors.append(f"{route or '(root)'}={type(e).__name__}")
                         continue
+                    last_route = route
+                    if state == "closed":
+                        # 整个门户关停，换 hash 路由也是同一页，不必再试
+                        raise RuntimeError(f"moka portal closed: page says「{self._CLOSED_MARKER}」")
+                    if state == "empty":
+                        rendered_empty = True
+                    if len(first) > best_first:
+                        best_first, best_route = len(first), route
+                    if best_first >= 3:
+                        break  # 命中有岗位的路由即可，无需续试空路由
+                if best_route is None and not rendered_empty:
+                    # 所有路由都既没出岗位卡、也没出空态 = 没找到岗位列表（没渲染出来 / 入口已跳走）。
+                    # ⚠️ 不许安静返回 0 岗：那会记成 success，2026-09-10 起 312 个源天天「0 岗成功」没人发现。
+                    raise RuntimeError(
+                        "moka job list not found on any route (no job cards, no empty state): "
+                        + ", ".join(route_errors))
                 if best_route is not None:
-                    try:
-                        page.goto(base + best_route, wait_until="networkidle", timeout=35000)
-                        page.wait_for_timeout(self.wait_ms)
-                        best = self._collect_all_pages(page)
-                    except Exception:
-                        best = []
+                    # 已在这个路由上见过岗位卡；这一步再失败就是真故障，同样不许吞成 0 岗。
+                    # 页面还停在该路由首页（循环在它上面 break 了）就不必重开一遍。
+                    if last_route != best_route:
+                        self._open_route(page, base + best_route)
+                    best = self._collect_all_pages(page)
             finally:
                 browser.close()
         # 抓全率可观测。Moka 没有任何「总数」字段，分页器的总页数是唯一线索：
