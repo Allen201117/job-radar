@@ -5,9 +5,16 @@ name: enrichment-crawl
 # 并发轰同一台服务器（防 Errno 35 限流，2026-06-10 实锤 wecruit 102 源）。分片单位默认 = host，
 # 多租户 ATS 平台（app.mokahr.com）按租户细分（run.py _shard_key_of）——否则 265 个 moka 源同 host
 # 全压进一片：2026-07-23/24/25/27 实测该片 398 源跑满 180min 被 GitHub 取消 4 次，其余 5 片
-# 12-34min 就跑完闲着。现按源数贪心装箱，实测各片 188-190 源 ≈ 单片 65-66min。
+# 12-34min 就跑完闲着。
+# 2026-09-14 起按「预计耗时」装箱（plan job → crawler/shard_plan.py），不再按源数：源数均匀照样一片独大——
+# 国聘 www.iguopin.com 28 源同主机一队串行，线程池因此要 91~134min，按源数装箱还往那片塞 72 个浏览器源，
+# 浏览器档要等线程池结束才开跑 → 跑完的晚上该片 136~176min；09-08/10/11/12 撞 180min 被取消，
+# 浏览器档只开跑 35~45 个、27~37 个当晚零 crawl_runs（被杀那个停在 running）。moka 没卡住的晚上其余 5 片 40~84min。
+# ⚠️ 别拿 CI 日志数「列出了几个源」判断谁没跑：stdout 块缓冲，被杀的片尾巴日志会丢（09-12 日志只列 146 个，
+# 库里是 156 并发 + 38 串行开跑过），时间戳也是一批一批落的——量耗时、数漏抓一律查 crawl_runs。计划只算一次、各片共用同一份文件：各片自己读 crawl_runs 历史会读到不同数据，
+# 算出不同映射 → 漏抓 + 重抓。
 # 快档 daily-crawl.yml 只抓 httpx 列表、跳过富化（CRAWL_DETAIL_CAP=0）。
-# ⚠️ matrix 的片数与 --shard-count 必须一致（现为 6）；改片数要两处同改。
+# ⚠️ 片数三处必须一致：下方 SHARD_COUNT、matrix 列表、（计划文件自带 shard_count，run.py 会校验）。
 
 on:
   schedule:
@@ -26,14 +33,57 @@ concurrency:
   group: enrichment-crawl
   cancel-in-progress: false
 
+env:
+  SHARD_COUNT: "6"        # 与 enrich.strategy.matrix.shard 的列表长度必须一致
+  CRAWL_CONCURRENCY: "6"  # 每片线程池线程数；plan job 按它模拟线程池，两边必须同一个值
+
 jobs:
+  # 分片计划：只读 Supabase 的 sources + crawl_runs（近 7 晚），按预计耗时装箱，产物交给各片。
+  # 失败也不挡抓取：各片发现 plan 没成功就**一起**退回按源数装箱（全员一致，不会漏/重）。
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crawler/requirements.txt
+
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+
+      - name: Build duration-aware shard plan
+        run: |
+          python crawler/shard_plan.py \
+            --shard-count "$SHARD_COUNT" \
+            --tier "${{ github.event.inputs.tier || 'all' }}" \
+            --out shard-plan.json
+
+      - name: Upload shard plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-plan
+          path: shard-plan.json
+          if-no-files-found: error
+          retention-days: 14
+
   enrich:
+    needs: plan
+    # plan 失败时照样抓（退回按源数装箱）；只有整个 run 被取消才不跑。
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false  # 一片失败不取消其余片（各片独立，单片挂了其余照常覆盖）
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]  # 6 片并行；与下方 --shard-count 6 必须一致
+        shard: [0, 1, 2, 3, 4, 5]  # 6 片并行；列表长度与上方 SHARD_COUNT 必须一致
     runs-on: ubuntu-latest
-    # 单片 ~45-60min（全量 267min ÷ 6）；180 留足余量，触顶=提前失败留日志而非被 GitHub 6h 硬杀静默 cancel。
+    # 触顶=提前失败留日志而非被 GitHub 6h 硬杀静默 cancel。单片耗时以 plan job 的步骤摘要为准；
+    # 国聘那片的下限就是国聘一队的串行耗时（2026-09 实测线程池 91~134min），装箱救不了它，预计过 170 会打 warning。
     timeout-minutes: 180
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -42,7 +92,8 @@ jobs:
       JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
       JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
       JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
-      CRAWL_CONCURRENCY: "6"
+      # plan 成功才带计划；带了计划却读不到 → run.py 直接失败（不许一片退回、其余片用计划）。
+      CRAWL_SHARD_PLAN: ${{ needs.plan.result == 'success' && 'shard-plan/shard-plan.json' || '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -61,13 +112,23 @@ jobs:
         if: ${{ github.event.inputs.tier != 'httpx' }}
         run: python -m playwright install --with-deps chromium
 
-      # 并行分片：matrix.shard 提供片号（0-5），run.py 内 _shard_by_host 按主机分桶取本片的源。
+      - name: Download shard plan
+        if: ${{ needs.plan.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: shard-plan
+          path: shard-plan
+
+      # 并行分片：matrix.shard 提供片号，run.py 按计划（CRAWL_SHARD_PLAN）取本片的源；没计划就按源数装箱。
       - name: Run enrichment crawl (parallel shard, full per-job detail)
         run: |
+          if [ -z "$CRAWL_SHARD_PLAN" ]; then
+            echo "::warning::分片计划 job 没成功（${{ needs.plan.result }}），本轮各片一起退回按源数装箱，耗时不均衡的片可能撞 180min。"
+          fi
           python crawler/run.py \
             --tier "${{ github.event.inputs.tier || 'all' }}" \
             --shard-index "${{ matrix.shard }}" \
-            --shard-count 6
+            --shard-count "$SHARD_COUNT"
 
   # 分片各自软失败会全绿（见 enrich-backlog.yml guard 注释）；换台干净 runner 亲自连一次库，
   # 连不上才是真故障，红在这里。

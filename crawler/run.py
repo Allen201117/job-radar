@@ -326,6 +326,49 @@ def _shard_by_host(sources, shard_index, shard_count):
     return [s for s in sources if key_shard.get(_shard_key_of(s)) == shard_index]
 
 
+def select_tiers(sources, tier: str = "all"):
+    """本土优先排序 + 分档 + 按 --tier 收窄 → (并发档, 串行档)。
+
+    run_crawl 与 shard_plan（分片计划）共用这一份：计划按这里的顺序模拟线程池队序，
+    两边若各写一份，排序或分档一漂，计划就在按另一种跑法估耗时。会原地排序 sources。"""
+    # 本土优先：CI 时间有限时先抓中国本土公司源（高优），外企 ATS 殿后。
+    sources.sort(key=lambda s: 0 if (s.get("adapter_name") or "") in DOMESTIC_ADAPTERS else 1)
+    # P4 分档：httpx-safe 源并发抓（线程池，墙钟不再逐个叠加），浏览器(Playwright 非线程安全)/未知源串行抓。
+    concurrent, serial = _partition_by_tier(sources)
+    # 分档：快档 daily 只跑 httpx 并发档；重档 enrichment 跑 browser 串行档（或 all 全量）。默认 all=两档都跑（向后兼容）。
+    if tier == "httpx":
+        serial = []
+    elif tier == "browser":
+        concurrent = []
+    return concurrent, serial
+
+
+def _shard_by_plan(concurrent, serial, plan_path, shard_index, shard_count):
+    """按分片计划取本片的源（计划由 enrich-crawl 的 plan job 算一次、各片共用，见 shard_plan.py）。
+
+    ⚠️ 计划文件读不到 / 校验不过一律抛错、让这一片失败，**绝不**悄悄退回 _shard_by_host：
+    只要有一片退回按源数分、其余片用计划，同一个源就会两片都不抓或两片重抓。
+    计划里没有的 key（plan 之后才新增的源）按 crc32 兜底——各片算出来一致，同样不漏不重。"""
+    import shard_plan
+
+    plan = shard_plan.load_plan(plan_path, shard_count)
+    planned = plan["keys"]
+    unplanned = sorted({_shard_key_of(s) for s in concurrent + serial} - set(planned))
+    if unplanned:
+        print(f"[crawler] 分片计划之后新增的 key {len(unplanned)} 个，按 crc32 兜底分片：{unplanned[:10]}")
+    mine = [sh for sh in plan.get("shards") or [] if sh.get("index") == shard_index]
+    if mine:
+        print(f"[crawler] 分片计划：本片预计 {mine[0].get('est_minutes')} 分钟"
+              f"（线程池 {mine[0].get('est_pool_minutes')} + 串行 {mine[0].get('est_serial_minutes')}），"
+              f"最重 {mine[0].get('top_keys', [])[:3]}")
+
+    def pick(group):
+        return [s for s in group
+                if shard_plan.shard_of_key(_shard_key_of(s), planned, shard_count) == shard_index]
+
+    return pick(concurrent), pick(serial)
+
+
 # 并发档每线程独立 supabase 客户端。根因（2026-06-10 实锤，traceback 指向
 # httpcore/_sync/http2.py + postgrest）：supabase-py 客户端走 HTTP/2 单连接多路复用，
 # 被多个 worker 线程共享时并发读同一 socket → Errno 35（Resource temporarily unavailable）
@@ -558,7 +601,7 @@ def _process_one_source(source, supabase) -> dict:
 
 def run_crawl(filter_adapter: str = None, tier: str = "all",
               shard_index: int = 0, shard_count: int = 1,
-              sources_override: list = None):
+              sources_override: list = None, shard_plan_path: str = None):
     """全库抓取。sources_override 非空时只抓这批源（调用方已自行选源、已过滤 enabled），
     用于校招高频车道等「按业务口径挑一小撮源加密抓」的场景（见 crawler/campus_crawl.py）。
     分档/分片/本土优先等下游逻辑对两条路径完全一致，避免车道走出与主链路不同的抓取行为。"""
@@ -575,23 +618,20 @@ def run_crawl(filter_adapter: str = None, tier: str = "all",
             print(f"[crawler] 没有匹配 adapter_name='{filter_adapter}' 的 enabled source，退出。")
             return
 
-    # 本土优先：CI 时间有限时先抓中国本土公司源（高优），外企 ATS 殿后。
-    sources.sort(key=lambda s: 0 if (s.get("adapter_name") or "") in DOMESTIC_ADAPTERS else 1)
     domestic_n = sum(1 for s in sources if (s.get("adapter_name") or "") in DOMESTIC_ADAPTERS)
-    # P4 分档：httpx-safe 源并发抓（线程池，墙钟不再逐个叠加），浏览器(Playwright 非线程安全)/未知源串行抓。
-    concurrent_sources, serial_sources = _partition_by_tier(sources)
-    # 分档：快档 daily 只跑 httpx 并发档；重档 enrichment 跑 browser 串行档（或 all 全量）。默认 all=两档都跑（向后兼容）。
-    if tier == "httpx":
-        serial_sources = []
-    elif tier == "browser":
-        concurrent_sources = []
-    # 源分片：按主机分桶（_shard_by_host），同主机源落同一片。重档现为「N 片并行跨 runner」（matrix），
+    concurrent_sources, serial_sources = select_tiers(sources, tier)
+    # 源分片：同一分片单位（_shard_key_of）的源落同一片。重档现为「N 片并行跨 runner」（matrix），
     # 全量一次覆盖；旧「按天 1/shard_count 轮转单 runner」也兼容（仍是合法分片）。默认 shard_count=1 = 不分片。
     # 注意：按主机分桶（非源 round-robin）是并行跨 runner 的正确性前提——防同主机被多 runner 并发轰致限流。
+    # 有分片计划（enrich-crawl 的 plan job 按预计耗时算好的，见 shard_plan.py）就用计划，否则按源数装箱。
     if shard_count > 1:
         shard_index %= shard_count
-        concurrent_sources = _shard_by_host(concurrent_sources, shard_index, shard_count)
-        serial_sources = _shard_by_host(serial_sources, shard_index, shard_count)
+        if shard_plan_path:
+            concurrent_sources, serial_sources = _shard_by_plan(
+                concurrent_sources, serial_sources, shard_plan_path, shard_index, shard_count)
+        else:
+            concurrent_sources = _shard_by_host(concurrent_sources, shard_index, shard_count)
+            serial_sources = _shard_by_host(serial_sources, shard_index, shard_count)
     workers = max(1, int(os.environ.get("CRAWL_CONCURRENCY", "6") or "6"))
     active_n = len(concurrent_sources) + len(serial_sources)
     print(f"[crawler] tier={tier} shard={shard_index}/{shard_count}；本次抓取 {active_n}/{len(sources)} 源"
@@ -677,6 +717,9 @@ if __name__ == "__main__":
     parser.add_argument("--shard-count", type=int,
                         default=int(os.environ.get("CRAWL_SHARD_COUNT", "1") or "1"),
                         help="源分片轮转：共分几片（重档按天 1/7 轮转传 7；默认 1=不分片）")
+    parser.add_argument("--shard-plan", type=str,
+                        default=(os.environ.get("CRAWL_SHARD_PLAN") or None),
+                        help="分片计划 JSON（shard_plan.py 生成）；给了就按计划分片，读不到直接失败、不退回按源数分")
     args = parser.parse_args()
 
     # 按需「浏览器发现」模式（GitHub Actions workflow_dispatch 触发，通过 DISCOVERY_* 环境变量传参）。
@@ -687,4 +730,5 @@ if __name__ == "__main__":
 
     run_crawl(filter_adapter=args.source, tier=args.tier,
               shard_index=max(0, args.shard_index),
-              shard_count=max(1, args.shard_count))
+              shard_count=max(1, args.shard_count),
+              shard_plan_path=args.shard_plan)
