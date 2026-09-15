@@ -42,6 +42,7 @@ export async function GET(request: NextRequest) {
     jobType: p.get("jobType") || "",
     keyword: p.get("keyword") || "",
     capitalOrigin: p.get("capitalOrigin") || "",
+    companyTier: p.get("companyTier") || "",
     region: p.get("region") || "",
     education: p.get("education") || "",
     jobFunction: p.get("jobFunction") || "",

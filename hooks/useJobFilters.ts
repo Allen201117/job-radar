@@ -24,6 +24,7 @@ function filtersToParams(f: Filters, offset: number, limit: number): string {
   if (f.jobType) p.set("jobType", f.jobType);
   if (f.keyword.trim()) p.set("keyword", f.keyword.trim());
   if (f.capitalOrigin) p.set("capitalOrigin", f.capitalOrigin);
+  if (f.companyTier) p.set("companyTier", f.companyTier);
   if (f.region) p.set("region", f.region);
   if (f.education) p.set("education", f.education);
   if (f.jobFunction) p.set("jobFunction", f.jobFunction);
