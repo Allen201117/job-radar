@@ -15,16 +15,19 @@ test("保多集:重排前后同一批 job(长度+成员不变)", () => {
   assert.equal(multiset(out), multiset(ranked)); // 一个都没丢、没多
 });
 
-test("头部窗口内单公司不超 cap(有别家可换时)", () => {
-  // 100 个字节 + 穿插 100 个不同小公司,交替喂入
+test("头部窗口内单公司不超 cap(可满足密度:主导公司15%,聚堆在最前)", () => {
+  // 30 个字节聚在最前(模拟一家刚被批量抓取而刷屏)+ 170 家各 1 个岗
   const ranked = [];
-  for (let i = 0; i < 100; i++) { ranked.push(J("字节跳动", "b" + i)); ranked.push(J("小" + i, "s" + i)); }
+  for (let i = 0; i < 30; i++) ranked.push(J("字节跳动", "b" + i));
+  for (let i = 0; i < 170; i++) ranked.push(J("小" + i, "s" + i));
   const out = spreadByCompany(ranked, { cap: 3, window: 10, headOnly: 200 });
-  // 检查头部每个长度 10 的滑窗里字节 ≤ 3
+  // 30/200=15% 密度下 ≤3/窗口是可满足的
   for (let k = 0; k + 10 <= 200 && k + 10 <= out.length; k++) {
     const win = out.slice(k, k + 10).filter((j) => j.company === "字节跳动").length;
     assert.ok(win <= 3, `窗口[${k},${k + 10}) 字节=${win} 超过 cap`);
   }
+  // 开头那一坨字节确实被打散了(首窗 ≤3),这才是分散的意义
+  assert.ok(out.slice(0, 10).filter((j) => j.company === "字节跳动").length <= 3);
 });
 
 test("确定性:同输入同输出", () => {
