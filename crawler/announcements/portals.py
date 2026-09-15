@@ -26,22 +26,53 @@ class Portal:
     detail_pat: re.Pattern = field(default_factory=lambda: re.compile(r"(post_\d+\.html|/t20\d{6}_\d+\.html)"))
 
 
-# MVP：只登记 Phase 0 实测通过的两省静态源。扩省在这里加行。
+# 各省人社厅「事业单位公开招聘公告」列表页（2026-09-15 逐省 live 验证的静态源）。
+# ⚠️ 每省 detail URL 格式不同，detail_pat 必须逐省配，别假设统一格式。
+# ⚠️ 归属门只放行 domains 里的官方 gov 域名；host + detail_pat + 标题 INCLUDE/EXCLUDE 三重过滤。
+# ⚠️ 综合栏目（四川/河南/广西）混着非招聘内容，靠 classify 的标题过滤兜底（同 CLAUDE.md「后置过滤」）。
+# 暂缺：浙江/河北/江西（JS 渲染，需浏览器道，下一期）；辽宁（仅第三方人事考试网，无 gov.cn 源，跳过）。
+def _p(rx: str) -> re.Pattern:
+    return re.compile(rx)
+
+
 PORTALS: tuple[Portal, ...] = (
-    Portal(
-        key="bj_rsj",
-        name="北京市人力资源和社会保障局·公开招聘",
-        region="北京市",
-        list_urls=("https://rsj.beijing.gov.cn/xxgk/gkzp/",),
-        domains=("rsj.beijing.gov.cn",),
-    ),
-    Portal(
-        key="gd_hrss",
-        name="广东省人力资源和社会保障厅·事业单位招聘",
-        region="广东省",
-        list_urls=("https://hrss.gd.gov.cn/zwgk/sydwzp/zpgg/index.html",),
-        domains=("hrss.gd.gov.cn",),
-    ),
+    Portal("bj_rsj", "北京市人力资源和社会保障局·公开招聘", "北京市",
+           ("https://rsj.beijing.gov.cn/xxgk/gkzp/",), ("rsj.beijing.gov.cn",),
+           _p(r"t\d{8}_\d+\.html")),
+    Portal("gd_hrss", "广东省人力资源和社会保障厅·事业单位招聘", "广东省",
+           ("https://hrss.gd.gov.cn/zwgk/sydwzp/zpgg/index.html",), ("hrss.gd.gov.cn",),
+           _p(r"post_\d+\.html")),
+    # ⏸️ 暂缺（下一期，2026-09-15 逐个 live 试过）：
+    #   · 上海：研究给的列表 URL 404，待找对入口。
+    #   · 江苏：col 页 JS 渲染，raw HTML 无 art_ 链接 → 需浏览器道。
+    #   · 四川/河南/广西/重庆/贵州：都是「综合公示公告/考试」栏目、没有干净的「招聘公告」子栏目，
+    #     过滤后剩的多是 面试资格确认 / 报名统计 / 政策办法 / 陈旧归档，信噪比差 → 精度红线下先不接，
+    #     待找到各省专属「事业单位招聘公告」子栏目 URL 再接。
+    #   · 云南：首页多为拟聘公示。
+    #   · 天津：每条都是同名「天津市部分事业单位公开招聘信息」聚合快讯、无单独截止日，需拆子项。
+    Portal("sd_hrss", "山东省人力资源和社会保障厅·事业单位公开招聘", "山东省",
+           ("http://hrss.shandong.gov.cn/channels/ch00232/",), ("hrss.shandong.gov.cn",),
+           _p(r"articles/ch\d+/\d+/[0-9a-f-]+\.shtml")),
+    Portal("hb_rst", "湖北省人力资源和社会保障厅·省直事业单位招聘公告", "湖北省",
+           ("https://rst.hubei.gov.cn/bmdt/ztzl/ywzl/hbsszsydwgkzp/zpgg/",), ("rst.hubei.gov.cn",),
+           _p(r"t\d{8}_\d+\.shtml")),
+    Portal("hn_rst", "湖南省人力资源和社会保障厅·事业单位招聘", "湖南省",
+           ("https://rst.hunan.gov.cn/rst/xxgk/zpzl/sydwzp/index.html",), ("rst.hunan.gov.cn",),
+           _p(r"t\d{8}_\d+\.html")),
+    Portal("fj_rst", "福建省人力资源和社会保障厅·事业单位人才招聘", "福建省",
+           ("https://rst.fujian.gov.cn/zw/ztzl/zxzt/sydwrczp/",), ("rst.fujian.gov.cn",),
+           _p(r"t\d{8}_\d+\.htm")),
+    Portal("ah_hrss", "安徽省人力资源和社会保障厅·省直事业单位公开招聘", "安徽省",
+           ("https://hrss.ah.gov.cn/zxzx/ztzl/ahssydwgkzp/index.html",), ("hrss.ah.gov.cn",),
+           _p(r"ahssydwgkzp/\d+\.html")),
+    # 陕西：列表在 rst.shaanxi.gov.cn，详情由省政府门户 www.shaanxi.gov.cn 代发 → 两个域名都要白名单。
+    Portal("sn_rst", "陕西省人力资源和社会保障厅·事业单位公开招聘", "陕西省",
+           ("https://rst.shaanxi.gov.cn/sy/ztzl/rdzt/zkzl/sxssydwgkzp_22656/",),
+           ("rst.shaanxi.gov.cn", "www.shaanxi.gov.cn"),
+           _p(r"t\d{8}_\d+\.html")),
+    Portal("sx_rst", "山西省人力资源和社会保障厅·事业单位公开招聘", "山西省",
+           ("https://rst.shanxi.gov.cn/ztzl/zpxx/",), ("rst.shanxi.gov.cn",),
+           _p(r"t\d{8}_\d+\.shtml")),
 )
 
 PORTALS_BY_KEY: dict[str, Portal] = {p.key: p for p in PORTALS}
@@ -84,6 +115,16 @@ class ListItem:
     published_at: date | None
 
 
+# 列表项文字常尾随一个发布日期（山东「…公告2026-09-11」）或多余空白 → 清掉再当标题。
+_TRAILING_DATE = re.compile(r"\s*20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\s*$")
+
+
+def _clean_title(text: str) -> str:
+    t = re.sub(r"\s+", " ", (text or "").strip())
+    t = _TRAILING_DATE.sub("", t).strip()
+    return t[:200]
+
+
 def parse_list(portal: Portal, list_url: str, html: str) -> list[ListItem]:
     """从列表页 HTML 抽出「可报名招聘公告」候选（已过归属门 + 内容过滤）。"""
     tree = HTMLParser(html)
@@ -91,7 +132,7 @@ def parse_list(portal: Portal, list_url: str, html: str) -> list[ListItem]:
     out: list[ListItem] = []
     for a in tree.css("a[href]"):
         href = a.attributes.get("href") or ""
-        title = (a.text() or "").strip()
+        title = _clean_title(a.text() or "")
         if not href or len(title) < 8:
             continue
         full = urljoin(list_url, href)
@@ -104,5 +145,5 @@ def parse_list(portal: Portal, list_url: str, html: str) -> list[ListItem]:
         if full in seen:
             continue
         seen.add(full)
-        out.append(ListItem(title=title[:200], url=full, published_at=published_from_url(full)))
+        out.append(ListItem(title=title, url=full, published_at=published_from_url(full)))
     return out

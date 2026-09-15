@@ -31,6 +31,10 @@ _UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
+# 单 portal 每轮最多处理的候选数（列表页倒序 = 取最新 N）。
+# 防山东那种整档 462 条把详情抓取撑爆；老公告报名多已截止，取最新即可，其余靠下一轮增量补。
+_MAX_CANDIDATES_PER_PORTAL = 60
+
 
 def _client() -> httpx.Client:
     # 复用国内门户 TLS 兼容层（强制 IPv4 + 传统重协商）——本机测不出、CI 上才炸的坑。
@@ -79,6 +83,10 @@ def harvest_portal(client: httpx.Client, sb, portal: Portal, dry_run: bool) -> d
                 continue
             seen.add(item.url)
             candidates.append(item)
+
+    # 列表页倒序 → 截最新 N，防整档（如山东 462 条）把详情抓取撑爆。
+    total_found = len(candidates)
+    candidates = candidates[:_MAX_CANDIDATES_PER_PORTAL]
 
     # 2. 已在库的 source_url（用于区分新增/更新；dry-run 不读库，全部当新的抽一遍）
     existing: dict[str, dict] = {}
@@ -132,7 +140,8 @@ def harvest_portal(client: httpx.Client, sb, portal: Portal, dry_run: bool) -> d
 
     metrics = {
         "portal": portal.key,
-        "found": len(candidates),
+        "found": total_found,            # 列表页命中的候选总数（截断前）
+        "processed": len(candidates),    # 本轮实际处理（截最新 N）
         "new": len(new_rows),
         "touched": touched,
         "deadline_hit": deadline_hit,

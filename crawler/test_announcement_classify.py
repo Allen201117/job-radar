@@ -21,6 +21,19 @@ class TestIsRecruitment(unittest.TestCase):
         self.assertFalse(is_recruitment_announcement("XX单位2026年公开招聘资格复审公告"))
         self.assertFalse(is_recruitment_announcement("招聘政策法规"))
 
+    def test_stats_policy_process_filtered(self):
+        # 扩省实测：综合栏目混着报名统计/政策办法/资格确认/公务员遴选，必须剔除
+        self.assertFalse(is_recruitment_announcement("重庆市事业单位2026年第三季度公开招聘工作人员考试报名统计"))
+        self.assertFalse(is_recruitment_announcement("关于印发《贵州省事业单位公开招聘操作办法（试行）》的通知"))
+        self.assertFalse(is_recruitment_announcement("河南医药健康技师学院2026年公开招聘面试资格确认公告"))
+        self.assertFalse(is_recruitment_announcement("事业单位公开招聘专业设置参考目录"))
+        # 「遴选」不在 INCLUDE：公开遴选=体制内在职流动，不算对外招聘
+        self.assertFalse(is_recruitment_announcement("重庆市属事业单位2026年公开遴选工作人员报名统计"))
+
+    def test_stats_keyword_does_not_overfilter(self):
+        # 「统计局」招聘是真公告——EXCLUDE 用「报名统计」而非裸「统计」，不能误杀
+        self.assertTrue(is_recruitment_announcement("重庆市统计局2026年公开招聘工作人员公告"))
+
     def test_empty(self):
         self.assertFalse(is_recruitment_announcement(""))
 
