@@ -181,6 +181,7 @@ export default function CampusClient({
   hasIndustry,
   generatedLabel = null,
   filterOptions,
+  seasonGradClass,
 }: {
   cards: CampusBoardCard[];
   industries: string[];
@@ -188,6 +189,9 @@ export default function CampusClient({
   /** 看板快照的年龄（服务端算好的文案，如「12 分钟前」）；null 时不渲染。 */
   generatedLabel?: string | null;
   filterOptions: { campus: CampusFilterOptions; intern: CampusFilterOptions };
+  /** 当前校招季的目标届别（服务端 currentGradClass() 算好传入，避免年界处 SSR/hydration 不一致）。
+   *  没有官方周期数据的公司，校招卡也用它兜一个「N届」标签，不至于一个标签都没有。 */
+  seasonGradClass: number;
 }) {
   const [mode, setMode] = useState<RecruitMode>("campus");
   const [filters, setFilters] = useState<CampusFilters>(EMPTY_FILTERS);
@@ -539,18 +543,18 @@ export default function CampusClient({
                     // （公开信息 sky / 往年 neutral）+ batchBits。⚠️ 往年不可能有当届，措辞交给 basis，别写死。
                     const hasPrecise = card.preciseDates.length > 0;
                     const chips: JSX.Element[] = [];
-                    if (hasPrecise) {
-                      chips.push(<Badge key="basis" tone="green" size="sm">今年·据官方公告</Badge>);
-                    } else if (card.timeline) {
-                      const tone = card.timeline.basis === "public" ? "sky" : "neutral";
-                      chips.push(
-                        <Badge key="basis" tone={tone} size="sm">
-                          {TIMELINE_BASIS_LABEL[card.timeline.basis]}
-                        </Badge>,
-                      );
+                    // 数据依据标签：「今年·据官方公告 / 据公开信息」删掉（创始人 2026-09-15：噪音，且和「招聘中」大徽章挤在一起）。
+                    // 只保留「据往年」—— 它不是噪音，是「这条时间线是按往年规律推的、今年官方还没确认」的诚实提醒，
+                    // 删了会让推测显得像确认（有精确日期的官方档不受影响：绿色日期标签本身就表明是官方来源）。
+                    if (!hasPrecise && card.timeline?.basis === "historical") {
+                      chips.push(<Badge key="basis" tone="neutral" size="sm">{TIMELINE_BASIS_LABEL.historical}</Badge>);
                     }
-                    if (card.timeline?.gradClass) {
-                      chips.push(<Badge key="gc" tone="neutral" size="sm">{card.timeline.gradClass}</Badge>);
+                    // 届别：有官方周期数据用它；否则校招卡兜一个当季届别（本区已滤掉往届，剩的就是当季校招），
+                    // 让没接入周期数据的公司也不至于「一个标签都没有」。实习不按届别，无数据就不显。
+                    const gradLabel =
+                      card.timeline?.gradClass ?? (mode === "campus" ? `${seasonGradClass}届` : null);
+                    if (gradLabel) {
+                      chips.push(<Badge key="gc" tone="neutral" size="sm">{gradLabel}</Badge>);
                     }
                     if (hasPrecise) {
                       card.preciseDates.forEach((p) =>
@@ -561,13 +565,7 @@ export default function CampusClient({
                         chips.push(<Badge key={`b-${bit}`} tone="neutral" size="sm">{bit}</Badge>),
                       );
                     }
-                    if (card.timeline?.phaseLabel) {
-                      chips.push(
-                        <Badge key="phase" tone="amber" size="sm" className="font-medium">
-                          {card.timeline.phaseLabel}
-                        </Badge>,
-                      );
-                    }
+                    // 「现处正式批/黄金期」标签删掉（创始人 2026-09-15：与「招聘中」大徽章重复）。
                     if (!hasPrecise && card.cleanDeadlineMs) {
                       chips.push(
                         <Badge key="dl" tone="neutral" size="sm">
