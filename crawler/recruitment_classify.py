@@ -1,9 +1,12 @@
-"""入库时给岗位补「招聘类型」两列（recruitment_category / recruitment_explicit）。
+"""入库时给岗位补「招聘类型」两列 + 「职能」一列（recruitment_category / recruitment_explicit / job_function）。
 
-为什么不在 Python 里重写规则：判「社招/校招/实习」的权威实现只有一份，在 JS
-（lib/china-keyword-expansion.js 的七层裁决 + 完整单测）。把它翻译成 Python = 制造第二份
+为什么不在 Python 里重写规则：判「社招/校招/实习」与「产品/研发/设计…」的权威实现各只有一份，都在 JS
+（lib/china-keyword-expansion.js 的七层裁决 / classifyJobFunction + 完整单测）。把它翻译成 Python = 制造第二份
 会各自漂移的实现——本仓库在 canonicalize_jd_url 上已经吃过「同一逻辑存三份、改一处忘两处」的亏。
-这里隔一个进程调那份 JS，规则始终只有一处。
+这里隔一个进程同时拿三个结论（省一次进程启动），规则始终只有一处。
+
+⚠️ job_function **带 summary 算**（classifyJobFunction 会对歧义标题看正文精修），与校招看板读路径同口径；
+   这与 crawler/job_function.py（只喂 title、服务于 insight 分布统计）是两种口径，别混。物化列用这里的。
 
 ⚠️ 最重要的不变量：**分类失败绝不能让抓取失败**。任何异常（没装 node / 脚本报错 / 超时）
    一律静默降级成「不填这两列」，岗位照常入库，由 backfill-recruitment-category 的补漏任务捡回。
@@ -38,17 +41,17 @@ def _warn_once(msg: str) -> None:
         _warned = True
 
 
-def classify(jobs: Iterable[dict]) -> list[tuple[str | None, bool | None]]:
-    """批量分类，返回与输入等长的 [(category, explicit)]；任何失败一律返回全 (None, None)。"""
+def classify(jobs: Iterable[dict]) -> list[tuple[str | None, bool | None, str | None]]:
+    """批量分类，返回与输入等长的 [(category, explicit, function)]；任何失败一律返回全 (None, None, None)。"""
     items = list(jobs)
     if not items:
         return []
     if _DISABLED:
-        return [(None, None)] * len(items)
+        return [(None, None, None)] * len(items)
     node = shutil.which("node")
     if not node or not _SCRIPT.exists():
         _warn_once("未找到 node 或分类脚本")
-        return [(None, None)] * len(items)
+        return [(None, None, None)] * len(items)
 
     payload = json.dumps(
         [{f: j.get(f) for f in _FIELDS} for j in items], ensure_ascii=False
@@ -63,15 +66,15 @@ def classify(jobs: Iterable[dict]) -> list[tuple[str | None, bool | None]]:
         )
         if proc.returncode != 0:
             _warn_once(f"分类脚本退出码 {proc.returncode}: {proc.stderr.strip()[:160]}")
-            return [(None, None)] * len(items)
+            return [(None, None, None)] * len(items)
         out = json.loads(proc.stdout)
         if not isinstance(out, list) or len(out) != len(items):
             _warn_once("分类结果条数与输入不符")
-            return [(None, None)] * len(items)
-        return [(o.get("category"), o.get("explicit")) for o in out]
+            return [(None, None, None)] * len(items)
+        return [(o.get("category"), o.get("explicit"), o.get("function")) for o in out]
     except Exception as exc:  # noqa: BLE001 —— 故意兜住一切，主链路不能被支线拖垮
         _warn_once(f"{type(exc).__name__}: {exc}")
-        return [(None, None)] * len(items)
+        return [(None, None, None)] * len(items)
 
 
 # ⚠️ 这两列的「所有权」在数据库，不在写入方（2026-09-03）。
@@ -85,18 +88,20 @@ def classify(jobs: Iterable[dict]) -> list[tuple[str | None, bool | None]]:
 # 语言还不同，靠每个人自觉 = 下一条新路径原样复发（实测漂过 8,140 行 / 1.93%）。
 
 def annotate(jobs: list[dict[str, Any]]) -> None:
-    """就地给每个 job 补上两列。已经带值的行不覆盖（调用方可能已算过）。
+    """就地给每个 job 补上三列（recruitment_category / recruitment_explicit / job_function）。
+    已算过招聘类型的行不再重算（调用方可能已算过）——三列由同一次 JS 调用产出，一起补。
 
     ⚠️ 这里**再兜一层异常**（classify 内部已经兜过）：这是写库主链路上的一个可选富化步骤，
     任何从意料之外的路径冒出来的异常都不许冒泡到 upsert —— 否则一个支线故障会让整源抓取失败。
-    降级后两列留空，由 backfill-recruitment-category 的定时任务捡回。
+    降级后三列留空，由 backfill-recruitment-category / backfill-job-function 的定时任务捡回。
     """
     try:
         todo = [j for j in jobs if j.get("recruitment_category") is None]
         if not todo:
             return
-        for job, (cat, exp) in zip(todo, classify(todo)):
+        for job, (cat, exp, fn) in zip(todo, classify(todo)):
             job["recruitment_category"] = cat
             job["recruitment_explicit"] = exp
+            job["job_function"] = fn
     except Exception as exc:  # noqa: BLE001 —— 主链路不能被支线拖垮，见上
         _warn_once(f"annotate 异常 {type(exc).__name__}: {exc}")

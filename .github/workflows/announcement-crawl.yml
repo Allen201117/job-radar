@@ -1,0 +1,43 @@
+name: announcement-crawl
+
+# 公告制招聘：每日抓官方招聘公告（事业单位/体制内）→ announcement_postings（Supabase）+ 过期治理。
+# 设计文档：docs/superpowers/specs/2026-09-15-announcement-recruitment-supply-design.md
+# 归属门在 crawler/announcements/portals.py（只收官方 gov 域名 + 可报名公告）；扩省 = 往 PORTALS 加行。
+# 只抓官方源，不碰公众号、不碰第三方平台（中公/华图等）——见方案 §2/§11。
+
+on:
+  schedule:
+    - cron: "0 22 * * *"   # UTC 22（北京 6:00），与 daily-crawl(0:00)/auto-discover(23:00) 错峰
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true=只抓不写库（打印将入库的行）；留空=真抓 + 过期治理"
+        required: false
+        default: ""
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # 无结构化截止日时的兜底过期天数（发布日/首见日 + N 天）。改档改这里即可。
+      ANNOUNCEMENT_TTL_DAYS: ${{ vars.ANNOUNCEMENT_TTL_DAYS || '45' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crawler/requirements.txt
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
+      - name: Harvest official recruitment announcements
+        working-directory: crawler
+        run: |
+          if [ -n "${{ github.event.inputs.dry_run }}" ]; then
+            python -m announcements.harvest --dry-run
+          else
+            python -m announcements.harvest
+          fi

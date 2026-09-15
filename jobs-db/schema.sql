@@ -285,6 +285,49 @@ create trigger jobs_recruitment_class_guard_trg
   before update on jobs
   for each row execute function jobs_guard_recruitment_class();
 
+-- ── 职能物化（2026-09-15，第1步：只加列 + 触发器；回填 / 切读分步走）─────────────────────────
+-- 为什么要存：判「产品/研发/设计…」的权威实现只有一份，在 JS（lib/china-keyword-expansion.js 的
+-- classifyJobFunction：标题权威优先 + 歧义标题看正文精修 + 完整单测）。校招看板过去在**渲染期**把
+-- 几万条岗位的 JD 正文拖回函数现算职能分面 —— 又重又慢、撑不过 unstable_cache 后台重算的超时 →
+-- 快照静默冻死 → 全部「数据待更新」（2026-09-15 实测冻 3 天，库里数据其实当天还在更新）；也因为职能
+-- 不是字段，展开公司按职能筛全部岗位时每翻一页都要重拉正文，所以只能截前 200。物化成带索引的列后，
+-- 读路径不再拉正文、翻页也便宜。
+-- ⚠️ 计算口径必须**带 summary**（classifyJobFunction({title,summary})），与校招现有读路径逐字一致：
+--    只用标题会让约 3.4 万个「标题歧义、靠正文精修」的行退回「其他」，反而做差职能筛选。
+--    这与 scripts/classify-job-function.js（**只喂 title**、服务于 insight 职能分布统计）是两种口径，别混。
+-- 值域：job_function ∈ JOB_FUNCTION_BUCKETS（17 桶）；NULL =「还没算」≠「其他」，读路径遇 NULL 退回现算兜底。
+alter table jobs add column if not exists job_function text;
+-- 校招/实习职能筛选走它 → 部分索引（只覆盖 active 行，控体积）。
+create index if not exists idx_jobs_active_job_function on jobs (job_function) where status = 'active';
+-- 「等待重算的行」小索引：触发器把结论作废（置 NULL）后，回填 / 富化按它快速找到待补的行。
+create index if not exists jobs_job_function_unclassified_idx on jobs (id) where job_function is null;
+
+-- 职能同为**派生数据**：必须是「库里那一行」的函数。触发器只管作废与保权、不算分类（规则在 JS，
+-- 照抄进 SQL = 制造第二份会漂移的实现）。与 jobs_guard_recruitment_class 同一套设计：
+--   ① 分类输入（title/summary）变了 → 旧结论作废置 NULL（读路径退回现算兜底，结果照常正确）。
+--   ② 输入没变却有人想改 → 驳回，保留库里那份（堵列表重抓拿瘦 payload 覆盖好值，见上文 recruitment 段）。
+--   ③ 只有重算任务（set jobradar.reclassify='on'，与 recruitment 回填共用同一标记）能写值。
+-- ⚠️ classifyJobFunction 只吃 title + summary（刻意不含 job_type，见其注释）→ 这里的作废判据也只看这两列。
+create or replace function jobs_guard_job_function()
+returns trigger language plpgsql as $function$
+begin
+  if coalesce(current_setting('jobradar.reclassify', true), '') = 'on' then
+    return new;  -- ③ 重算任务：放行
+  end if;
+  if (new.title, new.summary) is distinct from (old.title, old.summary) then
+    new.job_function := null;              -- ① 依据变了 → 结论作废
+  else
+    new.job_function := old.job_function;  -- ② 依据没变 → 不许改结论
+  end if;
+  return new;
+end;
+$function$;
+
+drop trigger if exists jobs_job_function_guard_trg on jobs;
+create trigger jobs_job_function_guard_trg
+  before update on jobs
+  for each row execute function jobs_guard_job_function();
+
 -- ── 招聘阶段谓词（校招 / 实习）：与 lib/jobs-store/opportunities.ts 的 stageRecallPatterns 逐字对齐 ──
 -- 它存在的唯一理由是**给下面两个分区索引写谓词**；应用层 SQL 不调它、也不需要改。
 -- 之所以「不改应用层也能生效」：这是个简单 SQL 函数且标了 immutable，Postgres 建索引时会把它

@@ -12,7 +12,7 @@ import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import { GraduationCap } from "@phosphor-icons/react/ssr";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { companiesForIndustries, getUserCampusScope } from "@/lib/campus-user-industries";
-import { getCampusZone } from "@/lib/jobs-store/read";
+import { getCampusZone, getCampusFreshStats } from "@/lib/jobs-store/read";
 import { getCampusSourceCoverage } from "@/lib/campus-sources";
 import { windowStatus, compareCompanyCards } from "@/lib/campus-zone";
 import { getRecruitmentCyclesForCompanies } from "@/lib/recruitment-cycle-store";
@@ -107,8 +107,9 @@ const loadCampusBoard = unstable_cache(
     console.log(`[campus-board] rebuilt industries=${industries.join(",")} companies=${companies.length} ms=${generatedAtMs - startedAt}`);
     return { cards, filterOptions: { campus: campus.options, intern: intern.options }, generatedAtMs };
   },
-  // v2：换 key 让线上那份卡死的 v1 快照立刻失效（Vercel 数据缓存跨部署存活，光部署不会刷掉它）。
-  ["campus-board-v2"],
+  // v3：职能改读物化列 job_function 后，看板重算不再拉几万条正文、变轻，换 key 让线上那份卡死的
+  //     v2 facet 快照立刻失效并用新的轻重算刷新（Vercel 数据缓存跨部署存活，光部署不会刷掉它）。
+  ["campus-board-v3"],
   // 10 分钟：校招看板的数据由每日 / 每小时的抓取车道产出，10 分钟的滞后用户感知不到，
   // 但足以让绝大多数请求走缓存、不再逐次重算这坨重活。
   { revalidate: 600, tags: ["campus-board"] },
@@ -124,20 +125,41 @@ export default async function CampusPage() {
   // 缓存键只认行业清单本身，排序后传入让「同一组行业、不同顺序」共用一份缓存。
   const board = await loadCampusBoard([...industries].sort());
 
-  // 徽章与排序按「此刻」现算：缓存里存的是 lastSeenAtMs 等原始输入，不是随时间失效的结论。
+  // 「计数 + 新鲜度」用轻查询每请求现算，绕开这个可能冻住的重快照（见 getCampusFreshStats 注释）：
+  // 快照卡死时，卡面的岗位数与「数据待更新」徽章不再跟着冻在旧值。轻查询失败就回退快照值、绝不让页面崩。
   const nowMs = Date.now();
+  let fresh: Awaited<ReturnType<typeof getCampusFreshStats>> | null = null;
+  try {
+    fresh = await getCampusFreshStats(companiesForIndustries(industries));
+  } catch (err) {
+    console.error("[campus-board] fresh stats failed; fall back to snapshot counts", err);
+  }
+
+  // 徽章与排序按「此刻」现算：用现算的计数 / lastSeenAt（拿不到才退回快照里的原始输入）。
   const cards = board.cards
-    .map((c) => ({
-      ...c,
-      window: windowStatus({
-        campusJobCount: c.campusTotal,
-        hasCampusSource: c.hasCampusSource,
-        hasAnySource: c.hasAnySource,
-        lastSeenAtMs: c.lastSeenAtMs,
-        nowMs,
-      }),
-    }))
+    .map((c) => {
+      const f = fresh?.byPattern.get(c.pattern);
+      const campusTotal = f ? f.campusTotal : c.campusTotal;
+      const internTotal = f ? f.internTotal : c.internTotal;
+      const lastSeenAtMs = f ? f.lastSeenAtMs : c.lastSeenAtMs;
+      return {
+        ...c,
+        campusTotal,
+        internTotal,
+        lastSeenAtMs,
+        window: windowStatus({
+          campusJobCount: campusTotal,
+          hasCampusSource: c.hasCampusSource,
+          hasAnySource: c.hasAnySource,
+          lastSeenAtMs,
+          nowMs,
+        }),
+      };
+    })
     .sort(compareCompanyCards);
+
+  // 计数现算成功 → 新鲜度按现算时刻（≈刚刚）；失败回退 → 沿用快照生成时刻，让「卡死」照旧一眼可见。
+  const freshnessAtMs = fresh ? fresh.fetchedAtMs : board.generatedAtMs;
 
   return (
     <div className="min-h-screen bg-editorial">
@@ -149,7 +171,7 @@ export default async function CampusPage() {
           industries={industries}
           hasIndustry={rawIndustries.length > 0}
           filterOptions={board.filterOptions}
-          generatedLabel={snapshotAgeLabel(board.generatedAtMs, nowMs)}
+          generatedLabel={snapshotAgeLabel(freshnessAtMs, nowMs)}
         />
       </ProductPage>
     </div>

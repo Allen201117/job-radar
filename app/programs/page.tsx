@@ -7,6 +7,7 @@ import {
   ArrowSquareOut,
   CalendarBlank,
   ClipboardText,
+  MapPin,
   Megaphone,
   SealCheck,
   Student,
@@ -17,44 +18,159 @@ import { cn } from "@/lib/utils";
 import { formatDateLabel } from "@/lib/relative-time";
 import { getRequestUser } from "@/lib/auth";
 import { getApplyPrograms } from "@/lib/apply-programs-store";
-import { groupByType, PROGRAM_TYPE_TONE, type ApplyProgramType } from "@/lib/apply-programs";
+import { getAnnouncementPostings } from "@/lib/announcement-postings-store";
+import {
+  PROGRAM_TYPE_HINT,
+  PROGRAM_TYPE_LABEL,
+  PROGRAM_TYPE_TONE,
+  type ApplyProgram,
+} from "@/lib/apply-programs";
+import { AUDIENCE_LABEL, type AnnouncementPosting } from "@/lib/announcement-postings";
 
 export const metadata = { title: "公告制招聘 · 求职雷达" };
 
-// 为什么单独一个入口：有一类公司**客观上不存在「一岗一页」** —— 中通校招是「蓝天计划」
-// 项目制投递（整页只有项目介绍 + 宣讲会 + 一个投递按钮，没有岗位列表），国有大行是公告制。
-// 它们进不了岗位库（过不了 jd_url 红线，也不该假装是岗位），此前就等于在产品里不存在：
-// 用户搜「中通 校招」一无所获，而对方其实正在招。
+// 为什么单独一个入口：有一类招聘**客观上不存在「一岗一页」** —— 事业单位/体制内多为公告制
+// （一条公告 = 批量岗位 + 报名截止日，官网没有逐个岗位的详情页），中通校招是「蓝天计划」项目制投递。
+// 它们进不了岗位库（过不了 jd_url 红线，也不该假装是岗位），此前就等于在产品里不存在。
 //
-// ⚠️ 这一页的设计红线：**绝不能让它看起来像岗位列表**。所以刻意做了三件与岗位卡相反的事：
-//   ① 整卡不可点（只有明确写着「去官方入口投递」的按钮可点）——岗位卡是整卡可点的；
-//   ② 每张卡都留着「为什么这家没有岗位列表」的原文说明，不折叠、不截断；
-//   ③ 分区标题直接写清这是公告 / 项目 / 人才库。
-// 用「看起来有岗」骗点击，比不展示更伤信任。
+// 数据两路：apply_programs（手工核实的边缘条目，如中国银行）+ announcement_postings（官方源自动抓取
+// 的招聘公告，事业单位/体制内，量大带时效）。两者在「招聘公告」区统一展示。
+//
+// ⚠️ 设计红线：**绝不能让它看起来像岗位列表**——整卡不可点、留着「为什么没有逐岗列表」的说明、
+// 分区标题写清这是公告/项目/人才库。用「看起来有岗」骗点击，比不展示更伤信任。
 
-/** 分区图标：与徽章 tone 同族，让「这是哪一类」在扫视时先于文字被看到。 */
-const TYPE_ICON: Record<ApplyProgramType, typeof Megaphone> = {
-  campus_program: Student,
-  announcement: ClipboardText,
-  talent_pool: UsersThree,
-};
-
-/**
- * 分区图标底座配色。直接用 --tone-* 语义类（不写 hex），与 Badge 的 tone 保持同一族，
- * 这样「绿=校招项目 / 琥珀=公告制 / 中性=人才库」在图标和徽章上是同一套暗示。
- */
-const TYPE_TILE: Record<ApplyProgramType, string> = {
+const TYPE_ICON = { campus_program: Student, announcement: ClipboardText, talent_pool: UsersThree };
+const TYPE_TILE = {
   campus_program: "border-tone-green-border bg-tone-green-bg text-tone-green-fg",
   announcement: "border-tone-amber-border bg-tone-amber-bg text-tone-amber-fg",
   talent_pool: "border-tone-neutral-border bg-tone-neutral-bg text-tone-neutral-fg",
 };
 
+/** 报名截止/时间的展示文案：优先结构化日期，其次原文，再次「以公告为准」。 */
+function deadlineLabel(posting: AnnouncementPosting): string {
+  if (posting.deadline) return `报名截止 ${formatDateLabel(posting.deadline)}`;
+  if (posting.deadlineText) return `报名时间：${posting.deadlineText}`;
+  return "报名时间以公告为准";
+}
+
+/** 手工核实条目卡（apply_programs）。 */
+function ProgramCard({ program }: { program: ApplyProgram }) {
+  const verified = formatDateLabel(program.verifiedAt);
+  return (
+    <li className="surface surface-hover flex h-full flex-col p-5">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="t-h3">{program.company}</h3>
+        {program.industry ? <Badge tone="neutral" size="xs">{program.industry}</Badge> : null}
+      </div>
+      <p className="t-body-sm ink-2 mt-1.5 font-medium">{program.programName}</p>
+      {program.description ? <p className="t-body-sm ink-3 mt-3">{program.description}</p> : null}
+      {program.windowText ? (
+        <p className="t-caption mt-3 inline-flex items-start gap-1.5 rounded-lg border border-tone-amber-border bg-tone-amber-bg px-2.5 py-1.5 text-tone-amber-fg">
+          <CalendarBlank size={14} weight="bold" aria-hidden className="mt-0.5 shrink-0" />
+          <span>对方页面写的时间窗：{program.windowText}</span>
+        </p>
+      ) : null}
+      <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-black/[0.06] pt-4 dark:border-white/[0.08]">
+        <span className="t-caption ink-3 inline-flex items-center gap-1.5">
+          <SealCheck size={14} weight="fill" aria-hidden className="shrink-0" />
+          {verified ? `${verified} 人工核实` : "入口已人工核实"}
+        </span>
+        <a
+          className={cn(buttonVariants({ variant: "ink", size: "sm" }), "press-feedback")}
+          href={program.entryUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          去官方入口投递
+          <ArrowSquareOut size={14} weight="bold" aria-hidden />
+        </a>
+      </div>
+    </li>
+  );
+}
+
+/** 官方招聘公告卡（announcement_postings）。标题即公告名，突出地区/受众/报名截止日。 */
+function PostingCard({ posting }: { posting: AnnouncementPosting }) {
+  const audience = AUDIENCE_LABEL[posting.audience];
+  return (
+    <li className="surface surface-hover flex h-full flex-col p-5">
+      <div className="flex flex-wrap items-center gap-2">
+        {posting.region ? (
+          <Badge tone="neutral" size="xs">
+            <MapPin size={11} weight="fill" aria-hidden className="mr-0.5 inline shrink-0" />
+            {posting.region}
+          </Badge>
+        ) : null}
+        {audience ? (
+          <Badge tone={posting.audience === "experienced" ? "neutral" : "green"} size="xs">
+            {audience}
+          </Badge>
+        ) : null}
+        {posting.employerType ? <Badge tone="neutral" size="xs">{posting.employerType}</Badge> : null}
+      </div>
+      <h3 className="t-h3 mt-2">{posting.title}</h3>
+      <p className="t-caption mt-3 inline-flex items-start gap-1.5 rounded-lg border border-tone-amber-border bg-tone-amber-bg px-2.5 py-1.5 text-tone-amber-fg">
+        <CalendarBlank size={14} weight="bold" aria-hidden className="mt-0.5 shrink-0" />
+        <span>{deadlineLabel(posting)}</span>
+      </p>
+      <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-black/[0.06] pt-4 dark:border-white/[0.08]">
+        <span className="t-caption ink-3 inline-flex items-center gap-1.5">
+          <SealCheck size={14} weight="fill" aria-hidden className="shrink-0" />
+          {posting.publishedAt ? `${formatDateLabel(posting.publishedAt)} 官方发布` : "官方公告"}
+        </span>
+        <a
+          className={cn(buttonVariants({ variant: "ink", size: "sm" }), "press-feedback")}
+          href={posting.sourceUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          去官方公告投递
+          <ArrowSquareOut size={14} weight="bold" aria-hidden />
+        </a>
+      </div>
+    </li>
+  );
+}
+
+function SectionHeader({
+  type,
+  count,
+}: {
+  type: "campus_program" | "announcement" | "talent_pool";
+  count: number;
+}) {
+  const Icon = TYPE_ICON[type];
+  return (
+    <div className="flex items-start gap-3">
+      <span
+        aria-hidden="true"
+        className={cn("mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl border", TYPE_TILE[type])}
+      >
+        <Icon size={18} weight="fill" />
+      </span>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="t-h2">{PROGRAM_TYPE_LABEL[type]}</h2>
+          <Badge tone={PROGRAM_TYPE_TONE[type]} size="xs">{count} 项</Badge>
+        </div>
+        <p className="t-body-sm ink-3 mt-1">{PROGRAM_TYPE_HINT[type]}</p>
+      </div>
+    </div>
+  );
+}
+
 export default async function ProgramsPage() {
   const user = await getRequestUser();
   if (!user) redirect("/login?next=/programs");
 
-  const programs = await getApplyPrograms();
-  const groups = groupByType(programs);
+  // 互不依赖 → 并行取（冷启动别串行等两次）。
+  const [programs, postings] = await Promise.all([getApplyPrograms(), getAnnouncementPostings()]);
+
+  const campus = programs.filter((p) => p.programType === "campus_program");
+  const manualAnnouncements = programs.filter((p) => p.programType === "announcement");
+  const talentPool = programs.filter((p) => p.programType === "talent_pool");
+  const announcementCount = manualAnnouncements.length + postings.length;
+  const total = programs.length + postings.length;
 
   return (
     <div className="min-h-screen bg-editorial">
@@ -65,111 +181,48 @@ export default async function ProgramsPage() {
           icon={Megaphone}
           align="center"
           action={
-            programs.length > 0 ? (
-              <MetricTile
-                label="已核实投递入口"
-                value={programs.length}
-                icon={SealCheck}
-                tone="lime"
-              />
+            total > 0 ? (
+              <MetricTile label="已核实投递入口" value={total} icon={SealCheck} tone="lime" />
             ) : undefined
           }
         />
 
-        {groups.length === 0 ? (
+        {total === 0 ? (
           <div className="mt-10">
             <EmptyState
               title="还没有已核实的投递入口"
-              description="入口链接必须人工核实能打开才会展示——没核实的宁可不放，也不让你点开一个死链。"
+              description="入口链接必须核实能打开、且报名未截止才会展示——没核实、已过期的宁可不放。"
             />
           </div>
         ) : (
           <div className="mt-10 space-y-12">
-            {groups.map((group) => {
-              const Icon = TYPE_ICON[group.type];
-              return (
-                <section key={group.type}>
-                  {/* 分区头：图标 + 类型名 + 计数，下面紧跟一句「为什么这类公司没有岗位列表」。
-                      这句话是本页最该被读到的信息，所以给它独立一行、不塞进卡片里。 */}
-                  <div className="flex items-start gap-3">
-                    <span
-                      aria-hidden="true"
-                      className={cn(
-                        "mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl border",
-                        TYPE_TILE[group.type],
-                      )}
-                    >
-                      <Icon size={18} weight="fill" />
-                    </span>
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="t-h2">{group.label}</h2>
-                        <Badge tone={PROGRAM_TYPE_TONE[group.type]} size="xs">
-                          {group.items.length} 家
-                        </Badge>
-                      </div>
-                      <p className="t-body-sm ink-3 mt-1">{group.hint}</p>
-                    </div>
-                  </div>
+            {campus.length > 0 ? (
+              <section>
+                <SectionHeader type="campus_program" count={campus.length} />
+                <ul className="mt-5 grid gap-4 lg:grid-cols-2">
+                  {campus.map((p) => <ProgramCard key={p.entryUrl} program={p} />)}
+                </ul>
+              </section>
+            ) : null}
 
-                  {/* 两列网格：9 张卡片平铺成整屏长条会读成「岗位列表」，也浪费右半屏。
-                      卡内用 flex-col + mt-auto 把按钮钉在底边，同一行的卡片高度自然对齐。 */}
-                  <ul className="mt-5 grid gap-4 lg:grid-cols-2">
-                    {group.items.map((program) => {
-                      const verified = formatDateLabel(program.verifiedAt);
-                      return (
-                        <li
-                          key={program.entryUrl}
-                          className="surface surface-hover flex h-full flex-col p-5"
-                        >
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="t-h3">{program.company}</h3>
-                            {program.industry ? (
-                              <Badge tone="neutral" size="xs">
-                                {program.industry}
-                              </Badge>
-                            ) : null}
-                          </div>
-                          <p className="t-body-sm ink-2 mt-1.5 font-medium">{program.programName}</p>
+            {announcementCount > 0 ? (
+              <section>
+                <SectionHeader type="announcement" count={announcementCount} />
+                <ul className="mt-5 grid gap-4 lg:grid-cols-2">
+                  {manualAnnouncements.map((p) => <ProgramCard key={p.entryUrl} program={p} />)}
+                  {postings.map((p) => <PostingCard key={p.sourceUrl} posting={p} />)}
+                </ul>
+              </section>
+            ) : null}
 
-                          {program.description ? (
-                            // 不截断、不折叠：这段是「为什么这家搜不到岗位」的原文交代，
-                            // 折起来等于把本页存在的理由藏起来。
-                            <p className="t-body-sm ink-3 mt-3">{program.description}</p>
-                          ) : null}
-
-                          {program.windowText ? (
-                            // 时间窗是这页唯一带时效的信息，单独一行 + 琥珀色，别混进正文里被读漏。
-                            <p className="t-caption mt-3 inline-flex items-start gap-1.5 rounded-lg border border-tone-amber-border bg-tone-amber-bg px-2.5 py-1.5 text-tone-amber-fg">
-                              <CalendarBlank size={14} weight="bold" aria-hidden className="mt-0.5 shrink-0" />
-                              <span>对方页面写的时间窗：{program.windowText}</span>
-                            </p>
-                          ) : null}
-
-                          {/* 底边：左边是「这条链接我们核实过」的凭据，右边是唯一可点的动作。
-                              mt-auto 把它压到卡底，同行卡片的按钮因此横向对齐。 */}
-                          <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-black/[0.06] pt-4 dark:border-white/[0.08]">
-                            <span className="t-caption ink-3 inline-flex items-center gap-1.5">
-                              <SealCheck size={14} weight="fill" aria-hidden className="shrink-0" />
-                              {verified ? `${verified} 人工核实` : "入口已人工核实"}
-                            </span>
-                            <a
-                              className={cn(buttonVariants({ variant: "ink", size: "sm" }), "press-feedback")}
-                              href={program.entryUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              去官方入口投递
-                              <ArrowSquareOut size={14} weight="bold" aria-hidden />
-                            </a>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </section>
-              );
-            })}
+            {talentPool.length > 0 ? (
+              <section>
+                <SectionHeader type="talent_pool" count={talentPool.length} />
+                <ul className="mt-5 grid gap-4 lg:grid-cols-2">
+                  {talentPool.map((p) => <ProgramCard key={p.entryUrl} program={p} />)}
+                </ul>
+              </section>
+            ) : null}
           </div>
         )}
       </ProductPage>

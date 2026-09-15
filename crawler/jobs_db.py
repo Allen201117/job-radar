@@ -39,6 +39,9 @@ _INSERT_COLS = (
     # 招聘类型物化（2026-09-03）：入库时就由 JS 权威规则算好，检索直接查这两列，
     # 不再让 SQL 用「正向信号并集」去近似（那套与 JS 的分层裁决结构不同，必然捞进注定被否决的岗）。
     "recruitment_category", "recruitment_explicit",
+    # 职能物化（2026-09-15）：入库时由 classifyJobFunction（带 summary）算好，校招看板读列不再拉正文现算。
+    # 与上面两列由同一次 _annotate_recruitment 调用产出。UPDATE 时归数据库触发器 jobs_guard_job_function 管。
+    "job_function",
 )
 # update 时不动：主键 id / 首见时间 first_seen_at / enrich 子系统独占的 enrich_checked_at·enrich_fail_count。
 # 后两者由 enrich_backlog 死活巡检+富化**直接 UPDATE**（非本 upsert）：列表重抓若把 enrich_checked_at 抹回
@@ -55,7 +58,9 @@ _UPDATE_COLS = tuple(
 _PRESERVE_IF_EMPTY = ("summary", "job_type", "experience", "education", "deadline", "salary_text",
                       # 分类降级时是 None（不是「判定为空」）——必须保留上一次算好的值，
                       # 否则一次 node 不可用就把全库这一列抹成 NULL（同 summary 被重抓抹掉的老坑）。
-                      "recruitment_category")
+                      # job_function 同理（同一次 annotate 产出，同样会降级成 None）；UPDATE 最终仍归
+                      # jobs_guard_job_function 触发器裁决，这里的 COALESCE 是与 recruitment_category 一致的第一层防护。
+                      "recruitment_category", "job_function")
 
 # 同样要防「重抓抹掉」，但列是**非文本类型**，不能套 NULLIF(%s,'')：
 # NULLIF(2027, '') 会让 Postgres 把 '' 往 integer 强转 → invalid input syntax，整源写库炸掉。

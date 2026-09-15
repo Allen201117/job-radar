@@ -50,8 +50,13 @@ export function campusFacetKey(job: any): {
   return {
     city: String(job?.city ?? "").trim(),
     education: String(job?.education ?? "").trim(),
-    // 服务端用**完整 summary** 算职能，与客户端此前现算的是同一份实现、同一份输入 → 精度零损失。
-    fn: classifyJobFunction({ title: job?.title, job_type: job?.job_type, summary: job?.summary }),
+    // 职能优先读物化列 jobs.job_function（入库时由 classifyJobFunction 带 summary 算好，2026-09-15）——
+    // 看板读它就不必在渲染期把几万条 JD 正文拖回函数现算，正是 unstable_cache 快照冻死的病根。
+    // 列 == 现算（回填/写入用同一份 classifyJobFunction 带 summary，--check --all live 对拍 0 差异）。
+    // 仅当列为 NULL（刚被触发器作废、还没被 2h 补漏 cron 重算的极少数行）才退回现算兜底。
+    fn: (typeof job?.job_function === "string" && job.job_function)
+      ? job.job_function
+      : classifyJobFunction({ title: job?.title, job_type: job?.job_type, summary: job?.summary }),
     gc: typeof job?.grad_class === "number" ? job.grad_class : null,
   };
 }
