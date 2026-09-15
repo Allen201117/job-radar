@@ -34,3 +34,25 @@ test("NAMED_TIER_PATTERNS 覆盖所有命名标签、不含中小厂", () => {
   assert.ok(NAMED_TIER_PATTERNS.length >= 100);
   assert.ok(!NAMED_TIER_PATTERNS.some(p => p.includes("中小厂")));
 });
+
+test("跨标签无核心子串碰撞(保计数精确的不变量)", () => {
+  // 收集每个命名标签的 pattern 核心
+  const tiers = require("../lib/company-tiers.json");
+  const byTier = {};
+  for (const [k, v] of Object.entries(tiers)) {
+    if (k === "_meta" || !Array.isArray(v)) continue;
+    byTier[k] = v.map((e) => e.pattern.replace(/%/g, "").trim().toLowerCase());
+  }
+  const names = Object.keys(byTier);
+  for (let i = 0; i < names.length; i++) {
+    for (let j = 0; j < names.length; j++) {
+      if (i === j) continue;
+      for (const a of byTier[names[i]]) {
+        for (const b of byTier[names[j]]) {
+          // a 不应是 b 的子串(否则同一公司名可能同时命中两个标签,SQL/JS 口径分叉)
+          assert.ok(!b.includes(a), `跨标签核心碰撞: "${a}"(${names[i]}) ⊂ "${b}"(${names[j]})`);
+        }
+      }
+    }
+  }
+});

@@ -18,12 +18,19 @@ const core = (pat: string): string => pat.replace(/%/g, "").trim().toLowerCase()
 
 export const NAMED_TIER_PATTERNS: string[] = NAMED_TIERS.flatMap(patternsOf);
 
+// 预计算每个标签的核心子串(去 % + trim + 小写),避免 classifyCompanyTier 在热路径
+// (每岗调用一次,单次搜索最多 28000 候选)里重复做 map/replace/trim/toLowerCase。
+const TIER_CORES: { tier: string; cores: string[] }[] = NAMED_TIERS.map((tier) => ({
+  tier,
+  cores: patternsOf(tier).map(core),
+}));
+
 export function classifyCompanyTier(company: string): string {
   const name = (company || "").toLowerCase();
   if (name) {
-    for (const tier of NAMED_TIERS) {
-      for (const pat of patternsOf(tier)) {
-        if (name.includes(core(pat))) return tier;
+    for (const { tier, cores } of TIER_CORES) {
+      for (const c of cores) {
+        if (name.includes(c)) return tier;
       }
     }
   }
