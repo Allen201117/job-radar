@@ -23,6 +23,7 @@ import {
 } from "@/lib/insight-client";
 import { groupCampusJobs } from "@/lib/campus-zone";
 import { formatDateLabel } from "@/lib/relative-time";
+import { Badge } from "@/components/ui";
 import {
   countMatchingFacets,
   countUnlabeledInMatch,
@@ -518,68 +519,80 @@ export default function CampusClient({
                     </div>
                     <WindowBadge window={card.window} />
                   </div>
-                  {/* 正式批开闸（近 7 天校招岗一次性放量）——秋招最该立刻行动的信号，放在最上面。
-                      不写「新增 N 个」而写「一次性放出 N 个」：放量是校招的形态特征，也解释了为什么值得马上看。 */}
+                  {/* 招聘信息一律结构化成小标签（届别 / 提前批·正式批 / 现处阶段 / 截止），
+                      不再堆成一串带「·」的长句（用户反馈「很乱」）。措辞仍由数据的 basis 推出、不写死。 */}
                   {card.surge && (
-                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 text-[#9a4a1a] dark:text-[#f0a06a]">
-                      <span className="inline-flex items-center gap-1 rounded-md border border-[#f0c3a0] bg-[#fce8d8] px-1.5 py-0.5 font-medium dark:border-[#f0a06a]/[0.30] dark:bg-[#f0a06a]/[0.15]">
-                        🔥 刚开正式批
-                      </span>
-                      <span>
-                        一次性放出 {card.surge.toCount}
-                        {card.surge.fromCount != null && card.surge.fromCount > 0
-                          ? `（此前 ${card.surge.fromCount}）`
-                          : ""}
-                      </span>
-                    </div>
+                    <Badge
+                      tone="amber"
+                      size="sm"
+                      icon={<span aria-hidden="true">🔥</span>}
+                      className="self-start font-medium"
+                    >
+                      刚开正式批 · 放出 {card.surge.toCount}
+                      {card.surge.fromCount != null && card.surge.fromCount > 0
+                        ? `（此前 ${card.surge.fromCount}）`
+                        : ""}
+                    </Badge>
                   )}
-                  {card.timeline && (
-                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 ink-3">
-                      {/* ⚠️ 措辞由数据的 basis 决定，不写死。写死「据往年」时，卡面渲染出的是
-                          「据往年 2027届 · 正式批8-10月」——往年不可能有 2027 届，14 家全中（用户实锤）。 */}
-                      <span className="inline-flex items-center gap-1 rounded-md border border-tone-sky-border bg-tone-sky-bg px-1.5 py-0.5 font-medium text-[#2f6299] dark:text-[#7fb2e8]">
-                        {TIMELINE_BASIS_LABEL[card.timeline.basis]}
-                      </span>
-                      <span>{card.timeline.gradClass}</span>
-                      {card.timeline.batchBits.map((bit) => (
-                        <span key={bit}>· {bit}</span>
-                      ))}
-                      {card.timeline.phaseLabel && (
-                        <span className="font-medium text-tone-amber-fg">
-                          · {card.timeline.phaseLabel}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  {/* P3：今年精确日期（官方公告，绿系强档）。措辞三档：据官方公告 > 据在招岗位 > 据往年。 */}
-                  {card.preciseDates.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 text-tone-green-fg">
-                      <span className="inline-flex items-center gap-1 rounded-md border border-tone-green-border bg-tone-green-bg px-1.5 py-0.5 font-medium text-tone-green-fg">
-                        今年·据官方公告
-                      </span>
-                      {card.preciseDates.map((p) => (
-                        <span key={p.batch}>· {p.label}</span>
-                      ))}
-                      {card.batchTimingGap && (
-                        <span className="text-tone-amber-fg">· {card.batchTimingGap}</span>
-                      )}
-                    </div>
-                  )}
-                  {/* 快路①：无官方精确日期时，用清洗后的自有岗位 deadline 做弱档提示（灰系）。 */}
-                  {card.preciseDates.length === 0 && card.cleanDeadlineMs && (
-                    <p className="text-[12px] leading-5 ink-3">
-                      据在招岗位约{""}
-                      {formatDateLabel(card.cleanDeadlineMs, { month: "long", day: "numeric" })}{""}
-                      前截止
-                    </p>
-                  )}
-                  <p className="text-sm ink-2">
-                    {totalCount > 0
-                      ? `${totalCount} 个${modeLabel}在招岗位${
-                          hasActiveFilter && isExpanded ? `· 筛选后 ${filteredCount} 个` : ""
-                        }`
-                      : `暂无${modeLabel}在招岗位`}
-                  </p>
+                  {(() => {
+                    // 有官方精确日期 → 数据依据是「官方公告」(绿)，日期用官方那档；否则用 timeline 的 basis
+                    // （公开信息 sky / 往年 neutral）+ batchBits。⚠️ 往年不可能有当届，措辞交给 basis，别写死。
+                    const hasPrecise = card.preciseDates.length > 0;
+                    const chips: JSX.Element[] = [];
+                    if (hasPrecise) {
+                      chips.push(<Badge key="basis" tone="green" size="sm">今年·据官方公告</Badge>);
+                    } else if (card.timeline) {
+                      const tone = card.timeline.basis === "public" ? "sky" : "neutral";
+                      chips.push(
+                        <Badge key="basis" tone={tone} size="sm">
+                          {TIMELINE_BASIS_LABEL[card.timeline.basis]}
+                        </Badge>,
+                      );
+                    }
+                    if (card.timeline?.gradClass) {
+                      chips.push(<Badge key="gc" tone="neutral" size="sm">{card.timeline.gradClass}</Badge>);
+                    }
+                    if (hasPrecise) {
+                      card.preciseDates.forEach((p) =>
+                        chips.push(<Badge key={`pd-${p.batch}`} tone="green" size="sm">{p.label}</Badge>),
+                      );
+                    } else if (card.timeline) {
+                      card.timeline.batchBits.forEach((bit) =>
+                        chips.push(<Badge key={`b-${bit}`} tone="neutral" size="sm">{bit}</Badge>),
+                      );
+                    }
+                    if (card.timeline?.phaseLabel) {
+                      chips.push(
+                        <Badge key="phase" tone="amber" size="sm" className="font-medium">
+                          {card.timeline.phaseLabel}
+                        </Badge>,
+                      );
+                    }
+                    if (!hasPrecise && card.cleanDeadlineMs) {
+                      chips.push(
+                        <Badge key="dl" tone="neutral" size="sm">
+                          约{formatDateLabel(card.cleanDeadlineMs, { month: "long", day: "numeric" })}截止
+                        </Badge>,
+                      );
+                    }
+                    return chips.length ? (
+                      <div className="flex flex-wrap items-center gap-1.5">{chips}</div>
+                    ) : null;
+                  })()}
+                  {/* 岗位数：结构化成醒目数字 + 单位，不写成句子。筛选后的数用绿标签另标。 */}
+                  <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
+                    {totalCount > 0 ? (
+                      <>
+                        <span className="t-num text-[20px] font-semibold leading-none ink-1">{totalCount}</span>
+                        <span className="text-sm ink-2">个{modeLabel}在招岗位</span>
+                        {hasActiveFilter && isExpanded && (
+                          <Badge tone="green" size="sm" className="ml-0.5">筛选后 {filteredCount}</Badge>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-sm ink-3">暂无{modeLabel}在招岗位</span>
+                    )}
+                  </div>
                   {/* 往届岗不静默丢弃：说清楚「有但不是这一届」，免得用户以为我们漏抓。
                       只有岗位文本里写明届别（如「2026届」）的才会被挡；届别未知的岗照常在上面列着。 */}
                   {card.pastClassJobCount > 0 && (
