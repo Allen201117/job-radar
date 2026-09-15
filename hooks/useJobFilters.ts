@@ -226,7 +226,7 @@ export function useJobFilters({
 
   const clearOne = useCallback((key: keyof Filters, value?: string) => {
     setFilters((current) => {
-      if (value && ["city", "keyword", "jobFunction", "jobRole"].includes(key)) {
+      if (value && ["city", "keyword", "jobFunction", "jobRole", "companyTier"].includes(key)) {
         const next = splitMultiValue(String(current[key])).filter((item) => item !== value).join(",");
         return { ...current, [key]: next };
       }
