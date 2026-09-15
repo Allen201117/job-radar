@@ -20,15 +20,15 @@
 - **segment 只作待核线索**:`sources.segment=foreign` 是历史按 ATS 类型批量填的、非股权核验 → 映射为 `ownership_class` 时状态必须是 `pending`,不得升级为 `confirmed`。
 - **不逐岗物化**:本计划不给 jobs 加任何列。
 - **跨库读**:jobs 在香港库(`JOBS_DATABASE_URL`),signals 在 Supabase(`SUPABASE_DB_URL`);审计脚本分别连、在 Python 里 join,不做跨库 SQL join。
-- 迁移前缀递增不重复(当前最新 251,本计划用 252);新表非 seed,文件名不带 `_seed_`。
+- 迁移前缀递增不重复(当前最新 252(announcement_postings 已占 252),本计划用 253);新表非 seed,文件名不带 `_seed_`。
 - **执行前先设 `export MAIN_REPO=<你的主仓绝对路径>`**(`.env.local` 所在的仓库根;本仓公开,文档一律不写绝对路径)。下文命令用 `"$MAIN_REPO"` 引用它。
 
 ---
 
-### Task 1: `company_size_signals` 表 schema(迁移 252)
+### Task 1: `company_size_signals` 表 schema(迁移 253)
 
 **Files:**
-- Create: `supabase/migrations/252_company_size_signals.sql`
+- Create: `supabase/migrations/253_company_size_signals.sql`
 
 **Interfaces:**
 - Produces: 表 `company_size_signals`,列:`id uuid pk`、`company text not null unique`、`size_band text`(check in `<100/100-499/500-1999/2000+/unknown`)、`ownership_class text`(check in `民营/外资/央企/地方国企/unknown`)、`dev_stage text`(check in `初创/成长/成熟/unknown`)、`raw_size_evidence text`(原始人数/区间,跨档时保留)、`evidence_url text`、`evidence_date date`、`entity_scope text`(check in `group/legal_entity/operating_entity/unknown`,默认 unknown)、`size_status text`(check in `confirmed/pending/conflict/unknown`,默认 unknown)、`source_signal text`(check in `wikidata/segment/funding_stage/manual/llm`)、`created_at timestamptz default now()`、`updated_at timestamptz default now()`。RLS:service_role 全权、authenticated 只读且限 admin(镜像 `must_apply_gap_attempts`)。
@@ -36,7 +36,7 @@
 - [ ] **Step 1: 写迁移文件**
 
 ```sql
--- 252 — 公司规模/性质/阶段 规范化信号表（与旧 headcount_band/funding_stage 语义隔离）。
+-- 253 — 公司规模/性质/阶段 规范化信号表（与旧 headcount_band/funding_stage 语义隔离）。
 -- 宁可 unknown 不错标：无硬证据一律 unknown；跨档区间保留原文、band=unknown。
 
 create table company_size_signals (
@@ -77,7 +77,7 @@ Run:
 cd "$MAIN_REPO" && set -a && source .env.local && set +a && \
 psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
 begin;
-\i .claude/worktrees/laughing-galileo-012163/supabase/migrations/252_company_size_signals.sql
+\i .claude/worktrees/laughing-galileo-012163/supabase/migrations/253_company_size_signals.sql
 insert into company_size_signals (company, size_band, size_status, source_signal)
   values ('__dryrun__', 'unknown', 'unknown', 'manual');
 select count(*) from company_size_signals;
@@ -89,13 +89,13 @@ Expected: 无 ERROR,`count` 返回 1,末尾 ROLLBACK(不留数据)。
 - [ ] **Step 3: 前缀校验**
 
 Run: `bash scripts/check-migrations.sh` (若脚本存在)
-Expected: PASS(252 未被占用、纯数字前缀)。
+Expected: PASS(253 未被占用、纯数字前缀)。
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add supabase/migrations/252_company_size_signals.sql
-git commit -m "feat(tiering): company_size_signals 规范化三轴信号表(迁移 252)"
+git add supabase/migrations/253_company_size_signals.sql
+git commit -m "feat(tiering): company_size_signals 规范化三轴信号表(迁移 253)"
 ```
 
 ---
