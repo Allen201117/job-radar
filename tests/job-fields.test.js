@@ -44,3 +44,21 @@ test("extractDeadline handles rolling and empty deadlines", () => {
   assert.equal(F.extractDeadline(null), "未知");
   assert.equal(F.extractDeadline("请尽快投递"), "未知");
 });
+
+test("cleanDeadlineText 只放行近未来真实日期，占位/过期/远未来一律 null", () => {
+  const now = new Date("2026-09-15T00:00:00Z");
+  // 近未来真实日期 → 放行（归一 YYYY-MM-DD）
+  assert.equal(F.cleanDeadlineText("2026-09-22", now), "2026-09-22");
+  assert.equal(F.cleanDeadlineText("2027-08-31 23:59:59", now), "2027-08-31"); // 容忍时间后缀
+  // 占位 / 垃圾 → null
+  assert.equal(F.cleanDeadlineText("长期有效", now), null);
+  assert.equal(F.cleanDeadlineText("3000-01-01", now), null); // 远未来占位
+  assert.equal(F.cleanDeadlineText("2079-11-30", now), null);
+  assert.equal(F.cleanDeadlineText("2030-12-31", now), null); // 超 550 天
+  // 已过期 → null（留一天缓冲）
+  assert.equal(F.cleanDeadlineText("2026-08-01", now), null);
+  // 空 / 非日期 → null
+  assert.equal(F.cleanDeadlineText("", now), null);
+  assert.equal(F.cleanDeadlineText(null, now), null);
+  assert.equal(F.cleanDeadlineText("未知", now), null);
+});
