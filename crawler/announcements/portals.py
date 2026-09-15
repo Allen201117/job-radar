@@ -123,6 +123,17 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
             "&tagId=%E5%BD%93%E5%89%8D%E6%A0%8F%E7%9B%AE%E5%88%97%E8%A1%A8&editType=null&pageId=1229743683",),
            ("rlsbt.zj.gov.cn",),
            _p(r"art_[0-9a-f]{32}\.html"), list_format="json_fragment"),
+    # ── 第四批（2026-09-16 recon live 验证，gov.cn 干净专属栏目）──
+    # 甘肃：主站 rst.gansu.gov.cn 全站真 WAF(412)，但官方子站 ks.rst.gansu.gov.cn（甘肃人事考试网，
+    #   页脚版权=省人社厅，仍在 *.gov.cn 白名单内）无 WAF。考试栏目干净（实测 12/15 过门）。
+    Portal("gs_ks", "甘肃省人力资源和社会保障厅·事业单位公开招聘（人事考试网）", "甘肃省",
+           ("https://ks.rst.gansu.gov.cn/ncms/wzlb.shtml?mkbh=gwysydwks",), ("rst.gansu.gov.cn",),
+           _p(r"article_[0-9a-f]{32}\.shtml")),
+    # 四川：此前「列表 403」是误判——那是裸目录的标准 nginx 403，真实列表页是 zfxxgkpage.shtml（非 WAF）。
+    #   招考录用栏目干净但窄（厅本级/直属，产出偏少正常）。
+    Portal("sc_rst", "四川省人力资源和社会保障厅·招考录用", "四川省",
+           ("https://rst.sc.gov.cn/rst/zkly/zfxxgkpage.shtml",), ("rst.sc.gov.cn",),
+           _p(r"zkly/20\d{2}/\d+/\d+/[0-9a-f]{32}\.shtml")),
     # 下面几个偏窄（厅本级 / 更新慢），靠标题过滤兜底，产出偏少正常（研究已标注）。
     Portal("henan_hrss", "河南省人力资源和社会保障厅·招考录用", "河南省",
            ("https://hrss.henan.gov.cn/zwgk/xxgk/yfygkdqtxx/zkly/",), ("hrss.henan.gov.cn",),
@@ -135,12 +146,17 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
            _p(r"/t\d+\.shtml")),
 )
 
-# ⏸️ 仍暂缺（2026-09-15 两批 research + dry-run 逐个 live 试过）——下一个 session 从这里接：
-#   【真需浏览器道或未定位数据源】河北(整站 Vue SPA)、辽宁/青海(eportal 组件异步渲染，勘察中)。
-#     （江苏/天津/浙江已接——见 _GEO_BLOCKED_FROM_CI 第三批；江西 script_json。四者都无需浏览器。）
-#   【WAF 拦列表页】四川(rst.sc.gov.cn 列表 403)、甘肃(rst.gansu.gov.cn 全站 412)——detail 能开、列表抓不了。
-#   【只有综合栏目/信噪比差，本轮 dry-run 丢掉】云南(NewsLsit classid=602 过滤后 0)、贵州(残留是部委通知/
-#     方案非公告)、黑龙江/宁夏/西藏(只有「通知公告」综合栏目，无事业单位招聘专栏)。
+# ⏸️ 仍暂缺（2026-09-16 三批 research + live 逐个试过）——下一个 session 从这里接：
+#   【待创始人拍板：非 gov.cn 归属红线】辽宁/青海——省厅 gov.cn 站无干净/更新的招聘子栏目，
+#     能 curl 的干净源是「省人事考试中心」门户（辽宁 lnrsks.com、青海 qhpta.com，均 static）。
+#     纳不纳入白名单是归属政策，需创始人定，别自作主张（同「国聘是第三方禁令唯一例外」先例）。
+#   【待创始人拍板：综合栏目政策】黑龙江/宁夏/西藏——都是 gov.cn，但只有综合「通知公告」栏目、
+#     无专属招聘子栏目，classify 标题门能保精度（噪音在 list 端就滤掉、不浪费 detail 抓取），
+#     但接综合栏目 = 翻「综合栏目不接」红线，需创始人定。黑龙江还是 json_api（{"data":{"results":[…]}}，
+#     需新增一种 list_format）；宁夏/西藏 是 static-a-href（默认 detail_pat 覆盖），产出极低（真招聘半年一次）。
+#   【真难/未通】河北——整站 Vue SPA 且数据接口 /rsmhapi/ 要登录 token（Vuex session），匿名拿不到，
+#     比普通 needs-browser 更难；备选 hbrc.com.cn 是 static 但混私企招聘（信噪比差，弃）。
+#   （已接的非静态形态：江西 script_json / 浙江 json_fragment / 江苏 html+CDATA / 天津·甘肃·四川 html。）
 
 # 含 geo-blocked 省，便于 --portal 单独测/在大陆 runner 上按 key 取；默认 run 仍只跑 PORTALS。
 PORTALS_BY_KEY: dict[str, Portal] = {p.key: p for p in (*PORTALS, *_GEO_BLOCKED_FROM_CI)}
