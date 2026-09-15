@@ -3,10 +3,27 @@ from datetime import date
 
 from announcements.portals import (
     PORTALS_BY_KEY,
+    _clean_title,
     host_in_whitelist,
     parse_list,
     published_from_url,
 )
+
+
+class TestCleanTitle(unittest.TestCase):
+    def test_strips_trailing_date(self):
+        # 山东列表项文字尾随发布日期，要清掉再当标题
+        self.assertEqual(
+            _clean_title("《山东商报》社2026年公开招聘人员公告2026-09-11"),
+            "《山东商报》社2026年公开招聘人员公告")
+
+    def test_collapses_whitespace(self):
+        self.assertEqual(_clean_title("  北京水利医院\n2026年 公开招聘公告 "),
+                         "北京水利医院 2026年 公开招聘公告")
+
+    def test_keeps_year_in_title(self):
+        # 只去尾随完整日期，不动标题里的年份
+        self.assertEqual(_clean_title("2026年公开招聘公告"), "2026年公开招聘公告")
 
 
 class TestHostWhitelist(unittest.TestCase):

@@ -201,6 +201,10 @@
   也**别改成 `unstable_cache`**：Next 数据缓存单条约 2MB 上限，19MB 的候选集根本放不进去。
 - ✅ 真正的解法是**物化派生字段**（`job_function` 等落成列，写入时算好，照 `recruitment_category` 的先例），
   让候选取数根本不需要 summary。属 schema + 全表回填 + 等价性验收，**单独立项**，别顺手改。
+  📌 **`jobs.job_function` 已于 2026-09-15 物化上线**（列 + 触发器 + 回填 535k 行 + `--check --all` 对拍 0 差异；
+  见「校招专区首屏」段与 [[job-radar-campus-job-function-materialization]]）。**校招链已切读该列**；
+  但**此处 `/jobs` 主搜索冷路径尚未切**（`keywordMatchTier` 的兄弟组排除仍读 summary）——要砍 summary 得先确认
+  匹配所需的其它 summary 用途都能用列替代，仍属单独立项，别顺手改。
 
 ## 数据库迁移（已自动化，勿再手动跑 Supabase）
 
@@ -332,6 +336,15 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
 4. **官方源发现** `/api/discovery` — 百度千帆为主 provider，**低频、串行、可缓存**（相同 user/query/city/job_type 45 分钟复用缓存）；默认只调 1 个 generated query，「继续发现更多」才调第 2 个。
 
 > 三/四层都靠 GitHub Actions workflow_dispatch（需 Vercel 配 `GITHUB_DISPATCH_TOKEN`+`GITHUB_DISPATCH_REPO`）；`/api/refresh` 与 `/api/discovery/dispatch` 共用这套异步轨道 + `discovery_runs` 表，零新表。
+
+## 公告制招聘（/programs）供给：官方公告自动抓取（2026-09-15 上线）
+
+事业单位/体制内很多招聘是**公告制**（一条公告 = 批量岗位 + 报名截止日，官网没有逐岗详情页），进不了 jobs 库（过不了 jd_url 红线，也不该假装是岗位）。`/programs` 承载它，两路数据：`apply_programs`（手工核实的边缘央企/项目/人才库条目，迁移 226）+ `announcement_postings`（官方招聘公告自动抓取，迁移 252），统一渲染为「招聘公告」卡，**一条公告 = 一个投递入口，不拆岗位**。设计文档 `docs/superpowers/specs/2026-09-15-announcement-recruitment-supply-design.md`，记忆 [[job-radar-announcement-supply-pipeline]]。抓取管道 `crawler/announcements/`（portals 白名单/classify 过滤/deadline 抽取/harvest/expire），调度 `announcement-crawl.yml`。四条红线：
+
+- **归属靠官方 gov 域名白名单天然保证**（`portals.PORTALS` 逐省登记，host + 逐省 `detail_pat` + 标题 INCLUDE/EXCLUDE 三重过滤）→ 不会张冠李戴（企业爬取最头疼、这里免费解决的）。只抓官方源：**不碰公众号**（内容与官网栏目重复且列表无法程序化枚举）、**不碰第三方**（中公/华图，红线）。
+- **时效**：报名截止日抽成结构化 `deadline` 列 → 过期自动下架；抽不到走「发布日/首见日 + TTL(默认 45 天)」兜底 + RLS `deadline >= current_date` 双保险。**过期公告比死岗更伤**，别只靠人工。
+- **⚠️ 加省准入判据是 CI 的 `crawl_runs`/harvest `list_errors`，不是本机 dry-run**：很多省 gov 服务器 **geo-block GitHub US runner**（HTTPStatusError/ConnectError，`make_transport` 已 retry=2 仍失败，非 TLS），而本机走中国路由全通、**永远测不出来**（同「本机绿≠CI绿」但这次是 geo 可达性不是 TLS）。当前 CI 可达 active 4 省（北京/广东/湖北/福建）；山东/湖南/安徽/陕西/山西已 live 验证且 detail_pat 配好、但 CI 连不上 → 存 `portals._GEO_BLOCKED_FROM_CI`，**有中国/香港自托管 runner 后搬回 PORTALS 即生效**（[[job-radar-backend-review-2026-09-03]] 待定成本项）。所以逐省扩量的真瓶颈是 runner 地理位置，不是找 URL。
+- **综合「公示公告」栏目不接**（四川/河南/广西/重庆/贵州）：没有干净的「招聘公告」子栏目，过滤后多是面试资格确认/报名统计/政策办法/陈旧归档，信噪比差，服从「精>量」；待找到各省专属子栏目 URL 再接。JS 渲染省（江苏/浙江/河北/江西）待浏览器道。
 
 ## 数据质量优先级（最高）
 
@@ -607,7 +620,8 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
 1. **页面一条岗位记录都不下发**，只下发 `lib/campus-facets.ts` 的聚合分面 `[城市下标, 学历下标, 职能下标, 届别, 计数]`——客户端只用这四个维度填下拉和算计数（live 实测 16,494 条压成 1,917 个四元组，props 2,086 KB → 52.6 KB）。⚠️ **构建 `buildCampusFacets` 与匹配 `countMatchingFacets` 刻意放同一文件**：下标口径两端一漂，卡面就安静地报错数字——不报错、不崩，只骗用户；等价性由 `tests/campus-facets.test.js` 穷举全部筛选组合钉死。
 2. **重活按行业清单缓存**（`unstable_cache` 10 分钟，只依赖必投清单、不含用户私有数据）。⚠️ `windowStatus` 与排序**刻意留在缓存外每请求现算**（依赖「此刻」的 72h 新鲜度阈值，一起缓存会把徽章冻住）；⚠️ 缓存函数体内**不得读 `cookies()`/`headers()`**。
 3. **聚合 SQL 不用 `company ilike any()`**：带前导 % 用不了任何索引 → 39 万 active 行并行全表扫（live EXPLAIN 2567ms / 127,726 buffers）。改成先取全部 active 公司名走索引、JS 解析出确切名字、再 `company = any()`（957ms / 46,413 buffers，结果集逐行相同）。
-4. **展开某家公司走 `/api/campus-zone/jobs`（按 公司+模式），不按 id**：按 id 取要先把 16,494 个 uuid 下发到浏览器（光 uuid 就 0.59 MB）。⚠️ 旧的 by-ids 调法有个真 bug——把 campus 与 intern 的 id 拼一起再截前 200，**大厂的实习桶被校招桶挤没、实习模式展开必然空白**。⚠️ 取数分两段：先只取轻字段（排序键 + company）排好序，再顺着顺序分批（500）取完整行跑准入门，收满 200 就停（一次性拉完整行 live 实测 5.8s，分段后 0.5~0.9s）。
+4. **展开某家公司走 `/api/campus-zone/jobs`（按 公司+模式），不按 id**：按 id 取要先把 16,494 个 uuid 下发到浏览器（光 uuid 就 0.59 MB）。⚠️ 旧的 by-ids 调法有个真 bug——把 campus 与 intern 的 id 拼一起再截前 200，**大厂的实习桶被校招桶挤没、实习模式展开必然空白**。
+   📌 **2026-09-15 起改为服务端按筛选分页 + 回精确 total（Phase B，去掉「前 200」硬顶）**：`getCampusCompanyJobs(list, pattern, bucket, {filters, offset, limit})`——归属+届别门+桶+分面筛选+排序全用轻字段（职能读物化列 `job_function`、桶读 `recruitment_category` 列），数清全部候选得精确 `total`，只给「这一页」取正文；前端抽屉按 `pattern|mode|filterKey` 累计分页 + 「加载更多」。**筛选必须服务端下推**（客户端只翻页不二次过滤），否则「看全部符合筛选的岗位」又会被单页截断。归属/届别门/桶口径与 getCampusZone 逐字一致（见第 5 条）。
 5. **归属规则三处必须一致**（getCampusZone / getCampusCompanyJobs / 分面计数）：list 里**第一个 pattern 命中者得**（`腾讯音乐 TME` 归 `%腾讯音乐%` 不归 `%腾讯%`）。任一处漂移 → 卡面计数与展开列表对不上；live 交叉验证法：卡面计数与接口返回条数在未截断的公司上必须逐个相等。
 6. **🚫 `unstable_cache` 的重算被杀 = 永远服务旧快照且不报错（2026-09-09 线上实锤，卡了 6 天）**：
    ❌ 现象：/campus 卡面 京东 0 / 小米 6 / 百度 2 / vivo 0、全部「数据待更新」，而库里是 127 / 852 / 158 / 166、
@@ -616,9 +630,12 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
    Hobby 档函数默认 10s，后台重算被杀后 Next 继续服务旧条目，且 Vercel 数据缓存**跨部署存活**——部署也刷不掉。
    ✅ 防：① page `maxDuration = 60`；② 快照带 `generatedAtMs`，页面渲染「数据更新于 N 分钟前」（服务端算成字符串再下发，
    见 `lib/relative-time.snapshotAgeLabel`）——**任何 `unstable_cache` 包着的重活都该这么做**，否则卡死无人知；
-   ③ 重算打 `[campus-board] … ms=` 日志；④ 要刷掉卡死的条目，**换 cache key**（v1→v2），别指望 revalidate。
-   ⚠️ 别顺手把 `summary` 从取数里砍掉：`buildCampusFacets` 的职能分面要靠它算 `fn`；真正的解法是物化 `job_function`
-   （见「/jobs 默认排序冷路径」那节，单独立项）。
+   ③ 重算打 `[campus-board] … ms=` 日志；④ 要刷掉卡死的条目，**换 cache key**（现为 v3），别指望 revalidate。
+   📌 **2026-09-15 根因已拔除**：职能物化成 `jobs.job_function` 列后，`getCampusZone` / `buildCampusFacets`
+   **不再拉 JD 正文**（facet 分类载荷 6.5MB→35kB），后台重算变轻、不再被超时杀。计数+徽章另由
+   `getCampusFreshStats` 每请求现算绕开快照（止血，保留为安全网）。详见 [[job-radar-campus-job-function-materialization]]。
+   ⚠️ 因此「别把 summary 从校招取数里砍掉」这条**已不再适用于校招链**（职能读列了）；`buildCampusFacets`
+   现在读 `job_function` 列、仅列为 NULL 时才退回现算。`/jobs` 主搜索冷路径另说（见「/jobs 默认排序冷路径」段，仍未切）。
 7. **SQL 粗筛必须是 JS 准入门的超集，且直接认 `recruitment_category` 列**：`CAMPUS_PREFILTER_SQL` 曾停在 2026-08-07
    之前的 url 正则（不认 moka 的 `-recruitment` / `_apply` 后缀、不认 `/internship/`），大疆 131/139、中兴 60/60 个
    「校招」在专区里静默消失。列与 JS 现算同源（`crawler/recruitment_classify.py` 隔进程调同一份 JS；live 对拍

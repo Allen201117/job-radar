@@ -26,6 +26,7 @@ import {
 } from "@/lib/recruitment-cycle";
 import CampusClient, { type CampusBoardCard } from "./campus-client";
 import { snapshotAgeLabel } from "@/lib/relative-time";
+import { currentGradClass } from "@/lib/grad-class";
 
 export type CampusBoard = {
   cards: CampusBoardCard[];
@@ -172,6 +173,7 @@ export default async function CampusPage() {
           hasIndustry={rawIndustries.length > 0}
           filterOptions={board.filterOptions}
           generatedLabel={snapshotAgeLabel(freshnessAtMs, nowMs)}
+          seasonGradClass={currentGradClass()}
         />
       </ProductPage>
     </div>

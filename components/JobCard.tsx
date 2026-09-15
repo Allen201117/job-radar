@@ -24,6 +24,7 @@ import {
   recruitmentCategory,
 } from "@/lib/china-keyword-expansion";
 import {
+  cleanDeadlineText,
   extractDeadline,
   extractEducation,
   extractExperience,
@@ -243,8 +244,11 @@ export default function JobCard({
   // 优先用爬虫从完整 JD 抽取并入库的结构化列；列为空（历史行/未重抓）才回退旧的 summary 正则。
   const exp = useMemo(() => job.experience || extractExperience(summary), [job.experience, summary]);
   const edu = useMemo(() => job.education || extractEducation(summary), [job.education, summary]);
+  // 「截止」只显示可信的近未来真实日期：deadline 是自由文本列，塞着「长期有效」/「3000-01-01」/远未来占位/
+  // 已过期日期，直接显示原文会渲染出「截止 3000-01-01」这种不可信标签（2026-09-15 创始人质疑后查实）。
+  // cleanDeadlineText 与公司卡的 cleanCampusDeadlineMs 同口径，占位/过期/远未来一律不显。
   const deadline = useMemo(
-    () => job.deadline || extractDeadline(summary),
+    () => cleanDeadlineText(job.deadline) ?? cleanDeadlineText(extractDeadline(summary)),
     [job.deadline, summary],
   );
   // 强特征：招聘类型穷尽落到 实习/校招/社招 之一；职能粗分到 产品/研发/…。

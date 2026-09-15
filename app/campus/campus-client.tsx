@@ -2,7 +2,7 @@
 
 // 校招专区客户端：公司卡 + 徽章 + 校招/实习切换 + 城市/学历/职能筛选 + 展开分组渲染 JobCard + 展示时探活。
 // 数据已由服务端按必投清单公司聚合好（app/campus/page.tsx → getCampusZone），本组件只做客户端交互层。
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Briefcase,
@@ -23,12 +23,11 @@ import {
 } from "@/lib/insight-client";
 import { groupCampusJobs } from "@/lib/campus-zone";
 import { formatDateLabel } from "@/lib/relative-time";
+import { Badge } from "@/components/ui";
 import {
-  campusRowMatches,
   countMatchingFacets,
   countUnlabeledInMatch,
   selectFacetIndexes,
-  selectionIsUnsatisfiable,
   type CampusFacet,
   type CampusFilterOptions,
 } from "@/lib/campus-facets";
@@ -182,6 +181,7 @@ export default function CampusClient({
   hasIndustry,
   generatedLabel = null,
   filterOptions,
+  seasonGradClass,
 }: {
   cards: CampusBoardCard[];
   industries: string[];
@@ -189,6 +189,9 @@ export default function CampusClient({
   /** 看板快照的年龄（服务端算好的文案，如「12 分钟前」）；null 时不渲染。 */
   generatedLabel?: string | null;
   filterOptions: { campus: CampusFilterOptions; intern: CampusFilterOptions };
+  /** 当前校招季的目标届别（服务端 currentGradClass() 算好传入，避免年界处 SSR/hydration 不一致）。
+   *  没有官方周期数据的公司，校招卡也用它兜一个「N届」标签，不至于一个标签都没有。 */
+  seasonGradClass: number;
 }) {
   const [mode, setMode] = useState<RecruitMode>("campus");
   const [filters, setFilters] = useState<CampusFilters>(EMPTY_FILTERS);
@@ -256,55 +259,74 @@ export default function CampusClient({
     filters.city ? "城市" : null,
   ].filter(Boolean) as string[];
 
-  // 展开某家公司时按需取回该公司当前桶的完整岗位行（页面一条岗位记录都没下发，见 CampusFacet）。
-  // key = `pattern|mode`：校招与实习是两批岗，切模式必须重取（旧实现只按 pattern 存，
-  // 且把两桶 id 拼起来截前 200 → 大厂实习桶会被校招桶挤没，展开区空白）。
-  // 未取回前展开区显示加载态；失败则清掉请求标记，下次展开可重试。
-  const [fullJobs, setFullJobs] = useState<Map<string, any[]>>(new Map());
-  const fullJobsRequested = useRef<Set<string>>(new Set());
-  // 手风琴同时只可能展开一家（expandedPattern），所以这里只取当前那一家。
-  useEffect(() => {
-    const pattern = expandedPattern;
-    if (!pattern) return;
-    const key = `${pattern}|${mode}`;
-    if (fullJobsRequested.current.has(key)) return;
-    const card = cards.find((c) => c.pattern === pattern);
-    if (!card) return;
-    if ((mode === "campus" ? card.campusTotal : card.internTotal) === 0) return;
-    fullJobsRequested.current.add(key);
-    let cancelled = false;
-    (async () => {
+  // 展开某家公司时按需取该公司当前桶 + **当前筛选**下的完整岗位行，按页翻完全部（Phase B，2026-09-15）。
+  // key = `pattern|mode|filterKey`：模式、筛选任一变化都是另一批结果，各自独立累计分页。
+  // 服务端已按筛选 + 届别门筛好并回**精确 total**（职能/招聘类型已物化成列，数得起），这里只累计页、
+  // 按 total 判要不要「加载更多」——去掉了旧的「前 200」硬顶（那正是用户反馈「岗位展示不全」的根因）。
+  type DrawerPage = { jobs: any[]; total: number; loading: boolean; error: boolean };
+  const [drawer, setDrawer] = useState<Map<string, DrawerPage>>(new Map());
+  const drawerRequested = useRef<Set<string>>(new Set()); // 去重键 `key@offset`；失败时删除以便重试
+  const filterKey = useMemo(
+    () => JSON.stringify([filters.city, filters.education, filters.jobFunction, filters.gradClass]),
+    [filters],
+  );
+  const drawerFor = useCallback(
+    (pattern: string): DrawerPage | undefined => drawer.get(`${pattern}|${mode}|${filterKey}`),
+    [drawer, mode, filterKey],
+  );
+
+  const loadPage = useCallback(
+    async (pattern: string, offset: number) => {
+      const key = `${pattern}|${mode}|${filterKey}`;
+      const reqId = `${key}@${offset}`;
+      if (drawerRequested.current.has(reqId)) return;
+      drawerRequested.current.add(reqId);
+      setDrawer((prev) => {
+        const n = new Map(prev);
+        const cur = n.get(key) ?? { jobs: [], total: 0, loading: false, error: false };
+        n.set(key, { ...cur, loading: true, error: false });
+        return n;
+      });
+      const fail = () => {
+        drawerRequested.current.delete(reqId); // 失败可重试
+        setDrawer((prev) => {
+          const n = new Map(prev);
+          const cur = n.get(key) ?? { jobs: [], total: 0, loading: false, error: false };
+          n.set(key, { ...cur, loading: false, error: true });
+          return n;
+        });
+      };
       try {
         const resp = await fetch("/api/campus-zone/jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pattern, mode }),
+          body: JSON.stringify({ pattern, mode, offset, filters }),
         });
         const data = await resp.json().catch(() => null);
-        if (cancelled) return;
-        if (!data?.ok) {
-          fullJobsRequested.current.delete(key); // 失败清标记，收起再展开可重试
-          return;
-        }
-        setFullJobs((prev) => new Map(prev).set(key, data.jobs || []));
+        if (!data?.ok) return fail();
+        setDrawer((prev) => {
+          const n = new Map(prev);
+          const cur = n.get(key) ?? { jobs: [], total: 0, loading: false, error: false };
+          const jobs = offset === 0 ? data.jobs || [] : [...cur.jobs, ...(data.jobs || [])];
+          n.set(key, { jobs, total: data.total ?? jobs.length, loading: false, error: false });
+          return n;
+        });
       } catch {
-        if (!cancelled) fullJobsRequested.current.delete(key);
+        fail();
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [expandedPattern, mode, cards]);
+    },
+    [mode, filterKey, filters],
+  );
 
-  /** 展开区要渲染的完整行：取回后按当前筛选过一遍，口径与卡面计数一致
-   *  （`row.fn` 由接口随行返回，与分面里的职能标签同源同值）。 */
-  function expandedRows(pattern: string): any[] {
-    const rows = fullJobs.get(`${pattern}|${mode}`);
-    if (!rows) return [];
-    // 失效筛选值（切校招/实习后残留）下卡面计数是 0，展开也必须是 0，否则两处对不上。
-    if (selectionIsUnsatisfiable(selected)) return [];
-    return rows.filter((r: any) => campusRowMatches(r, filters));
-  }
+  // 展开 / 切模式 / 改筛选 → 取第 0 页（drawerRequested 去重，不会重复请求同一 key@0）。
+  useEffect(() => {
+    const pattern = expandedPattern;
+    if (!pattern) return;
+    const card = cards.find((c) => c.pattern === pattern);
+    if (!card) return;
+    if ((mode === "campus" ? card.campusTotal : card.internTotal) === 0) return;
+    loadPage(pattern, 0);
+  }, [expandedPattern, mode, filterKey, cards, loadPage]);
 
   // 展示时探活（②层，复刻 app/jobs/jobs-client.tsx）：对当前展开公司里可见的岗位批量探活，
   // 死的当场从渲染里隐藏。deadIds 全局共享（同一岗位 id 不会同时出现在两家公司下）。
@@ -313,7 +335,7 @@ export default function CampusClient({
   useEffect(() => {
     const visibleIds: string[] = [];
     if (expandedPattern) {
-      for (const j of expandedRows(expandedPattern)) {
+      for (const j of drawerFor(expandedPattern)?.jobs ?? []) {
         if (j.id) visibleIds.push(j.id);
       }
     }
@@ -346,7 +368,7 @@ export default function CampusClient({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expandedPattern, mode, fullJobs, filters]);
+  }, [expandedPattern, mode, drawer, filterKey]);
 
   // JobCard 要求的回调；本区岗位不预取 job_actions（专区场景无需个性化打分/回填 user_action），
   // 收藏/已投递/忽略仍会经 JobCard 内部走 /api/job-actions 真实写库，只是不需要在此处再镜像一份状态。
@@ -481,15 +503,14 @@ export default function CampusClient({
             const isExpanded = expandedPattern === card.pattern;
             const totalCount = mode === "campus" ? card.campusTotal : card.internTotal;
             const filteredCount = filteredCountByPattern.get(card.pattern) ?? 0;
-            // 卡面计数用聚合分面；展开区渲染用按需取回的完整行，两者过同一套筛选口径。
-            const fetched = fullJobs.get(`${card.pattern}|${mode}`);
-            const rowsLoaded = !isExpanded || !!fetched;
-            const visibleRows = isExpanded ? expandedRows(card.pattern) : [];
+            // 展开区：服务端已按当前筛选筛好并分页（Phase B），这里按页累计、按 total 判「加载更多」。
+            const page = isExpanded ? drawerFor(card.pattern) : undefined;
+            const loadedCount = page?.jobs.length ?? 0;
+            const drawerTotal = page?.total ?? filteredCount; // 精确 total（服务端）；未取回前用分面估算兜底
+            const initialLoading = isExpanded && (!page || (page.loading && loadedCount === 0));
+            const visibleRows = page?.jobs ?? [];
             const groups = isExpanded ? groupCampusJobs(visibleRows) : [];
-            // 大厂一个桶可能上千个岗，展开区最多取回 200 个（见 /api/campus-zone/jobs）。
-            // 「取回来的比这个桶的总数少」= 被截断了，照实说一句，不让用户以为「筛选后只剩这些」。
-            // 总数用卡面那个（来自聚合分面，权威），不让接口再去数一遍。
-            const cappedBy = fetched && fetched.length < totalCount ? fetched.length : 0;
+            const hasMore = !!page && page.jobs.length < page.total;
             const modeLabel = mode === "campus" ? "校招" : "实习";
 
             return (
@@ -502,68 +523,74 @@ export default function CampusClient({
                     </div>
                     <WindowBadge window={card.window} />
                   </div>
-                  {/* 正式批开闸（近 7 天校招岗一次性放量）——秋招最该立刻行动的信号，放在最上面。
-                      不写「新增 N 个」而写「一次性放出 N 个」：放量是校招的形态特征，也解释了为什么值得马上看。 */}
+                  {/* 招聘信息一律结构化成小标签（届别 / 提前批·正式批 / 现处阶段 / 截止），
+                      不再堆成一串带「·」的长句（用户反馈「很乱」）。措辞仍由数据的 basis 推出、不写死。 */}
                   {card.surge && (
-                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 text-[#9a4a1a] dark:text-[#f0a06a]">
-                      <span className="inline-flex items-center gap-1 rounded-md border border-[#f0c3a0] bg-[#fce8d8] px-1.5 py-0.5 font-medium dark:border-[#f0a06a]/[0.30] dark:bg-[#f0a06a]/[0.15]">
-                        🔥 刚开正式批
-                      </span>
-                      <span>
-                        一次性放出 {card.surge.toCount}
-                        {card.surge.fromCount != null && card.surge.fromCount > 0
-                          ? `（此前 ${card.surge.fromCount}）`
-                          : ""}
-                      </span>
-                    </div>
+                    <Badge
+                      tone="amber"
+                      size="sm"
+                      icon={<span aria-hidden="true">🔥</span>}
+                      className="self-start font-medium"
+                    >
+                      刚开正式批 · 放出 {card.surge.toCount}
+                      {card.surge.fromCount != null && card.surge.fromCount > 0
+                        ? `（此前 ${card.surge.fromCount}）`
+                        : ""}
+                    </Badge>
                   )}
-                  {card.timeline && (
-                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 ink-3">
-                      {/* ⚠️ 措辞由数据的 basis 决定，不写死。写死「据往年」时，卡面渲染出的是
-                          「据往年 2027届 · 正式批8-10月」——往年不可能有 2027 届，14 家全中（用户实锤）。 */}
-                      <span className="inline-flex items-center gap-1 rounded-md border border-tone-sky-border bg-tone-sky-bg px-1.5 py-0.5 font-medium text-[#2f6299] dark:text-[#7fb2e8]">
-                        {TIMELINE_BASIS_LABEL[card.timeline.basis]}
-                      </span>
-                      <span>{card.timeline.gradClass}</span>
-                      {card.timeline.batchBits.map((bit) => (
-                        <span key={bit}>· {bit}</span>
-                      ))}
-                      {card.timeline.phaseLabel && (
-                        <span className="font-medium text-tone-amber-fg">
-                          · {card.timeline.phaseLabel}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  {/* P3：今年精确日期（官方公告，绿系强档）。措辞三档：据官方公告 > 据在招岗位 > 据往年。 */}
-                  {card.preciseDates.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] leading-5 text-tone-green-fg">
-                      <span className="inline-flex items-center gap-1 rounded-md border border-tone-green-border bg-tone-green-bg px-1.5 py-0.5 font-medium text-tone-green-fg">
-                        今年·据官方公告
-                      </span>
-                      {card.preciseDates.map((p) => (
-                        <span key={p.batch}>· {p.label}</span>
-                      ))}
-                      {card.batchTimingGap && (
-                        <span className="text-tone-amber-fg">· {card.batchTimingGap}</span>
-                      )}
-                    </div>
-                  )}
-                  {/* 快路①：无官方精确日期时，用清洗后的自有岗位 deadline 做弱档提示（灰系）。 */}
-                  {card.preciseDates.length === 0 && card.cleanDeadlineMs && (
-                    <p className="text-[12px] leading-5 ink-3">
-                      据在招岗位约{""}
-                      {formatDateLabel(card.cleanDeadlineMs, { month: "long", day: "numeric" })}{""}
-                      前截止
-                    </p>
-                  )}
-                  <p className="text-sm ink-2">
-                    {totalCount > 0
-                      ? `${totalCount} 个${modeLabel}在招岗位${
-                          hasActiveFilter && isExpanded ? `· 筛选后 ${filteredCount} 个` : ""
-                        }`
-                      : `暂无${modeLabel}在招岗位`}
-                  </p>
+                  {(() => {
+                    // 有官方精确日期 → 数据依据是「官方公告」(绿)，日期用官方那档；否则用 timeline 的 basis
+                    // （公开信息 sky / 往年 neutral）+ batchBits。⚠️ 往年不可能有当届，措辞交给 basis，别写死。
+                    const hasPrecise = card.preciseDates.length > 0;
+                    const chips: JSX.Element[] = [];
+                    // 数据依据标签：「今年·据官方公告 / 据公开信息」删掉（创始人 2026-09-15：噪音，且和「招聘中」大徽章挤在一起）。
+                    // 只保留「据往年」—— 它不是噪音，是「这条时间线是按往年规律推的、今年官方还没确认」的诚实提醒，
+                    // 删了会让推测显得像确认（有精确日期的官方档不受影响：绿色日期标签本身就表明是官方来源）。
+                    if (!hasPrecise && card.timeline?.basis === "historical") {
+                      chips.push(<Badge key="basis" tone="neutral" size="sm">{TIMELINE_BASIS_LABEL.historical}</Badge>);
+                    }
+                    // 届别：有官方周期数据用它；否则校招卡兜一个当季届别（本区已滤掉往届，剩的就是当季校招），
+                    // 让没接入周期数据的公司也不至于「一个标签都没有」。实习不按届别，无数据就不显。
+                    const gradLabel =
+                      card.timeline?.gradClass ?? (mode === "campus" ? `${seasonGradClass}届` : null);
+                    if (gradLabel) {
+                      chips.push(<Badge key="gc" tone="neutral" size="sm">{gradLabel}</Badge>);
+                    }
+                    if (hasPrecise) {
+                      card.preciseDates.forEach((p) =>
+                        chips.push(<Badge key={`pd-${p.batch}`} tone="green" size="sm">{p.label}</Badge>),
+                      );
+                    } else if (card.timeline) {
+                      card.timeline.batchBits.forEach((bit) =>
+                        chips.push(<Badge key={`b-${bit}`} tone="neutral" size="sm">{bit}</Badge>),
+                      );
+                    }
+                    // 「现处正式批/黄金期」标签删掉（创始人 2026-09-15：与「招聘中」大徽章重复）。
+                    if (!hasPrecise && card.cleanDeadlineMs) {
+                      chips.push(
+                        <Badge key="dl" tone="neutral" size="sm">
+                          约{formatDateLabel(card.cleanDeadlineMs, { month: "long", day: "numeric" })}截止
+                        </Badge>,
+                      );
+                    }
+                    return chips.length ? (
+                      <div className="flex flex-wrap items-center gap-1.5">{chips}</div>
+                    ) : null;
+                  })()}
+                  {/* 岗位数：结构化成醒目数字 + 单位，不写成句子。筛选后的数用绿标签另标。 */}
+                  <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
+                    {totalCount > 0 ? (
+                      <>
+                        <span className="t-num text-[20px] font-semibold leading-none ink-1">{totalCount}</span>
+                        <span className="text-sm ink-2">个{modeLabel}在招岗位</span>
+                        {hasActiveFilter && isExpanded && (
+                          <Badge tone="green" size="sm" className="ml-0.5">筛选后 {filteredCount}</Badge>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-sm ink-3">暂无{modeLabel}在招岗位</span>
+                    )}
+                  </div>
                   {/* 往届岗不静默丢弃：说清楚「有但不是这一届」，免得用户以为我们漏抓。
                       只有岗位文本里写明届别（如「2026届」）的才会被挡；届别未知的岗照常在上面列着。 */}
                   {card.pastClassJobCount > 0 && (
@@ -605,8 +632,10 @@ export default function CampusClient({
 
                 {isExpanded && (
                   <div className="sm:col-span-2 lg:col-span-3">
-                    {!rowsLoaded ? (
-                      <EmptyPanel title="正在加载岗位…" description={`共 ${filteredCount} 个，稍等一下。`} />
+                    {initialLoading ? (
+                      <EmptyPanel title="正在加载岗位…" description={`共 ${drawerTotal} 个，稍等一下。`} />
+                    ) : page?.error && loadedCount === 0 ? (
+                      <EmptyPanel title="加载失败" description="收起再展开可重试。" />
                     ) : groups.length === 0 ? (
                       <EmptyPanel title="当前筛选下没有匹配岗位" description="换一个城市、学历、职能或届别试试，或清空筛选。" />
                     ) : (
@@ -639,10 +668,22 @@ export default function CampusClient({
                         })}
                       </div>
                     )}
-                    {cappedBy > 0 && (
-                      <p className="mt-3 text-xs text-[#8a8275] dark:text-[#9a9184]">
-                        该公司{modeLabel}岗位较多，这里按临近截止优先展示前 {cappedBy} 个
-                      </p>
+                    {/* 加载更多：按页翻完当前筛选下的**全部**岗位（去掉了旧的「前 200」硬顶）。 */}
+                    {hasMore && (
+                      <div className="mt-4 flex justify-center">
+                        <button
+                          type="button"
+                          disabled={page?.loading}
+                          onClick={() => loadPage(card.pattern, loadedCount)}
+                          className="inline-flex items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-4 py-2 text-sm font-medium ink-2 transition hover:bg-white disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
+                        >
+                          {page?.loading ? "加载中…" : `加载更多（还有 ${Math.max(0, drawerTotal - loadedCount)} 个）`}
+                        </button>
+                      </div>
+                    )}
+                    {!hasMore && loadedCount > 0 && drawerTotal > loadedCount && (
+                      // total 与已加载对不上又没有下一页（极少：翻页间隙有岗位下架/被 deadIds 隐藏）——照实说，不假装完整。
+                      <p className="mt-3 text-xs ink-3">已加载 {loadedCount} 个（共约 {drawerTotal} 个）</p>
                     )}
                     {deadIds.size > 0 && (
                       <p className="mt-3 text-xs ink-3">
