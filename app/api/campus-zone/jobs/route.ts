@@ -6,8 +6,8 @@ import { getCampusCompanyJobs, jobsStoreEnabled } from "@/lib/jobs-store/read";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** 单次最多返回多少岗：校招专区一次展开一家公司，够用；同时挡住把整家大厂拉空。 */
-const MAX_JOBS = 200;
+/** 单页返回多少岗：抽屉「加载更多」按页翻，直到看完当前筛选下的**全部**岗位（Phase B，2026-09-15）。 */
+const PAGE_SIZE = 200;
 
 /**
  * 校招专区「展开某家公司」按需取完整岗位行。
@@ -32,12 +32,25 @@ export async function POST(request: NextRequest) {
   } catch {
     return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 400 });
   }
-  const pattern = String((body as { pattern?: unknown })?.pattern ?? "").trim();
-  const mode = String((body as { mode?: unknown })?.mode ?? "").trim();
+  const b = (body ?? {}) as Record<string, unknown>;
+  const pattern = String(b.pattern ?? "").trim();
+  const mode = String(b.mode ?? "").trim();
   if (!pattern) return NextResponse.json({ ok: false, error: "pattern_required" }, { status: 400 });
   if (mode !== "campus" && mode !== "intern") {
     return NextResponse.json({ ok: false, error: "invalid_mode" }, { status: 400 });
   }
+  // 分页 + 服务端筛选（Phase B）：把当前筛选下推到库里，「加载更多」按页翻完全部符合条件的岗位。
+  const offset = Math.max(0, Math.floor(Number(b.offset) || 0));
+  const rawFilters = (b.filters ?? {}) as Record<string, unknown>;
+  const gradClassNum = Number(rawFilters.gradClass);
+  const filters = {
+    city: String(rawFilters.city ?? "").trim(),
+    education: String(rawFilters.education ?? "").trim(),
+    jobFunction: String(rawFilters.jobFunction ?? "").trim(),
+    gradClass: Number.isFinite(gradClassNum) && rawFilters.gradClass !== null && rawFilters.gradClass !== ""
+      ? gradClassNum
+      : null,
+  };
 
   if (!jobsStoreEnabled()) {
     // 未配 JOBS_DATABASE_URL（本地 / 回滚）：不静默返空，让调用方知道这条路没通。
@@ -51,10 +64,14 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // 是否截断由调用方拿卡面总数（来自聚合分面，权威）与 jobs.length 比对得出——
-    // 这里不再回一个 total：为了拿它就得把全公司的岗位正文都取回来数一遍，正是刚优化掉的那笔开销。
-    const { jobs } = await getCampusCompanyJobs(companies, pattern, mode, MAX_JOBS);
-    return NextResponse.json({ ok: true, jobs });
+    // total 现在是**精确**的：职能/招聘类型都物化成列后，全部候选靠轻字段就能筛出来数清（Phase A/B），
+    // 不必再把全公司正文取回来数一遍。hasMore 据此判，供抽屉「加载更多」翻页。
+    const { jobs, total } = await getCampusCompanyJobs(companies, pattern, mode, {
+      filters,
+      offset,
+      limit: PAGE_SIZE,
+    });
+    return NextResponse.json({ ok: true, jobs, total, offset, hasMore: offset + jobs.length < total });
   } catch (e: any) {
     console.error("[api/campus-zone/jobs] 取岗失败:", e?.message);
     return NextResponse.json({ ok: false, error: e?.message || "fetch_failed" }, { status: 500 });

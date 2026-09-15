@@ -13,6 +13,7 @@ import {
   type CampusStatRow,
   type CampusFreshStat,
 } from "@/lib/campus-stats";
+import { campusRowMatches, type CampusFilterValues } from "@/lib/campus-facets";
 import { classifyJobFunction } from "@/lib/china-keyword-expansion";
 import { mustApplyPatterns, mustApplyUnion, type MustApplyCompany } from "@/lib/must-apply-list";
 import { unstable_cache } from "next/cache";
@@ -716,43 +717,10 @@ export async function resolveActiveCompanyNames(patterns: string[]): Promise<str
  * 公司归属在 JS 端按 pattern 子串匹配回填（见下方 for 循环）。短 TTL 缓存降同实例重复读取；
  * 跨请求复用由调用方（app/campus/page.tsx 的 unstable_cache）负责。
  */
-/**
- * 第二阶段：只给「光看标题判不出职能」的行补正文，且只补前 1000 字。
- *
- * 等价性（2026-09-09 live 全量对拍，active 校招+实习 101,465 行）：
- *   · 标题单独判出非「其他 / 职能」的行，其结果与带全文判**完全一致**（「职能」是文档化的例外：
- *     classifyJobFunction 对「职能」标题会剥掉活动标签再看正文，所以它也要正文）；
- *   · 需要正文的 34,578 行里，`left(summary, 1000)` 与全文判 **0 差异**（600 字有 1 例差异，故取 1000）。
- * 代价：正文传输量从全部行降到约 1/3、且每行封顶 1KB。改这两个阈值必须重跑对拍脚本，别凭感觉调。
- */
-const SUMMARY_FACET_CHARS = 1000;
-const SUMMARY_FETCH_CHUNK = 2000;
-async function hydrateSummariesForFunctionFacet(rows: any[]): Promise<void> {
-  const need: any[] = [];
-  for (const r of rows) {
-    if (r.summary != null) continue; // 列为 NULL 的行第一阶段已带全文（判桶要用）
-    const fn = classifyJobFunction({ title: r.title, job_type: r.job_type });
-    if (fn === "其他" || fn === "职能") need.push(r);
-  }
-  if (!need.length) return;
-  const byId = new Map<string, any>();
-  for (const r of need) byId.set(String(r.id), r);
-  const ids = Array.from(byId.keys());
-  const chunks: string[][] = [];
-  for (let i = 0; i < ids.length; i += SUMMARY_FETCH_CHUNK) chunks.push(ids.slice(i, i + SUMMARY_FETCH_CHUNK));
-  const results = await Promise.all(
-    chunks.map((chunk) =>
-      jobsQuery<{ id: string; summary: string | null }>(
-        `select id, left(summary, $2) as summary from jobs where id = any($1::uuid[])`,
-        [chunk, SUMMARY_FACET_CHARS],
-      ),
-    ),
-  );
-  for (const rs of results) for (const x of rs) {
-    const r = byId.get(String(x.id));
-    if (r) r.summary = x.summary;
-  }
-}
+// ⚠️ 职能分面此前的「第二阶段按需补正文再现算」已于 2026-09-15 移除：职能改读物化列 jobs.job_function
+// （入库时由 classifyJobFunction 带 summary 算好，见 crawler/recruitment_classify + scripts/backfill-job-function）。
+// 那次把 ~3.4 万条 JD 正文拖回函数现算正是 unstable_cache 后台重算撑爆超时、静默服务旧快照的病根。
+// buildCampusFacets 现在读列、仅列为 NULL 时退回现算兜底（lib/campus-facets.campusFacetKey）。
 
 export type CampusZoneCacheEntry = { expiresAt: number; value: CampusCompanyRow[] };
 const campusZoneCache = new Map<string, CampusZoneCacheEntry>();
@@ -778,6 +746,9 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
     // 页面静默服务 6 天旧快照；换 key 后没有旧快照可服务，直接 500（Digest 721878106，创始人 Chrome 实测）。
     // 判桶已经不需要正文（campusAdmission 认 recruitment_category 列；只有列为 NULL 的行才要现算，
     // CASE 只给这些行带正文，全库 36 行）。正文唯一的消费者是分面的职能 fn，走下面的第二阶段按需补。
+    // 职能读物化列 j.job_function（2026-09-15）：不再在此拉正文跑分类，看板重算就此变轻、
+    // unstable_cache 后台重算不再撑爆超时被杀（那是「全部数据待更新」的病根）。summary 只为
+    // recruitment_category 为 NULL 的极少数行（全库 36 行）保留、供 campusAdmission 现算兜底。
     const rows = names.length
       ? await jobsQuery<any>(
           `
@@ -785,7 +756,7 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
         j.id, j.company, j.title, j.job_type, j.jd_url, j.apply_url,
         case when j.recruitment_category is null then j.summary end as summary,
         j.experience, j.deadline, j.first_seen_at, j.last_seen_at, j.location as city, j.education, j.status,
-        j.grad_class, j.recruitment_category
+        j.grad_class, j.recruitment_category, j.job_function
       from jobs j
       where j.status = 'active'
         and j.company = any($1::text[])
@@ -794,7 +765,6 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
           [names],
         )
       : [];
-    await hydrateSummariesForFunctionFacet(rows);
     const byName = new Map<string, CampusCompanyRow>();
     for (const c of list) byName.set(c.name, {
       company: c.name, pattern: c.pattern, campusJobs: [], internJobs: [], hasAnyActiveJob: false, lastSeenAtMs: null,
@@ -903,26 +873,37 @@ export async function getCampusFreshStats(
  * 语义与「全取回来再排序截断」**完全一致**：排序在取正文之前就已定好，顺序靠前的先判，
  * 收满 200 条时后面的岗不可能挤进前 200。最坏情况（该桶的岗全排在最后）退化成旧行为，不会更差。
  */
-export type CampusCompanyJobs = { jobs: any[]; scanned: number };
+export type CampusCompanyJobs = { jobs: any[]; total: number };
 
-/** 每批取多少条完整行。够大以求一批命中，又不至于为 200 条结果拉回上千条正文。 */
-const CAMPUS_DETAIL_CHUNK = 500;
-
+/**
+ * Phase B（2026-09-15）：**服务端**按筛选分页取完整行 + 回一个**精确总数**，去掉「前 200」硬顶。
+ *
+ * 能便宜地做到，全靠 job_function / recruitment_category 都物化成列了（Phase A）：
+ *   · 桶判（校招/实习）读 recruitment_category 列；职能筛选读 job_function 列；届别/城市/学历都是列。
+ *   → 归属 + 届别门 + 桶 + 分面筛选 + 排序**全用轻字段完成**，得到该公司在当前筛选下的**全部**候选，
+ *     `total = 候选数`（精确、与卡面「筛选后 N」同口径：campusRowMatches ≡ facetMatches）。
+ *   · 只给「这一页」（offset..offset+limit）取完整行（含 summary，供抽屉展示）——大厂也不再拉几 MB 正文。
+ * NULL-recruitment_category 行（全库 ~36 行、判桶要看正文）单独补一次 summary 再判，保总数精确、不漏不错。
+ * 归属 / 届别门 / 桶口径与 getCampusZone 逐字一致（CLAUDE.md「归属规则多处必须一致」）。
+ */
 export async function getCampusCompanyJobs(
   list: Array<{ name: string; pattern: string }>,
   pattern: string,
   bucket: "campus" | "intern",
-  limit: number,
+  opts: { filters?: CampusFilterValues; offset?: number; limit: number },
 ): Promise<CampusCompanyJobs> {
+  const { filters, limit } = opts;
+  const offset = Math.max(0, opts.offset ?? 0);
   const target = list.find((c) => c.pattern === pattern);
-  if (!target) return { jobs: [], scanned: 0 };
+  if (!target) return { jobs: [], total: 0 };
   const names = await resolveActiveCompanyNames([pattern]);
-  if (!names.length) return { jobs: [], scanned: 0 };
+  if (!names.length) return { jobs: [], total: 0 };
 
-  // 第一段：只取轻字段（不含 summary），足够做归属 + 届别门 + 排序。
+  // 只取轻字段（无 summary）：够做归属 + 届别门 + 桶 + 分面筛选 + 排序 + 职能（读物化列）。
   const light = await jobsQuery<any>(
     `
-    select j.id, j.company, j.grad_class, j.deadline, j.first_seen_at
+    select j.id, j.company, j.grad_class, j.deadline, j.first_seen_at,
+           j.recruitment_category, j.job_function, j.location as city, j.education, j.title, j.job_type
     from jobs j
     where j.status = 'active'
       and j.company = any($1::text[])
@@ -930,39 +911,60 @@ export async function getCampusCompanyJobs(
     `,
     [names],
   );
-  const candidates: any[] = [];
+
+  // 归属 + 届别门；NULL-category 行留到后面补正文判桶（极少）。
+  const owned: any[] = [];
+  const needSummary: any[] = [];
   for (const r of light) {
     if (!r.id || !r.company) continue;
     const companyLower = String(r.company).toLowerCase();
     // 归属规则与 getCampusZone 逐字一致：list 里第一个 pattern 命中者得。
     const owner = list.find((c) => companyLower.includes(c.pattern.replace(/%/g, "").toLowerCase()));
     if (!owner || owner.pattern !== target.pattern) continue;
-    // 届别门只看 grad_class，轻字段就能判，先剪枝再取正文。
     if (!isCurrentSeasonGradClass(r.grad_class)) continue;
-    candidates.push(r);
+    if (r.recruitment_category == null) needSummary.push(r);
+    else owned.push(r);
   }
-  // 临近截止优先、其次新增降序 —— 与全量排序结果相同（这两个键都在轻字段里）。
-  candidates.sort(compareCampusJobs);
-
-  // 第二段：顺着排好的顺序分批取完整行跑准入门，收满 limit 就不再往下取。
-  const kept: any[] = [];
-  let scanned = 0;
-  for (let i = 0; i < candidates.length && kept.length < limit; i += CAMPUS_DETAIL_CHUNK) {
-    const ids = candidates.slice(i, i + CAMPUS_DETAIL_CHUNK).map((r) => r.id);
-    const rows = await jobsQuery<any>(
-      `select ${JOB_COLUMNS}, j.location as city from jobs j where j.id = any($1::uuid[])`,
+  if (needSummary.length) {
+    const ids = needSummary.map((r) => r.id);
+    const rows = await jobsQuery<{ id: string; summary: string | null }>(
+      `select id, summary from jobs where id = any($1::uuid[])`,
       [ids],
     );
-    scanned += ids.length;
-    const byId = new Map(rows.map((r: any) => [r.id, r]));
-    // 按本批在候选序列里的顺序处理，保证「先来的先占名额」与全量排序一致。
-    for (const c of candidates.slice(i, i + CAMPUS_DETAIL_CHUNK)) {
-      if (kept.length >= limit) break;
-      const full = byId.get(c.id);
-      if (!full) continue;
-      if (campusAdmission(full) !== bucket) continue;
-      kept.push({ ...full, fn: classifyJobFunction(full) });
+    const byId = new Map(rows.map((r) => [String(r.id), r.summary]));
+    for (const r of needSummary) {
+      r.summary = byId.get(String(r.id)) ?? null; // 供 campusAdmission 现算
+      owned.push(r);
     }
   }
-  return { jobs: kept, scanned };
+
+  // 桶判 + 职能（列优先，与 campus-facets.campusFacetKey 同口径）+ 分面筛选（与 campusRowMatches 逐字同义）。
+  const candidates: any[] = [];
+  for (const r of owned) {
+    if (campusAdmission(r) !== bucket) continue;
+    const fn = typeof r.job_function === "string" && r.job_function ? r.job_function : classifyJobFunction(r);
+    const row = { ...r, fn };
+    if (filters && !campusRowMatches(row, filters)) continue;
+    candidates.push(row);
+  }
+  // 临近截止优先、其次新增降序（两个键都在轻字段里，与全量排序一致）。
+  candidates.sort(compareCampusJobs);
+  const total = candidates.length;
+
+  // 只给这一页取完整行（含 summary），保持排好的顺序。
+  const pageMeta = candidates.slice(offset, offset + limit);
+  if (!pageMeta.length) return { jobs: [], total };
+  const pageIds = pageMeta.map((r) => r.id);
+  const full = await jobsQuery<any>(
+    `select ${JOB_COLUMNS}, j.location as city from jobs j where j.id = any($1::uuid[])`,
+    [pageIds],
+  );
+  const byId = new Map(full.map((r: any) => [String(r.id), r]));
+  const jobs = pageMeta
+    .map((m) => {
+      const f = byId.get(String(m.id));
+      return f ? { ...f, fn: m.fn } : null; // fn 用候选阶段算好的（列优先），与筛选口径一致
+    })
+    .filter((x): x is any => x != null);
+  return { jobs, total };
 }

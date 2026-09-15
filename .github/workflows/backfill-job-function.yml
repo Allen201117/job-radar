@@ -1,0 +1,65 @@
+name: backfill-job-function
+
+# 职能物化：把 JS 侧的权威裁决（classifyJobFunction，带 summary）写进 jobs.job_function。
+# 手动触发用于一次性回填与只读对拍；定时那次是「补漏」——爬虫入库时已经算好了，
+# 这里只兜住极少数分类失败 / 被触发器作废（title/summary 变了）的行（NULL）。
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "check=只读对拍（绝不写库） / apply=写库"
+        type: choice
+        options: ["check", "apply"]
+        default: "check"
+      all:
+        description: "apply 时是否全量重算覆盖（false=只补 NULL）"
+        type: boolean
+        default: false
+      limit:
+        description: "只处理前 N 行（留空=不限，用于小样本试跑）"
+        type: string
+        default: ""
+  schedule:
+    # 每 2 小时补一次 NULL（便宜）：触发器 jobs_guard_job_function 一发现 title/summary 变了就把
+    # job_function 置 NULL（jobs-db/schema.sql），这条负责重新算出来 —— 让看板读列时极少落到「NULL 现算」兜底。
+    # 走部分索引 jobs_job_function_unclassified_idx，只碰真正待算的那几百行。错开 recruitment 的 :17。
+    - cron: "37 */2 * * *"
+    # 每天 UTC 19:45 全量重算兜底：防「规则本身改了」（classifyJobFunction 一改，全库存量结论都该重算）。
+    # 错开 recruitment 的 19:30，避免两条全量链叠在一起烧香港库 CPU。
+    - cron: "45 19 * * *"
+
+concurrency:
+  group: backfill-job-function
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      # 只装脚本真正用到的那一个包，不跑 npm ci（仓库 lock 与 package.json 暂不同步，见 recruitment 同款注释）。
+      - run: npm install --no-save --no-audit --no-fund --ignore-scripts "pg@^8.13.1"
+      - name: Run backfill
+        env:
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+        run: |
+          set -euo pipefail
+          if [ -z "${JOBS_DATABASE_URL:-}" ]; then
+            echo "::error::JOBS_DATABASE_URL 未配置"; exit 1
+          fi
+          # 定时触发一律 apply；只有每天那一次走全量重算，2 小时一次的那条只补 NULL。
+          MODE="${{ github.event.inputs.mode || 'apply' }}"
+          ARGS="--$MODE"
+          if [ "${{ github.event.inputs.all }}" = "true" ] || [ "${{ github.event.schedule }}" = "45 19 * * *" ]; then
+            ARGS="$ARGS --all"
+          fi
+          if [ -n "${{ github.event.inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ github.event.inputs.limit }}"; fi
+          echo "运行参数：$ARGS"
+          node scripts/backfill-job-function.js $ARGS
