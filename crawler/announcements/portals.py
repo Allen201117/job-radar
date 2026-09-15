@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -24,13 +25,16 @@ class Portal:
     domains: tuple[str, ...]       # 官方域名白名单（source_url host 必须命中其一）
     # 详情页 URL 特征（用于从列表页里挑出公告详情链接）
     detail_pat: re.Pattern = field(default_factory=lambda: re.compile(r"(post_\d+\.html|/t20\d{6}_\d+\.html)"))
+    # 列表数据形态："html"=常规 <a href>；"script_json"=数据在 <script>var listData JSON 里（江西）。
+    list_format: str = "html"
 
 
 # 各省人社厅「事业单位公开招聘公告」列表页（2026-09-15 逐省 live 验证的静态源）。
 # ⚠️ 每省 detail URL 格式不同，detail_pat 必须逐省配，别假设统一格式。
 # ⚠️ 归属门只放行 domains 里的官方 gov 域名；host + detail_pat + 标题 INCLUDE/EXCLUDE 三重过滤。
 # ⚠️ 综合栏目（四川/河南/广西）混着非招聘内容，靠 classify 的标题过滤兜底（同 CLAUDE.md「后置过滤」）。
-# 暂缺：浙江/河北/江西（JS 渲染，需浏览器道，下一期）；辽宁（仅第三方人事考试网，无 gov.cn 源，跳过）。
+# 暂缺：浙江/河北（JS 渲染，需浏览器道，下一期）；辽宁（仅第三方人事考试网，无 gov.cn 源，跳过）。
+# 江西已接（jx_rst，list_format="script_json" 从 <script>var listData 抽 JSON，无需浏览器）。
 def _p(rx: str) -> re.Pattern:
     return re.compile(rx)
 
@@ -89,6 +93,12 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
     Portal("cq_rlsbj", "重庆市人力资源和社会保障局·事业单位公开招聘2026", "重庆市",
            ("https://rlsbj.cq.gov.cn/zwxx_182/sydw/sydwgkzp2026/",), ("rlsbj.cq.gov.cn",),
            _p(r"t\d{8}_\d+\.html")),
+    # 江西：列表页 JS 渲染，但公告数据就在 <script>var listData = {articleList:[...]}> JSON 里
+    #   （每条含 title + pubDate + urls.pc），curl 一次即得，list_format="script_json" 抽 JSON，无需浏览器。
+    Portal("jx_rst", "江西省人力资源和社会保障厅·事业单位公开招聘", "江西省",
+           ("https://rst.jiangxi.gov.cn/jxsrlzyhshbzt/col/col85519/index.html",),
+           ("rst.jiangxi.gov.cn",),
+           _p(r"content_\d+\.html"), list_format="script_json"),
     # 下面几个偏窄（厅本级 / 更新慢），靠标题过滤兜底，产出偏少正常（研究已标注）。
     Portal("henan_hrss", "河南省人力资源和社会保障厅·招考录用", "河南省",
            ("https://hrss.henan.gov.cn/zwgk/xxgk/yfygkdqtxx/zkly/",), ("hrss.henan.gov.cn",),
@@ -104,8 +114,9 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
 # ⏸️ 仍暂缺（2026-09-15 两批 research + dry-run 逐个 live 试过）——下一个 session 从这里接：
 #   【JS 渲染，需浏览器道或找其 AJAX 接口】江苏(col78506 列表 JS，detail 静态需 Referer)、浙江
 #     (已找到内部接口 /api-gateway/jpaas-publish-server/... pageId=1229743683，但非公开约定别硬依赖)、
-#     河北(整站 Vue SPA)、江西(列表在 <script>var listData JSON 里，写 JSON 解析即可接，最省)、
-#     辽宁/青海(eportal 组件异步渲染，未定位数据源)、天津(sydwgkzp 列表 JS，detail 静态)。
+#     河北(整站 Vue SPA)、辽宁/青海(eportal 组件异步渲染，未定位数据源)、
+#     天津(sydwgkzp 列表 JS，detail 静态)。
+#     （江西已接：list_format="script_json"，列表数据在 <script>var listData JSON 里，无需浏览器。）
 #   【WAF 拦列表页】四川(rst.sc.gov.cn 列表 403)、甘肃(rst.gansu.gov.cn 全站 412)——detail 能开、列表抓不了。
 #   【只有综合栏目/信噪比差，本轮 dry-run 丢掉】云南(NewsLsit classid=602 过滤后 0)、贵州(残留是部委通知/
 #     方案非公告)、黑龙江/宁夏/西藏(只有「通知公告」综合栏目，无事业单位招聘专栏)。
@@ -161,25 +172,138 @@ def _clean_title(text: str) -> str:
     return t[:200]
 
 
+def _accept(portal: Portal, list_url: str, title: str, href: str,
+            seen: set[str], out: list[ListItem], published_override: date | None = None) -> None:
+    """把一条 (标题, 链接) 过三重门（归属 / detail_pat / 内容），通过则收进 out。html 与 script_json 两路共用。"""
+    title = _clean_title(title)
+    if not href or len(title) < 8:
+        return
+    full = urljoin(list_url, href)
+    if not host_in_whitelist(portal, full):
+        return
+    if not portal.detail_pat.search(full):
+        return
+    if not is_recruitment_announcement(title):
+        return
+    if full in seen:
+        return
+    seen.add(full)
+    out.append(ListItem(title=title, url=full,
+                        published_at=published_override or published_from_url(full)))
+
+
+def _match_delimited(text: str, start: int, open_ch: str, close_ch: str) -> str | None:
+    """从 text[start]（须是 open_ch）起做配对扫描，尊重 JSON 字符串字面量里的括号，返回含首尾配对的子串。"""
+    depth = 0
+    in_str = esc = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == open_ch:
+            depth += 1
+        elif c == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
+def _extract_json_array(text: str, key: str) -> str | None:
+    """从 `key: [ ... ]`（JS 对象里的键，可能未加引号）抠出 JSON 数组文本；尊重字符串字面量里的方括号。"""
+    idx = text.find(key)
+    if idx < 0:
+        return None
+    b = text.find("[", idx)
+    if b < 0:
+        return None
+    return _match_delimited(text, b, "[", "]")
+
+
+# script_json 详情页正文键：带冒号 + 引号，避开页面 markup 里的 id="content" 那类裸 "content"。
+_CONTENT_KEY = re.compile(r'"content"\s*:\s*"')
+
+
+def _extract_script_json_content(html: str) -> str | None:
+    """script_json 详情页正文 HTML：正文在 content:{"content":"<html>"} 这个 JSON 字符串里（江西也是 JS 渲染）。"""
+    m = _CONTENT_KEY.search(html)
+    if not m:
+        return None
+    b = html.rfind("{", 0, m.start())  # 该 JSON 对象的起始花括号
+    if b < 0:
+        return None
+    obj = _match_delimited(html, b, "{", "}")
+    if not obj:
+        return None
+    try:
+        data = json.loads(obj)
+    except ValueError:
+        return None
+    return data.get("content") if isinstance(data, dict) else None
+
+
+def detail_text(portal: Portal, html: str) -> str:
+    """详情页正文纯文本（供截止日 / 受众抽取）。
+
+    script_json 源的详情页同样 JS 渲染 → 从 content:{"content":"<html>"} 里挖正文再去标签；
+    抽不到正文返回空串（让上游走 published+TTL 兜底，不假装有截止日）。静态源取可见正文。
+    """
+    if portal.list_format == "script_json":
+        body = _extract_script_json_content(html)
+        if not body:
+            return ""
+        return re.sub(r"\s+", " ", HTMLParser(body).text(separator=" ")).strip()
+    tree = HTMLParser(html)
+    for node in tree.css("script, style"):
+        node.decompose()
+    node = tree.body or tree
+    return node.text(separator=" ")
+
+
+_SCRIPT_JSON_PUBDATE = re.compile(r"(20\d{2})-(\d{1,2})-(\d{1,2})")
+
+
+def _iter_script_json_items(html: str):
+    """江西：列表数据在 <script>var listData = {articleList:[...]}> 里。yield (title, pc_href, published_at)。
+
+    找不到 articleList 时抛错（页面形态变了）——让 harvest 记 list_errors，不静默返回 0（工程化底线）。
+    """
+    raw = _extract_json_array(html, "articleList")
+    if raw is None:
+        raise ValueError("script_json 列表：未找到 articleList 数组（页面形态可能变了）")
+    for it in json.loads(raw):
+        title = it.get("title") or it.get("showTitle") or ""
+        try:
+            urls = json.loads(it.get("urls") or "{}")  # urls 是**字符串化**的 JSON
+        except (ValueError, TypeError):
+            urls = {}
+        href = urls.get("pc") if isinstance(urls, dict) else ""
+        pub = None
+        m = _SCRIPT_JSON_PUBDATE.match((it.get("pubDate") or "").strip())
+        if m:
+            try:
+                pub = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except ValueError:
+                pub = None
+        yield title, href or "", pub
+
+
 def parse_list(portal: Portal, list_url: str, html: str) -> list[ListItem]:
     """从列表页 HTML 抽出「可报名招聘公告」候选（已过归属门 + 内容过滤）。"""
-    tree = HTMLParser(html)
     seen: set[str] = set()
     out: list[ListItem] = []
-    for a in tree.css("a[href]"):
-        href = a.attributes.get("href") or ""
-        title = _clean_title(a.text() or "")
-        if not href or len(title) < 8:
-            continue
-        full = urljoin(list_url, href)
-        if not host_in_whitelist(portal, full):
-            continue
-        if not portal.detail_pat.search(full):
-            continue
-        if not is_recruitment_announcement(title):
-            continue
-        if full in seen:
-            continue
-        seen.add(full)
-        out.append(ListItem(title=title, url=full, published_at=published_from_url(full)))
+    if portal.list_format == "script_json":
+        for title, href, pub in _iter_script_json_items(html):
+            _accept(portal, list_url, title, href, seen, out, published_override=pub)
+    else:
+        tree = HTMLParser(html)
+        for a in tree.css("a[href]"):
+            _accept(portal, list_url, a.text() or "", a.attributes.get("href") or "", seen, out)
     return out

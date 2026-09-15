@@ -1,9 +1,12 @@
 import unittest
 from datetime import date
 
+import json
+
 from announcements.portals import (
     PORTALS_BY_KEY,
     _clean_title,
+    detail_text,
     host_in_whitelist,
     parse_list,
     published_from_url,
@@ -77,6 +80,77 @@ class TestParseList(unittest.TestCase):
         self.assertEqual(len(items), 2)
         # 北京 URL 自带发布日期
         self.assertEqual(items[0].published_at, date(2026, 9, 14))
+
+
+class TestScriptJsonList(unittest.TestCase):
+    """江西：列表数据不在 <a href> 里，而在 <script>var listData = {articleList:[...]}> JSON 里。"""
+
+    def _html(self, items: list[dict]) -> str:
+        # 忠实复刻线上形态：articleList 键未加引号（整块不是合法 JSON），urls 是**字符串化**的 JSON。
+        import json
+        arr = ",".join(
+            '{"title":%s,"pubDate":%s,"urls":%s}' % (
+                json.dumps(it["title"], ensure_ascii=False),
+                json.dumps(it["pubDate"], ensure_ascii=False),
+                json.dumps(json.dumps({"pc": it["pc"]}), ensure_ascii=False),
+            )
+            for it in items
+        )
+        return "<script>var listData = { articleList: [%s] };</script>" % arr
+
+    def test_parses_json_and_applies_gates(self):
+        jx = PORTALS_BY_KEY["jx_rst"]
+        html = self._html([
+            {"title": "江西师范大学2026年公开招聘工作人员公告",
+             "pubDate": "2026-07-07 16:04",
+             "pc": "/jxsrlzyhshbzt/col/col85519/content/content_111.html"},
+            {"title": "江西省2026年中小学教师招聘进入面试人员名单公告",  # 名单 → classify 剔除
+             "pubDate": "2026-06-24 15:53",
+             "pc": "/jxsrlzyhshbzt/col/col85519/content/content_222.html"},
+            {"title": "某第三方转载2026年公开招聘公告",  # 非官方域名 → 归属门剔除
+             "pubDate": "2026-06-24 00:00",
+             "pc": "https://offcn.com/content_333.html"},
+        ])
+        items = parse_list(jx, jx.list_urls[0], html)
+        titles = [it.title for it in items]
+        self.assertEqual(titles, ["江西师范大学2026年公开招聘工作人员公告"])
+        # pubDate 直接给发布日期（优于 URL 推断）
+        self.assertEqual(items[0].published_at, date(2026, 7, 7))
+        self.assertTrue(items[0].url.endswith("/content/content_111.html"))
+
+    def test_missing_articlelist_raises(self):
+        # 形态变了（找不到 articleList）必须抛错 → 让 harvest 记 list_errors，别静默 0 产出。
+        jx = PORTALS_BY_KEY["jx_rst"]
+        with self.assertRaises(ValueError):
+            parse_list(jx, jx.list_urls[0], "<html><body>无数据</body></html>")
+
+
+class TestDetailText(unittest.TestCase):
+    def test_html_portal_reads_visible_text(self):
+        bj = PORTALS_BY_KEY["bj_rsj"]  # 静态源：取可见正文、去掉 script
+        html = "<html><body><p>报名时间：2026年9月20日截止</p><script>var x=1</script></body></html>"
+        text = detail_text(bj, html)
+        self.assertIn("报名时间：2026年9月20日截止", text)
+        self.assertNotIn("var x", text)
+
+    def test_script_json_portal_digs_out_embedded_body(self):
+        # 江西详情页也是 JS 渲染：正文在 content:{"content":"<html>"} 里，且页面 markup 有 id="content" 干扰项。
+        jx = PORTALS_BY_KEY["jx_rst"]
+        body_html = "<p>三、报名</p><p>报名时间：即日起至2026年7月21日17:00时止</p>"
+        html = (
+            '<div id="content">导航噪音不应进正文</div>'
+            "<script>var articleContent_1 = [{ content:%s }];</script>"
+            % json.dumps({"content": body_html}, ensure_ascii=False)
+        )
+        text = detail_text(jx, html)
+        self.assertIn("报名时间：即日起至2026年7月21日17:00时止", text)
+        self.assertNotIn("导航噪音", text)  # 只取嵌入正文，不混入页面 markup
+        self.assertNotIn("<p>", text)       # 已去标签
+
+    def test_script_json_portal_no_body_returns_empty(self):
+        # 抽不到正文 → 空串（上游走 TTL 兜底，不假装有截止日）。
+        jx = PORTALS_BY_KEY["jx_rst"]
+        self.assertEqual(detail_text(jx, "<html><body>无 content 块</body></html>"), "")
 
 
 if __name__ == "__main__":

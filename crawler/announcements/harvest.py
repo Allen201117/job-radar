@@ -15,7 +15,6 @@ import sys
 from datetime import datetime, timezone
 
 import httpx
-from selectolax.parser import HTMLParser
 
 # 兄弟模块走 crawler/ 顶层扁平导入（crawler/ 在 sys.path 上）
 import db  # noqa: E402
@@ -24,7 +23,7 @@ from adapters.cn_portal_tls import make_transport  # noqa: E402
 
 from .classify import detect_audience, detect_employer_type
 from .deadline import extract_deadline, extract_published
-from .portals import PORTALS, PORTALS_BY_KEY, Portal, parse_list, _GEO_BLOCKED_FROM_CI
+from .portals import PORTALS, PORTALS_BY_KEY, Portal, detail_text, parse_list, _GEO_BLOCKED_FROM_CI
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -54,14 +53,6 @@ def _fetch(client: httpx.Client, url: str, referer: str | None = None) -> str:
     return r.content.decode(r.encoding or "utf-8", errors="replace")
 
 
-def _visible_text(html: str) -> str:
-    tree = HTMLParser(html)
-    for node in tree.css("script, style"):
-        node.decompose()
-    body = tree.body or tree
-    return body.text(separator=" ")
-
-
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -73,13 +64,15 @@ def harvest_portal(client: httpx.Client, sb, portal: Portal, dry_run: bool) -> d
     seen: set[str] = set()
     list_errors = 0
     for lu in portal.list_urls:
+        # 抓取 + 解析都算「列表页」这一步：解析抛错（如 script_json 形态变了）计 list_errors，别崩整轮。
         try:
             html = _fetch(client, lu)
+            items = parse_list(portal, lu, html)
         except Exception as exc:  # noqa: BLE001
             list_errors += 1
             sys.stderr.write(f"[announce] {portal.key} 列表页失败 {lu}: {type(exc).__name__}\n")
             continue
-        for item in parse_list(portal, lu, html):
+        for item in items:
             if item.url in seen:
                 continue
             seen.add(item.url)
@@ -116,7 +109,7 @@ def harvest_portal(client: httpx.Client, sb, portal: Portal, dry_run: bool) -> d
             detail_errors += 1
             sys.stderr.write(f"[announce] {portal.key} 详情失败 {item.url}: {type(exc).__name__}\n")
             continue
-        dtext = _visible_text(dhtml)
+        dtext = detail_text(portal, dhtml)
         published = item.published_at or extract_published(dtext)
         deadline, deadline_text = extract_deadline(dtext, published_at=published)
         if deadline:
