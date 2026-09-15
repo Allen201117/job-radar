@@ -223,3 +223,15 @@ class JobFunctionMaterializationTests(unittest.TestCase):
             "scripts", "classify-recruitment.js").read_text(encoding="utf-8")
         self.assertIn("classifyJobFunction", bridge)
         self.assertIn("function:", bridge)
+
+    def test_backfill_uses_reclassify_flag_on_same_connection(self):
+        # 回填脚本必须打 reclassify 标记（否则触发器把写入静默驳回 = 跑完一行没改），
+        # 且写值必须走 classifyJobFunction（带 summary），只 UPDATE job_function 一列。
+        import pathlib
+        script = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "scripts", "backfill-job-function.js").read_text(encoding="utf-8")
+        self.assertIn("set jobradar.reclassify = 'on'", script)
+        self.assertIn("classifyJobFunction", script)
+        self.assertIn("update jobs set job_function", script)
+        self.assertNotIn("pool.query(", script,
+                         "必须用同一条连接，否则会话上的标记打了也用不上")
