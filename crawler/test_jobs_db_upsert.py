@@ -169,3 +169,57 @@ class RecruitmentClassOwnershipTests(unittest.TestCase):
         # 去掉它会让每个新岗都得等补算任务，白白拉长 NULL 窗口。
         for col in ("recruitment_category", "recruitment_explicit"):
             self.assertIn(col, jobs_db._INSERT_COLS)
+
+
+class JobFunctionMaterializationTests(unittest.TestCase):
+    """职能物化（2026-09-15）：入库时由 classifyJobFunction（带 summary）算好 job_function 列，
+    校招看板读列不再在渲染期拉正文现算——那正是 unstable_cache 快照卡死、展开只能截 200 的病根。
+    与 recruitment_category 同一套「写入端算、触发器把门、回填捡漏」的机件，逐条镜像。
+    """
+
+    def _schema(self):
+        import pathlib
+        return pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "jobs-db", "schema.sql").read_text(encoding="utf-8")
+
+    def test_column_is_written_on_both_paths(self):
+        self.assertIn("job_function", jobs_db._INSERT_COLS)
+        self.assertIn("job_function", jobs_db._UPDATE_COLS)
+
+    def test_degraded_classification_must_not_wipe_existing_value(self):
+        # 分类降级写 None 时保留旧值（COALESCE(NULLIF(...))），否则一次 node 不可用抹光全库这一列。
+        clause = jobs_db._update_set_clause()
+        self.assertIn("job_function = COALESCE(NULLIF(%s, ''), job_function)", clause)
+
+    def test_schema_installs_the_guard_trigger(self):
+        sql = self._schema()
+        self.assertIn("create or replace function jobs_guard_job_function()", sql)
+        self.assertIn("create trigger jobs_job_function_guard_trg", sql)
+
+    def test_guard_covers_exactly_the_classifier_inputs(self):
+        # classifyJobFunction 只吃 title + summary（刻意不含 job_type，见其注释）→ 作废判据只看这两列。
+        import re
+        sql = self._schema()
+        body = sql[sql.index("jobs_guard_job_function()"):sql.index("jobs_job_function_guard_trg")]
+        guarded = set(re.findall(r"new\.(\w+)", body)) - {"job_function"}
+        self.assertEqual(guarded, {"title", "summary"})
+
+    def test_annotate_sets_job_function_with_summary(self):
+        # 三列由同一次 classify 调用产出；annotate 就地补 job_function。
+        import recruitment_classify
+        orig = recruitment_classify.classify
+        try:
+            recruitment_classify.classify = lambda items: [("校招", True, "研发")] * len(list(items))
+            jobs = [{"title": "后端研发工程师", "summary": "负责服务端…", "recruitment_category": None}]
+            recruitment_classify.annotate(jobs)
+            self.assertEqual(jobs[0]["job_function"], "研发")
+            self.assertEqual(jobs[0]["recruitment_category"], "校招")
+        finally:
+            recruitment_classify.classify = orig
+
+    def test_bridge_emits_the_function_field(self):
+        import pathlib
+        bridge = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "scripts", "classify-recruitment.js").read_text(encoding="utf-8")
+        self.assertIn("classifyJobFunction", bridge)
+        self.assertIn("function:", bridge)
