@@ -83,7 +83,8 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
 #     面试资格确认 / 报名统计 / 政策办法 / 陈旧归档，信噪比差 → 待找各省专属子栏目 URL 再接。
 #   · 云南：首页多为拟聘公示。 · 天津：同名聚合快讯无单独截止日，需拆子项。 · 辽宁：仅第三方人事考试网，无 gov.cn 源。
 
-PORTALS_BY_KEY: dict[str, Portal] = {p.key: p for p in PORTALS}
+# 含 geo-blocked 省，便于 --portal 单独测/在大陆 runner 上按 key 取；默认 run 仍只跑 PORTALS。
+PORTALS_BY_KEY: dict[str, Portal] = {p.key: p for p in (*PORTALS, *_GEO_BLOCKED_FROM_CI)}
 
 # URL 里自带的发布日期：北京 t20260914_xxx（8 位，前缀是 t，不是 _//）；退化到 /202609/ 目录段（月精度）。
 _URL_DATE_8 = re.compile(r"(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)")

@@ -24,7 +24,7 @@ from adapters.cn_portal_tls import make_transport  # noqa: E402
 
 from .classify import detect_audience, detect_employer_type
 from .deadline import extract_deadline, extract_published
-from .portals import PORTALS, PORTALS_BY_KEY, Portal, parse_list
+from .portals import PORTALS, PORTALS_BY_KEY, Portal, parse_list, _GEO_BLOCKED_FROM_CI
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -153,8 +153,14 @@ def harvest_portal(client: httpx.Client, sb, portal: Portal, dry_run: bool) -> d
     return metrics
 
 
-def run(portal_keys: list[str] | None, dry_run: bool) -> dict:
-    portals = [PORTALS_BY_KEY[k] for k in portal_keys] if portal_keys else list(PORTALS)
+def run(portal_keys: list[str] | None, dry_run: bool, include_geo_blocked: bool = False) -> dict:
+    if portal_keys:
+        portals = [PORTALS_BY_KEY[k] for k in portal_keys]
+    elif include_geo_blocked:
+        # 只有大陆 runner（如创始人 Mac 的 launchd）才带这个 —— 它连得上 GitHub US runner 挡掉的省。
+        portals = [*PORTALS, *_GEO_BLOCKED_FROM_CI]
+    else:
+        portals = list(PORTALS)
     sb = None if dry_run else db.get_supabase()
     started = _now_iso()
     per_portal = []
@@ -191,11 +197,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="公告抓取")
     ap.add_argument("--dry-run", action="store_true", help="只抓不写库，打印将入库的行")
     ap.add_argument("--portal", action="append", help="只跑指定 portal key，可多次")
+    ap.add_argument("--include-geo-blocked", action="store_true",
+                    help="额外跑 _GEO_BLOCKED_FROM_CI 那几个省（只有大陆 runner 连得上，如创始人 Mac 的 launchd）")
     ap.add_argument("--no-expire", action="store_true", help="跳过过期治理")
     args = ap.parse_args()
 
     db.load_environment()
-    result = run(args.portal, args.dry_run)
+    result = run(args.portal, args.dry_run, include_geo_blocked=args.include_geo_blocked)
 
     if args.dry_run:
         for m in result["per_portal"]:
