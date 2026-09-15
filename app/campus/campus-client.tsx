@@ -2,7 +2,7 @@
 
 // 校招专区客户端：公司卡 + 徽章 + 校招/实习切换 + 城市/学历/职能筛选 + 展开分组渲染 JobCard + 展示时探活。
 // 数据已由服务端按必投清单公司聚合好（app/campus/page.tsx → getCampusZone），本组件只做客户端交互层。
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Briefcase,
@@ -24,11 +24,9 @@ import {
 import { groupCampusJobs } from "@/lib/campus-zone";
 import { formatDateLabel } from "@/lib/relative-time";
 import {
-  campusRowMatches,
   countMatchingFacets,
   countUnlabeledInMatch,
   selectFacetIndexes,
-  selectionIsUnsatisfiable,
   type CampusFacet,
   type CampusFilterOptions,
 } from "@/lib/campus-facets";
@@ -256,55 +254,74 @@ export default function CampusClient({
     filters.city ? "城市" : null,
   ].filter(Boolean) as string[];
 
-  // 展开某家公司时按需取回该公司当前桶的完整岗位行（页面一条岗位记录都没下发，见 CampusFacet）。
-  // key = `pattern|mode`：校招与实习是两批岗，切模式必须重取（旧实现只按 pattern 存，
-  // 且把两桶 id 拼起来截前 200 → 大厂实习桶会被校招桶挤没，展开区空白）。
-  // 未取回前展开区显示加载态；失败则清掉请求标记，下次展开可重试。
-  const [fullJobs, setFullJobs] = useState<Map<string, any[]>>(new Map());
-  const fullJobsRequested = useRef<Set<string>>(new Set());
-  // 手风琴同时只可能展开一家（expandedPattern），所以这里只取当前那一家。
-  useEffect(() => {
-    const pattern = expandedPattern;
-    if (!pattern) return;
-    const key = `${pattern}|${mode}`;
-    if (fullJobsRequested.current.has(key)) return;
-    const card = cards.find((c) => c.pattern === pattern);
-    if (!card) return;
-    if ((mode === "campus" ? card.campusTotal : card.internTotal) === 0) return;
-    fullJobsRequested.current.add(key);
-    let cancelled = false;
-    (async () => {
+  // 展开某家公司时按需取该公司当前桶 + **当前筛选**下的完整岗位行，按页翻完全部（Phase B，2026-09-15）。
+  // key = `pattern|mode|filterKey`：模式、筛选任一变化都是另一批结果，各自独立累计分页。
+  // 服务端已按筛选 + 届别门筛好并回**精确 total**（职能/招聘类型已物化成列，数得起），这里只累计页、
+  // 按 total 判要不要「加载更多」——去掉了旧的「前 200」硬顶（那正是用户反馈「岗位展示不全」的根因）。
+  type DrawerPage = { jobs: any[]; total: number; loading: boolean; error: boolean };
+  const [drawer, setDrawer] = useState<Map<string, DrawerPage>>(new Map());
+  const drawerRequested = useRef<Set<string>>(new Set()); // 去重键 `key@offset`；失败时删除以便重试
+  const filterKey = useMemo(
+    () => JSON.stringify([filters.city, filters.education, filters.jobFunction, filters.gradClass]),
+    [filters],
+  );
+  const drawerFor = useCallback(
+    (pattern: string): DrawerPage | undefined => drawer.get(`${pattern}|${mode}|${filterKey}`),
+    [drawer, mode, filterKey],
+  );
+
+  const loadPage = useCallback(
+    async (pattern: string, offset: number) => {
+      const key = `${pattern}|${mode}|${filterKey}`;
+      const reqId = `${key}@${offset}`;
+      if (drawerRequested.current.has(reqId)) return;
+      drawerRequested.current.add(reqId);
+      setDrawer((prev) => {
+        const n = new Map(prev);
+        const cur = n.get(key) ?? { jobs: [], total: 0, loading: false, error: false };
+        n.set(key, { ...cur, loading: true, error: false });
+        return n;
+      });
+      const fail = () => {
+        drawerRequested.current.delete(reqId); // 失败可重试
+        setDrawer((prev) => {
+          const n = new Map(prev);
+          const cur = n.get(key) ?? { jobs: [], total: 0, loading: false, error: false };
+          n.set(key, { ...cur, loading: false, error: true });
+          return n;
+        });
+      };
       try {
         const resp = await fetch("/api/campus-zone/jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pattern, mode }),
+          body: JSON.stringify({ pattern, mode, offset, filters }),
         });
         const data = await resp.json().catch(() => null);
-        if (cancelled) return;
-        if (!data?.ok) {
-          fullJobsRequested.current.delete(key); // 失败清标记，收起再展开可重试
-          return;
-        }
-        setFullJobs((prev) => new Map(prev).set(key, data.jobs || []));
+        if (!data?.ok) return fail();
+        setDrawer((prev) => {
+          const n = new Map(prev);
+          const cur = n.get(key) ?? { jobs: [], total: 0, loading: false, error: false };
+          const jobs = offset === 0 ? data.jobs || [] : [...cur.jobs, ...(data.jobs || [])];
+          n.set(key, { jobs, total: data.total ?? jobs.length, loading: false, error: false });
+          return n;
+        });
       } catch {
-        if (!cancelled) fullJobsRequested.current.delete(key);
+        fail();
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [expandedPattern, mode, cards]);
+    },
+    [mode, filterKey, filters],
+  );
 
-  /** 展开区要渲染的完整行：取回后按当前筛选过一遍，口径与卡面计数一致
-   *  （`row.fn` 由接口随行返回，与分面里的职能标签同源同值）。 */
-  function expandedRows(pattern: string): any[] {
-    const rows = fullJobs.get(`${pattern}|${mode}`);
-    if (!rows) return [];
-    // 失效筛选值（切校招/实习后残留）下卡面计数是 0，展开也必须是 0，否则两处对不上。
-    if (selectionIsUnsatisfiable(selected)) return [];
-    return rows.filter((r: any) => campusRowMatches(r, filters));
-  }
+  // 展开 / 切模式 / 改筛选 → 取第 0 页（drawerRequested 去重，不会重复请求同一 key@0）。
+  useEffect(() => {
+    const pattern = expandedPattern;
+    if (!pattern) return;
+    const card = cards.find((c) => c.pattern === pattern);
+    if (!card) return;
+    if ((mode === "campus" ? card.campusTotal : card.internTotal) === 0) return;
+    loadPage(pattern, 0);
+  }, [expandedPattern, mode, filterKey, cards, loadPage]);
 
   // 展示时探活（②层，复刻 app/jobs/jobs-client.tsx）：对当前展开公司里可见的岗位批量探活，
   // 死的当场从渲染里隐藏。deadIds 全局共享（同一岗位 id 不会同时出现在两家公司下）。
@@ -313,7 +330,7 @@ export default function CampusClient({
   useEffect(() => {
     const visibleIds: string[] = [];
     if (expandedPattern) {
-      for (const j of expandedRows(expandedPattern)) {
+      for (const j of drawerFor(expandedPattern)?.jobs ?? []) {
         if (j.id) visibleIds.push(j.id);
       }
     }
@@ -346,7 +363,7 @@ export default function CampusClient({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expandedPattern, mode, fullJobs, filters]);
+  }, [expandedPattern, mode, drawer, filterKey]);
 
   // JobCard 要求的回调；本区岗位不预取 job_actions（专区场景无需个性化打分/回填 user_action），
   // 收藏/已投递/忽略仍会经 JobCard 内部走 /api/job-actions 真实写库，只是不需要在此处再镜像一份状态。
@@ -481,15 +498,14 @@ export default function CampusClient({
             const isExpanded = expandedPattern === card.pattern;
             const totalCount = mode === "campus" ? card.campusTotal : card.internTotal;
             const filteredCount = filteredCountByPattern.get(card.pattern) ?? 0;
-            // 卡面计数用聚合分面；展开区渲染用按需取回的完整行，两者过同一套筛选口径。
-            const fetched = fullJobs.get(`${card.pattern}|${mode}`);
-            const rowsLoaded = !isExpanded || !!fetched;
-            const visibleRows = isExpanded ? expandedRows(card.pattern) : [];
+            // 展开区：服务端已按当前筛选筛好并分页（Phase B），这里按页累计、按 total 判「加载更多」。
+            const page = isExpanded ? drawerFor(card.pattern) : undefined;
+            const loadedCount = page?.jobs.length ?? 0;
+            const drawerTotal = page?.total ?? filteredCount; // 精确 total（服务端）；未取回前用分面估算兜底
+            const initialLoading = isExpanded && (!page || (page.loading && loadedCount === 0));
+            const visibleRows = page?.jobs ?? [];
             const groups = isExpanded ? groupCampusJobs(visibleRows) : [];
-            // 大厂一个桶可能上千个岗，展开区最多取回 200 个（见 /api/campus-zone/jobs）。
-            // 「取回来的比这个桶的总数少」= 被截断了，照实说一句，不让用户以为「筛选后只剩这些」。
-            // 总数用卡面那个（来自聚合分面，权威），不让接口再去数一遍。
-            const cappedBy = fetched && fetched.length < totalCount ? fetched.length : 0;
+            const hasMore = !!page && page.jobs.length < page.total;
             const modeLabel = mode === "campus" ? "校招" : "实习";
 
             return (
@@ -605,8 +621,10 @@ export default function CampusClient({
 
                 {isExpanded && (
                   <div className="sm:col-span-2 lg:col-span-3">
-                    {!rowsLoaded ? (
-                      <EmptyPanel title="正在加载岗位…" description={`共 ${filteredCount} 个，稍等一下。`} />
+                    {initialLoading ? (
+                      <EmptyPanel title="正在加载岗位…" description={`共 ${drawerTotal} 个，稍等一下。`} />
+                    ) : page?.error && loadedCount === 0 ? (
+                      <EmptyPanel title="加载失败" description="收起再展开可重试。" />
                     ) : groups.length === 0 ? (
                       <EmptyPanel title="当前筛选下没有匹配岗位" description="换一个城市、学历、职能或届别试试，或清空筛选。" />
                     ) : (
@@ -639,10 +657,22 @@ export default function CampusClient({
                         })}
                       </div>
                     )}
-                    {cappedBy > 0 && (
-                      <p className="mt-3 text-xs text-[#8a8275] dark:text-[#9a9184]">
-                        该公司{modeLabel}岗位较多，这里按临近截止优先展示前 {cappedBy} 个
-                      </p>
+                    {/* 加载更多：按页翻完当前筛选下的**全部**岗位（去掉了旧的「前 200」硬顶）。 */}
+                    {hasMore && (
+                      <div className="mt-4 flex justify-center">
+                        <button
+                          type="button"
+                          disabled={page?.loading}
+                          onClick={() => loadPage(card.pattern, loadedCount)}
+                          className="inline-flex items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-4 py-2 text-sm font-medium ink-2 transition hover:bg-white disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
+                        >
+                          {page?.loading ? "加载中…" : `加载更多（还有 ${Math.max(0, drawerTotal - loadedCount)} 个）`}
+                        </button>
+                      </div>
+                    )}
+                    {!hasMore && loadedCount > 0 && drawerTotal > loadedCount && (
+                      // total 与已加载对不上又没有下一页（极少：翻页间隙有岗位下架/被 deadIds 隐藏）——照实说，不假装完整。
+                      <p className="mt-3 text-xs ink-3">已加载 {loadedCount} 个（共约 {drawerTotal} 个）</p>
                     )}
                     {deadIds.size > 0 && (
                       <p className="mt-3 text-xs ink-3">
