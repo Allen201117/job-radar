@@ -153,5 +153,55 @@ class TestDetailText(unittest.TestCase):
         self.assertEqual(detail_text(jx, "<html><body>无 content 块</body></html>"), "")
 
 
+class TestCdataList(unittest.TestCase):
+    def test_cdata_wrapped_list_is_unwrapped(self):
+        # 江苏：<li><a> 藏在 <record><![CDATA[…]]> 里，selectolax 不建 DOM → 必须先解包。
+        js = PORTALS_BY_KEY["js_hrss"]
+        html = (
+            "<html><body><record><![CDATA["
+            '<li><a href="/art/2026/9/15/art_78506_111.html" target="_blank">'
+            '<span class="list_title">南京大学2026年公开招聘工作人员公告</span><i>2026-09-15</i></a></li>'
+            '<li><a href="/art/2026/9/10/art_78506_222.html" target="_blank">'
+            '<span class="list_title">江苏省某单位2026年拟聘用人员名单公示</span><i>2026-09-10</i></a></li>'
+            "]]></record></body></html>"
+        )
+        items = parse_list(js, js.list_urls[0], html)
+        # 招聘公告保留；同栏目混入的「拟聘用人员名单公示」被 classify EXCLUDE 剔除
+        self.assertEqual([it.title for it in items], ["南京大学2026年公开招聘工作人员公告"])
+
+
+class TestJsonFragmentList(unittest.TestCase):
+    def test_parses_ajax_fragment_and_filters(self):
+        # 浙江：GET AJAX 返回 {"data":{"html":"<li><a>…片段"}}。
+        zj = PORTALS_BY_KEY["zj_rlsbt"]
+        frag = (
+            '<li><a href="/col/col1229743683/art/2026/art_%s.html" '
+            'title="浙江省交通运输科学研究院公开招聘人员公告">'
+            "浙江省交通运输科学研究院公开招聘人员公告</a></li>"
+            '<li><a href="/col/col1229743683/art/2026/art_%s.html" '
+            'title="浙江省某单位2026年拟聘用人员公示">浙江省某单位2026年拟聘用人员公示</a></li>'
+        ) % ("a" * 32, "b" * 32)
+        payload = json.dumps({"success": True, "data": {"html": frag}}, ensure_ascii=False)
+        items = parse_list(zj, zj.list_urls[0], payload)
+        self.assertEqual([it.title for it in items], ["浙江省交通运输科学研究院公开招聘人员公告"])
+
+    def test_missing_data_html_raises(self):
+        # 接口参数失效（无 data.html）→ 抛错让 harvest 记 list_errors，不静默 0。
+        zj = PORTALS_BY_KEY["zj_rlsbt"]
+        with self.assertRaises(ValueError):
+            parse_list(zj, zj.list_urls[0], json.dumps({"success": False}))
+
+
+class TestAnchorTitleFallback(unittest.TestCase):
+    def test_falls_back_to_title_attr(self):
+        # 天津那类：<a> 可见文字可能为空，标题只在 title 属性里。
+        tj = PORTALS_BY_KEY["tj_rsj"]
+        html = ('<ul><li><a href="./202609/t20260911_7372274.html" '
+                'title="天津市部分事业单位公开招聘信息"></a></li></ul>')
+        items = parse_list(tj, tj.list_urls[0], html)
+        self.assertEqual([it.title for it in items], ["天津市部分事业单位公开招聘信息"])
+        self.assertEqual(items[0].published_at, date(2026, 9, 11))  # URL t20260911_ 自带发布日
+
+
 if __name__ == "__main__":
     unittest.main()

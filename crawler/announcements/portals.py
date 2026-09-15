@@ -33,8 +33,9 @@ class Portal:
 # ⚠️ 每省 detail URL 格式不同，detail_pat 必须逐省配，别假设统一格式。
 # ⚠️ 归属门只放行 domains 里的官方 gov 域名；host + detail_pat + 标题 INCLUDE/EXCLUDE 三重过滤。
 # ⚠️ 综合栏目（四川/河南/广西）混着非招聘内容，靠 classify 的标题过滤兜底（同 CLAUDE.md「后置过滤」）。
-# 暂缺：浙江/河北（JS 渲染，需浏览器道，下一期）；辽宁（仅第三方人事考试网，无 gov.cn 源，跳过）。
-# 江西已接（jx_rst，list_format="script_json" 从 <script>var listData 抽 JSON，无需浏览器）。
+# 暂缺：河北（整站 Vue SPA，需浏览器道或找 AJAX 接口，下一期）；辽宁/青海（eportal 异步，未定位数据源，勘察中）。
+# 已接的三种非静态形态（均无需浏览器）：江西 script_json（内嵌 <script>var listData JSON）、
+#   浙江 json_fragment（非公开 GET 接口返 data.html 片段）、江苏 html+CDATA 解包、天津 html。
 def _p(rx: str) -> re.Pattern:
     return re.compile(rx)
 
@@ -99,6 +100,29 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
            ("https://rst.jiangxi.gov.cn/jxsrlzyhshbzt/col/col85519/index.html",),
            ("rst.jiangxi.gov.cn",),
            _p(r"content_\d+\.html"), list_format="script_json"),
+    # ── 第三批（2026-09-15 recon live 验证）──
+    # 天津：列表 static <a href>；⚠️ 每条公告标题几乎都叫「天津市部分事业单位公开招聘信息」，
+    #   去重靠 source_url（本管道天然如此），别指望靠标题区分。detail 是 .html 不是 .shtml。
+    Portal("tj_rsj", "天津市人力资源和社会保障局·事业单位公开招聘", "天津市",
+           ("https://hrss.tj.gov.cn/ztzl/ztzl1/sydwgkzp/",), ("hrss.tj.gov.cn",),
+           _p(r"t\d{8}_\d+\.html")),
+    # 江苏：列表 <li><a> 藏在 <record><![CDATA[…]]> 里（selectolax 不建 DOM）→ _unwrap_cdata 解包后走 html 路径。
+    #   ⚠️ 该栏目混「招聘公告 + 拟聘用名单公示」，后者靠 classify EXCLUDE（公示/拟聘/名单）剔除，别放宽。
+    Portal("js_hrss", "江苏省人力资源和社会保障厅·省属事业单位招聘", "江苏省",
+           ("https://jshrss.jiangsu.gov.cn/col/col78506/index.html",), ("jshrss.jiangsu.gov.cn",),
+           _p(r"art_\d+_\d+\.html")),
+    # 浙江：⚠️ 唯一走「非公开 GET 接口」的省（list_format="json_fragment"）——列表页是空壳，数据由
+    #   /api-gateway/... 这个 GET 返 {"data":{"html":"<li><a>片段"}}。curl 可得、无需浏览器，但更脆：
+    #   ① query 参数（webId/tplSetId/tagId/pageId）是页面 JS 里硬编码的常量，官方换模板即失效
+    #      （失效时 data.html 缺失 → parse_list 抛错记 list_errors，不静默）；② 只返最新 10 条、无法翻页回填历史。
+    # tagId 的值「当前栏目列表」必须**预先 percent-encode**：它既是 GET query，又被复用为详情抓取的
+    # Referer 请求头，而 HTTP 头只能是 latin-1，原文中文会 UnicodeEncodeError（实测 httpx 不会二次编码 %E5…）。
+    Portal("zj_rlsbt", "浙江省人力资源和社会保障厅·事业单位招聘公告", "浙江省",
+           ("https://rlsbt.zj.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit"
+            "?parseType=bulidstatic&webId=2758&tplSetId=kUBgoFENJiaYxr31jYEph&pageType=column"
+            "&tagId=%E5%BD%93%E5%89%8D%E6%A0%8F%E7%9B%AE%E5%88%97%E8%A1%A8&editType=null&pageId=1229743683",),
+           ("rlsbt.zj.gov.cn",),
+           _p(r"art_[0-9a-f]{32}\.html"), list_format="json_fragment"),
     # 下面几个偏窄（厅本级 / 更新慢），靠标题过滤兜底，产出偏少正常（研究已标注）。
     Portal("henan_hrss", "河南省人力资源和社会保障厅·招考录用", "河南省",
            ("https://hrss.henan.gov.cn/zwgk/xxgk/yfygkdqtxx/zkly/",), ("hrss.henan.gov.cn",),
@@ -112,11 +136,8 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
 )
 
 # ⏸️ 仍暂缺（2026-09-15 两批 research + dry-run 逐个 live 试过）——下一个 session 从这里接：
-#   【JS 渲染，需浏览器道或找其 AJAX 接口】江苏(col78506 列表 JS，detail 静态需 Referer)、浙江
-#     (已找到内部接口 /api-gateway/jpaas-publish-server/... pageId=1229743683，但非公开约定别硬依赖)、
-#     河北(整站 Vue SPA)、辽宁/青海(eportal 组件异步渲染，未定位数据源)、
-#     天津(sydwgkzp 列表 JS，detail 静态)。
-#     （江西已接：list_format="script_json"，列表数据在 <script>var listData JSON 里，无需浏览器。）
+#   【真需浏览器道或未定位数据源】河北(整站 Vue SPA)、辽宁/青海(eportal 组件异步渲染，勘察中)。
+#     （江苏/天津/浙江已接——见 _GEO_BLOCKED_FROM_CI 第三批；江西 script_json。四者都无需浏览器。）
 #   【WAF 拦列表页】四川(rst.sc.gov.cn 列表 403)、甘肃(rst.gansu.gov.cn 全站 412)——detail 能开、列表抓不了。
 #   【只有综合栏目/信噪比差，本轮 dry-run 丢掉】云南(NewsLsit classid=602 过滤后 0)、贵州(残留是部委通知/
 #     方案非公告)、黑龙江/宁夏/西藏(只有「通知公告」综合栏目，无事业单位招聘专栏)。
@@ -295,6 +316,30 @@ def _iter_script_json_items(html: str):
         yield title, href or "", pub
 
 
+_CDATA = re.compile(r"<!\[CDATA\[(.*?)\]\]>", re.S)
+
+
+def _anchors_from(portal: Portal, list_url: str, html: str,
+                  seen: set[str], out: list[ListItem]) -> None:
+    tree = HTMLParser(html)
+    for a in tree.css("a[href]"):
+        title = a.text() or a.attributes.get("title") or ""  # 天津那类标题只在 title 属性里
+        _accept(portal, list_url, title, a.attributes.get("href") or "", seen, out)
+
+
+def _parse_anchors(portal: Portal, list_url: str, html: str,
+                   seen: set[str], out: list[ListItem]) -> None:
+    """从一段 HTML 按 <a href> 收候选（seen 去重）。
+
+    先解析主文档（北京/广东/天津…的 <a> 直接在 DOM 里）；再把每个 <![CDATA[…]]> 块**单独当片段**解析——
+    江苏把 <li><a> 塞进 <record><![CDATA[…]]>，selectolax 既不解析 CDATA 内容、把它并进整页又会丢锚点，
+    只有把每块隔离出来单独解析才拿得到（实测同一页整页 0 / 逐块 60）。非 CDATA 页此循环是空操作。
+    """
+    _anchors_from(portal, list_url, html, seen, out)
+    for block in _CDATA.findall(html):
+        _anchors_from(portal, list_url, block, seen, out)
+
+
 def parse_list(portal: Portal, list_url: str, html: str) -> list[ListItem]:
     """从列表页 HTML 抽出「可报名招聘公告」候选（已过归属门 + 内容过滤）。"""
     seen: set[str] = set()
@@ -302,8 +347,17 @@ def parse_list(portal: Portal, list_url: str, html: str) -> list[ListItem]:
     if portal.list_format == "script_json":
         for title, href, pub in _iter_script_json_items(html):
             _accept(portal, list_url, title, href, seen, out, published_override=pub)
-    else:
-        tree = HTMLParser(html)
-        for a in tree.css("a[href]"):
-            _accept(portal, list_url, a.text() or "", a.attributes.get("href") or "", seen, out)
+    elif portal.list_format == "json_fragment":
+        # 浙江：列表由普通 GET AJAX 返回 {"data":{"html":"<li><a>…片段"}}，list_url 即该接口 URL。
+        # data.html 缺失（接口参数失效）→ 抛错让 harvest 记 list_errors，不静默 0（非公开接口尤其要出声）。
+        try:
+            data = json.loads(html)
+        except ValueError as exc:
+            raise ValueError(f"json_fragment 列表：响应不是 JSON（{type(exc).__name__}）") from exc
+        frag = (data.get("data") or {}).get("html") if isinstance(data, dict) else None
+        if not frag:
+            raise ValueError("json_fragment 列表：data.html 缺失（接口参数可能失效）")
+        _parse_anchors(portal, list_url, frag, seen, out)
+    else:  # html：整页 <a href>（含 CDATA 解包）
+        _parse_anchors(portal, list_url, html, seen, out)
     return out
