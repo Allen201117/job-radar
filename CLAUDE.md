@@ -343,7 +343,7 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
 
 - **归属靠官方 gov 域名白名单天然保证**（`portals.PORTALS` 逐省登记，host + 逐省 `detail_pat` + 标题 INCLUDE/EXCLUDE 三重过滤）→ 不会张冠李戴（企业爬取最头疼、这里免费解决的）。只抓官方源：**不碰公众号**（内容与官网栏目重复且列表无法程序化枚举）、**不碰第三方**（中公/华图，红线）。
 - **时效**：报名截止日抽成结构化 `deadline` 列 → 过期自动下架；抽不到走「发布日/首见日 + TTL(默认 45 天)」兜底 + RLS `deadline >= current_date` 双保险。**过期公告比死岗更伤**，别只靠人工。
-- **⚠️ 加省准入判据是 CI 的 `crawl_runs`/harvest `list_errors`，不是本机 dry-run**：很多省 gov 服务器 **geo-block GitHub US runner**（HTTPStatusError/ConnectError，`make_transport` 已 retry=2 仍失败，非 TLS），而本机走中国路由全通、**永远测不出来**（同「本机绿≠CI绿」但这次是 geo 可达性不是 TLS）。当前 CI 可达 active 4 省（北京/广东/湖北/福建）；山东/湖南/安徽/陕西/山西已 live 验证且 detail_pat 配好、但 CI 连不上 → 存 `portals._GEO_BLOCKED_FROM_CI`，**有中国/香港自托管 runner 后搬回 PORTALS 即生效**（[[job-radar-backend-review-2026-09-03]] 待定成本项）。所以逐省扩量的真瓶颈是 runner 地理位置，不是找 URL。
+- **⚠️ geo-block + 双 runner（2026-09-15，16 省 live）**：很多省 gov 服务器拒连境外 IP（GitHub US runner 与香港服务器都连不上，`make_transport` retry=2 仍失败，非 TLS 是地理可达性）。解法 = **创始人 Mac 的 launchd**（大陆路由，每日 12:30，`scripts/run-announcement-crawl.sh` → `harvest --include-geo-blocked`）跑**全部省**；GitHub `announcement-crawl.yml` 只跑境外可达 4 省（北京/广东/湖北/福建）作常开兜底，两边 upsert 幂等。**加省准入两条判据**：`portals.PORTALS`（GitHub 跑）看 CI `list_errors`；`portals._GEO_BLOCKED_FROM_CI`（Mac 跑）看**本机 dry-run**（CI 够不着它们）。🔴 **plist 是 wrapper 的绝对路径，仓库一移动定时任务就静默失效**（2026-09-15 仓库移到 `diy/` 断过一次，改 plist 路径 + reload 修好）。彻底不依赖 Mac 开机 = 大陆 SCF/轻量服务器/自托管 runner，待创始人定（[[job-radar-backend-review-2026-09-03]]）。加省清单与 detail_pat 逐省细节在 `portals.py` 注释，不写这里。
 - **综合「公示公告」栏目不接**（四川/河南/广西/重庆/贵州）：没有干净的「招聘公告」子栏目，过滤后多是面试资格确认/报名统计/政策办法/陈旧归档，信噪比差，服从「精>量」；待找到各省专属子栏目 URL 再接。JS 渲染省（江苏/浙江/河北/江西）待浏览器道。
 
 ## 数据质量优先级（最高）
