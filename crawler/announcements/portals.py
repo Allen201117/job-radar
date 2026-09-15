@@ -35,6 +35,10 @@ def _p(rx: str) -> re.Pattern:
     return re.compile(rx)
 
 
+# ⚠️⚠️ 只放**从 GitHub US runner 实测可达**的省。别拿本机 dry-run 当准入——本机走中国路由能连，
+#   runner 在美国，很多省 gov 服务器对海外 IP geo-block / 拒连（make_transport 已 retry=2 仍失败，非 TLS）。
+#   2026-09-15 连跑两轮 CI 均如此：可达 北京/广东/湖北/福建；不可达 山东/湖南/安徽/陕西/山西（见下方 🌏 块）。
+#   ⇒ 加省前必须回读 crawl_runs 的 list_errors，CI 真跑通才 active（CLAUDE.md「接完源必须回读线上 crawl_runs」）。
 PORTALS: tuple[Portal, ...] = (
     Portal("bj_rsj", "北京市人力资源和社会保障局·公开招聘", "北京市",
            ("https://rsj.beijing.gov.cn/xxgk/gkzp/",), ("rsj.beijing.gov.cn",),
@@ -42,30 +46,27 @@ PORTALS: tuple[Portal, ...] = (
     Portal("gd_hrss", "广东省人力资源和社会保障厅·事业单位招聘", "广东省",
            ("https://hrss.gd.gov.cn/zwgk/sydwzp/zpgg/index.html",), ("hrss.gd.gov.cn",),
            _p(r"post_\d+\.html")),
-    # ⏸️ 暂缺（下一期，2026-09-15 逐个 live 试过）：
-    #   · 上海：研究给的列表 URL 404，待找对入口。
-    #   · 江苏：col 页 JS 渲染，raw HTML 无 art_ 链接 → 需浏览器道。
-    #   · 四川/河南/广西/重庆/贵州：都是「综合公示公告/考试」栏目、没有干净的「招聘公告」子栏目，
-    #     过滤后剩的多是 面试资格确认 / 报名统计 / 政策办法 / 陈旧归档，信噪比差 → 精度红线下先不接，
-    #     待找到各省专属「事业单位招聘公告」子栏目 URL 再接。
-    #   · 云南：首页多为拟聘公示。
-    #   · 天津：每条都是同名「天津市部分事业单位公开招聘信息」聚合快讯、无单独截止日，需拆子项。
-    Portal("sd_hrss", "山东省人力资源和社会保障厅·事业单位公开招聘", "山东省",
-           ("http://hrss.shandong.gov.cn/channels/ch00232/",), ("hrss.shandong.gov.cn",),
-           _p(r"articles/ch\d+/\d+/[0-9a-f-]+\.shtml")),
     Portal("hb_rst", "湖北省人力资源和社会保障厅·省直事业单位招聘公告", "湖北省",
            ("https://rst.hubei.gov.cn/bmdt/ztzl/ywzl/hbsszsydwgkzp/zpgg/",), ("rst.hubei.gov.cn",),
            _p(r"t\d{8}_\d+\.shtml")),
-    Portal("hn_rst", "湖南省人力资源和社会保障厅·事业单位招聘", "湖南省",
-           ("https://rst.hunan.gov.cn/rst/xxgk/zpzl/sydwzp/index.html",), ("rst.hunan.gov.cn",),
-           _p(r"t\d{8}_\d+\.html")),
     Portal("fj_rst", "福建省人力资源和社会保障厅·事业单位人才招聘", "福建省",
            ("https://rst.fujian.gov.cn/zw/ztzl/zxzt/sydwrczp/",), ("rst.fujian.gov.cn",),
            _p(r"t\d{8}_\d+\.htm")),
+)
+
+# 🌏 已逐省 live 验证（本机中国路由）、栏目干净、detail_pat 已配好，但 **CI US runner 连不上** →
+#   一旦有中国/香港自托管 runner（[[job-radar-backend-review]] 待定成本项），把下面几行搬回上面 PORTALS 即生效。
+#   verified 2026-09-15：山东(整档 462 → cap 60) / 湖南 / 安徽 / 陕西(详情走 www.shaanxi.gov.cn) / 山西。
+_GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
+    Portal("sd_hrss", "山东省人力资源和社会保障厅·事业单位公开招聘", "山东省",
+           ("http://hrss.shandong.gov.cn/channels/ch00232/",), ("hrss.shandong.gov.cn",),
+           _p(r"articles/ch\d+/\d+/[0-9a-f-]+\.shtml")),
+    Portal("hn_rst", "湖南省人力资源和社会保障厅·事业单位招聘", "湖南省",
+           ("https://rst.hunan.gov.cn/rst/xxgk/zpzl/sydwzp/index.html",), ("rst.hunan.gov.cn",),
+           _p(r"t\d{8}_\d+\.html")),
     Portal("ah_hrss", "安徽省人力资源和社会保障厅·省直事业单位公开招聘", "安徽省",
            ("https://hrss.ah.gov.cn/zxzx/ztzl/ahssydwgkzp/index.html",), ("hrss.ah.gov.cn",),
            _p(r"ahssydwgkzp/\d+\.html")),
-    # 陕西：列表在 rst.shaanxi.gov.cn，详情由省政府门户 www.shaanxi.gov.cn 代发 → 两个域名都要白名单。
     Portal("sn_rst", "陕西省人力资源和社会保障厅·事业单位公开招聘", "陕西省",
            ("https://rst.shaanxi.gov.cn/sy/ztzl/rdzt/zkzl/sxssydwgkzp_22656/",),
            ("rst.shaanxi.gov.cn", "www.shaanxi.gov.cn"),
@@ -74,6 +75,13 @@ PORTALS: tuple[Portal, ...] = (
            ("https://rst.shanxi.gov.cn/ztzl/zpxx/",), ("rst.shanxi.gov.cn",),
            _p(r"t\d{8}_\d+\.shtml")),
 )
+
+# ⏸️ 其它暂缺（2026-09-15 逐个 live 试过，非 geo 问题）：
+#   · 上海：研究给的列表 URL 404，待找对入口。
+#   · 江苏/浙江/河北/江西：col 页 JS 渲染，raw HTML 无公告链接 → 需浏览器道。
+#   · 四川/河南/广西/重庆/贵州：综合「公示公告/考试」栏目、无干净「招聘公告」子栏目，过滤后多是
+#     面试资格确认 / 报名统计 / 政策办法 / 陈旧归档，信噪比差 → 待找各省专属子栏目 URL 再接。
+#   · 云南：首页多为拟聘公示。 · 天津：同名聚合快讯无单独截止日，需拆子项。 · 辽宁：仅第三方人事考试网，无 gov.cn 源。
 
 PORTALS_BY_KEY: dict[str, Portal] = {p.key: p for p in PORTALS}
 
