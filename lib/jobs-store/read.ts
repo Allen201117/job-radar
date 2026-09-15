@@ -7,7 +7,12 @@ import { appendJobScopeWhere } from "@/lib/job-scope";
 import type { UserPreferences } from "@/lib/types";
 import { ilikeMatcher } from "@/lib/ilike-matcher";
 import { campusAdmission, compareCampusJobs } from "@/lib/campus-zone";
-import { isCurrentSeasonGradClass } from "@/lib/grad-class";
+import { isCurrentSeasonGradClass, currentGradClass } from "@/lib/grad-class";
+import {
+  aggregateCampusFreshStats,
+  type CampusStatRow,
+  type CampusFreshStat,
+} from "@/lib/campus-stats";
 import { classifyJobFunction } from "@/lib/china-keyword-expansion";
 import { mustApplyPatterns, mustApplyUnion, type MustApplyCompany } from "@/lib/must-apply-list";
 import { unstable_cache } from "next/cache";
@@ -830,6 +835,51 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
   } finally {
     campusZoneInFlight.delete(cacheKey);
   }
+}
+
+export type CampusFreshStats = {
+  byPattern: Map<string, CampusFreshStat>;
+  fetchedAtMs: number;
+};
+
+/**
+ * 校招看板的「计数 + 新鲜度」轻查询：**只做分组聚合、不拉正文**，永远现算、不进 unstable_cache。
+ *
+ * 为什么与 getCampusZone 分开走（2026-09-15）：整块看板（分面/时间线/计数）被打包进一个
+ * unstable_cache 快照，这块重活偶发跑不完或报错（曾 500，Digest 721878106）时，Next 会
+ * **永远服务旧快照且不报错** → 快照里的计数与 last_seen 一起冻住 → 每张卡算出「距今>72h」
+ * → 全部「数据待更新」（实测冻 3 天，库里数据其实当天还在更新）。计数和 last_seen 都是轻字段、
+ * 分组后只剩几百行、走索引，独立现算既便宜又不受重快照成败影响。分面/时间线继续走缓存
+ * （滞后≤10min 用户无感）。彻底解法是物化 job_function（见重构项目）。
+ *
+ * 口径与卡面一致：只数库里 recruitment_category 为「校招」/「实习」的 active 岗（卡面就只展示这两桶），
+ * 并同步 lib/campus-season.appendCurrentSeasonWhere 的往届门（明确标了更早届别的岗不计入）。
+ * 与 getCampusZone 相比忽略的仅是全库 36 行「列为 NULL 需现算分类」的岗，量级可忽略、由重构项目彻底对齐。
+ */
+export async function getCampusFreshStats(
+  list: Array<{ name: string; pattern: string }>,
+): Promise<CampusFreshStats> {
+  const names = await resolveActiveCompanyNames(list.map((c) => c.pattern));
+  let rows: CampusStatRow[] = [];
+  if (names.length) {
+    rows = await jobsQuery<CampusStatRow>(
+      `
+      select
+        j.company,
+        count(*) filter (where j.recruitment_category = '校招') as campus_total,
+        count(*) filter (where j.recruitment_category = '实习') as intern_total,
+        max(j.last_seen_at) as last_seen
+      from jobs j
+      where j.status = 'active'
+        and j.company = any($1::text[])
+        and ${CAMPUS_PREFILTER_SQL}
+        and not (j.recruitment_category in ('校招','实习') and j.grad_class is not null and j.grad_class < $2)
+      group by j.company
+      `,
+      [names, currentGradClass()],
+    );
+  }
+  return { byPattern: aggregateCampusFreshStats(rows, list), fetchedAtMs: Date.now() };
 }
 
 /**
