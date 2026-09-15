@@ -47,8 +47,9 @@ def _client() -> httpx.Client:
     )
 
 
-def _fetch(client: httpx.Client, url: str) -> str:
-    r = client.get(url)
+def _fetch(client: httpx.Client, url: str, referer: str | None = None) -> str:
+    # 有的省 detail 页要 Referer 才给（江苏无 Referer 返 403）；带上无害，统一给 detail 传列表页做 Referer。
+    r = client.get(url, headers={"Referer": referer} if referer else None)
     r.raise_for_status()
     return r.content.decode(r.encoding or "utf-8", errors="replace")
 
@@ -108,9 +109,9 @@ def harvest_portal(client: httpx.Client, sb, portal: Portal, dry_run: bool) -> d
                 ).eq("source_url", item.url).execute()
             touched += 1
             continue
-        # 新公告 → 抽详情
+        # 新公告 → 抽详情（带列表页做 Referer，绕过江苏那类 detail 反爬）
         try:
-            dhtml = _fetch(client, item.url)
+            dhtml = _fetch(client, item.url, referer=portal.list_urls[0])
         except Exception as exc:  # noqa: BLE001
             detail_errors += 1
             sys.stderr.write(f"[announce] {portal.key} 详情失败 {item.url}: {type(exc).__name__}\n")

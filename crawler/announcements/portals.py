@@ -54,9 +54,11 @@ PORTALS: tuple[Portal, ...] = (
            _p(r"t\d{8}_\d+\.htm")),
 )
 
-# 🌏 已逐省 live 验证（本机中国路由）、栏目干净、detail_pat 已配好，但 **CI US runner 连不上** →
-#   一旦有中国/香港自托管 runner（[[job-radar-backend-review]] 待定成本项），把下面几行搬回上面 PORTALS 即生效。
-#   verified 2026-09-15：山东(整档 462 → cap 60) / 湖南 / 安徽 / 陕西(详情走 www.shaanxi.gov.cn) / 山西。
+# 🌏 大陆 runner 才跑的省（--include-geo-blocked 才带；创始人 Mac 的 launchd 每天跑）。两类：
+#   ① CI US runner geo-block、本机中国路由能连（山东/湖南/安徽/陕西/山西，2026-09-15 两轮 CI 实证）；
+#   ② 第二批新增、没测过 CI 可达性（默认丢这里让 Mac 跑，够用；将来要上 GitHub baseline 再逐个测 CI）。
+#   有中国/香港自托管 runner 后可把稳定的搬回上面 PORTALS（[[job-radar-backend-review]] 待定成本项）。
+#   ⚠️ 综合/公示-heavy 的省（贵州/云南/新疆/广西/河南）靠标题 INCLUDE/EXCLUDE 过滤兜底，产出偏少是正常。
 _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
     Portal("sd_hrss", "山东省人力资源和社会保障厅·事业单位公开招聘", "山东省",
            ("http://hrss.shandong.gov.cn/channels/ch00232/",), ("hrss.shandong.gov.cn",),
@@ -74,14 +76,39 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
     Portal("sx_rst", "山西省人力资源和社会保障厅·事业单位公开招聘", "山西省",
            ("https://rst.shanxi.gov.cn/ztzl/zpxx/",), ("rst.shanxi.gov.cn",),
            _p(r"t\d{8}_\d+\.shtml")),
+    # ── 第二批（2026-09-15 research live 验证，static 干净子栏目）──
+    Portal("sh_rsj", "上海市人力资源和社会保障局·事业单位招聘公告", "上海市",
+           ("https://rsj.sh.gov.cn/tzpgg_17408/index.html",), ("rsj.sh.gov.cn",),
+           _p(r"t\d+_\d+\.html")),
+    Portal("jl_hrss", "吉林省人力资源和社会保障厅·省直事业单位公开招聘", "吉林省",
+           ("https://hrss.jl.gov.cn/rsrc/sydwrsgl/gkzp/",), ("hrss.jl.gov.cn",),
+           _p(r"t\d{8}_\d+\.html")),
+    Portal("nmg_rst", "内蒙古人力资源和社会保障厅·省属事业单位招聘", "内蒙古自治区",
+           ("https://rst.nmg.gov.cn/zhuantizhuanlan/ssdwzp/",), ("rst.nmg.gov.cn",),
+           _p(r"t\d{8}_\d+\.html")),
+    Portal("cq_rlsbj", "重庆市人力资源和社会保障局·事业单位公开招聘2026", "重庆市",
+           ("https://rlsbj.cq.gov.cn/zwxx_182/sydw/sydwgkzp2026/",), ("rlsbj.cq.gov.cn",),
+           _p(r"t\d{8}_\d+\.html")),
+    # 下面几个偏窄（厅本级 / 更新慢），靠标题过滤兜底，产出偏少正常（研究已标注）。
+    Portal("henan_hrss", "河南省人力资源和社会保障厅·招考录用", "河南省",
+           ("https://hrss.henan.gov.cn/zwgk/xxgk/yfygkdqtxx/zkly/",), ("hrss.henan.gov.cn",),
+           _p(r"/\d{4}/\d{2}-\d{2}/\d+\.html")),
+    Portal("xj_rst", "新疆维吾尔自治区人力资源和社会保障厅·事业单位公开招聘", "新疆维吾尔自治区",
+           ("https://rst.xinjiang.gov.cn/xjrst/c112746/list.shtml",), ("rst.xinjiang.gov.cn",),
+           _p(r"c112746/\d{6}/[0-9a-f]{32}\.shtml")),
+    Portal("gx_rst", "广西人力资源和社会保障厅·考录招聘", "广西壮族自治区",
+           ("http://rst.gxzf.gov.cn/zwgk/xxgk/rsxx/xxgkklzp/",), ("rst.gxzf.gov.cn",),
+           _p(r"/t\d+\.shtml")),
 )
 
-# ⏸️ 其它暂缺（2026-09-15 逐个 live 试过，非 geo 问题）：
-#   · 上海：研究给的列表 URL 404，待找对入口。
-#   · 江苏/浙江/河北/江西：col 页 JS 渲染，raw HTML 无公告链接 → 需浏览器道。
-#   · 四川/河南/广西/重庆/贵州：综合「公示公告/考试」栏目、无干净「招聘公告」子栏目，过滤后多是
-#     面试资格确认 / 报名统计 / 政策办法 / 陈旧归档，信噪比差 → 待找各省专属子栏目 URL 再接。
-#   · 云南：首页多为拟聘公示。 · 天津：同名聚合快讯无单独截止日，需拆子项。 · 辽宁：仅第三方人事考试网，无 gov.cn 源。
+# ⏸️ 仍暂缺（2026-09-15 两批 research + dry-run 逐个 live 试过）——下一个 session 从这里接：
+#   【JS 渲染，需浏览器道或找其 AJAX 接口】江苏(col78506 列表 JS，detail 静态需 Referer)、浙江
+#     (已找到内部接口 /api-gateway/jpaas-publish-server/... pageId=1229743683，但非公开约定别硬依赖)、
+#     河北(整站 Vue SPA)、江西(列表在 <script>var listData JSON 里，写 JSON 解析即可接，最省)、
+#     辽宁/青海(eportal 组件异步渲染，未定位数据源)、天津(sydwgkzp 列表 JS，detail 静态)。
+#   【WAF 拦列表页】四川(rst.sc.gov.cn 列表 403)、甘肃(rst.gansu.gov.cn 全站 412)——detail 能开、列表抓不了。
+#   【只有综合栏目/信噪比差，本轮 dry-run 丢掉】云南(NewsLsit classid=602 过滤后 0)、贵州(残留是部委通知/
+#     方案非公告)、黑龙江/宁夏/西藏(只有「通知公告」综合栏目，无事业单位招聘专栏)。
 
 # 含 geo-blocked 省，便于 --portal 单独测/在大陆 runner 上按 key 取；默认 run 仍只跑 PORTALS。
 PORTALS_BY_KEY: dict[str, Portal] = {p.key: p for p in (*PORTALS, *_GEO_BLOCKED_FROM_CI)}
