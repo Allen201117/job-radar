@@ -716,43 +716,10 @@ export async function resolveActiveCompanyNames(patterns: string[]): Promise<str
  * 公司归属在 JS 端按 pattern 子串匹配回填（见下方 for 循环）。短 TTL 缓存降同实例重复读取；
  * 跨请求复用由调用方（app/campus/page.tsx 的 unstable_cache）负责。
  */
-/**
- * 第二阶段：只给「光看标题判不出职能」的行补正文，且只补前 1000 字。
- *
- * 等价性（2026-09-09 live 全量对拍，active 校招+实习 101,465 行）：
- *   · 标题单独判出非「其他 / 职能」的行，其结果与带全文判**完全一致**（「职能」是文档化的例外：
- *     classifyJobFunction 对「职能」标题会剥掉活动标签再看正文，所以它也要正文）；
- *   · 需要正文的 34,578 行里，`left(summary, 1000)` 与全文判 **0 差异**（600 字有 1 例差异，故取 1000）。
- * 代价：正文传输量从全部行降到约 1/3、且每行封顶 1KB。改这两个阈值必须重跑对拍脚本，别凭感觉调。
- */
-const SUMMARY_FACET_CHARS = 1000;
-const SUMMARY_FETCH_CHUNK = 2000;
-async function hydrateSummariesForFunctionFacet(rows: any[]): Promise<void> {
-  const need: any[] = [];
-  for (const r of rows) {
-    if (r.summary != null) continue; // 列为 NULL 的行第一阶段已带全文（判桶要用）
-    const fn = classifyJobFunction({ title: r.title, job_type: r.job_type });
-    if (fn === "其他" || fn === "职能") need.push(r);
-  }
-  if (!need.length) return;
-  const byId = new Map<string, any>();
-  for (const r of need) byId.set(String(r.id), r);
-  const ids = Array.from(byId.keys());
-  const chunks: string[][] = [];
-  for (let i = 0; i < ids.length; i += SUMMARY_FETCH_CHUNK) chunks.push(ids.slice(i, i + SUMMARY_FETCH_CHUNK));
-  const results = await Promise.all(
-    chunks.map((chunk) =>
-      jobsQuery<{ id: string; summary: string | null }>(
-        `select id, left(summary, $2) as summary from jobs where id = any($1::uuid[])`,
-        [chunk, SUMMARY_FACET_CHARS],
-      ),
-    ),
-  );
-  for (const rs of results) for (const x of rs) {
-    const r = byId.get(String(x.id));
-    if (r) r.summary = x.summary;
-  }
-}
+// ⚠️ 职能分面此前的「第二阶段按需补正文再现算」已于 2026-09-15 移除：职能改读物化列 jobs.job_function
+// （入库时由 classifyJobFunction 带 summary 算好，见 crawler/recruitment_classify + scripts/backfill-job-function）。
+// 那次把 ~3.4 万条 JD 正文拖回函数现算正是 unstable_cache 后台重算撑爆超时、静默服务旧快照的病根。
+// buildCampusFacets 现在读列、仅列为 NULL 时退回现算兜底（lib/campus-facets.campusFacetKey）。
 
 export type CampusZoneCacheEntry = { expiresAt: number; value: CampusCompanyRow[] };
 const campusZoneCache = new Map<string, CampusZoneCacheEntry>();
@@ -778,6 +745,9 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
     // 页面静默服务 6 天旧快照；换 key 后没有旧快照可服务，直接 500（Digest 721878106，创始人 Chrome 实测）。
     // 判桶已经不需要正文（campusAdmission 认 recruitment_category 列；只有列为 NULL 的行才要现算，
     // CASE 只给这些行带正文，全库 36 行）。正文唯一的消费者是分面的职能 fn，走下面的第二阶段按需补。
+    // 职能读物化列 j.job_function（2026-09-15）：不再在此拉正文跑分类，看板重算就此变轻、
+    // unstable_cache 后台重算不再撑爆超时被杀（那是「全部数据待更新」的病根）。summary 只为
+    // recruitment_category 为 NULL 的极少数行（全库 36 行）保留、供 campusAdmission 现算兜底。
     const rows = names.length
       ? await jobsQuery<any>(
           `
@@ -785,7 +755,7 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
         j.id, j.company, j.title, j.job_type, j.jd_url, j.apply_url,
         case when j.recruitment_category is null then j.summary end as summary,
         j.experience, j.deadline, j.first_seen_at, j.last_seen_at, j.location as city, j.education, j.status,
-        j.grad_class, j.recruitment_category
+        j.grad_class, j.recruitment_category, j.job_function
       from jobs j
       where j.status = 'active'
         and j.company = any($1::text[])
@@ -794,7 +764,6 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
           [names],
         )
       : [];
-    await hydrateSummariesForFunctionFacet(rows);
     const byName = new Map<string, CampusCompanyRow>();
     for (const c of list) byName.set(c.name, {
       company: c.name, pattern: c.pattern, campusJobs: [], internJobs: [], hasAnyActiveJob: false, lastSeenAtMs: null,

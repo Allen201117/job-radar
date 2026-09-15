@@ -217,3 +217,26 @@ test("展开区的整行匹配与分面计数同口径（否则卡面写 N 个�
     assert.equal(byRow, byFacet, `filters=${JSON.stringify(filters)}`);
   }
 });
+
+// 物化列 job_function（2026-09-15）：职能优先读列、列为 NULL 时退回现算。
+// 列存在时看板读它就不必在渲染期拉正文分类（那是 unstable_cache 快照冻死的病根）。
+test("campusFacetKey 优先用 job_function 列，缺列时退回现算", () => {
+  // 列存在 → 直接用列值（哪怕标题会现算成别的，也以库里存的为准）
+  assert.equal(
+    campusFacetKey({ title: "后端研发工程师", job_function: "产品" }).fn,
+    "产品",
+    "有列就用列值",
+  );
+  // 列缺失（NULL/undefined/空串）→ 退回 classifyJobFunction 现算
+  assert.equal(campusFacetKey({ title: "后端研发工程师" }).fn, "研发", "无列退回现算");
+  assert.equal(
+    campusFacetKey({ title: "后端研发工程师", job_function: null }).fn,
+    "研发",
+    "列为 NULL 退回现算",
+  );
+  assert.equal(
+    campusFacetKey({ title: "后端研发工程师", job_function: "" }).fn,
+    "研发",
+    "列为空串退回现算",
+  );
+});
