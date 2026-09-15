@@ -1,7 +1,8 @@
 """官方源白名单 + 列表页解析。
 
-白名单是本模块唯一的**归属门**：只从声明的官方 gov 域名抓，source_url 的 host 必属该域名，
-→ 天然不会张冠李戴（企业爬取最头疼、这里免费解决的一点）。加省份 = 往 PORTALS 加一条并核实。
+白名单是本模块唯一的**归属门**：只从声明的官方政府域名或获授权的人社厅下属官方机构域名抓，
+source_url 的 host 必属该域名，→ 天然不会张冠李戴（企业爬取最头疼、这里免费解决的一点）。
+加省份 = 往 PORTALS 加一条并核实。
 """
 from __future__ import annotations
 
@@ -25,17 +26,17 @@ class Portal:
     domains: tuple[str, ...]       # 官方域名白名单（source_url host 必须命中其一）
     # 详情页 URL 特征（用于从列表页里挑出公告详情链接）
     detail_pat: re.Pattern = field(default_factory=lambda: re.compile(r"(post_\d+\.html|/t20\d{6}_\d+\.html)"))
-    # 列表数据形态："html"=常规 <a href>；"script_json"=数据在 <script>var listData JSON 里（江西）。
+    # 列表数据形态：html=常规 <a href>；script_json=内嵌 JSON；json_fragment=JSON 内的 HTML；json_api=结构化 JSON。
     list_format: str = "html"
 
 
 # 各省人社厅「事业单位公开招聘公告」列表页（2026-09-15 逐省 live 验证的静态源）。
 # ⚠️ 每省 detail URL 格式不同，detail_pat 必须逐省配，别假设统一格式。
-# ⚠️ 归属门只放行 domains 里的官方 gov 域名；host + detail_pat + 标题 INCLUDE/EXCLUDE 三重过滤。
+# ⚠️ 归属门只放行 domains 里的官方政府域名或获授权的下属官方机构域名；host + detail_pat + 标题 INCLUDE/EXCLUDE 三重过滤。
 # ⚠️ 综合栏目（四川/河南/广西）混着非招聘内容，靠 classify 的标题过滤兜底（同 CLAUDE.md「后置过滤」）。
-# 暂缺：河北（整站 Vue SPA，需浏览器道或找 AJAX 接口，下一期）；辽宁/青海（eportal 异步，未定位数据源，勘察中）。
-# 已接的三种非静态形态（均无需浏览器）：江西 script_json（内嵌 <script>var listData JSON）、
-#   浙江 json_fragment（非公开 GET 接口返 data.html 片段）、江苏 html+CDATA 解包、天津 html。
+# 暂缺：河北（整站 Vue SPA，需浏览器道或找 AJAX 接口，下一期）。
+# 已接的非静态形态（均无需浏览器）：江西 script_json（内嵌 <script>var listData JSON）、
+#   浙江 json_fragment（非公开 GET 接口返 data.html 片段）、黑龙江 json_api（结构化 GET JSON）、江苏 html+CDATA 解包、天津 html。
 def _p(rx: str) -> re.Pattern:
     return re.compile(rx)
 
@@ -144,19 +145,32 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
     Portal("gx_rst", "广西人力资源和社会保障厅·考录招聘", "广西壮族自治区",
            ("http://rst.gxzf.gov.cn/zwgk/xxgk/rsxx/xxgkklzp/",), ("rst.gxzf.gov.cn",),
            _p(r"/t\d+\.shtml")),
+    # ── 第五批（2026-09-16 创始人拍板：综合栏目放宽 + 非 gov.cn 官方下属机构入白名单）──
+    Portal("hlj_hrss", "黑龙江省人力资源和社会保障厅·事业单位公开招聘（通知公告）", "黑龙江省",
+           ("https://hrss.hlj.gov.cn/common/search/97292339af064f35a6fa6958746ab8ed"
+            "?_isAgg=true&_isJson=true&_pageSize=50&_template=index&page=1",),
+           ("hrss.hlj.gov.cn",),
+           _p(r"c00_\d+\.shtml"), list_format="json_api"),
+    Portal("nx_hrss", "宁夏回族自治区人力资源和社会保障厅·公示公告", "宁夏回族自治区",
+           ("https://hrss.nx.gov.cn/gzdt/gsgg/",), ("hrss.nx.gov.cn",),
+           _p(r"t20\d{6}_\d+\.html")),
+    Portal("xz_hrss", "西藏自治区人力资源和社会保障厅·通知公告", "西藏自治区",
+           ("https://hrss.xizang.gov.cn/xwzx/tzgg/",), ("hrss.xizang.gov.cn",),
+           _p(r"t20\d{6}_\d+\.html")),
+    # ⚠️ 辽宁/青海是非 gov.cn——省人事考试中心官网（人社厅下属官方机构，创始人已授权入白名单；仍拒中公/华图第三方）。
+    Portal("ln_ks", "辽宁省人事考试中心·事业单位招聘公告", "辽宁省",
+           ("https://www.lnrsks.com/html/sydw_zhaopingonggao/",), ("lnrsks.com",),
+           _p(r"sydw_zhaopingonggao/\d+\.html")),
+    # ⚠️ 青海仅 http 不支持 https（https 返回连接失败）。
+    Portal("qh_pta", "青海省人事考试信息网·事业单位考试", "青海省",
+           ("http://www.qhpta.com/ncms/sydwks.shtml",), ("qhpta.com",),
+           _p(r"article_[0-9a-f]{32}\.shtml")),
 )
 
-# ⏸️ 仍暂缺（2026-09-16 三批 research + live 逐个试过）——下一个 session 从这里接：
-#   【待创始人拍板：非 gov.cn 归属红线】辽宁/青海——省厅 gov.cn 站无干净/更新的招聘子栏目，
-#     能 curl 的干净源是「省人事考试中心」门户（辽宁 lnrsks.com、青海 qhpta.com，均 static）。
-#     纳不纳入白名单是归属政策，需创始人定，别自作主张（同「国聘是第三方禁令唯一例外」先例）。
-#   【待创始人拍板：综合栏目政策】黑龙江/宁夏/西藏——都是 gov.cn，但只有综合「通知公告」栏目、
-#     无专属招聘子栏目，classify 标题门能保精度（噪音在 list 端就滤掉、不浪费 detail 抓取），
-#     但接综合栏目 = 翻「综合栏目不接」红线，需创始人定。黑龙江还是 json_api（{"data":{"results":[…]}}，
-#     需新增一种 list_format）；宁夏/西藏 是 static-a-href（默认 detail_pat 覆盖），产出极低（真招聘半年一次）。
+# ⏸️ 仍暂缺（2026-09-16 live 逐个试过）——下一个 session 从这里接：
 #   【真难/未通】河北——整站 Vue SPA 且数据接口 /rsmhapi/ 要登录 token（Vuex session），匿名拿不到，
 #     比普通 needs-browser 更难；备选 hbrc.com.cn 是 static 但混私企招聘（信噪比差，弃）。
-#   （已接的非静态形态：江西 script_json / 浙江 json_fragment / 江苏 html+CDATA / 天津·甘肃·四川 html。）
+#   （已接的非静态形态：江西 script_json / 浙江 json_fragment / 黑龙江 json_api / 江苏 html+CDATA / 天津·甘肃·四川 html。）
 
 # 含 geo-blocked 省，便于 --portal 单独测/在大陆 runner 上按 key 取；默认 run 仍只跑 PORTALS。
 PORTALS_BY_KEY: dict[str, Portal] = {p.key: p for p in (*PORTALS, *_GEO_BLOCKED_FROM_CI)}
@@ -374,6 +388,24 @@ def parse_list(portal: Portal, list_url: str, html: str) -> list[ListItem]:
         if not frag:
             raise ValueError("json_fragment 列表：data.html 缺失（接口参数可能失效）")
         _parse_anchors(portal, list_url, frag, seen, out)
+    elif portal.list_format == "json_api":
+        try:
+            data = json.loads(html)
+        except ValueError as exc:
+            raise ValueError(f"json_api 列表：响应不是 JSON（{type(exc).__name__}）") from exc
+        results = (data.get("data") or {}).get("results") if isinstance(data, dict) else None
+        if results is None:
+            raise ValueError("json_api 列表：data.results 缺失（接口变了）")
+        for it in results:
+            m = _SCRIPT_JSON_PUBDATE.match((it.get("publishedTimeStr") or "").strip())
+            pub = None
+            if m:
+                try:
+                    pub = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                except ValueError:
+                    pub = None
+            _accept(portal, list_url, it.get("title") or "", it.get("url") or "", seen, out,
+                    published_override=pub)
     else:  # html：整页 <a href>（含 CDATA 解包）
         _parse_anchors(portal, list_url, html, seen, out)
     return out

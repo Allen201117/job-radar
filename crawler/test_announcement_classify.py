@@ -19,6 +19,7 @@ class TestIsRecruitment(unittest.TestCase):
         self.assertFalse(is_recruitment_announcement("关于广东省事业单位2026年公开招聘笔试合格分数线的公告"))
         self.assertFalse(is_recruitment_announcement("广东省教育厅所属事业单位2026年公开招聘拟聘用人员公示"))
         self.assertFalse(is_recruitment_announcement("XX单位2026年公开招聘资格复审公告"))
+        self.assertFalse(is_recruitment_announcement("关于2026年区直事业单位公开招聘高校毕业生面试有关事项的通知"))
         self.assertFalse(is_recruitment_announcement("招聘政策法规"))
 
     def test_stats_policy_process_filtered(self):

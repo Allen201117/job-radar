@@ -192,6 +192,27 @@ class TestJsonFragmentList(unittest.TestCase):
             parse_list(zj, zj.list_urls[0], json.dumps({"success": False}))
 
 
+class TestJsonApiList(unittest.TestCase):
+    def test_parses_structured_json_and_filters(self):
+        hlj = PORTALS_BY_KEY["hlj_hrss"]
+        payload = json.dumps({"data": {"results": [
+            {"title": "XX省2026年事业单位公开招聘工作人员公告",
+             "url": "/hrss/c111741/202609/c00_123.shtml",
+             "publishedTimeStr": "2026-09-15 15:44:52"},
+            {"title": "XX拟聘用人员公示",
+             "url": "/hrss/c111741/202609/c00_456.shtml",
+             "publishedTimeStr": "2026-09-10 10:00:00"},
+        ]}}, ensure_ascii=False)
+        items = parse_list(hlj, hlj.list_urls[0], payload)
+        self.assertEqual([it.title for it in items], ["XX省2026年事业单位公开招聘工作人员公告"])
+        self.assertEqual(items[0].published_at, date(2026, 9, 15))
+
+    def test_missing_results_raises(self):
+        hlj = PORTALS_BY_KEY["hlj_hrss"]
+        with self.assertRaises(ValueError):
+            parse_list(hlj, hlj.list_urls[0], json.dumps({"data": {}}))
+
+
 class TestAnchorTitleFallback(unittest.TestCase):
     def test_falls_back_to_title_attr(self):
         # 天津那类：<a> 可见文字可能为空，标题只在 title 属性里。
