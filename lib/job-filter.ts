@@ -11,7 +11,7 @@ import {
   recruitmentCategory,
 } from "@/lib/china-keyword-expansion";
 import { classifyCompanyOriginWithSource } from "@/lib/company-origin";
-import { classifyCompanyTier } from "./company-tiers";
+import { classifyCompanyTier } from "@/lib/company-tiers";
 import { educationMatch } from "@/lib/education-rank";
 import { jobMatchesRegion } from "@/lib/job-scope";
 import type { ScoredJob } from "@/lib/types";

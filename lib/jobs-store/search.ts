@@ -158,6 +158,31 @@ function appendSoftCityWhere(conds: string[], params: unknown[], cities: string[
   conds.push(`(${parts.join(" or ")})`);
 }
 
+// 公司类型下推（FTS / 扫描两条候选路径共用同一份实现，保证 SQL 字节级一致，杜绝两处各写一套漂移）：
+// named tiers 走 ilike any，中小厂走「不命中任一 named 前缀」的负向匹配；与 classifyCompanyTier
+// 同一份 patterns、同大小写不敏感子串，保持 SQL_PUSHED 的等价性。
+function appendCompanyTierWhere(conds: string[], params: unknown[], companyTier: string) {
+  const tierSel = splitMultiValue(companyTier);
+  if (!tierSel.length) return;
+  const { named, includeSmb } = companyTierPatterns(tierSel);
+  const ors: string[] = [];
+  if (named.length) {
+    const ph = named.map((p) => {
+      params.push(p);
+      return `company ilike $${params.length}`;
+    });
+    ors.push(`(${ph.join(" or ")})`);
+  }
+  if (includeSmb) {
+    const ph = NAMED_TIER_PATTERNS.map((p) => {
+      params.push(p);
+      return `company not ilike $${params.length}`;
+    });
+    ors.push(ph.length ? `(${ph.join(" and ")})` : "true");
+  }
+  if (ors.length) conds.push(`(${ors.join(" or ")})`);
+}
+
 function appendPostedWithinWhere(conds: string[], params: unknown[], postedWithin: string) {
   if (!postedWithin) return;
   const days = Number(postedWithin);
@@ -403,28 +428,7 @@ async function searchViaFTS(
     params.push(`%${company}%`);
     conds.push(`company ilike $${params.length}`);
   }
-  // 公司类型下推：named tiers 走 ilike any，中小厂走「不命中任一 named 前缀」的负向匹配；
-  // 与 classifyCompanyTier 同一份 patterns、同大小写不敏感子串，保持 SQL_PUSHED 的等价性。
-  const tierSel = splitMultiValue(filters.companyTier);
-  if (tierSel.length) {
-    const { named, includeSmb } = companyTierPatterns(tierSel);
-    const ors: string[] = [];
-    if (named.length) {
-      const ph = named.map((p) => {
-        params.push(p);
-        return `company ilike $${params.length}`;
-      });
-      ors.push(`(${ph.join(" or ")})`);
-    }
-    if (includeSmb) {
-      const ph = NAMED_TIER_PATTERNS.map((p) => {
-        params.push(p);
-        return `company not ilike $${params.length}`;
-      });
-      ors.push(ph.length ? `(${ph.join(" and ")})` : "true");
-    }
-    if (ors.length) conds.push(`(${ors.join(" or ")})`);
-  }
+  appendCompanyTierWhere(conds, params, filters.companyTier);
   // 校招/实习超集下推：只保留可能命中的行，别把大量社招岗跨洋传过来（JS 仍权威判定）。
   appendRecruitmentPrefilter(conds, filters.jobType);
   appendCurrentSeasonWhere(conds, params);
@@ -499,6 +503,7 @@ async function searchViaScan(
   const params: unknown[] = [];
   appendJobScopeWhere(conds, params, prefs, filters);
   appendPostedWithinWhere(conds, params, filters.postedWithin);
+  appendCompanyTierWhere(conds, params, filters.companyTier); // 与 FTS 路径同一份实现，稀疏标签独立浏览不漏岗
   appendRecruitmentPrefilter(conds, filters.jobType); // 校招/实习超集下推，扫描也少翻无关行
   appendCurrentSeasonWhere(conds, params); // 往届校招/实习岗不进默认结果（与 FTS 路径同口径）
   // 候选只取 CANDIDATE_COLUMNS（与 FTS 路径同一套）：JS 打分/精筛只读这些列，纯展示列留到

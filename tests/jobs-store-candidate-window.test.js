@@ -14,6 +14,7 @@ function loadSearch() {
   const client = loadTs(path.join(ROOT, "lib", "jobs-store", "client.ts"), cache);
   const search = loadTs(path.join(ROOT, "lib", "jobs-store", "search.ts"), cache);
   const { DEFAULT_FILTERS } = loadTs(path.join(ROOT, "lib", "job-filter.ts"), cache);
+  const { companyTierPatterns } = loadTs(path.join(ROOT, "lib", "company-tiers.ts"), cache);
   search.__resetScanCache();
   const calls = [];
   const install = ({ candidates, count }) => {
@@ -24,7 +25,7 @@ function loadSearch() {
       return candidates;
     };
   };
-  return { search, DEFAULT_FILTERS, calls, install };
+  return { search, DEFAULT_FILTERS, calls, install, companyTierPatterns };
 }
 
 const countQueries = (calls) => calls.filter((c) => /^select count\(\*\)/.test(c.sql));
@@ -314,4 +315,71 @@ test("没按城市/公司筛时，这两维仍有区分度 → 要进优先级�
   const prefQuery = candidateSql(calls).params[candidateSql(calls).params.length - 1];
   assert.match(prefQuery, /深圳|shenzhen/i);
   assert.match(prefQuery, /腾讯|tencent/i);
+});
+
+// ── companyTier 稀疏标签独立浏览：只选标签、不填 city/keyword/company → 落到 scan 路径。
+// scan 路径必须像 FTS 路径一样把 companyTier 下推进候选 SQL，否则 sortBy=match 只看
+// SCAN_BUDGET(=28000) 条「最新」行，稀疏标签（如初创独角兽/外企/大厂）的命中大多落在窗口外，
+// 单靠 JS 事后过滤会把结果筛成近乎空集（不是计数不准，是真的漏岗）。 ──
+
+test("companyTier 单独选中(无 city/keyword/company)→ 落到 scan 路径，仍要把 tier 下推 SQL", async () => {
+  const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+  install({ candidates: candidateRows(50), count: null });
+
+  await search.searchJobsStore(
+    { ...DEFAULT_FILTERS, companyTier: "初创独角兽" },
+    null,
+    [],
+    0,
+    60,
+  );
+  const c = candidateSql(calls);
+  assert.match(
+    c.sql,
+    /company ilike \$\d+/,
+    "scan 路径的候选查询必须包含 companyTier 的 ilike 下推，不能只留给 JS 事后过滤",
+  );
+});
+
+test("companyTier=中小厂 单独选中也走 scan 路径的负向下推（not ilike all）", async () => {
+  const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+  install({ candidates: candidateRows(50), count: null });
+
+  await search.searchJobsStore({ ...DEFAULT_FILTERS, companyTier: "中小厂" }, null, [], 0, 60);
+  const c = candidateSql(calls);
+  assert.match(c.sql, /company not ilike \$\d+/);
+});
+
+test("companyTier 下推：FTS 路径与 scan 路径共用同一份 patterns（parity，不允许各写一套漂移）", async () => {
+  // FTS 路径（带 city，触发 tsquery）。
+  const ftsRun = loadSearch();
+  ftsRun.install({ candidates: candidateRows(50), count: null });
+  await ftsRun.search.searchJobsStore(
+    { ...ftsRun.DEFAULT_FILTERS, city: "深圳", companyTier: "外企" },
+    null,
+    [],
+    0,
+    60,
+  );
+  const ftsParams = candidateSql(ftsRun.calls).params;
+
+  // scan 路径（无 city/keyword/company）。
+  const scanRun = loadSearch();
+  scanRun.install({ candidates: candidateRows(50), count: null });
+  await scanRun.search.searchJobsStore(
+    { ...scanRun.DEFAULT_FILTERS, companyTier: "外企" },
+    null,
+    [],
+    0,
+    60,
+  );
+  const scanParams = candidateSql(scanRun.calls).params;
+
+  // 两条路径都必须把「外企」标签的全部 named patterns 作为绑定参数传下去，且完全一致，
+  // 与 lib/company-tiers.companyTierPatterns 的输出同一份数据源（parity 的可验证证据）。
+  const { named } = ftsRun.companyTierPatterns(["外企"]);
+  for (const pattern of named) {
+    assert.ok(ftsParams.includes(pattern), `FTS 路径缺少 tier pattern：${pattern}`);
+    assert.ok(scanParams.includes(pattern), `scan 路径缺少 tier pattern：${pattern}`);
+  }
 });
