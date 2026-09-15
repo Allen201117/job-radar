@@ -337,6 +337,15 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
 
 > 三/四层都靠 GitHub Actions workflow_dispatch（需 Vercel 配 `GITHUB_DISPATCH_TOKEN`+`GITHUB_DISPATCH_REPO`）；`/api/refresh` 与 `/api/discovery/dispatch` 共用这套异步轨道 + `discovery_runs` 表，零新表。
 
+## 公告制招聘（/programs）供给：官方公告自动抓取（2026-09-15 上线）
+
+事业单位/体制内很多招聘是**公告制**（一条公告 = 批量岗位 + 报名截止日，官网没有逐岗详情页），进不了 jobs 库（过不了 jd_url 红线，也不该假装是岗位）。`/programs` 承载它，两路数据：`apply_programs`（手工核实的边缘央企/项目/人才库条目，迁移 226）+ `announcement_postings`（官方招聘公告自动抓取，迁移 252），统一渲染为「招聘公告」卡，**一条公告 = 一个投递入口，不拆岗位**。设计文档 `docs/superpowers/specs/2026-09-15-announcement-recruitment-supply-design.md`，记忆 [[job-radar-announcement-supply-pipeline]]。抓取管道 `crawler/announcements/`（portals 白名单/classify 过滤/deadline 抽取/harvest/expire），调度 `announcement-crawl.yml`。四条红线：
+
+- **归属靠官方 gov 域名白名单天然保证**（`portals.PORTALS` 逐省登记，host + 逐省 `detail_pat` + 标题 INCLUDE/EXCLUDE 三重过滤）→ 不会张冠李戴（企业爬取最头疼、这里免费解决的）。只抓官方源：**不碰公众号**（内容与官网栏目重复且列表无法程序化枚举）、**不碰第三方**（中公/华图，红线）。
+- **时效**：报名截止日抽成结构化 `deadline` 列 → 过期自动下架；抽不到走「发布日/首见日 + TTL(默认 45 天)」兜底 + RLS `deadline >= current_date` 双保险。**过期公告比死岗更伤**，别只靠人工。
+- **⚠️ 加省准入判据是 CI 的 `crawl_runs`/harvest `list_errors`，不是本机 dry-run**：很多省 gov 服务器 **geo-block GitHub US runner**（HTTPStatusError/ConnectError，`make_transport` 已 retry=2 仍失败，非 TLS），而本机走中国路由全通、**永远测不出来**（同「本机绿≠CI绿」但这次是 geo 可达性不是 TLS）。当前 CI 可达 active 4 省（北京/广东/湖北/福建）；山东/湖南/安徽/陕西/山西已 live 验证且 detail_pat 配好、但 CI 连不上 → 存 `portals._GEO_BLOCKED_FROM_CI`，**有中国/香港自托管 runner 后搬回 PORTALS 即生效**（[[job-radar-backend-review-2026-09-03]] 待定成本项）。所以逐省扩量的真瓶颈是 runner 地理位置，不是找 URL。
+- **综合「公示公告」栏目不接**（四川/河南/广西/重庆/贵州）：没有干净的「招聘公告」子栏目，过滤后多是面试资格确认/报名统计/政策办法/陈旧归档，信噪比差，服从「精>量」；待找到各省专属子栏目 URL 再接。JS 渲染省（江苏/浙江/河北/江西）待浏览器道。
+
 ## 数据质量优先级（最高）
 
 `jd_url` 准确性高于一切。**禁止写入 active jobs**：招聘首页 / 搜索页 / 导航页 / 帮助页·FAQ / 登录页 / 语言切换页 / 专题入口页 / 空链接或猜测链接。拿不到稳定岗位详情链接的 source 只能记 `partial_success`，不得标记完整成功。质量门：`company/title/jd_url` 非空 + HTTP 200 + 页面含标题或核心片段。
