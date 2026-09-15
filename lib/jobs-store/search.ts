@@ -18,6 +18,7 @@ import { cityMatchTokens, ftsCandidateTerms } from "@/lib/china-keyword-expansio
 import { appendJobScopeWhere, effectiveJobScope } from "@/lib/job-scope";
 import { collapseBulkStoreJobs } from "@/lib/bulk-store-dedup";
 import { appendCurrentSeasonWhere } from "@/lib/campus-season";
+import { spreadByCompany } from "../job-diversify";
 import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 
 const FTS_CAP = 8000;
@@ -420,7 +421,8 @@ async function searchViaFTS(
   );
   // 批量门店副本折叠放在排序**之后**：留下的是打分最高的那条。折叠后 ranked.length 变小 →
   // exactTotalWhenCapped 的自检门③ 自动失败 → 计数退回「N+」，这是对的（见 bulk-store-dedup 注释）。
-  const ranked = collapseBulkStoreJobs(annotateAndRank(rows, filters, prefs, actions));
+  const rankedRaw = collapseBulkStoreJobs(annotateAndRank(rows, filters, prefs, actions));
+  const ranked = filters.sortBy === "newest" ? rankedRaw : spreadByCompany(rankedRaw);
   const breakdown = countMatchBreakdown(ranked);
   const page = ranked.slice(offset, offset + limit);
   const capped = rows.length >= FTS_CAP;
@@ -536,7 +538,8 @@ async function searchViaScan(
     }
   }
   // 与 FTS 路径同口径：门店副本折叠在排序之后（见 bulk-store-dedup 注释）。
-  const ranked = collapseBulkStoreJobs(filterAndRankJobs(matched, filters));
+  const rankedRaw = collapseBulkStoreJobs(filterAndRankJobs(matched, filters));
+  const ranked = filters.sortBy === "newest" ? rankedRaw : spreadByCompany(rankedRaw);
   const breakdown = countMatchBreakdown(ranked);
   const page = ranked.slice(offset, offset + limit);
   const capped = !exhausted;
