@@ -11,6 +11,7 @@ import {
   recruitmentCategory,
 } from "@/lib/china-keyword-expansion";
 import { classifyCompanyOriginWithSource } from "@/lib/company-origin";
+import { classifyCompanyTier } from "./company-tiers";
 import { educationMatch } from "@/lib/education-rank";
 import { jobMatchesRegion } from "@/lib/job-scope";
 import type { ScoredJob } from "@/lib/types";
@@ -33,6 +34,7 @@ export type Filters = {
   jobRole: string; // 具体岗位方向多选，逗号分隔；""=不限
   experience: string; // fresh / 0-3 / 3-5 / 5-10 / 10+；""=不限
   postedWithin: string; // 1 / 3 / 7 / 30（天）；""=不限
+  companyTier: string; // 公司类型多选（大厂/央国企/外企/初创独角兽/中小厂），逗号分隔；""=不限
 };
 
 // 多选字段（城市 / 关键词）拆成去空去重的值数组。分隔符 = 逗号（中英文）或空白：
@@ -70,6 +72,7 @@ export const DEFAULT_FILTERS: Filters = {
   jobRole: "",
   experience: "",
   postedWithin: "",
+  companyTier: "",
 };
 
 /**
@@ -89,6 +92,7 @@ export const SQL_PUSHED_FILTER_KEYS = [
   "region", // job_scope='overseas' + country_code / Remote ⇒ jobMatchesRegion
   "showIgnored", // 被隐藏的岗按 id 从 count 里一并排除
   "showApplied",
+  "companyTier", // 标签→公司名 patterns，SQL 与 classifyCompanyTier 同口径
 ] as const;
 
 /** 只能在 JS 里判的筛选项：任一被启用 → 不能用 SQL 计数（前端退回诚实的「N+」）。 */
@@ -252,6 +256,11 @@ export function jobFilterMatch(
     if (filters.capitalOrigin === "外企") {
       if (origin === "中国") return null;
     } else if (origin !== filters.capitalOrigin) return null;
+  }
+  if (filters.companyTier) {
+    // 公司类型多选（并集）：命中任一选中标签才放行。与 SQL 下推同口径（lib/jobs-store/search.ts）。
+    const selectedTiers = splitMultiValue(filters.companyTier);
+    if (!selectedTiers.includes(classifyCompanyTier(job.company))) return null;
   }
   if (filters.region && !jobMatchesRegion(job, filters.region)) return null;
   if (filters.salaryOnly && !job.salary_text) return null;

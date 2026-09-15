@@ -15,6 +15,7 @@ import {
 } from "@/lib/job-filter";
 import { buildTsquery, annotateAndRank, annotateSourceAdapter } from "@/lib/job-search";
 import { cityMatchTokens, ftsCandidateTerms } from "@/lib/china-keyword-expansion";
+import { companyTierPatterns, NAMED_TIER_PATTERNS } from "@/lib/company-tiers";
 import { appendJobScopeWhere, effectiveJobScope } from "@/lib/job-scope";
 import { collapseBulkStoreJobs } from "@/lib/bulk-store-dedup";
 import { appendCurrentSeasonWhere } from "@/lib/campus-season";
@@ -401,6 +402,28 @@ async function searchViaFTS(
   if (company) {
     params.push(`%${company}%`);
     conds.push(`company ilike $${params.length}`);
+  }
+  // 公司类型下推：named tiers 走 ilike any，中小厂走「不命中任一 named 前缀」的负向匹配；
+  // 与 classifyCompanyTier 同一份 patterns、同大小写不敏感子串，保持 SQL_PUSHED 的等价性。
+  const tierSel = splitMultiValue(filters.companyTier);
+  if (tierSel.length) {
+    const { named, includeSmb } = companyTierPatterns(tierSel);
+    const ors: string[] = [];
+    if (named.length) {
+      const ph = named.map((p) => {
+        params.push(p);
+        return `company ilike $${params.length}`;
+      });
+      ors.push(`(${ph.join(" or ")})`);
+    }
+    if (includeSmb) {
+      const ph = NAMED_TIER_PATTERNS.map((p) => {
+        params.push(p);
+        return `company not ilike $${params.length}`;
+      });
+      ors.push(ph.length ? `(${ph.join(" and ")})` : "true");
+    }
+    if (ors.length) conds.push(`(${ors.join(" or ")})`);
   }
   // 校招/实习超集下推：只保留可能命中的行，别把大量社招岗跨洋传过来（JS 仍权威判定）。
   appendRecruitmentPrefilter(conds, filters.jobType);
