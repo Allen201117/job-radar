@@ -18,8 +18,7 @@ test("不命中任何名单 → 中小厂兜底", () => {
 });
 
 test("标签顺序:中小厂在末尾", () => {
-  assert.deepEqual(COMPANY_TIER_LABELS[COMPANY_TIER_LABELS.length - 1], "中小厂");
-  assert.ok(COMPANY_TIER_LABELS.includes("大厂"));
+  assert.deepEqual(COMPANY_TIER_LABELS, ["大厂","央国企","外企","初创独角兽","中小厂"]);
 });
 
 test("companyTierPatterns 拆解正确", () => {
@@ -32,6 +31,6 @@ test("companyTierPatterns 拆解正确", () => {
 });
 
 test("NAMED_TIER_PATTERNS 覆盖所有命名标签、不含中小厂", () => {
-  assert.ok(NAMED_TIER_PATTERNS.length >= 100); // 大厂+央国企+外企+独角兽 patterns 合计
-  // 中小厂无 pattern,不应出现
+  assert.ok(NAMED_TIER_PATTERNS.length >= 100);
+  assert.ok(!NAMED_TIER_PATTERNS.some(p => p.includes("中小厂")));
 });

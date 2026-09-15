@@ -1,14 +1,10 @@
 // 公司类型标签:唯一数据源 lib/company-tiers.json。名字子串匹配 + 中小厂兜底。
 // SQL 下推与本文件的 classify 必须语义一致(同 patterns、同大小写不敏感子串)。
 
-import * as fs from "node:fs";
-import * as path from "node:path";
+import tiersData from "./company-tiers.json";
 
 type TierEntry = { name: string; pattern: string };
-
-// 使用 fs.readFileSync 确保 transpiler 能处理
-const tiersDataStr = fs.readFileSync(path.join(__dirname, "company-tiers.json"), "utf8");
-const RAW = JSON.parse(tiersDataStr) as Record<string, unknown>;
+const RAW = tiersData as Record<string, unknown>;
 
 // JSON key 顺序即优先级;排除 _meta。
 const NAMED_TIERS: string[] = Object.keys(RAW).filter((k) => k !== "_meta");
