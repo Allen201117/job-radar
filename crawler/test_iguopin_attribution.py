@@ -14,7 +14,7 @@
 """
 import unittest
 
-from adapters.iguopin import IguopinAdapter, _row_passes_match
+from adapters.iguopin import IguopinAdapter, _row_passes_match, reset_process_caches
 
 
 class _Adapter(IguopinAdapter):
@@ -24,7 +24,9 @@ class _Adapter(IguopinAdapter):
         self._table = table          # company_id -> group_id / "" / None
         self.calls = []
 
-    def _company_group_id(self, company_id, headers):
+    def _fetch_company_group_id(self, company_id, headers):
+        # 只替掉「真发请求」那一层，`_company_group_id` 的三态语义 + 进程级缓存照跑，
+        # 这样「同一家只查一次」这条断言覆盖的是真实路径而不是被绕开的桩。
         self.calls.append(company_id)
         return self._table.get(company_id, None)
 
@@ -41,6 +43,7 @@ GROUP = "10685309282299237"          # 南方电网
 
 class GroupMembershipTest(unittest.TestCase):
     def setUp(self):
+        reset_process_caches()
         self.a = _Adapter({
             "c_dinghe": GROUP,       # 鼎和财产保险：真子公司，名字里没有「南方电网」
             "c_inst": "",            # 中国（海南）改革发展研究院：查到了，无集团
