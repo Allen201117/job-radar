@@ -1,5 +1,7 @@
 // 偏好 PUT 的纯输入校验/归一（§8.1）。单一事实来源：/api/preferences 用它，node --test 直接测它。
 // 不接受客户端 user_id；radar_intensity 仅 active/passive；数组 trim/去空/去重 ≤30 项、单项 ≤80 字；daily_limit 5–30。
+import { normalizeRolePhrases } from "@/lib/china-keyword-expansion";
+import { canonicalizeIndustryList, normalizeCityPhrases } from "@/lib/profile-hygiene";
 import type { RadarIntensity } from "./types";
 
 const MAX_ITEMS = 30;
@@ -136,12 +138,17 @@ export function parsePreferencesInput(
     ok: true,
     value: {
       prefs: {
-        target_locations: cleanArray(b.target_locations),
-        target_roles: cleanArray(b.target_roles),
+        // 手填入口的画像卫生门（2026-09-17）：脏写法**在落库这一刻**就被收拾掉，
+        // 而不是等到召回时各处各归一一次（那样 /today、/jobs、爬虫三条链迟早漂）。
+        // 归一只拆分 / 去填充 / 归规范名，认不出的一律原样保留，绝不丢用户的值。
+        // 顺序：先 cleanArray（trim / 去空 / 去重 / 限长限量）→ 再归一 → 再 cleanArray 收口
+        //（归一会把一条拆成多条，可能重新引入重复并越过 30 项上限）。
+        target_locations: cleanArray(normalizeCityPhrases(cleanArray(b.target_locations))),
+        target_roles: cleanArray(normalizeRolePhrases(cleanArray(b.target_roles))),
         target_keywords: cleanArray(b.target_keywords),
         exclude_keywords: cleanArray(b.exclude_keywords),
         target_companies: cleanArray(b.target_companies),
-        target_industries: cleanArray(b.target_industries),
+        target_industries: cleanArray(canonicalizeIndustryList(cleanArray(b.target_industries))),
         experience_stage: cleanExperienceStage(b.experience_stage),
         job_scope: scope.value.job_scope,
         target_regions: scope.value.target_regions,
