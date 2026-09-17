@@ -241,3 +241,40 @@ service 标 `functionOnly`（方向非 exact 时），grouping 主清单排除�
 跨行业对拍（主清单严格准确率）：护士 58→73（=基线）、柜员 40→100（=基线）、教师 43→75（=基线）、机械 92→96；
 拓展看看里分别多出 4 / 3 / 3 / 5 条同职能岗。
 
+
+## 11. 登录态岗位库首屏：粗排 SQL 本身是全表扫（2026-09-18 凌晨，库空闲时干净实测）
+
+**起点（main 9fa4cc2 部署，库上 `pg_stat_activity` 除本连接外 0 个活动查询）**，创始人 Chrome 登录态在页面上下文直接 fetch：
+
+| 请求 | TTFB | 服务端账本 `x-jobs-search-timing` |
+|---|---:|---|
+| 匿名 `sortBy=match&limit=10`（curl ×3） | 4.09 / 1.46 / 1.06s | scan rows=1000 fetch 1634 / 1045 / 661 |
+| 登录 `sortBy=match`（无筛选，冷） | **6.45s** | scan rows=1000 **fetch=5525** score=338 |
+| 登录 同条件，撞到同实例缓存 | 1.03s | cache=hit fetch=0 score=344 |
+| 登录 `sortBy=match&city=深圳`（冷） | 3.66s | **fts rows=8000** fetch=1440 **score=1629** |
+| 登录 `city=上海` / `city=北京`（冷，各落不同实例） | 5.73 / 6.35s | — |
+
+判读：登录冷路径只拉 1000 行、不传正文，fetch 仍 5.5s，而匿名同样 1000 行 0.7~1.6s → **慢在 SQL 不在传输**。
+香港库 EXPLAIN ANALYZE（真实规模 20 项方向 tsquery + 3 城市 + 5 公司）：
+
+| 形态 | 计划 | 库上耗时 |
+|---|---|---:|
+| 现行：`order by 粗排键 … limit 1000` | Parallel Seq Scan 33.8 万行，13.5 万 buffer（7 万从盘读），top-N 堆排 | **2,606 / 2,281ms**（冷/热） |
+| 候选加 where `search_doc @@ 方向`（GIN） | Bitmap Heap 22,002 行 | 309ms |
+| 候选加 where `方向 GIN or first_seen_at > now()-7d` | **BitmapOr**（GIN 31,573 + btree 32,044）→ 38,090 行 | **493 / 492ms** |
+| FTS 路径（深圳 24,207 行）改粗排键 + limit 1000 | Bitmap Heap（不变）+ 排序 | 153ms |
+
+三条改动（`lib/jobs-store/search.ts`）：① `prescoreOrderBy` 额外产出 `candidateWhere`，**只拼进候选 SQL、不进 conds**（计数与真实总数口径不变）；
+② 候选被收窄后「拿到的比窗口少」不再当 exhausted，仍按 capped 走 `exactTotalWhenCapped`；③ 登录 match 的 FTS 路径同样走粗排 + 1000 窗（原 8000）。
+运维开关 `JOBS_MATCH_PRESCORE=off` 退回旧形态（对拍真值也靠它）。
+
+**等价性（第一页 60 条 vs 全量 28,000 行带正文 JS 精排真值）**：
+
+| 路径 | 用户（roles） | 重合 | 前 10 同位 |
+|---|---|---:|---:|
+| 扫描（无筛选） | 仓库文员 / 财务会计 / 实验员 | 93% / 95% / **75%** | 40 / 90 / 30% |
+| FTS（city=深圳） | 同上三人 | 93% / 97% / 97% | 40 / 80 / 60% |
+
+75% 那位逐条查过：丢掉的 14 条**全部满足**收窄条件（全是 7 天内、都不命中「实验员」方向），是「城市+7 天」档里同一天入库的上千条并列岗被
+1000 窗截断——这段截断逻辑本次没动，与 09-17 报的「差异全是同分并列」同一成因；窗口页顶上来的反而是苏州/南京的实验员岗。
+**没验的**：没有方向词的用户（无 target_roles）仍是全表扫；上线后的真实 TTFB 见下一段追记。

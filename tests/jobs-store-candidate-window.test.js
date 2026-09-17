@@ -202,15 +202,38 @@ test("按匹配度排：偏好命中的岗优先进窗口，再按新鲜度补�
     60,
   );
   const c = candidateSql(calls);
+  // 2026-09-18 起登录 match 的 FTS 路径也走 SQL 粗排（方向 30 + … + 7 天内 10）+ 1000 窗口，
+  // 不再一次拉满 FTS_CAP=8000 再 JS 全打分（线上账本 fetch 1.4s + score 1.6s）。
   assert.match(
     c.sql,
-    /order by \(search_doc @@ to_tsquery\('simple', \$\d+\)\) desc, first_seen_at desc limit/,
-    "偏好命中优先 + 新鲜度补位",
+    /order by \(\(\(search_doc @@ to_tsquery\('simple', \$\d+\)\) is true\)::int \* 30 \+ .*\) desc, first_seen_at desc limit 1000$/,
+    "偏好命中优先 + 新鲜度补位（粗排键 + 1000 窗口）",
   );
+  // 城市已被筛选锁定 → 粗排键里不该再有城市项（常量项等于没排）。
+  assert.doesNotMatch(c.sql, /location ilike any/);
   // 偏好词要真的被展开成 tsquery 传下去，不能是空的。
   const prefQuery = c.params[c.params.length - 1];
   assert.equal(typeof prefQuery, "string");
   assert.ok(prefQuery.includes("后端") || prefQuery.includes("工程"), prefQuery);
+});
+
+test("FTS 路径：运维开关 JOBS_MATCH_PRESCORE=off 退回旧的全窗形态", async () => {
+  const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+  install({ candidates: candidateRows(FTS_CAP), count: null });
+  process.env.JOBS_MATCH_PRESCORE = "off";
+  try {
+    await search.searchJobsStore(
+      { ...DEFAULT_FILTERS, city: "深圳" },
+      prefsWith({ target_roles: ["后端工程师"] }),
+      [],
+      0,
+      60,
+    );
+  } finally {
+    delete process.env.JOBS_MATCH_PRESCORE;
+  }
+  const c = candidateSql(calls);
+  assert.match(c.sql, /order by \(search_doc @@ to_tsquery\('simple', \$\d+\)\) desc, first_seen_at desc limit 8000$/);
 });
 
 test("按发布时间排：只按新鲜度截断——窗口内的分页与全集一致", async () => {
@@ -288,6 +311,13 @@ test("扫描路径（无筛选）同样按偏好优先截断", async () => {
   assert.equal((c.sql.match(/ is true\)::int/g) || []).length, pieces, "每个粗排项都要 is true（NULL 会排到最前）");
   assert.ok(pieces >= 2);
   assert.match(c.sql, /first_seen_at > now\(\) - interval '7 days'/);
+  // 候选查询必须带「方向 GIN 命中 OR 7 天内」的收窄条件（2026-09-18：不带它是全表扫，库上 2.3~2.6s；带上走 BitmapOr 493ms），
+  // 且引用的占位符就是排序用的那个 tsquery 参数。
+  const m = c.sql.match(/where .* and \(search_doc @@ to_tsquery\('simple', \$(\d+)\) or first_seen_at > now\(\) - interval '7 days'\) order by/);
+  assert.ok(m, `候选 SQL 缺少方向/7 天收窄条件：${c.sql}`);
+  assert.equal(typeof c.params[Number(m[1]) - 1], "string", "收窄条件引用的必须是排序 tsquery 参数");
+  // 收窄条件只进候选查询，不进计数（总数口径不变）。
+  for (const q of countQueries(calls)) assert.doesNotMatch(q.sql, /interval '7 days'\)/);
   // 窗口不再是 28000 整窗
   assert.ok(c.params[c.params.length - 2] <= 1000, `登录 match 窗口应 ≤1000，拿到 ${c.params[c.params.length - 2]}`);
   assert.match(c.sql, /null::text as summary/, "登录 match 候选不传正文");
@@ -333,9 +363,13 @@ test("没按城市/公司筛时，这两维仍有区分度 → 要进优先级�
     0,
     60,
   );
-  const prefQuery = candidateSql(calls).params[candidateSql(calls).params.length - 1];
-  assert.match(prefQuery, /深圳|shenzhen/i);
-  assert.match(prefQuery, /腾讯|tencent/i);
+  // 没有方向词时粗排键只剩城市 / 公司 / 7 天三项：城市、公司以 ilike 数组参数下推（不再拼进 tsquery）。
+  const c = candidateSql(calls);
+  const flat = c.params.flat().filter((v) => typeof v === "string");
+  assert.match(c.sql, /location ilike any\(\$\d+::text\[\]\)\) is true\)::int \* 20/);
+  assert.match(c.sql, /company ilike any\(\$\d+::text\[\]\)\) is true\)::int \* 15/);
+  assert.ok(flat.some((v) => /深圳|shenzhen/i.test(v)), JSON.stringify(c.params));
+  assert.ok(flat.some((v) => /腾讯|tencent/i.test(v)), JSON.stringify(c.params));
 });
 
 // ── companyTier 稀疏标签独立浏览：只选标签、不填 city/keyword/company → 落到 scan 路径。

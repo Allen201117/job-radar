@@ -424,12 +424,30 @@ function candidateOrderBy(
 // 让「JS 精排要看的那批」尽量落在窗口前部——窗口从 28,000 缩到几千行，带宽是香港机的硬上限（见 CLAUDE.md）。
 // 方向项用 FTS 近似 keywordMatchTier（同一份 ftsCandidateTerms 展开），城市/公司项与 scoreJob 同为子串命中。
 // ⚠️ 排序 tsquery 仍压在**最后一个**参数上（tests/jobs-store-candidate-window 按它定位），城市/公司数组在它前面。
+type Prescore = {
+  orderBy: string;
+  /**
+   * 只给**候选查询**用的收窄条件（计数查询不带它，总数口径不变）。
+   * 2026-09-18 线上分段账本：登录 match 无筛选冷路径 fetch 5.5s，只拉 1000 行且不传正文——慢的不是带宽，
+   * 是 `order by 粗排键` 对全部 33.8 万 active 行逐行算 tsquery / ilike 再 top-N（EXPLAIN：Parallel Seq Scan，
+   * 13.5 万 buffer，库上 2.3~2.6s；函数里叠 2 核争用 + 传输 → 5.5s）。
+   * 把「方向词 GIN 命中 OR 7 天内新岗」下推到 where：两条都能走索引（jobs_search_doc_gin +
+   * jobs_status_first_seen_idx 的 BitmapOr），同一画像 EXPLAIN 493ms、窗口照样填满 1000 行。
+   * 被排除的只有「不命中方向、又超过 7 天、只靠城市/公司加分」的行（粗排分 ≤35，且 7 天内新岗单独就有 1.7 万行，
+   * 窗口不会因此变空）。等价性对拍见 docs/reviews/2026-09-17 §10。
+   * 没有方向词（dirQuery 为空）时不收窄——那时只剩城市/公司/7 天三项，全表扫是老路径，量级同旧。
+   */
+  candidateWhere: string | null;
+};
+
 function prescoreOrderBy(
   params: unknown[],
   filters: Filters,
   prefs: UserPreferences | null,
-): string | null {
+): Prescore | null {
   if (filters.sortBy !== "match" || !prefs) return null;
+  // 运维开关：出事改 Vercel 变量退回「全窗 JS 精排」，不用重新部署（对拍脚本也拿它取真值）。
+  if ((process.env.JOBS_MATCH_PRESCORE || "").toLowerCase() === "off") return null;
   const includeOverseasLexicon = effectiveJobScope(prefs) !== "domestic";
   const groups = scoringSignalGroups(prefs, { overseasProfile: includeOverseasLexicon });
   const dirTerms = groups.direction
@@ -450,12 +468,14 @@ function prescoreOrderBy(
     pieces.push(`((company ilike any($${params.length}::text[])) is true)::int * 15`);
   }
   pieces.push("((first_seen_at > now() - interval '7 days') is true)::int * 10");
+  let candidateWhere: string | null = null;
   if (dirQuery) {
     params.push(dirQuery);
     pieces.unshift(`((search_doc @@ to_tsquery('simple', $${params.length})) is true)::int * 30`);
+    candidateWhere = `(search_doc @@ to_tsquery('simple', $${params.length}) or first_seen_at > now() - interval '7 days')`;
   }
   if (!dirQuery && !cities.length && !companies.length) return null; // 没有可粗排的信号 → 退回原排序
-  return ` order by (${pieces.join(" + ")}) desc, first_seen_at desc`;
+  return { orderBy: ` order by (${pieces.join(" + ")}) desc, first_seen_at desc`, candidateWhere };
 }
 
 // 命中页回补 HYDRATE_COLUMNS：候选阶段没拉这些展示列，排序分页定下 ≤limit 行后按 id 批量补齐再合并。
@@ -583,10 +603,15 @@ async function searchViaFTS(
   // 先压正文门参数、再压排序参数：让「候选查询最后一个参数 = 排序 tsquery」这个既有契约继续成立
   // （tests/jobs-store-candidate-window 按它定位排序参数）。
   const columns = candidateColumns(candidateSummaryExpr(candidateParams, filters, prefs));
-  const orderBy = candidateOrderBy(candidateParams, filters, prefs);
+  // 登录 + match：与扫描路径同一套 SQL 粗排 + 1000 窗口（2026-09-18）。此前带城市/关键词的登录默认态
+  // 一次拉满 FTS_CAP=8000 行再 JS 全打分：线上账本 fetch 1.4s + score 1.6s；候选集本身已被 FTS 收窄，
+  // 不再另加 candidateWhere。窗口装不下时（capped）照旧走 exactTotalWhenCapped 给真实总数。
+  const prescore = prescoreOrderBy(candidateParams, filters, prefs);
+  const orderBy = prescore?.orderBy ?? candidateOrderBy(candidateParams, filters, prefs);
+  const cap = prescore ? matchPrescoreWindow() : FTS_CAP;
   const rows = annotateSourceAdapter(
     await fetchCandidates(
-      `select ${columns} from jobs where ${conds.join(" and ")}${orderBy} limit ${FTS_CAP}`,
+      `select ${columns} from jobs where ${conds.join(" and ")}${orderBy} limit ${cap}`,
       candidateParams,
       fetchMeta,
     ),
@@ -599,7 +624,7 @@ async function searchViaFTS(
   const ranked = filters.sortBy === "newest" ? rankedRaw : spreadByCompany(rankedRaw);
   const breakdown = countMatchBreakdown(ranked);
   const page = ranked.slice(offset, offset + limit);
-  const capped = rows.length >= FTS_CAP;
+  const capped = rows.length >= cap;
   const tScored = now();
   // 回补展示列与「真实总数」计数彼此无关，并行跑，别把 85ms 串到 TTFB 上。
   const [, exactTotal] = await Promise.all([
@@ -676,10 +701,12 @@ async function searchViaScan(
   const candidateParams = [...params];
   const columns = candidateColumns(candidateSummaryExpr(candidateParams, filters, prefs)); // 先正文门、后排序（同 FTS 路径）
   const prescore = prescoreOrderBy(candidateParams, filters, prefs);
-  const orderBy = prescore ?? candidateOrderBy(candidateParams, filters, prefs);
+  const orderBy = prescore?.orderBy ?? candidateOrderBy(candidateParams, filters, prefs);
   const matchWindow = prescore ? matchPrescoreWindow() : SCAN_BUDGET;
+  // 粗排的收窄条件只进候选 SQL，不进 conds（计数 / 真实总数仍按完整 where 算）。
+  const candidateConds = prescore?.candidateWhere ? [...conds, prescore.candidateWhere] : conds;
   const sql =
-    `select ${columns} from jobs where ${conds.join(" and ")}${orderBy} ` +
+    `select ${columns} from jobs where ${candidateConds.join(" and ")}${orderBy} ` +
     `limit $${candidateParams.length + 1} offset $${candidateParams.length + 2}`;
   const fetchRows = async (want: number, off: number) => {
     const s = now();
@@ -738,7 +765,8 @@ async function searchViaScan(
     const s = now();
     const raw = await fetchCandidates(sql, [...candidateParams, matchWindow, 0], fetchMeta);
     fetchMs += now() - s;
-    exhausted = absorb(raw, matchWindow);
+    // 候选被 candidateWhere 收窄过时，「拿到的比窗口少」不等于「全库看完了」→ 仍按 capped 走真实总数计数。
+    exhausted = absorb(raw, matchWindow) && !prescore?.candidateWhere;
   } else {
     // newest 攒够 need 即停 → 保持逐页，不为了少几次往返把 2.8 万行全拉回来。
     // （并行取页已实测更慢/会 500，见上面常量位置的记录，别再改回去。）
