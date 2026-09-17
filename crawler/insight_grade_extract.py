@@ -168,7 +168,7 @@ def _load_rows(supabase, metric_keys, max_attempts=None) -> list[dict]:
     """分页读取候选行；PostgREST 单次最多 1000 行，不能直接 .execute()。
 
     ⚠️ 必须排除已达重试上限的条目，否则判不出档的那批会被每天重选、永久空烧（见
-    MAX 上限注释与迁移 256）。
+    MAX 上限注释与迁移 257）。
     """
     cap = max_attempts or max_grade_attempts()
     return db.fetch_all_rows(

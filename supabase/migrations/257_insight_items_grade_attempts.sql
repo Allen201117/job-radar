@@ -1,4 +1,4 @@
--- 256_insight_items_grade_attempts.sql
+-- 257_insight_items_grade_attempts.sql
 -- 档位判档的「已尝试」簿记（修 insight_grade_extract 连续 9 天 graded:0 / ungraded:194 的空转）。
 --
 -- 现象：ops_runs 里 insight_grade_extract 从 2026-09-09 起每天 scanned≈194 / graded=0 / llm_calls=11，
