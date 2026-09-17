@@ -706,6 +706,16 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
    「校招」在专区里静默消失。列与 JS 现算同源（`crawler/recruitment_classify.py` 隔进程调同一份 JS；live 对拍
    20,311 行零不一致），`campusAdmission` 有列就认列，正则只兜 NULL。契约测试 `tests/campus-zone-prefilter.test.js`。
 
+## 🧪 「更准了」必须拿尺子说话：match-eval + 用户体验走查（2026-09-17 立）
+
+- **精度尺子** `scripts/match-eval`（LLM 独立裁判，严格=同一具体角色）。⚠️ 判官必须 temperature=0 + 判决缓存：
+  实测同一批 25 个岗（24 个相同）两次裁判严格准确率 88% 与 40%，尺子自己在抖时对拍出来的升降全是噪音。
+  改任何召回/匹配/词库前后都要跑，报**逐画像**的严格准确率，不许只报「候选变多了」（本轮就是这么把「更准」说出口的）。
+- **体验尺子** `scripts/ux-walkthrough/walkthrough.js`（每日 `ux-walkthrough.yml`，`ops_runs.ux_walkthrough`）：拿真实用户画像逐个
+  模拟推荐 / 方向 / 洞察覆盖 / 校招专区 / 接口 TTFB。它第一天就抓到 7/44 用户推荐页 0 岗（手填岗位写法 4 人 +
+  求职范围海外错配 3 人），这两类单测永远报不了警——只有喂真实画像才看得见。
+- 匿名 `/api/jobs/search?sortBy=match` **不再拉 2.8 万行整窗**：无偏好打分全 0 = 纯新鲜度，走逐页攒够即停；有偏好才看满窗口。
+
 ## 认证
 
 Supabase Auth（邮箱登录）+ cookie session。`middleware.ts` 排除 `/api/*`，API 未登录返回 `401 application/json`，不被页面重定向拦截。Sources 页仅管理员。
