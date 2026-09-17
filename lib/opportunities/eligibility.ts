@@ -47,19 +47,60 @@ export function userTargetFunctions(profile: RadarProfile): Set<string> {
   return out;
 }
 
+interface RoleTier {
+  tier: "exact" | "related" | null;
+  label: string | null;
+  // 命中落在标题上还是只在正文里（scoring 用它分 40/30 两档）。
+  titleHit: boolean;
+}
+
+// keywordMatchTier 的匹配域有三块（见 china-keyword-expansion._jobTexts）：标题 / 公司 / 内容
+// （内容 = location + job_type + summary + salary）。把不想要的那块置空再判一次，就是「命中落在哪一块」。
+// ⚠️ 两个裁剪对象都必须**每个岗位只建一次、跨查询词复用**：那边的文本缓存是按行对象身份的 WeakMap，
+// 每个词各克隆一次会让缓存全 miss、把标题重新归一 N 遍。
+//
+// 两种裁剪法是刻意分开的，别合并成一个：
+//   noContentJob  → 给 roleTitleHit（40/30 分档）用，口径与 2026-09-17 上线时逐字一致，本次不动。
+//   titleOnlyJob  → 给下面的职能门豁免用。豁免必须严到**只认标题**：真库实测（44 画像）宽到带公司名时，
+//                   新放行的 1,700 个岗里 572 个（34%）其实是公司名里带了用户的方向词
+//                   （「机械」画像 → XX机械有限公司名下全部岗位），那不是「标题写着他要的岗」。
+function noContentJob(job: Job): Job {
+  return { ...job, summary: null, job_type: null, salary_text: null, location: null } as Job;
+}
+function titleOnlyJob(job: Job): Job {
+  // company 是 `string`（非空类型），置空串即可 —— _jobTexts 归一后同样得到空公司域。
+  return { ...job, summary: null, job_type: null, salary_text: null, location: null, company: "" } as Job;
+}
+
 // role+keyword 跨查询取最优 tier；exact 立即胜出，否则首个 related。
 function bestRoleTier(
   job: Job,
+  titleJob: Job,
   queries: string[],
   options: { includeOverseasLexicon?: boolean } = {},
-): { tier: "exact" | "related" | null; label: string | null } {
+): RoleTier {
   let label: string | null = null;
   for (const q of queries) {
     const t = keywordMatchTier(job, q, options);
-    if (t === "exact") return { tier: "exact", label: q };
+    if (t === "exact") {
+      return { tier: "exact", label: q, titleHit: keywordMatchTier(titleJob, q, options) === "exact" };
+    }
     if (t === "related" && label === null) label = q;
   }
-  return { tier: label ? "related" : null, label };
+  return { tier: label ? "related" : null, label, titleHit: false };
+}
+
+// 职能门拒收的岗位走这条：**只认标题字面精确命中**，一条都不看正文。
+// 与 bestRoleTier 的差别是刻意的——正文里的泛词正是职能门要挡的东西，标题字面写着用户要的岗位名不是。
+function titleExactRoleTier(
+  titleJob: Job,
+  queries: string[],
+  options: { includeOverseasLexicon?: boolean } = {},
+): RoleTier {
+  for (const q of queries) {
+    if (keywordMatchTier(titleJob, q, options) === "exact") return { tier: "exact", label: q, titleHit: true };
+  }
+  return { tier: null, label: null, titleHit: false };
 }
 
 function usesOverseasScope(profile: RadarProfile, job: Job): boolean {
@@ -167,23 +208,42 @@ export function computeMatchFacts(
   // 关键词降级为「加分技能」（≤15 分封顶），只有在它没被当作方向查询时才并入，避免同一个词双重计分。
   const skillTerms =
     profile.targetRoles.length > 0 ? [...profile.skills, ...profile.targetKeywords] : profile.skills;
-  // 职能门：岗位职能判得出且不在用户方向集内 → 不认作方向匹配（roleTier=null → checkEligibility 按 role_mismatch 拒掉）。
+  // 职能门：岗位职能判得出且不在用户方向集内 → 正文/泛词带来的方向命中不算数
+  // （roleTier=null → checkEligibility 按 role_mismatch 拒掉）。
   // 这样「后端/算法开发(研发)」不会因 JD 里含 AI/产品 被误标 方向匹配/高匹配。判不出(其他)或用户没填方向 → 放行（不误杀）。
+  //
+  // ⚠️ **职能门两边的口径必须对称，否则标题字面写着用户目标岗位的岗会被拒（2026-09-18 立）**：
+  // 用户方向集来自 `classifyJobFunction({ title: role })` —— **只看标题**；
+  // 而岗位这边 `classifyJobFunction(job)` 优先认物化列 `jobs.job_function`，那是按**标题 + 正文**算的。
+  // 同一个词两把尺子，于是「仓库文员 / 办公室文员」画像（userFns={职能}）下，
+  // 「客房部文员」(物化列=供应链)、「客服文员」(客服服务) 这类标题自判就是「职能」的岗全被 role_mismatch 拒掉。
+  // 修法 = 物化列口径不放行时，再用**和用户侧同一个表达式**（只看标题）复判一次；两边都判不出交集才拒。
+  //
+  // 🚫 **不能改成「标题字面 exact 命中一律豁免职能门」**——真库 44 画像 + LLM 独立裁判实测过，代价是精度塌方：
+  // 那一版比本版多放行 1,040 个岗，随机 150 条送判官 → **严格（同一具体角色）只有 48.0%、宽松 64.7%**；
+  // 本版新放行的 93 条同口径是 **严格 84.4% / 宽松 95.2%**。多出来的那批集中在两个坏形态：
+  // 「产品经理」→ `Product Engineering Architect` / `Product Design Engineer` / `Senior Product Engineer`，
+  // 「工程」→ `销售管理工程师` / `物流工程师`（按命中词计 产品经理 241 + 工程 263，占 45%）。
+  // 它们的标题命中落在**泛锚点**上（product / 工程），而标题真正的角色词（Engineer / 销售）属于
+  // `GENERIC_ANCHOR_GROUP_INDEXES` 那几组、无权认领标题 ⇒ 角色簇门 `_titleRoleClusterConflict` 够不着，
+  // 职能门是**唯一**拦得住它们的东西。按标题复判则两个形态都照旧拒掉（Product Engineering Architect
+  // 标题自判 = 研发、销售管理工程师 = 销售，都不在各自用户的方向集里）。
+  // 角色簇门本身在 keywordMatchTier 内部，两条路径都过它，没有被绕过。
   const userFns = userTargetFunctions(profile);
   const jobFn = classifyJobFunction(job);
   const functionAllowed = userFns.size === 0 || jobFn === "其他" || userFns.has(jobFn);
+  // 只在物化列口径已经拒了的时候才复判（省一次分类；userFns 为空时 functionAllowed 恒真，不会走到这）。
+  const titleFn = functionAllowed ? null : classifyJobFunction({ title: job.title });
+  const titleFunctionAllowed = titleFn === null || titleFn === "其他" || userFns.has(titleFn);
   const keywordOptions = usesOverseasScope(profile, job) ? { includeOverseasLexicon: true } : {};
-  const role =
-    roleConstrained && functionAllowed
-      ? bestRoleTier(job, directionQueries, keywordOptions)
-      : { tier: null as null, label: null };
-
-  // 方向命中落在标题上还是只在正文里？用只带 title/company 的裁剪岗位再判一次即可
-  // （keywordMatchTier 的内容域来自 location/job_type/summary/salary，这里全部留空）。
-  const roleTitleHit =
-    role.tier === "exact" && role.label
-      ? keywordMatchTier({ ...job, summary: null, job_type: null, salary_text: null, location: null }, role.label, keywordOptions) === "exact"
-      : false;
+  const role: RoleTier = !roleConstrained
+    ? { tier: null, label: null, titleHit: false }
+    : functionAllowed
+      ? bestRoleTier(job, noContentJob(job), directionQueries, keywordOptions)
+      : titleFunctionAllowed
+        ? titleExactRoleTier(titleOnlyJob(job), directionQueries, keywordOptions)
+        : { tier: null, label: null, titleHit: false };
+  const roleTitleHit = role.titleHit;
 
   const loc = locationState(job, profile);
   const stage = stageState(job, profile.experienceStage);

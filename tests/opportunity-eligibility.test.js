@@ -358,3 +358,95 @@ test("computeMatchFacts: 主动作 + viewed 透传", () => {
   assert.equal(f.userAction, "saved");
   assert.equal(f.viewed, true);
 });
+
+// ---- 职能门两边口径对称（2026-09-18）：用户方向集是「只看标题」算出来的，岗位这边先认物化列
+//      （按 标题+正文 算），物化列拒了必须用**同一个只看标题的表达式**复判一次，否则标题白纸黑字
+//      写着用户目标岗位的岗会被误杀。为什么不能改成「标题字面 exact 一律豁免」见 eligibility.ts 注释。
+
+test("职能门：物化列判成别的桶、但标题自判职能与用户一致 + 标题字面 exact → 放行", () => {
+  // 真实案例：用户方向「文员」(职能)；「客房部文员」物化列是 供应链，标题自判却是 职能。
+  const f = computeMatchFacts(
+    job({ title: "客房部文员", job_function: "供应链" }),
+    rprofile({ targetRoles: ["文员"] }),
+    undefined,
+    noAction,
+    NOW,
+  );
+  assert.equal(f.roleTier, "exact");
+  assert.equal(f.roleMatchLabel, "文员");
+  assert.equal(f.roleTitleHit, true);
+  assert.equal(checkEligibility(f).eligible, true);
+});
+
+test("职能门：方向词只出现在正文（非标题字面）+ 职能不符 → 仍拒", () => {
+  const f = computeMatchFacts(
+    job({ title: "客房部主管", job_function: "供应链", summary: "协助文员完成日常单据整理。" + "x".repeat(60) }),
+    rprofile({ targetRoles: ["文员"] }),
+    undefined,
+    noAction,
+    NOW,
+  );
+  assert.equal(f.roleTier, null);
+  assert.equal(checkEligibility(f).reason, "role_mismatch");
+});
+
+test("职能门：标题字面 exact 但标题自判职能也不符 → 仍拒（泛锚点误命中：工程 → 销售管理工程师）", () => {
+  // 「工程」自身判不出职能，用户方向集来自「机械」= 生产制造；标题自判 销售 → 两道都不放行。
+  const f = computeMatchFacts(
+    job({ title: "销售管理工程师", job_function: "销售" }),
+    rprofile({ targetRoles: ["机械", "工程"] }),
+    undefined,
+    noAction,
+    NOW,
+  );
+  assert.equal(f.roleTier, null);
+  assert.equal(checkEligibility(f).reason, "role_mismatch");
+});
+
+test("职能门：英文泛锚点同理（产品经理 → Product Engineering Architect 仍拒）", () => {
+  const f = computeMatchFacts(
+    job({ title: "Product Engineering Architect", job_function: "研发" }),
+    rprofile({ targetRoles: ["产品经理"] }),
+    undefined,
+    noAction,
+    NOW,
+  );
+  assert.equal(f.roleTier, null);
+});
+
+test("职能门的标题复判不绕过角色簇门：数据分析 → 大数据开发工程师，两条路径都拒", () => {
+  // ① 物化列本来就放行的路径
+  assert.equal(
+    computeMatchFacts(
+      job({ title: "大数据开发工程师", job_function: "数据" }),
+      rprofile({ targetRoles: ["数据分析"] }),
+      undefined,
+      noAction,
+      NOW,
+    ).roleTier,
+    null,
+  );
+  // ② 物化列拒、标题自判(数据)放行 → 走标题复判路径，角色簇门仍然拦下
+  assert.equal(
+    computeMatchFacts(
+      job({ title: "大数据开发工程师", job_function: "研发" }),
+      rprofile({ targetRoles: ["数据分析"] }),
+      undefined,
+      noAction,
+      NOW,
+    ).roleTier,
+    null,
+  );
+});
+
+test("职能门的标题复判只认标题，公司名里出现方向词不算数", () => {
+  // 标题自判「其他」→ 复判路径会跑；但裁剪岗位把 company 也置空，公司名里的「文员」命中不了。
+  const f = computeMatchFacts(
+    job({ title: "综合岗", company: "深圳文员服务有限公司", job_function: "供应链" }),
+    rprofile({ targetRoles: ["文员"] }),
+    undefined,
+    noAction,
+    NOW,
+  );
+  assert.equal(f.roleTier, null);
+});

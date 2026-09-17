@@ -5,10 +5,13 @@
 // lib/jobs-store/opportunities.candidateSummaryExpr）。真库实测：机械@广东 1,794 行里 710 行
 // 职能门必拒，整条召回 1,905 kB → 1,377 kB。
 //
-// 这条测试守三个**少一个就不再是等价变换**的口子，以及一个「拒绝原因不许漂」的不变量：
+// 这条测试守四个**少一个就不再是等价变换**的口子，以及一个「拒绝原因不许漂」的不变量：
 //   ① job_function 为 NULL / 空 / 「其他」照传（职能门对这三种放行，且列为空时要靠正文现算职能）；
 //   ② 批量门店公司照传（bulkStoreGroupKey 拿正文当折叠键，抽走会让 counts.screened 漂）；
 //   ③ 用户没填目标岗位（职能集为空）→ 整条门不生效，一行都不许省；
+//   ③b 用户配了 exclude_keywords → 整条门不生效。职能门 2026-09-18 起不再一票否决
+//      （标题自判职能相符 + 标题字面 exact 会放行），被省掉正文的行有机会展示，而排除词
+//      只出现在正文时就看不见了 ——「命中排除词一律不入选」是产品红线，不能靠运气；
 //   ④ summary_len 恒随行返回，summaryOk/summaryLong 认它 —— 否则职能门必拒的行会被记成
 //      thin_summary 而不是 role_mismatch。
 const { test } = require("node:test");
@@ -48,6 +51,12 @@ test("正文门：职能判得出的画像 → CASE 表达式带齐三个放行�
 test("正文门：用户没填目标岗位（职能集为空）→ 一行都不省，全传", () => {
   const { sql } = build({ ...baseProfile, targetRoles: [], targetKeywords: ["Python"] });
   assert.ok(!sql.includes("case when job_function is null"), "职能集为空时不许挂正文门");
+  assert.match(sql, /left\(btrim\(summary\), 300\) as summary/);
+});
+
+test("正文门：用户配了排除词 → 一行都不省，全传（排除词要看正文，是产品红线）", () => {
+  const { sql } = build({ ...baseProfile, excludeKeywords: ["外包"] });
+  assert.ok(!sql.includes("case when job_function is null"), "有排除词时不许挂正文门");
   assert.match(sql, /left\(btrim\(summary\), 300\) as summary/);
 });
 
