@@ -146,6 +146,20 @@ test("别名不得命中同一清单里的另一家公司（张冠李戴门）",
   }
 });
 
+// pattern 本身也会张冠李戴，而上面那道门只查别名。这里钉死一个 live 实测过的真实碰撞。
+test("中国电建的 pattern 不得吃掉中国能建的「火电建设」子公司", () => {
+  const entries = Object.entries(json).filter(([k]) => !k.startsWith("_")).flatMap(([, v]) => v);
+  const dianjian = entries.find((e) => e.name === "中国电建");
+  const matches = M.mustApplyPatterns(dianjian).map((p) => R.ilikeMatcher(p));
+  const hit = (name) => matches.some((m) => m(name));
+  // ❌ 旧 pattern `%电建%` 命中「火**电建**设」：2026-09-17 香港库全量实测，
+  //    139 个 ilike '%电建%' 的在招岗里 41 个是中国能建的（湖南/浙江火电建设），
+  //    而 98 个真中国电建的岗**全部**含「中国电建」四个字 —— 收紧后
+  //    去掉 41 个错算、真岗一个不少（反方向为 0，不是抽样，是扫全集）。
+  assert.equal(hit("中国能源建设集团湖南火电建设有限公司（中国能建）"), false);
+  assert.equal(hit("中国电建集团华东勘测设计研究院有限公司"), true);
+});
+
 test("mustApplyPatterns = pattern + 别名，无别名时行为不变", () => {
   assert.deepEqual(M.mustApplyPatterns({ pattern: "%甲%" }), ["%甲%"]);
   assert.deepEqual(M.mustApplyPatterns({ pattern: "%甲%", aliases: [] }), ["%甲%"]);
