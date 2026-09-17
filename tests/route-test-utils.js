@@ -53,6 +53,9 @@ function loadRoute(relativePath, mocks = {}) {
       NextRequest: class NextRequest {},
       NextResponse: { json: jsonResponse },
     },
+    // 路由里的缓存失效调用（revalidateTag/revalidatePath）在 Next 请求上下文之外会抛；
+    // 测试只关心业务顺序与返回值，这里默认给空实现，测试可按需覆盖。
+    "next/cache": { revalidateTag() {}, revalidatePath() {} },
     ...mocks,
   };
   // Node 的 require 不认 .ts。被测文件里**未被显式 mock**的 TS 依赖（如 lib/apiAuth.ts 与各

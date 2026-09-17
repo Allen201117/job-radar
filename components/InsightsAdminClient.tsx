@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, PencilSimple, Trash, ArrowCounterClockwise, CircleNotch, X, Flag, Warning, Sparkle, CheckCircle, XCircle } from "@phosphor-icons/react";
 import ActionToast, { useActionToast } from "@/components/ActionToast";
+import { invalidateCompanyInsights } from "@/lib/insight-client";
 import { INSIGHT_DIMENSIONS } from "@/lib/insight-bundle";
 import { INDUSTRIES } from "@/lib/industries";
 import type {
@@ -508,6 +509,9 @@ export default function InsightsAdminClient() {
         showToast({ text: data.error || "操作失败", tone: "error" });
         return;
       }
+      // 撤回要传到本会话的公司抽屉缓存（lib/insight-client 10 分钟 TTL），否则管理员自己再点开抽屉
+      // 仍看到刚下架的条目。服务端 /insights 索引由接口侧 revalidateTag 失效。
+      invalidateCompanyInsights();
       await load();
       showToast({ text: resolution === "upheld" ? "申诉成立，已下架该条" : "已驳回申诉" });
     } finally {

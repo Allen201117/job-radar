@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { requireAdmin } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
 
@@ -50,6 +51,9 @@ export async function POST(request: NextRequest) {
       console.error("[insights-admin] 下架被申诉条目失败", retireErr.message);
       return NextResponse.json({ ok: false, error: retireErr.message }, { status: 500 });
     }
+    // I5 残留（2026-09-17 修）：下架只改了库，/insights 洞察库索引走 unstable_cache（tag insight-library），
+    // 不失效的话被撤回的条目还会在索引页挂到 TTL 到期。公司抽屉接口是实时读库，不受影响。
+    revalidateTag("insight-library");
   }
 
   const { error: upErr } = await service

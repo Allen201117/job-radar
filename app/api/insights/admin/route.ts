@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { requireAdmin } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
 import { fetchAllPages } from "@/lib/supabase-paginate";
@@ -345,5 +346,7 @@ export async function PATCH(request: NextRequest) {
     console.error("[insights-admin] 改状态失败", upErr.message);
     return NextResponse.json({ ok: false, error: upErr.message }, { status: 500 });
   }
+  // 上架/下架都要让 /insights 索引缓存（tag insight-library）失效，否则撤回要等 TTL 才到达索引页（I5 残留）。
+  revalidateTag("insight-library");
   return NextResponse.json({ ok: true, id, status });
 }
