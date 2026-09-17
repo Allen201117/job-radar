@@ -32,6 +32,13 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+      # ⚠️ jobs 热表在自建香港 PG。不注入这三个，`insight_backlog.fetch_t3_queue` 的
+      # `if not jobs_db.enabled()` 会**静默**提前 return —— 需求排序（用户 30 天看过/收藏/投递的
+      # 公司优先 + 必投清单优先）整段变成死代码，队列退回按 founded_year 排，而且不报错、
+      # 日志里一个字都没有。2026-09-17 体检发现这条链一直就是这么跑的。
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+      JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+      JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
       # 搜索源 key：配哪个用哪个，未配的 router 自动跳过（先用免费额度验证灵活性）
       BOCHA_API_KEY: ${{ secrets.BOCHA_API_KEY }}
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
