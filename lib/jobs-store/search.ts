@@ -472,6 +472,7 @@ function prescoreOrderBy(
   params: unknown[],
   filters: Filters,
   prefs: UserPreferences | null,
+  options: { candidateWhere: boolean },
 ): Prescore | null {
   if (filters.sortBy !== "match" || !prefs) return null;
   // 运维开关：出事改 Vercel 变量退回「全窗 JS 精排」，不用重新部署（对拍脚本也拿它取真值）。
@@ -499,7 +500,9 @@ function prescoreOrderBy(
   pieces.push("((first_seen_at > now() - interval '7 days') is true)::int * 10");
   let candidateWhere: string | null = null;
   if (dirQuery) {
-    if (narrowQuery) {
+    // ⚠️ 只有调用方真会把 candidateWhere 拼进 SQL 时才压这个参数：绑定了 SQL 里没引用的参数 PG 直接报错
+    //（2026-09-18 线上实锤：FTS 路径没用收窄条件却压了参数 → 抛错 → 被 searchJobsStore 的 catch 吞掉、静默退化到扫描路径）。
+    if (narrowQuery && options.candidateWhere) {
       // 先压窄查询、再压宽查询：保住「候选查询最后一个参数 = 排序 tsquery」的既有契约（tests/jobs-store-candidate-window）。
       params.push(narrowQuery);
       candidateWhere = `(search_doc @@ to_tsquery('simple', $${params.length}) or first_seen_at > now() - interval '7 days')`;
@@ -660,7 +663,7 @@ async function searchViaFTS(
   // 登录 + match：与扫描路径同一套 SQL 粗排 + 1000 窗口（2026-09-18）。此前带城市/关键词的登录默认态
   // 一次拉满 FTS_CAP=8000 行再 JS 全打分：线上账本 fetch 1.4s + score 1.6s；候选集本身已被 FTS 收窄，
   // 不再另加 candidateWhere。窗口装不下时（capped）照旧走 exactTotalWhenCapped 给真实总数。
-  const prescore = prescoreOrderBy(candidateParams, filters, prefs);
+  const prescore = prescoreOrderBy(candidateParams, filters, prefs, { candidateWhere: false });
   const orderBy = prescore?.orderBy ?? candidateOrderBy(candidateParams, filters, prefs);
   const cap = prescore ? matchPrescoreWindow() : FTS_CAP;
   const rows = annotateSourceAdapter(
@@ -754,7 +757,7 @@ async function searchViaScan(
   // 同 FTS 路径：`params` 只留 where（计数要用），排序/正文门参数进 candidateParams。
   const candidateParams = [...params];
   const columns = candidateColumns(candidateSummaryExpr(candidateParams, filters, prefs)); // 先正文门、后排序（同 FTS 路径）
-  const prescore = prescoreOrderBy(candidateParams, filters, prefs);
+  const prescore = prescoreOrderBy(candidateParams, filters, prefs, { candidateWhere: true });
   const orderBy = prescore?.orderBy ?? candidateOrderBy(candidateParams, filters, prefs);
   const matchWindow = prescore ? matchPrescoreWindow() : SCAN_BUDGET;
   // 粗排的收窄条件只进候选 SQL，不进 conds（计数 / 真实总数仍按完整 where 算）。
@@ -901,8 +904,10 @@ export async function searchJobsStore(
   if (tsquery) {
     try {
       return await searchViaFTS(filters, prefs, actions, offset, limit, tsquery, adapterBySource);
-    } catch {
-      // FTS 异常 → 降级扫描，保证搜索永不挂
+    } catch (error) {
+      // FTS 异常 → 降级扫描，保证搜索永不挂。⚠️ 必须记日志：这里曾静默吞掉「绑定了未引用参数」的 PG 错误，
+      // 线上带城市的登录搜索整体退化到扫描路径（总数变 N+、候选口径变样）一段时间无人知晓（2026-09-18）。
+      console.error("[jobs-search] fts path failed, falling back to scan", error instanceof Error ? error.message : error);
     }
   }
   return await searchViaScan(filters, prefs, actions, offset, limit, adapterBySource);

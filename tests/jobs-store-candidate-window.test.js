@@ -461,3 +461,28 @@ test("匿名 + 按匹配度排：没有偏好就是纯新鲜度 → 走逐页路
   assert.equal(result.jobs.length, 60);
   assert.equal(result.timing.path, "scan");
 });
+
+// 2026-09-18 线上实锤：候选 SQL 绑定了一个没被引用的参数（FTS 路径压了收窄用的 tsquery 却没拼收窄条件）
+// → PG 报错 → searchJobsStore 的 catch 静默退化到扫描路径。钉死：两条路径的候选 SQL 每个绑定参数都必须被引用，
+// 且引用的最大编号不超过参数个数。
+for (const [name, filters] of [
+  ["FTS 路径（city）", { city: "深圳" }],
+  ["FTS 路径（keyword）", { keyword: "后端" }],
+  ["扫描路径（无筛选）", {}],
+]) {
+  test(`候选 SQL 的绑定参数与占位符一一对应：${name}`, async () => {
+    const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+    install({ candidates: candidateRows(200), count: null });
+    await search.searchJobsStore(
+      { ...DEFAULT_FILTERS, ...filters },
+      prefsWith({ target_roles: ["后端工程师"], target_locations: ["上海"], target_companies: ["腾讯"] }),
+      [],
+      0,
+      60,
+    );
+    const c = candidateSql(calls);
+    const used = new Set([...c.sql.matchAll(/\$(\d+)/g)].map((m) => Number(m[1])));
+    for (let i = 1; i <= c.params.length; i++) assert.ok(used.has(i), `$${i} 被绑定但 SQL 没引用：${c.sql}`);
+    assert.ok(Math.max(...used) <= c.params.length, "SQL 引用了没绑定的参数");
+  });
+}
