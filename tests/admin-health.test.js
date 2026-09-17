@@ -72,16 +72,21 @@ test("gap attempt summary reports campus channel as a separate axis from company
     { company: "农业银行", state: "healthy", campus_channel: "idle" },
     { company: "建设银行", state: "healthy", campus_channel: "healthy", campus_jobs_recent: 3784 },
     { company: "宁波银行", state: "unknown", campus_channel: "missing" },
+    // pending = 有校招源但近 3 天还有岗没分类完（迁移 256）。它**不能**并进 idle：
+    // 并进去就是又把「还没算」说成「确认零校招岗」，正是那条迁移要消掉的假话。
+    { company: "潍柴", state: "healthy", campus_channel: "pending" },
     { company: "Shell", state: "healthy" }, // 老行 / 海外：没有这列 = unknown，不算进缺口
   ];
   const summary = H.summarizeMustApplyGapAttempts(rows);
   assert.deepEqual(summary.campusChannel, {
     healthy: 1,
     idle: 1,
+    pending: 1,
     missing: 2,
     unknown: 1,
     missingCompanies: ["宁波银行", "招商银行"],
     idleCompanies: ["农业银行"],
+    pendingCompanies: ["潍柴"],
   });
 });
 

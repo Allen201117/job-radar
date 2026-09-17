@@ -60,7 +60,18 @@ select
   count(*) filter (
     where job_scope = %(scope)s and recruitment_category = '实习'
       and last_seen_at > now() - interval '3 days'
-  ) as intern_recent
+  ) as intern_recent,
+  -- ⚠️ `recruitment_category is null` = 「还没算」，**不是**「不是校招」（jobs-db/schema.sql
+  -- 的 jobs_guard_recruitment_class：列表一重抓、分类依据一变就把结论作废置 NULL，
+  -- 由 backfill-recruitment-category 重新算出来）。上面两个 filter 拿不到这些行，
+  -- 于是「刚抓完还没回填」会被读成「这个渠道零产出」→ 假 idle。
+  -- 2026-09-17 实测：24 家 idle 里 6 家（潍柴/华为/中通/奔驰/迈瑞/金茂）纯属这一种，
+  -- 离线用同一份 JS 裁决重算 → 36/70/23/10/1/8 个校招岗，反向（列说校招、重算说不是）0 条。
+  -- 所以把「待分类」如实数出来，让 classify_company 有能力说「还不知道」而不是说「没有」。
+  count(*) filter (
+    where job_scope = %(scope)s and recruitment_category is null
+      and last_seen_at > now() - interval '3 days'
+  ) as unclassified_recent
   {brand_columns}
 from jobs
 where status = 'active'
@@ -99,7 +110,7 @@ _CAMPUS_BOARDS = frozenset({"campus", "mixed"})
 
 def campus_channel_counts(rows):
     """一轮 census 的渠道分布，写进 ops_runs 供趋势与看门狗读。"""
-    counts = {"healthy": 0, "idle": 0, "missing": 0, "unknown": 0}
+    counts = {"healthy": 0, "idle": 0, "pending": 0, "missing": 0, "unknown": 0}
     for row in rows or []:
         key = str((row or {}).get("campus_channel") or "unknown")
         counts[key if key in counts else "unknown"] += 1
@@ -161,13 +172,19 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None,
     # 2026-09-17 的盲区正是把前者当成了后者：46 家 healthy 的公司校招渠道根本没接。
     campus_recent = sum(_as_int(row.get("campus_recent")) for row in matched_jobs)
     intern_recent = sum(_as_int(row.get("intern_recent")) for row in matched_jobs)
+    unclassified_recent = sum(_as_int(row.get("unclassified_recent")) for row in matched_jobs)
     if scope != "domestic":
         campus_channel = "unknown"          # 海外清单不按国内秋招口径判
     elif campus_recent > 0:
         campus_channel = "healthy"          # 产出反查优先，不管源标的是什么板块
     elif any(str(row.get("board") or "") in _CAMPUS_BOARDS for row in enabled_sources):
-        campus_channel = "idle"             # 渠道在、没出岗：源坏了或对方还没开
+        # 「渠道在、没出岗」这句话只有在**近 3 天的岗都已分类**时才成立。
+        # 还有没算完的行 → 我们没有资格说「没出岗」，如实记 pending（见 SQL 那段注释）。
+        campus_channel = "idle" if unclassified_recent == 0 else "pending"
     else:
+        # ⚠️ pending 刻意**不覆盖 missing**：missing 是按 `sources` 判的（有没有 campus/mixed 源），
+        # 与分类列无关，NULL 推翻不了它。把它也降级成 pending 会让真缺口从看门狗规则 O 里消失 ——
+        # 那是把「指标诚实」修成「指标好看」，方向正好反了。
         campus_channel = "missing"          # 没接校招渠道（社招接没接都算）
 
     # program_companies 传进来的已经是**清单规范名**（归属由 resolve_program_owners 在
@@ -203,6 +220,7 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None,
         "healthy_jobs": healthy_total,
         "direct_healthy_jobs": direct_healthy,
         "other_scope_healthy_jobs": other_scope_healthy if has_other_scope else None,
+        "campus_unclassified_recent": unclassified_recent,
         "parent_portal_healthy_jobs": accepted_parent["healthy"],
         "covered_via_parent_portal": accepted_parent["healthy"] > 0,
         "matched_job_companies": sorted({
@@ -238,6 +256,7 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None,
         "state": state,
         "campus_channel": campus_channel,
         "campus_jobs_recent": campus_recent,
+        # 不额外加列：待分类数写进 evidence，看台账的人能自己解释「为什么是 pending」。
         "intern_jobs_recent": intern_recent,
         "source_id": source_id,
         "official_entry_url": prev.get("official_entry_url"),

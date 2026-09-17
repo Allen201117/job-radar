@@ -38,6 +38,52 @@ class CampusChannelTest(unittest.TestCase):
         )
         self.assertEqual(row["campus_channel"], "idle")
 
+    def test_unclassified_recent_jobs_make_channel_pending_not_idle(self):
+        """`recruitment_category is null` = 「还没算」≠「不是校招」（迁移 256）。
+
+        2026-09-17：潍柴 259 行近 3 天的岗全是 NULL（列表重抓 → 触发器作废结论，等 backfill），
+        普查把它读成「渠道零产出」→ 假 idle；离线用同一份 JS 裁决重算得 36 个校招岗。
+        """
+        row = gc.classify_company(
+            _company(),
+            [{"company": "甲公司", "active_total": 259, "healthy": 259,
+              "campus_recent": 0, "intern_recent": 0, "unclassified_recent": 259}],
+            [{"company": "甲公司", "enabled": True, "id": "s1", "board": "mixed"}],
+            None,
+        )
+        self.assertEqual(row["campus_channel"], "pending")
+        self.assertEqual(row["evidence"]["campus_unclassified_recent"], 259)
+
+    def test_unclassified_jobs_do_not_downgrade_missing_to_pending(self):
+        """pending 只降级 idle：missing 是按 sources 判的，分类列 NULL 推翻不了它。
+
+        把 missing 也说成 pending = 真缺口从看门狗规则 O 里消失，方向正好反了。
+        """
+        row = gc.classify_company(
+            _company(),
+            [{"company": "甲公司", "active_total": 500, "healthy": 500,
+              "campus_recent": 0, "intern_recent": 0, "unclassified_recent": 120}],
+            [{"company": "甲公司", "enabled": True, "id": "s1", "board": "social"}],
+            None,
+        )
+        self.assertEqual(row["campus_channel"], "missing")
+
+    def test_campus_jobs_outrank_unclassified(self):
+        """已经抓到校招岗就是 healthy —— 有没有待分类的行都不影响这个结论。"""
+        row = gc.classify_company(
+            _company(),
+            [{"company": "甲公司", "active_total": 9, "healthy": 9,
+              "campus_recent": 3, "intern_recent": 0, "unclassified_recent": 50}],
+            [{"company": "甲公司", "enabled": True, "id": "s1", "board": "mixed"}],
+            None,
+        )
+        self.assertEqual(row["campus_channel"], "healthy")
+
+    def test_aggregate_query_counts_unclassified_jobs(self):
+        sql, _params, _rules = gc._job_aggregate_query([_company()])
+        self.assertIn("recruitment_category is null", sql)
+        self.assertIn("as unclassified_recent", sql)
+
     def test_social_only_source_is_missing_channel_even_when_company_is_healthy(self):
         # 这正是 2026-09-17 的盲区：一家有 500 个社招岗的公司被记成 healthy，校招 0 却没人知道。
         row = gc.classify_company(
@@ -69,8 +115,12 @@ class CampusChannelTest(unittest.TestCase):
         self.assertIn("as intern_recent", sql)
 
     def test_channel_counts_are_summarised_per_census(self):
-        rows = [{"campus_channel": "healthy"}, {"campus_channel": "missing"}, {"campus_channel": "missing"}, {"campus_channel": "idle"}]
-        self.assertEqual(gc.campus_channel_counts(rows), {"healthy": 1, "idle": 1, "missing": 2, "unknown": 0})
+        rows = [{"campus_channel": "healthy"}, {"campus_channel": "missing"},
+                {"campus_channel": "missing"}, {"campus_channel": "idle"}, {"campus_channel": "pending"}]
+        self.assertEqual(
+            gc.campus_channel_counts(rows),
+            {"healthy": 1, "idle": 1, "pending": 1, "missing": 2, "unknown": 0},
+        )
 
 
 class CampusQueueTest(unittest.TestCase):
