@@ -74,8 +74,9 @@ class QueryMatchesTest(unittest.TestCase):
 class ParityWithFrontendTest(unittest.TestCase):
     def test_group_count_matches_frontend(self):
         # 本次把 JS 已有 25 组同步到 crawler，并在末尾追加金融、教育、医疗、制造、建筑、客服共 20 组。
-        # 本次再追加「学段」修饰组；46 这个数是两端索引同构的守卫：加组时必须同步 KEYWORD_GROUP_FUNCTIONS。
-        self.assertEqual(len(cke.CHINA_KEYWORD_GROUPS), 46)
+        # 又追加「学段」修饰组；2026-09-18 学生画像走查再追加投行/并购(46)、编导/内容制作(47) 两组。
+        # 这个数是两端索引同构的守卫：加组时必须同步 KEYWORD_GROUP_FUNCTIONS 与 lib/china-keyword-expansion.js。
+        self.assertEqual(len(cke.CHINA_KEYWORD_GROUPS), 48)
 
     def test_group_functions_aligned(self):
         self.assertEqual(len(cke.KEYWORD_GROUP_FUNCTIONS), len(cke.CHINA_KEYWORD_GROUPS))
@@ -370,6 +371,67 @@ class JobMatchesTest(unittest.TestCase):
         self.assertTrue(cke.job_matches("土建施工与系统实施工程", "", "土木"))
         self.assertTrue(cke.job_matches("资深产品经理", "", "产品经理"))
         self.assertTrue(cke.job_matches("推荐算法工程师", "", "算法"))
+
+
+class StudentPersonaWalkthroughDirectionsTest(unittest.TestCase):
+    """2026-09-18 学生画像走查补词表：9 个几乎搜不到的方向，与 lib/china-keyword-expansion.js
+    的 tests/china-keyword-expansion.test.js 同批断言同步，两边必须保持一致。"""
+
+    def test_investment_banking_direction(self):
+        for title in [
+            "投行业务岗（先进制造方向）",
+            "承做业务岗（并购组）",
+            "债券承做岗(009759)",
+            "投资银行部",
+            "Investment Banking Analyst",
+        ]:
+            self.assertTrue(cke.job_matches(title, "", "投行分析师"), title)
+        self.assertFalse(cke.job_matches("证券研究员", "", "投行分析师"))
+
+    def test_pharma_rd_direction_not_blocked_by_generic_engineering_group(self):
+        for title in [
+            "2026届-博士-有机合成研究员-北京总部",
+            "制剂分析研究员-北京",
+            "药理毒理总监级",
+            "原料药合成实验员(J11081)",
+            "药物化学研究员(J16619)",
+            "CMC Director",
+        ]:
+            self.assertTrue(cke.job_matches(title, "", "药物研发"), title)
+
+    def test_clinical_research_direction(self):
+        self.assertTrue(cke.job_matches("医学经理(J22026)", "", "临床研究"))
+        self.assertTrue(cke.job_matches("临床运营部：临床项目总监", "", "临床研究"))
+
+    def test_cost_engineering_direction(self):
+        self.assertTrue(cke.job_matches("2027届校招一公司预算员", "", "造价"))
+
+    def test_warehouse_operations_direction_and_data_warehouse_false_friend(self):
+        self.assertTrue(cke.job_matches("仓库管理员", "", "仓储"))
+        self.assertTrue(cke.job_matches("仓储主管", "", "仓储"))
+        # 「数据仓库」是数据工程概念，不该被供应链组的「仓库」抢成"已被认领"，否则会把它从
+        # 「数据分析」这类查询里挤掉。
+        self.assertTrue(cke.job_matches("Data Warehouse Engineer", "", "数据分析"))
+        self.assertTrue(cke.job_matches("数据仓库开发工程师-国际化业务", "", "数据分析"))
+
+    def test_after_sales_and_store_trainee_suffix_fix(self):
+        self.assertTrue(cke.job_matches("2027-国内售后工程师（惠州）", "", "售后服务"))
+        self.assertTrue(cke.job_matches("售后运营培训生-东南亚", "", "售后服务"))
+        self.assertTrue(cke.job_matches("特步-储备店长（云南）", "", "门店管培"))
+
+    def test_content_production_direction(self):
+        for title in ["米哈游 视频编导", "阿里巴巴 动漫制片", "游戏动画导演（2027届）", "视频剪辑专员(J25948)"]:
+            self.assertTrue(cke.job_matches(title, "", "编导"), title)
+        self.assertFalse(cke.job_matches("客户端开发工程师（PC端基础剪辑）", "", "编导"))
+
+    def test_generic_engineering_group_still_required_when_no_overlap(self):
+        # 「硬件工程师」的"硬件"耗不尽查询、仍剩"工程师"三个实字 → 21 组必须保留，
+        # 否则「硬件产品经理」「硬件采购专员」这类无关角色会被放行（2026-09-18 全量对拍实测过的红线）。
+        self.assertFalse(cke.job_matches("硬件产品经理", "", "硬件工程师"))
+        self.assertFalse(cke.job_matches("硬件采购专员", "", "硬件工程师"))
+        self.assertTrue(cke.job_matches("嵌入式硬件工程师", "", "硬件工程师"))
+        # 「机械工程师」的"工程"与"机械工程"重叠、可以压掉 21 组，纯英文标题也应召回。
+        self.assertTrue(cke.job_matches("Principal Mechanical Engineer, Industrial Robotics Group", "", "机械工程师"))
 
 
 if __name__ == "__main__":

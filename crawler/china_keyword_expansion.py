@@ -34,7 +34,10 @@ CHINA_KEYWORD_GROUPS: List[List[str]] = [
     ["财务", "会计", "审计", "finance", "accounting", "audit", "financial analyst", "财务分析"],
     ["人力", "人力资源", "招聘", "hr", "human resources", "recruiter", "recruiting", "talent"],
     ["法务", "法律", "合规", "legal", "compliance", "counsel"],
-    ["供应链", "采购", "物流", "supply chain", "procurement", "logistics", "operations manager"],
+    # 仓储角色词与假朋友保护同步自 lib/china-keyword-expansion.js（2026-09-18 学生画像走查补词表）：
+    # 仓储/仓库/仓管库内证据见 JS 侧同索引注释；「仓库」的假朋友「数据仓库」登记进下方 CJK_FALSE_FRIENDS。
+    ["供应链", "采购", "物流", "supply chain", "procurement", "logistics", "operations manager",
+     "仓储", "仓库", "仓管"],
     ["硬件", "嵌入式", "芯片", "电子", "hardware", "embedded", "firmware", "chip", "asic", "fpga"],
     ["投研", "行业研究", "股票研究", "固收", "量化", "investment research",
      "equity research", "quant"],
@@ -57,8 +60,11 @@ CHINA_KEYWORD_GROUPS: List[List[str]] = [
     ["教研", "教务", "培训师", "课程顾问", "学习教练", "课程研发"],
     ["护士", "护理岗", "临床护理", "护理部", "护理师", "护师", "护士长", "nurse", "nursing"],
     ["医生", "医师", "主治", "住院医师", "全科医生", "全科医师", "全科门诊", "专科医师", "physician", "doctor"],
-    ["临床研究", "临床监查", "cra", "crc", "cta", "临床协调", "clinical research"],
-    ["药师", "药剂", "药物研发", "制药", "药品注册", "pharmacist", "pharmaceutical"],
+    # 医学经理/临床运营同步自 JS 侧（2026-09-18，库内证据见同索引注释）。
+    ["临床研究", "临床监查", "cra", "crc", "cta", "临床协调", "clinical research", "临床运营", "医学经理"],
+    # 药物化学/制剂/药理/原料药/CMC/合成研究员同步自 JS 侧（2026-09-18，库内证据见同索引注释）。
+    ["药师", "药剂", "药物研发", "制药", "药品注册", "pharmacist", "pharmaceutical",
+     "药物化学", "制剂", "药理", "原料药", "CMC", "合成研究员"],
     ["医药代表", "医药信息沟通", "医学信息沟通", "医学联络", "msl", "medical representative"],
     ["机械设计", "机械工程", "结构设计", "机构设计", "模具设计", "mechanical design", "mechanical engineer"],
     ["工艺工程", "制程", "生产工艺", "制造工程", "工艺员", "process engineer", "manufacturing engineer"],
@@ -67,11 +73,17 @@ CHINA_KEYWORD_GROUPS: List[List[str]] = [
     ["生产管理", "车间主任", "班组长", "操作工", "装配", "技工", "production supervisor", "operator"],
     # 不收裸「结构工程」：软件结构工程也会使用它，建筑组只保留土建/施工等可替代的建筑语境。
     ["土木", "土建", "建筑工程", "建筑结构", "施工", "施工员", "现场工程师", "civil engineer", "construction"],
-    ["造价", "工程预算", "工程结算", "招投标", "商务标", "cost engineer", "quantity surveyor"],
+    # 预算员同步自 JS 侧（2026-09-18，库内证据见同索引注释）。
+    ["造价", "工程预算", "工程结算", "招投标", "商务标", "cost engineer", "quantity surveyor", "预算员"],
     ["客服", "客户服务", "客户支持", "售后", "呼叫中心", "坐席", "话务", "customer service", "customer support"],
     ["店长", "店员", "导购", "收银", "门店", "零售", "营业员", "领班", "store manager", "retail"],
     # 学段是修饰语，不是职能；独立成组后「中学数学教师」会保留「数学」而兼容高中/初中标题写法。
     ["小学", "初中", "中学", "高中", "高中部", "初中部", "k12", "中小学", "幼儿园", "幼教", "学前"],
+    # 索引 46 = 投资银行/并购；索引 47 = 编导/内容制作。均于 2026-09-18 追加在末尾（不插入中间），
+    # 与 KEYWORD_GROUP_FUNCTIONS 索引严格对齐；库内证据与取舍见 lib/china-keyword-expansion.js
+    # 同索引注释（此处不重复列证据，两边必须保持一致）。
+    ["投行", "投资银行", "并购", "承做", "承揽", "investment banking", "资本市场"],
+    ["编导", "短视频编导", "导演", "制片", "视频剪辑"],
 ]
 
 # 算法岗位组与 AI 技术领域组的非对称展开与前端一致。AI 原本在末尾，后续只能追加，故索引固定为 24。
@@ -88,6 +100,9 @@ CJK_FALSE_FRIENDS = {
     "品管": ["产品管", "样品管", "用品管", "物品管"],
     "质检": ["性质检"],
     "检测": ["性质检测"],
+    # 「数据仓库」= data warehouse，数据工程概念，不是物理仓储；同步自 JS 侧 2026-09-18 修复
+    # （给供应链组新增「仓库」角色词后，「数据仓库开发工程师」被误判成已被供应链组认领）。
+    "仓库": ["数据仓库"],
 }
 
 
@@ -220,6 +235,8 @@ KEYWORD_GROUP_FUNCTIONS = [
     "客服服务",  # 43 客户服务
     "客服服务",  # 44 门店零售
     None,        # 45 学段（修饰语，不参与职能相关层）
+    "金融业务",  # 46 投资银行/并购（2026-09-18 新增，见 CHINA_KEYWORD_GROUPS 同索引注释）
+    None,        # 47 编导/内容制作（2026-09-18 新增，无对应职能桶，见 CHINA_KEYWORD_GROUPS 同索引注释）
 ]
 
 # 非软件工程降级门专用：词表刻意宽于生产制造，只负责阻止传统工程/医疗靠泛工程师进入软件研发。
@@ -287,7 +304,7 @@ GENERIC_ANCHOR_GROUP_INDEXES = {21, 22, AI_DOMAIN_GROUP_INDEX}
 # 与前端的 GENERIC_ROLE_SUFFIX_ONLY 一致：残差若只是职级/岗位后缀，不应被误加成新的 AND 条件。
 _GENERIC_ROLE_SUFFIX_ONLY = re.compile(
     r"^(?:开发|研发|工程|工程师|技术|岗位|岗|职位|方向|专员|专家|经理|主管|总监|负责人|顾问|助理|人员|"
-    r"实习生|实习|校招|社招|招聘|高级|资深|初级|中级|senior|junior|lead|staff|principal)+$",
+    r"实习生|实习|校招|社招|招聘|高级|资深|初级|中级|服务|管培|分析师|senior|junior|lead|staff|principal)+$",
     re.I,
 )
 
@@ -453,11 +470,34 @@ def keyword_match_units(query) -> List[List[str]]:
         return []
     normalized = normalize_for_match(raw)
     units: List[List[str]] = []
-    for index, group in enumerate(CHINA_KEYWORD_GROUPS):
-        if any(contains_term(normalized, term) for term in group):
-            # AI 领域包含算法岗位的召回，但算法岗位不能反向泛化成所有 AI 岗；与前端保持单向展开。
-            expanded = group + CHINA_KEYWORD_GROUPS[ALGO_GROUP_INDEX] if index == AI_DOMAIN_GROUP_INDEX else group
-            units.append([normalize_for_match(t) for t in expanded])
+
+    matched_idx = [i for i, group in enumerate(CHINA_KEYWORD_GROUPS)
+                   if any(contains_term(normalized, term) for term in group)]
+
+    # 21=工程师/研发/engineer/developer、22=软件/software 命中时，若命中文字与另一个具体方向组
+    # 完全重叠（如「药物研发」里的"研发"被"药物研发"整段包住），独立成一条 AND 单元就是重复限制，
+    # 会把残差处理挤出一个多余的强制条件（"药物研发"曾漏判"有机合成研究员"类不含"研发"二字的标题）。
+    # 判据 = 去掉 21/22 后，只用其余具体方向组能否把原查询几乎耗尽（残差 <2 字）；耗不尽（如
+    # 「硬件工程师」耗完"硬件"后还剩"工程师"三个实字）则保留 21/22，避免放行「硬件产品经理」这类
+    # 无关角色——与 lib/china-keyword-expansion.js 同步，改动请两边同改。
+    specific_idx = [i for i in matched_idx if i not in GENERIC_ANCHOR_GROUP_INDEXES]
+    suppress_generic_fallback = False
+    if specific_idx:
+        specific_terms = [t for i in specific_idx for t in CHINA_KEYWORD_GROUPS[i]]
+        remainder = normalized
+        for term in specific_terms:
+            nt = normalize_for_match(term)
+            if nt and nt in remainder:
+                remainder = remainder.replace(nt, "")
+        suppress_generic_fallback = len(remainder.strip()) < 2
+
+    for index in matched_idx:
+        if suppress_generic_fallback and index in (21, 22):
+            continue
+        group = CHINA_KEYWORD_GROUPS[index]
+        # AI 领域包含算法岗位的召回，但算法岗位不能反向泛化成所有 AI 岗；与前端保持单向展开。
+        expanded = group + CHINA_KEYWORD_GROUPS[ALGO_GROUP_INDEX] if index == AI_DOMAIN_GROUP_INDEX else group
+        units.append([normalize_for_match(t) for t in expanded])
     for lit in (normalize_for_match(t) for t in split_keyword_terms(raw)[1:]):
         if not lit:
             continue
