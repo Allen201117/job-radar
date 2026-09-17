@@ -107,6 +107,26 @@ def fetch_queue(sb, limit=0):
     return rows[:limit] if limit else rows
 
 
+_TRANSIENT_STATUS = {408, 425, 429, 500, 502, 503, 504}
+
+
+def is_transient_error(exc) -> bool:
+    """这个异常是「对方/网络一时不行」还是「这家公司真查不到」？纯函数，可单测。
+
+    为什么必须分开（2026-09-17 立）：`insight_fail_count` 累到 3 就**永久**掉出 T2 队列，
+    而 2026-09-09~11 三晚 Wikidata 连回 1,504 次 `429 Your bot is making too many requests`
+    —— 那是**我们自己 4 线程打太快**被限流，跟「Wikidata 没有这家公司」毫无关系。
+    当时把 252 家公司推到了 1~2 次失败，再来一晚同样的限流就会被永久判死。
+    把限流/超时/5xx 记成死信，等于拿「我们被限流」证明「对方没这家公司」。
+    """
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status in _TRANSIENT_STATUS:
+        return True
+    name = type(exc).__name__
+    return any(k in name for k in ("Timeout", "Connect", "ReadError", "WriteError",
+                                   "RemoteProtocol", "PoolTimeout", "NetworkError"))
+
+
 def _existing_listing(sb, company_id):
     """该公司 listing 条目（任意 origin）；wikidata/official 共用一行，官方源就地升级覆盖，避免重复卡片。"""
     rows = (sb.table("insight_items").select("id")
@@ -179,20 +199,27 @@ def enrich_company(sb, profile):
     try:
         facts = wikidata.get_company_facts(profile["company"], profile.get("aliases"))
     except Exception as e:
-        print(f"  [wd-err] {profile['company']}: {type(e).__name__}: {str(e)[:140]}")
+        transient = is_transient_error(e)
+        print(f"  [wd-err] {profile['company']}: {type(e).__name__}: {str(e)[:140]}"
+              f"{'（限流/网络抖动，不计死信）' if transient else ''}")
         # 只记失败、**不盖 checked 戳** → 下一轮还会被取到（短重试）；
         # 连续失败到 MAX_FAIL 自然掉出队列，所以不会一直卡在队首（队列按 insight_fail_count < MAX_FAIL 过滤）。
-        try:
-            sb.table("company_profiles").update({
-                "insight_fail_count": (profile.get("insight_fail_count") or 0) + 1,
-            }).eq("id", profile["id"]).execute()
-        except Exception:
-            pass
+        # ⚠️ 但限流 / 超时 / 5xx **不计**死信：那是我们自己打太快，不是对方没有这家公司。
+        if not transient:
+            try:
+                sb.table("company_profiles").update({
+                    "insight_fail_count": (profile.get("insight_fail_count") or 0) + 1,
+                }).eq("id", profile["id"]).execute()
+            except Exception:
+                pass
         return "err"
     if not facts:
         # 真正「请求成功但查无」才记一轮 checked_at（避免每次重试查无的公司）；不算硬失败
+        # 且**清零** fail_count：这一轮已经证明链路是通的，之前那几次失败不该继续记在它头上。
         try:
-            sb.table("company_profiles").update({"insight_checked_at": _now()}).eq("id", profile["id"]).execute()
+            sb.table("company_profiles").update({
+                "insight_checked_at": _now(), "insight_fail_count": 0,
+            }).eq("id", profile["id"]).execute()
         except Exception:
             return "err"
         return "noface"
@@ -221,6 +248,9 @@ def enrich_company(sb, profile):
             prof["headcount_band"] = official_band
         prof["insight_checked_at"] = _now()
         prof["last_verified_at"] = _now()
+        # 成功即清零：原来成功路径不动 fail_count，于是一家公司被限流两次留下的「疤」会
+        # 一直跟着它，下次再抖两下就被永久判死。失败计数只该数「连续失败」。
+        prof["insight_fail_count"] = 0
         sb.table("company_profiles").update(prof).eq("id", profile["id"]).execute()
         return "ok"
     except Exception:
@@ -518,6 +548,10 @@ def fetch_t3_queue(sb, limit):
 
     rows = db.fetch_all_rows(query)
     if not jobs_db.enabled():
+        # 不许静默降级：没有 jobs 库就没有需求信号，队列退回 founded_year 排序 ——
+        # 额度会花在「Wikidata 收录得早」的公司上，而不是用户真在看的公司上。
+        print("::warning::[t3] 未配置 JOBS_DATABASE_URL → 需求排序失效，"
+              "本轮按 founded_year 取队列（CI 上出现这条说明 workflow 漏注入 secret）")
         return rows[:limit] if limit else rows
 
     # 仅 jobs 库可用时才多取候选：按在招岗需求排序后再截断，避免 founded_year 把大户永远挤在队尾。
@@ -712,6 +746,28 @@ def enrich_company_t3(sb, profile):
     return "wrote" if wrote_any else "empty"
 
 
+INSIGHT_TREND_DAYS = 7
+
+
+def count_active_added(sb, days=INSIGHT_TREND_DAYS):
+    """近 days 天新增的 active 洞察条数。取不到返回 None（台账指标绝不拖垮主任务）。
+
+    为什么要记它（2026-09-17 立）：现有看门狗规则只看「这条链跑没跑、报没报错」，
+    而洞察库真正的健康指标是**库本身在不在长**。T3 每晚 `checked` 是 1~9 家、
+    `companies_enriched` 是 1~7 家，看起来天天有产出，但那说的是「处理了几家公司」，
+    不是「库里多了几条能给用户看的洞察」——两者可以长期背离且没有任何信号。
+    None 与 0 必须分开：None = 没数出来，0 = 真的一条没长。
+    """
+    try:
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        res = (sb.table("insight_items").select("id", count="exact")
+               .eq("status", "active").gte("created_at", since).limit(1).execute())
+        return int(res.count or 0)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[insight-trend] 统计近 {days} 天新增 active 洞察失败: {type(exc).__name__}")
+        return None
+
+
 def drain_t3(sb, limit=0):
     """T3 drain（多源搜索，各源受每日额度 → 串行 + 预算守门，绝不冲破各自日顶）。"""
     # 先探 LLM，再碰任何搜索额度。余额不足时继续搜索只会空烧有限日配额。
@@ -802,6 +858,8 @@ def main():
                 "companies_enriched": stat["wrote"],
                 "failed": stat["err"],
                 "mode": "experience",
+                # 库存量趋势：只有它能回答「洞察库到底在不在长」（见 count_active_added 注释）。
+                "active_added_7d": count_active_added(sb),
             },
             status=ops_runs.status_from_counts(checked, stat["err"]),
             started_at=started_at,
