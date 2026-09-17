@@ -31,7 +31,10 @@ def _confirm_httpx(item):
                     "industry": industry, "segment": "private", "_valid": r["count"], "_china": r["count"]}
     elif plat in ("hotjob", "wt"):
         r = dd.hotjob_probe(slug, cn) or dd.wt_probe(slug, cn)
-        if r and r.get("count", 0) > 0:
+        # ⚠️ 2026-09-18 修：此前只看 count>0 就当放行，压根没读 verified —— hotjob_probe/wt_probe
+        # 的 verified 字段现在带公司名核验（张冠李戴 guard），这里必须一并检查，否则猜错 slug
+        # 撞上别家真实租户时会绕过核验直接写入迁移。
+        if r and r.get("count", 0) > 0 and r.get("verified"):
             if r["platform"] == "wt":
                 return {"company": company, "adapter": "wt",
                         "url": f"{r['origin']}/wt/{r['wt_brand']}/web/index", "industry": industry,

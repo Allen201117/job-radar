@@ -1,8 +1,11 @@
-"""discover_domestic moka 校招板块探测单测（mock httpx client，不打真网络）。
+"""discover_domestic moka 校招板块探测 + hotjob/wt 公司名核验单测（mock httpx client，不打真网络）。
 
 红线：① 校招候选是独立于社招的第二条命中（各自 title-verify，互不覆盖）；
 ② 校招 URL 必须命中 CAMPUS_URL_RE（lib/campus-sources.ts 同款正则）才算「校招源」；
-③ 租户没开校招板块（404/不存在/无 orgId）时不产出候选，不是错误。
+③ 租户没开校招板块（404/不存在/无 orgId）时不产出候选，不是错误；
+④ hotjob_probe/wt_probe 的 verified 必须核验自报公司名，不能只看 suiteKey/岗位数
+（2026-09-18 修：live 实测 ampace.hotjob.cn 同时被「新能安」「安脉时代」两个目标猜中，
+两者列表接口自报 company 全是「厦门新能安（XMC）」，此前逻辑会把两个都判 verified=True）。
 """
 import re
 import unittest
@@ -160,6 +163,225 @@ class ToMokaCandidatesCampusTest(unittest.TestCase):
         hits = [{"platform": "moka", "kind": "campus", "company": "X", "verified": False,
                 "url": "https://app.mokahr.com/campus-recruitment/x/1"}]
         self.assertEqual(dd.to_moka_candidates(hits), [])
+
+
+class _FakeJsonOrHtmlResp:
+    """hotjob/wt 探测用的假响应：JSON 接口传 json_payload，HTML 落地页传 text。"""
+
+    def __init__(self, status_code=200, json_payload=None, text="", url=""):
+        self.status_code = status_code
+        self._json = json_payload
+        self.text = text
+        self.url = url
+
+    def json(self):
+        return self._json
+
+
+class _FakeHotjobClient:
+    """按 (method, url 前缀) 分派；路由值可以是响应本身，也可以是 callable(**kwargs)->响应
+    （用于按 recruitType 等请求参数返回不同数据）。未匹配的调用直接报错，方便定位测试疏漏。"""
+
+    def __init__(self, get_routes=None, post_routes=None):
+        self._get = get_routes or {}
+        self._post = post_routes or {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def _dispatch(self, routes, url, kwargs, method):
+        for prefix, resp in routes.items():
+            if url.startswith(prefix):
+                return resp(**kwargs) if callable(resp) else resp
+        raise AssertionError(f"unexpected {method} in test: {url}")
+
+    def get(self, url, **kwargs):
+        return self._dispatch(self._get, url, kwargs, "GET")
+
+    def post(self, url, **kwargs):
+        return self._dispatch(self._post, url, kwargs, "POST")
+
+
+def _patched_hotjob_client(get_routes=None, post_routes=None):
+    return mock.patch.object(dd, "_client",
+                             return_value=_FakeHotjobClient(get_routes, post_routes))
+
+
+def _wecruit_list_dispatch(company, social_count=1):
+    """listPosition 分派器：只有 recruitType=2（社招）返回一条自报 company 的岗位，
+    校招/实习渠道返回空（与真实 ampace.hotjob.cn 观测一致：某些渠道本就没开）。"""
+    def _dispatch(**kwargs):
+        rt = (kwargs.get("data") or {}).get("recruitType")
+        if rt == 2:
+            return _FakeJsonOrHtmlResp(json_payload={"data": {"pageForm": {
+                "pageData": [{"postId": "1", "postName": "两轮车大客户代表", "company": company}],
+                "total": social_count}}})
+        return _FakeJsonOrHtmlResp(json_payload={"data": {"pageForm": {"pageData": [], "total": 0}}})
+    return _dispatch
+
+
+class HotjobWecruitCompanyVerifyTest(unittest.TestCase):
+    """hotjob_probe 的 wecruit 分支：verified 必须核验列表接口自报的 `company` 字段。"""
+
+    def _routes(self, company):
+        host = "ampace.hotjob.cn"
+        origin = f"https://{host}"
+        suite_key = "SU6619d98e1eb8053acd618afb"
+        post_routes = {
+            f"{origin}/wecruit/common/getSLD": _FakeJsonOrHtmlResp(json_payload={
+                "data": {"linkData": {"link": f"{origin}/{suite_key}/pb/index.html#/",
+                                       "title": "Ampace招聘官网"}},
+                "state": "200", "type": "success"}),
+            f"{origin}/wecruit/positionInfo/listPosition/{suite_key}":
+                _wecruit_list_dispatch(company),
+        }
+        return post_routes
+
+    def test_verified_true_when_self_reported_company_matches_target(self):
+        """正例：自报 company「厦门新能安（XMC）」含目标核心词「新能安」→ verified=True。"""
+        with _patched_hotjob_client(post_routes=self._routes("厦门新能安（XMC）")):
+            r = dd.hotjob_probe("ampace", "新能安")
+        self.assertIsNotNone(r)
+        self.assertEqual(r["platform"], "wecruit")
+        self.assertTrue(r["verified"])
+        self.assertEqual(r["sample_companies"], ["厦门新能安（XMC）"])
+
+    def test_verified_false_when_self_reported_company_is_a_different_tenant(self):
+        """反例（原洞的实况）：同一个 suiteKey 被另一个目标猜中——自报 company 不含
+        「安脉时代」核心词 → verified=False，且带上不匹配的自报公司名方便人工复核。"""
+        with _patched_hotjob_client(post_routes=self._routes("厦门新能安（XMC）")):
+            r = dd.hotjob_probe("ampace", "安脉时代智能制造(宁德)")
+        self.assertIsNotNone(r)
+        self.assertFalse(r["verified"])
+        self.assertIn("厦门新能安（XMC）", r["note"])
+
+    def test_bracketed_english_name_does_not_break_matching(self):
+        """自报名带括号英文名（如「宁德时代 (CATL)」）不应干扰核心词核验——
+        核对的是中文核心词子串，英文缩写括号只是噪音，不参与匹配也不应导致误判。"""
+        with _patched_hotjob_client(post_routes=self._routes("宁德时代 (CATL)")):
+            r = dd.hotjob_probe("ampace", "宁德时代")
+        self.assertTrue(r["verified"])
+        with _patched_hotjob_client(post_routes=self._routes("宁德时代 (CATL)")):
+            r2 = dd.hotjob_probe("ampace", "国轩高科")
+        self.assertFalse(r2["verified"])
+
+
+class HotjobWtBranchCompanyVerifyTest(unittest.TestCase):
+    """hotjob_probe 的 wt 分支（getSLD 命中但落到老版 wt 链路）：wt 列表 JSON 没有公司字段
+    （orgName 是内部部门名），核验只能靠落地页 <title>。"""
+
+    def _routes(self, brand, portal_title, job_count=1):
+        host = f"{brand}.hotjob.cn"
+        origin = f"https://{host}"
+
+        def _list_dispatch(**kwargs):
+            rt = (kwargs.get("params") or {}).get("recruitType")
+            if rt == 2:
+                return _FakeJsonOrHtmlResp(json_payload={
+                    "postList": [{"postId": "1", "postName": "某岗位"}], "rowCount": job_count})
+            return _FakeJsonOrHtmlResp(json_payload={"postList": [], "rowCount": 0})
+
+        post_routes = {
+            f"{origin}/wecruit/common/getSLD": _FakeJsonOrHtmlResp(json_payload={
+                "data": {"linkData": {"link": f"{origin}/wt/{brand}/web/index",
+                                       "title": portal_title}},
+                "state": "200", "type": "success"}),
+        }
+        get_routes = {
+            f"{origin}/wt/{brand}/web/json/position/list": _list_dispatch,
+            f"{origin}/wt/{brand}/web/index": _FakeJsonOrHtmlResp(text=f"<title>{portal_title}</title>"),
+        }
+        return get_routes, post_routes
+
+    def test_verified_true_when_portal_title_matches(self):
+        get_routes, post_routes = self._routes("yili", "伊利招聘官网")
+        with _patched_hotjob_client(get_routes, post_routes):
+            r = dd.hotjob_probe("yili", "伊利")
+        self.assertEqual(r["platform"], "wt")
+        self.assertTrue(r["verified"])
+        self.assertEqual(r["portal_title"], "伊利招聘官网")
+
+    def test_verified_false_when_portal_title_is_another_company(self):
+        get_routes, post_routes = self._routes("yili", "伊利招聘官网")
+        with _patched_hotjob_client(get_routes, post_routes):
+            r = dd.hotjob_probe("yili", "蒙牛")
+        self.assertFalse(r["verified"])
+        self.assertIn("伊利招聘官网", r["note"])
+
+
+class WtPortalTitleFallbackTest(unittest.TestCase):
+    """部分 wt 租户 <title> 是模板默认值（如「首页」），不含公司名——但正文里公司名反复出现
+    （live 实测兴业证券即此状态：title=「首页」，正文「兴业证券」出现 12 次）。verified 必须
+    退回扫整页正文，不能只看 title 标签，否则这类租户会被误判成「张冠李戴」。"""
+
+    def _routes(self, brand, generic_title, body_company_mentions, job_count=1):
+        host = f"{brand}.hotjob.cn"
+        origin = f"https://{host}"
+
+        def _list_dispatch(**kwargs):
+            if (kwargs.get("params") or {}).get("recruitType") == 2:
+                return _FakeJsonOrHtmlResp(json_payload={
+                    "postList": [{"postId": "1", "postName": "某岗位"}], "rowCount": job_count})
+            return _FakeJsonOrHtmlResp(json_payload={"postList": [], "rowCount": 0})
+
+        body = (f"<title>{generic_title}</title>"
+                + "".join(f"<img alt='{body_company_mentions}招聘'/>" for _ in range(3)))
+        get_routes = {
+            f"{origin}/wt/{brand}/web/json/position/list": _list_dispatch,
+            f"{origin}/wt/{brand}/web/index": _FakeJsonOrHtmlResp(text=body),
+        }
+        return get_routes
+
+    def test_generic_title_falls_back_to_body_text_match(self):
+        with _patched_hotjob_client(get_routes=self._routes("xyzq", "首页", "兴业证券")):
+            r = dd.wt_probe("xyzq", "兴业证券")
+        self.assertIsNotNone(r)
+        self.assertTrue(r["verified"])
+        self.assertEqual(r["portal_title"], "首页")  # title 本身仍是原样记录，供人工复核
+
+    def test_generic_title_and_unrelated_body_still_rejected(self):
+        with _patched_hotjob_client(get_routes=self._routes("xyzq", "首页", "兴业证券")):
+            r = dd.wt_probe("xyzq", "国泰君安")
+        self.assertFalse(r["verified"])
+
+
+class WtProbeCompanyVerifyTest(unittest.TestCase):
+    """标准版 wt_probe（getSLD 未命中、直连 list API 兜底）：同样必须核验落地页 title，
+    此前 verified 恒为 True，是与 hotjob_probe wt 分支相同的一个洞。"""
+
+    def _routes(self, brand, portal_title, job_count=1):
+        host = f"{brand}.hotjob.cn"
+        origin = f"https://{host}"
+
+        def _list_dispatch(**kwargs):
+            params = kwargs.get("params") or {}
+            if params.get("recruitType") == 2:
+                return _FakeJsonOrHtmlResp(json_payload={
+                    "postList": [{"postId": "1", "postName": "某岗位"}], "rowCount": job_count})
+            return _FakeJsonOrHtmlResp(json_payload={"postList": [], "rowCount": 0})
+
+        get_routes = {
+            f"{origin}/wt/{brand}/web/json/position/list": _list_dispatch,
+            f"{origin}/wt/{brand}/web/index": _FakeJsonOrHtmlResp(text=f"<title>{portal_title}</title>"),
+        }
+        return get_routes
+
+    def test_verified_true_when_portal_title_matches_target(self):
+        with _patched_hotjob_client(get_routes=self._routes("yili", "伊利招聘官网")):
+            r = dd.wt_probe("yili", "伊利")
+        self.assertIsNotNone(r)
+        self.assertTrue(r["verified"])
+
+    def test_verified_false_when_portal_title_is_a_different_company(self):
+        """猜的 brand 命中了别家真实租户（同一类张冠李戴）→ verified=False，不再无条件放行。"""
+        with _patched_hotjob_client(get_routes=self._routes("yili", "伊利招聘官网")):
+            r = dd.wt_probe("yili", "蒙牛")
+        self.assertIsNotNone(r)
+        self.assertFalse(r["verified"])
+        self.assertIn("伊利招聘官网", r["note"])
 
 
 if __name__ == "__main__":
