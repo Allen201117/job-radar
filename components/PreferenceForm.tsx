@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import type { UserPreferences } from "@/lib/types";
+import { profileHygieneHints } from "@/lib/profile-hygiene";
+import { Banner } from "@/components/ui";
 import { PREFERENCES_SAVED_EVENT, track } from "@/lib/track";
 import { normalizeCompany } from "@/lib/company-normalize";
 import TagInput from "./TagInput";
@@ -138,6 +140,27 @@ export default function PreferenceForm() {
       }
     }
   }
+
+  // 画像卫生提示（2026-09-17）：**不阻断、不替他改**，只在当前这份草稿确实有可证明的问题时说一句人话。
+  // 判据与落库归一同一份代码（lib/profile-hygiene），所以「提示说会拆开」和「保存后真的拆开了」必然一致。
+  // 放在客户端按当前表单状态实时算：用户刚敲完「项目专员/助理」就能看见，而不是存完才知道。
+  const hygieneHints = useMemo(
+    () =>
+      prefs
+        ? profileHygieneHints({
+            preferences: {
+              target_roles: prefs.target_roles,
+              target_keywords: prefs.target_keywords,
+              target_locations: prefs.target_locations,
+              target_industries: prefs.target_industries,
+              experience_stage: prefs.experience_stage,
+              job_scope: prefs.job_scope,
+              has_en_resume: prefs.has_en_resume,
+            },
+          })
+        : [],
+    [prefs],
+  );
 
   function setArray(field: keyof UserPreferences, arr: string[]) {
     if (!prefs) return;
@@ -343,6 +366,16 @@ export default function PreferenceForm() {
           </Field>
         </div>
       </details>
+
+      {hygieneHints.length > 0 && (
+        <div className="space-y-2">
+          {hygieneHints.map((hint) => (
+            <Banner key={hint.code} tone="amber" size="sm" live="polite">
+              {hint.text}
+            </Banner>
+          ))}
+        </div>
+      )}
 
       {message && (
         <p className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm ${message.includes("失败") ?"border-tone-rose-border bg-tone-rose-bg text-tone-rose-fg":"border-[#bcd2ed] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]"}`}>
