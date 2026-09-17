@@ -691,7 +691,7 @@ class StaleApplyProgramsTest(unittest.TestCase):
 
     def test_规则字母都登记了标题(self):
         # H / I 曾经在用却没登记，issue 标题会退化成裸字母。
-        for letter in ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N"):
+        for letter in ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O"):
             self.assertIn(letter, W.RULE_TITLES)
 
 
@@ -715,6 +715,29 @@ class AnnouncementHarvestWatchdogTest(unittest.TestCase):
             "finished_at": "2026-09-17T10:00:00+00:00",
         }]
         self.assertEqual(W.evaluate_missing_mac_announcement_harvest(rows, now=self.NOW), [])
+
+
+class CampusChannelGapWatchdogTest(unittest.TestCase):
+    IN_SEASON = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
+    OFF_SEASON = datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc)
+
+    def _rows(self, missing, idle=0, healthy=0):
+        rows = [{"company": f"缺{i}", "industries": ["金融"], "campus_channel": "missing"} for i in range(missing)]
+        rows += [{"company": f"闲{i}", "industries": ["金融"], "campus_channel": "idle"} for i in range(idle)]
+        rows += [{"company": f"好{i}", "industries": ["金融"], "campus_channel": "healthy"} for i in range(healthy)]
+        return rows
+
+    def test_in_season_missing_channels_alert_with_company_names(self):
+        [finding] = W.evaluate_campus_channel_gap(self._rows(missing=3, idle=1, healthy=2), now=self.IN_SEASON, min_missing=1)
+        self.assertEqual((finding["rule"], finding["subject"]), ("O", "must_apply_campus_channel"))
+        self.assertIn("3 家", finding["summary"])
+        self.assertTrue(any("缺0" in line for line in finding["evidence"]))
+
+    def test_off_season_is_silent(self):
+        self.assertEqual(W.evaluate_campus_channel_gap(self._rows(missing=30), now=self.OFF_SEASON), [])
+
+    def test_below_threshold_is_silent(self):
+        self.assertEqual(W.evaluate_campus_channel_gap(self._rows(missing=2), now=self.IN_SEASON, min_missing=5), [])
 
 
 class CrawlRunUnrecordedWatchdogTest(unittest.TestCase):

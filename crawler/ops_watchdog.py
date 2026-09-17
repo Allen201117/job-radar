@@ -52,6 +52,7 @@ RULE_TITLES = {
     "L": "源断抓",
     "M": "Mac 公告抓取无记录",
     "N": "抓取台账终态未回写",
+    "O": "必投公司校招渠道没接",
 }
 
 # ── 规则 A：每个模块的「产出口径」与「处理量口径」────────────────────────────
@@ -964,6 +965,42 @@ def evaluate_stuck_ledger(rows, now=None, hours=6):
     }]
 
 
+# 规则 O：校招季（秋招 9~11 月、春招 3~4 月，按上海时间）里必投公司没接校招渠道 = 供给缺口。
+# 淡季不吵：淡季 missing 是常态，吵了只会让人把 watchdog 静音。
+CAMPUS_SEASON_MONTHS = frozenset({3, 4, 9, 10, 11})
+CAMPUS_CHANNEL_MIN_MISSING = 5
+
+
+def evaluate_campus_channel_gap(rows, now=None, min_missing=CAMPUS_CHANNEL_MIN_MISSING):
+    """规则 O：校招季里国内必投公司 `campus_channel = missing` 的家数 ≥ 阈值。
+
+    2026-09-17 实测：国内必投 321 家里 46 家只接了社招、89 家没源，合计 135 家在秋招季对用户是隐形的，
+    而台账天天报 healthy。这条规则读的是迁移 254 落成的列，不是 evidence 里的散文。
+    """
+    now = now or datetime.now(timezone.utc)
+    if now.astimezone(SHANGHAI).month not in CAMPUS_SEASON_MONTHS:
+        return []
+    missing = [r for r in rows or [] if (r or {}).get("campus_channel") == "missing"]
+    if len(missing) < max(1, int(min_missing)):
+        return []
+    idle = [r for r in rows or [] if (r or {}).get("campus_channel") == "idle"]
+    by_industry = Counter(
+        str((r.get("industries") or ["?"])[0]) for r in missing
+    )
+    names = sorted(str(r.get("company") or "?") for r in missing)
+    return [{
+        "rule": "O",
+        "subject": "must_apply_campus_channel",
+        "summary": (f"校招季里国内必投公司有 {len(missing)} 家没接校招渠道"
+                    f"（另有 {len(idle)} 家渠道在但近 3 天零校招岗）。"),
+        "evidence": [f"按行业分：{dict(by_industry)}"] + [
+            f"{name}" for name in names[:40]
+        ] + ([f"… 共 {len(names)} 家"] if len(names) > 40 else []),
+        "next": "按平台分簇接校招渠道（hotjob/wt/beisen/moka），每家过探活门才入库；"
+                "idle 的先查源是否坏了（crawl_runs）再说对方没开。",
+    }]
+
+
 APPLY_PROGRAM_STALE_DAYS = 45
 MAC_ANNOUNCEMENT_HARVEST_HOURS = 30
 
@@ -1403,6 +1440,16 @@ def main():
     findings += evaluate_account_errors(event_rows, ops_rows, now=now)
     findings += evaluate_missing_mac_announcement_harvest(ops_rows, now=now)
     findings += evaluate_crawl_run_unrecorded(ops_rows, today=today)
+    # 规则 O 单独包住：台账几百行的小表，取不到不拖垮别的规则。
+    try:
+        gap_rows = db.fetch_all_rows(
+            lambda: sb.table("must_apply_gap_attempts")
+                      .select("company,industries,campus_channel")
+                      .eq("scope", "domestic")
+        )
+        findings += evaluate_campus_channel_gap(gap_rows, now=now)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[watchdog] 规则 O 取 must_apply_gap_attempts 失败，跳过：{exc}")
     # 规则 J 单独包住：apply_programs 是张十几行的小表，取不到也不该拖垮别的规则。
     try:
         program_rows = db.fetch_all_rows(

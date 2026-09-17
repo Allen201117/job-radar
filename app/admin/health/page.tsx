@@ -284,7 +284,7 @@ const loadMustApplyGapAdminData = cachedLoader<MustApplyGapAdminData>("gap-admin
     fetchAllPages<MustApplyGapAttemptRow>((from, to) =>
       service
         .from("must_apply_gap_attempts")
-        .select("id,company,industries,state,fail_reason,attempts,rounds_no_entry,last_attempt_at,next_retry_at,evidence")
+        .select("id,company,industries,state,fail_reason,attempts,rounds_no_entry,last_attempt_at,next_retry_at,evidence,campus_channel,campus_jobs_recent,intern_jobs_recent")
         .eq("scope", "domestic")
         .order("id", { ascending: true })
         .range(from, to),
@@ -1456,6 +1456,17 @@ function MustApplyGapLedger({
         <KpiCard title="这一轮真的新接入" value={ledger?.realExpansion == null ? "—" : `+${ledger.realExpansion}`} tone="success" detail="取国内流水线最近有记录的那一天，只算验收通过、最终留下来的新公司" className="min-h-0" />
         <KpiCard title="统计规则变动" value={ledger ? `${ledger.definitionChange >= 0 ?"+":""}${ledger.definitionChange}` : "—"} tone="muted" detail="只是改了统计规则后多算进来的（比如通过母公司招聘页覆盖到），不能冒充成新接入" className="min-h-0" />
       </div>
+      {summary && (
+        <div className="mt-5">
+          <h3 className="text-sm font-semibold">校招渠道 · 国内必投</h3>
+          <p className="mt-1 text-xs ink-3">和上面的「有没有健康岗」是两回事：一家公司社招 500 个岗也可能校招一条都没接。近 3 天抓到校招岗 = 通；有校招源但零岗 = 闲置；没有校招源 = 没接。</p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <KpiCard title="校招渠道通" value={formatCount(summary.campusChannel.healthy)} tone="success" detail={`占国内清单 ${summary.campusChannel.healthy + summary.campusChannel.idle + summary.campusChannel.missing > 0 ? Math.round((summary.campusChannel.healthy * 100) / (summary.campusChannel.healthy + summary.campusChannel.idle + summary.campusChannel.missing)) : 0}%`} className="min-h-0" />
+            <KpiCard title="渠道闲置" value={formatCount(summary.campusChannel.idle)} tone={summary.campusChannel.idle > 0 ? "warning" : "muted"} detail={summary.campusChannel.idleCompanies.slice(0, 6).join("、") || "无"} className="min-h-0" />
+            <KpiCard title="校招没接" value={formatCount(summary.campusChannel.missing)} tone={summary.campusChannel.missing > 0 ? "danger" : "success"} detail={summary.campusChannel.missingCompanies.slice(0, 8).join("、") || "无"} className="min-h-0" />
+          </div>
+        </div>
+      )}
       {!summary ? <div className="mt-4"><ErrorPanel label="补公司流水线 · 运行记录" /></div> : (
         <div className="mt-5 grid gap-4 lg:grid-cols-3">
           <div>

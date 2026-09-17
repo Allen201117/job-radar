@@ -501,12 +501,26 @@ export type MustApplyGapAttemptRow = {
   last_attempt_at?: string | null;
   next_retry_at?: string | null;
   evidence?: Record<string, unknown> | null;
+  /** 校招渠道（迁移 254）：与 state 正交。老行 / 海外没有这列 = unknown。 */
+  campus_channel?: string | null;
+  campus_jobs_recent?: Numeric;
+  intern_jobs_recent?: Numeric;
+};
+
+export type MustApplyCampusChannelSummary = {
+  healthy: number;
+  idle: number;
+  missing: number;
+  unknown: number;
+  missingCompanies: string[];
+  idleCompanies: string[];
 };
 
 export type MustApplyGapSummary = {
   stateCounts: Record<string, number>;
   recentFailures: Array<{ company: string; reason: string; at: string | null }>;
   manualReviewCompanies: string[];
+  campusChannel: MustApplyCampusChannelSummary;
 };
 
 export type MustApplyGovernanceItem = {
@@ -650,7 +664,22 @@ export function summarizeMustApplyGapAttempts(
     )
     .map((row) => String(row.company || ""))
     .filter(Boolean);
-  return { stateCounts: sortedStateCounts, recentFailures, manualReviewCompanies };
+  // 校招渠道单独一轴：一家公司可以 state=healthy（社招 500 岗）同时 campus_channel=missing。
+  // 2026-09-17 之前看板只有前者，秋招季 46 家「有社招无校招」的必投公司全被记成健康。
+  const campusChannel: MustApplyCampusChannelSummary = {
+    healthy: 0, idle: 0, missing: 0, unknown: 0, missingCompanies: [], idleCompanies: [],
+  };
+  for (const row of rows || []) {
+    const channel = String(row.campus_channel || "unknown");
+    const name = String(row.company || "").trim();
+    if (channel === "healthy") campusChannel.healthy += 1;
+    else if (channel === "idle") { campusChannel.idle += 1; if (name) campusChannel.idleCompanies.push(name); }
+    else if (channel === "missing") { campusChannel.missing += 1; if (name) campusChannel.missingCompanies.push(name); }
+    else campusChannel.unknown += 1;
+  }
+  campusChannel.missingCompanies.sort((a, b) => a.localeCompare(b, "zh-CN"));
+  campusChannel.idleCompanies.sort((a, b) => a.localeCompare(b, "zh-CN"));
+  return { stateCounts: sortedStateCounts, recentFailures, manualReviewCompanies, campusChannel };
 }
 
 // 全站唯一的模块判据。热力图和模块卡都调它 —— 两处曾各写一套且方向相反

@@ -66,6 +66,25 @@ test("gap attempt summary counts states, failure top5, and terminal manual revie
   assert.deepEqual(summary.recentFailures.map((row) => row.company), ["乙", "丙", "丁"]);
 });
 
+test("gap attempt summary reports campus channel as a separate axis from company health", () => {
+  const rows = [
+    { company: "招商银行", state: "healthy", campus_channel: "missing" },
+    { company: "农业银行", state: "healthy", campus_channel: "idle" },
+    { company: "建设银行", state: "healthy", campus_channel: "healthy", campus_jobs_recent: 3784 },
+    { company: "宁波银行", state: "unknown", campus_channel: "missing" },
+    { company: "Shell", state: "healthy" }, // 老行 / 海外：没有这列 = unknown，不算进缺口
+  ];
+  const summary = H.summarizeMustApplyGapAttempts(rows);
+  assert.deepEqual(summary.campusChannel, {
+    healthy: 1,
+    idle: 1,
+    missing: 2,
+    unknown: 1,
+    missingCompanies: ["宁波银行", "招商银行"],
+    idleCompanies: ["农业银行"],
+  });
+});
+
 test("must-apply governance list turns terminal and retry states into a human action", () => {
   const items = H.buildMustApplyGovernanceItems([
     {

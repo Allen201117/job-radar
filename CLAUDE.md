@@ -616,6 +616,19 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
 - ⚠️ `unstable_cache` 条目**跨部署存活**（TTL 180s），上线那一小段缓存里是**旧形状**的行 → `scopedCounts()` 没有 byScope 时必须回退平铺合计，**不许改成直接 `byScope[scope]`**（会把 /admin/health 打挂）。
 - 壳牌影子源全过程、口径切换的逐家实测数字、同类复查方法 → `docs/module-deep-notes.md`。
 
+## 🚫 必投「healthy」不等于「校招接了」：渠道是独立一轴（2026-09-17 立，迁移 254）
+
+❌ 现象：秋招季各行各业都开了，而国内必投 321 家里近 3 天有校招岗的只有 **171 家（53%）**：46 家只接了社招
+（招行 / 民生 / 微众 / 快手 / 美的 / 比亚迪 / 顺丰 / 万科…）、20 家有源但零岗（农行 / 中信银行 / 国家电网 / 京东方…）、
+89 家没源（中国银行 / 中信证券 / 宁波银行 / 三一 / 富士康 / 中国石化…）。台账却天天报 healthy。
+✅ 根因：`must_apply_gap_attempts.state` 只回答「有没有健康岗」，一家社招 500 岗就算 healthy；源模型一家公司通常只有
+一条社招 URL，「校招渠道」在指标里根本不存在 → **库里的 0 被读成「对方没开」**（同「接口返 0 ≠ 对方没开」那块碑）。
+✅ 防：`campus_channel` 列（healthy = 近 3 天抓到校招岗，**产出反查优先**，社招门户也会出校招岗 / idle = 有 campus·mixed
+源但零岗 / missing = 无校招渠道源），`gap_census.classify_company` 算、`ops_runs.gap_funnel.metrics.campus_channel` 记趋势、
+/admin/health 供给页三张卡、看门狗规则 O 只在校招季（3·4·9·10·11 月）吵。
+⚠️ 判「这家校招开没开」**只认对方页面**，不认我们的计数；idle 先查 `crawl_runs` 源坏没坏，missing 按平台分簇接
+（hotjob / wt / beisen / moka），每家过探活门才入库。
+
 ## 搜索额度是全局共享的 —— 贪心方必须给校招链留一份（2026-08-28 立）
 
 `search_usage` 的每日额度是**所有链共用一个池子**。T3 洞察 drain 会一路吃到 0

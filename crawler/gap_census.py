@@ -52,7 +52,15 @@ select
   count(*) filter (
     where job_scope <> %(scope)s
       and summary is not null and char_length(btrim(summary)) >= 60
-  ) as other_scope_healthy
+  ) as other_scope_healthy,
+  count(*) filter (
+    where job_scope = %(scope)s and recruitment_category = '校招'
+      and last_seen_at > now() - interval '3 days'
+  ) as campus_recent,
+  count(*) filter (
+    where job_scope = %(scope)s and recruitment_category = '实习'
+      and last_seen_at > now() - interval '3 days'
+  ) as intern_recent
   {brand_columns}
 from jobs
 where status = 'active'
@@ -84,8 +92,22 @@ def _base_company(company):
     }
 
 
+# 校招渠道判定用的源板块：campus / mixed（一次抓全三类）。⚠️ 只是「有没有渠道」的静态判据，
+# 「渠道有没有产出」以近 3 天校招岗为准（社招门户也可能出校招岗，见迁移 187 注释 3）。
+_CAMPUS_BOARDS = frozenset({"campus", "mixed"})
+
+
+def campus_channel_counts(rows):
+    """一轮 census 的渠道分布，写进 ops_runs 供趋势与看门狗读。"""
+    counts = {"healthy": 0, "idle": 0, "missing": 0, "unknown": 0}
+    for row in rows or []:
+        key = str((row or {}).get("campus_channel") or "unknown")
+        counts[key if key in counts else "unknown"] += 1
+    return counts
+
+
 def classify_company(company, healthy_jobs, sources_rows, prev_row=None,
-                     program_companies=()):
+                     program_companies=(), scope="domestic"):
     """纯函数：给单个清单槽位计算当前台账状态，不执行任何 IO。
 
     program_companies = 已在 `apply_programs` 里**已核实且启用**的公司名。这类公司
@@ -133,6 +155,20 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None,
     ]
     enabled_sources = [row for row in matched_sources if row.get("enabled")]
     prev = dict(prev_row or {})
+
+    # 校招渠道是独立于 state 的一轴（迁移 254）：state 回答「这家有没有可投岗」，
+    # campus_channel 回答「这家的校招我们接了没、接了有没有在出岗」。两者正交 ——
+    # 2026-09-17 的盲区正是把前者当成了后者：46 家 healthy 的公司校招渠道根本没接。
+    campus_recent = sum(_as_int(row.get("campus_recent")) for row in matched_jobs)
+    intern_recent = sum(_as_int(row.get("intern_recent")) for row in matched_jobs)
+    if scope != "domestic":
+        campus_channel = "unknown"          # 海外清单不按国内秋招口径判
+    elif campus_recent > 0:
+        campus_channel = "healthy"          # 产出反查优先，不管源标的是什么板块
+    elif any(str(row.get("board") or "") in _CAMPUS_BOARDS for row in enabled_sources):
+        campus_channel = "idle"             # 渠道在、没出岗：源坏了或对方还没开
+    else:
+        campus_channel = "missing"          # 没接校招渠道（社招接没接都算）
 
     # program_companies 传进来的已经是**清单规范名**（归属由 resolve_program_owners 在
     # census 里用全量清单名解好），这里只做精确比对。刻意不在这个纯函数里做子串匹配：
@@ -200,6 +236,9 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None,
     out = {
         **base,
         "state": state,
+        "campus_channel": campus_channel,
+        "campus_jobs_recent": campus_recent,
+        "intern_jobs_recent": intern_recent,
         "source_id": source_id,
         "official_entry_url": prev.get("official_entry_url"),
         "detected_platform": prev.get("detected_platform"),
@@ -445,7 +484,7 @@ def fetch_job_aggregates(conn, companies, scope="domestic"):
 
 def fetch_sources(supabase):
     return db.fetch_all_rows(
-        lambda: supabase.table("sources").select("id,company,source_url,adapter_name,enabled")
+        lambda: supabase.table("sources").select("id,company,source_url,adapter_name,enabled,board")
     )
 
 
@@ -568,7 +607,7 @@ def census(supabase, jobs_conn, *, scope="domestic", cap=20, company=None,
     for item in companies:
         prev = previous.get(item["name"])
         row = classify_company(item, aggregates, sources, prev,
-                               program_companies=program_owners)
+                               program_companies=program_owners, scope=scope)
         rows.append(schedule_initial_retry(row, now))
     coverage = compute_industry_coverage(rows, companies)
     wanted = fetch_user_wanted(supabase)
@@ -589,4 +628,5 @@ def census(supabase, jobs_conn, *, scope="domestic", cap=20, company=None,
         "queue": queue,
         "industry_coverage": coverage,
         "user_wanted": wanted,
+        "campus_channel": campus_channel_counts(rows),
     }

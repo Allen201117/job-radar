@@ -16,6 +16,63 @@ def _company(name="甲公司", pattern="%甲公司%", industry="金融"):
     return {"name": name, "pattern": pattern, "industries": [industry]}
 
 
+class CampusChannelTest(unittest.TestCase):
+    """校招渠道三态：产出反查优先（社招源也可能出校招岗，见迁移 187 注释 3），其次看有没有 campus/mixed 源。"""
+
+    def test_recent_campus_jobs_make_channel_healthy_even_from_social_board(self):
+        row = gc.classify_company(
+            _company(),
+            [{"company": "甲公司", "active_total": 9, "healthy": 9, "campus_recent": 4, "intern_recent": 1}],
+            [{"company": "甲公司", "enabled": True, "id": "s1", "board": "social"}],
+            None,
+        )
+        self.assertEqual(row["campus_channel"], "healthy")
+        self.assertEqual((row["campus_jobs_recent"], row["intern_jobs_recent"]), (4, 1))
+
+    def test_campus_source_without_recent_campus_jobs_is_idle(self):
+        row = gc.classify_company(
+            _company(),
+            [{"company": "甲公司", "active_total": 9, "healthy": 9, "campus_recent": 0, "intern_recent": 0}],
+            [{"company": "甲公司", "enabled": True, "id": "s1", "board": "mixed"}],
+            None,
+        )
+        self.assertEqual(row["campus_channel"], "idle")
+
+    def test_social_only_source_is_missing_channel_even_when_company_is_healthy(self):
+        # 这正是 2026-09-17 的盲区：一家有 500 个社招岗的公司被记成 healthy，校招 0 却没人知道。
+        row = gc.classify_company(
+            _company(),
+            [{"company": "甲公司", "active_total": 500, "healthy": 500, "campus_recent": 0, "intern_recent": 0}],
+            [{"company": "甲公司", "enabled": True, "id": "s1", "board": "social"}],
+            None,
+        )
+        self.assertEqual(row["state"], "healthy")
+        self.assertEqual(row["campus_channel"], "missing")
+
+    def test_disabled_campus_source_does_not_count_as_channel(self):
+        row = gc.classify_company(
+            _company(), [],
+            [{"company": "甲公司", "enabled": False, "id": "s1", "board": "campus"}], None,
+        )
+        self.assertEqual(row["campus_channel"], "missing")
+
+    def test_overseas_scope_is_not_judged(self):
+        row = gc.classify_company(_company(), [], [], None, scope="overseas")
+        self.assertEqual(row["campus_channel"], "unknown")
+
+    def test_aggregate_query_counts_campus_and_intern_seen_in_last_3_days(self):
+        sql, _params, _rules = gc._job_aggregate_query([_company()])
+        self.assertIn("recruitment_category = '校招'", sql)
+        self.assertIn("recruitment_category = '实习'", sql)
+        self.assertIn("interval '3 days'", sql)
+        self.assertIn("as campus_recent", sql)
+        self.assertIn("as intern_recent", sql)
+
+    def test_channel_counts_are_summarised_per_census(self):
+        rows = [{"campus_channel": "healthy"}, {"campus_channel": "missing"}, {"campus_channel": "missing"}, {"campus_channel": "idle"}]
+        self.assertEqual(gc.campus_channel_counts(rows), {"healthy": 1, "idle": 1, "missing": 2, "unknown": 0})
+
+
 class ClassifyCompanyTest(unittest.TestCase):
     def test_healthy_company_wins_over_previous_failure(self):
         row = gc.classify_company(
