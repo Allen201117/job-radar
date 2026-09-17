@@ -729,6 +729,11 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
 - **体验尺子** `scripts/ux-walkthrough/walkthrough.js`（每日 `ux-walkthrough.yml`，`ops_runs.ux_walkthrough`）：拿真实用户画像逐个
   模拟推荐 / 方向 / 洞察覆盖 / 校招专区 / 接口 TTFB。它第一天就抓到 7/44 用户推荐页 0 岗（手填岗位写法 4 人 +
   求职范围海外错配 3 人），这两类单测永远报不了警——只有喂真实画像才看得见。
+- ⚠️ **「同职能」≠「同角色」，概念组里的领域锚点是最大的漏洞（2026-09-17 立）**：数据分析被推「大数据开发」、AI 产品经理被推
+  「产品运营」、财务被推「财务科技全栈开发」——21 条独立裁判判错的岗 0 条是职能层捞的，全是标题只靠组里的**领域词**
+  （数据/产品/品牌/财务）精确命中而标题真正的角色词属于另一个簇。防法 `GROUP_DOMAIN_ANCHORS` + `_titleRoleClusterConflict`
+  （lib/china-keyword-expansion.js，/today 与 /jobs 共用一处）；**角色词绝不能进锚点表**。
+  「准确率涨了」必须逐条对拍 top-25 进出名单——第一版净值向好里藏着 3 个被杀掉的真岗（「商务」认领、括号限定语当角色）。
 - 匿名 `/api/jobs/search?sortBy=match` **不再拉 2.8 万行整窗**：无偏好打分全 0 = 纯新鲜度，走逐页攒够即停；有偏好才看满窗口。
 
 ## 认证
