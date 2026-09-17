@@ -39,10 +39,16 @@ WANTED_MAX_SHARE = 0.5
 PLATFORMS = {"feishu", "hotjob"}   # httpx-safe（hotjob 内含 wt/wecruit）；beisen/moka 需浏览器，留后置
 # 科技/新经济/消费清单排最前 → load 时标 _priority，plan_targets 里优先探（对齐目标用户，见 CLAUDE.md §3
 # 「保精度逐步扩量」：民营500强 76% 是传统制造，与目标用户错配，别让它淹没科技/消费候选）。
-_CURATED_FILES = ("targets_must_apply.json", "targets_tech_consumer.json", "targets_private500_full.json",
-                  "targets_private500.json", "targets_soe500.json")
+# targets_campus_2027.json = 2026-09-18 联网盘点「已发布 2027 届秋招公告」的 312 家公司里，
+# 对拍后**库里既没源也没 active 岗**、且不在必投清单（那条线有 gap_funnel 专职在跑）的 154 家。
+# 排在 must_apply 之后、其余清单之前：同名公司以它的 slug 为准；标 _priority 让秋招缺口先探。
+# ⚠️ 它和其它清单一样只是**待探活候选**——slug 是按品牌英文名/拼音写的，猜错的会被
+#    discover_domestic 的 verify/count 门丢掉（本批 154 家里 ctsec/noahgroup/chervon/spic 四个
+#    zhiye 子域就是全路由 404 被丢的）。
+_CURATED_FILES = ("targets_must_apply.json", "targets_campus_2027.json", "targets_tech_consumer.json",
+                  "targets_private500_full.json", "targets_private500.json", "targets_soe500.json")
 _MUST_APPLY_FILES = {"targets_must_apply.json"}
-_PRIORITY_FILES = {"targets_tech_consumer.json"}
+_PRIORITY_FILES = {"targets_tech_consumer.json", "targets_campus_2027.json"}
 
 # ── 校招板块缺口重探（Track A2）：与 lib/campus-sources.ts 的 CAMPUS_URL_RE 同口径
 # （两端各自实现，判定逻辑必须一致，否则「校招覆盖率」两处会打架）。
