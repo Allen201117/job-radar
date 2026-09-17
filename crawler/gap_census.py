@@ -60,7 +60,18 @@ select
   count(*) filter (
     where job_scope = %(scope)s and recruitment_category = '实习'
       and last_seen_at > now() - interval '3 days'
-  ) as intern_recent
+  ) as intern_recent,
+  -- ⚠️ `recruitment_category is null` = 「还没算」，**不是**「不是校招」（jobs-db/schema.sql
+  -- 的 jobs_guard_recruitment_class：列表一重抓、分类依据一变就把结论作废置 NULL，
+  -- 由 backfill-recruitment-category 重新算出来）。上面两个 filter 拿不到这些行，
+  -- 于是「刚抓完还没回填」会被读成「这个渠道零产出」→ 假 idle。
+  -- 2026-09-17 实测：24 家 idle 里 6 家（潍柴/华为/中通/奔驰/迈瑞/金茂）纯属这一种，
+  -- 离线用同一份 JS 裁决重算 → 36/70/23/10/1/8 个校招岗，反向（列说校招、重算说不是）0 条。
+  -- 所以把「待分类」如实数出来，让 classify_company 有能力说「还不知道」而不是说「没有」。
+  count(*) filter (
+    where job_scope = %(scope)s and recruitment_category is null
+      and last_seen_at > now() - interval '3 days'
+  ) as unclassified_recent
   {brand_columns}
 from jobs
 where status = 'active'
@@ -69,10 +80,77 @@ group by company
 
 
 def _matches(value, patterns):
-    """库里这行公司名是不是这家清单公司；`patterns` = pattern + 别名（见 must_apply.company_patterns）。"""
+    """库里这行公司名是不是这家清单公司；`patterns` = pattern + 别名（见 must_apply.company_patterns）。
+
+    ⚠️ 这是**候选判据**，不是归属判据：一行公司名可以同时命中好几家清单公司的 pattern
+    （`%京东%` 同时命中「京东物流」「京东科技」）。归属由 `build_owner_index` /
+    `resolve_owner` 独占裁决，见那两个函数的注释。这里只负责「像不像」。
+    拉丁 pattern 走词边界（`must_apply._token_in_name`）：`%ABB%` 不再命中 AbbVie / 雅培 Abbott。
+    """
     if isinstance(patterns, str):
         patterns = [patterns]
-    return must_apply.match_company_against_patterns(value, patterns)
+    low = str(value or "").lower()
+    if not low:
+        return False
+    for pattern in patterns or []:
+        token = str(pattern).replace("%", "").strip().lower()
+        if token and must_apply._token_in_name(token, low):
+            return True
+    return False
+
+
+def build_owner_index(companies):
+    """[(token, 清单规范名)]，按清单顺序、首次出现者胜。`token` = pattern / 别名去掉 `%`。
+
+    为什么不直接用 `must_apply.owner_index()`：那份索引的 key 是**清单规范名 + 别名**，
+    而清单的 `name` 常常不是库里的名字（「中国人保」的 pattern 是 `%中国人民保险%`、
+    「中外运」的是 `%中国外运%`、「西门子」的是 `%siemens%`）。拿规范名当 token 去匹配，
+    2026-09-17 全库实测会把中国人保 2,668 / 泰康保险 1,987 / 西门子 222 个健康岗
+    **整家打成 0** —— 那是把张冠李戴修成了漏判，方向一样错。
+    所以 token 仍取 pattern（清单自己声明的「库里怎么写」），只把「最长者胜」这条
+    独占规则从 `resolve_owner` 搬过来。
+    """
+    index, seen = [], set()
+    for company in companies or []:
+        name = str((company or {}).get("name") or "").strip()
+        if not name:
+            continue
+        for pattern in must_apply.company_patterns(company):
+            token = str(pattern).replace("%", "").strip()
+            if token and token.lower() not in seen:
+                seen.add(token.lower())
+                index.append((token, name))
+    return index
+
+
+def resolve_owner(value, owner_index):
+    """库里这行公司名**独占**归属于哪一家清单公司；命中多个 pattern 时最长者胜。
+
+    ❌ 不独占的后果（2026-09-17 全库实测，香港库 active 聚合）：`%京东%` 把「京东物流」
+       「京东科技」1,040 个健康岗同时算进京东；`%腾讯%` 吃掉腾讯音乐 260 个；
+       `%网易%` 吃掉网易云音乐 214 个 —— 三家子品牌自己也在清单里，等于同一批岗
+       被数两遍，必投覆盖率虚高。
+    ✅ 规则与 `must_apply.resolve_owner` 同源：**更长的 token 胜出**（京东方 归 `%京东方%`
+       不归 `%京东%`）。全库只有 3 行会走到同长度兜底，依次再比：
+       ① **规范名更长**（「网易有道」压过「网易」，token 都是 2 字）；
+       ② **token 在名字里出现得更靠后**——中文公司名把集团归属写在后缀/括号里，
+          「中铁十七局集团有限公司（**中国铁建**）」的 `铁建` 在 `中铁` 之后，
+          按位置判才归得对（中铁 X 局确实是中国铁建的子公司，不是中国中铁的）；
+       ③ 仍平就按清单顺序。这三例（网易/网易有道、好未来/学而思、中国中铁/中国铁建）
+          本来就是清单自身的二义，任选一家都好过双方各记一遍；真要改判去清单里改 pattern。
+    """
+    low = str(value or "").lower()
+    if not low:
+        return ""
+    best_key, best_owner = None, ""
+    for token, owner in owner_index or []:
+        low_token = token.lower()
+        if not low_token or not must_apply._token_in_name(low_token, low):
+            continue
+        key = (len(low_token), len(owner), low.rfind(low_token))
+        if best_key is None or key > best_key:
+            best_key, best_owner = key, owner
+    return best_owner
 
 
 def _as_int(value):
@@ -99,7 +177,7 @@ _CAMPUS_BOARDS = frozenset({"campus", "mixed"})
 
 def campus_channel_counts(rows):
     """一轮 census 的渠道分布，写进 ops_runs 供趋势与看门狗读。"""
-    counts = {"healthy": 0, "idle": 0, "missing": 0, "unknown": 0}
+    counts = {"healthy": 0, "idle": 0, "pending": 0, "missing": 0, "unknown": 0}
     for row in rows or []:
         key = str((row or {}).get("campus_channel") or "unknown")
         counts[key if key in counts else "unknown"] += 1
@@ -107,7 +185,7 @@ def campus_channel_counts(rows):
 
 
 def classify_company(company, healthy_jobs, sources_rows, prev_row=None,
-                     program_companies=(), scope="domestic"):
+                     program_companies=(), scope="domestic", owner_index=None):
     """纯函数：给单个清单槽位计算当前台账状态，不执行任何 IO。
 
     program_companies = 已在 `apply_programs` 里**已核实且启用**的公司名。这类公司
@@ -122,9 +200,16 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None,
     patterns = must_apply.company_patterns({
         "pattern": pattern, "aliases": company.get("aliases"),
     })
+    # `owner_index` 由 census 用**全量**清单建好传进来，这样「京东物流」才有机会把行从
+    # 「京东」手里抢走。不传（单测 / 单公司调用）就退化成只认这一家 —— 等价于旧的
+    # pattern 匹配，但仍享受拉丁词边界（`%ABB%` 不再吃 AbbVie）。
+    index = owner_index if owner_index is not None else build_owner_index([
+        {"name": base["company"], "pattern": pattern, "aliases": company.get("aliases")},
+    ])
+    owned = lambda value: resolve_owner(value, index) == base["company"]  # noqa: E731
     matched_jobs = [
         row for row in (healthy_jobs or [])
-        if _matches((row or {}).get("company"), patterns)
+        if owned((row or {}).get("company"))
     ]
     direct_active = sum(_as_int(row.get("active_total")) for row in matched_jobs)
     direct_healthy = sum(_as_int(row.get("healthy")) for row in matched_jobs)
@@ -149,9 +234,12 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None,
     )
     active_total = direct_active + accepted_parent["active_total"]
     healthy_total = direct_healthy + accepted_parent["healthy"]
+    # 源也走同一把尺：`%京东%` 曾把「京东方」「京东方 BOE」两条源算成京东的源，
+    # 而 `campus_channel` 的 missing/idle 正是按 enabled_sources 判的 —— 归属一错，
+    # 「这家校招渠道接没接」这句话就挂到了另一家头上。
     matched_sources = [
         row for row in (sources_rows or [])
-        if _matches((row or {}).get("company"), patterns)
+        if owned((row or {}).get("company"))
     ]
     enabled_sources = [row for row in matched_sources if row.get("enabled")]
     prev = dict(prev_row or {})
@@ -161,13 +249,19 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None,
     # 2026-09-17 的盲区正是把前者当成了后者：46 家 healthy 的公司校招渠道根本没接。
     campus_recent = sum(_as_int(row.get("campus_recent")) for row in matched_jobs)
     intern_recent = sum(_as_int(row.get("intern_recent")) for row in matched_jobs)
+    unclassified_recent = sum(_as_int(row.get("unclassified_recent")) for row in matched_jobs)
     if scope != "domestic":
         campus_channel = "unknown"          # 海外清单不按国内秋招口径判
     elif campus_recent > 0:
         campus_channel = "healthy"          # 产出反查优先，不管源标的是什么板块
     elif any(str(row.get("board") or "") in _CAMPUS_BOARDS for row in enabled_sources):
-        campus_channel = "idle"             # 渠道在、没出岗：源坏了或对方还没开
+        # 「渠道在、没出岗」这句话只有在**近 3 天的岗都已分类**时才成立。
+        # 还有没算完的行 → 我们没有资格说「没出岗」，如实记 pending（见 SQL 那段注释）。
+        campus_channel = "idle" if unclassified_recent == 0 else "pending"
     else:
+        # ⚠️ pending 刻意**不覆盖 missing**：missing 是按 `sources` 判的（有没有 campus/mixed 源），
+        # 与分类列无关，NULL 推翻不了它。把它也降级成 pending 会让真缺口从看门狗规则 O 里消失 ——
+        # 那是把「指标诚实」修成「指标好看」，方向正好反了。
         campus_channel = "missing"          # 没接校招渠道（社招接没接都算）
 
     # program_companies 传进来的已经是**清单规范名**（归属由 resolve_program_owners 在
@@ -203,6 +297,7 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None,
         "healthy_jobs": healthy_total,
         "direct_healthy_jobs": direct_healthy,
         "other_scope_healthy_jobs": other_scope_healthy if has_other_scope else None,
+        "campus_unclassified_recent": unclassified_recent,
         "parent_portal_healthy_jobs": accepted_parent["healthy"],
         "covered_via_parent_portal": accepted_parent["healthy"] > 0,
         "matched_job_companies": sorted({
@@ -238,6 +333,7 @@ def classify_company(company, healthy_jobs, sources_rows, prev_row=None,
         "state": state,
         "campus_channel": campus_channel,
         "campus_jobs_recent": campus_recent,
+        # 不额外加列：待分类数写进 evidence，看台账的人能自己解释「为什么是 pending」。
         "intern_jobs_recent": intern_recent,
         "source_id": source_id,
         "official_entry_url": prev.get("official_entry_url"),
@@ -629,6 +725,10 @@ def census(supabase, jobs_conn, *, scope="domestic", cap=20, company=None,
         raise ValueError("scope must be domestic or overseas")
     now = now or datetime.now(timezone.utc)
     companies = load_companies(scope)
+    # ⚠️ 归属索引必须用**全量**清单建，且要在 `--company` 过滤**之前**：
+    # 只用被过滤剩的那一家建索引 = 没有竞争者，「京东物流」的岗又会回流到京东，
+    # 于是单查一家与整轮 census 会给出两个不同的数字。
+    owner_index = build_owner_index(companies)
     if company:
         companies = [row for row in companies if row["name"] == company]
     aggregates = fetch_job_aggregates(jobs_conn, companies, scope)
@@ -639,7 +739,8 @@ def census(supabase, jobs_conn, *, scope="domestic", cap=20, company=None,
     for item in companies:
         prev = previous.get(item["name"])
         row = classify_company(item, aggregates, sources, prev,
-                               program_companies=program_owners, scope=scope)
+                               program_companies=program_owners, scope=scope,
+                               owner_index=owner_index)
         rows.append(schedule_initial_retry(row, now))
     coverage = compute_industry_coverage(rows, companies)
     wanted = fetch_user_wanted(supabase)

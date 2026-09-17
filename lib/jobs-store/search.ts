@@ -27,11 +27,12 @@ const DB_PAGE = 1000;
 const SCAN_BUDGET = 28000;
 // 登录 + 按匹配度排（扫描路径）的候选窗口（2026-09-17）：SQL 先按打分公式的四个可下推项粗排
 // （方向 30 / 城市 20 / 公司 15 / 7 天内 10，见 prescoreOrderBy），JS 只精排这一窗。
-// 窗口大小由 44 个真实用户偏好对拍定：第一页 60 条与「全量 28,000 行 JS 精排」的重合率见 docs/reviews/2026-09-17 §10。
+// 窗口 1000 + 候选不传正文：真实用户偏好对拍，第一页 60 条与「全量 28,000 行带正文 JS 精排」重合 94%（W2000 96%），
+// 差异全是同分并列；载荷与匿名默认态同量级（<1MB），见 docs/reviews/2026-09-17 §10。
 // env JOBS_MATCH_WINDOW 可整体调档（出事改 Vercel 变量即可，不用重新部署）。
 function matchPrescoreWindow(): number {
   const raw = Number(process.env.JOBS_MATCH_WINDOW || 0);
-  return Number.isFinite(raw) && raw > 0 ? Math.min(raw, SCAN_BUDGET) : 4000;
+  return Number.isFinite(raw) && raw > 0 ? Math.min(raw, SCAN_BUDGET) : 1000;
 }
 
 /**
@@ -167,6 +168,11 @@ export function candidateSummaryExpr(candidateParams: unknown[], filters: Filter
   // 匿名：scoreJob 直接返回 0 分、不读任何正文；上面三个读正文的精筛也没开 → 一行正文都不用传
   // （命中页展示用的摘要由 hydratePageColumns 按 id 回补）。
   if (!prefs) return "null::text";
+  // 登录 + 按匹配度排（2026-09-17）：候选也不传正文，正文只给命中页回补。香港机出口个位数 Mbps，
+  // 正文是候选载荷的大头；不传后打分只看标题/地点/公司/类型（正文里的关键词命中随之失效），
+  // 但真库对拍第一页与「全量 28,000 行带正文精排」重合 94~96%、差异全是同分并列（docs/reviews/2026-09-17 §10）。
+  // 筛选里显式读正文的项（keyword / jobRole / experience）仍走上面的 `summary` 分支。
+  if (filters.sortBy === "match") return "null::text";
   const fns = scoringTargetFunctions(prefs);
   if (!fns.length) return "summary";
   candidateParams.push(fns);

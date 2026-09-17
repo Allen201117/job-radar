@@ -429,15 +429,35 @@ def _load_beisen_routes() -> dict:
 _BEISEN_ROUTE_CACHE: dict = _load_beisen_routes()
 
 
+def _beisen_route_usable(route) -> bool:
+    """这条缓存路由**能不能给新版 GetJobAdPageList 的行拼出 jd_url**。
+
+    能用的只有三种形状：点击捕获的 `{template, idfield}`、旧的 detail base 字符串、`{"cms": true}`。
+    ⚠️ `{ssr_path, ssr_param}` 是**老版 SSR 列表**那条通道的产物，它配的是 SSR 锚点里的数字 id；
+    新版接口给的是 uuid，两者不通用 —— 2026-09-17 真渲染实测：把新版 uuid 拼进
+    `fosunpharma.zhiye.com/campusxq?jobId=<uuid>` / `cnnc.zhiye.com/szxq?…` / `boe.zhiye.com/zwxq?…`，
+    三家渲染出来的都是门户首页（body 文本 30~51 字，没有那个岗位），**拼出来就是坏链**。
+    而 `_resolve_url` 的 dict 分支只认 template → 这类租户每行 jd_url 都是空串 → 质量门全丢 →
+    「success + 0 岗」且不报错。实测这三家躺了很久：复星医药 33 次 success / 0 岗（北森自报 161 个岗、
+    其中 71 个校招），中核集团北森自报 854 个校招、库里 0 个，京东方（必投）同病。
+    """
+    if isinstance(route, str):
+        return bool(route)
+    if isinstance(route, dict):
+        return bool(route.get("template")) or route.get("cms") is True
+    return False
+
+
 def beisen_httpx_ready(source_url: str) -> bool:
-    """该 beisen 源能否走纯 httpx（= 详情路由已缓存，能拼 jd_url 不开浏览器）。
-    未缓存（含老版 SSR / 异构租户，无 GetJobAdPageList JSON）→ False → 必须留浏览器档。
+    """该 beisen 源能否走纯 httpx（= 详情路由已缓存**且能用**，能拼 jd_url 不开浏览器）。
+    未缓存或缓存形状用不了（含老版 SSR 残留 / 异构租户）→ False → 必须留浏览器档，
+    在那里重新探一次路由才有救。
     run.py `_partition_by_tier` 用它做 **per-source** 分档：缓存了的 beisen 进 httpx 快车道，没缓存的留浏览器。"""
     try:
         host = urlparse(source_url or "").netloc
     except Exception:
         return False
-    return bool(host) and bool(_BEISEN_ROUTE_CACHE.get(host))
+    return bool(host) and _beisen_route_usable(_BEISEN_ROUTE_CACHE.get(host))
 # 北森详情页常见路由名（zwxq=职位详情拼音；不同租户配置不同：chinalife=zwxq、横店/杰瑞=detail…）
 _BEISEN_DETAIL_NAMES = ("zwxq", "detail", "jobdetail", "positiondetail", "jobDetail")
 
@@ -986,6 +1006,33 @@ class BeisenAdapter(ChinaSpaAdapter):
     supports_absence_liveness = True
     fetch_complete = False
 
+    def _map(self, post: dict) -> Optional[RawJob]:
+        """在通用映射之上补一件事：把北森**自己声明的招聘类别**带进 job_type。
+
+        GetJobAdPageList 每行都有 `Category`，值是中文串（"校园招聘" / "社会招聘" / "实习"），
+        而通用 `_map` 找的是小写的 jobType/recruitType/… —— 大小写对不上，于是这个
+        **租户自报、最权威**的信号被整包丢掉，招聘类型只能回落到标题/URL 猜。
+        后果是校招岗被兜底成社招：2026-09-17 live 逐租户问北森自己（Category=["2"] 的 Count），
+        252 个租户自报 22,862 个校招岗，而库里同一批 host 分类成校招的只有一部分 ——
+        奇瑞自报 2,261 / 库里 54、中核集团自报 854 / 库里 0、泰格医药 214 / 5。
+        这些岗的标题（"生产操作工" "销售代表"）和 URL（/social/detail?jobAdId=…）里一个校招令牌都没有，
+        光靠现有七层裁决**永远**判不出来 —— 唯一的事实来源就是这个字段。
+
+        ⚠️ 只取 `Category`，**绝不能顺手把 `Kind` 也带上**：Kind 是"全职/兼职"，
+           而 `sourceDeclaredCategory("全职")` 直接返回「社招」—— 那会把校招岗按住判成社招，
+           正好把这个 bug 放大一遍。
+        ⚠️ 仍然只在 job_type 为空时才填，不覆盖已有值（保持与通用 _map 的优先级一致）。
+        ⚠️ 判定规则本身**不在这里**：这里只负责如实把事实搬过来，
+           "校园招聘"→校招 的裁决仍归 lib/china-keyword-expansion.js 的 sourceDeclaredCategory
+           （层3），规则只有一份。
+        """
+        job = super()._map(post)
+        if job is not None and not job.job_type and isinstance(post, dict):
+            declared = _first_str(post, ("Category", "CategoryName"))
+            if declared:
+                job.job_type = declared
+        return job
+
     def fetch(self, source_url: str) -> str:
         """httpx-first（2026-06-28 实测 6/6 租户冷 httpx 可达）：HTML 抽 PortalId → GetJobAdPageList 翻页，
         **零浏览器**。但 jd_url 需本租户详情路由（点击捕获，按 host 缓存到 beisen_routes.json）——故仅当
@@ -1019,6 +1066,14 @@ class BeisenAdapter(ChinaSpaAdapter):
             # 「首见租户」分支会因为 host 还在缓存里被跳过 → 详情路由永远探不出来 → _resolve_url
             # 全返空 → 整源解析成 0 岗，偏偏浏览器路径又把 fetch_complete 置成 True
             # ＝「0 岗 + 自称抓全」，正是 CLAUDE.md §4 立碑警告的误杀在招岗组合。
+            _BEISEN_ROUTE_CACHE.pop(self._host, None)
+            route = None
+
+        if route is not None and not _beisen_route_usable(route):
+            # 同上一段一模一样的道理，只是过期的是**老版 SSR 路由登记**：租户升级到新版 SPA 后，
+            # `{ssr_path, ssr_param}` 配不了新版接口的 uuid（真渲染实测拼出来是首页，见
+            # _beisen_route_usable 的注释）。留着它 = 每行 jd_url 空串 = 「success + 0 岗」永久静默。
+            # 清掉 → 落到下面「首见租户」分支，httpx 抓完整列表 + 浏览器重探一次路由。
             _BEISEN_ROUTE_CACHE.pop(self._host, None)
             route = None
 
@@ -1549,7 +1604,18 @@ class BeisenAdapter(ChinaSpaAdapter):
                                   summary=j.get("summary"), education=j.get("education"),
                                   jd_url=jd, apply_url=jd, posted_at=None))
             return out
-        return super().parse(html)  # 新版 JSON 拦截路径
+        out = super().parse(html)  # 新版 JSON 拦截路径
+        # 「列表明明有行、却一条都映射不出来」只有一个成因：详情路由用不了 → 每行 jd_url 是空串 →
+        # 被质量门丢光。它以前**静默**成 success + 0 岗（复星医药连着 33 次、中核 / 京东方同病），
+        # 而「0 岗」在下游会被当成「对方没岗了」。这不是 0 岗，是抓坏了，必须记 failed 让人看见。
+        # ⚠️ 只在「有行 → 零产出」这一种组合下抛；真的返回空列表（对方确实没岗）照常返回 []。
+        if not out and self._list_posts(html):
+            raise RuntimeError(
+                f"beisen: list returned rows but no job could be mapped "
+                f"({getattr(self, '_host', '?')} → route={getattr(self, '_detail_route', None)!r}); "
+                f"detail route unusable, refuse to report 0 jobs as success"
+            )
+        return out
 
     def _list_posts(self, list_json: str):
         try:

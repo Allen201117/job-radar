@@ -32,6 +32,10 @@ jobs:
       # 巨潮(A股)官方源默认关；live 验证返回格式正确后，在 repo Variables 置 INSIGHT_CNINFO_ENABLED=true 开启（无需改代码）
       INSIGHT_CNINFO_ENABLED: ${{ vars.INSIGHT_CNINFO_ENABLED }}
       SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+      # 同 insight-enrich-t3.yml：单公司现查快车道也会走 T3，缺这三个则需求排序静默失效。
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+      JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+      JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
       BOCHA_API_KEY: ${{ secrets.BOCHA_API_KEY }}
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
       SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}

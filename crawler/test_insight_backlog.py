@@ -232,6 +232,66 @@ class TestWorker(unittest.TestCase):
         ups = store.get("company_profiles_updates", [])
         self.assertTrue(any("insight_checked_at" in p for _, p in ups))
 
+    def test_transient_error_does_not_count_toward_deadletter(self):
+        """429 限流是「我们打太快」，不是「Wikidata 没这家公司」——不许计进死信。
+
+        2026-09-09~11 三晚 Wikidata 回了 1,504 次 429，把 252 家公司推到 1~2 次失败，
+        再来一晚同样的限流就会被永久踢出 T2 队列。
+        """
+        import httpx
+
+        def boom(c, a=None):
+            resp = httpx.Response(429, request=httpx.Request("GET", "https://x/"))
+            raise httpx.HTTPStatusError("429", request=resp.request, response=resp)
+
+        store = {}
+        W.get_company_facts = boom
+        res = B.enrich_company(FakeSB(store), {"id": "c7", "company": "限流公司",
+                                               "aliases": [], "insight_fail_count": 2})
+        self.assertEqual(res, "err")
+        ups = store.get("company_profiles_updates", [])
+        self.assertFalse(any("insight_fail_count" in p for _, p in ups))
+
+    def test_permanent_error_still_counts_toward_deadletter(self):
+        def boom(c, a=None):
+            raise ValueError("解析炸了")
+
+        store = {}
+        W.get_company_facts = boom
+        res = B.enrich_company(FakeSB(store), {"id": "c8", "company": "坏公司",
+                                               "aliases": [], "insight_fail_count": 1})
+        self.assertEqual(res, "err")
+        ups = store.get("company_profiles_updates", [])
+        self.assertTrue(any(p.get("insight_fail_count") == 2 for _, p in ups))
+
+    def test_success_resets_fail_count(self):
+        """失败计数只该数「连续失败」；不清零的话一次限流留下的疤会跟公司一辈子。"""
+        store = {}
+        W.get_company_facts = lambda c, a=None: FACTS
+        B.enrich_company(FakeSB(store), {"id": "c6", "company": "测试集团",
+                                         "aliases": [], "insight_fail_count": 2})
+        ups = store.get("company_profiles_updates", [])
+        self.assertTrue(any(p.get("insight_fail_count") == 0 for _, p in ups))
+
+    def test_noface_also_resets_fail_count(self):
+        store = {}
+        W.get_company_facts = lambda c, a=None: None
+        B.enrich_company(FakeSB(store), {"id": "c5", "company": "查无",
+                                         "aliases": [], "insight_fail_count": 2})
+        ups = store.get("company_profiles_updates", [])
+        self.assertTrue(any(p.get("insight_fail_count") == 0 for _, p in ups))
+
+    def test_is_transient_error_classification(self):
+        import httpx
+        resp = httpx.Response(503, request=httpx.Request("GET", "https://x/"))
+        self.assertTrue(B.is_transient_error(
+            httpx.HTTPStatusError("503", request=resp.request, response=resp)))
+        self.assertTrue(B.is_transient_error(httpx.ConnectTimeout("t")))
+        self.assertFalse(B.is_transient_error(ValueError("bad")))
+        resp404 = httpx.Response(404, request=httpx.Request("GET", "https://x/"))
+        self.assertFalse(B.is_transient_error(
+            httpx.HTTPStatusError("404", request=resp404.request, response=resp404)))
+
     def test_update_existing_listing(self):
         store = {"_canned_insight_items": [{"id": "existing-1"}]}  # 已有 → 走 update 不重复 insert
         W.get_company_facts = lambda c, a=None: FACTS

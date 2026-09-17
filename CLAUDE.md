@@ -637,6 +637,15 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
 /admin/health 供给页三张卡、看门狗规则 O 只在校招季（3·4·9·10·11 月）吵。
 ⚠️ 判「这家校招开没开」**只认对方页面**，不认我们的计数；idle 先查 `crawl_runs` 源坏没坏，missing 按平台分簇接
 （hotjob / wt / beisen / moka），每家过探活门才入库。
+- ⚠️ **`recruitment_category is null` = 「还没算」，不是「不是校招」（2026-09-17 立，迁移 258）**：它是被 `jobs_guard_recruitment_class`
+  触发器主动作废等回填的缓存；backfill 名义每 2 小时、实跑约 4 次/天，全库 3,380 行 NULL 全是近 3 天新抓的。按它数数把 NULL
+  读成 0 会静默制造假缺陷（24 家 idle 里 6 家纯属此）。census 现在把「渠道在 + 零校招 + 还有没算完的行」记成 `pending`，
+  只降级 idle、不降级 missing。
+- ⚠️ **ATS 自报的招聘类别就是事实来源，别让大小写把它吃掉**：北森 `Category`（校园招聘/社会招聘/实习生招聘）曾被通用 `_map`
+  的小写键整包丢掉，16 租户 24,828 岗逐岗对拍：校招 +5,149 / 实习 +105、反向 45 条全是纠正，一致率 81%→97%。接 adapter 先问
+  「对方返回体里有没有它自己声明的类别」。**绝不带 `Kind`**（"全职" 会被裁决成社招）。
+- ⚠️ **列表有行却一条都映射不出来必须记 failed**：复星医药连着 33 次 success + 0 岗，根因是 `beisen_routes.json` 一条过期
+  `ssr_path` 登记把每行 jd_url 拼成空串。「官网不存在」也只是我们的观测——中化 111 次 failed 只是搬了域名和 suiteKey。
 - **校招车道**（`gap_funnel.process_campus_channel`，每轮 `GAP_FUNNEL_CAMPUS_CAP` 默认 5 家）：对 missing 的公司搜
   「{公司} 校园招聘 官网」，指纹认出平台后按平台换算校招板块 URL（`campus_source_url`：hotjob school.html / 飞书
   /campus/position / 国聘 nature=应届生 / moka 只认 campus-recruitment / 外企 ATS 无校招板块 → 不接），过同一道真抓验收门。

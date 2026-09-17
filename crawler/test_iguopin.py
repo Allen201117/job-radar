@@ -5,7 +5,10 @@ from pathlib import Path
 import unittest
 from unittest import mock
 
-from adapters.iguopin import IguopinAdapter, _company_keyword, _nature_codes, _full_name_is_same_entity
+from adapters.iguopin import (
+    IguopinAdapter, _company_keyword, _nature_codes, _full_name_is_same_entity,
+    reset_process_caches,
+)
 
 
 class _Response:
@@ -32,6 +35,9 @@ def _job(job_id, company_name, company_id):
 
 
 class IguopinAdapterTest(unittest.TestCase):
+    def setUp(self):
+        reset_process_caches()
+
     def test_parse_verified_detail_job(self):
         fixture = Path(__file__).with_name("fixtures") / "iguopin_list.json"
         row = json.loads(fixture.read_text(encoding="utf-8"))["data"]["list"][0]
@@ -332,6 +338,94 @@ class IguopinAdapterTest(unittest.TestCase):
             "国网江苏省电力有限公司（国家电网）",
             "国家电网有限公司",
         ])
+
+
+class ProcessCacheTest(unittest.TestCase):
+    """进程级缓存：45 条国聘源同主机一队串行跑在同一个进程里（社招 28 + 校招 17），
+    重档那一片的墙钟下限就是这一队的累加 —— 少发的每一次请求都直接从 180 分钟里扣。"""
+
+    def setUp(self):
+        reset_process_caches()
+
+    def _fetch(self, url, rows, *, group_id="grp", seen_home=None, seen_detail=None):
+        def fake_post(_url, **_kwargs):
+            return _Response({"code": 200, "data": {"total": len(rows), "list": rows}})
+
+        def fake_get(url_, **kwargs):
+            if "company/index/v1/home" in url_:
+                cid = kwargs["params"]["company_id"]
+                if seen_home is not None:
+                    seen_home.append(cid)
+                return _Response({"code": 200, "data": {"company_info": {
+                    "id": cid, "group_id": group_id, "group_short_name": "某集团"}}})
+            if "children-list" in url_:
+                return _Response({"code": 200, "data": []})
+            job_id = kwargs["params"]["id"]
+            if seen_detail is not None:
+                seen_detail.append(job_id)
+            row = next(r for r in rows if r["job_id"] == job_id)
+            return _Response({"code": 200, "data": {**row}})
+
+        with mock.patch("adapters.iguopin.httpx.post", side_effect=fake_post), \
+             mock.patch("adapters.iguopin.httpx.get", side_effect=fake_get):
+            return IguopinAdapter().fetch(url)
+
+    def test_group_id_and_detail_are_not_refetched_across_sources(self):
+        """同一集团的社招源与校招源问的是同一批公司、同一批岗 —— 第二条源不该再问一遍。"""
+        rows = [_job("j1", "某集团某子公司", "c1"), _job("j2", "某集团另一子公司", "c2")]
+        home, detail = [], []
+        social = "https://www.iguopin.com/job?company=某集团"
+        campus = "https://www.iguopin.com/job?company=某集团&nature=115xW5oQ&channel=campus"
+
+        self._fetch(social, rows, seen_home=home, seen_detail=detail)
+        first_home, first_detail = len(home), len(detail)
+        self.assertEqual(sorted(set(home)), ["c1", "c2"])
+        self.assertEqual(sorted(set(detail)), ["j1", "j2"])
+
+        payload = self._fetch(campus, rows, seen_home=home, seen_detail=detail)
+        self.assertEqual(len(home), first_home, "第二条源不该重复查 company_id → group_id")
+        self.assertEqual(len(detail), first_detail, "第二条源不该重复拉同一批 job_id 的详情")
+        # 省请求不能省产出：复用的详情同样让这些行过核验。
+        self.assertEqual(len(IguopinAdapter().parse(payload)), 2)
+
+    def test_failed_group_lookup_is_not_cached_as_a_verdict(self):
+        """`None` = 暂时不知道，缓存它就等于把一次网络抖动冻成整晚的结论。"""
+        calls = []
+
+        class _Flaky(IguopinAdapter):
+            def _fetch_company_group_id(self, company_id, headers):
+                calls.append(company_id)
+                return None if len(calls) == 1 else "grp"
+
+        adapter = _Flaky()
+        self.assertIsNone(adapter._company_group_id("c1", {}))
+        self.assertEqual(adapter._company_group_id("c1", {}), "grp")
+        self.assertEqual(calls, ["c1", "c1"])
+        # 拿到定论之后才缓存
+        self.assertEqual(adapter._company_group_id("c1", {}), "grp")
+        self.assertEqual(calls, ["c1", "c1"])
+
+    def test_empty_group_verdict_is_cached(self):
+        """「查到了、它没有集团」是定论（那正是挡住中国（海南）改革发展研究院的那一条），
+        必须缓存 —— 否则空串会被 `if found` 之类的写法当成失败反复重查。"""
+        calls = []
+
+        class _Independent(IguopinAdapter):
+            def _fetch_company_group_id(self, company_id, headers):
+                calls.append(company_id)
+                return ""
+
+        adapter = _Independent()
+        self.assertEqual(adapter._company_group_id("c1", {}), "")
+        self.assertEqual(adapter._company_group_id("c1", {}), "")
+        self.assertEqual(calls, ["c1"])
+
+    def test_prefetch_does_not_add_requests_for_rows_already_known(self):
+        """预热只是把「本来就要问的那批」并发问掉，不许多问一次。"""
+        rows = [_job("j1", "某集团某子公司", "c1"), _job("j2", "某集团某子公司", "c1")]
+        home = []
+        self._fetch("https://www.iguopin.com/job?company=某集团", rows, seen_home=home)
+        self.assertEqual(home.count("c1"), 1)
 
 
 if __name__ == "__main__":

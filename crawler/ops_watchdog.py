@@ -80,7 +80,9 @@ MODULE_OUTPUT = {
     # 有主体可算却一条指标都没产出 = 洞察库页面会空着，属零产出。
     "bu_signals": (("items_written",), ("subjects_scanned",)),
     # 有待判档的条目却一条都没判出来 = 档位筛选会一直空着，属零产出。
-    "insight_grade_extract": (("graded",), ("scanned",)),
+    # attempts_exhausted 也算产出：判不出档的条目走到「搁置」同样是队列在前进。
+    # 只有「既没判出档、也没有一条走到终态」才是真卡住（2026-09-09~17 空转 9 天正是这一态）。
+    "insight_grade_extract": (("graded", "attempts_exhausted"), ("scanned",)),
     # run.py 每轮抓取收尾写的台账（2026-09-03）：有源可抓却一个岗都没拿到 = 零产出。
     "daily_crawl": (("jobs_found_total",), ("sources_total",)),
 }
@@ -1065,6 +1067,53 @@ def evaluate_crawl_run_unrecorded(rows, today=None):
     }]
 
 
+# 规则 P：洞察库 7 天新增 active 条数。阈值取得保守——2026-09-03~17 实测每天新增 active
+# 在 8~682 条之间波动（中位 82），7 天累计从没低过三位数。低于 20 基本只可能是整条链停了
+# （LLM 账户欠费 / 搜索 key 失效 / 队列空转），不是「这周没啥可写」。
+INSIGHT_WEEKLY_MIN = 20
+
+
+def evaluate_insight_supply_stall(rows, today=None, minimum=INSIGHT_WEEKLY_MIN):
+    """规则 P：洞察库近 7 天新增 active 洞察过少 = 供给停摆。
+
+    为什么规则 A 顶不了这个：规则 A 看的是「模块产出为 0」，而 T3 每晚都会报
+    `checked: 5 / companies_enriched: 3`，永远不为 0 —— 它数的是**处理了几家公司**。
+    公司照样被处理、判官照样 abstain、库里一条没多，规则 A 全程不响。
+    指标为 None（没数出来）**不告警**：拿不到数不等于数是 0，那是两回事。
+    """
+    today = str(today or datetime.now(SHANGHAI).date())[:10]
+    latest = None
+    for row in rows or []:
+        if (row or {}).get("module") != "insight_backlog":
+            continue
+        metrics = (row.get("metrics") or {})
+        if "active_added_7d" not in metrics:
+            continue
+        if latest is None or str(row.get("run_date") or "") > str(latest[0] or ""):
+            latest = (row.get("run_date"), metrics.get("active_added_7d"))
+    if latest is None:
+        return []
+    run_date, value = latest
+    if value is None:
+        return []
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return []
+    if value >= minimum:
+        return []
+    return [{
+        "rule": "P",
+        "subject": "insight_supply",
+        "summary": f"洞察库近 7 天只新增了 {value} 条 active 洞察（下限 {minimum}），供给可能已停摆。",
+        "evidence": [f"最近一次台账 run_date={run_date}，active_added_7d={value}",
+                     f"今天={today}"],
+        "next": "按顺序查：① SiliconFlow 账户是否欠费（llm_usage 台账 calls 是否归零）；"
+                "② 搜索源 key / 日顶（search_usage 各 provider 当天 used）；"
+                "③ T3 队列是否被 t3_fail_count 死信掏空。",
+    }]
+
+
 def evaluate_stale_apply_programs(rows, today=None, stale_days=APPLY_PROGRAM_STALE_DAYS):
     """规则 J：/programs 的投递入口该重新人工核实了。
 
@@ -1442,6 +1491,7 @@ def main():
     findings += evaluate_account_errors(event_rows, ops_rows, now=now)
     findings += evaluate_missing_mac_announcement_harvest(ops_rows, now=now)
     findings += evaluate_crawl_run_unrecorded(ops_rows, today=today)
+    findings += evaluate_insight_supply_stall(ops_rows, today=today)
     # 规则 O 单独包住：台账几百行的小表，取不到不拖垮别的规则。
     try:
         gap_rows = db.fetch_all_rows(

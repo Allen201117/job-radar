@@ -1459,10 +1459,11 @@ function MustApplyGapLedger({
       {summary && (
         <div className="mt-5">
           <h3 className="text-sm font-semibold">校招渠道 · 国内必投</h3>
-          <p className="mt-1 text-xs ink-3">和上面的「有没有健康岗」是两回事：一家公司社招 500 个岗也可能校招一条都没接。近 3 天抓到校招岗 = 通；有校招源但零岗 = 闲置；没有校招源 = 没接。</p>
-          <div className="mt-3 grid gap-3 sm:grid-cols-3">
-            <KpiCard title="校招渠道通" value={formatCount(summary.campusChannel.healthy)} tone="success" detail={`占国内清单 ${summary.campusChannel.healthy + summary.campusChannel.idle + summary.campusChannel.missing > 0 ? Math.round((summary.campusChannel.healthy * 100) / (summary.campusChannel.healthy + summary.campusChannel.idle + summary.campusChannel.missing)) : 0}%`} className="min-h-0" />
+          <p className="mt-1 text-xs ink-3">和上面的「有没有健康岗」是两回事：一家公司社招 500 个岗也可能校招一条都没接。近 3 天抓到校招岗 = 通；有校招源、近 3 天的岗也都分类完了却零校招岗 = 闲置；有校招源但还有岗没分类完 = 待判（不是缺陷）；没有校招源 = 没接。</p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <KpiCard title="校招渠道通" value={formatCount(summary.campusChannel.healthy)} tone="success" detail={`占国内清单 ${summary.campusChannel.healthy + summary.campusChannel.idle + summary.campusChannel.pending + summary.campusChannel.missing > 0 ? Math.round((summary.campusChannel.healthy * 100) / (summary.campusChannel.healthy + summary.campusChannel.idle + summary.campusChannel.pending + summary.campusChannel.missing)) : 0}%`} className="min-h-0" />
             <KpiCard title="渠道闲置" value={formatCount(summary.campusChannel.idle)} tone={summary.campusChannel.idle > 0 ? "warning" : "muted"} detail={summary.campusChannel.idleCompanies.slice(0, 6).join("、") || "无"} className="min-h-0" />
+            <KpiCard title="待判（分类未回填）" value={formatCount(summary.campusChannel.pending)} tone="muted" detail={summary.campusChannel.pendingCompanies.slice(0, 6).join("、") || "无"} className="min-h-0" />
             <KpiCard title="校招没接" value={formatCount(summary.campusChannel.missing)} tone={summary.campusChannel.missing > 0 ? "danger" : "success"} detail={summary.campusChannel.missingCompanies.slice(0, 8).join("、") || "无"} className="min-h-0" />
           </div>
         </div>

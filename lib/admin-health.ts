@@ -510,10 +510,13 @@ export type MustApplyGapAttemptRow = {
 export type MustApplyCampusChannelSummary = {
   healthy: number;
   idle: number;
+  /** 有校招渠道源、但近 3 天还有岗没分类完 → 判不了「零校招岗」（迁移 258）。不是缺陷，是「还不知道」。 */
+  pending: number;
   missing: number;
   unknown: number;
   missingCompanies: string[];
   idleCompanies: string[];
+  pendingCompanies: string[];
 };
 
 export type MustApplyGapSummary = {
@@ -667,18 +670,23 @@ export function summarizeMustApplyGapAttempts(
   // 校招渠道单独一轴：一家公司可以 state=healthy（社招 500 岗）同时 campus_channel=missing。
   // 2026-09-17 之前看板只有前者，秋招季 46 家「有社招无校招」的必投公司全被记成健康。
   const campusChannel: MustApplyCampusChannelSummary = {
-    healthy: 0, idle: 0, missing: 0, unknown: 0, missingCompanies: [], idleCompanies: [],
+    healthy: 0, idle: 0, pending: 0, missing: 0, unknown: 0,
+    missingCompanies: [], idleCompanies: [], pendingCompanies: [],
   };
   for (const row of rows || []) {
     const channel = String(row.campus_channel || "unknown");
     const name = String(row.company || "").trim();
     if (channel === "healthy") campusChannel.healthy += 1;
     else if (channel === "idle") { campusChannel.idle += 1; if (name) campusChannel.idleCompanies.push(name); }
+    // pending 刻意**不并进 idle**：并进去就等于又把「还没算完」说成「确认零校招岗」，
+    // 正是迁移 258 要消掉的那句假话。它单独计数、单独列名字。
+    else if (channel === "pending") { campusChannel.pending += 1; if (name) campusChannel.pendingCompanies.push(name); }
     else if (channel === "missing") { campusChannel.missing += 1; if (name) campusChannel.missingCompanies.push(name); }
     else campusChannel.unknown += 1;
   }
   campusChannel.missingCompanies.sort((a, b) => a.localeCompare(b, "zh-CN"));
   campusChannel.idleCompanies.sort((a, b) => a.localeCompare(b, "zh-CN"));
+  campusChannel.pendingCompanies.sort((a, b) => a.localeCompare(b, "zh-CN"));
   return { stateCounts: sortedStateCounts, recentFailures, manualReviewCompanies, campusChannel };
 }
 
