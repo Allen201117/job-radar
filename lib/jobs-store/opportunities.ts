@@ -261,17 +261,25 @@ function roleTsquery(profile: RadarProfile): string | null {
  * 正文按需传（2026-09-18）：只给「有机会通过职能门」的候选行传 300 字截断正文，其余传 NULL。
  *
  * 依据（与 /jobs 的 `candidateSummaryExpr` 是同一条论证，见 lib/jobs-store/search.ts）：
- * stage-2 里正文只被两处读到 —— `keywordMatchTier`（方向判定）与 `skillsHit`（加分技能）。
- * 而 `computeMatchFacts` 的职能门是：`userFns` 非空 且 岗位职能既不是「其他」也不在 `userFns` 里
- * ⇒ `roleTier = null` ⇒ `roleConstrained` 必为真（userFns 非空 ⇒ targetRoles 非空）⇒
- * `checkEligibility` 一定 `reject("role_mismatch")`。**这些行的正文不可能改变任何结果**，
- * 它们的 MatchFacts 连同 skillsHit 一起被丢弃。所以不传 = 零语义变化，省的是纯过路费。
+ * stage-2 里正文只被三处读到 —— `keywordMatchTier`（方向判定）、`skillsHit`（加分技能）、
+ * `excludeJobs`（排除词）。职能门必拒的行，这三样的结果都会连同 MatchFacts 一起被丢弃。
  *
- * 两条必须留的口子（少一条就不是等价变换了）：
+ * ⚠️ **2026-09-18 起这条论证被削弱了一半，别再按「零语义变化」理解**：
+ * `computeMatchFacts` 的职能门不再一票否决 —— 物化列判到别的桶、但**标题自判职能**与用户一致的行，
+ * 只要标题字面 exact 命中就会放行（见 lib/opportunities/eligibility.ts 的立碑）。于是：
+ *   · 方向判定不受影响 —— 这条豁免路径只看标题（`titleOnlyJob`），压根不读正文；
+ *   · `skillsHit` 会少算 —— 这些行的技能分只按标题算，**只会低估、不会高估**（分低不影响准入）；
+ *   · `excludeJobs` 会漏 —— 排除词只出现在正文时看不见它。排除词是产品红线（「命中一律不入选」），
+ *     所以**只要用户配了排除词就整体不省正文**（下面第 ③ 条）。
+ * 隔离对拍（2026-09-18，44 个真实画像，同一批行在 JS 里模拟按需传）：展示集合差 **0** 条、
+ * 排除词漏网 **0** 条、6 条岗位因 skillsHit 少算而分数略低。
+ *
+ * 三条必须留的口子（少一条就不是等价变换了）：
  *   ① `job_function` 为 NULL / 空 / 「其他」一律照传 —— 职能门对这三种放行（classifyJobFunction
  *      会在列为空时用正文现算，把正文抽走等于把现算的输入抽走）。
  *   ② 批量门店公司（lib/bulk-store-dedup）照传 —— `bulkStoreGroupKey` 拿**正文**当折叠键，
  *      抽走正文会让折叠失效，`counts.screened` / `filtered` 跟着漂（结果不变但账本会骗人）。
+ *   ③ 用户配了 `exclude_keywords` → 整体不省（见上）。
  * 运维开关 `RECALL_SUMMARY_GATE=off` 退回全传（也是改前/改后对拍的尺子，见 scripts/perf-probe）。
  *
  * 实测（2026-09-18，真库真画像）：机械@广东 1,794 行里 710 行（40%）职能门必拒 ——
@@ -280,6 +288,7 @@ function roleTsquery(profile: RadarProfile): string | null {
 function candidateSummaryExpr(profile: RadarProfile, params: unknown[]): string {
   const full = `left(btrim(summary), ${SUMMARY_TRUNC}) as summary`;
   if (String(process.env.RECALL_SUMMARY_GATE || "").toLowerCase() === "off") return full;
+  if (profile.excludeKeywords.length) return full; // ③ 排除词要看正文，且它现在拦得住的行可能被放行
   const fns = Array.from(userTargetFunctions(profile));
   if (!fns.length) return full; // 用户没填目标岗位 → 职能门整体不生效，一行都不能省
   params.push(fns);
