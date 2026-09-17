@@ -840,7 +840,11 @@ async function searchViaScan(
   // 与 newest 路径逐行同序。此时把 2.8 万行整窗拉回来只为了给一页 60 条排序，是白扔带宽
   // （2026-09-17 线上分段账本：匿名默认态 fetch 7.9~8.3s，打分 0.3s；香港机出口只有个位数 Mbps）。
   // → 匿名走下面攒够即停的逐页路径。有偏好时才需要看满窗口。
-  if (filters.sortBy === "match" && prefs) {
+  // 2026-09-18：有偏好但**一个可粗排的信号都没有**（没填岗位名 / 城市 / 公司，prescore 为 null）的登录用户，
+  // 此前会落回「拉满 SCAN_BUDGET=28000 行再 JS 排序」的老路径（线上 19s 那档）——而此时 scoreJob 能算的只剩
+  // 「7 天内 +10」，按分排序退化成纯新鲜度，与匿名路径逐行同序。所以和匿名一样走下面攒够即停的逐页路径。
+  // 这正是刚注册、还没填偏好就点开 /campus（默认全部校招岗、sortBy=match）的新用户会踩的那条路。
+  if (filters.sortBy === "match" && prefs && prescore) {
     // match 必须看满 SCAN_BUDGET 才能按分排序 → **一次查完，不要 OFFSET 翻页**。
     // 翻页是移植 lib/job-search.ts 时留下的阑尾：那侧走 PostgREST（单次最多返 1000 行）
     // 才不得不翻页，直连 pg 没有该上限 —— 同文件的 FTS 路径本来就是一条 `limit FTS_CAP`。
