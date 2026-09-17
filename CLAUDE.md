@@ -750,6 +750,11 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
    顶部 Segmented 切换、localStorage 记上次选择。头部库存数走 `countCampusLibrary` + `unstable_cache` 300s，与列表候选同一份 where
    （双向对拍：列表有头部无 2,292 / 头部有列表无 0，只会少说不会多说）。⚠️ `jobType` 锁定有三条静默泄漏路径（筛选控件 / 已选 chip / 清空），
    契约测试 `tests/campus-all-jobs.test.js` 各有断言，别解开。设计与数字：`docs/superpowers/specs/2026-09-18-campus-zone-all-campus-jobs-design.md`。
+- ⚠️ **改前 / 改后必须背靠背、同一份画像连续跑，否则库在动会被读成「代码回归」（2026-09-18 凌晨险些误撤）**：
+  方向词分支合并后我隔了一段时间才跑 match-eval，读到 5 格下降（财务 A 96→48），当场撤回；对方做受控对照
+  （`git archive` 出两棵树、共用一份 `parsed-profiles.json`、两轮交替跑）12 格逐格一致，我复跑同样一致——
+  差的是这段时间里爬虫/探活改了候选池 + 判官对新岗的判决。✅ 防：对拍一律「基线-变体-基线-变体」交替连续跑，
+  两轮基线不一致就先别下结论；「严格」口径对「财务分析 / 审计」这种宽方向天然敏感（24/25 是 same_family），看格子要连宽松一起看。
 
 ## 认证
 
