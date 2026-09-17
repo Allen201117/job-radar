@@ -181,3 +181,12 @@ test("库存计数与列表计数是两个数，措辞不能混（诚实口径�
   assert.match(body[0], /grad_class is null or grad_class >= /, "库存计数必须带同一条往届门");
   assert.match(body[0], /appendJobScopeWhere/, "库存计数必须跟随用户的求职范围");
 });
+
+// 审查抓到：空态文案写死「必投 30 家」，而视图切换按钮上的数字是按用户行业收窄后的 cards.length（不恒等于 30）。
+test("全部校招岗视图不许写死「必投 30 家」，数量必须来自 props", () => {
+  const src = read("app/campus/campus-all-jobs.tsx");
+  assert.doesNotMatch(src.replace(/\/\/.*$/gm, ""), /必投 30 家/, "文案里不许出现写死的 30");
+  assert.match(src, /mustApplyCount/, "必须通过 mustApplyCount prop 拿数量");
+  const client = read("app/campus/campus-client.tsx");
+  assert.match(client, /mustApplyCount=\{cards\.length\}/, "父组件必须把 cards.length 传下去");
+});

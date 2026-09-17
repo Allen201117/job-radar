@@ -499,7 +499,7 @@ export default function CampusClient({
               <span className="ink-3">（已滤掉往届；按你的偏好排序，不做隐藏）</span>
             </p>
           )}
-          <CampusAllJobs mode={mode} jobScope={jobScope} />
+          <CampusAllJobs mode={mode} jobScope={jobScope} mustApplyCount={cards.length} />
         </>
       ) : (
         // ⚠️ 这里是**函数调用**，不是把它当组件渲染。写成组件标签会让 React 每次父组件重渲染

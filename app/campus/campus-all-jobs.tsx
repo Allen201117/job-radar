@@ -29,9 +29,12 @@ type PrimaryAction = "saved" | "ignored" | "applied";
 export default function CampusAllJobs({
   mode,
   jobScope = "domestic",
+  mustApplyCount,
 }: {
   mode: RecruitMode;
   jobScope?: string | null;
+  /** 「必投」视图当前给这位用户看的公司数（按行业收窄后不恒等于 30），文案里必须用它、不许写死。 */
+  mustApplyCount: number;
 }) {
   // 公司输入框的候选清单（与 /jobs 同一份接口）。只在这个视图挂载时拉一次；
   // 「必投 30 家」视图用不到它，所以刻意不放到页面 SSR 里。
@@ -223,7 +226,7 @@ export default function CampusAllJobs({
           <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] bg-white/45 px-6 py-14 text-center dark:border-white/[0.1] dark:bg-white/[0.05]">
             <h2 className="t-h2 ink-1">没有匹配的{mode === "campus" ? "校招" : "实习"}岗位</h2>
             <p className="t-body-sm mx-auto mt-2 max-w-md text-pretty ink-2">
-              可以放宽筛选条件；或切到「必投 30 家」，看你目标行业里那几家的招聘窗口。
+              可以放宽筛选条件；或切到「必投 {mustApplyCount} 家」，看你目标行业里那几家的招聘窗口。
             </p>
             <button
               type="button"
