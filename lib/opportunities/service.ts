@@ -2,7 +2,7 @@
 // → 按身份×强度分区 → 组装 OpportunityFeed。纯逻辑（facts/eligibility/scoring/signals/grouping）各自单测；
 // 本文件只做 DB 编排与组装，不重写匹配/信号规则。
 import "server-only";
-import type { JobAction, Job } from "../types";
+import type { Job } from "../types";
 import type {
   RadarProfile,
   Opportunity,
@@ -23,6 +23,8 @@ import { recallOpportunityCandidates } from "../jobs-store/opportunities";
 import { jobsByIds, jobsStoreEnabled } from "../jobs-store/read";
 import { estimateRowBytes, kb } from "../jobs-store/row-bytes";
 import { hydrateOpportunityJobs } from "./hydration";
+import { SOURCE_META_COLUMNS, loadSourceMetaSnapshot } from "./source-meta";
+import type { RadarJobAction } from "./types";
 
 type SupabaseLike = { from: (table: string) => any };
 
@@ -30,7 +32,7 @@ const EMPTY_COUNTS: FeedCounts = { total: 0, critical: 0, main: 0, by_signal: {}
 const EMPTY_SECTIONS: FeedSections = { critical: [], main: [], explore: [], momentum: [], waiting: [] };
 
 // 把 job_actions 折叠成每岗位的 {primary, viewed}
-function buildActionMap(actions: JobAction[]): Map<string, ActionState> {
+function buildActionMap(actions: RadarJobAction[]): Map<string, ActionState> {
   const map = new Map<string, ActionState>();
   for (const a of actions || []) {
     const cur = map.get(a.job_id) || { primary: null, viewed: false };
@@ -41,7 +43,6 @@ function buildActionMap(actions: JobAction[]): Map<string, ActionState> {
   return map;
 }
 
-const SOURCE_META_COLUMNS = "id, company, adapter_name, crawl_method, last_checked_at, enabled";
 /** freshness 徽章只看「上次检查时间」的粗粒度，5 分钟内完全够新鲜。 */
 const SOURCE_META_TTL_MS = 5 * 60 * 1000;
 /** 单次 `.in()` 带几个 id：PostgREST 的 select 走 GET，id 太多会把 URL 撑爆。 */
@@ -57,19 +58,15 @@ export function __resetSourceMetaCache(): void {
 }
 
 /**
- * 取本次召回**真正涉及到**的那些 source 的元信息（sources 永远在 Supabase）。
- * 失败不抛，freshness 退化为 manual SLA（§14.2）。
+ * 【兜底路径】取本次召回**真正涉及到**的那些 source 的元信息（sources 永远在 Supabase）。
  *
- * ⚠️ 为什么不再取全表：旧实现一次性拉全部 sources，理由是「可与召回并行、省一条串行往返」。
- * 但 sources 已越过 PostgREST 单次 1000 行上限（实测 1121），`fetchAllSources` 内部因此是
- * **串行**翻页 —— 所谓的"并行"里藏着 2 趟跨洋往返 + 1121 行传输，本地实测这一条就要 1434ms，
- * 反而成了 buildOpportunityFeed 那个 Promise.all 阶段的最慢一条。
- * 而实测一次召回（limit 4000）只涉及 **395 个源**：改成按 id 取后 395 < 1000 → 一次往返、
- * 行数少 65%，即使排在召回之后串行执行也更快。
+ * 主路径已改为 `loadSourceMetaSnapshot()` 的跨实例全表快照（见 lib/opportunities/source-meta.ts），
+ * 它不依赖召回结果、可与召回并行；这里只在快照取不到时兜底，**不是死代码**：
+ * 快照一旦静默失败而这里又不补，`checkEligibility` 的 `source_disabled` 硬门会整体失效。
  *
- * 另加按 id 的进程内缓存（TTL 5 分钟）：同实例的后续渲染只补差集。⚠️ 但别指望它——
- * 低流量下 Vercel 几乎每请求一个新实例，命中率很低（本轮实测：只加缓存不改取数方式，
- * /today 总时长纹丝不动）。真正的收益来自「少取行」，缓存只是锦上添花。
+ * 历史（别再原地打转）：一次请求一次全表拉取 → 改按 id 分块取（395 个源、一次往返）→
+ * 线上实测这一跳仍要 **480ms**，因为它**只能串在召回之后**。进程内缓存（TTL 5 分钟）
+ * 在 serverless 低流量下几乎不命中（每请求一个新实例），别指望它。
  */
 async function fetchSourceMetaFor(
   supabase: SupabaseLike,
@@ -128,7 +125,7 @@ async function hydrateDisplayJobs(sections: FeedSections): Promise<{ rows: numbe
 // 关键提醒（§3 / §4.4）：用户 saved/applied 的岗位若关闭/陈旧/快截止 → 进关键提醒区（不受强度压制）。
 // saved 岗被 eligibility 的 already_actioned 排除出主召回，所以这里单独取当前库状态派生。
 async function buildCriticalAlerts(
-  actions: JobAction[],
+  actions: RadarJobAction[],
   profile: RadarProfile,
   intensity: RadarIntensity,
   now: Date
@@ -189,7 +186,7 @@ async function buildCriticalAlerts(
 export async function buildOpportunityFeed(
   supabase: SupabaseLike,
   profile: RadarProfile,
-  actions: JobAction[],
+  actions: RadarJobAction[],
   radarState: { last_opened_at: string | null } | null,
   options: OpportunityFeedOptions,
 ): Promise<OpportunityFeed> {
@@ -220,13 +217,16 @@ export async function buildOpportunityFeed(
   const t0 = clock();
   const mark: Record<string, number> = {};
 
-  // 两条互相独立的 I/O 并行：① 岗位召回（香港库）② 关键提醒（香港库，按 saved/applied 岗）。
-  // source 元信息改为召回之后按 id 取（只要这一批真正涉及的源）——它原本挤在这个 Promise.all 里
-  // 号称"并行"，实际是全表分页的 2 趟串行跨洋往返 + 1121 行，反而是最慢的一条。
-  // 详见 fetchSourceMetaFor 的注释与实测数字。
+  // 三条互相独立的 I/O 并行：① 岗位召回（香港库）② 关键提醒（香港库，按 saved/applied 岗）
+  // ③ source 元信息快照（Supabase 悉尼，跨实例缓存、**不依赖召回结果**）。
+  //
+  // ③ 之所以能回到并行里：它不再是「按召回涉及的 id 取」（那必须等召回出结果，线上实测这一跳
+  // 串行 480ms = feed 总时长的 25%），而是全表 1,655 行 / 170KB 的跨实例快照——命中即零往返，
+  // 未命中的那一次也躲在召回的影子里。详见 lib/opportunities/source-meta.ts。
   let recallMs = 0;
   let criticalMs = 0;
-  const [recall, critical] = await Promise.all([
+  let sourcemetaMs = 0;
+  const [recall, critical, snapshot] = await Promise.all([
     (async () => {
       const s = clock();
       try {
@@ -245,14 +245,37 @@ export async function buildOpportunityFeed(
         criticalMs = clock() - s;
       }
     })(),
+    (async () => {
+      const s = clock();
+      try {
+        return await loadSourceMetaSnapshot();
+      } finally {
+        sourcemetaMs = clock() - s;
+      }
+    })(),
   ]);
   mark.recall = recallMs;
   mark.critical = criticalMs;
-  mark.parallel = clock() - t0; // 这一阶段的墙钟（= 两条里最慢的那条）
+  mark.sourcemeta = sourcemetaMs;
+  mark.parallel = clock() - t0; // 这一阶段的墙钟（= 三条里最慢的那条）
 
-  const tSrc = clock();
-  const sourceMeta = await fetchSourceMetaFor(supabase, recall.jobs);
-  mark.sourcemeta = clock() - tSrc;
+  // 快照取不到（首次部署 / Supabase 抖 / 缓存里是旧形状）→ 退回按 id 取，**不许当成「这批岗没有元信息」**：
+  // 那会让 source_disabled 硬门整体失效，把已禁用源的岗静默放行。兜底是串行的，记进账本好识别。
+  let sourceMeta = snapshot ?? new Map<string, SourceMeta>();
+  let sourcemetaFallback = 0;
+  if (!snapshot) {
+    const s = clock();
+    sourceMeta = await fetchSourceMetaFor(supabase, recall.jobs);
+    sourcemetaFallback = clock() - s;
+    mark.sourcemeta += sourcemetaFallback;
+  }
+  // 「这批候选涉及的源里，有几个真的拿到了元信息」——账本里唯一能看出静默降级的数字。
+  // 报全表行数没用（快照恒 1,655）；命中率掉下来才说明 freshness / source_disabled 正在失效。
+  const wantedSources = new Set<string>();
+  for (const j of recall.jobs) if (j.source_id) wantedSources.add(j.source_id);
+  let sourcemetaHits = 0;
+  for (const id of wantedSources) if (sourceMeta.has(id)) sourcemetaHits += 1;
+
   const tCompute = clock();
 
   const opps: Opportunity[] = [];
@@ -329,7 +352,9 @@ export async function buildOpportunityFeed(
       `recall_rows=${recall.timing?.rows ?? mark.candidates} recall_kb=${kb(recall.timing?.bytes ?? 0)} ` +
       `hydrate_rows=${hydrated.rows} hydrate_kb=${kb(hydrated.bytes)} ` +
       `recall_ms=${Math.round(mark.recall)} critical_ms=${Math.round(mark.critical)} ` +
-      `sourcemeta_ms=${Math.round(mark.sourcemeta)} compute_ms=${Math.round(mark.compute)} ` +
+      `sourcemeta_ms=${Math.round(mark.sourcemeta)} sourcemeta_hit=${sourcemetaHits}/${wantedSources.size}` +
+      `${sourcemetaFallback ? `(fallback ${Math.round(sourcemetaFallback)}ms)` : ""} ` +
+      `compute_ms=${Math.round(mark.compute)} ` +
       `group_ms=${Math.round(mark.group)} hydrate_ms=${Math.round(mark.hydrate)} total_ms=${Math.round(mark.total)}`,
   );
 

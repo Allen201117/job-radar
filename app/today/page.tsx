@@ -6,7 +6,8 @@ import { deriveCountryCode } from "@/lib/geo";
 import { JobListSkeleton } from "@/components/Skeletons";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { buildRadarProfile, profileReadiness } from "@/lib/opportunities/profile";
-import { loadRadarContext } from "@/lib/opportunities/context";
+import { loadRadarContext, type RadarContextStats } from "@/lib/opportunities/context";
+import { kb } from "@/lib/jobs-store/row-bytes";
 import { resolveIntensityForUser } from "@/lib/opportunities/intensity";
 import { buildOpportunityFeed } from "@/lib/opportunities/service";
 import { getPopularFeed, type PopularFeed } from "@/lib/popular-feed";
@@ -34,8 +35,35 @@ type TodayBundle = {
   savedIndustries: string[];
   /** 选了海外/全都要却在海外池里 0 岗（目标城市全是国内、无英文简历）→ 已按国内重算，页面要告诉他。 */
   scopeFallback: "domestic" | null;
-  /** shell 之前那 4 条 Supabase(悉尼) 并行查询耗时，诊断用。 */
-  userRowsMs: number;
+  /** 页面级分段账本（见 TodayBundleTiming）。 */
+  timing: TodayBundleTiming;
+};
+
+/**
+ * `[today-page]` 账本：**feed 之外**那几段。
+ *
+ * 为什么非有不可：`[today-feed]` 只覆盖 buildOpportunityFeed 内部，线上 2026-09-18 02:35 实测它
+ * `total=1,880ms`，而真实浏览器里整页流完要 **6.5s**——2/3 的时间没有任何人能指认。
+ * 缺的那几段就是这里记的：画像读取（4 条悉尼查询）、海外→国内兜底重算、热门兜底、
+ * 以及**交给浏览器的 props 有多少字节**（HTML 里它出现两次：JobCard 渲染出的 markup + RSC payload）。
+ *
+ * 判读法（照 /campus 那次的先例：`TTFB 快 + responseEnd 慢` = 生成/传输页面本身的问题）：
+ *   · 浏览器 responseEnd − (TTFB + total_ms) ≈ **传输 + React 序列化**，用 props_kb 去解释它；
+ *   · TTFB 本身偏大 ≈ **函数冷启动**（容器启动 + 首次建库连接），这一段代码里改不掉。
+ */
+type TodayBundleTiming = {
+  /** loadRadarContext：4 条 Supabase(悉尼) 并行查询的墙钟与回传字节。 */
+  ctxMs: number;
+  ctxBytes: number;
+  ctxActions: number;
+  /** buildOpportunityFeed 端到端（其内部分解见 `[today-feed]`）。 */
+  feedMs: number;
+  /** 求职范围错配时按国内重算的**第二次** feed；没触发为 0。 */
+  fallbackMs: number;
+  /** 画像未就绪时的「热门在招」（跨请求 unstable_cache）；没触发为 0。 */
+  popularMs: number;
+  /** loadTodayBundle 端到端。 */
+  bundleMs: number;
 };
 
 /**
@@ -50,24 +78,34 @@ async function loadTodayBundle(
   userId: string,
   now: Date,
 ): Promise<TodayBundle> {
-  const tUserRows = performance.now();
+  const tBundleStart = performance.now();
+  const ctxStats: RadarContextStats = { ms: 0, bytes: 0, actionRows: 0 };
+  const timing: TodayBundleTiming = {
+    ctxMs: 0, ctxBytes: 0, ctxActions: 0, feedMs: 0, fallbackMs: 0, popularMs: 0, bundleMs: 0,
+  };
   // 读取失败必须抛（见 lib/opportunities/context.ts）：外层 .catch 会把它变成「暂时无法更新，
   // 请稍后重试」的错误面板。**不能**像以前那样把失败当成空偏好继续往下走——那会静默丢掉
   // 排除词与已处理记录，还会把老用户打回填表引导页。
-  const ctx = await loadRadarContext(supabase, userId);
-  const userRowsMs = Math.round(performance.now() - tUserRows);
+  const ctx = await loadRadarContext(supabase, userId, ctxStats);
+  timing.ctxMs = ctxStats.ms;
+  timing.ctxBytes = ctxStats.bytes;
+  timing.ctxActions = ctxStats.actionRows;
 
   const profile = buildRadarProfile(userId, ctx.preferences, ctx.candidate);
   const readiness = profileReadiness(profile);
   // 画像未就绪 → 不做个人召回（没有目标可召回），改取与用户无关、跨请求共享缓存的「热门在招」。
   // 这是新用户的第一屏：给不出对口机会，也要给得出**能点开的真岗位**，而不是一堵表单墙。
   if (!readiness.ready) {
+    const tPopular = performance.now();
+    const popular = await getPopularFeed();
+    timing.popularMs = performance.now() - tPopular;
+    timing.bundleMs = performance.now() - tBundleStart;
     return {
       readiness,
       feed: null,
-      popular: await getPopularFeed(),
+      popular,
       savedIndustries: profile.targetIndustries,
-      userRowsMs,
+      timing,
       scopeFallback: null,
     };
   }
@@ -83,6 +121,7 @@ async function loadTodayBundle(
     now,
   );
 
+  const tFeed = performance.now();
   let feed = await buildOpportunityFeed(supabase, profile, actions, radarState, {
     surface: "today",
     intensity,
@@ -91,23 +130,27 @@ async function loadTodayBundle(
     console.error("[today] feed build failed:", (e as Error).message);
     return null;
   });
+  timing.feedMs = performance.now() - tFeed;
   // 求职范围错配兜底（2026-09-17 走查 44 个真实用户，4 个推荐页 0 岗全栽在这）：顶栏一点「海外」，
   // 画像却是「深圳 + 行政 + 没有英文简历」→ 海外池里当然一个都没有，页面就空着、不说为什么。
   // 只在「海外池确实 0 岗 + 目标城市全是国内 + 没英文简历」三件同时成立时按国内重算一次，并把原因交给页面说清。
   let scopeFallback: TodayBundle["scopeFallback"] = null;
   if (feed && feedIsEmpty(feed) && shouldFallbackToDomestic(profile, ctx.candidate)) {
+    const tFallback = performance.now();
     const domesticProfile = buildRadarProfile(userId, { ...(ctx.preferences as UserPreferences), job_scope: "domestic" }, ctx.candidate);
     const domesticFeed = await buildOpportunityFeed(supabase, domesticProfile, actions, radarState, {
       surface: "today",
       intensity,
       now,
     }).catch(() => null);
+    timing.fallbackMs = performance.now() - tFallback;
     if (domesticFeed && !feedIsEmpty(domesticFeed)) {
       feed = domesticFeed;
       scopeFallback = "domestic";
     }
   }
-  return { readiness, feed, popular: null, savedIndustries: profile.targetIndustries, userRowsMs, scopeFallback };
+  timing.bundleMs = performance.now() - tBundleStart;
+  return { readiness, feed, popular: null, savedIndustries: profile.targetIndustries, timing, scopeFallback };
 }
 
 function feedIsEmpty(feed: OpportunityFeed): boolean {
@@ -144,6 +187,9 @@ export default async function TodayPage({
       return null;
     },
   );
+  // shell（导航 + 页头 + 骨架）此刻就能 flush —— 这一段约等于浏览器看到的 TTFB 里**属于本函数**的部分。
+  // 它与真实 TTFB 的差 = 平台冷启动（容器启动 + bundle 加载），代码里改不掉。
+  const shellMs = performance.now() - tPageStart;
 
   return (
     <div className="min-h-screen bg-editorial">
@@ -160,7 +206,7 @@ export default async function TodayPage({
 
         <section className="mt-8">
           <Suspense fallback={<JobListSkeleton count={6} />}>
-            <TodayBody bundlePromise={bundlePromise} />
+            <TodayBody bundlePromise={bundlePromise} tPageStart={tPageStart} shellMs={shellMs} userId={user.id} />
           </Suspense>
         </section>
         {wantTiming && (
@@ -185,7 +231,8 @@ async function TimingProbe({
 }) {
   const bundle = await bundlePromise;
   const payload = {
-    user_rows_ms: bundle?.userRowsMs ?? null, // shell 之外那 4 条 Supabase(悉尼) 并行查询
+    user_rows_ms: bundle ? Math.round(bundle.timing.ctxMs) : null, // shell 之外那 4 条 Supabase(悉尼) 并行查询
+    page: bundle ? roundTiming(bundle.timing) : null, // 页面级分段（feed 之外的那几段）
     server_total_ms: Math.round(performance.now() - tPageStart), // 页面函数内总耗时（到主体完成）
     feed: bundle?.feed?.timing ?? null, // buildOpportunityFeed 内部分解
   };
@@ -199,9 +246,62 @@ async function TimingProbe({
   );
 }
 
+function roundTiming(t: TodayBundleTiming) {
+  return {
+    ctx_ms: Math.round(t.ctxMs),
+    ctx_kb: kb(t.ctxBytes),
+    ctx_actions: t.ctxActions,
+    feed_ms: Math.round(t.feedMs),
+    fallback_ms: Math.round(t.fallbackMs),
+    popular_ms: Math.round(t.popularMs),
+    bundle_ms: Math.round(t.bundleMs),
+  };
+}
+
+/**
+ * 交给浏览器的 props 有多少字节。**这是本页最该常开观测的数字**：
+ * 它在 HTML 里出现两次（JobCard 渲染出的 markup + RSC payload），是「TTFB 很快、整页却要 6.5s」
+ * 这个形态的第一嫌疑人。JSON.stringify 一遍约 1ms（React 紧接着还要做同样的事），相对 6.5s 是噪声。
+ * 估算失败不许影响页面渲染。
+ */
+function payloadKb(value: unknown): number {
+  try {
+    return kb(Buffer.byteLength(JSON.stringify(value) ?? ""));
+  } catch {
+    return -1;
+  }
+}
+
 // 主体区：画像不完整 → onboarding（不展示任何岗位）；就绪 → 机会列表；构建失败 → 友好兜底（偏好/历史未丢）。
-async function TodayBody({ bundlePromise }: { bundlePromise: Promise<TodayBundle | null> }) {
+async function TodayBody({
+  bundlePromise,
+  tPageStart,
+  shellMs,
+  userId,
+}: {
+  bundlePromise: Promise<TodayBundle | null>;
+  tPageStart: number;
+  shellMs: number;
+  userId: string;
+}) {
   const bundle = await bundlePromise;
+  // 一行可 grep 的页面级账本（与 `[today-feed]` / `[today-recall]` 同款；/today 要登录，外部 curl 不到）。
+  // user 只留前 8 位：够把两条日志串成一次请求，又不是可用的用户标识。
+  {
+    const t = bundle?.timing;
+    const cards = bundle?.feed
+      ? Object.values(bundle.feed.sections).reduce((n, arr) => n + arr.length, 0)
+      : (bundle?.popular?.jobs.length ?? 0);
+    console.log(
+      `[today-page] user=${userId.slice(0, 8)} ready=${bundle?.readiness.ready ? 1 : 0} ` +
+        `shell_ms=${Math.round(shellMs)} ctx_ms=${Math.round(t?.ctxMs ?? 0)} ctx_kb=${kb(t?.ctxBytes ?? 0)} ` +
+        `ctx_actions=${t?.ctxActions ?? 0} feed_ms=${Math.round(t?.feedMs ?? 0)} ` +
+        `fallback_ms=${Math.round(t?.fallbackMs ?? 0)} popular_ms=${Math.round(t?.popularMs ?? 0)} ` +
+        `bundle_ms=${Math.round(t?.bundleMs ?? 0)} cards=${cards} ` +
+        `props_kb=${payloadKb(bundle?.feed ?? bundle?.popular ?? null)} ` +
+        `total_ms=${Math.round(performance.now() - tPageStart)}`,
+    );
+  }
   if (!bundle) {
     return (
       <EmptyPanel
