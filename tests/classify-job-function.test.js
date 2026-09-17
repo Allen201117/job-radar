@@ -287,3 +287,77 @@ test("标题优先：job_type/summary 不带偏标题已明确的职能", () => 
   // 真 HR 岗：标题就是招聘角色，正文不翻盘 → 仍判职能（不被例外误伤）。
   assert.equal(classifyJobFunction({ title: "招聘专员", summary: "负责候选人寻访" }), "职能");
 });
+
+// ── 2026-09-17 词表补缺：用户手填的合法岗位名判不出职能（画像体检 22/64 个画像中招）+
+//    库里 active「其他」的高频真实标题。每条都钉「新增词命中什么」和「不许误吃什么」两面。
+test("用户手填的岗位方向必须判得出职能（画像体检缺口）", () => {
+  assert.equal(classifyJobFunction({ title: "有机合成研究员" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "实验员" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "资料员" }), "建筑工程");
+  assert.equal(classifyJobFunction({ title: "招投标" }), "供应链");
+  assert.equal(classifyJobFunction({ title: "外贸" }), "销售");
+  assert.equal(classifyJobFunction({ title: "电商运营" }), "运营");
+  assert.equal(classifyJobFunction({ title: "美工" }), "设计");
+  assert.equal(classifyJobFunction({ title: "网络安全" }), "研发");
+  assert.equal(classifyJobFunction({ title: "数字 IC 验证" }), "研发");
+  assert.equal(classifyJobFunction({ title: "ic验证" }), "研发");
+  assert.equal(classifyJobFunction({ title: "文员" }), "职能");
+  assert.equal(classifyJobFunction({ title: "人事专员" }), "职能");
+  assert.equal(classifyJobFunction({ title: "后勤" }), "职能");
+  assert.equal(classifyJobFunction({ title: "项目专员" }), "项目管理");
+  assert.equal(classifyJobFunction({ title: "数据中台" }), "数据");
+  assert.equal(classifyJobFunction({ title: "音乐教培" }), "教育培训");
+  assert.equal(classifyJobFunction({ title: "实验员" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "blender建模" }), "设计");
+});
+
+// 这三条是「全库对拍后主动撤回」的词，钉住它们**不该**被判出来——防下一个人凭直觉又加回去。
+// 撤回理由与实测数字写在 lib/china-keyword-expansion.js 对应规则的注释里。
+test("撤回的三个词不许复活（裸电商 / 裸教育 / scientist）", () => {
+  assert.equal(classifyJobFunction({ title: "资深前端开发工程师-抖音电商" }), "研发");
+  assert.equal(classifyJobFunction({ title: "AI产品经理-抖音电商" }), "产品");
+  assert.equal(classifyJobFunction({ title: "中级客户经理-教育" }), "销售");
+  assert.equal(classifyJobFunction({ title: "Principal Scientist, Clinical Pharmacology" }), "医疗健康");
+  assert.equal(classifyJobFunction({ title: "药理实验员" }), "医疗健康");
+});
+
+test("新增词不许抢走已有的正确判定（反方向）", () => {
+  assert.equal(classifyJobFunction({ title: "Data Scientist" }), "数据");
+  // retail 不许吃掉零售业务线的软件岗
+  assert.equal(classifyJobFunction({ title: "Retail Platform Principal Engineer" }), "研发");
+  // 「培训」裸词刻意没收：库里 300+ 个管培生不是教培岗。
+  assert.equal(classifyJobFunction({ title: "管理培训生（通用方向）" }), "其他");
+  assert.equal(classifyJobFunction({ title: "管培生" }), "其他");
+  // retail / bank / sales 同现时，按「最靠后命中」定角色。
+  assert.equal(classifyJobFunction({ title: "Retail Banking Relationship Manager" }), "金融业务");
+  assert.equal(classifyJobFunction({ title: "Retail Sales Associate" }), "销售");
+  // 安全：网络安全归研发，EHS 安全管理归生产制造（靠 (?<!网络|信息) 分开）。
+  assert.equal(classifyJobFunction({ title: "网络安全工程师" }), "研发");
+  assert.equal(classifyJobFunction({ title: "安全生产管理岗" }), "生产制造");
+  // account 分家：Account Manager 仍是销售，不因新增 accountant 变职能。
+  assert.equal(classifyJobFunction({ title: "Account Manager" }), "销售");
+  assert.equal(classifyJobFunction({ title: "Senior Accountant" }), "职能");
+  // 驱动开发不许被 driver 吃进供应链（所以供应链只收 forklift/truck，不收裸 driver）。
+  assert.equal(classifyJobFunction({ title: "Driver Development Engineer" }), "研发");
+});
+
+test("库里 active「其他」的高频真实标题现在归得了桶", () => {
+  assert.equal(classifyJobFunction({ title: "集控运行值班员" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "热控检修工" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "服务维保技师实习生" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "化验员" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "仓库管理员" }), "供应链");
+  assert.equal(classifyJobFunction({ title: "物控专员" }), "供应链");
+  assert.equal(classifyJobFunction({ title: "Material Handler" }), "供应链");
+  assert.equal(classifyJobFunction({ title: "Senior Buyer" }), "供应链");
+  assert.equal(classifyJobFunction({ title: "P/T Retail Store Associate" }), "客服服务");
+  assert.equal(classifyJobFunction({ title: "Visual Merchandiser" }), "客服服务");
+  assert.equal(classifyJobFunction({ title: "Contact Centre Representative" }), "客服服务");
+  assert.equal(classifyJobFunction({ title: "Wealth Relationship Manager" }), "金融业务");
+  assert.equal(classifyJobFunction({ title: "Oncology Territory Account Specialist" }), "医疗健康");
+  assert.equal(classifyJobFunction({ title: "Phlebotomist" }), "医疗健康");
+  assert.equal(classifyJobFunction({ title: "Executive Assistant" }), "职能");
+  assert.equal(classifyJobFunction({ title: "Business Analyst" }), "数据");
+  assert.equal(classifyJobFunction({ title: "Fire Alarm Inspector" }), "建筑工程");
+  assert.equal(classifyJobFunction({ title: "营运主管" }), "运营");
+});

@@ -76,3 +76,34 @@ test("jobFilterTier：city 缺失仍降级放行（不淘汰）", () => {
   const job = { id: "3", company: "X", title: "产品经理", location: "", jd_url: "u" };
   assert.equal(jobFilterTier(job, { ...base, city: "北京" }), "related");
 });
+
+// 2026-09-17：画像体检报出 14/64 个画像填的是「真实地级市但没登记」，这里把新登记的 17 个钉死。
+// 判据用 cityMatchTokens 的**双向**性质（正向：中文筛选词带出拼音；反向：拼音筛选词带出中文），
+// 而不是只看 normalizeChinaCity —— 后者靠子串兜底本来就能认出「浙江省宁波市」，看它证明不了什么。
+const NEWLY_REGISTERED = [
+  ["无锡", "wuxi"], ["合肥", "hefei"], ["宁波", "ningbo"], ["东莞", "dongguan"],
+  ["佛山", "foshan"], ["珠海", "zhuhai"], ["惠州", "huizhou"], ["湛江", "zhanjiang"],
+  ["青岛", "qingdao"], ["南昌", "nanchang"], ["南宁", "nanning"], ["海口", "haikou"],
+  ["长春", "changchun"], ["绍兴", "shaoxing"], ["连云港", "lianyungang"],
+];
+
+test("cityMatchTokens：新登记地级市双向无损（中文↔拼音）", () => {
+  const { normalizeChinaCity } = require("../lib/china-keyword-expansion");
+  for (const [cn, py] of NEWLY_REGISTERED) {
+    const fromCn = cityMatchTokens(cn);
+    assert.ok(fromCn.includes(py), `${cn} 应带出拼音 ${py}`);
+    assert.ok(fromCn.includes(cn), `${cn} 应含自身`);
+    const fromPy = cityMatchTokens(py);
+    assert.ok(fromPy.includes(cn), `${py} 应带出中文 ${cn}`);
+    assert.equal(normalizeChinaCity(`${cn}市`), cn, `${cn}市 应归一为 ${cn}`);
+  }
+});
+
+// 泰州/台州、福州/抚州 同音：收了拼音就会张冠李戴，所以刻意只收中文写法。
+test("cityMatchTokens：同音城市不收拼音（泰州/福州）", () => {
+  const { CITY_ALIASES, normalizeChinaCity } = require("../lib/china-keyword-expansion");
+  assert.ok(!CITY_ALIASES.has("taizhou"), "taizhou 与台州同音，不许登记");
+  assert.ok(!CITY_ALIASES.has("fuzhou"), "fuzhou 与抚州同音，不许登记");
+  assert.equal(normalizeChinaCity("泰州市"), "泰州");
+  assert.equal(normalizeChinaCity("福州市"), "福州");
+});

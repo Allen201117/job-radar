@@ -63,7 +63,11 @@ test("cityRecognition：城市 / 省·城市群 / 未登记 三档", () => {
   assert.equal(cityRecognition("北京"), "city");
   assert.equal(cityRecognition("广东"), "region");
   assert.equal(cityRecognition("长三角"), "region");
-  assert.equal(cityRecognition("连云港"), "unknown");
+  // 原本用「连云港」当未登记样本，2026-09-17 它连同另外 16 个用户真填过的地级市一起进了
+  // CITY_ALIASES（见 lib/china-keyword-expansion.js），已升格为 "city"。换一个仍未登记的样本，
+  // 保住这一档本身的断言——「未登记」这个返回值还在用（auditProfile 靠它报 location_unregistered_city）。
+  assert.equal(cityRecognition("连云港"), "city");
+  assert.equal(cityRecognition("石家庄"), "unknown");
 });
 
 test("canonicalizeIndustryList：认识的归一，认不出的原样保留（不丢）", () => {
