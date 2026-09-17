@@ -196,6 +196,11 @@ test("当前别名清单逐条钉死（海外：库里记的是中文名）", ()
     ["Continental", ["%大陆集团%"]],
     ["Merck", ["%默沙东%"]],
     ["Bristol Myers Squibb", ["%百时美施贵宝%"]],
+    // 2026-09-17 加：库里那行叫「埃克森美孚 ExxonMobil」（508 个健康 overseas 岗）。
+    // 同日 gap_census 的归属改走拉丁词边界后，pattern `%Exxon%` 不再命中 `ExxonMobil`
+    // （后面紧跟 `mobil`，不是词尾）——这条别名是把那 508 个岗接回来的补丁，
+    // 不是新增口径。词边界本身不能放宽：放宽就等于让 `%ABB%` 重新吃掉 AbbVie（8,530 岗）。
+    ["ExxonMobil", ["%埃克森美孚%"]],
     ["Shell", ["%壳牌%"]],
     ["TotalEnergies", ["%道达尔%"]],
     ["BASF", ["%巴斯夫%"]],

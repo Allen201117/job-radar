@@ -651,3 +651,115 @@ class ApplyProgramCoverageTest(unittest.TestCase):
                           now=NOW, cap=20, revalidate_slots=5),
             [],
         )
+
+
+class JobAttributionTest(unittest.TestCase):
+    """岗位/源归属必须与 `must_apply.resolve_owner` 同口径：pattern 命中多家时最长者独占。
+
+    用例都是 2026-09-17 香港库 active 聚合里的**真实**碰撞（只拉 group by company 的计数，
+    没拉逐岗行）。在此之前 census 用裸 ilike 聚合，同一批岗被两家各记一遍：
+      · `%京东%`  → 京东物流 / 京东科技 1,040 个健康岗同时算进「京东」；
+                    sources 侧「京东方」「京东方 BOE」两条源也算成京东的源
+      · `%ABB%`   → AbbVie 843 + 雅培 Abbott 736 算进「ABB」（overseas 侧 6,951 个）
+      · `%中国能源建设%` → 带「（中国能建）」后缀的子公司必须归中国能建，不归中国电建
+    """
+
+    JOBS = [
+        {"company": "京东", "active_total": 10, "healthy": 10},
+        {"company": "京东物流", "active_total": 7, "healthy": 7},
+        {"company": "京东方 BOE", "active_total": 5, "healthy": 5},
+    ]
+    LIST = [
+        {"name": "京东", "pattern": "%京东%"},
+        {"name": "京东物流", "pattern": "%京东物流%"},
+        {"name": "京东方", "pattern": "%京东方%"},
+    ]
+
+    def test_jd_does_not_swallow_jd_logistics_or_boe(self):
+        index = gc.build_owner_index(self.LIST)
+        row = gc.classify_company(self.LIST[0], self.JOBS, [], None, owner_index=index)
+        self.assertEqual(row["evidence"]["healthy_jobs"], 10)
+        self.assertEqual(row["evidence"]["matched_job_companies"], ["京东"])
+
+    def test_jd_logistics_and_boe_keep_their_own_jobs(self):
+        index = gc.build_owner_index(self.LIST)
+        logistics = gc.classify_company(self.LIST[1], self.JOBS, [], None, owner_index=index)
+        boe = gc.classify_company(self.LIST[2], self.JOBS, [], None, owner_index=index)
+        self.assertEqual(logistics["evidence"]["matched_job_companies"], ["京东物流"])
+        self.assertEqual(boe["evidence"]["matched_job_companies"], ["京东方 BOE"])
+
+    def test_boe_sources_do_not_count_as_jd_sources(self):
+        """源归属同一把尺：`campus_channel` 的 missing/idle 就是按 enabled_sources 判的。"""
+        index = gc.build_owner_index(self.LIST)
+        sources = [{"company": "京东方 BOE", "enabled": True, "id": "s-boe", "board": "mixed"}]
+        row = gc.classify_company(self.LIST[0], [], sources, None, owner_index=index)
+        self.assertEqual(row["evidence"]["matched_source_ids"], [])
+        self.assertEqual(row["campus_channel"], "missing")
+
+    def test_latin_pattern_matches_whole_word_only(self):
+        """`%ABB%` 不得命中 AbbVie / 雅培 Abbott —— 即使没有竞争者（不传 owner_index）。"""
+        jobs = [
+            {"company": "ABB", "active_total": 3, "healthy": 3},
+            {"company": "AbbVie", "active_total": 9, "healthy": 9},
+            {"company": "雅培 Abbott", "active_total": 8, "healthy": 8},
+        ]
+        row = gc.classify_company({"name": "ABB", "pattern": "%ABB%"}, jobs, [], None)
+        self.assertEqual(row["evidence"]["matched_job_companies"], ["ABB"])
+        self.assertEqual(row["evidence"]["healthy_jobs"], 3)
+
+    def test_ge_pattern_does_not_swallow_biogen(self):
+        """CLAUDE.md 2026-09-17 那块碑的原始反例：`GE` ⊄ `Biogen`，但 ⊂ `GE HealthCare`。"""
+        jobs = [
+            {"company": "Biogen", "active_total": 4, "healthy": 4},
+            {"company": "GE医疗 GE HealthCare", "active_total": 6, "healthy": 6},
+        ]
+        row = gc.classify_company({"name": "GE", "pattern": "%GE%"}, jobs, [], None)
+        self.assertEqual(row["evidence"]["matched_job_companies"], ["GE医疗 GE HealthCare"])
+
+    def test_china_energy_engineering_subsidiaries_are_not_stolen(self):
+        """`%中国电建%` 与 `%中国能源建设%` 各归各家：火电建设子公司归中国能建。"""
+        listing = [
+            {"name": "中国电建", "pattern": "%中国电建%"},
+            {"name": "中国能建", "pattern": "%中国能源建设%"},
+        ]
+        jobs = [
+            {"company": "中国能源建设集团湖南火电建设有限公司（中国能建）",
+             "active_total": 41, "healthy": 41},
+            {"company": "中国电建集团华东勘测设计研究院有限公司",
+             "active_total": 98, "healthy": 98},
+        ]
+        index = gc.build_owner_index(listing)
+        dianjian = gc.classify_company(listing[0], jobs, [], None, owner_index=index)
+        nengjian = gc.classify_company(listing[1], jobs, [], None, owner_index=index)
+        self.assertEqual(dianjian["evidence"]["healthy_jobs"], 98)
+        self.assertEqual(nengjian["evidence"]["healthy_jobs"], 41)
+
+    def test_short_list_name_that_is_not_a_substring_of_db_name_still_counts(self):
+        """归属**不能**改用清单规范名去匹配：「中国人保」不是「中国人民保险 校招」的子串，
+        那样会把 2,668 个健康岗整家打成 0（2026-09-17 全库实测）。token 仍取 pattern。"""
+        row = gc.classify_company(
+            {"name": "中国人保", "pattern": "%中国人民保险%"},
+            [{"company": "中国人民保险 校招", "active_total": 2729, "healthy": 2668}],
+            [], None,
+        )
+        self.assertEqual(row["evidence"]["healthy_jobs"], 2668)
+
+    def test_owner_index_ties_are_deterministic(self):
+        """同长度 token（网易 / 有道）必须稳定判给同一家，不能随字典序漂。"""
+        listing = [{"name": "网易", "pattern": "%网易%"},
+                   {"name": "网易有道", "pattern": "%有道%"}]
+        index = gc.build_owner_index(listing)
+        self.assertEqual(gc.resolve_owner("网易有道", index), "网易有道")
+        self.assertEqual(gc.resolve_owner("网易云音乐", index), "网易")
+
+    def test_group_suffix_wins_when_tokens_tie(self):
+        """「中铁十七局集团有限公司（中国铁建）」：中铁 X 局是中国铁建的子公司。
+        两个 token 都是 2 字、两个规范名都是 4 字，只能靠「谁出现得更靠后」判 ——
+        中文公司名把集团归属写在括号后缀里。"""
+        listing = [{"name": "中国中铁", "pattern": "%中铁%"},
+                   {"name": "中国铁建", "pattern": "%铁建%"}]
+        index = gc.build_owner_index(listing)
+        self.assertEqual(
+            gc.resolve_owner("中铁十七局集团有限公司（中国铁建）", index), "中国铁建")
+        self.assertEqual(gc.resolve_owner("中铁建工集团有限公司", index), "中国铁建")
+        self.assertEqual(gc.resolve_owner("中铁第一勘察设计院集团", index), "中国中铁")
