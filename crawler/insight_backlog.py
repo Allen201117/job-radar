@@ -475,22 +475,28 @@ def write_experience(sb, company_id, claim, sources, judge, status, dimension="c
         # 保鲜：1 年后过期 → 过期下架巡检(insight_sweep)自动退役；180 天复核会续期。不长期滞留老聚合。
         "valid_until": (datetime.now(timezone.utc) + timedelta(days=365)).date().isoformat(),
     }).execute()
-    quote = claim.get("quote")
-    for s in sources:
-        sid = str(uuid.uuid4())
-        # I3 修复（2026-09-08）：引文必须真出自「这一条」来源的正文，才能当它的 excerpt。
-        # 旧实现把同一句 claim["quote"] 无差别地复制给 _pick_sources 选中的每一个来源，
-        # 而那句话实际上可能只出自其中一个——其余来源被安上了它们并没有说过的话。
-        # 判据复用 E.quote_supported()（归一 + 子串判定，容忍空白/标点/全半角），
-        # 与 run_pipeline 抽取阶段同一口径，不另造一份。
-        excerpt_text = quote if quote and E.quote_supported(quote, [s.get("text")]) else s.get("snippet")
-        sb.table("insight_sources").insert({
-            "id": sid, "url": s["url"], "publisher": s.get("publisher"),
-            "source_kind": "community_deidentified",
-            "excerpt": (excerpt_text or "")[:200],
-            "deidentified": True,
-        }).execute()
-        sb.table("insight_item_sources").insert({"item_id": item_id, "source_id": sid}).execute()
+    try:
+        quote = claim.get("quote")
+        for s in sources:
+            sid = str(uuid.uuid4())
+            # I3 修复（2026-09-08）：引文必须真出自「这一条」来源的正文，才能当它的 excerpt。
+            # 旧实现把同一句 claim["quote"] 无差别地复制给 _pick_sources 选中的每一个来源，
+            # 而那句话实际上可能只出自其中一个——其余来源被安上了它们并没有说过的话。
+            # 判据复用 E.quote_supported()（归一 + 子串判定，容忍空白/标点/全半角），
+            # 与 run_pipeline 抽取阶段同一口径，不另造一份。
+            excerpt_text = quote if quote and E.quote_supported(quote, [s.get("text")]) else s.get("snippet")
+            sb.table("insight_sources").insert({
+                "id": sid, "url": s["url"], "publisher": s.get("publisher"),
+                "source_kind": "community_deidentified",
+                "excerpt": (excerpt_text or "")[:200],
+                "deidentified": True,
+            }).execute()
+            sb.table("insight_item_sources").insert({"item_id": item_id, "source_id": sid}).execute()
+    except Exception:
+        # PostgREST 没有跨三表事务；来源或关联写失败时，这个 active item 没有展示证据，
+        # 必须立即补偿删除，不能让换代把上一轮有效内容误退役。
+        sb.table("insight_items").delete().eq("id", item_id).execute()
+        raise
 
 
 def fetch_t3_queue(sb, limit):
@@ -554,6 +560,8 @@ def enrich_company_t3(sb, profile):
     wrote_active = False
     written_dims = set()   # 本轮真正写出 active 的维度 —— 退役只许波及这些维度（见下方 I2 注释）
     topics_attempted = 0   # 真进过检索的主题数；全程 0 = 这轮什么都没做，不能假装「已复核」
+    topics_completed = 0   # 查询、判官、写入都走完的主题数；异常中断的不算完成。
+    topic_failures = 0     # 单主题写入/检索失败单列，不能被“本轮仍有别的主题”掩掉。
     # 主题门的计数：拦掉多少、转投多少。绝不静默——「跑绿了」不等于「产出是对的」。
     off_topic_blocked = 0
     rerouted = 0
@@ -579,6 +587,7 @@ def enrich_company_t3(sb, profile):
             if host_denied:
                 print(f"  [t3] host_denied={host_denied}")
             if not results:
+                topics_completed += 1  # 真空结果也是走完，不然会对同一家公司无限重做。
                 continue
             pipeline = E.run_pipeline(profile["company"], pack["dimension"], results)
             pubs = len({E.registrable_host(r.get("url")) for r in results if E.registrable_host(r.get("url"))})
@@ -625,8 +634,11 @@ def enrich_company_t3(sb, profile):
                 if entry_status == "active":
                     wrote_active = True
                     written_dims.add(dimension)
+            topics_completed += 1
         except Exception as e:
-            print(f"  [t3-err] {profile['company']}/{pack['topic']}: {type(e).__name__}: {str(e)[:120]}")
+            topic_failures += 1
+            print(f"::warning::[t3-err] {profile['company']}/{pack['topic']}: "
+                  f"{type(e).__name__}: {str(e)[:120]}（本轮主题失败 {topic_failures}）")
             continue
     if off_topic_blocked or rerouted:
         print(f"  [t3-gate] {profile['company']}: 拦下 {off_topic_blocked} 条答非所问，"
@@ -648,18 +660,27 @@ def enrich_company_t3(sb, profile):
                 .eq("company_id", profile["id"]).eq("origin", "public_web").eq("status", "active") \
                 .in_("dimension", sorted(written_dims)) \
                 .lt("last_verified_at", run_start).execute()
-        if topics_attempted == 0:
+        if topics_completed == 0:
             # 一个主题都没进过检索（开跑就撞额度）= 这轮什么都没做。盖 t3_checked_at 会把这家公司
             # 排除出队列 180 天（T3_TTL_DAYS）却零产出 —— 那正是 I1。不盖戳，下轮额度恢复后接着取。
-            # 注：只在「零主题」这一种情形下不盖戳，所以不存在「永远重做同一家」的死循环。
+            # 主题走到一半抛异常也不能算“完成”：只加失败数而不盖戳；用“走完”而非“有产出”
+            # 是为了让真实空结果也完成复核，避免同一家公司每轮都被无意义地重做。
+            if topics_attempted:
+                sb.table("company_profiles").update({
+                    "t3_fail_count": (profile.get("t3_fail_count") or 0) + 1,
+                }).eq("id", profile["id"]).execute()
+                return "err"
             print(f"  [t3] {profile['company']}: 额度不足，本轮零主题，不推进复核时间")
             return "empty"
         sb.table("company_profiles").update({"t3_checked_at": _now()}).eq("id", profile["id"]).execute()
     except Exception:
         try:
-            sb.table("company_profiles").update({
-                "t3_fail_count": (profile.get("t3_fail_count") or 0) + 1, "t3_checked_at": _now(),
-            }).eq("id", profile["id"]).execute()
+            failure = {"t3_fail_count": (profile.get("t3_fail_count") or 0) + 1}
+            # 只有至少一个主题完整走完（包括真实空结果）才有资格推进复核时间；
+            # 不能拿“有产出”当判据，否则无结果公司会每轮重做、空烧搜索与 LLM 额度。
+            if topics_completed:
+                failure["t3_checked_at"] = _now()
+            sb.table("company_profiles").update(failure).eq("id", profile["id"]).execute()
         except Exception:
             pass
         return "err"

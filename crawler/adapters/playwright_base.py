@@ -10,6 +10,7 @@ playwright 仅在 fetch() 内惰性导入——未跑 fetch 的单元测试无�
 """
 import json
 import re
+import sys
 from typing import List, Optional
 from urllib.parse import urlparse
 
@@ -63,6 +64,24 @@ _STATIC_ASSET_RE = re.compile(
 
 def _is_static_asset(url):
     return bool(_STATIC_ASSET_RE.search(urlparse(str(url or "")).path or ""))
+
+
+def install_dialog_guard(page):
+    """接管页面 alert/confirm/beforeunload，避免驱动自动 dismiss 与下一跳导航并发崩溃。"""
+    def _on_dialog(dialog):
+        try:
+            # beforeunload 必须放行我们自己发起的导航；其它对话框关闭即可，避免触发页面副作用。
+            if dialog.type == "beforeunload":
+                dialog.accept()
+            else:
+                dialog.dismiss()
+        except Exception as e:
+            # 页面已跳走时 dismiss 可能失败；宁可漏判也不能让一个 dialog 拖死整个 CI 分片。
+            sys.stderr.write(
+                f"\n  [dialog] 处理 {dialog.type}({dialog.message[:20]!r}) 失败(已忽略): "
+                f"{type(e).__name__}\n")
+
+    page.on("dialog", _on_dialog)
 
 
 def _ats_hint(final_url, html):
@@ -182,6 +201,7 @@ class PlaywrightAdapter(BaseAdapter):
                 user_agent=_UA, viewport={"width": 1366, "height": 900}, locale="zh-CN"
             )
             page = ctx.new_page()
+            install_dialog_guard(page)
 
             matchers = self.intercept_matches or (
                 (self.intercept_match,) if self.intercept_match else ()

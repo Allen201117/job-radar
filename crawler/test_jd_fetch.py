@@ -29,7 +29,7 @@ def _row(idx):
 
 
 class JdFetchTest(unittest.TestCase):
-    def test_fetches_until_short_page_and_reports_fetched_total(self):
+    def test_short_page_keeps_coverage_unknown(self):
         pages = [[_row(i) for i in range(100)], [_row(100 + i) for i in range(46)]]
         calls = []
 
@@ -53,8 +53,8 @@ class JdFetchTest(unittest.TestCase):
         jobs = adapter.parse(payload)
         self.assertEqual([call[0] for call in calls], [1, 2])
         self.assertEqual(len(jobs), 146)
-        self.assertEqual(adapter.reported_total, 146)
-        self.assertTrue(adapter.fetch_complete)
+        self.assertIsNone(adapter.reported_total)
+        self.assertFalse(adapter.fetch_complete)
         self.assertEqual(
             jobs[0].jd_url,
             "https://zhaopin.jd.com/web/job-info-detail?requementId=REQ-0",
@@ -84,8 +84,24 @@ class JdFetchTest(unittest.TestCase):
         jobs = adapter.parse(payload)
         self.assertEqual(calls, [1, 2])
         self.assertEqual(len(jobs), 146)
-        self.assertEqual(adapter.reported_total, 146)
-        self.assertTrue(adapter.fetch_complete)
+        self.assertIsNone(adapter.reported_total)
+        self.assertFalse(adapter.fetch_complete)
+
+    def test_later_page_failure_keeps_rows_already_fetched(self):
+        first_page = [_row(i) for i in range(100)]
+
+        def fake_post(url, **kwargs):
+            if kwargs["data"]["pageIndex"] == "1":
+                return _Response(first_page)
+            raise RuntimeError("rate limited")
+
+        adapter = JdAdapter()
+        with patch("adapters.jd.httpx.post", side_effect=fake_post):
+            payload = adapter.fetch("https://zhaopin.jd.com/web/job/job_info_list/3")
+
+        self.assertEqual(len(adapter.parse(payload)), 100)
+        self.assertIsNone(adapter.reported_total)
+        self.assertFalse(adapter.fetch_complete)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,9 @@
 """playwright_base 智能等待单测 —— 用假 page 模拟时间推进，不启动真实浏览器。"""
 import os
 import sys
+import types
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -69,6 +71,73 @@ class AwaitListCaptureTests(unittest.TestCase):
         # 第二波(900)重置静默 → 至少等到 900+900=1800，证明没在 300+900=1200 处误提前返回
         self.assertGreaterEqual(page.elapsed, 1800)
         self.assertLess(page.elapsed, a.wait_ms)  # 且第二波后静默够久即返回，没死等到 wait_ms 上限
+
+
+class DialogGuardTests(unittest.TestCase):
+    def test_fetch_registers_dialog_guard_and_ignores_dismiss_error(self):
+        """每个 Playwright 抓取页都必须接管 dialog，处理自身异常也不能炸掉抓取进程。"""
+        class _Dialog:
+            type = "alert"
+            message = "职位已下架"
+
+            def dismiss(self):
+                raise RuntimeError("page detached")
+
+        class _Page:
+            def __init__(self):
+                self.handlers = {}
+                self.url = "https://example.test/jobs"
+
+            def on(self, event, handler):
+                self.handlers[event] = handler
+
+            def goto(self, *args, **kwargs):
+                return types.SimpleNamespace(status=200)
+
+            def wait_for_timeout(self, _ms):
+                pass
+
+            def content(self):
+                return "<title>招聘</title>"
+
+        page = _Page()
+
+        class _Browser:
+            def new_context(self, **kwargs):
+                return _Context()
+
+            def close(self):
+                pass
+
+        class _Context:
+            def new_page(self):
+                return page
+
+        class _Chromium:
+            def launch(self, **kwargs):
+                return _Browser()
+
+        class _Playwright:
+            chromium = _Chromium()
+
+        class _SyncPlaywright:
+            def __enter__(self):
+                return _Playwright()
+
+            def __exit__(self, *args):
+                return False
+
+        fake_module = types.ModuleType("playwright.sync_api")
+        fake_module.sync_playwright = lambda: _SyncPlaywright()
+        fake_package = types.ModuleType("playwright")
+        with mock.patch.dict(sys.modules, {"playwright": fake_package, "playwright.sync_api": fake_module}):
+            adapter = PlaywrightAdapter()
+            adapter.wait_ms = 0
+            with self.assertRaises(InterceptFailure):
+                adapter.fetch("https://example.test/jobs")
+
+        self.assertIn("dialog", page.handlers)
+        page.handlers["dialog"](_Dialog())
 
 
 class ClassifyEmptyCaptureTests(unittest.TestCase):

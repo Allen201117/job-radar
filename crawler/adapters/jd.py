@@ -82,8 +82,8 @@ class JdAdapter(BaseAdapter):
             page_rows = payload if isinstance(payload, list) else _find_job_list(payload)
             rows.extend(page_rows)
             if len(page_rows) < self.PAGE_SIZE:
-                self.reported_total = len(rows)
-                self.fetch_complete = True
+                # 限流时接口也会回短页；没有官网自报总数就无法据此断言末页，
+                # 保持“未知”让 crawl_runs 如实暴露抓全率，而不是把已抓数伪装成总数。
                 break
             page += 1
             time.sleep(self.PAGE_DELAY_SECONDS)

@@ -22,6 +22,9 @@ class FakeQuery:
     def update(self, row):
         self._op, self._payload = "update", row; return self
 
+    def delete(self):
+        self._op = "delete"; return self
+
     def upsert(self, row, **k):
         self.store.setdefault(self.table, []).append(("upsert", row)); return self
 
@@ -54,6 +57,8 @@ class FakeQuery:
     def execute(self):
         if self._op == "update":
             self.store.setdefault(self.table + "_updates", []).append((dict(self._filters), self._payload))
+        elif self._op == "delete":
+            self.store.setdefault(self.table + "_deletes", []).append(dict(self._filters))
         data = self.store.get("_canned_" + self.table, [])
         if self._limit is not None:
             data = data[:self._limit]
@@ -66,6 +71,27 @@ class FakeSB:
 
     def table(self, name):
         return FakeQuery(self.store, name)
+
+
+class _SecondInsertFailsQuery(FakeQuery):
+    """只让第二次写入失败，复现条目已落库、来源还没落库的真实断点。"""
+
+    def insert(self, row):
+        self.sb.insert_count += 1
+        if self.sb.insert_count == 2:
+            raise RuntimeError("source insert failed")
+        return super().insert(row)
+
+
+class _SecondInsertFailsSB(FakeSB):
+    def __init__(self, store):
+        super().__init__(store)
+        self.insert_count = 0
+
+    def table(self, name):
+        query = _SecondInsertFailsQuery(self.store, name)
+        query.sb = self
+        return query
 
 
 FACTS = {
@@ -355,6 +381,53 @@ class TestT3(unittest.TestCase):
                             for _f, p in store.get("insight_items_updates", [])))  # 替换旧代退役
         self.assertTrue(any("t3_checked_at" in p for _, p in store.get("company_profiles_updates", [])))
 
+    def test_t3_source_write_failure_does_not_retire_old_generation_and_warns(self):
+        """来源落库失败不是新证据：必须清孤儿、保住旧代，并留下 CI warning。"""
+        B._ROUTER = _FakeRouter([
+            {"url": "https://a.example/1", "publisher": "a.example", "text": "加班偏多"},
+            {"url": "https://b.example/2", "publisher": "b.example", "text": "氛围不错"},
+        ])
+        B.T3_QUERY_PACK, old_packs = (
+            [{"topic": "加班文化", "query": "{c}", "dimension": "culture"}], B.T3_QUERY_PACK
+        )
+        E.run_pipeline = lambda c, d, *a, **k: [{
+            "claim": {"content": _on_topic(d), "grade": "experience", "sample_size": 8},
+            "judge": {"supported_source_idxs": [0, 1]}, "status": "active",
+        }]
+        store = {}
+        try:
+            with mock.patch("builtins.print") as printed:
+                result = B.enrich_company_t3(
+                    _SecondInsertFailsSB(store), {"id": "c-atomic", "company": "原子公司", "aliases": []}
+                )
+        finally:
+            B.T3_QUERY_PACK = old_packs
+        self.assertEqual(result, "err")
+        self.assertEqual(store.get("insight_items_deletes"), [{"id": store["insight_items"][0][1]["id"]}])
+        self.assertFalse(any(
+            payload.get("status") == "retired"
+            for _filters, payload in store.get("insight_items_updates", [])
+        ), "写入失败的维度不得计入 written_dims 后退役旧代")
+        self.assertTrue(any("::warning::" in str(call) for call in printed.call_args_list),
+                        "主题写入异常必须显式留在 CI 日志，不能静默")
+
+    def test_write_experience_success_still_writes_item_sources_and_links(self):
+        """补偿逻辑不能改变三步成功时的正常写入。"""
+        store = {}
+        B.write_experience(
+            FakeSB(store), "c-success",
+            {"content": "据公开讨论该公司加班偏多", "sample_size": 6},
+            [
+                {"url": "https://a.example/1", "publisher": "a.example", "text": "加班偏多"},
+                {"url": "https://b.example/2", "publisher": "b.example", "text": "氛围不错"},
+            ],
+            {"verdict": "entailment", "confidence": 0.8}, "active",
+        )
+        self.assertEqual(len(store.get("insight_items", [])), 1)
+        self.assertEqual(len(store.get("insight_sources", [])), 2)
+        self.assertEqual(len(store.get("insight_item_sources", [])), 2)
+        self.assertFalse(store.get("insight_items_deletes"))
+
     def test_enrich_company_t3_empty_search(self):
         B._ROUTER = _FakeRouter([])
         store = {}
@@ -436,6 +509,24 @@ class TestT3(unittest.TestCase):
         advanced = [payload for _f, payload in store.get("company_profiles_updates", [])
                     if "t3_checked_at" in payload]
         self.assertEqual(advanced, [], "零主题这轮不得推进 t3_checked_at")
+
+    def test_t3_first_topic_error_only_increments_fail_count_without_checked_stamp(self):
+        """第一主题中断并不等于完成复核；否则公司会被错误冷却 180 天。"""
+        B._ROUTER = _FakeRouter([{"url": "https://a.example/1", "text": "x"}])
+        B.T3_QUERY_PACK, old_packs = (
+            [{"topic": "加班文化", "query": "{c}", "dimension": "culture"}], B.T3_QUERY_PACK
+        )
+        E.run_pipeline = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("judge failed"))
+        store = {}
+        try:
+            result = B.enrich_company_t3(
+                FakeSB(store), {"id": "c-first-error", "company": "异常公司", "aliases": [], "t3_fail_count": 2}
+            )
+        finally:
+            B.T3_QUERY_PACK = old_packs
+        self.assertEqual(result, "err")
+        updates = [payload for _filters, payload in store.get("company_profiles_updates", [])]
+        self.assertEqual(updates, [{"t3_fail_count": 3}])
 
     def test_dispute_gate_downgrades_matching_dimension_metric_to_pending_review(self):
         """I4b 回归：命中同一 (dimension, metric_key) 的已成立申诉时，判官判 active
