@@ -1,0 +1,2060 @@
+[
+ {
+  "company": "帆软",
+  "cn": "帆软",
+  "slugs": [
+   "fanruan",
+   "fanruanhr"
+  ],
+  "industry": "互联网/科技",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://join.fanruan.com"
+ },
+ {
+  "company": "DeepSeek",
+  "cn": "DeepSeek",
+  "slugs": [
+   "deepseek",
+   "deepseekai",
+   "shenduqiusuo"
+  ],
+  "industry": "互联网/科技",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://app.mokahr.com"
+ },
+ {
+  "company": "虹软科技",
+  "cn": "虹软科技",
+  "slugs": [
+   "arcsoft",
+   "arcsofthr"
+  ],
+  "industry": "互联网/科技",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://arcsoft.com.cn/job"
+ },
+ {
+  "company": "TP-LINK",
+  "cn": "TP-LINK",
+  "slugs": [
+   "tplink",
+   "tp-link",
+   "tplinkhr"
+  ],
+  "industry": "互联网/科技",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://hr.tp-link.com.cn"
+ },
+ {
+  "company": "4399游戏",
+  "cn": "4399游戏",
+  "slugs": [
+   "4399",
+   "4399om",
+   "4399game"
+  ],
+  "industry": "互联网/科技",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://hr.4399om.com"
+ },
+ {
+  "company": "叠纸游戏",
+  "cn": "叠纸游戏",
+  "slugs": [
+   "papegames",
+   "diezhi",
+   "paper-games"
+  ],
+  "industry": "互联网/科技",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://career.papegames.com"
+ },
+ {
+  "company": "多益网络",
+  "cn": "多益网络",
+  "slugs": [
+   "duoyi",
+   "duoyinetwork"
+  ],
+  "industry": "互联网/科技",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://xz.duoyi.com"
+ },
+ {
+  "company": "中国光大银行",
+  "cn": "中国光大银行",
+  "slugs": [
+   "cebbank",
+   "ceb",
+   "guangda"
+  ],
+  "industry": "金融",
+  "size": "大型",
+  "campus_evidence": "招行、浦发、中信、民生等股份制银行2027校园招聘火热进行中",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "南京银行",
+  "cn": "南京银行",
+  "slugs": [
+   "njcb",
+   "nanjingbank",
+   "njbank"
+  ],
+  "industry": "金融",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://job.njcb.com.cn"
+ },
+ {
+  "company": "杭州银行",
+  "cn": "杭州银行",
+  "slugs": [
+   "hzbank",
+   "hccb",
+   "hangzhoubank"
+  ],
+  "industry": "金融",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "渣打银行",
+  "cn": "渣打银行",
+  "slugs": [
+   "sc",
+   "standardchartered",
+   "zhada"
+  ],
+  "industry": "金融",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://sc.com/cn"
+ },
+ {
+  "company": "招银网络科技",
+  "cn": "招银网络科技",
+  "slugs": [
+   "cmbnt",
+   "cmbchinahr",
+   "zhaoyin"
+  ],
+  "industry": "金融",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "中国太保",
+  "cn": "中国太保",
+  "slugs": [
+   "cpic",
+   "cpichr",
+   "taibao"
+  ],
+  "industry": "金融",
+  "size": "央国企",
+  "campus_evidence": "search snippet only",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "新华保险",
+  "cn": "新华保险",
+  "slugs": [
+   "newchinalife",
+   "xinhua",
+   "ncl"
+  ],
+  "industry": "金融",
+  "size": "大型",
+  "campus_evidence": "search snippet only",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "华安保险",
+  "cn": "华安保险",
+  "slugs": [
+   "huaan",
+   "sinosafe"
+  ],
+  "industry": "金融",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "中泰证券",
+  "cn": "中泰证券",
+  "slugs": [
+   "zts",
+   "zhongtai",
+   "ztsec"
+  ],
+  "industry": "金融",
+  "size": "央国企",
+  "campus_evidence": "中泰证券公开招聘2027届及在求职期人员，共86个岗位227人（上岸Claw公告详情标题）",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "hotjob zts：social 469 岗 + interns 7 岗已入迁移 261（自报 company=各地分公司/中泰期货）"
+  }
+ },
+ {
+  "company": "国金证券",
+  "cn": "国金证券",
+  "slugs": [
+   "gjzq",
+   "sinolink",
+   "guojin"
+  ],
+  "industry": "金融",
+  "size": "大型",
+  "campus_evidence": "国金证券招聘27届实习/2027校园招聘（牛企直聘）",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen gjzq.zhiye.com，411 岗（校招40+实习62）已入迁移 261"
+  }
+ },
+ {
+  "company": "中信建投证券",
+  "cn": "中信建投证券",
+  "slugs": [
+   "csc108",
+   "csc",
+   "jiantou"
+  ],
+  "industry": "金融",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://csc108.zhiye.com/campus/jobs",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen csc108.zhiye.com，94 岗（2027届校招 29）已入迁移 261"
+  }
+ },
+ {
+  "company": "财通证券",
+  "cn": "财通证券",
+  "slugs": [
+   "caitong"
+  ],
+  "industry": "金融",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://ctsec.zhiye.com",
+  "probed_2026_09_18": {
+   "state": "dead_slug",
+   "note": "ctsec.zhiye.com 全部路由 302→/404（该 slug 不是北森租户）；入口待重找"
+  }
+ },
+ {
+  "company": "诺亚控股",
+  "cn": "诺亚控股",
+  "slugs": [
+   "noah"
+  ],
+  "industry": "金融",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://noahgroup.zhiye.com",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "moka noah：campus 26537(25 岗) + social 76134(15 岗) 已入迁移 261；⚠️ beisen slug `noahgroup` 全路由 404，不是北森租户"
+  }
+ },
+ {
+  "company": "Wind万得",
+  "cn": "Wind万得",
+  "slugs": [
+   "wind",
+   "windinfo",
+   "wande"
+  ],
+  "industry": "金融",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://wind.com.cn"
+ },
+ {
+  "company": "广发基金",
+  "cn": "广发基金",
+  "slugs": [
+   "gffunds",
+   "gffund",
+   "guangfa"
+  ],
+  "industry": "金融",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "睿远基金",
+  "cn": "睿远基金",
+  "slugs": [
+   "foreverfund",
+   "ruiyuan"
+  ],
+  "industry": "金融",
+  "size": "中型",
+  "campus_evidence": "'睿远基金权益研究部'（resumemakeroffer金融业分类收录）",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "泸州老窖",
+  "cn": "泸州老窖",
+  "slugs": [
+   "lzlj",
+   "luzhoulaojiao"
+  ],
+  "industry": "消费/零售",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "珀莱雅",
+  "cn": "珀莱雅",
+  "slugs": [
+   "proya",
+   "proyahr",
+   "polaiya"
+  ],
+  "industry": "消费/零售",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "路易威登",
+  "cn": "路易威登",
+  "slugs": [
+   "lv",
+   "louisvuitton",
+   "lvmh"
+  ],
+  "industry": "消费/零售",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "百胜餐饮",
+  "cn": "百胜餐饮",
+  "slugs": [
+   "yumchina",
+   "yum",
+   "kfc"
+  ],
+  "industry": "消费/零售",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "babycare",
+  "cn": "babycare",
+  "slugs": [
+   "babycare",
+   "bc"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "unverified",
+   "note": "feishu babycare 20 岗但 title 核验未过；beisen babycare.zhiye.com title=「Babycare招聘官网」（核验器没认出来）——需人工确认后再接"
+  }
+ },
+ {
+  "company": "浙江一鸣食品",
+  "cn": "浙江一鸣食品",
+  "slugs": [
+   "yiming",
+   "yimingfood"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "红蜻蜓",
+  "cn": "红蜻蜓",
+  "slugs": [
+   "hongqingting",
+   "reddragonfly"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "我乐家居",
+  "cn": "我乐家居",
+  "slugs": [
+   "oppein",
+   "wolejiaju",
+   "welle"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "爱慕股份",
+  "cn": "爱慕股份",
+  "slugs": [
+   "aimer",
+   "aimerhr"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "already_sourced",
+   "note": "aimer.zhiye.com 已在库（本轮未重复入库）"
+  }
+ },
+ {
+  "company": "天农食品集团",
+  "cn": "天农食品集团",
+  "slugs": [
+   "tiannong",
+   "tiannongfood"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "认养一头牛",
+  "cn": "认养一头牛",
+  "slugs": [
+   "adopt",
+   "renyangyitouniu",
+   "adoptacow"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "美宜佳",
+  "cn": "美宜佳",
+  "slugs": [
+   "meiyijia",
+   "myj"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "feishu meiyijia：/campus/position 30 岗 + /index/position 12 岗已入迁移 261；/internship/position 该租户不存在"
+  }
+ },
+ {
+  "company": "荣泰健康",
+  "cn": "荣泰健康",
+  "slugs": [
+   "rongtai",
+   "rotai"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "齐心集团",
+  "cn": "齐心集团",
+  "slugs": [
+   "comix",
+   "qixin"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen comix.zhiye.com，96 岗（校招 12）已入迁移 261"
+  }
+ },
+ {
+  "company": "豫园股份",
+  "cn": "豫园股份",
+  "slugs": [
+   "yuyuan",
+   "yuyuangroup"
+  ],
+  "industry": "消费/零售",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "劲牌",
+  "cn": "劲牌",
+  "slugs": [
+   "jingpai",
+   "jingbrand"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen jingpai.zhiye.com，91 岗（校招 69）已入迁移 261"
+  }
+ },
+ {
+  "company": "金光集团APP",
+  "cn": "金光集团APP",
+  "slugs": [
+   "app",
+   "asiapulppaper",
+   "jinguang"
+  ],
+  "industry": "消费/零售",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "新疆梅花",
+  "cn": "新疆梅花",
+  "slugs": [
+   "meihua",
+   "meihuagrp"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "林氏家居",
+  "cn": "林氏家居",
+  "slugs": [
+   "linsy",
+   "linshimuye"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "苏美达轻纺",
+  "cn": "苏美达轻纺",
+  "slugs": [
+   "sumec",
+   "sumeida"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "全棉时代",
+  "cn": "全棉时代",
+  "slugs": [
+   "purcotton",
+   "winner",
+   "quanmian"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen purcotton.zhiye.com，104 岗（校招 19）已入迁移 261"
+  }
+ },
+ {
+  "company": "河南华莱士",
+  "cn": "河南华莱士",
+  "slugs": [
+   "wallace",
+   "hualaishi"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "太粮",
+  "cn": "太粮",
+  "slugs": [
+   "tailiang",
+   "tailiangrice"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "山东得益乳业",
+  "cn": "山东得益乳业",
+  "slugs": [
+   "deyi",
+   "deyidairy"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen deyi.zhiye.com，campus 44 + social 55（两路由不同批）已入迁移 261"
+  }
+ },
+ {
+  "company": "卡姿兰",
+  "cn": "卡姿兰",
+  "slugs": [
+   "carslan",
+   "kazilan"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "植护",
+  "cn": "植护",
+  "slugs": [
+   "zhihu-care",
+   "zhihucare",
+   "plantcare"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "VF威富亚太区",
+  "cn": "VF威富亚太区",
+  "slugs": [
+   "vfc",
+   "vf",
+   "weifu"
+  ],
+  "industry": "消费/零售",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "水羊国际",
+  "cn": "水羊国际",
+  "slugs": [
+   "syoung",
+   "shuiyang"
+  ],
+  "industry": "消费/零售",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "方太集团",
+  "cn": "方太集团",
+  "slugs": [
+   "fotile",
+   "fotilehr"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://fotile.zhiye.com",
+  "probed_2026_09_18": {
+   "state": "needs_adapter",
+   "note": "fotile.zhiye.com 门户真实存在（/campus /social /intern 全 200、title 自报「方太集团招聘官网」），但 BeisenAdapter 报「SSR 列表页无 jobId/adId 锚点」→ 新版北森门户，需 adapter 升级"
+  }
+ },
+ {
+  "company": "泉峰科技",
+  "cn": "泉峰科技",
+  "slugs": [
+   "quanfeng"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://chervon.zhiye.com",
+  "probed_2026_09_18": {
+   "state": "dead_slug",
+   "note": "chervon.zhiye.com 全部路由 302→/404；moka quanfeng/78075 title 取不到公司名，未核实"
+  }
+ },
+ {
+  "company": "必易微",
+  "cn": "必易微",
+  "slugs": [
+   "biyiwei",
+   "kiwiinstrument",
+   "bywin"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "南瑞继保",
+  "cn": "南瑞继保",
+  "slugs": [
+   "nrec",
+   "nanruijibao",
+   "nrjb"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen nrec.zhiye.com，10 岗（校招 7）已入迁移 261"
+  }
+ },
+ {
+  "company": "星网锐捷",
+  "cn": "星网锐捷",
+  "slugs": [
+   "starnet",
+   "ruijie",
+   "star-net"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen starnet.zhiye.com，18 岗全部校招；已入迁移 261"
+  }
+ },
+ {
+  "company": "柏楚电子",
+  "cn": "柏楚电子",
+  "slugs": [
+   "fscut",
+   "bochu",
+   "baichu"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://fscut.zhiye.com",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen fscut.zhiye.com，126 岗（校招 36+实习 17）已入迁移 261"
+  }
+ },
+ {
+  "company": "捷迅光电",
+  "cn": "捷迅光电",
+  "slugs": [
+   "jiexun",
+   "hfjiexun"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://hfjiexun.com"
+ },
+ {
+  "company": "科华集团",
+  "cn": "科华集团",
+  "slugs": [
+   "kehua",
+   "kehuahr"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "already_sourced",
+   "note": "moka kehua 租户已在库（本轮未重复入库）"
+  }
+ },
+ {
+  "company": "徐工重型",
+  "cn": "徐工重型",
+  "slugs": [
+   "xcmg",
+   "xugong",
+   "xcmghr"
+  ],
+  "industry": "制造/工业",
+  "size": "央国企",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "泰科电子(上海)",
+  "cn": "泰科电子(上海)",
+  "slugs": [
+   "te",
+   "teconnectivity",
+   "taike"
+  ],
+  "industry": "制造/工业",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "延锋",
+  "cn": "延锋",
+  "slugs": [
+   "yanfeng",
+   "yfai"
+  ],
+  "industry": "制造/工业",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "moka yanfeng：campus 45086(190 岗) + social 45085(512 岗) 已入迁移 261"
+  }
+ },
+ {
+  "company": "伯特利",
+  "cn": "伯特利",
+  "slugs": [
+   "bethel",
+   "bertelli",
+   "boteli"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "东软睿驰",
+  "cn": "东软睿驰",
+  "slugs": [
+   "neusoftreach",
+   "neusoft-reach",
+   "dongruan"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "盛弘电气",
+  "cn": "盛弘电气",
+  "slugs": [
+   "sinexcel",
+   "shenghong-electric"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "moka sinexcel：campus 74287(29 岗) + social 74286(41 岗) 已入迁移 261"
+  }
+ },
+ {
+  "company": "派诺科技",
+  "cn": "派诺科技",
+  "slugs": [
+   "pinortech",
+   "painuo"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "乾程科技",
+  "cn": "乾程科技",
+  "slugs": [
+   "qiancheng",
+   "qcgroup"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "吉泰科电气",
+  "cn": "吉泰科电气",
+  "slugs": [
+   "jitaike",
+   "gtake"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "武汉楚能新能源",
+  "cn": "武汉楚能新能源",
+  "slugs": [
+   "chuneng",
+   "chunengxinnengyuan"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "航发动力",
+  "cn": "航发动力",
+  "slugs": [
+   "aecc",
+   "hangfa",
+   "aecc-avic"
+  ],
+  "industry": "制造/工业",
+  "size": "央国企",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "新时达",
+  "cn": "新时达",
+  "slugs": [
+   "stepelectric",
+   "xinshida"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen stepelectric.zhiye.com，campus 13 + social 136 已入迁移 261；⚠️ moka slug `step` 是**阶跃星辰**不是新时达，别再用"
+  }
+ },
+ {
+  "company": "黄山工业泵制造",
+  "cn": "黄山工业泵制造",
+  "slugs": [
+   "huangshanpump",
+   "hsgybeng"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "海四达",
+  "cn": "海四达",
+  "slugs": [
+   "highstar",
+   "haisida"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen highstar.zhiye.com，77 岗（校招 21）已入迁移 261"
+  }
+ },
+ {
+  "company": "大族视觉",
+  "cn": "大族视觉",
+  "slugs": [
+   "hanslaser",
+   "dazu",
+   "hansvision"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "创维光伏",
+  "cn": "创维光伏",
+  "slugs": [
+   "skyworthpv",
+   "skyworth",
+   "chuangwei"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen skyworthpv.zhiye.com，4 岗（全社招）已入迁移 261"
+  }
+ },
+ {
+  "company": "优优绿能",
+  "cn": "优优绿能",
+  "slugs": [
+   "uugreenpower",
+   "youyou"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "新能安",
+  "cn": "新能安",
+  "slugs": [
+   "ampace",
+   "atlbattery",
+   "xinnengan"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "hotjob ampace：school 68 + social 369 已入迁移 261（自报 company=厦门新能安（XMC））"
+  }
+ },
+ {
+  "company": "轩宇空间",
+  "cn": "轩宇空间",
+  "slugs": [
+   "xuanyu",
+   "casc"
+  ],
+  "industry": "制造/工业",
+  "size": "央国企",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "莱克",
+  "cn": "莱克",
+  "slugs": [
+   "lexy",
+   "laike",
+   "kingclean"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "高盟新材",
+  "cn": "高盟新材",
+  "slugs": [
+   "gaomeng",
+   "comens"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "联域股份",
+  "cn": "联域股份",
+  "slugs": [
+   "lianyu",
+   "linkage"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "艾诺仪器",
+  "cn": "艾诺仪器",
+  "slugs": [
+   "ainuo",
+   "ainuoinstrument"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen ainuo.zhiye.com，17 岗（校招 14）已入迁移 261"
+  }
+ },
+ {
+  "company": "图为电气",
+  "cn": "图为电气",
+  "slugs": [
+   "tuwei",
+   "tuweidianqi"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "宏盛股份",
+  "cn": "宏盛股份",
+  "slugs": [
+   "hongsheng",
+   "hsgroup"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "山西新华防化装备研究院",
+  "cn": "山西新华防化装备研究院",
+  "slugs": [
+   "xinhuafanghua",
+   "sxxhfh"
+  ],
+  "industry": "制造/工业",
+  "size": "央国企",
+  "campus_evidence": "牛企直聘机械制造业分类收录（未核实官网原文）",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "安脉时代智能制造(宁德)",
+  "cn": "安脉时代智能制造(宁德)",
+  "slugs": [
+   "anmai"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "牛企直聘机械制造业分类收录",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "same_tenant_as_other",
+   "note": "ampace.hotjob.cn 自报 company 全是「厦门新能安（XMC）」→ 归新能安，不另立源；本条如要单独接需先拿到它自己的门户"
+  }
+ },
+ {
+  "company": "江西联创电子",
+  "cn": "江西联创电子",
+  "slugs": [
+   "lianchuang",
+   "lcetron"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "牛企直聘机械制造业分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "维都利阀门",
+  "cn": "维都利阀门",
+  "slugs": [
+   "weiduli",
+   "vtv"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "牛企直聘机械制造业分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "广西东糖投资",
+  "cn": "广西东糖投资",
+  "slugs": [
+   "dongtang",
+   "gxdongtang"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "牛企直聘机械制造业分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "航天八院一四九厂",
+  "cn": "航天八院一四九厂",
+  "slugs": [
+   "sast",
+   "hangtianbayuan"
+  ],
+  "industry": "制造/工业",
+  "size": "央国企",
+  "campus_evidence": "牛企直聘机械制造业分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "重庆金世利航空材料",
+  "cn": "重庆金世利航空材料",
+  "slugs": [
+   "jinshili",
+   "jsl"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "牛企直聘机械制造业分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "纳芯微",
+  "cn": "纳芯微",
+  "slugs": [
+   "novosense",
+   "naxinwei"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "牛企直聘通信电子分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "豪威科技",
+  "cn": "豪威科技",
+  "slugs": [
+   "omnivision",
+   "ovt",
+   "haowei"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "牛企直聘通信电子分类收录(OmniVision)",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "越疆科技",
+  "cn": "越疆科技",
+  "slugs": [
+   "dobot",
+   "yuejiang"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "牛企直聘通信电子分类收录",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen dobot.zhiye.com，135 岗（校招 34+实习 5）已入迁移 261"
+  }
+ },
+ {
+  "company": "方正微电子",
+  "cn": "方正微电子",
+  "slugs": [
+   "fmsh",
+   "fangzhengwei"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "牛企直聘通信电子分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "凌云光技术",
+  "cn": "凌云光技术",
+  "slugs": [
+   "luster",
+   "lingyunguang"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "牛企直聘通信电子分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "睿创微纳",
+  "cn": "睿创微纳",
+  "slugs": [
+   "raytrontek",
+   "ruichuang"
+  ],
+  "industry": "制造/工业",
+  "size": "中型",
+  "campus_evidence": "牛企直聘通信电子分类收录",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen raytrontek.zhiye.com，258 岗（校招 53+实习 49）已入迁移 261"
+  }
+ },
+ {
+  "company": "宇通集团",
+  "cn": "宇通集团",
+  "slugs": [
+   "yutong",
+   "yutongbus"
+  ],
+  "industry": "汽车/出行",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://join.yutong.com",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "moka yutong campus 172567 40 岗已入迁移 261；social 166580 解析 0 岗未写；库里另有 wt 源 yutong.hotjob.cn（郑州宇通企业集团）"
+  }
+ },
+ {
+  "company": "陕汽控股",
+  "cn": "陕汽控股",
+  "slugs": [
+   "sxqc",
+   "shaanxiauto",
+   "shacman"
+  ],
+  "industry": "汽车/出行",
+  "size": "中型",
+  "campus_evidence": "牛企直聘新能源分类收录，Xi'an",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen sxqc.zhiye.com，150 岗（校招 61）已入迁移 261"
+  }
+ },
+ {
+  "company": "广西汽车集团",
+  "cn": "广西汽车集团",
+  "slugs": [
+   "gxauto",
+   "guangxiqiche",
+   "gxgroup"
+  ],
+  "industry": "汽车/出行",
+  "size": "央国企",
+  "campus_evidence": "牛企直聘新能源分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "永达汽车",
+  "cn": "永达汽车",
+  "slugs": [
+   "yongda",
+   "yongdaauto"
+  ],
+  "industry": "汽车/出行",
+  "size": "中型",
+  "campus_evidence": "牛企直聘新能源分类收录（汽车经销商集团）",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "万向钱潮",
+  "cn": "万向钱潮",
+  "slugs": [
+   "wanxiang",
+   "wxqc",
+   "wanxiangqianchao"
+  ],
+  "industry": "汽车/出行",
+  "size": "大型",
+  "campus_evidence": "牛企直聘新能源分类收录（汽车零部件）",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "国邦医药",
+  "cn": "国邦医药",
+  "slugs": [
+   "guobang",
+   "gnbpharma"
+  ],
+  "industry": "医疗/医药",
+  "size": "中型",
+  "campus_evidence": "国邦医药2027届校园招聘正式启动，工作地点杭州/潍坊/绍兴",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "信立泰药业",
+  "cn": "信立泰药业",
+  "slugs": [
+   "salubris",
+   "xinlitai"
+  ],
+  "industry": "医疗/医药",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "hotjob salubris：school 39 + social 98 已入迁移 261"
+  }
+ },
+ {
+  "company": "上药控股",
+  "cn": "上药控股",
+  "slugs": [
+   "sphchina",
+   "shangyao",
+   "sph"
+  ],
+  "industry": "医疗/医药",
+  "size": "央国企",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "鲁南制药",
+  "cn": "鲁南制药",
+  "slugs": [
+   "lunan",
+   "lunanpharm"
+  ],
+  "industry": "医疗/医药",
+  "size": "中型",
+  "campus_evidence": "牛企直聘机械制造业分类误收录，实为制药企业",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "永胜医疗",
+  "cn": "永胜医疗",
+  "slugs": [
+   "yongsheng",
+   "yspmedical"
+  ],
+  "industry": "医疗/医药",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "维力医疗",
+  "cn": "维力医疗",
+  "slugs": [
+   "weili",
+   "vigmed",
+   "wellead"
+  ],
+  "industry": "医疗/医药",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "海正药业",
+  "cn": "海正药业",
+  "slugs": [
+   "hisunpharm",
+   "haizhengpharm",
+   "haizheng"
+  ],
+  "industry": "医疗/医药",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen hisunpharm.zhiye.com，27 岗（校招 9）已入迁移 261"
+  }
+ },
+ {
+  "company": "汉欣医药",
+  "cn": "汉欣医药",
+  "slugs": [
+   "hanxin",
+   "hanxinpharma"
+  ],
+  "industry": "医疗/医药",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "科华生物",
+  "cn": "科华生物",
+  "slugs": [
+   "kehuabio",
+   "kehuashengwu"
+  ],
+  "industry": "医疗/医药",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "安图生物",
+  "cn": "安图生物",
+  "slugs": [
+   "autobio",
+   "antushengwu"
+  ],
+  "industry": "医疗/医药",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "联邦制药",
+  "cn": "联邦制药",
+  "slugs": [
+   "theunited",
+   "lianbang",
+   "unitedlab"
+  ],
+  "industry": "医疗/医药",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "京新药业",
+  "cn": "京新药业",
+  "slugs": [
+   "jingxinpharm",
+   "jingxin"
+  ],
+  "industry": "医疗/医药",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen jingxinpharm.zhiye.com，117 岗（校招 68）已入迁移 261"
+  }
+ },
+ {
+  "company": "天康生物",
+  "cn": "天康生物",
+  "slugs": [
+   "tecon",
+   "tiankang"
+  ],
+  "industry": "医疗/医药",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen tecon.zhiye.com，campus 7 + social 4 已入迁移 261"
+  }
+ },
+ {
+  "company": "景杰生物",
+  "cn": "景杰生物",
+  "slugs": [
+   "ptmbio",
+   "jingjie"
+  ],
+  "industry": "医疗/医药",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "大泽农生物",
+  "cn": "大泽农生物",
+  "slugs": [
+   "dazenong",
+   "dzn"
+  ],
+  "industry": "医疗/医药",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "BMC瑞迈特",
+  "cn": "BMC瑞迈特",
+  "slugs": [
+   "bmc",
+   "ruimaite",
+   "bmcmedical"
+  ],
+  "industry": "医疗/医药",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "成都倍特药业",
+  "cn": "成都倍特药业",
+  "slugs": [
+   "beite",
+   "bettapharm"
+  ],
+  "industry": "医疗/医药",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "高博医疗集团",
+  "cn": "高博医疗集团",
+  "slugs": [
+   "gobroad",
+   "gaobo"
+  ],
+  "industry": "医疗/医药",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "甘李药业",
+  "cn": "甘李药业",
+  "slugs": [
+   "ganlee",
+   "ganli"
+  ],
+  "industry": "医疗/医药",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "哈药集团",
+  "cn": "哈药集团",
+  "slugs": [
+   "hayao",
+   "harbinpharm"
+  ],
+  "industry": "医疗/医药",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen hayao.zhiye.com，74 岗全部校招；已入迁移 261"
+  }
+ },
+ {
+  "company": "新和成",
+  "cn": "新和成",
+  "slugs": [
+   "nhu",
+   "xinhecheng"
+  ],
+  "industry": "医疗/医药",
+  "size": "大型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "迪康药业",
+  "cn": "迪康药业",
+  "slugs": [
+   "dikang",
+   "dikangpharm"
+  ],
+  "industry": "医疗/医药",
+  "size": "中型",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "wt dikang.hotjob.cn/wt/DIKANG，33 岗（含校招 8）已入迁移 261"
+  }
+ },
+ {
+  "company": "国家电投",
+  "cn": "国家电投",
+  "slugs": [
+   "guojiadiantou"
+  ],
+  "industry": "能源/化工",
+  "size": "央国企",
+  "campus_evidence": "聚合站(resumemakeroffer.com)2027届分类收录，未逐一核实官网原文",
+  "campus_url_hint": "https://spic.zhiye.com",
+  "probed_2026_09_18": {
+   "state": "dead_slug",
+   "note": "spic.zhiye.com 全部路由 302→/404；moka spic/45565 title=-1（取不到），未核实。央企建议走国聘通道而不是猜 ATS slug"
+  }
+ },
+ {
+  "company": "中国宝武",
+  "cn": "中国宝武",
+  "slugs": [
+   "baowu",
+   "baowugroup",
+   "baosteel"
+  ],
+  "industry": "能源/化工",
+  "size": "央国企",
+  "campus_evidence": "聚合来源给的是51job域名，产品红线禁用第三方平台，未采用",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "山东能源",
+  "cn": "山东能源",
+  "slugs": [
+   "shandongenergy",
+   "sdnyjt",
+   "shanneng"
+  ],
+  "industry": "能源/化工",
+  "size": "央国企",
+  "campus_evidence": "牛企直聘能源化工分类收录，2027 Fall Recruitment",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "洛阳钼业",
+  "cn": "洛阳钼业",
+  "slugs": [
+   "cmoc",
+   "luoyangmuye"
+  ],
+  "industry": "能源/化工",
+  "size": "大型",
+  "campus_evidence": "牛企直聘能源化工分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "中国化学(东华工程科技)",
+  "cn": "中国化学(东华工程科技)",
+  "slugs": [
+   "cncec",
+   "donghua",
+   "dhec"
+  ],
+  "industry": "能源/化工",
+  "size": "央国企",
+  "campus_evidence": "中国化学-东华工程科技股份有限公司2027届校园招聘（中国石油大学就业网转载）",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "陕西煤业化工集团",
+  "cn": "陕西煤业化工集团",
+  "slugs": [
+   "shccig",
+   "shaanmei",
+   "shanmei"
+  ],
+  "industry": "能源/化工",
+  "size": "央国企",
+  "campus_evidence": "陕西煤业化工集团有限责任公司2027年度高校毕业生招聘简章，官网shccig.com",
+  "campus_url_hint": "https://www.shccig.com"
+ },
+ {
+  "company": "中国华能",
+  "cn": "中国华能",
+  "slugs": [
+   "chng",
+   "huaneng",
+   "chnghr"
+  ],
+  "industry": "能源/化工",
+  "size": "央国企",
+  "campus_evidence": "中国华能集团2027校园招聘正式启动，申请期9月15日9:00至10月31日18:00",
+  "campus_url_hint": "https://zhaopin.chng.com.cn"
+ },
+ {
+  "company": "中国大唐",
+  "cn": "中国大唐",
+  "slugs": [
+   "cdt",
+   "datang",
+   "china-cdt"
+  ],
+  "industry": "能源/化工",
+  "size": "央国企",
+  "campus_evidence": "大唐集团2027届校园招聘官方网站zhaopin.china-cdt.com",
+  "campus_url_hint": "https://zhaopin.china-cdt.com"
+ },
+ {
+  "company": "中国华电",
+  "cn": "中国华电",
+  "slugs": [
+   "chd",
+   "huadian",
+   "chdhr"
+  ],
+  "industry": "能源/化工",
+  "size": "央国企",
+  "campus_evidence": "中国华电招聘平台，点击'校园招聘'注册",
+  "campus_url_hint": "https://rencaishichang.chd.com.cn"
+ },
+ {
+  "company": "中国核电",
+  "cn": "中国核电",
+  "slugs": [
+   "cnnp",
+   "zhongguohedian",
+   "cnnc"
+  ],
+  "industry": "能源/化工",
+  "size": "央国企",
+  "campus_evidence": "中国核电启动2027届校园招聘（中国能源新闻网标题）",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "盛虹石化",
+  "cn": "盛虹石化",
+  "slugs": [
+   "shenghong",
+   "shenghongpetro"
+  ],
+  "industry": "能源/化工",
+  "size": "大型",
+  "campus_evidence": "牛企直聘新能源分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "内蒙古君正能源化工集团",
+  "cn": "内蒙古君正能源化工集团",
+  "slugs": [
+   "junzheng",
+   "nmjunzheng"
+  ],
+  "industry": "能源/化工",
+  "size": "大型",
+  "campus_evidence": "牛企直聘能源化工分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "新疆天业集团",
+  "cn": "新疆天业集团",
+  "slugs": [
+   "xjtianye",
+   "tianye"
+  ],
+  "industry": "能源/化工",
+  "size": "央国企",
+  "campus_evidence": "牛企直聘能源化工分类收录",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen xjtianye.zhiye.com，6 岗（校招 3）已入迁移 261"
+  }
+ },
+ {
+  "company": "江苏时代",
+  "cn": "江苏时代",
+  "slugs": [
+   "catl",
+   "jiangsushidai"
+  ],
+  "industry": "能源/化工",
+  "size": "大型",
+  "campus_evidence": "牛企直聘新能源分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "赛唯",
+  "cn": "赛唯",
+  "slugs": [
+   "saiwei",
+   "savi"
+  ],
+  "industry": "能源/化工",
+  "size": "中型",
+  "campus_evidence": "牛企直聘新能源分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "电乐多",
+  "cn": "电乐多",
+  "slugs": [
+   "dianleduo",
+   "dld"
+  ],
+  "industry": "能源/化工",
+  "size": "中型",
+  "campus_evidence": "牛企直聘新能源分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "华茂能联",
+  "cn": "华茂能联",
+  "slugs": [
+   "huamaonenglian",
+   "hmnl"
+  ],
+  "industry": "能源/化工",
+  "size": "中型",
+  "campus_evidence": "牛企直聘新能源分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "孚新工程",
+  "cn": "孚新工程",
+  "slugs": [
+   "fuxin",
+   "fuxineng"
+  ],
+  "industry": "能源/化工",
+  "size": "中型",
+  "campus_evidence": "牛企直聘新能源分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "易鼎丰",
+  "cn": "易鼎丰",
+  "slugs": [
+   "yidingfeng",
+   "ydf"
+  ],
+  "industry": "能源/化工",
+  "size": "中型",
+  "campus_evidence": "牛企直聘新能源分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "融创中国",
+  "cn": "融创中国",
+  "slugs": [
+   "sunac",
+   "rongchuang"
+  ],
+  "industry": "地产/建筑",
+  "size": "大型",
+  "campus_evidence": "融创中国控股有限公司在全国范围内有校园招聘岗位（实习僧转载，未确认2027específico）",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "中建三局集团建设发展有限公司",
+  "cn": "中建三局集团建设发展有限公司",
+  "slugs": [
+   "cscec3b",
+   "zhongjiansanju",
+   "cscec3"
+  ],
+  "industry": "地产/建筑",
+  "size": "央国企",
+  "campus_evidence": "中建三局集团建设发展有限公司2027届校园招聘（暨南大学就业信息网转载）",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "中建八局新型建造公司",
+  "cn": "中建八局新型建造公司",
+  "slugs": [
+   "cscec8b",
+   "zhongjianbaju",
+   "cscec8"
+  ],
+  "industry": "地产/建筑",
+  "size": "央国企",
+  "campus_evidence": "中建八局新型建造公司2027届秋季校园招聘正式启动（超级简历转载标题）",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "北京麦田",
+  "cn": "北京麦田",
+  "slugs": [
+   "maitian",
+   "beijingmaitian"
+  ],
+  "industry": "地产/建筑",
+  "size": "中型",
+  "campus_evidence": "牛企直聘房地产业建筑业分类收录，2027 Fall",
+  "campus_url_hint": "",
+  "probed_2026_09_18": {
+   "state": "seeded",
+   "note": "beisen maitian.zhiye.com/social 6 岗；/campus 抽不出锚点（新版门户）"
+  }
+ },
+ {
+  "company": "中铁西北科学研究院评估中心",
+  "cn": "中铁西北科学研究院评估中心",
+  "slugs": [
+   "xbky",
+   "zhongtiexibei"
+  ],
+  "industry": "地产/建筑",
+  "size": "央国企",
+  "campus_evidence": "牛企直聘房地产业建筑业分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "中工国际工程",
+  "cn": "中工国际工程",
+  "slugs": [
+   "cameceng",
+   "zhonggongguoji",
+   "cameceng-hr"
+  ],
+  "industry": "地产/建筑",
+  "size": "央国企",
+  "campus_evidence": "牛企直聘房地产业建筑业分类收录（CIWEC）",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "中国青建",
+  "cn": "中国青建",
+  "slugs": [
+   "qingjian",
+   "chinaqingjian"
+  ],
+  "industry": "地产/建筑",
+  "size": "央国企",
+  "campus_evidence": "牛企直聘房地产业建筑业分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "华西龙湖",
+  "cn": "华西龙湖",
+  "slugs": [
+   "longfor",
+   "huaxilonghu"
+  ],
+  "industry": "地产/建筑",
+  "size": "中型",
+  "campus_evidence": "牛企直聘房地产业建筑业分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "THAD清华建筑设计院",
+  "cn": "THAD清华建筑设计院",
+  "slugs": [
+   "thad",
+   "qinghuajianzhu"
+  ],
+  "industry": "地产/建筑",
+  "size": "央国企",
+  "campus_evidence": "牛企直聘房地产业建筑业分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "中国五洲",
+  "cn": "中国五洲",
+  "slugs": [
+   "wuzhou",
+   "chinawuzhou",
+   "cmec"
+  ],
+  "industry": "地产/建筑",
+  "size": "央国企",
+  "campus_evidence": "牛企直聘房地产业建筑业分类收录",
+  "campus_url_hint": ""
+ },
+ {
+  "company": "同岩科技",
+  "cn": "同岩科技",
+  "slugs": [
+   "tongyan",
+   "tongyankeji"
+  ],
+  "industry": "地产/建筑",
+  "size": "中型",
+  "campus_evidence": "牛企直聘房地产业建筑业分类收录",
+  "campus_url_hint": ""
+ }
+]
