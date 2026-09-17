@@ -21,7 +21,7 @@ import {
   getCachedAvailability,
   subscribeAvailability,
 } from "@/lib/insight-client";
-import { groupCampusJobs } from "@/lib/campus-zone";
+import { groupCampusJobs, compareCompanyCardsByFit } from "@/lib/campus-zone";
 import { formatDateLabel } from "@/lib/relative-time";
 import { Badge } from "@/components/ui";
 import {
@@ -60,6 +60,15 @@ export type CampusBoardCard = {
   surge: { atMs: number; fromCount: number | null; toCount: number } | null;
   // 明确标了往届（如 2026 届）而被移出列表的岗数；不静默丢弃，卡面照实说一句
   pastClassJobCount: number;
+  /** 「对你有货」：该公司当前校招/实习岗里对得上用户方向（+ 城市）的条数。
+   *  `null` = 判不出用户方向（不是 0——0 会被读成「一个都没有」，那是另一回事）。
+   *  服务端按用户私有画像现算，不进按行业共享的快照（见 app/campus/page.tsx）。 */
+  fitCampusCount: number | null;
+  fitInternCount: number | null;
+  /** 排序用的「当前模式」视图（compareCompanyCardsByFit 读这两个键）：服务端按校招模式填，
+   *  切到实习时客户端换成实习那一列再用同一个比较器重排。 */
+  fitCount?: number | null;
+  fitTotal?: number;
 };
 
 type RecruitMode = "campus" | "intern";
@@ -176,16 +185,22 @@ const DISPUTE_REASONS: { reason: DisputeReason; label: string }[] = [
 ];
 
 export default function CampusClient({
-  cards,
+  cards: cardsInput,
   industries,
   hasIndustry,
   generatedLabel = null,
   filterOptions,
   seasonGradClass,
+  fitFunctions = [],
+  fitCities = [],
 }: {
   cards: CampusBoardCard[];
   industries: string[];
   hasIndustry: boolean;
+  /** 用户方向（classifyJobFunction 归一后的职能名）。空 = 判不出方向，卡面不提「对口」。 */
+  fitFunctions?: string[];
+  /** 用户目标城市（原始写法），仅用于在说明行里照实写清这份排序依据了什么。 */
+  fitCities?: string[];
   /** 看板快照的年龄（服务端算好的文案，如「12 分钟前」）；null 时不渲染。 */
   generatedLabel?: string | null;
   filterOptions: { campus: CampusFilterOptions; intern: CampusFilterOptions };
@@ -194,6 +209,15 @@ export default function CampusClient({
   seasonGradClass: number;
 }) {
   const [mode, setMode] = useState<RecruitMode>("campus");
+  // 服务端已按「校招模式的对口数」排好；切到实习要按实习那一列重排（同一个比较器，口径不会漂）。
+  // 校招模式下结果与服务端逐位相同 → 首屏不会有 hydration 差异。
+  const cards = useMemo(() => {
+    if (mode === "campus") return cardsInput;
+    return cardsInput
+      .map((c) => ({ ...c, fitCount: c.fitInternCount, fitTotal: c.internTotal }))
+      .sort(compareCompanyCardsByFit);
+  }, [cardsInput, mode]);
+  const fitKnown = fitFunctions.length > 0;
   const [filters, setFilters] = useState<CampusFilters>(EMPTY_FILTERS);
   // 手风琴：同一时刻只允许一家公司展开（同时展开多家会把三列网格撑成一长条，页面很乱）。
   const [expandedPattern, setExpandedPattern] = useState<string | null>(null);
@@ -202,10 +226,11 @@ export default function CampusClient({
   const [insightCompany, setInsightCompany] = useState<string | null>(null);
   const [, forceAvailTick] = useState(0);
   useEffect(() => {
-    cards.forEach((c) => requestInsightAvailability(c.company));
+    // 依赖 cardsInput 而不是排序后的 cards：切模式只换顺序、公司集合没变，不必重问一遍可用性。
+    cardsInput.forEach((c) => requestInsightAvailability(c.company));
     const unsub = subscribeAvailability(() => forceAvailTick((n) => n + 1));
     return unsub;
-  }, [cards]);
+  }, [cardsInput]);
 
   function toggleExpand(pattern: string) {
     setExpandedPattern((cur) => (cur === pattern ? null : pattern));
@@ -408,9 +433,29 @@ export default function CampusClient({
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm ink-2">
-          已接入官方校招源并持续验证的岗位 · 按行业「{industries.join("、")}」匹配 {cards.length} 家必投目标公司{generatedLabel ? ` · 数据更新于 ${generatedLabel}` : ""}
-        </p>
+        <div className="space-y-1">
+          <p className="text-sm ink-2">
+            已接入官方校招源并持续验证的岗位 · 按行业「{industries.join("、")}」匹配 {cards.length} 家必投目标公司{generatedLabel ? ` · 数据更新于 ${generatedLabel}` : ""}
+          </p>
+          {/* 排序依据照实写出来：清单是静态的北极星（不随你的方向增删公司），变的只是先看谁。
+              判不出方向时不吹这句，改成一句可行动的提示。 */}
+          <p className="t-caption ink-3">
+            {fitKnown ? (
+              <>
+                必投清单固定 {cards.length} 家不变，已把「对你有货」的排在前面 —— 方向「{fitFunctions.join("、")}」
+                {fitCities.length > 0 ? ` · 城市「${fitCities.join("、")}」` : ""}
+              </>
+            ) : (
+              <>
+                还判不出你的求职方向，暂按在招岗位数排序。到
+                <Link href="/me" className="mx-1 underline underline-offset-2 hover:opacity-80">
+                  偏好设置
+                </Link>
+                填目标岗位，可把「对你有货」的公司排到前面。
+              </>
+            )}
+          </p>
+        </div>
       </div>
 
       <div className="surface space-y-3 p-4 sm:p-5">
@@ -502,6 +547,7 @@ export default function CampusClient({
           {cards.map((card) => {
             const isExpanded = expandedPattern === card.pattern;
             const totalCount = mode === "campus" ? card.campusTotal : card.internTotal;
+            const fitCount = mode === "campus" ? card.fitCampusCount : card.fitInternCount;
             const filteredCount = filteredCountByPattern.get(card.pattern) ?? 0;
             // 展开区：服务端已按当前筛选筛好并分页（Phase B），这里按页累计、按 total 判「加载更多」。
             const page = isExpanded ? drawerFor(card.pattern) : undefined;
@@ -591,6 +637,21 @@ export default function CampusClient({
                       <span className="text-sm ink-3">暂无{modeLabel}在招岗位</span>
                     )}
                   </div>
+                  {/* 「对你有货」：清单不变，只把「你能投的」说清楚。
+                      · 有对口岗 → 绿标给出条数（用户一眼知道这张卡值不值得点开）；
+                      · 0 个但有别的岗 → 照实说「本季暂无对口岗」并带上其余岗数，不假装没岗、也不让用户白点。
+                      判不出方向（fitCount == null）时两句都不出现 —— 不知道就别说。 */}
+                  {fitCount !== null && totalCount > 0 && (
+                    fitCount > 0 ? (
+                      <Badge tone="green" size="sm" className="self-start font-medium">
+                        有你能投的岗 {fitCount} 个
+                      </Badge>
+                    ) : (
+                      <p className="t-caption ink-3">
+                        本季暂无对口岗（有 {totalCount} 个其它{modeLabel}岗）
+                      </p>
+                    )
+                  )}
                   {/* 往届岗不静默丢弃：说清楚「有但不是这一届」，免得用户以为我们漏抓。
                       只有岗位文本里写明届别（如「2026届」）的才会被挡；届别未知的岗照常在上面列着。 */}
                   {card.pastClassJobCount > 0 && (
