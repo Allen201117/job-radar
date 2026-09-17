@@ -182,7 +182,7 @@
   **复活率是多少，查 `job_closures` 就知道**——在拿到这个数字之前，任何拦截策略都是拍脑袋。
 - 回归钉在 `crawler/test_job_closures.py`（含「同一事务」与「不加外键」的契约断言）。
 
-## ⚠️ /jobs 默认排序（sortBy=match）冷路径 14~16s，病根是候选传输不是 SQL（2026-09-08 实测）
+## ⚠️ /jobs 默认排序（sortBy=match）冷路径：三层病根都量过了，别再凭感觉砍列（2026-09-08 实测，2026-09-18 更新）
 
 线上 `https://www.myjobradar.top/api/jobs/search` 实测（匿名、可 curl）：
 
@@ -214,6 +214,15 @@
   真库量：newest 28,000 行正文 20 MB → 产品用户 4.1 MB / 研发用户 7.7 MB / 匿名 0。
   ⚠️ 改 `CANDIDATE_BASE_COLUMNS` / `HYDRATE_COLUMNS` 必须保住「summary 在回补列里」，否则卡片没摘要
   （`tests/jobs-store-search-summary-gate.test.js`）。线上 TTFB 数字见 `docs/reviews/2026-09-17-core-features-adversarial-review.md`。
+  📌 **2026-09-18 登录态切完：SQL 粗排 + 1000 窗 + 收窄条件走索引**。三层病根按先后各自量过，别只记一层：
+  ① **带宽**（2026-09-17 psql 裸拉 8MB 要 42.9s ≈ 1.5Mbit/s）→ 解法是**少传行**：登录 match 走 `prescoreOrderBy`
+  （方向 30 / 城市 20 / 公司 15 / 7 天 10，每项 `is true`）只回 1000 行且不传正文（原 2.8 万行 20MB → 0.8MB）；
+  ② **粗排 SQL 本身全表扫**（2026-09-18 分段账本 fetch 5.5s 只拉 1000 行；EXPLAIN 是 Parallel Seq Scan 13.5 万 buffer、
+  库上 2.3~2.6s）→ 候选查询多带一条 `(search_doc @@ 方向 tsquery or first_seen_at > now()-7d)`，GIN + `(status,first_seen_at)`
+  两个索引 BitmapOr，同画像 493ms；**只进候选 SQL 不进 conds**，计数口径不变。带城市/关键词的 FTS 路径同一套（8000 行 → 1000）。
+  ③ **函数实例**：每次请求常落到不同实例，进程内 5 分钟缓存对首屏基本无效（三连打三个实例）。
+  等价性尺子：`JOBS_MATCH_PRESCORE=off` 退回全窗精排取真值，第一页 60 条逐用户对拍（数字在报告 §10）。
+  ⚠️ 没有方向词的用户（画像无 target_roles）粗排只剩城市/公司/7 天，仍是全表扫——量级同旧，不算回归但也没提速。
 
 ## /today 召回加了第四层 function，层内先保标题命中（2026-09-17，18 个画像真库对拍）
 
