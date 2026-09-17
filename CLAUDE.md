@@ -205,6 +205,39 @@
   见「校招专区首屏」段与 [[job-radar-campus-job-function-materialization]]）。**校招链已切读该列**；
   但**此处 `/jobs` 主搜索冷路径尚未切**（`keywordMatchTier` 的兄弟组排除仍读 summary）——要砍 summary 得先确认
   匹配所需的其它 summary 用途都能用列替代，仍属单独立项，别顺手改。
+  📌 **2026-09-17 切了一半：正文「按需传」**（`lib/jobs-store/search.ts` 的 `candidateSummaryExpr`）。不是砍 summary，
+  是只给「打分/精筛真会读正文」的行传：scoreJob 的职能门必拒的行（用户目标职能是产品时，研发/销售/制造… 占 active 77%）
+  正文不传；匿名且没开 keyword/jobRole/experience 精筛时一行都不传；命中页卡片摘要由 `hydratePageColumns` 按 id 回补。
+  等价性靠三件事：① `classifyJobFunction` / `recruitmentCategory` **有物化列就认列**（`lib/china-keyword-expansion.js`，
+  分类所有权归数据库的最后一块，此前 /jobs /today 都在用截断摘要重算、与卡片徽标打架）；② 排除词下推 SQL
+  （`appendExcludeWhere`，与 scoreJob 同字段集，顺带让撞上限的计数不再因排除词弃权）；③ 读正文的三个精筛任一生效就退回全传。
+  真库量：newest 28,000 行正文 20 MB → 产品用户 4.1 MB / 研发用户 7.7 MB / 匿名 0。
+  ⚠️ 改 `CANDIDATE_BASE_COLUMNS` / `HYDRATE_COLUMNS` 必须保住「summary 在回补列里」，否则卡片没摘要
+  （`tests/jobs-store-search-summary-gate.test.js`）。线上 TTFB 数字见 `docs/reviews/2026-09-17-core-features-adversarial-review.md`。
+
+## /today 召回加了第四层 function，层内先保标题命中（2026-09-17，18 个画像真库对拍）
+
+`lib/jobs-store/opportunities.ts` `buildRecallSql`。三处改动与各自的实测依据：
+- **方向层窗口先保「用户原词在标题里」**（城市桶之后、最新之前）：方向层命中集常远大于份额，此前只按城市→最新截断，
+  精确标题命中却更早首见的岗被砍在窗外，窗里塞的是标题只沾泛词、到 stage-2 必被 role_mismatch 拒掉的岗
+  （上海「机械工程师」召回 1,796 行只剩 20 可展示）。
+- **国内画像填了城市 → role/company 层 where 直接收窄到「城市命中或城市未知」**：location mismatch 在 stage-2 是硬拒，
+  此前这些行只是排到层尾，城市行取完后照样填满份额（前端@深圳 1,642 召回里 632 行 location_mismatch）。
+- **第四层 `job_function = any(目标职能)`**（权重 3，cityNew 3→2）：方向层只看 search_doc（无正文），
+  「标题泛、正文才写方向」的岗和词库没覆盖的非互联网岗它捞不到；`job_function` 列是标题+正文分类好的。
+  ⚠️ **形态必须是 `job_function = any(...) and search_doc @@ 城市tsquery`（BitmapAnd 两个索引）**，
+  三种反例都试过：城市门带 `or location is null` → GIN 用不上、逐行算 tsquery 3,048ms；`location ilike` 逐行过滤整桶 2,014ms；
+  加 30 天窗照样 2.2s 且长尾岗大半被窗砍掉（土木 0→6 掉回 0→1）。现行 生产制造∩上海 182ms、研发∩深圳 398ms。
+  配套复合索引 `idx_jobs_active_job_function_first_seen (job_function, first_seen_at desc) where active`
+  （2026-09-17 已 `create index concurrently` 上线，schema.sql 同步）。
+- 结果（可展示岗，`scratch w2-measure` 复跑口径）：**13 升 / 4 降 / 1 平**。长尾从无到有：土木 0→3、教师 3→6、机械 20→40；
+  4 个降的是算法/数据/市场/财务（−44~−93，各仍 ≥475，远超每日 20~30 张）——方向层份额从 5/8 降到 5/12 的代价，
+  双向都报、别只看净值。in-DB 耗时 127~802ms（改前两例 250/287ms）。
+- 顺带闭掉 F8 残差：`RECALL_COLUMNS` 带回 `recruitment_category / recruitment_explicit / job_function`，stage-2 认列。
+  此前用 300 字摘要重算 → 线上给社招岗写「校招岗位」的匹配理由。
+- /today main 区加相邻散列（`spreadByCompany` 复用 /jobs 的滑窗，任意 6 张同一家 ≤2）：公司配额只限总数不限相邻，
+  线上前 8 张全是字节跳动。⚠️ `spreadByCompany` 默认读顶层 `company`，Opportunity 的公司在 `job.company` 下，
+  必须传 `keyOf`，否则所有项同一个空键、散列等于没做（tests/opportunity-grouping 钉着）。
 
 ## 数据库迁移（已自动化，勿再手动跑 Supabase）
 
@@ -324,6 +357,11 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
 - **展示前必过 `lib/insight-verification.ts`** 的分级 / 时效 / 去标识 / 归因门；无可信结果返回 `insight_unverified` / `insight_outdated`，**不许降级放行**。
 - **只走搜索 API 取去标识聚合 + 判官核验 + ≥2 源，不直接爬社区**；官方源=fact，搜索源必须聚合去标识。
 - **AI 辅助草稿强制 `status=retired`**，必须人工核对 + 补真实来源过门才展示；不进 cron、不按用户触发（控账单）。
+- **公司归属的中文子串门（2026-09-17 立）**：`lib/insight-match.ts` 此前「含汉字就许子串命中」→「京东」命中「京东方」、
+  「中国银行」命中「中国银行业协会」，京东方（BOE）的岗被算进京东的派生指标。现行：长名比短名多出的那一截必须**全部**是
+  公司装饰词/地名（腾讯科技（北京）✓、中国银行深圳分行 ✓；京东方 ✗、腾讯音乐 ✗、京东物流 ✗）。子公司归集团画像靠
+  `company_profiles.aliases` 显式登记，不靠子串猜——归属准确性高于一切。撤回/下架接口现会 `revalidateTag("insight-library")`，
+  管理员端同步清本会话抽屉缓存（I5 残差）。
 - 检索额度是**全局共享**的（见「搜索额度是全局共享的」一节）；千帆免费额度 50/天，耗尽时设 `BAIDU_QIANFAN_SEARCH_DISABLED=true`，**不要反复点「发现」或跑 5-query live 验证**。
 
 ## 四层「搜索/刷新」必须区分（高频踩坑点）
