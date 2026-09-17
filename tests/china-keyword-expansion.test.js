@@ -258,3 +258,61 @@ test("normalizeRolePhrases：斜杠=或、去填充后缀、去办公室修饰�
   assert.deepEqual(normalizeRolePhrases(["岗位", "  "]), ["岗位"]);   // 只剩填充词 → 保留原样
   assert.deepEqual(normalizeRolePhrases("AI 产品经理"), ["AI 产品经理"]);
 });
+
+// 角色簇门：只靠领域锚点（数据 / 产品 / 品牌 / 财务）命中标题、而标题的角色词属于另一个角色簇 →
+// 不算同角色精确匹配。下面每条都是 2026-09-17 真实库对拍里被独立裁判判「不是同一个角色」的岗，
+// 全部 roleTier=exact 混进了 top-25 主清单（不是「拓展看看」，用户真会看到）。
+test("角色簇门：领域锚点命中标题但角色属于别的簇 → 不算 exact", () => {
+  const job = (title) => ({ title, company: "某公司", summary: null });
+  for (const [query, title] of [
+    ["数据分析师", "大数据开发负责人"],
+    ["数据分析师", "零部件数据工程师"],
+    ["数据分析师", "大模型训练数据工程师（数据算子与流水线方向）"],
+    ["AI 产品经理", "AI产品运营-AI工具运营"],
+    ["AI 产品经理", "大模型MaaS网关产品运营专家"],
+    ["品牌营销", "品牌设计-个护BG"],
+    ["产品经理", "产品运营专家"],
+    ["审计", "财务科技（ERP方向）- 全栈开发工程师"],
+  ]) {
+    assert.notEqual(keywordMatchTier(job(title), query), "exact", `${query} 不该精确匹配 ${title}`);
+  }
+});
+
+test("角色簇门不误杀：查询自己的角色词在标题里 → 照常 exact", () => {
+  const job = (title) => ({ title, company: "某公司", summary: null });
+  for (const [query, title] of [
+    ["数据分析师", "数据分析师"],
+    ["数据分析师", "商业分析师"],
+    ["数据分析师", "数据分析专家-商业分析"],
+    ["AI 产品经理", "AI产品经理"],
+    ["产品经理", "产品经理-电商"],
+    ["产品经理", "高级产品专家"], // 组里只有锚点命中，但没有任何别的角色簇来认领 → 不拦
+    ["数据", "Data Engineer"], // ④ 查询只写领域词 = 要整个领域，不替他划掉任何角色
+    ["产品", "产品运营专家"],
+    ["品牌营销", "品牌营销经理"],
+    ["品牌营销", "市场部品牌公关"],
+    ["审计", "审计经理"],
+    ["财务分析", "财务分析师"],
+    ["前端开发工程师", "前端开发工程师"],
+    ["算法工程师", "推荐算法工程师"],
+  ]) {
+    assert.equal(keywordMatchTier(job(title), query), "exact", `${query} 应精确匹配 ${title}`);
+  }
+});
+
+test("领域锚点表只许放领域词：角色词进表会让对应角色簇失去认领能力", () => {
+  const { GROUP_DOMAIN_ANCHORS } = require("../lib/china-keyword-expansion");
+  // 「设计」「运营」「销售」「全栈」「大数据」是角色词，正是它们把上面那些岗认领走的。
+  // 谁把它们挪进锚点表，这条修法当场失效 → 钉死。
+  const forbidden = ["设计", "运营", "销售", "全栈", "大数据", "数据工程", "会计", "审计", "财务分析"];
+  for (const [idx, anchors] of GROUP_DOMAIN_ANCHORS) {
+    for (const a of anchors) {
+      assert.ok(!forbidden.includes(a), `${a} 是角色词，不能当领域锚点`);
+      // 锚点必须真属于它声明的那个组，否则是拼错了（错字会静默失效、不报错）。
+      assert.ok(
+        CHINA_KEYWORD_GROUPS[idx].some((t) => String(t).toLowerCase() === a.toLowerCase()),
+        `组 ${idx} 里没有 ${a}`,
+      );
+    }
+  }
+});
