@@ -168,6 +168,11 @@ def run(portal_keys: list[str] | None, dry_run: bool, include_geo_blocked: bool 
     total_new = sum(m["new"] for m in per_portal)
     total_found = sum(m["found"] for m in per_portal)
     total_err = sum(m["list_errors"] + m["detail_errors"] for m in per_portal)
+    # HTTP 200 + 空候选同样是假阴性：逐 portal 叫出来，别让其他省的产出把它盖绿。
+    zero_found_portals = [m["portal"] for m in per_portal
+                          if m["found"] == 0 and m["list_errors"] == 0]
+    for key in zero_found_portals:
+        print(f"::warning::[announce] {key} found 0 candidates（形态可能变了）")
     # 零产出出声：候选为 0 或全是错，别静默绿灯（工程化底线）。
     status = ops_runs.status_from_counts(processed=total_found, failed=total_err)
     if total_found == 0:
@@ -176,10 +181,14 @@ def run(portal_keys: list[str] | None, dry_run: bool, include_geo_blocked: bool 
 
     metrics = {
         "portals": [{k: v for k, v in m.items() if k != "dry_run_rows"} for m in per_portal],
+        # Mac 的 --include-geo-blocked 是 27 省主 runner；默认分支是 CI 的可达省兜底。
+        "runner": "mac" if include_geo_blocked else "ci",
+        "portals_run": len(portals),
         "total_found": total_found,
         "total_new": total_new,
         "total_deadline_hit": sum(m["deadline_hit"] for m in per_portal),
         "total_errors": total_err,
+        "zero_found_portals": zero_found_portals,
     }
     if not dry_run and sb is not None:
         ops_runs.record_ops_run(sb, "announcement_harvest", metrics,

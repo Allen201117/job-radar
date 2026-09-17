@@ -50,6 +50,8 @@ RULE_TITLES = {
     "J": "投递入口该复查了",
     "K": "adapter 产出骤降",
     "L": "源断抓",
+    "M": "Mac 公告抓取无记录",
+    "N": "抓取台账终态未回写",
 }
 
 # ── 规则 A：每个模块的「产出口径」与「处理量口径」────────────────────────────
@@ -963,6 +965,65 @@ def evaluate_stuck_ledger(rows, now=None, hours=6):
 
 
 APPLY_PROGRAM_STALE_DAYS = 45
+MAC_ANNOUNCEMENT_HARVEST_HOURS = 30
+
+
+def evaluate_missing_mac_announcement_harvest(rows, now=None,
+                                              hours=MAC_ANNOUNCEMENT_HARVEST_HOURS):
+    """规则 M：27 省主 runner 的 Mac 超过 hours 没有台账就告警。
+
+    CI 只抓境外可达的 4 省，不能用它的 success 代替 Mac 的 27 省收尾记录。
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=hours)
+    for row in rows or []:
+        if (row or {}).get("module") != "announcement_harvest":
+            continue
+        metrics = row.get("metrics") or {}
+        if metrics.get("runner") != "mac":
+            continue
+        finished = _as_dt(row.get("finished_at") or row.get("created_at"))
+        if finished and finished >= cutoff:
+            return []
+    return [{
+        "rule": "M",
+        "subject": "announcement_harvest",
+        "summary": f"Mac 公告抓取 {hours} 小时无记录：27 省主 runner 可能没有启动。",
+        "evidence": [
+            "只找到 CI 兜底 runner 不能证明 geo-blocked 省实际抓过；"
+            "判据是 announcement_harvest.metrics.runner=mac 的 finished_at/created_at。"
+        ],
+        "next": "先检查 Mac launchd 是否已加载，以及 plist 里的脚本绝对路径是否仍指向当前仓库。",
+    }]
+
+
+def evaluate_crawl_run_unrecorded(rows, today=None):
+    """规则 N：run.py 活着但两次终态回写都失败，不能只留在会被截断的 CI 日志里。"""
+    today = str(today or datetime.now(SHANGHAI).date())[:10]
+    by_task = Counter()
+    for row in rows or []:
+        if (row or {}).get("run_date") != today:
+            continue
+        task = row.get("module")
+        if task not in ("daily_crawl", "campus_crawl", "enrich_crawl"):
+            continue
+        try:
+            count = int((row.get("metrics") or {}).get("crawl_run_unrecorded") or 0)
+        except (TypeError, ValueError):
+            continue
+        if count > 0:
+            by_task[task] += count
+    total = sum(by_task.values())
+    if total == 0:
+        return []
+    return [{
+        "rule": "N",
+        "subject": "crawl_run_unrecorded",
+        "summary": f"当日有 {total} 个 crawl_run 终态两次都未回写，台账状态可能一直是 running。",
+        "evidence": [f"{task}: crawl_run_unrecorded={count}"
+                     for task, count in sorted(by_task.items())],
+        "next": "查对应任务的数据库写入错误；这表示进程仍在运行，但 success/failed 两次收尾都没写成。",
+    }]
 
 
 def evaluate_stale_apply_programs(rows, today=None, stale_days=APPLY_PROGRAM_STALE_DAYS):
@@ -1323,7 +1384,7 @@ def main():
     started_at = now
     since_day = (now - timedelta(days=max(args.days + 2, 4))).astimezone(SHANGHAI).date().isoformat()
     ops_rows = db.fetch_all_rows(
-        lambda: sb.table("ops_runs").select("module,run_date,status,metrics")
+        lambda: sb.table("ops_runs").select("module,run_date,status,metrics,finished_at,created_at")
                   .gte("run_date", since_day)
     )
     discovery_rows = db.fetch_all_rows(
@@ -1340,6 +1401,8 @@ def main():
     findings += zero
     findings += evaluate_stuck_ledger(discovery_rows, now=now, hours=args.stuck_hours)
     findings += evaluate_account_errors(event_rows, ops_rows, now=now)
+    findings += evaluate_missing_mac_announcement_harvest(ops_rows, now=now)
+    findings += evaluate_crawl_run_unrecorded(ops_rows, today=today)
     # 规则 J 单独包住：apply_programs 是张十几行的小表，取不到也不该拖垮别的规则。
     try:
         program_rows = db.fetch_all_rows(

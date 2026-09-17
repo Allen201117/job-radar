@@ -1,4 +1,7 @@
+import contextlib
+import io
 import unittest
+from unittest import mock
 from datetime import date
 
 import json
@@ -11,6 +14,7 @@ from announcements.portals import (
     parse_list,
     published_from_url,
 )
+from announcements import harvest
 
 
 class TestCleanTitle(unittest.TestCase):
@@ -222,6 +226,63 @@ class TestAnchorTitleFallback(unittest.TestCase):
         items = parse_list(tj, tj.list_urls[0], html)
         self.assertEqual([it.title for it in items], ["天津市部分事业单位公开招聘信息"])
         self.assertEqual(items[0].published_at, date(2026, 9, 11))  # URL t20260911_ 自带发布日
+
+
+class TestHarvestLedger(unittest.TestCase):
+    def test_zero_found_portal_warns_and_is_recorded(self):
+        portal = PORTALS_BY_KEY["bj_rsj"]
+        zero = {
+            "portal": portal.key, "found": 0, "processed": 0, "new": 0, "touched": 0,
+            "deadline_hit": 0, "list_errors": 0, "detail_errors": 0,
+        }
+        client = mock.MagicMock()
+        client.__enter__.return_value = object()
+        with mock.patch.object(harvest, "_client", return_value=client), \
+                mock.patch.object(harvest.db, "get_supabase", return_value="SB"), \
+                mock.patch.object(harvest, "harvest_portal", return_value=zero), \
+                mock.patch.object(harvest.ops_runs, "record_ops_run") as record:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = harvest.run([portal.key], dry_run=False)
+
+        self.assertIn(
+            "::warning::[announce] bj_rsj found 0 candidates（形态可能变了）", output.getvalue())
+        self.assertEqual(result["metrics"]["zero_found_portals"], ["bj_rsj"])
+        self.assertEqual(record.call_args.args[2]["zero_found_portals"], ["bj_rsj"])
+
+    def test_ledger_marks_ci_runner_and_portal_count(self):
+        portal = PORTALS_BY_KEY["bj_rsj"]
+        metrics = {
+            "portal": portal.key, "found": 1, "processed": 1, "new": 0, "touched": 1,
+            "deadline_hit": 0, "list_errors": 0, "detail_errors": 0,
+        }
+        client = mock.MagicMock()
+        client.__enter__.return_value = object()
+        with mock.patch.object(harvest, "_client", return_value=client), \
+                mock.patch.object(harvest.db, "get_supabase", return_value="SB"), \
+                mock.patch.object(harvest, "harvest_portal", return_value=metrics), \
+                mock.patch.object(harvest.ops_runs, "record_ops_run") as record:
+            harvest.run([portal.key], dry_run=False)
+
+        ledger = record.call_args.args[2]
+        self.assertEqual(ledger["runner"], "ci")
+        self.assertEqual(ledger["portals_run"], 1)
+
+    def test_ledger_marks_include_geo_blocked_runner_as_mac(self):
+        portal = PORTALS_BY_KEY["bj_rsj"]
+        metrics = {
+            "portal": portal.key, "found": 1, "processed": 1, "new": 0, "touched": 1,
+            "deadline_hit": 0, "list_errors": 0, "detail_errors": 0,
+        }
+        client = mock.MagicMock()
+        client.__enter__.return_value = object()
+        with mock.patch.object(harvest, "_client", return_value=client), \
+                mock.patch.object(harvest.db, "get_supabase", return_value="SB"), \
+                mock.patch.object(harvest, "harvest_portal", return_value=metrics), \
+                mock.patch.object(harvest.ops_runs, "record_ops_run") as record:
+            harvest.run([portal.key], dry_run=False, include_geo_blocked=True)
+
+        self.assertEqual(record.call_args.args[2]["runner"], "mac")
 
 
 if __name__ == "__main__":

@@ -27,6 +27,38 @@ class TestDeadlineExtraction(unittest.TestCase):
         d, _ = extract_deadline("报名时间自9月1日至9月28日", published_at=date(2026, 9, 1))
         self.assertEqual(d, date(2026, 9, 28))
 
+    def test_common_month_day_deadline_forms(self):
+        # 这些都带明确的报名/截止语义，不能退化成「正文任意日期」的猜测。
+        cases = [
+            ("截止日期：9月20日", date(2026, 9, 20)),
+            ("报名截止：9月20日", date(2026, 9, 20)),
+            ("报名截止时间：9月20日前", date(2026, 9, 20)),
+            ("报名时间：2026年9月10日9:00至9月20日17:00", date(2026, 9, 20)),
+            ("2026.9.20 截止", date(2026, 9, 20)),
+            ("报名截止时间为9月20日17:00", date(2026, 9, 20)),
+        ]
+        for text, expected in cases:
+            with self.subTest(text=text):
+                actual, _ = extract_deadline(text, published_at=date(2026, 9, 1))
+                self.assertEqual(actual, expected)
+
+    def test_month_day_deadline_crosses_into_next_year(self):
+        # 12 月发布、1 月截止只能是下一年；否则刚入库就被过期治理下架。
+        d, _ = extract_deadline(
+            "报名时间：12月25日至1月10日", published_at=date(2026, 12, 15))
+        self.assertEqual(d, date(2027, 1, 10))
+        # 同月的正常公告不能被跨年规则误伤。
+        same_month, _ = extract_deadline(
+            "报名截止：9月20日", published_at=date(2026, 9, 1))
+        self.assertEqual(same_month, date(2026, 9, 20))
+
+    def test_deadline_text_keeps_a_safe_boundary(self):
+        d, evidence = extract_deadline(
+            "报名时间：2026年9月10日9时至9月30日17时（逾期不予受理，详情请见附件）")
+        self.assertEqual(d, date(2026, 9, 30))
+        self.assertLessEqual(len(evidence), 100)
+        self.assertFalse(evidence[-1].isdigit())
+
     def test_business_days_needs_published(self):
         # 无发布日 → 抽不成 date，但带回原文兜底
         d, ev = extract_deadline("自公告发布之日起7个工作日内报名")

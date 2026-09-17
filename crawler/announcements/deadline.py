@@ -18,12 +18,24 @@ _MD = r"(\d{1,2})\s*月\s*(\d{1,2})\s*日"                          # 只有月�
 
 # 顺序有意义：优先匹配「区间的结束端」（报名截止 = 区间右端），再匹配裸「截止」。
 _RANGE_END_PATS = [
+    # 「报名时间：2026年9月10日…至2026年9月20日…」：完整年月日的区间右端。
     re.compile(r"报名[时實]间[^。；;\n]{0,50}?至[^。；;\n]{0,25}?" + _DATE),
+    # 「报名截止时间：2026年9月20日」：报名前缀 + 完整年月日。
     re.compile(r"报名[^。；;\n]{0,40}?截止[^。；;\n]{0,25}?" + _DATE),
+    # 「截止日期：2026年9月20日」：不带报名二字但有明确截止字段。
     re.compile(r"截止[^。；;\n]{0,12}?(?:时间|日期)?\s*[为：:]{0,3}\s*" + _DATE),
+    # 「2026.9.20 截止」：完整日期在前，紧邻明确的截止词。
+    re.compile(_DATE + r"\s*截止"),
+    # 「报名时间：9月10日…至9月20日…」：年份省略时仍只取区间右端。
     re.compile(r"报名[时實]间[^。；;\n]{0,50}?至[^。；;\n]{0,25}?" + _MD),
+    # 「截止日期：9月20日」「报名截止时间为9月20日」：明确截止字段 + 月日。
+    re.compile(r"(?:报名)?截止(?:时间|日期)?\s*(?:为|：|:)?\s*" + _MD),
 ]
 _WORKDAYS_PAT = re.compile(r"自(?:本)?公告(?:发布|公布|印发)之日起(\d{1,2})个?工作日")
+
+# 月日省略年份时，最多容忍 60 天的列表页/正文日期错位；超过说明已跨年。
+# 这个窗口覆盖同季公告的正常差异，又不会把 12 月发布、1 月截止直接判成已过期。
+_CROSS_YEAR_TOLERANCE_DAYS = 60
 
 
 def normalize(text: str) -> str:
@@ -85,6 +97,10 @@ def extract_deadline(
                 base_year = (published_at or today).year
                 mo, da = int(g[0]), int(g[1])
                 y = base_year
+                inferred = date(y, mo, da)
+                if (published_at is not None
+                        and inferred < published_at - timedelta(days=_CROSS_YEAR_TOLERANCE_DAYS)):
+                    y += 1
             return date(y, mo, da), m.group(0)[:60]
         except ValueError:
             # 月/日越界（如误匹配到「13月」）→ 当作没抽到，继续找下一条更可靠的

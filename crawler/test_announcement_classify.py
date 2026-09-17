@@ -64,5 +64,23 @@ class TestEmployerType(unittest.TestCase):
         self.assertIsNone(detect_employer_type("某某通知"))
 
 
+class TestRecruitmentAnnouncement(unittest.TestCase):
+    def test_recruitment_explanation_titles_are_not_misclassified(self):
+        # 「说明」描述的是招聘条件/选聘事项本身，不等于非招聘通知。
+        self.assertTrue(is_recruitment_announcement("2026年公开招聘工作人员招募条件说明公告"))
+        self.assertTrue(is_recruitment_announcement("关于公开选聘工作人员的说明"))
+
+    def test_explicit_non_recruitment_forms_stay_excluded(self):
+        # 这些词是栏目里最常见的招聘后续流程，仍不能流进 /programs。
+        for title in (
+            "2026年公开招聘工作人员拟聘用人员公示",
+            "2026年公开招聘工作人员进入面试名单",
+            "2026年公开招聘工作人员笔试成绩公告",
+            "2026年公开招聘工作人员面试通知",
+        ):
+            with self.subTest(title=title):
+                self.assertFalse(is_recruitment_announcement(title))
+
+
 if __name__ == "__main__":
     unittest.main()

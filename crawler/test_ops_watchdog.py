@@ -691,8 +691,50 @@ class StaleApplyProgramsTest(unittest.TestCase):
 
     def test_规则字母都登记了标题(self):
         # H / I 曾经在用却没登记，issue 标题会退化成裸字母。
-        for letter in ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"):
+        for letter in ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N"):
             self.assertIn(letter, W.RULE_TITLES)
+
+
+class AnnouncementHarvestWatchdogTest(unittest.TestCase):
+    NOW = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
+
+    def test_missing_mac_runner_for_30_hours_alerts(self):
+        rows = [{
+            "module": "announcement_harvest",
+            "metrics": {"runner": "ci", "portals_run": 4},
+            "finished_at": "2026-09-17T11:00:00+00:00",
+        }]
+        [finding] = W.evaluate_missing_mac_announcement_harvest(rows, now=self.NOW)
+        self.assertEqual((finding["rule"], finding["subject"]), ("M", "announcement_harvest"))
+        self.assertIn("Mac 公告抓取 30 小时无记录", finding["summary"])
+
+    def test_recent_mac_runner_is_healthy(self):
+        rows = [{
+            "module": "announcement_harvest",
+            "metrics": {"runner": "mac", "portals_run": 27},
+            "finished_at": "2026-09-17T10:00:00+00:00",
+        }]
+        self.assertEqual(W.evaluate_missing_mac_announcement_harvest(rows, now=self.NOW), [])
+
+
+class CrawlRunUnrecordedWatchdogTest(unittest.TestCase):
+    def test_nonzero_metric_alerts_with_task_and_count(self):
+        rows = [
+            _run("daily_crawl", "2026-09-17", crawl_run_unrecorded=2),
+            _run("campus_crawl", "2026-09-17", crawl_run_unrecorded=0),
+            _run("enrich_crawl", "2026-09-17"),
+        ]
+        [finding] = W.evaluate_crawl_run_unrecorded(rows, today="2026-09-17")
+        self.assertEqual(finding["rule"], "N")
+        self.assertIn("2", finding["summary"])
+        self.assertIn("daily_crawl", "\n".join(finding["evidence"]))
+
+    def test_zero_or_missing_metric_does_not_alert(self):
+        rows = [
+            _run("daily_crawl", "2026-09-17", crawl_run_unrecorded=0),
+            _run("campus_crawl", "2026-09-17"),
+        ]
+        self.assertEqual(W.evaluate_crawl_run_unrecorded(rows, today="2026-09-17"), [])
 
 
 class AdapterCollapseTest(unittest.TestCase):
