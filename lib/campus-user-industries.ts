@@ -4,7 +4,7 @@ import { resolveMustApplyIndustries, MUST_APPLY_BY_INDUSTRY } from "@/lib/must-a
 
 /**
  * 读用户的必投范围（行业 → 公司清单）与方向（目标岗位 / 城市）。
- * 行业实际只来自 user_preferences（原因见函数体内注释，live 已核实列不存在）。
+ * 行业 / 岗位 / 城市三者同一口径：**偏好（手填）优先，简历解析兜底**（见函数体内注释）。
  * 走传入的 RLS 客户端（只读用户自己的行），不用 service-role——这不是 admin 场景。
  *
  * 抽出来共用是为了让 `/campus` 页面与 `/api/campus-zone/jobs` 解析出**同一批公司**：
@@ -23,28 +23,31 @@ export async function getUserCampusScope(
   targetLocations: string[];
 }> {
   const [profRes, prefRes] = await Promise.all([
-    supabase.from("candidate_profiles").select("target_roles, target_locations").eq("user_id", userId).maybeSingle(),
+    supabase
+      .from("candidate_profiles")
+      .select("industries, target_roles, target_locations")
+      .eq("user_id", userId)
+      .maybeSingle(),
     supabase
       .from("user_preferences")
       .select("target_industries, target_roles, target_locations")
       .eq("user_id", userId)
       .maybeSingle(),
   ]);
-  // ⚠️ 行业**只读 user_preferences.target_industries**。原代码还从 candidate_profiles 选
-  // `target_industries` 并置于更高优先级，但该表根本没有这一列（迁移 006 里叫 `industries`）——
-  // PostgREST 整条 select 报错、data 恒为 null，所以「简历优先」这一档**从来没生效过**，
-  // 实际一直是偏好单读。这里如实写成偏好单读（行为逐字不变），要不要真的接上简历那一档
-  // 属于「必投清单口径」决策，不在本次改动范围内。
-  const rawIndustries = (prefRes.data?.target_industries as string[] | null) || [];
-  const industries = resolveMustApplyIndustries(rawIndustries); // 空/归一不出 → 兜底「互联网/科技」
-  // ⚠️ 行业是「简历优先」（上面几行），而**岗位/城市是偏好优先**——这不是笔误，是跟
-  // lib/opportunities/profile.buildRadarProfile 对齐：用户在偏好里手填的方向表达的是「我现在想投什么」，
-  // 优先级高于简历解析出来的历史方向。两处口径若分家，/campus 的「对口」与 /today 的推荐会各说各话。
+  // 三个维度都是「偏好优先、简历兜底」，与 lib/opportunities/profile.buildRadarProfile 对齐：用户在偏好里
+  // 手填的表达的是「我现在想投什么」，优先级高于简历解析出来的历史方向；两处口径若分家，/campus 的「对口」
+  // 与 /today 的推荐会各说各话。
+  // ⚠️ 简历那一档的列名是 `candidate_profiles.industries`（迁移 006），**不是** `target_industries`。
+  // 3a0fa0f~b7ff590 期间选的是不存在的列 → PostgREST 整条 select 报错、data 恒为 null，简历档从未生效。
+  // 2026-09-17 创始人拍板接上；live 量过影响面：7 个「偏好为空、简历有行业」的用户从兜底「互联网/科技」
+  // 换成简历行业，偏好已填的用户一个都不变（偏好优先，简历只兜底）。
   const pick = (a: unknown, b: unknown): string[] => {
     const first = Array.isArray(a) ? a.filter((x): x is string => typeof x === "string" && !!x.trim()) : [];
     if (first.length) return first;
     return Array.isArray(b) ? b.filter((x): x is string => typeof x === "string" && !!x.trim()) : [];
   };
+  const rawIndustries = pick(prefRes.data?.target_industries, profRes.data?.industries);
+  const industries = resolveMustApplyIndustries(rawIndustries); // 空/归一不出 → 兜底「互联网/科技」
   return {
     rawIndustries,
     industries,
