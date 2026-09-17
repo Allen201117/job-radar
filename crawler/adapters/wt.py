@@ -172,6 +172,23 @@ class WtAdapter(PlaywrightAdapter):
     # 直接在 _map 前由 _extract_posts 命中。posts_keys 未含 postList，故显式加上。
     posts_keys = ("postList",) + PlaywrightAdapter.posts_keys
 
+    # recruitType → sourceDeclaredCategory 能识别的显式招聘类型词（lib/china-keyword-expansion.js
+    # 的 sourceDeclaredCategory 只认这几类关键词，不认「市场营销类」这种职能类别）。
+    # ⚠️ wt 列表接口只按功能类别给 postType（如「市场营销类」「职能管理类」），完全不含招聘类型词汇——
+    # 而我们请求时用的 recruitType（1=校招/2=社招/12=实习）才是权威的招聘类型信号。不把它带下去，
+    # 分类器只能看 job_type 里的职能类别（永远判不出校招/实习），于是 wt 源的校招/实习岗全部被
+    # 兜底成社招（2026-09-17 实锤：华发股份 9 个校招岗、李宁 1 个校招岗全部入库成「社招」）。
+    #
+    # 🚫 **刻意只标 1/12，不标 2（社招）**，与 china-keyword-expansion 层4 那条
+    # 「不对 postType=society 对称判社招」同一个理由：社招本来就是层7 的默认态，标了不增加信息，
+    # 却会让层3（declared）抢在层4（url 门户）/层5（标题强校招标记）**之前**拍板。
+    # 2026-09-17 香港库全量对拍（只拉 group by 计数）：wt 源 jd_url 带 recruitType=2 的在招岗里，
+    # 现在有 **170 个判成校招、91 个判成实习**（公司把校招岗挂在社招板块，靠标题「XX 届 / 应届」
+    # 被层5 捞回来）——标上「社会招聘」= 这 170 个当场被压回社招。
+    # 正向收益（rt=1/12 标上后能救回的）：rt=1 现有 3,827 个判成社招 + 77 个判成实习，
+    # rt=12 现有 285 个判成社招 + 46 个判成校招。只标 1/12 是**单向纯增量**。
+    _RT_CATEGORY_LABEL = {1: "校园招聘", 12: "实习"}
+
     def _map(self, post: dict) -> Optional[RawJob]:
         if not isinstance(post, dict):
             return None
@@ -186,11 +203,16 @@ class WtAdapter(PlaywrightAdapter):
         desc = _first(post, ("workContent", "description"))
         req = _first(post, ("serviceCondition", "requirement"))
         summary = (desc + ("\n\n【任职要求】\n" + req if req else "")).strip() or None
+        func_type = _first(post, ("postType", "postTypeName"))
+        rt_label = self._RT_CATEGORY_LABEL.get(rt)
+        # 职能类别 + 招聘类型词并存：sourceDeclaredCategory 只是子串匹配，两段拼一起互不干扰；
+        # 职能类别继续喂给 classifyJobFunction，招聘类型词喂给 recruitmentCategory 的层3。
+        job_type = " ".join(p for p in (func_type, rt_label) if p) or None
         return RawJob(
             company=self.company_name or "",
             title=title,
             location=_first(post, ("workPlace", "workCity", "location")) or None,
-            job_type=_first(post, ("postType", "postTypeName")) or None,
+            job_type=job_type,
             summary=summary,
             jd_url=jd_url,
             apply_url=jd_url,

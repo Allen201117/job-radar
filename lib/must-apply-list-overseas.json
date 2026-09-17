@@ -192,7 +192,7 @@
     { "name": "Merck KGaA", "pattern": "%Merck KGaA%" }
   ],
   "能源/化工": [
-    { "name": "ExxonMobil", "pattern": "%Exxon%" },
+    { "name": "ExxonMobil", "pattern": "%Exxon%", "aliases": ["%埃克森美孚%"] },
     { "name": "Chevron", "pattern": "%Chevron%" },
     { "name": "Shell", "pattern": "%Shell%", "aliases": ["%壳牌%"] },
     { "name": "BP", "pattern": "%BP p.l.c%" },
