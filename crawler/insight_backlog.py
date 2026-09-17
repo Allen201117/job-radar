@@ -499,6 +499,9 @@ def write_experience(sb, company_id, claim, sources, judge, status, dimension="c
         raise
 
 
+DEMAND_WINDOW_DAYS = 30
+
+
 def fetch_t3_queue(sb, limit):
     """T3 队列：所有已建画像的公司（= 我们在抓的源公司，需求对齐）+ t3 待处理/超期 + 未超死信。
     2026-06-28 放宽：原硬门 `founded_year 非空` 只放 64 家 notable，把 707 家「Wikidata 查无成立年份但
@@ -520,20 +523,40 @@ def fetch_t3_queue(sb, limit):
     # 仅 jobs 库可用时才多取候选：按在招岗需求排序后再截断，避免 founded_year 把大户永远挤在队尾。
     if not rows:
         return []
+    # 用户需求信号（2026-09-17 创始人问「洞察库怎么更快更稳扩充」）：最近 30 天被用户看过/收藏/投递的岗，
+    # 它们的公司排在**最前**——额度先花在用户真在看的公司上。取不到（表抖 / 无记录）就退回原排序，绝不阻断。
+    demand_job_ids = []
+    try:
+        since = (datetime.now(timezone.utc) - timedelta(days=DEMAND_WINDOW_DAYS)).isoformat()
+        demand_job_ids = [
+            str(item.get("job_id") or "")
+            for item in db.fetch_all_rows(
+                lambda: sb.table("job_actions").select("job_id").gte("created_at", since)
+            )
+            if item.get("job_id")
+        ]
+    except Exception as exc:  # noqa: BLE001
+        print(f"[t3] 读 job_actions 需求信号失败，本轮按无需求排序: {type(exc).__name__}")
     try:
         conn = jobs_db.get_conn()
         counts = jobs_db.fetch_all(
             conn,
             """
-            select company, count(*) as active_count
+            select company,
+                   count(*) as active_count,
+                   count(*) filter (where id::text = any(%s)) as demand_count
             from jobs
             where status = 'active' and company = any(%s)
             group by 1
             """,
-            ([str(row.get("company") or "") for row in rows],),
+            (demand_job_ids, [str(row.get("company") or "") for row in rows]),
         )
         active_counts = {
             str(item.get("company") or ""): int(item.get("active_count") or 0)
+            for item in counts
+        }
+        demand_counts = {
+            str(item.get("company") or ""): int(item.get("demand_count") or 0)
             for item in counts
         }
         # ⚠️ 必投清单公司**排在最前**（2026-09-04）：洞察库现在只放信息差，而信息差
@@ -543,7 +566,9 @@ def fetch_t3_queue(sb, limit):
         # 裸子串会把「京东方」算成「京东」，那是本仓库立过碑的红线。
         must_apply_names = must_apply.all_names()
         rows.sort(key=lambda row: (
+            0 if demand_counts.get(str(row.get("company") or ""), 0) > 0 else 1,   # 用户真在看的公司最前
             0 if must_apply.resolve_owner(str(row.get("company") or ""), must_apply_names) else 1,
+            -demand_counts.get(str(row.get("company") or ""), 0),
             -active_counts.get(str(row.get("company") or ""), 0),
         ))
     except Exception as exc:

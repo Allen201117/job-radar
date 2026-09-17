@@ -273,6 +273,26 @@ class TestWorker(unittest.TestCase):
         self.assertEqual([row["company"] for row in rows], ["大公司", "中公司"])
         fetch_all.assert_called_once()
 
+    def test_fetch_t3_queue_puts_user_demand_companies_first(self):
+        """用户 30 天内看过/收藏的岗所在公司排最前，其次才是在招岗多寡。"""
+        store = {"_canned_company_profiles": [
+            {"id": "a", "company": "冷门公司", "aliases": [], "t3_fail_count": 0},
+            {"id": "b", "company": "大户公司", "aliases": [], "t3_fail_count": 0},
+        ]}
+        fetch_all = mock.Mock(return_value=[
+            {"company": "冷门公司", "active_count": 2, "demand_count": 3},
+            {"company": "大户公司", "active_count": 900, "demand_count": 0},
+        ])
+        with mock.patch.object(B.jobs_db, "enabled", return_value=True), \
+             mock.patch.object(B.jobs_db, "get_conn", return_value=object()), \
+             mock.patch.object(B.jobs_db, "fetch_all", fetch_all), \
+             mock.patch.object(B.db, "fetch_all_rows",
+                               side_effect=[store["_canned_company_profiles"], [{"job_id": "j1"}, {"job_id": "j2"}]]):
+            rows = B.fetch_t3_queue(FakeSB(store), limit=2)
+        self.assertEqual([row["company"] for row in rows], ["冷门公司", "大户公司"])
+        # 需求 id 作为第一个绑定参数传进同一条 SQL（不多打一次库）
+        self.assertEqual(fetch_all.call_args.args[2][0], ["j1", "j2"])
+
     def test_fetch_t3_queue_falls_back_to_existing_order_without_jobs_db(self):
         store = {"_canned_company_profiles": [
             {"id": "a", "company": "原排序第一", "aliases": [], "t3_fail_count": 0},
