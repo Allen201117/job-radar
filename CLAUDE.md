@@ -701,6 +701,12 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
    `getCampusFreshStats` 每请求现算绕开快照（止血，保留为安全网）。详见 [[job-radar-campus-job-function-materialization]]。
    ⚠️ 因此「别把 summary 从校招取数里砍掉」这条**已不再适用于校招链**（职能读列了）；`buildCampusFacets`
    现在读 `job_function` 列、仅列为 NULL 时才退回现算。`/jobs` 主搜索冷路径另说（见「/jobs 默认排序冷路径」段，仍未切）。
+8. **「对你有货」的对口数必须算在 `unstable_cache` 之外（2026-09-17 立）**：必投清单是静态北极星，不因用户方向增删公司，
+   变的只是先看谁。对口数 = 清单 ∩ 有该用户对得上的校招/实习岗，由 `lib/campus-facets.countFacetsForFit` 在同一份分面上算
+   （共用下标编码，必须与 `buildCampusFacets` 同文件）。⚠️ 它吃用户私有画像，进了按行业共享的快照就会把 A 的方向算给 B 看
+   （类型层用 `CachedCampusCard = Omit<…, fit*>` 堵死；live 30 家 7,537 岗只要 1~2ms）。⚠️ 下标数组为空有两种含义，靠
+   `fnRequested`/`cityRequested` 区分「没填」（全放行）与「填了但对不上」（应为 0）。⚠️ 判不出方向 `fitCount` 记 null 不是 0。
+   ⚠️ 对口数来自 10 分钟快照、总数每请求现算 → 必须夹上限，否则出现「对口 20 / 共 12」。
 7. **SQL 粗筛必须是 JS 准入门的超集，且直接认 `recruitment_category` 列**：`CAMPUS_PREFILTER_SQL` 曾停在 2026-08-07
    之前的 url 正则（不认 moka 的 `-recruitment` / `_apply` 后缀、不认 `/internship/`），大疆 131/139、中兴 60/60 个
    「校招」在专区里静默消失。列与 JS 现算同源（`crawler/recruitment_classify.py` 隔进程调同一份 JS；live 对拍
