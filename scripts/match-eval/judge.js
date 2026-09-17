@@ -46,7 +46,9 @@ ${list}
 verdict 必须是 same_role / same_family / different / unclear 之一。
 必须为每个岗位都给一条，i 与序号一一对应。` },
   ];
-  const raw = await chatJSON(messages, { tag: "match-judge", maxTokens: 3000 });
+  // temperature 0：裁判必须可复现。2026-09-17 实测同一批 25 个岗（24 个完全相同）两次裁判严格准确率
+  // 88% 与 40%——尺子自己在抖，对拍出来的「升/降」全是噪音。配合下面的判决缓存，同一个岗只判一次。
+  const raw = await chatJSON(messages, { tag: "match-judge", maxTokens: 3000, temperature: 0 });
   const map = new Map();
   for (const r of raw?.results || []) if (r && Number.isFinite(Number(r.i))) map.set(Number(r.i), r);
   const VERDICTS = new Set(["same_role", "same_family", "different", "unclear"]);
@@ -57,7 +59,27 @@ verdict 必须是 same_role / same_family / different / unclear 之一。
   });
 }
 
+const CACHE_FILE = path.join(__dirname, "judge-cache.json");
+let _cache = null;
+function cache() {
+  if (_cache) return _cache;
+  try { _cache = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8")); } catch { _cache = {}; }
+  return _cache;
+}
+const ckey = (direction, t) => `${direction}\u0000${t.title}\u0000${t.company || ""}`;
+
 async function judgeAll(direction, items) {
+  // 判决缓存：同一（方向, 标题, 公司）只让 LLM 判一次，新旧代码对拍时同一个岗拿到同一个判决，
+  // 差异才是代码的差异。删 judge-cache.json 即重判。
+  const c = cache();
+  const pending = items.filter((t) => !c[ckey(direction, t)]);
+  const fresh = pending.length ? await judgeAllUncached(direction, pending) : [];
+  for (const j of fresh) if (j.verdict) c[ckey(direction, j)] = { verdict: j.verdict, job_direction: j.job_direction };
+  if (fresh.length) fs.writeFileSync(CACHE_FILE, JSON.stringify(c));
+  return items.map((t) => ({ ...t, ...(c[ckey(direction, t)] || { verdict: null, job_direction: null }) }));
+}
+
+async function judgeAllUncached(direction, items) {
   const out = [];
   for (let i = 0; i < items.length; i += BATCH) {
     let tries = 0, res = null;

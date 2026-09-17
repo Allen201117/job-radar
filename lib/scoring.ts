@@ -8,6 +8,7 @@ import {
   keywordMatchTier,
   classifyJobFunction,
   normalizeChinaCity,
+  normalizeRolePhrases,
 } from "./china-keyword-expansion";
 import { jobIndustryAllowed } from "./company-industry";
 
@@ -362,7 +363,8 @@ function shouldUseOverseasProfile(job: Job, preferences: UserPreferences): boole
 }
 
 function scoringTargetRoles(preferences: UserPreferences, overseasProfile: boolean): string[] {
-  const base = preferences.target_roles || [];
+  // 与 lib/opportunities/profile.ts 同口径：斜杠=或、去「相关/岗位」填充、去「办公室」修饰（normalizeRolePhrases）
+  const base = normalizeRolePhrases(preferences.target_roles || []);
   if (!overseasProfile) return base;
   return uniqueStrings([...(preferences.en_target_roles || []), ...base]);
 }

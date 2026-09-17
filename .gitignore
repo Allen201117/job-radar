@@ -43,3 +43,8 @@ scripts/match-eval/*-judged.json
 *.bak-[0-9]*
 *.bak
 runs/
+
+scripts/match-eval/judge-cache.json
+scripts/match-eval/eval-raw.json
+scripts/match-eval/*-judged.json
+scripts/match-eval/parsed-profiles.json

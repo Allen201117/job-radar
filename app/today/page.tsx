@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import Navbar from "@/components/Navbar";
 import { EmptyPanel, ProductHero, ProductPage } from "@/components/ProductChrome";
+import { deriveCountryCode } from "@/lib/geo";
 import { JobListSkeleton } from "@/components/Skeletons";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { buildRadarProfile, profileReadiness } from "@/lib/opportunities/profile";
@@ -10,6 +11,8 @@ import { resolveIntensityForUser } from "@/lib/opportunities/intensity";
 import { buildOpportunityFeed } from "@/lib/opportunities/service";
 import { getPopularFeed, type PopularFeed } from "@/lib/popular-feed";
 import type { OpportunityFeed } from "@/lib/opportunities/types";
+import type { RadarProfile } from "@/lib/opportunities/types";
+import type { CandidateProfile, UserPreferences } from "@/lib/types";
 import TodayClient, { OnboardingPanel } from "../today-client";
 import TodayPopularClient from "../today-popular-client";
 import { TODAY_HERO } from "./hero";
@@ -29,6 +32,8 @@ type TodayBundle = {
   popular: PopularFeed | null;
   /** 用户已存过的目标行业（兜底位的「设为我的行业」用它避免重复追问）。 */
   savedIndustries: string[];
+  /** 选了海外/全都要却在海外池里 0 岗（目标城市全是国内、无英文简历）→ 已按国内重算，页面要告诉他。 */
+  scopeFallback: "domestic" | null;
   /** shell 之前那 4 条 Supabase(悉尼) 并行查询耗时，诊断用。 */
   userRowsMs: number;
 };
@@ -63,6 +68,7 @@ async function loadTodayBundle(
       popular: await getPopularFeed(),
       savedIndustries: profile.targetIndustries,
       userRowsMs,
+      scopeFallback: null,
     };
   }
 
@@ -77,7 +83,7 @@ async function loadTodayBundle(
     now,
   );
 
-  const feed = await buildOpportunityFeed(supabase, profile, actions, radarState, {
+  let feed = await buildOpportunityFeed(supabase, profile, actions, radarState, {
     surface: "today",
     intensity,
     now,
@@ -85,7 +91,34 @@ async function loadTodayBundle(
     console.error("[today] feed build failed:", (e as Error).message);
     return null;
   });
-  return { readiness, feed, popular: null, savedIndustries: profile.targetIndustries, userRowsMs };
+  // 求职范围错配兜底（2026-09-17 走查 44 个真实用户，4 个推荐页 0 岗全栽在这）：顶栏一点「海外」，
+  // 画像却是「深圳 + 行政 + 没有英文简历」→ 海外池里当然一个都没有，页面就空着、不说为什么。
+  // 只在「海外池确实 0 岗 + 目标城市全是国内 + 没英文简历」三件同时成立时按国内重算一次，并把原因交给页面说清。
+  let scopeFallback: TodayBundle["scopeFallback"] = null;
+  if (feed && feedIsEmpty(feed) && shouldFallbackToDomestic(profile, ctx.candidate)) {
+    const domesticProfile = buildRadarProfile(userId, { ...(ctx.preferences as UserPreferences), job_scope: "domestic" }, ctx.candidate);
+    const domesticFeed = await buildOpportunityFeed(supabase, domesticProfile, actions, radarState, {
+      surface: "today",
+      intensity,
+      now,
+    }).catch(() => null);
+    if (domesticFeed && !feedIsEmpty(domesticFeed)) {
+      feed = domesticFeed;
+      scopeFallback = "domestic";
+    }
+  }
+  return { readiness, feed, popular: null, savedIndustries: profile.targetIndustries, userRowsMs, scopeFallback };
+}
+
+function feedIsEmpty(feed: OpportunityFeed): boolean {
+  return (feed.counts?.total ?? Object.values(feed.sections).reduce((n, arr) => n + arr.length, 0)) === 0;
+}
+
+function shouldFallbackToDomestic(profile: RadarProfile, candidate: CandidateProfile | null): boolean {
+  if (profile.jobScope === "domestic") return false;
+  if (candidate?.has_en_resume) return false;
+  const cities = profile.targetLocations;
+  return cities.length > 0 && cities.every((c: string) => deriveCountryCode(c) === "CN");
 }
 
 // 流式：先出页面骨架（导航 + 标题），用户小表查询与慢的跨区机会召回都在 Suspense 边界里流入，不阻塞整页。
@@ -206,5 +239,15 @@ async function TodayBody({ bundlePromise }: { bundlePromise: Promise<TodayBundle
       />
     );
   }
-  return <TodayClient feed={bundle.feed} />;
+  return (
+    <>
+      {bundle.scopeFallback === "domestic" && (
+        <p className="t-body-sm ink-2 mb-3 rounded-xl border border-black/[0.08] px-4 py-3 dark:border-white/[0.12]">
+          你把求职范围设成了海外，但目标城市都在国内、也还没有英文简历，海外岗位里没有匹配的机会。
+          下面按国内范围展示；要看海外机会，先在个人中心补一份英文简历。
+        </p>
+      )}
+      <TodayClient feed={bundle.feed} />
+    </>
+  );
 }

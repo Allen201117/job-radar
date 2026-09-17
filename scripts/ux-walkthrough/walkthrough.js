@@ -108,6 +108,12 @@ async function main() {
       const prof = findCompanyProfile(companyProfiles, c);
       if (prof && (insightCountByCompany.get(prof.id) || 0) > 0) withInsight += 1;
     }
+    // 求职范围错配：选了海外/全都要、目标城市却全是国内、又没有英文简历 → 海外池里当然找不到「行政/美工」。
+    // 页面侧（app/today）会回落国内并提示；这里单独标出来，别和「词库召不回」混成一种 0。
+    const CN_CITY_RE = /^(北京|上海|深圳|广州|杭州|成都|武汉|南京|西安|天津|长春|苏州|重庆|长沙|郑州|青岛|合肥|宁波|厦门|济南|大连|沈阳|福州|昆明|无锡|佛山|东莞)/;
+    const cities = prefs.target_locations || [];
+    const scopeMismatch = String(prefs.job_scope || "domestic") !== "domestic" && cities.length > 0
+      && cities.every((c) => CN_CITY_RE.test(String(c))) && !(cand && cand.has_en_resume) && !prefs.has_en_resume;
     const stage = String(prefs.experience_stage || (cand && cand.experience_stage) || "");
     let campus = null;
     if (CAMPUS_STAGES.has(stage)) {
@@ -121,7 +127,7 @@ async function main() {
       directionOk: inFn === null || !judged.length ? null : Number((inFn / judged.length).toFixed(2)),
       directionJudged: judged.length,
       filtered: rec.filtered,
-      insightCompanies: companies.length, insightCovered: withInsight, campus,
+      insightCompanies: companies.length, insightCovered: withInsight, campus, scopeMismatch, jobScope: prefs.job_scope || "domestic",
       top3: top.slice(0, 3).map((j) => `${j.title} @ ${j.company}`),
     });
   }
@@ -135,7 +141,8 @@ async function main() {
   const ok = results.filter((r) => !r.error);
   const issues = [];
   for (const r of ok) {
-    if (r.shown === 0) issues.push(`${r.user}：推荐页 0 岗（召回 ${r.recalled}，被拦原因 ${JSON.stringify(r.filtered)}）roles=${JSON.stringify(r.roles)}`);
+    if (r.shown === 0 && r.scopeMismatch) issues.push(`${r.user}：求职范围=${r.jobScope} 但目标城市全是国内且无英文简历 → 海外池 0 岗（roles=${JSON.stringify(r.roles)}）`);
+    else if (r.shown === 0) issues.push(`${r.user}：推荐页 0 岗（召回 ${r.recalled}，被拦原因 ${JSON.stringify(r.filtered)}）roles=${JSON.stringify(r.roles)}`);
     if (r.directionOk !== null && r.directionOk < DIRECTION_BAD) issues.push(`${r.user}：方向命中 ${Math.round(r.directionOk * 100)}%（roles=${JSON.stringify(r.roles)}）`);
     if (r.insightCompanies > 0 && r.insightCovered === 0) issues.push(`${r.user}：前 20 张卡的 ${r.insightCompanies} 家公司都没有洞察`);
     if (r.campus && r.campus.healthy === 0) issues.push(`${r.user}：校招用户，${r.campus.industries.join("/")} 必投 ${r.campus.listed} 家校招渠道全不通`);
@@ -148,6 +155,7 @@ async function main() {
   const summary = {
     users: ok.length, errors: results.length - ok.length,
     zero_shown: ok.filter((r) => r.shown === 0).length,
+    scope_mismatch: ok.filter((r) => r.scopeMismatch).length,
     median_shown: median(ok.map((r) => r.shown)),
     direction_ok_avg: avg(ok.map((r) => r.directionOk).filter((x) => x !== null)),
     insight_coverage_avg: avg(ok.filter((r) => r.insightCompanies > 0).map((r) => r.insightCovered / r.insightCompanies)),

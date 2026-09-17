@@ -7,6 +7,7 @@
 //   4. 所有数组大小写不敏感去重；
 //   5. dailyLimit clamp 5–30。
 // 唯一的「合并」字段是 target_industries（偏好 ∪ 简历），其余是「偏好优先，空则简历兜底」。
+import { normalizeRolePhrases } from "@/lib/china-keyword-expansion";
 import type { UserPreferences, CandidateProfile } from "../types";
 import type { RadarProfile, ExperienceStage, EducationLabel } from "./types";
 import { educationRank } from "../education-rank";
@@ -71,7 +72,8 @@ export function buildRadarProfile(
 ): RadarProfile {
   const jobScope = effectiveJobScope(prefs);
   const useEnglishProfile = (jobScope === "overseas" || jobScope === "all") && candidate?.has_en_resume === true;
-  const cnRoles = preferOrFallback(prefs?.target_roles, candidate?.target_roles);
+  // 手填岗位先拆干净（斜杠=或、去「相关/岗位」填充、去「办公室」修饰），见 china-keyword-expansion.normalizeRolePhrases
+  const cnRoles = normalizeRolePhrases(preferOrFallback(prefs?.target_roles, candidate?.target_roles));
   const cnKeywords = uniqStrings(prefs?.target_keywords);
   // 技能取简历档案优先、偏好列兜底：两处都由简历解析写入（迁移 202 起偏好也有 skills 列），
   // 老账号可能只有其中一处有值。技能只喂 skillTerms 加分，永不进方向判定（见 eligibility.ts:165）。

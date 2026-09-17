@@ -248,3 +248,13 @@ test("ftsCandidateTerms: 命中组的跨语言同义词，全部 >=2 字，不�
   assert.ok(!fe.includes("后端") && !fe.includes("算法"));
   assert.deepEqual(ftsCandidateTerms(""), []);
 });
+
+test("normalizeRolePhrases：斜杠=或、去填充后缀、去办公室修饰，剥空了保留原样", () => {
+  const { normalizeRolePhrases } = require("../lib/china-keyword-expansion.js");
+  assert.deepEqual(normalizeRolePhrases(["项目专员/助理"]), ["项目专员", "助理"]);
+  assert.deepEqual(normalizeRolePhrases(["英文相关", "技术岗位"]), ["英文", "技术"]);
+  assert.deepEqual(normalizeRolePhrases(["办公室文员", "仓库文员"]), ["文员", "仓库文员"]);
+  assert.deepEqual(normalizeRolePhrases(["产品经理"]), ["产品经理"]);
+  assert.deepEqual(normalizeRolePhrases(["岗位", "  "]), ["岗位"]);   // 只剩填充词 → 保留原样
+  assert.deepEqual(normalizeRolePhrases("AI 产品经理"), ["AI 产品经理"]);
+});
