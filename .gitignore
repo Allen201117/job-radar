@@ -48,3 +48,4 @@ scripts/match-eval/judge-cache.json
 scripts/match-eval/eval-raw.json
 scripts/match-eval/*-judged.json
 scripts/match-eval/parsed-profiles.json
+scripts/ux-walkthrough/campus-persona-coverage-raw.json

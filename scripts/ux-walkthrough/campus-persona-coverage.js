@@ -80,7 +80,10 @@ function escSqlLiteral(s) {
 }
 
 function buildDirectionTsquery(direction) {
-  const terms = ftsCandidateTerms(direction);
+  // PERSONA_NARROW=1：只用方向短语本身（不做词表扩展）。扩展版会把「工程师」这类泛词一并算进来，
+  // 机械/工艺/设备/化工/电气/土木工程师在同一城市档会得到几乎相同的岗数与公司数（2026-09-18 实测），
+  // 看覆盖时两列都要看：宽 = 产品实际召回口径，窄 = 该方向真实存在的岗。
+  const terms = process.env.PERSONA_NARROW ? [direction] : ftsCandidateTerms(direction);
   return buildTsquery(terms, [], []);
 }
 
