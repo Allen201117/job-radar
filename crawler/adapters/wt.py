@@ -23,6 +23,7 @@ company 由 sources.company 兜底（BRAND 仅用于路由，不当公司名，�
 直连 httpx（无头浏览器非必需），返回 PlaywrightAdapter.parse 可消费的 _intercepted 信封。
 """
 import json
+import re
 from typing import List, Optional
 from urllib.parse import urlparse
 
@@ -189,6 +190,31 @@ class WtAdapter(PlaywrightAdapter):
     # rt=12 现有 285 个判成社招 + 46 个判成校招。只标 1/12 是**单向纯增量**。
     _RT_CATEGORY_LABEL = {1: "校园招聘", 12: "实习"}
 
+    # ⛔ 「按院校设的投递入口」不是岗位，一律不入库（2026-09-18 立）。
+    # 中广核把校园招聘做成「每所目标院校一条 post」：postName 就是院校名（「北京建筑大学」
+    # 「海外院校」「其他院校」），workContent / serviceCondition 都只有一个句号。它们照样有
+    # 独立 postId 和可打开的详情页，所以质量门放行 —— 进库后 recruitType=1 又让它们全判成校招，
+    # 用户在校招专区看到 957 张标题是大学名、点开没有任何 JD 的卡片。
+    # 判据是**两条同时成立**，不是公司名（别写成 if company == 中广核，下一家照样中招）：
+    #   ① 标题整体就是一个院校 / 研究机构名（不是「XX-研究院」这种带职位的写法）；
+    #   ② 正文去掉句号与「【任职要求】」后为空。
+    # 2026-09-18 香港库全 wt 语料（20,600 个在招岗）逐行对拍这两条的**交集**：
+    #   命中 957 行 = 中广核全部 957 行，无第四家公司；
+    #   只中①不中②：4 行（特变电工「FPGA软件工程师-研究院」等真岗，正文完整）→ 保住；
+    #   只中②不中①：3 行（三棵树「行政接待类实习生」/ 特变电工「实习生（客房部）」等薄卡）→ 保住
+    #   （薄卡按 CLAUDE.md §4 该留在库里、只是不计入有效在招，不该被这道门顺手删掉）。
+    _INSTITUTION_TITLE = re.compile(
+        r"^[^,，/、|]{2,20}(?:大学|学院|院校|研究生院|研究院|研究所|学校)(?:（[^）]*）|\([^)]*\))?$")
+    _EMPTY_BODY = re.compile(r"[。\s【】任职要求]")
+
+    # 类属性起步、`+=` 时自动变成实例属性：不覆写 __init__，免得跟基类的构造签名纠缠。
+    _skipped_school_entries = 0
+
+    def _is_school_entry(self, title: str, summary: Optional[str]) -> bool:
+        if not self._INSTITUTION_TITLE.match(title.strip()):
+            return False
+        return not self._EMPTY_BODY.sub("", summary or "")
+
     def _map(self, post: dict) -> Optional[RawJob]:
         if not isinstance(post, dict):
             return None
@@ -203,6 +229,13 @@ class WtAdapter(PlaywrightAdapter):
         desc = _first(post, ("workContent", "description"))
         req = _first(post, ("serviceCondition", "requirement"))
         summary = (desc + ("\n\n【任职要求】\n" + req if req else "")).strip() or None
+        if self._is_school_entry(title, summary):
+            # 不吞声：累计并打一行，让「这源少了 957 条」在 CI 日志里有据可查。
+            self._skipped_school_entries += 1
+            if self._skipped_school_entries == 1:
+                print(f"    [wt:{self._brand}] 跳过「按院校设的投递入口」（标题=院校名且无正文），"
+                      f"首条：{title}", flush=True)
+            return None
         func_type = _first(post, ("postType", "postTypeName"))
         rt_label = self._RT_CATEGORY_LABEL.get(rt)
         # 职能类别 + 招聘类型词并存：sourceDeclaredCategory 只是子串匹配，两段拼一起互不干扰；

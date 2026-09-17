@@ -65,5 +65,52 @@ class WtRecruitTypeJobTypeTest(unittest.TestCase):
         self.assertEqual(by["社招岗"].job_type, "市场营销类")
 
 
+class WtSchoolEntryGateTest(unittest.TestCase):
+    """「按院校设的投递入口」不是岗位，不入库（2026-09-18 立，见 _INSTITUTION_TITLE 注释）。"""
+
+    def setUp(self):
+        self.a = WtAdapter()
+        self.a.company_name = "中广核"
+        self.a._bind_source("https://cgn.hotjob.cn/wt/CGN/web/index")
+
+    def _map(self, name, content="。", cond="。", rt=1):
+        return self.a._map({"postId": "1", "postName": name, "postType": "其他",
+                            "workContent": content, "serviceCondition": cond,
+                            "_wtRecruitType": rt})
+
+    def test_school_name_with_empty_body_is_dropped(self):
+        """中广核把校招做成「一所院校一条 post」：标题是院校名、正文只有一个句号。
+        2026-09-18 live 全库 957 行全是这个形态，用户在校招专区看到的是大学名而不是岗位。"""
+        for name in ("北京建筑大学", "电子科技大学", "海外院校", "其他院校",
+                     "中国地质大学（武汉）", "清华大学深圳国际研究生院",
+                     "中国原子能科学研究院", "哈尔滨焊接研究所"):
+            self.assertIsNone(self._map(name), f"应被拦下: {name}")
+
+    def test_real_job_whose_title_ends_with_institution_word_is_kept(self):
+        """⚠️ 单看标题会误杀：特变电工「FPGA软件工程师-研究院」是真岗（live 4 行）。
+        判据必须是「院校名标题」**且**「正文为空」的交集。"""
+        job = self._map("FPGA软件工程师-研究院",
+                        content="1、参与FPGA技术需求分析，设计相应场景下FPGA方案；")
+        self.assertIsNotNone(job)
+        self.assertEqual(job.title, "FPGA软件工程师-研究院")
+
+    def test_thin_card_with_normal_title_is_kept(self):
+        """⚠️ 单看正文也会误杀：三棵树「行政接待类实习生」正文同样为空，但它是真岗。
+        薄卡按 CLAUDE.md §4 该留在库里（只是不计入「有效在招」），不该被这道门顺手删掉。"""
+        self.assertIsNotNone(self._map("行政接待类实习生"))
+        self.assertIsNotNone(self._map("实习生（客房部）", rt=12))
+
+    def test_parse_skips_them_end_to_end_and_counts(self):
+        payload = json.dumps({"_intercepted": [{"postList": [
+            {"postId": "10", "postName": "上海交通大学", "postType": "其他",
+             "workContent": "。", "serviceCondition": "。", "_wtRecruitType": 1},
+            {"postId": "11", "postName": "核电运行值班员", "postType": "技术类",
+             "workContent": "负责机组运行监盘…", "_wtRecruitType": 1},
+        ]}]}, ensure_ascii=False)
+        jobs = self.a.parse(payload)
+        self.assertEqual([j.title for j in jobs], ["核电运行值班员"])
+        self.assertEqual(self.a._skipped_school_entries, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
