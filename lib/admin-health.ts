@@ -510,7 +510,7 @@ export type MustApplyGapAttemptRow = {
 export type MustApplyCampusChannelSummary = {
   healthy: number;
   idle: number;
-  /** 有校招渠道源、但近 3 天还有岗没分类完 → 判不了「零校招岗」（迁移 256）。不是缺陷，是「还不知道」。 */
+  /** 有校招渠道源、但近 3 天还有岗没分类完 → 判不了「零校招岗」（迁移 258）。不是缺陷，是「还不知道」。 */
   pending: number;
   missing: number;
   unknown: number;
@@ -679,7 +679,7 @@ export function summarizeMustApplyGapAttempts(
     if (channel === "healthy") campusChannel.healthy += 1;
     else if (channel === "idle") { campusChannel.idle += 1; if (name) campusChannel.idleCompanies.push(name); }
     // pending 刻意**不并进 idle**：并进去就等于又把「还没算完」说成「确认零校招岗」，
-    // 正是迁移 256 要消掉的那句假话。它单独计数、单独列名字。
+    // 正是迁移 258 要消掉的那句假话。它单独计数、单独列名字。
     else if (channel === "pending") { campusChannel.pending += 1; if (name) campusChannel.pendingCompanies.push(name); }
     else if (channel === "missing") { campusChannel.missing += 1; if (name) campusChannel.missingCompanies.push(name); }
     else campusChannel.unknown += 1;
