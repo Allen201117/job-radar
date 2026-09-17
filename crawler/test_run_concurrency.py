@@ -401,6 +401,8 @@ class ProcessOneSourceTest(unittest.TestCase):
         run.db.update_source_timestamp = lambda sb, sid: None
         run.check_robots = lambda url: {"allowed": True, "reason": ""}
         run.ADAPTERS["_fake_httpx"] = _FakeAdapter()
+        self.crawl_run_updates = []
+        run.db.update_crawl_run = lambda *a, **k: self.crawl_run_updates.append((a, k))
 
     def tearDown(self):
         run.db.create_crawl_run = self._orig["create"]
@@ -409,6 +411,38 @@ class ProcessOneSourceTest(unittest.TestCase):
         run.db.update_source_timestamp = self._orig["ts"]
         run.check_robots = self._orig["robots"]
         run.ADAPTERS.pop("_fake_httpx", None)
+
+    def test_fetch_completeness_controls_success_status_without_changing_success_semantics(self):
+        """有有效岗但列表没抓全应如实标 partial_success；完整和老 adapter 保持 success。"""
+        class _Incomplete(_FakeAdapter):
+            reported_total = 2
+            fetch_complete = False
+
+        class _Complete(_FakeAdapter):
+            reported_total = 1
+            fetch_complete = True
+
+        class _Legacy(_FakeAdapter):
+            pass
+
+        cases = [
+            ("_fake_incomplete", _Incomplete, "partial_success"),
+            ("_fake_complete", _Complete, "success"),
+            ("_fake_legacy", _Legacy, "success"),
+        ]
+        try:
+            for adapter_name, adapter_type, expected in cases:
+                run.ADAPTERS[adapter_name] = adapter_type()
+                result = run._process_one_source(
+                    {"adapter_name": adapter_name, "company": "测试公司",
+                     "source_url": "https://example.com/list", "id": adapter_name},
+                    supabase=None,
+                )
+                self.assertEqual(result["status"], expected)
+                self.assertEqual(self.crawl_run_updates[-1][0][2], expected)
+        finally:
+            for adapter_name, _adapter_type, _expected in cases:
+                run.ADAPTERS.pop(adapter_name, None)
 
     def test_returns_created_count(self):
         source = {"adapter_name": "_fake_httpx", "company": "测试公司",

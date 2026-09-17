@@ -556,10 +556,11 @@ def _process_one_source(source, supabase) -> dict:
         db.update_source_timestamp(supabase, source_id)
 
         # 7. update crawl_run
+        run_status = "partial_success" if invalid_reasons or _cov_complete is False else "success"
         db.update_crawl_run(
             supabase,
             run_id,
-            "partial_success" if invalid_reasons else "success",
+            run_status,
             jobs_found=len(valid_jobs),
             jobs_created=created,
             jobs_updated=updated,
@@ -578,7 +579,7 @@ def _process_one_source(source, supabase) -> dict:
         if invalid_reasons:
             print(f"    skipped invalid rows: {invalid_reasons}")
         print(f"    created={created}, updated={updated}")
-        return {"status": "partial_success" if invalid_reasons else "success",
+        return {"status": run_status,
                 "created": created, "updated": updated}
 
     except Exception as e:

@@ -33,6 +33,7 @@ import db
 import jobs_db
 import must_apply
 import ops_runs
+from adapters.playwright_base import install_dialog_guard as _install_dialog_guard
 from playwright.sync_api import sync_playwright
 
 
@@ -135,48 +136,6 @@ def is_same_document_nav(previous_url, url):
     if not previous_url or not url:
         return False
     return previous_url.split("#", 1)[0] == url.split("#", 1)[0]
-
-
-def _install_dialog_guard(page):
-    """页面自己弹的 JS 对话框(alert/confirm/beforeunload)必须显式接管，否则整个分片会被拖死。
-
-    2026-09-13 查实（3 次分片取消，日志与成因逐字一致）：北森 zhiye 站(如本文件覆盖的
-    ccccltd.zhiye.com)对已下架的岗位会在详情页用 `window.alert('职位已下架')` 提示——这是
-    页面自己的正常 UI 行为，不是攻击也不是我们代码的 bug。但本文件此前从未注册
-    `page.on("dialog", ...)`：没有监听器时，Playwright 默认由 Node 驱动进程自己在内部
-    自动 dismiss 该对话框；一旦这次自动 dismiss 与我们紧接着发起的下一跳
-    `goto()`（同一个 page 对象）发生并发——对话框刚弹出、页面/frame 却已经因为导航被
-    detach——驱动内部这次 `Page.handleJavaScriptDialog` 调用会抛出
-    "Not attached to an active page"，这是一个未被驱动自身捕获的 promise rejection，
-    Node 对未捕获的 rejection 默认整进程崩溃（`node:internal/process/promises:394
-    triggerUncaughtException`）退出。三次取消的 CI 日志逐字一致地卡在这一行之后。
-
-    修法 = 主动注册 dialog 监听器，让"是否需要处理这个对话框"这件事从驱动内部的黑盒
-    转移到我们自己的 Python 代码：一旦注册了监听器，Playwright 就不再由驱动自动
-    dismiss，而是要求我们显式调用 accept()/dismiss()——即使我们这次调用本身失败
-    (比如页面已经导航走、目标已 detach)，playwright-python 的 sync 事件分发
-    (`Connection.dispatch()` 的 `_is_sync` 分支，用 EventGreenlet 包一层再由
-    `_on_event_listener_error` 收敛)会把这个异常安全地存起来、在下一次 API 调用时
-    抛给我们的 Python 代码，而不会让 Node 驱动进程本身崩溃退出。
-
-    我们自己的处理逻辑必须绝不外抛：宁可漏判（这一岗当场渲染不出内容，classify()
-    会落到 unsure/suspect，绝不会被误判 dead）也不可让驱动死循环/崩溃拖死整个分片。"""
-
-    def _on_dialog(dialog):
-        try:
-            # beforeunload 的语义是"是否允许离开当前页"：dismiss=留在原地会顶住我们自己
-            # 发起的 goto()/reload()；我们才是发起导航的一方，理应放行。alert/confirm/
-            # prompt 没有这层含义，用 dismiss（相当于取消/关闭，不触发任何潜在副作用）。
-            if dialog.type == "beforeunload":
-                dialog.accept()
-            else:
-                dialog.dismiss()
-        except Exception as e:
-            sys.stderr.write(
-                f"\n  [dialog] 处理 {dialog.type}({dialog.message[:20]!r}) 失败(已忽略): "
-                f"{type(e).__name__}\n")
-
-    page.on("dialog", _on_dialog)
 
 
 def _start_watchdog(heartbeat, stop_event, timeout_s=None, poll_s=5, exit_fn=None):
