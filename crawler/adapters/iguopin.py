@@ -23,6 +23,7 @@ xiaoyuan.iguopin.com 「应届生职位 → 更多」的真实跳转 ``/job?natu
 import json
 import os
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 from urllib.parse import parse_qs, unquote, urlparse
@@ -44,6 +45,41 @@ _GROUP_CHILD_CAP = 60
 _GROUP_ANCHOR_TRIES = 5   # 最多拿前 5 个不同公司去问集团；模糊搜索的头几行就够定锚，再多是白烧
 _GROUP_CHILD_PAGE_CAP = 2
 _DETAIL_WORKERS = 3
+
+# 「这家公司在国聘口径下属于哪个集团」是**全局事实**，与是哪条源问的无关 → 进程级缓存。
+# 为什么值得：单源实测（中国建筑校招源，2026-09-17）墙钟 106s 里 **56.6s（53%）花在 251 次
+# company/index/v1/home 上**，而国聘 45 条源（28 社招 + 17 校招）同主机一队串行跑在同一个进程里，
+# 同一集团的社招源与校招源问的是同一批 company_id，子公司展开出来的公司更是反复出现。
+# ⚠️ 只缓存**定论**（"xxx" 有集团 / "" 查到了没有集团）；请求失败的 None 不缓存，
+#    否则一次网络抖动会把「暂时不知道」冻成整晚的结论（`_company_group_id` 的三态语义见其 docstring）。
+# ⚠️ 必须是进程级 + 加锁：并发档里 ADAPTERS 是**跨线程共享的单例**（见 run.py 的注释），
+#    实例字段会被别的线程覆写，而这份缓存按 company_id 存全局事实，跨线程共享是安全的。
+_GROUP_ID_CACHE: dict = {}
+# 定锚用的 (group_id, 集团简称, 集团全称)，同样按 company_id 存，共用 _GROUP_ID_LOCK。
+_GROUP_INFO_CACHE: dict = {}
+_GROUP_ID_LOCK = threading.Lock()
+
+# 同一个 job_id 在一晚里会被多条源抓到：同集团的社招源与校招源是同一个池子的两个视图
+# （校招源 = 社招源加 nature 筛），子公司展开还会让兄弟集团的源撞上同一批岗。
+# 实测中国建筑：社招 173 次详情 / 校招 124 次，且校招那批 job_id 基本是社招那批的子集。
+# ⚠️ 只在**本进程本轮**内复用：详情调用同时充当「这个岗此刻真实存在」的核验，
+#    跨轮/跨夜复用就等于拿旧证据放行，那是 `_detail_verified` 的语义红线。
+# ⚠️ 有上限、超了就整体清空（FIFO 太重，这里只求别把 runner 内存吃光）：
+#    正文动辄几 KB，45 条源 × 400 条不设限是上百 MB。
+_DETAIL_CACHE: dict = {}
+_DETAIL_CACHE_LOCK = threading.Lock()
+_DETAIL_CACHE_MAX = 4000
+
+
+def reset_process_caches() -> None:
+    """清空两个进程级缓存。生产代码不调用（一个进程 = 一轮抓取，缓存就该活满整轮）；
+    **单测必须在每个用例前调用**，否则上一个用例缓存下来的 job_id/company_id 会让下一个用例
+    少发请求 —— 加缓存时就是这么被 test_fetch_verifies_group_child... 当场抓到的。"""
+    with _GROUP_ID_LOCK:
+        _GROUP_ID_CACHE.clear()
+        _GROUP_INFO_CACHE.clear()
+    with _DETAIL_CACHE_LOCK:
+        _DETAIL_CACHE.clear()
 
 
 class IguopinAdapter(BaseAdapter):
@@ -89,6 +125,8 @@ class IguopinAdapter(BaseAdapter):
         listed = len(rows)
         # 即使没配 match，集团展开进来的行也要过归属核验——旁路必须堵死。
         if match or group_ok:
+            if group_ok:
+                self._prefetch_group_ids(rows, headers)
             rows[:] = [row for row in rows if _row_passes_match(row, match, group_ok)]
         # 归属核验只有 fetch 做得了（要联网查国聘的集团口径），parse 里没有这个能力。
         # 打个标把结论带下去，否则 parse 的那道复查会按「名字核名」把真子公司再毙一次
@@ -204,7 +242,41 @@ class IguopinAdapter(BaseAdapter):
         把「没有集团」和「查不到」混成一种，正是张冠李戴修不掉的原因：
         中国（海南）改革发展研究院在国聘上写着「民营企业、无集团」，
         当成「查不到 → 保守放行」就永远挡不住它。
+        进程级缓存只存前两种（定论），None 每次重查——见 `_GROUP_ID_CACHE` 的注释。
         """
+        cid = str(company_id or "").strip()
+        with _GROUP_ID_LOCK:
+            if cid in _GROUP_ID_CACHE:
+                return _GROUP_ID_CACHE[cid]
+        found = self._fetch_company_group_id(cid, headers)
+        if found is not None:
+            with _GROUP_ID_LOCK:
+                _GROUP_ID_CACHE[cid] = found
+        return found
+
+    def _prefetch_group_ids(self, rows, headers: dict) -> None:
+        """把本源要问的 company_id 先并发灌进 `_GROUP_ID_CACHE`，再走串行的逐行核验。
+
+        为什么要这一步：核验本身必须逐行串行（判据要按行用），但**取事实**可以并发。
+        实测（中国建筑校招源）251 次 company home 串行 56.6s，是单源墙钟 106s 的 53%。
+        并发度沿用 `_DETAIL_WORKERS`（逐岗详情同样对 gp-api 开 3 路，是已在线上跑了两个月的档位），
+        **不额外抬高对国聘的并发**。"""
+        seen, todo = set(), []
+        for row in rows or []:
+            cid = str((row or {}).get("company_id") or "").strip() if isinstance(row, dict) else ""
+            if not cid or cid in seen:
+                continue
+            seen.add(cid)
+            with _GROUP_ID_LOCK:
+                if cid in _GROUP_ID_CACHE:
+                    continue
+            todo.append(cid)
+        if not todo:
+            return
+        with ThreadPoolExecutor(max_workers=_DETAIL_WORKERS) as executor:
+            list(executor.map(lambda cid: self._company_group_id(cid, headers), todo))
+
+    def _fetch_company_group_id(self, company_id: str, headers: dict):
         try:
             response = httpx.get(_COMPANY_HOME_API, params={"company_id": company_id},
                                  headers=headers, timeout=self.timeout, follow_redirects=True)
@@ -229,7 +301,8 @@ class IguopinAdapter(BaseAdapter):
         判据是 group_id，不是名字——名字核不住：鼎和财产保险是南方电网真子公司、
         名字里却没有「南方电网」；反过来「中国（海南）改革发展研究院」名字里有「海南」，
         被「海南电网有限责任公司」这个关键词搜了回来，实际是民营企业。
-        按 company_id 缓存，一家公司只查一次（单源实测 20~100 家，成本可接受）。
+        按 company_id 缓存，一家公司只查一次（本地缓存 + 进程级 `_GROUP_ID_CACHE`：
+        同一集团的社招源与校招源问的是同一批公司，45 条源跑在同一个进程里，跨源复用是白捡的）。
 
         失败语义：查到「无集团」→ **拒**（定论）；请求失败 → 放行（暂时不知道，下轮重查，
         宁可多留一条待发现的错归属，也不因为对方接口抖一下就丢掉整源真岗）。
@@ -248,6 +321,15 @@ class IguopinAdapter(BaseAdapter):
         return ok
 
     def _group_info(self, company_id: str, headers: dict):
+        """定锚：这家公司的集团 id / 简称 / 全称。同样是全局事实 → 进程级缓存
+        （社招源与校招源是同一个集团的两个视图，锚点行往往就是同一家公司）。
+        `_last_group_name` 是**实例字段**，命中缓存时也必须照样写回 —— 调用方紧接着就读它。"""
+        cid = str(company_id or "").strip()
+        with _GROUP_ID_LOCK:
+            hit = _GROUP_INFO_CACHE.get(cid)
+        if hit is not None:
+            group_id, group_short_name, self._last_group_name = hit
+            return group_id, group_short_name
         response = httpx.get(_COMPANY_HOME_API, params={"company_id": company_id}, headers=headers,
                              timeout=self.timeout, follow_redirects=True)
         response.raise_for_status()
@@ -268,6 +350,13 @@ class IguopinAdapter(BaseAdapter):
             self._last_group_name = _text(info.get("group_name"))
         if not group_id or not group_short_name:
             raise ValueError("iguopin company home response missing group metadata")
+        # 定锚这一跳问的也是 company home，结论与 `_company_group_id` 同口径 → 顺手灌进缓存。
+        # 每条源最多试 5 个锚点，45 条源就是最多 225 次可以省掉的重复请求。
+        own_group = own_id if info.get("classify_cn") == "央企(集团)" else \
+            str(info.get("group_id") or "").strip()
+        with _GROUP_ID_LOCK:
+            _GROUP_ID_CACHE[cid] = own_group
+            _GROUP_INFO_CACHE[cid] = (group_id, group_short_name, self._last_group_name)
         return group_id, group_short_name
 
     def _group_children(self, group_id: str, headers: dict) -> List[str]:
@@ -286,30 +375,44 @@ class IguopinAdapter(BaseAdapter):
         return names
 
     def _enrich_details(self, rows: List[dict], headers: dict) -> int:
-        """读取每条公开详情；只有确认存在的逐岗详情才在 parse 中放行。"""
-        def enrich_row(row: dict) -> bool:
-            job_id = str(row.get("job_id") or "").strip()
-            if not job_id:
-                return False
+        """读取每条公开详情；只有确认存在的逐岗详情才在 parse 中放行。
+        本进程本轮已核过的 job_id 直接复用（见 `_DETAIL_CACHE` 注释）。"""
+        def fetch_detail(job_id: str):
+            with _DETAIL_CACHE_LOCK:
+                if job_id in _DETAIL_CACHE:
+                    return _DETAIL_CACHE[job_id]
             try:
                 response = httpx.get(_DETAIL_API, params={"id": job_id}, headers=headers,
                                      timeout=self.timeout, follow_redirects=True)
                 if response.status_code >= 300:
-                    return False
+                    return None
                 body = response.json() or {}
                 detail = body.get("data") if body.get("code") == 200 else None
                 if not isinstance(detail, dict) or str(detail.get("job_id") or "") != job_id:
-                    return False
-                row["_detail_verified"] = True
-                row["_jd"] = detail.get("contents") or row.get("contents")
-                # Detail 是 title/source of truth，列表的瞬时卡片字段不覆盖它。
-                for key in ("job_name", "company_name", "district_list", "education_cn",
-                            "experience_cn", "end_time", "recruitment_type_cn"):
-                    if detail.get(key) not in (None, ""):
-                        row[key] = detail[key]
-                return True
+                    return None
             except (httpx.HTTPError, ValueError, TypeError):
+                return None
+            with _DETAIL_CACHE_LOCK:
+                if len(_DETAIL_CACHE) >= _DETAIL_CACHE_MAX:
+                    _DETAIL_CACHE.clear()
+                _DETAIL_CACHE[job_id] = detail
+            return detail
+
+        def enrich_row(row: dict) -> bool:
+            job_id = str(row.get("job_id") or "").strip()
+            if not job_id:
                 return False
+            detail = fetch_detail(job_id)
+            if detail is None:
+                return False
+            row["_detail_verified"] = True
+            row["_jd"] = detail.get("contents") or row.get("contents")
+            # Detail 是 title/source of truth，列表的瞬时卡片字段不覆盖它。
+            for key in ("job_name", "company_name", "district_list", "education_cn",
+                        "experience_cn", "end_time", "recruitment_type_cn"):
+                if detail.get(key) not in (None, ""):
+                    row[key] = detail[key]
+            return True
 
         detail_rows = [row for row in rows[:resolve_detail_cap(self._DETAIL_CAP)]
                        if isinstance(row, dict)]
