@@ -71,6 +71,8 @@ MODULE_OUTPUT = {
     "annual_report": (("written",), ("checked",)),
     "gap_funnel": (("sources_added",), ("processed",)),
     "gap_funnel_browser": (("sources_added",), ("processed",)),
+    # 用户体验走查（scripts/ux-walkthrough）：有用户画像可走却一个都没走完 = 零产出。
+    "ux_walkthrough": (("users",), ("users",)),
     "campus_official_backlog": (("verified", "draft"), ("companies_processed",)),
     "campus_cycle_backlog": (("verified", "draft"), ("companies_processed",)),
     "campus_lane": (("snapshots",), ("sources",)),

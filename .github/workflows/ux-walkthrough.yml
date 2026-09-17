@@ -1,0 +1,34 @@
+# 用户体验走查：拿真实用户画像逐个模拟（推荐有没有岗 / 方向准不准 / 洞察有没有 / 校招专区可用度 / 接口 TTFB），
+# 每天一轮写 ops_runs(module=ux_walkthrough)。只读，不写任何用户数据。脚本与口径见 scripts/ux-walkthrough/walkthrough.js。
+name: ux-walkthrough
+
+on:
+  schedule:
+    - cron: "10 4 * * *"   # UTC 04:10 = 北京 12:10，日抓取与富化都跑完之后
+  workflow_dispatch:
+
+jobs:
+  walkthrough:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - run: npm ci --ignore-scripts
+      - name: Walk through real user profiles
+        run: node scripts/ux-walkthrough/walkthrough.js --record
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ux-walkthrough-raw
+          path: scripts/ux-walkthrough/walkthrough-raw.json
+          retention-days: 14
