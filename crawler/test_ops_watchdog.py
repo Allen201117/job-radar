@@ -760,6 +760,37 @@ class CrawlRunUnrecordedWatchdogTest(unittest.TestCase):
         self.assertEqual(W.evaluate_crawl_run_unrecorded(rows, today="2026-09-17"), [])
 
 
+class InsightSupplyStallTest(unittest.TestCase):
+    """规则 P：洞察库 7 天新增 active 条数（2026-09-17 加）。"""
+
+    def test_low_weekly_additions_alert(self):
+        rows = [_run("insight_backlog", "2026-09-17", active_added_7d=3)]
+        [finding] = W.evaluate_insight_supply_stall(rows, today="2026-09-17")
+        self.assertEqual(finding["rule"], "P")
+        self.assertIn("3", finding["summary"])
+
+    def test_healthy_weekly_additions_silent(self):
+        rows = [_run("insight_backlog", "2026-09-17", active_added_7d=400)]
+        self.assertEqual(W.evaluate_insight_supply_stall(rows, today="2026-09-17"), [])
+
+    def test_missing_metric_silent(self):
+        """老台账行没有这个指标，不能当成 0 报警。"""
+        rows = [_run("insight_backlog", "2026-09-17", checked=5)]
+        self.assertEqual(W.evaluate_insight_supply_stall(rows, today="2026-09-17"), [])
+
+    def test_none_metric_silent(self):
+        """None = 没数出来，跟「真的一条没长」是两回事。"""
+        rows = [_run("insight_backlog", "2026-09-17", active_added_7d=None)]
+        self.assertEqual(W.evaluate_insight_supply_stall(rows, today="2026-09-17"), [])
+
+    def test_uses_latest_run_date(self):
+        rows = [
+            _run("insight_backlog", "2026-09-10", active_added_7d=1),
+            _run("insight_backlog", "2026-09-17", active_added_7d=500),
+        ]
+        self.assertEqual(W.evaluate_insight_supply_stall(rows, today="2026-09-17"), [])
+
+
 class AdapterCollapseTest(unittest.TestCase):
     """规则 K：adapter 整体产出塌了，status 却照样 success（2026-09-13 加）。
 
