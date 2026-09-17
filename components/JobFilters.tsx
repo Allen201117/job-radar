@@ -36,6 +36,15 @@ interface Props {
   /** 「查看 N 个岗位」上的计数文案；撞取数上限时是「8000+」这类下限表述（见 lib/match-total）。 */
   resultTotalText: string;
   jobScope?: string | null;
+  /**
+   * 招聘类型由**调用方**锁定（校招专区：由页面顶部的「校招 / 实习」切换驱动）。
+   *
+   * true 时做两件事，缺一不可：① 筛选条与筛选弹窗都不渲染「招聘类型」控件；
+   * ② 已选条件行里不出 `jobType` chip —— 那个 chip 点一下就把它清成「全部」，
+   * 校招专区会**静默**开始混进社招岗（不报错、不崩，只是不再是校招专区）。
+   * 第三条泄漏路径「重置全部」由调用方自己的 `onClearAll` 堵（见 lib/campus-zone.campusResetFilters）。
+   */
+  lockedJobType?: boolean;
 }
 
 type PopoverName = "city" | "jobFunction" | "experience" | "keyword" | "company" | null;
@@ -81,6 +90,7 @@ export default function JobFilters({
   companies,
   resultTotalText,
   jobScope = "domestic",
+  lockedJobType = false,
 }: Props) {
   const [activePopover, setActivePopover] = useState<PopoverName>(null);
   // 存的是「更多」按钮被点那一刻的位置，不只是开关状态——桌面端弹窗要从这颗按钮的位置放大展开。
@@ -97,7 +107,7 @@ export default function JobFilters({
   };
   const togglePopover = (name: PopoverName) => setActivePopover((current) => (current === name ? null : name));
 
-  const activeChips = collectActiveChips(filters, overseas);
+  const activeChips = collectActiveChips(filters, overseas, lockedJobType);
   const allFiltersCount = countPanelFilters(filters, overseas);
 
   return (
@@ -105,7 +115,7 @@ export default function JobFilters({
       <div className="sticky top-14 z-30 -mx-1 border-b border-black/[0.08] bg-[#f4efe6]/95 px-1 py-2.5 dark:border-white/[0.1] dark:bg-[#16130f]/95">
         <div className="hidden items-center gap-2 overflow-x-auto scrollbar-hide lg:flex">
           <FilterField label="城市" value={compactMultiValue(filters.city)} active={Boolean(filters.city)} open={activePopover === "city"} onToggle={() => togglePopover("city")} icon={<MapPin size={15} weight="fill" aria-hidden="true" />} onClose={() => setActivePopover(null)}><MultiValueEditor value={filters.city} onChange={(value) => set("city", value)} ariaLabel="城市，可多选" placeholder="输入城市后按回车" /></FilterField>
-          <RecruitmentType value={filters.jobType} onChange={(value) => set("jobType", value)} />
+          {!lockedJobType && <RecruitmentType value={filters.jobType} onChange={(value) => set("jobType", value)} />}
           <FilterField label="岗位方向" value={compactMultiValue([filters.jobFunction, filters.jobRole].filter(Boolean).join(","))} active={Boolean(filters.jobFunction || filters.jobRole)} open={activePopover === "jobFunction"} onToggle={() => togglePopover("jobFunction")} onClose={() => setActivePopover(null)}><FunctionPicker functionValue={filters.jobFunction} roleValue={filters.jobRole} onChangeFunction={(value) => set("jobFunction", value)} onChangeRole={(value) => set("jobRole", value)} /></FilterField>
           <FilterField label="经验" value={labelFor(EXPERIENCE, filters.experience)} active={Boolean(filters.experience)} open={activePopover === "experience"} onToggle={() => togglePopover("experience")} onClose={() => setActivePopover(null)}><PillGroup options={EXPERIENCE} value={filters.experience} onChange={(value) => set("experience", value)} ariaLabel="工作经验" /></FilterField>
           <FilterField label="关键词" value={compactMultiValue(filters.keyword)} active={Boolean(filters.keyword)} open={activePopover === "keyword"} onToggle={() => togglePopover("keyword")} icon={<MagnifyingGlass size={15} weight="bold" aria-hidden="true" />} onClose={() => setActivePopover(null)}><MultiValueEditor value={filters.keyword} onChange={(value) => set("keyword", value)} ariaLabel="关键词，可多选" placeholder="输入关键词后按回车" /></FilterField>
@@ -141,6 +151,7 @@ export default function JobFilters({
         companies={companies}
         resultTotalText={resultTotalText}
         overseas={overseas}
+        lockedJobType={lockedJobType}
       />
     </section>
   );
@@ -448,7 +459,7 @@ function SelectedChips({ chips, onClearAll, onClearOne }: { chips: ActiveChip[];
   return <div className="flex items-center gap-2 overflow-x-auto px-1 pb-1 scrollbar-hide" aria-label="已选筛选条件"><div className="flex min-w-max gap-1.5">{chips.map((chip) => <button key={chip.id} type="button" onClick={() => onClearOne(chip.key, chip.value)} className="chip ink-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a1714]/30 dark:focus-visible:ring-[#f3ecdf]/35"><X size={13} weight="bold" aria-hidden="true" />{chip.label}</button>)}</div><button type="button" onClick={onClearAll} className="t-label ink-3 ml-auto shrink-0 px-2 py-1 hover:ink-1">清空全部</button></div>;
 }
 
-function AllFiltersPanel({ origin, filters, onChange, onClearAll, onClose, companies, resultTotalText, overseas }: { origin: PanelOrigin | null; filters: Filters; onChange: (key: keyof Filters, value: Filters[keyof Filters]) => void; onClearAll: () => void; onClose: () => void; companies: string[]; resultTotalText: string; overseas: boolean }) {
+function AllFiltersPanel({ origin, filters, onChange, onClearAll, onClose, companies, resultTotalText, overseas, lockedJobType = false }: { origin: PanelOrigin | null; filters: Filters; onChange: (key: keyof Filters, value: Filters[keyof Filters]) => void; onClearAll: () => void; onClose: () => void; companies: string[]; resultTotalText: string; overseas: boolean; lockedJobType?: boolean }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const open = origin !== null;
   useEscapeKey(onClose, open);
@@ -465,7 +476,7 @@ function AllFiltersPanel({ origin, filters, onChange, onClearAll, onClose, compa
     "--fy": `${Math.round(origin.y + origin.h / 2 - window.innerHeight / 2)}px`,
     "--fs": "0.28",
   } as CSSProperties;
-  return <div className="job-filter-backdrop fixed inset-0 z-50 flex items-end bg-[#1a1714]/45 p-0 backdrop-blur-[3px] dark:bg-black/65 lg:items-center lg:justify-center lg:p-6" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={panelRef} role="dialog" aria-modal="true" aria-label="筛选" tabIndex={-1} style={growStyle} className="job-filter-panel flex h-[85dvh] w-full flex-col rounded-t-3xl bg-[#f4efe6] shadow-2xl outline-none dark:bg-[#16130f] lg:h-auto lg:max-h-[82vh] lg:w-[40rem] lg:rounded-3xl" onMouseDown={(event) => event.stopPropagation()}><div className="flex items-center justify-between border-b border-black/[0.08] px-5 py-4 dark:border-white/[0.1]"><h2 className="t-h2">筛选</h2><button type="button" onClick={onClose} aria-label="关闭筛选" className="grid size-9 place-items-center rounded-full ink-3 hover:bg-black/[0.06] hover:ink-1 dark:hover:bg-white/[0.1]"><X size={18} weight="bold" aria-hidden="true" /></button></div><div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5"><div className="space-y-3 lg:hidden"><PanelTitle>基础条件</PanelTitle><MultiValueEditor value={filters.city} onChange={(value) => onChange("city", value)} ariaLabel="城市，可多选" placeholder="城市，可多选" /><RecruitmentType value={filters.jobType} onChange={(value) => onChange("jobType", value)} /><FunctionPicker functionValue={filters.jobFunction} roleValue={filters.jobRole} onChangeFunction={(value) => onChange("jobFunction", value)} onChangeRole={(value) => onChange("jobRole", value)} /><MultiValueEditor value={filters.keyword} onChange={(value) => onChange("keyword", value)} ariaLabel="关键词，可多选" placeholder="关键词，可多选" /><CompanyPicker value={filters.company} onChange={(value) => onChange("company", value)} companies={companies} /></div><div className="space-y-3"><PanelTitle>岗位要求</PanelTitle><PillField label="学历" options={EDUCATION.map((item) => ({ value: item === "不限" ? "" : item, label: item }))} value={filters.education} onChange={(value) => onChange("education", value)} /><PillField label="经验" options={EXPERIENCE} value={filters.experience} onChange={(value) => onChange("experience", value)} /></div><div className="space-y-3"><PanelTitle>岗位新鲜度</PanelTitle><PillField label="发布时间" options={POSTED_WITHIN} value={filters.postedWithin} onChange={(value) => onChange("postedWithin", value)} /><Toggle label="仅新岗位" checked={filters.showNewOnly} onChange={(value) => onChange("showNewOnly", value)} /></div><div className="space-y-3"><PanelTitle>公司</PanelTitle><PillField label="资本来源" options={ORIGINS.map((item) => ({ value: item === "全部" ? "" : item, label: item }))} value={filters.capitalOrigin} onChange={(value) => onChange("capitalOrigin", value)} /><CompanyTierPicker value={filters.companyTier} onChange={(value) => onChange("companyTier", value)} /></div>{overseas && <div className="space-y-3"><PanelTitle>海外</PanelTitle><PillField label="目标地区" options={REGIONS} value={filters.region} onChange={(value) => onChange("region", value)} /><Toggle label="仅显示提供 Sponsorship 的岗位" checked={filters.sponsorshipOnly} onChange={(value) => onChange("sponsorshipOnly", value)} /></div>}<div className="space-y-3"><PanelTitle>展示</PanelTitle><Toggle label="仅显示公开薪资的岗位" checked={filters.salaryOnly} onChange={(value) => onChange("salaryOnly", value)} /><Toggle label="显示已忽略" checked={filters.showIgnored} onChange={(value) => onChange("showIgnored", value)} /><Toggle label="显示已投递" checked={filters.showApplied} onChange={(value) => onChange("showApplied", value)} /><PillField label="排序" options={[{ value: "match", label: "按匹配度" }, { value: "newest", label: "按发布时间" }]} value={filters.sortBy} onChange={(value) => onChange("sortBy", value as Filters["sortBy"])} /></div></div><div className="flex items-center gap-3 border-t border-black/[0.08] bg-[#f4efe6] px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] dark:border-white/[0.1] dark:bg-[#16130f]"><button type="button" onClick={onClearAll} className="t-label ink-3 shrink-0 px-2 py-2 hover:ink-1">重置全部</button><button type="button" onClick={onClose} className="btn-ink-sm min-w-0 flex-1"><span>查看</span><span className="t-num">{resultTotalText}</span><span>个岗位</span></button></div></div></div>;
+  return <div className="job-filter-backdrop fixed inset-0 z-50 flex items-end bg-[#1a1714]/45 p-0 backdrop-blur-[3px] dark:bg-black/65 lg:items-center lg:justify-center lg:p-6" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={panelRef} role="dialog" aria-modal="true" aria-label="筛选" tabIndex={-1} style={growStyle} className="job-filter-panel flex h-[85dvh] w-full flex-col rounded-t-3xl bg-[#f4efe6] shadow-2xl outline-none dark:bg-[#16130f] lg:h-auto lg:max-h-[82vh] lg:w-[40rem] lg:rounded-3xl" onMouseDown={(event) => event.stopPropagation()}><div className="flex items-center justify-between border-b border-black/[0.08] px-5 py-4 dark:border-white/[0.1]"><h2 className="t-h2">筛选</h2><button type="button" onClick={onClose} aria-label="关闭筛选" className="grid size-9 place-items-center rounded-full ink-3 hover:bg-black/[0.06] hover:ink-1 dark:hover:bg-white/[0.1]"><X size={18} weight="bold" aria-hidden="true" /></button></div><div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5"><div className="space-y-3 lg:hidden"><PanelTitle>基础条件</PanelTitle><MultiValueEditor value={filters.city} onChange={(value) => onChange("city", value)} ariaLabel="城市，可多选" placeholder="城市，可多选" />{!lockedJobType && <RecruitmentType value={filters.jobType} onChange={(value) => onChange("jobType", value)} />}<FunctionPicker functionValue={filters.jobFunction} roleValue={filters.jobRole} onChangeFunction={(value) => onChange("jobFunction", value)} onChangeRole={(value) => onChange("jobRole", value)} /><MultiValueEditor value={filters.keyword} onChange={(value) => onChange("keyword", value)} ariaLabel="关键词，可多选" placeholder="关键词，可多选" /><CompanyPicker value={filters.company} onChange={(value) => onChange("company", value)} companies={companies} /></div><div className="space-y-3"><PanelTitle>岗位要求</PanelTitle><PillField label="学历" options={EDUCATION.map((item) => ({ value: item === "不限" ? "" : item, label: item }))} value={filters.education} onChange={(value) => onChange("education", value)} /><PillField label="经验" options={EXPERIENCE} value={filters.experience} onChange={(value) => onChange("experience", value)} /></div><div className="space-y-3"><PanelTitle>岗位新鲜度</PanelTitle><PillField label="发布时间" options={POSTED_WITHIN} value={filters.postedWithin} onChange={(value) => onChange("postedWithin", value)} /><Toggle label="仅新岗位" checked={filters.showNewOnly} onChange={(value) => onChange("showNewOnly", value)} /></div><div className="space-y-3"><PanelTitle>公司</PanelTitle><PillField label="资本来源" options={ORIGINS.map((item) => ({ value: item === "全部" ? "" : item, label: item }))} value={filters.capitalOrigin} onChange={(value) => onChange("capitalOrigin", value)} /><CompanyTierPicker value={filters.companyTier} onChange={(value) => onChange("companyTier", value)} /></div>{overseas && <div className="space-y-3"><PanelTitle>海外</PanelTitle><PillField label="目标地区" options={REGIONS} value={filters.region} onChange={(value) => onChange("region", value)} /><Toggle label="仅显示提供 Sponsorship 的岗位" checked={filters.sponsorshipOnly} onChange={(value) => onChange("sponsorshipOnly", value)} /></div>}<div className="space-y-3"><PanelTitle>展示</PanelTitle><Toggle label="仅显示公开薪资的岗位" checked={filters.salaryOnly} onChange={(value) => onChange("salaryOnly", value)} /><Toggle label="显示已忽略" checked={filters.showIgnored} onChange={(value) => onChange("showIgnored", value)} /><Toggle label="显示已投递" checked={filters.showApplied} onChange={(value) => onChange("showApplied", value)} /><PillField label="排序" options={[{ value: "match", label: "按匹配度" }, { value: "newest", label: "按发布时间" }]} value={filters.sortBy} onChange={(value) => onChange("sortBy", value as Filters["sortBy"])} /></div></div><div className="flex items-center gap-3 border-t border-black/[0.08] bg-[#f4efe6] px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] dark:border-white/[0.1] dark:bg-[#16130f]"><button type="button" onClick={onClearAll} className="t-label ink-3 shrink-0 px-2 py-2 hover:ink-1">重置全部</button><button type="button" onClick={onClose} className="btn-ink-sm min-w-0 flex-1"><span>查看</span><span className="t-num">{resultTotalText}</span><span>个岗位</span></button></div></div></div>;
 }
 
 function PanelTitle({ children }: { children: ReactNode }) { return <h3 className="t-h3">{children}</h3>; }
@@ -475,7 +486,9 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
 function CountBadge({ count }: { count: number }) { return <span className="btn-ink-sm t-num absolute -right-1 -top-1 grid size-4 place-items-center !p-0">{count}</span>; }
 
 type ActiveChip = { id: string; key: keyof Filters; value?: string; label: string };
-function collectActiveChips(filters: Filters, overseas: boolean): ActiveChip[] {
+// lockedJobType 时**必须**把 jobType chip 摘掉：chip 点一下就把它清成「全部」，
+// 而校招专区靠这一项把结果限在校招/实习 —— 清掉不报错、不崩，只是专区静默混进社招岗。
+function collectActiveChips(filters: Filters, overseas: boolean, lockedJobType = false): ActiveChip[] {
   const values: ActiveChip[] = [];
   const addMany = (key: "city" | "keyword" | "jobFunction" | "jobRole" | "companyTier", prefix = "") => splitMultiValue(filters[key]).forEach((value) => values.push({ id: `${key}-${value}`, key, value, label: `${prefix}${key ==="jobRole"? roleLabel(value) : value}` }));
   addMany("city");
@@ -483,7 +496,7 @@ function collectActiveChips(filters: Filters, overseas: boolean): ActiveChip[] {
   addMany("jobFunction");
   addMany("jobRole");
   addMany("companyTier");
-  const singles: Array<[keyof Filters, string, string]> = [["company", filters.company, "公司："], ["jobType", filters.jobType, ""], ["experience", labelFor(EXPERIENCE, filters.experience), ""], ["education", filters.education, ""], ["postedWithin", labelFor(POSTED_WITHIN, filters.postedWithin), ""], ["capitalOrigin", filters.capitalOrigin, ""], ["region", overseas ? labelFor(REGIONS, filters.region) : "", ""], ["sortBy", filters.sortBy === "newest" ? "按发布时间" : "", ""]];
+  const singles: Array<[keyof Filters, string, string]> = [["company", filters.company, "公司："], ["jobType", lockedJobType ? "" : filters.jobType, ""], ["experience", labelFor(EXPERIENCE, filters.experience), ""], ["education", filters.education, ""], ["postedWithin", labelFor(POSTED_WITHIN, filters.postedWithin), ""], ["capitalOrigin", filters.capitalOrigin, ""], ["region", overseas ? labelFor(REGIONS, filters.region) : "", ""], ["sortBy", filters.sortBy === "newest" ? "按发布时间" : "", ""]];
   singles.forEach(([key, value, prefix]) => { if (value) values.push({ id: `${key}-${value}`, key, label: `${prefix}${value}` }); });
   ([["showNewOnly", filters.showNewOnly, "仅新岗位"], ["salaryOnly", filters.salaryOnly, "仅公开薪资"], ["sponsorshipOnly", overseas && filters.sponsorshipOnly, "仅 Sponsorship"], ["showIgnored", filters.showIgnored, "显示已忽略"], ["showApplied", filters.showApplied, "显示已投递"]] as Array<[keyof Filters, boolean, string]>).forEach(([key, enabled, label]) => { if (enabled) values.push({ id: String(key), key, label }); });
   return values;

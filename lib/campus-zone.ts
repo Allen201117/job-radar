@@ -4,6 +4,60 @@ import { recruitmentCategory } from "./china-keyword-expansion";
 
 export type CampusAdmission = "campus" | "intern" | "reject";
 
+/** 专区的两种模式。两个视图（全部校招岗 / 必投 30 家）共用同一个状态。 */
+export type RecruitMode = "campus" | "intern";
+
+/** 专区顶部的两种视图。默认 `all`（创始人 2026-09-18 定：专区 = 校招岗位库，不是 30 家公司）。 */
+export type CampusView = "all" | "must";
+
+/** 上次选的视图记在这个 localStorage 键下；读写都必须包 try/catch（隐私窗口会抛）。 */
+export const CAMPUS_VIEW_STORAGE_KEY = "campus-view";
+
+export function isCampusView(value: unknown): value is CampusView {
+  return value === "all" || value === "must";
+}
+
+/**
+ * 模式 → `/api/jobs/search` 的 `jobType` 取值。
+ *
+ * ⚠️ 这两个字符串必须与 `lib/job-filter.ts` 的三桶分类、以及 `lib/jobs-store/search.ts` 的
+ * `appendRecruitmentPrefilter` 逐字一致 —— 那边是 `recruitment_category = '校招'` 这种字面量比较，
+ * 这里写错一个字不会报错，只会让专区返回空列表。
+ */
+export const CAMPUS_MODE_JOB_TYPE: Record<RecruitMode, string> = {
+  campus: "校招",
+  intern: "实习",
+};
+
+/**
+ * 把 `jobType` 强制写成当前模式对应的值。
+ *
+ * 为什么需要它：「全部校招岗」视图用 `/api/jobs/search`，而那条接口一旦 `jobType` 为空就会
+ * 返回**全库岗位（含社招）**。这是**静默**失效——页面照常渲染、不报错、不变慢，只是校招专区
+ * 悄悄变成了岗位库。所以每一个会写 filters 的路径（切模式 / 清空全部 / 清空单项）都必须过这个函数。
+ *
+ * ⚠️ 别把它「简化」成只在切模式时调一次：清空按钮走的是另一条路（`DEFAULT_FILTERS.jobType === ""`），
+ * 漏掉它就正好把 jobType 抹掉。三条泄漏路径见 docs/superpowers/specs/2026-09-18-campus-zone-*。
+ */
+export function withCampusMode<T extends { jobType: string }>(filters: T, mode: RecruitMode): T {
+  const jobType = CAMPUS_MODE_JOB_TYPE[mode];
+  return filters.jobType === jobType ? filters : { ...filters, jobType };
+}
+
+/**
+ * 「清空全部」在专区里的语义：回到默认筛选，但**保留**排序偏好与当前模式的 jobType。
+ *
+ * 排序保留的理由与 `useJobFilters.clearAll` 一致（排序是展示偏好不是筛选条件，
+ * 用户刚切「按发布时间」不该被静默改回去）；jobType 保留的理由见 `withCampusMode`。
+ */
+export function campusResetFilters<T extends { jobType: string; sortBy: string }>(
+  defaults: T,
+  current: T,
+  mode: RecruitMode,
+): T {
+  return withCampusMode({ ...defaults, sortBy: current.sortBy } as T, mode);
+}
+
 // 专区准入门：直接复用 recruitmentCategory（已精度优先，弱词不判校招）。
 // campus = 进默认列表；intern = 单独可筛桶；reject = 不进专区（社招/无信号）。
 export function campusAdmission(job: any = {}): CampusAdmission {
