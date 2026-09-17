@@ -744,6 +744,12 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
   （lib/china-keyword-expansion.js，/today 与 /jobs 共用一处）；**角色词绝不能进锚点表**。
   「准确率涨了」必须逐条对拍 top-25 进出名单——第一版净值向好里藏着 3 个被杀掉的真岗（「商务」认领、括号限定语当角色）。
 - 匿名 `/api/jobs/search?sortBy=match` **不再拉 2.8 万行整窗**：无偏好打分全 0 = 纯新鲜度，走逐页攒够即停；有偏好才看满窗口。
+9. **默认态 = 全部校招岗，「必投 30 家」只是一个入口（2026-09-18 创始人拍板）**：库里 active 校招岗 69,138 个 / 978 家（`recruitment_explicit` 口径，
+   过当季届别门 66,051），而旧专区只给必投清单里的 ~30 家看——差两个数量级。现行形态：视图 A「全部校招岗」复用 `/api/jobs/search`
+   （`jobType` 锁成 校招/实习 下推物化列，登录 match 走粗排 1000 窗，**SSR 不下发任何岗位行**，挂载后才请求）；视图 B = 原必投看板一字未改，
+   顶部 Segmented 切换、localStorage 记上次选择。头部库存数走 `countCampusLibrary` + `unstable_cache` 300s，与列表候选同一份 where
+   （双向对拍：列表有头部无 2,292 / 头部有列表无 0，只会少说不会多说）。⚠️ `jobType` 锁定有三条静默泄漏路径（筛选控件 / 已选 chip / 清空），
+   契约测试 `tests/campus-all-jobs.test.js` 各有断言，别解开。设计与数字：`docs/superpowers/specs/2026-09-18-campus-zone-all-campus-jobs-design.md`。
 
 ## 认证
 
