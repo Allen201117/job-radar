@@ -224,7 +224,8 @@ export function groupOpportunities(
     spreadByCompany(
       takeWithCompanyDiversity(
         candidates
-          .filter((o) => !used.has(o.job.id) && isMainSignal(o) && o.score >= mainThreshold)
+          // functionOnly：只靠职能层捞到、方向没真命中 → 不进对口机会（下面拓展看看接住）
+          .filter((o) => !used.has(o.job.id) && !o.functionOnly && isMainSignal(o) && o.score >= mainThreshold)
           .sort(byScore),
         effectiveLimit,
       ),
@@ -244,7 +245,7 @@ export function groupOpportunities(
               isMainSignal(o) &&
               o.exploreEligible &&
               o.score >= 30 &&
-              o.score < mainThreshold
+              (o.score < mainThreshold || o.functionOnly)
           )
           .sort(byScore),
         EXPLORE_CAP,

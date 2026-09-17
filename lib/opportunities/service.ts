@@ -284,7 +284,8 @@ export async function buildOpportunityFeed(
       userAction: facts.userAction,
       viewed: facts.viewed,
       isNew: false, // grouping 据 noveltySince 填充
-      exploreEligible: facts.roleTier === "related" || facts.companyHit,
+      exploreEligible: facts.roleTier === "related" || facts.companyHit || Boolean((job as any).recall_function_only),
+      functionOnly: Boolean((job as any).recall_function_only) && facts.roleTier !== "exact",
       signals,
       intensity,
       lastCheckedAt: (job.enrich_checked_at as string | null) ?? null,

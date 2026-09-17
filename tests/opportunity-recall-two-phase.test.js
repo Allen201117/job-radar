@@ -289,3 +289,21 @@ test("城市词带归一名：「深圳市」也要能命中 location 只写「�
   const cityTs = built.params.find((p) => typeof p === "string" && p.includes("深圳"));
   assert.ok(cityTs.includes("|"), `城市 tsquery 应 OR 上归一名：${cityTs}`);
 });
+
+test("stripTierColumns：只被 function 层捞到的岗打 recall_function_only，方向层也命中的不打", () => {
+  const tiers = ["role", "cityNew", "function"];
+  const rows = [
+    { id: "a", _tier: 0, _rn: 1 },            // 方向层
+    { id: "b", _tier: 2, _rn: 1 },            // 只在职能层
+    { id: "c", _tier: 2, _rn: 2 },            // 职能层先出现……
+    { id: "c", _tier: 1, _rn: 5 },            // ……但城市层也有它 → 不算 function-only
+  ];
+  const out = stripTierColumns(rows, tiers);
+  const byId = Object.fromEntries(out.map((j) => [j.id, j]));
+  assert.equal(byId.a.recall_function_only, undefined);
+  assert.equal(byId.b.recall_function_only, true);
+  assert.equal(byId.c.recall_function_only, undefined);
+  assert.equal("_tier" in byId.b, false);
+  // 不传 tiers（旧调用方）→ 行为不变，谁都不打标
+  assert.equal(stripTierColumns(rows)[1].recall_function_only, undefined);
+});

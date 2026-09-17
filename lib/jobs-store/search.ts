@@ -25,6 +25,14 @@ import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 const FTS_CAP = 8000;
 const DB_PAGE = 1000;
 const SCAN_BUDGET = 28000;
+// 登录 + 按匹配度排（扫描路径）的候选窗口（2026-09-17）：SQL 先按打分公式的四个可下推项粗排
+// （方向 30 / 城市 20 / 公司 15 / 7 天内 10，见 prescoreOrderBy），JS 只精排这一窗。
+// 窗口大小由 44 个真实用户偏好对拍定：第一页 60 条与「全量 28,000 行 JS 精排」的重合率见 docs/reviews/2026-09-17 §10。
+// env JOBS_MATCH_WINDOW 可整体调档（出事改 Vercel 变量即可，不用重新部署）。
+function matchPrescoreWindow(): number {
+  const raw = Number(process.env.JOBS_MATCH_WINDOW || 0);
+  return Number.isFinite(raw) && raw > 0 ? Math.min(raw, SCAN_BUDGET) : 4000;
+}
 
 /**
  * 候选缓存 TTL（同一 lambda 实例内跨请求共享，FTS 与扫描两条路径共用）。
@@ -406,6 +414,44 @@ function candidateOrderBy(
   return ` order by (search_doc @@ to_tsquery('simple', $${params.length})) desc, ${fresh}`;
 }
 
+// 扫描路径 + 登录 + 按匹配度排：把 lib/scoring.scoreJob 里能下推的四项搬进 SQL 当粗排键，
+// 让「JS 精排要看的那批」尽量落在窗口前部——窗口从 28,000 缩到几千行，带宽是香港机的硬上限（见 CLAUDE.md）。
+// 方向项用 FTS 近似 keywordMatchTier（同一份 ftsCandidateTerms 展开），城市/公司项与 scoreJob 同为子串命中。
+// ⚠️ 排序 tsquery 仍压在**最后一个**参数上（tests/jobs-store-candidate-window 按它定位），城市/公司数组在它前面。
+function prescoreOrderBy(
+  params: unknown[],
+  filters: Filters,
+  prefs: UserPreferences | null,
+): string | null {
+  if (filters.sortBy !== "match" || !prefs) return null;
+  const includeOverseasLexicon = effectiveJobScope(prefs) !== "domestic";
+  const groups = scoringSignalGroups(prefs, { overseasProfile: includeOverseasLexicon });
+  const dirTerms = groups.direction
+    .slice(0, PREF_SIGNAL_TERM_CAP)
+    .flatMap((t: string) => ftsCandidateTerms(t, { includeOverseasLexicon }));
+  const dirQuery = buildTsquery(dirTerms, [], []);
+  const pieces: string[] = [];
+  const cities = splitMultiValue(filters.city).length ? [] : groups.locations;
+  if (cities.length) {
+    params.push(cities.map((c: string) => `%${escapeLike(c)}%`));
+    // ⚠️ 每一项都要 `is true`：location/company 为 NULL 时 ilike 返回 NULL，整个和会变成 NULL，
+    // 而 `order by … desc` 默认 NULLS FIRST → 没写城市的岗全排到最前面（2026-09-17 对拍当场抓到：重合率 0%）。
+    pieces.push(`((location ilike any($${params.length}::text[])) is true)::int * 20`);
+  }
+  const companies = filters.company.trim() ? [] : groups.companies;
+  if (companies.length) {
+    params.push(companies.map((c: string) => `%${escapeLike(c)}%`));
+    pieces.push(`((company ilike any($${params.length}::text[])) is true)::int * 15`);
+  }
+  pieces.push("((first_seen_at > now() - interval '7 days') is true)::int * 10");
+  if (dirQuery) {
+    params.push(dirQuery);
+    pieces.unshift(`((search_doc @@ to_tsquery('simple', $${params.length})) is true)::int * 30`);
+  }
+  if (!dirQuery && !cities.length && !companies.length) return null; // 没有可粗排的信号 → 退回原排序
+  return ` order by (${pieces.join(" + ")}) desc, first_seen_at desc`;
+}
+
 // 命中页回补 HYDRATE_COLUMNS：候选阶段没拉这些展示列，排序分页定下 ≤limit 行后按 id 批量补齐再合并。
 async function hydratePageColumns(
   page: Array<ScoredJob & { __tier: "exact" | "related"; __match: MatchReason }>,
@@ -623,7 +669,9 @@ async function searchViaScan(
   // 同 FTS 路径：`params` 只留 where（计数要用），排序/正文门参数进 candidateParams。
   const candidateParams = [...params];
   const columns = candidateColumns(candidateSummaryExpr(candidateParams, filters, prefs)); // 先正文门、后排序（同 FTS 路径）
-  const orderBy = candidateOrderBy(candidateParams, filters, prefs);
+  const prescore = prescoreOrderBy(candidateParams, filters, prefs);
+  const orderBy = prescore ?? candidateOrderBy(candidateParams, filters, prefs);
+  const matchWindow = prescore ? matchPrescoreWindow() : SCAN_BUDGET;
   const sql =
     `select ${columns} from jobs where ${conds.join(" and ")}${orderBy} ` +
     `limit $${candidateParams.length + 1} offset $${candidateParams.length + 2}`;
@@ -682,9 +730,9 @@ async function searchViaScan(
     // 在物化之前，先用「候选与用户无关」这一点把重复传输吃掉：走进程内缓存 + 并发去重
     // （见上面 fetchCandidates 的注释与不变量）。
     const s = now();
-    const raw = await fetchCandidates(sql, [...candidateParams, SCAN_BUDGET, 0], fetchMeta);
+    const raw = await fetchCandidates(sql, [...candidateParams, matchWindow, 0], fetchMeta);
     fetchMs += now() - s;
-    exhausted = absorb(raw, SCAN_BUDGET);
+    exhausted = absorb(raw, matchWindow);
   } else {
     // newest 攒够 need 即停 → 保持逐页，不为了少几次往返把 2.8 万行全拉回来。
     // （并行取页已实测更慢/会 500，见上面常量位置的记录，别再改回去。）

@@ -281,7 +281,15 @@ test("扫描路径（无筛选）同样按偏好优先截断", async () => {
     60,
   );
   const c = candidateSql(calls);
-  assert.match(c.sql, /order by \(search_doc @@ to_tsquery\('simple', \$\d+\)\) desc, first_seen_at desc/);
+  // 登录 + match：粗排键 = 方向 30 + 城市 20 + 公司 15 + 7 天内 10（prescoreOrderBy），排序 tsquery 仍是最后一个偏好参数
+  assert.match(c.sql, /order by \(\(\(search_doc @@ to_tsquery\('simple', \$\d+\)\) is true\)::int \* 30 \+ .*\) desc, first_seen_at desc/);
+  // 每一项都必须 `is true`：NULL 参与求和会让整行排到最前（NULLS FIRST）
+  const pieces = (c.sql.match(/::int \* \d+/g) || []).length;
+  assert.equal((c.sql.match(/ is true\)::int/g) || []).length, pieces, "每个粗排项都要 is true（NULL 会排到最前）");
+  assert.ok(pieces >= 2);
+  assert.match(c.sql, /first_seen_at > now\(\) - interval '7 days'/);
+  // 窗口不再是 28000 整窗
+  assert.ok(c.params[c.params.length - 2] <= 4000, `登录 match 窗口应 ≤4000，拿到 ${c.params[c.params.length - 2]}`);
   // limit / offset 的占位符要排在偏好参数之后，编号别串位。
   assert.match(c.sql, /limit \$(\d+) offset \$(\d+)/);
   const [, lim, off] = c.sql.match(/limit \$(\d+) offset \$(\d+)/);

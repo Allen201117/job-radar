@@ -417,3 +417,12 @@ test("main 区同一家公司不连着刷屏：任意连续 6 张里同一家 �
   // 第一张仍是全场最高分（散列不改变冠军）
   assert.equal(main[0].score, 95);
 });
+
+test("functionOnly 的岗不进 main，即使分数过门槛；exploreEligible 时落到 explore", () => {
+  const { sections } = groupOpportunities(
+    [opp({ score: 80 }), { ...opp({ score: 80 }), job: { ...opp({ score: 80 }).job, id: "fn-only" }, functionOnly: true, exploreEligible: true }],
+    { dailyLimit: 20, intensity: "active" },
+  );
+  assert.deepEqual(sections.main.map((o) => o.job.id).includes("fn-only"), false);
+  assert.deepEqual(sections.explore.map((o) => o.job.id), ["fn-only"]);
+});

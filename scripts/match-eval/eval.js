@@ -68,7 +68,7 @@ function runOne(label, prefs, candidate, opts = {}) {
   const built = buildRecallSql(profile, since, RECALL_BUDGET, []);
   if (!built) return { label, error: "no_recall" };
 
-  const rows = stripTierColumns(psqlJson(inlineParams(built.sql, built.params)));
+  const rows = stripTierColumns(psqlJson(inlineParams(built.sql, built.params)), built.tiers);
   const filtered = {};
   const shown = [];
   for (const job of rows) {
@@ -98,6 +98,8 @@ function runOne(label, prefs, candidate, opts = {}) {
       roleMatchLabel: facts.roleMatchLabel,
       jobFn: classifyJobFunction(job),
       skillsHit: facts.skillsHit,
+      // 只靠职能层捞到、方向没真命中 → 线上只进「拓展看看」；裁判只判主清单，这类单独报
+      functionOnly: Boolean(job.recall_function_only) && facts.roleTier !== "exact",
       summary: String(job.summary || "").slice(0, 200),
     });
   }

@@ -174,6 +174,8 @@ export interface Opportunity {
   viewed: boolean;
   isNew: boolean; // first_seen_at > 有效上次访问时间（由 grouping 计算填充）
   exploreEligible: boolean; // 是否够格进「拓展机会」（related 职能 或 命中目标公司），由 service 据 facts 算
+  /** 只被职能层召回、方向层没命中（jobs-store/opportunities.stripTierColumns 打的标）：只进拓展看看，不进对口机会。 */
+  functionOnly?: boolean;
   // v3：信号当标签（≥1）、强度、展示用的核验/官方发布/截止时间。由 service 据 signals 派生填充。
   signals: OpportunitySignal[];
   intensity: RadarIntensity;

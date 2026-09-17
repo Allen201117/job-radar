@@ -102,7 +102,10 @@ if (require.main === module) {
     for (const r of results) {
       if (r.error) continue;
       const direction = (r.profile.targetRoles || []).join(" / ") || "(未填)";
-      const items = r.shown.slice(0, TOPN).map((s) => ({ title: s.title, company: s.company, score: s.score, tier: s.tier, jobFn: s.jobFn, roleMatchLabel: s.roleMatchLabel }));
+      // 只判「对口机会」会放的岗：functionOnly（只靠职能层捞到）线上进的是「拓展看看」，不计入主清单准确率，单独报数
+      const mainShown = r.shown.filter((s) => !s.functionOnly);
+      const exploreOnly = r.shown.length - mainShown.length;
+      const items = mainShown.slice(0, TOPN).map((s) => ({ title: s.title, company: s.company, score: s.score, tier: s.tier, jobFn: s.jobFn, roleMatchLabel: s.roleMatchLabel }));
       if (!items.length) { report.push({ label: r.label, direction, n: 0, acc: null, judged: [] }); continue; }
       const judged = await judgeAll(direction, items);
       // unclear 不计入分母：标题没写岗位信息，判它对错都是瞎猜，单独报数量即可。
@@ -113,7 +116,7 @@ if (require.main === module) {
       const strict = valid.length ? strictOk / valid.length : null;
       const loose = valid.length ? looseOk / valid.length : null;
       const pct = (x) => (x == null ? "  -  " : (x * 100).toFixed(1) + "%");
-      console.error(`${r.label}  方向=${direction}  展示=${r.shownCount}  计分=${valid.length}(unclear ${unclear})  严格=${pct(strict)}  宽松=${pct(loose)}`);
+      console.error(`${r.label}  方向=${direction}  展示=${r.shownCount}(拓展 ${exploreOnly})  计分=${valid.length}(unclear ${unclear})  严格=${pct(strict)}  宽松=${pct(loose)}`);
       report.push({ label: r.label, direction, shownCount: r.shownCount, recalled: r.recalled, filtered: r.filtered, n: valid.length, unclear, strictOk, looseOk, strict, loose, judged });
     }
     fs.writeFileSync(path.join(__dirname, path.basename(inFile).replace(/\.json$/, "") + "-judged.json"), JSON.stringify(report, null, 2));

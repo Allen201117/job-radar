@@ -227,3 +227,17 @@ RRF（BigDataBoutique）、Fifty Shades of Ratings（负反馈硬过滤）、Ind
 中学教师 75→43（4→7 条）变差**——第四层职能召回在小池子里把「同职能不同角色」的岗带进了展示清单。这是本轮改动的**真实代价**，
 下一步：职能层召回的岗只进「拓展看看」不进「对口机会」，并让评测只判「对口机会」那一栏（用户真正看到的主清单）。
 
+## 10. 登录用户的岗位库默认打开 + 职能层分区（2026-09-17 深夜）
+
+**登录 + 按匹配度排：SQL 粗排 + 4000 窗**（`lib/jobs-store/search.ts` prescoreOrderBy）。粗排键 = 方向 FTS 命中 30 + 城市 20 + 公司 15 +
+7 天内 10，与 `scoring.scoreJob` 的四个可下推项同权重；JS 只精排前 4000 行。
+- ⚠️ 第一版重合率 **0%**：`location ilike` 对 NULL 返回 NULL，整个和变 NULL，`desc` 默认 NULLS FIRST → 没写城市的岗全排最前。每项加 `is true` 后：
+- 等价性（3 个真实用户，第一页 60 条 vs 全量 28,000 行 JS 精排真值）：重合 **95% / 90% / 95%**（W4000）；差异逐条看过，
+  **全是同分并列**（同一家康缘药业同一天同分的会计岗，取哪几条由并列顺序决定）。传输 24~29MB → 4MB。
+- 契约测试 `search-retrieval`「一次取满」改钉 4000；`jobs-store-candidate-window` 钉「每个粗排项都 is true」。
+
+**职能层召回只进「拓展看看」**：`stripTierColumns(rows, tiers)` 给「只被 function 层捞到」的岗打 `recall_function_only`，
+service 标 `functionOnly`（方向非 exact 时），grouping 主清单排除、拓展接住；eval/judge 只判主清单、拓展单独报数。
+跨行业对拍（主清单严格准确率）：护士 58→73（=基线）、柜员 40→100（=基线）、教师 43→75（=基线）、机械 92→96；
+拓展看看里分别多出 4 / 3 / 3 / 5 条同职能岗。
+

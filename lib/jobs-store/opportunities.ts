@@ -504,16 +504,26 @@ export function buildRecallSql(
   return { sql, params, tiers: tiers.map(({ tier }) => tier) };
 }
 
-/** 剥掉排序用的辅助列（_tier/_rn）并按 id 去重：层之间会重叠（如目标公司的岗同时命中方向层）。 */
-export function stripTierColumns(rows: any[]): any[] {
+/** 剥掉排序用的辅助列（_tier/_rn）并按 id 去重：层之间会重叠（如目标公司的岗同时命中方向层）。
+ *  传入 tiers（buildRecallSql 返回的层名序列）时，**只**被 function 层捞到、方向/公司/城市层都没命中的岗
+ *  打上 `recall_function_only`：它们是「同职能、方向没命中」的岗，只配进「拓展看看」，不进「对口机会」
+ *  （2026-09-17 跨行业对拍：护士 73→58、柜员 100→40、教师 75→43，全是这一层把同职能不同角色的岗带进了主清单）。 */
+export function stripTierColumns(rows: any[], tiers?: readonly string[]): any[] {
+  const functionTier = tiers ? tiers.indexOf("function") : -1;
+  const nonFunctionIds = new Set<string>();
+  if (functionTier >= 0) {
+    for (const r of rows || []) if (r && r.id != null && r._tier !== functionTier) nonFunctionIds.add(r.id);
+  }
   const seen = new Set<string>();
   const out: any[] = [];
   for (const r of rows || []) {
     if (!r || r.id == null || seen.has(r.id)) continue;
     seen.add(r.id);
     const job = { ...r };
+    const onlyFunction = functionTier >= 0 && r._tier === functionTier && !nonFunctionIds.has(r.id);
     delete job._tier;
     delete job._rn;
+    if (onlyFunction) job.recall_function_only = true;
     out.push(job);
   }
   return out;
@@ -532,7 +542,7 @@ async function recallViaStore(
   if (!built) return { jobs: [], capped: false };
   const rows = await jobsQuery(built.sql, built.params);
   // 取满预算 = 库里还有没取到的候选 → capped 诚实为 true
-  return { jobs: stripTierColumns(rows), capped: rows.length >= budget };
+  return { jobs: stripTierColumns(rows, built.tiers), capped: rows.length >= budget };
 }
 
 // ---- Supabase 回退（本地/回滚；prod jobs 表已空，非性能关键路径）----
