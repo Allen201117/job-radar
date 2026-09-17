@@ -50,11 +50,15 @@ jobs:
         # 判死信号真伪 id live 对拍过，全部双条件（见 crawler/enrich.py 各 _detail_xxx 注释）。
         # 同批补上 chnenergy——它 2026-09-05 就进了 ENRICH_REGISTRY，但漏加进本 matrix，
         # 于是只被 enrich-backlog 补正文、从来没被探活过（同一类漏配，别再漏）。
+        # 2026-09-18 两个校招门户（sf_express_campus 顺丰 crs-pub / midea_campus careers.midea.com）：
+        # 判死信号真伪 id live 对拍、全部双条件，见 crawler/enrich.py 各 _detail_xxx docstring。
+        # 「注册表 ⊆ 本 matrix」的契约断言在 crawler/test_state_bank_liveness.py。
         adapter: [wt, hotjob, workday, oracle, eightfold, smartrecruiters, greenhouse, lever,
                   amazon, apple, meituan, microsoft, sf_express, tencent, vivo, siemens, avature, successfactors, google,
                   huawei, jd, antgroup, haier, ashby, mihoyo, tencent_music,
                   iguopin, pinduoduo, meituan_campus, chnenergy,
-                  spdb, icbc, ccb, bankcomm, cmcc]
+                  spdb, icbc, ccb, bankcomm, cmcc,
+                  sf_express_campus, midea_campus]
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

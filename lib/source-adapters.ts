@@ -239,6 +239,12 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填「顺丰」+ https://hr.sf-express.com/jobMainHandler/main/9999，直连 SearchJob.do 社招接口，crawl_method 选 http",
   },
   {
+    value: "sf_express_campus",
+    label: "顺丰 校招 / 实习（crs-pub.sf-express.com）",
+    origin: "domestic",
+    hint: "填「顺丰」+ https://crs-pub.sf-express.com/#/positionList（与社招 hr.sf-express.com 是两套系统、id 空间不通用），直连 web/position/query 公开接口，列表自带全文，crawl_method 选 http",
+  },
+  {
     value: "tencent_music",
     label: "腾讯音乐 TME（自建门户 · 本土）",
     origin: "domestic",
@@ -285,6 +291,12 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     label: "美的集团（自建门户 · 本土）",
     origin: "domestic",
     hint: "填 https://recruit.midea.com/recruitOut/ihr/social/；适配器直连公开 position/list 接口并全量翻页，crawl_method 选 http",
+  },
+  {
+    value: "midea_campus",
+    label: "美的集团 校招 / 实习（careers.midea.com）",
+    origin: "domestic",
+    hint: "填「美的集团」+ https://careers.midea.com/schoolOut/post（与社招 recruit.midea.com 是两套 host），适配器先取在跑招聘项目再逐项目翻页（⚠️ 翻页参数是 pageIndex），列表自带全文，crawl_method 选 http",
   },
   {
     value: "cmb",

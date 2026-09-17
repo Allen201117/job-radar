@@ -114,6 +114,70 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       的 /api/jobs 恒 500）。选路不看域名：只有「首个请求就失败」才回退 widgets；
                          #       ⚠️ 总数在 `refineSearch.totalHits` 不在 data 里；⚠️ country facet 字面量带后缀
                          #       （"Hong Kong" 返 0，要 "Hong Kong, China"）；⚠️ 根路径按 IP 地理跳转，必须显式走 /global/en。
+                         #   sf_express_campus.py = 顺丰**校招**门户 crs-pub.sf-express.com（2026-09-18 接入，纯 httpx）。
+                         #     ⚠️ 与社招 sf_express.py **两套系统**：社招 hr.sf-express.com/SearchJob.do（id 是
+                         #       `id,positionType` 二元组），校招 crs-pub /api/web/position/query（id 是单个自增整数），
+                         #       id 空间不相干、jd_url 模板不同，共用 adapter 只会互相污染。
+                         #     接口怎么挖出来的：前端是 Vue2 SPA，接口名**不在主包里**——路由表在
+                         #       /cr/static/js/app.<hash>.js（`path:"/postDetail/:id"`），API 前缀在 /static/js/config.js
+                         #       （`__APP_ENV__API_BASE_URL__:"/api"`），真正的 `web/position/query` / `findById/{id}` /
+                         #       `queryDict/{type}` 写在 manifest chunk map 指向的**懒加载分块**里。
+                         #     live 数字：total=120（全部 seasonType=2 秋季校招），parse 120/120，正文 120/120，
+                         #       jd_url 唯一 120/120，fetch_complete=True。pageNum + pageSize **都真实生效**
+                         #       （page1∩page2=0、三页并集=120；pageSize 10/50/100/200 如实回显）。
+                         #     jd_url = `https://crs-pub.sf-express.com/#/postDetail/{id}` —— 站点自己拼的
+                         #       （列表卡片模板里就是 `href:"#/postDetail/"+a.id`），不是猜的；hash 路由，canonical 原样不碰。
+                         #     ⚠️ summary 段序是量出来的：届别硬信号「2027届本科及以上学历毕业生」只写在
+                         #       `jobRequirement` 首句，而 grad_class 只看截断后的前 400 字 →【任职要求】必须排在
+                         #       【岗位职责】前面（实测职责在前 118/120、要求在前 120/120）。
+                         #     判死（ENRICH_REGISTRY）：详情 `findById/{id}` 的 `status`（**列表行里没有这个字段**），
+                         #       双条件——「HTTP 500 且 body 含『找不到职位信息』」或「HTTP 200 且 positionName 非空
+                         #       且 status ∈ {0,2}」。全集对拍：列表内 120/120 全是 status=1 零反例，
+                         #       列表外 84 个 id 全是 status=2(73)/0(9)/500(2)，无一 status=1。
+                         #     诚实边界：实习通道 `staffGroup=C` 与 `positionType=consulting` / `specialCategory=1`
+                         #       当日实测均 total=0 ——「现在返 0」不等于「顺丰没有实习」（见 CLAUDE.md 那条碑）。
+                         #   midea_campus.py = 美的**校招**门户 careers.midea.com 自建 iHR（2026-09-18 接入，纯 httpx）。
+                         #     ⚠️ 与社招 midea.py 两套 host：社招 recruit.midea.com（form-encoded），
+                         #       校招 careers.midea.com（JSON，**先取在跑招聘项目、再逐项目取岗位**）。
+                         #     🚩 **翻页参数是 `pageIndex`，`pageNum` 会被静默忽略**：HTTP 200、total 正确、
+                         #       `info.pageIndex` 恒为 1、每页回同一批 20 条 —— 按 pageNum 翻 8 页拿回 160 行、
+                         #       去重后只有 20 个 positionId（total=152）。`pageSize` 被服务端**硬顶 20**
+                         #       （请求 50/100/200 一律回 20），小于 20 才生效。
+                         #       → 末页判据必须是「这一页有没有带来新 positionId」，用「本页条数 < pageSize」会无限翻同一页。
+                         #     ⚠️ 项目是**动态**的（同事凌晨看到 3 个、几小时后 4 个），不许硬编码 projectRuleId；
+                         #       完整性**逐项目判**，不拿各项目 total 之和当分母（渠道重叠会让和式判据永久为假）。
+                         #     live 数字：4 个在跑项目合计 total=535（日常实习 152 / 校企合作实习 169 /
+                         #       2027届美的星校招 148 / 2027应届博士校招 66，positionId 互不重叠），parse 535/535，
+                         #       正文 535/535（列表行的 projectPositionDto 自带全文，零薄卡），fetch_complete=True。
+                         #     jd_url = `…/schoolOut/post/details?positionId={positionId}` —— 站点自己
+                         #       `window.open(router.resolve({name:"postDetails",query:{positionId}}).href)`；
+                         #       ⚠️ 用 positionId **不是** projectPositionId（后者是岗位模板 id，取错就是坏链）。
+                         #     ⚠️ **不许把 `numberOfSessions` 写进 summary**：两个实习通道它是 2026，而项目自报的
+                         #       毕业时间窗是 2026-01-01~2028-12-31 → 写进去会把 26/27/28 届通吃的实习岗全标成 2026 届。
+                         #       届别只从项目名里的硬信号来（2027届/2027应届 → 214 个岗抽到 2027），实习通道留白 321。
+                         #     判死（ENRICH_REGISTRY）：详情 `position/details`，**不能按 code 判**——不存在的 id
+                         #       也返 `code="0"`，区别只在 `data` 是不是 null。双条件：「code=0 且 data 键存在且为 null」
+                         #       或「code=0 且 data 是对象、projectPositionName 非空、publishStatus=2」。
+                         #       对拍：在招 535/535 全是 publishStatus=1 零反例；变异 id 120 个里 89 个返 data=null。
+                         #       🚩 诚实边界：「已下架仍返记录但 publishStatus=2」的反向证据**只有 1 例**
+                         #       （美的没有公开历史岗位列表），真实撤岗若走别的形态这里会漏判（安全方向），
+                         #       等库里的岗自然过期后用 job_closures 复核。
+                         #   ⚠️ **这两家的详情页都不随撤岗消失**（2026-09-18 Playwright 真渲染，正反各验）：
+                         #     顺丰 status=2 的 2100 与 status=0 的 2267、美的 publishStatus=2 的
+                         #     `8a5ea6d6…232160`，全都渲染出完整岗位名 + 正文 +「申请职位 / 立即投递」按钮
+                         #     （620 / 846 / 576 字），跟在招岗肉眼无差；只有 id **彻底不存在**时才是空壳
+                         #     （顺丰 312 字 / 美的 110 字）。同 CLAUDE.md 里浦发那条边界。两个后果：
+                         #     ① 判死只能读接口字段（status / publishStatus），`audit_dead_links` 的
+                         #        DEAD_MARKERS 对这两个源一条都匹配不上 → 必须走 httpx 的 ENRICH_REGISTRY
+                         #        + liveness-sweep，别指望浏览器巡检兜底；
+                         #     ② 库里一旦留着撤岗，用户点进去看到的是个「可以投递」的完整页面、
+                         #        察觉不到已经关了 → 这两个源的 sweep 覆盖率比一般源更要紧。
+                         #   ⚠️ 这两家的后置地区门刻意用「只丢能确证在范围外的岗」（同 avature._in_regions 的 facet 分支）：
+                         #     单租户中国区校招门户，host 即地区保证，`derive_country_code` 返回 None 是「证据不足」
+                         #     不是「证据相反」。严格判据实测各误伤 1 个真·在招岗（顺丰 id=2328 demandCity 是空串；
+                         #     美的「生产计划专员」在**昆山市**——江苏的县级市，词表按设计只收到地级市）。
+                         #     双向核过：放宽后 A→B 各 1、B→A 各 0，两家全集共 655 行里**没有一行**能确证在 CN 之外；
+                         #     台湾红线不受影响（台北市识别得出 TW → 仍走严格分支被丢）。
                          #   iguopin.py = 国聘（国资委官方央企招聘平台）：recom-job 列表 + info 详情公开 API，纯 httpx。
                          #     source_url 约定 https://www.iguopin.com/job?company={检索词}&match={核名词}，一源=一集团。
                          #     ⚠️ match 走 company_name_match 严格核名（token 必须在实体名开头或只隔地名前缀），

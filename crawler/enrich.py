@@ -359,6 +359,120 @@ def _detail_sf_express(row, src):
     return ""
 
 
+# 顺丰校招：jd_url 是 hash 路由 `…/#/postDetail/{id}`，`#` 后面不会发给服务端 →
+# 探活必须走它自己的详情接口（接口名是从站点懒加载分块里读出来的，见 adapters/sf_express_campus.py）。
+_SF_CAMPUS_DETAIL = "https://crs-pub.sf-express.com/api/web/position/findById/{job_id}"
+# status：1=在招（列表里就是这批）/ 2=已结束 / 0=已下架或未发布。
+_SF_CAMPUS_CLOSED_STATUS = (0, 2)
+
+
+def _detail_sf_express_campus(row, src):
+    """顺丰校招 crs-pub 逐岗探活（2026-09-18 真伪 id live 对拍，liveness-only）。
+
+    判死靠详情接口的 `status` —— **列表行里没有这个字段**，只有详情有。
+
+    📊 全集对拍（不是抽样）：
+      · 列表里的 **120/120** 个在招 id → HTTP 200 + `status=1` + positionName 非空，**零反例**；
+      · 列表外 84 个 id（2239..2383 区间缺席的 25 个 + 更老的 2180..2238 共 59 个）→
+        `status=2` 73 个 / `status=0` 9 个 / HTTP 500「找不到职位信息」2 个，
+        **一个 status=1 都没有**。status=0 的样本（如 2267「语音大模型算法工程师（顺丰科技）」，
+        2026-09-03 建、当天就改过）都属于当前招聘季但已从列表撤下。
+
+    双条件，宁可漏判不可错杀：
+      ① HTTP 500 **且** body 里是 `找不到职位信息` → id 不存在。只看 500 会把真 5xx 当撤岗。
+      ② HTTP 200 **且** positionName 非空（证明拿到的是一条真记录、不是半截响应）
+         **且** status ∈ {0,2}。少了 positionName 这半条，接口某次返半截 JSON 就会误杀在招岗。
+    其余一律 unknown（不盖戳、不改状态），交给下一轮重试。
+    """
+    job_id = re.search(r"/postDetail/(\d+)", row.get("jd_url") or "")
+    if not job_id:
+        return ""
+    r = httpx.get(_SF_CAMPUS_DETAIL.format(job_id=job_id.group(1)),
+                  headers=UA, timeout=TIMEOUT, follow_redirects=True)
+    _raise_if_gone(r)
+    try:
+        payload = r.json()
+    except ValueError:
+        raise DetailUnknownError("sf_express_campus detail non-JSON response")
+    if not isinstance(payload, dict):
+        raise DetailUnknownError("sf_express_campus detail payload not an object")
+    if r.status_code == 500 and "找不到职位信息" in str(payload.get("message") or ""):
+        raise JobClosedError(f"sf_express_campus closed (id not found): {row['jd_url']}")
+    _raise_if_unknown(r)
+    name = str(payload.get("positionName") or "").strip()
+    status = payload.get("status")
+    if name and isinstance(status, int) and status in _SF_CAMPUS_CLOSED_STATUS:
+        raise JobClosedError(
+            f"sf_express_campus closed (status={status}): {row['jd_url']}")
+    if not name:
+        # 半截响应：既不判死也不算「确认在招」。
+        raise DetailUnknownError("sf_express_campus detail without positionName")
+    return ""
+
+
+_MIDEA_CAMPUS_DETAIL = ("https://careers.midea.com/backend/school/position/common"
+                        "/position/details")
+# publishStatus：1=在招 / 2=已下架（live 实测见 docstring）。
+_MIDEA_CAMPUS_CLOSED_PUBLISH_STATUS = 2
+
+
+def _detail_midea_campus(row, src):
+    """美的校招 careers.midea.com 逐岗探活（2026-09-18 live 对拍，liveness-only）。
+
+    ⚠️ **不能按 `code` 判成败**：不存在的 positionId 也返 `code="0"`，区别只在 `data` 是不是 null。
+
+    📊 对拍：
+      · 在招 **535/535**（全部 4 个在跑项目的全集）→ `code="0"` + data 为对象 +
+        projectPositionName 非空 + `publishStatus=1`，**零反例**；
+      · 变异 id（把真 id 最后一位改掉）120 个 → 89 个返 `data: null`，
+        31 个撞上了别的真实 id（id 空间稠密）；
+      · 这 31 个里剔掉仍在招的，得到 1 个**真·已下架**记录
+        （`8a5ea6d69c230413019c30b444232160`「电控硬件开发助理工程师-小家电」，
+        隶属仍在跑的「校企合作实习招聘通道」）→ `publishStatus=2`。
+
+    双条件：
+      ① `code="0"` **且** 响应里确实有 `data` 键 **且** 其值为 null → 该 id 不存在。
+         要求 code 正常是为了不把网关错误/限流当撤岗。
+      ② `code="0"` **且** data 是对象、projectPositionName 非空（真记录）
+         **且** `publishStatus == 2` → 对方明确标了下架。
+
+    🚩 **诚实边界**：条件②的反向证据只有 **1 条**（能拿到的已下架 id 就这一个，
+       美的没有公开的历史岗位列表）。正向那边是 535/535 全集，所以「在招不会被误杀」是
+       结实的；「下架一定判得出来」则没这么结实——真实撤岗如果走的是别的形态
+       （比如仍返 publishStatus=1 但掉出列表），这里会**漏判**（安全方向）。
+       等库里的美的校招岗自然过期后，用 `job_closures` 复核一次再决定要不要加信号。
+    """
+    pid = (parse_qs(urlparse(row.get("jd_url") or "").query).get("positionId") or [""])[0]
+    if not pid:
+        return ""
+    r = httpx.post(_MIDEA_CAMPUS_DETAIL, json={"positionId": pid},
+                   headers={**UA, "Content-Type": "application/json",
+                            "Referer": "https://careers.midea.com/schoolOut/post"},
+                   timeout=TIMEOUT, follow_redirects=True)
+    _raise_if_gone(r)
+    _raise_if_unknown(r)
+    try:
+        payload = r.json()
+    except ValueError:
+        raise DetailUnknownError("midea_campus detail non-JSON response")
+    if not isinstance(payload, dict) or str(payload.get("code")) != "0":
+        raise DetailUnknownError(
+            f"midea_campus detail code={payload.get('code') if isinstance(payload, dict) else '?'}")
+    if "data" not in payload:
+        raise DetailUnknownError("midea_campus detail without data key")
+    data = payload["data"]
+    if data is None:
+        raise JobClosedError(f"midea_campus closed (positionId not found): {row['jd_url']}")
+    if not isinstance(data, dict):
+        raise DetailUnknownError("midea_campus detail data is not an object")
+    name = str(data.get("projectPositionName") or "").strip()
+    if not name:
+        raise DetailUnknownError("midea_campus detail without projectPositionName")
+    if data.get("publishStatus") == _MIDEA_CAMPUS_CLOSED_PUBLISH_STATUS:
+        raise JobClosedError(f"midea_campus closed (publishStatus=2): {row['jd_url']}")
+    return ""
+
+
 def _detail_tencent(row, src):
     # postId = jd_url 查询参数；detail = 公开 ByPostId JSON。撤岗→HTTP500 {Code:500,Data:"E1005"}（3 真实撤岗）；
     # 在招→{Code:200,Data:{Responsibility/Requirement=正文}}。⚠️ E1003=bogus 入参错，不判死。
@@ -1105,6 +1219,9 @@ ENRICH_REGISTRY = {
     "successfactors": _detail_successfactors,  # SF CSB 详情 SSR：正则抽 jobdescription span（多数租户有；ZF 类无正文租户返空）
     "google": _detail_google,
     "sf_express": _detail_sf_express,
+    # 校招门户（2026-09-18 接入，真伪 id live 对拍，双条件；见各函数 docstring 的全集数字）：
+    "sf_express_campus": _detail_sf_express_campus,
+    "midea_campus": _detail_midea_campus,
     "tencent": _detail_tencent,
     "vivo": _detail_vivo,
     # 盲区六家（2026-08-28，真伪 id live 对拍，见各函数注释）：
