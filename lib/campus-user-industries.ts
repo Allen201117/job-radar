@@ -2,6 +2,8 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resolveMustApplyIndustries, MUST_APPLY_BY_INDUSTRY } from "@/lib/must-apply-list";
 
+export type CampusIndustrySource = "preference" | "resume" | "default";
+
 /**
  * 读用户的必投范围（行业 → 公司清单）与方向（目标岗位 / 城市）。
  * 行业 / 岗位 / 城市三者同一口径：**偏好（手填）优先，简历解析兜底**（见函数体内注释）。
@@ -16,6 +18,8 @@ export async function getUserCampusScope(
 ): Promise<{
   rawIndustries: string[];
   industries: string[];
+  /** 行业从哪来：偏好手填 / 简历兜底 / 两边都空走默认。页面据此写清来源与「去哪改」。 */
+  industrySource: CampusIndustrySource;
   companies: Array<{ name: string; pattern: string }>;
   /** 目标岗位（原始短语，未归一）：供「对你有货」判用户方向，见 app/campus/page.tsx。 */
   targetRoles: string[];
@@ -46,11 +50,18 @@ export async function getUserCampusScope(
     if (first.length) return first;
     return Array.isArray(b) ? b.filter((x): x is string => typeof x === "string" && !!x.trim()) : [];
   };
-  const rawIndustries = pick(prefRes.data?.target_industries, profRes.data?.industries);
+  const prefIndustries = pick(prefRes.data?.target_industries, null);
+  const rawIndustries = prefIndustries.length ? prefIndustries : pick(profRes.data?.industries, null);
   const industries = resolveMustApplyIndustries(rawIndustries); // 空/归一不出 → 兜底「互联网/科技」
+  const industrySource: CampusIndustrySource = prefIndustries.length
+    ? "preference"
+    : rawIndustries.length
+      ? "resume"
+      : "default";
   return {
     rawIndustries,
     industries,
+    industrySource,
     companies: companiesForIndustries(industries),
     targetRoles: pick(prefRes.data?.target_roles, profRes.data?.target_roles),
     targetLocations: pick(prefRes.data?.target_locations, profRes.data?.target_locations),

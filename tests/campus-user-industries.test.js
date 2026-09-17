@@ -45,6 +45,7 @@ test("偏好为空、简历有行业 → 用简历行业（此前这一档从未
   const r = await mod.getUserCampusScope(sb, "u1");
   assert.deepEqual(r.rawIndustries, ["能源/化工"]);
   assert.deepEqual(r.industries, ["能源/化工"]);
+  assert.equal(r.industrySource, "resume");
   assert.ok(r.companies.length > 0);
 });
 
@@ -56,6 +57,7 @@ test("偏好已填 → 偏好优先，简历不覆盖手填", async () => {
   const r = await mod.getUserCampusScope(sb, "u2");
   assert.deepEqual(r.rawIndustries, ["互联网"]);
   assert.deepEqual(r.industries, ["互联网/科技"]);
+  assert.equal(r.industrySource, "preference");
 });
 
 test("没有偏好行、只有简历 → 用简历", async () => {
@@ -68,6 +70,7 @@ test("两边都空 → 兜底互联网/科技，rawIndustries 为空（页面据
   const r = await mod.getUserCampusScope(fakeSupabase({}), "u4");
   assert.deepEqual(r.rawIndustries, []);
   assert.deepEqual(r.industries, ["互联网/科技"]);
+  assert.equal(r.industrySource, "default");
 });
 
 test("简历表 select 的列名必须是 industries（不是 target_industries），否则整条查询报错", async () => {
