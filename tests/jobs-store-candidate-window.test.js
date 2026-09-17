@@ -315,7 +315,14 @@ test("扫描路径（无筛选）同样按偏好优先截断", async () => {
   // 且引用的占位符就是排序用的那个 tsquery 参数。
   const m = c.sql.match(/where .* and \(search_doc @@ to_tsquery\('simple', \$(\d+)\) or first_seen_at > now\(\) - interval '7 days'\) order by/);
   assert.ok(m, `候选 SQL 缺少方向/7 天收窄条件：${c.sql}`);
-  assert.equal(typeof c.params[Number(m[1]) - 1], "string", "收窄条件引用的必须是排序 tsquery 参数");
+  const narrow = c.params[Number(m[1]) - 1];
+  assert.equal(typeof narrow, "string", "收窄条件引用的必须是 tsquery 参数");
+  // 收窄用的是**未扩展**的原始方向词（每个角色一条 AND 短语），不是排序那个经词表扩展的宽查询：
+  // 宽查询上百个 OR 子句会让规划器放弃 GIN 走全表扫（2026-09-18 真实账号 236 子句 → 6.5s）。
+  const wide = c.params[c.params.length - 3];
+  assert.notEqual(narrow, wide, "收窄 tsquery 不能复用排序的宽查询");
+  assert.ok(!narrow.includes("|") || narrow.split("|").length <= 5, `收窄 tsquery 子句过多：${narrow}`);
+  assert.ok(wide.length >= narrow.length, "排序用的宽查询至少不比收窄查询短");
   // 收窄条件只进候选查询，不进计数（总数口径不变）。
   for (const q of countQueries(calls)) assert.doesNotMatch(q.sql, /interval '7 days'\)/);
   // 窗口不再是 28000 整窗

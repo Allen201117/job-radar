@@ -434,8 +434,12 @@ type Prescore = {
    * 把「方向词 GIN 命中 OR 7 天内新岗」下推到 where：两条都能走索引（jobs_search_doc_gin +
    * jobs_status_first_seen_idx 的 BitmapOr），同一画像 EXPLAIN 493ms、窗口照样填满 1000 行。
    * 被排除的只有「不命中方向、又超过 7 天、只靠城市/公司加分」的行（粗排分 ≤35，且 7 天内新岗单独就有 1.7 万行，
-   * 窗口不会因此变空）。等价性对拍见 docs/reviews/2026-09-17 §10。
-   * 没有方向词（dirQuery 为空）时不收窄——那时只剩城市/公司/7 天三项，全表扫是老路径，量级同旧。
+   * 窗口不会因此变空）。等价性对拍见 docs/reviews/2026-09-17 §11。
+   * ⚠️ 收窄用的方向 tsquery 必须是**未经词表扩展的原始方向词**（narrowQuery），不能复用排序键那个宽查询：
+   * 宽查询经 ftsCandidateTerms 扩展后动辄上百个 OR 子句（创始人账号 5 个角色 → 236 个子句、3,368 字符，
+   * 全库 40% 的岗都命中）——规划器对它放弃 GIN 走 Parallel Seq Scan，线上 fetch 6.5s，与没收窄一样慢；
+   * 原始词 5 个 AND 短语只命中 2,067 行，同一条 SQL 461ms（2026-09-18 真实账号 EXPLAIN）。
+   * 没有方向词（narrowQuery 为空）时不收窄——那时只剩城市/公司/7 天三项，全表扫是老路径，量级同旧。
    */
   candidateWhere: string | null;
 };
@@ -454,6 +458,8 @@ function prescoreOrderBy(
     .slice(0, PREF_SIGNAL_TERM_CAP)
     .flatMap((t: string) => ftsCandidateTerms(t, { includeOverseasLexicon }));
   const dirQuery = buildTsquery(dirTerms, [], []);
+  // 收窄条件用的原始方向词（不扩展）：每个角色一条「其全部 token 的 AND」子句，走 GIN 选择性好。
+  const narrowQuery = buildTsquery(groups.direction.slice(0, PREF_SIGNAL_TERM_CAP), [], []);
   const pieces: string[] = [];
   const cities = splitMultiValue(filters.city).length ? [] : groups.locations;
   if (cities.length) {
@@ -470,9 +476,13 @@ function prescoreOrderBy(
   pieces.push("((first_seen_at > now() - interval '7 days') is true)::int * 10");
   let candidateWhere: string | null = null;
   if (dirQuery) {
+    if (narrowQuery) {
+      // 先压窄查询、再压宽查询：保住「候选查询最后一个参数 = 排序 tsquery」的既有契约（tests/jobs-store-candidate-window）。
+      params.push(narrowQuery);
+      candidateWhere = `(search_doc @@ to_tsquery('simple', $${params.length}) or first_seen_at > now() - interval '7 days')`;
+    }
     params.push(dirQuery);
     pieces.unshift(`((search_doc @@ to_tsquery('simple', $${params.length})) is true)::int * 30`);
-    candidateWhere = `(search_doc @@ to_tsquery('simple', $${params.length}) or first_seen_at > now() - interval '7 days')`;
   }
   if (!dirQuery && !cities.length && !companies.length) return null; // 没有可粗排的信号 → 退回原排序
   return { orderBy: ` order by (${pieces.join(" + ")}) desc, first_seen_at desc`, candidateWhere };
