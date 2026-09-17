@@ -8,7 +8,7 @@
 //
 // 构建（服务端 buildCampusFacets）与匹配（客户端 countMatchingFacets）刻意放在同一文件：
 // 下标口径一旦两边漂了，卡面计数就会错，而这种错不会报错、只会静静地骗用户。
-import { classifyJobFunction } from "@/lib/china-keyword-expansion";
+import { classifyJobFunction, cityMatchTokens } from "@/lib/china-keyword-expansion";
 
 /** 一条分面：`[城市下标, 学历下标, 职能下标, 届别, 岗位数]`。
  *  前三个下标指向 CampusFilterOptions 里对应的选项数组；`-1` = 该维度为空（只被「全部」匹配到）。 */
@@ -215,4 +215,78 @@ export function campusRowMatches(row: any, filters: CampusFilterValues): boolean
   const gc = typeof row?.grad_class === "number" ? row.grad_class : null;
   if (filters.gradClass !== null && gc !== null && gc !== filters.gradClass) return false;
   return true;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 「对你有货」：同一份分面，换一把用户画像做的尺子
+//
+// 为什么放在这个文件里：它与 buildCampusFacets 共用同一套**下标编码**（f[0]=城市下标、f[2]=职能下标）。
+// 编码口径一旦两处分家，卡面就会安静地报一个错数字 —— 与文件顶部那条注释同因。
+//
+// 与 facetMatches（用户手动筛选）的关系：语义刻意保持一致，只把「单选」换成「多选 OR」——
+//   · 职能：硬相等（classifyJobFunction 总有返回值，「其他」是分类结果不是缺失），命中任一目标职能即可；
+//   · 城市：**未标注放行**（库里 14.5% 的校招岗没写城市），写了别的城市才算不符，与 lib/job-filter 同口径。
+// 学历/届别不进这把尺子：届别门在服务端已过（isCurrentSeasonGradClass），拿学历卡「对口」会误杀
+// （38.6% 的岗没写学历，且用户学历高于岗位要求同样能投）。
+// ────────────────────────────────────────────────────────────────────────────
+
+/** 用户画像翻成的分面下标集合。
+ *  ⚠️ 下标数组为空有**两种**截然不同的含义，必须靠 `*Requested` 区分：
+ *  「用户没填这一维」（不收窄，全放行）vs「填了、但这块看板上一个选项都对不上」（对口数应为 0）。
+ *  混成一种 = 用户填了个本看板没有的方向/城市，卡面反而写「全都对口」——正是 facetMatches 用
+ *  NO_MATCH / selectionIsUnsatisfiable 防的同一种错。 */
+export type CampusFitSelection = {
+  /** 用户填了目标方向吗（判不出方向时为 false → 不做对口判定）。 */
+  fnRequested: boolean;
+  /** 目标职能在 functionOptions 里的下标。 */
+  fns: number[];
+  /** 用户填了目标城市吗。 */
+  cityRequested: boolean;
+  /** 目标城市在 cityOptions 里的下标。 */
+  cities: number[];
+};
+
+/**
+ * 把「用户目标职能 + 目标城市」翻成当前模式选项表里的下标。
+ *
+ * 职能：与服务端算分面用的是同一份 classifyJobFunction 词表，所以直接按字符串相等取下标。
+ * 城市：**不能**按字符串相等——库里的 location 写法五花八门（"北京-海淀区" / "Beijing" / "上海市"），
+ * 改用 cityMatchTokens 拿该城市的全部别名（中文/英文/拼音，见 lib/china-keyword-expansion），
+ * 与 lib/job-filter.jobFilterMatch 的城市判定同口径（hay.includes(token)）。
+ */
+export function selectFitIndexes(
+  targetFunctions: string[],
+  targetCities: string[],
+  options: CampusFilterOptions,
+): CampusFitSelection {
+  const fnSet = new Set(targetFunctions.filter(Boolean));
+  const fns: number[] = [];
+  options.functionOptions.forEach((opt, i) => {
+    if (fnSet.has(opt)) fns.push(i);
+  });
+
+  const tokens = targetCities.flatMap((c) => cityMatchTokens(c)).filter(Boolean);
+  const cities: number[] = [];
+  if (tokens.length) {
+    options.cityOptions.forEach((opt, i) => {
+      const hay = opt.toLowerCase().replace(/\s+/g, " ");
+      if (tokens.some((t) => hay.includes(t))) cities.push(i);
+    });
+  }
+  return { fnRequested: fnSet.size > 0, fns, cityRequested: tokens.length > 0, cities };
+}
+
+/** 这条分面代表的岗，用户投得上吗。 */
+export function facetMatchesFit(f: CampusFacet, fit: CampusFitSelection): boolean {
+  if (fit.fnRequested && !fit.fns.includes(f[2])) return false;
+  // 城市未标注（-1）放行：招聘方没写 ≠ 不在这个城市。
+  if (fit.cityRequested && f[0] !== -1 && !fit.cities.includes(f[0])) return false;
+  return true;
+}
+
+/** 这家公司在当前模式下有多少个岗对得上用户的方向（+ 城市）。 */
+export function countFacetsForFit(facets: CampusFacet[], fit: CampusFitSelection): number {
+  let n = 0;
+  for (const f of facets || []) if (facetMatchesFit(f, fit)) n += f[4];
+  return n;
 }

@@ -11,7 +11,11 @@ const {
   countUnlabeledInMatch,
   selectionIsUnsatisfiable,
   selectFacetIndexes,
+  countFacetsForFit,
+  selectFitIndexes,
 } = loadTs(path.join(__dirname, "..", "lib", "campus-facets.ts"));
+const { compareCompanyCardsByFit } = loadTs(path.join(__dirname, "..", "lib", "campus-zone.ts"));
+const { cityMatchTokens } = require("../lib/china-keyword-expansion");
 
 // 校招专区把「每条岗位一条记录」换成了「(城市,学历,职能,届别) → 计数」的聚合分面
 // （首屏 2.09 MB / 16,494 条 → 约两千个四元组）。这套测试钉死的不变量只有一条，但它是全部：
@@ -239,4 +243,105 @@ test("campusFacetKey 优先用 job_function 列，缺列时退回现算", () => 
     "研发",
     "列为空串退回现算",
   );
+});
+
+// ── 「对你有货」：同一份分面 + 用户画像做的尺子（2026-09-17）──────────────────────
+// 守的仍是那条唯一不变量：**分面聚合出来的数必须等于逐条数**。卡面写「有你能投的岗 N 个」，
+// 而这个 N 一旦与展开后能看到的岗对不上，就是不报错、不崩、只骗人的那类错。
+
+/** 参照实现：逐条判「这个岗对得上用户方向吗」。语义 = 职能硬相等（任一命中）+ 城市未标注放行。 */
+function referenceFits(job, targetFunctions, targetCities) {
+  if (targetFunctions.length) {
+    if (!targetFunctions.includes(campusFacetKey(job).fn)) return false;
+  }
+  if (targetCities.length) {
+    const city = String(job.city ?? "").trim();
+    if (city) {
+      const hay = city.toLowerCase().replace(/\s+/g, " ");
+      const tokens = targetCities.flatMap((c) => cityMatchTokens(c)).filter(Boolean);
+      if (tokens.length && !tokens.some((t) => hay.includes(t))) return false;
+    }
+  }
+  return true;
+}
+
+test("对口计数 ≡ 逐条过滤：穷举「方向 × 城市」画像组合", () => {
+  const lists = [
+    { pattern: "%字节%", jobs: makeJobs(300) },
+    { pattern: "%腾讯%", jobs: makeJobs(211) },
+    { pattern: "%空公司%", jobs: [] },
+  ];
+  const { options, byPattern } = buildCampusFacets(lists);
+  const FN_SETS = [
+    [],                     // 判不出方向
+    ["产品"],
+    ["研发"],
+    ["产品", "研发"],
+    ["火星工程"],            // 不在选项表里 → 一个都不该命中
+    ...options.functionOptions.map((f) => [f]),
+  ];
+  const CITY_SETS = [[], ["北京"], ["上海"], ["北京", "深圳"], ["Beijing"], ["火星市"]];
+
+  for (const fns of FN_SETS) {
+    for (const cities of CITY_SETS) {
+      const fit = selectFitIndexes(fns, cities, options);
+      for (const { pattern, jobs } of lists) {
+        const expected = jobs.filter((j) => referenceFits(j, fns, cities)).length;
+        const actual = countFacetsForFit(byPattern.get(pattern) || [], fit);
+        assert.equal(
+          actual,
+          expected,
+          `方向=${JSON.stringify(fns)} 城市=${JSON.stringify(cities)} 公司=${pattern}：分面 ${actual} ≠ 逐条 ${expected}`,
+        );
+      }
+    }
+  }
+});
+
+test("城市按别名双向匹配，且「没写城市」的岗一律放行", () => {
+  const jobs = [
+    { title: "2027届校园招聘-产品经理", city: "北京-海淀区" },
+    { title: "2027届校园招聘-产品经理", city: "Beijing" },
+    { title: "2027届校园招聘-产品经理", city: "上海" },
+    { title: "2027届校园招聘-产品经理", city: "" }, // 未标注 → 放行
+  ];
+  const { options, byPattern } = buildCampusFacets([{ pattern: "%X%", jobs }]);
+  const fit = selectFitIndexes(["产品"], ["北京"], options);
+  // 北京-海淀区 + Beijing + 未标注 = 3；上海那条写了别的城市 → 淘汰。
+  assert.equal(countFacetsForFit(byPattern.get("%X%"), fit), 3);
+});
+
+test("判不出方向 = 不做对口判定（全放行），不是 0", () => {
+  const jobs = makeJobs(50);
+  const { options, byPattern } = buildCampusFacets([{ pattern: "%X%", jobs }]);
+  assert.equal(countFacetsForFit(byPattern.get("%X%"), selectFitIndexes([], [], options)), jobs.length);
+});
+
+test("卡片排序：有对口岗的在前、0 沉底；判不出方向时退回按总岗数", () => {
+  const card = (name, fitCount, fitTotal, state = "hiring") => ({
+    company: name,
+    fitCount,
+    fitTotal,
+    window: { state },
+    nearestDeadlineMs: null,
+  });
+  const sorted = [
+    card("零对口大厂", 0, 5000),
+    card("小而对口", 3, 3),
+    card("待接入", 0, 0, "not_ingested"),
+    card("对口很多", 40, 900),
+  ]
+    .sort(compareCompanyCardsByFit)
+    .map((c) => c.company);
+  assert.deepEqual(sorted, ["对口很多", "小而对口", "零对口大厂", "待接入"]);
+
+  // fitCount 为 null（判不出方向）→ 窗口态优先、同态内按总岗数降序
+  const fallback = [
+    card("少岗", null, 10),
+    card("待接入", null, 0, "not_ingested"),
+    card("多岗", null, 900),
+  ]
+    .sort(compareCompanyCardsByFit)
+    .map((c) => c.company);
+  assert.deepEqual(fallback, ["多岗", "少岗", "待接入"]);
 });
