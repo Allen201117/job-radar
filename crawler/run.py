@@ -67,6 +67,7 @@ from adapters.vivo import VivoAdapter
 from adapters.lenovo import LenovoAdapter
 from adapters.byd import BydAdapter
 from adapters.sf_express import SfExpressAdapter
+from adapters.sf_express_campus import SfExpressCampusAdapter
 from adapters.tencent_music import TencentMusicAdapter
 from adapters.antgroup import AntGroupAdapter
 from adapters.mihoyo import MihoyoAdapter
@@ -75,6 +76,7 @@ from adapters.gllue import GllueAdapter
 from adapters.cnstaff import CnstaffAdapter
 from adapters.chnenergy import ChnenergyAdapter
 from adapters.midea import MideaAdapter
+from adapters.midea_campus import MideaCampusAdapter
 from adapters.cmb import CmbAdapter
 from adapters.cmbc import CmbcAdapter
 from adapters.spdb import SpdbAdapter
@@ -185,6 +187,9 @@ ADAPTERS = {
     "lenovo": LenovoAdapter(),  # 联想校招门户：jobBase/list 公开接口,零浏览器（2026-09-09 live）
     "byd": BydAdapter(),  # 比亚迪社招：公开列表 + 浏览器批量生成前端加密详情 URL
     "sf_express": SfExpressAdapter(),  # 顺丰社招：SearchJob.do 公开接口,零浏览器
+    # 顺丰校招是**另一个站另一套 id 空间**（crs-pub.sf-express.com/api/web/position/query），
+    # 与 hr.sf-express.com 的社招接口不通用（2026-09-18 live）。
+    "sf_express_campus": SfExpressCampusAdapter(),
     "tencent_music": TencentMusicAdapter(),  # 腾讯音乐自建门户：job/list + uc-job/list 公开接口,零浏览器
     "antgroup": AntGroupAdapter(),  # 蚂蚁集团自建门户：hrcareersweb position/search 公开接口,零浏览器
     "mihoyo": MihoyoAdapter(),  # 米哈游自建门户：ats-portal v1/job/list+info 公开接口,零浏览器
@@ -193,6 +198,9 @@ ADAPTERS = {
     "chnenergy": ChnenergyAdapter(),  # 国家能源集团自建门户：recTypeSerch 列表 + showgw 逐岗详情
     "cnstaff": CnstaffAdapter(),  # 聘客 cnstaff joblist API 通用层，host/tenant 动态解析
     "midea": MideaAdapter(),  # 美的集团自建门户：公开 position/list 接口，零浏览器
+    # 美的校招在 careers.midea.com（自建 iHR），与社招 recruit.midea.com 是两套 host。
+    # ⚠️ 翻页参数是 pageIndex，pageNum 会被静默忽略（见 adapters/midea_campus.py）。
+    "midea_campus": MideaCampusAdapter(),
     "cmb": CmbAdapter(),  # 招商银行自建门户：公开社会招聘接口，零浏览器
     "cmbc": CmbcAdapter(),  # 中国民生银行自建门户：公开社会招聘接口，零浏览器
     "gree": GreeAdapter(),  # 格力自建门户：公开校招/社招接口，零浏览器
@@ -217,6 +225,7 @@ DOMESTIC_ADAPTERS = {
     "chnenergy",  # 国家能源集团（2026-09-05 live 核实逐岗详情页；曾被误当公告制）
     "abchina",  # 农业银行（浏览器档：响应体加密，读 React state）
     "lixiang_campus",  # 理想汽车校招/实习（2026-09-09 live 核实逐岗详情页，零浏览器）
+    "sf_express_campus", "midea_campus",  # 顺丰 / 美的 校招门户（2026-09-18 live，零浏览器）
 }
 
 
@@ -232,6 +241,8 @@ _HTTPX_SAFE_ADAPTERS = {
     "meituan", "meituan_campus", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "sf_express", "lenovo",  # 已逐一核实为纯 httpx fetch
     "tencent_music", "antgroup", "mihoyo", "avature", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree", "tonghuashun",  # 公开接口/SSR，纯 httpx
     "zto", "zto_campus",  # 中通：列表+详情均为公开 JSON，零浏览器
+    # 顺丰 / 美的 校招门户：列表即全文（无逐岗富化），纯 httpx、无共享状态（2026-09-18 live）
+    "sf_express_campus", "midea_campus",
     "spdb", "icbc", "ccb", "bankcomm", "cmcc",  # 国有大行 + 中国移动自建门户，纯 httpx（无浏览器、无共享状态）
     "chnenergy",  # 国家能源集团自建门户，纯 httpx（POST 列表 + GET 详情）
     # 字节：jobs.bytedance.com posts API 已改为纯 httpx offset/limit 全量翻页；
