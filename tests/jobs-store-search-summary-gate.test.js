@@ -9,7 +9,7 @@ const S = loadTs(path.join(__dirname, "..", "lib", "jobs-store", "search.ts"));
 
 const baseFilters = {
   company: "", city: "", jobType: "", keyword: "", showIgnored: false, showApplied: false, showNewOnly: false,
-  sortBy: "match", capitalOrigin: "", region: "", salaryOnly: false, sponsorshipOnly: false, education: "",
+  sortBy: "newest", capitalOrigin: "", region: "", salaryOnly: false, sponsorshipOnly: false, education: "",
   jobFunction: "", jobRole: "", experience: "", postedWithin: "", companyTier: "",
 };
 const prefs = (over = {}) => ({ target_roles: ["产品经理"], target_keywords: [], exclude_keywords: [], target_locations: [], ...over });
@@ -58,4 +58,11 @@ test("没有排除词 → 不加条件、不发空数组", () => {
   S.appendExcludeWhere(conds, params, null);
   assert.deepEqual(conds, []);
   assert.deepEqual(params, []);
+});
+
+test("登录 + 按匹配度排：候选一律不传正文（正文只给命中页回补）", () => {
+  const params = [];
+  const expr = S.candidateSummaryExpr(params, { ...baseFilters, sortBy: "match" }, prefs({ target_roles: ["后端工程师"] }));
+  assert.equal(expr, "null::text");
+  assert.equal(params.length, 0);
 });

@@ -198,8 +198,8 @@ test("jobs-store scan takes the whole match budget in ONE query", async () => {
   // ⚠️ 也别改成并行取页：实测并发 8/16 会让 pg 池抛 connect timeout(500)、并发 3 则
   // 从 25s 恶化到 32s（香港库仅 2 vCPU，扫描是 DB 端 CPU 密集活，并发只是互抢）。
   assert.deepEqual(pageOffsets, [0]);
-  // 2026-09-17 起登录 match 走 SQL 粗排 + 4000 窗（等价性见 docs/reviews/2026-09-17 §10），仍是一次取满、不翻页
-  assert.deepEqual(limits, [4000]);
+  // 2026-09-17 起登录 match 走 SQL 粗排 + 1000 窗、候选不传正文（等价性见 docs/reviews/2026-09-17 §10），仍是一次取满、不翻页
+  assert.deepEqual(limits, [1000]);
   // 排序仍跨整批生效：高分岗在第 1001 位也要被排到最前。
   assert.equal(result.jobs[0].id, "high");
   assert.equal(result.jobs[0].match_score, 30);

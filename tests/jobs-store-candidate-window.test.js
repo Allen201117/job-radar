@@ -255,9 +255,9 @@ test("⚠️ 排序参数绝不能混进计数查询的绑定参数（多一个 
   // 计数用的 where 参数必须是候选参数的**前缀**，多余的一个都不能进计数查询。
   const extras = cand.params.slice(cnt.params.length);
   assert.deepEqual(cand.params.slice(0, cnt.params.length), cnt.params);
-  assert.equal(extras.length, 2, "候选专属参数 = [目标职能数组, 偏好 tsquery]");
-  assert.ok(Array.isArray(extras[0]) && extras[0].includes("研发"));
-  assert.equal(typeof extras[1], "string");
+  // 候选专属参数 = 粗排用的城市/公司数组 + 排序 tsquery（2026-09-17 起登录 match 不传正文，没有职能数组了）
+  assert.ok(extras.length >= 1, "候选查询至少多带排序 tsquery");
+  assert.equal(typeof extras[extras.length - 1], "string", "最后一个候选专属参数是排序 tsquery");
   // 计数 SQL 里出现的最大占位符编号不能超过它自己带的参数个数。
   const maxPlaceholder = Math.max(
     0,
@@ -289,7 +289,8 @@ test("扫描路径（无筛选）同样按偏好优先截断", async () => {
   assert.ok(pieces >= 2);
   assert.match(c.sql, /first_seen_at > now\(\) - interval '7 days'/);
   // 窗口不再是 28000 整窗
-  assert.ok(c.params[c.params.length - 2] <= 4000, `登录 match 窗口应 ≤4000，拿到 ${c.params[c.params.length - 2]}`);
+  assert.ok(c.params[c.params.length - 2] <= 1000, `登录 match 窗口应 ≤1000，拿到 ${c.params[c.params.length - 2]}`);
+  assert.match(c.sql, /null::text as summary/, "登录 match 候选不传正文");
   // limit / offset 的占位符要排在偏好参数之后，编号别串位。
   assert.match(c.sql, /limit \$(\d+) offset \$(\d+)/);
   const [, lim, off] = c.sql.match(/limit \$(\d+) offset \$(\d+)/);
