@@ -42,7 +42,7 @@ export type SearchResult = {
 };
 
 // 与 SQL search_tokens 同口径：纯拉丁/数字词→整词（英文标题选择性好、不爆）；含 CJK 的词→相邻双字（中文子串）。
-function queryTokens(term: string): string[] {
+export function queryTokens(term: string): string[] {
   const out: string[] = [];
   for (const tok of String(term || "").toLowerCase().split(/\s+/)) {
     if (!tok) continue;

@@ -321,8 +321,10 @@ test("扫描路径（无筛选）同样按偏好优先截断", async () => {
   // 宽查询上百个 OR 子句会让规划器放弃 GIN 走全表扫（2026-09-18 真实账号 236 子句 → 6.5s）。
   const wide = c.params[c.params.length - 3];
   assert.notEqual(narrow, wide, "收窄 tsquery 不能复用排序的宽查询");
-  assert.ok(!narrow.includes("|") || narrow.split("|").length <= 5, `收窄 tsquery 子句过多：${narrow}`);
-  assert.ok(wide.length >= narrow.length, "排序用的宽查询至少不比收窄查询短");
+  // 收窄 = 岗位名 ∪ 非泛化扩展 ⊆ 宽查询的词集：子句数不多于宽查询，且泛词（如「产品」单独一词）不在其中。
+  assert.ok(narrow.split("|").length <= wide.split("|").length, `收窄 tsquery 子句不该多于宽查询：${narrow}`);
+  assert.ok(narrow.includes("产品 & 品经 & 经理"), `岗位名本身必须保留在收窄条件里：${narrow}`);
+  assert.ok(!/\(产品\)/.test(narrow), `泛词「产品」不该进收窄条件：${narrow}`);
   // 收窄条件只进候选查询，不进计数（总数口径不变）。
   for (const q of countQueries(calls)) assert.doesNotMatch(q.sql, /interval '7 days'\)/);
   // 窗口不再是 28000 整窗

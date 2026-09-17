@@ -2,8 +2,9 @@
 //   同一份 search_doc bigram FTS（to_tsquery）收窄候选 + 同一份 JS 精筛/排序（scoring + job-filter）。
 //   差别仅「候选取数」从 supabase-js 换成直连 pg SQL → 搜索口径/精度/排序与线上零差异。
 import "server-only";
+import { unstable_cache } from "next/cache";
 import { jobsQuery } from "./client";
-import { actionHiddenJobIds, scoringSignalGroups, scoringTargetFunctions, sortAndFilterJobs } from "@/lib/scoring";
+import { actionHiddenJobIds, scoringSignalGroups, scoringTargetFunctions, scoringTargetRoles, sortAndFilterJobs } from "@/lib/scoring";
 import {
   filterAndRankJobs,
   filtersFullyPushedToSql,
@@ -13,7 +14,8 @@ import {
   type Filters,
   type MatchReason,
 } from "@/lib/job-filter";
-import { buildTsquery, annotateAndRank, annotateSourceAdapter } from "@/lib/job-search";
+import { buildTsquery, annotateAndRank, annotateSourceAdapter, queryTokens } from "@/lib/job-search";
+import ftsTokenDf from "@/lib/fts-token-df.json";
 import { cityMatchTokens, ftsCandidateTerms } from "@/lib/china-keyword-expansion";
 import { companyTierPatterns, NAMED_TIER_PATTERNS } from "@/lib/company-tiers";
 import { appendJobScopeWhere, effectiveJobScope } from "@/lib/job-scope";
@@ -424,6 +426,24 @@ function candidateOrderBy(
 // 让「JS 精排要看的那批」尽量落在窗口前部——窗口从 28,000 缩到几千行，带宽是香港机的硬上限（见 CLAUDE.md）。
 // 方向项用 FTS 近似 keywordMatchTier（同一份 ftsCandidateTerms 展开），城市/公司项与 scoreJob 同为子串命中。
 // ⚠️ 排序 tsquery 仍压在**最后一个**参数上（tests/jobs-store-candidate-window 按它定位），城市/公司数组在它前面。
+const FTS_GENERIC_TOKENS: Record<string, number> = (ftsTokenDf as { tokens: Record<string, number> }).tokens;
+/** 一个检索词是否「泛词」：它的全部 token 在 active 岗里都是高频 token（文档频率 ≥ 阈值）。无 token 视为泛词（不进收窄）。 */
+export function isGenericFtsTerm(term: string): boolean {
+  const toks = queryTokens(term);
+  if (!toks.length) return true;
+  return toks.every((t) => FTS_GENERIC_TOKENS[t] !== undefined);
+}
+/** 收窄候选用的方向词：岗位名本身 ∪ 岗位名的非泛化扩展（不含关键词/技能）。理由见 Prescore.candidateWhere 注释。 */
+export function narrowDirectionTerms(prefs: UserPreferences, includeOverseasLexicon: boolean): string[] {
+  const roles = scoringTargetRoles(prefs, includeOverseasLexicon).slice(0, PREF_SIGNAL_TERM_CAP);
+  const out = new Set<string>();
+  for (const r of roles) {
+    out.add(r);
+    for (const t of ftsCandidateTerms(r, { includeOverseasLexicon })) if (!isGenericFtsTerm(t)) out.add(t);
+  }
+  return [...out];
+}
+
 type Prescore = {
   orderBy: string;
   /**
@@ -435,11 +455,15 @@ type Prescore = {
    * jobs_status_first_seen_idx 的 BitmapOr），同一画像 EXPLAIN 493ms、窗口照样填满 1000 行。
    * 被排除的只有「不命中方向、又超过 7 天、只靠城市/公司加分」的行（粗排分 ≤35，且 7 天内新岗单独就有 1.7 万行，
    * 窗口不会因此变空）。等价性对拍见 docs/reviews/2026-09-17 §11。
-   * ⚠️ 收窄用的方向 tsquery 必须是**未经词表扩展的原始方向词**（narrowQuery），不能复用排序键那个宽查询：
-   * 宽查询经 ftsCandidateTerms 扩展后动辄上百个 OR 子句（创始人账号 5 个角色 → 236 个子句、3,368 字符，
-   * 全库 40% 的岗都命中）——规划器对它放弃 GIN 走 Parallel Seq Scan，线上 fetch 6.5s，与没收窄一样慢；
-   * 原始词 5 个 AND 短语只命中 2,067 行，同一条 SQL 461ms（2026-09-18 真实账号 EXPLAIN）。
-   * 没有方向词（narrowQuery 为空）时不收窄——那时只剩城市/公司/7 天三项，全表扫是老路径，量级同旧。
+   * ⚠️ 收窄用的方向 tsquery（narrowQuery）不能复用排序键那个宽查询，也不能只用原始词——两头都试过、都错：
+   * · 宽查询 = 全部方向词（岗位名 + 关键词/技能）经 ftsCandidateTerms 扩展，创始人账号 236 个 OR 子句、全库 36% 的岗命中
+   *   → 规划器放弃 GIN 走 Parallel Seq Scan，线上 fetch 6.5s，与没收窄一样慢；
+   * · 只用原始岗位名 → 「财务会计」这位用户第一页重合率 95% → 17%：真值里大量只写「会计」的老岗被挡在候选外。
+   * 现行口径（见 narrowDirectionTerms）：**岗位名本身 ∪ 岗位名的非泛化扩展**。「泛化」按 lib/fts-token-df.json
+   * （active 岗 search_doc 的 token 文档频率，脚本 scripts/fts-token-df/gen.mjs）判：一个词的全部 token 都 ≥ 阈值才算泛
+   * （「产品经理」三个 bigram 都高频但整短语只命中 1.6%，所以岗位名本身永远保留）。关键词/技能不进收窄条件。
+   * 实测：财务会计 8,970 行（扩展一个不丢）、后端工程师 5,901（丢「工程师」「java」）、创始人 27,896 行 897ms（原 5.8s）。
+   * 没有岗位名时不收窄——那时只剩城市/公司/7 天三项，全表扫是老路径，量级同旧。
    */
   candidateWhere: string | null;
 };
@@ -458,8 +482,7 @@ function prescoreOrderBy(
     .slice(0, PREF_SIGNAL_TERM_CAP)
     .flatMap((t: string) => ftsCandidateTerms(t, { includeOverseasLexicon }));
   const dirQuery = buildTsquery(dirTerms, [], []);
-  // 收窄条件用的原始方向词（不扩展）：每个角色一条「其全部 token 的 AND」子句，走 GIN 选择性好。
-  const narrowQuery = buildTsquery(groups.direction.slice(0, PREF_SIGNAL_TERM_CAP), [], []);
+  const narrowQuery = buildTsquery(narrowDirectionTerms(prefs, includeOverseasLexicon), [], []);
   const pieces: string[] = [];
   const cities = splitMultiValue(filters.city).length ? [] : groups.locations;
   if (cities.length) {
@@ -529,6 +552,24 @@ function countHidden(rows: Array<{ id?: string }>, hiddenIds: Set<string>): numb
  *   ④ recruitment_category 尚未算出的行走的是「信号超集」兜底分支，那条不是充分条件 → 结果集里
  *      只要还有这种行，数就不可信。
  */
+const CAPPED_COUNT_TTL_SECONDS = 300;
+type CappedCountRow = { total: number; unclassified: number };
+const queryCappedCount = async (sql: string, params: unknown[]) =>
+  (await jobsQuery(sql, params)) as CappedCountRow[];
+const cachedCappedCountInner = unstable_cache(queryCappedCount, ["jobs-search-capped-count-v1"], {
+  revalidate: CAPPED_COUNT_TTL_SECONDS,
+});
+// unstable_cache 只在 Next 请求上下文里可用；单测 / 独立脚本里抛「incrementalCache missing」→ 退回直查
+// （与 lib/jobs-store/read.ts 的 getCompanyActiveAggregates 同一做法，只吞这一种错）。
+async function cachedCappedCount(sql: string, params: unknown[]): Promise<CappedCountRow[]> {
+  try {
+    return await cachedCappedCountInner(sql, params);
+  } catch (error) {
+    if (!(error instanceof Error && /incrementalCache missing/i.test(error.message))) throw error;
+    return queryCappedCount(sql, params);
+  }
+}
+
 async function exactTotalWhenCapped(args: {
   conds: string[];
   params: unknown[];
@@ -552,12 +593,15 @@ async function exactTotalWhenCapped(args: {
     where.push(`not (id = any($${countParams.length}::uuid[]))`);
   }
   try {
-    // 走同一份候选缓存：翻页时 where 逐字节相同 → 一次查询覆盖整轮浏览（实测热查询 ~85ms）。
-    const rows = (await fetchCandidates(
+    // 跨实例数据缓存（2026-09-18）：这条 count(*) 只由 where 决定、与用户无关，结果就两个整数；
+    // 线上冷路径它是 33 万行并行全表扫 0.55~0.94s，与回补展示列并行后 tail ≈ 它。此前走 fetchCandidates 的
+    // 进程内缓存——每次请求常落到不同实例，首屏基本不命中（同一 tab 三连打三个实例）。
+    // ⚠️ 缓存函数体内不读 cookies()/headers()；key 由 sql + params 序列化而来，翻页/换用户同 where 共用一份。
+    const rows = await cachedCappedCount(
       `select count(*)::int as total, count(*) filter (where recruitment_category is null)::int as unclassified ` +
         `from jobs where ${where.join(" and ")}`,
       countParams,
-    )) as Array<{ total: number; unclassified: number }>;
+    );
     const row = rows[0];
     if (!row) return null;
     if (filters.jobType && row.unclassified > 0) return null; // ④

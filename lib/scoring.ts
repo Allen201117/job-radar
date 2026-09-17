@@ -362,7 +362,7 @@ function shouldUseOverseasProfile(job: Job, preferences: UserPreferences): boole
   return false;
 }
 
-function scoringTargetRoles(preferences: UserPreferences, overseasProfile: boolean): string[] {
+export function scoringTargetRoles(preferences: UserPreferences, overseasProfile: boolean): string[] {
   // 与 lib/opportunities/profile.ts 同口径：斜杠=或、去「相关/岗位」填充、去「办公室」修饰（normalizeRolePhrases）
   const base = normalizeRolePhrases(preferences.target_roles || []);
   if (!overseasProfile) return base;
