@@ -80,7 +80,9 @@ MODULE_OUTPUT = {
     # 有主体可算却一条指标都没产出 = 洞察库页面会空着，属零产出。
     "bu_signals": (("items_written",), ("subjects_scanned",)),
     # 有待判档的条目却一条都没判出来 = 档位筛选会一直空着，属零产出。
-    "insight_grade_extract": (("graded",), ("scanned",)),
+    # attempts_exhausted 也算产出：判不出档的条目走到「搁置」同样是队列在前进。
+    # 只有「既没判出档、也没有一条走到终态」才是真卡住（2026-09-09~17 空转 9 天正是这一态）。
+    "insight_grade_extract": (("graded", "attempts_exhausted"), ("scanned",)),
     # run.py 每轮抓取收尾写的台账（2026-09-03）：有源可抓却一个岗都没拿到 = 零产出。
     "daily_crawl": (("jobs_found_total",), ("sources_total",)),
 }
