@@ -130,6 +130,31 @@ class TestBeisenAdapter(unittest.TestCase):
         self.assertEqual(by["财务实习生"].jd_url,
                          "https://group.zhiye.com/custom/zwxq?jobAdId=uuid-b")
 
+    def test_beisen_category_becomes_job_type(self):
+        """北森列表自报的 `Category`（"校园招聘"/"社会招聘"/"实习"）必须进 job_type。
+
+        它是租户自己声明的招聘类别，比标题/URL 猜权威得多；漏掉它，校招岗只能被兜底成社招 ——
+        2026-09-17 live 逐租户问北森自己，252 个租户自报 22,862 个校招岗，而奇瑞这类
+        标题里一个校招令牌都没有的（"生产操作工"）在库里全是社招。
+        """
+        self.a._detail_route = "https://group.zhiye.com/custom/zwxq"
+        sample = {"Data": [
+            {"Id": "c1", "JobAdName": "生产操作工", "LocNames": "芜湖",
+             "Category": "校园招聘", "Kind": "全职"},
+            {"Id": "s1", "JobAdName": "销售代表", "LocNames": "上海",
+             "Category": "社会招聘", "Kind": "全职"},
+        ]}
+        by = {j.title: j for j in self.a.parse(json.dumps({"_intercepted": [sample]}))}
+        self.assertEqual(by["生产操作工"].job_type, "校园招聘")
+        self.assertEqual(by["销售代表"].job_type, "社会招聘")
+
+    def test_beisen_kind_is_never_used_as_job_type(self):
+        """`Kind`（全职/兼职）绝不能当 job_type —— "全职" 会被裁决成「社招」，把校招岗按死。"""
+        self.a._detail_route = "https://group.zhiye.com/custom/zwxq"
+        sample = {"Data": [{"Id": "k1", "JobAdName": "某岗", "LocNames": "上海", "Kind": "全职"}]}
+        [job] = self.a.parse(json.dumps({"_intercepted": [sample]}))
+        self.assertIsNone(job.job_type)
+
     def test_other_tenant_detail_route(self):
         # 不同租户详情页名不同（如横店 /campus/detail）：用探测到的 _detail_base 拼。
         self.a._detail_route = "https://group.zhiye.com/campus/detail"
@@ -138,12 +163,19 @@ class TestBeisenAdapter(unittest.TestCase):
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0].jd_url, "https://group.zhiye.com/campus/detail?jobAdId=x9")
 
-    def test_no_detail_route_drops_jobs(self):
-        # 探不到详情路由（_detail_route=None）→ 不拼坏链，丢弃无接口链接的行。
+    def test_no_detail_route_raises_instead_of_reporting_zero_jobs(self):
+        # 探不到详情路由（_detail_route=None）→ 仍然不拼坏链；但「有行却一条都映射不出来」
+        # **不许**静默返回 0 岗 —— 那会被下游读成「对方没岗了」。实测复星医药就这么连着
+        # success + 0 岗 33 次（北森自报 161 个岗），必须抛错记 failed 让人看见。
         self.a._detail_route = None
         sample = {"Data": [{"Id": "x9", "JobAdName": "投行分析师", "LocNames": "北京"}]}
-        jobs = self.a.parse(json.dumps({"_intercepted": [sample]}))
-        self.assertEqual(jobs, [])
+        with self.assertRaises(RuntimeError):
+            self.a.parse(json.dumps({"_intercepted": [sample]}))
+
+    def test_empty_list_is_still_an_honest_zero(self):
+        # 对方真的没岗 → 照常返回 []，不许被上面那道闸误伤成 failed。
+        self.a._detail_route = None
+        self.assertEqual(self.a.parse(json.dumps({"_intercepted": [{"Data": []}]})), [])
 
     def test_click_captured_dict_route(self):
         # 点击捕获式路由 {template, idfield}：按 idfield 取值填模板（适配 jobId/jobAdId × Id/JobAdId）。
@@ -225,8 +257,31 @@ class TestBeisenSsrParse(unittest.TestCase):
         # SSR 缓存形态 {ssr_path, ssr_param} 不应被新版 _resolve_url 误用（无 template → 返回空）。
         self.a._detail_route = {"ssr_path": "szxq", "ssr_param": "jobId"}
         sample = {"Data": [{"Id": "x", "JobAdName": "岗", "LocNames": "北京"}]}
-        # 走新版 _intercepted 路径时，SSR dict 不含 template → 该行无 jd_url 被丢，不产坏链。
-        self.assertEqual(self.a.parse(json.dumps({"_intercepted": [sample]})), [])
+        # 走新版 _intercepted 路径时，SSR dict 不含 template → 该行无 jd_url，绝不产坏链
+        # （2026-09-17 真渲染实测：新版 uuid 拼进 SSR 路由渲染出来是门户首页）。
+        # 但也不许静默 0 岗：抛错记 failed，等浏览器档重探路由。
+        with self.assertRaises(RuntimeError):
+            self.a.parse(json.dumps({"_intercepted": [sample]}))
+
+    def test_ssr_shaped_route_is_not_httpx_ready(self):
+        """`{ssr_path, ssr_param}` 配不了新版 uuid → 不能算「零浏览器可抓」，必须留浏览器档重探路由。
+
+        它曾被当成「已缓存」→ 排进 httpx 快车道 → 每行 jd_url 空串 → success + 0 岗永久静默：
+        复星医药（北森自报 161 岗 / 71 校招）、中核集团（自报 854 校招、库里 0）、京东方（必投）三家同病。
+        """
+        from adapters.china_ats import _BEISEN_ROUTE_CACHE, beisen_httpx_ready
+        host = "unit-test-tenant.zhiye.com"
+        try:
+            _BEISEN_ROUTE_CACHE[host] = {"ssr_path": "szxq", "ssr_param": "jobId"}
+            self.assertFalse(beisen_httpx_ready(f"https://{host}/social"))
+            _BEISEN_ROUTE_CACHE[host] = {"template": "https://x/d?jobAdId={id}", "idfield": "Id"}
+            self.assertTrue(beisen_httpx_ready(f"https://{host}/social"))
+            _BEISEN_ROUTE_CACHE[host] = "https://x/custom/zwxq"
+            self.assertTrue(beisen_httpx_ready(f"https://{host}/social"))
+            _BEISEN_ROUTE_CACHE[host] = {"cms": True}
+            self.assertTrue(beisen_httpx_ready(f"https://{host}/social"))
+        finally:
+            _BEISEN_ROUTE_CACHE.pop(host, None)
 
     def test_ssr_anchor_js_keeps_guid_adid_anchors(self):
         # BOE / 中国建筑这类老校招 SSR 使用 details2021?adId={GUID}，不能只接收数字 jobId。
