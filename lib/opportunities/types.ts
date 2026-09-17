@@ -241,6 +241,10 @@ export interface FeedTiming {
   total: number; // buildOpportunityFeed 端到端
   candidates: number; // 召回条数
   displayed: number; // 最终展示条数
+  // 跨库载荷（KB，抽样外推，见 lib/jobs-store/row-bytes）。香港库出口带宽是个位数 Mbps，
+  // 「这一跳传了多少字节」比耗时更稳定、更能指认病根——耗时会随实例与网络抖，字节数不会。
+  recallKb?: number; // 召回候选
+  hydrateKb?: number; // 展示回填
 }
 
 // /api/opportunities 响应体（§7.1 + v3 §8.2）

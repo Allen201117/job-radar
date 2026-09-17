@@ -196,10 +196,21 @@ export function computeMatchFacts(
     if (!Number.isNaN(t)) noveltyHours = (now.getTime() - t) / 3_600_000;
   }
 
+  // 正文长度优先认召回随行带回的 `summary_len`（= 库里 `char_length(btrim(summary))`，**完整**正文）。
+  // 两个原因：① 召回只传 300 字截断正文，用它算「≥200 字」本来就是在算截断值；
+  // ② 正文按需传之后（lib/jobs-store/opportunities.candidateSummaryExpr）职能门必拒的行 summary 为 null，
+  //    若跟着判成 thin_summary，拒绝原因会从 role_mismatch 漂成 thin_summary —— 结果不变但计分板会骗人。
+  // 没有这一列的调用方（Supabase 兜底 / 单测 / 洞察派生）照旧按 job.summary 现算，行为不变。
+  const recalledSummaryLen = (job as unknown as { summary_len?: unknown }).summary_len;
+  const summaryLen =
+    typeof recalledSummaryLen === "number"
+      ? recalledSummaryLen
+      : String(job.summary || "").trim().length;
+
   return {
     active: job.status === "active",
-    summaryOk: String(job.summary || "").trim().length >= 60,
-    summaryLong: String(job.summary || "").trim().length >= 200,
+    summaryOk: summaryLen >= 60,
+    summaryLong: summaryLen >= 200,
     sourceDisabled: sourceMeta != null && sourceMeta.enabled === false,
     excluded: excludeJobs([job], profile.excludeKeywords).length === 0,
     freshness: freshnessState(job.last_seen_at, sourceMeta?.crawl_method ?? null, now),

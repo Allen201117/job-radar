@@ -18,7 +18,7 @@ import { windowStatus, compareCompanyCardsByFit } from "@/lib/campus-zone";
 import { getRecruitmentCyclesForCompanies } from "@/lib/recruitment-cycle-store";
 import { getRecentCampusSurges } from "@/lib/campus-surge-store";
 import {
-  buildCampusFacets,
+  buildCampusFacetsFromGroups,
   countFacetsForFit,
   selectFitIndexes,
   type CampusFilterOptions,
@@ -68,18 +68,21 @@ const loadCampusBoard = unstable_cache(
       getRecentCampusSurges(companies),
     ]);
 
-    const campus = buildCampusFacets(zone.map((z) => ({ pattern: z.pattern, jobs: z.campusJobs })));
-    const intern = buildCampusFacets(zone.map((z) => ({ pattern: z.pattern, jobs: z.internJobs })));
+    // 看板只要聚合分面：getCampusZone 现在回的是**已按四维分好组的计数**（SQL group by 下推，
+    // 见 lib/campus-zone.foldCampusZone），不再是两万条岗位行。
+    const campus = buildCampusFacetsFromGroups(zone.map((z) => ({ pattern: z.pattern, groups: z.campusGroups })));
+    const intern = buildCampusFacetsFromGroups(zone.map((z) => ({ pattern: z.pattern, groups: z.internGroups })));
 
     const cards: CachedCampusCard[] = zone.map((z) => {
       const src = sourceCov.get(z.pattern) || { hasAnySource: z.hasAnyActiveJob, hasCampusSource: false };
-      const deadlines = z.campusJobs
-        .map((j) => (j.deadline ? Date.parse(j.deadline) : NaN))
+      // 最近截止只要「这家校招桶里出现过的截止日」的最小值——分面组已按 deadline 去重，取 min 与逐条取 min 相同。
+      const deadlines = z.campusGroups
+        .map((g) => (g.deadline ? Date.parse(g.deadline) : NaN))
         .filter((t) => !Number.isNaN(t));
       const obs = cyclesByPattern.get(z.pattern) || [];
       // 快路①：清洗后的公司级最近截止（滤掉「长期有效」/占位/远未来/过去），只作弱档提示。
-      const cleanDl = z.campusJobs
-        .map((j) => cleanCampusDeadlineMs(j.deadline))
+      const cleanDl = z.campusGroups
+        .map((g) => cleanCampusDeadlineMs(g.deadline))
         .filter((t): t is number => t != null);
       return {
         company: z.company,

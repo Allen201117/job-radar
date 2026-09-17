@@ -21,7 +21,8 @@ import {
 import { userTargetFunctions } from "@/lib/opportunities/eligibility";
 import { appendJobScopeWhere, effectiveTargetRegions, jobMatchesScope } from "@/lib/job-scope";
 import { appendCurrentSeasonWhere } from "@/lib/campus-season";
-import { collapseBulkStoreJobs } from "@/lib/bulk-store-dedup";
+import { collapseBulkStoreJobs, BULK_STORE_COMPANIES } from "@/lib/bulk-store-dedup";
+import { estimateRowBytes, kb } from "./row-bytes";
 import type { RadarProfile } from "@/lib/opportunities/types";
 
 type SupabaseLike = { from: (table: string) => any };
@@ -29,7 +30,21 @@ type SupabaseLike = { from: (table: string) => any };
 export interface RecallResult {
   jobs: any[];
   capped: boolean;
+  /** 召回这一跳的分段账本（观测用）；Supabase 兜底路径不产出。 */
+  timing?: RecallTiming;
 }
+
+/** 召回账本：行数 / 载荷估算 / 取数耗时。/today 是登录页，外部 curl 不到，只能靠服务端日志。 */
+export type RecallTiming = {
+  tiers: string[];
+  budget: number;
+  rows: number;
+  bytes: number;
+  /** 跨库取候选（含传输 + node-pg 解析）。 */
+  fetchMs: number;
+  /** 去重 / 剥辅助列 / 门店折叠。 */
+  foldMs: number;
+};
 
 const SEVEN_DAYS_MS = 7 * 86_400_000;
 // 召回载荷调优（2026-06-26）：summary 截 300。**注**：这只是性能优化，不是 503 事故的根因——
@@ -84,9 +99,12 @@ const ACTIONED_EXCLUDE_CAP = 500;
 // recruitment_category / recruitment_explicit / job_function（2026-09-17 加）：三列都是入库时算好的物化分类，
 // stage-2 的 recruitmentCategory / classifyJobFunction 有列就认列。不带回来就会用**截断到 300 字的摘要**重算，
 // 与卡片徽标（读完整行的列）打架——线上实锤：社招岗的匹配理由写着「校招岗位」。
-const RECALL_COLUMNS =
+// summary_len = 完整正文（btrim 后）的字符数，恒随行返回：`summaryOk`(≥60) / `summaryLong`(≥200) 是**长度**判据，
+// 不能跟着「正文按需传」一起变没（否则职能门必拒的行会被记成 thin_summary 而不是 role_mismatch，
+// 计分板口径静静地漂）。3~4 字节/行，可忽略。见 lib/opportunities/eligibility.computeMatchFacts。
+const RECALL_COLUMNS = (summaryExpr: string) =>
   "id, source_id, company, title, location, country_code, job_scope, job_type, " +
-  `left(btrim(summary), ${SUMMARY_TRUNC}) as summary, ` +
+  `${summaryExpr}, char_length(btrim(summary)) as summary_len, ` +
   "jd_url, salary_text, posted_at, deadline, first_seen_at, last_seen_at, enrich_checked_at, status, education, " +
   "recruitment_category, recruitment_explicit, job_function";
 
@@ -237,6 +255,44 @@ function roleTsquery(profile: RadarProfile): string | null {
   }
 
   return clauses.length ? clauses.join(" | ") : null;
+}
+
+/**
+ * 正文按需传（2026-09-18）：只给「有机会通过职能门」的候选行传 300 字截断正文，其余传 NULL。
+ *
+ * 依据（与 /jobs 的 `candidateSummaryExpr` 是同一条论证，见 lib/jobs-store/search.ts）：
+ * stage-2 里正文只被两处读到 —— `keywordMatchTier`（方向判定）与 `skillsHit`（加分技能）。
+ * 而 `computeMatchFacts` 的职能门是：`userFns` 非空 且 岗位职能既不是「其他」也不在 `userFns` 里
+ * ⇒ `roleTier = null` ⇒ `roleConstrained` 必为真（userFns 非空 ⇒ targetRoles 非空）⇒
+ * `checkEligibility` 一定 `reject("role_mismatch")`。**这些行的正文不可能改变任何结果**，
+ * 它们的 MatchFacts 连同 skillsHit 一起被丢弃。所以不传 = 零语义变化，省的是纯过路费。
+ *
+ * 两条必须留的口子（少一条就不是等价变换了）：
+ *   ① `job_function` 为 NULL / 空 / 「其他」一律照传 —— 职能门对这三种放行（classifyJobFunction
+ *      会在列为空时用正文现算，把正文抽走等于把现算的输入抽走）。
+ *   ② 批量门店公司（lib/bulk-store-dedup）照传 —— `bulkStoreGroupKey` 拿**正文**当折叠键，
+ *      抽走正文会让折叠失效，`counts.screened` / `filtered` 跟着漂（结果不变但账本会骗人）。
+ * 运维开关 `RECALL_SUMMARY_GATE=off` 退回全传（也是改前/改后对拍的尺子，见 scripts/perf-probe）。
+ *
+ * 实测（2026-09-18，真库真画像）：机械@广东 1,794 行里 710 行（40%）职能门必拒 ——
+ * 正文 1,282 kB → 754 kB，整条召回 1,905 kB → 1,377 kB。
+ */
+function candidateSummaryExpr(profile: RadarProfile, params: unknown[]): string {
+  const full = `left(btrim(summary), ${SUMMARY_TRUNC}) as summary`;
+  if (String(process.env.RECALL_SUMMARY_GATE || "").toLowerCase() === "off") return full;
+  const fns = Array.from(userTargetFunctions(profile));
+  if (!fns.length) return full; // 用户没填目标岗位 → 职能门整体不生效，一行都不能省
+  params.push(fns);
+  const fnRef = `$${params.length}::text[]`;
+  params.push(BULK_STORE_COMPANIES);
+  // ⚠️ 参数传原词、`%` 在 SQL 里拼：阶段谓词的哨兵测试（tests/recall-stage-index-alignment）
+  // 按「元素以 % 开头的数组」识别 like 模式组，别混进去。
+  const bulkRef = `array(select '%' || c || '%' from unnest($${params.length}::text[]) c)`;
+  return (
+    `case when job_function is null or job_function = '' or job_function = '其他'` +
+    ` or job_function = any(${fnRef}) or company ilike any(${bulkRef})` +
+    ` then left(btrim(summary), ${SUMMARY_TRUNC}) end as summary`
+  );
 }
 
 function uniqueTerms(values: string[]): string[] {
@@ -491,12 +547,14 @@ export function buildRecallSql(
 
   params.push(budget);
   const capRef = `$${params.length}`;
-  const parts = tiers.map(({ conds, order }, i) =>
-    `(select ${i} as _tier, row_number() over (order by ${order}) as _rn, ${RECALL_COLUMNS} from jobs ` +
-    `where ${[...base, ...conds].join(" and ")} order by ${order} limit ${capRef})`,
-  );
   params.push(tiers.map(({ tier }) => TIER_WEIGHTS[tier]));
   const weightsRef = `$${params.length}::float[]`;
+  // 正文门的参数**最后压**：上面所有 $n 位置保持不变（哨兵测试按位置认阶段谓词）。
+  const columns = RECALL_COLUMNS(candidateSummaryExpr(profile, params));
+  const parts = tiers.map(({ conds, order }, i) =>
+    `(select ${i} as _tier, row_number() over (order by ${order}) as _rn, ${columns} from jobs ` +
+    `where ${[...base, ...conds].join(" and ")} order by ${order} limit ${capRef})`,
+  );
   // 加权轮转：权重 5 的层每被取 5 条，权重 2 的层才被取 2 条；某层取空后其名额自动流向其余层。
   const sql =
     `select * from (\n${parts.join("\nunion all\n")}\n) q ` +
@@ -540,9 +598,24 @@ async function recallViaStore(
 ): Promise<RecallResult> {
   const built = buildRecallSql(profile, sinceIso, budget, actionedJobIds);
   if (!built) return { jobs: [], capped: false };
+  const t0 = Date.now();
   const rows = await jobsQuery(built.sql, built.params);
+  const tFetched = Date.now();
+  const jobs = stripTierColumns(rows, built.tiers);
+  const timing: RecallTiming = {
+    tiers: [...built.tiers],
+    budget,
+    rows: rows.length,
+    bytes: estimateRowBytes(rows),
+    fetchMs: tFetched - t0,
+    foldMs: Date.now() - tFetched,
+  };
+  console.log(
+    `[today-recall] tiers=${timing.tiers.join("+")} budget=${budget} rows=${timing.rows} kb=${kb(timing.bytes)} ` +
+      `fetch_ms=${timing.fetchMs} fold_ms=${timing.foldMs} deduped=${jobs.length}`,
+  );
   // 取满预算 = 库里还有没取到的候选 → capped 诚实为 true
-  return { jobs: stripTierColumns(rows, built.tiers), capped: rows.length >= budget };
+  return { jobs, capped: rows.length >= budget, timing };
 }
 
 // ---- Supabase 回退（本地/回滚；prod jobs 表已空，非性能关键路径）----

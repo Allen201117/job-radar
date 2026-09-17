@@ -21,6 +21,7 @@ import { deriveOpportunitySignals } from "./signals";
 import { parseDeadline } from "./deadline";
 import { recallOpportunityCandidates } from "../jobs-store/opportunities";
 import { jobsByIds, jobsStoreEnabled } from "../jobs-store/read";
+import { estimateRowBytes, kb } from "../jobs-store/row-bytes";
 import { hydrateOpportunityJobs } from "./hydration";
 
 type SupabaseLike = { from: (table: string) => any };
@@ -109,16 +110,18 @@ async function fetchSourceMetaFor(
 }
 
 // recall 为省跨区传输只回硬门/打分必需列（截断 summary）；展示卡在这里按 id 用**完整行**回填。
-async function hydrateDisplayJobs(sections: FeedSections): Promise<void> {
-  if (!jobsStoreEnabled()) return;
+async function hydrateDisplayJobs(sections: FeedSections): Promise<{ rows: number; bytes: number }> {
+  if (!jobsStoreEnabled()) return { rows: 0, bytes: 0 };
   const all = Object.values(sections).flat();
   const ids = all.map((o) => o.job.id).filter(Boolean);
-  if (!ids.length) return;
+  if (!ids.length) return { rows: 0, bytes: 0 };
   try {
     const rows = await jobsByIds(ids, false);
     hydrateOpportunityJobs(sections, rows);
+    return { rows: rows.length, bytes: estimateRowBytes(rows) };
   } catch (e) {
     console.warn("[opportunities] display-job hydrate failed:", (e as Error).message);
+    return { rows: 0, bytes: 0 };
   }
 }
 
@@ -313,11 +316,22 @@ export async function buildOpportunityFeed(
   mark.group = clock() - tGroup;
 
   const tHydrate = clock();
-  await hydrateDisplayJobs(sections);
+  const hydrated = await hydrateDisplayJobs(sections);
   mark.hydrate = clock() - tHydrate;
   mark.total = clock() - t0;
   mark.candidates = recall.jobs.length;
   mark.displayed = Object.values(sections).reduce((n, arr) => n + arr.length, 0);
+
+  // 一行可 grep 的分段账本（/today 要登录，外部 curl 不到，只能靠服务端日志；与 /jobs 的
+  // `[jobs-search]` 同款）。**跨库传了多少字节**是这条链最该常开观测的数字：香港库出口带宽个位数 Mbps。
+  console.log(
+    `[today-feed] candidates=${mark.candidates} displayed=${mark.displayed} ` +
+      `recall_rows=${recall.timing?.rows ?? mark.candidates} recall_kb=${kb(recall.timing?.bytes ?? 0)} ` +
+      `hydrate_rows=${hydrated.rows} hydrate_kb=${kb(hydrated.bytes)} ` +
+      `recall_ms=${Math.round(mark.recall)} critical_ms=${Math.round(mark.critical)} ` +
+      `sourcemeta_ms=${Math.round(mark.sourcemeta)} compute_ms=${Math.round(mark.compute)} ` +
+      `group_ms=${Math.round(mark.group)} hydrate_ms=${Math.round(mark.hydrate)} total_ms=${Math.round(mark.total)}`,
+  );
 
   return {
     generated_at: now.toISOString(),
@@ -339,6 +353,9 @@ export async function buildOpportunityFeed(
       total: Math.round(mark.total),
       candidates: mark.candidates,
       displayed: mark.displayed,
+      // 跨库载荷（KB）：耗时会随实例/网络抖，字节数不会 —— 判「是不是又在拖行」看这两个。
+      recallKb: kb(recall.timing?.bytes ?? 0),
+      hydrateKb: kb(hydrated.bytes),
     },
   };
 }
