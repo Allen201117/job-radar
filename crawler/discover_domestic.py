@@ -141,7 +141,15 @@ def _getsld(brand: str):
         return None
 
 
-def _hotjob_count(origin: str, suite_key: str, recruit_type: int) -> int:
+def _hotjob_channel(origin: str, suite_key: str, recruit_type: int):
+    """POST 单渠道 listPosition 首页；返回 (count, companies)。
+
+    companies = 本页岗位自报的 `company` 字段去重样本（live 实测 ampace.hotjob.cn 一条岗位：
+    `{"postName": "两轮车大客户代表", "company": "厦门新能安（XMC）", ...}`）。suiteKey 来自
+    getSLD 只证明「这个子域确实是某个真实 wecruit 租户」，不证明「这个租户就是我们猜的那家
+    公司」——一个品牌猜测（如 ampace）可能撞上完全不相关的另一家真实租户。2026-09-18 实锤：
+    「新能安」与「安脉时代」两个目标都猜中 ampace.hotjob.cn，若不核验自报 company 字段，
+    两者都会被判 verified=True，其中一个会挂错公司名（张冠李戴）。"""
     try:
         with _client() as cli:
             r = cli.post(f"{origin}/wecruit/positionInfo/listPosition/{suite_key}",
@@ -149,9 +157,13 @@ def _hotjob_count(origin: str, suite_key: str, recruit_type: int) -> int:
                          headers={"Content-Type": "application/x-www-form-urlencoded",
                                   "Referer": f"{origin}/{suite_key}/pb/social.html", "Origin": origin})
             pf = ((r.json().get("data") or {}).get("pageForm") or {})
-            return int(pf.get("totalCount") or pf.get("recordCount") or len(pf.get("pageData") or []))
+            rows = pf.get("pageData") or []
+            count = int(pf.get("totalCount") or pf.get("recordCount") or len(rows))
+            companies = {str(p.get("company") or "").strip() for p in rows if isinstance(p, dict)}
+            companies.discard("")
+            return count, companies
     except Exception:
-        return 0
+        return 0, set()
 
 
 def _wt_count_and_sample(origin: str, brand: str, recruit_type: int):
@@ -166,10 +178,30 @@ def _wt_count_and_sample(origin: str, brand: str, recruit_type: int):
         return 0, []
 
 
+def _wt_portal_title(origin: str, wt_brand: str):
+    """返回 (title, page_text)：wt 落地页 <title> 自报公司名（如 yili→「伊利招聘官网」），
+    用于张冠李戴 title-verify。⚠️ 不能用列表 JSON 的 `orgName` 核验——live 实测那是**内部部门名**
+    （伊利某岗 orgName=「成人营养品事业部」），不是公司名，与目标公司名核对会全错。
+
+    ⚠️ title 也不总可靠（2026-09-18 回归复核实测两种坏法，都靠回退扫整页正文救回）：
+      · 兴业证券(xyzq)：<title>是模板默认值「首页」，没填公司名——但页面正文里「兴业证券」
+        以 alt/文案形式重复出现 12 次，扫正文能救回。
+      · 部分租户已从老版 wt 迁移到新版 wecruit（web/index 直接 302 到 {SU...}/pb/ 页面），
+        新页是纯前端渲染的 React 壳，httpx 拿到的静态 HTML 里连 <title> 带正文都是空的
+        （华夏幸福即此状态）——这种扫正文也救不回，调用方按 verified=False 处理，宁可漏判。"""
+    try:
+        with _client() as cli:
+            r = cli.get(f"{origin}/wt/{wt_brand}/web/index")
+            return _title(r.text), r.text
+    except Exception:
+        return "", ""
+
+
 def wt_probe(brand: str, cn: str):
     """wt(老版 WinTalent) 直连发现 oracle（getSLD 对 wt 返 HTML 不可用，改直接探 list API）。
     host={brand}.hotjob.cn，BRAND 大小写因租户而异（yili 小写 / CGN/CT/HMGC 大写）→ 试两种。
-    命中即同时拿到岗位数（自带 job-confirm）。"""
+    命中即同时拿到岗位数，但**不代表命中的就是目标公司**（brand 是猜测的品牌名，可能撞上别家
+    真实租户）→ 命中后必须核验落地页 title 与目标公司名，同 hotjob_probe 的 wt 分支。"""
     host = f"{brand}.hotjob.cn"
     for wb in (brand, brand.upper()):
         try:
@@ -186,8 +218,13 @@ def wt_probe(brand: str, cn: str):
         if cnt > 0:
             origin = f"https://{host}"
             titles = [str(p.get("postName") or "") for p in posts[:5]]
-            return {"platform": "wt", "origin": origin, "host": host, "wt_brand": wb,
-                    "count": cnt, "titles": titles, "verified": True}
+            portal_title, page_text = _wt_portal_title(origin, wb)
+            verified = _verify(portal_title, cn) or _verify(page_text, cn)
+            result = {"platform": "wt", "origin": origin, "host": host, "wt_brand": wb,
+                      "count": cnt, "titles": titles, "portal_title": portal_title, "verified": verified}
+            if not verified:
+                result["note"] = f"portal title mismatch: {portal_title!r}"
+            return result
     return None
 
 
@@ -203,14 +240,23 @@ def hotjob_probe(brand: str, cn: str):
     if parts[0].startswith("SU"):  # wecruit
         suite_key = parts[0]
         channels = []
+        companies = set()
         for page, rt in _HOTJOB_CHANNELS:
-            n = _hotjob_count(origin, suite_key, rt)
+            n, cs = _hotjob_channel(origin, suite_key, rt)
             channels.append((page, rt, n))
+            companies |= cs
         total = sum(n for _, _, n in channels)
         if total == 0:
             return {"platform": "wecruit", "host": p.host, "count": 0, "verified": False, "note": "no jobs"}
-        return {"platform": "wecruit", "origin": origin, "host": p.host, "suite_key": suite_key,
-                "channels": channels, "count": total, "verified": True}  # suiteKey 来自官方域名，verified
+        # 张冠李戴 guard：suiteKey 来自官方域名只证明租户真实存在，不证明租户属于目标公司——
+        # 复用 feishu/beisen/moka 同款 _verify（核心 token 核验，见模块顶部 _core_tokens）。
+        verified = any(_verify(c, cn) for c in companies)
+        result = {"platform": "wecruit", "origin": origin, "host": p.host, "suite_key": suite_key,
+                  "channels": channels, "count": total, "verified": verified,
+                  "sample_companies": sorted(companies)[:5]}
+        if not verified:
+            result["note"] = f"self-reported company mismatch: {sorted(companies)[:5]}"
+        return result
     if parts[0].lower() == "wt" and len(parts) >= 2:  # wt
         wt_brand = parts[1]
         chans = []
@@ -222,8 +268,16 @@ def hotjob_probe(brand: str, cn: str):
         total = sum(n for _, _, n in chans)
         if total == 0:
             return {"platform": "wt", "host": p.host, "count": 0, "verified": False, "note": "no jobs"}
-        return {"platform": "wt", "origin": origin, "host": p.host, "wt_brand": wt_brand,
-                "channels": chans, "count": total, "titles": sample[:5], "verified": True}
+        # wt 列表 JSON 无公司字段（orgName 是内部部门名，见 _wt_portal_title 注释）→ 核验只能靠
+        # 落地页 title/正文，同 wt_probe 分支处理。
+        portal_title, page_text = _wt_portal_title(origin, wt_brand)
+        verified = _verify(portal_title, cn) or _verify(page_text, cn)
+        result = {"platform": "wt", "origin": origin, "host": p.host, "wt_brand": wt_brand,
+                  "channels": chans, "count": total, "titles": sample[:5], "portal_title": portal_title,
+                  "verified": verified}
+        if not verified:
+            result["note"] = f"portal title mismatch: {portal_title!r}"
+        return result
     return None
 
 
@@ -438,7 +492,8 @@ def main():
         cnt = h.get("count")
         cnt = "?" if cnt is None else cnt
         vt = "✓" if h.get("verified") else "✗张?"
-        tt = h.get("portal_title") or h.get("title") or (", ".join(h.get("titles", []))[:50])
+        tt = (h.get("portal_title") or h.get("title")
+              or ", ".join(h.get("titles") or h.get("sample_companies") or [])[:50])
         print(f"{h['company'][:15]:16} {h['platform']:8} {h['slug'][:13]:14} {str(cnt):>5} {vt:4} {tt[:46]}")
 
     passed = to_passed(hits)                 # feishu/wecruit/wt（已 job-confirm）
