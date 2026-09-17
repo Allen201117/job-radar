@@ -103,6 +103,30 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       c/p/ky，**必须归一只留 jobId+jc**否则 canonical_jd_url 重复；⚠️ 末页判定只能靠
                          #       「页内锚点数=0」（超出末页仍返 200+完整骨架）；⚠️ beisen_routes.json 里 {"cms":true}
                          #       登记过时时必须**把该 host 踢出路由缓存**，否则「首见租户」分支被跳过 → 0 岗+自称抓全。
+                         #   ⬆ 2026-09-18 BeisenAdapter 再加**卡片式 CMS 门户**分支（_httpx_fetch_cards，纯 httpx）
+                         #     → 方太集团 fotile.zhiye.com 231 岗（社招197/校招28/实习6），登记 {"cards":true}，迁移 272。
+                         #     ⚠️ **不是新网关**：同 cmsportal/<租户数字 id> 体系、同 ?PageIndex= 翻页、同 ?jobId= 详情身份、
+                         #       同 X-RateLimit-*-second:50 按 IP 限流。差的只有列表卡模板——标题在 <dd>、<a> 体内还塞着
+                         #       地点｜部门｜日期 和整段 JD。响应头 X-PAAS-DEBUG-GENERAL-SITE 看着像代际标记但**不能当判据**：
+                         #       方太与京东方同为 web-custom-new-zhiye-com，而京东方是新版 SPA；它区分的是托管档位。
+                         #     ⚠️ 老代码对它是**两种静默失败**：theme2 解析器退回「整个 <a> 文本当标题」被 3~120 字门丢光（0 行）；
+                         #       浏览器 _BEISEN_SSR_ANCHOR_JS 的 name.length<=60 门同理 → raise「SSR 列表页无 jobId/adId 锚点」。
+                         #       更坏的是 **JD 短的卡片会越过长度门**，把「标题+地点+部门+日期+整段JD」当标题悄悄入库
+                         #       （方太 /intern 6 行里 3 行这么进来过，还是 success）→ 已加「行内有 <dd> 就弃权」挡死。
+                         #     ⚠️ jd_url 是 /job_show?jobId= **不带板块标记** → 招聘类别只能靠**板块路径**声明成 job_type
+                         #       （/campus→校园招聘 /intern→实习 /social→社会招聘，实习优先于校招），否则 recruitmentCategory
+                         #       只能兜底成社招。实测 231/231 落对（校招28/实习6/社招197）。
+                         #     ⚠️ 列表值会被服务端按宽度截断：标题 11/231、地点 51/231（`浙江省-宁波市-...`/`内蒙古自治区,...`/
+                         #       `广西壮族自治区...`/`新疆维吾尔自治...`）。title/location **不在** _PRESERVE_IF_EMPTY 里，
+                         #       所以「残缺行」即使 CRAWL_DETAIL_CAP=0 也要补详情，否则快车道与夜间富化天天互刷。
+                         #       反过来列表已给全的 location **不许**被详情覆盖（多地岗详情会列全部地点，又成两个值）。
+                         #       两档对拍实测 title/location/posted_at/job_type 231 行逐行相等、0 处不一致。
+                         #     ⚠️ summary 刻意**只从详情页写**（同 theme2）：列表卡那段 JD 只有职责、没有任职要求，
+                         #       写进去会让快车道用半截正文盖掉富化的完整正文（summary 是空值才受保护）。首抓当天薄卡是设计。
+                         #       详情段序换成【任职要求】在前：存库 summary 只有 400 字（clean_summary 默认），职责段动辄几百字。
+                         #     📌 全集回归（2026-09-18）：358 个 enabled beisen 源新旧两版逐源对拍，岗位合计都是 89,653，
+                         #       分支归属/报错数/reported_total/fetch_complete 全 0 变化。**这一形态在库里只有方太一家**——
+                         #       510 条存量 beisen 源 + 300 个 distinct host × /social /campus /intern（900 次探测）零命中。
                          #     jd.py 按 `positionDeptName` 派生子公司 company → 京东科技 209 + 京东物流 629；
                          #     netease.py 按 `productName` 派生 → 网易有道 115 + 网易云音乐 157。
                          #       两者**都不新增 source**（那些岗本就在现有源里，新增源会抢同一行 upsert）；靠

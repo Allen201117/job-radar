@@ -432,7 +432,10 @@ _BEISEN_ROUTE_CACHE: dict = _load_beisen_routes()
 def _beisen_route_usable(route) -> bool:
     """这条缓存路由**能不能给新版 GetJobAdPageList 的行拼出 jd_url**。
 
-    能用的只有三种形状：点击捕获的 `{template, idfield}`、旧的 detail base 字符串、`{"cms": true}`。
+    能用的只有四种形状：点击捕获的 `{template, idfield}`、旧的 detail base 字符串、
+    `{"cms": true}`（老版 theme2 CMS）、`{"cards": true}`（卡片式 CMS，见 _httpx_fetch_cards）。
+    后两者不参与 `_resolve_url` 拼链接 —— 它们的 jd_url 来自列表页锚点本身，登记只是为了让
+    `beisen_httpx_ready()` 认它「零浏览器可抓」，好让 run.py 把它排进 httpx 并发快车道。
     ⚠️ `{ssr_path, ssr_param}` 是**老版 SSR 列表**那条通道的产物，它配的是 SSR 锚点里的数字 id；
     新版接口给的是 uuid，两者不通用 —— 2026-09-17 真渲染实测：把新版 uuid 拼进
     `fosunpharma.zhiye.com/campusxq?jobId=<uuid>` / `cnnc.zhiye.com/szxq?…` / `boe.zhiye.com/zwxq?…`，
@@ -444,7 +447,8 @@ def _beisen_route_usable(route) -> bool:
     if isinstance(route, str):
         return bool(route)
     if isinstance(route, dict):
-        return bool(route.get("template")) or route.get("cms") is True
+        return (bool(route.get("template")) or route.get("cms") is True
+                or route.get("cards") is True)
     return False
 
 
@@ -696,6 +700,8 @@ _CMS_ROW_RE = re.compile(
     r"<li[^>]*>\s*<a\s[^>]*(?:href|data-url)=\"(?P<href>[^\"]*[?&](?:jobId|jobAdId|adId)=[^\"]+)\"[^>]*>(?P<body>.*?)</a>",
     re.S | re.I)
 _CMS_SPAN_RE = re.compile(r"<span[^>]*>(.*?)</span>", re.S | re.I)
+# 卡片式模板的标志：标题包在 <dd> 里（见下面「卡片式 CMS 门户」一节）。theme2 的行里没有它。
+_CMS_CARD_MARK_RE = re.compile(r"<dd[^>]*>", re.I)
 _CMS_TH_RE = re.compile(r"<th[^>]*>(.*?)</th>", re.S | re.I)
 _CMS_PAGE_LINK_RE = re.compile(r"PageIndex=(\d{1,4})", re.I)
 _CMS_ID_RE = re.compile(r"[?&](jobId|jobAdId|adId)=([^&#]+)", re.I)
@@ -842,6 +848,16 @@ def _cms_parse_list(html_text: str, origin: str):
         if not jd_url or jd_url in seen:
             continue
         cells = [_cms_text(s) for s in _CMS_SPAN_RE.findall(m.group("body"))]
+        if not cells and _CMS_CARD_MARK_RE.search(m.group("body")):
+            # 没有 <span> 的行有两种，必须分开：真 theme2 的纯文本锚点，和**卡片式模板**
+            # （标题在 <dd> 里，<a> 体内还塞着地点/部门/日期和整段 JD）。后者若走下面
+            # 「整个 <a> 文本当标题」的兜底，就会把「标题+地点+部门+日期+整段JD」当成标题——
+            # JD 短的行还能过 3~120 字门，于是**悄悄**入库一批垃圾标题、还自称 success。
+            # 2026-09-18 实测方太 /intern 6 行里正是有 3 行这么进来的（另外 3 行 JD 长、被长度门丢掉，
+            # 于是这源看着像「只有 3 个岗」）。判据＝<a> 体里有 <dd> → 本函数弃权，交 _card_parse_list。
+            # 全集实测：能被 _CMS_ROW_RE 匹到行的 7 个源里，「<dd> 与 <span> 同时出现」的 0 个，
+            # 4 个正统 theme2 源全部只有 <span> —— 这条弃权对既有租户零影响（全集回归复核过）。
+            continue
         fields = _cms_row_fields(cells, col_map, header_count) if cells else {
             "title": _cms_text(m.group("body")), "location": None, "education": None, "category": None}
         title = (fields.get("title") or "").strip()
@@ -901,6 +917,198 @@ def _cms_parse_detail(html_text: str) -> dict:
     if len(summary) >= _CMS_SUMMARY_MIN:
         out["summary"] = summary[:4000]
     return out
+
+
+# ============================================================================
+# 卡片式 CMS 门户（列表卡把整段 JD 塞进 <a> 里）——纯 httpx，零浏览器
+# ============================================================================
+# **不是新网关，是同一套 CMS 换了列表卡模板**（2026-09-18 逐项 live 对拍，方太 fotile.zhiye.com）：
+#   · 静态资源同一个 `cmsportal/<租户数字 id>/` 体系（方太 10204200，老版 CMS 华安 10111900）；
+#   · 翻页同为 `?PageIndex=N`，详情身份同为 `?jobId=<数字>`；
+#   · 限流同为北森按 IP 的 `X-RateLimit-Limit-<host><ip>-second: 50`。
+#   ⚠️ 响应头 `X-PAAS-DEBUG-GENERAL-SITE` 看着像代际标记，**不能当判据**：方太是
+#      web-custom-new-zhiye-com，而同为该值的京东方却是新版 SPA（抽得到 PortalId）；
+#      华安/中国人寿/联易融是 web-new-zhiye-com、中芯是 web-vip-new-zhiye-com ——
+#      它区分的是托管档位，不是门户形态。识别只能按**响应结构**，和本文件其它分支同一条纪律。
+# 唯一的差别在列表卡：
+#   theme2 CMS：<li><a href="…?jobId=…"><span>字段</span>…</a>            ← 字段在 <span>，标题短
+#   本类      ：<li><a href="…?jobId=…"><dd>标题</dd><ol>地点｜部门｜日期</ol>
+#                                        <dl><p>整段 JD</p></dl></a>       ← 标题在 <dd>，<a> 里塞着几千字
+# 后果是**两个既有解析器都判它「没有岗位」，而且都不报错**：
+#   · _cms_parse_list 找不到 <span> → 退回「整个 <a> 文本当标题」→ 长度几千字 → 被 3~120 字门丢光 → 0 行；
+#   · 浏览器 _BEISEN_SSR_ANCHOR_JS 的 `name.length<=60` 门同理 → 0 个锚点 → raise
+#     「beisen: SSR 列表页无 jobId/adId 锚点」——同事看到的就是这条。
+# 因此本分支**只在前面两条老版通道都返回 None 之后**才试，且判据是「<a> 里有 <dd>」这一条结构特征：
+# 没有 <dd> 一律返回 None 原样交回旧流程，故对既有租户零影响（全集回归见 docs/crawler-adapter-notes.md）。
+_CARD_TITLE_RE = re.compile(r"<dd[^>]*>(.*?)</dd>", re.S | re.I)
+_CARD_META_RE = re.compile(r"<ol[^>]*>(.*?)</ol>", re.S | re.I)
+_CARD_BODY_RE = re.compile(r"<dl[^>]*>(.*?)</dl>", re.S | re.I)
+# 元信息分隔符是**全角竖线** U+FF5C（`地点｜部门｜日期`），半角 | 一并认着兜底。
+_CARD_META_SEP_RE = re.compile(r"[｜|]")
+_CARD_DATE_RE = re.compile(r"(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})")
+# 地点被服务端按显示宽度截断，实测三种写法：`浙江省-宁波市-...` / `内蒙古自治区,...` / `广西壮族自治区...`
+# （231 行里 51 行截断）。必须剥掉尾巴：不剥的话同一个城市会出现两种写法，而夜间富化补的是完整地点
+# → location 不在 _PRESERVE_IF_EMPTY 里 → 快车道与富化天天来回刷。剥完 `浙江省-宁波市` 与详情页的
+# `浙江省-宁波市-慈溪市` 经 normalizer.clean_location 都归一成「宁波」，两端一致、无抖动。
+_CARD_TRUNC_TAIL_RE = re.compile(r"[\s\-,，、]*(?:\.{3,}|…+)\s*$")
+# 地点段的识别一律按**取值特征**（同 _cms_row_fields 的兜底哲学），不按下标——下标只对当前这一家成立。
+# 「全国」不带省市区县后缀，是实测出现过的唯一例外（231 行里 3 行），显式收进来；
+# 其余认不出的段一律留 None：**漏判一个地点无害**（normalizer 照常入库），
+# 而按下标硬取会把「万州办事处」这种部门名写成地点（clean_location 不拦非地名，实测原样返回）。
+_CARD_NATIONWIDE = ("全国",)
+_CARD_MAX_PAGES = 200      # 安全上限（防翻不停）；命中即 fetch_complete=False
+_CARD_DETAIL_CAP = 800     # 逐岗补正文默认上限（同 theme2 CMS 口径）
+_CARD_REPAIR_CAP = 120     # 即使 CRAWL_DETAIL_CAP=0，仍补这么多条「列表值残缺」的行（见 _card_needs_repair）
+# 详情页段标题里出现这些词 = 任职要求段。**要求段必须排在职责段前面**（同 sf_express_campus 的
+# 既有处置）：normalizer 存库的 full_summary 走 clean_summary 默认 max_chars=400，grad_class 读的
+# 就是这 400 字，而站点自己的段序恒为「工作职责, 任职要求」（2026-09-18 抽 74 个详情页 74/74）——
+# 职责段动辄几百字，不换序要求段会被整段截掉。
+# 诚实边界：方太当前 231 个岗里只有 1 个能抽出届别硬信号（社招板块的「2024届阳光生」），
+# 且它正文短、换不换序都抽得到 —— 也就是说**这条换序在方太身上目前没有可量到的收益**，
+# 留着是因为 400 字截断对「职责长、要求里才写届别」的岗必然生效（sf_express_campus 实测 120/120）。
+# 换序确实改变了用户读到的那 400 字（实测 231 个岗的 summary 普遍顶到 400 上限）：先要求后职责。
+_CARD_REQUIREMENT_HEADS = ("要求", "资格", "条件", "requirement", "qualification")
+# 板块路径 → 租户自报的招聘类别。这是「精准路由」的一部分：本类的 jd_url 是
+# `/job_show?jobId=…`，**不带任何板块标记**，而 recruitmentCategory 的层4 只认 url 路径 →
+# 不带这个声明，/campus /intern 的岗会被兜底成社招（同 BeisenAdapter._map 搬 Category 的道理）。
+# ⚠️ 实习必须排在校招**前面**：`/campus/internship` 这种路径两边都命中，实习是更具体的那个
+#    （sourceDeclaredCategory 内部也是实习优先，两边口径保持一致）。
+_CARD_BOARD_JOB_TYPES = (
+    (("intern", "shixi", "实习"), "实习"),
+    (("campus", "school", "xiaozhao", "校园", "校招"), "校园招聘"),
+    (("social", "shehui", "experienced", "社会", "社招"), "社会招聘"),
+)
+
+
+def _card_board_job_type(path: str) -> Optional[str]:
+    """列表页路径 → 租户自报的招聘类别（认不出返回 None，绝不猜）。"""
+    low = (path or "").lower()
+    for tokens, declared in _CARD_BOARD_JOB_TYPES:
+        if any(tok in low for tok in tokens):
+            return declared
+    return None
+
+
+def _card_meta_fields(meta_text: str):
+    """`地点｜部门｜日期` → (location, posted_at)。按取值特征认，认不出的留 None。"""
+    location = posted_at = None
+    for seg in _CARD_META_SEP_RE.split(meta_text or ""):
+        seg = seg.strip()
+        if not seg:
+            continue
+        date_m = _CARD_DATE_RE.search(seg)
+        if date_m and posted_at is None:
+            posted_at = f"{date_m.group(1)}-{int(date_m.group(2)):02d}-{int(date_m.group(3)):02d}"
+            continue
+        if location is None and (_CMS_CITY_RE.search(seg) or seg in _CARD_NATIONWIDE):
+            location = _CARD_TRUNC_TAIL_RE.sub("", seg).strip() or None
+    return location, posted_at
+
+
+def _card_parse_list(html_text: str, origin: str, job_type: Optional[str] = None):
+    """卡片式列表页 HTML → (rows, last_page)。
+
+    rows = [{title, jd_url, location, posted_at, job_type, summary}]，按 jd_url 去重。
+    last_page = 分页条里出现过的最大 PageIndex（站点自报；抽不到返回 None，交 paginate_all 兜底）。
+    没有一行带 <dd> 标题 → 返回 ([], last_page)，调用方据此判「不是这种门户」。
+    """
+    body = _CMS_COMMENT_RE.sub(" ", html_text or "")   # 同 theme2：模板占位假岗藏在注释里
+    rows, seen = [], set()
+    for m in _CMS_ROW_RE.finditer(body):
+        card = m.group("body")
+        title_m = _CARD_TITLE_RE.search(card)
+        if not title_m:            # 没有 <dd> = 不是卡片式模板 → 一行都不认，原样交回旧分支
+            continue
+        title = _cms_text(title_m.group(1))
+        if not (3 <= len(title) <= 120):
+            continue
+        jd_url = _cms_normalize_job_url(origin, m.group("href"))
+        if not jd_url or jd_url in seen:
+            continue
+        seen.add(jd_url)
+        meta_m = _CARD_META_RE.search(card)
+        location, posted_at = _card_meta_fields(_cms_text(meta_m.group(1)) if meta_m else "")
+        rows.append({
+            "title": title,
+            "jd_url": jd_url,
+            "location": location,
+            "posted_at": posted_at,
+            "job_type": job_type,
+            # ⚠️ 列表卡里那段 JD **只有职责、没有任职要求**，与详情页补出来的不是同一段内容，
+            # 所以这里**刻意不把它当 summary**（与 theme2 CMS 完全同一处置：列表不出 summary，
+            # 只由 _card_fill_details 从详情页写）。否则快车道（CRAWL_DETAIL_CAP=0）会用「半截职责」
+            # 盖掉夜间富化写好的完整正文 —— summary 在 jobs_db._PRESERVE_IF_EMPTY 里，**空值才保护旧值**，
+            # 写个非空的半截正文正好把这层保护绕过去，变成 CLAUDE.md 立碑的「快车道与富化天天来回抖」。
+            # 代价是首抓当天是薄卡，等夜间 enrich 补正文（同中芯/科伦/启德，既有且可接受的形态）。
+        })
+    pages = [int(p) for p in _CMS_PAGE_LINK_RE.findall(body)]
+    return rows, (max(pages) if pages else None)
+
+
+_CARD_DETAIL_ITEM_RE = re.compile(
+    r"<li\s[^>]*class=\"(?P<cls>[^\"]*)\"[^>]*>(?P<body>.*?)</li>", re.S | re.I)
+
+
+def _card_parse_detail(html_text: str) -> dict:
+    """卡片式详情页 HTML → {title, summary, location, posted_at}。
+
+    模板：<li class="t">全名</li><li class="n">面议</li><li class="n">全职｜地点｜日期</li>
+          <li class="c"><dd>段标题</dd><dl><p>正文</p></dl></li> × N
+    只取 <li class="c"> 这些**结构块**当正文，不做「某关键词之后全要」的整页切片（同 theme2 的处置）。
+    """
+    out = {"title": "", "summary": None, "location": None, "posted_at": None}
+    if not html_text:
+        return out
+    cleaned = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html_text, flags=re.S | re.I)
+    cleaned = _CMS_COMMENT_RE.sub(" ", cleaned)
+
+    reqs, rest = [], []
+    for m in _CARD_DETAIL_ITEM_RE.finditer(cleaned):
+        cls = set((m.group("cls") or "").split())
+        block = m.group("body")
+        if "t" in cls and not out["title"]:
+            out["title"] = _cms_text(block)
+            continue
+        if "n" in cls:
+            location, posted_at = _card_meta_fields(_cms_text(block))
+            out["location"] = out["location"] or location
+            out["posted_at"] = out["posted_at"] or posted_at
+            continue
+        if "c" not in cls:
+            continue
+        head_m, body_m = _CARD_TITLE_RE.search(block), _CARD_BODY_RE.search(block)
+        head = _cms_text(head_m.group(1)) if head_m else ""
+        text = _cms_text(body_m.group(1)) if body_m else ""
+        if not text:
+            continue
+        chunk = f"【{head}】\n{text}" if head else text
+        low = head.lower()
+        (reqs if any(k in low for k in _CARD_REQUIREMENT_HEADS) else rest).append(chunk)
+
+    summary = "\n".join(reqs + rest).strip()   # 任职要求在前，理由见 _CARD_REQUIREMENT_HEADS
+    if len(summary) >= _CMS_SUMMARY_MIN:
+        out["summary"] = summary[:4000]
+    return out
+
+
+def _get_page_with_retry(cli, url: str, attempts: int = _PAGE_RETRIES):
+    """GET 一页列表，失败退避重试后仍失败则上抛（交给 paginate_all 的首页/后续页语义处置）。
+
+    ⚠️ 与 _post_page_with_retry 同一个理由：北森按 **IP** 限流
+    （实测方太响应头 `X-RateLimit-Limit-<host><ip>-second: 50`，与新版接口是同一套闸），
+    一次抖动就 break 会把整源截断成半页。3 次 × 0.6s 递增退避足够穿过秒级限流窗口。
+    """
+    last = None
+    for attempt in range(max(1, attempts)):
+        try:
+            resp = cli.get(url)
+            resp.raise_for_status()
+            return resp
+        except Exception as exc:     # noqa: BLE001 — 原因原样带给上层，见下面 raise
+            last = exc
+        if attempt + 1 < max(1, attempts):
+            time.sleep(_PAGE_BACKOFF_SECONDS * (attempt + 1))
+    raise last
 
 
 def _post_page_with_retry(cli, endpoints, ep_ok, body, attempts=_PAGE_RETRIES):
@@ -1052,6 +1260,22 @@ class BeisenAdapter(ChinaSpaAdapter):
         #   ① 让 beisen_httpx_ready() 认它为「零浏览器可抓」→ run.py 把它排进 httpx 并发快车道
         #      （否则未登记的 host 一律落串行浏览器档，白占慢车道名额）；
         #   ② 直接走老版 CMS 分支，省掉一次注定拿不到 PortalId 的新版探测请求。
+        # {"cards": true} 同理，登记的是卡片式 CMS 租户（见 _httpx_fetch_cards）。
+        cards_hint = isinstance(route, dict) and route.get("cards") is True
+        cards_tried = False
+        if cards_hint:
+            cards_tried = True
+            try:
+                cards = self._httpx_fetch_cards(source_url)
+            except Exception:
+                cards = None
+            if cards:
+                return cards
+            # 登记过时（租户换模板/升级 SPA）→ 与下面 cms 分支同一条纪律：把假登记清掉，
+            # 否则「首见租户」分支会因为 host 还在缓存里被跳过 → 0 岗 + 自称抓全。
+            _BEISEN_ROUTE_CACHE.pop(self._host, None)
+            route = None
+
         cms_hint = isinstance(route, dict) and route.get("cms") is True
         cms_tried = False
         if cms_hint:
@@ -1091,6 +1315,12 @@ class BeisenAdapter(ChinaSpaAdapter):
             ssr = self._httpx_fetch_ssr_paged(source_url)
             if ssr:
                 return ssr
+            # 卡片式 CMS 租户同理（也没有 PortalId）：旧路由登记会把它锁死在 failed 上，
+            # 必须在 raise 之前试一把。放在最后＝旧分支全部落空才轮到它，既有源的命运不受影响。
+            if not cards_tried:
+                cards = self._httpx_fetch_cards(source_url)
+                if cards:
+                    return cards
             # httpx 失败且路由已缓存 → 不要穿透到浏览器（CI 环境未装 Playwright 会直接崩溃）。
             # 正确处理：记 partial_success，等下次 auto-discover 重跑刷新路由缓存。
             raise RuntimeError(
@@ -1133,6 +1363,17 @@ class BeisenAdapter(ChinaSpaAdapter):
         ssr = self._httpx_fetch_ssr_paged(source_url)
         if ssr:
             return ssr
+
+        # 卡片式 CMS 门户（列表卡内嵌整段 JD）→ 纯 httpx 翻到底。**排在所有旧分支之后**：
+        # 旧分支任何一条能出岗就轮不到它，所以既有源走的路一步没变；只有「旧的全部落空、
+        # 原本注定掉进浏览器 _fetch_ssr 并 raise『无 jobId/adId 锚点』」的租户才会走到这里。
+        if not cards_tried:
+            try:
+                cards = self._httpx_fetch_cards(source_url)
+            except Exception:
+                cards = None
+            if cards:
+                return cards
 
         # 都没打通 → 回退浏览器全流程（探+缓存 route），再不行落 SSR
         try:
@@ -1316,6 +1557,133 @@ class BeisenAdapter(ChinaSpaAdapter):
                 row["title"] = detail["title"]
                 row["title_truncated"] = False
             for field in ("summary", "education", "job_type", "location"):
+                if detail.get(field) and not row.get(field):
+                    row[field] = detail[field]
+
+    def _httpx_fetch_cards(self, source_url: str) -> Optional[str]:
+        """卡片式 CMS 门户（列表卡内嵌整段 JD）：纯 httpx 翻全 + 详情页补正文。
+
+        返回值与 _fetch_ssr 同 shape（``{"_ssr_jobs":[…]}``），parse() 不必新增分支。
+        判据是「列表行的 <a> 里有 <dd> 标题」这一条结构特征；**不是**这种门户（抽得到 PortalId
+        = 新版 SPA，或一行 <dd> 都没有）→ 返回 None，原封不动交回原有流程，故对既有租户零影响。
+
+        ⚠️ fetch_complete 只在**正面证明抓全**时才置 True（BeisenAdapter 开着 list-absence，
+        「抓漏 + 自称抓全」＝误杀在招岗，CLAUDE.md §4 立碑）。两道否决：
+          ① 翻页参数不认账（页页回同一批岗）；② 分页条自报 N 页却没翻到 N 页。
+        """
+        parsed = urlparse(source_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        job_type = _card_board_job_type(parsed.path)
+        pages_seen = [0]
+        repeated = [False]
+        cache = {}              # 首页 HTML 复用，别为了探测多打一次
+        all_urls = set()
+
+        with httpx.Client(timeout=20, follow_redirects=True,
+                          headers={"User-Agent": PlaywrightAdapter.user_agent}) as cli:
+            try:
+                first = _get_page_with_retry(cli, self._cms_page_url(parsed, 1))
+            except Exception:
+                return None
+            # 识别按响应特征，不按域名/租户名：有 PortalId = 新版 SPA，不归本分支管（同 _httpx_fetch_cms）。
+            if _CMS_PORTAL_ID_RE.search(first.text or ""):
+                return None
+            cache[1] = first.text
+            first_rows, last_page = _card_parse_list(first.text, origin, job_type)
+            if not first_rows:
+                return None
+            # 每页行数不写死（同 jobsTable 分支的坑①：各租户每页条数不同），按首页实际行数推断。
+            page_size = len(first_rows)
+
+            def fetch_page(page: int) -> PageResult:
+                text = cache.pop(page, None)
+                if text is None:
+                    # 首页失败上抛记 failed；后续页由 paginate_all 尽力而为（保留已抓 + complete=False）。
+                    text = _get_page_with_retry(cli, self._cms_page_url(parsed, page)).text
+                rows, _ = _card_parse_list(text, origin, job_type)
+                pages_seen[0] = page
+                # 该租户的翻页参数不认账（页页回同一批岗）→ 立刻停，别空转 200 页；
+                # 且此时**只看见了第一页**，绝不能自称抓全（下面把 complete 置 False）。
+                fresh = [r for r in rows if r["jd_url"] not in all_urls]
+                if rows and not fresh:
+                    repeated[0] = True
+                    return PageResult(items=[], total=None, total_pages=None)
+                all_urls.update(r["jd_url"] for r in rows)
+                # 翻页越界仍是 200 + 完整骨架（实测 /social?PageIndex=21 返 200 但 0 个锚点）
+                # → 只能靠「本页 0 行」判终止，绝不能靠状态码。
+                # total_pages 只认首页分页条自报的末页号（实测社招 20 / 校招 3 / 实习无分页条）。
+                return PageResult(items=fresh, total=None,
+                                  total_pages=last_page if page == 1 else None)
+
+            max_pages = min(resolve_page_cap(page_size, self._MAX_JOBS), _CARD_MAX_PAGES)
+            jobs, _total, complete = paginate_all(
+                fetch_page, page_size=page_size, first_page=1,
+                max_pages=max_pages, logger=None,
+                label=f"beisen-cards {parsed.netloc}")
+
+            if repeated[0] or (last_page and pages_seen[0] < last_page):
+                complete = False
+
+            uniq, seen = [], set()
+            for row in jobs:
+                if row["jd_url"] in seen:
+                    continue
+                seen.add(row["jd_url"])
+                uniq.append(row)
+            self._card_fill_details(uniq, cli)
+
+        if not uniq:
+            return None
+        # 站点只报页数不报岗位总数 → 抓全时诚实把「看见的全部」记为分母（同 theme2 CMS 口径）。
+        self.reported_total = len(uniq) if complete else None
+        self.fetch_complete = complete
+        # list-absence 保持类默认（开），理由与 _httpx_fetch_ssr_paged 那条**相反**且都有据：
+        #   · 那条关掉，是因为库里压着旧浏览器路径留下的跨板块脏行（详情页侧栏「热招职位」被当成本板块的岗）；
+        #     本分支是全新接入、只从本板块列表取行，没有那种历史包袱；
+        #   · 板块之间**实测互不重叠**（方太 social/campus/intern 三个 jobId 集合两两交集 = 0），
+        #     所以「这个板块的列表就是这个板块的全集」成立；
+        #   · 且 absence 只在 fetch_complete=True 时才跑，而 complete 有上面两道否决把关。
+        # 另外 run.py 的 LIVENESS_ABSENCE_OBSERVE 默认就含 beisen ＝ 全 beisen 源当前都是 dry-run 观察，
+        # 真要开 apply 得先拿观察期的缺席占比说话（不可逆操作前先核验，CLAUDE.md §4）。
+        return json.dumps({"_ssr_jobs": uniq}, ensure_ascii=False)
+
+    @staticmethod
+    def _card_needs_repair(row: dict) -> bool:
+        """这一行的**列表值本身就是残的**，必须补详情，否则快车道与夜间富化会写出两个值。
+
+        两种残法（2026-09-18 方太 231 行实测）：
+          · 标题被服务端按宽度截断，11 行（`中医研发工程师（系统开发）(J154...`）——title 不在
+            jobs_db._PRESERVE_IF_EMPTY 里，快车道写截断名、富化写全名 = 天天来回抖（同 theme2 坑⑤）；
+          · 地点截在词中间认不出来，1 行（`新疆维吾尔自治...` 少了末尾的「区」→ 不含省/市/区/县 →
+            _card_meta_fields 留 None）——location 同样不在 _PRESERVE_IF_EMPTY 里，同款抖。
+        """
+        return bool(_CMS_TRUNCATED_RE.search(row.get("title") or "")) or not row.get("location")
+
+    def _card_fill_details(self, rows: List[dict], cli) -> None:
+        """逐岗 GET 详情页补 summary（+ 列表值残缺时补全名标题 / 地点）。
+
+        两个 cap，与 theme2 CMS 的 _cms_fill_details 同一套做法：
+          - 正文富化走 resolve_detail_cap(_CARD_DETAIL_CAP)，快车道 CRAWL_DETAIL_CAP=0 时跳过；
+          - **残缺行**另有独立小额度：即使富化关掉也要补，否则那些行的 title/location 天天抖。
+        ⚠️ **列表已经给全的 location 不许被详情覆盖**：列表地点剥掉截断尾巴后与详情地点经
+        clean_location 归一到同一个城市（实测 `浙江省-宁波市-...` 与 `浙江省-宁波市-慈溪市`
+        都是「宁波」），但多地岗的详情页会把地点列全 —— 让详情覆盖就又变成两个 lane 两个值。
+        单条失败静默跳过（最差是薄卡），绝不因为一个详情页炸掉整源。"""
+        cap = resolve_detail_cap(_CARD_DETAIL_CAP)
+        broken = [r for r in rows if self._card_needs_repair(r)]
+        rest = [r for r in rows if not self._card_needs_repair(r)]
+        budget = max(cap, min(len(broken), _CARD_REPAIR_CAP))
+        for row in (broken + rest)[:budget]:
+            try:
+                resp = cli.get(row["jd_url"])
+                if resp.status_code != 200:
+                    continue
+                detail = _card_parse_detail(resp.text)
+            except Exception:
+                continue
+            if detail["title"] and not _CMS_TRUNCATED_RE.search(detail["title"]):
+                row["title"] = detail["title"]
+            for field in ("summary", "location", "posted_at"):
                 if detail.get(field) and not row.get(field):
                     row[field] = detail[field]
 
@@ -1598,11 +1966,12 @@ class BeisenAdapter(ChinaSpaAdapter):
                 if not (jd and title) or jd in seen:
                     continue
                 seen.add(jd)
-                # job_type/education 老版 CMS 才有（列表列 + 详情页字段）；老调用方不传 → None，行为不变。
+                # job_type/education 老版 CMS 才有（列表列 + 详情页字段）；posted_at 卡片式 CMS 才有
+                # （列表卡 <ol> 的发布日）。老调用方都不传这些 key → .get 返 None，行为逐字节不变。
                 out.append(RawJob(company=self.company_name or "", title=title,
                                   location=j.get("location"), job_type=j.get("job_type"),
                                   summary=j.get("summary"), education=j.get("education"),
-                                  jd_url=jd, apply_url=jd, posted_at=None))
+                                  jd_url=jd, apply_url=jd, posted_at=j.get("posted_at")))
             return out
         out = super().parse(html)  # 新版 JSON 拦截路径
         # 「列表明明有行、却一条都映射不出来」只有一个成因：详情路由用不了 → 每行 jd_url 是空串 →
