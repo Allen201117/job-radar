@@ -71,14 +71,52 @@ export function buildCampusFacets(lists: Array<{ pattern: string; jobs: any[] }>
   byPattern: Map<string, CampusFacet[]>;
   totals: Map<string, number>;
 } {
+  return buildFacetsFromKeys(
+    lists.map(({ pattern, jobs }) => ({
+      pattern,
+      keys: (jobs || []).map((job) => ({ ...campusFacetKey(job), n: 1 })),
+    })),
+  );
+}
+
+/**
+ * 同一套分面，但输入是**已按四维分好组的计数**（SQL `group by` 的产物，见 campus-zone.foldCampusZone）。
+ *
+ * 为什么要这条入口：看板的分面此前是「把两万条岗位行拉回函数、在 JS 里逐条 map」算出来的，
+ * 而结果只有 ~1,900 个四元组 —— 跨库传输的 7 MB 全是过路费。把 group by 下推给库之后，
+ * 进来的就是 `{四维, count}`，这里只需把 count 累加进同一条分面。
+ * ⚠️ 与 `buildCampusFacets` 共用**同一段实现**（buildFacetsFromKeys），不允许各写一套：
+ *    两边的下标编码一旦漂了，卡面计数会静静地错（见文件顶部注释）。
+ */
+export function buildCampusFacetsFromGroups(
+  lists: Array<{ pattern: string; groups: Array<{ city: string; education: string; fn: string; gc: number | null; count: number }> }>,
+): {
+  options: CampusFilterOptions;
+  byPattern: Map<string, CampusFacet[]>;
+  totals: Map<string, number>;
+} {
+  return buildFacetsFromKeys(
+    lists.map(({ pattern, groups }) => ({
+      pattern,
+      keys: (groups || []).map((g) => ({ city: g.city, education: g.education, fn: g.fn, gc: g.gc, n: g.count })),
+    })),
+  );
+}
+
+type WeightedFacetKey = ReturnType<typeof campusFacetKey> & { n: number };
+
+function buildFacetsFromKeys(lists: Array<{ pattern: string; keys: WeightedFacetKey[] }>): {
+  options: CampusFilterOptions;
+  byPattern: Map<string, CampusFacet[]>;
+  totals: Map<string, number>;
+} {
   const cities = new Set<string>();
   const edus = new Set<string>();
   const fns = new Set<string>();
   const gradClasses = new Set<number>();
-  const keysByPattern = new Map<string, ReturnType<typeof campusFacetKey>[]>();
+  const keysByPattern = new Map<string, WeightedFacetKey[]>();
 
-  for (const { pattern, jobs } of lists) {
-    const keys = (jobs || []).map(campusFacetKey);
+  for (const { pattern, keys } of lists) {
     keysByPattern.set(pattern, keys);
     for (const k of keys) {
       if (k.city) cities.add(k.city);
@@ -102,17 +140,19 @@ export function buildCampusFacets(lists: Array<{ pattern: string; jobs: any[] }>
   const totals = new Map<string, number>();
   for (const [pattern, keys] of keysByPattern) {
     const counts = new Map<string, CampusFacet>();
+    let total = 0;
     for (const k of keys) {
       const c = k.city ? cityIdx.get(k.city) ?? NO_MATCH : -1;
       const e = k.education ? eduIdx.get(k.education) ?? NO_MATCH : -1;
       const f = fnIdx.get(k.fn) ?? -1;
       const id = `${c}|${e}|${f}|${k.gc ?? ""}`;
       const hit = counts.get(id);
-      if (hit) hit[4] += 1;
-      else counts.set(id, [c, e, f, k.gc, 1]);
+      if (hit) hit[4] += k.n;
+      else counts.set(id, [c, e, f, k.gc, k.n]);
+      total += k.n;
     }
     byPattern.set(pattern, Array.from(counts.values()));
-    totals.set(pattern, keys.length);
+    totals.set(pattern, total);
   }
   return { options, byPattern, totals };
 }

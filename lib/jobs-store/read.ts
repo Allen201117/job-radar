@@ -6,7 +6,13 @@ import { JOB_COLUMNS } from "./types";
 import { appendJobScopeWhere } from "@/lib/job-scope";
 import type { UserPreferences } from "@/lib/types";
 import { ilikeMatcher } from "@/lib/ilike-matcher";
-import { campusAdmission, compareCampusJobs } from "@/lib/campus-zone";
+import {
+  campusAdmission,
+  compareCampusJobs,
+  foldCampusZone,
+  type CampusCompanyRow,
+} from "@/lib/campus-zone";
+import { estimateRowBytes, logCampusTiming } from "./row-bytes";
 import { isCurrentSeasonGradClass, currentGradClass } from "@/lib/grad-class";
 import {
   aggregateCampusFreshStats,
@@ -631,15 +637,7 @@ export async function activeJobsByCompanies(companies: string[], limit: number):
   );
 }
 
-export type CampusCompanyRow = {
-  company: string;          // 必投清单展示名
-  pattern: string;
-  campusJobs: any[];        // 通过准入门 campus 的在招岗
-  internJobs: any[];        // intern 桶
-  hasAnyActiveJob: boolean; // 该公司「校招相关粗筛」里有没有岗（判 source_only_social 的输入之一，非严格任意在招）
-  lastSeenAtMs: number | null;
-  pastClassJobCount: number; // 明确标了往届（如秋招期库里没下架干净的 2026 届）而被移出列表的岗数，供卡面诚实说明
-};
+export type { CampusCompanyRow, CampusGroup } from "@/lib/campus-zone";
 
 /** 校招专区粗筛条件：job_type / title / jd_url 任一命中校招或实习关键词。
  *  getCampusZone（全清单聚合）与 getCampusCompanyJobs（展开单家取完整行）共用同一份，
@@ -710,17 +708,61 @@ export async function resolveActiveCompanyNames(patterns: string[]): Promise<str
   });
 }
 
+/** 「列判不出桶或职能」的行：recruitment_category 不是合法三值，或 job_function 为空。
+ *  这批必须带正文回来现算（campusAdmission / campusFacetKey），否则桶与职能会算错。
+ *  ⚠️ 它**不是**几十行：触发器在分类依据变化时置 NULL、2h 补漏 cron 才重算，
+ *     2026-09-18 实测全库 493,067 个 active 岗里 18,731 行（3.8%）category 为 NULL、882 行 job_function 为 NULL。 */
+const CAMPUS_ROW_LEVEL_PREDICATE = `(
+          coalesce(j.recruitment_category, '') not in ('校招','实习','社招')
+          or coalesce(j.job_function, '') = ''
+        )`;
+
+/**
+ * 校招看板取数 ①：**SQL 先 group by**，一行 = 一个 (公司,城市,学历,职能,届别,招聘类型,截止日) 组。
+ *
+ * 改前是「一岗一行拉回函数再在 JS 里筛」：互联网清单 30 家 21,607 行 / 7.0 MB，而这坨数据的唯一去向
+ * 是压成 ~1,900 个四元组 + 每家的计数/最近截止/最近抓取（见 lib/campus-zone.foldCampusZone 的长注释）。
+ * 同一批数据聚合后 3,609 行、且不含 jd_url / apply_url 两列长 URL。香港库出口带宽个位数 Mbps，省的是过路费。
+ *
+ * ⚠️ 不在 SQL 里 btrim / 判桶 / 判届别：trim 与分类一律留给 JS（SQL 的 btrim 不吃全角空格，
+ *    两侧口径必须逐字一致）。SQL 只负责 group by 与计数。
+ */
+export const CAMPUS_ZONE_AGGREGATE_SQL = `
+      select
+        j.company, j.location, j.education, j.job_function, j.grad_class, j.recruitment_category, j.deadline,
+        count(*)::int as n, max(j.last_seen_at) as last_seen
+      from jobs j
+      where j.status = 'active'
+        and j.company = any($1::text[])
+        and ${CAMPUS_PREFILTER_SQL}
+        and not ${CAMPUS_ROW_LEVEL_PREDICATE}
+      group by 1, 2, 3, 4, 5, 6, 7
+      `;
+
+/** 校招看板取数 ②：与 ① 严格互补的那批「要正文现算」的行，带完整判定输入回来。 */
+export const CAMPUS_ZONE_ROW_LEVEL_SQL = `
+      select
+        j.id, j.company, j.title, j.job_type, j.jd_url, j.apply_url, j.summary, j.experience,
+        j.deadline, j.last_seen_at, j.location as city, j.education, j.grad_class,
+        j.recruitment_category, j.job_function
+      from jobs j
+      where j.status = 'active'
+        and j.company = any($1::text[])
+        and ${CAMPUS_PREFILTER_SQL}
+        and ${CAMPUS_ROW_LEVEL_PREDICATE}
+      `;
+
 /**
  * 校招专区：按必投清单公司聚合校招/实习岗。
- * SQL 先按公司 + 校招关键词粗筛（见 resolveActiveCompanyNames / CAMPUS_PREFILTER_SQL），
- * JS 用 campusAdmission（复用 recruitmentCategory 全量判定逻辑，含 job.experience 硬经验年限门）精筛入桶。
- * 公司归属在 JS 端按 pattern 子串匹配回填（见下方 for 循环）。短 TTL 缓存降同实例重复读取；
+ * SQL 先按公司 + 校招关键词粗筛（见 resolveActiveCompanyNames / CAMPUS_PREFILTER_SQL）再 group by，
+ * JS（lib/campus-zone.foldCampusZone）用 campusAdmission 判桶、按归属折叠成每家公司的分面组。
+ * 公司归属在 JS 端按 pattern 子串匹配回填（第一个命中者得）。短 TTL 缓存降同实例重复读取；
  * 跨请求复用由调用方（app/campus/page.tsx 的 unstable_cache）负责。
  */
 // ⚠️ 职能分面此前的「第二阶段按需补正文再现算」已于 2026-09-15 移除：职能改读物化列 jobs.job_function
 // （入库时由 classifyJobFunction 带 summary 算好，见 crawler/recruitment_classify + scripts/backfill-job-function）。
 // 那次把 ~3.4 万条 JD 正文拖回函数现算正是 unstable_cache 后台重算撑爆超时、静默服务旧快照的病根。
-// buildCampusFacets 现在读列、仅列为 NULL 时退回现算兜底（lib/campus-facets.campusFacetKey）。
+// buildCampusFacetsFromGroups 现在读列、仅列为空时由上面的 rowLevel 一条小查询带正文回来现算兜底。
 
 export type CampusZoneCacheEntry = { expiresAt: number; value: CampusCompanyRow[] };
 const campusZoneCache = new Map<string, CampusZoneCacheEntry>();
@@ -740,61 +782,29 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
   if (inFlight) return inFlight;
 
   const promise = (async () => {
+    const t0 = Date.now();
     const names = await resolveActiveCompanyNames(pats);
-    // ⚠️ 第一阶段**不拉正文**（2026-09-09 改）。此前整段 select 带 j.summary：互联网清单 30 家 ~2 万行、
-    // 正文 6.5MB 一次拖回函数，同机房也要几十秒——就是它把 unstable_cache 的后台重算撑过 Hobby 10s 被杀、
-    // 页面静默服务 6 天旧快照；换 key 后没有旧快照可服务，直接 500（Digest 721878106，创始人 Chrome 实测）。
-    // 判桶已经不需要正文（campusAdmission 认 recruitment_category 列；只有列为 NULL 的行才要现算，
-    // CASE 只给这些行带正文，全库 36 行）。正文唯一的消费者是分面的职能 fn，走下面的第二阶段按需补。
-    // 职能读物化列 j.job_function（2026-09-15）：不再在此拉正文跑分类，看板重算就此变轻、
-    // unstable_cache 后台重算不再撑爆超时被杀（那是「全部数据待更新」的病根）。summary 只为
-    // recruitment_category 为 NULL 的极少数行（全库 36 行）保留、供 campusAdmission 现算兜底。
-    const rows = names.length
-      ? await jobsQuery<any>(
-          `
-      select
-        j.id, j.company, j.title, j.job_type, j.jd_url, j.apply_url,
-        case when j.recruitment_category is null then j.summary end as summary,
-        j.experience, j.deadline, j.first_seen_at, j.last_seen_at, j.location as city, j.education, j.status,
-        j.grad_class, j.recruitment_category, j.job_function
-      from jobs j
-      where j.status = 'active'
-        and j.company = any($1::text[])
-        and ${CAMPUS_PREFILTER_SQL}
-      `,
-          [names],
-        )
-      : [];
-    const byName = new Map<string, CampusCompanyRow>();
-    for (const c of list) byName.set(c.name, {
-      company: c.name, pattern: c.pattern, campusJobs: [], internJobs: [], hasAnyActiveJob: false, lastSeenAtMs: null,
-      pastClassJobCount: 0,
+    const tNames = Date.now();
+    // 两条查询并行：聚合组 + 「列判不出、要正文现算」的互补小集合。合在一起 = 粗筛命中的全部行，
+    // 不重不漏（谓词互为 not，见 CAMPUS_ROW_LEVEL_PREDICATE）。
+    const [aggregate, rowLevel] = names.length
+      ? await Promise.all([
+          jobsQuery<any>(CAMPUS_ZONE_AGGREGATE_SQL, [names]),
+          jobsQuery<any>(CAMPUS_ZONE_ROW_LEVEL_SQL, [names]),
+        ])
+      : [[], []];
+    const tFetched = Date.now();
+    const value = foldCampusZone(list, aggregate, rowLevel);
+    logCampusTiming("campus-zone", {
+      companies: names.length,
+      rows: aggregate.length + rowLevel.length,
+      bytes: estimateRowBytes(aggregate) + estimateRowBytes(rowLevel),
+      namesMs: tNames - t0,
+      fetchMs: tFetched - tNames,
+      foldMs: Date.now() - tFetched,
+      extra: `agg_rows=${aggregate.length} rowlevel_rows=${rowLevel.length}`,
     });
-    for (const r of rows) {
-      if (!r.id || !r.company) continue;
-      const companyLower = String(r.company).toLowerCase();
-      // 归属取第一个 needle 命中的公司；必投 pattern 是人工策展的互异公司名（如 %字节% %腾讯%），
-      // 子串重叠概率极低。注意：这与重构前 SQL unnest 交叉 join「一岗可归多家」的语义不同（现在只归一家）。
-      const owner = list.find((c) => companyLower.includes(c.pattern.replace(/%/g, "").toLowerCase()));
-      if (!owner) continue;
-      const agg = byName.get(owner.name);
-      if (!agg) continue;
-      agg.hasAnyActiveJob = true;
-      const seen = r.last_seen_at ? Date.parse(r.last_seen_at) : NaN;
-      if (!Number.isNaN(seen)) agg.lastSeenAtMs = Math.max(agg.lastSeenAtMs || 0, seen);
-      const bucket = campusAdmission(r);
-      if (bucket === "reject") continue;
-      // 往届岗（明确标了比当季更早的届别，如秋招开闸期库里没下架干净的 2026 届）不进默认列表——
-      // 校招用户投一个往届岗就白费一轮。届别未知（绝大多数岗）照常展示，留白不等于隐藏。
-      // 不静默丢弃：计数留给卡面说明「另有 N 个往届岗」，避免用户以为我们漏抓。
-      if (!isCurrentSeasonGradClass(r.grad_class)) {
-        agg.pastClassJobCount += 1;
-        continue;
-      }
-      if (bucket === "campus") agg.campusJobs.push(r);
-      else agg.internJobs.push(r);
-    }
-    return list.map((c) => byName.get(c.name)!);
+    return value;
   })();
 
   campusZoneInFlight.set(cacheKey, promise);
@@ -829,7 +839,9 @@ export type CampusFreshStats = {
 export async function getCampusFreshStats(
   list: Array<{ name: string; pattern: string }>,
 ): Promise<CampusFreshStats> {
+  const t0 = Date.now();
   const names = await resolveActiveCompanyNames(list.map((c) => c.pattern));
+  const tNames = Date.now();
   let rows: CampusStatRow[] = [];
   if (names.length) {
     rows = await jobsQuery<CampusStatRow>(
@@ -849,7 +861,17 @@ export async function getCampusFreshStats(
       [names, currentGradClass()],
     );
   }
-  return { byPattern: aggregateCampusFreshStats(rows, list), fetchedAtMs: Date.now() };
+  const tFetched = Date.now();
+  const byPattern = aggregateCampusFreshStats(rows, list);
+  logCampusTiming("campus-fresh", {
+    companies: names.length,
+    rows: rows.length,
+    bytes: estimateRowBytes(rows),
+    namesMs: tNames - t0,
+    fetchMs: tFetched - tNames,
+    foldMs: Date.now() - tFetched,
+  });
+  return { byPattern, fetchedAtMs: Date.now() };
 }
 
 /**
@@ -883,8 +905,17 @@ export type CampusCompanyJobs = { jobs: any[]; total: number };
  *   → 归属 + 届别门 + 桶 + 分面筛选 + 排序**全用轻字段完成**，得到该公司在当前筛选下的**全部**候选，
  *     `total = 候选数`（精确、与卡面「筛选后 N」同口径：campusRowMatches ≡ facetMatches）。
  *   · 只给「这一页」（offset..offset+limit）取完整行（含 summary，供抽屉展示）——大厂也不再拉几 MB 正文。
- * NULL-recruitment_category 行（全库 ~36 行、判桶要看正文）单独补一次 summary 再判，保总数精确、不漏不错。
+ * NULL-recruitment_category 行（判桶要看正文与 URL）单独补一次再判，保总数精确、不漏不错。
  * 归属 / 届别门 / 桶口径与 getCampusZone 逐字一致（CLAUDE.md「归属规则多处必须一致」）。
+ *
+ * ⚠️ **已知残留（2026-09-18 量过，没修，因为修它要动 schema）**：下面那条轻查询仍然把这家公司
+ * 粗筛命中的**全部**行拉回函数 —— 字节跳动实测 8,100 行 / **1.34 MB**，而产出只是「一个总数 + 一页」。
+ * 为什么不能像看板那样把 count / order by / offset 下推给库：`jobs.deadline` 是 **text**，
+ * 而排序键是 `compareCampusJobs` 的 `Date.parse(deadline)` —— 两者在库里对不齐：
+ *   · `长期有效` 是非空文本，JS 当「没有截止」排到最后，SQL 的文本序会把它排在数字前面（全库 46,541 个在招岗是它）；
+ *   · `2026-9-20` 这种没补零的写法 JS 能 parse，文本序却排在 `2026-10-07` 之后。
+ * 所以下推排序的前提是先把截止日**物化成 timestamptz 列**（照 job_function / recruitment_category 的先例：
+ * 列 + 触发器 + 全表回填 + 等价性对拍），属单独立项，别顺手改成文本排序 —— 那会让抽屉里的顺序静静地错。
  */
 export async function getCampusCompanyJobs(
   list: Array<{ name: string; pattern: string }>,
@@ -900,6 +931,7 @@ export async function getCampusCompanyJobs(
   if (!names.length) return { jobs: [], total: 0 };
 
   // 只取轻字段（无 summary）：够做归属 + 届别门 + 桶 + 分面筛选 + 排序 + 职能（读物化列）。
+  const tLight = Date.now();
   const light = await jobsQuery<any>(
     `
     select j.id, j.company, j.grad_class, j.deadline, j.first_seen_at,
@@ -911,6 +943,16 @@ export async function getCampusCompanyJobs(
     `,
     [names],
   );
+  // 这一跳是本文件里**还没下推**的那条（见上方 ⚠️）：常开账本，别再靠猜它有多大。
+  logCampusTiming("campus-company-jobs", {
+    companies: names.length,
+    rows: light.length,
+    bytes: estimateRowBytes(light),
+    namesMs: 0,
+    fetchMs: Date.now() - tLight,
+    foldMs: 0,
+    extra: `pattern=${pattern} bucket=${bucket} offset=${offset} limit=${limit}`,
+  });
 
   // 归属 + 届别门；NULL-category 行留到后面补正文判桶（极少）。
   const owned: any[] = [];
@@ -927,13 +969,21 @@ export async function getCampusCompanyJobs(
   }
   if (needSummary.length) {
     const ids = needSummary.map((r) => r.id);
-    const rows = await jobsQuery<{ id: string; summary: string | null }>(
-      `select id, summary from jobs where id = any($1::uuid[])`,
+    // ⚠️ 必须把 jd_url / apply_url 一起带回来（2026-09-18 修）：`recruitmentCategory` 的层1/层4 是
+    // **URL 门户令牌**（/campus /xiaozhao /shixi /intern、moka 的 -recruitment 后缀、wecruit 的
+    // ?postType=），排在正文强标记之前。此前这里只补 summary，于是同一个 NULL-category 岗
+    // 在卡面计数（getCampusZone 带 URL）与展开列表（这里不带）里可能判进不同的桶 ——
+    // 「卡面写 N 个、展开列出另一批」正是 CLAUDE.md 反复强调不能出现的那种不报错的错。
+    const rows = await jobsQuery<{ id: string; summary: string | null; jd_url: string | null; apply_url: string | null }>(
+      `select id, summary, jd_url, apply_url from jobs where id = any($1::uuid[])`,
       [ids],
     );
-    const byId = new Map(rows.map((r) => [String(r.id), r.summary]));
+    const byId = new Map(rows.map((r) => [String(r.id), r]));
     for (const r of needSummary) {
-      r.summary = byId.get(String(r.id)) ?? null; // 供 campusAdmission 现算
+      const full = byId.get(String(r.id));
+      r.summary = full?.summary ?? null; // 供 campusAdmission 现算
+      r.jd_url = full?.jd_url ?? null;
+      r.apply_url = full?.apply_url ?? null;
       owned.push(r);
     }
   }
