@@ -1,6 +1,12 @@
 """国聘（iguopin.com）通用企业岗位适配器，纯 httpx。
 
 source_url 约定：``https://www.iguopin.com/job?company={公司全称的 URL 编码}``。
+可选 ``&nature={code}``：按国聘自己的「职位性质」筛（``115xW5oQ`` = 应届生 / 校招，取自
+xiaoyuan.iguopin.com 「应届生职位 → 更多」的真实跳转 ``/job?nature=115xW5oQ&nature_cn=应届生``，
+列表接口的真实请求体是 ``search.nature: ["115xW5oQ"]``（数组，2026-09-17 浏览器 hook 抓到；传字符串返 total=None）。
+同一集团的社招 + 校招是两条源：关键词搜索单次封顶 400 条、逐岗核验封顶 300，大集团的校招岗
+会被社招挤出窗口（国家电网 / 中国石化「全部」400 条里应届生就占满 400）。加 ``&channel=campus``
+只是让 ``sources.board`` 派生成 campus（classify_source_board 认 URL 里的 campus 令牌），接口不读它。
 ``company`` 只是本适配器读取的检索词（也兼容 ``keyword``），不是国聘列表页实际
 查询串；fetch 会将它传给国聘公开搜索 API。一个源对应一个集团检索词，结果会保留
 名称包含该词的在招单位/子公司岗位。
@@ -16,6 +22,7 @@ source_url 约定：``https://www.iguopin.com/job?company={公司全称的 URL �
 """
 import json
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 from urllib.parse import parse_qs, unquote, urlparse
@@ -34,6 +41,7 @@ _CHILDREN_API = "https://gp-api.iguopin.com/api/company/index/v1/children-list"
 _DETAIL_PAGE = "https://www.iguopin.com/job/detail?id={id}"
 _PAGE_SIZE = 20  # 网站自己的列表页大小；与公开 API 实际响应一致
 _GROUP_CHILD_CAP = 60
+_GROUP_ANCHOR_TRIES = 5   # 最多拿前 5 个不同公司去问集团；模糊搜索的头几行就够定锚，再多是白烧
 _GROUP_CHILD_PAGE_CAP = 2
 _DETAIL_WORKERS = 3
 
@@ -42,6 +50,9 @@ class IguopinAdapter(BaseAdapter):
     name = "iguopin"
     max_pages = 200  # 20/页，单一集团检索词最多保护到 4,000 条
     _DETAIL_CAP = 300
+
+    _nature: tuple = ()
+    _last_group_name: str = ""   # _group_info 顺手记下集团全称，供锚点核名用（见 _expand_group_children）
 
     def should_skip(self, source_url: str):
         if resolve_detail_cap(self._DETAIL_CAP) == 0:
@@ -63,10 +74,14 @@ class IguopinAdapter(BaseAdapter):
             "Referer": "https://www.iguopin.com/",
         }
 
-        rows, total, complete = self._fetch_rows(keyword, headers, self.max_pages)
+        nature = _nature_codes(source_url)
+        self._nature = nature   # 集团子公司展开沿用同一性质筛，否则校招源会把子公司的社招岗抓进来
+        rows, total, complete = self._fetch_rows(keyword, headers, self.max_pages, nature=nature)
         self.reported_total = total
         self.fetch_complete = complete
-        group_short_name, group_id = self._expand_group_children(rows, headers)
+        # 集团锚点必须是「核过名的我们的公司」+「集团简称也对得上」，缺一个都不展开（见方法注释）。
+        group_short_name, group_id = self._expand_group_children(
+            rows, headers, tokens=[t for t in (_match_token(source_url), keyword) if t])
         group_ok = self._group_membership_checker(group_id, headers) if group_id else None
         # 可选 match token：国聘关键词搜索是模糊匹配（搜「中国建筑」会夹带无关公司岗），
         # 带 &match={token} 时只放行 company_name 含 token 的岗，保「按公司精准抓取」。
@@ -89,10 +104,13 @@ class IguopinAdapter(BaseAdapter):
             "_group_short_name": group_short_name,
         }, ensure_ascii=False)
 
-    def _fetch_rows(self, keyword: str, headers: dict, max_pages: int):
+    def _fetch_rows(self, keyword: str, headers: dict, max_pages: int, nature=None):
         def fetch_page(page: int) -> PageResult:
+            search = {"page": page, "page_size": _PAGE_SIZE, "keyword": keyword}
+            if nature:
+                search["nature"] = list(nature)   # 必须是数组：字符串会让接口返 total=None、list 空
             payload = {
-                "search": {"page": page, "page_size": _PAGE_SIZE, "keyword": keyword},
+                "search": search,
                 "recom": {"update_time": True, "company_nature": True, "hot_job": True},
             }
             response = httpx.post(_LIST_API, json=payload, headers=headers,
@@ -110,15 +128,48 @@ class IguopinAdapter(BaseAdapter):
             fetch_page, page_size=_PAGE_SIZE, first_page=1, max_pages=max_pages,
             label=f"iguopin:{keyword}")
 
-    def _expand_group_children(self, rows: List[dict], headers: dict):
-        """返回 (group_short_name, group_id)；集团元数据/子公司列表任一异常均静默回退原关键词结果。"""
-        company_id = next((str(row.get("company_id") or "").strip()
-                           for row in rows if isinstance(row, dict) and row.get("company_id")), "")
-        if not company_id:
+    def _expand_group_children(self, rows: List[dict], headers: dict, tokens=()):
+        """返回 (group_short_name, group_id)；集团元数据/子公司列表任一异常均静默回退原关键词结果。
+
+        ⚠️ 锚点不能是「搜索结果第一行」（2026-09-17 立）。国聘关键词搜索是模糊的，第一行是谁取决于
+        排序：同一个「华润置地」源，社招排序第一行碰巧是华润的公司，加上 nature=应届生 后第一行变成
+        中铝瑞闽 → 集团被认成「中国铝业」→ 整源 40 家中铝子公司挂到华润置地名下。同批实测还有
+        百胜中国→中国联通、中海油→国机集团、京东方→「宁波吉德电器（京东方向）」。
+        判据只有一条：**集团简称本身必须过核名**（`company_name_matches(集团简称, match 或 keyword)`）。
+        不能拿锚点行自己的名字当判据——「国网国际融资租赁」名字里没有「国家电网」却是真子公司，
+        「中国建筑技术集团」名字以「中国建筑」开头却属于中国建研院：名字像不像和东家是谁是两回事。
+        所以按顺序试前几行（各自去查一次集团），第一个集团简称对得上的才当锚点，都对不上就不展开。
+        简称对不上时再看**集团全称**（`group_name`，国聘公司主页接口自带），但全称的判据更严：
+        去掉 token 之后**只能剩公司后缀词**（集团/股份/有限/责任/公司/控股）。中海油：「中国海洋石油集团有限公司」
+        − keyword「中国海洋石油」= 「集团有限公司」✓；中国能建：「中国能源建设股份有限公司」✓；
+        而「中国建筑科学研究院有限公司」− 「中国建筑」= 「科学研究院有限公司」✗ —— 建研院不是中国建筑，
+        2026-09-17 第一版全称回退用 company_name_matches 就把它又放了回去（社招源对拍当场抓到）。
+        """
+        tokens = [str(t or "").strip() for t in (tokens or ()) if str(t or "").strip()]
+
+        def _passes(name: str) -> bool:
+            return (not tokens) or any(company_name_matches(name, tok) for tok in tokens)
+
+        candidates: List[str] = []
+        for row in rows:
+            cid = str(row.get("company_id") or "").strip() if isinstance(row, dict) else ""
+            if cid and cid not in candidates:
+                candidates.append(cid)
+            if len(candidates) >= _GROUP_ANCHOR_TRIES:
+                break
+        if not candidates:
             return None, ""
+        group_id, group_short_name = "", ""
         try:
-            group_id, group_short_name = self._group_info(company_id, headers)
-            if not group_id or not group_short_name:
+            for cid in candidates:
+                self._last_group_name = ""
+                gid, short = self._group_info(cid, headers)
+                full = getattr(self, "_last_group_name", "") or ""
+                if gid and short and (_passes(short) or (full and any(_full_name_is_same_entity(full, t) for t in tokens))):
+                    group_id, group_short_name = gid, short
+                    break
+                print(f"[iguopin] 集团「{short}」/「{full}」与 {tokens} 对不上，换下一个锚点")
+            if not group_id:
                 return None, ""
             children = self._group_children(group_id, headers)
             if not children:
@@ -133,7 +184,7 @@ class IguopinAdapter(BaseAdapter):
         expanded = []
         for child_name in children[:child_cap]:
             try:
-                child_rows, _, _ = self._fetch_rows(child_name, headers, page_cap)
+                child_rows, _, _ = self._fetch_rows(child_name, headers, page_cap, nature=self._nature)
             except Exception:
                 continue
             for row in child_rows:
@@ -211,8 +262,10 @@ class IguopinAdapter(BaseAdapter):
             group_id = own_id
         if group_id == own_id or info.get("classify_cn") == "央企(集团)":
             group_short_name = _text(info.get("short_name"))
+            self._last_group_name = _text(info.get("name"))
         else:
             group_short_name = _text(info.get("group_short_name"))
+            self._last_group_name = _text(info.get("group_name"))
         if not group_id or not group_short_name:
             raise ValueError("iguopin company home response missing group metadata")
         return group_id, group_short_name
@@ -307,6 +360,25 @@ def _company_keyword(source_url: str) -> str:
     query = parse_qs(urlparse(source_url).query)
     value = (query.get("company") or query.get("keyword") or [""])[0]
     return unquote(value).strip()
+
+
+_CORP_SUFFIX_RE = re.compile(r"^(?:集团|股份|有限|责任|公司|控股|总公司|有限公司|股份有限公司)*$")
+
+
+def _full_name_is_same_entity(full_name: str, token: str) -> bool:
+    """集团全称是不是 token 这家本身：token 在开头（允许地名前缀），剩余只能是公司后缀词。"""
+    name = (full_name or "").strip()
+    tok = (token or "").strip()
+    if not name or not tok or not company_name_matches(name, tok):
+        return False
+    rest = name[name.index(tok) + len(tok):]
+    return bool(_CORP_SUFFIX_RE.fullmatch(rest))
+
+
+def _nature_codes(source_url: str) -> tuple:
+    """可选职位性质码（逗号分隔），空 = 不筛（沿用旧行为，社招 + 校招混出）。"""
+    value = (parse_qs(urlparse(source_url).query).get("nature") or [""])[0]
+    return tuple(code.strip() for code in unquote(value).split(",") if code.strip())
 
 
 def _match_token(source_url: str) -> str:

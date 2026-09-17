@@ -5,7 +5,7 @@ from pathlib import Path
 import unittest
 from unittest import mock
 
-from adapters.iguopin import IguopinAdapter, _company_keyword
+from adapters.iguopin import IguopinAdapter, _company_keyword, _nature_codes, _full_name_is_same_entity
 
 
 class _Response:
@@ -51,6 +51,38 @@ class IguopinAdapterTest(unittest.TestCase):
         jobs = IguopinAdapter().parse(json.dumps({"list": [{"job_id": "1", "job_name": "岗位"}]}))
         self.assertEqual(jobs, [])
 
+    def test_nature_codes_parse_and_default_empty(self):
+        self.assertEqual(_nature_codes("https://www.iguopin.com/job?company=%E5%9B%BD%E7%BD%91"), ())
+        self.assertEqual(
+            _nature_codes("https://www.iguopin.com/job?company=x&nature=115xW5oQ&channel=campus"),
+            ("115xW5oQ",),
+        )
+        self.assertEqual(_nature_codes("https://www.iguopin.com/job?company=x&nature=a%2Cb"), ("a", "b"))
+
+    def test_fetch_sends_nature_as_array_in_search_payload(self):
+        seen = []
+
+        def fake_post(url, json=None, headers=None, timeout=None, follow_redirects=None):
+            seen.append(json)
+            return _Response({"code": 200, "data": {"total": 0, "list": []}})
+
+        with mock.patch("adapters.iguopin.httpx.post", side_effect=fake_post):
+            IguopinAdapter().fetch("https://www.iguopin.com/job?company=%E6%B3%B0%E5%BA%B7&nature=115xW5oQ&channel=campus")
+        self.assertTrue(seen)
+        self.assertEqual(seen[0]["search"]["nature"], ["115xW5oQ"])
+        self.assertEqual(seen[0]["search"]["keyword"], "泰康")
+
+    def test_fetch_without_nature_keeps_legacy_payload(self):
+        seen = []
+
+        def fake_post(url, json=None, headers=None, timeout=None, follow_redirects=None):
+            seen.append(json)
+            return _Response({"code": 200, "data": {"total": 0, "list": []}})
+
+        with mock.patch("adapters.iguopin.httpx.post", side_effect=fake_post):
+            IguopinAdapter().fetch("https://www.iguopin.com/job?company=%E6%B3%B0%E5%BA%B7")
+        self.assertNotIn("nature", seen[0]["search"])
+
     def test_source_url_company_keyword(self):
         self.assertEqual(
             _company_keyword("https://www.iguopin.com/job?company=%E4%B8%AD%E5%9B%BD%E5%BB%BA%E7%AD%91"),
@@ -67,6 +99,74 @@ class IguopinAdapterTest(unittest.TestCase):
     def test_positive_detail_cap_keeps_source_eligible(self):
         with mock.patch.dict(os.environ, {"CRAWL_DETAIL_CAP": "1"}, clear=False):
             self.assertIsNone(IguopinAdapter().should_skip("https://www.iguopin.com/job?company=国家电网"))
+
+    def test_group_anchor_skips_rows_that_fail_name_match(self):
+        """华润置地 + 应届生筛：第一行是中铝瑞闽，不能拿它的集团当锚点。"""
+        rows = [_job("a", "中铝瑞闽股份有限公司", "cid-chalco"), _job("b", "华润置地（北京）有限公司", "cid-crland")]
+        seen = []
+
+        def fake_group_info(company_id, headers):
+            seen.append(company_id)
+            return {"cid-chalco": ("g-chalco", "中国铝业"), "cid-crland": ("g-crland", "华润置地")}[company_id]
+
+        adapter = IguopinAdapter()
+        with mock.patch.object(IguopinAdapter, "_group_info", side_effect=fake_group_info), \
+             mock.patch.object(IguopinAdapter, "_group_children", return_value=[]):
+            short, gid = adapter._expand_group_children(rows, {}, tokens=["华润置地"])
+        self.assertEqual(seen, ["cid-chalco", "cid-crland"])
+        self.assertEqual((short, gid), ("华润置地", "g-crland"))
+
+    def test_group_rejected_when_group_short_name_does_not_match(self):
+        """「中国建筑技术集团」名字以中国建筑开头，但它的集团是中国建研院 → 不展开。"""
+        rows = [_job("a", "中国建筑技术集团有限公司", "cid-cabr")]
+        adapter = IguopinAdapter()
+        with mock.patch.object(IguopinAdapter, "_group_info", return_value=("g-cabr", "中国建研院")), \
+             mock.patch.object(IguopinAdapter, "_group_children", return_value=["建研院检测中心"]) as children:
+            short, gid = adapter._expand_group_children(rows, {}, tokens=["中国建筑"])
+        self.assertEqual((short, gid), (None, ""))
+        children.assert_not_called()
+
+    def test_full_name_gate_only_allows_corporate_suffix_remainder(self):
+        self.assertTrue(_full_name_is_same_entity("中国海洋石油集团有限公司", "中国海洋石油"))
+        self.assertTrue(_full_name_is_same_entity("中国能源建设股份有限公司", "中国能源建设"))
+        self.assertFalse(_full_name_is_same_entity("中国建筑科学研究院有限公司", "中国建筑"))   # 建研院 ≠ 中国建筑
+        self.assertFalse(_full_name_is_same_entity("中国铝业集团有限公司", "华润置地"))
+
+    def test_group_rejected_when_only_full_name_prefix_matches(self):
+        rows = [_job("a", "中国建筑技术集团有限公司", "cid-cabr")]
+        adapter = IguopinAdapter()
+
+        def fake_group_info(company_id, headers):
+            adapter._last_group_name = "中国建筑科学研究院有限公司"
+            return "g-cabr", "中国建研院"
+
+        with mock.patch.object(IguopinAdapter, "_group_info", side_effect=fake_group_info), \
+             mock.patch.object(IguopinAdapter, "_group_children", return_value=["x"]) as children:
+            self.assertEqual(adapter._expand_group_children(rows, {}, tokens=["中国建筑"]), (None, ""))
+        children.assert_not_called()
+
+    def test_group_accepted_when_keyword_matches_group_full_name(self):
+        """中海油：简称「中国海油」对不上，全称「中国海洋石油集团有限公司」对得上 keyword。"""
+        rows = [_job("a", "海洋石油工程股份有限公司", "cid-cooec")]
+        adapter = IguopinAdapter()
+
+        def fake_group_info(company_id, headers):
+            adapter._last_group_name = "中国海洋石油集团有限公司"
+            return "g-cnooc", "中国海油"
+
+        with mock.patch.object(IguopinAdapter, "_group_info", side_effect=fake_group_info), \
+             mock.patch.object(IguopinAdapter, "_group_children", return_value=[]):
+            short, gid = adapter._expand_group_children(rows, {}, tokens=["中海油", "中国海洋石油"])
+        self.assertEqual((short, gid), ("中国海油", "g-cnooc"))
+
+    def test_group_accepted_when_keyword_matches_group_short_name(self):
+        """match=国网 对不上集团简称「国家电网」，但 keyword=国家电网 对得上 → 展开。"""
+        rows = [_job("a", "国网国际融资租赁有限公司", "cid-sgcc")]
+        adapter = IguopinAdapter()
+        with mock.patch.object(IguopinAdapter, "_group_info", return_value=("g-sgcc", "国家电网")), \
+             mock.patch.object(IguopinAdapter, "_group_children", return_value=[]):
+            short, gid = adapter._expand_group_children(rows, {}, tokens=["国网", "国家电网"])
+        self.assertEqual((short, gid), ("国家电网", "g-sgcc"))
 
     def test_fetch_expands_group_children_and_labels_jobs_with_group_brand(self):
         """防止国聘又只停在模糊搜索命中的边缘子公司。"""
@@ -168,7 +268,7 @@ class IguopinAdapterTest(unittest.TestCase):
         def fake_post(_url, **_kwargs):
             return _Response({"code": 200, "data": {"total": 1, "list": [root]}})
 
-        def add_group_child(rows, _headers):
+        def add_group_child(rows, _headers, tokens=()):
             # 集团展开现在记「是哪个子公司名把它搜回来的」，并返回 (集团简称, group_id)；
             # group_id 非空 → 走国聘集团归属核验（见 test_iguopin_attribution.py）。
             child["_group_child"] = "中国石油天然气股份有限公司"
