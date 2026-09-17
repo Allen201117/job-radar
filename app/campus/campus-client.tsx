@@ -23,6 +23,8 @@ import {
 } from "@/lib/insight-client";
 import { groupCampusJobs, compareCompanyCardsByFit } from "@/lib/campus-zone";
 import { formatDateLabel } from "@/lib/relative-time";
+// 只引类型：该模块带 `server-only`，type-only import 编译期擦除，不会把它拉进客户端包。
+import type { CampusIndustrySource } from "@/lib/campus-user-industries";
 import { Badge } from "@/components/ui";
 import {
   countMatchingFacets,
@@ -187,7 +189,7 @@ const DISPUTE_REASONS: { reason: DisputeReason; label: string }[] = [
 export default function CampusClient({
   cards: cardsInput,
   industries,
-  hasIndustry,
+  industrySource,
   generatedLabel = null,
   filterOptions,
   seasonGradClass,
@@ -196,7 +198,8 @@ export default function CampusClient({
 }: {
   cards: CampusBoardCard[];
   industries: string[];
-  hasIndustry: boolean;
+  /** 行业来源：偏好手填 / 简历兜底 / 两边都空走默认（见 lib/campus-user-industries）。 */
+  industrySource: CampusIndustrySource;
   /** 用户方向（classifyJobFunction 归一后的职能名）。空 = 判不出方向，卡面不提「对口」。 */
   fitFunctions?: string[];
   /** 用户目标城市（原始写法），仅用于在说明行里照实写清这份排序依据了什么。 */
@@ -422,20 +425,22 @@ export default function CampusClient({
 
   return (
     <div className="mt-8 space-y-6 ink-1">
-      {!hasIndustry && (
+      {industrySource !== "preference" && (
         <p className="rounded-xl border border-[#cfe0f5] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] px-4 py-3 text-sm leading-6 text-[#2f6299] dark:text-[#7fb2e8]">
-          你还没设置简历行业，当前按默认行业展示。到
+          {industrySource === "resume"
+            ? "你没填目标行业，这里按简历里识别出的行业展示。想换行业，到"
+            : "你没填目标行业，简历里也没识别出行业，当前按默认行业展示。到"}
           <Link href="/me" className="mx-1 underline underline-offset-2 hover:opacity-80">
-            偏好设置
+            个人中心
           </Link>
-          完善简历行业，可精准锁定你的目标公司。
+          的「进阶设置 → 目标行业」里填，可精准锁定你的目标公司。
         </p>
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="space-y-1">
           <p className="text-sm ink-2">
-            已接入官方校招源并持续验证的岗位 · 按行业「{industries.join("、")}」匹配 {cards.length} 家必投目标公司{generatedLabel ? ` · 数据更新于 ${generatedLabel}` : ""}
+            已接入官方校招源并持续验证的岗位 · 按{industrySource === "resume" ? "简历行业" : industrySource === "preference" ? "目标行业" : "默认行业"}「{industries.join("、")}」匹配 {cards.length} 家必投目标公司{generatedLabel ? ` · 数据更新于 ${generatedLabel}` : ""}
           </p>
           {/* 排序依据照实写出来：清单是静态的北极星（不随你的方向增删公司），变的只是先看谁。
               判不出方向时不吹这句，改成一句可行动的提示。 */}

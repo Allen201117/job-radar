@@ -131,7 +131,7 @@ export default async function CampusPage() {
   if (!user) redirect("/login?next=/campus");
 
   const supabase = await createServerSupabase();
-  const { rawIndustries, industries, targetRoles, targetLocations } = await getUserCampusScope(
+  const { industries, industrySource, targetRoles, targetLocations } = await getUserCampusScope(
     supabase,
     user.id,
   );
@@ -219,7 +219,7 @@ export default async function CampusPage() {
         <CampusClient
           cards={cards}
           industries={industries}
-          hasIndustry={rawIndustries.length > 0}
+          industrySource={industrySource}
           filterOptions={board.filterOptions}
           generatedLabel={snapshotAgeLabel(freshnessAtMs, nowMs)}
           seasonGradClass={currentGradClass()}
