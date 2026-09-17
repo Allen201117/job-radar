@@ -111,7 +111,9 @@ test("结果集里还有招聘类型未分类的行 → 兜底分支不是充分
   assert.equal(r.exactTotal, null);
 });
 
-test("用户设了 exclude_keywords（SQL 看不到 JD 正文）→ 弃权", async () => {
+// 2026-09-17 起排除词下推 SQL（appendExcludeWhere，与 scoreJob 同字段集 title+summary）：候选与计数用同一份 where，
+// 不再因「SQL 看不到 JD 正文」弃权；口径若漂，运行时自检门③ 仍会兜住。
+test("用户设了 exclude_keywords → 候选与计数的 where 都带排除条件，计数照常给确定数字", async () => {
   const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
   install({ candidates: candidateRows(FTS_CAP), count: { total: 15290, unclassified: 0 } });
 
@@ -122,8 +124,13 @@ test("用户设了 exclude_keywords（SQL 看不到 JD 正文）→ 弃权", asy
     0,
     60,
   );
-  assert.equal(r.exactTotal, null);
-  assert.equal(countQueries(calls).length, 0);
+  assert.equal(r.exactTotal, 15290);
+  const [countCall] = countQueries(calls);
+  assert.ok(countCall, "应发出计数查询");
+  assert.match(countCall.sql, /not \(lower\(coalesce\(title, ''\) \|\| ' ' \|\| coalesce\(summary, ''\)\) like any\(\$\d+::text\[\]\)\)/);
+  assert.ok(countCall.params.some((p) => Array.isArray(p) && p.includes("%外包%")));
+  const candidateCall = calls.find((c) => /select .* from jobs where/.test(c.sql) && !/count\(\*\)/.test(c.sql));
+  assert.ok(candidateCall.params.some((p) => Array.isArray(p) && p.includes("%外包%")), "候选查询也要带排除词");
 });
 
 test("被忽略/已投递的岗：SQL 侧一并排除，自检按同一口径对账", async () => {
@@ -244,8 +251,13 @@ test("⚠️ 排序参数绝不能混进计数查询的绑定参数（多一个 
   assert.equal(r.exactTotal, 15290, "计数仍要能算出来");
   const cand = candidateSql(calls);
   const cnt = countQueries(calls)[0];
-  // 候选查询比计数查询多且仅多一个参数：那就是偏好 tsquery。
-  assert.equal(cand.params.length, cnt.params.length + 1);
+  // 候选查询比计数查询只多「候选专属」的参数：正文门（目标职能数组，2026-09-17 起）+ 偏好 tsquery（最后一个）。
+  // 计数用的 where 参数必须是候选参数的**前缀**，多余的一个都不能进计数查询。
+  const extras = cand.params.slice(cnt.params.length);
+  assert.deepEqual(cand.params.slice(0, cnt.params.length), cnt.params);
+  assert.equal(extras.length, 2, "候选专属参数 = [目标职能数组, 偏好 tsquery]");
+  assert.ok(Array.isArray(extras[0]) && extras[0].includes("研发"));
+  assert.equal(typeof extras[1], "string");
   // 计数 SQL 里出现的最大占位符编号不能超过它自己带的参数个数。
   const maxPlaceholder = Math.max(
     0,

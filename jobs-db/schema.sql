@@ -299,6 +299,9 @@ create trigger jobs_recruitment_class_guard_trg
 alter table jobs add column if not exists job_function text;
 -- 校招/实习职能筛选走它 → 部分索引（只覆盖 active 行，控体积）。
 create index if not exists idx_jobs_active_job_function on jobs (job_function) where status = 'active';
+-- /today 召回的 function 层（2026-09-17）：`job_function = any(...) order by first_seen_at desc limit N`——
+-- 有这个复合索引计划器按序走、取满就停；只有单列索引时要把整个职能桶（生产制造 5 万行）拉出来排（实测 2 秒）。
+create index if not exists idx_jobs_active_job_function_first_seen on jobs (job_function, first_seen_at desc) where status = 'active';
 -- 「等待重算的行」小索引：触发器把结论作废（置 NULL）后，回填 / 富化按它快速找到待补的行。
 create index if not exists jobs_job_function_unclassified_idx on jobs (id) where job_function is null;
 

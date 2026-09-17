@@ -3,7 +3,7 @@
 //   差别仅「候选取数」从 supabase-js 换成直连 pg SQL → 搜索口径/精度/排序与线上零差异。
 import "server-only";
 import { jobsQuery } from "./client";
-import { actionHiddenJobIds, scoringSignalGroups, sortAndFilterJobs } from "@/lib/scoring";
+import { actionHiddenJobIds, scoringSignalGroups, scoringTargetFunctions, sortAndFilterJobs } from "@/lib/scoring";
 import {
   filterAndRankJobs,
   filtersFullyPushedToSql,
@@ -123,12 +123,63 @@ async function fetchCandidates(sql: string, params: unknown[]): Promise<any[]> {
 // 候选取数只拉「打分/精筛」真正要用的列，把纯展示/写库列（正文之外最肥的 canonical_jd_url 等）留到
 // 分页命中后再补——函数固定在美东、库在香港，跨太平洋每少传一列 × 数千行都直接缩短耗时。JS 打分/精筛
 // （scoring + jobFilterMatch + recruitmentCategory + keywordMatchTier）只读这些列，删下面几列零精度影响。
-const CANDIDATE_COLUMNS =
-  "id, source_id, company, title, location, country_code, job_scope, job_type, summary, sponsorship_signal, " +
-  "jd_url, apply_url, salary_text, posted_at, first_seen_at, last_seen_at, status, experience, education";
+// job_function / recruitment_category / recruitment_explicit（2026-09-17 加）：入库时算好的物化分类，
+// classifyJobFunction / recruitmentCategory 有列就认列，与 /campus、/today 同一口径，也是下面「正文按需传」的前提。
+const CANDIDATE_BASE_COLUMNS =
+  "id, source_id, company, title, location, country_code, job_scope, job_type, sponsorship_signal, " +
+  "jd_url, apply_url, salary_text, posted_at, first_seen_at, last_seen_at, status, experience, education, " +
+  "job_function, recruitment_category, recruitment_explicit";
+/** 候选列 = 轻列 + 「按需传」的正文（见 candidateSummaryExpr）。 */
+function candidateColumns(summaryExpr: string): string {
+  return `${CANDIDATE_BASE_COLUMNS}, ${summaryExpr} as summary`;
+}
+
+/**
+ * 正文只传给「打分/精筛真会读它」的行（2026-09-17，/jobs 默认态冷路径 14~35s 的主因是把 2.8 万行正文传回函数：
+ * 16 MB 里正文占 13~15 MB）。
+ *
+ * 可以不传的行：scoreJob 的职能门 `functionAllowed = userFns.size===0 || jobFn==='其他' || userFns.has(jobFn)`
+ * 一旦为 false，方向/关键词命中一律不算 —— 这些行的正文读了也白读。用户目标职能是「产品」时，
+ * 研发/销售/生产制造… 的行（active 里占 ~77%）正文直接不传。等价性成立的前提：
+ *   ① classifyJobFunction 认物化列（有列就不现算，所以 summary=null 不改变职能判定）；
+ *   ② 排除词已下推到 SQL（appendExcludeWhere），JS 不再靠正文判排除；
+ *   ③ 只有 keyword / jobRole / experience 这三个 JS 精筛条件会读正文，任一生效就退回全传。
+ * 匿名（无偏好）或目标职能判不出 → 全传（scoreJob 没有职能门可省）。
+ */
+export function candidateSummaryExpr(candidateParams: unknown[], filters: Filters, prefs: UserPreferences | null): string {
+  const readsBody = [filters.keyword, filters.jobRole, filters.experience].some((v) => String(v ?? "").trim());
+  if (readsBody) return "summary";
+  // 匿名：scoreJob 直接返回 0 分、不读任何正文；上面三个读正文的精筛也没开 → 一行正文都不用传
+  // （命中页展示用的摘要由 hydratePageColumns 按 id 回补）。
+  if (!prefs) return "null::text";
+  const fns = scoringTargetFunctions(prefs);
+  if (!fns.length) return "summary";
+  candidateParams.push(fns);
+  return `(case when job_function is null or job_function = '其他' or job_function = any($${candidateParams.length}::text[]) then summary else null end)`;
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (m) => `\\${m}`);
+}
+
+/**
+ * 排除词下推 SQL（与 lib/scoring.ts scoreJob 的 `text.includes(ek)` 同字段集：title + summary，同为子串、大小写不敏感）。
+ * 此前只在 JS 里判 → 撞候选上限时算不出真实总数（exactTotalWhenCapped 的偏好门），现在 SQL 与 JS 同口径，
+ * 计数也能给确定数字。正文按需传（candidateSummaryExpr）后更是必须：JS 看不到的正文由这里兜。
+ */
+export function appendExcludeWhere(conds: string[], params: unknown[], prefs: UserPreferences | null) {
+  const words = (prefs?.exclude_keywords || [])
+    .map((w) => String(w || "").trim().toLowerCase())
+    .filter(Boolean);
+  if (!words.length) return;
+  params.push(words.map((w) => `%${escapeLike(w)}%`));
+  conds.push(`not (lower(coalesce(title, '') || ' ' || coalesce(summary, '')) like any($${params.length}::text[]))`);
+}
 // 仅命中页(≤limit 行)回补的展示/写库列（打分精筛都不读）。
+// summary 也在这里回补：候选阶段对职能门必拒的行不传正文（candidateSummaryExpr），但卡片要展示摘要——
+// 命中页 ≤limit 行按 id 补齐即可，Object.assign 落在打分后的副本上，不碰候选缓存里的原行。
 const HYDRATE_COLUMNS =
-  "content_hash, created_at, deadline, enrich_fail_count, enrich_checked_at, canonical_jd_url";
+  "content_hash, created_at, deadline, enrich_fail_count, enrich_checked_at, canonical_jd_url, summary";
 
 export type SearchResult = {
   jobs: Array<ScoredJob & { __tier: "exact" | "related"; __match: MatchReason }>;
@@ -371,9 +422,10 @@ async function exactTotalWhenCapped(args: {
   hiddenScanned: number;
   rankedLength: number;
 }): Promise<number | null> {
-  const { conds, params, filters, prefs, hiddenIds, scanned, hiddenScanned, rankedLength } = args;
+  const { conds, params, filters, hiddenIds, scanned, hiddenScanned, rankedLength } = args;
   if (!filtersFullyPushedToSql(filters)) return null; // ①
-  if ((prefs?.exclude_keywords || []).length) return null; // ②
+  // ② 排除词自 2026-09-17 起已下推 SQL（appendExcludeWhere，与 scoreJob 同字段集），不再弃权；
+  //    若两边口径漂了，③ 会兜住（JS 淘汰的行数对不上即弃权）。
   if (rankedLength !== scanned - hiddenScanned) return null; // ③
 
   const countParams = [...params];
@@ -432,16 +484,20 @@ async function searchViaFTS(
   // 校招/实习超集下推：只保留可能命中的行，别把大量社招岗跨洋传过来（JS 仍权威判定）。
   appendRecruitmentPrefilter(conds, filters.jobType);
   appendCurrentSeasonWhere(conds, params);
+  appendExcludeWhere(conds, params, prefs);
   // 走同一份候选缓存：候选集只由 where 决定（已全部进 key），而**翻页是在 JS 里 slice 的**——
   // 第 2 页的 SQL 与第 1 页逐字节相同。不缓存的话每翻一页都要把几千行重新跨库拉一遍再解析一遍，
   // 香港库实测这段占该接口服务端耗时的绝大部分（4354 行 ≈ 4.8MB）。
-  // ⚠️ 排序参数走 candidateParams，`params` 保持「只含 where」——exactTotalWhenCapped 要拿它拼
+  // ⚠️ 排序/正文门参数走 candidateParams，`params` 保持「只含 where」——exactTotalWhenCapped 要拿它拼
   // count 查询，多带一个用不到的绑定参数 PG 会直接报错。
   const candidateParams = [...params];
+  // 先压正文门参数、再压排序参数：让「候选查询最后一个参数 = 排序 tsquery」这个既有契约继续成立
+  // （tests/jobs-store-candidate-window 按它定位排序参数）。
+  const columns = candidateColumns(candidateSummaryExpr(candidateParams, filters, prefs));
   const orderBy = candidateOrderBy(candidateParams, filters, prefs);
   const rows = annotateSourceAdapter(
     await fetchCandidates(
-      `select ${CANDIDATE_COLUMNS} from jobs where ${conds.join(" and ")}${orderBy} limit ${FTS_CAP}`,
+      `select ${columns} from jobs where ${conds.join(" and ")}${orderBy} limit ${FTS_CAP}`,
       candidateParams,
     ),
     adapterBySource,
@@ -506,17 +562,19 @@ async function searchViaScan(
   appendCompanyTierWhere(conds, params, filters.companyTier); // 与 FTS 路径同一份实现，稀疏标签独立浏览不漏岗
   appendRecruitmentPrefilter(conds, filters.jobType); // 校招/实习超集下推，扫描也少翻无关行
   appendCurrentSeasonWhere(conds, params); // 往届校招/实习岗不进默认结果（与 FTS 路径同口径）
-  // 候选只取 CANDIDATE_COLUMNS（与 FTS 路径同一套）：JS 打分/精筛只读这些列，纯展示列留到
-  // 命中页再回补。此前这里拉的是全量 JOB_COLUMNS —— sortBy=match 默认要看满 SCAN_BUDGET=28000 行，
+  appendExcludeWhere(conds, params, prefs);
+  // 候选只取轻列 + 按需正文（与 FTS 路径同一套，见 candidateColumns / candidateSummaryExpr）：JS 打分/精筛只读这些列，
+  // 纯展示列留到命中页再回补。此前这里拉的是全量 JOB_COLUMNS —— sortBy=match 默认要看满 SCAN_BUDGET=28000 行，
   // 多传的 6 个展示列 × 2.8 万行是白扔的带宽。
   // ⚠️ 别再试「用 json_agg 把整批行打成一个字段传回来」绕开 node-pg 逐字段解析：2026-09-02
   // 上线实测**更慢**（无筛选冷路径 19.0s → 20.5s），因为 json 要给每行每列写一遍 key 名，
   // 2.8 万行多出约 8MB 纯键名、字节 +33%，把省下的解析成本吃光了（已撤回，commit f011592）。
-  // 同 FTS 路径：`params` 只留 where（计数要用），排序参数进 candidateParams。
+  // 同 FTS 路径：`params` 只留 where（计数要用），排序/正文门参数进 candidateParams。
   const candidateParams = [...params];
+  const columns = candidateColumns(candidateSummaryExpr(candidateParams, filters, prefs)); // 先正文门、后排序（同 FTS 路径）
   const orderBy = candidateOrderBy(candidateParams, filters, prefs);
   const sql =
-    `select ${CANDIDATE_COLUMNS} from jobs where ${conds.join(" and ")}${orderBy} ` +
+    `select ${columns} from jobs where ${conds.join(" and ")}${orderBy} ` +
     `limit $${candidateParams.length + 1} offset $${candidateParams.length + 2}`;
   const fetchRows = (want: number, off: number) => jobsQuery(sql, [...candidateParams, want, off]);
   // 吸收一批：打分/精筛后并入 matched，返回「是否已到底」（拿到的比想要的少 = 没更多了）。

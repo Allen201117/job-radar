@@ -15,6 +15,13 @@ import type {
   OpportunitySignal,
   OpportunitySignalType,
 } from "./types";
+import { spreadByCompany } from "../job-diversify";
+
+// main 区相邻散列（2026-09-17）：公司配额只管「一家最多几张」，不管「挨着几张」——线上 /today 前 8 张全是字节跳动
+// （配额 30% × 30 = 9 张，全部堆在最前面）。/jobs 早有滑窗散列（lib/job-diversify），这里复用同一实现：
+// 任意连续 MAIN_SPREAD_WINDOW 张里同一家 ≤ MAIN_SPREAD_CAP，多的按原相对顺序往后挪，不丢岗、不改多重集。
+const MAIN_SPREAD_WINDOW = 6;
+const MAIN_SPREAD_CAP = 2;
 
 // 首次访问窗口：无 last_opened_at → now-72h（不把全部历史算成新增）；有则原样。
 export function resolveNoveltySince(lastOpenedAt: string | null, now: Date): string {
@@ -212,13 +219,16 @@ export function groupOpportunities(
     candidates.filter((o) => o.signals.some((s) => s.isCritical)).sort(byCriticalThenScore)
   );
 
-  // main：主信号 + 强度门槛，封顶 effectiveLimit。
+  // main：主信号 + 强度门槛，封顶 effectiveLimit；选定后再做相邻散列（同一家别连着刷屏）。
   const main = take(
-    takeWithCompanyDiversity(
-      candidates
-        .filter((o) => !used.has(o.job.id) && isMainSignal(o) && o.score >= mainThreshold)
-        .sort(byScore),
-      effectiveLimit,
+    spreadByCompany(
+      takeWithCompanyDiversity(
+        candidates
+          .filter((o) => !used.has(o.job.id) && isMainSignal(o) && o.score >= mainThreshold)
+          .sort(byScore),
+        effectiveLimit,
+      ),
+      { cap: MAIN_SPREAD_CAP, window: MAIN_SPREAD_WINDOW, headOnly: Number.POSITIVE_INFINITY, keyOf: companyKeyOf },
     )
   );
 

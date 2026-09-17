@@ -394,3 +394,26 @@ test("resolveNoveltySince：无上次访问 → now-72h；有则原样", () => {
   assert.equal(resolveNoveltySince(null, now), new Date(now.getTime() - 72 * 3600 * 1000).toISOString());
   assert.equal(resolveNoveltySince("2026-06-22T00:00:00.000Z", now), "2026-06-22T00:00:00.000Z");
 });
+
+// main 区相邻散列（2026-09-17）：线上 /today 前 8 张全是字节跳动——公司配额只限总数不限相邻。
+test("main 区同一家公司不连着刷屏：任意连续 6 张里同一家 ≤ 2，且不丢岗、不改多重集", () => {
+  const byte = Array.from({ length: 8 }, (_, i) => opp({ company: "字节跳动", score: 95 - i }));
+  const others = ["腾讯", "阿里巴巴", "美团", "快手", "小红书", "拼多多", "网易", "京东"].map((c, i) =>
+    opp({ company: c, score: 80 - i }),
+  );
+  const { sections } = groupOpportunities([...byte, ...others], { dailyLimit: 20, intensity: "active" });
+  const main = sections.main;
+  // 多重集守恒：一张都不丢
+  assert.equal(main.length, 16);
+  assert.deepEqual(
+    [...main].map((o) => o.job.id).sort(),
+    [...byte, ...others].map((o) => o.job.id).sort(),
+  );
+  // 头部不再连着一家：任意 6 张窗口内字节 ≤ 2（8 张字节里放不下的按原顺序排在后面，不算违约）
+  for (let i = 0; i + 6 <= 10; i++) {
+    const win = main.slice(i, i + 6).filter((o) => o.job.company === "字节跳动").length;
+    assert.ok(win <= 2, `位置 ${i}-${i + 5} 有 ${win} 张字节跳动`);
+  }
+  // 第一张仍是全场最高分（散列不改变冠军）
+  assert.equal(main[0].score, 95);
+});

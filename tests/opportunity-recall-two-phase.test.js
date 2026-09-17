@@ -30,7 +30,7 @@ const SINCE = "2026-07-24T00:00:00.000Z";
 
 test("有方向/公司/城市时各出一层，层号与权重数组一一对应", () => {
   const built = buildRecallSql(mk({ targetLocations: ["上海"], targetCompanies: ["字节跳动"] }), SINCE, 900);
-  assert.deepEqual(built.tiers, ["role", "company", "cityNew"]);
+  assert.deepEqual(built.tiers, ["role", "company", "cityNew", "function"]);
   // 每层一个 `N as _tier`，层号即 tiers 数组下标
   for (let i = 0; i < built.tiers.length; i++) {
     assert.ok(built.sql.includes(`select ${i} as _tier`), `missing tier ${i}`);
@@ -42,7 +42,7 @@ test("有方向/公司/城市时各出一层，层号与权重数组一一对应
 
 test("用户没填城市 → 不出 cityNew 层，层内排序退回按最新", () => {
   const built = buildRecallSql(mk({}), SINCE, 900);
-  assert.deepEqual(built.tiers, ["role"]);
+  assert.deepEqual(built.tiers, ["role", "function"]);
   assert.ok(!built.sql.includes("btrim(location)"), "无城市时不应有城市排序表达式");
 });
 
@@ -55,7 +55,8 @@ test("画像连方向/公司/城市都没有 → 返回 null，不发查询", ()
 test("填了城市 → 每层都先按「城市命中 → 城市未知 → 其余」排，再按最新", () => {
   const built = buildRecallSql(mk({ targetLocations: ["上海"], targetCompanies: ["字节跳动"] }), SINCE, 900);
   const cityOrder = /case when search_doc @@ to_tsquery\('simple', \$\d+\) then 0 when location is null or btrim\(location\) = '' then 1 else 2 end/;
-  // 三层都按城市桶排序；每层在 window 与子查询 order by 各出现一次。
+  // role/company/cityNew 三层按城市桶排序（function 层的城市门在 where 里用 location ilike，不逐行算 tsquery）；
+  // 每层在 window 与子查询 order by 各出现一次。
   assert.equal((built.sql.match(new RegExp(cityOrder.source, "g")) || []).length, 6);
 });
 
@@ -99,10 +100,12 @@ test("Today 默认召回预算为 1800 条", () => {
 test("方向 tsquery 只作为 role 层 where 条件出现（不许拆成 role + roleCity 两层）", () => {
   const built = buildRecallSql(mk({ targetLocations: ["上海"] }), SINCE, 900);
   const roleParamIndex = built.params.findIndex((p) => typeof p === "string" && p.includes("产品"));
-  const roleRef = `to_tsquery('simple', $${roleParamIndex + 1})`;
-  const escapedRoleRef = roleRef.replace(/[()$]/g, "\\$&");
-  const whereOccurrences = built.sql.match(new RegExp(`from jobs where[\\s\\S]*?${escapedRoleRef} order by`, "g")) || [];
-  assert.equal(whereOccurrences.length, 1, "方向查询只能有一个 where（role 层的 GIN 扫描）");
+  const roleRef = `search_doc @@ to_tsquery('simple', $${roleParamIndex + 1})`;
+  // 逐个子查询看 where 段（from jobs where … order by）里有没有方向 tsquery；function 层只在 order by 里
+  // 逐行判它（不新增 GIN 扫描），where 里含它的必须恰好是 role 层这一个。
+  const whereSegments = built.sql.split("from jobs where").slice(1).map((seg) => seg.split(" order by")[0]);
+  const withRole = whereSegments.filter((seg) => seg.includes(roleRef));
+  assert.equal(withRole.length, 1, "方向查询只能有一个 where（role 层的 GIN 扫描）");
 });
 
 // 关键词多的画像会把扩展后的 tsquery 撑到几百个子句，GIN 扫描随之从 0.1s 涨到 3.5s
@@ -218,4 +221,71 @@ test("stripTierColumns 去掉辅助列、按 id 去重、保留 SQL 给的顺序
 test("stripTierColumns 容忍空输入与无 id 的脏行", () => {
   assert.deepEqual(stripTierColumns(null), []);
   assert.deepEqual(stripTierColumns([null, { _tier: 0 }, { id: "x" }]), [{ id: "x" }]);
+});
+
+
+// ── 2026-09-17：function 层 / 标题优先 / 国内城市门 ────────────────────────────────
+test("function 层：目标职能判得出才出层，参数是 userTargetFunctions 的职能名，只按最新排", () => {
+  const built = buildRecallSql(mk({ targetLocations: ["上海"] }), SINCE, 900);
+  assert.ok(built.tiers.includes("function"));
+  const fns = built.params.find((p) => Array.isArray(p) && p.includes("产品"));
+  assert.ok(fns, "function 层应把目标职能数组作为参数传入");
+  const fnSeg = built.sql.split("from jobs where")[built.tiers.indexOf("function") + 1];
+  assert.match(fnSeg, /job_function = any\(\$\d+::text\[\]\)/);
+  // where = 职能等值 AND 城市 GIN（BitmapAnd 两个索引），没有 `or location is null`（那会让 GIN 用不上、逐行算 tsquery 3 秒）
+  const cityParamIndex = built.params.findIndex((p) => typeof p === "string" && p.includes("上海"));
+  const fnWhere = fnSeg.split(" order by")[0];
+  assert.ok(fnWhere.includes(`search_doc @@ to_tsquery('simple', $${cityParamIndex + 1})`), "function 层 where 应带城市 tsquery");
+  assert.ok(!fnWhere.includes("or location is null"), "function 层的城市条件不能带 or location is null");
+  assert.ok(!fnWhere.includes("location ilike"), "function 层不用 location ilike（整桶逐行过滤 2 秒）");
+  // 只按最新排、不加 case：与方向层重叠的行靠 JS 去重
+  assert.match(fnSeg, /order by first_seen_at desc limit/);
+  assert.ok(!fnSeg.includes("case when"), "function 层不加任何 case 排序表达式");
+});
+
+test("function 层：目标岗位判不出职能（纯领域词）→ 不出 function 层", () => {
+  const built = buildRecallSql(mk({ targetRoles: ["AI Agent"] }), SINCE, 900);
+  assert.ok(!built.tiers.includes("function"));
+});
+
+test("function 层：没填城市用 30 天窗兜扫描范围；填了城市走城市 GIN，不带窗；海外范围不出这一层", () => {
+  const noCity = buildRecallSql(mk({}), SINCE, 900);
+  assert.ok(noCity.sql.includes("first_seen_at >= now() - interval '30 days'"));
+  // 有城市时靠城市 GIN 与职能索引 BitmapAnd 收窄，不需要时间窗
+  const withCity = buildRecallSql(mk({ targetLocations: ["上海"] }), SINCE, 900);
+  const fnSeg = withCity.sql.split("from jobs where")[withCity.tiers.indexOf("function") + 1];
+  assert.ok(!fnSeg.includes("interval '30 days'"));
+  const overseas = buildRecallSql(mk({ jobScope: "all", targetRegions: ["US"] }), SINCE, 900);
+  assert.ok(!overseas.tiers.includes("function"));
+});
+
+test("标题优先：用户原词在标题里的行排在城市桶之后、最新之前；参数传原词不带 %", () => {
+  const built = buildRecallSql(mk({ targetRoles: ["机械工程师"], targetLocations: ["上海"] }), SINCE, 900);
+  const raw = built.params.find((p) => Array.isArray(p) && p.includes("机械工程师"));
+  assert.ok(raw, "标题优先应把原词数组作为参数传入");
+  assert.ok(raw.every((x) => !x.includes("%")), "原词参数不得带 % —— 阶段谓词哨兵按 % 识别 like 组");
+  const roleSeg = built.sql.split("from jobs where")[1].split(" limit ")[0];
+  const orderPart = roleSeg.slice(roleSeg.lastIndexOf(" order by "));
+  const cityAt = orderPart.indexOf("when location is null or btrim(location) = '' then 1 else 2 end");
+  const titleAt = orderPart.indexOf("case when title ilike any(array(select '%' || r || '%' from unnest(");
+  const freshAt = orderPart.lastIndexOf("first_seen_at desc");
+  assert.ok(cityAt >= 0 && titleAt > cityAt && freshAt > titleAt, `role 层排序应为 城市桶 → 标题命中 → 最新，实际：${orderPart}`);
+});
+
+test("国内画像填了城市 → role/company/function 层 where 直接收窄到「城市命中或城市未知」", () => {
+  const built = buildRecallSql(mk({ targetLocations: ["上海"], targetCompanies: ["字节跳动"] }), SINCE, 900);
+  const cityParamIndex = built.params.findIndex((p) => typeof p === "string" && p.includes("上海"));
+  const gate = `(search_doc @@ to_tsquery('simple', $${cityParamIndex + 1}) or location is null or btrim(location) = '')`;
+  const whereSegments = built.sql.split("from jobs where").slice(1).map((seg) => seg.split(" order by")[0]);
+  // role / company 两层带「城市命中或城市未知」门；cityNew 本就含城市条件；function 层只带纯城市 tsquery（要 BitmapAnd）
+  assert.equal(whereSegments.filter((seg) => seg.includes(gate)).length, 2);
+  // 海外范围不加门（目标地区在排序里判）
+  const overseas = buildRecallSql(mk({ jobScope: "all", targetRegions: ["US"], targetLocations: ["上海"] }), SINCE, 900);
+  assert.ok(!overseas.sql.includes("or location is null or btrim(location) = '')"));
+});
+
+test("城市词带归一名：「深圳市」也要能命中 location 只写「深圳」的岗（SQL 门必须是 JS locationState 的超集）", () => {
+  const built = buildRecallSql(mk({ targetLocations: ["深圳市"] }), SINCE, 900);
+  const cityTs = built.params.find((p) => typeof p === "string" && p.includes("深圳"));
+  assert.ok(cityTs.includes("|"), `城市 tsquery 应 OR 上归一名：${cityTs}`);
 });

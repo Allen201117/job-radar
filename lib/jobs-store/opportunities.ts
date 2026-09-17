@@ -14,6 +14,7 @@ import { buildTsquery } from "@/lib/job-search";
 import {
   keywordMatchUnits,
   classifyJobFunction,
+  normalizeChinaCity,
   CHINA_KEYWORD_GROUPS,
   KEYWORD_GROUP_FUNCTIONS,
 } from "@/lib/china-keyword-expansion";
@@ -55,10 +56,19 @@ const SUMMARY_TRUNC = 300;
 // 层内排序把「城市命中」顶到最前，是因为 checkEligibility 里 **location mismatch 是硬拒**——
 // 用户填了目标城市时，不在目标城市的岗无论方向多准都进不了看板，先取它们就是纯浪费名额。
 // 城市未知（location 为空）是 degraded 放行，排在城市命中之后、明确不符之前。
-const RECALL_TIERS = ["role", "company", "cityNew"] as const;
+// 第四层 function（2026-09-17）：`job_function = any(用户目标职能)`。方向层只看 search_doc（标题/公司/城市/类型，
+// **无正文**），「标题泛、正文才写方向」的岗和词库没覆盖的非互联网岗它捞不到；job_function 列是入库时按
+// 标题+正文分类好的（09-15 物化，NULL 仅 27 行），走 idx_jobs_active_job_function 等值命中，便宜且与
+// stage-2 的职能门同一套 userTargetFunctions。真库对拍（18 个画像，scratch w2-measure）：互联网画像本就饱和
+// （产品 698 可展示）基本无感；非互联网画像是从无到有——土木 0→6、教师 3→13、机械 20→47、算法 +41、前端 +33。
+const RECALL_TIERS = ["role", "company", "cityNew", "function"] as const;
 type RecallTier = (typeof RECALL_TIERS)[number];
 // 权重只在「该层这次有效」时参与分配（如用户没填城市 → cityNew 不存在，预算全给 role/company）。
-const TIER_WEIGHTS: Record<RecallTier, number> = { role: 5, company: 2, cityNew: 3 };
+// cityNew 从 3 降到 2：它原本是「方向只在正文」的岗唯一的进池通道，现在 function 层更精准地接了这一职责，
+// cityNew 只剩兜 job_function=其他 的那一小截。
+const TIER_WEIGHTS: Record<RecallTier, number> = { role: 5, company: 2, cityNew: 2, function: 3 };
+// function 层在用户没填城市（或海外范围）时没有城市门收窄，得靠时间窗兜住排序成本（研发 11 万行）。
+const FUNCTION_TIER_FALLBACK_WINDOW = "first_seen_at >= now() - interval '30 days'";
 // 总预算 1800：层内排序与 JS 硬门对齐后仍保留同一候选集合，再把预算从 900 提到 1800，
 // 降低候选名额竞争造成的漏报；额外 900 行约增加 1.2MB 传输和少量 JS 计算。
 export const RECALL_BUDGET = 1800;
@@ -71,10 +81,14 @@ const ACTIONED_EXCLUDE_CAP = 500;
 // apply_url/posted_at/experience/deadline/content_hash/... 等展示字段不在此，由 service 对最终少量入选卡片回填完整行。
 // enrich_checked_at（分层核验 today 硬门）+ posted_at/deadline（信号派生：STILL_OPEN/DEADLINE_SOON，在回填前算）
 // 必须随召回带回——均为短字段/时间戳，载荷可忽略（P0-1 的重载荷是长 summary，已截断）。
+// recruitment_category / recruitment_explicit / job_function（2026-09-17 加）：三列都是入库时算好的物化分类，
+// stage-2 的 recruitmentCategory / classifyJobFunction 有列就认列。不带回来就会用**截断到 300 字的摘要**重算，
+// 与卡片徽标（读完整行的列）打架——线上实锤：社招岗的匹配理由写着「校招岗位」。
 const RECALL_COLUMNS =
   "id, source_id, company, title, location, country_code, job_scope, job_type, " +
   `left(btrim(summary), ${SUMMARY_TRUNC}) as summary, ` +
-  "jd_url, salary_text, posted_at, deadline, first_seen_at, last_seen_at, enrich_checked_at, status, education";
+  "jd_url, salary_text, posted_at, deadline, first_seen_at, last_seen_at, enrich_checked_at, status, education, " +
+  "recruitment_category, recruitment_explicit, job_function";
 
 // 方向 tsquery 的词库扩展上限。stage-1 最贵的东西就是这条查询的 GIN 扫描（实测 0.1~3.5s，
 // 与子句数正相关）。真实画像实测：多数人扩展后 17~132 个子句，但有画像填了 29 个关键词 → **240 个**，
@@ -225,6 +239,20 @@ function roleTsquery(profile: RadarProfile): string | null {
   return clauses.length ? clauses.join(" | ") : null;
 }
 
+function uniqueTerms(values: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of values) {
+    const v = String(raw ?? "").trim();
+    if (!v) continue;
+    const key = v.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(v);
+  }
+  return out;
+}
+
 function mergeById(target: Map<string, any>, rows: any[] | null | undefined): void {
   for (const r of rows || []) {
     if (r && r.id != null && !target.has(r.id)) target.set(r.id, r);
@@ -336,9 +364,15 @@ export function buildRecallSql(
   const companyTs = profile.targetCompanies.length
     ? buildTsquery(profile.targetCompanies.slice(0, 30), [])
     : null;
-  const cityTs = profile.targetLocations.length
-    ? buildTsquery(profile.targetLocations.slice(0, 10), [])
-    : null;
+  // 城市词同时带上归一名（「深圳市」→「深圳」）：bigram 对「深圳市」要求「圳市」也命中，location 只写「深圳」
+  // 的岗会被漏掉；stage-2 的 locationState 是按归一名 includes 判的，SQL 侧必须是它的超集才能当门用。
+  const cityTerms = profile.targetLocations.length
+    ? uniqueTerms([
+        ...profile.targetLocations.slice(0, 10),
+        ...profile.targetLocations.slice(0, 10).map((c) => normalizeChinaCity(c) || ""),
+      ])
+    : [];
+  const cityTs = cityTerms.length ? buildTsquery(cityTerms, []) : null;
 
   const params: unknown[] = [sinceIso];
   const base = [
@@ -371,9 +405,9 @@ export function buildRecallSql(
   // 层内排序：国内是「城市命中 → 城市未知 → 其余」；含海外范围时是
   // 「目标地区命中 → 目标城市命中 → 其余」。城市/地区判断只在每层限量候选上逐行算，
   // 不另拆一层，避免昂贵的方向 GIN 再扫一次。
-  const cityFirst = cityRef
-    ? `(case when ${cityRef} then 0 when location is null or btrim(location) = '' then 1 else 2 end), first_seen_at desc`
-    : "first_seen_at desc";
+  const cityCase = cityRef
+    ? `(case when ${cityRef} then 0 when location is null or btrim(location) = '' then 1 else 2 end)`
+    : null;
   let regionMatch: string | null = null;
   if (profile.jobScope !== "domestic") {
     const regions = effectiveTargetRegions({ job_scope: profile.jobScope, target_regions: profile.targetRegions });
@@ -390,23 +424,67 @@ export function buildRecallSql(
     }
     if (parts.length) regionMatch = `(job_scope = 'overseas' and (${parts.join(" or ")}))`;
   }
-  const regionCityFirst = regionMatch
+  const placeCase = regionMatch
     ? cityRef
-      ? `(case when ${regionMatch} then 0 when ${cityRef} then 1 else 2 end), first_seen_at desc`
-      : `(case when ${regionMatch} then 0 else 1 end), first_seen_at desc`
-    : cityFirst;
+      ? `(case when ${regionMatch} then 0 when ${cityRef} then 1 else 2 end)`
+      : `(case when ${regionMatch} then 0 else 1 end)`
+    : cityCase;
+  // 「用户原词在标题里」优先（2026-09-17）：方向层的命中集常远大于预算（上海「机械工程师」命中 1,796 行、
+  // 预算份额 ~1,100），此前层内只按城市→最新截断，精确标题命中却更早首见的岗被砍在窗口外，
+  // 而窗口里塞满的是标题只沾泛词、到 stage-2 必被 role_mismatch 拒掉的岗（机械画像 1,796 召回只剩 20 可展示，
+  // function 层另捞的 27 个里 19 个是「机械设计工程师」这种精确标题）。ilike 只在已命中的行上逐行算，很便宜。
+  // 顺序刻意排在城市之后：location mismatch 是硬拒，先保城市再保标题。
+  // 参数传原词、`%` 在 SQL 里拼：阶段谓词的哨兵测试按「元素以 % 开头的数组」识别 like 模式组，别混进去。
+  const rawRoles = uniqueTerms(profile.targetRoles.slice(0, 10));
+  let titleRef: string | null = null;
+  if (rawRoles.length) {
+    params.push(rawRoles);
+    titleRef = `title ilike any(array(select '%' || r || '%' from unnest($${params.length}::text[]) r))`;
+  }
+  const titleCase = titleRef ? `(case when ${titleRef} then 0 else 1 end)` : null;
+  const orderOf = (...heads: Array<string | null>) =>
+    [...heads.filter((h): h is string => Boolean(h)), "first_seen_at desc"].join(", ");
+  const regionCityFirst = orderOf(placeCase);
   // companyHit 不豁免 JS 的方向硬门，cityNew 也会捞到仅城市命中的岗位；两层都先把
   // 方向命中放前面。它只是已限量候选的逐行布尔判断，不会新增方向 GIN 扫描。
-  const directionFirst = roleRef ? `(case when ${roleRef} then 0 else 1 end), ` : "";
+  const directionCase = roleRef ? `(case when ${roleRef} then 0 else 1 end)` : null;
+  // 国内画像填了城市 → 各层 where 直接收窄到「城市命中或城市未知」：location mismatch 在 stage-2 是硬拒，
+  // 此前这些行只是被排到层尾，城市行取完后照样填满剩余份额（前端@深圳画像 1,642 召回里 632 行 location_mismatch），
+  // 白占名额、白传字节。海外范围保持原样（目标地区判断在排序里）。cityNew 层本就含 cityRef，不再叠加。
+  const cityGate = cityRef && profile.jobScope === "domestic"
+    ? `(${cityRef} or location is null or btrim(location) = '')`
+    : null;
+  const gated = (conds: string[]) => (cityGate ? [...conds, cityGate] : conds);
 
   const tiers: Array<{ tier: RecallTier; conds: string[]; order: string }> = [];
-  if (roleRef) tiers.push({ tier: "role", conds: [roleRef], order: regionCityFirst });
-  if (companyRef) tiers.push({ tier: "company", conds: [companyRef], order: `${directionFirst}${regionCityFirst}` });
+  if (roleRef) tiers.push({ tier: "role", conds: gated([roleRef]), order: orderOf(placeCase, titleCase) });
+  if (companyRef) {
+    tiers.push({ tier: "company", conds: gated([companyRef]), order: orderOf(directionCase, placeCase, titleCase) });
+  }
   if (cityRef) {
     tiers.push({
       tier: "cityNew",
       conds: [cityRef, "first_seen_at >= $1"],
-      order: `${directionFirst}${regionCityFirst}`,
+      order: orderOf(directionCase, placeCase),
+    });
+  }
+  // function 层：等值命中用户目标职能的岗（只做国内画像；海外画像的地理模型走 regionMatch，先不叠）。
+  // ⚠️ 这一层的候选集是整个职能桶（研发 11 万行），形态必须让计划器能 **BitmapAnd** 两个索引再取堆：
+  //   · where 只放两个可走索引的等值/GIN 条件：`job_function = any(...)`（idx_jobs_active_job_function_first_seen）
+  //     AND `search_doc @@ 城市 tsquery`（jobs_search_doc_gin）。EXPLAIN ANALYZE 实测：生产制造∩上海 182ms、
+  //     研发∩深圳 398ms、教育培训∩杭州 10ms。反例都试过：城市门带 `or location is null` 会让 GIN 用不上、
+  //     逐行算 tsquery 3,048ms；换 `location ilike` 逐行过滤整桶 2,014ms；加 30 天窗照样 2.2s 且长尾岗大半被窗砍掉
+  //     （土木 0→6 掉回 0→1）。代价是 location 为空的行进不了这一层——方向层照样能捞到它们。
+  //   · order 只按最新，不加 case 表达式；与方向层重叠的行靠 JS 按 id 去重，白占的那点名额比逐行算 tsquery 便宜得多。
+  //   · 没填城市时没有 GIN 可 AND，用 30 天窗兜住扫描范围。
+  const targetFns = Array.from(userTargetFunctions(profile));
+  if (roleRef && targetFns.length && profile.jobScope === "domestic") {
+    params.push(targetFns);
+    const fnRef = `job_function = any($${params.length}::text[])`;
+    tiers.push({
+      tier: "function",
+      conds: cityRef ? [fnRef, cityRef] : [fnRef, FUNCTION_TIER_FALLBACK_WINDOW],
+      order: "first_seen_at desc",
     });
   }
   if (!tiers.length) return null; // profile_ready 应保证至少一项；防御性返回

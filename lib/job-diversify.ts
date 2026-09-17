@@ -3,16 +3,20 @@
 
 type Diversifiable = { company?: string | null; id?: string; jd_url?: string | null };
 
-const companyKey = (j: Diversifiable): string =>
+const defaultCompanyKey = (j: Diversifiable): string =>
   (j.company || `id:${j.id ?? j.jd_url ?? ""}`).trim().toLowerCase();
 
-export function spreadByCompany<T extends Diversifiable>(
+export function spreadByCompany<T>(
   ranked: T[],
-  opts: { cap?: number; window?: number; headOnly?: number } = {},
+  opts: { cap?: number; window?: number; headOnly?: number; keyOf?: (item: T) => string } = {},
 ): T[] {
   const cap = opts.cap ?? 3;
   const window = opts.window ?? 10;
   const headOnly = opts.headOnly ?? 200;
+  // 调用方可自带分组键（/today 的 Opportunity 把公司放在 job.company 下，顶层没有 company 字段——
+  // 不传 keyOf 会让所有项落到同一个空键，散列等于没做）。默认键按 Diversifiable 形状读顶层 company。
+  const companyKey: (item: T) => string =
+    opts.keyOf ?? ((item: T) => defaultCompanyKey(item as unknown as Diversifiable));
   if (ranked.length <= window) return ranked;
 
   const head = ranked.slice(0, headOnly);

@@ -335,6 +335,25 @@ export function scoringSignalGroups(
   };
 }
 
+/**
+ * 用户目标职能集（scoreJob 职能门用的同一判据：目标岗位逐条 classifyJobFunction，跳过「其他」）。
+ * 国内 + 海外两套目标岗位取并集——它给候选取数当「哪些行的正文根本不用传」的门（lib/jobs-store/search.ts），
+ * 并集是超集：宁可多传几行正文，也不能让某个 job 在 scoreJob 里该读正文却拿到 null。
+ */
+export function scoringTargetFunctions(preferences: UserPreferences | null): string[] {
+  if (!preferences) return [];
+  const roles = uniqueStrings([
+    ...scoringTargetRoles(preferences, false),
+    ...scoringTargetRoles(preferences, true),
+  ]);
+  const out = new Set<string>();
+  for (const role of roles) {
+    const fn = classifyJobFunction({ title: role });
+    if (fn && fn !== "其他") out.add(fn);
+  }
+  return Array.from(out);
+}
+
 function shouldUseOverseasProfile(job: Job, preferences: UserPreferences): boolean {
   const scope = preferences.job_scope || "domestic";
   if (scope === "overseas") return true;
