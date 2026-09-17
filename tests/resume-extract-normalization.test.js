@@ -103,3 +103,24 @@ test("industries 全是自造类目且归一不出 → 空数组（宁可不设�
   const p = normalizeResumeProfile({ industries: ["星际贸易", "时空管理"] });
   assert.deepEqual(p.industries, []);
 });
+
+test("target_roles 里的技能词门：同时在 skills 里且判不出职能的词才剔除（Java 不是岗位方向）", () => {
+  const out = normalizeResumeProfile({
+    target_roles: ["Java", "Spring Boot", "后端开发工程师", "AI Agent", "数据分析"],
+    skills: ["Java", "Spring Boot", "MySQL", "数据分析"],
+  });
+  // Java / Spring Boot：在技能表里 + 判不出职能 → 是技能词，剔掉
+  assert.ok(!out.target_roles.includes("Java"));
+  assert.ok(!out.target_roles.includes("Spring Boot"));
+  // 后端开发工程师：不在技能表里 → 保留
+  assert.ok(out.target_roles.includes("后端开发工程师"));
+  // AI Agent：判不出职能但不在技能表里 → 合法的领域方向词，保留（无从判断就别猜）
+  assert.ok(out.target_roles.includes("AI Agent"));
+  // 数据分析：在技能表里但判得出职能（数据）→ 合法方向，保留
+  assert.ok(out.target_roles.includes("数据分析"));
+});
+
+test("target_roles 技能词门：skills 为空时一个都不剔（没有交集就没有证据）", () => {
+  const out = normalizeResumeProfile({ target_roles: ["Java", "Python"], skills: [] });
+  assert.deepEqual(out.target_roles, ["Java", "Python"]);
+});

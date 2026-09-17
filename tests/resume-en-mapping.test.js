@@ -11,7 +11,8 @@ test("maps parsed English resume profile into en_* candidate fields", () => {
 
   assert.deepEqual(mapped.en_target_roles, ["Machine Learning Engineer", "Backend Engineer"]);
   assert.deepEqual(mapped.en_skills, ["Python", "Distributed Systems"]);
-  assert.deepEqual(mapped.en_target_keywords, ["Python", "Distributed Systems"]);
+  // 技能不再复制进补充搜索词：没填英文目标岗位时关键词会被当方向信号（技能 ≠ 方向，与中文侧同口径）。
+  assert.deepEqual(mapped.en_target_keywords, []);
   assert.equal(mapped.has_en_resume, true);
 });
 

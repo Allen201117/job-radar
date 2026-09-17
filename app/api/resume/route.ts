@@ -114,6 +114,16 @@ async function parseResume(
   userId: string,
   input: ResumeInput,
 ) {
+  if (input.extractError === "extract_error") {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "extract_error",
+        supported: "文件类型能识别，但内容抽取失败（扫描版 PDF、加密文档常见）。请转成文本粘贴，或换 Word / 文本版重试。",
+      },
+      { status: 422 },
+    );
+  }
   const validation = validateResumeUploadInput(input);
   if (!validation.ok) {
     return NextResponse.json(
@@ -327,6 +337,8 @@ type ResumeInput = {
   profile?: any;
   resumeId?: string | null;
   parseDiagnostics?: unknown;
+  /** 文件抽取失败的种类（extract_error / unsupported）；成功或纯文本输入为 null。 */
+  extractError?: string | null;
 };
 
 async function readResumeInput(request: NextRequest): Promise<ResumeInput> {
@@ -364,10 +376,13 @@ async function readResumeInput(request: NextRequest): Promise<ResumeInput> {
       intent,
       variant,
       ...fileMeta,
-      // 抽取成功 → 标为 text/plain 让下游文本校验通过；不支持/失败 → 保留原类型走 415
+      // 抽取成功 → 标为 text/plain 让下游文本校验通过；不支持 → 保留原类型走 415。
+      // 抽取**失败**（扫描版 PDF / 加密文档 / 解析库崩溃）单独带出来走 422：此前它也落进 415
+      // 「文件类型不支持」，用户传的明明是 PDF 却被告知不支持 PDF（2026-09-17 修）。
       fileType: extracted.ok ? "text/plain" : fileMeta.fileType,
       text: extracted.text,
       applyToPreferences,
+      extractError: extracted.ok ? null : extracted.kind,
     };
   }
 
@@ -416,6 +431,14 @@ async function saveEnglishProfile(
     return NextResponse.json({ ok: false, error: profileError.message + hint }, { status: 500 });
   }
 
+  // 英文画像必须同时写进 user_preferences（迁移 253）：/jobs 页与 /api/jobs/search 只读 user_preferences，
+  // lib/scoring.ts 按 preferences.en_* 给海外岗打分——此前只写 candidate_profiles，/today 读得到、/jobs 读不到，
+  // 海外用户上传英文简历后「按匹配度」排序与没上传一模一样（2026-09-17 修）。
+  const { error: prefsError } = await upsertEnglishPreferences(supabase, userId, enProfile);
+  if (prefsError) {
+    return NextResponse.json({ ok: false, error: prefsError.message }, { status: 500 });
+  }
+
   const parseDiagnostics = buildResumeDiagnostics(input.parseDiagnostics);
   await trackResumeEvent(supabase, userId, "resume_profile_saved", {
     ...parseDiagnostics,
@@ -426,9 +449,44 @@ async function saveEnglishProfile(
   return NextResponse.json({
     ok: true,
     profile: saved,
-    preferences_applied: false,
+    preferences_applied: true,
     english_profile_applied: true,
   });
+}
+
+// 英文画像 → user_preferences 的 en_* 列。只动 en_* 与 has_en_resume，中文侧字段原样保留
+// （新用户没有偏好行时用与 upsertMergedPreferences 相同的默认值建行）。
+async function upsertEnglishPreferences(
+  supabase: Awaited<ReturnType<typeof createServerSupabase>>,
+  userId: string,
+  en: { en_target_roles: string[]; en_skills: string[]; en_target_keywords: string[] },
+) {
+  const { data: existing, error: readError } = await supabase
+    .from("user_preferences")
+    .select("*")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (readError) return { error: readError };
+
+  return supabase.from("user_preferences").upsert(
+    {
+      user_id: userId,
+      target_locations: existing?.target_locations || [],
+      target_roles: existing?.target_roles || [],
+      skills: existing?.skills || [],
+      target_keywords: existing?.target_keywords || [],
+      target_industries: existing?.target_industries || [],
+      exclude_keywords: existing?.exclude_keywords || [],
+      target_companies: existing?.target_companies || [],
+      daily_limit: existing?.daily_limit || 20,
+      en_target_roles: en.en_target_roles,
+      en_skills: en.en_skills,
+      en_target_keywords: en.en_target_keywords,
+      has_en_resume: true,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" },
+  );
 }
 
 async function upsertMergedPreferences(
