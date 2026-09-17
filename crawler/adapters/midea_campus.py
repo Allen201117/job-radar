@@ -56,7 +56,7 @@ import httpx
 
 import normalizer
 
-from .base import BaseAdapter, RawJob, resolve_list_cap
+from .base import BaseAdapter, DEFAULT_LIST_CAP, RawJob, resolve_list_cap, resolve_page_cap
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,6 @@ class MideaCampusAdapter(BaseAdapter):
     DETAIL_URL = f"{_HOST}/schoolOut/post/details?positionId={{position_id}}"
     # 服务端硬顶 20，请求更大只是白填（见模块注释）。写 20 是为了让「页数 = ceil(total/20)」对得上。
     PAGE_SIZE = 20
-    MAX_PAGES = 200
 
     def should_skip(self, source_url: str) -> Optional[str]:
         # `/` 会 302 到 `/schoolOut`，HEAD 跟随重定向后 200（2026-09-18 实测），默认实现不会跳过。
@@ -112,18 +111,26 @@ class MideaCampusAdapter(BaseAdapter):
                 f"midea_campus: project/list 结构异常（code={payload.get('code')!r}）")
         return [p for p in projects if isinstance(p, dict) and p.get("projectRuleId")]
 
-    def _drain_project(self, client: httpx.Client, project: dict, budget: int):
+    def _drain_project(self, client: httpx.Client, project: dict, remaining: int):
         """翻完一个项目，返回 (rows, reported_total, drained)。
 
         ⚠️ 末页判据 = 「这一页有没有带来新的 positionId」+「够不够自报 total」。
         绝不用「本页条数 < pageSize」——服务端把 pageSize 顶到 20，正常页恒等于 20，
         这个判据在这里永远为假；而 `pageIndex` 一旦写错成 `pageNum`，每页都回同一批，
         只有「没带来新 id」能当场把它抓出来（这正是 2026-09-18 踩到的坑）。
+
+        `remaining` 是**整源**还剩多少条预算（由调用方递减后传进来，同 chnenergy 的多渠道写法），
+        不是每个项目各给一份 —— 后者会让「单源上限」变成「上限 × 项目数」，
+        而 `resolve_list_cap` 的语义是单源列表抓取条数上限。
         """
         prid = project["projectRuleId"]
         seen: Dict[str, dict] = {}
         total: Optional[int] = None
-        for page in range(1, self.MAX_PAGES + 1):
+        # 页数上限只作「防死循环」兜底，真正的收尾靠接口自报的 total 与整源预算。
+        # ⚠️ 不要写死页数：base.resolve_page_cap 的文档字符串专门点名过「硬编码 200 页」
+        # 这个反模式（顺丰/小红书/wt 都栽过），硬编码会让 CRAWL_MAX_JOBS 这个旋钮对本源失效。
+        max_pages = resolve_page_cap(self.PAGE_SIZE)
+        for page in range(1, max_pages + 1):
             resp = client.post(self.LIST_API, json={
                 "projectRuleId": prid,
                 "pageIndex": page,
@@ -158,17 +165,22 @@ class MideaCampusAdapter(BaseAdapter):
                 break
             if total is not None and len(seen) >= total:
                 break
-            if len(seen) >= budget:
-                logger.warning("%s: 项目 %s 撞单源条数上限 %d，未抓全",
-                               self.name, project.get("projectRuleName"), budget)
+            if len(seen) >= remaining:
+                logger.warning("%s: 项目 %s 撞单源条数上限（本项目还剩 %d 条预算），未抓全",
+                               self.name, project.get("projectRuleName"), remaining)
                 break
+        else:
+            # for 正常跑完 = 撞了防死循环的页数上限。不记一笔的话，这种「没抓全」
+            # 事后在日志里完全看不出是为什么停的。
+            logger.warning("%s: 项目 %s 撞页数上限 %d，未抓全（got=%d total=%s）",
+                           self.name, project.get("projectRuleName"), max_pages, len(seen), total)
         drained = total is not None and len(seen) >= total
         return list(seen.values()), total, drained
 
     def fetch(self, source_url: str) -> str:
         self.reported_total = None
         self.fetch_complete = False
-        budget = resolve_list_cap(8000)
+        budget = resolve_list_cap(DEFAULT_LIST_CAP)
 
         rows: List[dict] = []
         totals: List[int] = []
@@ -183,8 +195,16 @@ class MideaCampusAdapter(BaseAdapter):
                 self.fetch_complete = True
                 return json.dumps({"rows": []}, ensure_ascii=False)
             for project in projects:
+                # 预算整源共享、逐项目递减（同 chnenergy 的多渠道写法）。用完就不再开新项目，
+                # 并如实记「没抓全」——不许悄悄把剩下的项目当成「本来就没有」。
+                remaining = budget - len(rows)
+                if remaining <= 0:
+                    logger.warning("%s: 单源条数上限 %d 已用尽，项目 %s 及之后未抓",
+                                   self.name, budget, project.get("projectRuleName"))
+                    drained.append(False)
+                    continue
                 try:
-                    got, total, ok = self._drain_project(client, project, budget)
+                    got, total, ok = self._drain_project(client, project, remaining)
                 except Exception:
                     if not rows:
                         raise      # 第一个项目就炸 = 接口坏了，交上层记 failed

@@ -260,6 +260,36 @@ class MideaCampusFetchTest(unittest.TestCase):
         self.assertFalse(adapter.fetch_complete)
         self.assertEqual(len(rows), 20)
 
+    def test_list_cap_is_shared_across_projects_not_per_project(self):
+        """`resolve_list_cap` 的语义是**单源**上限。预算若逐项目各给一份，
+        4 个项目就会变成「上限 × 4」，单源上限这个旋钮等于失效。"""
+        a, b = _CAMPUS_PROJECT, _COOP_INTERN_PROJECT
+        pages = {
+            (a["projectRuleId"], 1): [_row(f"{i:032x}", project=a) for i in range(20)],
+            (a["projectRuleId"], 2): [_row(f"{i + 20:032x}", project=a) for i in range(20)],
+            (b["projectRuleId"], 1): [_row(f"{i + 100:032x}", project=b) for i in range(20)],
+        }
+        with mock.patch.dict(os.environ, {"CRAWL_MAX_JOBS": "20"}):
+            adapter, rows, client = _run([a, b], pages,
+                                         {a["projectRuleId"]: 152, b["projectRuleId"]: 169})
+        # 第一个项目就把 20 条预算吃光 → 第二个项目一个请求都不该发
+        self.assertEqual(len(rows), 20)
+        self.assertFalse(adapter.fetch_complete)
+        posted_prids = {c[2].get("projectRuleId") for c in client.calls if c[0] == "POST"}
+        self.assertEqual(posted_prids, {a["projectRuleId"]})
+
+    def test_page_cap_follows_crawl_max_jobs_not_a_hardcoded_number(self):
+        """页数上限必须跟着 CRAWL_MAX_JOBS 走（resolve_page_cap），不能写死。
+        CRAWL_MAX_JOBS=60 → ceil(60/20)=3 页就停。"""
+        prid = _CAMPUS_PROJECT["projectRuleId"]
+        pages = {(prid, n): [_row(f"{i:032x}") for i in range((n - 1) * 20, n * 20)]
+                 for n in range(1, 20)}
+        with mock.patch.dict(os.environ, {"CRAWL_MAX_JOBS": "60"}):
+            adapter, rows, client = _run([_CAMPUS_PROJECT], pages, {prid: 999})
+        self.assertFalse(adapter.fetch_complete)
+        self.assertEqual(len([c for c in client.calls if c[0] == "POST"]), 3)
+        self.assertEqual(len(rows), 60)
+
     def test_project_list_broken_shape_raises(self):
         client = _FakeClient({"oops": 1}, {})
         with mock.patch.object(mod.httpx, "Client", lambda *a, **k: client):
