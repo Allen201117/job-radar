@@ -251,3 +251,42 @@ test("wecruit/hotjob 查询参数 postType 是门户自报渠道：campus→校�
   // 层1 仍在前：校招门户里标题写明实习的判实习
   assert.strictEqual(recruitmentCategory({ title: "算法实习生", jd_url: base + "campus" }), "实习");
 });
+
+test("老版 wt（hotjob）查询参数 recruitType 是平台渠道常量：1→校招、12→实习、2 不做对称规则", () => {
+  // 老版 WinTalent 的详情页形如 …/mobweb/position/detail?brandCode=1&safe=Y&recruitType={rt}&postIdsAry={id}
+  // rt 是**平台常量**（1=校招 / 2=社招 / 12=实习，见 crawler/adapters/wt.py 顶部注释），且值就在 jd_url 里。
+  // 为什么 adapter 已经把标签拼进 job_type 了还要认 URL：job_type 是可变派生字段，
+  // 一旦那步回退 / 源停抓 / 老代码写的旧值被 _PRESERVE_IF_EMPTY 保留，结论就静默退回「社招」。
+  // 2026-09-18 live 全库实测：rt=1 的 5,373 个在招岗里仍有 83 行 job_type 不带标签。
+  const wt = (rt) => `https://goodwe.hotjob.cn/wt/goodwe/mobweb/position/detail?brandCode=1&safe=Y&recruitType=${rt}&postIdsAry=908`;
+  assert.strictEqual(recruitmentCategory({ title: "硬件助理工程师", job_type: "技术族", jd_url: wt(1) }), "校招");
+  assert.strictEqual(recruitmentCategory({ title: "测试工程师", job_type: "管理族", jd_url: wt(12) }), "实习");
+
+  // ⚠️ 1 后面必须有否定数字前瞻，否则 12（实习）会被前面的 1（校招）先吃掉。
+  assert.notStrictEqual(recruitmentCategory({ title: "前台接待", job_type: "管理族", jd_url: wt(12) }), "校招");
+
+  // 🚫 rt=2 刻意不判社招（与 postType=society 同一取舍）：社招本来就是层7 默认态，
+  // 加了只会让层4 抢在层5 前面，把「社招板块里标题写明届别」的岗压回社招。
+  // 2026-09-18 全库：rt=2 的 13,201 个在招岗里有 168 个靠标题被层5 判成校招、89 个被层1 判成实习。
+  assert.strictEqual(recruitmentCategory({ title: "整车电控工程师（2027届）", job_type: "技术族", jd_url: wt(2) }), "校招");
+  assert.strictEqual(recruitmentCategory({ title: "财务实习生", job_type: "职能类", jd_url: wt(2) }), "实习");
+  assert.strictEqual(recruitmentCategory({ title: "客户经理", job_type: "营销族", jd_url: wt(2) }), "社招");
+
+  // 层2（≥2 年经验）仍排在 rt=1 令牌之前：源头把资深岗挂进校招板块也不放行。
+  // ⚠️ 年限必须写在「经验/经历/从业」语境里才会被层2 认出来（见 _minRequiredExperienceYears）。
+  // wt 的 experience 列常是**裸值**「3-5年」「5年」，那种写法层2 认不出 —— 2026-09-18 全库实测：
+  // rt=1/12 里 experience 整体是 ≥2 年的 34 行，层2 只兜住 17 行。这是既有口径，本次不动。
+  assert.strictEqual(
+    recruitmentCategory({ title: "结构工程师", job_type: "技术族", jd_url: wt(1), experience: "3年以上相关工作经验" }),
+    "社招",
+  );
+
+  // 别的平台把 recruitType 写成非数字（美的 recruitType=social，线上 1,043 个在招岗）→ 一条都不许命中。
+  assert.strictEqual(
+    recruitmentCategory({
+      title: "供应链管理岗",
+      jd_url: "https://recruit.midea.com/recruitOut/ihr/social/jobApplication?positionId=8a5e&recruitType=social",
+    }),
+    "社招",
+  );
+});
