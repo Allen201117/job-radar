@@ -87,12 +87,19 @@ function evictToRowBudget(incomingRows: number): void {
  *
  * TTL 见 SCAN_CACHE_TTL_MS：岗位库由爬虫按天级写入，分钟级陈旧对用户不可见。
  */
-async function fetchCandidates(sql: string, params: unknown[]): Promise<any[]> {
+async function fetchCandidates(sql: string, params: unknown[], meta?: { cacheHit?: boolean }): Promise<any[]> {
   const key = `${sql}|${JSON.stringify(params)}`;
   const hit = scanCache.get(key);
-  if (hit && hit.expiresAt > Date.now()) return hit.rows;
+  if (hit && hit.expiresAt > Date.now()) {
+    if (meta) meta.cacheHit = true;
+    return hit.rows;
+  }
   const pending = scanInFlight.get(key);
-  if (pending) return pending;
+  if (pending) {
+    if (meta) meta.cacheHit = true;
+    return pending;
+  }
+  if (meta) meta.cacheHit = false;
 
   const p = (async () => {
     try {
@@ -194,7 +201,35 @@ export type SearchResult = {
   exactTotal: number | null;
   offset: number;
   limit: number;
+  /** 服务端分段耗时（ms），只为观测：写进 `x-jobs-search-timing` 响应头 + 一行 `[jobs-search]` 日志。 */
+  timing?: SearchTiming;
 };
+
+export type SearchTiming = {
+  path: "fts" | "scan";
+  sortBy: string;
+  anon: boolean;
+  rows: number;
+  /** 候选是否来自进程内缓存（true = 这次没跨库拉行）。 */
+  cacheHit: boolean;
+  /** 候选取数（含跨库传输 + node-pg 解析）。 */
+  fetchMs: number;
+  /** JS 打分 + 精筛 + 排序 + 散列。 */
+  scoreMs: number;
+  /** 命中页回补 + 真实总数计数（并行，取两者之长）。 */
+  tailMs: number;
+  totalMs: number;
+};
+
+const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+// 2026-09-17 立：线上匿名 sortBy=match 冷路径正文按需传之后仍 10.8~13s，从外面量不出钱花在哪。
+// 这一行是分段账本；先看它的数字再动代码（先量后改）。
+function logSearchTiming(t: SearchTiming): void {
+  console.log(
+    `[jobs-search] path=${t.path} sortBy=${t.sortBy} anon=${t.anon} rows=${t.rows} cache=${t.cacheHit ? "hit" : "miss"} ` +
+      `fetch_ms=${Math.round(t.fetchMs)} score_ms=${Math.round(t.scoreMs)} tail_ms=${Math.round(t.tailMs)} total_ms=${Math.round(t.totalMs)}`,
+  );
+}
 
 function appendSoftCityWhere(conds: string[], params: unknown[], cities: string[]) {
   const tokens = cities.flatMap((c) => cityMatchTokens(c));
@@ -462,6 +497,8 @@ async function searchViaFTS(
   tsquery: string,
   adapterBySource?: Map<string, string | null> | null,
 ): Promise<SearchResult> {
+  const t0 = now();
+  const fetchMeta: { cacheHit?: boolean } = {};
   // 「默认会被隐藏」的岗位（忽略/已投递）。⚠️ 无偏好时 scoreJob 直接返回 hidden_reason=null，
   // 用户操作根本不生效（lib/scoring.ts），这里必须同口径，否则算真实总数时会多排除。
   const hiddenIds = prefs ? actionHiddenJobIds(actions, filters) : new Set<string>();
@@ -499,9 +536,11 @@ async function searchViaFTS(
     await fetchCandidates(
       `select ${columns} from jobs where ${conds.join(" and ")}${orderBy} limit ${FTS_CAP}`,
       candidateParams,
+      fetchMeta,
     ),
     adapterBySource,
   );
+  const tFetched = now();
   // 批量门店副本折叠放在排序**之后**：留下的是打分最高的那条。折叠后 ranked.length 变小 →
   // exactTotalWhenCapped 的自检门③ 自动失败 → 计数退回「N+」，这是对的（见 bulk-store-dedup 注释）。
   const rankedRaw = collapseBulkStoreJobs(annotateAndRank(rows, filters, prefs, actions));
@@ -509,6 +548,7 @@ async function searchViaFTS(
   const breakdown = countMatchBreakdown(ranked);
   const page = ranked.slice(offset, offset + limit);
   const capped = rows.length >= FTS_CAP;
+  const tScored = now();
   // 回补展示列与「真实总数」计数彼此无关，并行跑，别把 85ms 串到 TTFB 上。
   const [, exactTotal] = await Promise.all([
     hydratePageColumns(page), // 命中页回补展示列（候选阶段省传）
@@ -525,6 +565,12 @@ async function searchViaFTS(
         })
       : Promise.resolve(null),
   ]);
+  const tEnd = now();
+  const timing: SearchTiming = {
+    path: "fts", sortBy: filters.sortBy, anon: !prefs, rows: rows.length, cacheHit: fetchMeta.cacheHit === true,
+    fetchMs: tFetched - t0, scoreMs: tScored - tFetched, tailMs: tEnd - tScored, totalMs: tEnd - t0,
+  };
+  logSearchTiming(timing);
   return {
     jobs: page,
     total: ranked.length,
@@ -535,6 +581,7 @@ async function searchViaFTS(
     exactTotal,
     offset,
     limit,
+    timing,
   };
 }
 
@@ -547,6 +594,10 @@ async function searchViaScan(
   limit: number,
   adapterBySource?: Map<string, string | null> | null,
 ): Promise<SearchResult> {
+  const t0 = now();
+  const fetchMeta: { cacheHit?: boolean } = {};
+  let fetchMs = 0;
+  let scoreMs = 0;
   const need = offset + limit;
   const matched: ScoredJob[] = [];
   let nextOff = 0;
@@ -576,9 +627,24 @@ async function searchViaScan(
   const sql =
     `select ${columns} from jobs where ${conds.join(" and ")}${orderBy} ` +
     `limit $${candidateParams.length + 1} offset $${candidateParams.length + 2}`;
-  const fetchRows = (want: number, off: number) => jobsQuery(sql, [...candidateParams, want, off]);
+  const fetchRows = async (want: number, off: number) => {
+    const s = now();
+    try {
+      return await jobsQuery(sql, [...candidateParams, want, off]);
+    } finally {
+      fetchMs += now() - s;
+    }
+  };
   // 吸收一批：打分/精筛后并入 matched，返回「是否已到底」（拿到的比想要的少 = 没更多了）。
   const absorb = (raw: unknown, want: number): boolean => {
+    const s = now();
+    try {
+      return absorbInner(raw, want);
+    } finally {
+      scoreMs += now() - s;
+    }
+  };
+  const absorbInner = (raw: unknown, want: number): boolean => {
     const rows: any[] = annotateSourceAdapter(raw as any[], adapterBySource);
     if (!rows.length) return true;
     scanned += rows.length;
@@ -611,10 +677,10 @@ async function searchViaScan(
     //   让候选取数根本不需要 summary。属 schema 改动，见设计文档。
     // 在物化之前，先用「候选与用户无关」这一点把重复传输吃掉：走进程内缓存 + 并发去重
     // （见上面 fetchCandidates 的注释与不变量）。
-    exhausted = absorb(
-      await fetchCandidates(sql, [...candidateParams, SCAN_BUDGET, 0]),
-      SCAN_BUDGET,
-    );
+    const s = now();
+    const raw = await fetchCandidates(sql, [...candidateParams, SCAN_BUDGET, 0], fetchMeta);
+    fetchMs += now() - s;
+    exhausted = absorb(raw, SCAN_BUDGET);
   } else {
     // newest 攒够 need 即停 → 保持逐页，不为了少几次往返把 2.8 万行全拉回来。
     // （并行取页已实测更慢/会 500，见上面常量位置的记录，别再改回去。）
@@ -624,11 +690,14 @@ async function searchViaScan(
     }
   }
   // 与 FTS 路径同口径：门店副本折叠在排序之后（见 bulk-store-dedup 注释）。
+  const sRank = now();
   const rankedRaw = collapseBulkStoreJobs(filterAndRankJobs(matched, filters));
   const ranked = filters.sortBy === "newest" ? rankedRaw : spreadByCompany(rankedRaw);
   const breakdown = countMatchBreakdown(ranked);
   const page = ranked.slice(offset, offset + limit);
+  scoreMs += now() - sRank;
   const capped = !exhausted;
+  const tScored = now();
   const [, exactTotal] = await Promise.all([
     hydratePageColumns(page), // 命中页回补展示列（候选阶段省传）
     capped
@@ -644,6 +713,12 @@ async function searchViaScan(
         })
       : Promise.resolve(null),
   ]);
+  const tEnd = now();
+  const timing: SearchTiming = {
+    path: "scan", sortBy: filters.sortBy, anon: !prefs, rows: scanned, cacheHit: fetchMeta.cacheHit === true,
+    fetchMs, scoreMs, tailMs: tEnd - tScored, totalMs: tEnd - t0,
+  };
+  logSearchTiming(timing);
   return {
     jobs: page,
     total: ranked.length,
@@ -654,6 +729,7 @@ async function searchViaScan(
     exactTotal,
     offset,
     limit,
+    timing,
   };
 }
 

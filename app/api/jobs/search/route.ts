@@ -91,7 +91,16 @@ export async function GET(request: NextRequest) {
     const result = process.env.JOBS_DATABASE_URL
       ? await searchJobsStore(filters, preferences, actions, offset, limit, adapterBySource)
       : await searchJobs(createServiceClient(), filters, preferences, actions, offset, limit, adapterBySource);
-    return NextResponse.json({ ok: true, ...result });
+    const res = NextResponse.json({ ok: true, ...result });
+    // 分段耗时暴露成响应头：线上没有函数日志入口时，curl -D - 就能看到钱花在哪（fetch / score / tail）。
+    const t = (result as { timing?: import("@/lib/jobs-store/search").SearchTiming }).timing;
+    if (t) {
+      res.headers.set(
+        "x-jobs-search-timing",
+        `path=${t.path};rows=${t.rows};cache=${t.cacheHit ? "hit" : "miss"};fetch=${Math.round(t.fetchMs)};score=${Math.round(t.scoreMs)};tail=${Math.round(t.tailMs)};total=${Math.round(t.totalMs)}`,
+      );
+    }
+    return res;
   } catch (e: any) {
     return NextResponse.json(
       { ok: false, error: e?.message || "search_failed" },
