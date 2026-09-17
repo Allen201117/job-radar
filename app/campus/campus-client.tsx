@@ -21,11 +21,19 @@ import {
   getCachedAvailability,
   subscribeAvailability,
 } from "@/lib/insight-client";
-import { groupCampusJobs, compareCompanyCardsByFit } from "@/lib/campus-zone";
+import {
+  groupCampusJobs,
+  compareCompanyCardsByFit,
+  isCampusView,
+  CAMPUS_VIEW_STORAGE_KEY,
+  type CampusView,
+  type RecruitMode,
+} from "@/lib/campus-zone";
+import CampusAllJobs from "./campus-all-jobs";
 import { formatDateLabel } from "@/lib/relative-time";
 // 只引类型：该模块带 `server-only`，type-only import 编译期擦除，不会把它拉进客户端包。
 import type { CampusIndustrySource } from "@/lib/campus-user-industries";
-import { Badge } from "@/components/ui";
+import { Badge, Segmented } from "@/components/ui";
 import {
   countMatchingFacets,
   countUnlabeledInMatch,
@@ -73,7 +81,6 @@ export type CampusBoardCard = {
   fitTotal?: number;
 };
 
-type RecruitMode = "campus" | "intern";
 type PrimaryAction = "saved" | "ignored" | "applied";
 
 const WINDOW_BADGE: Record<
@@ -195,6 +202,8 @@ export default function CampusClient({
   seasonGradClass,
   fitFunctions = [],
   fitCities = [],
+  libraryCounts = null,
+  jobScope = "domestic",
 }: {
   cards: CampusBoardCard[];
   industries: string[];
@@ -210,8 +219,31 @@ export default function CampusClient({
   /** 当前校招季的目标届别（服务端 currentGradClass() 算好传入，避免年界处 SSR/hydration 不一致）。
    *  没有官方周期数据的公司，校招卡也用它兜一个「N届」标签，不至于一个标签都没有。 */
   seasonGradClass: number;
+  /** 校招岗位库的库存量级（精确计数，来自 countCampusLibrary）；取不到时为 null，界面就不提这句。 */
+  libraryCounts?: { campus: number; intern: number } | null;
+  jobScope?: string | null;
 }) {
   const [mode, setMode] = useState<RecruitMode>("campus");
+  // 视图：`all` = 全部校招岗（默认，创始人 2026-09-18 定），`must` = 必投 30 家。
+  // ⚠️ 初始值**必须**是常量 `all`，不能在 useState 里读 localStorage —— 服务端渲染不出它，
+  // 放初始值就是 hydration 不一致（同 CLAUDE.md 那条 SSR 日期时区的坑）。读取放 useEffect。
+  const [view, setView] = useState<CampusView>("all");
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(CAMPUS_VIEW_STORAGE_KEY);
+      if (isCampusView(saved)) setView(saved);
+    } catch {
+      // 隐私窗口 / 站点数据被清时 localStorage 会抛。记不住视图是小事，页面挂了是大事。
+    }
+  }, []);
+  function chooseView(next: CampusView) {
+    setView(next);
+    try {
+      window.localStorage.setItem(CAMPUS_VIEW_STORAGE_KEY, next);
+    } catch {
+      // 同上：存不住就算了，本次会话内照常生效。
+    }
+  }
   // 服务端已按「校招模式的对口数」排好；切到实习要按实习那一列重排（同一个比较器，口径不会漂）。
   // 校招模式下结果与服务端逐位相同 → 首屏不会有 hydration 差异。
   const cards = useMemo(() => {
@@ -229,11 +261,14 @@ export default function CampusClient({
   const [insightCompany, setInsightCompany] = useState<string | null>(null);
   const [, forceAvailTick] = useState(0);
   useEffect(() => {
+    // 只在「必投」视图问可用性：默认的「全部校招岗」视图一张公司卡都不渲染，
+    // 预拉 30 家的洞察可用性是纯浪费的一次网络往返。
+    if (view !== "must") return;
     // 依赖 cardsInput 而不是排序后的 cards：切模式只换顺序、公司集合没变，不必重问一遍可用性。
     cardsInput.forEach((c) => requestInsightAvailability(c.company));
     const unsub = subscribeAvailability(() => forceAvailTick((n) => n + 1));
     return unsub;
-  }, [cardsInput]);
+  }, [cardsInput, view]);
 
   function toggleExpand(pattern: string) {
     setExpandedPattern((cur) => (cur === pattern ? null : pattern));
@@ -423,8 +458,80 @@ export default function CampusClient({
     }
   }
 
+  const modeLabelText = mode === "campus" ? "校招" : "实习";
+  const libraryCount = libraryCounts ? (mode === "campus" ? libraryCounts.campus : libraryCounts.intern) : null;
+
   return (
     <div className="mt-8 space-y-6 ink-1">
+      {/* 视图 + 模式两个开关横贯全页：视图决定「看全库还是看必投 30 家」，模式决定「校招还是实习」。
+          两个视图共用同一个 mode —— 切过去不会莫名其妙回到校招。 */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Segmented
+          ariaLabel="校招专区视图"
+          value={view}
+          onChange={chooseView}
+          size="md"
+          options={[
+            { value: "all", label: "全部校招岗" },
+            { value: "must", label: `必投 ${cards.length} 家` },
+          ]}
+        />
+        <Segmented
+          ariaLabel="招聘类型"
+          value={mode}
+          onChange={setMode}
+          size="md"
+          options={[
+            { value: "campus", label: "校招" },
+            { value: "intern", label: "实习" },
+          ]}
+        />
+      </div>
+
+      {view === "all" ? (
+        <>
+          {/* 库存量级的**精确**数字（countCampusLibrary）。它和下面列表里的「N 个匹配岗位」
+              刻意是两个数、两种措辞：这条说「库里现在有多少」，那条说「你这组筛选匹配到多少」；
+              后者撞取数上限时只能给「N+」（见 lib/match-total），不能拿它冒充库存量。 */}
+          {libraryCount != null && (
+            <p className="t-body-sm ink-2">
+              全站在招{modeLabelText}岗 <span className="t-num ink-1">{libraryCount.toLocaleString("zh-CN")}</span> 个
+              <span className="ink-3">（已滤掉往届；按你的偏好排序，不做隐藏）</span>
+            </p>
+          )}
+          <CampusAllJobs mode={mode} jobScope={jobScope} />
+        </>
+      ) : (
+        // ⚠️ 这里是**函数调用**，不是把它当组件渲染。写成组件标签会让 React 每次父组件重渲染
+        // 都看到一个**新的组件类型**（函数在 render 体内声明，每次渲染都是新对象）→ 整棵子树卸载重挂：
+        // 展开区滚动位置丢、焦点丢、JobCard 的 effect 全部重跑。调用函数则只是把 JSX 内联进来。
+        renderMustApplyBoard()
+      )}
+
+      <SaveToast
+        state={disputeSaveState}
+        savingText="提交中…"
+        doneText="已收到，感谢反馈"
+        errorText="提交失败，请重试"
+        onDismiss={() => setDisputeSaveState("idle")}
+      />
+
+      {insightCompany && (
+        <CompanyInsightDrawer
+          company={insightCompany}
+          open={!!insightCompany}
+          onClose={() => setInsightCompany(null)}
+        />
+      )}
+    </div>
+  );
+
+  /** 「必投 N 家」视图：原有全部形态原样保留（公司卡 / 窗口徽章 / 时间线 / 展开分页 / 反馈）。
+   *  写成渲染函数而不是组件，① 让这次改动的 diff 只有「包一层」，不搬动任何既有逻辑；
+   *  ② 避免「render 体内声明的组件每次都是新类型」导致的整棵子树卸载重挂（见调用处注释）。 */
+  function renderMustApplyBoard() {
+    return (
+      <div className="space-y-6">
       {industrySource !== "preference" && (
         <p className="rounded-xl border border-[#cfe0f5] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] px-4 py-3 text-sm leading-6 text-[#2f6299] dark:text-[#7fb2e8]">
           {industrySource === "resume"
@@ -464,26 +571,9 @@ export default function CampusClient({
       </div>
 
       <div className="surface space-y-3 p-4 sm:p-5">
-        {/* 校招 / 实习切换：驱动卡面计数、展开区与探活取哪个桶。 */}
+        {/* 校招 / 实习切换已提到页面顶部（两个视图共用同一个 mode），这里只留筛选。 */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-black/[0.06] pb-3 dark:border-white/[0.1]">
           <p className="text-sm font-medium ink-2">岗位范围与筛选</p>
-          <div className="inline-flex shrink-0 rounded-full border border-black/[0.08] bg-white/60 p-1 dark:border-white/[0.1] dark:bg-white/[0.05]">
-            {(["campus", "intern"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => setMode(m)}
-                className={cn(
-                  "rounded-full px-3.5 py-1.5 text-sm font-medium transition",
-                  mode === m
-                    ? "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
-                    : "ink-3 hover:opacity-80",
-                )}
-              >
-                {m === "campus" ? "校招" : "实习"}
-              </button>
-            ))}
-          </div>
         </div>
 
         {/* 选项全部来自当前模式已下发的岗位；往届岗位已在服务端过滤，届别不会出现空结果。 */}
@@ -763,24 +853,9 @@ export default function CampusClient({
           })}
         </div>
       )}
-
-      <SaveToast
-        state={disputeSaveState}
-        savingText="提交中…"
-        doneText="已收到，感谢反馈"
-        errorText="提交失败，请重试"
-        onDismiss={() => setDisputeSaveState("idle")}
-      />
-
-      {insightCompany && (
-        <CompanyInsightDrawer
-          company={insightCompany}
-          open={!!insightCompany}
-          onClose={() => setInsightCompany(null)}
-        />
-      )}
-    </div>
-  );
+      </div>
+    );
+  }
 }
 
 // 单个岗位的反馈入口：点「反馈」展开三个理由 chip，选中即提交。不改 JobCard，独立渲染在卡片下方。

@@ -21,6 +21,7 @@ import { companyTierPatterns, NAMED_TIER_PATTERNS } from "@/lib/company-tiers";
 import { appendJobScopeWhere, effectiveJobScope } from "@/lib/job-scope";
 import { collapseBulkStoreJobs } from "@/lib/bulk-store-dedup";
 import { appendCurrentSeasonWhere } from "@/lib/campus-season";
+import { currentGradClass } from "@/lib/grad-class";
 import { spreadByCompany } from "../job-diversify";
 import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 
@@ -352,6 +353,44 @@ function legacyRecruitmentSuperset(jobType: string): string {
     return "(job_type ~* '(实习|intern)' or title ~* '(实习|shixi|intern)' or jd_url ~* '(shixi|intern)')";
   }
   return "true"; // 社招=默认态·大头，无信号可下推 → 兜底路全放行，交给 JS 精筛
+}
+
+/** 校招专区头部的「库存量级」计数（校招 / 实习各一个）。 */
+export type CampusLibraryCounts = { campus: number; intern: number };
+
+/**
+ * 「校招岗位库现在有多少个在招岗」—— 精确计数，**不是**某次搜索的匹配数。
+ *
+ * 为什么不能拿搜索结果的 `total` 当这个数：`total` 是「可翻页条数」，候选撞窗口上限时它只是
+ * 「取到这么多」（实测 `jobType=校招` 回 `total=1000, capped=true, exactTotal=null` → 只能显示
+ * 「1000+」）。`exactTotalWhenCapped` 在这里主动弃权是对的——库里还有约 2,954 行
+ * `recruitment_category is null`，它们走「信号超集」兜底分支，那条不是充分条件。
+ * 所以头部另给一个库存量级的确定数字，和 `/jobs` 的 `JobLibraryStat` 是同一个先例：
+ * 两个数字措辞刻意不同（头部 = 库里有多少 / 列表行 = 你这组筛选匹配到多少）。
+ *
+ * ⚠️ **口径必须与 `appendRecruitmentPrefilter` + `appendCurrentSeasonWhere` 逐条对齐**，
+ * 尤其 `recruitment_explicit` 这一条不能少：少了它是 75,744（2026-09-18 实测），而列表只给得出
+ * 69,138 —— 头部与列表两个数字当场打架，用户会读成「有 6,606 个岗被藏了」。
+ * ⚠️ 实测 `Parallel Seq Scan` 515ms / 13.3 万 buffers，调用方**必须缓存**（见 app/campus/page.tsx）。
+ */
+export async function countCampusLibrary(
+  prefs: UserPreferences | null,
+): Promise<CampusLibraryCounts> {
+  const conds = ["status = 'active'", "recruitment_explicit", "recruitment_category in ('校招','实习')"];
+  const params: unknown[] = [];
+  appendJobScopeWhere(conds, params, prefs, {});
+  // 与 appendCurrentSeasonWhere 同一条往届门；这里 where 已经限定在校招/实习两桶内，
+  // 故不必再带 `recruitment_category in (...)` 那半截（那半截在通用路径上是为了别误伤社招）。
+  params.push(currentGradClass());
+  conds.push(`(grad_class is null or grad_class >= $${params.length})`);
+  const rows = await jobsQuery<{ campus: number; intern: number }>(
+    `select count(*) filter (where recruitment_category = '校招')::int as campus,` +
+      ` count(*) filter (where recruitment_category = '实习')::int as intern` +
+      ` from jobs where ${conds.join(" and ")}`,
+    params,
+  );
+  const row = rows[0];
+  return { campus: Number(row?.campus ?? 0), intern: Number(row?.intern ?? 0) };
 }
 
 /**

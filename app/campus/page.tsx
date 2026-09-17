@@ -12,7 +12,9 @@ import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import { GraduationCap } from "@phosphor-icons/react/ssr";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { companiesForIndustries, getUserCampusScope } from "@/lib/campus-user-industries";
-import { getCampusZone, getCampusFreshStats } from "@/lib/jobs-store/read";
+import { getCampusZone, getCampusFreshStats, jobsStoreEnabled } from "@/lib/jobs-store/read";
+import { countCampusLibrary, type CampusLibraryCounts } from "@/lib/jobs-store/search";
+import type { UserPreferences } from "@/lib/types";
 import { getCampusSourceCoverage } from "@/lib/campus-sources";
 import { windowStatus, compareCompanyCardsByFit } from "@/lib/campus-zone";
 import { getRecruitmentCyclesForCompanies } from "@/lib/recruitment-cycle-store";
@@ -126,18 +128,57 @@ const loadCampusBoard = unstable_cache(
   { revalidate: 600, tags: ["campus-board"] },
 );
 
+/**
+ * 「全站在招校招/实习岗」的库存量级计数。
+ *
+ * 为什么缓存：这条 SQL 实测是 `Parallel Seq Scan` 515ms / 13.3 万 buffers（2026-09-18 EXPLAIN），
+ * 而它是个**全局**数字（同一求职范围下谁看都一样），只在爬虫写入时才变（天级）。
+ * ⚠️ key 只含真正影响结果集的两项、且取**原始值**（与 app/jobs/page.tsx 的 loadJobsFirstScreen 同理）：
+ * `appendJobScopeWhere` 只读 job_scope + target_regions，原样传回去重建即产出逐字节相同的 SQL。
+ * 不含任何用户私有字段 → 跨用户共享安全。
+ * ⚠️ 函数体内不得读 cookies()/headers()（unstable_cache 限制）；这里只调 jobs-store，安全。
+ */
+const loadCampusLibraryCounts = unstable_cache(
+  async (jobScope: string | null, targetRegions: string[]): Promise<CampusLibraryCounts> => {
+    const startedAt = Date.now();
+    const counts = await countCampusLibrary({
+      job_scope: jobScope,
+      target_regions: targetRegions,
+    } as UserPreferences);
+    // 与 [campus-board] 同理：留一条可 grep 的耗时日志，缓存哪天卡住时能看出重算跑没跑完。
+    console.log(`[campus-library] campus=${counts.campus} intern=${counts.intern} ms=${Date.now() - startedAt}`);
+    return counts;
+  },
+  ["campus-library-v1"],
+  // 5 分钟：与 /jobs 首屏计数同档。岗位库按天级写入，这点滞后用户感知不到。
+  { revalidate: 300, tags: ["campus-library"] },
+);
+
 export default async function CampusPage() {
   const user = await getRequestUser();
   if (!user) redirect("/login?next=/campus");
 
   const supabase = await createServerSupabase();
-  const { industries, industrySource, targetRoles, targetLocations } = await getUserCampusScope(
-    supabase,
-    user.id,
-  );
+  // 两条互不依赖 → 并行，少一趟跨区往返（Supabase 在悉尼）。
+  const [{ industries, industrySource, targetRoles, targetLocations }, scopePrefRes] = await Promise.all([
+    getUserCampusScope(supabase, user.id),
+    supabase.from("user_preferences").select("job_scope, target_regions").eq("user_id", user.id).maybeSingle(),
+  ]);
+  const jobScope: string = scopePrefRes.data?.job_scope ?? "domestic";
+  const targetRegions: string[] = (scopePrefRes.data?.target_regions as string[] | null) ?? [];
 
   // 缓存键只认行业清单本身，排序后传入让「同一组行业、不同顺序」共用一份缓存。
-  const board = await loadCampusBoard([...industries].sort());
+  // 库存计数与看板互不依赖 → 并行；两者都走各自的 unstable_cache，绝大多数请求是命中。
+  const [board, libraryCounts] = await Promise.all([
+    loadCampusBoard([...industries].sort()),
+    // 取不到就不渲染那一句（null），绝不让首屏因为一个展示用的数字挂掉。
+    jobsStoreEnabled()
+      ? loadCampusLibraryCounts(jobScope, targetRegions).catch((err) => {
+          console.error("[campus-library] 库存计数失败，本次不展示", err);
+          return null;
+        })
+      : Promise.resolve(null),
+  ]);
 
   // 「计数 + 新鲜度」用轻查询每请求现算，绕开这个可能冻住的重快照（见 getCampusFreshStats 注释）：
   // 快照卡死时，卡面的岗位数与「数据待更新」徽章不再跟着冻在旧值。轻查询失败就回退快照值、绝不让页面崩。
@@ -225,6 +266,8 @@ export default async function CampusPage() {
           seasonGradClass={currentGradClass()}
           fitFunctions={targetFunctions}
           fitCities={targetLocations}
+          libraryCounts={libraryCounts}
+          jobScope={jobScope}
         />
       </ProductPage>
     </div>
