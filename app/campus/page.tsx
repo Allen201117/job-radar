@@ -125,7 +125,7 @@ const loadCampusBoard = unstable_cache(
   },
   // v3：职能改读物化列 job_function 后，看板重算不再拉几万条正文、变轻，换 key 让线上那份卡死的
   //     v2 facet 快照立刻失效并用新的轻重算刷新（Vercel 数据缓存跨部署存活，光部署不会刷掉它）。
-  ["campus-board-v3"],
+  ["campus-board-v4"],
   // 10 分钟：校招看板的数据由每日 / 每小时的抓取车道产出，10 分钟的滞后用户感知不到，
   // 但足以让绝大多数请求走缓存、不再逐次重算这坨重活。
   { revalidate: 600, tags: ["campus-board"] },
