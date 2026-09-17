@@ -72,6 +72,38 @@ export function compareCompanyCards(a: any, b: any): number {
   return 0;
 }
 
+/**
+ * 「对你有货优先」的卡片排序（2026-09-17）。
+ *
+ * 必投清单本身**保持静态**（北极星口径，见 docs/reviews/2026-09-17-core-features-adversarial-review.md §5），
+ * 这里只换看板的**呈现顺序**：清单 ∩「有该用户对得上的校招/实习岗」的公司先看。
+ *
+ * 排序键（依次）：
+ *   ① 有没有对口岗（`fitCount > 0` 在前，0 沉底）—— 用户抱怨的正是「点进来先看到一排 0 岗的卡」；
+ *   ② 窗口态 WINDOW_ORDER（招聘中 > 未观测到 > 待更新 > 待接入）—— 桶内仍保持原有语义；
+ *   ③ 对口岗数降序；判不出用户方向时（`fitCount == null`）退回**总岗数**降序；
+ *   ④ 最近截止（compareCompanyCards 的原有尾部规则）。
+ *
+ * ⚠️ `fitCount == null` 表示「这个用户判不出方向」，对全体卡片同时成立 → ① 恒同组、③ 退回总数，
+ * 净效果 = 旧行为 + 总数兜底，不会只对部分卡生效而造成半套排序。
+ */
+export function compareCompanyCardsByFit(a: any, b: any): number {
+  const fa: number | null = typeof a.fitCount === "number" ? a.fitCount : null;
+  const fb: number | null = typeof b.fitCount === "number" ? b.fitCount : null;
+  const ba = fa != null && fa > 0 ? 0 : 1;
+  const bb = fb != null && fb > 0 ? 0 : 1;
+  if (fa != null && fb != null && ba !== bb) return ba - bb;
+
+  const oa = WINDOW_ORDER[a.window.state], ob = WINDOW_ORDER[b.window.state];
+  if (oa !== ob) return oa - ob;
+
+  const ra = fa != null ? fa : (a.fitTotal ?? 0);
+  const rb = fb != null ? fb : (b.fitTotal ?? 0);
+  if (ra !== rb) return rb - ra;
+
+  return compareCompanyCards(a, b);
+}
+
 export function groupCampusJobs(jobs: any[]): any[] {
   const buckets = new Map<string, any[]>();
   for (const j of jobs || []) {

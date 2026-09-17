@@ -14,10 +14,16 @@ import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { companiesForIndustries, getUserCampusScope } from "@/lib/campus-user-industries";
 import { getCampusZone, getCampusFreshStats } from "@/lib/jobs-store/read";
 import { getCampusSourceCoverage } from "@/lib/campus-sources";
-import { windowStatus, compareCompanyCards } from "@/lib/campus-zone";
+import { windowStatus, compareCompanyCardsByFit } from "@/lib/campus-zone";
 import { getRecruitmentCyclesForCompanies } from "@/lib/recruitment-cycle-store";
 import { getRecentCampusSurges } from "@/lib/campus-surge-store";
-import { buildCampusFacets, type CampusFilterOptions } from "@/lib/campus-facets";
+import {
+  buildCampusFacets,
+  countFacetsForFit,
+  selectFitIndexes,
+  type CampusFilterOptions,
+} from "@/lib/campus-facets";
+import { classifyJobFunction, normalizeRolePhrases } from "@/lib/china-keyword-expansion";
 import {
   campusTimelineSummary,
   campusPreciseDates,
@@ -28,8 +34,12 @@ import CampusClient, { type CampusBoardCard } from "./campus-client";
 import { snapshotAgeLabel } from "@/lib/relative-time";
 import { currentGradClass } from "@/lib/grad-class";
 
+/** 快照里的卡片**不含**「对你有货」的对口数：那是用户私有画像算出来的，进了按行业共享的缓存
+ *  就会把 A 用户的方向算给 B 用户看。对口数在缓存外逐请求现算（见 CampusPage）。 */
+type CachedCampusCard = Omit<CampusBoardCard, "fitCampusCount" | "fitInternCount" | "fitCount" | "fitTotal">;
+
 export type CampusBoard = {
-  cards: CampusBoardCard[];
+  cards: CachedCampusCard[];
   filterOptions: { campus: CampusFilterOptions; intern: CampusFilterOptions };
   /** 这份快照算出来的时刻。页面渲染成「数据更新于 …」，缓存卡死时用户和我们都能一眼看出来。 */
   generatedAtMs: number;
@@ -61,7 +71,7 @@ const loadCampusBoard = unstable_cache(
     const campus = buildCampusFacets(zone.map((z) => ({ pattern: z.pattern, jobs: z.campusJobs })));
     const intern = buildCampusFacets(zone.map((z) => ({ pattern: z.pattern, jobs: z.internJobs })));
 
-    const cards: CampusBoardCard[] = zone.map((z) => {
+    const cards: CachedCampusCard[] = zone.map((z) => {
       const src = sourceCov.get(z.pattern) || { hasAnySource: z.hasAnyActiveJob, hasCampusSource: false };
       const deadlines = z.campusJobs
         .map((j) => (j.deadline ? Date.parse(j.deadline) : NaN))
@@ -121,7 +131,10 @@ export default async function CampusPage() {
   if (!user) redirect("/login?next=/campus");
 
   const supabase = await createServerSupabase();
-  const { rawIndustries, industries } = await getUserCampusScope(supabase, user.id);
+  const { rawIndustries, industries, targetRoles, targetLocations } = await getUserCampusScope(
+    supabase,
+    user.id,
+  );
 
   // 缓存键只认行业清单本身，排序后传入让「同一组行业、不同顺序」共用一份缓存。
   const board = await loadCampusBoard([...industries].sort());
@@ -136,6 +149,28 @@ export default async function CampusPage() {
     console.error("[campus-board] fresh stats failed; fall back to snapshot counts", err);
   }
 
+  // 「对你有货」：必投清单**保持静态**（北极星口径不动），这里只按用户方向派生一份可投量，
+  // 用来排序 + 在卡面上区分「有你能投的岗」与「本季暂无对口岗」。
+  //
+  // ⚠️ 这段刻意**在 unstable_cache 之外**算：它吃用户私有数据（目标岗位 / 城市），
+  // 放进那份按行业共享的快照里就会把 A 用户的方向算给 B 用户看。
+  // 成本可忽略：分面已按四元组压过（live 16,494 条 → ~1,900 个四元组），只是再遍历一遍数组。
+  //
+  // 方向判定与 /today 推荐同口径：normalizeRolePhrases（拆「产品/运营」、去「相关·岗位」填充）
+  // → classifyJobFunction 逐条整体分类 → 丢掉判不出的「其他」。**不拿关键词/技能判方向**
+  // （"SQL/Python" 会把产品用户污染成研发，见 lib/opportunities/eligibility.userTargetFunctions 的注释）。
+  const targetFunctions = Array.from(
+    new Set(
+      normalizeRolePhrases(targetRoles)
+        .map((role: string) => classifyJobFunction({ title: role }))
+        .filter((fn: string) => fn && fn !== "其他"),
+    ),
+  ) as string[];
+  // 判不出方向 → fitCount 记 null（不是 0）：0 会被读成「一个对口岗都没有」，而事实是「我们不知道」。
+  const fitKnown = targetFunctions.length > 0;
+  const fitCampus = selectFitIndexes(targetFunctions, targetLocations, board.filterOptions.campus);
+  const fitIntern = selectFitIndexes(targetFunctions, targetLocations, board.filterOptions.intern);
+
   // 徽章与排序按「此刻」现算：用现算的计数 / lastSeenAt（拿不到才退回快照里的原始输入）。
   const cards = board.cards
     .map((c) => {
@@ -143,11 +178,25 @@ export default async function CampusPage() {
       const campusTotal = f ? f.campusTotal : c.campusTotal;
       const internTotal = f ? f.internTotal : c.internTotal;
       const lastSeenAtMs = f ? f.lastSeenAtMs : c.lastSeenAtMs;
+      // ⚠️ 对口数来自**快照里的分面**，而总数是每请求现算的轻查询（getCampusFreshStats）——
+      // 两者最多差一个 10 分钟的缓存周期。夹一下上限，免得出现「对口 20 个 / 共 12 个」这种自相矛盾
+      // 的卡面（宁可少报，不可报出一个解释不了的数）。
+      const fitCampusCount = fitKnown
+        ? Math.min(countFacetsForFit(c.campusFacets, fitCampus), campusTotal)
+        : null;
+      const fitInternCount = fitKnown
+        ? Math.min(countFacetsForFit(c.internFacets, fitIntern), internTotal)
+        : null;
       return {
         ...c,
         campusTotal,
         internTotal,
         lastSeenAtMs,
+        fitCampusCount,
+        fitInternCount,
+        // 排序用「当前模式」的两个值；服务端按默认模式（校招）排，切到实习由客户端同规则重排。
+        fitCount: fitCampusCount,
+        fitTotal: campusTotal,
         window: windowStatus({
           campusJobCount: campusTotal,
           hasCampusSource: c.hasCampusSource,
@@ -157,7 +206,7 @@ export default async function CampusPage() {
         }),
       };
     })
-    .sort(compareCompanyCards);
+    .sort(compareCompanyCardsByFit);
 
   // 计数现算成功 → 新鲜度按现算时刻（≈刚刚）；失败回退 → 沿用快照生成时刻，让「卡死」照旧一眼可见。
   const freshnessAtMs = fresh ? fresh.fetchedAtMs : board.generatedAtMs;
@@ -174,6 +223,8 @@ export default async function CampusPage() {
           filterOptions={board.filterOptions}
           generatedLabel={snapshotAgeLabel(freshnessAtMs, nowMs)}
           seasonGradClass={currentGradClass()}
+          fitFunctions={targetFunctions}
+          fitCities={targetLocations}
         />
       </ProductPage>
     </div>
