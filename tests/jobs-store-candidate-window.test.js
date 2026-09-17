@@ -395,3 +395,17 @@ test("companyTier 下推：FTS 路径与 scan 路径共用同一份 patterns（p
     assert.ok(scanParams.includes(pattern), `scan 路径缺少 tier pattern：${pattern}`);
   }
 });
+
+test("匿名 + 按匹配度排：没有偏好就是纯新鲜度 → 走逐页路径攒够即停，不拉 SCAN_BUDGET 整窗", async () => {
+  const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+  install({ candidates: candidateRows(1000) });
+  const result = await search.searchJobsStore({ ...DEFAULT_FILTERS, sortBy: "match" }, null, [], 0, 60);
+  const candidateCalls = calls.filter((c) => /select .* from jobs where/.test(c.sql) && !/count\(\*\)/.test(c.sql) && !/^select id, content_hash/.test(c.sql));
+  assert.ok(candidateCalls.length >= 1);
+  for (const c of candidateCalls) {
+    const limit = c.params[c.params.length - 2];
+    assert.ok(limit <= 1000, `匿名 match 单次取数不该超过一页（拿到 limit=${limit}）`);
+  }
+  assert.equal(result.jobs.length, 60);
+  assert.equal(result.timing.path, "scan");
+});

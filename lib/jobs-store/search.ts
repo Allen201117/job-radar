@@ -659,7 +659,11 @@ async function searchViaScan(
     return rows.length < want;
   };
 
-  if (filters.sortBy === "match") {
+  // 匿名 + 按匹配度排：没有偏好 → scoreJob 对每一行都返回 0 分，「按分排序」退化成纯新鲜度，
+  // 与 newest 路径逐行同序。此时把 2.8 万行整窗拉回来只为了给一页 60 条排序，是白扔带宽
+  // （2026-09-17 线上分段账本：匿名默认态 fetch 7.9~8.3s，打分 0.3s；香港机出口只有个位数 Mbps）。
+  // → 匿名走下面攒够即停的逐页路径。有偏好时才需要看满窗口。
+  if (filters.sortBy === "match" && prefs) {
     // match 必须看满 SCAN_BUDGET 才能按分排序 → **一次查完，不要 OFFSET 翻页**。
     // 翻页是移植 lib/job-search.ts 时留下的阑尾：那侧走 PostgREST（单次最多返 1000 行）
     // 才不得不翻页，直连 pg 没有该上限 —— 同文件的 FTS 路径本来就是一条 `limit FTS_CAP`。
