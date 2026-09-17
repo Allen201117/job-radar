@@ -96,7 +96,19 @@ top-20 精确标题占比不变（20/20；机械 18→19）。in-DB 耗时 127~8
 - crawler unittest：2,247 全绿；`git diff --check` 通过；ESLint（`--no-eslintrc -c .eslintrc.json`，绕开 worktree 双配置冲突）0 问题；`next build` 通过。
 
 ### 3.3 线上
-部署后回填：/api/jobs/search 匿名 `sortBy=match&limit=10` TTFB 改前 14.1~16.6s（09-08）/ 走查 35s；/today 真实账号 feed 前 8 张公司分布。
+2026-09-17 部署（main 385c267，Vercel status success、迁移 253 已 apply）后实测：
+
+| 请求（匿名 curl，hkg1） | 改前（09-08） | 改后 |
+|---|---:|---:|
+| `sortBy=match&limit=10` 冷 | 14.1~16.6s | **12.96s / 10.77s**（两次冷） |
+| 同上，同实例复打 | 0.56s | 0.58s |
+| `sortBy=newest&limit=10` | 3.25s | 4.02s |
+| `sortBy=match&city=北京` | 4.37s | 3.61s |
+
+结论：匿名冷路径只降 ~20%，**没有出现「正文 0 传输」应有的量级下降**。说明剩余大头不在 summary 传输，而在 28k 候选的其余列 + JS 打分（§4「/jobs 冷路径的另一半」），下一步应先在函数里打分段耗时日志再动。
+诚实边界：无法从外部证明线上函数已跑新代码（Vercel 状态时间戳恒等于创建时间、chunk hash 本地与 Vercel 不一致），依据只有 GitHub 状态 success + 无 failure。
+
+/today（创始人账号，前台 tab）：「对口机会」前 8 张公司 = 字节 / 字节 / 得物 / 得物 / 阿里 / 小红书 / 沐瞳 / 字节 —— 不再连续 8 张字节，符合 cap2/window6。30 张理由标签与「招聘类型」一致（全部校招）。残留：阿里「Maas 平台 AI 商业化产品经理」正文写「招聘项目：日常实习生」但类型标校招（分类器把阿里日常实习归校招，属另一问题）。
 
 ## 4. 没修、出 spec 或任务卡的
 
