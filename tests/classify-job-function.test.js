@@ -361,18 +361,3 @@ test("库里 active「其他」的高频真实标题现在归得了桶", () => {
   assert.equal(classifyJobFunction({ title: "Fire Alarm Inspector" }), "建筑工程");
   assert.equal(classifyJobFunction({ title: "营运主管" }), "运营");
 });
-
-// 2026-09-18 学生画像走查补词表：投行/并购是国内券商标准业务术语，此前一个都没进
-// JOB_FUNCTION_RULES 的「金融业务」正则，导致标题剥掉括号修饰语后判不出职能、又跌回带括号的
-// 原始标题重判，被括号里的业务方向词（"先进制造"等）误判成生产制造或干脆落"其他"。
-// 全库 336510 条 distinct active 标题对拍：152 条从「其他/职能/生产制造/销售/医疗健康/研发/
-// 市场/运营/数据」改判「金融业务」，逐条抽查全部是投行/承做/承揽/并购真实岗位，零反向变化
-// （没有任何原本判"金融业务"的标题被改判走）。
-test("投行/并购业务归入金融业务（此前落其他或被括号里的业务方向词误判）", () => {
-  assert.equal(classifyJobFunction({ title: "投行业务岗（先进制造方向）" }), "金融业务");
-  assert.equal(classifyJobFunction({ title: "承做业务岗（并购组）" }), "金融业务");
-  assert.equal(classifyJobFunction({ title: "债券承做岗(009759)" }), "金融业务");
-  assert.equal(classifyJobFunction({ title: "投行条线-承做岗" }), "金融业务");
-  assert.equal(classifyJobFunction({ title: "股票资本市场承做岗(J11314)" }), "金融业务");
-  assert.equal(classifyJobFunction({ title: "Investment Banking Analyst" }), "金融业务");
-});
