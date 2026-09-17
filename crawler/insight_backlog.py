@@ -676,7 +676,10 @@ def enrich_company_t3(sb, profile):
                 if action == "reroute":
                     rerouted += 1
                     GATE_STATS["rerouted"] += 1
-                    print(f"  [t3-gate] {profile['company']}/{pack['topic']} → 转投 {metric_key}")
+                    # metric_key 为空 = 说法类型门判定它不属于任何量表（福利 / 门槛 /
+                    # 实习日薪），照写但不带 metric_key，不进分档队列空烧 LLM。
+                    print(f"  [t3-gate] {profile['company']}/{pack['topic']} → 转投 "
+                          f"{metric_key or '无量表（不进分档队列）'}")
                 dimension = routed_dim or pack["dimension"]
                 entry_status = entry["status"]
                 # I4b：同一断言曾被申诉且申诉成立过 → 这轮判官再判 active 也只能先落

@@ -124,3 +124,88 @@ class WriteSideGateTest(unittest.TestCase):
     def test_every_metric_has_a_dimension(self):
         for key in set(gate.TOPIC_TO_METRIC.values()) | {"pay_level"}:
             self.assertIn(key, gate.METRIC_TO_DIMENSION, key)
+
+
+class ClaimTypeGateTest(unittest.TestCase):
+    """说法类型门：metric_key 必须与「这句在断言什么」一致，不能只跟着「在讲谁」走。
+
+    2026-09-17 live：3 个档位主题共 195 条判不出档，intern_experience 占 152 条，
+    其中 54 条讲薪资、32 条讲门槛、27 条讲福利，真讲实习体验强弱的只有 23 条。
+    下面每条 content 都是当时库里的原文。
+    """
+
+    def test_intern_pay_and_perks_do_not_enter_the_grade_queue(self):
+        # 分档队列只按 metric_key 取数（insight_grade_extract._load_rows），
+        # 所以「不进队列」的唯一正确表达就是 metric_key 为 None。
+        cases = [
+            ("据公开讨论，中国能建实习生转正后的薪资范围在5000-12000元/月。", "compensation_intensity"),
+            ("据招聘信息显示，哈啰为实习生提供健身房和食堂等福利", "compensation_intensity"),
+            ("财务实习生岗位学历要求严格，郑州地区招聘均要求本科及以上学历", "hiring"),
+            ("据招聘信息显示，AMD硬件平台验证设计实习生需具备Python/Ruby脚本开发调试经验。", "hiring"),
+        ]
+        for content, dimension in cases:
+            action, key, dim = gate.gate_new_claim(content, "实习体验")
+            self.assertIsNone(key, content[:24])
+            self.assertEqual(dim, dimension, content[:24])
+            self.assertEqual(action, "reroute", content[:24])
+
+    def test_real_intern_experience_keeps_its_scale(self):
+        for content in [
+            "据报道，公司对新员工有导师带教制度，帮助快速融入和成长。",
+            "据公开讨论，Squarespace的实习生转正后有明确的晋升路径，从员工到技工再到主管和副总。",
+            "据公开讨论，有实习生反映公司氛围适合喜欢科研、专注创新和解决问题的同学。",
+        ]:
+            action, key, dim = gate.gate_new_claim(content, "实习体验")
+            self.assertEqual((action, key, dim), ("keep", "intern_experience", "culture"), content[:24])
+
+    def test_intern_pay_is_not_routed_into_pay_level(self):
+        """实习日薪 / 津贴与 pay_level 的全职月薪 K 不是一个量纲，混进去会把中位数拉垮。"""
+        _action, key, dim = gate.gate_new_claim(
+            "据招聘信息显示，米哈游实习生薪资按日计算，日薪范围在150-300元之间。", "实习体验")
+        self.assertIsNone(key)
+        self.assertEqual(dim, "compensation_intensity")
+
+    def test_non_intern_pay_still_routes_to_pay_level(self):
+        # 主语不是实习时，纯薪资说法照旧进 pay_level（有全职月薪量纲，可比）。
+        _action, key, dim = gate.gate_new_claim(
+            "据员工爆料，小米涨薪幅度通常为8%-10%，薪资较低的员工可能获得20%的涨幅。", "晋升发展")
+        self.assertEqual((key, dim), ("pay_level", "compensation_intensity"))
+
+    def test_mixed_promotion_and_pay_stays_on_promotion(self):
+        """「Senior 职级薪资可达 1 万新元」两边各命中一词 → 让位闸保原判，不瞎改。"""
+        _action, key, _dim = gate.gate_new_claim(
+            "据公开讨论，Grab的Senior职级薪资可达1万新元以上。", "晋升发展")
+        self.assertEqual(key, "promotion_pace")
+
+    def test_original_scale_wins_when_it_has_any_signal_of_its_own(self):
+        """让位闸：原量表命中一个词就留着。收紧成「得分最高才留」实测把全库反向误伤从 119 抬到 168。"""
+        action, key, _dim = gate.gate_new_claim(
+            "据报道，公司提供弹性工作制，包括双休、节日福利和定期团建活动。", "加班文化")
+        self.assertEqual((action, key), ("keep", "overtime_level"))
+        action, key, _dim = gate.gate_new_claim(
+            "据行业观察，美国初创企业主动要求员工遵循996的数量在过去一年至少翻了一番。", "加班文化")
+        self.assertEqual((action, key), ("keep", "overtime_level"))
+
+    def test_a_real_extracted_number_always_wins(self):
+        """数值抽取器抽出了值 = 比任何词表都硬的证据，不许被福利词摘掉 key。"""
+        content = "据公开讨论，某公司年终奖普遍发放3-6个月，另有五险一金等福利。"
+        self.assertIsNotNone(gate.extract_metric_value("bonus_months", content))
+        _action, key, _dim = gate.gate_new_claim(content, "年终奖")
+        self.assertEqual(key, "bonus_months")
+
+    def test_ambiguous_content_keeps_the_original_key(self):
+        """并列最高 / 零命中一律弃权：宁可少改一条，也不要把好条目改坏。"""
+        self.assertIsNone(gate.classify_claim_type("据公开讨论，这家公司挺不错的。"))
+        self.assertEqual(gate.route_by_claim_type("据公开讨论，这家公司挺不错的。", "overtime_level"),
+                         ("overtime_level", "culture"))
+
+    def test_every_claim_type_has_a_dimension(self):
+        for claim_type in gate.CLAIM_TYPE_KEYWORDS:
+            self.assertIn(claim_type, gate.CLAIM_TYPE_TO_DIMENSION, claim_type)
+        for claim_type, metric in gate.CLAIM_TYPE_TO_METRIC.items():
+            if metric:
+                self.assertIn(metric, gate.METRIC_TO_DIMENSION, metric)
+
+    def test_bare_transfer_word_is_not_a_mentoring_signal(self):
+        """「实习生转正后的薪资……」几乎人人都写，收裸「转正」这道门就白装了。"""
+        self.assertNotIn("转正", gate.CLAIM_TYPE_KEYWORDS["mentoring"])
