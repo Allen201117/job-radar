@@ -73,6 +73,34 @@ class CampusChannelTest(unittest.TestCase):
         self.assertEqual(gc.campus_channel_counts(rows), {"healthy": 1, "idle": 1, "missing": 2, "unknown": 0})
 
 
+class CampusQueueTest(unittest.TestCase):
+    def _row(self, name, channel="missing", attempts=0, retry=None):
+        ev = {"campus_attempts": attempts}
+        if retry:
+            ev["campus_next_retry_at"] = retry
+        return {"company": name, "campus_channel": channel, "state": "healthy", "evidence": ev}
+
+    def test_only_missing_and_not_backed_off_are_queued_fewest_attempts_first(self):
+        rows = [
+            self._row("丙", attempts=2),
+            self._row("甲", attempts=0),
+            self._row("乙", channel="healthy"),
+            self._row("丁", attempts=0, retry=(NOW + timedelta(days=3)).isoformat()),
+            self._row("戊", attempts=1, retry=(NOW - timedelta(days=1)).isoformat()),
+        ]
+        queue = gc.plan_campus_queue(rows, now=NOW, cap=10)
+        self.assertEqual([r["company"] for r in queue], ["甲", "戊", "丙"])
+
+    def test_cap_and_zero_cap(self):
+        rows = [self._row(str(i)) for i in range(8)]
+        self.assertEqual(len(gc.plan_campus_queue(rows, now=NOW, cap=3)), 3)
+        self.assertEqual(gc.plan_campus_queue(rows, now=NOW, cap=0), [])
+
+    def test_env_cap_default(self):
+        with mock.patch.dict("os.environ", {"GAP_FUNNEL_CAMPUS_CAP": "2"}):
+            self.assertEqual(len(gc.plan_campus_queue([self._row(str(i)) for i in range(5)], now=NOW)), 2)
+
+
 class ClassifyCompanyTest(unittest.TestCase):
     def test_healthy_company_wins_over_previous_failure(self):
         row = gc.classify_company(

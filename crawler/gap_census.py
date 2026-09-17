@@ -379,6 +379,38 @@ def _revalidation_picks(backed_off, queue, *, limit, slots, now):
     return [row for _last, _name, row in pool[:room]]
 
 
+_DEFAULT_CAMPUS_CAP = 5
+_CAMPUS_RETRY_DAYS = 7
+
+
+def plan_campus_queue(rows, *, now=None, cap=None):
+    """校招车道队列：`campus_channel = missing` 且校招车道未在退避中的公司，每轮最多 cap 家。
+
+    与主队列正交：一家公司可以 state=healthy（社招 500 岗）同时进校招车道。退避只看
+    `evidence.campus_next_retry_at`（校招车道自己的），不看 next_retry_at（那是社招入口的）。
+    优先没试过校招车道的（campus_attempts 小的），同数按公司名稳定排序，别让同一批公司天天占满。
+    """
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if cap is None:
+        raw = str(os.environ.get("GAP_FUNNEL_CAMPUS_CAP", "")).strip()
+        cap = int(raw) if raw.isdigit() else _DEFAULT_CAMPUS_CAP
+    cap = max(0, int(cap))
+    if not cap:
+        return []
+    eligible = []
+    for row in rows or []:
+        if (row or {}).get("campus_channel") != "missing":
+            continue
+        evidence = row.get("evidence") or {}
+        retry_at = _parse_datetime(evidence.get("campus_next_retry_at"))
+        if retry_at is not None and retry_at > now:
+            continue
+        eligible.append(row)
+    eligible.sort(key=lambda r: (_as_int((r.get("evidence") or {}).get("campus_attempts")),
+                                 str(r.get("company") or "").casefold()))
+    return eligible[:cap]
+
+
 def load_companies(scope="domestic"):
     grouped = must_apply.by_industry() if scope == "domestic" else must_apply.overseas_by_industry()
     merged = {}
@@ -629,4 +661,5 @@ def census(supabase, jobs_conn, *, scope="domestic", cap=20, company=None,
         "industry_coverage": coverage,
         "user_wanted": wanted,
         "campus_channel": campus_channel_counts(rows),
+        "campus_queue": plan_campus_queue(rows, now=now) if scope == "domestic" else [],
     }

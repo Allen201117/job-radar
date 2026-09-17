@@ -566,6 +566,115 @@ def _candidate_items(row, official_url, finder_result):
     return out
 
 
+# ── 校招车道：把「搜到的入口」换算成该平台的校招板块 URL ─────────────────────────
+# 社招入口和校招入口常在同一平台的两个板块上：hotjob 是 social.html / school.html，飞书是
+# /index/position / /campus/position（用 website-path 头切门户），国聘是 nature=应届生。
+# 认不出校招板块的平台（外企 ATS 校招社招混在一个列表里）返回 None → 这条候选在校招车道
+# 里视为不可路由，宁可不接也不把社招源当校招源再插一遍。
+_CAMPUS_NATURE = "115xW5oQ"
+
+
+def campus_source_url(adapter, source_url):
+    adapter = str(adapter or "")
+    url = str(source_url or "")
+    if not adapter or not url:
+        return None
+    if adapter == "hotjob":
+        return re.sub(r"/pb/(social|interns)\.html", "/pb/school.html", url) if "/pb/" in url else None
+    if adapter == "feishu" or adapter.endswith("_feishu"):
+        if "/campus/position" in url or "/internship/position" in url:
+            return url
+        return re.sub(r"/index/position\b", "/campus/position", url) if "/index/position" in url else None
+    if adapter == "iguopin":
+        if "nature=" in url:
+            return url
+        return url + ("&" if "?" in url else "?") + "nature=%s&channel=campus" % _CAMPUS_NATURE
+    if adapter == "moka":
+        return url if re.search(r"campus", url, re.I) else None
+    # 一次抓全三类的 adapter（sources.board = mixed）：社招入口本身就带校招岗，源已存在就不重插
+    if adapter in ("beisen", "wt", "tencent", "baidu"):
+        return url
+    if adapter.endswith("_campus"):
+        return url
+    return None
+
+
+def _campus_fingerprinter(fingerprinter):
+    """包一层：把指纹认出的 source_url 换成校招板块 URL；换不出来就让它在路由门上被拦。"""
+
+    def wrapped(url, company=None):
+        fingerprint = fingerprinter(url, company=company)
+        adapter = fingerprint.get("adapter")
+        derived = campus_source_url(adapter, fingerprint.get("source_url"))
+        if fingerprint.get("platform") in _BLOCKED_PLATFORMS or fingerprint.get("identity_ok") is not True:
+            return fingerprint
+        if not derived:
+            return {**fingerprint, "source_url": None, "reason": "no_campus_board"}
+        return {**fingerprint, "source_url": derived}
+
+    return wrapped
+
+
+def campus_attempt_payload(row, result, now):
+    """校招车道的台账写法：**不碰** state / official_entry_url / next_retry_at（那些是社招入口的），
+    只把本轮结论记进 evidence.campus_lane 并设校招车道自己的退避。"""
+    evidence = dict(row.get("evidence") or {})
+    state = result.get("state")
+    if state == "dry_run":
+        state = "platform_known"
+    lane = {
+        "state": state,
+        "official_entry_url": result.get("official_entry_url"),
+        "detected_platform": result.get("detected_platform"),
+        "source_url": ((result.get("evidence") or {}).get("planned_source_url")
+                       or (result.get("evidence") or {}).get("source_url")),
+        "source_id": result.get("source_id"),
+        "fail_reason": result.get("fail_reason"),
+        "attempted_at": _iso(now),
+    }
+    retry = result.get("next_retry_at")
+    if state in ("healthy", "thin_only") and result.get("source_id"):
+        retry = None   # 接通了：下轮 census 按产出把 campus_channel 翻成 healthy，车道不再排它
+    elif not retry:
+        retry = _after(now, gap_census._CAMPUS_RETRY_DAYS)
+    evidence["campus_lane"] = lane
+    evidence["campus_attempts"] = _as_int(evidence.get("campus_attempts")) + 1
+    evidence["campus_next_retry_at"] = retry
+    return {
+        "scope": row.get("scope", "domestic"),
+        "company": row["company"],
+        "pattern": row["pattern"],
+        "industries": row.get("industries") or [],
+        "evidence": evidence,
+        "updated_at": _iso(now),
+    }
+
+
+def _as_int(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def process_campus_channel(row, **kwargs):
+    """校招车道 = process_company 换三样：校招查询词、校招板块 URL 换算、不复用社招入口缓存。"""
+    finder = kwargs.pop("finder", entry_finder.find_official_entry)
+    fingerprinter = kwargs.pop("fingerprinter", platform_fingerprint.fingerprint)
+
+    def campus_finder(company, supabase, **fkw):
+        return finder(company, supabase, queries=entry_finder.CAMPUS_QUERIES, **fkw)
+
+    lane_row = {
+        **row,
+        "official_entry_url": None,          # 社招入口不是校招入口，别拿它当缓存
+        "evidence": {k: v for k, v in (row.get("evidence") or {}).items()
+                     if k not in ("candidate_urls", "entry_channel")},
+    }
+    return process_company(lane_row, finder=campus_finder,
+                           fingerprinter=_campus_fingerprinter(fingerprinter), **kwargs)
+
+
 def _strict_httpx_probe_safe(adapter, source_url):
     if not adapter or not source_url:
         return False
@@ -1151,6 +1260,44 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
                 % (row["company"], type(exc).__name__, str(exc)[:160])
             )
 
+    # ── 校招车道（2026-09-17）：missing 的必投公司另搜校招入口。与主队列共用搜索额度与 insert 配额。
+    campus_outcomes = []
+    campus_queue = census_result.get("campus_queue") or []
+    for row in campus_queue:
+        if company and row["company"] != company:
+            continue
+        scoped = {**row, "scope": scope}
+        try:
+            result, used, inserted = process_campus_channel(
+                scoped,
+                supabase=supabase,
+                jobs_conn=jobs_conn,
+                apply=apply,
+                search_remaining=search_cap - search_used,
+                insert_allowed=inserts_used < insert_cap,
+                now=now,
+                site_resolver=round_site_resolver,
+            )
+            search_used += used
+            inserts_used += int(inserted)
+        except Exception as exc:
+            print("[gap_funnel][campus] %s 处理异常: %s: %s"
+                  % (row["company"], type(exc).__name__, str(exc)[:500]))
+            result = {"state": "unknown", "next_retry_at": _after(now, 1),
+                      "fail_reason": "%s: %s" % (type(exc).__name__, str(exc)[:500])}
+        payload = campus_attempt_payload(scoped, result, now)
+        campus_outcomes.append(payload)
+        lane = payload["evidence"]["campus_lane"]
+        print("[gap_funnel][campus] %s → %s｜入口=%s｜平台=%s｜源=%s｜原因=%s"
+              % (payload["company"], lane["state"], lane.get("official_entry_url") or "-",
+                 lane.get("detected_platform") or "-", lane.get("source_url") or "-",
+                 lane.get("fail_reason") or "-"))
+        try:
+            _write_attempt(supabase, payload)
+        except Exception as exc:
+            print("[gap_funnel][campus] %s 台账写入失败: %s: %s"
+                  % (row["company"], type(exc).__name__, str(exc)[:160]))
+
     counts = Counter(item["state"] for item in outcomes)
     failed = sum(
         count for state, count in counts.items()
@@ -1174,6 +1321,13 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
         # 必投校招渠道分布（迁移 254）：healthy / idle / missing 三个数每天落台账，
         # 「必投校招覆盖率」= healthy / 国内清单数，从 2026-09-17 的 53% 往上走。
         "campus_channel": census_result.get("campus_channel") or {},
+        "campus_lane_processed": len(campus_outcomes),
+        "campus_lane_states": dict(Counter(
+            item["evidence"]["campus_lane"]["state"] for item in campus_outcomes)),
+        "campus_sources_added": sum(
+            1 for item in campus_outcomes
+            if item["evidence"]["campus_lane"].get("state") in ("healthy", "thin_only")
+            and item["evidence"]["campus_lane"].get("source_id")),
         "dry_run": not apply,
         "list_version": must_apply.version(),
         "stopped_search_cap": stopped_search_cap,

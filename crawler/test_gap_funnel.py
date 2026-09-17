@@ -99,6 +99,84 @@ def _entry():
     }
 
 
+class CampusLaneTest(unittest.TestCase):
+    def test_campus_source_url_per_platform(self):
+        self.assertEqual(gf.campus_source_url("hotjob", "https://x.hotjob.cn/SU1/pb/social.html"),
+                         "https://x.hotjob.cn/SU1/pb/school.html")
+        self.assertEqual(gf.campus_source_url("feishu", "https://a.jobs.feishu.cn/index/position"),
+                         "https://a.jobs.feishu.cn/campus/position")
+        self.assertEqual(gf.campus_source_url("iguopin", "https://www.iguopin.com/job?company=x"),
+                         "https://www.iguopin.com/job?company=x&nature=115xW5oQ&channel=campus")
+        self.assertEqual(gf.campus_source_url("moka", "https://app.mokahr.com/campus-recruitment/x/1"),
+                         "https://app.mokahr.com/campus-recruitment/x/1")
+        self.assertIsNone(gf.campus_source_url("moka", "https://app.mokahr.com/social-recruitment/x/1"))
+        self.assertIsNone(gf.campus_source_url("workday", "https://x.wd1.myworkdayjobs.com/wday/cxs/x/y/jobs"))
+        self.assertEqual(gf.campus_source_url("beisen", "https://x.zhiye.com/social"), "https://x.zhiye.com/social")
+
+    def test_campus_lane_uses_campus_queries_and_derived_board_url(self):
+        seen_queries = []
+
+        def finder(company, supabase, **kwargs):
+            seen_queries.append(kwargs.get("queries"))
+            return {"found": True, "state": "entry_found", "search_used": 1, "rounds_no_entry": 0,
+                    "official_entry_url": "https://x.hotjob.cn/SU1/pb/social.html",
+                    "candidates": [{"url": "https://x.hotjob.cn/SU1/pb/social.html"}],
+                    "evidence": {"candidate_urls": []}}
+
+        prober = mock.Mock(return_value={"ok": True, "valid": 3, "china": 3})
+        result, used, _inserted = gf.process_campus_channel(
+            {**_entry(), "official_entry_url": "https://jobs.acme.com/social", "campus_channel": "missing"},
+            supabase=_Sb(), jobs_conn=_Conn(), apply=False, search_remaining=2, insert_allowed=True, now=NOW,
+            finder=finder,
+            fingerprinter=lambda _url, **_kw: {"platform": "hotjob", "adapter": "hotjob",
+                                               "source_url": "https://x.hotjob.cn/SU1/pb/social.html",
+                                               "identity_ok": True, "identity_reason": "page_company_match:甲公司"},
+            prober=prober, site_resolver=lambda *_a, **_k: None,
+        )
+        self.assertEqual(seen_queries, [gf.entry_finder.CAMPUS_QUERIES])
+        self.assertEqual(prober.call_args.args[0]["url"], "https://x.hotjob.cn/SU1/pb/school.html")
+        self.assertEqual(result["state"], "platform_known")   # dry-run 走到验收门
+        self.assertEqual(used, 1)
+
+    def test_campus_lane_rejects_platform_without_campus_board(self):
+        prober = mock.Mock()
+        result, _used, _inserted = gf.process_campus_channel(
+            {**_entry(), "campus_channel": "missing"},
+            supabase=_Sb(), jobs_conn=_Conn(), apply=False, search_remaining=2, insert_allowed=True, now=NOW,
+            finder=lambda company, supabase, **kw: {"found": True, "state": "entry_found", "search_used": 1,
+                                                   "rounds_no_entry": 0,
+                                                   "official_entry_url": "https://x.wd1.myworkdayjobs.com/x",
+                                                   "candidates": [{"url": "https://x.wd1.myworkdayjobs.com/x"}],
+                                                   "evidence": {"candidate_urls": []}},
+            fingerprinter=lambda _url, **_kw: {"platform": "workday", "adapter": "workday",
+                                               "source_url": "https://x.wd1.myworkdayjobs.com/wday/cxs/x/y/jobs",
+                                               "identity_ok": True, "identity_reason": "page_company_match:甲公司"},
+            prober=prober, site_resolver=lambda *_a, **_k: None,
+        )
+        prober.assert_not_called()
+        self.assertNotIn(result["state"], ("healthy", "thin_only", "platform_known"))
+
+    def test_campus_attempt_payload_never_touches_social_state(self):
+        row = {**_entry(), "state": "healthy", "next_retry_at": None, "attempts": 4,
+               "evidence": {"entry_channel": "search", "campus_attempts": 1}}
+        payload = gf.campus_attempt_payload(row, {"state": "no_active_jobs", "fail_reason": "0 岗",
+                                                  "next_retry_at": "2026-08-10T00:00:00+00:00",
+                                                  "official_entry_url": "https://c/campus"}, NOW)
+        for key in ("state", "official_entry_url", "next_retry_at", "attempts", "source_id", "detected_platform"):
+            self.assertNotIn(key, payload)
+        self.assertEqual(payload["evidence"]["campus_lane"]["state"], "no_active_jobs")
+        self.assertEqual(payload["evidence"]["campus_attempts"], 2)
+        self.assertEqual(payload["evidence"]["campus_next_retry_at"], "2026-08-10T00:00:00+00:00")
+        self.assertEqual(payload["evidence"]["entry_channel"], "search")   # 社招证据原样保留
+
+    def test_campus_attempt_payload_defaults_retry_and_clears_when_connected(self):
+        row = {**_entry(), "evidence": {}}
+        p1 = gf.campus_attempt_payload(row, {"state": "wrong_platform"}, NOW)
+        self.assertTrue(p1["evidence"]["campus_next_retry_at"].startswith("2026-08-03"))
+        p2 = gf.campus_attempt_payload(row, {"state": "healthy", "source_id": "s9"}, NOW)
+        self.assertIsNone(p2["evidence"]["campus_next_retry_at"])
+
+
 class AcceptanceGateTest(unittest.TestCase):
     def _run(self, counts, jd_ok=True, apply=True, adapter="greenhouse"):
         sb = _Sb()

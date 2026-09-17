@@ -637,6 +637,10 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
 /admin/health 供给页三张卡、看门狗规则 O 只在校招季（3·4·9·10·11 月）吵。
 ⚠️ 判「这家校招开没开」**只认对方页面**，不认我们的计数；idle 先查 `crawl_runs` 源坏没坏，missing 按平台分簇接
 （hotjob / wt / beisen / moka），每家过探活门才入库。
+- **校招车道**（`gap_funnel.process_campus_channel`，每轮 `GAP_FUNNEL_CAMPUS_CAP` 默认 5 家）：对 missing 的公司搜
+  「{公司} 校园招聘 官网」，指纹认出平台后按平台换算校招板块 URL（`campus_source_url`：hotjob school.html / 飞书
+  /campus/position / 国聘 nature=应届生 / moka 只认 campus-recruitment / 外企 ATS 无校招板块 → 不接），过同一道真抓验收门。
+  结论只写 `evidence.campus_lane` + `campus_next_retry_at`（默认退避 7 天），**不碰 state / official_entry_url**——那是社招入口的账。
 
 ## 搜索额度是全局共享的 —— 贪心方必须给校招链留一份（2026-08-28 立）
 

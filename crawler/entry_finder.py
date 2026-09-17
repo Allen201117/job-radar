@@ -191,16 +191,23 @@ def _search_one(provider, supabase, query, top_k, client, consume):
     return results, error
 
 
+CAMPUS_QUERIES = (
+    "%s 校园招聘 官网",
+    "%s 2027届 校园招聘 网申",
+)
+
+
 def find_official_entry(company, supabase, *, router=None, prev_row=None,
                         top_k=8, client=None, max_searches=2, now=None,
-                        consume=True):
-    """搜索单家公司；每轮最多两次，返回入口与台账失败态字段。"""
+                        consume=True, queries=None):
+    """搜索单家公司；每轮最多两次，返回入口与台账失败态字段。
+
+    queries：可选查询模板（含一个 %s）。默认是社招入口；校招车道传 CAMPUS_QUERIES ——
+    「{公司} 招聘 官网」搜出来的是社招门户，秋招季要的是校招网申入口，两者常不在一个站上。
+    """
     router = router or search_router.default_router()
     now = now or datetime.now(timezone.utc)
-    queries = [
-        "%s 招聘 官网" % company,
-        "%s 社会招聘 职位" % company,
-    ]
+    queries = [template % company for template in (queries or ("%s 招聘 官网", "%s 社会招聘 职位"))]
     plan = _provider_plan(router, supabase)
     limit = min(2, max(0, int(max_searches or 0)), len(queries), len(plan))
     evidence = []
