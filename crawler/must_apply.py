@@ -1,5 +1,6 @@
 """必投清单共享读取：Python 爬虫复用前端北极星清单，避免 TS/Python 双份口径漂移。"""
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -178,9 +179,25 @@ def resolve_owner(company_name: str, names) -> str:
     best_token, best_owner = "", ""
     for raw, owner in items:
         token = str(raw or "").strip()
-        if token and token.lower() in low and len(token) > len(best_token):
+        if token and _token_in_name(token.lower(), low) and len(token) > len(best_token):
             best_token, best_owner = token, str(owner or "").strip()
     return best_owner
+
+
+_ASCII_TOKEN_RE = re.compile(r"^[a-z0-9&.'\-\s]+$")
+
+
+def _token_in_name(token_low: str, name_low: str) -> bool:
+    """清单名是否出现在库里名字里。中文按子串；**拉丁名按整词**（2026-09-17 立）。
+
+    ❌ 规范短名当裸子串：`GE` ⊂ `General Electric`？不——`GE` ⊂ `Biogen` / `Tiger Brokers` / `Geek+`；
+       `Mars` ⊂ `Marsh McLennan`（达信 1,715 个岗挂到玛氏）、`IMAX` ⊂ `MiniMax`、`Meta` ⊂ `MetaApp`。
+       实测 8 种写法 / 2,297 个在招岗因此张冠李戴（docs/superpowers/specs/2026-09-17-company-entity-design.md §1）。
+    ✅ 拉丁 token 用词边界：`ge healthcare` 命中 `GE`，`biogen` 不命中；中文仍是子串（「京东方 ⊃ 京东」由最长者胜处理）。
+    """
+    if not _ASCII_TOKEN_RE.match(token_low):
+        return token_low in name_low
+    return re.search(r"(?<![a-z0-9])" + re.escape(token_low) + r"(?![a-z0-9])", name_low) is not None
 
 
 def sources_for(target: str, rows, names) -> list:

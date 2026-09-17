@@ -126,3 +126,26 @@ class AllNamesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LatinTokenWordBoundaryTest(unittest.TestCase):
+    """拉丁清单名按整词匹配：GE 不能吞掉 Biogen / Geek+，Mars 不能吞掉 Marsh McLennan。"""
+
+    def test_short_latin_name_does_not_match_inside_other_words(self):
+        names = ["GE", "Mars", "IMAX", "Meta", "达信 Marsh McLennan"]
+        self.assertEqual(M.resolve_owner("Biogen 渤健", names), "")
+        self.assertEqual(M.resolve_owner("Tiger Brokers 老虎国际", names), "")
+        self.assertEqual(M.resolve_owner("MiniMax", names), "")
+        self.assertEqual(M.resolve_owner("MetaApp", names), "")
+        self.assertEqual(M.resolve_owner("达信 Marsh McLennan (China)", names), "达信 Marsh McLennan")
+
+    def test_latin_name_still_matches_as_whole_word(self):
+        names = ["GE", "Mars", "Meta"]
+        self.assertEqual(M.resolve_owner("GE Healthcare 通用电气医疗", names), "GE")
+        self.assertEqual(M.resolve_owner("Mars 玛氏", names), "Mars")
+        self.assertEqual(M.resolve_owner("Meta Platforms", names), "Meta")
+
+    def test_cjk_names_keep_substring_and_longest_wins(self):
+        names = ["京东", "京东方"]
+        self.assertEqual(M.resolve_owner("京东方科技集团", names), "京东方")
+        self.assertEqual(M.resolve_owner("京东集团", names), "京东")
