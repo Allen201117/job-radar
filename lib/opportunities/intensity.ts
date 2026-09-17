@@ -1,7 +1,7 @@
 // 强度推导（04 spec §3）：手动近期优先 > 行为自调 > 默认 active（蜜月期）。纯函数，可测。
 // 强度只影响 daily_limit / 分区取舍 / 推送频率 / 入选门槛，**不影响 profile_ready、不裁剪关键提醒**。
-import type { RadarIntensity } from "./types";
-import type { UserPreferences, JobAction } from "../types";
+import type { RadarIntensity, RadarJobAction } from "./types";
+import type { UserPreferences } from "../types";
 
 // 手动设置的尊重窗口（天）：窗口内用手动值，超出转行为自调。
 const MANUAL_HONOR_DAYS = 30;
@@ -52,7 +52,7 @@ export function resolveIntensity(
 export function resolveIntensityForUser(
   prefs: Pick<UserPreferences, "radar_intensity" | "radar_intensity_source" | "radar_intensity_updated_at"> | null,
   radarState: { last_opened_at: string | null } | null,
-  actions: JobAction[],
+  actions: RadarJobAction[],
   hasTargetCompanies: boolean,
   now: Date
 ): { intensity: RadarIntensity; source: "user" | "auto" | "default" } {

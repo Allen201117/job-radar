@@ -5,9 +5,16 @@
 // 注意：本目录所有模块只能用「相对 import」（"./types" / "../china-keyword-expansion"），
 // 不能用 "@/..." 别名——否则 node --test 的即时转译 shim 解析不到（见 tests/opportunity-*.test.js）。
 
-import type { Job } from "../types";
+import type { Job, JobAction } from "../types";
 
 export type { Job };
+
+/**
+ * 雷达链真正会读到的 job_actions 字段（取数列表见 context.ts 的 `RADAR_ACTION_COLUMNS`）。
+ * 用窄类型而不是 `JobAction` 是刻意的：它让「这条链只读这 4 列」成为**编译期**约束——
+ * 谁想多读一列，TS 会当场报错，而不是在线上悄悄拿到 undefined。
+ */
+export type RadarJobAction = Pick<JobAction, "job_id" | "action" | "created_at" | "updated_at">;
 
 // 求职阶段：空串表示用户未设定
 export type ExperienceStage = "" | "实习" | "校招" | "社招";

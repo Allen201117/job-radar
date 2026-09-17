@@ -16,9 +16,28 @@
 // ⚠️ 注意这四张表的读法：maybeSingle() 在「零行」时返回 {data:null,error:null}，
 //    所以这里出现的 error 一定是**真失败**（超时/权限/网络），不是「用户没填」。
 //    别把这个判据改成看 data 是否为空——那正是原来的 bug。
-import type { UserPreferences, CandidateProfile, JobAction } from "@/lib/types";
+import type { UserPreferences, CandidateProfile } from "../types";
+import type { RadarJobAction } from "./types";
+import { estimateRowBytes } from "../jobs-store/row-bytes";
 
 type SupabaseLike = { from: (table: string) => any };
+
+/**
+ * job_actions 在雷达链里**只被读这 4 列**：
+ *   · job_id / action  → buildActionMap（已处理硬门）、buildCriticalAlerts（关注岗）、SQL 下推的 actionedIds
+ *   · created_at / updated_at → resolveIntensityForUser 的「近 14 天动作数」
+ * 其余列（尤其 `job_snapshot` 这个 JSON 快照）一行都没人读，却要跨太平洋传回来：
+ * 2026-09-18 实测动作最多的那个用户 234 行 `select("*")` = 52.9KB，只取这 4 列 = 24.8KB（−53%）。
+ * ⚠️ 新增「要读 job_actions 某列」的逻辑时必须同步加到这里，否则那列会是 undefined —— 不报错、只是行为悄悄变。
+ */
+export const RADAR_ACTION_COLUMNS = "job_id, action, created_at, updated_at";
+
+/** 这一段的分段账本（`[today-page]` 用）：4 条悉尼查询的墙钟与回传字节。 */
+export interface RadarContextStats {
+  ms: number;
+  bytes: number;
+  actionRows: number;
+}
 
 /** 硬上下文读取失败。调用方应显示可重试的降级状态，**绝不可**当作「用户没有偏好」继续。 */
 export class RadarContextError extends Error {
@@ -31,20 +50,32 @@ export class RadarContextError extends Error {
 export type RadarContext = {
   preferences: UserPreferences | null;
   candidate: CandidateProfile | null;
-  actions: JobAction[];
+  actions: RadarJobAction[];
   radarState: { last_opened_at: string | null } | null;
 };
 
 export async function loadRadarContext(
   supabase: SupabaseLike,
   userId: string,
+  stats?: RadarContextStats,
 ): Promise<RadarContext> {
+  const t0 = performance.now();
   const [prefsRes, candRes, actsRes, stateRes] = await Promise.all([
     supabase.from("user_preferences").select("*").eq("user_id", userId).maybeSingle(),
     supabase.from("candidate_profiles").select("*").eq("user_id", userId).maybeSingle(),
-    supabase.from("job_actions").select("*").eq("user_id", userId),
+    supabase.from("job_actions").select(RADAR_ACTION_COLUMNS).eq("user_id", userId),
     supabase.from("user_radar_state").select("last_opened_at").eq("user_id", userId).maybeSingle(),
   ]);
+  if (stats) {
+    stats.ms = performance.now() - t0;
+    stats.actionRows = (actsRes?.data as unknown[] | null)?.length ?? 0;
+    // 逐组算：estimateRowBytes 是「抽样外推」，四张表行形状不同，混在一个数组里外推会失真。
+    stats.bytes =
+      estimateRowBytes([prefsRes?.data]) +
+      estimateRowBytes([candRes?.data]) +
+      estimateRowBytes([stateRes?.data]) +
+      estimateRowBytes((actsRes?.data as unknown[]) || []);
+  }
 
   // 硬上下文：失败即抛，绝不降级成空值。
   for (const [table, res] of [
@@ -63,7 +94,7 @@ export async function loadRadarContext(
   return {
     preferences: (prefsRes?.data as UserPreferences | null) ?? null,
     candidate: (candRes?.data as CandidateProfile | null) ?? null,
-    actions: (actsRes?.data as JobAction[]) || [],
+    actions: (actsRes?.data as RadarJobAction[]) || [],
     radarState: stateRes?.error
       ? null
       : ((stateRes?.data as { last_opened_at: string | null } | null) ?? null),
