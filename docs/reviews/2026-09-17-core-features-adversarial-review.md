@@ -326,3 +326,14 @@ service 标 `functionOnly`（方向非 exact 时），grouping 主清单排除�
 
 **尺子 4（不可信，留作反例）**：分行业学生画像 × 城市档裸 tsquery 计数——词表扩展版被「工程师」泛词灌水（六个工程师方向同一城市档全是 6,0xx 岗 / 235 家），
 原始短语版又过严（「药物研发」标题里几乎不出现 → 0）。已改成按产品真实搜索口径（`searchJobsStore` FTS + JS 精筛）重量，结果另记。
+
+### §11 追记二：/today 与 /campus 上线后（main f8d2451，创始人 Chrome，2026-09-18 02:35）
+
+| 页面 | 首字节 | 整页流完（冷 / 热） | 服务端账本 |
+|---|---:|---:|---|
+| /today | 92~184ms | **6.5s / 2.2s** | `[today-feed]` total 1,880ms = recall 725 + sourcemeta（悉尼）480 + compute 664 + hydrate 9；候选 1,372 行 / 1,478KB，展示 30 |
+| /campus（默认全部校招岗） | 93ms | **4.8s / 1.4s** | 冷那次含 cache key v4 首次重算看板快照；列表挂载后才请求 `/api/jobs/search?jobType=校招`（冷 2.4s / 热 0.26s 服务端） |
+| /jobs 登录默认态 | — | 冷 3.8~7.4s（含子 agent 打库期间）/ 热 1.0s | fetch 2.8~3.7s（干净窗口待复测） |
+
+读法：/today 服务端只占 1.9s，冷 6.5s 的大头在函数冷启动 + 流式渲染 30 张卡 + 页面其它并行取数，下一刀要给页面级加分段（不只是 feed）；
+`sourcemeta` 那 480ms 是跨洋到 Supabase 的一跳，`lib/opportunities/types.ts` 记着 07-30 在这条上猜错过两次，先拿这个线上真数再动。
