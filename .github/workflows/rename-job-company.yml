@@ -1,0 +1,51 @@
+name: rename-job-company
+
+# 香港 jobs 库「公司挂错名」的存量纠正：按 jd_url 前缀点名，把 company 从旧名改成新名。
+# 配套 sources.company 的 Supabase 迁移一起用（如 274：wecruit 租户 SU612f55… 由领益智造纠正为特变电工）——
+# 迁移改「以后抓进来的」，这条 workflow 改「已经在库里的」。手动触发、默认 dry-run。
+# 判据与护栏见 crawler/rename_job_company.py 的模块注释。
+
+on:
+  workflow_dispatch:
+    inputs:
+      url_prefix:
+        description: "jd_url 前缀（租户/门户级，完整 https 前缀）"
+        required: true
+      from_name:
+        description: "现在挂着的（错的）公司名，精确匹配"
+        required: true
+      to_name:
+        description: "改成的公司名"
+        required: true
+      apply:
+        description: "true = 真的写库；留空/false = 只 dry-run 报数"
+        required: false
+        default: "false"
+
+jobs:
+  rename:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: crawler/requirements.txt
+      - run: pip install -r crawler/requirements.txt
+
+      - name: Rename job company
+        env:
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+          URL_PREFIX: ${{ github.event.inputs.url_prefix }}
+          FROM_NAME: ${{ github.event.inputs.from_name }}
+          TO_NAME: ${{ github.event.inputs.to_name }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          set -euo pipefail
+          args=(--url-prefix "$URL_PREFIX" --from "$FROM_NAME" --to "$TO_NAME")
+          if [ "$APPLY" = "true" ]; then args+=(--apply); fi
+          python3 crawler/rename_job_company.py "${args[@]}"
