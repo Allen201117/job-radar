@@ -158,8 +158,14 @@ def _pipeline_owners(checks):
 # 允许中间换行（\s 本来就匹配换行），所以多行调用（本仓库大多数调用点都是多行）也能命中。
 # `(?<!def )` 排除 `def record_ops_run(...)` 这个函数定义本身（crawler/ops_runs.py 里
 # 定义处的形参列表长得跟调用一模一样，不排除会把「定义」误判成一次「调用」）。
+# `(?<!\w)` 排除 `_record_ops_run`（一个旁路包装函数的定义/调用，比如
+# crawler/sync_ats_tenants.py 的 `def _record_ops_run(status, metrics, started_at):`）——
+# 这个名字整段包含 "record_ops_run" 子串，前面只差一个下划线，不排除会把它的形参列表
+# 误当成一次真调用，第二个形参 `metrics` 被当成没有字面量绑定的「module 标识符」报进
+# unreadable（2026-09 实测：audit_coverage.py 输出里出现假阳性
+# `crawler/sync_ats_tenants.py:metrics`，而这个文件从没真的把 metrics 当 module 用）。
 _RECORD_CALL_RE = re.compile(
-    rf"(?<!def ){re.escape('record_ops_run')}\(\s*[\w.]+\s*,\s*(?:[\"']({_IDENT})[\"']|({_IDENT}))",
+    rf"(?<!\w)(?<!def ){re.escape('record_ops_run')}\(\s*[\w.]+\s*,\s*(?:[\"']({_IDENT})[\"']|({_IDENT}))",
 )
 # JS 侧：`.from("ops_runs").insert({ ... module: "xxx" ... })`。跨行、非贪婪地找到 insert 块
 # 里最先出现的 module 字面量即可——本仓库里每处 insert 只写一个 module。

@@ -328,6 +328,21 @@ ops_runs.record_ops_run(sb, module, {})
             self.assertNotIn("module", modules)
             self.assertEqual(unreadable, [])
 
+    def test_wrapper_function_named_underscore_record_ops_run_is_not_a_false_call(self):
+        # 回归：sync_ats_tenants.py 的 `def _record_ops_run(status, metrics, started_at):`
+        # 曾被误判成一次调用（第二个形参 "metrics" 被当成 module 标识符报进 unreadable）。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_root(tmp)
+            _write(
+                root / "crawler" / "sync_ats_tenants.py",
+                "def _record_ops_run(status, metrics, started_at):\n"
+                '    ops_runs.record_ops_run(sb, "ats_tenant_sync", metrics, status)\n',
+            )
+            modules, unreadable = C.find_ops_run_modules(root / "crawler", root / "scripts")
+            self.assertIn("ats_tenant_sync", modules)
+            self.assertNotIn("metrics", modules)
+            self.assertEqual(unreadable, [])
+
     def test_js_module_literal_is_found(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _make_root(tmp)
