@@ -191,3 +191,37 @@ class TestVerifyScope(unittest.TestCase):
                                                          {"row": r, "outcome": "skip", "reason": "x"})[1]):
             V.verify(sb, dry_run=True, only_ci_reachable=True)
         self.assertEqual(seen, [ci_key], "geo-block 的省不该在 CI 上被复验")
+
+
+class TestProcessNoticeCoverage(unittest.TestCase):
+    """2026-09-18 接入宁夏/西藏/内蒙古时实测漏进来的几类过程通知，逐条钉死。"""
+
+    def test_rejects_newly_found_process_notices(self):
+        for title in ("关于2026年自治区档案馆、公务服务中心公开招聘工作人员面试的公告",
+                      "《事业单位公开招聘分类考试公共科目笔试考试大纲解读2026》发布",
+                      "宁夏回族自治区2023年公开招聘事业编制警务人员体能测评公告",
+                      "西藏自治区2026年事业单位公开招聘高校毕业生报名情况公布（一）",
+                      "关于2027年度内蒙古自治区事业单位公开招聘工作人员减少招聘人数岗位的公告",
+                      "内蒙古自治区2026年残疾人专项事业单位公开招聘笔试费用减免申请",
+                      "关于内蒙古自治区2026年残疾人专场招聘改报岗位的公告"):
+            self.assertEqual(assess(title, "正文若干。", today=TODAY).action, "reject", title)
+
+    def test_supplementary_recruitment_round_is_still_real(self):
+        """⚠️ 反方向：「补充**招聘**」是真的又开了一轮，不是「补充公告」那种过程通知，不许误杀。"""
+        v = assess("2026年内蒙古自治区事业单位公开招聘“1+N”补充招聘工作人员公告",
+                   "报名时间：2026年9月20日至2026年9月30日。", today=TODAY)
+        self.assertEqual(v.action, "ok")
+
+
+class TestRangeStartYear(unittest.TestCase):
+    def test_end_of_range_follows_the_year_written_at_the_start(self):
+        """⚠️ 回归：「报名时间为 **2025年**10月13日至10月17日」——只取右端再按今年补，
+        会把一条去年早已截止的公告算成今年「还能报」。四川那批 30 条同一个假日期就是这么来的。"""
+        from announcements.deadline import extract_deadline
+        d, _ = extract_deadline("报名时间为2025年10月13日10∶00至10月17日18∶00", today=TODAY)
+        self.assertEqual(d, date(2025, 10, 17))
+
+    def test_range_crossing_new_year_rolls_forward(self):
+        from announcements.deadline import extract_deadline
+        d, _ = extract_deadline("报名时间：2025年12月28日至1月5日", today=TODAY)
+        self.assertEqual(d, date(2026, 1, 5))

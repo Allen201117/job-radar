@@ -357,7 +357,7 @@ class TestPaginationErrorSemantics(unittest.TestCase):
         urls = H.all_list_urls(portal)
         calls = {"n": 0}
 
-        def fake_fetch(client, url, referer=None):
+        def fake_fetch(client, url, referer=None, encoding=None):
             code = statuses[urls.index(url)]
             if code != 200:
                 req = _httpx.Request("GET", url)
@@ -377,3 +377,30 @@ class TestPaginationErrorSemantics(unittest.TestCase):
     def test_first_page_failure_still_counts(self):
         errs, _ = self._run([404, 200, 200, 200])
         self.assertEqual(errs, 1, "第一页打不开必须报错——栏目没了或被拦")
+
+
+class TestPortalRegistryIntegrity(unittest.TestCase):
+    def test_keys_are_unique(self):
+        """⚠️ key 重复是**静默**的：PORTALS_BY_KEY 只留最后一条，另一条永远读不到。
+        2026-09-18 换源时就出现过 sc_rst / nx_hrss 新旧两条并存。"""
+        from announcements.portals import PORTALS, _GEO_BLOCKED_FROM_CI
+        keys = [p.key for p in (*PORTALS, *_GEO_BLOCKED_FROM_CI)]
+        dupes = {k for k in keys if keys.count(k) > 1}
+        self.assertEqual(dupes, set(), f"重复的 portal key: {dupes}")
+
+    def test_regions_are_unique(self):
+        """一个省两条 portal 会让 /programs 的地区分面出现两份同名计数。"""
+        from announcements.portals import PORTALS, _GEO_BLOCKED_FROM_CI
+        regions = [p.region for p in (*PORTALS, *_GEO_BLOCKED_FROM_CI)]
+        dupes = {r for r in regions if regions.count(r) > 1}
+        self.assertEqual(dupes, set(), f"重复的省: {dupes}")
+
+    def test_list_url_host_is_in_its_own_domain_whitelist(self):
+        """列表页自己必须落在该 portal 声明的官方域名里 —— 换源时最容易漏改 domains。"""
+        from urllib.parse import urlparse
+        from announcements.portals import PORTALS, _GEO_BLOCKED_FROM_CI
+        for p in (*PORTALS, *_GEO_BLOCKED_FROM_CI):
+            for u in p.list_urls:
+                host = urlparse(u).netloc
+                self.assertTrue(any(host == d or host.endswith("." + d) for d in p.domains),
+                                f"{p.key}: 列表页 host {host} 不在 domains {p.domains}")

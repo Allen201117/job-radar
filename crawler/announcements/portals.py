@@ -33,6 +33,11 @@ class Portal:
     #   以 `index.html` 结尾的站多是 index_2 才是第 2 页（1 基）。填错只会静默抓回第一页、白跑。
     page_pattern: str | None = None
     page_indexes: tuple[int, ...] = ()
+    # 强制用这个编码解码响应体。只在对方站**不在响应头里声明 charset、而页面实际不是 UTF-8** 时填。
+    # ⚠️ 内蒙古人事考试网就是这种：响应头只有 `Content-Type: text/html`，页面是 GB2312，
+    #   而 httpx 的自动探测会给出 "utf-8" —— 不覆盖就整页中文乱码，标题门全部匹配失败、
+    #   **静默产出 0 条且不报错**（这正是本项目最忌讳的失败形态）。
+    encoding: str | None = None
 
 
 # 各省人社厅「事业单位公开招聘公告」列表页（2026-09-15 逐省 live 验证的静态源）。
@@ -118,9 +123,18 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
            ("https://hrss.jl.gov.cn/rsrc/sydwrsgl/gkzp/",), ("hrss.jl.gov.cn",),
            _p(r"t\d{8}_\d+\.html"),
            page_pattern="index_{}.html", page_indexes=(1, 2, 3)),
-    Portal("nmg_rst", "内蒙古人力资源和社会保障厅·省属事业单位招聘", "内蒙古自治区",
-           ("https://rst.nmg.gov.cn/zhuantizhuanlan/ssdwzp/",), ("rst.nmg.gov.cn",),
-           _p(r"t\d{8}_\d+\.html")),
+    # 内蒙古：**换源**。原配的 zhuantizhuanlan/ssdwzp 栏目已停更 368 天（最新一条 2025-09-15），
+    #   现在在更的是内蒙古人事考试院（2027 年度全区事业单位招聘 8825 人就发在这里，2026-09-08）。
+    #   ⚠️ 该站是 **GB2312** 且响应头不声明 charset → 必须显式 encoding，否则整页中文乱码、
+    #      标题门全部匹配失败、**静默产出 0 条**。⚠️ 仅 HTTP，无 HTTPS。
+    #   ⚠️ 导航里那个「事业单位公告」(ttt=42) 其实是**递补**公告子栏，名字有误导性，别用；要用 ttt=31。
+    #   ⚠️ 分页是查询参数 `mmm=N`，直接列完整 URL。
+    Portal("nmg_rst", "内蒙古自治区人事考试院·事业单位考试", "内蒙古自治区",
+           ("http://www.impta.com.cn/more.asp?ttt=31",
+            "http://www.impta.com.cn/more.asp?mmm=1&sss=&ttt=31",
+            "http://www.impta.com.cn/more.asp?mmm=2&sss=&ttt=31"),
+           ("www.impta.com.cn", "impta.com.cn"),
+           _p(r"shiyedanwei/\d+\.asp"), encoding="gb18030"),
     Portal("cq_rlsbj", "重庆市人力资源和社会保障局·事业单位公开招聘2026", "重庆市",
            ("https://rlsbj.cq.gov.cn/zwxx_182/sydw/sydwgkzp2026/",), ("rlsbj.cq.gov.cn",),
            _p(r"t\d{8}_\d+\.html"),
@@ -161,11 +175,6 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
     Portal("gs_ks", "甘肃省人力资源和社会保障厅·事业单位公开招聘（人事考试网）", "甘肃省",
            ("https://ks.rst.gansu.gov.cn/ncms/wzlb.shtml?mkbh=gwysydwks",), ("rst.gansu.gov.cn",),
            _p(r"article_[0-9a-f]{32}\.shtml")),
-    # 四川：此前「列表 403」是误判——那是裸目录的标准 nginx 403，真实列表页是 zfxxgkpage.shtml（非 WAF）。
-    #   招考录用栏目干净但窄（厅本级/直属，产出偏少正常）。
-    Portal("sc_rst", "四川省人力资源和社会保障厅·招考录用", "四川省",
-           ("https://rst.sc.gov.cn/rst/zkly/zfxxgkpage.shtml",), ("rst.sc.gov.cn",),
-           _p(r"zkly/20\d{2}/\d+/\d+/[0-9a-f]{32}\.shtml")),
     # 下面几个偏窄（厅本级 / 更新慢），靠标题过滤兜底，产出偏少正常（研究已标注）。
     Portal("henan_hrss", "河南省人力资源和社会保障厅·招考录用", "河南省",
            ("https://hrss.henan.gov.cn/zwgk/xxgk/yfygkdqtxx/zkly/",), ("hrss.henan.gov.cn",),
@@ -184,17 +193,57 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
             "?_isAgg=true&_isJson=true&_pageSize=50&_template=index&page=1",),
            ("hrss.hlj.gov.cn",),
            _p(r"c00_\d+\.shtml"), list_format="json_api"),
-    Portal("nx_hrss", "宁夏回族自治区人力资源和社会保障厅·公示公告", "宁夏回族自治区",
-           ("https://hrss.nx.gov.cn/gzdt/gsgg/",), ("hrss.nx.gov.cn",),
-           _p(r"t20\d{6}_\d+\.html")),
+    # 西藏：栏目是对的，只是原始公告已被跟进通知挤出首页（2026-07-07 那条在第 2 页）→ 只补分页。
+    #   ⚠️ 西藏同样是「单年批量」：网报窗口 7/7–7/11 四天，早过 45 天 TTL，修好分页也多半不展示。
     Portal("xz_hrss", "西藏自治区人力资源和社会保障厅·通知公告", "西藏自治区",
            ("https://hrss.xizang.gov.cn/xwzx/tzgg/",), ("hrss.xizang.gov.cn",),
-           _p(r"t20\d{6}_\d+\.html")),
+           _p(r"t20\d{6}_\d+\.html"),
+           page_pattern="index_{}.html", page_indexes=(1, 2)),
     # ⚠️ 辽宁/青海是非 gov.cn——省人事考试中心官网（人社厅下属官方机构，创始人已授权入白名单；仍拒中公/华图第三方）。
     Portal("ln_ks", "辽宁省人事考试中心·事业单位招聘公告", "辽宁省",
            ("https://www.lnrsks.com/html/sydw_zhaopingonggao/",), ("lnrsks.com",),
            _p(r"sydw_zhaopingonggao/\d+\.html")),
     # ⚠️ 青海仅 http 不支持 https（https 返回连接失败）。
+    # ── 第四批（2026-09-18 逐省 live 复核后新增/换源）────────────────────────────
+    # 海南：省人社厅本域，栏目干净、更新最勤（本批质量最好的一个）。
+    #   ⚠️ 分页是 1 基：第 1 页就是不带后缀的 list3.shtml，list3_1.shtml 是 404。
+    Portal("hainan_hrss", "海南省人力资源和社会保障厅·事业单位公开招聘", "海南省",
+           ("http://hrss.hainan.gov.cn/hrss/sydwzp/list3.shtml",), ("hrss.hainan.gov.cn",),
+           _p(r"sydwzp/20\d{4}/[0-9a-f]{32}\.shtml"),
+           page_pattern="list3_{}.shtml", page_indexes=(2, 3, 4)),
+    # 贵州：省人社厅本域的综合栏目。⚠️ 当前窗口 90%+ 是「拟聘人员公示」（靠标题门 EXCLUDE 挡掉），
+    #   真正的原始招聘公告集中在每年 1 月批量发 + 全年零散补充 —— **产出偏少是正常的**，
+    #   与河南/广西同一口径，别因为「才几条」就去放宽标题门。
+    Portal("gz_rst", "贵州省人力资源和社会保障厅·事业单位公开招聘", "贵州省",
+           ("https://rst.guizhou.gov.cn/zwgk/zdlyxx/sydwgkzp/",), ("rst.guizhou.gov.cn",),
+           _p(r"t20\d{6}_\d+\.html"),
+           page_pattern="index_{}.html", page_indexes=(1, 2, 3)),
+    # 云南：省人社厅本域。⚠️ 分页是**查询参数** `&page=N`，套不进 page_pattern 的路径拼接
+    #   → 直接把各页完整 URL 列进 list_urls。
+    #   ⚠️ **必须带 page=2**：第 1 页几乎全是「拟聘用人员公示」，下半年那 18 条批量原始公告
+    #   正好落在第 2 页（实测 page=1/5/10 都几乎没有原始公告）。
+    Portal("yn_hrss", "云南省人力资源和社会保障厅·事业单位招考", "云南省",
+           ("http://hrss.yn.gov.cn/NewsLsit.aspx?ClassID=602",
+            "http://hrss.yn.gov.cn/NewsLsit.aspx?ClassID=602&page=2",
+            "http://hrss.yn.gov.cn/NewsLsit.aspx?ClassID=602&page=3"),
+           ("hrss.yn.gov.cn",),
+           _p(r"NewsView\.aspx\?NewsID=\d+")),
+    # 四川：**换源**。原配的厅本级 zkly 栏目只有 3 条且全是「面试资格审查/遴选资格复审」过程通知；
+    #   省级事业单位公开招聘实际发在四川省人事考试中心（人社厅下属官方机构，同 lnrsks / qhpta 先例）。
+    #   ⚠️ 分页是查询参数 `&i=N`，同云南，直接列完整 URL。
+    Portal("sc_rst", "四川省人事考试中心·事业单位公开招聘", "四川省",
+           ("https://www.scpta.com.cn/front/News/List/67?t=110&a=1",
+            "https://www.scpta.com.cn/front/News/List/67?t=110&a=1&i=2",
+            "https://www.scpta.com.cn/front/News/List/67?t=110&a=1&i=3"),
+           ("www.scpta.com.cn", "scpta.com.cn"),
+           _p(r"News/info/[0-9a-f]{32}")),
+    # 宁夏：**换源**。原配的 gzdt/gsgg 是无关综合公告栏（举报线索/表彰公示/决算，零招聘）。
+    #   ⚠️ 宁夏是「单年一批」模式：全年原始公告基本只有 1 月那条（2026 年 4421 名），
+    #   其余全是过程通知 —— 产出低是该省真实发布节奏，不是配错了。
+    Portal("nx_hrss", "宁夏回族自治区人事考试中心·事业单位招考", "宁夏回族自治区",
+           ("https://www.nxpta.com/sydwzk/",), ("www.nxpta.com", "nxpta.com"),
+           _p(r"t20\d{6}_\d+\.html"),
+           page_pattern="index_{}.html", page_indexes=(1, 2)),
     Portal("qh_pta", "青海省人事考试信息网·事业单位考试", "青海省",
            ("http://www.qhpta.com/ncms/sydwks.shtml",), ("qhpta.com",),
            _p(r"article_[0-9a-f]{32}\.shtml")),

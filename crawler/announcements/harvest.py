@@ -51,11 +51,13 @@ def _client() -> httpx.Client:
     )
 
 
-def _fetch(client: httpx.Client, url: str, referer: str | None = None) -> str:
+def _fetch(client: httpx.Client, url: str, referer: str | None = None,
+           encoding: str | None = None) -> str:
     # 有的省 detail 页要 Referer 才给（江苏无 Referer 返 403）；带上无害，统一给 detail 传列表页做 Referer。
     r = client.get(url, headers={"Referer": referer} if referer else None)
     r.raise_for_status()
-    return r.content.decode(r.encoding or "utf-8", errors="replace")
+    # portal.encoding 优先：对方不声明 charset 时 httpx 会猜 utf-8，猜错就整页乱码（见 Portal.encoding）。
+    return r.content.decode(encoding or r.encoding or "utf-8", errors="replace")
 
 
 def _now_iso() -> str:
@@ -72,7 +74,7 @@ def harvest_portal(client: httpx.Client, sb, portal: Portal, dry_run: bool) -> d
     for idx, lu in enumerate(list_urls):
         # 抓取 + 解析都算「列表页」这一步：解析抛错（如 script_json 形态变了）计 list_errors，别崩整轮。
         try:
-            html = _fetch(client, lu)
+            html = _fetch(client, lu, encoding=portal.encoding)
             items = parse_list(portal, lu, html)
         except Exception as exc:  # noqa: BLE001
             # ⚠️ 翻页页面 404 = 「没有更多页了」，不是故障：某省公告变少时页数自然缩水
@@ -117,7 +119,7 @@ def harvest_portal(client: httpx.Client, sb, portal: Portal, dry_run: bool) -> d
             continue
         # 新公告 → 抽详情（带列表页做 Referer，绕过江苏那类 detail 反爬）
         try:
-            dhtml = _fetch(client, item.url, referer=portal.list_urls[0])
+            dhtml = _fetch(client, item.url, referer=portal.list_urls[0], encoding=portal.encoding)
         except Exception as exc:  # noqa: BLE001
             detail_errors += 1
             sys.stderr.write(f"[announce] {portal.key} 详情失败 {item.url}: {type(exc).__name__}\n")

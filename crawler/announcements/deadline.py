@@ -84,6 +84,10 @@ def _add_business_days(start: date, n: int) -> date:
     return d
 
 
+# 命中片段里的第一个完整日期 = 报名区间的**左端**。区间右端只写月日时，年份必须跟它走。
+_START_DATE_IN_MATCH = re.compile(_DATE)
+
+
 _PUBLISHED_PAT = re.compile(r"(?:发布|公布|印发)[日时][期间][:：]?\s*" + _DATE)
 # 有的站元信息只写「时间：2026-09-09」「信息来源：本网 时间：2026-09-09」，不写「发布」二字
 # （广东就是，实测 18 行因此既无发布日也无截止日 → TTL 只能从「今天首见」起算，
@@ -131,9 +135,26 @@ def extract_deadline(
         try:
             if len(g) == 3:  # 年月日齐全
                 y, mo, da = int(g[0]), int(g[1]), int(g[2])
-            else:            # 只有月日 → 年份用发布年/今年推断
-                base_year = (published_at or today).year
+            else:            # 只有月日 → 年份要推断
                 mo, da = int(g[0]), int(g[1])
+                # ⚠️ **优先跟区间左端写明的年份走**，而不是今年。
+                # 2026-09-18 实测：四川那批公告写的是「报名时间为 **2025年**10月13日至10月17日」，
+                # 只取右端的「10月17日」再按今年补，就把一条 2025 年早已截止的公告
+                # 算成 2026-10-17「还能报」—— 30 条同一个假日期，全是去年下半年的批次。
+                # 这类写法（左端带年、右端省略）在公告里是常态，不是个案。
+                head = _START_DATE_IN_MATCH.search(m.group(0))
+                if head:
+                    try:
+                        start = date(int(head.group(1)), int(head.group(2)), int(head.group(3)))
+                    except ValueError:
+                        start = None
+                    if start is not None:
+                        y = start.year
+                        # 区间跨年（如 12/28 至 1/5）：右端早于左端就进位。
+                        if (mo, da) < (start.month, start.day):
+                            y += 1
+                        return date(y, mo, da), m.group(0)[:60]
+                base_year = (published_at or today).year
                 y = base_year
                 inferred = date(y, mo, da)
                 if (published_at is not None

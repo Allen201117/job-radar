@@ -77,7 +77,8 @@ def _check_one(row: dict, today: date) -> dict:
         if resp.status_code in (404, 410):
             return {"row": row, "outcome": "dead", "reason": "unreachable"}
         resp.raise_for_status()
-        html = resp.content.decode(resp.encoding or "utf-8", errors="replace")
+        # 同 harvest：portal.encoding 优先，否则 GB2312 站会整页乱码（见 Portal.encoding）。
+        html = resp.content.decode(portal.encoding or resp.encoding or "utf-8", errors="replace")
     except Exception as exc:  # noqa: BLE001
         # 够不着 ≠ 对方撤了 → 不判死，留到下一轮
         return {"row": row, "outcome": "skip", "reason": type(exc).__name__}
