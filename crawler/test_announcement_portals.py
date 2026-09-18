@@ -287,3 +287,34 @@ class TestHarvestLedger(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestListPagination(unittest.TestCase):
+    """翻页展开（2026-09-18 加）。页码基数逐省实测，写错只会静默抓回第一页。"""
+
+    def test_expands_pages_next_to_the_first_list_url(self):
+        from announcements.portals import Portal, all_list_urls
+        p = Portal("x", "X", "某省", ("https://a.gov.cn/col/index.html",), ("a.gov.cn",),
+                   page_pattern="index_{}.html", page_indexes=(2, 3))
+        self.assertEqual(all_list_urls(p), [
+            "https://a.gov.cn/col/index.html",
+            "https://a.gov.cn/col/index_2.html",
+            "https://a.gov.cn/col/index_3.html",
+        ])
+
+    def test_directory_style_url_keeps_its_directory(self):
+        from announcements.portals import Portal, all_list_urls
+        p = Portal("y", "Y", "某省", ("https://b.gov.cn/col/",), ("b.gov.cn",),
+                   page_pattern="index_{}.html", page_indexes=(1,))
+        self.assertEqual(all_list_urls(p)[1], "https://b.gov.cn/col/index_1.html")
+
+    def test_no_pagination_configured_is_a_noop(self):
+        from announcements.portals import Portal, all_list_urls
+        p = Portal("z", "Z", "某省", ("https://c.gov.cn/col/",), ("c.gov.cn",))
+        self.assertEqual(all_list_urls(p), ["https://c.gov.cn/col/"])
+
+    def test_paginated_portals_declare_both_fields(self):
+        """只填一半（有 pattern 没 indexes）会静默不翻页 —— 钉死不许出现。"""
+        from announcements.portals import PORTALS, _GEO_BLOCKED_FROM_CI
+        for p in (*PORTALS, *_GEO_BLOCKED_FROM_CI):
+            self.assertEqual(bool(p.page_pattern), bool(p.page_indexes), p.key)

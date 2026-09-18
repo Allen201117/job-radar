@@ -57,6 +57,22 @@ class TestDeadlineRangeForms(unittest.TestCase):
             self.assertIsNone(extract_deadline(text, published_at=date(2026, 9, 1))[0], text)
 
 
+class TestPublishedDate(unittest.TestCase):
+    def test_reads_bare_time_meta_line(self):
+        """广东这类站元信息只写「时间：2026-09-09」，不写「发布」二字。
+        抽不到发布日 = 45 天 TTL 只能从「今天首见」起算，一条 1 月发的公告会被当成新件再挂一个半月。"""
+        from announcements.deadline import extract_published
+        self.assertEqual(extract_published("信息来源：本网 时间：2026-09-09 分享： 字体： 正文……"),
+                         date(2026, 9, 9))
+
+    def test_does_not_mistake_registration_time_for_publish_time(self):
+        """⚠️「**报名**时间」也含「时间」二字。只在正文开头元信息区找、且只认带横杠的 ISO 写法，
+        中文正文写报名时间用的是「2026年9月1日」，天然分开。"""
+        from announcements.deadline import extract_published
+        body = "某某学院公开招聘公告 " + "正文" * 200 + " 报名时间：2026-09-01 至 2026-09-30"
+        self.assertIsNone(extract_published(body))
+
+
 class TestAssess(unittest.TestCase):
     def test_rejects_registration_closed_notice(self):
         v = assess("江苏省水利科学研究院2026年公开招聘工作人员关闭报名系统公告",

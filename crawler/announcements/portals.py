@@ -28,6 +28,11 @@ class Portal:
     detail_pat: re.Pattern = field(default_factory=lambda: re.compile(r"(post_\d+\.html|/t20\d{6}_\d+\.html)"))
     # 列表数据形态：html=常规 <a href>；script_json=内嵌 JSON；json_fragment=JSON 内的 HTML；json_api=结构化 JSON。
     list_format: str = "html"
+    # 翻页：("index_{}.html", (1, 2, 3)) = 在 list_urls[0] 同目录下再抓这几页。
+    # ⚠️ 页码基数**逐省实测**，不要按经验填：URL 以 `/` 结尾的站多是 index_1 才是第 2 页（0 基），
+    #   以 `index.html` 结尾的站多是 index_2 才是第 2 页（1 基）。填错只会静默抓回第一页、白跑。
+    page_pattern: str | None = None
+    page_indexes: tuple[int, ...] = ()
 
 
 # 各省人社厅「事业单位公开招聘公告」列表页（2026-09-15 逐省 live 验证的静态源）。
@@ -41,6 +46,22 @@ def _p(rx: str) -> re.Pattern:
     return re.compile(rx)
 
 
+def all_list_urls(portal: Portal) -> list[str]:
+    """列表页全集 = 配置的 list_urls + 翻页展开出来的更深几页。
+
+    为什么要翻页（2026-09-18 实测）：各省人社厅的栏目一页只有 10~25 条，而**一页装不下当前
+    还在报名的全部公告** —— 往后翻 2~4 页、端到端过完可报名门 + TTL 之后，仍净增 48 条真能展示的
+    （湖南 26 / 北京 8 / 上海 8 / 重庆 4）。
+    ⚠️ 别拿「翻出多少条候选」当收益：同一次实测翻出 337 条候选，其中 289 条是**已截止或超 45 天 TTL**
+    的老公告（天津那 56 条同名汇总页全部超龄）。只数「真能展示」的。
+    """
+    urls = list(portal.list_urls)
+    if portal.page_pattern and portal.page_indexes:
+        base = portal.list_urls[0].rsplit("/", 1)[0] + "/"
+        urls += [base + portal.page_pattern.format(i) for i in portal.page_indexes]
+    return urls
+
+
 # ⚠️⚠️ 只放**从 GitHub US runner 实测可达**的省。别拿本机 dry-run 当准入——本机走中国路由能连，
 #   runner 在美国，很多省 gov 服务器对海外 IP geo-block / 拒连（make_transport 已 retry=2 仍失败，非 TLS）。
 #   2026-09-15 连跑两轮 CI 均如此：可达 北京/广东/湖北/福建；不可达 山东/湖南/安徽/陕西/山西（见下方 🌏 块）。
@@ -48,10 +69,12 @@ def _p(rx: str) -> re.Pattern:
 PORTALS: tuple[Portal, ...] = (
     Portal("bj_rsj", "北京市人力资源和社会保障局·公开招聘", "北京市",
            ("https://rsj.beijing.gov.cn/xxgk/gkzp/",), ("rsj.beijing.gov.cn",),
-           _p(r"t\d{8}_\d+\.html")),
+           _p(r"t\d{8}_\d+\.html"),
+           page_pattern="index_{}.html", page_indexes=(1, 2, 3)),
     Portal("gd_hrss", "广东省人力资源和社会保障厅·事业单位招聘", "广东省",
            ("https://hrss.gd.gov.cn/zwgk/sydwzp/zpgg/index.html",), ("hrss.gd.gov.cn",),
-           _p(r"post_\d+\.html")),
+           _p(r"post_\d+\.html"),
+           page_pattern="index_{}.html", page_indexes=(2, 3, 4)),
     Portal("hb_rst", "湖北省人力资源和社会保障厅·省直事业单位招聘公告", "湖北省",
            ("https://rst.hubei.gov.cn/bmdt/ztzl/ywzl/hbsszsydwgkzp/zpgg/",), ("rst.hubei.gov.cn",),
            _p(r"t\d{8}_\d+\.shtml")),
@@ -71,30 +94,35 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
            _p(r"articles/ch\d+/\d+/[0-9a-f-]+\.shtml")),
     Portal("hn_rst", "湖南省人力资源和社会保障厅·事业单位招聘", "湖南省",
            ("https://rst.hunan.gov.cn/rst/xxgk/zpzl/sydwzp/index.html",), ("rst.hunan.gov.cn",),
-           _p(r"t\d{8}_\d+\.html")),
+           _p(r"t\d{8}_\d+\.html"),
+           page_pattern="index_{}.html", page_indexes=(2, 3, 4)),
     Portal("ah_hrss", "安徽省人力资源和社会保障厅·省直事业单位公开招聘", "安徽省",
            ("https://hrss.ah.gov.cn/zxzx/ztzl/ahssydwgkzp/index.html",), ("hrss.ah.gov.cn",),
            _p(r"ahssydwgkzp/\d+\.html")),
     Portal("sn_rst", "陕西省人力资源和社会保障厅·事业单位公开招聘", "陕西省",
            ("https://rst.shaanxi.gov.cn/sy/ztzl/rdzt/zkzl/sxssydwgkzp_22656/",),
            ("rst.shaanxi.gov.cn", "www.shaanxi.gov.cn"),
-           _p(r"t\d{8}_\d+\.html")),
+           _p(r"t\d{8}_\d+\.html"),
+           page_pattern="index_{}.html", page_indexes=(1, 2, 3)),
     Portal("sx_rst", "山西省人力资源和社会保障厅·事业单位公开招聘", "山西省",
            ("https://rst.shanxi.gov.cn/ztzl/zpxx/",), ("rst.shanxi.gov.cn",),
            _p(r"t\d{8}_\d+\.shtml")),
     # ── 第二批（2026-09-15 research live 验证，static 干净子栏目）──
     Portal("sh_rsj", "上海市人力资源和社会保障局·事业单位招聘公告", "上海市",
            ("https://rsj.sh.gov.cn/tzpgg_17408/index.html",), ("rsj.sh.gov.cn",),
-           _p(r"t\d+_\d+\.html")),
+           _p(r"t\d+_\d+\.html"),
+           page_pattern="index_{}.html", page_indexes=(2, 3, 4)),
     Portal("jl_hrss", "吉林省人力资源和社会保障厅·省直事业单位公开招聘", "吉林省",
            ("https://hrss.jl.gov.cn/rsrc/sydwrsgl/gkzp/",), ("hrss.jl.gov.cn",),
-           _p(r"t\d{8}_\d+\.html")),
+           _p(r"t\d{8}_\d+\.html"),
+           page_pattern="index_{}.html", page_indexes=(1, 2, 3)),
     Portal("nmg_rst", "内蒙古人力资源和社会保障厅·省属事业单位招聘", "内蒙古自治区",
            ("https://rst.nmg.gov.cn/zhuantizhuanlan/ssdwzp/",), ("rst.nmg.gov.cn",),
            _p(r"t\d{8}_\d+\.html")),
     Portal("cq_rlsbj", "重庆市人力资源和社会保障局·事业单位公开招聘2026", "重庆市",
            ("https://rlsbj.cq.gov.cn/zwxx_182/sydw/sydwgkzp2026/",), ("rlsbj.cq.gov.cn",),
-           _p(r"t\d{8}_\d+\.html")),
+           _p(r"t\d{8}_\d+\.html"),
+           page_pattern="index_{}.html", page_indexes=(1, 2, 3)),
     # 江西：列表页 JS 渲染，但公告数据就在 <script>var listData = {articleList:[...]}> JSON 里
     #   （每条含 title + pubDate + urls.pc），curl 一次即得，list_format="script_json" 抽 JSON，无需浏览器。
     Portal("jx_rst", "江西省人力资源和社会保障厅·事业单位公开招聘", "江西省",
@@ -106,7 +134,8 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
     #   去重靠 source_url（本管道天然如此），别指望靠标题区分。detail 是 .html 不是 .shtml。
     Portal("tj_rsj", "天津市人力资源和社会保障局·事业单位公开招聘", "天津市",
            ("https://hrss.tj.gov.cn/ztzl/ztzl1/sydwgkzp/",), ("hrss.tj.gov.cn",),
-           _p(r"t\d{8}_\d+\.html")),
+           _p(r"t\d{8}_\d+\.html"),
+           page_pattern="index_{}.html", page_indexes=(1, 2, 3)),
     # 江苏：列表 <li><a> 藏在 <record><![CDATA[…]]> 里（selectolax 不建 DOM）→ _unwrap_cdata 解包后走 html 路径。
     #   ⚠️ 该栏目混「招聘公告 + 拟聘用名单公示」，后者靠 classify EXCLUDE（公示/拟聘/名单）剔除，别放宽。
     Portal("js_hrss", "江苏省人力资源和社会保障厅·省属事业单位招聘", "江苏省",
@@ -138,10 +167,12 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
     # 下面几个偏窄（厅本级 / 更新慢），靠标题过滤兜底，产出偏少正常（研究已标注）。
     Portal("henan_hrss", "河南省人力资源和社会保障厅·招考录用", "河南省",
            ("https://hrss.henan.gov.cn/zwgk/xxgk/yfygkdqtxx/zkly/",), ("hrss.henan.gov.cn",),
-           _p(r"/\d{4}/\d{2}-\d{2}/\d+\.html")),
+           _p(r"/\d{4}/\d{2}-\d{2}/\d+\.html"),
+           page_pattern="index_{}.html", page_indexes=(1, 2, 3)),
     Portal("xj_rst", "新疆维吾尔自治区人力资源和社会保障厅·事业单位公开招聘", "新疆维吾尔自治区",
            ("https://rst.xinjiang.gov.cn/xjrst/c112746/list.shtml",), ("rst.xinjiang.gov.cn",),
-           _p(r"c112746/\d{6}/[0-9a-f]{32}\.shtml")),
+           _p(r"c112746/\d{6}/[0-9a-f]{32}\.shtml"),
+           page_pattern="list_{}.shtml", page_indexes=(2, 3, 4)),
     Portal("gx_rst", "广西人力资源和社会保障厅·考录招聘", "广西壮族自治区",
            ("http://rst.gxzf.gov.cn/zwgk/xxgk/rsxx/xxgkklzp/",), ("rst.gxzf.gov.cn",),
            _p(r"/t\d+\.shtml")),

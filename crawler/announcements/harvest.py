@@ -24,7 +24,8 @@ from adapters.cn_portal_tls import make_transport  # noqa: E402
 from .body import extract_body
 from .classify import detect_audience, detect_employer_type
 from .deadline import extract_published
-from .portals import PORTALS, PORTALS_BY_KEY, Portal, detail_text, parse_list, _GEO_BLOCKED_FROM_CI
+from .portals import (PORTALS, PORTALS_BY_KEY, Portal, all_list_urls, detail_text,
+                      parse_list, _GEO_BLOCKED_FROM_CI)
 from .quality import assess
 
 _UA = (
@@ -34,7 +35,9 @@ _UA = (
 
 # 单 portal 每轮最多处理的候选数（列表页倒序 = 取最新 N）。
 # 防山东那种整档 462 条把详情抓取撑爆；老公告报名多已截止，取最新即可，其余靠下一轮增量补。
-_MAX_CANDIDATES_PER_PORTAL = 60
+# 2026-09-18 从 60 抬到 150：开了翻页（all_list_urls，2~4 页）后单省候选可到 80+，
+# 卡在 60 会把翻页翻出来的直接截掉、等于白翻。已入库的 URL 不再抓详情，所以稳态成本只多几个列表页。
+_MAX_CANDIDATES_PER_PORTAL = 150
 
 
 def _client() -> httpx.Client:
@@ -65,7 +68,7 @@ def harvest_portal(client: httpx.Client, sb, portal: Portal, dry_run: bool) -> d
     candidates = []
     seen: set[str] = set()
     list_errors = 0
-    for lu in portal.list_urls:
+    for lu in all_list_urls(portal):
         # 抓取 + 解析都算「列表页」这一步：解析抛错（如 script_json 形态变了）计 list_errors，别崩整轮。
         try:
             html = _fetch(client, lu)

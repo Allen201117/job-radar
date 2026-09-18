@@ -102,6 +102,9 @@ def _check_one(row: dict, today: date) -> dict:
         # 用现在的代码重算只剩 24 条 —— 分面字段陈旧会让筛选器把能投的岗筛没。
         "audience": detect_audience((row.get("title") or "") + " " + body[:2000]),
         "employer_type": detect_employer_type(row.get("title") or ""),
+        # 回填发布日：它是「没有截止日时靠什么过期」的锚点。库里 21 行两个日期都空，
+        # TTL 只能从「今天首见」起算 —— 一条 1 月发的年度集中招聘会被当成新件再挂 45 天。
+        "published_at": published.isoformat() if published else row.get("published_at"),
         # 抽不到就保留库里原值，别把已知的截止日清成 null
         "deadline": v.deadline.isoformat() if v.deadline else row.get("deadline"),
         "deadline_text": v.deadline_text or row.get("deadline_text"),
@@ -155,7 +158,7 @@ def verify(sb, today: date | None = None, dry_run: bool = False, limit: int | No
                 patch["verdict"] = r["verdict"]
                 if r["verdict"] == "index_page":
                     flagged += 1
-                for col in ("audience", "employer_type"):
+                for col in ("audience", "employer_type", "published_at"):
                     if r.get(col) and r[col] != row.get(col):
                         patch[col] = r[col]
                         refreshed += 1

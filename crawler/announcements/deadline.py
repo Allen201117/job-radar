@@ -85,18 +85,28 @@ def _add_business_days(start: date, n: int) -> date:
 
 
 _PUBLISHED_PAT = re.compile(r"(?:发布|公布|印发)[日时][期间][:：]?\s*" + _DATE)
+# 有的站元信息只写「时间：2026-09-09」「信息来源：本网 时间：2026-09-09」，不写「发布」二字
+# （广东就是，实测 18 行因此既无发布日也无截止日 → TTL 只能从「今天首见」起算，
+#  一条 2026-01-27 发的年度集中招聘公告会被当成新件再挂 45 天）。
+# ⚠️ 只认**带横杠的 ISO 写法**、且只在正文开头的元信息区里找：
+#    正文里的「报名时间」也含「时间」二字，正则一放宽就会把报名起始日当成发布日。
+#    中文正文写报名时间用的是「2026年9月1日」，与 ISO 写法天然分开。
+_META_ISO_PAT = re.compile(r"(?:时间|日期)[:：]?\s*(20\d{2})-(\d{1,2})-(\d{1,2})")
+_META_WINDOW = 200
 
 
 def extract_published(text: str) -> date | None:
-    """从详情页正文抽发布日期（「发布日期：2026年9月14日」一类）。抽不到返回 None。"""
+    """从详情页正文抽发布日期（「发布日期：2026年9月14日」「时间：2026-09-09」）。抽不到返回 None。"""
     norm = normalize(text)
-    m = _PUBLISHED_PAT.search(norm)
-    if not m:
-        return None
-    try:
-        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-    except ValueError:
-        return None
+    for pat, scope in ((_PUBLISHED_PAT, norm), (_META_ISO_PAT, norm[:_META_WINDOW])):
+        m = pat.search(scope)
+        if not m:
+            continue
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            continue
+    return None
 
 
 def extract_deadline(
