@@ -290,3 +290,54 @@ test("老版 wt（hotjob）查询参数 recruitType 是平台渠道常量：1→
     "社招",
   );
 });
+
+test("渠道自报的实习（job_type / postType=intern / recruitType=12 / 路径）排在层2 经验门之后：租户挪用实习频道挂社招岗时不再误标实习", () => {
+  // 2026-09-18 live 实锤：中伟新材料 / 浙江华友钴业把 wt 平台的 recruitType=12（门户上就叫「实习生招聘」）
+  // 当蓝领社招频道用——电工 3 年 / 钳工 3-5 年 / 投资高级经理 8 年 / 仓管员「仓储经验 3 年以上」，
+  // 标题自带「实习」的比例 1.6% / 0%（正常租户 60~100%）。此前渠道信号与标题同在层1，
+  // 抢在层2 之前拍板，经验门对这条路径完全失效：rt=12 且 experience 写着 ≥2 年的 23 个在招岗全部被标成实习。
+  const wt = (rt) => `https://cngr.hotjob.cn/wt/CNGR/mobweb/position/detail?brandCode=1&safe=Y&recruitType=${rt}&postIdsAry=468106`;
+  const wecruit = "https://career.honor.com/SU60/pb/posDetail.html?postId=6a83&postType=intern";
+  // 四种渠道信号 × 明确的 ≥2 年经验要求 → 社招
+  assert.strictEqual(
+    recruitmentCategory({ title: "钳工", job_type: "操作职系 实习", jd_url: wt(12), experience: "3年", summary: "2、具备3年及以上化工、石化等行业机修经验" }),
+    "社招",
+  );
+  assert.strictEqual(
+    recruitmentCategory({ title: "仓管员", job_type: "生产管理序列 实习", jd_url: wt(12), summary: "3、有仓储工作经验2年及以上。" }),
+    "社招",
+  );
+  assert.strictEqual(recruitmentCategory({ title: "电工", job_type: "暑期实习", experience: "3年以上电工相关工作经验" }), "社招");
+  assert.strictEqual(recruitmentCategory({ title: "结构工程师", jd_url: wecruit, experience: "5年以上工作经验" }), "社招");
+  assert.strictEqual(recruitmentCategory({ title: "研发工程师", jd_url: "https://x.com/zp/intern/123", summary: "3-5年研发经验" }), "社招");
+  // 没有经验要求的照旧判实习（渠道信号本身不动，只是让位给经验门）
+  assert.strictEqual(recruitmentCategory({ title: "研究所化工行业研究", job_type: "研究序列 实习", jd_url: wt(12) }), "实习");
+  assert.strictEqual(recruitmentCategory({ title: "产品助理", job_type: "暑期实习" }), "实习");
+  assert.strictEqual(recruitmentCategory({ title: "产品助理", jd_url: wecruit }), "实习");
+  // 标题自报「实习」仍是层1、最权威：正文提到年限也不改判（与「实习优先于校园字样」既有口径一致）
+  assert.strictEqual(recruitmentCategory({ title: "生产实习生", job_type: "操作职系 实习", jd_url: wt(12), summary: "有 3 年以上经验者优先" }), "实习");
+  // 渠道实习仍排在「来源自报校招/社招」与 url 门户之前：校招门户里 job_type 说实习 → 实习
+  assert.strictEqual(recruitmentCategory({ title: "数据分析", job_type: "实习", jd_url: "https://jobs.example.com/campus/1" }), "实习");
+});
+
+test("渠道自报的实习只让位给「写明数字年限」的经验要求：正文里的 senior / lead / staff 资历词不够格", () => {
+  // 2026-09-18 全集对拍（32,545 行）暴露：把渠道实习挪到层2 之后，8 行是**只**靠资历词触发经验门翻成社招的，
+  // 其中中金「【2027】人力资源岗」（正文 "staff development"）、日立「Entry Program」（"employs 1,900 staff"）、
+  // 美敦力「IT_Intern」（"lead with purpose"）是明明白白的实习/应届岗。资历词是给英文标题（Staff/Senior Engineer）
+  // 用的代理信号，出现在正文里不说明这岗要几年经验；推翻一个租户级声明必须拿岗位自己写的数字。
+  const wecruit = "https://career.example.com/pb/posDetail.html?postId=1&postType=intern";
+  assert.strictEqual(
+    recruitmentCategory({ title: "【2027】人力资源岗", job_type: "实习", summary: "Support training, recruitment and selection, staff development etc." }),
+    "实习",
+  );
+  assert.strictEqual(
+    recruitmentCategory({ title: "General Project Management Entry Program", jd_url: wecruit, summary: "Hitachi Energy employs over 1,900 staff across 55 cities." }),
+    "实习",
+  );
+  assert.strictEqual(recruitmentCategory({ title: "IT_Intern", job_type: "实习", summary: "You'll lead with purpose and report to senior management." }), "实习");
+  // 没有渠道实习声明的行，资历词照旧算硬门槛（既有口径不变）
+  assert.strictEqual(recruitmentCategory({ title: "Staff Software Engineer", job_type: "校园招聘" }), "社招");
+  assert.strictEqual(recruitmentCategory({ title: "Senior Analyst", jd_url: "https://x.com/campus/1" }), "社招");
+  // 写明数字年限的仍然推翻渠道声明
+  assert.strictEqual(recruitmentCategory({ title: "Product Operation Manager", jd_url: wecruit, summary: "5+ years of experience in product operations." }), "社招");
+});

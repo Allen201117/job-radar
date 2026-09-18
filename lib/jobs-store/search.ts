@@ -339,7 +339,8 @@ function legacyRecruitmentSuperset(jobType: string): string {
       " or (coalesce(title,'')||' '||coalesce(summary,'')) ~* '(应届|[0-9]{2,4}届|校园招聘|校招|管培生|管理培训生|留学生专项|new\\s?grads?|university\\s+graduate|entry[-\\s]?level|campus\\s?(recruit|hiring)|graduate\\s+program)'" +
       " or company ~* '(校招|校园招聘)')" +
       " and (job_type is null or job_type !~* '(社招|社会招聘|全职|experienced|professional|full.?time)')" +
-      // 排除实习：recruitmentCategory 层1（实习）最先短路，命中它绝不可能再被判成校招。
+      // 排除实习：带实习信号的行在 recruitmentCategory 里只会落到 实习（层1 标题 / 层2b 渠道）或 社招（层2 经验门），
+      // 绝不可能再被判成校招，所以从校招超集里剔掉是安全的。
       // ⚠️ intern 必须**两侧**词边界（PG 用 \y）：否则 international / internal / internet 会被当实习剔掉
       //    ——同款裸子串坑在 crawler 上实锤误标过 27,824 个岗。
       // ⚠️ url 只认**路径段** /shixi /intern，不认 `?postType=intern`：实测 wecruit 有 10 个「27届」
