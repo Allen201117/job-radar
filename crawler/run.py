@@ -77,6 +77,7 @@ from adapters.cnstaff import CnstaffAdapter
 from adapters.chnenergy import ChnenergyAdapter
 from adapters.midea import MideaAdapter
 from adapters.midea_campus import MideaCampusAdapter
+from adapters.duoyi import DuoyiAdapter
 from adapters.cmb import CmbAdapter
 from adapters.cmbc import CmbcAdapter
 from adapters.spdb import SpdbAdapter
@@ -201,6 +202,10 @@ ADAPTERS = {
     # 美的校招在 careers.midea.com（自建 iHR），与社招 recruit.midea.com 是两套 host。
     # ⚠️ 翻页参数是 pageIndex，pageNum 会被静默忽略（见 adapters/midea_campus.py）。
     "midea_campus": MideaCampusAdapter(),
+    # 多益网络：xz（校招）/ sz（社招）两个 host 同一套 /v40/api，渠道只认 host 前缀（见 adapters/duoyi.py）。
+    "duoyi": DuoyiAdapter(),
+    # 校招那一条源用独立 adapter 名，只为让 sources.board 生成列判成 campus（迁移 276；URL 无校招令牌）。
+    "duoyi_campus": DuoyiAdapter(),
     "cmb": CmbAdapter(),  # 招商银行自建门户：公开社会招聘接口，零浏览器
     "cmbc": CmbcAdapter(),  # 中国民生银行自建门户：公开社会招聘接口，零浏览器
     "gree": GreeAdapter(),  # 格力自建门户：公开校招/社招接口，零浏览器
@@ -226,6 +231,7 @@ DOMESTIC_ADAPTERS = {
     "abchina",  # 农业银行（浏览器档：响应体加密，读 React state）
     "lixiang_campus",  # 理想汽车校招/实习（2026-09-09 live 核实逐岗详情页，零浏览器）
     "sf_express_campus", "midea_campus",  # 顺丰 / 美的 校招门户（2026-09-18 live，零浏览器）
+    "duoyi", "duoyi_campus",  # 多益网络 社招 / 校招官网（2026-09-18 live，列表即全文，零浏览器）
 }
 
 
@@ -243,6 +249,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "zto", "zto_campus",  # 中通：列表+详情均为公开 JSON，零浏览器
     # 顺丰 / 美的 校招门户：列表即全文（无逐岗富化），纯 httpx、无共享状态（2026-09-18 live）
     "sf_express_campus", "midea_campus",
+    "duoyi", "duoyi_campus",  # 多益网络：/v40/api 公开 JSON，列表即全文，纯 httpx、无共享状态（2026-09-18 live）
     "spdb", "icbc", "ccb", "bankcomm", "cmcc",  # 国有大行 + 中国移动自建门户，纯 httpx（无浏览器、无共享状态）
     "chnenergy",  # 国家能源集团自建门户，纯 httpx（POST 列表 + GET 详情）
     # 字节：jobs.bytedance.com posts API 已改为纯 httpx offset/limit 全量翻页；

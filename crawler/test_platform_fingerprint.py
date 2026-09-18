@@ -410,3 +410,114 @@ class CareersSubdomainHopTest(unittest.TestCase):
         client = _MultiClient({"https://": page})
         pf.fingerprint("https://a.example.com/careers", company="Example", client=client)
         self.assertLessEqual(len(client.calls), 5)
+
+
+class _RoutedClient:
+    """按 URL 分发的假客户端（一次 fingerprint 里会 GET 入口页 + 若干 JS 包 + 租户页）。"""
+
+    def __init__(self, responses):
+        self.responses = responses
+        self.calls = []
+
+    def get(self, url, timeout):
+        self.calls.append(url)
+        if url not in self.responses:
+            raise RuntimeError("unexpected GET %s" % url)
+        return self.responses[url]
+
+
+class HotjobLandingAndWtRoutingTest(unittest.TestCase):
+    """2026-09-18：漏斗把「已认出 hotjob、只是落在租户首页」记成 adapter_source_url_unroutable。"""
+
+    def test_hotjob_tenant_landing_page_routes_to_social_board(self):
+        for landing in (
+            "https://wecruit.hotjob.cn/SU60613f74bef57c36adc66d0b/pb/index.html",
+            "https://wecruit.hotjob.cn/SU60613f74bef57c36adc66d0b/pb/",
+            "https://wecruit.hotjob.cn/SU60613f74bef57c36adc66d0b/pb",
+        ):
+            with self.subTest(landing=landing):
+                self.assertEqual(
+                    pf.resolve_source_url("hotjob", landing, ""),
+                    "https://wecruit.hotjob.cn/SU60613f74bef57c36adc66d0b/pb/social.html",
+                )
+
+    def test_hotjob_root_without_suite_still_unroutable(self):
+        # 根路径没有 suite key，不能瞎拼；保持旧行为（None）交给 HTML 里的 listPosition 派生。
+        self.assertIsNone(pf.resolve_source_url("hotjob", "https://gimc.hotjob.cn/", ""))
+
+    def test_hotjob_brand_host_linking_wt_portal_is_wt(self):
+        html = '<a href="https://foxconn.hotjob.cn/wt/Foxconn/web/index">进入</a>'
+        self.assertEqual(pf.detect_platform("https://foxconn.hotjob.cn", html), ("wt", "wt"))
+        self.assertEqual(
+            pf.resolve_source_url("wt", "https://foxconn.hotjob.cn", html),
+            "https://foxconn.hotjob.cn/wt/Foxconn/web/index",
+        )
+
+    def test_hotjob_pb_page_never_reclassified_as_wt(self):
+        html = '<a href="https://foxconn.hotjob.cn/wt/Foxconn/web/index">老站</a>'
+        self.assertEqual(
+            pf.detect_platform("https://gimc.hotjob.cn/GIMC/pb/social.html", html),
+            ("hotjob", "hotjob"),
+        )
+
+
+class ScriptBundleTenantTest(unittest.TestCase):
+    """自建壳 + JS 包里写死的 ATS 租户地址（DeepSeek/掌阅 形态）。"""
+
+    ENTRY = "https://talent.example.com/"
+    BUNDLE = "https://fe-static.example.com/main.js"
+    TENANT = "https://app.mokahr.com/social-recruitment/acme/4604"
+    ENTRY_HTML = (
+        "<html><head><title>Acme 招聘</title>"
+        '<script src="https://fe-static.example.com/main.js"></script>'
+        '<script src="https://cdn.sentry.io/sdk.js"></script>'
+        "</head><body><h1>Acme 校园招聘 加入我们 职位</h1></body></html>"
+    )
+    BUNDLE_JS = (
+        'x="https://app.mokahr.com/social-recruitment/acme/4604#/job/01416da2";'
+        'y="https://app.mokahr.com/social-recruitment/acme/4604#/job/0238c1b1/apply";'
+        'z="https://sentry-fe.mokahr.com/api/107/store/";'
+    )
+
+    def test_script_urls_only_same_registrable_domain(self):
+        self.assertEqual(
+            pf.find_script_bundle_urls(self.ENTRY_HTML, self.ENTRY), [self.BUNDLE]
+        )
+
+    def test_tenant_extraction_strips_fragments_and_noise(self):
+        self.assertEqual(pf.find_ats_tenant_urls(self.BUNDLE_JS), [self.TENANT])
+        self.assertEqual(pf.find_ats_tenant_urls('u="https://q7w8vltyes.jobs.feishu.cn/2024";'
+                                                 'v="https://q7w8vltyes.jobs.feishu.cn/zhangyue/position"'),
+                         ["https://q7w8vltyes.jobs.feishu.cn/zhangyue/position"])
+        self.assertEqual(pf.find_ats_tenant_urls('u="https://sentry-fe.mokahr.com/api/107/store/"'), [])
+
+    def test_fingerprint_follows_tenant_found_in_bundle(self):
+        client = _RoutedClient({
+            self.ENTRY: _Response(self.ENTRY, self.ENTRY_HTML),
+            self.BUNDLE: _Response(self.BUNDLE, self.BUNDLE_JS),
+            self.TENANT: _Response(self.TENANT, "<html><title>Acme 社会招聘</title><body>Acme</body></html>"),
+        })
+        result = pf.fingerprint(self.ENTRY, company="Acme", client=client)
+        self.assertEqual(result["adapter"], "moka")
+        self.assertEqual(result["source_url"], self.TENANT)
+        self.assertTrue(result["identity_ok"])
+        self.assertEqual(result["reason"], "ats_in_script_bundle_from:%s" % self.ENTRY)
+        self.assertEqual(client.calls, [self.ENTRY, self.BUNDLE, self.TENANT])
+
+    def test_bundle_tenant_failing_identity_gate_is_not_adopted(self):
+        client = _RoutedClient({
+            self.ENTRY: _Response(self.ENTRY, self.ENTRY_HTML),
+            self.BUNDLE: _Response(self.BUNDLE, self.BUNDLE_JS),
+            self.TENANT: _Response(self.TENANT, "<html><title>别家公司招聘</title><body>Other Corp</body></html>"),
+        })
+        result = pf.fingerprint(self.ENTRY, company="Acme", client=client)
+        self.assertIsNone(result["adapter"])
+        self.assertEqual(result["platform"], "unknown_spa")
+
+    def test_bundles_not_read_when_platform_already_known(self):
+        html = '<script src="https://static.acme.com/main.js"></script>' \
+               '<a href="https://acme.zhiye.com/social">社招</a>'
+        client = _RoutedClient({"https://careers.acme.com/": _Response("https://careers.acme.com/", html)})
+        result = pf.fingerprint("https://careers.acme.com/", company=None, client=client)
+        self.assertEqual(result["adapter"], "beisen")
+        self.assertEqual(client.calls, ["https://careers.acme.com/"])

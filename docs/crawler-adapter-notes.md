@@ -202,6 +202,53 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     美的「生产计划专员」在**昆山市**——江苏的县级市，词表按设计只收到地级市）。
                          #     双向核过：放宽后 A→B 各 1、B→A 各 0，两家全集共 655 行里**没有一行**能确证在 CN 之外；
                          #     台湾红线不受影响（台北市识别得出 TW → 仍走严格分支被丢）。
+                         #   duoyi.py = 多益网络招聘官网 xz.duoyi.com（校招）/ sz.duoyi.com（社招），自建 Vue SPA，纯 httpx
+                         #     （2026-09-18 接入）。两个 host 是**同一套后端**：`recruit` 参数选渠道（10 校招 / 20 社招），
+                         #     host 只是皮肤（xz 传 recruit=20 照样返社招全集）→ 渠道**只认 source_url 的 host 前缀**，
+                         #     两渠道 id 空间不重叠（live 33 ∩ 57 = 0）。
+                         #     🚩 接口前缀是 `/v40/api`（`GET /v40/api/index/positions/jds/page?recruit&pageIndex&pageSize`），
+                         #       裸 `/api/...` 是另一个 ASP.NET 站点、一律 500「页面出错」——前端 JS 里写的是相对路径
+                         #       `/api/index/...`，真正的前缀要从 `$api` 的其它调用（`/v40/api/deliveries/...`）读，别照 JS 猜。
+                         #     列表行自带全文（jobResponsibility + jobRequirements），零薄卡、不烧 detail 预算；
+                         #     pageIndex/pageSize 都真实生效（page1∩page2=0、page2=total−20；pageSize=200 如实回显）。
+                         #     jd_url = `https://{host}/v40/#/position-detail/{id}`（路由表 `path:"/position-detail/:id"`，
+                         #       hash 路由；history 形态 `/v40/position-detail/{id}` 是 404），浏览器真渲染核过：真 id 渲出
+                         #       标题 + 职责 + 要求 + 「投递简历」，伪 id 渲出空壳。
+                         #     判死（ENRICH_REGISTRY `duoyi` / `duoyi_campus`）：`GET /v40/api/index/positions/{id}/jds`，
+                         #       真 id → data 为对象 + name 非空（校招 33/33、社招 57/57 零反例）；不存在 id →
+                         #       `{"message":"success","data":null,"code":0}`；格式非法 id → `code=10100`「服务端错误」**不判死**。
+                         #       双条件 = message==success **且** data 键存在且为 null。诚实边界：「已下线但记录仍在」的反向
+                         #       证据一条都没有（多益没有公开历史岗位），只判得出「id 彻底不存在」。
+                         #     ⚠️ 校招那条源的 adapter_name 是 `duoyi_campus`（run.py 里与 `duoyi` 同一个类，同 zto_campus 先例）：
+                         #       URL `xz.duoyi.com` 没有任何 campus 令牌，走 URL 规则 board 会判成 social → campus-crawl 车道
+                         #       整条漏掉；迁移 276 把它钉进 classify_source_board 规则②。
+                         #     summary【任职要求】在【岗位职责】前（届别硬信号在要求段，同 sf_express_campus 量出的结论）。
+                         #   ⚠️ platform_fingerprint 三处路由扩展（2026-09-18，起因：漏斗把「入口找到了、却被拦在路由门外」
+                         #     归类后发现 `adapter_source_url_unroutable` 绝大多数**不是**「平台认得出但没 adapter」，而是两类）：
+                         #     ① hotjob 租户首页 `/{SU…}/pb/index.html`（或裸 `/pb/`）→ 映射到 `pb/social.html`。官网「加入我们」
+                         #        常直接 302 到这种不带板块的落地页（财通 www.ctsec.com/careers、宇通 join.yutong.com），
+                         #        此前 `_adapter_api_url` 返 None → 财通 208 岗 / 卓越 661 岗被挡在门外。校招板块由
+                         #        gap_funnel.campus_source_url 同规则换算成 school.html。
+                         #     ② `{brand}.hotjob.cn` 根路径同时托管两代产品：页面只链到 `/wt/{brand}/web/index` 的是老版
+                         #        WinTalent 租户（富士康 foxconn.hotjob.cn），按 host 判 hotjob 会拿 wecruit 的 suite/config
+                         #        去探一个不存在的租户 → `detect_platform` 对这种形态返 ("wt","wt")。
+                         #        ⚠️ 富士康 wt 列表四个 recruitType 当日实测都返 0 行——「返 0 ≠ 没开」，只把路由修对，
+                         #        有没有岗交给漏斗的真抓验收门，别因此把它 seed 进库。
+                         #     ③ 自建壳的**首屏 JS 包**里写死的 ATS 租户地址：talent.deepseek.com（580 B 的壳）→
+                         #        app.mokahr.com/social-recruitment/high-flyer/…；www.zhangyue.com/careers →
+                         #        q7w8vltyes.jobs.feishu.cn/…。HTML 扫描对它们全判 unknown_spa。现行：HTML 认不出平台时
+                         #        读**自家主域**下最多 5 个 <script src>（≤3 MB/个），抽出带 orgId 的 moka / 飞书租户地址后
+                         #        **重新走一遍 fingerprint**（身份门 + 路由门一个不跳，只接受 adapter 认出且 identity_ok 的结果）。
+                         #        只收自家域名：第三方 SDK 里的 ATS 域名是别家的；moka 只认 `/(social-recruitment|
+                         #        campus-recruitment|campus_apply)/{slug}/{orgId}` 形态，sentry-fe.mokahr.com 之类一律丢。
+                         #     ⚠️ 中信证券 careers.citics.com **不能接**：列表接口（global-kong.citics.com，sysNo=CSE001 +
+                         #        recruitType=08 等）匿名可调，但逐岗详情页 `/positonDetailHeadquarters?…` 前端路由守卫
+                         #        直接跳 `/login`（手机号登录）——jd_url 落在登录页，踩 jd_url 红线，按 login_wall 转人工。
+                         #     ⚠️ 浪潮 HCM Cloud（`{tenant}.hcmcloud.cn`，浪潮 / 太保 talent.cpic.com.cn / 泸州老窖 hr.lzlj.com
+                         #        私有部署 都是它）**是本轮唯一发现的多租户 SaaS**，但请求参数走 `hcm_transfer_strategy=ha5`
+                         #        会话密钥加密（key 来自 get_auth 的 `window.dk`）、响应 `hb5` 字符替换 base64，接口名是
+                         #        `/api/hcm.model.list?model=ReleaseJobMgr`。要接得先复刻它的传输层加解密，单独立项。
+                         #     ⚠️ 中国华能 zhaopin.chng.com.cn 接口路径本身被哈希（`/app-api/recruit/<128 hex>`），同上单独立项。
                          #   iguopin.py = 国聘（国资委官方央企招聘平台）：recom-job 列表 + info 详情公开 API，纯 httpx。
                          #     source_url 约定 https://www.iguopin.com/job?company={检索词}&match={核名词}，一源=一集团。
                          #     ⚠️ match 走 company_name_match 严格核名（token 必须在实体名开头或只隔地名前缀），

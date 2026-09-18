@@ -2,7 +2,7 @@
 import re
 import unicodedata
 from html import unescape
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 
@@ -85,11 +85,21 @@ def _host_detection(host, path=""):
     return None
 
 
+_WT_PORTAL_RE = re.compile(r"/wt/([A-Za-z0-9_-]+)/web/index\b", re.I)
+
+
 def detect_platform(final_url, html):
     """纯函数：最终 host → HTML 第三方 host → 接口路径特征。"""
     parsed = urlparse(str(final_url or ""))
     direct = _host_detection(parsed.hostname, parsed.path)
     if direct:
+        # `{brand}.hotjob.cn` 根路径同时托管两代产品：新版 wecruit（/{SU…}/pb/…）与老版
+        # WinTalent（/wt/{brand}/web/index）。落在根路径、页面却只链到 /wt/ 门户的，
+        # 是 wt 租户（富士康 foxconn.hotjob.cn 即此形态，2026-09-18 live）——按 host 判成
+        # hotjob 会让下游拿 wecruit 的 suite/config 去探一个不存在的租户。
+        if direct[0] == "hotjob" and "/pb/" not in (parsed.path or "").lower() \
+                and _WT_PORTAL_RE.search(str(html or "")):
+            return ("wt", "wt")
         return direct
 
     text = str(html or "")
@@ -254,6 +264,60 @@ def find_careers_subdomain_hops(html, final_url, limit=3):
     return hops
 
 
+# ── 首屏 JS 包里的 ATS 租户地址 ────────────────────────────────────────────────
+# 2026-09-18 实测：一批「自建招聘站」其实只是套了壳的 ATS 租户，租户地址不在 HTML 里、
+# 在首屏 JS 包里（React/Vue 把「投递」按钮的目标写死在 bundle 里）：
+#   talent.deepseek.com → app.mokahr.com/social-recruitment/high-flyer/…
+#   www.zhangyue.com/careers → q7w8vltyes.jobs.feishu.cn/zhangyue
+#   www.imdada.cn → app.mokahr.com/campus_apply/imdada/7841（租户页已下线，探活门会拦）
+# HTML 扫描对它们全部判 unknown_spa → 漏斗记 adapter_source_url_unroutable，人去研究「怎么接
+# 自建站」，而它们本来就有 adapter。这里补的是「再读几个 JS 包」这一跳，只在 HTML 认不出
+# 平台、且页面像招聘页时做；找到的租户地址仍要**重新走一遍 fingerprint**（身份门 + 路由门
+# 一个不跳），这里只负责把候选送到门前。
+_SCRIPT_SRC_RE = re.compile(r"""<script\b[^>]*\bsrc=["']([^"']+)["']""", re.I)
+_SCRIPT_BUNDLE_LIMIT = 5
+_SCRIPT_BUNDLE_MAX_BYTES = 3 * 1024 * 1024
+
+
+def find_script_bundle_urls(html, final_url, limit=_SCRIPT_BUNDLE_LIMIT):
+    """入口页里**同一主域**下的 <script src>（绝对化、去重、保序）。
+    只收自家域名：第三方 SDK（统计 / 客服 / 验证码）里的 ATS 域名是别家的，读了只会张冠李戴。"""
+    base_root = _registrable(urlparse(final_url or "").hostname or "")
+    if not base_root:
+        return []
+    out, seen = [], set()
+    for raw in _SCRIPT_SRC_RE.findall(str(html or "")):
+        url = urljoin(final_url, raw.strip())
+        host = (urlparse(url).hostname or "").lower()
+        if not host or _registrable(host) != base_root:
+            continue
+        if url not in seen and len(out) < limit:
+            seen.add(url)
+            out.append(url)
+    return out
+
+
+def find_ats_tenant_urls(text, limit=3):
+    """从一段 JS/HTML 文本里抽「能路由到已有 adapter」的 ATS 租户地址（去 #fragment、去重、
+    每个平台只留最短的一条——bundle 里同一租户会以 …#/job/{id} 形态出现几十次）。"""
+    best = {}
+    for raw in _URL_RE.findall(str(text or "")):
+        url = raw.split("#", 1)[0].rstrip(");,'\"")
+        parsed = urlparse(url)
+        platform, adapter = _host_detection(parsed.hostname, parsed.path)  or ("unknown", None)
+        if not adapter:
+            continue
+        if platform == "moka" and not re.search(r"/(?:social-recruitment|campus-recruitment|campus_apply)/[^/]+/\d+$", parsed.path):
+            continue   # moka 只认带 orgId 的租户页；sentry/静态资源等 mokahr.com 噪音一律丢
+        # 飞书租户在 bundle 里常同时出现「历史专场 /2024」与「常设门户 /{path}/position」，
+        # 优先带 /position 的；其余平台取最短（同一租户会以 …#/job/{id} 形态出现几十次）。
+        rank = (0 if platform == "feishu" and "/position" in parsed.path else 1, len(url))
+        current = best.get(platform)
+        if current is None or rank < current[0]:
+            best[platform] = (rank, url)
+    return [url for _rank, url in best.values()][:limit]
+
+
 def _looks_like_recruiting_page(html):
     """自建招聘页信号：有岗位列表形态，或可见文本里招聘词足够密集。"""
     source = str(html or "")
@@ -393,6 +457,14 @@ def _adapter_api_url(platform, candidate):
         )
         if portal:
             return candidate
+        # 租户首页 `/{SU…}/pb/index.html`（或裸 `/pb/`）：官网「加入我们」常直接 302 到这里
+        # （宇通 join.yutong.com、财通 www.ctsec.com/careers 都是），页面本身不带任何板块。
+        # 它与 social.html 是同一个租户、同一个 suite key，只差板块后缀 —— 2026-09-18 之前
+        # 这里返回 None → 漏斗记 adapter_source_url_unroutable，财通 208 岗 / 卓越 661 岗
+        # 就这么被挡在门外。校招板块由 gap_funnel.campus_source_url 按同一套规则换算。
+        landing = re.match(r"^/([^/]+)/pb/?(?:index\.html)?$", parsed.path, re.I)
+        if landing:
+            return "https://%s/%s/pb/social.html" % (host, landing.group(1))
         endpoint = re.search(
             r"/wecruit/positionInfo/listPosition/([^/?#]+)",
             parsed.path,
@@ -443,6 +515,25 @@ def resolve_source_url(platform, final_url, html):
         if detect_platform(candidate, "")[0] == platform:
             return candidate
     return final_url
+
+
+def _ats_urls_in_script_bundles(cli, html, final_url, timeout):
+    """拉最多 _SCRIPT_BUNDLE_LIMIT 个自家 JS 包，返回其中的 ATS 租户地址（去重保序）。
+    任何一个包拉不下来就跳过它；这一步只可能把 unknown 变成已知，不会反过来。"""
+    found, seen = [], set()
+    for script_url in find_script_bundle_urls(html, final_url):
+        try:
+            resp = cli.get(script_url, timeout=timeout)
+        except Exception:  # noqa: BLE001
+            continue
+        text = getattr(resp, "text", "") or ""
+        if int(getattr(resp, "status_code", 0) or 0) != 200 or len(text) > _SCRIPT_BUNDLE_MAX_BYTES:
+            continue
+        for tenant_url in find_ats_tenant_urls(text):
+            if tenant_url not in seen:
+                seen.add(tenant_url)
+                found.append(tenant_url)
+    return found
 
 
 def fingerprint(url, *, company=None, client=None, timeout=15, _hop_depth=0):
@@ -512,6 +603,21 @@ def fingerprint(url, *, company=None, client=None, timeout=15, _hop_depth=0):
                     continue
                 if hopped.get("adapter"):
                     hopped["reason"] = "careers_subdomain_hop_from:%s" % final_url
+                    return hopped
+        # 仍认不出 → 读自家首屏 JS 包找 ATS 租户地址（见 find_script_bundle_urls 上方注释）。
+        # 同样只在深度 0 做、只接受「跳过去真认出了 ATS 且过了身份门」的结果。
+        # 不要求「像招聘页」：这类壳常常只有几百字节（talent.deepseek.com 580 B），
+        # 招聘词全在 JS 里；花销由「只读自家域名、最多 5 个包」兜住。
+        if platform == "unknown" and _hop_depth == 0:
+            for tenant_url in _ats_urls_in_script_bundles(cli, html, final_url, timeout):
+                try:
+                    hopped = fingerprint(
+                        tenant_url, company=company, client=cli, timeout=timeout, _hop_depth=1
+                    )
+                except Exception:  # noqa: BLE001 —— 租户页探测失败不许拖垮主判定
+                    continue
+                if hopped.get("adapter") and hopped.get("identity_ok") is True:
+                    hopped["reason"] = "ats_in_script_bundle_from:%s" % final_url
                     return hopped
         # 已识别 ATS 的普通 SPA 壳仍交给 adapter；unknown_spa 只接住认不出的壳。
         if special and (special != "unknown_spa" or platform == "unknown"):

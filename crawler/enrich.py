@@ -473,6 +473,55 @@ def _detail_midea_campus(row, src):
     return ""
 
 
+_DUOYI_DETAIL = "https://{host}/v40/api/index/positions/{job_id}/jds"
+
+
+def _detail_duoyi(row, src):
+    """多益网络（xz/sz.duoyi.com）逐岗探活（2026-09-18 真伪 id live 对拍，liveness-only）。
+
+    jd_url 是 hash 路由 `…/v40/#/position-detail/{id}`，`#` 后面不会发给服务端 → 只能问接口。
+
+    📊 对拍（不是抽样）：
+      · 校招 33/33 + 社招 57/57 在招 id → HTTP 200、`data` 为对象、`name` 非空，**零反例**；
+      · 把真 id 末三位改掉（id 空间稀疏，雪花 id）→ `{"message":"success","data":null,"code":0}`；
+      · 格式非法 id（`1`）→ `{"message":"服务端错误","data":null,"code":10100}`。
+
+    双条件，宁可漏判不可错杀：
+      ① `message == "success"` **且** 响应里确实有 `data` 键 **且** 其值为 null → 该 id 不存在。
+         `code=10100`「服务端错误」的 `data` 也是 null，但 message 不是 success，**不判死**——
+         那是我们的入参/对方的故障，不是撤岗。
+      ② 其余一律 unknown（不盖戳、不改状态）。
+    🚩 诚实边界：「已下线但记录仍在」这一形态**一条反向证据都没有**（多益没有公开的历史岗位列表），
+       现在只判得出「id 彻底不存在」；等库里的岗自然过期后用 `job_closures` 复核。
+    """
+    parsed = urlparse(row.get("jd_url") or "")
+    job_id = re.search(r"/position-detail/(\d+)", parsed.fragment or "")
+    host = (parsed.hostname or "").lower()
+    if not job_id or not host.endswith(".duoyi.com"):
+        return ""
+    r = httpx.get(_DUOYI_DETAIL.format(host=host, job_id=job_id.group(1)),
+                  headers={**UA, "Accept": "application/json, text/plain, */*",
+                           "Referer": f"https://{host}/v40/"},
+                  timeout=TIMEOUT, follow_redirects=True)
+    _raise_if_gone(r)
+    _raise_if_unknown(r)
+    try:
+        payload = r.json()
+    except ValueError:
+        raise DetailUnknownError("duoyi detail non-JSON response")
+    if not isinstance(payload, dict) or "data" not in payload:
+        raise DetailUnknownError("duoyi detail without data key")
+    data = payload["data"]
+    if data is None:
+        if str(payload.get("message") or "") == "success":
+            raise JobClosedError(f"duoyi closed (id not found): {row['jd_url']}")
+        raise DetailUnknownError(
+            f"duoyi detail data=null but message={payload.get('message')!r} code={payload.get('code')!r}")
+    if not isinstance(data, dict) or not str(data.get("name") or "").strip():
+        raise DetailUnknownError("duoyi detail without name")
+    return ""
+
+
 def _detail_tencent(row, src):
     # postId = jd_url 查询参数；detail = 公开 ByPostId JSON。撤岗→HTTP500 {Code:500,Data:"E1005"}（3 真实撤岗）；
     # 在招→{Code:200,Data:{Responsibility/Requirement=正文}}。⚠️ E1003=bogus 入参错，不判死。
@@ -1222,6 +1271,9 @@ ENRICH_REGISTRY = {
     # 校招门户（2026-09-18 接入，真伪 id live 对拍，双条件；见各函数 docstring 的全集数字）：
     "sf_express_campus": _detail_sf_express_campus,
     "midea_campus": _detail_midea_campus,
+    # 多益网络 xz/sz.duoyi.com（2026-09-18 接入，真伪 id live 对拍，双条件；见 docstring）：
+    "duoyi": _detail_duoyi,
+    "duoyi_campus": _detail_duoyi,   # 同一个站、同一个判死接口（校招源只是 board 用的别名）
     "tencent": _detail_tencent,
     "vivo": _detail_vivo,
     # 盲区六家（2026-08-28，真伪 id live 对拍，见各函数注释）：

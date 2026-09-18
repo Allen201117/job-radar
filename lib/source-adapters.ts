@@ -293,6 +293,18 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填 https://recruit.midea.com/recruitOut/ihr/social/；适配器直连公开 position/list 接口并全量翻页，crawl_method 选 http",
   },
   {
+    value: "duoyi",
+    label: "多益网络 社招（sz.duoyi.com）",
+    origin: "domestic",
+    hint: "填「多益网络」+ https://sz.duoyi.com/v40/#/positions；/v40/api 公开接口、列表自带全文，渠道按 host 前缀判定，crawl_method 选 http",
+  },
+  {
+    value: "duoyi_campus",
+    label: "多益网络 校招 / 实习（xz.duoyi.com）",
+    origin: "domestic",
+    hint: "填「多益网络」+ https://xz.duoyi.com/v40/#/positions；与社招同一套接口，独立 adapter 名只为让 board 判成 campus（URL 无校招令牌），crawl_method 选 http",
+  },
+  {
     value: "midea_campus",
     label: "美的集团 校招 / 实习（careers.midea.com）",
     origin: "domestic",
