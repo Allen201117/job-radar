@@ -24,7 +24,13 @@ CONTRACT_PATH = Path(__file__).with_name("audit_contract.yaml")
 LAYERS = ("pipeline", "data", "experience")
 SEVERITIES = ("info", "warn", "critical")
 DATABASES = ("jobs", "supabase")
-REQUIRED_TEXT = ("id", "name", "layer", "db", "owner", "sql", "normal", "severity", "why", "action")
+SOURCES = ("sql", "watchdog")
+# source=sql（默认，老检查项不用写这个字段）：本文件真的跑 SQL 去量。
+# source=watchdog：这条检查的「测量」发生在 crawler/ops_watchdog.py 里（老告警规则本来就在跑，
+#   只是结果此前只落 GitHub Issue、没进 audit_results 这张趋势表）——本文件**不执行**它，
+#   只负责校验它声明得对不对；`rule` 是 ops_watchdog.RULE_TITLES 里的字母。
+REQUIRED_TEXT_SQL = ("id", "name", "layer", "db", "owner", "sql", "normal", "severity", "why", "action")
+REQUIRED_TEXT_WATCHDOG = ("id", "name", "layer", "owner", "rule", "normal", "severity", "why", "action")
 DEFAULT_TIMEOUT_S = 120
 ERROR_MESSAGE_MAX = 300
 
@@ -66,7 +72,11 @@ def validate_contract(checks):
     seen = set()
     for c in checks:
         cid = c.get("id")
-        for field in REQUIRED_TEXT:
+        source = c.get("source", "sql")
+        if source not in SOURCES:
+            raise ValueError(f"{cid}: source 只能是 {SOURCES}")
+        required = REQUIRED_TEXT_WATCHDOG if source == "watchdog" else REQUIRED_TEXT_SQL
+        for field in required:
             if not isinstance(c.get(field), str) or not c[field].strip():
                 raise ValueError(f"检查项 {cid!r} 缺字段 {field}")
         if cid in seen:
@@ -76,7 +86,7 @@ def validate_contract(checks):
             raise ValueError(f"{cid}: layer 只能是 {LAYERS}")
         if c["severity"] not in SEVERITIES:
             raise ValueError(f"{cid}: severity 只能是 {SEVERITIES}")
-        if c["db"] not in DATABASES:
+        if source == "sql" and c["db"] not in DATABASES:
             raise ValueError(f"{cid}: db 只能是 {DATABASES}")
         parse_normal(c["normal"])
     return checks
@@ -123,6 +133,7 @@ def run_check(check, get_conn, now=None):
         "measured_at": measured.astimezone(timezone.utc).isoformat(),
         "error_message": None,
         "duration_ms": None,
+        "detail": None,  # SQL 类检查恒为 None：数值本身就是全部信息，没有更细的明细可写
     }
     started = time.monotonic()
     try:
@@ -138,6 +149,13 @@ def run_check(check, get_conn, now=None):
         row["error_message"] = _redact(f"{type(exc).__name__}: {exc}")
     row["duration_ms"] = int((time.monotonic() - started) * 1000)
     return row
+
+
+def sql_checks(checks):
+    """source=watchdog 的检查项不由本文件执行——它们的「测量」发生在 ops_watchdog.py，
+    本文件跑起来时如果混进这些检查项去执行 SQL 会直接因为没有 `sql`/`db` 字段而崩。
+    main() 只让本函数返回的子集真正跑 _query_scalar。"""
+    return [c for c in checks if c.get("source", "sql") == "sql"]
 
 
 def run_all(checks, connect):
@@ -164,24 +182,28 @@ def run_all(checks, connect):
 _UPSERT_SQL = """
 insert into public.audit_results
   (check_id, run_date, layer, severity, value, normal, verdict, calibrated,
-   measured_at, error_message, duration_ms)
+   measured_at, error_message, duration_ms, detail)
 values
   (%(check_id)s, %(run_date)s, %(layer)s, %(severity)s, %(value)s, %(normal)s, %(verdict)s,
-   %(calibrated)s, %(measured_at)s, %(error_message)s, %(duration_ms)s)
+   %(calibrated)s, %(measured_at)s, %(error_message)s, %(duration_ms)s, %(detail)s)
 on conflict (check_id, run_date) do update set
   layer = excluded.layer, severity = excluded.severity, value = excluded.value,
   normal = excluded.normal, verdict = excluded.verdict, calibrated = excluded.calibrated,
   measured_at = excluded.measured_at, error_message = excluded.error_message,
-  duration_ms = excluded.duration_ms
+  duration_ms = excluded.duration_ms, detail = excluded.detail
 """
 
 
 def write_results(conn, results):
     """同一天重跑 = 覆盖当天那行（最后一次测量为准）；一天一行，历史才能直接画趋势。"""
+    import psycopg2.extras
     cur = conn.cursor()
     try:
         for row in results:
-            cur.execute(_UPSERT_SQL, row)
+            payload = dict(row)
+            if payload.get("detail") is not None:
+                payload["detail"] = psycopg2.extras.Json(payload["detail"])
+            cur.execute(_UPSERT_SQL, payload)
     finally:
         cur.close()
     return len(results)
@@ -226,6 +248,7 @@ def main(argv=None):
     checks = load_contract()
     if args.layer:
         checks = [c for c in checks if c["layer"] == args.layer]
+    checks = sql_checks(checks)  # source=watchdog 的检查项由 ops_watchdog.py 自己写，本文件不跑它们
     results = run_all(checks, connect)
     print(render(results, checks))
     tally = {v: sum(1 for r in results if r["verdict"] == v) for v in ("ok", "breach", "error")}
