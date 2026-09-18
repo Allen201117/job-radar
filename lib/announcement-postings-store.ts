@@ -5,8 +5,11 @@ import { createServiceClient } from "./supabaseService";
 import { toAnnouncementPostings, type AnnouncementPosting } from "./announcement-postings";
 
 const TTL_SECONDS = 600;
-// 首屏最多展示的公告数（够多、又不至于把页面拉爆；扩省后再评估分页/分面）。
-const MAX_ROWS = 300;
+// 一次取多少条公告。⚠️ 撞上限是**静默截断**——页面不会报错，只是少一批公告，
+// 而这页的价值全在「把还能报的都摆出来」。2026-09-18 接完国聘后已到 208 条，
+// 原来的 300 眼看就要撞上，抬到 600 留余量；行本身很小（不含正文），首屏代价可忽略。
+// 真到 600 还不够时，该做的是分页/按需加载，不是继续抬这个数——别让它悄悄吃掉供给。
+const MAX_ROWS = 600;
 
 const getCached = unstable_cache(
   async (_bucket: number): Promise<AnnouncementPosting[]> => {
