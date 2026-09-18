@@ -304,3 +304,61 @@ class StripNulTest(unittest.TestCase):
         self.assertEqual(offenders, [], f"这些字段仍带 NUL，会把整源写库炸掉: {offenders}")
         self.assertEqual(row["company"], "来伊份")
         self.assertEqual(row["title"], "门店运营专员")
+
+
+class TaiwanRejectionTests(unittest.TestCase):
+    """台湾岗必须在 validate_job_quality 这一步就被拦下，不许写进 jobs 表。
+
+    2026-09-18 实测：香港库 48 行 active + country_code='TW' 全部来自两类根因——
+    ① workday 的 trusted 分支整批跳过 per-job 复核（HP/3M/NXP/NVIDIA/Abbott/Cisco/
+       Medtronic/Alcon/HPE/Sanofi/JLL）；② 纯本土 CN adapter（feishu/hotjob/wt/
+       beisen/xiaomi_feishu）压根不调用 location_in_source_regions（小米/TCL/用友网络/
+       科大讯飞/安克创新/芯海科技/欢乐互娱）。两类都绕不开 validate_job_quality——
+       它是 run.py 对每个 raw job 唯一的、adapter 无关的必经关卡。
+    """
+
+    def _job(self, location, jd_url="https://example.com/job/123"):
+        return RawJob(company="测试公司", title="工程师", location=location, jd_url=jd_url)
+
+    def test_rejects_real_leaked_locations(self):
+        # 全部取自 2026-09-18 香港库 active 岗的真实 location 写法（改前会被判 job_scope=overseas
+        # 并放行入库；改后必须在 validate_job_quality 这一步就被拦下）。
+        for location in (
+            "Taipei, Taipei, City, Taiwan, Region",
+            "台北市",
+            "TW, Taipei, City, Taipei",
+            "Hsinchu",
+            "Taiwan, Hsinchu",
+            "Taiwan, Taipei",
+            "台湾省",
+            "Taiwan, , , Taipei",
+            "Taiwan, , Taichung, , CVL, Group, Headquarters, Bldg",
+            "Taipei, Taiwan",
+            "Taichung, Taichung, Taiwan",
+            "Taipei, Taipei, Taiwan",
+            "Taipei, Taiwan, China",
+        ):
+            with self.subTest(location=location):
+                ok, reason = normalizer.validate_job_quality(self._job(location), "https://example.com/jobs")
+                self.assertFalse(ok, f"{location} 应被拒收")
+                self.assertIn("taiwan", reason)
+
+    def test_multi_location_with_taiwan_is_rejected_too(self):
+        # 「泰国,越南,台北市」这类一岗多地写法：derive_country_code 与 is_rejected_location
+        # 共享同一套优先级（TW 排在 _COUNTRY_TOKENS 靠前、"台北"是子串匹配），会先判成 TW
+        # 整条拒收，即使该岗可能主要在泰国/越南——这是跟随既有 derive_country_code 顺序的
+        # 既定取舍，不是本次改动新引入的规则（见 crawler/geo.py is_rejected_location 注释）。
+        ok, reason = normalizer.validate_job_quality(self._job("泰国,越南,台北市"), "https://example.com/jobs")
+        self.assertFalse(ok)
+        self.assertIn("taiwan", reason)
+
+    def test_does_not_reject_non_taiwan_locations(self):
+        # 双向核验的另一半：非台湾地点一个都不许被这条新规则误杀。
+        for location in (
+            "北京", "上海市", "深圳", "香港", "澳门", "New York, NY", "Singapore",
+            "Tokyo, Japan", "Seoul, South Korea", "邢台南和区", "常州新北区", "福州连江县",
+            "北海市", "Beijing, China", "青岛市、日本、潍坊市", "远程",
+        ):
+            with self.subTest(location=location):
+                ok, reason = normalizer.validate_job_quality(self._job(location), "https://example.com/jobs")
+                self.assertTrue(ok, f"{location} 被误杀: {reason}")

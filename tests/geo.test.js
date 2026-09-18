@@ -9,6 +9,7 @@ const {
   deriveCountryCode,
   deriveJobScope,
   isOverseasUnspecified,
+  isRejectedLocation,
   locationInScope,
   normalizeRegions,
 } = geo;
@@ -327,4 +328,35 @@ test("geo 词表与 crawler/geo.py 逐条一致", () => {
   ]) {
     assert.deepEqual(geo[name], pick(name), `${name} 与 crawler/geo.py 不一致`);
   }
+});
+
+// isRejectedLocation：「要不要放行」的唯一硬判据，与 deriveJobScope（放行后怎么归类）是两个
+// 问题。2026-09-18 香港库实测：48 行 active + country_code='TW' 全部因两类 adapter 根因绕开
+// 或压根没走 locationInScope 复核而漏进库——见 crawler/geo.py 同名函数注释与实测台账。
+test("isRejectedLocation: 台湾地点一律拒收", () => {
+  for (const location of [
+    "Taipei, Taipei, City, Taiwan, Region", "台北市", "TW, Taipei, City, Taipei",
+    "Hsinchu", "Taiwan, Hsinchu", "Taiwan, Taipei", "台湾省",
+    "Taiwan, , , Taipei", "Taipei, Taiwan", "Taichung, Taichung, Taiwan",
+    "Taipei, Taipei, Taiwan", "Taipei, Taiwan, China", "新北市", "高雄市", "金门县",
+  ]) {
+    assert.equal(isRejectedLocation(location), true, location);
+  }
+});
+
+test("isRejectedLocation: 非台湾地点一个都不许被误杀", () => {
+  for (const location of [
+    "北京", "上海市", "深圳", "香港", "澳门", "New York, NY", "Singapore",
+    "Tokyo, Japan", "东京都", "Seoul, South Korea", "首尔市",
+    "邢台南和区", "常州新北区", "福州连江县", "北海市", "Beijing, China",
+    "青岛市、日本、潍坊市", "远程", "Remote", "", null, undefined,
+    "长沙市,铜仁市,钦州市,印度尼西亚,贵阳市,韩国",
+  ]) {
+    assert.equal(isRejectedLocation(location), false, String(location));
+  }
+});
+
+test("isRejectedLocation: 一岗多地写法跟随 deriveCountryCode 既有优先级", () => {
+  assert.equal(deriveCountryCode("泰国,越南,台北市"), "TW");
+  assert.equal(isRejectedLocation("泰国,越南,台北市"), true);
 });
