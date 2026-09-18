@@ -239,7 +239,10 @@ class WtAdapter(PlaywrightAdapter):
         func_type = _first(post, ("postType", "postTypeName"))
         rt_label = self._RT_CATEGORY_LABEL.get(rt)
         # 职能类别 + 招聘类型词并存：sourceDeclaredCategory 只是子串匹配，两段拼一起互不干扰；
-        # 职能类别继续喂给 classifyJobFunction，招聘类型词喂给 recruitmentCategory 的层3。
+        # 职能类别继续喂给 classifyJobFunction，招聘类型词喂给 recruitmentCategory（「校园招聘」走层3；
+        # 「实习」走层2b —— 它是租户级的频道声明，排在层2 经验门**之后**：2026-09-18 live 实锤中伟新材料 /
+        # 浙江华友钴业把 rt=12（门户上就叫「实习生招聘」）当蓝领社招频道用，电工 3 年 / 钳工 3-5 年 /
+        # 仓管员「仓储经验 3 年以上」全被标成实习。标签照贴，让分类器拿岗位自己写的年限压过它）。
         job_type = " ".join(p for p in (func_type, rt_label) if p) or None
         return RawJob(
             company=self.company_name or "",

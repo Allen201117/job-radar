@@ -318,7 +318,32 @@ test("撤回的三个词不许复活（裸电商 / 裸教育 / scientist）", ()
   assert.equal(classifyJobFunction({ title: "AI产品经理-抖音电商" }), "产品");
   assert.equal(classifyJobFunction({ title: "中级客户经理-教育" }), "销售");
   assert.equal(classifyJobFunction({ title: "Principal Scientist, Clinical Pharmacology" }), "医疗健康");
-  assert.equal(classifyJobFunction({ title: "药理实验员" }), "医疗健康");
+});
+
+// 2026-09-18：「实验员」是角色词，领域前缀不许把它拆进不同桶。09-17 那版 `(?<!药理|药物|…)实验员` 把全库
+// 118 个 active「实验员」岗拆成 生产制造 95 / 医疗健康 12 / 其他 11（康缘药业同一场南京校招里
+// 「药物筛选实验员」判医疗健康、「中药功效物质实验员」判生产制造），方向填「实验员」的用户被职能门拒掉
+// 标题字面就是实验员的岗。与 化验员 / 检验员 / QC 同口径：角色词赢。
+test("实验员按角色词归生产制造，不被药理/生物等领域前缀拆桶", () => {
+  for (const title of [
+    "实验员",
+    "药理实验员",
+    "药物筛选实验员--功效物质筛选",
+    "中药功效物质实验员",
+    "中药组分及药物发现实验员",
+    "分子生物实验员(J17543)",
+    "动物实验员（启东）",
+    "医学检验实验员(J18356)",
+    "DEL小分子高通量筛选实验员（生物、蛋白方向）(J25167)",
+    "原料药QC实验员(J10825)",
+  ]) {
+    assert.equal(classifyJobFunction({ title }), "生产制造", title);
+  }
+  // 只有角色词是「实验员」时才归生产制造；领域词自己的角色仍归医疗健康。
+  assert.equal(classifyJobFunction({ title: "药理研究员" }), "医疗健康");
+  assert.equal(classifyJobFunction({ title: "临床监察员" }), "医疗健康");
+  // 用户侧（只喂角色词）与岗位侧（完整标题）必须落同一个桶——这正是职能门两边对称的前提。
+  assert.equal(classifyJobFunction({ title: "实验员" }), classifyJobFunction({ title: "药理实验员" }));
 });
 
 test("新增词不许抢走已有的正确判定（反方向）", () => {
