@@ -13,7 +13,7 @@ const { loadTs } = require("./_load-ts");
 // 说明）。这次两端都只是「读同一个 JSON」，理论上不会漂，但门禁本身也要覆盖「有没有真的在读
 // 同一份数据」——如果哪端不小心复制了一份内嵌拷贝，这个测试会先坏给你看。
 //
-// 全量对拍（433 条 mapping key 全跑），不抽样——按项目「验证要扫全集」的规矩。
+// 全量对拍（mapping 全部 key 全跑，v1 433 条 / v2 450 条），不抽样——按项目「验证要扫全集」的规矩。
 // ============================================================
 
 const json = require("../lib/industry-taxonomy.json");
@@ -31,7 +31,7 @@ print(json.dumps([classify_industry(n) for n in names], ensure_ascii=False))
   return JSON.parse(out);
 }
 
-test("JS 与 Python 对全部 433 条 mapping key 给出逐条一致的 industry_group", () => {
+test("JS 与 Python 对全部 mapping key 给出逐条一致的 industry_group", () => {
   const rawKeys = Object.keys(json.mapping);
   assert.ok(rawKeys.length > 400, "mapping 条目数不应显著少于普查得到的 433 条");
   const pyResults = classifyViaPython(rawKeys);
