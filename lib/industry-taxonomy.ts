@@ -1,7 +1,7 @@
 // sources.industry 自由写法 → sources.industry_group 归一表。
 //
 // 唯一数据源是 industry-taxonomy.json（爬虫侧 crawler/industry_taxonomy.py 读同一份文件），
-// 两端一致性由 tests/industry-taxonomy-cross-lang.test.js 全量对拍守住（433 条全跑，不抽样）。
+// 两端一致性由 tests/industry-taxonomy-cross-lang.test.js 全量对拍守住（mapping 全部 key 全跑，不抽样）。
 // ⚠️ 改映射只改那个 JSON，不要在这里另写一份规则/表——两端各写一份迟早会漂
 // （company-industry.js / company_industry.py 就是前车之鉴）。
 //
