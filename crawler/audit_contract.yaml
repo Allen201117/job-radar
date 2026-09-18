@@ -291,11 +291,27 @@ checks:
         and created_at >= (date_trunc('day', now() at time zone 'Asia/Shanghai') - interval '1 day') at time zone 'Asia/Shanghai'
         and created_at <  date_trunc('day', now() at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai'
     normal: ">= 0"
-    severity: warn
+    severity: info    # 纯记录、攒历史，30 天后再定阈值——真正的告警在下面 exp.job_clicks_7d
     covers: []
     calibrated: false
     why: 这是产品真正想要发生的动作——用户觉得岗位靠谱、点出去看详情。持续为 0 说明推荐没打动人，或者页面本身有问题打不开。
     action: 去看走查报告里方向命中率是不是在降，或者页面是不是有报错
+
+  - id: exp.job_clicks_7d
+    name: 近 7 天点击「去官网投递」总次数
+    layer: experience
+    db: supabase
+    owner: components/JobCard.tsx
+    sql: >
+      select count(*) from events
+      where event in ('job_click', 'opportunity_official_opened')
+        and created_at >= now() - interval '7 days'
+    normal: ">= 20"        # 实测量级约 262/7天，阈值先保守拍（待校准）
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 连续一周几乎没人点出去看官网，说明用户进来了但没找到想投的岗——这是产品核心闭环断掉的最直接信号，比昨天单日的数字更抗噪。
+    action: 去看走查报告里方向命中率是不是在降，或者推荐页是不是没岗可看
 
   - id: exp.saved_yesterday
     name: 昨日收藏（值得投）次数
@@ -354,15 +370,32 @@ checks:
     db: supabase
     owner: lib/track.ts
     sql: >
-      select count(*) filter (where payload->>'latency_bucket' in ('slow', 'very_slow'))::float
+      select count(*) filter (where payload->>'latency_bucket' in ('3000_9999ms', 'gte_10000ms'))::float
              / nullif(count(*), 0)
       from events
       where event = 'search_result' and created_at >= now() - interval '7 days'
-    normal: "<= 0.20"
+    normal: "<= 0.20"      # 实测 19/70 = 27.1%，当前不达标，如实报，别为了绿灯放宽
     severity: warn
     covers: []
     calibrated: false
     why: 用户点一下要等半天，体感就是「这产品很卡」，即便后端指标看着还行。
+    action: 查最近有没有改动让候选取数变重，或者是不是命中了没走索引的查询
+
+  - id: exp.search_very_slow_rate_7d
+    name: 近 7 天搜索「等了超过 10 秒」的比例
+    layer: experience
+    db: supabase
+    owner: lib/track.ts
+    sql: >
+      select count(*) filter (where payload->>'latency_bucket' = 'gte_10000ms')::float
+             / nullif(count(*), 0)
+      from events
+      where event = 'search_result' and created_at >= now() - interval '7 days'
+    normal: "<= 0.08"      # 实测 10/70 = 14.3%，当前不达标，如实报，别为了绿灯放宽
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 10 秒是用户会直接放弃、转头关掉页面的量级，比「超过 3 秒」更接近「这个人已经流失了」。
     action: 查最近有没有改动让候选取数变重，或者是不是命中了没走索引的查询
 
   - id: exp.ux_walkthrough_zero_shown
@@ -482,8 +515,23 @@ checks:
     why: 一次假绿可能只是当天抖动，连续 7 天都这样基本可以确定这个来源已经坏了很久，只是没人发现。
     action: 逐个来源核实入口是否还有效，无效就 disable（保留行，别删）
 
-  - id: exp.dead_click_unknown_rate
-    name: 点击时探活「查不出来」的比例（该指标当前不可用，仅留痕观察）
+  - id: exp.dead_click_signal_freshness_30d
+    name: 「点开是死岗」这个埋点最近 30 天有没有再上报过
+    layer: experience
+    db: supabase
+    owner: app/api/jobs/[jobId]/liveness/route.ts
+    sql: >
+      select count(*) from events
+      where event = 'job_liveness_at_click' and created_at >= now() - interval '30 days'
+    normal: ">= 1"
+    severity: info    # 这个指标已知不可用，标 breach 也不该染灯，只留痕
+    covers: []
+    calibrated: false
+    why: 实测这个埋点最后一次上报是 2026-09-04（全表只有 29 行：unknown 23 / alive 6 / dead 0），此后再没上报过。所以「点开是死岗」这项指标目前完全不可用——不是「死链变多了」，是这条埋点本身停了。
+    action: 查 app/api/jobs/[jobId]/liveness/route.ts 的调用点最近有没有被下线或改了事件名
+
+  - id: exp.dead_click_unknown_rate_alltime
+    name: 点击时探活「查不出来」的比例（全量，非 7 天窗口；该指标当前不可用，仅留痕观察）
     layer: experience
     db: supabase
     owner: app/api/jobs/[jobId]/liveness/route.ts
@@ -491,10 +539,10 @@ checks:
       select count(*) filter (where payload->>'result' = 'unknown')::float
              / nullif(count(*), 0)
       from events
-      where event = 'job_liveness_at_click' and created_at >= now() - interval '7 days'
+      where event = 'job_liveness_at_click'
     normal: "<= 1.01"
-    severity: info
+    severity: info    # 已知不可用（见 exp.dead_click_signal_freshness_30d），不该染灯
     covers: []
     calibrated: false
-    why: 本来想用它衡量「点开是死岗」的比例，但实测 79% 都是 unknown（探不出结果），这个指标现在测不出真实死链率，只能先留着看 unknown 占比本身有没有变化。上限故意设成 1.01，不让它触发告警——它还不到能报警的程度。
+    why: 本来想用它衡量「点开是死岗」的比例，但实测全表 79%（23/29）都是 unknown（探不出结果）、且这条埋点 9 月 4 日后再没上报过——这个指标现在测不出真实死链率。改成全量窗口是因为 7 天窗口里这条埋点常年是空的，天天报「没查到」没有意义。上限故意设成 1.01，不让它触发告警——它还不到能报警的程度。
     action: 不要据此下结论；死链治理仍以 job-radar-clickable-job-criterion 的 last_seen_at 口径为准

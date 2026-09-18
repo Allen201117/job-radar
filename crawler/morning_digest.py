@@ -51,11 +51,12 @@ WALKTHROUGH_ISSUE_LABELS = {
 # 各段用到的固定检查项分组（人话分节，不是按 layer/db 机械分节）。
 SECTION_USERS = ["exp.dau_yesterday", "exp.wau_7d", "exp.registered_total", "exp.new_users_yesterday"]
 SECTION_EXPERIENCE = [
-    "exp.job_clicks_yesterday", "exp.saved_yesterday", "exp.applied_yesterday",
-    "exp.search_zero_result_rate_7d", "exp.search_slow_rate_7d",
+    "exp.job_clicks_yesterday", "exp.job_clicks_7d", "exp.saved_yesterday", "exp.applied_yesterday",
+    "exp.search_zero_result_rate_7d", "exp.search_slow_rate_7d", "exp.search_very_slow_rate_7d",
     "exp.ux_walkthrough_zero_shown", "exp.ux_walkthrough_issue_count",
     "exp.ux_walkthrough_direction_ok_avg", "exp.ux_walkthrough_insight_coverage_avg",
-    "exp.ux_walkthrough_campus_healthy_ratio_avg", "exp.dead_click_unknown_rate",
+    "exp.ux_walkthrough_campus_healthy_ratio_avg",
+    "exp.dead_click_signal_freshness_30d", "exp.dead_click_unknown_rate_alltime",
 ]
 SECTION_SUPPLY = ["jobs.active_total", "jobs.valid_active_total", "jobs.new_yesterday", "jobs.closed_yesterday"]
 SECTION_FAKE_GREEN = ["exp.fake_green_sources_yesterday", "exp.fake_green_sources_chronic"]
@@ -118,7 +119,12 @@ def format_delta(check_id, today_value, yesterday_value):
 # ---------------------------------------------------------------------------
 
 def compute_traffic_light(results_by_id):
-    """🔴 = 有 critical breach/error；🟡 = 有 warn breach 或有「没查到」；🟢 = 全 ok。"""
+    """🔴 = 有 critical breach/error；🟡 = 有 warn/critical breach 或 warn/critical 的「没查到」；🟢 = 全 ok。
+
+    severity=info 的 breach/error 绝不染灯——那批检查本来就是「已知不可用/纯记录留痕」
+    （如死链探活埋点已停、新增用户数只是记数），天天染黄会让邮件的灯色失去信号价值。
+    它们仍会照实出现在正文和⑧段数据完整性声明里，只是不影响主题行的灯色。
+    """
     has_critical_bad = any(
         r["severity"] == "critical" and r["verdict"] in ("breach", "error")
         for r in results_by_id.values()
@@ -126,7 +132,7 @@ def compute_traffic_light(results_by_id):
     if has_critical_bad:
         return "🔴"
     has_warn_bad_or_error = any(
-        r["verdict"] == "error" or (r["verdict"] == "breach" and r["severity"] == "warn")
+        r["severity"] == "warn" and r["verdict"] in ("breach", "error")
         for r in results_by_id.values()
     )
     if has_warn_bad_or_error:

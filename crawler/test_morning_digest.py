@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -6,6 +7,63 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(__file__))
 
 import morning_digest as md  # noqa: E402
+import audit_runner as ar  # noqa: E402
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SOURCE_DIRS = ("app", "lib", "components", "scripts")  # scripts/ 覆盖 ux_walkthrough 这类跑批脚本产生的字面量
+
+# 从体验层 SQL 里能抠出字面量的四种写法：event = '…' / event in ('…','…')、
+# payload->>'latency_bucket' = '…' / in (...)、payload->>'result' = '…'、
+# job_actions.action = '…'、ops_runs.module = '…'。
+_EVENT_RE = re.compile(r"\bevent\s*(?:=|in)\s*\(?\s*'([^']+)'(?:\s*,\s*'([^']+)')*\)?", re.I)
+_BUCKET_RE = re.compile(r"latency_bucket'\s*(?:=|in)\s*\(?\s*'([^']+)'(?:\s*,\s*'([^']+)')*\)?", re.I)
+_RESULT_RE = re.compile(r"'result'\s*=\s*'([^']+)'")
+_ACTION_RE = re.compile(r"\baction\s*=\s*'([^']+)'")
+_MODULE_RE = re.compile(r"\bmodule\s*=\s*'([^']+)'")
+
+
+def extract_literals(sql):
+    """从一条体验层 SQL 里抠出所有「跟埋点/枚举取值有关」的字面量，返回 set((kind, value))。"""
+    out = set()
+    for m in _EVENT_RE.finditer(sql):
+        for g in m.groups():
+            if g:
+                out.add(("event", g))
+    for m in _BUCKET_RE.finditer(sql):
+        for g in m.groups():
+            if g:
+                out.add(("latency_bucket", g))
+    for m in _RESULT_RE.finditer(sql):
+        out.add(("result", m.group(1)))
+    for m in _ACTION_RE.finditer(sql):
+        out.add(("action", m.group(1)))
+    for m in _MODULE_RE.finditer(sql):
+        out.add(("module", m.group(1)))
+    return out
+
+
+def literal_appears_in_source(value):
+    """在 app/ lib/ components/ 里按字面量（单引号或双引号包裹）grep，找到任一处即算有来源。"""
+    needles = (f"'{value}'", f'"{value}"')
+    for base in SOURCE_DIRS:
+        base_path = os.path.join(REPO_ROOT, base)
+        if not os.path.isdir(base_path):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(base_path):
+            if "node_modules" in dirpath or "/.next" in dirpath:
+                continue
+            for fn in filenames:
+                if not fn.endswith((".ts", ".tsx", ".js", ".jsx")):
+                    continue
+                path = os.path.join(dirpath, fn)
+                try:
+                    with open(path, encoding="utf-8", errors="ignore") as fh:
+                        text = fh.read()
+                except OSError:
+                    continue
+                if any(n in text for n in needles):
+                    return path
+    return None
 
 
 def check(cid, name="名字", why="原因", action="处理办法", severity="warn", calibrated=False):
@@ -81,6 +139,22 @@ class TrafficLightTests(unittest.TestCase):
             "b": result("b", 1, "breach", severity="warn"),
         }
         self.assertEqual(md.compute_traffic_light(results), "🟡")
+
+    def test_info_severity_breach_does_not_turn_yellow(self):
+        """已知不可用/纯记录的检查（如死链探活埋点已停）breach 也不该染灯，否则邮件永远黄。"""
+        results = {"a": result("a", 0, "breach", severity="info")}
+        self.assertEqual(md.compute_traffic_light(results), "🟢")
+
+    def test_info_severity_error_does_not_turn_yellow(self):
+        results = {"a": result("a", None, "error", severity="info")}
+        self.assertEqual(md.compute_traffic_light(results), "🟢")
+
+    def test_info_severity_breach_mixed_with_ok_others_stays_green(self):
+        results = {
+            "a": result("a", 1, "ok", severity="warn"),
+            "b": result("b", 0, "breach", severity="info"),
+        }
+        self.assertEqual(md.compute_traffic_light(results), "🟢")
 
 
 class SectionRowsTests(unittest.TestCase):
@@ -275,6 +349,51 @@ class SendResendTests(unittest.TestCase):
         out = buf.getvalue()
         self.assertIn("未发送：缺 RESEND_API_KEY", out)
         self.assertIn("未发送：缺 DIGEST_TO", out)
+
+
+class LiteralProvenanceTests(unittest.TestCase):
+    """结构性防线：体验层 SQL 里每个 event 名 / latency_bucket 取值 / result 取值 / action 取值 /
+    ops_runs.module 都必须能在真实产品代码（app/ lib/ components/）里 grep 到，不许猜。
+    抠不出字面量的 SQL（如纯 count(*) 不带任何字面量）不受这条测试约束。
+    """
+
+    def test_every_experience_layer_literal_traces_to_source(self):
+        checks = ar.load_contract()
+        experience_checks = [c for c in checks if c["layer"] == "experience"]
+        self.assertGreater(len(experience_checks), 0, "体验层检查项不该是空的")
+
+        missing = []
+        found_map = {}
+        for c in experience_checks:
+            for kind, value in extract_literals(c["sql"]):
+                path = literal_appears_in_source(value)
+                if path is None:
+                    missing.append((c["id"], kind, value))
+                else:
+                    found_map[(kind, value)] = os.path.relpath(path, REPO_ROOT)
+
+        if missing:
+            detail = "\n".join(f"  {cid} 用了 {kind}={value!r}，仓库源码里找不到" for cid, kind, value in missing)
+            self.fail(f"以下字面量在 app/lib/components 里 grep 不到，可能是猜的：\n{detail}")
+
+        # 至少要覆盖到我们已知这一批体验层用到的核心字面量，防止未来重写 extract_literals 时
+        # 悄悄把提取逻辑改坏、测试永远通过却什么都没抠出来（假绿）。
+        must_have_kinds = {"event", "latency_bucket", "result", "action", "module"}
+        seen_kinds = {kind for kind, _value in found_map}
+        self.assertTrue(
+            must_have_kinds.issubset(seen_kinds),
+            f"提取逻辑抠出的种类不全，可能自己先坏了：抠到 {seen_kinds}，应至少含 {must_have_kinds}",
+        )
+
+    def test_extract_literals_handles_multi_value_in_clause(self):
+        sql = "select 1 from events where event in ('a', 'b') and payload->>'latency_bucket' = 'x'"
+        out = extract_literals(sql)
+        self.assertIn(("event", "a"), out)
+        self.assertIn(("event", "b"), out)
+        self.assertIn(("latency_bucket", "x"), out)
+
+    def test_literal_not_in_source_is_reported_missing(self):
+        self.assertIsNone(literal_appears_in_source("definitely_not_a_real_literal_zzz"))
 
 
 if __name__ == "__main__":
