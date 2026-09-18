@@ -212,3 +212,699 @@ checks:
     calibrated: false
     why: 两个方向都有事：太少 = 死岗清理停了，用户会点到越来越多已关闭的岗位；太多 = 可能误判，把在招岗位当死岗永久删掉（这个动作不可恢复）。
     action: 太少查逐岗核验和清理任务；太多立刻看是哪家公司、哪种来源被成批判死
+
+  # ===== 链路层 =====
+  # 每条对应一个「带 schedule cron 的定时 workflow」，回答的问题只有一个：
+  # 「它在该出现的窗口里留下运行记录了吗」——不是「它跑对了没」（那是上面数据层的事）。
+  # 窗口按各 workflow 自己的 cron 周期定（日更看昨天全天 Asia/Shanghai，每周任务看 8 天），
+  # 全部在 2026-09-19 用真实生产 Supabase 库跑过 `select count(*) ...` 核对过数字。
+  # module→workflow 的映射逐条读过对应 .py/.js 里的 `ops_runs.record_ops_run(...)` 调用点
+  # 确认过，不是猜的；owner 指向真正写这个模块的 workflow 文件。
+
+  - id: pipeline.daily_crawl_ran
+    name: 主抓取车道昨天有没有跑出结果
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/daily-crawl.yml
+    sql: >
+      select count(*) from ops_runs where module = 'daily_crawl'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 36（一天 4 轮 × 多片，远高于 1）
+    severity: critical
+    calibrated: false
+    why: 这是全站岗位供给的主车道，每天固定跑几轮。一天一次记录都没有，说明抓取彻底停了。
+    action: 看这条车道最近一次 GitHub Actions 运行是失败还是根本没触发
+
+  - id: pipeline.enrich_backlog_httpx_ran
+    name: 逐岗补正文（网页直连档）昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/enrich-backlog.yml
+    sql: >
+      select count(*) from ops_runs where module = 'enrich_backlog'
+        and coalesce(metrics->>'adapter', '') <> 'moka'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 125（每 3 小时一轮）
+    severity: critical
+    calibrated: false
+    why: 这条任务负责给新岗位补上职位描述正文，停了会导致越来越多岗位是空卡。
+    action: 看这条任务最近几次运行有没有真的补进正文，而不是看它是不是绿的
+
+  - id: pipeline.enrich_backlog_browser_ran
+    name: 逐岗补正文（需要浏览器渲染的档）昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/enrich-backlog-browser.yml
+    sql: >
+      select count(*) from ops_runs where module = 'enrich_backlog'
+        and metrics->>'adapter' = 'moka'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 6
+    severity: critical
+    calibrated: false
+    why: 这批公司的职位描述藏在需要真实渲染网页才能看到的地方，停了这批岗位会一直是空卡。
+    action: 看这条任务最近几次运行有没有真的补进正文
+    # 注：与「网页直连档」共用同一个模块名 enrich_backlog，靠 metrics 里的 adapter 字段区分，
+    # 已在 2026-09-19 用真实数据验证两条查询各自非空、互不重叠。
+
+  - id: pipeline.dead_link_audit_ran
+    name: 死链核验（浏览器巡检）昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/dead-link-audit.yml
+    sql: >
+      select count(*) from ops_runs where module = 'dead_link_audit'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 14
+    severity: critical
+    calibrated: false
+    why: 这是清掉已下架岗位的主力之一。停了用户会越来越多地点到「该职位已下线」。
+    action: 看最近几次运行核验了多少个岗位，而不是看它是不是绿的
+    # 注：.github/workflows/dead-link-audit-new.yml（高频小批新岗核验）写的也是这同一个
+    # ops_runs 模块名，两条 workflow 之间没有任何字段能区分谁写了哪一行（见下方豁免）；
+    # 这条检查因此是两条 workflow 合起来「死链核验这件事今天有没有发生」的信号。
+
+  - id: pipeline.liveness_sweep_ran
+    name: 在招岗位逐个探活昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/liveness-sweep.yml
+    sql: >
+      select count(*) from ops_runs where module = 'liveness_sweep'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 115（一天 3 轮 × 多片）
+    severity: critical
+    calibrated: false
+    why: 历史上这条任务曾因查询超时长期空转，逐岗探活的比例涨到近九成才被发现。它是清掉死岗的另一条主力。
+    action: 看最近几次运行核验了多少个岗位
+    covers: []
+
+  - id: pipeline.purge_expired_ran
+    name: 清理已确认关闭岗位的任务昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/purge-expired.yml
+    sql: >
+      select count(*) from ops_runs where module = 'purge_expired'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1
+    severity: critical
+    calibrated: false
+    why: 这条任务负责真正删除已确认关闭的岗位。它停了不会马上出问题，但清理的岗位会越堆越多，且下面的「昨天关闭并清掉的岗位数」那条检查会失真。
+    action: 看这条任务最近一次运行有没有失败
+
+  - id: pipeline.campus_cycle_backlog_ran
+    name: 校招周期性补富化昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/campus-cycle-enrich.yml
+    sql: >
+      select count(*) from ops_runs where module = 'campus_cycle_backlog'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1
+    severity: critical
+    calibrated: false
+    why: 校招专区岗位的一部分补齐工作靠这条任务，停了校招页面的信息会逐渐过期。
+    action: 看这条任务最近一次运行是否失败
+
+  - id: pipeline.campus_official_pages_ran
+    name: 校招官方页面补录昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/campus-official-pages.yml
+    sql: >
+      select count(*) from ops_runs where module = 'campus_official_backlog'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1
+    severity: critical
+    calibrated: false
+    why: 校招覆盖率依赖这条任务持续把必投公司的官方校招页接进来。
+    action: 看这条任务最近一次运行处理了多少家公司
+
+  - id: pipeline.gap_funnel_ran
+    name: 必投缺口补源漏斗昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/gap-funnel.yml
+    sql: >
+      select count(*) from ops_runs where module = 'gap_funnel'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 3
+    severity: warn
+    calibrated: false
+    why: 这条任务负责把必投清单里还没有稳定官网入口的公司找出来接上，停了必投覆盖率会停在原地。
+    action: 看这条任务最近一次运行处理了多少家公司
+
+  - id: pipeline.harvest_beisen_routes_ran
+    name: 北森详情页路由探测昨天有没有留下记录
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/harvest-beisen-routes.yml
+    sql: >
+      select count(*) from ops_runs where module = 'harvest_beisen_routes'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 3)
+    normal: ">= 1"
+    severity: warn
+    calibrated: false
+    why: 这条任务负责把北森渠道的详情页路由探测出来，供其它逐岗核验的任务复用；停了会导致这批公司的详情页链接判断不准。
+    action: 看这条任务最近一次运行是否失败
+
+  - id: pipeline.announcement_harvest_ran
+    name: 官方招聘公告抓取昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/announcement-crawl.yml
+    sql: >
+      select count(*) from ops_runs where module = 'announcement_harvest'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 4
+    severity: warn
+    calibrated: false
+    why: 公告制招聘板块的供给全靠这条任务每天抓一遍，停了公告会逐渐过期没人补新的。
+    action: 看这条任务最近一次运行抓到了多少条新公告
+
+  - id: pipeline.auto_discover_ran
+    name: 新源自动发现（网页直连档）昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/auto-discover.yml
+    sql: >
+      select count(*) from ops_runs where module = 'auto_discover'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1
+    severity: warn
+    calibrated: false
+    why: 这条任务负责每天给目标公司清单补新的抓取源，停了源池就不再扩大。
+    action: 看这条任务最近一次运行新增了多少个源
+
+  - id: pipeline.auto_discover_browser_ran
+    name: 新源自动发现（需要浏览器的档）昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/auto-discover-browser.yml
+    sql: >
+      select count(*) from ops_runs where module = 'auto_discover_browser'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1
+    severity: warn
+    calibrated: false
+    why: 同上一条，只是这批目标公司（北森/Moka 等）必须用浏览器才能探测到。
+    action: 看这条任务最近一次运行新增了多少个源
+
+  - id: pipeline.auto_discover_overseas_ran
+    name: 新源自动发现（海外档）昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/auto-discover-overseas.yml
+    sql: >
+      select count(*) from ops_runs where module = 'auto_discover_overseas'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1
+    severity: warn
+    calibrated: false
+    why: 海外岗位供给的新源发现全靠这条任务，停了海外源池不再扩大。
+    action: 看这条任务最近一次运行新增了多少个源
+
+  - id: pipeline.campus_board_probe_ran
+    name: 校招板块批量补源昨天有没有留下记录
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/campus-board-probe.yml
+    sql: >
+      select count(*) from ops_runs where module = 'campus_board_probe'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 3)
+    normal: ">= 1"
+    severity: warn
+    calibrated: false
+    why: 这条任务批量给必投清单里的公司补校招板块源，停了校招覆盖率会停在原地。
+    action: 看这条任务最近一次运行处理了多少个候选、通过了多少个
+
+  - id: pipeline.company_logos_ran
+    name: 企业 logo 抓取（每周）最近有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/company-logos.yml
+    sql: >
+      select count(*) from ops_runs where module = 'company_logos'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 8)
+    normal: ">= 1"
+    severity: warn
+    calibrated: false
+    why: 这条任务每周给公司补 logo 图片，停了只会让新公司的卡片一直没有图，不影响岗位供给本身。
+    action: 看这条任务最近一次运行是否失败
+
+  - id: pipeline.ats_tenant_sync_ran
+    name: ATS 租户名单同步（每周）最近有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/ats-tenant-sync.yml
+    sql: >
+      select count(*) from ops_runs where module = 'ats_tenant_sync'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 8)
+    normal: ">= 1"
+    severity: warn
+    calibrated: false
+    why: 这条任务每周同步各招聘系统平台的新租户名单，停了新公司接入会变慢，不影响存量公司的抓取。
+    action: 看这条任务最近一次运行是否失败
+
+  - id: pipeline.audit_hotjob_attribution_ran
+    name: hotjob 租户归属核对（每周）最近有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/audit-hotjob-attribution.yml
+    sql: >
+      select count(*) from ops_runs where module = 'audit_hotjob_attribution'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 8)
+    normal: ">= 1"
+    severity: warn
+    calibrated: false
+    why: 这条任务每周核对 hotjob 渠道的租户名字有没有配错公司，停了张冠李戴的风险会累积没人发现。
+    action: 看这条任务最近一次运行是否失败
+
+  - id: pipeline.backfill_job_function_ran
+    name: 岗位职能分类补算昨天有没有真的跑起来
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/backfill-job-function.yml
+    sql: >
+      select count(*) from ops_runs where module = 'backfill_job_function'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 6"                # 理论每 2 小时一轮 + 每天一次全量 ≈ 13 次/天，下限取约一半
+    severity: warn
+    calibrated: false
+    why: >
+      这条任务把岗位归到「产品/研发/销售…」这类职能分类，停了新岗位会一直卡在待分类。
+      2026-09-19 才刚给它接上运行台账（此前一直没有台账，只能靠 jobs.function_pending
+      间接盯着「有没有堆积」），实测值目前是 0——正常，接线刚上线还没等到第一轮触发；
+      如果过几天还是 0 才是真的问题。
+    action: 看这条任务最近一次运行是否失败；也可以直接看 jobs.function_pending 有没有堆高
+
+  - id: pipeline.backfill_recruitment_category_ran
+    name: 校招/社招分类补算昨天有没有真的跑起来
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/backfill-recruitment-category.yml
+    sql: >
+      select count(*) from ops_runs where module = 'backfill_recruitment_category'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 6"                # 理论每 2 小时一轮 + 每天一次全量 ≈ 13 次/天，下限取约一半
+    severity: warn
+    calibrated: false
+    why: >
+      这条任务判断岗位是校招还是社招，停了新岗位会一直卡在待判定、在校招专区里看不到。
+      2026-09-19 才刚给它接上运行台账（此前一直没有台账，只能靠 jobs.recruitment_type_pending
+      间接盯着「有没有堆积」），实测值目前是 0——正常，接线刚上线还没等到第一轮触发；
+      如果过几天还是 0 才是真的问题。
+    action: 看这条任务最近一次运行是否失败；也可以直接看 jobs.recruitment_type_pending 有没有堆高
+
+  - id: pipeline.campus_lane_ran
+    name: 校招高频车道（校招季内）昨天有没有真的抓过
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/campus-crawl.yml
+    sql: >
+      select case
+        when extract(month from (now() at time zone 'Asia/Shanghai')) not in (3, 4, 9, 10, 11)
+          then 1
+        else (select count(*) from ops_runs where module = 'campus_lane'
+                and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1))
+      end
+    normal: ">= 1"                # 实测 7（当前 9 月，校招季内）
+    severity: critical
+    calibrated: false
+    why: >
+      这是校招岗位「开闸即抢」的高频车道，每小时刷一遍必投清单里的校招源，秋招/春招季
+      停了会导致新放出来的校招岗位最坏要等到第二天才被主车道抓到。校招季（3、4、9、10、
+      11 月，与「必投公司校招渠道没接」那条告警用的是同一组月份）之外这条车道设计上就
+      不该跑，SQL 里按月份条件化，非校招季恒返回 1，不会被误判成故障。
+    action: 看这条车道最近一次是不是被 gate job 拦住了，或者真的没触发
+
+  - id: pipeline.db_report_ran
+    name: 数据库真实数字体检报告昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/db-report.yml
+    sql: >
+      select count(*) from ops_runs where module = 'db_report'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1
+    severity: warn
+    calibrated: false
+    why: 这是其它很多判断依赖的只读体检报告，它自己不产出岗位，但停了会让人拿着过期数字做判断。
+    action: 看这条任务最近一次运行是否失败
+
+  - id: pipeline.insight_backlog_t2_ran
+    name: 职业洞察（官方事实层）昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/insight-enrich.yml
+    sql: >
+      select count(*) from ops_runs where module = 'insight_backlog'
+        and metrics->>'mode' = 'official_facts'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1
+    severity: warn
+    calibrated: false
+    why: 洞察库里「官方事实」这一层的更新全靠这条任务，停了公司资料会逐渐过期。
+    action: 看这条任务最近一次运行处理了多少家公司
+
+  - id: pipeline.insight_backlog_t3_ran
+    name: 职业洞察（多源搜索经验层）昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/insight-enrich-t3.yml
+    sql: >
+      select count(*) from ops_runs where module = 'insight_backlog'
+        and metrics->>'mode' = 'experience'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1
+    severity: warn
+    calibrated: false
+    why: 洞察库里「员工真实经验」这一层靠这条任务每天联网核实一批公司，停了会长期停在当前规模。
+    action: 看这条任务最近一次运行处理了多少家公司；也可能是搜索额度或账户欠费导致跳过
+
+  - id: pipeline.insight_grade_extract_ran
+    name: 职业洞察维度分档昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/insight-grade.yml
+    sql: >
+      select count(*) from ops_runs where module = 'insight_grade_extract'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1
+    severity: warn
+    calibrated: false
+    why: 洞察条目要经这条任务判出档位才能在筛选器里被筛到，停了新条目会一直卡在「未分档」。
+    action: 看这条任务最近一次运行判出了多少条
+
+  - id: pipeline.insight_staleness_sweep_ran
+    name: 过期洞察清理昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/insight-staleness-sweep.yml
+    sql: >
+      select count(*) from ops_runs where module = 'insight_staleness'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1
+    severity: warn
+    calibrated: false
+    why: 这条任务把过期的洞察下架，停了用户会看到越来越多不新鲜的结论。retired=0 是正常的（当天没有该下架的），但一行记录都没有就是任务停了。
+    action: 看这条任务最近一次运行是否失败
+
+  - id: pipeline.insight_subjects_ran
+    name: 洞察主体抽取（公司 × 业务线）昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/insight-subjects.yml
+    sql: >
+      select count(*) from ops_runs where module = 'bu_extract'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1
+    severity: warn
+    calibrated: false
+    why: 洞察库按业务线拆分的能力全靠这条任务，历史上曾经写完代码却没有任何 workflow 调用它，整整空转。
+    action: 看这条任务最近一次运行处理了多少家公司
+
+  - id: pipeline.insight_annual_report_ran
+    name: 公司年报摘要抽取昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/insight-annual-report.yml
+    sql: >
+      select count(*) from ops_runs where module = 'annual_report'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1
+    severity: warn
+    calibrated: false
+    why: 这条任务给洞察库补公司年报里的官方事实，停了这部分内容不再更新。
+    action: 看这条任务最近一次运行是否失败
+
+  - id: pipeline.search_quota_probe_ran
+    name: 搜索额度探活（每周）最近有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/search-quota-probe.yml
+    sql: >
+      select count(*) from ops_runs where module = 'search_quota_probe'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 8)
+    normal: ">= 1"                # 实测 1
+    severity: info
+    calibrated: false
+    why: 这条任务只是提醒搜索额度是否快用完，本身不产出岗位或洞察，停了只会让人晚一点发现快超额。
+    action: 看这条任务最近一次运行是否失败
+
+  - id: pipeline.production_smoke_ran
+    name: 生产环境冒烟测试昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/production-smoke.yml
+    sql: >
+      select count(*) from ops_runs where module = 'production_smoke'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1
+    severity: warn
+    calibrated: false
+    why: 这是确认线上网站首页和公开接口还能打开的冒烟测试。历史上它一度停跑 47 天没人发现。
+    action: 看这条任务最近一次运行是否失败
+
+  - id: pipeline.ops_watchdog_ran
+    name: 后台任务告警器自己昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/ops-watchdog.yml
+    sql: >
+      select count(*) from ops_runs where module = 'ops_watchdog'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1（仅 --apply 模式才写这条台账）
+    severity: warn
+    calibrated: false
+    why: 这个告警器本身如果停了，它盯着的所有后台任务就都失去了兜底的报警出口。
+    action: 看这条任务最近一次运行是否失败
+
+  - id: pipeline.ux_walkthrough_ran
+    name: 用户体验走查昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/ux-walkthrough.yml
+    sql: >
+      select count(*) from ops_runs where module = 'ux_walkthrough'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 1
+    severity: warn
+    calibrated: false
+    why: 这条任务拿真实用户画像模拟推荐效果，是唯一能发现「某类用户推荐页空着」这种问题的手段。
+    action: 看这条任务最近一次运行走查了多少个用户画像
+
+  - id: pipeline.structural_audit_ran
+    name: 本结构性审计自己昨天有没有跑
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/structural-audit.yml
+    sql: >
+      select count(*) from audit_results
+        where run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"                # 实测 13（当天已有别的 session 跑过）
+    severity: warn
+    calibrated: false
+    why: 这条检查测的是本审计系统自己——它如果停了，上面几十条检查全部不会再更新，且不会有任何人知道。
+    action: 看这条任务最近一次 GitHub Actions 运行是否失败
+
+  # ===== 老告警桥接（source: watchdog） =====
+  # 这 16 条不是本文件自己跑 SQL 量出来的——它们的判定逻辑一直在 crawler/ops_watchdog.py 里跑
+  # （规则 A~P，每天真评估、命中就开 GitHub Issue），本次只是把「今天这条规则命中了几条」接进
+  # audit_results 这张趋势表，好让它们也能被晨报、能画历史曲线，不用再翻 Issue 列表。
+  # 判定逻辑、阈值、evidence 文案一律不改；这里只补一层人话包装 + 桥接。
+  # value = 这条规则本轮命中的 finding 数；normal 统一 "== 0"（命中即代表这类问题真实发生了）；
+  # 规则本轮取数失败（比如取不到某张表）会落 verdict=error、value=NULL，不会被当成 0。
+
+  - id: watchdog.rule_a
+    name: 后台任务连续多天什么都没干出来
+    layer: pipeline
+    owner: crawler/ops_watchdog.py
+    rule: A
+    source: watchdog
+    normal: "== 0"
+    severity: critical
+    calibrated: false
+    why: 某个后台任务连续多天「有活可干却什么都没产出」，或者当天全部运行都失败了。空队列产出为 0 是正常的，只有「有活干却零产出」才算异常。
+    action: 看是哪个模块命中，查它最近几次运行的日志
+
+  - id: watchdog.rule_b
+    name: 任务运行到一半被系统强制中断
+    layer: pipeline
+    owner: crawler/ops_watchdog.py
+    rule: B
+    source: watchdog
+    normal: "== 0"
+    severity: critical
+    calibrated: false
+    why: 按更细的执行步骤级状态判断（不是看整体任务状态，那样会漏），发现任务被系统强制杀掉，或者反复被取消。
+    action: 看是哪个任务命中，把它的执行时长控制在系统允许的时限之内，或者拆小
+
+  - id: watchdog.rule_c
+    name: 派出去的活儿没人回写结果
+    layer: pipeline
+    owner: crawler/ops_watchdog.py
+    rule: C
+    source: watchdog
+    normal: "== 0"
+    severity: warn
+    calibrated: false
+    why: 有任务被派发出去处理，但超过几个小时都没有收到处理完成的回执，怀疑是卡住了。
+    action: 看是哪条任务卡住，检查它有没有异常退出但没写回状态
+
+  - id: watchdog.rule_d
+    name: 账号或密钥出问题了
+    layer: pipeline
+    owner: crawler/ops_watchdog.py
+    rule: D
+    source: watchdog
+    normal: "== 0"
+    severity: critical
+    calibrated: false
+    why: 检测到账号欠费、密钥失效或者权限被拒绝这类问题——这种问题重试多少次都没用，必须去处理账号本身。
+    action: 去对应服务商后台确认账号余额和密钥状态
+
+  - id: watchdog.rule_e
+    name: 该定时跑的关键任务超期没跑
+    layer: pipeline
+    owner: crawler/ops_watchdog.py
+    rule: E
+    source: watchdog
+    normal: "== 0"
+    severity: warn
+    calibrated: false
+    why: 某个声明了固定节奏的任务，超过它自己节奏两倍的时间还没有运行记录，怀疑触发失效了。
+    action: 看是哪个任务命中，确认它的定时触发器还在不在
+
+  - id: watchdog.rule_f
+    name: 某个抓取来源持续全部失败
+    layer: data
+    owner: crawler/ops_watchdog.py
+    rule: F
+    source: watchdog
+    normal: "== 0"
+    severity: critical
+    calibrated: false
+    why: 一个启用中的抓取来源在最近这几轮里全部失败了（不是抓少了，是每次都彻底失败），这个来源已经名存实亡。
+    action: 看命中的来源，按错误信息判断是网址失效、被反爬、还是环境缺东西
+
+  - id: watchdog.rule_g
+    name: 有的来源报了产出，但真正抓回来的差很远
+    layer: data
+    owner: crawler/ops_watchdog.py
+    rule: G
+    source: watchdog
+    normal: "== 0"
+    severity: warn
+    calibrated: false
+    why: 某个来源自己说有 N 个岗位，但我们真正抓回来入库的远少于 N，说明抓取过程漏了很大一块，而且这种情况不会报错、看起来一切正常。
+    action: 看命中的来源，查是不是翻页没翻完或者被限流截断了
+
+  - id: watchdog.rule_h
+    name: 好几个来源其实指向同一个官网
+    layer: data
+    owner: crawler/ops_watchdog.py
+    rule: H
+    source: watchdog
+    normal: "== 0"
+    severity: warn
+    calibrated: false
+    why: 同一个招聘官网被错误地配置成了好几个不同的来源，会导致同一批岗位在页面上重复出现，而且这种情况两个来源各自看起来都很健康，不会报错。
+    action: 看命中的来源，合并或停用多余的那一个
+
+  - id: watchdog.rule_i
+    name: 抓取任务跑到一半就没有收尾
+    layer: pipeline
+    owner: crawler/ops_watchdog.py
+    rule: I
+    source: watchdog
+    normal: "== 0"
+    severity: critical
+    calibrated: false
+    why: 抓取记录显示任务已经开始，但很久都没有等到它说「跑完了」，很可能是进程被杀掉后没人清理这条记录。
+    action: 看命中的任务，确认对应的 GitHub Actions 运行是不是真的被中断了
+
+  - id: watchdog.rule_j
+    name: 投递入口该找人重新核实了
+    layer: pipeline
+    owner: crawler/ops_watchdog.py
+    rule: J
+    source: watchdog
+    normal: "== 0"
+    severity: warn
+    calibrated: false
+    why: 公告制招聘的投递入口链接有有效期，到了该重新人工确认它还准不准的时候了。
+    action: 打开命中的投递入口，确认链接还有效、内容还准确，然后更新核实时间
+
+  - id: watchdog.rule_k
+    name: 某类来源的产出突然大幅下降
+    layer: pipeline
+    owner: crawler/ops_watchdog.py
+    rule: K
+    source: watchdog
+    normal: "== 0"
+    severity: warn
+    calibrated: false
+    why: 某一类抓取方式（比如某个招聘系统平台）整体产出比平时大幅下降，但任务状态照样显示成功，靠这个信号才能发现。
+    action: 看命中的是哪一类来源，对比它平时和现在的产出差多少
+
+  - id: watchdog.rule_l
+    name: 某个来源本该每天被抓却断更了
+    layer: pipeline
+    owner: crawler/ops_watchdog.py
+    rule: L
+    source: watchdog
+    normal: "== 0"
+    severity: warn
+    calibrated: false
+    why: 一个本来每天都会被抓一遍的来源，突然连一次运行记录都没有了——不是抓失败，是这一轮根本没轮到它。
+    action: 看命中的来源，确认它是不是被排除在了本轮抓取范围之外
+
+  - id: watchdog.rule_m
+    name: 需要在创始人电脑上跑的公告抓取失联了
+    layer: pipeline
+    owner: crawler/ops_watchdog.py
+    rule: M
+    source: watchdog
+    normal: "== 0"
+    severity: warn
+    calibrated: false
+    why: 部分省份的官方公告只能从创始人自己电脑上的定时任务抓，超过约定时间没有收到它的运行记录。
+    action: 确认创始人电脑上的定时任务是不是还在正常运行
+
+  - id: watchdog.rule_n
+    name: 抓取任务结束时两次都没能把结果写下来
+    layer: pipeline
+    owner: crawler/ops_watchdog.py
+    rule: N
+    source: watchdog
+    normal: "== 0"
+    severity: critical
+    calibrated: false
+    why: 抓取进程本身跑完了，但连着两次想把「跑完了」这件事记下来都失败了，只留在会被截断的运行日志里，没人看得到。
+    action: 看命中的任务，查它写运行记录那一步为什么连续失败
+
+  - id: watchdog.rule_o
+    name: 必投公司的校招入口还没接上
+    layer: data
+    owner: crawler/ops_watchdog.py
+    rule: O
+    source: watchdog
+    normal: "== 0"
+    severity: warn
+    calibrated: false
+    why: 校招季里，必投清单上的公司却连一个校招岗位的入口都没有接上，用户按公司找是找不到的，而这个情况在别的统计口径里会被误判成「一切正常」。
+    action: 看命中的公司，按它用的招聘系统去接上对应的校招板块
+
+  - id: watchdog.rule_p
+    name: 职业洞察供给停摆了
+    layer: data
+    owner: crawler/ops_watchdog.py
+    rule: P
+    source: watchdog
+    normal: "== 0"
+    severity: warn
+    calibrated: false
+    why: 洞察库最近一周新增的有效条目太少——这条任务每天都在处理公司、数字从不为 0，光看「有没有在跑」看不出它其实几乎没有真产出。
+    action: 查最近几天洞察抓取的处理量和真正写入的条目数，看是不是卡在了某个环节

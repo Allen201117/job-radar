@@ -158,13 +158,29 @@ def _pipeline_owners(checks):
 # 允许中间换行（\s 本来就匹配换行），所以多行调用（本仓库大多数调用点都是多行）也能命中。
 # `(?<!def )` 排除 `def record_ops_run(...)` 这个函数定义本身（crawler/ops_runs.py 里
 # 定义处的形参列表长得跟调用一模一样，不排除会把「定义」误判成一次「调用」）。
+# `(?<!\w)` 排除 `_record_ops_run`（一个旁路包装函数的定义/调用，比如
+# crawler/sync_ats_tenants.py 的 `def _record_ops_run(status, metrics, started_at):`）——
+# 这个名字整段包含 "record_ops_run" 子串，前面只差一个下划线，不排除会把它的形参列表
+# 误当成一次真调用，第二个形参 `metrics` 被当成没有字面量绑定的「module 标识符」报进
+# unreadable（2026-09 实测：audit_coverage.py 输出里出现假阳性
+# `crawler/sync_ats_tenants.py:metrics`，而这个文件从没真的把 metrics 当 module 用）。
 _RECORD_CALL_RE = re.compile(
-    rf"(?<!def ){re.escape('record_ops_run')}\(\s*[\w.]+\s*,\s*(?:[\"']({_IDENT})[\"']|({_IDENT}))",
+    rf"(?<!\w)(?<!def ){re.escape('record_ops_run')}\(\s*[\w.]+\s*,\s*(?:[\"']({_IDENT})[\"']|({_IDENT}))",
 )
-# JS 侧：`.from("ops_runs").insert({ ... module: "xxx" ... })`。跨行、非贪婪地找到 insert 块
-# 里最先出现的 module 字面量即可——本仓库里每处 insert 只写一个 module。
+# JS 侧，两种写法都要认：
+#   ① `.from("ops_runs").insert({ ... module: "xxx" ... })`——跨行、非贪婪地找到 insert 块
+#      里最先出现的 module 字面量即可（本仓库里每处 insert 只写一个 module）。
+#   ② `recordOpsRun("xxx", metrics, status)`——scripts/lib/record-ops-run.js 封装的旁路台账
+#      helper，第一个位置参数就是 module（2026-09-19 补：backfill-job-function.js /
+#      backfill-recruitment-category.js 都走这条，此前只认①会把它们的 module 完全看漏，
+#      两条链一度被误判成「不写任何台账」）。同 Python 侧一样支持字符串字面量直写或
+#      变量间接绑定，`(?<!\w)(?<!function )` 排除 `function recordOpsRun(module, ...)`
+#      这个定义本身（定义处的形参列表长得跟调用一模一样）。
 _JS_OPS_RUNS_RE = re.compile(
     r"\.from\(\s*[\"']ops_runs[\"']\s*\)[\s\S]{0,400}?module\s*:\s*[\"'](" + _IDENT + r")[\"']",
+)
+_JS_RECORD_OPS_RUN_RE = re.compile(
+    rf"(?<!\w)(?<!function ){re.escape('recordOpsRun')}\(\s*(?:[\"']({_IDENT})[\"']|({_IDENT}))",
 )
 
 
@@ -221,9 +237,22 @@ def find_ops_run_modules(crawler_dir=CRAWLER_DIR, scripts_dir=None):
                 unreadable.append(f"{rel}:{ident}")
 
     for path in sorted(scripts_dir.rglob("*.js")):
+        if path.name.startswith("test_") or "/test/" in path.as_posix():
+            continue
         text = path.read_text(encoding="utf-8")
         for m in _JS_OPS_RUNS_RE.finditer(text):
             modules.add(m.group(1))
+        for m in _JS_RECORD_OPS_RUN_RE.finditer(text):
+            literal, ident = m.group(1), m.group(2)
+            if literal:
+                modules.add(literal)
+                continue
+            resolved = _resolve_identifier_literals(text, ident)
+            if resolved:
+                modules |= resolved
+            else:
+                rel = path.relative_to(display_root)
+                unreadable.append(f"{rel}:{ident}")
 
     return modules, unreadable
 

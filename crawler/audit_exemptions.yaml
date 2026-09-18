@@ -5,9 +5,9 @@
 # 四个分类名对应 audit_coverage.compute_gaps 的四个差集键；键是被豁免的具体名字
 # （workflow 路径 / module 名 / jobs 列名 / 指标键），值是理由。
 
-pipeline_workflows: {}
-  # 目前没有任何定时 workflow 被豁免——它们都应该有 layer=pipeline 的检查项覆盖，或者
-  # 等真正接入台账后再决定要不要豁免。空集合本身也是一条诚实的记录。
+pipeline_workflows:
+  .github/workflows/enrich-crawl.yml: "真缺口，不是不用管：crawler/run.py 写 ops_runs 时模块名恒为 daily_crawl，与 daily-crawl.yml 完全同名，metrics 里没有任何字段能区分『这轮是快档还是富化档』（2026-09-19 读代码确认）。已用 pipeline.daily_crawl_ran 覆盖『daily_crawl 这个模块今天有没有活动』，但这条 workflow 如果单独停了、只要 daily-crawl.yml 还在跑，这条检查会一直显示正常——那条检查掩盖不住这一条真的坏了。等两条车道的台账能各自打上区分字段再拆开接。"
+  .github/workflows/dead-link-audit-new.yml: "真缺口，不是不用管：audit_dead_links.py 写 ops_runs 时模块名恒为 dead_link_audit，与 dead-link-audit.yml 完全同名，没有字段能区分是全量轮转档还是高频新岗档（2026-09-19 读代码确认）。已用 pipeline.dead_link_audit_ran 覆盖『dead_link_audit 这个模块今天有没有活动』，但这条 workflow 单独停了、只要另一条还在跑，这条检查看不出来——同上一条一样，另一条会掩盖它。等台账能区分再拆开接。"
 
 pipeline_modules: {}
   # 同上：ops_runs 里出现的模块目前没有被豁免的，MODULE_OUTPUT/NO_OUTPUT_MODULES

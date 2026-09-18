@@ -150,11 +150,43 @@ class ContractTest(unittest.TestCase):
     def test_shipped_contract_is_valid_and_sql_is_read_only(self):
         checks = A.load_contract()
         self.assertGreaterEqual(len([c for c in checks if c["layer"] == "data"]), 10)
-        for c in checks:
+        for c in A.sql_checks(checks):
             low = " " + " ".join(c["sql"].lower().split()) + " "
             self.assertTrue(low.strip().startswith(("select", "with")), c["id"])
             for kw in (" insert ", " update ", " delete ", " truncate ", " drop ", " alter "):
                 self.assertNotIn(kw, low, c["id"])
+
+    def test_watchdog_source_checks_have_no_sql_and_are_excluded_from_sql_checks(self):
+        """source=watchdog 的检查项不该有 sql/db（那是 ops_watchdog.py 自己测量的），
+        且 audit_runner.sql_checks 必须把它们过滤掉，否则 main() 会拿它们去执行 SQL 而崩。"""
+        checks = A.load_contract()
+        watchdog_checks = [c for c in checks if c.get("source") == "watchdog"]
+        self.assertGreater(len(watchdog_checks), 0, "shipped contract 应该已经桥接了 watchdog 规则")
+        for c in watchdog_checks:
+            self.assertNotIn(c, A.sql_checks(checks))
+            self.assertIsInstance(c.get("rule"), str)
+            self.assertTrue(c["rule"].strip())
+
+    def test_validate_contract_accepts_watchdog_source_without_sql_or_db(self):
+        watchdog_check = {
+            "id": "watchdog.rule_z", "name": "人话名", "layer": "pipeline",
+            "owner": "crawler/ops_watchdog.py", "rule": "Z", "normal": "== 0",
+            "severity": "warn", "why": "为什么", "action": "怎么办", "source": "watchdog",
+        }
+        A.validate_contract([watchdog_check])  # 不该抛错——没有 sql/db 也合法
+
+    def test_validate_contract_rejects_watchdog_source_missing_rule(self):
+        watchdog_check = {
+            "id": "watchdog.rule_z", "name": "人话名", "layer": "pipeline",
+            "owner": "crawler/ops_watchdog.py", "normal": "== 0",
+            "severity": "warn", "why": "为什么", "action": "怎么办", "source": "watchdog",
+        }
+        with self.assertRaises(ValueError):
+            A.validate_contract([watchdog_check])
+
+    def test_validate_contract_rejects_unknown_source(self):
+        with self.assertRaises(ValueError):
+            A.validate_contract([check(source="csv")])
 
     def test_every_owner_points_at_a_real_file(self):
         """owner = 出事去哪查。指向不存在的文件等于没写（写这份清单时就猜错过一次）。"""
@@ -173,9 +205,10 @@ class RowShapeTest(unittest.TestCase):
     def test_result_row_has_every_ledger_column(self):
         res = A.run_check(check(calibrated=False), lambda db: FakeConn((0.2,)))
         for col in ("check_id", "run_date", "layer", "severity", "value", "normal",
-                    "verdict", "calibrated", "measured_at", "error_message", "duration_ms"):
+                    "verdict", "calibrated", "measured_at", "error_message", "duration_ms", "detail"):
             self.assertIn(col, res)
         self.assertFalse(res["calibrated"])
+        self.assertIsNone(res["detail"])  # SQL 类检查恒不写明细
 
     def test_exit_code_only_fails_when_ledger_write_fails(self):
         self.assertEqual(A.exit_code(written=True), 0)

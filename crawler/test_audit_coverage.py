@@ -328,6 +328,55 @@ ops_runs.record_ops_run(sb, module, {})
             self.assertNotIn("module", modules)
             self.assertEqual(unreadable, [])
 
+    def test_js_record_ops_run_helper_literal_module_is_found(self):
+        # 回归：backfill-job-function.js / backfill-recruitment-category.js 走
+        # scripts/lib/record-ops-run.js 的 recordOpsRun(module, metrics, status) 封装，
+        # 此前只认 `.from("ops_runs").insert({module:...})` 这一种写法，把它们看漏了，
+        # 一度被误判成「不写任何台账」。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_root(tmp)
+            _write(
+                root / "scripts" / "backfill-job-function.js",
+                'async function recordOpsRun(module, metrics, status = "success", opts = {}) {}\n'
+                'async function main() {\n'
+                '  await recordOpsRun(\n'
+                '    "backfill_job_function",\n'
+                '    { scanned: 1 },\n'
+                '    "success",\n'
+                '  );\n'
+                '}\n',
+            )
+            modules, unreadable = C.find_ops_run_modules(root / "crawler", root / "scripts")
+            self.assertIn("backfill_job_function", modules)
+            self.assertNotIn("module", modules)  # 定义处的形参不该被当成一次调用
+            self.assertEqual(unreadable, [])
+
+    def test_js_record_ops_run_helper_unresolvable_identifier_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_root(tmp)
+            _write(
+                root / "scripts" / "mystery.js",
+                'recordOpsRun(mysteryModule, { scanned: 1 });\n',
+            )
+            modules, unreadable = C.find_ops_run_modules(root / "crawler", root / "scripts")
+            self.assertNotIn("mysteryModule", modules)
+            self.assertTrue(any("mystery.js:mysteryModule" in u for u in unreadable))
+
+    def test_wrapper_function_named_underscore_record_ops_run_is_not_a_false_call(self):
+        # 回归：sync_ats_tenants.py 的 `def _record_ops_run(status, metrics, started_at):`
+        # 曾被误判成一次调用（第二个形参 "metrics" 被当成 module 标识符报进 unreadable）。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _make_root(tmp)
+            _write(
+                root / "crawler" / "sync_ats_tenants.py",
+                "def _record_ops_run(status, metrics, started_at):\n"
+                '    ops_runs.record_ops_run(sb, "ats_tenant_sync", metrics, status)\n',
+            )
+            modules, unreadable = C.find_ops_run_modules(root / "crawler", root / "scripts")
+            self.assertIn("ats_tenant_sync", modules)
+            self.assertNotIn("metrics", modules)
+            self.assertEqual(unreadable, [])
+
     def test_js_module_literal_is_found(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _make_root(tmp)
