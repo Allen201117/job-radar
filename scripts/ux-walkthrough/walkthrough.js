@@ -29,6 +29,108 @@ const SITE = process.env.UX_WALK_SITE || "https://www.myjobradar.top";
 const CAMPUS_STAGES = new Set(["校招", "实习", "campus", "intern", "internship", "应届"]);
 const TTFB_BAD_S = 8;      // 超过就算卡点
 const DIRECTION_BAD = 0.7; // 前 20 张里方向命中低于 70% 算卡点
+const ROLE_MISMATCH_RATIO_BAD = 0.5; // 候选里因方向不符被拦的占比超过它算卡点（待校准，2026-09-18 首次引入）
+
+// ⚠️ 有限枚举：每个 type 必须对应代码里真实存在的判定（不是发明的假设）。metrics.issues_by_type
+// 恒含全部键（含 0），"真的是 0" 与 "这轮没测到" 分得开——阈值/判定逻辑变了，先改这里的注释再改代码。
+const ISSUE_TYPES = {
+  zero_shown: { label: "推荐页零岗（非求职范围错配）" },
+  scope_mismatch: { label: "求职范围错配：选了海外但城市全国内又没有英文简历" },
+  direction_low: { label: "展示岗位方向命中率偏低" },
+  role_input_format: { label: "用户填的岗位方向写法没被识别（一栏里塞了多个岗位名）" },
+  role_mismatch_high: { label: "候选里因方向不符被拦掉的占比偏高" },
+  insight_uncovered: { label: "他会看到的公司里，一家有职业洞察的都没有" },
+  campus_channel_broken: { label: "校招/实习用户，所属行业必投公司的校招渠道全不通" },
+  api_latency: { label: "接口响应慢或失败" },
+};
+
+function mkIssue(type, user, detail, extra) {
+  const meta = ISSUE_TYPES[type];
+  if (!meta) throw new Error(`未登记的 issue type: ${type}`);
+  return { type, user, detail, text: `${user}：${detail}`, ...(extra || {}) };
+}
+
+// 用户手填岗位方向时常见的写法坑：一个 role 字符串里塞了多个岗位名，用中文/英文分隔符或
+// 空格隔开（如 "销售；采购"、"销售 管培 运营"）。分词/匹配逻辑本身不归这个脚本管，这里只做
+// 检测与归类，供后续统一算一次「有多少用户受影响」。
+const ROLE_SEPARATOR_RE = /[;；,，、\/]+|\s+/;
+
+function splitRoleTokens(role) {
+  return String(role || "")
+    .split(ROLE_SEPARATOR_RE)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function findMixedSeparatorRoles(roles) {
+  return (Array.isArray(roles) ? roles : []).filter((r) => splitRoleTokens(r).length > 1);
+}
+
+// 同一用户同一根因只计一次：所有 mixed 写法合并成一条 issue，而不是一个 role 一条。
+function buildUserIssues(r) {
+  const issues = [];
+  if (r.shown === 0 && r.scopeMismatch) {
+    issues.push(mkIssue("scope_mismatch", r.user,
+      `求职范围=${r.jobScope} 但目标城市全是国内且无英文简历 → 海外池 0 岗（roles=${JSON.stringify(r.roles)}）`,
+      { shown: r.shown, jobScope: r.jobScope }));
+  } else if (r.shown === 0) {
+    issues.push(mkIssue("zero_shown", r.user,
+      `推荐页 0 岗（召回 ${r.recalled}，被拦原因 ${JSON.stringify(r.filtered)}）roles=${JSON.stringify(r.roles)}`,
+      { shown: r.shown, recalled: r.recalled }));
+  }
+  if (r.directionOk !== null && r.directionOk < DIRECTION_BAD) {
+    issues.push(mkIssue("direction_low", r.user,
+      `方向命中 ${Math.round(r.directionOk * 100)}%（roles=${JSON.stringify(r.roles)}）`,
+      { directionOk: r.directionOk }));
+  }
+  const mixedRoles = findMixedSeparatorRoles(r.roles);
+  if (mixedRoles.length) {
+    issues.push(mkIssue("role_input_format", r.user,
+      `岗位方向填写里混了分隔符，未必被正确识别：${JSON.stringify(mixedRoles)}`,
+      { mixedRoles }));
+  }
+  const roleMismatchCount = (r.filtered && r.filtered.role_mismatch) || 0;
+  const denom = r.recalled || 0;
+  if (denom > 0 && roleMismatchCount / denom > ROLE_MISMATCH_RATIO_BAD) {
+    issues.push(mkIssue("role_mismatch_high", r.user,
+      `候选里 ${roleMismatchCount}/${denom}（${Math.round((roleMismatchCount / denom) * 100)}%）因方向不符被拦，占比偏高（roles=${JSON.stringify(r.roles)}）`,
+      { roleMismatchCount, recalled: denom, ratio: Number((roleMismatchCount / denom).toFixed(3)) }));
+  }
+  if (r.insightCompanies > 0 && r.insightCovered === 0) {
+    issues.push(mkIssue("insight_uncovered", r.user,
+      `前 20 张卡的 ${r.insightCompanies} 家公司都没有洞察`,
+      { insightCompanies: r.insightCompanies }));
+  }
+  if (r.campus && r.campus.healthy === 0) {
+    issues.push(mkIssue("campus_channel_broken", r.user,
+      `校招用户，${r.campus.industries.join("/")} 必投 ${r.campus.listed} 家校招渠道全不通`,
+      { listed: r.campus.listed }));
+  }
+  return issues;
+}
+
+function buildLatencyIssues(latency) {
+  const issues = [];
+  for (const [k, v] of Object.entries(latency || {})) {
+    if (v.seconds == null || v.http !== 200) {
+      issues.push(mkIssue("api_latency", k, `接口 ${k} 失败（http=${v.http}）`, { seconds: v.seconds, http: v.http }));
+    } else if (v.seconds > TTFB_BAD_S) {
+      issues.push(mkIssue("api_latency", k, `接口 ${k} TTFB ${v.seconds.toFixed(1)}s > ${TTFB_BAD_S}s`, { seconds: v.seconds }));
+    }
+  }
+  return issues;
+}
+
+// metrics.issues_by_type 恒含全部枚举键（0 也写）——"真的是 0" 与 "没测到" 分得开。
+function computeIssuesByType(issues) {
+  const out = {};
+  for (const type of Object.keys(ISSUE_TYPES)) out[type] = 0;
+  for (const issue of issues || []) {
+    if (!(issue.type in out)) out[issue.type] = 0;
+    out[issue.type] += 1;
+  }
+  return out;
+}
 
 // 与 lib/campus-user-industries.companiesForIndustries 同口径（那个模块带 server-only，脚本里内联一份）
 function companiesForIndustries(industries) {
@@ -140,17 +242,10 @@ async function main() {
 
   const ok = results.filter((r) => !r.error);
   const issues = [];
-  for (const r of ok) {
-    if (r.shown === 0 && r.scopeMismatch) issues.push(`${r.user}：求职范围=${r.jobScope} 但目标城市全是国内且无英文简历 → 海外池 0 岗（roles=${JSON.stringify(r.roles)}）`);
-    else if (r.shown === 0) issues.push(`${r.user}：推荐页 0 岗（召回 ${r.recalled}，被拦原因 ${JSON.stringify(r.filtered)}）roles=${JSON.stringify(r.roles)}`);
-    if (r.directionOk !== null && r.directionOk < DIRECTION_BAD) issues.push(`${r.user}：方向命中 ${Math.round(r.directionOk * 100)}%（roles=${JSON.stringify(r.roles)}）`);
-    if (r.insightCompanies > 0 && r.insightCovered === 0) issues.push(`${r.user}：前 20 张卡的 ${r.insightCompanies} 家公司都没有洞察`);
-    if (r.campus && r.campus.healthy === 0) issues.push(`${r.user}：校招用户，${r.campus.industries.join("/")} 必投 ${r.campus.listed} 家校招渠道全不通`);
-  }
-  for (const [k, v] of Object.entries(latency)) {
-    if (v.seconds == null || v.http !== 200) issues.push(`接口 ${k} 失败（http=${v.http}）`);
-    else if (v.seconds > TTFB_BAD_S) issues.push(`接口 ${k} TTFB ${v.seconds.toFixed(1)}s > ${TTFB_BAD_S}s`);
-  }
+  for (const r of ok) issues.push(...buildUserIssues(r));
+  issues.push(...buildLatencyIssues(latency));
+  const issuesByType = computeIssuesByType(issues);
+
   const campusUsers = ok.filter((r) => r.campus);
   const summary = {
     users: ok.length, errors: results.length - ok.length,
@@ -162,7 +257,7 @@ async function main() {
     campus_users: campusUsers.length,
     campus_zero_healthy: campusUsers.filter((r) => r.campus.healthy === 0).length,
     campus_healthy_ratio_avg: avg(campusUsers.map((r) => r.campus.healthy / Math.max(1, r.campus.listed))),
-    latency, issues: issues.length,
+    latency, issues: issues.length, issues_by_type: issuesByType,
   };
 
   console.log("\n用户 | 阶段 | 召回 | 展示 | 方向命中 | 洞察覆盖 | 校招通/必投 | TOP1");
@@ -171,8 +266,8 @@ async function main() {
     console.log(`${r.user} | ${r.stage || "-"} | ${r.recalled} | ${r.shown} | ${r.directionOk === null ? "-" : Math.round(r.directionOk * 100) + "%"} | ${r.insightCovered}/${r.insightCompanies} | ${r.campus ? r.campus.healthy + "/" + r.campus.listed : "-"} | ${r.top3[0] || "-"}`);
   }
   console.log("\n汇总:", JSON.stringify(summary, null, 1));
-  console.log("\n卡点（" + issues.length + "）:");
-  for (const i of issues) console.log("  - " + i);
+  console.log("\n卡点（" + issues.length + "，按类型 " + JSON.stringify(issuesByType) + "）:");
+  for (const i of issues) console.log("  - " + i.text);
   fs.writeFileSync(path.join(__dirname, "walkthrough-raw.json"), JSON.stringify({ started_at: startedAt, summary, results, issues }, null, 2));
 
   if (process.argv.includes("--record")) {
@@ -186,4 +281,11 @@ async function main() {
   }
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+module.exports = {
+  ISSUE_TYPES, mkIssue, splitRoleTokens, findMixedSeparatorRoles,
+  buildUserIssues, buildLatencyIssues, computeIssuesByType,
+};
+
+if (require.main === module) {
+  main().catch((e) => { console.error(e); process.exit(1); });
+}
