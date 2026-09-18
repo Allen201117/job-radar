@@ -325,7 +325,7 @@ class BuildDigestTests(unittest.TestCase):
     def test_last_digest_delivered(self):
         checks = self._checks()
         results_today = [result(cid, 1, "ok") for cid in [c["id"] for c in checks]]
-        last = {"status": "success", "finished_at": None, "metrics": {}}
+        last = {"status": "success", "finished_at": None, "metrics": {"mode": "sent"}}
         digest = md.build_digest(checks, results_today, [], None, [], last)
         self.assertIn("已送达", digest["text"])
 
@@ -333,7 +333,7 @@ class BuildDigestTests(unittest.TestCase):
         checks = self._checks()
         results_today = [result(cid, 1, "ok") for cid in [c["id"] for c in checks]]
         digest = md.build_digest(checks, results_today, [], None, [], None)
-        self.assertIn("没有台账记录", digest["text"])
+        self.assertIn("还没有真正发出过晨报，这是第一封", digest["text"])
 
     def test_old_issues_full_list_not_truncated(self):
         checks = self._checks()
@@ -346,6 +346,61 @@ class BuildDigestTests(unittest.TestCase):
         digest = md.build_digest(checks, results_today, [], None, issues, None)
         for i in range(1, 12):
             self.assertIn(f"#{i} ", digest["text"])
+
+
+def ops_row(mode, status="success", finished_at=None, error=None):
+    metrics = {"mode": mode}
+    if error:
+        metrics["error"] = error
+    return {"metrics": metrics, "status": status, "finished_at": finished_at}
+
+
+class PickLatestSentTests(unittest.TestCase):
+    """本次返工的真 bug 现场：dry-run 也会写一行 ops_runs 台账（status 甚至是 success），
+    「上一封是否送达」必须跳过 dry-run 行，往前找最近一条 mode=='sent' 的行。
+    """
+
+    def test_only_dry_run_rows_returns_none(self):
+        rows = [ops_row("dry_run"), ops_row("dry_run"), ops_row("dry_run")]
+        self.assertIsNone(md.pick_latest_sent(rows))
+
+    def test_dry_run_on_top_skips_to_earlier_sent_row(self):
+        """最新一条是 dry-run，再往前一条才是真发的——必须挑到那条真发的，不是 None、也不是 dry-run 行。"""
+        rows = [ops_row("dry_run"), ops_row("sent", status="success")]
+        picked = md.pick_latest_sent(rows)
+        self.assertIsNotNone(picked)
+        self.assertEqual(picked["metrics"]["mode"], "sent")
+
+    def test_most_recent_sent_row_is_failed(self):
+        rows = [ops_row("sent", status="failed", error="Resend 超时"), ops_row("sent", status="success")]
+        picked = md.pick_latest_sent(rows)
+        self.assertEqual(picked["status"], "failed")
+
+    def test_empty_rows_returns_none(self):
+        self.assertIsNone(md.pick_latest_sent([]))
+        self.assertIsNone(md.pick_latest_sent(None))
+
+
+class LastSentLineTests(unittest.TestCase):
+    def test_never_sent(self):
+        self.assertEqual(md._last_sent_line(None), "还没有真正发出过晨报，这是第一封。")
+
+    def test_sent_success(self):
+        finished = datetime(2026, 9, 18, 2, 0, tzinfo=timezone.utc)
+        line = md._last_sent_line({"status": "success", "finished_at": finished, "metrics": {"mode": "sent"}})
+        self.assertIn("已送达", line)
+        self.assertIn("9/18", line)
+
+    def test_sent_failed_shows_redacted_reason(self):
+        finished = datetime(2026, 9, 18, 2, 0, tzinfo=timezone.utc)
+        fake_dsn = "postgres" + "ql://user:pw@" + "10.0." + "0.9" + ":5432/db"
+        line = md._last_sent_line({
+            "status": "failed", "finished_at": finished,
+            "metrics": {"mode": "sent", "error": f"HTTPError: connect to {fake_dsn} failed"},
+        })
+        self.assertIn("发送失败", line)
+        self.assertNotIn("10.0.0.9", line)
+        self.assertNotIn("postgresql://", line)
 
 
 class CommentCountTests(unittest.TestCase):

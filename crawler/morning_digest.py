@@ -306,6 +306,46 @@ def fetch_latest_ops_run(conn, module):
         cur.close()
 
 
+def pick_latest_sent(rows):
+    """rows 是按 finished_at 降序排好的 ops_runs(module='morning_digest') 行（dict，
+    含 metrics/status/finished_at），从中挑出**最近一条真正发出去的**（metrics.mode == "sent"）。
+
+    这是本次返工修的真 bug：「上一封晨报是否送达」此前直接读最新一条 ops_runs，而
+    dry-run 也会写一行台账（status 甚至可以是 success）——于是天天跑 dry-run 就天天显示
+    「已送达」，一封真邮件都没发出去。dry-run 行必须被跳过，往前找最近一条真发的；
+    一条都没有就说明还没有真正发出过晨报。
+    """
+    for row in rows or []:
+        metrics = row.get("metrics") or {}
+        if metrics.get("mode") == "sent":
+            return row
+    return None
+
+
+def fetch_latest_sent_digest(conn, limit=30):
+    """拉最近 N 条晨报台账（按时间降序），交给 pick_latest_sent 挑出最近一条真发的。
+    不在 SQL 里直接过滤 mode='sent'，是为了让「跳过 dry-run 行往前找」这条逻辑能被
+    pick_latest_sent 单独单测覆盖，不必连真库才能验证。
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            select metrics, status, finished_at from public.ops_runs
+            where module = 'morning_digest'
+            order by finished_at desc limit %s
+            """,
+            (limit,),
+        )
+        rows = [
+            {"metrics": metrics or {}, "status": status, "finished_at": finished_at}
+            for metrics, status, finished_at in cur.fetchall()
+        ]
+        return pick_latest_sent(rows)
+    finally:
+        cur.close()
+
+
 def fetch_open_issues():
     """gh issue list；CI 里靠 GH_TOKEN env，本地没配就返回空列表（不当作失败）。
 
@@ -374,7 +414,35 @@ def build_subject(light, results_by_id, checks_by_id):
     return f"{light} 职达 {date_label} · 日活{dau_txt}人·{applied_txt}投递 · 在招{active_txt}"
 
 
-def _integrity_lines(all_checks, results_today_by_id, last_digest):
+def _format_last_sent_date(finished_at):
+    if finished_at is None:
+        return None
+    dt = finished_at
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.astimezone(SHANGHAI)
+    return f"{dt.month}/{dt.day}"
+
+
+def _last_sent_line(last_sent_digest):
+    """last_sent_digest 必须已经是「只认 mode=='sent' 那一行」的结果（见 fetch_latest_sent_digest），
+    不能直接拿最新一条 ops_runs——否则 dry-run 写的台账会被读成「送达」，这是本次返工的真 bug。
+    三种文案，二选一都不许编：没有任何真发行 / 最近一次真发成功 / 最近一次真发失败。
+    """
+    if not last_sent_digest:
+        return "还没有真正发出过晨报，这是第一封。"
+    date_label = _format_last_sent_date(last_sent_digest.get("finished_at"))
+    date_part = f"（{date_label}）" if date_label else ""
+    status = last_sent_digest.get("status")
+    if status == "success":
+        return f"上一封晨报{date_part}已送达。"
+    reason = (last_sent_digest.get("metrics") or {}).get("error") or "原因未知"
+    if _audit_runner is not None:
+        reason = _audit_runner._redact(reason)  # noqa: SLF001 - 错误信息可能带连接串/host，必须脱敏
+    return f"上一封晨报{date_part}发送失败：{reason}"
+
+
+def _integrity_lines(all_checks, results_today_by_id, last_sent_digest):
     total = len(all_checks)
     error_ids = [cid for cid, r in results_today_by_id.items() if r["verdict"] == "error"]
     calibrated_false_names = [c["name"] for c in all_checks if not c.get("calibrated", True)]
@@ -384,17 +452,12 @@ def _integrity_lines(all_checks, results_today_by_id, last_digest):
         lines.append("没查到的是：" + "、".join(names.get(cid, cid) for cid in error_ids))
     if calibrated_false_names:
         lines.append(f"有 {len(calibrated_false_names)} 项阈值还是拍的、没有历史数据校准过，标了「待校准」的都是。")
-    if last_digest:
-        status = last_digest.get("status")
-        sent_ok = isinstance(status, str) and status == "success"
-        lines.append("上一封晨报" + ("已送达。" if sent_ok else f"状态是「{status}」，可能没送达，留意一下有没有收到重复提醒。"))
-    else:
-        lines.append("上一封晨报没有台账记录（可能是第一次发，或者查询失败）。")
+    lines.append(_last_sent_line(last_sent_digest))
     lines.extend(FIXED_DISCLAIMERS)
     return lines
 
 
-def build_digest(checks, results_today, results_yesterday, walkthrough_run, open_issues, last_digest):
+def build_digest(checks, results_today, results_yesterday, walkthrough_run, open_issues, last_sent_digest):
     checks_by_id = {c["id"]: c for c in checks}
     names = {c["id"]: c["name"] for c in checks}
     results_today_by_id = index_results(results_today)
@@ -430,7 +493,7 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
     open_issue_count = len(open_issues)
     subject = subject + f" · 待清账{open_issue_count}项"
 
-    integrity_lines = _integrity_lines(checks, results_today_by_id, last_digest)
+    integrity_lines = _integrity_lines(checks, results_today_by_id, last_sent_digest)
 
     text_lines = [subject, ""]
     text_lines.append("① 用户")
@@ -608,10 +671,10 @@ def main(argv=None):
     results_today = fetch_audit_results(conn, today.isoformat())
     results_yesterday = fetch_audit_results(conn, yesterday.isoformat())
     walkthrough_run = fetch_latest_ops_run(conn, "ux_walkthrough")
-    last_digest = fetch_latest_ops_run(conn, "morning_digest")
+    last_sent_digest = fetch_latest_sent_digest(conn)
     open_issues = fetch_open_issues()
 
-    digest = build_digest(checks, results_today, results_yesterday, walkthrough_run, open_issues, last_digest)
+    digest = build_digest(checks, results_today, results_yesterday, walkthrough_run, open_issues, last_sent_digest)
 
     api_key = os.environ.get("RESEND_API_KEY")
     to_addr = os.environ.get("DIGEST_TO")
@@ -636,15 +699,20 @@ def main(argv=None):
             import supabase as _supabase_pkg  # noqa: F401
             from supabase import create_client
             sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
+            # mode 是权威字段——「上一封晨报是否送达」（fetch_latest_sent_digest）只认
+            # mode == "sent" 的行，dry-run 写的行 mode 必须是 "dry_run"，绝不能被误读成送达。
+            metrics = {
+                "mode": "dry_run" if dry_run else "sent",
+                "sent": not dry_run,
+                "dry_run": dry_run,
+                "resend_status": send_result.get("status"),
+                "resend_id": send_result.get("id"),
+                "light": digest["light"],
+            }
+            if not dry_run and not send_result.get("ok") and send_result.get("error"):
+                metrics["error"] = _audit_runner._redact(str(send_result["error"]))  # noqa: SLF001
             _ops_runs.record_ops_run(
-                sb, "morning_digest",
-                {
-                    "sent": not dry_run,
-                    "dry_run": dry_run,
-                    "resend_status": send_result.get("status"),
-                    "resend_id": send_result.get("id"),
-                    "light": digest["light"],
-                },
+                sb, "morning_digest", metrics,
                 status=run_status,
                 started_at=started,
                 finished_at=datetime.now(timezone.utc),
