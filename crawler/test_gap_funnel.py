@@ -858,7 +858,11 @@ class RoundCapTest(unittest.TestCase):
         # dry-run 契约：**台账要写**（它是我们自己的簿记，不写就等于这轮搜索白烧、下轮重搜），
         # 但 sources / jobs 一个字都不许动。
         written_tables = {name for name, _action, _payload in sb.writes}
-        self.assertEqual(written_tables, {"must_apply_gap_attempts"})
+        # dry-run 允许写的只有**我们自己的簿记**：台账 + LLM 额度计数（slug 车道问过一次变体，
+        # 计数不落盘就等于日顶形同虚设）。业务表 sources / jobs / crawl_runs 一个字都不许动。
+        self.assertTrue(written_tables <= {"must_apply_gap_attempts", "llm_usage"},
+                        f"dry-run 写了不该写的表: {written_tables}")
+        self.assertIn("must_apply_gap_attempts", written_tables)
         attempt = [p for name, action, p in sb.writes
                    if name == "must_apply_gap_attempts" and action == "upsert"][0]
         self.assertEqual(attempt["state"], "platform_known",
@@ -926,7 +930,9 @@ class RoundCapTest(unittest.TestCase):
         self.assertEqual(result["state"], "platform_known")
         self.assertEqual(
             probed[0]["url"],
-            "https://www.iguopin.com/job?company=%E7%94%B2%E5%85%AC%E5%8F%B8",
+            # match= 不能省：没有它且查不到集团时 adapter 放行一切（张冠李戴红线）
+            "https://www.iguopin.com/job?company=%E7%94%B2%E5%85%AC%E5%8F%B8"
+            "&match=%E7%94%B2%E5%85%AC%E5%8F%B8",
         )
 
     def test_candidate_identity_retry_uses_second_routable_candidate(self):
