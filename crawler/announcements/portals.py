@@ -39,7 +39,8 @@ class Portal:
 # ⚠️ 每省 detail URL 格式不同，detail_pat 必须逐省配，别假设统一格式。
 # ⚠️ 归属门只放行 domains 里的官方政府域名或获授权的下属官方机构域名；host + detail_pat + 标题 INCLUDE/EXCLUDE 三重过滤。
 # ⚠️ 综合栏目（四川/河南/广西）混着非招聘内容，靠 classify 的标题过滤兜底（同 CLAUDE.md「后置过滤」）。
-# 暂缺：河北（整站 Vue SPA，需浏览器道或找 AJAX 接口，下一期）。
+# 暂缺 4 个省级行政区（2026-09-18 逐条数过，此前这里只写了「暂缺河北」，是错的）：
+#   河北（整站 Vue SPA，无匿名可取数据）、海南、贵州、云南。加省前先读本文件顶部的 Portal 字段说明。
 # 已接的非静态形态（均无需浏览器）：江西 script_json（内嵌 <script>var listData JSON）、
 #   浙江 json_fragment（非公开 GET 接口返 data.html 片段）、黑龙江 json_api（结构化 GET JSON）、江苏 html+CDATA 解包、天津 html。
 def _p(rx: str) -> re.Pattern:
