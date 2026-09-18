@@ -27,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 import campus_board_probe as P
 import db
 import jobs_db
+import ops_runs
 from campus_board_probe_run import upsert_attempt
 from run import run_crawl
 
@@ -146,17 +147,38 @@ def verify_one(supabase, conn, candidate, all_sources):
 
 
 def main():
+    started_at = datetime.now(timezone.utc)
     ap = argparse.ArgumentParser(description="校招板块候选源验收门")
     ap.add_argument("--limit", type=int, default=12,
                     help="本轮验收几个候选（moka 是浏览器源 2-5min/个，别开太大撞 CI 超时）；"
                          "0 = 不限，但 90min job 超时下**不建议**用")
     args = ap.parse_args()
 
+    try:
+        supabase = db.get_supabase()
+    except Exception as e:
+        sys.stderr.write(f"[campus-verify] 无法获取 Supabase client，台账写不了: {type(e).__name__}\n")
+        raise
+
+    try:
+        return _run(supabase, args, started_at)
+    except Exception as e:
+        # 中途任何未捕获异常都要留痕，再原样抛出保持原退出码（同 campus_board_probe_run 的补法）。
+        ops_runs.record_ops_run(
+            supabase, "campus_board_verify", {"crash": type(e).__name__}, "failed", started_at=started_at,
+        )
+        raise
+
+
+def _run(supabase, args, started_at):
+    def _record(status, metrics):
+        ops_runs.record_ops_run(supabase, "campus_board_verify", metrics, status, started_at=started_at)
+
     if not jobs_db.enabled():
         _log("❌ 未配置 JOBS_DATABASE_URL，无法回读香港库做验收 → 拒绝空转")
+        _record("failed", {"error": "JOBS_DATABASE_URL 未配置"})
         return 1
 
-    supabase = db.get_supabase()
     all_sources = db.fetch_all_rows(lambda: supabase.table("sources").select("*"))
 
     # ⚠️ 待验收名单只认台账 state='source_added'，**不能**靠「disabled 的 campus URL 源」去猜：
@@ -169,6 +191,7 @@ def main():
         awaiting = {(r["company"], r["adapter_name"]) for r in (resp.data or [])}
     except Exception as e:
         _log(f"❌ 台账读取失败，无法确定待验收名单：{type(e).__name__}: {e}")
+        _record("failed", {"error": f"{type(e).__name__}: {e}"})
         return 1
     pending = [s for s in all_sources
                if not s.get("enabled")
@@ -178,6 +201,7 @@ def main():
         pending = pending[:args.limit]
     if not pending:
         _log("没有待验收的候选源。")
+        _record("success", {"pending": 0, "enabled": 0})
         return 0
 
     _log(f"待验收 {len(pending)} 个候选源")
@@ -195,6 +219,9 @@ def main():
         except Exception:
             pass
     _log(f"验收完成：{results}")
+    enabled = results.get("enabled", 0)
+    _record(ops_runs.status_from_counts(len(pending), len(pending) - enabled),
+            {"pending": len(pending), "enabled": enabled, **results})
     return 0
 
 

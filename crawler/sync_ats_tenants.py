@@ -110,23 +110,46 @@ def sync_tenant_snapshots(*, apply=False, data_dir=DATA_DIR, fetcher=download_te
     return pending
 
 
+def _record_ops_run(status, metrics, started_at):
+    """旁路台账：Supabase 不可用/写入失败只打日志，绝不影响本脚本的退出码。"""
+    try:
+        from db import get_supabase  # noqa: E402  延迟导入：单测不需要 Supabase 环境
+        import ops_runs
+        ops_runs.record_ops_run(get_supabase(), "ats_tenant_sync", metrics, status, started_at=started_at)
+    except Exception as exc:  # noqa: BLE001
+        print("[ats_tenant_sync] ops_runs 台账写入失败（不影响主流程）: %s" % exc, file=sys.stderr)
+
+
 def main(argv=None):
+    from datetime import datetime, timezone
+    started_at = datetime.now(timezone.utc)
     parser = argparse.ArgumentParser(description="同步上游 ATS 租户 CSV 快照")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--dry-run", action="store_true", help="仅下载、校验和打印摘要（默认）")
+    mode.add_argument("--dry-run", action="store_true", help="仅下载、校验和预览（默认）")
     mode.add_argument("--apply", action="store_true", help="校验通过后覆盖本地快照")
     args = parser.parse_args(argv)
     try:
         rows = sync_tenant_snapshots(apply=args.apply)
     except SyncValidationError as exc:
         print("[ats_tenant_sync] %s" % exc, file=sys.stderr)
+        _record_ops_run("failed", {"error": str(exc)[:200]}, started_at)
         return 1
+    except Exception as exc:  # noqa: BLE001
+        # 校验之外的未捕获异常（网络库炸了、解析崩了…）此前一行台账都不写——跟本次要治的
+        # 「静默」问题一模一样。补写 crash + 原样重新抛出，退出码不变。
+        _record_ops_run("failed", {"crash": type(exc).__name__}, started_at)
+        raise
     for row in rows:
         verb = "已同步" if row["applied"] else "dry-run"
         print(
             "[ats_tenant_sync] %s：%d → %d，新增租户 %d（%s）"
             % (row["filename"], row["old_rows"], row["new_rows"], row["new_tenants"], verb)
         )
+    _record_ops_run(
+        "success",
+        {"files": len(rows), "new_tenants": sum(row["new_tenants"] for row in rows), "applied": bool(args.apply)},
+        started_at,
+    )
     return 0
 
 

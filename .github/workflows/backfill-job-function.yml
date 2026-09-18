@@ -42,13 +42,16 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-      # 只装脚本真正用到的那一个包，不跑 npm ci（仓库 lock 与 package.json 暂不同步，见 recruitment 同款注释）。
-      - run: npm install --no-save --no-audit --no-fund --ignore-scripts "pg@^8.13.1"
+      # 只装脚本真正用到的包，不跑 npm ci（仓库 lock 与 package.json 暂不同步，见 recruitment 同款注释）。
+      # @supabase/supabase-js 是台账写入（ops_runs）用的，跟 pg 一起手装。
+      - run: npm install --no-save --no-audit --no-fund --ignore-scripts "pg@^8.13.1" "@supabase/supabase-js@^2.47.0"
       - name: Run backfill
         env:
           JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
           JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
           JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${JOBS_DATABASE_URL:-}" ]; then

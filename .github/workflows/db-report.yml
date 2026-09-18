@@ -25,6 +25,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
       - name: Job-quality audit
+        id: audit
         env:
           # Phase 1 后 jobs 热表在自建香港 PG；sources 仍留 Supabase（第 3 段 adapter 映射要跨库）。
           JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
@@ -79,4 +80,42 @@ jobs:
             ' <(printf '%s\n' "$src_map") <(printf '%s\n' "$job_counts") \
               | sort -k2 -nr | awk 'NR<=25'
           fi
+          # 台账口径：把上面已经算出的几个核心数字（第 2 段）也落一份到 ops_runs，
+          # 让「岗位库质量」可查询、可跨天比趋势，不只是躺在 CI 日志里。
+          metrics_row="$(psql "$JOBS_DATABASE_URL" -v ON_ERROR_STOP=1 -At -F'|' -c "
+            select count(*),
+                   count(*) filter (where summary is not null and char_length(btrim(summary)) >= 60),
+                   count(*) filter (where summary is null or char_length(btrim(coalesce(summary,''))) < 60),
+                   count(*) filter (where enrich_checked_at is null),
+                   count(*) filter (where last_seen_at >= now() - interval '24 hours')
+            from jobs where status = 'active'")"
+          echo "metrics_row=$metrics_row" >> "$GITHUB_OUTPUT"
           echo "[db-report] done."
+
+      - name: Record ops_runs ledger
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          # 台账是旁路观测：写失败只告警，绝不让 report 这个 job 因此变红（与 crawler/ops_runs.py 同语义）。
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+            echo "::warning::SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY 未配置，跳过 ops_runs 台账写入"
+            exit 0
+          fi
+          status="failed"
+          [ "${{ steps.audit.outcome }}" = "success" ] && status="success"
+          row="${{ steps.audit.outputs.metrics_row }}"
+          IFS='|' read -r active_total active_with_jd active_thin never_checked seen_24h <<< "$row"
+          now="$(date -u +%FT%TZ)"
+          # run_date 必须按上海时区取日，别用裸 `date -u`：crawler/ops_runs.py 那边就是按上海日期
+          # 分桶的，UTC 取会在 UTC 16:00~23:59 这段窗口里把行错记到「前一天」（2026-09-18 review 揪出来的）。
+          payload=$(printf '{"module":"db_report","run_date":"%s","status":"%s","started_at":"%s","finished_at":"%s","metrics":{"active_total":%s,"active_with_jd":%s,"active_thin":%s,"never_liveness_checked":%s,"seen_24h":%s}}' \
+            "$(TZ=Asia/Shanghai date +%F)" "$status" "$now" "$now" \
+            "${active_total:-null}" "${active_with_jd:-null}" "${active_thin:-null}" "${never_checked:-null}" "${seen_24h:-null}")
+          curl -sS --max-time 15 -X POST "$SUPABASE_URL/rest/v1/ops_runs" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/json" -H "Prefer: return=minimal" \
+            -d "$payload" \
+            || echo "::warning::db-report ops_runs 台账写入失败（不影响本次报告）"

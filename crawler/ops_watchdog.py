@@ -85,7 +85,33 @@ MODULE_OUTPUT = {
     "insight_grade_extract": (("graded", "attempts_exhausted"), ("scanned",)),
     # run.py 每轮抓取收尾写的台账（2026-09-03）：有源可抓却一个岗都没拿到 = 零产出。
     "daily_crawl": (("jobs_found_total",), ("sources_total",)),
+    # 校招板块批量补源两层（2026-09-18 补台账）：层1 有候选可分诊却一个都没建源、
+    # 层2 有待验收候选却一个都没通过验收 = 零产出。
+    "campus_board_probe": (("sources_added",), ("candidates_checked",)),
+    "campus_board_verify": (("enabled",), ("pending",)),
+    # 北森详情路由浏览器逐家探测（2026-09-18 补台账）：有待探租户却一个都没探到路由 = 零产出。
+    "harvest_beisen_routes": (("harvested",), ("attempted",)),
+    # 企业 logo 抓取（2026-09-18 补台账）：有待处理公司却一张图都没抓到 = 零产出。
+    "company_logos": (("found",), ("processed",)),
+    # 公告制招聘官方抓取（已有台账，此前不在 MODULE_OUTPUT，2026-09-18 补登记）：
+    # 有候选可看却一条新公告都没进库 = 零产出。
+    "announcement_harvest": (("total_new",), ("total_found",)),
+    "announcement_iguopin": (("kept",), ("fetched",)),
 }
+
+# ⚠️ 周任务在当前规则 A 下几乎不可能被判定为「连续零产出」（2026-09-18 发现，未修，先如实记录）：
+# evaluate_zero_output 要求 complete_days(today, days) 窗口内**每一天**都是 module_day_state=="zero"，
+# 而每周只跑一次的模块在其余 6 天里 day_bucket 为空 → module_day_state 返回 "no_run"，"no_run" != "zero"，
+# `all(state == "zero")` 恒为假 → 规则 A 对这些模块形同虚设（即使连续断更数月也不会触发）。
+# audit_hotjob_attribution / ats_tenant_sync / company_logos 三个都是每周一次的任务（cron 分别是
+# 周一 22:17 / 周一 05:30 / 周一 04:00）——**台账现在都写了，但规则 A 目前对它们暂时没有真正生效的
+# 零产出告警**：前两个是因为它们本身就登记在 NO_OUTPUT_MODULES 里（零产出是好消息，见上面理由），
+# company_logos 虽然登记进了 MODULE_OUTPUT（它确有「产出可能归零」的语义，万一真的抓不到图），
+# 但一样撞上这个结构性缺口，规则 A 实际上盯不住它。三个都需要下一波再处理（不在本次任务范围）。
+# 最小改法（未做，需要额外设计/测试）：window 大小按模块声明的 cron 周期算
+# （复用已有的 cron_max_gap_minutes），而不是写死 `days=2` 天；或者把「no_run」在窗口末尾折叠成
+# 「按声明周期换算的一个周期」再判零产出，两种做法都会改变 evaluate_zero_output 的调用契约，
+# 需要人工确认后再动，先如实记录在这里、不擅自改规则逻辑。
 
 # 规则 F：一个源在回看窗口内「每一轮都失败」才告警。
 # 2026-09-03 实测：11 个源一周 28 轮全挂（Workday 站点名错 / 板块改名 / 反爬 403 / 浏览器没装），
@@ -98,8 +124,21 @@ DEAD_SOURCE_MIN_RUNS = 8   # 少于这个次数不判（新源、低频源不冤
 #   purge_expired：deleted=0 = 当天没有确认撤下的死岗
 #   ops_watchdog：本模块自己的台账
 #   search_quota_probe：它的产出就是「有没有越线」，critical=0 是好事不是零产出
+#   backfill_job_function / backfill_recruitment_category：written=0 是常态——触发器只在
+#     title/summary 真的变了时才把结论置 NULL，回填稳定后大多数轮次本来就没有需要纠正的行；
+#     --check 模式更是设计上从不写库。真正的异常（连不上库、SQL 报错）会让进程整体失败，
+#     那条路走的是「运行失败」不是「零产出」。
+#   db_report：只读审计报告，没有队列/产出这对语义——它本身就是给别的模块判断依据的数字来源。
+#   production_smoke：冒烟测试，ok=true 就是好结果，不是「零产出」。
+#   audit_hotjob_attribution：mismatch=0（没查到张冠李戴）是好消息，不是零产出；它是每周一次
+#     的存量核对，真正的接口失败已经单独计进 unknown，走的是别的判据。
+#   ats_tenant_sync：new_tenants=0 是常态（上游 ATS 租户名单增长很慢，经常一整周都没有新增），
+#     而它的「处理量」口径（files=3）恒大于 0，硬塞进规则 A 只会制造天天误报。
+#   announcement_verify：expired/dead=0（当天没有该下架的公告）是好消息，不是零产出。
 NO_OUTPUT_MODULES = ("insight_staleness", "purge_expired", "ops_watchdog",
-                     "search_quota_probe")
+                     "search_quota_probe", "backfill_job_function",
+                     "backfill_recruitment_category", "db_report", "production_smoke",
+                     "audit_hotjob_attribution", "ats_tenant_sync", "announcement_verify")
 
 # 规则 D：已落库的账户级错误信号。lib/track.ts 把 402/余额不足归一成 llm_insufficient_balance、
 # 把 401/403 归一成 llm_auth_error，写进 events.payload.diagnostics.error_code——用户侧真实踩到的欠费。

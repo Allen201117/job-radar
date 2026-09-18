@@ -10,10 +10,12 @@
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
 import db
+import ops_runs
 
 sys.path.insert(0, os.path.dirname(__file__))
 from adapters import china_ats  # noqa: E402
@@ -32,7 +34,23 @@ def _usable(route):
 
 
 def main():
-    sb = db.get_supabase()
+    started_at = datetime.now(timezone.utc)
+    try:
+        sb = db.get_supabase()
+    except Exception as e:
+        sys.stderr.write(f"[harvest-beisen] 无法获取 Supabase client，台账写不了: {type(e).__name__}\n")
+        raise
+    try:
+        return _run(sb, started_at)
+    except Exception as e:
+        # 中途任何未捕获异常都要留痕（取源列表失败等），再原样抛出保持原退出码。
+        ops_runs.record_ops_run(
+            sb, "harvest_beisen_routes", {"crash": type(e).__name__}, "failed", started_at=started_at,
+        )
+        raise
+
+
+def _run(sb, started_at):
     # 分页拉全量：本过滤当前 331 行未触顶 PostgREST 的 1000 行硬顶，但 beisen 源随每日扩源持续涨 → 走统一 helper。
     # ⚠️ 不能只取 enabled：缺口漏斗按验收门规矩「先插 disabled 源 → 真抓 → 回读健康岗才 enable」，
     # 而北森新租户不先 harvest 到详情路由就抓不出岗 → 只探 enabled 会形成死结
@@ -77,7 +95,15 @@ def main():
             except Exception as e:
                 print(f"    落盘失败: {e}", flush=True)
 
+    attempted = len(uniq[:CAP])
     print(f"[harvest-beisen] 本次新探到 {harvested} 家；beisen_routes.json 现共 {len(routes)} 家。", flush=True)
+
+    ops_runs.record_ops_run(
+        sb, "harvest_beisen_routes",
+        {"harvested": harvested, "attempted": attempted, "cached_total": len(routes), "pending": len(uniq)},
+        ops_runs.status_from_counts(attempted, attempted - harvested),
+        started_at=started_at,
+    )
 
 
 if __name__ == "__main__":

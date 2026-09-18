@@ -505,6 +505,51 @@ class DeadSourceRuleTest(unittest.TestCase):
         # run.py 2026-09-03 起写 daily_crawl 台账；没声明口径规则 A 会静默跳过它。
         self.assertIn("daily_crawl", W.MODULE_OUTPUT)
 
+    def test_2026_09_18_ledger_backfill_modules_are_registered(self):
+        # 结构性审计发现的 9 个「既不写 ops_runs 也不写 crawl_runs」的链路 + 3 个已写台账但
+        # 不在 MODULE_OUTPUT 的模块，2026-09-18 一起补登记：每一个都必须落在 MODULE_OUTPUT
+        # 或 NO_OUTPUT_MODULES 里，不许既不在这、也不在那（= 又一次「补了台账没人告警」）。
+        for module in (
+            "campus_board_probe", "campus_board_verify", "harvest_beisen_routes",
+            "company_logos", "announcement_harvest", "announcement_iguopin",
+            "backfill_job_function", "backfill_recruitment_category", "db_report",
+            "production_smoke", "audit_hotjob_attribution", "ats_tenant_sync",
+            "announcement_verify",
+        ):
+            in_output = module in W.MODULE_OUTPUT
+            in_no_output = module in W.NO_OUTPUT_MODULES
+            self.assertTrue(
+                in_output or in_no_output,
+                f"{module} 既不在 MODULE_OUTPUT 也不在 NO_OUTPUT_MODULES，规则 A 会静默跳过它",
+            )
+            self.assertFalse(
+                in_output and in_no_output,
+                f"{module} 同时登记在两张表里，语义自相矛盾",
+            )
+
+    def test_campus_board_probe_zero_output_when_candidates_checked_but_nothing_added(self):
+        rows = [{
+            "module": "campus_board_probe", "run_date": "2026-09-17", "status": "success",
+            "metrics": {"candidates_checked": 12, "triage_ok": 3, "sources_added": 0},
+        }, {
+            "module": "campus_board_probe", "run_date": "2026-09-16", "status": "success",
+            "metrics": {"candidates_checked": 20, "triage_ok": 5, "sources_added": 0},
+        }]
+        findings, _skipped = W.evaluate_zero_output(rows, "2026-09-18", days=2)
+        self.assertEqual([f["subject"] for f in findings], ["campus_board_probe"])
+
+    def test_harvest_beisen_routes_idle_when_no_pending_tenants(self):
+        # 待探租户为 0（全部已缓存）是正常的空队列，不该被规则 A 当成零产出。
+        rows = [{
+            "module": "harvest_beisen_routes", "run_date": "2026-09-17", "status": "success",
+            "metrics": {"harvested": 0, "attempted": 0, "cached_total": 331, "pending": 0},
+        }, {
+            "module": "harvest_beisen_routes", "run_date": "2026-09-16", "status": "success",
+            "metrics": {"harvested": 0, "attempted": 0, "cached_total": 331, "pending": 0},
+        }]
+        findings, _skipped = W.evaluate_zero_output(rows, "2026-09-18", days=2)
+        self.assertEqual(findings, [])
+
 
 class DuplicatePortalTest(unittest.TestCase):
     """规则 H：同一个 ATS 门户挂多个 enabled 源 —— 用 2026-09-04 实际踩到的三处做用例。"""

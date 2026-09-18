@@ -20,9 +20,12 @@ import argparse
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import httpx
+
+import ops_runs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from discover_domestic import _core_tokens  # noqa: E402
@@ -139,11 +142,28 @@ def audit(rows, client):
 
 
 def main(argv=None):
+    started_at = datetime.now(timezone.utc)
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args(argv)
     from db import get_supabase  # noqa: E402  延迟导入：单测不需要 Supabase 环境
-    rows = load_sources(get_supabase(), args.limit)
+    try:
+        sb = get_supabase()
+    except Exception as e:
+        sys.stderr.write(f"[audit-hotjob] 无法获取 Supabase client，台账写不了: {type(e).__name__}\n")
+        raise
+    try:
+        return _run(sb, args, started_at)
+    except Exception as e:
+        # 中途任何未捕获异常都要留痕（读源列表 / httpx client 初始化失败等），再原样抛出。
+        ops_runs.record_ops_run(
+            sb, "audit_hotjob_attribution", {"crash": type(e).__name__}, "failed", started_at=started_at,
+        )
+        raise
+
+
+def _run(sb, args, started_at):
+    rows = load_sources(sb, args.limit)
     with httpx.Client(timeout=20, follow_redirects=True,
                       headers={"User-Agent": _UA, "Accept": "application/json, text/plain, */*"}) as client:
         mismatches, unknowns, ok = audit(rows, client)
@@ -152,6 +172,13 @@ def main(argv=None):
         print(f"::warning::归属对不上: sources.company='{company}' 租户自报='{tenant}' {url}")
     for company, url, err in unknowns:
         print(f"  unknown: '{company}' {url} ({err})")
+    # 台账口径：mismatch/unknown 是核对结果，不是抓取失败——failed 只反映「租户接口打不通」（unknown）。
+    ops_runs.record_ops_run(
+        sb, "audit_hotjob_attribution",
+        {"sources": len(rows), "ok": ok, "mismatch": len(mismatches), "unknown": len(unknowns)},
+        ops_runs.status_from_counts(len(rows), len(unknowns)),
+        started_at=started_at,
+    )
     return 0
 
 
