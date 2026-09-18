@@ -26,12 +26,21 @@ import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from discover_domestic import _core_tokens  # noqa: E402
+from company_name_match import _PREFIX_RE  # noqa: E402  地名前缀（「苏州凌志软件」→「凌志软件」）
 
 _CONFIG_API = "/wecruit/suite/config/"
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/125.0 Safari/537.36")
 _CHANNEL_SUFFIX = re.compile(r"(校招|社招|实习|校园招聘|社会招聘|实习生)$")
 _NON_CJK = re.compile(r"[^一-鿿]+")
+
+# 人工核过「名字对不上但归属没错」的租户（suiteKey → 理由）。只收「同一法人换了名」这一类；
+# 品牌 vs 母公司靠 keywords / 组织树自动对上（一汽-大众 / 一汽奥迪 的 companyName 都是中国一汽，keywords 才写品牌）。
+_KNOWN_OK = {
+    "SU625d4a0b2f9d24287db127c8": "国投证券 = 原安信证券（2024 更名），租户 companyName 仍写旧名",
+    "SU6116236b2f9d24229ef9364c": "华润水泥 = 华润建材科技（2024 更名），清单口径仍叫华润水泥",
+    "SU6474230c0dcad45af14d7963": "瓜子二手车 = 车好多集团旗下品牌，租户以集团名自报",
+}
 
 
 def cjk_name(company: str) -> str:
@@ -43,16 +52,35 @@ def cjk_name(company: str) -> str:
     return cn
 
 
-def names_agree(source_company: str, tenant_company: str) -> bool:
-    """双向核心 token 包含：任一方向对上即通过。两边任一为空 → False（调用方按 unknown 处理）。"""
-    a, b = cjk_name(source_company), (tenant_company or "").strip()
-    if not a or not b:
+def _strip_place(cn: str) -> str:
+    m = _PREFIX_RE.match(cn or "")
+    rest = cn[m.end():] if m else cn
+    return rest if len(rest) >= 2 else cn
+
+
+def names_agree(source_company: str, tenant_texts) -> bool:
+    """库里公司名 vs 租户自报的一组文本（companyName / keywords / 组织树名）：
+    任一文本、任一方向核心 token 对上即通过；库名先剥地名前缀（苏州凌志软件 → 凌志软件）。
+    库名没有中文时退回拉丁名不区分大小写子串（TCL ↔ TCL集团）。两边任一为空 → False。"""
+    if isinstance(tenant_texts, str):
+        tenant_texts = [tenant_texts]
+    texts = [str(t or "").strip() for t in tenant_texts if str(t or "").strip()]
+    a = cjk_name(source_company)
+    if not texts:
         return False
-    return any(t in b for t in _core_tokens(a)) or any(t in a for t in _core_tokens(b))
+    if not a:
+        latin = _CHANNEL_SUFFIX.sub("", (source_company or "")).strip().lower()
+        return bool(latin) and any(latin in t.lower() for t in texts)
+    cands = {a, _strip_place(a)}
+    for b in texts:
+        for x in cands:
+            if any(t in b for t in _core_tokens(x)) or any(t in x for t in _core_tokens(b)):
+                return True
+    return False
 
 
-def tenant_company_name(source_url: str, client: httpx.Client):
-    """POST suite/config，返回 (companyName, error)。失败返回 (None, 原因)。"""
+def tenant_identity(source_url: str, client: httpx.Client):
+    """POST suite/config，返回 ([companyName, keywords, 组织树名…], error)。失败返回 (None, 原因)。"""
     parsed = urlparse(source_url)
     parts = [p for p in (parsed.path or "").split("/") if p]
     if not parts:
@@ -63,7 +91,13 @@ def tenant_company_name(source_url: str, client: httpx.Client):
                         headers={"Referer": source_url, "Origin": origin})
         data = (r.json() or {}).get("data") or {}
         name = str(data.get("companyName") or "").strip()
-        return (name or None), (None if name else "no companyName in data")
+        if not name:
+            return None, "no companyName in data"
+        texts = [name, str(data.get("keywords") or "")]
+        for org in data.get("suitOrgInfoPOs") or []:
+            if isinstance(org, dict):
+                texts.append(str(org.get("orgName") or org.get("name") or ""))
+        return [t for t in texts if t.strip()], None
     except Exception as e:  # noqa: BLE001
         return None, f"{type(e).__name__}: {e}"
 
@@ -90,16 +124,17 @@ def audit(rows, client):
     mismatches, unknowns, ok = [], [], 0
     for row in rows:
         url = row["source_url"]
-        key = urlparse(url).netloc + "/" + ([p for p in urlparse(url).path.split("/") if p] or [""])[0]
+        suite = ([p for p in urlparse(url).path.split("/") if p] or [""])[0]
+        key = urlparse(url).netloc + "/" + suite
         if key not in cache:
-            cache[key] = tenant_company_name(url, client)
+            cache[key] = tenant_identity(url, client)
         tenant, err = cache[key]
         if tenant is None:
             unknowns.append((row["company"], url, err))
-        elif names_agree(row["company"], tenant):
+        elif suite in _KNOWN_OK or names_agree(row["company"], tenant):
             ok += 1
         else:
-            mismatches.append((row["company"], url, tenant))
+            mismatches.append((row["company"], url, tenant[0]))
     return mismatches, unknowns, ok
 
 

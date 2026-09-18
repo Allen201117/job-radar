@@ -27,6 +27,15 @@ class NamesTest(unittest.TestCase):
         self.assertFalse(names_agree("Shell", "壳牌中国"))
         self.assertFalse(names_agree("华夏银行", ""))
 
+    def test_latin_only_name_and_place_prefix_and_keywords(self):
+        self.assertTrue(names_agree("TCL 实习", ["TCL集团"]))
+        self.assertTrue(names_agree("苏州凌志软件 校招", ["苏州工业园区凌志软件股份有限公司"]))
+        self.assertTrue(names_agree("上海瑞金医院 Ruijin Hospital", ["上海交通大学医学院附属瑞金医院"]))
+        # 品牌门户的 companyName 是母公司，keywords / 组织树才写品牌
+        self.assertTrue(names_agree("一汽-大众汽车有限公司",
+                                    ["中国第一汽车股份有限公司", "一汽大众招聘官网，一汽大众校招", "一汽-大众"]))
+        self.assertFalse(names_agree("领益智造 Lingyi", ["特变电工股份有限公司", "特变电工招聘官网", "沈变公司"]))
+
 
 class AuditTest(unittest.TestCase):
     def test_audit_buckets_and_caches_per_tenant(self):
@@ -36,7 +45,8 @@ class AuditTest(unittest.TestCase):
             {"company": "华夏银行", "source_url": "https://hxb.hotjob.cn/SU2/pb/social.html"},
             {"company": "某某", "source_url": "https://x.hotjob.cn/SU3/pb/social.html"},
         ]
-        answers = {"SU1": {"data": {"companyName": "特变电工股份有限公司"}},
+        answers = {"SU1": {"data": {"companyName": "特变电工股份有限公司", "keywords": "特变电工招聘",
+                                    "suitOrgInfoPOs": [{"orgName": "沈变公司"}]}},
                    "SU2": {"data": {"companyName": "华夏银行股份有限公司"}}}
         calls = []
 
