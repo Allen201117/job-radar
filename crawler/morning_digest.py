@@ -396,6 +396,38 @@ def humanize_issue_title(title, names=None):
     return text
 
 
+_MODULE_ARRAY_RE = re.compile(r"module\s*=\s*any\s*\(\s*array\s*\[([^\]]+)\]\s*\)", re.I)
+_MODULE_EQ_RE = re.compile(r"\bmodule\s*=\s*'([^']+)'", re.I)
+_QUOTED_LITERAL_RE = re.compile(r"'([^']+)'")
+
+
+def build_issue_title_names(checks):
+    """从 contract 自动构建 humanize_issue_title 的映射表，不手写——issue 标题冒号后的
+    英文（模块名如 auto_discover_overseas、workflow 文件名如 dead-link-audit.yml）
+    对应哪条 pipeline 检查项，靠该检查项自己的 owner（workflow 路径）与 sql 里
+    `module = '…'` / `module = any(array['…', '…'])` 的字面量来确认，匹配不到就不收录
+    （humanize_issue_title 原样保留英文，绝不猜）。
+    """
+    names = {}
+    for c in checks:
+        if c.get("layer") != "pipeline":
+            continue
+        name = c.get("name")
+        if not name:
+            continue
+        owner = c.get("owner") or ""
+        basename = os.path.basename(owner)
+        if basename:
+            names.setdefault(basename, name)
+        sql = c.get("sql") or ""
+        for m in _MODULE_ARRAY_RE.finditer(sql):
+            for lit in _QUOTED_LITERAL_RE.findall(m.group(1)):
+                names.setdefault(lit, name)
+        for m in _MODULE_EQ_RE.finditer(sql):
+            names.setdefault(m.group(1), name)
+    return names
+
+
 # ---------------------------------------------------------------------------
 # 邮件正文拼装
 # ---------------------------------------------------------------------------
@@ -457,11 +489,62 @@ def _integrity_lines(all_checks, results_today_by_id, last_sent_digest):
     return lines
 
 
+def merge_missing_as_error(checks, results_today_by_id):
+    """contract 里有、但今天 audit_results 里没有这一行的检查项（含 source=watchdog 的条目）
+    = 今天没查到，不是「跳过不算」。合成一行 verdict='error' 的记录塞进去，这样它会自动被
+    ⑧段的『没查到』列表点名，也会按自己的 severity（除了 info）参与灯色——不需要另外写
+    一套平行逻辑。真正跑过但查询失败的行已经是 verdict='error'，这里只处理『压根没有这一行』
+    的情况，不会覆盖已存在的行（用 setdefault 的写法：cid 已存在就跳过）。
+    """
+    merged = dict(results_today_by_id)
+    for c in checks:
+        cid = c["id"]
+        if cid in merged:
+            continue
+        merged[cid] = {
+            "check_id": cid,
+            "severity": c.get("severity", "warn"),
+            "verdict": "error",
+            "value": None,
+            "calibrated": c.get("calibrated", True),
+            "error_message": "contract 里有这条检查，但今天 audit_results 里没有这一行（检查没跑，不是查出来是 0）",
+            "why": c.get("why"),
+        }
+    return merged
+
+
+def summarize_watchdog_rules(checks, results_today_by_id, checks_by_id):
+    """把 16 条老告警规则（source=watchdog）折成⑥段开头一句总述：今天共报了多少项、
+    有几条规则没评估成（必须逐条点名，不许折叠成 0——那会把『规则本身跑挂了』悄悄藏起来）。
+    """
+    watchdog_ids = [c["id"] for c in checks if c.get("source") == "watchdog"]
+    if not watchdog_ids:
+        return None
+    total_hits = 0
+    failed_names = []
+    for cid in watchdog_ids:
+        row = results_today_by_id.get(cid)
+        if row is None:
+            failed_names.append(checks_by_id.get(cid, {}).get("name", cid))
+            continue
+        if row.get("verdict") == "error":
+            failed_names.append(checks_by_id.get(cid, {}).get("name", cid))
+            continue
+        if row.get("value") is not None:
+            total_hits += int(row["value"])
+    line = f"老告警 {len(watchdog_ids)} 条规则今天共报 {total_hits} 项，其中 {len(failed_names)} 条规则没评估成"
+    if failed_names:
+        line += "：" + "、".join(failed_names)
+    return line + "。"
+
+
 def build_digest(checks, results_today, results_yesterday, walkthrough_run, open_issues, last_sent_digest):
     checks_by_id = {c["id"]: c for c in checks}
     names = {c["id"]: c["name"] for c in checks}
+    issue_title_names = build_issue_title_names(checks)
     results_today_by_id = index_results(results_today)
     results_yesterday_by_id = index_results(results_yesterday)
+    results_today_by_id = merge_missing_as_error(checks, results_today_by_id)
 
     for cid, row in results_today_by_id.items():
         check = checks_by_id.get(cid)
@@ -494,6 +577,7 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
     subject = subject + f" · 待清账{open_issue_count}项"
 
     integrity_lines = _integrity_lines(checks, results_today_by_id, last_sent_digest)
+    watchdog_summary = summarize_watchdog_rules(checks, results_today_by_id, checks_by_id)
 
     text_lines = [subject, ""]
     text_lines.append("① 用户")
@@ -517,16 +601,18 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
         for item in newly_broken:
             text_lines.append(f"  · {item['name']}：昨天还正常，今天不正常了。{item['why']}")
         for issue in recent_issues:
-            text_lines.append(f"  · #{issue.get('number')} {humanize_issue_title(issue.get('title'))}（24 小时内新开）")
+            text_lines.append(f"  · #{issue.get('number')} {humanize_issue_title(issue.get('title'), issue_title_names)}（24 小时内新开）")
     else:
         text_lines.append("  没有。")
     text_lines.append("")
     text_lines.append(f"⑥ 老问题清账（共 {len(old_issues_sorted)} 项，按拖了多久排序，全列不截断）")
+    if watchdog_summary:
+        text_lines.append(f"  {watchdog_summary}")
     if old_issues_sorted:
         for issue in old_issues_sorted:
             days = _issue_age_hours(issue)
             days_txt = f"{days / 24:.0f}天" if days is not None else "未知天数"
-            text_lines.append(f"  · #{issue.get('number')} {humanize_issue_title(issue.get('title'))}（拖了{days_txt}，{comment_count(issue)}条评论）")
+            text_lines.append(f"  · #{issue.get('number')} {humanize_issue_title(issue.get('title'), issue_title_names)}（拖了{days_txt}，{comment_count(issue)}条评论）")
     else:
         text_lines.append("  没有未解决的老问题。")
     text_lines.append("")
@@ -543,7 +629,7 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
     text = "\n".join(text_lines)
     html = _to_html(subject, users_rows, experience_rows, supply_rows, fake_green_rows,
                      walkthrough_issue_summary, newly_broken, recent_issues, old_issues_sorted,
-                     action_items, integrity_lines)
+                     action_items, integrity_lines, watchdog_summary, issue_title_names)
     return {"subject": subject, "text": text, "html": html, "light": light}
 
 
@@ -580,7 +666,7 @@ def _rows_html(rows):
 
 def _to_html(subject, users_rows, experience_rows, supply_rows, fake_green_rows,
              walkthrough_issue_summary, newly_broken, recent_issues, old_issues_sorted,
-             action_items, integrity_lines):
+             action_items, integrity_lines, watchdog_summary=None, issue_title_names=None):
     walkthrough_html = ""
     if walkthrough_issue_summary:
         walkthrough_html = "<p><b>走查发现的问题：</b></p><ul style='padding-left:18px'>" + "".join(
@@ -590,17 +676,18 @@ def _to_html(subject, users_rows, experience_rows, supply_rows, fake_green_rows,
     new_html = "<p>没有。</p>"
     if newly_broken or recent_issues:
         li = [f"<li>{_esc(x['name'])}：昨天还正常，今天不正常了。{_esc(x.get('why',''))}</li>" for x in newly_broken]
-        li += [f"<li>#{issue.get('number')} {_esc(humanize_issue_title(issue.get('title')))}（24 小时内新开）</li>" for issue in recent_issues]
+        li += [f"<li>#{issue.get('number')} {_esc(humanize_issue_title(issue.get('title'), issue_title_names))}（24 小时内新开）</li>" for issue in recent_issues]
         new_html = "<ul style='padding-left:18px'>" + "".join(li) + "</ul>"
 
-    old_html = "<p>没有未解决的老问题。</p>"
+    old_html_prefix = f"<p>{_esc(watchdog_summary)}</p>" if watchdog_summary else ""
+    old_html = old_html_prefix + "<p>没有未解决的老问题。</p>" if not old_issues_sorted else old_html_prefix
     if old_issues_sorted:
         li = []
         for issue in old_issues_sorted:
             hrs = _issue_age_hours(issue)
             days_txt = f"{hrs/24:.0f}天" if hrs is not None else "未知天数"
-            li.append(f"<li>#{issue.get('number')} {_esc(humanize_issue_title(issue.get('title')))}（拖了{days_txt}，{comment_count(issue)}条评论）</li>")
-        old_html = "<ul style='padding-left:18px'>" + "".join(li) + "</ul>"
+            li.append(f"<li>#{issue.get('number')} {_esc(humanize_issue_title(issue.get('title'), issue_title_names))}（拖了{days_txt}，{comment_count(issue)}条评论）</li>")
+        old_html += "<ul style='padding-left:18px'>" + "".join(li) + "</ul>"
 
     action_html = "<p>今天没有需要你处理的事。</p>"
     if action_items:

@@ -5,9 +5,9 @@
 # 四个分类名对应 audit_coverage.compute_gaps 的四个差集键；键是被豁免的具体名字
 # （workflow 路径 / module 名 / jobs 列名 / 指标键），值是理由。
 
-pipeline_workflows: {}
-  # 目前没有任何定时 workflow 被豁免——它们都应该有 layer=pipeline 的检查项覆盖，或者
-  # 等真正接入台账后再决定要不要豁免。空集合本身也是一条诚实的记录。
+pipeline_workflows:
+  .github/workflows/enrich-crawl.yml: "真缺口，不是不用管：crawler/run.py 写 ops_runs 时模块名恒为 daily_crawl，与 daily-crawl.yml 完全同名，metrics 里没有任何字段能区分『这轮是快档还是富化档』（2026-09-19 读代码确认）。已用 pipeline.daily_crawl_ran 覆盖『daily_crawl 这个模块今天有没有活动』，但这条 workflow 如果单独停了、只要 daily-crawl.yml 还在跑，这条检查会一直显示正常——那条检查掩盖不住这一条真的坏了。等两条车道的台账能各自打上区分字段再拆开接。"
+  .github/workflows/dead-link-audit-new.yml: "真缺口，不是不用管：audit_dead_links.py 写 ops_runs 时模块名恒为 dead_link_audit，与 dead-link-audit.yml 完全同名，没有字段能区分是全量轮转档还是高频新岗档（2026-09-19 读代码确认）。已用 pipeline.dead_link_audit_ran 覆盖『dead_link_audit 这个模块今天有没有活动』，但这条 workflow 单独停了、只要另一条还在跑，这条检查看不出来——同上一条一样，另一条会掩盖它。等台账能区分再拆开接。"
 
 pipeline_modules: {}
   # 同上：ops_runs 里出现的模块目前没有被豁免的，MODULE_OUTPUT/NO_OUTPUT_MODULES
@@ -20,6 +20,10 @@ data_columns:
   search_doc: "内部 tsvector 缓存列，schema.sql 自己注释『v1 不填，FTS 后置 pass 再启用』，当前没有任何写入路径产出真实内容"
   source_id: "外键，指向 sources 表；它本身没有独立取值范围，异常表现在 sources 侧的检查项里"
 
-experience_metrics: {}
-  # 体验层还没有 contract 检查项落地，暂不豁免任何指标——先让差集把全部指标列出来，
-  # 等真正决定哪些指标要有阈值时再补 experience 层检查项，而不是先消音。
+experience_metrics:
+  campus_users: "参与计算 exp.ux_walkthrough_campus_healthy_ratio_avg 的分母子样本量（多少个模拟用户是校招/实习画像），本身没有『正常范围』，只是解释比例怎么算出来的辅助计数，不单独设期望。"
+  campus_zero_healthy: "『必投公司渠道命中数为 0』的模拟用户计数，已被 exp.ux_walkthrough_campus_healthy_ratio_avg 这个比例覆盖同一个信号，不重复设期望。"
+  errors: "走查脚本自身运行出错的计数（比如某个模拟用户请求异常），这是走查任务本身健不健康的信号，不是产品体验指标；脚本出错会体现在 ops_runs(module='ux_walkthrough') 的 status 上，不需要单独阈值。"
+  issue_samples: "每类问题的具体样本明细（含用户、detail），是给人工排查用的原始记录，不是可以设『正常范围』的聚合数字——聚合后的计数已经是 exp.ux_walkthrough_issue_count 和 issues_by_type。"
+  median_shown: "推荐页展示岗位数的中位数，用于解读『展示得多不多』的辅助数字；最严重的『完全没有』这个情形已被 exp.ux_walkthrough_zero_shown 单独覆盖，中位数本身没有一个明确的『不正常』门槛。"
+  scope_mismatch: "求职范围错配的模拟用户计数，是 issues_by_type 里的一个分类键，已经被 exp.ux_walkthrough_issue_count（总数）覆盖同一份数据；scope_mismatch 这个具体分类只在走查报告的问题清单里逐条列出，不单独设阈值（阈值意义不大——这是配置错误不是产品质量抖动）。"

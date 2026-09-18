@@ -53,6 +53,9 @@ RULE_TITLES = {
     "M": "Mac 公告抓取无记录",
     "N": "抓取台账终态未回写",
     "O": "必投公司校招渠道没接",
+    # P 同 H/I：早就在用了，标题一直没登记（2026-09-19 桥接 audit_results 时顺手补上，
+    # 不改判定逻辑，只补一个人话标签）。
+    "P": "洞察供给停摆",
 }
 
 # ── 规则 A：每个模块的「产出口径」与「处理量口径」────────────────────────────
@@ -97,6 +100,17 @@ MODULE_OUTPUT = {
     # 有候选可看却一条新公告都没进库 = 零产出。
     "announcement_harvest": (("total_new",), ("total_found",)),
     "announcement_iguopin": (("kept",), ("fetched",)),
+    # 公开讨论「说法」层治理（2026-09-19 补登记，audit_coverage 差集揪出来的）：有活扫却一条
+    # 都没治理（重路由/退休/去重/补数值全零）= 治理停了。⚠️ 结构性缺口：本仓库目前没有任何
+    # workflow 调用 insight_topic_sweep.py（读 .github/workflows/*.yml 逐个确认过），登记进
+    # MODULE_OUTPUT 只是让「模块名有没有声明产出口径」这条差集不再报它，不代表它已经接了线——
+    # 接线是单独的活，不在本次任务范围内，如实记在这里别装作已经解决。
+    "insight_topic_sweep": (("retired", "reroute", "dedupe", "metric_values"), ("scanned",)),
+    # LLM 真实 token 用量记账（insight_engine.record_usage_ops_run）：它只在本进程真的调过
+    # LLM 时才写这一行（calls=0 直接不写，见函数内 `if not totals["calls"]: return False`），
+    # 所以「写了却是零产出」这件事结构上不可能发生——produced/work 用同一个键只是让它能通过
+    # 规则 A 的口径校验，不代表这个键真的会被规则 A 判定异常。
+    "llm_usage": (("calls",), ("calls",)),
 }
 
 # ⚠️ 周任务在当前规则 A 下几乎不可能被判定为「连续零产出」（2026-09-18 发现，未修，先如实记录）：
@@ -138,7 +152,10 @@ DEAD_SOURCE_MIN_RUNS = 8   # 少于这个次数不判（新源、低频源不冤
 NO_OUTPUT_MODULES = ("insight_staleness", "purge_expired", "ops_watchdog",
                      "search_quota_probe", "backfill_job_function",
                      "backfill_recruitment_category", "db_report", "production_smoke",
-                     "audit_hotjob_attribution", "ats_tenant_sync", "announcement_verify")
+                     "audit_hotjob_attribution", "ats_tenant_sync", "announcement_verify",
+                     # morning_digest：一天固定发一封（或 dry-run 一次），不是「处理量越大产出越大」
+                     # 的批处理任务，硬塞进规则 A 的 produced/work 口径没有意义。
+                     "morning_digest")
 
 # 规则 D：已落库的账户级错误信号。lib/track.ts 把 402/余额不足归一成 llm_insufficient_balance、
 # 把 401/403 归一成 llm_auth_error，写进 events.payload.diagnostics.error_code——用户侧真实踩到的欠费。
@@ -1485,6 +1502,88 @@ def publish(repo, findings, apply=False, now=None):
     return opened, commented
 
 
+def guarded_evaluate(rule, rule_errored, fn, *args, **kwargs):
+    """跑一条规则的 evaluate_*，异常不外传——只打 ::warning:: + 把 rule 记进 rule_errored、
+    本轮当作零 findings，让调用方（main()）继续评估其余规则、继续发已经算好的 issue。
+
+    2026-09-19 加：此前 A/C/D/M/N/P 六条规则是裸调用，任一异常会让整个 main() 直接崩溃、
+    其余规则（包括已经算好的 F/G/H/I/K/L 等）一个都发不出去；桥接进 audit_results 时也
+    没法单独把这一条标成「没评估成」。提出成模块级函数是为了能脱离 main() 单独测——
+    真正调用点仍在 main() 里，行为不变，只是抽出来方便写单测。
+    """
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - 单条规则失败不能拖垮其余规则
+        print(f"::warning::[watchdog] 规则 {rule} 本轮没评估成：{type(exc).__name__}: {exc}")
+        rule_errored.add(rule)
+        return None
+
+
+def build_audit_bridge_rows(findings, rule_errored, checks, today, now=None):
+    """把这一轮的 findings 翻成 audit_results 行——每条 contract 里 source=watchdog 的检查项一行。
+
+    只做翻译，不重新判定：value = 这条规则本轮命中的 finding 数（用 issue_title 里的
+    subject 去重前的原始条数，与 GitHub Issue 是否已经开过无关）；rule_errored 里的规则
+    这一轮真的没评估成（取数异常/跳过），落 verdict=error、value=None——不能拿「没查」
+    充「查到 0」。max 30 条 finding 摘要放进 detail，供排查时不用回头翻 Issue 列表。
+    """
+    import audit_runner as A
+    now = now or datetime.now(timezone.utc)
+    by_rule = defaultdict(list)
+    for f in findings:
+        by_rule[f["rule"]].append(f)
+
+    rows = []
+    for c in checks:
+        if c.get("source") != "watchdog":
+            continue
+        rule = c["rule"]
+        row = {
+            "check_id": c["id"],
+            "run_date": today,
+            "layer": c["layer"],
+            "severity": c["severity"],
+            "normal": c["normal"],
+            "calibrated": bool(c.get("calibrated", True)),
+            "measured_at": now.astimezone(timezone.utc).isoformat(),
+            "error_message": None,
+            "duration_ms": None,
+        }
+        if rule in rule_errored:
+            row.update(value=None, verdict="error", detail=None,
+                       error_message="这一轮该规则的取数/评估失败或被跳过，不是评估出 0 条")
+        else:
+            matched = by_rule.get(rule, [])
+            value = float(len(matched))
+            row["value"] = value
+            row["verdict"] = "ok" if A.evaluate_normal(value, c["normal"]) else "breach"
+            row["detail"] = ({"findings": [
+                {"title": issue_title(f), "key": f.get("subject")} for f in matched[:30]
+            ]} if matched else None)
+        rows.append(row)
+    return rows
+
+
+def publish_audit_bridge(checks, findings, rule_errored, today, now=None):
+    """写失败只 ::warning::，绝不影响 watchdog 主流程的退出码——这条桥接是旁路观测。"""
+    rows = build_audit_bridge_rows(findings, rule_errored, checks, today, now=now)
+    if not rows:
+        return 0
+    try:
+        import audit_runner as A
+        conn = A.connect("supabase")
+        try:
+            written = A.write_results(conn, rows)
+        finally:
+            conn.close()
+        print(f"[watchdog] 已把 {written} 条老告警规则的今日结果写进 audit_results")
+        return written
+    except Exception as exc:  # noqa: BLE001
+        print(f"::warning::[watchdog] 写 audit_results 桥接失败（不影响本轮告警发布）："
+              f"{type(exc).__name__}: {exc}")
+        return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="后台任务真产出告警")
     parser.add_argument("--days", type=int, default=2, help="规则 A：连续几天零产出才告警")
@@ -1523,14 +1622,33 @@ def main():
                   .gte("created_at", (now - timedelta(hours=48)).isoformat())
     )
 
+    # 哪些规则「这一轮真的没评估成」（取数异常，不是评估出 0 条）——供 audit_results 桥接用
+    # （见 build_audit_bridge_rows）。2026-09-19 起 A/C/D/M/N/P 也各自包了一层：此前它们
+    # 裸调用、任一抛错就让整个 main() 崩溃、其余规则（含已经算好的 F/G/H/I/K/L 等）一个
+    # 都发不出去；现在改成每条单独 try/except，异常只打 ::warning:: + 标记该规则 error、
+    # 视为本轮零 findings，其余规则照常评估与发 issue——行为更稳，判定逻辑与阈值一个字都没改。
+    rule_errored = set()
+
     findings = []
-    zero, skipped = evaluate_zero_output(ops_rows, today, days=args.days, muted=muted)
+    zero, skipped = guarded_evaluate(
+        "A", rule_errored, evaluate_zero_output, ops_rows, today, days=args.days, muted=muted,
+    ) or ([], [])
     findings += zero
-    findings += evaluate_stuck_ledger(discovery_rows, now=now, hours=args.stuck_hours)
-    findings += evaluate_account_errors(event_rows, ops_rows, now=now)
-    findings += evaluate_missing_mac_announcement_harvest(ops_rows, now=now)
-    findings += evaluate_crawl_run_unrecorded(ops_rows, today=today)
-    findings += evaluate_insight_supply_stall(ops_rows, today=today)
+    findings += guarded_evaluate(
+        "C", rule_errored, evaluate_stuck_ledger, discovery_rows, now=now, hours=args.stuck_hours,
+    ) or []
+    findings += guarded_evaluate(
+        "D", rule_errored, evaluate_account_errors, event_rows, ops_rows, now=now,
+    ) or []
+    findings += guarded_evaluate(
+        "M", rule_errored, evaluate_missing_mac_announcement_harvest, ops_rows, now=now,
+    ) or []
+    findings += guarded_evaluate(
+        "N", rule_errored, evaluate_crawl_run_unrecorded, ops_rows, today=today,
+    ) or []
+    findings += guarded_evaluate(
+        "P", rule_errored, evaluate_insight_supply_stall, ops_rows, today=today,
+    ) or []
     # 规则 O 单独包住：台账几百行的小表，取不到不拖垮别的规则。
     try:
         gap_rows = db.fetch_all_rows(
@@ -1541,6 +1659,7 @@ def main():
         findings += evaluate_campus_channel_gap(gap_rows, now=now)
     except Exception as exc:  # noqa: BLE001
         print(f"[watchdog] 规则 O 取 must_apply_gap_attempts 失败，跳过：{exc}")
+        rule_errored.add("O")
     # 规则 J 单独包住：apply_programs 是张十几行的小表，取不到也不该拖垮别的规则。
     try:
         program_rows = db.fetch_all_rows(
@@ -1551,6 +1670,7 @@ def main():
         findings += evaluate_stale_apply_programs(program_rows, today=now.astimezone(SHANGHAI).date())
     except Exception as exc:  # noqa: BLE001
         print(f"[watchdog] 规则 J 取 apply_programs 失败，跳过：{exc}")
+        rule_errored.add("J")
     # 规则 F 单独包住：crawl_runs 是最大的一张表（1,400 源 × 4 轮/天），取不到不能拖垮 A/C/D。
     try:
         # 规则 K 要 1 个最近窗 + 7 天基线、规则 L 要 10 天，一次取够；F/G/I 仍只看自己那 dead_source_days 天
@@ -1585,6 +1705,7 @@ def main():
     except Exception as exc:  # noqa: BLE001
         print(f"::warning::[watchdog] 规则 F/G/H/I/K/L（源级 / adapter 级抓取告警）本轮没查成："
               f"{type(exc).__name__}: {exc}")
+        rule_errored |= {"F", "G", "H", "I", "K", "L"}
 
     meta_by_path = load_workflow_meta(root)
     repo = args.repo or detect_repo()
@@ -1607,8 +1728,10 @@ def main():
             findings += evaluate_overdue(fetch_last_runs(repo, meta_by_path, runs), now=now)
         except Exception as exc:  # noqa: BLE001 - GitHub 侧失败只降级，不吞掉台账侧告警
             print(f"::warning::[watchdog] workflow 侧规则（B/E）本轮没查成：{type(exc).__name__}: {exc}")
+            rule_errored |= {"B", "E"}
     else:
         print("[watchdog] 识别不到仓库，跳过 workflow 侧规则（B/E）。")
+        rule_errored |= {"B", "E"}  # 没跑 = 这一轮真的没评估成，不是评估出「0 条」
 
     print(f"\n[watchdog] {today} 检查完成：{len(findings)} 条告警"
           f"（ops_runs {len(ops_rows)} 行 / queued {len(discovery_rows)} 行 / events {len(event_rows)} 行）"
@@ -1617,6 +1740,15 @@ def main():
         print(f"  · [{finding['rule']}] {issue_title(finding)}")
     if skipped:
         print(f"[watchdog] 这些模块在写台账但没声明产出口径（规则 A 跳过，别忘了补）：{', '.join(skipped)}")
+
+    # 桥接进 audit_results：dry-run 与 apply 都写（这是旁路观测台账，不是「真开 issue」那个
+    # 有副作用的动作），失败只 ::warning::，不影响本次 watchdog 的退出码。
+    try:
+        import audit_runner as _audit_runner
+        bridge_checks = [c for c in _audit_runner.load_contract() if c.get("source") == "watchdog"]
+        publish_audit_bridge(bridge_checks, findings, rule_errored, today, now=now)
+    except Exception as exc:  # noqa: BLE001
+        print(f"::warning::[watchdog] 读取 audit_contract.yaml 桥接检查项失败：{type(exc).__name__}: {exc}")
 
     opened, commented = publish(repo, findings, apply=apply, now=now)
     if apply:

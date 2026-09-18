@@ -112,6 +112,150 @@ class FormatTests(unittest.TestCase):
         self.assertIn("个百分点", d)
 
 
+class MergeMissingAsErrorTests(unittest.TestCase):
+    """contract 里有、但今天 audit_results 没有这一行的检查项（含 source=watchdog 的条目）
+    = 今天没查到，必须合成一行 verdict=error，按自己 severity 参与灯色（info 除外）。
+    """
+
+    def test_missing_check_becomes_error_row(self):
+        checks = [check("a", severity="critical")]
+        merged = md.merge_missing_as_error(checks, {})
+        self.assertEqual(merged["a"]["verdict"], "error")
+        self.assertIsNone(merged["a"]["value"])
+        self.assertEqual(merged["a"]["severity"], "critical")
+
+    def test_existing_row_is_not_overwritten(self):
+        checks = [check("a", severity="critical")]
+        existing = {"a": result("a", 5, "ok")}
+        merged = md.merge_missing_as_error(checks, existing)
+        self.assertEqual(merged["a"]["verdict"], "ok")
+        self.assertEqual(merged["a"]["value"], 5)
+
+    def test_missing_watchdog_style_check_without_sql_or_db_field(self):
+        """source=watchdog 的条目没有 sql/db 字段，合并逻辑不该因此报错。"""
+        checks = [{"id": "watchdog.rule_a", "name": "老告警 A", "severity": "warn",
+                   "why": "why", "action": "action", "source": "watchdog"}]
+        merged = md.merge_missing_as_error(checks, {})
+        self.assertIn("watchdog.rule_a", merged)
+        self.assertEqual(merged["watchdog.rule_a"]["verdict"], "error")
+
+    def test_missing_critical_check_turns_light_red(self):
+        checks = [check("a", severity="critical")]
+        merged = md.merge_missing_as_error(checks, {})
+        self.assertEqual(md.compute_traffic_light(merged), "🔴")
+
+    def test_missing_info_check_stays_green(self):
+        checks = [check("a", severity="info")]
+        merged = md.merge_missing_as_error(checks, {})
+        self.assertEqual(md.compute_traffic_light(merged), "🟢")
+
+    def test_missing_warn_check_turns_light_yellow(self):
+        checks = [check("a", severity="warn")]
+        merged = md.merge_missing_as_error(checks, {})
+        self.assertEqual(md.compute_traffic_light(merged), "🟡")
+
+
+class BuildIssueTitleNamesTests(unittest.TestCase):
+    def test_hits_module_literal_in_equality_sql(self):
+        checks = [{
+            "id": "pipeline.x", "name": "洞察供给车道昨天有没有跑", "layer": "pipeline",
+            "owner": ".github/workflows/x.yml",
+            "sql": "select count(*) from ops_runs where module = 'insight_backlog'",
+        }]
+        names = md.build_issue_title_names(checks)
+        self.assertEqual(names.get("insight_backlog"), "洞察供给车道昨天有没有跑")
+
+    def test_hits_module_literal_in_any_array_sql(self):
+        checks = [{
+            "id": "pipeline.y", "name": "扩源车道昨天有没有跑", "layer": "pipeline",
+            "owner": ".github/workflows/y.yml",
+            "sql": "select count(*) from ops_runs where module = any(array['auto_discover', 'auto_discover_overseas'])",
+        }]
+        names = md.build_issue_title_names(checks)
+        self.assertEqual(names.get("auto_discover_overseas"), "扩源车道昨天有没有跑")
+        self.assertEqual(names.get("auto_discover"), "扩源车道昨天有没有跑")
+
+    def test_hits_workflow_filename(self):
+        checks = [{
+            "id": "pipeline.z", "name": "死链巡检昨天有没有跑", "layer": "pipeline",
+            "owner": ".github/workflows/dead-link-audit.yml",
+            "sql": "select count(*) from ops_runs where module = 'dead_link_audit'",
+        }]
+        names = md.build_issue_title_names(checks)
+        self.assertEqual(names.get("dead-link-audit.yml"), "死链巡检昨天有没有跑")
+
+    def test_non_pipeline_layer_not_collected(self):
+        checks = [{
+            "id": "exp.a", "name": "某体验层检查", "layer": "experience",
+            "owner": "lib/track.ts",
+            "sql": "select count(*) from events where event = 'search_result'",
+        }]
+        names = md.build_issue_title_names(checks)
+        self.assertNotIn("search_result", names)
+
+    def test_humanize_uses_built_names_end_to_end(self):
+        checks = [{
+            "id": "pipeline.overseas", "name": "海外自动扩源车道昨天有没有跑", "layer": "pipeline",
+            "owner": ".github/workflows/auto-discover-overseas.yml",
+            "sql": "select count(*) from ops_runs where module = 'auto_discover_overseas'",
+        }]
+        names = md.build_issue_title_names(checks)
+        out = md.humanize_issue_title("[watchdog] 连续零产出：auto_discover_overseas", names)
+        self.assertEqual(out, "连续零产出：海外自动扩源车道昨天有没有跑")
+
+    def test_no_match_keeps_english_as_is(self):
+        checks = [{
+            "id": "pipeline.a", "name": "某车道", "layer": "pipeline",
+            "owner": ".github/workflows/a.yml",
+            "sql": "select count(*) from ops_runs where module = 'a_module'",
+        }]
+        names = md.build_issue_title_names(checks)
+        out = md.humanize_issue_title("[watchdog] 连续零产出：some_unmapped_module", names)
+        self.assertEqual(out, "连续零产出：some_unmapped_module")
+
+
+class SummarizeWatchdogRulesTests(unittest.TestCase):
+    def _watchdog_checks(self, n=3):
+        return [
+            {"id": f"watchdog.rule_{c}", "name": f"老告警{c}", "severity": "warn", "source": "watchdog",
+             "why": "w", "action": "a"}
+            for c in "abc"[:n]
+        ]
+
+    def test_no_watchdog_checks_returns_none(self):
+        self.assertIsNone(md.summarize_watchdog_rules([], {}, {}))
+
+    def test_sums_hits_across_rules(self):
+        checks = self._watchdog_checks(2)
+        checks_by_id = {c["id"]: c for c in checks}
+        results = {
+            "watchdog.rule_a": result("watchdog.rule_a", 3, "breach", severity="warn"),
+            "watchdog.rule_b": result("watchdog.rule_b", 0, "ok", severity="warn"),
+        }
+        line = md.summarize_watchdog_rules(checks, results, checks_by_id)
+        self.assertIn("2 条规则今天共报 3 项", line)
+        self.assertIn("其中 0 条规则没评估成", line)
+
+    def test_error_rule_named_not_folded_into_zero(self):
+        checks = self._watchdog_checks(2)
+        checks_by_id = {c["id"]: c for c in checks}
+        results = {
+            "watchdog.rule_a": result("watchdog.rule_a", None, "error", severity="warn"),
+            "watchdog.rule_b": result("watchdog.rule_b", 1, "ok", severity="warn"),
+        }
+        line = md.summarize_watchdog_rules(checks, results, checks_by_id)
+        self.assertIn("其中 1 条规则没评估成", line)
+        self.assertIn("老告警a", line)
+
+    def test_missing_row_also_counts_as_not_assessed(self):
+        checks = self._watchdog_checks(2)
+        checks_by_id = {c["id"]: c for c in checks}
+        results = {"watchdog.rule_b": result("watchdog.rule_b", 1, "ok", severity="warn")}
+        line = md.summarize_watchdog_rules(checks, results, checks_by_id)
+        self.assertIn("其中 1 条规则没评估成", line)
+        self.assertIn("老告警a", line)
+
+
 class TrafficLightTests(unittest.TestCase):
     def test_all_ok_is_green(self):
         results = {"a": result("a", 1, "ok", severity="critical")}
