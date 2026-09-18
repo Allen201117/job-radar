@@ -38,6 +38,9 @@ jobs:
       JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
       BOCHA_API_KEY: ${{ secrets.BOCHA_API_KEY }}
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      GOOGLE_CSE_API_KEY: ${{ secrets.GOOGLE_CSE_API_KEY }}
+      GOOGLE_CSE_CX: ${{ secrets.GOOGLE_CSE_CX }}
+      EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
       SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
       BAIDU_QIANFAN_API_KEY: ${{ secrets.BAIDU_QIANFAN_API_KEY }}
       BOCHA_DAILY_CAP: ${{ vars.BOCHA_DAILY_CAP }}

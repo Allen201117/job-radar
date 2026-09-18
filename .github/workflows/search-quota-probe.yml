@@ -29,6 +29,9 @@ jobs:
       # 只有 Tavily 有官方余额接口（2026-09-04 查证）；其余两家只能靠自家台账估算，
       # 所以这里只需要 Tavily 的 key。给了就用官方口径，没给就整体回退台账。
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      GOOGLE_CSE_API_KEY: ${{ secrets.GOOGLE_CSE_API_KEY }}
+      GOOGLE_CSE_CX: ${{ secrets.GOOGLE_CSE_CX }}
+      EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
