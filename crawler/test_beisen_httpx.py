@@ -243,5 +243,54 @@ class BeisenFetchRoutingTest(unittest.TestCase):
         pag.assert_not_called()
 
 
+
+class BeisenRoutesFileContract(unittest.TestCase):
+    """crawler/beisen_routes.json 的登记形状契约。
+
+    2026-09-18 立：boe / cnnc / fosunpharma 三家的登记长期是老版 SSR 形式
+    `{"ssr_param": "jobId", "ssr_path": "zwxq"}`。那是老版 SSR 列表那条通道的产物，配的是
+    SSR 锚点里的**数字 id**；新版 GetJobAdPageList 给的是 **uuid**，两者不通用 ——
+    `_resolve_url` 的 dict 分支只认 template，于是每行 jd_url 都是空串，整源要么
+    「success + 0 岗」要么报 `list returned rows but no job could be mapped`。
+    实际代价：京东方 1073 岗（校招 700）、中核集团 1316 岗（校招 863）、复星医药 160 岗
+    （校招 71）三家必投公司在秋招季一个岗都进不了库，而它们的源早就 enabled 躺在表里。
+
+    `_beisen_route_usable()` 已经会把这种形状判成不可用（清缓存 → 落首见租户分支重探），
+    但那条自我修复路径要开浏览器；CI 的 httpx 车道走不到，就只能每天失败一次。
+    根治是**别让这种形状再登记进来** —— 这条测试就是那道门。
+    """
+
+    def test_no_legacy_ssr_shaped_routes(self):
+        import json
+        import os
+        path = os.path.join(os.path.dirname(__file__), "beisen_routes.json")
+        with open(path, encoding="utf-8") as f:
+            routes = json.load(f)
+        legacy = {
+            host: route for host, route in routes.items()
+            if isinstance(route, dict) and ("ssr_param" in route or "ssr_path" in route)
+        }
+        self.assertEqual(
+            legacy, {},
+            "beisen_routes.json 不许再登记 {ssr_param, ssr_path} 形式："
+            "它配不了新版接口的 uuid，会让每行 jd_url 变成空串。"
+            "改登记成详情页 base（如 https://<租户>.zhiye.com/social/detail）。",
+        )
+
+    def test_every_route_is_usable(self):
+        """每条登记都必须能给新版列表行拼出 jd_url（或自报「靠列表锚点」）。
+
+        不可用的登记比没有登记更糟：没有登记会走首见租户分支重探，
+        而不可用的登记会让 adapter 以为自己有路由、拼出空串、静默丢掉整源。
+        """
+        import json
+        import os
+        path = os.path.join(os.path.dirname(__file__), "beisen_routes.json")
+        with open(path, encoding="utf-8") as f:
+            routes = json.load(f)
+        unusable = [h for h, r in routes.items() if not china_ats._beisen_route_usable(r)]
+        self.assertEqual(unusable, [], f"这些登记拼不出 jd_url：{unusable}")
+
+
 if __name__ == "__main__":
     unittest.main()
