@@ -1,0 +1,44 @@
+name: morning-digest
+
+# 每天给创始人发一封晨报邮件：用户 / 用户体验 / 供给 / 假绿体检 / 新问题 / 老问题清账 / 今天建议做的事 / 数据完整性声明。
+# 取数来源 = audit_results（crawler/audit_runner.py 当天已落库的检查结果）+ ops_runs(module='ux_walkthrough')
+# + gh issue（老问题清账）。绿灯也每天发——绿灯邮件本身就是心跳。
+#
+# 北京 09:30，排在 structural-audit（08:50）之后，保证今天的检查结果已经落库。
+on:
+  schedule:
+    - cron: "30 1 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只打印邮件内容，不真的发送"
+        type: boolean
+        default: false
+
+concurrency:
+  group: morning-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      DIGEST_TO: ${{ secrets.DIGEST_TO }}
+      GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crawler/requirements.txt
+      - name: Install deps
+        run: pip install -r crawler/requirements.txt
+      - name: Send morning digest
+        working-directory: crawler
+        run: python3 morning_digest.py ${{ inputs.dry_run && '--dry-run' || '' }}

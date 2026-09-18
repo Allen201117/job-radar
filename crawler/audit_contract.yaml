@@ -212,3 +212,289 @@ checks:
     calibrated: false
     why: 两个方向都有事：太少 = 死岗清理停了，用户会点到越来越多已关闭的岗位；太多 = 可能误判，把在招岗位当死岗永久删掉（这个动作不可恢复）。
     action: 太少查逐岗核验和清理任务；太多立刻看是哪家公司、哪种来源被成批判死
+
+  # ===== 体验层 =====
+  # 全部 db: supabase（events / job_actions / auth.users / ops_runs 都在 Supabase）。
+  # 口径统一「昨天全天（Asia/Shanghai）」；SQL 已在真库跑通，实测值写在各条注释里
+  # （2026-09-19 用 crawler/morning_digest.py 所在分支实测，见 PR 报告）。
+  # calibrated 全部 false：这批指标一天历史都没有，阈值是保守拍的。
+
+  - id: exp.dau_yesterday
+    name: 昨日活跃用户数
+    layer: experience
+    db: supabase
+    owner: lib/track.ts
+    sql: >
+      select count(distinct user_id) from events
+      where user_id is not null
+        and created_at >= (date_trunc('day', now() at time zone 'Asia/Shanghai') - interval '1 day') at time zone 'Asia/Shanghai'
+        and created_at <  date_trunc('day', now() at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai'
+    normal: ">= 1"
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 内测期用户很少，这个数字本身不是拿来吓人的，是拿来看「产品有没有人在用」的最基础信号。跌到 0 就要想是不是哪里坏了导致用户打不开。
+    action: 先看昨天有没有报错/加载失败的迹象，再看是不是正好没人有空用
+
+  - id: exp.wau_7d
+    name: 近 7 天活跃用户数
+    layer: experience
+    db: supabase
+    owner: lib/track.ts
+    sql: >
+      select count(distinct user_id) from events
+      where user_id is not null and created_at >= now() - interval '7 days'
+    normal: ">= 1"
+    severity: info
+    covers: []
+    calibrated: false
+    why: 和昨日活跃对照着看，判断是「持续有人用」还是「昨天恰好有一个人点了一下」。
+    action: 无需单独处理，配合昨日活跃一起看趋势
+
+  - id: exp.registered_total
+    name: 注册用户总数
+    layer: experience
+    db: supabase
+    owner: lib/admin-health.ts
+    sql: select count(*) from auth.users
+    normal: ">= 1"
+    severity: info
+    covers: []
+    calibrated: false
+    why: 内测期的用户总盘子，配合昨日新增看增长是不是还在发生。
+    action: 无需处理，纯背景数字
+
+  - id: exp.new_users_yesterday
+    name: 昨日新注册用户数
+    layer: experience
+    db: supabase
+    owner: lib/admin-health.ts
+    sql: >
+      select count(*) from auth.users
+      where created_at >= (date_trunc('day', now() at time zone 'Asia/Shanghai') - interval '1 day') at time zone 'Asia/Shanghai'
+        and created_at <  date_trunc('day', now() at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai'
+    normal: ">= 0"
+    severity: info
+    covers: []
+    calibrated: false
+    why: 内测期还没有拉新动作，这条主要是留痕，哪天开始拉新可以看到效果。
+    action: 无需处理
+
+  - id: exp.job_clicks_yesterday
+    name: 昨日点击「去官网投递」次数
+    layer: experience
+    db: supabase
+    owner: components/JobCard.tsx
+    sql: >
+      select count(*) from events
+      where event in ('job_click', 'opportunity_official_opened')
+        and created_at >= (date_trunc('day', now() at time zone 'Asia/Shanghai') - interval '1 day') at time zone 'Asia/Shanghai'
+        and created_at <  date_trunc('day', now() at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai'
+    normal: ">= 0"
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 这是产品真正想要发生的动作——用户觉得岗位靠谱、点出去看详情。持续为 0 说明推荐没打动人，或者页面本身有问题打不开。
+    action: 去看走查报告里方向命中率是不是在降，或者页面是不是有报错
+
+  - id: exp.saved_yesterday
+    name: 昨日收藏（值得投）次数
+    layer: experience
+    db: supabase
+    owner: components/JobCard.tsx
+    sql: >
+      select count(*) from job_actions
+      where action = 'saved'
+        and created_at >= (date_trunc('day', now() at time zone 'Asia/Shanghai') - interval '1 day') at time zone 'Asia/Shanghai'
+        and created_at <  date_trunc('day', now() at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai'
+    normal: ">= 0"
+    severity: info
+    covers: []
+    calibrated: false
+    why: 用户觉得值得投的岗位数，是推荐质量的另一个侧面证据。
+    action: 无需单独处理，配合点击去官网一起看
+
+  - id: exp.applied_yesterday
+    name: 昨日标记投递次数
+    layer: experience
+    db: supabase
+    owner: components/JobCard.tsx
+    sql: >
+      select count(*) from job_actions
+      where action = 'applied'
+        and created_at >= (date_trunc('day', now() at time zone 'Asia/Shanghai') - interval '1 day') at time zone 'Asia/Shanghai'
+        and created_at <  date_trunc('day', now() at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai'
+    normal: ">= 0"
+    severity: info
+    covers: []
+    calibrated: false
+    why: 靠用户自己手动标记，不代表真实投递数量（很多人投了不点这个按钮），只能当作参考信号。
+    action: 无需单独处理
+
+  - id: exp.search_zero_result_rate_7d
+    name: 近 7 天搜索「什么都没搜到」的比例
+    layer: experience
+    db: supabase
+    owner: lib/track.ts
+    sql: >
+      select count(*) filter (where (payload->>'zero_result')::boolean is true)::float
+             / nullif(count(*), 0)
+      from events
+      where event = 'search_result' and created_at >= now() - interval '7 days'
+    normal: "<= 0.30"
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 用户搜了半天啥都没有，是最直接的「筛选条件太严或供给不够」的信号。
+    action: 去看用户常搜的城市/关键词组合，是不是供给本来就薄
+
+  - id: exp.search_slow_rate_7d
+    name: 近 7 天搜索「等了超过 3 秒」的比例
+    layer: experience
+    db: supabase
+    owner: lib/track.ts
+    sql: >
+      select count(*) filter (where payload->>'latency_bucket' in ('slow', 'very_slow'))::float
+             / nullif(count(*), 0)
+      from events
+      where event = 'search_result' and created_at >= now() - interval '7 days'
+    normal: "<= 0.20"
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 用户点一下要等半天，体感就是「这产品很卡」，即便后端指标看着还行。
+    action: 查最近有没有改动让候选取数变重，或者是不是命中了没走索引的查询
+
+  - id: exp.ux_walkthrough_zero_shown
+    name: 体验走查：有几个模拟用户在推荐页什么都没看到
+    layer: experience
+    db: supabase
+    owner: scripts/ux-walkthrough/walkthrough.js
+    sql: >
+      select (metrics->>'zero_shown')::float from ops_runs
+      where module = 'ux_walkthrough'
+      order by finished_at desc limit 1
+    normal: "<= 3"
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 走查脚本每天拿真实用户画像模拟一遍推荐；有人一个岗都刷不出来，通常是求职范围配置错配或方向词写法没被识别，光看代码看不出来。
+    action: 去 ops_runs(module='ux_walkthrough') 最新一行看是哪几个用户、issues 里写的什么原因
+
+  - id: exp.ux_walkthrough_issue_count
+    name: 体验走查：昨晚模拟出的问题总数
+    layer: experience
+    db: supabase
+    owner: scripts/ux-walkthrough/walkthrough.js
+    sql: >
+      select (metrics->>'issues')::float from ops_runs
+      where module = 'ux_walkthrough'
+      order by finished_at desc limit 1
+    normal: "<= 10"
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 汇总所有类型的问题（零结果/范围错配/方向命中低/校招渠道不通/洞察零覆盖/接口慢）。数字本身不告诉你哪一类，要看 issues_by_type。
+    action: 看 ops_runs(module='ux_walkthrough') 最新一行的 issues_by_type，按人数最多的那一类先处理
+
+  - id: exp.ux_walkthrough_direction_ok_avg
+    name: 体验走查：推荐岗位方向命中率均值
+    layer: experience
+    db: supabase
+    owner: scripts/ux-walkthrough/walkthrough.js
+    sql: >
+      select (metrics->>'direction_ok_avg')::float from ops_runs
+      where module = 'ux_walkthrough'
+      order by finished_at desc limit 1
+    normal: ">= 0.6"
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 推荐给用户的岗位，有多大比例是他真正想要的方向。这是「推荐准不准」最核心的一个数。
+    action: 参考 [[job-radar-zero-drift-ab-harness]] 的对拍方法，别只看这一个数就动匹配逻辑
+
+  - id: exp.ux_walkthrough_insight_coverage_avg
+    name: 体验走查：用户能看到职业洞察的公司占比均值
+    layer: experience
+    db: supabase
+    owner: scripts/ux-walkthrough/walkthrough.js
+    sql: >
+      select (metrics->>'insight_coverage_avg')::float from ops_runs
+      where module = 'ux_walkthrough'
+      order by finished_at desc limit 1
+    normal: ">= 0.1"
+    severity: info
+    covers: []
+    calibrated: false
+    why: 洞察库还在早期，这个数天然不会高，先留着看趋势。
+    action: 无需单独处理
+
+  - id: exp.ux_walkthrough_campus_healthy_ratio_avg
+    name: 体验走查：校招/实习用户看到的必投公司里渠道打得通的占比均值
+    layer: experience
+    db: supabase
+    owner: scripts/ux-walkthrough/walkthrough.js
+    sql: >
+      select (metrics->>'campus_healthy_ratio_avg')::float from ops_runs
+      where module = 'ux_walkthrough'
+      order by finished_at desc limit 1
+    normal: ">= 0.3"
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 校招/实习用户最关心的必投公司名单里，有多少家的招聘渠道是真的通的、抓得到岗位。
+    action: 去 /admin/health 供给页看具体哪几家掉了，是 idle 还是 missing
+
+  - id: exp.fake_green_sources_yesterday
+    name: 假绿体检：昨天「报成功却一个岗都没抓回来」的来源数
+    layer: experience
+    db: supabase
+    owner: crawler/run.py
+    sql: >
+      select count(distinct source_id) from crawl_runs
+      where status = 'success' and jobs_found = 0
+        and started_at >= (date_trunc('day', now() at time zone 'Asia/Shanghai') - interval '1 day') at time zone 'Asia/Shanghai'
+        and started_at <  date_trunc('day', now() at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai'
+    normal: "<= 50"
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 「绿灯」不等于「有产出」。故意不用 jobs_created=0（那是常态，84% 的运行都是 0），只看 jobs_found=0——一个岗都没在列表里看到，却报成功，是最典型的假绿。
+    action: 挑几个来源看看是不是接口返回结构变了、还是登录态过期
+
+  - id: exp.fake_green_sources_chronic
+    name: 假绿体检：连续 7 天都「报成功却零产出」的来源数
+    layer: experience
+    db: supabase
+    owner: crawler/run.py
+    sql: >
+      select count(*) from (
+        select source_id from crawl_runs
+        where started_at >= now() - interval '7 days'
+        group by source_id
+        having count(*) filter (where status = 'success' and jobs_found = 0) >= 7
+           and count(*) filter (where not (status = 'success' and jobs_found = 0)) = 0
+      ) chronic
+    normal: "<= 10"
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 一次假绿可能只是当天抖动，连续 7 天都这样基本可以确定这个来源已经坏了很久，只是没人发现。
+    action: 逐个来源核实入口是否还有效，无效就 disable（保留行，别删）
+
+  - id: exp.dead_click_unknown_rate
+    name: 点击时探活「查不出来」的比例（该指标当前不可用，仅留痕观察）
+    layer: experience
+    db: supabase
+    owner: app/api/jobs/[jobId]/liveness/route.ts
+    sql: >
+      select count(*) filter (where payload->>'result' = 'unknown')::float
+             / nullif(count(*), 0)
+      from events
+      where event = 'job_liveness_at_click' and created_at >= now() - interval '7 days'
+    normal: "<= 1.01"
+    severity: info
+    covers: []
+    calibrated: false
+    why: 本来想用它衡量「点开是死岗」的比例，但实测 79% 都是 unknown（探不出结果），这个指标现在测不出真实死链率，只能先留着看 unknown 占比本身有没有变化。上限故意设成 1.01，不让它触发告警——它还不到能报警的程度。
+    action: 不要据此下结论；死链治理仍以 job-radar-clickable-job-criterion 的 last_seen_at 口径为准
