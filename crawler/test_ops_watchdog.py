@@ -1102,3 +1102,64 @@ class SilentSourcesTest(unittest.TestCase):
         room = W.SILENT_LOOKBACK_DAYS - (W.SILENT_SOURCE_HOURS // 24)
         self.assertGreaterEqual(room, W.SILENT_MIN_DAYS)
         self.assertGreaterEqual(W.SILENT_SOURCE_HOURS, 36)   # 低于正常最长间隔 32.2h + 余量就会被调度漂移误报
+
+
+class AuditBridgeTest(unittest.TestCase):
+    """老告警规则接进 audit_results：只做翻译，不重新判定；规则没评估成必须落 error/None。"""
+
+    def _checks(self):
+        return [
+            {"id": "watchdog.rule_a", "rule": "A", "layer": "pipeline", "severity": "critical",
+             "normal": "== 0", "calibrated": False, "source": "watchdog"},
+            {"id": "watchdog.rule_f", "rule": "F", "layer": "data", "severity": "critical",
+             "normal": "== 0", "calibrated": False, "source": "watchdog"},
+        ]
+
+    def test_rule_with_findings_is_breach_with_value_and_detail(self):
+        findings = [{"rule": "A", "subject": "daily_crawl", "summary": "s", "evidence": []}]
+        rows = W.build_audit_bridge_rows(findings, rule_errored=set(),
+                                         checks=self._checks(), today="2026-09-19", now=NOW)
+        by_id = {r["check_id"]: r for r in rows}
+        a = by_id["watchdog.rule_a"]
+        self.assertEqual(a["value"], 1.0)
+        self.assertEqual(a["verdict"], "breach")
+        self.assertIsNone(a["error_message"])
+        self.assertEqual(len(a["detail"]["findings"]), 1)
+
+    def test_rule_with_zero_findings_is_ok_with_no_detail(self):
+        rows = W.build_audit_bridge_rows([], rule_errored=set(),
+                                         checks=self._checks(), today="2026-09-19", now=NOW)
+        f = {r["check_id"]: r for r in rows}["watchdog.rule_f"]
+        self.assertEqual(f["value"], 0.0)
+        self.assertEqual(f["verdict"], "ok")
+        self.assertIsNone(f["detail"])
+
+    def test_rule_that_failed_to_evaluate_is_error_with_null_value_not_zero(self):
+        """核验点：规则本轮评估失败必须是 verdict=error / value=None，不许写成「查到 0」。"""
+        rows = W.build_audit_bridge_rows([], rule_errored={"F"},
+                                         checks=self._checks(), today="2026-09-19", now=NOW)
+        f = {r["check_id"]: r for r in rows}["watchdog.rule_f"]
+        self.assertIsNone(f["value"])
+        self.assertEqual(f["verdict"], "error")
+        self.assertIsNotNone(f["error_message"])
+        # 没受影响的规则不该被连带标成 error
+        a = {r["check_id"]: r for r in rows}["watchdog.rule_a"]
+        self.assertEqual(a["verdict"], "ok")
+
+    def test_non_watchdog_checks_are_ignored(self):
+        checks = self._checks() + [{"id": "jobs.x", "source": "sql"}]
+        rows = W.build_audit_bridge_rows([], set(), checks, "2026-09-19", now=NOW)
+        self.assertEqual({r["check_id"] for r in rows}, {"watchdog.rule_a", "watchdog.rule_f"})
+
+    def test_publish_bridge_write_failure_is_warning_not_raise(self):
+        """写库失败只打 ::warning::，绝不让这条旁路观测炸掉 watchdog 主流程。"""
+        import audit_runner as A
+        original_connect = A.connect
+        A.connect = lambda db: (_ for _ in ()).throw(RuntimeError("boom"))
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                written = W.publish_audit_bridge(self._checks(), [], set(), "2026-09-19", now=NOW)
+            self.assertEqual(written, 0)
+            self.assertIn("::warning::", buf.getvalue())
+        finally:
+            A.connect = original_connect

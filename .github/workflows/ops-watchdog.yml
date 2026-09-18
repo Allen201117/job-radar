@@ -39,6 +39,10 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # 直连 Postgres（不是 supabase-py 客户端）：2026-09-19 起本任务把老告警规则的结果桥接进
+      # audit_results 表（crawler/audit_runner.py 用 psycopg2 直连写库），这条与 structural-audit.yml
+      # 用的是同一个 secret。桥接写失败只打 ::warning::，缺这个变量不会让告警发布本身失败。
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       OPS_WATCHDOG_APPLY: ${{ github.event.inputs.apply || vars.OPS_WATCHDOG_APPLY || 'false' }}
       # 已知在停摆、不想被反复提醒的模块（逗号分隔）。留空即全查。
