@@ -615,6 +615,10 @@ def merge_missing_as_error(checks, results_today_by_id):
     for c in checks:
         cid = c["id"]
         if cid in merged:
+            # 「什么算严重」以期望清单为唯一权威，不认落库那一刻的快照：清单里调了分级应当立刻生效，
+            # 否则调级当天的晨报仍按旧分级亮灯（2026-09-19 实测：老告警降级后灯还是红的）。
+            if c.get("severity") and merged[cid].get("severity") != c["severity"]:
+                merged[cid] = {**merged[cid], "severity": c["severity"]}
             continue
         merged[cid] = {
             "check_id": cid,

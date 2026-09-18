@@ -902,3 +902,18 @@ class LiteralProvenanceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ContractSeverityIsAuthoritativeTests(unittest.TestCase):
+    """落库快照里的 severity 过期时，以期望清单为准（调级当天就要生效）。"""
+
+    def test_contract_severity_overrides_stale_row_severity(self):
+        checks = [{"id": "watchdog.rule_a", "severity": "warn", "source": "watchdog"}]
+        rows = {"watchdog.rule_a": {"check_id": "watchdog.rule_a", "severity": "critical",
+                                    "verdict": "breach", "value": 6.0, "calibrated": True}}
+        merged = md.merge_missing_as_error(checks, rows)
+        self.assertEqual(merged["watchdog.rule_a"]["severity"], "warn")
+        self.assertEqual(merged["watchdog.rule_a"]["value"], 6.0)
+        self.assertEqual(md.compute_traffic_light(merged), "🟡")
+        self.assertEqual(rows["watchdog.rule_a"]["severity"], "critical")  # 不原地改入参
+

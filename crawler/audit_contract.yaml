@@ -583,7 +583,7 @@ checks:
     severity: critical
     calibrated: false
     why: 这是全站岗位供给的主车道，每天固定跑几轮。一天一次记录都没有，说明抓取彻底停了。
-    action: 看这条车道最近一次 GitHub Actions 运行是失败还是根本没触发
+    action: 把这条转给 Claude，让它查主抓取昨天是运行失败了，还是压根没被触发
 
   - id: pipeline.enrich_backlog_httpx_ran
     name: 逐岗补正文（网页直连档）昨天有没有跑
@@ -1104,7 +1104,7 @@ checks:
     severity: warn
     calibrated: false
     why: 这条检查测的是本审计系统自己——它如果停了，上面几十条检查全部不会再更新，且不会有任何人知道。
-    action: 看这条任务最近一次 GitHub Actions 运行是否失败
+    action: 把这条转给 Claude，让它查每日体检昨天为什么没跑成
 
   - id: pipeline.morning_digest_ran
     name: 晨报邮件昨天有没有真的发出去
@@ -1123,6 +1123,9 @@ checks:
     action: 把这条转给 Claude，让它查晨报这条定时任务最近一次是不是运行失败了
 
   # ===== 老告警桥接（source: watchdog） =====
+  # 严重度口径（2026-09-19 定）：晨报红灯只留给「用户可见损坏 / 供给来源大面积塌」，单个来源坏最多黄灯。
+  # 所以这里只有 rule_d（关键任务超期没跑）与 rule_k（某一整类来源产出骤降）是 critical，其余一律 warn ——
+  # 否则拖了几周的老病号（首日实测 A=6 / F=9）会让晨报天天红灯，红灯就废了。
   # 这 16 条不是本文件自己跑 SQL 量出来的——它们的判定逻辑一直在 crawler/ops_watchdog.py 里跑
   # （规则 A~P，每天真评估、命中就开 GitHub Issue），本次只是把「今天这条规则命中了几条」接进
   # audit_results 这张趋势表，好让它们也能被晨报、能画历史曲线，不用再翻 Issue 列表。
@@ -1137,10 +1140,10 @@ checks:
     rule: A
     source: watchdog
     normal: "== 0"
-    severity: critical
+    severity: warn
     calibrated: false
     why: 某个后台任务连续多天「有活可干却什么都没产出」，或者当天全部运行都失败了。空队列产出为 0 是正常的，只有「有活干却零产出」才算异常。
-    action: 看是哪个模块命中，查它最近几次运行的日志
+    action: 把这条转给 Claude，让它看是哪几个后台任务在空转、各自卡在哪一步
 
   - id: watchdog.rule_b
     name: 任务运行到一半被系统强制中断
@@ -1149,7 +1152,7 @@ checks:
     rule: B
     source: watchdog
     normal: "== 0"
-    severity: critical
+    severity: warn
     calibrated: false
     why: 按更细的执行步骤级状态判断（不是看整体任务状态，那样会漏），发现任务被系统强制杀掉，或者反复被取消。
     action: 看是哪个任务命中，把它的执行时长控制在系统允许的时限之内，或者拆小
@@ -1197,7 +1200,7 @@ checks:
     rule: F
     source: watchdog
     normal: "== 0"
-    severity: critical
+    severity: warn
     calibrated: false
     why: 一个启用中的抓取来源在最近这几轮里全部失败了（不是抓少了，是每次都彻底失败），这个来源已经名存实亡。
     action: 看命中的来源，按错误信息判断是网址失效、被反爬、还是环境缺东西
@@ -1233,10 +1236,10 @@ checks:
     rule: I
     source: watchdog
     normal: "== 0"
-    severity: critical
+    severity: warn
     calibrated: false
     why: 抓取记录显示任务已经开始，但很久都没有等到它说「跑完了」，很可能是进程被杀掉后没人清理这条记录。
-    action: 看命中的任务，确认对应的 GitHub Actions 运行是不是真的被中断了
+    action: 把这条转给 Claude，让它确认这些抓取是被中途打断了，还是跑完了只是没记下结果
 
   - id: watchdog.rule_j
     name: 投递入口该找人重新核实了
@@ -1293,7 +1296,7 @@ checks:
     rule: N
     source: watchdog
     normal: "== 0"
-    severity: critical
+    severity: warn
     calibrated: false
     why: 抓取进程本身跑完了，但连着两次想把「跑完了」这件事记下来都失败了，只留在会被截断的运行日志里，没人看得到。
     action: 看命中的任务，查它写运行记录那一步为什么连续失败
