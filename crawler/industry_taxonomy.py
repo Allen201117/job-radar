@@ -1,7 +1,7 @@
 """sources.industry 自由写法 → sources.industry_group 归一表。
 
 唯一数据源是 `lib/industry-taxonomy.json`（前端 `lib/industry-taxonomy.ts` 读同一份文件），
-两端一致性由 `tests/industry-taxonomy-cross-lang.test.js` 全量对拍守住（433 条全跑，不抽样）。
+两端一致性由 `tests/industry-taxonomy-cross-lang.test.js` 全量对拍守住（mapping 全部 key 全跑，不抽样）。
 **改映射只改那个 JSON，不要在这里另写一份规则/表**——那正是 company-industry.js /
 company_industry.py 两端各写一份、跑着跑着就漂了的坑（见 tests/company-industry-cross-lang.test.js
 的门禁说明）。
@@ -48,7 +48,7 @@ def other_group() -> str:
 
 
 def mapping() -> dict:
-    """{sources.industry 原始写法: industry_group}，433 条全量显式表。"""
+    """{sources.industry 原始写法: industry_group}，全量显式表（v1 433 条，v2 450 条）。"""
     return dict(_load().get("mapping") or {})
 
 

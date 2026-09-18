@@ -81,3 +81,41 @@ test("纯拉丁长词词边界：解除误认领后真岗回到本方向 exact",
   assert.equal(keywordMatchTier({ title: "Salesforce Product Owner", summary: "" }, "产品经理"), "exact");
   assert.equal(keywordMatchTier({ title: "Data Science Postdoctoral Fellow", summary: "" }, "数据分析"), "exact");
 });
+
+// 2026-09-18 /today 44 画像真库对拍抓到的误报：「产品经理」词组含短拉丁词 pm（国内组与海外词库都有），
+// containsTerm 对 ≤3 字母的拉丁词走词边界正则，而海外倒班岗标题里的排班时间 "2 PM-" / "6:00 PM)" 的
+// PM 正好是独立 token → 判成「方向精确命中 产品经理」。全库 active 实测：标题含独立 pm token 的 480 条里
+// 63 条是「小时数 + am/pm」的时间写法，全被判 exact，全是仓储/产线/客服倒班岗。
+// 修法钉在 containsTerm：am/pm 前面紧跟「独立的 1~2 位小时数（可带 :mm）」时不算命中。
+// ⚠️ 别拿 "Production Associate (11:00 PM" 当样例：它另有一条根因（长词 product 走裸子串、被 production 包住），不归本条管。
+// ⚠️ 判据必须是**独立**的小时数：「T0 PM」（量化 T0 策略的 PM）里 0 前面是字母，不是时间，仍要命中。
+test("时间型 AM/PM 不算 产品经理 命中（倒班岗排班时间）", () => {
+  const timeTitles = [
+    "Data Center Team Lead- Builds-B Shift (Mon-Fri 2 PM- 10:30PM)",
+    "W/E Days Supervisor (Fri-Sun: 5:45 AM-6:00 PM)",
+    "11 PM Closing Expert",
+    "3rd Shift Molding Supervisor (11 PM",
+    "Supply Handler (6:00 am- 6:30 pm)",
+    "Customs Brokerage Rep III: M-F: 8:30 am to 5 pm CDT",
+  ];
+  for (const title of timeTitles) {
+    assert.equal(jobMatchesChinaKeyword({ title }, "产品经理"), false, title);
+    assert.equal(keywordMatchTier({ title }, "产品经理", { includeOverseasLexicon: true }), null, title);
+  }
+});
+
+test("岗位缩写 PM 仍精确命中 产品经理（不能因时间规则误杀）", () => {
+  const roleTitles = [
+    "Senior PM, Growth",
+    "Technical PM",
+    "PM - Platform",
+    "PM(J16657)",
+    "T0 PM",
+    "搜索策略pm（J84612）",
+    "Digital PM Analyst, Assistant Vice President",
+  ];
+  for (const title of roleTitles) {
+    assert.equal(jobMatchesChinaKeyword({ title }, "产品经理"), true, title);
+    assert.equal(keywordMatchTier({ title }, "产品经理", { includeOverseasLexicon: true }), "exact", title);
+  }
+});
