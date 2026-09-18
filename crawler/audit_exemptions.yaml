@@ -20,6 +20,10 @@ data_columns:
   search_doc: "内部 tsvector 缓存列，schema.sql 自己注释『v1 不填，FTS 后置 pass 再启用』，当前没有任何写入路径产出真实内容"
   source_id: "外键，指向 sources 表；它本身没有独立取值范围，异常表现在 sources 侧的检查项里"
 
-experience_metrics: {}
-  # 体验层还没有 contract 检查项落地，暂不豁免任何指标——先让差集把全部指标列出来，
-  # 等真正决定哪些指标要有阈值时再补 experience 层检查项，而不是先消音。
+experience_metrics:
+  campus_users: "参与计算 exp.ux_walkthrough_campus_healthy_ratio_avg 的分母子样本量（多少个模拟用户是校招/实习画像），本身没有『正常范围』，只是解释比例怎么算出来的辅助计数，不单独设期望。"
+  campus_zero_healthy: "『必投公司渠道命中数为 0』的模拟用户计数，已被 exp.ux_walkthrough_campus_healthy_ratio_avg 这个比例覆盖同一个信号，不重复设期望。"
+  errors: "走查脚本自身运行出错的计数（比如某个模拟用户请求异常），这是走查任务本身健不健康的信号，不是产品体验指标；脚本出错会体现在 ops_runs(module='ux_walkthrough') 的 status 上，不需要单独阈值。"
+  issue_samples: "每类问题的具体样本明细（含用户、detail），是给人工排查用的原始记录，不是可以设『正常范围』的聚合数字——聚合后的计数已经是 exp.ux_walkthrough_issue_count 和 issues_by_type。"
+  median_shown: "推荐页展示岗位数的中位数，用于解读『展示得多不多』的辅助数字；最严重的『完全没有』这个情形已被 exp.ux_walkthrough_zero_shown 单独覆盖，中位数本身没有一个明确的『不正常』门槛。"
+  scope_mismatch: "求职范围错配的模拟用户计数，是 issues_by_type 里的一个分类键，已经被 exp.ux_walkthrough_issue_count（总数）覆盖同一份数据；scope_mismatch 这个具体分类只在走查报告的问题清单里逐条列出，不单独设阈值（阈值意义不大——这是配置错误不是产品质量抖动）。"

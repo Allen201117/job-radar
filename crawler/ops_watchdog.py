@@ -152,7 +152,10 @@ DEAD_SOURCE_MIN_RUNS = 8   # 少于这个次数不判（新源、低频源不冤
 NO_OUTPUT_MODULES = ("insight_staleness", "purge_expired", "ops_watchdog",
                      "search_quota_probe", "backfill_job_function",
                      "backfill_recruitment_category", "db_report", "production_smoke",
-                     "audit_hotjob_attribution", "ats_tenant_sync", "announcement_verify")
+                     "audit_hotjob_attribution", "ats_tenant_sync", "announcement_verify",
+                     # morning_digest：一天固定发一封（或 dry-run 一次），不是「处理量越大产出越大」
+                     # 的批处理任务，硬塞进规则 A 的 produced/work 口径没有意义。
+                     "morning_digest")
 
 # 规则 D：已落库的账户级错误信号。lib/track.ts 把 402/余额不足归一成 llm_insufficient_balance、
 # 把 401/403 归一成 llm_auth_error，写进 events.payload.diagnostics.error_code——用户侧真实踩到的欠费。
