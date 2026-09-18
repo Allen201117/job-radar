@@ -366,11 +366,8 @@ checks:
     normal: ">= 1"
     severity: warn
     calibrated: false
-    why: >
-      2026-09-19 复核时发现这个模块在台账里从来没有出现过一行（不是窗口太短，是全表扫描
-      查不到任何历史）——代码里确实在调用记录台账，但从未真正落库过，原因还没查。这条检查
-      如实反映现状：它现在会一直「不达标」，直到接线问题被修好。
-    action: 先确认这条 workflow 最近有没有真的触发过，再查它写台账那一步为什么没有留下任何记录
+    why: 这条任务负责把北森渠道的详情页路由探测出来，供其它逐岗核验的任务复用；停了会导致这批公司的详情页链接判断不准。
+    action: 看这条任务最近一次运行是否失败
 
   - id: pipeline.announcement_harvest_ran
     name: 官方招聘公告抓取昨天有没有跑
@@ -439,11 +436,8 @@ checks:
     normal: ">= 1"
     severity: warn
     calibrated: false
-    why: >
-      2026-09-19 复核时发现这个模块（以及同一条 workflow 第二步用的 campus_board_verify）
-      在台账里从来没有出现过一行，全表扫描查不到任何历史。代码里确实在调用记录台账，
-      原因还没查。这条检查如实反映现状：它现在会一直「不达标」。
-    action: 先确认这条 workflow 最近有没有真的触发成功过，再查它写台账那一步为什么没有留下任何记录
+    why: 这条任务批量给必投清单里的公司补校招板块源，停了校招覆盖率会停在原地。
+    action: 看这条任务最近一次运行处理了多少个候选、通过了多少个
 
   - id: pipeline.company_logos_ran
     name: 企业 logo 抓取（每周）最近有没有跑
@@ -456,10 +450,8 @@ checks:
     normal: ">= 1"
     severity: warn
     calibrated: false
-    why: >
-      2026-09-19 复核时发现这个模块在台账里从来没有出现过一行。代码里确实在调用记录台账，
-      原因还没查。这条检查如实反映现状：它现在会一直「不达标」。
-    action: 先确认这条 workflow 最近有没有真的触发成功过，再查它写台账那一步为什么没有留下任何记录
+    why: 这条任务每周给公司补 logo 图片，停了只会让新公司的卡片一直没有图，不影响岗位供给本身。
+    action: 看这条任务最近一次运行是否失败
 
   - id: pipeline.ats_tenant_sync_ran
     name: ATS 租户名单同步（每周）最近有没有跑
@@ -472,10 +464,8 @@ checks:
     normal: ">= 1"
     severity: warn
     calibrated: false
-    why: >
-      2026-09-19 复核时发现这个模块在台账里从来没有出现过一行。代码里确实在调用记录台账，
-      原因还没查。这条检查如实反映现状：它现在会一直「不达标」。
-    action: 先确认这条 workflow 最近有没有真的触发成功过，再查它写台账那一步为什么没有留下任何记录
+    why: 这条任务每周同步各招聘系统平台的新租户名单，停了新公司接入会变慢，不影响存量公司的抓取。
+    action: 看这条任务最近一次运行是否失败
 
   - id: pipeline.audit_hotjob_attribution_ran
     name: hotjob 租户归属核对（每周）最近有没有跑
@@ -488,10 +478,66 @@ checks:
     normal: ">= 1"
     severity: warn
     calibrated: false
+    why: 这条任务每周核对 hotjob 渠道的租户名字有没有配错公司，停了张冠李戴的风险会累积没人发现。
+    action: 看这条任务最近一次运行是否失败
+
+  - id: pipeline.backfill_job_function_ran
+    name: 岗位职能分类补算昨天有没有真的跑起来
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/backfill-job-function.yml
+    sql: >
+      select count(*) from ops_runs where module = 'backfill_job_function'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 6"                # 理论每 2 小时一轮 + 每天一次全量 ≈ 13 次/天，下限取约一半
+    severity: warn
+    calibrated: false
     why: >
-      2026-09-19 复核时发现这个模块在台账里从来没有出现过一行。代码里确实在调用记录台账，
-      原因还没查。这条检查如实反映现状：它现在会一直「不达标」。
-    action: 先确认这条 workflow 最近有没有真的触发成功过，再查它写台账那一步为什么没有留下任何记录
+      这条任务把岗位归到「产品/研发/销售…」这类职能分类，停了新岗位会一直卡在待分类。
+      2026-09-19 才刚给它接上运行台账（此前一直没有台账，只能靠 jobs.function_pending
+      间接盯着「有没有堆积」），实测值目前是 0——正常，接线刚上线还没等到第一轮触发；
+      如果过几天还是 0 才是真的问题。
+    action: 看这条任务最近一次运行是否失败；也可以直接看 jobs.function_pending 有没有堆高
+
+  - id: pipeline.backfill_recruitment_category_ran
+    name: 校招/社招分类补算昨天有没有真的跑起来
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/backfill-recruitment-category.yml
+    sql: >
+      select count(*) from ops_runs where module = 'backfill_recruitment_category'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 6"                # 理论每 2 小时一轮 + 每天一次全量 ≈ 13 次/天，下限取约一半
+    severity: warn
+    calibrated: false
+    why: >
+      这条任务判断岗位是校招还是社招，停了新岗位会一直卡在待判定、在校招专区里看不到。
+      2026-09-19 才刚给它接上运行台账（此前一直没有台账，只能靠 jobs.recruitment_type_pending
+      间接盯着「有没有堆积」），实测值目前是 0——正常，接线刚上线还没等到第一轮触发；
+      如果过几天还是 0 才是真的问题。
+    action: 看这条任务最近一次运行是否失败；也可以直接看 jobs.recruitment_type_pending 有没有堆高
+
+  - id: pipeline.campus_lane_ran
+    name: 校招高频车道（校招季内）昨天有没有真的抓过
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/campus-crawl.yml
+    sql: >
+      select case
+        when extract(month from (now() at time zone 'Asia/Shanghai')) not in (3, 4, 9, 10, 11)
+          then 1
+        else (select count(*) from ops_runs where module = 'campus_lane'
+                and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1))
+      end
+    normal: ">= 1"                # 实测 7（当前 9 月，校招季内）
+    severity: critical
+    calibrated: false
+    why: >
+      这是校招岗位「开闸即抢」的高频车道，每小时刷一遍必投清单里的校招源，秋招/春招季
+      停了会导致新放出来的校招岗位最坏要等到第二天才被主车道抓到。校招季（3、4、9、10、
+      11 月，与「必投公司校招渠道没接」那条告警用的是同一组月份）之外这条车道设计上就
+      不该跑，SQL 里按月份条件化，非校招季恒返回 1，不会被误判成故障。
+    action: 看这条车道最近一次是不是被 gate job 拦住了，或者真的没触发
 
   - id: pipeline.db_report_ran
     name: 数据库真实数字体检报告昨天有没有跑

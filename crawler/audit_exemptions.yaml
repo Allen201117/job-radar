@@ -6,11 +6,8 @@
 # （workflow 路径 / module 名 / jobs 列名 / 指标键），值是理由。
 
 pipeline_workflows:
-  .github/workflows/backfill-job-function.yml: "scripts/backfill-job-function.js 不写 ops_runs（也不写任何别的运行台账），没有可查的『它跑没跑』信号；它的效果已经被 jobs.function_pending 这条数据层检查间接盯住（NULL 堆高 = 补算任务停了），2026-09-19 复核确认无遗漏。"
-  .github/workflows/backfill-recruitment-category.yml: "同上一条，scripts/backfill-recruitment-category.js 也不写任何运行台账，效果由 jobs.recruitment_type_pending 间接盯住。"
-  .github/workflows/enrich-crawl.yml: "crawler/run.py 写 ops_runs 时模块名恒为 daily_crawl，与 daily-crawl.yml 完全同名，metrics 里也没有能区分『这轮是快档还是富化档』的字段（2026-09-19 读代码确认）。已用 pipeline.daily_crawl_ran 覆盖『daily_crawl 这个模块今天有没有活动』，但没法单独证明是这条 workflow 而不是那条在跑。"
-  .github/workflows/dead-link-audit-new.yml: "audit_dead_links.py 写 ops_runs 时模块名恒为 dead_link_audit，与 dead-link-audit.yml 完全同名，没有字段能区分是全量轮转档还是高频新岗档（2026-09-19 读代码确认）。已用 pipeline.dead_link_audit_ran 覆盖『dead_link_audit 这个模块今天有没有活动』。"
-  .github/workflows/campus-crawl.yml: "campus_crawl.py 确实写独立模块名 campus_lane，但这条车道设计上只在校招季（8-11月/2-4月）且『距上轮真跑完 ≥50min』时才真的执行（crawler/campus_lane_gate.py 的频率闸），淡季整月零记录是设计好的正常状态，不是故障。固定窗口的『>=1』existence 检查会在淡季持续无意义地报警（狼来了），2026-09-19 判断先不接，等按声明周期换算窗口的通用机制做出来再接（同 ops_watchdog.py 里『周任务规则 A 结构性缺口』那条注释是同一类问题）。"
+  .github/workflows/enrich-crawl.yml: "真缺口，不是不用管：crawler/run.py 写 ops_runs 时模块名恒为 daily_crawl，与 daily-crawl.yml 完全同名，metrics 里没有任何字段能区分『这轮是快档还是富化档』（2026-09-19 读代码确认）。已用 pipeline.daily_crawl_ran 覆盖『daily_crawl 这个模块今天有没有活动』，但这条 workflow 如果单独停了、只要 daily-crawl.yml 还在跑，这条检查会一直显示正常——那条检查掩盖不住这一条真的坏了。等两条车道的台账能各自打上区分字段再拆开接。"
+  .github/workflows/dead-link-audit-new.yml: "真缺口，不是不用管：audit_dead_links.py 写 ops_runs 时模块名恒为 dead_link_audit，与 dead-link-audit.yml 完全同名，没有字段能区分是全量轮转档还是高频新岗档（2026-09-19 读代码确认）。已用 pipeline.dead_link_audit_ran 覆盖『dead_link_audit 这个模块今天有没有活动』，但这条 workflow 单独停了、只要另一条还在跑，这条检查看不出来——同上一条一样，另一条会掩盖它。等台账能区分再拆开接。"
 
 pipeline_modules: {}
   # 同上：ops_runs 里出现的模块目前没有被豁免的，MODULE_OUTPUT/NO_OUTPUT_MODULES

@@ -1104,6 +1104,56 @@ class SilentSourcesTest(unittest.TestCase):
         self.assertGreaterEqual(W.SILENT_SOURCE_HOURS, 36)   # 低于正常最长间隔 32.2h + 余量就会被调度漂移误报
 
 
+class GuardedEvaluateTest(unittest.TestCase):
+    """A/C/D/M/N/P 六条规则 2026-09-19 起各自包了一层：一条抛错不能拖垮其余规则，
+    也不能让程序整体崩溃走不到桥接这一步。"""
+
+    def test_success_passes_through_return_value_untouched(self):
+        rule_errored = set()
+        result = W.guarded_evaluate("A", rule_errored, lambda x: x + 1, 41)
+        self.assertEqual(result, 42)
+        self.assertEqual(rule_errored, set())
+
+    def test_exception_is_warned_marks_rule_errored_and_returns_none(self):
+        rule_errored = set()
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            result = W.guarded_evaluate("F", rule_errored, lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+        self.assertIsNone(result)
+        self.assertEqual(rule_errored, {"F"})
+        self.assertIn("::warning::", buf.getvalue())
+        self.assertIn("F", buf.getvalue())
+
+    def test_one_rule_failing_does_not_affect_evaluation_of_the_next_rule(self):
+        """核验点：某条规则抛错后，紧接着评估的下一条规则必须照常拿到自己的真实结果，
+        不能被前一条的异常带偏或跳过。"""
+        rule_errored = set()
+        first = W.guarded_evaluate("D", rule_errored, lambda: (_ for _ in ()).throw(ValueError("x")))
+        second = W.guarded_evaluate(
+            "M", rule_errored,
+            lambda: [{"rule": "M", "subject": "mac", "summary": "s", "evidence": []}],
+        )
+        self.assertIsNone(first)
+        self.assertEqual(rule_errored, {"D"})
+        self.assertEqual(len(second), 1)  # M 完全不受 D 抛错影响
+
+    def test_failed_rule_bridges_to_error_with_null_value_end_to_end(self):
+        """从 guarded_evaluate 到 build_audit_bridge_rows 的端到端核验：
+        某条规则这一轮抛错 → 桥接行必须是 verdict=error / value=None，不是「查到 0」。"""
+        rule_errored = set()
+        findings = []
+        findings += W.guarded_evaluate(
+            "N", rule_errored, lambda: (_ for _ in ()).throw(RuntimeError("db down")),
+        ) or []
+        checks = [{"id": "watchdog.rule_n", "rule": "N", "layer": "pipeline",
+                   "severity": "critical", "normal": "== 0", "calibrated": False,
+                   "source": "watchdog"}]
+        rows = W.build_audit_bridge_rows(findings, rule_errored, checks, "2026-09-19", now=NOW)
+        row = rows[0]
+        self.assertEqual(row["verdict"], "error")
+        self.assertIsNone(row["value"])
+        self.assertIsNotNone(row["error_message"])
+
+
 class AuditBridgeTest(unittest.TestCase):
     """老告警规则接进 audit_results：只做翻译，不重新判定；规则没评估成必须落 error/None。"""
 

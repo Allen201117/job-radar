@@ -1499,6 +1499,23 @@ def publish(repo, findings, apply=False, now=None):
     return opened, commented
 
 
+def guarded_evaluate(rule, rule_errored, fn, *args, **kwargs):
+    """跑一条规则的 evaluate_*，异常不外传——只打 ::warning:: + 把 rule 记进 rule_errored、
+    本轮当作零 findings，让调用方（main()）继续评估其余规则、继续发已经算好的 issue。
+
+    2026-09-19 加：此前 A/C/D/M/N/P 六条规则是裸调用，任一异常会让整个 main() 直接崩溃、
+    其余规则（包括已经算好的 F/G/H/I/K/L 等）一个都发不出去；桥接进 audit_results 时也
+    没法单独把这一条标成「没评估成」。提出成模块级函数是为了能脱离 main() 单独测——
+    真正调用点仍在 main() 里，行为不变，只是抽出来方便写单测。
+    """
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - 单条规则失败不能拖垮其余规则
+        print(f"::warning::[watchdog] 规则 {rule} 本轮没评估成：{type(exc).__name__}: {exc}")
+        rule_errored.add(rule)
+        return None
+
+
 def build_audit_bridge_rows(findings, rule_errored, checks, today, now=None):
     """把这一轮的 findings 翻成 audit_results 行——每条 contract 里 source=watchdog 的检查项一行。
 
@@ -1603,20 +1620,32 @@ def main():
     )
 
     # 哪些规则「这一轮真的没评估成」（取数异常，不是评估出 0 条）——供 audit_results 桥接用
-    # （见文件末尾 write_audit_bridge）：只有落进下面这些 try/except 的规则才可能出现在这里；
-    # A/C/D/M/N/P 目前没有各自的 try/except（历史遗留，本次不改判定逻辑与容错边界，见函数
-    # 调用点之间没有 try 包裹——它们任一异常会让整个 main() 直接崩溃，走不到桥接这一步，
-    # 所以桥接函数不需要、也没办法单独把这几条标成 error；如实记录在这里而不是假装已经修好）。
+    # （见 build_audit_bridge_rows）。2026-09-19 起 A/C/D/M/N/P 也各自包了一层：此前它们
+    # 裸调用、任一抛错就让整个 main() 崩溃、其余规则（含已经算好的 F/G/H/I/K/L 等）一个
+    # 都发不出去；现在改成每条单独 try/except，异常只打 ::warning:: + 标记该规则 error、
+    # 视为本轮零 findings，其余规则照常评估与发 issue——行为更稳，判定逻辑与阈值一个字都没改。
     rule_errored = set()
 
     findings = []
-    zero, skipped = evaluate_zero_output(ops_rows, today, days=args.days, muted=muted)
+    zero, skipped = guarded_evaluate(
+        "A", rule_errored, evaluate_zero_output, ops_rows, today, days=args.days, muted=muted,
+    ) or ([], [])
     findings += zero
-    findings += evaluate_stuck_ledger(discovery_rows, now=now, hours=args.stuck_hours)
-    findings += evaluate_account_errors(event_rows, ops_rows, now=now)
-    findings += evaluate_missing_mac_announcement_harvest(ops_rows, now=now)
-    findings += evaluate_crawl_run_unrecorded(ops_rows, today=today)
-    findings += evaluate_insight_supply_stall(ops_rows, today=today)
+    findings += guarded_evaluate(
+        "C", rule_errored, evaluate_stuck_ledger, discovery_rows, now=now, hours=args.stuck_hours,
+    ) or []
+    findings += guarded_evaluate(
+        "D", rule_errored, evaluate_account_errors, event_rows, ops_rows, now=now,
+    ) or []
+    findings += guarded_evaluate(
+        "M", rule_errored, evaluate_missing_mac_announcement_harvest, ops_rows, now=now,
+    ) or []
+    findings += guarded_evaluate(
+        "N", rule_errored, evaluate_crawl_run_unrecorded, ops_rows, today=today,
+    ) or []
+    findings += guarded_evaluate(
+        "P", rule_errored, evaluate_insight_supply_stall, ops_rows, today=today,
+    ) or []
     # 规则 O 单独包住：台账几百行的小表，取不到不拖垮别的规则。
     try:
         gap_rows = db.fetch_all_rows(
