@@ -25,7 +25,13 @@ jobs:
           cache: "npm"
       - name: Install psql client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
-      - run: npm ci --ignore-scripts
+      # ⚠️ 不用 `npm ci`：仓库 lock 与 package.json 在 Linux runner 上不同步 —— npm ci 是严格模式，
+      # 实测 2026-09-18 直接失败并中断整条链（`Missing: @emnapi/runtime@1.11.3 from lock file`，
+      # @emnapi 是 Linux 平台特有的 optional 依赖，在 macOS 上跑 npm install 补不出来，
+      # 所以本地看 lockfile 永远是「同步」的）。backfill-job-function / backfill-recruitment-category
+      # 两条链早就因为同一个原因绕开了 npm ci，这条链是后加的，踩了同一个坑。
+      # npm install 是非严格模式，会按 runner 的平台自己补齐；CI 里改到的 lockfile 不提交，无副作用。
+      - run: npm install --ignore-scripts --no-audit --no-fund
       - name: Walk through real user profiles
         run: node scripts/ux-walkthrough/walkthrough.js --record
       - uses: actions/upload-artifact@v4
