@@ -999,3 +999,37 @@ def location_in_scope(location: Optional[str], regions) -> bool:
     if is_remote_location(location):
         return "Remote" in regions or "CN" in regions
     return False
+
+
+# 项目口径下**任何 source.regions 都不该放行**的地区（目前只有台湾）。TW 不是任何 source
+# 的合法 regions 取值——不像 US/SG，它不会因为某个源被放开而变成「该源允许」，所以拦截
+# 不能只靠「adapter 记得调用 location_in_scope(location, source.regions)」这一条线：
+#   ① 部分外企 ATS adapter（如 workday）对「facet 已服务端筛过在华」的岗（trusted）整批跳过
+#      per-job 的 location_in_scope 复核——Workday 租户自己的地区分组有时把台湾并进
+#      「Greater China」facet，descriptor 文本不含「taiwan」，_is_facet_in_regions 挡不住它，
+#      个体岗位的 location 因此从未被拿去比对（2026-09-18 实测：HP/3M/NXP/NVIDIA/Abbott/
+#      Cisco/Medtronic/Alcon/HPE/Sanofi/JLL 共 34 行台北/新竹/台中岗，regions 都是
+#      {CN,US,SG,Remote}，TW 从未在里面——照理该被 location_in_scope 拦住，实际因为走的
+#      是 trusted 分支，那道复核压根没跑）。
+#   ② 纯本土 CN adapter（feishu/hotjob/wt/beisen/xiaomi_feishu…）默认「这个源就是国内」，
+#      从不对每条岗位调用 location_in_scope——公司在台北的分支机构岗位因此直接放行
+#      （小米/TCL/用友网络/科大讯飞/安克创新/芯海科技/欢乐互娱 共 14 行）。
+# 两类根因不同（一个是「该拦的地方被绕过」，一个是「压根没设拦」），但**都不是
+# derive_job_scope 的问题**——它把 TW 归成 overseas 是既有测试钉死的正确分类（如果放行了
+# 该怎么标注 job_scope），不是「要不要放行」。放不放行必须在**所有 adapter 汇合之后**的
+# 唯一出口上判一次，才不会被某个 adapter 的个体逻辑绕过或漏配——所以这里给一个不依赖
+# source.regions、任何调用方都能用的硬判据。
+_REJECTED_COUNTRY_CODES = frozenset({"TW"})
+
+
+def is_rejected_location(location: Optional[str]) -> bool:
+    """地点判定为项目口径**无条件排除**（不抓、不归入国内也不归入海外）的地区。
+
+    与 derive_job_scope 无关：即使某条 location 会被 derive_job_scope 归类成 overseas，
+    只要 derive_country_code 判它是 TW，这里都返回 True——调用方应据此直接丢弃该行，
+    不要写库。⚠️ 一岗多地写法（"泰国,越南,台北市"）与 derive_country_code 共享同一套
+    优先级（_COUNTRY_TOKENS 按 dict 顺序逐个试，TW 排在前面且"台北"是子串匹配），所以
+    这类字符串会被判定为 TW 并整条拒收，即使该岗可能主要在泰国/越南——这是跟随既有
+    derive_country_code 顺序的既定取舍，不是本函数新引入的规则，详见调用处的实测记录。
+    """
+    return derive_country_code(location) in _REJECTED_COUNTRY_CODES
