@@ -50,6 +50,14 @@ function loadTsWithMocks(absPath, mocks = {}, cache = new Map()) {
   return mod.exports;
 }
 
+// ⚠️ 下面这个 `filters` 是手写的、**漏了** jobFunction/jobRole/experience/postedWithin 等键，
+// 而生产路由造 filters 时是 `{ ...DEFAULT_FILTERS, ... }`（app/api/jobs/search/route.ts）。
+// 漏键的值是 undefined，凡是拿它跟默认值比的判据（如 filtersFullyPushedToSql）在这里都会得出
+// 与线上相反的结论。整体补全会改掉四条 scan 路径测试的行为，故只在需要该判据的用例里显式展开
+// DEFAULT_FILTERS（见下方 fullFilters），其余用例维持原样。
+const { DEFAULT_FILTERS } = loadTsWithMocks(path.join(__dirname, "..", "lib/job-filter.ts"));
+const fullFilters = { ...DEFAULT_FILTERS, showIgnored: true, showApplied: true, sortBy: "match" };
+
 const filters = {
   company: "",
   city: "",
@@ -151,17 +159,38 @@ test("jobs-store city-only search stays on FTS (全表覆盖) 且软城市仍保
     return [job({ id: "missing-city", location: "" })];
   });
 
-  const result = await searchJobsStore({ ...filters, city: "北京" }, null, [], 0, 1);
+  const result = await searchJobsStore({ ...fullFilters, city: "北京" }, null, [], 0, 1);
 
   assert.match(calls[0].sql, /search_doc @@/i); // FTS 全表覆盖，不退化到 scan
   // 「是不是 scan」要看 offset 翻页，不能再拿 order by 当判据 —— FTS 路径 2026-09-03 起也带
   // order by（候选窗口装不下时决定砍掉谁，见 candidateOrderBy），拿它区分两条路会误判。
   assert.doesNotMatch(calls[0].sql, /offset \$\d+/i);
-  assert.match(calls[0].sql, /limit 8000$/i);
+  // 2026-09-18：匿名 + 筛选全下推 → 1000 窗（库上 limit 8000 要 10.5s、limit 1000 只要 17ms；
+  // 匿名无偏好打分恒 0、排序纯新鲜度、JS 又不过滤 → 取到的就是 8000 窗的前 1000 行，逐条相同）。
+  // 这条断言守的仍是「走 FTS 全表 GIN 而非 scan」（上面 search_doc @@ + 无 offset 两条），窗口大小是它的附属。
+  assert.match(calls[0].sql, /limit 1000$/i);
   assert.match(calls[0].sql, /location is null or location = ''/i); // 软城市 OR 组仍在
   assert.ok(calls[0].params.includes("%beijing%")); // 双向别名
   assert.equal(result.jobs[0].id, "missing-city");
   assert.deepEqual(result.jobs[0].__match.degradedFields, ["city"]);
+});
+
+// 缩窗的前提是「JS 侧不再过滤」。带 keyword/education/experience 这类 JS-only 筛选时，
+// JS 会拒掉大量候选，1000 行可能填不满一页 —— 那时必须保持 FTS_CAP，否则是拿结果完整性换速度。
+test("匿名带 JS-only 筛选时不缩窗，仍取满 FTS_CAP", async () => {
+  for (const extra of [{ education: "本科" }, { experience: "3-5年" }, { jobFunction: "研发" }]) {
+    const calls = [];
+    const { searchJobsStore } = loadJobsStore(async (sql, params) => {
+      calls.push({ sql, params });
+      return [];
+    });
+    await searchJobsStore({ ...fullFilters, city: "北京", ...extra }, null, [], 0, 1);
+    assert.match(
+      calls[0].sql,
+      /limit 8000$/i,
+      `带 ${JSON.stringify(extra)} 时 JS 还要过滤，不能缩窗`,
+    );
+  }
 });
 
 // 候选取数调用与「命中页回补展示列」的调用要分开看：回补走 `where id in (...)`，

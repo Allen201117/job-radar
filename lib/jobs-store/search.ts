@@ -708,7 +708,34 @@ async function searchViaFTS(
   // 不再另加 candidateWhere。窗口装不下时（capped）照旧走 exactTotalWhenCapped 给真实总数。
   const prescore = prescoreOrderBy(candidateParams, filters, prefs, { candidateWhere: false });
   const orderBy = prescore?.orderBy ?? candidateOrderBy(candidateParams, filters, prefs);
-  const cap = prescore ? matchPrescoreWindow() : FTS_CAP;
+  // 匿名（无偏好）也用同一个 1000 窗，别拉满 FTS_CAP（2026-09-18）：
+  // prescoreOrderBy 第一行就是 `if (!prefs) return null`，于是**登录用户走 1000 窗、匿名反而走 8000 窗**——
+  // 正好反了。ux-walkthrough 上线第一天就报 `search_city TTFB 20.1s`，线上复测冷实例 8~12s。
+  // 库上量因（香港库，`city=北京`，同一条候选 SQL 只改 limit）：
+  //     limit 8000 → 10,468ms  ·  limit 2000 → 507ms  ·  limit 1000 → 17ms
+  // 根因不是索引选错（强制 CTE 走 GIN 也要 8.6s，因为「北京」命中 5.6 万行都得取堆），而是**取太多行**：
+  // 计划器沿 jobs_status_first_seen_idx 按时间倒序边扫边过滤，凑够 1000 个北京岗只要扫最近几千行，
+  // 凑够 8000 个就得一路扫到很久以前。
+  // 等价性：匿名无偏好时 scoreJob 打分恒为 0（见 lib/scoring.ts），排序退化成纯新鲜度，而候选查询本身就是
+  // `order by first_seen_at desc` —— 取到的 1000 行就是 8000 行的前 1000 行，且 JS 精筛对无偏好用户几乎不拒
+  // （没有偏好就没有 role/location/industry mismatch），第一页 60 条不受影响。
+  // 撞窗口时的计数照旧走 exactTotalWhenCapped / formatMatchTotal（给不出确定数字就显示「N+」，不会给错数字）。
+  // 匿名 + 筛选全下推时也用 1000 窗，别拉满 FTS_CAP（2026-09-18）：
+  // prescoreOrderBy 第一行是 `if (!prefs) return null`，于是**登录用户走 1000 窗、匿名反而走 8000 窗**，
+  // 正好反了。ux-walkthrough 上线第一天就报 `search_city TTFB 20.1s`，线上复测冷实例 8~12s。
+  // 库上量因（香港库 `city=北京`，同一条候选 SQL 只改 limit）：
+  //     limit 8000 → 10,468ms  ·  limit 2000 → 507ms  ·  limit 1000 → 17ms
+  // 根因不是索引选错（强制 CTE 走 GIN 仍要 8.6s——「北京」命中 5.6 万行都得取堆），而是**取太多行**：
+  // 计划器沿 jobs_status_first_seen_idx 按时间倒序边扫边过滤，凑够 1000 个北京岗只需扫最近几千行，
+  // 凑够 8000 个就得一路扫到很久以前。
+  // ⚠️ 必须同时要求 filtersFullyPushedToSql：JS 侧不再过滤时「候选 = 结果」，而匿名无偏好的 scoreJob
+  // 打分恒为 0（lib/scoring.ts）、排序退化成纯新鲜度，候选查询本身又是 order by first_seen_at desc
+  // —— 取到的 1000 行**就是** 8000 行的前 1000 行，逐条相同，第一页 60 条可证等价。
+  // 反过来，带 keyword/education/experience 这类 JS-only 筛选时 JS 会拒掉大量候选，1000 行可能不够填满一页，
+  // 那种情况保持 FTS_CAP 不动。
+  // 撞窗口时的计数照旧走 exactTotalWhenCapped / formatMatchTotal（给不出确定数字就显示「N+」，不会给错数字）。
+  const anonymousFullyPushed = !prefs && filtersFullyPushedToSql(filters);
+  const cap = prescore || anonymousFullyPushed ? matchPrescoreWindow() : FTS_CAP;
   const rows = annotateSourceAdapter(
     await fetchCandidates(
       `select ${columns} from jobs where ${conds.join(" and ")}${orderBy} limit ${cap}`,
