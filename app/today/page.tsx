@@ -14,6 +14,12 @@ import { getPopularFeed, type PopularFeed } from "@/lib/popular-feed";
 import type { OpportunityFeed } from "@/lib/opportunities/types";
 import type { RadarProfile } from "@/lib/opportunities/types";
 import type { CandidateProfile, UserPreferences } from "@/lib/types";
+import {
+  planWidenings,
+  widenProfile,
+  summarizeCriteria,
+  type EmptyWidening,
+} from "@/lib/opportunities/empty-diagnosis";
 import TodayClient, { OnboardingPanel } from "../today-client";
 import TodayPopularClient from "../today-popular-client";
 import { TODAY_HERO } from "./hero";
@@ -35,6 +41,10 @@ type TodayBundle = {
   savedIndustries: string[];
   /** 选了海外/全都要却在海外池里 0 岗（目标城市全是国内、无英文简历）→ 已按国内重算，页面要告诉他。 */
   scopeFallback: "domestic" | null;
+  /** 0 岗且不是范围错配时：放宽哪一维之后真的有机会（数字来自同一条召回链路重算，不另写 count SQL）。null = 没有可放宽的维度或放宽了也还是 0。 */
+  emptyWidening: EmptyWidening | null;
+  /** 用户当前叠着的筛选条件，空态照原样念回去——0 岗几乎总是「几个条件叠太窄」，而他看不见自己叠了什么。 */
+  criteria: string[];
   /** 页面级分段账本（见 TodayBundleTiming）。 */
   timing: TodayBundleTiming;
 };
@@ -60,6 +70,8 @@ type TodayBundleTiming = {
   feedMs: number;
   /** 求职范围错配时按国内重算的**第二次** feed；没触发为 0。 */
   fallbackMs: number;
+  /** 0 岗时为了拿「放宽后有几个」重算的 feed（最多 2 次，每次一维）；没触发为 0。 */
+  widenMs: number;
   /** 画像未就绪时的「热门在招」（跨请求 unstable_cache）；没触发为 0。 */
   popularMs: number;
   /** loadTodayBundle 端到端。 */
@@ -81,7 +93,7 @@ async function loadTodayBundle(
   const tBundleStart = performance.now();
   const ctxStats: RadarContextStats = { ms: 0, bytes: 0, actionRows: 0 };
   const timing: TodayBundleTiming = {
-    ctxMs: 0, ctxBytes: 0, ctxActions: 0, feedMs: 0, fallbackMs: 0, popularMs: 0, bundleMs: 0,
+    ctxMs: 0, ctxBytes: 0, ctxActions: 0, feedMs: 0, fallbackMs: 0, widenMs: 0, popularMs: 0, bundleMs: 0,
   };
   // 读取失败必须抛（见 lib/opportunities/context.ts）：外层 .catch 会把它变成「暂时无法更新，
   // 请稍后重试」的错误面板。**不能**像以前那样把失败当成空偏好继续往下走——那会静默丢掉
@@ -107,6 +119,8 @@ async function loadTodayBundle(
       savedIndustries: profile.targetIndustries,
       timing,
       scopeFallback: null,
+      emptyWidening: null,
+      criteria: [],
     };
   }
 
@@ -149,8 +163,40 @@ async function loadTodayBundle(
       scopeFallback = "domestic";
     }
   }
+  // 仍然 0 岗（且不是范围错配那种、已经回落过的）→ 找出「松哪一个条件就有货」，把真原因交给页面说。
+  // 为什么要多跑一次召回而不是另写一条 count SQL：提示里的数字必须与用户松了条件后**真能看到**的
+  // 一致，自己另算一套就会出现「说有 12 个、点进去 3 个」，那比不给数字更伤信任。
+  // 成本可控：0 岗是低频（2026-09-18 走查 44 个真实用户里 3 个），且最多重算 2 次、第一次有货就停。
+  let emptyWidening: EmptyWidening | null = null;
+  if (feed && feedIsEmpty(feed) && !scopeFallback) {
+    const tWiden = performance.now();
+    for (const plan of planWidenings(profile)) {
+      const widenedFeed = await buildOpportunityFeed(
+        supabase,
+        widenProfile(profile, plan.dim),
+        actions,
+        radarState,
+        { surface: "today", intensity, now },
+      ).catch(() => null);
+      const count = widenedFeed?.counts?.total ?? 0;
+      if (count > 0) {
+        emptyWidening = { ...plan, count };
+        break;
+      }
+    }
+    timing.widenMs = performance.now() - tWiden;
+  }
   timing.bundleMs = performance.now() - tBundleStart;
-  return { readiness, feed, popular: null, savedIndustries: profile.targetIndustries, timing, scopeFallback };
+  return {
+    readiness,
+    feed,
+    popular: null,
+    savedIndustries: profile.targetIndustries,
+    timing,
+    scopeFallback,
+    emptyWidening,
+    criteria: summarizeCriteria(profile),
+  };
 }
 
 function feedIsEmpty(feed: OpportunityFeed): boolean {
@@ -253,6 +299,7 @@ function roundTiming(t: TodayBundleTiming) {
     ctx_actions: t.ctxActions,
     feed_ms: Math.round(t.feedMs),
     fallback_ms: Math.round(t.fallbackMs),
+    widen_ms: Math.round(t.widenMs),
     popular_ms: Math.round(t.popularMs),
     bundle_ms: Math.round(t.bundleMs),
   };
@@ -296,7 +343,7 @@ async function TodayBody({
       `[today-page] user=${userId.slice(0, 8)} ready=${bundle?.readiness.ready ? 1 : 0} ` +
         `shell_ms=${Math.round(shellMs)} ctx_ms=${Math.round(t?.ctxMs ?? 0)} ctx_kb=${kb(t?.ctxBytes ?? 0)} ` +
         `ctx_actions=${t?.ctxActions ?? 0} feed_ms=${Math.round(t?.feedMs ?? 0)} ` +
-        `fallback_ms=${Math.round(t?.fallbackMs ?? 0)} popular_ms=${Math.round(t?.popularMs ?? 0)} ` +
+        `fallback_ms=${Math.round(t?.fallbackMs ?? 0)} widen_ms=${Math.round(t?.widenMs ?? 0)} popular_ms=${Math.round(t?.popularMs ?? 0)} ` +
         `bundle_ms=${Math.round(t?.bundleMs ?? 0)} cards=${cards} ` +
         `props_kb=${payloadKb(bundle?.feed ?? bundle?.popular ?? null)} ` +
         `total_ms=${Math.round(performance.now() - tPageStart)}`,
@@ -347,7 +394,11 @@ async function TodayBody({
           下面按国内范围展示；要看海外机会，先在个人中心补一份英文简历。
         </p>
       )}
-      <TodayClient feed={bundle.feed} />
+      <TodayClient
+        feed={bundle.feed}
+        emptyWidening={bundle.emptyWidening}
+        criteria={bundle.criteria}
+      />
     </>
   );
 }

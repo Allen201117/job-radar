@@ -6,6 +6,7 @@ import JobCard from "@/components/JobCard";
 import { track } from "@/lib/track";
 import type { ScoredJob } from "@/lib/types";
 import type { Opportunity, OpportunityFeed, OpportunitySignal } from "@/lib/opportunities/types";
+import { WIDEN_DIM_LABEL, type EmptyWidening } from "@/lib/opportunities/empty-diagnosis";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui";
 import {
@@ -112,18 +113,45 @@ export function OnboardingPanel({
 // 空队列仍要回答「为什么是 0」，但**不报内部漏斗的中间数**（2026-09-02 创始人要求下线
 // 「考察 N 个 / 剔除 M 个：已失效·不对口·信息不全」那套话术——那是给运营看的漏斗，
 // 不是给求职者看的价值）。这里只说结论 + 下一步动作，语气仍是「宁缺毋滥」而非「系统没干活」。
-function EmptyQueue({ counts }: { counts?: OpportunityFeed["counts"] }) {
+function EmptyQueue({
+  counts,
+  widening,
+  criteria,
+}: {
+  counts?: OpportunityFeed["counts"];
+  widening?: EmptyWidening | null;
+  criteria?: string[];
+}) {
   const screened = counts?.screened ?? 0;
+  const conditions = (criteria || []).filter(Boolean);
+  // 「今天没有新的」会被读成「明天再来」，而 0 岗的真实原因几乎总是几个条件叠太窄 ——
+  // 那样他明天、后天还是空。所以先把他自己叠的条件念回去，再说松哪一个就有货。
   const explain =
     screened > 0
-      ? "今天的官方在招岗位都过了一遍，没有一条达到推荐门槛——宁可空着，也不硬凑。你可以："
-      : "系统持续在监控你关注的官方招聘源，有新机会会第一时间出现在这里。你也可以：";
+      ? "今天的官方在招岗位都过了一遍，没有一条同时满足这些条件——宁可空着，也不硬凑。"
+      : "系统持续在监控你关注的官方招聘源，暂时还没有同时满足这些条件的岗位。";
   return (
     <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] bg-white/45 px-6 py-14 text-center dark:border-white/[0.1] dark:bg-white/[0.05]">
       <h2 className="t-h2 ink-1">今天暂时没有新的对口机会</h2>
-      <p className="t-body-sm mx-auto mt-2 max-w-md text-pretty ink-2">
-        {explain}
-      </p>
+      {conditions.length > 0 && (
+        <p className="t-body-sm mx-auto mt-2 max-w-md text-pretty ink-2">
+          你现在的条件是
+          <span className="ink-1 font-medium">{conditions.join(" · ")}</span>。
+        </p>
+      )}
+      <p className="t-body-sm mx-auto mt-2 max-w-md text-pretty ink-2">{explain}</p>
+      {widening ? (
+        <p className="t-body-sm mx-auto mt-3 max-w-md text-pretty ink-2">
+          放宽<span className="ink-1 font-medium">{WIDEN_DIM_LABEL[widening.dim]}</span>
+          （现在是 {widening.from}）之后有
+          <span className="t-num ink-1 font-semibold"> {widening.count} </span>
+          个机会。
+        </p>
+      ) : conditions.length > 0 ? (
+        <p className="t-body-sm mx-auto mt-3 max-w-md text-pretty ink-2">
+          放宽城市或求职阶段也还是没有，多半是目标岗位写得太具体了——换个更常见的说法试试。
+        </p>
+      ) : null}
       <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
         <Link href="/me" className={buttonVariants({ variant: "soft", size: "sm" })}>
           调整求职目标
@@ -141,7 +169,15 @@ function EmptyQueue({ counts }: { counts?: OpportunityFeed["counts"] }) {
 
 const TOAST_MS = 5000;
 
-export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
+export default function TodayClient({
+  feed,
+  emptyWidening,
+  criteria,
+}: {
+  feed: OpportunityFeed;
+  emptyWidening?: EmptyWidening | null;
+  criteria?: string[];
+}) {
   const [state, dispatch] = useReducer(todayReducer, feed.sections, initTodayState);
   const [deadIds, setDeadIds] = useState<Set<string>>(new Set());
 
@@ -263,7 +299,7 @@ export default function TodayClient({ feed }: { feed: OpportunityFeed }) {
   const total = visibleCounts.reduce((a, b) => a + b, 0);
 
   if (total === 0) {
-    return <EmptyQueue counts={feed.counts} />;
+    return <EmptyQueue counts={feed.counts} widening={emptyWidening} criteria={criteria} />;
   }
 
   return (
