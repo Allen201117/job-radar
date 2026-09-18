@@ -21,6 +21,9 @@ jobs:
           cache: "pip"
           cache-dependency-path: crawler/requirements.txt
       - name: Sync ATS tenant snapshots
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python3 crawler/sync_ats_tenants.py --apply
       - name: Commit updated snapshots if changed
         run: |

@@ -35,6 +35,7 @@ from typing import Optional
 import httpx
 
 import must_apply
+import ops_runs
 from db import get_sources, get_supabase
 from logo_util import (
     COMPANY_DOMAIN_OVERRIDES,
@@ -286,6 +287,7 @@ def resolve_domain_by_slug(client: httpx.Client, company: str, source_url: str) 
 
 
 def main() -> None:
+    started_at = datetime.now(timezone.utc)
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="最多处理多少家公司（0=全部）")
     ap.add_argument("--force", action="store_true", help="忽略 30 天新鲜度，全部重抓")
@@ -453,6 +455,12 @@ def main() -> None:
                     print(f"[logo] 进度 {processed}/{len(targets)}：{stats}", flush=True)
 
     print(f"[logo] 完成：{stats} 来源分布={by_source}（processed={processed}）")
+    ops_runs.record_ops_run(
+        sb, "company_logos",
+        {"processed": processed, **stats, "by_source": by_source},
+        ops_runs.status_from_counts(processed, stats.get("err", 0)),
+        started_at=started_at,
+    )
 
 
 if __name__ == "__main__":

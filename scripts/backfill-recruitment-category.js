@@ -24,6 +24,7 @@
 const { Pool } = require("pg");
 const path = require("path");
 const { buildJobsDatabaseSsl } = require(path.join(__dirname, "..", "lib", "jobs-store", "tls-options.js"));
+const { recordOpsRun, statusFromCounts } = require(path.join(__dirname, "lib", "record-ops-run.js"));
 const {
   recruitmentCategory,
   hasExplicitRecruitmentType,
@@ -160,9 +161,17 @@ async function main() {
   console.log(`耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   client.release();
   await pool.end();
+
+  await recordOpsRun(
+    "backfill_recruitment_category",
+    { mode: CHECK ? "check" : ALL ? "apply_all" : "apply_null", scanned: seen, changed, written, mismatch: mismatch.total },
+    statusFromCounts(seen, 0),
+    { startedAt: new Date(t0) },
+  );
 }
 
-main().catch((e) => {
+main().catch(async (e) => {
   console.error("失败：", e.message);
+  await recordOpsRun("backfill_recruitment_category", { error: String(e.message || e).slice(0, 200) }, "failed");
   process.exit(1);
 });

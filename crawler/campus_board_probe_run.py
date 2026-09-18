@@ -26,6 +26,7 @@ import httpx
 import campus_board_probe as P
 import db
 import jobs_db
+import ops_runs
 import robots
 
 TRIAGE_MIN_BYTES = 15000      # 小于这个基本是 400/空壳页（实测真板块 17KB~270KB）
@@ -134,6 +135,7 @@ def skip_by_ledger(supabase, candidates):
 
 
 def main():
+    started_at = datetime.now(timezone.utc)
     ap = argparse.ArgumentParser(description="校招板块批量探测")
     ap.add_argument("--apply", action="store_true",
                     help="真写库（插 disabled 源交给验收门）；缺省只 dry-run 报告")
@@ -143,6 +145,15 @@ def main():
     args = ap.parse_args()
 
     supabase = db.get_supabase()
+
+    def _record(status, triage_ok, checked, sources_added):
+        ops_runs.record_ops_run(
+            supabase, "campus_board_probe",
+            {"candidates_checked": checked, "triage_ok": triage_ok, "sources_added": sources_added,
+             "apply": bool(args.apply)},
+            status, started_at=started_at,
+        )
+
     sources = db.get_sources(supabase)
     candidates = derive_candidates(sources)
     _log(f"推导候选 {len(candidates)} 个 / 全库 {len(sources)} 源")
@@ -156,6 +167,7 @@ def main():
         candidates = candidates[:args.limit]
     _log(f"扣除台账未到复查日的，本轮处理 {len(candidates)} 个")
     if not candidates:
+        _record("success", 0, 0, 0)
         return 0
 
     with ThreadPoolExecutor(max_workers=TRIAGE_WORKERS) as ex:
@@ -171,6 +183,7 @@ def main():
         for source, candidate, _s, final in ok:
             _log(f"  [dry-run] 待建源 {source.get('company')} → {final}")
         _log("dry-run 结束（加 --apply 才写库）")
+        _record("success", len(ok), len(candidates), 0)
         return 0
 
     # 层2：插 disabled 源，交给 campus_board_verify 在下一步真抓 + 非重复门 + 健康岗验收。
@@ -195,6 +208,7 @@ def main():
             upsert_attempt(supabase, source.get("company"), source.get("adapter_name"),
                            final or candidate, "insert_failed", f"{type(e).__name__}: {e}")
     _log(f"层2 已插入 {created} 个 disabled 候选源，等验收门放行")
+    _record(ops_runs.status_from_counts(len(ok), len(ok) - created), len(ok), len(candidates), created)
     return 0
 
 
