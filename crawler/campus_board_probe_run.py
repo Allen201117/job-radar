@@ -144,8 +144,24 @@ def main():
                          "probe_overseas_f500 同约定）")
     args = ap.parse_args()
 
-    supabase = db.get_supabase()
+    try:
+        supabase = db.get_supabase()
+    except Exception as e:
+        sys.stderr.write(f"[campus-probe] 无法获取 Supabase client，台账写不了: {type(e).__name__}\n")
+        raise
 
+    try:
+        return _run(supabase, args, started_at)
+    except Exception as e:
+        # 中途任何未捕获异常都要留痕：以前只在跑到最后一行才写台账，崩溃 = 一行不写，
+        # 跟本次要治的「静默」问题一模一样。这里补写 failed，再原样抛出保持原退出码。
+        ops_runs.record_ops_run(
+            supabase, "campus_board_probe", {"crash": type(e).__name__}, "failed", started_at=started_at,
+        )
+        raise
+
+
+def _run(supabase, args, started_at):
     def _record(status, triage_ok, checked, sources_added):
         ops_runs.record_ops_run(
             supabase, "campus_board_probe",

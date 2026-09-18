@@ -69,8 +69,9 @@ jobs:
           metrics='${{ steps.smoke.outputs.metrics }}'
           [ -n "$metrics" ] || metrics='{}'
           now="$(date -u +%FT%TZ)"
+          # run_date 按上海时区取日（不用裸 `date -u`），理由同 db-report.yml 那条注释。
           payload=$(printf '{"module":"production_smoke","run_date":"%s","status":"%s","started_at":"%s","finished_at":"%s","metrics":%s}' \
-            "$(date -u +%F)" "$status" "$now" "$now" "$metrics")
+            "$(TZ=Asia/Shanghai date +%F)" "$status" "$now" "$now" "$metrics")
           curl -sS --max-time 15 -X POST "$SUPABASE_URL/rest/v1/ops_runs" \
             -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \

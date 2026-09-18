@@ -103,10 +103,12 @@ MODULE_OUTPUT = {
 # evaluate_zero_output 要求 complete_days(today, days) 窗口内**每一天**都是 module_day_state=="zero"，
 # 而每周只跑一次的模块在其余 6 天里 day_bucket 为空 → module_day_state 返回 "no_run"，"no_run" != "zero"，
 # `all(state == "zero")` 恒为假 → 规则 A 对这些模块形同虚设（即使连续断更数月也不会触发）。
-# 本次登记进 MODULE_OUTPUT 的 audit_hotjob_attribution / ats_tenant_sync / company_logos 三个都是
-# 周任务（cron 分别是周一、周一、周一），company_logos 保留在 MODULE_OUTPUT 是因为它确有「产出可能
-# 归零」的语义（万一真的抓不到图），但要指出：目前它和另外两个一样，规则 A 实际上盯不住它。
-# 最小改法（未做，需要额外设计/测试，不属于本次任务范围）：window 大小按模块声明的 cron 周期算
+# audit_hotjob_attribution / ats_tenant_sync / company_logos 三个都是每周一次的任务（cron 分别是
+# 周一 22:17 / 周一 05:30 / 周一 04:00）——**台账现在都写了，但规则 A 目前对它们暂时没有真正生效的
+# 零产出告警**：前两个是因为它们本身就登记在 NO_OUTPUT_MODULES 里（零产出是好消息，见上面理由），
+# company_logos 虽然登记进了 MODULE_OUTPUT（它确有「产出可能归零」的语义，万一真的抓不到图），
+# 但一样撞上这个结构性缺口，规则 A 实际上盯不住它。三个都需要下一波再处理（不在本次任务范围）。
+# 最小改法（未做，需要额外设计/测试）：window 大小按模块声明的 cron 周期算
 # （复用已有的 cron_max_gap_minutes），而不是写死 `days=2` 天；或者把「no_run」在窗口末尾折叠成
 # 「按声明周期换算的一个周期」再判零产出，两种做法都会改变 evaluate_zero_output 的调用契约，
 # 需要人工确认后再动，先如实记录在这里、不擅自改规则逻辑。

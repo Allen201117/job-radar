@@ -35,7 +35,22 @@ def _usable(route):
 
 def main():
     started_at = datetime.now(timezone.utc)
-    sb = db.get_supabase()
+    try:
+        sb = db.get_supabase()
+    except Exception as e:
+        sys.stderr.write(f"[harvest-beisen] 无法获取 Supabase client，台账写不了: {type(e).__name__}\n")
+        raise
+    try:
+        return _run(sb, started_at)
+    except Exception as e:
+        # 中途任何未捕获异常都要留痕（取源列表失败等），再原样抛出保持原退出码。
+        ops_runs.record_ops_run(
+            sb, "harvest_beisen_routes", {"crash": type(e).__name__}, "failed", started_at=started_at,
+        )
+        raise
+
+
+def _run(sb, started_at):
     # 分页拉全量：本过滤当前 331 行未触顶 PostgREST 的 1000 行硬顶，但 beisen 源随每日扩源持续涨 → 走统一 helper。
     # ⚠️ 不能只取 enabled：缺口漏斗按验收门规矩「先插 disabled 源 → 真抓 → 回读健康岗才 enable」，
     # 而北森新租户不先 harvest 到详情路由就抓不出岗 → 只探 enabled 会形成死结

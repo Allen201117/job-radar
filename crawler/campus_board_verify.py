@@ -154,8 +154,23 @@ def main():
                          "0 = 不限，但 90min job 超时下**不建议**用")
     args = ap.parse_args()
 
-    supabase = db.get_supabase()
+    try:
+        supabase = db.get_supabase()
+    except Exception as e:
+        sys.stderr.write(f"[campus-verify] 无法获取 Supabase client，台账写不了: {type(e).__name__}\n")
+        raise
 
+    try:
+        return _run(supabase, args, started_at)
+    except Exception as e:
+        # 中途任何未捕获异常都要留痕，再原样抛出保持原退出码（同 campus_board_probe_run 的补法）。
+        ops_runs.record_ops_run(
+            supabase, "campus_board_verify", {"crash": type(e).__name__}, "failed", started_at=started_at,
+        )
+        raise
+
+
+def _run(supabase, args, started_at):
     def _record(status, metrics):
         ops_runs.record_ops_run(supabase, "campus_board_verify", metrics, status, started_at=started_at)
 

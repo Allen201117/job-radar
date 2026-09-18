@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -73,6 +74,29 @@ class SyncAtsTenantsTest(unittest.TestCase):
 
             self.assertTrue(all(not row["applied"] for row in results))
             self.assertEqual((data_dir / "moka.csv").read_text(encoding="utf-8"), _OLD_MOKA)
+
+
+class MainCrashRecordsFailedLedgerTest(unittest.TestCase):
+    """main() 中途崩溃必须留痕：此前只有 SyncValidationError 会补台账，别的未捕获异常
+    （网络库炸了、解析崩了…）一行都不写——跟本次要治的「静默」问题一模一样。"""
+
+    def test_unexpected_exception_writes_failed_crash_and_reraises(self):
+        with patch.object(sync, "sync_tenant_snapshots", side_effect=RuntimeError("boom")), \
+             patch.object(sync, "_record_ops_run") as rec:
+            with self.assertRaises(RuntimeError):
+                sync.main(["--apply"])
+            rec.assert_called_once()
+            args, kwargs = rec.call_args
+            self.assertEqual(args[0], "failed")
+            self.assertEqual(args[1], {"crash": "RuntimeError"})
+
+    def test_supabase_unavailable_inside_record_helper_does_not_raise(self):
+        # _record_ops_run 自己已经把「拿不到 Supabase client」这一路吞掉了，
+        # 主流程的退出码只由 sync_tenant_snapshots 的结果决定，不受台账写入影响。
+        with patch.object(sync, "sync_tenant_snapshots", side_effect=RuntimeError("boom")), \
+             patch("db.get_supabase", side_effect=ConnectionError("no db")):
+            with self.assertRaises(RuntimeError):
+                sync.main(["--apply"])
 
 
 if __name__ == "__main__":

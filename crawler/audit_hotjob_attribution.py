@@ -147,7 +147,22 @@ def main(argv=None):
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args(argv)
     from db import get_supabase  # noqa: E402  延迟导入：单测不需要 Supabase 环境
-    sb = get_supabase()
+    try:
+        sb = get_supabase()
+    except Exception as e:
+        sys.stderr.write(f"[audit-hotjob] 无法获取 Supabase client，台账写不了: {type(e).__name__}\n")
+        raise
+    try:
+        return _run(sb, args, started_at)
+    except Exception as e:
+        # 中途任何未捕获异常都要留痕（读源列表 / httpx client 初始化失败等），再原样抛出。
+        ops_runs.record_ops_run(
+            sb, "audit_hotjob_attribution", {"crash": type(e).__name__}, "failed", started_at=started_at,
+        )
+        raise
+
+
+def _run(sb, args, started_at):
     rows = load_sources(sb, args.limit)
     with httpx.Client(timeout=20, follow_redirects=True,
                       headers={"User-Agent": _UA, "Accept": "application/json, text/plain, */*"}) as client:

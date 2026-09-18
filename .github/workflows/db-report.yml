@@ -108,8 +108,10 @@ jobs:
           row="${{ steps.audit.outputs.metrics_row }}"
           IFS='|' read -r active_total active_with_jd active_thin never_checked seen_24h <<< "$row"
           now="$(date -u +%FT%TZ)"
+          # run_date 必须按上海时区取日，别用裸 `date -u`：crawler/ops_runs.py 那边就是按上海日期
+          # 分桶的，UTC 取会在 UTC 16:00~23:59 这段窗口里把行错记到「前一天」（2026-09-18 review 揪出来的）。
           payload=$(printf '{"module":"db_report","run_date":"%s","status":"%s","started_at":"%s","finished_at":"%s","metrics":{"active_total":%s,"active_with_jd":%s,"active_thin":%s,"never_liveness_checked":%s,"seen_24h":%s}}' \
-            "$(date -u +%F)" "$status" "$now" "$now" \
+            "$(TZ=Asia/Shanghai date +%F)" "$status" "$now" "$now" \
             "${active_total:-null}" "${active_with_jd:-null}" "${active_thin:-null}" "${never_checked:-null}" "${seen_24h:-null}")
           curl -sS --max-time 15 -X POST "$SUPABASE_URL/rest/v1/ops_runs" \
             -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \

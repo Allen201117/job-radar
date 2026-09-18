@@ -134,6 +134,11 @@ def main(argv=None):
         print("[ats_tenant_sync] %s" % exc, file=sys.stderr)
         _record_ops_run("failed", {"error": str(exc)[:200]}, started_at)
         return 1
+    except Exception as exc:  # noqa: BLE001
+        # 校验之外的未捕获异常（网络库炸了、解析崩了…）此前一行台账都不写——跟本次要治的
+        # 「静默」问题一模一样。补写 crash + 原样重新抛出，退出码不变。
+        _record_ops_run("failed", {"crash": type(exc).__name__}, started_at)
+        raise
     for row in rows:
         verb = "已同步" if row["applied"] else "dry-run"
         print(

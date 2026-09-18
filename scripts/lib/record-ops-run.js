@@ -21,7 +21,17 @@ function statusFromCounts(processed, failed) {
   return "success";
 }
 
-async function recordOpsRun(module, metrics, status = "success", { startedAt, finishedAt } = {}) {
+// ⚠️ run_date 必须按 Asia/Shanghai 取日，不能用 toISOString().slice(0,10)（那是 UTC 日期）。
+// crawler/ops_runs.py 的 Python 侧就是按上海时区取的（_as_iso 里 `.astimezone(SHANGHAI).date()`）——
+// 两侧写同一张按 run_date 分桶的表，取日口径必须一致，否则 UTC 16:00~23:59（上海次日 0~7:59）
+// 这 8 小时里 JS 写的行会落进「前一天」的桶，backfill 两条 workflow 恰好各有一档卡在
+// UTC 19:30/19:45，正中这个漂移窗口（2026-09-18 review 抓到）。
+function shanghaiDateString(d) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(d);
+}
+
+async function recordOpsRun(module, metrics, status = "success", opts = {}) {
+  const { startedAt, finishedAt, createClient: createClientOverride } = opts;
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) {
@@ -32,11 +42,12 @@ async function recordOpsRun(module, metrics, status = "success", { startedAt, fi
   const started = startedAt || finished;
   try {
     // 延迟 require：调用方多为一次性脚本，没配 Supabase env 时不必强装这个包。
-    const { createClient } = require("@supabase/supabase-js");
+    // 测试用 opts.createClient 注入假客户端，不打真网络。
+    const createClient = createClientOverride || require("@supabase/supabase-js").createClient;
     const client = createClient(url, key, { auth: { persistSession: false } });
     const { error } = await client.from("ops_runs").insert({
       module: String(module),
-      run_date: finished.toISOString().slice(0, 10),
+      run_date: shanghaiDateString(finished),
       metrics: metrics || {},
       status: ["success", "partial", "failed"].includes(status) ? status : "failed",
       started_at: started.toISOString(),
@@ -53,4 +64,4 @@ async function recordOpsRun(module, metrics, status = "success", { startedAt, fi
   }
 }
 
-module.exports = { recordOpsRun, statusFromCounts };
+module.exports = { recordOpsRun, statusFromCounts, shanghaiDateString };

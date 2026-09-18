@@ -303,7 +303,20 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    sb = get_supabase()
+    try:
+        sb = get_supabase()
+    except Exception as e:
+        sys.stderr.write(f"[logo] 无法获取 Supabase client，台账写不了: {type(e).__name__}\n")
+        raise
+    try:
+        return _run(sb, args, started_at)
+    except Exception as e:
+        # 中途任何未捕获异常都要留痕（读 sources / 读已有记录失败等），再原样抛出保持原退出码。
+        ops_runs.record_ops_run(sb, "company_logos", {"crash": type(e).__name__}, "failed", started_at=started_at)
+        raise
+
+
+def _run(sb, args, started_at) -> None:
     sources = get_sources(sb)
 
     # 已有记录：新鲜度 + 已解析域名（已核验过的域名复用，重跑不必再核验一遍）+ 上次结果
