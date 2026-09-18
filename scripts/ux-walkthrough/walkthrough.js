@@ -44,16 +44,25 @@ const ISSUE_TYPES = {
   api_latency: { label: "接口响应慢或失败" },
 };
 
+// user=null 用于非按用户归因的 issue（如接口延迟——它归因于某个接口，不是某个用户）；
+// 这类 issue 用 extra.metric 标出真正的归因对象，text 不拼 "null：" 前缀。
 function mkIssue(type, user, detail, extra) {
   const meta = ISSUE_TYPES[type];
   if (!meta) throw new Error(`未登记的 issue type: ${type}`);
-  return { type, user, detail, text: `${user}：${detail}`, ...(extra || {}) };
+  const text = user == null ? detail : `${user}：${detail}`;
+  return { type, user, detail, text, ...(extra || {}) };
 }
 
 // 用户手填岗位方向时常见的写法坑：一个 role 字符串里塞了多个岗位名，用中文/英文分隔符或
 // 空格隔开（如 "销售；采购"、"销售 管培 运营"）。分词/匹配逻辑本身不归这个脚本管，这里只做
 // 检测与归类，供后续统一算一次「有多少用户受影响」。
-const ROLE_SEPARATOR_RE = /[;；,，、\/]+|\s+/;
+// 2026-09-18 返工：初版「空白/斜杠恒切」在全量真实 target_roles 上实测 30 条里 21 条误报
+// （"AI 产品经理" "Spring Boot" "UI/UX设计师"…全被判成多岗位）。全量对拍出的规律——
+// 真问题全是「汉字—分隔符—汉字」，误报全是英文/缩写紧邻分隔符。所以：
+// ① ；;，,、 这几个硬分隔符恒切（不含歧义，从不出现在正常职位名里）；
+// ② 空白 / 斜杠 只在分隔符**两侧紧邻字符都是汉字**时才切——紧邻一侧是英文/数字/缩写就不切。
+const HAN = "\\p{Script=Han}";
+const ROLE_SEPARATOR_RE = new RegExp(`[;；,，、]+|(?<=${HAN})[ \\t\\u3000/]+(?=${HAN})`, "gu");
 
 function splitRoleTokens(role) {
   return String(role || "")
@@ -113,9 +122,9 @@ function buildLatencyIssues(latency) {
   const issues = [];
   for (const [k, v] of Object.entries(latency || {})) {
     if (v.seconds == null || v.http !== 200) {
-      issues.push(mkIssue("api_latency", k, `接口 ${k} 失败（http=${v.http}）`, { seconds: v.seconds, http: v.http }));
+      issues.push(mkIssue("api_latency", null, `接口 ${k} 失败（http=${v.http}）`, { metric: k, seconds: v.seconds, http: v.http }));
     } else if (v.seconds > TTFB_BAD_S) {
-      issues.push(mkIssue("api_latency", k, `接口 ${k} TTFB ${v.seconds.toFixed(1)}s > ${TTFB_BAD_S}s`, { seconds: v.seconds }));
+      issues.push(mkIssue("api_latency", null, `接口 ${k} TTFB ${v.seconds.toFixed(1)}s > ${TTFB_BAD_S}s`, { metric: k, seconds: v.seconds }));
     }
   }
   return issues;

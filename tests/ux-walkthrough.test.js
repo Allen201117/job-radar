@@ -13,16 +13,52 @@ test("splitRoleTokens：单个岗位名不切分", () => {
   assert.deepEqual(splitRoleTokens("AI产品经理"), ["AI产品经理"]);
 });
 
-test("splitRoleTokens：中文分号 / 空格分隔的多岗位写法", () => {
-  assert.deepEqual(splitRoleTokens("销售；采购"), ["销售", "采购"]);
-  assert.deepEqual(splitRoleTokens("销售 管培 运营"), ["销售", "管培", "运营"]);
-});
-
 test("splitRoleTokens：边界输入（空/null/undefined）不炸", () => {
   assert.deepEqual(splitRoleTokens(""), []);
   assert.deepEqual(splitRoleTokens(null), []);
   assert.deepEqual(splitRoleTokens(undefined), []);
   assert.deepEqual(splitRoleTokens("   "), []);
+});
+
+// 2026-09-18 返工：全量真实 target_roles 对拍出的规律——
+// 真问题（应切分为多岗位）全是「汉字—分隔符—汉字」；误报（不应切分）全是英文/缩写紧邻分隔符。
+// 三组样本原样保留（不许为了让规则过而改样本），两个方向都必须是 0 错。
+const REAL_MULTI_ROLE_SAMPLES = [
+  "行政/后勤类", "教育/培训类", "文体/影视/写作/媒体类", "项目专员/助理", "行政专员/助理",
+  "数字 IC 验证/设计工程师", "质量工程师 工艺工程师",
+  "销售；采购", "销售 管培 运营", // 已知线上样本
+];
+const FALSE_POSITIVE_SINGLE_ROLE_SAMPLES = [
+  "AI 数据产品经理", "AI Agent", "AIGC 内容实习生", "TikTok Shop 运营", "AI 产品经理",
+  "Office/WPS", "Spring Boot", "Spring Security", "Element Plus", "RESTful API",
+  "AB 实验分析", "Prompt Engineering", "Agent Workflow", "Skill 调度设计", "iDA OpenAPI",
+  "Kano 优先级", "Figma 原型", "Agent 架构", "Agent Loop", "Skill 调度与自迭代",
+  "business development",
+];
+const UNSURE_DO_NOT_FLAG_SAMPLES = ["MVP 定义", "Spec 全栈", "UI/UX设计师"];
+
+test("splitRoleTokens：真问题组——「汉字-分隔符-汉字」必须切出 ≥2 段（0 条漏标）", () => {
+  let missed = 0;
+  for (const role of REAL_MULTI_ROLE_SAMPLES) {
+    if (splitRoleTokens(role).length < 2) { missed += 1; console.error("漏标:", role); }
+  }
+  assert.equal(missed, 0, "真问题组应全部被切分，漏标数必须为 0");
+});
+
+test("splitRoleTokens：误报组——英文/缩写紧邻分隔符不许被切（0 条误报）", () => {
+  let falsePositives = 0;
+  for (const role of FALSE_POSITIVE_SINGLE_ROLE_SAMPLES) {
+    if (splitRoleTokens(role).length > 1) { falsePositives += 1; console.error("误报:", role); }
+  }
+  assert.equal(falsePositives, 0, "误报组应全部保持单 token，误报数必须为 0");
+});
+
+test("splitRoleTokens：拿不准组——宁可漏判不可误报，不许被切", () => {
+  let falsePositives = 0;
+  for (const role of UNSURE_DO_NOT_FLAG_SAMPLES) {
+    if (splitRoleTokens(role).length > 1) { falsePositives += 1; console.error("误报:", role); }
+  }
+  assert.equal(falsePositives, 0, "拿不准组应保持单 token（宁可漏判），误报数必须为 0");
 });
 
 test("findMixedSeparatorRoles：归纳出所有含分隔符写法的 role，且不误伤正常写法", () => {
@@ -117,18 +153,34 @@ test("buildUserIssues：校招用户必投渠道全不通 → campus_channel_bro
   assert.ok(!notCampus.some((i) => i.type === "campus_channel_broken"));
 });
 
-test("buildLatencyIssues：http 非 200 或超时都算失败/慢，200 且快不报", () => {
+test("buildLatencyIssues：http 非 200 或超时都算失败/慢，200 且快不报；归因字段是 metric 不是 user", () => {
   const issues = buildLatencyIssues({
     a: { seconds: 1, http: 200 },
     b: { seconds: 12, http: 200 },
     c: { seconds: null, http: null },
     d: { seconds: 3, http: 500 },
   });
-  const types = issues.map((i) => `${i.user}:${i.type}`);
-  assert.deepEqual(types, ["b:api_latency", "c:api_latency", "d:api_latency"]);
+  const metrics = issues.map((i) => `${i.metric}:${i.type}`);
+  assert.deepEqual(metrics, ["b:api_latency", "c:api_latency", "d:api_latency"]);
+  // user 字段是接口名的坑已修：延迟类 issue 不归因到用户，user 必须是 null，text 不拼 "null：" 前缀
+  for (const i of issues) {
+    assert.equal(i.user, null);
+    assert.ok(!i.text.startsWith("null"), `text 不应带 null 前缀: ${i.text}`);
+  }
 });
 
 test("buildLatencyIssues：空输入不炸", () => {
   assert.deepEqual(buildLatencyIssues({}), []);
   assert.deepEqual(buildLatencyIssues(undefined), []);
+});
+
+test("buildUserIssues：zero_shown 与 role_input_format 是两个不同根因，必须共存不互斥", () => {
+  const r = {
+    user: "u1", shown: 0, scopeMismatch: false, recalled: 0, filtered: {},
+    roles: ["销售；采购"], directionOk: null, insightCompanies: 0, insightCovered: 0, campus: null,
+  };
+  const issues = buildUserIssues(r);
+  const types = issues.map((i) => i.type);
+  assert.ok(types.includes("zero_shown"), "0 岗本身是真实卡点，不该被 role_input_format 顶掉");
+  assert.ok(types.includes("role_input_format"), "岗位写法问题不该被 zero_shown 顶掉");
 });
