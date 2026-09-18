@@ -379,7 +379,7 @@ checks:
     covers: []
     calibrated: false
     why: 用户点一下要等半天，体感就是「这产品很卡」，即便后端指标看着还行。
-    action: 查最近有没有改动让候选取数变重，或者是不是命中了没走索引的查询
+    action: 把这条转给 Claude，让它查搜索为什么慢、慢在哪一类搜索上
 
   - id: exp.search_very_slow_rate_7d
     name: 近 7 天搜索「等了超过 10 秒」的比例
@@ -396,7 +396,7 @@ checks:
     covers: []
     calibrated: false
     why: 10 秒是用户会直接放弃、转头关掉页面的量级，比「超过 3 秒」更接近「这个人已经流失了」。
-    action: 查最近有没有改动让候选取数变重，或者是不是命中了没走索引的查询
+    action: 把这条转给 Claude，让它查搜索为什么慢、慢在哪一类搜索上
 
   - id: exp.ux_walkthrough_zero_shown
     name: 体验走查：有几个模拟用户在推荐页什么都没看到
@@ -513,7 +513,7 @@ checks:
     covers: []
     calibrated: false
     why: 一次假绿可能只是当天抖动，连续 7 天都这样基本可以确定这个来源已经坏了很久，只是没人发现。
-    action: 逐个来源核实入口是否还有效，无效就 disable（保留行，别删）
+    action: 把这条转给 Claude，让它逐个核实这些来源是不是真的失效了，失效的就先关掉（保留记录，不删）
 
   - id: exp.dead_click_signal_freshness_30d
     name: 「点开是死岗」这个埋点最近 30 天有没有再上报过

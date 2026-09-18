@@ -13,6 +13,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -103,15 +104,20 @@ def format_value(check_id, value):
 
 
 def format_delta(check_id, today_value, yesterday_value):
-    """有昨天数据才显示变化；没有就什么都不写（不许编一个假变化）。"""
+    """有上一次数据才显示变化；没有就什么都不写（不许编一个假变化）。
+
+    说「较上一次」不说「较昨天」——上一批测量未必发生在昨天（比如检查项刚新增，
+    或者中间某天跑漏了）；数字用 format_number 统一走「万」的格式化，避免 ↑7817 这种
+    大数直接甩出来。
+    """
     if today_value is None or yesterday_value is None:
         return ""
     delta = today_value - yesterday_value
     if is_ratio_check(check_id):
         arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
-        return f"（较昨天{arrow}{abs(delta) * 100:.1f}个百分点）"
+        return f"（较上一次{arrow}{abs(delta) * 100:.1f}个百分点）"
     arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
-    return f"（较昨天{arrow}{format_number(abs(delta))}）"
+    return f"（较上一次{arrow}{format_number(abs(delta))}）"
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +165,8 @@ def section_rows(results_by_id, results_yesterday_by_id, names, check_ids):
         verdict = r.get("verdict")
         shown = format_value(cid, value)
         delta = format_delta(cid, value, (results_yesterday_by_id.get(cid) or {}).get("value"))
-        calibrated_tag = "" if r.get("calibrated", True) else "（待校准）"
+        # ok 的行不带「（待校准）」——每行都吵；只在不达标/没查到时才提醒「这条阈值还没校准过」。
+        calibrated_tag = "" if (r.get("calibrated", True) or verdict == "ok") else "（待校准）"
         why = f"　{r.get('why')}" if verdict in ("breach", "error") and r.get("why") else ""
         rows.append({
             "check_id": cid, "name": name, "shown": shown, "delta": delta,
@@ -218,8 +225,12 @@ def find_newly_broken(results_today_by_id, results_yesterday_by_id, names):
 
 
 def build_action_items(results_today_by_id, checks_by_id, limit=5):
-    """从 breach 项的 action 字段取，critical 在前，最多 limit 条。"""
-    items = []
+    """从 breach 项的 action 字段取，critical 在前，最多 limit 条。
+
+    同一句 action 文案常常对应好几个检查项（比如好几条都写「去看走查报告」），
+    逐条各占一行只会让创始人觉得啰嗦——按 action 文案去重，命中的名字用「、」并列。
+    """
+    grouped = {}  # action 文案 -> {"rank": 排序优先级, "names": [name, ...]}
     for cid, row in results_today_by_id.items():
         if row["verdict"] not in ("breach", "error"):
             continue
@@ -227,9 +238,15 @@ def build_action_items(results_today_by_id, checks_by_id, limit=5):
         action = check.get("action")
         if not action:
             continue
-        items.append((0 if row["severity"] == "critical" else 1, check.get("name", cid), action))
-    items.sort(key=lambda x: x[0])
-    return [f"{name}：{action}" for _sev, name, action in items[:limit]]
+        rank = 0 if row["severity"] == "critical" else 1
+        name = check.get("name", cid)
+        bucket = grouped.setdefault(action, {"rank": rank, "names": []})
+        bucket["rank"] = min(bucket["rank"], rank)
+        if name not in bucket["names"]:
+            bucket["names"].append(name)
+
+    ordered = sorted(grouped.items(), key=lambda kv: (kv[1]["rank"], kv[1]["names"]))
+    return [f"{'、'.join(info['names'])}：{action}" for action, info in ordered[:limit]]
 
 
 def order_old_issues(issues, now=None):
@@ -290,7 +307,12 @@ def fetch_latest_ops_run(conn, module):
 
 
 def fetch_open_issues():
-    """gh issue list；CI 里靠 GH_TOKEN env，本地没配就返回空列表（不当作失败）。"""
+    """gh issue list；CI 里靠 GH_TOKEN env，本地没配就返回空列表（不当作失败）。
+
+    `--json comments` 拿到的是每条评论的完整对象列表（id/author/body/…），不是数字——
+    直接塞进邮件正文曾把一行撑到 4 万字符、整封 325KB。这里不改字段列表（省一次请求成本，
+    也留住 comments 内容供未来别的用途），只在渲染那一层用 comment_count() 转成数量。
+    """
     try:
         out = subprocess.run(
             ["gh", "issue", "list", "--state", "open", "--limit", "100",
@@ -304,6 +326,34 @@ def fetch_open_issues():
     except Exception as exc:  # noqa: BLE001
         sys.stderr.write(f"[morning-digest] gh issue list 异常（跳过老问题清账）: {type(exc).__name__}\n")
         return []
+
+
+def comment_count(issue):
+    """`comments` 字段可能是完整评论对象列表（gh issue list 的真实形状），也可能已经是数字
+    （比如未来换成 gh api 的计数字段）——统一转成条数，绝不把整个列表塞进邮件正文。
+    """
+    comments = (issue or {}).get("comments")
+    if isinstance(comments, list):
+        return len(comments)
+    try:
+        return int(comments)
+    except (TypeError, ValueError):
+        return 0
+
+
+_ISSUE_TITLE_TAG_RE = re.compile(r"^\s*\[[^\]]+\]\s*")
+
+
+def humanize_issue_title(title, names=None):
+    """去掉 `[watchdog]` 这类给程序看的前缀标签；冒号后的英文模块名/文件名先原样保留，
+    等有人话映射表（names）时按它替换成人话。names 为空就原样返回冒号后的部分。
+    """
+    text = _ISSUE_TITLE_TAG_RE.sub("", str(title or ""))
+    if not names:
+        return text
+    for raw, human in names.items():
+        text = text.replace(raw, human)
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +454,7 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
         for item in newly_broken:
             text_lines.append(f"  · {item['name']}：昨天还正常，今天不正常了。{item['why']}")
         for issue in recent_issues:
-            text_lines.append(f"  · #{issue.get('number')} {issue.get('title')}（24 小时内新开）")
+            text_lines.append(f"  · #{issue.get('number')} {humanize_issue_title(issue.get('title'))}（24 小时内新开）")
     else:
         text_lines.append("  没有。")
     text_lines.append("")
@@ -413,7 +463,7 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
         for issue in old_issues_sorted:
             days = _issue_age_hours(issue)
             days_txt = f"{days / 24:.0f}天" if days is not None else "未知天数"
-            text_lines.append(f"  · #{issue.get('number')} {issue.get('title')}（拖了{days_txt}，{issue.get('comments', 0)}条评论）")
+            text_lines.append(f"  · #{issue.get('number')} {humanize_issue_title(issue.get('title'))}（拖了{days_txt}，{comment_count(issue)}条评论）")
     else:
         text_lines.append("  没有未解决的老问题。")
     text_lines.append("")
@@ -477,7 +527,7 @@ def _to_html(subject, users_rows, experience_rows, supply_rows, fake_green_rows,
     new_html = "<p>没有。</p>"
     if newly_broken or recent_issues:
         li = [f"<li>{_esc(x['name'])}：昨天还正常，今天不正常了。{_esc(x.get('why',''))}</li>" for x in newly_broken]
-        li += [f"<li>#{issue.get('number')} {_esc(issue.get('title'))}（24 小时内新开）</li>" for issue in recent_issues]
+        li += [f"<li>#{issue.get('number')} {_esc(humanize_issue_title(issue.get('title')))}（24 小时内新开）</li>" for issue in recent_issues]
         new_html = "<ul style='padding-left:18px'>" + "".join(li) + "</ul>"
 
     old_html = "<p>没有未解决的老问题。</p>"
@@ -486,7 +536,7 @@ def _to_html(subject, users_rows, experience_rows, supply_rows, fake_green_rows,
         for issue in old_issues_sorted:
             hrs = _issue_age_hours(issue)
             days_txt = f"{hrs/24:.0f}天" if hrs is not None else "未知天数"
-            li.append(f"<li>#{issue.get('number')} {_esc(issue.get('title'))}（拖了{days_txt}，{issue.get('comments',0)}条评论）</li>")
+            li.append(f"<li>#{issue.get('number')} {_esc(humanize_issue_title(issue.get('title')))}（拖了{days_txt}，{comment_count(issue)}条评论）</li>")
         old_html = "<ul style='padding-left:18px'>" + "".join(li) + "</ul>"
 
     action_html = "<p>今天没有需要你处理的事。</p>"

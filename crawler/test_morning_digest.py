@@ -169,10 +169,17 @@ class SectionRowsTests(unittest.TestCase):
         rows = md.section_rows({}, {}, {"a": "指标A"}, ["a", "b"])
         self.assertEqual(rows, [])
 
-    def test_calibrated_false_tagged(self):
-        results_today = {"a": result("a", 5, "ok", calibrated=False)}
+    def test_calibrated_false_tagged_on_breach(self):
+        """待校准标签只在不达标/没查到时才提醒——ok 的行不带，见下一条测试。"""
+        results_today = {"a": result("a", 5, "breach", severity="warn", calibrated=False)}
         rows = md.section_rows(results_today, {}, {"a": "指标A"}, ["a"])
         self.assertIn("待校准", rows[0]["calibrated_tag"])
+
+    def test_calibrated_false_not_tagged_when_ok(self):
+        """每行都写「（待校准）」太吵——verdict=ok 时不带，即便 calibrated=False。"""
+        results_today = {"a": result("a", 5, "ok", calibrated=False)}
+        rows = md.section_rows(results_today, {}, {"a": "指标A"}, ["a"])
+        self.assertEqual(rows[0]["calibrated_tag"], "")
 
 
 class WalkthroughSummaryTests(unittest.TestCase):
@@ -221,6 +228,20 @@ class ActionItemsTests(unittest.TestCase):
             checks_by_id[cid] = check(cid, name=f"N{i}", action=f"do {i}")
         items = md.build_action_items(results_today, checks_by_id, limit=5)
         self.assertEqual(len(items), 5)
+
+    def test_same_action_text_merges_names_with_separator(self):
+        """两条检查项的 action 文案完全一样时，合并成一条，名字用「、」并列，不逐条重复。"""
+        results_today = {
+            "a": result("a", 1, "breach", severity="warn"),
+            "b": result("b", 1, "breach", severity="warn"),
+        }
+        checks_by_id = {
+            "a": check("a", name="搜索超3秒占比", action="把这条转给 Claude，让它查搜索为什么慢"),
+            "b": check("b", name="搜索超10秒占比", action="把这条转给 Claude，让它查搜索为什么慢"),
+        }
+        items = md.build_action_items(results_today, checks_by_id)
+        self.assertEqual(len(items), 1)
+        self.assertIn("搜索超3秒占比、搜索超10秒占比", items[0])
 
 
 class NewlyBrokenTests(unittest.TestCase):
@@ -291,7 +312,8 @@ class BuildDigestTests(unittest.TestCase):
         checks = self._checks()
         results_today = [result(cid, 5, "ok") for cid in [c["id"] for c in checks]]
         digest = md.build_digest(checks, results_today, [], None, [], None)
-        self.assertNotIn("较昨天", digest["text"])
+        self.assertNotIn("较上一次", digest["text"])
+        self.assertNotIn("较昨天", digest["text"])  # 旧文案不该再冒出来
 
     def test_data_integrity_lists_error_checks_not_zero(self):
         checks = self._checks()
@@ -324,6 +346,110 @@ class BuildDigestTests(unittest.TestCase):
         digest = md.build_digest(checks, results_today, [], None, issues, None)
         for i in range(1, 12):
             self.assertIn(f"#{i} ", digest["text"])
+
+
+class CommentCountTests(unittest.TestCase):
+    def test_real_shaped_comment_objects_counted_not_dumped(self):
+        """gh issue list --json comments 真实返回的是评论对象列表，不是数字——这是本次返工的真 bug。"""
+        issue = {"comments": [
+            {"id": "IC_kwabc", "author": {"login": "allen"}, "body": "x" * 500, "createdAt": "2026-09-01T00:00:00Z"},
+            {"id": "IC_kwdef", "author": {"login": "bot"}, "body": "y" * 500, "createdAt": "2026-09-02T00:00:00Z"},
+        ]}
+        self.assertEqual(md.comment_count(issue), 2)
+
+    def test_empty_comments_list_is_zero_not_bracket_string(self):
+        issue = {"comments": []}
+        self.assertEqual(md.comment_count(issue), 0)
+
+    def test_already_numeric_comment_count_passthrough(self):
+        self.assertEqual(md.comment_count({"comments": 5}), 5)
+
+    def test_missing_comments_field_is_zero(self):
+        self.assertEqual(md.comment_count({}), 0)
+        self.assertEqual(md.comment_count(None), 0)
+
+
+class HumanizeIssueTitleTests(unittest.TestCase):
+    def test_strips_watchdog_bracket_prefix(self):
+        out = md.humanize_issue_title("[watchdog] 连续零产出：auto_discover_overseas")
+        self.assertNotIn("[watchdog]", out)
+        self.assertEqual(out, "连续零产出：auto_discover_overseas")
+
+    def test_no_prefix_returned_as_is(self):
+        self.assertEqual(md.humanize_issue_title("普通标题"), "普通标题")
+
+    def test_names_mapping_replaces_when_given(self):
+        out = md.humanize_issue_title("[watchdog] 连续零产出：auto_discover_overseas",
+                                       names={"auto_discover_overseas": "海外自动扩源"})
+        self.assertEqual(out, "连续零产出：海外自动扩源")
+
+    def test_empty_names_leaves_module_name_untouched(self):
+        out = md.humanize_issue_title("[watchdog] 连续零产出：auto_discover_overseas", names={})
+        self.assertEqual(out, "连续零产出：auto_discover_overseas")
+
+
+class DigestSizeAndIssueRenderingTests(unittest.TestCase):
+    def _checks(self):
+        ids = md.SECTION_USERS + md.SECTION_EXPERIENCE + md.SECTION_SUPPLY + md.SECTION_FAKE_GREEN
+        return [check(cid, name=f"人话名字-{i}") for i, cid in enumerate(ids)]
+
+    def test_old_issue_with_real_shaped_comments_does_not_dump_objects(self):
+        """本次返工的真 bug：真实形状的 comments（对象列表）曾被整段塞进正文，单行 4 万字符。"""
+        checks = self._checks()
+        results_today = [result(cid, 1, "ok") for cid in [c["id"] for c in checks]]
+        now = datetime.now(timezone.utc)
+        issues = [{
+            "number": 42,
+            "title": "[watchdog] 连续零产出：auto_discover_overseas",
+            "createdAt": (now - timedelta(days=22)).isoformat(),
+            "comments": [
+                {"id": "IC_kwabc", "author": {"login": "allen"}, "body": "x" * 1000},
+                {"id": "IC_kwdef", "author": {"login": "bot"}, "body": "y" * 1000},
+            ],
+        }]
+        digest = md.build_digest(checks, results_today, [], None, issues, None)
+        self.assertIn("2条评论", digest["text"])
+        self.assertNotIn("IC_kwabc", digest["text"])
+        self.assertNotIn("author", digest["text"])
+        self.assertNotIn("[watchdog]", digest["text"])
+        self.assertNotIn("[watchdog]", digest["html"])
+
+    def test_empty_comments_list_shows_zero_not_bracket_literal(self):
+        checks = self._checks()
+        results_today = [result(cid, 1, "ok") for cid in [c["id"] for c in checks]]
+        now = datetime.now(timezone.utc)
+        issues = [{"number": 7, "title": "空评论的老问题", "createdAt": (now - timedelta(days=3)).isoformat(), "comments": []}]
+        digest = md.build_digest(checks, results_today, [], None, issues, None)
+        self.assertIn("0条评论", digest["text"])
+        self.assertNotIn("[]条评论", digest["text"])
+
+    def test_no_single_line_exceeds_500_chars(self):
+        checks = self._checks()
+        results_today = [result(cid, 1, "ok") for cid in [c["id"] for c in checks]]
+        now = datetime.now(timezone.utc)
+        # 混入一条带超大 comments 对象列表的老问题，防回归
+        issues = [{
+            "number": i,
+            "title": f"issue {i}",
+            "createdAt": (now - timedelta(days=i)).isoformat(),
+            "comments": [{"id": f"IC_{i}_{j}", "body": "z" * 200} for j in range(30)],
+        } for i in range(1, 6)]
+        digest = md.build_digest(checks, results_today, [], None, issues, None)
+        for line in digest["text"].splitlines():
+            self.assertLessEqual(len(line), 500, line[:80])
+
+    def test_whole_text_under_30kb(self):
+        checks = self._checks()
+        results_today = [result(cid, 1, "ok") for cid in [c["id"] for c in checks]]
+        now = datetime.now(timezone.utc)
+        issues = [{
+            "number": i,
+            "title": f"issue {i}",
+            "createdAt": (now - timedelta(days=i)).isoformat(),
+            "comments": [{"id": f"IC_{i}_{j}", "body": "z" * 200} for j in range(30)],
+        } for i in range(1, 40)]
+        digest = md.build_digest(checks, results_today, [], None, issues, None)
+        self.assertLessEqual(len(digest["text"].encode("utf-8")), 30 * 1024)
 
 
 class SendResendTests(unittest.TestCase):
