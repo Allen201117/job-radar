@@ -11,6 +11,13 @@
 #   severity  info | warn | critical
 #   calibrated: false = 阈值是保守拍的、还没有历史可依，邮件会标「（待校准）」。
 #               攒够 30 天换成分位数后再去掉这个标记。**禁止编一个看着合理的数字却不标它。**
+#   covers    可选。layer=data 且 db=jobs 时才有意义：这条检查真正**度量**的 jobs 列
+#             （过滤条件里顺带出现的不算，比如 `where status='active'` 里的其它列名）。
+#             `crawler/audit_coverage.py` 拿它算「哪些列还没被任何检查覆盖」的差集——
+#             故意不用「列名出现在 SQL 里」判覆盖：`status` 几乎出现在每条 where 里，
+#             按出现判会把从没被真正度量的列全部误判成「已覆盖」。没写 covers = 什么都
+#             没覆盖，只会让差集多报、不会漏报。声明的每个列名会被校验「真的按词边界
+#             出现在这条 SQL 里」+「真的是 schema 里的列」，声明不了的列不让声明。
 #
 # 种子数字全部来自 2026-09-18 真库实测，写在每条的注释里。
 
@@ -23,6 +30,7 @@ checks:
     sql: select count(*) from jobs where status = 'active'
     normal: ">= 400000"          # 实测 502,024
     severity: critical
+    covers: [status]
     calibrated: false
     why: 这是整个产品的库存。它大幅下跌意味着抓取大面积坏了，或者清理任务误删了在招岗位。此前这个数字一天历史都没有，从这条检查开始每天留一个点。
     action: 先看当天哪些来源的抓取量塌了，再看清理过期岗位的任务昨天删了多少
@@ -35,6 +43,7 @@ checks:
     sql: select count_valid_active_jobs()
     normal: ">= 380000"          # 实测 484,776
     severity: critical
+    covers: []
     calibrated: false
     why: 首页展示的岗位库数字就是它。它比「在招总量」掉得更快，说明新进来的岗位大多没有正文，用户点开是空卡。
     action: 查补正文的后台任务最近有没有在产出
@@ -49,6 +58,7 @@ checks:
       from jobs where status = 'active'
     normal: "<= 0.10"            # 实测 45,652 / 502,024 = 9.1%
     severity: warn
+    covers: [country_code]
     calibrated: false
     why: 这批岗位算国内还是海外，全押在来源配置的一个字段上。哪天某个来源被放开海外，它们会悄悄全部变成海外岗，国内供给少一块，而且不报错。
     action: 补地名词表；或查最近有没有来源改过抓取地区
@@ -61,6 +71,7 @@ checks:
     sql: select count(*) from jobs where status = 'active' and recruitment_category is null
     normal: "<= 5000"            # 实测 1,162；历史见过 3,380（全是近 3 天新抓的）
     severity: warn
+    covers: [recruitment_category]
     calibrated: false
     why: 新抓的岗位要等后台任务补算类别。没算完的岗位在校招专区里看不到，统计校招覆盖时会被当成「没有校招」。这个数持续堆高 = 补算任务停了，而那个任务自己没有任何运行记录。
     action: 看补算校招类别的任务最近几次有没有真的跑完
@@ -73,6 +84,7 @@ checks:
     sql: select count(*) from jobs where status = 'active' and job_function is null
     normal: "<= 3000"            # 实测 316
     severity: warn
+    covers: [job_function]
     calibrated: false
     why: 推荐页和校招专区按职能给用户配岗位。没算职能的岗位只能临时现算，结果会和卡片上的标签打架。持续堆高 = 补算任务停了。
     action: 看补算职能的任务最近几次有没有真的跑完
@@ -88,6 +100,7 @@ checks:
       from jobs where status = 'active'
     normal: "<= 0.06"            # 实测 17,248 / 502,024 = 3.4%
     severity: warn
+    covers: [summary]
     calibrated: false
     why: 没正文的岗位用户点开是空卡，也没法参与精确匹配。历史上出过「每晚补好的正文第二天被列表重抓抹掉」的事故，当时这个比例一路涨却没人知道。
     action: 查补正文任务的产出；查最近有没有人改过岗位写库的逻辑
@@ -103,6 +116,7 @@ checks:
              or title is null or btrim(title) = '')
     normal: "== 0"               # 实测 0
     severity: critical
+    covers: [jd_url, company, title]
     why: 官网链接准确是本产品的命根子。这个数只要不是 0，就说明入库前的质量门被绕过了。
     action: 按来源找出这些岗位，看是哪个抓取器绕过了质量门
 
@@ -114,6 +128,7 @@ checks:
     sql: select count(*) from jobs where status = 'active' and country_code = 'TW'
     normal: "== 0"               # 实测 48 —— 首日即不达标，是真问题不是阈值问题
     severity: critical
+    covers: [country_code]
     why: 产品规则是台湾岗位一律不抓、不展示。库里出现这类在招岗，说明入库时的地区拦截有漏网的路径。
     action: 列出这些岗位的来源，查它们走的哪条入库路径没过地区拦截
 
@@ -127,6 +142,7 @@ checks:
       where job_scope is null or job_scope not in ('domestic', 'overseas')
     normal: "== 0"               # 实测 0
     severity: critical
+    covers: [job_scope]
     why: 归属只允许国内、海外两种取值。出现第三种，这些岗位在两边的列表里都搜不到，等于凭空消失。
     action: 查最近的表结构改动和写库代码
 
@@ -141,6 +157,7 @@ checks:
       from jobs where status = 'active'
     normal: "<= 0.30"            # 实测 121,925 / 502,024 = 24.3%
     severity: warn
+    covers: [last_seen_at]
     calibrated: false
     why: 官网列表上最近还挂着，是岗位仍在招的第一手证据。这个比例上升 = 要么列表没翻完（漏抓），要么来源整个停了。注意：它只是信号，不能据此直接下架岗位。
     action: 跑陈旧在招岗的分桶体检，区分是「列表没翻完」还是「来源停了」
@@ -155,6 +172,7 @@ checks:
       from jobs where status = 'active'
     normal: "<= 0.30"            # 实测 104,098 / 502,024 = 20.7%；历史事故时曾到 87%~89%
     severity: warn
+    covers: [enrich_checked_at]
     calibrated: false
     why: 逐岗核验是清掉已关闭岗位的主力。历史上它曾因查询超时长期空转，这个比例涨到近九成，用户点开的大量是死岗，而任务一直显示成功。
     action: 看逐岗核验任务昨天实际核了多少个，而不是看它是不是绿的
@@ -172,6 +190,7 @@ checks:
                              at time zone 'Asia/Shanghai'
     normal: ">= 1500"            # 实测 6,817。注意：已被清理任务删掉的行不计入，略偏低
     severity: warn
+    covers: [first_seen_at]
     calibrated: false
     why: 每天有没有新岗位进来，是「抓取真的在产出」最直接的证据，比任何任务的成功状态都可信。
     action: 看昨天各来源的抓取产出，找出断掉的那一批
@@ -189,6 +208,7 @@ checks:
                          at time zone 'Asia/Shanghai'
     normal: "between 200 and 15000"   # 近 14 天均值 2,871/天；昨天按关闭时间口径 2,815
     severity: warn
+    covers: []
     calibrated: false
     why: 两个方向都有事：太少 = 死岗清理停了，用户会点到越来越多已关闭的岗位；太多 = 可能误判，把在招岗位当死岗永久删掉（这个动作不可恢复）。
     action: 太少查逐岗核验和清理任务；太多立刻看是哪家公司、哪种来源被成批判死
