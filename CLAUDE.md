@@ -335,6 +335,7 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
 - **必须逐个跑一遍 `adapter.should_skip(url)`**：工行 / 中国移动对 HEAD 恒返 403，建行对本项目 Bot UA 返「HTTP 200 + 零字节 body」——不覆写就整源被静默跳过、永远 0 产出且不报错。
 - **本机绿 ≠ CI 绿**：本机 macOS 是 LibreSSL + 有 IPv6，GitHub runner 是 OpenSSL 3 + 无 IPv6 出口 → 国内门户常「本机全通、CI 四个源全 failed」。修法在 `crawler/cn_portal_tls.py`（强制 IPv4 + OP_LEGACY_SERVER_CONNECT，**证书校验保持开启、不许 verify=False**），这两条本机永远测不出来，靠单测断言看着。
 - **接完源必须回读线上 `crawl_runs` 的 status / error_message**，别拿本机跑通当交付。
+- **hotjob / wecruit 源的公司名只认租户自报的 `suite/config.companyName`，不认 slug / probe 清单（2026-09-18 立，迁移 248·274 两次张冠李戴）**：`jd.hotjob.cn` 是精雕不是京东；wecruit 租户 `SU612f55…` seed 时记成领益智造，实为特变电工（1,903 个 active 岗挂错名三个月无人发现，标题与 tbea wt 源逐字相同）。探活出岗 ≠ 归属正确。存量纠正走 `rename-job-company.yml`（按 jd_url 前缀点名）。
 - **Playwright 在 CI 上：不等 `networkidle`、必须接管 dialog（2026-09-13 立）**。
   ❌ moka 09-10 起 410 源日产 3.6 万岗 → ~500 却全记 success：新版前端 POST `sentry-fe.mokahr.com`，该主机从 runner 连不上也不断开（本机国内网络能连，所以本机复现不出来）→ networkidle 永远等不到 → 4 路由×35s 超时被 `except` 吞成 0 岗。
   ❌ dead-link-audit 每晚一片卡 150min：中国交建详情页弹 `alert('职位已下架')`，没注册 dialog 监听 → 驱动自动 dismiss 撞上下一跳 goto → Node 驱动崩溃、Python 干等。CI 上 A/B：旧代码第 6 个岗就崩，新代码 76 分钟审 1300 岗零崩溃。

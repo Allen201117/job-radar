@@ -49,5 +49,17 @@ class IndustryTaxonomyTest(unittest.TestCase):
             self.assertEqual(it.classify_industry(raw), expected, raw)
 
 
+    def test_v2_batch_2026_09_18_added_keys(self):
+        # 迁移 273 批：与 tests/industry-taxonomy.test.js 的 V2_ADDED 同一份口径（抽 5 条钉死，
+        # 17 条全量一致性由 tests/industry-taxonomy-cross-lang.test.js 跨语言对拍覆盖）。
+        self.assertEqual(it.classify_industry("锂电池"), "制造/工业")
+        self.assertEqual(it.classify_industry("财富管理"), "金融")
+        self.assertEqual(it.classify_industry("客车"), "汽车/出行")
+        self.assertEqual(it.classify_industry("电力保护与控制"), "能源/化工")
+        self.assertEqual(it.classify_industry("网络通信设备"), "制造/工业")
+        # 刻意不收录（两段分属不同组，见 JSON _boundaryNotes）
+        self.assertIsNone(it.classify_industry("生物制药·农牧"))
+
+
 if __name__ == "__main__":
     unittest.main()
