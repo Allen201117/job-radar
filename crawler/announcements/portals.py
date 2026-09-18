@@ -104,7 +104,8 @@ _GEO_BLOCKED_FROM_CI: tuple[Portal, ...] = (
            ("https://rst.shaanxi.gov.cn/sy/ztzl/rdzt/zkzl/sxssydwgkzp_22656/",),
            ("rst.shaanxi.gov.cn", "www.shaanxi.gov.cn"),
            _p(r"t\d{8}_\d+\.html"),
-           page_pattern="index_{}.html", page_indexes=(1, 2, 3)),
+           # 陕西这个栏目只有 2 页（index_2 起 404，2026-09-18 实测）。
+           page_pattern="index_{}.html", page_indexes=(1,)),
     Portal("sx_rst", "山西省人力资源和社会保障厅·事业单位公开招聘", "山西省",
            ("https://rst.shanxi.gov.cn/ztzl/zpxx/",), ("rst.shanxi.gov.cn",),
            _p(r"t\d{8}_\d+\.shtml")),

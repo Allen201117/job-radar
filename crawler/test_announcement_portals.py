@@ -344,3 +344,36 @@ class TestCanonicalScheme(unittest.TestCase):
         hb = PORTALS_BY_KEY["hb_rst"]
         self.assertEqual(_canonical_scheme(hb, "http://other.gov.cn/x.shtml"),
                          "http://other.gov.cn/x.shtml")
+
+
+class TestPaginationErrorSemantics(unittest.TestCase):
+    """翻页 404 = 没有更多页了，不是故障；第一页失败才是故障。"""
+
+    def _run(self, statuses):
+        """statuses: 每个列表页返回的 HTTP 码。返回 (list_errors, 抓到的页数)。"""
+        import httpx as _httpx
+        from announcements import harvest as H
+        portal = H.PORTALS_BY_KEY["bj_rsj"]
+        urls = H.all_list_urls(portal)
+        calls = {"n": 0}
+
+        def fake_fetch(client, url, referer=None):
+            code = statuses[urls.index(url)]
+            if code != 200:
+                req = _httpx.Request("GET", url)
+                raise _httpx.HTTPStatusError("x", request=req, response=_httpx.Response(code, request=req))
+            calls["n"] += 1
+            return "<html></html>"
+
+        with mock.patch.object(H, "_fetch", fake_fetch):
+            m = H.harvest_portal(None, None, portal, dry_run=True)
+        return m["list_errors"], calls["n"]
+
+    def test_deep_page_404_is_not_an_error(self):
+        errs, fetched = self._run([200, 200, 404, 404])
+        self.assertEqual(errs, 0, "翻页 404 不该记 list_errors")
+        self.assertEqual(fetched, 2)
+
+    def test_first_page_failure_still_counts(self):
+        errs, _ = self._run([404, 200, 200, 200])
+        self.assertEqual(errs, 1, "第一页打不开必须报错——栏目没了或被拦")

@@ -68,14 +68,21 @@ def harvest_portal(client: httpx.Client, sb, portal: Portal, dry_run: bool) -> d
     candidates = []
     seen: set[str] = set()
     list_errors = 0
-    for lu in all_list_urls(portal):
+    list_urls = all_list_urls(portal)
+    for idx, lu in enumerate(list_urls):
         # 抓取 + 解析都算「列表页」这一步：解析抛错（如 script_json 形态变了）计 list_errors，别崩整轮。
         try:
             html = _fetch(client, lu)
             items = parse_list(portal, lu, html)
         except Exception as exc:  # noqa: BLE001
-            list_errors += 1
-            sys.stderr.write(f"[announce] {portal.key} 列表页失败 {lu}: {type(exc).__name__}\n")
+            # ⚠️ 翻页页面 404 = 「没有更多页了」，不是故障：某省公告变少时页数自然缩水
+            # （陕西那个栏目就只有 2 页）。把它记成 list_errors 会让 CI 天天报假错，
+            # 而真正该报警的是**第一页**打不开 —— 那才说明栏目没了或被拦。
+            is_missing_page = idx > 0 and isinstance(exc, httpx.HTTPStatusError) \
+                and exc.response.status_code in (404, 410)
+            if not is_missing_page:
+                list_errors += 1
+                sys.stderr.write(f"[announce] {portal.key} 列表页失败 {lu}: {type(exc).__name__}\n")
             continue
         for item in items:
             if item.url in seen:
