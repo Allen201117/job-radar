@@ -1,8 +1,13 @@
 """审计执行器契约：正常 / 边界 / 错误路径。单测不连任何真库。"""
+import io
 import os
 import unittest
+from contextlib import redirect_stdout
+from unittest import mock
 
 import audit_runner as A
+
+_FAKE_PING_URL = "https://hc-ping.example/test-uuid"
 
 
 class FakeCursor:
@@ -167,6 +172,180 @@ class ContractTest(unittest.TestCase):
         for c in A.load_contract():
             for word in ("null", "country_code", "job_scope", "summary", "select", "_at"):
                 self.assertNotIn(word, c["name"].lower(), c["id"])
+
+
+class FakeOpener:
+    """记录调用、不打真网络。outcome 控制第几次调用抛错（0-indexed），None 表示全部成功。"""
+
+    def __init__(self, fail_until_call=None, exc=RuntimeError("boom")):
+        self.calls = []
+        self.fail_until_call = fail_until_call
+        self.exc = exc
+
+    def __call__(self, request, timeout):
+        self.calls.append((request.full_url, request.data, timeout))
+        if self.fail_until_call is not None and len(self.calls) <= self.fail_until_call:
+            raise self.exc
+        return None
+
+
+class PingHeartbeatTest(unittest.TestCase):
+    def test_url_suffix_per_outcome(self):
+        opener = FakeOpener()
+        A.ping_heartbeat("start", url=_FAKE_PING_URL, opener=opener)
+        A.ping_heartbeat("success", url=_FAKE_PING_URL, opener=opener)
+        A.ping_heartbeat("fail", url=_FAKE_PING_URL, opener=opener)
+        urls = [c[0] for c in opener.calls]
+        self.assertEqual(urls, [
+            _FAKE_PING_URL + "/start",
+            _FAKE_PING_URL,
+            _FAKE_PING_URL + "/fail",
+        ])
+
+    def test_missing_url_is_skipped_and_says_so(self):
+        buf = io.StringIO()
+        opener = FakeOpener()
+        with redirect_stdout(buf):
+            result = A.ping_heartbeat("start", url=None, opener=opener)
+        self.assertEqual(result, "skipped")
+        self.assertEqual(opener.calls, [])
+        self.assertIn("HEALTHCHECKS_PING_URL", buf.getvalue())
+        self.assertIn("跳过", buf.getvalue())
+
+    def test_missing_url_falls_back_to_env(self):
+        opener = FakeOpener()
+        with mock.patch.dict(os.environ, {"HEALTHCHECKS_PING_URL": _FAKE_PING_URL}):
+            result = A.ping_heartbeat("start", opener=opener)
+        self.assertEqual(result, "sent")
+        self.assertEqual(len(opener.calls), 1)
+
+    def test_request_failure_returns_failed_without_raising_and_without_leaking_url(self):
+        opener = FakeOpener(fail_until_call=99)  # 每次都失败
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            result = A.ping_heartbeat("fail", url=_FAKE_PING_URL, opener=opener)
+        self.assertEqual(result, "failed")
+        out = buf.getvalue()
+        self.assertNotIn(_FAKE_PING_URL, out)
+        self.assertIn("RuntimeError", out)
+        self.assertGreaterEqual(len(opener.calls), 2)  # 确实重试过
+
+    def test_dry_run_sends_zero_pings(self):
+        opener = FakeOpener()
+        with mock.patch.dict(os.environ, {"HEALTHCHECKS_PING_URL": _FAKE_PING_URL}):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                with mock.patch.object(A, "_default_opener", opener):
+                    code = A.main(["--dry-run"])
+        self.assertEqual(code, 0)
+        self.assertEqual(opener.calls, [])
+        self.assertIn("dry-run", buf.getvalue())
+
+    def test_fail_body_is_redacted_and_capped(self):
+        long_body = "postgresql://u:p@203.0.113.7:5432/db " + "x" * 400
+        opener = FakeOpener()
+        A.ping_heartbeat("fail", url=_FAKE_PING_URL, opener=opener, body=long_body)
+        sent_body = opener.calls[0][1].decode("utf-8")
+        self.assertNotIn("203.0.113.7", sent_body)
+        self.assertLessEqual(len(sent_body), A._HEARTBEAT_BODY_MAX)
+
+
+def _stub_checks_and_run(monkeypatch_target, verdicts):
+    """main() 里跑到 write_results 前的那一段替身：假合约 + 假 run_all 结果。"""
+    checks = [check(id=f"c{i}") for i in range(len(verdicts))]
+    results = []
+    for c, v in zip(checks, verdicts):
+        row = A.run_check(c, lambda db: FakeConn((0.0,)))
+        row["verdict"] = v
+        results.append(row)
+    return checks, results
+
+
+class MainHeartbeatWiringTest(unittest.TestCase):
+    def setUp(self):
+        self.checks, self.results = _stub_checks_and_run(None, ["ok"])
+        patcher1 = mock.patch.object(A, "load_contract", return_value=self.checks)
+        patcher2 = mock.patch.object(A, "run_all", return_value=self.results)
+        patcher1.start()
+        patcher2.start()
+        self.addCleanup(patcher1.stop)
+        self.addCleanup(patcher2.stop)
+        env_patcher = mock.patch.dict(os.environ, {"HEALTHCHECKS_PING_URL": _FAKE_PING_URL}, clear=False)
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+
+    def _run_main(self, argv=None):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = A.main(argv or [])
+        return code, buf.getvalue()
+
+    def test_success_path_pings_start_then_success_in_order(self):
+        calls = []
+
+        def fake_ping(outcome, **kw):
+            calls.append(outcome)
+            return "sent"
+
+        with mock.patch.object(A, "write_results", return_value=1), \
+             mock.patch.object(A, "connect", return_value=object()), \
+             mock.patch.object(A, "ping_heartbeat", side_effect=fake_ping):
+            code, _ = self._run_main()
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, ["start", "success"])
+
+    def test_ledger_write_failure_pings_fail_and_exits_nonzero(self):
+        calls = []
+
+        def fake_ping(outcome, **kw):
+            calls.append(outcome)
+            return "sent"
+
+        def boom_connect(db):
+            raise RuntimeError("ledger down")
+
+        with mock.patch.object(A, "connect", side_effect=boom_connect), \
+             mock.patch.object(A, "ping_heartbeat", side_effect=fake_ping):
+            code, out = self._run_main()
+        self.assertEqual(code, 1)
+        self.assertEqual(calls, ["start", "fail"])
+        self.assertIn("写入失败", out)
+
+    def test_force_fail_env_skips_ledger_write_and_pings_fail(self):
+        calls = []
+
+        def fake_ping(outcome, **kw):
+            calls.append(outcome)
+            return "sent"
+
+        write_called = []
+
+        def fake_write(conn, results):
+            write_called.append(True)
+            return len(results)
+
+        with mock.patch.dict(os.environ, {"AUDIT_FORCE_FAIL": "1"}), \
+             mock.patch.object(A, "write_results", side_effect=fake_write), \
+             mock.patch.object(A, "connect", return_value=object()), \
+             mock.patch.object(A, "ping_heartbeat", side_effect=fake_ping):
+            code, out = self._run_main()
+        self.assertEqual(code, 1)
+        self.assertEqual(calls, ["start", "fail"])
+        self.assertEqual(write_called, [])
+        self.assertIn("故障演练", out)
+
+    def test_uncaught_exception_still_pings_fail_and_reraises(self):
+        calls = []
+
+        def fake_ping(outcome, **kw):
+            calls.append(outcome)
+            return "sent"
+
+        with mock.patch.object(A, "run_all", side_effect=RuntimeError("kaboom")), \
+             mock.patch.object(A, "ping_heartbeat", side_effect=fake_ping):
+            with self.assertRaises(RuntimeError):
+                self._run_main()
+        self.assertEqual(calls, ["start", "fail"])
 
 
 class RowShapeTest(unittest.TestCase):

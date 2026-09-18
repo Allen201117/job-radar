@@ -14,6 +14,10 @@ on:
         description: "只量不落库"
         type: boolean
         default: false
+      force_fail:
+        description: "故障演练：故意让本次失败，用来验证告警真能送达（schedule 触发时恒为 false）"
+        type: boolean
+        default: false
 
 concurrency:
   group: structural-audit
@@ -28,6 +32,10 @@ jobs:
       JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
       JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      HEALTHCHECKS_PING_URL: ${{ secrets.HEALTHCHECKS_PING_URL }}
+      # schedule 事件没有 inputs context——先判事件名再取 inputs.force_fail，
+      # 保证 schedule 触发时这里恒是空字符串（= false），不会意外落到 workflow_dispatch 的默认值判断上。
+      AUDIT_FORCE_FAIL: ${{ (github.event_name == 'workflow_dispatch' && inputs.force_fail) && '1' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
