@@ -412,7 +412,7 @@ checks:
     covers: []
     calibrated: false
     why: 走查脚本每天拿真实用户画像模拟一遍推荐；有人一个岗都刷不出来，通常是求职范围配置错配或方向词写法没被识别，光看代码看不出来。
-    action: 去 ops_runs(module='ux_walkthrough') 最新一行看是哪几个用户、issues 里写的什么原因
+    action: 把这条转给 Claude，让它查最近一次体验走查是哪几个模拟用户没刷出岗位、原因是什么
 
   - id: exp.ux_walkthrough_issue_count
     name: 体验走查：昨晚模拟出的问题总数
@@ -428,7 +428,7 @@ checks:
     covers: []
     calibrated: false
     why: 汇总所有类型的问题（零结果/范围错配/方向命中低/校招渠道不通/洞察零覆盖/接口慢）。数字本身不告诉你哪一类，要看 issues_by_type。
-    action: 看 ops_runs(module='ux_walkthrough') 最新一行的 issues_by_type，按人数最多的那一类先处理
+    action: 把这条转给 Claude，让它查最近一次体验走查里哪类问题命中人数最多，先处理那一类
 
   - id: exp.ux_walkthrough_direction_ok_avg
     name: 体验走查：推荐岗位方向命中率均值
@@ -572,6 +572,7 @@ checks:
 
   - id: pipeline.daily_crawl_ran
     name: 主抓取车道昨天有没有跑出结果
+    subject: 主抓取车道
     layer: pipeline
     db: supabase
     owner: .github/workflows/daily-crawl.yml
@@ -586,6 +587,7 @@ checks:
 
   - id: pipeline.enrich_backlog_httpx_ran
     name: 逐岗补正文（网页直连档）昨天有没有跑
+    subject: 逐岗补正文（网页直连档）
     layer: pipeline
     db: supabase
     owner: .github/workflows/enrich-backlog.yml
@@ -601,6 +603,7 @@ checks:
 
   - id: pipeline.enrich_backlog_browser_ran
     name: 逐岗补正文（需要浏览器渲染的档）昨天有没有跑
+    subject: 逐岗补正文（需要浏览器渲染的档）
     layer: pipeline
     db: supabase
     owner: .github/workflows/enrich-backlog-browser.yml
@@ -618,6 +621,7 @@ checks:
 
   - id: pipeline.dead_link_audit_ran
     name: 死链核验（浏览器巡检）昨天有没有跑
+    subject: 死链核验（浏览器巡检）
     layer: pipeline
     db: supabase
     owner: .github/workflows/dead-link-audit.yml
@@ -635,6 +639,7 @@ checks:
 
   - id: pipeline.liveness_sweep_ran
     name: 在招岗位逐个探活昨天有没有跑
+    subject: 在招岗位逐个探活
     layer: pipeline
     db: supabase
     owner: .github/workflows/liveness-sweep.yml
@@ -650,6 +655,7 @@ checks:
 
   - id: pipeline.purge_expired_ran
     name: 清理已确认关闭岗位的任务昨天有没有跑
+    subject: 清理已确认关闭岗位的任务
     layer: pipeline
     db: supabase
     owner: .github/workflows/purge-expired.yml
@@ -664,6 +670,7 @@ checks:
 
   - id: pipeline.campus_cycle_backlog_ran
     name: 校招周期性补富化昨天有没有跑
+    subject: 校招周期性补富化
     layer: pipeline
     db: supabase
     owner: .github/workflows/campus-cycle-enrich.yml
@@ -678,6 +685,7 @@ checks:
 
   - id: pipeline.campus_official_pages_ran
     name: 校招官方页面补录昨天有没有跑
+    subject: 校招官方页面补录
     layer: pipeline
     db: supabase
     owner: .github/workflows/campus-official-pages.yml
@@ -692,6 +700,7 @@ checks:
 
   - id: pipeline.gap_funnel_ran
     name: 必投缺口补源漏斗昨天有没有跑
+    subject: 必投缺口补源漏斗
     layer: pipeline
     db: supabase
     owner: .github/workflows/gap-funnel.yml
@@ -704,8 +713,24 @@ checks:
     why: 这条任务负责把必投清单里还没有稳定官网入口的公司找出来接上，停了必投覆盖率会停在原地。
     action: 看这条任务最近一次运行处理了多少家公司
 
+  - id: pipeline.gap_funnel_browser_ran
+    name: 必投缺口补源漏斗（浏览器档）昨天有没有跑
+    subject: 必投缺口补源漏斗（浏览器档）
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/gap-funnel.yml
+    sql: >
+      select count(*) from ops_runs where module = 'gap_funnel_browser'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 0"                # 待校准：这一档是否每天都有活干还没验证，先记录不告警
+    severity: info
+    calibrated: false
+    why: 同一条漏斗流水线里需要浏览器渲染才能确认的那一档（如需要 JS 才能确认的入口），和上面网页直连档的产出是分开记的，先留一个历史点。
+    action: 看这条任务最近一次运行处理了多少家公司
+
   - id: pipeline.harvest_beisen_routes_ran
     name: 北森详情页路由探测昨天有没有留下记录
+    subject: 北森详情页路由探测
     layer: pipeline
     db: supabase
     owner: .github/workflows/harvest-beisen-routes.yml
@@ -720,6 +745,7 @@ checks:
 
   - id: pipeline.announcement_harvest_ran
     name: 官方招聘公告抓取昨天有没有跑
+    subject: 官方招聘公告抓取
     layer: pipeline
     db: supabase
     owner: .github/workflows/announcement-crawl.yml
@@ -734,6 +760,7 @@ checks:
 
   - id: pipeline.auto_discover_ran
     name: 新源自动发现（网页直连档）昨天有没有跑
+    subject: 新源自动发现（网页直连档）
     layer: pipeline
     db: supabase
     owner: .github/workflows/auto-discover.yml
@@ -748,6 +775,7 @@ checks:
 
   - id: pipeline.auto_discover_browser_ran
     name: 新源自动发现（需要浏览器的档）昨天有没有跑
+    subject: 新源自动发现（需要浏览器的档）
     layer: pipeline
     db: supabase
     owner: .github/workflows/auto-discover-browser.yml
@@ -762,6 +790,7 @@ checks:
 
   - id: pipeline.auto_discover_overseas_ran
     name: 新源自动发现（海外档）昨天有没有跑
+    subject: 新源自动发现（海外档）
     layer: pipeline
     db: supabase
     owner: .github/workflows/auto-discover-overseas.yml
@@ -776,6 +805,7 @@ checks:
 
   - id: pipeline.campus_board_probe_ran
     name: 校招板块批量补源昨天有没有留下记录
+    subject: 校招板块批量补源
     layer: pipeline
     db: supabase
     owner: .github/workflows/campus-board-probe.yml
@@ -790,6 +820,7 @@ checks:
 
   - id: pipeline.company_logos_ran
     name: 企业 logo 抓取（每周）最近有没有跑
+    subject: 企业 logo 抓取
     layer: pipeline
     db: supabase
     owner: .github/workflows/company-logos.yml
@@ -804,6 +835,7 @@ checks:
 
   - id: pipeline.ats_tenant_sync_ran
     name: ATS 租户名单同步（每周）最近有没有跑
+    subject: ATS 租户名单同步
     layer: pipeline
     db: supabase
     owner: .github/workflows/ats-tenant-sync.yml
@@ -818,6 +850,7 @@ checks:
 
   - id: pipeline.audit_hotjob_attribution_ran
     name: hotjob 租户归属核对（每周）最近有没有跑
+    subject: hotjob 租户归属核对
     layer: pipeline
     db: supabase
     owner: .github/workflows/audit-hotjob-attribution.yml
@@ -832,6 +865,7 @@ checks:
 
   - id: pipeline.backfill_job_function_ran
     name: 岗位职能分类补算昨天有没有真的跑起来
+    subject: 岗位职能分类补算
     layer: pipeline
     db: supabase
     owner: .github/workflows/backfill-job-function.yml
@@ -850,6 +884,7 @@ checks:
 
   - id: pipeline.backfill_recruitment_category_ran
     name: 校招/社招分类补算昨天有没有真的跑起来
+    subject: 校招/社招分类补算
     layer: pipeline
     db: supabase
     owner: .github/workflows/backfill-recruitment-category.yml
@@ -868,6 +903,7 @@ checks:
 
   - id: pipeline.campus_lane_ran
     name: 校招高频车道（校招季内）昨天有没有真的抓过
+    subject: 校招高频车道
     layer: pipeline
     db: supabase
     owner: .github/workflows/campus-crawl.yml
@@ -890,6 +926,7 @@ checks:
 
   - id: pipeline.db_report_ran
     name: 数据库真实数字体检报告昨天有没有跑
+    subject: 数据库真实数字体检报告
     layer: pipeline
     db: supabase
     owner: .github/workflows/db-report.yml
@@ -904,6 +941,7 @@ checks:
 
   - id: pipeline.insight_backlog_t2_ran
     name: 职业洞察（官方事实层）昨天有没有跑
+    subject: 职业洞察（官方事实层）
     layer: pipeline
     db: supabase
     owner: .github/workflows/insight-enrich.yml
@@ -919,6 +957,7 @@ checks:
 
   - id: pipeline.insight_backlog_t3_ran
     name: 职业洞察（多源搜索经验层）昨天有没有跑
+    subject: 职业洞察（多源搜索经验层）
     layer: pipeline
     db: supabase
     owner: .github/workflows/insight-enrich-t3.yml
@@ -934,6 +973,7 @@ checks:
 
   - id: pipeline.insight_grade_extract_ran
     name: 职业洞察维度分档昨天有没有跑
+    subject: 职业洞察维度分档
     layer: pipeline
     db: supabase
     owner: .github/workflows/insight-grade.yml
@@ -948,6 +988,7 @@ checks:
 
   - id: pipeline.insight_staleness_sweep_ran
     name: 过期洞察清理昨天有没有跑
+    subject: 过期洞察清理
     layer: pipeline
     db: supabase
     owner: .github/workflows/insight-staleness-sweep.yml
@@ -962,6 +1003,7 @@ checks:
 
   - id: pipeline.insight_subjects_ran
     name: 洞察主体抽取（公司 × 业务线）昨天有没有跑
+    subject: 洞察主体抽取（公司 × 业务线）
     layer: pipeline
     db: supabase
     owner: .github/workflows/insight-subjects.yml
@@ -976,6 +1018,7 @@ checks:
 
   - id: pipeline.insight_annual_report_ran
     name: 公司年报摘要抽取昨天有没有跑
+    subject: 公司年报摘要抽取
     layer: pipeline
     db: supabase
     owner: .github/workflows/insight-annual-report.yml
@@ -990,6 +1033,7 @@ checks:
 
   - id: pipeline.search_quota_probe_ran
     name: 搜索额度探活（每周）最近有没有跑
+    subject: 搜索额度探活
     layer: pipeline
     db: supabase
     owner: .github/workflows/search-quota-probe.yml
@@ -1004,6 +1048,7 @@ checks:
 
   - id: pipeline.production_smoke_ran
     name: 生产环境冒烟测试昨天有没有跑
+    subject: 生产环境冒烟测试
     layer: pipeline
     db: supabase
     owner: .github/workflows/production-smoke.yml
@@ -1018,6 +1063,7 @@ checks:
 
   - id: pipeline.ops_watchdog_ran
     name: 后台任务告警器自己昨天有没有跑
+    subject: 后台任务告警器
     layer: pipeline
     db: supabase
     owner: .github/workflows/ops-watchdog.yml
@@ -1032,6 +1078,7 @@ checks:
 
   - id: pipeline.ux_walkthrough_ran
     name: 用户体验走查昨天有没有跑
+    subject: 用户体验走查
     layer: pipeline
     db: supabase
     owner: .github/workflows/ux-walkthrough.yml
@@ -1046,6 +1093,7 @@ checks:
 
   - id: pipeline.structural_audit_ran
     name: 本结构性审计自己昨天有没有跑
+    subject: 本结构性审计
     layer: pipeline
     db: supabase
     owner: .github/workflows/structural-audit.yml
@@ -1060,6 +1108,7 @@ checks:
 
   - id: pipeline.morning_digest_ran
     name: 晨报邮件昨天有没有真的发出去
+    subject: 晨报邮件
     layer: pipeline
     db: supabase
     owner: .github/workflows/morning-digest.yml
@@ -1071,7 +1120,7 @@ checks:
     severity: warn
     calibrated: false
     why: 这条检查测的是晨报这条链路自己——如果它停了，创始人会以为「没消息就是没问题」，但其实是没人在发消息。
-    action: 看 GitHub Actions 里 morning-digest 这条 workflow 最近一次是不是失败了
+    action: 把这条转给 Claude，让它查晨报这条定时任务最近一次是不是运行失败了
 
   # ===== 老告警桥接（source: watchdog） =====
   # 这 16 条不是本文件自己跑 SQL 量出来的——它们的判定逻辑一直在 crawler/ops_watchdog.py 里跑

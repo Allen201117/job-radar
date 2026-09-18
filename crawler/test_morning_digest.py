@@ -66,8 +66,11 @@ def literal_appears_in_source(value):
     return None
 
 
-def check(cid, name="名字", why="原因", action="处理办法", severity="warn", calibrated=False):
-    return {"id": cid, "name": name, "why": why, "action": action, "severity": severity, "calibrated": calibrated}
+def check(cid, name="名字", why="原因", action="处理办法", severity="warn", calibrated=False, layer=None):
+    c = {"id": cid, "name": name, "why": why, "action": action, "severity": severity, "calibrated": calibrated}
+    if layer is not None:
+        c["layer"] = layer
+    return c
 
 
 def result(cid, value, verdict, severity="warn", calibrated=False, error_message=None):
@@ -158,31 +161,69 @@ class MergeMissingAsErrorTests(unittest.TestCase):
 class BuildIssueTitleNamesTests(unittest.TestCase):
     def test_hits_module_literal_in_equality_sql(self):
         checks = [{
-            "id": "pipeline.x", "name": "洞察供给车道昨天有没有跑", "layer": "pipeline",
+            "id": "pipeline.x", "name": "洞察供给车道昨天有没有跑", "subject": "洞察供给车道", "layer": "pipeline",
             "owner": ".github/workflows/x.yml",
             "sql": "select count(*) from ops_runs where module = 'insight_backlog'",
         }]
         names = md.build_issue_title_names(checks)
-        self.assertEqual(names.get("insight_backlog"), "洞察供给车道昨天有没有跑")
+        self.assertEqual(names.get("insight_backlog"), "洞察供给车道")
 
     def test_hits_module_literal_in_any_array_sql(self):
         checks = [{
-            "id": "pipeline.y", "name": "扩源车道昨天有没有跑", "layer": "pipeline",
+            "id": "pipeline.y", "name": "扩源车道昨天有没有跑", "subject": "扩源车道", "layer": "pipeline",
             "owner": ".github/workflows/y.yml",
             "sql": "select count(*) from ops_runs where module = any(array['auto_discover', 'auto_discover_overseas'])",
         }]
         names = md.build_issue_title_names(checks)
-        self.assertEqual(names.get("auto_discover_overseas"), "扩源车道昨天有没有跑")
-        self.assertEqual(names.get("auto_discover"), "扩源车道昨天有没有跑")
+        self.assertEqual(names.get("auto_discover_overseas"), "扩源车道")
+        self.assertEqual(names.get("auto_discover"), "扩源车道")
 
     def test_hits_workflow_filename(self):
         checks = [{
-            "id": "pipeline.z", "name": "死链巡检昨天有没有跑", "layer": "pipeline",
+            "id": "pipeline.z", "name": "死链巡检昨天有没有跑", "subject": "死链巡检", "layer": "pipeline",
             "owner": ".github/workflows/dead-link-audit.yml",
             "sql": "select count(*) from ops_runs where module = 'dead_link_audit'",
         }]
         names = md.build_issue_title_names(checks)
-        self.assertEqual(names.get("dead-link-audit.yml"), "死链巡检昨天有没有跑")
+        self.assertEqual(names.get("dead-link-audit.yml"), "死链巡检")
+
+    def test_missing_subject_falls_back_to_question_suffix_stripping(self):
+        """没写 subject 时，用正则剥掉 name 结尾的问句部分兜底，不是原样把问句塞进去。"""
+        checks = [{
+            "id": "pipeline.w", "name": "主抓取车道昨天有没有跑出结果", "layer": "pipeline",
+            "owner": ".github/workflows/w.yml",
+            "sql": "select count(*) from ops_runs where module = 'daily_crawl'",
+        }]
+        names = md.build_issue_title_names(checks)
+        self.assertEqual(names.get("daily_crawl"), "主抓取车道")
+
+    def test_exact_token_match_does_not_substring_replace(self):
+        """本次返工的真 bug：auto_discover 是 auto_discover_overseas 的子串，子串替换会把
+        它错改成缝合怪；三个真实标题（真库 dry-run 实测过的）必须各自映射到自己那条检查。
+        """
+        checks = [
+            {"id": "pipeline.a1", "name": "新源自动发现（网页直连档）昨天有没有跑", "subject": "新源自动发现（网页直连档）",
+             "layer": "pipeline", "owner": ".github/workflows/auto-discover.yml",
+             "sql": "select count(*) from ops_runs where module = 'auto_discover'"},
+            {"id": "pipeline.a2", "name": "新源自动发现（需要浏览器的档）昨天有没有跑", "subject": "新源自动发现（需要浏览器的档）",
+             "layer": "pipeline", "owner": ".github/workflows/auto-discover-browser.yml",
+             "sql": "select count(*) from ops_runs where module = 'auto_discover_browser'"},
+            {"id": "pipeline.a3", "name": "新源自动发现（海外档）昨天有没有跑", "subject": "新源自动发现（海外档）",
+             "layer": "pipeline", "owner": ".github/workflows/auto-discover-overseas.yml",
+             "sql": "select count(*) from ops_runs where module = 'auto_discover_overseas'"},
+            {"id": "pipeline.g1", "name": "必投缺口补源漏斗（浏览器档）昨天有没有跑", "subject": "必投缺口补源漏斗（浏览器档）",
+             "layer": "pipeline", "owner": ".github/workflows/gap-funnel.yml",
+             "sql": "select count(*) from ops_runs where module = 'gap_funnel_browser'"},
+        ]
+        names = md.build_issue_title_names(checks)
+        cases = [
+            ("[watchdog] 连续零产出：auto_discover_overseas", "连续零产出：新源自动发现（海外档）"),
+            ("[watchdog] 连续零产出：auto_discover_browser", "连续零产出：新源自动发现（需要浏览器的档）"),
+            ("[watchdog] 连续零产出：gap_funnel_browser", "连续零产出：必投缺口补源漏斗（浏览器档）"),
+            ("[watchdog] 连续零产出：auto_discover", "连续零产出：新源自动发现（网页直连档）"),
+        ]
+        for title, expected in cases:
+            self.assertEqual(md.humanize_issue_title(title, names), expected)
 
     def test_non_pipeline_layer_not_collected(self):
         checks = [{
@@ -195,13 +236,13 @@ class BuildIssueTitleNamesTests(unittest.TestCase):
 
     def test_humanize_uses_built_names_end_to_end(self):
         checks = [{
-            "id": "pipeline.overseas", "name": "海外自动扩源车道昨天有没有跑", "layer": "pipeline",
+            "id": "pipeline.overseas", "name": "海外自动扩源车道昨天有没有跑", "subject": "海外自动扩源车道", "layer": "pipeline",
             "owner": ".github/workflows/auto-discover-overseas.yml",
             "sql": "select count(*) from ops_runs where module = 'auto_discover_overseas'",
         }]
         names = md.build_issue_title_names(checks)
         out = md.humanize_issue_title("[watchdog] 连续零产出：auto_discover_overseas", names)
-        self.assertEqual(out, "连续零产出：海外自动扩源车道昨天有没有跑")
+        self.assertEqual(out, "连续零产出：海外自动扩源车道")
 
     def test_no_match_keeps_english_as_is(self):
         checks = [{
@@ -254,6 +295,82 @@ class SummarizeWatchdogRulesTests(unittest.TestCase):
         line = md.summarize_watchdog_rules(checks, results, checks_by_id)
         self.assertIn("其中 1 条规则没评估成", line)
         self.assertIn("老告警a", line)
+
+    def test_all_rules_failed_becomes_single_sentence_not_16_names(self):
+        """16 条全没评估成时不逐条念名字，写成一句『老告警今天还没有运行结果』。"""
+        checks = self._watchdog_checks(3)
+        checks_by_id = {c["id"]: c for c in checks}
+        results = {}  # 一行都没有 = 三条全部没评估成
+        line = md.summarize_watchdog_rules(checks, results, checks_by_id)
+        self.assertEqual(line, "老告警今天还没有运行结果（3 条规则都没有结果）。")
+        self.assertNotIn("老告警a", line)
+        self.assertNotIn("老告警b", line)
+
+
+class MissingCheckLinesTests(unittest.TestCase):
+    def _checks(self, n, layer="pipeline", prefix="c"):
+        return [check(f"{prefix}{i}", name=f"检查{prefix}{i}", layer=layer) for i in range(n)]
+
+    def test_few_missing_items_get_one_bullet_each(self):
+        checks = self._checks(3)
+        error_ids = [c["id"] for c in checks]
+        lines = md._missing_check_lines(checks, error_ids)
+        self.assertEqual(len(lines), 3)
+        for line in lines:
+            self.assertTrue(line.startswith("没查到："))
+
+    def test_many_missing_items_grouped_by_layer_with_truncated_names(self):
+        checks = self._checks(20, layer="pipeline")
+        error_ids = [c["id"] for c in checks]
+        lines = md._missing_check_lines(checks, error_ids)
+        # 20 项全在同一层且全部缺失 → 应该折成一句话，不是列出 20 个名字
+        self.assertEqual(len(lines), 1)
+        self.assertIn("链路层今天还没有运行结果", lines[0])
+        self.assertIn("20", lines[0])
+
+    def test_partial_layer_missing_shows_top_5_plus_remaining_count(self):
+        checks = self._checks(20, layer="pipeline")
+        error_ids = [c["id"] for c in checks[:13]]  # 20 条里只有 13 条缺失，触发分组但不是整层
+        lines = md._missing_check_lines(checks, error_ids)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("链路层有 13 项没查到", lines[0])
+        self.assertIn("等 8 项", lines[0])  # 13 - 5 = 8
+
+    def test_mixed_layers_grouped_separately(self):
+        checks = self._checks(13, layer="pipeline", prefix="p") + self._checks(13, layer="data", prefix="d")
+        error_ids = [c["id"] for c in checks]  # 两层各 13 条全缺，各自折成一句
+        lines = md._missing_check_lines(checks, error_ids)
+        self.assertEqual(len(lines), 2)
+        joined = "".join(lines)
+        self.assertIn("链路层今天还没有运行结果", joined)
+        self.assertIn("数据层今天还没有运行结果", joined)
+
+    def test_watchdog_source_grouped_as_watchdog_not_by_layer(self):
+        checks = [
+            {"id": f"watchdog.rule_{i}", "name": f"老告警{i}", "layer": "pipeline", "source": "watchdog"}
+            for i in range(13)
+        ]
+        error_ids = [c["id"] for c in checks]
+        lines = md._missing_check_lines(checks, error_ids)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("老告警今天还没有运行结果", lines[0])
+
+    def test_no_missing_returns_empty(self):
+        self.assertEqual(md._missing_check_lines([], []), [])
+
+
+class CapLineLengthTests(unittest.TestCase):
+    def test_short_line_untouched(self):
+        self.assertEqual(md._cap_line_length("短句子"), "短句子")
+
+    def test_long_line_truncated_with_ellipsis(self):
+        long_line = "x" * 1000
+        capped = md._cap_line_length(long_line, limit=300)
+        self.assertEqual(len(capped), 300)
+        self.assertTrue(capped.endswith("…"))
+
+    def test_default_limit_is_300(self):
+        self.assertEqual(len(md._cap_line_length("y" * 1000)), 300)
 
 
 class TrafficLightTests(unittest.TestCase):
@@ -364,14 +481,63 @@ class ActionItemsTests(unittest.TestCase):
         self.assertIn("do critical thing", items[0])
 
     def test_limit_five(self):
+        """同一层最多占 2 条，凑够 5 条要跨好几个层——用不同 layer 分散开才能测到旧的『最多 5 条』上限。"""
         results_today = {}
         checks_by_id = {}
+        layers = ["pipeline", "data", "experience", "pipeline", "data", "experience", "pipeline", "data"]
         for i in range(8):
             cid = f"c{i}"
             results_today[cid] = result(cid, 1, "breach", severity="warn")
-            checks_by_id[cid] = check(cid, name=f"N{i}", action=f"do {i}")
+            checks_by_id[cid] = check(cid, name=f"N{i}", action=f"do {i}", layer=layers[i])
         items = md.build_action_items(results_today, checks_by_id, limit=5)
         self.assertEqual(len(items), 5)
+
+    def test_same_layer_capped_at_two_even_with_room_left(self):
+        """同一层塞了 4 条不同 action，即便 limit 还有余量，也只取前 2 条——
+        否则某一层集体出问题时会把建议清单的 5 个名额占满，看不出还有别的层需要关注。
+        """
+        results_today = {}
+        checks_by_id = {}
+        for i in range(4):
+            cid = f"p{i}"
+            results_today[cid] = result(cid, 1, "breach", severity="warn")
+            checks_by_id[cid] = check(cid, name=f"链路层检查{i}", action=f"do pipeline {i}", layer="pipeline")
+        items = md.build_action_items(results_today, checks_by_id, limit=5)
+        self.assertEqual(len(items), 2)
+
+    def test_many_checks_sharing_one_action_shows_top_5_plus_remaining(self):
+        """几十条检查共用同一句 action 文案时（比如一整层集体没跑），名字不能全念出来。"""
+        results_today = {}
+        checks_by_id = {}
+        for i in range(20):
+            cid = f"c{i}"
+            results_today[cid] = result(cid, 1, "breach", severity="warn")
+            checks_by_id[cid] = check(cid, name=f"检查{i}", action="统一动作", layer="pipeline")
+        items = md.build_action_items(results_today, checks_by_id, limit=5, max_per_group=99)
+        self.assertEqual(len(items), 1)
+        self.assertIn("等 20 项", items[0])
+        self.assertNotIn("检查19", items[0])
+
+    def test_watchdog_source_counted_as_its_own_group_not_by_layer(self):
+        """source=watchdog 的条目即便 layer=pipeline，也要单独算一层——不能跟真正的
+        链路层检查合并计数，否则老告警集体出问题会把链路层的建议名额也占满。
+        """
+        results_today = {}
+        checks_by_id = {}
+        for i in range(3):
+            cid = f"pipeline{i}"
+            results_today[cid] = result(cid, 1, "breach", severity="warn")
+            checks_by_id[cid] = check(cid, name=f"链路层{i}", action=f"do pipeline {i}", layer="pipeline")
+        for i in range(3):
+            cid = f"watchdog.rule_{i}"
+            results_today[cid] = result(cid, 1, "breach", severity="warn")
+            checks_by_id[cid] = check(cid, name=f"老告警{i}", action=f"do watchdog {i}", layer="pipeline")
+            checks_by_id[cid]["source"] = "watchdog"
+        items = md.build_action_items(results_today, checks_by_id, limit=5)
+        pipeline_items = [x for x in items if "链路层" in x]
+        watchdog_items = [x for x in items if "老告警" in x]
+        self.assertEqual(len(pipeline_items), 2)
+        self.assertEqual(len(watchdog_items), 2)
 
     def test_same_action_text_merges_names_with_separator(self):
         """两条检查项的 action 文案完全一样时，合并成一条，名字用「、」并列，不逐条重复。"""
@@ -622,7 +788,8 @@ class DigestSizeAndIssueRenderingTests(unittest.TestCase):
         self.assertIn("0条评论", digest["text"])
         self.assertNotIn("[]条评论", digest["text"])
 
-    def test_no_single_line_exceeds_500_chars(self):
+    def test_no_single_line_exceeds_300_chars(self):
+        """收紧到 300（此前是 500，没能拦住⑧段『没查到』51 个名字挤成一行的可读性问题）。"""
         checks = self._checks()
         results_today = [result(cid, 1, "ok") for cid in [c["id"] for c in checks]]
         now = datetime.now(timezone.utc)
@@ -635,7 +802,19 @@ class DigestSizeAndIssueRenderingTests(unittest.TestCase):
         } for i in range(1, 6)]
         digest = md.build_digest(checks, results_today, [], None, issues, None)
         for line in digest["text"].splitlines():
-            self.assertLessEqual(len(line), 500, line[:80])
+            self.assertLessEqual(len(line), 300, line[:80])
+
+    def test_many_missing_checks_does_not_cram_into_one_line(self):
+        """51 个检查项都没查到时，⑧段不能把 51 个名字挤成一行——这是本次返工的真 bug。"""
+        checks = self._checks() + [check(f"extra.{i}", name=f"额外检查{i}", layer="data") for i in range(50)]
+        results_today = [result(cid, 1, "ok") for cid in [c["id"] for c in self._checks()]]
+        # extra.* 全部缺行 → merge_missing_as_error 会把它们标成 error
+        digest = md.build_digest(checks, results_today, [], None, [], None)
+        for line in digest["text"].splitlines():
+            self.assertLessEqual(len(line), 300, line[:80])
+        # 51 个名字挤一行的旧现象：不该把全部 50 个名字都念出来（只展示前几个 + 剩余数）
+        self.assertNotIn("额外检查49", digest["text"])
+        self.assertIn("等 50 项", digest["text"])
 
     def test_whole_text_under_30kb(self):
         checks = self._checks()

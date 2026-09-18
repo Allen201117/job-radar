@@ -224,13 +224,24 @@ def find_newly_broken(results_today_by_id, results_yesterday_by_id, names):
     return out
 
 
-def build_action_items(results_today_by_id, checks_by_id, limit=5):
-    """从 breach 项的 action 字段取，critical 在前，最多 limit 条。
+def _group_key(check):
+    """一条检查项归到哪个『层』——老告警桥接条目（source=watchdog）单独算一层，
+    不跟它 layer 字段声明的 pipeline/data 混在一起（那只是历史遗留的挂靠）。
+    """
+    if (check or {}).get("source") == "watchdog":
+        return "watchdog"
+    return (check or {}).get("layer", "other")
+
+
+def build_action_items(results_today_by_id, checks_by_id, limit=5, max_per_group=2):
+    """从 breach 项的 action 字段取，critical 在前，最多 limit 条；同一层最多占
+    max_per_group 条——某一整层（比如链路层集体没跑）时，剩下几条名额要留给别的层，
+    不能被一层的 5 条建议占满，创始人才看得出『还有别的事要看』。
 
     同一句 action 文案常常对应好几个检查项（比如好几条都写「去看走查报告」），
     逐条各占一行只会让创始人觉得啰嗦——按 action 文案去重，命中的名字用「、」并列。
     """
-    grouped = {}  # action 文案 -> {"rank": 排序优先级, "names": [name, ...]}
+    grouped = {}  # action 文案 -> {"rank": 排序优先级, "names": [name, ...], "group": 层}
     for cid, row in results_today_by_id.items():
         if row["verdict"] not in ("breach", "error"):
             continue
@@ -240,13 +251,30 @@ def build_action_items(results_today_by_id, checks_by_id, limit=5):
             continue
         rank = 0 if row["severity"] == "critical" else 1
         name = check.get("name", cid)
-        bucket = grouped.setdefault(action, {"rank": rank, "names": []})
+        bucket = grouped.setdefault(action, {"rank": rank, "names": [], "group": _group_key(check)})
         bucket["rank"] = min(bucket["rank"], rank)
         if name not in bucket["names"]:
             bucket["names"].append(name)
 
     ordered = sorted(grouped.items(), key=lambda kv: (kv[1]["rank"], kv[1]["names"]))
-    return [f"{'、'.join(info['names'])}：{action}" for action, info in ordered[:limit]]
+    result = []
+    group_counts = {}
+    for action, info in ordered:
+        if len(result) >= limit:
+            break
+        group = info["group"]
+        if group_counts.get(group, 0) >= max_per_group:
+            continue
+        group_counts[group] = group_counts.get(group, 0) + 1
+        names = info["names"]
+        # 名字列表也可能挤成一堵墙（比如一整层集体没跑，几十条检查共用同一句 action 文案）——
+        # 同⑧段『没查到』一样，超过 5 个就只列前 5 个 + 剩余数，不逐条念完。
+        shown = names[:5]
+        label = "、".join(shown)
+        if len(names) > 5:
+            label += f"等 {len(names)} 项"
+        result.append(f"{label}：{action}")
+    return result
 
 
 def order_old_issues(issues, now=None):
@@ -382,17 +410,45 @@ def comment_count(issue):
 
 
 _ISSUE_TITLE_TAG_RE = re.compile(r"^\s*\[[^\]]+\]\s*")
+_ISSUE_TITLE_LAST_COLON_RE = re.compile(r"^(.*?)[：:]([^：:]+)$")
+
+# name 通常是「XX 昨天有没有跑出结果」这种检查项问句；塞进 issue 标题读不通
+# （「连续零产出：校招官方页面补录昨天有没有跑」）。contract 里的 pipeline 条目应该带一个
+# 短名词 `subject`（如「校招官方页面补录」），没带时用这条正则剥掉问句部分兜底——不追求
+# 覆盖所有可能写法，宁可剥不干净（原样保留 name）也不许剥错（把不该删的部分删了）。
+_QUESTION_SUFFIX_RE = re.compile(r"(?:（[^）]*）)?(?:自己)?(?:昨天|今天|最近)?(?:是否|有没有).*$")
+
+
+def _check_subject(check):
+    subject = check.get("subject")
+    if subject:
+        return subject
+    name = check.get("name") or ""
+    stripped = _QUESTION_SUFFIX_RE.sub("", name).strip()
+    return stripped or name
 
 
 def humanize_issue_title(title, names=None):
     """去掉 `[watchdog]` 这类给程序看的前缀标签；冒号后的英文模块名/文件名先原样保留，
-    等有人话映射表（names）时按它替换成人话。names 为空就原样返回冒号后的部分。
+    等有人话映射表（names）时按它替换成人话。
+
+    ⚠️ 必须整词精确匹配，不能子串替换——`auto_discover` 是 `auto_discover_overseas` 的
+    子串，子串替换会把「auto_discover_overseas」错改成「<auto_discover 的人话>_overseas」
+    这种缝合怪（2026-09-19 真库 dry-run 实测过的真 bug）。只在冒号后的整段文本**恰好等于**
+    某个 key 时才整段替换；等号两侧多一个字都不行，匹配不到就原样保留英文。
     """
     text = _ISSUE_TITLE_TAG_RE.sub("", str(title or ""))
     if not names:
         return text
-    for raw, human in names.items():
-        text = text.replace(raw, human)
+    m = _ISSUE_TITLE_LAST_COLON_RE.match(text)
+    if m:
+        head, tail = m.group(1), m.group(2)
+        tail_stripped = tail.strip()
+        if tail_stripped in names:
+            return f"{head}：{names[tail_stripped]}"
+        return text
+    if text.strip() in names:
+        return names[text.strip()]
     return text
 
 
@@ -407,24 +463,31 @@ def build_issue_title_names(checks):
     对应哪条 pipeline 检查项，靠该检查项自己的 owner（workflow 路径）与 sql 里
     `module = '…'` / `module = any(array['…', '…'])` 的字面量来确认，匹配不到就不收录
     （humanize_issue_title 原样保留英文，绝不猜）。
+
+    映射到的人话优先用检查项的 `subject`（短名词，如「校招官方页面补录」）——直接用 `name`
+    会把一句问句（「…昨天有没有跑」）塞进 issue 标题读不通；没有 subject 时用
+    `_check_subject` 剥掉问句部分兜底。
     """
     names = {}
     for c in checks:
-        if c.get("layer") != "pipeline":
+        # source=watchdog 的条目即便 layer=pipeline，也不是「一条 workflow 一条 SQL」那种
+        # 真正意义上的链路检查——它没有 module 字面量可抠、owner 也不是 workflow 文件，
+        # 收进来只会制造噪音映射，跳过。
+        if c.get("layer") != "pipeline" or c.get("source") == "watchdog":
             continue
-        name = c.get("name")
-        if not name:
+        subject = _check_subject(c)
+        if not subject:
             continue
         owner = c.get("owner") or ""
         basename = os.path.basename(owner)
         if basename:
-            names.setdefault(basename, name)
+            names.setdefault(basename, subject)
         sql = c.get("sql") or ""
         for m in _MODULE_ARRAY_RE.finditer(sql):
             for lit in _QUOTED_LITERAL_RE.findall(m.group(1)):
-                names.setdefault(lit, name)
+                names.setdefault(lit, subject)
         for m in _MODULE_EQ_RE.finditer(sql):
-            names.setdefault(m.group(1), name)
+            names.setdefault(m.group(1), subject)
     return names
 
 
@@ -474,19 +537,71 @@ def _last_sent_line(last_sent_digest):
     return f"上一封晨报{date_part}发送失败：{reason}"
 
 
+_GROUP_LABELS = {"pipeline": "链路层", "data": "数据层", "experience": "体验层", "watchdog": "老告警"}
+_MISSING_LIST_GROUPING_THRESHOLD = 12  # 超过这个数就不再逐条念名字，改成按层分组
+_MISSING_LIST_NAMES_PER_GROUP = 5
+
+
+def _missing_check_lines(all_checks, error_ids):
+    """⑧段『没查到』的渲染：≤12 项逐条一行 bullet；超过 12 项按层分组，某一整层全没查到
+    时写成一句话（不逐条念名字），否则该层给出前 5 个名字 + 剩余数。
+    每一行返回 build_digest 的调用方，会各自变成一条『  · 』bullet（text）/ <li>（html）。
+    """
+    if not error_ids:
+        return []
+    checks_by_id = {c["id"]: c for c in all_checks}
+    error_id_set = set(error_ids)
+    if len(error_ids) <= _MISSING_LIST_GROUPING_THRESHOLD:
+        return [f"没查到：{checks_by_id.get(cid, {}).get('name', cid)}" for cid in error_ids]
+
+    by_group = {}
+    group_totals = {}
+    for c in all_checks:
+        g = _group_key(c)
+        group_totals[g] = group_totals.get(g, 0) + 1
+        if c["id"] in error_id_set:
+            by_group.setdefault(g, []).append(c["name"])
+
+    lines = []
+    for group, names in sorted(by_group.items(), key=lambda kv: -len(kv[1])):
+        label = _GROUP_LABELS.get(group, group)
+        total_in_group = group_totals.get(group, len(names))
+        if len(names) == total_in_group:
+            lines.append(f"{label}今天还没有运行结果（{total_in_group} 项都没有结果）。")
+            continue
+        shown = names[:_MISSING_LIST_NAMES_PER_GROUP]
+        remaining = len(names) - len(shown)
+        line = f"{label}有 {len(names)} 项没查到：{'、'.join(shown)}"
+        if remaining > 0:
+            line += f"等 {remaining} 项"
+        lines.append(line + "。")
+    return lines
+
+
+_MAX_LINE_CHARS = 300
+
+
+def _cap_line_length(line, limit=_MAX_LINE_CHARS):
+    """硬上限兜底：不管上面哪段逻辑没兜住，任何一行超过这个长度都在这里截断，
+    绝不让一整个对象/列表被拼进邮件正文（本次返工的诱因就是没有这道硬兜底）。
+    """
+    text = str(line)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
 def _integrity_lines(all_checks, results_today_by_id, last_sent_digest):
     total = len(all_checks)
     error_ids = [cid for cid, r in results_today_by_id.items() if r["verdict"] == "error"]
     calibrated_false_names = [c["name"] for c in all_checks if not c.get("calibrated", True)]
     lines = [f"今天一共跑了 {total} 项检查，{len(error_ids)} 项没查到。"]
-    if error_ids:
-        names = {c["id"]: c["name"] for c in all_checks}
-        lines.append("没查到的是：" + "、".join(names.get(cid, cid) for cid in error_ids))
+    lines.extend(_missing_check_lines(all_checks, error_ids))
     if calibrated_false_names:
         lines.append(f"有 {len(calibrated_false_names)} 项阈值还是拍的、没有历史数据校准过，标了「待校准」的都是。")
     lines.append(_last_sent_line(last_sent_digest))
     lines.extend(FIXED_DISCLAIMERS)
-    return lines
+    return [_cap_line_length(line) for line in lines]
 
 
 def merge_missing_as_error(checks, results_today_by_id):
@@ -516,6 +631,9 @@ def merge_missing_as_error(checks, results_today_by_id):
 def summarize_watchdog_rules(checks, results_today_by_id, checks_by_id):
     """把 16 条老告警规则（source=watchdog）折成⑥段开头一句总述：今天共报了多少项、
     有几条规则没评估成（必须逐条点名，不许折叠成 0——那会把『规则本身跑挂了』悄悄藏起来）。
+
+    ⚠️ 例外：**全部**规则都没评估成时不逐条念 16 个名字——那不是「这几条规则坏了」，
+    是「老告警这整层今天压根没跑」，一句话就说清楚，念名单反而埋没了这个更大的信号。
     """
     watchdog_ids = [c["id"] for c in checks if c.get("source") == "watchdog"]
     if not watchdog_ids:
@@ -532,6 +650,8 @@ def summarize_watchdog_rules(checks, results_today_by_id, checks_by_id):
             continue
         if row.get("value") is not None:
             total_hits += int(row["value"])
+    if len(failed_names) == len(watchdog_ids):
+        return f"老告警今天还没有运行结果（{len(watchdog_ids)} 条规则都没有结果）。"
     line = f"老告警 {len(watchdog_ids)} 条规则今天共报 {total_hits} 项，其中 {len(failed_names)} 条规则没评估成"
     if failed_names:
         line += "：" + "、".join(failed_names)
@@ -578,6 +698,8 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
 
     integrity_lines = _integrity_lines(checks, results_today_by_id, last_sent_digest)
     watchdog_summary = summarize_watchdog_rules(checks, results_today_by_id, checks_by_id)
+    if watchdog_summary:
+        watchdog_summary = _cap_line_length(watchdog_summary)
 
     text_lines = [subject, ""]
     text_lines.append("① 用户")
@@ -626,7 +748,9 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
     text_lines.append("⑧ 数据完整性声明")
     text_lines.extend(f"  · {line}" for line in integrity_lines)
 
-    text = "\n".join(text_lines)
+    # 最终硬兜底：不管上面哪段忘了处理，任何一行超过 300 字符都在这里截断——
+    # 本次返工的诱因就是没有这道兜底，comments 对象列表能一路塞到单行 4 万字符。
+    text = "\n".join(_cap_line_length(line) for line in text_lines)
     html = _to_html(subject, users_rows, experience_rows, supply_rows, fake_green_rows,
                      walkthrough_issue_summary, newly_broken, recent_issues, old_issues_sorted,
                      action_items, integrity_lines, watchdog_summary, issue_title_names)
