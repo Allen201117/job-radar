@@ -778,8 +778,10 @@ def _evaluate_candidates(row, candidates, *, trusted_site, fingerprinter):
         adapter = fingerprint.get("adapter")
         source_url = fingerprint.get("source_url")
         if platform == "iguopin" and adapter == "iguopin" and not source_url:
-            source_url = "https://www.iguopin.com/job?company=%s" % quote(
-                row["company"], safe=""
+            # `match=` 不能省：没有它且查不到集团时 adapter 放行一切（见 entry_lanes
+            # 的 _IGUOPIN_TEMPLATE 注释里那两个实测反例）。
+            source_url = "https://www.iguopin.com/job?company=%s&match=%s" % (
+                quote(row["company"], safe=""), quote(row["company"], safe=""),
             )
             fingerprint = {**fingerprint, "source_url": source_url}
         if not _routable_source_url(adapter, source_url):

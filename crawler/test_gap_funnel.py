@@ -930,7 +930,9 @@ class RoundCapTest(unittest.TestCase):
         self.assertEqual(result["state"], "platform_known")
         self.assertEqual(
             probed[0]["url"],
-            "https://www.iguopin.com/job?company=%E7%94%B2%E5%85%AC%E5%8F%B8",
+            # match= 不能省：没有它且查不到集团时 adapter 放行一切（张冠李戴红线）
+            "https://www.iguopin.com/job?company=%E7%94%B2%E5%85%AC%E5%8F%B8"
+            "&match=%E7%94%B2%E5%85%AC%E5%8F%B8",
         )
 
     def test_candidate_identity_retry_uses_second_routable_candidate(self):

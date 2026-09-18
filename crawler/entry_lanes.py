@@ -49,7 +49,13 @@ LANE_RETRY_DAYS = {
     LANE_SEARCH: 7,
 }
 
-_IGUOPIN_TEMPLATE = "https://www.iguopin.com/job?company=%s"
+# ⚠️ `match=` **不能省**：adapter 的 `_row_passes_match` 是 `if not match: return True` ——
+# 没有 match 且查不到集团时它**放行一切**。2026-09-18 dry-run 实测省掉它的后果：
+# 「北京麦田」返回 300 个岗，自报公司是中移信息 51 / 北京遥感 25 / 北京现代 22…，
+# 「中泰证券」返回 300 个岗全是国投证券 118 / 长城证券 41 —— 正是 CLAUDE.md
+# 「归属准确性没有旁路」那块碑记的 84% 张冠李戴，一字不差地又演了一遍。
+# match 一律用**完整公司名**（比库里手调的短名更严）：宁可漏判，不可错杀。
+_IGUOPIN_TEMPLATE = "https://www.iguopin.com/job?company=%s&match=%s"
 
 
 def _now(now=None):
@@ -298,7 +304,7 @@ def iguopin_candidates(company, *, indexed=None):
     check = indexed if indexed is not None else iguopin_indexed
     if not check(name):
         return []
-    url = _IGUOPIN_TEMPLATE % quote(name, safe="")
+    url = _IGUOPIN_TEMPLATE % (quote(name, safe=""), quote(name, safe=""))
     item = _candidate(url, LANE_IGUOPIN, reason="iguopin_company_index", preset={
         "platform": "iguopin", "adapter": "iguopin", "source_url": url,
         "identity_ok": True,
