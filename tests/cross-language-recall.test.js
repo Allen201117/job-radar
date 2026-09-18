@@ -48,3 +48,36 @@ test("复合 query 仍精确：数据工程师", () => {
   assert.equal(jobMatchesChinaKeyword({ title: "Data Engineer" }, "数据工程师"), true);
   assert.equal(jobMatchesChinaKeyword({ title: "Marketing Analyst" }, "数据工程师"), false);
 });
+
+// 2026-09-18：纯拉丁长词（≥4 字母）改走词边界。此前 ≥4 字母的拉丁词是裸子串 →
+// product ⊂ production（全库 active 标题 2,166 例、1,430 例被判成产品经理 exact）、search ⊂ research 1,968、
+// intern ⊂ international/internal 675、quant ⊂ quantum 71、sales ⊂ salesforce 97、doctor ⊂ postdoctoral 44。
+test("纯拉丁长词走词边界：production 不再命中 产品经理", () => {
+  assert.equal(keywordMatchTier({ title: "Production Technician I", summary: "" }, "产品经理"), null);
+  assert.equal(keywordMatchTier({ title: "Manager Production", summary: "" }, "产品经理"), null);
+  assert.equal(jobMatchesChinaKeyword({ title: "Sr. Production Planner." }, "产品经理"), false);
+  assert.equal(jobMatchesChinaKeyword({ title: "Research Scientist" }, "搜索"), false);
+  assert.equal(jobMatchesChinaKeyword({ title: "Senior Internal Auditor" }, "实习"), false);
+  assert.equal(jobMatchesChinaKeyword({ title: "Ant International-Product Manager" }, "实习"), false);
+  assert.equal(jobMatchesChinaKeyword({ title: "Senior Quantum Engineer" }, "量化"), false);
+  assert.equal(jobMatchesChinaKeyword({ title: "Senior Salesforce Developer" }, "销售"), false);
+  assert.equal(jobMatchesChinaKeyword({ title: "Postdoctoral Fellow" }, "医生"), false);
+});
+
+test("纯拉丁长词词边界：真岗仍命中（多词短语保持子串、复数与登记过的派生词放行）", () => {
+  assert.equal(keywordMatchTier({ title: "Product Manager", summary: "" }, "产品经理"), "exact");
+  assert.equal(keywordMatchTier({ title: "Senior Product Owner", summary: "" }, "产品经理"), "exact");
+  assert.equal(jobMatchesChinaKeyword({ title: "Data Products Lead" }, "产品经理"), true); // 复数
+  assert.equal(jobMatchesChinaKeyword({ title: "Engineering Manager" }, "工程师"), true); // 派生词 engineering
+  assert.equal(jobMatchesChinaKeyword({ title: "Quantitative Researcher" }, "量化"), true); // quantitative
+  assert.equal(jobMatchesChinaKeyword({ title: "Database Engineer" }, "数据"), true); // database 沿用旧口径
+  assert.equal(jobMatchesChinaKeyword({ title: "Senior Auditor" }, "财务"), true); // auditor
+  assert.equal(jobMatchesChinaKeyword({ title: "Back-end Engineer" }, "后端"), true); // 带连字符的复合词仍子串
+  assert.equal(jobMatchesChinaKeyword({ title: "产品product经理" }, "产品经理"), true); // CJK 也是词边界
+});
+
+test("纯拉丁长词词边界：解除误认领后真岗回到本方向 exact", () => {
+  // 旧实现里 salesforce ⊂ sales 让销售组「认领」了这个岗，产品经理查询被兄弟组排除。
+  assert.equal(keywordMatchTier({ title: "Salesforce Product Owner", summary: "" }, "产品经理"), "exact");
+  assert.equal(keywordMatchTier({ title: "Data Science Postdoctoral Fellow", summary: "" }, "数据分析"), "exact");
+});
