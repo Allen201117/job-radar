@@ -12,6 +12,8 @@ import os
 import re
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -33,6 +35,13 @@ REQUIRED_TEXT_SQL = ("id", "name", "layer", "db", "owner", "sql", "normal", "sev
 REQUIRED_TEXT_WATCHDOG = ("id", "name", "layer", "owner", "rule", "normal", "severity", "why", "action")
 DEFAULT_TIMEOUT_S = 120
 ERROR_MESSAGE_MAX = 300
+
+# 外部心跳（Healthchecks.io）：执行器自己也可能没跑起来（CI 挂了 / cron 没触发），
+# 那种情况只靠台账查不出来——台账本身就没被写。这套心跳独立于台账，是「进程还活着吗」的旁路信号。
+_HEARTBEAT_SUFFIX = {"start": "/start", "success": "", "fail": "/fail"}
+_HEARTBEAT_TIMEOUT_S = 10
+_HEARTBEAT_MAX_ATTEMPTS = 3  # 首次 + 最多重试 2 次
+_HEARTBEAT_BODY_MAX = 200
 
 _NUM = r"-?\d+(?:\.\d+)?"
 _CMP_RE = re.compile(rf"^(<=|>=|==|!=|<|>)\s*({_NUM})$")
@@ -103,6 +112,44 @@ def _redact(message):
     for pattern, replacement in _REDACTIONS:
         text = pattern.sub(replacement, text)
     return text[:ERROR_MESSAGE_MAX]
+
+
+def _default_opener(request, timeout):
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
+def ping_heartbeat(outcome, url=None, opener=None, body=None):
+    """给 Healthchecks.io 发一次心跳。outcome ∈ start/success/fail。
+
+    url 缺失只是「没配」，不是错误——打印一行说明后跳过（返回 "skipped"），
+    但绝不能一声不响地什么都不做。发送失败只记 warning、绝不影响进程退出码
+    （它是旁路信号，不是台账本身）；异常信息只打类名，ping URL 本身等同密钥、
+    一律不许出现在任何日志里。
+    """
+    if outcome not in _HEARTBEAT_SUFFIX:
+        raise ValueError(f"未知的心跳 outcome: {outcome!r}")
+    if url is None:
+        url = os.environ.get("HEALTHCHECKS_PING_URL")
+    if not url:
+        print("[audit] 未配置 HEALTHCHECKS_PING_URL，已跳过外部心跳")
+        return "skipped"
+
+    target = url.rstrip("/") + _HEARTBEAT_SUFFIX[outcome]
+    opener = opener or _default_opener
+    data = None
+    if outcome == "fail" and body:
+        data = _redact(body)[:_HEARTBEAT_BODY_MAX].encode("utf-8")
+
+    last_exc = None
+    for _ in range(_HEARTBEAT_MAX_ATTEMPTS):
+        try:
+            request = urllib.request.Request(target, data=data, method="POST" if data else "GET")
+            opener(request, timeout=_HEARTBEAT_TIMEOUT_S)
+            return "sent"
+        except Exception as exc:  # noqa: BLE001 - 心跳失败绝不能让审计本身跟着炸
+            last_exc = exc
+    print(f"::warning::外部心跳发送失败: {type(last_exc).__name__}")
+    return "failed"
 
 
 def _query_scalar(conn, sql, timeout_s):
@@ -245,27 +292,53 @@ def main(argv=None):
     parser.add_argument("--layer", choices=LAYERS)
     args = parser.parse_args(argv)
 
-    checks = load_contract()
-    if args.layer:
-        checks = [c for c in checks if c["layer"] == args.layer]
-    checks = sql_checks(checks)  # source=watchdog 的检查项由 ops_watchdog.py 自己写，本文件不跑它们
-    results = run_all(checks, connect)
-    print(render(results, checks))
-    tally = {v: sum(1 for r in results if r["verdict"] == v) for v in ("ok", "breach", "error")}
-    print(f"[audit] checks={len(results)} ok={tally['ok']} breach={tally['breach']} error={tally['error']}")
-    if tally["error"]:
-        print(f"::warning::audit 有 {tally['error']} 条检查没查到（已按 error 落库，不是 0）")
+    force_fail = os.environ.get("AUDIT_FORCE_FAIL") == "1"
 
     if args.dry_run:
-        print("[audit] dry-run：未写 audit_results")
-        return 0
-    written = False
+        print("[audit] dry-run：不发外部心跳")
+    else:
+        ping_heartbeat("start")
+
     try:
-        ledger = connect("supabase")
-        written = write_results(ledger, results) == len(results)
-    except Exception as exc:  # noqa: BLE001
-        print(f"::error::audit_results 写入失败: {_redact(f'{type(exc).__name__}: {exc}')}")
-    return exit_code(written)
+        checks = load_contract()
+        if args.layer:
+            checks = [c for c in checks if c["layer"] == args.layer]
+        checks = sql_checks(checks)  # source=watchdog 的检查项由 ops_watchdog.py 自己写，本文件不跑它们
+        results = run_all(checks, connect)
+        print(render(results, checks))
+        tally = {v: sum(1 for r in results if r["verdict"] == v) for v in ("ok", "breach", "error")}
+        print(f"[audit] checks={len(results)} ok={tally['ok']} breach={tally['breach']} error={tally['error']}")
+        if tally["error"]:
+            print(f"::warning::audit 有 {tally['error']} 条检查没查到（已按 error 落库，不是 0）")
+
+        if args.dry_run:
+            print("[audit] dry-run：未写 audit_results")
+            return 0
+
+        if force_fail:
+            print("[audit] 故障演练：AUDIT_FORCE_FAIL=1，本次故意失败（跳过写台账）")
+            ping_heartbeat("fail", body="故障演练：AUDIT_FORCE_FAIL=1")
+            return exit_code(written=False)
+
+        written = False
+        try:
+            ledger = connect("supabase")
+            written = write_results(ledger, results) == len(results)
+        except Exception as exc:  # noqa: BLE001
+            print(f"::error::audit_results 写入失败: {_redact(f'{type(exc).__name__}: {exc}')}")
+
+        if written:
+            ping_heartbeat("success")
+        else:
+            ping_heartbeat("fail", body="audit_results 写入失败")
+        return exit_code(written)
+    except Exception:
+        # 走到这里说明上面某处有未捕获异常（不是台账写失败、也不是查询失败——那两类各自已经
+        # 被内层 try 收敛成 error 行/written=False）。心跳照实发一次 fail，异常本身必须 re-raise，
+        # 不能吞掉——否则退出码会被这层 except 悄悄改成「正常返回」。
+        if not args.dry_run:
+            ping_heartbeat("fail", body="audit_runner 主流程抛出未捕获异常")
+        raise
 
 
 if __name__ == "__main__":
