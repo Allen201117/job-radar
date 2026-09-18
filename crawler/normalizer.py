@@ -17,6 +17,7 @@ from geo import (
     derive_country_code,
     derive_job_scope,
     is_china_location,
+    is_rejected_location,
     is_remote_location,
     keep_for_china_radar,
     location_in_scope,
@@ -578,6 +579,14 @@ def validate_job_quality(raw: RawJob, source_url: str) -> tuple[bool, str]:
         return False, "missing title"
     if not jd_url:
         return False, "missing jd_url"
+    # 台湾：项目口径不抓、不归入任一范围。这条挡在**所有 adapter 汇合之后**的唯一出口上
+    # （run.py 对每个 raw job 一律先过 validate_job_quality 再 normalize/写库），不依赖
+    # 某个 adapter 记得自己调 location_in_source_regions——2026-09-18 实测两类根因都不是
+    # 「adapter 调用了但判错」，而是「压根没走到那道复核」（workday trusted 分支整批跳过
+    # per-job 复核；feishu/hotjob/wt/beisen/xiaomi_feishu 这类纯本土源默认全在国内、从不
+    # 调用该复核）。详见 geo.is_rejected_location 的注释与实测台账。
+    if is_rejected_location(raw.location):
+        return False, "rejected region (taiwan)"
 
     parsed = urlparse(jd_url)
     source = urlparse(source_url)

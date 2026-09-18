@@ -10,6 +10,7 @@ from geo import (
     derive_job_scope,
     is_china_location,
     is_overseas_unspecified,
+    is_rejected_location,
     location_in_scope,
 )
 
@@ -708,3 +709,36 @@ class UsStateAbbrMustBeUppercaseTest(unittest.TestCase):
         for location in ("CHARLOTTE, NC", "Ann, Arbor, MI 48108", "AustinTX"):
             with self.subTest(location=location):
                 self.assertEqual(derive_country_code(location), "US")
+
+
+class RejectedLocationTest(unittest.TestCase):
+    """is_rejected_location 是「要不要放行」的唯一硬判据，与 derive_job_scope（放行后怎么归类）
+    是两个问题——见 crawler/geo.py 同名函数注释与 2026-09-18 香港库 48 行泄漏实测台账。
+    """
+
+    def test_taiwan_locations_are_rejected(self):
+        for location in (
+            "Taipei, Taipei, City, Taiwan, Region", "台北市", "TW, Taipei, City, Taipei",
+            "Hsinchu", "Taiwan, Hsinchu", "Taiwan, Taipei", "台湾省",
+            "Taiwan, , , Taipei", "Taipei, Taiwan", "Taichung, Taichung, Taiwan",
+            "Taipei, Taipei, Taiwan", "Taipei, Taiwan, China", "新北市", "高雄市", "金门县",
+        ):
+            with self.subTest(location=location):
+                self.assertTrue(is_rejected_location(location), location)
+
+    def test_non_taiwan_locations_are_not_rejected(self):
+        for location in (
+            "北京", "上海市", "深圳", "香港", "澳门", "New York, NY", "Singapore",
+            "Tokyo, Japan", "东京都", "Seoul, South Korea", "首尔市",
+            "邢台南和区", "常州新北区", "福州连江县", "北海市", "Beijing, China",
+            "青岛市、日本、潍坊市", "远程", "Remote", "", None,
+            "长沙市,铜仁市,钦州市,印度尼西亚,贵阳市,韩国",
+        ):
+            with self.subTest(location=location):
+                self.assertFalse(is_rejected_location(location), location)
+
+    def test_multi_location_with_taiwan_follows_derive_country_code_precedence(self):
+        # 「泰国,越南,台北市」：derive_country_code 已判定为 TW（TW 排在 _COUNTRY_TOKENS
+        # 靠前、"台北"是子串匹配），is_rejected_location 如实跟随，不额外发明多地点仲裁规则。
+        self.assertEqual(derive_country_code("泰国,越南,台北市"), "TW")
+        self.assertTrue(is_rejected_location("泰国,越南,台北市"))
