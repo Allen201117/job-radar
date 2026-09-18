@@ -916,4 +916,3 @@ class ContractSeverityIsAuthoritativeTests(unittest.TestCase):
         self.assertEqual(merged["watchdog.rule_a"]["value"], 6.0)
         self.assertEqual(md.compute_traffic_light(merged), "🟡")
         self.assertEqual(rows["watchdog.rule_a"]["severity"], "critical")  # 不原地改入参
-
