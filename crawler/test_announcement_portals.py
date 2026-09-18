@@ -318,3 +318,29 @@ class TestListPagination(unittest.TestCase):
         from announcements.portals import PORTALS, _GEO_BLOCKED_FROM_CI
         for p in (*PORTALS, *_GEO_BLOCKED_FROM_CI):
             self.assertEqual(bool(p.page_pattern), bool(p.page_indexes), p.key)
+
+
+class TestCanonicalScheme(unittest.TestCase):
+    """同一篇公告的 http:// 与 https:// 是两个 source_url（唯一键）→ 存两行、页面出两张同样的卡。"""
+
+    def test_detail_scheme_follows_the_portal_list_url(self):
+        from announcements.portals import PORTALS_BY_KEY, _canonical_scheme
+        hb = PORTALS_BY_KEY["hb_rst"]          # 列表页是 https
+        self.assertTrue(hb.list_urls[0].startswith("https://"))
+        self.assertEqual(
+            _canonical_scheme(hb, "http://rst.hubei.gov.cn/a/t20260916_6015318.shtml"),
+            "https://rst.hubei.gov.cn/a/t20260916_6015318.shtml")
+
+    def test_http_only_site_is_not_upgraded(self):
+        """⚠️ 不许一律升 https —— 山东那个站本身就是 http，升了会全站 404。"""
+        from announcements.portals import PORTALS_BY_KEY, _canonical_scheme
+        sd = PORTALS_BY_KEY["sd_hrss"]
+        self.assertTrue(sd.list_urls[0].startswith("http://"))
+        url = "https://hrss.shandong.gov.cn/articles/ch00232/2026/x.shtml"
+        self.assertEqual(_canonical_scheme(sd, url).split("://", 1)[0], "http")
+
+    def test_other_hosts_untouched(self):
+        from announcements.portals import PORTALS_BY_KEY, _canonical_scheme
+        hb = PORTALS_BY_KEY["hb_rst"]
+        self.assertEqual(_canonical_scheme(hb, "http://other.gov.cn/x.shtml"),
+                         "http://other.gov.cn/x.shtml")

@@ -255,13 +255,27 @@ def _clean_title(text: str) -> str:
     return t[:200]
 
 
+def _canonical_scheme(portal: Portal, url: str) -> str:
+    """详情链接的协议统一成该 portal 自己列表页的协议。
+
+    ⚠️ 不能一律升 https —— 山东那个站就是 http 的。之所以要统一：同一篇公告的 http:// 和 https://
+    是**两个不同的 source_url**，而 source_url 是唯一键 → 同一条公告在库里存两行、页面上出现两张
+    一模一样的卡（2026-09-18 实测湖北有 2 组）。站内链接混用两种协议很常见，靠 portal 自报的协议归一。
+    """
+    want = portal.list_urls[0].split("://", 1)[0]
+    other = "http" if want == "https" else "https"
+    if url.startswith(other + "://") and urlparse(url).netloc == urlparse(portal.list_urls[0]).netloc:
+        return want + "://" + url.split("://", 1)[1]
+    return url
+
+
 def _accept(portal: Portal, list_url: str, title: str, href: str,
             seen: set[str], out: list[ListItem], published_override: date | None = None) -> None:
     """把一条 (标题, 链接) 过三重门（归属 / detail_pat / 内容），通过则收进 out。html 与 script_json 两路共用。"""
     title = _clean_title(title)
     if not href or len(title) < 8:
         return
-    full = urljoin(list_url, href)
+    full = _canonical_scheme(portal, urljoin(list_url, href))
     if not host_in_whitelist(portal, full):
         return
     if not portal.detail_pat.search(full):
