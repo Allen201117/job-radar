@@ -46,11 +46,11 @@ jobs:
       GOOGLE_CSE_CX: ${{ secrets.GOOGLE_CSE_CX }}
       EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
       BOCHA_API_KEY: ${{ secrets.BOCHA_API_KEY }}
-      DISPATCH_LIMIT: ${{ github.event.inputs.limit || '20' }}
+      DISPATCH_LIMIT: ${{ github.event.inputs.limit || '40' }}
       DISPATCH_COMPANY: ${{ github.event.inputs.company || '' }}
       DISPATCH_APPLY: ${{ github.event.inputs.apply || 'true' }}
       # 校招季（2026-09-17 创始人定调：集中攻校招）：校招车道每轮 15 家；淡季改回默认 5。
-      GAP_FUNNEL_CAMPUS_CAP: "15"
+      GAP_FUNNEL_CAMPUS_CAP: "40"
       # 每日完整必投普查后写北极星；写入失败只告警，绝不阻断主任务。
       NORTH_STAR_SNAPSHOT: "true"
 
