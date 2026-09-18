@@ -14,7 +14,8 @@ const getCached = unstable_cache(
     const { data, error } = await supabase
       .from("announcement_postings")
       .select(
-        "id, source_portal, source_url, title, region, employer_type, audience, published_at, deadline, deadline_text, status",
+        "id, source_portal, source_url, title, region, employer_type, audience, " +
+        "published_at, deadline, deadline_text, status, verdict",
       )
       .eq("status", "active")
       .order("published_at", { ascending: false, nullsFirst: false })
@@ -27,7 +28,7 @@ const getCached = unstable_cache(
     // service_role 绕过 RLS → 过期/非 active 的过滤在 toAnnouncementPostings 里再做一遍（fail-safe）。
     return toAnnouncementPostings(data);
   },
-  ["announcement-postings-v1"],
+  ["announcement-postings-v2"],
   { revalidate: TTL_SECONDS * 2 },
 );
 

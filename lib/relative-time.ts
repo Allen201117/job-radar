@@ -47,6 +47,18 @@ export function formatDateLabel(
 }
 
 /**
+ * 今天是几号（`YYYY-MM-DD`，按展示时区 Asia/Shanghai）。
+ *
+ * ⚠️ 别用 `new Date().toISOString().slice(0,10)` —— 那是 **UTC** 的日期。Vercel 函数跑 UTC，
+ * 于是北京时间 00:00–08:00 这八小时里它给的是「昨天」：昨天刚截止的公告会被判成「还没到期」
+ * 继续展示。报名截止日本来就是「北京时间的哪一天」，比较基准必须同一个时区。
+ */
+export function todayInDisplayZone(now: Date = new Date()): string {
+  // en-CA 的短日期格式就是 YYYY-MM-DD，省掉手工拼接补零。
+  return new Intl.DateTimeFormat("en-CA", { timeZone: DISPLAY_TIME_ZONE }).format(now);
+}
+
+/**
  * 快照年龄文案（「刚刚 / 12 分钟前 / 3 小时前 / 2 天前」）。给校招看板这类「服务端缓存的快照」用：
  * 服务端算成字符串再下发，客户端原样渲染，避免两端各算一次分钟数导致水合不一致。
  * 用途是**把缓存卡死暴露出来**（2026-09-09 /campus 静默服务了 6 天前的快照），不是装饰。

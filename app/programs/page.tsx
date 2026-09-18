@@ -7,7 +7,6 @@ import {
   ArrowSquareOut,
   CalendarBlank,
   ClipboardText,
-  MapPin,
   Megaphone,
   SealCheck,
   Student,
@@ -15,7 +14,7 @@ import {
 } from "@phosphor-icons/react/ssr";
 import { Badge, EmptyState, buttonVariants } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { formatDateLabel } from "@/lib/relative-time";
+import { formatDateLabel, todayInDisplayZone } from "@/lib/relative-time";
 import { getRequestUser } from "@/lib/auth";
 import { getApplyPrograms } from "@/lib/apply-programs-store";
 import { getAnnouncementPostings } from "@/lib/announcement-postings-store";
@@ -25,7 +24,7 @@ import {
   PROGRAM_TYPE_TONE,
   type ApplyProgram,
 } from "@/lib/apply-programs";
-import { AUDIENCE_LABEL, type AnnouncementPosting } from "@/lib/announcement-postings";
+import AnnouncementsClient from "./announcements-client";
 
 export const metadata = { title: "公告制招聘 · 求职雷达" };
 
@@ -45,13 +44,6 @@ const TYPE_TILE = {
   announcement: "border-tone-amber-border bg-tone-amber-bg text-tone-amber-fg",
   talent_pool: "border-tone-neutral-border bg-tone-neutral-bg text-tone-neutral-fg",
 };
-
-/** 报名截止/时间的展示文案：优先结构化日期，其次原文，再次「以公告为准」。 */
-function deadlineLabel(posting: AnnouncementPosting): string {
-  if (posting.deadline) return `报名截止 ${formatDateLabel(posting.deadline)}`;
-  if (posting.deadlineText) return `报名时间：${posting.deadlineText}`;
-  return "报名时间以公告为准";
-}
 
 /** 手工核实条目卡（apply_programs）。 */
 function ProgramCard({ program }: { program: ApplyProgram }) {
@@ -82,49 +74,6 @@ function ProgramCard({ program }: { program: ApplyProgram }) {
           rel="noopener noreferrer"
         >
           去官方入口投递
-          <ArrowSquareOut size={14} weight="bold" aria-hidden />
-        </a>
-      </div>
-    </li>
-  );
-}
-
-/** 官方招聘公告卡（announcement_postings）。标题即公告名，突出地区/受众/报名截止日。 */
-function PostingCard({ posting }: { posting: AnnouncementPosting }) {
-  const audience = AUDIENCE_LABEL[posting.audience];
-  return (
-    <li className="surface surface-hover flex h-full flex-col p-5">
-      <div className="flex flex-wrap items-center gap-2">
-        {posting.region ? (
-          <Badge tone="neutral" size="xs">
-            <MapPin size={11} weight="fill" aria-hidden className="mr-0.5 inline shrink-0" />
-            {posting.region}
-          </Badge>
-        ) : null}
-        {audience ? (
-          <Badge tone={posting.audience === "experienced" ? "neutral" : "green"} size="xs">
-            {audience}
-          </Badge>
-        ) : null}
-        {posting.employerType ? <Badge tone="neutral" size="xs">{posting.employerType}</Badge> : null}
-      </div>
-      <h3 className="t-h3 mt-2">{posting.title}</h3>
-      <p className="t-caption mt-3 inline-flex items-start gap-1.5 rounded-lg border border-tone-amber-border bg-tone-amber-bg px-2.5 py-1.5 text-tone-amber-fg">
-        <CalendarBlank size={14} weight="bold" aria-hidden className="mt-0.5 shrink-0" />
-        <span>{deadlineLabel(posting)}</span>
-      </p>
-      <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-black/[0.06] pt-4 dark:border-white/[0.08]">
-        <span className="t-caption ink-3 inline-flex items-center gap-1.5">
-          <SealCheck size={14} weight="fill" aria-hidden className="shrink-0" />
-          {posting.publishedAt ? `${formatDateLabel(posting.publishedAt)} 官方发布` : "官方公告"}
-        </span>
-        <a
-          className={cn(buttonVariants({ variant: "ink", size: "sm" }), "press-feedback")}
-          href={posting.sourceUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          去官方公告投递
           <ArrowSquareOut size={14} weight="bold" aria-hidden />
         </a>
       </div>
@@ -165,6 +114,9 @@ export default async function ProgramsPage() {
 
   // 互不依赖 → 并行取（冷启动别串行等两次）。
   const [programs, postings] = await Promise.all([getApplyPrograms(), getAnnouncementPostings()]);
+  // ⚠️ 「今天」在服务端算一次传下去：两端各自 new Date() 会因时区不同算出不同的「还剩几天」，
+  //    导致水合文本不一致（项目已因裸 toLocaleDateString 踩过 React #418）。
+  const today = todayInDisplayZone();
 
   const campus = programs.filter((p) => p.programType === "campus_program");
   const manualAnnouncements = programs.filter((p) => p.programType === "announcement");
@@ -208,10 +160,24 @@ export default async function ProgramsPage() {
             {announcementCount > 0 ? (
               <section>
                 <SectionHeader type="announcement" count={announcementCount} />
-                <ul className="mt-5 grid gap-4 lg:grid-cols-2">
-                  {manualAnnouncements.map((p) => <ProgramCard key={p.entryUrl} program={p} />)}
-                  {postings.map((p) => <PostingCard key={p.sourceUrl} posting={p} />)}
-                </ul>
+
+                {/* 人工核实的少量条目单列一组：它们没有地区/受众字段，跟着筛选器一起被筛掉会显得「东西丢了」，
+                    而且「人工核实过」本身是更强的信任信号，值得放在前面。 */}
+                {manualAnnouncements.length > 0 ? (
+                  <div className="mt-5">
+                    <h3 className="t-label ink-3 mb-2.5">人工核实的投递入口 · {manualAnnouncements.length}</h3>
+                    <ul className="grid gap-4 lg:grid-cols-2">
+                      {manualAnnouncements.map((p) => <ProgramCard key={p.entryUrl} program={p} />)}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {postings.length > 0 ? (
+                  <div className="mt-7">
+                    <h3 className="t-label ink-3 mb-2.5">各省人社厅官网每日抓取 · 已复验报名未截止</h3>
+                    <AnnouncementsClient postings={postings} today={today} />
+                  </div>
+                ) : null}
               </section>
             ) : null}
 

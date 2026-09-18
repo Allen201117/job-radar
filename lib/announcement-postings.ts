@@ -5,6 +5,8 @@
 // ⚠️ fail-safe：service_role 读绕过 RLS，所以「已过报名截止日 / 非 active」的过滤必须在这里再做一遍，
 //   不能只依赖 DB —— 与 apply-programs.toApplyProgram 同一道理（宁可读侧再判一次，也不放死链/过期件出去）。
 
+import { todayInDisplayZone } from "./relative-time";
+
 export type AnnouncementAudience = "fresh_grad" | "experienced" | "both" | "unknown";
 
 export interface AnnouncementPosting {
@@ -18,6 +20,8 @@ export interface AnnouncementPosting {
   publishedAt: string | null;
   deadline: string | null; // ISO date；null = 截止日未知（靠 TTL 治理）
   deadlineText: string | null;
+  /** ok = 本页自己收报名；index_page = 官方汇总索引页，报名入口在别处（卡片要标注「需再跳转」）。 */
+  verdict: "ok" | "index_page";
 }
 
 /** 受众徽章文案（应届/社会分面）。unknown 不出徽章。 */
@@ -30,11 +34,6 @@ export const AUDIENCE_LABEL: Record<AnnouncementAudience, string> = {
 
 function isAudience(v: unknown): v is AnnouncementAudience {
   return v === "fresh_grad" || v === "experienced" || v === "both" || v === "unknown";
-}
-
-/** 今天（本地 ISO date）——报名截止日比较用。 */
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
 }
 
 /** DB 行 → 展示模型。只放行 active + 未过报名截止日 + 入口是 http(s) 的官方公告。 */
@@ -51,7 +50,7 @@ export function toAnnouncementPosting(
   if (status !== "active") return null;
   if (!/^https?:\/\//i.test(sourceUrl)) return null;
   // 过报名截止日的不展示（deadline 为空 = 未知，仍展示，靠 TTL 过期治理下架）。
-  if (deadline && deadline < todayISO()) return null;
+  if (deadline && deadline < todayInDisplayZone()) return null;
 
   const audienceRaw = row.audience;
   return {
@@ -65,6 +64,7 @@ export function toAnnouncementPosting(
     publishedAt: (row.published_at ?? row.publishedAt ?? null) as string | null,
     deadline,
     deadlineText: (row.deadline_text ?? row.deadlineText ?? null) as string | null,
+    verdict: row.verdict === "index_page" ? "index_page" : "ok",
   };
 }
 

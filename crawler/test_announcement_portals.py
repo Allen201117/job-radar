@@ -232,7 +232,7 @@ class TestHarvestLedger(unittest.TestCase):
     def test_zero_found_portal_warns_and_is_recorded(self):
         portal = PORTALS_BY_KEY["bj_rsj"]
         zero = {
-            "portal": portal.key, "found": 0, "processed": 0, "new": 0, "touched": 0,
+            "portal": portal.key, "found": 0, "processed": 0, "new": 0, "rejected": 0, "rejected_reasons": {}, "touched": 0,
             "deadline_hit": 0, "list_errors": 0, "detail_errors": 0,
         }
         client = mock.MagicMock()
@@ -253,7 +253,7 @@ class TestHarvestLedger(unittest.TestCase):
     def test_ledger_marks_ci_runner_and_portal_count(self):
         portal = PORTALS_BY_KEY["bj_rsj"]
         metrics = {
-            "portal": portal.key, "found": 1, "processed": 1, "new": 0, "touched": 1,
+            "portal": portal.key, "found": 1, "processed": 1, "new": 0, "rejected": 0, "rejected_reasons": {}, "touched": 1,
             "deadline_hit": 0, "list_errors": 0, "detail_errors": 0,
         }
         client = mock.MagicMock()
@@ -271,7 +271,7 @@ class TestHarvestLedger(unittest.TestCase):
     def test_ledger_marks_include_geo_blocked_runner_as_mac(self):
         portal = PORTALS_BY_KEY["bj_rsj"]
         metrics = {
-            "portal": portal.key, "found": 1, "processed": 1, "new": 0, "touched": 1,
+            "portal": portal.key, "found": 1, "processed": 1, "new": 0, "rejected": 0, "rejected_reasons": {}, "touched": 1,
             "deadline_hit": 0, "list_errors": 0, "detail_errors": 0,
         }
         client = mock.MagicMock()

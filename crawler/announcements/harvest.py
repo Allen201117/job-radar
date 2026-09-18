@@ -21,9 +21,11 @@ import db  # noqa: E402
 import ops_runs  # noqa: E402
 from adapters.cn_portal_tls import make_transport  # noqa: E402
 
+from .body import extract_body
 from .classify import detect_audience, detect_employer_type
-from .deadline import extract_deadline, extract_published
+from .deadline import extract_published
 from .portals import PORTALS, PORTALS_BY_KEY, Portal, detail_text, parse_list, _GEO_BLOCKED_FROM_CI
+from .quality import assess
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -94,6 +96,7 @@ def harvest_portal(client: httpx.Client, sb, portal: Portal, dry_run: bool) -> d
         existing = {r["source_url"]: r for r in rows}
 
     new_rows, touched, deadline_hit, detail_errors = [], 0, 0, 0
+    rejected, rejected_reasons = 0, {}
     for item in candidates:
         if item.url in existing:
             if not dry_run:
@@ -109,9 +112,18 @@ def harvest_portal(client: httpx.Client, sb, portal: Portal, dry_run: bool) -> d
             detail_errors += 1
             sys.stderr.write(f"[announce] {portal.key} 详情失败 {item.url}: {type(exc).__name__}\n")
             continue
-        dtext = detail_text(portal, dhtml)
+        # ⚠️ 判断一律落在**正文**上，不用整页文本：整页含导航/侧栏/友情链接/页脚，
+        #   既会让「正文里有没有 X」被导航词命中，也可能把侧栏别条公告的日期当成本公告的截止日。
+        dtext = extract_body(detail_text(portal, dhtml), item.title)
         published = item.published_at or extract_published(dtext)
-        deadline, deadline_text = extract_deadline(dtext, published_at=published)
+        v = assess(item.title, dtext, published_at=published)
+        if not v.ok and v.action == "reject":
+            # 标题带「招聘」但点进去是过程通知 / 报名已关门 / 已过截止日 → 压根别入库。
+            # 这些此前会入库并一直展示到 45 天 TTL，正是「点进去是招聘结束的公示」的来源。
+            rejected += 1
+            rejected_reasons[v.reason] = rejected_reasons.get(v.reason, 0) + 1
+            continue
+        deadline, deadline_text = v.deadline, v.deadline_text
         if deadline:
             deadline_hit += 1
         new_rows.append({
@@ -125,6 +137,7 @@ def harvest_portal(client: httpx.Client, sb, portal: Portal, dry_run: bool) -> d
             "deadline": deadline.isoformat() if deadline else None,
             "deadline_text": deadline_text,
             "status": "active",
+            "verdict": "index_page" if v.action == "flag" else "ok",
             "last_seen_at": _now_iso(),
             "updated_at": _now_iso(),
         })
@@ -137,6 +150,8 @@ def harvest_portal(client: httpx.Client, sb, portal: Portal, dry_run: bool) -> d
         "found": total_found,            # 列表页命中的候选总数（截断前）
         "processed": len(candidates),    # 本轮实际处理（截最新 N）
         "new": len(new_rows),
+        "rejected": rejected,              # 过了标题门、但正文判「现在报不了」被拦下的
+        "rejected_reasons": rejected_reasons,
         "touched": touched,
         "deadline_hit": deadline_hit,
         "list_errors": list_errors,
@@ -162,7 +177,7 @@ def run(portal_keys: list[str] | None, dry_run: bool, include_geo_blocked: bool 
         for p in portals:
             m = harvest_portal(client, sb, p, dry_run)
             per_portal.append(m)
-            print(f"[announce] {p.key}: 候选 {m['found']} / 新增 {m['new']} / 更新 {m['touched']} "
+            print(f"[announce] {p.key}: 候选 {m['found']} / 新增 {m['new']} / 正文拦下 {m['rejected']} / 更新 {m['touched']} "
                   f"/ 抽到截止日 {m['deadline_hit']} / 列表错 {m['list_errors']} / 详情错 {m['detail_errors']}")
 
     total_new = sum(m["new"] for m in per_portal)
@@ -186,6 +201,7 @@ def run(portal_keys: list[str] | None, dry_run: bool, include_geo_blocked: bool 
         "portals_run": len(portals),
         "total_found": total_found,
         "total_new": total_new,
+        "total_rejected": sum(m["rejected"] for m in per_portal),
         "total_deadline_hit": sum(m["deadline_hit"] for m in per_portal),
         "total_errors": total_err,
         "zero_found_portals": zero_found_portals,

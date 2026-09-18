@@ -28,5 +28,12 @@ set -a; source "$REPO/.env.local" 2>/dev/null; set +a
 cd "$REPO/crawler" || { echo "[err] 无 crawler 目录" >> "$LOG"; exit 1; }
 /usr/bin/python3 -m announcements.harvest --include-geo-blocked >> "$LOG" 2>&1
 rc=$?
+
+# 国聘（央企/地方国企公告，JSON 接口）——各省人社厅结构性够不着的那块供给。
+/usr/bin/python3 -m announcements.iguopin >> "$LOG" 2>&1 || echo "[warn] 国聘抓取失败（不影响整轮）" >> "$LOG"
+
+# 每日复验：逐条真抓正文，判「现在还能不能报」，报不了的下架。
+# 本机是大陆路由，够得着**全部**省份——GitHub runner 够不着的那些省只有这里能复验。
+/usr/bin/python3 -m announcements.verify >> "$LOG" 2>&1 || echo "[warn] 公告复验失败（不影响整轮）" >> "$LOG"
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') 结束（exit $rc）=====" >> "$LOG"
 exit $rc

@@ -41,3 +41,22 @@ jobs:
           else
             python -m announcements.harvest
           fi
+
+      # 国聘（国资委官方央企招聘平台）——补的是各省人社厅结构性够不着的那块：央企/地方国企。
+      # 它是 JSON 接口、报名起止日是结构化字段，单独一个 harvester（见 announcements/iguopin.py）。
+      - name: Harvest iguopin (SOE) announcements
+        working-directory: crawler
+        run: |
+          if [ -n "${{ github.event.inputs.dry_run }}" ]; then
+            python -m announcements.iguopin --dry-run
+          else
+            python -m announcements.iguopin
+          fi
+
+      # 每日复验：把**正在展示**的公告逐条真抓一遍正文，判它现在还能不能报，报不了就下架。
+      # ⚠️ 入库时判一次是不够的：报名窗写在正文里，官方随时能另发公告提前关掉。
+      # ⚠️ CI 在境外，够不着的省会被记 unreachable 跳过（不判死）；那些省由创始人 Mac 的 launchd 复验。
+      - name: Re-verify displayed announcements
+        if: ${{ github.event.inputs.dry_run == '' }}
+        working-directory: crawler
+        run: python -m announcements.verify
