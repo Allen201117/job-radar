@@ -290,3 +290,25 @@ test("老版 wt（hotjob）查询参数 recruitType 是平台渠道常量：1→
     "社招",
   );
 });
+
+test("hasExplicitRecruitmentType 的 url 渠道正则与 recruitmentCategory 层1/层4 共用一份（moka 后缀门户 / 查询参数渠道）", () => {
+  // 2026-09-18 live：moka `/campus-recruitment/` 6,906 个校招岗 recruitment_explicit=false，
+  // 被 /jobs 校招筛选（要求 explicit and category）淘汰 —— 层4 在 08-07 放宽了后缀，这里没跟。
+  const cases = [
+    "https://app.mokahr.com/campus-recruitment/catlhr/148948#/job/abc",
+    "https://app.mokahr.com/campus_apply/xx/1#/job/abc",
+    "https://app.mokahr.com/social-recruitment/xx/1#/job/abc",
+    "https://career.honor.com/SU60/pb/posDetail.html?postId=1&postType=campus",
+    "https://career.honor.com/SU60/pb/posDetail.html?postId=1&postType=intern",
+    "https://goodwe.hotjob.cn/wt/goodwe/mobweb/position/detail?brandCode=1&safe=Y&recruitType=1&postIdsAry=908",
+    "https://goodwe.hotjob.cn/wt/goodwe/mobweb/position/detail?brandCode=1&safe=Y&recruitType=12&postIdsAry=908",
+  ];
+  for (const jd_url of cases) {
+    const job = { title: "高级通用人工智能算法研发工程师（大模型方向）", jd_url };
+    if (!/social-recruitment/.test(jd_url)) assert.notStrictEqual(recruitmentCategory(job), "社招", jd_url);
+    assert.strictEqual(hasExplicitRecruitmentType(job), true, jd_url);
+  }
+  // 不是渠道令牌的路径不算（campusXX 无分隔、recruitType=2 刻意不判、社招兜底仍是"信息不足"）
+  assert.strictEqual(hasExplicitRecruitmentType({ title: "后端", jd_url: "https://x.com/campusnews/1" }), false);
+  assert.strictEqual(hasExplicitRecruitmentType({ title: "后端", jd_url: "https://x.hotjob.cn/d?recruitType=2&id=1" }), false);
+});

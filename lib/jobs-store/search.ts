@@ -336,6 +336,9 @@ function legacyRecruitmentSuperset(jobType: string): string {
     return (
       "((job_type ~* '(校招|校园招聘|应届|管培生|管理培训生|留学生专项|campus|new\\s+grad|university\\s+graduate|entry[-\\s]?level)'" +
       " or jd_url ~* '(xiaozhao|campus)'" +
+      // 老版 wt 的平台渠道常量（recruitmentCategory 层4 认 recruitType=1 → 校招；12 是实习，下面排除）。
+      // 超集只许放宽：job_type 不带标签的 wt 校招行（2026-09-18 实测 83 行）在列为 NULL 期间也要捞到。
+      " or jd_url ~* '[?&]recruitType=1(?![0-9])'" +
       " or (coalesce(title,'')||' '||coalesce(summary,'')) ~* '(应届|[0-9]{2,4}届|校园招聘|校招|管培生|管理培训生|留学生专项|new\\s?grads?|university\\s+graduate|entry[-\\s]?level|campus\\s?(recruit|hiring)|graduate\\s+program)'" +
       " or company ~* '(校招|校园招聘)')" +
       " and (job_type is null or job_type !~* '(社招|社会招聘|全职|experienced|professional|full.?time)')" +
@@ -350,7 +353,7 @@ function legacyRecruitmentSuperset(jobType: string): string {
     );
   }
   if (jobType === "实习") {
-    return "(job_type ~* '(实习|intern)' or title ~* '(实习|shixi|intern)' or jd_url ~* '(shixi|intern)')";
+    return "(job_type ~* '(实习|intern)' or title ~* '(实习|shixi|intern)' or jd_url ~* '(shixi|intern)' or jd_url ~* '[?&]recruitType=12(?![0-9])')";
   }
   return "true"; // 社招=默认态·大头，无信号可下推 → 兜底路全放行，交给 JS 精筛
 }
