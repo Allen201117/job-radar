@@ -33,7 +33,7 @@ from adapters.cn_portal_tls import make_transport  # noqa: E402
 from .body import extract_body
 from .classify import detect_audience, detect_employer_type
 from .deadline import extract_published
-from .portals import PORTALS_BY_KEY, detail_text
+from .portals import PORTALS, PORTALS_BY_KEY, detail_text
 from .quality import assess
 
 _UA = (
@@ -111,7 +111,14 @@ def _check_one(row: dict, today: date) -> dict:
     }
 
 
-def verify(sb, today: date | None = None, dry_run: bool = False, limit: int | None = None) -> dict:
+def verify(sb, today: date | None = None, dry_run: bool = False, limit: int | None = None,
+           only_ci_reachable: bool = False) -> dict:
+    """复验在展示的公告。
+
+    `only_ci_reachable=True` 只验 `PORTALS`（境外 runner 连得上的那几个省）。
+    ⚠️ GitHub runner 连不上 `_GEO_BLOCKED_FROM_CI` 里的省，硬验它们 = 每条白等 25 秒超时，
+    170 条就是 12 分钟空烧，很可能顶穿 job 时限把台账写不成。那些省由创始人 Mac 的 launchd 复验。
+    """
     today = today or date.today()
     batch = limit or _BATCH
     rows = (sb.table("announcement_postings")
@@ -122,6 +129,9 @@ def verify(sb, today: date | None = None, dry_run: bool = False, limit: int | No
             .order("last_checked_at", desc=False, nullsfirst=True)
             .limit(batch)
             .execute()).data or []
+    if only_ci_reachable:
+        reachable = {p.key for p in PORTALS}
+        rows = [r for r in rows if r["source_portal"] in reachable]
     if not rows:
         return {"checked": 0, "expired": 0, "flagged": 0, "dead": 0, "unreachable": 0,
                 "deadline_filled": 0, "facets_refreshed": 0, "unsupported": 0, "aborted": False}
@@ -198,12 +208,15 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="公告每日复验（真抓正文，判还能不能报）")
     ap.add_argument("--dry-run", action="store_true", help="只判不写库，打印将下架的条目")
     ap.add_argument("--limit", type=int, default=None, help="本轮最多复验多少条")
+    ap.add_argument("--only-ci-reachable", action="store_true",
+                    help="只验境外 runner 连得上的省（GitHub CI 用；其余省由大陆 runner 复验）")
     args = ap.parse_args()
 
     db.load_environment()
     sb = db.get_supabase()
     started = _now_iso()
-    m = verify(sb, dry_run=args.dry_run, limit=args.limit)
+    m = verify(sb, dry_run=args.dry_run, limit=args.limit,
+               only_ci_reachable=args.only_ci_reachable)
     print(f"[announce-verify] 复验 {m['checked']} / 下架 {m['expired']} / 死链 {m['dead']} "
           f"/ 汇总页标注 {m['flagged']} / 补到截止日 {m['deadline_filled']} "
           f"/ 刷新分面 {m['facets_refreshed']} / 够不着 {m['unreachable']} / 非本模块 {m['unsupported']}")

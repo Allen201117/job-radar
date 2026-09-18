@@ -161,3 +161,33 @@ class TestAssess(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestVerifyScope(unittest.TestCase):
+    """CI 只验它连得上的省 —— 硬验 geo-block 的省 = 每条白等 25 秒超时，会顶穿 job 时限。"""
+
+    def test_only_ci_reachable_filters_to_PORTALS(self):
+        from unittest import mock
+        from announcements import verify as V
+        from announcements.portals import PORTALS, _GEO_BLOCKED_FROM_CI
+
+        ci_key = PORTALS[0].key
+        mac_key = _GEO_BLOCKED_FROM_CI[0].key
+        rows = [{"id": "1", "source_portal": ci_key, "source_url": "https://a", "title": "t"},
+                {"id": "2", "source_portal": mac_key, "source_url": "https://b", "title": "t"}]
+
+        class FakeTable:
+            def select(self, *a, **k): return self
+            def eq(self, *a, **k): return self
+            def neq(self, *a, **k): return self
+            def order(self, *a, **k): return self
+            def limit(self, *a, **k): return self
+            def execute(self): return mock.Mock(data=rows)
+
+        sb = mock.Mock(); sb.table.return_value = FakeTable()
+        seen = []
+        with mock.patch.object(V, "_check_one",
+                               side_effect=lambda r, t: (seen.append(r["source_portal"]),
+                                                         {"row": r, "outcome": "skip", "reason": "x"})[1]):
+            V.verify(sb, dry_run=True, only_ci_reachable=True)
+        self.assertEqual(seen, [ci_key], "geo-block 的省不该在 CI 上被复验")

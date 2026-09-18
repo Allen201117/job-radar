@@ -18,7 +18,7 @@ on:
 jobs:
   harvest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -59,4 +59,4 @@ jobs:
       - name: Re-verify displayed announcements
         if: ${{ github.event.inputs.dry_run == '' }}
         working-directory: crawler
-        run: python -m announcements.verify
+        run: python -m announcements.verify --only-ci-reachable
