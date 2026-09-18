@@ -24,7 +24,7 @@ class ProviderOrderTest(unittest.TestCase):
     def test_order_is_by_refill_cycle(self):
         self.assertEqual(
             self._providers(),
-            ["tavily", "qianfan", "serper", "bocha"],
+            ["google_cse", "tavily", "qianfan", "serper", "exa", "bocha"],
             "顺序必须是「每月回血 → 每天回血 → 一次性 → 付费」；"
             "把 serper（2500 一次性）或 bocha（付费）往前挪之前，先算一遍余额",
         )
@@ -63,8 +63,24 @@ class LifetimeWarningTest(unittest.TestCase):
         self.assertEqual(R.lifetime_warnings(None), [])
 
     def test_crossing_eighty_percent_warns(self):
-        R.lifetime_used = lambda sb, provider: 2100
+        # 逐 provider 给不同用量：一次性额度的源不止 serper 一个（exa 也是），
+        # 拿同一个数字喂所有源会让断言分不清「哪个源越线了」。
+        used = {"serper": 2100, "exa": 100}
+        R.lifetime_used = lambda sb, provider: used.get(provider, 0)
         self.assertEqual(R.lifetime_warnings(None), [("serper", 2100, 2500)])
+
+    def test_google_cse_cap_is_pinned_to_the_trial_credit_window(self):
+        """日顶 500 > 免费档 100，超出部分吃试用赠金（2026-12-18 到期）。
+        改这个数之前先确认赠金还在，否则是在真花钱。"""
+        import search_google_cse
+        self.assertEqual(search_google_cse.GoogleCseProvider().default_cap, 500)
+
+    def test_exa_is_tracked_as_a_one_off_quota_too(self):
+        """exa 也是一次性额度（注册送 $10 ≈ 1,000 次），必须进耗尽预警 ——
+        漏登记它 = 某天它悄悄见底，表现成「入口突然找不到了」，又一次绿灯零产出。"""
+        used = {"serper": 0, "exa": 900}
+        R.lifetime_used = lambda sb, provider: used.get(provider, 0)
+        self.assertEqual(R.lifetime_warnings(None), [("exa", 900, 1000)])
 
     def test_read_failure_never_breaks_the_caller(self):
         """预警读不到台账时返回 0，绝不抛——预警不能把主任务拖垮。"""

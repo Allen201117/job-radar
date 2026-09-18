@@ -13,7 +13,10 @@ from search_router import SearchAccountError, is_search_account_error
 
 class HttpSearchProvider:
     def __init__(self, name, key_env, parse, build_request, cap_env, default_cap,
-                 disabled_env=None, timeout=12):
+                 disabled_env=None, timeout=12, method="POST"):
+        # method="GET" 时 build_request 的第三项当**查询串参数**发（Brave 只支持 GET，
+        # 给它发 POST 直接 405）；POST 时当 JSON body 发，与 tavily/serper/bocha 一致。
+        self.method = str(method or "POST").upper()
         self.name = name
         self.key_env = key_env
         self.parse = parse
@@ -47,7 +50,10 @@ class HttpSearchProvider:
         url, headers, body = self.build_request(os.environ[self.key_env], query, top_k)
         own = client or httpx.Client()
         try:
-            r = own.post(url, json=body, headers=headers, timeout=self.timeout)
+            if self.method == "GET":
+                r = own.get(url, params=body, headers=headers, timeout=self.timeout)
+            else:
+                r = own.post(url, json=body, headers=headers, timeout=self.timeout)
             if is_search_account_error(r.status_code, r.text):
                 raise SearchAccountError(f"HTTP {r.status_code}: {r.text[:160]}")
             if r.status_code >= 300:

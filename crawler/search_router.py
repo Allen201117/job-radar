@@ -63,10 +63,18 @@ class SearchRouter:
     def __init__(self, providers):
         self.providers = list(providers or [])
 
-    def _active(self):
+    def _active(self, include_scoped=False):
+        """已配置且未熔断的 provider。
+
+        `include_scoped=False`（默认）只返回**通用**源。有的源不是全网搜索 ——
+        google_cse 这台引擎只收录招聘平台域名，对 T3 洞察那种要搜新闻/社区的查询恒返 0 条，
+        而 router 是「打一次就记一次额度」：放进通用池 = 每天白烧额度还把召回打薄。
+        找入口的链（entry_finder）显式传 True 取用它们。
+        """
         return [
             p for p in self.providers
             if p.is_configured() and not provider_blacklisted(p)
+            and (include_scoped or getattr(p, "general", True))
         ]
 
     def is_configured(self):
@@ -74,8 +82,18 @@ class SearchRouter:
         return bool(self._active())
 
     def remaining(self, sb):
-        """已配置 provider 当日剩余额度之和（drain 用它判断是否还能跑）。"""
+        """已配置**通用** provider 当日剩余额度之和（drain 用它判断是否还能跑）。
+
+        刻意不含 scoped 源：把 google_cse 的 90 次算进来，会让 T3 以为还有额度可花，
+        实际它一条都用不上 —— 那正是「绿灯零产出」。
+        """
         return sum(p.remaining(sb) for p in self._active())
+
+    def scoped_providers(self, kind="ats_entry"):
+        """取专用源（目前只有 ATS 域内的 google_cse），按配置顺序返回。"""
+        del kind  # 目前只有一类专用源；留参数是为了以后加别的 scope 时不改调用方签名
+        return [p for p in self._active(include_scoped=True)
+                if not getattr(p, "general", True)]
 
     def remaining_above_reserve(self, sb):
         """扣掉「给校招链预留的那一份」之后，**贪心消费方**还能用多少。
@@ -129,6 +147,8 @@ def default_router():
     未配 key 的源 router 自会跳过 → 「先用各家免费额度验证灵活性」即配哪个用哪个。
     每源日顶默认值仅为安全上限，正式放量由 *_DAILY_CAP env 按月度预算调。"""
     import search_bocha
+    import search_exa
+    import search_google_cse
     import search_qianfan
     import search_serper
     import search_tavily
@@ -140,17 +160,26 @@ def default_router():
     # 正好是反的：台账实测 2026-06-20 起 68 天里 Serper 已用掉 1,299 / 2,500（52%），
     # 按每月 ~570 次的速度约两个月见底，而千帆每天 50 次免费额度天天没用完。
     # 现顺序按「回血周期」排：每月回血 → 每天回血 → 一次性 → 付费。
-    #   1. tavily  每月 1,000 免费（月初重置），日顶 32 ≈ 960/月，留 4% 余量
-    #   2. 千帆    每天 50 免费（次日重置），走自身 QIANFAN_DAILY_CAP=40
-    #   3. serper  **2,500 一次性总额，用完就没了** → 日顶砍到 10，当最后手段
-    #   4. bocha   **付费**（不是免费额度）→ 放最后，避免有人配了 key 就默认先花钱
+    #   1. google_cse 每天 100 免费、**不绑卡**（次日重置），日顶 500 —— 额度最大故排最前。
+    #      ⚠️ 日顶 500 > 免费档 100，超出部分吃 Google Cloud 项目的 ¥47,813 **试用赠金**，
+    #      **赠金 2026-12-18 到期** → 到期后必须把 GOOGLE_CSE_DAILY_CAP 降回 90，否则开始真扣钱。
+    #      它只收录招聘平台域名、不是全网搜索，因此 general=False：通用池跳过它，
+    #      只有找入口的链（entry_finder._provider_plan）显式取用（见 search_google_cse 的 docstring）。
+    #   2. tavily  每月 1,000 免费（月初重置），日顶 32 ≈ 960/月，留 4% 余量
+    #   3. 千帆    每天 50 免费（次日重置），走自身 QIANFAN_DAILY_CAP=40
+    #   4. serper  **2,500 一次性总额，用完就没了** → 日顶砍到 10，当最后手段
+    #   5. exa     **~1,000 一次性总额**（注册送 $10，不绑卡）→ 日顶 15，与 serper 同档
+    #   6. bocha   **付费**（不是免费额度）→ 放最后，避免有人配了 key 就默认先花钱
     # 想临时调回来不必改代码：repo Variables 的 *_DAILY_CAP 可覆盖任一日顶。
     return SearchRouter([
+        search_google_cse.GoogleCseProvider(),
         HttpSearchProvider("tavily", "TAVILY_API_KEY", search_tavily.parse_response,
                            search_tavily.build_request, "TAVILY_DAILY_CAP", 32),
         search_qianfan.QianfanProvider(),
         HttpSearchProvider("serper", "SERPER_API_KEY", search_serper.parse_response,
                            search_serper.build_request, "SERPER_DAILY_CAP", 10),
+        HttpSearchProvider("exa", "EXA_API_KEY", search_exa.parse_response,
+                           search_exa.build_request, "EXA_DAILY_CAP", 15),
         HttpSearchProvider("bocha", "BOCHA_API_KEY", search_bocha.parse_response,
                            search_bocha.build_request, "BOCHA_DAILY_CAP", 50),
     ])
@@ -160,7 +189,7 @@ def default_router():
 # Serper 的免费额度是 **2,500 次一次性总额**（不是按月重置），用完就静默没了 ——
 # 表现会是「T3 突然不产出」，又是一次「绿灯零产出」。这里靠自家台账算累计用量预警，
 # 不需要各家的余额 API（那些 key 只在 CI，本地拿不到）。
-LIFETIME_QUOTA = {"serper": 2500}
+LIFETIME_QUOTA = {"serper": 2500, "exa": 1000}
 LIFETIME_WARN_RATIO = 0.8
 
 

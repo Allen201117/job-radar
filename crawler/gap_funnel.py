@@ -14,6 +14,7 @@ import ats_tenant_seed
 import db
 import enrich
 import entry_finder
+import entry_lanes
 import gap_census
 import jobs_db
 import must_apply
@@ -547,6 +548,10 @@ def _candidate_items(row, official_url, finder_result):
         items = list(((row.get("evidence") or {}).get("candidate_urls") or []))
     if official_url and not any(item.get("url") == official_url for item in items):
         items.insert(0, {"url": official_url})
+    return _dedupe_candidate_items(items)
+
+
+def _dedupe_candidate_items(items):
     # 按「去掉 #fragment 的地址」去重：同一个招聘页的锚点变体（/career、/career#jobs、
     # /career#contactus、/career#hot）本质是同一页，却会吃满 5 个候选名额，
     # 把真正的外部 ATS 入口挤出去——实测万泰生物的 moka 租户地址就是这么丢的。
@@ -624,6 +629,7 @@ def campus_attempt_payload(row, result, now):
         state = "platform_known"
     lane = {
         "state": state,
+        "entry_lane": (result.get("evidence") or {}).get("entry_lane"),
         "official_entry_url": result.get("official_entry_url"),
         "detected_platform": result.get("detected_platform"),
         "source_url": ((result.get("evidence") or {}).get("planned_source_url")
@@ -638,6 +644,7 @@ def campus_attempt_payload(row, result, now):
     elif not retry:
         retry = _after(now, gap_census._CAMPUS_RETRY_DAYS)
     evidence["campus_lane"] = lane
+    evidence["campus_lanes"] = (result.get("evidence") or {}).get("lanes") or {}
     evidence["campus_attempts"] = _as_int(evidence.get("campus_attempts")) + 1
     evidence["campus_next_retry_at"] = retry
     return {
@@ -665,11 +672,18 @@ def process_campus_channel(row, **kwargs):
     def campus_finder(company, supabase, **fkw):
         return finder(company, supabase, queries=entry_finder.CAMPUS_QUERIES, **fkw)
 
+    evidence = row.get("evidence") or {}
     lane_row = {
         **row,
         "official_entry_url": None,          # 社招入口不是校招入口，别拿它当缓存
-        "evidence": {k: v for k, v in (row.get("evidence") or {}).items()
-                     if k not in ("candidate_urls", "entry_channel")},
+        "evidence": {
+            **{k: v for k, v in evidence.items()
+               if k not in ("candidate_urls", "entry_channel", "lanes")},
+            # 车道退避**两条渠道各记各的**（存在 evidence.campus_lanes）：社招那边
+            # slug 车道试过没结果而进入 21 天退避，不该顺手把校招的 slug 车道也锁上 ——
+            # 同一家公司的社招门户和校招门户常常是两个不同的 slug / 两个不同的板块。
+            "lanes": evidence.get("campus_lanes") or {},
+        },
     }
     return process_company(lane_row, finder=campus_finder,
                            fingerprinter=_campus_fingerprinter(fingerprinter), **kwargs)
@@ -730,7 +744,16 @@ def _evaluate_candidates(row, candidates, *, trusted_site, fingerprinter):
             if verdict == "reject":
                 rejections.append(_rejection(candidate_url, url_reason))
                 continue
-        fingerprint = fingerprinter(candidate_url, company=row["company"])
+        # `preset` = 出这条候选的车道**自己已经做过**平台识别 + 归属核验
+        # （slug 车道走 discover_domestic 的 title-verify / 自报 company 核验，
+        #  与 verify_page_identity 同等强度，见 entry_lanes 的注释）。
+        # 之所以要这个口子：moka / beisen 这类纯 SPA 壳用 httpx 拿不到可核验的正文，
+        # 再跑一遍页面身份门只会把已经核验过的真租户判成 identity_unverified 丢掉。
+        # ⚠️ 它只跳过**身份门**，下面的路由门、httpx 安全门、探活、真抓回读一个都不跳。
+        preset = candidate.get("preset") if isinstance(candidate, dict) else None
+        fingerprint = dict(preset) if isinstance(preset, dict) else fingerprinter(
+            candidate_url, company=row["company"]
+        )
         platform = fingerprint.get("platform")
         if platform in _BLOCKED_PLATFORMS:
             fallbacks.append((candidate_url, fingerprint))
@@ -892,73 +915,86 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
             ):
                 official_url = None
 
-    if not official_url:
-        site_result = None
-        try:
-            site_result = site_resolver(row["company"], supabase=supabase)
-        except Exception:
-            site_result = None
-        if isinstance(site_result, str):
-            site_result = {
-                "home_url": site_result,
-                "entry_channel": "wikidata_site",
-            }
-        if site_result and site_result.get("home_url"):
-            try:
-                site_candidates = site_link_finder(
-                    row["company"], site_result["home_url"]
+    # ── 免费车道（slug / 官网 / 线索 / 国聘），全部排在搜索之前 ─────────────────
+    # 创始人 2026-09-18 定：搜索额度只能是最后手段（它是全局共享的，见 CLAUDE.md）。
+    # 每条车道**各自退避**：一条不通只锁自己，不锁整家公司（「退避锁死自我修复」那块碑）。
+    ledger = entry_lanes.lane_ledger(row)
+    entry_lane = (row.get("evidence") or {}).get("entry_lane")
+    deferred_browser = None
+    if not official_url and selected is None:
+        planned = [lane for lane in entry_lanes.plan_lanes(row, now=now)
+                   if lane != entry_lanes.LANE_SEARCH]
+        for lane in planned:
+            lane_items, lane_reason, trusted = [], None, False
+            if lane == entry_lanes.LANE_SLUG:
+                lane_items = entry_lanes.slug_candidates(
+                    row["company"], seeds=row.get("slugs") or (), supabase=supabase)
+                trusted = True
+            elif lane == entry_lanes.LANE_HOMEPAGE:
+                lane_items, site_result = entry_lanes.homepage_candidates(
+                    row["company"],
+                    site_resolver=lambda name: site_resolver(name, supabase=supabase),
+                    link_finder=site_link_finder,
                 )
-            except Exception:
-                site_candidates = []
-            site_candidates = _candidate_items(
-                row, None, {"candidates": site_candidates}
+                trusted = True
+                if site_result:
+                    lane_reason = site_result.get("entry_channel")
+                    candidate_evidence["site_home_url"] = site_result.get("home_url")
+            elif lane == entry_lanes.LANE_HINT:
+                lane_items = entry_lanes.hint_candidates(row["company"])
+            elif lane == entry_lanes.LANE_IGUOPIN:
+                lane_items = entry_lanes.iguopin_candidates(row["company"])
+            # 刻意**不**走 _candidate_items：它在候选为空时会回落到 row.evidence.candidate_urls，
+            # 那会把上一轮（甚至别条车道）的陈旧候选当成本车道的产出，把台账和计数一起搞脏。
+            lane_items = _dedupe_candidate_items(lane_items)
+            if not lane_items:
+                ledger = entry_lanes.record_lane(
+                    ledger, lane, found=False, company=row["company"], now=now,
+                    reason=lane_reason or "no_candidate")
+                continue
+            candidate_evidence["candidate_urls"] = (
+                list(candidate_evidence.get("candidate_urls") or []) + lane_items
             )
-            candidate_evidence.update({
-                "site_home_url": site_result["home_url"],
-                "candidate_urls": list(site_candidates),
-            })
             evaluated = _evaluate_candidates(
-                row,
-                site_candidates,
-                trusted_site=True,
-                fingerprinter=fingerprinter,
+                row, lane_items, trusted_site=trusted, fingerprinter=fingerprinter,
             )
-            selected = evaluated["selected"]
             fallbacks.extend(evaluated["fallbacks"])
             rejections.extend(evaluated["rejections"])
             identity_checked += evaluated["identity_checked"]
             identity_mismatches += evaluated["identity_mismatches"]
-            if selected:
-                entry_channel = site_result.get(
-                    "entry_channel", "wikidata_site"
-                )
-            else:
-                browser_fallback = _preferred_browser_fallback(
-                    evaluated["fallbacks"]
-                )
+            ledger = entry_lanes.record_lane(
+                ledger, lane, found=bool(evaluated["selected"]),
+                company=row["company"], now=now,
+                reason=lane_reason or ("selected" if evaluated["selected"] else "no_routable"),
+                candidates=len(lane_items))
+            if evaluated["selected"]:
+                selected = evaluated["selected"]
+                entry_lane = lane
+                entry_channel = lane_reason or lane
+                break
+            if deferred_browser is None:
+                # 浏览器道交接**推迟到所有免费车道跑完**再决定：先前的写法一拿到官网 SPA
+                # 就立刻 return，把后面几条更便宜也更可能命中的车道整条堵死。
+                browser_fallback = _preferred_browser_fallback(evaluated["fallbacks"])
                 if browser_fallback:
-                    entry_channel = site_result.get(
-                        "entry_channel", "wikidata_site"
-                    )
-                    fallback_url, fallback_fingerprint = browser_fallback
-                    rejected_hosts = sorted({
-                        item["host"] for item in rejections if item.get("host")
-                    })
-                    rejection_evidence = {
-                        **candidate_evidence,
-                        "entry_channel": entry_channel,
-                        "candidate_rejections": rejections,
-                        "rejected_candidate_hosts": rejected_hosts,
-                    }
-                    result = _failure_for_platform(
-                        fallback_fingerprint, now, row["company"]
-                    )
-                    result["official_entry_url"] = fallback_url
-                    result["evidence"] = {
-                        **result.get("evidence", {}),
-                        **rejection_evidence,
-                    }
-                    return result, 0, False
+                    deferred_browser = (browser_fallback, lane_reason or lane, lane)
+
+    if selected is None and deferred_browser is not None:
+        (fallback_url, fallback_fingerprint), channel, lane = deferred_browser
+        rejection_evidence = {
+            **candidate_evidence,
+            "entry_channel": channel,
+            "entry_lane": lane,
+            "lanes": ledger,
+            "candidate_rejections": rejections,
+            "rejected_candidate_hosts": sorted({
+                item["host"] for item in rejections if item.get("host")
+            }),
+        }
+        result = _failure_for_platform(fallback_fingerprint, now, row["company"])
+        result["official_entry_url"] = fallback_url
+        result["evidence"] = {**result.get("evidence", {}), **rejection_evidence}
+        return result, 0, False
 
     if not official_url and selected is None:
         finder_result = finder(
@@ -992,6 +1028,11 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
             )
             evidence.update({
                 "entry_channel": "search",
+                "entry_lane": entry_lanes.LANE_SEARCH,
+                "lanes": entry_lanes.record_lane(
+                    ledger, entry_lanes.LANE_SEARCH, found=False,
+                    company=row["company"], now=now,
+                    reason=failed.get("fail_reason")),
                 "candidate_rejections": rejections,
                 "rejected_candidate_hosts": sorted({
                     item["host"]
@@ -1021,6 +1062,13 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
         identity_checked += evaluated["identity_checked"]
         identity_mismatches += evaluated["identity_mismatches"]
         entry_channel = "search"
+        ledger = entry_lanes.record_lane(
+            ledger, entry_lanes.LANE_SEARCH, found=bool(selected),
+            company=row["company"], now=now,
+            reason="selected" if selected else "no_routable",
+            candidates=len(search_candidates))
+        if selected:
+            entry_lane = entry_lanes.LANE_SEARCH
     elif official_url and selected is None and not cache_evaluated:
         candidates = _candidate_items(row, official_url, finder_result)
         candidate_evidence = dict((finder_result or {}).get("evidence") or {})
@@ -1043,6 +1091,8 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
     rejection_evidence = {
         **candidate_evidence,
         "entry_channel": entry_channel,
+        "entry_lane": entry_lane,
+        "lanes": ledger,
         "candidate_rejections": rejections,
         "rejected_candidate_hosts": rejected_hosts,
     }
@@ -1321,6 +1371,13 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
         # 必投校招渠道分布（迁移 254）：healthy / idle / missing 三个数每天落台账，
         # 「必投校招覆盖率」= healthy / 国内清单数，从 2026-09-17 的 53% 往上走。
         "campus_channel": census_result.get("campus_channel") or {},
+        # 分车道计数（2026-09-18）：入口是从哪条车道找到的。所有键恒存在（含 0）——
+        # 缺键会被读成「这条车道没跑」，而不是「跑了但一家都没找到」。
+        # not_found 单独一栏，专防「绿灯零产出」：处理了 20 家、一条车道都没命中要看得见。
+        **entry_lanes.summarize_lanes(outcomes),
+        "campus_lane_by_entry_lane": entry_lanes.summarize_lanes([
+            {"evidence": {"entry_lane": (item["evidence"].get("campus_lane") or {}).get("entry_lane")}}
+            for item in campus_outcomes]),
         "campus_lane_processed": len(campus_outcomes),
         "campus_lane_states": dict(Counter(
             item["evidence"]["campus_lane"]["state"] for item in campus_outcomes)),

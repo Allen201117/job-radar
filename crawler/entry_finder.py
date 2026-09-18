@@ -148,6 +148,20 @@ def classify_candidate_url(url, company):
 
 
 def _provider_plan(router, supabase):
+    """本轮按什么顺序用 provider。
+
+    ⚠️ **ATS 域内的专用源排最前**（2026-09-18）：google_cse 那台引擎只收录招聘平台域名
+    （zhiye / hotjob / wintalent / mokahr / feishu / iguopin / workday），返回的结果天然
+    就是我们要的 ATS 入口，命中率远高于全网搜索，而且它每天 100 次免费不绑卡 ——
+    是目前最便宜的一条搜索。它在通用池里被 SearchRouter 跳过（对 T3 那类查询恒返 0 条，
+    见 search_router._active），所以只有这里显式取。
+    """
+    scoped = []
+    try:
+        scoped = [p for p in router.scoped_providers()
+                  if int(p.remaining(supabase)) > 0]
+    except Exception:  # noqa: BLE001 —— 没有这个方法的老 router / 额度读不到都不该炸
+        scoped = []
     providers = list(getattr(router, "providers", []) or [])
     available = []
     for provider in providers:
@@ -163,15 +177,17 @@ def _provider_plan(router, supabase):
          if getattr(provider, "name", "") == "qianfan"),
         None,
     )
+    scoped_names = {getattr(p, "name", "") for p in scoped}
     http_candidates = [
         (provider, remaining) for provider, remaining in available
         if getattr(provider, "name", "") != "qianfan"
+        and getattr(provider, "name", "") not in scoped_names
     ]
     http_candidates.sort(
         key=lambda item: (-item[1], str(getattr(item[0], "name", "")))
     )
     fallback = http_candidates[0][0] if http_candidates else None
-    return [provider for provider in (qianfan, fallback) if provider]
+    return scoped + [provider for provider in (qianfan, fallback) if provider]
 
 
 def _search_one(provider, supabase, query, top_k, client, consume):
@@ -189,6 +205,49 @@ def _search_one(provider, supabase, query, top_k, client, consume):
         if consume:
             provider.consume(supabase, 1)
     return results, error
+
+
+def _classify_round(results, *, company, provider, evidence):
+    """把一轮搜索结果过 URL 评分门；累加进 evidence 并返回可接受的候选（已排序）。"""
+    classified = []
+    for result in results:
+        url = (result or {}).get("url")
+        verdict, score, reason = classify_candidate_url(url, company)
+        item = {
+            "url": url,
+            "title": (result or {}).get("title"),
+            "verdict": verdict,
+            "score": score,
+            "reason": reason,
+            "provider": getattr(provider, "name", "?"),
+        }
+        evidence.append(item)
+        if verdict in ("trusted_ats", "likely_official"):
+            classified.append(item)
+    return sorted(
+        classified, key=lambda item: (-item["score"], str(item.get("url") or "")),
+    )[:5]
+
+
+def _entry_found(accepted, evidence, errors, search_used):
+    best = accepted[0]
+    candidates = sorted(
+        evidence, key=lambda item: (-item["score"], str(item.get("url") or "")),
+    )[:5]
+    return {
+        "found": True,
+        "state": "entry_found",
+        "official_entry_url": best["url"],
+        "candidates": accepted,
+        "search_used": search_used,
+        "rounds_no_entry": 0,
+        "next_retry_at": None,
+        "evidence": {
+            "search_provider": best["provider"],
+            "candidate_urls": candidates,
+            "search_errors": errors,
+        },
+    }
 
 
 CAMPUS_QUERIES = (
@@ -229,6 +288,21 @@ def find_official_entry(company, supabase, *, router=None, prev_row=None,
     for index in range(limit):
         provider = plan[index]
         query = queries[index]
+        # 专用源（ATS 域内的 google_cse）**不占共享额度池**：它每天 100 次是自己的，
+        # 拿共享池的余量去挡它，等于共享池一空就把最便宜的那条路也关了。
+        if not getattr(provider, "general", True):
+            results, error = _search_one(
+                provider, supabase, query, top_k, client, consume
+            )
+            search_used += int(error is None)
+            if error:
+                errors.append({"provider": getattr(provider, "name", "?"), "error": error})
+                continue
+            hit = _classify_round(results, company=company, provider=provider,
+                                  evidence=evidence)
+            if hit:
+                return _entry_found(hit, evidence, errors, search_used)
+            continue
         # 成本闸不是安全闸：额度表读不到（Supabase 抖一下）一律 fail-open 放行，
         # 与 llm_budget 同口径；否则一次抖动就让整条漏斗空转一天。
         try:
@@ -254,45 +328,10 @@ def find_official_entry(company, supabase, *, router=None, prev_row=None,
         if error:
             errors.append({"provider": getattr(provider, "name", "?"), "error": error})
             continue
-        classified = []
-        for result in results:
-            url = (result or {}).get("url")
-            verdict, score, reason = classify_candidate_url(url, company)
-            item = {
-                "url": url,
-                "title": (result or {}).get("title"),
-                "verdict": verdict,
-                "score": score,
-                "reason": reason,
-                "provider": getattr(provider, "name", "?"),
-            }
-            evidence.append(item)
-            if verdict in ("trusted_ats", "likely_official"):
-                classified.append(item)
-        if classified:
-            accepted = sorted(
-                classified,
-                key=lambda item: (-item["score"], str(item.get("url") or "")),
-            )[:5]
-            best = accepted[0]
-            candidates = sorted(
-                evidence,
-                key=lambda item: (-item["score"], str(item.get("url") or "")),
-            )[:5]
-            return {
-                "found": True,
-                "state": "entry_found",
-                "official_entry_url": best["url"],
-                "candidates": accepted,
-                "search_used": search_used,
-                "rounds_no_entry": 0,
-                "next_retry_at": None,
-                "evidence": {
-                    "search_provider": best["provider"],
-                    "candidate_urls": candidates,
-                    "search_errors": errors,
-                },
-            }
+        accepted = _classify_round(results, company=company, provider=provider,
+                                   evidence=evidence)
+        if accepted:
+            return _entry_found(accepted, evidence, errors, search_used)
 
     rounds = int((prev_row or {}).get("rounds_no_entry") or 0) + 1
     governance = rounds >= 2
