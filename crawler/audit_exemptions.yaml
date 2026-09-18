@@ -1,0 +1,25 @@
+# 覆盖率差集的显式豁免清单。豁免 = 承认这条差集存在、但有理由不追。
+# 每条必须带非空 reason（`audit_coverage.load_exemptions` 校验），拿不出理由不许豁免——
+# 拿不准就别加在这里，让它留在差集报告里，那正是这个模块存在的目的。
+#
+# 四个分类名对应 audit_coverage.compute_gaps 的四个差集键；键是被豁免的具体名字
+# （workflow 路径 / module 名 / jobs 列名 / 指标键），值是理由。
+
+pipeline_workflows: {}
+  # 目前没有任何定时 workflow 被豁免——它们都应该有 layer=pipeline 的检查项覆盖，或者
+  # 等真正接入台账后再决定要不要豁免。空集合本身也是一条诚实的记录。
+
+pipeline_modules: {}
+  # 同上：ops_runs 里出现的模块目前没有被豁免的，MODULE_OUTPUT/NO_OUTPUT_MODULES
+  # 已经是它自己的期望清单，覆盖率差集只是拿它当右边对照，不重复定义豁免。
+
+data_columns:
+  id: "uuid 主键，纯技术标识，没有业务语义可判『正常』"
+  created_at: "行创建时间，与 first_seen_at（已被 jobs.new_yesterday 检查覆盖）语义重复，只是历史遗留的另一个时间戳"
+  content_hash: "内部去重指纹，用于判断列表重抓时内容有没有变化，不是面向业务的字段"
+  search_doc: "内部 tsvector 缓存列，schema.sql 自己注释『v1 不填，FTS 后置 pass 再启用』，当前没有任何写入路径产出真实内容"
+  source_id: "外键，指向 sources 表；它本身没有独立取值范围，异常表现在 sources 侧的检查项里"
+
+experience_metrics: {}
+  # 体验层还没有 contract 检查项落地，暂不豁免任何指标——先让差集把全部指标列出来，
+  # 等真正决定哪些指标要有阈值时再补 experience 层检查项，而不是先消音。
