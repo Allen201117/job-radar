@@ -225,3 +225,34 @@ class TestRangeStartYear(unittest.TestCase):
         from announcements.deadline import extract_deadline
         d, _ = extract_deadline("报名时间：2025年12月28日至1月5日", today=TODAY)
         self.assertEqual(d, date(2026, 1, 5))
+
+
+class TestQualificationCutoffIsNotADeadline(unittest.TestCase):
+    """⚠️ 2026-09-18 线上走查抓到的：事业单位公告标配写法「年龄/学历/工作经历**计算**截止时间为 X」，
+    它算的是资格条件的时点，**不是报名窗口**。裸「截止」那条正则原先排在「报名…截止」前面，
+    于是抢先抽走了这些日期 —— 实测线上 179 条里 8 条因此挂着错的截止日。"""
+
+    def setUp(self):
+        from announcements.deadline import extract_deadline
+        self.ex = extract_deadline
+
+    def test_registration_cutoff_beats_qualification_cutoff(self):
+        # 上海交通职业技术学院的真实正文：三句都带「截止」，只有第一句是报名
+        text = ("报名截止时间:即日起至9月25日止。"
+                "居住证有效期计算截止时间为2026年12月31日。"
+                "工作经历计算截止时间为2026年9月30日")
+        self.assertEqual(self.ex(text, today=TODAY)[0], date(2026, 9, 25))
+
+    def test_age_cutoff_alone_is_not_taken(self):
+        text = "(二)年龄计算本公告所要求的年龄计算截止时间为2026年9月20日，如“45周岁以下”指未满46周岁"
+        self.assertIsNone(self.ex(text, today=TODAY)[0])
+
+    def test_real_registration_range_wins_over_age_cutoff(self):
+        # 重庆荣昌区的真实正文：年龄计算截止 9/20 在前，真正的报名窗 9/21-10/23 在后
+        text = ("年龄计算截止时间为2026年9月20日。"
+                "(二)报名时间2026年9月21日9:00—2026年10月23日9:00")
+        self.assertEqual(self.ex(text, today=TODAY)[0], date(2026, 10, 23))
+
+    def test_plain_deadline_still_works_when_unqualified(self):
+        """反方向：没有资格条件词的裸「截止」仍要能抽到，别把守卫收得太紧。"""
+        self.assertEqual(self.ex("截止日期：2026年10月8日", today=TODAY)[0], date(2026, 10, 8))
