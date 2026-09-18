@@ -16,8 +16,15 @@
     yili 514713→"总部人力资源部HR数据分析专业经理"、522468→"酸奶苏皖…人力资源专员"，互不串页；
     HMGC 172801→"中英翻译"；无效 postId 仅回 ~1.8KB 关闭页不入坏链）。→ 过质量门，可入库。
 
-recruitType 为 wt 平台常量（非每公司配置）：校招/campus=1 / 社招/social=2 / 实习/intern=12，
+recruitType 为 wt 平台常量（非每公司配置）：校招/campus=1 / 社招/social=2 / 实习/intern=12 /
+**13=「海外」板块（页面模板 `v_recruitType=="13"` 跳 /web/index/overseas，但租户各自挪用）**，
 与详情页 recruitType 一致；逐 recruitType 抓取并合并，三桶归类交后置过滤 + 前端 recruitmentCategory。
+rt=13 于 2026-09-18 live 扫全部 41 个 wt 租户补上：11 家共约 200 岗此前一条都没进库
+（五矿 81「安全管培生（海外）-2027应届生」是校招、TCL 40「EMC工程师-27届」是校招、中伟 CNGR 38
+「汽修工」是社招、华友 11 社招、用友 9 社招、中联重科 8、润阳 8、宇通 3 实习、海澜 2「艺术团招聘」、
+兴业证券 1「博士后招聘」、越秀 1）。闸门②对 rt=13 同样成立：8 家 16 岗
+`…/mobweb/position/detail?…&recruitType=13&postIdsAry={pid}` 全部渲染出岗位本身，假 postId 只回 ~1.8KB
+提示页；且五矿 / 用友 / 宇通 / 海澜的这批岗用 recruitType=2 打详情页只回「提示」页 —— jd_url 必须带 13。
 company 由 sources.company 兜底（BRAND 仅用于路由，不当公司名，杜绝张冠李戴）。
 
 直连 httpx（无头浏览器非必需），返回 PlaywrightAdapter.parse 可消费的 _intercepted 信封。
@@ -63,8 +70,9 @@ class WtAdapter(PlaywrightAdapter):
     # 稳定详情页（移动版，postId-only，无 operational 签名）——闸门②已 live 验证可逐岗直达。
     _DETAIL_TPL = ("{origin}/wt/{brand}/mobweb/position/detail"
                    "?brandCode=1&safe=Y&recruitType={rt}&postIdsAry={pid}")
-    # recruitType 平台常量：校招=1 / 社招=2 / 实习=12（与详情页 recruitType 同口径）。
-    _RECRUIT_TYPES = (2, 1, 12)
+    # recruitType 平台常量：校招=1 / 社招=2 / 实习=12 / 13=「海外」板块（与详情页 recruitType 同口径）。
+    # ⚠️ 逐渠道判 reported_total / fetch_complete 的两处都用 len(self._RECRUIT_TYPES)，加渠道只改这里。
+    _RECRUIT_TYPES = (2, 1, 12, 13)
     # 每 recruitType 的页数上限，只作防死循环兜底（靠 rowCount/短页自然收尾）。
     # 旧的硬编码 200 页 × 10 条 = 2000 岗/类：长城汽车社招一超过 2000 就被悄悄截断，
     # 2026-09-04 实测自报 3,421 只抓到 2,617、status 仍是 success。改按 CRAWL_MAX_JOBS 换算。
@@ -104,13 +112,19 @@ class WtAdapter(PlaywrightAdapter):
         collected: List[dict] = []
         totals: List[int] = []
         type_complete: List[bool] = []
-        seen_jobs = set()
+        # postId → 该岗出现过的全部 recruitType（首见渠道在前）。同一 postId 在多个渠道里各出现
+        # 一次是常态（2026-09-18 live：TCL 40 个「-27届」岗四个渠道全挂、中伟 38 个 rt=13 岗里
+        # 34 个同时在社招）；jd_url 带 recruitType，按 (渠道, postId) 去重会让同一岗存出多行
+        # （库里 GWM 3,440 行只有 3,188 个 postId）。所以按 postId 跨渠道去重：**首见渠道**决定
+        # jd_url（rt=13 独有的岗只有 recruitType=13 能渲染详情页，首见即它），其余渠道只记进
+        # `_wtRecruitTypes` 供 _map 取招聘类型标签（挂在校招板块的岗，不论首见于哪个渠道都标校招）。
+        seen_rts: dict = {}
         budget_exhausted = False
         cap = resolve_list_cap(self._MAX_JOBS)
         page_cap = self._PAGE_CAP or resolve_page_cap(10)   # 10 条/页，见 fetch_page
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             for rt in self._RECRUIT_TYPES:
-                remaining_jobs = cap - len(seen_jobs)
+                remaining_jobs = cap - len(seen_rts)
                 if remaining_jobs <= 0:
                     budget_exhausted = True
                     break
@@ -124,15 +138,27 @@ class WtAdapter(PlaywrightAdapter):
                     if not isinstance(payload, dict):
                         raise ValueError("wt: position/list returned non-object payload")
                     rows = payload.get("postList") or []
-                    # 标记本批的 recruitType，供 _map 拼稳定详情链（详情页要 recruitType）。
+                    kept = []
                     for r in rows:
-                        if isinstance(r, dict):
-                            r["_wtRecruitType"] = rt
-                    if rows:
-                        collected.append(payload)
+                        if not isinstance(r, dict):
+                            continue
+                        pid = _first(r, ("postId", "id"))
+                        if pid and pid in seen_rts:
+                            if rt not in seen_rts[pid]:
+                                seen_rts[pid].append(rt)
+                            continue
+                        # 标记本批的 recruitType，供 _map 拼稳定详情链（详情页要 recruitType）。
+                        r["_wtRecruitType"] = rt
+                        if pid:
+                            seen_rts[pid] = r["_wtRecruitTypes"] = [rt]
+                        kept.append(r)
+                    if kept:
+                        collected.append(dict(payload, postList=kept))
+                    # ⚠️ 末页判据要看整页（含跨渠道重复行），否则 rt=13 首页全是别的渠道已见过的岗时
+                    # 会被当成空页提前收尾，后面几页真正独有的岗就漏了。
                     return PageResult(items=rows, total=_int_or_none(payload.get("rowCount")))
 
-                rows, total, complete = paginate_all(
+                _, total, complete = paginate_all(
                     fetch_page,
                     page_size=10,
                     first_page=1,
@@ -143,13 +169,7 @@ class WtAdapter(PlaywrightAdapter):
                 if total is not None:
                     totals.append(total)
                 type_complete.append(complete)
-                for row in rows:
-                    if not isinstance(row, dict):
-                        continue
-                    post_id = _first(row, ("postId", "id"))
-                    if post_id:
-                        seen_jobs.add((rt, post_id))
-                if len(seen_jobs) >= cap:
+                if len(seen_rts) >= cap:
                     budget_exhausted = True
                     break
                 if not complete and max_pages < page_cap:
@@ -159,8 +179,12 @@ class WtAdapter(PlaywrightAdapter):
             # 一条都没拿到 → 多半非 wt 老版 / 接口改版 / 该域被拦；交给 run.py 记 partial（不伪装成功）。
             raise RuntimeError(
                 f"wt: empty position/list (brand={self._brand} host={self._host})")
+        # 分母去掉跨渠道重复：各渠道 rowCount 之和把同一 postId 数了多次（五矿 4 渠道之和 1,017、
+        # 去重后 925），不减就是「渠道总数之和当分母」那块碑说的假缺口——抓全了却永远显示 91%。
+        # 减的是本次**真看到**的重复（每个 postId 多出现一次减一），不是估算。
+        overlap = sum(len(rts) - 1 for rts in seen_rts.values())
         self.reported_total = (
-            sum(totals) if len(totals) == len(self._RECRUIT_TYPES) else len(seen_jobs)
+            sum(totals) - overlap if len(totals) == len(self._RECRUIT_TYPES) else len(seen_rts)
         )
         self.fetch_complete = (
             len(type_complete) == len(self._RECRUIT_TYPES)
@@ -188,6 +212,11 @@ class WtAdapter(PlaywrightAdapter):
     # 被层5 捞回来）——标上「社会招聘」= 这 170 个当场被压回社招。
     # 正向收益（rt=1/12 标上后能救回的）：rt=1 现有 3,827 个判成社招 + 77 个判成实习，
     # rt=12 现有 285 个判成社招 + 46 个判成校招。只标 1/12 是**单向纯增量**。
+    #
+    # 🚫 **rt=13 也不贴任何标签**（2026-09-18）：名义是「海外」板块，实际租户各自挪用——五矿 / TCL
+    # 放的是「-2027应届生」「-27届」校招，宇通放实习，中伟 / 华友 / 用友 / 中联重科放社招，海澜放
+    # 艺术团、兴业证券放博士后。渠道本身不携带招聘类型信息，硬标任何一种都会错一半；交给
+    # recruitmentCategory 按标题「27届 / 应届 / 实习生」自己判（层5 / 层2b）。
     _RT_CATEGORY_LABEL = {1: "校园招聘", 12: "实习"}
 
     # ⛔ 「按院校设的投递入口」不是岗位，一律不入库（2026-09-18 立）。
@@ -223,6 +252,7 @@ class WtAdapter(PlaywrightAdapter):
         if not (post_id and title):
             return None
         rt = post.get("_wtRecruitType") or 2
+        rts = post.get("_wtRecruitTypes") or [rt]
         jd_url = self._DETAIL_TPL.format(
             origin=self._origin, brand=self._brand, rt=rt, pid=post_id)
 
@@ -237,7 +267,9 @@ class WtAdapter(PlaywrightAdapter):
                       f"首条：{title}", flush=True)
             return None
         func_type = _first(post, ("postType", "postTypeName"))
-        rt_label = self._RT_CATEGORY_LABEL.get(rt)
+        # 招聘类型标签看该岗出现过的**全部**渠道：首见于社招、同时也挂在校招板块的岗照样标校招
+        # （去重前它本来就以 rt=1 那一行的身份带着「校园招聘」入库过）。
+        rt_label = next((self._RT_CATEGORY_LABEL[x] for x in (1, 12) if x in rts), None)
         # 职能类别 + 招聘类型词并存：sourceDeclaredCategory 只是子串匹配，两段拼一起互不干扰；
         # 职能类别继续喂给 classifyJobFunction，招聘类型词喂给 recruitmentCategory 的层3。
         job_type = " ".join(p for p in (func_type, rt_label) if p) or None

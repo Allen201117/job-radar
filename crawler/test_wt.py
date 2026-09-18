@@ -44,6 +44,29 @@ class WtRecruitTypeJobTypeTest(unittest.TestCase):
                            "postType": "市场营销类", "_wtRecruitType": 2})
         self.assertEqual(job.job_type, "市场营销类")
 
+    def test_overseas_recruit_type_13_is_not_labelled(self):
+        """🚫 rt=13（页面模板叫「海外」板块）**不贴任何标签**。
+
+        2026-09-18 live 扫全部 41 个 wt 租户：11 家把这个板块各自挪用——五矿 81 个
+        「安全管培生（海外）-2027应届生」、TCL 40 个「EMC工程师-27届」是校招；宇通 3 个
+        「研发实习生」是实习；中伟「汽修工」/ 华友「汽轮机发电工」/ 用友「实施顾问」是社招；
+        海澜「声乐表演」是艺术团、兴业证券是博士后。渠道不携带招聘类型，硬标哪一种都错一半，
+        交给 recruitmentCategory 按标题自己判。job_type 只保留职能类别（或为空）。
+        """
+        by = {p["postId"]: self.a._map(p) for p in [
+            {"postId": "13a", "postName": "安全管培生（海外）-2027应届生",
+             "postType": "职能管理类", "_wtRecruitType": 13},
+            {"postId": "13b", "postName": "汽修工", "_wtRecruitType": 13},
+        ]}
+        self.assertEqual(by["13a"].job_type, "职能管理类")
+        self.assertIsNone(by["13b"].job_type)
+        # 详情页要带 recruitType=13 才渲染出岗位本身（五矿 / 用友 / 宇通 / 海澜用 2 只回提示页）。
+        self.assertIn("recruitType=13&postIdsAry=13a", by["13a"].jd_url)
+
+    def test_recruit_type_13_is_fetched(self):
+        """加渠道只改 _RECRUIT_TYPES 一处：逐渠道判 total / complete 的两处都按它的长度算。"""
+        self.assertIn(13, WtAdapter._RECRUIT_TYPES)
+
     def test_missing_post_type_still_gets_recruit_label(self):
         post = {"postId": "4", "postName": "某校招岗", "_wtRecruitType": 1}
         self.assertEqual(self.a._map(post).job_type, "校园招聘")
@@ -110,6 +133,91 @@ class WtSchoolEntryGateTest(unittest.TestCase):
         jobs = self.a.parse(payload)
         self.assertEqual([j.title for j in jobs], ["核电运行值班员"])
         self.assertEqual(self.a._skipped_school_entries, 1)
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._p = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._p
+
+
+class _FakeClient:
+    """按 (recruitType, page) 回放固定列表，模拟 wt 的 position/list 接口。"""
+    pages = {}
+
+    def __init__(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def get(self, url, params=None):
+        rows = self.pages.get((params["recruitType"], params["page"]), [])
+        total = sum(len(v) for (rt, _), v in self.pages.items() if rt == params["recruitType"])
+        return _FakeResp({"postList": [dict(r) for r in rows], "rowCount": total})
+
+
+class WtCrossChannelDedupeTest(unittest.TestCase):
+    """同一 postId 挂在多个渠道 = 一个岗，不是多个岗（2026-09-18 立）。
+
+    live：TCL 40 个「-27届」岗四个渠道（1/2/12/13）全挂、中伟 38 个 rt=13 岗里 34 个也在社招、
+    五矿 81 个里 75 个也在校招；库里 GWM 3,440 个 active 行只有 3,188 个 postId。jd_url 带
+    recruitType，按 (渠道, postId) 去重就会一岗多行。补 rt=13 若不先去重，只会再多一份副本。
+    """
+
+    def _run(self, pages):
+        import adapters.wt as wt
+        _FakeClient.pages = pages
+        orig = wt.httpx.Client
+        wt.httpx.Client = _FakeClient
+        try:
+            a = WtAdapter()
+            a.company_name = "测试公司"
+            html = a.fetch("https://test.hotjob.cn/wt/test/web/index")
+            return a, {j.title: j for j in a.parse(html)}
+        finally:
+            wt.httpx.Client = orig
+
+    def test_first_seen_channel_owns_jd_url_and_labels_merge_across_channels(self):
+        a, by = self._run({
+            (2, 1): [{"postId": "A", "postName": "A岗"}, {"postId": "B", "postName": "B岗"}],
+            (1, 1): [{"postId": "B", "postName": "B岗"}, {"postId": "C", "postName": "C岗"}],
+            (13, 1): [{"postId": "C", "postName": "C岗"}, {"postId": "D", "postName": "D岗-27届"}],
+        })
+        self.assertEqual(sorted(by), ["A岗", "B岗", "C岗", "D岗-27届"])
+        # 首见渠道决定 jd_url：B 首见于社招，保住存量行的链接不变。
+        self.assertIn("recruitType=2&postIdsAry=B", by["B岗"].jd_url)
+        self.assertIn("recruitType=1&postIdsAry=C", by["C岗"].jd_url)
+        # rt=13 独有的岗只有 recruitType=13 能渲染详情页（live：五矿/用友/宇通/海澜用 2 只回提示页）。
+        self.assertIn("recruitType=13&postIdsAry=D", by["D岗-27届"].jd_url)
+        # 标签看全部渠道：B 同时挂在校招板块 → 校园招聘；A 只在社招、D 只在 rt=13 → 不贴标签。
+        self.assertEqual(by["B岗"].job_type, "校园招聘")
+        self.assertEqual(by["C岗"].job_type, "校园招聘")
+        self.assertIsNone(by["A岗"].job_type)
+        self.assertIsNone(by["D岗-27届"].job_type)
+        self.assertTrue(a.fetch_complete)
+        # 分母去掉本次看到的跨渠道重复：各渠道 rowCount 之和 2+2+2=6，B/C 各重复一次 → 4 个岗。
+        self.assertEqual(a.reported_total, 4)
+
+    def test_fully_duplicated_first_page_does_not_end_pagination_early(self):
+        """rt=13 第一页全是别的渠道见过的岗时，翻页判据仍看整页，第二页独有的岗不能漏。"""
+        first = [{"postId": str(i), "postName": f"岗{i}"} for i in range(10)]
+        _, by = self._run({
+            (2, 1): first,
+            (13, 1): first,
+            (13, 2): [{"postId": "only13", "postName": "只在13"}],
+        })
+        self.assertIn("只在13", by)
+        self.assertEqual(len(by), 11)
+        self.assertEqual(_.reported_total, 11)   # 10 + 11 = 21，减去 10 个重复
 
 
 if __name__ == "__main__":
