@@ -21,10 +21,7 @@
   "bdstar.zhiye.com": "https://bdstar.zhiye.com/campus/detail",
   "beisen.zhiye.com": "https://beisen.zhiye.com/campus/detail",
   "benewake.zhiye.com": "https://benewake.zhiye.com/social/detail",
-  "boe.zhiye.com": {
-    "ssr_param": "jobId",
-    "ssr_path": "zwxq"
-  },
+  "boe.zhiye.com": "https://boe.zhiye.com/social/detail",
   "bozhon.zhiye.com": "https://bozhon.zhiye.com/social/detail",
   "bpsemi.zhiye.com": "https://bpsemi.zhiye.com/campus/detail",
   "bsthr.zhiye.com": "https://bsthr.zhiye.com/social/detail",
@@ -46,10 +43,7 @@
   "cicc.zhiye.com": "https://cicc.zhiye.com/social/detail",
   "cmhk.zhiye.com": "https://cmhk.zhiye.com/social/detail",
   "cmsk1979.zhiye.com": "https://cmsk1979.zhiye.com/campus/detail",
-  "cnnc.zhiye.com": {
-    "ssr_param": "jobId",
-    "ssr_path": "szxq"
-  },
+  "cnnc.zhiye.com": "https://cnnc.zhiye.com/social/detail",
   "coamc.zhiye.com": "https://coamc.zhiye.com/social/detail",
   "copm.zhiye.com": "https://copm.zhiye.com/social/detail",
   "cpgroup.zhiye.com": "https://cpgroup.zhiye.com/social/detail",
@@ -78,10 +72,7 @@
   "farasisenergy.zhiye.com": "https://farasisenergy.zhiye.com/social/detail",
   "fibocom.zhiye.com": "https://fibocom.zhiye.com/social/detail",
   "flashforge.zhiye.com": "https://flashforge.zhiye.com/social/detail",
-  "fosunpharma.zhiye.com": {
-    "ssr_param": "jobId",
-    "ssr_path": "campusxq"
-  },
+  "fosunpharma.zhiye.com": "https://fosunpharma.zhiye.com/social/detail",
   "ganfenglithium.zhiye.com": "https://ganfenglithium.zhiye.com/campus/detail",
   "gangyan.zhiye.com": "https://gangyan.zhiye.com/campus/detail",
   "genertec.zhiye.com": "https://genertec.zhiye.com/social/detail",
