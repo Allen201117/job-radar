@@ -916,3 +916,13 @@ class ContractSeverityIsAuthoritativeTests(unittest.TestCase):
         self.assertEqual(merged["watchdog.rule_a"]["value"], 6.0)
         self.assertEqual(md.compute_traffic_light(merged), "🟡")
         self.assertEqual(rows["watchdog.rule_a"]["severity"], "critical")  # 不原地改入参
+
+
+class ResendRequestHeadersTests(unittest.TestCase):
+    def test_request_carries_explicit_user_agent(self):
+        """urllib 默认 UA 会被 Resend 前面的 Cloudflare 拦成 1010；源码里必须显式带 UA。"""
+        import inspect
+        src = inspect.getsource(md)
+        self.assertIn('"User-Agent": RESEND_USER_AGENT', src)
+        self.assertNotIn("python-urllib", md.RESEND_USER_AGENT.lower())
+        self.assertTrue(md.RESEND_USER_AGENT.strip())

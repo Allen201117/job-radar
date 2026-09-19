@@ -124,6 +124,9 @@ def format_delta(check_id, today_value, yesterday_value):
 # 纯函数：灯色
 # ---------------------------------------------------------------------------
 
+RESEND_USER_AGENT = "job-radar-morning-digest/1.0"
+
+
 def compute_traffic_light(results_by_id):
     """🔴 = 有 critical breach/error；🟡 = 有 warn/critical breach 或 warn/critical 的「没查到」；🟢 = 全 ok。
 
@@ -855,7 +858,11 @@ def send_via_resend(api_key, to_addr, subject, text, html):
         "https://api.resend.com/emails",
         data=payload,
         method="POST",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        # User-Agent 必须显式给：Resend 前面是 Cloudflare，urllib 默认的 "Python-urllib/x.y" 会被按客户端特征
+        # 直接拦掉（HTTP 403，body「error code: 1010」），请求根本到不了 Resend、key 都没机会被校验。
+        # 2026-09-19 第一封真发就栽在这里——单测注入了假 opener，永远测不到这一层。
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
+                 "User-Agent": RESEND_USER_AGENT},
     )
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
