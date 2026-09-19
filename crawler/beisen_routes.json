@@ -254,5 +254,23 @@
   "norincogroupzhaopin.zhiye.com": "https://norincogroupzhaopin.zhiye.com/campus/detail",
   "deye.zhiye.com": "https://deye.zhiye.com/social/detail",
   "siglent.zhiye.com": "https://siglent.zhiye.com/campus/detail",
-  "fotile.zhiye.com": {"cards": true}
+  "fotile.zhiye.com": {
+    "cards": true
+  },
+  "jingpai.zhiye.com": "https://jingpai.zhiye.com/campus/detail",
+  "highstar.zhiye.com": "https://highstar.zhiye.com/campus/detail",
+  "ugreen.zhiye.com": "https://ugreen.zhiye.com/campus/detail",
+  "hayao.zhiye.com": "https://hayao.zhiye.com/campus/detail",
+  "jingxinpharm.zhiye.com": "https://jingxinpharm.zhiye.com/campus/detail",
+  "fscut.zhiye.com": "https://fscut.zhiye.com/campus/detail",
+  "hisunpharm.zhiye.com": "https://hisunpharm.zhiye.com/campus/detail",
+  "gjzq.zhiye.com": "https://gjzq.zhiye.com/campus/detail",
+  "starnet.zhiye.com": "https://starnet.zhiye.com/campus/detail",
+  "ainuo.zhiye.com": "https://ainuo.zhiye.com/campus/detail",
+  "csc108.zhiye.com": "https://csc108.zhiye.com/campus/detail",
+  "xjtianye.zhiye.com": "https://xjtianye.zhiye.com/campus/detail",
+  "dobot.zhiye.com": "https://dobot.zhiye.com/campus/detail",
+  "sxqc.zhiye.com": "https://sxqc.zhiye.com/campus/detail",
+  "nrec.zhiye.com": "https://nrec.zhiye.com/campus/detail",
+  "skyworthpv.zhiye.com": "https://skyworthpv.zhiye.com/campus/detail"
 }
