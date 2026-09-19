@@ -21,7 +21,7 @@ import time
 
 import httpx
 
-from company_name_match import company_name_matches
+from company_name_match import company_name_matches, strip_leading_place
 
 # 输出 token 预算。旧值 2000 装不下 n=50（每天 finish_reason=length 截断 → parse 失败 → 喂料返回 []
 # → 静态清单榨干、扩源停摆，本次修复的根因）。GEN_MAX_TOKENS 是**下限兜底**；实际预算随 n 伸缩（见
@@ -80,6 +80,8 @@ _COMPANY_SUFFIXES = (
     "集团股份",
     "控股",
     "集团",
+    "股份",   # 2026-09-19 补：漏了这个导致「伊利股份」≠「伊利」被判假缺失、天天重探同一家
+              # （platform_fingerprint.py 的同名后缀表本就有「股份」，两处口径当时就已经漂了）。
     "科技",
     "公司",
     "中国",
@@ -123,7 +125,24 @@ def company_covered(name, existing, existing_norm=None):
         return True
     # 归一后再比一次：清单写「创维集团」、库里写「创维 Skyworth 校招」——前者剥掉「集团」才
     # 是后者的归属前缀，只比原始名会漏（2026-07-31 线上实测这条被去重挡掉）。
-    return bool(nname) and any(company_name_matches(e, nname) for e in existing_norm)
+    if nname and any(company_name_matches(e, nname) for e in existing_norm):
+        return True
+    # 第四层：清单名带地名前缀、库里名不带（「广东小鹏汽车科技」↔「小鹏汽车」）——
+    # 2026-09-19 线上实测天天重探小鹏、每次都在 sweep 里命中真源却被 source_url 去重挡掉
+    # （探测名额白烧）。⚠️ 不能像上面几层那样做子串/token 匹配：company_name_matches 对
+    # idx==0（token 在开头）无条件放行，若拿它去比「候选去掉地名前缀后的剩余部分」与
+    # existing，会把「网易」误判成覆盖「网易有道」（地名前缀这条根本用不上，但同类无条件
+    # idx==0 放行的逻辑一旦被复用到这里就会出现，CLAUDE.md 明确禁止这种子公司误判）。
+    # 所以这里只做「剥地名前缀 + 归一后精确相等」，不做子串/前缀匹配，避免子公司被错并。
+    # ⚠️ 剥完地名前缀的剩余部分必须 >=3 字才进这一层：「北京银行」剥掉「北京」剩「银行」、
+    # 「上海电气」剥掉「上海」剩「电气」——这类行业通用短词一旦被当成公司标识精确匹配，
+    # 会把「库里随便有一家叫『银行』/『电气』的」误判成覆盖所有同类公司（2026-09-19 复核加）。
+    stripped = strip_leading_place(name)
+    if stripped != name and len(stripped) >= 3:
+        nstripped = norm_company(stripped)
+        if nstripped and nstripped in existing_norm:
+            return True
+    return False
 
 
 def build_messages(theme_name, theme_desc, exclude_names, n):
