@@ -96,6 +96,27 @@ def _verify(title_or_text: str, cn: str) -> bool:
     return False
 
 
+# wt/wecruit 门户很多用通用模板标题（<title>Home</title> / <title>首页</title>）、
+# 正文里也从不出现目标公司的中文名（2026-09-19 实测「中伟新材料」cngr.hotjob.cn：<title>是字面
+# "Home"，正文唯一的自报身份是 <meta name="keywords"> 里的 "CNGR社会招聘,CNGR校园招聘,..."）。
+# 这类门户被 _verify(cn) 判 verified=False 直接丢弃是假阴性——665 个真实岗位没入库。
+# 兜底：门户自己把 slug 和「招聘」类词紧邻重复(>=2 次)写进正文，且要求 slug 长度 >=3
+# —— 满足即认为门户自报了这个品牌身份，等同于门户自己承认「我是 {slug}」。
+# ⚠️ 信任边界：这条只核验「门户 = 我们猜的这个 slug」，不核验「这个 slug = 目标公司 cn」——
+# 后者由调用方保证（wt_probe/hotjob_probe 的 slug 参数本就来自同一个 target 自己的 slugs
+# 字段，不是跨 target 乱配的）。不放松既有 _verify(cn) 判据，只是新增一条独立证据来源，
+# 且要求出现 ≥2 次降低随机碰撞（宁缺毋滥）。
+_BRAND_SLUG_CONTEXT_RE_TEMPLATE = r"{slug}(?:社会招聘|校园招聘|社招|校招|招聘)"
+
+
+def _verify_brand_slug(text: str, slug: str) -> bool:
+    s = (slug or "").strip()
+    if len(s) < 3:
+        return False
+    pattern = re.compile(_BRAND_SLUG_CONTEXT_RE_TEMPLATE.format(slug=re.escape(s)), re.I)
+    return len(pattern.findall(text or "")) >= 2
+
+
 # ───────────────────────── feishu ─────────────────────────
 def feishu_probe(slug: str, cn: str):
     """GET 租户 + POST posts。返回 dict 或 None。"""
@@ -219,7 +240,8 @@ def wt_probe(brand: str, cn: str):
             origin = f"https://{host}"
             titles = [str(p.get("postName") or "") for p in posts[:5]]
             portal_title, page_text = _wt_portal_title(origin, wb)
-            verified = _verify(portal_title, cn) or _verify(page_text, cn)
+            verified = (_verify(portal_title, cn) or _verify(page_text, cn)
+                       or _verify_brand_slug(page_text, wb))
             result = {"platform": "wt", "origin": origin, "host": host, "wt_brand": wb,
                       "count": cnt, "titles": titles, "portal_title": portal_title, "verified": verified}
             if not verified:
@@ -271,7 +293,8 @@ def hotjob_probe(brand: str, cn: str):
         # wt 列表 JSON 无公司字段（orgName 是内部部门名，见 _wt_portal_title 注释）→ 核验只能靠
         # 落地页 title/正文，同 wt_probe 分支处理。
         portal_title, page_text = _wt_portal_title(origin, wt_brand)
-        verified = _verify(portal_title, cn) or _verify(page_text, cn)
+        verified = (_verify(portal_title, cn) or _verify(page_text, cn)
+                   or _verify_brand_slug(page_text, wt_brand))
         result = {"platform": "wt", "origin": origin, "host": p.host, "wt_brand": wt_brand,
                   "channels": chans, "count": total, "titles": sample[:5], "portal_title": portal_title,
                   "verified": verified}

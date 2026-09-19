@@ -143,6 +143,57 @@ def build_workday_candidates(targets, covered_companies, discover_fn=None, cap=N
     return out
 
 
+def fetch_url_region_rows(sb):
+    """全量 source_url → 行(id, regions)。用于「补 regions」而非「插新行」（见下）。
+    ⚠️ 必须分页拉全量，理由同 ad.existing_source_keys（PostgREST 1000 行硬顶，尾部漏判 →
+    误判成缺口、天天重探）。"""
+    out = {}
+    for r in db.fetch_all_rows(lambda: sb.table("sources").select("id,source_url,regions")):
+        url = (r.get("source_url") or "").strip()
+        if url:
+            out[url] = r
+    return out
+
+
+def expand_existing_regions(sb, passed, url_rows, apply):
+    """探活验证通过的候选里，source_url **已经在库**的那部分不能再 INSERT（唯一索引拦、也没必要），
+    但也不该像 plan_inserts 那样直接丢弃——多半是该公司已有一条国内 regions={CN} 的源，只是没被
+    标上海外范围，UPDATE regions 补齐即可、不需要新插行。
+
+    2026-09-19 实测：auto_discover_overseas 连续 22 天 checked=80/produced=0，而当天日志明明
+    「验证通过 2」（Epic Games / Flexport greenhouse board，httpx 真返回岗位）——两条候选的
+    source_url 恰好是库里已有源的同一个 greenhouse board 地址，被 plan_inserts 的 URL 去重整批
+    吃掉，日复一日 100% 空烧（同 CLAUDE.md「大陆集团只缺 regions 不缺入口」那类坑，只是这次
+    发生在扩源管道自己身上）。
+
+    只补**缺失**的海外 regions，不动已有值（不误伤已手工配置的区域范围）；已经覆盖全部海外
+    regions 的候选视为真重复，交还给调用方按普通去重处理（不在这里悄悄吞掉真正的重复）。
+    返回 (expanded_count, remaining_passed)。"""
+    expanded = 0
+    remaining = []
+    for cand in passed:
+        url = (cand.get("url") or "").strip()
+        row = url_rows.get(url)
+        if not row:
+            remaining.append(cand)
+            continue
+        current = {str(x).strip() for x in (row.get("regions") or []) if str(x).strip()}
+        missing = _OVERSEAS_REGIONS - current
+        if not missing:
+            remaining.append(cand)   # 已全覆盖 → 是真重复，走普通去重路径（不在此处理）
+            continue
+        merged = sorted(current | _OVERSEAS_REGIONS)
+        tag = "+ expand-regions" if apply else "· dry-run expand-regions"
+        print(f"  {tag} [{cand['adapter']}] {cand['company']} regions {sorted(current)} → {merged} {url}")
+        if apply:
+            try:
+                sb.table("sources").update({"regions": merged}).eq("id", row["id"]).execute()
+                expanded += 1
+            except Exception as e:
+                print(f"    regions update 失败(跳过): {type(e).__name__}: {e}")
+    return expanded, remaining
+
+
 def confirm_candidates(candidates, timeout=12, probe_fn=None):
     """复用 probe 的解析和质量门，海外以岗位、有效详情链接为准，不要求在华地点。"""
     probe_fn = probe_fn or (lambda cand: probe.probe_one(cand, timeout=timeout))
@@ -194,9 +245,15 @@ def main():
     wd_candidates = build_workday_candidates(targets, covered)
     passed += confirm_candidates(wd_candidates)
 
-    to_insert = ad.plan_inserts(passed, existing_urls, INSERT_CAP)
+    # source_url 已在库的候选先尝试「补 regions」而不是被 URL 去重直接吃掉（见函数注释：
+    # 2026-09-19 之前这是 overseas 道连续 22 天零产出的主因之一）。
+    url_rows = fetch_url_region_rows(sb)
+    expanded, passed_new = expand_existing_regions(sb, passed, url_rows, apply)
+
+    to_insert = ad.plan_inserts(passed_new, existing_urls, INSERT_CAP)
     print(f"[auto_discover_overseas] 探 {len(targets)} 家 / ATS 候选 {len(candidates)} / "
-          f"workday 发现 {len(wd_candidates)} / 验证通过 {len(passed)} / 可入库(去重后) {len(to_insert)}")
+          f"workday 发现 {len(wd_candidates)} / 验证通过 {len(passed)} / 补regions {expanded} / "
+          f"可入库(去重后) {len(to_insert)}")
     added = 0
     for row in to_insert:
         tag = "+ insert" if apply else "· dry-run"
@@ -207,13 +264,14 @@ def main():
                 added += 1
             except Exception as e:
                 print(f"    insert 失败(跳过): {type(e).__name__}: {e}")
+    produced = added + expanded
     ops_runs.record_ops_run(
         sb, "auto_discover_overseas",
-        {"checked": len(targets), "produced": added, "companies_enriched": added,
-         "candidates": len(to_insert)},
+        {"checked": len(targets), "produced": produced, "companies_enriched": produced,
+         "candidates": len(to_insert), "regions_expanded": expanded},
         status=ops_runs.status_from_counts(len(to_insert), len(to_insert) - added),
         started_at=started, finished_at=_now_iso())
-    print(f"[auto_discover_overseas] 完成: 入库 {added} 源 (apply={apply})")
+    print(f"[auto_discover_overseas] 完成: 入库 {added} 源 / 补 regions {expanded} 家 (apply={apply})")
 
 
 if __name__ == "__main__":

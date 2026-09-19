@@ -113,5 +113,96 @@ class OverseasInsertTest(unittest.TestCase):
         self.assertEqual(sb.inserts["sources"]["regions"], ["US", "SG", "Remote"])
 
 
+class _UpdateQuery:
+    def __init__(self, sb, name):
+        self.sb = sb
+        self.name = name
+        self._eq = None
+
+    def update(self, payload):
+        self._payload = payload
+        return self
+
+    def eq(self, _col, value):
+        self._eq = value
+        return self
+
+    def execute(self):
+        self.sb.updates.append((self._eq, self._payload))
+        class Result:
+            data = [{}]
+        return Result()
+
+
+class _UpdateSb:
+    def __init__(self):
+        self.updates = []
+
+    def table(self, name):
+        return _UpdateQuery(self, name)
+
+
+class ExpandExistingRegionsTest(unittest.TestCase):
+    """回归守卫：2026-09-19 实测 overseas 道连续 22 天 produced=0——探活真验证通过的候选
+    (Epic Games / Flexport 的 greenhouse board url) 恰好已在库（国内 regions={CN}），被
+    plan_inserts 的 URL 去重当场丢弃，一天一天地把真探到的产出吃掉。expand_existing_regions
+    改成给这类候选补 regions，不再白白丢弃。"""
+
+    def _cand(self, company="Flexport", url="https://boards-api.greenhouse.io/v1/boards/flexport/jobs"):
+        return {"company": company, "adapter": "greenhouse", "url": url,
+                "industry": "物流", "_valid": 26, "regions": ["US", "SG", "Remote"]}
+
+    def test_expands_regions_for_url_already_in_library(self):
+        sb = _UpdateSb()
+        url_rows = {"https://boards-api.greenhouse.io/v1/boards/flexport/jobs":
+                    {"id": "src-1", "source_url": "https://boards-api.greenhouse.io/v1/boards/flexport/jobs",
+                     "regions": ["CN"]}}
+        expanded, remaining = ado.expand_existing_regions(sb, [self._cand()], url_rows, apply=True)
+        self.assertEqual(expanded, 1)
+        self.assertEqual(remaining, [])
+        self.assertEqual(len(sb.updates), 1)
+        eq_id, payload = sb.updates[0]
+        self.assertEqual(eq_id, "src-1")
+        self.assertEqual(sorted(payload["regions"]), ["CN", "Remote", "SG", "US"])
+
+    def test_dry_run_does_not_write(self):
+        sb = _UpdateSb()
+        url_rows = {"https://boards-api.greenhouse.io/v1/boards/flexport/jobs":
+                    {"id": "src-1", "regions": ["CN"]}}
+        expanded, remaining = ado.expand_existing_regions(sb, [self._cand()], url_rows, apply=False)
+        self.assertEqual(expanded, 0, "dry-run 不许真的 update")
+        self.assertEqual(remaining, [])
+        self.assertEqual(sb.updates, [])
+
+    def test_new_url_passes_through_untouched(self):
+        sb = _UpdateSb()
+        expanded, remaining = ado.expand_existing_regions(sb, [self._cand()], {}, apply=True)
+        self.assertEqual(expanded, 0)
+        self.assertEqual(len(remaining), 1, "url 不在库时应原样交回，走正常 plan_inserts 路径")
+        self.assertEqual(sb.updates, [])
+
+    def test_already_fully_covered_is_not_double_counted_as_expansion(self):
+        sb = _UpdateSb()
+        url_rows = {"https://boards-api.greenhouse.io/v1/boards/flexport/jobs":
+                    {"id": "src-1", "regions": ["CN", "US", "SG", "Remote"]}}
+        expanded, remaining = ado.expand_existing_regions(sb, [self._cand()], url_rows, apply=True)
+        self.assertEqual(expanded, 0, "regions 已全覆盖不是「补漏」，不能算扩源产出")
+        self.assertEqual(len(remaining), 1, "交还给真去重路径处理，不在这里悄悄吞掉")
+        self.assertEqual(sb.updates, [])
+
+
+class FetchUrlRegionRowsTest(unittest.TestCase):
+    def test_indexes_by_source_url_and_skips_blank(self):
+        rows = [
+            {"id": "1", "source_url": "https://x/1", "regions": ["CN"]},
+            {"id": "2", "source_url": "  ", "regions": ["CN"]},
+            {"id": "3", "source_url": "https://x/3", "regions": None},
+        ]
+        with mock.patch.object(ado.db, "fetch_all_rows", return_value=rows):
+            out = ado.fetch_url_region_rows(mock.Mock())
+        self.assertEqual(set(out.keys()), {"https://x/1", "https://x/3"})
+        self.assertEqual(out["https://x/1"]["id"], "1")
+
+
 if __name__ == "__main__":
     unittest.main()

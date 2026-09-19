@@ -33,3 +33,14 @@ def company_name_matches(company_name: str, token: str) -> bool:
     if idx == 0:
         return True
     return bool(_PREFIX_RE.fullmatch(name[:idx]))
+
+
+def strip_leading_place(name: str) -> str:
+    """去掉名字开头的地名前缀（如「广东小鹏汽车科技」→「小鹏汽车科技」），供调用方在
+    **要求剩余部分与已知名字精确相等**（而非子串）的场景里安全复用——不像
+    `company_name_matches` 那样允许 idx==0 时无条件通过（idx==0 会把「京东」误判成
+    「京东方」的归属方，见 auto_discover.company_covered 的用法与该坑的说明）。
+    未命中地名前缀（正则两个分组都可选，恒匹配成功但可能零长）时原样返回。"""
+    m = _PREFIX_RE.match(name or "")
+    end = m.end() if m else 0
+    return (name or "")[end:]
