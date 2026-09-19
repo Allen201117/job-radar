@@ -1260,7 +1260,7 @@ checks:
     rule: K
     source: watchdog
     normal: "== 0"
-    severity: warn
+    severity: critical
     calibrated: false
     why: 某一类抓取方式（比如某个招聘系统平台）整体产出比平时大幅下降，但任务状态照样显示成功，靠这个信号才能发现。
     action: 看命中的是哪一类来源，对比它平时和现在的产出差多少
