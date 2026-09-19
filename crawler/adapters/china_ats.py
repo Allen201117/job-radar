@@ -1399,6 +1399,13 @@ class BeisenAdapter(ChinaSpaAdapter):
         ua = PlaywrightAdapter.user_agent
         rows: List[dict] = []
         total: Optional[int] = None
+        # 接口是否至少答上来一次（拿到过 dict 响应），区分「真的 0 岗」与「没打通」——同 alibaba.py
+        # 的 api_answered 口径。建信基金（ccbfund.zhiye.com）实测：PortalId 能抽到、接口稳定 200
+        # 返回 {"Code":200,"Data":[],"Total":0}（/social /campus /intern 逐板块 + 逐 Category 值
+        # 交叉验证过，不是某一次偶然），此前 rows 为空一律 return None，把「真 0 岗」和「接口没打通」
+        # 混成一种 → 触发下面缓存路由分支的 raise，天天记 failed、25 次都等不到 auto-discover 自愈
+        # （根本没有「过期路由」可刷新，租户就是眼下没开放岗位）。
+        api_answered = False
         endpoints = (f"{origin}/api/Jobad/GetJobAdPageList", f"{origin}/api/JobAd/GetJobAdPageList")
         ep_ok = None
         with httpx.Client(timeout=20, follow_redirects=True, headers={"User-Agent": ua}) as cli:
@@ -1419,6 +1426,7 @@ class BeisenAdapter(ChinaSpaAdapter):
                 jj, ep_ok = _post_page_with_retry(cli, endpoints, ep_ok, body)
                 if not isinstance(jj, dict):
                     break
+                api_answered = True
                 if total is None:
                     total = jj.get("Count") or jj.get("Total") or 0
                     reported = _int_or_none(jj.get("Count"))
@@ -1443,6 +1451,12 @@ class BeisenAdapter(ChinaSpaAdapter):
                     break
                 index += 1
         if not rows:
+            # portal_id 抽到了（不是「页面结构变了、我们没找对 PortalId」）且接口至少答过一次
+            # 且明确回了 Count/Total=0（reported_total 由上面显式置 0，非默认 None）→ 真 0 岗，
+            # 当成功返回；否则维持原样返 None，交回上层去试 ssr/cards 或最终判 failed。
+            if api_answered and portal_id and self.reported_total == 0:
+                self.fetch_complete = True
+                return json.dumps({"_intercepted": [{"Data": [], "Count": 0}]}, ensure_ascii=False)
             return None
         self.fetch_complete = (total is not None and len(rows) >= (total or 0))
         return json.dumps({"_intercepted": [{"Data": rows, "Count": total or len(rows)}]}, ensure_ascii=False)
