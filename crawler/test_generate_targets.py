@@ -25,6 +25,13 @@ class NormCompanyTest(unittest.TestCase):
     def test_does_not_merge_substrings(self):
         self.assertNotEqual(gt.norm_company("字节"), gt.norm_company("字节跳动"))
 
+    def test_strips_bare_gufen_suffix(self):
+        # 2026-09-19 实测：generate_targets 的后缀表一直漏了「股份」（platform_fingerprint.py
+        # 的同名后缀表早就有），导致「伊利股份」≠「伊利」被 auto_discover 判成假缺失，
+        # 连续多天重探同一家、真源被 URL 去重白白挡掉、浪费探测名额。
+        self.assertEqual(gt.norm_company("伊利股份"), gt.norm_company("伊利"))
+        self.assertEqual(gt.norm_company("五粮液股份"), "五粮液")
+
 
 class ParseGeneratedTest(unittest.TestCase):
     def test_extracts_valid_and_marks_llm_priority(self):
@@ -96,6 +103,40 @@ class ParseGeneratedTest(unittest.TestCase):
         self.assertEqual(gt.parse_generated({}, set()), [])
         self.assertEqual(gt.parse_generated({"companies": ["not-a-dict"]}, set()), [])
         self.assertEqual(gt.parse_generated(None, set()), [])
+
+
+class CompanyCoveredPlacePrefixTest(unittest.TestCase):
+    """company_covered 第四层（剥地名前缀 + 精确相等）。2026-09-19 实测：auto_discover 连续
+    多天在「小鹏」上白烧探测名额——清单写「广东小鹏汽车科技」，库里是「小鹏汽车」，两者互不是
+    对方的子串/token，前三层判据全部漏判，天天重探、天天被 source_url 去重挡掉。"""
+
+    def test_covers_target_with_leading_place_prefix(self):
+        # 真实命中路径：剥掉地名前缀「广东」→「小鹏汽车科技」，再走 norm_company 的既有
+        # 后缀表把「科技」剥掉 → 精确等于「小鹏汽车」的 norm 结果。不是靠子串/前缀匹配，
+        # 是「剥地名前缀」与「norm_company 剥业务后缀」两步都要走到才成立——如实记录，
+        # 免得下一个人以为这层单靠地名剥离就能生效。
+        existing = {"小鹏汽车"}
+        existing_norm = {gt.norm_company(x) for x in existing}
+        self.assertEqual(gt.norm_company("小鹏汽车科技"), gt.norm_company("小鹏汽车"),
+                         "本条覆盖成立的前提：norm_company 会把候选剥地名后的「科技」后缀也剥掉")
+        self.assertTrue(gt.company_covered("广东小鹏汽车科技", existing, existing_norm))
+
+    def test_no_place_prefix_falls_through_unaffected(self):
+        # 没有地名前缀时 strip 是 no-op，不能凭空制造匹配。
+        self.assertFalse(gt.company_covered("完全不相关公司", {"小鹏汽车"},
+                                            {gt.norm_company("小鹏汽车")}))
+
+    def test_does_not_let_subsidiary_piggyback_on_parent_via_place_strip(self):
+        # 红线回归：不能因为加了这一层就把「网易」误判成覆盖「网易有道」、
+        # 「京东」误判成覆盖「京东方」——两者都没有地名前缀，strip 是 no-op，第四层不该生效。
+        self.assertFalse(gt.company_covered("网易有道", {"网易"}, {gt.norm_company("网易")}))
+        self.assertFalse(gt.company_covered("京东方", {"京东"}, {gt.norm_company("京东")}))
+
+    def test_does_not_let_generic_short_word_after_place_strip_match(self):
+        # 2026-09-19 复核加：剥完地名前缀 <3 字的通用行业短词（「银行」「电气」）不能精确匹配——
+        # 否则库里随便有一家叫「银行」/「电气」的，就会把「北京银行」「上海电气」都误判成覆盖。
+        self.assertFalse(gt.company_covered("北京银行", {"银行"}, {gt.norm_company("银行")}))
+        self.assertFalse(gt.company_covered("上海电气", {"电气"}, {gt.norm_company("电气")}))
 
 
 class ThemeAndGuardTest(unittest.TestCase):

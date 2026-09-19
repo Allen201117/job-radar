@@ -170,9 +170,24 @@ class BeisenHttpxTest(unittest.TestCase):
             out = a._httpx_fetch("https://x.zhiye.com/social/jobs")
         self.assertIsNotNone(out)
 
-    def test_no_data_returns_none(self):
+    def test_genuine_zero_returns_empty_envelope_not_none(self):
+        """接口答上来了（PortalId 抽到 + Count/Total 显式 0）= 真 0 岗，必须当成功返回空信封，
+        不能返回 None——否则 china_ats.fetch() 的「cached route」分支会把它当成 httpx 没打通，
+        触发 raise，把「租户暂无在招岗」误记成 failed（2026-09-19 建信基金 ccbfund.zhiye.com
+        实锤：25 次全 failed，live 核实其接口稳定 200 返回 Count=0/Total=0）。"""
         a = self._a()
         with _patch(HTML, [{"Data": [], "Count": 0}]):
+            out = json.loads(a._httpx_fetch("https://x.zhiye.com/social/jobs"))
+        self.assertEqual(out, {"_intercepted": [{"Data": [], "Count": 0}]})
+        self.assertEqual(a.reported_total, 0)
+        self.assertTrue(a.fetch_complete)
+
+    def test_no_portal_id_and_no_data_returns_none(self):
+        """PortalId 都没抽到（页面结构变了/不是这个租户）→ 不能当「真 0 岗」，必须回 None
+        交回上层去试 ssr/cards 或最终判 failed，不能把「我们没找对」伪装成「对方真没岗」。"""
+        a = self._a()
+        html_no_portal = "<html>no portal id here</html>"
+        with _patch(html_no_portal, [{"Data": [], "Count": 0}]):
             self.assertIsNone(a._httpx_fetch("https://x.zhiye.com/social/jobs"))
 
 

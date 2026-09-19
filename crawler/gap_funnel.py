@@ -1370,6 +1370,14 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
             and item.get("source_id")
         ),
         "states": dict(counts),
+        # wrong_platform 是「探到了平台，但 P1 httpx 道没有这个平台的 adapter」——占失败态的
+        # 绝大多数（2026-09-19 实测某轮 4/4），且不会随退避自愈（30 天后重探，平台还是没 adapter）。
+        # 只报 states.wrong_platform 的总数看不出该优先接哪个平台；按 detected_platform 拆开，
+        # 人工排查/建 adapter 时不用再逐个点开 must_apply_gap_attempts 核对。
+        "wrong_platform_breakdown": dict(Counter(
+            item.get("detected_platform") or "unknown"
+            for item in outcomes if item.get("state") == "wrong_platform"
+        )),
         # 必投校招渠道分布（迁移 254）：healthy / idle / missing 三个数每天落台账，
         # 「必投校招覆盖率」= healthy / 国内清单数，从 2026-09-17 的 53% 往上走。
         "campus_channel": census_result.get("campus_channel") or {},

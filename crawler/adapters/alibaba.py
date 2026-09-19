@@ -19,6 +19,7 @@ host 从 source_url 动态解析，一个 adapter 全家通用；company 由 sou
  （回落到「更多招聘」导航页），不能当 source 入库——只用 BU 自有域。）
 """
 import json
+import time
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -87,12 +88,25 @@ class AlibabaAdapter(PlaywrightAdapter):
         }
         collected = []
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
-            # 1) 种 cookie 拿 XSRF-TOKEN（部分域首页即种，部分要列表页路由）
-            client.get(f"{base}/?lang=zh")
-            csrf = client.cookies.get("XSRF-TOKEN")
-            if not csrf:
-                client.get(f"{base}/{self._PORTAL}/position-list?lang=zh")
-                csrf = client.cookies.get("XSRF-TOKEN")
+            # 1) 种 cookie 拿 XSRF-TOKEN（部分域首页即种，部分要列表页路由）。
+            # ⚠️ 2026-09-14~19 hire.freshippo.com 连续 5 天 25 次全 failed 在此步骤报错，但
+            # 2026-09-19 本地/CI 同网段多次直连复现均正常拿到 cookie（浏览器 UA、bot UA 各测
+            # 4 次全部成功）——无法坐实是固定的服务端/host 问题，最可能是偶发丢包/瞬时限流。
+            # 加 2 次重试（短退避）兜底这类瞬时抖动，不构成已证实的根因结论。
+            csrf = None
+            for attempt in range(3):
+                if attempt:
+                    time.sleep(0.8 * attempt)
+                try:
+                    client.get(f"{base}/?lang=zh")
+                    csrf = client.cookies.get("XSRF-TOKEN")
+                    if not csrf:
+                        client.get(f"{base}/{self._PORTAL}/position-list?lang=zh")
+                        csrf = client.cookies.get("XSRF-TOKEN")
+                except httpx.HTTPError:
+                    csrf = None
+                if csrf:
+                    break
             if not csrf:
                 raise RuntimeError(f"alibaba: 拿不到 XSRF-TOKEN ({host})")
 
