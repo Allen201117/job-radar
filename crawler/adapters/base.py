@@ -287,6 +287,10 @@ class BaseAdapter:
     #   fetch_complete = 本次是否抓到了 reported_total 的全部（fetched >= total 或按接口翻完）。
     reported_total: Optional[int] = None
     fetch_complete: bool = False
+    # 未抓全时「为什么」的可判定原因（任务B：把「按设计刹停」从「真漏抓」里分出来，见
+    # RepetitionBrake 文档字符串 + migration 284）。None = 不可判定/未触发已知刹车。
+    # 目前唯一取值 "repetition_brake"；adapter 在 brake.observe()==True 分支里显式赋值。
+    coverage_stop_reason: Optional[str] = None
 
     def fetch(self, source_url: str) -> str:
         """从 source_url 获取页面 HTML 或 JSON 文本。"""

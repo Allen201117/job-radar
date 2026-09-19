@@ -154,8 +154,14 @@ def update_crawl_run(
     error_message: Optional[str] = None,
     reported_total: Optional[int] = None,
     coverage_complete: Optional[bool] = None,
+    coverage_stop_reason: Optional[str] = None,
 ):
-    """更新抓取日志。reported_total/coverage_complete=抓全率可观测（阶段①），None 时不写该列。"""
+    """更新抓取日志。reported_total/coverage_complete=抓全率可观测（阶段①），None 时不写该列。
+    coverage_stop_reason=任务B：未抓全时「为什么」可判定的原因（当前唯一取值
+    repetition_brake，见 migration 284），供 ops_watchdog 规则 G 把「按设计刹停」从
+    「真漏抓」里分出来。每个 run_id 对应的是新插入的一行（create_crawl_run 先占位，
+    这里是该行唯一一次 update），列默认 NULL，与 reported_total/coverage_complete
+    同口径：None 时不写该列即可，不存在「旧值粘在下一行」的问题。"""
     data = {
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "status": status,
@@ -169,6 +175,8 @@ def update_crawl_run(
         data["reported_total"] = reported_total
     if coverage_complete is not None:
         data["coverage_complete"] = coverage_complete
+    if coverage_stop_reason is not None:
+        data["coverage_stop_reason"] = coverage_stop_reason
 
     supabase.table("crawl_runs").update(data).eq("id", run_id).execute()
 

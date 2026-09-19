@@ -799,6 +799,7 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
             latest[sid] = (started, row)
 
     shortfalls = []
+    braked = []   # 任务B：RepetitionBrake 按设计刹停（同岗×N门店），不是「我们自己停在半路」
     for sid, (_started, row) in latest.items():
         source = sources_by_id.get(sid)
         if not source or not source.get("enabled", True):
@@ -810,13 +811,24 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
         gap = int(reported - found)
         if reported <= 0 or gap < min_gap or found >= reported * ratio_floor:
             continue
-        shortfalls.append({
+        item = {
             "company": source.get("company") or sid,
             "adapter": source.get("adapter_name") or "?",
             "reported": int(reported), "found": int(found), "gap": gap,
-        })
+        }
+        # ⚠️ 阈值（ratio_floor/min_gap/total_gap）一个不改，只在这里把「按设计刹停」的源
+        # 从缺口清单里摘出去——它们 fetch_complete 天然为 False（RepetitionBrake 的不变量，
+        # 见 base.py），跟真漏抓在 crawl_runs 上长得一模一样，混进同一堆会误导人去抬
+        # CRAWL_MAX_JOBS（抬了也没用，刹车会再次刹停，还违反「精准 > 规模」）。
+        if row.get("coverage_stop_reason") == "repetition_brake":
+            braked.append(item)
+        else:
+            shortfalls.append(item)
 
     if not shortfalls:
+        if braked:
+            print(f"  [watchdog] 规则 G：本轮 {len(braked)} 个源按设计刹停（RepetitionBrake），"
+                  f"不计入缺口：{'、'.join(x['company'] for x in braked[:10])}")
         return []
     shortfalls.sort(key=lambda x: -x["gap"])
     grand = sum(x["gap"] for x in shortfalls)
@@ -835,6 +847,12 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
         evidence.append(f"…还有 {len(shortfalls) - 8} 个源没列出来")
     evidence.append("按 adapter 汇总缺口：" + "、".join(
         f"{name} {gap}" for name, gap in by_adapter.most_common(5)))
+    if braked:
+        braked_gap = sum(x["gap"] for x in braked)
+        evidence.append(
+            f"另有 {len(braked)} 个源按设计刹停（RepetitionBrake 判定同一岗位×N家门店批量发布，"
+            f"少 {braked_gap} 个岗），不计入上面的缺口：" + "、".join(x["company"] for x in braked[:5])
+        )
     return [{
         "rule": "G",
         "subject": "抓取覆盖",

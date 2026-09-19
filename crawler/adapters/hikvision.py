@@ -19,6 +19,7 @@ live 验证：该 URL 渲染出「【2027校园招聘】AI加速算法工程师�
 """
 import json
 import logging
+import time
 from typing import List, Optional
 
 import httpx
@@ -26,6 +27,13 @@ import httpx
 from .base import BaseAdapter, RawJob
 
 logger = logging.getLogger(__name__)
+
+# 页面级重试：2026-09-19 live 复核 crawl_runs 近 20 轮实测 2/20（10%）卡在第 1 页（50/256），
+# 其余 18/20 全量抓全 —— 不是硬顶/分页逻辑坏了（那样应该每次都卡在同一条），是某一页偶发瞬时
+# 失败（超时/连接抖动）时旧代码直接放弃剩余页。3 次 × 0.6s 退避足以穿过瞬时抖动，同 china_ats
+# 里北森翻页重试的既有写法（_PAGE_RETRIES/_PAGE_BACKOFF_SECONDS）。
+_PAGE_RETRIES = 3
+_PAGE_BACKOFF_SECONDS = 0.6
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -61,19 +69,29 @@ class HikvisionAdapter(BaseAdapter):
                 # ⚠️ 分页参数走 **URL query**，放进 JSON body 会被静默忽略、每页恒返首批 10 条
                 # （live 逐个试过：body 里的 pageNum/pageIndex/current/start 全无效，
                 #  只有 ?pageNum=&pageSize= 能让首条从「AI加速算法工程师」变成「工业设计师」）。
-                try:
-                    response = client.post(
-                        self.LIST_URL,
-                        params={"pageNum": page_no, "pageSize": self.PAGE_SIZE},
-                        json={},
-                    )
-                    response.raise_for_status()
-                    data = (response.json() or {}).get("data") or {}
-                except Exception:
+                data = None
+                last_exc = None
+                for attempt in range(_PAGE_RETRIES):
+                    try:
+                        response = client.post(
+                            self.LIST_URL,
+                            params={"pageNum": page_no, "pageSize": self.PAGE_SIZE},
+                            json={},
+                        )
+                        response.raise_for_status()
+                        data = (response.json() or {}).get("data") or {}
+                        last_exc = None
+                        break
+                    except Exception as exc:  # noqa: BLE001 —— 瞬时抖动重试，真故障留给外层处理
+                        last_exc = exc
+                        if attempt < _PAGE_RETRIES - 1:
+                            time.sleep(_PAGE_BACKOFF_SECONDS * (attempt + 1))
+                if last_exc is not None:
                     if page_no == 1:
-                        raise  # 首页失败交给 run.py 记录为 failed
+                        raise last_exc  # 首页重试仍失败交给 run.py 记录为 failed
                     logger.warning(
-                        "hikvision: 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）", page_no, len(rows)
+                        "hikvision: 第 %d 页重试 %d 次仍失败，保留已抓 %d 条（尽力而为）：%s",
+                        page_no, _PAGE_RETRIES, len(rows), last_exc,
                     )
                     break  # 后续页尽力而为，保留已抓的行；fetch_complete 由下方与 reported_total 比对天然置 False
                 if self.reported_total is None:
