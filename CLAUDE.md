@@ -167,6 +167,46 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
 → 验收报**分项**（A→B 多少条、B→A 多少条），**不许只报净值或总数**；
 → 聚合指标向好时，必须同时确认**没有分项在回归**（逐源/逐类对拍，不是抽样）。
 
+## 结构性审计：没声明「正常长什么样」的东西，本身就是告警（2026-09-19 上线）
+
+**为什么有它**：此前 16 条告警规则里 14 条只看「任务有没有在跑」、0 条看用户体验；9 条定时链路不留任何运行记录；
+「在招总量」全库一天历史都没有。更糟的是，因为期望从没被显式写下，**「哪些东西没有期望」也无从枚举**。
+
+| 组件 | 在哪 | 干什么 |
+|---|---|---|
+| 期望清单 | `crawler/audit_contract.yaml`（85 条：数据 13 / 体验 21 / 链路 35 / 老告警桥接 16） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
+| 执行器 | `crawler/audit_runner.py` + `structural-audit.yml`（每日北京 08:50） | 逐条量，写 `audit_results`（Supabase，迁移 281/282）；`unique(check_id, run_date)` 一天一行 = 趋势表 |
+| 覆盖率差集 | `crawler/audit_coverage.py` + `audit_exemptions.yaml` | 左边**自动枚举**（带 cron 的 workflow / 写 ops_runs 的模块 / jobs 表列 / 走查指标），减去有期望的；上线时 68 条 → 现 14 条（全是 jobs 列） |
+| 老告警桥接 | `ops_watchdog.py` 的 `publish_audit_bridge` | 16 条规则**判定与阈值一字未动**，只把每条的命中数 + 明细写进同一张表（`detail.findings[].title` 与 issue 标题逐字一致） |
+| 晨报 | `crawler/morning_digest.py` + `morning-digest.yml`（北京 09:30） | 每天必发，绿灯也发（绿灯邮件就是心跳）；报「昨天全天」 |
+| 外部心跳 | `audit_runner.ping_heartbeat`（Healthchecks.io，只挂执行器 1 个） | start / success / fail 三态；`workflow_dispatch -f force_fail=true` 做故障演练 |
+
+**改这套东西务必保住的不变量**：
+- **查询失败 → `verdict='error'` 且 `value` 为 NULL，绝不写 0**（表约束 `(verdict='error') = (value is null)` 钉死）；
+  清单里有、当天却没有行的检查 = 「今天没查到」，晨报⑧段逐条点名并参与灯色。ok 也每天落库——那就是历史。
+- **新增定时 workflow / 写台账的模块 / jobs 列 / 走查指标，差集会自动多一条**；消音只有两条路：写期望，或在
+  `audit_exemptions.yaml` 带**非空理由**豁免。jobs 列的覆盖靠检查项显式 `covers: [列]`（必须真出现在该条 SQL 里、
+  真存在于 `jobs-db/schema.sql`），**不靠「列名在 SQL 文本里出现过」**——`status` 出现在几乎每条 where 里，按文本猜会永久假绿。
+- **红灯只留给「用户可见损坏 / 供给来源大面积塌」，单个源坏最多黄灯**（创始人定）。老告警里只有 `rule_d`（关键任务超期）
+  与 `rule_k`（一整类来源产出骤降）是 critical；`severity=info` 的不染灯。灯色以**清单里的 severity** 为准，不认落库快照。
+- **`name/why/action` 的读者是非技术创始人**：不许出现表名 / 模块英文名 / SQL 词 / 「GitHub Actions、日志、索引、adapter」；
+  `action` 写成他能做的动作（「把这条转给 Claude，让它查…」）。阈值没有历史依据的一律 `calibrated: false`（现 82/85 条），
+  攒够 30 天换分位数，**禁止编一个看着合理的数字却不标它**。
+- 周任务的链路检查窗口是 8 天；`campus-crawl` 那条按月份条件化（月份集合复用规则 O）。
+  ⚠️ `enrich-crawl` / `dead-link-audit-new` 与另一条 workflow 共用台账模块名，**一条停了另一条会掩盖它**——豁免理由里写的是真缺口，不是「不用管」。
+
+**搭的过程中踩的坑（都是「没真跑就看不见」的那一类）**：
+- 🚫 **体验层 SQL 里的事件名 / 取值必须能在产生它的源码里 grep 到**。❌ 慢搜索那条曾把耗时桶写成 `'slow','very_slow'`（猜的），
+  真实取值是 `3000_9999ms` / `gte_10000ms` → 恒算出 0，一条**永远绿的假检查**（真实值 27.1%）。
+  ✅ `test_every_experience_layer_literal_traces_to_source` 逐个字面量回溯源码，抽不到来源就红。
+- 🚫 **Resend 必须显式带 `User-Agent`**。❌ 第一封真发连败三次 `error code: 1010`：Resend 前面是 Cloudflare，urllib 默认的
+  `Python-urllib/x.y` 被按客户端特征拦掉，请求根本到不了 Resend、与 key 无关。单测注入的是假 opener，永远测不到这层。
+  ✅ `morning_digest.RESEND_USER_AGENT` + 源码级断言。
+- 🚫 **用 mock 数据排的版不算验证**。❌ `gh issue list --json comments` 返回的是**对象列表**，夹具里写成了数字 → 真跑时整段原始评论
+  塞进正文，单行 4 万字符、整封 325KB。✅ 夹具用真实形状 + 单行 ≤300 字符 / 整封 ≤30KB 的兜底断言。
+- 🚫 **dry-run 写的台账不许被读成「已送达」**：「上一封是否送达」只认 `metrics.mode == "sent"` 的行。
+- 🚫 JS 与 Python 两侧写 `ops_runs` 的 `run_date` 都必须按 **Asia/Shanghai**（JS 曾用 `toISOString()` 取 UTC，每天 8 小时落错桶）。
+
 ## ⚠️ 撤岗身份：purge 删行前必须先立墓碑（2026-09-08 立，修 F1）
 
 `purge-expired.yml` 每天 `delete from jobs where status='expired'`，**近 14 天实测均值 2,871 行/天、
