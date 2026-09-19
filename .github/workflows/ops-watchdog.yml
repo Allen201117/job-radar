@@ -4,15 +4,17 @@ name: ops-watchdog
 # 把「静默坏掉」的任务开成本仓库的 GitHub Issue（防刷屏：同标题的 open issue 只追评论、不新开）。
 # 规则与判据见 crawler/ops_watchdog.py 头注释 / docs/superpowers/specs/2026-08-27-observability-and-ux-plan.md §2.2。
 #
-# 时间：每日 UTC 01:00——排在所有夜间档之后（auto-discover 21/23、gap-funnel 22:40、
-# insight 19:30/20:30、dead-link-audit 22:00、purge 02:30 是次日的事），这样看到的是完整的一夜产出。
+# 时间：每日北京 08:30（UTC 00:30，2026-09-19 从 UTC 01:00 提前——排在所有夜间档之后
+# （auto-discover 21/23、gap-funnel 22:40、insight 19:30/20:30、dead-link-audit 22:00、
+# purge 02:30 是次日的事），这样看到的仍是完整的一夜产出；提前 30 分钟只是为了赶在
+# 09:00 的自动修复 session 之前把老告警评估完，讲的是同一批夜间产出，不影响判定口径）。
 #
 # ⚠️ 默认 dry-run：只在日志里打印「会开哪些 issue」，零写入。要真开 issue，
 # 到 repo → Settings → Variables 加 OPS_WATCHDOG_APPLY=true（或手动 dispatch 时把 apply 填 true）。
 # 这样开关不用改代码，也不会因为某次误判就往仓库里灌一堆 issue。
 on:
   schedule:
-    - cron: "0 1 * * *"
+    - cron: "30 0 * * *"
   workflow_dispatch:
     inputs:
       apply:

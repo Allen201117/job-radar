@@ -4,10 +4,11 @@ name: morning-digest
 # 取数来源 = audit_results（crawler/audit_runner.py 当天已落库的检查结果）+ ops_runs(module='ux_walkthrough')
 # + gh issue（老问题清账）。绿灯也每天发——绿灯邮件本身就是心跳。
 #
-# 北京 09:30，排在 structural-audit（08:50）之后，保证今天的检查结果已经落库。
+# 北京 10:00（2026-09-19 从 09:30 推迟）：排在 structural-audit 的第二次跑（09:45，见该
+# workflow 注释）之后，保证晨报读到的是「今早自动修复跑完之后」重新量过的数字，不是修之前的旧值。
 on:
   schedule:
-    - cron: "30 1 * * *"
+    - cron: "0 2 * * *"
   workflow_dispatch:
     inputs:
       dry_run:

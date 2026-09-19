@@ -1122,6 +1122,21 @@ checks:
     why: 这条检查测的是晨报这条链路自己——如果它停了，创始人会以为「没消息就是没问题」，但其实是没人在发消息。
     action: 把这条转给 Claude，让它查晨报这条定时任务最近一次是不是运行失败了
 
+  - id: pipeline.auto_repair_ran
+    name: 每天早上的自动修复昨天有没有跑
+    subject: 每天早上的自动修复
+    layer: pipeline
+    db: supabase
+    owner: crawler/repair_ledger.py
+    sql: >
+      select count(*) from ops_runs where module = 'auto_repair'
+        and run_date = ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 1"
+    severity: warn
+    calibrated: false
+    why: 这条不是某个 GitHub 定时任务——它跑在创始人自己电脑上的 Claude 桌面 App 定时任务里，电脑没开着 App 它就不会跑，也不会有任何人发现。
+    action: 把这条转给 Claude，让它查昨天早上电脑上的自动修复 session 是不是没跑起来，或者跑起来了但没走到记账那一步
+
   # ===== 老告警桥接（source: watchdog） =====
   # 严重度口径（2026-09-19 定）：晨报红灯只留给「用户可见损坏 / 供给来源大面积塌」，单个来源坏最多黄灯。
   # 所以这里只有 rule_d（关键任务超期没跑）与 rule_k（某一整类来源产出骤降）是 critical，其余一律 warn ——

@@ -4,10 +4,17 @@ name: structural-audit
 # 只读（每条 SQL 跑在 read only 事务里）。breach / error 是「发现」，不让本 workflow 变红；
 # 只有台账写不进去才失败 —— 查了没落库 = 没查。
 #
-# 北京 08:50：排在晨报（09:30）之前；避开整点（GitHub cron 整点常延迟 10~30 分钟）。
+# 两条 cron（2026-09-19 起，配合创始人电脑上北京 09:00 跑的自动修复 session）：
+#   · 北京 08:10（UTC 00:10）：给 09:00 的自动修复留「修之前的现状」——留够余量，
+#     因为 GitHub 定时常延迟 10~30 分钟，08:10 触发到真正跑完可能已经 08:30+。
+#   · 北京 09:45（UTC 01:45）：修复之后再量一遍，同一天 `audit_results` upsert 覆盖
+#     08:10 那次的行（见 audit_runner.write_results 的 `on conflict (check_id, run_date)`），
+#     这样 09:30 晨报（现改到 10:00）拿到的是「修完之后」的数字，不是修之前的旧值。
+#   两次都避开整点（GitHub cron 整点常延迟 10~30 分钟）。
 on:
   schedule:
-    - cron: "50 0 * * *"
+    - cron: "10 0 * * *"
+    - cron: "45 1 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
