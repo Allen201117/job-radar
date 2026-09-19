@@ -236,9 +236,27 @@ class MokaAdapter(PlaywrightAdapter):
     _cards_js = ("els => els.map(e => ({href: e.getAttribute('href'),"
                  " text: (e.innerText || '').trim()}))")
     _PAGE_ROWS = 30       # Moka 默认「30 行/页」，分页器上写着
+    # 部分租户首屏渲染出岗位卡的同时会弹一个「cookies」同意抽屉（sd-Modal-drawer，
+    # 按钮文案「好的」），浮在页面最上层拦截点击事件。不清掉它，第一次点「下一页」
+    # 就会被它挡住、`nxt.click()` 超时进 except、`_collect_all_pages` 静默停在第 1 页
+    # （2026-09-19 live 实测实锤：作业帮/百济神州的 social-recruitment 源常年卡在
+    # 30~31/240~510，Playwright trace 显示 click 报
+    # 「secret-drawer-content intercepts pointer events」）。campus-recruitment /
+    # apply 这类路由多半页数少、根本不需要点「下一页」，所以碰不到这个坑。
+    _COOKIE_ACCEPT_SEL = "button:has-text('好的')"
     # 抓全率可观测契约（190 个 moka 校招源此前 reported_total 恒为 None＝不可判定）
     reported_total = None
     fetch_complete = False
+
+    def _dismiss_cookie_banner(self, page) -> None:
+        """点掉可能挡住「下一页」按钮的 cookies 同意抽屉；没有就什么都不做，失败也不影响主流程。"""
+        try:
+            btn = page.query_selector(self._COOKIE_ACCEPT_SEL)
+            if btn and btn.is_visible():
+                btn.click(timeout=1500)
+                page.wait_for_timeout(300)
+        except Exception:
+            pass
 
     def _collect_all_pages(self, page) -> List[dict]:
         """从当前已渲染的列表路由翻页累加全量岗位卡，按 href 去重。
@@ -250,6 +268,7 @@ class MokaAdapter(PlaywrightAdapter):
         no_growth = 0
         self._last_page = self._read_last_page(page)   # 分页器自报的总页数（拿不到=None）
         pages_done = 0
+        self._dismiss_cookie_banner(page)   # 翻页前先清场，否则首次点击就会被它挡住
         for _ in range(self._page_cap or resolve_page_cap(self._PAGE_ROWS, self._MAX_JOBS)):
             pages_done += 1
             cards = page.eval_on_selector_all("a[href*='#/job/']", self._cards_js)
@@ -272,7 +291,15 @@ class MokaAdapter(PlaywrightAdapter):
                 nxt.click(timeout=2500)
                 page.wait_for_timeout(1800)  # 等下一页岗位卡渲染
             except Exception:
-                break
+                # 常见诱因：cookies 抽屉在这一拍才弹出来（首屏渲染晚于 _dismiss 那一次调用）。
+                # 补清一次、重试点击一次；再失败才真放弃（保留已收的行，不让整源卡死在这一页）。
+                self._dismiss_cookie_banner(page)
+                try:
+                    nxt.click(timeout=2500)
+                    page.wait_for_timeout(1800)
+                    continue
+                except Exception:
+                    break
         self._pages_done = pages_done
         return list(union.values())
 
@@ -312,6 +339,7 @@ class MokaAdapter(PlaywrightAdapter):
 
         self.reported_total = None
         self.fetch_complete = False
+        self.coverage_stop_reason = None
         self._last_page = None
         self._pages_done = 0
         base = source_url.split("#")[0]
@@ -1248,6 +1276,7 @@ class BeisenAdapter(ChinaSpaAdapter):
         harvest_beisen_routes.py 持久化）。daily-crawl 无 Playwright → httpx 路径自给，回退浏览器会抛由上层记 failed。"""
         self.reported_total = None
         self.fetch_complete = False
+        self.coverage_stop_reason = None
         parsed = urlparse(source_url)
         self._origin = f"{parsed.scheme}://{parsed.netloc}"
         self._host = parsed.netloc
@@ -1444,6 +1473,7 @@ class BeisenAdapter(ChinaSpaAdapter):
                 # 重复度刹车（批量门店发布源）。放在「抓全」判定之后：能抓全的源一律抓全，
                 # 只有还要继续翻页时才问「再翻还有没有新角色」。刹停 → fetch_complete 天然为 False。
                 if brake.observe(_titles_of(fresh)):
+                    self.coverage_stop_reason = "repetition_brake"
                     _log.info("%s: 重复度刹车 —— 连续 %d 条没有新角色，停在 %d/%s 条 host=%s",
                               self.name, brake.stall_rows, len(rows), total, self._host)
                     break
@@ -1876,6 +1906,7 @@ class BeisenAdapter(ChinaSpaAdapter):
                     if total and len(rows) >= total:
                         break
                     if brake.observe(_titles_of(fresh)):   # 与 httpx 路径同口径，见那边注释
+                        self.coverage_stop_reason = "repetition_brake"
                         _log.info("%s: 重复度刹车 —— 连续 %d 条没有新角色，停在 %d/%s 条 host=%s",
                                   self.name, brake.stall_rows, len(rows), total, self._host)
                         break

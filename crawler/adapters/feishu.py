@@ -92,6 +92,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         self._apply_website_path("")
         self.fetch_complete = False
         self.reported_total = None
+        self.coverage_stop_reason = None
         self._prefetched = None
 
     def _apply_website_path(self, path: str) -> None:
@@ -186,6 +187,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                     # 重复度刹车：批量发布源（同一个岗 × N 家门店）翻再多页也只是同质副本。
                     # 放在「抓全」判定之后 → 能抓全的源一律抓全。刹停 → fetch_complete 天然为 False。
                     if brake.observe(_titles_of(rows[before:])):
+                        self.coverage_stop_reason = "repetition_brake"
                         logger.info("%s: 重复度刹车 —— 连续 %d 条没有新角色，停在 %d/%s 条 host=%s",
                                     self.name, brake.stall_rows, len(rows), total, host)
                         break
@@ -297,6 +299,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         浏览器抓包链（仅 Playwright 可用环境如 enrich-crawl）。"""
         self.fetch_complete = False
         self.reported_total = None
+        self.coverage_stop_reason = None
         prefetched = self._prefetched
         self._prefetched = None
         self._bind_website_path(source_url)
@@ -415,6 +418,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
             if total and len(rows) >= total:
                 break
             if brake.observe(_titles_of(rows[before:])):   # 与 httpx 路径同口径，见那边注释
+                self.coverage_stop_reason = "repetition_brake"
                 logger.info("%s: 重复度刹车 —— 连续 %d 条没有新角色，停在 %d/%s 条 url=%s",
                             self.name, brake.stall_rows, len(rows), total, url)
                 break

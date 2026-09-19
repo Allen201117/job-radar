@@ -415,9 +415,11 @@ class CoverageShortfallRuleTest(unittest.TestCase):
     }
 
     @staticmethod
-    def _row(sid, reported, found, complete=False, started="2026-08-27T00:00:00+00:00"):
+    def _row(sid, reported, found, complete=False, started="2026-08-27T00:00:00+00:00",
+             stop_reason=None):
         return {"source_id": sid, "status": "success", "started_at": started,
-                "reported_total": reported, "jobs_found": found, "coverage_complete": complete}
+                "reported_total": reported, "jobs_found": found, "coverage_complete": complete,
+                "coverage_stop_reason": stop_reason}
 
     def test_reports_aggregate_with_biggest_gap_first(self):
         rows = [self._row("s1", 5643, 600), self._row("s4", 2055, 600)]
@@ -462,6 +464,30 @@ class CoverageShortfallRuleTest(unittest.TestCase):
         rows = [self._row("s1", 5643, 600), self._row("s4", 2055, 600)]
         [finding] = W.evaluate_coverage_shortfall(rows, self.SOURCES)
         self.assertEqual(W.issue_title(finding), "[watchdog] 源抓不全：抓取覆盖")
+
+    def test_repetition_brake_stop_is_not_a_shortfall(self):
+        """任务B：RepetitionBrake 按设计刹停（同一岗位×N家门店批量发布）不算「我们自己停在半路」，
+        单独一个刹停源不该触发规则 G（哪怕缺口本身够大）。"""
+        rows = [self._row("s1", 5643, 600, stop_reason="repetition_brake")]
+        self.assertEqual(W.evaluate_coverage_shortfall(rows, self.SOURCES), [])
+
+    def test_non_braked_shortfall_still_counts_when_mixed_with_braked(self):
+        """真漏抓的源不能被同批的刹停源连累忽略；刹停源单列一行，不进 evidence 的缺口列表。"""
+        rows = [self._row("s1", 5643, 600), self._row("s4", 2055, 600, stop_reason="repetition_brake")]
+        [finding] = W.evaluate_coverage_shortfall(rows, self.SOURCES)
+        self.assertIn("1 个源", finding["summary"])
+        self.assertIn("5043", finding["summary"])   # 只有 s1 的缺口，s4 不计入
+        joined = " ".join(finding["evidence"])
+        self.assertIn("奇瑞汽车", joined)
+        self.assertNotIn("蔚来（feishu）：官网自报", joined)   # s4 没被当成真缺口列出来
+        self.assertIn("另有 1 个源按设计刹停", joined)
+        self.assertIn("蔚来", joined)   # 但要在「按设计刹停」那一行里点名
+
+    def test_all_sources_braked_means_rule_g_stays_quiet(self):
+        """全是按设计刹停的源时，规则 G 完全不命中（连聚合 finding 都不产生）。"""
+        rows = [self._row("s1", 5643, 600, stop_reason="repetition_brake"),
+                self._row("s4", 2055, 600, stop_reason="repetition_brake")]
+        self.assertEqual(W.evaluate_coverage_shortfall(rows, self.SOURCES), [])
 
 
 class DeadSourceRuleTest(unittest.TestCase):

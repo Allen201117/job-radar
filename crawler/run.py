@@ -502,11 +502,14 @@ def _process_one_source(source, supabase) -> dict:
         # 有 total 才判 complete；无 total（纯 HTML/接口无此字段）→ complete=None 不可判定（诚实盲区）。
         _cov_total = getattr(adapter, "reported_total", None)
         _cov_complete = getattr(adapter, "fetch_complete", False) if _cov_total is not None else None
+        # 任务B：RepetitionBrake 按设计刹停 ≠ 真漏抓，供 ops_watchdog 规则 G 把两者分开算（见 migration 284）。
+        _cov_stop_reason = getattr(adapter, "coverage_stop_reason", None)
 
         if not raw_jobs:
             db.update_crawl_run(supabase, run_id, "success",
                                 jobs_found=0,
-                                reported_total=_cov_total, coverage_complete=_cov_complete)
+                                reported_total=_cov_total, coverage_complete=_cov_complete,
+                                coverage_stop_reason=_cov_stop_reason)
             return {"status": "empty", "created": 0, "updated": 0}
 
         valid_jobs = []
@@ -534,6 +537,7 @@ def _process_one_source(source, supabase) -> dict:
                     f"{reason_text}"
                 ),
                 reported_total=_cov_total, coverage_complete=_cov_complete,
+                coverage_stop_reason=_cov_stop_reason,
             )
             return {"status": "no_valid", "created": 0, "updated": 0}
 
@@ -592,6 +596,7 @@ def _process_one_source(source, supabase) -> dict:
                 else None
             ),
             reported_total=_cov_total, coverage_complete=_cov_complete,
+            coverage_stop_reason=_cov_stop_reason,
         )
 
         if invalid_reasons:

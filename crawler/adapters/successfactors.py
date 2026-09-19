@@ -40,7 +40,13 @@ def _strip_tags(fragment: str) -> str:
 
 class SuccessFactorsAdapter(BaseAdapter):
     name = "successfactors"
-    max_pages = 200  # 25/页 → 5000 岗安全上限
+    # 5000 岗安全上限。⚠️ 不能按 `_PAGE_SIZE(=25)` 反推页数：多个租户（如 DSV）SSR 表格
+    # 实测**每次响应只回 10 行**，与文档声称/常见的 25/页不符（live 2026-09-19 逐页验证，
+    # startrow=0/10/20…每步 10 行、行行不重复；旧代码按 startrow=page*25 请求，等于每次
+    # 只吃到自己请求窗口的前 10 行、白白跳过后 15 行，DSV 2063 岗常年只收 600 左右）。
+    # 故改为按**实际收到的行数**累进 startrow（见 fetch 内的 offset 状态），
+    # 这个安全上限按「真实最小页大小 10」换算：500 次请求覆盖 5000 岗。
+    max_pages = 500
 
     def should_skip(self, source_url: str):
         return None  # SSR 公开页，GET 暴露真实错误即可
@@ -51,18 +57,24 @@ class SuccessFactorsAdapter(BaseAdapter):
         parsed = urlparse(source_url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
         headers = {"User-Agent": self.user_agent, "Accept": "text/html"}
+        # ⚠️ 不能用 `page * _PAGE_SIZE` 算 startrow：不同租户实际每页行数不一致（DSV 实测 10，
+        # 不是请求参数暗示的 25），startrow 必须紧跟着「上一页真实收到几行」累进，否则会像
+        # 固定步长 25 那样把每页多出的行悄悄跳过。用可变闭包状态代替 paginate_all 的 page 序号。
+        offset_state = {"next": 0}
 
-        def fetch_page(page: int) -> PageResult:
+        def fetch_page(_page: int) -> PageResult:
+            startrow = offset_state["next"]
             r = httpx.get(f"{origin}/search/",
                           params={"q": "", "sortColumn": "referencedate", "sortDirection": "desc",
-                                  "startrow": page * _PAGE_SIZE},
+                                  "startrow": startrow},
                           headers=headers, timeout=self.timeout, follow_redirects=True)
             r.raise_for_status()
             m = _TOTAL_RE.search(r.text)
             total = int(m.group(1)) if m else None
             items = []
             tree = HTMLParser(r.text)
-            for row in tree.css("tr.data-row"):
+            raw_rows = tree.css("tr.data-row")
+            for row in raw_rows:
                 a = row.css_first("a.jobTitle-link") or row.css_first("a[href*='/job/']")
                 if not a:
                     continue
@@ -72,6 +84,10 @@ class SuccessFactorsAdapter(BaseAdapter):
                 location = loc.text(strip=True) if loc else None
                 if title and href:
                     items.append({"title": title, "href": href, "location": location})
+            # 下一次请求的 startrow = 这次**原始行数**（不是过滤后的 items 数——个别装饰行没有
+            # a 标签会被 items 滤掉，但它们仍占了服务端的一个 startrow 位置，用 items 数累进
+            # 会导致下次请求起点往回缩、重复抓到同一批行）。一行都没收到时退回 _PAGE_SIZE 兜底防死循环。
+            offset_state["next"] = startrow + (len(raw_rows) or _PAGE_SIZE)
             return PageResult(items=items, total=total)
 
         rows, total, complete = paginate_all(
