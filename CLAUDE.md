@@ -19,7 +19,9 @@
 
 ## 项目概览
 
-3–5 人内测版「公开企业官网岗位雷达看板」。Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgres / RLS）；Python crawler（httpx + selectolax）；GitHub Actions 定时抓取。npm（前端）/ pip（`crawler/requirements.txt`）。Node ≥18.18，Python 3.11+。前端部署 Vercel，crawler 跑 GitHub Actions。
+已正式上线的「公开企业官网岗位雷达看板」（**2026-09-19 实测 116 个注册用户、近 30 天新增 57、近 7 天活跃 14**；最新数字看每日晨报①段，别引这里）。
+📌 纠错（2026-09-19 创始人授权）：此处原写「3–5 人内测版」，是立项初期的事实，产品 2026-07-02 正式上线后一直没人改；它会让后来人按「几个人在用」去判断邮件额度、要不要做用户侧监控、值不值得工程化，全部判偏。
+Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgres / RLS）；Python crawler（httpx + selectolax）；GitHub Actions 定时抓取。npm（前端）/ pip（`crawler/requirements.txt`）。Node ≥18.18，Python 3.11+。前端部署 Vercel，crawler 跑 GitHub Actions。
 
 **线上地址 = https://www.myjobradar.top**（创始人 2026-09-08 授权写入，别再问）。实测要点：
 ① 页面（/today /jobs /campus…）**要登录**，匿名一律 307 跳 /login —— 只能用创始人已登录的 Chrome 看，
