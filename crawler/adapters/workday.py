@@ -33,6 +33,10 @@ _REGION_FACET_KEYWORDS = {
     "SG": ("singapore", "新加坡"),
     "Remote": ("remote", "anywhere", "distributed"),
 }
+# appliedFacets[param] 单次提交的 id 数上限：实测 ThermoFisher 250 个 OK、300 个 400；
+# Mondelez 300 个 OK、904 个（未分块）500——阈值随租户浮动，150 留足安全边界（<250 的已知下限的 60%）。
+_FACET_ID_CHUNK = 150
+
 _SEARCH_TEXT_BY_REGION = {
     "CN": ("China", "Hong Kong", "Macau"),
     "US": ("United States", "USA"),
@@ -141,27 +145,34 @@ class WorkdayAdapter(BaseAdapter):
         for param, ids in candidates.items():
             if not ids:
                 continue
-            def fetch_page(page: int) -> PageResult:
-                body = {"appliedFacets": {param: ids}, "limit": 20, "offset": page * 20, "searchText": ""}
-                rr = _post_list(source_url, body, headers, self.timeout)
-                posts = rr.json().get("jobPostings", []) or []
-                return PageResult(items=posts, total=None)
+            # ⚠️ appliedFacets[param] 里塞太多 id 会撞租户后端上限——实测 ThermoFisher 250 个 id 还
+            # 200，300 个就 400；Mondelez 300 个还 200，904 个（不分块）500。阈值随租户/id 长度浮动，
+            # 不是我们猜错了字面量（单 id 请求恒 200），是请求本身太大。分块提交、按块翻页并集去重，
+            # 留足安全边界（2026-09-14~18 ThermoFisher/Mondelez 连续 failed 即此）。
+            for chunk_start in range(0, len(ids), _FACET_ID_CHUNK):
+                chunk = ids[chunk_start:chunk_start + _FACET_ID_CHUNK]
 
-            posts, _total, complete = paginate_all(
-                fetch_page,
-                page_size=20,
-                first_page=0,
-                max_pages=self.max_pages,
-                logger=None,
-                label=f"workday:{self._host}:{param}",
-            )
-            if not complete:
-                any_capped = True
-            for p in posts:
-                key = p.get("externalPath") or p.get("title")
-                if key and key not in seen:
-                    seen.add(key)
-                    trusted.append(p)
+                def fetch_page(page: int, _chunk=chunk) -> PageResult:
+                    body = {"appliedFacets": {param: _chunk}, "limit": 20, "offset": page * 20, "searchText": ""}
+                    rr = _post_list(source_url, body, headers, self.timeout)
+                    posts = rr.json().get("jobPostings", []) or []
+                    return PageResult(items=posts, total=None)
+
+                posts, _total, complete = paginate_all(
+                    fetch_page,
+                    page_size=20,
+                    first_page=0,
+                    max_pages=self.max_pages,
+                    logger=None,
+                    label=f"workday:{self._host}:{param}:{chunk_start}",
+                )
+                if not complete:
+                    any_capped = True
+                for p in posts:
+                    key = p.get("externalPath") or p.get("title")
+                    if key and key not in seen:
+                        seen.add(key)
+                        trusted.append(p)
 
         # 3) searchText 文本补充：部分租户的在华地点埋在**嵌套/截断**的 location facet 里，facet 只露出
         # 部分叶子（如 GE HealthCare 的 locationMainGroup 只有 Hong Kong、漏掉上海 22 岗）。facet 取到的太少

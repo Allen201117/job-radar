@@ -156,6 +156,7 @@ class PhenomAdapter(BaseAdapter):
         seen = set()
         locations = self._locations_for_regions()
         location_totals: List[int] = []
+        skipped_locations = 0
         for loc in locations:
             loc_total: Optional[int] = None
             for page in range(self.max_pages):
@@ -165,6 +166,20 @@ class PhenomAdapter(BaseAdapter):
                     r.raise_for_status()
                     body = r.json()
                     jobs = body.get("jobs", []) or []
+                except httpx.HTTPStatusError as exc:
+                    # 首个请求就失败（还一条没抓到）→ 判定该租户没开这条 API，交给 fetch() 回退 widgets。
+                    if not collected and not location_totals and page == 0 and loc == locations[0]:
+                        raise _ApiJobsUnavailable(exc) from exc
+                    # 422 = 该地点字面量这个租户不接受（实测 AMD/PepsiCo 的 "Remote" 恒 422，
+                    # 而 China/United States/Singapore 都 200；地点值是我们从 regions 派生的猜测,
+                    # 不是租户真开放的 facet 全集）。只跳过这一个地点，其余地点照常抓，
+                    # 不让一个不支持的地点拖垮整源（2026-09-14~18 AMD/PepsiCo 连续 25 次 failed 即此）。
+                    # 5xx / 网络错误等其它状态码仍按旧逻辑上抛，交 run.py 记 failed。
+                    if exc.response is not None and exc.response.status_code == 422:
+                        logger.info("phenom: %s location=%r 返回 422，跳过该地点（其余地点继续）", host, loc)
+                        skipped_locations += 1
+                        break
+                    raise
                 except Exception as exc:
                     # 首个请求就失败（还一条没抓到）→ 判定该租户没开这条 API，交给 fetch() 回退 widgets。
                     # 抓到过数据之后的失败沿用旧行为：原样上抛，由 run.py 记 failed（别把半截结果当成功）。
