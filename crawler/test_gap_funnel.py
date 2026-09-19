@@ -524,6 +524,41 @@ class RoundCapTest(unittest.TestCase):
         self.assertEqual(process.call_args.kwargs["search_remaining"], 0)
         self.assertEqual(result["metrics"]["search_used"], 0)
 
+    def test_metrics_break_down_wrong_platform_by_detected_platform(self):
+        # gap_funnel 每天几乎必然是 failed（healthy/thin_only 之外都算失败），而失败态里
+        # wrong_platform（P1 无 adapter）常年占大多数。只报 states.wrong_platform 的总数，
+        # 人工没法一眼看出该优先给哪个平台建 adapter——必须按 detected_platform 拆开。
+        queue = [
+            {"company": "甲公司", "pattern": "%甲公司%", "industries": [], "state": "unknown"},
+            {"company": "乙公司", "pattern": "%乙公司%", "industries": [], "state": "unknown"},
+            {"company": "丙公司", "pattern": "%丙公司%", "industries": [], "state": "unknown"},
+        ]
+        outcomes_by_company = {
+            "甲公司": {"state": "wrong_platform", "detected_platform": "workday",
+                       "next_retry_at": None, "evidence": {}},
+            "乙公司": {"state": "wrong_platform", "detected_platform": "workday",
+                       "next_retry_at": None, "evidence": {}},
+            "丙公司": {"state": "wrong_platform", "detected_platform": "icims",
+                       "next_retry_at": None, "evidence": {}},
+        }
+
+        def fake_process_company(row, **_kwargs):
+            return outcomes_by_company[row["company"]], 0, False
+
+        with mock.patch.object(
+                 gf.gap_census, "census",
+                 return_value={"queue": queue, "rows": queue, "industry_coverage": {}},
+             ), \
+             mock.patch.object(gf, "process_company", side_effect=fake_process_company):
+            result = gf.run_round(
+                scope="domestic", limit=3, apply=False,
+                supabase=_Sb(), jobs_conn=_Conn(), now=NOW,
+            )
+        self.assertEqual(
+            result["metrics"]["wrong_platform_breakdown"],
+            {"workday": 2, "icims": 1},
+        )
+
     def test_search_unavailable_unknown_gets_one_day_retry(self):
         result, used, inserted = gf.process_company(
             {**_entry(), "official_entry_url": None},
