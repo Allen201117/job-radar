@@ -23,7 +23,9 @@ jobs:
         with:
           # Node 22 而不是 20：@supabase/supabase-js 要原生 WebSocket，Node 20 默认不暴露全局
           # （2026-09-18 实测 `Error: Node.js 20 detected without native WebSocket support.` 直接退出 1）。
-          # 本仓库只有这条链在 CI 里用 supabase-js（其余 node 链只用 pg），所以只改这一处。
+          # ⚠️ 原注释写「本仓库只有这条链用 supabase-js，所以只改这一处」——bd34eb4d（09-18 23:43）
+          # 给两条 backfill 也加了台账写入，那句话当天就过期了，两条链在 Node 20 上静默丢台账到 09-19。
+          # 现在「装了 supabase-js 就必须 node>=22」由 tests/workflow-matrix.test.js 兜底。
           node-version: "22"
           cache: "npm"
       - name: Install psql client

@@ -92,3 +92,26 @@ test("dead-link-audit has lightweight must-apply-only schedule", () => {
   assert.match(text, /--must-apply-only/);
   assert.match(text, /max-parallel:\s*\d+/);
 });
+
+// 2026-09-19 自动修复：@supabase/supabase-js 在 Node 20 上启动即抛
+// `Node.js 20 detected without native WebSocket support.`。台账写入是 fail-open 的
+// （只打日志、不拖垮主任务），所以症状是「workflow 全绿 + 一行台账都没有」——
+// 体检据此报「这条链没在跑」，实际在跑，只是没留痕。ux-walkthrough 09-18 已按 Node 22 修过，
+// 同日 bd34eb4d 给两条 backfill 加台账时又落回 Node 20，无人察觉。
+test("装了 @supabase/supabase-js 的 workflow 必须跑 node>=22（否则台账静默丢失）", () => {
+  const dir = path.join(__dirname, "..", ".github", "workflows");
+  const offenders = [];
+  let checked = 0;
+
+  for (const name of fs.readdirSync(dir).filter((f) => f.endsWith(".yml") || f.endsWith(".yaml"))) {
+    const text = fs.readFileSync(path.join(dir, name), "utf8");
+    if (!text.includes("@supabase/supabase-js")) continue;
+    checked += 1;
+    const versions = [...text.matchAll(/node-version:\s*"?(\d+)/g)].map((m) => Number(m[1]));
+    assert.ok(versions.length > 0, `${name} 装了 supabase-js 却没有显式 node-version`);
+    if (versions.some((v) => v < 22)) offenders.push(`${name}(node ${versions.join("/")})`);
+  }
+
+  assert.ok(checked > 0, "没有扫到任何装 supabase-js 的 workflow，断言失效了");
+  assert.deepEqual(offenders, [], `这些 workflow 会静默丢台账：${offenders.join(", ")}`);
+});

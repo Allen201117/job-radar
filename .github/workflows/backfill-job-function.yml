@@ -40,7 +40,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Node 22 而不是 20：台账写入用的 @supabase/supabase-js 要原生 WebSocket，
+          # Node 20 默认不暴露全局（实测 `Node.js 20 detected without native WebSocket
+          # support.`，台账 fail-open 只打日志 → 任务全绿但一行台账都没有）。
+          # 契约钉在 tests/workflow-matrix.test.js。
+          node-version: "22"
           cache: "npm"
       # 只装脚本真正用到的包，不跑 npm ci（仓库 lock 与 package.json 暂不同步，见 recruitment 同款注释）。
       # @supabase/supabase-js 是台账写入（ops_runs）用的，跟 pg 一起手装。
