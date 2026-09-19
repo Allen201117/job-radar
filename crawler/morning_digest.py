@@ -369,6 +369,22 @@ _AUTO_REPAIR_ORDER = {
 _AUTO_REPAIR_ASK_OUTCOMES = ("waiting_founder", "needs_founder_action")
 
 
+def _is_deferred_like(item):
+    """『今天没排到 / 只诊断没动手』的条目——不逐条展开，折成⓪段末尾一行。
+
+    · outcome == 'deferred'：新写法，明确表达『没真动手』。
+    · outcome == 'still_breaching' 且没有 commit：**兼容 2026-09-19 首次运行落库的历史行**
+      ——那批把『今天没排到/只诊断』也记成了 still_breaching，此时没有 commit 佐证『真的动过手』，
+      渲染时按 deferred 同样折叠，避免旧数据在晨报里被念成一大段『今天没查』。
+    """
+    outcome = item.get("outcome")
+    if outcome == "deferred":
+        return True
+    if outcome == "still_breaching" and not item.get("commit"):
+        return True
+    return False
+
+
 def build_auto_repair_summary(auto_repair_run, fetch_failed=False):
     """把今天的 ops_runs(module='auto_repair') 记录翻成⓪段要展示的文本行 + ⑦段要置顶的 ask 列表。
 
@@ -376,6 +392,10 @@ def build_auto_repair_summary(auto_repair_run, fetch_failed=False):
       · fetch_failed=True            → 查询本身失败，不是『今天没跑』，文案必须说『没查到』。
       · auto_repair_run is None      → 真的没有这一行（电脑没开 App / 任务没跑起来）。
       · 有记录（items 可以是空数组）  → 按 outcome 分类叙述，空 items 是『今天没有要处理的』心跳。
+
+    『今天没排到/只诊断没动手』（`_is_deferred_like`）的条目不逐条展开——否则每天一大段
+    『今天没查』——而是折成一行放在最后；『没修好』只数真动手修过的（fix_failed / 带 commit
+    的 still_breaching），deferred 单独计数，两者不许混在一起报。
     """
     if fetch_failed:
         return {"lines": ["自动修复记录今天没查到。"], "top_asks": []}
@@ -383,7 +403,7 @@ def build_auto_repair_summary(auto_repair_run, fetch_failed=False):
         return {"lines": ["今早的自动修复没有运行记录（电脑可能没开着 App，或任务失败了）。"], "top_asks": []}
 
     metrics = auto_repair_run.get("metrics") or {}
-    items = metrics.get("items") or []
+    items = [it for it in (metrics.get("items") or []) if isinstance(it, dict)]
     counts = metrics.get("counts") or {}
 
     def n(outcome):
@@ -401,18 +421,23 @@ def build_auto_repair_summary(auto_repair_run, fetch_failed=False):
     if total == 0:
         return {"lines": ["今早的自动修复跑了，但今天没有需要处理的问题。"], "top_asks": []}
 
+    deferred_items = [it for it in items if _is_deferred_like(it)]
+    visible_items = [it for it in items if not _is_deferred_like(it)]
+    real_not_fixed = sum(1 for it in visible_items if it.get("outcome") in ("fix_failed", "still_breaching"))
+
     summary = (
         f"今早自动处理{total}项：修好{n('fixed')}、带证据关掉{n('closed_stale')}、"
         f"等你一句话{n('waiting_founder')}、需要你亲自操作{n('needs_founder_action')}、"
-        f"没修好{n('fix_failed') + n('still_breaching')}"
+        f"没修好{real_not_fixed}"
     )
     if n("skipped_gave_up"):
         summary += f"、连续两次没修好已停手{n('skipped_gave_up')}"
+    if deferred_items:
+        summary += f"、今天没排到或只查清原因{len(deferred_items)}"
     summary += "。"
 
     ordered_items = sorted(
-        [it for it in items if isinstance(it, dict)],
-        key=lambda it: _AUTO_REPAIR_ORDER.get(it.get("outcome"), 9),
+        visible_items, key=lambda it: _AUTO_REPAIR_ORDER.get(it.get("outcome"), 9),
     )
 
     lines = [summary]
@@ -429,6 +454,14 @@ def build_auto_repair_summary(auto_repair_run, fetch_failed=False):
         if ask and outcome in _AUTO_REPAIR_ASK_OUTCOMES:
             lines.append(f"　👉 需要你：{ask}")
             top_asks.append(f"{title}：{ask}")
+
+    if deferred_items:
+        titles = [
+            it.get("title") or it.get("check_id") or it.get("issue") or "（未命名项）"
+            for it in deferred_items
+        ]
+        preview = "、".join(titles[:3])
+        lines.append(f"还有{len(deferred_items)}项今天没排到或只查清了原因，明天继续：{preview}…")
 
     return {"lines": lines, "top_asks": top_asks}
 

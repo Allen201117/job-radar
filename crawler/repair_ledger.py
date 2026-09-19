@@ -10,7 +10,7 @@
     {
       "check_id": "jobs.active_total",   // 或 "issue"：contract 里没有对应 check_id 的老 issue
       "title": "一句人话标题",
-      "outcome": "fixed",                // fixed|closed_stale|waiting_founder|needs_founder_action|fix_failed|still_breaching|skipped_gave_up
+      "outcome": "fixed",                // fixed|closed_stale|waiting_founder|needs_founder_action|fix_failed|still_breaching|skipped_gave_up|deferred
       "evidence": "一句话证据",
       "commit": "abc1234",               // 可选
       "ask": "需要创始人做什么"           // waiting_founder / needs_founder_action 必填
@@ -40,8 +40,11 @@ except ImportError:  # pragma: no cover - db 依赖 supabase SDK，理论上仓�
 
 OUTCOMES = (
     "fixed", "closed_stale", "waiting_founder", "needs_founder_action",
-    "fix_failed", "still_breaching", "skipped_gave_up",
+    "fix_failed", "still_breaching", "skipped_gave_up", "deferred",
 )
+# deferred = 今天没排到这一项，或者只查清了根因、还没真动手修。它不算「修过一次还没修好」，
+# 所以 repair_queue.count_prior_attempts 不会把它算进 give_up 的计数（见该文件 _counts_as_prior_attempt）。
+# evidence 仍必填——要写清「今天查到了什么」或「为什么没排到」，不许留空敷衍。
 ASK_REQUIRED_OUTCOMES = ("waiting_founder", "needs_founder_action")
 FIX_FAILED_OUTCOMES = ("fix_failed", "still_breaching")
 MAX_FIELD_CHARS = 200

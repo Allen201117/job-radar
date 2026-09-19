@@ -50,6 +50,15 @@ class ValidateItemsTests(unittest.TestCase):
         cleaned = rl.validate_items([item(outcome="fixed")])
         self.assertIsNone(cleaned[0]["ask"])
 
+    def test_deferred_outcome_accepted_without_ask(self):
+        cleaned = rl.validate_items([item(outcome="deferred", evidence="今天没排到，队列里排在后面")])
+        self.assertEqual(cleaned[0]["outcome"], "deferred")
+        self.assertIsNone(cleaned[0]["ask"])
+
+    def test_deferred_outcome_still_requires_evidence(self):
+        with self.assertRaises(ValueError):
+            rl.validate_items([item(outcome="deferred", evidence="")])
+
     def test_missing_check_id_and_issue_rejected(self):
         bad = {"title": "t", "outcome": "fixed", "evidence": "e"}
         with self.assertRaises(ValueError):
