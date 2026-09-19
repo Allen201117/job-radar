@@ -34,12 +34,8 @@ jobs:
       AUTO_DISCOVER_TARGET_CAP: ${{ github.event.inputs.target_cap || '80' }}
       AUTO_DISCOVER_INSERT_CAP: ${{ github.event.inputs.insert_cap || '40' }}
       # 持续喂清单：每日 LLM 生成一批「库里没有的」新目标公司（走同一探活验证门，编造/猜错自动丢）。
-      # ✅ 2026-09-19 恢复为 "true"：2026-08-27 因 SiliconFlow 欠费(402) 关闭；
-      # 近 14 天 ops_runs 无 llm_insufficient_balance 事件（已核实已充值），且静态清单
-      # （targets_*.json，1332 家）连续 7+ 天在 feishu/hotjob 上真实命中率仅 ~5%（见
-      # docs/module-deep-notes.md 或 auto_discover 相关 commit 说明），LLM 喂料是恢复
-      # 扩源产出的主要杠杆，没理由继续按住。关掉的开关是 auto_discover.py 里的安全闸
-      # （探活/标题核验），与本开关无关——LLM 失败或编造一律在下游被丢弃，不会污染库。
+      # ⏸️ 2026-08-27 关闭 LLM 喂料：余额耗尽返回 402，喂料必失败。
+      # ✅ 2026-09-19 创始人批准恢复（余额已确认）。
       AUTO_DISCOVER_LLM: "true"
       SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
     steps:

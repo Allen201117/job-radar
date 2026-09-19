@@ -134,8 +134,11 @@ def company_covered(name, existing, existing_norm=None):
     # existing，会把「网易」误判成覆盖「网易有道」（地名前缀这条根本用不上，但同类无条件
     # idx==0 放行的逻辑一旦被复用到这里就会出现，CLAUDE.md 明确禁止这种子公司误判）。
     # 所以这里只做「剥地名前缀 + 归一后精确相等」，不做子串/前缀匹配，避免子公司被错并。
+    # ⚠️ 剥完地名前缀的剩余部分必须 >=3 字才进这一层：「北京银行」剥掉「北京」剩「银行」、
+    # 「上海电气」剥掉「上海」剩「电气」——这类行业通用短词一旦被当成公司标识精确匹配，
+    # 会把「库里随便有一家叫『银行』/『电气』的」误判成覆盖所有同类公司（2026-09-19 复核加）。
     stripped = strip_leading_place(name)
-    if stripped != name:
+    if stripped != name and len(stripped) >= 3:
         nstripped = norm_company(stripped)
         if nstripped and nstripped in existing_norm:
             return True
