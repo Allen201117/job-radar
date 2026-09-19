@@ -155,7 +155,11 @@ NO_OUTPUT_MODULES = ("insight_staleness", "purge_expired", "ops_watchdog",
                      "audit_hotjob_attribution", "ats_tenant_sync", "announcement_verify",
                      # morning_digest：一天固定发一封（或 dry-run 一次），不是「处理量越大产出越大」
                      # 的批处理任务，硬塞进规则 A 的 produced/work 口径没有意义。
-                     "morning_digest")
+                     "morning_digest",
+                     # auto_repair（2026-09-19 新增，跑在创始人电脑上的 Claude 桌面 App 定时任务，
+                     # 不是本仓库的 GitHub workflow）：items 为空是正常的「今天没有要处理的问题」，
+                     # 不是零产出；它「今天有没有跑过」由 pipeline.auto_repair_ran 单独覆盖。
+                     "auto_repair")
 
 # 规则 D：已落库的账户级错误信号。lib/track.ts 把 402/余额不足归一成 llm_insufficient_balance、
 # 把 401/403 归一成 llm_auth_error，写进 events.payload.diagnostics.error_code——用户侧真实踩到的欠费。

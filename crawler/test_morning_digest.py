@@ -658,6 +658,105 @@ class BuildDigestTests(unittest.TestCase):
             self.assertIn(f"#{i} ", digest["text"])
 
 
+class BuildAutoRepairSummaryTests(unittest.TestCase):
+    def test_fetch_failed_says_not_found_not_no_run(self):
+        out = md.build_auto_repair_summary(None, fetch_failed=True)
+        self.assertEqual(out["lines"], ["自动修复记录今天没查到。"])
+        self.assertEqual(out["top_asks"], [])
+
+    def test_no_record_says_no_run(self):
+        out = md.build_auto_repair_summary(None, fetch_failed=False)
+        self.assertIn("没有运行记录", out["lines"][0])
+
+    def test_empty_items_is_heartbeat_not_confused_with_no_run(self):
+        out = md.build_auto_repair_summary({"metrics": {"items": [], "counts": {}, "total": 0}})
+        self.assertIn("今天没有需要处理的问题", out["lines"][0])
+        self.assertNotIn("没有运行记录", out["lines"][0])
+
+    def test_ordering_waiting_needs_failed_fixed_closed(self):
+        run = {"metrics": {"total": 5, "counts": {}, "items": [
+            {"check_id": "a", "title": "修好项", "outcome": "fixed", "evidence": "e1"},
+            {"check_id": "b", "title": "关闭项", "outcome": "closed_stale", "evidence": "e2"},
+            {"check_id": "c", "title": "等你项", "outcome": "waiting_founder", "evidence": "e3", "ask": "问一句"},
+            {"check_id": "d", "title": "需要你项", "outcome": "needs_founder_action", "evidence": "e4", "ask": "去做"},
+            {"check_id": "e", "title": "没修好项", "outcome": "fix_failed", "evidence": "e5"},
+        ]}}
+        out = md.build_auto_repair_summary(run)
+        order = [line for line in out["lines"] if "项" in line and "👉" not in line]
+        idx = {name.split(" ")[0]: i for i, name in enumerate(order)}
+        self.assertLess(idx["等你项"], idx["需要你项"])
+        self.assertLess(idx["需要你项"], idx["没修好项"])
+        self.assertLess(idx["没修好项"], idx["修好项"])
+        self.assertLess(idx["修好项"], idx["关闭项"])
+
+    def test_ask_goes_to_top_asks_only_for_waiting_and_needs(self):
+        run = {"metrics": {"total": 2, "counts": {}, "items": [
+            {"check_id": "a", "title": "等你项", "outcome": "waiting_founder", "evidence": "e", "ask": "回一句话"},
+            {"check_id": "b", "title": "修好项", "outcome": "fixed", "evidence": "e"},
+        ]}}
+        out = md.build_auto_repair_summary(run)
+        self.assertEqual(out["top_asks"], ["等你项：回一句话"])
+        self.assertTrue(any("👉 需要你：回一句话" in line for line in out["lines"]))
+
+    def test_skipped_gave_up_wording(self):
+        run = {"metrics": {"total": 1, "counts": {}, "items": [
+            {"check_id": "a", "title": "老大难", "outcome": "skipped_gave_up", "evidence": "e"},
+        ]}}
+        out = md.build_auto_repair_summary(run)
+        self.assertTrue(any("已连续两次没修好，停止自动重试" in line for line in out["lines"]))
+
+
+class BuildDigestAutoRepairSectionTests(unittest.TestCase):
+    def _checks(self):
+        ids = md.SECTION_USERS + md.SECTION_EXPERIENCE + md.SECTION_SUPPLY + md.SECTION_FAKE_GREEN
+        return [check(cid, name=f"人话名字-{i}") for i, cid in enumerate(ids)]
+
+    def _results(self, checks):
+        return [result(cid, 1, "ok") for cid in [c["id"] for c in checks]]
+
+    def test_section_zero_present_and_before_users(self):
+        checks = self._checks()
+        digest = md.build_digest(checks, self._results(checks), [], None, [], None)
+        self.assertIn("⓪ 今早自动处理了什么", digest["text"])
+        self.assertLess(digest["text"].index("⓪"), digest["text"].index("① 用户"))
+        self.assertIn("⓪", digest["html"])
+
+    def test_no_record_text_present(self):
+        checks = self._checks()
+        digest = md.build_digest(checks, self._results(checks), [], None, [], None)
+        self.assertIn("今早的自动修复没有运行记录", digest["text"])
+
+    def test_fetch_failed_text_present(self):
+        checks = self._checks()
+        digest = md.build_digest(checks, self._results(checks), [], None, [], None,
+                                  auto_repair_fetch_failed=True)
+        self.assertIn("自动修复记录今天没查到", digest["text"])
+        self.assertNotIn("今早的自动修复没有运行记录", digest["text"])
+
+    def test_asks_prepended_to_section_seven_and_capped_at_five(self):
+        checks = self._checks()
+        run = {"metrics": {"total": 1, "counts": {}, "items": [
+            {"check_id": "a", "title": "紧急事项", "outcome": "waiting_founder", "evidence": "e", "ask": "请拍个板"},
+        ]}}
+        digest = md.build_digest(checks, self._results(checks), [], None, [], None, auto_repair_run=run)
+        section7 = digest["text"].split("⑦【今天建议你做的事】")[1].split("⑧")[0]
+        self.assertIn("紧急事项：请拍个板", section7)
+        lines = [l for l in section7.splitlines() if l.strip().startswith(tuple("12345"))]
+        self.assertLessEqual(len(lines), 5)
+        self.assertTrue(section7.strip().split("\n")[0].strip().startswith("1."))
+
+    def test_full_digest_still_under_size_and_line_caps(self):
+        checks = self._checks()
+        run = {"metrics": {"total": 1, "counts": {}, "items": [
+            {"check_id": "a", "title": "x" * 500, "outcome": "waiting_founder",
+             "evidence": "y" * 500, "ask": "z" * 500},
+        ]}}
+        digest = md.build_digest(checks, self._results(checks), [], None, [], None, auto_repair_run=run)
+        self.assertLessEqual(len(digest["text"].encode("utf-8")), 30 * 1024)
+        for line in digest["text"].splitlines():
+            self.assertLessEqual(len(line), 300)
+
+
 def ops_row(mode, status="success", finished_at=None, error=None):
     metrics = {"mode": mode}
     if error:

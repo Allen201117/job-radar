@@ -337,6 +337,102 @@ def fetch_latest_ops_run(conn, module):
         cur.close()
 
 
+def fetch_auto_repair_run_today(conn, run_date_str):
+    """今天（Asia/Shanghai）的自动修复台账（module='auto_repair'），同一天多次写入取最后一条。
+    没有记录返回 None——调用方要把『没有记录』和『查询失败』分开处理，本函数只管前者，
+    后者由调用方 try/except 包住。
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            select metrics, status, finished_at from public.ops_runs
+            where module = 'auto_repair' and run_date = %s
+            order by finished_at desc limit 1
+            """,
+            (run_date_str,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        metrics, status, finished_at = row
+        return {"metrics": metrics or {}, "status": status, "finished_at": finished_at}
+    finally:
+        cur.close()
+
+
+_AUTO_REPAIR_ORDER = {
+    "waiting_founder": 0, "needs_founder_action": 1,
+    "fix_failed": 2, "still_breaching": 2, "skipped_gave_up": 2,
+    "fixed": 3, "closed_stale": 4,
+}
+_AUTO_REPAIR_ASK_OUTCOMES = ("waiting_founder", "needs_founder_action")
+
+
+def build_auto_repair_summary(auto_repair_run, fetch_failed=False):
+    """把今天的 ops_runs(module='auto_repair') 记录翻成⓪段要展示的文本行 + ⑦段要置顶的 ask 列表。
+
+    三种互斥的情形，绝不许混淆（这是本段存在的意义）：
+      · fetch_failed=True            → 查询本身失败，不是『今天没跑』，文案必须说『没查到』。
+      · auto_repair_run is None      → 真的没有这一行（电脑没开 App / 任务没跑起来）。
+      · 有记录（items 可以是空数组）  → 按 outcome 分类叙述，空 items 是『今天没有要处理的』心跳。
+    """
+    if fetch_failed:
+        return {"lines": ["自动修复记录今天没查到。"], "top_asks": []}
+    if auto_repair_run is None:
+        return {"lines": ["今早的自动修复没有运行记录（电脑可能没开着 App，或任务失败了）。"], "top_asks": []}
+
+    metrics = auto_repair_run.get("metrics") or {}
+    items = metrics.get("items") or []
+    counts = metrics.get("counts") or {}
+
+    def n(outcome):
+        try:
+            return int(counts.get(outcome, 0))
+        except (TypeError, ValueError):
+            return 0
+
+    total = metrics.get("total")
+    try:
+        total = int(total) if total is not None else len(items)
+    except (TypeError, ValueError):
+        total = len(items)
+
+    if total == 0:
+        return {"lines": ["今早的自动修复跑了，但今天没有需要处理的问题。"], "top_asks": []}
+
+    summary = (
+        f"今早自动处理{total}项：修好{n('fixed')}、带证据关掉{n('closed_stale')}、"
+        f"等你一句话{n('waiting_founder')}、需要你亲自操作{n('needs_founder_action')}、"
+        f"没修好{n('fix_failed') + n('still_breaching')}"
+    )
+    if n("skipped_gave_up"):
+        summary += f"、连续两次没修好已停手{n('skipped_gave_up')}"
+    summary += "。"
+
+    ordered_items = sorted(
+        [it for it in items if isinstance(it, dict)],
+        key=lambda it: _AUTO_REPAIR_ORDER.get(it.get("outcome"), 9),
+    )
+
+    lines = [summary]
+    top_asks = []
+    for item in ordered_items:
+        outcome = item.get("outcome")
+        title = item.get("title") or item.get("check_id") or item.get("issue") or "（未命名项）"
+        evidence = item.get("evidence") or ""
+        ask = item.get("ask")
+        if outcome == "skipped_gave_up":
+            lines.append(f"{title}：已连续两次没修好，停止自动重试，需要你看一眼。")
+        else:
+            lines.append(f"{title} — {evidence}" if evidence else str(title))
+        if ask and outcome in _AUTO_REPAIR_ASK_OUTCOMES:
+            lines.append(f"　👉 需要你：{ask}")
+            top_asks.append(f"{title}：{ask}")
+
+    return {"lines": lines, "top_asks": top_asks}
+
+
 def pick_latest_sent(rows):
     """rows 是按 finished_at 降序排好的 ops_runs(module='morning_digest') 行（dict，
     含 metrics/status/finished_at），从中挑出**最近一条真正发出去的**（metrics.mode == "sent"）。
@@ -665,7 +761,8 @@ def summarize_watchdog_rules(checks, results_today_by_id, checks_by_id):
     return line + "。"
 
 
-def build_digest(checks, results_today, results_yesterday, walkthrough_run, open_issues, last_sent_digest):
+def build_digest(checks, results_today, results_yesterday, walkthrough_run, open_issues, last_sent_digest,
+                  auto_repair_run=None, auto_repair_fetch_failed=False):
     checks_by_id = {c["id"]: c for c in checks}
     names = {c["id"]: c["name"] for c in checks}
     issue_title_names = build_issue_title_names(checks)
@@ -698,7 +795,14 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
 
     old_issues_sorted = order_old_issues(open_issues)
 
-    action_items = build_action_items(results_today_by_id, checks_by_id)
+    auto_repair_summary = build_auto_repair_summary(auto_repair_run, fetch_failed=auto_repair_fetch_failed)
+    auto_repair_lines = [_cap_line_length(line) for line in auto_repair_summary["lines"]]
+    top_asks = auto_repair_summary["top_asks"]
+
+    action_items = list(top_asks[:5]) + build_action_items(
+        results_today_by_id, checks_by_id, limit=max(0, 5 - len(top_asks))
+    )
+    action_items = action_items[:5]
 
     open_issue_count = len(open_issues)
     subject = subject + f" · 待清账{open_issue_count}项"
@@ -709,6 +813,9 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
         watchdog_summary = _cap_line_length(watchdog_summary)
 
     text_lines = [subject, ""]
+    text_lines.append("⓪ 今早自动处理了什么")
+    text_lines.extend(f"  · {line}" for line in auto_repair_lines)
+    text_lines.append("")
     text_lines.append("① 用户")
     text_lines.extend(render_rows_text(users_rows))
     text_lines.append("")
@@ -760,7 +867,8 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
     text = "\n".join(_cap_line_length(line) for line in text_lines)
     html = _to_html(subject, users_rows, experience_rows, supply_rows, fake_green_rows,
                      walkthrough_issue_summary, newly_broken, recent_issues, old_issues_sorted,
-                     action_items, integrity_lines, watchdog_summary, issue_title_names)
+                     action_items, integrity_lines, watchdog_summary, issue_title_names,
+                     auto_repair_lines)
     return {"subject": subject, "text": text, "html": html, "light": light}
 
 
@@ -797,7 +905,15 @@ def _rows_html(rows):
 
 def _to_html(subject, users_rows, experience_rows, supply_rows, fake_green_rows,
              walkthrough_issue_summary, newly_broken, recent_issues, old_issues_sorted,
-             action_items, integrity_lines, watchdog_summary=None, issue_title_names=None):
+             action_items, integrity_lines, watchdog_summary=None, issue_title_names=None,
+             auto_repair_lines=None):
+    auto_repair_lines = auto_repair_lines or ["今早的自动修复没有运行记录（电脑可能没开着 App，或任务失败了）。"]
+    auto_repair_html = f"<p>{_esc(auto_repair_lines[0])}</p>"
+    if len(auto_repair_lines) > 1:
+        auto_repair_html += "<ul style='padding-left:18px;line-height:1.7'>" + "".join(
+            f"<li>{_esc(line)}</li>" for line in auto_repair_lines[1:]
+        ) + "</ul>"
+
     walkthrough_html = ""
     if walkthrough_issue_summary:
         walkthrough_html = "<p><b>走查发现的问题：</b></p><ul style='padding-left:18px'>" + "".join(
@@ -831,6 +947,7 @@ def _to_html(subject, users_rows, experience_rows, supply_rows, fake_green_rows,
     return f"""<!DOCTYPE html>
 <html><body style="font-family:-apple-system,PingFang SC,Microsoft YaHei,sans-serif;color:#222;max-width:640px;margin:0 auto;padding:16px">
 <h2 style="font-size:18px">{_esc(subject)}</h2>
+<h3>⓪ 今早自动处理了什么</h3>{auto_repair_html}
 <h3>① 用户</h3>{_rows_html(users_rows)}
 <h3>② 用户体验</h3>{_rows_html(experience_rows)}{walkthrough_html}
 <h3>③ 供给（在招岗位）</h3>{_rows_html(supply_rows)}
@@ -895,8 +1012,16 @@ def main(argv=None):
     walkthrough_run = fetch_latest_ops_run(conn, "ux_walkthrough")
     last_sent_digest = fetch_latest_sent_digest(conn)
     open_issues = fetch_open_issues()
+    try:
+        auto_repair_run = fetch_auto_repair_run_today(conn, today.isoformat())
+        auto_repair_fetch_failed = False
+    except Exception as exc:  # noqa: BLE001 - 这一项取数失败不该拖垮整封晨报，只降级成『没查到』
+        sys.stderr.write(f"[morning-digest] 自动修复记录取数失败: {type(exc).__name__}\n")
+        auto_repair_run = None
+        auto_repair_fetch_failed = True
 
-    digest = build_digest(checks, results_today, results_yesterday, walkthrough_run, open_issues, last_sent_digest)
+    digest = build_digest(checks, results_today, results_yesterday, walkthrough_run, open_issues, last_sent_digest,
+                           auto_repair_run=auto_repair_run, auto_repair_fetch_failed=auto_repair_fetch_failed)
 
     api_key = os.environ.get("RESEND_API_KEY")
     to_addr = os.environ.get("DIGEST_TO")
