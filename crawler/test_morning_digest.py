@@ -705,6 +705,40 @@ class BuildAutoRepairSummaryTests(unittest.TestCase):
         out = md.build_auto_repair_summary(run)
         self.assertTrue(any("已连续两次没修好，停止自动重试" in line for line in out["lines"]))
 
+    def test_deferred_items_folded_into_one_line_not_expanded(self):
+        run = {"metrics": {"total": 3, "counts": {}, "items": [
+            {"check_id": "a", "title": "没排到项一", "outcome": "deferred", "evidence": "今天没排到"},
+            {"check_id": "b", "title": "只查清原因项", "outcome": "deferred", "evidence": "查清根因但没动手"},
+            {"check_id": "c", "title": "修好项", "outcome": "fixed", "evidence": "e"},
+        ]}}
+        out = md.build_auto_repair_summary(run)
+        self.assertNotIn("没排到项一", "\n".join(out["lines"][:-1]))  # 不逐条展开
+        self.assertTrue(any(
+            line.startswith("还有2项今天没排到或只查清了原因，明天继续：")
+            and "没排到项一" in line and "只查清原因项" in line
+            for line in out["lines"]
+        ))
+        self.assertIn("今天没排到或只查清原因2", out["lines"][0])
+
+    def test_still_breaching_without_commit_folds_like_deferred(self):
+        """兼容 2026-09-19 首次运行落库的历史行：没 commit 的 still_breaching 按 deferred 折叠。"""
+        run = {"metrics": {"total": 1, "counts": {}, "items": [
+            {"check_id": "a", "title": "老问题", "outcome": "still_breaching", "evidence": "还没修"},
+        ]}}
+        out = md.build_auto_repair_summary(run)
+        self.assertTrue(any(line.startswith("还有1项今天没排到或只查清了原因") for line in out["lines"]))
+        self.assertIn("没修好0", out["lines"][0])
+
+    def test_still_breaching_with_commit_shown_individually_and_counted_as_not_fixed(self):
+        run = {"metrics": {"total": 1, "counts": {}, "items": [
+            {"check_id": "a", "title": "上线未解决", "outcome": "still_breaching", "evidence": "还没修",
+             "commit": "abc1234"},
+        ]}}
+        out = md.build_auto_repair_summary(run)
+        self.assertTrue(any("上线未解决" in line and "还没修" in line for line in out["lines"][1:]))
+        self.assertIn("没修好1", out["lines"][0])
+        self.assertFalse(any(line.startswith("还有") for line in out["lines"]))
+
 
 class BuildDigestAutoRepairSectionTests(unittest.TestCase):
     def _checks(self):

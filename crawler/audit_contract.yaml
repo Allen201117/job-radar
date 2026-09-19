@@ -1115,11 +1115,14 @@ checks:
     sql: >
       select count(*) from ops_runs where module = 'morning_digest'
         and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
-        and metrics->>'mode' = 'sent'
+        and metrics->>'mode' = 'sent' and status = 'success'
     normal: ">= 1"
     severity: warn
     calibrated: false
     why: 这条检查测的是晨报这条链路自己——如果它停了，创始人会以为「没消息就是没问题」，但其实是没人在发消息。
+      只看 mode='sent' 不够：morning_digest.py 里 mode='sent' 只表示"不是 dry-run、试过真发"，真调
+      Resend API 失败时 status 会写 'failed' 但 mode 仍是 'sent'（2026-09-19 实测 3 次失败尝试都是这种
+      形状）——所以必须再叠一个 status='success'，只数真正送达的那一行。
     action: 把这条转给 Claude，让它查晨报这条定时任务最近一次是不是运行失败了
 
   - id: pipeline.auto_repair_ran

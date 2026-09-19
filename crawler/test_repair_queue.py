@@ -115,12 +115,22 @@ class BuildRepairQueueTests(unittest.TestCase):
 
 
 class CountPriorAttemptsTests(unittest.TestCase):
-    def test_counts_fix_failed_and_still_breaching(self):
+    def test_counts_fix_failed_and_still_breaching_with_commit(self):
         rows = [
             {"metrics": {"items": [{"check_id": "a", "outcome": "fix_failed"}]}},
-            {"metrics": {"items": [{"check_id": "a", "outcome": "still_breaching"}]}},
+            {"metrics": {"items": [{"check_id": "a", "outcome": "still_breaching", "commit": "abc1234"}]}},
         ]
         self.assertEqual(rq.count_prior_attempts(rows), {"a": 2})
+
+    def test_still_breaching_without_commit_not_counted(self):
+        """兼容 2026-09-19 首次运行落库的历史行：那批 still_breaching 没有 commit，
+        代表『今天没排到/只诊断』而不是『真动手修过没修好』，不许计入 give_up。"""
+        rows = [{"metrics": {"items": [{"check_id": "a", "outcome": "still_breaching"}]}}]
+        self.assertEqual(rq.count_prior_attempts(rows), {})
+
+    def test_deferred_outcome_not_counted(self):
+        rows = [{"metrics": {"items": [{"check_id": "a", "outcome": "deferred"}]}}]
+        self.assertEqual(rq.count_prior_attempts(rows), {})
 
     def test_fixed_outcome_not_counted(self):
         rows = [{"metrics": {"items": [{"check_id": "a", "outcome": "fixed"}]}}]
@@ -137,6 +147,18 @@ class CountPriorAttemptsTests(unittest.TestCase):
     def test_non_dict_items_ignored(self):
         rows = [{"metrics": {"items": ["not-a-dict"]}}]
         self.assertEqual(rq.count_prior_attempts(rows), {})
+
+    def test_two_real_failures_trigger_give_up(self):
+        """两次『真动手修了但没修好』（fix_failed + 带 commit 的 still_breaching）才 give_up。"""
+        rows = [
+            {"metrics": {"items": [{"check_id": "a", "outcome": "fix_failed"}]}},
+            {"metrics": {"items": [{"check_id": "a", "outcome": "still_breaching", "commit": "def5678"}]}},
+        ]
+        prior = rq.count_prior_attempts(rows)
+        checks = [check("a", severity="warn")]
+        results = {"a": result_row("a", 1, "breach", severity="warn")}
+        items = rq.build_repair_queue(checks, results, prior)
+        self.assertTrue(items[0]["give_up"])
 
 
 class MainConnectFailureTests(unittest.TestCase):

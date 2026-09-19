@@ -7,7 +7,9 @@
 三条硬规矩（照抄 audit_runner.py 的规矩，别改回去）：
   1. 连不上库 / 查询失败 → 非零退出并打印脱敏错误，绝不输出空数组冒充「今天没问题」。
   2. severity=info 的检查项不进清单——那批是纯记录留痕，不需要人/自动化去修。
-  3. 同一个问题连续两次没修好（`give_up`）就不再往下派——避免每天重复修一个修不好的问题。
+  3. 同一个问题连续两次「真动手修过但没修好」（`give_up`）就不再往下派——避免每天重复修一个
+     修不好的问题。「今天没排到」「只诊断没动手」（outcome=deferred，或 still_breaching 但没
+     commit）不计入这个次数，判据见 `_counts_as_prior_attempt`。
 """
 import argparse
 import json
@@ -26,7 +28,6 @@ except ImportError:  # pragma: no cover
 
 SHANGHAI = _audit_runner.SHANGHAI if _audit_runner else None
 
-STILL_BAD_OUTCOMES = ("fix_failed", "still_breaching")
 GIVE_UP_THRESHOLD = 2
 LEDGER_LOOKBACK_DAYS = 14
 
@@ -39,21 +40,46 @@ LAYER_RANK = {"data": 0, "pipeline": 1, "experience": 2}
 # 纯函数：不连库，供单测直接调用
 # ---------------------------------------------------------------------------
 
+def _counts_as_prior_attempt(item):
+    """判「这一条台账记录算不算一次真实的、没修好的修复尝试」——give_up 只应该拦住
+    「连续两次真动手修了但没修好」，不应该拦住「今天没排到 / 只诊断没动手」。
+
+    计入条件（缺一不可）：
+      · outcome == 'fix_failed'：明确动手改了，改完还是不对，无歧义。
+      · outcome == 'still_breaching' 且带非空 commit：修复已经上线（有 commit 佐证）但
+        问题依然存在——这是「真动手修过、没修好」的另一种写法。
+
+    不计入：
+      · outcome == 'deferred'：今天没排到，或只查清了根因没动手，本来就不该占用 give_up 名额。
+      · outcome == 'still_breaching' 且没有 commit：**这是为了兼容 2026-09-19 首次运行已经
+        落库的历史行**——那一批把「今天没排到 / 只诊断」也记成了 still_breaching，此时没有
+        commit 作为「真的动过手」的佐证，宁可少计一次也不能把从未真正修过的问题两天内判死。
+        新写入的台账应该尽量用 deferred 表达这种情形，但旧数据不必回填，这条判据本身
+        就兼容了旧形状。
+    """
+    if not isinstance(item, dict):
+        return False
+    outcome = item.get("outcome")
+    if outcome == "fix_failed":
+        return True
+    if outcome == "still_breaching" and item.get("commit"):
+        return True
+    return False
+
+
 def count_prior_attempts(ledger_rows):
     """ledger_rows：ops_runs(module='auto_repair') 的行（每行至少含 metrics）。
 
-    返回 {check_id 或 issue: 命中 STILL_BAD_OUTCOMES 的次数}。一个条目既没有 check_id
-    也没有 issue 就没法归属，跳过（repair_ledger.py 已校验二者至少有一个非空，正常情况下
-    不会发生；这里再兜底一次是防御性的，不是假装它总是干净）。
+    返回 {check_id 或 issue: 计入 give_up 的失败尝试次数}（判据见 `_counts_as_prior_attempt`）。
+    一个条目既没有 check_id 也没有 issue 就没法归属，跳过（repair_ledger.py 已校验二者至少
+    有一个非空，正常情况下不会发生；这里再兜底一次是防御性的，不是假装它总是干净）。
     """
     counts = {}
     for row in ledger_rows or []:
         metrics = (row or {}).get("metrics") or {}
         items = metrics.get("items") or []
         for item in items:
-            if not isinstance(item, dict):
-                continue
-            if item.get("outcome") not in STILL_BAD_OUTCOMES:
+            if not _counts_as_prior_attempt(item):
                 continue
             key = item.get("check_id") or item.get("issue")
             if not key:
