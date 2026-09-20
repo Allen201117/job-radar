@@ -70,6 +70,18 @@ def fetch_first_with_signal(urls, timeout=12):
             html = resp.text or ""
         except Exception:
             continue
-        if has_date_signal(html):
-            return u, html_to_text(html)
+        if not has_date_signal(html):
+            continue
+        # ⚠️ 门必须判在「模型真正会看到的那份文本」上（2026-09-20 修）。
+        # 原来的写法：门跑在**原始 HTML**（含 <script>/<style>/内联 JSON、不截断），
+        # 而喂给 LLM 的是 html_to_text —— selectolax 的 .text() 会**丢掉 script/style**、
+        # 再截到前 6000 字。两份内容不是同一个东西，于是出现一整类必然空转：
+        # 页面的「日期信号」只存在于内联 JSON / 表单占位符（SPA 空壳的典型形态，如携程
+        # careers.ctrip.com/campus），门放行 → 正文里一个日期都没有 → LLM 每天被调用一次、
+        # 每天返回 0 条 claim、还占着 LLM 日配额；台账只看得到 claims_seen=0，看不出为什么。
+        # 更糟的是：一旦这种候选排在前面，函数当场 return，**后面真正有公告正文的候选再也轮不到**。
+        # 现在：正文里没有日期信号就换下一个候选，而不是拿着这份没法抽的正文收工。
+        text = html_to_text(html)
+        if _DATE_SIGNAL.search(text):
+            return u, text
     return None, ""
