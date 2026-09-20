@@ -124,15 +124,44 @@ test("buildUserIssues：role_input_format——同一用户填了多个混写岗
   assert.equal(roleFormatIssues[0].mixedRoles.length, 2);
 });
 
-test("buildUserIssues：role_mismatch 拦截占比过高才报，占比低不报", () => {
+test("buildUserIssues：方向拦截占比高但岗位照样够看 → 不报（这是设计，不是卡点）", () => {
+  // 本项目召回宽、精筛严：四层召回按城市/公司/职能捞进大量非目标方向的岗，再由方向门拒掉，
+  // 所以高占比是常态。2026-09-19 真库 44 人实测：ratio>0.5 的 31 人里 13 人照样看到 ≥60 个岗。
+  // 旧判据把这 21 人全报成卡点，每天 20+ 条噪音把真问题埋掉——这条断言就是钉死别改回去。
+  const base = { user: "u1", scopeMismatch: false, roles: ["产品经理"], directionOk: 0.9, insightCompanies: 0, insightCovered: 0, campus: null };
+  const plenty = buildUserIssues({ ...base, shown: 60, recalled: 1000, filtered: { role_mismatch: 940 } });
+  assert.deepEqual(plenty.map((i) => i.type), [], "看到 60 个岗的用户不该被报成卡点");
+});
+
+test("buildUserIssues：岗位少到不够看 + 方向是主因 → role_mismatch_high", () => {
+  const base = { user: "u1", scopeMismatch: false, roles: ["产品经理"], directionOk: 0.9, insightCompanies: 0, insightCovered: 0, campus: null };
+  const starved = buildUserIssues({ ...base, shown: 3, recalled: 10, filtered: { role_mismatch: 8 } });
+  const hit = starved.filter((i) => i.type === "role_mismatch_high");
+  assert.equal(hit.length, 1);
+  assert.equal(hit[0].shown, 3);
+  assert.equal(hit[0].ratio, 0.8);
+});
+
+test("buildUserIssues：岗位少但不是方向拦的 → thin_shown（两头都不报会让这类用户彻底隐身）", () => {
+  const base = { user: "u1", scopeMismatch: false, roles: ["新媒体运营"], directionOk: 0.9, insightCompanies: 0, insightCovered: 0, campus: null };
+  const thin = buildUserIssues({ ...base, shown: 1, recalled: 10, filtered: { role_mismatch: 0, stale: 9 } });
+  assert.deepEqual(thin.map((i) => i.type), ["thin_shown"]);
+  assert.equal(thin[0].shown, 1);
+});
+
+test("buildUserIssues：岗位少的两类互斥，且 recalled=0 不除零报错", () => {
   const base = { user: "u1", shown: 3, scopeMismatch: false, roles: ["产品经理"], directionOk: 0.9, insightCompanies: 0, insightCovered: 0, campus: null };
-  const high = buildUserIssues({ ...base, recalled: 10, filtered: { role_mismatch: 8 } });
-  assert.ok(high.some((i) => i.type === "role_mismatch_high"));
-  const low = buildUserIssues({ ...base, recalled: 10, filtered: { role_mismatch: 1 } });
-  assert.ok(!low.some((i) => i.type === "role_mismatch_high"));
-  // recalled=0 时不能除零报错
+  const both = buildUserIssues({ ...base, recalled: 10, filtered: { role_mismatch: 8 } })
+    .filter((i) => i.type === "role_mismatch_high" || i.type === "thin_shown");
+  assert.equal(both.length, 1, "同一个用户不能既报方向拦光又报岗位少");
   const zero = buildUserIssues({ ...base, recalled: 0, filtered: {} });
-  assert.ok(!zero.some((i) => i.type === "role_mismatch_high"));
+  assert.deepEqual(zero.map((i) => i.type), ["thin_shown"], "召回为 0 时归为岗位少，且不能除零崩溃");
+});
+
+test("buildUserIssues：推荐页 0 岗只算 zero_shown，不再叠加一条方向拦截", () => {
+  // shown=0 的 detail 里本来就带 filtered 分布，叠加一条等于同一个人同一根因计两次。
+  const r = { user: "u1", shown: 0, scopeMismatch: false, recalled: 1714, filtered: { role_mismatch: 1695 }, roles: ["仓库文员"], directionOk: null, insightCompanies: 0, insightCovered: 0, campus: null };
+  assert.deepEqual(buildUserIssues(r).map((i) => i.type), ["zero_shown"]);
 });
 
 test("buildUserIssues：洞察零覆盖——只在有公司候选时才报，避免 0/0 误判", () => {

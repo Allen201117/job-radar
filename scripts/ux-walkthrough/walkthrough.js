@@ -29,7 +29,8 @@ const SITE = process.env.UX_WALK_SITE || "https://www.myjobradar.top";
 const CAMPUS_STAGES = new Set(["校招", "实习", "campus", "intern", "internship", "应届"]);
 const TTFB_BAD_S = 8;      // 超过就算卡点
 const DIRECTION_BAD = 0.7; // 前 20 张里方向命中低于 70% 算卡点
-const ROLE_MISMATCH_RATIO_BAD = 0.5; // 候选里因方向不符被拦的占比超过它算卡点（待校准，2026-09-18 首次引入）
+const ROLE_MISMATCH_RATIO_BAD = 0.5; // 方向门拒掉的候选占比超过它，才算「方向是主因」（待校准，2026-09-18 引入）
+const THIN_SHOWN_BAD = 10; // 推荐页可展示岗少于它 = 打开基本是空的，首屏都填不满（待校准，2026-09-20 引入）
 
 // ⚠️ 有限枚举：每个 type 必须对应代码里真实存在的判定（不是发明的假设）。metrics.issues_by_type
 // 恒含全部键（含 0），"真的是 0" 与 "这轮没测到" 分得开——阈值/判定逻辑变了，先改这里的注释再改代码。
@@ -38,7 +39,8 @@ const ISSUE_TYPES = {
   scope_mismatch: { label: "求职范围错配：选了海外但城市全国内又没有英文简历" },
   direction_low: { label: "展示岗位方向命中率偏低" },
   role_input_format: { label: "用户填的岗位方向写法没被识别（一栏里塞了多个岗位名）" },
-  role_mismatch_high: { label: "候选里因方向不符被拦掉的占比偏高" },
+  role_mismatch_high: { label: "方向不符把候选拦光了，用户几乎看不到岗" },
+  thin_shown: { label: "推荐页岗位少得不够看（原因不是方向不符）" },
   insight_uncovered: { label: "他会看到的公司里，一家有职业洞察的都没有" },
   campus_channel_broken: { label: "校招/实习用户，所属行业必投公司的校招渠道全不通" },
   api_latency: { label: "接口响应慢或失败" },
@@ -98,12 +100,27 @@ function buildUserIssues(r) {
       `岗位方向填写里混了分隔符，未必被正确识别：${JSON.stringify(mixedRoles)}`,
       { mixedRoles }));
   }
+  // 2026-09-20 收窄：旧判据只看「方向拦截占比 > 0.5」就报，而**占比高本身不是卡点**——
+  // 召回宽、精筛严是 /today 的设计（四层召回按城市/公司/职能捞进大量非目标方向的岗，再由方向门拒掉），
+  // 占比高只说明召回层干了活。真库全量实测（2026-09-19，44 个真实画像）：ratio>0.5 的 31 人里
+  // **13 人照样看到 ≥60 个岗**、该组 shown 中位数 33 —— 旧判据报 31 条，真受伤的（shown<10）只有 10 人。
+  // 那 21 条噪音每天把真问题埋掉，还让晨报把「昨天新加了这个检测器」读成「产品昨天变坏了」。
+  // 现在的判据 = 「方向门真的把这个人的岗拦光了」：岗少到不够看 **且** 方向是主因。
+  // shown===0 已由上面的 zero_shown / scope_mismatch 认领（其 detail 里就带着 filtered 分布），这里不重复计。
   const roleMismatchCount = (r.filtered && r.filtered.role_mismatch) || 0;
   const denom = r.recalled || 0;
-  if (denom > 0 && roleMismatchCount / denom > ROLE_MISMATCH_RATIO_BAD) {
-    issues.push(mkIssue("role_mismatch_high", r.user,
-      `候选里 ${roleMismatchCount}/${denom}（${Math.round((roleMismatchCount / denom) * 100)}%）因方向不符被拦，占比偏高（roles=${JSON.stringify(r.roles)}）`,
-      { roleMismatchCount, recalled: denom, ratio: Number((roleMismatchCount / denom).toFixed(3)) }));
+  const roleMismatchRatio = denom > 0 ? roleMismatchCount / denom : 0;
+  if (typeof r.shown === "number" && r.shown > 0 && r.shown < THIN_SHOWN_BAD) {
+    if (roleMismatchRatio > ROLE_MISMATCH_RATIO_BAD) {
+      issues.push(mkIssue("role_mismatch_high", r.user,
+        `只看到 ${r.shown} 个岗：候选 ${denom} 个里 ${roleMismatchCount} 个（${Math.round(roleMismatchRatio * 100)}%）因方向不符被拦（roles=${JSON.stringify(r.roles)}）`,
+        { shown: r.shown, roleMismatchCount, recalled: denom, ratio: Number(roleMismatchRatio.toFixed(3)) }));
+    } else {
+      // 岗少但不是方向拦的——旧判据两头都不报，用户看到 1 个岗也没人知道（2026-09-19 真实存在 1 人）。
+      issues.push(mkIssue("thin_shown", r.user,
+        `只看到 ${r.shown} 个岗，且不是方向不符造成的（召回 ${denom}，被拦原因 ${JSON.stringify(r.filtered || {})}）roles=${JSON.stringify(r.roles)}`,
+        { shown: r.shown, recalled: denom, ratio: Number(roleMismatchRatio.toFixed(3)) }));
+    }
   }
   if (r.insightCompanies > 0 && r.insightCovered === 0) {
     issues.push(mkIssue("insight_uncovered", r.user,

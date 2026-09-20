@@ -427,7 +427,7 @@ checks:
     severity: warn
     covers: []
     calibrated: false
-    why: 汇总所有类型的问题（零结果/范围错配/方向命中低/校招渠道不通/洞察零覆盖/接口慢）。数字本身不告诉你哪一类，要看 issues_by_type。
+    why: 汇总所有类型的问题（零结果/范围错配/岗位少得不够看/方向命中低/岗位方向写法没识别/校招渠道不通/洞察零覆盖/接口慢）。数字本身不告诉你哪一类，要看 issues_by_type。
     action: 把这条转给 Claude，让它查最近一次体验走查里哪类问题命中人数最多，先处理那一类
 
   - id: exp.ux_walkthrough_direction_ok_avg

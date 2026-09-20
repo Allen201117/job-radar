@@ -1059,3 +1059,28 @@ class ResendRequestHeadersTests(unittest.TestCase):
         self.assertIn('"User-Agent": RESEND_USER_AGENT', src)
         self.assertNotIn("python-urllib", md.RESEND_USER_AGENT.lower())
         self.assertTrue(md.RESEND_USER_AGENT.strip())
+
+
+class WalkthroughLabelSyncTests(unittest.TestCase):
+    """走查的 issue 枚举与晨报的人话标签是两份手写表，漂了就会出现「晨报认不出的问题类型」。
+
+    2026-09-20 加：那天新增 thin_shown 时差点只改一边——只改 walkthrough.js 的话，晨报会把
+    这类问题显示成原始英文 key（或干脆漏掉一整类），而单测全绿。靠人记得同步是不够的。
+    """
+
+    @staticmethod
+    def _js_issue_labels():
+        import os
+        import re
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "scripts", "ux-walkthrough", "walkthrough.js")
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        block = re.search(r"const ISSUE_TYPES = \{(.*?)\n\};", src, re.S)
+        assert block, "walkthrough.js 里找不到 ISSUE_TYPES 定义（改了形状就要同步改这个测试）"
+        return dict(re.findall(r'(\w+):\s*\{\s*label:\s*"([^"]+)"\s*\}', block.group(1)))
+
+    def test_labels_match_word_for_word(self):
+        js = self._js_issue_labels()
+        self.assertTrue(js, "没从 walkthrough.js 解析出任何 issue type")
+        self.assertEqual(js, md.WALKTHROUGH_ISSUE_LABELS)
