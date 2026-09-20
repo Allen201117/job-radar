@@ -30,6 +30,7 @@ from adapters.avature import AvatureAdapter
 from adapters.tencent import TencentAdapter
 from adapters.alibaba_campus_portal import AlibabaCampusPortalAdapter
 from adapters.bilibili_campus import BilibiliCampusAdapter
+from adapters.crc import CrcAdapter
 from adapters.netease_campus import NeteaseCampusAdapter
 from adapters.huawei_campus import HuaweiCampusAdapter
 from adapters.lixiang_campus import LixiangCampusAdapter
@@ -136,6 +137,8 @@ ADAPTERS = {
     "huawei_campus": HuaweiCampusAdapter(),
     "lixiang_campus": LixiangCampusAdapter(),  # 理想汽车校招/实习：api-web.lixiang.com 公开接口,零浏览器
     "bilibili_campus": BilibiliCampusAdapter(),
+    # 华润集团自建招聘平台（runjob.crc.com.cn）：一行 source = 一个品牌招聘站
+    "crc": CrcAdapter(),
     "netease_campus": NeteaseCampusAdapter(),
     "alibaba_campus_portal": AlibabaCampusPortalAdapter(),
     "bytedance": BytedanceAdapter(),
@@ -228,6 +231,7 @@ DOMESTIC_ADAPTERS = {
     "tencent_music", "antgroup", "mihoyo", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree", "tonghuashun",  # 自建门户公开接口（零浏览器；cmb=招商银行，cmbc=中国民生银行）
     "spdb", "icbc", "ccb", "bankcomm", "cmcc",  # 国有大行 + 中国移动自建门户（2026-09-05 live 核实逐岗详情页，零浏览器）
     "chnenergy",  # 国家能源集团（2026-09-05 live 核实逐岗详情页；曾被误当公告制）
+    "crc",  # 华润集团自建平台（2026-09-20 live 核实逐岗详情页 + 列表即全文）
     "abchina",  # 农业银行（浏览器档：响应体加密，读 React state）
     "lixiang_campus",  # 理想汽车校招/实习（2026-09-09 live 核实逐岗详情页，零浏览器）
     "sf_express_campus", "midea_campus",  # 顺丰 / 美的 校招门户（2026-09-18 live，零浏览器）
@@ -252,6 +256,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "duoyi", "duoyi_campus",  # 多益网络：/v40/api 公开 JSON，列表即全文，纯 httpx、无共享状态（2026-09-18 live）
     "spdb", "icbc", "ccb", "bankcomm", "cmcc",  # 国有大行 + 中国移动自建门户，纯 httpx（无浏览器、无共享状态）
     "chnenergy",  # 国家能源集团自建门户，纯 httpx（POST 列表 + GET 详情）
+    "crc",  # 华润集团自建平台：网关 POST 列表即全文，纯 httpx、无共享状态（2026-09-20 live）
     # 字节：jobs.bytedance.com posts API 已改为纯 httpx offset/limit 全量翻页；
     # sources.crawl_method 仍由运维侧改库，本白名单只控制代码侧并发档。
     "bytedance", "bytedance_campus",
