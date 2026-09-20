@@ -36,6 +36,25 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     gree 格力 64（GET api/apply/jobs，**property=1 校招/博士 + 2 社招两个板块都要抓**；
                          #       ⚠️ 返回带 HR 真人姓名 PubName，一律忽略不入库；错误入口：gie.gree.com 是子公司、
                          #       recruit.gree.com 是内部登录墙）
+                         #   crc.py = 华润集团自建招聘平台 runjob.crc.com.cn（2026-09-20 live，纯 httpx 零浏览器零签名）。
+                         #     一行 source = 一个品牌招聘站：source_url 写 `#/homepage?id=<品牌站 id>`，
+                         #     加别的华润品牌零代码（23 个品牌站 id 来自 searchEmployerBrandList）。
+                         #     网关 POST ssdp.crc.com.cn/ssdp/sys/rf/?ssdp=<base64 鉴权串>，body 也是 base64 包的 JSON，
+                         #     `Sign=NO_SIGN`+`User_Token` 空 = 匿名；列表行自带 rmJobDuty/rmJobRqmt 全文，无需逐岗富化。
+                         #     ⚠️ **Time_Stamp 必须是北京时间、误差几分钟内**，否则返 HTTP 200 + **零字节 body**
+                         #       （实测：北京时间当下 ✅26001B / 同刻 UTC ❌0B / -5min ✅ / -30min ❌ / -2h ❌）。
+                         #       runner 跑 UTC，`datetime.now()` 直接就是错的 —— 完美的「绿灯零产出」配方，
+                         #       所以 adapter 显式钉 ZoneInfo("Asia/Shanghai")，单测有源码级断言守着。
+                         #     ⚠️ 四个自定义头缺一不可：homepageconfigid / languageindex / rmapplyid / authorization，
+                         #       少带同样是 200 + 空 body（同华为新网关那一类）。空 body 一律抛错记 failed，不许安静返 0。
+                         #     ⚠️ **逐岗详情页的 id 是 `blockRowId` 不是 `id`**，两者只差 1（…849 vs …850）；
+                         #       用 `id` 打开渲染成「职位已下架」→ 用错字段 = 全源死链且会被巡检判撤岗后删库。
+                         #     ⚠️ 三个渠道 recruitTypeCode A01 社招 / A02 校招 / A04 实习**会互相重叠**：
+                         #       华润三九 127+56+25=208，按 blockRowId 去重后只有 186（= 品牌卡自报的 186）。
+                         #       抓全率逐渠道判，绝不拿三者之和当条数（同 huawei/xiaohongshu，本项目栽过两次）。
+                         #     归属：每条岗位用平台自报的 companyDescr（昆药/天士力等子公司各归各名），不贴 sources.company。
+                         #     ⚠️ sources.board 生成列把它算成 social（URL 无板块线索），而它实际三渠道都抓；
+                         #       华润三九不在必投清单故暂无影响，加华润置地（必投，平台自报 1720 岗）前先看这条。
                          #   spdb/icbc/ccb/bankcomm/cmcc = 国有大行 + 中国移动自建门户（2026-09-05 live，纯 httpx 零浏览器）。
                          #     ⚠️ **推翻旧结论「国有大行=公告制、没有逐岗详情页」**——那是只点了几下首页、
                          #       没读列表页 onClick 就下的判断。工行/农行/交行的详情走 `window.open`，
