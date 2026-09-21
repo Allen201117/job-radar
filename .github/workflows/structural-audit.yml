@@ -4,16 +4,29 @@ name: structural-audit
 # 只读（每条 SQL 跑在 read only 事务里）。breach / error 是「发现」，不让本 workflow 变红；
 # 只有台账写不进去才失败 —— 查了没落库 = 没查。
 #
-# 两条 cron（2026-09-19 起，配合创始人电脑上北京 09:00 跑的自动修复 session）：
-#   · 北京 08:10（UTC 00:10）：给 09:00 的自动修复留「修之前的现状」——留够余量，
-#     因为 GitHub 定时常延迟 10~30 分钟，08:10 触发到真正跑完可能已经 08:30+。
-#   · 北京 09:45（UTC 01:45）：修复之后再量一遍，同一天 `audit_results` upsert 覆盖
-#     08:10 那次的行（见 audit_runner.write_results 的 `on conflict (check_id, run_date)`），
-#     这样 09:30 晨报（现改到 10:00）拿到的是「修完之后」的数字，不是修之前的旧值。
-#   两次都避开整点（GitHub cron 整点常延迟 10~30 分钟）。
+# 两条 cron（配合创始人电脑上北京 09:00 跑的自动修复 session）：
+#   · UTC 22:00（前一天）：给 09:00 的自动修复留「修之前的现状」。
+#   · UTC 01:45：修复之后再量一遍，同一天 `audit_results` upsert 覆盖前一次的行
+#     （见 audit_runner.write_results 的 `on conflict (check_id, run_date)`），
+#     这样晨报拿到的是「修完之后」的数字，不是修之前的旧值。
+#
+# 🚫 第一条 cron 不许再挪回 UTC 00:00~04:00 那段（2026-09-21 立，实测）：
+#   ❌ 现象：09-21 早上 09:13 的自动修复 session 拿到的问题清单是「85 条检查全部失败」——
+#      而真相是当天 audit_results 一行都没有，本 workflow 当时还没跑。
+#   ✅ 根因：本仓库的 GitHub 定时**不是延迟 10~30 分钟**（旧注释这么写，是错的）。
+#      实测最近 7 天 20 个 workflow 的 schedule 事件，延迟按 cron 所在 UTC 小时分层，中位数：
+#      UTC 00 时 309 分 / 01 时 267 分 / 02 时 324 分 / 03 时 314 分 / 04 时 300 分；
+#      而 UTC 22 时 118 分（44 个样本，区间 99~143）/ 23 时 116 分 / 21 时 126 分。
+#      原来的 UTC 00:10 实测落在 04:47~07:03（= 北京 12:47~15:03），比 09:00 晚 4~6 小时，
+#      **每天**都赶不上，不是偶发。
+#   ✅ 防：第一条放在 UTC 22:00 —— 实测该时段最坏 143 分钟 → 最晚 UTC 00:23（北京 08:23），
+#      仍在 09:00 之前。run_date 取 Asia/Shanghai（audit_runner.py 的 measured.astimezone），
+#      UTC 22:00 = 北京次日 06:00，所以延迟在 0~16 小时之间落到的都是同一个「次日」，不会错桶。
+#   ⚠️ 改这条之前先重新量一遍延迟，别信注释里的数字（它会过期）：拿 gh run list 的
+#      schedule 事件 createdAt 减去 cron 声明时刻，按 UTC 小时分组取中位数。
 on:
   schedule:
-    - cron: "10 0 * * *"
+    - cron: "0 22 * * *"
     - cron: "45 1 * * *"
   workflow_dispatch:
     inputs:
