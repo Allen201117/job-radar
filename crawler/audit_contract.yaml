@@ -683,20 +683,9 @@ checks:
     why: 校招专区岗位的一部分补齐工作靠这条任务，停了校招页面的信息会逐渐过期。
     action: 看这条任务最近一次运行是否失败
 
-  - id: pipeline.campus_official_pages_ran
-    name: 校招官方页面补录昨天有没有跑
-    subject: 校招官方页面补录
-    layer: pipeline
-    db: supabase
-    owner: .github/workflows/campus-official-pages.yml
-    sql: >
-      select count(*) from ops_runs where module = 'campus_official_backlog'
-        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
-    normal: ">= 1"                # 实测 1
-    severity: critical
-    calibrated: false
-    why: 校招覆盖率依赖这条任务持续把必投公司的官方校招页接进来。
-    action: 看这条任务最近一次运行处理了多少家公司
+  # pipeline.campus_official_pages_ran 已于 2026-09-21 撤下（创始人拍板）：campus-official-pages.yml
+  # 的每日定时停了（原因与证据写在该 workflow 的 on: 段注释里），这条「昨天有没有跑」再留着
+  # 第二天就会以 critical 把晨报染红。恢复定时时把它原样加回来。
 
   - id: pipeline.gap_funnel_ran
     name: 必投缺口补源漏斗昨天有没有跑
