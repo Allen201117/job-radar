@@ -30,7 +30,9 @@ on:
   #     但按上面的量尺，修轮转最多多出 1~2 家，不构成恢复定时的理由。
   #   想恢复：先给「校招网申日期」找到够得着的取数来源（例如库里官方 ATS 校招岗自带的投递截止日——
   #   2026-09-21 量过能覆盖未覆盖公司里的 46 家，但各平台截止日含义不一，要逐个核），再取消下面两行注释，
-  #   并把 audit_contract.yaml 里 pipeline.campus_official_pages_ran 加回去。
+  #   并把 audit_contract.yaml 里 pipeline.campus_official_pages_ran 加回去，
+  #   **再从仓库变量 OPS_WATCHDOG_MUTE_MODULES 里删掉 campus_official_backlog**（停定时那天设的，
+  #   否则最后两晚的零产出会让看门狗在停后第二天再开一个新 issue；恢复后不删，零产出就没人报了）。
   # schedule:
   # - cron: "20 20 * * *"   # 每日 UTC 20:20（2026-08-28 与 enrich-backlog-browser 的 20:00 真正错开）
   workflow_dispatch:
