@@ -36,13 +36,30 @@ function libraryScope<T extends { not: Function }>(query: T): T {
   return (query as any).not("origin", "in", `(${origins})`).not("dimension", "in", `(${dims})`) as T;
 }
 
+/** 建索引各段耗时（诊断用）。随索引一起缓存，只有几个数字，不影响缓存体积。 */
+export interface IndexBuildTiming {
+  subjects_ms: number;
+  subject_rows: number;
+  items_ms: number;
+  item_rows: number;
+  /** 条目 + 来源的 JSON 体积（KB）——跨洋（香港函数 → 悉尼 Supabase）传输的主要载荷。 */
+  items_kb: number;
+  profiles_ms: number;
+  profile_rows: number;
+  build_ms: number;
+  total_ms: number;
+  index_kb: number;
+}
+
 export interface LibraryIndex {
   subjects: LibrarySubject[];
   builtAt: string;
+  buildTiming?: IndexBuildTiming;
 }
 
 async function loadIndex(): Promise<LibraryIndex> {
   const supabase = createServiceClient();
+  const t0 = performance.now();
 
   // 主体：rejected / retired 是治理结论，索引里直接不要。
   const subjectRows = await fetchAllPages<RawSubjectRow>((from, to) =>
@@ -53,6 +70,7 @@ async function loadIndex(): Promise<LibraryIndex> {
       .order("id", { ascending: true })
       .range(from, to),
   );
+  const t1 = performance.now();
 
   // 条目 + 来源。来源是 claim 展示门的必需输入（时间窗 + ≥2 独立域名）；
   // 不带来源就没法判断「这条能不能展示」，卡面计数会比点进去看到的多。
@@ -67,6 +85,7 @@ async function loadIndex(): Promise<LibraryIndex> {
       .order("id", { ascending: true })
       .range(from, to),
   );
+  const t2 = performance.now();
   const items: RawItemRow[] = itemRows.map((raw) => ({
     ...(raw as RawItemRow),
     sources: flattenSources(raw),
@@ -80,11 +99,13 @@ async function loadIndex(): Promise<LibraryIndex> {
         .order("id", { ascending: true })
         .range(from, to),
   );
+  const t3 = performance.now();
   const companies = new Map(
     profileRows.map((row) => [row.id, { company: row.company, industry: row.industry ?? null }]),
   );
 
   const subjects = buildLibraryIndex(subjectRows, items, companies);
+  const t4 = performance.now();
   // ⚠️ 缓存条目一旦超过 Vercel 数据缓存的 2MB 上限就会**静默不缓存**，症状是每个请求
   // 都在重建索引（线上实测 ~10s/次），且没有任何报错。这行日志是它唯一的哨兵。
   const bytes = JSON.stringify(subjects).length;
@@ -94,8 +115,23 @@ async function loadIndex(): Promise<LibraryIndex> {
         "再涨会静默失去缓存，需要进一步瘦身或分片。",
     );
   }
-  console.log(`[insight-library] 索引重建：${subjects.length} 个主体，${Math.round(bytes / 1024)}KB`);
-  return { subjects, builtAt: new Date().toISOString() };
+  const buildTiming: IndexBuildTiming = {
+    subjects_ms: Math.round(t1 - t0),
+    subject_rows: subjectRows.length,
+    items_ms: Math.round(t2 - t1),
+    item_rows: itemRows.length,
+    items_kb: Math.round(JSON.stringify(itemRows).length / 1024),
+    profiles_ms: Math.round(t3 - t2),
+    profile_rows: profileRows.length,
+    build_ms: Math.round(t4 - t3),
+    total_ms: Math.round(performance.now() - t0),
+    index_kb: Math.round(bytes / 1024),
+  };
+  console.log(
+    `[insight-library] 索引重建：${subjects.length} 个主体，${buildTiming.index_kb}KB ` +
+      JSON.stringify(buildTiming),
+  );
+  return { subjects, builtAt: new Date().toISOString(), buildTiming };
 }
 
 /**
