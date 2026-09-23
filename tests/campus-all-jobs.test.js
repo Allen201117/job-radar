@@ -169,17 +169,18 @@ test("两个视图共用同一个 mode 状态（切过去不会莫名回到校�
   assert.doesNotMatch(allJobs, /useState<RecruitMode>/, "全部校招岗视图的 mode 由页面传入，不得自持一份");
 });
 
-test("库存计数与列表计数是两个数，措辞不能混（诚实口径）", () => {
-  // 列表那条撞取数上限时只能给「N+」，不能拿它冒充库存量；库存量走 countCampusLibrary 的精确计数。
+test("全部校招岗同屏只保留搜索结果这一套数字，避免库存量与匹配数打架", () => {
+  // 列表那条撞取数上限时只能给「N+」，不能拿它冒充第二个「全站总数」。
   assert.match(allJobs, /formatMatchTotal\(total, capped, exactTotal\)/);
-  assert.match(campusClient, /libraryCounts/);
-  const search = read("lib/jobs-store/search.ts");
-  // 口径：recruitment_explicit 这一条不能少（少了是 75,744，而列表只给得出 69,138 —— 两个数字打架）
-  const body = search.match(/export async function countCampusLibrary[\s\S]*?\n\}/);
-  assert.ok(body, "找不到 countCampusLibrary");
-  assert.match(body[0], /"recruitment_explicit"/, "库存计数必须带 recruitment_explicit，与列表口径对齐");
-  assert.match(body[0], /grad_class is null or grad_class >= /, "库存计数必须带同一条往届门");
-  assert.match(body[0], /appendJobScopeWhere/, "库存计数必须跟随用户的求职范围");
+  assert.doesNotMatch(campusClient, /libraryCounts|全站在招.*岗/, "专区页头不再并列展示另一套总数");
+  assert.doesNotMatch(read("app/campus/page.tsx"), /countCampusLibrary/, "默认首屏不再为已移除的页头数字等库查询");
+});
+
+test("必投展开默认对口、可切全部，并支持 ESC 收起后回焦点", () => {
+  assert.match(campusClient, /fitOnly: expandedList === "fit"/, "对口筛选必须服务端下推");
+  assert.match(campusClient, /value=\{expandedList\}/, "展开区必须给出对口/全部切换");
+  assert.match(campusClient, /useEscapeKey\(collapseExpanded, !!expandedPattern\)/, "ESC 必须收起展开区");
+  assert.match(campusClient, /expandButtons\.current\.get\(pattern\)\?\.focus\(\)/, "收起后焦点必须回到展开按钮");
 });
 
 // 审查抓到：空态文案写死「必投 30 家」，而视图切换按钮上的数字是按用户行业收窄后的 cards.length（不恒等于 30）。

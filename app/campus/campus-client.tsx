@@ -34,6 +34,7 @@ import { formatDateLabel } from "@/lib/relative-time";
 // 只引类型：该模块带 `server-only`，type-only import 编译期擦除，不会把它拉进客户端包。
 import type { CampusIndustrySource } from "@/lib/campus-user-industries";
 import { Badge, Segmented } from "@/components/ui";
+import { useEscapeKey } from "@/lib/ui/hooks";
 import {
   countMatchingFacets,
   countUnlabeledInMatch,
@@ -202,7 +203,6 @@ export default function CampusClient({
   seasonGradClass,
   fitFunctions = [],
   fitCities = [],
-  libraryCounts = null,
   jobScope = "domestic",
 }: {
   cards: CampusBoardCard[];
@@ -219,8 +219,6 @@ export default function CampusClient({
   /** 当前校招季的目标届别（服务端 currentGradClass() 算好传入，避免年界处 SSR/hydration 不一致）。
    *  没有官方周期数据的公司，校招卡也用它兜一个「N届」标签，不至于一个标签都没有。 */
   seasonGradClass: number;
-  /** 校招岗位库的库存量级（精确计数，来自 countCampusLibrary）；取不到时为 null，界面就不提这句。 */
-  libraryCounts?: { campus: number; intern: number } | null;
   jobScope?: string | null;
 }) {
   const [mode, setMode] = useState<RecruitMode>("campus");
@@ -256,6 +254,9 @@ export default function CampusClient({
   const [filters, setFilters] = useState<CampusFilters>(EMPTY_FILTERS);
   // 手风琴：同一时刻只允许一家公司展开（同时展开多家会把三列网格撑成一长条，页面很乱）。
   const [expandedPattern, setExpandedPattern] = useState<string | null>(null);
+  // 卡面给出明确「对口数」时，首次展开先看这批；用户可一键切回该公司全部岗位。
+  const [expandedList, setExpandedList] = useState<"fit" | "all">("all");
+  const expandButtons = useRef(new Map<string, HTMLButtonElement>());
 
   // 公司洞察抽屉（P3a 外露）：公司卡级只拉一次可用性（比每个 JobCard 各拉更省），暂无实录/派生的公司不给点。
   const [insightCompany, setInsightCompany] = useState<string | null>(null);
@@ -270,8 +271,19 @@ export default function CampusClient({
     return unsub;
   }, [cardsInput, view]);
 
-  function toggleExpand(pattern: string) {
-    setExpandedPattern((cur) => (cur === pattern ? null : pattern));
+  function collapseExpanded() {
+    if (!expandedPattern) return;
+    const pattern = expandedPattern;
+    setExpandedPattern(null);
+    requestAnimationFrame(() => expandButtons.current.get(pattern)?.focus());
+  }
+
+  useEscapeKey(collapseExpanded, !!expandedPattern);
+
+  function toggleExpand(pattern: string, fitCount: number | null) {
+    if (expandedPattern === pattern) return collapseExpanded();
+    setExpandedList(fitCount != null && fitCount > 0 ? "fit" : "all");
+    setExpandedPattern(pattern);
   }
 
   // 当前态（校招/实习）下每家公司的聚合分面——先按 mode 取桶，其余步骤共用。
@@ -330,8 +342,8 @@ export default function CampusClient({
   const [drawer, setDrawer] = useState<Map<string, DrawerPage>>(new Map());
   const drawerRequested = useRef<Set<string>>(new Set()); // 去重键 `key@offset`；失败时删除以便重试
   const filterKey = useMemo(
-    () => JSON.stringify([filters.city, filters.education, filters.jobFunction, filters.gradClass]),
-    [filters],
+    () => JSON.stringify([filters.city, filters.education, filters.jobFunction, filters.gradClass, expandedList]),
+    [filters, expandedList],
   );
   const drawerFor = useCallback(
     (pattern: string): DrawerPage | undefined => drawer.get(`${pattern}|${mode}|${filterKey}`),
@@ -363,7 +375,7 @@ export default function CampusClient({
         const resp = await fetch("/api/campus-zone/jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pattern, mode, offset, filters }),
+          body: JSON.stringify({ pattern, mode, offset, filters, fitOnly: expandedList === "fit" }),
         });
         const data = await resp.json().catch(() => null);
         if (!data?.ok) return fail();
@@ -378,7 +390,7 @@ export default function CampusClient({
         fail();
       }
     },
-    [mode, filterKey, filters],
+    [mode, filterKey, filters, expandedList],
   );
 
   // 展开 / 切模式 / 改筛选 → 取第 0 页（drawerRequested 去重，不会重复请求同一 key@0）。
@@ -458,14 +470,11 @@ export default function CampusClient({
     }
   }
 
-  const modeLabelText = mode === "campus" ? "校招" : "实习";
-  const libraryCount = libraryCounts ? (mode === "campus" ? libraryCounts.campus : libraryCounts.intern) : null;
-
   return (
     <div className="mt-8 space-y-6 ink-1">
       {/* 视图 + 模式两个开关横贯全页：视图决定「看全库还是看必投 30 家」，模式决定「校招还是实习」。
           两个视图共用同一个 mode —— 切过去不会莫名其妙回到校招。 */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
         <Segmented
           ariaLabel="校招专区视图"
           value={view}
@@ -476,29 +485,23 @@ export default function CampusClient({
             { value: "must", label: `必投 ${cards.length} 家` },
           ]}
         />
-        <Segmented
-          ariaLabel="招聘类型"
-          value={mode}
-          onChange={setMode}
-          size="md"
-          options={[
-            { value: "campus", label: "校招" },
-            { value: "intern", label: "实习" },
-          ]}
-        />
+        <div className="flex items-center gap-2.5">
+          <span className="t-label ink-3">类型</span>
+          <Segmented
+            ariaLabel="招聘类型"
+            value={mode}
+            onChange={setMode}
+            size="md"
+            options={[
+              { value: "campus", label: "校招" },
+              { value: "intern", label: "实习" },
+            ]}
+          />
+        </div>
       </div>
 
       {view === "all" ? (
         <>
-          {/* 库存量级的**精确**数字（countCampusLibrary）。它和下面列表里的「N 个匹配岗位」
-              刻意是两个数、两种措辞：这条说「库里现在有多少」，那条说「你这组筛选匹配到多少」；
-              后者撞取数上限时只能给「N+」（见 lib/match-total），不能拿它冒充库存量。 */}
-          {libraryCount != null && (
-            <p className="t-body-sm ink-2">
-              全站在招{modeLabelText}岗 <span className="t-num ink-1">{libraryCount.toLocaleString("zh-CN")}</span> 个
-              <span className="ink-3">（已滤掉往届；按你的偏好排序，不做隐藏）</span>
-            </p>
-          )}
           <CampusAllJobs mode={mode} jobScope={jobScope} mustApplyCount={cards.length} />
         </>
       ) : (
@@ -743,22 +746,26 @@ export default function CampusClient({
                       </Badge>
                     ) : (
                       <p className="t-caption ink-3">
-                        本季暂无对口岗（有 {totalCount} 个其它{modeLabel}岗）
+                        这家的 {totalCount} 个{modeLabel}岗暂时没有和你方向对口的
                       </p>
                     )
                   )}
                   {/* 往届岗不静默丢弃：说清楚「有但不是这一届」，免得用户以为我们漏抓。
                       只有岗位文本里写明届别（如「2026届」）的才会被挡；届别未知的岗照常在上面列着。 */}
                   {card.pastClassJobCount > 0 && (
-                    <p className="text-[12px] leading-5 ink-3">
-                      另有 {card.pastClassJobCount} 个往届岗位未列出
+                    <p className="t-caption ink-3">
+                      另有 {card.pastClassJobCount} 个往届（{seasonGradClass - 1}届及更早）岗位未列出
                     </p>
                   )}
                   <div className="mt-1 flex flex-wrap items-center gap-2">
                     {totalCount > 0 && (
                       <button
                         type="button"
-                        onClick={() => toggleExpand(card.pattern)}
+                        ref={(node) => {
+                          if (node) expandButtons.current.set(card.pattern, node);
+                          else expandButtons.current.delete(card.pattern);
+                        }}
+                        onClick={() => isExpanded ? collapseExpanded() : toggleExpand(card.pattern, fitCount)}
                         aria-expanded={isExpanded}
                         className="inline-flex items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-3.5 py-1.5 text-sm font-medium ink-2 transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
                       >
@@ -788,6 +795,25 @@ export default function CampusClient({
 
                 {isExpanded && (
                   <div className="sm:col-span-2 lg:col-span-3">
+                    {fitCount != null && fitCount > 0 && (
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                        <p className="t-caption ink-2">
+                          {expandedList === "fit"
+                            ? `优先显示和你方向对口的 ${fitCount} 个岗位`
+                            : `正在看这家全部 ${hasActiveFilter ? filteredCount : totalCount} 个岗位`}
+                        </p>
+                        <Segmented
+                          ariaLabel={`${card.company}展开岗位范围`}
+                          value={expandedList}
+                          onChange={setExpandedList}
+                          size="sm"
+                          options={[
+                            { value: "fit", label: `对口 ${fitCount} 个` },
+                            { value: "all", label: `全部 ${hasActiveFilter ? filteredCount : totalCount} 个` },
+                          ]}
+                        />
+                      </div>
+                    )}
                     {initialLoading ? (
                       <EmptyPanel title="正在加载岗位…" description={`共 ${drawerTotal} 个，稍等一下。`} />
                     ) : page?.error && loadedCount === 0 ? (
