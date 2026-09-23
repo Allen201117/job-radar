@@ -38,6 +38,45 @@ def _strip_tags(fragment: str) -> str:
     return re.sub(r"\s+", " ", html_lib.unescape(text)).strip()
 
 
+def _parse_list_rows(page_html: str):
+    """列表页 → (服务端占了几个 startrow 位置, 岗位行 [{title, href, location}])。
+
+    CSB 有两套列表模板，同一个 adapter 两套都认：
+    - 表格版：tr.data-row / a.jobTitle-link / span.jobLocation（ZF / Adidas / DSV 等绝大多数租户）
+    - 卡片版：li.job-tile / a.jobTitle-link / 「…-desktop-section-location-value」
+      ⚠️ 2026-09-23 实测 Ferrari 已切到卡片版：页面照常 200、13 个岗都在，表格版选择器一行都匹配不到
+      → 0 岗照样记 success，连续 37 轮「报成功却零产出」。同一张卡里桌面/平板/手机三份重复标记，取第一份。
+    只在一行表格都没有时才按卡片版解析，表格版租户的行为一字不变。"""
+    tree = HTMLParser(page_html)
+    items = []
+    raw_rows = tree.css("tr.data-row")
+    if raw_rows:
+        for row in raw_rows:
+            a = row.css_first("a.jobTitle-link") or row.css_first("a[href*='/job/']")
+            if not a:
+                continue
+            href = (a.attrs.get("href") or "").strip()
+            title = a.text(strip=True)
+            loc = row.css_first("span.jobLocation")
+            location = loc.text(strip=True) if loc else None
+            if title and href:
+                items.append({"title": title, "href": href, "location": location})
+        return len(raw_rows), items
+    tiles = tree.css("li.job-tile")
+    for tile in tiles:
+        a = tile.css_first("a.jobTitle-link") or tile.css_first("a[href*='/job/']")
+        if not a:
+            continue
+        href = (a.attrs.get("href") or tile.attributes.get("data-url") or "").strip()
+        title = a.text(strip=True)
+        loc = tile.css_first("[id$='-desktop-section-location-value']") \
+            or tile.css_first(".section-field.location div")
+        location = loc.text(strip=True) if loc else None
+        if title and href:
+            items.append({"title": title, "href": href, "location": location or None})
+    return len(tiles), items
+
+
 class SuccessFactorsAdapter(BaseAdapter):
     name = "successfactors"
     # 5000 岗安全上限。⚠️ 不能按 `_PAGE_SIZE(=25)` 反推页数：多个租户（如 DSV）SSR 表格
@@ -71,23 +110,11 @@ class SuccessFactorsAdapter(BaseAdapter):
             r.raise_for_status()
             m = _TOTAL_RE.search(r.text)
             total = int(m.group(1)) if m else None
-            items = []
-            tree = HTMLParser(r.text)
-            raw_rows = tree.css("tr.data-row")
-            for row in raw_rows:
-                a = row.css_first("a.jobTitle-link") or row.css_first("a[href*='/job/']")
-                if not a:
-                    continue
-                href = (a.attrs.get("href") or "").strip()
-                title = a.text(strip=True)
-                loc = row.css_first("span.jobLocation")
-                location = loc.text(strip=True) if loc else None
-                if title and href:
-                    items.append({"title": title, "href": href, "location": location})
+            raw_count, items = _parse_list_rows(r.text)
             # 下一次请求的 startrow = 这次**原始行数**（不是过滤后的 items 数——个别装饰行没有
             # a 标签会被 items 滤掉，但它们仍占了服务端的一个 startrow 位置，用 items 数累进
             # 会导致下次请求起点往回缩、重复抓到同一批行）。一行都没收到时退回 _PAGE_SIZE 兜底防死循环。
-            offset_state["next"] = startrow + (len(raw_rows) or _PAGE_SIZE)
+            offset_state["next"] = startrow + (raw_count or _PAGE_SIZE)
             return PageResult(items=items, total=total)
 
         rows, total, complete = paginate_all(

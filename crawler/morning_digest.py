@@ -61,7 +61,8 @@ SECTION_EXPERIENCE = [
     "exp.dead_click_signal_freshness_30d", "exp.dead_click_unknown_rate_alltime",
 ]
 SECTION_SUPPLY = ["jobs.active_total", "jobs.valid_active_total", "jobs.new_yesterday", "jobs.closed_yesterday"]
-SECTION_FAKE_GREEN = ["exp.fake_green_sources_yesterday", "exp.fake_green_sources_chronic"]
+SECTION_FAKE_GREEN = ["exp.fake_green_sources_yesterday", "exp.fake_green_sources_chronic",
+                      "exp.fake_green_campus_dormant"]
 
 FIXED_DISCLAIMERS = [
     "投递数是用户自己手动标记的，不代表真实投递数量（很多人投了也不点这个按钮）。",

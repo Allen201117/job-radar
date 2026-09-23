@@ -248,6 +248,58 @@ class MokaAdapter(PlaywrightAdapter):
     reported_total = None
     fetch_complete = False
 
+    # 校招门户「换期换 id」：同一租户每一期校招新建一个门户 id，公司换期后我们存的那个 id 页面还在、
+    # 列表恒空（迁移 286：知乎/菲尼克斯/芯粤能/明源云）。它和「这一批招完、下一批没开」长得一模一样，
+    # 都是 success + 0 岗，而假绿体检从 2026-09-23 起不再数休眠的校招入口 —— 不在这里认出来就彻底看不见了。
+    # 平台自己的无 id 别名 `campus_apply/{tenant}` 会 302 到该租户**当前生效**的那一期，
+    # 所以「本门户 0 岗 且 别名指向另一个 id 且那个门户真有岗」= 我们指着一个旧门户，记 failed 并把新地址带进报错。
+    # ⚠️ 只报不自动换：别名不保证指向有岗的门户（华虹的别名指向的恰恰是没配置过的空模板 74008），
+    #    换不换由人渲染新门户确认有岗后改 source_url（迁移 286 的做法）。
+    # ⚠️ 本门户有岗时绝不查：一个租户常同时开着好几个校招门户（2026-09-23 全量扫 203 条 Moka 校招源，
+    #    22 条别名 ≠ 存的 id，其中 20 条照常出岗），「别名不同」本身不说明任何问题。
+    _CAMPUS_PORTAL_RE = re.compile(
+        r"^https?://([^/]*mokahr\.com)/(?:campus-recruitment|campus_apply)/([^/#?]+)/(\d+)")
+    _CAMPUS_ALIAS_ID_RE = r"/(?:campus_apply|campus-recruitment)/{tenant}/(\d+)"
+
+    def _current_campus_portal_id(self, host: str, tenant: str) -> Optional[str]:
+        """问平台这个租户当前生效的校招门户 id（`campus_apply/{tenant}` 的 302 目标）。
+
+        问不到返回 None —— 查不到不等于换了期，宁可漏报也不能把一个正常休眠的门户记成失败。"""
+        try:
+            resp = httpx.get(f"https://{host}/campus_apply/{tenant}",
+                             headers={"User-Agent": self.user_agent},
+                             timeout=15, follow_redirects=False)
+        except httpx.HTTPError as e:
+            _log.warning("moka campus alias lookup failed for %s: %s: %s", tenant, type(e).__name__, e)
+            return None
+        m = re.search(self._CAMPUS_ALIAS_ID_RE.format(tenant=re.escape(tenant)),
+                      resp.headers.get("location") or "")
+        return m.group(1) if m else None
+
+    def _raise_if_campus_portal_superseded(self, page, source_url: str) -> None:
+        """本门户渲染为空时调用：别名指向另一个 id **且那个门户真有岗** → 记 failed 并带上新地址。
+
+        「别名不同」本身不够：租户常同时开着几个门户，别名也可能指向没配置过的空模板（华虹 74008）。
+        所以要在同一个浏览器里把别名门户打开看一眼——那边也是空的，就当本门户只是休眠，照常记 0 岗。
+        打不开 / 看不清一律不报（宁可漏报，不把休眠记成失败）。"""
+        m = self._CAMPUS_PORTAL_RE.match(source_url or "")
+        if not m:
+            return  # 不是带 id 的校招门户（社招 / 无 id 别名本身就跟着当前期走）
+        host, tenant, stored_id = m.groups()
+        current_id = self._current_campus_portal_id(host, tenant)
+        if not current_id or current_id == stored_id:
+            return
+        current_url = f"https://{host}/campus_apply/{tenant}/{current_id}"
+        try:
+            _state, cards = self._open_route(page, current_url + "#/jobs")
+        except Exception as e:  # noqa: BLE001 —— 看不清就不下结论
+            _log.warning("moka campus alias portal %s not readable: %s: %s", current_url, type(e).__name__, e)
+            return
+        if cards:
+            raise RuntimeError(
+                f"moka campus portal superseded: 本门户 {stored_id} 为空，该租户当前生效的校招门户 "
+                f"{current_url} 首屏有 {len(cards)} 个岗；渲染确认后把这条来源改到新门户")
+
     def _dismiss_cookie_banner(self, page) -> None:
         """点掉可能挡住「下一页」按钮的 cookies 同意抽屉；没有就什么都不做，失败也不影响主流程。"""
         try:
@@ -378,6 +430,9 @@ class MokaAdapter(PlaywrightAdapter):
                     raise RuntimeError(
                         "moka job list not found on any route (no job cards, no empty state): "
                         + ", ".join(route_errors))
+                if best_route is None:
+                    # 渲染出了空态、一张卡都没有：先排除「我们指着一个已换期的旧门户」再认 0 岗。
+                    self._raise_if_campus_portal_superseded(page, source_url)
                 if best_route is not None:
                     # 已在这个路由上见过岗位卡；这一步再失败就是真故障，同样不许吞成 0 岗。
                     # 页面还停在该路由首页（循环在它上面 break 了）就不必重开一遍。

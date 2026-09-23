@@ -174,7 +174,7 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
 
 | 组件 | 在哪 | 干什么 |
 |---|---|---|
-| 期望清单 | `crawler/audit_contract.yaml`（85 条：数据 13 / 体验 21 / 链路 35 / 老告警桥接 16） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
+| 期望清单 | `crawler/audit_contract.yaml`（87 条：数据 13 / 体验 22 / 链路 36 / 老告警桥接 16；原写 85 条是 09-19 上线时的数，09-23 复核更正） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
 | 执行器 | `crawler/audit_runner.py` + `structural-audit.yml`（每日北京 08:50） | 逐条量，写 `audit_results`（Supabase，迁移 281/282）；`unique(check_id, run_date)` 一天一行 = 趋势表 |
 | 覆盖率差集 | `crawler/audit_coverage.py` + `audit_exemptions.yaml` | 左边**自动枚举**（带 cron 的 workflow / 写 ops_runs 的模块 / jobs 表列 / 走查指标），减去有期望的；上线时 68 条 → 现 14 条（全是 jobs 列） |
 | 老告警桥接 | `ops_watchdog.py` 的 `publish_audit_bridge` | 16 条规则**判定与阈值一字未动**，只把每条的命中数 + 明细写进同一张表（`detail.findings[].title` 与 issue 标题逐字一致） |
@@ -189,8 +189,14 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
   真存在于 `jobs-db/schema.sql`），**不靠「列名在 SQL 文本里出现过」**——`status` 出现在几乎每条 where 里，按文本猜会永久假绿。
 - **红灯只留给「用户可见损坏 / 供给来源大面积塌」，单个源坏最多黄灯**（创始人定）。老告警里只有 `rule_d`（关键任务超期）
   与 `rule_k`（一整类来源产出骤降）是 critical；`severity=info` 的不染灯。灯色以**清单里的 severity** 为准，不认落库快照。
+- **假绿体检（连续 7 天报成功零产出）不数「休眠中的校招/实习入口」**（近一年出过岗、这一批没开，2026-09-23 创始人授权），
+  它们单独记在 `exp.fake_green_campus_dormant`（info 不染灯）。❌ 代价：公司换了新校招门户、旧门户留着不关，和休眠长得一模一样
+  （09-20 修的知乎等 4 条全是这一类，放新口径下会全被藏掉）。✅ 防：Moka 校招门户 0 岗时问一次平台别名，别名指向另一期**且那一期真有岗**才记 failed 带新地址（只看别名不同会误报：
+  一个租户常同时开几个门户，华虹的别名还指向空模板）
+  （`MokaAdapter._raise_if_campus_portal_superseded`，由「连续失败」老告警接住）。**两者是一对，删掉后者前者就会藏坏源**；
+  其它平台还没有同类识别。回归钉在 `crawler/test_fake_green_sources.py`。
 - **`name/why/action` 的读者是非技术创始人**：不许出现表名 / 模块英文名 / SQL 词 / 「GitHub Actions、日志、索引、adapter」；
-  `action` 写成他能做的动作（「把这条转给 Claude，让它查…」）。阈值没有历史依据的一律 `calibrated: false`（现 82/85 条），
+  `action` 写成他能做的动作（「把这条转给 Claude，让它查…」）。阈值没有历史依据的一律 `calibrated: false`（现 84/87 条），
   攒够 30 天换分位数，**禁止编一个看着合理的数字却不标它**。
 - 周任务的链路检查窗口是 8 天；`campus-crawl` 那条按月份条件化（月份集合复用规则 O）。
   ⚠️ `enrich-crawl` / `dead-link-audit-new` 与另一条 workflow 共用台账模块名，**一条停了另一条会掩盖它**——豁免理由里写的是真缺口，不是「不用管」。
