@@ -295,7 +295,8 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(enrich.detail_class("hotjob"), "httpx")
         self.assertEqual(enrich.detail_class("wt"), "httpx")
         self.assertEqual(enrich.detail_class("workday"), "httpx")
-        self.assertEqual(enrich.detail_class("beisen"), "browser")
+        self.assertEqual(enrich.detail_class("moka"), "browser")
+        self.assertEqual(enrich.detail_class("beisen"), "httpx")   # 2026-09-23 起有 httpx 探活器
         self.assertIsNone(enrich.detail_class("不存在的源"))
 
     def test_enrich_one_unknown_returns_empty(self):

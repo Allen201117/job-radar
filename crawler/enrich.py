@@ -1244,6 +1244,94 @@ def _detail_cmcc(row, src):
     return CmccAdapter._summary_of(data) or ""
 
 
+_BEISEN_DETAIL_PATH = "/api/JobAd/GetJobAdInfo"
+_BEISEN_OK_CODE = 200
+_BEISEN_CLOSED_STATUS = 2
+_BEISEN_OPEN_STATUS = 1
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _beisen_job_ad_id(jd_url):
+    """jd_url 的 `jobAdId` 参数（小写 uuid）。路径因租户而异（/social/detail、/custom/zwxq…），
+    参数名大小写也不统一，所以只认参数、不认路径。拿不到合法 uuid 返回 ""。"""
+    for key, values in parse_qs(urlparse(jd_url or "").query).items():
+        if key.lower() == "jobadid" and values:
+            value = values[0].strip().lower()
+            return value if _UUID.match(value) else ""
+    return ""
+
+
+def _detail_beisen(row, src):
+    """北森（*.zhiye.com 及北森承载的自有域名）逐岗探活：GET /api/JobAd/GetJobAdInfo。
+
+    判死信号 = `Data.Status == 2`。这不是我们猜的语义，是**北森前端自己的代码**：
+    标准门户（ux-recruitment-portal-2022）的详情组件拿到这个接口的响应后
+    `if (2 === Data.Status) location.replace("/job/empty")`，页面渲染
+    「当前职位已停止招聘，去看看其他机会吧」（2026-09-23 从门户 JS 读出 + 真浏览器复现）。
+
+    📊 全集对拍（2026-09-23，不是抽样）：库里全部 114,565 个带 jobAdId 的北森在招岗逐个问详情，
+    同时把 275 个租户的在招列表（GetJobAdPageList，Category=[]）全量翻完（14.6 万行，**行里的
+    Status 全部是 1**），两边按 jobAdId 对：
+      · Status=1 且在列表 97,218 / Status=2 且**不在**列表 16,366；
+      · Status=2 却在列表 **1**、Status=1 却不在列表 2 —— 那 1 条复查是「拉完列表后、问详情前
+        刚下架」（泰康列表 1562→1560，它已不在）；同一小时里上汽通用下架 3 个校招岗，
+        列表与 Status 是**同时**变的。那 2 条是对外门户查不到的在招岗，本函数不判它们（漏判方向）；
+      · 其余：Status=7 4 条（都不在列表，前端照常渲染）、整站 302 到 /404 的两个租户 974 条。
+    🌐 真浏览器（176 个有 Status=2 的租户每家抽 1 条 + 40 条 Status=1 对照）：167 家跳「已停止招聘」、
+    4 家定制模板渲染成空白字段或踢回首页；对照组 40/40 正常显示「投递」。
+    🚩 诚实边界：中国人寿 / 银河证券（租户自定义 make-template.js）、通威（老版前端）、泰康、长安
+    这 5 家的页面模板**根本不读 Status**，在招和已停渲染得一模一样（长安的 jd_url 本身就落在列表页）
+    —— 所以对它们页面给不出反证也给不出正证，判死只凭 Status=2 + 「公司自己的列表里已经没有」
+    （这 5 家 1,607 条 Status=2，列表里 0 条；中国人寿那 616 条 last_seen 最早在 6 月）。
+
+    双条件，宁可漏判不可错杀：
+      ① `Code == 200` **且** `Data.Id` 与请求的 jobAdId 相同 **且** `JobAdName` 非空
+         —— 证明拿到的是这条岗位本身的完整记录，不是半截响应 / 别的岗；
+      ② 同时 `Status == 2`（全集里 275 个租户给的都是数字；字符串 "2" 也认，防序列化差异）。
+    其余一律 unknown（DetailUnknownError：不盖戳、不改状态，下轮重试）：
+      · 不存在的 id 返 `Code=500` +「参数错误」—— 这是**通用**参数错误文案，
+        我们传错参数也长这样（同交行 JUMPTESTBP9001 那块碑），**不拿它判死**；
+      · Status 既不是 1 也不是 2（实测有 7）—— 前端照常渲染，语义没证实，不判；
+      · 非 200 —— ⚠️ 刻意**不调 _raise_if_gone**：接口 404 说明的是「这个 host 上没有这个
+        接口」（老版 CMS 门户 / 自有域名反代），不是岗位撤了；按 404 判死会整租户清空。
+    ⚠️ 老版 CMS 门户（jd_url 是 /zpdetail/{数字}、/job_show?jobId=…）没有 jobAdId，
+       这个接口问不了 → 同样 unknown，不返 ""：空串在巡检里等于「确认在招」，会盖上
+       enrich_checked_at 把它挤到浏览器巡检（dead-link-audit）队尾，反而没人看了。
+    在招（Status=1）→ 返回 Duty +「任职要求」拼成的正文（与 adapter 列表口径一致），顺手补薄卡。
+    """
+    parsed = urlparse(row.get("jd_url") or "")
+    host = (parsed.hostname or "").lower()
+    job_ad_id = _beisen_job_ad_id(row.get("jd_url"))
+    if not host or not job_ad_id:
+        raise DetailUnknownError("beisen jd_url without jobAdId (legacy CMS portal)")
+    r = httpx.get(f"https://{host}{_BEISEN_DETAIL_PATH}",
+                  params={"jc": "", "jobAdId": job_ad_id, "displayFields": '["Org"]'},
+                  headers=UA, timeout=TIMEOUT, follow_redirects=True)
+    if r.status_code != 200:
+        raise DetailUnknownError(f"beisen detail HTTP {r.status_code}")
+    payload = _loads_object(r)
+    if payload is None:
+        raise DetailUnknownError("beisen detail non-JSON response")
+    if _int_or_none(payload.get("Code")) != _BEISEN_OK_CODE:
+        raise DetailUnknownError(
+            f"beisen detail Code={payload.get('Code')!r} Message={payload.get('Message')!r}")
+    data = payload.get("Data")
+    if not isinstance(data, dict):
+        raise DetailUnknownError("beisen detail Data is not an object")
+    record_id = str(data.get("Id") or "").strip().lower()
+    name = str(data.get("JobAdName") or "").strip()
+    if record_id != job_ad_id or not name:
+        raise DetailUnknownError("beisen detail without matching Id/JobAdName (half data)")
+    status = _int_or_none(data.get("Status"))
+    if status == _BEISEN_CLOSED_STATUS:
+        raise JobClosedError(f"beisen jobAdId={job_ad_id} closed (Status=2)")
+    if status != _BEISEN_OPEN_STATUS:
+        raise DetailUnknownError(f"beisen detail Status={data.get('Status')!r}")
+    duty = str(data.get("Duty") or "").strip()
+    require = str(data.get("Require") or "").strip()
+    return (duty + ("\n【任职要求】\n" + require if require else "")).strip()
+
+
 ENRICH_REGISTRY = {
     "huawei": _detail_huawei,
     "workday": _detail_workday,
@@ -1300,11 +1388,16 @@ ENRICH_REGISTRY = {
     "cmcc": _detail_cmcc,
     # alibaba_campus 暂缺：13 个 BU 白标域名各自独立 cookie+CSRF 会话，详情接口已 live 验证
     # （POST /position/detail，content:null=撤岗），需 per-host session 管理，单独排期。
+    # 北森（2026-09-23，全集对拍 + 前端代码 + 真浏览器，见 _detail_beisen）：此前 11.7 万 active 岗
+    # 只有浏览器巡检一条撤岗路径，list-absence 还在 observe 模式 → 实测 16,366 个已停止招聘的岗挂着。
+    # 老版 CMS 门户（/zpdetail/{数字}）的岗这里判不了，仍靠 audit_dead_links 浏览器巡检（beisen 留在那边）。
+    "beisen": _detail_beisen,
 }
 
 # 需渲染、低并发：SPA 壳详情页无 httpx 关闭信号，走 audit_dead_links 浏览器审计兜底。
 # bilibili（detail 需 ajSessionId cookie）、phenom（jd_url→SPA 壳，careers.amd.com/pepsicojobs.com）同类。
-_BROWSER_ADAPTERS = {"beisen", "moka", "feishu"}
+# beisen 2026-09-23 起有 httpx 探活器（ENRICH_REGISTRY 优先），从这里移走。
+_BROWSER_ADAPTERS = {"moka", "feishu"}
 
 
 def detail_class(adapter):

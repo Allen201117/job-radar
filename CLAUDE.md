@@ -110,6 +110,16 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
        社招校招两个板块都查不到」两跳确认。别把它「简化」回一跳。
      · ⚠️ 同批补上 `chnenergy`：它 2026-09-05 就进了 ENRICH_REGISTRY 却漏加 sweep matrix，
        只被补正文、一次没探活过。`crawler/test_state_bank_liveness.py` 现在断言「注册表 ⊆ matrix」。
+   - **北森（beisen，库里最大一族 11.7 万 active）已有逐岗探活：详情接口 `Data.Status==2` = 已停止招聘（2026-09-23 接入）**：
+     ❌ 此前只有浏览器巡检一条撤岗路径、list-absence 还在 observe → 实测 16,366 个已停招的岗挂着（中国人寿 616 条最早 6 月就掉出列表）。
+     ✅ 依据三方印证、不是猜：① 北森标准门户前端代码 `if (2 === Data.Status) location.replace("/job/empty")`；
+     ② 全集对拍——库里 114,565 个带 jobAdId 的岗逐个问 + 275 个租户列表全量翻完（14.6 万行 Status 全是 1）：
+     Status=2 却在列表 0 条（唯一 1 条是拉列表后刚下架的时间差）、Status=1 却不在列表 2 条；
+     ③ 176 个租户各抽 1 条真渲染，167 家显示「当前职位已停止招聘」。
+     ⚠️ 不存在的 id 返 `Code=500`「参数错误」是**通用**文案，不判死；接口 404 = 这个 host 没这接口，**不许走 `_raise_if_gone`**。
+     ⚠️ 中国人寿 / 银河证券 / 通威 / 泰康 / 长安 的页面模板**不读 Status**，在招和已停长得一样——对它们只能靠「Status=2 + 列表已无」。
+     ⚠️ 老版 CMS 门户（`/zpdetail/{数字}`，约 3 千岗）无 jobAdId、判不了 → unknown 留给浏览器巡检，**beisen 别从 `audit_dead_links` 撤**。
+     📄 `enrich._detail_beisen` + `enrich_backlog.EXPIRE_RATIO_GUARD`（本轮判死 ≥50% 即熔断，全集模拟峰值 15.7%）+ `crawler/test_beisen_liveness.py`。
    - **🚫「列表里没有」≠「已撤岗」——除非先证明该列表是全集（2026-07-29 立碑，差点误删 460 个在招岗）**：
      list-absence 撤岗（`supports_absence_liveness` + `jobs_db.sweep_absent_jobs`）的前提是**该源的列表接口返回岗位全集**（feishu/beisen/bytedance 是验证过确实返全量才开的）。
      ⚠️ **绝不能从「列表条数 ≪ 库里 active 条数」反推「差额都是死岗」**——这个差额有两种成因、处置**完全相反**：① 死岗堆积（该清）；② 列表接口本身只返子集（一清就是删在招岗）。
