@@ -271,6 +271,23 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
   ③ **函数实例**：每次请求常落到不同实例，进程内 5 分钟缓存对首屏基本无效（三连打三个实例）。
   等价性尺子：`JOBS_MATCH_PRESCORE=off` 退回全窗精排取真值，第一页 60 条逐用户对拍（数字在报告 §10）。
   ⚠️ 没有方向词的用户（画像无 target_roles）粗排只剩城市/公司/7 天，仍是全表扫——量级同旧，不算回归但也没提速。
+  （2026-09-23 核：近 7 天 80 次真实搜索里**没有一次**落在这条路上——慢的是下面第四、五层，别再把「慢」默认归到这里。）
+  📌 **2026-09-23 第四层：规划器估错行数**（审计 `exp.search_slow_rate_7d` 33.75% 起查，80 次搜索全集按用户画像逐条复现）。
+  ❌ 「不加筛选 / 只选校招 / 只选实习」只取最新 1000 行，库上却 Parallel Seq Scan 13.9 万 buffer、0.6~1s（冷缓存更久）。
+  ✅ 根因：`coalesce(job_scope,'domestic')='domestic'` 是表达式、没有统计信息，规划器按默认 0.5% 估（实际 67%）→
+  以为按时间索引要翻很久，改走整表扫再排序。改写成逐值等价的 `(job_scope='domestic' or job_scope is null)`（`lib/job-scope.ts`）
+  → Index Scan 1.5k buffer、4~196ms。`listLatestActive`（/jobs 首屏 SSR）同一写法同时受益。
+  🚫 **新写 where 别用函数/coalesce 包列**，写完先 `EXPLAIN` 看估计行数和实际行数差几个数量级。
+  📌 **第五层：招聘类型没索引 + 库机内存装不下数据**（2GB 内存 / 2.26GB 数据，冷缓存每回表一行 0.1~0.3ms）：
+  「只选实习」要回表 2.9 万行才凑满 1000 行（热 76ms / 冷 2~4.6s）。加 `idx_jobs_active_recruitment_first_seen`；
+  无粗排的校招/实习拆两支 `union all`（`recruitmentUnionSql`），粗排收窄按类型拆三支（`prescoreOrderBy`）——
+  规划器不会自己把 OR 分配进去，写成 `(方向 or 7天) and (该类型 or 待回填)` 计划不变。
+  另：选了招聘类型时 `exactTotalWhenCapped` 先 `exists` 查未分类行——此前全表 count 0.6~2.4s 算完再被门④丢掉。
+  等价性：31 种真实搜索组合、改前改后交替两轮、并列按 id 定序后第一页 60 条逐位相同（不定序时旧代码自己两轮都对不上）。
+  ⚠️ **剩下的大头是真实总数计数**（`exactTotalWhenCapped`，在关键路径上）：校招专区冷 1.3~2.3s、北京 / 上海冷 3.6~5.2s；
+  它跑不跑取决于「有没有该类未分类行」→ 同一段代码随回填进度在快慢之间切换。其 `unstable_cache` 线上对这几条不命中
+  （15 次连打尾段不降、库上采样到 count 在请求期间真在跑），「不加筛选」那条却稳定命中——原因未查清，是观测不是结论。
+  数字与残留见 docs/reviews/2026-09-17 §13。
 
 ## /today 召回加了第四层 function，层内先保标题命中（2026-09-17，18 个画像真库对拍）
 
