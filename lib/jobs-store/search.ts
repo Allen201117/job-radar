@@ -30,7 +30,8 @@ const DB_PAGE = 1000;
 // 新鲜度排序的完整键：末位 `id` 是唯一决胜列（2026-09-23）。爬虫一批入库在同一事务里，几百行 first_seen_at
 // 逐字相同；只按 first_seen_at 排时，窗口 limit / 翻页 offset 落在并列块中间，砍掉哪几行由执行计划决定——
 // 同一请求换个计划（数据量变、SQL 文本变）候选就换一批，offset 翻页还会重复 / 漏行。
-// 走 (status, first_seen_at desc) 索引的计划由 Incremental Sort 只在并列块内按 id 排，不回退成全量排序。
+// 走 (status, first_seen_at desc) 索引的计划由 Incremental Sort 只在并列块内按 id 排，索引与扫描方式不变
+// （香港库 16 个场景 EXPLAIN 逐个核过；代价是读完截断点所在的那一批，匿名北京 buffer +12%、warm 37→42ms）。
 const FRESH_ORDER = "first_seen_at desc, id";
 const SCAN_BUDGET = 28000;
 // 登录 + 按匹配度排（扫描路径）的候选窗口（2026-09-17）：SQL 先按打分公式的四个可下推项粗排
