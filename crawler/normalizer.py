@@ -21,6 +21,7 @@ from geo import (
     is_remote_location,
     keep_for_china_radar,
     location_in_scope,
+    title_city_location,
 )
 from sponsorship import sponsorship_signal
 
@@ -238,6 +239,16 @@ def source_regions(regions=None) -> set[str]:
     return {str(r).strip() for r in regions if str(r).strip()} or {"CN"}
 
 
+def location_or_title_city(location: Optional[str], title: Optional[str]) -> Optional[str]:
+    """写库用的地点：adapter 给了就用它（已过 clean_location）；给空了才从标题认城市。
+
+    物化进 location 而不是读时现算：/today 召回的城市门、stage-2 的 locationState、/jobs 城市筛选、
+    卡片展示都直接读 location 列，只在一处派生就不会有哪条读路径漏掉兜底。判据见 geo.title_city_location。
+    run.py（normalize）与 discovery._upsert_raw_jobs 两条写库链都走这里，app 侧镜像在 lib/jobs-store/write.ts。
+    """
+    return location or title_city_location(title)
+
+
 def location_in_source_regions(location: Optional[str], regions=None) -> bool:
     return location_in_scope(location, source_regions(regions))
 
@@ -258,7 +269,9 @@ def normalize(raw: RawJob, *, source_id: str, company: str, regions=None) -> dic
         if is_recruitment_type(raw.job_type)
         else (extract_job_type(title, full_summary) or raw.job_type)
     )
+    # hash 按 adapter 给的地点算：标题城市是标题的纯函数、不带新信息，这样上线不会让存量行的 hash 集体翻一遍。
     content_hash = make_content_hash(title, location, full_summary)
+    location = location_or_title_city(location, title)
     experience = raw.experience or extract_experience(raw.summary)
     education = raw.education or extract_education(raw.summary)
     deadline = raw.deadline or extract_deadline(raw.summary)
