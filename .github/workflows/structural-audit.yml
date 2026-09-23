@@ -47,12 +47,27 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # 刻意不给 issues: write —— 下面那步只是「重新量一遍老告警」，绝不能开 issue。
+    # 少给这个权限 = 就算哪天 OPS_WATCHDOG_APPLY 被误开，它也开不出 issue 来。
+    permissions:
+      contents: read
+      actions: read      # 老告警规则 B/E 要读 workflow 运行与 job 详情
     env:
       JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
       JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
       JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       HEALTHCHECKS_PING_URL: ${{ secrets.HEALTHCHECKS_PING_URL }}
+      # 下面「刷新老告警桥接」那步要的：ops_watchdog 用 supabase-py 读台账，用 GH_TOKEN 读 workflow 历史。
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 🔒 恒为 false，且**刻意不读** vars.OPS_WATCHDOG_APPLY：这一步只负责重新量，
+      # 「开 issue」永远只属于 ops-watchdog.yml 那条链，两边不能都有副作用。
+      OPS_WATCHDOG_APPLY: "false"
+      # 静音清单要跟 ops-watchdog.yml 逐字一致，否则两边对同一条规则会量出不同的数。
+      OPS_WATCHDOG_MUTE_MODULES: ${{ vars.OPS_WATCHDOG_MUTE_MODULES }}
+      OPS_WATCHDOG_MUTE_ADAPTERS: ${{ vars.OPS_WATCHDOG_MUTE_ADAPTERS }}
       # schedule 事件没有 inputs context——先判事件名再取 inputs.force_fail，
       # 保证 schedule 触发时这里恒是空字符串（= false），不会意外落到 workflow_dispatch 的默认值判断上。
       AUDIT_FORCE_FAIL: ${{ (github.event_name == 'workflow_dispatch' && inputs.force_fail) && '1' || '' }}
@@ -65,6 +80,28 @@ jobs:
           cache-dependency-path: crawler/requirements.txt
       - name: Install deps
         run: pip install -r crawler/requirements.txt
+      # 16 条「老告警」检查项的今日数值不是本执行器算的，是 ops_watchdog.py 桥接写进 audit_results 的
+      # （publish_audit_bridge，dry-run 与 apply 都写）。所以本执行器跑之前必须先让它量一遍，
+      # 否则那 16 条今天就一行都没有 = 晨报把它们逐条念成「今天没查到」。
+      #
+      # 🚫 别改回「靠 ops-watchdog.yml 自己的 cron 先跑」（2026-09-23 立，实测）：
+      #   ❌ 现象：09-23 的问题清单里 16 条老告警全部 verdict=error、value 为空，
+      #      其中包括仅有的两条 critical（账号密钥、来源产出骤降）——等于告警系统当天全瞎。
+      #   ✅ 根因：ops-watchdog 声明在 UTC 00:30，而本仓 UTC 00 时段实测中位延迟 306 分钟
+      #      （12 个样本，275~322），**实际落在 UTC 05:05 左右**；本执行器 2026-09-21 起
+      #      挪到 UTC 22:00（实际 ~00:01）后就排在它前面了，读的是一张还没人写的表。
+      #      09-22 之前能凑上纯属两边都被延迟、而本执行器延迟更多。
+      #   ✅ 防：桥接不再依赖两条 cron 谁先谁后——本执行器自己先 dry-run 量一遍。
+      #      13:35 左右 ops-watchdog 真跑时会按 (check_id, run_date) upsert 覆盖成更新的值，
+      #      口径一致（同一份 audit_contract.yaml、同一套静音变量），不会打架。
+      #   ⚠️ 这步失败只警告不拦路：量不到就是那 16 条今天没有行，晨报会如实点名，
+      #      绝不能因为它把整个执行器带红（红了才是 85 条全没有）。
+      - name: Refresh watchdog bridge (dry-run, no issues)
+        shell: bash
+        run: |
+          python3 crawler/ops_watchdog.py \
+            || echo "::warning::[audit] 老告警桥接这一轮没量成，16 条老告警今天可能没有数值"
+
       - name: Run audit
         working-directory: crawler
         run: python3 audit_runner.py ${{ inputs.dry_run && '--dry-run' || '' }}

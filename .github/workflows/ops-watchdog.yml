@@ -4,10 +4,14 @@ name: ops-watchdog
 # 把「静默坏掉」的任务开成本仓库的 GitHub Issue（防刷屏：同标题的 open issue 只追评论、不新开）。
 # 规则与判据见 crawler/ops_watchdog.py 头注释 / docs/superpowers/specs/2026-08-27-observability-and-ux-plan.md §2.2。
 #
-# 时间：每日北京 08:30（UTC 00:30，2026-09-19 从 UTC 01:00 提前——排在所有夜间档之后
-# （auto-discover 21/23、gap-funnel 22:40、insight 19:30/20:30、dead-link-audit 22:00、
-# purge 02:30 是次日的事），这样看到的仍是完整的一夜产出；提前 30 分钟只是为了赶在
-# 09:00 的自动修复 session 之前把老告警评估完，讲的是同一批夜间产出，不影响判定口径）。
+# 时间：声明 UTC 00:30，**实际每天落在 UTC 05:05 前后**（= 北京 13:05）。
+# ⚠️ 2026-09-23 纠错：原注释写「每日北京 08:30 …… 赶在 09:00 的自动修复 session 之前」，
+#    这条从来没成立过——本仓 UTC 00 时段实测中位延迟 306 分钟（12 个样本，275~322），
+#    GitHub 把它推到了北京 13:05。排在夜间档之后、看到完整一夜产出这点仍然成立（判定口径没变），
+#    但「赶在 09:00 之前」是错的，别再照着这句话推断桥接数据是新鲜的。
+# 📌 因此 audit_results 里那 16 条老告警的**当天数值不靠这条 cron**：structural-audit.yml
+#    自己会先 dry-run 跑一遍 ops_watchdog 把桥接写上（见那边「Refresh watchdog bridge」一步的注释），
+#    本条链跑到时再按 (check_id, run_date) upsert 覆盖成更新的值。
 #
 # ⚠️ 默认 dry-run：只在日志里打印「会开哪些 issue」，零写入。要真开 issue，
 # 到 repo → Settings → Variables 加 OPS_WATCHDOG_APPLY=true（或手动 dispatch 时把 apply 填 true）。
