@@ -77,6 +77,12 @@ async function main() {
     actionedBy.get(a.user_id).add(a.job_id);
   }
 
+  // 先连一次库：连不上（缺证书 / 缺连接串 / 库挂了）是整条链的配置问题，不是「50 个用户各失败一次」。
+  // 直接退出红灯、不写台账——写一行 failed=50 会让晨报把配置问题念成「给 50 个用户算失败」；
+  // 真的一轮都没跑成，由审计期望 pipeline.today_recall_snapshot_ran（按台账行数）接住。
+  const { jobsQuery } = L("lib/jobs-store/client.ts");
+  await jobsQuery("select 1 from today_recall_snapshots limit 1");
+
   const { refreshRecallSnapshot } = L("lib/jobs-store/opportunities.ts");
   const fetchMs = [];
   let refreshed = 0;
