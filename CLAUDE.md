@@ -727,6 +727,12 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
   「{公司} 校园招聘 官网」，指纹认出平台后按平台换算校招板块 URL（`campus_source_url`：hotjob school.html / 飞书
   /campus/position / 国聘 nature=应届生 / moka 只认 campus-recruitment / 外企 ATS 无校招板块 → 不接），过同一道真抓验收门。
   结论只写 `evidence.campus_lane` + `campus_next_retry_at`（默认退避 7 天），**不碰 state / official_entry_url**——那是社招入口的账。
+  - 🚫 **纠错（2026-09-23）：上面「按平台换算校招板块 URL」对国聘 / slug 车道从没生效过**。❌ 9-18~9-20 台账报「新增 10 个校招源」，
+    实为 10 条国聘**社招** URL（不带 nature=应届生，board=social）；这些公司下一轮仍是 missing，再派生同一个社招 URL →
+    撞「source_url 已由 enabled source 占用」→ 异常 +1 天重试，招行 / 比亚迪 / 海信 / 中海油 / 大悦城天天空转。
+    ✅ 根因：换算原先包在 fingerprinter 外面，而带 preset 的候选根本不调 fingerprinter、国聘 URL 又是评估时才补的。
+    ✅ 防：换算挪进 `_evaluate_candidates`（身份门与国聘补 URL 之后，`board_transform=_to_campus_board`）；
+    `test_campus_lane_converts_preset_candidates_to_campus_board` 钉着，另有反向用例保证社招主队列不被换成校招 URL。
 
 ## 搜索额度是全局共享的 —— 贪心方必须给校招链留一份（2026-08-28 立）
 

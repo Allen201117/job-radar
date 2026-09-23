@@ -379,6 +379,20 @@ class CareersLinkTest(unittest.TestCase):
         self.assertIn("https://example.com/job/404detail", urls)
 
 
+
+class MalformedHrefTest(unittest.TestCase):
+    def test_one_malformed_href_only_drops_itself(self):
+        # 2026-09-23：一个畸形 href 曾让 _extract_candidates 抛 ValueError，被上层整体吞掉 →
+        # 这家公司的官网车道整条归零。现在只丢那一条。
+        html = ('<a href="http://[bad">加入我们</a>'
+                '<a href="http://www.x.com，或巨潮资讯网：www.y.com">招聘</a>'
+                '<a href="/careers">加入我们</a>')
+        items = se._extract_candidates(html, "https://www.acme.com/", "https://www.acme.com/")
+        self.assertEqual([item["url"] for item in items], ["https://www.acme.com/careers"])
+
+    def test_http_url_rejects_unparseable(self):
+        self.assertIsNone(se._http_url("https://["))
+
 if __name__ == "__main__":
     unittest.main()
 
