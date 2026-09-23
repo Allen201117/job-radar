@@ -1,4 +1,7 @@
 export const dynamic = "force-dynamic";
+// 洞察索引过期后在 waitUntil 里后台重建（lib/insight-library-store）：给它留足时间，
+// 别让函数默认时长把重建掐断 —— 2026-09-04「索引三小时不动」疑似就是这么断的。
+export const maxDuration = 60;
 
 import { redirect } from "next/navigation";
 import Navbar from "@/components/Navbar";
