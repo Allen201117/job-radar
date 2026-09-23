@@ -744,6 +744,24 @@ class RejectedLocationTest(unittest.TestCase):
         self.assertTrue(is_rejected_location("泰国,越南,台北市"))
 
 
+class PinnedOverseasWithoutCountryCodeTest(unittest.TestCase):
+    """2026-09-23 补的境外钉词：没有国家码可给，但地点明摆着在境外，不能按 regions 猜成国内。"""
+
+    def test_new_tokens_pin_scope_but_leave_country_empty(self):
+        for loc in ("Athens, Georgia", "Little, Chalfont, England", "Athens, Attica, Greece",
+                    "Almaty, Almaty, Kazakhstan", "Hamilton, Bermuda", "Minsk, Minsk, Belarus"):
+            self.assertIsNone(derive_country_code(loc), loc)
+            self.assertEqual(derive_job_scope(loc, {"CN", "US"}), "overseas", loc)
+
+    def test_jordan_is_deliberately_not_pinned(self):
+        # 香港九龙有佐敦（Jordan）：收了它，「Jordan, Kowloon」会被钉成境外
+        self.assertNotIn("jordan", geo.OVERSEAS_LOCATION_TOKENS)
+        self.assertEqual(derive_job_scope("Jordan, Kowloon", {"CN"}), "domestic")
+
+    def test_linkedin_tag_is_not_liechtenstein(self):
+        self.assertIsNone(derive_country_code("LI, REMOTE"))
+
+
 class TitleCityLocationTest(unittest.TestCase):
     """location 为空时从标题认城市（2026-09-23 加）。与 lib/geo.js 的 titleCityLocation 共读夹具
     tests/fixtures/title-city-cases.json，两侧逐条断言一致；为什么这么判见 geo.title_city_location 注释。"""

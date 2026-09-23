@@ -971,8 +971,55 @@ def _cms_parse_list(html_text: str, origin: str):
                          if normalizer.is_recruitment_type(fields.get("education")) else None),
             "title_truncated": bool(_CMS_TRUNCATED_RE.search(title)),
         })
+    if not rows:
+        rows = _cms_parse_position_items(body, origin)
     pages = [int(p) for p in _CMS_PAGE_LINK_RE.findall(body)]
     return rows, (max(pages) if pages else None)
+
+
+# 「position-item」模板（2026-09-23，药石科技 pharmablock.zhiye.com）：同属老版 CMS（无 PortalId、?PageIndex= 翻页、
+# /zwxq?jobId= 详情），但岗位行不是 <li><a>，而是
+#   <div class="position-item"><div class="position-name"><a href="/zwxq?jobId=…">标题</a></div>
+#     <div class="position-info"><span class="city">江苏省-南京市</span>…<span>2024-09-14</span></div>
+#     <div class="position-desc"><h4>工作内容</h4><p>整段 JD…</p></div>…
+# _CMS_ROW_RE 强制锚 <li>（防「热招职位」侧栏裸锚点冒充主列表，见上），于是这类页 0 行、整源静默 0 岗。
+# 这里只在 <li> 一行都没匹到时才启用，且锚在 position-item → position-name → jobId 这条三层结构上，
+# 侧栏裸 <a> 进不来；既有租户走不到这条分支（全集核过：近 4 天 0 产出的 5 个北森源里没有一个是这种标记）。
+_CMS_POSITION_ITEM_SPLIT_RE = re.compile(r"<div[^>]*class=\"position-item\"[^>]*>", re.I)
+_CMS_POSITION_NAME_RE = re.compile(
+    r"<div[^>]*class=\"position-name[^\"]*\"[^>]*>\s*<a\s[^>]*href=\"(?P<href>[^\"]*[?&](?:jobId|jobAdId|adId)=[^\"]+)\"[^>]*>(?P<title>.*?)</a>",
+    re.S | re.I)
+_CMS_POSITION_CITY_RE = re.compile(r"<span[^>]*class=\"city[^\"]*\"[^>]*>(.*?)</span>", re.S | re.I)
+_CMS_POSITION_DATE_RE = re.compile(r"<span[^>]*>\s*(\d{4}-\d{2}-\d{2})\s*</span>")
+_CMS_POSITION_DESC_RE = re.compile(r"<div[^>]*class=\"position-desc\"[^>]*>(.*?)</div>", re.S | re.I)
+
+
+def _cms_parse_position_items(body: str, origin: str) -> list:
+    """「position-item」模板的列表行 → 与 _cms_parse_list 同形的 rows（另带列表自带的 summary / posted_at）。"""
+    rows, seen = [], set()
+    for block in _CMS_POSITION_ITEM_SPLIT_RE.split(body)[1:]:
+        m = _CMS_POSITION_NAME_RE.search(block)
+        if not m:
+            continue
+        jd_url = _cms_normalize_job_url(origin, m.group("href"))
+        title = _cms_text(m.group("title")).strip()
+        if not jd_url or jd_url in seen or not (3 <= len(title) <= 120):
+            continue
+        city = _CMS_POSITION_CITY_RE.search(block)
+        date = _CMS_POSITION_DATE_RE.search(block)
+        desc = "\n".join(t for t in (_cms_text(d) for d in _CMS_POSITION_DESC_RE.findall(block)) if t)
+        seen.add(jd_url)
+        rows.append({
+            "title": title,
+            "jd_url": jd_url,
+            "location": (_cms_text(city.group(1)) or None) if city else None,
+            "education": None,
+            "job_type": None,
+            "summary": desc or None,
+            "posted_at": date.group(1) if date else None,
+            "title_truncated": bool(_CMS_TRUNCATED_RE.search(title)),
+        })
+    return rows
 
 
 def _cms_parse_detail(html_text: str) -> dict:
@@ -1738,7 +1785,8 @@ class BeisenAdapter(ChinaSpaAdapter):
         单条失败静默跳过（保留列表信息，最差是薄卡），绝不因为一个详情页炸掉整源。"""
         cap = resolve_detail_cap(_CMS_DETAIL_CAP)
         truncated = [r for r in rows if r.get("title_truncated")]
-        rest = [r for r in rows if not r.get("title_truncated")]
+        # 列表已自带正文（position-item 模板）的行不用再打详情页；theme2 列表从不带 summary，对既有租户是空操作。
+        rest = [r for r in rows if not r.get("title_truncated") and not r.get("summary")]
         queue = truncated + rest
         budget = max(cap, min(len(truncated), _CMS_TITLE_REPAIR_CAP))
         for row in queue[:budget]:

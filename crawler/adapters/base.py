@@ -169,6 +169,10 @@ class RawJob:
     experience: Optional[str] = None   # 经验要求；adapter 可直填，否则由 normalizer 从全文抽取
     education: Optional[str] = None     # 学历要求；同上
     deadline: Optional[str] = None      # 投递截止；同上
+    # 对方 ATS 在结构化字段里**自报**的国家（ISO-3166 alpha-2），不是从地点文本猜的。
+    # 只在地点文本判不出国家、job_scope 只能按 source.regions 猜的时候才生效（normalizer.normalize），
+    # 地点能判出国家时一律以地点为准。没有就留 None。目前只有 workday 填（detail 的 alpha2Code）。
+    country_code: Optional[str] = None
 
 
 @dataclass

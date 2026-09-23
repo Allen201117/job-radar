@@ -331,6 +331,30 @@ test("geo 词表与 crawler/geo.py 逐条一致", () => {
   }
 });
 
+// OVERSEAS_LOCATION_TOKENS / _PHRASES 是 derive_job_scope「钉在境外」那一步的词表。lib/geo.js 的注释
+// 早就写着「会 deepEqual 对拍」，但上面那条测试并不包含它们——这里补上，按集合比（两端书写顺序不同）。
+test("境外钉词表与 crawler/geo.py 逐条一致", () => {
+  const py = fs.readFileSync(path.join(__dirname, "..", "crawler", "geo.py"), "utf8");
+  const js = fs.readFileSync(path.join(__dirname, "..", "lib", "geo.js"), "utf8");
+  const words = (block) => block.replace(/#.*$|\/\/.*$/gm, "").match(/"([^"]+)"/g).map((s) => s.slice(1, -1)).sort();
+  const pyTokens = py.match(/^OVERSEAS_LOCATION_TOKENS = \{([\s\S]*?)^\}/m);
+  const jsTokens = js.match(/^const OVERSEAS_LOCATION_TOKENS = new Set\(\[([\s\S]*?)^\]\);/m);
+  const pyPhrases = py.match(/^OVERSEAS_LOCATION_PHRASES = \(([\s\S]*?)^\)/m);
+  const jsPhrases = js.match(/^const OVERSEAS_LOCATION_PHRASES = \[([\s\S]*?)^\];/m);
+  for (const m of [pyTokens, jsTokens, pyPhrases, jsPhrases]) assert.ok(m, "找不到词表定义");
+  assert.deepEqual(words(jsTokens[1]), words(pyTokens[1]));
+  assert.deepEqual(words(jsPhrases[1]), words(pyPhrases[1]));
+});
+
+test("deriveJobScope: 词表没有国家码的境外地名钉在境外，不按 regions 猜", () => {
+  for (const loc of ["Athens, Georgia", "Little, Chalfont, England", "Athens, Attica, Greece",
+    "Almaty, Almaty, Kazakhstan", "Hamilton, Bermuda"]) {
+    assert.equal(deriveCountryCode(loc), null, loc);
+    assert.equal(deriveJobScope(loc, ["CN", "US"]), "overseas", loc);
+  }
+  assert.equal(deriveJobScope("Jordan, Kowloon", ["CN"]), "domestic"); // 香港佐敦：刻意不收 jordan
+});
+
 // isRejectedLocation：「要不要放行」的唯一硬判据，与 deriveJobScope（放行后怎么归类）是两个
 // 问题。2026-09-18 香港库实测：48 行 active + country_code='TW' 全部因两类 adapter 根因绕开
 // 或压根没走 locationInScope 复核而漏进库——见 crawler/geo.py 同名函数注释与实测台账。

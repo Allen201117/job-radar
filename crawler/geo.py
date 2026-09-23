@@ -139,6 +139,14 @@ OVERSEAS_LOCATION_TOKENS = {
     "algeria", "bulgaria", "cambodia", "chile", "croatia", "czechia", "denmark", "ecuador",
     "estonia", "finland", "guatemala", "hungary", "latvia", "lithuania", "morocco", "norway",
     "pakistan", "romania", "russia", "serbia", "slovakia", "slovenia", "tunisia", "ukraine",
+    # 2026-09-23 补：地点里写着这些名字、却因为词表没有而按 source.regions 兜底判成 domestic 的在招岗
+    # （全库 active 实测：Georgia 63 / England 9 / Greece 5 / Kazakhstan 2 / Bangladesh·Belarus·Bermuda 各 1）。
+    # "georgia" 只钉「在境外」、不给国家码：它多半是美国佐治亚州（Athens, Georgia），也可能是格鲁吉亚，
+    # 两种都在境外，所以 scope 判得准；国家码仍留空（US 词表刻意不收它，见 _US_STATE_NAMES）。
+    # ⚠️ 刻意**不收** "jordan"：香港九龙有佐敦（Jordan），「Jordan, Kowloon」这类写法会被钉成境外；
+    #    库里另有 South Jordan / West Jordan（犹他州），那些靠 Utah / United States 早就判出了 US。
+    "georgia", "england", "scotland", "wales", "greece", "kazakhstan", "bangladesh", "belarus",
+    "bermuda",
 }
 OVERSEAS_LOCATION_PHRASES = (
     "united states", "united kingdom", "new zealand", "south korea", "saudi arabia",
@@ -857,7 +865,8 @@ _LEADING_CODE_ALIASES = {"UK": "GB"}
 #   · GM = 通用汽车的厂区前缀（`GM, Global, Technical, Center, , , 7000, Bldg`，
 #     jd_url 是 generalmotors.wd5.myworkdayjobs.com，实际在密歇根 Warren）——不是冈比亚。
 #   · NA = 卡夫亨氏写的「North America」占位（location 字面就是裸 `NA`）——不是纳米比亚。
-_LEADING_CODE_BLOCKLIST = frozenset({"GM", "NA"})
+#   · LI = LinkedIn 招聘标签「#LI-Remote」（爱德华兹 `LI, REMOTE`，岗位标题写着 US-Remote）——不是列支敦士登。
+_LEADING_CODE_BLOCKLIST = frozenset({"GM", "NA", "LI"})
 
 _LEADING_COUNTRY_RE = re.compile(r"^([A-Z]{2})\s*[,，]")
 

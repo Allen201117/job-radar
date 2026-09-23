@@ -24,7 +24,7 @@ import httpx
 
 import normalizer
 from geo import derive_country_code
-from .base import BaseAdapter, PageResult, RawJob, paginate_all, resolve_detail_cap
+from .base import BaseAdapter, PageResult, RawJob, _env_int, paginate_all, resolve_detail_cap
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,33 @@ def _is_facet_in_regions(desc: str, regions) -> bool:
         if any(_contains_facet_keyword(d, kw) for kw in _REGION_FACET_KEYWORDS.get(region, ())):
             return True
     return False
+
+
+_GREATER_CHINA_CODES = frozenset({"CN", "HK", "MO"})
+
+
+def _declared_country(info) -> Optional[str]:
+    """detail 里对方自报的国家（ISO-2），给地点文本说不清国家的岗用（见 _resolve_declared_countries）。
+
+    主依据是 jobRequisitionLocation.country.alpha2Code：2026-09-23 实测 1,053 个 detail 全都带它。
+    **不用** jobPostingInfo.country：它会错——赛默飞「Remote, Georgia」写成格鲁吉亚（招聘地点是
+    US - Atlanta, GA）、诺华美国远程岗写成瑞士、强生 New Brunswick (NJ) 写成加拿大。
+
+    ⚠️ 宁可漏判：岗位的任何一处地点（自报国家 / 主地点 / 附加地点）沾大中华就判大中华。
+    这批岗原本按 regions 兜底，外企源几乎都是 domestic；自报只该把「确实全在境外」的岗挪出去，
+    不能因为招聘主地点在曼谷，就把同时挂着天津的岗（恩智浦，实测）挪出国内。
+    """
+    if not isinstance(info, dict):
+        return None
+    req = info.get("jobRequisitionLocation") or {}
+    alpha2 = str((req.get("country") or {}).get("alpha2Code") or "").strip().upper()
+    texts = [info.get("location"), req.get("descriptor"), (info.get("country") or {}).get("descriptor")]
+    texts.extend(info.get("additionalLocations") or [])
+    codes = [alpha2] + [derive_country_code(t) for t in texts if isinstance(t, str) and t.strip()]
+    for code in codes:
+        if code in _GREATER_CHINA_CODES:
+            return code
+    return alpha2 if re.fullmatch(r"[A-Z]{2}", alpha2) else None
 
 
 def _search_texts_for_regions(regions):
@@ -209,8 +236,19 @@ class WorkdayAdapter(BaseAdapter):
         #    （trusted 全保留；text_posts 取在华的），单源封顶防夜间全量被拖垮；失败该岗无摘要、不影响入库。
         self._enrich_descriptions(trusted, headers, filter_by_regions=False, regions=regions)
         self._enrich_descriptions(text_posts, headers, filter_by_regions=True, regions=regions)
+
+        # 5) 地点说不清国家的岗，问对方 detail 自报的国家（见 _resolve_declared_countries）。
+        #    ⚠️ 不受 CRAWL_DETAIL_CAP 管：快档（cap=0）和重档必须对同一个岗给出同一个答案，
+        #    否则一天四次快档判 domestic、夜里重档判 overseas，这个岗就在两个池子之间来回跳。
+        self.country_lookup = {"needed": 0, "looked_up": 0, "declared": 0, "unresolved": 0}
+        self._resolve_declared_countries(trusted, headers, filter_by_regions=False, regions=regions)
+        self._resolve_declared_countries(text_posts, headers, filter_by_regions=True, regions=regions)
+        unresolved = self.country_lookup["unresolved"]
+        if unresolved:
+            logger.warning("workday %s: %d/%d posts' country unresolved (detail unreachable), "
+                           "not written this run", self._host, unresolved, self.country_lookup["needed"])
         self.reported_total = len(trusted) + len(text_posts)
-        self.fetch_complete = not any_capped
+        self.fetch_complete = not any_capped and not unresolved
 
         return json.dumps({
             "_host": self._host, "_site": self._site,
@@ -310,19 +348,102 @@ class WorkdayAdapter(BaseAdapter):
             ep = (p.get("externalPath") or "").strip()
             if not ep:
                 continue
-            if filter_by_regions:
-                loc = self._loc_from_path(ep) or p.get("locationsText")
-                if not normalizer.location_in_source_regions(loc, regions):
-                    continue
+            loc = self._post_location(p)
+            if filter_by_regions and not normalizer.location_in_source_regions(loc, regions):
+                continue
             try:
                 d = httpx.get(f"{self._cxs_base}{ep}", headers=headers, timeout=self.timeout)
                 if d.status_code < 300:
-                    desc = (d.json().get("jobPostingInfo", {}) or {}).get("jobDescription")
+                    info = d.json().get("jobPostingInfo", {}) or {}
+                    desc = info.get("jobDescription")
                     if desc:
                         p["_jd"] = desc
+                    if normalizer.needs_declared_country(loc):
+                        # 同一个响应里就有国家，顺手记下，第 5 步不必再为它请求一次。
+                        p["_country"] = _declared_country(info)
                     n += 1
             except Exception:
                 continue
+
+    _COUNTRY_LOOKUP_CAP = 2000  # 单源「只为问国家」的 detail 请求上限（2026-09-23 实测单源最多 ~310 个）
+
+    def _resolve_declared_countries(self, posts: List[dict], headers: dict, filter_by_regions: bool, regions=None):
+        """地点文本说不清国家的岗（'Durham' / 'Remote' / 'One Island East'），问 detail 要对方自报的国家，
+        记在 post['_country']，parse 交给 RawJob.country_code。
+
+        为什么要问：这批岗的 job_scope 原本只能按 source.regions 猜，而外企源 regions 大多含 CN →
+        一律判 domestic。2026-09-23 香港库实测这样判 domestic 的在招 workday 岗 1,715 个，
+        detail 问得到国家的 1,053 个里 US 541 / HK 306 / GB 28 / CN 27 / CA 24 …
+
+        防来回跳（同一个岗今天 overseas、明天 domestic）的三条：
+          · 每个需要的岗每一轮都问，不看 CRAWL_DETAIL_CAP（见 fetch 第 5 步）；
+          · detail 明确说「这个岗不对外」（4xx）是确定答复 → 按原样走 regions 兜底，每轮结果一样；
+          · 超时 / 5xx / 限流重试后仍拿不到 = 这一轮不知道 → **这个岗本轮不写库**（parse 跳过），
+            库里保留上一轮的判定，fetch_complete 如实记 False。宁可一轮没刷新，不拿猜的值覆盖。
+        """
+        cap = _env_int("CRAWL_COUNTRY_LOOKUP_CAP", self._COUNTRY_LOOKUP_CAP)
+        stats = self.country_lookup
+        for p in posts:
+            if not isinstance(p, dict) or "_country" in p:
+                continue
+            ep = (p.get("externalPath") or "").strip()
+            if not ep or not (p.get("title") or "").strip():
+                continue  # parse 不会产出它，不用问
+            loc = self._post_location(p)
+            if filter_by_regions and not normalizer.location_in_source_regions(loc, regions):
+                continue
+            if not normalizer.needs_declared_country(loc):
+                continue
+            stats["needed"] += 1
+            if stats["looked_up"] >= cap:
+                p["_country_unresolved"] = True
+                stats["unresolved"] += 1
+                continue
+            stats["looked_up"] += 1
+            status, info = self._get_detail(ep, headers)
+            if status is None:
+                p["_country_unresolved"] = True
+                stats["unresolved"] += 1
+                continue
+            p["_country"] = _declared_country(info) if info is not None else None
+            if p["_country"]:
+                stats["declared"] += 1
+            if info is not None and info.get("jobDescription") and not p.get("_jd"):
+                p["_jd"] = info["jobDescription"]  # 已经拿到了，不多花请求
+
+    def _get_detail(self, ep: str, headers: dict):
+        """GET detail。返回 (status, jobPostingInfo)：
+        2xx → (status, info)；4xx（429 除外）→ (status, None)，确定答复（岗位不对外 / 已下架）；
+        连接异常 / 5xx / 429 重试一次仍失败 → (None, None)，本轮不知道。"""
+        url = f"{self._cxs_base}{ep}"
+        for attempt in range(2):
+            last = attempt == 1
+            try:
+                d = httpx.get(url, headers=headers, timeout=self.timeout)
+            except Exception as e:
+                if last:
+                    logger.info("workday detail %s failed twice: %r", url, e)
+                    return None, None
+                time.sleep(1)
+                continue
+            if d.status_code == 429 or d.status_code >= 500:
+                if last:
+                    return None, None
+                try:
+                    wait = float(d.headers.get("Retry-After", 1))
+                except (TypeError, ValueError):
+                    wait = 1
+                time.sleep(min(30, max(0, wait)))
+                continue
+            if d.status_code >= 300:
+                return d.status_code, None
+            try:
+                return d.status_code, d.json().get("jobPostingInfo") or {}
+            except ValueError:
+                if last:
+                    return None, None
+                time.sleep(1)
+        return None, None
 
     @staticmethod
     def _facet_candidates_for_regions(facets, regions) -> dict:
@@ -372,7 +493,9 @@ class WorkdayAdapter(BaseAdapter):
             ep = (p.get("externalPath") or "").strip()
             if not title or not ep:
                 return
-            location = self._loc_from_path(ep) or (p.get("locationsText") or None)
+            if p.get("_country_unresolved"):
+                return  # 本轮没问到国家：不写这一行，库里保留上一轮的判定（见 _resolve_declared_countries）
+            location = self._post_location(p)
             # trusted（facet 已服务端过滤）全部在华直接收；text_posts（searchText 文本召回）按 location 严格
             # 判定在华（大陆/港/澳）—— 外企 Workday 的 "Remote" 多指母国远程而非中国，故用 is_china_location，
             # 避免泄漏非华岗（如 "Remote - Delhi" / Haifa）。
@@ -395,6 +518,7 @@ class WorkdayAdapter(BaseAdapter):
                 jd_url=jd_url,
                 apply_url=jd_url,
                 posted_at=None,  # postedOn 是相对文案（"Posted Yesterday"），不伪造日期
+                country_code=p.get("_country"),  # 对方 detail 自报的国家；只在地点说不清时生效
             ))
 
         # 向后兼容：旧形态 {"posts", "_china_filtered"}；新形态 {"trusted_posts","text_posts"}
@@ -408,6 +532,12 @@ class WorkdayAdapter(BaseAdapter):
             for p in data.get("text_posts", []):
                 emit(p, trusted=False)
         return out
+
+    @staticmethod
+    def _post_location(p: dict) -> Optional[str]:
+        """parse 写进 RawJob.location 的那个地点。问不问国家、按不按 regions 过滤都必须看同一个值。"""
+        ep = (p.get("externalPath") or "").strip()
+        return WorkdayAdapter._loc_from_path(ep) or (p.get("locationsText") or None)
 
     @staticmethod
     def _loc_from_path(ep: str) -> Optional[str]:
