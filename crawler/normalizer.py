@@ -284,7 +284,6 @@ def make_content_hash(title: str, location: Optional[str], summary: Optional[str
 def normalize(raw: RawJob, *, source_id: str, company: str, regions=None) -> dict:
     title = clean_title(raw.title)
     location = clean_location(raw.location)
-    geo_location = geo_basis(raw.location, location)
     full_summary = clean_summary(raw.summary)
     salary = clean_salary(raw.salary_text)
     job_type = (
@@ -295,6 +294,8 @@ def normalize(raw: RawJob, *, source_id: str, company: str, regions=None) -> dic
     # hash 按 adapter 给的地点算：标题城市是标题的纯函数、不带新信息，这样上线不会让存量行的 hash 集体翻一遍。
     content_hash = make_content_hash(title, location, full_summary)
     location = location_or_title_city(location, title)
+    # 必须排在标题兜底之后：country_code / job_scope 要按最终写进库的地点算（标题城市 → CN）。
+    geo_location = geo_basis(raw.location, location)
     experience = raw.experience or extract_experience(raw.summary)
     education = raw.education or extract_education(raw.summary)
     deadline = raw.deadline or extract_deadline(raw.summary)
