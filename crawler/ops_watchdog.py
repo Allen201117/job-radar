@@ -125,6 +125,10 @@ MODULE_OUTPUT = {
 # pipeline.*_ran 兜）；campus_board_verify 的崩溃行显式带 errors=1。所以对它们只按 produced/work
 # 判，不走「当天所有 run 全失败 = 零产出」的捷径——否则一条正常复查、全部判出否定结论的漏斗
 # 会被天天当成故障（2026-08-30 起 issue #17 / #8 / #34 即此）。
+# ⚠️ 这套口径**看不见**的两种故障（刻意接受，别指望规则 A 兜）：
+#   · 否定结论本身判错了——指纹回归把真 ATS 判成 wrong_platform、moka 解析静默返回 0 被当成空板块，
+#     都停在验收门之前，处理量为 0。整类 adapter 塌由规则 K 看，漏斗覆盖停涨由晨报北极星看；
+#   · 整轮崩在落台账之前（census / 连库失败）——当天没有行，由结构性审计 pipeline.gap_funnel_ran 看。
 VERDICT_STATUS_MODULES = frozenset({"gap_funnel", "gap_funnel_browser", "campus_board_verify"})
 
 # ⚠️ 周任务在当前规则 A 下几乎不可能被判定为「连续零产出」（2026-09-18 发现，未修，先如实记录）：
