@@ -81,6 +81,8 @@ from adapters.midea_campus import MideaCampusAdapter
 from adapters.duoyi import DuoyiAdapter
 from adapters.cmb import CmbAdapter
 from adapters.cmbc import CmbcAdapter
+from adapters.citicbank import CiticbankAdapter
+from adapters.cib import CibAdapter
 from adapters.spdb import SpdbAdapter
 from adapters.icbc import IcbcAdapter
 from adapters.ccb import CcbAdapter
@@ -211,6 +213,7 @@ ADAPTERS = {
     "duoyi_campus": DuoyiAdapter(),
     "cmb": CmbAdapter(),  # 招商银行自建门户：公开社会招聘接口，零浏览器
     "cmbc": CmbcAdapter(),  # 中国民生银行自建门户：公开社会招聘接口，零浏览器
+    "citicbank": CiticbankAdapter(),  # 中信银行招聘官网：recruitQuery 公开接口 + 静态详情页，零浏览器
     "gree": GreeAdapter(),  # 格力自建门户：公开校招/社招接口，零浏览器
     "spdb": SpdbAdapter(),  # 浦发银行自建门户：公开社招/校招列表 + 逐岗详情页正文，零浏览器
     "icbc": IcbcAdapter(),  # 工商银行自建门户：qryPostList/qryPostById 公开接口，零浏览器
@@ -219,6 +222,8 @@ ADAPTERS = {
     "cmcc": CmccAdapter(),  # 中国移动招聘网站：searchJobs 公开接口（RSA 签名头自算），零浏览器
     # 农业银行：接口响应体是 SM4 密文，明文只存在于浏览器内存 → 只能走 Playwright 读 React state
     "abchina": AbchinaAdapter(),
+    # 兴业银行：JUP 框架给每个请求现场签名（SM3-HMAC + SM4 防重放），直接调用页面自己的请求函数
+    "cib": CibAdapter(),
 }
 
 # 中国本土公司源（每日后台爬取高优）：本土覆盖优先级 > 外企，排在外企 ATS 前先抓。
@@ -232,7 +237,9 @@ DOMESTIC_ADAPTERS = {
     "spdb", "icbc", "ccb", "bankcomm", "cmcc",  # 国有大行 + 中国移动自建门户（2026-09-05 live 核实逐岗详情页，零浏览器）
     "chnenergy",  # 国家能源集团（2026-09-05 live 核实逐岗详情页；曾被误当公告制）
     "crc",  # 华润集团自建平台（2026-09-20 live 核实逐岗详情页 + 列表即全文）
+    "citicbank",  # 中信银行招聘官网（2026-09-23 live 核实逐岗静态详情页，零浏览器）
     "abchina",  # 农业银行（浏览器档：响应体加密，读 React state）
+    "cib",  # 兴业银行（浏览器档：请求要现场签名，调用页面自己的请求函数）
     "lixiang_campus",  # 理想汽车校招/实习（2026-09-09 live 核实逐岗详情页，零浏览器）
     "sf_express_campus", "midea_campus",  # 顺丰 / 美的 校招门户（2026-09-18 live，零浏览器）
     "duoyi", "duoyi_campus",  # 多益网络 社招 / 校招官网（2026-09-18 live，列表即全文，零浏览器）
@@ -257,6 +264,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "spdb", "icbc", "ccb", "bankcomm", "cmcc",  # 国有大行 + 中国移动自建门户，纯 httpx（无浏览器、无共享状态）
     "chnenergy",  # 国家能源集团自建门户，纯 httpx（POST 列表 + GET 详情）
     "crc",  # 华润集团自建平台：网关 POST 列表即全文，纯 httpx、无共享状态（2026-09-20 live）
+    "citicbank",  # 中信银行：POST 列表 + GET 静态详情，纯 httpx、无共享状态（2026-09-23 live）
     # 字节：jobs.bytedance.com posts API 已改为纯 httpx offset/limit 全量翻页；
     # sources.crawl_method 仍由运维侧改库，本白名单只控制代码侧并发档。
     "bytedance", "bytedance_campus",

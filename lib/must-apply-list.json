@@ -1,5 +1,190 @@
 {
-  "_version": "2026Q3-v1",
+  "_version": "2026Q3-v2",
+  "_removed": {
+    "_note": "移出必投覆盖口径的公司（不计入分母）。保留原 pattern 与证据，对方开了官方渠道时按「怎么复查」核实后移回对应行业即可。测试会校验：每个行业现有家数 + 该行业移出家数 = 30。",
+    "仁恒置地": {
+      "industry": "地产/建筑",
+      "pattern": "%仁恒%",
+      "reason": "entry_not_found",
+      "evidence": "北森租户 yanlord.zhiye.com 已下线（302 到 404，响应头 Web: BeiSen）；官网 yanlordland.com 本机三种方式均连接失败。",
+      "how_to_restore": "⚠️ 官网连不上不能完全排除是网络环境问题——换稳定境内出口先打开 yanlordland.com/cn/ 复查招聘栏目。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "金螳螂": {
+      "industry": "地产/建筑",
+      "pattern": "%金螳螂%",
+      "reason": "entry_not_found",
+      "evidence": "官网「企业招聘」栏目只有一条防虚假招聘声明；历史北森租户 goldmantis.zhiye.com 已 404。",
+      "how_to_restore": "大概率会再走北森新租户，定期搜索 goldmantis.zhiye.com 或新租户。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "日日顺": {
+      "industry": "物流/供应链",
+      "pattern": "%日日顺%",
+      "reason": "entry_not_found",
+      "evidence": "官网 rrswl.com 的「职业发展」页实为仓库/网点查询工具；社招只在 51job（红线）。",
+      "how_to_restore": "⚠️ 海尔集团统一校招门户 maker.haier.net 的品牌选项里有日日顺——摸清如何按品牌筛出稳定逐岗页后可按日日顺接回。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "安能物流": {
+      "industry": "物流/供应链",
+      "pattern": "%安能物流%",
+      "reason": "entry_not_found",
+      "evidence": "官网 self-recruit.html 只是通用导航壳（「岗位/职位」0 次命中）；hr/zhaopin/job/campus 子域 SSL 握手全部失败。",
+      "how_to_restore": "可查其港股 IR 站是否另有 HR 页；出现逐岗页时恢复。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "闪送": {
+      "industry": "物流/供应链",
+      "pattern": "%闪送%",
+      "reason": "no_per_job_url",
+      "evidence": "官网唯一「招聘」页 m.ishansong.com/recruit.html 只招众包骑手、无职位列表；office 类岗位只在 BOSS/猎聘（红线）。",
+      "how_to_restore": "官网出现 office 类岗位的逐岗页时恢复。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "准时达": {
+      "industry": "物流/供应链",
+      "pattern": "%准时达%",
+      "reason": "entry_not_found",
+      "evidence": "官网 jusdascm.com（版权：富泰华工业）无招聘入口；搜到的 chinalogisticsgroup.hotjob.cn 自报「中国物流集团」，是另一家公司；富士康统一招聘站的岗位按归属红线应记富士康。",
+      "how_to_restore": "若富士康招聘站能按「招聘单位=准时达」筛出逐岗页，按准时达归属接回。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "百世集团": {
+      "industry": "物流/供应链",
+      "pattern": "%百世%",
+      "reason": "not_hiring_now",
+      "evidence": "官网 800best.com/hr/jobs 自建招聘板块正常，但当前 0 岗；境内快递业务 2021 年已出售给极兔，母公司 2025 年私有化。",
+      "how_to_restore": "官网招聘板块重新挂岗时恢复。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "华策影视": {
+      "industry": "传媒/文娱",
+      "pattern": "%华策%",
+      "reason": "entry_not_found",
+      "evidence": "官网「人才中心」join.html 实为企业文化图文页，逐个检查导航均非职位列表；未命中任何 ATS 租户。",
+      "how_to_restore": "官网人才中心挂出真实岗位列表时恢复。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "开心麻花": {
+      "industry": "传媒/文娱",
+      "pattern": "%开心麻花%",
+      "reason": "entry_not_found",
+      "evidence": "两个官网（kaixinmahua.hi.cn / shkxmh.com）均无招聘链接；国聘上仅有「天津开心麻花民园剧院管理有限公司」空壳，自报民营、0 岗。",
+      "how_to_restore": "官网出现招聘栏目或 ATS 租户时恢复。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "正午阳光": {
+      "industry": "传媒/文娱",
+      "pattern": "%正午阳光%",
+      "reason": "entry_not_found",
+      "evidence": "官网域名 daylightent.com 只是虚拟主机默认占位页（「恭喜，站点创建成功」）；招聘信息只在第三方平台，投递方式为邮箱。",
+      "how_to_restore": "官网真正建站并有岗位列表时恢复。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "松鼠AI": {
+      "industry": "教育",
+      "pattern": "%松鼠AI%",
+      "reason": "entry_not_found",
+      "evidence": "squirrelai.com/careers 静态页岗位区为空、无 ATS 嵌入，偏海外团队官网；中国区岗位只见于第三方平台与邮箱投递。",
+      "how_to_restore": "出现中国区官方 ATS 租户时恢复。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "尚德机构": {
+      "industry": "教育",
+      "pattern": "%尚德机构%",
+      "reason": "entry_not_found",
+      "evidence": "官网 sunlands.com 为 2C 课程营销站，无招聘入口；常见 ATS 子域均落空。",
+      "how_to_restore": "出现官方招聘系统时恢复。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "达内教育": {
+      "industry": "教育",
+      "pattern": "%达内%",
+      "reason": "entry_not_found",
+      "evidence": "tedu.cn/zp/ 系列返回 404；「jobIndex」栏目是学员就业喜报（不是达内自己招人）。",
+      "how_to_restore": "官网出现社会招聘板块时恢复。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "思考乐": {
+      "industry": "教育",
+      "pattern": "%思考乐%",
+      "reason": "entry_not_found",
+      "evidence": "官网 skledu.com 全站导航无任何招聘入口，/join 只是官网后台登录；join/hr/campus/zhaopin 子域均不可达；招聘只见于公众号/小红书与第三方平台（红线）。",
+      "how_to_restore": "官网或 zhiye/mokahr/hotjob 等 ATS 上出现思考乐自己的岗位列表时恢复。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "洪恩教育": {
+      "industry": "教育",
+      "pattern": "%洪恩%",
+      "reason": "entry_not_found",
+      "evidence": "hongen.com / et.hongen.com / eihuman.com / goldhuman.com 均为产品/公司展示站，无招聘入口；搜索只返回 BOSS/智联/猎聘（红线）。",
+      "how_to_restore": "官网或 ATS 出现逐岗招聘页时恢复。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "凯叔讲故事": {
+      "industry": "教育",
+      "pattern": "%凯叔%",
+      "reason": "entry_not_found",
+      "evidence": "官网 kaishustory.com 为品牌展示单页，全文无招聘/加入我们；联系方式只有公众号与客服电话；岗位只见于第三方平台。其飞书源已于同日停用（迁移 298）。",
+      "how_to_restore": "官网或 ATS 出现逐岗招聘页时恢复。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    },
+    "中教控股": {
+      "industry": "教育",
+      "pattern": "%中教控股%",
+      "reason": "entry_not_found",
+      "evidence": "chinaeducation.hk 是港股投资控股的 IR 站，本身不直接招聘；招聘发生在旗下 9 所学校各自的人事处。",
+      "how_to_restore": "若要覆盖，应把旗下学校作为独立公司接，而不是给「中教控股」找入口。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "removed_in": "2026Q3-v2"
+    }
+  },
+  "_merged": {
+    "万达电影": {
+      "merged_into": "儒意影业",
+      "industry": "传媒/文娱",
+      "pattern": "%万达电影%",
+      "evidence": "万达电影（002739）2026 年因控制权变更更名儒意电影；wandafilm.com 301 到 ruyifilm.com，招聘在北森 ruyifilm.zhiye.com——清单里已有的「儒意影业」（%儒意%）就是这家公司、这个入口（2026-09-23 香港库 58 个在招、57 个正文达标）。原来两行并存 = 同一家公司占两个名额，其中「万达电影」这一行因旧 pattern 匹配不到任何岗，一直被算成缺口。",
+      "note": "是合并不是删除：这家公司仍由「儒意影业」这一行计入覆盖。库里没有任何叫「万达电影」的岗/源，所以不给儒意影业加 %万达电影% 别名（别名须逐条有据）。",
+      "verified_at": "2026-09-23",
+      "decision": "创始人 2026-09-23 拍板：「必投清单里面，这18家可以筛。」（经「项目更新汇总与验收」会话转达）",
+      "merged_in": "2026Q3-v2"
+    }
+  },
   "互联网/科技": [
     {
       "name": "字节跳动",
@@ -929,10 +1114,6 @@
       "pattern": "%华发%"
     },
     {
-      "name": "仁恒置地",
-      "pattern": "%仁恒%"
-    },
-    {
       "name": "大悦城",
       "pattern": "%大悦城%"
     },
@@ -967,10 +1148,6 @@
     {
       "name": "上海建工",
       "pattern": "%上海建工%"
-    },
-    {
-      "name": "金螳螂",
-      "pattern": "%金螳螂%"
     },
     {
       "name": "广联达",
@@ -1047,14 +1224,6 @@
       "pattern": "%满帮%"
     },
     {
-      "name": "日日顺",
-      "pattern": "%日日顺%"
-    },
-    {
-      "name": "安能物流",
-      "pattern": "%安能物流%"
-    },
-    {
       "name": "中国邮政",
       "pattern": "%中国邮政%"
     },
@@ -1099,24 +1268,12 @@
       "pattern": "%达达%"
     },
     {
-      "name": "闪送",
-      "pattern": "%闪送%"
-    },
-    {
-      "name": "准时达",
-      "pattern": "%准时达%"
-    },
-    {
       "name": "中储智运",
       "pattern": "%中储%"
     },
     {
       "name": "传化智联",
       "pattern": "%传化%"
-    },
-    {
-      "name": "百世集团",
-      "pattern": "%百世%"
     }
   ],
   "传媒/文娱": [
@@ -1161,24 +1318,12 @@
       "pattern": "%猫眼%"
     },
     {
-      "name": "万达电影",
-      "pattern": "%万达电影%"
-    },
-    {
       "name": "博纳影业",
       "pattern": "%博纳%"
     },
     {
       "name": "光线传媒",
       "pattern": "%光线传媒%"
-    },
-    {
-      "name": "华策影视",
-      "pattern": "%华策%"
-    },
-    {
-      "name": "开心麻花",
-      "pattern": "%开心麻花%"
     },
     {
       "name": "东方明珠",
@@ -1207,10 +1352,6 @@
     {
       "name": "柠萌影业",
       "pattern": "%柠萌%"
-    },
-    {
-      "name": "正午阳光",
-      "pattern": "%正午阳光%"
     },
     {
       "name": "快看漫画",
@@ -1291,10 +1432,6 @@
       "pattern": "%核桃编程%"
     },
     {
-      "name": "松鼠AI",
-      "pattern": "%松鼠AI%"
-    },
-    {
       "name": "中公教育",
       "pattern": "%中公%"
     },
@@ -1307,16 +1444,8 @@
       "pattern": "%粉笔%"
     },
     {
-      "name": "尚德机构",
-      "pattern": "%尚德机构%"
-    },
-    {
       "name": "传智教育",
       "pattern": "%传智%"
-    },
-    {
-      "name": "达内教育",
-      "pattern": "%达内%"
     },
     {
       "name": "昂立教育",
@@ -1329,18 +1458,6 @@
     {
       "name": "卓越教育",
       "pattern": "%卓越教育%"
-    },
-    {
-      "name": "思考乐",
-      "pattern": "%思考乐%"
-    },
-    {
-      "name": "洪恩教育",
-      "pattern": "%洪恩%"
-    },
-    {
-      "name": "凯叔讲故事",
-      "pattern": "%凯叔%"
     },
     {
       "name": "多邻国",
@@ -1357,10 +1474,6 @@
     {
       "name": "金吉列",
       "pattern": "%金吉列%"
-    },
-    {
-      "name": "中教控股",
-      "pattern": "%中教控股%"
     },
     {
       "name": "一起教育",

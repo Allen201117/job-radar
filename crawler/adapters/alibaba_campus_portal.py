@@ -190,7 +190,11 @@ class AlibabaCampusPortalAdapter(BaseAdapter):
                 company=self.company_name,
                 title=title,
                 location=location or None,
-                job_type=str(row.get("categoryName") or "").strip() or None,
+                # categoryName 只是「产品类/AI Infra」等职能；batchName 才是站点自报的招聘项目。
+                # 两者拼进 job_type，与兄弟 alibaba.py 同口径，分类器才能识别日常/研究型实习与届别校招。
+                job_type=" ".join(filter(None, [
+                    str(row.get("categoryName") or "").strip(), batch_name,
+                ])) or None,
                 summary="\n".join(bits).strip() or None,
                 jd_url=jd_url,
                 apply_url=jd_url,

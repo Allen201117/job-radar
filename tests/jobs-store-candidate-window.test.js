@@ -17,9 +17,11 @@ function loadSearch() {
   const { companyTierPatterns } = loadTs(path.join(ROOT, "lib", "company-tiers.ts"), cache);
   search.__resetScanCache();
   const calls = [];
-  const install = ({ candidates, count }) => {
+  const install = ({ candidates, count, hiddenCount }) => {
     client.jobsQuery = async (sql, params) => {
       calls.push({ sql, params });
+      // 用户隐藏岗那部分（按主键取，2026-09-23 起从共享计数里拆出来单算）
+      if (/^select count\(\*\)/.test(sql) && / and id = any\(/.test(sql)) return [hiddenCount || { total: 0, unclassified: 0 }];
       if (/^select count\(\*\)/.test(sql)) return count ? [count] : [];
       // ④ 的前置存在性查询（选了招聘类型才发）：与计数查询同一份 where，只问「有没有未分类的行」。
       if (/^select exists\(/.test(sql)) return count ? [{ pending: count.unclassified > 0 }] : [];
@@ -171,11 +173,11 @@ test("用户设了 exclude_keywords → 候选与计数的 where 都带排除条
   assert.ok(candidateCall.params.some((p) => Array.isArray(p) && p.includes("%外包%")), "候选查询也要带排除词");
 });
 
-test("被忽略/已投递的岗：SQL 侧一并排除，自检按同一口径对账", async () => {
+test("被忽略/已投递的岗：总数 = 共享计数 − 隐藏岗落在条件内的条数；共享那条不带任何个人数据", async () => {
   const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
   const rows = candidateRows(FTS_CAP);
   const ignoredId = rows[3].id;
-  install({ candidates: rows, count: { total: 15290, unclassified: 0 } });
+  install({ candidates: rows, count: { total: 15291, unclassified: 0 }, hiddenCount: { total: 1, unclassified: 0 } });
 
   const r = await search.searchJobsStore(
     { ...DEFAULT_FILTERS, city: "深圳" },
@@ -185,10 +187,17 @@ test("被忽略/已投递的岗：SQL 侧一并排除，自检按同一口径对
     60,
   );
   assert.equal(r.total, FTS_CAP - 1, "被忽略的岗不进结果");
-  assert.equal(r.exactTotal, 15290);
-  const [countCall] = countQueries(calls);
-  assert.match(countCall.sql, /not \(id = any\(\$\d+::uuid\[\]\)\)/);
-  assert.deepEqual(countCall.params[countCall.params.length - 1], [ignoredId]);
+  assert.equal(r.exactTotal, 15290, "15,291 − 1");
+  const shared = countQueries(calls).find((c) => !/ id = any\(/.test(c.sql));
+  const own = countQueries(calls).find((c) => / and id = any\(\$\d+::uuid\[\]\)$/.test(c.sql));
+  assert.ok(shared && own, JSON.stringify(countQueries(calls).map((c) => c.sql)));
+  // 共享计数的键（sql + params）里不许有任何个人数据，否则跨用户共享不了。
+  assert.ok(!JSON.stringify(shared.params).includes(ignoredId));
+  assert.doesNotMatch(shared.sql, /not \(id = any/);
+  // 隐藏部分：同一份 where + 只按主键取这个用户的隐藏岗。
+  assert.deepEqual(own.params[own.params.length - 1], [ignoredId]);
+  assert.deepEqual(own.params.slice(0, -1), shared.params);
+  assert.equal(own.sql.replace(/ and id = any\(\$\d+::uuid\[\]\)$/, ""), shared.sql);
 });
 
 test("没撞上限 → 根本不查计数，total 本来就是真实值", async () => {
@@ -393,7 +402,8 @@ test("扫描路径（无筛选）同样按偏好优先截断", async () => {
   assert.notEqual(narrow, wide, "收窄 tsquery 不能复用排序的宽查询");
   // 收窄 = 岗位名 ∪ 非泛化扩展 ⊆ 宽查询的词集：子句数不多于宽查询，且泛词（如「产品」单独一词）不在其中。
   assert.ok(narrow.split("|").length <= wide.split("|").length, `收窄 tsquery 子句不该多于宽查询：${narrow}`);
-  assert.ok(narrow.includes("产品 & 品经 & 经理"), `岗位名本身必须保留在收窄条件里：${narrow}`);
+  // 「前缀 + 角色名」的词，接缝 bigram「品经」换成「接缝或职级插词」（产品高级经理，见 tests/fts-seniority-infix）。
+  assert.ok(narrow.includes("产品 & 经理 & (品经 |"), `岗位名本身必须保留在收窄条件里：${narrow}`);
   assert.ok(!/\(产品\)/.test(narrow), `泛词「产品」不该进收窄条件：${narrow}`);
   // 收窄条件只进候选查询，不进计数（总数口径不变）。
   for (const q of countQueries(calls)) assert.doesNotMatch(q.sql, /interval '7 days'\)/);

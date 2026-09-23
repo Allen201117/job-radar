@@ -63,7 +63,7 @@ type UseJobFiltersArgs = {
   onlyNew: boolean;
   // 从用户已保存偏好预填的筛选初值（城市/类型/关键词）；用户手动改即覆盖。
   // company 由 URL 带入（洞察库跳过来时锁定这家公司），偏好里没有这一项。
-  initialFilters?: { city?: string; jobType?: string; keyword?: string; company?: string };
+  initialFilters?: Partial<Filters>;
   // SSR 首页岗位（无初始筛选时做即时首屏）+ 活跃总数（无筛选浏览时的诚实计数）
   initialJobs: ScoredJob[];
   initialTotal: number;
@@ -78,19 +78,10 @@ export function useJobFilters({
   initialJobs,
   initialTotal,
 }: UseJobFiltersArgs) {
-  const [filters, setFilters] = useState<Filters>({
-    ...DEFAULT_FILTERS,
-    city: initialFilters?.city || "",
-    jobType: initialFilters?.jobType || "",
-    keyword: initialFilters?.keyword || "",
-    company: initialFilters?.company || "",
-  });
+  const [filters, setFilters] = useState<Filters>({ ...DEFAULT_FILTERS, ...initialFilters });
 
-  const hasInitialFilter = Boolean(
-    initialFilters?.city ||
-      initialFilters?.jobType ||
-      initialFilters?.keyword ||
-      initialFilters?.company,
+  const hasInitialFilter = Object.keys(DEFAULT_FILTERS).some(
+    (key) => filters[key as keyof Filters] !== DEFAULT_FILTERS[key as keyof Filters],
   );
 
   // 无初始筛选 → 用 SSR 首页(取前一页)做即时首屏；有初始筛选 → 首搜返回前先空(免闪未筛选的错误内容)。
@@ -257,7 +248,8 @@ export function useJobFilters({
     return [...newMatching, ...server.jobs.filter((j) => !newKeys.has(j.jd_url || j.id))];
   }, [newViewActive, newMatching, server.jobs]);
 
-  const hasMore = !newViewActive && server.jobs.length < server.total;
+  // 0 条是确定空结果；即使候选查询恰好撞了上限，也不能留一个永远点不出内容的「加载更多」。
+  const hasMore = !newViewActive && server.total > 0 && server.jobs.length < server.total;
 
   return {
     filters,

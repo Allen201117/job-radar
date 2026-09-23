@@ -5,16 +5,14 @@ export const dynamic = "force-dynamic";
 // /api/campus-zone/jobs 不走缓存返回的正是库里的数）。抬到 60s（Hobby 上限）给重算留足余量。
 export const maxDuration = 60;
 
-import { unstable_cache } from "next/cache";
+import { requestSafeCache } from "@/lib/request-safe-cache";
 import { redirect } from "next/navigation";
 import Navbar from "@/components/Navbar";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import { GraduationCap } from "@phosphor-icons/react/ssr";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { companiesForIndustries, getUserCampusScope } from "@/lib/campus-user-industries";
-import { getCampusZone, getCampusFreshStats, jobsStoreEnabled } from "@/lib/jobs-store/read";
-import { countCampusLibrary, type CampusLibraryCounts } from "@/lib/jobs-store/search";
-import type { UserPreferences } from "@/lib/types";
+import { getCampusZone, getCampusFreshStats } from "@/lib/jobs-store/read";
 import { getCampusSourceCoverage } from "@/lib/campus-sources";
 import { windowStatus, compareCompanyCardsByFit } from "@/lib/campus-zone";
 import { getRecruitmentCyclesForCompanies } from "@/lib/recruitment-cycle-store";
@@ -23,9 +21,9 @@ import {
   buildCampusFacetsFromGroups,
   countFacetsForFit,
   selectFitIndexes,
+  targetFunctionsFromRoles,
   type CampusFilterOptions,
 } from "@/lib/campus-facets";
-import { classifyJobFunction, normalizeRolePhrases } from "@/lib/china-keyword-expansion";
 import {
   campusTimelineSummary,
   campusPreciseDates,
@@ -59,7 +57,7 @@ export type CampusBoard = {
  * ⚠️ 函数体内不得读 cookies()/headers() 等动态 API（unstable_cache 限制）；
  * 这里用的 createServiceClient 只读环境变量，安全。
  */
-const loadCampusBoard = unstable_cache(
+const loadCampusBoard = requestSafeCache(
   async (industries: string[]): Promise<CampusBoard> => {
     const startedAt = Date.now();
     const companies = companiesForIndustries(industries);
@@ -131,32 +129,6 @@ const loadCampusBoard = unstable_cache(
   { revalidate: 600, tags: ["campus-board"] },
 );
 
-/**
- * 「全站在招校招/实习岗」的库存量级计数。
- *
- * 为什么缓存：这条 SQL 实测是 `Parallel Seq Scan` 515ms / 13.3 万 buffers（2026-09-18 EXPLAIN），
- * 而它是个**全局**数字（同一求职范围下谁看都一样），只在爬虫写入时才变（天级）。
- * ⚠️ key 只含真正影响结果集的两项、且取**原始值**（与 app/jobs/page.tsx 的 loadJobsFirstScreen 同理）：
- * `appendJobScopeWhere` 只读 job_scope + target_regions，原样传回去重建即产出逐字节相同的 SQL。
- * 不含任何用户私有字段 → 跨用户共享安全。
- * ⚠️ 函数体内不得读 cookies()/headers()（unstable_cache 限制）；这里只调 jobs-store，安全。
- */
-const loadCampusLibraryCounts = unstable_cache(
-  async (jobScope: string | null, targetRegions: string[]): Promise<CampusLibraryCounts> => {
-    const startedAt = Date.now();
-    const counts = await countCampusLibrary({
-      job_scope: jobScope,
-      target_regions: targetRegions,
-    } as UserPreferences);
-    // 与 [campus-board] 同理：留一条可 grep 的耗时日志，缓存哪天卡住时能看出重算跑没跑完。
-    console.log(`[campus-library] campus=${counts.campus} intern=${counts.intern} ms=${Date.now() - startedAt}`);
-    return counts;
-  },
-  ["campus-library-v1"],
-  // 5 分钟：与 /jobs 首屏计数同档。岗位库按天级写入，这点滞后用户感知不到。
-  { revalidate: 300, tags: ["campus-library"] },
-);
-
 export default async function CampusPage() {
   const user = await getRequestUser();
   if (!user) redirect("/login?next=/campus");
@@ -168,22 +140,12 @@ export default async function CampusPage() {
     supabase.from("user_preferences").select("job_scope, target_regions").eq("user_id", user.id).maybeSingle(),
   ]);
   const jobScope: string = scopePrefRes.data?.job_scope ?? "domestic";
-  const targetRegions: string[] = (scopePrefRes.data?.target_regions as string[] | null) ?? [];
 
   // 缓存键只认行业清单本身，排序后传入让「同一组行业、不同顺序」共用一份缓存。
-  // 库存计数与看板互不依赖 → 并行；两者都走各自的 unstable_cache，绝大多数请求是命中。
-  const [board, libraryCounts] = await Promise.all([
-    loadCampusBoard([...industries].sort()),
-    // 取不到就不渲染那一句（null），绝不让首屏因为一个展示用的数字挂掉。
-    jobsStoreEnabled()
-      ? loadCampusLibraryCounts(jobScope, targetRegions).catch((err) => {
-          console.error("[campus-library] 库存计数失败，本次不展示", err);
-          return null;
-        })
-      : Promise.resolve(null),
-  ]);
+  // 默认全站列表只在挂载后取岗位；这里保留的是切到「必投」才会用到的聚合看板快照。
+  const board = await loadCampusBoard([...industries].sort());
 
-  // 「计数 + 新鲜度」用轻查询每请求现算，绕开这个可能冻住的重快照（见 getCampusFreshStats 注释）：
+  // 「计数 + 新鲜度」走独立的 60s 短缓存（不与重快照共用条目），绕开这个可能冻住的重快照（见 getCampusFreshStats 注释）：
   // 快照卡死时，卡面的岗位数与「数据待更新」徽章不再跟着冻在旧值。轻查询失败就回退快照值、绝不让页面崩。
   const nowMs = Date.now();
   let fresh: Awaited<ReturnType<typeof getCampusFreshStats>> | null = null;
@@ -203,13 +165,7 @@ export default async function CampusPage() {
   // 方向判定与 /today 推荐同口径：normalizeRolePhrases（拆「产品/运营」、去「相关·岗位」填充）
   // → classifyJobFunction 逐条整体分类 → 丢掉判不出的「其他」。**不拿关键词/技能判方向**
   // （"SQL/Python" 会把产品用户污染成研发，见 lib/opportunities/eligibility.userTargetFunctions 的注释）。
-  const targetFunctions = Array.from(
-    new Set(
-      normalizeRolePhrases(targetRoles)
-        .map((role: string) => classifyJobFunction({ title: role }))
-        .filter((fn: string) => fn && fn !== "其他"),
-    ),
-  ) as string[];
+  const targetFunctions = targetFunctionsFromRoles(targetRoles);
   // 判不出方向 → fitCount 记 null（不是 0）：0 会被读成「一个对口岗都没有」，而事实是「我们不知道」。
   const fitKnown = targetFunctions.length > 0;
   const fitCampus = selectFitIndexes(targetFunctions, targetLocations, board.filterOptions.campus);
@@ -269,7 +225,6 @@ export default async function CampusPage() {
           seasonGradClass={currentGradClass()}
           fitFunctions={targetFunctions}
           fitCities={targetLocations}
-          libraryCounts={libraryCounts}
           jobScope={jobScope}
         />
       </ProductPage>

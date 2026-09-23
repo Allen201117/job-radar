@@ -11,6 +11,8 @@ import {
   normalizeRolePhrases,
 } from "./china-keyword-expansion";
 import { jobIndustryAllowed } from "./company-industry";
+import { locationProvinces } from "./cn-location-provinces";
+import { provinceOfTarget } from "./opportunities/location-targets";
 
 interface ScoreResult {
   score: number;
@@ -389,6 +391,10 @@ function locationMatchesTarget(jobLocation: string | null | undefined, target: s
   const rawLocation = String(jobLocation || "").trim();
   const rawTarget = String(target || "").trim();
   if (!rawLocation || !rawTarget) return false;
+  // 省目标按全省地级市解析（与 /today、/jobs 城市筛选同一份判定）：否则筛「广东」时字面写着「广东省·肇庆市」的岗
+  // 比「深圳」多拿 20 分、整页排在前面；「天津-河北区」也不该算河北。
+  const province = provinceOfTarget(rawTarget);
+  if (province) return (locationProvinces(rawLocation) as string[]).includes(province);
   if (rawLocation.toLowerCase().includes(rawTarget.toLowerCase())) return true;
 
   const normalizedLocation = (normalizeChinaCity(rawLocation) || "").toLowerCase();

@@ -1,10 +1,11 @@
-import { unstable_cache } from "next/cache";
+import { requestSafeCache } from "@/lib/request-safe-cache";
 import Navbar from "@/components/Navbar";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import JobLibraryStat from "@/components/JobLibraryStat";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { jobsStoreEnabled, listLatestActive, countActiveForScope, countValidActive } from "@/lib/jobs-store/read";
 import { sortAndFilterJobs } from "@/lib/scoring";
+import { filtersFromSearchParams, hasJobFilterSearchParams, type Filters } from "@/lib/job-filter";
 import type { Job, UserPreferences, JobAction, ScoredJob } from "@/lib/types";
 import JobsClient from "./jobs-client";
 import { Database } from "@phosphor-icons/react/ssr";
@@ -12,7 +13,7 @@ import { Database } from "@phosphor-icons/react/ssr";
 export const dynamic = "force-dynamic";
 
 // 从用户已保存偏好（简历画像 + 偏好表）算筛选器初值：城市/类型/关键词。
-function buildInitialFilters(prefs: any, cp: any): { city: string; jobType: string; keyword: string } {
+function buildInitialFilters(prefs: any, cp: any): Partial<Filters> {
   const STAGES = ["实习", "校招", "社招"];
   const first = (...arrs: any[]): string => {
     for (const a of arrs) {
@@ -52,7 +53,7 @@ const PAGE1 = 60;
  * 不依赖「归一化是幂等的」这个假设。不含任何用户私有字段 → 跨用户共享安全。
  * ⚠️ 函数体内不得读 cookies()/headers()（unstable_cache 限制）；这里只调 jobs-store，安全。
  */
-const loadJobsFirstScreen = unstable_cache(
+const loadJobsFirstScreen = requestSafeCache(
   async (
     jobScope: string | null,
     targetRegions: string[],
@@ -103,10 +104,6 @@ export default async function JobsPage({
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const params = (await searchParams) || {};
-  const one = (key: string): string => {
-    const value = params[key];
-    return (Array.isArray(value) ? value[0] : value || "").trim();
-  };
   const supabase = await createServerSupabase();
   const user = await getRequestUser();
 
@@ -128,10 +125,11 @@ export default async function JobsPage({
   const candidate = userData?.[2].data ?? null;
   const firstPage = await fetchFirstPageAndTotal(supabase, preferences);
 
-  // 默认按用户已保存偏好预填筛选器（城市/类型/关键词）；用户手动改即覆盖。
-  const urlCompany = one("company");
-  const urlKeyword = one("q");
-  const initialFilters = buildInitialFilters(preferences, candidate);
+  // 带筛选参数的链接是明确的分享意图，必须完整覆盖个人偏好；否则同一个 URL 会因打开者不同
+  // 而显示不同结果。没有参数时仍按原逻辑预填个人偏好。
+  const initialFilters = hasJobFilterSearchParams(params)
+    ? filtersFromSearchParams(params)
+    : buildInitialFilters(preferences, candidate);
 
   const { jobs, total, libraryTotal } = firstPage;
 
@@ -159,14 +157,7 @@ export default async function JobsPage({
           <JobsClient
             initialJobs={scored as ScoredJob[]}
             initialTotal={total}
-            initialFilters={{
-              ...initialFilters,
-              // URL 明确指定时**覆盖**偏好预填：用户是带着「看这家公司」的意图点过来的，
-              // 再叠上偏好里的城市/关键词只会把结果筛没。
-              ...(urlCompany
-                ? { company: urlCompany, city: "", keyword: urlKeyword, jobType: "" }
-                : {}),
-            }}
+            initialFilters={initialFilters}
             jobScope={preferences?.job_scope ?? "domestic"}
           />
         </div>

@@ -426,3 +426,37 @@ test("functionOnly 的岗不进 main，即使分数过门槛；exploreEligible �
   assert.deepEqual(sections.main.map((o) => o.job.id).includes("fn-only"), false);
   assert.deepEqual(sections.explore.map((o) => o.job.id), ["fn-only"]);
 });
+
+// 2026-09-23 创始人拍板：整页同一家公司最多 10 张（所有区合计，回填也不许超过 10），critical 不截断但占名额。
+test("整页单公司上限 10：dailyLimit 很大时主区回填也不超过 10", () => {
+  const many = Array.from({ length: 40 }, (_, i) =>
+    opp({ id: `a${i}`, company: "字节跳动", title: `T${i}`, location: "L", score: 99 - i / 100 }),
+  );
+  const { sections } = groupOpportunities(many, { dailyLimit: 50, intensity: "active" });
+  const shown = [...sections.critical, ...sections.main, ...sections.explore, ...sections.waiting];
+  assert.equal(shown.filter((o) => o.job.company === "字节跳动").length, 10);
+});
+
+test("整页单公司上限 10：critical 不截断，但它占的名额算进整页", () => {
+  const crit = Array.from({ length: 7 }, (_, i) =>
+    opp({ id: `c${i}`, company: "阿里巴巴", title: `C${i}`, location: "L", signal: "CLOSED_OR_STALE", critical: true, score: 100 }),
+  );
+  const main = Array.from({ length: 20 }, (_, i) =>
+    opp({ id: `m${i}`, company: "阿里巴巴", title: `M${i}`, location: "L", score: 95 - i / 100 }),
+  );
+  const { sections } = groupOpportunities([...crit, ...main], { dailyLimit: 30, intensity: "active" });
+  assert.equal(sections.critical.length, 7, "关键提醒一条不丢");
+  const total = [...sections.critical, ...sections.main, ...sections.explore, ...sections.waiting]
+    .filter((o) => o.job.company === "阿里巴巴").length;
+  assert.equal(total, 10);
+});
+
+test("整页单公司上限 10：critical 自己超过 10 时照样全留（不悄悄丢用户收藏的岗）", () => {
+  const crit = Array.from({ length: 12 }, (_, i) =>
+    opp({ id: `c${i}`, company: "腾讯", title: `C${i}`, location: "L", signal: "CLOSED_OR_STALE", critical: true, score: 100 }),
+  );
+  const main = Array.from({ length: 5 }, (_, i) => opp({ id: `m${i}`, company: "腾讯", title: `M${i}`, location: "L", score: 90 }));
+  const { sections } = groupOpportunities([...crit, ...main], { dailyLimit: 30, intensity: "active" });
+  assert.equal(sections.critical.length, 12);
+  assert.equal(sections.main.filter((o) => o.job.company === "腾讯").length, 0);
+});

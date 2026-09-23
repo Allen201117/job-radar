@@ -415,3 +415,92 @@ test("信用/市场/操作/全面风险岗归金融业务，末尾是别的角�
   assert.equal(classifyJobFunction({ title: "风险策略运营实习生" }), "运营");
   assert.equal(classifyJobFunction({ title: "市场营销专员" }), "市场");
 });
+
+// 2026-09-23 线上走查：校招 PM 画像（AI产品经理 / AI Agent）的 /today 里出现阿里「Agentic Post-training-阿里星」
+// 「Agentic Post-training Infra-阿里星」，理由写「方向匹配：AI Agent」。标题里没有一个研发角色词 →
+// 标题判「其他」、正文兜底被「招聘项目：…」判成「职能」→ 职能门对「其他」放行，产品用户照收。
+// 大模型训练 / 推理基础设施是研发条线，标题写的就是岗位做的事。
+test("大模型训练 / 推理基础设施岗归研发（标题无工程师后缀也要判得出）", () => {
+  for (const title of [
+    "Agentic Post-training-阿里星/Bravo Star",
+    "Agentic Post-training Infra-阿里星/Bravo Star",
+    "LLM and Multimodal Post-training-AliStar/Bravo Star",
+    "Agentic Model Post-training 与真实环境学习-阿里星/Bravo Star",
+    "日常实习生-大模型后训练 (Post-training)-Qwen基础模型",
+    "Agent Post-Training Research",
+    "【Ace顶尖实习生】大模型后训练泛化性研究",
+    "Agentic Infra 实习生",
+    "AI Infra研究员",
+  ]) {
+    assert.equal(classifyJobFunction({ title }), "研发", title);
+  }
+  // 物化列带正文算：正文开头的「招聘项目：…」不能再把它判成职能。
+  assert.equal(
+    classifyJobFunction({
+      title: "Agentic Post-training Infra-阿里星/Bravo Star",
+      summary: "工作地点：杭州 招聘项目：阿里巴巴2027届应届生 职位描述：负责大模型训练及 Post-Training 基础设施建设",
+    }),
+    "研发",
+  );
+});
+
+// 反方向：训练 / Infra 在标题里常是团队 / 业务线后缀，按「最靠后命中」会抢走前面的真实角色 ——
+// 这些都是库里真实标题（2026-09-23 全量对拍时被第一版规则抢进研发的那批），所以新规则只进 generic 那一轮。
+test("训练 / 推理 / Infra 词不抢标题里的真实角色词", () => {
+  assert.equal(classifyJobFunction({ title: "大模型后训练产品经理" }), "产品");
+  assert.equal(classifyJobFunction({ title: "AI Infra产品经理" }), "产品");
+  assert.equal(classifyJobFunction({ title: "AI产品经理-Dev Infra" }), "产品");
+  assert.equal(classifyJobFunction({ title: "产品经理-AI infra平台" }), "产品");
+  assert.equal(classifyJobFunction({ title: "推理引擎产品运营" }), "运营");
+  assert.equal(classifyJobFunction({ title: "开发者产品运营专家-Dev Infra" }), "运营");
+  assert.equal(classifyJobFunction({ title: "研发项目经理-大模型训练infra团队（北京/深圳）" }), "项目管理");
+  assert.equal(classifyJobFunction({ title: "阿里控股-高招招聘专员-Infra与基座方向" }), "职能");
+  assert.equal(classifyJobFunction({ title: "阿里云智能-体验设计师-AI Infra产品设计-北京" }), "设计");
+  assert.equal(classifyJobFunction({ title: "预训练数据工程师" }), "数据");
+  // infrastructure 整词不归这条（\binfra\b 不吃它）。
+  assert.equal(classifyJobFunction({ title: "Infrastructure Project Manager" }), "项目管理");
+});
+
+// 2026-09-23 同一次排查查出的三个旧误判（全量对拍数字见 lib 里对应规则的注释）。
+test("ux 只认整词：正文/标题里的 Linux / luxury 不再判设计，真 UX 岗照旧", () => {
+  assert.notEqual(
+    classifyJobFunction({ title: "应用SE（授时卡）(J10782)", summary: "负责授时卡驱动适配，熟悉 Linux 系统与嵌入式开发。" }),
+    "设计",
+  );
+  assert.equal(classifyJobFunction({ title: "嵌入式Linux开发工程师" }), "研发");
+  assert.equal(classifyJobFunction({ title: "UX设计师" }), "设计");
+  assert.equal(classifyJobFunction({ title: "UI/UX Designer" }), "设计");
+  assert.equal(classifyJobFunction({ title: "Senior UX Researcher" }), "设计");
+  assert.equal(classifyJobFunction({ title: "用户体验(UX)研究员" }), "设计");
+  // ux 粘在别的字母后面也可能是真设计岗：只卡词首，外加显式 UI/UX、3D UX（第一版两边都卡边界，丢了这几个）。
+  assert.equal(classifyJobFunction({ title: "Intern, UIUX(J12817)" }), "设计");
+  assert.equal(classifyJobFunction({ title: "工业设计（ID设计/UIUX）-割草机器人(J66409)" }), "设计");
+  assert.equal(classifyJobFunction({ title: "XR3DUX设计实习生" }), "设计");
+  assert.equal(classifyJobFunction({ title: "Senior Writer & Editor, UXCD (Digital Success)" }), "设计");
+  // 地名 / 词里夹着 ux 的不再是设计
+  assert.equal(classifyJobFunction({ title: "Process Engineer-Wuxi" }), "研发");
+  assert.equal(classifyJobFunction({ title: "Personal Banker Sioux Falls" }), "金融业务");
+});
+
+test("正文里的招聘元信息（招聘项目/单位/对象…、校园招聘、招聘公告）不是 HR 职能信号", () => {
+  const ali = "工作地点：杭州 招聘项目：阿里巴巴2027届应届生 职位描述：参与多模态传输协议研究。";
+  assert.equal(classifyJobFunction({ title: "研究型实习生", summary: ali }), "其他");
+  const netease = "招聘项目：2027届雷火秋季校园招聘 工作地点：杭州 岗位描述：负责卡牌玩法设计与数值。";
+  assert.equal(classifyJobFunction({ title: "游戏策划（卡牌）", summary: netease }), "其他");
+  const chnenergy = "【招聘单位】：国能某某发电有限公司 岗位职责：负责机组运行监盘，任职条件详见招聘公告。";
+  assert.notEqual(classifyJobFunction({ title: "运行值班岗", summary: chnenergy }), "职能");
+  // 正文写的是岗位本身在做招聘 → 仍是 HR 职能。
+  assert.equal(classifyJobFunction({ title: "专员", summary: "负责制定招聘计划，拓展招聘渠道，复盘招聘效率。" }), "职能");
+  // 标题本身是纯活动标签的旧口径不动（由标题层决定，见上方「招聘活动标签」用例）。
+  assert.equal(classifyJobFunction({ title: "招聘专员", summary: ali }), "职能");
+});
+
+test("强化学习不是化学：不再被判成生产制造", () => {
+  assert.equal(classifyJobFunction({ title: "生成式推荐与强化学习后训练探索" }), "研发");
+  assert.equal(classifyJobFunction({ title: "面向工业界Agent的强化学习后训练研究" }), "研发");
+  assert.equal(classifyJobFunction({ title: "强化学习研究员" }), "研发");
+  assert.equal(classifyJobFunction({ title: "数字化学习实习生" }), "其他");
+  // 真化学岗不受影响
+  assert.equal(classifyJobFunction({ title: "化学分析员" }), "生产制造");
+  assert.equal(classifyJobFunction({ title: "化学工艺工程师" }), "生产制造");
+});

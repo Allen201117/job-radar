@@ -31,7 +31,7 @@ import {
   jobFieldDisplayValue,
 } from "@/lib/job-fields";
 import { gradClassLabel, isEarlyBatch } from "@/lib/campus-batch";
-import { formatDateLabel, relativeTimeLabel } from "@/lib/relative-time";
+import { formatDateLabel } from "@/lib/relative-time";
 import { matchTier } from "@/lib/scoring";
 import CompanyInsightDrawer from "@/components/CompanyInsightDrawer";
 import CompanyLogo from "@/components/CompanyLogo";
@@ -265,7 +265,7 @@ export default function JobCard({
   // 门店批量副本在检索层已折叠成一条（lib/bulk-store-dedup）。这里如实说明它代表多少家门店，
   // 否则用户会以为我们只抓到一个店 —— 折叠可以，瞒着不行。
   const storeCount = Number((job as any).__storeCount) || 1;
-  // 新鲜度信任信号：last_seen_at 距今多久 → 「今天/X 天前确认在招」；>14 天转暖橙告警「可能已下线」。
+  // 新鲜度信任信号：last_seen_at 距今多久 → 「今天/X 天前确认在招」；超过两周则提示先确认。
   const freshness = useMemo(() => freshnessLabel(job.last_seen_at), [job.last_seen_at]);
 
   // 主动作走服务端 API（§8.1）：乐观更新 + 失败回滚；不再前端直连 Supabase。
@@ -402,10 +402,10 @@ export default function JobCard({
     job.first_seen_at &&
     (Date.now() - new Date(job.first_seen_at).getTime()) / 86400000 <= 3;
   const posted = formatDateLabel(job.posted_at);
-  const postedRelative = relativeTimeLabel(job.posted_at);
-  const postedLabel = jobFieldDisplayValue(
-    posted && postedRelative ? `${posted} · ${postedRelative}` : posted,
-  );
+  const postedLabel = jobFieldDisplayValue(posted);
+  const freshnessText = freshness.stale
+    ? "超过 2 周没在官网看到它，投递前先确认"
+    : freshness.label;
   // 关键结构性字段做成标签行。这些是扫卡时真正用来做决策的字段，
   // 过去散在「浅灰点号行」+「弱对比两列小格子」里，对比度低到几乎看不见（用户原话：太浅了、不易看出）。
   const keyTagCandidates: Array<KeyTagSpec | null> = [
@@ -485,6 +485,7 @@ export default function JobCard({
   const insight = insightBadge(insightAvail);
   // 无量纲匹配分 → 可解释三档徽标（阈值在 lib/scoring.ts，前端只消费）。
   const tier = matchTier(job.match_score);
+  const tierLabel = tier.level === "related" ? "相关匹配" : tier.label;
   const matchReasons = job.match_reasons || [];
 
   return (
@@ -496,6 +497,7 @@ export default function JobCard({
         sessionNew
           ? "border-tone-green-border bg-[#eef6e0]/75 ring-1 ring-[#cfe6b0] hover:bg-[#eef6e0]/90 hover:shadow-[0_26px_56px_-28px_rgba(60,90,30,0.4)] dark:bg-[#a3d06a]/[0.08] dark:ring-[#a3d06a]/[0.25] dark:hover:bg-[#a3d06a]/[0.12]"
           : "border-black/[0.06] bg-white/55 shadow-[0_18px_44px_-30px_rgba(40,34,28,0.32)] hover:border-black/[0.1] hover:bg-white/80 hover:shadow-[0_26px_56px_-26px_rgba(40,34,28,0.42)] dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:border-white/20 dark:hover:bg-white/[0.08]",
+        freshness.stale && "opacity-75 hover:opacity-100",
       )}
     >
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -538,21 +540,21 @@ export default function JobCard({
           </div>
 
           {/* 次要 meta：时间线 + 归类原因 + 洞察入口。刻意保持低对比度，不跟关键标签抢注意力。 */}
-          {(postedLabel || freshness.label || relatedReason || insight) && (
+          {(postedLabel || freshnessText || relatedReason || insight) && (
             <div className="t-caption mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 ink-3">
               {postedLabel && (
                 <span className="inline-flex items-center gap-1">
                   <CalendarBlank size={12} className="shrink-0" aria-hidden="true" />
-                  官网发布 {postedLabel}
+                  官网发布于 {postedLabel}
                 </span>
               )}
-              {freshness.label && (
+              {freshnessText && (
                 <span
                   className={cn(
-                    freshness.stale && "font-semibold text-[#9a6a2a] dark:text-[#e0b15a]",
+                    freshness.stale && "font-semibold text-tone-amber-fg",
                   )}
                 >
-                  {freshness.label}
+                  {freshnessText}
                 </span>
               )}
               {relatedReason && (
@@ -658,19 +660,19 @@ export default function JobCard({
             </>
           ) : (
             <>
-              {(tier.label || job.matched_keywords.length > 0) && (
+              {(tierLabel || job.matched_keywords.length > 0) && (
                 <div className="mt-4 flex flex-wrap items-center gap-1.5">
-                  {tier.label && (
+                  {tierLabel && (
                     <span
                       title="根据你的求职偏好与简历画像评估的匹配档位"
                       className={cn(
-                        "t-micro rounded-full px-2.5 py-1",
+                        "t-micro inline-flex shrink-0 whitespace-nowrap rounded-full px-2.5 py-1",
                         tier.level === "high"
                           ? "bg-[#1a1714] text-[#f7f1e6] dark:bg-[#f3ecdf] dark:text-[#16130f]"
                           : "border border-black/[0.08] bg-[#f0ece2] ink-2 dark:border-white/[0.1] dark:bg-white/[0.08]",
                       )}
                     >
-                      {tier.label}
+                      {tierLabel}
                     </span>
                   )}
                   {job.matched_keywords.slice(0, 3).map((kw) => (

@@ -4,6 +4,7 @@
 import {
   cityMatchTokens,
   classifyJobFunction,
+  expandChinaCityTargets,
   hasExplicitRecruitmentType,
   jobMatchesChinaKeyword,
   keywordMatchTier,
@@ -13,7 +14,9 @@ import {
 import { classifyCompanyOriginWithSource } from "@/lib/company-origin";
 import { classifyCompanyTier } from "@/lib/company-tiers";
 import { educationMatch } from "@/lib/education-rank";
+import { chinaProvincePlaceNames, locationProvinces } from "@/lib/cn-location-provinces";
 import { jobMatchesRegion } from "@/lib/job-scope";
+import { provinceOfTarget } from "@/lib/opportunities/location-targets";
 import type { ScoredJob } from "@/lib/types";
 
 export type Filters = {
@@ -54,6 +57,69 @@ export function splitMultiValue(value: string): string[] {
   return out;
 }
 
+// ── 城市筛选（/jobs、/campus 全部校招岗、校招专区「对你有货」共用）──────────────────────────────
+// 省目标（广东 / 广东省 / 广西壮族自治区）按全省地级市解析，与 /today 读同一份判定（lib/opportunities/location-targets
+// 的 provinceOfTarget + lib/cn-location-provinces 的 locationProvinces）；城市 / 直辖市 / 城市群照旧「全别名子串」（cityMatchTokens）。
+// 2026-09-23 前省目标只展开成 1–2 个省会的别名，而候选 SQL 的全文门更窄——按原词「广东」查 search_doc，
+// 只取到 location / 标题 / 公司里字面写着「广东」的岗：线上筛「广东」3,434 个、筛「深圳」23,394 个；
+// 珠三角 / 长三角 / 「北京市」同一个洞（全库命中 0 / 11 / 34 个）。
+// ⚠️ 候选 SQL（cityFtsTerms / citySqlLikeTokens）必须是 locationMatchesCityFilter 的超集；省目标的 SQL 只是超集
+//    （「大连市-中山区」含「中山」），所以计数要按 location 复核（cityNeedsLocationRecheck，见 exactTotalWhenCapped）。
+
+/** location（非空）是否命中筛选城市之一。一个可判的目标都没有（输入全是标点之类）时不淘汰，与改前同口径。 */
+export function locationMatchesCityFilter(location: string, cities: string[]): boolean {
+  const hay = location.toLowerCase().replace(/\s+/g, " ");
+  let provinces: string[] | null = null;
+  let anyTarget = false;
+  for (const city of cities) {
+    const province = provinceOfTarget(city);
+    if (province) {
+      anyTarget = true;
+      provinces ??= locationProvinces(location) as string[];
+      if (provinces.includes(province)) return true;
+      continue;
+    }
+    const tokens = cityMatchTokens(city) as string[];
+    if (tokens.length) anyTarget = true;
+    if (tokens.some((t) => hay.includes(t))) return true;
+  }
+  return !anyTarget;
+}
+
+/** 这组筛选城市里有没有一个真能拿来判 location 的目标（校招「对你有货」用它区分「没填」与「填了但对不上」）。 */
+export function cityFilterHasTargets(cities: string[]): boolean {
+  return cities.some((c) => Boolean(provinceOfTarget(c)) || (cityMatchTokens(c) as string[]).length > 0);
+}
+
+/** 全文候选门（search_doc 含 location 的全部二元组）的 OR 组：原词 + 省内全部地名 / 城市群展开 / 规范名。 */
+export function cityFtsTerms(cities: string[]): string[] {
+  const out: string[] = [];
+  for (const city of cities) {
+    const province = provinceOfTarget(city);
+    const expanded = province
+      ? (chinaProvincePlaceNames(province) as string[])
+      : (expandChinaCityTargets(city) as string[]);
+    for (const t of [city, ...expanded]) if (t && !out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
+/** 候选 where 里 `location ilike '%x%'` 的词：省目标用省内全部地名，其余照旧全别名。 */
+export function citySqlLikeTokens(cities: string[]): string[] {
+  const out: string[] = [];
+  for (const city of cities) {
+    const province = provinceOfTarget(city);
+    const tokens = province ? (chinaProvincePlaceNames(province) as string[]) : (cityMatchTokens(city) as string[]);
+    for (const t of tokens) if (t && !out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
+/** 有省目标 → 候选 where 只是超集，拿它 count(*) 会多数「大连市-中山区」这种，必须按 location 逐个复核。 */
+export function cityNeedsLocationRecheck(cities: string[]): boolean {
+  return cities.some((c) => Boolean(provinceOfTarget(c)));
+}
+
 export const DEFAULT_FILTERS: Filters = {
   company: "",
   city: "",
@@ -75,6 +141,77 @@ export const DEFAULT_FILTERS: Filters = {
   companyTier: "",
 };
 
+// /jobs 分享链接的筛选状态。关键词沿用已存在的 q，避免旧链接失效；其余字段名与搜索接口一致，
+// 这样用户看地址也能直接读懂。只序列化偏离默认值的项，清空全部后自然回到干净的 /jobs。
+const URL_FILTER_KEYS: Array<keyof Filters> = [
+  "company",
+  "city",
+  "jobType",
+  "capitalOrigin",
+  "region",
+  "education",
+  "jobFunction",
+  "jobRole",
+  "experience",
+  "postedWithin",
+  "companyTier",
+  "sortBy",
+];
+type UrlBooleanFilterKey = "showIgnored" | "showApplied" | "showNewOnly" | "salaryOnly" | "sponsorshipOnly";
+const URL_BOOLEAN_FILTER_KEYS: UrlBooleanFilterKey[] = [
+  "showIgnored",
+  "showApplied",
+  "showNewOnly",
+  "salaryOnly",
+  "sponsorshipOnly",
+];
+
+type SearchParamInput = URLSearchParams | Record<string, string | string[] | undefined>;
+
+function readSearchParam(params: SearchParamInput, key: string): string {
+  if (params instanceof URLSearchParams) return params.get(key)?.trim() || "";
+  const value = params[key];
+  return (Array.isArray(value) ? value[0] : value || "").trim();
+}
+
+/** URL 是否明确携带了 /jobs 筛选；有时必须覆盖个人偏好，不能把两种意图混在一起。 */
+export function hasJobFilterSearchParams(params: SearchParamInput): boolean {
+  return ["q", "keyword", ...URL_FILTER_KEYS, ...URL_BOOLEAN_FILTER_KEYS].some((key) => Boolean(readSearchParam(params, key)));
+}
+
+/** 把分享链接还原成完整筛选对象。非法 sortBy 与布尔值安全回退默认值。 */
+export function filtersFromSearchParams(params: SearchParamInput): Filters {
+  const next: Filters = { ...DEFAULT_FILTERS };
+  for (const key of URL_FILTER_KEYS) {
+    const value = readSearchParam(params, key);
+    if (!value) continue;
+    if (key === "sortBy") {
+      next.sortBy = value === "newest" ? "newest" : "match";
+    } else {
+      (next[key] as string) = value;
+    }
+  }
+  next.keyword = readSearchParam(params, "q") || readSearchParam(params, "keyword");
+  for (const key of URL_BOOLEAN_FILTER_KEYS) {
+    next[key] = readSearchParam(params, key) === "1";
+  }
+  return next;
+}
+
+/** 将当前筛选转成可分享的 /jobs 查询串；不含分页等瞬态参数。 */
+export function filtersToSearchParams(filters: Filters): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const key of URL_FILTER_KEYS) {
+    const value = filters[key];
+    if (typeof value === "string" && value && value !== DEFAULT_FILTERS[key]) params.set(key, value);
+  }
+  if (filters.keyword.trim()) params.set("q", filters.keyword.trim());
+  for (const key of URL_BOOLEAN_FILTER_KEYS) {
+    if (filters[key] === true) params.set(key, "1");
+  }
+  return params;
+}
+
 /**
  * 计算「真实匹配总数」时的筛选项归类（候选撞上限时才用到，见 lib/jobs-store/search.ts）。
  *
@@ -86,7 +223,7 @@ export const DEFAULT_FILTERS: Filters = {
  */
 export const SQL_PUSHED_FILTER_KEYS = [
   "company", // company ilike '%X%'（X 不含通配符时 ⇒ JS 的大小写不敏感子串）
-  "city", // appendSoftCityWhere：空 location 放行 + 全别名 ilike，与下面的城市分支同口径
+  "city", // appendSoftCityWhere：空 location 放行 + 全别名 ilike；省目标的 ilike 只是超集，计数按 location 复核
   "jobType", // 物化列 recruitment_category / recruitment_explicit 与本文件逐字同义
   "postedWithin", // posted_at >= now() - N day
   "region", // job_scope='overseas' + country_code / Remote ⇒ jobMatchesRegion
@@ -196,14 +333,10 @@ export function jobFilterMatch(
     const location = job.location || "";
     if (!location) {
       degradedFields.push("city"); // 城市未知（信息缺失 ≠ 不符合）→ 不淘汰，降级排后。
-    } else {
-      // 多城市 OR + 双向匹配：命中任一选中城市（经全别名，含英文/拼音 Beijing）即通过；
-      // 有明确 location 且全不符（写了别的城市）才淘汰。单城市时与改造前逐字段一致。
-      const hay = location.toLowerCase().replace(/\s+/g, " ");
-      const tokens = cities.flatMap((c) => cityMatchTokens(c));
-      if (tokens.length && !tokens.some((t) => hay.includes(t))) {
-        return null; // 明确写了别的城市（全不符）→ 淘汰。
-      }
+    } else if (!locationMatchesCityFilter(location, cities)) {
+      // 多城市 OR：城市经全别名（含英文/拼音 Beijing）双向匹配，省按全省地级市解析（见 locationMatchesCityFilter）；
+      // 有明确 location 且全不符（写了别的城市）才淘汰。
+      return null;
     }
   }
   if (filters.jobType) {

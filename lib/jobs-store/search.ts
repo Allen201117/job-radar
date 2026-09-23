@@ -2,13 +2,17 @@
 //   同一份 search_doc bigram FTS（to_tsquery）收窄候选 + 同一份 JS 精筛/排序（scoring + job-filter）。
 //   差别仅「候选取数」从 supabase-js 换成直连 pg SQL → 搜索口径/精度/排序与线上零差异。
 import "server-only";
-import { unstable_cache } from "next/cache";
+import { requestSafeCache } from "@/lib/request-safe-cache";
 import { jobsQuery } from "./client";
 import { actionHiddenJobIds, scoringSignalGroups, scoringTargetFunctions, scoringTargetRoles, sortAndFilterJobs } from "@/lib/scoring";
 import {
+  cityFtsTerms,
+  cityNeedsLocationRecheck,
+  citySqlLikeTokens,
   filterAndRankJobs,
   filtersFullyPushedToSql,
   jobFilterTier,
+  locationMatchesCityFilter,
   splitMultiValue,
   countMatchBreakdown,
   type Filters,
@@ -16,13 +20,20 @@ import {
 } from "@/lib/job-filter";
 import { buildTsquery, annotateAndRank, annotateSourceAdapter, queryTokens } from "@/lib/job-search";
 import ftsTokenDf from "@/lib/fts-token-df.json";
-import { cityMatchTokens, ftsCandidateTerms } from "@/lib/china-keyword-expansion";
+import { ftsCandidateTerms } from "@/lib/china-keyword-expansion";
+import { chinaProvincePlaceNames } from "@/lib/cn-location-provinces";
+import { provinceOfTarget } from "@/lib/opportunities/location-targets";
 import { companyTierPatterns, NAMED_TIER_PATTERNS } from "@/lib/company-tiers";
 import { appendJobScopeWhere, effectiveJobScope } from "@/lib/job-scope";
 import { collapseBulkStoreJobs } from "@/lib/bulk-store-dedup";
 import { appendCurrentSeasonWhere } from "@/lib/campus-season";
 import { currentGradClass } from "@/lib/grad-class";
 import { spreadByCompany } from "../job-diversify";
+
+// 「按发布时间」排序也不让一家公司连续霸屏（线上实测深圳+校招前 14 张全是同一家）：
+// 任意 6 张最多 2 张同公司，只在当前页内重排，不改变匹配、总数或分页集合。
+// match 排序沿用 spreadByCompany 默认参数，不在这里改动。
+const JOB_LIBRARY_SPREAD = { cap: 2, window: 6 } as const;
 import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 
 const FTS_CAP = 8000;
@@ -255,10 +266,11 @@ function logSearchTiming(t: SearchTiming): void {
 }
 
 function appendSoftCityWhere(conds: string[], params: unknown[], cities: string[]) {
-  const tokens = cities.flatMap((c) => cityMatchTokens(c));
+  const tokens = citySqlLikeTokens(cities);
   if (!tokens.length) return;
 
-  // 城市筛选必须是 JS matcher 的超集：空 location 要放行降级，多城市所有别名/拼音也要进候选（OR）。
+  // 城市筛选必须是 JS matcher 的超集：空 location 要放行降级，多城市所有别名/拼音也要进候选（OR）；
+  // 省目标展开成省内全部地名（仍是超集，计数由 exactTotalWhenCapped 按 location 复核）。
   const parts = ["location is null", "location = ''"];
   for (const tok of tokens) {
     params.push(`%${tok}%`);
@@ -467,15 +479,18 @@ function preferenceTsquery(filters: Filters, prefs: UserPreferences | null): str
   if (!prefs) return null;
   const includeOverseasLexicon = effectiveJobScope(prefs) !== "domestic";
   const groups = scoringSignalGroups(prefs, { overseasProfile: includeOverseasLexicon });
+  const locations: string[] = splitMultiValue(filters.city).length ? [] : groups.locations;
   const signals = [
     ...groups.direction,
     // 用户自己填了公司/城市 → 候选已按它收窄，这一维在集合内是常量，放进来只会稀释区分度。
     ...(filters.company.trim() ? [] : groups.companies),
-    ...(splitMultiValue(filters.city).length ? [] : groups.locations),
+    ...locations,
   ];
-  const terms = signals
-    .slice(0, PREF_SIGNAL_TERM_CAP)
-    .flatMap((t: string) => ftsCandidateTerms(t, { includeOverseasLexicon }));
+  const terms = signals.slice(0, PREF_SIGNAL_TERM_CAP).flatMap((t: string) => {
+    // 省目标展开成省内全部地名（与 scoreJob 的城市 +20 同口径，见 prescoreOrderBy）。
+    const province = locations.includes(t) ? provinceOfTarget(t) : null;
+    return province ? (chinaProvincePlaceNames(province) as string[]) : ftsCandidateTerms(t, { includeOverseasLexicon });
+  });
   return buildTsquery(terms, [], []);
 }
 
@@ -586,7 +601,12 @@ function prescoreOrderBy(
   const pieces: string[] = [];
   const cities = splitMultiValue(filters.city).length ? [] : groups.locations;
   if (cities.length) {
-    params.push(cities.map((c: string) => `%${escapeLike(c)}%`));
+    // 省目标展开成省内全部地名：scoreJob 的城市 +20 按全省算（lib/scoring locationMatchesTarget），粗排跟着近似。
+    const places = cities.flatMap((c: string) => {
+      const province = provinceOfTarget(c);
+      return province ? (chinaProvincePlaceNames(province) as string[]) : [c];
+    });
+    params.push(places.map((c: string) => `%${escapeLike(c)}%`));
     // ⚠️ 每一项都要 `is true`：location/company 为 NULL 时 ilike 返回 NULL，整个和会变成 NULL，
     // 而 `order by … desc` 默认 NULLS FIRST → 没写城市的岗全排到最前面（2026-09-17 对拍当场抓到：重合率 0%）。
     pieces.push(`((location ilike any($${params.length}::text[])) is true)::int * 20`);
@@ -644,6 +664,27 @@ async function hydratePageColumns(
   }
 }
 
+/** 候选里没被隐藏、却被 JS 城市判定淘汰的行数（只有省目标会出现：where 是地名 ilike 超集）。 */
+function countCityRejected(rows: Array<{ id?: string; location?: string | null }>, hiddenIds: Set<string>, cities: string[]): number {
+  let n = 0;
+  for (const r of rows) {
+    if (r.id && hiddenIds.has(r.id)) continue;
+    if (r.location && !locationMatchesCityFilter(r.location, cities)) n += 1;
+  }
+  return n;
+}
+
+/** 按 location 分组的计数 → 只加 JS 城市判定放行的组（空 location 与 jobFilterMatch 一样降级放行）。 */
+function sumCityAcceptedLocations(rows: CappedCountRow[], cities: string[]): CappedCountRow {
+  const sum: CappedCountRow = { total: 0, unclassified: 0 };
+  for (const r of rows) {
+    if (r.location && !locationMatchesCityFilter(r.location, cities)) continue;
+    sum.total += r.total;
+    sum.unclassified += r.unclassified;
+  }
+  return sum;
+}
+
 /** 候选里落在「SQL 也会一并排除」的隐藏岗（ignored / applied）条数。 */
 function countHidden(rows: Array<{ id?: string }>, hiddenIds: Set<string>): number {
   if (!hiddenIds.size) return 0;
@@ -666,12 +707,16 @@ function countHidden(rows: Array<{ id?: string }>, hiddenIds: Set<string>): numb
  *      上面的归类表）→ 不给。这道门不依赖任何人记得改代码，是最后一道保险。
  *   ④ recruitment_category 尚未算出的行走的是「信号超集」兜底分支，那条不是充分条件 → 结果集里
  *      只要还有这种行，数就不可信。
+ *
+ * 省目标（cityRecheck）是唯一「where 只是超集」的已下推条件：地名 ilike 会把「大连市-中山区」算进广东、
+ * 「安徽省·马鞍山市」算进辽宁（全库 374 行，辽宁 170）。城市判定只看 location，所以计数改成按 location 分组、
+ * 每组用 JS 的同一个 locationMatchesCityFilter 复核再求和；③ 相应扣掉候选里被城市判掉的行，其余口径不动。
  */
 const CAPPED_COUNT_TTL_SECONDS = 300;
-type CappedCountRow = { total: number; unclassified: number };
+type CappedCountRow = { total: number; unclassified: number; location?: string | null };
 const queryCappedCount = async (sql: string, params: unknown[]) =>
   (await jobsQuery(sql, params)) as CappedCountRow[];
-const cachedCappedCountInner = unstable_cache(queryCappedCount, ["jobs-search-capped-count-v1"], {
+const cachedCappedCountInner = requestSafeCache(queryCappedCount, ["jobs-search-capped-count-v1"], {
   revalidate: CAPPED_COUNT_TTL_SECONDS,
 });
 // unstable_cache 只在 Next 请求上下文里可用；单测 / 独立脚本里抛「incrementalCache missing」→ 退回直查
@@ -694,12 +739,14 @@ async function exactTotalWhenCapped(args: {
   scanned: number;
   hiddenScanned: number;
   rankedLength: number;
+  /** 只有候选 where 带了城市门（FTS 路径）且有省目标时才传：计数按 location 复核，③ 扣掉被城市判掉的行。 */
+  cityRecheck?: { cities: string[]; rejectedScanned: number };
 }): Promise<number | null> {
-  const { conds, params, filters, hiddenIds, scanned, hiddenScanned, rankedLength } = args;
+  const { conds, params, filters, hiddenIds, scanned, hiddenScanned, rankedLength, cityRecheck } = args;
   if (!filtersFullyPushedToSql(filters)) return null; // ①
   // ② 排除词自 2026-09-17 起已下推 SQL（appendExcludeWhere，与 scoreJob 同字段集），不再弃权；
   //    若两边口径漂了，③ 会兜住（JS 淘汰的行数对不上即弃权）。
-  if (rankedLength !== scanned - hiddenScanned) return null; // ③
+  if (rankedLength !== scanned - hiddenScanned - (cityRecheck?.rejectedScanned ?? 0)) return null; // ③
 
   const countParams = [...params];
   const where = [...conds];
@@ -723,13 +770,29 @@ async function exactTotalWhenCapped(args: {
     // 线上冷路径它是 33 万行并行全表扫 0.55~0.94s，与回补展示列并行后 tail ≈ 它。此前走 fetchCandidates 的
     // 进程内缓存——每次请求常落到不同实例，首屏基本不命中（同一 tab 三连打三个实例）。
     // ⚠️ 缓存函数体内不读 cookies()/headers()；key 由 sql + params 序列化而来，翻页/换用户同 where 共用一份。
-    const rows = await cachedCappedCount(
-      `select count(*)::int as total, count(*) filter (where recruitment_category is null)::int as unclassified ` +
-        `from jobs where ${where.join(" and ")}`,
-      countParams,
-    );
-    const row = rows[0];
-    if (!row) return null;
+    // 用户自己隐藏的岗（忽略 / 已投递）不进缓存键（2026-09-23）：总数 = 共享计数 − 隐藏岗里落在 where 内的条数，
+    // 算术上与「where 里直接排除隐藏岗」逐值相等。此前把隐藏 id 拼进 where → 每个有操作记录的登录用户各一个键，
+    // 每点一次忽略 / 投递又换一个键，缓存对登录用户基本等于没有（校招 / 北京这类计数冷 1.3~5s）。
+    // 隐藏那部分按主键取（≤ 操作条数行），毫秒级、不缓存、每次现算。
+    // 省目标的按地点复核（cityRecheck）对两部分各做一遍再相减：复核是逐个 location 组判放不放行，对减法是线性的。
+    // ⚠️ 隐藏条件必须拼在 group by 之前。
+    const countSql = (extra: string) =>
+      `select ${cityRecheck ? "location, " : ""}count(*)::int as total, ` +
+      `count(*) filter (where recruitment_category is null)::int as unclassified ` +
+      `from jobs where ${conds.join(" and ")}${extra}${cityRecheck ? " group by location" : ""}`;
+    const reduce = (rows: CappedCountRow[]): CappedCountRow | undefined =>
+      cityRecheck ? sumCityAcceptedLocations(rows, cityRecheck.cities) : rows[0];
+    const hidden = [...hiddenIds];
+    const [sharedRows, hiddenRows] = await Promise.all([
+      cachedCappedCount(countSql(""), params),
+      hidden.length
+        ? jobsQuery<CappedCountRow>(countSql(` and id = any($${params.length + 1}::uuid[])`), [...params, hidden])
+        : Promise.resolve(null),
+    ]);
+    const shared = reduce(sharedRows);
+    const own = hiddenRows ? reduce(hiddenRows) : { total: 0, unclassified: 0 };
+    if (!shared || !own) return null;
+    const row = { total: shared.total - own.total, unclassified: shared.unclassified - own.unclassified };
     // ④ 再判一次不是多余：上面的计数走 5 分钟跨实例缓存，可能拿到「还有未分类行」时算的旧结果。
     if (filters.jobType && row.unclassified > 0) return null; // ④
     // 真实总数不可能比「已经排出来的条数」还少；小于就说明这个数不可信。
@@ -837,7 +900,11 @@ async function searchViaFTS(
   const rankedRaw = collapseBulkStoreJobs(annotateAndRank(rows, filters, prefs, actions));
   const ranked = filters.sortBy === "newest" ? rankedRaw : spreadByCompany(rankedRaw);
   const breakdown = countMatchBreakdown(ranked);
-  const page = ranked.slice(offset, offset + limit);
+  // newest 也要防同一家公司刷屏，但只能在当前已取回的一页里散列：这样下一页加载不会
+  // 回头挪动用户已经看过的卡片，也不会造成跨页重复或漏岗。
+  const page = filters.sortBy === "newest"
+    ? spreadByCompany(ranked.slice(offset, offset + limit), JOB_LIBRARY_SPREAD)
+    : ranked.slice(offset, offset + limit);
   const capped = rows.length >= cap;
   const tScored = now();
   // 回补展示列与「真实总数」计数彼此无关，并行跑，别把 85ms 串到 TTFB 上。
@@ -853,6 +920,9 @@ async function searchViaFTS(
           scanned: rows.length,
           hiddenScanned: countHidden(rows, hiddenIds),
           rankedLength: ranked.length,
+          cityRecheck: cityNeedsLocationRecheck(cities)
+            ? { cities, rejectedScanned: countCityRejected(rows, hiddenIds, cities) }
+            : undefined,
         })
       : Promise.resolve(null),
   ]);
@@ -1006,7 +1076,9 @@ async function searchViaScan(
   const rankedRaw = collapseBulkStoreJobs(filterAndRankJobs(matched, filters));
   const ranked = filters.sortBy === "newest" ? rankedRaw : spreadByCompany(rankedRaw);
   const breakdown = countMatchBreakdown(ranked);
-  const page = ranked.slice(offset, offset + limit);
+  const page = filters.sortBy === "newest"
+    ? spreadByCompany(ranked.slice(offset, offset + limit), JOB_LIBRARY_SPREAD)
+    : ranked.slice(offset, offset + limit);
   scoreMs += now() - sRank;
   const capped = !exhausted;
   const tScored = now();
@@ -1066,8 +1138,9 @@ export async function searchJobsStore(
   // ~6% 目标城市岗（北京 1818/28201）。多城市为一个 OR 组（(北京 | 上海)），与关键词/公司 AND。
   // 空 location 与别名/拼音的「软放行」由 appendSoftCityWhere 的 OR 组精修（location null / 别名 ilike）
   // ——它是 JS matcher 的超集，且排除「只在正文提到该城、实际在别处」的岗。
+  // OR 组必须是展开后的词（cityFtsTerms）：只放原词时「广东」只取到字面写着广东的岗，深圳 / 广州全被挡在门外。
   const andTerms = filters.company.trim() ? [filters.company.trim()] : [];
-  const orGroups = cities.length ? [cities] : [];
+  const orGroups = cities.length ? [cityFtsTerms(cities)] : [];
   const tsquery = buildTsquery(keywordTerms, andTerms, orGroups);
 
   if (tsquery) {

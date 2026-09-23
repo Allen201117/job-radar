@@ -1,25 +1,11 @@
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
-const ts = require("typescript");
-const Module = require("node:module");
+const { loadTs } = require("./_load-ts");
 
+// scoring.ts 依赖 .ts 兄弟模块（./opportunities/location-targets），单文件 createRequire 解析不了 → 走通用递归加载器。
 function loadScoringModule() {
-  const sourcePath = path.join(__dirname, "..", "lib", "scoring.ts");
-  const source = fs.readFileSync(sourcePath, "utf8");
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2020,
-      esModuleInterop: true,
-    },
-  }).outputText;
-  const module = { exports: {} };
-  const scopedRequire = Module.createRequire(sourcePath);
-  const fn = new Function("exports", "require", "module", "__filename", "__dirname", compiled);
-  fn(module.exports, scopedRequire, module, sourcePath, path.dirname(sourcePath));
-  return module.exports;
+  return loadTs(path.join(__dirname, "..", "lib", "scoring.ts"));
 }
 
 const { scoreJob } = loadScoringModule();
