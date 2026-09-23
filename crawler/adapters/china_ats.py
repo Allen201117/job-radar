@@ -290,11 +290,16 @@ class MokaAdapter(PlaywrightAdapter):
         if not current_id or current_id == stored_id:
             return
         current_url = f"https://{host}/campus_apply/{tenant}/{current_id}"
-        try:
-            _state, cards = self._open_route(page, current_url + "#/jobs")
-        except Exception as e:  # noqa: BLE001 —— 看不清就不下结论
-            _log.warning("moka campus alias portal %s not readable: %s: %s", current_url, type(e).__name__, e)
-            return
+        cards = []
+        for route in self._routes:  # 与本门户同样逐个路由试，岗位卡不一定挂在 #/jobs
+            try:
+                state, cards = self._open_route(page, current_url + route)
+            except Exception as e:  # noqa: BLE001 —— 看不清就不下结论
+                _log.warning("moka campus alias portal %s%s not readable: %s: %s",
+                             current_url, route, type(e).__name__, e)
+                continue
+            if cards or state == "closed":
+                break
         if cards:
             raise RuntimeError(
                 f"moka campus portal superseded: 本门户 {stored_id} 为空，该租户当前生效的校招门户 "

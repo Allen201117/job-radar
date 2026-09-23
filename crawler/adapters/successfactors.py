@@ -27,6 +27,20 @@ from .base import BaseAdapter, PageResult, RawJob, paginate_all, resolve_detail_
 
 _PAGE_SIZE = 25
 _TOTAL_RE = re.compile(r"of\s*<b>\s*(\d+)\s*</b>")
+# 卡片版的总数写在 <span id="tile-search-results-label">Showing 1 to 13 of 13 Jobs</span>（Ferrari live），
+# 取这句里最后一个数。拿不到总数时 paginate_all 只能靠「本页 < 25 条」收尾，DSV 那种每页只回 10 条的
+# 租户会被当成末页截断——所以卡片版也要有分母。
+_TILE_TOTAL_RE = re.compile(r'id="tile-search-results-label"[^>]*>([^<]*)<')
+
+
+def _list_total(page_html: str) -> Optional[int]:
+    m = _TOTAL_RE.search(page_html)
+    if m:
+        return int(m.group(1))
+    m = _TILE_TOTAL_RE.search(page_html)
+    nums = re.findall(r"\d[\d,.]*", m.group(1)) if m else []
+    digits = re.sub(r"\D", "", nums[-1]) if nums else ""
+    return int(digits) if digits else None
 _JD_SPAN_RE = re.compile(
     r'<span[^>]*class="[^"]*jobdescription[^"]*"[^>]*>(.*?)</span>\s*(?:</div|<div|<footer|<span[^>]*class="[^"]*job)',
     re.S | re.I)
@@ -69,8 +83,7 @@ def _parse_list_rows(page_html: str):
             continue
         href = (a.attrs.get("href") or tile.attributes.get("data-url") or "").strip()
         title = a.text(strip=True)
-        loc = tile.css_first("[id$='-desktop-section-location-value']") \
-            or tile.css_first(".section-field.location div")
+        loc = tile.css_first("[id$='-desktop-section-location-value']")
         location = loc.text(strip=True) if loc else None
         if title and href:
             items.append({"title": title, "href": href, "location": location or None})
@@ -108,8 +121,7 @@ class SuccessFactorsAdapter(BaseAdapter):
                                   "startrow": startrow},
                           headers=headers, timeout=self.timeout, follow_redirects=True)
             r.raise_for_status()
-            m = _TOTAL_RE.search(r.text)
-            total = int(m.group(1)) if m else None
+            total = _list_total(r.text)
             raw_count, items = _parse_list_rows(r.text)
             # 下一次请求的 startrow = 这次**原始行数**（不是过滤后的 items 数——个别装饰行没有
             # a 标签会被 items 滤掉，但它们仍占了服务端的一个 startrow 位置，用 items 数累进

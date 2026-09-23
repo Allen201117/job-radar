@@ -16,7 +16,7 @@ import httpx
 import audit_runner
 import morning_digest
 from adapters.china_ats import MokaAdapter
-from adapters.successfactors import SuccessFactorsAdapter, _parse_list_rows
+from adapters.successfactors import SuccessFactorsAdapter, _list_total, _parse_list_rows
 
 
 def _checks_by_id():
@@ -177,6 +177,42 @@ class SuccessFactorsListLayoutTest(unittest.TestCase):
         count, items = _parse_list_rows(_TABLE)
         self.assertEqual(count, 2, "装饰行也占服务端一个 startrow 位置")
         self.assertEqual(items, [{"title": "Engineer", "href": "/job/X/9/", "location": "Shanghai, CN"}])
+
+    def test_total_is_read_from_both_layouts(self):
+        self.assertEqual(_list_total('Results 1 – 25 of <b>2063</b>'), 2063)
+        self.assertEqual(_list_total('<span id="tile-search-results-label">Showing 1 to 13 of 13 Jobs</span>'), 13)
+        self.assertEqual(_list_total('<span id="tile-search-results-label">Showing 1 to 10 of 1,234 Jobs</span>'), 1234)
+        self.assertIsNone(_list_total("<ul></ul>"))
+
+    def test_multi_page_tile_tenant_with_short_pages_is_not_truncated(self):
+        # 卡片版租户每页只回 10 条、共 25 条：没有分母时会在第 1 页（10 < 25）被当成末页截断
+        def page(start, n, total=25):
+            tiles = "".join(
+                f'<li class="job-tile" data-url="/job/J/{i}/"><a class="jobTitle-link" href="/job/J/{i}/">岗{i}</a>'
+                f'<div id="job-{i}-desktop-section-location-value">Shanghai, CN</div></li>'
+                for i in range(start, start + n))
+            return (f'<span id="tile-search-results-label">Showing {start + 1} to {start + n} of {total} Jobs</span>'
+                    f"<ul>{tiles}</ul>")
+
+        class R:
+            def __init__(self, text):
+                self.text, self.status_code = text, 200
+
+            def raise_for_status(self):
+                pass
+
+        def fake_get(url, params=None, **kw):
+            if params is None:          # 逐岗详情补正文：给空页
+                return R("")
+            start = params["startrow"]
+            return R(page(start, min(10, 25 - start)) if start < 25 else "<ul></ul>")
+
+        a = SuccessFactorsAdapter()
+        with mock.patch.object(httpx, "get", side_effect=fake_get):
+            rows = __import__("json").loads(a.fetch("https://jobs.example.com/search/"))["jobs"]
+        self.assertEqual(len(rows), 25)
+        self.assertEqual(a.reported_total, 25)
+        self.assertTrue(a.fetch_complete)
 
     def test_regions_filter_applies_to_tile_rows(self):
         a = SuccessFactorsAdapter()
