@@ -23,6 +23,12 @@ jobs:
           JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
           JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
           JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+          # ⚠️ schema.sql 开头的 `alter table jobs add column if not exists …` 即使列已存在也要拿 jobs 的排他锁。
+          # 2026-09-23 实测：库里有个会话「事务开着没提交」挂了 14 分钟，这条 alter 排在它后面等锁，
+          # 而**排队中的排他锁会挡住之后所有读写 jobs 的查询**——线上 jobs 读写卡了约 6 分钟，runner 断线后
+          # 服务端那条 alter 还在等，是手动 pg_cancel_backend 才解开的。加锁超时：拿不到锁 10 秒就失败（红灯重跑），
+          # 绝不让一次迁移把线上冻住。
+          PGOPTIONS: "-c lock_timeout=10s"
         run: |
           if [ -z "${JOBS_DATABASE_URL:-}" ]; then
             echo "::error::JOBS_DATABASE_URL secret 未配置（自建香港 Postgres 连接串）。"
