@@ -159,6 +159,29 @@ class CompanyRefreshRecipeTests(unittest.TestCase):
         self.assertEqual(result["jobs_created"], 1)
         self.assertEqual(result["jobs_updated"], 1)
 
+    def test_source_regions_reach_adapter_and_job_scope(self):
+        # 与 run.py 同口径：adapter 后置过滤读 self.regions，写库归一按源 regions 判 job_scope。
+        # 两处都漏过：刷新链的 adapter 永远是类默认 {CN}，写进库的 job_scope 是 NULL。
+        seen_regions = []
+
+        class _RegionAdapter:
+            def fetch(self, url):
+                return "html"
+
+            def parse(self, html):
+                seen_regions.append(getattr(self, "regions", None))
+                return [RawJob(company="A", title="Software Engineer", location="Remote",
+                               jd_url="https://a.wd.com/j/1")]
+
+        rows = [{"id": "s1", "adapter_name": "workday", "company": "A",
+                 "source_url": "https://a.wd.com/j", "regions": ["US"]}]
+        captured = []
+        with mock.patch.object(discovery.db, "upsert_job",
+                               side_effect=lambda _sb, job: captured.append(job) or "created"):
+            self._run(rows, {"workday": _RegionAdapter()})
+        self.assertEqual(seen_regions, [{"US"}])
+        self.assertEqual([j.get("job_scope") for j in captured], ["overseas"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,11 +14,11 @@ import { buildTsquery } from "@/lib/job-search";
 import {
   keywordMatchUnits,
   classifyJobFunction,
-  normalizeChinaCity,
   CHINA_KEYWORD_GROUPS,
   KEYWORD_GROUP_FUNCTIONS,
 } from "@/lib/china-keyword-expansion";
 import { userTargetFunctions } from "@/lib/opportunities/eligibility";
+import { locationTargetSqlTerms } from "@/lib/opportunities/location-targets";
 import { appendJobScopeWhere, effectiveTargetRegions, jobMatchesScope } from "@/lib/job-scope";
 import { appendCurrentSeasonWhere } from "@/lib/campus-season";
 import { collapseBulkStoreJobs, BULK_STORE_COMPANIES } from "@/lib/bulk-store-dedup";
@@ -429,14 +429,10 @@ export function buildRecallSql(
   const companyTs = profile.targetCompanies.length
     ? buildTsquery(profile.targetCompanies.slice(0, 30), [])
     : null;
-  // 城市词同时带上归一名（「深圳市」→「深圳」）：bigram 对「深圳市」要求「圳市」也命中，location 只写「深圳」
-  // 的岗会被漏掉；stage-2 的 locationState 是按归一名 includes 判的，SQL 侧必须是它的超集才能当门用。
-  const cityTerms = profile.targetLocations.length
-    ? uniqueTerms([
-        ...profile.targetLocations.slice(0, 10),
-        ...profile.targetLocations.slice(0, 10).map((c) => normalizeChinaCity(c) || ""),
-      ])
-    : [];
+  // 城市词与 stage-2 locationState 读同一份展开（lib/opportunities/location-targets），SQL 侧必须是它的超集才能当门用：
+  // 城市带上归一名（「深圳市」→「深圳」：bigram 对「深圳市」要求「圳市」也命中，location 只写「深圳」的岗会被漏掉）；
+  // 省展开成全省地级名（「陕西」→ 西安/榆林/…，此前只认字面写着「陕西」的岗，西安的岗根本进不了池）。
+  const cityTerms = uniqueTerms(profile.targetLocations.slice(0, 10).flatMap((c) => locationTargetSqlTerms(c)));
   const cityTs = cityTerms.length ? buildTsquery(cityTerms, []) : null;
 
   const params: unknown[] = [sinceIso];

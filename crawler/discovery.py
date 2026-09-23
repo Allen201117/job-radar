@@ -306,8 +306,10 @@ class SpaKeywordRecipe:
             if not adapter_cls:
                 continue
             company = source.get("company") or adapter_name
+            regions = normalizer.source_regions(source.get("regions"))
             try:
                 adapter = adapter_cls()
+                adapter.regions = regions  # 与 run.py 同口径：adapter 后置地区过滤读它
                 try:
                     adapter.max_pages = min(getattr(adapter, "max_pages", 2), max_pages)
                 except Exception:
@@ -318,7 +320,7 @@ class SpaKeywordRecipe:
                 raw_jobs = adapter.parse(html)
                 matched = filter_raw_jobs(raw_jobs, query, city, job_type, exclude)
                 c, u, urls = _upsert_raw_jobs(
-                    supabase, source["id"], company, source["source_url"], matched
+                    supabase, source["id"], company, source["source_url"], matched, regions=regions
                 )
                 created += c
                 updated += u
@@ -361,11 +363,13 @@ def _jobs_conn():
     return c
 
 
-def _upsert_raw_jobs(supabase, source_id, company, source_url, raw_jobs):
-    """质量门校验 + 归一化 + upsert（镜像 run.py 的入库逻辑）。返回 (created, updated, created_jd_urls)。
+def _upsert_raw_jobs(supabase, source_id, company, source_url, raw_jobs, regions=None):
+    """质量门校验 + 归一化 + upsert（与 run.py 同走 normalizer.normalize）。返回 (created, updated, created_jd_urls)。
     jobs 写入：配了 JOBS_DATABASE_URL 写香港库（每线程独立连接），否则 Supabase。
     ⚠ 第三个返回值【只含真新增(created)的 jd_url】——刷新/发掘据此流式「带回」，绝不把重抓到的
-    旧岗位(updated)混进带回充数（治用户痛点：刷新等半天「带回 199」、实际真新增才 2）。"""
+    旧岗位(updated)混进带回充数（治用户痛点：刷新等半天「带回 199」、实际真新增才 2）。
+    ⚠ 别再在这里自己拼 job dict：曾经这么做，漏了 2026-07-02 新增的 country_code / job_scope，
+    job_scope 被显式写成 NULL 撞 NOT NULL，这条链每个源都写库失败（2026-09-23 回滚事务实测）。"""
     created = updated = 0
     urls: List[str] = []
     for raw in raw_jobs:
@@ -373,36 +377,8 @@ def _upsert_raw_jobs(supabase, source_id, company, source_url, raw_jobs):
         if not is_valid:
             continue
 
-        title = normalizer.clean_title(raw.title)
-        location = normalizer.clean_location(raw.location)
-        summary = normalizer.clean_summary(raw.summary)
-        salary = normalizer.clean_salary(raw.salary_text)
-        job_type = normalizer.extract_job_type(title, summary) or raw.job_type
-        content_hash = normalizer.make_content_hash(title, location, summary)
-        location = normalizer.location_or_title_city(location, title)  # 与 normalizer.normalize 同口径
-        # 结构化字段从**完整** raw.summary 抽取（截断前），adapter 直填的优先
-        experience = raw.experience or normalizer.extract_experience(raw.summary)
-        education = raw.education or normalizer.extract_education(raw.summary)
-        deadline = raw.deadline or normalizer.extract_deadline(raw.summary)
-
-        job_data = {
-            "source_id": source_id,
-            "company": raw.company or company,
-            "title": title,
-            "location": location,
-            "job_type": job_type,
-            "summary": summary,
-            "jd_url": raw.jd_url,
-            "apply_url": raw.apply_url,
-            "salary_text": salary,
-            "posted_at": raw.posted_at,
-            "experience": experience,
-            "education": education,
-            "deadline": deadline,
-            "content_hash": content_hash,
-            "status": "active",
-        }
-        result = jobs_db.upsert_job(_jobs_conn(), job_data) if jobs_db.enabled() else db.upsert_job(supabase, job_data)
+        job_data = normalizer.normalize(raw, source_id=source_id, company=company, regions=regions)
+        result =jobs_db.upsert_job(_jobs_conn(), job_data) if jobs_db.enabled() else db.upsert_job(supabase, job_data)
         if result == "created":
             created += 1
             urls.append(raw.jd_url)  # 只收真新增；重抓到的旧岗位(updated)不进「带回」，不充数
@@ -474,11 +450,14 @@ class CompanyRefreshRecipe:
                     # 每源独立实例：adapter 持 per-source 可变状态（workday/oracle 在 fetch 里按 url 设
                     # self._host 等），并发共享单例会互相覆写 → 岗位张冠李戴（run.py:238-243 实锤）。
                     adapter = type(registered)()
+                    regions = normalizer.source_regions(source.get("regions"))
+                    adapter.regions = regions  # 与 run.py 同口径：adapter 后置地区过滤读它
                     html = adapter.fetch(source["source_url"])
                     raw_jobs = adapter.parse(html)
                     # 逐岗按用户 关键词/城市/类型/排除词 过滤（CLAUDE.md #1/#2）后再入库 + 流式。
                     matched = filter_raw_jobs(raw_jobs, query, city, job_type, exclude)
-                    c, u, new_urls = _upsert_raw_jobs(sb, source["id"], company, source["source_url"], matched)
+                    c, u, new_urls = _upsert_raw_jobs(sb, source["id"], company, source["source_url"], matched,
+                                                      regions=regions)
                     print(f"[refresh]   {company}({adapter_name}): parsed={len(raw_jobs)} "
                           f"matched={len(matched)} created={c} updated={u}")
                 except Exception as e:  # noqa: BLE001 —— 单源失败不炸整批
