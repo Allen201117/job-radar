@@ -252,6 +252,10 @@ export interface FeedTiming {
   // 「这一跳传了多少字节」比耗时更稳定、更能指认病根——耗时会随实例与网络抖，字节数不会。
   recallKb?: number; // 召回候选
   hydrateKb?: number; // 展示回填
+  // 召回快照（lib/jobs-store/recall-snapshot.ts）：这一次召回用的是快照限定重算还是现跑，没用的原因，快照多旧。
+  recallSource?: "snapshot" | "live";
+  snapshotReason?: string;
+  snapshotAgeMin?: number | null;
 }
 
 // /api/opportunities 响应体（§7.1 + v3 §8.2）
