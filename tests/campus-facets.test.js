@@ -400,3 +400,21 @@ test("线上 /campus 城市下拉里出现过的英文原文全部归一成中�
   // 不认识的海外地名保留原文，不猜成国内城市
   assert.equal(normalizeCampusCity("东京"), "东京");
 });
+
+// 2026-09-23 线上 /campus（校招 + 实习）两份城市选项表的全集 213 项，逐条过一遍归一：
+// 两个方向都要看——该并的并了（英文 / 「省·市」/「XX市」），不该并的没被并（海外中文地名、多地点串）。
+test("线上城市选项全集：无英文残留、同城多写法合并、海外与多地点原样", () => {
+  const options = require("./fixtures/campus-city-options-2026-09-23.json");
+  const normalized = options.map((o) => normalizeCampusCity(o));
+  assert.deepEqual(normalized.filter((c) => /[A-Za-z]/.test(c)), []);
+  assert.equal(new Set(normalized).size, 184);
+  for (const [raw, want] of [
+    ["云南省-昆明市", "昆明"], ["云南省·昆明市", "昆明"], ["河北省-保定市", "保定"], ["保定市", "保定"],
+    ["河北省-廊坊市-广阳区", "廊坊"], ["德宏傣族景颇族自治州", "德宏"], ["澳门特别行政区", "澳门"],
+    ["重庆市-重庆市", "重庆"], ["Chongqing", "重庆"], ["福建省-厦门市", "厦门"], ["河北雄安", "雄安"],
+  ]) assert.equal(normalizeCampusCity(raw), want, raw);
+  for (const keep of ["吉隆坡", "河内", "新加坡", "东京", "罗安达市", "开罗", "德国", "全国", "广东省",
+    "桐庐县/重庆市", "哈尔滨市、巴彦淖尔市、包头市、赤峰市、鄂尔多斯市、呼和浩特市、通辽市、乌海市、乌兰察布市"]) {
+    assert.equal(normalizeCampusCity(keep), keep, keep);
+  }
+});
