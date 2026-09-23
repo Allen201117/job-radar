@@ -3,8 +3,9 @@
 // 页面与 /api/insights/library 共用同一份，避免两处各建一份索引导致数字不一致。
 // ============================================================
 import { unstable_cache } from "next/cache";
+import { callOutsideRequestScope } from "./cache-outside-request";
 import { createServiceClient } from "./supabaseService";
-import { fetchAllPages } from "./supabase-paginate";
+import { fetchAllPagesConcurrent } from "./supabase-paginate";
 import { ITEM_COLUMNS, flattenSources } from "./insight-bundle";
 import {
   buildLibraryIndex,
@@ -19,8 +20,16 @@ import {
 import { evaluateInsight } from "./insight-verification";
 import type { InsightItemView } from "./types";
 
-/** 索引缓存时长。洞察由每日派生/富化链产出，10 分钟滞后用户感知不到。 */
+/**
+ * 索引多旧算「陈旧」：超过它，下一个请求照常拿到旧索引，同时在后台重建（stale-while-revalidate）。
+ * 洞察由每日派生/富化链产出，10 分钟滞后用户感知不到。
+ */
 const INDEX_TTL_SECONDS = 600;
+/**
+ * 兜底：拿到的索引比这还旧，说明后台重建一直没落地（或整站闲了这么久）→ 本次请求同步重建一份。
+ * 这是 2026-09-04「索引三个多小时一动不动」那次事故的上限：陈旧不许超过它。
+ */
+const INDEX_MAX_STALE_SECONDS = 2 * 60 * 60;
 
 const SOURCE_SELECT =
   "insight_item_sources(insight_sources(id, url, publisher, source_kind, excerpt, collected_at, deidentified, created_at))";
@@ -57,55 +66,72 @@ export interface LibraryIndex {
   buildTiming?: IndexBuildTiming;
 }
 
+type ProfileRow = { id: string; company: string; industry: string | null };
+
 async function loadIndex(): Promise<LibraryIndex> {
   const supabase = createServiceClient();
   const t0 = performance.now();
-
-  // 主体：rejected / retired 是治理结论，索引里直接不要。
-  const subjectRows = await fetchAllPages<RawSubjectRow>((from, to) =>
-    supabase
-      .from("insight_subjects")
-      .select("id,company_id,kind,name,job_count,status")
-      .eq("status", "active")
-      .order("id", { ascending: true })
-      .range(from, to),
-  );
-  const t1 = performance.now();
-
+  const timed = async <T>(run: () => Promise<T>): Promise<[T, number]> => {
+    const started = performance.now();
+    const value = await run();
+    return [value, performance.now() - started];
+  };
+  // 计数与取数必须共用同一份过滤条件（fetchAllPagesConcurrent 按计数切页）。
+  const subjectsQuery = (columns: string, options?: { count: "exact"; head: true }) =>
+    // 主体：rejected / retired 是治理结论，索引里直接不要。
+    supabase.from("insight_subjects").select(columns, options).eq("status", "active");
   // 条目 + 来源。来源是 claim 展示门的必需输入（时间窗 + ≥2 独立域名）；
   // 不带来源就没法判断「这条能不能展示」，卡面计数会比点进去看到的多。
-  const itemRows = await fetchAllPages<any>((from, to) =>
-    libraryScope(
-      supabase
-        .from("insight_items")
-        .select(`${ITEM_COLUMNS}, ${SOURCE_SELECT}`)
-        .eq("status", "active"),
-    )
-      // 不按 subject_id 过滤：NULL 是「公司级」，由 buildLibraryIndex 挂到公司主体上。
-      .order("id", { ascending: true })
-      .range(from, to),
-  );
-  const t2 = performance.now();
+  // 不按 subject_id 过滤：NULL 是「公司级」，由 buildLibraryIndex 挂到公司主体上。
+  const itemsQuery = (columns: string, options?: { count: "exact"; head: true }) =>
+    libraryScope(supabase.from("insight_items").select(columns, options).eq("status", "active"));
+  const profilesQuery = (columns: string, options?: { count: "exact"; head: true }) =>
+    supabase.from("company_profiles").select(columns, options);
+  const HEAD = { count: "exact", head: true } as const;
+
+  // 三张表互不依赖，并发取；每张表内部的各页也并发（见 fetchAllPagesConcurrent）。
+  // 改前是 3 张表 × 各自分页全部串行：主体 1.0s + 条目 4.6s + 画像 0.5s ≈ 6.2s（2026-09-23 线上分段）。
+  const [[subjectRows, subjectsMs], [itemRows, itemsMs], [profileRows, profilesMs]] = await Promise.all([
+    timed(() =>
+      fetchAllPagesConcurrent<RawSubjectRow>(
+        () => subjectsQuery("id", HEAD),
+        (from, to) =>
+          subjectsQuery("id,company_id,kind,name,job_count,status")
+            .order("id", { ascending: true })
+            .range(from, to)
+            .overrideTypes<RawSubjectRow[], { merge: false }>(),
+      ),
+    ),
+    timed(() =>
+      fetchAllPagesConcurrent<any>(
+        () => itemsQuery("id", HEAD),
+        (from, to) =>
+          itemsQuery(`${ITEM_COLUMNS}, ${SOURCE_SELECT}`).order("id", { ascending: true }).range(from, to),
+      ),
+    ),
+    timed(() =>
+      fetchAllPagesConcurrent<ProfileRow>(
+        () => profilesQuery("id", HEAD),
+        (from, to) =>
+          profilesQuery("id,company,industry")
+            .order("id", { ascending: true })
+            .range(from, to)
+            .overrideTypes<ProfileRow[], { merge: false }>(),
+      ),
+    ),
+  ]);
   const items: RawItemRow[] = itemRows.map((raw) => ({
     ...(raw as RawItemRow),
     sources: flattenSources(raw),
   }));
 
-  const profileRows = await fetchAllPages<{ id: string; company: string; industry: string | null }>(
-    (from, to) =>
-      supabase
-        .from("company_profiles")
-        .select("id,company,industry")
-        .order("id", { ascending: true })
-        .range(from, to),
-  );
-  const t3 = performance.now();
+  const tBuild = performance.now();
   const companies = new Map(
     profileRows.map((row) => [row.id, { company: row.company, industry: row.industry ?? null }]),
   );
 
   const subjects = buildLibraryIndex(subjectRows, items, companies);
-  const t4 = performance.now();
+  const tBuilt = performance.now();
   // ⚠️ 缓存条目一旦超过 Vercel 数据缓存的 2MB 上限就会**静默不缓存**，症状是每个请求
   // 都在重建索引（线上实测 ~10s/次），且没有任何报错。这行日志是它唯一的哨兵。
   const bytes = JSON.stringify(subjects).length;
@@ -116,14 +142,14 @@ async function loadIndex(): Promise<LibraryIndex> {
     );
   }
   const buildTiming: IndexBuildTiming = {
-    subjects_ms: Math.round(t1 - t0),
+    subjects_ms: Math.round(subjectsMs),
     subject_rows: subjectRows.length,
-    items_ms: Math.round(t2 - t1),
+    items_ms: Math.round(itemsMs),
     item_rows: itemRows.length,
     items_kb: Math.round(JSON.stringify(itemRows).length / 1024),
-    profiles_ms: Math.round(t3 - t2),
+    profiles_ms: Math.round(profilesMs),
     profile_rows: profileRows.length,
-    build_ms: Math.round(t4 - t3),
+    build_ms: Math.round(tBuilt - tBuild),
     total_ms: Math.round(performance.now() - t0),
     index_kb: Math.round(bytes / 1024),
   };
@@ -138,23 +164,47 @@ async function loadIndex(): Promise<LibraryIndex> {
  * ⚠️ 跨实例缓存（unstable_cache），不要退回进程内 Map：serverless 多实例下命中率≈0。
  * 索引只依赖库里的洞察、与用户无关，所以可以全站共享。
  *
- * ⚠️ 缓存键里**带一个时间桶**，不要只靠 `revalidate` 的后台重验证。
- * 线上实测：光配 revalidate:600 时，`index_built_at` 三个多小时一动不动 ——
- * 后台重验证要花 ~10s 建索引，在响应已经返回的 serverless 实例上大概率跑不完，
- * 于是永远在发陈旧数据、而且**不报错**。症状很难看：治理脚本刚判完档，
- * 页面按「加班强度 ≤ 2」筛却是 0 条（索引里 metric_value 还全是空）。
- * 时间桶让每个 10 分钟窗口成为**不同的缓存条目**：窗口内第一个请求同步建好（慢一次），
- * 其余全部命中。不依赖任何后台任务跑完。
+ * 形态：**stale-while-revalidate + 陈旧上限兜底**（2026-09-23 起；此前是 10 分钟时间桶）。
+ * · 平时：条目过了 INDEX_TTL_SECONDS 就算陈旧，请求照常拿旧的、Next 在 waitUntil 里后台重建。
+ *   没有任何请求需要等建索引（除了条目根本不存在：首次部署新键 / 管理后台 revalidateTag 之后）。
+ * · 兜底：拿到的索引比 INDEX_MAX_STALE_SECONDS 还旧 → 同步重建一份（按 10 分钟时间桶存，
+ *   同一窗口里只建一次）。
+ *
+ * ⚠️ 为什么不能只靠 revalidate（时间桶当初就是为此加的，兜底分支保住了它的作用）：
+ * 2026-09-04 线上光配 revalidate:600 时，`index_built_at` 三个多小时一动不动 ——
+ * 那时建索引要 ~10s，后台重建大概率没跑完就被回收，于是永远在发陈旧数据、而且**不报错**。
+ * 症状很难看：治理脚本刚判完档，页面按「加班强度 ≤ 2」筛却是 0 条（索引里 metric_value 还全是空）。
+ * 现在建索引改成并发取数（6.2s → 见 buildTiming），页面与接口都配了 maxDuration 给后台重建留余量；
+ * 真没落地，兜底分支把陈旧封顶在 2 小时并打 warn。
+ *
+ * ⚠️ 为什么纯时间桶不够：每个 10 分钟窗口的第一个请求都要同步建一次索引。本站流量稀疏，
+ * 大多数访问恰好就是「窗口里第一个」，于是线上 /insights 大多数时候 6~7s（2026-09-23 实测）。
+ *
+ * ⚠️ 必须经 callOutsideRequestScope 调用：否则 Next 把请求 URL（含 ?q=腾讯 这种中文）拼进缓存条目名，
+ * Vercel 数据缓存读写全部静默失败，带中文搜索词的每个请求都重建索引（见 lib/cache-outside-request.ts）。
  */
-const getCachedIndex = unstable_cache(
+const getCachedIndex = unstable_cache(async () => loadIndex(), ["insight-library-index-v3"], {
+  revalidate: INDEX_TTL_SECONDS,
+  tags: ["insight-library"],
+});
+
+const getRebuiltIndex = unstable_cache(
   async (_bucket: number) => loadIndex(),
-  ["insight-library-index-v2"],
+  ["insight-library-index-v3-rebuild"],
   { revalidate: INDEX_TTL_SECONDS * 2, tags: ["insight-library"] },
 );
 
 export async function getInsightLibraryIndex(): Promise<LibraryIndex> {
+  const index = await callOutsideRequestScope(() => getCachedIndex());
+  const ageSeconds = (Date.now() - Date.parse(index.builtAt)) / 1000;
+  if (!(ageSeconds > INDEX_MAX_STALE_SECONDS)) return index;
+
+  console.warn(
+    `[insight-library] 索引已 ${Math.round(ageSeconds / 60)} 分钟没更新（后台重建没落地，或整站闲置这么久），本次同步重建`,
+  );
   const bucket = Math.floor(Date.now() / (INDEX_TTL_SECONDS * 1000));
-  return getCachedIndex(bucket);
+  const rebuilt = await callOutsideRequestScope(() => getRebuiltIndex(bucket));
+  return Date.parse(rebuilt.builtAt) > Date.parse(index.builtAt) ? rebuilt : index;
 }
 
 /**
