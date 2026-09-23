@@ -604,20 +604,21 @@ def campus_source_url(adapter, source_url):
     return None
 
 
-def _campus_fingerprinter(fingerprinter):
-    """包一层：把指纹认出的 source_url 换成校招板块 URL；换不出来就让它在路由门上被拦。"""
+def _to_campus_board(fingerprint):
+    """把已认出的 source_url 换成校招板块 URL；换不出来就让它在路由门上被拦。
 
-    def wrapped(url, company=None):
-        fingerprint = fingerprinter(url, company=company)
-        adapter = fingerprint.get("adapter")
-        derived = campus_source_url(adapter, fingerprint.get("source_url"))
-        if fingerprint.get("platform") in _BLOCKED_PLATFORMS or fingerprint.get("identity_ok") is not True:
-            return fingerprint
-        if not derived:
-            return {**fingerprint, "source_url": None, "reason": "no_campus_board"}
-        return {**fingerprint, "source_url": derived}
-
-    return wrapped
+    ⚠️ 必须在 `_evaluate_candidates` **里面**、身份门与国聘补 URL **之后**做，不能再包在
+    fingerprinter 外面（2026-09-23 修）：带 preset 的候选（国聘车道 / slug 车道）根本不调
+    fingerprinter，国聘的 source_url 也是评估时才补出来的——旧写法两条都绕过了换算，
+    校招车道拿**社招** URL 去建源。9-18~9-20 报的「新增 10 个校招源」实为 10 条国聘社招源
+    （不带 nature=应届生，board=social），这些公司下一轮仍是 missing，再派生出同一个社招 URL
+    → 撞「source_url 已由 enabled source 占用」→ 异常 +1 天重试，招行/比亚迪/海信/中海油/大悦城
+    天天空转。
+    """
+    derived = campus_source_url(fingerprint.get("adapter"), fingerprint.get("source_url"))
+    if not derived:
+        return {**fingerprint, "source_url": None, "reason": "no_campus_board"}
+    return {**fingerprint, "source_url": derived}
 
 
 def campus_attempt_payload(row, result, now):
@@ -685,8 +686,8 @@ def process_campus_channel(row, **kwargs):
             "lanes": evidence.get("campus_lanes") or {},
         },
     }
-    return process_company(lane_row, finder=campus_finder,
-                           fingerprinter=_campus_fingerprinter(fingerprinter), **kwargs)
+    return process_company(lane_row, finder=campus_finder, fingerprinter=fingerprinter,
+                           board_transform=_to_campus_board, **kwargs)
 
 
 def _strict_httpx_probe_safe(adapter, source_url):
@@ -720,16 +721,23 @@ def _routable_source_url(adapter, source_url):
 
 
 def _rejection(url, reason, fingerprint=None):
+    try:
+        host = (urlparse(str(url or "")).hostname or "").lower()
+    except ValueError:
+        # classify_candidate_url 判 invalid_url 的恰恰是 urlparse 解析不了的串；
+        # 在这里再解析一次会把同一个 ValueError 抛出去，整家公司记成异常。
+        host = ""
     return {
         "url": url,
-        "host": (urlparse(str(url or "")).hostname or "").lower(),
+        "host": host,
         "reason": reason,
         "platform": (fingerprint or {}).get("platform"),
         "identity_reason": (fingerprint or {}).get("identity_reason"),
     }
 
 
-def _evaluate_candidates(row, candidates, *, trusted_site, fingerprinter):
+def _evaluate_candidates(row, candidates, *, trusted_site, fingerprinter,
+                         board_transform=None):
     """候选统一过指纹、身份和路由门；官网候选跳过搜索 URL 评分门。"""
     rejections = []
     fallbacks = []
@@ -784,6 +792,9 @@ def _evaluate_candidates(row, candidates, *, trusted_site, fingerprinter):
                 quote(row["company"], safe=""), quote(row["company"], safe=""),
             )
             fingerprint = {**fingerprint, "source_url": source_url}
+        if board_transform is not None:
+            fingerprint = board_transform(fingerprint)
+            source_url = fingerprint.get("source_url")
         if not _routable_source_url(adapter, source_url):
             fallbacks.append((candidate_url, fingerprint))
             rejections.append(_rejection(
@@ -873,8 +884,11 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
                     insert_allowed, now=None, finder=entry_finder.find_official_entry,
                     fingerprinter=platform_fingerprint.fingerprint,
                     prober=probe.probe_one, site_resolver=None,
-                    site_link_finder=None):
-    """处理一家公司；返回 (台账结果, 搜索次数, 是否消耗 insert 配额)。"""
+                    site_link_finder=None, board_transform=None):
+    """处理一家公司；返回 (台账结果, 搜索次数, 是否消耗 insert 配额)。
+
+    board_transform：校招车道传 `_to_campus_board`，把认出的入口换成校招板块 URL。
+    """
     now = now or datetime.now(timezone.utc)
     site_resolver = site_resolver or site_entry.resolve_official_site_details
     site_link_finder = site_link_finder or site_entry.find_careers_links
@@ -902,6 +916,7 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
             cache_evaluated = True
             evaluated = _evaluate_candidates(
                 row, [{"url": official_url}], trusted_site=False, fingerprinter=fingerprinter,
+                board_transform=board_transform,
             )
             selected = evaluated["selected"]
             fallbacks.extend(evaluated["fallbacks"])
@@ -959,6 +974,7 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
             )
             evaluated = _evaluate_candidates(
                 row, lane_items, trusted_site=trusted, fingerprinter=fingerprinter,
+                board_transform=board_transform,
             )
             fallbacks.extend(evaluated["fallbacks"])
             rejections.extend(evaluated["rejections"])
@@ -1057,6 +1073,7 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
             search_candidates,
             trusted_site=False,
             fingerprinter=fingerprinter,
+            board_transform=board_transform,
         )
         selected = evaluated["selected"]
         fallbacks.extend(evaluated["fallbacks"])
@@ -1080,6 +1097,7 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
             candidates,
             trusted_site=False,
             fingerprinter=fingerprinter,
+            board_transform=board_transform,
         )
         selected = evaluated["selected"]
         fallbacks.extend(evaluated["fallbacks"])
@@ -1187,6 +1205,8 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
         apply=apply,
         now=now,
     )
+    # 只给 run_round 计数用（_attempt_payload 不拷顶层键，不会进台账）。
+    gate["acceptance_gate_ran"] = True
     if not apply:
         gate.update({
             "state": "platform_known",
@@ -1265,6 +1285,8 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
     search_used = 0
     inserts_used = 0
     stopped_search_cap = False
+    # 规则 A 的「有活可干」口径，见 metrics 里 gate_reached 的注释。
+    gate_reached = errors = campus_gate_reached = campus_errors = 0
 
     for row in queue:
         scoped = {**row, "scope": scope}
@@ -1281,8 +1303,10 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
             )
             search_used += used
             inserts_used += int(inserted)
+            gate_reached += int(bool(result.get("acceptance_gate_ran")))
             payload = _attempt_payload(scoped, result, now)
         except Exception as exc:
+            errors += 1
             print(
                 "[gap_funnel] %s 处理异常: %s: %s"
                 % (row["company"], type(exc).__name__, str(exc)[:500])
@@ -1332,7 +1356,9 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
             )
             search_used += used
             inserts_used += int(inserted)
+            campus_gate_reached += int(bool(result.get("acceptance_gate_ran")))
         except Exception as exc:
+            campus_errors += 1
             print("[gap_funnel][campus] %s 处理异常: %s: %s"
                   % (row["company"], type(exc).__name__, str(exc)[:500]))
             result = {"state": "unknown", "next_retry_at": _after(now, 1),
@@ -1370,6 +1396,17 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
             and item.get("source_id")
         ),
         "states": dict(counts),
+        # 规则 A（ops_watchdog）的「处理量」口径（2026-09-23）。processed 数的是「看了几家」，
+        # 但队列里剩下的绝大多数是复查：没 adapter 的自建站 / 反爬 / 找不到入口，每家都在
+        # 验收门**之前**就得出否定结论——产出 0 是当前能力下的正确结论，不是卡住（8-30 起
+        # 规则 A 按 processed 判，一个 issue 追了 23 条评论没人能处理）。真正「有活没干成」只有两种：
+        #   gate_reached：认出了可路由的入口、探活有岗、走到了真抓验收门——走到了却一个源都没加上，
+        #                 是验收门 / 写库 / 回读出了问题；
+        #   errors：处理这家时抛了异常（代码坏了）——这类会 +1 天重试，放着不管就天天空转。
+        "gate_reached": gate_reached,
+        "errors": errors,
+        "campus_gate_reached": campus_gate_reached,
+        "campus_errors": campus_errors,
         # wrong_platform 是「探到了平台，但 P1 httpx 道没有这个平台的 adapter」——占失败态的
         # 绝大多数（2026-09-19 实测某轮 4/4），且不会随退避自愈（30 天后重探，平台还是没 adapter）。
         # 只报 states.wrong_platform 的总数看不出该优先接哪个平台；按 detected_platform 拆开，

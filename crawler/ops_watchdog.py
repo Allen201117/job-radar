@@ -72,8 +72,13 @@ MODULE_OUTPUT = {
     "dead_link_audit": (("checked",), ("checked",)),
     "insight_backlog": (("companies_enriched",), ("checked",)),
     "annual_report": (("written",), ("checked",)),
-    "gap_funnel": (("sources_added",), ("processed",)),
-    "gap_funnel_browser": (("sources_added",), ("processed",)),
+    # 必投缺口漏斗（2026-09-23 改口径）：处理量不再是 processed（看了几家），而是「走到真抓验收门的
+    # 家数 + 处理时抛异常的家数」。队列里剩下的大多是复查——没 adapter 的自建站 / 反爬 / 找不到
+    # 入口，每家都在验收门之前得出否定结论，那是正确结论不是卡住（按 processed 判时 8-30 起天天
+    # 报警、issue 追评 23 条无人可处理）。校招车道的产出一并算进来（此前漏数）。
+    "gap_funnel": (("sources_added", "campus_sources_added"),
+                   ("gate_reached", "campus_gate_reached", "errors", "campus_errors")),
+    "gap_funnel_browser": (("sources_added",), ("gate_reached", "errors")),
     # 用户体验走查（scripts/ux-walkthrough）：有用户画像可走却一个都没走完 = 零产出。
     "ux_walkthrough": (("users",), ("users",)),
     "campus_official_backlog": (("verified", "draft"), ("companies_processed",)),
@@ -91,7 +96,8 @@ MODULE_OUTPUT = {
     # 校招板块批量补源两层（2026-09-18 补台账）：层1 有候选可分诊却一个都没建源、
     # 层2 有待验收候选却一个都没通过验收 = 零产出。
     "campus_board_probe": (("sources_added",), ("candidates_checked",)),
-    "campus_board_verify": (("enabled",), ("pending",)),
+    # 处理量 = 非空板块（有岗走完三关 + 抓取失败）+ 崩溃；空板块是等开闸的正常态（2026-09-23）。
+    "campus_board_verify": (("enabled",), ("actionable", "errors")),
     # 北森详情路由浏览器逐家探测（2026-09-18 补台账）：有待探租户却一个都没探到路由 = 零产出。
     "harvest_beisen_routes": (("harvested",), ("attempted",)),
     # 企业 logo 抓取（2026-09-18 补台账）：有待处理公司却一张图都没抓到 = 零产出。
@@ -112,6 +118,14 @@ MODULE_OUTPUT = {
     # 规则 A 的口径校验，不代表这个键真的会被规则 A 判定异常。
     "llm_usage": (("calls",), ("calls",)),
 }
+
+# 这几个模块的 status='failed' 表示「本轮每一项都得到了否定结论」（一家都没转化成功），
+# **不**表示「这一轮跑崩了」：gap_funnel / gap_funnel_browser 的 status 由
+# status_from_counts(处理家数, 未转化家数) 算，跑崩了根本不落台账（那由规则 E 与结构性审计的
+# pipeline.*_ran 兜）；campus_board_verify 的崩溃行显式带 errors=1。所以对它们只按 produced/work
+# 判，不走「当天所有 run 全失败 = 零产出」的捷径——否则一条正常复查、全部判出否定结论的漏斗
+# 会被天天当成故障（2026-08-30 起 issue #17 / #8 / #34 即此）。
+VERDICT_STATUS_MODULES = frozenset({"gap_funnel", "gap_funnel_browser", "campus_board_verify"})
 
 # ⚠️ 周任务在当前规则 A 下几乎不可能被判定为「连续零产出」（2026-09-18 发现，未修，先如实记录）：
 # evaluate_zero_output 要求 complete_days(today, days) 窗口内**每一天**都是 module_day_state=="zero"，
@@ -355,16 +369,17 @@ def aggregate_ops_runs(rows):
     return agg
 
 
-def module_day_state(day_bucket, spec):
+def module_day_state(day_bucket, spec, verdict_status=False):
     """一个模块某一天的状态：ok / zero / idle / no_run。
 
     zero 有两种成因，都算「今天什么也没产出」：所有 run 全失败，或有活干但产出为 0。
+    verdict_status=True（见 VERDICT_STATUS_MODULES）时 failed 只是「一项都没转化」，不走第一种。
     """
     if not day_bucket or day_bucket["runs"] <= 0:
         return "no_run", "当天无运行记录"
     produced_keys, work_keys = spec
     metrics = day_bucket["metrics"]
-    if day_bucket["failed"] >= day_bucket["runs"]:
+    if not verdict_status and day_bucket["failed"] >= day_bucket["runs"]:
         return "zero", f"{day_bucket['runs']} 次运行全部失败"
     work = sum(metrics.get(k, 0) for k in work_keys)
     produced = sum(metrics.get(k, 0) for k in produced_keys)
@@ -401,7 +416,9 @@ def evaluate_zero_output(rows, today, days=2, muted=()):
         if not spec:
             skipped.append(module)
             continue
-        states = [module_day_state(agg.get(module, {}).get(day), spec) for day in window]
+        verdict_status = module in VERDICT_STATUS_MODULES
+        states = [module_day_state(agg.get(module, {}).get(day), spec, verdict_status)
+                  for day in window]
         if not states or not all(state == "zero" for state, _ in states):
             continue
         findings.append({
