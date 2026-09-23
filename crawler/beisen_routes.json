@@ -277,5 +277,77 @@
   "kkworld.zhiye.com": "https://kkworld.zhiye.com/social/detail",
   "comix.zhiye.com": "https://comix.zhiye.com/campus/detail",
   "purcotton.zhiye.com": "https://purcotton.zhiye.com/campus/detail",
-  "calbjs.zhiye.com": "https://calbjs.zhiye.com/social/detail"
+  "calbjs.zhiye.com": "https://calbjs.zhiye.com/social/detail",
+  "glprop.zhiye.com": {
+    "ssr": true
+  },
+  "deyi.zhiye.com": {
+    "ssr": true
+  },
+  "jingce.zhiye.com": {
+    "ssr": true
+  },
+  "kexing.zhiye.com": {
+    "ssr": true
+  },
+  "kelun.zhiye.com": {
+    "ssr": true
+  },
+  "smics.zhiye.com": {
+    "cms": true
+  },
+  "hundsun.zhiye.com": {
+    "ssr": true
+  },
+  "ledman.zhiye.com": {
+    "ssr": true
+  },
+  "goodix.zhiye.com": {
+    "ssr": true
+  },
+  "eic.zhiye.com": {
+    "ssr": true
+  },
+  "bettapharma.zhiye.com": {
+    "ssr": true
+  },
+  "jingbo.zhiye.com": {
+    "ssr": true
+  },
+  "gtgroup.zhiye.com": {
+    "ssr": true
+  },
+  "fullhan.zhiye.com": {
+    "ssr": true
+  },
+  "tecon.zhiye.com": {
+    "ssr": true
+  },
+  "slamtec.zhiye.com": {
+    "ssr": true
+  },
+  "qingcloud.zhiye.com": {
+    "ssr": true
+  },
+  "stepelectric.zhiye.com": {
+    "ssr": true
+  },
+  "fuhai.zhiye.com": {
+    "ssr": true
+  },
+  "shenghuagroup.zhiye.com": {
+    "ssr": true
+  },
+  "cansinotech.zhiye.com": {
+    "ssr": true
+  },
+  "neocrm.zhiye.com": {
+    "ssr": true
+  },
+  "linklogis.zhiye.com": {
+    "ssr": true
+  },
+  "maitian.zhiye.com": {
+    "ssr": true
+  }
 }

@@ -412,6 +412,26 @@ class TestCardsRouteHint(unittest.TestCase):
         finally:
             china_ats._BEISEN_ROUTE_CACHE.pop(host, None)
 
+    def test_first_seen_tenant_resolved_via_cards_gets_registered(self):
+        """2026-09-23 立：首次探到「这是卡片式 CMS 租户」时 fetch() 必须登记 {"cards": true}，
+        道理同 cms/ssr 两个姊妹分支——不登记就会被 harvest_beisen_routes.py 天天当成
+        「还没探出路由」重探，即便它早就能纯 httpx 抓全。"""
+        host = "cards-first-seen.zhiye.com"
+        calls = []
+        a = _adapter()
+        a._httpx_fetch = lambda url: (calls.append("httpx"), None)[1]
+        a._httpx_fetch_cms = lambda url: (calls.append("cms"), None)[1]
+        a._httpx_fetch_ssr_paged = lambda url: (calls.append("ssr"), None)[1]
+        a._httpx_fetch_cards = lambda url: (calls.append("cards"), '{"_ssr_jobs": []}')[1]
+        try:
+            out = a.fetch(f"https://{host}/social")
+            self.assertEqual(out, '{"_ssr_jobs": []}')
+            self.assertEqual(calls, ["httpx", "cms", "ssr", "cards"])
+            self.assertEqual(china_ats._BEISEN_ROUTE_CACHE.get(host), {"cards": True},
+                              "首次探到 cards 成功必须登记，否则 harvest 脚本永远读不到这个事实")
+        finally:
+            china_ats._BEISEN_ROUTE_CACHE.pop(host, None)
+
     def test_stale_cards_hint_is_evicted(self):
         """登记过时（租户换模板/升级 SPA）→ 必须把假登记清掉，否则「首见租户」分支会被跳过
         → 详情路由永远探不出来 → 0 岗 + 自称抓全。"""

@@ -460,23 +460,32 @@ _BEISEN_ROUTE_CACHE: dict = _load_beisen_routes()
 def _beisen_route_usable(route) -> bool:
     """这条缓存路由**能不能给新版 GetJobAdPageList 的行拼出 jd_url**。
 
-    能用的只有四种形状：点击捕获的 `{template, idfield}`、旧的 detail base 字符串、
-    `{"cms": true}`（老版 theme2 CMS）、`{"cards": true}`（卡片式 CMS，见 _httpx_fetch_cards）。
-    后两者不参与 `_resolve_url` 拼链接 —— 它们的 jd_url 来自列表页锚点本身，登记只是为了让
+    能用的只有五种形状：点击捕获的 `{template, idfield}`、旧的 detail base 字符串、
+    `{"cms": true}`（老版 theme2 CMS）、`{"cards": true}`（卡片式 CMS，见 _httpx_fetch_cards）、
+    `{"ssr": true}`（老版 SSR「jobsTable」路径式详情，见 _httpx_fetch_ssr_paged）。
+    后三者不参与 `_resolve_url` 拼链接 —— 它们的 jd_url 来自列表页锚点本身，登记只是为了让
     `beisen_httpx_ready()` 认它「零浏览器可抓」，好让 run.py 把它排进 httpx 并发快车道。
-    ⚠️ `{ssr_path, ssr_param}` 是**老版 SSR 列表**那条通道的产物，它配的是 SSR 锚点里的数字 id；
-    新版接口给的是 uuid，两者不通用 —— 2026-09-17 真渲染实测：把新版 uuid 拼进
+    ⚠️ 2026-09-23 实测：harvest_beisen_routes.py 待探队列 26 家里 23 家（88%）就是这一类——
+    `fetch()` 早就能纯 httpx 抓全，只是当时没登记 `{"ssr": true}`，harvest 脚本天天当成
+    「还没探出路由」重探、harvested 连续 3 天卡 0（这类租户压根不需要探测）。
+    ⚠️ **`{"ssr": true}` 不是** `{ssr_path, ssr_param}`——后者才是被禁的老版残留形状，
+    两者字面接近但含义相反，改这里千万别搞混：
+    `{ssr_path, ssr_param}` 是**给新版 GetJobAdPageList 的行**配 SSR 锚点里的数字 id 用的模板，
+    而新版接口给的是 uuid，两者不通用 —— 2026-09-17 真渲染实测：把新版 uuid 拼进
     `fosunpharma.zhiye.com/campusxq?jobId=<uuid>` / `cnnc.zhiye.com/szxq?…` / `boe.zhiye.com/zwxq?…`，
     三家渲染出来的都是门户首页（body 文本 30~51 字，没有那个岗位），**拼出来就是坏链**。
     而 `_resolve_url` 的 dict 分支只认 template → 这类租户每行 jd_url 都是空串 → 质量门全丢 →
     「success + 0 岗」且不报错。实测这三家躺了很久：复星医药 33 次 success / 0 岗（北森自报 161 个岗、
     其中 71 个校招），中核集团北森自报 854 个校招、库里 0 个，京东方（必投）同病。
+    `{"ssr": true}` 则完全不参与拼链接（同 cms/cards），只是「这个 host 走 _httpx_fetch_ssr_paged
+    自己从列表锚点里拿 jd_url，不需要任何模板」的标记——两者能用性判据不同，别以为都带 ssr 字样
+    就该一视同仁。
     """
     if isinstance(route, str):
         return bool(route)
     if isinstance(route, dict):
         return (bool(route.get("template")) or route.get("cms") is True
-                or route.get("cards") is True)
+                or route.get("cards") is True or route.get("ssr") is True)
     return False
 
 
@@ -1289,7 +1298,8 @@ class BeisenAdapter(ChinaSpaAdapter):
         #   ① 让 beisen_httpx_ready() 认它为「零浏览器可抓」→ run.py 把它排进 httpx 并发快车道
         #      （否则未登记的 host 一律落串行浏览器档，白占慢车道名额）；
         #   ② 直接走老版 CMS 分支，省掉一次注定拿不到 PortalId 的新版探测请求。
-        # {"cards": true} 同理，登记的是卡片式 CMS 租户（见 _httpx_fetch_cards）。
+        # {"cards": true} 同理，登记的是卡片式 CMS 租户（见 _httpx_fetch_cards）；
+        # {"ssr": true} 同理，登记的是老版 SSR「jobsTable」路径式详情租户（见 _httpx_fetch_ssr_paged）。
         cards_hint = isinstance(route, dict) and route.get("cards") is True
         cards_tried = False
         if cards_hint:
@@ -1319,6 +1329,22 @@ class BeisenAdapter(ChinaSpaAdapter):
             # 「首见租户」分支会因为 host 还在缓存里被跳过 → 详情路由永远探不出来 → _resolve_url
             # 全返空 → 整源解析成 0 岗，偏偏浏览器路径又把 fetch_complete 置成 True
             # ＝「0 岗 + 自称抓全」，正是 CLAUDE.md §4 立碑警告的误杀在招岗组合。
+            _BEISEN_ROUTE_CACHE.pop(self._host, None)
+            route = None
+
+        # {"ssr": true} 同理，登记的是老版 SSR「jobsTable」路径式详情租户（见 _httpx_fetch_ssr_paged）。
+        # 别与被禁的 {ssr_path, ssr_param} 形状搞混——那是给新版接口 uuid 拼模板用的旧残留，
+        # 这里的 {"ssr": true} 跟 cms/cards 一样只是「零浏览器可抓」标记，不参与拼链接。
+        ssr_hint = isinstance(route, dict) and route.get("ssr") is True
+        ssr_tried = False
+        if ssr_hint:
+            ssr_tried = True
+            try:
+                ssr = self._httpx_fetch_ssr_paged(source_url)
+            except Exception:
+                ssr = None
+            if ssr:
+                return ssr
             _BEISEN_ROUTE_CACHE.pop(self._host, None)
             route = None
 
@@ -1385,13 +1411,26 @@ class BeisenAdapter(ChinaSpaAdapter):
             except Exception:
                 cms = None
             if cms:
+                # 首次证实「这是老版 CMS 租户」必须登记 {"cms": true}，否则这个事实只活在
+                # 这一次 fetch() 调用里：harvest_beisen_routes.py 只看 _BEISEN_ROUTE_CACHE 判
+                # 「探到路由没」，CMS 租户压根不需要 template（jd_url 来自列表锚点本身）却因为
+                # 没登记而被当成「还没探出来」天天重探、harvested 永远 0（2026-09-23 实测
+                # harvest_beisen_routes.py 待探队列 26 家里 2 家属这一类，同批 23 家其实是下面
+                # 的 ssr 分支——两个分支都漏登记，症状一模一样）；run.py 的 beisen_httpx_ready()
+                # 同样读不到，会把零浏览器可抓的源错分进慢车道。
+                _BEISEN_ROUTE_CACHE[self._host] = {"cms": True}
                 return cms
 
         # 老版 SSR「jobsTable」门户（路径式详情，非 ?jobId= 故 CMS 分支匹配不到）→ 纯 httpx 翻到底。
         # 放在开浏览器之前：浏览器 _fetch_ssr 只渲染首屏、不翻页、也不报分母。
-        ssr = self._httpx_fetch_ssr_paged(source_url)
-        if ssr:
-            return ssr
+        if not ssr_tried:
+            ssr = self._httpx_fetch_ssr_paged(source_url)
+            if ssr:
+                # 同上一条 cms 分支：这类租户是 2026-09-23 那批 26 个 pending 里的大头（23/26），
+                # 不登记 {"ssr": true} 就会被 harvest_beisen_routes.py 天天当成「还没探出路由」
+                # 重探，而它们其实早就能纯 httpx 抓全，压根不需要探测。
+                _BEISEN_ROUTE_CACHE[self._host] = {"ssr": True}
+                return ssr
 
         # 卡片式 CMS 门户（列表卡内嵌整段 JD）→ 纯 httpx 翻到底。**排在所有旧分支之后**：
         # 旧分支任何一条能出岗就轮不到它，所以既有源走的路一步没变；只有「旧的全部落空、
@@ -1402,6 +1441,9 @@ class BeisenAdapter(ChinaSpaAdapter):
             except Exception:
                 cards = None
             if cards:
+                # 同上一条 cms 分支的道理：卡片式 CMS 租户也不需要 template，
+                # 不登记 {"cards": true} 就会永远卡在「待探路由」的假 pending 里。
+                _BEISEN_ROUTE_CACHE[self._host] = {"cards": True}
                 return cards
 
         # 都没打通 → 回退浏览器全流程（探+缓存 route），再不行落 SSR

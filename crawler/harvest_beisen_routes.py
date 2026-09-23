@@ -1,11 +1,15 @@
 """crawler/harvest_beisen_routes.py — 一次性/周期性持久化 beisen 各租户详情路由到 beisen_routes.json。
 
 为何：beisen 列表已能纯 httpx 抓（adapters/china_ats.BeisenAdapter._httpx_fetch），但 jd_url 需本租户详情
-路由（点击捕获，浏览器探测），只有 route 已缓存的租户才能走 httpx。本脚本浏览器逐家探出路由并落盘——
+路由，只有 route 已缓存的租户才能走 httpx 快车道。多数租户需要浏览器点击捕获才能探出 template 路由；
+但老版 CMS / 卡片式 / SSR「jobsTable」这三类门户零浏览器可抓（jd_url 来自列表锚点本身），本脚本调用一次
+`ad.fetch(url)` 就够——命中哪一类，china_ats.fetch() 会自己把 {"cms"/"cards"/"ssr": true} 写进
+_BEISEN_ROUTE_CACHE，本脚本只管读缓存、落盘（2026-09-23 前这三类的登记漏了，详情见 _usable() 的注释）。
 覆盖到（近）全部 enabled beisen 租户后，beisen 即可进 daily-crawl httpx 快车道（4×/天 + list-absence）。
 
-慢（浏览器逐家），故每次 cap 一批、**逐家增量落盘**（中途崩也不丢已探到的），由 workflow 每晚跑 + commit 回仓，
-几晚覆盖全部。已缓存 route 的租户跳过；探不到的留待下次重试（不落 None，避免永久跳过可能恢复的租户）。
+慢（真正需要浏览器点击捕获的租户），故每次 cap 一批、**逐家增量落盘**（中途崩也不丢已探到的），由
+workflow 每晚跑 + commit 回仓，几晚覆盖全部。已缓存 route 的租户跳过；探不到的留待下次重试（不落
+None，避免永久跳过可能恢复的租户）。
 """
 import json
 import os
@@ -25,12 +29,36 @@ _ROUTES_FILE = Path(china_ats._BEISEN_ROUTES_FILE)
 
 
 def _usable(route):
-    """只持久化可拼 jd_url 的路由（str=detail base / dict 含 template）；None/空不落盘（留待重试）。"""
+    """只持久化「能拼 jd_url 或已确认零浏览器可抓」的路由：str/dict 含 template（点击捕获），
+    或 {"cms": true}/{"cards": true}/{"ssr": true}（老版 CMS / 卡片式 / SSR「jobsTable」门户，
+    jd_url 来自列表锚点本身，不需要 template）。None/其它形状不落盘（留待重试）。
+
+    ⚠️ 判据必须复用 china_ats._beisen_route_usable，不能在这里另起一套「能用」的定义——
+    2026-09-23 实测：这里原来只认 template，导致 fetch() 已经证明可用的 {"cms": true}/
+    {"ssr": true} 标记被判成「不可用」，26 个待探租户里 25 个（2 cms + 23 ssr）天天被当成
+    「还没探出路由」重探，harvested 连续 3 天为 0（它们其实早就能纯 httpx 抓全，压根不需要
+    探测；剩下 1 个才是真需要浏览器点击捕获的）。两处判据一旦漂移，症状会一模一样地复发。
+    """
     if isinstance(route, str) and route.strip():
         return route
-    if isinstance(route, dict) and route.get("template"):
+    if isinstance(route, dict) and china_ats._beisen_route_usable(route):
         return route
     return None
+
+
+def _describe(route):
+    """给日志用的可读摘要：template 路由打印模板本身，cms/cards/ssr 标记打印类型名。"""
+    if isinstance(route, str):
+        return route
+    if route.get("template"):
+        return route.get("template")
+    if route.get("cms"):
+        return "cms"
+    if route.get("cards"):
+        return "cards"
+    if route.get("ssr"):
+        return "ssr"
+    return route
 
 
 def main():
@@ -80,7 +108,9 @@ def _run(sb, started_at):
     for host, url in uniq[:CAP]:
         try:
             ad = china_ats.BeisenAdapter()
-            ad.fetch(url)  # route 未缓存 → 走浏览器探+缓存到 _BEISEN_ROUTE_CACHE[host]
+            ad.fetch(url)  # route 未缓存 → 探测并缓存到 _BEISEN_ROUTE_CACHE[host]
+            # （多数走浏览器点击捕获；老版 CMS/卡片式/SSR 租户零浏览器可抓，登记的是
+            #  {"cms"/"cards"/"ssr": true}）
             route = _usable(china_ats._BEISEN_ROUTE_CACHE.get(host))
         except Exception as e:
             route = None
@@ -88,7 +118,7 @@ def _run(sb, started_at):
         if route:
             routes[host] = route
             harvested += 1
-            print(f"  ✓ {host} → {route if isinstance(route, str) else route.get('template')}", flush=True)
+            print(f"  ✓ {host} → {_describe(route)}", flush=True)
             # 逐家增量落盘（中途崩不丢）
             try:
                 _ROUTES_FILE.write_text(json.dumps(routes, ensure_ascii=False, indent=2), encoding="utf-8")
