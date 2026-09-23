@@ -67,10 +67,12 @@ def main():
     user_wanted = ad.load_user_wanted_companies(sb)
     existing_companies, existing_urls = ad.existing_source_keys(sb)
     curated = ad.load_targets(existing_companies)
+    llm_candidates = ad.count_llm_candidates(curated)
     seed = int(datetime.now(timezone.utc).strftime("%Y%m%d"))
     targets = ad.plan_targets(curated, user_wanted, existing_companies, TARGET_CAP, seed=seed)
-    print(f"[auto_discover_browser] curated={len(curated)} user_wanted={len(user_wanted)} "
-          f"existing={len(existing_companies)} → httpx 探 {len(targets)} 家 tenant (apply={apply})")
+    print(f"[auto_discover_browser] curated={len(curated)} (LLM 新料 {llm_candidates}) "
+          f"user_wanted={len(user_wanted)} existing={len(existing_companies)} "
+          f"→ httpx 探 {len(targets)} 家 tenant (apply={apply})")
 
     # Track A2：已有社招源但缺校招板块的必投公司 —— 绕过上面「整家去重」，moka-only 专补校招板块
     # （beisen/hotjob/wt 校招已在 A0 摸清覆盖，不需重探；targeting 纯函数见 auto_discover.py）。
@@ -85,15 +87,16 @@ def main():
     print(f"[auto_discover_browser] 校招板块缺口重探目标 {len(campus_gap_targets)} 家（moka-only）")
 
     if not targets and not campus_gap_targets:
-        ops_runs.record_ops_run(sb, "auto_discover_browser", {"checked": 0, "produced": 0},
+        ops_runs.record_ops_run(sb, "auto_discover_browser",
+                                {"checked": 0, "produced": 0, "llm_candidates": llm_candidates},
                                 status="success", started_at=started, finished_at=_now_iso())
         print("[auto_discover_browser] 无缺失目标，结束。")
         return
 
     hits = dd.sweep(targets, BROWSER_PLATFORMS) if targets else []
-    cands = dd.to_beisen_candidates(hits) + dd.to_moka_candidates(hits)
+    raw_cands = dd.to_beisen_candidates(hits) + dd.to_moka_candidates(hits)
     # 先去重 vs 已有 source_url（别浪费浏览器时间确认已在库的），不截断——截断交给 CONFIRM_CAP。
-    cands = ad.plan_inserts(cands, existing_urls, cap=10 ** 9)
+    cands = ad.plan_inserts(raw_cands, existing_urls, cap=10 ** 9)
     print(f"[auto_discover_browser] tenant 命中候选 {len(cands)} → 浏览器确认前 {CONFIRM_CAP} 家")
 
     campus_hits = dd.sweep(campus_gap_targets, {"moka"}) if campus_gap_targets else []
@@ -102,6 +105,7 @@ def main():
 
     confirmed = confirm_candidates(cands, CONFIRM_CAP, CONFIRM_TIMEOUT)
     confirmed += confirm_candidates(campus_cands, CAMPUS_GAP_CONFIRM_CAP, CONFIRM_TIMEOUT)
+    confirm_attempted = min(len(cands), CONFIRM_CAP) + min(len(campus_cands), CAMPUS_GAP_CONFIRM_CAP)
     added = 0
     for row in confirmed:
         tag = "+ insert" if apply else "· dry-run"
@@ -113,10 +117,17 @@ def main():
             except Exception as e:
                 print(f"    insert 失败(跳过): {type(e).__name__}: {e}")
 
+    # 各步淘汰计数（2026-09-23 补）：此前台账只有 checked/produced，「为什么 0」只能翻 CI 日志；
+    # 那次排查才发现 LLM 喂料在本道关了近一个月、每天 90% 的浏览器确认在重复确认同一批 0 岗候选。
     ops_runs.record_ops_run(
         sb, "auto_discover_browser",
         {"checked": len(targets) + len(campus_gap_targets), "produced": added, "companies_enriched": added,
-         "candidates": len(confirmed)},
+         "candidates": len(confirmed), "llm_candidates": llm_candidates,
+         "tenant_hits": len(hits) + len(campus_hits),
+         "tenant_unverified": sum(1 for h in hits + campus_hits if not h.get("verified")),
+         "deduped": len(raw_cands) - len(cands),
+         "confirm_attempted": confirm_attempted,
+         "confirmed_zero": confirm_attempted - len(confirmed)},
         status=ops_runs.status_from_counts(len(confirmed), len(confirmed) - added),
         started_at=started, finished_at=_now_iso())
     print(f"[auto_discover_browser] 完成: 确认产岗 {len(confirmed)} / 入库 {added} 源 (apply={apply})")

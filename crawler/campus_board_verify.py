@@ -164,8 +164,11 @@ def main():
         return _run(supabase, args, started_at)
     except Exception as e:
         # 中途任何未捕获异常都要留痕，再原样抛出保持原退出码（同 campus_board_probe_run 的补法）。
+        # errors=1 是给规则 A 看的：本模块的 failed 也用来表示「本轮没有一个候选通过验收」，
+        # 看门狗不再单凭 status 判零产出，崩溃必须显式计数才看得见。
         ops_runs.record_ops_run(
-            supabase, "campus_board_verify", {"crash": type(e).__name__}, "failed", started_at=started_at,
+            supabase, "campus_board_verify", {"crash": type(e).__name__, "errors": 1}, "failed",
+            started_at=started_at,
         )
         raise
 
@@ -176,7 +179,7 @@ def _run(supabase, args, started_at):
 
     if not jobs_db.enabled():
         _log("❌ 未配置 JOBS_DATABASE_URL，无法回读香港库做验收 → 拒绝空转")
-        _record("failed", {"error": "JOBS_DATABASE_URL 未配置"})
+        _record("failed", {"error": "JOBS_DATABASE_URL 未配置", "errors": 1})
         return 1
 
     all_sources = db.fetch_all_rows(lambda: supabase.table("sources").select("*"))
@@ -191,7 +194,7 @@ def _run(supabase, args, started_at):
         awaiting = {(r["company"], r["adapter_name"]) for r in (resp.data or [])}
     except Exception as e:
         _log(f"❌ 台账读取失败，无法确定待验收名单：{type(e).__name__}: {e}")
-        _record("failed", {"error": f"{type(e).__name__}: {e}"})
+        _record("failed", {"error": f"{type(e).__name__}: {e}", "errors": 1})
         return 1
     pending = [s for s in all_sources
                if not s.get("enabled")
@@ -219,9 +222,16 @@ def _run(supabase, args, started_at):
         except Exception:
             pass
     _log(f"验收完成：{results}")
-    enabled = results.get("enabled", 0)
+    # ⚠️ verify_one 通过验收时返回的状态是 "healthy"，不是 "enabled"。2026-09-18 补台账时写成了
+    # results.get("enabled") → 恒为 0：9-21 耐世特、9-22 万孚生物各启用了 1 个校招源，台账照样记
+    # 「零产出 + failed」，规则 A 据此报了假的连续零产出（issue #34）。
+    enabled = results.get("healthy", 0)
+    # 规则 A 的「处理量」口径：板块空着（empty_board）是等开闸的正常态，不是能产出的活
+    # （抽查 李宁 / 芒果TV / 国泰君安 的校招页确为「0 结果」）。只有「有岗走完三关」和
+    # 「抓取本身失败」的候选才算这一轮真有活——它们全军覆没才是验收门或抓取坏了。
+    actionable = len(pending) - results.get("empty_board", 0)
     _record(ops_runs.status_from_counts(len(pending), len(pending) - enabled),
-            {"pending": len(pending), "enabled": enabled, **results})
+            {**results, "pending": len(pending), "enabled": enabled, "actionable": actionable})
     return 0
 
 

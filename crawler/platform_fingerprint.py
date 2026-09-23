@@ -42,6 +42,33 @@ _INTERFACE_RULES = (
     ("/web/json/position/list", "wt", "wt"),
 )
 _URL_RE = re.compile(r"https?://[^\s\"'<>\\]+", re.I)
+
+
+def _safe_urlparse(raw):
+    """解析**从网页内容里抠出来的** URL；解析不了返回 None，调用方跳过这一条。
+
+    _URL_RE 刻意放得很宽，抠出来的东西不全是合法 URL：JS 里的 `"https://[" + host + "]"`
+    会让 urlparse 抛「Invalid IPv6 URL」，中文正文里的「http://www.x.com，或巨潮资讯网：…」
+    会抛「netloc … contains invalid characters under NFKC normalization」。
+    旧写法不接这个 ValueError → 整个 fingerprint() 抛出 → gap_funnel 把**整家公司**记成异常、
+    次日重试 → 同一个页面天天炸（2026-09-14~22 施耐德、联邦快递、荣盛石化隔天一次，一次都没判出结论）。
+    一条坏字符串只该丢掉它自己，不该拖垮整页的平台判定。
+    """
+    try:
+        parsed = urlparse(str(raw or ""))
+        parsed.hostname  # noqa: B018 —— 部分畸形 netloc 要到取 hostname 才暴露
+    except ValueError:
+        return None
+    return parsed
+
+
+def _safe_urljoin(base, raw):
+    """同 _safe_urlparse：页面里的 href/src 拼不成合法 URL 就返回 None。"""
+    try:
+        joined = urljoin(base, str(raw or "").strip())
+    except ValueError:
+        return None
+    return joined if _safe_urlparse(joined) is not None else None
 _HOSTLIKE_RE = re.compile(
     r"(?<![a-z0-9-])(?:[a-z0-9-]+\.)+[a-z]{2,}(?![a-z0-9-])", re.I
 )
@@ -90,7 +117,7 @@ _WT_PORTAL_RE = re.compile(r"/wt/([A-Za-z0-9_-]+)/web/index\b", re.I)
 
 def detect_platform(final_url, html):
     """纯函数：最终 host → HTML 第三方 host → 接口路径特征。"""
-    parsed = urlparse(str(final_url or ""))
+    parsed = _safe_urlparse(final_url) or urlparse("")
     direct = _host_detection(parsed.hostname, parsed.path)
     if direct:
         # `{brand}.hotjob.cn` 根路径同时托管两代产品：新版 wecruit（/{SU…}/pb/…）与老版
@@ -104,7 +131,9 @@ def detect_platform(final_url, html):
 
     text = str(html or "")
     for candidate in _URL_RE.findall(text):
-        embedded = urlparse(candidate.rstrip(");,"))
+        embedded = _safe_urlparse(candidate.rstrip(");,"))
+        if embedded is None:
+            continue
         detected = _host_detection(embedded.hostname, embedded.path)
         if detected:
             return detected
@@ -252,7 +281,8 @@ def find_careers_subdomain_hops(html, final_url, limit=3):
         return []
     hops, seen = [], set()
     for raw in _URL_RE.findall(str(html or "")):
-        host = (urlparse(raw).hostname or "").lower()
+        parsed = _safe_urlparse(raw)
+        host = ((parsed.hostname if parsed else "") or "").lower()
         if not host or host == base_host or _registrable(host) != base_root:
             continue
         if not _CAREERS_SUBDOMAIN_RE.match(host.split(".")[0]):
@@ -287,7 +317,9 @@ def find_script_bundle_urls(html, final_url, limit=_SCRIPT_BUNDLE_LIMIT):
         return []
     out, seen = [], set()
     for raw in _SCRIPT_SRC_RE.findall(str(html or "")):
-        url = urljoin(final_url, raw.strip())
+        url = _safe_urljoin(final_url, raw)
+        if url is None:
+            continue
         host = (urlparse(url).hostname or "").lower()
         if not host or _registrable(host) != base_root:
             continue
@@ -303,7 +335,9 @@ def find_ats_tenant_urls(text, limit=3):
     best = {}
     for raw in _URL_RE.findall(str(text or "")):
         url = raw.split("#", 1)[0].rstrip(");,'\"")
-        parsed = urlparse(url)
+        parsed = _safe_urlparse(url)
+        if parsed is None:
+            continue
         platform, adapter = _host_detection(parsed.hostname, parsed.path)  or ("unknown", None)
         if not adapter:
             continue
@@ -388,7 +422,9 @@ def verify_page_identity(company, final_url, html):
 
 
 def _adapter_api_url(platform, candidate):
-    parsed = urlparse(str(candidate or ""))
+    parsed = _safe_urlparse(candidate)
+    if parsed is None:
+        return None
     host = (parsed.hostname or "").lower()
     parts = [part for part in parsed.path.split("/") if part]
     if platform == "greenhouse":
