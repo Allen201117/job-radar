@@ -1,7 +1,7 @@
 name: liveness-sweep
 
 # 失活清扫（质量方针）：对全部带 closure detector 的 httpx 源逐岗 detail 探活，源站撤岗信号
-#   （hotjob state=1017 / wt req_state=9501 / workday·oracle·eightfold·smartrecruiters 404…）→ status='expired'。
+#   （hotjob state=1017 / wt req_state=9501 / workday 403+S22 / workday·oracle·eightfold·smartrecruiters 404…）→ status='expired'。
 # 与 daily-crawl 内置 sweep 的区别：**本工作流只探活、不抓列表**，故不会重新灌入「已关闭但列表仍返回」的假 active
 #   （wt~52% / hotjob~71% 列表夹带已关闭岗）——纯挤干失活，不回潮。
 # 按 adapter 分片并行（各 shard 只 drain 自己 adapter，互不重叠）；按 enrich_checked_at 最旧轮转

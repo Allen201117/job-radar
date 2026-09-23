@@ -158,11 +158,25 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
 |---|---|---|
 | 数据结构 | 岗位/洞察走**类型化列 + 枚举 + 约束**，派生量物化成列（`job_scope`/`grad_class`/`canonical_jd_url`） | 把结论塞进一段 LLM 散文，没法索引、没法筛、没法治理 |
 | 索引 | 大表查询先看 EXPLAIN；前导列顺序对齐排序键；分区 GIN（校招/实习） | `ilike any('%x%')` 全表扫 39 万行还以为走了索引 |
-| 缓存 | 跨实例用 `unstable_cache` / CDN；进程内缓存只当同实例并发去重 | 进程内 Map 当缓存用，serverless 多实例命中率≈0 |
+| 缓存 | 跨实例用 `unstable_cache` / CDN（一律经 `lib/request-safe-cache.requestSafeCache` 定义，见表下）；进程内缓存只当同实例并发去重 | 进程内 Map 当缓存用，serverless 多实例命中率≈0 |
 | 队列与调度 | 重活进 GitHub Actions + `ops_runs` 台账，cron 错峰、分片、限并发护连接 | 长任务塞进请求路径（点击探活 5-8s 已废弃） |
 | 会话鉴权 | 本地 JWT 验签 + 模块级 JWKS 缓存，中间件注入用户头 | 每请求跨洋 `getUser()`（566ms→0.7ms） |
 | 安全 | 密钥只进 Secrets/env；公开仓 pre-commit 门禁扫敏感信息 | 绝对路径/IP/真名进公开仓（不可撤回） |
 | 可观测 | 每条链写 `ops_runs`（含零产出指标）+ ops-watchdog 规则 A~F | 「绿灯零产出」连续 7 天无人知 |
+
+🚫 **`unstable_cache` 在带中文查询串的请求里读写全失败（2026-09-23 立）**：
+❌ 线上 `/insights?q=腾讯` 每次都重建索引（6.2s），连一个无关参数 `?zz=腾` 也是；`?zz=1` 21ms 命中、4 个实例拿到同一份。
+✅ 根因：Next 15 在请求里调用 `unstable_cache` 时，把「路径 + **解码后**的查询串」拼进缓存条目名，Vercel 数据缓存拿它读写，
+带非 ASCII 字符就静默失败，不报错。缓存键本身与 URL 无关，所以只有中文请求一直落空。
+✅ 防：定义处一律用 `lib/request-safe-cache.requestSafeCache(fn, keyParts, opts)`（= `unstable_cache` + 每次调用自动经
+`lib/cache-outside-request.callOutsideRequestScope` 跳出 request 作用域，缓存键不变）；`tests/request-safe-cache.test.js`
+契约禁止 app/ lib/ 直接调 `unstable_cache`，`tests/cache-outside-request.test.js` 用 Next 真实的 `unstable_cache` 截条目名断言，升级 Next 会先红。
+这是 Next 官方缺陷（vercel/next.js#76286），修复只进了 16.x，15.5 线到 15.5.26 都没 backport；升到 ≥16.3 后这层可删。
+⚠️ 同一个 helper 还绕开另一个坑：条目过期后的后台重建，**接口路由（Route Handler）会等它跑完才结束响应**（Next 15.5
+app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse），线上取索引 56ms、响应 6.2s；helper 把它挪给 `after()`。
+📌 纠错（同日）：上一行原写「全站 14 处目前只改了洞察索引，其余未改」——已于 2026-09-23 全站统一换成 requestSafeCache（现 15 处）。
+搜索的真实总数计数同日 A/B 实测：同一条计数只多挂一个无关的 `&zz=中`，尾段 6~52ms → 678~1,738ms；它还把用户隐藏岗拆出了缓存键
+（总数 = 共享计数 − 隐藏岗落在条件内的条数，逐值相等），否则每个有操作记录的登录用户各一个键，缓存照样白搭。
 
 **每次交付前自查（缺一条就别说做完了）**：
 ① 先量后改，有改前改后真实数字；② 新数据先想「怎么建模成可索引可筛选的字段」，再想怎么展示；
@@ -295,8 +309,8 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
   另：选了招聘类型时 `exactTotalWhenCapped` 先 `exists` 查未分类行——此前全表 count 0.6~2.4s 算完再被门④丢掉。
   等价性：31 种真实搜索组合、改前改后交替两轮、并列按 id 定序后第一页 60 条逐位相同（不定序时旧代码自己两轮都对不上）。
   ⚠️ **剩下的大头是真实总数计数**（`exactTotalWhenCapped`，在关键路径上）：校招专区冷 1.3~2.3s、北京 / 上海冷 3.6~5.2s；
-  它跑不跑取决于「有没有该类未分类行」→ 同一段代码随回填进度在快慢之间切换。其 `unstable_cache` 线上对这几条不命中
-  （15 次连打尾段不降、库上采样到 count 在请求期间真在跑），「不加筛选」那条却稳定命中——原因未查清，是观测不是结论。
+  它跑不跑取决于「有没有该类未分类行」→ 同一段代码随回填进度在快慢之间切换。它的跨实例缓存曾对所有带中文参数的请求
+  （校招、实习、任何城市）全部不命中——根因与修法见上文「`unstable_cache` 在带中文查询串的请求里读写全失败」那块碑（同日修）。
   数字与残留见 docs/reviews/2026-09-17 §13。
 
 ## /today 召回加了第四层 function，层内先保标题命中（2026-09-17，18 个画像真库对拍）
@@ -348,7 +362,12 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
   线上登录态三段串行 = 画像读取（悉尼）0.2~0.56s + 召回 0.43~0.82s 热 / **2.2~4.8s 冷** + stage-2 计算。
   同一画像召回库内 EXPLAIN 热 513ms、十分钟后再跑 2,210ms（read 19,823 块）——jobs 堆 1.1GB、shared_buffers 512MB，
   爬虫写入几分钟就把缓存挤掉，**真实用户一天来一次 = 基本都是冷的**。50 个画像就绪用户首轮 EXPLAIN 库内 37ms~5.9s（16 人 >1.3s），
-  读块分散在方向 / 城市新岗 / 职能各层（合计 50 万 / 40 万 / 35 万块），没有单层能一刀修掉 → 根治靠加内存或召回瘦身，待创始人拍板。
+  读块分散在方向 / 城市新岗 / 职能各层（合计 50 万 / 40 万 / 35 万块），没有单层能一刀修掉。
+  🚫 **加索引 / 瘦身救不了（同日量过下限）**：假设有个能把全部过滤条件（含 7 天窗）都下推的完美索引，50 画像回表的不同堆块
+  也只从 76.8 万降到 28.8 万（37.5%）；最重的 3 个画像仍 75~83%——过完全部条件还剩几万行，
+  而每层「全排序后取 1,800」必须把它们全读一遍。命中行稀疏（≈1.2 行/块），把行做窄（投影表 / 正文挪 TOAST）估算只省 1.1~1.5 倍。
+  最重那个画像背靠背第二次仍 6.1s / read 58,526 块：单条查询的工作集就大过 512MB shared_buffers。
+  → 只剩两条路：加内存（jobs 堆 1,126MB + 召回用到的索引 ~180MB，全库 2.3GB，现机 2GB）或改召回语义（给层加时间窗，会砍长尾），都要创始人拍板。
   stage-2 计算的 40% 曾是 `classifyCompanyIndustry` 每次重建 override 正则，已预编译 + 按公司名记忆（线上 600~740→265~362ms）。
 
 ## 数据库迁移（已自动化，勿再手动跑 Supabase）

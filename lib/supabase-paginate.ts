@@ -37,6 +37,55 @@ export async function fetchAllPages<T>(
   return all;
 }
 
+type CountResult = { count: number | null; error: { message: string } | null };
+
+/**
+ * 与 fetchAllPages 同语义（翻到底、任一页出错就 throw），但先数总行数、再把各页**并发**取回。
+ *
+ * 为什么要它：跨洋拉全表（香港函数 → 悉尼 Supabase）时，串行 N 页 = N 段「往返 + 传输」首尾相接。
+ * 洞察库索引的条目表 4 页（3,477 行 / 6MB）串行要 4.6s（2026-09-23 线上 Server-Timing 分段）。
+ *
+ * ⚠️ 截止判据与 fetchAllPages 一致：数完之后又有新行写进来，最后一页会是满页 →
+ *    接着串行往后翻，直到某页不满。计数偏小不会漏尾巴。
+ * ⚠️ 接口没回计数（count 为 null）就退回串行，别拿 null 当 0。
+ * `count` 与 `page` 必须带**同一组**过滤条件，否则按计数切出来的页数不对。
+ */
+export async function fetchAllPagesConcurrent<T>(
+  count: () => PromiseLike<CountResult>,
+  page: (from: number, to: number) => PromiseLike<PageResult<T>>,
+  options: { step?: number; concurrency?: number } = {},
+): Promise<T[]> {
+  const step = options.step ?? PAGE_SIZE;
+  const concurrency = Math.max(1, options.concurrency ?? 4);
+  const counted = await count();
+  if (counted.error) throw new Error(counted.error.message);
+  if (counted.count == null) return fetchAllPages(page, step);
+
+  const pageCount = Math.max(1, Math.ceil(counted.count / step));
+  const pages: T[][] = new Array(pageCount);
+  let next = 0;
+  const worker = async () => {
+    while (next < pageCount) {
+      const index = next++;
+      const { data, error } = await page(index * step, index * step + step - 1);
+      if (error) throw new Error(error.message);
+      pages[index] = (data || []) as T[];
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, pageCount) }, worker));
+
+  const all = pages.flat();
+  // 计数之后才写进来的行：最后一页满了就接着往后翻（与 fetchAllPages 的「不满才停」同一个判据）。
+  let last = pages[pageCount - 1];
+  for (let offset = pageCount * step; last.length === step; offset += step) {
+    const { data, error } = await page(offset, offset + step - 1);
+    if (error) throw new Error(error.message);
+    last = (data || []) as T[];
+    all.push(...last);
+  }
+  return all;
+}
+
 /**
  * 分页拉全量 sources（默认含 disabled；`enabledOnly` 只取 enabled）。
  * 排序键固定为 id —— 稳定且必有；调用方若要别的展示顺序，自己在内存里排。

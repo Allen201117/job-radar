@@ -109,6 +109,30 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       各自 try/except，不许炸掉整轮（否则前面几十家已抓的岗一起丢 + 整源记 failed）。
                          #     诚实边界：社招靠「热招事项」卡枚举机构，当前站点自报「暂无热招事项」故为 0；
                          #       哪天社招开了但站点不出热招事项卡，这里会漏——上线后拿 db-report 复核。
+                         #   cib 兴业银行（2026-09-23）= 第二家走浏览器的银行，1574 岗（社招/校招/实习同一列表）。
+                         #     不是反爬：门户建在兴业的 JUP 前端框架上，**每个请求都带现场签算的两个头**，裸请求一律 500：
+                         #       X-VALID-TOKEN = SM3-HMAC(按键排序的请求体, signKey)；
+                         #       X-AntiReplay-Token = SM4(访问令牌|时间戳尾数+6位随机数|时间戳, sm4Key)；
+                         #       会话密钥来自握手：POST /api/authPrehandler 发 SM2 公钥+salt → POST /api/cfn/sysToken
+                         #       用随机串换回 SM4 加密的 tokenKey/signKey。
+                         #     🔎 **性质判定（读前端源码 index.*.js / chunk-libs.*.js 逐段核过）**：输入只有请求体、时间戳、
+                         #       随机数、服务端下发的会话密钥 → 请求完整性签名 + 防重放；**没有滑块、没有设备指纹**
+                         #       （canvas 只用于渲染 PDF；无 toDataURL / webdriver / 插件枚举 / AudioContext）、
+                         #       **没有行为校验**；图形验证码只在登录框（手机号/邮箱登录）里，看岗位用不到；
+                         #       错误码 915021 needRecheck 是银行系统的「复核」（操作要另一人审批，旁边还有 915501
+                         #       「等待复核」），不是人机校验。→ 按「前端公开算法的普通接口参数」处理，可接。
+                         #     抓法：不在 Python 里复刻国密（要引新加密依赖），打开门户后调用页面自己的
+                         #       `document.querySelector('#app').__vue__.jup__ajax('recruitpositionportalPage', …)`，
+                         #       签名由页面代码完成；一次可取 200 条，行内自带职责+任职要求全文，不用逐岗补正文。
+                         #     ⚠️ 等 `jup__ajax` 就绪（wait_for_function），**不等 networkidle**；接管 dialog。
+                         #     ⚠️ 详情是 hash 路由 `…?recruitType={SR|CR|TR}#/positionDetails/{positionId}`，真 id 匿名可看、
+                         #       假 id 只剩页头页脚空壳；日后接浏览器巡检**必须 reload**（同文档导航留上一个岗）。
+                         #     ⚠️ 截止时间「长期」站点写 3000-01-01 哨兵值，当成无截止；约 20% 岗发布于 2023~2024 年、
+                         #       站点仍标「发布中 + 长期」，是银行常设岗，按站点口径收。
+                         #   citicbank 中信银行（2026-09-23）：job.citicbank.com 自建，POST recruitQuery（零鉴权，15 条/页，
+                         #     顶层 pageCount 实为**总条数**不是总页数）+ 静态详情 /static/positionDetail_{ID}_{01|02}.html；
+                         #     假 id 返 404「系统错误」。社招/校招两渠道 id 不重叠，拆两条源（校招 URL 带 #/campus 让 board 判 campus）。
+                         #     ⚠️ 必投台账曾把它的入口记成 careers.citics.com —— 那是**中信证券**。
                          #   ⚠️ **这五家 httpx 的共性坑（cn_portal_tls.py）**：本机 macOS 是 LibreSSL + 有 IPv6、
                          #     GitHub runner 是 OpenSSL 3 + 无 IPv6 出口 → **本机全绿、上 CI 四个源全 failed**
                          #     （建行/交行/移动 UNSAFE_LEGACY_RENEGOTIATION_DISABLED、工行 Errno 101）。
@@ -293,6 +317,14 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          # 洞察供给：insight_backlog.py(T2 Wikidata+EDGAR+巨潮 / T3 多维查询包 drain：**默认 3 主题** 年终奖/加班文化/晋升发展→各维度（2026-08-27 由 5 砍到 3 控成本：砍掉的「面试难度」其维度 hiring 已由 T1 派生免费供给、「实习体验」与加班文化同属 culture 重复；五个主题都还在 T3_TOPIC_CATALOG 里，env `INSIGHT_T3_TOPICS` 可随时调回）；支持 --company 单公司现查；EDGAR 财报员工数会覆盖 headcount_band) / insight_engine.py(接地→判官→共识) / wikidata.py / official_edgar.py(SEC 美股上市+业绩 XBRL companyfacts) / official_cninfo.py(巨潮 A股,默认关需 INSIGHT_CNINFO_ENABLED；2026-07-02 live 验过 stockList 结构与比亚迪/顺丰匹配，但 repo Variable 仍需有效 GitHub 凭据启用) / insight_sweep.py(过期下架)
                          # geo.py / sponsorship.py = country_code/job_scope/地区过滤 + visa/sponsorship 信号派生
                          # search_router.py = T3 多源搜索路由：search_{bocha,tavily,serper,qianfan} provider + search_budget(每源日顶 search_usage 表)；配哪个 key 用哪个、未配跳过、多源并取喂≥2 publisher 共识门
+                         #   workday.py = Workday CXS（`{tenant}.wdN.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs`）。
+                         #     ⚠️ 租户会搬数据中心（wdN 变、tenant/site 不变）：旧 host 对列表和每个岗的详情**一律回 422**
+                         #     （body `errorCode:"HTTP_422"`），公开页回 500 —— 不是限流、也不是岗位关了。2026-09-23 查实两家：
+                         #     武田 wd3→wd502（2026-08-02 起 422）、奥的斯 wd5→wd504（2026-08-09 起），各自连败约一个月后源被停用。
+                         #     ⚠️ 停用源不会下架它名下的 active 岗（巡检队列不看 enabled，照样按停用源的旧 source_url 去探），
+                         #     这两家 2,675 个 active 岗的 jd_url 仍指向旧 host。新 host 从对方官网某个职位的「Apply」链接里读
+                         #     （jobs.takeda.com 是 Radancy 皮，Apply 指向 takeda.wd502…）；同一个 /job/{path} 在新 host 上照样能开。
+                         #     详情探活 `enrich._detail_workday`：404/410 判死，其余非 2xx 判 unknown 不盖戳（429 是 Workday 按 IP 限流）。
 ```
 
 ## 必投清单口径（`lib/must-apply-list.ts` / `.json`）

@@ -64,7 +64,7 @@ import { fetchAllPages, fetchAllSources } from "@/lib/supabase-paginate";
 import { nullableShare } from "@/lib/admin-health-tracker";
 import { Clock, ShieldCheck } from "@phosphor-icons/react/ssr";
 import { redirect } from "next/navigation";
-import { unstable_cache } from "next/cache";
+import { requestSafeCache } from "@/lib/request-safe-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -128,7 +128,7 @@ function cachedByKey<T>(keyParts: string[], loader: () => Promise<T>): Promise<T
 }
 
 function cachedLoader<T>(key: string, loader: () => Promise<T>): () => Promise<T> {
-  const cached = unstable_cache(loader, ["admin-health", key], {
+  const cached = requestSafeCache(loader, ["admin-health", key], {
     revalidate: ADMIN_DATA_TTL_SECONDS,
     tags: ["admin-health"],
   });

@@ -29,6 +29,8 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// 与 app/insights/page.tsx 同理：索引过期后的后台重建挂在 waitUntil 上，给它留足时间。
+export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   const auth = await requireUser();

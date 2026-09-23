@@ -26,7 +26,7 @@ import {
 } from "@/lib/campus-facets";
 import { classifyJobFunction } from "@/lib/china-keyword-expansion";
 import { mustApplyPatterns, mustApplyUnion, type MustApplyCompany } from "@/lib/must-apply-list";
-import { unstable_cache } from "next/cache";
+import { requestSafeCache } from "@/lib/request-safe-cache";
 
 export { ilikeMatcher } from "@/lib/ilike-matcher";
 
@@ -420,7 +420,7 @@ async function fetchCompanyActiveAggregates(): Promise<CompanyActiveAggregate[]>
 // 这里走的是 service-role 直连 pg，本来就与请求身份无关，天然满足。
 export const COMPANY_AGGREGATES_TTL_SECONDS = 180;
 
-const cachedCompanyActiveAggregates = unstable_cache(
+const cachedCompanyActiveAggregates = requestSafeCache(
   fetchCompanyActiveAggregates,
   ["company-active-aggregates"],
   { revalidate: COMPANY_AGGREGATES_TTL_SECONDS, tags: ["company-active-aggregates"] },
@@ -693,7 +693,7 @@ const ACTIVE_COMPANY_NAMES_SQL = `
   )
   select c as company from t where c is not null`;
 
-const loadActiveCompanyNamesShared = unstable_cache(
+const loadActiveCompanyNamesShared = requestSafeCache(
   async (): Promise<string[]> => {
     const rows = await jobsQuery<{ company: string | null }>(ACTIVE_COMPANY_NAMES_SQL);
     return rows.map((r) => r.company).filter((c): c is string => !!c);
@@ -868,7 +868,7 @@ export type CampusFreshStats = {
  *    且卡面「数据更新于 N 分钟前」读的就是这里的 fetchedAtMs——真卡住了用户与我们都看得见，不会静默。
  *    Map 不能直接进 unstable_cache（按 JSON 序列化），缓存里存 entries，出缓存再还原。
  */
-const loadCampusFreshStatsShared = unstable_cache(
+const loadCampusFreshStatsShared = requestSafeCache(
   async (
     list: Array<{ name: string; pattern: string }>,
   ): Promise<{ entries: Array<[string, CampusFreshStat]>; fetchedAtMs: number }> => {

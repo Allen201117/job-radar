@@ -4,7 +4,7 @@
 // 「还没设过求职目标」的用户完全相同 —— 因此整体走 unstable_cache 跨请求共享。
 // 新用户注册后的第一次访问是产品最贵的一次首屏，不该让每个人各付一次 DB 的钱。
 import "server-only";
-import { unstable_cache } from "next/cache";
+import { requestSafeCache } from "@/lib/request-safe-cache";
 import { fetchPopularCandidates } from "./jobs-store/popular";
 import { jobsByIds, jobsStoreEnabled } from "./jobs-store/read";
 import { mustApplyPatterns, mustApplyUnion } from "./must-apply-list";
@@ -60,7 +60,7 @@ async function buildPopularFeed(): Promise<PopularFeed> {
   };
 }
 
-const cachedPopularFeed = unstable_cache(buildPopularFeed, ["today-popular-feed-v1"], {
+const cachedPopularFeed = requestSafeCache(buildPopularFeed, ["today-popular-feed-v1"], {
   revalidate: CACHE_TTL_SECONDS,
   tags: ["today-popular-feed"],
 });
