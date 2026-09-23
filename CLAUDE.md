@@ -344,6 +344,12 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
     自检③只扣城市判掉的行；**别改回 count(*)**，否则给出多数的确定数字。代价：「广东」计数库内 warm 416ms / 冷 2s，与「北京」同档。
     🚫 省级解析在 `lib/cn-location-provinces.js`，**不许 require("./geo")**：job-filter / scoring / campus-facets 被客户端组件引用，
     引 geo.js 会把 52KB 词表打进 /jobs /campus /today /saved 首屏包（实测各 +16kB；拆出后 +4~5kB）。
+- **/today 慢先看 `?__timing=1` 分段，大头是召回 SQL 的冷缓存，不是传输也不是 CPU（2026-09-23 实测）**：
+  线上登录态三段串行 = 画像读取（悉尼）0.2~0.56s + 召回 0.43~0.82s 热 / **2.2~4.8s 冷** + stage-2 计算。
+  同一画像召回库内 EXPLAIN 热 513ms、十分钟后再跑 2,210ms（read 19,823 块）——jobs 堆 1.1GB、shared_buffers 512MB，
+  爬虫写入几分钟就把缓存挤掉，**真实用户一天来一次 = 基本都是冷的**。50 个画像就绪用户首轮 EXPLAIN 库内 37ms~5.9s（16 人 >1.3s），
+  读块分散在方向 / 城市新岗 / 职能各层（合计 50 万 / 40 万 / 35 万块），没有单层能一刀修掉 → 根治靠加内存或召回瘦身，待创始人拍板。
+  stage-2 计算的 40% 曾是 `classifyCompanyIndustry` 每次重建 override 正则，已预编译 + 按公司名记忆（线上 600~740→265~362ms）。
 
 ## 数据库迁移（已自动化，勿再手动跑 Supabase）
 
