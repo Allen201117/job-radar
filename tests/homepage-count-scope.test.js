@@ -36,7 +36,8 @@ test("jobs 首屏缓存的 key 覆盖全部影响结果集的偏好字段", () =
   assert.match(call[1], /job_scope/, "cache key 必须带 job_scope");
   assert.match(call[1], /target_regions/, "cache key 必须带 target_regions");
   // 缓存内容不得掺入任何用户私有数据（否则跨用户共享会泄露）。
-  const body = jobsPage.match(/const loadJobsFirstScreen = unstable_cache\(([\s\S]*?)\n\);/);
+  // 2026-09-23 起跨实例缓存统一走 requestSafeCache（lib/request-safe-cache.ts，中文网址下 unstable_cache 不命中的绕法）。
+  const body = jobsPage.match(/const loadJobsFirstScreen = (?:unstable_cache|requestSafeCache)\(([\s\S]*?)\n\);/);
   assert.ok(body, "应能取到缓存函数体");
   for (const leak of ["user_id", "actions", "job_actions", "candidate_profiles", "target_keywords"]) {
     assert.ok(!body[1].includes(leak), `缓存体内不得出现用户私有字段 ${leak}`);

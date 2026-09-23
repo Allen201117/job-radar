@@ -2,7 +2,7 @@
 // 洞察库的取数层：索引（跨实例缓存）+ 单主体条目（实时）。
 // 页面与 /api/insights/library 共用同一份，避免两处各建一份索引导致数字不一致。
 // ============================================================
-import { unstable_cache } from "next/cache";
+import { requestSafeCache } from "@/lib/request-safe-cache";
 import { createServiceClient } from "./supabaseService";
 import { fetchAllPages } from "./supabase-paginate";
 import { ITEM_COLUMNS, flattenSources } from "./insight-bundle";
@@ -110,7 +110,7 @@ async function loadIndex(): Promise<LibraryIndex> {
  * 时间桶让每个 10 分钟窗口成为**不同的缓存条目**：窗口内第一个请求同步建好（慢一次），
  * 其余全部命中。不依赖任何后台任务跑完。
  */
-const getCachedIndex = unstable_cache(
+const getCachedIndex = requestSafeCache(
   async (_bucket: number) => loadIndex(),
   ["insight-library-index-v2"],
   { revalidate: INDEX_TTL_SECONDS * 2, tags: ["insight-library"] },

@@ -2,7 +2,7 @@
 //   同一份 search_doc bigram FTS（to_tsquery）收窄候选 + 同一份 JS 精筛/排序（scoring + job-filter）。
 //   差别仅「候选取数」从 supabase-js 换成直连 pg SQL → 搜索口径/精度/排序与线上零差异。
 import "server-only";
-import { unstable_cache } from "next/cache";
+import { requestSafeCache } from "@/lib/request-safe-cache";
 import { jobsQuery } from "./client";
 import { actionHiddenJobIds, scoringSignalGroups, scoringTargetFunctions, scoringTargetRoles, sortAndFilterJobs } from "@/lib/scoring";
 import {
@@ -665,7 +665,7 @@ const CAPPED_COUNT_TTL_SECONDS = 300;
 type CappedCountRow = { total: number; unclassified: number };
 const queryCappedCount = async (sql: string, params: unknown[]) =>
   (await jobsQuery(sql, params)) as CappedCountRow[];
-const cachedCappedCountInner = unstable_cache(queryCappedCount, ["jobs-search-capped-count-v1"], {
+const cachedCappedCountInner = requestSafeCache(queryCappedCount, ["jobs-search-capped-count-v1"], {
   revalidate: CAPPED_COUNT_TTL_SECONDS,
 });
 // unstable_cache 只在 Next 请求上下文里可用；单测 / 独立脚本里抛「incrementalCache missing」→ 退回直查
@@ -717,13 +717,24 @@ async function exactTotalWhenCapped(args: {
     // 线上冷路径它是 33 万行并行全表扫 0.55~0.94s，与回补展示列并行后 tail ≈ 它。此前走 fetchCandidates 的
     // 进程内缓存——每次请求常落到不同实例，首屏基本不命中（同一 tab 三连打三个实例）。
     // ⚠️ 缓存函数体内不读 cookies()/headers()；key 由 sql + params 序列化而来，翻页/换用户同 where 共用一份。
-    const rows = await cachedCappedCount(
+    // 用户自己隐藏的岗（忽略 / 已投递）不进缓存键（2026-09-23）：总数 = 共享计数 − 隐藏岗里落在 where 内的条数，
+    // 算术上与「where 里直接排除隐藏岗」逐值相等。此前把隐藏 id 拼进 where → 每个有操作记录的登录用户各一个键，
+    // 每点一次忽略 / 投递又换一个键，缓存对登录用户基本等于没有（校招 / 北京这类计数冷 1.3~5s）。
+    // 隐藏那部分按主键取（≤ 操作条数行），毫秒级、不缓存、每次现算。
+    const countSql = (extra: string) =>
       `select count(*)::int as total, count(*) filter (where recruitment_category is null)::int as unclassified ` +
-        `from jobs where ${where.join(" and ")}`,
-      countParams,
-    );
-    const row = rows[0];
-    if (!row) return null;
+      `from jobs where ${conds.join(" and ")}${extra}`;
+    const hidden = [...hiddenIds];
+    const [sharedRows, hiddenRows] = await Promise.all([
+      cachedCappedCount(countSql(""), params),
+      hidden.length
+        ? jobsQuery<CappedCountRow>(countSql(` and id = any($${params.length + 1}::uuid[])`), [...params, hidden])
+        : Promise.resolve([{ total: 0, unclassified: 0 }]),
+    ]);
+    const shared = sharedRows[0];
+    const own = hiddenRows[0];
+    if (!shared || !own) return null;
+    const row = { total: shared.total - own.total, unclassified: shared.unclassified - own.unclassified };
     // ④ 再判一次不是多余：上面的计数走 5 分钟跨实例缓存，可能拿到「还有未分类行」时算的旧结果。
     if (filters.jobType && row.unclassified > 0) return null; // ④
     // 真实总数不可能比「已经排出来的条数」还少；小于就说明这个数不可信。

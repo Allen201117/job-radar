@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 // /api/campus-zone/jobs 不走缓存返回的正是库里的数）。抬到 60s（Hobby 上限）给重算留足余量。
 export const maxDuration = 60;
 
-import { unstable_cache } from "next/cache";
+import { requestSafeCache } from "@/lib/request-safe-cache";
 import { redirect } from "next/navigation";
 import Navbar from "@/components/Navbar";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
@@ -59,7 +59,7 @@ export type CampusBoard = {
  * ⚠️ 函数体内不得读 cookies()/headers() 等动态 API（unstable_cache 限制）；
  * 这里用的 createServiceClient 只读环境变量，安全。
  */
-const loadCampusBoard = unstable_cache(
+const loadCampusBoard = requestSafeCache(
   async (industries: string[]): Promise<CampusBoard> => {
     const startedAt = Date.now();
     const companies = companiesForIndustries(industries);
@@ -141,7 +141,7 @@ const loadCampusBoard = unstable_cache(
  * 不含任何用户私有字段 → 跨用户共享安全。
  * ⚠️ 函数体内不得读 cookies()/headers()（unstable_cache 限制）；这里只调 jobs-store，安全。
  */
-const loadCampusLibraryCounts = unstable_cache(
+const loadCampusLibraryCounts = requestSafeCache(
   async (jobScope: string | null, targetRegions: string[]): Promise<CampusLibraryCounts> => {
     const startedAt = Date.now();
     const counts = await countCampusLibrary({

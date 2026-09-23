@@ -22,7 +22,7 @@ import {
 import { campusRowMatches, type CampusFilterValues } from "@/lib/campus-facets";
 import { classifyJobFunction } from "@/lib/china-keyword-expansion";
 import { mustApplyPatterns, mustApplyUnion, type MustApplyCompany } from "@/lib/must-apply-list";
-import { unstable_cache } from "next/cache";
+import { requestSafeCache } from "@/lib/request-safe-cache";
 
 export { ilikeMatcher } from "@/lib/ilike-matcher";
 
@@ -416,7 +416,7 @@ async function fetchCompanyActiveAggregates(): Promise<CompanyActiveAggregate[]>
 // 这里走的是 service-role 直连 pg，本来就与请求身份无关，天然满足。
 export const COMPANY_AGGREGATES_TTL_SECONDS = 180;
 
-const cachedCompanyActiveAggregates = unstable_cache(
+const cachedCompanyActiveAggregates = requestSafeCache(
   fetchCompanyActiveAggregates,
   ["company-active-aggregates"],
   { revalidate: COMPANY_AGGREGATES_TTL_SECONDS, tags: ["company-active-aggregates"] },

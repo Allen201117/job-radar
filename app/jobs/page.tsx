@@ -1,4 +1,4 @@
-import { unstable_cache } from "next/cache";
+import { requestSafeCache } from "@/lib/request-safe-cache";
 import Navbar from "@/components/Navbar";
 import { ProductHero, ProductPage } from "@/components/ProductChrome";
 import JobLibraryStat from "@/components/JobLibraryStat";
@@ -52,7 +52,7 @@ const PAGE1 = 60;
  * 不依赖「归一化是幂等的」这个假设。不含任何用户私有字段 → 跨用户共享安全。
  * ⚠️ 函数体内不得读 cookies()/headers()（unstable_cache 限制）；这里只调 jobs-store，安全。
  */
-const loadJobsFirstScreen = unstable_cache(
+const loadJobsFirstScreen = requestSafeCache(
   async (
     jobScope: string | null,
     targetRegions: string[],
