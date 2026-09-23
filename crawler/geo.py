@@ -1149,12 +1149,15 @@ def is_rejected_location(location: Optional[str]) -> bool:
 # ---------------------------------------------------------------------------
 # 省级归属：岗位 location 落在哪几个省级行政区（2026-09-23 加）。
 # ⚠️ 与 lib/geo.js 的 locationProvinces 逐条同口径；映射本体 lib/cn-province-prefectures.json 两端共读，
-#    逐条用例在 tests/fixtures/cn-location-provinces.json 两端共测。规则与每条规则对应的实测反例见 lib/geo.js 同名段。
+#    逐条用例在 tests/fixtures/cn-location-provinces.json 两端共测。规则与每条规则对应的实测反例见
+#    lib/cn-location-provinces.js（2026-09-23 从 lib/geo.js 拆出）。
 # ---------------------------------------------------------------------------
 _CN_PROVINCE_JSON = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "lib", "cn-province-prefectures.json"
 )
 _PLACE_BOUNDARY_BEFORE = frozenset("省市州盟区县旗国")
+# 规则⑤：地名后面紧跟这些 = 街道名（南京东路 / 延安东路 / 深圳大道）。与 JS 的 STREET_AFTER_PLACE_RE 逐字相同。
+_STREET_AFTER_PLACE_RE = re.compile(r"[东西南北中]?(?:路|街|大道|大街)")
 _province_index = None
 
 
@@ -1200,7 +1203,7 @@ def _segment_province(seg: str):
             continue
         if rest.startswith("县") and name in county_collisions:
             continue
-        if rest[:1] in ("路", "街"):
+        if _STREET_AFTER_PLACE_RE.match(rest):
             continue
         return place_province[name]
     return None
