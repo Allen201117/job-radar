@@ -742,3 +742,21 @@ class RejectedLocationTest(unittest.TestCase):
         # 靠前、"台北"是子串匹配），is_rejected_location 如实跟随，不额外发明多地点仲裁规则。
         self.assertEqual(derive_country_code("泰国,越南,台北市"), "TW")
         self.assertTrue(is_rejected_location("泰国,越南,台北市"))
+
+
+class PinnedOverseasWithoutCountryCodeTest(unittest.TestCase):
+    """2026-09-23 补的境外钉词：没有国家码可给，但地点明摆着在境外，不能按 regions 猜成国内。"""
+
+    def test_new_tokens_pin_scope_but_leave_country_empty(self):
+        for loc in ("Athens, Georgia", "Little, Chalfont, England", "Athens, Attica, Greece",
+                    "Almaty, Almaty, Kazakhstan", "Hamilton, Bermuda", "Minsk, Minsk, Belarus"):
+            self.assertIsNone(derive_country_code(loc), loc)
+            self.assertEqual(derive_job_scope(loc, {"CN", "US"}), "overseas", loc)
+
+    def test_jordan_is_deliberately_not_pinned(self):
+        # 香港九龙有佐敦（Jordan）：收了它，「Jordan, Kowloon」会被钉成境外
+        self.assertNotIn("jordan", geo.OVERSEAS_LOCATION_TOKENS)
+        self.assertEqual(derive_job_scope("Jordan, Kowloon", {"CN"}), "domestic")
+
+    def test_linkedin_tag_is_not_liechtenstein(self):
+        self.assertIsNone(derive_country_code("LI, REMOTE"))
