@@ -760,3 +760,32 @@ class PinnedOverseasWithoutCountryCodeTest(unittest.TestCase):
 
     def test_linkedin_tag_is_not_liechtenstein(self):
         self.assertIsNone(derive_country_code("LI, REMOTE"))
+
+
+class TitleCityLocationTest(unittest.TestCase):
+    """location 为空时从标题认城市（2026-09-23 加）。与 lib/geo.js 的 titleCityLocation 共读夹具
+    tests/fixtures/title-city-cases.json，两侧逐条断言一致；为什么这么判见 geo.title_city_location 注释。"""
+
+    def test_matches_shared_fixture(self):
+        import json
+        import os
+
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "tests", "fixtures", "title-city-cases.json"
+        )
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        self.assertGreater(len(doc["cases"]), 30, "夹具被清空了？")
+        for case in doc["cases"]:
+            with self.subTest(title=case["title"], note=case["note"]):
+                self.assertEqual(geo.title_city_location(case["title"]), case["expected"])
+
+    def test_none_title(self):
+        self.assertIsNone(geo.title_city_location(None))
+
+    def test_every_output_city_is_china(self):
+        # 标题认出的城市只来自大陆地名表：填进 location 后 derive_country_code 必须判 CN，
+        # 否则填完反而把国内岗的归属搞乱。
+        for title in ("有机合成研究员-西安", "博士管培生-连云港/苏州", "售前工程师-黔西南州"):
+            with self.subTest(title=title):
+                self.assertEqual(derive_country_code(geo.title_city_location(title)), "CN")

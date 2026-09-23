@@ -405,6 +405,96 @@ class PlanInsertsTest(unittest.TestCase):
         self.assertEqual([r["company"] for r in out], ["B"])
 
 
+class MokaTenantKeyTest(unittest.TestCase):
+    """moka 同一租户同一板块的多种写法必须归到同一个键（2026-09-23 线上 419 条逐条 curl 核实）。"""
+
+    def test_campus_spellings_share_one_key(self):
+        for url in ("https://app.mokahr.com/campus-recruitment/zhihu/68321",
+                    "https://app.mokahr.com/campus_apply/zhihu",
+                    "https://app.mokahr.com/campus_apply/zhihu/3818",
+                    "https://app.mokahr.com/campus-recruitment/zhihu/68321?locale=zh-CN#/jobs",
+                    "https://APP.mokahr.com/Campus_Apply/ZHIHU/"):
+            self.assertEqual(ad.moka_tenant_key(url), ("moka", "zhihu", "campus"), url)
+
+    def test_social_spellings_share_one_key(self):
+        for url in ("https://app.mokahr.com/social-recruitment/tesla/46129",
+                    "https://app.mokahr.com/apply/tesla/46129",
+                    "https://app.mokahr.com/social-recruitment/tesla/46129#/candidateHome/"):
+            self.assertEqual(ad.moka_tenant_key(url), ("moka", "tesla", "social"), url)
+
+    def test_board_is_part_of_the_key(self):
+        self.assertNotEqual(ad.moka_tenant_key("https://app.mokahr.com/social-recruitment/zuoyebang/41328"),
+                            ad.moka_tenant_key("https://app.mokahr.com/campus-recruitment/zuoyebang/39595"))
+
+    def test_host_variant_is_same_tenant(self):
+        self.assertEqual(ad.moka_tenant_key("https://app-tc.mokahr.com/apply/wesure/6018"),
+                         ("moka", "wesure", "social"))
+
+    def test_non_moka_or_non_portal_url_has_no_key(self):
+        for url in ("https://a.com", "", None,
+                    "https://jobs.mokahr.com.evil.cn/social-recruitment/x/1",
+                    "https://app.mokahr.com/m/social-recruitment/x/1",
+                    "https://www.example.com/?next=app.mokahr.com/apply/x/1"):
+            self.assertIsNone(ad.moka_tenant_key(url), url)
+
+
+class PlanInsertsMokaTenantTest(unittest.TestCase):
+    """回归守卫：auto-discover 给一个已在库的 moka 租户+板块换个写法再插一条源 = 同一个岗在库里存两行。
+
+    2026-09-23 线上：知乎校招 campus_apply/zhihu 与 campus_apply/zhihu/3818 两条 enabled 源，
+    探测器又只会产出 campus-recruitment/{slug}/{id} 这种写法 —— 纯 URL 精确去重一条都拦不住。"""
+
+    def _cand(self, url, company="知乎"):
+        return {"company": company, "adapter": "moka", "url": url, "_valid": 5}
+
+    def _existing(self, *rows):
+        return ad.existing_source_keys(_PagedSb([
+            {"company": "X", "source_url": url, "enabled": enabled} for url, enabled in rows]))[1]
+
+    def test_campus_alias_in_library_blocks_campus_candidate(self):
+        existing = self._existing(("https://app.mokahr.com/campus_apply/zhihu", True))
+        out = ad.plan_inserts([self._cand("https://app.mokahr.com/campus-recruitment/zhihu/68321")],
+                              existing, cap=10)
+        self.assertEqual(out, [])
+
+    def test_campus_apply_with_id_in_library_blocks_campus_candidate(self):
+        existing = self._existing(("https://app.mokahr.com/campus_apply/zhihu/3818", True))
+        out = ad.plan_inserts([self._cand("https://app.mokahr.com/campus-recruitment/zhihu/68321")],
+                              existing, cap=10)
+        self.assertEqual(out, [])
+
+    def test_legacy_apply_in_library_blocks_social_candidate(self):
+        existing = self._existing(("https://app.mokahr.com/apply/tesla/46129", True))
+        out = ad.plan_inserts([self._cand("https://app.mokahr.com/social-recruitment/tesla/46129", "特斯拉")],
+                              existing, cap=10)
+        self.assertEqual(out, [])
+
+    def test_social_source_does_not_block_campus_candidate(self):
+        existing = self._existing(("https://app.mokahr.com/social-recruitment/zuoyebang/41328", True))
+        url = "https://app.mokahr.com/campus-recruitment/zuoyebang/39595"
+        out = ad.plan_inserts([self._cand(url, "作业帮")], existing, cap=10)
+        self.assertEqual([r["url"] for r in out], [url], "不同板块是两个池子，不能互相挡")
+
+    def test_disabled_row_does_not_block_its_tenant_but_still_blocks_its_exact_url(self):
+        """同公司名去重只算 enabled 的理由：停掉的旧一期门户不能让这个租户+板块永远补不回来。"""
+        existing = self._existing(("https://app.mokahr.com/campus-recruitment/4paradigm/58145", False))
+        new_period = "https://app.mokahr.com/campus-recruitment/4paradigm/170001"
+        same_row = "https://app.mokahr.com/campus-recruitment/4paradigm/58145"
+        out = ad.plan_inserts([self._cand(new_period, "第四范式"), self._cand(same_row, "第四范式")],
+                              existing, cap=10)
+        self.assertEqual([r["url"] for r in out], [new_period])
+
+    def test_two_spellings_in_one_batch_insert_once(self):
+        out = ad.plan_inserts([self._cand("https://app.mokahr.com/campus-recruitment/zhihu/68321"),
+                               self._cand("https://app.mokahr.com/campus_apply/zhihu")], set(), cap=10)
+        self.assertEqual(len(out), 1)
+
+    def test_already_in_library_matches_plan_inserts(self):
+        existing = self._existing(("https://app.mokahr.com/campus_apply/zhihu", True))
+        self.assertTrue(ad.already_in_library("https://app.mokahr.com/campus-recruitment/zhihu/68321", existing))
+        self.assertFalse(ad.already_in_library("https://app.mokahr.com/social-recruitment/zhihu/1", existing))
+
+
 if __name__ == "__main__":
     unittest.main()
 

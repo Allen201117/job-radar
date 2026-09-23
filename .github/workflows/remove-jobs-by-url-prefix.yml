@@ -13,6 +13,10 @@ on:
       company:
         description: "精确公司名，与前缀同时成立才动"
         required: true
+      only_twins_under:
+        description: "可选：保留门户的 jd_url 前缀，只标在它下面有在招孪生行（同一 # 片段）的岗"
+        required: false
+        default: ""
       apply:
         description: "true = 真的写库；留空/false = 只 dry-run 报数"
         required: false
@@ -38,9 +42,11 @@ jobs:
           JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
           URL_PREFIX: ${{ github.event.inputs.url_prefix }}
           COMPANY: ${{ github.event.inputs.company }}
+          ONLY_TWINS_UNDER: ${{ github.event.inputs.only_twins_under }}
           APPLY: ${{ github.event.inputs.apply }}
         run: |
           set -euo pipefail
           args=(--url-prefix "$URL_PREFIX" --company "$COMPANY")
+          if [ -n "$ONLY_TWINS_UNDER" ]; then args+=(--only-twins-under "$ONLY_TWINS_UNDER"); fi
           if [ "$APPLY" = "true" ]; then args+=(--apply); fi
           python3 crawler/remove_jobs_by_url_prefix.py "${args[@]}"

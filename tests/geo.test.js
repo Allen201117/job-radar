@@ -325,6 +325,7 @@ test("geo 词表与 crawler/geo.py 逐条一致", () => {
   for (const name of [
     "CHINA_CJK_PLACE_MARKERS", "TAIWAN_CJK_MARKERS", "JAPAN_CJK_MARKERS", "KOREA_CJK_MARKERS",
     "ISO_ALPHA2_CODES",
+    "TITLE_CITY_PROVINCE_NAMES", "TITLE_CITY_VETO_SEGMENTS", "TITLE_CITY_SUFFIX_ONLY_NAMES", "TITLE_CITY_SUFFIXES",
   ]) {
     assert.deepEqual(geo[name], pick(name), `${name} 与 crawler/geo.py 不一致`);
   }

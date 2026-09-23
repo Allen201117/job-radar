@@ -18,8 +18,9 @@ import { extractGradClass } from "@/lib/grad-class";
 const { canonicalizeJdUrl } = canonicalUrl as {
   canonicalizeJdUrl: (u: string | null | undefined) => string | null;
 };
-const { deriveCountryCode, deriveJobScope, normalizeRegions } = geo as {
+const { deriveCountryCode, deriveJobScope, normalizeRegions, titleCityLocation } = geo as {
   deriveCountryCode: (location: string | null | undefined) => string | null;
+  titleCityLocation: (title: string | null | undefined) => string | null;
   deriveJobScope: (
     location: string | null | undefined,
     regions?: string[] | string | null,
@@ -83,6 +84,9 @@ function withDerivedFields(job: Record<string, any>): Record<string, any> {
   // 什么时候该做：上面两个数字任意一个涨起来（有 source_id is null 的行进来，或 web_search
   // 恢复日常运行）。「覆盖已有结论」那一半已经由下面的 SCOPE_EVIDENCED 堵死，与本条无关。
   const regions = normalizeRegions(job.source_regions);
+  // adapter 没给地点才从标题认城市（与 crawler/normalizer.location_or_title_city 同口径），
+  // 必须排在 country_code / job_scope 之前：它们都由 location 派生。
+  if (!String(job.location ?? "").trim()) job = { ...job, location: titleCityLocation(job.title) };
   const countryCode = job.country_code ?? deriveCountryCode(job.location);
   const jobScope = job.job_scope ?? deriveJobScope(job.location, regions);
   return {

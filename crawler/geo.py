@@ -589,6 +589,106 @@ def is_overseas_unspecified(location: Optional[str]) -> bool:
     return any(seg in _OVERSEAS_UNSPECIFIED_SEGMENTS for seg in _segments(location.strip()))
 
 
+# ---------------------------------------------------------------------------
+# 标题里的城市（2026-09-23 加）：location 为空时的兜底，由 normalizer 在**写库时**物化进 location。
+#
+# 为什么需要：部分源把城市写在标题里、地点字段给空（康龙化成「有机合成研究员-西安」、
+# 万物云「福州-项目管理岗（实习生）」）。location 为空在 /today 是「城市未知」→ 降级放行，
+# 召回 SQL 的城市门也认「location 为空」→ 这些岗推给**所有城市**的用户
+# （真实用户目标 上海/杭州，7 张卡全在外地）。2026-09-23 香港库实测 active 且 location 为空 27,663 行：
+# 本函数填出单一城市 3,254 行、多城市 154 行（143 家公司）；刻意不填的 = 标题带省 406 / 全国·海外 85 /
+# 城市只在公司名括号里 33，其余 23,727 行标题里没有地名。
+#
+# 为什么信得过：拿**有地点**的在招岗当对照，本函数在 34,990 行上认出了城市，其中 adapter 地点写到
+# 城市一级的 32,855 行里与标题一致 32,201 行（98.0%）；不一致的 654 行大半是 adapter 写的区域中心、
+# 标题写的才是真城市（「乐道顾问-安庆」地点写宣城）。唯一系统性不可信的写法是「公司名里括号注册地」——
+# 「中交长江（重庆）水利工程有限公司」这类只有 32% 一致 → 整段剔掉再认。
+#
+# 🚫 宁可漏判，不可错杀：填错一个城市 = 把在招岗从对的用户那里藏掉；不填只是维持「城市未知」。
+#   ① 只认**整段**地名（按 _SEGMENT_SPLIT_RE 切段后整段等于地名或「地名+后缀」），不做子串：
+#      「上海市场部」「北京银行」「五大连池」「西安研发中心」一律不认。
+#   ② 后缀只收 市/州/盟/地区/自治州/新区，**不收 区/县/旗**：「中山区」在大连、「朝阳区」在北京。
+#   ③ 只写到省不填：填「浙江」会让杭州用户判成城市不符（今天是未知放行）。
+#      省与城市并存也不填：「（浙江/江苏/上海）」「（昆明、浙江、山东区域）」是跨省区域岗
+#      （库里 8 行里 4 行如此），没有城市→省份映射就分不清「河北-张家口」这种同省写法，统一放弃。
+#   ④ 出现「全国/多地/不限/海外…」任一段就不填：「全国-北京」说不清到底在哪。
+#   ⑤ 裸写即常用词 / 多地同名的地名只认带后缀的写法：「（阿里）」实测 3/3 指阿里巴巴、
+#      「（朝阳）」4 行里 2 行是长春朝阳区。
+#   只认中文地名：拼音/英文城市交给 adapter 的地点字段（CITY_ALIASES 是子串匹配，搬到标题上不安全）。
+#
+# ⚠️ 与 lib/geo.js 的 titleCityLocation 逐条镜像，两侧共读 tests/fixtures/title-city-cases.json；
+#   下面四张表由 tests/geo.test.js 逐条对拍，改一边必须改另一边。
+# ---------------------------------------------------------------------------
+
+# 省级（非直辖市）名字：只写到省不填，省与城市并存也不填（见上文 ③）。_CN_ADMIN_NAMES 里带民族限定的长写法一并列上。
+TITLE_CITY_PROVINCE_NAMES = (
+    "河北", "山西", "辽宁", "吉林", "黑龙江", "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南",
+    "广东", "海南", "四川", "贵州", "云南", "陕西", "甘肃", "青海", "台湾省", "内蒙古", "广西", "西藏", "宁夏", "新疆",
+    "内蒙古自治", "广西壮族", "西藏自治", "宁夏回族", "新疆维吾尔",
+)
+
+# 出现即不填的段（见上文 ④）：说不清具体城市，或自称在境外。
+TITLE_CITY_VETO_SEGMENTS = (
+    "全国", "全国各地", "各地", "多地", "异地", "不限", "地点不限", "不限地区", "全部地区", "全球", "全球各地",
+    "其他地区", "其它地区",
+    "海外", "国外", "境外", "海外地区", "国外地区", "海外国家", "境外地区", "海外区域", "国外区域", "境外区域",
+)
+
+# 只认带后缀写法的地名（见上文 ⑤）。
+TITLE_CITY_SUFFIX_ONLY_NAMES = (
+    "阿里", "朝阳", "东方", "白沙", "新星", "双河",
+)
+
+# 地名后缀：长的排前面（「自治州」先于「州」）。刻意不收 区/县/旗（见上文 ②）。
+TITLE_CITY_SUFFIXES = (
+    "自治州", "地区", "新区", "市", "州", "盟",
+)
+
+_TITLE_CITY_PROVINCE_SET = frozenset(TITLE_CITY_PROVINCE_NAMES)
+_TITLE_CITY_VETO_SET = frozenset(TITLE_CITY_VETO_SEGMENTS)
+_TITLE_CITY_SUFFIX_ONLY_SET = frozenset(TITLE_CITY_SUFFIX_ONLY_NAMES)
+# 「公司名里括号注册地」：括号里 ≤8 字，紧跟（隔 ≤16 个汉字）公司/集团/研究院这类机构后缀。
+_TITLE_ORG_PAREN_RE = re.compile(
+    r"[（(][^（）()]{1,8}[）)](?=[一-鿿]{0,16}?"
+    r"(?:有限责任公司|股份有限公司|有限公司|分公司|公司|集团|研究院|研究所|设计院|工程局|医院|银行))"
+)
+
+
+def _title_place(seg: str):
+    """整段 → 地名短名；不是地名返回 None。"""
+    if seg in _CN_ADMIN_NAME_SET:
+        return None if seg in _TITLE_CITY_SUFFIX_ONLY_SET else seg
+    for suffix in TITLE_CITY_SUFFIXES:
+        if seg.endswith(suffix) and len(seg) > len(suffix):
+            name = seg[: -len(suffix)]
+            if name in _CN_ADMIN_NAME_SET:
+                return name
+    return None
+
+
+def title_city_location(title: Optional[str]) -> Optional[str]:
+    """从岗位标题认出工作城市，给 location 为空的岗兜底。认不出 / 不该填时返回 None。
+
+    多个城市按标题里的顺序用「/」连接（「连云港/苏州」），与多地点岗的常见写法一致。
+    判据与取舍见本段顶部注释；只在 adapter 没给地点时才用，绝不覆盖 adapter 的地点。
+    """
+    if not title:
+        return None
+    text = _TITLE_ORG_PAREN_RE.sub(" ", str(title))
+    cities = []
+    for seg in _segments(text.strip()):
+        if seg in _TITLE_CITY_VETO_SET:
+            return None
+        place = _title_place(seg)
+        if place is None:
+            continue
+        if place in _TITLE_CITY_PROVINCE_SET:
+            return None
+        if place not in cities:
+            cities.append(place)
+    return "/".join(cities) or None
+
+
 
 # ---------------------------------------------------------------------------
 # 美国州名 / 州缩写（2026-09-05 加）
