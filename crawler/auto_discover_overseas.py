@@ -282,7 +282,10 @@ def main():
         sb, "auto_discover_overseas",
         {"checked": len(targets), "produced": produced, "companies_enriched": produced,
          "candidates": len(to_insert), "regions_expanded": expanded,
-         "skipped_disabled": skipped_disabled},
+         "skipped_disabled": skipped_disabled,
+         # 各步淘汰计数（2026-09-23 补）：探了多少条 ATS 模板 URL / workday 发现几家 / 过验收几条
+         "ats_candidates": len(candidates), "workday_found": len(wd_candidates),
+         "passed": len(passed)},
         status=ops_runs.status_from_counts(len(to_insert), len(to_insert) - added),
         started_at=started, finished_at=_now_iso())
     print(f"[auto_discover_overseas] 完成: 入库 {added} 源 / 补 regions {expanded} 家 / "
