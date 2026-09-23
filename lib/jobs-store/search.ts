@@ -23,6 +23,11 @@ import { collapseBulkStoreJobs } from "@/lib/bulk-store-dedup";
 import { appendCurrentSeasonWhere } from "@/lib/campus-season";
 import { currentGradClass } from "@/lib/grad-class";
 import { spreadByCompany } from "../job-diversify";
+
+// 「按发布时间」排序也不让一家公司连续霸屏（线上实测深圳+校招前 14 张全是同一家）：
+// 任意 6 张最多 2 张同公司，只在当前页内重排，不改变匹配、总数或分页集合。
+// match 排序沿用 spreadByCompany 默认参数，不在这里改动。
+const JOB_LIBRARY_SPREAD = { cap: 2, window: 6 } as const;
 import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 
 const FTS_CAP = 8000;
@@ -831,7 +836,11 @@ async function searchViaFTS(
   const rankedRaw = collapseBulkStoreJobs(annotateAndRank(rows, filters, prefs, actions));
   const ranked = filters.sortBy === "newest" ? rankedRaw : spreadByCompany(rankedRaw);
   const breakdown = countMatchBreakdown(ranked);
-  const page = ranked.slice(offset, offset + limit);
+  // newest 也要防同一家公司刷屏，但只能在当前已取回的一页里散列：这样下一页加载不会
+  // 回头挪动用户已经看过的卡片，也不会造成跨页重复或漏岗。
+  const page = filters.sortBy === "newest"
+    ? spreadByCompany(ranked.slice(offset, offset + limit), JOB_LIBRARY_SPREAD)
+    : ranked.slice(offset, offset + limit);
   const capped = rows.length >= cap;
   const tScored = now();
   // 回补展示列与「真实总数」计数彼此无关，并行跑，别把 85ms 串到 TTFB 上。
@@ -1000,7 +1009,9 @@ async function searchViaScan(
   const rankedRaw = collapseBulkStoreJobs(filterAndRankJobs(matched, filters));
   const ranked = filters.sortBy === "newest" ? rankedRaw : spreadByCompany(rankedRaw);
   const breakdown = countMatchBreakdown(ranked);
-  const page = ranked.slice(offset, offset + limit);
+  const page = filters.sortBy === "newest"
+    ? spreadByCompany(ranked.slice(offset, offset + limit), JOB_LIBRARY_SPREAD)
+    : ranked.slice(offset, offset + limit);
   scoreMs += now() - sRank;
   const capped = !exhausted;
   const tScored = now();

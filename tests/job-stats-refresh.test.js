@@ -5,6 +5,8 @@ const { loadTsModule } = require("./route-test-utils");
 const { createJobStatsRefresher, installVisiblePolling } = loadTsModule(
   "lib/job-stats-refresh.ts",
 );
+const fs = require("node:fs");
+const path = require("node:path");
 
 function deferred() {
   let resolve;
@@ -49,6 +51,12 @@ test("job stats refresher reuses one in-flight promise and starts a new request 
   second.resolve({ validActive: 13 });
   await nextRefresh;
   assert.deepEqual(successes, [{ validActive: 12 }, { validActive: 13 }]);
+});
+
+test("岗位库次要统计首屏用骨架，不显示破折号占位", () => {
+  const component = fs.readFileSync(path.join(__dirname, "..", "components", "JobLibraryStat.tsx"), "utf8");
+  assert.match(component, /加载中/);
+  assert.doesNotMatch(component, /<span className=\{cn\(numberClass, "ink-4"\)\}>—<\/span>/);
 });
 
 test("job stats refresher reports a failure once and can retry after it settles", async () => {
