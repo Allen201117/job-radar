@@ -4,8 +4,16 @@ name: morning-digest
 # 取数来源 = audit_results（crawler/audit_runner.py 当天已落库的检查结果）+ ops_runs(module='ux_walkthrough')
 # + gh issue（老问题清账）。绿灯也每天发——绿灯邮件本身就是心跳。
 #
-# 北京 10:00（2026-09-19 从 09:30 推迟）：排在 structural-audit 的第二次跑（09:45，见该
-# workflow 注释）之后，保证晨报读到的是「今早自动修复跑完之后」重新量过的数字，不是修之前的旧值。
+# 🚫 别再指望 cron 准点（2026-09-23 立，实测）：
+#   ❌ 现象：声明北京 10:00，9/19~9/22 实际 14:06 / 15:39 / 15:52 / 15:36 才发出。
+#   ✅ 根因：不是 Actions 机器排队（这几次「创建 → 开跑」都是 0 秒），是 GitHub 的定时器
+#      **创建这次运行**就晚了 5 个半小时——本仓 UTC 00~04 时段的 schedule 事件中位延迟 267~324 分钟
+#      （见 structural-audit.yml 的实测表）。workflow_dispatch 点了当场创建，不走这条队列。
+#   ✅ 防：主路 = 创始人电脑上的「每日自动修复」写完修复台账后 `gh workflow run morning-digest.yml`；
+#      下面的 cron 只是兜底（电脑没开 / 修复没跑完），它到的时候今天已送达就跳过
+#      （morning_digest.py 的一天一封守卫），不会一天两封。
+#   ✅ 发信前先把体检重新量一遍（audit 这个 job），所以不管哪条路触发，邮件里都是「修完之后」的数字。
+#      以前靠 structural-audit 的第二条 cron（UTC 01:45）做这件事，它同样要到下午才到，已删。
 on:
   schedule:
     - cron: "0 2 * * *"
@@ -15,13 +23,28 @@ on:
         description: "只打印邮件内容，不真的发送"
         type: boolean
         default: false
+      force:
+        description: "今天已经送达过也再发一封（默认跳过，防一天两封）"
+        type: boolean
+        default: false
 
 concurrency:
   group: morning-digest
   cancel-in-progress: false
 
 jobs:
+  # 复用 structural-audit.yml（同一份步骤、同一套静音变量，不复制一份会漂的配置）。
+  audit:
+    uses: ./.github/workflows/structural-audit.yml
+    secrets: inherit
+    permissions:
+      contents: read
+      actions: read
+
   digest:
+    needs: audit
+    # 体检这一轮失败也照发：晨报会把「今天没查到」逐条点名，不发才是真的瞎。
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -42,4 +65,4 @@ jobs:
         run: pip install -r crawler/requirements.txt
       - name: Send morning digest
         working-directory: crawler
-        run: python3 morning_digest.py ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: python3 morning_digest.py ${{ inputs.dry_run && '--dry-run' || '' }} ${{ inputs.force && '--force' || '' }}

@@ -4,11 +4,12 @@ name: structural-audit
 # 只读（每条 SQL 跑在 read only 事务里）。breach / error 是「发现」，不让本 workflow 变红；
 # 只有台账写不进去才失败 —— 查了没落库 = 没查。
 #
-# 两条 cron（配合创始人电脑上北京 09:00 跑的自动修复 session）：
-#   · UTC 22:00（前一天）：给 09:00 的自动修复留「修之前的现状」。
-#   · UTC 01:45：修复之后再量一遍，同一天 `audit_results` upsert 覆盖前一次的行
-#     （见 audit_runner.write_results 的 `on conflict (check_id, run_date)`），
-#     这样晨报拿到的是「修完之后」的数字，不是修之前的旧值。
+# 两个触发点（配合创始人电脑上北京 09:00 跑的自动修复 session）：
+#   · cron UTC 22:00（前一天）：给 09:00 的自动修复留「修之前的现状」。
+#   · workflow_call：morning-digest.yml 发信前先调本 workflow 再量一遍，同一天 `audit_results`
+#     upsert 覆盖前一次的行（见 audit_runner.write_results 的 `on conflict (check_id, run_date)`），
+#     这样晨报拿到的是「修完之后」的数字。原来这件事靠第二条 cron UTC 01:45，但它和晨报一样
+#     要到北京下午才到（2026-09-23 删，见 morning-digest.yml 注释）。
 #
 # 🚫 第一条 cron 不许再挪回 UTC 00:00~04:00 那段（2026-09-21 立，实测）：
 #   ❌ 现象：09-21 早上 09:13 的自动修复 session 拿到的问题清单是「85 条检查全部失败」——
@@ -27,7 +28,15 @@ name: structural-audit
 on:
   schedule:
     - cron: "0 22 * * *"
-    - cron: "45 1 * * *"
+  # 被 morning-digest.yml 调用：两个 input 显式声明成 false 且调用方不传，恒真量真落库、绝不故障演练。
+  workflow_call:
+    inputs:
+      dry_run:
+        type: boolean
+        default: false
+      force_fail:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       dry_run:

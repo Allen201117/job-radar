@@ -1114,6 +1114,24 @@ checks:
       形状）——所以必须再叠一个 status='success'，只数真正送达的那一行。
     action: 把这条转给 Claude，让它查晨报这条定时任务最近一次是不是运行失败了
 
+  - id: pipeline.morning_digest_on_time
+    name: 晨报邮件昨天是不是上午就到了（值是几点到的，没发出算 24 点）
+    subject: 晨报邮件
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/morning-digest.yml
+    sql: >
+      select coalesce(min(extract(hour from finished_at at time zone 'Asia/Shanghai')), 24)
+        from ops_runs where module = 'morning_digest'
+        and run_date = ((now() at time zone 'Asia/Shanghai')::date - 1)
+        and metrics->>'mode' = 'sent' and status = 'success'
+    normal: "< 12"                # 改主路前实测 9/19~9/22：21 / 10（当天有人手动补发）/ 15 / 15
+    severity: warn
+    calibrated: false
+    why: 晨报原本每天下午三点多才到，连着好几天没人发现——邮件照样在发，只是晚了。现在改成早上自动修复做完就发，
+      下午那次只是兜底；如果哪天又退回到下午才到，说明早上那一步没接上，这条就会亮。
+    action: 把这条转给 Claude，让它查昨天早上电脑上的自动修复有没有跑完、跑完后有没有把晨报发出去
+
   - id: pipeline.auto_repair_ran
     name: 每天早上的自动修复昨天有没有跑
     subject: 每天早上的自动修复

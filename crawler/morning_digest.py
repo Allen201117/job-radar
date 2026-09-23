@@ -507,6 +507,36 @@ def fetch_latest_sent_digest(conn, limit=30):
         cur.close()
 
 
+def fetch_sent_digest_today(conn, run_date_str):
+    """今天（Asia/Shanghai）已经**真送达**的那封晨报的 finished_at；没有返回 None。
+
+    口径与审计检查 pipeline.morning_digest_ran 逐字一致（mode='sent' 且 status='success'）：
+    Resend 调用失败的那一行 mode 也是 'sent'，但 status='failed'——那种情况必须允许重发。
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            select finished_at from public.ops_runs
+            where module = 'morning_digest' and run_date = %s
+              and metrics->>'mode' = 'sent' and status = 'success'
+            order by finished_at asc limit 1
+            """,
+            (run_date_str,),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+    finally:
+        cur.close()
+
+
+def already_sent_message(run_date, sent_at):
+    """跳过重发时打的那一行。sent_at 为 tz-aware datetime；按北京时间念出几点几分。"""
+    label = sent_at.astimezone(SHANGHAI).strftime("%H:%M") if sent_at else "早些时候"
+    return (f"未发送：{run_date.isoformat()} 的晨报已于北京时间 {label} 送达，本次不重复发送"
+            "（要强制再发一封加 --force）")
+
+
 def fetch_open_issues():
     """gh issue list；CI 里靠 GH_TOKEN env，本地没配就返回空列表（不当作失败）。
 
@@ -1033,6 +1063,7 @@ def send_via_resend(api_key, to_addr, subject, text, html):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--force", action="store_true", help="今天已经送达过也再发一封")
     args = parser.parse_args(argv)
 
     checks = _audit_runner.load_contract()
@@ -1040,6 +1071,22 @@ def main(argv=None):
 
     today = datetime.now(SHANGHAI).date()
     yesterday = today - timedelta(days=1)
+
+    # 一天只发一封：主路是早上自动修复写完台账后手动触发（workflow_dispatch 不排队），
+    # GitHub 定时（北京 10:00 声明、实际下午 3 点半左右才到）只是兜底。兜底那一次
+    # 看到今天已经送达就跳过——2026-09-20 手动补发 + 定时各发了一封，收件人收到两封。
+    # 查不到就照发：重复一封的代价远小于漏发一封（晨报本身就是心跳）。
+    will_send = (not args.dry_run and bool(os.environ.get("RESEND_API_KEY"))
+                 and bool(os.environ.get("DIGEST_TO")))
+    if will_send and not args.force:
+        try:
+            sent_at = fetch_sent_digest_today(conn, today.isoformat())
+        except Exception as exc:  # noqa: BLE001
+            sys.stderr.write(f"[morning-digest] 查今天是否已发失败，照常发送: {type(exc).__name__}\n")
+            sent_at = None
+        if sent_at is not None:
+            print(already_sent_message(today, sent_at))
+            return 0
 
     results_today = fetch_audit_results(conn, today.isoformat())
     results_yesterday = fetch_audit_results(conn, yesterday.isoformat())

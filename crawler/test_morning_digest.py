@@ -1084,3 +1084,75 @@ class WalkthroughLabelSyncTests(unittest.TestCase):
         js = self._js_issue_labels()
         self.assertTrue(js, "没从 walkthrough.js 解析出任何 issue type")
         self.assertEqual(js, md.WALKTHROUGH_ISSUE_LABELS)
+
+
+class SendOncePerDayGuardTests(unittest.TestCase):
+    """一天只发一封（2026-09-23 加）。
+
+    主路改成「早上自动修复写完台账后手动触发」，GitHub 定时（实际下午 3 点半左右才到）只做兜底；
+    兜底那一次看到今天已送达必须跳过，否则每天两封。反过来，查询失败 / 上一次发送失败 / 显式 --force
+    都必须照发——漏发一封比重复一封伤得多。
+    """
+
+    class _Stop(Exception):
+        """走到「开始取数拼邮件」这一步就停：说明守卫放行了。"""
+
+    def _run_main(self, argv, sent_at=None, guard_raises=False):
+        from unittest import mock
+        env = {"RESEND_API_KEY": "k", "DIGEST_TO": "someone@example.invalid"}
+        guard = mock.Mock(side_effect=RuntimeError("db down")) if guard_raises else mock.Mock(return_value=sent_at)
+        fake_runner = mock.Mock()
+        fake_runner.load_contract.return_value = []
+        fake_runner.connect.return_value = object()
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(md, "_audit_runner", fake_runner), \
+                mock.patch.object(md, "fetch_sent_digest_today", guard), \
+                mock.patch.object(md, "fetch_audit_results", side_effect=self._Stop), \
+                mock.patch.object(md, "send_via_resend") as send:
+            try:
+                rc = md.main(argv)
+            except self._Stop:
+                rc = "proceeded"
+        return rc, guard, send
+
+    def test_skips_when_already_delivered_today(self):
+        sent_at = datetime(2026, 9, 23, 2, 5, tzinfo=timezone.utc)
+        rc, guard, send = self._run_main([], sent_at=sent_at)
+        self.assertEqual(rc, 0)
+        guard.assert_called_once()
+        send.assert_not_called()
+
+    def test_sends_when_nothing_delivered_today(self):
+        rc, _guard, _send = self._run_main([], sent_at=None)
+        self.assertEqual(rc, "proceeded")
+
+    def test_fails_open_when_guard_query_breaks(self):
+        rc, _guard, _send = self._run_main([], guard_raises=True)
+        self.assertEqual(rc, "proceeded")
+
+    def test_force_bypasses_guard(self):
+        rc, guard, _send = self._run_main(["--force"], sent_at=datetime.now(timezone.utc))
+        self.assertEqual(rc, "proceeded")
+        guard.assert_not_called()
+
+    def test_dry_run_is_never_blocked(self):
+        rc, guard, _send = self._run_main(["--dry-run"], sent_at=datetime.now(timezone.utc))
+        self.assertEqual(rc, "proceeded")
+        guard.assert_not_called()
+
+    def test_message_reads_beijing_time(self):
+        msg = md.already_sent_message(datetime(2026, 9, 23).date(),
+                                      datetime(2026, 9, 23, 2, 5, tzinfo=timezone.utc))
+        self.assertIn("10:05", msg)
+        self.assertIn("未发送", msg)
+
+    def test_guard_uses_same_delivered_definition_as_contract_check(self):
+        """守卫与 pipeline.morning_digest_ran 必须同一个「送达」口径：只认 mode='sent' 且 status='success'。
+        否则 Resend 失败的那一行会被守卫当成已送达，当天就再也不补发了。"""
+        import inspect
+        guard_sql = inspect.getsource(md.fetch_sent_digest_today)
+        contract = {c["id"]: c for c in ar.load_contract()}
+        check_sql = contract["pipeline.morning_digest_ran"]["sql"]
+        for literal in ("module = 'morning_digest'", "metrics->>'mode' = 'sent'", "status = 'success'"):
+            self.assertIn(literal, guard_sql)
+            self.assertIn(literal, check_sql)
