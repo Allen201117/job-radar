@@ -127,3 +127,26 @@ class TestEmptyVsBroken(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBrandDerivationOnSharedPortal(unittest.TestCase):
+    """虎鲸文娱门户同时挂优酷 / 大麦 / 阿里鱼：按标题前缀把优酷的岗归给优酷（2026-09-23）。"""
+
+    def _job(self, title, host="jobs.hujing-dme.com", cls=AlibabaAdapter):
+        a = cls(); a.company_name = "虎鲸文娱"
+        return a._map(_row(name=title, _host=host, categoryType="freshman", batchName="2027届秋季应届生招聘"))
+
+    def test_youku_prefixed_titles_go_to_youku(self):
+        self.assertEqual(self._job("优酷-内容运营专家").company, "优酷")
+        self.assertEqual(self._job("优酷子公司-资深视频算法工程师").company, "优酷")
+        self.assertEqual(self._job("优酷-算法工程师", cls=AlibabaCampusAdapter).company, "优酷")
+
+    def test_sibling_brands_fall_back_to_source_company(self):
+        self.assertEqual(self._job("大麦娱乐-票务运营").company, "虎鲸文娱")
+        self.assertEqual(self._job("阿里鱼-IP授权经理").company, "虎鲸文娱")
+
+    def test_prefix_not_substring(self):
+        self.assertEqual(self._job("内容合作经理（对接优酷）").company, "虎鲸文娱")
+
+    def test_other_hosts_untouched(self):
+        self.assertEqual(self._job("优酷-测试", host="talent.taotian.com").company, "虎鲸文娱")
