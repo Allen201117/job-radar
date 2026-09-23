@@ -1,0 +1,48 @@
+name: reattribute-beisen-shared-tenant
+
+# 北森「一个租户挂着多家公司」的存量归属纠正：逐行按岗位自报的招聘机构改 company。
+# rename-job-company 按 jd_url 前缀整批改名，同一前缀下两家混着时用不上，才有这条。
+# 判据与护栏见 crawler/reattribute_beisen_shared_tenant.py 的模块注释。手动触发、默认 dry-run。
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: "共享租户的北森 host（须已登记在 _BEISEN_SHARED_TENANTS）"
+        required: true
+        default: "chinalife.zhiye.com"
+      home:
+        description: "租户本家公司名（= 该租户 sources.company）"
+        required: true
+        default: "中国人寿"
+      apply:
+        description: "true = 真的写库；留空/false = 只 dry-run 报数"
+        required: false
+        default: "false"
+
+jobs:
+  reattribute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: crawler/requirements.txt
+      - run: pip install -r crawler/requirements.txt
+
+      - name: Reattribute shared tenant
+        env:
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+          HOST: ${{ github.event.inputs.host }}
+          HOME_COMPANY: ${{ github.event.inputs.home }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          set -euo pipefail
+          args=(--host "$HOST" --home "$HOME_COMPANY")
+          if [ "$APPLY" = "true" ]; then args+=(--apply); fi
+          python3 crawler/reattribute_beisen_shared_tenant.py "${args[@]}"

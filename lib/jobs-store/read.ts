@@ -19,7 +19,11 @@ import {
   type CampusStatRow,
   type CampusFreshStat,
 } from "@/lib/campus-stats";
-import { campusRowMatches, type CampusFilterValues } from "@/lib/campus-facets";
+import {
+  campusRowMatches,
+  campusRowMatchesFit,
+  type CampusFilterValues,
+} from "@/lib/campus-facets";
 import { classifyJobFunction } from "@/lib/china-keyword-expansion";
 import { mustApplyPatterns, mustApplyUnion, type MustApplyCompany } from "@/lib/must-apply-list";
 import { requestSafeCache } from "@/lib/request-safe-cache";
@@ -670,8 +674,34 @@ export const CAMPUS_PREFILTER_SQL = `(
  * 语义等价性：SQL 的 `ilike '%x%'` = 不区分大小写子串，与这里的 toLowerCase().includes 同义；
  * 候选集来自 `status='active'`，与主查询的 status 条件一致，所以不会漏。
  */
-// 全部 active 公司名的短 TTL 缓存：这份清单 live 只有 1467 行、且只在新源入库时才变，
-// 但每次校招看板刷新 / 每次展开一家公司都要用它，不缓存就是每次白付 ~384ms。
+// 全部 active 公司名：这份清单 live 只有 ~1700 行、且只在新源入库时才变，但每次校招看板刷新 /
+// 每次展开一家公司 / 热门推荐都要用它。
+//
+// ⚠️ 2026-09-23 线上实测它是 /campus 首屏 ~3s 的来源（整页 8.8~10.1s）：
+//   ① `select distinct company … where status='active'` 早已不走 Index Only Scan，规划器改成
+//      Parallel Seq Scan（EXPLAIN 144k buffers、3.1s，两次复测 3,127 / 3,173ms）——上面注释里的 384ms 已过期；
+//   ② 缓存只在进程内：serverless 每次请求多半落到不同实例，命中率≈0（见 CLAUDE.md「工程化底线」缓存那一行）。
+// ✅ SQL 改成沿 jobs_active_company_idx 逐个取「下一个更大的公司名」的松散索引扫描（~1,700 次索引探查，
+//    冷 654ms / 热 206ms，与 distinct 结果集逐行相同）；外面再包一层跨实例 unstable_cache（5 分钟），
+//    进程内那层只当同实例并发去重。
+const ACTIVE_COMPANY_NAMES_SQL = `
+  with recursive t as (
+    select min(company) as c from jobs where status = 'active'
+    union all
+    select (select min(company) from jobs where status = 'active' and company > t.c)
+    from t where t.c is not null
+  )
+  select c as company from t where c is not null`;
+
+const loadActiveCompanyNamesShared = requestSafeCache(
+  async (): Promise<string[]> => {
+    const rows = await jobsQuery<{ company: string | null }>(ACTIVE_COMPANY_NAMES_SQL);
+    return rows.map((r) => r.company).filter((c): c is string => !!c);
+  },
+  ["active-company-names-v1"],
+  { revalidate: 300, tags: ["active-company-names"] },
+);
+
 let activeCompanyNamesCache: { expiresAt: number; value: string[] } | null = null;
 let activeCompanyNamesInFlight: Promise<string[]> | null = null;
 
@@ -681,12 +711,7 @@ async function allActiveCompanyNames(): Promise<string[]> {
     return activeCompanyNamesCache.value;
   }
   if (activeCompanyNamesInFlight) return activeCompanyNamesInFlight;
-  activeCompanyNamesInFlight = (async () => {
-    const rows = await jobsQuery<{ company: string | null }>(
-      "select distinct company from jobs where status = 'active'",
-    );
-    return rows.map((r) => r.company).filter((c): c is string => !!c);
-  })();
+  activeCompanyNamesInFlight = loadActiveCompanyNamesShared();
   try {
     const value = await activeCompanyNamesInFlight;
     activeCompanyNamesCache = { expiresAt: Date.now() + 5 * 60_000, value };
@@ -823,7 +848,8 @@ export type CampusFreshStats = {
 };
 
 /**
- * 校招看板的「计数 + 新鲜度」轻查询：**只做分组聚合、不拉正文**，永远现算、不进 unstable_cache。
+ * 校招看板的「计数 + 新鲜度」轻查询：**只做分组聚合、不拉正文**，走它自己的短 TTL 缓存（60s），
+ * 不与重快照 loadCampusBoard 共用一个缓存条目。
  *
  * 为什么与 getCampusZone 分开走（2026-09-15）：整块看板（分面/时间线/计数）被打包进一个
  * unstable_cache 快照，这块重活偶发跑不完或报错（曾 500，Digest 721878106）时，Next 会
@@ -835,8 +861,32 @@ export type CampusFreshStats = {
  * 口径与卡面一致：只数库里 recruitment_category 为「校招」/「实习」的 active 岗（卡面就只展示这两桶），
  * 并同步 lib/campus-season.appendCurrentSeasonWhere 的往届门（明确标了更早届别的岗不计入）。
  * 与 getCampusZone 相比忽略的仅是全库 36 行「列为 NULL 需现算分类」的岗，量级可忽略、由重构项目彻底对齐。
+ *
+ * ⚠️ 2026-09-23 起加 60s 跨实例缓存：「轻」的前提不成立了——互联网清单 44 个公司名、Bitmap Heap Scan
+ *    69,662 行、库机内存装不下数据时大半从盘上读（EXPLAIN 3,608ms），每请求现算让 /campus 首屏多等 ~3.6s。
+ *    当初不缓存是怕「重算被杀 → 永远服务旧值」；这条缓存的重算只有这一条几秒的查询（离 maxDuration=60 很远），
+ *    且卡面「数据更新于 N 分钟前」读的就是这里的 fetchedAtMs——真卡住了用户与我们都看得见，不会静默。
+ *    Map 不能直接进 unstable_cache（按 JSON 序列化），缓存里存 entries，出缓存再还原。
  */
+const loadCampusFreshStatsShared = requestSafeCache(
+  async (
+    list: Array<{ name: string; pattern: string }>,
+  ): Promise<{ entries: Array<[string, CampusFreshStat]>; fetchedAtMs: number }> => {
+    const { byPattern, fetchedAtMs } = await computeCampusFreshStats(list);
+    return { entries: Array.from(byPattern.entries()), fetchedAtMs };
+  },
+  ["campus-fresh-stats-v1"],
+  { revalidate: 60, tags: ["campus-fresh"] },
+);
+
 export async function getCampusFreshStats(
+  list: Array<{ name: string; pattern: string }>,
+): Promise<CampusFreshStats> {
+  const { entries, fetchedAtMs } = await loadCampusFreshStatsShared(list);
+  return { byPattern: new Map(entries), fetchedAtMs };
+}
+
+async function computeCampusFreshStats(
   list: Array<{ name: string; pattern: string }>,
 ): Promise<CampusFreshStats> {
   const t0 = Date.now();
@@ -921,7 +971,13 @@ export async function getCampusCompanyJobs(
   list: Array<{ name: string; pattern: string }>,
   pattern: string,
   bucket: "campus" | "intern",
-  opts: { filters?: CampusFilterValues; offset?: number; limit: number },
+  opts: {
+    filters?: CampusFilterValues;
+    /** 卡面有明确对口数时，展开默认只取这批；用户可切回全量。 */
+    fit?: { targetFunctions: string[]; targetCities: string[] } | null;
+    offset?: number;
+    limit: number;
+  },
 ): Promise<CampusCompanyJobs> {
   const { filters, limit } = opts;
   const offset = Math.max(0, opts.offset ?? 0);
@@ -995,6 +1051,7 @@ export async function getCampusCompanyJobs(
     const fn = typeof r.job_function === "string" && r.job_function ? r.job_function : classifyJobFunction(r);
     const row = { ...r, fn };
     if (filters && !campusRowMatches(row, filters)) continue;
+    if (opts.fit && !campusRowMatchesFit(row, opts.fit.targetFunctions, opts.fit.targetCities)) continue;
     candidates.push(row);
   }
   // 临近截止优先、其次新增降序（两个键都在轻字段里，与全量排序一致）。

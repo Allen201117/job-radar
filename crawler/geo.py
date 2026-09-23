@@ -1,3 +1,5 @@
+import json
+import os
 import re
 from typing import Optional
 
@@ -139,6 +141,14 @@ OVERSEAS_LOCATION_TOKENS = {
     "algeria", "bulgaria", "cambodia", "chile", "croatia", "czechia", "denmark", "ecuador",
     "estonia", "finland", "guatemala", "hungary", "latvia", "lithuania", "morocco", "norway",
     "pakistan", "romania", "russia", "serbia", "slovakia", "slovenia", "tunisia", "ukraine",
+    # 2026-09-23 补：地点里写着这些名字、却因为词表没有而按 source.regions 兜底判成 domestic 的在招岗
+    # （全库 active 实测：Georgia 63 / England 9 / Greece 5 / Kazakhstan 2 / Bangladesh·Belarus·Bermuda 各 1）。
+    # "georgia" 只钉「在境外」、不给国家码：它多半是美国佐治亚州（Athens, Georgia），也可能是格鲁吉亚，
+    # 两种都在境外，所以 scope 判得准；国家码仍留空（US 词表刻意不收它，见 _US_STATE_NAMES）。
+    # ⚠️ 刻意**不收** "jordan"：香港九龙有佐敦（Jordan），「Jordan, Kowloon」这类写法会被钉成境外；
+    #    库里另有 South Jordan / West Jordan（犹他州），那些靠 Utah / United States 早就判出了 US。
+    "georgia", "england", "scotland", "wales", "greece", "kazakhstan", "bangladesh", "belarus",
+    "bermuda",
 }
 OVERSEAS_LOCATION_PHRASES = (
     "united states", "united kingdom", "new zealand", "south korea", "saudi arabia",
@@ -857,7 +867,8 @@ _LEADING_CODE_ALIASES = {"UK": "GB"}
 #   · GM = 通用汽车的厂区前缀（`GM, Global, Technical, Center, , , 7000, Bldg`，
 #     jd_url 是 generalmotors.wd5.myworkdayjobs.com，实际在密歇根 Warren）——不是冈比亚。
 #   · NA = 卡夫亨氏写的「North America」占位（location 字面就是裸 `NA`）——不是纳米比亚。
-_LEADING_CODE_BLOCKLIST = frozenset({"GM", "NA"})
+#   · LI = LinkedIn 招聘标签「#LI-Remote」（爱德华兹 `LI, REMOTE`，岗位标题写着 US-Remote）——不是列支敦士登。
+_LEADING_CODE_BLOCKLIST = frozenset({"GM", "NA", "LI"})
 
 _LEADING_COUNTRY_RE = re.compile(r"^([A-Z]{2})\s*[,，]")
 
@@ -1133,3 +1144,76 @@ def is_rejected_location(location: Optional[str]) -> bool:
     derive_country_code 顺序的既定取舍，不是本函数新引入的规则，详见调用处的实测记录。
     """
     return derive_country_code(location) in _REJECTED_COUNTRY_CODES
+
+
+# ---------------------------------------------------------------------------
+# 省级归属：岗位 location 落在哪几个省级行政区（2026-09-23 加）。
+# ⚠️ 与 lib/geo.js 的 locationProvinces 逐条同口径；映射本体 lib/cn-province-prefectures.json 两端共读，
+#    逐条用例在 tests/fixtures/cn-location-provinces.json 两端共测。规则与每条规则对应的实测反例见
+#    lib/cn-location-provinces.js（2026-09-23 从 lib/geo.js 拆出）。
+# ---------------------------------------------------------------------------
+_CN_PROVINCE_JSON = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "lib", "cn-province-prefectures.json"
+)
+_PLACE_BOUNDARY_BEFORE = frozenset("省市州盟区县旗国")
+# 规则⑤：地名后面紧跟这些 = 街道名（南京东路 / 延安东路 / 深圳大道）。与 JS 的 STREET_AFTER_PLACE_RE 逐字相同。
+_STREET_AFTER_PLACE_RE = re.compile(r"[东西南北中]?(?:路|街|大道|大街)")
+_province_index = None
+
+
+def _load_province_index():
+    """(地名 → 省, 首字 → 以它开头的地名[长的在前], 跨省重名县集合, 省 → 地级列表)，首次调用时读 JSON。"""
+    global _province_index
+    if _province_index is None:
+        with open(_CN_PROVINCE_JSON, encoding="utf-8") as f:
+            data = json.load(f)
+        place_province = {m: m for m in data["municipalities"]}
+        for province, names in data["provinces"].items():
+            place_province[province] = province
+            for name in names:
+                place_province[name] = province
+        place_province.update(data["_disambiguation"])
+        by_head = {}
+        for name in sorted(place_province, key=len, reverse=True):
+            by_head.setdefault(name[0], []).append(name)
+        _province_index = (
+            place_province,
+            by_head,
+            frozenset(data["_county_collisions"]["names"]),
+            data["provinces"],
+        )
+    return _province_index
+
+
+def cn_province_prefectures():
+    """省短名 → 地级短名列表（直辖市不在内）。"""
+    return _load_province_index()[3]
+
+
+def _segment_province(seg: str):
+    place_province, by_head, county_collisions, _ = _load_province_index()
+    for i in range(len(seg)):
+        if i > 0 and seg[i - 1] not in _PLACE_BOUNDARY_BEFORE:
+            continue
+        name = next((n for n in by_head.get(seg[i], ()) if seg.startswith(n, i)), None)
+        if name is None:
+            continue
+        rest = seg[i + len(name):]
+        if rest.startswith("区") and not rest.startswith("区域"):
+            continue
+        if rest.startswith("县") and name in county_collisions:
+            continue
+        if _STREET_AFTER_PLACE_RE.match(rest):
+            continue
+        return place_province[name]
+    return None
+
+
+def location_provinces(location: Optional[str]) -> list:
+    """location 落在哪些省级行政区（省短名 / 直辖市 / 港澳），按出现顺序去重；认不出返回 []。"""
+    out = []
+    for seg in _segments(str(location or "").strip()):
+        province = _segment_province(seg)
+        if province and province not in out:
+            out.append(province)
+    return out

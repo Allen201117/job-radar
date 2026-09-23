@@ -127,6 +127,25 @@ class FetchTest(unittest.TestCase):
         self.assertEqual(jobs[0].location, "杭州")
         self.assertIn("杭州 / 北京", jobs[0].summary)
 
+    def test_job_type_keeps_function_and_declared_batch_name(self):
+        adapter = AlibabaCampusPortalAdapter()
+        for batch_name, expected in (
+            ("阿里巴巴日常实习生", "实习"),
+            ("阿里巴巴研究型实习生", "实习"),
+            ("阿里巴巴2027届秋季校园招聘", "校招"),
+        ):
+            with self.subTest(batch_name=batch_name):
+                payload = {"datas": [{
+                    "id": 1, "name": "算法工程师", "status": "recruit", "workLocations": ["杭州"],
+                    "categoryName": "AI Infra", "batchName": batch_name, "description": "", "requirement": "",
+                }]}
+                job = adapter.parse(json.dumps(payload, ensure_ascii=False))[0]
+                self.assertEqual(job.job_type, f"AI Infra {batch_name}")
+                # recruitment_classify 调的是 JS 权威分类器；测试走同一路径，避免另写一套规则。
+                from recruitment_classify import classify
+                category, _explicit, _function = classify([job.__dict__])[0]
+                self.assertEqual(category, expected)
+
 
 if __name__ == "__main__":
     unittest.main()

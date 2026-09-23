@@ -10,9 +10,12 @@ from adapters.base import RawJob
 from grad_class import extract_grad_class
 from geo import (
     CHINA_LOCATION_MARKERS,
+    ISO_ALPHA2_CODES,
     OVERSEAS_LOCATION_PHRASES,
     OVERSEAS_LOCATION_TOKENS,
     REMOTE_MARKERS,
+    _GREATER_CHINA,
+    _REJECTED_COUNTRY_CODES,
     _is_overseas_pinned,
     derive_country_code,
     derive_job_scope,
@@ -221,6 +224,42 @@ def geo_basis(raw_location: Optional[str], cleaned: Optional[str]) -> Optional[s
     return raw or cleaned
 
 
+def scope_depends_on_regions(location: Optional[str]) -> bool:
+    """这个地点的 job_scope 是不是只能按 source.regions 猜（没说国家、也没钉在境外）。
+
+    定义成「CN 源和纯海外源会给出不同答案」，而不是把 derive_job_scope 的判断步骤抄一遍：
+    derive_job_scope 以后多一道判据，这里自动跟上，两处不会漂移。
+    """
+    return derive_job_scope(location, {"CN"}) != derive_job_scope(location, {"US"})
+
+
+def needs_declared_country(raw_location: Optional[str]) -> bool:
+    """adapter 要不要去问对方「这个岗在哪国」（见 RawJob.country_code）。
+
+    与 normalize 判国家用的是同一份文本（geo_basis），所以 normalize 会采信自报国家的岗，adapter
+    一定问过。唯一的多问：地点为空时 normalize 还会从标题认城市（location_or_title_city），
+    标题认出城市就以城市为准，问来的国家用不上——多一次请求，不会判错。
+    """
+    return scope_depends_on_regions(geo_basis(raw_location, clean_location(raw_location)))
+
+
+_ISO_ALPHA2 = frozenset(ISO_ALPHA2_CODES)
+
+
+def _declared_country(raw: RawJob) -> Optional[str]:
+    code = (getattr(raw, "country_code", None) or "").strip().upper()
+    return code if code in _ISO_ALPHA2 else None
+
+
+def _country_and_scope(raw: RawJob, geo_location: Optional[str], regions) -> tuple:
+    """(country_code, job_scope)。地点能说清的一律以地点为准（与改前逐字相同）；
+    只有地点说不清、原本要按 source.regions 猜的，才改用对方 ATS 自报的国家。"""
+    declared = _declared_country(raw)
+    if declared and scope_depends_on_regions(geo_location):
+        return declared, ("domestic" if declared in _GREATER_CHINA else "overseas")
+    return derive_country_code(geo_location), derive_job_scope(geo_location, source_regions(regions))
+
+
 def clean_summary(summary: Optional[str], max_chars: int = 400) -> Optional[str]:
     """截断摘要到 max_chars 字，在词边界截断。"""
     if not summary:
@@ -296,6 +335,7 @@ def normalize(raw: RawJob, *, source_id: str, company: str, regions=None) -> dic
     location = location_or_title_city(location, title)
     # 必须排在标题兜底之后：country_code / job_scope 要按最终写进库的地点算（标题城市 → CN）。
     geo_location = geo_basis(raw.location, location)
+    country_code, job_scope = _country_and_scope(raw, geo_location, regions)
     experience = raw.experience or extract_experience(raw.summary)
     education = raw.education or extract_education(raw.summary)
     deadline = raw.deadline or extract_deadline(raw.summary)
@@ -308,8 +348,8 @@ def normalize(raw: RawJob, *, source_id: str, company: str, regions=None) -> dic
         "company": raw.company or company,
         "title": title,
         "location": location,
-        "country_code": derive_country_code(geo_location),
-        "job_scope": derive_job_scope(geo_location, source_regions(regions)),
+        "country_code": country_code,
+        "job_scope": job_scope,
         "job_type": job_type,
         # 届别只认硬信号（2027届/27届/2027校招/Class of 2027…），抽不出留 None。
         # 绝不靠入库时间兜底——8 月同时在抓 2027 届新岗与 2026 届收尾岗，猜错=把往届岗
@@ -622,7 +662,10 @@ def validate_job_quality(raw: RawJob, source_url: str) -> tuple[bool, str]:
     # 「adapter 调用了但判错」，而是「压根没走到那道复核」（workday trusted 分支整批跳过
     # per-job 复核；feishu/hotjob/wt/beisen/xiaomi_feishu 这类纯本土源默认全在国内、从不
     # 调用该复核）。详见 geo.is_rejected_location 的注释与实测台账。
-    if is_rejected_location(raw.location):
+    # 地点文本说不清、对方 ATS 自报台湾的，同样拒收（与 normalize 采信自报国家的条件一致）。
+    if is_rejected_location(raw.location) or (
+        _declared_country(raw) in _REJECTED_COUNTRY_CODES and needs_declared_country(raw.location)
+    ):
         return False, "rejected region (taiwan)"
 
     parsed = urlparse(jd_url)

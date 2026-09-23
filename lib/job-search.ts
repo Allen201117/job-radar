@@ -9,6 +9,8 @@
 // 历史踩坑：全库塞前端=卡死；全库塞服务端=45s 超时；count(exact)/ilike 全表扫撞 statement_timeout。
 import { sortAndFilterJobs } from "@/lib/scoring";
 import {
+  cityFtsTerms,
+  citySqlLikeTokens,
   filterAndRankJobs,
   jobFilterTier,
   splitMultiValue,
@@ -19,7 +21,12 @@ import {
 import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 import { effectiveJobScope, jobMatchesScope } from "@/lib/job-scope";
 // china-keyword-expansion 为 CommonJS，沿用 hooks 的 import 习惯。
-import { cityMatchTokens, ftsCandidateTerms } from "@/lib/china-keyword-expansion";
+import {
+  ftsCandidateTerms,
+  seniorityInfixSplit,
+  SENIORITY_INFIX_WORDS,
+  SENIORITY_INFIX_PAREN_WORDS,
+} from "@/lib/china-keyword-expansion";
 
 const DB_PAGE = 1000;
 // 扫描路径：逐批增大的并行扫描页数（累计 4/12/28 页）。
@@ -63,10 +70,34 @@ export function queryTokens(term: string): string[] {
 }
 
 // 一个词 → 「其全部 token 的 AND」子句（命中该词≈其 token 全在文档中）。无有效 token 返回 null。
+// 它必须是 JS containsTerm 在标题上的超集，否则 JS 判 exact 的岗根本进不了候选。
+// 「合成研究员」这类「前缀 + 角色名」的词，containsTerm 还放行中间插职级词的写法（有机合成高级研究员 /
+// 有机合成（助理）研究员，见 china-keyword-expansion 的 SENIORITY_INFIX）——连续 bigram 里的接缝「成研」
+// 在这些标题里不存在（2026-09-23 全库 52 个在招岗，旧子句 0 命中）。所以接缝那一位换成「接缝 或 职级插词」：
+//   (合成 & 研究 & 究员 & (成研 | (成高 & 高级 & 级研) | … | (成副 & 副研) | (成 & 研 & (高级 | … | 副))))
+// · 裸写的职级词必须**贴着两边**（成高 + 级研），不能只要求「标题某处有高级」：那一版在真库上把
+//   「客户服务高级经理 / 医学写作高级经理」这类前缀、角色名、职级词各在一处的标题也捞进来，
+//   撞窗口时把真岗挤出去（销售 8000 窗 −6、临床协调 1000 窗 −18）。
+// · 带括号的写法，search_tokens 的 bigram「成（」「）研」被 to_tsvector 按标点切成单字词「成」「研」
+//   （真库验过），所以括号那一支认「前缀末字 & 角色名首字 & 职级词」这三个词。单字词不带相邻关系，
+//   「（高级）经理，大客户」也会进「客户经理」的候选（JS 精筛会拒）；真库每个查询 ≤4 行，没挤掉过真岗。
+// 仍是一条子句（opportunities 的子句预算按词计，不变），且严格包含旧子句（旧子句 = 同样的 AND 再要求「成研」）。
+const tsAnd = (toks: string[]) => (toks.length === 1 ? toks[0] : `(${toks.join(" & ")})`);
+function seniorityInfixAlternatives(prefix: string, noun: string): string[] {
+  const last = prefix.slice(-1);
+  const first = noun[0];
+  const bare = (SENIORITY_INFIX_WORDS as readonly string[]).map((w) => tsAnd(queryTokens(last + w + first)));
+  const paren = (SENIORITY_INFIX_PAREN_WORDS as readonly string[]).map((w) => tsAnd(queryTokens(w)));
+  return [last + first, ...bare, `(${last} & ${first} & (${paren.join(" | ")}))`];
+}
+
 function termClause(term: string): string | null {
   const toks = queryTokens(term);
   if (!toks.length) return null;
-  return `(${toks.join(" & ")})`;
+  const split = seniorityInfixSplit(term) as { prefix: string; noun: string } | null;
+  if (!split) return `(${toks.join(" & ")})`;
+  const fixed = [...queryTokens(split.prefix), ...queryTokens(split.noun)];
+  return `(${fixed.join(" & ")} & (${seniorityInfixAlternatives(split.prefix, split.noun).join(" | ")}))`;
 }
 
 // 构造 tsquery：关键词候选词「组内 OR」，再与 城市/公司 等「过滤词 AND」。全空返回 null（→走浏览/扫描）。
@@ -126,7 +157,7 @@ export function annotateAndRank(
 }
 
 function softCityOrFilter(cities: string[]): string | null {
-  const tokens = cities.flatMap((c) => cityMatchTokens(c));
+  const tokens = citySqlLikeTokens(cities);
   if (!tokens.length) return null;
 
   // 与 JS matcher 保持超集：空 location 放行降级；多城市所有别名/拼音通过 ilike 进候选（OR）。
@@ -275,9 +306,9 @@ export async function searchJobs(
   );
   // 城市必须留在 tsquery（全表 GIN 命中，保住城市浏览完整覆盖——location 无 trigram 索引，移出会让
   // 无关键词的城市搜索退化到 scan 仅覆盖最新 28k）；多城市为一个 OR 组（(北京 | 上海)），与关键词/公司 AND。
-  // 空 location / 别名的软放行由 softCityOrFilter 精修。
+  // 空 location / 别名的软放行由 softCityOrFilter 精修。OR 组放展开后的词（省→省内地名，见 cityFtsTerms）。
   const andTerms = company ? [company] : [];
-  const orGroups = cities.length ? [cities] : [];
+  const orGroups = cities.length ? [cityFtsTerms(cities)] : [];
   const tsquery = buildTsquery(keywordTerms, andTerms, orGroups);
 
   if (tsquery) {

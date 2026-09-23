@@ -113,3 +113,34 @@ test("function=null 泛组（工程师/软件）只匹配标题，不撞正文",
   // 标题命中（含跨语言英文标题）→ exact，召回不丢。
   assert.equal(keywordMatchTier({ title: "Backend Engineer" }, "工程师"), "exact");
 });
+
+test("职级词插在角色名中间（合成高级研究员）仍算同一个角色 → exact", () => {
+  // 2026-09-23 真实画像（方向「有机合成研究员」、上海/杭州）：召回里 6 个标题字面就是这个岗的
+  // 「有机合成高级研究员 / 有机合成助理研究员 / 有机合成（助理）研究员」全被 role_mismatch 拒掉，
+  // 因为词表词「合成研究员」要求连续子串，中间插一个职级词就断了。
+  for (const title of [
+    "有机合成高级研究员",
+    "有机合成高级研究员(J21905)",
+    "有机合成助理研究员-上海(J21993)",
+    "有机合成（助理）研究员",
+    "2027届-有机合成高级研究员-上海外高桥(J24968)",
+    "有机合成高级研究员 (精通韩语)-武汉(J21909)",
+  ]) {
+    assert.equal(keywordMatchTier({ title }, "有机合成研究员"), "exact", title);
+  }
+  // 查询里的散词（不在任何词组里）同样适用：职级词不改变角色。
+  assert.equal(keywordMatchTier({ title: "化学高级研究员" }, "化学研究员"), "exact");
+});
+
+test("中间插的不是职级词、或前缀不同 → 不放宽（不跨角色）", () => {
+  // 前缀必须原样出现：分析研究员 / 药物合成研究员 / 多肽合成研究员 都不是「有机合成研究员」。
+  // （断言「不是 exact」：「药物分析高级研究员」本来就经职能相关层判 related，与本条无关。）
+  for (const title of ["分析研究员", "药物分析高级研究员", "药物合成高级研究员(J30495)", "多肽合成高级研究员"]) {
+    assert.notEqual(keywordMatchTier({ title }, "有机合成研究员"), "exact", title);
+  }
+  // 插进去的是另一个角色词（分析 / 销售 / 运营）→ 那是另一个岗，不许靠这条放行。
+  assert.equal(keywordMatchTier({ title: "化学分析研究员" }, "化学研究员"), null);
+  assert.equal(keywordMatchTier({ title: "化学合成研究员" }, "化学研究员"), null);
+  // 职级词不在角色名中间、而是替换了角色名 → 不是同一个角色写法，不放宽。
+  assert.equal(keywordMatchTier({ title: "化学高级专员" }, "化学研究员"), null);
+});

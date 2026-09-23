@@ -8,6 +8,7 @@
 //   5. dailyLimit clamp 5–30。
 // 唯一的「合并」字段是 target_industries（偏好 ∪ 简历），其余是「偏好优先，空则简历兜底」。
 import { normalizeRolePhrases } from "@/lib/china-keyword-expansion";
+import { normalizeCityPhrases } from "@/lib/profile-hygiene";
 import type { UserPreferences, CandidateProfile } from "../types";
 import type { RadarProfile, ExperienceStage, EducationLabel } from "./types";
 import { educationRank } from "../education-rank";
@@ -89,7 +90,9 @@ export function buildRadarProfile(
     targetRoles: useEnglishProfile ? enRoles : cnRoles,
     targetKeywords: useEnglishProfile ? enKeywords : cnKeywords,
     excludeKeywords: uniqStrings(prefs?.exclude_keywords),
-    targetLocations: preferOrFallback(prefs?.target_locations, candidate?.target_locations),
+    // 一格多值（「杭州 深圳 无锡 宁波」）在读侧也拆一遍：落库口（preferences-input / resume-extract）2026-09-17 起才拆，
+    // 此前存下的行和简历兜底值仍是整串，整串拿去子串匹配 location 永远不中。与落库口同一个函数，认不出的原样保留。
+    targetLocations: normalizeCityPhrases(preferOrFallback(prefs?.target_locations, candidate?.target_locations)),
     targetCompanies: uniqStrings(prefs?.target_companies),
     // 唯一合并字段：偏好 ∪ 简历
     targetIndustries: uniqStrings([...(prefs?.target_industries ?? []), ...(candidate?.industries ?? [])]),

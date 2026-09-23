@@ -13,6 +13,9 @@ const {
   selectFacetIndexes,
   countFacetsForFit,
   selectFitIndexes,
+  normalizeCampusCity,
+  campusRowMatchesFit,
+  targetFunctionsFromRoles,
 } = loadTs(path.join(__dirname, "..", "lib", "campus-facets.ts"));
 const { compareCompanyCardsByFit } = loadTs(path.join(__dirname, "..", "lib", "campus-zone.ts"));
 const { cityMatchTokens } = require("../lib/china-keyword-expansion");
@@ -311,6 +314,48 @@ test("城市按别名双向匹配，且「没写城市」的岗一律放行", ()
   assert.equal(countFacetsForFit(byPattern.get("%X%"), fit), 3);
 });
 
+test("城市分面归一成中文规范名：英文和 ATS 层级写法合并，展开筛选同口径", () => {
+  const jobs = [
+    { title: "2027届校园招聘-产品经理", city: "Shanghai" },
+    { title: "2027届校园招聘-产品经理", city: "上海市" },
+    { title: "2027届校园招聘-产品经理", city: "China\\Shanxi-Taiyuan" },
+    { title: "2027届校园招聘-产品经理", city: "太原" },
+    { title: "2027届校园招聘-产品经理", city: "Guilin" },
+    { title: "2027届校园招聘-产品经理", city: "桂林" },
+    { title: "2027届校园招聘-产品经理", city: "Jinan" },
+    { title: "2027届校园招聘-产品经理", city: "济南" },
+  ];
+  const { options, byPattern } = buildCampusFacets([{ pattern: "%x%", jobs }]);
+  assert.deepEqual(new Set(options.cityOptions), new Set(["上海", "太原", "桂林", "济南"]));
+  assert.equal(normalizeCampusCity("China\\Shanxi-Taiyuan"), "太原");
+  assert.equal(normalizeCampusCity("Guilin"), "桂林");
+  for (const city of options.cityOptions) {
+    const filters = { city, education: "", jobFunction: "", gradClass: null };
+    const selected = selectFacetIndexes(filters, options);
+    assert.equal(countMatchingFacets(byPattern.get("%x%"), selected), 2, `${city} 应合并两种写法`);
+    const rows = jobs.map((job) => ({ ...job, fn: campusFacetKey(job).fn }));
+    assert.equal(rows.filter((row) => campusRowMatches(row, filters)).length, 2, `${city} 展开筛选同口径`);
+  }
+});
+
+test("展开的「对口岗位」逐行判定与卡面分面计数同口径", () => {
+  const jobs = [
+    { title: "2027届校园招聘-产品经理", city: "Shanghai" },
+    { title: "2027届校园招聘-产品经理", city: "北京" },
+    { title: "2027届校园招聘-后端开发工程师", city: "上海" },
+    { title: "2027届校园招聘-产品经理", city: "" },
+  ];
+  const targetFunctions = targetFunctionsFromRoles(["产品经理"]);
+  const targetCities = ["上海"];
+  const { options, byPattern } = buildCampusFacets([{ pattern: "%x%", jobs }]);
+  const expected = countFacetsForFit(byPattern.get("%x%"), selectFitIndexes(targetFunctions, targetCities, options));
+  const actual = jobs
+    .map((job) => ({ ...job, fn: campusFacetKey(job).fn }))
+    .filter((row) => campusRowMatchesFit(row, targetFunctions, targetCities)).length;
+  assert.equal(actual, expected, "卡面写的对口数必须等于服务端展开的岗位数");
+  assert.equal(actual, 2, "Shanghai 与未标注城市均应保留；北京和研发岗应排除");
+});
+
 test("判不出方向 = 不做对口判定（全放行），不是 0", () => {
   const jobs = makeJobs(50);
   const { options, byPattern } = buildCampusFacets([{ pattern: "%X%", jobs }]);
@@ -344,4 +389,32 @@ test("卡片排序：有对口岗的在前、0 沉底；判不出方向时退回
     .sort(compareCompanyCardsByFit)
     .map((c) => c.company);
   assert.deepEqual(fallback, ["多岗", "少岗", "待接入"]);
+});
+
+test("线上 /campus 城市下拉里出现过的英文原文全部归一成中文（2026-09-23 逐条核对的 7 个）", () => {
+  const cases = {
+    "China\\Shanxi-Taiyuan": "太原", Guilin: "桂林", Jinan: "济南", Nantong: "南通",
+    Shenyang: "沈阳", Taiyuan: "太原", Zhengzhou: "郑州", Shanghai: "上海", "上海市": "上海",
+  };
+  for (const [raw, want] of Object.entries(cases)) assert.equal(normalizeCampusCity(raw), want, raw);
+  // 不认识的海外地名保留原文，不猜成国内城市
+  assert.equal(normalizeCampusCity("东京"), "东京");
+});
+
+// 2026-09-23 线上 /campus（校招 + 实习）两份城市选项表的全集 213 项，逐条过一遍归一：
+// 两个方向都要看——该并的并了（英文 / 「省·市」/「XX市」），不该并的没被并（海外中文地名、多地点串）。
+test("线上城市选项全集：无英文残留、同城多写法合并、海外与多地点原样", () => {
+  const options = require("./fixtures/campus-city-options-2026-09-23.json");
+  const normalized = options.map((o) => normalizeCampusCity(o));
+  assert.deepEqual(normalized.filter((c) => /[A-Za-z]/.test(c)), []);
+  assert.equal(new Set(normalized).size, 184);
+  for (const [raw, want] of [
+    ["云南省-昆明市", "昆明"], ["云南省·昆明市", "昆明"], ["河北省-保定市", "保定"], ["保定市", "保定"],
+    ["河北省-廊坊市-广阳区", "廊坊"], ["德宏傣族景颇族自治州", "德宏"], ["澳门特别行政区", "澳门"],
+    ["重庆市-重庆市", "重庆"], ["Chongqing", "重庆"], ["福建省-厦门市", "厦门"], ["河北雄安", "雄安"],
+  ]) assert.equal(normalizeCampusCity(raw), want, raw);
+  for (const keep of ["吉隆坡", "河内", "新加坡", "东京", "罗安达市", "开罗", "德国", "全国", "广东省",
+    "桐庐县/重庆市", "哈尔滨市、巴彦淖尔市、包头市、赤峰市、鄂尔多斯市、呼和浩特市、通辽市、乌海市、乌兰察布市"]) {
+    assert.equal(normalizeCampusCity(keep), keep, keep);
+  }
 });

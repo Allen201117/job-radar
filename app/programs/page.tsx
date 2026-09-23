@@ -18,6 +18,8 @@ import { formatDateLabel, todayInDisplayZone } from "@/lib/relative-time";
 import { getRequestUser } from "@/lib/auth";
 import { getApplyPrograms } from "@/lib/apply-programs-store";
 import { getAnnouncementPostings } from "@/lib/announcement-postings-store";
+import { toAnnouncementCard } from "@/lib/announcement-postings";
+import { initialAnnouncementView } from "@/lib/announcement-filters";
 import {
   PROGRAM_TYPE_HINT,
   PROGRAM_TYPE_LABEL,
@@ -128,16 +130,18 @@ export default async function ProgramsPage() {
     <div className="min-h-screen bg-editorial">
       <Navbar />
       <ProductPage maxWidth="max-w-5xl">
-        <ProductHero
-          title="公告制招聘"
+          <ProductHero
+            title="公告制招聘"
           icon={Megaphone}
           align="center"
           action={
             total > 0 ? (
-              <MetricTile label="已核实投递入口" value={total} icon={SealCheck} tone="lime" />
+              <MetricTile label="已核实入口（含项目、人才库）" value={total} icon={SealCheck} tone="lime" />
             ) : undefined
           }
-        />
+        >
+          <p className="t-body-sm ink-2 text-pretty">事业单位、国企、银行等会把多个方向写进一份招聘公告，统一写报名截止日；点进去看公告原文报名。</p>
+        </ProductHero>
 
         {total === 0 ? (
           <div className="mt-10">
@@ -165,7 +169,7 @@ export default async function ProgramsPage() {
                     而且「人工核实过」本身是更强的信任信号，值得放在前面。 */}
                 {manualAnnouncements.length > 0 ? (
                   <div className="mt-5">
-                    <h3 className="t-label ink-3 mb-2.5">人工核实的投递入口 · {manualAnnouncements.length}</h3>
+                    <h3 className="t-label ink-3 mb-2.5">人工核实的投递入口 · {manualAnnouncements.length} · 全国性项目，不随下方筛选变化</h3>
                     <ul className="grid gap-4 lg:grid-cols-2">
                       {manualAnnouncements.map((p) => <ProgramCard key={p.entryUrl} program={p} />)}
                     </ul>
@@ -174,8 +178,13 @@ export default async function ProgramsPage() {
 
                 {postings.length > 0 ? (
                   <div className="mt-7">
-                    <h3 className="t-label ink-3 mb-2.5">各省人社厅官网每日抓取 · 已复验报名未截止</h3>
-                    <AnnouncementsClient postings={postings} today={today} />
+                    <h3 className="t-label ink-3 mb-2.5">每天从各省官方人事考试/人社网站收录 · 只保留还在报名期内的</h3>
+                    {/* 只下发首屏那一页 + 服务端算好的分面；全量由客户端挂载后从 /api/programs/postings 取
+                        （原先整块塞进 props，占 HTML 的 252KB / 572KB，而首屏只画 40 张卡）。 */}
+                    <AnnouncementsClient
+                      initial={initialAnnouncementView(postings.map(toAnnouncementCard), today)}
+                      today={today}
+                    />
                   </div>
                 ) : null}
               </section>

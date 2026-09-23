@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, Fragment } from "react";
+import { useState, useEffect, useRef, useCallback, Fragment, type SetStateAction } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import ActionToast, { jobActionToastText, useActionToast } from "@/components/ActionToast";
@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { MANUAL_CRAWL_UI_ENABLED } from "@/lib/product-flags";
 import type { ScoredJob } from "@/lib/types";
 import { useJobFilters } from "@/hooks/useJobFilters";
+import { filtersToSearchParams, type Filters } from "@/lib/job-filter";
 import { buttonVariants, badgeVariants } from "@/components/ui";
 import {
   useDiscoveryPoll,
@@ -38,7 +39,7 @@ type PrimaryAction = "saved" | "ignored" | "applied";
 interface Props {
   initialJobs: ScoredJob[];
   initialTotal: number;
-  initialFilters?: { city?: string; jobType?: string; keyword?: string; company?: string };
+  initialFilters?: Partial<Filters>;
   jobScope?: string | null;
 }
 
@@ -92,6 +93,33 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
     clearOne,
     newMatching,
   } = useJobFilters({ officialJobs, onlyNew, initialFilters, initialJobs, initialTotal });
+
+  // /jobs 才把用户主动修改的筛选写回地址栏；校招专区共用 JobFilters，但不能因此污染 /campus。
+  // 首屏的个人偏好只是预填，不擅自变成链接；用户真正操作后才生成可分享 URL。
+  const pendingUrlSync = useRef(false);
+  const updateFilters = useCallback((next: SetStateAction<Filters>) => {
+    pendingUrlSync.current = true;
+    setFilters(next);
+  }, [setFilters]);
+  const clearAllWithUrl = useCallback(() => {
+    pendingUrlSync.current = true;
+    clearAll();
+  }, [clearAll]);
+  const clearOneWithUrl = useCallback((key: keyof Filters, value?: string) => {
+    pendingUrlSync.current = true;
+    clearOne(key, value);
+  }, [clearOne]);
+
+  useEffect(() => {
+    if (!pendingUrlSync.current) return;
+    pendingUrlSync.current = false;
+    const query = filtersToSearchParams(filters).toString();
+    const href = query ? `/jobs?${query}` : "/jobs";
+    // replace 不堆历史记录，也不会整页刷新；同一个地址不再发一次无意义导航。
+    if (`${window.location.pathname}${window.location.search}` !== href) {
+      router.replace(href, { scroll: false });
+    }
+  }, [filters, router]);
 
   useEffect(() => {
     if (jobScope !== "domestic") return;
@@ -174,12 +202,12 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
 
   // 一键放宽城市 + 岗位类型（保留关键词）
   function relaxLocationAndType() {
-    setFilters((f) => ({ ...f, city: "", jobType: "" }));
+    updateFilters((f) => ({ ...f, city: "", jobType: "" }));
     setOnlyNew(true);
   }
 
   function broadenFilters() {
-    setFilters((f) => ({ ...f, city: "", jobType: "", keyword: "" }));
+    updateFilters((f) => ({ ...f, city: "", jobType: "", keyword: "" }));
     setOnlyNew(false);
   }
 
@@ -206,14 +234,14 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
   const matchTotal = formatMatchTotal(total, capped, exactTotal);
   const matchCountParts = filters.keyword
     ? [
-        exactCount > 0 ? `精确 ${exactCount}` : "",
+        exactCount > 0 ? `精确匹配 ${exactCount} 个` : "",
         relatedSameFunction > 0 ? `同职能相关 ${relatedSameFunction}` : "",
-        relatedMissingInfo > 0 ? `信息不全 ${relatedMissingInfo}` : "",
+        relatedMissingInfo > 0 ? `详情待补充 ${relatedMissingInfo} 个` : "",
       ].filter(Boolean)
     : [];
   const searchMetaParts = [
     ...matchCountParts,
-    capped ? "还有更多，可继续加载" : "",
+    capped && total > 0 ? "还有更多，可继续加载" : "",
   ].filter(Boolean);
 
   return (
@@ -221,9 +249,9 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
       <BackToTop />
       <JobFilters
         filters={filters}
-        onChange={setFilters}
-        onClearAll={clearAll}
-        onClearOne={clearOne}
+        onChange={updateFilters}
+        onClearAll={clearAllWithUrl}
+        onClearOne={clearOneWithUrl}
         companies={companies}
         resultTotalText={matchTotal.text}
         jobScope={jobScope}
@@ -348,7 +376,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
                 <div className="flex items-center gap-3 pt-4 pb-1" role="separator">
                   <span className="h-px flex-1 bg-black/[0.08] dark:bg-white/[0.1]" />
                   <span className="t-caption min-w-0 text-center ink-3">
-                    相关岗位 · 同职能相关或信息不全（见每条标注）
+                    以下是同类职能、或详情还没补全的岗位
                   </span>
                   <span className="h-px flex-1 bg-black/[0.08] dark:bg-white/[0.1]" />
                 </div>

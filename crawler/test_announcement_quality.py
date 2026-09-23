@@ -152,6 +152,29 @@ class TestAssess(unittest.TestCase):
         self.assertEqual(v.action, "ok")
         self.assertEqual(v.deadline, date(2026, 12, 31))
 
+    def test_rejects_presentation_schedule_on_daily_recheck(self):
+        """存量宣讲行程也必须由 verify 复验时的同一 quality 门下架。"""
+        v = assess("零跑汽车2027届校园招聘9月宣讲会行程预告",
+                   "9月在北京、上海等高校开展宣讲活动，欢迎到场交流。", today=TODAY)
+        self.assertEqual((v.action, v.reason), ("reject", "presentation_schedule"))
+
+    def test_verify_retires_existing_iguopin_schedule_from_the_shared_title_gate(self):
+        """国聘没有公告详情页；存量宣讲/行程由共享的标题门下架（verify._check_one 用同一个 is_schedule_only）。"""
+        from announcements.classify import is_schedule_only
+        self.assertTrue(is_schedule_only("零跑汽车2027届校园招聘9月宣讲会行程预告"))
+        self.assertTrue(is_schedule_only("力勤集团2027届校园招聘9月校招行程"))
+        # 反例：标题自报是招聘公告/简章/启事的，不凭标题判死
+        self.assertFalse(is_schedule_only("某集团2027届校园招聘简章（附宣讲会行程）"))
+        self.assertFalse(is_schedule_only("某集团2027届校园招聘公告及宣讲会安排"))
+        self.assertFalse(is_schedule_only("某银行2026年公开招聘启事"))
+
+    def test_keeps_schedule_named_recruitment_announcement_with_own_apply_window(self):
+        """反例：标题含宣讲会，但本页确实收报名的招聘公告不能误杀。"""
+        v = assess("某集团2027届校园招聘公告及宣讲会安排",
+                   "报名时间：2026年9月20日至2026年10月20日。网上报名，请登录报名网站提交简历。",
+                   today=TODAY)
+        self.assertEqual((v.action, v.reason), ("ok", ""))
+
     def test_no_apply_info_is_not_a_death_sentence(self):
         """高校人才引进常年只写个邮箱、不写「报名时间」——不许因此判死（宁可漏判不可错杀）。"""
         v = assess("某大学2026年高层次人才引进公告",
@@ -180,6 +203,7 @@ class TestVerifyScope(unittest.TestCase):
             def select(self, *a, **k): return self
             def eq(self, *a, **k): return self
             def neq(self, *a, **k): return self
+            def or_(self, *a, **k): return self
             def order(self, *a, **k): return self
             def limit(self, *a, **k): return self
             def execute(self): return mock.Mock(data=rows)

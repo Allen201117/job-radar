@@ -744,6 +744,63 @@ class RejectedLocationTest(unittest.TestCase):
         self.assertTrue(is_rejected_location("泰国,越南,台北市"))
 
 
+class PinnedOverseasWithoutCountryCodeTest(unittest.TestCase):
+    """2026-09-23 补的境外钉词：没有国家码可给，但地点明摆着在境外，不能按 regions 猜成国内。"""
+
+    def test_new_tokens_pin_scope_but_leave_country_empty(self):
+        for loc in ("Athens, Georgia", "Little, Chalfont, England", "Athens, Attica, Greece",
+                    "Almaty, Almaty, Kazakhstan", "Hamilton, Bermuda", "Minsk, Minsk, Belarus"):
+            self.assertIsNone(derive_country_code(loc), loc)
+            self.assertEqual(derive_job_scope(loc, {"CN", "US"}), "overseas", loc)
+
+    def test_jordan_is_deliberately_not_pinned(self):
+        # 香港九龙有佐敦（Jordan）：收了它，「Jordan, Kowloon」会被钉成境外
+        self.assertNotIn("jordan", geo.OVERSEAS_LOCATION_TOKENS)
+        self.assertEqual(derive_job_scope("Jordan, Kowloon", {"CN"}), "domestic")
+
+    def test_linkedin_tag_is_not_liechtenstein(self):
+        self.assertIsNone(derive_country_code("LI, REMOTE"))
+
+
+class LocationProvincesTest(unittest.TestCase):
+    """省级归属（2026-09-23）。与 lib/geo.js 的 locationProvinces 共读同一份夹具
+    tests/fixtures/cn-location-provinces.json，JS 侧断言在 tests/geo.test.js。"""
+
+    def _load(self, *parts):
+        import json
+        import os
+
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", *parts)
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_matches_shared_fixture(self):
+        doc = self._load("tests", "fixtures", "cn-location-provinces.json")
+        self.assertGreater(len(doc["cases"]), 30, "夹具被清空了？")
+        for case in doc["cases"]:
+            with self.subTest(location=case["location"], note=case["note"]):
+                self.assertEqual(geo.location_provinces(case["location"]), case["expected"])
+
+    def test_mapping_consistent_with_cn_admin_names(self):
+        # 映射里的每个地级短名都必须在 _CN_ADMIN_NAMES 里，且只挂在一个省下；
+        # 反过来 _CN_ADMIN_NAMES 的每个短名都要归到某个省（民族全称前缀以已登记短名开头；台湾不归任何范围）。
+        data = self._load("lib", "cn-province-prefectures.json")
+        admin = set(geo._CN_ADMIN_NAMES)
+        owner = {}
+        for province, names in data["provinces"].items():
+            self.assertIn(province, admin)
+            for name in names:
+                self.assertIn(name, admin, f"{province}/{name}")
+                self.assertNotIn(name, owner, f"{name} 同时挂在 {owner.get(name)} 与 {province} 下")
+                owner[name] = province
+        covered = set(data["provinces"]) | set(data["municipalities"]) | set(owner)
+        for name in geo._CN_ADMIN_NAMES:
+            if name in covered or name == "台湾省":
+                continue
+            self.assertTrue(any(name.startswith(s) for s in covered), f"{name} 没归到任何省")
+        self.assertEqual(geo.cn_province_prefectures(), data["provinces"])
+
+
 class TitleCityLocationTest(unittest.TestCase):
     """location 为空时从标题认城市（2026-09-23 加）。与 lib/geo.js 的 titleCityLocation 共读夹具
     tests/fixtures/title-city-cases.json，两侧逐条断言一致；为什么这么判见 geo.title_city_location 注释。"""

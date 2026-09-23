@@ -28,7 +28,7 @@ function sqlFunctionBody(source, name) {
 test("posted_at 元数据明确标注为官网发布日期", () => {
   // 关键标签行改版后 posted 不再是 metadataFields 的一项，改为次要 meta 行里的一段文案。
   // 契约不变：posted_at 必须写明是「官网发布」——只写「发布」会被读成"我们抓到它的时间"。
-  assert.match(jobCardSource, /官网发布\s*\{postedLabel\}/);
+  assert.match(jobCardSource, /官网发布于\s*\{postedLabel\}/);
   assert.match(jobCardSource, /const\s+postedLabel\s*=\s*jobFieldDisplayValue\(/);
 });
 

@@ -331,6 +331,30 @@ test("geo 词表与 crawler/geo.py 逐条一致", () => {
   }
 });
 
+// OVERSEAS_LOCATION_TOKENS / _PHRASES 是 derive_job_scope「钉在境外」那一步的词表。lib/geo.js 的注释
+// 早就写着「会 deepEqual 对拍」，但上面那条测试并不包含它们——这里补上，按集合比（两端书写顺序不同）。
+test("境外钉词表与 crawler/geo.py 逐条一致", () => {
+  const py = fs.readFileSync(path.join(__dirname, "..", "crawler", "geo.py"), "utf8");
+  const js = fs.readFileSync(path.join(__dirname, "..", "lib", "geo.js"), "utf8");
+  const words = (block) => block.replace(/#.*$|\/\/.*$/gm, "").match(/"([^"]+)"/g).map((s) => s.slice(1, -1)).sort();
+  const pyTokens = py.match(/^OVERSEAS_LOCATION_TOKENS = \{([\s\S]*?)^\}/m);
+  const jsTokens = js.match(/^const OVERSEAS_LOCATION_TOKENS = new Set\(\[([\s\S]*?)^\]\);/m);
+  const pyPhrases = py.match(/^OVERSEAS_LOCATION_PHRASES = \(([\s\S]*?)^\)/m);
+  const jsPhrases = js.match(/^const OVERSEAS_LOCATION_PHRASES = \[([\s\S]*?)^\];/m);
+  for (const m of [pyTokens, jsTokens, pyPhrases, jsPhrases]) assert.ok(m, "找不到词表定义");
+  assert.deepEqual(words(jsTokens[1]), words(pyTokens[1]));
+  assert.deepEqual(words(jsPhrases[1]), words(pyPhrases[1]));
+});
+
+test("deriveJobScope: 词表没有国家码的境外地名钉在境外，不按 regions 猜", () => {
+  for (const loc of ["Athens, Georgia", "Little, Chalfont, England", "Athens, Attica, Greece",
+    "Almaty, Almaty, Kazakhstan", "Hamilton, Bermuda"]) {
+    assert.equal(deriveCountryCode(loc), null, loc);
+    assert.equal(deriveJobScope(loc, ["CN", "US"]), "overseas", loc);
+  }
+  assert.equal(deriveJobScope("Jordan, Kowloon", ["CN"]), "domestic"); // 香港佐敦：刻意不收 jordan
+});
+
 // isRejectedLocation：「要不要放行」的唯一硬判据，与 deriveJobScope（放行后怎么归类）是两个
 // 问题。2026-09-18 香港库实测：48 行 active + country_code='TW' 全部因两类 adapter 根因绕开
 // 或压根没走 locationInScope 复核而漏进库——见 crawler/geo.py 同名函数注释与实测台账。
@@ -360,4 +384,46 @@ test("isRejectedLocation: 非台湾地点一个都不许被误杀", () => {
 test("isRejectedLocation: 一岗多地写法跟随 deriveCountryCode 既有优先级", () => {
   assert.equal(deriveCountryCode("泰国,越南,台北市"), "TW");
   assert.equal(isRejectedLocation("泰国,越南,台北市"), true);
+});
+
+// ── 省级归属（2026-09-23）：/today 城市门把「陕西」展开成全省地级市用。背景与规则见 lib/geo.js 同名段。
+test("locationProvinces: 与 crawler/geo.py 共读同一份夹具，逐条一致", () => {
+  const doc = require("./fixtures/cn-location-provinces.json");
+  assert.ok(doc.cases.length > 30, "夹具被清空了？");
+  for (const c of doc.cases) {
+    assert.deepEqual(geo.locationProvinces(c.location), c.expected, `${c.location} (${c.note})`);
+  }
+});
+
+test("cn-province-prefectures.json: 地级短名与 CN_ADMIN_NAMES 双向对得上", () => {
+  const data = require("../lib/cn-province-prefectures.json");
+  const admin = new Set(geo.CN_ADMIN_NAMES);
+  const seen = new Map();
+  for (const [province, names] of Object.entries(data.provinces)) {
+    assert.ok(admin.has(province), `省名 ${province} 不在 CN_ADMIN_NAMES`);
+    for (const name of names) {
+      assert.ok(admin.has(name), `${province}/${name} 不在 CN_ADMIN_NAMES —— 先补词表，再补映射`);
+      assert.ok(!seen.has(name), `${name} 同时挂在 ${seen.get(name)} 与 ${province} 下`);
+      seen.set(name, province);
+    }
+  }
+  const covered = new Set([...Object.keys(data.provinces), ...data.municipalities, ...seen.keys()]);
+  // CN_ADMIN_NAMES 另收了民族全称前缀（「延边朝鲜族」「广西壮族」），它们都以某个已登记短名开头；台湾不归任何范围。
+  for (const name of geo.CN_ADMIN_NAMES) {
+    if (covered.has(name) || name === "台湾省") continue;
+    assert.ok([...covered].some((short) => name.startsWith(short)), `CN_ADMIN_NAMES 的 ${name} 没归到任何省`);
+  }
+  for (const [name, province] of Object.entries(data._disambiguation)) {
+    assert.ok(data.provinces[province], `${name} 指向的 ${province} 不是省`);
+  }
+});
+
+test("chinaProvincePlaceNames: 覆盖解析器会判给该省的全部名字（召回 SQL 超集的前提）", () => {
+  const data = require("../lib/cn-province-prefectures.json");
+  for (const province of Object.keys(data.provinces)) {
+    const names = new Set(geo.chinaProvincePlaceNames(province));
+    for (const name of [province, ...data.provinces[province]]) assert.ok(names.has(name), `${province} 缺 ${name}`);
+  }
+  assert.ok(geo.chinaProvincePlaceNames("青海").includes("海南藏族"));
+  assert.deepEqual(geo.chinaProvincePlaceNames("北京"), [], "直辖市不走省展开");
 });

@@ -38,7 +38,8 @@ function errorText(error: string): string {
 
 export default function InsightSubmitForm({ company, onSubmitted }: Props) {
   const [topic, setTopic] = useState<FirstPartyTopic>("culture");
-  const [rating, setRating] = useState(4);
+  // 评分是主观信息，不能替用户预选一个看似已填写的分数。
+  const [rating, setRating] = useState<number | null>(null);
   const [content, setContent] = useState("");
   const [consent, setConsent] = useState(false);
   const [bonusMonths, setBonusMonths] = useState("");
@@ -65,6 +66,10 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (rating == null) {
+      setError("请选择 1-5 分评分。");
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -130,13 +135,14 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
         </label>
 
         <div className="space-y-1.5">
-          <span className="text-xs font-medium ink-3">评分</span>
-          <div className="grid grid-cols-5 gap-1.5">
+          <span className="text-xs font-medium ink-3">评分（1 很差 · 5 很好）</span>
+          <div className="grid grid-cols-5 gap-1.5" role="radiogroup" aria-label="评分，1 很差，5 很好">
             {[1, 2, 3, 4, 5].map((value) => (
               <button
                 key={value}
                 type="button"
                 onClick={() => setRating(value)}
+                aria-pressed={rating === value}
                 className={cn(
                   "h-9 rounded-lg border text-sm font-semibold transition",
                   rating === value
@@ -226,7 +232,7 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
       <div className="mt-4 flex justify-end">
         <button
           type="submit"
-          disabled={saving}
+          disabled={saving || rating == null}
           className={cn(buttonVariants({ variant: "ink", size: "sm" }), "inline-flex items-center gap-2 font-semibold disabled:opacity-50")}
         >
           <PaperPlaneTilt size={15} weight="bold" />
