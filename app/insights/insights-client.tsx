@@ -27,6 +27,7 @@ import {
 import { formatDateLabel } from "@/lib/relative-time";
 import type { InsightAssertion, InsightItemView } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useEscapeKey } from "@/lib/ui/hooks";
 import { buttonVariants } from "@/components/ui";
 
 type Props = {
@@ -166,6 +167,7 @@ export default function InsightsClient({
 
   const set = (patch: Partial<Filters>) => setFilters((prev) => ({ ...prev, ...patch }));
   const hasMore = subjects.length < total;
+  const searchMiss = Boolean(filters.q.trim());
 
   return (
     <div className="mt-8">
@@ -190,7 +192,7 @@ export default function InsightsClient({
           <Select
             value={filters.kind}
             onChange={(v) => set({ kind: v })}
-            placeholder="全部主体"
+            placeholder="全部公司"
             options={facets.kind.map((b) => ({
               value: b.key,
               label: `${b.key ==="company"?"公司":"业务线"}（${b.count}）`,
@@ -199,7 +201,7 @@ export default function InsightsClient({
           <Select
             value={filters.assertion}
             onChange={(v) => set({ assertion: v })}
-            placeholder="全部强度"
+            placeholder="全部可信度"
             options={ASSERTION_ORDER.filter((a) => facets.assertion.some((b) => b.key === a)).map(
               (a) => ({
                 value: a,
@@ -212,7 +214,7 @@ export default function InsightsClient({
           <Select
             value={filters.dimension}
             onChange={(v) => set({ dimension: v })}
-            placeholder="全部维度"
+            placeholder="全部话题"
             options={facets.dimension.map((b) => ({
               value: b.key,
               label: `${DIMENSION_LABEL[b.key as keyof typeof DIMENSION_LABEL] || b.key}（${b.count}）`,
@@ -227,7 +229,7 @@ export default function InsightsClient({
                 metricMax: v ? filters.metricMax : "",
               })
             }
-            placeholder="全部主题"
+            placeholder="全部指标"
             options={facets.metric.map((b) => ({
               value: b.key,
               label: `${METRIC_LABEL[b.key] || b.key}（${b.count}）`,
@@ -331,9 +333,13 @@ export default function InsightsClient({
 
       {subjects.length === 0 && !loading ? (
         <div className="rounded-2xl border border-black/[0.06] bg-white/55 px-5 py-8 text-center dark:border-white/[0.1] dark:bg-white/[0.05]">
-          <p className="t-body ink-2">没有主体同时满足这些条件。</p>
+          <p className="t-body ink-2">
+            {searchMiss ? `洞察库还没收录「${filters.q.trim()}」。` : "没有公司同时满足这些条件。"}
+          </p>
           <p className="mt-1 t-caption ink-3">
-            试着放宽一个条件——我们宁可少显示，也不用样本不足的数字凑数。
+            {searchMiss
+              ? "试试换一个公司名，或清空搜索查看已收录的公司。"
+              : "试着放宽一个条件——我们宁可少显示，也不用样本不足的数字凑数。"}
           </p>
         </div>
       ) : (
@@ -463,7 +469,11 @@ function SubjectCard({
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const [contribute, setContribute] = useState(false);
+  const [contributeWasOpened, setContributeWasOpened] = useState(false);
   const gaps = missingContributionTopics(subject);
+
+  // 关闭时保留已挂载的表单，因此按 Esc 收起不会丢掉尚未提交的内容。
+  useEscapeKey(() => setContribute(false), contribute);
 
   async function toggle() {
     const next = !open;
@@ -524,7 +534,7 @@ function SubjectCard({
               <ArrowSquareOut size={12} />
             </Link>
             {subject.last_verified_at && (
-              <span className="ink-4">核实于 {formatDateLabel(subject.last_verified_at)}</span>
+              <span className="ink-4">最近核实：{formatDateLabel(subject.last_verified_at)}</span>
             )}
           </div>
         </div>
@@ -575,11 +585,14 @@ function SubjectCard({
         {gaps.length > 0 && (
           <button
             type="button"
-            onClick={() => setContribute((v) => !v)}
+            onClick={() => {
+              setContributeWasOpened(true);
+              setContribute((v) => !v);
+            }}
             className="inline-flex items-center gap-1.5 rounded-full border border-tone-teal-border bg-tone-teal-bg px-3 py-1.5 t-label text-tone-teal-fg transition hover:bg-[#d2eee1]"
           >
             <ChatCircleText size={14} weight="bold" />
-            {contribute ? "收起" : "说一句真实体验"}
+            {contribute ? "收起" : "分享我的经历"}
           </button>
         )}
       </div>
@@ -593,8 +606,8 @@ function SubjectCard({
         </p>
       )}
 
-      {contribute && (
-        <div className="mt-3">
+      {contributeWasOpened && (
+        <div className="mt-3" hidden={!contribute} aria-hidden={!contribute}>
           <InsightSubmitForm
             company={subject.company}
             onSubmitted={() => {

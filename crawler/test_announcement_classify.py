@@ -35,6 +35,19 @@ class TestIsRecruitment(unittest.TestCase):
         # 「统计局」招聘是真公告——EXCLUDE 用「报名统计」而非裸「统计」，不能误杀
         self.assertTrue(is_recruitment_announcement("重庆市统计局2026年公开招聘工作人员公告"))
 
+    def test_presentation_schedule_is_not_an_application_announcement(self):
+        for title in (
+            "零跑汽车2027届校园招聘9月宣讲会行程预告",
+            "力勤集团2027届校园招聘9月校招行程",
+            "某集团2027届校园招聘宣讲行程",
+        ):
+            with self.subTest(title=title):
+                self.assertFalse(is_recruitment_announcement(title))
+
+    def test_schedule_title_with_recruitment_announcement_is_left_for_body_quality_gate(self):
+        # 标题不能一刀切：正文若有本页报名窗口，quality.assess 会作最终裁决。
+        self.assertTrue(is_recruitment_announcement("某集团2027届校园招聘公告及宣讲会安排"))
+
     def test_empty(self):
         self.assertFalse(is_recruitment_announcement(""))
 

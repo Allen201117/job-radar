@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from .deadline import extract_deadline, normalize
+from .classify import has_recruit_notice_words, is_presentation_schedule
 
 # ── 1. 标题层：过程 / 结果 / 附件 / 索引类，不是「可报名公告本体」 ──────────────
 # 与 classify._EXCLUDE 的分工：那条门管「一眼就不是招聘」（成绩/公示/名单），
@@ -96,6 +97,13 @@ def assess(
     m = _TITLE_PROCESS.search(title or "")
     if m:
         return Verdict("reject", "process_notice", m.group(0), deadline, deadline_text)
+
+    # 宣讲/行程不是投递公告；唯一例外是标题自报招聘公告/简章/启事/公开招聘、且正文也有本页报名证据。
+    # 这条必须留在 assess：harvest 与 verify 每天都会走它，不能只在首次列表抓取时判一次。
+    if is_presentation_schedule(title) and not (
+        has_recruit_notice_words(title) and _BODY_SELF_APPLY.search(norm)
+    ):
+        return Verdict("reject", "presentation_schedule", "宣讲/行程", deadline, deadline_text)
 
     m = _BODY_CLOSED.search(norm_unquoted)
     if m:

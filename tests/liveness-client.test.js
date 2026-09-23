@@ -1,5 +1,5 @@
 // 点击时校验门的撤岗判定 golden 用例：与 Python crawler/enrich.py 的撤岗信号同口径
-// （wt req_state=9501 / hotjob state=1017 / detail 404·410）。
+// （wt req_state=9501 / hotjob state=1017 / workday 403+S22 / detail 404·410）。
 // 安全不变量：**只在明确撤岗信号才判 dead**；拿不准一律 unknown（放行），绝不误判活岗为死。
 // mock global.fetch，不打真网络（同 tests/enrich-client.test.js 模式）。
 const assert = require("node:assert/strict");
@@ -116,6 +116,38 @@ test("workday: detail 404 → dead", async () => {
   });
   restore();
   assert.equal(v, "dead");
+});
+
+const WD = {
+  jd_url: "https://co.wd1.myworkdayjobs.com/en-US/Careers/job/Beijing/Eng_R-1",
+  source_url: "https://co.wd1.myworkdayjobs.com/wday/cxs/co/Careers/jobs",
+};
+
+test("workday: 403 + errorCode S22 → dead（与 _detail_workday 同口径）", async () => {
+  const restore = mockFetch(async () => ({
+    ok: false,
+    status: 403,
+    json: async () => ({ errorCode: "S22", message: "permission denied", httpStatus: 403 }),
+  }));
+  const v = await checkLiveness("workday", WD);
+  restore();
+  assert.equal(v, "dead");
+});
+
+test("workday: 双条件——403 但不是 S22 / S22 但不是 403 / 403 的 HTML 拦截页 → unknown", async () => {
+  const cases = [
+    { status: 403, json: async () => ({}) },
+    { status: 403, json: async () => ({ errorCode: "S21" }) },
+    { status: 429, json: async () => ({ errorCode: "S22" }) },
+    { status: 422, json: async () => ({ errorCode: "S22" }) },
+    { status: 403, json: async () => { throw new SyntaxError("Unexpected token <"); } },
+  ];
+  for (const c of cases) {
+    const restore = mockFetch(async () => ({ ok: false, ...c }));
+    const v = await checkLiveness("workday", WD);
+    restore();
+    assert.equal(v, "unknown", `status=${c.status}`);
+  }
 });
 
 test("workday: 200 + jobPostingInfo → alive", async () => {

@@ -6,7 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { loadTs } = require("./_load-ts");
 
-const { fetchAllPages, fetchAllSources, PAGE_SIZE } = loadTs(
+const { fetchAllPages, fetchAllPagesConcurrent, fetchAllSources, PAGE_SIZE } = loadTs(
   path.join(__dirname, "..", "lib", "supabase-paginate.ts"),
 );
 
@@ -108,4 +108,81 @@ test("fetchAllSources enabledOnly 每页都带 enabled 过滤，只回 enabled �
 test("fetchAllSources 出错抛出（调用方各自决定容错）", async () => {
   const client = fakeClient([], { error: { message: "sources_lookup_failed" } });
   await assert.rejects(() => fetchAllSources(client, "id"), /sources_lookup_failed/);
+});
+
+// ── fetchAllPagesConcurrent：先数、再并发取各页（洞察库索引跨洋拉全表用）──────────
+function pager(rows, { failAt = null, delays = {} } = {}) {
+  const seen = [];
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const page = async (from, to) => {
+    seen.push([from, to]);
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((r) => setTimeout(r, delays[from] ?? 1));
+    inFlight -= 1;
+    if (from === failAt) return { data: null, error: { message: `page_${from}_failed` } };
+    return { data: rows.slice(from, to + 1), error: null };
+  };
+  return { page, seen, maxInFlight: () => maxInFlight };
+}
+
+test("fetchAllPagesConcurrent 并发取各页，结果按页序拼接（不受完成先后影响）", async () => {
+  const rows = Array.from({ length: 7 }, (_, i) => ({ id: i }));
+  // 第一页故意最慢：若按完成先后拼接，顺序就乱了。
+  const p = pager(rows, { delays: { 0: 30, 2: 1, 4: 5, 6: 1 } });
+  const out = await fetchAllPagesConcurrent(async () => ({ count: 7, error: null }), p.page, {
+    step: 2,
+    concurrency: 4,
+  });
+  assert.deepEqual(out, rows);
+  assert.ok(p.maxInFlight() > 1, "页必须真的并发发出");
+  assert.ok(p.maxInFlight() <= 4, "并发度不许超过上限");
+});
+
+test("fetchAllPagesConcurrent 计数之后又写进新行：最后一页满页就接着往后翻，不漏尾巴", async () => {
+  const rows = Array.from({ length: 7 }, (_, i) => ({ id: i }));
+  const p = pager(rows);
+  // 计数时只有 4 行（两整页），取数时已涨到 7 行。
+  const out = await fetchAllPagesConcurrent(async () => ({ count: 4, error: null }), p.page, { step: 2 });
+  assert.deepEqual(out, rows);
+});
+
+test("fetchAllPagesConcurrent 行数恰好整除时与串行一样多取一页空页再停", async () => {
+  const rows = Array.from({ length: 4 }, (_, i) => ({ id: i }));
+  const p = pager(rows);
+  const out = await fetchAllPagesConcurrent(async () => ({ count: 4, error: null }), p.page, { step: 2 });
+  assert.equal(out.length, 4);
+  assert.deepEqual(p.seen.map(([from]) => from).sort((a, b) => a - b), [0, 2, 4]);
+});
+
+test("fetchAllPagesConcurrent 空表只取一页", async () => {
+  const p = pager([]);
+  const out = await fetchAllPagesConcurrent(async () => ({ count: 0, error: null }), p.page, { step: 2 });
+  assert.deepEqual(out, []);
+  assert.equal(p.seen.length, 1);
+});
+
+test("fetchAllPagesConcurrent 计数为 null 时退回串行（不拿 null 当 0）", async () => {
+  const rows = Array.from({ length: 5 }, (_, i) => ({ id: i }));
+  const p = pager(rows);
+  const out = await fetchAllPagesConcurrent(async () => ({ count: null, error: null }), p.page, { step: 2 });
+  assert.deepEqual(out, rows);
+  assert.equal(p.maxInFlight(), 1);
+});
+
+test("fetchAllPagesConcurrent 计数或任一页出错都抛出，不返回半截数据", async () => {
+  const rows = Array.from({ length: 6 }, (_, i) => ({ id: i }));
+  await assert.rejects(
+    () =>
+      fetchAllPagesConcurrent(async () => ({ count: null, error: { message: "count_failed" } }), pager(rows).page),
+    /count_failed/,
+  );
+  await assert.rejects(
+    () =>
+      fetchAllPagesConcurrent(async () => ({ count: 6, error: null }), pager(rows, { failAt: 2 }).page, {
+        step: 2,
+      }),
+    /page_2_failed/,
+  );
 });

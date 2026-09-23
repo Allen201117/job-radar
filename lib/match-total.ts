@@ -17,6 +17,9 @@ export function formatMatchTotal(
   exactTotal?: number | null,
 ): MatchTotal {
   const shown = Number.isFinite(total) && total > 0 ? Math.floor(total) : 0;
+  // 候选窗口撞上限只说明「候选很多、还没数全」。已经精筛为 0 时，0 就是确定结果，
+  // 不能把「窗口状态」误写成「至少有 0 个」的 0+。
+  if (shown === 0) return { text: "0", approximate: false };
   if (!capped) return { text: String(shown), approximate: false };
   // 服务端只在能证明数字正确时才回填 exactTotal（见 lib/jobs-store/search.ts）。
   // 真实总数不可能比已经排出来的还少，比它小说明这个数不可信 → 退回下限表述。

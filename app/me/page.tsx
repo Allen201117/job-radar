@@ -13,9 +13,10 @@ export default async function MePage() {
   const supabase = await createServerSupabase();
   const user = await getRequestUser();
 
-  let savedCount = 0;
-  let appliedCount = 0;
-  let ignoredCount = 0;
+  // 查询尚未拿到结果或失败时不用「0」冒充真实记录数，避免首屏误导用户。
+  let savedCount: number | null = null;
+  let appliedCount: number | null = null;
+  let ignoredCount: number | null = null;
   if (user) {
     const counts = await Promise.all(
       ["saved", "applied", "ignored"].map((action) =>
@@ -26,9 +27,9 @@ export default async function MePage() {
           .eq("action", action),
       ),
     );
-    savedCount = counts[0].count || 0;
-    appliedCount = counts[1].count || 0;
-    ignoredCount = counts[2].count || 0;
+    savedCount = counts[0].error ? null : counts[0].count;
+    appliedCount = counts[1].error ? null : counts[1].count;
+    ignoredCount = counts[2].error ? null : counts[2].count;
   }
 
   return (
@@ -41,12 +42,12 @@ export default async function MePage() {
         >
           <div className="grid gap-3 sm:grid-cols-3">
             <Link href="/saved" className="block transition duration-200 hover:-translate-y-0.5">
-              <MetricTile icon={BookmarkSimple} label="收藏 →" value={savedCount} tone="white" />
+              <MetricTile icon={BookmarkSimple} label="收藏 →" value={savedCount ?? "—"} tone="white" />
             </Link>
             <Link href="/applied" className="block transition duration-200 hover:-translate-y-0.5">
-              <MetricTile icon={CheckCircle} label="投递记录 →" value={appliedCount} tone="orange" />
+              <MetricTile icon={CheckCircle} label="投递记录 →" value={appliedCount ?? "—"} tone="orange" />
             </Link>
-            <MetricTile icon={EyeSlash} label="已忽略" value={ignoredCount} tone="muted" />
+            <MetricTile icon={EyeSlash} label="已忽略" value={ignoredCount ?? "—"} tone="muted" />
           </div>
         </ProductHero>
 

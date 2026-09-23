@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/apiAuth";
 import { getUserCampusScope } from "@/lib/campus-user-industries";
+import { targetFunctionsFromRoles } from "@/lib/campus-facets";
 import { getCampusCompanyJobs, jobsStoreEnabled } from "@/lib/jobs-store/read";
 
 export const runtime = "nodejs";
@@ -57,7 +58,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "jobs_store_disabled" }, { status: 503 });
   }
 
-  const { companies } = await getUserCampusScope(auth.supabase, auth.user.id);
+  const { companies, targetRoles, targetLocations } = await getUserCampusScope(auth.supabase, auth.user.id);
   if (!companies.some((c) => c.pattern === pattern)) {
     // 不在该用户行业的必投清单里 → 这不是他这块看板上的公司。
     return NextResponse.json({ ok: false, error: "company_out_of_scope" }, { status: 403 });
@@ -66,8 +67,17 @@ export async function POST(request: NextRequest) {
   try {
     // total 现在是**精确**的：职能/招聘类型都物化成列后，全部候选靠轻字段就能筛出来数清（Phase A/B），
     // 不必再把全公司正文取回来数一遍。hasMore 据此判，供抽屉「加载更多」翻页。
+    // 对口范围只由登录用户自己的画像推导，不能相信客户端传来的职能/城市。
+    // 无法判出方向时客户端不会请求 fitOnly；即使伪造请求，也宁可返回空而不是把全量伪装成对口。
+    const targetFunctions = targetFunctionsFromRoles(targetRoles);
+    const fit = b.fitOnly === true
+      ? targetFunctions.length > 0
+        ? { targetFunctions, targetCities: targetLocations }
+        : { targetFunctions: ["__no_matching_function__"], targetCities: [] }
+      : null;
     const { jobs, total } = await getCampusCompanyJobs(companies, pattern, mode, {
       filters,
+      fit,
       offset,
       limit: PAGE_SIZE,
     });

@@ -3,7 +3,7 @@
 //
 // ⚠️ 分面计数刻意**排除该维度自身**（选了「北京市」之后，地区那一栏仍按其余条件给出全部省份的计数），
 //   否则用户选完一个地区就再也看不到别的地区有多少 —— 换地区要先清空，是最常见的筛选器手感问题。
-import type { AnnouncementAudience, AnnouncementPosting } from "./announcement-postings";
+import type { AnnouncementAudience, AnnouncementCard } from "./announcement-postings";
 
 export type AudienceFilter = "all" | "fresh_grad" | "experienced";
 export type SortKey = "newest" | "closing";
@@ -49,7 +49,7 @@ export function daysUntilDeadline(deadline: string | null, today: string): numbe
 }
 
 export function matchesFilters(
-  p: AnnouncementPosting,
+  p: AnnouncementCard,
   f: AnnouncementFilters,
   today: string,
 ): boolean {
@@ -71,7 +71,7 @@ export function matchesFilters(
 
 /** 某一维度的可选值 + 计数（算计数时忽略该维度自身的当前选择，见文件头注释）。 */
 function facetsFor(
-  postings: readonly AnnouncementPosting[],
+  postings: readonly AnnouncementCard[],
   f: AnnouncementFilters,
   today: string,
   dimension: "region" | "employerType",
@@ -98,7 +98,7 @@ export interface AnnouncementFacets {
 }
 
 export function buildFacets(
-  postings: readonly AnnouncementPosting[],
+  postings: readonly AnnouncementCard[],
   f: AnnouncementFilters,
   today: string,
 ): AnnouncementFacets {
@@ -132,11 +132,11 @@ export function activeFilterCount(f: AnnouncementFilters): number {
   );
 }
 
-export function sortPostings(
-  postings: readonly AnnouncementPosting[],
+export function sortPostings<T extends AnnouncementCard>(
+  postings: readonly T[],
   sort: SortKey,
   today: string,
-): AnnouncementPosting[] {
+): T[] {
   const out = [...postings];
   if (sort === "closing") {
     // 最快截止在前；截止日未知的一律沉底（不知道就不该插队催人）。
@@ -152,4 +152,41 @@ export function sortPostings(
   }
   out.sort((a, b) => (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""));
   return out;
+}
+
+/** 列表一页多少条：服务端首屏只渲染这么多，「加载更多」每次再加这么多。 */
+export const ANNOUNCEMENT_PAGE_SIZE = 40;
+
+/** 首屏（无筛选、按最新发布）要画的一切——服务端算好下发，浏览器不必先拿到全量才能画首屏。 */
+export interface InitialAnnouncementView {
+  /** 首屏那一页（与客户端「无筛选 + 最新发布」时 `visible.slice(0, 页大小)` 逐条相同）。 */
+  postings: AnnouncementCard[];
+  /** 无筛选时的分面计数（同一个 buildFacets、同一份全量，所以与全量到货后客户端自己算的一致）。 */
+  facets: AnnouncementFacets;
+  /** 全量条数。 */
+  total: number;
+  /** 截止日未知的条数（「N 天内截止」的说明文案用）。 */
+  unknownDeadlineCount: number;
+}
+
+/**
+ * ⚠️ 首屏数字与全量到货后的数字必须是**同一套函数**算出来的，否则会出现「首屏写 474 条、一点筛选变 471」。
+ * 所以这里不另写计数，只把客户端在无筛选状态下会做的事原样在服务端做一遍（契约测试钉着逐项相等）。
+ */
+export function initialAnnouncementView(
+  postings: readonly AnnouncementCard[],
+  today: string,
+  pageSize: number = ANNOUNCEMENT_PAGE_SIZE,
+): InitialAnnouncementView {
+  const visible = sortPostings(
+    postings.filter((p) => matchesFilters(p, EMPTY_FILTERS, today)),
+    "newest",
+    today,
+  );
+  return {
+    postings: visible.slice(0, pageSize),
+    facets: buildFacets(postings, EMPTY_FILTERS, today),
+    total: visible.length,
+    unknownDeadlineCount: postings.filter((p) => !p.deadline).length,
+  };
 }

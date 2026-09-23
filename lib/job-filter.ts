@@ -141,6 +141,77 @@ export const DEFAULT_FILTERS: Filters = {
   companyTier: "",
 };
 
+// /jobs 分享链接的筛选状态。关键词沿用已存在的 q，避免旧链接失效；其余字段名与搜索接口一致，
+// 这样用户看地址也能直接读懂。只序列化偏离默认值的项，清空全部后自然回到干净的 /jobs。
+const URL_FILTER_KEYS: Array<keyof Filters> = [
+  "company",
+  "city",
+  "jobType",
+  "capitalOrigin",
+  "region",
+  "education",
+  "jobFunction",
+  "jobRole",
+  "experience",
+  "postedWithin",
+  "companyTier",
+  "sortBy",
+];
+type UrlBooleanFilterKey = "showIgnored" | "showApplied" | "showNewOnly" | "salaryOnly" | "sponsorshipOnly";
+const URL_BOOLEAN_FILTER_KEYS: UrlBooleanFilterKey[] = [
+  "showIgnored",
+  "showApplied",
+  "showNewOnly",
+  "salaryOnly",
+  "sponsorshipOnly",
+];
+
+type SearchParamInput = URLSearchParams | Record<string, string | string[] | undefined>;
+
+function readSearchParam(params: SearchParamInput, key: string): string {
+  if (params instanceof URLSearchParams) return params.get(key)?.trim() || "";
+  const value = params[key];
+  return (Array.isArray(value) ? value[0] : value || "").trim();
+}
+
+/** URL 是否明确携带了 /jobs 筛选；有时必须覆盖个人偏好，不能把两种意图混在一起。 */
+export function hasJobFilterSearchParams(params: SearchParamInput): boolean {
+  return ["q", "keyword", ...URL_FILTER_KEYS, ...URL_BOOLEAN_FILTER_KEYS].some((key) => Boolean(readSearchParam(params, key)));
+}
+
+/** 把分享链接还原成完整筛选对象。非法 sortBy 与布尔值安全回退默认值。 */
+export function filtersFromSearchParams(params: SearchParamInput): Filters {
+  const next: Filters = { ...DEFAULT_FILTERS };
+  for (const key of URL_FILTER_KEYS) {
+    const value = readSearchParam(params, key);
+    if (!value) continue;
+    if (key === "sortBy") {
+      next.sortBy = value === "newest" ? "newest" : "match";
+    } else {
+      (next[key] as string) = value;
+    }
+  }
+  next.keyword = readSearchParam(params, "q") || readSearchParam(params, "keyword");
+  for (const key of URL_BOOLEAN_FILTER_KEYS) {
+    next[key] = readSearchParam(params, key) === "1";
+  }
+  return next;
+}
+
+/** 将当前筛选转成可分享的 /jobs 查询串；不含分页等瞬态参数。 */
+export function filtersToSearchParams(filters: Filters): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const key of URL_FILTER_KEYS) {
+    const value = filters[key];
+    if (typeof value === "string" && value && value !== DEFAULT_FILTERS[key]) params.set(key, value);
+  }
+  if (filters.keyword.trim()) params.set("q", filters.keyword.trim());
+  for (const key of URL_BOOLEAN_FILTER_KEYS) {
+    if (filters[key] === true) params.set(key, "1");
+  }
+  return params;
+}
+
 /**
  * 计算「真实匹配总数」时的筛选项归类（候选撞上限时才用到，见 lib/jobs-store/search.ts）。
  *

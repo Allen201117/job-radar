@@ -20,7 +20,9 @@
 --   传化智联       app.mokahr.com …/117946     1
 --   · 北森 / 飞书 / Workday：should_skip(source_url) 全部 None；详情页真开 3 条全 HTTP 200。
 --   · 北森的「/campus」对新版租户返回的是同一批（social/detail 链接），所以赛力斯/蓝思只接一条。
---   · 北森三个租户 beisen_httpx_ready() 全为 True → 走 httpx 快车道。
+--   · ⚠️ 更正（同日上线后）：北森三个租户的详情路由**不在** beisen_routes.json 缓存里，本机测到的
+--     beisen_httpx_ready()=True 是同一进程里刚探出来的路由。CI 定向刷新时赛力斯 303 / 君实 83 现场探路由
+--     成功入库，蓝思科技报「route=None」失败——等 harvest-beisen-routes（每日 UTC 19:00）给新租户收割路由后自愈。
 --   · ABB 本机全量没跑完（Workday 逐岗补正文 + 遵守对方 Retry-After 限流，很慢），以接口分组计数为准，
 --     上线后回读线上 crawl_runs 核实。
 --
