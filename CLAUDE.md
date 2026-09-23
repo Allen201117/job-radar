@@ -170,6 +170,8 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
 带非 ASCII 字符就静默失败，不报错。缓存键本身与 URL 无关，所以只有中文请求一直落空。
 ✅ 防：在调用处包 `lib/cache-outside-request.callOutsideRequestScope(() => cached(...))`（跳出 request 作用域，缓存键不变）；
 `tests/cache-outside-request.test.js` 用 Next 真实的 `unstable_cache` 截条目名断言，升级 Next 会先红。
+⚠️ 同一个 helper 还绕开另一个坑：条目过期后的后台重建，**接口路由（Route Handler）会等它跑完才结束响应**（Next 15.5
+app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse），线上取索引 56ms、响应 6.2s；helper 把它挪给 `after()`。
 ⚠️ 全站 14 处 `unstable_cache` 目前只改了洞察索引；其余在带中文参数的请求里（城市、公司名、搜索词）同样中招，未改。
 
 **每次交付前自查（缺一条就别说做完了）**：
