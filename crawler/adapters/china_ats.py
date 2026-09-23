@@ -19,6 +19,8 @@ import json
 import logging
 import re
 import time
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from typing import List, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
@@ -654,9 +656,13 @@ def _beisen_ssr_fill_summaries(jobs: List[dict]) -> None:
 #      招聘人数/工作地点）→ 必须按表头建列映射，**不能按下标硬取**，否则「公司」会被写进 location。
 #   ③ 岗位全名在 `<a title="…">` 属性里，`<a>` 内文本同样是全名但更易被样式标签切碎 → 优先取 title 属性。
 #   ④ 与 theme2 同源的老坑：模板占位假岗藏在 <!-- --> 注释里，解析前必须先剥注释。
-_SSR_TABLE_RE = re.compile(r"<table[^>]*class=\"[^\"]*jobsTable[^\"]*\"[^>]*>(.*?)</table>", re.S | re.I)
+_SSR_TABLE_RE = re.compile(
+    r"<table[^>]*class=\"[^\"]*(?:jobsTable|listtable)[^\"]*\"[^>]*>(.*?)</table>", re.S | re.I)
 _SSR_TR_RE = re.compile(r"<tr[^>]*>(.*?)</tr>", re.S | re.I)
 _SSR_TD_RE = re.compile(r"<td([^>]*)>(.*?)</td>", re.S | re.I)
+# 表头单元格：多数租户用 <td>，百胜中国（yumchina，class=listtable）用 <thead><th>（2026-09-23 live）。
+# 只认 <td> 时列映射为空 → 「工作地点 / 发布时间」整列丢失，2392 个岗全无地点。
+_SSR_HEAD_CELL_RE = re.compile(r"<t[dh]([^>]*)>(.*?)</t[dh]>", re.S | re.I)
 _SSR_TITLE_ATTR_RE = re.compile(r"\btitle=\"([^\"]*)\"", re.I)
 # 路径式详情锚点。与 _BEISEN_SSR_ANCHOR_JS 的第②类同一套路径名，保持两端口径一致。
 # ⚠️ 分两步匹配（先整个 <a> 标签、再在属性串里找 href）而不是一条正则连着写：
@@ -675,7 +681,41 @@ _SSR_COL_ALIASES = (
     ("location", ("工作地点", "工作城市", "地点", "城市", "工作地区", "所在地")),
     ("job_type", ("职位类型", "职位类别", "职位分类", "职能", "岗位类别", "职位职能")),
     ("education", ("学历", "职位学历", "学历要求")),
+    ("posted_at", ("发布时间", "发布日期", "更新时间", "刷新时间")),
 )
+_SSR_DATE_RE = re.compile(r"(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})")
+
+
+# 逐租户的入库口径（只对点名的租户生效，其余老版 SSR 租户行为不变）。
+# 百胜中国（yumchina，2026-09-23）：列表 2392 个岗全是门店岗，① 地点只在列表的「工作地点」列里，
+# 取不到地点的岗会被 /today 当成「城市未知」推给所有城市的用户；② 约 65% 发布于 2017~2023 年，
+# 分不清常年在招还是没撤的旧岗。口径（代创始人拍板，可否决）：没有地点的不收；只收近 365 天发布的，
+# 发布日期缺失 = 证明不了是近期的，也不收。筛是在「列表完整翻完」之后做的，fetch_complete 仍是 True、
+# 分母仍是站点自报总数——规则 G 只看 coverage_complete=False，不会把它当成漏抓。
+_SSR_TENANT_POLICY = {
+    "yumchina.zhiye.com": {"require_location": True, "max_age_days": 365},
+}
+
+
+def _ssr_policy_allows(job: dict, policy: Optional[dict], today=None) -> bool:
+    """按租户口径判这一行收不收。无口径 → 一律收（老租户行为不变）。"""
+    if not policy:
+        return True
+    if policy.get("require_location") and not (job.get("location") or "").strip():
+        return False
+    max_age = policy.get("max_age_days")
+    if max_age:
+        dm = _SSR_DATE_RE.search(str(job.get("posted_at") or ""))
+        if not dm:
+            return False
+        try:
+            posted = date(int(dm.group(1)), int(dm.group(2)), int(dm.group(3)))
+        except ValueError:
+            return False
+        today = today or datetime.now(ZoneInfo("Asia/Shanghai")).date()
+        if (today - posted).days > int(max_age):
+            return False
+    return True
 
 
 def _ssr_normalize_job_url(origin: str, href: str) -> str:
@@ -709,7 +749,7 @@ def _ssr_column_map(table_html: str):
     """按表头行建「列下标 → 规范字段」映射（列序逐租户不同，见坑②）。"""
     col_map = {}
     for row in _SSR_TR_RE.findall(table_html):
-        cells = [_ssr_cell_text(a, b) for a, b in _SSR_TD_RE.findall(row)]
+        cells = [_ssr_cell_text(a, b) for a, b in _SSR_HEAD_CELL_RE.findall(row)]
         if not cells or not any("职位名称" in c or "岗位名称" in c for c in cells):
             continue
         for idx, cell in enumerate(cells):
@@ -749,7 +789,7 @@ def _ssr_parse_list(html_text: str, origin: str):
             continue
         seen.add(jd_url)
         row = {"title": title, "jd_url": jd_url,
-               "location": None, "job_type": None, "education": None}
+               "location": None, "job_type": None, "education": None, "posted_at": None}
         cells = _SSR_TD_RE.findall(tr)
         for idx, (attrs, cell_body) in enumerate(cells):
             field = col_map.get(idx)
@@ -757,7 +797,13 @@ def _ssr_parse_list(html_text: str, origin: str):
                 continue
             value = _ssr_cell_text(attrs, cell_body)
             if value and value != title:
-                row[field] = _cms_education(value) if field == "education" else value
+                if field == "education":
+                    value = _cms_education(value)
+                elif field == "posted_at":
+                    dm = _SSR_DATE_RE.search(value)
+                    value = "%s-%02d-%02d" % (dm.group(1), int(dm.group(2)), int(dm.group(3))) if dm else None
+                if value:
+                    row[field] = value
         rows.append(row)
     flat = re.sub(r"\s+", " ", body)
     cm, pm = _SSR_COUNT_RE.search(flat), _SSR_CURPAGE_RE.search(flat)
@@ -1995,6 +2041,12 @@ class BeisenAdapter(ChinaSpaAdapter):
             complete = False
         if not jobs:
             return None
+        # 租户口径先筛、再补正文：补正文每轮有上限（_BEISEN_SSR_SUMMARY_CAP），先补后筛会把
+        # 名额全花在要被筛掉的旧岗上（百胜中国实测：列表前 60 行全是 2022 年的岗）。
+        # parse() 里还会再套一次同一口径（浏览器兜底路径也要受约束），两次结果一致。
+        policy = _SSR_TENANT_POLICY.get(parsed.netloc.lower())
+        if policy:
+            jobs = [j for j in jobs if _ssr_policy_allows(j, policy)]
         _beisen_ssr_fill_summaries(jobs)
         # 站点报了总条数就用它当分母；没报（单页租户不渲染分页条）→ 抓全时诚实记「看见的全部」。
         self.reported_total = (first_total if first_total is not None
@@ -2218,6 +2270,8 @@ class BeisenAdapter(ChinaSpaAdapter):
                 if not (jd and title) or jd in seen:
                     continue
                 seen.add(jd)
+                if not _ssr_policy_allows(j, _SSR_TENANT_POLICY.get(urlparse(jd).netloc.lower())):
+                    continue
                 # job_type/education 老版 CMS 才有（列表列 + 详情页字段）；posted_at 卡片式 CMS 才有
                 # （列表卡 <ol> 的发布日）。老调用方都不传这些 key → .get 返 None，行为逐字节不变。
                 out.append(RawJob(company=self.company_name or "", title=title,

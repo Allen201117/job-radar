@@ -251,7 +251,10 @@ def should_trip_adapter(checked, miss, min_sample=ADAPTIVE_MIN_SAMPLE, miss_rati
 # 本轮该 adapter 判死占比越线 → 停掉它本轮剩余（已判的都过了双条件，留着），下轮再说。
 # 只给「正常撤岗率远低于阈值」的源登记：北森全集对拍一次性存量 14%（见 enrich._detail_beisen），
 # 稳态更低。**别给 wt/hotjob 登记**——它们的列表本来就夹带 52%/71% 已关闭岗，高比例是常态。
-EXPIRE_RATIO_GUARD = {"beisen": 0.5}
+# workday（2026-09-23 随 403+S22 判死加）：上线时有 7 万死岗存量，按真实队列顺序重放全量 dry-run，
+# 清存量那几轮累计判死占比最高 59.6% → 阈值取 0.8（0.5 会让存量永远清不掉）；稳态「30h 内见过」的岗
+# S22 只有 3%，S22 语义一旦被挪作他用（接近全判死）200 个样本内就停。
+EXPIRE_RATIO_GUARD = {"beisen": 0.5, "workday": 0.8}
 EXPIRE_GUARD_MIN_SAMPLE = 200
 
 
