@@ -14,6 +14,12 @@ httpx 变体（auto_discover.py）只能发现 feishu/hotjob；但传统制造/�
 开浏览器确认。三道闸同 httpx 变体：AUTO_DISCOVER_APPLY 默认 dry-run / source_url 去重 / 每日上限。
 确认串行（一进程一 Playwright，避免 sync_playwright 线程冲突）。
 
+**2026-09-23 起本道也顺手探 feishu/hotjob（HTTPX_PLATFORMS），httpx 变体停掉每日定时**（创始人拍板）：
+静态清单全集 844 家缺口实测 feishu/hotjob 0 个新候选，那条道只剩「LLM 新料偶尔落在飞书/hotjob 上」
+这点产出（8 月约 0.4 家/天）——而同一批新料本道每天也在生成、也在探，并过来省一次 LLM 调用和一个
+CI 任务。feishu/hotjob 的命中在 httpx 探活时已拿到真实岗位数（dd.to_passed），不需要浏览器确认，
+直接走同一套 URL 去重 + 入库。
+
 **Track A2（校招板块缺口重探）也接在这里、不接在 httpx 变体**：moka 校招板块岗位数确认同样要
 Playwright（跟社招 tenant 发现一样），httpx 变体（auto_discover.py）的 PLATFORMS 不含 moka，探不了。
 targeting（哪些必投公司缺校招板块、slug 怎么反推）是纯函数，住在 auto_discover.py（ad.plan_campus_gap_targets），
@@ -31,6 +37,7 @@ import discover_domestic as dd
 import auto_discover as ad
 
 BROWSER_PLATFORMS = {"beisen", "moka"}
+HTTPX_PLATFORMS = set(ad.PLATFORMS)   # feishu/hotjob：探活即拿到岗位数，不走浏览器确认（见模块注释）
 TARGET_CAP = int(os.environ.get("AUTO_DISCOVER_BROWSER_TARGET_CAP", "120"))   # httpx 廉价探多少家 tenant
 CONFIRM_CAP = int(os.environ.get("AUTO_DISCOVER_BROWSER_CONFIRM_CAP", "15"))  # 浏览器确认封顶（慢~1-3min/家，CI 50min 预算内）
 CONFIRM_TIMEOUT = int(os.environ.get("AUTO_DISCOVER_BROWSER_TIMEOUT", "45"))
@@ -93,7 +100,12 @@ def main():
         print("[auto_discover_browser] 无缺失目标，结束。")
         return
 
-    hits = dd.sweep(targets, BROWSER_PLATFORMS) if targets else []
+    hits = dd.sweep(targets, BROWSER_PLATFORMS | HTTPX_PLATFORMS) if targets else []
+    # feishu/hotjob：探活时已 httpx 拿到真实岗位数 + 标题/自报公司核验（dd.to_passed），直接可入库。
+    raw_httpx = dd.to_passed(hits)
+    httpx_unique = ad.plan_inserts(raw_httpx, existing_urls, cap=10 ** 9)
+    httpx_new = httpx_unique[:ad.DAILY_INSERT_CAP]
+    print(f"[auto_discover_browser] 飞书/hotjob 探活通过 {len(raw_httpx)} → 去重后可入库 {len(httpx_new)}")
     raw_cands = dd.to_beisen_candidates(hits) + dd.to_moka_candidates(hits)
     # 先去重 vs 已有 source_url（别浪费浏览器时间确认已在库的），不截断——截断交给 CONFIRM_CAP。
     cands = ad.plan_inserts(raw_cands, existing_urls, cap=10 ** 9)
@@ -106,8 +118,9 @@ def main():
     confirmed = confirm_candidates(cands, CONFIRM_CAP, CONFIRM_TIMEOUT)
     confirmed += confirm_candidates(campus_cands, CAMPUS_GAP_CONFIRM_CAP, CONFIRM_TIMEOUT)
     confirm_attempted = min(len(cands), CONFIRM_CAP) + min(len(campus_cands), CAMPUS_GAP_CONFIRM_CAP)
+    to_add = httpx_new + confirmed
     added = 0
-    for row in confirmed:
+    for row in to_add:
         tag = "+ insert" if apply else "· dry-run"
         print(f"  {tag} [{row['adapter']}] {row['company']} ({row['_valid']}岗) {row['url']}")
         if apply:
@@ -122,15 +135,17 @@ def main():
     ops_runs.record_ops_run(
         sb, "auto_discover_browser",
         {"checked": len(targets) + len(campus_gap_targets), "produced": added, "companies_enriched": added,
-         "candidates": len(confirmed), "llm_candidates": llm_candidates,
+         "candidates": len(to_add), "llm_candidates": llm_candidates,
          "tenant_hits": len(hits) + len(campus_hits),
          "tenant_unverified": sum(1 for h in hits + campus_hits if not h.get("verified")),
-         "deduped": len(raw_cands) - len(cands),
+         "deduped": (len(raw_cands) - len(cands)) + (len(raw_httpx) - len(httpx_unique)),
+         "httpx_passed": len(httpx_new),
          "confirm_attempted": confirm_attempted,
          "confirmed_zero": confirm_attempted - len(confirmed)},
-        status=ops_runs.status_from_counts(len(confirmed), len(confirmed) - added),
+        status=ops_runs.status_from_counts(len(to_add), len(to_add) - added),
         started_at=started, finished_at=_now_iso())
-    print(f"[auto_discover_browser] 完成: 确认产岗 {len(confirmed)} / 入库 {added} 源 (apply={apply})")
+    print(f"[auto_discover_browser] 完成: 飞书/hotjob {len(httpx_new)} + 浏览器确认产岗 {len(confirmed)}"
+          f" / 入库 {added} 源 (apply={apply})")
 
 
 if __name__ == "__main__":

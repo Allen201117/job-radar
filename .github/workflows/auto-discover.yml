@@ -4,9 +4,16 @@ name: auto-discover-sources
 # 从精选目标公司清单 + 用户 target_companies 里取**库里没有的**公司 → httpx live 探活验证
 # （feishu/hotjob/wt）→ 只把 verified+真产岗+标题核验通过的源入库。三道闸：dry-run 默认 / source_url
 # 去重 / 每日上限。详见 crawler/auto_discover.py。新源由下一次 daily-crawl 自动开抓。
+#
+# ⏹️ 2026-09-23 停掉每日定时（创始人拍板「并进浏览器道」），只留手动触发：
+# 静态清单全集 844 家缺口实测探飞书/hotjob 得 0 个新候选，近 30 天探 2,400 家只入库 3 个源；
+# 剩下的「LLM 新料偶尔落在飞书/hotjob 上」由 auto-discover-browser.yml 顺手探（同一批新料、同一道
+# 探活门，见 crawler/auto_discover_browser.py 的 HTTPX_PLATFORMS）。同时撤掉了 audit_contract 里
+# pipeline.auto_discover_ran、关了看门狗 #5、OPS_WATCHDOG_MUTE_MODULES 加了 auto_discover。
+# 要恢复：把下面两行 schedule 取消注释，并把那三处一起还原。
 on:
-  schedule:
-    - cron: "0 23 * * *"   # UTC 23（北京 7:00），赶在 UTC 1 的 daily-crawl 前把新源备好
+  # schedule:
+  #   - cron: "0 23 * * *"   # UTC 23（北京 7:00），赶在 UTC 1 的 daily-crawl 前把新源备好
   workflow_dispatch:
     inputs:
       apply:
