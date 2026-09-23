@@ -133,12 +133,34 @@ class WorkdayDetailTest(unittest.TestCase):
             with self.assertRaises(enrich.JobClosedError):
                 enrich.ENRICH_REGISTRY["workday"](row, src)
 
-    def test_transient_5xx_returns_empty_not_closed(self):
-        # 5xx/限流 = 瞬时错误，必须走 miss 重试，绝不能 expired（否则误杀活岗）。
-        row = {"jd_url": "https://co.wd1.myworkdayjobs.com/en-US/Careers/job/X/R-2"}
-        src = {"source_url": "https://co.wd1.myworkdayjobs.com/wday/cxs/co/Careers/jobs"}
-        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=503)):
-            self.assertEqual(enrich.ENRICH_REGISTRY["workday"](row, src), "")
+    _ROW = {"jd_url": "https://co.wd1.myworkdayjobs.com/en-US/Careers/job/X/R-2"}
+    _SRC = {"source_url": "https://co.wd1.myworkdayjobs.com/wday/cxs/co/Careers/jobs",
+            "adapter_name": "workday"}
+
+    def test_non_2xx_raises_unknown_not_closed(self):
+        # 非 2xx（404/410 除外）= 没探到：429 是 Workday 按 IP 限流，422 是租户搬了数据中心
+        # （武田 wd3→wd502 后旧地址每个岗都回 422），5xx 是瞬时错误。
+        # 不能 expired（误杀在招岗），也不能 return ""——空串会被当成「确认在招」盖戳（F3）。
+        for status in (401, 403, 422, 429, 500, 503):
+            with self.subTest(status=status), \
+                    mock.patch.object(enrich.httpx, "get", lambda *a, _s=status, **k: _Resp({}, status=_s)):
+                with self.assertRaises(enrich.DetailUnknownError):
+                    enrich.ENRICH_REGISTRY["workday"](self._ROW, self._SRC)
+
+    def test_2xx_without_description_still_returns_empty(self):
+        # 2xx 是可判读的答复：岗位还在、只是没正文 → 仍返回 ""（巡检照常盖戳）。
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({"jobPostingInfo": {}})):
+            self.assertEqual(enrich.ENRICH_REGISTRY["workday"](self._ROW, self._SRC), "")
+
+    def test_unknown_does_not_stamp_row_as_alive(self):
+        # 端到端：已有正文的岗被限流 → enrich_row 记 err、不写库（不盖 enrich_checked_at，下轮重试）。
+        row = {"id": "job-1", "source_id": "src-1", "title": "t", "jd_url": self._ROW["jd_url"],
+               "job_type": None, "summary": "旧正文", "enrich_fail_count": 0}
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=429)), \
+                mock.patch.object(enrich_backlog.jobs_db, "execute") as ex:
+            res = enrich_backlog.enrich_row(None, row, self._SRC, dry_run=False, jobs_conn=object())
+        self.assertEqual(res, "err")
+        ex.assert_not_called()
 
 
 class OracleDetailTest(unittest.TestCase):

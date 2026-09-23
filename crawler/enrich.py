@@ -74,8 +74,9 @@ def _detail_workday(row, src):
     cxs_base = re.sub(r"/jobs/?$", "", src["source_url"])
     r = httpx.get(f"{cxs_base}{m.group(1)}", headers=UA, timeout=TIMEOUT)
     _raise_if_gone(r)  # cxs /job/{path} 404 = 岗位下架
-    if r.status_code >= 300:
-        return ""
+    # 其余非 2xx = 没探到，不是「确认在招」（F3）。此前这里 `return ""` → 巡检照样盖戳，2026-09-23 实测：
+    # Workday 按 IP 限流的 429，和武田搬数据中心（wd3→wd502）后旧地址对每个岗回的 422，都被记成了刚确认在招。
+    _raise_if_unknown(r)
     return (r.json().get("jobPostingInfo", {}) or {}).get("jobDescription") or ""
 
 
