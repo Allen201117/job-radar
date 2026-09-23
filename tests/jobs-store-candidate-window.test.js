@@ -21,6 +21,8 @@ function loadSearch() {
     client.jobsQuery = async (sql, params) => {
       calls.push({ sql, params });
       if (/^select count\(\*\)/.test(sql)) return count ? [count] : [];
+      // ④ 的前置存在性查询（选了招聘类型才发）：与计数查询同一份 where，只问「有没有未分类的行」。
+      if (/^select exists\(/.test(sql)) return count ? [{ pending: count.unclassified > 0 }] : [];
       if (/^select id, content_hash/.test(sql)) return []; // 命中页回补展示列
       return candidates;
     };
@@ -28,6 +30,7 @@ function loadSearch() {
   return { search, DEFAULT_FILTERS, calls, install, companyTierPatterns };
 }
 
+const CAMPUS = { title: "后端开发（2027届校招）", recruitment_category: "校招", recruitment_explicit: true };
 const countQueries = (calls) => calls.filter((c) => /^select count\(\*\)/.test(c.sql));
 
 function candidateRows(n, overrides = {}) {
@@ -98,8 +101,9 @@ test("候选里有被 JS 淘汰的行 = 等价性已漂 → 运行时自检兜�
 });
 
 test("结果集里还有招聘类型未分类的行 → 兜底分支不是充分条件，弃权", async () => {
-  const { search, DEFAULT_FILTERS, install } = loadSearch();
-  install({ candidates: candidateRows(FTS_CAP), count: { total: 15290, unclassified: 7 } });
+  const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+  // 候选必须是 JS 也判为校招的行，否则自检门③ 先弃权，根本走不到 ④（此前这条用例就是被 ③ 挡住的）。
+  install({ candidates: candidateRows(FTS_CAP, CAMPUS), count: { total: 15290, unclassified: 7 } });
 
   const r = await search.searchJobsStore(
     { ...DEFAULT_FILTERS, city: "深圳", jobType: "校招" },
@@ -109,6 +113,40 @@ test("结果集里还有招聘类型未分类的行 → 兜底分支不是充分
     60,
   );
   assert.equal(r.exactTotal, null);
+  // 2026-09-23：先问「有没有未分类的行」，有就不再跑全表 count——那个数算完也会被 ④ 丢掉
+  // （/campus 默认态每次白跑 0.6~2.4s）。存在性查询与计数用同一份 where、同一份参数。
+  const ex = calls.find((c) => /^select exists\(/.test(c.sql));
+  assert.ok(ex, "选了招聘类型时应先发存在性查询");
+  assert.match(ex.sql, / and recruitment_category is null\) as pending$/);
+  assert.equal(countQueries(calls).length, 0, "已知要弃权，就别再数");
+});
+
+test("选了招聘类型但没有未分类的行 → 照常计数；存在性查询与计数的 where / 参数逐字相同", async () => {
+  const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+  install({ candidates: candidateRows(FTS_CAP, CAMPUS), count: { total: 15290, unclassified: 0 } });
+
+  const r = await search.searchJobsStore(
+    { ...DEFAULT_FILTERS, city: "深圳", jobType: "校招" },
+    null,
+    [],
+    0,
+    60,
+  );
+  assert.equal(r.exactTotal, 15290);
+  const ex = calls.find((c) => /^select exists\(/.test(c.sql));
+  const [cnt] = countQueries(calls);
+  assert.ok(ex && cnt);
+  const whereOf = (sql) => sql.match(/from jobs where (.*?)( and recruitment_category is null\) as pending)?$/)[1];
+  assert.equal(whereOf(ex.sql), whereOf(cnt.sql));
+  assert.deepEqual(ex.params, cnt.params);
+});
+
+test("没选招聘类型 → 不发存在性查询（④ 只对招聘类型生效）", async () => {
+  const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+  install({ candidates: candidateRows(FTS_CAP), count: { total: 15290, unclassified: 3 } });
+  const r = await search.searchJobsStore({ ...DEFAULT_FILTERS, city: "深圳" }, null, [], 0, 60);
+  assert.equal(r.exactTotal, 15290);
+  assert.equal(calls.filter((c) => /^select exists\(/.test(c.sql)).length, 0);
 });
 
 // 2026-09-17 起排除词下推 SQL（appendExcludeWhere，与 scoreJob 同字段集 title+summary）：候选与计数用同一份 where，
@@ -250,6 +288,38 @@ test("按发布时间排：只按新鲜度截断——窗口内的分页与全�
   const c = candidateSql(calls);
   assert.match(c.sql, /order by first_seen_at desc limit/);
   assert.doesNotMatch(c.sql, /to_tsquery\('simple', \$\d+\)\) desc/);
+});
+
+// 2026-09-23：有偏好记录、但一个粗排信号都没有（没填岗位名/城市/公司）的登录用户，与匿名同一回事 →
+// 同样只取 1000 窗。此前只认 `!prefs`，这类用户「北京 + 实习」反而拉满 8000 行 5.6 MB。
+test("FTS 路径：偏好里没有任何粗排信号 + 按匹配度 → 与匿名同用 1000 窗", async () => {
+  const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+  install({ candidates: candidateRows(1000), count: null });
+  await search.searchJobsStore(
+    { ...DEFAULT_FILTERS, city: "北京", jobType: "实习" },
+    prefsWith({ job_scope: "all" }),
+    [],
+    0,
+    60,
+  );
+  assert.match(candidateSql(calls).sql, /order by first_seen_at desc limit 1000$/);
+});
+
+test("FTS 路径：没信号但按发布时间排 / 开关 off → 保持 8000 窗（这两种都不能归并成匿名）", async () => {
+  for (const [label, filters, env] of [
+    ["newest", { city: "北京", sortBy: "newest" }, null],
+    ["JOBS_MATCH_PRESCORE=off", { city: "北京" }, "off"],
+  ]) {
+    const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+    install({ candidates: candidateRows(FTS_CAP), count: null });
+    if (env) process.env.JOBS_MATCH_PRESCORE = env;
+    try {
+      await search.searchJobsStore({ ...DEFAULT_FILTERS, ...filters }, prefsWith(), [], 0, 60);
+    } finally {
+      delete process.env.JOBS_MATCH_PRESCORE;
+    }
+    assert.match(candidateSql(calls).sql, /limit 8000$/, label);
+  }
 });
 
 test("没有偏好时按新鲜度排——此时打分只剩「近 7 天 +10」，这就是正确排序", async () => {

@@ -511,6 +511,11 @@ type Prescore = {
   candidateWhere: string | null;
 };
 
+// 运维开关：出事改 Vercel 变量退回「全窗 JS 精排」，不用重新部署（对拍脚本也拿它取真值）。
+function prescoreDisabled(): boolean {
+  return (process.env.JOBS_MATCH_PRESCORE || "").toLowerCase() === "off";
+}
+
 function prescoreOrderBy(
   params: unknown[],
   filters: Filters,
@@ -518,8 +523,7 @@ function prescoreOrderBy(
   options: { candidateWhere: boolean },
 ): Prescore | null {
   if (filters.sortBy !== "match" || !prefs) return null;
-  // 运维开关：出事改 Vercel 变量退回「全窗 JS 精排」，不用重新部署（对拍脚本也拿它取真值）。
-  if ((process.env.JOBS_MATCH_PRESCORE || "").toLowerCase() === "off") return null;
+  if (prescoreDisabled()) return null;
   const includeOverseasLexicon = effectiveJobScope(prefs) !== "domestic";
   const groups = scoringSignalGroups(prefs, { overseasProfile: includeOverseasLexicon });
   const dirTerms = groups.direction
@@ -639,6 +643,17 @@ async function exactTotalWhenCapped(args: {
     where.push(`not (id = any($${countParams.length}::uuid[]))`);
   }
   try {
+    // ④ 先判，别先数（2026-09-23）：选了招聘类型时，结果集里只要有一行「还没分类」，下面的计数算完也会被 ④ 丢掉。
+    // 而 active 里几乎总有这种行（当天实测 1,453 行，全是近 3 天新抓的），于是 /campus 默认态、「只选实习」
+    // 每次都白跑一遍 33 万行全表计数（库上 0.6~2.4s，与回补并行 → 整段 tail 就是它）。
+    // 这条存在性查询走 jobs_recruitment_unclassified_idx（只含未分类行），毫秒级；判定与 ④ 完全同一条件。
+    if (filters.jobType) {
+      const pending = await jobsQuery<{ pending: boolean }>(
+        `select exists(select 1 from jobs where ${where.join(" and ")} and recruitment_category is null) as pending`,
+        countParams,
+      );
+      if (pending[0]?.pending !== false) return null; // ④（查询异常走下面的 catch，同样退回「N+」）
+    }
     // 跨实例数据缓存（2026-09-18）：这条 count(*) 只由 where 决定、与用户无关，结果就两个整数；
     // 线上冷路径它是 33 万行并行全表扫 0.55~0.94s，与回补展示列并行后 tail ≈ 它。此前走 fetchCandidates 的
     // 进程内缓存——每次请求常落到不同实例，首屏基本不命中（同一 tab 三连打三个实例）。
@@ -734,7 +749,13 @@ async function searchViaFTS(
   // 反过来，带 keyword/education/experience 这类 JS-only 筛选时 JS 会拒掉大量候选，1000 行可能不够填满一页，
   // 那种情况保持 FTS_CAP 不动。
   // 撞窗口时的计数照旧走 exactTotalWhenCapped / formatMatchTotal（给不出确定数字就显示「N+」，不会给错数字）。
-  const anonymousFullyPushed = !prefs && filtersFullyPushedToSql(filters);
+  // 「有偏好记录、但一个可粗排的信号都没有」（没填岗位名/城市/公司，prescore 为 null）的登录用户按匹配度排时，
+  // 打分同样只剩「7 天内 +10」、与 first_seen_at 同向，和匿名是同一回事（扫描路径早已这样归并，见 searchViaScan）。
+  // 此前这里只认 `!prefs` → 这类用户反而拉满 8000 行（2026-09-23 实测「北京 + 实习」5.6 MB，慢请求里 4 次都是它）。
+  // newest 不归并：JS 按 posted_at 排、SQL 按 first_seen_at 排，前 1000 行不保证是前 8000 行里 posted_at 最新的。
+  // 开关 off 时 prescore 恒为 null，那是「取真值」不是「没信号」，保持 8000 窗。
+  const noRankingSignals = !prefs || (filters.sortBy === "match" && !prescore && !prescoreDisabled());
+  const anonymousFullyPushed = noRankingSignals && filtersFullyPushedToSql(filters);
   const cap = prescore || anonymousFullyPushed ? matchPrescoreWindow() : FTS_CAP;
   const rows = annotateSourceAdapter(
     await fetchCandidates(
