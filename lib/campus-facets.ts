@@ -8,7 +8,12 @@
 //
 // 构建（服务端 buildCampusFacets）与匹配（客户端 countMatchingFacets）刻意放在同一文件：
 // 下标口径一旦两边漂了，卡面计数就会错，而这种错不会报错、只会静静地骗用户。
-import { classifyJobFunction, cityMatchTokens } from "@/lib/china-keyword-expansion";
+import {
+  classifyJobFunction,
+  cityMatchTokens,
+  normalizeChinaCity,
+  normalizeRolePhrases,
+} from "@/lib/china-keyword-expansion";
 
 /** 一条分面：`[城市下标, 学历下标, 职能下标, 届别, 岗位数]`。
  *  前三个下标指向 CampusFilterOptions 里对应的选项数组；`-1` = 该维度为空（只被「全部」匹配到）。 */
@@ -36,6 +41,26 @@ export type CampusFacetSelection = {
   gc: number | null;
 };
 
+/**
+ * 校招专区城市的唯一显示/筛选口径。
+ *
+ * 招聘系统常把同一个城市写成 "Shanghai"、"上海市" 或 "China\\Shanghai"。这里复用全站
+ * `normalizeChinaCity` 的别名表，而不是在专区再维护一份；分面、卡面筛选和展开接口都必须走它。
+ * 对全站还不认识的地点保留原文，避免把未知海外地点猜成中国城市。
+ */
+export function normalizeCampusCity(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const direct = normalizeChinaCity(raw) ?? raw;
+  if (direct !== raw) return direct;
+  // ATS 常用反斜杠、横线等把国家/省/城市串起来；逐段交给同一份全站别名表识别。
+  for (const part of raw.split(/[\\\\/|,，;；·—–-]+/).map((item) => item.trim()).filter(Boolean).reverse()) {
+    const normalized = normalizeChinaCity(part) ?? part;
+    if (normalized !== part) return normalized;
+  }
+  return raw;
+}
+
 /** 哨兵：筛选值在当前模式的选项表里不存在（切校招/实习后可能出现）→ 匹配不到任何分面、计数为 0。
  *  与逐条实现「字符串比不中」同义。 */
 export const NO_MATCH = -2;
@@ -48,7 +73,7 @@ export function campusFacetKey(job: any): {
   gc: number | null;
 } {
   return {
-    city: String(job?.city ?? "").trim(),
+    city: normalizeCampusCity(job?.city),
     education: String(job?.education ?? "").trim(),
     // 职能优先读物化列 jobs.job_function（入库时由 classifyJobFunction 带 summary 算好，2026-09-15）——
     // 看板读它就不必在渲染期把几万条 JD 正文拖回函数现算，正是 unstable_cache 快照冻死的病根。
@@ -98,7 +123,9 @@ export function buildCampusFacetsFromGroups(
   return buildFacetsFromKeys(
     lists.map(({ pattern, groups }) => ({
       pattern,
-      keys: (groups || []).map((g) => ({ city: g.city, education: g.education, fn: g.fn, gc: g.gc, n: g.count })),
+      keys: (groups || []).map((g) => ({
+        city: normalizeCampusCity(g.city), education: g.education, fn: g.fn, gc: g.gc, n: g.count,
+      })),
     })),
   );
 }
@@ -117,8 +144,9 @@ function buildFacetsFromKeys(lists: Array<{ pattern: string; keys: WeightedFacet
   const keysByPattern = new Map<string, WeightedFacetKey[]>();
 
   for (const { pattern, keys } of lists) {
-    keysByPattern.set(pattern, keys);
-    for (const k of keys) {
+    const normalizedKeys = keys.map((key) => ({ ...key, city: normalizeCampusCity(key.city) }));
+    keysByPattern.set(pattern, normalizedKeys);
+    for (const k of normalizedKeys) {
       if (k.city) cities.add(k.city);
       if (k.education) edus.add(k.education);
       fns.add(k.fn);
@@ -163,8 +191,9 @@ export function selectFacetIndexes(
   options: CampusFilterOptions,
 ): CampusFacetSelection {
   const pick = (value: string, list: string[]) => {
-    if (!value) return -1;
-    const i = list.indexOf(value);
+    const normalized = normalizeCampusCity(value);
+    if (!normalized) return -1;
+    const i = list.indexOf(normalized);
     return i >= 0 ? i : NO_MATCH;
   };
   return {
@@ -247,8 +276,9 @@ export function countUnlabeledInMatch(facets: CampusFacet[], sel: CampusFacetSel
 export function campusRowMatches(row: any, filters: CampusFilterValues): boolean {
   // ⚠️ 与 facetMatches 逐条同义：未标注的维度放行（见上方长注释）。
   // 两者一旦漂了，卡面写「N 个」而展开列出另一批 —— 不报错、只骗人，等价性由测试钉死。
-  const city = String(row?.city ?? "").trim();
-  if (filters.city && city && city !== filters.city) return false;
+  const city = normalizeCampusCity(row?.city);
+  const selectedCity = normalizeCampusCity(filters.city);
+  if (selectedCity && city && city !== selectedCity) return false;
   const education = String(row?.education ?? "").trim();
   if (filters.education && education && education !== filters.education) return false;
   if (filters.jobFunction && row?.fn !== filters.jobFunction) return false;
@@ -286,6 +316,37 @@ export type CampusFitSelection = {
   cities: number[];
 };
 
+/** 与页面和展开接口共用：用户原始目标岗位归一成「对口」职能。 */
+export function targetFunctionsFromRoles(targetRoles: string[]): string[] {
+  return Array.from(
+    new Set(
+      normalizeRolePhrases(targetRoles)
+        .map((role: string) => classifyJobFunction({ title: role }))
+        .filter((fn: string) => fn && fn !== "其他"),
+    ),
+  ) as string[];
+}
+
+function cityMatchesTargets(city: unknown, targetCities: string[]): boolean {
+  const tokens = targetCities
+    .flatMap((target) => cityMatchTokens(normalizeCampusCity(target)))
+    .filter(Boolean);
+  const normalized = normalizeCampusCity(city);
+  if (!tokens.length || !normalized) return true;
+  const hay = normalized.toLowerCase().replace(/\s+/g, " ");
+  return tokens.some((token) => hay.includes(token));
+}
+
+/** 展开接口用的逐行「对口」判定；与 countFacetsForFit 的职能/城市口径逐条同义。 */
+export function campusRowMatchesFit(
+  row: any,
+  targetFunctions: string[],
+  targetCities: string[],
+): boolean {
+  if (targetFunctions.length && !targetFunctions.includes(row?.fn)) return false;
+  return cityMatchesTargets(row?.city, targetCities);
+}
+
 /**
  * 把「用户目标职能 + 目标城市」翻成当前模式选项表里的下标。
  *
@@ -305,11 +366,11 @@ export function selectFitIndexes(
     if (fnSet.has(opt)) fns.push(i);
   });
 
-  const tokens = targetCities.flatMap((c) => cityMatchTokens(c)).filter(Boolean);
+  const tokens = targetCities.flatMap((c) => cityMatchTokens(normalizeCampusCity(c))).filter(Boolean);
   const cities: number[] = [];
   if (tokens.length) {
     options.cityOptions.forEach((opt, i) => {
-      const hay = opt.toLowerCase().replace(/\s+/g, " ");
+      const hay = normalizeCampusCity(opt).toLowerCase().replace(/\s+/g, " ");
       if (tokens.some((t) => hay.includes(t))) cities.push(i);
     });
   }

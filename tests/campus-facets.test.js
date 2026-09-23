@@ -13,6 +13,9 @@ const {
   selectFacetIndexes,
   countFacetsForFit,
   selectFitIndexes,
+  normalizeCampusCity,
+  campusRowMatchesFit,
+  targetFunctionsFromRoles,
 } = loadTs(path.join(__dirname, "..", "lib", "campus-facets.ts"));
 const { compareCompanyCardsByFit } = loadTs(path.join(__dirname, "..", "lib", "campus-zone.ts"));
 const { cityMatchTokens } = require("../lib/china-keyword-expansion");
@@ -309,6 +312,48 @@ test("城市按别名双向匹配，且「没写城市」的岗一律放行", ()
   const fit = selectFitIndexes(["产品"], ["北京"], options);
   // 北京-海淀区 + Beijing + 未标注 = 3；上海那条写了别的城市 → 淘汰。
   assert.equal(countFacetsForFit(byPattern.get("%X%"), fit), 3);
+});
+
+test("城市分面归一成中文规范名：英文和 ATS 层级写法合并，展开筛选同口径", () => {
+  const jobs = [
+    { title: "2027届校园招聘-产品经理", city: "Shanghai" },
+    { title: "2027届校园招聘-产品经理", city: "上海市" },
+    { title: "2027届校园招聘-产品经理", city: "China\\Shanxi-Taiyuan" },
+    { title: "2027届校园招聘-产品经理", city: "太原" },
+    { title: "2027届校园招聘-产品经理", city: "Guilin" },
+    { title: "2027届校园招聘-产品经理", city: "桂林" },
+    { title: "2027届校园招聘-产品经理", city: "Jinan" },
+    { title: "2027届校园招聘-产品经理", city: "济南" },
+  ];
+  const { options, byPattern } = buildCampusFacets([{ pattern: "%x%", jobs }]);
+  assert.deepEqual(new Set(options.cityOptions), new Set(["上海", "太原", "桂林", "济南"]));
+  assert.equal(normalizeCampusCity("China\\Shanxi-Taiyuan"), "太原");
+  assert.equal(normalizeCampusCity("Guilin"), "桂林");
+  for (const city of options.cityOptions) {
+    const filters = { city, education: "", jobFunction: "", gradClass: null };
+    const selected = selectFacetIndexes(filters, options);
+    assert.equal(countMatchingFacets(byPattern.get("%x%"), selected), 2, `${city} 应合并两种写法`);
+    const rows = jobs.map((job) => ({ ...job, fn: campusFacetKey(job).fn }));
+    assert.equal(rows.filter((row) => campusRowMatches(row, filters)).length, 2, `${city} 展开筛选同口径`);
+  }
+});
+
+test("展开的「对口岗位」逐行判定与卡面分面计数同口径", () => {
+  const jobs = [
+    { title: "2027届校园招聘-产品经理", city: "Shanghai" },
+    { title: "2027届校园招聘-产品经理", city: "北京" },
+    { title: "2027届校园招聘-后端开发工程师", city: "上海" },
+    { title: "2027届校园招聘-产品经理", city: "" },
+  ];
+  const targetFunctions = targetFunctionsFromRoles(["产品经理"]);
+  const targetCities = ["上海"];
+  const { options, byPattern } = buildCampusFacets([{ pattern: "%x%", jobs }]);
+  const expected = countFacetsForFit(byPattern.get("%x%"), selectFitIndexes(targetFunctions, targetCities, options));
+  const actual = jobs
+    .map((job) => ({ ...job, fn: campusFacetKey(job).fn }))
+    .filter((row) => campusRowMatchesFit(row, targetFunctions, targetCities)).length;
+  assert.equal(actual, expected, "卡面写的对口数必须等于服务端展开的岗位数");
+  assert.equal(actual, 2, "Shanghai 与未标注城市均应保留；北京和研发岗应排除");
 });
 
 test("判不出方向 = 不做对口判定（全放行），不是 0", () => {
