@@ -18,6 +18,8 @@
 安全闸：
   · 阳性对照：每个源从当前公开列表里抽 3 个岗查状态，必须都读到 1，才承认本源读到的 0 是真的；
     对照不过 → 本源一个都不下架（接口改了/被限流时 0 也可能是假的）。
+  · 公开门户 0 岗的源（海底捞 / 地素时尚：公开首页「开启新的工作（0）」）无从本源对照 → 用本轮全局对照：
+    本轮 ≥ RUN_CONTROL_MIN 个源对照通过、且没有任何源对照失败，才下架它们（跑完所有源后统一处理）。
   · 默认 dry-run；--apply 才写库。只动 status='active' 的行。
   · 下架与巡检同口径：status=expired + confirmed_closed_at + CLOSED 事件；purge 删行前会立墓碑。
 
@@ -47,7 +49,9 @@ FEISHU_ADAPTERS = {
 }
 _URL_RE = re.compile(r"^(https?://[^/]+)/([^/?#]+)/position/(\d+)/detail")
 CONTROL_SAMPLE = 3
-THREADS = int(os.environ.get("RECONCILE_THREADS", "6"))
+RUN_CONTROL_MIN = 10
+THREADS = int(os.environ.get("RECONCILE_THREADS", "8"))
+SOURCE_THREADS = int(os.environ.get("RECONCILE_SOURCE_THREADS", "4"))   # 源间并发（CI 在海外，逐源串行 90 分钟跑不完）
 
 
 def portal_status(host, jid, portal):
@@ -121,6 +125,21 @@ def control_ok(host, portal_map, status_fn, k=CONTROL_SAMPLE, seed=0):
     return all(status_fn(j, portal_map[j]) == 1 for j in ids[:k])
 
 
+def run_control_ok(ctrls, min_pass=RUN_CONTROL_MIN):
+    """本轮全局对照：通过的源够多、且一个失败的都没有。"""
+    ctrls = list(ctrls)
+    return sum(1 for c in ctrls if c is True) >= min_pass and not any(c is False for c in ctrls)
+
+
+def expire_allowed(ctrl, run_ok):
+    """本源读到的 0 能不能信：本源对照过 → 信；本源无从对照（公开门户 0 岗）→ 看全局；本源对照失败 → 不信。"""
+    if ctrl is True:
+        return True
+    if ctrl is None:
+        return bool(run_ok)
+    return False
+
+
 def apply_actions(conn, source_id, actions):
     """写库：relink 原地改链接（撞唯一约束 = 重复行 → 下架这行）；expire 下架 + CLOSED 事件。"""
     now = jobs_db._now()
@@ -149,21 +168,10 @@ def apply_actions(conn, source_id, actions):
     return {"relinked": relinked, "expired": n_expired, "dup_expired": len(dup)}
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--source-id", action="append", default=[])
-    ap.add_argument("--apply", action="store_true")
-    ap.add_argument("--out", default="")
-    args = ap.parse_args()
-
-    sb = db.get_supabase()
-    sources = [r for r in db.fetch_all_rows(lambda: sb.table("sources").select("id,company,source_url,adapter_name,enabled"))
-               if r.get("enabled") and r.get("adapter_name") in FEISHU_ADAPTERS
-               and (not args.source_id or r["id"] in args.source_id)]
+def process_source(row, i, n, apply):
+    """单源：取公开列表 → 逐岗定处置 → 对照 → （对照过且 apply 时）写库。本源对照不为 True 的下架留给全局对照。"""
     conn = jobs_db.get_conn()
-    report, totals = [], {}
-    print(f"[reconcile] 飞书系 enabled 源 {len(sources)} 个 (apply={args.apply})")
-    for i, row in enumerate(sources, 1):
+    try:
         ad = build_adapter(row)
         host = ad._resolve_host(row["source_url"])
         portal_map, complete = current_portal_map(ad, host)
@@ -174,7 +182,6 @@ def main():
         def status_fn(jid, portal, _host=host):
             return portal_status(_host, jid, portal)
 
-        # 先并发把「不在列表里」的状态查齐（plan_source 本身是纯函数，这里预取好喂给它）
         need = []
         for _jid, url in lib:
             m = _URL_RE.match(url or "")
@@ -191,27 +198,71 @@ def main():
         rec = {"source_id": row["id"], "company": row["company"], "source_url": row["source_url"], "host": host,
                "active_before": len(lib), "list": len(portal_map or {}), "list_complete": complete,
                "list_not_in_lib": len(set(portal_map or {}) - lib_jids), "control": ctrl, **counts}
-        if counts.get("expire") and ctrl is not True:
-            # 对照没过（或列表空无从对照）→ 本源读到的 0 不可信，一个都不下架。
-            rec["expire_blocked_by_control"] = counts["expire"]
+        deferred = []
+        if ctrl is not True and counts.get("expire"):
+            deferred = [a for a in actions if a[0] == "expire"]
             actions = [a for a in actions if a[0] != "expire"]
-        if args.apply:
+        if apply:
             rec.update(apply_actions(conn, row["id"], actions))
-        rec["active_after_planned"] = len(lib) - sum(1 for a in actions if a[0] == "expire")
+        print(f"[{i}/{n}] {row['company'][:16]:16s} {host[:34]:34s} 库{len(lib):5d} 列表{rec['list']:5d} "
+              f"保留{counts.get('keep', 0):5d} 改链{counts.get('relink', 0):4d} 下架{counts.get('expire', 0):5d} "
+              f"在线未列{counts.get('keep_online_unlisted', 0):3d} 未知{counts.get('keep_unknown', 0):3d} "
+              f"待补{rec['list_not_in_lib']:4d} 对照{ctrl}" + (" (下架待全局对照)" if deferred else ""), flush=True)
+        return rec, deferred
+    finally:
+        conn.close()
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--source-id", action="append", default=[])
+    ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--out", default="")
+    args = ap.parse_args()
+
+    sb = db.get_supabase()
+    sources = [r for r in db.fetch_all_rows(lambda: sb.table("sources").select("id,company,source_url,adapter_name,enabled"))
+               if r.get("enabled") and r.get("adapter_name") in FEISHU_ADAPTERS
+               and (not args.source_id or r["id"] in args.source_id)]
+    n = len(sources)
+    print(f"[reconcile] 飞书系 enabled 源 {n} 个 (apply={args.apply})", flush=True)
+    with ThreadPoolExecutor(SOURCE_THREADS) as ex:
+        results = list(ex.map(lambda t: process_source(t[1], t[0], n, args.apply), enumerate(sources, 1)))
+
+    run_ok = run_control_ok(rec["control"] for rec, _ in results)
+    print(f"[reconcile] 全局对照：通过 {sum(1 for r, _ in results if r['control'] is True)} 源、"
+          f"失败 {sum(1 for r, _ in results if r['control'] is False)} 源 → {'可信' if run_ok else '不可信'}", flush=True)
+    if any(d for _, d in results):
+        conn = jobs_db.get_conn()
+        try:
+            for rec, deferred in results:
+                if not deferred:
+                    continue
+                if expire_allowed(rec["control"], run_ok):
+                    rec["expire_via_run_control"] = len(deferred)
+                    if args.apply:
+                        out = apply_actions(conn, rec["source_id"], deferred)
+                        rec["expired"] = rec.get("expired", 0) + out["expired"]
+                    print(f"  [全局对照放行] {rec['company'][:16]} 下架 {len(deferred)}", flush=True)
+                else:
+                    rec["expire_blocked_by_control"] = len(deferred)
+                    print(f"  ⚠️ [对照不过拦下] {rec['company'][:16]} {len(deferred)} 个不动", flush=True)
+        finally:
+            conn.close()
+
+    report, totals = [], {}
+    for rec, _deferred in results:
+        rec["active_after_planned"] = (rec["active_before"] - rec.get("expire", 0)
+                                       + rec.get("expire_blocked_by_control", 0))
         report.append(rec)
         for k, v in rec.items():
             if isinstance(v, int) and not isinstance(v, bool):
                 totals[k] = totals.get(k, 0) + v
-        print(f"[{i}/{len(sources)}] {row['company'][:16]:16s} {host[:34]:34s} 库{len(lib):5d} 列表{rec['list']:5d} "
-              f"保留{counts.get('keep', 0):5d} 改链{counts.get('relink', 0):4d} 下架{counts.get('expire', 0):5d} "
-              f"在线未列{counts.get('keep_online_unlisted', 0):3d} 未知{counts.get('keep_unknown', 0):3d} "
-              f"待补{rec['list_not_in_lib']:4d} 对照{ctrl}"
-              + (f" ⚠️对照不过拦下{rec['expire_blocked_by_control']}" if rec.get("expire_blocked_by_control") else ""),
-              flush=True)
-    print("[reconcile] 合计:", json.dumps(totals, ensure_ascii=False))
+    print("[reconcile] 合计:", json.dumps(totals, ensure_ascii=False), flush=True)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
-            json.dump({"apply": args.apply, "totals": totals, "sources": report}, f, ensure_ascii=False, indent=1)
+            json.dump({"apply": args.apply, "run_control_ok": run_ok, "totals": totals, "sources": report},
+                      f, ensure_ascii=False, indent=1)
 
 
 if __name__ == "__main__":

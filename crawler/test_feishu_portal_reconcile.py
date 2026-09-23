@@ -60,6 +60,21 @@ class ControlTest(unittest.TestCase):
         self.assertIsNone(R.control_ok("h", None, lambda j, p: 1))
 
 
+class RunControlTest(unittest.TestCase):
+    """公开门户 0 岗的源（海底捞 / 地素时尚）无从本源对照，靠本轮全局对照。"""
+
+    def test_run_control_needs_enough_passes_and_no_failure(self):
+        self.assertTrue(R.run_control_ok([True] * 10 + [None] * 3))
+        self.assertFalse(R.run_control_ok([True] * 9 + [None]))
+        self.assertFalse(R.run_control_ok([True] * 50 + [False]))
+
+    def test_expire_allowed(self):
+        self.assertTrue(R.expire_allowed(True, False))
+        self.assertTrue(R.expire_allowed(None, True))
+        self.assertFalse(R.expire_allowed(None, False))
+        self.assertFalse(R.expire_allowed(False, True))   # 本源对照失败，全局再好也不信
+
+
 class _Cur:
     def __init__(self, taken):
         self.taken, self.sql, self.rowcount, self._one = taken, [], 0, None
