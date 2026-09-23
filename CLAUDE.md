@@ -158,11 +158,19 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
 |---|---|---|
 | 数据结构 | 岗位/洞察走**类型化列 + 枚举 + 约束**，派生量物化成列（`job_scope`/`grad_class`/`canonical_jd_url`） | 把结论塞进一段 LLM 散文，没法索引、没法筛、没法治理 |
 | 索引 | 大表查询先看 EXPLAIN；前导列顺序对齐排序键；分区 GIN（校招/实习） | `ilike any('%x%')` 全表扫 39 万行还以为走了索引 |
-| 缓存 | 跨实例用 `unstable_cache` / CDN；进程内缓存只当同实例并发去重 | 进程内 Map 当缓存用，serverless 多实例命中率≈0 |
+| 缓存 | 跨实例用 `unstable_cache` / CDN（在请求里调用要经 `callOutsideRequestScope`，见表下）；进程内缓存只当同实例并发去重 | 进程内 Map 当缓存用，serverless 多实例命中率≈0 |
 | 队列与调度 | 重活进 GitHub Actions + `ops_runs` 台账，cron 错峰、分片、限并发护连接 | 长任务塞进请求路径（点击探活 5-8s 已废弃） |
 | 会话鉴权 | 本地 JWT 验签 + 模块级 JWKS 缓存，中间件注入用户头 | 每请求跨洋 `getUser()`（566ms→0.7ms） |
 | 安全 | 密钥只进 Secrets/env；公开仓 pre-commit 门禁扫敏感信息 | 绝对路径/IP/真名进公开仓（不可撤回） |
 | 可观测 | 每条链写 `ops_runs`（含零产出指标）+ ops-watchdog 规则 A~F | 「绿灯零产出」连续 7 天无人知 |
+
+🚫 **`unstable_cache` 在带中文查询串的请求里读写全失败（2026-09-23 立）**：
+❌ 线上 `/insights?q=腾讯` 每次都重建索引（6.2s），连一个无关参数 `?zz=腾` 也是；`?zz=1` 21ms 命中、4 个实例拿到同一份。
+✅ 根因：Next 15 在请求里调用 `unstable_cache` 时，把「路径 + **解码后**的查询串」拼进缓存条目名，Vercel 数据缓存拿它读写，
+带非 ASCII 字符就静默失败，不报错。缓存键本身与 URL 无关，所以只有中文请求一直落空。
+✅ 防：在调用处包 `lib/cache-outside-request.callOutsideRequestScope(() => cached(...))`（跳出 request 作用域，缓存键不变）；
+`tests/cache-outside-request.test.js` 用 Next 真实的 `unstable_cache` 截条目名断言，升级 Next 会先红。
+⚠️ 全站 14 处 `unstable_cache` 目前只改了洞察索引；其余在带中文参数的请求里（城市、公司名、搜索词）同样中招，未改。
 
 **每次交付前自查（缺一条就别说做完了）**：
 ① 先量后改，有改前改后真实数字；② 新数据先想「怎么建模成可索引可筛选的字段」，再想怎么展示；
