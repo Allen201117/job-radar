@@ -89,11 +89,17 @@ class AlibabaAdapter(PlaywrightAdapter):
         collected = []
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
             # 1) 种 cookie 拿 XSRF-TOKEN（部分域首页即种，部分要列表页路由）。
-            # ⚠️ 2026-09-14~19 hire.freshippo.com 连续 5 天 25 次全 failed 在此步骤报错，但
-            # 2026-09-19 本地/CI 同网段多次直连复现均正常拿到 cookie（浏览器 UA、bot UA 各测
-            # 4 次全部成功）——无法坐实是固定的服务端/host 问题，最可能是偶发丢包/瞬时限流。
-            # 加 2 次重试（短退避）兜底这类瞬时抖动，不构成已证实的根因结论。
+            # ⚠️ 2026-09-19 曾在此加 3 次退避重试，猜测是「偶发丢包/瞬时限流」——已被推翻：
+            # hire.freshippo.com（盒马）加了重试之后 09-20~09-22 仍是 100% failed（15/15），
+            # 而全量扫 crawl_runs 显示该源自 2026-08-27 创建以来 137 次抓取 137 次全部失败、
+            # 0 次成功；同一份代码同一轮 CI 里其余 13 个阿里 BU 域全部 success 稳定出岗，
+            # 本沙箱（非 CI 网段）用完全相同请求头直连 6/6 次全部成功——即不是 adapter 代码
+            # 或 URL/参数问题，**最可能是这个 host 在 CI 出口网段上打不通**——但这是推断：
+            # 原代码把 httpx.HTTPError 吞掉了，CI 上的真实异常一次都没留下来。2026-09-23 起
+            # 真实异常带进报错（见下），先拿到 crawl_runs.error_message 里的原文再决定停不停用。
+            # 保留重试不再是「猜偶发」，而是「万一其它 BU 域真撞上瞬时丢包」的通用兜底。
             csrf = None
+            last_exc: Optional[str] = None
             for attempt in range(3):
                 if attempt:
                     time.sleep(0.8 * attempt)
@@ -103,12 +109,17 @@ class AlibabaAdapter(PlaywrightAdapter):
                     if not csrf:
                         client.get(f"{base}/{self._PORTAL}/position-list?lang=zh")
                         csrf = client.cookies.get("XSRF-TOKEN")
-                except httpx.HTTPError:
+                except httpx.HTTPError as e:
+                    # 不吞错：把真实异常类型/信息带进最终报错，否则 crawl_runs.error_message
+                    # 永远只看到「拿不到 XSRF-TOKEN」这一句人造结论，看不出是超时/连接被拒/
+                    # TLS 失败还是别的——这正是 hire.freshippo.com 排障时缺的那块证据。
                     csrf = None
+                    last_exc = f"{type(e).__name__}: {e}"
                 if csrf:
                     break
             if not csrf:
-                raise RuntimeError(f"alibaba: 拿不到 XSRF-TOKEN ({host})")
+                suffix = f"，最后一次异常 {last_exc}" if last_exc else "（请求均已应答但未种下该 cookie）"
+                raise RuntimeError(f"alibaba: 拿不到 XSRF-TOKEN ({host}){suffix}")
 
             seen_ids = set()
             # 接口是否至少成功应答过一次。用来区分两种「一条都没有」：
