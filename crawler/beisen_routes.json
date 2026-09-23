@@ -349,5 +349,8 @@
   },
   "maitian.zhiye.com": {
     "ssr": true
+  },
+  "pharmablock.zhiye.com": {
+    "cms": true
   }
 }

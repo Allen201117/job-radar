@@ -461,5 +461,72 @@ class StaleCmsHintTest(unittest.TestCase):
             china_ats._BEISEN_ROUTE_CACHE.pop(host, None)
 
 
+
+# 「position-item」模板（2026-09-23 按药石科技 pharmablock.zhiye.com live 结构裁剪）：同属老版 CMS，
+# 但岗位行是 <div class="position-item"> 而不是 <li><a>，列表自带整段 JD 与发布日。
+POSITION_ITEM_HTML = """
+<span class="total-num"> 共 <span class="num">2</span>个职位</span>
+<div class="list-wrap">
+  <div class="position-item">
+    <div class="position-name clearfix">
+      <a class="name nowrap job-info " href="/zwxq?jobId=620908912" data-id="620908912">核酸化学（高级）研究员 </a>
+    </div>
+    <div class="salary nowrap">面议</div>
+    <div class="btn-group btn-detail"><a href="/zwxq?jobId=620908912"><button class="btn">投递简历</button></a></div>
+    <div class="position-info clearfix">
+      <span class="city nowrap"><i class="icon-address"></i>江苏省-南京市</span>
+      <span class="edu-620908912"></span><span class="exp-620908912"></span><span>若干<label>人</label> </span>
+      <span>2024-09-14</span>
+    </div>
+    <div class="detail"><div class="detail-content">
+      <div class="position-desc"><h4><i class="icon-claim"></i>工作内容</h4><p>专注于核苷、核苷酸、亚磷酰胺及寡核苷酸的合成、纯化与分析工作。<br />为前沿药物研发项目注入活力。</p></div>
+      <div class="position-desc"><h4>任职要求</h4><p>有机化学或核酸化学相关专业硕士及以上。</p></div>
+    </div></div>
+  </div>
+  <div class="position-item">
+    <div class="position-name clearfix">
+      <a class="name nowrap job-info " href="/zwxq?jobId=620484181" data-id="620484181">有机合成研究员/高级研究员 </a>
+    </div>
+    <div class="position-info clearfix"><span class="city nowrap"><i class="icon-address"></i>浙江省-绍兴市</span><span>2026-09-23</span></div>
+  </div>
+</div>
+<div class="pager"><a href="/social/?PageIndex=2">2</a><a href="/social/?PageIndex=8">8</a></div>
+"""
+
+
+class TestCmsPositionItemTemplate(unittest.TestCase):
+    def setUp(self):
+        self.rows, self.last_page = _cms_parse_list(POSITION_ITEM_HTML, ORIGIN)
+
+    def test_rows_title_url_location_date(self):
+        self.assertEqual([r["title"] for r in self.rows], ["核酸化学（高级）研究员", "有机合成研究员/高级研究员"])
+        self.assertEqual(self.rows[0]["jd_url"], ORIGIN + "/zwxq?jobId=620908912")
+        self.assertEqual(self.rows[0]["location"], "江苏省-南京市")
+        self.assertEqual(self.rows[1]["location"], "浙江省-绍兴市")
+        self.assertEqual(self.rows[0]["posted_at"], "2024-09-14")
+
+    def test_inline_jd_carried_as_summary(self):
+        self.assertIn("寡核苷酸", self.rows[0]["summary"])
+        self.assertIn("硕士及以上", self.rows[0]["summary"])   # 多段 position-desc 都要
+        self.assertIsNone(self.rows[1]["summary"])               # 没有正文的行不编造
+
+    def test_last_page_from_pager(self):
+        self.assertEqual(self.last_page, 8)
+
+    def test_button_anchor_not_double_counted(self):
+        # 同一岗位的「投递简历」按钮也链到 jobId，不能算成第二行
+        self.assertEqual(len({r["jd_url"] for r in self.rows}), len(self.rows))
+
+    def test_li_template_wins_when_present(self):
+        # 正统 theme2 页照旧只走 <li> 解析，position-item 分支不介入（既有租户行为不变）
+        rows, _ = _cms_parse_list(LIST_HTML, ORIGIN)
+        self.assertTrue(rows)
+        self.assertTrue(all("summary" not in r for r in rows))
+
+    def test_bare_sidebar_anchor_without_structure_ignored(self):
+        html = '<div class="hot"><a href="/zwxq?jobId=1">热招：高级研究员</a></div>'
+        rows, _ = _cms_parse_list(html, ORIGIN)
+        self.assertEqual(rows, [])
+
 if __name__ == "__main__":
     unittest.main()
