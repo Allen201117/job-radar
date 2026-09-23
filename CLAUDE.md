@@ -312,6 +312,17 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
 - /today main 区加相邻散列（`spreadByCompany` 复用 /jobs 的滑窗，任意 6 张同一家 ≤2）：公司配额只限总数不限相邻，
   线上前 8 张全是字节跳动。⚠️ `spreadByCompany` 默认读顶层 `company`，Opportunity 的公司在 `job.company` 下，
   必须传 `keyOf`，否则所有项同一个空键、散列等于没做（tests/opportunity-grouping 钉着）。
+- **目标城市填省 → 按全省地级市解析，召回城市门与 stage-2 资格门读同一份展开（2026-09-23）**：
+  ❌ 填「陕西」「广东」的用户只看得到 location 字面写着省名的岗：广东画像看不到深圳 / 广州 / 佛山（全库在招 +36,623 个），
+  陕西画像前 20 张全是 location 为空的岗。✅ 根因：`locationState` 与城市门都是「目标原词 + normalizeChinaCity」子串；
+  `expandChinaCityTargets` 只有 /jobs 在用、一省只展开 1–2 个省会。✅ 防：`lib/opportunities/location-targets.ts`（两端共用）+
+  `lib/geo.locationProvinces`（映射 `lib/cn-province-prefectures.json`，crawler/geo.py 同口径，共享夹具
+  `tests/fixtures/cn-location-provinces.json`）；「杭州 深圳 无锡 宁波」这种一格多值在 `buildRadarProfile` 读侧也拆（同 `normalizeCityPhrases`）。
+  🚫 别退回「含该省任一地级名」的裸子串：8,107 种在招写法逐条对拍，它会把「大连市-中山区」判广东、「安徽省·马鞍山市」判辽宁、
+  「天津-河北区」判河北、「乌海市·海南区」判海南（后两条旧口径就中，一并纠正）。
+  📊 8 个受影响画像交替两轮：展示岗落在目标外 0→0，召回里被误拒的省内岗 273→0；其余 60 个画像召回 SQL 逐字节相同。
+  代价：多省画像库内 warm 120~230→540~640ms，仍在「北京上海杭州」这类城市画像（540~1,090ms）范围内。
+  ⚠️ 没覆盖：县级市（昆山 / 义乌）与拼音地点；/jobs 城市筛选仍是一省 1–2 城，两页口径暂不一致。
 
 ## 数据库迁移（已自动化，勿再手动跑 Supabase）
 
