@@ -35,6 +35,10 @@ REQUIRED_TEXT_SQL = ("id", "name", "layer", "db", "owner", "sql", "normal", "sev
 REQUIRED_TEXT_WATCHDOG = ("id", "name", "layer", "owner", "rule", "normal", "severity", "why", "action")
 DEFAULT_TIMEOUT_S = 120
 ERROR_MESSAGE_MAX = 300
+# detail_sql（可选，只给 source=sql）：数值之外再取「具体是哪几处」，返回 title / key 两列、每行一处，
+# 落进 detail.findings——与 ops_watchdog 桥接行同形，晨报与 repair_queue 共用一套读法。条数上限同桥接。
+DETAIL_MAX_FINDINGS = 30
+DETAIL_TITLE_MAX = 200
 
 # 外部心跳（Healthchecks.io）：执行器自己也可能没跑起来（CI 挂了 / cron 没触发），
 # 那种情况只靠台账查不出来——台账本身就没被写。这套心跳独立于台账，是「进程还活着吗」的旁路信号。
@@ -97,6 +101,11 @@ def validate_contract(checks):
             raise ValueError(f"{cid}: severity 只能是 {SEVERITIES}")
         if source == "sql" and c["db"] not in DATABASES:
             raise ValueError(f"{cid}: db 只能是 {DATABASES}")
+        if "detail_sql" in c:
+            if source != "sql":
+                raise ValueError(f"{cid}: 只有 source=sql 的检查项能带 detail_sql")
+            if not isinstance(c["detail_sql"], str) or not c["detail_sql"].strip():
+                raise ValueError(f"{cid}: detail_sql 必须是非空字符串")
         parse_normal(c["normal"])
     return checks
 
@@ -152,18 +161,37 @@ def ping_heartbeat(outcome, url=None, opener=None, body=None):
     return "failed"
 
 
-def _query_scalar(conn, sql, timeout_s):
+def _query_read_only(conn, sql, timeout_s, fetch):
     cur = conn.cursor()
     try:
         cur.execute("begin transaction read only")
         try:
             cur.execute(f"set local statement_timeout = '{int(timeout_s)}s'")
             cur.execute(sql)
-            return cur.fetchone()
+            return fetch(cur)
         finally:
             cur.execute("rollback")
     finally:
         cur.close()
+
+
+def _query_scalar(conn, sql, timeout_s):
+    return _query_read_only(conn, sql, timeout_s, lambda cur: cur.fetchone())
+
+
+def _query_findings(conn, sql, timeout_s):
+    """detail_sql → [{"title", "key"}]。列按名字取（不按位置），少了 title/key 直接抛错——
+    明细列写错时宁可记一条取明细失败，也不许把错位的列当成人话念进邮件。"""
+    def fetch(cur):
+        cols = [d[0] for d in (cur.description or [])]
+        missing = {"title", "key"} - set(cols)
+        if missing:
+            raise ValueError(f"detail_sql 缺列: {sorted(missing)}")
+        ti, ki = cols.index("title"), cols.index("key")
+        rows = cur.fetchmany(DETAIL_MAX_FINDINGS)
+        return [{"title": str(r[ti])[:DETAIL_TITLE_MAX], "key": None if r[ki] is None else str(r[ki])}
+                for r in rows]
+    return _query_read_only(conn, sql, timeout_s, fetch)
 
 
 def run_check(check, get_conn, now=None):
@@ -180,7 +208,7 @@ def run_check(check, get_conn, now=None):
         "measured_at": measured.astimezone(timezone.utc).isoformat(),
         "error_message": None,
         "duration_ms": None,
-        "detail": None,  # SQL 类检查恒为 None：数值本身就是全部信息，没有更细的明细可写
+        "detail": None,  # 没带 detail_sql 的 SQL 类检查恒为 None：数值本身就是全部信息
     }
     started = time.monotonic()
     try:
@@ -194,8 +222,20 @@ def run_check(check, get_conn, now=None):
     except Exception as exc:  # noqa: BLE001 - 失败要变成一行 error 台账，而不是中断其余检查
         row["value"] = None
         row["error_message"] = _redact(f"{type(exc).__name__}: {exc}")
+    if check.get("detail_sql") and row["value"] is not None:
+        row["detail"] = _collect_detail(check, conn)
     row["duration_ms"] = int((time.monotonic() - started) * 1000)
     return row
+
+
+def _collect_detail(check, conn):
+    """明细是数值的附件，不是数值本身：取明细失败**不改** value / verdict（那样会把一个量到了的数
+    记成「没查到」），但也不许静默——失败原因落在 detail.error 里，晨报/排查看得见。"""
+    try:
+        findings = _query_findings(conn, check["detail_sql"], check.get("timeout_s", DEFAULT_TIMEOUT_S))
+    except Exception as exc:  # noqa: BLE001
+        return {"error": _redact(f"{type(exc).__name__}: {exc}")}
+    return {"findings": findings} if findings else None
 
 
 def sql_checks(checks):
@@ -310,6 +350,9 @@ def main(argv=None):
         print(f"[audit] checks={len(results)} ok={tally['ok']} breach={tally['breach']} error={tally['error']}")
         if tally["error"]:
             print(f"::warning::audit 有 {tally['error']} 条检查没查到（已按 error 落库，不是 0）")
+        for r in results:
+            if (r.get("detail") or {}).get("error"):
+                print(f"::warning::audit {r['check_id']} 数值已量到，但明细没取到：{r['detail']['error']}")
 
         if args.dry_run:
             print("[audit] dry-run：未写 audit_results")

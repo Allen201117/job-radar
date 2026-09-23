@@ -7,6 +7,9 @@
 #   db        jobs（自建香港库）| supabase
 #   owner     出事去哪查（文件 / workflow）
 #   sql       只读、返回单个数值。执行器把它包在 read only 事务里并无条件 rollback
+#   detail_sql 可选。数值之外再列出「具体是哪几处」：返回 title（人话，晨报直接念）/ key 两列，
+#             最多取 30 行，落进 detail.findings。只在数值量到时才跑；它失败不改数值与判定，
+#             失败原因记在 detail.error。同样只读、同样 rollback
 #   normal    声明「正常」：<= < >= > == != 数字，或 between a and b
 #   severity  info | warn | critical
 #   calibrated: false = 阈值是保守拍的、还没有历史可依，邮件会标「（待校准）」。
@@ -212,6 +215,64 @@ checks:
     calibrated: false
     why: 两个方向都有事：太少 = 死岗清理停了，用户会点到越来越多已关闭的岗位；太多 = 可能误判，把在招岗位当死岗永久删掉（这个动作不可恢复）。
     action: 太少查逐岗核验和清理任务；太多立刻看是哪家公司、哪种来源被成批判死
+
+  # 2026-09-23 实测：库里 299 个 Moka 岗同时挂在两个入口下（作业帮 social-recruitment/41328 与 /150144、
+  # 知乎 campus_apply/zhihu 与 /zhihu/3818…），老告警规则 H 一条没报——它按「租户/门户号」认身份，
+  # 认不出不带门户号的别名、也认不出同一租户两个门户号共用一个岗位池。这条不看网址长相，直接数
+  # 「同一个岗位编号在两个不同入口下都在招」。
+  # 口径刻意不限 mokahr.com：talent.catl.com / campus.geely.com / apply.careers.dji.com / jobs.58.com /
+  # recruit.pg.com.cn / hr.webank.com 都是 Moka 的自有域名皮（路径同形），合计 6,328 个在招岗；
+  # 只数 mokahr.com 会漏掉宝洁这一对（app.mokahr.com/social-recruitment/pg/91934 与
+  # recruit.pg.com.cn/social-recruitment/pg/91934 同一个岗，后者 09-05 之后再没被抓到）。
+  # 全部 52,823 个 `#/job/` 在招岗的编号都是 uuid（实测 0 个非 uuid、0 个抽不出编号），跨租户撞号不可能。
+  - id: jobs.moka_same_job_two_entries
+    name: Moka 渠道里同一个岗位在两个入口各挂一份、多出来的份数
+    layer: data
+    db: jobs
+    owner: .github/workflows/remove-jobs-by-url-prefix.yml
+    sql: >
+      with m as (
+        select (regexp_match(jd_url, '#/job/([0-9A-Za-z-]+)'))[1] as job_no,
+               split_part(jd_url, '#', 1) as entry
+        from jobs where status = 'active' and jd_url like '%#/job/%'
+      ), per_job as (
+        select count(*) as copies, count(distinct entry) as entries
+        from m where job_no is not null group by job_no
+      )
+      select coalesce(sum(copies - 1) filter (where entries > 1), 0) from per_job
+    # 每一对入口一行：title 给人念，key 是两个入口的完整地址（给排查/清理用）。
+    # known = 有意保留的例外（与 normal 的上限 1 对应）：照样列出、但排最后并标注，
+    # 免得晨报只点第一处时点到它、把真该处理的那一对挤出去。加例外要同时抬 normal。
+    detail_sql: >
+      with m as (
+        select (regexp_match(jd_url, '#/job/([0-9A-Za-z-]+)'))[1] as job_no,
+               split_part(jd_url, '#', 1) as entry, company
+        from jobs where status = 'active' and jd_url like '%#/job/%'
+      ), pairs as (
+        select a.entry as entry_a, b.entry as entry_b,
+               min(a.company) as company_a, min(b.company) as company_b, count(*) as shared
+        from m a join m b on a.job_no = b.job_no and a.entry < b.entry
+        group by a.entry, b.entry
+      ), known (entry_a, entry_b) as (
+        values ('https://app.mokahr.com/campus-recruitment/eastmoney/57971',
+                'https://app.mokahr.com/campus-recruitment/eastmoney/92400')
+      )
+      select format('%s：%s 个岗位同时挂在 %s 和 %s%s',
+                    case when p.company_a = p.company_b then p.company_a
+                         else p.company_a || ' / ' || p.company_b end,
+                    p.shared,
+                    regexp_replace(p.entry_a, '^https?://(app\.mokahr\.com/)?', ''),
+                    regexp_replace(p.entry_b, '^https?://(app\.mokahr\.com/)?', ''),
+                    case when k.entry_a is not null then '（有意保留）' else '' end) as title,
+             p.entry_a || ' | ' || p.entry_b as key
+      from pairs p left join known k on k.entry_a = p.entry_a and k.entry_b = p.entry_b
+      order by (k.entry_a is not null), p.shared desc, p.entry_a, p.entry_b limit 30
+    normal: "<= 1"               # 实测 2 = 东方财富 campus-recruitment/eastmoney/57971 与 /92400 共用 1 个（刻意保留）+ 宝洁 1 个（真重复）
+    severity: warn
+    covers: [jd_url]
+    calibrated: false
+    why: 同一家公司在 Moka 上常有好几个招聘入口（不同届别、老入口和新入口、公司自己的域名）。我们给其中两个入口各建了一条来源时，同一个岗位会在库里出现两份，用户会刷到两张一模一样的卡。9 月 23 日一次清掉了 299 份这样的重复，而原来的告警一份都没报出来——它是按网址长相判的。这条直接数「同一个岗位出现了几份」。东方财富两个校招入口共用 1 个岗位是有意保留的，所以正常上限是 1。
+    action: 把这条转给 Claude，让它按点名的两个入口处理：是同一批岗位就停掉一条来源、清掉多出来的那份；本来就是两场不同的招聘（比如不同届别）就登记成已知例外
 
   # ===== 体验层 =====
   # 全部 db: supabase（events / job_actions / auth.users / ops_runs 都在 Supabase）。
