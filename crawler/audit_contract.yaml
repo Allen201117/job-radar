@@ -790,20 +790,9 @@ checks:
     why: 公告制招聘板块的供给全靠这条任务每天抓一遍，停了公告会逐渐过期没人补新的。
     action: 看这条任务最近一次运行抓到了多少条新公告
 
-  - id: pipeline.auto_discover_ran
-    name: 新源自动发现（网页直连档）昨天有没有跑
-    subject: 新源自动发现（网页直连档）
-    layer: pipeline
-    db: supabase
-    owner: .github/workflows/auto-discover.yml
-    sql: >
-      select count(*) from ops_runs where module = 'auto_discover'
-        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
-    normal: ">= 1"                # 实测 1
-    severity: warn
-    calibrated: false
-    why: 这条任务负责每天给目标公司清单补新的抓取源，停了源池就不再扩大。
-    action: 看这条任务最近一次运行新增了多少个源
+  # pipeline.auto_discover_ran 已于 2026-09-23 撤掉：网页直连档的每日定时停了、并进浏览器档
+  # （创始人拍板，理由见 .github/workflows/auto-discover.yml 顶部注释），它不再每天跑，
+  # 留着这条检查只会天天报「没跑」。
 
   - id: pipeline.auto_discover_browser_ran
     name: 新源自动发现（需要浏览器的档）昨天有没有跑
@@ -817,22 +806,23 @@ checks:
     normal: ">= 1"                # 实测 1
     severity: warn
     calibrated: false
-    why: 同上一条，只是这批目标公司（北森/Moka 等）必须用浏览器才能探测到。
+    why: 这条任务每天给目标公司清单补新的抓取源（国内唯一一条每天跑的自动扩源），停了国内源池就不再扩大。
     action: 看这条任务最近一次运行新增了多少个源
 
   - id: pipeline.auto_discover_overseas_ran
-    name: 新源自动发现（海外档）昨天有没有跑
+    name: 新源自动发现（海外档，每周）最近有没有跑
     subject: 新源自动发现（海外档）
     layer: pipeline
     db: supabase
     owner: .github/workflows/auto-discover-overseas.yml
+    # 2026-09-23 起每周一次（原每天），窗口按周任务惯例放到 8 天。
     sql: >
       select count(*) from ops_runs where module = 'auto_discover_overseas'
-        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
-    normal: ">= 1"                # 实测 1
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 8)
+    normal: ">= 1"
     severity: warn
     calibrated: false
-    why: 海外岗位供给的新源发现全靠这条任务，停了海外源池不再扩大。
+    why: 海外岗位供给的新源发现全靠这条任务（每周整批探一遍），停了海外源池不再扩大。
     action: 看这条任务最近一次运行新增了多少个源
 
   - id: pipeline.campus_board_probe_ran

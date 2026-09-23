@@ -81,3 +81,35 @@ class BrowserLedgerMetricsTest(unittest.TestCase):
         self.assertEqual(m["confirm_attempted"], 1)
         self.assertEqual(m["confirmed_zero"], 1)
         self.assertEqual(m["produced"], 0)
+
+    def test_feishu_hotjob_hits_inserted_without_browser_confirm(self):
+        """2026-09-23 httpx 道并入本道：同一批目标顺手探飞书/hotjob；这两家平台探活时已拿到真实岗位数
+        + 核验过公司名，直接入库、不占浏览器确认名额；未过核验的照样丢。"""
+        from unittest import mock
+        curated = [{"company": "新料甲", "cn": "新料甲", "slugs": ["a"], "_priority": True, "_llm": True}]
+        hits = [{"platform": "feishu", "verified": True, "count": 7, "company": "新料甲", "industry": "x",
+                 "url": "https://a.jobs.feishu.cn/index/position"},
+                {"platform": "feishu", "verified": False, "count": 9, "company": "新料乙", "industry": "x",
+                 "url": "https://b.jobs.feishu.cn/index/position"}]
+        sweep = mock.Mock(return_value=hits)
+        inserted = []
+        confirm = mock.Mock(return_value=[])
+        with mock.patch.object(adb.db, "get_supabase", return_value=object()), \
+             mock.patch.object(adb.ad, "load_user_wanted_companies", return_value=set()), \
+             mock.patch.object(adb.ad, "existing_source_keys", return_value=(set(), set())), \
+             mock.patch.object(adb.ad, "load_targets", return_value=curated), \
+             mock.patch.object(adb.must_apply, "by_industry", return_value={}), \
+             mock.patch.object(adb.ad, "load_campus_gap_source_rows", return_value=[]), \
+             mock.patch.object(adb.dd, "sweep", sweep), \
+             mock.patch.object(adb, "confirm_candidates", confirm), \
+             mock.patch.object(adb.ad, "insert_source", lambda sb, row: inserted.append(row)), \
+             mock.patch.object(adb.ops_runs, "record_ops_run", mock.Mock(return_value=True)) as ledger, \
+             mock.patch.dict("os.environ", {"AUTO_DISCOVER_APPLY": "true"}):
+            adb.main()
+        self.assertEqual(sweep.call_args.args[1], {"beisen", "moka", "feishu", "hotjob"})
+        self.assertEqual([r["url"] for r in inserted], ["https://a.jobs.feishu.cn/index/position"])
+        self.assertEqual(inserted[0]["adapter"], "feishu")
+        for call in confirm.call_args_list:   # 飞书/hotjob 候选绝不进浏览器确认
+            self.assertFalse(any("feishu" in c["url"] for c in call.args[0]))
+        m = ledger.call_args.args[2]
+        self.assertEqual((m["httpx_passed"], m["produced"], m["tenant_unverified"]), (1, 1, 1))
