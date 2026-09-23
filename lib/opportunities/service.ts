@@ -19,7 +19,8 @@ import { scoreOpportunity } from "./scoring";
 import { groupOpportunities, resolveNoveltySince } from "./grouping";
 import { deriveOpportunitySignals } from "./signals";
 import { parseDeadline } from "./deadline";
-import { recallOpportunityCandidates } from "../jobs-store/opportunities";
+import { recallOpportunityCandidates, type RecallResult } from "../jobs-store/opportunities";
+import type { RecallSnapshot } from "../jobs-store/recall-snapshot";
 import { jobsByIds, jobsStoreEnabled } from "../jobs-store/read";
 import { estimateRowBytes, kb } from "../jobs-store/row-bytes";
 import { hydrateOpportunityJobs } from "./hydration";
@@ -183,12 +184,23 @@ async function buildCriticalAlerts(
   return out;
 }
 
+/**
+ * 召回快照（见 lib/jobs-store/recall-snapshot.ts）。只给「用户本人真实画像」那一次构建传——
+ * 放宽条件 / 范围兜底重算用的是改过的画像，指纹对不上，传了也用不上，更不能拿它们的结果回写快照。
+ */
+export interface FeedRecallSnapshotOption {
+  /** 页面在等悉尼那几条查询时就已经发出去的快照读取（永不 reject）。 */
+  snapshot: Promise<RecallSnapshot | null> | RecallSnapshot | null;
+  /** 召回做完后回调：页面据此在响应之后写 / 刷新快照（写库不进请求路径）。 */
+  onRecall?: (info: Pick<RecallResult, "snapshot" | "snapshotWrite">) => void;
+}
+
 export async function buildOpportunityFeed(
   supabase: SupabaseLike,
   profile: RadarProfile,
   actions: RadarJobAction[],
   radarState: { last_opened_at: string | null } | null,
-  options: OpportunityFeedOptions,
+  options: OpportunityFeedOptions & { recallSnapshot?: FeedRecallSnapshotOption },
 ): Promise<OpportunityFeed> {
   const now = options.now ?? new Date();
   const intensity: RadarIntensity = options.intensity ?? "active";
@@ -232,7 +244,13 @@ export async function buildOpportunityFeed(
       try {
         // 已处理过的岗（saved/ignored/applied）下推到 SQL 排除：它们在 stage-2 必被 already_actioned 挡掉，
         // 留在候选里只是白占名额。viewed 不算——那类岗仍可展示（只在打分里 -8）。
-        return await recallOpportunityCandidates(profile, now, supabase, { actionedJobIds: actionedIds });
+        const snapOpt = options.recallSnapshot;
+        const r = await recallOpportunityCandidates(profile, now, supabase, {
+          actionedJobIds: actionedIds,
+          ...(snapOpt ? { snapshot: await snapOpt.snapshot } : {}),
+        });
+        snapOpt?.onRecall?.({ snapshot: r.snapshot, snapshotWrite: r.snapshotWrite });
+        return r;
       } finally {
         recallMs = clock() - s;
       }
@@ -354,6 +372,8 @@ export async function buildOpportunityFeed(
       `recall_ms=${Math.round(mark.recall)} critical_ms=${Math.round(mark.critical)} ` +
       `sourcemeta_ms=${Math.round(mark.sourcemeta)} sourcemeta_hit=${sourcemetaHits}/${wantedSources.size}` +
       `${sourcemetaFallback ? `(fallback ${Math.round(sourcemetaFallback)}ms)` : ""} ` +
+      `recall_source=${recall.snapshot ? (recall.snapshot.used ? "snapshot" : `live:${recall.snapshot.reason}`) : "live"} ` +
+      `snapshot_age_min=${recall.snapshot?.ageMs != null ? Math.round(recall.snapshot.ageMs / 60_000) : "-"} ` +
       `compute_ms=${Math.round(mark.compute)} ` +
       `group_ms=${Math.round(mark.group)} hydrate_ms=${Math.round(mark.hydrate)} total_ms=${Math.round(mark.total)}`,
   );
@@ -381,6 +401,9 @@ export async function buildOpportunityFeed(
       // 跨库载荷（KB）：耗时会随实例/网络抖，字节数不会 —— 判「是不是又在拖行」看这两个。
       recallKb: kb(recall.timing?.bytes ?? 0),
       hydrateKb: kb(hydrated.bytes),
+      recallSource: recall.snapshot?.used ? "snapshot" : "live",
+      snapshotReason: recall.snapshot?.reason,
+      snapshotAgeMin: recall.snapshot?.ageMs != null ? Math.round(recall.snapshot.ageMs / 60_000) : null,
     },
   };
 }

@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import Navbar from "@/components/Navbar";
 import { EmptyPanel, ProductHero, ProductPage } from "@/components/ProductChrome";
 import { deriveCountryCode } from "@/lib/geo";
@@ -10,6 +11,9 @@ import { loadRadarContext, type RadarContextStats } from "@/lib/opportunities/co
 import { kb } from "@/lib/jobs-store/row-bytes";
 import { resolveIntensityForUser } from "@/lib/opportunities/intensity";
 import { buildOpportunityFeed } from "@/lib/opportunities/service";
+import { readRecallSnapshotSafe, writeRecallSnapshot } from "@/lib/jobs-store/recall-snapshot";
+import { refreshRecallSnapshot, RECALL_SNAPSHOT_REFRESH_AFTER_MS, type RecallResult } from "@/lib/jobs-store/opportunities";
+import { jobsStoreEnabled } from "@/lib/jobs-store/read";
 import { getPopularFeed, type PopularFeed } from "@/lib/popular-feed";
 import type { OpportunityFeed } from "@/lib/opportunities/types";
 import type { RadarProfile } from "@/lib/opportunities/types";
@@ -91,6 +95,12 @@ async function loadTodayBundle(
   now: Date,
 ): Promise<TodayBundle> {
   const tBundleStart = performance.now();
+  // 召回快照与悉尼那 4 条查询**并行**发出：它只要 user_id，而它顺手预热的堆块正是紧接着召回要读的
+  // （见 lib/jobs-store/recall-snapshot.readRecallSnapshot）。永不 reject；关掉开关 / 没配香港库时不发。
+  const snapshotPromise =
+    jobsStoreEnabled() && String(process.env.TODAY_RECALL_SNAPSHOT || "").toLowerCase() !== "off"
+      ? readRecallSnapshotSafe(userId)
+      : Promise.resolve(null);
   const ctxStats: RadarContextStats = { ms: 0, bytes: 0, actionRows: 0 };
   const timing: TodayBundleTiming = {
     ctxMs: 0, ctxBytes: 0, ctxActions: 0, feedMs: 0, fallbackMs: 0, widenMs: 0, popularMs: 0, bundleMs: 0,
@@ -136,15 +146,18 @@ async function loadTodayBundle(
   );
 
   const tFeed = performance.now();
+  let recallInfo: Pick<RecallResult, "snapshot" | "snapshotWrite"> | null = null;
   let feed = await buildOpportunityFeed(supabase, profile, actions, radarState, {
     surface: "today",
     intensity,
     now,
+    recallSnapshot: { snapshot: snapshotPromise, onRecall: (info) => { recallInfo = info; } },
   }).catch((e) => {
     console.error("[today] feed build failed:", (e as Error).message);
     return null;
   });
   timing.feedMs = performance.now() - tFeed;
+  scheduleRecallSnapshotUpkeep(userId, profile, actions, recallInfo);
   // 求职范围错配兜底（2026-09-17 走查 44 个真实用户，4 个推荐页 0 岗全栽在这）：顶栏一点「海外」，
   // 画像却是「深圳 + 行政 + 没有英文简历」→ 海外池里当然一个都没有，页面就空着、不说为什么。
   // 只在「海外池确实 0 岗 + 目标城市全是国内 + 没英文简历」三件同时成立时按国内重算一次，并把原因交给页面说清。
@@ -197,6 +210,51 @@ async function loadTodayBundle(
     emptyWidening,
     criteria: summarizeCriteria(profile),
   };
+}
+
+/**
+ * 快照的写与刷新都放到**响应之后**（after）：写库、以及刷新时那一次冷态可能好几秒的现跑召回，都不许进请求路径。
+ *   · 这次是现跑（没快照 / 偏好改了 / 快照过期）→ 把现跑结果原样写成快照，下次打开直接命中；
+ *   · 这次用了快照、但它已超过 1 小时 → 顺手现跑一次刷新（新岗本来就靠「首见晚于快照」实时补上，
+ *     刷新是为了让「快照之后才掉出去的岗」有人补位，偏差不随快照变老一路累积）。
+ * 失败只记日志：快照只是加速层，写不进去下次无非再现跑一次。
+ */
+function scheduleRecallSnapshotUpkeep(
+  userId: string,
+  profile: RadarProfile,
+  actions: Array<{ job_id: string; action: string }>,
+  info: Pick<RecallResult, "snapshot" | "snapshotWrite"> | null,
+): void {
+  if (!info) return;
+  // after() 本身出错（不在请求作用域里等）也只能记日志：这里在 bundle 的 promise 链上，
+  // 一抛就会把整页打成「机会队列暂时无法更新」——为一个加速层赔上页面不值。
+  const later = (task: () => Promise<unknown>) => {
+    try {
+      after(task);
+    } catch (e) {
+      console.warn("[recall-snapshot] after() 不可用，本次不维护快照：", (e as Error).message);
+    }
+  };
+  const write = info.snapshotWrite;
+  if (write) {
+    later(() =>
+      writeRecallSnapshot(userId, write).catch((e) =>
+        console.warn("[recall-snapshot] 回写失败：", (e as Error).message),
+      ),
+    );
+    return;
+  }
+  const ageMs = info.snapshot?.used ? info.snapshot.ageMs : null;
+  if (ageMs == null || ageMs <= RECALL_SNAPSHOT_REFRESH_AFTER_MS) return;
+  // 与 buildOpportunityFeed 的 SQL 下推同一口径：saved / ignored / applied 过的岗不占召回名额
+  const actioned = Array.from(
+    new Set(actions.filter((a) => a.action === "saved" || a.action === "ignored" || a.action === "applied").map((a) => a.job_id)),
+  );
+  later(() =>
+    refreshRecallSnapshot(userId, profile, new Date(), actioned, "request").catch((e) =>
+      console.warn("[recall-snapshot] 刷新失败：", (e as Error).message),
+    ),
+  );
 }
 
 function feedIsEmpty(feed: OpportunityFeed): boolean {

@@ -123,6 +123,28 @@ create table if not exists job_closures (
 create index if not exists job_closures_closed_at_idx on job_closures (closed_at desc);
 create index if not exists job_closures_reopened_idx on job_closures (reopened_at desc) where reopened_at is not null;
 
+-- ── /today 召回快照（2026-09-23）──
+-- 为什么需要它：/today 的召回 SQL 要把方向 / 城市 / 职能各层 GIN 命中的几万行全部回表才排得出前 1,800，
+-- jobs 堆 1.1GB 远大于 512MB 缓存，冷态单次 2~6s（50 个真实画像实测，EXPLAIN read 最多 5.7 万块）。
+-- 量过「完美索引」下限也只能降到 37.5%（CLAUDE.md /today 段），所以把整条召回挪出请求路径：
+-- 后台（today-recall-snapshot.yml + 用户打开页面后的 after()）按用户现跑一次召回，只存「各层选中了哪些 id」；
+-- 请求时在「这些 id ∪ 快照之后才首见的岗」里重跑同一套 where + 排序（lib/jobs-store/opportunities.ts
+-- 的 RecallRestriction），回表从几万块降到两三千块。偏好一改 recall_key 就对不上 → 退回现跑，不存在「改了偏好还看旧推荐」。
+-- ⚠️ 只存 id 与层号，不存岗位内容：岗位状态 / 正文 / 分类以请求时 jobs 表为准（撤岗、滑出 7 天窗自然掉出去）。
+-- ⚠️ 不对 jobs 做外键：快照里的岗会被 purge 删掉，那正是请求时要自然过滤掉的。
+create table if not exists today_recall_snapshots (
+  user_id     uuid primary key,
+  recall_key  text not null,               -- 召回 SQL 形状指纹（画像/偏好决定；不含时间窗与已处理 id）
+  computed_at timestamptz not null,        -- 现跑召回的时刻：请求时「首见晚于它」的岗一律参与重算
+  job_ids     uuid[] not null,             -- 召回输出（按层加权排好序、未去重），与 SQL 输出逐行同序
+  tier_idx    smallint[] not null,         -- 每行来自第几层（下标对应 tier_names）
+  tier_names  text[] not null,             -- 当次的层名序列（role / company / cityNew / function）
+  capped      boolean not null,            -- 当次是否取满预算
+  source      text not null check (source in ('cron', 'request')),
+  updated_at  timestamptz not null default now(),
+  constraint today_recall_snapshots_aligned check (cardinality(job_ids) = cardinality(tier_idx))
+);
+
 -- ── canonical_jd_url 归一（与 lib/canonical-url.js / crawler/normalizer.py / 迁移144 字节级一致；改一处必同改）──
 create or replace function canonicalize_jd_url(u text)
 returns text language plpgsql immutable as $function$

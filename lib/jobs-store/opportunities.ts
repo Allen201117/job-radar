@@ -8,6 +8,7 @@
 // stage-1 的分层召回见下方 RECALL_TIERS 注释。
 // companyHit 的权威判定用 normalizeCompany() exact（见 eligibility.ts），此处公司层只做超集召回。
 import "server-only";
+import { createHash } from "node:crypto";
 import { jobsQuery } from "./client";
 import { jobsStoreEnabled } from "./read";
 import { buildTsquery } from "@/lib/job-search";
@@ -23,6 +24,7 @@ import { appendJobScopeWhere, effectiveTargetRegions, jobMatchesScope } from "@/
 import { appendCurrentSeasonWhere } from "@/lib/campus-season";
 import { collapseBulkStoreJobs, BULK_STORE_COMPANIES } from "@/lib/bulk-store-dedup";
 import { estimateRowBytes, kb } from "./row-bytes";
+import { writeRecallSnapshot, type RecallSnapshot, type RecallSnapshotWrite } from "./recall-snapshot";
 import type { RadarProfile } from "@/lib/opportunities/types";
 
 type SupabaseLike = { from: (table: string) => any };
@@ -32,6 +34,55 @@ export interface RecallResult {
   capped: boolean;
   /** 召回这一跳的分段账本（观测用）；Supabase 兜底路径不产出。 */
   timing?: RecallTiming;
+  /** 快照命中情况（观测用）：用了快照 / 为什么没用。 */
+  snapshot?: { used: boolean; reason: RecallSnapshotReason; ageMs: number | null };
+  /**
+   * 现跑召回时给出「可写成快照」的原始输出。**限定重算不给**：快照只许由现跑结果写，
+   * 否则每次都在上一份快照的子集上再取子集，偏差一轮轮累积下去。
+   */
+  snapshotWrite?: RecallSnapshotWrite;
+}
+
+// ── 召回快照（2026-09-23）：召回挪出请求路径 ──────────────────────────────────────
+// 为什么：冷缓存下这条召回 SQL 要回表几万个堆块（50 画像实测库内 0.04~6s，最重的背靠背第二次仍 6.1s），
+// 而「完美索引」下限也只能把块数降到 37.5%（CLAUDE.md /today 段）。所以后台按用户现跑并记下「各层选中了哪些 id」，
+// 请求时只在「这些 id ∪ 快照之后才首见的岗」里重跑同一条 SQL（见 RecallRestriction）。
+// 新岗一个不漏（首见晚于快照的全部参与重算、按原排序插进来）；撤岗 / 滑出 7 天窗 / 刚处理过的岗被原 where 自然滤掉。
+// 唯一的偏差来源：快照之后掉出去的岗，现跑时会有「当时排在限额之外」的岗补位，限定重算补不上（量见 CLAUDE.md）。
+/** 快照超过这个年龄就不用（退回现跑）。后台 6 小时刷一轮，留一轮的余量。 */
+export const RECALL_SNAPSHOT_MAX_AGE_MS = 12 * 3_600_000;
+/** 用了快照、但快照已超过这个年龄 → 页面在响应之后顺手现跑一次刷新它（用户下次打开就是新的）。 */
+export const RECALL_SNAPSHOT_REFRESH_AFTER_MS = 60 * 60_000;
+
+export type RecallSnapshotReason = "ok" | "none" | "key_mismatch" | "stale" | "future" | "disabled";
+
+/**
+ * 召回 SQL 的「形状指纹」：画像 / 偏好 / 当季届别 / 词库决定，**不含**时间窗与已处理 id。
+ * 偏好一改、词库一改（查询词展开不同）指纹就变 → 快照作废、退回现跑，所以不需要任何「改偏好时清缓存」的钩子。
+ */
+export function recallSnapshotKey(profile: RadarProfile, budget: number = RECALL_BUDGET): string | null {
+  const built = buildRecallSql(profile, "<since>", budget, []);
+  if (!built) return null;
+  return createHash("sha256").update(built.sql).update("\u0000").update(JSON.stringify(built.params)).digest("hex").slice(0, 32);
+}
+
+/** 快照能不能用。纯函数，页面与测试共用。 */
+export function recallSnapshotUsability(
+  snapshot: Pick<RecallSnapshot, "recallKey" | "computedAt"> | null | undefined,
+  key: string | null,
+  now: Date,
+): { usable: boolean; reason: RecallSnapshotReason; ageMs: number | null } {
+  if (String(process.env.TODAY_RECALL_SNAPSHOT || "").toLowerCase() === "off") {
+    return { usable: false, reason: "disabled", ageMs: null };
+  }
+  if (!snapshot || !key) return { usable: false, reason: "none", ageMs: null };
+  const ageMs = now.getTime() - new Date(snapshot.computedAt).getTime();
+  if (!Number.isFinite(ageMs)) return { usable: false, reason: "none", ageMs: null };
+  if (snapshot.recallKey !== key) return { usable: false, reason: "key_mismatch", ageMs };
+  // 时钟回拨 / 快照来自未来：限定条件「首见晚于快照」会漏掉中间的新岗，不能用
+  if (ageMs < -60_000) return { usable: false, reason: "future", ageMs };
+  if (ageMs > RECALL_SNAPSHOT_MAX_AGE_MS) return { usable: false, reason: "stale", ageMs };
+  return { usable: true, reason: "ok", ageMs };
 }
 
 /** 召回账本：行数 / 载荷估算 / 取数耗时。/today 是登录页，外部 curl 不到，只能靠服务端日志。 */
@@ -77,7 +128,7 @@ const SUMMARY_TRUNC = 300;
 // stage-2 的职能门同一套 userTargetFunctions。真库对拍（18 个画像，scratch w2-measure）：互联网画像本就饱和
 // （产品 698 可展示）基本无感；非互联网画像是从无到有——土木 0→6、教师 3→13、机械 20→47、算法 +41、前端 +33。
 const RECALL_TIERS = ["role", "company", "cityNew", "function"] as const;
-type RecallTier = (typeof RECALL_TIERS)[number];
+export type RecallTier = (typeof RECALL_TIERS)[number];
 // 权重只在「该层这次有效」时参与分配（如用户没填城市 → cityNew 不存在，预算全给 role/company）。
 // cityNew 从 3 降到 2：它原本是「方向只在正文」的岗唯一的进池通道，现在 function 层更精准地接了这一职责，
 // cityNew 只剩兜 job_function=其他 的那一小截。
@@ -418,11 +469,25 @@ function jobMatchesStageRecall(job: any, profile: RadarProfile): boolean {
  * 就白白浪费预算（实测有画像因此只召回 349 行、展示岗位从 25 掉到 15）。轮转让取不满的层自动把名额
  * 让给其他层，总量恒等于 min(budget, 可用量)。层之间会有重叠，重复行在 JS 侧按 id 去掉。
  */
+/**
+ * 召回快照的「限定重算」（见 lib/jobs-store/recall-snapshot.ts）：每层只在
+ * 「快照当时该层选中的 id ∪ 快照之后才首见的岗」里重跑**同一套** where + 排序 + 限额。
+ * 过滤条件照旧全部生效（撤岗 / 滑出 7 天窗 / 刚处理过的岗自然掉出去），新岗照旧按原排序插进来；
+ * 只是不再去扫方向 GIN 命中的几万行 —— 那是冷缓存下读几万个堆块的根源。
+ */
+export interface RecallRestriction {
+  /** 快照当时各层选中的 id（按层名）；某层缺省 = 该层当时一行没选中。 */
+  idsByTier: Partial<Record<RecallTier, readonly string[]>>;
+  /** 快照执行时刻；首见晚于它的岗一律参与重算。 */
+  newerThan: string;
+}
+
 export function buildRecallSql(
   profile: RadarProfile,
   sinceIso: string,
   budget: number,
   actionedJobIds: readonly string[] = [],
+  options: { restrict?: RecallRestriction } = {},
 ): { sql: string; params: unknown[]; tiers: RecallTier[] } | null {
   const excl = excludePatterns(profile);
   const roleTs = roleTsquery(profile);
@@ -556,13 +621,34 @@ export function buildRecallSql(
   const weightsRef = `$${params.length}::float[]`;
   // 正文门的参数**最后压**：上面所有 $n 位置保持不变（哨兵测试按位置认阶段谓词）。
   const columns = RECALL_COLUMNS(candidateSummaryExpr(profile, params));
+  // 限定重算的参数同样压在最后（理由同正文门）；不限定时 SQL 与原来逐字节相同。
+  const restrict = options.restrict;
+  let source = "jobs";
+  let prelude = "";
+  const restrictConds: string[] = [];
+  if (restrict) {
+    params.push(restrict.newerThan);
+    const newerRef = `$${params.length}::timestamptz`;
+    const allIds = Array.from(new Set(tiers.flatMap(({ tier }) => restrict.idsByTier[tier] ?? [])));
+    params.push(allIds);
+    // 候选池先按主键 + 首见时间取出来（两个 btree 走 BitmapOr），物化后各层在池里重跑原 where 与排序。
+    // materialized 是刻意的：不让规划器把方向 tsquery 提到池外去走 GIN —— 那正是要绕开的几万行回表。
+    prelude =
+      `with recall_pool as materialized (select * from jobs where status = 'active' ` +
+      `and (id = any($${params.length}::uuid[]) or first_seen_at > ${newerRef}))\n`;
+    source = "recall_pool jobs";
+    for (const { tier } of tiers) {
+      params.push(restrict.idsByTier[tier] ?? []);
+      restrictConds.push(`(id = any($${params.length}::uuid[]) or first_seen_at > ${newerRef})`);
+    }
+  }
   const parts = tiers.map(({ conds, order }, i) =>
-    `(select ${i} as _tier, row_number() over (order by ${order}) as _rn, ${columns} from jobs ` +
-    `where ${[...base, ...conds].join(" and ")} order by ${order} limit ${capRef})`,
+    `(select ${i} as _tier, row_number() over (order by ${order}) as _rn, ${columns} from ${source} ` +
+    `where ${[...base, ...conds, ...(restrict ? [restrictConds[i]] : [])].join(" and ")} order by ${order} limit ${capRef})`,
   );
   // 加权轮转：权重 5 的层每被取 5 条，权重 2 的层才被取 2 条；某层取空后其名额自动流向其余层。
   const sql =
-    `select * from (\n${parts.join("\nunion all\n")}\n) q ` +
+    `${prelude}select * from (\n${parts.join("\nunion all\n")}\n) q ` +
     `order by _rn::float / (${weightsRef})[_tier + 1], _tier limit ${capRef}`;
   return { sql, params, tiers: tiers.map(({ tier }) => tier) };
 }
@@ -600,12 +686,15 @@ async function recallViaStore(
   sinceIso: string,
   budget: number,
   actionedJobIds: readonly string[],
-): Promise<RecallResult> {
-  const built = buildRecallSql(profile, sinceIso, budget, actionedJobIds);
+  restrict?: RecallRestriction,
+): Promise<RecallResult & { tierRows?: Array<{ id: string; tier: number }>; tiers?: RecallTier[] }> {
+  const built = buildRecallSql(profile, sinceIso, budget, actionedJobIds, { restrict });
   if (!built) return { jobs: [], capped: false };
   const t0 = Date.now();
   const rows = await jobsQuery(built.sql, built.params);
   const tFetched = Date.now();
+  // 现跑时留一份 (id, 层) 原始序列给快照用——必须在 stripTierColumns 之前取（它会删掉 _tier）。
+  const tierRows = restrict ? undefined : rows.map((r: any) => ({ id: String(r.id), tier: Number(r._tier) }));
   const jobs = stripTierColumns(rows, built.tiers);
   const timing: RecallTiming = {
     tiers: [...built.tiers],
@@ -616,11 +705,11 @@ async function recallViaStore(
     foldMs: Date.now() - tFetched,
   };
   console.log(
-    `[today-recall] tiers=${timing.tiers.join("+")} budget=${budget} rows=${timing.rows} kb=${kb(timing.bytes)} ` +
-      `fetch_ms=${timing.fetchMs} fold_ms=${timing.foldMs} deduped=${jobs.length}`,
+    `[today-recall] mode=${restrict ? "snapshot" : "live"} tiers=${timing.tiers.join("+")} budget=${budget} ` +
+      `rows=${timing.rows} kb=${kb(timing.bytes)} fetch_ms=${timing.fetchMs} fold_ms=${timing.foldMs} deduped=${jobs.length}`,
   );
   // 取满预算 = 库里还有没取到的候选 → capped 诚实为 true
-  return { jobs, capped: rows.length >= budget, timing };
+  return { jobs, capped: rows.length >= budget, timing, tierRows, tiers: built.tiers };
 }
 
 // ---- Supabase 回退（本地/回滚；prod jobs 表已空，非性能关键路径）----
@@ -701,7 +790,12 @@ export async function recallOpportunityCandidates(
   profile: RadarProfile,
   now: Date,
   supabaseFallback: SupabaseLike | null,
-  options: { budget?: number; actionedJobIds?: readonly string[] } = {},
+  options: {
+    budget?: number;
+    actionedJobIds?: readonly string[];
+    /** 后台预算好的召回快照（见 lib/jobs-store/recall-snapshot.ts）；不传 = 与改造前逐字相同地现跑。 */
+    snapshot?: RecallSnapshot | null;
+  } = {},
 ): Promise<RecallResult> {
   const sinceIso = new Date(now.getTime() - SEVEN_DAYS_MS).toISOString();
   const budget = options.budget ?? RECALL_BUDGET;
@@ -709,12 +803,67 @@ export async function recallOpportunityCandidates(
   // 免得日后只改一条。召回已按 tier + 地区/新鲜度排过序，留下的是靠前那条。
   // 不折叠的话，一个目标是房产经纪的用户当天推荐流会被同一家的几十个门店岗占满。
   if (jobsStoreEnabled()) {
-    const r = await recallViaStore(profile, sinceIso, budget, options.actionedJobIds ?? []);
-    return { ...r, jobs: collapseBulkStoreJobs(r.jobs) };
+    const actioned = options.actionedJobIds ?? [];
+    if (options.snapshot !== undefined) {
+      const key = recallSnapshotKey(profile, budget);
+      const verdict = recallSnapshotUsability(options.snapshot, key, now);
+      if (verdict.usable && options.snapshot) {
+        const r = await recallViaStore(profile, sinceIso, budget, actioned, {
+          idsByTier: options.snapshot.idsByTier,
+          newerThan: options.snapshot.computedAt,
+        });
+        return {
+          jobs: collapseBulkStoreJobs(r.jobs),
+          capped: r.capped,
+          timing: r.timing,
+          snapshot: { used: true, reason: "ok", ageMs: verdict.ageMs },
+        };
+      }
+      const r = await recallViaStore(profile, sinceIso, budget, actioned);
+      return {
+        jobs: collapseBulkStoreJobs(r.jobs),
+        capped: r.capped,
+        timing: r.timing,
+        snapshot: { used: false, reason: verdict.reason, ageMs: verdict.ageMs },
+        snapshotWrite:
+          key && r.tierRows && r.tiers
+            ? { recallKey: key, computedAt: now.toISOString(), rows: r.tierRows, tiers: r.tiers, capped: r.capped, source: "request" }
+            : undefined,
+      };
+    }
+    const r = await recallViaStore(profile, sinceIso, budget, actioned);
+    return { jobs: collapseBulkStoreJobs(r.jobs), capped: r.capped, timing: r.timing };
   }
   if (supabaseFallback) {
     const r = await recallViaSupabase(profile, sinceIso, supabaseFallback, budget);
     return { ...r, jobs: collapseBulkStoreJobs(r.jobs) };
   }
   return { jobs: [], capped: false };
+}
+
+/**
+ * 现跑一次召回并写成快照。后台刷新（scripts/today-recall-snapshot.js）与页面响应后的顺手刷新共用这一个函数，
+ * 两条路径写出来的快照口径逐字相同。返回写入的行数与库内耗时（台账用）；画像不可召回时返回 null。
+ */
+export async function refreshRecallSnapshot(
+  userId: string,
+  profile: RadarProfile,
+  now: Date,
+  actionedJobIds: readonly string[],
+  source: "cron" | "request",
+): Promise<{ rows: number; fetchMs: number; capped: boolean } | null> {
+  const key = recallSnapshotKey(profile);
+  if (!key) return null;
+  const sinceIso = new Date(now.getTime() - SEVEN_DAYS_MS).toISOString();
+  const r = await recallViaStore(profile, sinceIso, RECALL_BUDGET, actionedJobIds);
+  if (!r.tierRows || !r.tiers) return null;
+  await writeRecallSnapshot(userId, {
+    recallKey: key,
+    computedAt: now.toISOString(),
+    rows: r.tierRows,
+    tiers: r.tiers,
+    capped: r.capped,
+    source,
+  });
+  return { rows: r.tierRows.length, fetchMs: r.timing?.fetchMs ?? 0, capped: r.capped };
 }

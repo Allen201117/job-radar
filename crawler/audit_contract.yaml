@@ -984,6 +984,41 @@ checks:
       如果过几天还是 0 才是真的问题。
     action: 看这条任务最近一次运行是否失败；也可以直接看 jobs.recruitment_type_pending 有没有堆高
 
+  - id: pipeline.today_recall_snapshot_ran
+    name: 「今日推荐」的后台预算最近有没有在跑
+    subject: 今日推荐后台预算
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/today-recall-snapshot.yml
+    sql: >
+      select count(*) from ops_runs where module = 'today_recall_snapshot'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: ">= 3"                # 每 6 小时一轮 ≈ 每天 4 次，窗口含昨天和今天；下限取 3，漏一两轮不吵
+    severity: warn
+    calibrated: false
+    why: >
+      用户打开「今日」页时，推荐岗位的候选名单是这条任务提前算好的，页面只需要在名单里挑，所以打开得快。
+      它停了页面不会坏——会退回「打开时现算」，只是每次打开又要慢好几秒。2026-09-23 上线，实测值刚开始积累。
+    action: 看这条任务最近一次运行是否失败；把结果转给 Claude，让它查为什么没算出来
+
+  - id: pipeline.today_recall_snapshot_failed
+    name: 「今日推荐」后台预算有没有给某些用户算失败
+    subject: 今日推荐后台预算
+    layer: pipeline
+    db: supabase
+    owner: .github/workflows/today-recall-snapshot.yml
+    sql: >
+      select coalesce(sum((metrics->>'failed')::int + coalesce((metrics->>'no_recall')::int, 0)), 0)
+        from ops_runs where module = 'today_recall_snapshot'
+        and run_date >= ((now() at time zone 'Asia/Shanghai')::date - 1)
+    normal: "== 0"
+    severity: warn
+    calibrated: false
+    why: >
+      算失败的用户打开「今日」页会退回现算，推荐内容不受影响，但会慢好几秒。
+      偶尔一两次多半是数据库连接抖了一下；天天有就是这条任务本身出了问题。
+    action: 把这条任务最近一次运行的结果转给 Claude，让它查是哪几个用户、为什么算失败
+
   - id: pipeline.campus_lane_ran
     name: 校招高频车道（校招季内）昨天有没有真的抓过
     subject: 校招高频车道

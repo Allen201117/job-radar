@@ -1,0 +1,38 @@
+# /today 召回快照后台刷新：给所有画像就绪的用户现跑一次召回、记下「各层选中了哪些 id」，
+# 页面只在「这些 id ∪ 快照之后首见的岗」里重跑同一条 SQL（冷态回表从几万块降到两三千块）。
+# 为什么、口径与偏差见 lib/jobs-store/opportunities.ts「召回快照」段与 jobs-db/schema.sql today_recall_snapshots 注释。
+# 台账 ops_runs(module=today_recall_snapshot)，期望在 crawler/audit_contract.yaml。
+name: today-recall-snapshot
+
+on:
+  schedule:
+    # 北京 06:40 / 12:40 / 18:40 / 00:40。页面对快照的容忍上限是 12 小时（RECALL_SNAPSHOT_MAX_AGE_MS），
+    # 错过一轮仍在期内；超期的用户打开页面会退回现跑并在响应后回写，不会看到陈旧推荐。
+    - cron: "40 4,10,16,22 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: today-recall-snapshot
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+      JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+      JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # supabase-js 需要原生 WebSocket（Node 22），见 tests/workflow-matrix.test.js
+          node-version: "22"
+          cache: "npm"
+      # 不用 npm ci：Linux runner 上 lockfile 缺平台可选依赖会直接失败（同 ux-walkthrough.yml 的注释）。
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Refresh recall snapshots
+        run: node scripts/today-recall-snapshot.js
