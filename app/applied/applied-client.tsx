@@ -110,7 +110,7 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
                 </div>
                 {item.down ? (
                   <span className="inline-flex w-full shrink-0 items-center justify-center gap-2 rounded-full border border-black/[0.08] bg-[#f0ece2] px-4 py-2.5 text-sm font-medium ink-3 dark:border-white/[0.1] dark:bg-white/[0.05] sm:w-auto sm:py-2">
-                    原岗位已下线
+                    该岗位已下线
                   </span>
                 ) : (
                   <a
@@ -124,6 +124,10 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
                   </a>
                 )}
               </div>
+
+              {item.down && (
+                <p className="mt-3 t-body-sm ink-2">岗位已从官网下线，你的投递进展照常记录。</p>
+              )}
 
               <div className="mt-4 flex flex-wrap items-center gap-1.5 border-t border-black/[0.05] pt-3 dark:border-white/[0.06]">
                 <span className="mr-1 text-xs ink-3">进展</span>
