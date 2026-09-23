@@ -10,9 +10,16 @@ liveness-sweep 只判「对方关闭」，在招的重复岗会一直 active、�
 
 护栏：默认 dry-run；--apply 必须 --url-prefix 点名门户 **且** --company 精确点名；只翻 status='active' 的行；参数绑定。
 
+--only-twins-under <保留门户前缀>（规则 H 的处置口径）：只标「在保留门户下有同一个 `#` 片段（hash 路由的岗位 id，
+如 moka 的 `#/job/<uuid>`）且那行还在招」的行，只在影子门户出现的岗不动。没有 `#` 片段的行一律不算孪生（宁可不动）。
+两个前缀不许互相包含，否则会拿自己当自己的孪生。
+
 用法：
     python3 crawler/remove_jobs_by_url_prefix.py --url-prefix https://tbea.hotjob.cn/wt/TBEA/ --company 新疆特变电工集团
     python3 crawler/remove_jobs_by_url_prefix.py --url-prefix https://tbea.hotjob.cn/wt/TBEA/ --company 新疆特变电工集团 --apply
+    python3 crawler/remove_jobs_by_url_prefix.py --company 作业帮 \
+        --url-prefix 'https://app.mokahr.com/social-recruitment/zuoyebang/150144#' \
+        --only-twins-under 'https://app.mokahr.com/social-recruitment/zuoyebang/41328#'
 """
 import argparse
 import os
@@ -38,15 +45,30 @@ _UPDATE_SQL = """
        and jd_url like %s
 """
 
+# 保留门户那侧必须包成 array(...)：它是不相关子查询 → InitPlan 只扫一次表。写成 `in (select …)` 时
+# 规划器把影子侧估成 1 行、选嵌套循环，实际 307 行就把 jobs 全表并行扫 307 遍（2026-09-23 香港库 EXPLAIN）。
+_TWIN_SQL = """
+       and split_part(jd_url, '#', 2) <> ''
+       and split_part(jd_url, '#', 2) = any(array(
+             select split_part(k.jd_url, '#', 2)
+               from jobs k
+              where k.status = 'active'
+                and k.jd_url like %s))
+"""
 
-def run(cur, url_prefix, company, apply=False):
-    """返回 (命中 active 行数, 实际改动行数或 None)。"""
-    pattern = like_prefix(url_prefix)
-    cur.execute(_COUNT_SQL, [company, pattern])
+
+def run(cur, url_prefix, company, apply=False, twins_under=None):
+    """返回 (命中 active 行数, 实际改动行数或 None)。twins_under 见模块注释 --only-twins-under。"""
+    params = [company, like_prefix(url_prefix)]
+    count_sql, update_sql = _COUNT_SQL, _UPDATE_SQL
+    if twins_under:
+        params.append(like_prefix(twins_under))
+        count_sql, update_sql = count_sql + _TWIN_SQL, update_sql + _TWIN_SQL
+    cur.execute(count_sql, params)
     (planned,) = cur.fetchone()
     if not apply or not planned:
         return planned, None
-    cur.execute(_UPDATE_SQL, [company, pattern])
+    cur.execute(update_sql, params)
     if cur.rowcount != planned:
         print(f"  ⚠️ 计划改 {planned} 行、实际改 {cur.rowcount} 行（差额 = 两步之间状态变了的行）")
     return planned, cur.rowcount
@@ -56,10 +78,15 @@ def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--url-prefix", required=True, help="jd_url 前缀（门户级，完整 https 前缀）")
     ap.add_argument("--company", required=True, help="精确公司名，与前缀同时成立才动")
+    ap.add_argument("--only-twins-under", help="保留门户的 jd_url 前缀：只标在它下面有在招孪生行的（见模块注释）")
     ap.add_argument("--apply", action="store_true", help="真的写库（默认只 dry-run 报数）")
     args = ap.parse_args(argv)
-    if not args.url_prefix.startswith("https://") or len(args.url_prefix) < len("https://a.b/"):
-        ap.error("--url-prefix 必须是完整 https 前缀（含主机与路径）")
+    for flag, value in (("--url-prefix", args.url_prefix), ("--only-twins-under", args.only_twins_under)):
+        if value is not None and (not value.startswith("https://") or len(value) < len("https://a.b/")):
+            ap.error(f"{flag} 必须是完整 https 前缀（含主机与路径）")
+    keep = args.only_twins_under
+    if keep and (keep.startswith(args.url_prefix) or args.url_prefix.startswith(keep)):
+        ap.error("--only-twins-under 与 --url-prefix 互相包含：会拿自己当自己的孪生")
     return args
 
 
@@ -71,11 +98,13 @@ def main(argv=None):
     conn = jobs_db.get_conn()  # autocommit=True，别加 `with conn:`
     try:
         with conn.cursor() as cur:
-            planned, updated = run(cur, args.url_prefix, args.company, apply=args.apply)
+            planned, updated = run(cur, args.url_prefix, args.company, apply=args.apply,
+                                   twins_under=args.only_twins_under)
     finally:
         conn.close()
     if not planned:
-        print(f"前缀 {args.url_prefix} 下没有 company='{args.company}' 的 active 行 —— 无事可做")
+        twin_note = f"（且在 {args.only_twins_under} 下有在招孪生）" if args.only_twins_under else ""
+        print(f"前缀 {args.url_prefix} 下没有 company='{args.company}' 的 active 行{twin_note} —— 无事可做")
         return 0
     if args.apply:
         print(f"已标 {updated} 行 → status='removed'（可逆，purge 不删）")

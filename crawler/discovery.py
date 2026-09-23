@@ -379,6 +379,7 @@ def _upsert_raw_jobs(supabase, source_id, company, source_url, raw_jobs):
         salary = normalizer.clean_salary(raw.salary_text)
         job_type = normalizer.extract_job_type(title, summary) or raw.job_type
         content_hash = normalizer.make_content_hash(title, location, summary)
+        location = normalizer.location_or_title_city(location, title)  # 与 normalizer.normalize 同口径
         # 结构化字段从**完整** raw.summary 抽取（截断前），adapter 直填的优先
         experience = raw.experience or normalizer.extract_experience(raw.summary)
         education = raw.education or normalizer.extract_education(raw.summary)
