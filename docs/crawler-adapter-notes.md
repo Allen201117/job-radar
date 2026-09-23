@@ -109,6 +109,30 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       各自 try/except，不许炸掉整轮（否则前面几十家已抓的岗一起丢 + 整源记 failed）。
                          #     诚实边界：社招靠「热招事项」卡枚举机构，当前站点自报「暂无热招事项」故为 0；
                          #       哪天社招开了但站点不出热招事项卡，这里会漏——上线后拿 db-report 复核。
+                         #   cib 兴业银行（2026-09-23）= 第二家走浏览器的银行，1574 岗（社招/校招/实习同一列表）。
+                         #     不是反爬：门户建在兴业的 JUP 前端框架上，**每个请求都带现场签算的两个头**，裸请求一律 500：
+                         #       X-VALID-TOKEN = SM3-HMAC(按键排序的请求体, signKey)；
+                         #       X-AntiReplay-Token = SM4(访问令牌|时间戳尾数+6位随机数|时间戳, sm4Key)；
+                         #       会话密钥来自握手：POST /api/authPrehandler 发 SM2 公钥+salt → POST /api/cfn/sysToken
+                         #       用随机串换回 SM4 加密的 tokenKey/signKey。
+                         #     🔎 **性质判定（读前端源码 index.*.js / chunk-libs.*.js 逐段核过）**：输入只有请求体、时间戳、
+                         #       随机数、服务端下发的会话密钥 → 请求完整性签名 + 防重放；**没有滑块、没有设备指纹**
+                         #       （canvas 只用于渲染 PDF；无 toDataURL / webdriver / 插件枚举 / AudioContext）、
+                         #       **没有行为校验**；图形验证码只在登录框（手机号/邮箱登录）里，看岗位用不到；
+                         #       错误码 915021 needRecheck 是银行系统的「复核」（操作要另一人审批，旁边还有 915501
+                         #       「等待复核」），不是人机校验。→ 按「前端公开算法的普通接口参数」处理，可接。
+                         #     抓法：不在 Python 里复刻国密（要引新加密依赖），打开门户后调用页面自己的
+                         #       `document.querySelector('#app').__vue__.jup__ajax('recruitpositionportalPage', …)`，
+                         #       签名由页面代码完成；一次可取 200 条，行内自带职责+任职要求全文，不用逐岗补正文。
+                         #     ⚠️ 等 `jup__ajax` 就绪（wait_for_function），**不等 networkidle**；接管 dialog。
+                         #     ⚠️ 详情是 hash 路由 `…?recruitType={SR|CR|TR}#/positionDetails/{positionId}`，真 id 匿名可看、
+                         #       假 id 只剩页头页脚空壳；日后接浏览器巡检**必须 reload**（同文档导航留上一个岗）。
+                         #     ⚠️ 截止时间「长期」站点写 3000-01-01 哨兵值，当成无截止；约 20% 岗发布于 2023~2024 年、
+                         #       站点仍标「发布中 + 长期」，是银行常设岗，按站点口径收。
+                         #   citicbank 中信银行（2026-09-23）：job.citicbank.com 自建，POST recruitQuery（零鉴权，15 条/页，
+                         #     顶层 pageCount 实为**总条数**不是总页数）+ 静态详情 /static/positionDetail_{ID}_{01|02}.html；
+                         #     假 id 返 404「系统错误」。社招/校招两渠道 id 不重叠，拆两条源（校招 URL 带 #/campus 让 board 判 campus）。
+                         #     ⚠️ 必投台账曾把它的入口记成 careers.citics.com —— 那是**中信证券**。
                          #   ⚠️ **这五家 httpx 的共性坑（cn_portal_tls.py）**：本机 macOS 是 LibreSSL + 有 IPv6、
                          #     GitHub runner 是 OpenSSL 3 + 无 IPv6 出口 → **本机全绿、上 CI 四个源全 failed**
                          #     （建行/交行/移动 UNSAFE_LEGACY_RENEGOTIATION_DISABLED、工行 Errno 101）。
