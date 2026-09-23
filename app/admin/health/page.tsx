@@ -20,6 +20,7 @@ import {
   getMustApplyFetchCoverage,
   groupFetchCoverageByIndustry,
   HEALTH_THRESHOLDS,
+  mustApplyHealthyThresholds,
   normalizeCrawlSources,
   summarizeMustApplyGapAttempts,
   translateOperationalTerm,
@@ -795,7 +796,7 @@ function MustApplyIndustryBlock({
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <KpiCard title="最近 7 天有新岗" value={`${freshCount}/${n}`} tone="muted" detail="说明这家还在持续放岗，但不用它判断健康与否" className="min-h-0" />
         <KpiCard title="72 小时内查过" value={`${checkedCount}/${n}`} tone={blind.length > 0 ? "warning" : "success"} detail="有岗但没查过的公司，会在下面点名" className="min-h-0" />
-        <KpiCard title="健康覆盖目标" value={`≥${HEALTH_THRESHOLDS.mustApplyHealthyCompanies.good}/30`} tone={bandTone(healthBand)} detail="24 至 27 家为关注，低于 24 家需处理" className="min-h-0" />
+        <KpiCard title="健康覆盖目标" value={`≥${mustApplyHealthyThresholds(n).good}/${n}`} tone={bandTone(healthBand)} detail={`${mustApplyHealthyThresholds(n).warn} 至 ${mustApplyHealthyThresholds(n).good - 1} 家为关注，低于 ${mustApplyHealthyThresholds(n).warn} 家需处理`} className="min-h-0" />
       </div>
 
       {(gaps.length > 0 || blind.length > 0) && (
@@ -827,10 +828,11 @@ function mustApplyIndustryBand(rows: MustApplyRow[] | null): HealthBand {
   const healthy = rows.filter((row) => row.healthy > 0).length;
   const zeroHealthy = rows.length - healthy;
   if (zeroHealthy >= HEALTH_THRESHOLDS.mustApplyZeroHealthyCompanies.bad) return "bad";
-  if (healthy >= HEALTH_THRESHOLDS.mustApplyHealthyCompanies.good) {
+  const thresholds = mustApplyHealthyThresholds(rows.length);
+  if (healthy >= thresholds.good) {
     return zeroHealthy >= HEALTH_THRESHOLDS.mustApplyZeroHealthyCompanies.warn ? "warn" : "good";
   }
-  return healthy >= HEALTH_THRESHOLDS.mustApplyHealthyCompanies.warn ? "warn" : "bad";
+  return healthy >= thresholds.warn ? "warn" : "bad";
 }
 
 // 必投清单：一行一个行业的折叠列表。
