@@ -133,12 +133,80 @@ class WorkdayDetailTest(unittest.TestCase):
             with self.assertRaises(enrich.JobClosedError):
                 enrich.ENRICH_REGISTRY["workday"](row, src)
 
-    def test_transient_5xx_returns_empty_not_closed(self):
-        # 5xx/限流 = 瞬时错误，必须走 miss 重试，绝不能 expired（否则误杀活岗）。
-        row = {"jd_url": "https://co.wd1.myworkdayjobs.com/en-US/Careers/job/X/R-2"}
-        src = {"source_url": "https://co.wd1.myworkdayjobs.com/wday/cxs/co/Careers/jobs"}
-        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=503)):
-            self.assertEqual(enrich.ENRICH_REGISTRY["workday"](row, src), "")
+    _ROW = {"jd_url": "https://co.wd1.myworkdayjobs.com/en-US/Careers/job/X/R-2"}
+    _SRC = {"source_url": "https://co.wd1.myworkdayjobs.com/wday/cxs/co/Careers/jobs",
+            "adapter_name": "workday"}
+
+    def test_non_2xx_raises_unknown_not_closed(self):
+        # 非 2xx（404/410 除外）= 没探到：429 是 Workday 按 IP 限流，422 是租户搬了数据中心
+        # （武田 wd3→wd502 后旧地址每个岗都回 422），5xx 是瞬时错误。
+        # 不能 expired（误杀在招岗），也不能 return ""——空串会被当成「确认在招」盖戳（F3）。
+        for status in (401, 403, 422, 429, 500, 503):
+            with self.subTest(status=status), \
+                    mock.patch.object(enrich.httpx, "get", lambda *a, _s=status, **k: _Resp({}, status=_s)):
+                with self.assertRaises(enrich.DetailUnknownError):
+                    enrich.ENRICH_REGISTRY["workday"](self._ROW, self._SRC)
+
+    def test_2xx_without_description_still_returns_empty(self):
+        # 2xx 是可判读的答复：岗位还在、只是没正文 → 仍返回 ""（巡检照常盖戳）。
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({"jobPostingInfo": {}})):
+            self.assertEqual(enrich.ENRICH_REGISTRY["workday"](self._ROW, self._SRC), "")
+
+    def test_unknown_does_not_stamp_row_as_alive(self):
+        # 端到端：已有正文的岗被限流 → enrich_row 记 err、不写库（不盖 enrich_checked_at，下轮重试）。
+        row = {"id": "job-1", "source_id": "src-1", "title": "t", "jd_url": self._ROW["jd_url"],
+               "job_type": None, "summary": "旧正文", "enrich_fail_count": 0}
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp({}, status=429)), \
+                mock.patch.object(enrich_backlog.jobs_db, "execute") as ex:
+            res = enrich_backlog.enrich_row(None, row, self._SRC, dry_run=False, jobs_conn=object())
+        self.assertEqual(res, "err")
+        ex.assert_not_called()
+
+    def test_403_s22_raises_jobclosed(self):
+        # Workday 撤岗大多不是 404，是 403 + {"errorCode":"S22"}（2026-09-23 live：该岗已不在对方公开列表、
+        # 公开页渲染「The page you are looking for doesn't exist.」）。
+        body = {"errorCode": "S22", "message": "permission denied", "httpStatus": 403}
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp(body, status=403)):
+            with self.assertRaises(enrich.JobClosedError):
+                enrich.ENRICH_REGISTRY["workday"](self._ROW, self._SRC)
+
+    def test_403_without_s22_is_not_closed(self):
+        # 双条件：只有 403 且 errorCode=S22 才判死。别的 403（WAF / 其它错误码）不判死，记「没探到」。
+        for body in ({}, {"errorCode": "S21"}, {"message": "permission denied"}):
+            with self.subTest(body=body), \
+                    mock.patch.object(enrich.httpx, "get", lambda *a, _b=body, **k: _Resp(_b, status=403)):
+                with self.assertRaises(enrich.DetailUnknownError):
+                    enrich.ENRICH_REGISTRY["workday"](self._ROW, self._SRC)
+
+    def test_s22_with_other_status_is_not_closed(self):
+        body = {"errorCode": "S22"}
+        # 2xx 带 S22 字样：可判读的答复、没正文 → ""（不判死）。
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp(body, status=200)):
+            self.assertEqual(enrich.ENRICH_REGISTRY["workday"](self._ROW, self._SRC), "")
+        # 非 403 的错误码带 S22：不判死，记「没探到」。
+        for status in (401, 422, 429, 500):
+            with self.subTest(status=status), \
+                    mock.patch.object(enrich.httpx, "get", lambda *a, _s=status, **k: _Resp(body, status=_s)):
+                with self.assertRaises(enrich.DetailUnknownError):
+                    enrich.ENRICH_REGISTRY["workday"](self._ROW, self._SRC)
+
+    def test_expire_guard_lets_backlog_through_but_trips_on_signal_flip(self):
+        # 上线清存量那几轮：按真实队列顺序（source_id 排序 + 每轮 5 万 + 按源交错）重放全量 dry-run，
+        # 累计判死占比最高 59.6% —— 阈值必须高于它，否则存量永远清不掉（照抄北森的 0.5 会卡死）。
+        self.assertFalse(enrich_backlog.should_trip_expire_guard("workday", 25525, 15215))  # 59.6%
+        self.assertFalse(enrich_backlog.should_trip_expire_guard("workday", 50000, 28789))  # 57.6%
+        # S22 语义哪天被 Workday 挪作他用 → 几乎全判死，200 个样本内就停。
+        self.assertTrue(enrich_backlog.should_trip_expire_guard("workday", 200, 200))
+        self.assertTrue(enrich_backlog.should_trip_expire_guard("workday", 1000, 800))
+
+    def test_403_non_json_body_is_not_closed(self):
+        # CDN/WAF 拦截回的是 HTML 403，不是 Workday 应用层的 S22 → 不许判死。
+        class _Html(_Resp):
+            def json(self):
+                raise ValueError("not json")
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Html(None, status=403)):
+            with self.assertRaises(enrich.DetailUnknownError):
+                enrich.ENRICH_REGISTRY["workday"](self._ROW, self._SRC)
 
 
 class OracleDetailTest(unittest.TestCase):

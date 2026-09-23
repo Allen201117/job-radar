@@ -76,9 +76,11 @@ function loadSearch() {
   const search = loadTs(lib("jobs-store", "search.ts"), cache);
   search.__resetScanCache();
   const calls = [];
-  const install = ({ candidates, countRows }) => {
+  const install = ({ candidates, countRows, ownRows }) => {
     client.jobsQuery = async (sql, params) => {
       calls.push({ sql, params });
+      // 用户隐藏岗那部分（2026-09-23 起从共享计数里拆出来按主键单算）
+      if (/^select (location, )?count\(\*\)/.test(sql) && / and id = any\(/.test(sql)) return ownRows || [];
       if (/^select (location, )?count\(\*\)/.test(sql)) return countRows;
       if (/^select exists\(/.test(sql)) return [{ pending: false }];
       if (/^select id, content_hash/.test(sql)) return [];
@@ -194,4 +196,41 @@ test("校招「对你有货」：填省的用户，省内城市选项都算对�
   assert.deepEqual(fit.cities, [0, 2, 3]);
   assert.deepEqual(selectFitIndexes([], ["深圳"], options).cities, [2], "城市目标照旧");
   assert.equal(selectFitIndexes([], [], options).cityRequested, false);
+});
+
+test("省目标 + 用户隐藏岗：共享计数与隐藏部分各自按地点复核再相减（外省的隐藏岗不能多减）", async () => {
+  const { search, calls, install } = loadSearch();
+  const cands = [...rows(997, "深圳"), ...rows(3, "大连市-中山区", 997)];
+  const ignoredId = cands[10].id;
+  install({
+    candidates: cands,
+    countRows: [
+      { location: "深圳", total: 22000, unclassified: 0 },
+      { location: "佛山", total: 2000, unclassified: 0 },
+      { location: "大连市-中山区", total: 17, unclassified: 0 },
+      { location: null, total: 40, unclassified: 0 },
+      { location: "", total: 2, unclassified: 0 },
+    ],
+    // 隐藏岗里 1 个在深圳、5 个在大连：大连那组本来就不算进广东，不能再减一遍
+    ownRows: [
+      { location: "深圳", total: 1, unclassified: 0 },
+      { location: "大连市-中山区", total: 5, unclassified: 0 },
+    ],
+  });
+  const r = await search.searchJobsStore(
+    { ...DEFAULT_FILTERS, city: "广东" },
+    { job_scope: "domestic", target_roles: [], target_keywords: [], target_locations: [], target_companies: [], exclude_keywords: [] },
+    [{ id: "a1", user_id: "u", job_id: ignoredId, action: "ignored", created_at: "2026-09-01T00:00:00Z" }],
+    0,
+    60,
+  );
+  assert.equal(r.total, 996, "外省 3 行 + 被忽略 1 行");
+  assert.equal(r.exactTotal, 24041, "24042 − 深圳那 1 个隐藏岗");
+  const q = countSql(calls);
+  const shared = q.find((c) => !/ id = any\(/.test(c.sql));
+  const own = q.find((c) => / id = any\(/.test(c.sql));
+  assert.ok(shared && own);
+  assert.match(shared.sql, /group by location$/);
+  assert.match(own.sql, / and id = any\(\$\d+::uuid\[\]\) group by location$/, "隐藏条件必须在 group by 之前");
+  assert.ok(!JSON.stringify(shared.params).includes(ignoredId), "共享计数的键里不许有个人数据");
 });

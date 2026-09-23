@@ -17,7 +17,7 @@
 //    （缓存体内写 cookie 会抛），错误又会被 catch 吞成「没有元信息」。service_role 无 cookie、行为确定。
 //    只读这 6 个非隐私列。
 import "server-only";
-import { unstable_cache } from "next/cache";
+import { requestSafeCache } from "@/lib/request-safe-cache";
 import { createServiceClient } from "../supabaseService";
 import type { SourceMeta } from "./types";
 
@@ -46,7 +46,7 @@ async function fetchAllSourceMeta(): Promise<SourceMeta[]> {
   return out;
 }
 
-const cachedSourceMeta = unstable_cache(fetchAllSourceMeta, ["radar-source-meta-v1"], {
+const cachedSourceMeta = requestSafeCache(fetchAllSourceMeta, ["radar-source-meta-v1"], {
   revalidate: CACHE_TTL_SECONDS,
   tags: ["radar-source-meta"],
 });

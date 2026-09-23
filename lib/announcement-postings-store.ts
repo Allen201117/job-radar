@@ -1,6 +1,6 @@
 // 公告制招聘：官方招聘公告（announcement_postings）取数层。镜像 apply-programs-store.ts。
 // 表由 CI 抓取管道每日刷新，跨实例缓存 10 分钟。
-import { unstable_cache } from "next/cache";
+import { requestSafeCache } from "@/lib/request-safe-cache";
 import { createServiceClient } from "./supabaseService";
 import { toAnnouncementPostings, type AnnouncementPosting } from "./announcement-postings";
 
@@ -11,7 +11,7 @@ const TTL_SECONDS = 600;
 // 真到 600 还不够时，该做的是分页/按需加载，不是继续抬这个数——别让它悄悄吃掉供给。
 const MAX_ROWS = 600;
 
-const getCached = unstable_cache(
+const getCached = requestSafeCache(
   async (_bucket: number): Promise<AnnouncementPosting[]> => {
     const supabase = createServiceClient();
     const { data, error } = await supabase

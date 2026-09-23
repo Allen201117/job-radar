@@ -65,6 +65,15 @@ def _raise_if_gone(r):
         raise JobClosedError(f"detail gone (HTTP {r.status_code})")
 
 
+def _json_field(r, key):
+    """错误响应体里取一个字段；不是 JSON 对象（WAF 的 HTML 403 等）返回 None。"""
+    try:
+        j = r.json()
+    except ValueError:
+        return None
+    return j.get(key) if isinstance(j, dict) else None
+
+
 # --- 外企四家族：搬 scripts/backfill_foreign_summaries.py（已 live 验证，全是公开 JSON API） ---
 def _detail_workday(row, src):
     # jd_url = {host}/{site}{ep}；detail = source_url 去尾部 /jobs 再拼 {ep}（ep 从 /job/ 起）
@@ -74,8 +83,23 @@ def _detail_workday(row, src):
     cxs_base = re.sub(r"/jobs/?$", "", src["source_url"])
     r = httpx.get(f"{cxs_base}{m.group(1)}", headers=UA, timeout=TIMEOUT)
     _raise_if_gone(r)  # cxs /job/{path} 404 = 岗位下架
-    if r.status_code >= 300:
-        return ""
+    # Workday 撤岗大多不是 404，是 403 + {"errorCode":"S22","message":"permission denied"}。
+    # 2026-09-23 live 对拍（香港库在招 workday 岗随机抽样）：
+    #   · 3,000 个「列表 7 天没再见到」的岗 2,795 个回 S22，30h 内还见过的 3,000 个里 121 个回 S22；
+    #     这 2,916 个按 req id 搜对方公开列表 **一个都不在**（对照：300 个回 200 的岗 300/300 搜得到）；
+    #   · 反向：全部 98 个启用源随机翻页取 8,333 个**当前在招**的岗逐个打 detail，S22 **0 个**；
+    #   · Playwright 真渲染公开页：S22 的 2,907 个全是页面自己的 XHR 回 403 +「The page you are looking
+    #     for doesn't exist.」、0 个渲染出岗位；回 200 的 372 个全渲染出标题 + 申请按钮、0 个判死。
+    #     （另 9 个被 Workday 反爬挑战页挡住没判成；反爬页是 HTML、不带 S22，正好说明双条件的必要。）
+    # 在此之前它落进下面的 `return ""` → 巡检当「在招」盖戳，撤了的岗一直挂 active。
+    # 上线前全量 dry-run（126,122 个在招 workday 岗逐个真打）：S22 69,804 个 = 列表 7 天没见 62,565 /
+    # 30h~7 天 5,692 / 30h 内 1,547；100 个源里没有一个源的「30h 内见过」的岗 S22 占比超过 13%。
+    # 双条件：状态码 403 **且** JSON 错误码 S22。WAF / CDN 的 403 是 HTML、别的错误码不认——宁可漏判不可错杀。
+    if r.status_code == 403 and _json_field(r, "errorCode") == "S22":
+        raise JobClosedError(f"workday posting not public (403 S22): {row['jd_url']}")
+    # 其余非 2xx = 没探到，不是「确认在招」（F3）。此前这里 `return ""` → 巡检照样盖戳，2026-09-23 实测：
+    # Workday 按 IP 限流的 429，和武田搬数据中心（wd3→wd502）后旧地址对每个岗回的 422，都被记成了刚确认在招。
+    _raise_if_unknown(r)
     return (r.json().get("jobPostingInfo", {}) or {}).get("jobDescription") or ""
 
 

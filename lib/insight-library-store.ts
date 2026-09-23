@@ -2,8 +2,7 @@
 // 洞察库的取数层：索引（跨实例缓存）+ 单主体条目（实时）。
 // 页面与 /api/insights/library 共用同一份，避免两处各建一份索引导致数字不一致。
 // ============================================================
-import { unstable_cache } from "next/cache";
-import { callOutsideRequestScope } from "./cache-outside-request";
+import { requestSafeCache } from "@/lib/request-safe-cache";
 import { createServiceClient } from "./supabaseService";
 import { fetchAllPagesConcurrent } from "./supabase-paginate";
 import { ITEM_COLUMNS, flattenSources } from "./insight-bundle";
@@ -180,22 +179,23 @@ async function loadIndex(): Promise<LibraryIndex> {
  * ⚠️ 为什么纯时间桶不够：每个 10 分钟窗口的第一个请求都要同步建一次索引。本站流量稀疏，
  * 大多数访问恰好就是「窗口里第一个」，于是线上 /insights 大多数时候 6~7s（2026-09-23 实测）。
  *
- * ⚠️ 必须经 callOutsideRequestScope 调用：否则 Next 把请求 URL（含 ?q=腾讯 这种中文）拼进缓存条目名，
+ * ⚠️ 必须在请求上下文之外调用：否则 Next 把请求 URL（含 ?q=腾讯 这种中文）拼进缓存条目名，
  * Vercel 数据缓存读写全部静默失败，带中文搜索词的每个请求都重建索引（见 lib/cache-outside-request.ts）。
+ * 定义处的 requestSafeCache 内部就是 callOutsideRequestScope，调用处不用再包（全仓统一入口，见 lib/request-safe-cache.ts）。
  */
-const getCachedIndex = unstable_cache(async () => loadIndex(), ["insight-library-index-v3"], {
+const getCachedIndex = requestSafeCache(async () => loadIndex(), ["insight-library-index-v3"], {
   revalidate: INDEX_TTL_SECONDS,
   tags: ["insight-library"],
 });
 
-const getRebuiltIndex = unstable_cache(
+const getRebuiltIndex = requestSafeCache(
   async (_bucket: number) => loadIndex(),
   ["insight-library-index-v3-rebuild"],
   { revalidate: INDEX_TTL_SECONDS * 2, tags: ["insight-library"] },
 );
 
 export async function getInsightLibraryIndex(): Promise<LibraryIndex> {
-  const index = await callOutsideRequestScope(() => getCachedIndex());
+  const index = await getCachedIndex();
   const ageSeconds = (Date.now() - Date.parse(index.builtAt)) / 1000;
   if (!(ageSeconds > INDEX_MAX_STALE_SECONDS)) return index;
 
@@ -203,7 +203,7 @@ export async function getInsightLibraryIndex(): Promise<LibraryIndex> {
     `[insight-library] 索引已 ${Math.round(ageSeconds / 60)} 分钟没更新（后台重建没落地，或整站闲置这么久），本次同步重建`,
   );
   const bucket = Math.floor(Date.now() / (INDEX_TTL_SECONDS * 1000));
-  const rebuilt = await callOutsideRequestScope(() => getRebuiltIndex(bucket));
+  const rebuilt = await getRebuiltIndex(bucket);
   return Date.parse(rebuilt.builtAt) > Date.parse(index.builtAt) ? rebuilt : index;
 }
 
