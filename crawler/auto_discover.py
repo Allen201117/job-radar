@@ -1,5 +1,9 @@
 """crawler/auto_discover.py — 每日定向自动扩源（发现 → live 探活验证 → 只入库真产岗的）。
 
+⏹️ 2026-09-23 起本脚本的每日定时已停（auto-discover.yml 只留手动触发）：静态清单全集探飞书/hotjob
+已 0 个新候选，「同一批目标顺手探飞书/hotjob」并进了 auto_discover_browser.py。本文件的纯函数
+（plan_targets / load_targets / insert_source …）浏览器道和海外道仍在复用，别删。
+
 为何：产品要岗位库**自动扩充、不靠人工开 session**。但守住 §3「精 > 量、禁止猜 slug 入库」——
 本脚本不铺量、不猜 slug 入库：
   · 目标只来自 **精选目标公司清单**（targets_private500/soe500.json，{company,cn,slugs,industry}）

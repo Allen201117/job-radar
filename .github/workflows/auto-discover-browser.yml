@@ -3,6 +3,8 @@ name: auto-discover-sources-browser
 # 每日定向自动扩源（浏览器变体）：补 httpx 探不到的 beisen/moka 传统大厂缺口。
 # httpx 廉价探一批 tenant（标题核验）→ 只对前 CONFIRM_CAP 家开真 adapter(Playwright)确认真产岗 → 只入库产岗的。
 # §3 精>量：不铺量/不猜slug入库。三道闸：dry-run默认 / source_url去重 / 每日上限。详见 crawler/auto_discover_browser.py。
+# 2026-09-23 起同一批目标也顺手探飞书/hotjob（httpx 探活即拿到岗位数，不占浏览器确认名额），
+# 原 auto-discover.yml 的每日定时已停、并入本道。
 on:
   schedule:
     - cron: "0 21 * * *"   # UTC 21（北京 5:00），低峰；与 enrich/audit 浏览器档错开，新源赶下次 daily-crawl
