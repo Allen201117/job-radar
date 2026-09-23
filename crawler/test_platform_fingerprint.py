@@ -566,3 +566,29 @@ class MalformedEmbeddedUrlTest(unittest.TestCase):
             ["https://www.example.com/app.js"],
         )
         self.assertIsNone(pf._adapter_api_url("greenhouse", "https://["))
+
+
+
+class LatinCompanyWordBoundaryTest(unittest.TestCase):
+    """纯英文公司名按词边界核身份（2026-09-23）：ABB 的入口曾被记成 careers.abbvie.com。"""
+
+    def _ok(self, company, html):
+        return pf.verify_page_identity(company, "https://x.example.com/", html)[0]
+
+    def test_substrings_of_other_words_do_not_count(self):
+        self.assertFalse(self._ok("ABB", "<title>AbbVie Careers</title>"))
+        self.assertFalse(self._ok("ABB", "<p>Abbott Laboratories jobs</p>"))
+        self.assertFalse(self._ok("OPPO", "<p>Explore career opportunities</p>"))
+        self.assertFalse(self._ok("UPS", "<p>our groups and startups</p>"))
+        self.assertFalse(self._ok("3M", "<p>3mm steel plate</p>"))
+
+    def test_real_mentions_still_count(self):
+        self.assertTrue(self._ok("ABB", "<title>Careers | ABB</title>"))
+        self.assertTrue(self._ok("ABB", "<title>ABB中国招聘</title>"))
+        self.assertTrue(self._ok("OPPO", "<title>OPPO 校园招聘</title>"))
+        self.assertTrue(self._ok("TCL", "<title>TCL科技集团</title>"))
+        self.assertTrue(self._ok("3M", "<title>3M中国</title>"))
+        self.assertTrue(self._ok("vivo", "<title>vivo招聘</title>"))
+
+    def test_chinese_names_keep_compact_substring(self):
+        self.assertTrue(self._ok("腾讯", "<title>腾 讯 招 聘</title>"))
