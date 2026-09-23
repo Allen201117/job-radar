@@ -94,7 +94,11 @@ export function appendJobScopeWhere(
 
   const scope = effectiveJobScope(preferences);
   if (scope === "domestic") {
-    conds.push("coalesce(job_scope, 'domestic') = 'domestic'");
+    // ⚠️ 不要写成 `coalesce(job_scope, 'domestic') = 'domestic'`（两者对每个取值都等价，含 NULL）：
+    // 表达式没有统计信息，规划器按默认 0.5% 估行 → 以为 51.7 万 active 里只有约 2,500 行是国内岗，
+    // 于是放弃 (status, first_seen_at) 索引、整表扫描再排序。2026-09-23 香港库实测「无筛选 / 只选校招」
+    // 取最新 1000 行：Parallel Seq Scan 13.9 万 buffer 985ms → Index Scan 1,500 buffer 4~196ms。
+    conds.push("(job_scope = 'domestic' or job_scope is null)");
     return;
   }
   if (scope === "all") return;
