@@ -18,6 +18,8 @@ import { formatDateLabel, todayInDisplayZone } from "@/lib/relative-time";
 import { getRequestUser } from "@/lib/auth";
 import { getApplyPrograms } from "@/lib/apply-programs-store";
 import { getAnnouncementPostings } from "@/lib/announcement-postings-store";
+import { toAnnouncementCard } from "@/lib/announcement-postings";
+import { initialAnnouncementView } from "@/lib/announcement-filters";
 import {
   PROGRAM_TYPE_HINT,
   PROGRAM_TYPE_LABEL,
@@ -177,7 +179,12 @@ export default async function ProgramsPage() {
                 {postings.length > 0 ? (
                   <div className="mt-7">
                     <h3 className="t-label ink-3 mb-2.5">每天从各省官方人事考试/人社网站收录 · 只保留还在报名期内的</h3>
-                    <AnnouncementsClient postings={postings} today={today} />
+                    {/* 只下发首屏那一页 + 服务端算好的分面；全量由客户端挂载后从 /api/programs/postings 取
+                        （原先整块塞进 props，占 HTML 的 252KB / 572KB，而首屏只画 40 张卡）。 */}
+                    <AnnouncementsClient
+                      initial={initialAnnouncementView(postings.map(toAnnouncementCard), today)}
+                      today={today}
+                    />
                   </div>
                 ) : null}
               </section>

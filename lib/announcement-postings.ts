@@ -28,6 +28,29 @@ export interface AnnouncementPosting {
   sameTitleHint: string | null;
 }
 
+/**
+ * 交给浏览器的公告形状：卡片与筛选器真正读的字段。`id` / `sourcePortal` 前端一处都不读
+ * （卡片 key 用 sourceUrl），每条白带 ~80 字节，400+ 条全量下发时就是几十 KB。
+ */
+export type AnnouncementCard = Omit<AnnouncementPosting, "id" | "sourcePortal">;
+
+export function toAnnouncementCard(p: AnnouncementPosting): AnnouncementCard {
+  // 显式挑字段而不是解构剔除：将来给 AnnouncementPosting 加列，不会悄悄跟着下发到浏览器。
+  return {
+    sourceUrl: p.sourceUrl,
+    title: p.title,
+    region: p.region,
+    employerType: p.employerType,
+    audience: p.audience,
+    publishedAt: p.publishedAt,
+    deadline: p.deadline,
+    deadlineText: p.deadlineText,
+    verdict: p.verdict,
+    employerUnclear: p.employerUnclear,
+    sameTitleHint: p.sameTitleHint,
+  };
+}
+
 /** 受众徽章文案（应届/社会分面）。unknown 不出徽章。 */
 export const AUDIENCE_LABEL: Record<AnnouncementAudience, string> = {
   fresh_grad: "应届",

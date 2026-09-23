@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareOut,
   CalendarBlank,
@@ -12,11 +12,12 @@ import {
   SealCheck,
   X,
 } from "@phosphor-icons/react";
-import { Badge, Button, EmptyState, Popover, Segmented, buttonVariants } from "@/components/ui";
+import { Badge, Button, EmptyState, Popover, Segmented, Spinner, buttonVariants } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { formatDateLabel } from "@/lib/relative-time";
-import { AUDIENCE_LABEL, inferAnnouncementRegion, type AnnouncementPosting } from "@/lib/announcement-postings";
+import { AUDIENCE_LABEL, inferAnnouncementRegion, type AnnouncementCard } from "@/lib/announcement-postings";
 import {
+  ANNOUNCEMENT_PAGE_SIZE,
   CLOSING_SOON_DAYS,
   EMPTY_FILTERS,
   activeFilterCount,
@@ -26,42 +27,94 @@ import {
   sortPostings,
   type AnnouncementFilters,
   type AudienceFilter,
-  type Facet,
+  type InitialAnnouncementView,
   type SortKey,
 } from "@/lib/announcement-filters";
 
-const INITIAL_VISIBLE_COUNT = 40;
+const INITIAL_VISIBLE_COUNT = ANNOUNCEMENT_PAGE_SIZE;
+
+/** 分面选项；count 缺省 = 全量还没到货、此刻给不出准确数字（宁可不写，也不写一个对不上的）。 */
+type FacetChoice = { value: string; count?: number };
 
 /**
  * 招聘公告列表 + 筛选器。
+ *
+ * 首屏（无筛选、最新发布）由服务端算好下发（`initial`）；全量公告挂载后从 /api/programs/postings 取，
+ * 到货后筛选、排序、加载更多都在浏览器里即时算。全量没到之前，只有首屏那一种状态画得出准确结果——
+ * 用户在这之前动了筛选，就先显示「正在载入」，**不拿首屏的数字冒充筛选后的数字**。
  *
  * ⚠️ `today` 由**服务端**算好传进来（`todayInDisplayZone()`），客户端不要自己 `new Date()` ——
  * Vercel 函数跑 UTC、浏览器跑本地时区，两边各算一次「还剩几天」会导致水合文本不一致
  * （项目已因裸 toLocaleDateString 踩过 React #418，见 lib/relative-time 的注释）。
  */
 export default function AnnouncementsClient({
-  postings,
+  initial,
   today,
 }: {
-  postings: AnnouncementPosting[];
+  initial: InitialAnnouncementView;
   today: string;
 }) {
   const [filters, setFilters] = useState<AnnouncementFilters>(EMPTY_FILTERS);
   const [sort, setSort] = useState<SortKey>("newest");
   const [shownCount, setShownCount] = useState(INITIAL_VISIBLE_COUNT);
+  const [all, setAll] = useState<AnnouncementCard[] | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
-  const facets = useMemo(() => buildFacets(postings, filters, today), [postings, filters, today]);
-  const visible = useMemo(
-    () => sortPostings(postings.filter((p) => matchesFilters(p, filters, today)), sort, today),
-    [postings, filters, today, sort],
+  useEffect(() => {
+    const ctl = new AbortController();
+    setLoadFailed(false);
+    fetch("/api/programs/postings", { signal: ctl.signal, cache: "no-store" })
+      .then(async (res) => {
+        const body = await res.json().catch(() => null);
+        if (!res.ok || !body?.ok || !Array.isArray(body.postings)) throw new Error(`HTTP ${res.status}`);
+        // 首屏明明有公告、全量却是空的 = 取数出了问题（取数层失败时返回空数组），不能当成「全都下架了」。
+        if (body.postings.length === 0 && initial.total > 0) throw new Error("empty_postings");
+        setAll(body.postings as AnnouncementCard[]);
+      })
+      .catch((e: Error) => {
+        if (ctl.signal.aborted) return;
+        console.warn("[programs] 全量公告加载失败:", e.message);
+        setLoadFailed(true);
+      });
+    return () => ctl.abort();
+  }, [attempt, initial.total]);
+
+  // 全量到货前唯一画得准的状态 = 无筛选 + 最新发布（服务端用同一套函数算好的首屏）。
+  const pristine = activeFilterCount(filters) === 0 && sort === "newest";
+  const facets = useMemo(
+    () => (all ? buildFacets(all, filters, today) : pristine ? initial.facets : null),
+    [all, filters, today, pristine, initial.facets],
   );
+  const visible = useMemo(
+    () =>
+      all
+        ? sortPostings(all.filter((p) => matchesFilters(p, filters, today)), sort, today)
+        : pristine
+          ? initial.postings
+          : null,
+    [all, filters, today, sort, pristine, initial.postings],
+  );
+  const totalCount = all ? all.length : initial.total;
+  // 当前筛选下一共几条；首屏态 visible 只有一页，总数要用服务端给的。
+  const visibleCount = all ? (visible?.length ?? 0) : pristine ? initial.total : null;
+  const unknownDeadlineCount = all
+    ? all.filter((posting) => !posting.deadline).length
+    : initial.unknownDeadlineCount;
+  const displayed = visible ? visible.slice(0, shownCount) : [];
   const activeCount = activeFilterCount(filters);
-  const unknownDeadlineCount = postings.filter((posting) => !posting.deadline).length;
-  const displayed = visible.slice(0, shownCount);
+  const waitingForAll = !all && !loadFailed;
+  const retry = () => setAttempt((n) => n + 1);
   const patch = (p: Partial<AnnouncementFilters>) => {
     setFilters((f) => ({ ...f, ...p }));
     setShownCount(INITIAL_VISIBLE_COUNT);
   };
+  const withCount = (label: string, n: number | undefined) => (n === undefined ? label : `${label} ${n}`);
+  // 全量没到时下拉里照样列出全部可选值（来自首屏分面），只是先不写数字。
+  const regionChoices: FacetChoice[] = facets ? facets.regions : initial.facets.regions.map((f) => ({ value: f.value }));
+  const employerChoices: FacetChoice[] = facets
+    ? facets.employerTypes
+    : initial.facets.employerTypes.map((f) => ({ value: f.value }));
 
   return (
     <div>
@@ -86,13 +139,13 @@ export default function AnnouncementsClient({
         <FacetDropdown
           label="地区"
           selected={filters.region}
-          facets={facets.regions}
+          facets={regionChoices}
           onSelect={(v) => patch({ region: v })}
         />
         <FacetDropdown
           label="单位类型"
           selected={filters.employerType}
-          facets={facets.employerTypes}
+          facets={employerChoices}
           onSelect={(v) => patch({ employerType: v })}
         />
 
@@ -102,9 +155,9 @@ export default function AnnouncementsClient({
           value={filters.audience}
           onChange={(v) => patch({ audience: v })}
           options={[
-            { value: "all", label: `全部 ${facets.audience.all}` },
-            { value: "fresh_grad", label: `应届 ${facets.audience.fresh_grad}` },
-            { value: "experienced", label: `社会 ${facets.audience.experienced}` },
+            { value: "all", label: withCount("全部", facets?.audience.all) },
+            { value: "fresh_grad", label: withCount("应届", facets?.audience.fresh_grad) },
+            { value: "experienced", label: withCount("社会", facets?.audience.experienced) },
           ]}
         />
 
@@ -122,7 +175,7 @@ export default function AnnouncementsClient({
           )}
         >
           <CalendarBlank size={14} weight="bold" aria-hidden />
-          {CLOSING_SOON_DAYS} 天内截止 {facets.closingSoon}
+          {withCount(`${CLOSING_SOON_DAYS} 天内截止`, facets?.closingSoon)}
         </button>
 
         <Segmented<SortKey>
@@ -171,15 +224,33 @@ export default function AnnouncementsClient({
       ) : null}
 
       <p className="t-caption ink-3 mt-3" aria-live="polite">
-        {activeCount > 0
-          ? `在 ${postings.length} 条自动收录的公告里筛出 ${visible.length} 条`
-          : `共 ${postings.length} 条自动收录、正在报名的官方公告`}
-        {filters.closingWithinDays !== null && unknownDeadlineCount > 0
+        {visibleCount === null
+          ? `正在载入全部 ${totalCount} 条公告…`
+          : activeCount > 0
+            ? `在 ${totalCount} 条自动收录的公告里筛出 ${visibleCount} 条`
+            : `共 ${totalCount} 条自动收录、正在报名的官方公告`}
+        {visibleCount !== null && filters.closingWithinDays !== null && unknownDeadlineCount > 0
           ? `；截止日待确认的 ${unknownDeadlineCount} 条不计入“${CLOSING_SOON_DAYS} 天内截止”`
           : null}
       </p>
 
-      {visible.length === 0 ? (
+      {visible === null ? (
+        <div className="mt-5">
+          {loadFailed ? (
+            <EmptyState
+              tone="error"
+              title="公告列表没载入成功"
+              description="筛选要用到全部公告，刚才没取到。网络恢复后点重试；清空筛选可以先看最新发布的一页。"
+              action={<Button variant="soft" size="sm" onClick={retry}>重试</Button>}
+            />
+          ) : (
+            <p className="t-body-sm ink-3 inline-flex items-center gap-2">
+              <Spinner size={14} label={null} />
+              正在载入全部公告，马上按你的条件筛出来
+            </p>
+          )}
+        </div>
+      ) : visibleCount === 0 ? (
         <div className="mt-5">
           <EmptyState
             title="没有符合条件的公告"
@@ -193,10 +264,21 @@ export default function AnnouncementsClient({
           ))}
         </ul>
       )}
-      {visible.length > displayed.length ? (
+      {visibleCount !== null && visibleCount > displayed.length ? (
         <div className="mt-5 flex justify-center">
-          <Button variant="soft" size="sm" onClick={() => setShownCount((count) => count + INITIAL_VISIBLE_COUNT)}>
-            加载更多（还有 {visible.length - displayed.length} 条）
+          {/* 首屏态点「加载更多」时全量可能还没到：先把页数记下，到货即展开，按钮上显示在等。 */}
+          <Button
+            variant="soft"
+            size="sm"
+            loading={waitingForAll && shownCount > displayed.length}
+            onClick={() => {
+              if (loadFailed) retry();
+              if (shownCount <= displayed.length) setShownCount((count) => count + INITIAL_VISIBLE_COUNT);
+            }}
+          >
+            {loadFailed && shownCount > displayed.length
+              ? "没载入成功，点此重试"
+              : `加载更多（还有 ${visibleCount - displayed.length} 条）`}
           </Button>
         </div>
       ) : null}
@@ -222,7 +304,7 @@ function FacetDropdown({
 }: {
   label: string;
   selected: string | null;
-  facets: Facet[];
+  facets: FacetChoice[];
   onSelect: (value: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -285,7 +367,7 @@ function FacetOption({
 }
 
 /** 报名截止的展示文案 + 紧迫度色。 */
-function deadlineChip(posting: AnnouncementPosting, today: string) {
+function deadlineChip(posting: AnnouncementCard, today: string) {
   const left = daysUntilDeadline(posting.deadline, today);
   if (left === null) {
     return posting.deadlineText
@@ -305,7 +387,7 @@ const CHIP_TONE = {
 };
 
 /** 官方招聘公告卡。标题即公告名，突出地区/受众/报名截止日。 */
-function PostingCard({ posting, today }: { posting: AnnouncementPosting; today: string }) {
+function PostingCard({ posting, today }: { posting: AnnouncementCard; today: string }) {
   const audience = AUDIENCE_LABEL[posting.audience];
   const chip = deadlineChip(posting, today);
   const region = posting.region ?? inferAnnouncementRegion(posting.title);

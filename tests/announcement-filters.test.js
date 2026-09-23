@@ -75,3 +75,22 @@ test("todayInDisplayZone 用北京时区，不是 UTC", () => {
   assert.equal(todayInDisplayZone(earlyMorningBeijing), "2026-09-18");
   assert.equal(earlyMorningBeijing.toISOString().slice(0, 10), "2026-09-17", "前提：UTC 确实是前一天");
 });
+
+// 首屏由服务端算、全量到货后由浏览器算：两边必须是同一套函数、同一个结果，
+// 否则用户会看到「首屏写 N 条、一动筛选（哪怕又清空）变成 N±k」。
+test("initialAnnouncementView 与浏览器在无筛选+最新发布时算出的逐项相同", () => {
+  const pool = [
+    ...POOL,
+    mk({ title: "广东医院招聘", region: "广东省", employerType: "医疗卫生", audience: "fresh_grad", deadline: "2026-09-22", publishedAt: "2026-09-16" }),
+    mk({ title: "浙江高校招聘", region: "浙江省", employerType: "高校", audience: "both", deadline: null, publishedAt: "2026-09-02" }),
+  ];
+  const pageSize = 3;
+  const view = F.initialAnnouncementView(pool, TODAY, pageSize);
+  const visible = F.sortPostings(pool.filter((p) => F.matchesFilters(p, F.EMPTY_FILTERS, TODAY)), "newest", TODAY);
+  assert.deepEqual(view.postings, visible.slice(0, pageSize));
+  assert.deepEqual(view.facets, F.buildFacets(pool, F.EMPTY_FILTERS, TODAY));
+  assert.equal(view.total, pool.length);
+  assert.equal(view.unknownDeadlineCount, 2);
+  assert.equal(view.postings.length, pageSize, "只下发一页");
+  assert.equal(F.initialAnnouncementView(pool, TODAY).postings.length, pool.length, "不足一页时全给");
+});
