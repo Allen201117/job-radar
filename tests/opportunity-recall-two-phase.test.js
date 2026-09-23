@@ -49,13 +49,17 @@ test("用户没填城市 → 不出 cityNew 层，层内排序退回按最新", 
 // 2026-09-23：爬虫一批入库在同一事务里，几百行 first_seen_at 逐字相同。排序键没有唯一列时，
 // 并列行谁拿到 row_number、谁被 limit 砍掉由执行计划决定——同一用户、同一条 SQL 换个计划候选就换一批
 // （70 画像 193 行互换，全是同一时间戳的行互相顶替）。每层的 window 排序与子查询 order by 都必须以 id 收尾。
+// 限定重算（召回快照 + 请求时只在快照 id 与新岗里重排）同样要：它换了 from / where，计划必然与快照那次不同，
+// 没有 id 决胜时两次对并列行的排法对不上。
 test("每层的 row_number 与层内 limit 都以唯一列 id 收尾（并列行的取舍不许由执行计划决定）", () => {
-  for (const over of [
-    {},
-    { targetLocations: ["上海"], targetCompanies: ["字节跳动"] },
-    { jobScope: "all", targetRegions: ["US"], targetLocations: ["上海"] },
+  const restrict = { idsByTier: { role: ["00000000-0000-4000-8000-000000000001"] }, newerThan: SINCE };
+  for (const [over, options] of [
+    [{}, {}],
+    [{ targetLocations: ["上海"], targetCompanies: ["字节跳动"] }, {}],
+    [{ jobScope: "all", targetRegions: ["US"], targetLocations: ["上海"] }, {}],
+    [{ targetLocations: ["上海"], targetCompanies: ["字节跳动"] }, { restrict }],
   ]) {
-    const built = buildRecallSql(mk(over), SINCE, 900);
+    const built = buildRecallSql(mk(over), SINCE, 900, [], options);
     const windows = [...built.sql.matchAll(/row_number\(\) over \(order by (.*?)\) as _rn/g)].map((m) => m[1]);
     const limits = [...built.sql.matchAll(/ order by ((?:(?! order by ).)*?) limit \$\d+\)/g)].map((m) => m[1]);
     assert.equal(windows.length, built.tiers.length, JSON.stringify(over));
