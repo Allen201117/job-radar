@@ -19,6 +19,13 @@ _EXCLUDE = re.compile(
     r"报名统计|温馨提示|印发|违纪违规|操作办法|暂行办法|实施办法|参考目录|设置参考|处理规定|工作规程)"
 )
 
+# 宣讲会/行程是线下活动预告，不是可投递的公告（2026-09-23 线上实测：「零跑汽车 2027 届校园招聘 9 月
+# 宣讲会行程预告」「力勤集团 2027 届校园招聘 9 月校招行程」挂在 /programs 上，点进去无处报名）。
+# 标题若同时写明是招聘公告/简章/启事/公开招聘，就不凭标题判死——交给 quality.assess 看正文有没有本页报名窗
+# （CLAUDE.md：两次误杀都栽在否定性判断上）。
+_PRESENTATION_SCHEDULE = re.compile(r"(宣讲会|宣讲行程|校招行程|行程预告)")
+_RECRUIT_NOTICE = re.compile(r"(招聘公告|招聘简章|招聘启事|公开招聘)")
+
 # 应届 / 社会 信号
 _FRESH = re.compile(r"(应届|高校毕业生|校园招聘|校招|毕业生|应届生|择业期)")
 _EXPERIENCED = re.compile(r"(社会人员|社会招聘|社招|工作经历|工作经验|在职)")
@@ -38,7 +45,24 @@ def is_recruitment_announcement(title: str) -> bool:
         return False
     if _EXCLUDE.search(title):
         return False
+    if is_schedule_only(title):
+        return False
     return bool(_INCLUDE.search(title))
+
+
+def is_presentation_schedule(title: str) -> bool:
+    """标题是否含宣讲/行程类信号，供入库与每日复验共用。"""
+    return bool(_PRESENTATION_SCHEDULE.search(title or ""))
+
+
+def has_recruit_notice_words(title: str) -> bool:
+    """标题是否自报为招聘公告/简章/启事/公开招聘。"""
+    return bool(_RECRUIT_NOTICE.search(title or ""))
+
+
+def is_schedule_only(title: str) -> bool:
+    """只是宣讲/行程预告、标题没自报是招聘公告 → 单凭标题即可判定不是投递入口。"""
+    return is_presentation_schedule(title) and not has_recruit_notice_words(title)
 
 
 def detect_audience(text: str) -> str:
