@@ -574,6 +574,107 @@ class NewlyBrokenTests(unittest.TestCase):
         self.assertEqual(out, [])
 
 
+def with_findings(row, *titles):
+    row["detail"] = {"findings": [{"title": t, "key": f"k{i}"} for i, t in enumerate(titles)]}
+    return row
+
+
+PAIR_A = "东方财富：1 个岗位同时挂在 campus-recruitment/eastmoney/57971 和 campus-recruitment/eastmoney/92400"
+PAIR_B = "宝洁：1 个岗位同时挂在 social-recruitment/pg/91934 和 recruit.pg.com.cn/social-recruitment/pg/91934"
+
+
+class NamedFindingsTests(unittest.TestCase):
+    """SQL 类检查的明细（detail.findings）要被晨报点名：光说「多了 2 份」，创始人转给谁都得再查一遍是哪家。"""
+
+    def test_no_detail_names_nothing(self):
+        self.assertEqual(md.named_findings(result("a", 2, "breach"), check("a")), "")
+        row = result("a", 2, "breach")
+        row["detail"] = {"error": "RuntimeError: timeout"}
+        self.assertEqual(md.named_findings(row, check("a")), "")
+
+    def test_titles_joined_and_rest_folded_into_count(self):
+        row = with_findings(result("a", 3, "breach"), PAIR_A, PAIR_B, "第三处")
+        out = md.named_findings(row, check("a"))
+        self.assertIn(PAIR_A, out)
+        self.assertIn(PAIR_B, out)
+        self.assertNotIn("第三处", out)
+        self.assertIn("等共 3 处", out)
+
+    def test_full_detail_says_at_least_not_total(self):
+        row = with_findings(result("a", 99, "breach"), *[f"第{i}处" for i in range(ar.DETAIL_MAX_FINDINGS)])
+        self.assertIn(f"等至少 {ar.DETAIL_MAX_FINDINGS} 处", md.named_findings(row, check("a")))
+
+    def test_long_title_is_capped(self):
+        row = with_findings(result("a", 1, "breach"), "长" * 500)
+        self.assertLessEqual(len(md.named_findings(row, check("a"))), 100)
+
+    def test_watchdog_findings_not_repeated(self):
+        """老告警的明细就是 issue 标题，⑤⑥ 已经逐条列过。"""
+        wd = dict(check("watchdog.rule_h"), source="watchdog")
+        row = with_findings(result("watchdog.rule_h", 1, "breach"), "[watchdog] 同一门户挂了两条源")
+        self.assertEqual(md.named_findings(row, wd), "")
+
+    def test_action_item_names_the_pairs(self):
+        c = check("jobs.moka", name="重复份数", action="转给 Claude")
+        today = {"jobs.moka": with_findings(result("jobs.moka", 2, "breach"), PAIR_A, PAIR_B)}
+        items = md.build_action_items(today, {"jobs.moka": c})
+        self.assertEqual(len(items), 1)
+        self.assertTrue(items[0].startswith("重复份数：转给 Claude（涉及："))
+        self.assertIn("东方财富", items[0])
+        self.assertIn("等共 2 处", items[0])  # ⑦ 只点第一处，免得撞 300 字上限被截断
+
+    def test_action_item_without_findings_unchanged(self):
+        c = check("a", name="指标A", action="去看看")
+        items = md.build_action_items({"a": result("a", 2, "breach")}, {"a": c})
+        self.assertEqual(items, ["指标A：去看看"])
+
+    def test_newly_broken_carries_names(self):
+        today = {"a": with_findings(result("a", 2, "breach"), PAIR_B)}
+        out = md.find_newly_broken(today, {"a": result("a", 1, "ok")}, {"a": "指标A"}, {"a": check("a")})
+        self.assertEqual(out[0]["named"], PAIR_B)
+
+    def test_digest_text_and_html_name_the_pairs_within_caps(self):
+        ids = md.SECTION_USERS + md.SECTION_EXPERIENCE + md.SECTION_SUPPLY + md.SECTION_FAKE_GREEN
+        checks = [check(cid, name=f"人话名字-{i}") for i, cid in enumerate(ids)]
+        checks.append(check("jobs.moka", name="重复份数", why="同一个岗位挂了两份", action="转给 Claude",
+                            layer="data"))
+        today = [result(cid, 1, "ok") for cid in ids]
+        today.append(with_findings(result("jobs.moka", 2, "breach"), PAIR_A, PAIR_B + "<b>"))
+        yesterday = [result("jobs.moka", 1, "ok")]
+        digest = md.build_digest(checks, today, yesterday, None, [], None)
+        section5 = digest["text"].split("⑤")[1].split("⑥")[0]
+        section7 = digest["text"].split("⑦")[1].split("⑧")[0]
+        self.assertIn("    涉及：东方财富", section5)
+        self.assertIn("宝洁", section5)
+        self.assertIn("东方财富", section7)
+        self.assertNotIn("…", section5 + section7)  # 点名本身不许被行长上限截断
+        self.assertIn("&lt;b&gt;", digest["html"])
+        self.assertNotIn(PAIR_B + "<b>", digest["html"])
+        for line in digest["text"].splitlines():
+            self.assertLessEqual(len(line), 300)
+
+
+class FetchAuditResultsTests(unittest.TestCase):
+    def test_reads_detail_column(self):
+        class Cur:
+            def execute(self, sql, params):
+                self.sql = sql
+
+            def fetchall(self):
+                return [("a", "data", "warn", 2.0, "<= 1", "breach", False, None, {"findings": [{"title": "t"}]})]
+
+            def close(self):
+                pass
+
+        class Conn:
+            def cursor(self):
+                return Cur()
+
+        rows = md.fetch_audit_results(Conn(), "2026-09-23")
+        self.assertEqual(rows[0]["detail"], {"findings": [{"title": "t"}]})
+        self.assertEqual(rows[0]["verdict"], "breach")
+
+
 class OldIssueOrderTests(unittest.TestCase):
     def test_sorted_oldest_first(self):
         now = datetime.now(timezone.utc)

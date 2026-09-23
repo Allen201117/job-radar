@@ -400,5 +400,28 @@ class DiscoveryMaxPagesWiringTest(unittest.TestCase):
         self.assertEqual(captured, [discovery.DEFAULT_DISCOVERY_MAX_PAGES])  # 回退默认 4
 
 
+class UpsertRawJobsLocationTest(unittest.TestCase):
+    """按需发现/刷新那条写库链（_upsert_raw_jobs）是 run.py 入库逻辑的镜像，标题认城市必须同口径，
+    否则同一个岗从两条链进来会一个有城市、一个没有。"""
+
+    def test_empty_location_falls_back_to_title_city(self):
+        from unittest import mock
+
+        captured = []
+        with mock.patch.object(discovery.jobs_db, "enabled", return_value=True), \
+                mock.patch.object(discovery.jobs_db, "upsert_job",
+                                  side_effect=lambda conn, job: captured.append(job) or "created"), \
+                mock.patch.object(discovery, "_jobs_conn", return_value=None):
+            discovery._upsert_raw_jobs(
+                None, "src-1", "万物云", "https://example.com/jobs",
+                [_job(title="福州-项目管理岗（实习生）", location=None,
+                      jd_url="https://example.com/jobs/position/9/detail"),
+                 _job(title="泉州-项目管理岗", location="厦门",
+                      jd_url="https://example.com/jobs/position/10/detail")],
+            )
+
+        self.assertEqual([j["location"] for j in captured], ["福州", "厦门"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -217,15 +217,42 @@ def summarize_walkthrough_issues(issues_by_type):
 # 今天新出的问题 / 建议做的事
 # ---------------------------------------------------------------------------
 
-def find_newly_broken(results_today_by_id, results_yesterday_by_id, names):
+_NAMED_FINDINGS_SHOWN = 2
+_NAMED_FINDING_TITLE_MAX = 100
+
+
+def named_findings(row, check, limit=_NAMED_FINDINGS_SHOWN):
+    """把一条检查今天的明细（detail.findings[].title）念成一句「涉及：…」用的人话，没有就返回空串。
+
+    只念 SQL 类检查的明细：老告警桥接（source=watchdog）的明细就是 issue 标题，⑤⑥ 段已经逐条列了，
+    再念一遍是重复。只念前 limit 处，其余折成「等共 N 处」；明细本身最多只取 30 处，
+    取满时说「至少」，不把截断当成全集。
+    """
+    if (check or {}).get("source") == "watchdog":
+        return ""
+    findings = ((row or {}).get("detail") or {}).get("findings") or []
+    titles = [str(f["title"]).strip() for f in findings if isinstance(f, dict) and f.get("title")]
+    titles = [t for t in titles if t]
+    if not titles:
+        return ""
+    text = "；".join(_cap_line_length(t, _NAMED_FINDING_TITLE_MAX) for t in titles[:limit])
+    if len(titles) > limit:
+        cap = getattr(_audit_runner, "DETAIL_MAX_FINDINGS", 30)
+        text += f" 等至少 {len(titles)} 处" if len(titles) >= cap else f" 等共 {len(titles)} 处"
+    return text
+
+
+def find_newly_broken(results_today_by_id, results_yesterday_by_id, names, checks_by_id=None):
     """昨天 ok、今天 breach/error 的检查项。"""
+    checks_by_id = checks_by_id or {}
     out = []
     for cid, today_row in results_today_by_id.items():
         if today_row["verdict"] not in ("breach", "error"):
             continue
         yest = results_yesterday_by_id.get(cid)
         if yest is not None and yest["verdict"] == "ok":
-            out.append({"check_id": cid, "name": names.get(cid, cid), "why": today_row.get("why", "")})
+            out.append({"check_id": cid, "name": names.get(cid, cid), "why": today_row.get("why", ""),
+                        "named": named_findings(today_row, checks_by_id.get(cid))})
     return out
 
 
@@ -256,10 +283,13 @@ def build_action_items(results_today_by_id, checks_by_id, limit=5, max_per_group
             continue
         rank = 0 if row["severity"] == "critical" else 1
         name = check.get("name", cid)
-        bucket = grouped.setdefault(action, {"rank": rank, "names": [], "group": _group_key(check)})
+        bucket = grouped.setdefault(action, {"rank": rank, "names": [], "group": _group_key(check), "named": []})
         bucket["rank"] = min(bucket["rank"], rank)
         if name not in bucket["names"]:
             bucket["names"].append(name)
+        named = named_findings(row, check, limit=1)  # ⑦ 一行里还有名字和 action，只点第一处，全文见 ⑤ / 明细
+        if named:
+            bucket["named"].append(named)
 
     ordered = sorted(grouped.items(), key=lambda kv: (kv[1]["rank"], kv[1]["names"]))
     result = []
@@ -278,7 +308,10 @@ def build_action_items(results_today_by_id, checks_by_id, limit=5, max_per_group
         label = "、".join(shown)
         if len(names) > 5:
             label += f"等 {len(names)} 项"
-        result.append(f"{label}：{action}")
+        item = f"{label}：{action}"
+        if info["named"]:
+            item += f"（涉及：{'；'.join(info['named'])}）"
+        result.append(item)
     return result
 
 
@@ -309,12 +342,13 @@ def fetch_audit_results(conn, run_date_str):
     try:
         cur.execute(
             """
-            select check_id, layer, severity, value, normal, verdict, calibrated, error_message
+            select check_id, layer, severity, value, normal, verdict, calibrated, error_message, detail
             from public.audit_results where run_date = %s
             """,
             (run_date_str,),
         )
-        cols = ["check_id", "layer", "severity", "value", "normal", "verdict", "calibrated", "error_message"]
+        cols = ["check_id", "layer", "severity", "value", "normal", "verdict", "calibrated", "error_message",
+                "detail"]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
     finally:
         cur.close()
@@ -852,7 +886,7 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
     issues_by_type = walkthrough_metrics.get("issues_by_type") or {}
     walkthrough_issue_summary = summarize_walkthrough_issues(issues_by_type)
 
-    newly_broken = find_newly_broken(results_today_by_id, results_yesterday_by_id, names)
+    newly_broken = find_newly_broken(results_today_by_id, results_yesterday_by_id, names, checks_by_id)
     recent_issues = [
         i for i in open_issues
         if _issue_age_hours(i) is not None and _issue_age_hours(i) <= 24
@@ -901,6 +935,8 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
     if newly_broken or recent_issues:
         for item in newly_broken:
             text_lines.append(f"  · {item['name']}：昨天还正常，今天不正常了。{item['why']}")
+            if item.get("named"):
+                text_lines.append(f"    涉及：{item['named']}")
         for issue in recent_issues:
             text_lines.append(f"  · #{issue.get('number')} {humanize_issue_title(issue.get('title'), issue_title_names)}（24 小时内新开）")
     else:
@@ -987,7 +1023,8 @@ def _to_html(subject, users_rows, experience_rows, supply_rows, fake_green_rows,
 
     new_html = "<p>没有。</p>"
     if newly_broken or recent_issues:
-        li = [f"<li>{_esc(x['name'])}：昨天还正常，今天不正常了。{_esc(x.get('why',''))}</li>" for x in newly_broken]
+        li = [f"<li>{_esc(x['name'])}：昨天还正常，今天不正常了。{_esc(x.get('why',''))}"
+              + (f"<br>涉及：{_esc(x['named'])}" if x.get("named") else "") + "</li>" for x in newly_broken]
         li += [f"<li>#{issue.get('number')} {_esc(humanize_issue_title(issue.get('title'), issue_title_names))}（24 小时内新开）</li>" for issue in recent_issues]
         new_html = "<ul style='padding-left:18px'>" + "".join(li) + "</ul>"
 

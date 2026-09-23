@@ -174,8 +174,8 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
 
 | 组件 | 在哪 | 干什么 |
 |---|---|---|
-| 期望清单 | `crawler/audit_contract.yaml`（86 条：数据 13 / 体验 22 / 链路 35 / 老告警桥接 16；原写 85 条是 09-19 上线时的数，09-23 复核更正） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
-| 执行器 | `crawler/audit_runner.py` + `structural-audit.yml`（每日北京 08:50） | 逐条量，写 `audit_results`（Supabase，迁移 281/282）；`unique(check_id, run_date)` 一天一行 = 趋势表 |
+| 期望清单 | `crawler/audit_contract.yaml`（87 条：数据 14 / 体验 22 / 链路 35 / 老告警桥接 16；原写 85 条是 09-19 上线时的数，09-23 复核更正） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
+| 执行器 | `crawler/audit_runner.py` + `structural-audit.yml`（每日北京 08:50） | 逐条量，写 `audit_results`（Supabase，迁移 281/282）；`unique(check_id, run_date)` 一天一行 = 趋势表。可选 `detail_sql` 列出「具体是哪几处」进 `detail.findings`，晨报 ⑤⑦ 据此点名；它失败不改数值与判定 |
 | 覆盖率差集 | `crawler/audit_coverage.py` + `audit_exemptions.yaml` | 左边**自动枚举**（带 cron 的 workflow / 写 ops_runs 的模块 / jobs 表列 / 走查指标），减去有期望的；上线时 68 条 → 现 14 条（全是 jobs 列） |
 | 老告警桥接 | `ops_watchdog.py` 的 `publish_audit_bridge` | 16 条规则**判定与阈值一字未动**，只把每条的命中数 + 明细写进同一张表（`detail.findings[].title` 与 issue 标题逐字一致） |
 | 晨报 | `crawler/morning_digest.py` + `morning-digest.yml`（北京 09:30） | 每天必发，绿灯也发（绿灯邮件就是心跳）；报「昨天全天」 |
@@ -196,7 +196,7 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
   （`MokaAdapter._raise_if_campus_portal_superseded`，由「连续失败」老告警接住）。**两者是一对，删掉后者前者就会藏坏源**；
   其它平台还没有同类识别。回归钉在 `crawler/test_fake_green_sources.py`。
 - **`name/why/action` 的读者是非技术创始人**：不许出现表名 / 模块英文名 / SQL 词 / 「GitHub Actions、日志、索引、adapter」；
-  `action` 写成他能做的动作（「把这条转给 Claude，让它查…」）。阈值没有历史依据的一律 `calibrated: false`（现 83/86 条），
+  `action` 写成他能做的动作（「把这条转给 Claude，让它查…」）。阈值没有历史依据的一律 `calibrated: false`（现 84/87 条），
   攒够 30 天换分位数，**禁止编一个看着合理的数字却不标它**。
 - 周任务的链路检查窗口是 8 天；`campus-crawl` 那条按月份条件化（月份集合复用规则 O）。
   ⚠️ `enrich-crawl` / `dead-link-audit-new` 与另一条 workflow 共用台账模块名，**一条停了另一条会掩盖它**——豁免理由里写的是真缺口，不是「不用管」。
@@ -271,6 +271,23 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
   ③ **函数实例**：每次请求常落到不同实例，进程内 5 分钟缓存对首屏基本无效（三连打三个实例）。
   等价性尺子：`JOBS_MATCH_PRESCORE=off` 退回全窗精排取真值，第一页 60 条逐用户对拍（数字在报告 §10）。
   ⚠️ 没有方向词的用户（画像无 target_roles）粗排只剩城市/公司/7 天，仍是全表扫——量级同旧，不算回归但也没提速。
+  （2026-09-23 核：近 7 天 80 次真实搜索里**没有一次**落在这条路上——慢的是下面第四、五层，别再把「慢」默认归到这里。）
+  📌 **2026-09-23 第四层：规划器估错行数**（审计 `exp.search_slow_rate_7d` 33.75% 起查，80 次搜索全集按用户画像逐条复现）。
+  ❌ 「不加筛选 / 只选校招 / 只选实习」只取最新 1000 行，库上却 Parallel Seq Scan 13.9 万 buffer、0.6~1s（冷缓存更久）。
+  ✅ 根因：`coalesce(job_scope,'domestic')='domestic'` 是表达式、没有统计信息，规划器按默认 0.5% 估（实际 67%）→
+  以为按时间索引要翻很久，改走整表扫再排序。改写成逐值等价的 `(job_scope='domestic' or job_scope is null)`（`lib/job-scope.ts`）
+  → Index Scan 1.5k buffer、4~196ms。`listLatestActive`（/jobs 首屏 SSR）同一写法同时受益。
+  🚫 **新写 where 别用函数/coalesce 包列**，写完先 `EXPLAIN` 看估计行数和实际行数差几个数量级。
+  📌 **第五层：招聘类型没索引 + 库机内存装不下数据**（2GB 内存 / 2.26GB 数据，冷缓存每回表一行 0.1~0.3ms）：
+  「只选实习」要回表 2.9 万行才凑满 1000 行（热 76ms / 冷 2~4.6s）。加 `idx_jobs_active_recruitment_first_seen`；
+  无粗排的校招/实习拆两支 `union all`（`recruitmentUnionSql`），粗排收窄按类型拆三支（`prescoreOrderBy`）——
+  规划器不会自己把 OR 分配进去，写成 `(方向 or 7天) and (该类型 or 待回填)` 计划不变。
+  另：选了招聘类型时 `exactTotalWhenCapped` 先 `exists` 查未分类行——此前全表 count 0.6~2.4s 算完再被门④丢掉。
+  等价性：31 种真实搜索组合、改前改后交替两轮、并列按 id 定序后第一页 60 条逐位相同（不定序时旧代码自己两轮都对不上）。
+  ⚠️ **剩下的大头是真实总数计数**（`exactTotalWhenCapped`，在关键路径上）：校招专区冷 1.3~2.3s、北京 / 上海冷 3.6~5.2s；
+  它跑不跑取决于「有没有该类未分类行」→ 同一段代码随回填进度在快慢之间切换。其 `unstable_cache` 线上对这几条不命中
+  （15 次连打尾段不降、库上采样到 count 在请求期间真在跑），「不加筛选」那条却稳定命中——原因未查清，是观测不是结论。
+  数字与残留见 docs/reviews/2026-09-17 §13。
 
 ## /today 召回加了第四层 function，层内先保标题命中（2026-09-17，18 个画像真库对拍）
 
@@ -524,6 +541,7 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 - ⚠️ **顺序必须是「先推代码、再回填」**：`country_code`/`job_scope` 在 `_UPDATE_COLS` 里、不在 `_PRESERVE_IF_EMPTY` 里，列表重抓会用**当时 CI 上那版代码**覆盖——2026-09-05 回填完 3 分钟 `campus-crawl` 起来，用旧代码把 11,613 行刷回 NULL。
 - ⚠️ **两字母码在「开头」和「结尾」是两回事，别把结尾那张表复制过去**（2026-09-06 加）：Workday 系还有一种把码写最前面的格式（`MY, JOHOR, VIRTUAL` / `SE, Solna`），但**这个位置上美国州缩写比国别码更常见** —— live 全库「开头两字母 + 逗号」7,403 行里 `GA, Atlanta…`117 / `NY, BROADWAY…`116 / `CA, Burbank…`50 全是「州, 城市, 门牌」。所以规则是**撞美国州缩写的一律弃权**（MO 是密苏里不是澳门、IN 是印第安纳不是印度），只有 CA/IN 在串里另有该国省/邦硬证据时才认；且整条规则排在 `derive_country_code` **最后一步**（`SE, Bothell, Washington, United, States` 是波音厂区代号，早在第一步就判了 US）。实测影响面 120 行：国内→境外 69、境外→国内 0、只补 country_code 51。取舍与实证反例（GM=通用汽车厂区前缀不是冈比亚、NA=北美占位不是纳米比亚）写在 `crawler/geo.py` 的 `ISO_ALPHA2_CODES` 那段注释里。
 - 🚫 **国家 / 范围必须按「别名折叠之前」的原文判（2026-09-23 立）**：❌ workday 在招岗 6,526 行 `country_code` 为空却判 domestic，其中 4,383 行存的是「远程」，路径原文是 `United-States---Remote` / `Remote-Mexico` / `UK-Remote`；greenhouse / smartrecruiters / ashby 同病（live 重抓 77 源 2,899 个）。✅ 根因：`normalize()` 先 `clean_location` 再判国家，而 `normalize_city` 是**子串**折叠——串里有 remote 就整串换成「远程」，国家当场丢光（smartrecruiters 出口特意展开的 `Remote Germany` 也被它抹掉）。✅ 防：`normalizer.geo_basis`，别名后判不出国家就用原文判；CITY_ALIASES 的目标值里只有「远程」判不出国家，所以只动被折叠的行，`test_only_remote_alias_target_lacks_country` 钉着这个前提。workday 另在 `_loc_from_path` 展开 ISO3 国别码（白名单；PHL=费城、NOR=站点编号是实测撞车码）、还原 `United-Kingdom` 这类多词国名的连字符。
+- 🚫 **location 为空 ≠ 城市未知：标题里的城市在写库时物化进 location（2026-09-23 立）**：❌ 康龙化成「有机合成研究员-西安」、万物云「福州-项目管理岗（实习生）」location 为空，/today 城市门认「location 为空」放行、stage-2 判「城市未知」只降级 → 外地岗推给所有城市的用户（真实用户目标上海/杭州，7 张卡全在外地）。✅ 防：`geo.title_city_location` / `titleCityLocation`（两端共读 `tests/fixtures/title-city-cases.json`），经 `normalizer.location_or_title_city`（run.py + discovery 两条链）与 `lib/jobs-store/write.ts` 写库；**只在 adapter 给空时填、绝不覆盖**，带省 / 全国 / 海外段、公司名括号注册地一律不填。有地点的 34,990 行对照 98.0% 一致；存量已回填 3,372 行。⚠️ `normalize()` 里标题兜底必须排在 `geo_basis` **之前**（合并时栽过：排反了 location='西安' 而 country_code=NULL，`test_empty_location_falls_back_to_title_city` 钉着）。
 - 📌 验收方法：拉全库 `distinct location`（约 2 万个写法）**逐条对拍改前 / 改后**，「大中华 → 境外」这个方向**必须为 0**。⚠️ 库里的 `location` 是**别名折叠之后**的文本，拿它、或拿 adapter `parse` 的出口量，都会和真实写库结果差一层——量地点类改动要把原始地点**完整过一遍 `normalize()`**（workday 能从 jd_url 路径复原原文，其它源只能 live 重抓）。逐条选词理由与实测数字 → `docs/module-deep-notes.md`。
 
 ## 🚫「接口返 0 / 403」不能证明「对方没开」（2026-09-04 立，一晚栽三次）

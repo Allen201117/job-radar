@@ -15,7 +15,7 @@
 
 三道安全闸（同 list-absence 套路）：
   ① env AUTO_DISCOVER_APPLY 默认 **dry-run**（只数不插，先线上验证产出干净再开）；
-  ② source_url 已存在跳过（去重，不重复入库）；
+  ② 已在库跳过（source_url 相同，或 moka 同租户同板块已有 enabled 源，见 moka_tenant_key）；
   ③ 每日 probe / insert 上限（不一夜铺量）。
 beisen / moka 的逐岗 count 需浏览器确认，本 httpx cron 不碰（留 browser 变体后置）。
 """
@@ -59,6 +59,11 @@ _PRIORITY_FILES = {"targets_tech_consumer.json", "targets_campus_2027.json"}
 _CAMPUS_TOKEN_RE = re.compile(r"campus|xiaozhao|校招|校园|campus_apply|/campus", re.I)
 # moka 社招源 URL 反推 slug：新命名 social-recruitment，旧存量命名 apply，两种历史命名并存。
 _MOKA_SOCIAL_SLUG_RE = re.compile(r"app\.mokahr\.com/(?:social-recruitment|apply)/([^/?#]+)", re.I)
+# moka 同一租户同一板块在库里有五种写法，路径前缀只是皮、板块由它决定（2026-09-23 线上 419 条逐条 curl，
+# 读页面自报的 siteId/type：campus-recruitment·campus_apply 206/206 落到校招门户，
+# social-recruitment·apply 204/204 落到社招门户）。campus_apply/{slug} 不带 id，302 到当期门户。
+_MOKA_TENANT_RE = re.compile(
+    r"^https?://[\w-]+\.mokahr\.com/(social-recruitment|campus-recruitment|campus_apply|apply)/([^/?#]+)", re.I)
 # 塌陷行业（用户反馈校招覆盖薄弱的行业，见 P2 设计文档）优先补校招板块。
 CAMPUS_GAP_INDUSTRIES = ("传媒/文娱", "物流/供应链", "教育", "金融")
 CAMPUS_GAP_CAP = int(os.environ.get("AUTO_DISCOVER_CAMPUS_GAP_CAP", "30"))   # 每日最多重探多少家缺校招板块的公司
@@ -140,6 +145,8 @@ def existing_source_keys(sb):
     ⚠️ 公司名去重只算 enabled：一家公司曾经插过一个坏源（后被 disable）时，若把它也算「已覆盖」，
     这家公司会被永久跳过、再也不会被重新发现平台（2026-07-26 实测礼来即此状态）。
     source_url 仍算全量（含 disabled）——URL 级去重是防重复插同一行，与「公司是否还需要找源」无关。
+    moka 行另把租户级键 moka_tenant_key 放进同一个集合，**只算 enabled**（理由同公司名：停掉的旧一期
+    门户不能让这个租户+板块永远补不回来）；判「已在库」一律走 already_in_library。
     ⚠️ 必须分页拉全量：PostgREST 单次查询默认最多返回 1000 行，而 sources 已越过 1000
     （2026-07-14 实测 1042）→ 不分页拿到的是**残缺**去重集，尾部（正是最新入库的）漏掉
     → 去重失效 → 同一 source_url 被反复重复入库（当天 browser 道两轮把 15 个 URL 各插了 2 次）。
@@ -153,7 +160,32 @@ def existing_source_keys(sb):
             companies.add(c)
         if u:
             urls.add(u)
+            tenant = moka_tenant_key(u)
+            if tenant and r.get("enabled"):
+                urls.add(tenant)
     return companies, urls
+
+
+def moka_tenant_key(url):
+    """纯函数：moka 源 URL → ("moka", 租户 slug, "campus"|"social")；不是 moka 门户 URL 返回 None。
+
+    auto-discover 的去重只按 source_url 字符串比对时，同一租户同一板块换个写法就能再插一条源
+    （2026-09-23 线上：知乎校招 campus_apply/zhihu 与 campus_apply/zhihu/3818 两条 enabled），
+    两条源各抓一遍，同一个岗以两个 jd_url 在库里存两行、用户看到两张卡。
+    身份里刻意不带门户 id：一个租户同一板块的另一个 id 多半是换期后的新门户，交给 MokaAdapter 的
+    「门户已换期」报错由人改 URL，不该由扩源再插一条。不同板块是两个池子，互不相挡。"""
+    m = _MOKA_TENANT_RE.match((url or "").strip())
+    if not m:
+        return None
+    kind, slug = m.group(1).lower(), m.group(2).lower()
+    return ("moka", slug, "campus" if kind.startswith("campus") else "social")
+
+
+def already_in_library(url, existing_keys):
+    """url 精确在库，或它的 moka 租户+板块已有 enabled 源（existing_keys 来自 existing_source_keys）。"""
+    url = (url or "").strip()
+    tenant = moka_tenant_key(url)
+    return url in existing_keys or (tenant is not None and tenant in existing_keys)
 
 
 def load_campus_gap_source_rows(sb):
@@ -301,14 +333,17 @@ def plan_targets(curated, user_wanted, existing_companies, cap, seed=0):
 
 
 def plan_inserts(passed, existing_urls, cap):
-    """纯函数：从 to_passed 结果挑可入库的 = source_url 不在库、批内去重、封顶 cap。"""
+    """纯函数：从 to_passed 结果挑可入库的 = 不在库（already_in_library）、批内去重、封顶 cap。"""
     seen = set(existing_urls)
     out = []
     for row in passed:
         url = (row.get("url") or "").strip()
-        if not url or url in seen:
+        if not url or already_in_library(url, seen):
             continue
         seen.add(url)
+        tenant = moka_tenant_key(url)
+        if tenant:
+            seen.add(tenant)
         out.append(row)
         if len(out) >= cap:
             break
@@ -416,9 +451,9 @@ def main():
     print(f"[auto_discover] sweep 命中 {len(hits)} / 验证通过 {len(passed)} / 可入库(去重后) {len(to_insert)}")
     # 探活通过却被 URL 去重挡掉 = 这家其实已在库、只是清单与库里公司名写法不同（假缺失），白烧探测
     # 名额。不打出来就完全静默——2026-07-31 之前它连日 100% 空转两周没人看得见。
-    blocked = [p for p in passed if (p.get("url") or "").strip() in existing_urls]
+    blocked = [p for p in passed if already_in_library(p.get("url"), existing_urls)]
     if blocked:
-        print(f"[auto_discover] ⚠️ 探活通过但 source_url 已在库、被去重挡掉 {len(blocked)} 条"
+        print(f"[auto_discover] ⚠️ 探活通过但已在库（source_url 相同或 moka 同租户同板块）、被去重挡掉 {len(blocked)} 条"
               f"（多半是清单公司名 ≠ 库里公司名的假缺失，浪费了探测名额）：")
         for p in blocked[:5]:
             print(f"      [{p['adapter']}] {p['company']} → {p['url']}")

@@ -156,10 +156,13 @@ class ContractTest(unittest.TestCase):
         checks = A.load_contract()
         self.assertGreaterEqual(len([c for c in checks if c["layer"] == "data"]), 10)
         for c in A.sql_checks(checks):
-            low = " " + " ".join(c["sql"].lower().split()) + " "
-            self.assertTrue(low.strip().startswith(("select", "with")), c["id"])
-            for kw in (" insert ", " update ", " delete ", " truncate ", " drop ", " alter "):
-                self.assertNotIn(kw, low, c["id"])
+            for field in ("sql", "detail_sql"):
+                if field not in c:
+                    continue
+                low = " " + " ".join(c[field].lower().split()) + " "
+                self.assertTrue(low.strip().startswith(("select", "with")), (c["id"], field))
+                for kw in (" insert ", " update ", " delete ", " truncate ", " drop ", " alter "):
+                    self.assertNotIn(kw, low, (c["id"], field))
 
     def test_watchdog_source_checks_have_no_sql_and_are_excluded_from_sql_checks(self):
         """source=watchdog 的检查项不该有 sql/db（那是 ops_watchdog.py 自己测量的），
@@ -378,6 +381,164 @@ class MainHeartbeatWiringTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self._run_main()
         self.assertEqual(calls, ["start", "fail"])
+
+
+class DetailFakeCursor:
+    """按 SQL 文本分流：数值查询与明细查询各给各的结果，便于单独让其中一条失败。"""
+
+    def __init__(self, conn):
+        self.conn = conn
+        self._row = None
+        self._rows = []
+        self.description = None
+
+    def execute(self, sql, params=None):
+        self.conn.executed.append(sql)
+        low = sql.strip().lower()
+        if low.startswith(("begin", "set local", "rollback")):
+            return
+        outcome = self.conn.detail if sql == self.conn.detail_sql else self.conn.scalar
+        if isinstance(outcome, Exception):
+            raise outcome
+        if sql == self.conn.detail_sql:
+            cols, self._rows = outcome
+            self.description = [(c,) for c in cols]
+        else:
+            self._row = outcome
+
+    def fetchone(self):
+        return self._row
+
+    def fetchmany(self, size):
+        self.conn.fetchmany_sizes.append(size)
+        return self._rows[:size]
+
+    def close(self):
+        pass
+
+
+class DetailFakeConn:
+    def __init__(self, scalar, detail, detail_sql="select title, key from pairs"):
+        self.scalar = scalar
+        self.detail = detail
+        self.detail_sql = detail_sql
+        self.executed = []
+        self.fetchmany_sizes = []
+        self.closed = 0
+
+    def cursor(self):
+        return DetailFakeCursor(self)
+
+
+class DetailSqlTest(unittest.TestCase):
+    """detail_sql：数值之外的「具体是哪几处」。它是附件——取不到不许拖累数值与判定，也不许静默。"""
+
+    DETAIL_SQL = "select title, key from pairs"
+
+    def _check(self, **over):
+        return check(normal="<= 1", detail_sql=self.DETAIL_SQL, **over)
+
+    def test_findings_land_in_detail_with_bridge_shape(self):
+        conn = DetailFakeConn((2,), (["title", "key"], [("东方财富：1 个岗位…", "a | b"), ("宝洁：1 个岗位…", "c | d")]))
+        res = A.run_check(self._check(), lambda db: conn)
+        self.assertEqual((res["value"], res["verdict"]), (2.0, "breach"))
+        self.assertEqual(res["detail"], {"findings": [
+            {"title": "东方财富：1 个岗位…", "key": "a | b"}, {"title": "宝洁：1 个岗位…", "key": "c | d"}]})
+        self.assertIsNone(res["error_message"])
+
+    def test_detail_runs_read_only_and_rolls_back(self):
+        conn = DetailFakeConn((0,), (["title", "key"], []))
+        A.run_check(self._check(), lambda db: conn)
+        i = conn.executed.index(self.DETAIL_SQL)
+        self.assertIn("read only", conn.executed[i - 2].lower())
+        self.assertTrue(conn.executed[i + 1].lower().startswith("rollback"))
+
+    def test_columns_are_read_by_name_not_position(self):
+        conn = DetailFakeConn((1,), (["key", "extra", "title"], [("a | b", "x", "人话")]))
+        res = A.run_check(self._check(), lambda db: conn)
+        self.assertEqual(res["detail"], {"findings": [{"title": "人话", "key": "a | b"}]})
+
+    def test_capped_at_bridge_limit_and_title_truncated(self):
+        rows = [("长" * 500, f"k{i}") for i in range(A.DETAIL_MAX_FINDINGS + 5)]
+        conn = DetailFakeConn((40,), (["title", "key"], rows))
+        res = A.run_check(self._check(), lambda db: conn)
+        self.assertEqual(conn.fetchmany_sizes, [A.DETAIL_MAX_FINDINGS])
+        self.assertEqual(len(res["detail"]["findings"]), A.DETAIL_MAX_FINDINGS)
+        self.assertEqual(len(res["detail"]["findings"][0]["title"]), A.DETAIL_TITLE_MAX)
+
+    def test_no_rows_means_no_detail(self):
+        conn = DetailFakeConn((0,), (["title", "key"], []))
+        res = A.run_check(self._check(), lambda db: conn)
+        self.assertEqual(res["verdict"], "ok")
+        self.assertIsNone(res["detail"])
+
+    def test_detail_failure_keeps_value_and_verdict_and_says_why(self):
+        ip = ".".join(["203", "0", "113", "7"])  # 运行时拼：公开仓门禁不许出现 IP 字面量
+        conn = DetailFakeConn((2,), RuntimeError(f"timeout on {ip}:5432"))
+        res = A.run_check(self._check(), lambda db: conn)
+        self.assertEqual((res["value"], res["verdict"]), (2.0, "breach"))  # 量到的数不许变成「没查到」
+        self.assertIsNone(res["error_message"])
+        self.assertIn("RuntimeError", res["detail"]["error"])
+        self.assertNotIn(ip, res["detail"]["error"])
+
+    def test_missing_title_or_key_column_is_a_detail_error_not_misread(self):
+        conn = DetailFakeConn((2,), (["foo", "bar"], [("x", "y")]))
+        res = A.run_check(self._check(), lambda db: conn)
+        self.assertEqual(res["verdict"], "breach")
+        self.assertIn("缺列", res["detail"]["error"])
+
+    def test_value_failure_skips_detail_query(self):
+        conn = DetailFakeConn(RuntimeError("down"), (["title", "key"], [("x", "y")]))
+        res = A.run_check(self._check(), lambda db: conn)
+        self.assertEqual(res["verdict"], "error")
+        self.assertIsNone(res["detail"])
+        self.assertNotIn(self.DETAIL_SQL, conn.executed)
+
+    def test_validate_rejects_bad_detail_sql(self):
+        A.validate_contract([self._check()])
+        for bad in ("", "  ", None, 3):
+            with self.assertRaises(ValueError, msg=bad):
+                A.validate_contract([check(detail_sql=bad)])
+        watchdog_check = {
+            "id": "watchdog.rule_z", "name": "人话名", "layer": "pipeline",
+            "owner": "crawler/ops_watchdog.py", "rule": "Z", "normal": "== 0",
+            "severity": "warn", "why": "为什么", "action": "怎么办", "source": "watchdog",
+            "detail_sql": "select 1",
+        }
+        with self.assertRaises(ValueError):
+            A.validate_contract([watchdog_check])
+
+
+class MokaSameJobTwoEntriesContractTest(unittest.TestCase):
+    """2026-09-23：299 个 Moka 岗同时挂在两个入口下，按网址长相认身份的老规则 H 一条没报。"""
+
+    def setUp(self):
+        self.c = {c["id"]: c for c in A.load_contract()}["jobs.moka_same_job_two_entries"]
+
+    def test_declared_as_a_per_source_yellow_uncalibrated_data_check(self):
+        c = self.c
+        self.assertEqual((c["layer"], c["db"]), ("data", "jobs"))
+        self.assertIn(c["severity"], ("info", "warn"))  # 单个源的问题最多黄灯，不许染红
+        self.assertIs(c["calibrated"], False)
+        self.assertEqual(c["covers"], ["jd_url"])
+        self.assertTrue(A.evaluate_normal(1, c["normal"]))   # 东方财富那一对是有意保留的
+        self.assertFalse(A.evaluate_normal(2, c["normal"]))  # 再多一份就该报
+
+    def test_counts_by_job_number_not_by_mokahr_host(self):
+        """Moka 的自有域名皮（recruit.pg.com.cn、talent.catl.com…）路径同形；只数 mokahr.com 会漏掉
+        宝洁那种「同一个岗在 mokahr 与自有域名各一份」的重复（2026-09-23 真库实测到 1 对）。"""
+        sql = " ".join(self.c["sql"].lower().split())
+        self.assertNotIn("mokahr.com", sql)
+        self.assertIn("#/job/", sql)
+        self.assertIn("count(distinct entry)", sql)
+        self.assertIn("job_no is not null", sql)  # 抽不出编号的行不许被算成重复
+
+    def test_names_the_offending_pairs(self):
+        detail = " ".join(self.c["detail_sql"].lower().split())
+        self.assertIn(" as title", detail)
+        self.assertIn(" as key", detail)
+        # 有意保留的那一对要排最后：晨报 ⑦ 只点第一处，排前面会把真该处理的那一对挤掉
+        self.assertIn("order by (k.entry_a is not null)", detail)
 
 
 class RowShapeTest(unittest.TestCase):
