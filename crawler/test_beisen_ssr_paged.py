@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from adapters import china_ats
-from adapters.china_ats import BeisenAdapter, _ssr_parse_list
+from adapters.china_ats import BeisenAdapter, _ssr_parse_list, _beisen_route_usable, beisen_httpx_ready
 
 ORIGIN = "https://tenant.zhiye.com"
 
@@ -278,6 +278,96 @@ class TestSsrAbsenceLivenessStaysOff(unittest.TestCase):
     def test_other_beisen_paths_keep_absence_on(self):
         """只降本实例，不动类默认 —— 新版 SPA / theme2 CMS 两条路径行为一字不改。"""
         self.assertTrue(BeisenAdapter().supports_absence_liveness)
+
+
+class TestSsrRouteHint(unittest.TestCase):
+    """2026-09-23 立：这是本次要修的主 bug —— fetch() 首次探测到「老版 SSR jobsTable 租户」时
+    从来没登记 {"ssr": true}，harvest_beisen_routes.py 因此把它天天当成「还没探出路由」重探。
+    2026-09-23 实测：harvest_beisen_routes.py 待探队列 26 家里 23 家（88%）就是这一类
+    ——它们早就能纯 httpx 抓全，压根不需要浏览器点击捕获。"""
+
+    def test_route_usable_accepts_ssr(self):
+        self.assertTrue(_beisen_route_usable({"ssr": True}))
+
+    def test_httpx_ready_for_registered_ssr_tenant(self):
+        host = "ssr-ready.zhiye.com"
+        china_ats._BEISEN_ROUTE_CACHE[host] = {"ssr": True}
+        try:
+            self.assertTrue(beisen_httpx_ready(f"https://{host}/social"))
+        finally:
+            china_ats._BEISEN_ROUTE_CACHE.pop(host, None)
+
+    def test_first_seen_tenant_resolved_via_ssr_gets_registered(self):
+        host = "ssr-first-seen.zhiye.com"
+        calls = []
+        a = BeisenAdapter()
+        a._httpx_fetch = lambda url: (calls.append("httpx"), None)[1]
+        a._httpx_fetch_cms = lambda url: (calls.append("cms"), None)[1]
+        a._httpx_fetch_ssr_paged = lambda url: (calls.append("ssr"), '{"_ssr_jobs": [{"jd_url": "x"}]}')[1]
+        try:
+            out = a.fetch(f"https://{host}/social")
+            self.assertEqual(out, '{"_ssr_jobs": [{"jd_url": "x"}]}')
+            self.assertEqual(calls, ["httpx", "cms", "ssr"])
+            self.assertEqual(china_ats._BEISEN_ROUTE_CACHE.get(host), {"ssr": True},
+                              "首次探到 ssr 成功必须登记，否则 harvest 脚本永远读不到这个事实")
+        finally:
+            china_ats._BEISEN_ROUTE_CACHE.pop(host, None)
+
+    def test_ssr_hint_tried_first(self):
+        """反向不变量：登记正确（ssr 抓到了东西）时不能误删或重复探测，否则每次都要
+        重跑新版 SPA/CMS 探测，白掉这条本该零成本的快车道。"""
+        host = "ssr-hint.zhiye.com"
+        china_ats._BEISEN_ROUTE_CACHE[host] = {"ssr": True}
+        calls = []
+        a = BeisenAdapter()
+        a._httpx_fetch_ssr_paged = lambda url: (calls.append("ssr"), '{"_ssr_jobs": []}')[1]
+        a._httpx_fetch = lambda url: (calls.append("httpx"), None)[1]
+        try:
+            self.assertEqual(a.fetch(f"https://{host}/social"), '{"_ssr_jobs": []}')
+            self.assertEqual(calls, ["ssr"])
+            self.assertEqual(china_ats._BEISEN_ROUTE_CACHE.get(host), {"ssr": True})
+        finally:
+            china_ats._BEISEN_ROUTE_CACHE.pop(host, None)
+
+    def test_stale_ssr_hint_is_evicted(self):
+        """登记过时（租户升级到新版 SPA/CMS）→ 必须把假登记清掉，否则「首见租户」分支
+        会因为 host 还在缓存里被跳过 → 0 岗 + 自称抓全（同 cms/cards 的 stale-hint 用例）。"""
+        host = "stale-ssr.zhiye.com"
+        china_ats._BEISEN_ROUTE_CACHE[host] = {"ssr": True}
+        calls = []
+        a = BeisenAdapter()
+        a._httpx_fetch_ssr_paged = lambda url: (calls.append("ssr"), None)[1]
+        a._httpx_fetch = lambda url: (calls.append("httpx"), None)[1]
+        a._httpx_fetch_cms = lambda url: (calls.append("cms"), None)[1]
+        a._httpx_fetch_cards = lambda url: (calls.append("cards"), None)[1]
+        a._fetch_paginated = lambda url: (
+            calls.append("browser"), (_ for _ in ()).throw(RuntimeError("no browser")))[1]
+        a._fetch_ssr = lambda url: (calls.append("ssr_browser"), "{}")[1]
+        try:
+            a.fetch(f"https://{host}/social")
+            self.assertNotIn(host, china_ats._BEISEN_ROUTE_CACHE,
+                             "过时的 ssr 登记必须被清出缓存，否则该租户永远探不出详情路由")
+            self.assertEqual(calls[0], "ssr")
+            self.assertIn("httpx", calls, "驱逐后必须继续往下试，不能停在 ssr 分支")
+        finally:
+            china_ats._BEISEN_ROUTE_CACHE.pop(host, None)
+
+    def test_ssr_runs_after_spa_and_cms_but_before_cards(self):
+        """选路纪律：新版 SPA / cms 任一条能出岗就轮不到 ssr；ssr 打通了 cards 也不用再试
+        （既有源的命运一步不变，同 test_cards_runs_after_all_legacy_branches）。"""
+        host = "ssr-order.zhiye.com"
+        calls = []
+        a = BeisenAdapter()
+        a._httpx_fetch = lambda url: (calls.append("httpx"), None)[1]
+        a._httpx_fetch_cms = lambda url: (calls.append("cms"), None)[1]
+        a._httpx_fetch_ssr_paged = lambda url: (calls.append("ssr"), '{"_ssr_jobs": []}')[1]
+        a._httpx_fetch_cards = lambda url: (calls.append("cards"), '{"_ssr_jobs": []}')[1]
+        try:
+            a.fetch(f"https://{host}/social")
+            self.assertEqual(calls, ["httpx", "cms", "ssr"])
+            self.assertNotIn("cards", calls)
+        finally:
+            china_ats._BEISEN_ROUTE_CACHE.pop(host, None)
 
 
 if __name__ == "__main__":

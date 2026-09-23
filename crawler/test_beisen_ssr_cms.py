@@ -441,6 +441,25 @@ class StaleCmsHintTest(unittest.TestCase):
         self.assertEqual(adapter.fetch(f"https://{host}/social"), '{"_ssr_jobs": []}')
         self.assertEqual(china_ats._BEISEN_ROUTE_CACHE.get(host), {"cms": True})
 
+    def test_first_seen_tenant_resolved_via_cms_gets_registered(self):
+        """2026-09-23 立：这是本次要修的 bug 之一 —— 首次探到「这是老版 CMS 租户」时
+        fetch() 从来没登记 {"cms": true}，harvest_beisen_routes.py 只看 _BEISEN_ROUTE_CACHE
+        判「探到路由没」，于是这类租户天天被当成「还没探出来」重探，harvested 永远 0
+        （它们其实早就能纯 httpx 抓全，压根不需要浏览器点击捕获）。"""
+        host = "cms-first-seen.zhiye.com"
+        calls = []
+        a = BeisenAdapter()
+        a._httpx_fetch = lambda url: (calls.append("httpx"), None)[1]
+        a._httpx_fetch_cms = lambda url: (calls.append("cms"), '{"_ssr_jobs": []}')[1]
+        try:
+            out = a.fetch(f"https://{host}/social")
+            self.assertEqual(out, '{"_ssr_jobs": []}')
+            self.assertEqual(calls, ["httpx", "cms"])
+            self.assertEqual(china_ats._BEISEN_ROUTE_CACHE.get(host), {"cms": True},
+                              "首次探到 cms 成功必须登记，否则 harvest 脚本永远读不到这个事实")
+        finally:
+            china_ats._BEISEN_ROUTE_CACHE.pop(host, None)
+
 
 if __name__ == "__main__":
     unittest.main()
