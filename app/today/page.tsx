@@ -14,6 +14,7 @@ import { buildOpportunityFeed } from "@/lib/opportunities/service";
 import { readRecallSnapshotSafe, writeRecallSnapshot } from "@/lib/jobs-store/recall-snapshot";
 import { refreshRecallSnapshot, RECALL_SNAPSHOT_REFRESH_AFTER_MS, type RecallResult } from "@/lib/jobs-store/opportunities";
 import { jobsStoreEnabled } from "@/lib/jobs-store/read";
+import { recallActionedJobIds } from "@/lib/opportunities/recall-snapshot-upkeep";
 import { getPopularFeed, type PopularFeed } from "@/lib/popular-feed";
 import type { OpportunityFeed } from "@/lib/opportunities/types";
 import type { RadarProfile } from "@/lib/opportunities/types";
@@ -246,12 +247,8 @@ function scheduleRecallSnapshotUpkeep(
   }
   const ageMs = info.snapshot?.used ? info.snapshot.ageMs : null;
   if (ageMs == null || ageMs <= RECALL_SNAPSHOT_REFRESH_AFTER_MS) return;
-  // 与 buildOpportunityFeed 的 SQL 下推同一口径：saved / ignored / applied 过的岗不占召回名额
-  const actioned = Array.from(
-    new Set(actions.filter((a) => a.action === "saved" || a.action === "ignored" || a.action === "applied").map((a) => a.job_id)),
-  );
   later(() =>
-    refreshRecallSnapshot(userId, profile, new Date(), actioned, "request").catch((e) =>
+    refreshRecallSnapshot(userId, profile, new Date(), recallActionedJobIds(actions), "request").catch((e) =>
       console.warn("[recall-snapshot] 刷新失败：", (e as Error).message),
     ),
   );

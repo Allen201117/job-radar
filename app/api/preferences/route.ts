@@ -10,6 +10,7 @@ import { isMissingRelation } from "@/lib/opportunities/schema-errors";
 import { fetchAllSources } from "@/lib/supabase-paginate";
 import { buildCoverageRows } from "@/lib/sync-coverage";
 import type { CandidateProfile, UserPreferences } from "@/lib/types";
+import { scheduleRecallSnapshotRefresh } from "@/lib/opportunities/recall-snapshot-upkeep";
 
 export const runtime = "nodejs";
 
@@ -174,6 +175,9 @@ export async function PUT(request: NextRequest) {
     console.error("[preferences] upsert failed:", upErr.message);
     return NextResponse.json({ ok: false, error: "preferences_unavailable" }, { status: 503 });
   }
+  // 偏好已落库（后面 coverage 同步失败也不影响这一点）→ 召回快照指纹必然对不上；
+  // 响应之后按新偏好预算一份，/today 下次打开不必退回现跑（冷态 2~6s）。
+  scheduleRecallSnapshotRefresh(user.id, "保存偏好");
 
   const { data: cand } = await supabase
     .from("candidate_profiles")
@@ -229,5 +233,7 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "preferences_unavailable" }, { status: 503 });
   }
 
+  // 不在这里预算召回快照：顶栏切换范围后前端立刻 router.refresh()，/today 会马上现跑并在响应后回写；
+  // 这里再挂一次只会让两条最重的召回 SQL 同时跑。保存偏好（PUT）后不跳页，所以那边挂了。
   return NextResponse.json({ ok: true, preferences: parsed.value });
 }
