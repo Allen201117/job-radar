@@ -20,6 +20,15 @@ jobs:
           python-version: "3.11"
           cache: "pip"
           cache-dependency-path: crawler/requirements.txt
+      # ⚠️ 这一步不是可有可无的（2026-09-23 补，此前一直漏着）：
+      #   同步本身只用标准库（urllib），装不装依赖都跑得通；但跑完要写 ops_runs 台账，
+      #   那条路径走 crawler/db.py → import httpx。没装依赖 → 台账写不进去，
+      #   而写台账的失败是被 try 兜住的（「不影响主流程」），于是每周都是：
+      #   **同步真的成功了，体检却一直显示这条任务没跑过**。
+      #   实测 09-21 那次：三份名单 198/221/8 全部同步成功，日志里同时有
+      #   `ops_runs 台账写入失败（不影响主流程）: No module named 'httpx'`。
+      - name: Install crawler dependencies
+        run: pip install -r crawler/requirements.txt
       - name: Sync ATS tenant snapshots
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
