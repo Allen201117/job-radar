@@ -347,6 +347,18 @@ class CuratedTargetsFileTest(unittest.TestCase):
         names = [t["company"] for t in targets]
         self.assertEqual(len(names), len(set(names)))  # 跨全部清单公司名去重（不重复劳动）
 
+    def test_dahua_security_targets_reject_shanghai_dahua_group_portal(self):
+        # 迁移 291：moka 租户 dahua 是上海「大华（集团）有限公司」（地产），曾因清单 cn='大华' 的标题核验
+        # 放行而被记成「浙江大华技术」。标题取自对方门户 live 页面。
+        import discover_domestic as dd
+        targets = [t for t in ad.load_curated_targets()
+                   if "大华" in t["company"] and t.get("industry") == "安防"]
+        self.assertGreaterEqual(len(targets), 2)
+        for t in targets:
+            self.assertFalse(dd._verify("大华集团 - 社会招聘", t["cn"]), t)
+            self.assertFalse(dd._verify("大华（集团）有限公司 - 校园招聘", t["cn"]), t)
+            self.assertTrue(dd._verify("浙江大华技术股份有限公司", t["cn"]), t)
+
     def test_must_apply_targets_win_dedup_and_get_separate_marker(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
