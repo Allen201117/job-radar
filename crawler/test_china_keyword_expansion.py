@@ -140,6 +140,19 @@ class ClassifyJobFunctionTest(unittest.TestCase):
         self.assertEqual(cke.classify_job_function("研发项目经理-大模型训练infra团队（北京/深圳）"), "项目管理")
         self.assertEqual(cke.classify_job_function("Infrastructure Project Manager"), "项目管理")
 
+    def test_body_recruit_meta_ux_and_reinforcement_learning(self):
+        # 与 tests/classify-job-function.test.js 同批用例（2026-09-23 三个旧误判）。
+        ali = "工作地点：杭州 招聘项目：阿里巴巴2027届应届生 职位描述：参与多模态传输协议研究。"
+        self.assertEqual(cke.classify_job_function("研究型实习生", "", ali), "其他")
+        self.assertEqual(cke.classify_job_function("专员", "", "负责制定招聘计划，拓展招聘渠道。"), "职能")
+        self.assertEqual(cke.classify_job_function("招聘专员", "", ali), "职能")
+        self.assertNotEqual(cke.classify_job_function("应用SE（授时卡）(J10782)", "", "熟悉 Linux 系统。"), "设计")
+        self.assertEqual(cke.classify_job_function("嵌入式Linux开发工程师"), "研发")
+        for title in ("UX设计师", "Intern, UIUX(J12817)", "XR3DUX设计实习生"):
+            self.assertEqual(cke.classify_job_function(title), "设计", title)
+        self.assertEqual(cke.classify_job_function("强化学习研究员"), "研发")
+        self.assertEqual(cke.classify_job_function("化学分析员"), "生产制造")
+
     def test_title_classifier_matches_frontend_key_boundaries(self):
         self.assertEqual(cke.classify_job_title_function("2027 届校园招聘 - 后台开发工程师"), "研发")
         self.assertEqual(cke.classify_job_title_function("招聘HR（抖音）"), "职能")
