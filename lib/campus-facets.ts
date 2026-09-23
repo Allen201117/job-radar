@@ -14,6 +14,7 @@ import {
   normalizeRolePhrases,
 } from "@/lib/china-keyword-expansion";
 import { cityFilterHasTargets, locationMatchesCityFilter } from "@/lib/job-filter";
+import { segments, CN_PROVINCE_PREFECTURES, CN_MUNICIPALITIES } from "@/lib/cn-location-provinces";
 
 /** 一条分面：`[城市下标, 学历下标, 职能下标, 届别, 岗位数]`。
  *  前三个下标指向 CampusFilterOptions 里对应的选项数组；`-1` = 该维度为空（只被「全部」匹配到）。 */
@@ -51,14 +52,47 @@ export type CampusFacetSelection = {
 export function normalizeCampusCity(value: unknown): string {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
+  // 一串里列了多个中文地点（「哈尔滨市、包头市…」「桐庐县/重庆市」）：原样保留，不替用户挑其中一个
+  // （别名表是子串匹配，不拦会把「桐庐县/重庆市」整条归进重庆）。
+  if (CJK_RE.test(raw) && MULTI_PLACE_RE.test(raw)) return raw;
   const direct = normalizeChinaCity(raw) ?? raw;
   if (direct !== raw) return direct;
   // ATS 常用反斜杠、横线等把国家/省/城市串起来；逐段交给同一份全站别名表识别。
-  for (const part of raw.split(/[\\\\/|,，;；·—–-]+/).map((item) => item.trim()).filter(Boolean).reverse()) {
+  for (const part of raw.split(/[\\/|,，;；·—–-]+/).map((item) => item.trim()).filter(Boolean).reverse()) {
     const normalized = normalizeChinaCity(part) ?? part;
     if (normalized !== part) return normalized;
   }
-  return raw;
+  return prefectureFromChineseLocation(raw) ?? raw;
+}
+
+// 中文「省·市」「省-市-区」「XX市」「XX自治州」写法 → 地级短名（2026-09-23 线上 /campus 城市下拉逐条核对：
+// 「云南省-昆明市」「云南省·昆明市」「昆明」同时出现，「保定 / 保定市 / 河北省-保定市」三个选项）。
+// 名录复用 lib/cn-location-provinces 的全国地级表（省/市两端共读的那份 JSON），不在专区另造词表。
+// 保守：一串里列了多个地点（「哈尔滨市、包头市…」「桐庐县/重庆市」）一律保留原文，不替用户挑第一个；
+// 只认「段首就是地级名、后面只跟行政后缀」，海外中文地名（吉隆坡 / 河内 / 新加坡）因此不会被误认。
+const PREFECTURE_NAMES: string[] = [
+  ...(CN_MUNICIPALITIES as string[]),
+  ...(Object.values(CN_PROVINCE_PREFECTURES as Record<string, string[]>).flat()),
+].sort((a, b) => b.length - a.length);
+const PROVINCE_PREFIX_RE = new RegExp(
+  `^(?:${Object.keys(CN_PROVINCE_PREFECTURES as Record<string, string[]>).join("|")})(?:省|自治区|壮族自治区|回族自治区|维吾尔自治区)?`,
+);
+const ADMIN_TAIL_RE = /^(?:市|地区|盟|特别行政区|.{0,12}自治州)?$/;
+const MULTI_PLACE_RE = /[、,，;；/／]/;
+
+const CJK_RE = /[\u4e00-\u9fff]/;
+
+function prefectureFromChineseLocation(raw: string): string | null {
+  if (!CJK_RE.test(raw) || MULTI_PLACE_RE.test(raw)) return null;
+  for (const seg of segments(raw) as string[]) {
+    for (const candidate of [seg, seg.replace(PROVINCE_PREFIX_RE, "")]) {
+      if (!candidate) continue;
+      for (const name of PREFECTURE_NAMES) {
+        if (candidate.startsWith(name) && ADMIN_TAIL_RE.test(candidate.slice(name.length))) return name;
+      }
+    }
+  }
+  return null;
 }
 
 /** 哨兵：筛选值在当前模式的选项表里不存在（切校招/实习后可能出现）→ 匹配不到任何分面、计数为 0。

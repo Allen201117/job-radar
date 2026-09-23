@@ -285,6 +285,9 @@ _JOB_FUNCTION_RULES = [
     ("建筑工程", re.compile(r"建筑师|钢结构|混凝土|建筑结构|水工结构|桥梁|土木|土建|道路|隧道|市政|岩土|勘察|暖通|给排水|供变电|幕墙|装饰|(?<![实设])施工|监理|造价|预算员|建筑设计|(?:高速|公路)\s*项目|architectural|landscape\s*architect|construction|site\s*engineer|civil\s*engineer", re.I)),
     # 泛工程后缀：与 JS 一样只在没有具体职能词时才兜底，避免「Data Engineer」被工程师抢成研发。
     ("研发", re.compile(r"工程师|研发|开发|技术|engineer|developer", re.I), True),
+    # 大模型训练 / 推理基础设施条线（与 JS 同口径，2026-09-23）：标题里常是团队后缀（「AI产品经理-Dev Infra」），
+    # 所以同样只进泛词那一轮。边界用 ASCII 显式环视：Python 的 \b 把汉字当单词字符，「AI Infra实习生」会漏。
+    ("研发", re.compile(r"post[\s-]?training|pre[\s-]?training|后训练|预训练|(?<![a-z0-9_])rlhf(?![a-z0-9_])|训练框架|训练引擎|推理框架|推理引擎|推理加速|推理优化|(?<![a-z0-9_])infra(?![a-z0-9_])", re.I), True),
     ("运营", re.compile(r"用户运营|内容运营|运营|增长|operations|growth", re.I)),
     ("市场", re.compile(r"市场|营销|品牌|公关|marketing|brand|\bpr\b", re.I)),
     ("医疗健康", re.compile(r"医生|医师|护士|护理岗|临床护理|护理部|护理师|药师|药剂|临床数据|临床|\bcra\b|\bcrc\b|\bcta\b|医学|医药|药物|制药|药品|药理|检验科|放射|影像|超声|口腔|中医|兽医|营养师|康复|理疗|\bmsl\b|医学事务|医疗器械|试剂|生物制药|生物医药|medical|clinical|nurse|pharmac\w*|physician|therapist|biolog\w*|pathology", re.I)),
