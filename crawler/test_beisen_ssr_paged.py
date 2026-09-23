@@ -222,6 +222,46 @@ class TestSsrPagedFetch(unittest.TestCase):
 
 
 
+class TestListtableHeaderAndTenantPolicy(unittest.TestCase):
+    """百胜中国（yumchina，2026-09-23）：class=listtable、表头 <th>、地点整串在 td 的 title 里。"""
+
+    PAGE = ('<table class="listtable"><thead><tr class="tabletitle">'
+            '<th class="tableleft">&nbsp;&nbsp;职位名称</th><th title="品牌">品牌</th>'
+            '<th>工作地点</th><th>发布时间</th></tr></thead>'
+            '<tr><td><a title="必胜客餐厅储备经理-诸暨" jobAdId="310095098" href="/zpdetail/310095098">必胜客餐厅储备经理-诸暨</a></td>'
+            '<td title="必胜客">必胜客</td><td title="浙江省-绍兴市-诸暨市">浙江省-绍兴市-...</td><td> 2022-11-18 </td></tr>'
+            '<tr><td><a title="肯德基餐厅储备经理-天津" href="/zpdetail/310300001">肯德基餐厅储备经理-天津</a></td>'
+            '<td title="肯德基">肯德基</td><td title="天津市">天津市</td><td>2026-9-16</td></tr>'
+            '</table><div class="counts">共2条记录</div>')
+
+    def test_th_header_maps_location_and_posted_at(self):
+        rows, total, _last = _ssr_parse_list(self.PAGE, "https://yumchina.zhiye.com")
+        self.assertEqual(total, 2)
+        # 地点取 td 的 title（整串），不取被截断的「浙江省-绍兴市-...」；品牌列不许被当成地点。
+        self.assertEqual([r["location"] for r in rows], ["浙江省-绍兴市-诸暨市", "天津市"])
+        self.assertEqual([r["posted_at"] for r in rows], ["2022-11-18", "2026-09-16"])
+
+    def test_policy_drops_missing_location_old_and_undated_rows(self):
+        from datetime import date
+        policy = {"require_location": True, "max_age_days": 365}
+        today = date(2026, 9, 23)
+        allow = china_ats._ssr_policy_allows
+        self.assertTrue(allow({"location": "天津市", "posted_at": "2026-09-16"}, policy, today))
+        self.assertFalse(allow({"location": "", "posted_at": "2026-09-16"}, policy, today))
+        self.assertFalse(allow({"location": "浙江省", "posted_at": "2022-11-18"}, policy, today))
+        self.assertFalse(allow({"location": "浙江省", "posted_at": None}, policy, today))   # 证明不了是近期
+        self.assertTrue(allow({"location": "浙江省", "posted_at": "2025-09-24"}, policy, today))
+        self.assertTrue(allow({"location": None, "posted_at": None}, None, today))          # 无口径 = 老行为
+
+    def test_policy_only_applies_to_named_tenant(self):
+        jobs = [{"title": "储备经理", "jd_url": "https://yumchina.zhiye.com/zpdetail/1", "location": None,
+                 "posted_at": "2020-01-01"},
+                {"title": "储备经理", "jd_url": "https://other.zhiye.com/zpdetail/2", "location": None,
+                 "posted_at": "2020-01-01"}]
+        out = BeisenAdapter().parse(json.dumps({"_ssr_jobs": jobs}, ensure_ascii=False))
+        self.assertEqual([j.jd_url for j in out], ["https://other.zhiye.com/zpdetail/2"])
+
+
 class TestSsrJobUrlNormalize(unittest.TestCase):
     """回归：详情锚点带列表页号 `?PageIndex=N`（联易融 live 实测）。
 
