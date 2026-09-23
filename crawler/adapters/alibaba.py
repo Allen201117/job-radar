@@ -214,7 +214,7 @@ class AlibabaAdapter(PlaywrightAdapter):
         locs = post.get("workLocations")
         location = locs[0] if isinstance(locs, list) and locs and isinstance(locs[0], str) else None
         return RawJob(
-            company=self.company_name or "",
+            company=_derive_company(host, title) or self.company_name or "",
             title=title,
             location=location,
             job_type=self._JOB_TYPE,
@@ -223,6 +223,25 @@ class AlibabaAdapter(PlaywrightAdapter):
             apply_url=jd_url,
             posted_at=normalizer.pick_publish_date(post),
         )
+
+
+# 一个 BU 门户挂着多个品牌时，按岗位标题自报的品牌前缀派生归属（2026-09-23，同 jd.py 的事业群派生）。
+# jobs.hujing-dme.com 是阿里文娱重组后「虎鲸文娱」的统一招聘站，同时挂优酷 / 大麦 / 阿里鱼 / 游戏工作室，
+# 标题自带品牌前缀：「优酷-…」65 个、「优酷子公司-…」19 个（2026-09-23 香港库实测，共 162 个在招）。
+# 源记在「虎鲸文娱」名下，于是必投清单里的「优酷」（%优酷%）明明有岗却一直算缺口。
+# 只映必投清单里有的品牌：大麦 / 阿里鱼等不在清单里，映了换不来覆盖收益，按最小改动回落源名。
+# ⚠️ 前缀必须是**标题开头**的品牌名，不许做子串匹配（「合作优酷的…」这类岗不属于优酷）。
+_TITLE_PREFIX_COMPANY = {
+    "jobs.hujing-dme.com": (("优酷", "优酷"),),
+}
+
+
+def _derive_company(host: str, title: str) -> str:
+    """按门户域名 + 标题前缀派生品牌归属；认不出返回 "" 回落 sources.company。"""
+    for prefix, company in _TITLE_PREFIX_COMPANY.get(str(host or "").lower(), ()):
+        if str(title or "").strip().startswith(prefix):
+            return company
+    return ""
 
 
 class AlibabaCampusAdapter(AlibabaAdapter):
