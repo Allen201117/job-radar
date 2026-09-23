@@ -1125,7 +1125,8 @@ class RoundCapTest(unittest.TestCase):
         self.assertEqual(len(probed), 1)
         self.assertEqual(probed[0]["adapter"], "greenhouse")
 
-    def test_all_identity_mismatches_become_wrong_platform_with_rejected_hosts(self):
+    def test_all_identity_mismatches_become_no_official_entry_with_rejected_hosts(self):
+        # 2026-09-23 改标签：候选全是别家公司 = 没找到入口，不是「平台没 adapter」。
         urls = [
             "https://gimc.hotjob.cn/GIMC/pb/social.html",
             "https://hire.feishu.cn/customer/zhongkechuangda",
@@ -1156,7 +1157,7 @@ class RoundCapTest(unittest.TestCase):
             },
             prober=lambda _candidate: self.fail("身份不符的候选不应进入 probe"),
         )
-        self.assertEqual(result["state"], "wrong_platform")
+        self.assertEqual(result["state"], "no_official_entry")
         self.assertEqual(result["fail_reason"], "候选入口均非本公司（张冠李戴）")
         self.assertIsNone(result["official_entry_url"])
         self.assertEqual(
@@ -1379,9 +1380,43 @@ class RoundCapTest(unittest.TestCase):
             ),
             prober=lambda _candidate: self.fail("候选未通过身份门"),
         )
-        self.assertEqual(result["state"], "anti_bot")
-        self.assertEqual(result["next_retry_at"], (NOW + gf.timedelta(days=30)).isoformat())
+        # 2026-09-23：搜索来的被拦候选核不了身份，不能拿它给这家公司定「反爬」（学大教育曾因
+        # 夏威夷公立学校的网站被记成 anti_bot）；但也不能说「全是别家公司」——如实记没找到可信入口。
+        self.assertEqual(result["state"], "no_official_entry")
         self.assertNotEqual(result["fail_reason"], "候选入口均非本公司（张冠李戴）")
+        self.assertEqual(result["evidence"]["blocked_unverified_candidates"], 1)
+        self.assertIsNone(result["official_entry_url"])
+
+    def test_blocked_candidate_counts_only_from_trusted_site(self):
+        blocked = {"platform": "anti_bot", "adapter": None, "source_url": "https://jobs.acme.com/",
+                   "reason": "anti_bot", "identity_ok": False,
+                   "identity_reason": "identity_unverifiable:anti_bot"}
+        cands = [{"url": "https://jobs.acme.com/"}]
+        trusted = gf._evaluate_candidates(_entry(), cands, trusted_site=True,
+                                          fingerprinter=lambda *_a, **_k: dict(blocked))
+        untrusted = gf._evaluate_candidates(_entry(), cands, trusted_site=False,
+                                            fingerprinter=lambda *_a, **_k: dict(blocked))
+        self.assertEqual((len(trusted["fallbacks"]), trusted["blocked_unverified"]), (1, 0))
+        self.assertEqual((len(untrusted["fallbacks"]), untrusted["blocked_unverified"]), (0, 1))
+        self.assertEqual(len(untrusted["rejections"]), 1)
+
+    def test_no_trusted_candidate_is_no_official_entry_not_wrong_platform(self):
+        # 旧写法记 wrong_platform「P1 httpx 道无可用 adapter」+ 把搜索第一条记成官方入口
+        # （联合利华→LVMH、宁波银行→恒丰银行）。
+        result, _used, _inserted = gf.process_company(
+            {**_entry(), "official_entry_url": None},
+            supabase=_Sb(), jobs_conn=_Conn(), apply=False, search_remaining=2,
+            insert_allowed=True, now=NOW,
+            finder=lambda *_a, **_k: {"found": True, "official_entry_url": "https://www.lvmh.cn/job-offers",
+                                      "search_used": 1,
+                                      "candidates": [{"url": "https://www.lvmh.cn/job-offers",
+                                                      "verdict": "likely_official", "score": 55}]},
+            fingerprinter=lambda _url, **_k: {"platform": "unknown", "adapter": None, "source_url": None,
+                                              "identity_ok": False, "identity_reason": "fetch_failed"},
+            prober=lambda _c: self.fail("不该探活"), site_resolver=lambda *_a, **_k: None,
+        )
+        self.assertEqual(result["state"], "no_official_entry")
+        self.assertIsNone(result["official_entry_url"])
 
     def test_login_wall_remains_manual_without_retry(self):
         with mock.patch("builtins.print") as printed:

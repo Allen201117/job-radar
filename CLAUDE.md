@@ -174,7 +174,7 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
 
 | 组件 | 在哪 | 干什么 |
 |---|---|---|
-| 期望清单 | `crawler/audit_contract.yaml`（85 条：数据 13 / 体验 21 / 链路 35 / 老告警桥接 16） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
+| 期望清单 | `crawler/audit_contract.yaml`（86 条：数据 13 / 体验 22 / 链路 35 / 老告警桥接 16；原写 85 条是 09-19 上线时的数，09-23 复核更正） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
 | 执行器 | `crawler/audit_runner.py` + `structural-audit.yml`（每日北京 08:50） | 逐条量，写 `audit_results`（Supabase，迁移 281/282）；`unique(check_id, run_date)` 一天一行 = 趋势表 |
 | 覆盖率差集 | `crawler/audit_coverage.py` + `audit_exemptions.yaml` | 左边**自动枚举**（带 cron 的 workflow / 写 ops_runs 的模块 / jobs 表列 / 走查指标），减去有期望的；上线时 68 条 → 现 14 条（全是 jobs 列） |
 | 老告警桥接 | `ops_watchdog.py` 的 `publish_audit_bridge` | 16 条规则**判定与阈值一字未动**，只把每条的命中数 + 明细写进同一张表（`detail.findings[].title` 与 issue 标题逐字一致） |
@@ -189,8 +189,14 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
   真存在于 `jobs-db/schema.sql`），**不靠「列名在 SQL 文本里出现过」**——`status` 出现在几乎每条 where 里，按文本猜会永久假绿。
 - **红灯只留给「用户可见损坏 / 供给来源大面积塌」，单个源坏最多黄灯**（创始人定）。老告警里只有 `rule_d`（关键任务超期）
   与 `rule_k`（一整类来源产出骤降）是 critical；`severity=info` 的不染灯。灯色以**清单里的 severity** 为准，不认落库快照。
+- **假绿体检（连续 7 天报成功零产出）不数「休眠中的校招/实习入口」**（近一年出过岗、这一批没开，2026-09-23 创始人授权），
+  它们单独记在 `exp.fake_green_campus_dormant`（info 不染灯）。❌ 代价：公司换了新校招门户、旧门户留着不关，和休眠长得一模一样
+  （09-20 修的知乎等 4 条全是这一类，放新口径下会全被藏掉）。✅ 防：Moka 校招门户 0 岗时问一次平台别名，别名指向另一期**且那一期真有岗**才记 failed 带新地址（只看别名不同会误报：
+  一个租户常同时开几个门户，华虹的别名还指向空模板）
+  （`MokaAdapter._raise_if_campus_portal_superseded`，由「连续失败」老告警接住）。**两者是一对，删掉后者前者就会藏坏源**；
+  其它平台还没有同类识别。回归钉在 `crawler/test_fake_green_sources.py`。
 - **`name/why/action` 的读者是非技术创始人**：不许出现表名 / 模块英文名 / SQL 词 / 「GitHub Actions、日志、索引、adapter」；
-  `action` 写成他能做的动作（「把这条转给 Claude，让它查…」）。阈值没有历史依据的一律 `calibrated: false`（现 82/85 条），
+  `action` 写成他能做的动作（「把这条转给 Claude，让它查…」）。阈值没有历史依据的一律 `calibrated: false`（现 83/86 条），
   攒够 30 天换分位数，**禁止编一个看着合理的数字却不标它**。
 - 周任务的链路检查窗口是 8 天；`campus-crawl` 那条按月份条件化（月份集合复用规则 O）。
   ⚠️ `enrich-crawl` / `dead-link-audit-new` 与另一条 workflow 共用台账模块名，**一条停了另一条会掩盖它**——豁免理由里写的是真缺口，不是「不用管」。
@@ -517,7 +523,8 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 - **词表两端逐条一致**：`tests/geo.test.js` 会读 `crawler/geo.py` 抽词表做 deepEqual，改一边不改另一边直接红。改 `crawler/geo.py` 必须同改 `lib/geo.js`。
 - ⚠️ **顺序必须是「先推代码、再回填」**：`country_code`/`job_scope` 在 `_UPDATE_COLS` 里、不在 `_PRESERVE_IF_EMPTY` 里，列表重抓会用**当时 CI 上那版代码**覆盖——2026-09-05 回填完 3 分钟 `campus-crawl` 起来，用旧代码把 11,613 行刷回 NULL。
 - ⚠️ **两字母码在「开头」和「结尾」是两回事，别把结尾那张表复制过去**（2026-09-06 加）：Workday 系还有一种把码写最前面的格式（`MY, JOHOR, VIRTUAL` / `SE, Solna`），但**这个位置上美国州缩写比国别码更常见** —— live 全库「开头两字母 + 逗号」7,403 行里 `GA, Atlanta…`117 / `NY, BROADWAY…`116 / `CA, Burbank…`50 全是「州, 城市, 门牌」。所以规则是**撞美国州缩写的一律弃权**（MO 是密苏里不是澳门、IN 是印第安纳不是印度），只有 CA/IN 在串里另有该国省/邦硬证据时才认；且整条规则排在 `derive_country_code` **最后一步**（`SE, Bothell, Washington, United, States` 是波音厂区代号，早在第一步就判了 US）。实测影响面 120 行：国内→境外 69、境外→国内 0、只补 country_code 51。取舍与实证反例（GM=通用汽车厂区前缀不是冈比亚、NA=北美占位不是纳米比亚）写在 `crawler/geo.py` 的 `ISO_ALPHA2_CODES` 那段注释里。
-- 📌 验收方法：拉全库 `distinct location`（约 2 万个写法）**逐条对拍改前 / 改后**，「大中华 → 境外」这个方向**必须为 0**。逐条选词理由与实测数字 → `docs/module-deep-notes.md`。
+- 🚫 **国家 / 范围必须按「别名折叠之前」的原文判（2026-09-23 立）**：❌ workday 在招岗 6,526 行 `country_code` 为空却判 domestic，其中 4,383 行存的是「远程」，路径原文是 `United-States---Remote` / `Remote-Mexico` / `UK-Remote`；greenhouse / smartrecruiters / ashby 同病（live 重抓 77 源 2,899 个）。✅ 根因：`normalize()` 先 `clean_location` 再判国家，而 `normalize_city` 是**子串**折叠——串里有 remote 就整串换成「远程」，国家当场丢光（smartrecruiters 出口特意展开的 `Remote Germany` 也被它抹掉）。✅ 防：`normalizer.geo_basis`，别名后判不出国家就用原文判；CITY_ALIASES 的目标值里只有「远程」判不出国家，所以只动被折叠的行，`test_only_remote_alias_target_lacks_country` 钉着这个前提。workday 另在 `_loc_from_path` 展开 ISO3 国别码（白名单；PHL=费城、NOR=站点编号是实测撞车码）、还原 `United-Kingdom` 这类多词国名的连字符。
+- 📌 验收方法：拉全库 `distinct location`（约 2 万个写法）**逐条对拍改前 / 改后**，「大中华 → 境外」这个方向**必须为 0**。⚠️ 库里的 `location` 是**别名折叠之后**的文本，拿它、或拿 adapter `parse` 的出口量，都会和真实写库结果差一层——量地点类改动要把原始地点**完整过一遍 `normalize()`**（workday 能从 jd_url 路径复原原文，其它源只能 live 重抓）。逐条选词理由与实测数字 → `docs/module-deep-notes.md`。
 
 ## 🚫「接口返 0 / 403」不能证明「对方没开」（2026-09-04 立，一晚栽三次）
 
@@ -812,6 +819,11 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
 - **体验尺子** `scripts/ux-walkthrough/walkthrough.js`（每日 `ux-walkthrough.yml`，`ops_runs.ux_walkthrough`）：拿真实用户画像逐个
   模拟推荐 / 方向 / 洞察覆盖 / 校招专区 / 接口 TTFB。它第一天就抓到 7/44 用户推荐页 0 岗（手填岗位写法 4 人 +
   求职范围海外错配 3 人），这两类单测永远报不了警——只有喂真实画像才看得见。
+  ⚠️ **检测器必须调生产端同一个函数，不许自己另判一遍（2026-09-23 立）**：`role_input_format` 曾只看原文有没有分隔符、
+  方向命中曾拿没拆开的原文分类——09-20~22 每天报的 18 条里 **7 条是生产端早已处理好的写法**（「销售；采购」自 09-17 起就被
+  `normalizeRolePhrases` 拆成两个方向，走查却把销售岗算成跑偏）。现在两处都走 `normalizeRolePhrases`。
+  `role_mismatch_high` 分不清「库里没货」与「真被拦了」：动词库前先按 标题 × 城市 × 阶段 数库里有多少这类岗
+  （09-23 那 7 条里 5 条是供给不足；真被拦的 2 条是叫法缺口，补了芯片验证 / 风控两组）。
 - ⚠️ **「同职能」≠「同角色」，概念组里的领域锚点是最大的漏洞（2026-09-17 立）**：数据分析被推「大数据开发」、AI 产品经理被推
   「产品运营」、财务被推「财务科技全栈开发」——21 条独立裁判判错的岗 0 条是职能层捞的，全是标题只靠组里的**领域词**
   （数据/产品/品牌/财务）精确命中而标题真正的角色词属于另一个簇。防法 `GROUP_DOMAIN_ANCHORS` + `_titleRoleClusterConflict`

@@ -743,6 +743,7 @@ def _evaluate_candidates(row, candidates, *, trusted_site, fingerprinter,
     fallbacks = []
     identity_checked = 0
     identity_mismatches = 0
+    blocked_unverified = 0
     for candidate in candidates:
         candidate_url = candidate["url"]
         if not trusted_site:
@@ -764,7 +765,15 @@ def _evaluate_candidates(row, candidates, *, trusted_site, fingerprinter,
         )
         platform = fingerprint.get("platform")
         if platform in _BLOCKED_PLATFORMS:
-            fallbacks.append((candidate_url, fingerprint))
+            # 被拦的页面核不了身份，所以只有**来源可信**的候选（官网首页链出去的 / slug 探出来的）
+            # 才能拿来给这家公司定「反爬 / 登录墙」的结论（2026-09-23）。搜索结果不行：
+            # 旧写法不设门，学大教育被记成 anti_bot 的依据是夏威夷公立学校的招聘页、思考乐是
+            # 香港明爱、视觉中国是 Insta360、福耀 / 赛力斯是第三方招聘站——别人家的网站挡了我们，
+            # 却成了这家公司 30 天退避的理由。不可信的被拦候选只记 rejection，不当 fallback。
+            if trusted_site:
+                fallbacks.append((candidate_url, fingerprint))
+            else:
+                blocked_unverified += 1
             rejections.append(_rejection(
                 candidate_url,
                 fingerprint.get("reason") or platform,
@@ -827,6 +836,7 @@ def _evaluate_candidates(row, candidates, *, trusted_site, fingerprinter,
             "rejections": rejections,
             "identity_checked": identity_checked,
             "identity_mismatches": identity_mismatches,
+            "blocked_unverified": blocked_unverified,
         }
     return {
         "selected": None,
@@ -834,6 +844,7 @@ def _evaluate_candidates(row, candidates, *, trusted_site, fingerprinter,
         "rejections": rejections,
         "identity_checked": identity_checked,
         "identity_mismatches": identity_mismatches,
+        "blocked_unverified": blocked_unverified,
     }
 
 
@@ -901,6 +912,7 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
     rejections = []
     identity_checked = 0
     identity_mismatches = 0
+    blocked_unverified = 0
     candidate_evidence = {}
     cache_evaluated = False
     if official_url:
@@ -923,6 +935,7 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
             rejections.extend(evaluated["rejections"])
             identity_checked += evaluated["identity_checked"]
             identity_mismatches += evaluated["identity_mismatches"]
+            blocked_unverified += evaluated.get("blocked_unverified", 0)
             candidate_evidence["candidate_urls"] = [{"url": official_url}]
             if (
                 selected is None
@@ -980,6 +993,7 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
             rejections.extend(evaluated["rejections"])
             identity_checked += evaluated["identity_checked"]
             identity_mismatches += evaluated["identity_mismatches"]
+            blocked_unverified += evaluated.get("blocked_unverified", 0)
             ledger = entry_lanes.record_lane(
                 ledger, lane, found=bool(evaluated["selected"]),
                 company=row["company"], now=now,
@@ -1080,6 +1094,7 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
         rejections.extend(evaluated["rejections"])
         identity_checked += evaluated["identity_checked"]
         identity_mismatches += evaluated["identity_mismatches"]
+        blocked_unverified += evaluated.get("blocked_unverified", 0)
         entry_channel = "search"
         ledger = entry_lanes.record_lane(
             ledger, entry_lanes.LANE_SEARCH, found=bool(selected),
@@ -1104,6 +1119,7 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
         rejections.extend(evaluated["rejections"])
         identity_checked += evaluated["identity_checked"]
         identity_mismatches += evaluated["identity_mismatches"]
+        blocked_unverified += evaluated.get("blocked_unverified", 0)
 
     rejected_hosts = sorted({
         item["host"] for item in rejections if item.get("host")
@@ -1117,13 +1133,17 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
         "rejected_candidate_hosts": rejected_hosts,
     }
     if selected is None:
+        rejection_evidence["blocked_unverified_candidates"] = blocked_unverified
         if (
             identity_checked > 0
             and identity_mismatches == identity_checked
             and not fallbacks
+            # 有候选只是被拦、核不了身份时，不能下「全是别家公司」的结论
+            and not blocked_unverified
         ):
             return {
-                "state": "wrong_platform",
+                # 同下面「没有可信候选」：候选全是别家公司 = 没找到入口，不是缺 adapter（2026-09-23 改标签）。
+                "state": "no_official_entry",
                 "official_entry_url": None,
                 "detected_platform": None,
                 "next_retry_at": _after(now, 30),
@@ -1143,13 +1163,17 @@ def process_company(row, *, supabase, jobs_conn, apply, search_remaining,
                 fallbacks[0],
             )
         else:
-            fallback_url = official_url
-            fallback_fingerprint = {
-                "platform": "unknown",
-                "adapter": None,
-                "source_url": None,
-                "reason": "no_routable_candidate",
-            }
+            # 一个过了身份门的候选都没有 = 没找到可信的官方入口，不是「平台没 adapter」（2026-09-23）。
+            # 旧写法记成 wrong_platform「P1 httpx 道无可用 adapter」，还把搜索排第一的那条 URL 记成
+            # 官方入口（联合利华→LVMH、宁波银行→恒丰银行）：看台账的人会去给一个不存在的平台写 adapter。
+            return {
+                "state": "no_official_entry",
+                "official_entry_url": None,
+                "detected_platform": None,
+                "next_retry_at": _after_spread(now, 30, row.get("company")),
+                "fail_reason": "候选入口都没过身份核验或路由门，没有可信的官方招聘入口",
+                "evidence": rejection_evidence,
+            }, search_used, False
         result = _failure_for_platform(
             fallback_fingerprint, now, row["company"]
         )

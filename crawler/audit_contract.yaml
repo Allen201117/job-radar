@@ -511,25 +511,68 @@ checks:
     why: 「绿灯」不等于「有产出」。故意不用 jobs_created=0（那是常态，84% 的运行都是 0），只看 jobs_found=0——一个岗都没在列表里看到，却报成功，是最典型的假绿。
     action: 挑几个来源看看是不是接口返回结构变了、还是登录态过期
 
+  # 2026-09-23 改口径（创始人授权）。旧口径天天 25 个、天天红，逐个去对方页面核实：
+  #   14 个是「近一年出过岗的校招/实习门户，这一批招完、下一批没开」（页面自己写着 0 个岗）
+  #   1 个是已经停用的来源（奥普特，停用后 7 天窗口里的旧记录还在算）
+  #   剩下 10 个才是真要人处理的（6 个从没出过岗的阿里子公司校招页、极米社招空模板、南孚、凯叔、法拉利）。
+  # 新口径 = 只数「已启用」且「不是休眠校招通道」的；休眠校招通道挪到下一条单独记数、不染灯。
+  # 回测（每天北京 09:00）09-16~09-23：旧 33/33/30/30/30/24/25/25 → 新 14/14/12/12/10/10/10/10。
+  # 阈值从 10 收到 5：去掉休眠通道后剩下的每一条都要人处理，原来的 10 是给季节性噪音留的余量。没有历史依据，待校准。
+  # 盲区（新口径会藏掉的方向）：公司换了新的校招门户、旧门户留着不关 —— 看起来和休眠一模一样。
+  #   09-20 修的知乎/菲尼克斯/芯粤能/明源云 4 条全是这一类，放在新口径下会被藏进下一条。
+  #   对策在抓取端：Moka 校招门户抓到 0 岗时会问一次平台「这个公司当前的校招门户是哪个」，换了且新门户真有岗
+  #   就直接记抓取失败并带上新地址（crawler/adapters/china_ats.py 的 _raise_if_campus_portal_superseded），
+  #   失败会被「连续失败」那条老告警接住。其它平台还识别不了，这是如实的剩余盲区。
   - id: exp.fake_green_sources_chronic
-    name: 假绿体检：连续 7 天都「报成功却零产出」的来源数
+    name: 假绿体检：连续 7 天都「报成功却零产出」、需要人处理的来源数（不含休眠中的校招/实习通道）
     layer: experience
     db: supabase
     owner: crawler/run.py
     sql: >
       select count(*) from (
-        select source_id from crawl_runs
-        where started_at >= now() - interval '7 days'
-        group by source_id
-        having count(*) filter (where status = 'success' and jobs_found = 0) >= 7
-           and count(*) filter (where not (status = 'success' and jobs_found = 0)) = 0
+        select r.source_id from crawl_runs r
+        join sources s on s.id = r.source_id and s.enabled
+        where r.started_at >= now() - interval '7 days'
+        group by r.source_id, s.board
+        having count(*) filter (where r.status = 'success' and r.jobs_found = 0) >= 7
+           and count(*) filter (where not (r.status = 'success' and r.jobs_found = 0)) = 0
+           and not (coalesce(s.board, '') in ('campus', 'intern') and exists (
+             select 1 from crawl_runs x
+             where x.source_id = r.source_id and x.jobs_found > 0
+               and x.started_at >= now() - interval '365 days'))
       ) chronic
-    normal: "<= 10"
+    normal: "<= 5"           # 2026-09-23 新口径实测 10（旧口径 25）
     severity: warn
     covers: []
     calibrated: false
-    why: 一次假绿可能只是当天抖动，连续 7 天都这样基本可以确定这个来源已经坏了很久，只是没人发现。
-    action: 把这条转给 Claude，让它逐个核实这些来源是不是真的失效了，失效的就先关掉（保留记录，不删）
+    why: 一次假绿可能只是当天抖动，连续 7 天都这样，基本说明这个来源坏了或者作废了。校招/实习的入口如果近一年出过岗、只是上一批招完了下一批还没开，门户显示 0 个岗是正常的，不算在这里（单独记在下一条）。所以这里剩下的每一个来源都需要有人处理。
+    action: 把这条转给 Claude，让它逐个去对方招聘页核实：对方有岗我们没抓到就修；对方换了入口就改地址；入口已经作废的，列出来请你拍板关掉（保留记录，不删）
+
+  - id: exp.fake_green_campus_dormant
+    name: 休眠中的校招/实习入口数（近一年出过岗，最近 7 天一个岗都没有）
+    layer: experience
+    db: supabase
+    owner: crawler/run.py
+    sql: >
+      select count(*) from (
+        select r.source_id from crawl_runs r
+        join sources s on s.id = r.source_id and s.enabled
+        where r.started_at >= now() - interval '7 days'
+          and coalesce(s.board, '') in ('campus', 'intern')
+        group by r.source_id
+        having count(*) filter (where r.status = 'success' and r.jobs_found = 0) >= 7
+           and count(*) filter (where not (r.status = 'success' and r.jobs_found = 0)) = 0
+           and exists (
+             select 1 from crawl_runs x
+             where x.source_id = r.source_id and x.jobs_found > 0
+               and x.started_at >= now() - interval '365 days')
+      ) dormant
+    normal: "<= 30"          # 2026-09-23 实测 14；回测 09-16~09-23 为 17/17/17/17/18/13/14/14
+    severity: info           # 休眠是常态，不染灯，只每天留个数看趋势
+    covers: []
+    calibrated: false
+    why: 校招是一批一批开的，上一批招完、下一批还没开的这段时间，门户显示 0 个岗是正常的，所以这里不算坏、不染灯。2026-09-23 逐个核过当天的 14 个，对方页面全都自己写着 0 个岗。但它有一个盲区：公司换了一个新的校招门户、旧门户留着不关，看起来和休眠一模一样。用得最多的那个招聘平台已经能在抓取时自动认出「换了新门户、新门户里有岗」并直接报失败，其它平台还认不出来。
+    action: 平时无需处理。秋招春招季（3、4、9、10、11 月）如果这个数明显上涨，把这条转给 Claude，让它挑几家去对方官网看看是不是换了新门户
 
   - id: exp.dead_click_signal_freshness_30d
     name: 「点开是死岗」这个埋点最近 30 天有没有再上报过

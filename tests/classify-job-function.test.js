@@ -401,3 +401,17 @@ test("投行/并购业务归入金融业务（此前落其他或被括号里的�
   assert.equal(classifyJobFunction({ title: "股票资本市场承做岗(J11314)" }), "金融业务");
   assert.equal(classifyJobFunction({ title: "Investment Banking Analyst" }), "金融业务");
 });
+
+// 2026-09-23：券商/银行风险管理部的四类标准岗名。旧规则只认「风控/风险管理」，
+// 「市场风险」被「市场」判成市场营销，其余判不出落「其他」→ 风控画像的职能门把它们拒掉。
+// 全量对拍（标题或正文含这四个词的 741 个在招岗）：17 行变化，15 行是这类风险岗归回金融业务。
+test("信用/市场/操作/全面风险岗归金融业务，末尾是别的角色词时不抢", () => {
+  assert.equal(classifyJobFunction({ title: "市场风险实习生" }), "金融业务");
+  assert.equal(classifyJobFunction({ title: "市场风险分析岗(J19548)" }), "金融业务");
+  assert.equal(classifyJobFunction({ title: "信用风险评级岗(J11367)" }), "金融业务");
+  assert.equal(classifyJobFunction({ title: "操作风险岗(J11318)" }), "金融业务");
+  assert.equal(classifyJobFunction({ title: "全面风险实习生" }), "金融业务");
+  // 最靠后命中：末尾的角色词仍然赢
+  assert.equal(classifyJobFunction({ title: "风险策略运营实习生" }), "运营");
+  assert.equal(classifyJobFunction({ title: "市场营销专员" }), "市场");
+});

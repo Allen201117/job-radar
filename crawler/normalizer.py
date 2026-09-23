@@ -199,6 +199,28 @@ def clean_location(location: Optional[str]) -> Optional[str]:
     return normalize_city(loc)
 
 
+def geo_basis(raw_location: Optional[str], cleaned: Optional[str]) -> Optional[str]:
+    """判国家 / 求职范围用的地点文本：展示用别名把国家信息吃掉时，退回别名之前的原文。
+
+    `normalize_city` 是**子串**折叠：地点里只要出现 "remote" 就整串变成「远程」——
+    "United States - Remote" / "Remote Germany" / "China - Remote" 全都成了同一个「远程」，
+    derive_country_code 拿到的只剩一个没有国家的词，于是按 source.regions 兜底，
+    regions 含 CN 的外企源就把美国远程岗判成 domestic。
+    2026-09-23 香港库实测：workday 在招岗 country_code 为空却判 domestic 的 6,526 行里
+    4,383 行（67%）存的就是「远程」，路径原文是 United-States---Remote / Remote-Mexico /
+    UK-Remote …；smartrecruiters 在 adapter 出口把 "Remote de" 展开成 "Remote Germany"
+    （见其 _ISO2_COUNTRY_NAMES 注释）也是被这一步抹掉的。
+
+    只在「别名后的文本判不出国家」时才看原文：CITY_ALIASES 的目标值里只有「远程」判不出国家
+    （其余都是大陆城市 / 香港 / 新加坡），所以本函数**只改变被折叠成「远程」的那批行**，
+    其它地点逐字走旧路径。展示用的 location 列不动。
+    """
+    if not cleaned or derive_country_code(cleaned) is not None:
+        return cleaned
+    raw = re.sub(r"\s+", " ", strip_nul(raw_location or "")).strip()
+    return raw or cleaned
+
+
 def clean_summary(summary: Optional[str], max_chars: int = 400) -> Optional[str]:
     """截断摘要到 max_chars 字，在词边界截断。"""
     if not summary:
@@ -262,6 +284,7 @@ def make_content_hash(title: str, location: Optional[str], summary: Optional[str
 def normalize(raw: RawJob, *, source_id: str, company: str, regions=None) -> dict:
     title = clean_title(raw.title)
     location = clean_location(raw.location)
+    geo_location = geo_basis(raw.location, location)
     full_summary = clean_summary(raw.summary)
     salary = clean_salary(raw.salary_text)
     job_type = (
@@ -284,8 +307,8 @@ def normalize(raw: RawJob, *, source_id: str, company: str, regions=None) -> dic
         "company": raw.company or company,
         "title": title,
         "location": location,
-        "country_code": derive_country_code(location),
-        "job_scope": derive_job_scope(location, source_regions(regions)),
+        "country_code": derive_country_code(geo_location),
+        "job_scope": derive_job_scope(geo_location, source_regions(regions)),
         "job_type": job_type,
         # 届别只认硬信号（2027届/27届/2027校招/Class of 2027…），抽不出留 None。
         # 绝不靠入库时间兜底——8 月同时在抓 2027 届新岗与 2026 届收尾岗，猜错=把往届岗

@@ -84,6 +84,10 @@ CHINA_KEYWORD_GROUPS: List[List[str]] = [
     # 同索引注释（此处不重复列证据，两边必须保持一致）。
     ["投行", "投资银行", "并购", "承做", "承揽", "investment banking", "资本市场"],
     ["编导", "短视频编导", "导演", "制片", "视频剪辑"],
+    # 索引 48 = 芯片验证；索引 49 = 风控/风险管理。均于 2026-09-23 追加在末尾，库内证据与取舍见
+    # lib/china-keyword-expansion.js 同索引注释（两边必须保持一致）。
+    ["芯片验证", "ic验证", "数字验证", "soc验证", "asic验证", "逻辑验证", "处理器验证", "硅后验证", "原型验证", "fpga验证", "design verification"],
+    ["风控", "风险管理", "风险控制", "信用风险", "市场风险", "操作风险", "全面风险", "风险合规", "风险量化", "风险分析", "风险策略"],
 ]
 
 # 算法岗位组与 AI 技术领域组的非对称展开与前端一致。AI 原本在末尾，后续只能追加，故索引固定为 24。
@@ -237,6 +241,8 @@ KEYWORD_GROUP_FUNCTIONS = [
     None,        # 45 学段（修饰语，不参与职能相关层）
     "金融业务",  # 46 投资银行/并购（2026-09-18 新增，见 CHINA_KEYWORD_GROUPS 同索引注释）
     None,        # 47 编导/内容制作（2026-09-18 新增，无对应职能桶，见 CHINA_KEYWORD_GROUPS 同索引注释）
+    "研发",      # 48 芯片验证（2026-09-23 新增）
+    "金融业务",  # 49 风控/风险管理（2026-09-23 新增）
 ]
 
 # 非软件工程降级门专用：词表刻意宽于生产制造，只负责阻止传统工程/医疗靠泛工程师进入软件研发。
@@ -282,7 +288,7 @@ _JOB_FUNCTION_RULES = [
     ("运营", re.compile(r"用户运营|内容运营|运营|增长|operations|growth", re.I)),
     ("市场", re.compile(r"市场|营销|品牌|公关|marketing|brand|\bpr\b", re.I)),
     ("医疗健康", re.compile(r"医生|医师|护士|护理岗|临床护理|护理部|护理师|药师|药剂|临床数据|临床|\bcra\b|\bcrc\b|\bcta\b|医学|医药|药物|制药|药品|药理|检验科|放射|影像|超声|口腔|中医|兽医|营养师|康复|理疗|\bmsl\b|医学事务|医疗器械|试剂|生物制药|生物医药|medical|clinical|nurse|pharmac\w*|physician|therapist|biolog\w*|pathology", re.I)),
-    ("金融业务", re.compile(r"柜员|综合柜员|理赔|查勘|核保|核赔|承保|信贷|信审|风控|风险管理|合规风控|投资|投研|精算|证券|保险|银行|理财|资产管理|资管|基金|信托|外汇|清算|清算结算|资金结算|证券结算|跨境结算|反洗钱|信用卡|交易员|teller|banker|underwrit\w*|actuar\w*|trader|trading|credit\s*analyst|investment", re.I)),
+    ("金融业务", re.compile(r"柜员|综合柜员|理赔|查勘|核保|核赔|承保|信贷|信审|风控|风险管理|合规风控|信用风险|市场风险|操作风险|全面风险|投资|投研|精算|证券|保险|银行|理财|资产管理|资管|基金|信托|外汇|清算|清算结算|资金结算|证券结算|跨境结算|反洗钱|信用卡|交易员|teller|banker|underwrit\w*|actuar\w*|trader|trading|credit\s*analyst|investment", re.I)),
     ("教育培训", re.compile(r"教师|老师|讲师|教练|教研|助教|辅导员|班主任|教务|培训师|课程顾问|保育|幼师|teacher|instructor|tutor|faculty|professor|lecturer", re.I)),
     # 不含「客户经理」：它是销售岗位，避免客服服务抢走既有销售规则。
     ("客服服务", re.compile(r"客服|客户服务|客户支持|售后|服务专员|服务顾问|话务|坐席|门店|店长|店员|导购|收银|领班|前台|接待|服务员|咖啡师|调茶师|运动顾问|零售|customer\s*service|customer\s*support|customer\s*success|front\s*desk|receptionist|barista|cashier|retail\s*associate", re.I)),

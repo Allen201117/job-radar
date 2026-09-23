@@ -21,6 +21,8 @@ function loadSearch() {
     client.jobsQuery = async (sql, params) => {
       calls.push({ sql, params });
       if (/^select count\(\*\)/.test(sql)) return count ? [count] : [];
+      // ④ 的前置存在性查询（选了招聘类型才发）：与计数查询同一份 where，只问「有没有未分类的行」。
+      if (/^select exists\(/.test(sql)) return count ? [{ pending: count.unclassified > 0 }] : [];
       if (/^select id, content_hash/.test(sql)) return []; // 命中页回补展示列
       return candidates;
     };
@@ -28,6 +30,7 @@ function loadSearch() {
   return { search, DEFAULT_FILTERS, calls, install, companyTierPatterns };
 }
 
+const CAMPUS = { title: "后端开发（2027届校招）", recruitment_category: "校招", recruitment_explicit: true };
 const countQueries = (calls) => calls.filter((c) => /^select count\(\*\)/.test(c.sql));
 
 function candidateRows(n, overrides = {}) {
@@ -98,8 +101,9 @@ test("候选里有被 JS 淘汰的行 = 等价性已漂 → 运行时自检兜�
 });
 
 test("结果集里还有招聘类型未分类的行 → 兜底分支不是充分条件，弃权", async () => {
-  const { search, DEFAULT_FILTERS, install } = loadSearch();
-  install({ candidates: candidateRows(FTS_CAP), count: { total: 15290, unclassified: 7 } });
+  const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+  // 候选必须是 JS 也判为校招的行，否则自检门③ 先弃权，根本走不到 ④（此前这条用例就是被 ③ 挡住的）。
+  install({ candidates: candidateRows(FTS_CAP, CAMPUS), count: { total: 15290, unclassified: 7 } });
 
   const r = await search.searchJobsStore(
     { ...DEFAULT_FILTERS, city: "深圳", jobType: "校招" },
@@ -109,6 +113,40 @@ test("结果集里还有招聘类型未分类的行 → 兜底分支不是充分
     60,
   );
   assert.equal(r.exactTotal, null);
+  // 2026-09-23：先问「有没有未分类的行」，有就不再跑全表 count——那个数算完也会被 ④ 丢掉
+  // （/campus 默认态每次白跑 0.6~2.4s）。存在性查询与计数用同一份 where、同一份参数。
+  const ex = calls.find((c) => /^select exists\(/.test(c.sql));
+  assert.ok(ex, "选了招聘类型时应先发存在性查询");
+  assert.match(ex.sql, / and recruitment_category is null\) as pending$/);
+  assert.equal(countQueries(calls).length, 0, "已知要弃权，就别再数");
+});
+
+test("选了招聘类型但没有未分类的行 → 照常计数；存在性查询与计数的 where / 参数逐字相同", async () => {
+  const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+  install({ candidates: candidateRows(FTS_CAP, CAMPUS), count: { total: 15290, unclassified: 0 } });
+
+  const r = await search.searchJobsStore(
+    { ...DEFAULT_FILTERS, city: "深圳", jobType: "校招" },
+    null,
+    [],
+    0,
+    60,
+  );
+  assert.equal(r.exactTotal, 15290);
+  const ex = calls.find((c) => /^select exists\(/.test(c.sql));
+  const [cnt] = countQueries(calls);
+  assert.ok(ex && cnt);
+  const whereOf = (sql) => sql.match(/from jobs where (.*?)( and recruitment_category is null\) as pending)?$/)[1];
+  assert.equal(whereOf(ex.sql), whereOf(cnt.sql));
+  assert.deepEqual(ex.params, cnt.params);
+});
+
+test("没选招聘类型 → 不发存在性查询（④ 只对招聘类型生效）", async () => {
+  const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+  install({ candidates: candidateRows(FTS_CAP), count: { total: 15290, unclassified: 3 } });
+  const r = await search.searchJobsStore({ ...DEFAULT_FILTERS, city: "深圳" }, null, [], 0, 60);
+  assert.equal(r.exactTotal, 15290);
+  assert.equal(calls.filter((c) => /^select exists\(/.test(c.sql)).length, 0);
 });
 
 // 2026-09-17 起排除词下推 SQL（appendExcludeWhere，与 scoreJob 同字段集 title+summary）：候选与计数用同一份 where，
@@ -250,6 +288,38 @@ test("按发布时间排：只按新鲜度截断——窗口内的分页与全�
   const c = candidateSql(calls);
   assert.match(c.sql, /order by first_seen_at desc limit/);
   assert.doesNotMatch(c.sql, /to_tsquery\('simple', \$\d+\)\) desc/);
+});
+
+// 2026-09-23：有偏好记录、但一个粗排信号都没有（没填岗位名/城市/公司）的登录用户，与匿名同一回事 →
+// 同样只取 1000 窗。此前只认 `!prefs`，这类用户「北京 + 实习」反而拉满 8000 行 5.6 MB。
+test("FTS 路径：偏好里没有任何粗排信号 + 按匹配度 → 与匿名同用 1000 窗", async () => {
+  const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+  install({ candidates: candidateRows(1000), count: null });
+  await search.searchJobsStore(
+    { ...DEFAULT_FILTERS, city: "北京", jobType: "实习" },
+    prefsWith({ job_scope: "all" }),
+    [],
+    0,
+    60,
+  );
+  assert.match(candidateSql(calls).sql, /order by first_seen_at desc limit 1000$/);
+});
+
+test("FTS 路径：没信号但按发布时间排 / 开关 off → 保持 8000 窗（这两种都不能归并成匿名）", async () => {
+  for (const [label, filters, env] of [
+    ["newest", { city: "北京", sortBy: "newest" }, null],
+    ["JOBS_MATCH_PRESCORE=off", { city: "北京" }, "off"],
+  ]) {
+    const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+    install({ candidates: candidateRows(FTS_CAP), count: null });
+    if (env) process.env.JOBS_MATCH_PRESCORE = env;
+    try {
+      await search.searchJobsStore({ ...DEFAULT_FILTERS, ...filters }, prefsWith(), [], 0, 60);
+    } finally {
+      delete process.env.JOBS_MATCH_PRESCORE;
+    }
+    assert.match(candidateSql(calls).sql, /limit 8000$/, label);
+  }
 });
 
 test("没有偏好时按新鲜度排——此时打分只剩「近 7 天 +10」，这就是正确排序", async () => {
@@ -462,6 +532,54 @@ test("匿名 + 按匹配度排：没有偏好就是纯新鲜度 → 走逐页路
   assert.equal(result.timing.path, "scan");
 });
 
+// 2026-09-23：校招 / 实习 + 按新鲜度取（无粗排）→ 预筛拆成「已分类 / 待回填」两支各走索引再合并。
+// 实习只占 active 6%，不拆就得按时间回表 2.9 万行才凑满 1000 行（冷缓存 2~4.6s）。
+test("扫描路径：校招/实习无粗排 → 两支 union all，各自 order by first_seen_at limit，参数比普通形态多一个", async () => {
+  for (const jobType of ["校招", "实习"]) {
+    const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+    install({ candidates: candidateRows(200, { recruitment_category: jobType, recruitment_explicit: true }), count: null });
+    await search.searchJobsStore({ ...DEFAULT_FILTERS, jobType }, null, [], 0, 60);
+    const c = calls.find((x) => /^select \* from \(/.test(x.sql));
+    assert.ok(c, `${jobType}：应走 union 形态`);
+    const branches = c.sql.match(/\(select id, source_id.*? from jobs where (.*?) order by first_seen_at desc limit \$(\d+)\)/g);
+    assert.equal(branches.length, 2, c.sql);
+    assert.match(branches[0], new RegExp(`\\(recruitment_category is not null and recruitment_explicit and recruitment_category = '${jobType}'\\)`));
+    assert.match(branches[1], /\(recruitment_category is null and /);
+    for (const b of branches) assert.doesNotMatch(b, / or \(recruitment_category is null/, "每支只带自己那一半预筛");
+    const [, lim, off] = c.sql.match(/\) u order by first_seen_at desc limit \$(\d+) offset \$(\d+)$/);
+    const inner = Number(c.sql.match(/limit \$(\d+)\)/)[1]);
+    assert.equal(c.params[inner - 1], c.params[Number(lim) - 1] + c.params[Number(off) - 1], "内层 limit = 外层 limit + offset");
+    const used = new Set([...c.sql.matchAll(/\$(\d+)/g)].map((m) => Number(m[1])));
+    for (let i = 1; i <= c.params.length; i++) assert.ok(used.has(i), `$${i} 被绑定但 SQL 没引用`);
+  }
+});
+
+test("扫描路径：社招 / 有粗排 / 按匹配度有信号 → 不走 union（只在按时间翻的校招实习上拆）", async () => {
+  for (const [label, filters, prefs] of [
+    ["社招", { jobType: "社招" }, null],
+    ["有方向词的校招（粗排路径）", { jobType: "校招" }, prefsWith({ target_roles: ["产品经理"] })],
+  ]) {
+    const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+    install({ candidates: candidateRows(200), count: null });
+    await search.searchJobsStore({ ...DEFAULT_FILTERS, ...filters }, prefs, [], 0, 60);
+    assert.ok(!calls.some((x) => /union all/.test(x.sql)), label);
+  }
+});
+
+test("粗排收窄：选了校招/实习时按招聘类型拆成三支（逐行等价），不选时保持原样", async () => {
+  const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
+  install({ candidates: candidateRows(200), count: null });
+  await search.searchJobsStore({ ...DEFAULT_FILTERS, jobType: "实习" }, prefsWith({ target_roles: ["产品经理"] }), [], 0, 60);
+  const c = candidateSql(calls);
+  const m = c.sql.match(
+    /and \(\(search_doc @@ to_tsquery\('simple', \$(\d+)\) and recruitment_category = '实习'\) or \(first_seen_at > now\(\) - interval '7 days' and recruitment_category = '实习'\) or \(recruitment_category is null and \(search_doc @@ to_tsquery\('simple', \$(\d+)\) or first_seen_at > now\(\) - interval '7 days'\)\)\) order by/,
+  );
+  assert.ok(m, c.sql);
+  assert.equal(m[1], m[2], "三支引用的是同一个收窄 tsquery");
+  // 外层预筛仍在：7 天支上的类型条件只是冗余提示，候选集由预筛决定。
+  assert.match(c.sql, /recruitment_category is not null and recruitment_explicit and recruitment_category = '实习'/);
+});
+
 // 2026-09-18 线上实锤：候选 SQL 绑定了一个没被引用的参数（FTS 路径压了收窄用的 tsquery 却没拼收窄条件）
 // → PG 报错 → searchJobsStore 的 catch 静默退化到扫描路径。钉死：两条路径的候选 SQL 每个绑定参数都必须被引用，
 // 且引用的最大编号不超过参数个数。
@@ -469,6 +587,7 @@ for (const [name, filters] of [
   ["FTS 路径（city）", { city: "深圳" }],
   ["FTS 路径（keyword）", { keyword: "后端" }],
   ["扫描路径（无筛选）", {}],
+  ["扫描路径（校招，粗排收窄）", { jobType: "校招" }],
 ]) {
   test(`候选 SQL 的绑定参数与占位符一一对应：${name}`, async () => {
     const { search, DEFAULT_FILTERS, calls, install } = loadSearch();
