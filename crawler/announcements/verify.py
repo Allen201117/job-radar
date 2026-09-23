@@ -31,7 +31,7 @@ import ops_runs  # noqa: E402
 from adapters.cn_portal_tls import make_transport  # noqa: E402
 
 from .body import extract_body
-from .classify import detect_audience, detect_employer_type
+from .classify import detect_audience, detect_employer_type, is_schedule_only
 from .deadline import extract_published
 from .portals import PORTALS, PORTALS_BY_KEY, detail_text
 from .quality import assess
@@ -66,9 +66,13 @@ def _check_one(row: dict, today: date) -> dict:
     """抓一条 + 在正文上重判。返回 {row, outcome, reason, deadline, verdict}。"""
     portal = PORTALS_BY_KEY.get(row["source_portal"])
     if portal is None:
-        # 本模块只会读 portals.py 里定义的 HTML 公告页。国聘那类 JSON 源不在这儿复验
-        # （它的报名起止日是结构化字段，由 announcements/iguopin.py 每天重拉刷新），
-        # 硬用 HTML 那套去读它的 SPA 空壳只会读出一堆垃圾。**不认识就不判**，别瞎判。
+        # 国聘没有公告详情页，不能拿 SPA 空壳正文做质量判；但宣讲/行程这种标题本身就不是
+        # 投递公告，必须让存量也走与入库同一条标题门。若标题同时明确写「招聘公告」，
+        # 则保守保留：没有正文不能证明它是否有本页报名窗。
+        title = row.get("title") or ""
+        if is_schedule_only(title):
+            return {"row": row, "outcome": "expire", "reason": "presentation_schedule"}
+        # 其余 JSON / 未登记源由自己的 harvester 刷新结构化报名时间；不认识就不判，别瞎判。
         return {"row": row, "outcome": "unsupported", "reason": "no_portal_definition"}
     referer = portal.list_urls[0] if portal else None
     try:
@@ -122,9 +126,10 @@ def verify(sb, today: date | None = None, dry_run: bool = False, limit: int | No
     """
     today = today or date.today()
     batch = limit or _BATCH
+    cols = ("id, source_portal, source_url, title, published_at, deadline, "
+            "deadline_text, verdict, audience, employer_type")
     rows = (sb.table("announcement_postings")
-            .select("id, source_portal, source_url, title, published_at, deadline, "
-                    "deadline_text, verdict, audience, employer_type")
+            .select(cols)
             .eq("status", "active")
             .neq("source_portal", "iguopin")   # 见 _check_one：国聘由自己的 harvester 复验
             .order("last_checked_at", desc=False, nullsfirst=True)
@@ -133,6 +138,17 @@ def verify(sb, today: date | None = None, dry_run: bool = False, limit: int | No
     if only_ci_reachable:
         reachable = {p.key for p in PORTALS}
         rows = [r for r in rows if r["source_portal"] in reachable]
+    # 国聘只补一道「标题门」：它的 harvester 只过滤新条目、不下架存量，标题门后来收紧（宣讲/行程）时
+    # 存量会一直挂到 TTL。这里只捞标题像宣讲/行程的那几条，不把 262 条国聘全塞进上面的 400 批次——
+    # 那些行在本模块只会得到 unsupported、不盖 last_checked_at，会反复占住批次饿死 HTML 省份的复验。
+    schedule_rows = (sb.table("announcement_postings")
+                     .select(cols)
+                     .eq("status", "active")
+                     .eq("source_portal", "iguopin")
+                     .or_("title.ilike.%宣讲%,title.ilike.%行程%")
+                     .limit(200)
+                     .execute()).data or []
+    rows = rows + [r for r in schedule_rows if is_schedule_only(r.get("title") or "")]
     if not rows:
         return {"checked": 0, "expired": 0, "flagged": 0, "dead": 0, "unreachable": 0,
                 "deadline_filled": 0, "facets_refreshed": 0, "unsupported": 0, "aborted": False}

@@ -12,10 +12,10 @@ import {
   SealCheck,
   X,
 } from "@phosphor-icons/react";
-import { Badge, EmptyState, Popover, Segmented, buttonVariants } from "@/components/ui";
+import { Badge, Button, EmptyState, Popover, Segmented, buttonVariants } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { formatDateLabel } from "@/lib/relative-time";
-import { AUDIENCE_LABEL, type AnnouncementPosting } from "@/lib/announcement-postings";
+import { AUDIENCE_LABEL, inferAnnouncementRegion, type AnnouncementPosting } from "@/lib/announcement-postings";
 import {
   CLOSING_SOON_DAYS,
   EMPTY_FILTERS,
@@ -29,6 +29,8 @@ import {
   type Facet,
   type SortKey,
 } from "@/lib/announcement-filters";
+
+const INITIAL_VISIBLE_COUNT = 40;
 
 /**
  * 招聘公告列表 + 筛选器。
@@ -46,6 +48,7 @@ export default function AnnouncementsClient({
 }) {
   const [filters, setFilters] = useState<AnnouncementFilters>(EMPTY_FILTERS);
   const [sort, setSort] = useState<SortKey>("newest");
+  const [shownCount, setShownCount] = useState(INITIAL_VISIBLE_COUNT);
 
   const facets = useMemo(() => buildFacets(postings, filters, today), [postings, filters, today]);
   const visible = useMemo(
@@ -53,7 +56,12 @@ export default function AnnouncementsClient({
     [postings, filters, today, sort],
   );
   const activeCount = activeFilterCount(filters);
-  const patch = (p: Partial<AnnouncementFilters>) => setFilters((f) => ({ ...f, ...p }));
+  const unknownDeadlineCount = postings.filter((posting) => !posting.deadline).length;
+  const displayed = visible.slice(0, shownCount);
+  const patch = (p: Partial<AnnouncementFilters>) => {
+    setFilters((f) => ({ ...f, ...p }));
+    setShownCount(INITIAL_VISIBLE_COUNT);
+  };
 
   return (
     <div>
@@ -69,7 +77,7 @@ export default function AnnouncementsClient({
             type="search"
             value={filters.q}
             onChange={(e) => patch({ q: e.target.value })}
-            placeholder="搜公告标题，如 教师 / 辅导员"
+            placeholder="可搜：标题、地区、单位类型"
             aria-label="搜索招聘公告"
             className="t-body-sm w-full rounded-full border border-black/[0.08] bg-white/70 py-2 pl-9 pr-3 outline-none placeholder:ink-4 focus:border-black/20 dark:border-white/[0.12] dark:bg-white/[0.06]"
           />
@@ -121,7 +129,7 @@ export default function AnnouncementsClient({
           ariaLabel="排序方式"
           size="sm"
           value={sort}
-          onChange={setSort}
+          onChange={(value) => { setSort(value); setShownCount(INITIAL_VISIBLE_COUNT); }}
           options={[
             { value: "newest", label: "最新发布" },
             { value: "closing", label: "最快截止" },
@@ -154,7 +162,7 @@ export default function AnnouncementsClient({
           ) : null}
           <button
             type="button"
-            onClick={() => setFilters(EMPTY_FILTERS)}
+            onClick={() => { setFilters(EMPTY_FILTERS); setShownCount(INITIAL_VISIBLE_COUNT); }}
             className="t-label ink-3 ml-auto shrink-0 px-2 py-1 hover:ink-1"
           >
             清空全部
@@ -164,8 +172,11 @@ export default function AnnouncementsClient({
 
       <p className="t-caption ink-3 mt-3" aria-live="polite">
         {activeCount > 0
-          ? `筛出 ${visible.length} 条 / 共 ${postings.length} 条`
-          : `共 ${postings.length} 条正在报名的官方公告`}
+          ? `在 ${postings.length} 条自动收录的公告里筛出 ${visible.length} 条`
+          : `共 ${postings.length} 条自动收录、正在报名的官方公告`}
+        {filters.closingWithinDays !== null && unknownDeadlineCount > 0
+          ? `；截止日待确认的 ${unknownDeadlineCount} 条不计入“${CLOSING_SOON_DAYS} 天内截止”`
+          : null}
       </p>
 
       {visible.length === 0 ? (
@@ -177,11 +188,18 @@ export default function AnnouncementsClient({
         </div>
       ) : (
         <ul className="mt-5 grid gap-4 lg:grid-cols-2">
-          {visible.map((p) => (
+          {displayed.map((p) => (
             <PostingCard key={p.sourceUrl} posting={p} today={today} />
           ))}
         </ul>
       )}
+      {visible.length > displayed.length ? (
+        <div className="mt-5 flex justify-center">
+          <Button variant="soft" size="sm" onClick={() => setShownCount((count) => count + INITIAL_VISIBLE_COUNT)}>
+            加载更多（还有 {visible.length - displayed.length} 条）
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -290,15 +308,16 @@ const CHIP_TONE = {
 function PostingCard({ posting, today }: { posting: AnnouncementPosting; today: string }) {
   const audience = AUDIENCE_LABEL[posting.audience];
   const chip = deadlineChip(posting, today);
+  const region = posting.region ?? inferAnnouncementRegion(posting.title);
   return (
     <li className="surface surface-hover flex h-full flex-col p-5">
       <div className="flex flex-wrap items-center gap-2">
-        {posting.region ? (
+        {region ? (
           <Badge tone="neutral" size="xs">
             <MapPin size={11} weight="fill" aria-hidden className="mr-0.5 inline shrink-0" />
-            {posting.region}
+            {region}
           </Badge>
-        ) : null}
+        ) : <Badge tone="neutral" size="xs">地区未标注</Badge>}
         {audience ? (
           <Badge tone={posting.audience === "experienced" ? "neutral" : "green"} size="xs">
             {audience}
@@ -306,7 +325,7 @@ function PostingCard({ posting, today }: { posting: AnnouncementPosting; today: 
         ) : null}
         {posting.employerType ? <Badge tone="neutral" size="xs">{posting.employerType}</Badge> : null}
       </div>
-      <h3 className="t-h3 mt-2">{posting.title}</h3>
+      <h3 className="t-h3 mt-2">{posting.title}{posting.sameTitleHint && <span className="t-body-sm ink-3 font-normal">（{posting.sameTitleHint}）</span>}</h3>
 
       <p className={cn("t-caption mt-3 inline-flex items-start gap-1.5 rounded-lg border px-2.5 py-1.5", CHIP_TONE[chip.tone])}>
         <CalendarBlank size={14} weight="bold" aria-hidden className="mt-0.5 shrink-0" />
@@ -318,6 +337,13 @@ function PostingCard({ posting, today }: { posting: AnnouncementPosting; today: 
         <p className="t-caption ink-3 mt-2 inline-flex items-start gap-1.5">
           <Info size={13} weight="fill" aria-hidden className="mt-0.5 shrink-0" />
           <span>官方汇总页：列出多家单位与岗位，报名入口在各单位自己的网站</span>
+        </p>
+      ) : null}
+
+      {posting.employerUnclear ? (
+        <p className="t-caption ink-3 mt-2 inline-flex items-start gap-1.5">
+          <Info size={13} weight="fill" aria-hidden className="mt-0.5 shrink-0" />
+          <span>招聘单位未写明，投递前请看原公告</span>
         </p>
       ) : null}
 
