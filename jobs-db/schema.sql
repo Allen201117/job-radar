@@ -417,6 +417,11 @@ create index if not exists jobs_search_doc_gin on jobs using gin (search_doc);
 -- 补算任务要按 id 翻页找出这些行。不建这个索引，它就得为了几百行去全表 42 万行捞一遍。
 -- 部分索引只装 NULL 行，平时几乎不占空间。
 create index if not exists jobs_recruitment_unclassified_idx on jobs (id) where recruitment_category is null;
+-- 按招聘类型取最新岗（2026-09-23）：/campus 默认态、「只选实习」、有方向词的用户进校招专区，候选 SQL 都要先把
+-- 「是不是校招/实习」判出来，而此前这一列没有索引 → 只能回表几万行再筛（「只选实习」要翻 2.9 万行才凑满 1000 行，
+-- 带方向词的校招粗排要回表 6 万行只留 1.2 万）。库机 2GB 内存装不下 2.26GB 数据，冷缓存时每回表一行 0.1~0.3ms，
+-- 同一条查询热 0.08s / 冷 4.6s。有了它：精确分类的行按 (类型, 明确, 首见时间) 顺序直取；rc is null 的待回填行也能按 IS NULL 走它。
+create index if not exists idx_jobs_active_recruitment_first_seen on jobs (recruitment_category, recruitment_explicit, first_seen_at desc) where status = 'active';
 
 -- ── 校招 / 实习分区 GIN：治 /today 召回的方向层慢（2026-08-27 加）──
 -- 病因：召回方向层的 tsquery 命中十几万行后，**还要逐行堆扫**才能应用招聘阶段过滤

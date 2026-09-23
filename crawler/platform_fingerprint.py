@@ -367,6 +367,30 @@ def _compact(value):
     return re.sub(r"[\W_]+", "", normalized, flags=re.UNICODE)
 
 
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _spaced(value):
+    """NFKC + casefold，非字母数字一律变成单个空格——保住词边界（_compact 会把它抹掉）。"""
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return re.sub(r"[\W_]+", " ", normalized, flags=re.UNICODE)
+
+
+def _latin_word_match(variant, spaced_text):
+    """纯拉丁/数字的公司名必须按**词边界**出现（2026-09-23）。
+
+    _compact 抹掉了空格，旧写法对它做子串匹配：「abb」命中 AbbVie / Abbott、「oppo」命中
+    opportunities、「ups」命中 groups、「3m」命中 3mm。必投清单里 OPPO / vivo / SHEIN / TCL /
+    ABB / 3M / DHL / UPS 八家全是纯英文名——ABB 的入口因此被记成了 careers.abbvie.com。
+    字母之间允许夹分隔符（「Tesla China」对 teslachina），但两端必须不是字母数字；
+    CJK 字符不算字母数字，所以「ABB中国」「TCL科技」照样命中。宁可漏判，不可认错公司。
+    """
+    if not variant:
+        return False
+    pattern = r"(?<![a-z0-9])" + r"\s?".join(re.escape(ch) for ch in variant) + r"(?![a-z0-9])"
+    return re.search(pattern, spaced_text) is not None
+
+
 def _company_variants(company):
     full = _compact(company)
     if not full:
@@ -411,9 +435,16 @@ def verify_page_identity(company, final_url, html):
     visible = unescape(_TAG_RE.sub(" ", visible))[:3000]
     title_compact = _compact(title)
     body_compact = _compact(visible)
+    spaced = _spaced(title) + " " + _spaced(visible)
     host_related = _host_company_related(final_url, company)
     for kind, variant in _company_variants(company):
-        if variant and (variant in title_compact or variant in body_compact):
+        if not variant:
+            continue
+        if _CJK_RE.search(variant):
+            matched = variant in title_compact or variant in body_compact
+        else:
+            matched = _latin_word_match(variant, spaced)
+        if matched:
             reason = "page_company_match:%s" % kind
             if host_related:
                 reason += "+host_related"
