@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowSquareOut,
@@ -42,10 +42,11 @@ import { formatDateLabel } from "@/lib/relative-time";
 import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
 import CompanyLogo from "@/components/CompanyLogo";
+import { InsightDrawerSkeleton } from "@/components/Skeletons";
 import type { RecruitmentObservation } from "@/lib/recruitment-cycle";
-import { useBodyScrollLock, useEscapeKey } from "@/lib/ui/hooks";
+import { useBodyScrollLock, useEscapeKey, useFocusTrap } from "@/lib/ui/hooks";
 import { INSIGHT_CHIP_TONE_CLASS as PAYLOAD_CHIP_TONE } from "@/lib/insight-chip-format";
-import { buttonVariants, badgeVariants } from "@/components/ui";
+import { Banner, buttonVariants, badgeVariants } from "@/components/ui";
 
 // 新鲜度分级配色：越旧越偏琥珀，提示用户谨慎参考。
 const FRESHNESS_TONE: Record<FreshnessLevel, string> = {
@@ -119,6 +120,8 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<CompanyInsightResponse | null>(null);
   const [submitOpen, setSubmitOpen] = useState(false);
+  const [submitWasOpened, setSubmitWasOpened] = useState(false);
+  const panelRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -140,7 +143,12 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
   // 打开时锁滚动 + 支持 Esc 关闭
   // 锁滚动 + ESC 关闭收编进组件库（改造前这段逻辑在 6 个组件里各写了一份）。
   useBodyScrollLock(open);
-  useEscapeKey(onClose, open);
+  // 表单展开时 Esc 先收起它。表单不卸载，填写中的内容仍保留；再按一次才关闭抽屉。
+  useEscapeKey(() => {
+    if (submitOpen) setSubmitOpen(false);
+    else onClose();
+  }, open);
+  useFocusTrap(panelRef, open);
 
   // 通过 portal 渲染到 body：避免抽屉成为带 transform 的 JobCard <article> 的后代，
   // 否则 fixed 定位会以卡片为包含块、随 hover transform 抖动（曾导致打开后频繁闪烁）。
@@ -173,9 +181,11 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
         className="absolute inset-0 bg-[#1a1714]/40 backdrop-blur-sm dark:bg-black/60"
       />
       <aside
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label="公司职业洞察"
+        tabIndex={-1}
         className="relative flex h-full w-full flex-col border-l border-black/[0.08] bg-[#f4efe6] ink-1 shadow-2xl sm:max-w-xl lg:max-w-2xl dark:border-white/[0.1] dark:bg-[#16130f]"
       >
         {/* 头部：明确「社区聚合·非官方」，与官方岗位数据视觉区分 */}
@@ -204,29 +214,25 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
               <X size={18} weight="bold" />
             </button>
           </div>
-          {/* 唯一一次「来源聚合·去标识」统一声明（每条卡片正文不再重复罗列媒体名） */}
-          <div className="mt-4 rounded-xl border border-tone-lilac-border bg-tone-lilac-bg px-3.5 py-3 text-[13px] leading-6 text-[#5a4a78] dark:text-[#c3b1e6]">
+          {/* 唯一一次来源聚合声明（每条卡片正文不再重复罗列媒体名） */}
+          <Banner tone="lilac" size="sm" className="mt-4 leading-6" live={null} icon={<ShieldCheck size={18} weight="fill" />}>
             <div className="flex items-center gap-2.5">
-              <ShieldCheck size={18} weight="fill" className="shrink-0 text-tone-lilac-fg" />
-              <span className="font-semibold">公开来源聚合 · 去标识 · 仅供参考</span>
+              <span className="font-semibold">公开来源聚合 · 已隐去个人信息 · 仅供参考</span>
             </div>
             <details className="mt-1.5">
-              <summary className="inline-flex cursor-pointer list-none text-xs font-semibold text-tone-lilac-fg transition hover:text-[#4f3b82] [&::-webkit-details-marker]:hidden dark:hover:text-[#d9cdf2]">
+              <summary className="inline-flex cursor-pointer list-none t-caption font-semibold text-tone-lilac-fg transition hover:opacity-80 [&::-webkit-details-marker]:hidden">
                 了解更多
               </summary>
-              <p className="mt-2 text-xs leading-6 text-[#5a4a78] dark:text-[#c3b1e6]">
-                下列内容部分来自<strong>本平台在招岗位的聚合统计</strong>（带「本平台岗位聚合」标记，属事实数据），部分来自<strong>公开报道与网络讨论的聚合</strong>并经<strong>去标识化</strong>处理（属社区参考、非官方，也不针对任何个人）。每条结论的依据见卡片下方，<strong>仅供参考</strong>，请结合官方岗位信息与面试沟通自行判断。
+              <p className="mt-2 t-caption leading-6">
+                下列内容部分来自<strong>本平台在招岗位的聚合统计</strong>（带「本平台岗位聚合」标记，属事实数据），部分来自<strong>公开报道与网络讨论的聚合</strong>并<strong>已隐去个人信息</strong>（属社区参考、非官方，也不针对任何个人）。每条结论的依据见卡片下方，<strong>仅供参考</strong>，请结合官方岗位信息与面试沟通自行判断。
               </p>
             </details>
-          </div>
+          </Banner>
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-6">
           {loading && (
-            <div className="flex items-center gap-2 t-body-sm ink-3">
-              <CircleNotch size={16} weight="bold" className="animate-spin shrink-0" aria-hidden="true" />
-              正在加载洞察…
-            </div>
+            <InsightDrawerSkeleton />
           )}
 
           {!loading && totalItems === 0 && !(data?.recruitment_cycles?.length) && (
@@ -240,7 +246,11 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
               company={data?.company?.display_name || data?.company?.company || company}
               aggregate={data.first_party}
               submitOpen={submitOpen}
-              onToggleSubmit={() => setSubmitOpen((v) => !v)}
+              submitWasOpened={submitWasOpened}
+              onToggleSubmit={() => {
+                setSubmitWasOpened(true);
+                setSubmitOpen((v) => !v);
+              }}
               onSubmitted={() => setSubmitOpen(false)}
             />
           )}
@@ -303,12 +313,14 @@ function FirstPartySection({
   company,
   aggregate,
   submitOpen,
+  submitWasOpened,
   onToggleSubmit,
   onSubmitted,
 }: {
   company: string;
   aggregate: FirstPartyAggregate;
   submitOpen: boolean;
+  submitWasOpened: boolean;
   onToggleSubmit: () => void;
   onSubmitted: () => void;
 }) {
@@ -332,7 +344,7 @@ function FirstPartySection({
           onClick={onToggleSubmit}
           className={cn(buttonVariants({ variant: "soft", size: "xs" }), "ml-auto font-semibold")}
         >
-          {submitOpen ? "收起" : "贡献一条"}
+          {submitOpen ? "收起" : "分享我的经历"}
         </button>
       </header>
 
@@ -348,8 +360,8 @@ function FirstPartySection({
         </div>
       )}
 
-      {submitOpen && (
-        <div className="mt-3.5">
+      {submitWasOpened && (
+        <div className="mt-3.5" hidden={!submitOpen} aria-hidden={!submitOpen}>
           <InsightSubmitForm company={company} onSubmitted={onSubmitted} />
         </div>
       )}

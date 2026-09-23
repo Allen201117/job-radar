@@ -849,7 +849,10 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
    ③ 重算打 `[campus-board] … ms=` 日志；④ 要刷掉卡死的条目，**换 cache key**（现为 v3），别指望 revalidate。
    📌 **2026-09-15 根因已拔除**：职能物化成 `jobs.job_function` 列后，`getCampusZone` / `buildCampusFacets`
    **不再拉 JD 正文**（facet 分类载荷 6.5MB→35kB），后台重算变轻、不再被超时杀。计数+徽章另由
-   `getCampusFreshStats` 每请求现算绕开快照（止血，保留为安全网）。详见 [[job-radar-campus-job-function-materialization]]。
+   `getCampusFreshStats` 独立于快照取数（止血，保留为安全网）。详见 [[job-radar-campus-job-function-materialization]]。
+   📌 2026-09-23：它和它依赖的「全部 active 公司名」都不再每请求打库——线上 /campus 首屏实测 8.8~10.1s，
+   其中 `select distinct company` 已退化成全表扫 3.1s、fresh 聚合冷盘 3.6s，且公司名只有进程内缓存（多实例≈0 命中）。
+   现为：公司名走松散索引扫描 + 跨实例 `unstable_cache` 5 分钟；fresh 走独立 60s `unstable_cache`（卡面「数据更新于」读它的 fetchedAtMs，卡住看得见）。
    ⚠️ 因此「别把 summary 从校招取数里砍掉」这条**已不再适用于校招链**（职能读列了）；`buildCampusFacets`
    现在读 `job_function` 列、仅列为 NULL 时才退回现算。`/jobs` 主搜索冷路径另说（见「/jobs 默认排序冷路径」段，仍未切）。
 8. **「对你有货」的对口数必须算在 `unstable_cache` 之外（2026-09-17 立）**：必投清单是静态北极星，不因用户方向增删公司，

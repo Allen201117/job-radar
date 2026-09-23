@@ -96,3 +96,28 @@ export function PanelSkeleton({ className }: { className?: string }) {
     </div>
   );
 }
+
+// 公司洞察抽屉骨架：标题栏在抽屉外已真实渲染，这里只占住两段洞察分区，
+// 避免慢请求期间只剩一个转圈且数据到达时整页跳动。
+export function InsightDrawerSkeleton() {
+  return (
+    <div className="animate-pulse space-y-6" role="status" aria-label="正在加载洞察">
+      <span className="sr-only">正在加载洞察…</span>
+      <div className="space-y-3">
+        <Bar className="h-5 w-28" />
+        <div className="rounded-xl border border-black/[0.06] bg-white/55 p-5 dark:border-white/[0.1] dark:bg-white/[0.05]">
+          <Bar className="h-4 w-2/5" />
+          <Bar className="mt-4 h-3 w-full" />
+          <Bar className="mt-2 h-3 w-4/5" />
+        </div>
+      </div>
+      <div className="space-y-3">
+        <Bar className="h-5 w-24" />
+        <div className="rounded-xl border border-black/[0.06] bg-white/55 p-5 dark:border-white/[0.1] dark:bg-white/[0.05]">
+          <Bar className="h-3 w-full" />
+          <Bar className="mt-2 h-3 w-3/5" />
+        </div>
+      </div>
+    </div>
+  );
+}
