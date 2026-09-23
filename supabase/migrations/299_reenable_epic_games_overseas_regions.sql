@@ -1,4 +1,4 @@
--- 298: 重新启用 Epic Games（Greenhouse），抓取地区放开到海外口径 {CN,US,SG,Remote}。
+-- 299: 重新启用 Epic Games（Greenhouse），抓取地区放开到海外口径 {CN,US,SG,Remote}。
 --
 -- 当初为什么停：迁移 146（2026-06-16「MVP 精>量」）以「面向中国求职者、板上抓不到任何在华岗」
 -- 为由停用，当时 regions 只有 {CN}。
