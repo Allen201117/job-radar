@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  ISSUE_TYPES, splitRoleTokens, findMixedSeparatorRoles,
+  ISSUE_TYPES, splitRoleTokens, findMixedSeparatorRoles, userFunctions,
   buildUserIssues, buildLatencyIssues, computeIssuesByType,
 } = require("../scripts/ux-walkthrough/walkthrough.js");
 
@@ -61,12 +61,30 @@ test("splitRoleTokens：拿不准组——宁可漏判不可误报，不许被�
   assert.equal(falsePositives, 0, "拿不准组应保持单 token（宁可漏判），误报数必须为 0");
 });
 
-test("findMixedSeparatorRoles：归纳出所有含分隔符写法的 role，且不误伤正常写法", () => {
-  const roles = ["产品经理", "销售；采购", "数据分析师", "销售 管培 运营"];
-  assert.deepEqual(findMixedSeparatorRoles(roles), ["销售；采购", "销售 管培 运营"]);
+// 2026-09-23：判据从「原文里有分隔符」改成「看着是多个岗位名、生产端 normalizeRolePhrases 却没拆开」。
+// 09-20~09-22 连续三天报的 5 条（下面这组）全是生产端早已拆开的写法——label 写「没被识别」却在报已识别的。
+const LIVE_SPLIT_BY_PRODUCTION = ["销售；采购", "销售 管培 运营", "测试 后端", "质量工程师 工艺工程师", "项目专员/助理"];
+
+test("findMixedSeparatorRoles：生产端已拆开的写法不再报（09-20~22 线上 5 条全在此列）", () => {
+  assert.deepEqual(findMixedSeparatorRoles(LIVE_SPLIT_BY_PRODUCTION), []);
+  // 真问题组同样全部已被生产端拆开——这条断言守的是「两边口径一致」，哪天生产端退化了它会红
+  assert.deepEqual(findMixedSeparatorRoles(REAL_MULTI_ROLE_SAMPLES), []);
+});
+
+test("findMixedSeparatorRoles：看着是多岗位、生产端却整体弃权的写法照报", () => {
+  // 空格两侧是汉字 → 检测器切成 3 段；「等」只有 1 个字 → 生产端宁可不拆，整串当一个岗位名去匹配
+  const roles = ["产品经理", "文员 前台 等", "数据分析师"];
+  assert.deepEqual(findMixedSeparatorRoles(roles), ["文员 前台 等"]);
   assert.deepEqual(findMixedSeparatorRoles([]), []);
   assert.deepEqual(findMixedSeparatorRoles(undefined), []);
   assert.deepEqual(findMixedSeparatorRoles(["产品经理", "运营"]), []);
+});
+
+test("userFunctions：与生产端同口径先拆再分类（旧实现整串分类，「销售；采购」只判出供应链）", () => {
+  assert.deepEqual([...userFunctions(["销售；采购"])].sort(), ["供应链", "销售"]);
+  assert.deepEqual([...userFunctions(["销售 管培 运营"])].sort(), ["运营", "销售"].sort());
+  assert.deepEqual([...userFunctions([])], []);
+  assert.deepEqual([...userFunctions(undefined)], []);
 });
 
 test("ISSUE_TYPES：每个枚举都带人话 label", () => {
@@ -115,7 +133,7 @@ test("buildUserIssues：方向命中低于阈值 → direction_low；命中良�
 test("buildUserIssues：role_input_format——同一用户填了多个混写岗位名只算一条，不是每个 role 一条", () => {
   const r = {
     user: "u1", shown: 10, scopeMismatch: false, recalled: 10, filtered: {},
-    roles: ["销售；采购", "销售 管培 运营"], directionOk: 0.9,
+    roles: ["文员 前台 等", "客服 售后 等"], directionOk: 0.9,
     insightCompanies: 0, insightCovered: 0, campus: null,
   };
   const issues = buildUserIssues(r);
@@ -206,7 +224,7 @@ test("buildLatencyIssues：空输入不炸", () => {
 test("buildUserIssues：zero_shown 与 role_input_format 是两个不同根因，必须共存不互斥", () => {
   const r = {
     user: "u1", shown: 0, scopeMismatch: false, recalled: 0, filtered: {},
-    roles: ["销售；采购"], directionOk: null, insightCompanies: 0, insightCovered: 0, campus: null,
+    roles: ["文员 前台 等"], directionOk: null, insightCompanies: 0, insightCovered: 0, campus: null,
   };
   const issues = buildUserIssues(r);
   const types = issues.map((i) => i.type);

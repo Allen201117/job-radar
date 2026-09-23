@@ -413,3 +413,55 @@ test("CMC/制剂登记为药学组的领域锚点，不误杀产品经理等其�
   // 这两个标题的真实角色是"产品经理/医学经理"而非"药学研发"，只是标题里带了 CMC/制剂 当限定语。
   assert.equal(jobMatchesChinaKeyword({ title: "CMC Lead, Launch Product, Small Molecules" }, "产品经理"), true);
 });
+
+// 2026-09-23 走查：「ic验证」「风控」画像推荐页只剩 5 / 1 张。库里同城同阶段的真岗是有的，只是叫法不同
+// （芯片验证 / 数字验证；信用风险 / 市场风险 / 风险管理），查询只剩字面一个词，全被方向门拒掉。
+// 两个方向都钉：新叫法要命中，看着像但不是同一个角色的也要挡住（证据见 CHINA_KEYWORD_GROUPS 索引 48/49 注释）。
+test("芯片验证方向：ic验证 能认出芯片/数字/逻辑验证等真实叫法，不吃芯片设计和非芯片的验证岗", () => {
+  for (const title of [
+    "芯片验证工程师（上海）",
+    "数字验证工程师-2027届校招",
+    "逻辑验证工程师-27届",
+    "芯片/处理器验证工程师",
+    "SoC验证工程师-互联芯片",
+    "Design Verification Engineer",
+    "2027校招-GPGPU芯片验证工程师",
+    "数字IC验证工程师（2027届）",
+  ]) {
+    assert.equal(keywordMatchTier({ title }, "ic验证"), "exact", `ic验证 应精确命中「${title}」`);
+  }
+  for (const title of [
+    "芯片设计工程师",
+    "硬件工程师",
+    "小米汽车-热管理设计验证高级工程师/专家",
+    "电芯验证工程师-国际工程研究院",
+    "DS MSAT技术转移和工艺验证工程师",
+    "系统验证工程师（风机）",
+  ]) {
+    assert.notEqual(keywordMatchTier({ title }, "ic验证"), "exact", `ic验证 不该精确命中「${title}」`);
+  }
+});
+
+test("风控方向：风控 能认出券商/银行的「XX风险」岗名，不吃裸「风险」的非风控岗", () => {
+  for (const title of [
+    "信用风险实习生",
+    "市场风险管理岗",
+    "操作风险岗(J11318)",
+    "全面风险管理岗(J19194)",
+    "风险管理实习生",
+    "风险控制岗（招商资管）",
+    "【2027】风险分析员岗(J19682)",
+  ]) {
+    assert.equal(keywordMatchTier({ title }, "风控"), "exact", `风控 应精确命中「${title}」`);
+  }
+  for (const title of [
+    "反入侵安全专家（风险检测/处置）",
+    "阿里云智能-IDC风险运营专家-杭州",
+    "市场营销专员",
+  ]) {
+    assert.notEqual(keywordMatchTier({ title }, "风控"), "exact", `风控 不该精确命中「${title}」`);
+  }
+  // 反方向：「风控」在标题里常是业务域——风控组不许凭它把别的角色的岗认领走（对拍实测误杀过这一条）
+  assert.equal(keywordMatchTier({ title: "账号风控产品实习生" }, "产品经理"), "exact");
+  assert.equal(keywordMatchTier({ title: "风控平台产品经理（AI Native 方向）" }, "产品经理"), "exact");
+});

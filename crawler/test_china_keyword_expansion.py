@@ -74,9 +74,10 @@ class QueryMatchesTest(unittest.TestCase):
 class ParityWithFrontendTest(unittest.TestCase):
     def test_group_count_matches_frontend(self):
         # 本次把 JS 已有 25 组同步到 crawler，并在末尾追加金融、教育、医疗、制造、建筑、客服共 20 组。
-        # 又追加「学段」修饰组；2026-09-18 学生画像走查再追加投行/并购(46)、编导/内容制作(47) 两组。
+        # 又追加「学段」修饰组；2026-09-18 学生画像走查再追加投行/并购(46)、编导/内容制作(47) 两组；
+        # 2026-09-23 体验走查再追加芯片验证(48)、风控/风险管理(49) 两组。
         # 这个数是两端索引同构的守卫：加组时必须同步 KEYWORD_GROUP_FUNCTIONS 与 lib/china-keyword-expansion.js。
-        self.assertEqual(len(cke.CHINA_KEYWORD_GROUPS), 48)
+        self.assertEqual(len(cke.CHINA_KEYWORD_GROUPS), 50)
 
     def test_group_functions_aligned(self):
         self.assertEqual(len(cke.KEYWORD_GROUP_FUNCTIONS), len(cke.CHINA_KEYWORD_GROUPS))
@@ -423,6 +424,16 @@ class StudentPersonaWalkthroughDirectionsTest(unittest.TestCase):
         for title in ["米哈游 视频编导", "阿里巴巴 动漫制片", "游戏动画导演（2027届）", "视频剪辑专员(J25948)"]:
             self.assertTrue(cke.job_matches(title, "", "编导"), title)
         self.assertFalse(cke.job_matches("客户端开发工程师（PC端基础剪辑）", "", "编导"))
+
+    def test_chip_verification_and_risk_directions(self):
+        # 2026-09-23：与 JS 同步（tests/china-keyword-expansion.test.js 同名用例），爬虫侧的发现过滤走这里。
+        for title in ["芯片验证工程师（上海）", "数字验证工程师-2027届校招", "Design Verification Engineer"]:
+            self.assertTrue(cke.job_matches(title, "", "ic验证"), title)
+        self.assertFalse(cke.job_matches("芯片设计工程师", "", "ic验证"))
+        for title in ["信用风险实习生", "市场风险管理岗", "风险管理实习生"]:
+            self.assertTrue(cke.job_matches(title, "", "风控"), title)
+        self.assertFalse(cke.job_matches("阿里云智能-IDC风险运营专家-杭州", "", "风控"))
+        self.assertEqual(cke.classify_job_function("市场风险实习生"), "金融业务")
 
     def test_generic_engineering_group_still_required_when_no_overlap(self):
         # 「硬件工程师」的"硬件"耗不尽查询、仍剩"工程师"三个实字 → 21 组必须保留，

@@ -21,7 +21,7 @@ const ROOT = path.join(__dirname, "..", "..");
 const { runOne } = require(path.join(ROOT, "scripts/match-eval/eval.js"));
 const { loadTs } = require(path.join(ROOT, "tests/_load-ts.js"));
 const L = (rel) => loadTs(path.join(ROOT, rel));
-const { classifyJobFunction } = require(path.join(ROOT, "lib/china-keyword-expansion.js"));
+const { classifyJobFunction, normalizeRolePhrases } = require(path.join(ROOT, "lib/china-keyword-expansion.js"));
 const { findCompanyProfile } = L("lib/insight-match.ts");
 const { resolveMustApplyIndustries, MUST_APPLY_BY_INDUSTRY } = L("lib/must-apply-list.ts");
 
@@ -73,8 +73,16 @@ function splitRoleTokens(role) {
     .filter(Boolean);
 }
 
+// 2026-09-23 改判据：只报「看着是多个岗位名、**生产端却没拆开**」的写法。
+// 旧判据只看原文里有没有分隔符，而生产端早在 2026-09-17（3e95bd86）就用 normalizeRolePhrases 把
+// 「销售；采购」「测试 后端」「项目专员/助理」拆成多个方向了——09-20~09-22 连续三天报的 5 条
+// 全是生产端已正确拆开的写法，label 写「没被识别」却在报已识别的，每天白占 5 个名额。
+// 现在对照的就是生产端那一处（profile.ts / scoring.ts 共用），拆开了就不算卡点；
+// 「文员 前台 等」这种单字碎片让生产端整体弃权的写法仍会报。
 function findMixedSeparatorRoles(roles) {
-  return (Array.isArray(roles) ? roles : []).filter((r) => splitRoleTokens(r).length > 1);
+  return (Array.isArray(roles) ? roles : []).filter(
+    (r) => splitRoleTokens(r).length > 1 && normalizeRolePhrases([r]).length < 2,
+  );
 }
 
 // 同一用户同一根因只计一次：所有 mixed 写法合并成一条 issue，而不是一个 role 一条。
@@ -97,7 +105,7 @@ function buildUserIssues(r) {
   const mixedRoles = findMixedSeparatorRoles(r.roles);
   if (mixedRoles.length) {
     issues.push(mkIssue("role_input_format", r.user,
-      `岗位方向填写里混了分隔符，未必被正确识别：${JSON.stringify(mixedRoles)}`,
+      `岗位方向一栏里写了多个岗位名，系统没拆开：${JSON.stringify(mixedRoles)}`,
       { mixedRoles }));
   }
   // 2026-09-20 收窄：旧判据只看「方向拦截占比 > 0.5」就报，而**占比高本身不是卡点**——
@@ -188,9 +196,12 @@ function ttfb(url) {
   }
 }
 
+// 与生产端 eligibility.userTargetFunctions 同口径：先按 normalizeRolePhrases 拆开再逐条分类。
+// 2026-09-23 前这里拿原文整串分类——「销售；采购」按最靠后命中只判出「供应链」，展示的销售岗全被算成
+// 方向不符（该用户实测 25%），而生产端的方向集是 {销售, 供应链}：尺子和被测对象不是同一把。
 function userFunctions(roles) {
   const set = new Set();
-  for (const role of roles || []) {
+  for (const role of normalizeRolePhrases(roles || [])) {
     const fn = classifyJobFunction({ title: role });
     if (fn && fn !== "其他") set.add(fn);
   }
@@ -223,7 +234,8 @@ async function main() {
     let rec;
     try { rec = runOne(label, prefs, cand); } catch (e) { results.push({ user: label, error: String(e.message || e) }); continue; }
     if (rec.error) { results.push({ user: label, error: rec.error, roles: prefs.target_roles }); continue; }
-    const fns = userFunctions(prefs.target_roles);
+    // 用生产端 buildRadarProfile 产出的方向词（已拆开、海外英文画像时是英文词），不用原文
+    const fns = userFunctions((rec.profile && rec.profile.targetRoles) || prefs.target_roles);
     const shown = rec.shown || [];
     const top = shown.slice(0, 20);
     // 方向命中：只在「用户职能判得出 且 岗位职能判得出」的样本上算，判不出的（其他）不进分母——
@@ -308,7 +320,7 @@ async function main() {
 }
 
 module.exports = {
-  ISSUE_TYPES, mkIssue, splitRoleTokens, findMixedSeparatorRoles,
+  ISSUE_TYPES, mkIssue, splitRoleTokens, findMixedSeparatorRoles, userFunctions,
   buildUserIssues, buildLatencyIssues, computeIssuesByType,
 };
 
