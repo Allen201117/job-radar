@@ -174,7 +174,7 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
 
 | 组件 | 在哪 | 干什么 |
 |---|---|---|
-| 期望清单 | `crawler/audit_contract.yaml`（87 条：数据 13 / 体验 22 / 链路 36 / 老告警桥接 16；原写 85 条是 09-19 上线时的数，09-23 复核更正） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
+| 期望清单 | `crawler/audit_contract.yaml`（86 条：数据 13 / 体验 22 / 链路 35 / 老告警桥接 16；原写 85 条是 09-19 上线时的数，09-23 复核更正） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
 | 执行器 | `crawler/audit_runner.py` + `structural-audit.yml`（每日北京 08:50） | 逐条量，写 `audit_results`（Supabase，迁移 281/282）；`unique(check_id, run_date)` 一天一行 = 趋势表 |
 | 覆盖率差集 | `crawler/audit_coverage.py` + `audit_exemptions.yaml` | 左边**自动枚举**（带 cron 的 workflow / 写 ops_runs 的模块 / jobs 表列 / 走查指标），减去有期望的；上线时 68 条 → 现 14 条（全是 jobs 列） |
 | 老告警桥接 | `ops_watchdog.py` 的 `publish_audit_bridge` | 16 条规则**判定与阈值一字未动**，只把每条的命中数 + 明细写进同一张表（`detail.findings[].title` 与 issue 标题逐字一致） |
@@ -196,7 +196,7 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
   （`MokaAdapter._raise_if_campus_portal_superseded`，由「连续失败」老告警接住）。**两者是一对，删掉后者前者就会藏坏源**；
   其它平台还没有同类识别。回归钉在 `crawler/test_fake_green_sources.py`。
 - **`name/why/action` 的读者是非技术创始人**：不许出现表名 / 模块英文名 / SQL 词 / 「GitHub Actions、日志、索引、adapter」；
-  `action` 写成他能做的动作（「把这条转给 Claude，让它查…」）。阈值没有历史依据的一律 `calibrated: false`（现 84/87 条），
+  `action` 写成他能做的动作（「把这条转给 Claude，让它查…」）。阈值没有历史依据的一律 `calibrated: false`（现 83/86 条），
   攒够 30 天换分位数，**禁止编一个看着合理的数字却不标它**。
 - 周任务的链路检查窗口是 8 天；`campus-crawl` 那条按月份条件化（月份集合复用规则 O）。
   ⚠️ `enrich-crawl` / `dead-link-audit-new` 与另一条 workflow 共用台账模块名，**一条停了另一条会掩盖它**——豁免理由里写的是真缺口，不是「不用管」。
