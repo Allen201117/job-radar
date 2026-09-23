@@ -724,6 +724,7 @@ async function exactTotalWhenCapped(args: {
     );
     const row = rows[0];
     if (!row) return null;
+    // ④ 再判一次不是多余：上面的计数走 5 分钟跨实例缓存，可能拿到「还有未分类行」时算的旧结果。
     if (filters.jobType && row.unclassified > 0) return null; // ④
     // 真实总数不可能比「已经排出来的条数」还少；小于就说明这个数不可信。
     return row.total >= rankedLength ? row.total : null;
