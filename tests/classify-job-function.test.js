@@ -415,3 +415,48 @@ test("信用/市场/操作/全面风险岗归金融业务，末尾是别的角�
   assert.equal(classifyJobFunction({ title: "风险策略运营实习生" }), "运营");
   assert.equal(classifyJobFunction({ title: "市场营销专员" }), "市场");
 });
+
+// 2026-09-23 线上走查：校招 PM 画像（AI产品经理 / AI Agent）的 /today 里出现阿里「Agentic Post-training-阿里星」
+// 「Agentic Post-training Infra-阿里星」，理由写「方向匹配：AI Agent」。标题里没有一个研发角色词 →
+// 标题判「其他」、正文兜底被「招聘项目：…」判成「职能」→ 职能门对「其他」放行，产品用户照收。
+// 大模型训练 / 推理基础设施是研发条线，标题写的就是岗位做的事。
+test("大模型训练 / 推理基础设施岗归研发（标题无工程师后缀也要判得出）", () => {
+  for (const title of [
+    "Agentic Post-training-阿里星/Bravo Star",
+    "Agentic Post-training Infra-阿里星/Bravo Star",
+    "LLM and Multimodal Post-training-AliStar/Bravo Star",
+    "Agentic Model Post-training 与真实环境学习-阿里星/Bravo Star",
+    "日常实习生-大模型后训练 (Post-training)-Qwen基础模型",
+    "Agent Post-Training Research",
+    "【Ace顶尖实习生】大模型后训练泛化性研究",
+    "Agentic Infra 实习生",
+    "AI Infra研究员",
+  ]) {
+    assert.equal(classifyJobFunction({ title }), "研发", title);
+  }
+  // 物化列带正文算：正文开头的「招聘项目：…」不能再把它判成职能。
+  assert.equal(
+    classifyJobFunction({
+      title: "Agentic Post-training Infra-阿里星/Bravo Star",
+      summary: "工作地点：杭州 招聘项目：阿里巴巴2027届应届生 职位描述：负责大模型训练及 Post-Training 基础设施建设",
+    }),
+    "研发",
+  );
+});
+
+// 反方向：训练 / Infra 在标题里常是团队 / 业务线后缀，按「最靠后命中」会抢走前面的真实角色 ——
+// 这些都是库里真实标题（2026-09-23 全量对拍时被第一版规则抢进研发的那批），所以新规则只进 generic 那一轮。
+test("训练 / 推理 / Infra 词不抢标题里的真实角色词", () => {
+  assert.equal(classifyJobFunction({ title: "大模型后训练产品经理" }), "产品");
+  assert.equal(classifyJobFunction({ title: "AI Infra产品经理" }), "产品");
+  assert.equal(classifyJobFunction({ title: "AI产品经理-Dev Infra" }), "产品");
+  assert.equal(classifyJobFunction({ title: "产品经理-AI infra平台" }), "产品");
+  assert.equal(classifyJobFunction({ title: "推理引擎产品运营" }), "运营");
+  assert.equal(classifyJobFunction({ title: "开发者产品运营专家-Dev Infra" }), "运营");
+  assert.equal(classifyJobFunction({ title: "研发项目经理-大模型训练infra团队（北京/深圳）" }), "项目管理");
+  assert.equal(classifyJobFunction({ title: "阿里控股-高招招聘专员-Infra与基座方向" }), "职能");
+  assert.equal(classifyJobFunction({ title: "阿里云智能-体验设计师-AI Infra产品设计-北京" }), "设计");
+  assert.equal(classifyJobFunction({ title: "预训练数据工程师" }), "数据");
+  // infrastructure 整词不归这条（\binfra\b 不吃它）。
+  assert.equal(classifyJobFunction({ title: "Infrastructure Project Manager" }), "项目管理");
+});
