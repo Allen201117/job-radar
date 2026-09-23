@@ -279,6 +279,56 @@ class WorkdayParseTest(unittest.TestCase):
         self.assertEqual(f("/job/Dalian-Liaoning-China/T_JR4"), "Dalian, Liaoning, China")
         self.assertEqual(f("/job/Munich-Germany/T_JR5"), "Munich, Germany")  # 不误伤
 
+    def test_loc_from_path_expands_iso3_country(self):
+        # 2026-09-23 live 路径实测写法
+        f = WorkdayAdapter._loc_from_path
+        self.assertEqual(f("/job/SingaporeSGP/T_1"), "Singapore, Singapore")      # 粘连尾
+        self.assertEqual(f("/job/JaliscoMEX/T_2"), "Jalisco, Mexico")
+        self.assertEqual(f("/job/San-JoseCRI/T_3"), "San, Jose, Costa Rica")
+        self.assertEqual(f("/job/HsinchuTWN/T_4"), "Hsinchu, Taiwan")
+        self.assertEqual(f("/job/London-GBR/T_5"), "London, United Kingdom")     # 独立词
+        self.assertEqual(f("/job/Toronto-ON-CAN/T_6"), "Toronto, ON, Canada")
+        self.assertEqual(f("/job/SGP---Singapore---Leica-Microsystems/T_7"),
+                         "Singapore, , , Singapore, , , Leica, Microsystems")
+        self.assertEqual(f("/job/HKG---Remote/T_8"), "Hong Kong, , , Remote")
+        self.assertEqual(f("/job/USAVAReston/T_9"), "USA, VAReston")             # 粘连头
+
+    def test_loc_from_path_keeps_multiword_country_intact(self):
+        f = WorkdayAdapter._loc_from_path
+        self.assertEqual(f("/job/United-Kingdom---Remote/T_1"), "United Kingdom, , , Remote")
+        self.assertEqual(f("/job/Watford-Hertfordshire-United-Kingdom/T_2"),
+                         "Watford, Hertfordshire, United Kingdom")
+        self.assertEqual(f("/job/Riyadh-Riyadh-Saudi-Arabia/T_3"), "Riyadh, Riyadh, Saudi Arabia")
+        # 'United States' 刻意不动：geo 本来就认得劈开的写法
+        self.assertEqual(f("/job/United-States---Remote/T_4"), "United, States, , , Remote")
+        for path in ("/job/Watford-Hertfordshire-United-Kingdom/T", "/job/Riyadh-Saudi-Arabia/T",
+                     "/job/Johannesburg-Gauteng-South-Africa/T", "/job/Belen-Costa-Rica/T"):
+            loc = normalizer.clean_location(f(path))
+            self.assertEqual(normalizer.derive_job_scope(loc, {"CN", "US", "SG", "Remote"}), "overseas", path)
+
+    def test_loc_from_path_iso3_leaves_collisions_alone(self):
+        f = WorkdayAdapter._loc_from_path
+        # 库里真见过的撞车码：费城 / 美国站点编号 / Santa Ana / 海军航空站
+        self.assertEqual(f("/job/US---PHL-OFFICE--WAREHOUSE/T_1"), "US, , , PHL, OFFICE, , WAREHOUSE")
+        self.assertIn("NOR", f("/job/CAV17-NOR-Fairfax-VA-22031-USA/T_2"))
+        self.assertEqual(f("/job/SANTA-ANA-CA/T_3"), "SANTA, ANA, CA")
+        self.assertIn("NAS", f("/job/USA---NAS-JRB-New-Orleans-LA/T_4"))
+        # 只认大写、只认整词：小写英文词与长词里的片段不动
+        self.assertEqual(f("/job/Can-Tho/T_5"), "Can, Tho")
+        self.assertEqual(f("/job/AUSTIN-TX/T_6"), "AUSTIN, TX")
+        self.assertEqual(f("/job/Kwun-Tong/T_7"), "Kwun, Tong")
+
+    def test_iso3_country_names_are_recognised_by_geo(self):
+        # 每个展开出来的国名都必须让 geo 判得出范围；否则展开了也白展开。
+        from adapters.workday import _ISO3_COUNTRY_NAMES
+        greater_china = {"HKG"}
+        for code, name in _ISO3_COUNTRY_NAMES.items():
+            loc = normalizer.clean_location(f"Somewhere, {name}")
+            scope = normalizer.derive_job_scope(loc, {"CN", "US", "SG", "Remote"})
+            want = "domestic" if code in greater_china else "overseas"
+            self.assertEqual(scope, want, (code, name, loc))
+        self.assertTrue(normalizer.is_rejected_location("Hsinchu, Taiwan"))
+
     def test_bad_json(self):
         self.assertEqual(WorkdayAdapter().parse("nope"), [])
 
