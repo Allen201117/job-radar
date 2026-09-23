@@ -369,6 +369,18 @@ app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse�
   最重那个画像背靠背第二次仍 6.1s / read 58,526 块：单条查询的工作集就大过 512MB shared_buffers。
   → 只剩两条路：加内存（jobs 堆 1,126MB + 召回用到的索引 ~180MB，全库 2.3GB，现机 2GB）或改召回语义（给层加时间窗，会砍长尾），都要创始人拍板。
   stage-2 计算的 40% 曾是 `classifyCompanyIndustry` 每次重建 override 正则，已预编译 + 按公司名记忆（线上 600~740→265~362ms）。
+- **🚫 凡是「order by → limit / offset」截断，排序键必须以唯一列 `id` 收尾（2026-09-23，召回 + /jobs 候选同改）**：
+  ❌ 现象：同一用户、同一份代码，/today 候选隔一会儿就换一批；改前改后对拍里「凭空丢岗」全是同一 first_seen_at 的行互换。
+  ✅ 根因：爬虫一批入库在同一事务里，几百行 first_seen_at 逐字相同（一批 201 行跨层内名次 24–764，层截断 752 落在中间）；
+  只按时间截断时并列块里谁进窗口由执行计划决定，而 GIN 代价估算随写入漂——**同一条 SQL 一分钟内就会换索引**
+  （实测某 role 层 6 次规划 5:1 在两个 GIN 间翻）。所以它不只是「改 SQL 才抖」，线上两次刷新就可能不同。
+  ✅ 防：召回 `orderOf` 末位 `id`（function 层同用它）；`lib/jobs-store/search.ts` 的 `FRESH_ORDER`（粗排 / 新鲜度 / 校招实习 union 三处）。
+  📊 同 SQL + 无害扰动（tsquery 上 OR 一个永假 id 条件）：召回 56 画像旧 23 人 323 行被并列行顶替 → 新 0（仅剩 2 人差异，核实是查询间隙爬虫刚写入的行）；
+  搜索 17 个 FTS 窗口旧 5 个换序 2,385 位 → 新 0。walkthrough 连跑两轮召回数不一致 12 人 → 3 人；match-eval top-25 两轮一致 5/24 → 23/24，
+  严格 / 宽松准确率改前改后逐画像相同（93.0/98.3%、89.9/95.3%）；可展示岗合计 9,824 → 9,818（换了另一批并列行，3 升 5 降）。
+  代价（香港库 EXPLAIN）：召回 148 层计划逐层同形、buffer +1.0%；搜索按索引取序的路径多一层 Incremental Sort（只在并列块内按 id 排、
+  索引不变），buffer +0~12%，最重的是匿名城市搜索（北京 warm 37→42ms）——Incremental Sort 要读完截断点所在的那一批。
+  ⚠️ `lib/jobs-store/read.ts` 的 `listLatestActive` 等（`order by first_seen_at desc limit/offset`）同病未改。
 
 ## 数据库迁移（已自动化，勿再手动跑 Supabase）
 

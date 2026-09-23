@@ -568,8 +568,12 @@ export function buildRecallSql(
     titleRef = `title ilike any(array(select '%' || r || '%' from unnest($${params.length}::text[]) r))`;
   }
   const titleCase = titleRef ? `(case when ${titleRef} then 0 else 1 end)` : null;
+  // 末位 `id` = 唯一决胜列（2026-09-23）：爬虫一批入库在同一事务里，几百行 first_seen_at 逐字相同
+  // （实例：一批 201 行跨层内名次 24–764，层截断 752 落在中间）。没有唯一列时，并列行谁拿到 row_number、
+  // 谁被 limit 砍掉由执行计划决定——SQL 文本或数据量一变，同一用户的候选就换一批（70 画像 193 行互换，
+  // 全是同一时间戳的行互相顶替）。加在最末位只决定并列行的先后，不改变任何非并列行的相对顺序。
   const orderOf = (...heads: Array<string | null>) =>
-    [...heads.filter((h): h is string => Boolean(h)), "first_seen_at desc"].join(", ");
+    [...heads.filter((h): h is string => Boolean(h)), "first_seen_at desc", "id"].join(", ");
   const regionCityFirst = orderOf(placeCase);
   // companyHit 不豁免 JS 的方向硬门，cityNew 也会捞到仅城市命中的岗位；两层都先把
   // 方向命中放前面。它只是已限量候选的逐行布尔判断，不会新增方向 GIN 扫描。
@@ -610,7 +614,7 @@ export function buildRecallSql(
     tiers.push({
       tier: "function",
       conds: cityRef ? [fnRef, cityRef] : [fnRef, FUNCTION_TIER_FALLBACK_WINDOW],
-      order: "first_seen_at desc",
+      order: orderOf(),
     });
   }
   if (!tiers.length) return null; // profile_ready 应保证至少一项；防御性返回

@@ -62,8 +62,16 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
     ⚠️ 此前判「飞书私有部署没有校招板块」是**错的**，错在试错了维度：当时对比的是
     `storefront_id` 两个取值（返回完全相同的 1887 条），而真正的开关是这个请求头。
     ⚠️ `portal_type` 也不是开关：带 `website-path: campus` 时传 2 或 6 都返回同一批 764 条。
-    ⚠️ **`website-path: index` 不等于「主门户」**，它是个更小的子集（蔚来 2055 → 1801），
-       所以 `_bind_website_path` 把 index 当成「没有子门户」。
+
+    ## 主门户（source_url 是 /index/position）：抓「公开门户」，不抓「不带头的全集」（2026-09-23 更正）
+    ❌ 旧结论（2026-09-04）：「`website-path: index` 是更小的子集（蔚来 2055 → 1801），所以主门户不带头」。
+       错在只比了**条数**，没问多出来那批在公开页上是不是活的。
+    ✅ 实测（133 个飞书系源逐岗全量核，见 crawler/test_feishu_httpx.MainPortalTest 的碑文）：不带头多出来的
+       岗在公开门户详情页上显示「该职位已下线」——详情接口带 `website-path: <门户>` 时
+       `channel_online_status=0`；而带门户头取到的列表，逐岗在该门户上都是 1。
+       ⚠️ `channel_online_status` 是**按门户**算的：同一个岗不带头读 1、带 index 头读 0（浏览器实开=已下线）。
+    所以主门户 = 租户首页自报的门户（`website_info.path`，多数是 index）∪ index 门户，都**带头**取，
+    每个岗的 jd_url 用它实际挂着的那个门户前缀（`post["_portal"]`）。
 
     新增一个租户的校招源**不需要写代码**：插一条 source_url 指向 `https://{host}/campus/position`
     的 sources 行即可，本类按路径自动切门户、切详情模板。
@@ -89,6 +97,7 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         self.official_hosts = (self.host,)
         self.website_path = ""
         self._detail_prefix_override = ""
+        self._main_portal = False   # source_url 指向主门户（/index/position 或根路径）→ 走 _httpx_fetch_main
         self._apply_website_path("")
         self.fetch_complete = False
         self.reported_total = None
@@ -122,13 +131,13 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
     def _bind_website_path(self, source_url: str) -> None:
         """从 source_url 的首个路径段派生子门户（见 website_path 的类注释）。
 
-        ⚠️ **`index` 必须当成「没有子门户」**：飞书的主门户带 `website-path: index` 反而是
-        *子集* —— 2026-09-04 实测蔚来不带该头 2055 岗、带 index 只有 1801 岗（少 254 个）。
-        库里 70 个存量飞书源全是 `/index/position`，一旦把 index 也派生出去就是**全体缩水**。
+        `index` / 根路径 = 主门户：website_path 留空、标 `_main_portal`，由 `_httpx_fetch_main`
+        按租户自报门户 ∪ index **带头**去取（见类注释「主门户」一节；旧的「不带头 = 全集」已推翻）。
         """
         segments = [seg for seg in (urlparse(source_url).path or "").split("/") if seg]
         first = segments[0] if segments else ""
-        self._apply_website_path("" if first in ("", "index", "position") else first)
+        self._main_portal = first in ("", "index", "position")
+        self._apply_website_path("" if self._main_portal else first)
 
     def _resolve_host(self, source_url: str) -> str:
         """httpx 直拉用的 host：子类有 self.host；通用类 fetch 前已 _bind_host → official_hosts[0]。"""
@@ -139,20 +148,64 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
     def _httpx_fetch(self, host: str) -> Tuple[List[dict], Optional[int], bool]:
         """纯 httpx 直拉 posts API（feishu_probe 已实证冷启动可达：真实 Chrome UA、无签名、无 cookie）。
         翻页到 data.count，返回 (rows, total, reached)。reached=至少一次拿到合法 data dict（用于区分
-        '真 0 岗' 与 'httpx 没打通'——前者照常返回空、后者回退浏览器）。daily-crawl 无 Playwright 也能跑。"""
+        '真 0 岗' 与 'httpx 没打通'——前者照常返回空、后者回退浏览器）。daily-crawl 无 Playwright 也能跑。
+        主门户源（`_main_portal`）走 `_httpx_fetch_main`：自报门户 ∪ index，都带 website-path 头。"""
+        if getattr(self, "_main_portal", False) and not self.website_path:
+            return self._httpx_fetch_main(host)
+        return self._httpx_fetch_portal(host, self.website_path)
+
+    def _httpx_fetch_main(self, host: str) -> Tuple[List[dict], Optional[int], bool]:
+        """主门户：取租户首页自报的门户（`website_info.path`）与 index 两个公开门户，合并去重。
+
+        每行打上 `_portal`（它挂在哪个门户上），`_map` 用它拼 jd_url——同一个租户两个门户
+        都开着时（莉莉丝 career 119 / index 57），岗必须用它真在线的那个门户前缀，否则详情页「已下线」。
+        返回的 total：两个门户都翻全且首页自报了门户 → 合并后的条数（= 抓全）；否则 None（不许
+        list-absence 据此判撤岗——拿不到自报门户时我们不能确定手里的是不是这个租户的全部公开岗）。"""
+        declared = self._discover_detail_prefix(host)
+        # 自报门户就是这个租户唯一有效的 URL 前缀（见 _discover_detail_prefix）；详情模板跟着它走。
+        # 每次都重设（拿不到就清空）：probe.probe_one 共用单例，上一家的前缀不许漏到下一家。
+        self._detail_prefix_override = declared or ""
+        self._apply_website_path("")
+        portals = [p for p in dict.fromkeys([declared, "index"]) if p]
+        merged: List[dict] = []
+        seen: set = set()
+        reached_any = False
+        complete = bool(declared)
+        for portal in portals:
+            # 自报门户之外的 index 门户**可以不存在**（小马智行 / 商汤 / 海底捞：接口回 -9000003 site not exist）
+            # → 当空门户算，不当「没打通」，否则这些租户永远标不了抓全。自报门户本身不许这样放过。
+            rows, total, reached = self._httpx_fetch_portal(host, portal, missing_ok=(portal != declared))
+            if not reached:
+                complete = False
+                continue
+            reached_any = True
+            if total is None or len(rows) < (total or 0):
+                complete = False
+            for post in rows:
+                pid = str((post or {}).get("id") or "")
+                if pid and pid not in seen:
+                    seen.add(pid)
+                    merged.append({**post, "_portal": portal})
+        return merged, (len(merged) if complete else None), reached_any
+
+    _SITE_NOT_EXIST = -9000003   # 带了一个租户没有的 website-path：200 + code=-9000003 "site not exist"，data=None
+
+    def _httpx_fetch_portal(self, host: str, website_path: str,
+                            missing_ok: bool = False) -> Tuple[List[dict], Optional[int], bool]:
+        """取一个门户的列表（website_path="" = 不带头，仅用于 `_main_portal` 之外的历史调用方）。
+        missing_ok：门户不存在（-9000003）时按「空门户」返回 ([], 0, True)，而不是「没打通」。"""
         rows: List[dict] = []
         seen: set = set()
         total: Optional[int] = None
         reached = False
         offset = 0
-        prefix = self.website_path or "index"
+        prefix = website_path or "index"
         headers = {"User-Agent": _UA, "Accept-Language": "zh-CN,en;q=0.9",
                    "Content-Type": "application/json",
                    "portal-channel": "saas-career", "portal-platform": "pc",
                    "Referer": f"https://{host}/{prefix}/position"}
-        if self.website_path:
-            # 只有子门户才带这个头。主门户带 `website-path: index` 会拿到更小的子集（见类注释）。
-            headers["website-path"] = self.website_path
+        if website_path:
+            headers["website-path"] = website_path
         try:
             with httpx.Client(timeout=self._HTTPX_TIMEOUT, follow_redirects=True, headers=headers) as cli:
                 cap = resolve_list_cap(self._MAX_JOBS)
@@ -169,6 +222,8 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                         break
                     data = (jj or {}).get("data") if isinstance(jj, dict) else None
                     if not isinstance(data, dict):
+                        if missing_ok and isinstance(jj, dict) and jj.get("code") == self._SITE_NOT_EXIST:
+                            return [], 0, True
                         break
                     reached = True
                     if total is None:
@@ -203,13 +258,16 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         pid = str((post or {}).get("id") or (post or {}).get("code") or "").strip()
         if not pid:
             return False
+        portal = (post or {}).get("_portal")
+        url = (f"https://{host}/{portal}/position/{pid}/detail" if portal
+               else self.detail_template.format(id=pid))
         try:
             response = httpx.get(
-                self.detail_template.format(id=pid),
+                url,
                 timeout=self._HTTPX_TIMEOUT,
                 follow_redirects=True,
                 headers={"User-Agent": _UA,
-                         "Referer": f"https://{host}/{self.website_path or 'index'}/position"},
+                         "Referer": f"https://{host}/{portal or self.website_path or 'index'}/position"},
             )
             return response.status_code in (404, 410)
         except Exception:
@@ -249,9 +307,9 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         前缀只是 URL 路由，与「查哪个池子」是两回事。
 
         ⚠️ 修不好才跳过：能修就别跳。跳过 = 整源 0 岗，代价远大于多发两个请求。
-        ⚠️ 全库 85 个飞书租户实测只有这 2 家需要走这条路（其余 `/index/` 路由本来就通，
-           哪怕它们自报的 path 不是 index）——所以这是**兜底**，不是新的默认路径，
-           别把它改成「一律先查自报 path」。
+        ⚠️ 2026-09-23 起主门户源已经「一律先查自报 path」（`_httpx_fetch_main`），本函数对主门户只剩兜底意义；
+           子门户源（campus/internship…）仍靠它。旧注释说「别改成一律先查自报 path」，依据是
+           「/index/ 详情本来就通」——但「详情页 200」不等于「岗在线」（SPA 壳恒 200，内容是「已下线」）。
         """
         prefix = self._discover_detail_prefix(host)
         if not prefix or prefix == (self.website_path or "index"):
@@ -450,7 +508,12 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
         desc = (post.get("description") or "").strip()
         req = (post.get("requirement") or "").strip()
         summary = (desc + ("　【职位要求】" + req if req else "")).strip() or None
-        jd_url = self.detail_template.format(id=pid)
+        portal = post.get("_portal")
+        if portal:
+            host = (self.official_hosts[0] if getattr(self, "official_hosts", None) else "") or self.host
+            jd_url = f"https://{host}/{portal}/position/{pid}/detail"
+        else:
+            jd_url = self.detail_template.format(id=pid)
         return RawJob(
             company=self.company_name, title=title, location=city or None,
             job_type=job_type or None, jd_url=jd_url, apply_url=jd_url,

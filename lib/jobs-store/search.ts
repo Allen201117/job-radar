@@ -38,6 +38,12 @@ import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 
 const FTS_CAP = 8000;
 const DB_PAGE = 1000;
+// 新鲜度排序的完整键：末位 `id` 是唯一决胜列（2026-09-23）。爬虫一批入库在同一事务里，几百行 first_seen_at
+// 逐字相同；只按 first_seen_at 排时，窗口 limit / 翻页 offset 落在并列块中间，砍掉哪几行由执行计划决定——
+// 同一请求换个计划（数据量变、SQL 文本变）候选就换一批，offset 翻页还会重复 / 漏行。
+// 走 (status, first_seen_at desc) 索引的计划由 Incremental Sort 只在并列块内按 id 排，索引与扫描方式不变
+// （香港库 16 个场景 EXPLAIN 逐个核过；代价是读完截断点所在的那一批，匿名北京 buffer +12%、warm 37→42ms）。
+const FRESH_ORDER = "first_seen_at desc, id";
 const SCAN_BUDGET = 28000;
 // 登录 + 按匹配度排（扫描路径）的候选窗口（2026-09-17）：SQL 先按打分公式的四个可下推项粗排
 // （方向 30 / 城市 20 / 公司 15 / 7 天内 10，见 prescoreOrderBy），JS 只精排这一窗。
@@ -371,11 +377,11 @@ function recruitmentUnionSql(
   const branch = (arm: string) => {
     const cs = [...conds];
     cs[prefilterAt] = `(${arm})`;
-    return `(select ${columns} from jobs where ${cs.join(" and ")} order by first_seen_at desc limit $${lastParam + 3})`;
+    return `(select ${columns} from jobs where ${cs.join(" and ")} order by ${FRESH_ORDER} limit $${lastParam + 3})`;
   };
   return (
     `select * from (${branch(arms[0])} union all ${branch(arms[1])}) u ` +
-    `order by first_seen_at desc limit $${lastParam + 1} offset $${lastParam + 2}`
+    `order by ${FRESH_ORDER} limit $${lastParam + 1} offset $${lastParam + 2}`
   );
 }
 
@@ -518,7 +524,7 @@ function candidateOrderBy(
   filters: Filters,
   prefs: UserPreferences | null,
 ): string {
-  const fresh = "first_seen_at desc";
+  const fresh = FRESH_ORDER;
   if (filters.sortBy === "newest") return ` order by ${fresh}`;
   const prefQuery = preferenceTsquery(filters, prefs);
   if (!prefQuery) return ` order by ${fresh}`; // 无偏好时打分只剩「近 7 天 +10」→ 按新鲜度排就是对的
@@ -637,7 +643,7 @@ function prescoreOrderBy(
     pieces.unshift(`((search_doc @@ to_tsquery('simple', $${params.length})) is true)::int * 30`);
   }
   if (!dirQuery && !cities.length && !companies.length) return null; // 没有可粗排的信号 → 退回原排序
-  return { orderBy: ` order by (${pieces.join(" + ")}) desc, first_seen_at desc`, candidateWhere };
+  return { orderBy: ` order by (${pieces.join(" + ")}) desc, ${FRESH_ORDER}`, candidateWhere };
 }
 
 // 命中页回补 HYDRATE_COLUMNS：候选阶段没拉这些展示列，排序分页定下 ≤limit 行后按 id 批量补齐再合并。
@@ -985,7 +991,7 @@ async function searchViaScan(
   // 粗排的收窄条件只进候选 SQL，不进 conds（计数 / 真实总数仍按完整 where 算）。
   const candidateConds = prescore?.candidateWhere ? [...conds, prescore.candidateWhere] : conds;
   // 校招 / 实习 + 按新鲜度取（无粗排）：拆成两支各走索引（见 recruitmentUnionSql），多带一个「内层 limit」参数。
-  const unionSql = !prescore && orderBy === " order by first_seen_at desc"
+  const unionSql = !prescore && orderBy === ` order by ${FRESH_ORDER}`
     ? recruitmentUnionSql(columns, candidateConds, prefilterAt, filters.jobType, candidateParams.length)
     : null;
   const sql =
