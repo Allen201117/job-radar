@@ -302,7 +302,17 @@ function appendPostedWithinWhere(conds: string[], params: unknown[], postedWithi
 // ⚠️ 正则须与 china-keyword-expansion 的 sourceDeclaredCategory / hasStrongCampusSignal / hasInternSignal 对齐，
 // 改一处两处同改，否则可能漏掉真校招/实习（精度红线）。
 function appendRecruitmentPrefilter(conds: string[], jobType: string) {
-  if (jobType !== "校招" && jobType !== "实习" && jobType !== "社招") return;
+  const arms = recruitmentPrefilterArms(jobType);
+  if (arms) conds.push(`((${arms[0]}) or (${arms[1]}))`);
+}
+
+/**
+ * 预筛的两支（按 recruitment_category 是否为 NULL 切开，**互斥**）：[已分类支, 待回填支]。
+ * appendRecruitmentPrefilter 把它们 OR 起来；扫描路径的 recruitmentUnionSql 把它们拆成两条各自按索引取数的子查询。
+ * 两处共用这一份字符串，不存在两套口径。
+ */
+function recruitmentPrefilterArms(jobType: string): [string, string] | null {
+  if (jobType !== "校招" && jobType !== "实习" && jobType !== "社招") return null;
 
   // ── 主路：查物化列，与 JS 的 jobFilterMatch 逐字同义 ──────────────────────────────
   // 这两列由入库时的 JS 权威规则算好（crawler/recruitment_classify.py → scripts/classify-recruitment.js），
@@ -318,7 +328,43 @@ function appendRecruitmentPrefilter(conds: string[], jobType: string) {
   // 什么时候会是 null：一次性回填尚未覆盖到、或入库时分类降级（没装 node / 超时）。
   // 这时必须退回原来的信号超集，绝不能当它不存在——否则新抓来的岗会从筛选结果里凭空消失，
   // 而新岗恰恰是用户最想看的。社招本来就不下推（默认态、大头），兜底路直接放行。
-  conds.push(`((recruitment_category is not null and ${exact}) or (recruitment_category is null and ${legacyRecruitmentSuperset(jobType)}))`);
+  return [
+    `recruitment_category is not null and ${exact}`,
+    `recruitment_category is null and ${legacyRecruitmentSuperset(jobType)}`,
+  ];
+}
+
+/**
+ * 校招 / 实习按新鲜度取数：把预筛拆成两支各自 `order by first_seen_at desc limit N`，再 Merge Append（2026-09-23）。
+ *
+ * 为什么：预筛是「已分类 OR 待回填」一个 OR，规划器只能沿 (status, first_seen_at) 按时间翻、逐行回表判类型。
+ * 实习只占 active 6% → 凑满 1000 行要回表 2.9 万行；库机 2GB 内存装不下 2.26GB 数据，冷缓存时每行 0.1~0.3ms，
+ * 同一条「只选实习」热 76ms / 冷 2.1~4.6s。拆开后已分类支走 idx_jobs_active_recruitment_first_seen
+ * （Index Cond: 类型 = X and 明确），待回填支走同一索引的 IS NULL 段：香港库 26,573 → 2,743 buffer。
+ * 等价性：两支按 recruitment_category 是否为 NULL 互斥，并集 = 原 OR；全集按 first_seen_at 倒序的前 (offset+limit) 行
+ * 必然落在「每支各自的前 (offset+limit) 行」里。真库对拍 1000 行（按 first_seen_at, id 定序取 md5）逐条相同。
+ * 社招不拆：它是大头，按时间翻很快就凑满，而且「已分类支」是否定条件，走不了索引。
+ * 参数：比普通形态多一个「内层 limit = 外层 limit + offset」，由调用方追加在最后。
+ */
+function recruitmentUnionSql(
+  columns: string,
+  conds: string[],
+  prefilterAt: number,
+  jobType: string,
+  lastParam: number,
+): string | null {
+  if (jobType !== "校招" && jobType !== "实习") return null;
+  const arms = recruitmentPrefilterArms(jobType);
+  if (!arms || prefilterAt < 0 || prefilterAt >= conds.length) return null;
+  const branch = (arm: string) => {
+    const cs = [...conds];
+    cs[prefilterAt] = `(${arm})`;
+    return `(select ${columns} from jobs where ${cs.join(" and ")} order by first_seen_at desc limit $${lastParam + 3})`;
+  };
+  return (
+    `select * from (${branch(arms[0])} union all ${branch(arms[1])}) u ` +
+    `order by first_seen_at desc limit $${lastParam + 1} offset $${lastParam + 2}`
+  );
 }
 
 
@@ -552,7 +598,20 @@ function prescoreOrderBy(
     if (narrowQuery && options.candidateWhere) {
       // 先压窄查询、再压宽查询：保住「候选查询最后一个参数 = 排序 tsquery」的既有契约（tests/jobs-store-candidate-window）。
       params.push(narrowQuery);
-      candidateWhere = `(search_doc @@ to_tsquery('simple', $${params.length}) or first_seen_at > now() - interval '7 days')`;
+      const dir = `search_doc @@ to_tsquery('simple', $${params.length})`;
+      const recent = "first_seen_at > now() - interval '7 days'";
+      // 选了校招 / 实习时按招聘类型拆开（2026-09-23）：外层预筛本来就只留「该类型 / 待回填（NULL）」两种行，
+      // 所以 (方向 or 7天) ≡ (方向 and 该类型) or (7天 and 该类型) or (待回填 and (方向 or 7天))，候选集逐行不变。
+      // 拆开后三支各走索引再 BitmapOr：方向支与 idx_jobs_active_recruitment_first_seen 做 BitmapAnd，7 天支直接按
+      // (类型, 首见时间) 取，待回填支只有一千多行——不再把 7 天内全部 4.5 万行、方向词命中的全部行（含社招、海外）回表再丢。
+      // 香港库三个真实画像：回表块 3.7 万 → 1.4 万；磁盘读 2.1 万 → 百级。方向词宽的画像（33 个 OR 子句）1,029 → 591ms（热）。
+      // ⚠️ 别写成 `(方向 or 7天) and (该类型 or 待回填)`：规划器会把它当普通过滤，照旧回表（实测计划不变）；
+      //    也别让「待回填」分别并进前两支：方向词 GIN 会被扫两遍（宽画像每遍 ~250ms）。
+      const stage = filters.jobType === "校招" || filters.jobType === "实习" ? filters.jobType : null;
+      const rc = `recruitment_category = '${stage}'`;
+      candidateWhere = stage
+        ? `((${dir} and ${rc}) or (${recent} and ${rc}) or (recruitment_category is null and (${dir} or ${recent})))`
+        : `(${dir} or ${recent})`;
     }
     params.push(dirQuery);
     pieces.unshift(`((search_doc @@ to_tsquery('simple', $${params.length})) is true)::int * 30`);
@@ -836,6 +895,7 @@ async function searchViaScan(
   appendJobScopeWhere(conds, params, prefs, filters);
   appendPostedWithinWhere(conds, params, filters.postedWithin);
   appendCompanyTierWhere(conds, params, filters.companyTier); // 与 FTS 路径同一份实现，稀疏标签独立浏览不漏岗
+  const prefilterAt = conds.length; // 预筛在 conds 里的位置：recruitmentUnionSql 要把它拆成两支
   appendRecruitmentPrefilter(conds, filters.jobType); // 校招/实习超集下推，扫描也少翻无关行
   appendCurrentSeasonWhere(conds, params); // 往届校招/实习岗不进默认结果（与 FTS 路径同口径）
   appendExcludeWhere(conds, params, prefs);
@@ -853,13 +913,20 @@ async function searchViaScan(
   const matchWindow = prescore ? matchPrescoreWindow() : SCAN_BUDGET;
   // 粗排的收窄条件只进候选 SQL，不进 conds（计数 / 真实总数仍按完整 where 算）。
   const candidateConds = prescore?.candidateWhere ? [...conds, prescore.candidateWhere] : conds;
+  // 校招 / 实习 + 按新鲜度取（无粗排）：拆成两支各走索引（见 recruitmentUnionSql），多带一个「内层 limit」参数。
+  const unionSql = !prescore && orderBy === " order by first_seen_at desc"
+    ? recruitmentUnionSql(columns, candidateConds, prefilterAt, filters.jobType, candidateParams.length)
+    : null;
   const sql =
+    unionSql ??
     `select ${columns} from jobs where ${candidateConds.join(" and ")}${orderBy} ` +
-    `limit $${candidateParams.length + 1} offset $${candidateParams.length + 2}`;
+      `limit $${candidateParams.length + 1} offset $${candidateParams.length + 2}`;
+  const pageParams = (want: number, off: number) =>
+    unionSql ? [...candidateParams, want, off, want + off] : [...candidateParams, want, off];
   const fetchRows = async (want: number, off: number) => {
     const s = now();
     try {
-      return await jobsQuery(sql, [...candidateParams, want, off]);
+      return await jobsQuery(sql, pageParams(want, off));
     } finally {
       fetchMs += now() - s;
     }
@@ -915,7 +982,7 @@ async function searchViaScan(
     // 在物化之前，先用「候选与用户无关」这一点把重复传输吃掉：走进程内缓存 + 并发去重
     // （见上面 fetchCandidates 的注释与不变量）。
     const s = now();
-    const raw = await fetchCandidates(sql, [...candidateParams, matchWindow, 0], fetchMeta);
+    const raw = await fetchCandidates(sql, pageParams(matchWindow, 0), fetchMeta);
     fetchMs += now() - s;
     // 候选被 candidateWhere 收窄过时，「拿到的比窗口少」不等于「全库看完了」→ 仍按 capped 走真实总数计数。
     exhausted = absorb(raw, matchWindow) && !prescore?.candidateWhere;
