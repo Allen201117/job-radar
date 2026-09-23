@@ -114,5 +114,133 @@ class WorkdayAdapterFacetChunkTest(unittest.TestCase):
         self.assertTrue(all(len(c) <= 150 for c in applied_calls), "任何单次请求的 id 数不得超过分块上限")
 
 
+def _location_facets(values, extra=None):
+    """Workday facets 的真实形状：locationMainGroup 下挂 locations 叶子。"""
+    groups = [{"facetParameter": "locationMainGroup", "values": [
+        {"facetParameter": "locations", "descriptor": "Locations", "values": [
+            {"id": f"id-{i}", "descriptor": d, "count": 1} for i, d in enumerate(values)
+        ]},
+    ]}]
+    return groups + (extra or [])
+
+
+class WorkdayLooseUsFacetTest(unittest.TestCase):
+    """城市级 US 叶子（2026-09-23 实测 98 个 US workday 源里 22 个靠它补美国岗；
+    Micron/阿斯利康 原本各只抓到 1 个、Nike 0 个）。字面关键词认不出，交给 geo 认。"""
+
+    REGIONS = {"CN", "US", "SG", "Remote"}
+
+    def test_city_level_us_leaves_are_picked_up(self):
+        facets = _location_facets([
+            "San Francisco, CA, US",   # Postman：州缩写 + 结尾 US
+            "US, Oregon, Hillsboro",   # Intel：US 在开头
+            "Beaverton, Oregon",       # Nike：不带国家，只有州全称
+            "Boise, ID - Main Site",   # Micron：州缩写 + 厂区后缀
+        ])
+        got = WorkdayAdapter._loose_us_facet_candidates(facets, self.REGIONS)
+        self.assertEqual(got, {"locations": ["id-0", "id-1", "id-2", "id-3"]})
+
+    def test_non_us_and_already_matched_leaves_are_left_alone(self):
+        facets = _location_facets([
+            "Bangalore, India", "Montreal, QC, ca", "Tbilisi, Georgia", "London, Ontario",
+            "Taiwan, Taipei", "Shanghai, China Mainland",
+            "Remote - United States",  # 字面关键词已认出 → 走原 trusted 通道，不重复进宽松通道
+        ])
+        self.assertEqual(WorkdayAdapter._loose_us_facet_candidates(facets, self.REGIONS), {})
+
+    def test_regions_without_us_get_nothing(self):
+        facets = _location_facets(["Beaverton, Oregon"])
+        self.assertEqual(WorkdayAdapter._loose_us_facet_candidates(facets, {"CN"}), {})
+
+    def test_non_location_param_is_ignored(self):
+        facets = [{"facetParameter": "jobFamilyGroup", "values": [
+            {"id": "jf", "descriptor": "New York Sales"},
+        ]}]
+        self.assertEqual(WorkdayAdapter._loose_us_facet_candidates(facets, self.REGIONS), {})
+
+    def test_country_level_us_facet_disables_loose_channel(self):
+        # 有国家级聚合项 = 一次就能拿全美国岗，宽松通道只会白加请求（68 源实测抓到/自报 ≈1.00）
+        country = [{"facetParameter": "locationMainGroup", "values": [
+            {"facetParameter": "locationCountry", "descriptor": "Location Country", "values": [
+                {"id": "us-country", "descriptor": "United States of America", "count": 500},
+            ]},
+        ]}]
+        facets = _location_facets(["Beaverton, Oregon"], extra=country)
+        self.assertTrue(WorkdayAdapter._has_us_country_facet(facets))
+        self.assertEqual(WorkdayAdapter._loose_us_facet_candidates(facets, self.REGIONS), {})
+
+    def test_country_named_leaf_under_locations_is_not_country_level(self):
+        # 罗氏：locations 下有个叫「United States of America」的叶子，只挂 4 个岗，不是国家聚合
+        facets = _location_facets(["United States of America", "South San Francisco, California"])
+        self.assertFalse(WorkdayAdapter._has_us_country_facet(facets))
+        self.assertEqual(
+            WorkdayAdapter._loose_us_facet_candidates(facets, self.REGIONS), {"locations": ["id-1"]},
+        )
+
+
+class WorkdayLooseUsFetchTest(unittest.TestCase):
+    SOURCE_URL = "https://tenant.wd5.myworkdayjobs.com/wday/cxs/tenant/site/jobs"
+
+    def _run(self, cn_count, us_leaf_error=None):
+        facets = _location_facets(
+            [f"Shanghai {i}, China" for i in range(cn_count)] + ["Austin, TX, US"],
+        )
+        us_leaf = f"id-{cn_count}"
+        searched = []
+
+        def post_side_effect(url, json=None, headers=None, timeout=None):
+            body = json or {}
+            applied = (body.get("appliedFacets") or {}).get("locations")
+            if body.get("limit") == 1:
+                return _response(200, {"facets": facets})
+            if body.get("offset", 0) > 0:
+                return _response(200, {"jobPostings": []})
+            if body.get("searchText"):
+                searched.append(body["searchText"])
+                return _response(200, {"jobPostings": []})
+            if applied == [us_leaf] and us_leaf_error is not None:
+                raise us_leaf_error
+            if applied == [us_leaf]:
+                # 叶子是 geo 猜的：同一个 facet 里混进一个非美国岗，必须被逐岗过滤掉
+                return _response(200, {"jobPostings": [
+                    {"title": "US Role", "externalPath": "/job/Austin-TX-US/US-Role_1"},
+                    {"title": "Leak Role", "externalPath": "/job/Bangalore-India/Leak-Role_2"},
+                ]})
+            return _response(200, {"jobPostings": [
+                {"title": f"CN Role {i}", "externalPath": f"/job/China-Shanghai/CN-Role_{i}"}
+                for i in range(len(applied or []))
+            ]})
+
+        adapter = WorkdayAdapter()
+        adapter.regions = frozenset({"CN", "US", "SG", "Remote"})
+        with mock.patch("adapters.workday.httpx.post", side_effect=post_side_effect), \
+                mock.patch("adapters.workday.httpx.get", side_effect=RuntimeError("no detail in test")):
+            html = adapter.fetch(self.SOURCE_URL)
+        data = json.loads(html)
+        self.adapter = adapter
+        return adapter.parse(html), data, searched
+
+    def test_loose_pass_failure_keeps_trusted_posts_and_marks_incomplete(self):
+        # 补充召回断连不许把整源扔掉：在华岗照交，fetch_complete 如实记 False
+        with self.assertLogs("adapters.workday", level="WARNING"):
+            jobs, _, _ = self._run(
+                cn_count=30, us_leaf_error=httpx.RemoteProtocolError("Server disconnected"),
+            )
+        self.assertEqual(sum(1 for j in jobs if j.title.startswith("CN Role")), 30)
+        self.assertFalse(self.adapter.fetch_complete)
+
+    def test_loose_posts_are_filtered_per_job_not_trusted(self):
+        jobs, data, _ = self._run(cn_count=30)
+        titles = {j.title for j in jobs}
+        self.assertIn("US Role", titles)
+        self.assertNotIn("Leak Role", titles)
+        self.assertNotIn("US Role", {p["title"] for p in data["trusted_posts"]})
+
+    def test_text_fallback_threshold_counts_trusted_only(self):
+        # trusted（在华）只有 3 个 < 25：原来会跑文本兜底，加了宽松通道之后必须照旧跑
+        _, _, searched = self._run(cn_count=3)
+        self.assertIn("United States", searched)
+
+
 if __name__ == "__main__":
     unittest.main()

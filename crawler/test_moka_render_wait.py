@@ -117,6 +117,9 @@ def _fake_playwright_modules(page):
 def _run(behaviors, reopen_behaviors=None):
     page = _FakePage(behaviors, reopen_behaviors)
     adapter = MokaAdapter()
+    # BASE 是带 id 的校招门户：0 岗时 fetch 会去问平台「当前生效的校招门户」——单测不打真网络，
+    # 这里固定答「就是它自己」（= 真休眠）。换期那条路径钉在 test_fake_green_sources.py。
+    adapter._current_campus_portal_id = lambda host, tenant: BASE.rsplit("/", 1)[-1]
     with mock.patch.dict(sys.modules, _fake_playwright_modules(page)):
         raw = adapter.fetch(BASE)
     return adapter, page, json.loads(raw)

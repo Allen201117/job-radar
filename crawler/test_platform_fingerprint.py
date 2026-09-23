@@ -521,3 +521,74 @@ class ScriptBundleTenantTest(unittest.TestCase):
         result = pf.fingerprint("https://careers.acme.com/", company=None, client=client)
         self.assertEqual(result["adapter"], "beisen")
         self.assertEqual(client.calls, ["https://careers.acme.com/"])
+
+
+class MalformedEmbeddedUrlTest(unittest.TestCase):
+    """页面里抠出来的畸形 URL 只能丢它自己，不许让整次 fingerprint 抛出（2026-09-23）。
+
+    两段 HTML 就是 CI 上真实报出的两种 ValueError 的最小复现：施耐德 / 联邦快递的
+    「Invalid IPv6 URL」、荣盛石化的「netloc … NFKC」。旧代码下 fingerprint() 直接抛出，
+    gap_funnel 把整家公司记成异常、+1 天重试 → 天天同一个页面炸，永远判不出结论。
+    """
+
+    CASES = (
+        '<title>施耐德电气招聘</title><script>var u="https://["+h+"]";</script>加入我们 招聘 职位',
+        '<title>荣盛石化 招聘</title><p>请访问 http://www.cnrspc.com，或巨潮资讯网：'
+        'www.cninfo.com.cn。我们十分重视</p> 招聘 岗位',
+        '<title>甲公司招聘</title><script>x="https://]x";</script>'
+        '<a href="https://acme.zhiye.com/social">社招</a>',
+    )
+
+    def test_fingerprint_survives_malformed_urls_in_page(self):
+        for html in self.CASES:
+            with self.subTest(html=html[:30]):
+                client = _Client(_Response("https://careers.example.com/", html))
+                result = pf.fingerprint("https://careers.example.com/", company=None, client=client)
+                self.assertIn("platform", result)
+
+    def test_valid_urls_next_to_malformed_ones_still_count(self):
+        # 丢掉坏的那条，旁边好的 ATS 地址照样要认出来——不能「一条坏、整页判 unknown」。
+        client = _Client(_Response("https://careers.example.com/", self.CASES[2]))
+        result = pf.fingerprint("https://careers.example.com/", company=None, client=client)
+        self.assertEqual(result["adapter"], "beisen")
+
+    def test_helpers_skip_unparseable_strings(self):
+        html = 'a https://[ b https://jobs.example.com/ c https://]x'
+        self.assertEqual(
+            pf.find_careers_subdomain_hops(html, "https://www.example.com/"),
+            ["https://jobs.example.com/"],
+        )
+        self.assertEqual(pf.find_ats_tenant_urls('"https://[" "https://acme.zhiye.com/social"'),
+                         ["https://acme.zhiye.com/social"])
+        self.assertEqual(
+            pf.find_script_bundle_urls('<script src="http://[bad"></script>'
+                                       '<script src="/app.js"></script>', "https://www.example.com/"),
+            ["https://www.example.com/app.js"],
+        )
+        self.assertIsNone(pf._adapter_api_url("greenhouse", "https://["))
+
+
+
+class LatinCompanyWordBoundaryTest(unittest.TestCase):
+    """纯英文公司名按词边界核身份（2026-09-23）：ABB 的入口曾被记成 careers.abbvie.com。"""
+
+    def _ok(self, company, html):
+        return pf.verify_page_identity(company, "https://x.example.com/", html)[0]
+
+    def test_substrings_of_other_words_do_not_count(self):
+        self.assertFalse(self._ok("ABB", "<title>AbbVie Careers</title>"))
+        self.assertFalse(self._ok("ABB", "<p>Abbott Laboratories jobs</p>"))
+        self.assertFalse(self._ok("OPPO", "<p>Explore career opportunities</p>"))
+        self.assertFalse(self._ok("UPS", "<p>our groups and startups</p>"))
+        self.assertFalse(self._ok("3M", "<p>3mm steel plate</p>"))
+
+    def test_real_mentions_still_count(self):
+        self.assertTrue(self._ok("ABB", "<title>Careers | ABB</title>"))
+        self.assertTrue(self._ok("ABB", "<title>ABB中国招聘</title>"))
+        self.assertTrue(self._ok("OPPO", "<title>OPPO 校园招聘</title>"))
+        self.assertTrue(self._ok("TCL", "<title>TCL科技集团</title>"))
+        self.assertTrue(self._ok("3M", "<title>3M中国</title>"))
+        self.assertTrue(self._ok("vivo", "<title>vivo招聘</title>"))
+
+    def test_chinese_names_keep_compact_substring(self):
+        self.assertTrue(self._ok("腾讯", "<title>腾 讯 招 聘</title>"))
