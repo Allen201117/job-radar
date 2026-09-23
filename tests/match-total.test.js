@@ -38,8 +38,8 @@ test("exactTotal 缺省 / 非数字一律当没有", () => {
   }
 });
 
-test("0 和异常 total 不会渲染成 NaN", () => {
+test("0 和异常 total 不会渲染成 NaN；空结果即使撞上限也不能显示 0+", () => {
   assert.equal(formatMatchTotal(0, false, null).text, "0");
   assert.equal(formatMatchTotal(NaN, false, null).text, "0");
-  assert.equal(formatMatchTotal(-3, true, null).text, "0+");
+  assert.deepEqual(formatMatchTotal(-3, true, null), { text: "0", approximate: false });
 });

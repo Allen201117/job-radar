@@ -165,7 +165,11 @@ function StatCell({
   return (
     <div className="flex items-baseline gap-1.5 px-2">
       {value === null ? (
-        <span className={cn(numberClass, "ink-4")}>—</span>
+        // 次要两项只能在客户端拿到；首屏用与数字等宽的骨架，不把尚未加载误读成「没有数据」。
+        <span
+          aria-label={`${label}加载中`}
+          className="inline-block h-4 w-10 animate-pulse rounded bg-black/[0.08] dark:bg-white/[0.10]"
+        />
       ) : animated ? (
         <AnimateNumber value={value} duration={700} blur={14} className={numberClass} />
       ) : (
