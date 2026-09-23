@@ -163,6 +163,15 @@ class WorkdayDetailTest(unittest.TestCase):
             with mock.patch.object(enrich.httpx, "get", lambda *a, _s=status, **k: _Resp(body, status=_s)):
                 self.assertEqual(enrich.ENRICH_REGISTRY["workday"](self._ROW, self._SRC), "", status)
 
+    def test_expire_guard_lets_backlog_through_but_trips_on_signal_flip(self):
+        # 上线清存量那几轮：按真实队列顺序（source_id 排序 + 每轮 5 万 + 按源交错）重放全量 dry-run，
+        # 累计判死占比最高 59.6% —— 阈值必须高于它，否则存量永远清不掉（照抄北森的 0.5 会卡死）。
+        self.assertFalse(enrich_backlog.should_trip_expire_guard("workday", 25525, 15215))  # 59.6%
+        self.assertFalse(enrich_backlog.should_trip_expire_guard("workday", 50000, 28789))  # 57.6%
+        # S22 语义哪天被 Workday 挪作他用 → 几乎全判死，200 个样本内就停。
+        self.assertTrue(enrich_backlog.should_trip_expire_guard("workday", 200, 200))
+        self.assertTrue(enrich_backlog.should_trip_expire_guard("workday", 1000, 800))
+
     def test_403_non_json_body_is_not_closed(self):
         # CDN/WAF 拦截回的是 HTML 403，不是 Workday 应用层的 S22 → 不许判死。
         class _Html(_Resp):
