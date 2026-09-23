@@ -1,0 +1,56 @@
+name: feishu-portal-reconcile
+
+# 飞书系源「公开门户」存量对账（2026-09-23）：逐岗核「在它链接所在门户上还在不在线」，
+# 下架确认已下线的死链、修正挂错门户的链接。adapter 已改成按公开门户抓（adapters/feishu.py
+# _httpx_fetch_main），这条清的是改之前灌进去、list-absence 被安全闸挡住清不掉的存量。
+# 手动触发、默认 dry-run；逐岗判据与安全闸见 crawler/feishu_portal_reconcile.py 的模块注释。
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "true = 真的写库；留空/false = 只 dry-run 报数"
+        required: false
+        default: "false"
+      source_ids:
+        description: "只对账这些源（sources.id，逗号分隔）；留空 = 全部 enabled 飞书系源"
+        required: false
+        default: ""
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: crawler/requirements.txt
+      - run: pip install -r crawler/requirements.txt
+
+      - name: Reconcile feishu portal jobs
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+        run: |
+          set -euo pipefail
+          args=(--out reconcile-report.json)
+          IFS=',' read -ra ids <<< "${{ github.event.inputs.source_ids }}"
+          for s in "${ids[@]}"; do
+            trimmed="$(echo "$s" | xargs)"
+            [ -n "$trimmed" ] && args+=(--source-id "$trimmed")
+          done
+          if [ "${{ github.event.inputs.apply }}" = "true" ]; then args+=(--apply); fi
+          python3 crawler/feishu_portal_reconcile.py "${args[@]}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: feishu-portal-reconcile-report
+          path: reconcile-report.json
+          if-no-files-found: ignore

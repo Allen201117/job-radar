@@ -67,16 +67,18 @@ class WebsitePathTest(unittest.TestCase):
                          "https://nio.jobs.feishu.cn/campus/position/{id}/detail")
         self.assertEqual(a.list_urls[0], "https://nio.jobs.feishu.cn/campus/position")
 
-    def test_index_must_not_become_a_website_path(self):
-        """⚠️ 主门户带 `website-path: index` 拿到的是**子集**：蔚来 2055 → 1801，少 254 个岗。
-        库里 70 个存量飞书源全是 /index/position，派生 index 就是全体缩水。"""
+    def test_index_url_is_marked_main_portal(self):
+        """/index/position 与根路径 = 主门户：website_path 留空、标 _main_portal，由 _httpx_fetch_main 带头去取
+        （2026-09-23 更正：旧版这里钉的是「index 是子集、主门户不带头」，见 MainPortalTest）。"""
         for url in ("https://nio.jobs.feishu.cn/index/position",
                     "https://nio.jobs.feishu.cn/",
                     "https://nio.jobs.feishu.cn"):
             a = self._a(url)
             self.assertEqual(a.website_path, "", url)
+            self.assertTrue(a._main_portal, url)
             self.assertEqual(a.detail_template,
                              "https://nio.jobs.feishu.cn/index/position/{id}/detail", url)
+        self.assertFalse(self._a("https://nio.jobs.feishu.cn/campus/position")._main_portal)
 
     def test_other_custom_portals_are_derived(self):
         for path, expected in (("internship", "internship"), ("newretailing", "newretailing"),
@@ -112,24 +114,160 @@ class WebsitePathTest(unittest.TestCase):
         a._apply_website_path("campus")
         self.assertEqual(a.detail_template, "")
 
-    def test_header_sent_only_for_sub_portals(self):
-        captured = {}
+    def test_headers_sent_per_portal(self):
+        """子门户只带自己的头；主门户带「自报门户」和「index」两个头各取一次，绝不再不带头。"""
+        for url, declared, expect in (("https://nio.jobs.feishu.cn/campus/position", "index", ["campus"]),
+                                      ("https://nio.jobs.feishu.cn/index/position", "career", ["career", "index"]),
+                                      ("https://nio.jobs.feishu.cn/index/position", "index", ["index"])):
+            sent = []
 
-        class _CapClient(_FakeClient):
-            def __init__(self, pages, **kw):
-                super().__init__(pages)
-                captured["headers"] = kw.get("headers") or {}
+            class _CapClient(_FakeClient):
+                def __init__(self, pages, **kw):
+                    super().__init__(pages)
+                    sent.append((kw.get("headers") or {}).get("website-path"))
+                    assert "portal-channel" in (kw.get("headers") or {})
 
-        for url, expect_header in (("https://nio.jobs.feishu.cn/campus/position", "campus"),
-                                   ("https://nio.jobs.feishu.cn/index/position", None)):
-            captured.clear()
             a = self._a(url)
             a._PAGE_SIZE = 2
-            with mock.patch.object(feishu.httpx, "Client",
-                                   lambda **kw: _CapClient([_page([1], 1)], **kw)):
+            with mock.patch.object(feishu.httpx, "Client", lambda **kw: _CapClient([_page([1], 1)], **kw)), \
+                    mock.patch.object(a, "_discover_detail_prefix", return_value=declared):
                 a._httpx_fetch("nio.jobs.feishu.cn")
-            self.assertEqual(captured["headers"].get("website-path"), expect_header, url)
-            self.assertIn("portal-channel", captured["headers"])
+            self.assertEqual(sent, expect, url)
+
+
+class MainPortalTest(unittest.TestCase):
+    """主门户抓「公开门户」而不是「不带头的全集」（2026-09-23 更正 2026-09-04 的结论）。
+
+    碑文（133 个飞书系源逐岗全量核，详情接口带 `website-path:<链接所在门户>` 读 channel_online_status）：
+      · 不带头多出来的岗在公开门户上显示「该职位已下线」（浏览器实开核对：去哪儿 / 网眼科技）；
+      · channel_online_status 按门户算——同一岗不带头读 1、带 index 头读 0；
+      · 带门户头取回的列表，逐岗在该门户上是 1；
+      · 有租户开两个公开门户（莉莉丝 career 119 / index 57），只取一个会漏在线岗 → 取并集、各用各的前缀；
+      · 「不带头 ⊇ 门户」也不成立（超级猩猩不带头 6 / 门户 17）。
+    """
+
+    def _a(self):
+        a = feishu.NioAdapter()
+        a._bind_website_path("https://nio.jobs.feishu.cn/index/position")
+        a._PAGE_SIZE = 50
+        return a
+
+    @staticmethod
+    def _client_by_portal(pages_by_portal):
+        def factory(**kw):
+            portal = (kw.get("headers") or {}).get("website-path")
+            return _FakeClient(list(pages_by_portal.get(portal, [_page([], 0)])))
+        return factory
+
+    def test_union_of_declared_and_index_with_per_row_prefix(self):
+        a = self._a()
+        pages = {"career": [_page([1, 2, 3], 3)], "index": [_page([3, 4], 2)]}
+        with mock.patch.object(feishu.httpx, "Client", self._client_by_portal(pages)), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="career"):
+            rows, total, reached = a._httpx_fetch("nio.jobs.feishu.cn")
+        self.assertTrue(reached)
+        self.assertEqual(total, 4)                                   # 两个门户都翻全 → 抓全
+        self.assertEqual({r["id"]: r["_portal"] for r in rows},
+                         {"1": "career", "2": "career", "3": "career", "4": "index"})
+        jobs = {j.jd_url for j in (a._map(r) for r in rows)}
+        self.assertIn("https://nio.jobs.feishu.cn/career/position/1/detail", jobs)
+        self.assertIn("https://nio.jobs.feishu.cn/index/position/4/detail", jobs)   # 只在 index 的用 index
+        self.assertEqual(a.detail_template, "https://nio.jobs.feishu.cn/career/position/{id}/detail")
+
+    def test_declared_index_fetches_once(self):
+        a = self._a()
+        calls = []
+
+        def factory(**kw):
+            calls.append((kw.get("headers") or {}).get("website-path"))
+            return _FakeClient([_page([1], 1)])
+
+        with mock.patch.object(feishu.httpx, "Client", factory), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="index"):
+            rows, total, reached = a._httpx_fetch("nio.jobs.feishu.cn")
+        self.assertEqual(calls, ["index"])
+        self.assertEqual((len(rows), total), (1, 1))
+
+    def test_unknown_declared_portal_is_never_complete(self):
+        """首页拿不到自报门户 → 只取 index，但**不许**标抓全：否则 list-absence 会按它判撤岗。"""
+        a = self._a()
+        with mock.patch.object(feishu.httpx, "Client", self._client_by_portal({"index": [_page([1], 1)]})), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value=""):
+            rows, total, reached = a._httpx_fetch("nio.jobs.feishu.cn")
+            a._prefetched = (rows, total, reached)
+            a.fetch("https://nio.jobs.feishu.cn/index/position")
+        self.assertEqual([r["id"] for r in rows], ["1"])
+        self.assertIsNone(total)
+        self.assertFalse(a.fetch_complete)
+
+    def test_one_portal_not_fully_paged_is_not_complete(self):
+        a = self._a()
+        a._MAX_JOBS = 2
+        pages = {"career": [_page([1, 2], 5)], "index": [_page([9], 1)]}
+        with mock.patch.object(feishu.httpx, "Client", self._client_by_portal(pages)), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="career"):
+            rows, total, reached = a._httpx_fetch("nio.jobs.feishu.cn")
+        self.assertIsNone(total)
+
+    def test_declared_prefix_does_not_leak_to_next_source(self):
+        """probe.probe_one 共用单例：上一家自报 exp，下一家首页没自报 → 模板必须回到 index。"""
+        a = self._a()
+        with mock.patch.object(feishu.httpx, "Client", self._client_by_portal({})), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="exp"):
+            a._httpx_fetch("nio.jobs.feishu.cn")
+        self.assertIn("/exp/position/", a.detail_template)
+        with mock.patch.object(feishu.httpx, "Client", self._client_by_portal({})), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value=""):
+            a._httpx_fetch("nio.jobs.feishu.cn")
+        self.assertIn("/index/position/", a.detail_template)
+
+    def test_missing_index_portal_counts_as_empty_not_unreached(self):
+        """小马智行 / 商汤：没有 index 门户，接口回 -9000003 site not exist → 当空门户，照样能标抓全。"""
+        a = self._a()
+
+        def factory(**kw):
+            portal = (kw.get("headers") or {}).get("website-path")
+            if portal == "index":
+                return _FakeClient([{"code": -9000003, "message": "site not exist", "data": None}])
+            return _FakeClient([_page([1, 2], 2)])
+
+        with mock.patch.object(feishu.httpx, "Client", factory), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="ponyai"):
+            rows, total, reached = a._httpx_fetch("ponyai.jobs.feishu.cn")
+        self.assertEqual((len(rows), total, reached), (2, 2, True))
+
+    def test_missing_declared_portal_is_not_waved_through(self):
+        """自报门户本身回 site not exist 是异常，不许当空门户（否则会把全源判成 0 岗、抓全）。"""
+        a = self._a()
+        with mock.patch.object(feishu.httpx, "Client",
+                               lambda **kw: _FakeClient([{"code": -9000003, "data": None}])), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="exp"):
+            rows, total, reached = a._httpx_fetch("x.jobs.feishu.cn")
+        self.assertIsNone(total)
+
+    def test_declared_portal_with_zero_jobs_is_a_real_zero(self):
+        """海底捞：自报门户（校园招聘 072846）0 岗、没有 index 门户、不带头却回 151 个
+        ——那 151 个在公开页全是「已下线」（公开首页「开启新的工作（0）」）。真 0 岗就是 0 岗。"""
+        a = self._a()
+
+        def factory(**kw):
+            portal = (kw.get("headers") or {}).get("website-path")
+            if portal == "index":
+                return _FakeClient([{"code": -9000003, "data": None}])
+            return _FakeClient([_page([], 0)])
+
+        with mock.patch.object(feishu.httpx, "Client", factory), \
+                mock.patch.object(a, "_discover_detail_prefix", return_value="072846"):
+            rows, total, reached = a._httpx_fetch("haidilao.jobs.feishu.cn")
+        self.assertEqual((rows, total, reached), ([], 0, True))
+
+    def test_detail_check_uses_the_rows_own_portal(self):
+        a = self._a()
+        seen = []
+        ok = type("Response", (), {"status_code": 200, "text": "x"})()
+        with mock.patch.object(feishu.httpx, "get", side_effect=lambda u, **k: seen.append(u) or ok):
+            self.assertFalse(a._detail_portal_closed("nio.jobs.feishu.cn", {"id": "7", "_portal": "career"}))
+        self.assertEqual(seen, ["https://nio.jobs.feishu.cn/career/position/7/detail"])
 
 
 class HttpxFetchTest(unittest.TestCase):
