@@ -414,9 +414,25 @@ class WorkdayAdapter(BaseAdapter):
         # externalPath: /job/China-Beijing/Title_JRxxxx → 第 2 段 "China-Beijing" → "China, Beijing"
         parts = [x for x in ep.split("/") if x]
         if len(parts) >= 2 and parts[0].lower() == "job":
-            seg = parts[1].replace("-", ", ").strip()
-            return _normalize_cn_country(seg) or None
+            seg = _SPLIT_COUNTRY_RE.sub(lambda m: m.group(0).replace("-", " "), parts[1])
+            seg = seg.replace("-", ", ").strip()
+            return _normalize_iso3_country(_normalize_cn_country(seg)) or None
         return None
+
+
+# 多词国名在路径里是连字符（'United-Kingdom---Remote'），上面的 replace('-', ', ') 会把它劈成
+# 'United, Kingdom'，而 geo 的 OVERSEAS_LOCATION_PHRASES 是**整词组子串**匹配 → 认不出来 →
+# 按 regions 兜底判 domestic（2026-09-23 live：United Kingdom 一类约 180 个在招岗，
+# 另有 Saudi Arabia / South Africa / Costa Rica）。劈开之前先把国名里的连字符还原成空格。
+# 'united states' 不在此列：geo 的 US 词表按词边界匹配，'United, States' 本来就认得，
+# 收进来只会白白改写上万个美国岗的地点文本。
+_SPLIT_COUNTRY_PHRASES = tuple(
+    p for p in normalizer.OVERSEAS_LOCATION_PHRASES if " " in p and p != "united states"
+)
+_SPLIT_COUNTRY_RE = re.compile(
+    r"(?i)(?<![a-z])(?:" + "|".join(re.escape(p).replace(r"\ ", "-") for p in _SPLIT_COUNTRY_PHRASES)
+    + r")(?![a-z])"
+)
 
 
 def _normalize_cn_country(seg: str) -> str:
@@ -430,4 +446,45 @@ def _normalize_cn_country(seg: str) -> str:
     seg = re.sub(r"(?<=[a-z])(CHN|CN)$", r", China", seg)
     # 独立词：'Sanshui, CHN' / 'CN, Shanghai' → China
     seg = re.sub(r"(?i)\b(?:CHN|CN)\b", "China", seg)
+    return seg.strip()
+
+
+# externalPath 地点段里的 ISO-3166 alpha-3 国别码 → geo 认得的英文国名。
+# 不展开的话 geo 按词边界一个都认不出来（'SingaporeSGP' / 'London, GBR' / 'USAVAReston'），
+# derive_country_code=None → derive_job_scope 按 source.regions 兜底 → regions 含 CN 的源
+# 把伦敦 / 曼谷 / 华沙 / 弗吉尼亚的岗判成 domestic（trusted 分支不做 per-job 地区复核，拦不住）。
+# ⚠️ 只收「live 路径里真见过、且确实是国别码」的（2026-09-23 扫全部 123,143 个在招 workday 岗）。
+#    刻意**不收**的撞车码，都是库里真见过的反例：
+#      PHL = 费城（'US---PHL-OFFICE--WAREHOUSE…'）不是菲律宾；
+#      NOR = 美国站点编号（'CAV17-NOR-Fairfax-…-VA-22031-USA'）不是挪威；
+#      ANA = Santa Ana（'SANTA-ANA-CA'）；NAS = 海军航空站（'USA---NAS-JRB-New-Orleans-LA'）。
+#    只认**大写**：小写的 can / col / ind / aus / fin 是英文词。
+# ⚠️ 每加一个码都必须让 geo 判得出（大中华三地 → domestic，其余 → overseas），
+#    crawler/test_foreign_ats.py 的契约测试逐条验。台湾展开后由 validate_job_quality 统一拒收。
+_ISO3_COUNTRY_NAMES = {
+    "HKG": "Hong Kong", "TWN": "Taiwan", "SGP": "Singapore",
+    "CAN": "Canada", "MEX": "Mexico", "CRI": "Costa Rica", "BRA": "Brazil",
+    "ARG": "Argentina", "COL": "Colombia",
+    "GBR": "United Kingdom", "IRL": "Ireland", "DEU": "Germany", "FRA": "France",
+    "ITA": "Italy", "ESP": "Spain", "POL": "Poland", "CZE": "Czechia", "HUN": "Hungary",
+    "ROU": "Romania", "CHE": "Switzerland", "DNK": "Denmark", "FIN": "Finland",
+    "IND": "India", "THA": "Thailand", "MYS": "Malaysia", "IDN": "Indonesia",
+    "JPN": "Japan", "KOR": "South Korea", "AUS": "Australia", "ZAF": "South Africa",
+}
+_ISO3_ALT = "|".join(sorted(_ISO3_COUNTRY_NAMES))
+_ISO3_GLUED_TAIL_RE = re.compile(r"(?<=[a-z])(" + _ISO3_ALT + r")$")
+_ISO3_WORD_RE = re.compile(r"(?<![A-Za-z0-9])(" + _ISO3_ALT + r")(?![A-Za-z0-9])")
+# 'USAVAReston' / 'USAIllinoisItasca60143'：国别码粘在**开头**、后面紧跟大写的州码或州名。
+_USA_GLUED_HEAD_RE = re.compile(r"^USA(?=[A-Z])")
+
+
+def _normalize_iso3_country(seg: str) -> str:
+    """把 externalPath 地点段里的 alpha-3 国别码展开成国名（CHN 由 _normalize_cn_country 管）。
+    'SingaporeSGP' → 'Singapore, Singapore'；'London, GBR' → 'London, United Kingdom'；
+    'USAVAReston' → 'USA, VAReston'。"""
+    if not seg:
+        return seg
+    seg = _USA_GLUED_HEAD_RE.sub("USA, ", seg)
+    seg = _ISO3_GLUED_TAIL_RE.sub(lambda m: ", " + _ISO3_COUNTRY_NAMES[m.group(1)], seg)
+    seg = _ISO3_WORD_RE.sub(lambda m: _ISO3_COUNTRY_NAMES[m.group(1)], seg)
     return seg.strip()
