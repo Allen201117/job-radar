@@ -134,9 +134,34 @@ function companyKeyOf(opportunity: Opportunity): string {
 // 宁可少给几张卡，也不让一家公司占掉半屏。
 // ⚠️ 这里是 floor 不是 ceil：ceil 在 limit=10 时给出 3+2=5，正好是半屏，等于放行本条规则要拦的事；
 // floor 让单公司恒定 <50%（30 张 → 13、10 张 → 4）。
+//
+// 2026-09-23 创始人拍板：**整页同一家公司最多 10 张**（所有区合计，回填也不许超过 10）。
+// 此前 30 张时主配额 9、回填放宽到 13；每日条数设得更大的用户（主配额 ceil(0.3×limit)）能看到一家占十几张。
+// 关键提醒区（critical）照旧不截断——那是用户自己收藏/投递的岗要关了，吞掉 = 悄悄丢用户的东西；
+// 它占掉的名额计入整页 10 张，后面的区给这家留的就少了。
+export const PAGE_COMPANY_CAP = 10;
+
 function companyCapsFor(basis: number): { perCompanyCap: number; backfillCap: number } {
-  const perCompanyCap = Math.max(2, Math.ceil(basis * 0.3));
-  return { perCompanyCap, backfillCap: perCompanyCap + Math.floor(perCompanyCap / 2) };
+  const perCompanyCap = Math.min(PAGE_COMPANY_CAP, Math.max(2, Math.ceil(basis * 0.3)));
+  return {
+    perCompanyCap,
+    backfillCap: Math.min(PAGE_COMPANY_CAP, perCompanyCap + Math.floor(perCompanyCap / 2)),
+  };
+}
+
+/** 整页已占名额（跨区共享）。critical 先记账，后面每个区取岗时既守本区配额，也守整页 PAGE_COMPANY_CAP。 */
+type PageCompanyCounts = Map<string, number>;
+
+function pageRoomFor(pageCounts: PageCompanyCounts | undefined, company: string): boolean {
+  return !pageCounts || (pageCounts.get(company) ?? 0) < PAGE_COMPANY_CAP;
+}
+
+function countOnPage(pageCounts: PageCompanyCounts | undefined, opportunities: Opportunity[]): void {
+  if (!pageCounts) return;
+  for (const o of opportunities) {
+    const company = companyKeyOf(o);
+    pageCounts.set(company, (pageCounts.get(company) ?? 0) + 1);
+  }
 }
 
 // limit = 本区总条数上限（critical 区不截断，传 Infinity）；capBasis = 算公司配额的基数，默认同 limit。
@@ -144,6 +169,7 @@ function takeWithCompanyDiversity(
   opportunities: Opportunity[],
   limit: number,
   capBasis: number = limit,
+  pageCounts?: PageCompanyCounts,
 ): Opportunity[] {
   const { perCompanyCap, backfillCap } = companyCapsFor(capBasis);
   const companyCounts = new Map<string, number>();
@@ -153,12 +179,14 @@ function takeWithCompanyDiversity(
   for (const opportunity of opportunities) {
     if (picked.length >= limit) break;
     const company = companyKeyOf(opportunity);
+    if (!pageRoomFor(pageCounts, company)) continue;
     const count = companyCounts.get(company) ?? 0;
     if (count >= perCompanyCap) {
       overflow.push(opportunity);
       continue;
     }
     companyCounts.set(company, count + 1);
+    pageCounts?.set(company, (pageCounts.get(company) ?? 0) + 1);
     picked.push(opportunity);
   }
 
@@ -166,9 +194,11 @@ function takeWithCompanyDiversity(
     for (const opportunity of overflow) {
       if (picked.length >= limit) break;
       const company = companyKeyOf(opportunity);
+      if (!pageRoomFor(pageCounts, company)) continue;
       const count = companyCounts.get(company) ?? 0;
       if (count >= backfillCap) continue;
       companyCounts.set(company, count + 1);
+      pageCounts?.set(company, (pageCounts.get(company) ?? 0) + 1);
       picked.push(opportunity);
     }
   }
@@ -218,6 +248,9 @@ export function groupOpportunities(
   const critical = take(
     candidates.filter((o) => o.signals.some((s) => s.isCritical)).sort(byCriticalThenScore)
   );
+  // 整页单公司上限的账本：critical 不截断，但它占的名额算数。
+  const pageCounts: PageCompanyCounts = new Map();
+  countOnPage(pageCounts, critical);
 
   // main：主信号 + 强度门槛，封顶 effectiveLimit；选定后再做相邻散列（同一家别连着刷屏）。
   const main = take(
@@ -228,6 +261,8 @@ export function groupOpportunities(
           .filter((o) => !used.has(o.job.id) && !o.functionOnly && isMainSignal(o) && o.score >= mainThreshold)
           .sort(byScore),
         effectiveLimit,
+        effectiveLimit,
+        pageCounts,
       ),
       { cap: MAIN_SPREAD_CAP, window: MAIN_SPREAD_WINDOW, headOnly: Number.POSITIVE_INFINITY, keyOf: companyKeyOf },
     )
@@ -249,6 +284,8 @@ export function groupOpportunities(
           )
           .sort(byScore),
         EXPLORE_CAP,
+        EXPLORE_CAP,
+        pageCounts,
       )
     );
   }
@@ -262,7 +299,14 @@ export function groupOpportunities(
         return !!p && p.type === "CLOSED_OR_STALE" && !p.isCritical;
       })
       .sort(byScore)
-      .slice(0, WAITING_CAP)
+      .reduce<Opportunity[]>((kept, o) => {
+        // 只给真正放进本区（≤ WAITING_CAP）的岗记账，截掉的不占整页名额。
+        const company = companyKeyOf(o);
+        if (kept.length >= WAITING_CAP || !pageRoomFor(pageCounts, company)) return kept;
+        pageCounts.set(company, (pageCounts.get(company) ?? 0) + 1);
+        kept.push(o);
+        return kept;
+      }, [])
   );
 
   const sections: FeedSections = { critical, main, explore, momentum: [], waiting };

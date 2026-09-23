@@ -479,10 +479,22 @@ test("groupFetchCoverageByIndustry includes cross-industry companies in every re
     ["互联网/科技", "地产/建筑"],
   );
   assert.equal(grouped["互联网/科技"].total, 30);
-  assert.equal(grouped["地产/建筑"].total, 30);
+  // 2026-09-23 必投清单 2026Q3-v2 移出仁恒置地、金螳螂（证据在 must-apply-list.json 的 _removed）→ 28。
+  assert.equal(grouped["地产/建筑"].total, 28);
   assert.deepEqual(grouped["互联网/科技"].companies.map((company) => company.name), ["贝壳", "腾讯"]);
   assert.deepEqual(grouped["地产/建筑"].companies.map((company) => company.name), ["贝壳"]);
   assert.equal(grouped["地产/建筑"].fullyFetched, 1);
+});
+
+test("必投健康阈值按行业实际家数等比例换算（30 家不变，23 家不会永久标红）", () => {
+  assert.deepEqual(H.mustApplyHealthyThresholds(30), { good: 28, warn: 24 });
+  assert.deepEqual(H.mustApplyHealthyThresholds(23), { good: 22, warn: 19 });
+  const verdict = H.evaluateCombinedHealth({
+    validActive: 100, crawlRuns: 1, crawlFailedRuns: 0,
+    mustApplyIndustries: [{ industry: "教育", healthy: 22, total: 23, zeroHealthyCompanies: ["甲"], blindCompanies: [], userCount: 1 }],
+  });
+  // 23 家里 22 家有健康岗 = 等比例达标；只因 1 家零岗降为「关注」，不会被判成「需处理」。
+  assert.ok(!verdict.actions.some((a) => a.includes("目标≥28/30")));
 });
 
 test("groupFetchCoverageByIndustry groups overseas patterns with overseas totals", () => {

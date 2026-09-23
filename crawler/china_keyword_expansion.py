@@ -248,7 +248,7 @@ KEYWORD_GROUP_FUNCTIONS = [
 # 非软件工程降级门专用：词表刻意宽于生产制造，只负责阻止传统工程/医疗靠泛工程师进入软件研发。
 # 基底来自 HEAD 原词表，合并本轮新增制造词；结构/管道/技术文档无上下文可留「其他」，但绝不能判研发。
 _NON_SOFTWARE_ENG_DOMAIN = re.compile(
-    r"机械|机电|机加|钣金|工艺|化工|化学|材料|冶金|铸造|锻造|焊接|焊工|模具|注塑|液压|气动|数控|机床|刀具|工装|夹具|"
+    r"机械|机电|机加|钣金|工艺|化工|化学(?!习)|材料|冶金|铸造|锻造|焊接|焊工|模具|注塑|液压|气动|数控|机床|刀具|工装|夹具|"
     r"热处理|土木|结构工程|岩土|暖通|给排水|管道|强电|工业工程|生产工艺|制造工艺|工艺技术|纺织|印染|涂装|总装|冲压|车身|"
     r"底盘|发动机|动力总成|整车|工业自动化|机械自动化|热设计|散热|结构设计|精密仪器|仪器仪表|光学|镜头|声学|射频|天线|电源|"
     r"电池|电芯|储能|逆变|试剂|生物|医疗器械|临床|药物|制药|检测认证|可靠性|环境试验|工业设计|包装设计|技术文档|标准化|"
@@ -262,7 +262,7 @@ _NON_SOFTWARE_ENG_DOMAIN = re.compile(
 _MANUFACTURING_DOMAIN = re.compile(
     r"生产|制造|车间|产线|装配|组装|操作工|技工|班组长|工段|钳工|电工|焊工|铣工|车工|设备维护|设备维修|保养|"
     r"production|manufactur\w*|assembler|operator|machinist|technician|maintenance|fabrication|welding|tooling|机械|机电|机加|钣金|工艺|"
-    r"化工|化学|材料|冶金|铸造|锻造|焊接|模具|注塑|液压|气动|数控|机床|刀具|工装|夹具|热处理|纺织|印染|涂装|总装|"
+    r"化工|化学(?!习)|材料|冶金|铸造|锻造|焊接|模具|注塑|液压|气动|数控|机床|刀具|工装|夹具|热处理|纺织|印染|涂装|总装|"
     r"冲压|车身|底盘|发动机|动力总成|整车|电气|自动化|强电|仪器仪表|热设计|散热|射频|天线|电源|电池|电芯|储能|逆变|"
     r"光学|镜头|声学|精密仪器|工业工程|生产工艺|制造工艺|工艺技术|工业自动化|机械自动化|包装设计|标准化|检测认证|环境试验|"
     r"transmission|mechanic|质量|品控|(?<![产样用物])品管|(?<!性)质检|检验员|可靠性|质量体系|管理体系|体系工程师|体系专员|体系认证|认证|(?<!性质)检测|ehs|"
@@ -275,7 +275,7 @@ _JOB_FUNCTION_RULES = [
     ("产品", re.compile(r"产品经理|产品策划|产品负责人|产品总监|产品专家|产品实习生|产品助理|产品专员|产品企划|product\s*manager|product\s*owner|product\s*lead|(?:director|head|vp|vice\s*president)[,\s]+(?:of\s+)?product", re.I)),
     # PM/PO 在英文标题里还会表示上午下午、预防性保养等，故意不收裸 \bpm\b；也不收「工程项目」等泛词。
     ("项目管理", re.compile(r"项目经理|项目管理|项目主管|项目总监|项目负责人|交付经理|交付总监|\bpmo\b|project\s*manager|program\s*manager|delivery\s*manager|technical\s*program\s*manager|\btpm\b", re.I)),
-    ("设计", re.compile(r"视觉设计|交互设计|ui\s*设计|ux|平面设计|设计师|designer", re.I)),
+    ("设计", re.compile(r"视觉设计|交互设计|ui\s*设计|(?<![a-z0-9_])ux|(?:ui|3d)\s*[/&+]?\s*ux|平面设计|设计师|designer", re.I)),
     ("数据", re.compile(r"数据分析|数据科学|数据工程|大数据|数据挖掘|data\s*(analyst|scien|engineer)|\bbi\b|商业分析", re.I)),
     # 英文裸 architect 在香港库实测 1915 个且压倒性是 IT 架构师；少数 Construction Project Architect 的漏判可接受。
     ("研发", re.compile(r"算法|前端|后端|客户端|测试|运维|架构|嵌入式|硬件|\barchitect\b|\bsde\b|\bsre\b|programmer|software|软件", re.I)),
@@ -287,7 +287,7 @@ _JOB_FUNCTION_RULES = [
     ("研发", re.compile(r"工程师|研发|开发|技术|engineer|developer", re.I), True),
     # 大模型训练 / 推理基础设施条线（与 JS 同口径，2026-09-23）：标题里常是团队后缀（「AI产品经理-Dev Infra」），
     # 所以同样只进泛词那一轮。边界用 ASCII 显式环视：Python 的 \b 把汉字当单词字符，「AI Infra实习生」会漏。
-    ("研发", re.compile(r"post[\s-]?training|pre[\s-]?training|后训练|预训练|(?<![a-z0-9_])rlhf(?![a-z0-9_])|训练框架|训练引擎|推理框架|推理引擎|推理加速|推理优化|(?<![a-z0-9_])infra(?![a-z0-9_])", re.I), True),
+    ("研发", re.compile(r"post[\s-]?training|pre[\s-]?training|后训练|预训练|强化学习|(?<![a-z0-9_])rlhf(?![a-z0-9_])|训练框架|训练引擎|推理框架|推理引擎|推理加速|推理优化|(?<![a-z0-9_])infra(?![a-z0-9_])", re.I), True),
     ("运营", re.compile(r"用户运营|内容运营|运营|增长|operations|growth", re.I)),
     ("市场", re.compile(r"市场|营销|品牌|公关|marketing|brand|\bpr\b", re.I)),
     ("医疗健康", re.compile(r"医生|医师|护士|护理岗|临床护理|护理部|护理师|药师|药剂|临床数据|临床|\bcra\b|\bcrc\b|\bcta\b|医学|医药|药物|制药|药品|药理|检验科|放射|影像|超声|口腔|中医|兽医|营养师|康复|理疗|\bmsl\b|医学事务|医疗器械|试剂|生物制药|生物医药|medical|clinical|nurse|pharmac\w*|physician|therapist|biolog\w*|pathology", re.I)),
@@ -411,6 +411,19 @@ _RECRUIT_EVENT_LABEL = re.compile(
 )
 
 
+# 正文里的招聘元信息（与 JS BODY_RECRUIT_META 同口径）：字段标签、招聘活动、公告引用说的是「这次招聘」，
+# 不是「这个岗位做招聘」。只剥正文；「制定招聘计划 / 拓展招聘渠道」这类真 HR 职责不带这些标签。
+_BODY_RECRUIT_META = re.compile(
+    r"招聘\s*(?:单位|项目|对象|类别|类型|人数|批次|方式|届别|地点|时间|范围)\s*[】\]]?\s*[:：]|招聘(?:公告|简章)"
+)
+
+
+def _strip_body_recruit_meta(summary):
+    if not summary:
+        return summary
+    return _RECRUIT_EVENT_LABEL.sub(" ", _BODY_RECRUIT_META.sub(" ", str(summary)))
+
+
 def _title_function_without_recruit_event(title=""):
     """剥掉招聘活动标签后重判：None 表示标题里没有可剥的活动标签。"""
     raw = normalize_for_match(title)
@@ -453,7 +466,7 @@ def classify_job_function(title="", job_type="", summary="") -> str:
             return stripped_fn
         # 剥完什么都不剩（纯招聘活动标签）才落到下方看正文。
     full = _classify_function_text(
-        normalize_for_match(" ".join(str(x) for x in (title, summary) if x))
+        normalize_for_match(" ".join(str(x) for x in (title, _strip_body_recruit_meta(summary)) if x))
     )
     if full in _BODY_FALLBACK_BLOCKED:
         return title_fn

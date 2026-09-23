@@ -1116,8 +1116,22 @@ function formatRateForAction(value: number | null): string {
   return value == null ? "暂无数据" : `${(value * 100).toFixed(1)}%`;
 }
 
-function mustApplyBand(healthyCompanies: number | null, zeroHealthyCount: number): HealthBand {
-  let result = band(healthyCompanies, HEALTH_THRESHOLDS.mustApplyHealthyCompanies, "higher");
+/**
+ * 必投健康覆盖的「好 / 关注」线按该行业**实际家数**等比例换算。
+ * HEALTH_THRESHOLDS 里的 28 / 24 是按「每行业 30 家」定的；2026-09-23 清单移出 17 家后
+ * 有的行业只剩 23 家，绝对值 24 永远够不着 → 该行业会被永久标红、永远被选成最差行业。
+ * 30 家时换算结果仍是 28 / 24，行为不变。
+ */
+export function mustApplyHealthyThresholds(total: number): { good: number; warn: number } {
+  const t = Number.isFinite(total) && total > 0 ? total : 30;
+  return {
+    good: Math.ceil((t * HEALTH_THRESHOLDS.mustApplyHealthyCompanies.good) / 30),
+    warn: Math.ceil((t * HEALTH_THRESHOLDS.mustApplyHealthyCompanies.warn) / 30),
+  };
+}
+
+function mustApplyBand(healthyCompanies: number | null, zeroHealthyCount: number, total = 30): HealthBand {
+  let result = band(healthyCompanies, mustApplyHealthyThresholds(total), "higher");
   if (zeroHealthyCount >= HEALTH_THRESHOLDS.mustApplyZeroHealthyCompanies.bad) return "bad";
   if (zeroHealthyCount >= HEALTH_THRESHOLDS.mustApplyZeroHealthyCompanies.warn && result === "good") return "warn";
   return result;
@@ -1161,12 +1175,12 @@ export function evaluateCombinedHealth(input: {
     : toNumber(input.mustApplyZeroHealthyCompanies);
   let blindCompanies = input.mustApplyBlindCompanies || [];
   let worstIndustry: NonNullable<typeof input.mustApplyIndustries>[number] | undefined;
-  let mustApply = mustApplyBand(healthyCompanies, zeroCount);
+  let mustApply = mustApplyBand(healthyCompanies, zeroCount, mustApplyTotal);
   if (input.mustApplyIndustries) {
     const rank: Record<HealthBand, number> = { empty: 0, good: 1, warn: 2, bad: 3 };
     for (const industry of input.mustApplyIndustries) {
-      const industryBand = mustApplyBand(industry.healthy, industry.zeroHealthyCompanies.length);
-      if (!worstIndustry || rank[industryBand] > rank[mustApplyBand(worstIndustry.healthy, worstIndustry.zeroHealthyCompanies.length)]) {
+      const industryBand = mustApplyBand(industry.healthy, industry.zeroHealthyCompanies.length, industry.total);
+      if (!worstIndustry || rank[industryBand] > rank[mustApplyBand(worstIndustry.healthy, worstIndustry.zeroHealthyCompanies.length, worstIndustry.total)]) {
         worstIndustry = industry;
         mustApply = industryBand;
       }
@@ -1187,7 +1201,7 @@ export function evaluateCombinedHealth(input: {
   if (worstIndustry && mustApply !== "good" && healthyCompanies !== null) {
     const scopePrefix = worstIndustry.scope === "overseas" ? "海外·" : "";
     actions.push(
-      `${scopePrefix}${worstIndustry.industry}行业必投覆盖 ${healthyCompanies}/${mustApplyTotal}（目标≥${HEALTH_THRESHOLDS.mustApplyHealthyCompanies.good}/30）`,
+      `${scopePrefix}${worstIndustry.industry}行业必投覆盖 ${healthyCompanies}/${mustApplyTotal}（目标≥${mustApplyHealthyThresholds(mustApplyTotal).good}/${mustApplyTotal}）`,
     );
   }
   if (zeroCount > 0) {
@@ -1211,7 +1225,7 @@ export function evaluateCombinedHealth(input: {
     actions.push("今天还没有抓取记录，可能是每天的定时抓取还没到点。");
   }
   if (!worstIndustry && mustApply === "warn" && zeroCount === 0 && healthyCompanies !== null) {
-    actions.push(`必投清单健康覆盖 ${healthyCompanies}/${mustApplyTotal}（目标≥28/30）`);
+    actions.push(`必投清单健康覆盖 ${healthyCompanies}/${mustApplyTotal}（目标≥${mustApplyHealthyThresholds(mustApplyTotal).good}/${mustApplyTotal}）`);
   }
   if (blindCompanies.length > 0) {
     actions.push(`${capList(blindCompanies)}：有岗但 72h 未核验`);

@@ -1,6 +1,6 @@
 // 公告制招聘（/programs）入口的取数层。表极小（2026-09-07 实测 18 行、15 行 enabled，
 // 长期也就几十行），跨实例缓存 10 分钟。
-import { unstable_cache } from "next/cache";
+import { requestSafeCache } from "@/lib/request-safe-cache";
 import { createServiceClient } from "./supabaseService";
 import { needsDeeperAnnouncementLink, toApplyPrograms, type ApplyProgram } from "./apply-programs";
 
@@ -9,7 +9,7 @@ const TTL_SECONDS = 600;
 
 // ⚠️ 缓存函数体内不得读 cookies()/headers()（unstable_cache 限制）；
 // 这份数据不含任何用户私有信息，所以能安全地跨请求共享。
-const getCached = unstable_cache(
+const getCached = requestSafeCache(
   async (_bucket: number): Promise<ApplyProgram[]> => {
     const supabase = createServiceClient();
     const { data, error } = await supabase

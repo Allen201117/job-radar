@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const { loadTs } = require("./_load-ts");
 
@@ -22,12 +23,23 @@ test("ilikeMatcher matches SQL ILIKE wildcards without changing literal matching
 
 test("must-apply JSON follows the canonical industry taxonomy and preserves the north-star list", () => {
   const industries = Object.keys(json).filter((key) => !key.startsWith("_"));
-  assert.equal(json._version, "2026Q3-v1");
+  assert.equal(json._version, "2026Q3-v2");
   assert.deepEqual(industries, INDUSTRY_CATEGORIES);
+  // 每个行业的必投目标是 30 家；移出口径的必须在 `_removed` 里留记录（原因 / 证据 / 核实日期），
+  // 同一家公司重复占名额的，并入另一行时在 `_merged` 里留记录。
+  // 所以「现有家数 + 该行业移出 / 并入家数 = 30」。移出了却不留记录，这里就红（2026-09-23 移出 17 家、并入 1 家时立）。
+  const removedByIndustry = {};
+  for (const bucket of [json._removed || {}, json._merged || {}]) {
+    for (const [name, record] of Object.entries(bucket)) {
+      if (name.startsWith("_")) continue;
+      removedByIndustry[record.industry] = (removedByIndustry[record.industry] || 0) + 1;
+    }
+  }
   for (const [industry, companies] of Object.entries(json).filter(([key]) => !key.startsWith("_"))) {
-    assert.equal(companies.length, 30, `${industry} must have 30 companies`);
-    assert.equal(new Set(companies.map((company) => company.name)).size, 30, `${industry} names must be unique`);
-    assert.equal(new Set(companies.map((company) => company.pattern)).size, 30, `${industry} patterns must be unique`);
+    const expected = 30 - (removedByIndustry[industry] || 0);
+    assert.equal(companies.length, expected, `${industry}: ${companies.length} 家 + 移出/并入 ${removedByIndustry[industry] || 0} 家应为 30`);
+    assert.equal(new Set(companies.map((company) => company.name)).size, expected, `${industry} names must be unique`);
+    assert.equal(new Set(companies.map((company) => company.pattern)).size, expected, `${industry} patterns must be unique`);
     for (const company of companies) {
       assert.equal(typeof company.name, "string");
       assert.ok(company.name.trim());
@@ -51,7 +63,7 @@ test("overseas must-apply JSON follows the domestic industry taxonomy and keeps 
 
 test("must-apply TypeScript API unions patterns, finds all industries, and resolves user industries", () => {
   assert.deepEqual(M.MUST_APPLY_INDUSTRIES, Object.keys(json).filter((key) => !key.startsWith("_")));
-  assert.equal(M.MUST_APPLY_VERSION, "2026Q3-v1");
+  assert.equal(M.MUST_APPLY_VERSION, "2026Q3-v2");
   assert.deepEqual(M.MUST_APPLY_LIST, json["互联网/科技"]);
   const union = M.mustApplyUnion();
   assert.equal(new Set(union.map((company) => company.pattern)).size, union.length);
@@ -166,6 +178,58 @@ test("mustApplyPatterns = pattern + 别名，无别名时行为不变", () => {
   assert.deepEqual(M.mustApplyPatterns({ pattern: "%壳牌%", aliases: ["%Shell%"] }), ["%壳牌%", "%Shell%"]);
   // 空白/重复项不该污染匹配集
   assert.deepEqual(M.mustApplyPatterns({ pattern: "%甲%", aliases: [" ", "%甲%", "%A%"] }), ["%甲%", "%A%"]);
+});
+
+// 2026-09-23：移出口径的公司不许「删得无影无踪」——每条都要能说清为什么移、凭什么、以后怎么捞回。
+test("_removed 记录齐全，且被移出的公司不再出现在任何行业里", () => {
+  const removed = Object.entries(json._removed || {}).filter(([name]) => !name.startsWith("_"));
+  assert.equal(removed.length, 17);
+  const active = Object.entries(json).filter(([k]) => !k.startsWith("_")).flatMap(([, v]) => v);
+  const activeNames = new Set(active.map((c) => c.name));
+  const activePatterns = new Set(active.map((c) => c.pattern));
+  for (const [name, r] of removed) {
+    for (const field of ["industry", "pattern", "reason", "evidence", "how_to_restore", "verified_at", "decision"]) {
+      assert.ok(typeof r[field] === "string" && r[field].trim(), `${name}.${field} 不能为空`);
+    }
+    assert.ok(INDUSTRY_CATEGORIES.includes(r.industry), `${name}: 行业 ${r.industry} 不存在`);
+    assert.match(r.verified_at, /^\d{4}-\d{2}-\d{2}$/);
+    assert.ok(!activeNames.has(name), `${name} 已移出却仍在清单里`);
+    assert.ok(!activePatterns.has(r.pattern), `${name} 的 pattern 仍在清单里`);
+  }
+});
+
+test("_merged：万达电影并进儒意影业（同一家公司改名后在清单里占了两个名额，不是删掉一家）", () => {
+  const merged = json._merged["万达电影"];
+  const media = json["传媒/文娱"];
+  assert.ok(!media.some((c) => c.name === "万达电影"));
+  const target = media.find((c) => c.name === merged.merged_into);
+  assert.ok(target, "并入的那一家必须还在原行业里");
+  assert.equal(target.pattern, "%儒意%");
+  assert.equal(target.aliases, undefined, "库里没有叫「万达电影」的岗/源，不加别名（别名须逐条有据）");
+  for (const field of ["industry", "pattern", "evidence", "verified_at", "decision"]) {
+    assert.ok(typeof merged[field] === "string" && merged[field].trim(), `万达电影.${field} 不能为空`);
+  }
+});
+
+test("元数据键不会漏进读取方：TS 与 Python 两侧都只读行业数组", () => {
+  assert.deepEqual(M.MUST_APPLY_INDUSTRIES, INDUSTRY_CATEGORIES);
+  assert.equal(M.MUST_APPLY_VERSION, "2026Q3-v2");
+  const names = M.mustApplyUnion().map((c) => c.name);
+  assert.ok(!names.includes("思考乐") && !names.includes("万达电影") && names.includes("儒意影业"));
+  const py = execFileSync("python3", ["-c", [
+    "import json, sys",
+    `sys.path.insert(0, ${JSON.stringify(path.join(__dirname, "..", "crawler"))})`,
+    "import must_apply",
+    "names = must_apply.all_names()",
+    "print(json.dumps({'version': must_apply.version(), 'n': len(must_apply.patterns()),",
+    "  'industries': list(must_apply.by_industry().keys()), 'si': '思考乐' in names, 'wanda': '万达电影' in names}, ensure_ascii=False))",
+  ].join("\n")], { encoding: "utf8" });
+  const got = JSON.parse(py);
+  assert.equal(got.version, "2026Q3-v2");
+  assert.deepEqual(got.industries, INDUSTRY_CATEGORIES);
+  assert.equal(got.n, new Set(M.mustApplyUnion().flatMap((c) => M.mustApplyPatterns(c))).size);
+  assert.equal(got.si, false);
+  assert.equal(got.wanda, false);
 });
 
 // 别名是**口径**：加一条就等于改北极星与缺口台账的判定，必须逐条有据（库里真有这个名字）。
