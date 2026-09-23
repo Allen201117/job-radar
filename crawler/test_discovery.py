@@ -399,6 +399,77 @@ class DiscoveryMaxPagesWiringTest(unittest.TestCase):
 
         self.assertEqual(captured, [discovery.DEFAULT_DISCOVERY_MAX_PAGES])  # 回退默认 4
 
+    def test_run_gives_adapter_the_source_regions(self):
+        # 与 run.py 同口径：adapter 的后置地区过滤读 self.regions，不设就退回类默认 {CN}。
+        seen = []
+
+        class _RegionAdapter:
+            def fetch(self, url):
+                seen.append(getattr(self, "regions", None))
+                return "{}"
+
+            def parse(self, html):
+                return []
+
+        recipe = discovery.SpaKeywordRecipe()
+        recipe.DISCOVERY_ADAPTERS = {"greenhouse": _RegionAdapter}
+        orig_get_sources = discovery.db.get_sources
+        discovery.db.get_sources = lambda supabase: [
+            {"adapter_name": "greenhouse", "id": "1", "company": "X",
+             "source_url": "https://example.com/api", "regions": ["CN", "US"]}
+        ]
+        try:
+            recipe.run(supabase=object(), params={"query": "算法", "city": ""})
+        finally:
+            discovery.db.get_sources = orig_get_sources
+
+        self.assertEqual(seen, [{"CN", "US"}])
+
+
+class UpsertRawJobsNormalizeParityTest(unittest.TestCase):
+    """_upsert_raw_jobs 曾自己拼 job dict，漏了 country_code / job_scope：jobs_db._row_tuple 把缺的列补成
+    None，显式 NULL 撞 jobs.job_scope NOT NULL（2026-09-23 香港库回滚事务实测 INSERT、UPDATE 两条路径
+    都报 23502）。现在它产出的 dict 必须逐字等于 normalizer.normalize，两条写库链不许再各算各的。"""
+
+    def _capture(self, raws, **kwargs):
+        from unittest import mock
+
+        captured = []
+        with mock.patch.object(discovery.jobs_db, "enabled", return_value=True), \
+                mock.patch.object(discovery.jobs_db, "upsert_job",
+                                  side_effect=lambda conn, job: captured.append(job) or "created"), \
+                mock.patch.object(discovery, "_jobs_conn", return_value=None):
+            discovery._upsert_raw_jobs(None, "src-1", "A", "https://example.com/jobs", raws, **kwargs)
+        return captured
+
+    def test_country_and_scope_are_always_written(self):
+        [job] = self._capture([_job(location="上海")])
+        self.assertEqual(job.get("country_code"), "CN")
+        self.assertEqual(job.get("job_scope"), "domestic")
+
+    def test_country_less_location_follows_source_regions(self):
+        # 裸 Remote 判不出国家 → 按源 regions 兜底。两个方向各钉一条：纯海外源 overseas、默认 CN 源 domestic。
+        remote = _job(title="Software Engineer", location="Remote",
+                      jd_url="https://example.com/jobs/position/1/detail")
+        [us_job] = self._capture([remote], regions=["US"])
+        [cn_job] = self._capture([remote])
+        self.assertEqual(us_job["job_scope"], "overseas")
+        self.assertEqual(cn_job["job_scope"], "domestic")
+
+    def test_job_dict_equals_normalize(self):
+        from normalizer import normalize
+
+        raws = [
+            _job(location="上海"),
+            _job(title="福州-项目管理岗（实习生）", location=None,
+                 jd_url="https://example.com/jobs/position/9/detail"),
+            _job(title="Software Engineer", location="Remote", summary="Build systems. Class of 2027.",
+                 jd_url="https://example.com/jobs/position/1/detail"),
+        ]
+        captured = self._capture(raws, regions="{CN,US}")
+        expected = [normalize(r, source_id="src-1", company="A", regions="{CN,US}") for r in raws]
+        self.assertEqual(captured, expected)
+
 
 class UpsertRawJobsLocationTest(unittest.TestCase):
     """按需发现/刷新那条写库链（_upsert_raw_jobs）是 run.py 入库逻辑的镜像，标题认城市必须同口径，

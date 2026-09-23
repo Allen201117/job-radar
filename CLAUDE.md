@@ -312,6 +312,17 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
 - /today main 区加相邻散列（`spreadByCompany` 复用 /jobs 的滑窗，任意 6 张同一家 ≤2）：公司配额只限总数不限相邻，
   线上前 8 张全是字节跳动。⚠️ `spreadByCompany` 默认读顶层 `company`，Opportunity 的公司在 `job.company` 下，
   必须传 `keyOf`，否则所有项同一个空键、散列等于没做（tests/opportunity-grouping 钉着）。
+- **目标城市填省 → 按全省地级市解析，召回城市门与 stage-2 资格门读同一份展开（2026-09-23）**：
+  ❌ 填「陕西」「广东」的用户只看得到 location 字面写着省名的岗：广东画像看不到深圳 / 广州 / 佛山（全库在招 +36,623 个），
+  陕西画像前 20 张全是 location 为空的岗。✅ 根因：`locationState` 与城市门都是「目标原词 + normalizeChinaCity」子串；
+  `expandChinaCityTargets` 只有 /jobs 在用、一省只展开 1–2 个省会。✅ 防：`lib/opportunities/location-targets.ts`（两端共用）+
+  `lib/geo.locationProvinces`（映射 `lib/cn-province-prefectures.json`，crawler/geo.py 同口径，共享夹具
+  `tests/fixtures/cn-location-provinces.json`）；「杭州 深圳 无锡 宁波」这种一格多值在 `buildRadarProfile` 读侧也拆（同 `normalizeCityPhrases`）。
+  🚫 别退回「含该省任一地级名」的裸子串：8,107 种在招写法逐条对拍，它会把「大连市-中山区」判广东、「安徽省·马鞍山市」判辽宁、
+  「天津-河北区」判河北、「乌海市·海南区」判海南（后两条旧口径就中，一并纠正）。
+  📊 8 个受影响画像交替两轮：展示岗落在目标外 0→0，召回里被误拒的省内岗 273→0；其余 60 个画像召回 SQL 逐字节相同。
+  代价：多省画像库内 warm 120~230→540~640ms，仍在「北京上海杭州」这类城市画像（540~1,090ms）范围内。
+  ⚠️ 没覆盖：县级市（昆山 / 义乌）与拼音地点；/jobs 城市筛选仍是一省 1–2 城，两页口径暂不一致。
 
 ## 数据库迁移（已自动化，勿再手动跑 Supabase）
 
@@ -542,6 +553,7 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 - ⚠️ **顺序必须是「先推代码、再回填」**：`country_code`/`job_scope` 在 `_UPDATE_COLS` 里、不在 `_PRESERVE_IF_EMPTY` 里，列表重抓会用**当时 CI 上那版代码**覆盖——2026-09-05 回填完 3 分钟 `campus-crawl` 起来，用旧代码把 11,613 行刷回 NULL。
 - ⚠️ **两字母码在「开头」和「结尾」是两回事，别把结尾那张表复制过去**（2026-09-06 加）：Workday 系还有一种把码写最前面的格式（`MY, JOHOR, VIRTUAL` / `SE, Solna`），但**这个位置上美国州缩写比国别码更常见** —— live 全库「开头两字母 + 逗号」7,403 行里 `GA, Atlanta…`117 / `NY, BROADWAY…`116 / `CA, Burbank…`50 全是「州, 城市, 门牌」。所以规则是**撞美国州缩写的一律弃权**（MO 是密苏里不是澳门、IN 是印第安纳不是印度），只有 CA/IN 在串里另有该国省/邦硬证据时才认；且整条规则排在 `derive_country_code` **最后一步**（`SE, Bothell, Washington, United, States` 是波音厂区代号，早在第一步就判了 US）。实测影响面 120 行：国内→境外 69、境外→国内 0、只补 country_code 51。取舍与实证反例（GM=通用汽车厂区前缀不是冈比亚、NA=北美占位不是纳米比亚）写在 `crawler/geo.py` 的 `ISO_ALPHA2_CODES` 那段注释里。
 - 🚫 **国家 / 范围必须按「别名折叠之前」的原文判（2026-09-23 立）**：❌ workday 在招岗 6,526 行 `country_code` 为空却判 domestic，其中 4,383 行存的是「远程」，路径原文是 `United-States---Remote` / `Remote-Mexico` / `UK-Remote`；greenhouse / smartrecruiters / ashby 同病（live 重抓 77 源 2,899 个）。✅ 根因：`normalize()` 先 `clean_location` 再判国家，而 `normalize_city` 是**子串**折叠——串里有 remote 就整串换成「远程」，国家当场丢光（smartrecruiters 出口特意展开的 `Remote Germany` 也被它抹掉）。✅ 防：`normalizer.geo_basis`，别名后判不出国家就用原文判；CITY_ALIASES 的目标值里只有「远程」判不出国家，所以只动被折叠的行，`test_only_remote_alias_target_lacks_country` 钉着这个前提。workday 另在 `_loc_from_path` 展开 ISO3 国别码（白名单；PHL=费城、NOR=站点编号是实测撞车码）、还原 `United-Kingdom` 这类多词国名的连字符。
+  📌 **续（同日）：地点压根没写国家的（'Durham' / 'Remote' / 'One Island East'）改问对方 ATS，不按 regions 猜**：❌ 上面修完仍剩 1,715 行按 regions 兜底判 domestic。✅ 防：`RawJob.country_code` = ATS 结构化字段**自报**的国家，`normalize` 只在 `scope_depends_on_regions`（CN 源与纯海外源答案不同）时采信，地点能说清一律以地点为准；workday 取 detail 的 `jobRequisitionLocation.country.alpha2Code`（`jobPostingInfo.country` 会错：赛默飞 Remote, Georgia 写成格鲁吉亚），任一地点沾大中华即判大中华。⚠️ **防来回跳**：国家查询不受 `CRAWL_DETAIL_CAP` 管（快档 / 重档同答案）；detail 4xx 是确定答复、照走兜底；超时 / 5xx 重试仍失败 → 该岗本轮不写库、`fetch_complete=False`。回归钉在 `crawler/test_declared_country.py`。live：新代码爬过的 45,692 行与预测逐行一致，国内→境外 708（+ 回填爬虫够不着的 60）、反向 0；DBS 快档 46s→307s（~300 次查询）。剩下 603 行里 540 行 detail 已 403/422（不对外），是探活问题不是 geo 问题。
 - 🚫 **location 为空 ≠ 城市未知：标题里的城市在写库时物化进 location（2026-09-23 立）**：❌ 康龙化成「有机合成研究员-西安」、万物云「福州-项目管理岗（实习生）」location 为空，/today 城市门认「location 为空」放行、stage-2 判「城市未知」只降级 → 外地岗推给所有城市的用户（真实用户目标上海/杭州，7 张卡全在外地）。✅ 防：`geo.title_city_location` / `titleCityLocation`（两端共读 `tests/fixtures/title-city-cases.json`），经 `normalizer.location_or_title_city`（run.py + discovery 两条链）与 `lib/jobs-store/write.ts` 写库；**只在 adapter 给空时填、绝不覆盖**，带省 / 全国 / 海外段、公司名括号注册地一律不填。有地点的 34,990 行对照 98.0% 一致；存量已回填 3,372 行。⚠️ `normalize()` 里标题兜底必须排在 `geo_basis` **之前**（合并时栽过：排反了 location='西安' 而 country_code=NULL，`test_empty_location_falls_back_to_title_city` 钉着）。
 - 📌 验收方法：拉全库 `distinct location`（约 2 万个写法）**逐条对拍改前 / 改后**，「大中华 → 境外」这个方向**必须为 0**。⚠️ 库里的 `location` 是**别名折叠之后**的文本，拿它、或拿 adapter `parse` 的出口量，都会和真实写库结果差一层——量地点类改动要把原始地点**完整过一遍 `normalize()`**（workday 能从 jd_url 路径复原原文，其它源只能 live 重抓）。逐条选词理由与实测数字 → `docs/module-deep-notes.md`。
 
