@@ -36,6 +36,7 @@
     {"name": "联想", "pattern": "%联想%"},
     {"name": "海康威视", "pattern": "%海康威视%"},
     {"name": "大华", "pattern": "%浙江大华%"},
+    {"name": "大华", "pattern": "%大华股份%"},
     {"name": "中兴", "pattern": "%中兴通讯%"},
     {"name": "传音", "pattern": "%传音%"},
     {"name": "京东方", "pattern": "%京东方%"},
