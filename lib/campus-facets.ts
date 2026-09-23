@@ -8,7 +8,8 @@
 //
 // 构建（服务端 buildCampusFacets）与匹配（客户端 countMatchingFacets）刻意放在同一文件：
 // 下标口径一旦两边漂了，卡面计数就会错，而这种错不会报错、只会静静地骗用户。
-import { classifyJobFunction, cityMatchTokens } from "@/lib/china-keyword-expansion";
+import { classifyJobFunction } from "@/lib/china-keyword-expansion";
+import { cityFilterHasTargets, locationMatchesCityFilter } from "@/lib/job-filter";
 
 /** 一条分面：`[城市下标, 学历下标, 职能下标, 届别, 岗位数]`。
  *  前三个下标指向 CampusFilterOptions 里对应的选项数组；`-1` = 该维度为空（只被「全部」匹配到）。 */
@@ -291,8 +292,8 @@ export type CampusFitSelection = {
  *
  * 职能：与服务端算分面用的是同一份 classifyJobFunction 词表，所以直接按字符串相等取下标。
  * 城市：**不能**按字符串相等——库里的 location 写法五花八门（"北京-海淀区" / "Beijing" / "上海市"），
- * 改用 cityMatchTokens 拿该城市的全部别名（中文/英文/拼音，见 lib/china-keyword-expansion），
- * 与 lib/job-filter.jobFilterMatch 的城市判定同口径（hay.includes(token)）。
+ * 直接用 lib/job-filter.jobFilterMatch 的同一个城市判定（locationMatchesCityFilter）：城市走全别名子串，
+ * 省目标（「广东」）按全省地级市解析——此前只认广州/深圳，填省的用户看不到佛山/东莞的岗算进「对你有货」。
  */
 export function selectFitIndexes(
   targetFunctions: string[],
@@ -305,15 +306,15 @@ export function selectFitIndexes(
     if (fnSet.has(opt)) fns.push(i);
   });
 
-  const tokens = targetCities.flatMap((c) => cityMatchTokens(c)).filter(Boolean);
+  const cityTargets = targetCities.filter(Boolean);
+  const cityRequested = cityFilterHasTargets(cityTargets);
   const cities: number[] = [];
-  if (tokens.length) {
+  if (cityRequested) {
     options.cityOptions.forEach((opt, i) => {
-      const hay = opt.toLowerCase().replace(/\s+/g, " ");
-      if (tokens.some((t) => hay.includes(t))) cities.push(i);
+      if (locationMatchesCityFilter(opt, cityTargets)) cities.push(i);
     });
   }
-  return { fnRequested: fnSet.size > 0, fns, cityRequested: tokens.length > 0, cities };
+  return { fnRequested: fnSet.size > 0, fns, cityRequested, cities };
 }
 
 /** 这条分面代表的岗，用户投得上吗。 */

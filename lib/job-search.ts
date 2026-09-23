@@ -9,6 +9,8 @@
 // 历史踩坑：全库塞前端=卡死；全库塞服务端=45s 超时；count(exact)/ilike 全表扫撞 statement_timeout。
 import { sortAndFilterJobs } from "@/lib/scoring";
 import {
+  cityFtsTerms,
+  citySqlLikeTokens,
   filterAndRankJobs,
   jobFilterTier,
   splitMultiValue,
@@ -19,7 +21,7 @@ import {
 import type { JobAction, ScoredJob, UserPreferences } from "@/lib/types";
 import { effectiveJobScope, jobMatchesScope } from "@/lib/job-scope";
 // china-keyword-expansion 为 CommonJS，沿用 hooks 的 import 习惯。
-import { cityMatchTokens, ftsCandidateTerms } from "@/lib/china-keyword-expansion";
+import { ftsCandidateTerms } from "@/lib/china-keyword-expansion";
 
 const DB_PAGE = 1000;
 // 扫描路径：逐批增大的并行扫描页数（累计 4/12/28 页）。
@@ -126,7 +128,7 @@ export function annotateAndRank(
 }
 
 function softCityOrFilter(cities: string[]): string | null {
-  const tokens = cities.flatMap((c) => cityMatchTokens(c));
+  const tokens = citySqlLikeTokens(cities);
   if (!tokens.length) return null;
 
   // 与 JS matcher 保持超集：空 location 放行降级；多城市所有别名/拼音通过 ilike 进候选（OR）。
@@ -275,9 +277,9 @@ export async function searchJobs(
   );
   // 城市必须留在 tsquery（全表 GIN 命中，保住城市浏览完整覆盖——location 无 trigram 索引，移出会让
   // 无关键词的城市搜索退化到 scan 仅覆盖最新 28k）；多城市为一个 OR 组（(北京 | 上海)），与关键词/公司 AND。
-  // 空 location / 别名的软放行由 softCityOrFilter 精修。
+  // 空 location / 别名的软放行由 softCityOrFilter 精修。OR 组放展开后的词（省→省内地名，见 cityFtsTerms）。
   const andTerms = company ? [company] : [];
-  const orGroups = cities.length ? [cities] : [];
+  const orGroups = cities.length ? [cityFtsTerms(cities)] : [];
   const tsquery = buildTsquery(keywordTerms, andTerms, orGroups);
 
   if (tsquery) {

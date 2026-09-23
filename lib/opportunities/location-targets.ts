@@ -9,7 +9,7 @@
 //   · 省 / 自治区（陕西、广东、广西壮族自治区）→ 按 lib/geo.locationProvinces 解析岗位落在哪个省，全省地级市都算；
 //   · 城市群（珠三角 / 长三角 / 京津冀）→ 按 expandChinaCityTargets 已有的定义展开成城市，再逐个子串匹配；
 //   · 城市 / 直辖市 / 其它（深圳、北京、新加坡）→ 与改前逐字相同：原词或规范名出现在 location 里。
-import { CN_PROVINCE_PREFECTURES, chinaProvincePlaceNames, locationProvinces } from "@/lib/geo";
+import { CN_PROVINCE_PREFECTURES, chinaProvincePlaceNames, locationProvinces } from "@/lib/cn-location-provinces";
 import { expandChinaCityTargets, normalizeChinaCity } from "@/lib/china-keyword-expansion";
 
 const PROVINCES = CN_PROVINCE_PREFECTURES as Record<string, string[]>;
