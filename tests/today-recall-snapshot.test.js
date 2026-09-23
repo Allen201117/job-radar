@@ -134,3 +134,38 @@ test("快照只许由现跑结果写：限定重算的结果不回写（否则�
   assert.match(src, /const tierRows = restrict \? undefined :/);
   assert.match(src, /snapshot: \{ used: true, reason: "ok", ageMs: verdict\.ageMs \},\n\s*\};/);
 });
+
+test("保存偏好后在响应之后预算快照；顶栏切范围不挂（前端立刻 refresh，/today 自己会现跑并回写）", () => {
+  const route = fs.readFileSync(path.join(ROOT, "app", "api", "preferences", "route.ts"), "utf8");
+  const put = route.slice(route.indexOf("export async function PUT"), route.indexOf("export async function PATCH"));
+  const patch = route.slice(route.indexOf("export async function PATCH"));
+  // 必须挂在「偏好已落库」之后、coverage 同步之前（coverage 失败也照样是新偏好）
+  const upsertAt = put.indexOf('.from("user_preferences")');
+  const schedAt = put.indexOf('scheduleRecallSnapshotRefresh(user.id, "保存偏好")');
+  const coverageAt = put.indexOf("syncCoverage(");
+  assert.ok(upsertAt > 0 && schedAt > upsertAt && coverageAt > schedAt);
+  assert.doesNotMatch(patch, /scheduleRecallSnapshotRefresh\(/);
+  const upkeep = fs.readFileSync(path.join(ROOT, "lib", "opportunities", "recall-snapshot-upkeep.ts"), "utf8");
+  assert.match(upkeep, /try \{\n\s*after\(/, "写接口里的快照维护永不抛");
+});
+
+test("recallActionedJobIds：只有 saved / ignored / applied 占召回名额，viewed 不算，去重", () => {
+  const src = fs.readFileSync(path.join(ROOT, "lib", "opportunities", "recall-snapshot-upkeep.ts"), "utf8");
+  const body = src.slice(src.indexOf("export function recallActionedJobIds"), src.indexOf("function snapshotsEnabled"));
+  const fn = new Function(
+    "actions",
+    body
+      .replace(/^export function recallActionedJobIds\([^)]*\): string\[\] \{/, "")
+      .replace(/\}\s*$/, "")
+      .replace(/new Set<string>\(\)/, "new Set()"),
+  );
+  assert.deepEqual(
+    fn([
+      { job_id: "a", action: "viewed" },
+      { job_id: "b", action: "saved" },
+      { job_id: "b", action: "applied" },
+      { job_id: "c", action: "ignored" },
+    ]).sort(),
+    ["b", "c"],
+  );
+});

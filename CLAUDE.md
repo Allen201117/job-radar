@@ -139,6 +139,10 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
      - **⚠️ Phase 1 已切（2026-06-19）：`jobs` 热表现在在自建香港 Postgres 17 上，不在 Supabase。** 腾讯云轻量 2C2G/40GB，免备案。连接串（含公网 IP / 账号 / 密码）只存 **`JOBS_DATABASE_URL` secret**（GitHub Actions + Vercel）+ 本地 `.env.local`；**仓库公开，host/IP/账号/密码一律不入库、不提交、不写进文档**。Supabase 现只管 Auth / `sources` / `crawl_runs` / `discovery_runs` / 用户小表 / 洞察表。
        - **边界层**：app 读+写都走 `lib/jobs-store/`（`client.ts` pg 连接池 / `search.ts` 复刻 FTS / `read.ts` 读：list/count/companies/byIds/byUrls/byCompanies/recallByPrefs / `write.ts` 写：canonical upsert + updateJobSummaryById，镜像 crawler/jobs_db），爬虫写走 `crawler/jobs_db.py`（psycopg2）。两端都 **gated**：配了 `JOBS_DATABASE_URL` 用香港库，否则回退 Supabase（本地无 env / 回滚安全）；**写入端 HK 报错不回退 Supabase**（避免写空库孤儿数据）。**sources/crawl_runs 永远走 Supabase**（jobs_db 只管 jobs）。
        - **schema 在 `jobs-db/schema.sql`**（从生产 `pg_dump` 忠实重建：表 + canonical 触发器 + bigram FTS(search_doc/search_tokens/GIN) + count_valid_active_jobs/active_companies/active_job_counts_by_company + 全索引 + pg_trgm）。2026-07-02 海外扩展新增 `jobs.country_code`、`jobs.job_scope`（默认 `domestic`）与 `jobs.sponsorship_signal`；`job_scope=domestic` 只覆盖大陆+香港+澳门，`overseas` 覆盖本期放开的 US/SG/Remote，台湾维持不抓、不归入任一范围。改 schema → `gh workflow run jobs-db-migrate`（幂等 apply 到 `JOBS_DATABASE_URL`）。
+         ⚠️ **它会拿 jobs 的排他锁，库里有「事务开着没提交」的会话时会冻住线上（2026-09-23 实测）**：❌ schema.sql 开头的 `alter table jobs add column if not exists`
+         列已存在也要排他锁，排在一个 idle in transaction 14 分钟的会话后面等锁；**排队中的排他锁挡住之后所有读写 jobs 的查询**，线上卡约 6 分钟，
+         runner 断线后服务端那条 alter 还在等，手动 `pg_cancel_backend` 才解开。✅ workflow 已加 `PGOPTIONS=-c lock_timeout=10s`（拿不到锁就红灯重跑）。
+         只新增一张独立表时不必跑整份 schema：把那条 `create table if not exists` 原文带 `set lock_timeout` 单独执行即可（不碰 jobs 的锁）。
        - **沙箱直连香港库验证**：见 [[job-radar-live-db-access-from-sandbox]]（dangerouslyDisableSandbox + source .env.local + 用户 Homebrew psql）。
        - **改 jobs 列/索引/canonical**：三处仍要同步（lib/canonical-url.js / crawler/normalizer.py / **jobs-db/schema.sql 的 SQL 函数**，不再是 supabase migration 144）。
        - **app 端 jobs 读+写已全部落香港库（2026-06-19，commit b742ee6/28ddddb）**：原「discovery/enrich 读仍在 Supabase」遗留已清。新增 app 写层 `lib/jobs-store/write.ts`（canonical upsert + updateJobSummaryById，镜像 crawler/jobs_db）；discovery/search 的 upsert、enrich 写回、refresh 选区、insights Tier1 派生全 gated 走香港库（11 个 `.from("jobs")` 文件全 gated，写入端失败不回退 Supabase 避免孤儿数据）。Supabase `jobs` 已清空（2026-09-05 再次 TRUNCATE：90MB / 34,965 行 → 136kB。⚠️ 上一次「已清空」的记载与现实不符——那批行是 Phase1 切换日 2026-06-19 的快照，一直躺到 2026-09-05 才被发现，期间**文档说空、实际有 3.5 万行**。危害不在占用空间，在于 gated 兜底一旦触发会**静默服务两个半月前的数据且不报错**。复核过再删：无任何外键指向它，642 行 `job_actions` 没有一行引用它）；gated 兜底仅在未配 `JOBS_DATABASE_URL`（本地/回滚）时回退它。**移除 gated 兜底前仍请线上确认稳定**（见 docs runbook）。详见记忆 [[job-radar-phase1-ci-jobs-db-wiring]]。
@@ -367,8 +371,29 @@ app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse�
   也只从 76.8 万降到 28.8 万（37.5%）；最重的 3 个画像仍 75~83%——过完全部条件还剩几万行，
   而每层「全排序后取 1,800」必须把它们全读一遍。命中行稀疏（≈1.2 行/块），把行做窄（投影表 / 正文挪 TOAST）估算只省 1.1~1.5 倍。
   最重那个画像背靠背第二次仍 6.1s / read 58,526 块：单条查询的工作集就大过 512MB shared_buffers。
-  → 只剩两条路：加内存（jobs 堆 1,126MB + 召回用到的索引 ~180MB，全库 2.3GB，现机 2GB）或改召回语义（给层加时间窗，会砍长尾），都要创始人拍板。
+  → 创始人拍板：不加内存、不给召回加时间窗（砍长尾），代码层做 ↓。
+- **✅ /today 召回已挪出请求路径：召回快照 + 限定重算（2026-09-23 上线）**。香港库 `today_recall_snapshots` 存每个用户召回各层选中的 id；
+  请求时 `buildRecallSql(…, { restrict })` 在「快照 id ∪ 快照之后首见的岗」里重跑**同一条** SQL（`recall_pool` 物化，走主键 + 首见 btree，不扫方向 GIN）。
+  写：`today-recall-snapshot.yml` 每 6h 全量（台账 `today_recall_snapshot`）、页面现跑后 / 快照超 1h 时 after() 回写、保存偏好（PUT）后 after() 预算。
+  失效：召回 SQL 形状指纹（改偏好即对不上 → 现跑）、超 12h → 现跑、`TODAY_RECALL_SNAPSHOT=off` 全关；快照读与悉尼查询并行并顺手预热堆块。
+  📊 库内（50 画像）：快照 2.5h 旧首跑 限定 p50 349 / max 593ms、read max 3,201 块 vs 现跑 p50 1,327 / max 10,428ms、read max 56,995；
+  线上 /today 召回 86~257ms（改前热 0.43~0.82s / 冷 2.2~4.8s）。**展示卡片 50 人逐张相同、顺序相同（两个方向都 0）**，召回层 24 人有 ~1% 行互换（614/595 行）没传到卡片。
+  🚫 快照只许由现跑结果写（限定结果回写 = 子集套子集，偏差一轮轮累积）；不传 restrict 时 SQL 与原来逐字节相同（50 画像对拍）。
+  ⚠️ 仅有的偏差来源：快照之后掉出去的岗由排在限额外的岗补位 / 快照之后属性变了才满足层条件的老岗——都随快照变老增长，所以超 1h 就刷新。
+  ⚠️ 对拍 harness 必须带用户真实已处理岗（快照按动作下推过），两边都不带会凭空多出几十行差异。顶栏切范围（PATCH）刻意不挂预算：前端会立刻 refresh。
   stage-2 计算的 40% 曾是 `classifyCompanyIndustry` 每次重建 override 正则，已预编译 + 按公司名记忆（线上 600~740→265~362ms）。
+- **🚫 凡是「order by → limit / offset」截断，排序键必须以唯一列 `id` 收尾（2026-09-23，召回 + /jobs 候选同改）**：
+  ❌ 现象：同一用户、同一份代码，/today 候选隔一会儿就换一批；改前改后对拍里「凭空丢岗」全是同一 first_seen_at 的行互换。
+  ✅ 根因：爬虫一批入库在同一事务里，几百行 first_seen_at 逐字相同（一批 201 行跨层内名次 24–764，层截断 752 落在中间）；
+  只按时间截断时并列块里谁进窗口由执行计划决定，而 GIN 代价估算随写入漂——**同一条 SQL 一分钟内就会换索引**
+  （实测某 role 层 6 次规划 5:1 在两个 GIN 间翻）。所以它不只是「改 SQL 才抖」，线上两次刷新就可能不同。
+  ✅ 防：召回 `orderOf` 末位 `id`（function 层同用它）；`lib/jobs-store/search.ts` 的 `FRESH_ORDER`（粗排 / 新鲜度 / 校招实习 union 三处）。
+  📊 同 SQL + 无害扰动（tsquery 上 OR 一个永假 id 条件）：召回 56 画像旧 23 人 323 行被并列行顶替 → 新 0（仅剩 2 人差异，核实是查询间隙爬虫刚写入的行）；
+  搜索 17 个 FTS 窗口旧 5 个换序 2,385 位 → 新 0。walkthrough 连跑两轮召回数不一致 12 人 → 3 人；match-eval top-25 两轮一致 5/24 → 23/24，
+  严格 / 宽松准确率改前改后逐画像相同（93.0/98.3%、89.9/95.3%）；可展示岗合计 9,824 → 9,818（换了另一批并列行，3 升 5 降）。
+  代价（香港库 EXPLAIN）：召回 148 层计划逐层同形、buffer +1.0%；搜索按索引取序的路径多一层 Incremental Sort（只在并列块内按 id 排、
+  索引不变），buffer +0~12%，最重的是匿名城市搜索（北京 warm 37→42ms）——Incremental Sort 要读完截断点所在的那一批。
+  ⚠️ `lib/jobs-store/read.ts` 的 `listLatestActive` 等（`order by first_seen_at desc limit/offset`）同病未改。
 
 ## 数据库迁移（已自动化，勿再手动跑 Supabase）
 

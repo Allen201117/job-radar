@@ -352,5 +352,15 @@
   },
   "pharmablock.zhiye.com": {
     "cms": true
+  },
+  "yumchina.zhiye.com": {
+    "ssr": true
+  },
+  "junshibiosciences.zhiye.com": "https://junshibiosciences.zhiye.com/social/detail",
+  "bozhon3.zhiye.com": "https://bozhon3.zhiye.com/social/detail",
+  "hnlens.zhiye.com": "https://hnlens.zhiye.com/social/detail",
+  "sokon.zhiye.com": "https://sokon.zhiye.com/social/detail",
+  "chinaamc.zhiye.com": {
+    "ssr": true
   }
 }

@@ -46,6 +46,31 @@ test("用户没填城市 → 不出 cityNew 层，层内排序退回按最新", 
   assert.ok(!built.sql.includes("btrim(location)"), "无城市时不应有城市排序表达式");
 });
 
+// 2026-09-23：爬虫一批入库在同一事务里，几百行 first_seen_at 逐字相同。排序键没有唯一列时，
+// 并列行谁拿到 row_number、谁被 limit 砍掉由执行计划决定——同一用户、同一条 SQL 换个计划候选就换一批
+// （70 画像 193 行互换，全是同一时间戳的行互相顶替）。每层的 window 排序与子查询 order by 都必须以 id 收尾。
+// 限定重算（召回快照 + 请求时只在快照 id 与新岗里重排）同样要：它换了 from / where，计划必然与快照那次不同，
+// 没有 id 决胜时两次对并列行的排法对不上。
+test("每层的 row_number 与层内 limit 都以唯一列 id 收尾（并列行的取舍不许由执行计划决定）", () => {
+  const restrict = { idsByTier: { role: ["00000000-0000-4000-8000-000000000001"] }, newerThan: SINCE };
+  for (const [over, options] of [
+    [{}, {}],
+    [{ targetLocations: ["上海"], targetCompanies: ["字节跳动"] }, {}],
+    [{ jobScope: "all", targetRegions: ["US"], targetLocations: ["上海"] }, {}],
+    [{ targetLocations: ["上海"], targetCompanies: ["字节跳动"] }, { restrict }],
+  ]) {
+    const built = buildRecallSql(mk(over), SINCE, 900, [], options);
+    const windows = [...built.sql.matchAll(/row_number\(\) over \(order by (.*?)\) as _rn/g)].map((m) => m[1]);
+    const limits = [...built.sql.matchAll(/ order by ((?:(?! order by ).)*?) limit \$\d+\)/g)].map((m) => m[1]);
+    assert.equal(windows.length, built.tiers.length, JSON.stringify(over));
+    assert.equal(limits.length, built.tiers.length, JSON.stringify(over));
+    for (const [i, order] of windows.entries()) {
+      assert.match(order, /first_seen_at desc, id$/, `${built.tiers[i]} 层 window 排序缺 id 决胜：${order}`);
+      assert.equal(limits[i], order, `${built.tiers[i]} 层 row_number 与 limit 必须同一排序键`);
+    }
+  }
+});
+
 test("画像连方向/公司/城市都没有 → 返回 null，不发查询", () => {
   assert.equal(buildRecallSql(mk({ targetRoles: [] }), SINCE, 900), null);
 });
@@ -238,8 +263,8 @@ test("function 层：目标职能判得出才出层，参数是 userTargetFuncti
   assert.ok(fnWhere.includes(`search_doc @@ to_tsquery('simple', $${cityParamIndex + 1})`), "function 层 where 应带城市 tsquery");
   assert.ok(!fnWhere.includes("or location is null"), "function 层的城市条件不能带 or location is null");
   assert.ok(!fnWhere.includes("location ilike"), "function 层不用 location ilike（整桶逐行过滤 2 秒）");
-  // 只按最新排、不加 case：与方向层重叠的行靠 JS 去重
-  assert.match(fnSeg, /order by first_seen_at desc limit/);
+  // 只按最新排（+ id 决胜）、不加 case：与方向层重叠的行靠 JS 去重
+  assert.match(fnSeg, /order by first_seen_at desc, id limit/);
   assert.ok(!fnSeg.includes("case when"), "function 层不加任何 case 排序表达式");
 });
 

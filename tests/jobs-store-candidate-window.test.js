@@ -253,7 +253,7 @@ test("按匹配度排：偏好命中的岗优先进窗口，再按新鲜度补�
   // 不再一次拉满 FTS_CAP=8000 再 JS 全打分（线上账本 fetch 1.4s + score 1.6s）。
   assert.match(
     c.sql,
-    /order by \(\(\(search_doc @@ to_tsquery\('simple', \$\d+\)\) is true\)::int \* 30 \+ .*\) desc, first_seen_at desc limit 1000$/,
+    /order by \(\(\(search_doc @@ to_tsquery\('simple', \$\d+\)\) is true\)::int \* 30 \+ .*\) desc, first_seen_at desc, id limit 1000$/,
     "偏好命中优先 + 新鲜度补位（粗排键 + 1000 窗口）",
   );
   // 城市已被筛选锁定 → 粗排键里不该再有城市项（常量项等于没排）。
@@ -280,7 +280,7 @@ test("FTS 路径：运维开关 JOBS_MATCH_PRESCORE=off 退回旧的全窗形态
     delete process.env.JOBS_MATCH_PRESCORE;
   }
   const c = candidateSql(calls);
-  assert.match(c.sql, /order by \(search_doc @@ to_tsquery\('simple', \$\d+\)\) desc, first_seen_at desc limit 8000$/);
+  assert.match(c.sql, /order by \(search_doc @@ to_tsquery\('simple', \$\d+\)\) desc, first_seen_at desc, id limit 8000$/);
 });
 
 test("按发布时间排：只按新鲜度截断——窗口内的分页与全集一致", async () => {
@@ -295,7 +295,7 @@ test("按发布时间排：只按新鲜度截断——窗口内的分页与全�
     60,
   );
   const c = candidateSql(calls);
-  assert.match(c.sql, /order by first_seen_at desc limit/);
+  assert.match(c.sql, /order by first_seen_at desc, id limit/);
   assert.doesNotMatch(c.sql, /to_tsquery\('simple', \$\d+\)\) desc/);
 });
 
@@ -311,7 +311,7 @@ test("FTS 路径：偏好里没有任何粗排信号 + 按匹配度 → 与匿�
     0,
     60,
   );
-  assert.match(candidateSql(calls).sql, /order by first_seen_at desc limit 1000$/);
+  assert.match(candidateSql(calls).sql, /order by first_seen_at desc, id limit 1000$/);
 });
 
 test("FTS 路径：没信号但按发布时间排 / 开关 off → 保持 8000 窗（这两种都不能归并成匿名）", async () => {
@@ -336,7 +336,7 @@ test("没有偏好时按新鲜度排——此时打分只剩「近 7 天 +10」�
   install({ candidates: candidateRows(FTS_CAP), count: null });
 
   await search.searchJobsStore({ ...DEFAULT_FILTERS, city: "深圳" }, null, [], 0, 60);
-  assert.match(candidateSql(calls).sql, /order by first_seen_at desc limit/);
+  assert.match(candidateSql(calls).sql, /order by first_seen_at desc, id limit/);
 });
 
 test("⚠️ 排序参数绝不能混进计数查询的绑定参数（多一个 PG 直接报错）", async () => {
@@ -551,12 +551,12 @@ test("扫描路径：校招/实习无粗排 → 两支 union all，各自 order 
     await search.searchJobsStore({ ...DEFAULT_FILTERS, jobType }, null, [], 0, 60);
     const c = calls.find((x) => /^select \* from \(/.test(x.sql));
     assert.ok(c, `${jobType}：应走 union 形态`);
-    const branches = c.sql.match(/\(select id, source_id.*? from jobs where (.*?) order by first_seen_at desc limit \$(\d+)\)/g);
+    const branches = c.sql.match(/\(select id, source_id.*? from jobs where (.*?) order by first_seen_at desc, id limit \$(\d+)\)/g);
     assert.equal(branches.length, 2, c.sql);
     assert.match(branches[0], new RegExp(`\\(recruitment_category is not null and recruitment_explicit and recruitment_category = '${jobType}'\\)`));
     assert.match(branches[1], /\(recruitment_category is null and /);
     for (const b of branches) assert.doesNotMatch(b, / or \(recruitment_category is null/, "每支只带自己那一半预筛");
-    const [, lim, off] = c.sql.match(/\) u order by first_seen_at desc limit \$(\d+) offset \$(\d+)$/);
+    const [, lim, off] = c.sql.match(/\) u order by first_seen_at desc, id limit \$(\d+) offset \$(\d+)$/);
     const inner = Number(c.sql.match(/limit \$(\d+)\)/)[1]);
     assert.equal(c.params[inner - 1], c.params[Number(lim) - 1] + c.params[Number(off) - 1], "内层 limit = 外层 limit + offset");
     const used = new Set([...c.sql.matchAll(/\$(\d+)/g)].map((m) => Number(m[1])));
