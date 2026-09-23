@@ -390,3 +390,13 @@ test("卡片排序：有对口岗的在前、0 沉底；判不出方向时退回
     .map((c) => c.company);
   assert.deepEqual(fallback, ["多岗", "少岗", "待接入"]);
 });
+
+test("线上 /campus 城市下拉里出现过的英文原文全部归一成中文（2026-09-23 逐条核对的 7 个）", () => {
+  const cases = {
+    "China\\Shanxi-Taiyuan": "太原", Guilin: "桂林", Jinan: "济南", Nantong: "南通",
+    Shenyang: "沈阳", Taiyuan: "太原", Zhengzhou: "郑州", Shanghai: "上海", "上海市": "上海",
+  };
+  for (const [raw, want] of Object.entries(cases)) assert.equal(normalizeCampusCity(raw), want, raw);
+  // 不认识的海外地名保留原文，不猜成国内城市
+  assert.equal(normalizeCampusCity("东京"), "东京");
+});
