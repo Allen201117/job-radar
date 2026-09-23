@@ -127,10 +127,83 @@ class ZeroOutputTest(unittest.TestCase):
         self.assertEqual(findings, [])
 
     def test_all_runs_failed_counts_as_zero_output(self):
+        # 普通模块：failed = 跑崩了，哪怕台账里没有处理量也算零产出。
+        rows = [_run("enrich_backlog", "2026-08-25", "failed"),
+                _run("enrich_backlog", "2026-08-26", "failed")]
+        findings, _ = W.evaluate_zero_output(rows, TODAY, days=2)
+        self.assertEqual([f["subject"] for f in findings], ["enrich_backlog"])
+
+
+class VerdictStatusZeroOutputTest(unittest.TestCase):
+    """gap_funnel / gap_funnel_browser / campus_board_verify：failed = 「一项都没转化」，不是跑崩了。
+
+    2026-08-30 起三个 issue 天天追评：漏斗每天复查 3~6 家没 adapter 的自建站，全部判出否定结论，
+    status 记 failed、processed>0、sources_added=0 → 被当成零产出。两个方向都要钉住：
+    该安静的安静（正确的否定结论），该响的照样响（走到验收门没加上源 / 抛异常）。
+    """
+
+    def test_funnel_with_only_negative_verdicts_is_idle(self):
+        # 2026-09-21 / 09-22 线上真实形态（新口径下）：处理 5~6 家，没有一家走到验收门，无异常。
+        rows = [_run("gap_funnel", day, "failed", processed=n, sources_added=0, gate_reached=0,
+                     errors=0, campus_gate_reached=0, campus_errors=0, campus_sources_added=0)
+                for day, n in (("2026-08-25", 5), ("2026-08-26", 6))]
+        rows += [_run("gap_funnel_browser", day, "failed", processed=2, sources_added=0,
+                      gate_reached=0, errors=0) for day in ("2026-08-25", "2026-08-26")]
+        findings, _ = W.evaluate_zero_output(rows, TODAY, days=2)
+        self.assertEqual(findings, [])
+
+    def test_legacy_rows_without_new_keys_do_not_alert(self):
+        # 上线前落的台账没有 gate_reached/errors：看不出有没有可转化的活，不拿 status 猜。
         rows = [_run("gap_funnel", "2026-08-25", "failed", processed=20, sources_added=0),
                 _run("gap_funnel", "2026-08-26", "failed", processed=20, sources_added=0)]
         findings, _ = W.evaluate_zero_output(rows, TODAY, days=2)
+        self.assertEqual(findings, [])
+
+    def test_reaching_the_gate_without_adding_sources_still_alerts(self):
+        rows = [_run("gap_funnel", day, "failed", processed=6, gate_reached=2, errors=0,
+                     sources_added=0, campus_sources_added=0)
+                for day in ("2026-08-25", "2026-08-26")]
+        findings, _ = W.evaluate_zero_output(rows, TODAY, days=2)
         self.assertEqual([f["subject"] for f in findings], ["gap_funnel"])
+
+    def test_exceptions_still_alert(self):
+        # 施耐德 / 联邦快递那种「同一家天天抛异常、+1 天重试」必须看得见。
+        rows = [_run("gap_funnel", day, "failed", processed=5, gate_reached=0, errors=0,
+                     campus_errors=5, sources_added=0, campus_sources_added=0)
+                for day in ("2026-08-25", "2026-08-26")]
+        rows += [_run("gap_funnel_browser", day, "failed", processed=1, gate_reached=0, errors=1,
+                      sources_added=0) for day in ("2026-08-25", "2026-08-26")]
+        findings, _ = W.evaluate_zero_output(rows, TODAY, days=2)
+        self.assertEqual(sorted(f["subject"] for f in findings), ["gap_funnel", "gap_funnel_browser"])
+
+    def test_campus_lane_output_counts_as_funnel_output(self):
+        rows = [_run("gap_funnel", day, "failed", processed=5, gate_reached=0, errors=0,
+                     campus_gate_reached=4, campus_sources_added=n, sources_added=0)
+                for day, n in (("2026-08-25", 0), ("2026-08-26", 3))]
+        findings, _ = W.evaluate_zero_output(rows, TODAY, days=2)
+        self.assertEqual(findings, [])
+
+    def test_campus_board_verify_empty_boards_are_idle(self):
+        # 9-19 / 9-20 线上真实形态：12 个候选全是「板块空着等开闸」。
+        rows = [_run("campus_board_verify", day, "failed", pending=12, enabled=0, empty_board=12,
+                     actionable=0) for day in ("2026-08-25", "2026-08-26")]
+        findings, _ = W.evaluate_zero_output(rows, TODAY, days=2)
+        self.assertEqual(findings, [])
+
+    def test_campus_board_verify_crash_rows_still_alert(self):
+        rows = [_run("campus_board_verify", day, "failed", errors=1)
+                for day in ("2026-08-25", "2026-08-26")]
+        findings, _ = W.evaluate_zero_output(rows, TODAY, days=2)
+        self.assertEqual([f["subject"] for f in findings], ["campus_board_verify"])
+
+    def test_campus_board_verify_actionable_without_enabling_alerts(self):
+        rows = [_run("campus_board_verify", day, "failed", pending=12, enabled=0, actionable=3,
+                     empty_board=9) for day in ("2026-08-25", "2026-08-26")]
+        findings, _ = W.evaluate_zero_output(rows, TODAY, days=2)
+        self.assertEqual([f["subject"] for f in findings], ["campus_board_verify"])
+
+    def test_verdict_modules_are_all_declared(self):
+        self.assertTrue(W.VERDICT_STATUS_MODULES <= set(W.MODULE_OUTPUT))
 
     def test_one_bad_day_is_not_enough(self):
         rows = [_run("auto_discover", "2026-08-25", checked=80, produced=3),

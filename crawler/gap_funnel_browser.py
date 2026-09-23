@@ -532,6 +532,8 @@ def process_browser_company(
         validate_jd=jd_validator,
     )
     result.update({
+        # 只给 run_round 计数用（_attempt_payload 不拷顶层键，不会进台账）。
+        "acceptance_gate_ran": True,
         "official_entry_url": source_url,
         "detected_platform": "unknown_spa",
         "evidence": {
@@ -577,6 +579,7 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
         queue = merge_browser_queues(
             handoff_rows, census_result["rows"], cap=cap, now=now)
     outcomes = []
+    gate_reached = errors = 0
     for row in queue:
         scoped = {**row, "scope": scope}
         try:
@@ -587,8 +590,10 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
                 apply=apply,
                 now=now,
             )
+            gate_reached += int(bool(result.get("acceptance_gate_ran")))
             payload = gap_funnel._attempt_payload(scoped, result, now)
         except Exception as exc:
+            errors += 1
             # ⚠️ 别把已知的 source_id 抹掉：源可能**已经建好、岗也已入库**，只是收尾抛了异常
             # （华虹实测：重复 dispatch 撞 "source_url 已由 enabled source 占用"，
             #  台账被覆盖成 source_id 为空的假失败，按 source_id 统计的地方就当它没打通）。
@@ -623,10 +628,12 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
         "processed": len(outcomes),
         "healthy": counts.get("healthy", 0),
         "thin_only": counts.get("thin_only", 0),
+        # thin_only 也算：救济过门的薄卡源已 enable（见上面 _NOT_FAILURE 的注释），与 P1 同口径；
+        # 被回滚的 thin_only 没有 source_id，下面那条会把它挡掉。
         "sources_added": sum(
             1
             for row in outcomes
-            if row.get("state") == "healthy"
+            if row.get("state") in ("healthy", "thin_only")
             and row.get("source_id")
             and row.get("evidence", {}).get("source_inserted_new") is True
         ),
@@ -654,6 +661,11 @@ def run_round(*, scope="domestic", limit=None, company=None, apply=False,
             )
         ),
         "states": dict(counts),
+        # 规则 A 的「处理量」口径，与 P1 同（见 gap_funnel.run_round 的 gate_reached 注释）：
+        # 浏览器道的队列几乎全是「渲染后也拿不到逐岗链接」的自建站，在验收门之前就判 no_stable_jd；
+        # 只有走到了真抓验收门却没加上源、或处理时抛异常，才是这条道自己卡住了。
+        "gate_reached": gate_reached,
+        "errors": errors,
         "dry_run": not apply,
         "list_version": must_apply.version(),
         "handoff_loaded": len(handoff_rows),

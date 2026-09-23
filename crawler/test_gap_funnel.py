@@ -156,6 +156,66 @@ class CampusLaneTest(unittest.TestCase):
         prober.assert_not_called()
         self.assertNotIn(result["state"], ("healthy", "thin_only", "platform_known"))
 
+    def _campus_lane_via_iguopin(self, preset):
+        """国聘车道出候选 → 校招车道评估。preset=None 时走「指纹认出国聘、URL 评估时补」那条路。"""
+        social = ("https://www.iguopin.com/job?company=%E7%94%B2%E5%85%AC%E5%8F%B8"
+                  "&match=%E7%94%B2%E5%85%AC%E5%8F%B8")
+        item = {"url": social, "lane": gf.entry_lanes.LANE_IGUOPIN}
+        if preset:
+            item["preset"] = {"platform": "iguopin", "adapter": "iguopin", "source_url": social,
+                              "identity_ok": True, "identity_reason": "iguopin:indexed"}
+        prober = mock.Mock(return_value={"ok": True, "valid": 3, "china": 3})
+        with mock.patch.object(gf.entry_lanes, "plan_lanes",
+                               return_value=[gf.entry_lanes.LANE_IGUOPIN]), \
+             mock.patch.object(gf.entry_lanes, "iguopin_candidates", return_value=[item]):
+            result, _used, _inserted = gf.process_campus_channel(
+                {**_entry(), "campus_channel": "missing"},
+                supabase=_Sb(), jobs_conn=_Conn(), apply=False, search_remaining=0,
+                insert_allowed=True, now=NOW,
+                finder=mock.Mock(side_effect=AssertionError("免费车道命中就不该搜")),
+                fingerprinter=lambda _url, **_kw: {"platform": "iguopin", "adapter": "iguopin",
+                                                   "source_url": None, "identity_ok": True,
+                                                   "identity_reason": "page_company_match:甲公司"},
+                prober=prober, site_resolver=lambda *_a, **_k: None,
+            )
+        return result, prober
+
+    def test_campus_lane_converts_preset_candidates_to_campus_board(self):
+        # 2026-09-23：preset 候选不调 fingerprinter，旧写法把换算包在 fingerprinter 外面 →
+        # 校招车道拿国聘**社招** URL 去建源（9-18~9-20 的 10 个「校招源」全是社招 URL）。
+        result, prober = self._campus_lane_via_iguopin(preset=True)
+        probed = prober.call_args.args[0]["url"]
+        self.assertIn("nature=%s" % gf._CAMPUS_NATURE, probed)
+        self.assertEqual(result["state"], "platform_known")
+
+    def test_campus_lane_converts_synthesized_iguopin_url_to_campus_board(self):
+        # 指纹认出国聘但没给 source_url 时，URL 是评估里现补的——补出来的也必须换成校招板块。
+        _result, prober = self._campus_lane_via_iguopin(preset=False)
+        self.assertIn("nature=%s" % gf._CAMPUS_NATURE, prober.call_args.args[0]["url"])
+
+    def test_main_lane_keeps_social_url_for_preset(self):
+        # 反方向：社招主队列绝不能被换成校招 URL。
+        social = "https://www.iguopin.com/job?company=x&match=x"
+        item = {"url": social, "lane": gf.entry_lanes.LANE_IGUOPIN,
+                "preset": {"platform": "iguopin", "adapter": "iguopin", "source_url": social,
+                           "identity_ok": True, "identity_reason": "iguopin:indexed"}}
+        prober = mock.Mock(return_value={"ok": True, "valid": 3, "china": 3})
+        with mock.patch.object(gf.entry_lanes, "plan_lanes",
+                               return_value=[gf.entry_lanes.LANE_IGUOPIN]), \
+             mock.patch.object(gf.entry_lanes, "iguopin_candidates", return_value=[item]):
+            gf.process_company(
+                {**_entry(), "official_entry_url": None},
+                supabase=_Sb(), jobs_conn=_Conn(), apply=False, search_remaining=0,
+                insert_allowed=True, now=NOW, prober=prober,
+                site_resolver=lambda *_a, **_k: None,
+            )
+        self.assertEqual(prober.call_args.args[0]["url"], social)
+
+    def test_rejection_of_unparseable_url_does_not_raise(self):
+        # classify_candidate_url 判 invalid_url 的正是 urlparse 解析不了的串，这里不能再抛一次。
+        for bad in ("https://[", "http://www.x.com，或巨潮资讯网：www.y.com"):
+            self.assertEqual(gf._rejection(bad, "invalid_url")["host"], "")
+
     def test_campus_attempt_payload_never_touches_social_state(self):
         row = {**_entry(), "state": "healthy", "next_retry_at": None, "attempts": 4,
                "evidence": {"entry_channel": "search", "campus_attempts": 1}}
@@ -558,6 +618,42 @@ class RoundCapTest(unittest.TestCase):
             result["metrics"]["wrong_platform_breakdown"],
             {"workday": 2, "icims": 1},
         )
+
+    def test_metrics_count_gate_reached_and_errors_per_lane(self):
+        # 规则 A 的处理量口径（2026-09-23）：只有「走到验收门」和「抛异常」才算有活没干成，
+        # 验收门之前的否定结论（没 adapter / 找不到入口）不算。
+        queue = [{"company": name, "pattern": "%%%s%%" % name, "industries": [], "state": "unknown"}
+                 for name in ("甲公司", "乙公司", "丙公司")]
+        campus_queue = [{**queue[0], "campus_channel": "missing"}, {**queue[1], "campus_channel": "missing"}]
+
+        def fake_process_company(row, **_kwargs):
+            if row["company"] == "甲公司":
+                return {"state": "no_active_jobs", "acceptance_gate_ran": True,
+                        "next_retry_at": None, "evidence": {}}, 0, False
+            if row["company"] == "乙公司":
+                raise ValueError("Invalid IPv6 URL")
+            return {"state": "wrong_platform", "next_retry_at": None, "evidence": {}}, 0, False
+
+        def fake_campus(row, **_kwargs):
+            if row["company"] == "甲公司":
+                raise RuntimeError("boom")
+            return {"state": "healthy", "source_id": "s1", "acceptance_gate_ran": True,
+                    "next_retry_at": None, "evidence": {}}, 0, True
+
+        with mock.patch.object(
+                 gf.gap_census, "census",
+                 return_value={"queue": queue, "rows": queue, "industry_coverage": {},
+                               "campus_queue": campus_queue},
+             ), \
+             mock.patch.object(gf, "process_company", side_effect=fake_process_company), \
+             mock.patch.object(gf, "process_campus_channel", side_effect=fake_campus), \
+             contextlib.redirect_stdout(io.StringIO()):
+            result = gf.run_round(scope="domestic", limit=3, apply=False,
+                                  supabase=_Sb(), jobs_conn=_Conn(), now=NOW)
+        metrics = result["metrics"]
+        self.assertEqual((metrics["gate_reached"], metrics["errors"]), (1, 1))
+        self.assertEqual((metrics["campus_gate_reached"], metrics["campus_errors"]), (1, 1))
+        self.assertEqual(metrics["campus_sources_added"], 1)
 
     def test_search_unavailable_unknown_gets_one_day_retry(self):
         result, used, inserted = gf.process_company(

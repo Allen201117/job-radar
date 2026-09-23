@@ -1,5 +1,9 @@
 """crawler/auto_discover.py — 每日定向自动扩源（发现 → live 探活验证 → 只入库真产岗的）。
 
+⏹️ 2026-09-23 起本脚本的每日定时已停（auto-discover.yml 只留手动触发）：静态清单全集探飞书/hotjob
+已 0 个新候选，「同一批目标顺手探飞书/hotjob」并进了 auto_discover_browser.py。本文件的纯函数
+（plan_targets / load_targets / insert_source …）浏览器道和海外道仍在复用，别删。
+
 为何：产品要岗位库**自动扩充、不靠人工开 session**。但守住 §3「精 > 量、禁止猜 slug 入库」——
 本脚本不铺量、不猜 slug 入库：
   · 目标只来自 **精选目标公司清单**（targets_private500/soe500.json，{company,cn,slugs,industry}）
@@ -104,7 +108,17 @@ def load_targets(existing_companies, static_targets=None):
             targets = [c for c in llm if c["company"] not in known] + targets  # LLM 新候选排最前
         except Exception as e:
             print(f"[auto_discover] LLM 生成清单跳过（回退静态）: {type(e).__name__}: {e}")
+        if not count_llm_candidates(targets):
+            # 开了喂料却一家新料都没拿到（无 key / 402 欠费 / 超时 / 全是库里已有的）：静态清单早已
+            # 榨干，这一天基本注定零产出。打成 CI 注解，别让它像 2026-08 那样静默一个月。
+            print("::warning::[auto_discover] AUTO_DISCOVER_LLM 已开但本轮 LLM 新料为 0，"
+                  "只剩已榨干的静态清单可探")
     return targets
+
+
+def count_llm_candidates(targets):
+    """本轮目标里有几家是 LLM 当天生成的新料（写进台账：喂料是否真的在喂，是本链产出的主因）。"""
+    return sum(1 for t in (targets or []) if t.get("_llm"))
 
 
 def load_user_wanted_companies(sb):
@@ -369,6 +383,7 @@ def main():
     existing_companies, existing_urls = existing_source_keys(sb)
     static_targets = load_curated_targets()
     curated = load_targets(existing_companies, static_targets)
+    llm_candidates = count_llm_candidates(curated)
     seed = int(datetime.now(timezone.utc).strftime("%Y%m%d"))
     targets = plan_targets(curated, user_wanted, existing_companies, DAILY_TARGET_CAP, seed=seed)
     existing_norm = {norm_company(name) for name in existing_companies if norm_company(name)}
@@ -385,7 +400,7 @@ def main():
             "auto_discover",
             {"checked": 0, "produced": 0, "candidates_total": len(static_targets),
              "already_in_library": already_in_library, "deduped": 0,
-             "exhausted": exhausted},
+             "exhausted": exhausted, "llm_candidates": llm_candidates},
             # ops_runs 不支持 warning；静态清单耗尽以 exhausted 指标供 watchdog 预警。
             status="success", started_at=started, finished_at=_now_iso())
         if exhausted:
@@ -423,7 +438,11 @@ def main():
         sb, "auto_discover",
         {"checked": len(targets), "produced": added, "companies_enriched": added,
          "candidates": len(to_insert), "candidates_total": len(static_targets),
-         "already_in_library": already_in_library, "deduped": len(blocked)},
+         "already_in_library": already_in_library, "deduped": len(blocked),
+         # 各步淘汰计数（2026-09-23 补，理由同 auto_discover_browser 的台账注释）
+         "llm_candidates": llm_candidates, "hits": len(hits),
+         "hits_unverified": sum(1 for h in hits if not h.get("verified")),
+         "passed": len(passed)},
         status=ops_runs.status_from_counts(len(to_insert), len(to_insert) - added),
         started_at=started, finished_at=_now_iso())
     print(f"[auto_discover] 完成: 入库 {added} 源 (apply={apply})")

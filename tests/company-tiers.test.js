@@ -12,6 +12,13 @@ test("命中命名标签", () => {
   assert.equal(classifyCompanyTier("MiniMax 稀宇科技"), "初创独角兽");
 });
 
+test("大华：安防大华（库里记作「大华股份 Dahua」）是大厂，上海大华集团（地产）不是", () => {
+  // 迁移 291：moka 租户 dahua 曾被记成「浙江大华技术」，%浙江大华% 只命中那条错名、漏掉真的大华股份。
+  assert.equal(classifyCompanyTier("大华股份 Dahua"), "大厂");
+  assert.equal(classifyCompanyTier("浙江大华技术股份有限公司"), "大厂");
+  assert.equal(classifyCompanyTier("大华集团"), "中小厂");
+});
+
 test("不命中任何名单 → 中小厂兜底", () => {
   assert.equal(classifyCompanyTier("某不知名小公司有限公司"), "中小厂");
   assert.equal(classifyCompanyTier(""), "中小厂");

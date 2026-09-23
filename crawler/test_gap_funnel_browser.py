@@ -697,6 +697,53 @@ class RenderedRouteMetricTest(unittest.TestCase):
         self.assertEqual(result["metrics"]["rendered_route_recognized"], 1)
 
 
+    def test_run_round_counts_gate_reached_and_errors(self):
+        # 规则 A 的处理量口径（2026-09-23）：验收门之前判 no_stable_jd 的不算「有活没干成」。
+        rows = [_row("甲公司"), _row("乙公司"), _row("丙公司")]
+        outcomes = {
+            "甲公司": {"state": "no_stable_jd", "next_retry_at": None, "evidence": {}},
+            "乙公司": {"state": "no_active_jobs", "acceptance_gate_ran": True,
+                       "next_retry_at": None, "evidence": {}},
+        }
+
+        def fake(row, **_kw):
+            if row["company"] == "丙公司":
+                raise ValueError("Invalid IPv6 URL")
+            return outcomes[row["company"]]
+
+        with mock.patch.object(
+            browser.gap_census, "census",
+            return_value={"rows": rows, "queue": [], "industry_coverage": {}},
+        ), mock.patch.object(browser, "merge_browser_queues", return_value=rows), \
+                mock.patch.object(browser, "process_browser_company", side_effect=fake), \
+                mock.patch.object(browser.gap_funnel, "_write_attempt"), \
+                mock.patch.object(browser.ops_runs, "record_ops_run"):
+            result = browser.run_round(
+                supabase=object(), jobs_conn=object(), apply=True, limit=5, now=NOW)
+        self.assertEqual((result["metrics"]["gate_reached"], result["metrics"]["errors"]), (1, 1))
+
+    def test_rescued_thin_only_source_counts_as_added(self):
+        rows = [_row("甲公司"), _row("乙公司")]
+        outcomes = {
+            # 救济过门：源已 enable
+            "甲公司": {"state": "thin_only", "source_id": "s1", "acceptance_gate_ran": True,
+                       "next_retry_at": None, "evidence": {"source_inserted_new": True}},
+            # 没过门被回滚：没有 source_id
+            "乙公司": {"state": "thin_only", "source_id": None, "acceptance_gate_ran": True,
+                       "next_retry_at": None, "evidence": {"source_inserted_new": True}},
+        }
+        with mock.patch.object(
+            browser.gap_census, "census",
+            return_value={"rows": rows, "queue": [], "industry_coverage": {}},
+        ), mock.patch.object(browser, "merge_browser_queues", return_value=rows), \
+                mock.patch.object(browser, "process_browser_company",
+                                  side_effect=lambda row, **_kw: outcomes[row["company"]]), \
+                mock.patch.object(browser.gap_funnel, "_write_attempt"), \
+                mock.patch.object(browser.ops_runs, "record_ops_run"):
+            result = browser.run_round(
+                supabase=object(), jobs_conn=object(), apply=True, limit=5, now=NOW)
+        self.assertEqual(result["metrics"]["sources_added"], 1)
+
 class ProbeBlockKindPassthroughTest(unittest.TestCase):
     """adapter 判过的因必须原样传到调用方；让调用方对着 reason 字符串猜就是老毛病的来源。"""
 

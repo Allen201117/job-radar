@@ -56,8 +56,14 @@ _COMPOUND_SUFFIXES = {
 
 def _http_url(value):
     url = str(value or "").strip()
-    parsed = urlparse(url)
-    return url if parsed.scheme in ("http", "https") and parsed.hostname else None
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname
+    except ValueError:
+        # 页面里的畸形 href（"http://[" / 全角标点混进域名）只丢这一条（2026-09-23）；
+        # 旧写法抛出去被上层整体吞掉，这家公司的整条官网车道静默归零。
+        return None
+    return url if parsed.scheme in ("http", "https") and host else None
 
 
 def _registered_domain(host):
@@ -295,7 +301,11 @@ def _extract_candidates(html, page_url, home_url):
         text = str(anchor.text(separator=" ", strip=True) or "").strip()
         if not href or not (_CAREERS_RE.search(text) or _CAREERS_RE.search(href)):
             continue
-        url = _http_url(urljoin(page_url, href))
+        try:
+            joined = urljoin(page_url, href)
+        except ValueError:
+            continue
+        url = _http_url(joined)
         if not url or url in seen:
             continue
         if _ERROR_PAGE_RE.search(urlparse(url).path or ""):
