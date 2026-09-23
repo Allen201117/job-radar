@@ -57,3 +57,15 @@ test("全是一家公司:不死循环,长度守恒", () => {
   const out = spreadByCompany(ranked);
   assert.equal(out.length, 500);
 });
+
+test("职位库 newest 可在当前页内散列：任意 6 张同公司最多 2 张且不丢不重", () => {
+  const page = [];
+  for (let i = 0; i < 14; i++) page.push(J("中核集团", `n${i}`));
+  for (let i = 0; i < 46; i++) page.push(J(`公司${i}`, `o${i}`));
+  const out = spreadByCompany(page, { cap: 2, window: 6 });
+  assert.equal(out.length, page.length);
+  assert.equal(multiset(out), multiset(page));
+  for (let i = 0; i + 6 <= out.length; i++) {
+    assert.ok(out.slice(i, i + 6).filter((job) => job.company === "中核集团").length <= 2);
+  }
+});

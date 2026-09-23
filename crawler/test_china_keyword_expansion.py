@@ -126,6 +126,20 @@ class ClassifyJobFunctionTest(unittest.TestCase):
         self.assertEqual(cke.classify_job_function("AI产品实习生"), "产品")
         self.assertEqual(cke.classify_job_function("产品助理"), "产品")
 
+    def test_model_training_infra_titles_are_rnd_but_do_not_steal_roles(self):
+        # 与 tests/classify-job-function.test.js 同批用例（2026-09-23 /today 走查）。
+        for title in ("Agentic Post-training-阿里星/Bravo Star",
+                      "Agentic Post-training Infra-阿里星/Bravo Star",
+                      "日常实习生-大模型后训练 (Post-training)-Qwen基础模型",
+                      "AI Infra研究员",
+                      "Agentic Infra 实习生"):
+            self.assertEqual(cke.classify_job_function(title), "研发", title)
+        # 团队后缀里的 Infra 不抢真实角色；infrastructure 整词不归这条。
+        self.assertEqual(cke.classify_job_function("AI产品经理-Dev Infra"), "产品")
+        self.assertEqual(cke.classify_job_function("开发者产品运营专家-Dev Infra"), "运营")
+        self.assertEqual(cke.classify_job_function("研发项目经理-大模型训练infra团队（北京/深圳）"), "项目管理")
+        self.assertEqual(cke.classify_job_function("Infrastructure Project Manager"), "项目管理")
+
     def test_title_classifier_matches_frontend_key_boundaries(self):
         self.assertEqual(cke.classify_job_title_function("2027 届校园招聘 - 后台开发工程师"), "研发")
         self.assertEqual(cke.classify_job_title_function("招聘HR（抖音）"), "职能")

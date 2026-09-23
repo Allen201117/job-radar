@@ -110,6 +110,16 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
        社招校招两个板块都查不到」两跳确认。别把它「简化」回一跳。
      · ⚠️ 同批补上 `chnenergy`：它 2026-09-05 就进了 ENRICH_REGISTRY 却漏加 sweep matrix，
        只被补正文、一次没探活过。`crawler/test_state_bank_liveness.py` 现在断言「注册表 ⊆ matrix」。
+   - **北森（beisen，库里最大一族 11.7 万 active）已有逐岗探活：详情接口 `Data.Status==2` = 已停止招聘（2026-09-23 接入）**：
+     ❌ 此前只有浏览器巡检一条撤岗路径、list-absence 还在 observe → 实测 16,366 个已停招的岗挂着（中国人寿 616 条最早 6 月就掉出列表）。
+     ✅ 依据三方印证、不是猜：① 北森标准门户前端代码 `if (2 === Data.Status) location.replace("/job/empty")`；
+     ② 全集对拍——库里 114,565 个带 jobAdId 的岗逐个问 + 275 个租户列表全量翻完（14.6 万行 Status 全是 1）：
+     Status=2 却在列表 0 条（唯一 1 条是拉列表后刚下架的时间差）、Status=1 却不在列表 2 条；
+     ③ 176 个租户各抽 1 条真渲染，167 家显示「当前职位已停止招聘」。
+     ⚠️ 不存在的 id 返 `Code=500`「参数错误」是**通用**文案，不判死；接口 404 = 这个 host 没这接口，**不许走 `_raise_if_gone`**。
+     ⚠️ 中国人寿 / 银河证券 / 通威 / 泰康 / 长安 的页面模板**不读 Status**，在招和已停长得一样——对它们只能靠「Status=2 + 列表已无」。
+     ⚠️ 老版 CMS 门户（`/zpdetail/{数字}`，约 3 千岗）无 jobAdId、判不了 → unknown 留给浏览器巡检，**beisen 别从 `audit_dead_links` 撤**。
+     📄 `enrich._detail_beisen` + `enrich_backlog.EXPIRE_RATIO_GUARD`（本轮判死 ≥50% 即熔断，全集模拟峰值 15.7%）+ `crawler/test_beisen_liveness.py`。
    - **🚫「列表里没有」≠「已撤岗」——除非先证明该列表是全集（2026-07-29 立碑，差点误删 460 个在招岗）**：
      list-absence 撤岗（`supports_absence_liveness` + `jobs_db.sweep_absent_jobs`）的前提是**该源的列表接口返回岗位全集**（feishu/beisen/bytedance 是验证过确实返全量才开的）。
      ⚠️ **绝不能从「列表条数 ≪ 库里 active 条数」反推「差额都是死岗」**——这个差额有两种成因、处置**完全相反**：① 死岗堆积（该清）；② 列表接口本身只返子集（一清就是删在招岗）。
@@ -312,6 +322,34 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
 - /today main 区加相邻散列（`spreadByCompany` 复用 /jobs 的滑窗，任意 6 张同一家 ≤2）：公司配额只限总数不限相邻，
   线上前 8 张全是字节跳动。⚠️ `spreadByCompany` 默认读顶层 `company`，Opportunity 的公司在 `job.company` 下，
   必须传 `keyOf`，否则所有项同一个空键、散列等于没做（tests/opportunity-grouping 钉着）。
+- **目标城市填省 → 按全省地级市解析，召回城市门与 stage-2 资格门读同一份展开（2026-09-23）**：
+  ❌ 填「陕西」「广东」的用户只看得到 location 字面写着省名的岗：广东画像看不到深圳 / 广州 / 佛山（全库在招 +36,623 个），
+  陕西画像前 20 张全是 location 为空的岗。✅ 根因：`locationState` 与城市门都是「目标原词 + normalizeChinaCity」子串；
+  `expandChinaCityTargets` 只有 /jobs 在用、一省只展开 1–2 个省会。✅ 防：`lib/opportunities/location-targets.ts`（两端共用）+
+  `lib/geo.locationProvinces`（映射 `lib/cn-province-prefectures.json`，crawler/geo.py 同口径，共享夹具
+  `tests/fixtures/cn-location-provinces.json`）；「杭州 深圳 无锡 宁波」这种一格多值在 `buildRadarProfile` 读侧也拆（同 `normalizeCityPhrases`）。
+  🚫 别退回「含该省任一地级名」的裸子串：8,107 种在招写法逐条对拍，它会把「大连市-中山区」判广东、「安徽省·马鞍山市」判辽宁、
+  「天津-河北区」判河北、「乌海市·海南区」判海南（后两条旧口径就中，一并纠正）。
+  📊 8 个受影响画像交替两轮：展示岗落在目标外 0→0，召回里被误拒的省内岗 273→0；其余 60 个画像召回 SQL 逐字节相同。
+  代价：多省画像库内 warm 120~230→540~640ms，仍在「北京上海杭州」这类城市画像（540~1,090ms）范围内。
+  ⚠️ 没覆盖：县级市（昆山 / 义乌）与拼音地点（全库只 4 行）；只写区名不写市的（「闵行,嘉定,…,黄浦」）认不出是上海。
+  📌 纠错（同日）：此处原写「「地名+方位路」会误认（延安东路→陕西）」，已修：街道规则从「路 / 街」扩到
+  `[东西南北中]?(路|街|大道|大街)`（南京东路 / 西藏中路 / 深圳大道），两端同改。在招 2.6 万种写法逐条对拍：
+  丢省 1 种 2 行（陕西→未知，农行上海岗）、多省 0；代价是以本市命名的大道单独出现（「深圳大道」）也不认，全库 0 行。
+  - **/jobs 同口径（2026-09-23）**。📌 纠错：此处原写「/jobs 仍是一省 1–2 城」，实际更窄——FTS 候选门按**原词**查 search_doc，
+    只取到字面写着省名的岗（线上筛「广东」3,434、筛「深圳」一城 23,394）；城市群 / 带「市」同一个洞（珠三角 0 / 长三角 11 / 「北京市」34）。
+    ✅ 筛选、`scoreJob` 城市 +20、粗排、校招「对你有货」统一走 `lib/job-filter` 的 `locationMatchesCityFilter` / `cityFtsTerms`
+    （普通城市 SQL 逐字节不变）。27 省 A/B 交替两轮零漂移：该进没进 0（全集）；新放行 2,053 种写法 / 31,939 行机审只错上面那 1 条。
+    ⚠️ 省目标的 where 只是超集（地名 ilike 误入全库 374 行，辽宁 170 是「马鞍山」）→ `exactTotalWhenCapped` 按 location 分组、用同一判定复核再求和，
+    自检③只扣城市判掉的行；**别改回 count(*)**，否则给出多数的确定数字。代价：「广东」计数库内 warm 416ms / 冷 2s，与「北京」同档。
+    🚫 省级解析在 `lib/cn-location-provinces.js`，**不许 require("./geo")**：job-filter / scoring / campus-facets 被客户端组件引用，
+    引 geo.js 会把 52KB 词表打进 /jobs /campus /today /saved 首屏包（实测各 +16kB；拆出后 +4~5kB）。
+- **/today 慢先看 `?__timing=1` 分段，大头是召回 SQL 的冷缓存，不是传输也不是 CPU（2026-09-23 实测）**：
+  线上登录态三段串行 = 画像读取（悉尼）0.2~0.56s + 召回 0.43~0.82s 热 / **2.2~4.8s 冷** + stage-2 计算。
+  同一画像召回库内 EXPLAIN 热 513ms、十分钟后再跑 2,210ms（read 19,823 块）——jobs 堆 1.1GB、shared_buffers 512MB，
+  爬虫写入几分钟就把缓存挤掉，**真实用户一天来一次 = 基本都是冷的**。50 个画像就绪用户首轮 EXPLAIN 库内 37ms~5.9s（16 人 >1.3s），
+  读块分散在方向 / 城市新岗 / 职能各层（合计 50 万 / 40 万 / 35 万块），没有单层能一刀修掉 → 根治靠加内存或召回瘦身，待创始人拍板。
+  stage-2 计算的 40% 曾是 `classifyCompanyIndustry` 每次重建 override 正则，已预编译 + 按公司名记忆（线上 600~740→265~362ms）。
 
 ## 数据库迁移（已自动化，勿再手动跑 Supabase）
 
@@ -402,6 +440,7 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
 - **接完源必须回读线上 `crawl_runs` 的 status / error_message**，别拿本机跑通当交付。
 - **hotjob / wecruit 源的公司名只认租户自报的 `suite/config.companyName`，不认 slug / probe 清单（2026-09-18 立，迁移 248·274 两次张冠李戴）**：`jd.hotjob.cn` 是精雕不是京东；wecruit 租户 `SU612f55…` seed 时记成领益智造，实为特变电工（1,903 个 active 岗挂错名三个月无人发现，标题与 tbea wt 源逐字相同）。探活出岗 ≠ 归属正确。存量纠正走 `rename-job-company.yml`（按 jd_url 前缀点名）。
   📌 第三次（2026-09-23，迁移 291，moka）：租户 `dahua` 是上海大华（集团）（地产，页面 title/intro 自报），被记成浙江大华技术（安防）——根因是 auto-discover 清单 `cn='大华'`，`_verify` 只要求门户标题含 cn，「大华集团 - 社会招聘」照样放行。**清单 `cn` 必须能区分同名的另一家公司**（现为「大华技术」，`test_auto_discover` 钉着）；moka 等平台同样以门户页自报的公司名为准。
+  📌 第四次（2026-09-23，北森）：**一个 ATS 租户 ≠ 一家公司**。`chinalife.zhiye.com` 同时发中国人寿与广发银行的岗，三个门户页同一 PortalId、列表一次返回整租户，每条都贴 sources.company → 531 个广发银行岗（列表里 466 + 已下线 65）挂成「中国人寿」。✅ 按每行自报的招聘机构 `Org`（DisplayFields 点名才返回；广发自己的校招页圈岗用的是同一棵树，全量逐条一致）归属，共享租户登记在 `china_ats._BEISEN_SHARED_TENANTS`；存量逐行纠正走 `reattribute-beisen-shared-tenant.yml`（`rename-job-company` 按前缀整批改名，同一前缀两家混着时用不上）。接北森源先看列表里「招聘机构」列有没有别家。
 - **Playwright 在 CI 上：不等 `networkidle`、必须接管 dialog（2026-09-13 立）**。
   ❌ moka 09-10 起 410 源日产 3.6 万岗 → ~500 却全记 success：新版前端 POST `sentry-fe.mokahr.com`，该主机从 runner 连不上也不断开（本机国内网络能连，所以本机复现不出来）→ networkidle 永远等不到 → 4 路由×35s 超时被 `except` 吞成 0 岗。
   ❌ dead-link-audit 每晚一片卡 150min：中国交建详情页弹 `alert('职位已下架')`，没注册 dialog 监听 → 驱动自动 dismiss 撞上下一跳 goto → Node 驱动崩溃、Python 干等。CI 上 A/B：旧代码第 6 个岗就崩，新代码 76 分钟审 1300 岗零崩溃。
@@ -541,6 +580,7 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 - ⚠️ **顺序必须是「先推代码、再回填」**：`country_code`/`job_scope` 在 `_UPDATE_COLS` 里、不在 `_PRESERVE_IF_EMPTY` 里，列表重抓会用**当时 CI 上那版代码**覆盖——2026-09-05 回填完 3 分钟 `campus-crawl` 起来，用旧代码把 11,613 行刷回 NULL。
 - ⚠️ **两字母码在「开头」和「结尾」是两回事，别把结尾那张表复制过去**（2026-09-06 加）：Workday 系还有一种把码写最前面的格式（`MY, JOHOR, VIRTUAL` / `SE, Solna`），但**这个位置上美国州缩写比国别码更常见** —— live 全库「开头两字母 + 逗号」7,403 行里 `GA, Atlanta…`117 / `NY, BROADWAY…`116 / `CA, Burbank…`50 全是「州, 城市, 门牌」。所以规则是**撞美国州缩写的一律弃权**（MO 是密苏里不是澳门、IN 是印第安纳不是印度），只有 CA/IN 在串里另有该国省/邦硬证据时才认；且整条规则排在 `derive_country_code` **最后一步**（`SE, Bothell, Washington, United, States` 是波音厂区代号，早在第一步就判了 US）。实测影响面 120 行：国内→境外 69、境外→国内 0、只补 country_code 51。取舍与实证反例（GM=通用汽车厂区前缀不是冈比亚、NA=北美占位不是纳米比亚）写在 `crawler/geo.py` 的 `ISO_ALPHA2_CODES` 那段注释里。
 - 🚫 **国家 / 范围必须按「别名折叠之前」的原文判（2026-09-23 立）**：❌ workday 在招岗 6,526 行 `country_code` 为空却判 domestic，其中 4,383 行存的是「远程」，路径原文是 `United-States---Remote` / `Remote-Mexico` / `UK-Remote`；greenhouse / smartrecruiters / ashby 同病（live 重抓 77 源 2,899 个）。✅ 根因：`normalize()` 先 `clean_location` 再判国家，而 `normalize_city` 是**子串**折叠——串里有 remote 就整串换成「远程」，国家当场丢光（smartrecruiters 出口特意展开的 `Remote Germany` 也被它抹掉）。✅ 防：`normalizer.geo_basis`，别名后判不出国家就用原文判；CITY_ALIASES 的目标值里只有「远程」判不出国家，所以只动被折叠的行，`test_only_remote_alias_target_lacks_country` 钉着这个前提。workday 另在 `_loc_from_path` 展开 ISO3 国别码（白名单；PHL=费城、NOR=站点编号是实测撞车码）、还原 `United-Kingdom` 这类多词国名的连字符。
+  📌 **续（同日）：地点压根没写国家的（'Durham' / 'Remote' / 'One Island East'）改问对方 ATS，不按 regions 猜**：❌ 上面修完仍剩 1,715 行按 regions 兜底判 domestic。✅ 防：`RawJob.country_code` = ATS 结构化字段**自报**的国家，`normalize` 只在 `scope_depends_on_regions`（CN 源与纯海外源答案不同）时采信，地点能说清一律以地点为准；workday 取 detail 的 `jobRequisitionLocation.country.alpha2Code`（`jobPostingInfo.country` 会错：赛默飞 Remote, Georgia 写成格鲁吉亚），任一地点沾大中华即判大中华。⚠️ **防来回跳**：国家查询不受 `CRAWL_DETAIL_CAP` 管（快档 / 重档同答案）；detail 4xx 是确定答复、照走兜底；超时 / 5xx 重试仍失败 → 该岗本轮不写库、`fetch_complete=False`。回归钉在 `crawler/test_declared_country.py`。live：新代码爬过的 45,692 行与预测逐行一致，国内→境外 708（+ 回填爬虫够不着的 60）、反向 0；DBS 快档 46s→307s（~300 次查询）。剩下 603 行里 540 行 detail 已 403/422（不对外），是探活问题不是 geo 问题。
 - 🚫 **location 为空 ≠ 城市未知：标题里的城市在写库时物化进 location（2026-09-23 立）**：❌ 康龙化成「有机合成研究员-西安」、万物云「福州-项目管理岗（实习生）」location 为空，/today 城市门认「location 为空」放行、stage-2 判「城市未知」只降级 → 外地岗推给所有城市的用户（真实用户目标上海/杭州，7 张卡全在外地）。✅ 防：`geo.title_city_location` / `titleCityLocation`（两端共读 `tests/fixtures/title-city-cases.json`），经 `normalizer.location_or_title_city`（run.py + discovery 两条链）与 `lib/jobs-store/write.ts` 写库；**只在 adapter 给空时填、绝不覆盖**，带省 / 全国 / 海外段、公司名括号注册地一律不填。有地点的 34,990 行对照 98.0% 一致；存量已回填 3,372 行。⚠️ `normalize()` 里标题兜底必须排在 `geo_basis` **之前**（合并时栽过：排反了 location='西安' 而 country_code=NULL，`test_empty_location_falls_back_to_title_city` 钉着）。
 - 📌 验收方法：拉全库 `distinct location`（约 2 万个写法）**逐条对拍改前 / 改后**，「大中华 → 境外」这个方向**必须为 0**。⚠️ 库里的 `location` 是**别名折叠之后**的文本，拿它、或拿 adapter `parse` 的出口量，都会和真实写库结果差一层——量地点类改动要把原始地点**完整过一遍 `normalize()`**（workday 能从 jd_url 路径复原原文，其它源只能 live 重抓）。逐条选词理由与实测数字 → `docs/module-deep-notes.md`。
 
@@ -815,7 +855,10 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
    ③ 重算打 `[campus-board] … ms=` 日志；④ 要刷掉卡死的条目，**换 cache key**（现为 v3），别指望 revalidate。
    📌 **2026-09-15 根因已拔除**：职能物化成 `jobs.job_function` 列后，`getCampusZone` / `buildCampusFacets`
    **不再拉 JD 正文**（facet 分类载荷 6.5MB→35kB），后台重算变轻、不再被超时杀。计数+徽章另由
-   `getCampusFreshStats` 每请求现算绕开快照（止血，保留为安全网）。详见 [[job-radar-campus-job-function-materialization]]。
+   `getCampusFreshStats` 独立于快照取数（止血，保留为安全网）。详见 [[job-radar-campus-job-function-materialization]]。
+   📌 2026-09-23：它和它依赖的「全部 active 公司名」都不再每请求打库——线上 /campus 首屏实测 8.8~10.1s，
+   其中 `select distinct company` 已退化成全表扫 3.1s、fresh 聚合冷盘 3.6s，且公司名只有进程内缓存（多实例≈0 命中）。
+   现为：公司名走松散索引扫描 + 跨实例 `unstable_cache` 5 分钟；fresh 走独立 60s `unstable_cache`（卡面「数据更新于」读它的 fetchedAtMs，卡住看得见）。
    ⚠️ 因此「别把 summary 从校招取数里砍掉」这条**已不再适用于校招链**（职能读列了）；`buildCampusFacets`
    现在读 `job_function` 列、仅列为 NULL 时才退回现算。`/jobs` 主搜索冷路径另说（见「/jobs 默认排序冷路径」段，仍未切）。
 8. **「对你有货」的对口数必须算在 `unstable_cache` 之外（2026-09-17 立）**：必投清单是静态北极星，不因用户方向增删公司，

@@ -246,6 +246,23 @@ def should_trip_adapter(checked, miss, min_sample=ADAPTIVE_MIN_SAMPLE, miss_rati
     return (miss / checked) >= miss_ratio
 
 
+# 撤岗比例熔断（按 adapter 显式登记，2026-09-23 随北森探活加）：expired 当天就被 purge 永久删除，
+# 而判死信号的**语义**是对方平台定的——哪天北森把 Status=2 挪作他用，双条件拦不住，一轮就能清空 11 万岗。
+# 本轮该 adapter 判死占比越线 → 停掉它本轮剩余（已判的都过了双条件，留着），下轮再说。
+# 只给「正常撤岗率远低于阈值」的源登记：北森全集对拍一次性存量 14%（见 enrich._detail_beisen），
+# 稳态更低。**别给 wt/hotjob 登记**——它们的列表本来就夹带 52%/71% 已关闭岗，高比例是常态。
+EXPIRE_RATIO_GUARD = {"beisen": 0.5}
+EXPIRE_GUARD_MIN_SAMPLE = 200
+
+
+def should_trip_expire_guard(adapter, checked, expired, min_sample=EXPIRE_GUARD_MIN_SAMPLE):
+    """纯函数：登记过的 adapter 本轮判死占比 ≥ 阈值（且样本够）→ 熔断。没登记的永远不熔断。"""
+    ratio = EXPIRE_RATIO_GUARD.get(adapter)
+    if ratio is None or checked < min_sample or checked <= 0:
+        return False
+    return (expired / checked) >= ratio
+
+
 def interleave_liveness_rows_by_priority(by_src, smap, match_company=must_apply.match_company):
     """为什么：队列 SQL 不能改排序键；必投倾斜只能在 source 分组交错前做内存重排。"""
     source_ids = list(by_src.keys())
@@ -310,7 +327,7 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
             res = "err"  # 兜底：任何意外都不许炸穿 ex.map（否则掀翻整批，本 drain 实锤过）
         with lock:
             stat[res] += 1
-            a = per_adapter.setdefault(adp, {"checked": 0, "miss": 0, "err": 0})
+            a = per_adapter.setdefault(adp, {"checked": 0, "miss": 0, "err": 0, "expired": 0})
             a["checked"] += 1
             if res == "miss":
                 a["miss"] += 1
@@ -319,12 +336,18 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
                 # 否则被限流的 adapter 永远凑不够 miss 率、熔断失效。
                 a["err"] += 1
             if res == "expired":  # 巡检确认撤岗 → 收集 CLOSED（批量末尾一次性落库，避免每岗一次往返）
+                a["expired"] += 1
                 close_events.append(jobs_db.plan_close_event(row["id"], row.get("source_id"), day))
             # 源级自适应：miss+err 率异常高 → 熔断该 adapter 本轮剩余（一次性 warning，不默默失败）
             if adp not in tripped and should_trip_adapter(a["checked"], a["miss"] + a["err"]):
                 tripped.add(adp)
                 print(f"⚠️ [自适应] adapter={adp} 本轮 miss+err {a['miss'] + a['err']}/{a['checked']} 过高（疑似被限流），"
                       f"跳过本轮剩余 {adp} 岗（不盖时间戳，下轮重试）")
+            if adp not in tripped and should_trip_expire_guard(adp, a["checked"], a["expired"]):
+                tripped.add(adp)
+                print(f"::warning::[撤岗熔断] adapter={adp} 本轮判死 {a['expired']}/{a['checked']} "
+                      f"≥ {EXPIRE_RATIO_GUARD[adp]:.0%}，远高于该源常态 → 疑似判死信号语义变了，"
+                      f"跳过本轮剩余 {adp} 岗（已判的留着，下轮重试）。先人工核对再放开。")
             done = stat["filled"] + stat["alive"] + stat["miss"] + stat["expired"] + stat["err"] + stat["skipped"]
             if done % 200 == 0:
                 print(f"  …{done}/{len(rows)}  filled={stat['filled']} alive={stat['alive']} "
@@ -344,7 +367,7 @@ def drain(sb, adapter=None, limit=0, workers=10, dry_run=False, make_sb=None, pe
           f"限流跳过(下轮重试) {stat['skipped']}"
           f"{'（dry-run 未写库）' if dry_run else ''}")
     if tripped:
-        print(f"⚠️ 本轮熔断 adapter：{', '.join(sorted(tripped))}（疑似限流，已跳过其剩余岗）")
+        print(f"⚠️ 本轮熔断 adapter：{', '.join(sorted(tripped))}（疑似限流 / 判死比例异常，见上方警告；已跳过其剩余岗）")
     return stat
 
 

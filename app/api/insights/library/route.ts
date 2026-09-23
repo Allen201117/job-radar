@@ -16,6 +16,7 @@ import {
   attachCardContents,
   getInsightLibraryIndex,
   getSubjectItems,
+  type IndexBuildTiming,
 } from "@/lib/insight-library-store";
 import {
   computeFacets,
@@ -28,6 +29,8 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// 与 app/insights/page.tsx 同理：索引过期后的后台重建挂在 waitUntil 上，给它留足时间。
+export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   const auth = await requireUser();
@@ -36,6 +39,8 @@ export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
 
   let index;
+  const requestStartedAt = Date.now();
+  const tIndex = performance.now();
   try {
     index = await getInsightLibraryIndex();
   } catch (error: any) {
@@ -62,15 +67,19 @@ export async function GET(request: NextRequest) {
   const matched = filterSubjects(index.subjects, filters);
   const sorted = sortSubjects(matched, filters.sort);
   const start = (page - 1) * LIBRARY_PAGE_SIZE;
+  const indexMs = performance.now() - tIndex;
 
   // 正文只为这一页现取（见 lib/insight-library-store.attachCardContents）。
+  const tCards = performance.now();
   const pageSubjects = await attachCardContents(
     sorted.slice(start, start + LIBRARY_PAGE_SIZE).map(trimSubjectForCard),
     3,
     filters.metric,
   );
 
-  return NextResponse.json({
+  const cardsMs = performance.now() - tCards;
+
+  const response = NextResponse.json({
     ok: true,
     total: sorted.length,
     page,
@@ -79,4 +88,22 @@ export async function GET(request: NextRequest) {
     facets: computeFacets(index.subjects, filters),
     index_built_at: index.builtAt,
   });
+  // 分段耗时走标准 Server-Timing 头：curl / DevTools 直接可读，不改响应体契约。
+  response.headers.set(
+    "Server-Timing",
+    `index;dur=${Math.round(indexMs)}, cards;dur=${Math.round(cardsMs)}` +
+      // 只有本次请求亲自建了索引（缓存没命中）才带建索引分段。
+      (index.buildTiming && Date.parse(index.builtAt) >= requestStartedAt
+        ? `, build;dur=${index.buildTiming.total_ms};desc="${serverTimingDesc(index.buildTiming)}"`
+        : ""),
+  );
+  return response;
+}
+
+/** 建索引分段压成一行 ASCII（Server-Timing 的 desc 只能放 ASCII）。 */
+function serverTimingDesc(t: IndexBuildTiming) {
+  return (
+    `subjects ${t.subjects_ms}ms/${t.subject_rows}r items ${t.items_ms}ms/${t.item_rows}r/${t.items_kb}KB ` +
+    `profiles ${t.profiles_ms}ms/${t.profile_rows}r build ${t.build_ms}ms index ${t.index_kb}KB`
+  );
 }

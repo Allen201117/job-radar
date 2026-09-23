@@ -1,7 +1,7 @@
 // 匹配事实计算（computeMatchFacts）+ 硬门（checkEligibility），§6.5。
 // computeMatchFacts 一次性算好所有维度，被 eligibility / scoring / 原因生成共用，杜绝口径漂移。
 // 严格复用既有 matcher（keywordMatchTier / recruitmentCategory / hasExplicitRecruitmentType /
-// educationMatch / jobIndustryAllowed 同源 classify / normalizeChinaCity / excludeJobs），不另造近似规则。
+// educationMatch / jobIndustryAllowed 同源 classify / location-targets / excludeJobs），不另造近似规则。
 import type { Job } from "../types";
 import type {
   RadarProfile,
@@ -18,7 +18,6 @@ import {
   keywordMatchTier,
   recruitmentCategory,
   hasExplicitRecruitmentType,
-  normalizeChinaCity,
   classifyJobFunction,
 } from "../china-keyword-expansion";
 import { classifyCompanyIndustry, userTargetIndustryCategories, jobIndustryAllowed } from "../company-industry";
@@ -26,6 +25,7 @@ import { educationMatch } from "../education-rank";
 import { excludeJobs } from "../live-search";
 import { normalizeCompany } from "../company-normalize";
 import { jobMatchesRegion } from "../job-scope";
+import { matchLocationTargets } from "./location-targets";
 
 export interface ActionState {
   primary: "saved" | "ignored" | "applied" | null;
@@ -108,7 +108,7 @@ function usesOverseasScope(profile: RadarProfile, job: Job): boolean {
   return profile.jobScope === "all" && job.job_scope === "overseas";
 }
 
-// 位置三态：domestic 保持旧城市 includes 口径；overseas/all 的海外岗走 country_code/targetRegions。
+// 位置三态：domestic 走 ./location-targets（省按省解析、城市照旧子串）；overseas/all 的海外岗走 country_code/targetRegions。
 function locationState(job: Job, profile: RadarProfile): { state: TriState; name: string | null } {
   if (usesOverseasScope(profile, job)) {
     const regions = profile.targetRegions || [];
@@ -127,11 +127,9 @@ function locationState(job: Job, profile: RadarProfile): { state: TriState; name
   if (targets.length === 0) return { state: "na", name: null };
   const loc = String(job.location || "");
   if (!loc) return { state: "unknown", name: null };
-  for (const t of targets) {
-    const norm = normalizeChinaCity(t);
-    if (loc.includes(t) || (norm && loc.includes(norm))) return { state: "match", name: norm || t };
-  }
-  return { state: "mismatch", name: null };
+  // 省目标按省解析、城市目标照旧子串（见 ./location-targets）；召回 SQL 的城市门读同一份展开。
+  const hit = matchLocationTargets(loc, targets);
+  return hit ? { state: "match", name: hit.label } : { state: "mismatch", name: null };
 }
 
 // 招聘阶段三态：实习/校招用户只接受明确匹配；社招保持默认宽松。

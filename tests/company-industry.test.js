@@ -126,3 +126,16 @@ test("必投清单里被用户点名的错分公司，分类器给出正确行�
   assert.equal(classifyCompanyIndustry("蚂蚁集团"), "金融");
   assert.equal(classifyCompanyIndustry("SHEIN"), "消费/零售");
 });
+
+// 2026-09-23：分类结果按公司名记忆、override 正则改为模块级预编译（/today 计算热点的 40%）。
+// 记忆只能省重算，不能串答案：同一批里交替问长短名、英文词边界名，结果必须与各自单独问时一致。
+test("classifyCompanyIndustry 记忆化不串答案（长短名交替、英文词边界、重复调用）", () => {
+  const names = ["京东方科技集团股份有限公司", "京东", "雅培 Abbott", "ABB（中国）有限公司", "京东方科技集团股份有限公司", "  京东  ", null, ""];
+  const first = names.map((n) => classifyCompanyIndustry(n));
+  const again = names.map((n) => classifyCompanyIndustry(n));
+  assert.deepEqual(again, first);
+  assert.equal(classifyCompanyIndustry("京东"), "互联网/科技");
+  assert.notEqual(classifyCompanyIndustry("京东方科技集团股份有限公司"), "互联网/科技");
+  assert.equal(classifyCompanyIndustry("雅培 Abbott"), "医疗/医药");
+  assert.equal(classifyCompanyIndustry(null), null);
+});

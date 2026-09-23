@@ -971,8 +971,55 @@ def _cms_parse_list(html_text: str, origin: str):
                          if normalizer.is_recruitment_type(fields.get("education")) else None),
             "title_truncated": bool(_CMS_TRUNCATED_RE.search(title)),
         })
+    if not rows:
+        rows = _cms_parse_position_items(body, origin)
     pages = [int(p) for p in _CMS_PAGE_LINK_RE.findall(body)]
     return rows, (max(pages) if pages else None)
+
+
+# 「position-item」模板（2026-09-23，药石科技 pharmablock.zhiye.com）：同属老版 CMS（无 PortalId、?PageIndex= 翻页、
+# /zwxq?jobId= 详情），但岗位行不是 <li><a>，而是
+#   <div class="position-item"><div class="position-name"><a href="/zwxq?jobId=…">标题</a></div>
+#     <div class="position-info"><span class="city">江苏省-南京市</span>…<span>2024-09-14</span></div>
+#     <div class="position-desc"><h4>工作内容</h4><p>整段 JD…</p></div>…
+# _CMS_ROW_RE 强制锚 <li>（防「热招职位」侧栏裸锚点冒充主列表，见上），于是这类页 0 行、整源静默 0 岗。
+# 这里只在 <li> 一行都没匹到时才启用，且锚在 position-item → position-name → jobId 这条三层结构上，
+# 侧栏裸 <a> 进不来；既有租户走不到这条分支（全集核过：近 4 天 0 产出的 5 个北森源里没有一个是这种标记）。
+_CMS_POSITION_ITEM_SPLIT_RE = re.compile(r"<div[^>]*class=\"position-item\"[^>]*>", re.I)
+_CMS_POSITION_NAME_RE = re.compile(
+    r"<div[^>]*class=\"position-name[^\"]*\"[^>]*>\s*<a\s[^>]*href=\"(?P<href>[^\"]*[?&](?:jobId|jobAdId|adId)=[^\"]+)\"[^>]*>(?P<title>.*?)</a>",
+    re.S | re.I)
+_CMS_POSITION_CITY_RE = re.compile(r"<span[^>]*class=\"city[^\"]*\"[^>]*>(.*?)</span>", re.S | re.I)
+_CMS_POSITION_DATE_RE = re.compile(r"<span[^>]*>\s*(\d{4}-\d{2}-\d{2})\s*</span>")
+_CMS_POSITION_DESC_RE = re.compile(r"<div[^>]*class=\"position-desc\"[^>]*>(.*?)</div>", re.S | re.I)
+
+
+def _cms_parse_position_items(body: str, origin: str) -> list:
+    """「position-item」模板的列表行 → 与 _cms_parse_list 同形的 rows（另带列表自带的 summary / posted_at）。"""
+    rows, seen = [], set()
+    for block in _CMS_POSITION_ITEM_SPLIT_RE.split(body)[1:]:
+        m = _CMS_POSITION_NAME_RE.search(block)
+        if not m:
+            continue
+        jd_url = _cms_normalize_job_url(origin, m.group("href"))
+        title = _cms_text(m.group("title")).strip()
+        if not jd_url or jd_url in seen or not (3 <= len(title) <= 120):
+            continue
+        city = _CMS_POSITION_CITY_RE.search(block)
+        date = _CMS_POSITION_DATE_RE.search(block)
+        desc = "\n".join(t for t in (_cms_text(d) for d in _CMS_POSITION_DESC_RE.findall(block)) if t)
+        seen.add(jd_url)
+        rows.append({
+            "title": title,
+            "jd_url": jd_url,
+            "location": (_cms_text(city.group(1)) or None) if city else None,
+            "education": None,
+            "job_type": None,
+            "summary": desc or None,
+            "posted_at": date.group(1) if date else None,
+            "title_truncated": bool(_CMS_TRUNCATED_RE.search(title)),
+        })
+    return rows
 
 
 def _cms_parse_detail(html_text: str) -> dict:
@@ -1282,6 +1329,49 @@ def _should_continue(fresh, chunk, total, page_size):
     return len(chunk) >= page_size
 
 
+# ============================================================================
+# 一个北森租户挂着不止一家公司：按岗位自报的「招聘机构」归属（2026-09-23 立）
+# ============================================================================
+# 北森的租户 ≠ 公司。chinalife.zhiye.com 是中国人寿集团的租户，广发银行（集团成员）的校招 / 实习 / 社招
+# 也发在这里：/custom/intern（国寿实习）与 /custom/gfcampus、/custom/gfintern（广发）是**同一个 PortalId**，
+# 列表接口不分门户，一次返回整个租户。旧代码每条都贴 sources.company →
+# 广发银行的「一级分行副行长级」「支行公司金融方向暑期实习生」全挂成了「中国人寿」。
+#
+# 事实来源 = 每行的 `Org`（页面上「招聘机构」那一列，要在 DisplayFields 里点名才返回）。
+# 2026-09-23 live 全量 2,964 行：
+#   · Org 非空 2,963 行；广发系 466 行，93 个机构全以「广发银行」「广银理财」开头；
+#   · 广发自己的校招页圈岗用的是同一棵树（请求体 `ClassificationTwo: 468`）→ 该节点全量 466 行
+#     与按 Org 分出来的 466 行逐条一致（多 0、少 0）；Org 与 ClassificationTwo 在 2,963 行上归属 100% 一致；
+#   · Org 为空退 ClassificationTwo；两者冲突认 Org（已下线的岗里实测 1 例：「香港分行副行长级」
+#     Org=广发银行总行、ClassificationTwo=中国人寿保险（集团）公司，正文写「本行任职回避」——是广发的岗）。
+# 为什么不改成「每个门户只抓自己那份」：门户页没有自己的 PortalId，只能复刻它请求体里的树节点号，
+# 那是页面配置、不是岗位事实，改一次页面就静默漂；两条源各抓一半还会让 upsert 的 source_id 来回抢。
+# 逐岗 Org 是岗位自己带的，同一个 host 照旧一次抓全，list-absence 也仍是全集。
+#
+# host → ((招聘机构前缀, 归属公司), ...)，按序第一个命中者得；都不命中 = sources.company（租户本家）。
+# 用前缀不用子串：本家机构名里夹着别家名字（「…驻广发银行…」）时子串会误判。
+_BEISEN_SHARED_TENANTS = {
+    "chinalife.zhiye.com": (("广发银行", "广发银行"), ("广银理财", "广发银行")),
+}
+# 只有共享租户才在列表请求里额外点名这两列，其余租户的请求体保持原样。
+_BEISEN_ENTITY_FIELDS = ("Org", "ClassificationTwo")
+
+
+def beisen_hiring_entity(post) -> str:
+    """岗位自报的招聘机构：Org 优先，空了退 ClassificationTwo；都没有返回空串。"""
+    if not isinstance(post, dict):
+        return ""
+    return _first_str(post, _BEISEN_ENTITY_FIELDS)
+
+
+def beisen_shared_tenant_owner(host: str, entity: str) -> Optional[str]:
+    """共享租户里这条岗归哪家公司。None = 不是共享租户，或机构属于租户本家（沿用 sources.company）。"""
+    for prefix, company in _BEISEN_SHARED_TENANTS.get(host or "", ()):
+        if entity.startswith(prefix):
+            return company
+    return None
+
+
 class BeisenAdapter(ChinaSpaAdapter):
     """北森招聘（*.zhiye.com / *.italent.cn / 自有 careers 域名，由北森承载）。
 
@@ -1336,6 +1426,11 @@ class BeisenAdapter(ChinaSpaAdapter):
             declared = _first_str(post, ("Category", "CategoryName"))
             if declared:
                 job.job_type = declared
+        if job is not None:
+            # 共享租户：按岗位自报的招聘机构归属（见 _BEISEN_SHARED_TENANTS）。
+            owner = beisen_shared_tenant_owner(getattr(self, "_host", ""), beisen_hiring_entity(post))
+            if owner:
+                job.company = owner
         return job
 
     def fetch(self, source_url: str) -> str:
@@ -1539,6 +1634,9 @@ class BeisenAdapter(ChinaSpaAdapter):
         api_answered = False
         endpoints = (f"{origin}/api/Jobad/GetJobAdPageList", f"{origin}/api/JobAd/GetJobAdPageList")
         ep_ok = None
+        display_fields = ["Category", "Kind", "LocId", "PostDate", "WorkWeChatQrCode"]
+        if parsed.netloc in _BEISEN_SHARED_TENANTS:
+            display_fields += list(_BEISEN_ENTITY_FIELDS)   # 不点名就不返回，归属无从判
         with httpx.Client(timeout=20, follow_redirects=True, headers={"User-Agent": ua}) as cli:
             try:
                 html = cli.get(source_url).text
@@ -1553,7 +1651,7 @@ class BeisenAdapter(ChinaSpaAdapter):
             while len(rows) < cap:
                 body = {"PageIndex": index, "PageSize": self._PAGE_SIZE, "Category": [],
                         "KeyWords": "", "SpecialType": 0, "PortalId": portal_id,
-                        "DisplayFields": ["Category", "Kind", "LocId", "PostDate", "WorkWeChatQrCode"]}
+                        "DisplayFields": display_fields}
                 jj, ep_ok = _post_page_with_retry(cli, endpoints, ep_ok, body)
                 if not isinstance(jj, dict):
                     break
@@ -1687,7 +1785,8 @@ class BeisenAdapter(ChinaSpaAdapter):
         单条失败静默跳过（保留列表信息，最差是薄卡），绝不因为一个详情页炸掉整源。"""
         cap = resolve_detail_cap(_CMS_DETAIL_CAP)
         truncated = [r for r in rows if r.get("title_truncated")]
-        rest = [r for r in rows if not r.get("title_truncated")]
+        # 列表已自带正文（position-item 模板）的行不用再打详情页；theme2 列表从不带 summary，对既有租户是空操作。
+        rest = [r for r in rows if not r.get("title_truncated") and not r.get("summary")]
         queue = truncated + rest
         budget = max(cap, min(len(truncated), _CMS_TITLE_REPAIR_CAP))
         for row in queue[:budget]:
@@ -2106,7 +2205,13 @@ class BeisenAdapter(ChinaSpaAdapter):
             data = json.loads(html)
         except (ValueError, TypeError):
             return []
+        shared = getattr(self, "_host", "") in _BEISEN_SHARED_TENANTS
         if isinstance(data, dict) and "_ssr_jobs" in data:  # 老版 SSR 产物
+            if shared:
+                # 老版 SSR / CMS / 卡片三条路径都不带招聘机构 → 只能整批贴 sources.company，正是要修的错。
+                raise RuntimeError(
+                    f"beisen: shared tenant {self._host} fell back to an SSR path without hiring entity; "
+                    f"refuse to attribute every job to sources.company")
             out, seen = [], set()
             for j in data["_ssr_jobs"]:
                 jd, title = j.get("jd_url"), j.get("title")
@@ -2131,6 +2236,18 @@ class BeisenAdapter(ChinaSpaAdapter):
                 f"({getattr(self, '_host', '?')} → route={getattr(self, '_detail_route', None)!r}); "
                 f"detail route unusable, refuse to report 0 jobs as success"
             )
+        if shared and out:
+            posts = self._list_posts(html)
+            missing = sum(1 for p in posts if not beisen_hiring_entity(p))
+            if posts and missing == len(posts):
+                # 整批都没有招聘机构 = 字段没返回（请求体没点名 / 北森改了字段），不是「全是本家的岗」。
+                # 放行就会静默退回「全贴 sources.company」，所以记 failed：库里保留上一轮归属正确的行。
+                raise RuntimeError(
+                    f"beisen: shared tenant {self._host} returned {len(posts)} rows without Org/"
+                    f"ClassificationTwo; refuse to attribute every job to sources.company")
+            if missing:
+                _log.warning("%s: 共享租户 %s 有 %d/%d 行没有招聘机构，这几行沿用 sources.company",
+                             self.name, self._host, missing, len(posts))
         return out
 
     def _list_posts(self, list_json: str):

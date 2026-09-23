@@ -92,7 +92,6 @@ export default function ResumeProfilePanel() {
   const [saved, setSaved] = useState<any | null>(null);
   const [loadingSaved, setLoadingSaved] = useState(true);
   const [llmReady, setLlmReady] = useState<boolean | null>(null);
-  const [llmModel, setLlmModel] = useState("");
 
   useEffect(() => {
     loadSaved();
@@ -106,7 +105,6 @@ export default function ResumeProfilePanel() {
       if (data.ok && data.profile) setSaved(data.profile);
       if (data.llm) {
         setLlmReady(Boolean(data.llm.configured));
-        setLlmModel(data.llm.model || "");
       }
     } catch {
       /* 静默 */
@@ -357,7 +355,7 @@ export default function ResumeProfilePanel() {
               </p>
             )}
             {llmReady === true && (
-              <p className="text-xs ink-3">AI 解析已就绪{llmModel ? `（模型 ${llmModel}）` : ""}。</p>
+              <p className="text-xs ink-3">AI 解析已就绪。</p>
             )}
 
             <button
