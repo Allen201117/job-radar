@@ -402,6 +402,7 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
 - **接完源必须回读线上 `crawl_runs` 的 status / error_message**，别拿本机跑通当交付。
 - **hotjob / wecruit 源的公司名只认租户自报的 `suite/config.companyName`，不认 slug / probe 清单（2026-09-18 立，迁移 248·274 两次张冠李戴）**：`jd.hotjob.cn` 是精雕不是京东；wecruit 租户 `SU612f55…` seed 时记成领益智造，实为特变电工（1,903 个 active 岗挂错名三个月无人发现，标题与 tbea wt 源逐字相同）。探活出岗 ≠ 归属正确。存量纠正走 `rename-job-company.yml`（按 jd_url 前缀点名）。
   📌 第三次（2026-09-23，迁移 291，moka）：租户 `dahua` 是上海大华（集团）（地产，页面 title/intro 自报），被记成浙江大华技术（安防）——根因是 auto-discover 清单 `cn='大华'`，`_verify` 只要求门户标题含 cn，「大华集团 - 社会招聘」照样放行。**清单 `cn` 必须能区分同名的另一家公司**（现为「大华技术」，`test_auto_discover` 钉着）；moka 等平台同样以门户页自报的公司名为准。
+  📌 第四次（2026-09-23，北森）：**一个 ATS 租户 ≠ 一家公司**。`chinalife.zhiye.com` 同时发中国人寿与广发银行的岗，三个门户页同一 PortalId、列表一次返回整租户，每条都贴 sources.company → 531 个广发银行岗（列表里 466 + 已下线 65）挂成「中国人寿」。✅ 按每行自报的招聘机构 `Org`（DisplayFields 点名才返回；广发自己的校招页圈岗用的是同一棵树，全量逐条一致）归属，共享租户登记在 `china_ats._BEISEN_SHARED_TENANTS`；存量逐行纠正走 `reattribute-beisen-shared-tenant.yml`（`rename-job-company` 按前缀整批改名，同一前缀两家混着时用不上）。接北森源先看列表里「招聘机构」列有没有别家。
 - **Playwright 在 CI 上：不等 `networkidle`、必须接管 dialog（2026-09-13 立）**。
   ❌ moka 09-10 起 410 源日产 3.6 万岗 → ~500 却全记 success：新版前端 POST `sentry-fe.mokahr.com`，该主机从 runner 连不上也不断开（本机国内网络能连，所以本机复现不出来）→ networkidle 永远等不到 → 4 路由×35s 超时被 `except` 吞成 0 岗。
   ❌ dead-link-audit 每晚一片卡 150min：中国交建详情页弹 `alert('职位已下架')`，没注册 dialog 监听 → 驱动自动 dismiss 撞上下一跳 goto → Node 驱动崩溃、Python 干等。CI 上 A/B：旧代码第 6 个岗就崩，新代码 76 分钟审 1300 岗零崩溃。
