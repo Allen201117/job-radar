@@ -170,6 +170,17 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     📌 全集回归（2026-09-18）：358 个 enabled beisen 源新旧两版逐源对拍，岗位合计都是 89,653，
                          #       分支归属/报错数/reported_total/fetch_complete 全 0 变化。**这一形态在库里只有方太一家**——
                          #       510 条存量 beisen 源 + 300 个 distinct host × /social /campus /intern（900 次探测）零命中。
+                         #   ⬆ 2026-09-24 老版门户（/zpdetail/{数字}，25 个租户同一套模板）正文两处修：
+                         #     ① 抓取时 _beisen_ssr_fill_summaries 每轮只补列表**前 60 条**、且每轮都是同样那 60 条；
+                         #       巡检 enrich._detail_beisen 对没有 jobAdId 的链接一律抛 unknown → enrich_row 记「没抓到正文」
+                         #       失败 +1、盖戳，满 3 次永久出队。百胜中国 557 岗因此只有 63 条正文。现在薄卡在巡检里取详情页
+                         #       补（已有正文的行仍 unknown，死活不判）；两边共用 `beisen_ssr_detail_body`。补后 538/557。
+                         #     ② 正文正则取到页尾，页脚「现在申请 返回职位列表 收藏 [热招职位 更多>> 别的岗名…] ©2026 … 京ICP备…」
+                         #       整段进了 summary（22 租户 482 条）。现截在页脚前（`_BEISEN_SSR_FOOTER_RE`），存量逐条从原页重取：
+                         #       424 条新正文逐条是旧正文的前缀（只去页脚、0 条丢真内容），15 条真实 JD 不足 60 字（靠页脚凑够的）如实变薄。
+                         #     ⚠️ 这类链接**没有任何死活判定**：已撤的岗详情页写「对不起，此职位已停用。」（无正文标签），
+                         #       2026-09-24 实测 43 个 active 岗是这个页面（38 个已不在列表、5 个绿城还挂在列表里）。
+                         #       要接判死先按项目规矩做真/伪 id 对拍、双条件，别直接拿这句文案判。
                          #     jd.py 按 `positionDeptName` 派生子公司 company → 京东科技 209 + 京东物流 629；
                          #     netease.py 按 `productName` 派生 → 网易有道 115 + 网易云音乐 157。
                          #       两者**都不新增 source**（那些岗本就在现有源里，新增源会抢同一行 upsert）；靠

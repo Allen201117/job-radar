@@ -25,7 +25,7 @@
     {"name": "小红书", "pattern": "%小红书%"},
     {"name": "哔哩哔哩", "pattern": "%哔哩哔哩%"},
     {"name": "携程", "pattern": "%携程%"},
-    {"name": "贝壳", "pattern": "%贝壳找房%"},
+    {"name": "贝壳", "pattern": "%贝壳%"},
     {"name": "得物", "pattern": "%得物%"},
     {"name": "米哈游", "pattern": "%米哈游%"},
     {"name": "华为", "pattern": "%华为%"},

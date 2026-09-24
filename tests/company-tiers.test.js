@@ -19,6 +19,12 @@ test("大华：安防大华（库里记作「大华股份 Dahua」）是大厂�
   assert.equal(classifyCompanyTier("大华集团"), "中小厂");
 });
 
+test("贝壳：社招 / 校招两个门户分别记作「贝壳 Beike」「贝壳找房」，都是大厂", () => {
+  // 原 pattern 是 %贝壳找房%，社招 476 个在招岗（贝壳 Beike）一直被兜底成中小厂（2026-09-24 查实）。
+  assert.equal(classifyCompanyTier("贝壳 Beike"), "大厂");
+  assert.equal(classifyCompanyTier("贝壳找房"), "大厂");
+});
+
 test("不命中任何名单 → 中小厂兜底", () => {
   assert.equal(classifyCompanyTier("某不知名小公司有限公司"), "中小厂");
   assert.equal(classifyCompanyTier(""), "中小厂");

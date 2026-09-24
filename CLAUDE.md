@@ -400,7 +400,9 @@ app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse�
   + 5 处 Supabase 兜底 `.order("id")`；`tests/jobs-order-tiebreak.test.js` 扫 lib/app/components，新写的裸 `order by first_seen_at desc` 直接红。
   📌 纠错：此处原写「listLatestActive 等同病未改」。同快照实测：国内首屏 60 条两版 19 条不同；走并行全表扫 + 排序的计划
   **同 SQL 同快照连跑两次** 200 位里 71 位不同（带 id 后 0）。代价：首屏 warm 0.5→0.6ms，截断点落在大并列块才明显
-  （海外第 2 页 1000 条、块 2,006 行 8.9→17.8ms）。仍是裸时间序、不在请求路径未改：`crawler/audit_dead_links.py` 取新岗、`scripts/verify-opportunity-recall.ts`。
+  （海外第 2 页 1000 条、块 2,006 行 8.9→17.8ms）。同日补 `audit_dead_links --prioritize-new`（香港库 + Supabase 兜底；400 条截断点落在
+  157 行并列块，同索引 + Incremental Sort，warm 5.7→7~20ms）与 `scripts/verify-opportunity-recall.ts`。
+  ⚠️ `scripts/{audit-job-duplicates,diagnose-jobs,probe-dead-links}.js` 仍是裸时间序没改：它们读的是 Supabase `jobs`（2026-09-24 实测 0 行），先得改读香港库，排序才有意义。
 
 ## 数据库迁移（已自动化，勿再手动跑 Supabase）
 
@@ -582,7 +584,9 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
 **唯一性下沉到 DB（migration 144）**：`jobs.canonical_jd_url`（归一 tracking 参数 + 尾斜杠；`#` SPA hash 路由原样不碰）+ active partial unique index 保证「同一岗位链接在 active 里唯一」。
 - ⚠️ **`canonicalize_jd_url` 归一逻辑活在三处，改一处必须三处同改、字节级一致**：`lib/canonical-url.js`（前端/JS 写入端）、`crawler/normalizer.py`（爬虫端）、`supabase/migrations/144_jobs_canonical_jd_url.sql` 的 SQL 函数（回填/触发器/审计）。任一处 drift 会导致同岗算出不同 canonical → 去重失效或误并。
 - 改规则后必须同步两套纯函数测试：`tests/canonical-url.test.js` + `crawler/test_canonical.py`。
-- 加唯一约束类迁移：上约束**前**必须先 dedup 存量重复（降级而非删除，保 `job_actions` 外键），否则 `CREATE UNIQUE INDEX` 在生产有重复时会失败并永久阻塞后续迁移；push 前先跑 `node scripts/audit-job-duplicates.js` 看影响面。
+- 加唯一约束类迁移：上约束**前**必须先 dedup 存量重复（降级而非删除，保 `job_actions` 外键），否则 `CREATE UNIQUE INDEX` 在生产有重复时会失败并永久阻塞后续迁移；push 前先在**香港库**上按新唯一键 `group by … having count(*) > 1` 数影响面。
+  📌 纠错（2026-09-24）：此处原写「先跑 `node scripts/audit-job-duplicates.js`」——它读的是 Supabase `jobs`，Phase 1（2026-06-19）后那张表不是真数据
+  （09-24 实测 0 行），跑出来恒为「无重复」= 假绿。它改读香港库之前别用。
 - ⚠️ **大表（jobs 10 万级）全表回填/建索引迁移必须抬超时**：在迁移事务内加 `set local statement_timeout = '1800s';`。Supabase 默认 statement_timeout ≈ 2min，全表 `update … set x = f(col)` 会被强杀致整个迁移回滚（migration 144 踩过这个坑）。
 
 ## 当前 source 状态

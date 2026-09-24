@@ -14,6 +14,13 @@ liveness-sweep 只判「对方关闭」，在招的重复岗会一直 active、�
 如 moka 的 `#/job/<uuid>`）且那行还在招」的行，只在影子门户出现的岗不动。没有 `#` 片段的行一律不算孪生（宁可不动）。
 两个前缀不许互相包含，否则会拿自己当自己的孪生。
 
+--twin-key 认「同一个岗」看哪一段（默认 hash，即上面的 `#` 片段）：
+  · jobadid：北森的岗位 id 在 `?jobAdId=<uuid>` 里、没有 `#`。同一个北森门户挂在两个域名上时两边 id 相同
+    （2026-09-24 实测 tjsemi→zhonghuan 758/758、ke.zhiye.com→campus.ke.com 45/45）。
+  · title：标题一字不差。只给「两个不同租户各发一份同一个招聘需求」用——两边 id 不同，标题里都带同一个
+    招聘编号（上实集团门户 vs 上海医药门户：`上海医药2027技术工培生(J12541)`，150 个在招里 117 个）。
+    ⚠️ 标题里没有编号的租户别用它：同名不同岗会被当成孪生。
+
 用法：
     python3 crawler/remove_jobs_by_url_prefix.py --url-prefix https://tbea.hotjob.cn/wt/TBEA/ --company 新疆特变电工集团
     python3 crawler/remove_jobs_by_url_prefix.py --url-prefix https://tbea.hotjob.cn/wt/TBEA/ --company 新疆特变电工集团 --apply
@@ -47,23 +54,33 @@ _UPDATE_SQL = """
 
 # 保留门户那侧必须包成 array(...)：它是不相关子查询 → InitPlan 只扫一次表。写成 `in (select …)` 时
 # 规划器把影子侧估成 1 行、选嵌套循环，实际 307 行就把 jobs 全表并行扫 307 遍（2026-09-23 香港库 EXPLAIN）。
-_TWIN_SQL = """
-       and split_part(jd_url, '#', 2) <> ''
-       and split_part(jd_url, '#', 2) = any(array(
-             select split_part(k.jd_url, '#', 2)
+# {c} = 列名前缀（影子侧为空，保留门户侧为 `k.`）。取不到键的行（空串）一律不算孪生。
+_TWIN_KEYS = {
+    "hash": "split_part({c}jd_url, '#', 2)",
+    "jobadid": "lower(coalesce(substring({c}jd_url from 'jobAdId=([0-9A-Za-z-]+)'), ''))",
+    "title": "coalesce({c}title, '')",
+}
+
+
+def twin_sql(key="hash"):
+    expr = _TWIN_KEYS[key]
+    return f"""
+       and {expr.format(c='')} <> ''
+       and {expr.format(c='')} = any(array(
+             select {expr.format(c='k.')}
                from jobs k
               where k.status = 'active'
                 and k.jd_url like %s))
 """
 
 
-def run(cur, url_prefix, company, apply=False, twins_under=None):
-    """返回 (命中 active 行数, 实际改动行数或 None)。twins_under 见模块注释 --only-twins-under。"""
+def run(cur, url_prefix, company, apply=False, twins_under=None, twin_key="hash"):
+    """返回 (命中 active 行数, 实际改动行数或 None)。twins_under / twin_key 见模块注释。"""
     params = [company, like_prefix(url_prefix)]
     count_sql, update_sql = _COUNT_SQL, _UPDATE_SQL
     if twins_under:
         params.append(like_prefix(twins_under))
-        count_sql, update_sql = count_sql + _TWIN_SQL, update_sql + _TWIN_SQL
+        count_sql, update_sql = count_sql + twin_sql(twin_key), update_sql + twin_sql(twin_key)
     cur.execute(count_sql, params)
     (planned,) = cur.fetchone()
     if not apply or not planned:
@@ -79,12 +96,16 @@ def parse_args(argv=None):
     ap.add_argument("--url-prefix", required=True, help="jd_url 前缀（门户级，完整 https 前缀）")
     ap.add_argument("--company", required=True, help="精确公司名，与前缀同时成立才动")
     ap.add_argument("--only-twins-under", help="保留门户的 jd_url 前缀：只标在它下面有在招孪生行的（见模块注释）")
+    ap.add_argument("--twin-key", choices=sorted(_TWIN_KEYS), default="hash",
+                    help="认孪生看哪一段：hash=`#` 片段 / jobadid=北森 jobAdId / title=标题一字不差（见模块注释）")
     ap.add_argument("--apply", action="store_true", help="真的写库（默认只 dry-run 报数）")
     args = ap.parse_args(argv)
     for flag, value in (("--url-prefix", args.url_prefix), ("--only-twins-under", args.only_twins_under)):
         if value is not None and (not value.startswith("https://") or len(value) < len("https://a.b/")):
             ap.error(f"{flag} 必须是完整 https 前缀（含主机与路径）")
     keep = args.only_twins_under
+    if args.twin_key != "hash" and not keep:
+        ap.error("--twin-key 只在 --only-twins-under 时有意义")
     if keep and (keep.startswith(args.url_prefix) or args.url_prefix.startswith(keep)):
         ap.error("--only-twins-under 与 --url-prefix 互相包含：会拿自己当自己的孪生")
     return args
@@ -99,7 +120,7 @@ def main(argv=None):
     try:
         with conn.cursor() as cur:
             planned, updated = run(cur, args.url_prefix, args.company, apply=args.apply,
-                                   twins_under=args.only_twins_under)
+                                   twins_under=args.only_twins_under, twin_key=args.twin_key)
     finally:
         conn.close()
     if not planned:

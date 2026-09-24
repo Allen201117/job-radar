@@ -60,7 +60,30 @@ class PrioritizeNewTest(unittest.TestCase):
         sql = self._capture_sql(prioritize_new=True)
         self.assertIn("enrich_checked_at is null", sql)
         self.assertIn("first_seen_at >= now() - interval '48 hours'", sql)
-        self.assertIn("order by first_seen_at desc", sql)
+        # 末位 id 决胜：一批入库几百行 first_seen_at 相同，截断点落在并列块里时挑哪几条不能交给执行计划
+        self.assertIn("order by first_seen_at desc, id limit", sql)
+
+    def test_prioritize_new_supabase_fallback_orders_by_id_after_first_seen(self):
+        orders = []
+
+        class _RecQuery:
+            def __getattr__(self, name):
+                return lambda *a, **k: self
+
+            def order(self, col, **k):
+                orders.append((col, k.get("desc", False)))
+                return self
+
+            def execute(self):
+                return _FakeResp([])
+
+        class _RecSupabase:
+            def table(self, name):
+                assert name == "jobs"
+                return _RecQuery()
+
+        audit_dead_links._fetch_browser_rows_supabase(_RecSupabase(), ["src-1"], 10, prioritize_new=True)
+        self.assertEqual(orders, [("first_seen_at", True), ("id", False)])
 
     def test_default_rotation_uses_oldest_first(self):
         sql = self._capture_sql(prioritize_new=False)
