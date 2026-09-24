@@ -404,7 +404,9 @@ app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse�
   **同 SQL 同快照连跑两次** 200 位里 71 位不同（带 id 后 0）。代价：首屏 warm 0.5→0.6ms，截断点落在大并列块才明显
   （海外第 2 页 1000 条、块 2,006 行 8.9→17.8ms）。同日补 `audit_dead_links --prioritize-new`（香港库 + Supabase 兜底；400 条截断点落在
   157 行并列块，同索引 + Incremental Sort，warm 5.7→7~20ms）与 `scripts/verify-opportunity-recall.ts`。
-  ⚠️ `scripts/{audit-job-duplicates,diagnose-jobs,probe-dead-links}.js` 仍是裸时间序没改：它们读的是 Supabase `jobs`（2026-09-24 实测 0 行），先得改读香港库，排序才有意义。
+  📌 纠错（同日）：此处原写「`scripts/{audit-job-duplicates,diagnose-jobs,probe-dead-links}.js` 仍是裸时间序、读的是 Supabase `jobs`（0 行）」，已处理：
+  `audit-job-duplicates.js` 改读香港库、按 `(first_seen_at desc, id desc)` keyset 翻页（见「唯一性下沉到 DB」一节）；`diagnose-jobs.js`（复刻 06-12 前的前端筛选）与
+  `probe-dead-links.js`（按状态码判死链）已删。`tests/jobs-order-tiebreak.test.js` 扫描范围加上 scripts/，`tests/scripts-jobs-db.test.js` 禁止 scripts/ 再读 Supabase `jobs`。
   📌 **JS 里「sort → 按页切」同一条规矩（2026-09-24，/campus 抽屉 `getCampusCompanyJobs`）**：轻查询没 order by（deadline 是 text 下推不了），行序 = 堆物理顺序，
   行一被改写（爬虫 upsert / 抽屉探活盖戳 / 分类回填）就变；`compareCampusJobs` 截止日相同即返 0 → 必投抽屉 288 个翻页边界 284 个落在并列块中间
   （建行校招 3,784 条截止日全是 10-08），换计划交替翻页改前重复 / 漏 632 / 632 → 改后 0 / 0。✅ 比较器末位补 `id`；翻页改游标（`campusPageStart`）+ 前端按 id 去重
@@ -589,11 +591,14 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
 `jd_url` 准确性高于一切。**禁止写入 active jobs**：招聘首页 / 搜索页 / 导航页 / 帮助页·FAQ / 登录页 / 语言切换页 / 专题入口页 / 空链接或猜测链接。拿不到稳定岗位详情链接的 source 只能记 `partial_success`，不得标记完整成功。质量门：`company/title/jd_url` 非空 + HTTP 200 + 页面含标题或核心片段。
 
 **唯一性下沉到 DB（migration 144）**：`jobs.canonical_jd_url`（归一 tracking 参数 + 尾斜杠；`#` SPA hash 路由原样不碰）+ active partial unique index 保证「同一岗位链接在 active 里唯一」。
-- ⚠️ **`canonicalize_jd_url` 归一逻辑活在三处，改一处必须三处同改、字节级一致**：`lib/canonical-url.js`（前端/JS 写入端）、`crawler/normalizer.py`（爬虫端）、`supabase/migrations/144_jobs_canonical_jd_url.sql` 的 SQL 函数（回填/触发器/审计）。任一处 drift 会导致同岗算出不同 canonical → 去重失效或误并。
+- ⚠️ **`canonicalize_jd_url` 归一逻辑活在三处，改一处必须三处同改、字节级一致**：`lib/canonical-url.js`（前端/JS 写入端）、`crawler/normalizer.py`（爬虫端）、`jobs-db/schema.sql` 的 SQL 函数（香港库的回填/触发器/审计；📌 纠错 2026-09-24：此处原写 `supabase/migrations/144`，那是 Phase 1 前的 Supabase 版，与上文 Phase 1 段的说法矛盾）。任一处 drift 会导致同岗算出不同 canonical → 去重失效或误并。
 - 改规则后必须同步两套纯函数测试：`tests/canonical-url.test.js` + `crawler/test_canonical.py`。
-- 加唯一约束类迁移：上约束**前**必须先 dedup 存量重复（降级而非删除，保 `job_actions` 外键），否则 `CREATE UNIQUE INDEX` 在生产有重复时会失败并永久阻塞后续迁移；push 前先在**香港库**上按新唯一键 `group by … having count(*) > 1` 数影响面。
-  📌 纠错（2026-09-24）：此处原写「先跑 `node scripts/audit-job-duplicates.js`」——它读的是 Supabase `jobs`，Phase 1（2026-06-19）后那张表不是真数据
-  （09-24 实测 0 行），跑出来恒为「无重复」= 假绿。它改读香港库之前别用。
+- 加唯一约束类迁移：上约束**前**必须先 dedup 存量重复（降级而非删除，保 `job_actions` 外键），否则 `CREATE UNIQUE INDEX` 在生产有重复时会失败并永久阻塞后续迁移；push 前先跑 `node scripts/audit-job-duplicates.js`（读香港库、会话只读；全量约 2.5 分钟，`--sql-only` 约 40 秒）看影响面：
+  A 段从 `pg_index` 读 jobs 每条唯一索引，按它**自己的键列 / 谓词**数重复，另数「键里有 NULL、索引不拦」的行；B 段按**本地** `lib/canonical-url.js` 重算 active 行的 canonical 分组
+  ——改 canonical 规则就先改 JS 再跑，★ 那行即要降级的行数。退出码 2 = 查出问题。其它形式的新唯一键仍在香港库上按新键 `group by … having count(*) > 1` 手数。
+  📌 纠错（2026-09-24）：旧版读 Supabase `jobs`（Phase 1 后那张表实测 0 行），恒报「无重复」= 假绿，同日已改读香港库；active 为 0 现在直接报错退出。
+  09-24 实测：两条唯一索引有效、重复 0；已存 canonical 与库内 SQL 函数、与 JS 重算（439,858 行）均 0 漂移。反向对照（JS 规则改成「去掉整段 query」）
+  报 192,714 行漂移 / 539 组重复，与独立 SQL 算的期望值各差 2 行（两次测量之间的上下架）。
 - ⚠️ **大表（jobs 10 万级）全表回填/建索引迁移必须抬超时**：在迁移事务内加 `set local statement_timeout = '1800s';`。Supabase 默认 statement_timeout ≈ 2min，全表 `update … set x = f(col)` 会被强杀致整个迁移回滚（migration 144 踩过这个坑）。
 
 ## 当前 source 状态
