@@ -444,5 +444,57 @@ class TestSsrDetailBodyFooter(unittest.TestCase):
         self.assertEqual(china_ats.beisen_ssr_detail_body(
             "<div>岗位职责：负责门店营运</div> 现在申请 返回职位列表 收藏 ©2026 x 京ICP备05051632号-16 " + "填充" * 40), "")
 
+
+class TestSsrStubRedirect(unittest.TestCase):
+    """华夏基金 / 京博：/zpdetail/{id} 只是跳转壳，按 #v 的招聘类别跳到自有详情模板（2026-09-24 实测页面原样）。"""
+    URL = "https://jingbo.zhiye.com/zpdetail/311188751"
+
+    def _stub(self, cate, jid="311188751", tag="hidden"):
+        return (f'<body><input type="{tag}" value="{cate}" id="v" /><script type="text/javascript">'
+                '$(function () { var cate = $("#v").val();'
+                f'  if(cate =="校园招聘"){{ window.location.href="/xiangqing2?jobId="+{jid}; }}'
+                f'  else if(cate =="社会招聘"){{ window.location.href="/xiangqing?jobId="+{jid}; }}'
+                f'  else{{ window.location.href="/xiangqing3?jobId="+{jid}; }} }});</script></body>')
+
+    def test_follows_branch_matching_category(self):
+        self.assertEqual(china_ats.beisen_ssr_stub_target(self._stub("社会招聘"), self.URL),
+                         "https://jingbo.zhiye.com/xiangqing?jobId=311188751")
+        self.assertEqual(china_ats.beisen_ssr_stub_target(self._stub("校园招聘", tag="text"), self.URL),
+                         "https://jingbo.zhiye.com/xiangqing2?jobId=311188751")
+
+    def test_unknown_category_takes_else_branch(self):
+        self.assertEqual(china_ats.beisen_ssr_stub_target(self._stub("实习生招聘"), self.URL),
+                         "https://jingbo.zhiye.com/xiangqing3?jobId=311188751")
+
+    def test_redirect_to_another_job_id_is_refused(self):
+        # 正文宁可取不到，也不能挂到别的岗上
+        self.assertIsNone(china_ats.beisen_ssr_stub_target(self._stub("社会招聘", jid="311188000"), self.URL))
+
+    def test_normal_detail_page_is_not_a_stub(self):
+        page = "<div>海口肯德基餐厅楼面经理</div><div>工作职责：负责餐厅值班管理</div>"
+        self.assertIsNone(china_ats.beisen_ssr_stub_target(page, self.URL))
+
+    def test_fetch_follows_stub_and_cuts_own_footer(self):
+        duty = ("1、期现方案制定与执行：结合公司现货头寸及产能，制定并高效执行期现经营与套期保值策略，提升经营稳定性；"
+                "2、风险模型构建与管控：建立完善的期现交易风险评估与控制机制。")
+        pages = {
+            self.URL: (200, self._stub("社会招聘")),
+            "https://jingbo.zhiye.com/xiangqing?jobId=311188751":
+                (200, f"<h2>苯乙烯期现经理(J19178)</h2><div>岗位职责：</div><p>{duty}</p>"
+                      "<a>立即申请</a><a>返回</a><div>版权所有：山东京博控股集团</div>"),
+        }
+        seen = []
+        body = china_ats.beisen_ssr_fetch_detail_body(lambda u: seen.append(u) or pages[u], self.URL)
+        self.assertEqual(body, duty)
+        self.assertEqual(len(seen), 2)
+
+    def test_fetch_does_not_hop_when_page_already_has_body(self):
+        page = "<div>工作职责：" + "负责区域银行渠道营销与客户维护，确保销售目标实现，" * 3 + "</div> 返回列表 分享： 版权所有：华夏基金"
+        seen = []
+        body = china_ats.beisen_ssr_fetch_detail_body(lambda u: seen.append(u) or (200, page), self.URL)
+        self.assertTrue(body.endswith("确保销售目标实现，"))
+        self.assertNotIn("版权所有", body)
+        self.assertEqual(len(seen), 1)
+
 if __name__ == "__main__":
     unittest.main()
