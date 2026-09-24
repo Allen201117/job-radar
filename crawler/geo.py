@@ -611,8 +611,10 @@ def is_overseas_unspecified(location: Optional[str]) -> bool:
 #      「上海市场部」「北京银行」「五大连池」「西安研发中心」一律不认。
 #   ② 后缀只收 市/州/盟/地区/自治州/新区，**不收 区/县/旗**：「中山区」在大连、「朝阳区」在北京。
 #   ③ 只写到省不填：填「浙江」会让杭州用户判成城市不符（今天是未知放行）。
-#      省与城市并存也不填：「（浙江/江苏/上海）」「（昆明、浙江、山东区域）」是跨省区域岗
-#      （库里 8 行里 4 行如此），没有城市→省份映射就分不清「河北-张家口」这种同省写法，统一放弃。
+#      省与城市并存时，**省市必须对得上**才填（映射用 lib/cn-province-prefectures.json，与省级解析共读）：
+#      每个出现的省都要有本省城市、每个城市都要落在出现过的省里。「河北-张家口」「江苏南京」「山东省济南市」✓；
+#      「（浙江/江苏/上海）」「（昆明、浙江、山东区域）」是跨省区域岗 ✗；「江苏济南」省市打架 ✗（整条不填）。
+#      2026-09-24 补：省名紧贴城市名（「江苏南京」）原先整段认不出，特斯拉 127 / 雅迪 21 / 延锋 4 等 154 行没填上。
 #   ④ 出现「全国/多地/不限/海外…」任一段就不填：「全国-北京」说不清到底在哪。
 #   ⑤ 裸写即常用词 / 多地同名的地名只认带后缀的写法：「（阿里）」实测 3/3 指阿里巴巴、
 #      「（朝阳）」4 行里 2 行是长春朝阳区。
@@ -622,7 +624,7 @@ def is_overseas_unspecified(location: Optional[str]) -> bool:
 #   下面四张表由 tests/geo.test.js 逐条对拍，改一边必须改另一边。
 # ---------------------------------------------------------------------------
 
-# 省级（非直辖市）名字：只写到省不填，省与城市并存也不填（见上文 ③）。_CN_ADMIN_NAMES 里带民族限定的长写法一并列上。
+# 省级（非直辖市）名字：只写到省不填，与城市并存时要省市对得上（见上文 ③）。_CN_ADMIN_NAMES 里带民族限定的长写法一并列上。
 TITLE_CITY_PROVINCE_NAMES = (
     "河北", "山西", "辽宁", "吉林", "黑龙江", "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南",
     "广东", "海南", "四川", "贵州", "云南", "陕西", "甘肃", "青海", "台湾省", "内蒙古", "广西", "西藏", "宁夏", "新疆",
@@ -668,6 +670,32 @@ def _title_place(seg: str):
     return None
 
 
+def _title_province_key(place: str):
+    """省级名（含「内蒙古自治」这类长写法）→ 映射表里的省短名；台湾省等不在表里的返回 None。"""
+    for province in cn_province_prefectures():
+        if place.startswith(province):
+            return province
+    return None
+
+
+def _title_glued_place(seg: str):
+    """「江苏南京」「江苏省南京市」「辽宁朝阳」：省名紧贴地名 → (省, 地名)；不是这种写法返回 None。
+
+    这里只拆，不判省市是否对得上——那由 title_city_location 统一的覆盖检查做（「江苏济南」在那里整条作废）。
+    省名在前已经消了歧义，所以裸写只认带后缀的「朝阳」这类名字在这里放行。
+    """
+    for province in cn_province_prefectures():
+        if len(seg) <= len(province) or not seg.startswith(province):
+            continue
+        rest = seg[len(province):]
+        if rest.startswith("省"):
+            rest = rest[1:]
+        place = _title_place(rest) or (rest if rest in _CN_ADMIN_NAME_SET else None)
+        if place:
+            return province, place
+    return None
+
+
 def title_city_location(title: Optional[str]) -> Optional[str]:
     """从岗位标题认出工作城市，给 location 为空的岗兜底。认不出 / 不该填时返回 None。
 
@@ -678,16 +706,36 @@ def title_city_location(title: Optional[str]) -> Optional[str]:
         return None
     text = _TITLE_ORG_PAREN_RE.sub(" ", str(title))
     cities = []
+    provinces = []
     for seg in _segments(text.strip()):
         if seg in _TITLE_CITY_VETO_SET:
             return None
         place = _title_place(seg)
         if place is None:
+            glued = _title_glued_place(seg)
+            if glued is None:
+                continue
+            province, place = glued
+            provinces.append(province)
+        elif place in _TITLE_CITY_PROVINCE_SET:
+            province = _title_province_key(place)
+            if province is None:
+                return None
+            provinces.append(province)
             continue
-        if place in _TITLE_CITY_PROVINCE_SET:
-            return None
         if place not in cities:
             cities.append(place)
+    if provinces:
+        # 规则 ③：每个城市都落在出现过的某个省里，每个省都有本省城市，否则是跨省区域岗或省市打架。
+        prefectures = cn_province_prefectures()
+        covered = set()
+        for city in cities:
+            owner = next((p for p in provinces if city in prefectures[p]), None)
+            if owner is None:
+                return None
+            covered.add(owner)
+        if covered != set(provinces):
+            return None
     return "/".join(cities) or None
 
 

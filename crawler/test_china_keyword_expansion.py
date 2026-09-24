@@ -153,6 +153,15 @@ class ClassifyJobFunctionTest(unittest.TestCase):
         self.assertEqual(cke.classify_job_function("强化学习研究员"), "研发")
         self.assertEqual(cke.classify_job_function("化学分析员"), "生产制造")
 
+    def test_chemical_synthesis_researchers_are_rnd(self):
+        # 与 tests/classify-job-function.test.js 同批用例（2026-09-23 创始人拍板）。
+        for title in ("有机合成研究员", "药物合成研究员", "化学合成研究员", "药物化学研究员", "多肽合成研究员",
+                      "有机合成实习生", "Scientist, Medicinal Chemistry"):
+            self.assertEqual(cke.classify_job_function(title), "研发", title)
+        for title in ("合成工艺技术员", "合成生产工程师", "有机合成车间主任", "合成工艺研究员", "工艺合成研究员", "化学分析员"):
+            self.assertEqual(cke.classify_job_function(title), "生产制造", title)
+        self.assertEqual(cke.classify_job_function("合成数据研究员"), "其他")
+
     def test_title_classifier_matches_frontend_key_boundaries(self):
         self.assertEqual(cke.classify_job_title_function("2027 届校园招聘 - 后台开发工程师"), "研发")
         self.assertEqual(cke.classify_job_title_function("招聘HR（抖音）"), "职能")
