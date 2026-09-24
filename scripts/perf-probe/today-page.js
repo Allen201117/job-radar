@@ -22,11 +22,11 @@
 // 只读：不写任何用户数据、不写库。输出里的 user_id 只保留前 8 位，不打印任何连接串/密钥。
 const fs = require("fs");
 const path = require("path");
-const { spawnSync } = require("child_process");
 const { createClient } = require("@supabase/supabase-js");
 
 const ROOT = path.join(__dirname, "..", "..");
 const { loadTs } = require(path.join(ROOT, "tests/_load-ts.js"));
+const { runPsql } = require("../lib/psql.js");
 const L = (rel) => loadTs(path.join(ROOT, rel));
 
 const { buildRecallSql, stripTierColumns, RECALL_BUDGET } = L("lib/jobs-store/opportunities.ts");
@@ -64,12 +64,9 @@ function inlineParams(sql, params) {
   for (let i = params.length; i >= 1; i--) out = out.split("$" + i).join(lit(params[i - 1]));
   return out;
 }
+// 连接串经环境变量传给 psql、不进命令行（见 scripts/lib/psql.js 顶部注释）。
 function psql(args, encoding = "utf8") {
-  const url = process.env.JOBS_DATABASE_URL;
-  if (!url) throw new Error("JOBS_DATABASE_URL 未配置（先 source .env.local）");
-  const r = spawnSync("psql", [url, "-X", "-q", ...args], { maxBuffer: 1024 * 1024 * 1024, encoding });
-  if (r.status !== 0) throw new Error(String(r.stderr || "psql failed").slice(0, 500));
-  return r.stdout;
+  return runPsql(["-X", "-q", ...args], { maxBuffer: 1024 * 1024 * 1024, encoding });
 }
 function sizeOf(sql) {
   const t0 = Date.now();

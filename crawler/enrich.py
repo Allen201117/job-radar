@@ -1327,6 +1327,19 @@ def _detail_beisen(row, src):
     host = (parsed.hostname or "").lower()
     job_ad_id = _beisen_job_ad_id(row.get("jd_url"))
     if not host or not job_ad_id:
+        # 老版 SSR / CMS 门户（/zpdetail/{数字}、/job_show?jobId=…）：没有 jobAdId，判不了死活，
+        # 但**详情页本身是服务端直出的正文**（抓取时 _beisen_ssr_fill_summaries 就是从这里抠的）。
+        # 这条行还是薄卡时，取详情页补正文（2026-09-23 百胜中国 494 个薄卡实录：此前这里一律抛 unknown，
+        # 巡检把它记成「没抓到正文」→ 失败 +1、盖戳，攒满 3 次就永远出队，而正文其实一直在页面上）。
+        # 已有正文的行（巡检复检）仍按 unknown 处理——页面还在不证明岗还在，死活交给浏览器巡检。
+        # ⚠️ 这里只可能返回正文或抛 unknown：绝不返回 ""（=确认在招），绝不抛 JobClosedError（判死）。
+        if host and not row.get("summary"):
+            r = httpx.get(row["jd_url"], headers=UA, timeout=TIMEOUT, follow_redirects=True)
+            if r.status_code == 200:
+                from adapters.china_ats import beisen_ssr_detail_body
+                body = beisen_ssr_detail_body(r.text)
+                if body:
+                    return body
         raise DetailUnknownError("beisen jd_url without jobAdId (legacy CMS portal)")
     r = httpx.get(f"https://{host}{_BEISEN_DETAIL_PATH}",
                   params={"jc": "", "jobAdId": job_ad_id, "displayFields": '["Org"]'},

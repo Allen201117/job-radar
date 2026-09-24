@@ -25,10 +25,13 @@ import type { InsightItemView } from "./types";
  */
 const INDEX_TTL_SECONDS = 600;
 /**
- * 兜底：拿到的索引比这还旧，说明后台重建一直没落地（或整站闲了这么久）→ 本次请求同步重建一份。
- * 这是 2026-09-04「索引三个多小时一动不动」那次事故的上限：陈旧不许超过它。
+ * 兜底：拿到的索引比这还旧，说明后台重建一直没落地（或整站闲了这么久）→ 本次请求同步重建一份（~4s）。
+ * 取舍（2026-09-24 从 2 小时放宽，创始人授权）：后台重建已在线上两个过期窗口实测落地
+ * （过期后的请求秒回旧索引，几秒后新索引写回）。这道兜底只防「后台重建又坏了」，
+ * 而它每触发一次就让闲置后的第一个访问者多等 ~4s；本站流量稀疏，2 小时的闲置一天要碰上好几次。
+ * 代价：真坏了的话，陈旧最长 6 小时（2026-09-04 那次事故是三个多小时没更新）。
  */
-const INDEX_MAX_STALE_SECONDS = 2 * 60 * 60;
+const INDEX_MAX_STALE_SECONDS = 6 * 60 * 60;
 
 const SOURCE_SELECT =
   "insight_item_sources(insight_sources(id, url, publisher, source_kind, excerpt, collected_at, deidentified, created_at))";
@@ -174,7 +177,7 @@ async function loadIndex(): Promise<LibraryIndex> {
  * 那时建索引要 ~10s，后台重建大概率没跑完就被回收，于是永远在发陈旧数据、而且**不报错**。
  * 症状很难看：治理脚本刚判完档，页面按「加班强度 ≤ 2」筛却是 0 条（索引里 metric_value 还全是空）。
  * 现在建索引改成并发取数（6.2s → 见 buildTiming），页面与接口都配了 maxDuration 给后台重建留余量；
- * 真没落地，兜底分支把陈旧封顶在 2 小时并打 warn。
+ * 真没落地，兜底分支把陈旧封顶在 INDEX_MAX_STALE_SECONDS（6 小时）并打 warn。
  *
  * ⚠️ 为什么纯时间桶不够：每个 10 分钟窗口的第一个请求都要同步建一次索引。本站流量稀疏，
  * 大多数访问恰好就是「窗口里第一个」，于是线上 /insights 大多数时候 6~7s（2026-09-23 实测）。

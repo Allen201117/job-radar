@@ -9,14 +9,14 @@
 // 运行（本地或 CI，需要 JOBS_DATABASE_URL；绝不把连接串打印/提交）：
 //   set -a; source .env.local; set +a; node scripts/fts-token-df/gen.mjs
 // ts_stat 全表扫 active 行约 7s；频率随库漂移很慢，改词表/大规模扩源后重跑一次即可。
-import { execFileSync } from "node:child_process";
+import psqlLib from "../lib/psql.js";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 
-const url = process.env.JOBS_DATABASE_URL;
-if (!url) { console.error("JOBS_DATABASE_URL missing"); process.exit(1); }
+if (!process.env.JOBS_DATABASE_URL) { console.error("JOBS_DATABASE_URL missing"); process.exit(1); }
 const RATIO = Number(process.env.FTS_GENERIC_RATIO || 0.0138);
-const psql = (q) => execFileSync("psql", [url, "-tAc", q], { encoding: "utf8", maxBuffer: 1e8 }).trim();
+// 连接串经环境变量传给 psql、不进命令行（见 scripts/lib/psql.js 顶部注释）。
+const psql = (q) => psqlLib.runPsql(["-tAc", q], { maxBuffer: 1e8 }).trim();
 const activeDocs = Number(psql("select count(*) from jobs where status='active'"));
 const minNdoc = Math.round(activeDocs * RATIO);
 const rows = psql(
