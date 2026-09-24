@@ -322,8 +322,10 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     （body `errorCode:"HTTP_422"`），公开页回 500 —— 不是限流、也不是岗位关了。2026-09-23 查实两家：
                          #     武田 wd3→wd502（2026-08-02 起 422）、奥的斯 wd5→wd504（2026-08-09 起），各自连败约一个月后源被停用。
                          #     ⚠️ 停用源不会下架它名下的 active 岗（巡检队列不看 enabled，照样按停用源的旧 source_url 去探），
-                         #     这两家 2,675 个 active 岗的 jd_url 仍指向旧 host。新 host 从对方官网某个职位的「Apply」链接里读
+                         #     这两家 2,675 个 active 岗的 jd_url 一直指向旧 host。新 host 从对方官网某个职位的「Apply」链接里读
                          #     （jobs.takeda.com 是 Radancy 皮，Apply 指向 takeda.wd502…）；同一个 /job/{path} 在新 host 上照样能开。
+                         #     修法（2026-09-24，迁移 304）：**先**把存量 jd_url / apply_url 只换 host（canonical 由触发器重算），
+                         #     **再**改 source_url 并启用——顺序反了，列表重抓会按新 host 另插一批，同一个岗变两行。
                          #     详情探活 `enrich._detail_workday`：404/410 判死，其余非 2xx 判 unknown 不盖戳（429 是 Workday 按 IP 限流）。
 ```
 
