@@ -120,7 +120,7 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
      ⚠️ 中国人寿 / 银河证券 / 通威 / 泰康 / 长安 的页面模板**不读 Status**，在招和已停长得一样——对它们只能靠「Status=2 + 列表已无」。
      ⚠️ 老版 CMS 门户（`/zpdetail/{数字}`，约 3 千岗）无 jobAdId、判不了 → unknown 留给浏览器巡检，**beisen 别从 `audit_dead_links` 撤**。
      巡检靠强信号「此职位已停用」判死（撤岗页仍渲染标题，缺这句就判 alive）：2026-09-24 前没收这句，85 个停用岗一直挂着；
-     补上后全集对拍停用 85/85、在招误判 0，定向巡检已下架 82 条（余下 3 条是 CI 页面超时，落 unsure 不下架）。
+     补上后全集对拍停用 85/85、在招误判 0；定向巡检 85 条全部下架、误杀 0（首轮 3 条 CI 页面超时落 unsure 不下架，重跑补上）。
      📄 `enrich._detail_beisen` + `enrich_backlog.EXPIRE_RATIO_GUARD`（本轮判死 ≥50% 即熔断，全集模拟峰值 15.7%）+ `crawler/test_beisen_liveness.py`。
    - **🚫「列表里没有」≠「已撤岗」——除非先证明该列表是全集（2026-07-29 立碑，差点误删 460 个在招岗）**：
      list-absence 撤岗（`supports_absence_liveness` + `jobs_db.sweep_absent_jobs`）的前提是**该源的列表接口返回岗位全集**（feishu/beisen/bytedance 是验证过确实返全量才开的）。
