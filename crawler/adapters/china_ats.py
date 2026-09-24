@@ -19,7 +19,7 @@ import json
 import logging
 import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from typing import List, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
@@ -609,8 +609,18 @@ _BEISEN_SSR_SUMMARY_CAP = 60
 # 老版门户详情页的页脚模板（25 个租户同一套，2026-09-24 逐租户取真页核过）：
 #   正文 … 现在申请 返回职位列表 收藏 [热招职位 更多 >> 别的岗名…] [长招职位 更多 >> …] ©2026 公司 京ICP备…
 # 正文正则取到页尾，不在这里截断就会把页脚与**别的岗位名**一起写进 summary（卡片露出备案号、职能分类读到别的岗）。
+# 华夏基金 / 京博的自有详情模板页脚不同：「返回列表 分享： 版权所有：…」「立即申请返回」。
 _BEISEN_SSR_FOOTER_RE = re.compile(
-    r"\s(?:现在申请\s+返回职位列表|返回职位列表|热招职位\s*更多|长招职位\s*更多|©\s*20\d\d)")
+    r"\s(?:现在申请\s+返回职位列表|返回职位列表|返回列表|立即申请|热招职位\s*更多|长招职位\s*更多"
+    r"|版权所有|©\s*20\d\d)")
+# 部分租户的 /zpdetail/{id} 只是跳转壳：隐藏框 #v 写招聘类别，脚本按类别跳到租户自己的详情模板
+# （华夏基金 校招/社招/其它 → /yjszwxq /szzwxq /sxszwxq，京博 → /xiangqing2 /xiangqing /xiangqing3）。
+_BEISEN_SSR_STUB_CATE_RE = re.compile(r'<input[^>]*\bvalue="([^"]*)"[^>]*\bid="v"', re.I)
+_BEISEN_SSR_STUB_BRANCH_RE = re.compile(
+    r'cate\s*==\s*"([^"]*)"\s*\)\s*\{\s*window\.location\.href\s*=\s*"(/[^"?]+\?jobId=)"\s*\+\s*(\d+)')
+_BEISEN_SSR_STUB_ELSE_RE = re.compile(
+    r'\}\s*else\s*\{\s*window\.location\.href\s*=\s*"(/[^"?]+\?jobId=)"\s*\+\s*(\d+)')
+_BEISEN_SSR_ZPDETAIL_ID_RE = re.compile(r"/zpdetail/(\d+)")
 
 
 def _beisen_ssr_fill_summaries(jobs: List[dict]) -> None:
@@ -626,14 +636,45 @@ def _beisen_ssr_fill_summaries(jobs: List[dict]) -> None:
                       headers={"User-Agent": PlaywrightAdapter.user_agent}) as cli:
         for job in jobs[:cap]:
             try:
-                resp = cli.get(job["jd_url"])
-                if resp.status_code != 200:
-                    continue
-                body = beisen_ssr_detail_body(resp.text)
+                body = beisen_ssr_fetch_detail_body(
+                    lambda u: (lambda r: (r.status_code, r.text))(cli.get(u)), job["jd_url"])
                 if body:
                     job["summary"] = body
             except Exception:
                 continue
+
+
+def beisen_ssr_stub_target(html_text: str, page_url: str) -> Optional[str]:
+    """/zpdetail/{id} 是跳转壳时，按壳自己的分支（#v 的招聘类别）算出真正的详情页地址；不是壳返回 None。
+
+    跳转目标里的 jobId 必须与原链接的 id 相同才采信——正文宁可取不到，也不能挂到别的岗上。"""
+    m = _BEISEN_SSR_STUB_CATE_RE.search(html_text or "")
+    own = _BEISEN_SSR_ZPDETAIL_ID_RE.search(page_url or "")
+    if not m or not own:
+        return None
+    cate = m.group(1)
+    target = next(((path, jid) for c, path, jid in _BEISEN_SSR_STUB_BRANCH_RE.findall(html_text) if c == cate), None)
+    if target is None:
+        e = _BEISEN_SSR_STUB_ELSE_RE.search(html_text)
+        target = (e.group(1), e.group(2)) if e else None
+    if target is None or target[1] != own.group(1):
+        return None
+    return urljoin(page_url, target[0] + target[1])
+
+
+def beisen_ssr_fetch_detail_body(get, url: str) -> str:
+    """取老版详情页正文；遇到跳转壳按它自己的分支跟一跳。get(url) -> (status_code, text)。取不到返回 ""。"""
+    status, text = get(url)
+    if status != 200:
+        return ""
+    body = beisen_ssr_detail_body(text)
+    if body:
+        return body
+    target = beisen_ssr_stub_target(text, url)
+    if not target:
+        return ""
+    status, text = get(target)
+    return beisen_ssr_detail_body(text) if status == 200 else ""
 
 
 def beisen_ssr_detail_body(html_text: str) -> str:
@@ -733,6 +774,16 @@ def _ssr_policy_allows(job: dict, policy: Optional[dict], today=None) -> bool:
         if (today - posted).days > int(max_age):
             return False
     return True
+
+
+def _ssr_policy_retire_before(policy: Optional[dict], today=None) -> Optional[date]:
+    """租户口径里有 max_age_days 时，库里「发布日早于这一天」的岗已超出口径（与 _ssr_policy_allows 同一边界：
+    正好 max_age_days 天前发布的仍收）。抓取端只能不再收新的，已在库里的由 run.py 收抓后按这一天下架。"""
+    max_age = (policy or {}).get("max_age_days")
+    if not max_age:
+        return None
+    today = today or datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    return today - timedelta(days=int(max_age))
 
 
 def _ssr_normalize_job_url(origin: str, href: str) -> str:
@@ -1459,6 +1510,9 @@ class BeisenAdapter(ChinaSpaAdapter):
 
     name = "beisen"
     intercept_matches = ("GetJobAdPageList", "JobAd", "Position", "position", "Recruit", "recruit", "/api/")
+    # 老版 SSR 租户口径有年限（_SSR_TENANT_POLICY.max_age_days）时由 parse() 置成截止日，run.py 收抓后
+    # 把库里发布日早于它的在招岗置 removed（可逆、不进 purge）。其余租户恒为 None，行为不变。
+    retire_posted_before: Optional[date] = None
     detail_template = ""
 
     _ID_FIELDS = ("Id", "id", "jobAdId", "JobAdId", "code")
@@ -2325,7 +2379,10 @@ class BeisenAdapter(ChinaSpaAdapter):
                 if not (jd and title) or jd in seen:
                     continue
                 seen.add(jd)
-                if not _ssr_policy_allows(j, _SSR_TENANT_POLICY.get(urlparse(jd).netloc.lower())):
+                policy = _SSR_TENANT_POLICY.get(urlparse(jd).netloc.lower())
+                if policy:
+                    self.retire_posted_before = _ssr_policy_retire_before(policy)
+                if not _ssr_policy_allows(j, policy):
                     continue
                 # job_type/education 老版 CMS 才有（列表列 + 详情页字段）；posted_at 卡片式 CMS 才有
                 # （列表卡 <ol> 的发布日）。老调用方都不传这些 key → .get 返 None，行为逐字节不变。

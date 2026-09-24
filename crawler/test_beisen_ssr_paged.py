@@ -262,6 +262,67 @@ class TestListtableHeaderAndTenantPolicy(unittest.TestCase):
         self.assertEqual([j.jd_url for j in out], ["https://other.zhiye.com/zpdetail/2"])
 
 
+class TestTenantPolicyAgesOutStoredJobs(unittest.TestCase):
+    """口径只收近 365 天：抓取端不再收超龄的，库里已有的要由 run.py 按同一边界下架成 removed。"""
+
+    def test_retire_cutoff_matches_crawl_filter_day_by_day(self):
+        # 两边边界一漂，就会出现「抓取收了、隔天又被下架」或「超龄了却一直挂着」。逐日扫一整年前后。
+        from datetime import date, timedelta
+        policy = {"require_location": True, "max_age_days": 365}
+        today = date(2026, 9, 24)
+        cutoff = china_ats._ssr_policy_retire_before(policy, today)
+        self.assertEqual(cutoff, date(2025, 9, 24))
+        for back in range(355, 376):
+            posted = today - timedelta(days=back)
+            allowed = china_ats._ssr_policy_allows(
+                {"location": "天津市", "posted_at": posted.isoformat()}, policy, today)
+            self.assertEqual(allowed, not (posted < cutoff), posted)
+
+    def test_no_age_policy_means_no_cutoff(self):
+        self.assertIsNone(china_ats._ssr_policy_retire_before({"require_location": True}))
+        self.assertIsNone(china_ats._ssr_policy_retire_before(None))
+
+    def test_parse_sets_cutoff_only_for_named_tenant(self):
+        row = {"title": "储备经理", "location": "天津市", "posted_at": "2026-09-16"}
+        a = BeisenAdapter()
+        a.parse(json.dumps({"_ssr_jobs": [dict(row, jd_url="https://yumchina.zhiye.com/zpdetail/1")]},
+                           ensure_ascii=False))
+        self.assertIsNotNone(a.retire_posted_before)
+        b = BeisenAdapter()
+        b.parse(json.dumps({"_ssr_jobs": [dict(row, jd_url="https://other.zhiye.com/zpdetail/2")]},
+                           ensure_ascii=False))
+        self.assertIsNone(b.retire_posted_before)
+
+    def test_db_step_uses_reversible_removed_not_expired(self):
+        import jobs_db
+        seen = {}
+
+        class _Cur:
+            rowcount = 3
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def execute(self, sql, params): seen["sql"], seen["params"] = sql, params
+
+        class _Conn:
+            def cursor(self): return _Cur()
+
+        from datetime import date
+        n = jobs_db.retire_posted_before(_Conn(), "src-1", date(2025, 9, 24))
+        self.assertEqual(n, 3)
+        self.assertIn("status = 'removed'", seen["sql"])
+        self.assertNotIn("expired", seen["sql"])          # expired 次日会被 purge 永久删除
+        self.assertIn("status = 'active'", seen["sql"])
+        self.assertIn("Asia/Shanghai", seen["sql"])       # 与抓取端按北京时间算天数同口径
+        self.assertEqual(seen["params"], ("src-1", date(2025, 9, 24)))
+
+    def test_run_py_step_never_blocks_the_crawl(self):
+        import pathlib, re
+        src = (pathlib.Path(__file__).parent / "run.py").read_text(encoding="utf-8")
+        block = src[src.index("retire_before = getattr(adapter"):src.index("# 6. update source timestamp")]
+        self.assertIn("jobs_db.enabled()", block)
+        self.assertRegex(block, r"except Exception")
+
+
 class TestSsrJobUrlNormalize(unittest.TestCase):
     """回归：详情锚点带列表页号 `?PageIndex=N`（联易融 live 实测）。
 
@@ -443,6 +504,58 @@ class TestSsrDetailBodyFooter(unittest.TestCase):
     def test_too_short_after_cut_is_empty(self):
         self.assertEqual(china_ats.beisen_ssr_detail_body(
             "<div>岗位职责：负责门店营运</div> 现在申请 返回职位列表 收藏 ©2026 x 京ICP备05051632号-16 " + "填充" * 40), "")
+
+
+class TestSsrStubRedirect(unittest.TestCase):
+    """华夏基金 / 京博：/zpdetail/{id} 只是跳转壳，按 #v 的招聘类别跳到自有详情模板（2026-09-24 实测页面原样）。"""
+    URL = "https://jingbo.zhiye.com/zpdetail/311188751"
+
+    def _stub(self, cate, jid="311188751", tag="hidden"):
+        return (f'<body><input type="{tag}" value="{cate}" id="v" /><script type="text/javascript">'
+                '$(function () { var cate = $("#v").val();'
+                f'  if(cate =="校园招聘"){{ window.location.href="/xiangqing2?jobId="+{jid}; }}'
+                f'  else if(cate =="社会招聘"){{ window.location.href="/xiangqing?jobId="+{jid}; }}'
+                f'  else{{ window.location.href="/xiangqing3?jobId="+{jid}; }} }});</script></body>')
+
+    def test_follows_branch_matching_category(self):
+        self.assertEqual(china_ats.beisen_ssr_stub_target(self._stub("社会招聘"), self.URL),
+                         "https://jingbo.zhiye.com/xiangqing?jobId=311188751")
+        self.assertEqual(china_ats.beisen_ssr_stub_target(self._stub("校园招聘", tag="text"), self.URL),
+                         "https://jingbo.zhiye.com/xiangqing2?jobId=311188751")
+
+    def test_unknown_category_takes_else_branch(self):
+        self.assertEqual(china_ats.beisen_ssr_stub_target(self._stub("实习生招聘"), self.URL),
+                         "https://jingbo.zhiye.com/xiangqing3?jobId=311188751")
+
+    def test_redirect_to_another_job_id_is_refused(self):
+        # 正文宁可取不到，也不能挂到别的岗上
+        self.assertIsNone(china_ats.beisen_ssr_stub_target(self._stub("社会招聘", jid="311188000"), self.URL))
+
+    def test_normal_detail_page_is_not_a_stub(self):
+        page = "<div>海口肯德基餐厅楼面经理</div><div>工作职责：负责餐厅值班管理</div>"
+        self.assertIsNone(china_ats.beisen_ssr_stub_target(page, self.URL))
+
+    def test_fetch_follows_stub_and_cuts_own_footer(self):
+        duty = ("1、期现方案制定与执行：结合公司现货头寸及产能，制定并高效执行期现经营与套期保值策略，提升经营稳定性；"
+                "2、风险模型构建与管控：建立完善的期现交易风险评估与控制机制。")
+        pages = {
+            self.URL: (200, self._stub("社会招聘")),
+            "https://jingbo.zhiye.com/xiangqing?jobId=311188751":
+                (200, f"<h2>苯乙烯期现经理(J19178)</h2><div>岗位职责：</div><p>{duty}</p>"
+                      "<a>立即申请</a><a>返回</a><div>版权所有：山东京博控股集团</div>"),
+        }
+        seen = []
+        body = china_ats.beisen_ssr_fetch_detail_body(lambda u: seen.append(u) or pages[u], self.URL)
+        self.assertEqual(body, duty)
+        self.assertEqual(len(seen), 2)
+
+    def test_fetch_does_not_hop_when_page_already_has_body(self):
+        page = "<div>工作职责：" + "负责区域银行渠道营销与客户维护，确保销售目标实现，" * 3 + "</div> 返回列表 分享： 版权所有：华夏基金"
+        seen = []
+        body = china_ats.beisen_ssr_fetch_detail_body(lambda u: seen.append(u) or (200, page), self.URL)
+        self.assertTrue(body.endswith("确保销售目标实现，"))
+        self.assertNotIn("版权所有", body)
+        self.assertEqual(len(seen), 1)
 
 if __name__ == "__main__":
     unittest.main()

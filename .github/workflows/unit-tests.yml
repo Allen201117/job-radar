@@ -1,0 +1,63 @@
+name: unit-tests
+
+# 提交前回归四件套里的两件（CLAUDE.md「常用命令」）：前端 node --test + crawler unittest。
+# 2026-09-24 查实：此前**没有任何 workflow 跑单测**。本机默认 python3.14 缺 postgrest / psycopg2，crawler 单测
+# 直接跑只到 2,349 / 3,263 个（其余 ImportError），一直被当成「本机环境问题、CI 会兜」——CI 根本没跑。
+# 只读：不带任何 secret、不连库；不是定时任务（不进结构性审计的覆盖率差集），失败即红。
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
+  pull_request:
+    paths-ignore: ["**.md", "docs/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: unit-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      # 不用 npm ci：package-lock.json 与 package.json 在 Linux 上不同步（@emnapi 传递依赖，
+      # 见 backfill-recruitment-category.yml 同款注释），严格模式会直接失败。--ignore-scripts：测试用不到安装脚本。
+      - run: npm install --no-audit --no-fund --ignore-scripts
+      - name: node --test
+        run: |
+          set -euo pipefail
+          # 显式 spec：Node 22 在非终端（管道）下默认 TAP 格式，统计行会变成 `# tests N`，下面的计数就读不到。
+          node --test --test-reporter=spec tests/*.test.js 2>&1 | tee node-test.log
+          # 绿灯 ≠ 有产出：发现不到测试也会「通过」，数一下真跑了多少个（下限只防整批失踪，不跟着日常增删改）。
+          n=$(grep -oE '^ℹ tests [0-9]+' node-test.log | awk '{print $3}')
+          echo "node tests ran: ${n:-0}"
+          if [ "${n:-0}" -lt 1000 ]; then echo "::error::只跑了 ${n:-0} 个 node 测试（下限 1000），测试发现可能坏了"; exit 1; fi
+
+  crawler:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crawler/requirements.txt
+      - run: pip install -r crawler/requirements.txt
+      - name: crawler unittest
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s crawler -t crawler -p "test_*.py" 2>&1 | tee crawler-test.log
+          # 缺依赖时 ImportError 记作 error、整批非零退出；这里再防「一个都没发现」的假绿（3.11 下 Ran 0 tests 退出码是 0）。
+          n=$(grep -oE '^Ran [0-9]+ tests?' crawler-test.log | awk '{print $2}')
+          echo "crawler tests ran: ${n:-0}"
+          if [ "${n:-0}" -lt 1000 ]; then echo "::error::只跑了 ${n:-0} 个 crawler 测试（下限 1000），测试发现可能坏了"; exit 1; fi

@@ -587,6 +587,16 @@ def _process_one_source(source, supabase) -> dict:
             except Exception as e:  # 探活失败绝不影响抓取主流程
                 print(f"    [absence] 跳过(异常不阻断): {type(e).__name__}: {e}")
 
+        # 5c. 租户年限口径（如百胜中国只收近 365 天发布的岗）：抓取端不再收超龄的，已在库里的按发布日下架成 removed。
+        retire_before = getattr(adapter, "retire_posted_before", None)
+        if retire_before is not None and jobs_db.enabled():
+            try:
+                n_retired = jobs_db.retire_posted_before(_get_thread_jobs_conn(), source_id, retire_before)
+                if n_retired:
+                    print(f"    [policy-age] removed={n_retired} posted_before={retire_before}")
+            except Exception as e:  # 下架失败绝不影响抓取主流程
+                print(f"    [policy-age] 跳过(异常不阻断): {type(e).__name__}: {e}")
+
         # 6. update source timestamp
         db.update_source_timestamp(supabase, source_id)
 

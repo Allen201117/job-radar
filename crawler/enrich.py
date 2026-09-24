@@ -1334,12 +1334,14 @@ def _detail_beisen(row, src):
         # 已有正文的行（巡检复检）仍按 unknown 处理——页面还在不证明岗还在，死活交给浏览器巡检。
         # ⚠️ 这里只可能返回正文或抛 unknown：绝不返回 ""（=确认在招），绝不抛 JobClosedError（判死）。
         if host and not row.get("summary"):
-            r = httpx.get(row["jd_url"], headers=UA, timeout=TIMEOUT, follow_redirects=True)
-            if r.status_code == 200:
-                from adapters.china_ats import beisen_ssr_detail_body
-                body = beisen_ssr_detail_body(r.text)
-                if body:
-                    return body
+            from adapters.china_ats import beisen_ssr_fetch_detail_body
+
+            def _get(u):
+                r = httpx.get(u, headers=UA, timeout=TIMEOUT, follow_redirects=True)
+                return r.status_code, r.text
+            body = beisen_ssr_fetch_detail_body(_get, row["jd_url"])
+            if body:
+                return body
         raise DetailUnknownError("beisen jd_url without jobAdId (legacy CMS portal)")
     r = httpx.get(f"https://{host}{_BEISEN_DETAIL_PATH}",
                   params={"jc": "", "jobAdId": job_ad_id, "displayFields": '["Org"]'},
