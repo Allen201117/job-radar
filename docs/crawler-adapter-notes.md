@@ -183,6 +183,13 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       这句不在强信号表里 → 标题在场判 alive，85 个停用岗一直挂着（5 个绿城的还在官网列表里）。
                          #       已把整句加进 `DEAD_MARKERS_STRONG`：全集 httpx 2,306 岗 + 真渲染 584 岗对拍，停用 85/85 判死、在招误判 0。
                          #       📌 纠错：本段上一版写「这类链接没有任何死活判定」，不对——覆盖在，缺的是这句文案。
+                         #     ④ 京博 / 华夏基金的 /zpdetail/{id} 是**跳转壳**：隐藏框 #v 写招聘类别，脚本按类别跳到自有模板
+                         #       （/xiangqing?jobId= / /szzwxq?jobId= 等），正文在那一页、页脚是「返回列表 / 立即申请 / 版权所有」。
+                         #       `beisen_ssr_fetch_detail_body` 照壳自己的分支跟一跳（jobId 必须与原链接相同才采信）。
+                         #       全集 2,222 岗新旧提取对拍：新得 88、丢 0、变短 26（全是方太，截掉的是导航）。
+                         #       至此老版在招 2,222 岗有正文 2,155，余下 51 条官网页面本身职责为空 / 写「无」「1」。
+                         #     ⑤ `_SSR_TENANT_POLICY.max_age_days`（百胜 365 天）同时约束库里已有的岗：run.py 收抓后把发布日
+                         #       早于截止日的置 removed（`jobs_db.retire_posted_before`，可逆、不进 purge），边界与抓取端逐日对拍。
                          #     jd.py 按 `positionDeptName` 派生子公司 company → 京东科技 209 + 京东物流 629；
                          #     netease.py 按 `productName` 派生 → 网易有道 115 + 网易云音乐 157。
                          #       两者**都不新增 source**（那些岗本就在现有源里，新增源会抢同一行 upsert）；靠
