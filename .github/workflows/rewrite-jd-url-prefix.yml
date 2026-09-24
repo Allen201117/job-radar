@@ -1,0 +1,52 @@
+name: rewrite-jd-url-prefix
+
+# 详情链接拼错门户路径 / 租户搬家后，把存量 active 行 jd_url 的前缀换成正确的（canonical 由触发器重算）。
+# 配套路由 / source_url 的修正一起用（首例 2026-09-24：长安 beisen 路由 /jobs/zwxq 落在列表页 → /social/detail）。
+# 手动触发、默认 dry-run。取舍与护栏见 crawler/rewrite_jd_url_prefix.py 的模块注释。
+# ⚠️ 顺序：路由修正先合进 main，再 apply 本工作流，且避开该源正在抓取的时段——
+#    否则旧代码的那一轮重抓会按旧链接再插一批新行（同一个岗两张卡）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      from_prefix:
+        description: "要换掉的 jd_url 前缀（完整 https 前缀）"
+        required: true
+      to_prefix:
+        description: "换成的 jd_url 前缀（完整 https 前缀）"
+        required: true
+      company:
+        description: "精确公司名，与前缀同时成立才动"
+        required: true
+      apply:
+        description: "true = 真的写库；留空/false = 只 dry-run 报数"
+        required: false
+        default: "false"
+
+jobs:
+  rewrite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: crawler/requirements.txt
+      - run: pip install -r crawler/requirements.txt
+
+      - name: Rewrite jd_url prefix
+        env:
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+          FROM_PREFIX: ${{ github.event.inputs.from_prefix }}
+          TO_PREFIX: ${{ github.event.inputs.to_prefix }}
+          COMPANY: ${{ github.event.inputs.company }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          set -euo pipefail
+          args=(--from-prefix "$FROM_PREFIX" --to-prefix "$TO_PREFIX" --company "$COMPANY")
+          if [ "$APPLY" = "true" ]; then args+=(--apply); fi
+          python3 crawler/rewrite_jd_url_prefix.py "${args[@]}"

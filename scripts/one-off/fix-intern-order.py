@@ -1,11 +1,11 @@
 """存量修复第二批：标题明写实习、却被标成校招/留学生专项/管培生的岗，改回实习类。
 口径与修好的 crawler/normalizer.extract_job_type 一致。dry-run 默认，--apply 才写库。"""
-import json, os, subprocess, sys, collections
+import json, os, sys, collections
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "crawler"))
 import normalizer
+from psql_env import run_psql  # 连接串经环境变量传给 psql，不进命令行（见 crawler/psql_env.py）
 
-URL = os.environ["JOBS_DATABASE_URL"]
 APPLY = "--apply" in sys.argv
 
 # 只看「标题里明写实习词」的岗——这是本次规则改动唯一影响到的集合
@@ -15,8 +15,7 @@ SQL = r"""select coalesce(json_agg(t),'[]'::json)::text from (
   where status='active'
     and (title like '%实习%' or lower(title) ~ '\yintern(ship)?s?\y')
     and coalesce(job_type,'') not in ('实习','暑期实习','日常实习')) t"""
-rows = json.loads(subprocess.run(["psql", URL, "-t", "-A", "-c", SQL],
-                                 capture_output=True, text=True, check=True).stdout.strip())
+rows = json.loads(run_psql(["-t", "-A", "-c", SQL]).strip())
 print(f"标题写着实习、但 job_type 不是实习类的岗: {len(rows)}")
 
 changes, dist = [], collections.Counter()
@@ -48,9 +47,7 @@ for i in range(0, len(changes), BATCH):
     chunk = changes[i:i + BATCH]
     vals = ",".join("('%s'::uuid, %s)" % (c[0], "NULL" if c[1] is None else "'" + c[1].replace("'", "''") + "'")
                     for c in chunk)
-    subprocess.run(["psql", URL, "-q", "-c",
-                    f"update jobs j set job_type = v.jt from (values {vals}) as v(id, jt) where j.id = v.id;"],
-                   check=True)
+    run_psql(["-q", "-c", f"update jobs j set job_type = v.jt from (values {vals}) as v(id, jt) where j.id = v.id;"])
     done += len(chunk)
     print(f"  写入 {done}/{len(changes)}")
 print("完成")

@@ -32,10 +32,10 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const { execFileSync } = require("child_process");
 
 const ROOT = path.join(__dirname, "..", "..");
 const { loadTs } = require(path.join(ROOT, "tests/_load-ts.js"));
+const { runPsql } = require("../lib/psql.js");
 const MUST_APPLY = require(path.join(ROOT, "lib/must-apply-list.json"));
 
 // 本 worktree 没有 .env.local（只有主仓根目录有，见文件头注释）。worktree 隔离的安全边界会拒绝
@@ -118,22 +118,15 @@ function inlineParams(sql, params) {
   return out;
 }
 
+// 连接串经环境变量传给 psql、不进命令行（见 scripts/lib/psql.js 顶部注释）。
 function psqlJson(sql) {
-  const url = process.env.JOBS_DATABASE_URL;
-  if (!url) throw new Error("JOBS_DATABASE_URL 未配置（先 source .env.local）");
   const wrapped = `select coalesce(json_agg(t), '[]'::json)::text from (${sql}) t`;
-  const raw = execFileSync("psql", [url, "-t", "-A", "-c", wrapped], {
-    maxBuffer: 512 * 1024 * 1024,
-    encoding: "utf8",
-  });
+  const raw = runPsql(["-t", "-A", "-c", wrapped], { maxBuffer: 512 * 1024 * 1024 });
   return JSON.parse(raw.trim());
 }
 
 function psqlRows(sql) {
-  const raw = execFileSync("psql", [process.env.JOBS_DATABASE_URL, "-Atc", sql, "-F", "\t"], {
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  const raw = runPsql(["-Atc", sql, "-F", "\t"], { maxBuffer: 64 * 1024 * 1024 });
   return raw
     .split("\n")
     .map((l) => l.trim())
