@@ -606,6 +606,11 @@ _BEISEN_SSR_ANCHOR_JS = r"""
 _BEISEN_SSR_JD_RE = re.compile(
     r"(工作职责|岗位职责|职位描述|工作内容|岗位描述|职责描述)[：:]\s*(.+)$", re.S)
 _BEISEN_SSR_SUMMARY_CAP = 60
+# 老版门户详情页的页脚模板（25 个租户同一套，2026-09-24 逐租户取真页核过）：
+#   正文 … 现在申请 返回职位列表 收藏 [热招职位 更多 >> 别的岗名…] [长招职位 更多 >> …] ©2026 公司 京ICP备…
+# 正文正则取到页尾，不在这里截断就会把页脚与**别的岗位名**一起写进 summary（卡片露出备案号、职能分类读到别的岗）。
+_BEISEN_SSR_FOOTER_RE = re.compile(
+    r"\s(?:现在申请\s+返回职位列表|返回职位列表|热招职位\s*更多|长招职位\s*更多|©\s*20\d\d)")
 
 
 def _beisen_ssr_fill_summaries(jobs: List[dict]) -> None:
@@ -641,6 +646,9 @@ def beisen_ssr_detail_body(html_text: str) -> str:
     text = re.sub(r"\s+", " ", _html.unescape(_html.unescape(text))).strip()
     m = _BEISEN_SSR_JD_RE.search(text)
     body = (m.group(2) if m else "").strip()
+    cut = _BEISEN_SSR_FOOTER_RE.search(body)
+    if cut:
+        body = body[:cut.start()].strip()
     return body[:4000] if len(body) >= 60 else ""
 
 
