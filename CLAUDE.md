@@ -396,7 +396,11 @@ app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse�
   严格 / 宽松准确率改前改后逐画像相同（93.0/98.3%、89.9/95.3%）；可展示岗合计 9,824 → 9,818（换了另一批并列行，3 升 5 降）。
   代价（香港库 EXPLAIN）：召回 148 层计划逐层同形、buffer +1.0%；搜索按索引取序的路径多一层 Incremental Sort（只在并列块内按 id 排、
   索引不变），buffer +0~12%，最重的是匿名城市搜索（北京 warm 37→42ms）——Incremental Sort 要读完截断点所在的那一批。
-  ⚠️ `lib/jobs-store/read.ts` 的 `listLatestActive` 等（`order by first_seen_at desc limit/offset`）同病未改。
+  ✅ 2026-09-24 补齐 `lib/jobs-store/read.ts` 的 `LATEST_ORDER`（listLatestActive = /jobs 首屏 SSR + /api/jobs/list 翻页、recallByPrefs）
+  + 5 处 Supabase 兜底 `.order("id")`；`tests/jobs-order-tiebreak.test.js` 扫 lib/app/components，新写的裸 `order by first_seen_at desc` 直接红。
+  📌 纠错：此处原写「listLatestActive 等同病未改」。同快照实测：国内首屏 60 条两版 19 条不同；走并行全表扫 + 排序的计划
+  **同 SQL 同快照连跑两次** 200 位里 71 位不同（带 id 后 0）。代价：首屏 warm 0.5→0.6ms，截断点落在大并列块才明显
+  （海外第 2 页 1000 条、块 2,006 行 8.9→17.8ms）。仍是裸时间序、不在请求路径未改：`crawler/audit_dead_links.py` 取新岗、`scripts/verify-opportunity-recall.ts`。
 
 ## 数据库迁移（已自动化，勿再手动跑 Supabase）
 
