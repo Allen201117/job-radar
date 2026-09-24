@@ -122,11 +122,51 @@ function compareId(a: any, b: any): number {
 
 export function compareCampusJobs(a: any, b: any): number {
   const da = ms(a.deadline), db = ms(b.deadline);
-  if (da != null && db != null) return da - db || compareId(a, b); // 都有截止 → 临近优先
-  if (da != null) return -1;                       // 有截止的排前
-  if (db != null) return 1;
+  if (da != null && db == null) return -1;         // 有截止的排前
+  if (da == null && db != null) return 1;
+  if (da != null && db != null && da !== db) return da - db; // 都有截止 → 临近优先
   const fa = ms(a.first_seen_at) || 0, fb = ms(b.first_seen_at) || 0;
-  return fb - fa || compareId(a, b);               // 都无截止 → 新增降序
+  return fb - fa || compareId(a, b);               // 截止相同 / 都无截止 → 新增降序，再按 id
+}
+
+/** 抽屉翻页游标 = 上一页最后一个岗的三个排序键（compareCampusJobs 只读这三个字段）。 */
+export type CampusJobCursor = { id: string; deadline: string | null; first_seen_at: string | null };
+
+export function campusCursorOf(job: any): CampusJobCursor | null {
+  if (!job || job.id == null) return null;
+  return {
+    id: String(job.id),
+    deadline: job.deadline == null ? null : String(job.deadline),
+    first_seen_at: job.first_seen_at == null ? null : String(job.first_seen_at),
+  };
+}
+
+/** 接口入参校验：不是合法游标一律 null（退回 offset 翻页），不抛错。 */
+export function parseCampusCursor(raw: unknown): CampusJobCursor | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const str = (v: unknown, max: number) => (typeof v === "string" && v.length > 0 && v.length <= max ? v : null);
+  const id = str(r.id, 64);
+  if (!id) return null;
+  if (r.deadline != null && str(r.deadline, 64) == null) return null;
+  if (r.first_seen_at != null && str(r.first_seen_at, 64) == null) return null;
+  return { id, deadline: (r.deadline as string) ?? null, first_seen_at: (r.first_seen_at as string) ?? null };
+}
+
+/**
+ * 按游标（keyset）翻页：返回排好序的 `sorted` 里第一个排在游标之后的下标。
+ * 为什么不用 offset：两次请求之间有岗下架（探活判死 / sweep）或新岗入库，offset 会整体错位，
+ * 漏掉或重复一个岗；游标只认「排在上一页最后一个岗之后」，与中间增删了什么无关。
+ * 游标对应的岗自己已经不在集合里也没关系——比较只看它的三个排序键。
+ */
+export function campusPageStart(sorted: any[], cursor: CampusJobCursor): number {
+  let lo = 0, hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (compareCampusJobs(sorted[mid], cursor) <= 0) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }
 
 export const WINDOW_ORDER: Record<string, number> = {

@@ -8,9 +8,11 @@ import type { UserPreferences } from "@/lib/types";
 import { ilikeMatcher } from "@/lib/ilike-matcher";
 import {
   campusAdmission,
+  campusPageStart,
   compareCampusJobs,
   foldCampusZone,
   type CampusCompanyRow,
+  type CampusJobCursor,
 } from "@/lib/campus-zone";
 import { estimateRowBytes, logCampusTiming } from "./row-bytes";
 import { isCurrentSeasonGradClass, currentGradClass } from "@/lib/grad-class";
@@ -955,7 +957,7 @@ async function computeCampusFreshStats(
  * 语义与「全取回来再排序截断」**完全一致**：排序在取正文之前就已定好，顺序靠前的先判，
  * 收满 200 条时后面的岗不可能挤进前 200。最坏情况（该桶的岗全排在最后）退化成旧行为，不会更差。
  */
-export type CampusCompanyJobs = { jobs: any[]; total: number };
+export type CampusCompanyJobs = { jobs: any[]; total: number; hasMore: boolean };
 
 /**
  * Phase B（2026-09-15）：**服务端**按筛选分页取完整行 + 回一个**精确总数**，去掉「前 200」硬顶。
@@ -986,15 +988,17 @@ export async function getCampusCompanyJobs(
     /** 卡面有明确对口数时，展开默认只取这批；用户可切回全量。 */
     fit?: { targetFunctions: string[]; targetCities: string[] } | null;
     offset?: number;
+    /** 上一页最后一个岗的排序键：给了就按游标翻页、忽略 offset（见 campusPageStart）。 */
+    after?: CampusJobCursor | null;
     limit: number;
   },
 ): Promise<CampusCompanyJobs> {
   const { filters, limit } = opts;
   const offset = Math.max(0, opts.offset ?? 0);
   const target = list.find((c) => c.pattern === pattern);
-  if (!target) return { jobs: [], total: 0 };
+  if (!target) return { jobs: [], total: 0, hasMore: false };
   const names = await resolveActiveCompanyNames([pattern]);
-  if (!names.length) return { jobs: [], total: 0 };
+  if (!names.length) return { jobs: [], total: 0, hasMore: false };
 
   // 只取轻字段（无 summary）：够做归属 + 届别门 + 桶 + 分面筛选 + 排序 + 职能（读物化列）。
   const tLight = Date.now();
@@ -1064,7 +1068,7 @@ export async function getCampusCompanyJobs(
     if (opts.fit && !campusRowMatchesFit(row, opts.fit.targetFunctions, opts.fit.targetCities)) continue;
     candidates.push(row);
   }
-  // 临近截止优先、其次新增降序（两个键都在轻字段里，与全量排序一致），并列按 id 定序。
+  // 临近截止优先、其次新增降序（两个键都在轻字段里，与全量排序一致），并列按 id 定序（全序）。
   // ⚠️ 上面的轻查询没有 order by，行序 = 堆里的物理顺序，行一被改写（爬虫 upsert、抽屉展开时的探活盖戳、
   // 分类回填）就变；比较器没有唯一决胜列时，「加载更多」的两次请求会切出重复 / 漏掉的岗（2026-09-24 实测
   // 必投抽屉 288 个翻页边界里 284 个落在并列块中间，如建行校招 3,784 条截止日全是 10-08）。
@@ -1072,8 +1076,11 @@ export async function getCampusCompanyJobs(
   const total = candidates.length;
 
   // 只给这一页取完整行（含 summary），保持排好的顺序。
-  const pageMeta = candidates.slice(offset, offset + limit);
-  if (!pageMeta.length) return { jobs: [], total };
+  // 「加载更多」走游标：两次请求之间有岗下架 / 新岗入库时 offset 会错位（漏一个或重复一个），游标不会。
+  const start = opts.after ? campusPageStart(candidates, opts.after) : offset;
+  const pageMeta = candidates.slice(start, start + limit);
+  const hasMore = start + pageMeta.length < total;
+  if (!pageMeta.length) return { jobs: [], total, hasMore };
   const pageIds = pageMeta.map((r) => r.id);
   const full = await jobsQuery<any>(
     `select ${JOB_COLUMNS}, j.location as city from jobs j where j.id = any($1::uuid[])`,
@@ -1086,5 +1093,5 @@ export async function getCampusCompanyJobs(
       return f ? { ...f, fn: m.fn } : null; // fn 用候选阶段算好的（列优先），与筛选口径一致
     })
     .filter((x): x is any => x != null);
-  return { jobs, total };
+  return { jobs, total, hasMore };
 }

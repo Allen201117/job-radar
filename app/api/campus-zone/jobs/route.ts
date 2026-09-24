@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/apiAuth";
 import { getUserCampusScope } from "@/lib/campus-user-industries";
 import { targetFunctionsFromRoles } from "@/lib/campus-facets";
+import { parseCampusCursor } from "@/lib/campus-zone";
 import { getCampusCompanyJobs, jobsStoreEnabled } from "@/lib/jobs-store/read";
 
 export const runtime = "nodejs";
@@ -42,6 +43,9 @@ export async function POST(request: NextRequest) {
   }
   // 分页 + 服务端筛选（Phase B）：把当前筛选下推到库里，「加载更多」按页翻完全部符合条件的岗位。
   const offset = Math.max(0, Math.floor(Number(b.offset) || 0));
+  // 「加载更多」带上一页最后一个岗的排序键（游标），给了就按游标翻、忽略 offset：两次请求之间有岗
+  // 下架 / 新岗入库时 offset 会错位漏岗或重复，游标不会。不合法的游标退回 offset（兼容旧前端）。
+  const after = parseCampusCursor(b.after);
   const rawFilters = (b.filters ?? {}) as Record<string, unknown>;
   const gradClassNum = Number(rawFilters.gradClass);
   const filters = {
@@ -75,13 +79,14 @@ export async function POST(request: NextRequest) {
         ? { targetFunctions, targetCities: targetLocations }
         : { targetFunctions: ["__no_matching_function__"], targetCities: [] }
       : null;
-    const { jobs, total } = await getCampusCompanyJobs(companies, pattern, mode, {
+    const { jobs, total, hasMore } = await getCampusCompanyJobs(companies, pattern, mode, {
       filters,
       fit,
       offset,
+      after,
       limit: PAGE_SIZE,
     });
-    return NextResponse.json({ ok: true, jobs, total, offset, hasMore: offset + jobs.length < total });
+    return NextResponse.json({ ok: true, jobs, total, offset, hasMore });
   } catch (e: any) {
     console.error("[api/campus-zone/jobs] 取岗失败:", e?.message);
     return NextResponse.json({ ok: false, error: e?.message || "fetch_failed" }, { status: 500 });

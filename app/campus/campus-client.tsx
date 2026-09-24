@@ -23,9 +23,11 @@ import {
 } from "@/lib/insight-client";
 import {
   groupCampusJobs,
+  campusCursorOf,
   compareCompanyCardsByFit,
   isCampusView,
   CAMPUS_VIEW_STORAGE_KEY,
+  type CampusJobCursor,
   type CampusView,
   type RecruitMode,
 } from "@/lib/campus-zone";
@@ -46,6 +48,10 @@ import { cn } from "@/lib/utils";
 import type { WindowState } from "@/lib/campus-zone";
 import type { ScoredJob } from "@/lib/types";
 import type { CampusTimeline } from "@/lib/recruitment-cycle";
+
+/** 展开抽屉一个 `pattern|mode|filterKey` 的累计分页状态。 */
+type DrawerPage = { jobs: any[]; total: number; hasMore: boolean; loading: boolean; error: boolean };
+const EMPTY_PAGE: DrawerPage = { jobs: [], total: 0, hasMore: false, loading: false, error: false };
 
 /** 一张公司卡。**不含任何单条岗位记录**——只有聚合分面（见 lib/campus-facets.ts）：
  *  逐条下发实测单页 2.09 MB / 16,494 条，而客户端拿它们只做两件事（填筛选下拉、算筛选后计数），
@@ -337,10 +343,11 @@ export default function CampusClient({
   // 展开某家公司时按需取该公司当前桶 + **当前筛选**下的完整岗位行，按页翻完全部（Phase B，2026-09-15）。
   // key = `pattern|mode|filterKey`：模式、筛选任一变化都是另一批结果，各自独立累计分页。
   // 服务端已按筛选 + 届别门筛好并回**精确 total**（职能/招聘类型已物化成列，数得起），这里只累计页、
-  // 按 total 判要不要「加载更多」——去掉了旧的「前 200」硬顶（那正是用户反馈「岗位展示不全」的根因）。
-  type DrawerPage = { jobs: any[]; total: number; loading: boolean; error: boolean };
+  // 按服务端的 hasMore 判要不要「加载更多」——去掉了旧的「前 200」硬顶（那正是用户反馈「岗位展示不全」的根因）。
+  // 翻页带上一页最后一个岗的排序键（游标，见 lib/campus-zone.campusPageStart）而不是只靠 offset：两次请求之间
+  // 有岗下架 / 新岗入库时 offset 会错位漏岗或重复；合并时再按 id 去重兜底。
   const [drawer, setDrawer] = useState<Map<string, DrawerPage>>(new Map());
-  const drawerRequested = useRef<Set<string>>(new Set()); // 去重键 `key@offset`；失败时删除以便重试
+  const drawerRequested = useRef<Set<string>>(new Set()); // 去重键 `key@offset:游标id`；失败时删除以便重试
   const filterKey = useMemo(
     () => JSON.stringify([filters.city, filters.education, filters.jobFunction, filters.gradClass, expandedList]),
     [filters, expandedList],
@@ -351,14 +358,14 @@ export default function CampusClient({
   );
 
   const loadPage = useCallback(
-    async (pattern: string, offset: number) => {
+    async (pattern: string, offset: number, after: CampusJobCursor | null = null) => {
       const key = `${pattern}|${mode}|${filterKey}`;
-      const reqId = `${key}@${offset}`;
+      const reqId = `${key}@${offset}:${after?.id ?? ""}`;
       if (drawerRequested.current.has(reqId)) return;
       drawerRequested.current.add(reqId);
       setDrawer((prev) => {
         const n = new Map(prev);
-        const cur = n.get(key) ?? { jobs: [], total: 0, loading: false, error: false };
+        const cur = n.get(key) ?? EMPTY_PAGE;
         n.set(key, { ...cur, loading: true, error: false });
         return n;
       });
@@ -366,7 +373,7 @@ export default function CampusClient({
         drawerRequested.current.delete(reqId); // 失败可重试
         setDrawer((prev) => {
           const n = new Map(prev);
-          const cur = n.get(key) ?? { jobs: [], total: 0, loading: false, error: false };
+          const cur = n.get(key) ?? EMPTY_PAGE;
           n.set(key, { ...cur, loading: false, error: true });
           return n;
         });
@@ -375,15 +382,19 @@ export default function CampusClient({
         const resp = await fetch("/api/campus-zone/jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pattern, mode, offset, filters, fitOnly: expandedList === "fit" }),
+          body: JSON.stringify({ pattern, mode, offset, after, filters, fitOnly: expandedList === "fit" }),
         });
         const data = await resp.json().catch(() => null);
         if (!data?.ok) return fail();
         setDrawer((prev) => {
           const n = new Map(prev);
-          const cur = n.get(key) ?? { jobs: [], total: 0, loading: false, error: false };
-          const jobs = offset === 0 ? data.jobs || [] : [...cur.jobs, ...(data.jobs || [])];
-          n.set(key, { jobs, total: data.total ?? jobs.length, loading: false, error: false });
+          const cur = n.get(key) ?? EMPTY_PAGE;
+          const incoming: any[] = data.jobs || [];
+          const have = new Set(offset === 0 ? [] : cur.jobs.map((j: any) => j.id));
+          const jobs = offset === 0 ? incoming : [...cur.jobs, ...incoming.filter((j: any) => !have.has(j.id))];
+          const total = data.total ?? jobs.length;
+          const hasMore = typeof data.hasMore === "boolean" ? data.hasMore : jobs.length < total;
+          n.set(key, { jobs, total, hasMore, loading: false, error: false });
           return n;
         });
       } catch {
@@ -654,7 +665,7 @@ export default function CampusClient({
             const initialLoading = isExpanded && (!page || (page.loading && loadedCount === 0));
             const visibleRows = page?.jobs ?? [];
             const groups = isExpanded ? groupCampusJobs(visibleRows) : [];
-            const hasMore = !!page && page.jobs.length < page.total;
+            const hasMore = !!page && page.hasMore;
             const modeLabel = mode === "campus" ? "校招" : "实习";
 
             return (
@@ -856,7 +867,7 @@ export default function CampusClient({
                         <button
                           type="button"
                           disabled={page?.loading}
-                          onClick={() => loadPage(card.pattern, loadedCount)}
+                          onClick={() => loadPage(card.pattern, loadedCount, campusCursorOf(page?.jobs[loadedCount - 1]))}
                           className="inline-flex items-center justify-center gap-1.5 rounded-full border border-black/[0.08] bg-white/70 px-4 py-2 text-sm font-medium ink-2 transition hover:bg-white disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
                         >
                           {page?.loading ? "加载中…" : `加载更多（还有 ${Math.max(0, drawerTotal - loadedCount)} 个）`}

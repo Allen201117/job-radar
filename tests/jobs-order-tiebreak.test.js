@@ -171,3 +171,50 @@ test("getCampusCompanyJobs：并列行（同截止日 / 同一批首见）跨请
   const byId = (rows) => rows.map((r) => r.id).sort();
   assert.deepEqual(seen, [...byId(lightRows.slice(0, 16)), ...byId(lightRows.slice(16))]);
 });
+
+test("getCampusCompanyJobs：按游标翻页，两次请求之间有岗下架 / 新岗入库也不漏不重，hasMore 由服务端给", async () => {
+  const batch = "2026-09-23 02:00:00.123456+00";
+  const mk = (i, deadline) => ({
+    id: uuidOf(i), company: "字节跳动", grad_class: null, deadline, first_seen_at: batch,
+    recruitment_category: "校招", job_function: "研发", city: "北京", education: "本科",
+    title: `后端开发工程师-${i}`, job_type: null,
+  });
+  const list = [{ name: "字节跳动", pattern: "%字节跳动%" }];
+  const limit = 7;
+  for (const change of ["remove", "insert"]) {
+    const lightRows = Array.from({ length: 40 }, (_, i) => mk(i, i < 16 ? "2026-10-31" : null));
+    const read = loadCampusRead(lightRows); // mock 读的是同一个数组，原地改动 = 两次请求之间库变了
+    const stable = new Set(lightRows.map((r) => r.id));
+    const seen = [];
+    let after = null;
+    let offset = 0;
+    let hasMore = true;
+    for (let req = 0; hasMore; req++) {
+      const res = await read.getCampusCompanyJobs(list, "%字节跳动%", "campus", { offset, after, limit });
+      seen.push(...res.jobs.map((j) => j.id));
+      offset += res.jobs.length;
+      after = { id: res.jobs.at(-1).id, deadline: res.jobs.at(-1).deadline, first_seen_at: res.jobs.at(-1).first_seen_at };
+      hasMore = res.hasMore;
+      if (req === 0 && change === "remove") {
+        const gone = res.jobs[0].id;
+        stable.delete(gone);
+        lightRows.splice(lightRows.findIndex((r) => r.id === gone), 1);
+      }
+      if (req === 0 && change === "insert") lightRows.push(mk(999, "2026-09-30"));
+    }
+    const dup = seen.length - new Set(seen).size;
+    const missing = [...stable].filter((id) => !seen.includes(id)).length;
+    assert.deepEqual({ change, dup, missing }, { change, dup: 0, missing: 0 });
+  }
+});
+
+test("/campus 抽屉「加载更多」必须带游标、按 id 合并去重、按服务端 hasMore 判下一页", () => {
+  const client = fs.readFileSync(path.join(ROOT, "app", "campus", "campus-client.tsx"), "utf8");
+  assert.match(client, /loadPage\(card\.pattern, loadedCount, campusCursorOf\(/, "加载更多必须把上一页最后一个岗当游标传");
+  assert.match(client, /JSON\.stringify\(\{ pattern, mode, offset, after,/, "请求体必须带 after");
+  assert.match(client, /incoming\.filter\(\(j: any\) => !have\.has\(j\.id\)\)/, "累计分页必须按 id 去重");
+  assert.match(client, /const hasMore = !!page && page\.hasMore;/, "下一页只认服务端 hasMore（下架后 total 与已加载数对不上）");
+  const route = fs.readFileSync(path.join(ROOT, "app", "api", "campus-zone", "jobs", "route.ts"), "utf8");
+  assert.match(route, /const after = parseCampusCursor\(b\.after\)/);
+  assert.match(route, /offset,\s*after,\s*limit: PAGE_SIZE/);
+});
