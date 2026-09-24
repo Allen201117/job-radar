@@ -246,6 +246,8 @@ def per_source_quota(want, source_count):
 def _fetch_browser_rows_pg(jobs_conn, src_ids, want, host_filter=None, prioritize_new=False, must_patterns=None):
     if prioritize_new:
         # 近 48h 新增且从未核验：本身就是小集合，全局按 first_seen_at 取即可，不必按源摊名额。
+        # 末位 id 决胜（2026-09-24，同 lib/jobs-store 的 FRESH_ORDER）：爬虫一批入库 first_seen_at 逐字相同，
+        # 截断点常落在并列块里（香港库实测 400 条的截断点在 157 行并列块中）。计划不变（同一索引 + Incremental Sort）。
         where = ["source_id = any(%s::uuid[])", "status='active'",
                  "enrich_checked_at is null", "first_seen_at >= now() - interval '48 hours'"]
         params = [src_ids]
@@ -256,7 +258,7 @@ def _fetch_browser_rows_pg(jobs_conn, src_ids, want, host_filter=None, prioritiz
         rows = jobs_db.fetch_all(
             jobs_conn,
             "select id, title, company, jd_url from jobs where " + " and ".join(where) +
-            " order by first_seen_at desc limit %s",
+            " order by first_seen_at desc, id limit %s",
             tuple(params),
         )
     else:
@@ -300,7 +302,8 @@ def _fetch_browser_rows_supabase(sb, src_ids, want, host_filter=None, prioritize
             q = q.or_(",".join(f"company.ilike.{p}" for p in must_patterns))
         if prioritize_new:
             # 近 48h 新增且从未核验，新者优先。
-            q = q.is_("enrich_checked_at", "null").gte("first_seen_at", cutoff_iso).order("first_seen_at", desc=True)
+            q = (q.is_("enrich_checked_at", "null").gte("first_seen_at", cutoff_iso)
+                 .order("first_seen_at", desc=True).order("id"))  # id 决胜：range 按 1000 行翻页，不带就跨页重复 / 漏行
         else:
             # source_id 打头吃 151 (source_id, enrich_checked_at nulls first) WHERE active 索引（同 sweep）。
             # ⚠️ 这条回退路径仍是全局排序 = UUID 靠后的源会被饿死（香港库那条已改成 lateral 逐源摊名额，
