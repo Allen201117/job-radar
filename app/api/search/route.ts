@@ -157,6 +157,7 @@ async function fetchCached(
     .select("*")
     .eq("status", "active")
     .order("first_seen_at", { ascending: false })
+    .order("id", { ascending: true })
     .limit(limit);
 
   if (query) {

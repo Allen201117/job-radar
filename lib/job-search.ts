@@ -236,6 +236,7 @@ async function searchViaScan(
       .select("*")
       .eq("status", "active")
       .order("first_seen_at", { ascending: false })
+      .order("id", { ascending: true })
       .range(off, off + DB_PAGE - 1);
 
   const matched: ScoredJob[] = [];

@@ -44,6 +44,7 @@ export async function GET(request: NextRequest) {
       : (((await supabase
           .from("jobs").select("*").eq("status", "active")
           .order("first_seen_at", { ascending: false })
+          .order("id", { ascending: true })
           .range(offset, offset + limit - 1)).data as Job[] | null) ?? []);
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || "list_failed" }, { status: 500 });
