@@ -654,7 +654,7 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 | 小米 | 飞书两个 `storefront_id` 返回**完全相同**的 1887 条，判「私有部署没有校招板块」 | 试错了维度，真正的开关是**请求头 `website-path`**，campus 764 / internship 554 / newretailing 121 |
 | 百度 | 列表接口传 `recruitType=CAMPUS` 返 0 | 校招那一档百度自己叫 **GRADUATE**；传 CAMPUS 接口回 `Illegal argument : recruitType`，adapter 只看到 0 条就跳过。改对之后 157 个校招岗 |
 | 华为 | 老门户 `reccampportal` 传 `jobType=2` 返 `totalRows=0`，判「对方没开」 | 校招 2026 年搬到新站 `career.huawei.com/cn/campus-recruitment` + 另一个网关；官网 2026-08-15 就挂着「2027届应届生招聘启动」。应届 69 + 实习 31 |
-| 商汤 / 海底捞 | 飞书详情页 404 → `should_skip` 判「tenant detail portal closed」，整源跳过 | **门户好好的，是我们把 URL 前缀写死成 `index`**。租户首页自报 `"website_info":{…,"path":"exp"}` 才是唯一有效前缀。商汤 80 岗（原本 0）、海底捞 119 岗；海底捞更坏——列表一直正常，36 个在招岗带着必然 404 的 jd_url 躺在库里 |
+| 商汤 / 海底捞 | 飞书详情页 404 → `should_skip` 判「tenant detail portal closed」，整源跳过 | **门户好好的，是我们把 URL 前缀写死成 `index`**。租户首页自报 `"website_info":{…,"path":"exp"}` 才是唯一有效前缀。商汤 80 岗（原本 0）、海底捞 119 岗；海底捞更坏——列表一直正常，36 个在招岗带着必然 404 的 jd_url 躺在库里。**📌 2026-09-24 更正**：海底捞那 119 岗在公开门户上**全是「已下线」**（自报门户 072846 是校招站、公开首页「开启新的工作（0）」）——换前缀只让页面 200，内容仍是已下线；「详情页 200」≠「岗在线」，见下方飞书 website-path 一节 |
 
 ✅ 正确姿势：① 先渲染对方的校招页，看它自己写没写「XX 届校园招聘启动」+ 网申日期；
 ② 再从**页面自己发的请求**里找入口（拦 XHR / 读它的 JS 路由表），不要拿社招接口试参数；
@@ -695,9 +695,20 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 
 - **加一个租户的校招源零代码**：插一行 `source_url = https://{host}/campus/position` 即可，
   `FeishuRecruitAdapter` 按路径自动切门户与详情模板（`lib/source-adapters.ts` 不用动）。
-- ⚠️ **`website-path: index` 不是「主门户」，是更小的子集**：蔚来不带头 2055 岗、带 index 只有
-  1801 岗（少 254 个）。库里存量飞书源全是 `/index/position`，派生 index 就是全体缩水——
-  `_bind_website_path` 因此把 index 当「无子门户」，钉在 `tests` 里别改。
+- 🚫 **主门户按「公开门户」抓，不抓「不带头的全集」（2026-09-24 更正，创始人授权）**：
+  ❌ 原文（2026-09-04 立）：「`website-path: index` 是更小的子集——蔚来不带头 2055、带 index 1801，少 254 个；
+     `_bind_website_path` 把 index 当无子门户，钉在 tests 里别改」。错在只比了**条数**，没问多出来那批在公开页上是不是活的。
+     从立碑起就是错的，库里一直躺着这批死链：死链巡检删了又被列表重抓回来（job_closures 飞书 URL 累计复活 11,581 次）。
+  ✅ 实测（133 个飞书系源逐岗全量核，非抽样）：不带头多出来的岗，详情接口带 `website-path:<链接所在门户>` 读
+     `channel_online_status=0`，公开页显示「该职位已下线」；⚠️ 这个状态**按门户算**——同一岗不带头读 1、带 index 头读 0。
+     蔚来当天不带头 2,087 / 公开门户 1,794，多出的 591/591 已下线。上线后存量下架 11,092、补进 2,521、误杀 0，
+     下架后 12 家各抽 1 岗浏览器实开 12/12 已下线。「不带头 ⊇ 门户」也不成立（超级猩猩 6 / 17，美宜佳 10 / 96）。
+  ✅ 防：`adapters/feishu._httpx_fetch_main`——主门户 = 租户首页自报 `website_info.path` ∪ index，都带头取，
+     每行按它真在线的门户拼 jd_url；index 门户不存在（接口回 `-9000003 site not exist`）算空门户；拿不到自报门户不标抓全。
+     回归钉在 `crawler/test_feishu_httpx.MainPortalTest`。存量死链堆积时跑 `feishu-portal-reconcile.yml`
+     （逐岗读状态、只下架读到 0 的、每源阳性对照 + 全局对照，默认 dry-run）。
+  ⚠️ 小米私有部署偶尔**无视 website-path 头**返回全集（2026-09-23 newretailing 一轮抓回 2,075，正常 110）
+     → 幽灵行占比过半、list-absence 安全闸清不掉，只能重跑对账工具。
 - ⚠️ `portal_type` **不是**开关：带 `website-path: campus` 时传 2 或 6 返回同一批。
 
 ## ⚠️ 列表抓取上限与「短页误判末页」（2026-09-04 立）
