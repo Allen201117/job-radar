@@ -624,15 +624,24 @@ def _beisen_ssr_fill_summaries(jobs: List[dict]) -> None:
                 resp = cli.get(job["jd_url"])
                 if resp.status_code != 200:
                     continue
-                text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", resp.text, flags=re.S | re.I)
-                text = re.sub(r"<[^>]+>", " ", text)
-                text = re.sub(r"\s+", " ", _html.unescape(_html.unescape(text))).strip()
-                m = _BEISEN_SSR_JD_RE.search(text)
-                body = (m.group(2) if m else "").strip()
-                if len(body) >= 60:
-                    job["summary"] = body[:4000]
+                body = beisen_ssr_detail_body(resp.text)
+                if body:
+                    job["summary"] = body
             except Exception:
                 continue
+
+
+def beisen_ssr_detail_body(html_text: str) -> str:
+    """老版 SSR / CMS 详情页 HTML → 正文（「工作职责 / 岗位职责 / 职位描述…」之后）；不足 60 字返回 ""。
+
+    抓取时补正文（_beisen_ssr_fill_summaries）与补正文 / 巡检任务（enrich._detail_beisen 的老版分支）
+    共用这一份，两边口径不许漂。"""
+    text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html_text or "", flags=re.S | re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", _html.unescape(_html.unescape(text))).strip()
+    m = _BEISEN_SSR_JD_RE.search(text)
+    body = (m.group(2) if m else "").strip()
+    return body[:4000] if len(body) >= 60 else ""
 
 
 # ============================================================================
