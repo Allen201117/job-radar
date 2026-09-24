@@ -7,11 +7,11 @@
 本批的判据是机器可验证的（词边界正则），且人工抽样 22/22 全为误标。
 
 dry-run 默认；--apply 才写库。口径与爬虫一致（直接 import 修好的 normalizer）。"""
-import json, os, subprocess, sys, collections
+import json, os, sys, collections
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "crawler"))
 import normalizer
+from psql_env import run_psql  # 连接串经环境变量传给 psql，不进命令行（见 crawler/psql_env.py）
 
-URL = os.environ["JOBS_DATABASE_URL"]
 APPLY = "--apply" in sys.argv
 
 SQL = r"""select coalesce(json_agg(t),'[]'::json)::text from (
@@ -19,7 +19,7 @@ SQL = r"""select coalesce(json_agg(t),'[]'::json)::text from (
   from jobs
   where status='active' and job_type='实习'
     and lower(coalesce(title,'')||' '||coalesce(summary,'')) !~ '(实习|\yintern(ship)?s?\y)') t"""
-raw = subprocess.run(["psql", URL, "-t", "-A", "-c", SQL], capture_output=True, text=True, check=True).stdout.strip()
+raw = run_psql(["-t", "-A", "-c", SQL]).strip()
 rows = json.loads(raw)
 print(f"待重算: {len(rows)}")
 
@@ -57,7 +57,7 @@ for i in range(0, len(changes), BATCH):
         for cid, nv, _t, _c in chunk
     )
     stmt = f"update jobs j set job_type = v.jt from (values {vals}) as v(id, jt) where j.id = v.id;"
-    subprocess.run(["psql", URL, "-q", "-c", stmt], check=True)
+    run_psql(["-q", "-c", stmt])
     done += len(chunk)
     print(f"  写入 {done}/{len(changes)}")
 print("完成")

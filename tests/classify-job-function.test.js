@@ -291,7 +291,8 @@ test("标题优先：job_type/summary 不带偏标题已明确的职能", () => 
 // ── 2026-09-17 词表补缺：用户手填的合法岗位名判不出职能（画像体检 22/64 个画像中招）+
 //    库里 active「其他」的高频真实标题。每条都钉「新增词命中什么」和「不许误吃什么」两面。
 test("用户手填的岗位方向必须判得出职能（画像体检缺口）", () => {
-  assert.equal(classifyJobFunction({ title: "有机合成研究员" }), "生产制造");
+  // 2026-09-23 创始人拍板改为研发（原为生产制造），见文末「化学 / 药物合成类研究员」用例。
+  assert.equal(classifyJobFunction({ title: "有机合成研究员" }), "研发");
   assert.equal(classifyJobFunction({ title: "实验员" }), "生产制造");
   assert.equal(classifyJobFunction({ title: "资料员" }), "建筑工程");
   assert.equal(classifyJobFunction({ title: "招投标" }), "供应链");
@@ -503,4 +504,33 @@ test("强化学习不是化学：不再被判成生产制造", () => {
   // 真化学岗不受影响
   assert.equal(classifyJobFunction({ title: "化学分析员" }), "生产制造");
   assert.equal(classifyJobFunction({ title: "化学工艺工程师" }), "生产制造");
+});
+
+// 2026-09-23 创始人拍板「有机合成研究员算研发」：此前同一类岗分在三个桶（有机合成研究员=生产制造、
+// 药物合成研究员=医疗健康、多肽合成研究员=其他），而「研发工程师（有机合成方向）」是研发 ——
+// 方向填「有机合成研究员」的用户被职能门挡掉一半对口岗。
+test("化学 / 药物合成类研究员归研发，真生产岗与 AI 的「合成」不受影响", () => {
+  for (const title of [
+    "有机合成研究员",
+    "有机合成高级研究员",
+    "药物合成研究员",
+    "化学合成研究员",
+    "药物化学研究员",
+    "多肽合成研究员",
+    "核酸/多肽/毒素连接体合成研究员",
+    "药化合成高级科研员",
+    "有机合成实习生",
+    "Scientist, Medicinal Chemistry",
+  ]) {
+    assert.equal(classifyJobFunction({ title }), "研发", title);
+  }
+  // 用户侧（只喂角色词）与岗位侧落同一个桶，职能门两边才对称。
+  assert.equal(classifyJobFunction({ title: "有机合成研究员" }), classifyJobFunction({ title: "研发工程师（有机合成方向）" }));
+  // 真生产 / 工艺 / 操作岗留在生产制造（末尾角色词更靠后）。工艺研究员按创始人口径不带进研发。
+  for (const title of ["合成工艺技术员", "合成生产工程师", "有机合成车间主任", "车间主任-合成/切割工序/D级区工序", "合成工艺研究员", "工艺合成研究员", "化学工艺合成研究员", "化学分析员", "QC Chemist"]) {
+    assert.equal(classifyJobFunction({ title }), "生产制造", title);
+  }
+  // 「合成」在 AI 里是合成数据 / 语音合成，不是化学。
+  assert.equal(classifyJobFunction({ title: "合成数据研究员" }), "其他");
+  assert.equal(classifyJobFunction({ title: "语音合成算法工程师" }), "研发");
 });

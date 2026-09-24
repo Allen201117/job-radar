@@ -38,10 +38,10 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const { execFileSync } = require("child_process");
 
 const ROOT = path.join(__dirname, "..", "..");
 const { loadTs } = require(path.join(ROOT, "tests/_load-ts.js"));
+const { runPsql } = require("../lib/psql.js");
 const { ftsCandidateTerms } = require(path.join(ROOT, "lib/china-keyword-expansion.js"));
 const { buildTsquery } = loadTs(path.join(ROOT, "lib/job-search.ts"));
 const MUST_APPLY = require(path.join(ROOT, "lib/must-apply-list.json"));
@@ -100,12 +100,9 @@ function buildPersonaSql(tsquery, cities) {
   return `select company, count(*) as cnt from jobs where ${where.join(" and ")} group by company order by cnt desc;`;
 }
 
+// 连接串经环境变量传给 psql、不进命令行（见 scripts/lib/psql.js 顶部注释）。
 function psqlRows(sql) {
-  const raw = execFileSync(
-    "psql",
-    [process.env.JOBS_DATABASE_URL, "-Atc", sql, "-F", "\t"],
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-  );
+  const raw = runPsql(["-Atc", sql, "-F", "\t"], { maxBuffer: 64 * 1024 * 1024 });
   return raw
     .split("\n")
     .map((l) => l.trim())

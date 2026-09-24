@@ -279,6 +279,9 @@ _JOB_FUNCTION_RULES = [
     ("数据", re.compile(r"数据分析|数据科学|数据工程|大数据|数据挖掘|data\s*(analyst|scien|engineer)|\bbi\b|商业分析", re.I)),
     # 英文裸 architect 在香港库实测 1915 个且压倒性是 IT 架构师；少数 Construction Project Architect 的漏判可接受。
     ("研发", re.compile(r"算法|前端|后端|客户端|测试|运维|架构|嵌入式|硬件|\barchitect\b|\bsde\b|\bsre\b|programmer|software|软件", re.I)),
+    # 化学 / 药物合成类研发（与 JS 同口径，2026-09-23 创始人拍板「有机合成研究员算研发」）。第 4 位 True =
+    # explicitDomain：学科词本身就是研发语境，跳过「传统工程无软件信号不许进研发」护栏（药物化学研究员含 化学/药物）。
+    ("研发", re.compile(r"(?:有机|药物|化学|化药|药化|多肽|核酸|寡核苷酸|液相|固相|adc)\s*合成|(?<!工艺)合成(?:高级|助理|资深|首席)?(?:研究员|科研员|科学家)|药物化学|(?:medicinal|synthetic|organic)\s*chemist\w*", re.I), False, True),
     # 具体软件研发之后、泛「工程师」之前：传统工程和质量安全不能被工程师抢进研发。
     ("生产制造", _MANUFACTURING_DOMAIN),
     # 仅认建筑语境：裸结构/强电/工程部等在生产库大量属于机械、电气和通用工程部门。
@@ -336,10 +339,12 @@ def _run_function_rules(text, prefer_last, use_generic):
     for index, item in enumerate(_JOB_FUNCTION_RULES):
         name, rule = item[:2]
         is_generic = bool(item[2]) if len(item) > 2 else False
+        explicit_domain = bool(item[3]) if len(item) > 3 else False
         if is_generic != use_generic:
             continue
         # 配套护栏①：传统工程仅靠泛词落入研发且无软件信号时，不能塌进软件研发。
         if (name == "研发"
+                and not explicit_domain
                 and _NON_SOFTWARE_ENG_DOMAIN.search(text)
                 and not _SOFTWARE_ENG_SIGNAL.search(text)):
             continue
