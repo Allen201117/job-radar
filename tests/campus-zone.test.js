@@ -3,8 +3,10 @@ const assert = require("node:assert");
 const path = require("node:path");
 const { loadTs } = require("./_load-ts");
 // 一次性 loadTs 加载 campus-zone.ts；后续任务只需在本行解构补上新函数名。
-const { campusAdmission, windowStatus, compareCampusJobs, compareCompanyCards, groupCampusJobs } =
-  loadTs(path.join(__dirname, "..", "lib", "campus-zone.ts"));
+const {
+  campusAdmission, windowStatus, compareCampusJobs, compareCompanyCards, groupCampusJobs,
+  campusPageStart, campusCursorOf, parseCampusCursor,
+} = loadTs(path.join(__dirname, "..", "lib", "campus-zone.ts"));
 
 test("campusAdmission: 强校招信号 → campus", () => {
   assert.equal(campusAdmission({ title: "2027届校园招聘-后端工程师", job_type: "校招" }), "campus");
@@ -134,6 +136,83 @@ test("compareCampusJobs: 按 offset 分页、每页一次请求且行序各不�
     assert.equal(new Set(ids).size, TIE_ROWS.length, `分页结果有重复（start=${start}）`);
     assert.deepEqual([...ids].sort(), TIE_ROWS.map((j) => j.id).sort(), `分页结果有漏岗（start=${start}）`);
   }
+});
+
+test("compareCampusJobs: 截止日相同 → 新增降序，再按 id", () => {
+  const rows = [
+    { id: "b", deadline: "2026-10-08", first_seen_at: "2026-09-01 10:00:00+08" },
+    { id: "a", deadline: "2026-10-08", first_seen_at: "2026-09-01 10:00:00+08" },
+    { id: "c", deadline: "2026-10-08", first_seen_at: "2026-09-20 10:00:00+08" },
+    { id: "d", deadline: "2026-10-01", first_seen_at: "2026-08-01 10:00:00+08" },
+  ];
+  assert.deepEqual(rows.slice().sort(compareCampusJobs).map((j) => j.id), ["d", "c", "a", "b"]);
+});
+
+test("campusPageStart: 游标之后的第一个下标；游标对应的岗已不在集合里也照样定位", () => {
+  const sorted = seededShuffle(TIE_ROWS, 3).sort(compareCampusJobs);
+  for (let i = 0; i < sorted.length; i++) {
+    assert.equal(campusPageStart(sorted, campusCursorOf(sorted[i])), i + 1, `cursor=${i}`);
+    // 游标那一行在两次请求之间下架了：下一页仍从它后面那一个开始，不漏不重
+    const without = sorted.filter((_, k) => k !== i);
+    assert.equal(campusPageStart(without, campusCursorOf(sorted[i])), i, `removed cursor=${i}`);
+  }
+  assert.equal(campusPageStart([], campusCursorOf(sorted[0])), 0);
+});
+
+// 模拟抽屉翻页：每页一次请求、行序各不相同；第 1 页之后库里发生一次变化（下架 / 入库），
+// 返回 {dup, missing}：重复出现的次数 + 全程都在库里却一次没出现的岗数（两个方向分开数，不许只看净值）。
+function pageThrough({ useCursor, change, seed }) {
+  const limit = 3;
+  let pool = TIE_ROWS.slice();
+  const stable = new Set(pool.map((j) => j.id));
+  const seen = [];
+  let after = null;
+  let offset = 0;
+  let hasMore = true;
+  for (let req = 0; hasMore; req++) {
+    const sorted = seededShuffle(pool, seed * 10 + req).sort(compareCampusJobs);
+    const from = useCursor && after ? campusPageStart(sorted, after) : offset;
+    const page = sorted.slice(from, from + limit);
+    hasMore = from + page.length < sorted.length;
+    seen.push(...page.map((j) => j.id));
+    offset = from + page.length;
+    if (page.length) after = campusCursorOf(page[page.length - 1]);
+    if (req === 0 && change === "remove") {
+      // 已经看过的第 1 个岗被探活判死、下架
+      stable.delete(page[0].id);
+      pool = pool.filter((j) => j.id !== page[0].id);
+    }
+    if (req === 0 && change === "insert") {
+      // 新入库一个截止更早、排在最前面的岗
+      pool = [...pool, { id: `ffffffff-new-${seed}`, deadline: "2026-09-30", first_seen_at: TIE_BATCH }];
+    }
+  }
+  const dup = seen.length - new Set(seen).size;
+  const missing = [...stable].filter((id) => !seen.includes(id)).length;
+  return { dup, missing };
+}
+
+for (const change of ["remove", "insert"]) {
+  test(`campusPageStart 翻页：两次请求之间${change === "remove" ? "有岗下架" : "新岗入库"}，已在的岗不漏不重（offset 做不到）`, () => {
+    for (let seed = 1; seed <= 50; seed++) {
+      assert.deepEqual(pageThrough({ useCursor: true, change, seed }), { dup: 0, missing: 0 }, `cursor seed=${seed}`);
+      // 对照组：同一场景只用 offset，下架必漏 1 个、入库必重复 1 个 —— 证明这个场景真的会出错
+      const expectedOffsetError = change === "remove" ? { dup: 0, missing: 1 } : { dup: 1, missing: 0 };
+      assert.deepEqual(pageThrough({ useCursor: false, change, seed }), expectedOffsetError, `offset seed=${seed}`);
+    }
+  });
+}
+
+test("parseCampusCursor: 只收三个字符串字段，其余一律 null（退回 offset）", () => {
+  const ok = { id: "c3a1f0e2-0000-4000-8000-000000000001", deadline: null, first_seen_at: "2026-09-20 10:00:00+08" };
+  assert.deepEqual(parseCampusCursor(ok), ok);
+  assert.deepEqual(parseCampusCursor({ id: "x", deadline: "2026-10-01" }), { id: "x", deadline: "2026-10-01", first_seen_at: null });
+  for (const bad of [null, undefined, "x", 1, [], {}, { id: "" }, { id: 1 }, { id: "x", deadline: 5 },
+    { id: "x".repeat(65) }, { id: "x", first_seen_at: "y".repeat(65) }]) {
+    assert.equal(parseCampusCursor(bad), null, JSON.stringify(bad));
+  }
+  assert.equal(campusCursorOf(null), null);
+  assert.equal(campusCursorOf({ deadline: "2026-10-01" }), null);
 });
 
 test("compareCompanyCards: hiring 在 no_campus_now / not_ingested 之前", () => {

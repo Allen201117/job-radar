@@ -405,6 +405,10 @@ app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse�
   （海外第 2 页 1000 条、块 2,006 行 8.9→17.8ms）。同日补 `audit_dead_links --prioritize-new`（香港库 + Supabase 兜底；400 条截断点落在
   157 行并列块，同索引 + Incremental Sort，warm 5.7→7~20ms）与 `scripts/verify-opportunity-recall.ts`。
   ⚠️ `scripts/{audit-job-duplicates,diagnose-jobs,probe-dead-links}.js` 仍是裸时间序没改：它们读的是 Supabase `jobs`（2026-09-24 实测 0 行），先得改读香港库，排序才有意义。
+  📌 **JS 里「sort → 按页切」同一条规矩（2026-09-24，/campus 抽屉 `getCampusCompanyJobs`）**：轻查询没 order by（deadline 是 text 下推不了），行序 = 堆物理顺序，
+  行一被改写（爬虫 upsert / 抽屉探活盖戳 / 分类回填）就变；`compareCampusJobs` 截止日相同即返 0 → 必投抽屉 288 个翻页边界 284 个落在并列块中间
+  （建行校招 3,784 条截止日全是 10-08），换计划交替翻页改前重复 / 漏 632 / 632 → 改后 0 / 0。✅ 比较器末位补 `id`；翻页改游标（`campusPageStart`）+ 前端按 id 去重
+  ——offset 在两次请求之间有岗下架必漏 1、有岗入库必重 1，游标两个方向都是 0（`tests/campus-zone.test.js` 两个方向各有对照组）。**新写的比较器同样以 id 收尾，翻页优先用游标。**
 
 ## 数据库迁移（已自动化，勿再手动跑 Supabase）
 
