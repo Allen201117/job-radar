@@ -1419,6 +1419,18 @@ _BEISEN_SHARED_TENANTS = {
 # 只有共享租户才在列表请求里额外点名这两列，其余租户的请求体保持原样。
 _BEISEN_ENTITY_FIELDS = ("Org", "ClassificationTwo")
 
+# 反过来的情形：母集团门户与子公司门户是**两个北森租户**，同一个招聘需求各发一份（jobAdId 不同）。
+# 子公司门户已单独接源，母集团门户里那份就跳过，否则同一个岗入库两行、挂两个公司名。
+# 2026-09-24 普查：上实集团门户 149 个岗里 117 个与上海医药门户标题连同招聘编号一字不差
+# （如「上海医药2027技术工培生(J12541)」，其中 113 个招聘机构也一字不差）；另 32 个是上实自己的
+# （东滩疗养院 / 上实总部 / 永发印务 / 南洋兄弟烟草 / 上实服务…），照收。
+# ⚠️ 认「同一个岗」靠标题一字不差，只对标题带招聘编号的租户成立；子公司门户那条源停用时这条登记要一起删，
+#    否则这批岗两边都不入库。
+# host → 子公司门户的列表页（PortalId 从这一页抽）。
+_BEISEN_TWIN_PORTALS = {
+    "siic.zhiye.com": "https://sph.zhiye.com/campus",
+}
+
 
 def beisen_hiring_entity(post) -> str:
     """岗位自报的招聘机构：Org 优先，空了退 ClassificationTwo；都没有返回空串。"""
@@ -1752,7 +1764,33 @@ class BeisenAdapter(ChinaSpaAdapter):
                 return json.dumps({"_intercepted": [{"Data": [], "Count": 0}]}, ensure_ascii=False)
             return None
         self.fetch_complete = (total is not None and len(rows) >= (total or 0))
+        # 「抓全」按剔除孪生之前的整张列表判：剔掉的是别的门户已经入库的岗，不是我们漏抓的。
+        rows = self._drop_twin_portal_rows(parsed.netloc, rows)
+        if rows is None:
+            return None
         return json.dumps({"_intercepted": [{"Data": rows, "Count": total or len(rows)}]}, ensure_ascii=False)
+
+    def _drop_twin_portal_rows(self, host: str, rows: List[dict]) -> Optional[List[dict]]:
+        """见 _BEISEN_TWIN_PORTALS：剔掉子公司门户也在招的岗。子公司门户列表拉不到 → None（上层记失败），
+        不静默全收——全收就是一岗两行、两个公司名。"""
+        twin_url = _BEISEN_TWIN_PORTALS.get(host)
+        if not twin_url:
+            return rows
+        try:
+            payload = BeisenAdapter()._httpx_fetch(twin_url)
+        except Exception:        # noqa: BLE001 — 原因在下面的日志里，交上层记 failed
+            payload = None
+        if not payload:
+            _log.warning("%s: %s 的孪生门户 %s 列表没拉到，本轮不入库（避免一岗两行）", self.name, host, twin_url)
+            return None
+        twin_titles = {_first_str(r, _TITLE_FIELDS)
+                       for resp in json.loads(payload).get("_intercepted") or []
+                       for r in resp.get("Data") or [] if isinstance(r, dict)}
+        twin_titles.discard("")
+        kept = [r for r in rows if _first_str(r, _TITLE_FIELDS) not in twin_titles]
+        _log.info("%s: %s 剔掉 %d 个孪生门户 %s 也在招的岗，留 %d 个",
+                  self.name, host, len(rows) - len(kept), twin_url, len(kept))
+        return kept
 
     # ---- 老版 CMS Portal 门户（theme2 SSR）：纯 httpx 抓全 ----
 

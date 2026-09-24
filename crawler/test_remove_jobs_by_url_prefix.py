@@ -2,6 +2,7 @@
 import contextlib
 import io
 import unittest
+from unittest import mock
 
 try:
     from remove_jobs_by_url_prefix import run, parse_args
@@ -123,6 +124,42 @@ class OnlyTwinsTest(unittest.TestCase):
             parse_args(base + ["--only-twins-under", "https://"])
         args = parse_args(["--company", "x", "--url-prefix", SHADOW, "--only-twins-under", KEEP])
         self.assertEqual(args.only_twins_under, KEEP)
+
+
+class TwinKeyTest(unittest.TestCase):
+    """北森没有 `#` 片段：同一门户两个域名认 jobAdId；两个租户各发一份同一招聘需求认标题（带编号）。"""
+
+    def _sql(self, key):
+        cur = mock.Mock()
+        cur.fetchone.return_value = (0,)
+        run(cur, "https://siic.zhiye.com/", "上实集团 SIIC", twins_under="https://sph.zhiye.com/", twin_key=key)
+        return " ".join(cur.execute.call_args[0][0].split())
+
+    def test_hash_key_keeps_the_original_sql(self):
+        sql = self._sql("hash")
+        self.assertIn("split_part(jd_url, '#', 2) <> ''", sql)
+        self.assertIn("select split_part(k.jd_url, '#', 2) from jobs k where k.status = 'active'", sql)
+
+    def test_jobadid_key_compares_beisen_ids_on_both_sides(self):
+        sql = self._sql("jobadid")
+        self.assertIn("substring(jd_url from 'jobAdId=([0-9A-Za-z-]+)')", sql)
+        self.assertIn("substring(k.jd_url from 'jobAdId=([0-9A-Za-z-]+)')", sql)
+        self.assertIn("<> ''", sql, "取不到 id 的行不许算孪生")
+
+    def test_title_key_compares_titles(self):
+        sql = self._sql("title")
+        self.assertIn("coalesce(title, '') <> ''", sql)
+        self.assertIn("select coalesce(k.title, '') from jobs k where k.status = 'active'", sql)
+
+    def test_parse_args_twin_key(self):
+        base = ["--company", "x", "--url-prefix", "https://tjsemi.zhiye.com/"]
+        with self.assertRaises(SystemExit):   # 不给保留门户时 twin-key 没意义，别让人以为生效了
+            parse_args(base + ["--twin-key", "jobadid"])
+        with self.assertRaises(SystemExit):
+            parse_args(base + ["--only-twins-under", "https://zhonghuan.zhiye.com/", "--twin-key", "id"])
+        args = parse_args(base + ["--only-twins-under", "https://zhonghuan.zhiye.com/", "--twin-key", "jobadid"])
+        self.assertEqual(args.twin_key, "jobadid")
+        self.assertEqual(parse_args(base).twin_key, "hash")
 
 
 if __name__ == "__main__":

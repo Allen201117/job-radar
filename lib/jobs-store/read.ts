@@ -1064,7 +1064,10 @@ export async function getCampusCompanyJobs(
     if (opts.fit && !campusRowMatchesFit(row, opts.fit.targetFunctions, opts.fit.targetCities)) continue;
     candidates.push(row);
   }
-  // 临近截止优先、其次新增降序（两个键都在轻字段里，与全量排序一致）。
+  // 临近截止优先、其次新增降序（两个键都在轻字段里，与全量排序一致），并列按 id 定序。
+  // ⚠️ 上面的轻查询没有 order by，行序 = 堆里的物理顺序，行一被改写（爬虫 upsert、抽屉展开时的探活盖戳、
+  // 分类回填）就变；比较器没有唯一决胜列时，「加载更多」的两次请求会切出重复 / 漏掉的岗（2026-09-24 实测
+  // 必投抽屉 288 个翻页边界里 284 个落在并列块中间，如建行校招 3,784 条截止日全是 10-08）。
   candidates.sort(compareCampusJobs);
   const total = candidates.length;
 

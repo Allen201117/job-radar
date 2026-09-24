@@ -112,13 +112,21 @@ function ms(x: any): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
+// 唯一决胜列 id（升序，与 SQL `first_seen_at desc, id` 同向；小写十六进制 uuid 的字符串序 = uuid 字节序）。
+// getCampusCompanyJobs 排完序按 offset 切页、每页一次请求，而轻查询没有 order by：爬虫同一批入库的岗
+// first_seen_at 逐字相同、截止日也常相同，并列块里的先后跟着执行计划走 → 翻页重复 / 漏岗。
+function compareId(a: any, b: any): number {
+  const ia = String(a.id ?? ""), ib = String(b.id ?? "");
+  return ia < ib ? -1 : ia > ib ? 1 : 0;
+}
+
 export function compareCampusJobs(a: any, b: any): number {
   const da = ms(a.deadline), db = ms(b.deadline);
-  if (da != null && db != null) return da - db;   // 都有截止 → 临近优先
+  if (da != null && db != null) return da - db || compareId(a, b); // 都有截止 → 临近优先
   if (da != null) return -1;                       // 有截止的排前
   if (db != null) return 1;
   const fa = ms(a.first_seen_at) || 0, fb = ms(b.first_seen_at) || 0;
-  return fb - fa;                                   // 都无截止 → 新增降序
+  return fb - fa || compareId(a, b);               // 都无截止 → 新增降序
 }
 
 export const WINDOW_ORDER: Record<string, number> = {
