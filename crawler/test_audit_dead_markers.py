@@ -56,6 +56,18 @@ class TestDeadMarkerPrecision(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertEqual(verdict(f"提示：{phrase}", "产品经理"), "dead")
 
+    def test_legacy_beisen_stopped_page_is_dead_even_with_title(self):
+        # 老版北森门户（/zpdetail/）撤岗后仍渲染岗位名，只多一句「对不起，此职位已停用。」
+        # ——原样取自天康生物线上页面。此前标题在场 → 判 alive，85 个已停招岗一直挂着。
+        text = ("搜索 招聘动态 更多>> 暂无内容 2026届校招-财务储备岗(J10576) 对不起，此职位已停用。 返回 "
+                "©2026 天康生物股份有限公司 京ICP备05051632号-16 京公网安备 11010802032024号 隐私政策 Powered by")
+        self.assertEqual(verdict(text, "2026届校招-财务储备岗"), "dead")
+
+    def test_legacy_beisen_live_page_is_alive(self):
+        text = ("海口肯德基餐厅楼面经理 工作性质： 全职 工作职责： 负责餐厅值班管理 任职资格： 大专以上 "
+                "现在申请 返回职位列表 收藏 ©2026 百胜中国 京ICP备05051632号-16")
+        self.assertEqual(verdict(text, "海口肯德基餐厅楼面经理"), "alive")
+
     def test_weak_marker_without_title_is_dead(self):
         # 标题不在场 + 弱信号 → 仍判死（真 404 页的典型形态）
         text = "很抱歉，页面不见了。" + "错误代码 404。" + "返回首页" * 10
