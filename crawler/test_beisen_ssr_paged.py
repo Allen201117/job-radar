@@ -410,5 +410,39 @@ class TestSsrRouteHint(unittest.TestCase):
             china_ats._BEISEN_ROUTE_CACHE.pop(host, None)
 
 
+
+class TestSsrDetailBodyFooter(unittest.TestCase):
+    """老版详情页的正文要截在页脚之前（2026-09-24：22 个租户 522 条 summary 带着备案号与别的岗位名）。"""
+    _DUTY = "负责餐厅现场人员管理，订货排班，成本控制，设备维护等营运系统管理工作；"
+
+    def _page(self, tail):
+        return ("<html><div class='nav'>品牌 肯德基 必胜客 搜索 招聘动态 更多>> 暂无内容</div>"
+                "<h2>海口肯德基餐厅楼面经理</h2><div>工作性质： 全职 工作地点： 海南省-海口市</div>"
+                f"<div>岗位职责：{self._DUTY * 3}</div>{tail}</html>")
+
+    def test_cuts_before_apply_buttons_and_other_job_titles(self):
+        body = china_ats.beisen_ssr_detail_body(self._page(
+            "<a>现在申请</a> <a>返回职位列表</a> 收藏 <h3>热招职位</h3> 更多 >> 西安研究院院长/技术带头人 "
+            "<h3>长招职位</h3> 更多 >> 招商地区经理（海口）(J14149) ©2026 百胜中国 京ICP备05051632号-16 隐私政策 Powered by"))
+        self.assertEqual(body, (self._DUTY * 3).strip())
+
+    def test_cuts_when_page_has_no_apply_button(self):
+        # 启德 / 科兴这类页：正文后直接是「长招职位 更多 >>」列表，没有「现在申请」。
+        body = china_ats.beisen_ssr_detail_body(self._page(
+            "长招职位 更多 >> 学习顾问2018(J12037) ©2026 启德教育集团 京ICP备05051632号-16"))
+        self.assertNotIn("学习顾问", body)
+        self.assertNotIn("ICP", body)
+        self.assertTrue(body.startswith("负责餐厅现场人员管理"))
+
+    def test_stopped_job_page_yields_no_body(self):
+        # 天康：已停用的岗位页只剩「对不起，此职位已停用。」——没有正文标签，不许补出任何东西。
+        page = ("<html>搜索 招聘动态 更多>> 暂无内容 2026届校招-财务储备岗(J10576) 对不起，此职位已停用。 返回 "
+                "©2026 天康生物股份有限公司 京ICP备05051632号-16</html>")
+        self.assertEqual(china_ats.beisen_ssr_detail_body(page), "")
+
+    def test_too_short_after_cut_is_empty(self):
+        self.assertEqual(china_ats.beisen_ssr_detail_body(
+            "<div>岗位职责：负责门店营运</div> 现在申请 返回职位列表 收藏 ©2026 x 京ICP备05051632号-16 " + "填充" * 40), "")
+
 if __name__ == "__main__":
     unittest.main()
