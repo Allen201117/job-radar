@@ -118,19 +118,41 @@ class BeisenLivenessTest(unittest.TestCase):
             with self.assertRaises(enrich.DetailUnknownError, msg=status):
                 self._run(_Resp(_payload(status=status)))
 
-    def test_legacy_cms_url_without_job_ad_id_is_unknown_and_sends_nothing(self):
-        """老版 CMS 门户没有 jobAdId：不能返 ""（那等于「确认在招」、会盖戳挤掉浏览器巡检），
-        而且根本不该发请求（Status=2 的假响应也不许让它判死）。"""
-        for url in ("https://eic.zhiye.com/zpdetail/230300234",
+    _LEGACY_URLS = ("https://eic.zhiye.com/zpdetail/230300234",
                     "https://fotile.zhiye.com/job_show?jobId=561114580",
-                    "https://x.zhiye.com/social/detail?jobAdId=not-a-uuid",
-                    ""):
+                    "https://x.zhiye.com/social/detail?jobAdId=not-a-uuid")
+
+    def test_legacy_cms_url_with_summary_is_unknown_and_sends_nothing(self):
+        """老版 CMS 门户没有 jobAdId、判不了死活：已有正文的行（巡检复检）不能返 ""（那等于「确认在招」、
+        会盖戳挤掉浏览器巡检），而且根本不该发请求（Status=2 的假响应也不许让它判死）。"""
+        for url in self._LEGACY_URLS + ("",):
             calls = []
             with mock.patch.object(enrich.httpx, "get",
                                    lambda *a, **k: calls.append(1) or _Resp(_payload(status=2))):
                 with self.assertRaises(enrich.DetailUnknownError, msg=url):
-                    enrich._detail_beisen({"jd_url": url}, {})
+                    enrich._detail_beisen({"jd_url": url, "summary": "已有正文"}, {})
             self.assertEqual(calls, [], url)
+
+    def test_legacy_thin_row_fills_body_from_ssr_detail_page(self):
+        """薄卡（没正文）取老版详情页补正文——百胜中国 494 个薄卡实录（2026-09-23）。"""
+        html = ("<html><body><div class='nav'>首页</div><h2>必胜客餐厅储备经理-诸暨</h2>"
+                "<div>岗位职责：负责餐厅现场人员管理、订货排班、成本控制与设备维护等营运系统管理工作，"
+                "带领团队为顾客提供优质服务并达成营业目标。任职要求：大专及以上学历，一年以上餐饮管理经验。</div><script>var 岗位职责='x';</script></body></html>")
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: _Resp(text=html)):
+            body = enrich._detail_beisen({"jd_url": self._LEGACY_URLS[0], "summary": None}, {})
+        self.assertTrue(body.startswith("负责餐厅现场人员管理"))
+        self.assertGreaterEqual(len(body), 60)
+
+    def test_legacy_thin_row_never_judged_dead_or_alive_without_body(self):
+        """补不到正文（Status=2 的假 JSON、404、空页）一律 unknown：不许判死，也不许返 "" 当在招。"""
+        for resp in (_Resp(_payload(status=2)), _Resp(text="<html>页面不存在</html>", status=404),
+                     _Resp(text="<html><body>岗位职责：太短</body></html>")):
+            with mock.patch.object(enrich.httpx, "get", lambda *a, _r=resp, **k: _r):
+                with self.assertRaises(enrich.DetailUnknownError):
+                    enrich._detail_beisen({"jd_url": self._LEGACY_URLS[0]}, {})
+        with mock.patch.object(enrich.httpx, "get", lambda *a, **k: self.fail("空 URL 不该发请求")):
+            with self.assertRaises(enrich.DetailUnknownError):
+                enrich._detail_beisen({"jd_url": ""}, {})
 
 
 class BeisenSweepOutcomeTest(unittest.TestCase):
