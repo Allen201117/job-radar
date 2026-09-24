@@ -400,7 +400,9 @@ app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse�
   + 5 处 Supabase 兜底 `.order("id")`；`tests/jobs-order-tiebreak.test.js` 扫 lib/app/components，新写的裸 `order by first_seen_at desc` 直接红。
   📌 纠错：此处原写「listLatestActive 等同病未改」。同快照实测：国内首屏 60 条两版 19 条不同；走并行全表扫 + 排序的计划
   **同 SQL 同快照连跑两次** 200 位里 71 位不同（带 id 后 0）。代价：首屏 warm 0.5→0.6ms，截断点落在大并列块才明显
-  （海外第 2 页 1000 条、块 2,006 行 8.9→17.8ms）。仍是裸时间序、不在请求路径未改：`crawler/audit_dead_links.py` 取新岗、`scripts/verify-opportunity-recall.ts`。
+  （海外第 2 页 1000 条、块 2,006 行 8.9→17.8ms）。同日补 `audit_dead_links --prioritize-new`（香港库 + Supabase 兜底；400 条截断点落在
+  157 行并列块，同索引 + Incremental Sort，warm 5.7→7~20ms）与 `scripts/verify-opportunity-recall.ts`。
+  ⚠️ `scripts/{audit-job-duplicates,diagnose-jobs,probe-dead-links}.js` 仍是裸时间序没改：它们读的是 Supabase `jobs`（2026-09-24 实测 0 行），先得改读香港库，排序才有意义。
 
 ## 数据库迁移（已自动化，勿再手动跑 Supabase）
 

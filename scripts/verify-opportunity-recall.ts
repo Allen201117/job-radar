@@ -66,7 +66,7 @@ async function main() {
   const sql =
     `select ${COLS} from jobs where status='active' and last_seen_at >= now() - interval '7 days' ` +
     `and summary is not null and char_length(btrim(summary)) >= 60 and (${ors.join(" or ")}) ` +
-    `order by first_seen_at desc limit 4000`;
+    `order by first_seen_at desc, id limit 4000`;
 
   try {
     console.log("画像：算法 / 上海 / 字节跳动+示例新公司XYZ");
