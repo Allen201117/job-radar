@@ -91,3 +91,82 @@ test("Supabase 兜底：.order(\"first_seen_at\") 之后必须紧跟 .order(\"id
   assert.ok(seen >= 5, `只扫到 ${seen} 处 .order("first_seen_at")，扫描规则可能失效`);
   assert.deepEqual(offenders, [], `缺 id 决胜列：\n${offenders.join("\n")}`);
 });
+
+// ── /campus 抽屉：getCampusCompanyJobs 在 JS 里 sort(compareCampusJobs) 再 slice(offset, offset+limit) ──
+// 轻查询没有 order by（排序键 deadline 是 text，下推不了，见函数上方 ⚠️），行序由执行计划决定；
+// 抽屉「加载更多」每页一次请求，所以两次请求拿到的行序可以不同 → 并列块必须靠 id 定序。
+function seededShuffle(arr, seed) {
+  let s = seed >>> 0;
+  const rand = () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const out = arr.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+function uuidOf(i) {
+  const h = require("node:crypto").createHash("md5").update(`campus-tie-${i}`).digest("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
+function loadCampusRead(lightRows) {
+  const cache = new Map();
+  // requestSafeCache 底下是 next/cache 的 unstable_cache，离开 Next 运行时会抛 → 公司名缓存直接透传。
+  cache.set(path.join(ROOT, "lib", "request-safe-cache.ts"), { exports: { requestSafeCache: (fn) => fn } });
+  const client = loadTs(path.join(ROOT, "lib", "jobs-store", "client.ts"), cache);
+  const read = loadTs(path.join(ROOT, "lib", "jobs-store", "read.ts"), cache);
+  let lightCalls = 0;
+  client.jobsQuery = async (sql, params) => {
+    if (/where j\.id = any\(\$1::uuid\[\]\)/.test(sql)) {
+      const ids = new Set(params[0]);
+      return seededShuffle(lightRows.filter((r) => ids.has(r.id)), 99).map((r) => ({ ...r }));
+    }
+    if (/and j\.company = any\(\$1::text\[\]\)/.test(sql)) {
+      lightCalls += 1; // 每次请求换一种行序 = 换了一个执行计划
+      return seededShuffle(lightRows, lightCalls).map((r) => ({ ...r }));
+    }
+    if (/with recursive t as/.test(sql)) return [{ company: "字节跳动" }];
+    throw new Error(`意外的 SQL：${sql.trim().slice(0, 80)}`);
+  };
+  return read;
+}
+
+test("getCampusCompanyJobs：并列行（同截止日 / 同一批首见）跨请求翻页不重复、不漏、顺序确定", async () => {
+  const batch = "2026-09-23 02:00:00.123456+00"; // 同一事务入库，逐字相同
+  const lightRows = Array.from({ length: 40 }, (_, i) => ({
+    id: uuidOf(i),
+    company: "字节跳动",
+    grad_class: null,
+    deadline: i < 16 ? "2026-10-31" : null,
+    first_seen_at: batch,
+    recruitment_category: "校招",
+    job_function: "研发",
+    city: "北京",
+    education: "本科",
+    title: `后端开发工程师-${i}`,
+    job_type: null,
+  }));
+  const read = loadCampusRead(lightRows);
+  const list = [{ name: "字节跳动", pattern: "%字节跳动%" }];
+  const limit = 7;
+  const seen = [];
+  for (let offset = 0; offset < lightRows.length; offset += limit) {
+    const { jobs, total } = await read.getCampusCompanyJobs(list, "%字节跳动%", "campus", { offset, limit });
+    assert.equal(total, lightRows.length);
+    seen.push(...jobs.map((j) => j.id));
+  }
+  const dup = seen.length - new Set(seen).size;
+  const missing = lightRows.filter((r) => !seen.includes(r.id)).length;
+  assert.deepEqual({ dup, missing }, { dup: 0, missing: 0 });
+  // 顺序 = 有截止的块在前、无截止的块在后，块内按 id 升序（与 SQL `first_seen_at desc, id` 同向）
+  const byId = (rows) => rows.map((r) => r.id).sort();
+  assert.deepEqual(seen, [...byId(lightRows.slice(0, 16)), ...byId(lightRows.slice(16))]);
+});
