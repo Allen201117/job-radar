@@ -159,5 +159,60 @@ class RequestBodyTest(unittest.TestCase):
                          ["Category", "Kind", "LocId", "PostDate", "WorkWeChatQrCode"])
 
 
+class _HostClient:
+    """按主机回不同列表：siic = 母集团门户，sph = 子公司门户。sph_ok=False 模拟子公司门户拉不到。"""
+    LISTS = {
+        "siic.zhiye.com": [{"Id": "s1", "JobAdName": "上海医药2027技术工培生(J12541)"},
+                           {"Id": "s2", "JobAdName": "公用工程技术员(J12679)"},
+                           {"Id": "s3", "JobAdName": "疗养院护士(J13001)"}],
+        "sph.zhiye.com": [{"Id": "p1", "JobAdName": "上海医药2027技术工培生(J12541)"},
+                          {"Id": "p2", "JobAdName": "公用工程技术员(J12679)"},
+                          {"Id": "p3", "JobAdName": "中药研究员(J12413)"}],
+    }
+
+    def __init__(self, sph_ok=True):
+        self.sph_ok = sph_ok
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def get(self, url):
+        return type("R", (), {"text": '{"PortalId":"fe9a4897-6c7b-4ebd-904b-da4f88b13020"}'})()
+
+    def post(self, url, json=None, headers=None):
+        host = url.split("/")[2]
+        if host == "sph.zhiye.com" and not self.sph_ok:
+            raise ConnectionError("sph down")
+        rows = self.LISTS[host]
+        return _Resp({"Count": len(rows), "Data": rows})
+
+
+class TwinPortalTest(unittest.TestCase):
+    def _fetch(self, url, **kw):
+        a = BeisenAdapter()
+        with mock.patch.object(china_ats.httpx, "Client", lambda **k: _HostClient(**kw)), \
+                mock.patch.object(china_ats.time, "sleep", lambda *_: None):
+            out = a._httpx_fetch(url)
+        return a, out
+
+    def test_parent_portal_drops_rows_the_subsidiary_portal_also_lists(self):
+        a, out = self._fetch("https://siic.zhiye.com/campus/jobs")
+        titles = [r["JobAdName"] for r in json.loads(out)["_intercepted"][0]["Data"]]
+        self.assertEqual(titles, ["疗养院护士(J13001)"])
+        self.assertTrue(a.fetch_complete)      # 剔掉的是别处入库的岗，不是漏抓 → 不许报「没抓全」
+        self.assertEqual(a.reported_total, 3)
+
+    def test_subsidiary_portal_unreachable_is_failure_not_silent_double_ingest(self):
+        _a, out = self._fetch("https://siic.zhiye.com/campus/jobs", sph_ok=False)
+        self.assertIsNone(out)
+
+    def test_subsidiary_portal_itself_is_untouched(self):
+        _a, out = self._fetch("https://sph.zhiye.com/campus")
+        self.assertEqual(len(json.loads(out)["_intercepted"][0]["Data"]), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
