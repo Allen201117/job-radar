@@ -546,6 +546,16 @@ export function computeMustApplyCoverage(
   });
 }
 
+/**
+ * 新鲜度排序的完整键，末位 `id` 是唯一决胜列（2026-09-24，与 search.ts 的 FRESH_ORDER 同口径）。
+ * 爬虫一批入库在同一事务里，几百上千行 first_seen_at 逐字相同；只按 first_seen_at 排时 limit / offset
+ * 落在并列块里，取哪几行由执行计划决定。offset 翻页各页的计划本来就不同（香港库实测浅页走索引、
+ * offset 22 万退回并行全表扫 + 排序），不带 id 时跨页会重复 / 漏行。
+ * 同一快照实测：国内首屏 60 条截断点落在 90 行并列块里，加不加 id 两版有 19 条不同。
+ * 计划不变（jobs_status_first_seen_idx 之上多一层 Incremental Sort，只在并列块内按 id 排），首屏 warm 0.5→0.6ms。
+ */
+const LATEST_ORDER = "first_seen_at desc, id";
+
 /** 最新 active 一页（jobs 页 SSR 首屏种子 / list 路由）。 */
 export async function listLatestActive(
   limit: number,
@@ -558,7 +568,7 @@ export async function listLatestActive(
   appendJobScopeWhere(conds, params, preferences, filters);
   params.push(limit, offset);
   return jobsQuery(
-    `select ${JOB_COLUMNS} from jobs where ${conds.join(" and ")} order by first_seen_at desc limit $${params.length - 1} offset $${params.length}`,
+    `select ${JOB_COLUMNS} from jobs where ${conds.join(" and ")} order by ${LATEST_ORDER} limit $${params.length - 1} offset $${params.length}`,
     params,
   );
 }
@@ -609,7 +619,7 @@ export async function recallByPrefs(locTerms: string[], titleTerms: string[], li
   }
   params.push(limit);
   return jobsQuery(
-    `select ${JOB_COLUMNS} from jobs where ${conds.join(" and ")} order by first_seen_at desc limit $${params.length}`,
+    `select ${JOB_COLUMNS} from jobs where ${conds.join(" and ")} order by ${LATEST_ORDER} limit $${params.length}`,
     params,
   );
 }

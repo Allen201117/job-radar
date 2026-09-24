@@ -47,6 +47,7 @@ export async function GET() {
         .select("company")
         .eq("status", "active")
         .order("first_seen_at", { ascending: false })
+        .order("id", { ascending: true })
         .range(off, off + 999);
       if (error || !data || data.length === 0) break;
       for (const r of data as Array<{ company: string }>) {

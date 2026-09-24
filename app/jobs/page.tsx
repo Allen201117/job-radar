@@ -88,6 +88,7 @@ async function fetchFirstPageAndTotal(
       .select("*")
       .eq("status", "active")
       .order("first_seen_at", { ascending: false })
+      .order("id", { ascending: true })
       .range(0, PAGE1 - 1),
     // 首屏计数 = 「有效在招」(active + 有 JD 正文)，不用裸 count(active)（含薄卡/失活会虚高）。
     supabase.rpc("count_valid_active_jobs"),
