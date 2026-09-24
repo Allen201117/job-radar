@@ -19,7 +19,7 @@ import json
 import logging
 import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from typing import List, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
@@ -776,6 +776,16 @@ def _ssr_policy_allows(job: dict, policy: Optional[dict], today=None) -> bool:
     return True
 
 
+def _ssr_policy_retire_before(policy: Optional[dict], today=None) -> Optional[date]:
+    """租户口径里有 max_age_days 时，库里「发布日早于这一天」的岗已超出口径（与 _ssr_policy_allows 同一边界：
+    正好 max_age_days 天前发布的仍收）。抓取端只能不再收新的，已在库里的由 run.py 收抓后按这一天下架。"""
+    max_age = (policy or {}).get("max_age_days")
+    if not max_age:
+        return None
+    today = today or datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    return today - timedelta(days=int(max_age))
+
+
 def _ssr_normalize_job_url(origin: str, href: str) -> str:
     """列表锚点 → 稳定的逐岗 jd_url：**身份只在 path 里**（/zpdetail/{id}），query 一律剥掉。
 
@@ -1500,6 +1510,9 @@ class BeisenAdapter(ChinaSpaAdapter):
 
     name = "beisen"
     intercept_matches = ("GetJobAdPageList", "JobAd", "Position", "position", "Recruit", "recruit", "/api/")
+    # 老版 SSR 租户口径有年限（_SSR_TENANT_POLICY.max_age_days）时由 parse() 置成截止日，run.py 收抓后
+    # 把库里发布日早于它的在招岗置 removed（可逆、不进 purge）。其余租户恒为 None，行为不变。
+    retire_posted_before: Optional[date] = None
     detail_template = ""
 
     _ID_FIELDS = ("Id", "id", "jobAdId", "JobAdId", "code")
@@ -2366,7 +2379,10 @@ class BeisenAdapter(ChinaSpaAdapter):
                 if not (jd and title) or jd in seen:
                     continue
                 seen.add(jd)
-                if not _ssr_policy_allows(j, _SSR_TENANT_POLICY.get(urlparse(jd).netloc.lower())):
+                policy = _SSR_TENANT_POLICY.get(urlparse(jd).netloc.lower())
+                if policy:
+                    self.retire_posted_before = _ssr_policy_retire_before(policy)
+                if not _ssr_policy_allows(j, policy):
                     continue
                 # job_type/education 老版 CMS 才有（列表列 + 详情页字段）；posted_at 卡片式 CMS 才有
                 # （列表卡 <ol> 的发布日）。老调用方都不传这些 key → .get 返 None，行为逐字节不变。

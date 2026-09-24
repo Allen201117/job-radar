@@ -362,6 +362,19 @@ def sweep_absent_jobs(conn, source_id, cutoff, *, apply=True, max_expire_fractio
     return result
 
 
+def retire_posted_before(conn, source_id, cutoff_date) -> int:
+    """按租户年限口径下架：本源 active 且发布日（北京时间）早于 cutoff_date 的岗 → removed。
+    不是撤岗（岗可能还在招，只是超出口径），所以用可逆的 removed、不写 expired：expired 会被
+    purge-expired 次日永久删除。日后同一行又被抓回（口径变了）时 upsert 会把它置回 active。
+    发布日为空的行不动（口径在入库时已挡掉这种行，这里不替它下结论）。返回受影响行数。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            "update jobs set status = 'removed' where source_id = %s and status = 'active' "
+            "and posted_at is not null and (posted_at at time zone 'Asia/Shanghai')::date < %s",
+            (str(source_id), cutoff_date))
+        return cur.rowcount
+
+
 def record_job_events(conn, events) -> int:
     """best-effort 批量插 job_events（event_key 幂等 → on conflict do nothing）。
     写失败只 warning、返回 0，**绝不抛**（事件失败不许影响 jobs upsert，02 spec §5.3）。"""
