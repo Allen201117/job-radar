@@ -451,6 +451,7 @@ python3 run.py --source apple         # 或 siemens / baidu / jd
 ```
 
 ⚠️ **`npm run build` 本地绿 ≠ Vercel 能部署**：本地 `next build` 会跳过 lint（输出里没有「Linting and checking validity of types」这一步），**Vercel 的 build 会跑 lint，且 Next 若干规则是 Error 级会直接让部署失败**（2026-07-27 实锤：`lib/admin-health.ts` 里一个变量叫 `module` 命中 `@next/next/no-assign-module-variable`，从 6d5010f 起连续 7 次部署失败，本地全程绿）。**改了 `app/` `lib/` `components/` 下的 TS/TSX 就必须另跑 `npm run lint`。**
+⚠️ **crawler 单测带 ImportError 的「通过」不算数（2026-09-24 立）**：本机默认 python3 是 Homebrew 3.14、没装 `postgrest` / `psycopg2`，直接跑是 2,349 个 + 89 个 ImportError，真实全集 3,263 个——而此前**没有任何 CI 跑单测**，这 89 个一直被当「本机环境问题」放过。现在 push main / PR 由 `unit-tests.yml` 跑前两件（Python 3.11 + Node 22，各带「真跑了 ≥1000 个」下限防假绿）；本机要跑全用 `uv venv -p 3.11` + `uv pip install -r crawler/requirements.txt`。
 ⚠️ 在 `.claude/worktrees/*` 里跑 `next lint` 会因「主仓 + worktree 两份 .eslintrc.json / package-lock.json」报 plugin 冲突直接退出 1——这是环境问题不是代码问题；改用 `npx next lint --dir lib --dir app --dir components`，或 push 后立刻查 Vercel 部署状态兜底（`gh api repos/<owner>/<repo>/deployments` + `/statuses`）。
 
 ## 目录结构
