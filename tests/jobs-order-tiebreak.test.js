@@ -56,7 +56,8 @@ function sourceFiles(dir, out = []) {
 }
 
 const isComment = (line) => /^\s*(\/\/|\*|\/\*)/.test(line);
-const SCAN_DIRS = ["lib", "app", "components"].map((d) => path.join(ROOT, d));
+// scripts/ 自 2026-09-24 起一并扫：audit-job-duplicates 曾按裸 first_seen_at 做 offset 翻页。
+const SCAN_DIRS = ["lib", "app", "components", "scripts"].map((d) => path.join(ROOT, d));
 
 test("全站 SQL 里的 `order by first_seen_at desc` 后面必须紧跟 `, id`", () => {
   const offenders = [];
