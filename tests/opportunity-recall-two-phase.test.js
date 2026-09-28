@@ -98,9 +98,11 @@ test("公司层与城市新增层先排方向命中，避免名额被必然 role
 
 // 海外/都要画像的城市词匹配不到国内 location；若沿用「城市 → 空城市 → 其他」，
 // US/SG/Remote 岗会被压到最后。目标地区必须成为最高优先级。
+// 2026-09-28：「全都要」+ 城市全在国内时改成城市在前（默认地区不是用户说过的地点，见 tests/opportunity-scope-intent.test.js），
+// 这里用城市里带海外地名（新加坡）的画像守住原口径。
 test("含海外范围时先排目标地区，再排目标城市，城市未知不再单列优先级", () => {
   const built = buildRecallSql(
-    mk({ jobScope: "all", targetRegions: ["US"], targetLocations: ["上海"], targetCompanies: ["字节跳动"] }),
+    mk({ jobScope: "all", targetRegions: ["US"], targetLocations: ["上海", "新加坡"], targetCompanies: ["字节跳动"] }),
     SINCE,
     900,
   );

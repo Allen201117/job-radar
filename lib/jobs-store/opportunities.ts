@@ -20,6 +20,7 @@ import {
 } from "@/lib/china-keyword-expansion";
 import { userTargetFunctions } from "@/lib/opportunities/eligibility";
 import { locationTargetSqlTerms } from "@/lib/opportunities/location-targets";
+import { overseasLocationUnstated } from "@/lib/opportunities/scope-intent";
 import { appendJobScopeWhere, effectiveTargetRegions, jobMatchesScope } from "@/lib/job-scope";
 import { appendCurrentSeasonWhere } from "@/lib/campus-season";
 import { collapseBulkStoreJobs, BULK_STORE_COMPANIES } from "@/lib/bulk-store-dedup";
@@ -529,7 +530,7 @@ export function buildRecallSql(
   const cityRef = cityTs ? (params.push(cityTs), `search_doc @@ to_tsquery('simple', $${params.length})`) : null;
 
   // 层内排序：国内是「城市命中 → 城市未知 → 其余」；含海外范围时是
-  // 「目标地区命中 → 目标城市命中 → 其余」。城市/地区判断只在每层限量候选上逐行算，
+  // 「目标地区命中 → 目标城市命中 → 其余」（「全都要」+ 城市全在国内时城市在前，见下）。城市/地区判断只在每层限量候选上逐行算，
   // 不另拆一层，避免昂贵的方向 GIN 再扫一次。
   const cityCase = cityRef
     ? `(case when ${cityRef} then 0 when location is null or btrim(location) = '' then 1 else 2 end)`
@@ -550,9 +551,13 @@ export function buildRecallSql(
     }
     if (parts.length) regionMatch = `(job_scope = 'overseas' and (${parts.join(" or ")}))`;
   }
+  // 「全都要」+ 目标城市全在国内：默认地区不是用户说过的地点，stage-2 只给它 unknown（lib/opportunities/scope-intent）→
+  // 层内也让用户自己的城市排前。反过来排，城市岗会被海外岗挤出层份额（成都销售画像：召回 1,800 行里海外 1,080、成都 55）。
   const placeCase = regionMatch
     ? cityRef
-      ? `(case when ${regionMatch} then 0 when ${cityRef} then 1 else 2 end)`
+      ? overseasLocationUnstated(profile)
+        ? `(case when ${cityRef} then 0 when ${regionMatch} then 1 else 2 end)`
+        : `(case when ${regionMatch} then 0 when ${cityRef} then 1 else 2 end)`
       : `(case when ${regionMatch} then 0 else 1 end)`
     : cityCase;
   // 「用户原词在标题里」优先（2026-09-17）：方向层的命中集常远大于预算（上海「机械工程师」命中 1,796 行、
