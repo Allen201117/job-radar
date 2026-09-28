@@ -157,6 +157,17 @@ _MOKA_NOISE = ("全职", "兼职", "实习", "|", "立即投递", "在招职位"
 _MOKA_CITY_RE = re.compile(r"[一-龥]{2,}(?:省|市|区)")
 
 
+def _first_line(exc: BaseException, limit: int = 240) -> str:
+    """异常的类型 + 首行信息（Playwright 报错动辄几十行 call log，只留能定位问题的那一行）。"""
+    text = str(exc).strip().splitlines()
+    head = text[0] if text else ""
+    for line in text[1:]:
+        if "intercepts pointer events" in line:   # 点名挡住按钮的元素，比首行更有用
+            head = f"{head} | {line.strip()}"
+            break
+    return f"{type(exc).__name__}: {head}"[:limit]
+
+
 def _parse_moka_card(text: str):
     """从 Moka 岗位卡 innerText（含换行）解析 (location, title)。
 
@@ -327,29 +338,39 @@ class MokaAdapter(PlaywrightAdapter):
         no_growth = 0
         self._last_page = self._read_last_page(page)   # 分页器自报的总页数（拿不到=None）
         pages_done = 0
+        # 翻页为什么停（只在没翻到末页时有意义，见 _finalize_coverage）。2026-09-28 之前这里的
+        # 三种停法既不打日志也不写 crawl_runs：09-24~28 的抓不全告警里，百济神州（分页器 17 页）每次都是
+        # 30 岗 = 停在第 1 页，58同城（16 页）出现时都是 150 岗 = 停在第 5 页，却分不出是点击被挡还是翻页没生效。
+        stop_cause, stop_detail = "list_cap", ""
         self._dismiss_cookie_banner(page)   # 翻页前先清场，否则首次点击就会被它挡住
-        for _ in range(self._page_cap or resolve_page_cap(self._PAGE_ROWS, self._MAX_JOBS)):
-            pages_done += 1
+        for attempt in range(self._page_cap or resolve_page_cap(self._PAGE_ROWS, self._MAX_JOBS)):
             cards = page.eval_on_selector_all("a[href*='#/job/']", self._cards_js)
             before = len(union)
             for c in cards:
                 href = c.get("href") or ""
                 if href and href not in union:
                     union[href] = c
+            # 只数「真翻到了新一页」：点了没翻过去的那几轮不算。旧写法每轮都 +1，
+            # 卡在第 5 页的 6 页租户会数成 7 页 ≥ 总页数 → 判成抓全，缺口从告警里消失。
+            if attempt == 0 or len(union) > before:
+                pages_done += 1
             no_growth = no_growth + 1 if len(union) == before else 0
             if no_growth >= 2:  # 连续两页零新增 → 停（防呆）
+                stop_cause, stop_detail = "page_no_new_rows", f"点了「下一页」连续 {no_growth} 次，岗位卡没变"
                 break
             nxt = page.query_selector(self._next_sel)
             if nxt is None:
+                stop_cause, stop_detail = "", ""
                 break  # 单页租户：Moka 不渲染分页器
             cls = (nxt.get_attribute("class") or "").lower()
             if "disabled" in cls or nxt.get_attribute("disabled") is not None:
+                stop_cause, stop_detail = "", ""
                 break  # 末页：下一页按钮 disabled
             try:
                 nxt.scroll_into_view_if_needed(timeout=2000)
                 nxt.click(timeout=2500)
                 page.wait_for_timeout(1800)  # 等下一页岗位卡渲染
-            except Exception:
+            except Exception as first_exc:  # noqa: BLE001 —— 下面重试，再失败就把原因留下
                 # 常见诱因：cookies 抽屉在这一拍才弹出来（首屏渲染晚于 _dismiss 那一次调用）。
                 # 补清一次、重试点击一次；再失败才真放弃（保留已收的行，不让整源卡死在这一页）。
                 self._dismiss_cookie_banner(page)
@@ -357,10 +378,41 @@ class MokaAdapter(PlaywrightAdapter):
                     nxt.click(timeout=2500)
                     page.wait_for_timeout(1800)
                     continue
-                except Exception:
+                except Exception as retry_exc:  # noqa: BLE001
+                    # Playwright 的点击超时报错会点名挡住按钮的元素（「<div class=…> intercepts
+                    # pointer events」）——这正是判断「是哪个弹层在挡」唯一的现场证据，别丢。
+                    stop_cause = "page_click_failed"
+                    stop_detail = (f"第 {pages_done} 页点「下一页」两次都失败："
+                                   f"{_first_line(first_exc)} / 重试 {_first_line(retry_exc)}")
                     break
         self._pages_done = pages_done
+        self._stop_cause, self._stop_detail = stop_cause, stop_detail
         return list(union.values())
+
+    def _finalize_coverage(self, best: List[dict], source_url: str = "") -> None:
+        """抓全率可观测。Moka 没有任何「总数」字段，分页器的总页数是唯一线索：
+          · 翻到了末页 → 算抓全，分母记实际收到的条数（与 base.paginate_all 对「接口不给 total」
+            的「诚实盲区」兜底同口径：分母就是抓到数，不编造精度）。
+          · 没翻到末页（撞 _page_cap / 连续零新增 / 点击失败）→ 不算抓全，分母用
+            `总页数 × 每页行数` 的**上界估计**，好让抓不全告警看得见这个缺口；并把停因写进
+            coverage_stop_reason + 打一条 warning（带 Playwright 报错原文），下一轮就知道该修哪。
+          · 单页租户（无分页器）→ 只有一页，翻完即抓全。
+        """
+        last_page = getattr(self, "_last_page", None)
+        pages_done = getattr(self, "_pages_done", 0)
+        if not best:
+            self.reported_total = None          # 一条都没拿到，别拿 0 当分母
+        elif not last_page or pages_done >= last_page:
+            self.reported_total = len(best)
+            self.fetch_complete = True
+        else:
+            self.reported_total = max(len(best), last_page * self._PAGE_ROWS)
+            self.fetch_complete = False
+            cause = getattr(self, "_stop_cause", "") or None
+            self.coverage_stop_reason = cause
+            _log.warning("moka: 翻页停在第 %d/%d 页（%d 岗），停因=%s %s url=%s",
+                         pages_done, last_page, len(best), cause or "未知",
+                         getattr(self, "_stop_detail", ""), source_url)
 
     def _read_last_page(self, page):
         """从 Moka 分页组件读总页数。拿不到返回 None（单页租户不渲染分页器，也走这条）。"""
@@ -401,6 +453,7 @@ class MokaAdapter(PlaywrightAdapter):
         self.coverage_stop_reason = None
         self._last_page = None
         self._pages_done = 0
+        self._stop_cause, self._stop_detail = "", ""
         base = source_url.split("#")[0]
         best: List[dict] = []
         with sync_playwright() as p:
@@ -448,23 +501,8 @@ class MokaAdapter(PlaywrightAdapter):
                     best = self._collect_all_pages(page)
             finally:
                 browser.close()
-        # 抓全率可观测。Moka 没有任何「总数」字段，分页器的总页数是唯一线索：
-        #   · 翻到了末页 → 算抓全，分母记实际收到的条数（与 base.paginate_all 对「接口不给 total」
-        #     的「诚实盲区」兜底同口径：分母就是抓到数，不编造精度）。
-        #   · 没翻到末页（撞 _page_cap / 连续零新增 / 分页器异常）→ 不算抓全，分母用
-        #     `总页数 × 每页行数` 的**上界估计**，好让抓不全告警看得见这个缺口；
-        #     宁可分母偏大被告警盯上，也不要像过去那样 reported_total=None、190 个源集体「不可判定」。
-        #   · 单页租户（无分页器）→ 只有一页，翻完即抓全。
-        last_page = getattr(self, "_last_page", None)
-        pages_done = getattr(self, "_pages_done", 0)
-        if not best:
-            self.reported_total = None          # 一条都没拿到，别拿 0 当分母
-        elif not last_page or pages_done >= last_page:
-            self.reported_total = len(best)
-            self.fetch_complete = True
-        else:
-            self.reported_total = max(len(best), last_page * self._PAGE_ROWS)
-            self.fetch_complete = False
+        # 宁可分母偏大被告警盯上，也不要像过去那样 reported_total=None、190 个源集体「不可判定」。
+        self._finalize_coverage(best, source_url)
         return json.dumps({"_base": base, "cards": best}, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:
@@ -1427,6 +1465,19 @@ def _titles_of(rows):
         out.append(_first_str(row, _TITLE_FIELDS) or "")
     return out
 
+
+def _mark_list_cap(adapter, rows, total, cap) -> None:
+    """翻页循环因「撞单源条数上限」收工、又确实没收齐自报总数时，记下停因 list_cap。
+
+    只补不覆盖：刹车（repetition_brake）先判先得。为什么要记：我爱我家自报 2.9 万、撞 8000 上限，
+    与「翻页中途坏了」在 crawl_runs 上长得一样（coverage_complete=false + 缺口），告警天天叫人
+    「修分页」——其实是 base.DEFAULT_LIST_CAP 注释里写明的取舍，该看的是要不要为它抬上限。"""
+    if getattr(adapter, "coverage_stop_reason", None):
+        return
+    if cap and len(rows) >= cap and (not total or len(rows) < total):
+        adapter.coverage_stop_reason = "list_cap"
+
+
 def _should_continue(fresh, chunk, total, page_size):
     """还该不该翻下一页。
 
@@ -1809,6 +1860,7 @@ class BeisenAdapter(ChinaSpaAdapter):
                 if not _should_continue(fresh, chunk, total, self._PAGE_SIZE):
                     break
                 index += 1
+            _mark_list_cap(self, rows, total, cap)
         if not rows:
             # portal_id 抽到了（不是「页面结构变了、我们没找对 PortalId」）且接口至少答过一次
             # 且明确回了 Count/Total=0（reported_total 由上面显式置 0，非默认 None）→ 真 0 岗，
@@ -2275,6 +2327,7 @@ class BeisenAdapter(ChinaSpaAdapter):
                     if not _should_continue(fresh, chunk, total, self._PAGE_SIZE):
                         break
                     index += 1
+                _mark_list_cap(self, rows, total, cap)
             browser.close()
 
         if rows:

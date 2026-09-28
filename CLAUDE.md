@@ -211,8 +211,12 @@ app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse�
 | 执行器 | `crawler/audit_runner.py` + `structural-audit.yml`（每日北京 08:50） | 逐条量，写 `audit_results`（Supabase，迁移 281/282）；`unique(check_id, run_date)` 一天一行 = 趋势表。可选 `detail_sql` 列出「具体是哪几处」进 `detail.findings`，晨报 ⑤⑦ 据此点名；它失败不改数值与判定 |
 | 覆盖率差集 | `crawler/audit_coverage.py` + `audit_exemptions.yaml` | 左边**自动枚举**（带 cron 的 workflow / 写 ops_runs 的模块 / jobs 表列 / 走查指标），减去有期望的；上线时 68 条 → 现 14 条（全是 jobs 列） |
 | 老告警桥接 | `ops_watchdog.py` 的 `publish_audit_bridge` | 16 条规则**判定与阈值一字未动**，只把每条的命中数 + 明细写进同一张表（`detail.findings[].title` 与 issue 标题逐字一致） |
-| 晨报 | `crawler/morning_digest.py` + `morning-digest.yml`（北京 09:30） | 每天必发，绿灯也发（绿灯邮件就是心跳）；报「昨天全天」 |
+| 晨报 | `crawler/morning_digest.py` + `morning-digest.yml`（UTC 22:40 定时；gate 等当天自动修复台账，北京 09:40 起不再等） | 每天必发，绿灯也发（绿灯邮件就是心跳）；报「昨天全天」 |
 | 外部心跳 | `audit_runner.ping_heartbeat`（Healthchecks.io，只挂执行器 1 个） | start / success / fail 三态；`workflow_dispatch -f force_fail=true` 做故障演练 |
+
+📌 纠错（2026-09-28 创始人授权）：晨报那行原写「北京 09:30」，09-20 写入时就不成立——当时 cron `0 2 * * *` 声明北京 10:00、
+实际被 GitHub 推迟到 14:06~15:52；09-23 改由电脑上的自动修复触发后，9/24~9/28 仍是 10:41 / 15:36 / 13:47 / 16:00 / 11:06
+（digest job 日志）。现行机制与实测延迟在 `morning-digest.yml` 文件头；实际几点到的看体检 `pipeline.morning_digest_on_time`（门槛 < 10）。
 
 **改这套东西务必保住的不变量**：
 - **查询失败 → `verdict='error'` 且 `value` 为 NULL，绝不写 0**（表约束 `(verdict='error') = (value is null)` 钉死）；
@@ -730,7 +734,10 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 ## ⚠️ 列表抓取上限与「短页误判末页」（2026-09-04 立）
 
 - 单源列表上限统一走 `adapters/base.resolve_list_cap`（`DEFAULT_LIST_CAP=8000`，
-  env `CRAWL_MAX_JOBS` 可整体调档，出事改 repo variable 即可、不用重新部署）。
+  env `CRAWL_MAX_JOBS` 可整体调档）。
+  📌 纠错（2026-09-28 创始人授权）：此处原写「出事改 repo variable 即可、不用重新部署」，09-04 写入时就不成立——
+  没有任何 workflow 把 `vars.CRAWL_MAX_JOBS` 传进 env（`git log --all -S CRAWL_MAX_JOBS -- .github/` 0 处），
+  只改变量不生效；要调档先在对应 workflow 的 env 里接上它。
   旧的 600 硬顶让 32 个源每轮漏 10.7 万个岗**且 status 全是 success**。
 - ⚠️ 末页判据一律用「这一页有没有带来新岗位」，**不要用「本页条数 < pageSize」**：
   北森按 IP 限流（响应头 `X-RateLimit-Limit-<host><ip>-second: 50`），限流时回短页，

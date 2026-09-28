@@ -33,6 +33,11 @@ try:
 except ImportError:  # pragma: no cover
     _ops_runs = None
 
+try:
+    import ops_watchdog as _ops_watchdog  # issue 标题前缀与规则标签的唯一来源
+except ImportError:  # pragma: no cover
+    _ops_watchdog = None
+
 
 # ---------------------------------------------------------------------------
 # 走查问题类型的人话标签（抄自 scripts/ux-walkthrough/walkthrough.js 的 ISSUE_TYPES，
@@ -329,6 +334,124 @@ def order_old_issues(issues, now=None):
     return sorted(issues, key=age_days, reverse=True)
 
 
+def _watchdog_rule_of_title(title):
+    """「[watchdog] 源连续失败：alibaba / 盒马」→ "F"；不是看门狗开的、或认不出规则 → None。
+
+    前缀与规则标签直接读 ops_watchdog（issue 标题就是它拼的），不在这里另抄一份。
+    RULE_TITLES 里没登记的规则，标题会退化成「[watchdog] X：…」，也认。
+    """
+    if _ops_watchdog is None:
+        return None
+    text = str(title or "")
+    prefix = _ops_watchdog.ISSUE_PREFIX
+    if not text.startswith(prefix):
+        return None
+    body = text[len(prefix):].strip()
+    for rule, label in _ops_watchdog.RULE_TITLES.items():
+        if body.startswith(f"{label}：") or body.startswith(f"{rule}："):
+            return rule
+    return None
+
+
+def classify_open_issues(open_issues, checks, results_today_by_id):
+    """把 open issue 分成三组，供⑥段分开念（每组保持入参顺序）：
+
+      firing  —— 今天老告警桥接的明细里还有这个标题（看门狗今天又报了它）；
+      quiet   —— 它所属的那条规则今天评估成了、明细没被截断，却没有这个标题；
+      unknown —— 不是看门狗开的 / 认不出规则 / 那条规则今天没评估成 / 明细被截断。
+
+    为什么要分：看门狗只开不关 issue（「修好后手动关掉」），2026-09-28 的晨报列了 21 个
+    「老问题」，其中 14 个当天已不再报警（最早的 9/19 起就没再报过）——真正还在响的 7 个
+    被埋在里面，标题里「待清账 21 项」也把它们算了进去。
+
+    判「不再报警」只认当天桥接行（ops_watchdog.build_audit_bridge_rows 写进 audit_results
+    的 detail.findings[].title，与 issue 标题逐字一致），拿不准一律归 unknown——
+    宁可少说一个「可以关」，也不许把还在响的问题说成已经好了。
+    """
+    rule_to_check = {c.get("rule"): c["id"] for c in checks
+                     if c.get("source") == "watchdog" and c.get("rule")}
+    groups = {"firing": [], "quiet": [], "unknown": []}
+    for issue in open_issues or []:
+        rule = _watchdog_rule_of_title(issue.get("title"))
+        row = results_today_by_id.get(rule_to_check.get(rule)) if rule else None
+        if row is None or row.get("verdict") == "error" or row.get("value") is None:
+            groups["unknown"].append(issue)
+            continue
+        findings = (row.get("detail") or {}).get("findings") or []
+        titles = {str(f.get("title")) for f in findings if isinstance(f, dict)}
+        if str(issue.get("title")) in titles:
+            groups["firing"].append(issue)
+        elif float(row["value"]) > len(findings):
+            groups["unknown"].append(issue)  # 明细只存前 30 条，没列出来不等于没报
+        else:
+            groups["quiet"].append(issue)
+    return groups
+
+
+def _issue_last_activity_days(issue, now=None):
+    """issue 最后一次有动静（新开或追加评论）距今几天。看门狗每次复发都追加一条评论，
+    所以对看门狗 issue 它就是「上次报警」；取不到时间返回 None。"""
+    now = now or datetime.now(timezone.utc)
+    stamps = [issue.get("createdAt")]
+    comments = issue.get("comments")
+    if isinstance(comments, list):
+        stamps += [c.get("createdAt") for c in comments if isinstance(c, dict)]
+    latest = None
+    for s in stamps:
+        try:
+            t = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            continue
+        latest = t if latest is None or t > latest else latest
+    if latest is None:
+        return None
+    return (now - latest).total_seconds() / 86400
+
+
+def _old_issue_line(issue, issue_title_names, quiet=False):
+    hrs = _issue_age_hours(issue)
+    days_txt = f"{hrs / 24:.0f}天" if hrs is not None else "未知天数"
+    title = humanize_issue_title(issue.get("title"), issue_title_names)
+    if quiet:
+        last = _issue_last_activity_days(issue)
+        last_txt = f"最后一次报警在 {last:.0f} 天前" if last is not None else "最后一次报警时间不详"
+        return f"#{issue.get('number')} {title}（开了{days_txt}，{last_txt}）"
+    return f"#{issue.get('number')} {title}（拖了{days_txt}，{comment_count(issue)}条评论）"
+
+
+def _old_issue_counts_note(groups):
+    """⑥段标题里的分项计数；分不出组时返回空串（沿用原标题）。"""
+    firing, quiet, unknown = (len(groups[k]) for k in ("firing", "quiet", "unknown"))
+    if not firing and not quiet:
+        return ""
+    parts = [f"今天仍在报警 {firing} 项"]
+    if unknown:
+        parts.append(f"判断不了 {unknown} 项")
+    if quiet:
+        parts.append(f"已不再报警 {quiet} 项")
+    return "：" + "、".join(parts)
+
+
+def old_issue_sections(groups, issue_title_names):
+    """⑥段正文：[(小标题或 None, [行, ...]), ...]。三组都有值才分组念；
+    一个都分不出来（比如老告警今天整层没跑）时退回原来的一张平铺清单，不多加一层噪音。"""
+    firing = order_old_issues(groups["firing"])
+    quiet = order_old_issues(groups["quiet"])
+    unknown = order_old_issues(groups["unknown"])
+    if not firing and not quiet:
+        return [(None, [_old_issue_line(i, issue_title_names) for i in unknown])] if unknown else []
+    sections = []
+    if firing:
+        sections.append(("今天仍在报警：", [_old_issue_line(i, issue_title_names) for i in firing]))
+    if unknown:
+        sections.append(("判断不了今天还报不报（不是看门狗开的，或相关规则今天没评估成）：",
+                         [_old_issue_line(i, issue_title_names) for i in unknown]))
+    if quiet:
+        sections.append(("今天已不再报警，多半已经修好——确认后可以关掉：",
+                         [_old_issue_line(i, issue_title_names, quiet=True) for i in quiet]))
+    return sections
+
+
 # ---------------------------------------------------------------------------
 # 主体：从 audit_results 取「今天」「昨天」两批
 # ---------------------------------------------------------------------------
@@ -421,12 +544,14 @@ def _is_deferred_like(item):
     return False
 
 
-def build_auto_repair_summary(auto_repair_run, fetch_failed=False):
+def build_auto_repair_summary(auto_repair_run, fetch_failed=False, checked_at=None):
     """把今天的 ops_runs(module='auto_repair') 记录翻成⓪段要展示的文本行 + ⑦段要置顶的 ask 列表。
 
     三种互斥的情形，绝不许混淆（这是本段存在的意义）：
       · fetch_failed=True            → 查询本身失败，不是『今天没跑』，文案必须说『没查到』。
-      · auto_repair_run is None      → 真的没有这一行（电脑没开 App / 任务没跑起来）。
+      · auto_repair_run is None      → 真的没有这一行（电脑没开 App / 任务没跑起来 / 还没跑完）。
+        带 checked_at 时念出「截至几点」：晨报到点就发、不再等修复（见 gate_decision），
+        不写时刻会把「还在跑」说成「没跑」。
       · 有记录（items 可以是空数组）  → 按 outcome 分类叙述，空 items 是『今天没有要处理的』心跳。
 
     『今天没排到/只诊断没动手』（`_is_deferred_like`）的条目不逐条展开——否则每天一大段
@@ -436,6 +561,10 @@ def build_auto_repair_summary(auto_repair_run, fetch_failed=False):
     if fetch_failed:
         return {"lines": ["自动修复记录今天没查到。"], "top_asks": []}
     if auto_repair_run is None:
+        if checked_at is not None:
+            label = checked_at.astimezone(SHANGHAI).strftime("%H:%M")
+            return {"lines": [f"截至北京时间 {label}，今早的自动修复没有运行记录"
+                              "（电脑可能没开着 App、还没跑完，或任务失败了）。"], "top_asks": []}
         return {"lines": ["今早的自动修复没有运行记录（电脑可能没开着 App，或任务失败了）。"], "top_asks": []}
 
     metrics = auto_repair_run.get("metrics") or {}
@@ -570,6 +699,110 @@ def already_sent_message(run_date, sent_at):
     label = sent_at.astimezone(SHANGHAI).strftime("%H:%M") if sent_at else "早些时候"
     return (f"未发送：{run_date.isoformat()} 的晨报已于北京时间 {label} 送达，本次不重复发送"
             "（要强制再发一封加 --force）")
+
+
+# ---------------------------------------------------------------------------
+# 发信闸门：什么时候发（morning-digest.yml 的 gate job 调 `--gate`）
+# ---------------------------------------------------------------------------
+# 2026-09-28 立：9/24~9/28 五天里 10:00 前送达 0 次（10:41 / 15:36 / 13:47 / 16:00 / 11:06）。
+# 主路「电脑上的自动修复跑完后手动触发」这几天触发得晚或根本没触发（9/25、9/27 没有，9/26 13:43），
+# 兜底 cron `0 2 * * *` 实测被 GitHub 推迟 326~357 分钟 → 北京 15:26~15:57。
+# 现在由 runner 自己等：cron 挪到 UTC 22:40（实测到达北京 08:19~09:08），到了先看今天的
+# 自动修复台账写好没有，写好了立刻发；到 DIGEST_WAIT_UNTIL（默认北京 09:40）还没有也照发——
+# 准点优先于「修完之后的数字」，⓪段会写明「截至几点没有记录」。电脑上的 `gh workflow run`
+# 仍然有用（修得早就发得早），但不再是唯一的路。
+DEFAULT_WAIT_UNTIL = "09:40"
+DEFAULT_GATE_INTERVAL_S = 150
+
+
+def parse_wait_until(text):
+    """"09:40" → (9, 40)；写错了退回默认值，不许因为一个配置把晨报卡死。"""
+    m = re.fullmatch(r"\s*([01]?\d|2[0-3]):([0-5]\d)\s*", str(text or ""))
+    if not m:
+        sys.stderr.write(f"[morning-digest] DIGEST_WAIT_UNTIL={text!r} 不是 HH:MM，按 {DEFAULT_WAIT_UNTIL} 处理\n")
+        m = re.fullmatch(r"(\d+):(\d+)", DEFAULT_WAIT_UNTIL)
+    return int(m.group(1)), int(m.group(2))
+
+
+def gate_decision(now, sent_at, repair_present, wait_until=DEFAULT_WAIT_UNTIL, force=False):
+    """纯函数：返回 (decision, 说明)，decision ∈ send / skip / wait。
+
+    顺序是设计的一部分：
+      1. 今天已送达 → skip（--force 除外）。放在最前面，下午那次兜底 cron、创始人电脑晚到的
+         手动触发都在这一步就退出——此前它们要先把整套体检重跑一遍，才在发信那一步发现已发过，
+         当天的趋势表被覆盖成下午/夜里的数字，和邮件里念的不是同一份。
+      2. 今天的自动修复台账已写好 → send。
+      3. 已过截止时刻 → send（晚到的触发、周末电脑没开，都走这条）。
+      4. 否则 → wait。
+    """
+    if not force and sent_at is not None:
+        return "skip", already_sent_message(now.astimezone(SHANGHAI).date(), sent_at)
+    if force:
+        return "send", "强制发送（--force），不等自动修复"
+    if repair_present:
+        return "send", "今天的自动修复台账已写好，现在发"
+    now_sh = now.astimezone(SHANGHAI)
+    hour, minute = parse_wait_until(wait_until)
+    deadline = now_sh.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if now_sh >= deadline:
+        return "send", f"已过北京时间 {hour:02d}:{minute:02d}，今天的自动修复还没有记录，不再等，照发"
+    return "wait", f"今天的自动修复还没有记录，最多等到北京时间 {hour:02d}:{minute:02d}"
+
+
+def _gate_probe(conn, run_date_str):
+    """(sent_at, repair_present)。任一查询失败都按「没有」处理并记一行——
+    与 main() 同口径：查不到就照发，重复一封的代价远小于漏发一封。"""
+    try:
+        sent_at = fetch_sent_digest_today(conn, run_date_str)
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"[morning-digest] 闸门：查今天是否已发失败，按没发处理: {type(exc).__name__}\n")
+        sent_at = None
+    try:
+        repair_present = fetch_auto_repair_run_today(conn, run_date_str) is not None
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"[morning-digest] 闸门：查自动修复台账失败，按没有处理: {type(exc).__name__}\n")
+        repair_present = False
+    return sent_at, repair_present
+
+
+def run_gate(connect, wait_until=DEFAULT_WAIT_UNTIL, force=False, interval_s=DEFAULT_GATE_INTERVAL_S,
+             clock=None, sleep=None):
+    """轮询直到 gate_decision 给出 send / skip。返回 True = 往下发，False = 今天不用再发。
+
+    connect 每轮新建一次连接（等一个多小时，长连接会被库端踢掉）；建连失败按两项都「没有」处理，
+    所以最坏情况是等到截止时刻照发，不会卡死也不会漏发。
+    """
+    clock = clock or (lambda: datetime.now(timezone.utc))
+    sleep = sleep or __import__("time").sleep
+    while True:
+        now = clock()
+        try:
+            conn = connect()
+        except Exception as exc:  # noqa: BLE001
+            sys.stderr.write(f"[morning-digest] 闸门：连不上库，按都没有处理: {type(exc).__name__}\n")
+            conn = None
+        try:
+            sent_at, repair_present = _gate_probe(conn, now.astimezone(SHANGHAI).date().isoformat()) \
+                if conn is not None else (None, False)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        decision, reason = gate_decision(now, sent_at, repair_present, wait_until=wait_until, force=force)
+        print(f"[morning-digest] 闸门 {now.astimezone(SHANGHAI).strftime('%H:%M')}：{reason}", flush=True)
+        if decision != "wait":
+            return decision == "send"
+        sleep(interval_s)
+
+
+def _write_github_output(name, value):
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(f"{name}={value}\n")
 
 
 def fetch_open_issues():
@@ -861,7 +1094,7 @@ def summarize_watchdog_rules(checks, results_today_by_id, checks_by_id):
 
 
 def build_digest(checks, results_today, results_yesterday, walkthrough_run, open_issues, last_sent_digest,
-                  auto_repair_run=None, auto_repair_fetch_failed=False):
+                  auto_repair_run=None, auto_repair_fetch_failed=False, checked_at=None):
     checks_by_id = {c["id"]: c for c in checks}
     names = {c["id"]: c["name"] for c in checks}
     issue_title_names = build_issue_title_names(checks)
@@ -893,8 +1126,11 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
     ]
 
     old_issues_sorted = order_old_issues(open_issues)
+    issue_groups = classify_open_issues(open_issues, checks, results_today_by_id)
+    old_sections = old_issue_sections(issue_groups, issue_title_names)
 
-    auto_repair_summary = build_auto_repair_summary(auto_repair_run, fetch_failed=auto_repair_fetch_failed)
+    auto_repair_summary = build_auto_repair_summary(auto_repair_run, fetch_failed=auto_repair_fetch_failed,
+                                                    checked_at=checked_at)
     auto_repair_lines = [_cap_line_length(line) for line in auto_repair_summary["lines"]]
     top_asks = auto_repair_summary["top_asks"]
 
@@ -903,8 +1139,10 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
     )
     action_items = action_items[:5]
 
-    open_issue_count = len(open_issues)
-    subject = subject + f" · 待清账{open_issue_count}项"
+    quiet_count = len(issue_groups["quiet"])
+    subject = subject + f" · 待清账{len(open_issues) - quiet_count}项"
+    if quiet_count:
+        subject += f"（另{quiet_count}项已不报警可关）"
 
     integrity_lines = _integrity_lines(checks, results_today_by_id, last_sent_digest)
     watchdog_summary = summarize_watchdog_rules(checks, results_today_by_id, checks_by_id)
@@ -942,14 +1180,14 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
     else:
         text_lines.append("  没有。")
     text_lines.append("")
-    text_lines.append(f"⑥ 老问题清账（共 {len(old_issues_sorted)} 项，按拖了多久排序，全列不截断）")
+    text_lines.append(f"⑥ 老问题清账（共 {len(old_issues_sorted)} 项{_old_issue_counts_note(issue_groups)}，按拖了多久排序，全列不截断）")
     if watchdog_summary:
         text_lines.append(f"  {watchdog_summary}")
-    if old_issues_sorted:
-        for issue in old_issues_sorted:
-            days = _issue_age_hours(issue)
-            days_txt = f"{days / 24:.0f}天" if days is not None else "未知天数"
-            text_lines.append(f"  · #{issue.get('number')} {humanize_issue_title(issue.get('title'), issue_title_names)}（拖了{days_txt}，{comment_count(issue)}条评论）")
+    if old_sections:
+        for heading, lines in old_sections:
+            if heading:
+                text_lines.append(f"  {heading}")
+            text_lines.extend(f"  · {line}" for line in lines)
     else:
         text_lines.append("  没有未解决的老问题。")
     text_lines.append("")
@@ -967,7 +1205,7 @@ def build_digest(checks, results_today, results_yesterday, walkthrough_run, open
     # 本次返工的诱因就是没有这道兜底，comments 对象列表能一路塞到单行 4 万字符。
     text = "\n".join(_cap_line_length(line) for line in text_lines)
     html = _to_html(subject, users_rows, experience_rows, supply_rows, fake_green_rows,
-                     walkthrough_issue_summary, newly_broken, recent_issues, old_issues_sorted,
+                     walkthrough_issue_summary, newly_broken, recent_issues, old_sections,
                      action_items, integrity_lines, watchdog_summary, issue_title_names,
                      auto_repair_lines)
     return {"subject": subject, "text": text, "html": html, "light": light}
@@ -1005,7 +1243,7 @@ def _rows_html(rows):
 
 
 def _to_html(subject, users_rows, experience_rows, supply_rows, fake_green_rows,
-             walkthrough_issue_summary, newly_broken, recent_issues, old_issues_sorted,
+             walkthrough_issue_summary, newly_broken, recent_issues, old_sections,
              action_items, integrity_lines, watchdog_summary=None, issue_title_names=None,
              auto_repair_lines=None):
     auto_repair_lines = auto_repair_lines or ["今早的自动修复没有运行记录（电脑可能没开着 App，或任务失败了）。"]
@@ -1029,14 +1267,11 @@ def _to_html(subject, users_rows, experience_rows, supply_rows, fake_green_rows,
         new_html = "<ul style='padding-left:18px'>" + "".join(li) + "</ul>"
 
     old_html_prefix = f"<p>{_esc(watchdog_summary)}</p>" if watchdog_summary else ""
-    old_html = old_html_prefix + "<p>没有未解决的老问题。</p>" if not old_issues_sorted else old_html_prefix
-    if old_issues_sorted:
-        li = []
-        for issue in old_issues_sorted:
-            hrs = _issue_age_hours(issue)
-            days_txt = f"{hrs/24:.0f}天" if hrs is not None else "未知天数"
-            li.append(f"<li>#{issue.get('number')} {_esc(humanize_issue_title(issue.get('title'), issue_title_names))}（拖了{days_txt}，{comment_count(issue)}条评论）</li>")
-        old_html += "<ul style='padding-left:18px'>" + "".join(li) + "</ul>"
+    old_html = old_html_prefix + "<p>没有未解决的老问题。</p>" if not old_sections else old_html_prefix
+    for heading, lines in old_sections:
+        if heading:
+            old_html += f"<p><b>{_esc(heading)}</b></p>"
+        old_html += "<ul style='padding-left:18px'>" + "".join(f"<li>{_esc(line)}</li>" for line in lines) + "</ul>"
 
     action_html = "<p>今天没有需要你处理的事。</p>"
     if action_items:
@@ -1102,7 +1337,20 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true", help="今天已经送达过也再发一封")
+    parser.add_argument("--gate", action="store_true",
+                        help="只做发信闸门：等今天的自动修复台账或截止时刻，结果写进 GITHUB_OUTPUT 的 proceed")
     args = parser.parse_args(argv)
+
+    if args.gate:
+        if args.dry_run:
+            print("[morning-digest] 闸门：dry-run 不等、不查是否已发，直接往下走")
+            proceed = True
+        else:
+            proceed = run_gate(lambda: _audit_runner.connect("supabase"),
+                               wait_until=os.environ.get("DIGEST_WAIT_UNTIL") or DEFAULT_WAIT_UNTIL,
+                               force=args.force)
+        _write_github_output("proceed", "true" if proceed else "false")
+        return 0
 
     checks = _audit_runner.load_contract()
     conn = _audit_runner.connect("supabase")
@@ -1140,7 +1388,8 @@ def main(argv=None):
         auto_repair_fetch_failed = True
 
     digest = build_digest(checks, results_today, results_yesterday, walkthrough_run, open_issues, last_sent_digest,
-                           auto_repair_run=auto_repair_run, auto_repair_fetch_failed=auto_repair_fetch_failed)
+                           auto_repair_run=auto_repair_run, auto_repair_fetch_failed=auto_repair_fetch_failed,
+                           checked_at=datetime.now(timezone.utc))
 
     api_key = os.environ.get("RESEND_API_KEY")
     to_addr = os.environ.get("DIGEST_TO")

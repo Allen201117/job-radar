@@ -17,6 +17,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import harvest_beisen_routes as M
+import ops_watchdog as W
 
 
 class UsableAcceptsAllZeroBrowserMarkersTest(unittest.TestCase):
@@ -128,6 +129,152 @@ class RunHarvestsZeroBrowserTenantsTest(unittest.TestCase):
         self.assertEqual(saved.get("ssr-tenant.zhiye.com"), {"ssr": True})
         self.assertNotIn("needs-browser.zhiye.com", saved,
                           "探不到路由的租户不许落盘（None 不可用，留待下次重试）")
+
+
+class PendingHostsQueueTest(unittest.TestCase):
+    """2026-09-23~27 建发集团（chinacdc.zhiye.com）每晚探失败的根因：同 host 两条源，旧实现按 id 序取第一条，
+    探的是人工定论「永久停用、勿再探」的 /campus 空壳（迁移 201），而不是 enabled 的老版 CMS /subzw/（迁移 199）。"""
+
+    CAMPUS = {"source_url": "https://chinacdc.zhiye.com/campus", "enabled": False,
+              "notes": "gap_funnel:closed 该租户只有 /subzw/ 一个板块（2026-08-28 live 逐路径确认）…此行永久停用，勿再探"}
+    SUBZW = {"source_url": "https://chinacdc.zhiye.com/subzw/", "enabled": True,
+             "notes": "gap_funnel:accepted 板块路径是 /subzw/ 不是 /social"}
+
+    def test_enabled_row_wins_even_when_listed_second(self):
+        self.assertEqual(M._pending_hosts([self.CAMPUS, self.SUBZW], {}),
+                         [("chinacdc.zhiye.com", "https://chinacdc.zhiye.com/subzw/")])
+
+    def test_closed_funnel_row_alone_is_not_probed(self):
+        self.assertEqual(M._pending_hosts([self.CAMPUS], {}), [])
+
+    def test_pending_funnel_row_is_still_probed(self):
+        """「漏斗待验收」的 disabled 源仍要探（否则北森新租户永远拿不到路由 → 永远验收不了，死结）。"""
+        row = {"source_url": "https://newco.zhiye.com/social", "enabled": False, "notes": "gap_funnel:pending"}
+        self.assertEqual(M._pending_hosts([row], {}), [("newco.zhiye.com", "https://newco.zhiye.com/social")])
+
+    def test_plain_disabled_row_is_not_probed(self):
+        row = {"source_url": "https://off.zhiye.com/social", "enabled": False, "notes": "人工停用"}
+        self.assertEqual(M._pending_hosts([row], {}), [])
+
+    def test_cached_hosts_are_skipped(self):
+        self.assertEqual(M._pending_hosts([self.SUBZW], {"chinacdc.zhiye.com": {"cms": True}}), [])
+
+
+class BrowserOnlyPayloadTest(unittest.TestCase):
+    def test_ssr_jobs_with_jd_url_is_browser_only(self):
+        payload = json.dumps({"_ssr_jobs": [{"title": "投资经理", "jd_url": "https://huaan.zhiye.com/zpdetail/123456"}]})
+        self.assertTrue(M._browser_only_payload(payload))
+
+    def test_new_version_list_without_route_is_not(self):
+        """新版接口的列表抓到了、路由没探出来 = 真失败（jd_url 拼不出），不能算 browser_only。"""
+        self.assertFalse(M._browser_only_payload('{"_intercepted": [{"Data": [{"Id": "x"}], "Count": 1}]}'))
+
+    def test_empty_or_linkless_ssr_jobs_is_not(self):
+        self.assertFalse(M._browser_only_payload('{"_ssr_jobs": []}'))
+        self.assertFalse(M._browser_only_payload('{"_ssr_jobs": [{"title": "x", "jd_url": ""}]}'))
+
+    def test_garbage_is_not(self):
+        for payload in (None, "", "not json", "[]", 123):
+            with self.subTest(payload=payload):
+                self.assertFalse(M._browser_only_payload(payload))
+
+
+class RunReproducesSept27QueueTest(unittest.TestCase):
+    """复刻 09-25~27 的待探队列（只剩建发 + 华安）：旧代码 attempted=2 / harvested=0 → status=failed →
+    规则 A 连续零产出。修后：建发探 /subzw/ 登记 {"cms": true}；华安判「只能浏览器」不计入 attempted。"""
+
+    def setUp(self):
+        self._saved_cache = dict(M.china_ats._BEISEN_ROUTE_CACHE)
+        M.china_ats._BEISEN_ROUTE_CACHE.clear()
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        Path(path).write_text("{}", encoding="utf-8")
+        self._tmp_path = Path(path)
+        self._patcher = mock.patch.object(M, "_ROUTES_FILE", self._tmp_path)
+        self._patcher.start()
+        self.fetched = []
+
+    def tearDown(self):
+        self._patcher.stop()
+        self._tmp_path.unlink(missing_ok=True)
+        M.china_ats._BEISEN_ROUTE_CACHE.clear()
+        M.china_ats._BEISEN_ROUTE_CACHE.update(self._saved_cache)
+
+    def _fake_fetch(self, source_url):
+        self.fetched.append(source_url)
+        host = source_url.split("/")[2]
+        if source_url == "https://chinacdc.zhiye.com/campus":
+            raise RuntimeError("beisen: SSR 列表页无 jobId/adId 锚点（非老版 SSR 或被反爬）host=chinacdc.zhiye.com")
+        if source_url == "https://chinacdc.zhiye.com/subzw/":
+            M.china_ats._BEISEN_ROUTE_CACHE[host] = {"cms": True}
+            return json.dumps({"_ssr_jobs": [{"title": "投资经理",
+                                              "jd_url": "https://chinacdc.zhiye.com/zwxq?jobId=561284174"}]})
+        if host == "huaan.zhiye.com":   # 浏览器 _fetch_ssr 直接取页面锚点：抓得到岗，不登记任何路由
+            return json.dumps({"_ssr_jobs": [{"title": "研究员", "jd_url": "https://huaan.zhiye.com/zpdetail/1234567"}]})
+        raise AssertionError(source_url)
+
+    def _run(self, rows):
+        test = self
+
+        def fake_fetch(_adapter, url):
+            return test._fake_fetch(url)
+
+        with mock.patch.object(M.db, "fetch_all_rows", return_value=rows), \
+             mock.patch.object(M.china_ats.BeisenAdapter, "fetch", fake_fetch), \
+             mock.patch.object(M.ops_runs, "record_ops_run") as rec:
+            M._run("fake-sb", datetime.now(timezone.utc))
+        return rec.call_args.args
+
+    @staticmethod
+    def _ledger(metrics, status):
+        return [{"module": "harvest_beisen_routes", "run_date": day, "status": status, "metrics": metrics}
+                for day in ("2026-09-29", "2026-09-30")]
+
+    def test_sept27_queue(self):
+        rows = [PendingHostsQueueTest.CAMPUS, PendingHostsQueueTest.SUBZW,
+                {"source_url": "https://huaan.zhiye.com/social", "enabled": True, "notes": None}]
+        _sb, module, metrics, status = self._run(rows)[:4]
+        self.assertNotIn("https://chinacdc.zhiye.com/campus", self.fetched)
+        self.assertEqual(module, "harvest_beisen_routes")
+        self.assertEqual({k: metrics[k] for k in ("harvested", "attempted", "probed", "browser_only",
+                                                  "failed", "pending")},
+                         {"harvested": 1, "attempted": 1, "probed": 2, "browser_only": 1, "failed": 0,
+                          "pending": 2})
+        self.assertEqual(status, "success")
+        saved = json.loads(self._tmp_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved, {"chinacdc.zhiye.com": {"cms": True}})
+
+    def test_only_browser_only_left_is_an_idle_day_for_rule_a(self):
+        """下一晚只剩华安：attempted=0 → 规则 A 判空队列，不再天天报零产出。"""
+        rows = [{"source_url": "https://huaan.zhiye.com/social", "enabled": True, "notes": None}]
+        _sb, _module, metrics, status = self._run(rows)[:4]
+        self.assertEqual((metrics["attempted"], metrics["browser_only"], status), (0, 1, "success"))
+        findings, _ = W.evaluate_zero_output(self._ledger(metrics, status), "2026-10-01", days=2)
+        self.assertEqual(findings, [])
+
+    def test_real_probe_failures_still_alarm(self):
+        """真探失败（抛错）照旧记 failed，规则 A 照报——browser_only 不许变成吞失败的口子。"""
+        rows = [dict(PendingHostsQueueTest.CAMPUS, notes="gap_funnel:pending")]
+        _sb, _module, metrics, status = self._run(rows)[:4]
+        self.assertEqual((metrics["attempted"], metrics["failed"], status), (1, 1, "failed"))
+        findings, _ = W.evaluate_zero_output(self._ledger(metrics, status), "2026-10-01", days=2)
+        self.assertEqual([f["subject"] for f in findings], ["harvest_beisen_routes"])
+
+    def test_list_without_route_still_counts_as_failure(self):
+        """新版租户列表抓到了、路由没探出来（下游 jd_url 拼不出 = 0 岗）是真问题，照旧计失败。"""
+        rows = [{"source_url": "https://newver.zhiye.com/social", "enabled": True, "notes": None}]
+
+        def fetch_without_route(_adapter, url):
+            M.china_ats._BEISEN_ROUTE_CACHE["newver.zhiye.com"] = None
+            return '{"_intercepted": [{"Data": [{"Id": "x"}], "Count": 1}]}'
+
+        with mock.patch.object(M.db, "fetch_all_rows", return_value=rows), \
+             mock.patch.object(M.china_ats.BeisenAdapter, "fetch", fetch_without_route), \
+             mock.patch.object(M.ops_runs, "record_ops_run") as rec:
+            M._run("fake-sb", datetime.now(timezone.utc))
+        metrics, status = rec.call_args.args[2], rec.call_args.args[3]
+        self.assertEqual((metrics["attempted"], metrics["failed"], metrics["browser_only"], status),
+                         (1, 1, 0, "failed"))
 
 
 class MainCrashRecordsFailedLedgerTest(unittest.TestCase):

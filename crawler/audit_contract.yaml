@@ -435,6 +435,27 @@ checks:
              / nullif(count(*), 0)
       from events
       where event = 'search_result' and created_at >= now() - interval '7 days'
+    # 只报比例说不清「慢在哪一类搜索上」（action 要的正是这个）：按 招聘类型 × 选没选城市 × 搜没搜关键词
+    # 分组，只列有慢搜索的组、慢的次数多的在前。2026-09-28 晨报 30.5% 时排查方拿不到 events 表，
+    # 只能凭猜——明细落进 detail.findings 后晨报与排查方都直接看得到。
+    # payload 键名以 lib/track.ts 的 buildSearchResultPayload 为准（test_morning_digest 逐个回溯）。
+    detail_sql: >
+      with s as (
+        select coalesce(nullif(payload->>'stage', ''), '不限招聘类型') as stage,
+               case when coalesce(payload->'cities', '[]'::jsonb) in ('[]'::jsonb, 'null'::jsonb, '""'::jsonb)
+                    then '没选城市' else '选了城市' end as city,
+               case when coalesce(payload->>'keyword', '') = '' then '没搜关键词' else '搜了关键词' end as kw,
+               payload->>'latency_bucket' in ('3000_9999ms', 'gte_10000ms') as slow
+        from events
+        where event = 'search_result' and created_at >= now() - interval '7 days'
+      )
+      select format('%s·%s·%s：%s 次里 %s 次等了超过 3 秒', stage, city, kw, count(*),
+                    count(*) filter (where slow)) as title,
+             stage || '|' || city || '|' || kw as key
+      from s
+      group by stage, city, kw
+      having count(*) filter (where slow) > 0
+      order by count(*) filter (where slow) desc, count(*) desc, 2
     normal: "<= 0.20"      # 实测 19/70 = 27.1%，当前不达标，如实报，别为了绿灯放宽
     severity: warn
     covers: []
@@ -1244,7 +1265,7 @@ checks:
     action: 把这条转给 Claude，让它查晨报这条定时任务最近一次是不是运行失败了
 
   - id: pipeline.morning_digest_on_time
-    name: 晨报邮件昨天是不是上午就到了（值是几点到的，没发出算 24 点）
+    name: 晨报邮件昨天是不是 10 点前就到了（值是几点到的，没发出算 24 点）
     subject: 晨报邮件
     layer: pipeline
     db: supabase
@@ -1254,12 +1275,14 @@ checks:
         from ops_runs where module = 'morning_digest'
         and run_date = ((now() at time zone 'Asia/Shanghai')::date - 1)
         and metrics->>'mode' = 'sent' and status = 'success'
-    normal: "< 12"                # 改主路前实测 9/19~9/22：21 / 10（当天有人手动补发）/ 15 / 15
+    # 值是整点小时，"< 10" = 09:59 前送达。原来是 "< 12"：9/24 的 10:41、9/28 的 11:06 都被算成准点，
+    # 而声明的送达时间是 10:00（2026-09-28 收紧，见 morning-digest.yml 文件头）。
+    normal: "< 10"                # 实测 9/19~9/22：21 / 10（有人手动补发）/ 15 / 15；9/24~9/28：10 / 15 / 13 / 16 / 11
     severity: warn
     calibrated: false
-    why: 晨报原本每天下午三点多才到，连着好几天没人发现——邮件照样在发，只是晚了。现在改成早上自动修复做完就发，
-      下午那次只是兜底；如果哪天又退回到下午才到，说明早上那一步没接上，这条就会亮。
-    action: 把这条转给 Claude，让它查昨天早上电脑上的自动修复有没有跑完、跑完后有没有把晨报发出去
+    why: 晨报原本每天下午三点多才到，连着好几天没人发现——邮件照样在发，只是晚了。现在由云端的晨报任务自己在早上
+      等自动修复做完再发，最晚 9 点 40 分左右不再等、照发；如果哪天又到了 10 点以后，说明早上那一轮没按时跑起来，这条就会亮。
+    action: 把这条转给 Claude，让它查昨天早上的晨报任务几点开始跑、有没有在等自动修复时卡住，以及电脑上的自动修复几点记的账
 
   - id: pipeline.auto_repair_ran
     name: 每天早上的自动修复昨天有没有跑

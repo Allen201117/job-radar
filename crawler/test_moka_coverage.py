@@ -30,6 +30,8 @@ class _Page:
         self.pages = pages                # [[href, ...], ...]
         self.page_numbers = page_numbers  # 分页器上的页码文本
         self.idx = 0
+        self.stuck_at = None              # 停在这一页（0 起）：点「下一页」不生效 / 抛 click_error
+        self.click_error = None
 
     def eval_on_selector_all(self, sel, js):
         return [{"href": h, "text": "岗"} for h in self.pages[self.idx]]
@@ -60,6 +62,10 @@ class _NextBtn:
 
     def click(self, timeout=None):
         if self.page is not None:
+            if self.page.click_error is not None and self.page.idx == self.page.stuck_at:
+                raise self.page.click_error
+            if self.page.idx == self.page.stuck_at:
+                return   # 点了，但页面没翻过去
             self.page.idx += 1
 
     def scroll_into_view_if_needed(self, timeout=None):
@@ -67,17 +73,8 @@ class _NextBtn:
 
 
 def _finish(adapter, cards):
-    """复刻 fetch 收尾那段的判定（fetch 本体要起浏览器，单测不跑它）。"""
-    last_page = getattr(adapter, "_last_page", None)
-    pages_done = getattr(adapter, "_pages_done", 0)
-    if not cards:
-        adapter.reported_total = None
-    elif not last_page or pages_done >= last_page:
-        adapter.reported_total = len(cards)
-        adapter.fetch_complete = True
-    else:
-        adapter.reported_total = max(len(cards), last_page * adapter._PAGE_ROWS)
-        adapter.fetch_complete = False
+    """fetch 收尾那段（fetch 本体要起浏览器，单测不跑它）——直接调生产端同一个方法，不另抄一份。"""
+    adapter._finalize_coverage(cards, "https://app.mokahr.com/social-recruitment/t/1")
 
 
 class MokaCoverageTest(unittest.TestCase):
@@ -124,6 +121,75 @@ class MokaCoverageTest(unittest.TestCase):
         self.assertEqual(a._read_last_page(_Page([[]], ["1", "2", "3", "4"])), 4)
         self.assertEqual(a._read_last_page(_Page([[]], ["1\n2\n3", "12"])), 12)
         self.assertIsNone(a._read_last_page(_Page([[]], [])))
+
+
+class MokaStopReasonTest(unittest.TestCase):
+    """没翻到末页时，停因必须留下来（写 coverage_stop_reason + warning），否则告警只知道「缺」不知道「为什么」。
+
+    病例（09-24~28 抓不全告警）：百济神州分页器 17 页、每次只入库 30 岗（第 1 页）；
+    58同城 16 页、每次 150 岗（第 5 页）。代码里三种停法（点击失败 / 点了没翻 / 撞上限）都不留痕。
+    """
+
+    @staticmethod
+    def _pages(n):
+        return [[f"#/job/{p}_{i}" for i in range(30)] for p in range(n)]
+
+    def test_click_blocked_records_reason_and_playwright_evidence(self):
+        a = MokaAdapter()
+        page = _Page(self._pages(17), [str(i) for i in range(1, 18)])
+        page.stuck_at = 0
+        page.click_error = Exception(
+            "Timeout 2500ms exceeded.\n  - <div class=\"sd-Modal-drawer\">…</div> intercepts pointer events\n  - retrying")
+        with self.assertLogs("adapters.china_ats", level="WARNING") as logs:
+            cards = a._collect_all_pages(page)
+            _finish(a, cards)
+        self.assertEqual(len(cards), 30)
+        self.assertFalse(a.fetch_complete)
+        self.assertEqual(a.reported_total, 17 * a._PAGE_ROWS)
+        self.assertEqual(a.coverage_stop_reason, "page_click_failed")
+        self.assertIn("intercepts pointer events", a._stop_detail, "挡住按钮的元素是唯一的现场证据")
+        self.assertIn("page_click_failed", "\n".join(logs.output))
+
+    def test_click_that_does_not_advance_is_page_no_new_rows(self):
+        a = MokaAdapter()
+        page = _Page(self._pages(16), [str(i) for i in range(1, 17)])
+        page.stuck_at = 4                     # 58同城：停在第 5 页
+        with self.assertLogs("adapters.china_ats", level="WARNING"):
+            cards = a._collect_all_pages(page)
+            _finish(a, cards)
+        self.assertEqual(len(cards), 150)
+        self.assertFalse(a.fetch_complete)
+        self.assertEqual(a.coverage_stop_reason, "page_no_new_rows")
+
+    def test_stuck_one_page_before_the_end_is_not_counted_as_complete(self):
+        """旧写法每轮都给 pages_done +1：6 页租户卡在第 5 页会数成 7 页 ≥ 6 → 误判抓全、缺口消失。"""
+        a = MokaAdapter()
+        page = _Page(self._pages(6), [str(i) for i in range(1, 7)])
+        page.stuck_at = 4
+        with self.assertLogs("adapters.china_ats", level="WARNING"):
+            cards = a._collect_all_pages(page)
+            _finish(a, cards)
+        self.assertEqual(len(cards), 150)
+        self.assertEqual(a._pages_done, 5)
+        self.assertFalse(a.fetch_complete)
+
+    def test_page_cap_records_list_cap(self):
+        a = MokaAdapter()
+        a._page_cap = 2
+        page = _Page(self._pages(5), ["1", "2", "3", "4", "5"])
+        with self.assertLogs("adapters.china_ats", level="WARNING"):
+            cards = a._collect_all_pages(page)
+            _finish(a, cards)
+        self.assertFalse(a.fetch_complete)
+        self.assertEqual(a.coverage_stop_reason, "list_cap")
+
+    def test_complete_crawl_leaves_no_reason(self):
+        a = MokaAdapter()
+        page = _Page(self._pages(3), ["1", "2", "3"])
+        cards = a._collect_all_pages(page)
+        _finish(a, cards)
+        self.assertTrue(a.fetch_complete)
+        self.assertIsNone(a.coverage_stop_reason)
 
 
 if __name__ == "__main__":
