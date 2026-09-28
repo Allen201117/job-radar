@@ -198,6 +198,25 @@ OVERDUE_FLOOR_MIN = 1440
 COVERAGE_RATIO_FLOOR = 0.9
 COVERAGE_MIN_GAP = 200      # 单源少抓这么多才值得开口（约等于「一个源整整少了 4 页」）
 COVERAGE_TOTAL_GAP = 2000   # 全站累计缺口低于这个数就先不吵（正常抖动区间）
+# crawl_runs.coverage_stop_reason 除 repetition_brake（按设计刹停，单列不计入缺口）外的取值 →
+# 规则 G 正文里「停因」的人话。它们**照样计入缺口**，只是让人一眼分清「撞上限」和「翻页坏了」，
+# 两者处置相反（前者是要不要抬上限的取舍，后者是修 adapter）。取值由 adapter 写，见 base.BaseAdapter。
+COVERAGE_STOP_LABELS = {
+    "list_cap": "撞单源条数上限",
+    "page_click_failed": "点「下一页」失败",
+    "page_no_new_rows": "翻页不生效，下一页全是已见过的岗",
+}
+
+# 规则 F/G/I/K/L 共用的一次 crawl_runs 取数只取这几列。⚠️ 规则里读到的每个字段都必须在这里：
+# PostgREST 只返回 select 点名的列，漏一列 `row.get()` 就恒为 None、不报错。
+# 2026-09-20 加 coverage_stop_reason（迁移 284，commit cfd438b）时只改了规则 G 与单测夹具、没改这里的
+# select，于是「按设计刹停」一次都没被认出来：星巴克 / 来伊份 / 喜茶此后每天照样挂在「抓不全」里
+# （issue #24 09-24~09-27 每条评论都有这三家，且没有一条出现「另有 N 个源按设计刹停」）。
+# 单测夹具现在按这张列表裁剪（test_ops_watchdog），再漏一列会当场红。
+CRAWL_RUN_COLUMNS = (
+    "source_id", "status", "error_message", "started_at", "finished_at",
+    "reported_total", "coverage_complete", "jobs_found", "coverage_stop_reason",
+)
 
 
 # ══════════════════ 纯函数层（可单测、不打网络）══════════════════
@@ -808,7 +827,7 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
     自然 found≪reported。把它们算进来只会让这条规则天天喊狼来了。
 
     输出**一条聚合 finding**（不是每源一条）：subject 固定，标题稳定可去重；正文按缺口排序
-    列出最该看的几个，直接决定「调 CRAWL_MAX_JOBS 档位 / 修 adapter 分页 / 这源本来就该停」。
+    列出最该看的几个，直接决定「抬不抬上限 / 修 adapter 分页 / 这源本来就该停」（每行带 adapter 自报的停因）。
     """
     # ⚠️ 先按源挑出**最后一轮**，再判这一轮抓没抓全。顺序反过来（先滤掉 complete=true 再挑最新）
     # 会让「早上没抓全、晚上抓全了」的源继续被报——最后一轮才是当下的真实状态。
@@ -839,6 +858,7 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
             "company": source.get("company") or sid,
             "adapter": source.get("adapter_name") or "?",
             "reported": int(reported), "found": int(found), "gap": gap,
+            "stop_reason": row.get("coverage_stop_reason"),
         }
         # ⚠️ 阈值（ratio_floor/min_gap/total_gap）一个不改，只在这里把「按设计刹停」的源
         # 从缺口清单里摘出去——它们 fetch_complete 天然为 False（RepetitionBrake 的不变量，
@@ -862,9 +882,13 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
     by_adapter = Counter()
     for item in shortfalls:
         by_adapter[item["adapter"]] += item["gap"]
+    def _stop_note(item):
+        label = COVERAGE_STOP_LABELS.get(item.get("stop_reason") or "")
+        return f"（停因：{label}）" if label else ""
+
     evidence = [
         f"{item['company']}（{item['adapter']}）：官网自报 {item['reported']}，只入库 {item['found']}，"
-        f"少 {item['gap']}"
+        f"少 {item['gap']}{_stop_note(item)}"
         for item in shortfalls[:8]
     ]
     if len(shortfalls) > 8:
@@ -883,8 +907,11 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
         "summary": f"{len(shortfalls)} 个源本轮没抓全，累计少入库 {grand} 个岗位"
                    f"（官网自报的都拿得到，是我们自己停在半路）。",
         "evidence": evidence,
-        "next": "先看缺口最大的那个 adapter：撞条数上限 → 调 CRAWL_MAX_JOBS / "
-                "CRAWL_MAX_JOBS_MUST_APPLY 档位；翻页在中途报错 → 修 adapter 分页；"
+        # ⚠️ 别再写「调 CRAWL_MAX_JOBS_MUST_APPLY」：仓库里没有这个变量；CRAWL_MAX_JOBS 也没接进
+        # 任何 workflow（2026-09-28 查），改 repo variable 不会生效，抬上限要改代码或 workflow。
+        "next": "先看每行的「停因」：撞单源条数上限 → 这是要不要抬上限的取舍（默认 8000，"
+                "抬之前先量对方限流与多进来的是什么，别直接抬）；点「下一页」失败 / 翻页不生效 → "
+                "修 adapter 分页；没写停因 → 查 adapter 为什么中途停。"
                 "这源本来就不该抓那么多 → 停用或降档。别让它继续每轮漏同一批岗。",
     }]
 
@@ -1726,8 +1753,7 @@ def main():
         crawl_since = (now - timedelta(days=crawl_days)).isoformat()
         all_crawl_rows = db.fetch_all_rows(
             lambda: sb.table("crawl_runs")
-                      .select("source_id,status,error_message,started_at,finished_at,"
-                              "reported_total,coverage_complete,jobs_found")
+                      .select(",".join(CRAWL_RUN_COLUMNS))
                       .gte("started_at", crawl_since)
         )
         crawl_rows = rows_started_since(all_crawl_rows, now - timedelta(days=args.dead_source_days))
@@ -1738,7 +1764,7 @@ def main():
         sources_by_id = {r["id"]: r for r in source_rows}
         findings += evaluate_dead_sources(crawl_rows, sources_by_id,
                                           days=args.dead_source_days)
-        # 规则 G 复用同一批 crawl_rows / sources（多取三列，不多打一次库）。
+        # 规则 G 复用同一批 crawl_rows / sources（多取四列，不多打一次库）。
         findings += evaluate_coverage_shortfall(crawl_rows, sources_by_id)
         # 规则 I 复用同一批 crawl_rows（多取 finished_at 一列，不多打一次库）。
         findings += evaluate_unfinished_crawls(crawl_rows, sources_by_id, now=now)

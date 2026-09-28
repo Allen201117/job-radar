@@ -84,6 +84,33 @@ class BeisenHttpxTest(unittest.TestCase):
         with _patch(HTML, [_page([1, 2], 99), _page([3, 4], 99)]):
             a._httpx_fetch("https://x.zhiye.com/social/jobs")
         self.assertFalse(a.fetch_complete)     # 撞上限 → absence 不会误判
+        # 停因记成 list_cap：否则告警把「撞上限」（我爱我家 2.9 万 → 8000）和「翻页坏了」混成一种
+        self.assertEqual(a.coverage_stop_reason, "list_cap")
+
+    def test_collecting_everything_exactly_at_cap_is_not_a_cap_stop(self):
+        a = self._a(page_size=2, max_jobs=2)
+        with _patch(HTML, [_page([1, 2], 2)]):
+            a._httpx_fetch("https://x.zhiye.com/social/jobs")
+        self.assertTrue(a.fetch_complete)
+        self.assertIsNone(a.coverage_stop_reason)
+
+    def test_repetition_brake_reason_is_not_overwritten_by_cap(self):
+        a = self._a(page_size=2, max_jobs=4)
+        a._host = "x.zhiye.com"   # fetch() 才会设它，刹停日志要用
+        same = lambda ids: {"Count": 99, "Data": [{"Id": str(x), "JobAdName": "店员", "Duty": "d", "Require": "r"}
+                                                  for x in ids]}
+        with _patch(HTML, [same([1, 2]), same([3, 4]), same([5, 6])]), \
+             mock.patch("adapters.base.resolve_repeat_stall_rows", return_value=2):
+            a._httpx_fetch("https://x.zhiye.com/social/jobs")
+        self.assertEqual(a.coverage_stop_reason, "repetition_brake")
+        self.assertFalse(a.fetch_complete)
+
+    def test_stopping_short_for_other_reasons_leaves_reason_unknown(self):
+        a = self._a(page_size=2, max_jobs=100)
+        with _patch(HTML, [_page([1, 2], 99), _page([1, 2], 99)]):   # 原地打转，不是撞上限
+            a._httpx_fetch("https://x.zhiye.com/social/jobs")
+        self.assertFalse(a.fetch_complete)
+        self.assertIsNone(a.coverage_stop_reason)
 
     def test_short_page_does_not_end_pagination_when_total_known(self):
         """限流/抖动回一个短页，不许当末页收工。

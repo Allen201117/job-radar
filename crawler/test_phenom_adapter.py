@@ -125,5 +125,66 @@ class ApiJobsLocationSkipTest(unittest.TestCase):
                 adapter.fetch(self.SOURCE_URL)
 
 
+class ApiJobsPaginationStallTest(unittest.TestCase):
+    """租户忽略 offset、每页回同一批时：早停 + 记停因，不再一路翻到 total 白打请求。"""
+
+    SOURCE_URL = "https://careers.na.panasonic.com/api/jobs"
+
+    @staticmethod
+    def _batch(start, n, total):
+        return {"jobs": [{"data": {"slug": str(start + i), "title": f"T{start + i}",
+                                   "country": "United States", "description": "d" * 80}}
+                         for i in range(n)], "totalCount": total}
+
+    def test_offset_ignored_stops_after_first_repeat_and_records_reason(self):
+        calls = []
+
+        def get_side_effect(url, params=None, headers=None, timeout=None):
+            calls.append(params["offset"])
+            return _resp(self._batch(0, 100, 379))   # 不管 offset 是多少都回前 100 条
+
+        adapter = PhenomAdapter()
+        adapter.regions = ["US"]
+        with mock.patch("adapters.phenom.httpx.get", side_effect=get_side_effect), \
+                self.assertLogs("adapters.phenom", level="WARNING") as logs:
+            adapter.fetch(self.SOURCE_URL)
+        self.assertEqual(calls, [0, 100], "第 2 页全是重复就该停，旧逻辑会打到 offset=300")
+        self.assertEqual(adapter.reported_total, 379)
+        self.assertFalse(adapter.fetch_complete)
+        self.assertEqual(adapter.coverage_stop_reason, "page_no_new_rows")
+        self.assertIn("United States", "\n".join(logs.output))
+
+    def test_working_offset_pagination_is_unchanged(self):
+        calls = []
+
+        def get_side_effect(url, params=None, headers=None, timeout=None):
+            off = params["offset"]
+            calls.append(off)
+            return _resp(self._batch(off, min(100, 250 - off), 250))
+
+        adapter = PhenomAdapter()
+        adapter.regions = ["US"]
+        with mock.patch("adapters.phenom.httpx.get", side_effect=get_side_effect):
+            payload = adapter.fetch(self.SOURCE_URL)
+        self.assertEqual(calls, [0, 100, 200])
+        self.assertTrue(adapter.fetch_complete)
+        self.assertIsNone(adapter.coverage_stop_reason)
+        self.assertEqual(len(adapter.parse(payload)), 250)
+
+    def test_overlap_between_locations_is_not_a_stall(self):
+        """「China」「Hong Kong」两个地点回同一批岗，是地点交集，不是翻页失效。"""
+        def get_side_effect(url, params=None, headers=None, timeout=None):
+            batch = self._batch(0, 3, 3)
+            for j in batch["jobs"]:
+                j["data"]["country"] = "China"
+            return _resp(batch)
+
+        adapter = PhenomAdapter()
+        adapter.regions = ["CN"]
+        with mock.patch("adapters.phenom.httpx.get", side_effect=get_side_effect):
+            adapter.fetch("https://careers.amd.com/api/jobs")
+        self.assertIsNone(adapter.coverage_stop_reason)
+
+
 if __name__ == "__main__":
     unittest.main()

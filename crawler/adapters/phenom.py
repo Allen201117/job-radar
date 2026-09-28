@@ -130,6 +130,7 @@ class PhenomAdapter(BaseAdapter):
     def fetch(self, source_url: str) -> str:
         self.reported_total = None
         self.fetch_complete = False
+        self.coverage_stop_reason = None
         p = urlparse(source_url)
         host = f"{p.scheme}://{p.netloc}"
         if p.path.rstrip("/").endswith(_WIDGETS_PATH):
@@ -159,6 +160,7 @@ class PhenomAdapter(BaseAdapter):
         skipped_locations = 0
         for loc in locations:
             loc_total: Optional[int] = None
+            loc_seen = set()
             for page in range(self.max_pages):
                 params = {"location": loc, "limit": 100, "offset": page * 100}
                 try:
@@ -192,13 +194,30 @@ class PhenomAdapter(BaseAdapter):
                         loc_total = _int_or_none(body.get("count"))
                 if not jobs:
                     break
+                new_in_loc = 0
                 for j in jobs:
                     data = j.get("data", {}) if isinstance(j, dict) else {}
                     slug = str(data.get("slug") or data.get("req_id") or "").strip()
+                    if slug and slug not in loc_seen:
+                        loc_seen.add(slug)
+                        new_in_loc += 1
                     if slug and slug not in seen:
                         seen.add(slug)
                         collected.append(data)
                 total = loc_total or 0
+                # 末页判据补一条「这一页有没有带来新岗位」（CLAUDE.md「列表抓取上限」一节）：
+                # 翻页参数若被租户忽略，每页都回同一批，旧判据只看条数会一直翻到 total 才停、白打请求，
+                # 且停因不留痕。松下（careers.na.panasonic.com，9-25 / 9-28 告警自报 387 / 379、入库都是 103）
+                # 的数字与「offset 不生效、每个地点只拿到第一页」吻合，但没有 live 探针证实——这里只做
+                # 早停 + 留证据（warning 带地点/页码/自报数），不改请求参数。按地点去重：多个地点返回同一批
+                # 岗（「China」「Hong Kong」有交集）不是翻页失效。
+                if page > 0 and new_in_loc == 0:
+                    self.coverage_stop_reason = "page_no_new_rows"
+                    logger.warning(
+                        "phenom: %s location=%r 第 %d 页（offset=%d）全是本地点已见过的岗，停止翻页"
+                        "（本地点已收 %d / 自报 %s）——翻页参数可能没生效",
+                        host, loc, page + 1, page * 100, len(loc_seen), loc_total)
+                    break
                 if len(jobs) < 100 or (page + 1) * 100 >= total:
                     break
             if loc_total is not None:

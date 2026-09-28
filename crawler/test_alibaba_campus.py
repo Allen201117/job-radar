@@ -150,3 +150,95 @@ class TestBrandDerivationOnSharedPortal(unittest.TestCase):
 
     def test_other_hosts_untouched(self):
         self.assertEqual(self._job("优酷-测试", host="talent.taotian.com").company, "虎鲸文娱")
+
+
+class TestCookieMissEvidence(unittest.TestCase):
+    """hire.freshippo.com（盒马）在 CI 上建源以来从没拿到过 XSRF-TOKEN：09-23 起报错只说到
+    「请求均已应答但未种下该 cookie」——答的是什么（正常页 / 403 / 跳走 / 反爬验证页）一个字都没留下，
+    「403/反爬 → 停用」就无从判。报错必须带上两次 GET 的应答摘要（只记录，不绕）。"""
+
+    @staticmethod
+    def _client(pages):
+        """pages: 依次给 GET 的 httpx.Response（循环取）；cookie 罐始终不含 XSRF-TOKEN。"""
+        import httpx
+
+        class FakeClient:
+            def __init__(self, *a, **k):
+                self.cookies = httpx.Cookies()
+                self._i = 0
+
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+            def get(self, url, *a, **k):
+                resp = pages[self._i % len(pages)]
+                self._i += 1
+                return resp
+
+            def post(self, *a, **k):
+                raise AssertionError("拿不到 token 不该发 POST")
+
+        return FakeClient
+
+    @staticmethod
+    def _resp(status, body, url, set_cookies=(), history=()):
+        import httpx
+        headers = [("content-type", "text/html; charset=utf-8")] + [("set-cookie", c) for c in set_cookies]
+        r = httpx.Response(status, headers=headers, text=body, request=httpx.Request("GET", url))
+        r.history = list(history)
+        return r
+
+    def _fetch_error(self, pages):
+        from unittest import mock
+        from adapters import alibaba
+        with mock.patch.object(alibaba.httpx, "Client", self._client(pages)), \
+                mock.patch.object(alibaba.time, "sleep", lambda s: None):
+            a = alibaba.AlibabaAdapter(); a.company_name = "盒马"
+            with self.assertRaises(RuntimeError) as ctx:
+                a.fetch("https://hire.freshippo.com/off-campus/position-list?lang=zh")
+        return str(ctx.exception)
+
+    def test_waf_challenge_page_is_named_in_the_error(self):
+        page = self._resp(200, "<html><head><title>验证</title></head><script>var arg1='x';"
+                               "document.cookie='acw_sc__v2='+x</script></html>",
+                          "https://hire.freshippo.com/?lang=zh", set_cookies=["acw_tc=abc123; Path=/"])
+        msg = self._fetch_error([page])
+        self.assertIn("拿不到 XSRF-TOKEN (hire.freshippo.com)", msg)
+        self.assertIn("200 hire.freshippo.com/", msg)
+        self.assertIn("种了[acw_tc]", msg)
+        self.assertIn("标题「验证」", msg)
+        self.assertIn("疑似反爬：阿里云 WAF JS 挑战", msg)
+        self.assertNotIn("abc123", msg, "cookie 值不进报错（每轮不同，会把同一种失败拆成多类）")
+
+    def test_redirect_chain_and_final_host_are_recorded(self):
+        import httpx
+        hop = httpx.Response(302, headers=[("location", "https://login.example.com/x")],
+                             request=httpx.Request("GET", "https://hire.freshippo.com/?lang=zh"))
+        page = self._resp(200, "<title>登录</title>", "https://login.example.com/x", history=[hop])
+        msg = self._fetch_error([page])
+        self.assertIn("302→200 login.example.com/x", msg)
+        self.assertIn("没种任何 cookie", msg)
+        self.assertNotIn("疑似反爬", msg, "没命中标记就不下反爬结论")
+
+    def test_same_failure_yields_identical_message(self):
+        """规则 F 按报错原文归并「最常见错误」：同一种失败两次的报错必须逐字相同。"""
+        page = self._resp(403, "<title>Access Denied</title>", "https://hire.freshippo.com/?lang=zh")
+        first = self._fetch_error([page])
+        self.assertEqual(first, self._fetch_error([page]))
+        self.assertIn("403 hire.freshippo.com/", first)
+        self.assertIn("疑似反爬：访问被拒绝页", first)
+
+    def test_transport_exception_path_unchanged(self):
+        import httpx
+
+        def boom(*a, **k):
+            raise httpx.ConnectError("connection refused")
+        from unittest import mock
+        from adapters import alibaba
+        client = self._client([])
+        client.get = boom
+        with mock.patch.object(alibaba.httpx, "Client", client), \
+                mock.patch.object(alibaba.time, "sleep", lambda s: None):
+            with self.assertRaises(RuntimeError) as ctx:
+                alibaba.AlibabaAdapter().fetch("https://hire.freshippo.com/off-campus/position-list?lang=zh")
+        self.assertIn("最后一次异常 ConnectError: connection refused", str(ctx.exception))

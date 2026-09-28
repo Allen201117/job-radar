@@ -52,8 +52,9 @@ def _env_int(name: str, default: int) -> int:
 def resolve_list_cap(default: int) -> int:
     """单源**列表**抓取条数上限。与 resolve_detail_cap（逐岗富化上限）是两码事。
 
-    env CRAWL_MAX_JOBS 整体调档 —— 出事（CI 超时 / 某站被我们翻烦了）不用改代码重新部署，
-    改一个 repo variable 下一轮就生效。
+    env CRAWL_MAX_JOBS 整体调档 —— 出事（CI 超时 / 某站被我们翻烦了）不用改 adapter 代码。
+    ⚠️ 2026-09-28 查：没有任何 workflow 把 `vars.CRAWL_MAX_JOBS` 传进 env，只改 repo variable 不会生效，
+    要先在对应 workflow 的 env 里接上它。
 
     ⚠️ 不要在这里对 default 取 max：adapter 声明的基准档必须能**往下**压（单测把 _MAX_JOBS 设成 2
     来验「撞上限 → 不算抓全」，取 max 会让这类断言静默失效，也堵死以后给个别慢源单独降档的路）。
@@ -292,8 +293,12 @@ class BaseAdapter:
     reported_total: Optional[int] = None
     fetch_complete: bool = False
     # 未抓全时「为什么」的可判定原因（任务B：把「按设计刹停」从「真漏抓」里分出来，见
-    # RepetitionBrake 文档字符串 + migration 284）。None = 不可判定/未触发已知刹车。
-    # 目前唯一取值 "repetition_brake"；adapter 在 brake.observe()==True 分支里显式赋值。
+    # RepetitionBrake 文档字符串 + migration 284）。None = 不可判定/未触发已知刹车。只在确知原因时写：
+    #   "repetition_brake"  RepetitionBrake 刹停（按设计，ops_watchdog 规则 G 单列、不计入缺口）
+    #   "list_cap"          撞 resolve_list_cap 的单源条数上限（计入缺口，正文标注——抬不抬是取舍）
+    #   "page_click_failed" 浏览器翻页点「下一页」失败（计入缺口，修 adapter）
+    #   "page_no_new_rows"  翻到的下一页全是已见过的岗（翻页参数没生效；计入缺口，修 adapter）
+    # 规则 G 的人话标签在 ops_watchdog.COVERAGE_STOP_LABELS，加取值两边一起加。
     coverage_stop_reason: Optional[str] = None
 
     def fetch(self, source_url: str) -> str:
