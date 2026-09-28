@@ -728,7 +728,10 @@ adapter 里 `normalizer.location_in_source_regions(location, self.regions)` 一�
 ## ⚠️ 列表抓取上限与「短页误判末页」（2026-09-04 立）
 
 - 单源列表上限统一走 `adapters/base.resolve_list_cap`（`DEFAULT_LIST_CAP=8000`，
-  env `CRAWL_MAX_JOBS` 可整体调档，出事改 repo variable 即可、不用重新部署）。
+  env `CRAWL_MAX_JOBS` 可整体调档）。
+  📌 纠错（2026-09-28 创始人授权）：此处原写「出事改 repo variable 即可、不用重新部署」，09-04 写入时就不成立——
+  没有任何 workflow 把 `vars.CRAWL_MAX_JOBS` 传进 env（`git log --all -S CRAWL_MAX_JOBS -- .github/` 0 处），
+  只改变量不生效；要调档先在对应 workflow 的 env 里接上它。
   旧的 600 硬顶让 32 个源每轮漏 10.7 万个岗**且 status 全是 success**。
 - ⚠️ 末页判据一律用「这一页有没有带来新岗位」，**不要用「本页条数 < pageSize」**：
   北森按 IP 限流（响应头 `X-RateLimit-Limit-<host><ip>-second: 50`），限流时回短页，
