@@ -14,6 +14,7 @@ const {
   shouldTryDomesticFallback,
   mergeDomesticFallback,
   scopeFallbackNotice,
+  opportunityCount,
   THIN_OVERSEAS_FEED,
 } = loadOpp("scope-intent");
 const { computeMatchFacts, checkEligibility } = loadOpp("eligibility");
@@ -232,6 +233,14 @@ test("mergeDomesticFallback：国内一个新岗都补不出来 → null（不�
   assert.equal(mergeDomesticFallback(feed({ critical: [alert] }), feed({ critical: [alert] }), "overseas"), null);
 });
 
+test("opportunityCount：只数机会卡，不数关键提醒（10 条提醒 + 0 个海外机会 → 仍要补国内岗）", () => {
+  const alerts = Array.from({ length: 10 }, (_, i) => opp(`saved-${i}`, { signals: [{ type: "CLOSED_OR_STALE", isCritical: true }] }));
+  const f = feed({ critical: alerts, main: [opp("sg-1")], explore: [opp("sg-2")], waiting: [opp("sg-3")] });
+  assert.equal(f.counts.total, 13);
+  assert.equal(opportunityCount(f), 3);
+  assert.equal(shouldTryDomesticFallback(allChengdu({ jobScope: "overseas" }), null, opportunityCount(feed({ critical: alerts }))), true);
+});
+
 test("scopeFallbackNotice：0 个时说「按国内展示」，有几个时把两个数都说出来", () => {
   const zero = scopeFallbackNotice({ scope: "all", scopedCount: 0, addedCount: 12 });
   assert.match(zero, /全都要/);
@@ -273,7 +282,7 @@ test("召回：「海外」画像、城市含海外地名的「全都要」画�
 
 test("/today 页接的是 scope-intent 的回落判定与合并，不再只认 0 岗", () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "app", "today", "page.tsx"), "utf8");
-  assert.match(src, /shouldTryDomesticFallback\(/);
+  assert.match(src, /shouldTryDomesticFallback\(profile, ctx\.candidate, opportunityCount\(feed\)\)/);
   assert.match(src, /mergeDomesticFallback\(/);
   assert.match(src, /scopeFallbackNotice\(/);
   assert.doesNotMatch(src, /shouldFallbackToDomestic/);

@@ -18,6 +18,7 @@ import { getPopularFeed, type PopularFeed } from "@/lib/popular-feed";
 import {
   canFallbackToDomestic,
   mergeDomesticFallback,
+  opportunityCount,
   scopeFallbackNotice,
   shouldTryDomesticFallback,
   type ScopeFallback,
@@ -187,7 +188,7 @@ async function loadTodayBundle(
   // 「目标城市全是国内 + 没英文简历」且原范围对口岗太少时按国内重算一次，把补进来的岗接在原范围的岗后面，并把原因交给页面说清。
   // 2026-09-28 起「海外」画像的门槛从 0 放宽到 < 10（lib/opportunities/scope-intent）：只召回 1 个岗的画像连着几天不回落。
   let scopeFallback: TodayBundle["scopeFallback"] = null;
-  if (feed && shouldTryDomesticFallback(profile, ctx.candidate, feedTotal(feed))) {
+  if (feed && shouldTryDomesticFallback(profile, ctx.candidate, opportunityCount(feed))) {
     // fallbackMs = 原范围出结果之后**额外**等了多久（并行起跑时通常接近 0）。
     const tFallback = performance.now();
     const domesticFeed = await (eagerDomestic ?? buildDomesticFeed());
@@ -275,12 +276,8 @@ function scheduleRecallSnapshotUpkeep(
   );
 }
 
-function feedTotal(feed: OpportunityFeed): number {
-  return feed.counts?.total ?? Object.values(feed.sections).reduce((n, arr) => n + arr.length, 0);
-}
-
 function feedIsEmpty(feed: OpportunityFeed): boolean {
-  return feedTotal(feed) === 0;
+  return (feed.counts?.total ?? Object.values(feed.sections).reduce((n, arr) => n + arr.length, 0)) === 0;
 }
 
 // 流式：先出页面骨架（导航 + 标题），用户小表查询与慢的跨区机会召回都在 Suspense 边界里流入，不阻塞整页。

@@ -11,6 +11,7 @@
 //    「海外」画像对口岗太少（< THIN_OVERSEAS_FEED）时补上国内岗，并在页面上说清为什么。
 //
 // ⚠️ 本模块引 lib/geo（52KB 词表），只许服务端用：eligibility / 召回 SQL / today 页。别从会进客户端包的模块引它。
+import "server-only";
 import { deriveCountryCode } from "../geo";
 import type { CandidateProfile } from "../types";
 import type { FeedSections, Opportunity, OpportunityFeed, RadarProfile } from "./types";
@@ -50,18 +51,29 @@ export function canFallbackToDomestic(profile: RadarProfile, candidate: Pick<Can
   return targetCitiesAllDomestic(profile);
 }
 
+const OPPORTUNITY_SECTIONS: Array<keyof FeedSections> = ["main", "explore", "momentum", "waiting"];
+
 /**
- * 要不要多跑一次国内召回。「海外」：展示岗 < {@link THIN_OVERSEAS_FEED}；「全都要」：只在 0 岗时（原口径）。
+ * 页面上的机会卡数，**不含关键提醒**。提醒是用户自己收藏 / 投递的岗关闭了、快截止了，不是这个范围里找到的机会：
+ * 拿含提醒的总数去判「够不够」，一个有 10 条提醒、0 个海外机会的用户永远等不到补充。横幅里的数字同一口径。
+ */
+export function opportunityCount(feed: Pick<OpportunityFeed, "sections">): number {
+  return OPPORTUNITY_SECTIONS.reduce((n, key) => n + (feed.sections[key]?.length ?? 0), 0);
+}
+
+/**
+ * 要不要多跑一次国内召回（`scopedOpportunities` 用 {@link opportunityCount}）。
+ * 「海外」：机会卡 < {@link THIN_OVERSEAS_FEED}；「全都要」：只在 0 个时。
  * 「全都要」不放宽是量过的：它的召回本来就含国内岗，2026-09-28 真实画像逐个重放，按国内重算的展示数
  * 没有一个多于原清单 —— 放宽只会给每次打开白加一次冷召回（2~5s）。
  */
 export function shouldTryDomesticFallback(
   profile: RadarProfile,
   candidate: Pick<CandidateProfile, "has_en_resume"> | null,
-  scopedTotal: number,
+  scopedOpportunities: number,
 ): boolean {
   if (!canFallbackToDomestic(profile, candidate)) return false;
-  return profile.jobScope === "overseas" ? scopedTotal < THIN_OVERSEAS_FEED : scopedTotal === 0;
+  return profile.jobScope === "overseas" ? scopedOpportunities < THIN_OVERSEAS_FEED : scopedOpportunities === 0;
 }
 
 export interface ScopeFallback {
