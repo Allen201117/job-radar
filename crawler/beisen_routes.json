@@ -362,5 +362,8 @@
   "sokon.zhiye.com": "https://sokon.zhiye.com/social/detail",
   "chinaamc.zhiye.com": {
     "ssr": true
+  },
+  "chinacdc.zhiye.com": {
+    "cms": true
   }
 }
