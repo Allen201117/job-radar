@@ -211,8 +211,12 @@ app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse�
 | 执行器 | `crawler/audit_runner.py` + `structural-audit.yml`（每日北京 08:50） | 逐条量，写 `audit_results`（Supabase，迁移 281/282）；`unique(check_id, run_date)` 一天一行 = 趋势表。可选 `detail_sql` 列出「具体是哪几处」进 `detail.findings`，晨报 ⑤⑦ 据此点名；它失败不改数值与判定 |
 | 覆盖率差集 | `crawler/audit_coverage.py` + `audit_exemptions.yaml` | 左边**自动枚举**（带 cron 的 workflow / 写 ops_runs 的模块 / jobs 表列 / 走查指标），减去有期望的；上线时 68 条 → 现 14 条（全是 jobs 列） |
 | 老告警桥接 | `ops_watchdog.py` 的 `publish_audit_bridge` | 16 条规则**判定与阈值一字未动**，只把每条的命中数 + 明细写进同一张表（`detail.findings[].title` 与 issue 标题逐字一致） |
-| 晨报 | `crawler/morning_digest.py` + `morning-digest.yml`（北京 09:30） | 每天必发，绿灯也发（绿灯邮件就是心跳）；报「昨天全天」 |
+| 晨报 | `crawler/morning_digest.py` + `morning-digest.yml`（UTC 22:40 定时；gate 等当天自动修复台账，北京 09:40 起不再等） | 每天必发，绿灯也发（绿灯邮件就是心跳）；报「昨天全天」 |
 | 外部心跳 | `audit_runner.ping_heartbeat`（Healthchecks.io，只挂执行器 1 个） | start / success / fail 三态；`workflow_dispatch -f force_fail=true` 做故障演练 |
+
+📌 纠错（2026-09-28 创始人授权）：晨报那行原写「北京 09:30」，09-20 写入时就不成立——当时 cron `0 2 * * *` 声明北京 10:00、
+实际被 GitHub 推迟到 14:06~15:52；09-23 改由电脑上的自动修复触发后，9/24~9/28 仍是 10:41 / 15:36 / 13:47 / 16:00 / 11:06
+（digest job 日志）。现行机制与实测延迟在 `morning-digest.yml` 文件头；实际几点到的看体检 `pipeline.morning_digest_on_time`（门槛 < 10）。
 
 **改这套东西务必保住的不变量**：
 - **查询失败 → `verdict='error'` 且 `value` 为 NULL，绝不写 0**（表约束 `(verdict='error') = (value is null)` 钉死）；
