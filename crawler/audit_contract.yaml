@@ -435,6 +435,27 @@ checks:
              / nullif(count(*), 0)
       from events
       where event = 'search_result' and created_at >= now() - interval '7 days'
+    # 只报比例说不清「慢在哪一类搜索上」（action 要的正是这个）：按 招聘类型 × 选没选城市 × 搜没搜关键词
+    # 分组，只列有慢搜索的组、慢的次数多的在前。2026-09-28 晨报 30.5% 时排查方拿不到 events 表，
+    # 只能凭猜——明细落进 detail.findings 后晨报与排查方都直接看得到。
+    # payload 键名以 lib/track.ts 的 buildSearchResultPayload 为准（test_morning_digest 逐个回溯）。
+    detail_sql: >
+      with s as (
+        select coalesce(nullif(payload->>'stage', ''), '不限招聘类型') as stage,
+               case when coalesce(payload->'cities', '[]'::jsonb) in ('[]'::jsonb, 'null'::jsonb, '""'::jsonb)
+                    then '没选城市' else '选了城市' end as city,
+               case when coalesce(payload->>'keyword', '') = '' then '没搜关键词' else '搜了关键词' end as kw,
+               payload->>'latency_bucket' in ('3000_9999ms', 'gte_10000ms') as slow
+        from events
+        where event = 'search_result' and created_at >= now() - interval '7 days'
+      )
+      select format('%s·%s·%s：%s 次里 %s 次等了超过 3 秒', stage, city, kw, count(*),
+                    count(*) filter (where slow)) as title,
+             stage || '|' || city || '|' || kw as key
+      from s
+      group by stage, city, kw
+      having count(*) filter (where slow) > 0
+      order by count(*) filter (where slow) desc, count(*) desc, 2
     normal: "<= 0.20"      # 实测 19/70 = 27.1%，当前不达标，如实报，别为了绿灯放宽
     severity: warn
     covers: []

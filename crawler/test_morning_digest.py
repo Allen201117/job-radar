@@ -1103,7 +1103,8 @@ class LiteralProvenanceTests(unittest.TestCase):
         missing = []
         found_map = {}
         for c in experience_checks:
-            for kind, value in extract_literals(c["sql"]):
+            # detail_sql 念进晨报的「具体是哪几处」，取值同样必须回溯得到源码。
+            for kind, value in extract_literals(c["sql"] + "\n" + c.get("detail_sql", "")):
                 path = literal_appears_in_source(value)
                 if path is None:
                     missing.append((c["id"], kind, value))
@@ -1122,6 +1123,25 @@ class LiteralProvenanceTests(unittest.TestCase):
             must_have_kinds.issubset(seen_kinds),
             f"提取逻辑抠出的种类不全，可能自己先坏了：抠到 {seen_kinds}，应至少含 {must_have_kinds}",
         )
+
+    def test_search_result_payload_keys_trace_to_builder(self):
+        """查 search_result 的 SQL 里用到的 payload 键，必须真是 buildSearchResultPayload 写的键
+        （猜错键名 = 恒为空的分组，比猜错取值更难发现）。"""
+        with open(os.path.join(REPO_ROOT, "lib", "track.ts"), encoding="utf-8") as fh:
+            src = fh.read()
+        body = src[src.index("export function buildSearchResultPayload"):]
+        body = body[body.index("return {"):]
+        body = body[:body.index("};")]
+        builder_keys = set(re.findall(r"^\s*(\w+):", body, re.M))
+        self.assertIn("latency_bucket", builder_keys, "解析 buildSearchResultPayload 失败，测试自己先坏了")
+        used = set()
+        for c in ar.load_contract():
+            text = c.get("sql", "") + "\n" + c.get("detail_sql", "")
+            if "'search_result'" not in text:
+                continue
+            used |= set(re.findall(r"payload\s*->>?\s*'(\w+)'", text))
+        self.assertTrue(used, "没有任何检查项在读 search_result 的 payload，提取逻辑可能坏了")
+        self.assertEqual(used - builder_keys, set())
 
     def test_extract_literals_handles_multi_value_in_clause(self):
         sql = "select 1 from events where event in ('a', 'b') and payload->>'latency_bucket' = 'x'"
