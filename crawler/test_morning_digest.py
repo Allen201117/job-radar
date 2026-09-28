@@ -759,6 +759,215 @@ class BuildDigestTests(unittest.TestCase):
             self.assertIn(f"#{i} ", digest["text"])
 
 
+class OldIssueFiringSplitTests(unittest.TestCase):
+    """⑥段把「今天仍在报警」与「已不再报警」分开（2026-09-28：21 个 open issue 里 14 个当天已不报警）。"""
+
+    def _wd_check(self, rule):
+        c = check(f"watchdog.rule_{rule.lower()}", name=f"老告警{rule}", layer="pipeline")
+        c.update(source="watchdog", rule=rule, owner="crawler/ops_watchdog.py")
+        return c
+
+    def _wd_row(self, rule, titles, value=None, verdict=None):
+        value = float(len(titles)) if value is None else value
+        row = result(f"watchdog.rule_{rule.lower()}", value, verdict or ("breach" if value else "ok"))
+        row["detail"] = {"findings": [{"title": t, "key": t} for t in titles]} if titles else None
+        return row
+
+    def _issue(self, number, title, days_old=10, last_comment_days=None):
+        now = datetime.now(timezone.utc)
+        comments = []
+        if last_comment_days is not None:
+            comments = [{"createdAt": (now - timedelta(days=last_comment_days)).isoformat(), "body": "x"}]
+        return {"number": number, "title": title, "createdAt": (now - timedelta(days=days_old)).isoformat(),
+                "comments": comments}
+
+    def test_classify_firing_quiet_unknown(self):
+        checks = [self._wd_check("F"), self._wd_check("A")]
+        results = md.index_results([
+            self._wd_row("F", ["[watchdog] 源连续失败：alibaba / 盒马"]),
+            self._wd_row("A", [], value=None, verdict="error"),
+        ])
+        results[f"watchdog.rule_a"]["value"] = None
+        issues = [
+            self._issue(23, "[watchdog] 源连续失败：alibaba / 盒马"),
+            self._issue(18, "[watchdog] 源连续失败：workday / 赛默飞 Thermo Fisher"),
+            self._issue(40, "[watchdog] 连续零产出：annual_report"),   # 规则 A 今天没评估成
+            self._issue(3, "Ops: enable and verify jobs database backups"),  # 不是看门狗开的
+        ]
+        g = md.classify_open_issues(issues, checks, results)
+        self.assertEqual([i["number"] for i in g["firing"]], [23])
+        self.assertEqual([i["number"] for i in g["quiet"]], [18])
+        self.assertEqual(sorted(i["number"] for i in g["unknown"]), [3, 40])
+
+    def test_truncated_findings_never_called_quiet(self):
+        """明细只存前 30 条：没出现在明细里、但命中数比明细多 → 判不了，不许说成不报警。"""
+        checks = [self._wd_check("F")]
+        titles = [f"[watchdog] 源连续失败：src{i}" for i in range(30)]
+        results = md.index_results([self._wd_row("F", titles, value=31.0)])
+        g = md.classify_open_issues([self._issue(99, "[watchdog] 源连续失败：src30")], checks, results)
+        self.assertEqual([i["number"] for i in g["unknown"]], [99])
+        self.assertEqual(g["quiet"], [])
+
+    def test_missing_bridge_row_is_unknown(self):
+        checks = [self._wd_check("F")]
+        g = md.classify_open_issues([self._issue(1, "[watchdog] 源连续失败：x")], checks, {})
+        self.assertEqual([i["number"] for i in g["unknown"]], [1])
+
+    def test_unregistered_rule_letter_title_recognised(self):
+        """RULE_TITLES 没登记的规则，标题退化成「[watchdog] X：…」，也要认得出来。"""
+        self.assertEqual(md._watchdog_rule_of_title("[watchdog] F：y"), "F")
+        self.assertEqual(md._watchdog_rule_of_title("[watchdog] 源抓不全：抓取覆盖"), "G")
+        self.assertIsNone(md._watchdog_rule_of_title("Security: temporary PostCSS moderate risk"))
+
+    def test_digest_splits_and_subject_counts_only_live_items(self):
+        base = BuildDigestTests()._checks()
+        checks = base + [self._wd_check("F")]
+        results_today = [result(c["id"], 1, "ok") for c in base]
+        results_today.append(self._wd_row("F", ["[watchdog] 源连续失败：alibaba / 盒马"]))
+        issues = [
+            self._issue(23, "[watchdog] 源连续失败：alibaba / 盒马", days_old=25, last_comment_days=0),
+            self._issue(18, "[watchdog] 源连续失败：workday / 赛默飞 Thermo Fisher", days_old=25,
+                        last_comment_days=9),
+        ]
+        digest = md.build_digest(checks, results_today, [], None, issues, None)
+        text = digest["text"]
+        self.assertIn("待清账1项（另1项已不报警可关）", digest["subject"])
+        self.assertIn("今天仍在报警 1 项", text)
+        self.assertIn("已不再报警 1 项", text)
+        self.assertLess(text.index("#23 "), text.index("今天已不再报警"))
+        self.assertGreater(text.index("#18 "), text.index("今天已不再报警"))
+        self.assertIn("最后一次报警在 9 天前", text)
+        self.assertIn("今天已不再报警", digest["html"])
+
+    def test_no_bridge_falls_back_to_flat_list(self):
+        """老告警整层没跑、一个都分不出来时，沿用原来的平铺清单与标题计数。"""
+        base = BuildDigestTests()._checks()
+        results_today = [result(c["id"], 1, "ok") for c in base]
+        issues = [self._issue(i, f"[watchdog] 源连续失败：s{i}") for i in range(1, 4)]
+        digest = md.build_digest(base, results_today, [], None, issues, None)
+        self.assertIn("待清账3项", digest["subject"])
+        self.assertNotIn("可关", digest["subject"])
+        self.assertNotIn("今天仍在报警", digest["text"])
+        for i in range(1, 4):
+            self.assertIn(f"#{i} ", digest["text"])
+
+
+class GateTests(unittest.TestCase):
+    """发信闸门（2026-09-28）：runner 自己等今天的自动修复台账，到截止时刻照发；已发过就在最前面退出。"""
+
+    def _at(self, hh, mm):
+        return datetime(2026, 9, 28, hh, mm, tzinfo=md.SHANGHAI).astimezone(timezone.utc)
+
+    def test_already_sent_skips_even_if_repair_present(self):
+        d, reason = md.gate_decision(self._at(15, 30), self._at(9, 5), True)
+        self.assertEqual(d, "skip")
+        self.assertIn("09:05 送达", reason)
+
+    def test_force_sends_even_if_already_sent(self):
+        self.assertEqual(md.gate_decision(self._at(15, 30), self._at(9, 5), False, force=True)[0], "send")
+
+    def test_repair_present_sends_before_deadline(self):
+        self.assertEqual(md.gate_decision(self._at(8, 30), None, True)[0], "send")
+
+    def test_no_repair_waits_until_deadline_then_sends(self):
+        self.assertEqual(md.gate_decision(self._at(9, 39), None, False)[0], "wait")
+        d, reason = md.gate_decision(self._at(9, 40), None, False)
+        self.assertEqual(d, "send")
+        self.assertIn("09:40", reason)
+
+    def test_custom_deadline_and_bad_config_falls_back(self):
+        self.assertEqual(md.gate_decision(self._at(9, 50), None, False, wait_until="10:00")[0], "wait")
+        self.assertEqual(md.parse_wait_until("9点半"), (9, 40))
+        self.assertEqual(md.parse_wait_until("08:05"), (8, 5))
+
+    def _run(self, polls, start=(8, 20), interval_s=150, sent_at=None, connect_fails=False):
+        """polls：每轮自动修复台账在不在；返回 (结果, 睡了几次)。"""
+        from unittest import mock
+        state = {"t": self._at(*start), "i": 0, "sleeps": 0}
+
+        def clock():
+            return state["t"]
+
+        def sleep(sec):
+            state["sleeps"] += 1
+            state["t"] = state["t"] + timedelta(seconds=sec)
+
+        def repair(_conn, _day):
+            present = polls[min(state["i"], len(polls) - 1)]
+            state["i"] += 1
+            return {"metrics": {}} if present else None
+
+        class Conn:
+            def close(self):
+                pass
+
+        def connect():
+            if connect_fails:
+                raise RuntimeError("down")
+            return Conn()
+
+        with mock.patch.object(md, "fetch_sent_digest_today", lambda _c, _d: sent_at), \
+                mock.patch.object(md, "fetch_auto_repair_run_today", repair):
+            out = md.run_gate(connect, interval_s=interval_s, clock=clock, sleep=sleep)
+        return out, state["sleeps"]
+
+    def test_run_gate_proceeds_as_soon_as_ledger_appears(self):
+        self.assertEqual(self._run([False, False, True]), (True, 2))
+
+    def test_run_gate_sends_at_deadline_without_ledger(self):
+        out, sleeps = self._run([False], start=(9, 30), interval_s=150)
+        self.assertTrue(out)
+        self.assertEqual(sleeps, 4)  # 09:30 → 09:40 每 2.5 分钟一轮
+
+    def test_run_gate_db_down_still_sends_at_deadline(self):
+        out, sleeps = self._run([True], start=(9, 35), connect_fails=True)
+        self.assertTrue(out)
+        self.assertEqual(sleeps, 2)
+
+    def test_run_gate_already_sent_returns_false_without_waiting(self):
+        self.assertEqual(self._run([False], start=(15, 30), sent_at=self._at(9, 5)), (False, 0))
+
+    def test_gate_dry_run_writes_output_without_db(self):
+        import tempfile
+        from unittest import mock
+        with tempfile.NamedTemporaryFile("r+", suffix=".txt") as fh, \
+                mock.patch.dict(os.environ, {"GITHUB_OUTPUT": fh.name}), \
+                mock.patch.object(md, "run_gate", side_effect=AssertionError("dry-run 不该连库")), \
+                mock.patch.object(md._audit_runner, "load_contract", side_effect=AssertionError("不该走到发信")):
+            self.assertEqual(md.main(["--gate", "--dry-run"]), 0)
+            fh.seek(0)
+            self.assertEqual(fh.read().strip(), "proceed=true")
+
+    def test_no_record_line_names_the_check_time(self):
+        out = md.build_auto_repair_summary(None, checked_at=self._at(9, 40))
+        self.assertIn("截至北京时间 09:40，今早的自动修复没有运行记录", out["lines"][0])
+
+
+class MorningDigestWorkflowContractTests(unittest.TestCase):
+    """morning-digest.yml 的两条不变量（2026-09-28）：主 cron 必须落在实测能在北京 09:30 前到达的
+    UTC 20~22 点；体检与发信都必须挂在 gate 后面——否则多余的触发又会先重跑整套体检、覆盖当天数字。"""
+
+    def _wf(self):
+        import yaml
+        with open(os.path.join(REPO_ROOT, ".github", "workflows", "morning-digest.yml"), encoding="utf-8") as fh:
+            return yaml.safe_load(fh)
+
+    def test_has_an_early_cron(self):
+        wf = self._wf()
+        on = wf.get("on", wf.get(True))  # PyYAML 把裸 on 读成 True
+        hours = [int(c["cron"].split()[1]) for c in on["schedule"]]
+        self.assertTrue(any(20 <= h <= 22 for h in hours), f"没有落在 UTC 20~22 点的 cron：{hours}")
+
+    def test_audit_and_digest_are_gated(self):
+        jobs = self._wf()["jobs"]
+        self.assertIn("--gate", jobs["gate"]["steps"][-1]["run"])
+        self.assertEqual(jobs["audit"]["needs"], "gate")
+        self.assertIn("needs.gate.outputs.proceed == 'true'", jobs["audit"]["if"])
+        self.assertIn("gate", jobs["digest"]["needs"])
+        self.assertIn("needs.gate.outputs.proceed == 'true'", jobs["digest"]["if"])
+        self.assertIn("!cancelled()", jobs["digest"]["if"])  # 体检失败也照发
+
+
 class BuildAutoRepairSummaryTests(unittest.TestCase):
     def test_fetch_failed_says_not_found_not_no_run(self):
         out = md.build_auto_repair_summary(None, fetch_failed=True)
