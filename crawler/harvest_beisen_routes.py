@@ -78,43 +78,94 @@ def main():
         raise
 
 
+# 人工定论「这行永久停用、勿再探」的漏斗行（迁移 201 写的就是这个前缀）。
+_CLOSED_NOTE_PREFIX = "gap_funnel:closed"
+
+
+def _is_harvest_candidate(row):
+    """这一行源要不要进待探队列。
+
+    enabled 一律要；disabled 只要「漏斗待验收」的（notes 前缀 gap_funnel:）——理由见 _run 开头注释。
+    但 gap_funnel:closed 是人工定论「此行永久停用，勿再探」，**不是待验收**：
+    ❌ 2026-09-23~27 建发集团（chinacdc.zhiye.com）每晚探失败：「SSR 列表页无 jobId/adId 锚点」或 goto 超时。
+    该租户两条源：enabled 的 /subzw/ 是老版 CMS、零浏览器可抓（迁移 199 live 110 岗，daily 一直在抓出岗），
+    停用的 /campus 是 gap_funnel:closed（迁移 201 实测「200 但 0 岗，站点空壳」）。CMS 分支对 /subzw/ 能出岗
+    就会登记 {"cms": true} 而不会走到那条报错，报错签名只对得上空壳 /campus——旧实现按 id 序取同 host 第一条，
+    探的是它（旧日志只打 host 不打 URL，所以此前没人看出来；现在 ✗ 行带 URL）。
+    """
+    if row.get("enabled"):
+        return True
+    notes = str(row.get("notes") or "")
+    return notes.startswith("gap_funnel:") and not notes.startswith(_CLOSED_NOTE_PREFIX)
+
+
+def _pending_hosts(rows, cached):
+    """待探队列：[(host, source_url)]，同 host 只探一条。
+
+    ⚠️ 同 host 有多条源时**优先 enabled 那条的 URL**：路由按 host 缓存，但探测是拿某一条 source_url 去 fetch 的，
+    挑中一条空板块（停用的 /campus）就等于替整个租户下了「探不出」的结论。原实现按 id 序取第一条，
+    谁先谁后全凭 uuid 的字面大小。
+    """
+    candidates = [r for r in rows if _is_harvest_candidate(r)]
+    candidates.sort(key=lambda r: not r.get("enabled"))   # 稳定排序：enabled 在前，同组内保持原顺序
+    seen, uniq = set(), []
+    for r in candidates:
+        url = r.get("source_url") or ""
+        host = urlparse(url).netloc
+        if not host or host in cached or host in seen:
+            continue
+        seen.add(host)
+        uniq.append((host, url))
+    return uniq
+
+
+def _browser_only_payload(payload):
+    """fetch() 的返回是不是「浏览器渲染列表页、jd_url 直接取自页面锚点」的产物。
+
+    这类租户（老版 SSR 门户但列表是 JS 渲染，如华安基金 huaan.zhiye.com，见 test_beisen_ssr_paged
+    的 test_non_jobstable_page_yields_nothing）fetch() 能抓出带 jd_url 的岗，却**没有任何零浏览器路由可存**：
+    httpx 的 cms / ssr / cards 三个分支都读不到列表（成功时它们会自己登记标记），只有浏览器 _fetch_ssr 读得到。
+    所以对 harvest 来说它不是「探失败」，而是「这家本来就只能走浏览器档，没东西可存」。
+    """
+    try:
+        data = json.loads(payload) if isinstance(payload, str) else None
+    except ValueError:
+        return False
+    if not isinstance(data, dict):
+        return False
+    jobs = data.get("_ssr_jobs")
+    return isinstance(jobs, list) and any(isinstance(j, dict) and j.get("jd_url") for j in jobs)
+
+
 def _run(sb, started_at):
     # 分页拉全量：本过滤当前 331 行未触顶 PostgREST 的 1000 行硬顶，但 beisen 源随每日扩源持续涨 → 走统一 helper。
     # ⚠️ 不能只取 enabled：缺口漏斗按验收门规矩「先插 disabled 源 → 真抓 → 回读健康岗才 enable」，
     # 而北森新租户不先 harvest 到详情路由就抓不出岗 → 只探 enabled 会形成死结
     # （disabled 永远拿不到路由 → 永远抓不出岗 → 永远 enable 不了 → 永远不被 harvest）。
-    # 所以把「漏斗待验收」的 disabled 源也纳进来（notes 前缀 gap_funnel:）。
+    # 所以把「漏斗待验收」的 disabled 源也纳进来（notes 前缀 gap_funnel:，closed 除外，见 _is_harvest_candidate）。
     rows = db.fetch_all_rows(
         lambda: sb.table("sources").select("source_url,enabled,notes")
         .eq("adapter_name", "beisen"))
-    rows = [r for r in rows
-            if r.get("enabled") or str(r.get("notes") or "").startswith("gap_funnel:")]
     # 现有落盘 route（china_ats 启动已载入 _BEISEN_ROUTE_CACHE）
     routes = dict(china_ats._BEISEN_ROUTE_CACHE)
-    todo = []
-    for r in rows:
-        host = urlparse(r["source_url"]).netloc
-        if host and host not in routes:
-            todo.append((host, r["source_url"]))
-    # 同 host 去重，保第一条 source_url
-    seen, uniq = set(), []
-    for host, url in todo:
-        if host not in seen:
-            seen.add(host)
-            uniq.append((host, url))
-    print(f"[harvest-beisen] enabled={len(rows)} 已缓存={len(routes)} 待探={len(uniq)} → 本次探前 {CAP} 家", flush=True)
+    uniq = _pending_hosts(rows, routes)
+    n_rows = sum(1 for r in rows if _is_harvest_candidate(r))
+    print(f"[harvest-beisen] enabled={n_rows} 已缓存={len(routes)} 待探={len(uniq)} → 本次探前 {CAP} 家", flush=True)
 
     harvested = 0
+    browser_only, failed_hosts = [], []
     for host, url in uniq[:CAP]:
+        payload, crashed = None, False
         try:
             ad = china_ats.BeisenAdapter()
-            ad.fetch(url)  # route 未缓存 → 探测并缓存到 _BEISEN_ROUTE_CACHE[host]
+            payload = ad.fetch(url)  # route 未缓存 → 探测并缓存到 _BEISEN_ROUTE_CACHE[host]
             # （多数走浏览器点击捕获；老版 CMS/卡片式/SSR 租户零浏览器可抓，登记的是
             #  {"cms"/"cards"/"ssr": true}）
             route = _usable(china_ats._BEISEN_ROUTE_CACHE.get(host))
         except Exception as e:
-            route = None
-            print(f"  ✗ {host}: {type(e).__name__}: {str(e)[:50]}", flush=True)
+            route, crashed = None, True
+            failed_hosts.append(host)
+            print(f"  ✗ {host}: {type(e).__name__}: {str(e)[:50]}  ({url})", flush=True)
         if route:
             routes[host] = route
             harvested += 1
@@ -124,14 +175,33 @@ def _run(sb, started_at):
                 _ROUTES_FILE.write_text(json.dumps(routes, ensure_ascii=False, indent=2), encoding="utf-8")
             except Exception as e:
                 print(f"    落盘失败: {e}", flush=True)
+        elif crashed:
+            pass
+        elif _browser_only_payload(payload):
+            # 2026-09-25~27 华安基金（huaan.zhiye.com，d99d391 实测「列表是 JS 渲染」）每晚都是「不抛错、
+            # 也没登记路由」：日志里一行都没有，台账却把它记成探失败——规则 A 连续零产出的另一半。
+            # 旧日志分不出它落在本分支还是下面的 else，新日志逐家打出来。
+            browser_only.append(host)
+            print(f"  · {host}: 只能浏览器抓（列表 JS 渲染，jd_url 取自页面锚点），无零浏览器路由可存", flush=True)
+        else:
+            failed_hosts.append(host)
+            print(f"  ✗ {host}: 抓到列表但没探出可用详情路由  ({url})", flush=True)
 
-    attempted = len(uniq[:CAP])
-    print(f"[harvest-beisen] 本次新探到 {harvested} 家；beisen_routes.json 现共 {len(routes)} 家。", flush=True)
+    probed = len(uniq[:CAP])
+    # attempted = 「还有零浏览器路由可探」的租户数（2026-09-28 起不含 browser_only）。
+    # 规则 A 按 attempted 判「有活干」：只剩只能走浏览器的租户时 = 0 = 空队列，不是零产出。
+    # 刻意沿用 attempted 这个键而不是新起一个：改前的台账行照旧按原值判（那几天建发是真探失败，判 zero 没错），
+    # 不会因为换了口径被倒回去改判成 idle。
+    attempted = probed - len(browser_only)
+    print(f"[harvest-beisen] 本次新探到 {harvested} 家；只能浏览器 {len(browser_only)} 家；"
+          f"探失败 {len(failed_hosts)} 家；beisen_routes.json 现共 {len(routes)} 家。", flush=True)
 
     ops_runs.record_ops_run(
         sb, "harvest_beisen_routes",
-        {"harvested": harvested, "attempted": attempted, "cached_total": len(routes), "pending": len(uniq)},
-        ops_runs.status_from_counts(attempted, attempted - harvested),
+        {"harvested": harvested, "attempted": attempted, "probed": probed,
+         "browser_only": len(browser_only), "failed": len(failed_hosts),
+         "cached_total": len(routes), "pending": len(uniq)},
+        ops_runs.status_from_counts(attempted, len(failed_hosts)),
         started_at=started_at,
     )
 

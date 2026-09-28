@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import Navbar from "@/components/Navbar";
 import { EmptyPanel, ProductHero, ProductPage } from "@/components/ProductChrome";
-import { deriveCountryCode } from "@/lib/geo";
 import { JobListSkeleton } from "@/components/Skeletons";
 import { createServerSupabase, getRequestUser } from "@/lib/auth";
 import { buildRadarProfile, profileReadiness } from "@/lib/opportunities/profile";
@@ -16,9 +15,17 @@ import { refreshRecallSnapshot, RECALL_SNAPSHOT_REFRESH_AFTER_MS, type RecallRes
 import { jobsStoreEnabled } from "@/lib/jobs-store/read";
 import { recallActionedJobIds } from "@/lib/opportunities/recall-snapshot-upkeep";
 import { getPopularFeed, type PopularFeed } from "@/lib/popular-feed";
+import {
+  canFallbackToDomestic,
+  mergeDomesticFallback,
+  opportunityCount,
+  scopeFallbackNotice,
+  shouldTryDomesticFallback,
+  type ScopeFallback,
+} from "@/lib/opportunities/scope-intent";
 import type { OpportunityFeed } from "@/lib/opportunities/types";
 import type { RadarProfile } from "@/lib/opportunities/types";
-import type { CandidateProfile, UserPreferences } from "@/lib/types";
+import type { UserPreferences } from "@/lib/types";
 import {
   planWidenings,
   widenProfile,
@@ -44,8 +51,8 @@ type TodayBundle = {
   popular: PopularFeed | null;
   /** 用户已存过的目标行业（兜底位的「设为我的行业」用它避免重复追问）。 */
   savedIndustries: string[];
-  /** 选了海外/全都要却在海外池里 0 岗（目标城市全是国内、无英文简历）→ 已按国内重算，页面要告诉他。 */
-  scopeFallback: "domestic" | null;
+  /** 选了海外/全都要、目标城市全是国内、无英文简历，原范围对口岗太少 → 已补上国内岗（原范围的排在前），页面要告诉他。 */
+  scopeFallback: ScopeFallback | null;
   /** 0 岗且不是范围错配时：放宽哪一维之后真的有机会（数字来自同一条召回链路重算，不另写 count SQL）。null = 没有可放宽的维度或放宽了也还是 0。 */
   emptyWidening: EmptyWidening | null;
   /** 用户当前叠着的筛选条件，空态照原样念回去——0 岗几乎总是「几个条件叠太窄」，而他看不见自己叠了什么。 */
@@ -146,6 +153,23 @@ async function loadTodayBundle(
     now,
   );
 
+  // 按国内重算一次（范围错配兜底用，见下）。它不走召回快照：快照一人一份，按的是用户自己的范围。
+  const buildDomesticFeed = () =>
+    buildOpportunityFeed(
+      supabase,
+      buildRadarProfile(userId, { ...(ctx.preferences as UserPreferences), job_scope: "domestic" }, ctx.candidate),
+      actions,
+      radarState,
+      { surface: "today", intensity, now },
+    ).catch((e) => {
+      console.warn("[today] domestic fallback feed failed:", (e as Error).message);
+      return null;
+    });
+  // 「海外」+ 城市全在国内 + 没英文简历：2026-09-28 线上 4 个这样的画像，原范围的展示岗全部 < 10 →
+  // 几乎每次都要补，国内那次与原范围并行起跑，不让用户在一次冷召回（2~5s）之后再等第二次；用不上就丢掉结果。
+  const eagerDomestic =
+    profile.jobScope === "overseas" && canFallbackToDomestic(profile, ctx.candidate) ? buildDomesticFeed() : null;
+
   const tFeed = performance.now();
   let recallInfo: Pick<RecallResult, "snapshot" | "snapshotWrite"> | null = null;
   let feed = await buildOpportunityFeed(supabase, profile, actions, radarState, {
@@ -161,20 +185,18 @@ async function loadTodayBundle(
   scheduleRecallSnapshotUpkeep(userId, profile, actions, recallInfo);
   // 求职范围错配兜底（2026-09-17 走查 44 个真实用户，4 个推荐页 0 岗全栽在这）：顶栏一点「海外」，
   // 画像却是「深圳 + 行政 + 没有英文简历」→ 海外池里当然一个都没有，页面就空着、不说为什么。
-  // 只在「海外池确实 0 岗 + 目标城市全是国内 + 没英文简历」三件同时成立时按国内重算一次，并把原因交给页面说清。
+  // 「目标城市全是国内 + 没英文简历」且原范围对口岗太少时按国内重算一次，把补进来的岗接在原范围的岗后面，并把原因交给页面说清。
+  // 2026-09-28 起「海外」画像的门槛从 0 放宽到 < 10（lib/opportunities/scope-intent）：只召回 1 个岗的画像连着几天不回落。
   let scopeFallback: TodayBundle["scopeFallback"] = null;
-  if (feed && feedIsEmpty(feed) && shouldFallbackToDomestic(profile, ctx.candidate)) {
+  if (feed && shouldTryDomesticFallback(profile, ctx.candidate, opportunityCount(feed))) {
+    // fallbackMs = 原范围出结果之后**额外**等了多久（并行起跑时通常接近 0）。
     const tFallback = performance.now();
-    const domesticProfile = buildRadarProfile(userId, { ...(ctx.preferences as UserPreferences), job_scope: "domestic" }, ctx.candidate);
-    const domesticFeed = await buildOpportunityFeed(supabase, domesticProfile, actions, radarState, {
-      surface: "today",
-      intensity,
-      now,
-    }).catch(() => null);
+    const domesticFeed = await (eagerDomestic ?? buildDomesticFeed());
     timing.fallbackMs = performance.now() - tFallback;
-    if (domesticFeed && !feedIsEmpty(domesticFeed)) {
-      feed = domesticFeed;
-      scopeFallback = "domestic";
+    const merged = domesticFeed ? mergeDomesticFallback(feed, domesticFeed, profile.jobScope === "all" ? "all" : "overseas") : null;
+    if (merged) {
+      feed = merged.feed;
+      scopeFallback = merged.fallback;
     }
   }
   // 仍然 0 岗（且不是范围错配那种、已经回落过的）→ 找出「松哪一个条件就有货」，把真原因交给页面说。
@@ -256,13 +278,6 @@ function scheduleRecallSnapshotUpkeep(
 
 function feedIsEmpty(feed: OpportunityFeed): boolean {
   return (feed.counts?.total ?? Object.values(feed.sections).reduce((n, arr) => n + arr.length, 0)) === 0;
-}
-
-function shouldFallbackToDomestic(profile: RadarProfile, candidate: CandidateProfile | null): boolean {
-  if (profile.jobScope === "domestic") return false;
-  if (candidate?.has_en_resume) return false;
-  const cities = profile.targetLocations;
-  return cities.length > 0 && cities.every((c: string) => deriveCountryCode(c) === "CN");
 }
 
 // 流式：先出页面骨架（导航 + 标题），用户小表查询与慢的跨区机会召回都在 Suspense 边界里流入，不阻塞整页。
@@ -443,10 +458,9 @@ async function TodayBody({
   }
   return (
     <>
-      {bundle.scopeFallback === "domestic" && (
+      {bundle.scopeFallback && (
         <p className="t-body-sm ink-2 mb-3 rounded-xl border border-black/[0.08] px-4 py-3 dark:border-white/[0.12]">
-          你把求职范围设成了海外，但目标城市都在国内、也还没有英文简历，海外岗位里没有匹配的机会。
-          下面按国内范围展示；要看海外机会，先在个人中心补一份英文简历。
+          {scopeFallbackNotice(bundle.scopeFallback)}
         </p>
       )}
       <TodayClient

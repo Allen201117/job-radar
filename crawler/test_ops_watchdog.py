@@ -490,9 +490,13 @@ class CoverageShortfallRuleTest(unittest.TestCase):
     @staticmethod
     def _row(sid, reported, found, complete=False, started="2026-08-27T00:00:00+00:00",
              stop_reason=None):
-        return {"source_id": sid, "status": "success", "started_at": started,
-                "reported_total": reported, "jobs_found": found, "coverage_complete": complete,
-                "coverage_stop_reason": stop_reason}
+        row = {"source_id": sid, "status": "success", "started_at": started,
+               "reported_total": reported, "jobs_found": found, "coverage_complete": complete,
+               "coverage_stop_reason": stop_reason}
+        # 夹具必须长得和线上取数一样：main() 只 select 了 CRAWL_RUN_COLUMNS，不在里面的列
+        # 线上根本不会出现在行里。2026-09-20~28 刹停判定一次没生效，正是因为夹具多给了一列
+        # coverage_stop_reason、而线上 select 漏了它——单测全绿，线上恒为 None。
+        return {k: v for k, v in row.items() if k in W.CRAWL_RUN_COLUMNS}
 
     def test_reports_aggregate_with_biggest_gap_first(self):
         rows = [self._row("s1", 5643, 600), self._row("s4", 2055, 600)]
@@ -561,6 +565,80 @@ class CoverageShortfallRuleTest(unittest.TestCase):
         rows = [self._row("s1", 5643, 600, stop_reason="repetition_brake"),
                 self._row("s4", 2055, 600, stop_reason="repetition_brake")]
         self.assertEqual(W.evaluate_coverage_shortfall(rows, self.SOURCES), [])
+
+    def test_other_stop_reasons_still_count_but_are_labelled(self):
+        """撞上限 / 翻页坏了照样算缺口（处置相反，但都不是「按设计」），只在正文里写明停因。"""
+        rows = [self._row("s1", 28855, 8000, stop_reason="list_cap"),
+                self._row("s4", 510, 30, stop_reason="page_click_failed")]
+        [finding] = W.evaluate_coverage_shortfall(rows, self.SOURCES)
+        self.assertIn("2 个源", finding["summary"])
+        self.assertIn("少 20855（停因：撞单源条数上限）", finding["evidence"][0])
+        self.assertIn("少 480（停因：点「下一页」失败）", finding["evidence"][1])
+        self.assertNotIn("按设计刹停", " ".join(finding["evidence"]))
+
+    WOAIWOJIA = {"id": "s5", "adapter_name": "beisen", "company": "我爱我家", "enabled": True,
+                 "source_url": "https://5i5j.zhiye.com/campus"}
+
+    def test_accepted_list_cap_source_is_not_a_shortfall(self):
+        """2026-09-28 创始人拍板：我爱我家撞 8000 上限是接受的取舍，单列、不计入缺口。"""
+        sources = {**self.SOURCES, "s5": self.WOAIWOJIA}
+        rows = [self._row("s5", 28855, 8000, stop_reason="list_cap")]
+        self.assertEqual(W.evaluate_coverage_shortfall(rows, sources), [])
+
+        rows.append(self._row("s1", 5643, 600))
+        [finding] = W.evaluate_coverage_shortfall(rows, sources)
+        self.assertIn("1 个源", finding["summary"])
+        self.assertIn("5043", finding["summary"])      # 只有奇瑞的缺口
+        joined = " ".join(finding["evidence"])
+        self.assertNotIn("我爱我家（beisen）：官网自报", joined)
+        self.assertIn("另有 1 个源撞单源条数上限、已接受这个取舍（少 20855 个岗）", joined)
+        self.assertIn("我爱我家", joined)
+
+    def test_accepted_host_with_other_stop_reason_still_counts(self):
+        """豁免只认「停因 = 撞上限」：同一个源翻页坏了 / 没写停因，照样报。"""
+        sources = {**self.SOURCES, "s5": {**self.WOAIWOJIA, "source_url": "https://5I5J.zhiye.com/campus"}}
+        for reason in ("page_click_failed", None):
+            [finding] = W.evaluate_coverage_shortfall(
+                [self._row("s5", 28855, 8000, stop_reason=reason)], sources)
+            self.assertIn("我爱我家（beisen）：官网自报 28855", finding["evidence"][0])
+
+    def test_accepted_hosts_registry_is_explicit(self):
+        """加豁免 = 放弃对这个源的缺口告警，必须是有意为之的一行登记，不许悄悄变多。"""
+        self.assertEqual(W.COVERAGE_CAP_ACCEPTED_HOSTS, {"5i5j.zhiye.com"})
+
+    def test_unknown_stop_reason_is_not_rendered(self):
+        rows = [self._row("s1", 5643, 600, stop_reason="something_new")]
+        [finding] = W.evaluate_coverage_shortfall(rows, self.SOURCES)
+        self.assertNotIn("停因", finding["evidence"][0])
+
+    def test_next_step_does_not_point_at_a_knob_that_does_not_exist(self):
+        """CRAWL_MAX_JOBS_MUST_APPLY 在仓库里从来不存在，告警却天天叫人去调它。"""
+        [finding] = W.evaluate_coverage_shortfall([self._row("s1", 5643, 600)], self.SOURCES)
+        self.assertNotIn("CRAWL_MAX_JOBS_MUST_APPLY", finding["next"])
+
+
+class CrawlRunSelectContractTest(unittest.TestCase):
+    """规则 F/G/I/K/L 读 crawl_runs 的每个字段都必须在 main() 的 select 里。"""
+
+    RULE_FUNCS = ("evaluate_dead_sources", "evaluate_unfinished_crawls", "evaluate_adapter_collapse",
+                  "evaluate_silent_sources", "evaluate_coverage_shortfall", "rows_started_since")
+
+    def test_every_crawl_row_field_read_by_rules_is_selected(self):
+        import inspect
+        import re
+        used = set()
+        for name in self.RULE_FUNCS:
+            src = inspect.getsource(getattr(W, name))
+            used |= set(re.findall(r'\b(?:row|r)\)?\.get\("(\w+)"', src))
+            used |= set(re.findall(r'\(r or \{\}\)\.get\("(\w+)"', src))
+        self.assertIn("coverage_stop_reason", used)   # 自检：正则确实扫到了规则 G 读的那一列
+        missing = used - set(W.CRAWL_RUN_COLUMNS)
+        self.assertEqual(missing, set(), f"规则读了但 select 没取的列：{sorted(missing)}")
+
+    def test_main_selects_from_the_shared_column_list(self):
+        import inspect
+        src = inspect.getsource(W.main)
+        self.assertIn('.select(",".join(CRAWL_RUN_COLUMNS))', src)
 
 
 class DeadSourceRuleTest(unittest.TestCase):

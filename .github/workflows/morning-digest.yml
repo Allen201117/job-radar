@@ -9,13 +9,26 @@ name: morning-digest
 #   ✅ 根因：不是 Actions 机器排队（这几次「创建 → 开跑」都是 0 秒），是 GitHub 的定时器
 #      **创建这次运行**就晚了 5 个半小时——本仓 UTC 00~04 时段的 schedule 事件中位延迟 267~324 分钟
 #      （见 structural-audit.yml 的实测表）。workflow_dispatch 点了当场创建，不走这条队列。
-#   ✅ 防：主路 = 创始人电脑上的「每日自动修复」写完修复台账后 `gh workflow run morning-digest.yml`；
-#      下面的 cron 只是兜底（电脑没开 / 修复没跑完），它到的时候今天已送达就跳过
-#      （morning_digest.py 的一天一封守卫），不会一天两封。
-#   ✅ 发信前先把体检重新量一遍（audit 这个 job），所以不管哪条路触发，邮件里都是「修完之后」的数字。
-#      以前靠 structural-audit 的第二条 cron（UTC 01:45）做这件事，它同样要到下午才到，已删。
+#   ✅ 发信前先把体检重新量一遍（audit 这个 job），所以不管哪条路触发，邮件里都是最新的数字。
+#
+# 🚫 也别只靠创始人电脑触发（2026-09-28 立，实测）：
+#   ❌ 现象：9/24~9/28 五天送达 10:41 / 15:36 / 13:47 / 16:00 / 11:06，10:00 前一次都没有。
+#   ✅ 根因：09-23 把主路改成「电脑上的自动修复写完台账后 `gh workflow run`」，但电脑这几天常不在线——
+#      9/25、9/27 上午没有触发（下午 cron 兜底才发），9/26 到 13:43 才触发；自动修复那边每天都记了账，
+#      是「修完 → 触发」这一步晚了或丢了，仓库里看不到原因。兜底 `0 2 * * *` 实测到达北京 15:26~15:57。
+#   ✅ 防：runner 自己等，不依赖电脑——
+#      · 主 cron 放 UTC 22:40（前一天）：9/19~9/28 同时段 14 个样本实测延迟 100~148 分钟 → 北京 08:19~09:08。
+#      · gate job 每 2.5 分钟看一次：今天已送达 → 整轮退出（不再重跑体检、不覆盖当天数字）；
+#        今天的自动修复台账写好了 → 马上发；到 DIGEST_WAIT_UNTIL（仓库变量，默认北京 09:40）还没有 → 照发，
+#        ⓪段写明「截至几点没有记录」。逻辑与单测在 morning_digest.py 的 gate_decision / run_gate。
+#      · 电脑上的 `gh workflow run` 仍然有用（修得早就发得早）；它若在 gate 等待时到达，被下面的并发组
+#        排在后面，轮到时 gate 看到已送达就退出——不会一天两封。
+#      · `0 2 * * *` 留作第二道兜底：只在前面都没发成时才真发。
+#   ⚠️ 改 cron 前先重新量延迟（方法见 structural-audit.yml 注释），别信这里的数字，它会过期。
+#   ⚠️ 公开仓库 runner 分钟不计费，gate 最多等约 80 分钟；私有化了要重新权衡。
 on:
   schedule:
+    - cron: "40 22 * * *"
     - cron: "0 2 * * *"
   workflow_dispatch:
     inputs:
@@ -33,8 +46,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 发信闸门：决定这一轮要不要发、什么时候发（见文件头）。只读库，不写任何东西。
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      proceed: ${{ steps.gate.outputs.proceed }}
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      DIGEST_WAIT_UNTIL: ${{ vars.DIGEST_WAIT_UNTIL || '09:40' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crawler/requirements.txt
+      - name: Install deps
+        run: pip install -r crawler/requirements.txt
+      - name: Wait for this morning's auto-repair (or the deadline)
+        id: gate
+        working-directory: crawler
+        run: python3 morning_digest.py --gate ${{ inputs.dry_run && '--dry-run' || '' }} ${{ inputs.force && '--force' || '' }}
+
   # 复用 structural-audit.yml（同一份步骤、同一套静音变量，不复制一份会漂的配置）。
   audit:
+    needs: gate
+    if: ${{ needs.gate.outputs.proceed == 'true' }}
     uses: ./.github/workflows/structural-audit.yml
     secrets: inherit
     permissions:
@@ -42,9 +80,10 @@ jobs:
       actions: read
 
   digest:
-    needs: audit
+    needs: [gate, audit]
     # 体检这一轮失败也照发：晨报会把「今天没查到」逐条点名，不发才是真的瞎。
-    if: ${{ !cancelled() }}
+    # gate 说今天已发过（proceed=false）→ 体检与发信都跳过。
+    if: ${{ !cancelled() && needs.gate.outputs.proceed == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

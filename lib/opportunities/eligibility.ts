@@ -26,6 +26,7 @@ import { excludeJobs } from "../live-search";
 import { normalizeCompany } from "../company-normalize";
 import { jobMatchesRegion } from "../job-scope";
 import { matchLocationTargets } from "./location-targets";
+import { overseasLocationUnstated } from "./scope-intent";
 
 export interface ActionState {
   primary: "saved" | "ignored" | "applied" | null;
@@ -114,7 +115,10 @@ function locationState(job: Job, profile: RadarProfile): { state: TriState; name
     const regions = profile.targetRegions || [];
     if (regions.length === 0) return { state: "na", name: null };
     for (const region of regions) {
-      if (jobMatchesRegion(job, region)) return { state: "match", name: region };
+      if (!jobMatchesRegion(job, region)) continue;
+      // 「全都要」+ 目标城市全在国内：默认地区是系统补的、不是用户说过的地点 → 放行但不加地点分（见 ./scope-intent）。
+      // 地区外的海外岗仍按下面 mismatch 拒掉 —— 只改「算不算命中」，不改「要不要这个范围」。
+      return overseasLocationUnstated(profile) ? { state: "unknown", name: null } : { state: "match", name: region };
     }
     return { state: "mismatch", name: null };
   }
