@@ -19,6 +19,7 @@ host 从 source_url 动态解析，一个 adapter 全家通用；company 由 sou
  （回落到「更多招聘」导航页），不能当 source 入库——只用 BU 自有域。）
 """
 import json
+import re
 import time
 from typing import Optional
 from urllib.parse import urlparse
@@ -45,6 +46,72 @@ def _int_or_none(value) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+# 「请求都答了、就是没种 XSRF-TOKEN」时，应答长什么样。hire.freshippo.com（盒马）建源以来在 CI 上
+# 从没成功过：09-23 起报错带出了异常原文，结果是「没有异常，请求均已应答但未种下该 cookie」——
+# 可答的是什么（200 正常页？403？跳去了哪？被阿里系反爬换成了验证页？）仍然一个字都没留下，
+# 停不停用（「403/反爬 → 停用（不绕）」）就判不了。这里只记录、不绕：命中反爬标记也照样报错。
+# 标记取阿里系常见拦截页的公开特征：淘系 punish 页路径、x5sec / baxia 滑块、阿里云 WAF 的 acw_sc__v2 挑战。
+_ANTI_BOT_MARKERS = (
+    ("_____tmd_____", "淘系 punish 拦截页"),
+    ("/punish", "淘系 punish 拦截页"),
+    ("x5sec", "x5sec 滑块验证"),
+    ("baxia", "baxia 人机验证"),
+    ("nocaptcha", "滑块验证"),
+    ("acw_sc__v2", "阿里云 WAF JS 挑战"),
+    ("aliyun_waf", "阿里云 WAF"),
+    ("aliyunwaf", "阿里云 WAF"),
+    ("滑动验证", "滑块验证"),
+    ("访问被拒绝", "访问被拒绝页"),
+    ("access denied", "访问被拒绝页"),
+)
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+
+
+def _describe_answer(resp) -> dict:
+    """把一次 GET 的应答压成可比对的摘要。只取确定性的字段（不含 cookie 值、时间戳），
+    好让规则 F「最常见错误」按原文归并时同一种失败仍归成一类。"""
+    chain = [getattr(r, "status_code", "?") for r in (getattr(resp, "history", None) or [])]
+    chain.append(getattr(resp, "status_code", "?"))
+    url = getattr(resp, "url", None)
+    final = f"{getattr(url, 'host', '') or ''}{getattr(url, 'path', '') or ''}"
+    cookie_names = []
+    for r in list(getattr(resp, "history", None) or []) + [resp]:
+        headers = getattr(r, "headers", None)
+        values = headers.get_list("set-cookie") if hasattr(headers, "get_list") else []
+        for v in values:
+            name = str(v).split("=", 1)[0].strip()
+            if name and name not in cookie_names:
+                cookie_names.append(name)
+    try:
+        text = resp.text or ""
+    except Exception:  # noqa: BLE001 —— 解码失败不影响出报错
+        text = ""
+    m = _TITLE_RE.search(text[:20000])
+    title = " ".join(m.group(1).split())[:40] if m else ""
+    haystack = f"{final} {' '.join(cookie_names)} {text[:20000]}".lower()
+    marker = next((label for needle, label in _ANTI_BOT_MARKERS if needle.lower() in haystack), "")
+    return {"chain": chain, "final": final, "cookies": sorted(cookie_names), "title": title,
+            "marker": marker}
+
+
+def _cookie_miss_message(host: str, last_exc: Optional[str], answered) -> str:
+    head = f"alibaba: 拿不到 XSRF-TOKEN ({host})"
+    if last_exc:
+        return f"{head}，最后一次异常 {last_exc}"
+    if not answered:
+        return f"{head}（请求均已应答但未种下该 cookie）"
+    parts = []
+    for a in answered:
+        seg = f"{'→'.join(str(c) for c in a['chain'])} {a['final']}"
+        seg += f" 种了[{','.join(a['cookies'])}]" if a["cookies"] else " 没种任何 cookie"
+        if a["title"]:
+            seg += f" 标题「{a['title']}」"
+        parts.append(seg)
+    markers = sorted({a["marker"] for a in answered if a["marker"]})
+    verdict = f"；疑似反爬：{'、'.join(markers)}" if markers else ""
+    return f"{head}（请求均已应答但未种下该 cookie：{'；'.join(parts)}{verdict}）"
 
 
 class AlibabaAdapter(PlaywrightAdapter):
@@ -100,14 +167,17 @@ class AlibabaAdapter(PlaywrightAdapter):
             # 保留重试不再是「猜偶发」，而是「万一其它 BU 域真撞上瞬时丢包」的通用兜底。
             csrf = None
             last_exc: Optional[str] = None
+            answered = []   # 最后一轮两次 GET 的应答摘要（状态码 / 跳转 / 种了哪些 cookie / 标题 / 反爬标记）
             for attempt in range(3):
                 if attempt:
                     time.sleep(0.8 * attempt)
+                answered = []
                 try:
-                    client.get(f"{base}/?lang=zh")
+                    answered.append(_describe_answer(client.get(f"{base}/?lang=zh")))
                     csrf = client.cookies.get("XSRF-TOKEN")
                     if not csrf:
-                        client.get(f"{base}/{self._PORTAL}/position-list?lang=zh")
+                        answered.append(_describe_answer(
+                            client.get(f"{base}/{self._PORTAL}/position-list?lang=zh")))
                         csrf = client.cookies.get("XSRF-TOKEN")
                 except httpx.HTTPError as e:
                     # 不吞错：把真实异常类型/信息带进最终报错，否则 crawl_runs.error_message
@@ -118,8 +188,7 @@ class AlibabaAdapter(PlaywrightAdapter):
                 if csrf:
                     break
             if not csrf:
-                suffix = f"，最后一次异常 {last_exc}" if last_exc else "（请求均已应答但未种下该 cookie）"
-                raise RuntimeError(f"alibaba: 拿不到 XSRF-TOKEN ({host}){suffix}")
+                raise RuntimeError(_cookie_miss_message(host, last_exc, answered))
 
             seen_ids = set()
             # 接口是否至少成功应答过一次。用来区分两种「一条都没有」：

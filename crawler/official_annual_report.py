@@ -11,7 +11,8 @@ import random
 import re
 import time
 import uuid
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -32,6 +33,15 @@ ORIGIN = "official_filing"
 ASSERTION = "fact"
 SOURCE_KIND = "official_filing"
 DEFAULT_LIMIT = 40
+# 得出定论后多少天内不再查同一家。与 insight_backlog.TTL_DAYS（T2 官方事实「变动罕见，90 天复核一次」）同口径，
+# 不另起一个数；两处一漂 test_official_annual_report 就红。代价：Jan–Apr 年报季里，一家公司新年报发布后
+# 最多晚 90 天才被写进来（盖戳时它还没发）。
+RECHECK_DAYS = 90
+# 这几种结论不会因为「明天再问一次巨潮」而改变（除非出了新年报，那由 RECHECK_DAYS 兜）→ 退避。
+# failed（接口 / 下载报错）与 no_reports（巨潮按简称查不到年报）**不在此列**：前者是瞬时故障，后者是
+# 「接口返 0」——不能当成「这家没年报」的结论（CLAUDE.md「接口返 0 / 403 不能证明对方没开」）→ 不退避，
+# 但同样记下这次尝试的时间，排到队尾：没查成的只重试、不插队，永远挤不掉从没查过的公司。
+CONCLUSIVE_RESULTS = frozenset({"parsed", "already_latest", "section_not_found", "scanned_pdf"})
 
 _NUMBER = r"([\d,，]+(?:\.\d+)?)"
 
@@ -382,9 +392,93 @@ def write_fact_items(sb, company_profile, items):
     return written
 
 
+def latest_possible_report_year(now):
+    """此刻可能存在的最新年报年度：FY Y 的年报只能在 Y 年结束后才发布 → 北京时间今年 - 1。
+
+    结构性事实、不是阈值：已写过这个年度的公司，巨潮上不可能有更新的年报，查了也白查。
+    """
+    return now.astimezone(ops_runs.SHANGHAI).year - 1
+
+
+def fetch_written_years(sb):
+    """一次分页读出所有已写年报条目 → {company_id: {report_year, …}}（队列预筛用，免得逐家查库）。"""
+    rows = db.fetch_all_rows(
+        lambda: (sb.table("insight_items").select("id,company_id,payload").eq("origin", ORIGIN)))
+    years = defaultdict(set)
+    for row in rows:
+        try:
+            years[row.get("company_id")].add(int((row.get("payload") or {}).get("report_year")))
+        except (TypeError, ValueError):
+            pass
+    return years
+
+
+def _parse_ts(value):
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def select_queue(candidates, written_years, now, limit):
+    """从全部 A 股候选里挑本轮要查的 ≤limit 家，返回 (picked, stats)。
+
+    ❌ 2026-09-22 起天天 checked=40 / written=0（issue #40）：旧实现是 ``candidates[:limit]``，候选按
+    company_profiles.id 排序 → 每天都是同一批 40 家。它们 09-03 那轮就写完了（CI 日志 already_latest
+    3 → 32 → 36 → 37），第 41 家往后一次都轮不到；解析不出员工章节的 3 家天天重下同一份 PDF。
+    现行三步，前两步都不占名额、不发请求：
+      ① 已写过 latest_possible_report_year 的 → up_to_date，跳过（巨潮上不可能有更新的）；
+      ② RECHECK_DAYS 内得出过定论（CONCLUSIVE_RESULTS）的 → backoff，跳过；
+      ③ 其余 = due，按上次尝试时间 LRU：从没查过的（空戳）最先，再最久没查的；同档保持输入顺序。
+         上次没查成的（failed / no_reports）也在 due 里，但它的戳是最近的 → 自然排在队尾。
+    candidates 是 [(profile, stock)]；profile 需带 annual_report_checked_at / annual_report_result（迁移 306）。
+    """
+    latest = latest_possible_report_year(now)
+    cutoff = now - timedelta(days=RECHECK_DAYS)
+    due, up_to_date, backoff = [], 0, 0
+    for profile, stock in candidates:
+        years = written_years.get(profile.get("id")) or ()
+        if years and max(years) >= latest:
+            up_to_date += 1
+            continue
+        checked_at = _parse_ts(profile.get("annual_report_checked_at"))
+        if (checked_at is not None and checked_at > cutoff
+                and profile.get("annual_report_result") in CONCLUSIVE_RESULTS):
+            backoff += 1
+            continue
+        due.append((profile, stock, checked_at))
+    oldest = datetime.min.replace(tzinfo=timezone.utc)
+    due.sort(key=lambda item: (item[2] is not None, item[2] or oldest))   # 稳定排序
+    picked = [(profile, stock) for profile, stock, _ in due[:max(0, limit)]]
+    return picked, {"candidates": len(candidates), "up_to_date": up_to_date,
+                    "backoff": backoff, "due": len(due)}
+
+
+def stamp_checked(sb, profile_id, result, now):
+    """记下这次尝试的时间与结果（每家、每种结果都记）。退避与否由 select_queue 按结果判。
+
+    盖戳失败只记一行、不抛：最坏是这家明天再被查一次（往安全方向错），不值得拖垮整轮。
+    """
+    try:
+        (sb.table("company_profiles")
+         .update({"annual_report_checked_at": now.isoformat(), "annual_report_result": result})
+         .eq("id", profile_id).execute())
+        return True
+    except Exception as exc:  # noqa: BLE001 - 队列簿记失败不能打断主流程
+        print(f"  [annual-report-stamp] {profile_id}: {type(exc).__name__}: {str(exc)[:140]}")
+        return False
+
+
 def fetch_profiles(sb, company=""):
     rows = db.fetch_all_rows(
-        lambda: sb.table("company_profiles").select("id,company,aliases,headcount_band"))
+        lambda: sb.table("company_profiles").select(
+            "id,company,aliases,headcount_band,annual_report_checked_at,annual_report_result"))
     if company:
         wanted = company.strip()
         rows = [row for row in rows if row.get("company") == wanted or wanted in (row.get("aliases") or [])]
@@ -432,6 +526,7 @@ def main():
         return
 
     started_at = _now()
+    now = datetime.now(timezone.utc)
     stat = {"checked": 0, "parsed": 0, "written": 0, "section_not_found": 0, "scanned_pdf": 0, "failed": 0, "no_reports": 0, "already_latest": 0}
     sb = db.get_supabase()
     with httpx.Client(headers=UA, follow_redirects=True, timeout=30) as client:
@@ -446,8 +541,16 @@ def main():
             stock = CN.find_stock(stocks, profile.get("company"), profile.get("aliases"))
             if stock:
                 candidates.append((profile, stock))
-        candidates = candidates[:max(0, args.limit)]
-        print(f"[annual-report] A 股候选 {len(candidates)} 家，dry_run={args.dry_run}")
+        if args.company:
+            # 点名单家 = 人工要求重查：不走预筛 / 退避（比如改了解析器想重跑某家 section_not_found）。
+            queue = {"candidates": len(candidates), "up_to_date": 0, "backoff": 0, "due": len(candidates)}
+            candidates = candidates[:max(0, args.limit)]
+        else:
+            candidates, queue = select_queue(candidates, fetch_written_years(sb), now, args.limit)
+        stat.update(queue)
+        print(f"[annual-report] A 股候选 {queue['candidates']} 家：已是最新年度 {queue['up_to_date']}、"
+              f"{RECHECK_DAYS} 天内查过 {queue['backoff']}、待查 {queue['due']} → 本轮查 {len(candidates)} 家，"
+              f"dry_run={args.dry_run}")
         for index, (profile, stock) in enumerate(candidates):
             stat["checked"] += 1
             try:
@@ -457,9 +560,14 @@ def main():
                     stat["written"] += written
                 elif result in stat:
                     stat[result] += 1
+                if result not in ("parsed", "already_latest"):
+                    print(f"  [annual-report] {profile.get('company')}（{stock.get('code')}）: {result}")
             except Exception as exc:  # 单家公司失败不拖垮整轮
                 stat["failed"] += 1
+                result = "failed"
                 print(f"  [annual-report-err] {profile.get('company')}: {type(exc).__name__}: {str(exc)[:140]}")
+            if not args.dry_run:
+                stamp_checked(sb, profile["id"], result, datetime.now(timezone.utc))
             if index < len(candidates) - 1:
                 time.sleep(random.uniform(1, 2))
     ops_runs.record_ops_run(
