@@ -576,6 +576,36 @@ class CoverageShortfallRuleTest(unittest.TestCase):
         self.assertIn("少 480（停因：点「下一页」失败）", finding["evidence"][1])
         self.assertNotIn("按设计刹停", " ".join(finding["evidence"]))
 
+    WOAIWOJIA = {"id": "s5", "adapter_name": "beisen", "company": "我爱我家", "enabled": True,
+                 "source_url": "https://5i5j.zhiye.com/campus"}
+
+    def test_accepted_list_cap_source_is_not_a_shortfall(self):
+        """2026-09-28 创始人拍板：我爱我家撞 8000 上限是接受的取舍，单列、不计入缺口。"""
+        sources = {**self.SOURCES, "s5": self.WOAIWOJIA}
+        rows = [self._row("s5", 28855, 8000, stop_reason="list_cap")]
+        self.assertEqual(W.evaluate_coverage_shortfall(rows, sources), [])
+
+        rows.append(self._row("s1", 5643, 600))
+        [finding] = W.evaluate_coverage_shortfall(rows, sources)
+        self.assertIn("1 个源", finding["summary"])
+        self.assertIn("5043", finding["summary"])      # 只有奇瑞的缺口
+        joined = " ".join(finding["evidence"])
+        self.assertNotIn("我爱我家（beisen）：官网自报", joined)
+        self.assertIn("另有 1 个源撞单源条数上限、已接受这个取舍（少 20855 个岗）", joined)
+        self.assertIn("我爱我家", joined)
+
+    def test_accepted_host_with_other_stop_reason_still_counts(self):
+        """豁免只认「停因 = 撞上限」：同一个源翻页坏了 / 没写停因，照样报。"""
+        sources = {**self.SOURCES, "s5": {**self.WOAIWOJIA, "source_url": "https://5I5J.zhiye.com/campus"}}
+        for reason in ("page_click_failed", None):
+            [finding] = W.evaluate_coverage_shortfall(
+                [self._row("s5", 28855, 8000, stop_reason=reason)], sources)
+            self.assertIn("我爱我家（beisen）：官网自报 28855", finding["evidence"][0])
+
+    def test_accepted_hosts_registry_is_explicit(self):
+        """加豁免 = 放弃对这个源的缺口告警，必须是有意为之的一行登记，不许悄悄变多。"""
+        self.assertEqual(W.COVERAGE_CAP_ACCEPTED_HOSTS, {"5i5j.zhiye.com"})
+
     def test_unknown_stop_reason_is_not_rendered(self):
         rows = [self._row("s1", 5643, 600, stop_reason="something_new")]
         [finding] = W.evaluate_coverage_shortfall(rows, self.SOURCES)

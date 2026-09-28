@@ -213,6 +213,15 @@ COVERAGE_STOP_LABELS = {
     "page_no_new_rows": "翻页不生效，下一页全是已见过的岗",
 }
 
+# 规则 G：创始人已接受「撞单源条数上限」这个取舍的源（2026-09-28 拍板），按 source_url 的 host 认——
+# 不认公司名（改名 / 同名公司不会让豁免漂走）。只在该轮停因**确为 list_cap** 时单列、不计入缺口；
+# 同一个源哪天换了停因（翻页坏了、没写停因），照样算缺口、照样报。
+COVERAGE_CAP_ACCEPTED_HOSTS = {
+    # 我爱我家：官网自报约 2.9 万，其中 2.8 万是 1.16 万个门店经纪人岗（base.DEFAULT_LIST_CAP 注释），
+    # 8000 上限是「精准 > 规模」的取舍；抬上限要多翻约 578 页，北森按 IP 限流会连累同批租户。
+    "5i5j.zhiye.com",
+}
+
 # 规则 F/G/I/K/L 共用的一次 crawl_runs 取数只取这几列。⚠️ 规则里读到的每个字段都必须在这里：
 # PostgREST 只返回 select 点名的列，漏一列 `row.get()` 就恒为 None、不报错。
 # 2026-09-20 加 coverage_stop_reason（迁移 284，commit cfd438b）时只改了规则 G 与单测夹具、没改这里的
@@ -849,6 +858,7 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
 
     shortfalls = []
     braked = []   # 任务B：RepetitionBrake 按设计刹停（同岗×N门店），不是「我们自己停在半路」
+    capped = []   # 撞单源条数上限、且创始人已接受这个取舍的源（COVERAGE_CAP_ACCEPTED_HOSTS）
     for sid, (_started, row) in latest.items():
         source = sources_by_id.get(sid)
         if not source or not source.get("enabled", True):
@@ -872,6 +882,9 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
         # CRAWL_MAX_JOBS（抬了也没用，刹车会再次刹停，还违反「精准 > 规模」）。
         if row.get("coverage_stop_reason") == "repetition_brake":
             braked.append(item)
+        elif (row.get("coverage_stop_reason") == "list_cap"
+              and _host_of(source.get("source_url")).lower() in COVERAGE_CAP_ACCEPTED_HOSTS):
+            capped.append(item)
         else:
             shortfalls.append(item)
 
@@ -879,6 +892,9 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
         if braked:
             print(f"  [watchdog] 规则 G：本轮 {len(braked)} 个源按设计刹停（RepetitionBrake），"
                   f"不计入缺口：{'、'.join(x['company'] for x in braked[:10])}")
+        if capped:
+            print(f"  [watchdog] 规则 G：本轮 {len(capped)} 个源撞单源条数上限（已接受），"
+                  f"不计入缺口：{'、'.join(x['company'] for x in capped[:10])}")
         return []
     shortfalls.sort(key=lambda x: -x["gap"])
     grand = sum(x["gap"] for x in shortfalls)
@@ -906,6 +922,11 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
         evidence.append(
             f"另有 {len(braked)} 个源按设计刹停（RepetitionBrake 判定同一岗位×N家门店批量发布，"
             f"少 {braked_gap} 个岗），不计入上面的缺口：" + "、".join(x["company"] for x in braked[:5])
+        )
+    if capped:
+        evidence.append(
+            f"另有 {len(capped)} 个源撞单源条数上限、已接受这个取舍（少 {sum(x['gap'] for x in capped)} 个岗），"
+            "不计入上面的缺口：" + "、".join(x["company"] for x in capped[:5])
         )
     return [{
         "rule": "G",
