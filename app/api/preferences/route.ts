@@ -11,6 +11,8 @@ import { fetchAllSources } from "@/lib/supabase-paginate";
 import { buildCoverageRows } from "@/lib/sync-coverage";
 import type { CandidateProfile, UserPreferences } from "@/lib/types";
 import { scheduleRecallSnapshotRefresh } from "@/lib/opportunities/recall-snapshot-upkeep";
+import { activeTitleTermsPresent, jobsStoreEnabled } from "@/lib/jobs-store/read";
+import { pickRoleSpellingHints, roleSpellingCandidates } from "@/lib/profile-hygiene";
 
 export const runtime = "nodejs";
 
@@ -21,6 +23,23 @@ class CoverageError extends Error {
   constructor(code: string) {
     super(code);
     this.code = code;
+  }
+}
+
+type RoleSpellingHint = { input: string; suggestions: string[] };
+
+// 方向词错别字提示（2026-09-28）：词表预筛出「系统完全不认识、且与某个岗位词只差一个字」的方向词，
+// 再问库——原词一个在招标题都没有、建议写法有，才提示（判据与取舍见 lib/profile-hygiene.pickRoleSpellingHints）。
+// 只是提示：失败只记日志、返回空，绝不影响保存本身。
+async function roleSpellingHints(roles: string[]): Promise<RoleSpellingHint[]> {
+  const candidates = roleSpellingCandidates(roles);
+  if (!candidates.length || !jobsStoreEnabled()) return [];
+  try {
+    const present = await activeTitleTermsPresent(candidates.flatMap((c) => [c.input, ...c.suggestions]));
+    return pickRoleSpellingHints(candidates, (t: string) => present.has(t));
+  } catch (e) {
+    console.error("[preferences] role spelling check failed:", (e as Error).message);
+    return [];
   }
 }
 
@@ -179,11 +198,10 @@ export async function PUT(request: NextRequest) {
   // 响应之后按新偏好预算一份，/today 下次打开不必退回现跑（冷态 2~6s）。
   scheduleRecallSnapshotRefresh(user.id, "保存偏好");
 
-  const { data: cand } = await supabase
-    .from("candidate_profiles")
-    .select("*")
-    .eq("user_id", user.id)
-    .maybeSingle();
+  const [{ data: cand }, role_hints] = await Promise.all([
+    supabase.from("candidate_profiles").select("*").eq("user_id", user.id).maybeSingle(),
+    roleSpellingHints(prefs.target_roles),
+  ]);
   const profile_ready = profileReadiness(
     buildRadarProfile(user.id, { user_id: user.id, ...prefs } as UserPreferences, cand as CandidateProfile | null),
   ).ready;
@@ -201,6 +219,7 @@ export async function PUT(request: NextRequest) {
       coverage_synced: false,
       error: code,
       profile_ready,
+      role_hints,
     });
   }
 
@@ -210,6 +229,7 @@ export async function PUT(request: NextRequest) {
     profile_ready,
     coverage,
     coverage_synced: true,
+    role_hints,
   });
 }
 

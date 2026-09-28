@@ -172,3 +172,30 @@ test("buildResumeMessages：prompt 明说 target_roles 要干净岗位名、一�
   assert.match(user.content, /不要把求职阶段写进岗位名/);
   assert.match(user.content, /标准城市名/);
 });
+
+// ---- 方向词错别字提示（2026-09-28）：词表预筛 → 服务端问库 → 定稿 ----
+const { roleSpellingCandidates, pickRoleSpellingHints, roleSpellingHintText } = require("../lib/profile-hygiene");
+
+test("错别字预筛：真实用户的「信货」被挑出来并给出「信贷」；系统认识的方向词一个都不挑", () => {
+  assert.deepEqual(roleSpellingCandidates(["信货", "风控"]), [{ input: "信货", suggestions: ["信贷", "信审"] }]);
+  // 已知写法 / 已知写法的一部分 / 能判出职能 → 不进候选（助理⊂产品助理、电商⊂电商运营、教育⊂教育培训）
+  assert.deepEqual(roleSpellingCandidates(["信贷", "助理", "电商", "教育", "管培", "有机合成研究员", "实验员", "英文相关"]), []);
+});
+
+test("错别字定稿：只有「原词在库里 0 个标题、建议写法有」才提示——词表预筛的误报靠这一步挡掉", () => {
+  // 2026-09-28 真库实测：132 个常见方向词里词表预筛挑出 22 个（律师→教师、统计→设计、美容→美工…），
+  // 它们在在招标题里都出现过 → 全部不提示；真实方向词里的「食品→产品」同理。
+  const inLibrary = new Set(["信贷", "信审", "律师", "教师", "统计", "设计", "食品", "产品"]);
+  const isPresent = (t) => inLibrary.has(t);
+  const cands = roleSpellingCandidates(["信货", "律师", "统计", "食品"]);
+  assert.equal(cands.length, 4, "这四个都会被词表预筛挑出来——单靠词表判据不能出提示");
+  assert.deepEqual(pickRoleSpellingHints(cands, isPresent), [{ input: "信货", suggestions: ["信贷", "信审"] }]);
+  // 建议写法库里也没有 → 不提示（没有可给的建议就别打扰）
+  assert.deepEqual(pickRoleSpellingHints([{ input: "信货", suggestions: ["信贷"] }], () => false), []);
+});
+
+test("错别字提示文案：先说能证明的事实，建议只作为一问", () => {
+  const text = roleSpellingHintText({ input: "信货", suggestions: ["信贷", "信审"] });
+  assert.match(text, /「信货」在岗位库里没有任何岗位标题这么写/);
+  assert.match(text, /如果是想写「信贷」或「信审」/);
+});

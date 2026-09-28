@@ -76,8 +76,9 @@ class ParityWithFrontendTest(unittest.TestCase):
         # 本次把 JS 已有 25 组同步到 crawler，并在末尾追加金融、教育、医疗、制造、建筑、客服共 20 组。
         # 又追加「学段」修饰组；2026-09-18 学生画像走查再追加投行/并购(46)、编导/内容制作(47) 两组；
         # 2026-09-23 体验走查再追加芯片验证(48)、风控/风险管理(49) 两组。
+        # 2026-09-28 体验走查再追加英语(50)、平面/视觉设计(51)、化学合成(52，从药学组拆出) 三组。
         # 这个数是两端索引同构的守卫：加组时必须同步 KEYWORD_GROUP_FUNCTIONS 与 lib/china-keyword-expansion.js。
-        self.assertEqual(len(cke.CHINA_KEYWORD_GROUPS), 50)
+        self.assertEqual(len(cke.CHINA_KEYWORD_GROUPS), 53)
 
     def test_group_functions_aligned(self):
         self.assertEqual(len(cke.KEYWORD_GROUP_FUNCTIONS), len(cke.CHINA_KEYWORD_GROUPS))
@@ -483,3 +484,41 @@ class StudentPersonaWalkthroughDirectionsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UncoveredResidualParityTest(unittest.TestCase):
+    """2026-09-28：残差按位置覆盖算，与 lib/china-keyword-expansion.js 的 _uncoveredResidual 同口径。
+
+    用例与 tests/china-keyword-expansion.test.js 同批：跨组重叠不再互相拆碎；同组里长词包住排在前面的
+    短兄弟词时照旧保留那截具体性；化学合成独立成组、药学组单向并入它。
+    """
+
+    def flat(self, q):
+        return [t for unit in cke.keyword_match_units(q) for t in unit]
+
+    def test_cross_group_overlap_no_longer_leaves_fragments(self):
+        self.assertNotIn("大开发", self.flat("大数据开发"))
+        self.assertNotIn("机械助理", self.flat("机械工程师助理"))
+        self.assertNotIn("机械", self.flat("机械设计"))
+        self.assertNotIn("管理", self.flat("质量管理"))
+        self.assertIn("天线", self.flat("天线工程师"))
+
+    def test_same_group_nesting_keeps_specificity(self):
+        self.assertEqual(cke.keyword_match_units("用户运营")[-1], ["用户"])
+        self.assertEqual(cke.keyword_match_units("网络安全")[-1], ["网络"])
+        self.assertEqual(len(cke.keyword_match_units("数据分析")), 1)
+
+    def test_chemical_synthesis_group_split(self):
+        units = cke.keyword_match_units("有机合成研究员")
+        self.assertEqual(len(units), 1)
+        for term in ("有机合成", "药物合成", "化学合成", "合成研究员", "药物化学"):
+            self.assertIn(term, units[0])
+        for term in ("制剂", "药理", "药师"):
+            self.assertNotIn(term, units[0])
+        # 药学 ⊃ 化学合成（单向）：查「药物研发」仍带着合成研究员
+        self.assertIn("合成研究员", self.flat("药物研发"))
+        self.assertIn("合成研究员", cke.expand_china_keyword_terms("药物研发"))
+
+    def test_new_synonym_groups(self):
+        self.assertIn("英语", self.flat("英文"))
+        self.assertIn("视觉设计", self.flat("美工"))

@@ -27,6 +27,7 @@ import {
   type CampusFilterValues,
 } from "@/lib/campus-facets";
 import { classifyJobFunction } from "@/lib/china-keyword-expansion";
+import { buildTsquery } from "@/lib/job-search";
 import { mustApplyPatterns, mustApplyUnion, type MustApplyCompany } from "@/lib/must-apply-list";
 import { requestSafeCache } from "@/lib/request-safe-cache";
 
@@ -599,6 +600,27 @@ export async function activeCompanies(): Promise<string[]> {
 /** 在招岗位按公司计数（洞察可用性 / 洞察库用）。 */
 export async function activeJobCountsByCompany(): Promise<Array<{ company: string; job_count: number }>> {
   return jobsQuery("select company, job_count from active_job_counts_by_company()");
+}
+
+/**
+ * 每个词在在招岗**标题**里出现过没有（偏好页方向词错别字提示用，见 lib/profile-hygiene.pickRoleSpellingHints）。
+ * 只问「有没有」：search_doc 的 bigram GIN 先筛（标题 + 公司 + 地点 + 类型），标题 ilike 复核，一个词一条 exists。
+ * 调用方只传纯中文短词（roleSpellingCandidates 已保证），不含 % / _。
+ */
+export async function activeTitleTermsPresent(terms: string[]): Promise<Set<string>> {
+  const uniq = Array.from(new Set(terms.filter(Boolean)));
+  const hits = await Promise.all(
+    uniq.map(async (t) => {
+      const tsq = buildTsquery([t], []);
+      if (!tsq) return false;
+      const hit = await jobsScalar<boolean>(
+        "select exists(select 1 from jobs where status = 'active' and search_doc @@ to_tsquery('simple', $1) and title ilike $2) as hit",
+        [tsq, `%${t}%`],
+      );
+      return Boolean(hit);
+    }),
+  );
+  return new Set(uniq.filter((_, i) => hits[i]));
 }
 
 /** Today 两段召回：location 命中任一城市 AND title 命中任一职位词，最新优先（无信号时调用方走 listLatestActive）。 */

@@ -450,3 +450,48 @@ test("职能门的标题复判只认标题，公司名里出现方向词不算�
   );
   assert.equal(f.roleTier, null);
 });
+
+// ---- 2026-09-28 体验走查：7 个真实用户推荐页连续 4 天近乎为空，逐个复现到的「真被拦了」三类 ----
+// 每条用例都是真实画像的方向词 + 真库里被拒掉的真实标题（job_function 取库里物化列的值）。
+// 走的是生产那条链：computeMatchFacts（方向 + 职能门）→ checkEligibility。
+
+test("有机合成研究员：同簇的有机合成 / 药物化学 / 化学合成岗能过方向门，药学组的制剂岗不再跟着放进来", () => {
+  const p = rprofile({ targetRoles: ["有机合成研究员"] });
+  for (const title of [
+    "有机合成实习生",
+    "有机合成专员/研究员（FTE）",
+    "研发工程师（有机合成方向/光刻胶方向）",
+    "药物化学研究员/高级研究员",
+    "小核酸化学合成（助理）研究员",
+    "药物合成研究员(J17432)",
+  ]) {
+    const f = computeMatchFacts(job({ title, job_function: "研发" }), p, undefined, noAction, NOW);
+    assert.equal(f.roleTier, "exact", title);
+    assert.equal(checkEligibility(f).eligible, true, title);
+  }
+  // 拆组前「有机合成研究员」挂在药学组里，组里的「制剂」让这类岗也算命中（召回放开后实测放出来的就是它们）。
+  for (const title of ["无菌制剂技术员(J10567)", "制剂分析研究员（2027届 上海）(J12138)"]) {
+    const f = computeMatchFacts(job({ title, job_function: "研发" }), p, undefined, noAction, NOW);
+    assert.notEqual(f.roleTier, "exact", title);
+  }
+});
+
+test("英文：英语 / 英文是同一个意思，标题写「英语」的岗不再被拒", () => {
+  const p = rprofile({ targetRoles: ["英文"] });
+  for (const title of ["英语翻译专员", "英语本地化策划（燕云十六声）", "英文翻译实习生（研究所）"]) {
+    const f = computeMatchFacts(job({ title, job_function: "其他" }), p, undefined, noAction, NOW);
+    assert.equal(f.roleTier, "exact", title);
+  }
+});
+
+test("美工：平面 / 视觉设计岗能过方向门，UI / 交互 / 工业设计不算（同职能≠同角色）", () => {
+  const p = rprofile({ targetRoles: ["美工"] });
+  for (const title of ["视觉设计实习生", "包装平面设计实习生", "营销视觉设计师", "创意视觉设计实习生"]) {
+    const f = computeMatchFacts(job({ title, job_function: "设计" }), p, undefined, noAction, NOW);
+    assert.equal(f.roleTier, "exact", title);
+  }
+  for (const title of ["UI设计实习生-深圳射击项目", "交互设计师", "工业设计（ID）工程师-27届"]) {
+    const f = computeMatchFacts(job({ title, job_function: "设计" }), p, undefined, noAction, NOW);
+    assert.notEqual(f.roleTier, "exact", title);
+  }
+});

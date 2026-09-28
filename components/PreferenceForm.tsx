@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import type { UserPreferences } from "@/lib/types";
-import { profileHygieneHints } from "@/lib/profile-hygiene";
+import { profileHygieneHints, roleSpellingHintText } from "@/lib/profile-hygiene";
 import { Banner } from "@/components/ui";
 import { PREFERENCES_SAVED_EVENT, track } from "@/lib/track";
 import { normalizeCompany } from "@/lib/company-normalize";
@@ -27,6 +27,9 @@ export default function PreferenceForm() {
   const [message, setMessage] = useState("");
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveErr, setSaveErr] = useState("");
+  // 方向词疑似写错（如「信货」）：保存时服务端问过库才给（见 app/api/preferences roleSpellingHints），
+  // 不能像下面的画像卫生提示那样在客户端实时算——能证明「写错了」的是「库里一个标题都没这么写」。
+  const [roleHints, setRoleHints] = useState<Array<{ input: string; suggestions: string[] }>>([]);
 
   useEffect(() => {
     loadPrefs();
@@ -90,6 +93,7 @@ export default function PreferenceForm() {
         throw new Error(data?.error || `HTTP ${resp.status}`);
       }
       if (data.preferences) setPrefs(withDefaults({ ...prefs, ...data.preferences }));
+      setRoleHints(Array.isArray(data.role_hints) ? data.role_hints : []);
       // 激活漏斗「设完求职目标」这一环。此前只有简历解析埋点，没有偏好保存埋点，
       // 于是「传完简历 → 设完偏好」中间那一跳在漏斗里是断的，看不出人掉在哪。
       // 打在这里（偏好本体已落库）而不是 data.ok 分支里：关注公司同步失败属于部分成功，
@@ -160,6 +164,11 @@ export default function PreferenceForm() {
           })
         : [],
     [prefs],
+  );
+
+  // 用户已经把那个词改掉（还没重新保存）→ 对应提示立刻收起，别让它指着一个已经不存在的词。
+  const visibleRoleHints = roleHints.filter((hint) =>
+    (prefs?.target_roles || []).some((role) => role.includes(hint.input)),
   );
 
   function setArray(field: keyof UserPreferences, arr: string[]) {
@@ -367,8 +376,13 @@ export default function PreferenceForm() {
         </div>
       </details>
 
-      {hygieneHints.length > 0 && (
+      {(visibleRoleHints.length > 0 || hygieneHints.length > 0) && (
         <div className="space-y-2">
+          {visibleRoleHints.map((hint) => (
+            <Banner key={`role-spelling-${hint.input}`} tone="amber" size="sm" live="polite">
+              {roleSpellingHintText(hint)}
+            </Banner>
+          ))}
           {hygieneHints.map((hint) => (
             <Banner key={hint.code} tone="amber" size="sm" live="polite">
               {hint.text}

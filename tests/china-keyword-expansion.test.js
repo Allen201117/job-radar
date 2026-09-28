@@ -465,3 +465,39 @@ test("风控方向：风控 能认出券商/银行的「XX风险」岗名，不�
   assert.equal(keywordMatchTier({ title: "账号风控产品实习生" }, "产品经理"), "exact");
   assert.equal(keywordMatchTier({ title: "风控平台产品经理（AI Native 方向）" }, "产品经理"), "exact");
 });
+
+// 2026-09-28：残差改按「位置覆盖」算（lib/china-keyword-expansion._uncoveredResidual）。全体真实方向词 118 条对拍，
+// 旧写法「按先后删串」在两个命中词重叠时把对方拆碎、碎片成了强制 AND 单元；新旧只在 8 条上不同，全是这一类。
+test("残差：跨组重叠的命中词不再互相拆碎（大数据开发 / 机械设计 / 机械工程师助理 / 质量管理）", () => {
+  const flat = (q) => keywordMatchUnits(q).flat();
+  assert.ok(!flat("大数据开发").includes("大开发"), "「大开发」是删掉「数据」后的碎片，不是用户意图");
+  assert.ok(!flat("机械工程师助理").includes("机械助理"));
+  assert.ok(!flat("机械设计").includes("机械"));
+  assert.ok(!flat("质量管理").includes("管理"));
+  // 行为上：机械设计 → 结构设计工程师 是同一个角色；大数据开发 → 大数据开发工程师 终于能命中
+  assert.equal(keywordMatchTier({ title: "结构设计工程师" }, "机械设计"), "exact");
+  assert.equal(keywordMatchTier({ title: "大数据开发工程师" }, "大数据开发"), "exact");
+  // 不重叠的查询照旧：天线工程师 仍要求标题带「天线」
+  assert.ok(flat("天线工程师").includes("天线"));
+});
+
+test("残差：同组里长词包住排在前面的短兄弟词时，照旧保留那截具体性（用户运营 / 网络安全 / 数据分析）", () => {
+  // 运营组「运营」排在「用户运营」前：查「用户运营」必须还要求「用户」，否则内容运营 / 活动运营都算同一个岗
+  assert.deepEqual(keywordMatchUnits("用户运营").at(-1), ["用户"]);
+  assert.notEqual(keywordMatchTier({ title: "内容运营专员" }, "用户运营"), "exact");
+  assert.equal(keywordMatchTier({ title: "用户运营专员" }, "用户运营"), "exact");
+  assert.deepEqual(keywordMatchUnits("网络安全").at(-1), ["网络"]);
+  // 数据组「数据分析」排在「数据」前：旧写法就是整段删净、没有残差 —— 照旧，英文 Data Analyst 标题不被凭空多出的 [分析] 挡掉
+  assert.equal(keywordMatchUnits("数据分析").length, 1);
+  assert.equal(keywordMatchTier({ title: "Data Analyst" }, "数据分析"), "exact");
+});
+
+test("化学合成独立成组：查它不带药学组的 制剂 / 药理，查「药物研发」照旧命中合成研究员（药学 ⊃ 化学合成 单向）", () => {
+  assert.equal(keywordMatchUnits("有机合成研究员").length, 1);
+  const unit = keywordMatchUnits("有机合成研究员")[0];
+  for (const t of ["有机合成", "药物合成", "化学合成", "合成研究员", "药物化学"]) assert.ok(unit.includes(t), t);
+  for (const t of ["制剂", "药理", "药师"]) assert.ok(!unit.includes(t), `${t} 不属于化学合成这一簇`);
+  // 反方向：药学组查询仍并入化学合成组（与 AI ⊃ 算法 同一套 GROUP_SUPERSETS）
+  assert.equal(keywordMatchTier({ title: "有机合成实习生" }, "药物研发"), "exact");
+  assert.ok(ftsCandidateTerms("药物研发").includes("合成研究员"), "/jobs 搜「药物研发」的 FTS 候选不能因拆组变少");
+});

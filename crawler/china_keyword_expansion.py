@@ -9,7 +9,7 @@
 import re
 from typing import List
 
-# 与 lib/china-keyword-expansion.js 的 CHINA_KEYWORD_GROUPS 一一对应（45 组）。
+# 与 lib/china-keyword-expansion.js 的 CHINA_KEYWORD_GROUPS 一一对应（组数由 test_group_count_matches_frontend 钉着）。
 CHINA_KEYWORD_GROUPS: List[List[str]] = [
     ["算法", "机器学习", "深度学习", "machine learning", "deep learning", "algorithm", "ml",
      "nlp", "自然语言处理", "computer vision", "cv", "计算机视觉"],
@@ -62,9 +62,10 @@ CHINA_KEYWORD_GROUPS: List[List[str]] = [
     ["医生", "医师", "主治", "住院医师", "全科医生", "全科医师", "全科门诊", "专科医师", "physician", "doctor"],
     # 医学经理/临床运营同步自 JS 侧（2026-09-18，库内证据见同索引注释）。
     ["临床研究", "临床监查", "cra", "crc", "cta", "临床协调", "clinical research", "临床运营", "医学经理"],
-    # 药物化学/制剂/药理/原料药/CMC/合成研究员同步自 JS 侧（2026-09-18，库内证据见同索引注释）。
+    # 制剂/药理/原料药/CMC 同步自 JS 侧（2026-09-18，库内证据见同索引注释）；同批的药物化学/合成研究员
+    # 2026-09-28 挪进化学合成组（52），经 GROUP_SUPERSETS 单向并回本组。
     ["药师", "药剂", "药物研发", "制药", "药品注册", "pharmacist", "pharmaceutical",
-     "药物化学", "制剂", "药理", "原料药", "CMC", "合成研究员"],
+     "制剂", "药理", "原料药", "CMC"],
     ["医药代表", "医药信息沟通", "医学信息沟通", "医学联络", "msl", "medical representative"],
     ["机械设计", "机械工程", "结构设计", "机构设计", "模具设计", "mechanical design", "mechanical engineer"],
     ["工艺工程", "制程", "生产工艺", "制造工程", "工艺员", "process engineer", "manufacturing engineer"],
@@ -88,11 +89,21 @@ CHINA_KEYWORD_GROUPS: List[List[str]] = [
     # lib/china-keyword-expansion.js 同索引注释（两边必须保持一致）。
     ["芯片验证", "ic验证", "数字验证", "soc验证", "asic验证", "逻辑验证", "处理器验证", "硅后验证", "原型验证", "fpga验证", "design verification"],
     ["风控", "风险管理", "风险控制", "信用风险", "市场风险", "操作风险", "全面风险", "风险合规", "风险量化", "风险分析", "风险策略"],
+    # 索引 50 = 英语；索引 51 = 平面/视觉设计。均于 2026-09-28 追加在末尾，库内证据与取舍见
+    # lib/china-keyword-expansion.js 同索引注释（两边必须保持一致）。
+    ["英语", "英文"],
+    ["平面设计", "美工", "视觉设计", "视觉传达"],
+    # 索引 52 = 化学合成（2026-09-28 从药学组 34 拆出 + 补词），缘由与库内证据见 JS 同索引注释。
+    ["有机合成", "药物合成", "化学合成", "合成研究员", "药物化学"],
 ]
 
 # 算法岗位组与 AI 技术领域组的非对称展开与前端一致。AI 原本在末尾，后续只能追加，故索引固定为 24。
 ALGO_GROUP_INDEX = 0
 AI_DOMAIN_GROUP_INDEX = 24
+# 药学组 ⊃ 化学合成组（2026-09-28）；与 JS 的 GROUP_SUPERSETS 同口径：命中大组 → 单元并入小组，反之不并。
+PHARMA_GROUP_INDEX = 34
+CHEM_SYNTHESIS_GROUP_INDEX = 52
+GROUP_SUPERSETS = {AI_DOMAIN_GROUP_INDEX: ALGO_GROUP_INDEX, PHARMA_GROUP_INDEX: CHEM_SYNTHESIS_GROUP_INDEX}
 
 _SPLIT_RE = re.compile(r"[\s,，、/|;；]+")
 _SHORT_LATIN_RE = re.compile(r"[a-z0-9.+#-]{1,3}")
@@ -161,9 +172,11 @@ def expand_china_keyword_terms(query) -> List[str]:
         return []
     normalized = normalize_for_match(raw)
     terms = set(split_keyword_terms(raw))
-    for group in CHINA_KEYWORD_GROUPS:
+    for index, group in enumerate(CHINA_KEYWORD_GROUPS):
         if any(contains_term(normalized, term) for term in group):
-            for term in group:
+            # 药学 ⊃ 化学合成：拆组前药学组就含药物化学/合成研究员，这里单向并回（与 JS expandChinaKeywordTerms 同口径）。
+            extra = CHINA_KEYWORD_GROUPS[CHEM_SYNTHESIS_GROUP_INDEX] if index == PHARMA_GROUP_INDEX else []
+            for term in group + extra:
                 terms.add(term)
                 terms.add(normalize_for_match(term))
     return [t for t in (str(x).strip() for x in terms) if t]
@@ -243,6 +256,9 @@ KEYWORD_GROUP_FUNCTIONS = [
     None,        # 47 编导/内容制作（2026-09-18 新增，无对应职能桶，见 CHINA_KEYWORD_GROUPS 同索引注释）
     "研发",      # 48 芯片验证（2026-09-23 新增）
     "金融业务",  # 49 风控/风险管理（2026-09-23 新增）
+    None,        # 50 英语（2026-09-28 新增：语种能力不是职能）
+    "设计",      # 51 平面/视觉设计（2026-09-28 新增）
+    "研发",      # 52 化学合成（2026-09-28 从药学组拆出）
 ]
 
 # 非软件工程降级门专用：词表刻意宽于生产制造，只负责阻止传统工程/医疗靠泛工程师进入软件研发。
@@ -490,6 +506,33 @@ def query_functions(query) -> set:
             if KEYWORD_GROUP_FUNCTIONS[i]}
 
 
+def _uncovered_residual(text: str, term_groups) -> str:
+    """残差 = 原文里没被任何命中词覆盖到的字（按位置标记覆盖，不按先后删串）。
+
+    与 lib/china-keyword-expansion.js 的 _uncoveredResidual 同口径（缘由与实测写在那边的注释里）：
+    跨组重叠（设计 ⊂ 机械设计、数据 ⊂ 大数据）与同组部分重叠（有机合成 / 合成研究员）按覆盖算，
+    不再把对方拆成「机械」「大开发」「有机」这种碎片残差；同组里长词包住一个**排在它前面**的短兄弟词时
+    （运营组「运营」→「用户运营」），长词不算覆盖，与旧写法逐条一致（残差「用户」保住用户写下的具体性）。
+    term_groups 每个元素是一组已归一的词，保持组内原有顺序。
+    """
+    covered = [False] * len(text)
+    for terms in term_groups:
+        hits = []
+        for order, term in enumerate(terms):
+            if not term:
+                continue
+            at = text.find(term)
+            while at >= 0:
+                hits.append((at, at + len(term), order))
+                at = text.find(term, at + 1)
+        for a, b, order in hits:
+            eaten = any(o < order and c >= a and d <= b and d - c < b - a for c, d, o in hits)
+            if not eaten:
+                for k in range(a, b):
+                    covered[k] = True
+    return "".join(ch for k, ch in enumerate(text) if not covered[k]).strip()
+
+
 def keyword_match_units(query) -> List[List[str]]:
     """把查询拆成概念单元：命中的同义词组各成一单元（OR），散词各自成单元；单元间 AND。"""
     raw = str(query or "").strip()
@@ -510,31 +553,21 @@ def keyword_match_units(query) -> List[List[str]]:
     specific_idx = [i for i in matched_idx if i not in GENERIC_ANCHOR_GROUP_INDEXES]
     suppress_generic_fallback = False
     if specific_idx:
-        specific_terms = [t for i in specific_idx for t in CHINA_KEYWORD_GROUPS[i]]
-        remainder = normalized
-        for term in specific_terms:
-            nt = normalize_for_match(term)
-            if nt and nt in remainder:
-                remainder = remainder.replace(nt, "")
-        suppress_generic_fallback = len(remainder.strip()) < 2
+        specific_groups = [[normalize_for_match(t) for t in CHINA_KEYWORD_GROUPS[i]] for i in specific_idx]
+        suppress_generic_fallback = len(_uncovered_residual(normalized, specific_groups)) < 2
 
     for index in matched_idx:
         if suppress_generic_fallback and index in (21, 22):
             continue
         group = CHINA_KEYWORD_GROUPS[index]
         # AI 领域包含算法岗位的召回，但算法岗位不能反向泛化成所有 AI 岗；与前端保持单向展开。
-        expanded = group + CHINA_KEYWORD_GROUPS[ALGO_GROUP_INDEX] if index == AI_DOMAIN_GROUP_INDEX else group
+        expanded = group + CHINA_KEYWORD_GROUPS[GROUP_SUPERSETS[index]] if index in GROUP_SUPERSETS else group
         units.append([normalize_for_match(t) for t in expanded])
     for lit in (normalize_for_match(t) for t in split_keyword_terms(raw)[1:]):
         if not lit:
             continue
         # 中文连写词不能因为尾部命中泛组就丢掉前半段：天线工程师 = [天线] AND [工程师]。
-        residual = lit
-        for unit in units:
-            for term in unit:
-                if term and term in residual:
-                    residual = residual.replace(term, "")
-        residual = residual.strip()
+        residual = _uncovered_residual(lit, units)
         if residual and residual != lit:
             if len(residual) >= 2 and not _GENERIC_ROLE_SUFFIX_ONLY.fullmatch(residual):
                 units.append([residual])
