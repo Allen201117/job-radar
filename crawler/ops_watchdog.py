@@ -71,7 +71,11 @@ MODULE_OUTPUT = {
     "liveness_sweep": (("checked",), ("checked",)),
     "dead_link_audit": (("checked",), ("checked",)),
     "insight_backlog": (("companies_enriched",), ("checked",)),
-    "annual_report": (("written",), ("checked",)),
+    # 年报（2026-09-28 改口径）：处理量不再是 checked（看了几家），而是「有新东西要解析」的家数——
+    # checked 里的 already_latest 只是「巨潮上最新一份年报我们已经写过」，那是正确结论不是卡住。
+    # 按 checked 判时，队列前 40 家全写过之后天天 checked=40 / written=0 报零产出（issue #40），
+    # 真正的病（队列饿死，见 official_annual_report.select_queue）反而被这个噪音盖住了。
+    "annual_report": (("written",), ("parsed", "section_not_found", "scanned_pdf", "failed", "no_reports")),
     # 必投缺口漏斗（2026-09-23 改口径）：处理量不再是 processed（看了几家），而是「走到真抓验收门的
     # 家数 + 处理时抛异常的家数」。队列里剩下的大多是复查——没 adapter 的自建站 / 反爬 / 找不到
     # 入口，每家都在验收门之前得出否定结论，那是正确结论不是卡住（按 processed 判时 8-30 起天天
@@ -99,6 +103,8 @@ MODULE_OUTPUT = {
     # 处理量 = 非空板块（有岗走完三关 + 抓取失败）+ 崩溃；空板块是等开闸的正常态（2026-09-23）。
     "campus_board_verify": (("enabled",), ("actionable", "errors")),
     # 北森详情路由浏览器逐家探测（2026-09-18 补台账）：有待探租户却一个都没探到路由 = 零产出。
+    # 2026-09-28 起 attempted 不含 browser_only（列表只能浏览器渲染、jd_url 取自页面锚点的租户，
+    # 本来就没有零浏览器路由可存）：只剩这类租户时 attempted=0 → 空队列，不再天天判零产出。
     "harvest_beisen_routes": (("harvested",), ("attempted",)),
     # 企业 logo 抓取（2026-09-18 补台账）：有待处理公司却一张图都没抓到 = 零产出。
     "company_logos": (("found",), ("processed",)),
