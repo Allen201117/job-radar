@@ -66,6 +66,14 @@ class AppleAdapter(BaseAdapter):
             delay_seconds=0.15,   # 礼貌爬取：几百页别把对方打毛
             label=f"apple:{self.name}",
         )
+        if not rows:
+            # 整站空结果不是「Apple 没岗」：它常年 4000+ 岗。2026-09-28 14:18 / 09-29 07:02
+            # 两轮各 2 秒收尾、totalRecords=0、记 success + coverage_complete，重档当晚等于没抓
+            # （次日只有 403/4883 个 active 岗 30h 内被刷新）。抛错让它记 failed、别标抓全。
+            raise RuntimeError(
+                f"apple search returned no rows (totalRecords={total!r}); "
+                "treating as fetch failure, not an empty board"
+            )
         self.reported_total = total
         self.fetch_complete = complete
         return json.dumps(rows)

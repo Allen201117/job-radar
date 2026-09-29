@@ -102,6 +102,19 @@ class ApplePaginationTest(unittest.TestCase):
         self.assertTrue(adapter.fetch_complete)
         self.assertGreaterEqual(len(seen), 3, f"没有逐页翻，只请求了 {seen}")
 
+    def test_empty_board_raises_instead_of_silent_success(self):
+        """totalRecords=0 / 0 行必须抛错记 failed，不许记 success + 抓全。"""
+        fake_get, _ = self._fake_get(0)
+        adapter = AppleAdapter()
+        import adapters.apple as mod
+        orig, mod.httpx.get = mod.httpx.get, fake_get
+        try:
+            with self.assertRaises(RuntimeError):
+                adapter.fetch("https://jobs.apple.com/en-us/search")
+        finally:
+            mod.httpx.get = orig
+        self.assertFalse(getattr(adapter, "fetch_complete", False))
+
     def test_enumerates_with_blank_search_not_hardcoded_keywords(self):
         """写死关键词天然带偏且互相重叠；空关键词才是全量枚举。"""
         fake_get, seen = self._fake_get(5)
