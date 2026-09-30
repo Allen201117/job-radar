@@ -365,5 +365,7 @@
   },
   "chinacdc.zhiye.com": {
     "cms": true
-  }
+  },
+  "qiaqiafood.zhiye.com": "https://qiaqiafood.zhiye.com/social/detail",
+  "mannercoffee.zhiye.com": "https://mannercoffee.zhiye.com/campus/detail"
 }
