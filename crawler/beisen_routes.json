@@ -367,5 +367,8 @@
     "cms": true
   },
   "qiaqiafood.zhiye.com": "https://qiaqiafood.zhiye.com/social/detail",
-  "mannercoffee.zhiye.com": "https://mannercoffee.zhiye.com/campus/detail"
+  "mannercoffee.zhiye.com": "https://mannercoffee.zhiye.com/campus/detail",
+  "absen.zhiye.com": {
+    "ssr": true
+  }
 }
