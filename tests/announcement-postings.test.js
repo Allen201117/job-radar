@@ -5,10 +5,12 @@ const { loadTs } = require("./_load-ts");
 
 const A = loadTs(path.join(__dirname, "..", "lib", "announcement-postings.ts"));
 
+// deadline 必须是远期：toAnnouncementPosting 会按「今天」丢掉已过截止日的公告。
+// 原写 2026-10-01，过了那天 5 条用例集体变红（CI run 37120468602）。
 const row = (overrides = {}) => ({
   id: "1", source_portal: "x", source_url: "https://gov.example.cn/notice/1/?utm_source=radar",
   title: "北京市某单位公开招聘公告", region: null, employer_type: "事业单位", audience: "unknown",
-  published_at: "2026-09-20", deadline: "2026-10-01", deadline_text: null, status: "active",
+  published_at: "2026-09-20", deadline: "2099-12-31", deadline_text: null, status: "active",
   verdict: "ok", first_seen_at: "2026-09-20T00:00:00Z", updated_at: "2026-09-20T00:00:00Z", ...overrides,
 });
 
