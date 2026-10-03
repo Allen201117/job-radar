@@ -13,6 +13,7 @@
 //   node scripts/ux-walkthrough/walkthrough.js --record   # 同上 + 写 ops_runs
 //   UX_WALK_LIMIT=10 …                                    # 只跑前 N 个用户
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { createClient } = require("@supabase/supabase-js");
@@ -188,7 +189,7 @@ async function fetchAll(query, pageSize = 1000) {
 
 function ttfb(url) {
   try {
-    const raw = execFileSync("curl", ["-s", "-o", "/dev/null", "-m", "60", "-w", "%{time_starttransfer} %{http_code}", url], { encoding: "utf8" });
+    const raw = execFileSync("curl", ["-s", "-o", os.devNull, "-m", "60", "-w", "%{time_starttransfer} %{http_code}", url], { encoding: "utf8" });
     const [t, code] = raw.trim().split(" ");
     return { seconds: Number(t), http: Number(code) };
   } catch {

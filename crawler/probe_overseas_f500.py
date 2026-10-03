@@ -169,7 +169,7 @@ def main():
     if args.emit and verified_rows:
         path = os.path.join(_HERE, "..", "supabase", "migrations",
                             f"{args.emit}_seed_overseas_f500.sql")
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(emit_migration_sql(verified_rows, args.emit))
         print(f"已写 {os.path.normpath(path)}（{len(verified_rows)} 条 verified 源）")
 

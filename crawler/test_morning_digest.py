@@ -930,13 +930,18 @@ class GateTests(unittest.TestCase):
     def test_gate_dry_run_writes_output_without_db(self):
         import tempfile
         from unittest import mock
-        with tempfile.NamedTemporaryFile("r+", suffix=".txt") as fh, \
-                mock.patch.dict(os.environ, {"GITHUB_OUTPUT": fh.name}), \
-                mock.patch.object(md, "run_gate", side_effect=AssertionError("dry-run 不该连库")), \
-                mock.patch.object(md._audit_runner, "load_contract", side_effect=AssertionError("不该走到发信")):
-            self.assertEqual(md.main(["--gate", "--dry-run"]), 0)
-            fh.seek(0)
-            self.assertEqual(fh.read().strip(), "proceed=true")
+        # 不用 NamedTemporaryFile：它开着的时候 Windows 不允许别人再按路径打开同一个文件（PermissionError），
+        # 而被测的 main() 正是按 GITHUB_OUTPUT 路径追加写。
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = os.path.join(tmp, "github_output.txt")
+            with open(out_path, "w", encoding="utf-8"):
+                pass
+            with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": out_path}), \
+                    mock.patch.object(md, "run_gate", side_effect=AssertionError("dry-run 不该连库")), \
+                    mock.patch.object(md._audit_runner, "load_contract", side_effect=AssertionError("不该走到发信")):
+                self.assertEqual(md.main(["--gate", "--dry-run"]), 0)
+            with open(out_path, encoding="utf-8") as fh:
+                self.assertEqual(fh.read().strip(), "proceed=true")
 
     def test_no_record_line_names_the_check_time(self):
         out = md.build_auto_repair_summary(None, checked_at=self._at(9, 40))

@@ -31,6 +31,7 @@
 //  不需要额外配 NODE_PATH；示例命令按需加上也无害。）
 "use strict";
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const ROOT = path.join(__dirname, "..", "..");
@@ -66,7 +67,8 @@ function loadMainRepoEnvIfNeeded() {
 
 const OUT_MD =
   process.env.CAMPUS_SEARCH_OUT_MD ||
-  "/private/tmp/claude-501/-Users-bytedance-Desktop-diy-------claude-worktrees-confident-bose-5f0ea6/78d9f427-7b64-4e73-b74d-ccc299d13064/scratchpad/campus-persona-search.md";
+  // 默认落系统临时目录（原来写死的是某次会话的 macOS 临时目录，换机器 / 换系统就是个不存在的怪路径）。
+  path.join(os.tmpdir(), "campus-persona-search.md");
 const OUT_JSON =
   process.env.CAMPUS_SEARCH_OUT_JSON || path.join(__dirname, "campus-persona-search-raw.json");
 const RESULT_LIMIT = 500;

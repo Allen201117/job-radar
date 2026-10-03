@@ -17,7 +17,7 @@
  *   node live.mjs --help
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -203,11 +203,11 @@ function globToRegex(pattern) {
 
 function runScript(name, args) {
   const scriptPath = path.join(__dirname, name);
-  const cmd = `node "${scriptPath}" ${args.map(a => `"${a}"`).join(' ')}`;
+  // 不拼 shell 命令串：Windows 上 execSync 走 cmd.exe，引号 / 空格 / & 的行为和 bash 不同；直接按参数数组拉起当前 node。
   try {
-    return execSync(cmd, { encoding: 'utf-8', cwd: process.cwd(), timeout: 15_000 });
+    return execFileSync(process.execPath, [scriptPath, ...args.map(String)], { encoding: 'utf-8', cwd: process.cwd(), timeout: 15_000 });
   } catch (err) {
-    // execSync throws on non-zero exit; return stdout if any
+    // execFileSync throws on non-zero exit; return stdout if any
     return err.stdout || err.message || '';
   }
 }

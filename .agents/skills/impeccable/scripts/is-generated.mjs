@@ -13,7 +13,7 @@
  *      within the first ~300 characters — catches non-git projects.
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -41,7 +41,8 @@ export function isGeneratedFile(filePath, options = {}) {
 
 function isGitIgnored(absPath, cwd) {
   try {
-    execSync(`git check-ignore --quiet ${JSON.stringify(absPath)}`, {
+    // 参数数组、不经 shell：Windows 上 execSync 走 cmd.exe，路径里的反斜杠 / 空格 / & 会被它重新解释。
+    execFileSync('git', ['check-ignore', '--quiet', absPath], {
       cwd,
       stdio: 'ignore',
     });

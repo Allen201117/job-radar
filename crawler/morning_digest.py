@@ -816,7 +816,7 @@ def fetch_open_issues():
         out = subprocess.run(
             ["gh", "issue", "list", "--state", "open", "--limit", "100",
              "--json", "number,title,createdAt,comments,labels"],
-            capture_output=True, text=True, timeout=30, check=False,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, check=False,
         )
         if out.returncode != 0:
             sys.stderr.write(f"[morning-digest] gh issue list 失败（跳过老问题清账）: {out.stderr.strip()[:200]}\n")

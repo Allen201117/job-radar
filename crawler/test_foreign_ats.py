@@ -110,6 +110,7 @@ class PublishDateTest(unittest.TestCase):
         self.assertEqual(normalizer.coerce_iso_date(1700000000), "2023-11-14")     # epoch s
         self.assertEqual(normalizer.coerce_iso_date("2026/05/30"), "2026-05-30")
         self.assertEqual(normalizer.coerce_iso_date("2026年5月3日"), "2026-05-03")
+        self.assertIsNone(normalizer.coerce_iso_date(9e15))  # 离谱大数：不许抛（Windows 上曾是 OSError）
         self.assertIsNone(normalizer.coerce_iso_date(None))
         self.assertIsNone(normalizer.coerce_iso_date(""))
         self.assertIsNone(normalizer.coerce_iso_date("n/a"))

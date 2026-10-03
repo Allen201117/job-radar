@@ -147,8 +147,10 @@ function runPsql(args, opts = {}) {
     throw new Error("psql 参数里不许出现连接串或密码（连接信息已经通过环境变量传入）");
   }
   const encoding = opts.encoding || "utf8";
+  // Node 一律按 UTF-8 解 stdout，所以让 psql 也按 UTF-8 出字：libpq 默认跟系统代码页走（Windows 上可能是 GBK），
+  // 中文公司名 / 标题会读成乱码。URL 或环境里已经指定了 client_encoding 的就尊重它；macOS / Linux 本来就是 UTF-8，行为不变。
   const r = spawnSync(opts.bin || "psql", args, {
-    env: { ...(opts.env || process.env), ...pgEnv },
+    env: { PGCLIENTENCODING: "UTF8", ...(opts.env || process.env), ...pgEnv },
     encoding,
     maxBuffer: opts.maxBuffer ?? 64 * 1024 * 1024,
     input: opts.input,

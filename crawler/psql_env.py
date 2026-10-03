@@ -155,8 +155,13 @@ def run_psql(args: list[str], url: str | None = None, *, input: str | None = Non
                                    or url in a or (pw and pw in a)):
             raise PsqlError("psql 参数里不许出现连接串或密码（连接信息已经通过环境变量传入）")
     env = {**(base_env if base_env is not None else os.environ), **pg_env}
+    # 编码两头都钉成 UTF-8：text=True 单独用时，Windows 上 Python 按系统代码页（cp936/GBK）读写，
+    # libpq 默认也跟系统代码页走（Windows 上可能是 GBK）——中文公司名 / 标题会读成乱码，之后拿乱码重算再 --apply 写回就是写坏数据。
+    # URL 或环境里已经指定了 client_encoding 的就尊重它。macOS / Linux 上本来就是 UTF-8，行为不变。
+    env.setdefault("PGCLIENTENCODING", "UTF8")
     try:
-        proc = subprocess.run([bin, *args], env=env, input=input, capture_output=True, text=True)
+        proc = subprocess.run([bin, *args], env=env, input=input, capture_output=True, text=True,
+                              encoding="utf-8")
     except OSError as e:
         # e 自身不带连接串（argv 里已经没有），但仍只取错误号，别把整个异常对象往外抛。
         raise PsqlError(f"psql 没能启动：errno={e.errno}（本机没装 psql？）") from None

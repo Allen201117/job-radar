@@ -481,7 +481,8 @@ function runClaude(prompt, { cwd, env, resultPath, logPath, timeoutMs = DEFAULT_
 function runAgentProcess(command, args, stdin, { cwd, env, logPath, timeoutMs, mirrorOutputPath }) {
   return new Promise((resolve, reject) => {
     const log = fs.createWriteStream(logPath, { flags: 'a' });
-    const child = spawn(command, args, {
+    const target = resolveSpawnTarget(command, env);
+    const child = spawn(target.command, [...target.prefix, ...args], {
       cwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -548,8 +549,36 @@ function truncate(value, max) {
   return value.slice(0, max) + `... [truncated ${value.length - max} chars]`;
 }
 
+/**
+ * Windows 上 npm 装的 claude / codex 是 .cmd 垫片：Node 不开 shell 就拉不起来（ENOENT），
+ * 开 shell 又要把整段 prompt 交给 cmd.exe 转义（& | " % 都会被它解释，有注入风险）。
+ * 所以这里不走 shell：先找 PATH 里的 <command>.exe；没有就读 .cmd 垫片，抠出它真正要跑的 .exe / .js 直接拉起。
+ * 非 Windows 原样返回，行为不变。
+ */
+function resolveSpawnTarget(command, env = process.env) {
+  const plain = { command, prefix: [] };
+  if (process.platform !== 'win32') return plain;
+  const dirs = String(env.PATH ?? env.Path ?? env.path ?? '').split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    const exe = path.join(dir, `${command}.exe`);
+    if (fs.existsSync(exe)) return { command: exe, prefix: [] };
+  }
+  for (const dir of dirs) {
+    const shim = path.join(dir, `${command}.cmd`);
+    let text;
+    try { text = fs.readFileSync(shim, 'utf-8'); } catch { continue; }
+    // 只认垫片最后真正执行的那一句（后面紧跟 %*）——前面 IF EXIST "%dp0%\node.exe" 之类的探测行不算。
+    const exe = text.match(/"%dp0%\\([^"\r\n]+?\.exe)"\s*%\*/i);
+    if (exe) return { command: path.join(dir, exe[1]), prefix: [] };
+    const js = text.match(/"%dp0%\\([^"\r\n]+?\.(?:c|m)?js)"\s*%\*/i);
+    if (js) return { command: process.execPath, prefix: [path.join(dir, js[1])] };
+  }
+  return plain;
+}
+
 function commandExists(command) {
-  const result = spawnSync(command, ['--version'], { stdio: 'ignore' });
+  const target = resolveSpawnTarget(command);
+  const result = spawnSync(target.command, [...target.prefix, '--version'], { stdio: 'ignore' });
   return !result.error && result.status === 0;
 }
 
@@ -658,7 +687,9 @@ function computeCommandAuthed(command) {
   if (command !== 'claude') return false;
   let result;
   try {
-    result = spawnSync('claude', [
+    const target = resolveSpawnTarget('claude');
+    result = spawnSync(target.command, [
+      ...target.prefix,
       '--print',
       '--output-format', 'json',
       'ping',

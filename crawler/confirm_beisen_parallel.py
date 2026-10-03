@@ -44,7 +44,7 @@ def main():
     if passed:
         path = os.path.join(os.path.dirname(__file__), "..", "supabase", "migrations",
                             f"{prefix}_seed_probed_sources.sql")
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(probe.emit_sql(prefix, passed))
         print(f"[confirm-beisen] 已写 {os.path.relpath(path)}（{len(passed)} 源行）。")
 

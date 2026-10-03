@@ -108,7 +108,7 @@ def main():
     if passed:
         out = os.path.join(os.path.dirname(__file__), "..", "supabase", "migrations",
                            f"{prefix}_seed_probed_sources.sql")
-        with open(out, "w", encoding="utf-8") as f:
+        with open(out, "w", encoding="utf-8", newline="\n") as f:
             f.write(probe.emit_sql(prefix, passed))
         print(f"[emit-disc] 已写 {os.path.relpath(out)}")
 

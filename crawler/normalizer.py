@@ -536,7 +536,9 @@ def coerce_iso_date(value) -> Optional[str]:
             n = n / 1000.0
         if n > 1e9:   # 秒级 epoch
             return datetime.fromtimestamp(n, tz=timezone.utc).date().isoformat()
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError, OSError):
+        # 离谱的大数：Linux/macOS 抛 ValueError/OverflowError，Windows 超过约公元 3000 年抛 OSError(EINVAL)——
+        # 不接住的话一个脏字段会让整个 adapter 的解析抛出，而不是「无法识别返回 None」。
         pass
     m = re.search(r"(\d{4})\D{1,3}(\d{1,2})\D{1,3}(\d{1,2})", str(value))
     if m:

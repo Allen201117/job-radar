@@ -39,12 +39,22 @@ sys.stdout.write(json.dumps({{"argv": sys.argv[1:], "pg": pg}}))
 """
 
 
+def run_fake_psql(bin_path, args, url, base_env):
+    """POSIX 直接执行带 shebang 的假 psql；Windows 不认 shebang（直接 exec 会 errno=8），
+    改成「当前解释器 + 脚本路径」——脚本里 sys.argv[1:] 不含脚本名，下面的 argv 断言口径不变。"""
+    if os.name == "nt":
+        # 子进程环境里缺 SYSTEMROOT，Windows 上的 Python 起不来。
+        base_env = {**base_env, "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")}
+        return psql_env.run_psql([bin_path, *args], url, base_env=base_env, bin=sys.executable)
+    return psql_env.run_psql(args, url, base_env=base_env, bin=bin_path)
+
+
 class PsqlEnvTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._tmp = tempfile.TemporaryDirectory()
         cls.bin = os.path.join(cls._tmp.name, "psql")
-        with open(cls.bin, "w") as f:
+        with open(cls.bin, "w", encoding="utf-8", newline="\n") as f:
             f.write(_FAKE)
         os.chmod(cls.bin, os.stat(cls.bin).st_mode | stat.S_IXUSR)
 
@@ -81,19 +91,20 @@ class PsqlEnvTest(unittest.TestCase):
             self.assertNoSecrets(cm.exception, "报错")
 
     def test_run_psql_passes_password_via_env_not_argv(self):
-        out = json.loads(psql_env.run_psql(
-            ["-t", "-A", "-c", "select 1"], dsn(f"{HOST}:6543/jobs"),
-            base_env={"PATH": os.environ.get("PATH", ""), "PGSSLMODE": "require", "PGPORT": "1"}, bin=self.bin))
+        out = json.loads(run_fake_psql(
+            self.bin, ["-t", "-A", "-c", "select 1"], dsn(f"{HOST}:6543/jobs"),
+            {"PATH": os.environ.get("PATH", ""), "PGSSLMODE": "require", "PGPORT": "1"}))
         self.assertEqual(out["argv"], ["-t", "-A", "-c", "select 1"])
         self.assertNoSecrets(json.dumps(out["argv"]), "argv")
         self.assertEqual(out["pg"]["PGPASSWORD"], PW)
         self.assertEqual(out["pg"]["PGPORT"], "6543")      # URL 写了就覆盖环境
         self.assertEqual(out["pg"]["PGSSLMODE"], "require")  # URL 没写仍用环境
+        self.assertEqual(out["pg"]["PGCLIENTENCODING"], "UTF8")  # 没指定 client_encoding 时默认 UTF-8（Python 按 UTF-8 解码）
 
     def test_failure_error_is_redacted_and_unchained(self):
         with self.assertRaises(psql_env.PsqlError) as cm:
-            psql_env.run_psql(["-c", "select 1"], URL, bin=self.bin,
-                              base_env={"PATH": os.environ.get("PATH", ""), "FAKE_PSQL_MODE": "fail"})
+            run_fake_psql(self.bin, ["-c", "select 1"], URL,
+                          {"PATH": os.environ.get("PATH", ""), "FAKE_PSQL_MODE": "fail"})
         err = cm.exception
         self.assertIn("退出码 2", str(err))
         self.assertIn("<redacted>", str(err))

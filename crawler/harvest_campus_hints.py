@@ -134,7 +134,7 @@ def main(argv=None):
         if row.get("campus_evidence", "").startswith("聚合站线索"):
             print(f"    {row.get('company')}  →  {row.get('campus_url_hint')}")
     if args.write and changed:
-        with open(args.targets, "w", encoding="utf-8") as handle:
+        with open(args.targets, "w", encoding="utf-8", newline="\n") as handle:
             json.dump(merged, handle, ensure_ascii=False, indent=1)
         print(f"[hints] 已写回 {args.targets}")
 

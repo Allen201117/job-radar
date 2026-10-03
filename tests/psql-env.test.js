@@ -39,6 +39,16 @@ process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), pg }));
   return bin;
 }
 
+// POSIX 直接执行带 shebang 的假 psql；Windows 不认 shebang（直接 spawn 无扩展名脚本会 ENOENT），
+// 改成「node 可执行文件 + 脚本路径」——脚本里 process.argv.slice(2) 不含脚本名，下面的 argv 断言口径不变。
+function runFake(bin, args, opts) {
+  if (process.platform === "win32") {
+    // 子进程环境里缺 SystemRoot，Windows 上的 node 起不来。
+    return runPsql([bin, ...args], { ...opts, bin: process.execPath, env: { ...opts.env, SystemRoot: process.env.SystemRoot } });
+  }
+  return runPsql(args, { ...opts, bin });
+}
+
 test("libpqEnvFromUrl：各段拆成 PG* 变量，百分号解码、+ 不当空格", () => {
   assert.deepEqual(libpqEnvFromUrl(URL_), {
     PGUSER: "jobs_user",
@@ -81,9 +91,8 @@ test("libpqEnvFromUrl：认不出的参数 / 解析失败都报错，但报错�
 test("runPsql：argv 里没有连接串，密码经 PGPASSWORD 传入；URL 覆盖环境、没写的项由环境兜底", () => {
   const bin = fakePsql();
   const out = JSON.parse(
-    runPsql(["-t", "-A", "-c", "select 1"], {
+    runFake(bin, ["-t", "-A", "-c", "select 1"], {
       url: `postgresql://jobs_user:${RAW_PW}@${HOST}:6543/jobs`,
-      bin,
       env: { PATH: process.env.PATH, PGSSLMODE: "require", PGPORT: "1" },
     }),
   );
@@ -92,13 +101,14 @@ test("runPsql：argv 里没有连接串，密码经 PGPASSWORD 传入；URL 覆�
   assert.equal(out.pg.PGPASSWORD, PW);
   assert.equal(out.pg.PGPORT, "6543", "URL 里写了端口就覆盖环境");
   assert.equal(out.pg.PGSSLMODE, "require", "URL 没写 sslmode 时仍用环境里的");
+  assert.equal(out.pg.PGCLIENTENCODING, "UTF8", "没指定 client_encoding 时默认 UTF-8（Node 一律按 UTF-8 解 stdout）");
 });
 
 test("runPsql：psql 失败时报错只含脱敏后的 stderr，报错对象里找不到密码 / 主机 / 连接串", () => {
   const bin = fakePsql();
   let err;
   try {
-    runPsql(["-c", "select 1"], { url: URL_, bin, env: { PATH: process.env.PATH, FAKE_PSQL_MODE: "fail" } });
+    runFake(bin, ["-c", "select 1"], { url: URL_, env: { PATH: process.env.PATH, FAKE_PSQL_MODE: "fail" } });
   } catch (e) {
     err = e;
   }
@@ -117,7 +127,7 @@ test("runPsql：成功时转发的 stderr（NOTICE）也先脱敏", () => {
   const orig = process.stderr.write;
   process.stderr.write = (chunk) => { writes.push(String(chunk)); return true; };
   try {
-    runPsql(["-c", "select 1"], { url: URL_, bin, env: { PATH: process.env.PATH, FAKE_PSQL_MODE: "notice" } });
+    runFake(bin, ["-c", "select 1"], { url: URL_, env: { PATH: process.env.PATH, FAKE_PSQL_MODE: "notice" } });
   } finally {
     process.stderr.write = orig;
   }
@@ -170,6 +180,8 @@ test("契约：scripts/ lib/ app/ crawler/ 里没有直接 spawn psql 的调用"
   const hits = [];
   // 两个助手自己的注释里引用了旧写法，本身不 spawn 带连接串的 psql。
   const ALLOWED = new Set(["scripts/lib/psql.js", "crawler/psql_env.py"]);
+  // path.relative 在 Windows 上返回反斜杠，和上面 / 分隔的白名单对不上 → 助手自己被当成违规。
+  const toPosix = (rel) => rel.split(path.sep).join("/");
   const JS_SPAWN_PSQL = /\b(?:execFileSync|execFile|spawnSync|spawn|execSync|exec)\(\s*(?:["'`]psql\b|`[^`]*\bpsql\s)/;
   const PY_SPAWN_PSQL = /subprocess\.\w+\(\s*\[\s*["']psql["']/;
   const walk = (dir) => {
@@ -177,8 +189,8 @@ test("契约：scripts/ lib/ app/ crawler/ 里没有直接 spawn psql 的调用"
       if (ent.name === "node_modules" || ent.name.startsWith(".")) continue;
       const p = path.join(dir, ent.name);
       if (ent.isDirectory()) walk(p);
-      else if (/\.(c?js|mjs|ts|tsx)$/.test(ent.name) && JS_SPAWN_PSQL.test(fs.readFileSync(p, "utf8"))) hits.push(path.relative(ROOT, p));
-      else if (/\.py$/.test(ent.name) && !/^test_/.test(ent.name) && PY_SPAWN_PSQL.test(fs.readFileSync(p, "utf8"))) hits.push(path.relative(ROOT, p));
+      else if (/\.(c?js|mjs|ts|tsx)$/.test(ent.name) && JS_SPAWN_PSQL.test(fs.readFileSync(p, "utf8"))) hits.push(toPosix(path.relative(ROOT, p)));
+      else if (/\.py$/.test(ent.name) && !/^test_/.test(ent.name) && PY_SPAWN_PSQL.test(fs.readFileSync(p, "utf8"))) hits.push(toPosix(path.relative(ROOT, p)));
     }
   };
   for (const d of ["scripts", "lib", "app", "crawler"]) walk(path.join(ROOT, d));

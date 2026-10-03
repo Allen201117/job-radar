@@ -106,7 +106,9 @@ def sync_tenant_snapshots(*, apply=False, data_dir=DATA_DIR, fetcher=download_te
         })
     if apply:
         for row in pending:
-            (Path(data_dir) / row["filename"]).write_text(row["text"], encoding="utf-8")
+            # newline="" 原样写出下载内容，不让 Windows 把 \n 翻成 \r\n（也不用 Path.write_text(newline=)：3.10 才有）。
+            with open(Path(data_dir) / row["filename"], "w", encoding="utf-8", newline="") as fh:
+                fh.write(row["text"])
     return pending
 
 

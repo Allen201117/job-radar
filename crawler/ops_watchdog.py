@@ -1445,7 +1445,9 @@ def _gh(args, attempts=4, timeout=60):
     last = None
     for attempt in range(attempts):
         try:
-            proc = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=timeout)
+            # gh 一律输出 UTF-8；Windows 上 text=True 默认按 cp936 解码，遇到中文 / 非 GBK 字符会抛 UnicodeDecodeError。
+            proc = subprocess.run(["gh", *args], capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=timeout)
         except subprocess.TimeoutExpired:
             last = f"超过 {timeout}s 未返回"
         else:

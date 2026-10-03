@@ -172,7 +172,9 @@ def _run(sb, started_at):
             print(f"  ✓ {host} → {_describe(route)}", flush=True)
             # 逐家增量落盘（中途崩不丢）
             try:
-                _ROUTES_FILE.write_text(json.dumps(routes, ensure_ascii=False, indent=2), encoding="utf-8")
+                # 不用 Path.write_text(newline=)：该参数 3.10 才有，本地 3.9 会 TypeError 被下面的 except 吞掉、路由一条都存不下来。
+                with open(_ROUTES_FILE, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(json.dumps(routes, ensure_ascii=False, indent=2))
             except Exception as e:
                 print(f"    落盘失败: {e}", flush=True)
         elif crashed:

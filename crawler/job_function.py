@@ -34,6 +34,7 @@ def _run_batch(titles: list[str]) -> list[str | None]:
         input=payload,
         capture_output=True,
         text=True,
+        encoding="utf-8",  # Windows 上 text=True 默认 cp936：中文标题经 stdin 传给 node（按 UTF-8 读）会变乱码，悄悄分错类
         timeout=_TIMEOUT_S,
     )
     if proc.returncode != 0:

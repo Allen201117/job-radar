@@ -540,7 +540,7 @@ def main():
     if args.emit and passed:
         path = os.path.join(os.path.dirname(__file__), "..", "supabase", "migrations",
                             f"{args.emit}_seed_probed_sources.sql")
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(emit_sql(args.emit, passed))
         print(f"[discover] 已写 {os.path.relpath(path)}（{len(passed)} 源行，feishu/wt/wecruit）。push 后自动迁移。")
     elif args.emit:

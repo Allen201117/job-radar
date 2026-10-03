@@ -302,7 +302,7 @@ const anchors = [
 global.document = {{ querySelectorAll: () => anchors }};
 process.stdout.write(JSON.stringify(fn()));
 """
-        result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+        result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(json.loads(result.stdout), [{
             "id": "7f8c4f7a-8858-4df9-a8f8-31bbad6dbf28",
             "name": "研发工程师(J12345)",
