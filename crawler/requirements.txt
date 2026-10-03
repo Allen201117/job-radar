@@ -6,3 +6,4 @@ playwright>=1.52.0  # SPA 浏览器抓取层 Tier-2（CI 需 playwright install 
 psycopg2-binary>=2.9.9  # Phase1：jobs 热表直连自建香港 PostgreSQL（crawler/jobs_db.py）
 pdfplumber>=0.11.0  # A 股年报员工/应付职工薪酬 PDF 文本解析
 PyYAML>=6.0  # 结构性审计的期望清单 crawler/audit_contract.yaml
+tzdata>=2024.1; sys_platform == "win32"  # Windows 的 python 不带时区库，ops_runs 的 ZoneInfo("Asia/Shanghai") 会直接抛错

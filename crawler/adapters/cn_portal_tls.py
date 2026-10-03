@@ -16,6 +16,11 @@
    ⚠️ 这个常量 Python 3.12 才进 `ssl` 模块，CI 上是 3.11/3.9 → 用字面量 0x4 兜底。
    ⚠️ 只放宽「重协商」这一条，**证书校验一律保持开启**（不用 verify=False）。
 
+3. **OpenSSL ≥3.5 的抗量子混合密钥交换**（2026-10-03 Windows 本机实测）：3.5 默认先报
+   X25519MLKEM768，湖南人社厅（rst.hunan.gov.cn）服务端握手直接 `[SSL: BAD_ECPOINT]`，
+   curl（Windows Schannel）同一 URL 200。钉成 P-256 后 200。CI 的 OpenSSL 3.0 没有这个默认，
+   所以只在 ≥3.5 时才收窄曲线 —— CI 上行为不变。
+
 只给这几个自建门户用，不动全局默认 —— 别的源没有这个毛病，也不该跟着放宽。
 """
 import ssl
@@ -24,12 +29,16 @@ import httpx
 
 # ssl.OP_LEGACY_SERVER_CONNECT（Python 3.12+）。低版本没有这个属性，值就是 0x4。
 _OP_LEGACY_SERVER_CONNECT = getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
+# OpenSSL 3.5 起默认带抗量子混合密钥交换，部分国内门户握手失败（见上文第 3 条）。
+_OPENSSL_PQ_DEFAULT = (3, 5)
 
 
 def make_ssl_context() -> ssl.SSLContext:
     """默认安全上下文 + 允许传统重协商。证书校验保持开启。"""
     context = ssl.create_default_context()
     context.options |= _OP_LEGACY_SERVER_CONNECT
+    if ssl.OPENSSL_VERSION_INFO >= _OPENSSL_PQ_DEFAULT:
+        context.set_ecdh_curve("prime256v1")
     return context
 
 

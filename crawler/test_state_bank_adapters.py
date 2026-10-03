@@ -244,6 +244,18 @@ class CnPortalTlsTest(unittest.TestCase):
         self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED, "不许为了绕重协商把证书校验也关了")
         self.assertTrue(ctx.check_hostname)
 
+    def test_curve_pinned_only_on_openssl_with_pq_default(self):
+        # OpenSSL ≥3.5 默认先报抗量子混合密钥交换，湖南人社厅握手 BAD_ECPOINT；CI 的 3.0 不该被动到。
+        from unittest import mock
+        import adapters.cn_portal_tls as tls
+        for version, pinned in [((3, 0, 13, 0, 15), False), ((3, 5, 8, 0, 15), True)]:
+            with mock.patch.object(tls.ssl, "OPENSSL_VERSION_INFO", version),                  mock.patch.object(tls.ssl.SSLContext, "set_ecdh_curve") as set_curve:
+                ctx = tls.make_ssl_context()
+            self.assertEqual(set_curve.called, pinned, version)
+            if pinned:
+                set_curve.assert_called_once_with("prime256v1")
+            self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED)
+
     def test_transport_pins_ipv4(self):
         # 这几家都有 AAAA 记录，而 GitHub runner 没有可用 IPv6 出口 → 不钉 IPv4 就是 Errno 101。
         self.assertEqual(make_transport()._pool._local_address, "0.0.0.0")
