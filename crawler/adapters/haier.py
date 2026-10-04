@@ -54,7 +54,7 @@ class HaierAdapter(BaseAdapter):
 
     def _enrich_descriptions(self, rows: List[dict], headers: dict):
         """SSR 详情页 div.cb-wordwrap = 岗位职责/任职要求正文，拼接挂 row['_jd']；失败静默（薄卡入库不阻断）。"""
-        from selectolax.parser import HTMLParser
+        from html_dom import HTMLParser
         n = 0
         for row in rows:
             if n >= resolve_detail_cap(self._DETAIL_CAP):

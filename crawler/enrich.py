@@ -17,7 +17,7 @@ from datetime import date
 from urllib.parse import urlparse, parse_qs
 
 import httpx
-from selectolax.parser import HTMLParser
+from html_dom import HTMLParser
 
 from adapters.bankcomm import BankcommAdapter
 from adapters.ccb import CcbAdapter, _repair_json as _ccb_repair_json

@@ -21,7 +21,7 @@ from datetime import date
 from typing import List, Optional
 
 import httpx
-from selectolax.parser import HTMLParser
+from html_dom import HTMLParser
 
 from .base import BaseAdapter, PageResult, RawJob, paginate_all, resolve_detail_cap, resolve_page_cap
 from .cn_portal_tls import make_transport

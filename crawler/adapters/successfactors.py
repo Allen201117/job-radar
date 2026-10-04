@@ -20,7 +20,7 @@ from typing import List, Optional
 from urllib.parse import urlparse
 
 import httpx
-from selectolax.parser import HTMLParser
+from html_dom import HTMLParser
 
 import normalizer
 from .base import BaseAdapter, PageResult, RawJob, paginate_all, resolve_detail_cap

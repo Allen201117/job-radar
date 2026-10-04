@@ -22,7 +22,7 @@ from html import unescape
 from urllib.parse import urljoin
 
 import httpx
-from selectolax.parser import HTMLParser
+from html_dom import HTMLParser
 
 import campus_hints
 

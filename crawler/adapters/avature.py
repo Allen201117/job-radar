@@ -11,7 +11,7 @@ from typing import List, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
-from selectolax.parser import HTMLParser
+from html_dom import HTMLParser
 
 import normalizer
 from .base import BaseAdapter, PageResult, RawJob, paginate_all

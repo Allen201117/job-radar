@@ -5,7 +5,7 @@ import re
 from typing import List, Optional
 
 import httpx
-from selectolax.parser import HTMLParser
+from html_dom import HTMLParser
 
 from .base import BaseAdapter, PageResult, RawJob, paginate_all, resolve_detail_cap
 

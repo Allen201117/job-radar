@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from urllib.parse import urljoin, urlparse
 
-from selectolax.parser import HTMLParser
+from html_dom import HTMLParser
 
 from .classify import is_recruitment_announcement
 

@@ -6,7 +6,7 @@ from typing import List
 from urllib.parse import urlsplit
 
 import httpx
-from selectolax.parser import HTMLParser
+from html_dom import HTMLParser
 
 from .base import BaseAdapter, RawJob
 

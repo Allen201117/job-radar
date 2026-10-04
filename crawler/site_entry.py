@@ -7,7 +7,7 @@ from threading import Lock
 from urllib.parse import urljoin, urlparse
 
 import httpx
-from selectolax.parser import HTMLParser
+from html_dom import HTMLParser
 
 import company_name_match
 import db

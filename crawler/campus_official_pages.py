@@ -6,7 +6,7 @@
 import re
 
 import httpx
-from selectolax.parser import HTMLParser
+from html_dom import HTMLParser
 
 from official_gate import is_official_grounding
 
@@ -74,7 +74,7 @@ def fetch_first_with_signal(urls, timeout=12):
             continue
         # ⚠️ 门必须判在「模型真正会看到的那份文本」上（2026-09-20 修）。
         # 原来的写法：门跑在**原始 HTML**（含 <script>/<style>/内联 JSON、不截断），
-        # 而喂给 LLM 的是 html_to_text —— selectolax 的 .text() 会**丢掉 script/style**、
+        # 而喂给 LLM 的是 html_to_text —— 解析器的 .text() 只取 <body>（<head> 里的 script/style 不进来）、
         # 再截到前 6000 字。两份内容不是同一个东西，于是出现一整类必然空转：
         # 页面的「日期信号」只存在于内联 JSON / 表单占位符（SPA 空壳的典型形态，如携程
         # careers.ctrip.com/campus），门放行 → 正文里一个日期都没有 → LLM 每天被调用一次、

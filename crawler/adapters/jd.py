@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import List
 
 import httpx
-from selectolax.parser import HTMLParser
+from html_dom import HTMLParser, css_first_in_order, css_in_order
 
 from .base import BaseAdapter, RawJob
 
@@ -119,9 +119,10 @@ class JdAdapter(BaseAdapter):
         # HTML 解析兜底
         try:
             tree = HTMLParser(html)
-            for card in tree.css(".job-card, .job-item, .position-item, li, tr"):
-                title_el = card.css_first(".job-title, .title, h3, a, td")
-                loc_el = card.css_first(".location, .city, .addr, td:nth-child(3)")
+            # 选择器按优先级取（.job-title 优先于外层 a），不按文档顺序，见 html_dom.css_first_in_order。
+            for card in css_in_order(tree, (".job-card", ".job-item", ".position-item", "li", "tr")):
+                title_el = css_first_in_order(card, (".job-title", ".title", "h3", "a", "td"))
+                loc_el = css_first_in_order(card, (".location", ".city", ".addr", "td:nth-child(3)"))
                 link_el = card.css_first("a[href]")
 
                 title = title_el.text(strip=True) if title_el else ""
