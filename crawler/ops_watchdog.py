@@ -56,6 +56,7 @@ RULE_TITLES = {
     # P 同 H/I：早就在用了，标题一直没登记（2026-09-19 桥接 audit_results 时顺手补上，
     # 不改判定逻辑，只补一个人话标签）。
     "P": "洞察供给停摆",
+    "Q": "抓取主链连续失败",
 }
 
 # ── 规则 A：每个模块的「产出口径」与「处理量口径」────────────────────────────
@@ -1095,6 +1096,59 @@ def evaluate_timeout_kills(runs, jobs_by_run, meta_by_path, ratio=TIMEOUT_KILL_R
     return findings
 
 
+# ── 规则 Q：抓取主链连续失败（2026-10-04 加）────────────────────────────────────
+# ❌ 现象：selectolax 1.0（10-03）删了旧解析后端，三条抓取主链从 10-03 16:48 UTC 起每一轮都是
+#    启动即失败，约 19 小时没有任何一条 crawl_runs，而现有告警一条都没点中「抓取全挂了」：
+#    规则 E 只看「有没有跑」（失败的运行也算跑过）；规则 F/I/K/L 都读 crawl_runs，进程死在 import
+#    那一步时一行都不写，它们无从判起（K 只在少数还写了 skipped 行的 adapter 上碰巧响了）。
+# ✅ 判据只看 GitHub 上的运行结论：主链最近 ≥2 轮跑完的运行全部失败、中间没有成功。
+#    cancelled 交给规则 B，这里既不算失败也不打断连败（并发取消夹在中间不该清零）。
+# 📊 回测 09-04~10-04 三条主链：只在这次停摆命中（daily-crawl / campus-crawl），零误报；
+#    enrich-crawl 一天一轮，09-28 与 10-03 两次失败不相邻，不响。
+CRAWL_MAIN_WORKFLOWS = ("daily-crawl.yml", "enrich-crawl.yml", "campus-crawl.yml")
+CRAWL_FAILURE_CONCLUSIONS = frozenset({"failure", "startup_failure", "timed_out"})
+CRAWL_FAILURE_MIN_CONSECUTIVE = 2
+
+
+def evaluate_crawl_workflow_failures(runs, workflows=CRAWL_MAIN_WORKFLOWS,
+                                     min_consecutive=CRAWL_FAILURE_MIN_CONSECUTIVE):
+    """规则 Q：抓取主链最近连续 min_consecutive 轮以上跑完即失败。"""
+    by_name = defaultdict(list)
+    for run in runs or []:
+        name = (run.get("path") or "").rsplit("/", 1)[-1]
+        if name in workflows and run.get("status") == "completed":
+            by_name[name].append(run)
+    findings = []
+    for name in workflows:
+        ordered = sorted(by_name.get(name, []), key=lambda r: r.get("created_at") or "", reverse=True)
+        streak, last_success = [], None
+        for run in ordered:
+            conclusion = run.get("conclusion") or ""
+            if conclusion == "cancelled":
+                continue
+            if conclusion in CRAWL_FAILURE_CONCLUSIONS:
+                streak.append(run)
+                continue
+            if conclusion == "success":
+                last_success = run
+            break
+        if len(streak) < min_consecutive:
+            continue
+        evidence = [f"{r.get('created_at', '?')} run #{r.get('run_number', '?')} 结论 {r.get('conclusion')}"
+                    for r in streak[:10]]
+        evidence.append(f"上一次成功：{last_success.get('created_at')}" if last_success
+                        else "回看窗口内没有一次成功")
+        findings.append({
+            "rule": "Q",
+            "subject": name,
+            "summary": f"抓取主链 `{name}` 最近连续 {len(streak)} 轮都失败了——这段时间岗位库没有新数据进来。",
+            "evidence": evidence,
+            "next": ("看最近一轮失败日志的第一条 Traceback：启动即挂多半是依赖升级 / 环境变化"
+                     "（10-03 selectolax 1.0 就是这样），修好后手动 dispatch 一轮并回读 crawl_runs。"),
+        })
+    return findings
+
+
 def evaluate_stuck_ledger(rows, now=None, hours=6):
     """规则 C：discovery_runs 里 queued 超过 hours 小时 = 派单出去没人回写。"""
     now = now or datetime.now(timezone.utc)
@@ -1827,12 +1881,13 @@ def main():
                     print(f"  [watchdog] 取 run {run.get('id')} 的 job 详情失败，跳过：{exc}")
             findings += evaluate_timeout_kills(targets, jobs_by_run, meta_by_path)
             findings += evaluate_overdue(fetch_last_runs(repo, meta_by_path, runs), now=now)
+            findings += evaluate_crawl_workflow_failures(runs)
         except Exception as exc:  # noqa: BLE001 - GitHub 侧失败只降级，不吞掉台账侧告警
-            print(f"::warning::[watchdog] workflow 侧规则（B/E）本轮没查成：{type(exc).__name__}: {exc}")
-            rule_errored |= {"B", "E"}
+            print(f"::warning::[watchdog] workflow 侧规则（B/E/Q）本轮没查成：{type(exc).__name__}: {exc}")
+            rule_errored |= {"B", "E", "Q"}
     else:
-        print("[watchdog] 识别不到仓库，跳过 workflow 侧规则（B/E）。")
-        rule_errored |= {"B", "E"}  # 没跑 = 这一轮真的没评估成，不是评估出「0 条」
+        print("[watchdog] 识别不到仓库，跳过 workflow 侧规则（B/E/Q）。")
+        rule_errored |= {"B", "E", "Q"}  # 没跑 = 这一轮真的没评估成，不是评估出「0 条」
 
     print(f"\n[watchdog] {today} 检查完成：{len(findings)} 条告警"
           f"（ops_runs {len(ops_rows)} 行 / queued {len(discovery_rows)} 行 / events {len(event_rows)} 行）"

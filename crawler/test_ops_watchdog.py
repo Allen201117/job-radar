@@ -329,6 +329,70 @@ class AccountErrorScanTest(unittest.TestCase):
         self.assertEqual(len(findings), 1)
 
 
+class CrawlWorkflowFailureTest(unittest.TestCase):
+    """规则 Q：抓取主链连续失败。夹具形状 = GitHub /actions/runs 返回的 run 对象。"""
+
+    @staticmethod
+    def _run(name, created, conclusion, status="completed", number=1):
+        return {"path": f".github/workflows/{name}", "status": status, "conclusion": conclusion,
+                "created_at": created, "run_number": number}
+
+    def test_10_03_outage_replay_alerts_daily_and_campus(self):
+        # 10-03 selectolax 停摆的真实序列（回放）：daily 连 3 败、campus 连 5 败；enrich 只败 1 轮。
+        runs = [
+            self._run("daily-crawl.yml", "2026-10-03T12:06:35Z", "success"),
+            self._run("daily-crawl.yml", "2026-10-03T16:48:56Z", "failure"),
+            self._run("daily-crawl.yml", "2026-10-03T19:33:27Z", "failure"),
+            self._run("daily-crawl.yml", "2026-10-04T06:27:53Z", "failure"),
+            self._run("campus-crawl.yml", "2026-09-30T14:58:00Z", "cancelled"),
+            self._run("campus-crawl.yml", "2026-10-03T14:00:00Z", "success"),
+            *[self._run("campus-crawl.yml", t, "failure") for t in (
+                "2026-10-03T17:35:00Z", "2026-10-03T20:11:04Z", "2026-10-03T23:08:38Z",
+                "2026-10-04T02:43:40Z", "2026-10-04T09:25:21Z")],
+            self._run("enrich-crawl.yml", "2026-10-02T21:42:50Z", "success"),
+            self._run("enrich-crawl.yml", "2026-10-03T20:28:08Z", "failure"),
+        ]
+        found = {f["subject"]: f for f in W.evaluate_crawl_workflow_failures(runs)}
+        self.assertEqual(set(found), {"daily-crawl.yml", "campus-crawl.yml"})
+        self.assertEqual(found["daily-crawl.yml"]["rule"], "Q")
+        self.assertIn("连续 3 轮", found["daily-crawl.yml"]["summary"])
+        self.assertIn("连续 5 轮", found["campus-crawl.yml"]["summary"])
+        self.assertIn("上一次成功：2026-10-03T12:06:35Z", found["daily-crawl.yml"]["evidence"])
+
+    def test_isolated_failures_between_successes_are_silent(self):
+        # 回测里 enrich 09-28 / 10-03 两次失败不相邻 —— 不该响。
+        runs = [self._run("enrich-crawl.yml", t, c) for t, c in (
+            ("2026-09-28T22:51:00Z", "failure"), ("2026-09-29T21:00:00Z", "success"),
+            ("2026-10-03T20:28:00Z", "failure"))]
+        self.assertEqual(W.evaluate_crawl_workflow_failures(runs), [])
+
+    def test_recovered_after_failures_is_silent(self):
+        runs = [self._run("daily-crawl.yml", t, c) for t, c in (
+            ("2026-10-03T16:48:00Z", "failure"), ("2026-10-03T19:33:00Z", "failure"),
+            ("2026-10-04T11:28:00Z", "success"))]
+        self.assertEqual(W.evaluate_crawl_workflow_failures(runs), [])
+
+    def test_cancelled_neither_counts_nor_breaks_streak(self):
+        runs = [self._run("campus-crawl.yml", t, c) for t, c in (
+            ("2026-10-03T10:00:00Z", "success"), ("2026-10-03T11:00:00Z", "failure"),
+            ("2026-10-03T12:00:00Z", "cancelled"), ("2026-10-03T13:00:00Z", "cancelled"))]
+        self.assertEqual(W.evaluate_crawl_workflow_failures(runs), [])   # 只有 1 次真失败
+        runs.append(self._run("campus-crawl.yml", "2026-10-03T14:00:00Z", "startup_failure"))
+        self.assertEqual(len(W.evaluate_crawl_workflow_failures(runs)), 1)
+
+    def test_in_progress_run_does_not_reset_streak(self):
+        # 修复后补跑那一轮还在跑时，告警不该提前消失，也不该把 in_progress 当失败。
+        runs = [self._run("daily-crawl.yml", "2026-10-03T16:48:00Z", "failure"),
+                self._run("daily-crawl.yml", "2026-10-03T19:33:00Z", "failure"),
+                self._run("daily-crawl.yml", "2026-10-04T11:28:00Z", None, status="in_progress")]
+        self.assertEqual(len(W.evaluate_crawl_workflow_failures(runs)), 1)
+
+    def test_other_workflows_are_ignored(self):
+        runs = [self._run("db-report.yml", t, "failure") for t in
+                ("2026-10-03T01:00:00Z", "2026-10-04T01:00:00Z")]
+        self.assertEqual(W.evaluate_crawl_workflow_failures(runs), [])
+
+
 class OverdueTest(unittest.TestCase):
     def test_daily_workflow_silent_for_47_days_alerts(self):
         states = [{"name": "db-report.yml", "crons": ["30 3 * * *"], "max_gap_minutes": 1440,
@@ -913,7 +977,7 @@ class StaleApplyProgramsTest(unittest.TestCase):
 
     def test_规则字母都登记了标题(self):
         # H / I 曾经在用却没登记，issue 标题会退化成裸字母。
-        for letter in ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O"):
+        for letter in ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q"):
             self.assertIn(letter, W.RULE_TITLES)
 
 

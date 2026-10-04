@@ -1301,7 +1301,7 @@ checks:
 
   # ===== 老告警桥接（source: watchdog） =====
   # 严重度口径（2026-09-19 定）：晨报红灯只留给「用户可见损坏 / 供给来源大面积塌」，单个来源坏最多黄灯。
-  # 所以这里只有 rule_d（关键任务超期没跑）与 rule_k（某一整类来源产出骤降）是 critical，其余一律 warn ——
+  # 所以这里只有 rule_d（关键任务超期没跑）、rule_k（某一整类来源产出骤降）与 rule_q（抓取主任务连续失败）是 critical，其余一律 warn ——
   # 否则拖了几周的老病号（首日实测 A=6 / F=9）会让晨报天天红灯，红灯就废了。
   # 这 16 条不是本文件自己跑 SQL 量出来的——它们的判定逻辑一直在 crawler/ops_watchdog.py 里跑
   # （规则 A~P，每天真评估、命中就开 GitHub Issue），本次只是把「今天这条规则命中了几条」接进
@@ -1501,3 +1501,15 @@ checks:
     calibrated: false
     why: 洞察库最近一周新增的有效条目太少——这条任务每天都在处理公司、数字从不为 0，光看「有没有在跑」看不出它其实几乎没有真产出。
     action: 查最近几天洞察抓取的处理量和真正写入的条目数，看是不是卡在了某个环节
+
+  - id: watchdog.rule_q
+    name: 抓取主任务连续几轮都失败了
+    layer: pipeline
+    owner: crawler/ops_watchdog.py
+    rule: Q
+    source: watchdog
+    normal: "== 0"
+    severity: critical
+    calibrated: false
+    why: 负责抓岗位的几个主任务最近连着两轮以上一启动就失败，这段时间岗位库完全没有新数据进来。这种情况下抓取记录一条都不会写，其它看抓取记录的检查全都看不出来——10 月 3 日晚上就这样停了将近一天，没有一条告警点中。
+    action: 把这条转给 Claude，让它看失败原因、修好后立刻手动补跑一轮，并确认岗位重新抓回来了
