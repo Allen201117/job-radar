@@ -27,8 +27,8 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 import httpx
 
 import normalizer
-from .base import (DEFAULT_LIST_CAP, PageResult, RawJob, RepetitionBrake, paginate_all,
-                   resolve_detail_cap, resolve_list_cap, resolve_page_cap)
+from .base import (DEFAULT_LIST_CAP, PageResult, RawJob, RepetitionBrake, exc_brief,
+                   paginate_all, resolve_detail_cap, resolve_list_cap, resolve_page_cap)
 from .playwright_base import PlaywrightAdapter
 
 _log = logging.getLogger(__name__)
@@ -1418,16 +1418,25 @@ def _post_page_with_retry(cli, endpoints, ep_ok, body, attempts=_PAGE_RETRIES):
 
     端点大小写两试（/api/Jobad/ 与 /api/JobAd/）只在**首次**发生，命中后固定，不重复试错。
     """
-    for attempt in range(max(1, attempts)):
+    rounds = max(1, attempts)
+    # 最后一次失败的原因：抛异常（网络 / 解析）或回了没有 Data 列表的响应（限流体就是这种，不抛）。
+    # 调用方拿到 None 就停止翻页——不记下来，停在哪、为什么停都看不见。
+    last_problem = None
+    for attempt in range(rounds):
         for ep in ((ep_ok,) if ep_ok else endpoints):
             try:
                 cand = cli.post(ep, json=body, headers={"Content-Type": "application/json"}).json()
-            except Exception:
+            except Exception as exc:
+                last_problem = exc_brief(exc)
                 continue
             if isinstance(cand, dict) and isinstance(cand.get("Data"), list):
                 return cand, ep
-        if attempt + 1 < max(1, attempts):
+            last_problem = f"响应里没有 Data 列表：{str(cand)[:120]}"
+        if attempt + 1 < rounds:
             time.sleep(_PAGE_BACKOFF_SECONDS * (attempt + 1))
+    if last_problem is not None:
+        _log.warning("beisen GetJobAdPageList: PageIndex=%s 重试 %d 轮仍拿不到列表，最后一次：%s",
+                     body.get("PageIndex"), rounds, last_problem)
     return None, ep_ok
 
 
@@ -2301,7 +2310,9 @@ class BeisenAdapter(ChinaSpaAdapter):
                     try:
                         r = page.request.post(captured["url"], data=json.dumps(body), headers=hdrs)
                         jj = r.json()
-                    except Exception:
+                    except Exception as exc:
+                        _log.warning("%s: PageIndex=%d 重放失败，保留已抓 %d 条：%s",
+                                     self.name, index, len(rows), exc_brief(exc))
                         break
                     if not isinstance(jj, dict):
                         break

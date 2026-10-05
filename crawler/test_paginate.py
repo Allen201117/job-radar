@@ -8,6 +8,8 @@
 import logging
 import unittest
 
+import httpx
+
 from adapters.base import paginate_all, PageResult
 
 
@@ -202,6 +204,31 @@ class PaginateErrorTests(unittest.TestCase):
         items, total, complete = paginate_all(fetch_page, page_size=100)
         self.assertEqual(len(items), 100)
         self.assertFalse(complete)
+
+    def test_later_page_exception_logs_class_and_message(self):
+        # 告警必须分得清「网络瞬断」与「解析器炸了」：2026-10-04 国家能源 2604→794 只留了
+        # 「第 61 页抓取失败」一句，靠整源本地重抓对拍才证明是网络，不是 selectolax 迁移。
+        cases = [
+            (httpx.ReadTimeout("The read operation timed out"), "ReadTimeout: The read operation timed out"),
+            (AttributeError("'NoneType' object has no attribute 'text'"), "AttributeError: "),
+        ]
+        for raised, expected in cases:
+            with self.subTest(exc=type(raised).__name__):
+                def fetch_page(page_index, raised=raised):
+                    if page_index == 1:
+                        return PageResult(items=list(range(100)), total=500)
+                    raise raised
+
+                logger = logging.getLogger("test_paginate_err")
+                with self.assertLogs(logger, level="WARNING") as cm:
+                    items, total, complete = paginate_all(
+                        fetch_page, page_size=100, logger=logger, label="kinds=1,schType=2",
+                    )
+                self.assertEqual(len(items), 100)
+                self.assertFalse(complete)
+                msg = "\n".join(cm.output)
+                self.assertIn("kinds=1,schType=2: 第 2 页抓取失败，保留已抓 100 条", msg)
+                self.assertIn(expected, msg)
 
 
 if __name__ == "__main__":

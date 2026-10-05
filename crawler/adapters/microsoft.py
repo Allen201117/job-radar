@@ -8,12 +8,15 @@ pcsx 的 location 是**文本匹配**，单次只回少量（"China" 仅 16、�
 jd_url = https://jobs.careers.microsoft.com/global/en/job/{displayJobId}（MS 公开逐岗页，已 live 验证 200）。
 """
 import json
+import logging
 from typing import List, Optional
 
 import httpx
 
 import normalizer
-from .base import BaseAdapter, RawJob
+from .base import BaseAdapter, RawJob, exc_brief
+
+logger = logging.getLogger(__name__)
 
 _BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -90,7 +93,9 @@ class MicrosoftAdapter(BaseAdapter):
                     data = r.json().get("data", {}) or {}
                     if loc_total is None:
                         loc_total = _reported_total_from_payload(data)
-                except Exception:
+                except Exception as exc:
+                    logger.warning("microsoft: location=%s 第 %d 页抓取失败，保留已抓 %d 条：%s",
+                                   loc, page + 1, len(collected), exc_brief(exc))
                     break
                 positions = data.get("positions", []) or []
                 if not positions:

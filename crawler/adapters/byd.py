@@ -11,7 +11,7 @@ from typing import List, Optional
 
 import httpx
 
-from .base import BaseAdapter, RawJob, resolve_detail_cap
+from .base import BaseAdapter, RawJob, exc_brief, resolve_detail_cap
 from .china_location import is_china_company_location
 
 logger = logging.getLogger(__name__)
@@ -79,11 +79,12 @@ class BydAdapter(BaseAdapter):
                 response = client.post(self.LIST_API, json=self._list_payload(offset))
                 response.raise_for_status()
                 body = response.json() or {}
-            except Exception:
+            except Exception as exc:
                 if offset == 0:
                     raise  # 首页（offset=0）失败交给 run.py 记录为 failed
                 logger.warning(
-                    "byd: offset=%d 抓取失败，保留已抓 %d 条（尽力而为）", offset, len(rows_by_id)
+                    "byd: offset=%d 抓取失败，保留已抓 %d 条（尽力而为）：%s",
+                    offset, len(rows_by_id), exc_brief(exc),
                 )
                 complete = False
                 break  # 后续页尽力而为，保留已抓的行；不再触发下面的一致性检查

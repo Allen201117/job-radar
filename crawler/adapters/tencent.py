@@ -1,11 +1,14 @@
 import json
+import logging
 import re
 import time
 from typing import List, Optional
 
 import httpx
 
-from .base import BaseAdapter, RawJob
+from .base import BaseAdapter, RawJob, exc_brief
+
+logger = logging.getLogger(__name__)
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -74,9 +77,13 @@ class TencentAdapter(BaseAdapter):
                         if total is not None:
                             expected_pages = max(1, (total + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
                     page_posts = data.get("Posts") or []
-                except Exception:
+                except Exception as exc:
                     if page == 1:
                         raise  # 任一板块首页失败交给 run.py 记录为 failed
+                    logger.warning(
+                        "tencent: attrId=%s 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）：%s",
+                        attr_id, page, len(board_posts), exc_brief(exc),
+                    )
                     break  # 后续页尽力而为，保留已拿到的
                 if not page_posts:
                     break
