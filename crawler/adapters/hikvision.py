@@ -24,7 +24,7 @@ from typing import List, Optional
 
 import httpx
 
-from .base import BaseAdapter, RawJob
+from .base import BaseAdapter, RawJob, exc_brief
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ class HikvisionAdapter(BaseAdapter):
                         raise last_exc  # 首页重试仍失败交给 run.py 记录为 failed
                     logger.warning(
                         "hikvision: 第 %d 页重试 %d 次仍失败，保留已抓 %d 条（尽力而为）：%s",
-                        page_no, _PAGE_RETRIES, len(rows), last_exc,
+                        page_no, _PAGE_RETRIES, len(rows), exc_brief(last_exc),
                     )
                     break  # 后续页尽力而为，保留已抓的行；fetch_complete 由下方与 reported_total 比对天然置 False
                 if self.reported_total is None:

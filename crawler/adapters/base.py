@@ -185,6 +185,36 @@ class PageResult:
     #                                    不受「短页」误判——治接口只报页数、又会回瞬时/限流短页的源。
 
 
+# exc_brief 要抹掉的：URL 里的 userinfo（user:pass@）与查询串（_csrf / 签名 / token 常在这里）。
+_URL_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s'\"@]+@")
+_URL_QUERY_RE = re.compile(r"(https?://[^\s'\"?]*)\?[^\s'\"]*")   # 路径可含 #：hash 路由的查询串也抹
+
+
+def exc_brief(exc: BaseException, limit: int = 200) -> str:
+    """把吞掉的异常压成一行「类名: 首行信息」，给「第 N 页抓取失败，保留已抓」这类告警用。
+
+    为什么要它：翻页的 try 里通常「请求 + 解析」一起做，只记「第 N 页抓取失败」时分不清是
+    网络瞬断（ReadTimeout / 5xx）还是解析器炸了（AttributeError…）。2026-10-04 国家能源
+    2604→794 的 CI 日志只有「kinds=1,schType=2: 第 61 页抓取失败」，靠整源本地重抓、新旧代码
+    逐字段对拍才证明是网络瞬断。
+    - 只取首行：httpx HTTPStatusError 第二行是固定的 MDN 链接，Playwright 报错后面是几十行 call log。
+    - URL 去掉 userinfo 和查询串（阿里校招 POST 带 ``?_csrf=``），不把凭据写进 CI 日志。
+    - 先脱敏再截断到 limit，截断不会把被抹掉的东西切出半截来；跑正则前先限长到 limit+1000
+      （防异常里夹着整页压缩 HTML 让正则跑很久，截点远在输出窗口之外）。
+    - 它跑在 except 分支里，自己绝不能再抛：__str__ 坏掉的异常只记类名。
+    """
+    try:
+        text = str(exc)
+    except Exception:  # noqa: BLE001 —— 摘要失败不能把「尽力而为」变成整源失败
+        text = ""
+    lines = text.strip().splitlines()
+    head = lines[0].strip()[: limit + 1000] if lines else ""
+    head = _URL_USERINFO_RE.sub(r"\1***@", head)
+    head = _URL_QUERY_RE.sub(r"\1?…", head)
+    name = type(exc).__name__
+    return (f"{name}: {head}" if head else name)[:limit]
+
+
 def paginate_all(
     fetch_page: Callable[[int], PageResult],
     *,
@@ -237,11 +267,11 @@ def paginate_all(
             break
         try:
             result = fetch_page(page)
-        except Exception:
+        except Exception as exc:
             if pages_done == 0:
                 raise  # 首页失败 → 交上层记 failed
-            log.warning("%s: 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）",
-                        label or "paginate", pages_done + 1, len(items))
+            log.warning("%s: 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）：%s",
+                        label or "paginate", pages_done + 1, len(items), exc_brief(exc))
             complete = False
             break
 

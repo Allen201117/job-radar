@@ -13,7 +13,7 @@ from typing import List, Optional
 import httpx
 
 import normalizer
-from .base import BaseAdapter, RawJob
+from .base import BaseAdapter, RawJob, exc_brief
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +50,12 @@ class TencentMusicAdapter(BaseAdapter):
                 resp = client.post(api, json=payload)
                 resp.raise_for_status()
                 data = (resp.json() or {}).get("data") or {}
-            except Exception:
+            except Exception as exc:
                 if page == 1:
                     raise  # 该板块首页失败交给 run.py 记录为 failed
                 logger.warning(
-                    "tencent_music: %s 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）", api, page, len(rows)
+                    "tencent_music: %s 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）：%s",
+                    api, page, len(rows), exc_brief(exc),
                 )
                 break  # 后续页尽力而为，保留已抓的行；fetch_complete 由 fetch() 与 reported_total 比对天然置 False
             items = data.get("items") or []

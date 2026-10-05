@@ -10,11 +10,14 @@
 但此前只配了社招 URL —— 1,087 个实习岗白白漏掉，而实习正是校招专区的核心供给之一。
 岗位行**自带 positionNatureCode**，所以 _map 能逐条判类型，不需要按来源 URL 打标。
 """
+import logging
 from typing import Optional
 
 import normalizer
-from .base import RawJob
+from .base import RawJob, exc_brief
 from .playwright_base import PlaywrightAdapter
+
+logger = logging.getLogger(__name__)
 
 
 _LOCATION_NAMES = {
@@ -101,7 +104,9 @@ class KuaishouAdapter(PlaywrightAdapter):
                     arg=previous,
                     timeout=6000,
                 )
-            except Exception:
+            except Exception as exc:
+                # 「下一页」按钮可点（上面已排除 disabled）却翻不过去 = 异常，不是正常翻到底
+                logger.warning("kuaishou: 第 %s 页之后翻页失败，停止翻页：%s", previous, exc_brief(exc))
                 break
 
     def _map(self, post: dict) -> Optional[RawJob]:

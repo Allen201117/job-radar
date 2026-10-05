@@ -8,7 +8,7 @@ from typing import List
 import httpx
 from html_dom import HTMLParser, css_first_in_order, css_in_order
 
-from .base import BaseAdapter, RawJob
+from .base import BaseAdapter, RawJob, exc_brief
 
 
 logger = logging.getLogger(__name__)
@@ -70,11 +70,11 @@ class JdAdapter(BaseAdapter):
                 )
                 resp.raise_for_status()
                 payload = resp.json()
-            except Exception:
+            except Exception as exc:
                 if page == 1:
                     raise  # 首页失败交给 run.py 记录为 failed
                 logger.warning(
-                    "jd: 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）", page, len(rows)
+                    "jd: 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）：%s", page, len(rows), exc_brief(exc)
                 )
                 self.reported_total = None
                 self.fetch_complete = False

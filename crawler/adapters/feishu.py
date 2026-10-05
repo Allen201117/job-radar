@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 import httpx
 
 import normalizer
-from .base import DEFAULT_LIST_CAP, RawJob, RepetitionBrake, resolve_list_cap
+from .base import DEFAULT_LIST_CAP, RawJob, RepetitionBrake, exc_brief, resolve_list_cap
 from .playwright_base import PlaywrightAdapter, _UA
 
 logger = logging.getLogger(__name__)
@@ -218,7 +218,9 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                     try:
                         r = cli.post(f"https://{host}/api/v1/search/job/posts", json=body)
                         jj = r.json()
-                    except Exception:
+                    except Exception as exc:
+                        logger.warning("%s: %s 门户 %s offset=%d 抓取失败，保留已抓 %d 条：%s",
+                                       self.name, host, prefix, offset, len(rows), exc_brief(exc))
                         break
                     data = (jj or {}).get("data") if isinstance(jj, dict) else None
                     if not isinstance(data, dict):
@@ -249,7 +251,9 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                     if not _should_continue(before, len(rows), chunk, total, self._PAGE_SIZE):
                         break
                     offset += self._PAGE_SIZE
-        except Exception:
+        except Exception as exc:
+            logger.warning("%s: %s 门户 %s 抓取中断，保留已抓 %d 条：%s",
+                           self.name, host, prefix, len(rows), exc_brief(exc))
             return rows, total, reached
         return rows, total, reached
 
@@ -457,7 +461,9 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
             try:
                 r = page.request.post(url, data=json.dumps(body), headers=hdrs)
                 jj = r.json()
-            except Exception:
+            except Exception as exc:
+                logger.warning("%s: 翻页重放 offset=%d 失败，保留已抓 %d 条：%s",
+                               self.name, offset, len(rows), exc_brief(exc))
                 break
             data = (jj or {}).get("data") if isinstance(jj, dict) else None
             if not isinstance(data, dict):

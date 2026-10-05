@@ -17,7 +17,7 @@ from urllib.parse import urlparse, parse_qs, urlencode
 import httpx
 
 import normalizer
-from .base import BaseAdapter, RawJob
+from .base import BaseAdapter, RawJob, exc_brief
 
 logger = logging.getLogger(__name__)
 
@@ -136,11 +136,12 @@ class AmazonAdapter(BaseAdapter):
                 r = httpx.get(url, headers=headers, timeout=self.timeout)
                 r.raise_for_status()
                 data = r.json()
-            except Exception:
+            except Exception as exc:
                 if page == 0:
                     raise  # 首页失败交给 run.py 记录为 failed
                 logger.warning(
-                    "amazon: 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）", page + 1, len(collected)
+                    "amazon: 第 %d 页抓取失败，保留已抓 %d 条（尽力而为）：%s",
+                    page + 1, len(collected), exc_brief(exc),
                 )
                 break  # 后续页尽力而为，保留已抓的行；fetch_complete 由下方与 reported_total 比对天然置 False
             if self.reported_total is None:

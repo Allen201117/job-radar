@@ -8,12 +8,15 @@ Google careers 结果页（www.google.com/about/careers/applications/jobs/result
 jd_url = https://www.google.com/about/careers/applications/{href去掉query}。
 """
 import json
+import logging
 import re
 from typing import List, Optional
 from urllib.parse import urlencode
 
 import normalizer
-from .base import BaseAdapter, RawJob
+from .base import BaseAdapter, RawJob, exc_brief
+
+logger = logging.getLogger(__name__)
 
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -81,7 +84,9 @@ class GoogleAdapter(BaseAdapter):
                             pass
                         page.wait_for_timeout(800)
                         rows = page.eval_on_selector_all("a[href*='jobs/results/']", _EXTRACT_JS)
-                    except Exception:
+                    except Exception as exc:
+                        logger.warning("google: location=%s 第 %d 页抓取失败，保留已抓 %d 条：%s",
+                                       loc, pg, len(cards), exc_brief(exc))
                         break
                     if not rows:
                         break

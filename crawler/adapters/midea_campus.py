@@ -56,7 +56,8 @@ import httpx
 
 import normalizer
 
-from .base import BaseAdapter, DEFAULT_LIST_CAP, RawJob, resolve_list_cap, resolve_page_cap
+from .base import (BaseAdapter, DEFAULT_LIST_CAP, RawJob, exc_brief, resolve_list_cap,
+                   resolve_page_cap)
 
 logger = logging.getLogger(__name__)
 
@@ -205,11 +206,12 @@ class MideaCampusAdapter(BaseAdapter):
                     continue
                 try:
                     got, total, ok = self._drain_project(client, project, remaining)
-                except Exception:
+                except Exception as exc:
                     if not rows:
                         raise      # 第一个项目就炸 = 接口坏了，交上层记 failed
-                    logger.warning("%s: 项目 %s 抓取失败，保留已抓 %d 条",
-                                   self.name, project.get("projectRuleName"), len(rows))
+                    logger.warning("%s: 项目 %s 抓取失败，保留已抓 %d 条：%s",
+                                   self.name, project.get("projectRuleName"), len(rows),
+                                   exc_brief(exc))
                     drained.append(False)
                     continue
                 rows.extend(got)
