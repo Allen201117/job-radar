@@ -130,3 +130,53 @@ class ApplePaginationTest(unittest.TestCase):
         for keyword in ("machine+learning", "machine%20learning", "search=software"):
             self.assertTrue(all(keyword not in u for u in seen),
                             f"仍在用写死关键词 {keyword}: {seen[:3]}")
+
+
+class AppleMidPageRetryTest(unittest.TestCase):
+    """2026-10-03 起 CI 上每轮只抓到 20~280 / ~4,500 个岗：中途某页瞬时失败 / 回空页，
+    paginate_all 就地收尾。中途页要退避重试；重试用尽仍坏，才按原语义截断并标没抓全。"""
+
+    def _run(self, glitches, total=55):
+        fake_get, seen = ApplePaginationTest()._fake_get(total)
+        calls = {}
+
+        def flaky_get(url, **kw):
+            page = int(re.search(r"[?&]page=(\d+)", url).group(1))
+            calls[page] = calls.get(page, 0) + 1
+            mode = glitches.get(page)
+            if mode and calls[page] <= mode[1]:
+                if mode[0] == "raise":
+                    raise RuntimeError("HTTP 503")
+                return fake_get(url.replace(f"page={page}", "page=999"), **kw)  # 空页
+            return fake_get(url, **kw)
+
+        adapter = AppleAdapter()
+        adapter.PAGE_RETRY_BACKOFF = (0, 0, 0)
+        import adapters.apple as mod
+        orig, mod.httpx.get = mod.httpx.get, flaky_get
+        try:
+            jobs = adapter.parse(adapter.fetch("https://jobs.apple.com/en-us/search"))
+        finally:
+            mod.httpx.get = orig
+        return adapter, jobs, calls
+
+    def test_transient_error_mid_page_is_retried(self):
+        adapter, jobs, calls = self._run({2: ("raise", 2)})
+        self.assertEqual(len(jobs), 55)
+        self.assertTrue(adapter.fetch_complete)
+        self.assertEqual(calls[2], 3)
+
+    def test_transient_empty_mid_page_is_retried(self):
+        adapter, jobs, _ = self._run({2: ("empty", 1)})
+        self.assertEqual(len(jobs), 55)
+        self.assertTrue(adapter.fetch_complete)
+
+    def test_persistent_mid_page_failure_keeps_rows_and_marks_incomplete(self):
+        adapter, jobs, calls = self._run({2: ("raise", 99)})
+        self.assertEqual(len(jobs), 20)
+        self.assertFalse(adapter.fetch_complete)
+        self.assertEqual(calls[2], 4)
+
+    def test_first_page_error_is_not_retried(self):
+        with self.assertRaises(RuntimeError):
+            self._run({1: ("raise", 99)})

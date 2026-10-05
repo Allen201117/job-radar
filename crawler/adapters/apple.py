@@ -1,4 +1,5 @@
 import json
+import time
 import re
 from urllib.parse import urlencode
 
@@ -22,6 +23,7 @@ class AppleAdapter(BaseAdapter):
 
     PAGE_SIZE = 20        # Apple 搜索页每页固定 20 条（实测）
     MAX_PAGES = 400       # 安全上限：全量 ~6000 岗 ÷ 20 ≈ 303 页，留余量
+    PAGE_RETRY_BACKOFF = (3, 8, 20)  # 中途页失败/空页的退避秒数（测试置 0）
 
     def fetch(self, source_url: str) -> str:
         """翻全 Apple 公开搜索页，返回 JSON 岗位数组。
@@ -38,7 +40,7 @@ class AppleAdapter(BaseAdapter):
         if self.SEARCH_LOCATION:
             params["location"] = self.SEARCH_LOCATION
 
-        def fetch_page(page: int) -> PageResult:
+        def fetch_once(page: int) -> PageResult:
             url = f"{self.SEARCH_URL}?{urlencode({**params, 'page': page})}"
             resp = httpx.get(
                 url,
@@ -57,6 +59,30 @@ class AppleAdapter(BaseAdapter):
                 items=rows if isinstance(rows, list) else [],
                 total=total if isinstance(total, int) else None,
             )
+
+        def fetch_page(page: int) -> PageResult:
+            # 中途页「抛错 / 空页」都会让 paginate_all 就地收尾：2026-10-03 起 CI 上每轮只抓到
+            # 20~280 / ~4,500 个岗（本机同时连翻 40 页全 200、每页 20 条），是瞬时失败把整轮截断。
+            # 首页不重试（交上层记 failed）；之后的页退避重试，仍失败再按原语义截断 + 标没抓全。
+            last_exc = None
+            for wait in (0, *self.PAGE_RETRY_BACKOFF):
+                if wait:
+                    time.sleep(wait)
+                try:
+                    result = fetch_once(page)
+                except Exception as e:  # noqa: BLE001 — 记下来，重试用尽再上抛
+                    if page == 1:
+                        raise
+                    last_exc = e
+                    print(f"    apple page {page} failed ({type(e).__name__}: {e}); retry", flush=True)
+                    continue
+                if result.items or page == 1:
+                    return result
+                last_exc = None
+                print(f"    apple page {page} came back empty; retry", flush=True)
+            if last_exc is not None:
+                raise last_exc
+            return PageResult(items=[], total=None)
 
         rows, total, complete = paginate_all(
             fetch_page,
