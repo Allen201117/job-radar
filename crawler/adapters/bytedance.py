@@ -178,6 +178,7 @@ class BytedanceFetchResult:
     reached: bool = True
     skipped_pages: int = 0
     hit_max_jobs: bool = False
+    error: Optional[str] = None   # reached=False 时根页失败的原因，带进 crawl_runs.error_message
 
 
 FetchPage = Callable[[str, int, int, Optional[str], Optional[str]], BytedancePage]
@@ -266,7 +267,8 @@ def collect_bytedance_track(
     root = safe_fetch(0, 1)
     if not root.ok:
         return BytedanceFetchResult(
-            jobs=[], total=None, complete=False, reached=False, skipped_pages=1
+            jobs=[], total=None, complete=False, reached=False, skipped_pages=1,
+            error=root.error,
         )
 
     total = root.count
@@ -492,7 +494,7 @@ class BytedanceAdapter(PlaywrightAdapter):
         self.reported_total = None
         result = self._httpx_fetch()
         if not result.reached:
-            raise RuntimeError(f"{self.name}: posts API not reached")
+            raise RuntimeError(f"{self.name}: posts API not reached ({result.error or 'unknown'})")
         self.reported_total = result.total
         self.fetch_complete = bool(result.complete)
         if result.hit_max_jobs:

@@ -18,6 +18,7 @@ from unittest import mock
 
 import httpx
 
+from adapters.alibaba import AlibabaAdapter
 from adapters.amazon import AmazonAdapter
 from adapters.apple import AppleAdapter
 from adapters.base import RepetitionBrake, exc_brief
@@ -402,6 +403,119 @@ class AppleRetryPrintTests(unittest.TestCase):
         self.assertTrue(lines[0].endswith("; retry"), lines[0])
         self.assertNotIn("SECRET9", printed)
         self.assertNotIn("mozilla", printed)
+
+
+class _AlibabaCookiePage:
+    """种 cookie 那两次 GET 的应答（_describe_answer 只读这几个属性）。"""
+    status_code, history, text, headers, url = 200, (), "", {}, None
+
+
+class _AlibabaFakeClient:
+    """按 URL 分发 POST 的假 httpx.Client。post 的 URL 里带 ?_csrf=CSRF999（与线上同形）。"""
+
+    def __init__(self, search_pages, category=None):
+        self.search_pages = list(search_pages)   # 依次返回的 payload；Exception 就抛（带真 URL）
+        self.category = category
+        self.cookies = {"XSRF-TOKEN": "CSRF999"}
+
+    def __call__(self, *a, **k):   # 当成 httpx.Client 类用
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def get(self, *a, **k):
+        return _AlibabaCookiePage()
+
+    def _answer(self, item, url):
+        if isinstance(item, int):
+            raise _status_error(url, item)
+        resp = mock.Mock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = item
+        return resp
+
+    def post(self, url, json=None):
+        if "/category/list" in url:
+            return self._answer(self.category, url)
+        item = self.search_pages.pop(0) if self.search_pages else {"content": {"datas": []}}
+        return self._answer(item, url)
+
+
+def _alibaba_page(start, n, total):
+    return {"content": {"totalCount": total,
+                        "datas": [{"id": start + i, "name": f"t{start + i}"} for i in range(n)]}}
+
+
+class AlibabaSearchFailureLogTests(unittest.TestCase):
+    """position/search、category/list 两个 POST 带 ?_csrf=：失败此前连一行日志都不留。"""
+
+    def _fetch(self, client):
+        adapter = AlibabaAdapter()
+        adapter.company_name = "X"
+        with mock.patch("adapters.alibaba.httpx.Client", client):
+            return adapter, adapter.fetch("https://talent.example.com/off-campus/position-list")
+
+    def test_never_answered_error_carries_redacted_cause(self):
+        with self.assertLogs("adapters.alibaba", level="WARNING") as cm:
+            with self.assertRaises(RuntimeError) as ctx:
+                self._fetch(_AlibabaFakeClient([503]))
+        err = str(ctx.exception)
+        self.assertIn("position/search 无应答 (talent.example.com)，最后一次异常 HTTPStatusError: "
+                      "Server error '503", err)
+        self.assertIn("https://talent.example.com/position/search?…", err)
+        msg = "\n".join(cm.output)
+        self.assertIn("第 1 页抓取失败，保留已抓 0 条：HTTPStatusError", msg)
+        self.assertNotIn("\n", err)
+        for text in (err, msg):
+            self.assertNotIn("CSRF999", text)
+            self.assertNotIn("_csrf", text)
+
+    def test_later_page_failure_keeps_rows_and_logs_cause(self):
+        client = _AlibabaFakeClient([_alibaba_page(0, 100, 250), 502])
+        with self.assertLogs("adapters.alibaba", level="WARNING") as cm:
+            adapter, payload = self._fetch(client)
+        self.assertEqual(len(json.loads(payload)["_intercepted"][0]["content"]["datas"]), 100)
+        self.assertFalse(adapter.fetch_complete)   # 100 / 250，没抓全照旧如实记
+        msg = "\n".join(cm.output)
+        self.assertIn("第 2 页抓取失败，保留已抓 100 条：HTTPStatusError: Server error '502", msg)
+        self.assertNotIn("CSRF999", msg)
+
+    def test_category_list_failure_logged(self):
+        # totalCount 超过 offset 封顶 500 才会去拉品类树；拉不到就只剩大城市分片补漏。
+        pages = [_alibaba_page(i * 100, 100, 700) for i in range(5)]
+        client = _AlibabaFakeClient(pages, category=500)
+        with self.assertLogs("adapters.alibaba", level="WARNING") as cm:
+            adapter, _ = self._fetch(client)
+        self.assertFalse(adapter.fetch_complete)
+        msg = "\n".join(cm.output)
+        self.assertIn("category/list 失败，跳过品类分片", msg)
+        self.assertIn("HTTPStatusError: Server error '500", msg)
+        self.assertNotIn("CSRF999", msg)
+
+
+class BytedanceRootFailureTests(unittest.TestCase):
+    """根页（count 探测）失败此前只报「posts API not reached」，原因整个丢掉。"""
+
+    def test_root_failure_cause_reaches_error_message(self):
+        adapter = BytedanceAdapter()
+        err = _status_error("https://jobs.bytedance.com/api/v1/search/job/posts?msToken=SECRET5", 503)
+        with mock.patch.object(adapter, "_request_page", side_effect=err):
+            with self.assertRaises(RuntimeError) as ctx:
+                adapter.fetch("https://jobs.bytedance.com/experienced/position")
+        msg = str(ctx.exception)
+        self.assertTrue(msg.startswith("bytedance: posts API not reached (HTTPStatusError: Server error '503"), msg)
+        self.assertNotIn("SECRET5", msg)
+        self.assertNotIn("\n", msg)
+
+    def test_root_failure_without_exception_keeps_its_reason(self):
+        result = collect_bytedance_track(
+            lambda *a: BytedancePage(ok=False, error="HTTP 405 after retries"), "1")
+        self.assertFalse(result.reached)
+        self.assertEqual(result.error, "HTTP 405 after retries")
 
 
 if __name__ == "__main__":

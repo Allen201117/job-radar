@@ -19,6 +19,7 @@ host 从 source_url 动态解析，一个 adapter 全家通用；company 由 sou
  （回落到「更多招聘」导航页），不能当 source 入库——只用 BU 自有域。）
 """
 import json
+import logging
 import re
 import time
 from typing import Optional
@@ -27,8 +28,10 @@ from urllib.parse import urlparse
 import httpx
 
 import normalizer
-from .base import RawJob
+from .base import RawJob, exc_brief
 from .playwright_base import PlaywrightAdapter
+
+logger = logging.getLogger(__name__)
 
 
 def _first(post: dict, keys) -> str:
@@ -196,6 +199,9 @@ class AlibabaAdapter(PlaywrightAdapter):
             #   · 接口从没答上来（超时/5xx/JSON 坏） → 真故障，必须 raise 让 crawl_run 记 failed
             # 不区分的话，「2027 届还没开闸」会天天被记成抓取失败，把真故障淹在噪音里。
             api_answered = [False]
+            # 最后一次 position/search 失败的原因；接口从没答上来时带进报错，否则 crawl_runs
+            # 只有一句「无应答」，看不出是超时、5xx 还是 JSON 坏了。URL 带 ?_csrf=，必须走 exc_brief。
+            search_error = [None]
 
             def sweep(regions: str = "", sub_categories: str = ""):
                 """单过滤条件下翻页收齐（服务端 offset 封顶 500/条件），返回该条件 totalCount。"""
@@ -212,7 +218,12 @@ class AlibabaAdapter(PlaywrightAdapter):
                         resp.raise_for_status()
                         payload = resp.json()
                         api_answered[0] = True
-                    except (httpx.HTTPError, ValueError):
+                    except (httpx.HTTPError, ValueError) as exc:
+                        search_error[0] = exc_brief(exc)
+                        logger.warning(
+                            "alibaba %s regions=%s subCategories=%s: 第 %d 页抓取失败，保留已抓 %d 条：%s",
+                            host, regions or "-", sub_categories or "-", page, len(seen_ids),
+                            exc_brief(exc))
                         break
                     content = payload.get("content") or {}
                     rows = content.get("datas") or []
@@ -245,7 +256,9 @@ class AlibabaAdapter(PlaywrightAdapter):
                         "channel": "group_official_site", "language": "zh",
                     })
                     cat_tree = cat_resp.json().get("content") or []
-                except (httpx.HTTPError, ValueError):
+                except (httpx.HTTPError, ValueError) as exc:
+                    logger.warning("alibaba %s: category/list 失败，跳过品类分片（只靠大城市分片补漏）：%s",
+                                   host, exc_brief(exc))
                     cat_tree = []
                 for cat in cat_tree:
                     codes = ",".join(
@@ -256,7 +269,8 @@ class AlibabaAdapter(PlaywrightAdapter):
                 for adcode in self._REGION_SHARDS:
                     sweep(regions=adcode)
         if not collected and not api_answered[0]:
-            raise RuntimeError(f"alibaba: position/search 无应答 ({host})")
+            cause = f"，最后一次异常 {search_error[0]}" if search_error[0] else ""
+            raise RuntimeError(f"alibaba: position/search 无应答 ({host}){cause}")
         if not collected:
             # 接口答了、就是 0 条：校招频道在正式批开闸前的正常状态（2026-08-04 实测 13 个 BU
             # 里 11 个校招 0 条）。返回空信封让上层记 0 岗成功，而不是 failed。
