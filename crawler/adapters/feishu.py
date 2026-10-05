@@ -19,7 +19,8 @@ from urllib.parse import urlparse
 import httpx
 
 import normalizer
-from .base import DEFAULT_LIST_CAP, RawJob, RepetitionBrake, exc_brief, resolve_list_cap
+from .base import (DEFAULT_LIST_CAP, RawJob, RepetitionBrake, exc_brief, redact_urls,
+                   resolve_list_cap)
 from .playwright_base import PlaywrightAdapter, _UA
 
 logger = logging.getLogger(__name__)
@@ -483,8 +484,9 @@ class FeishuRecruitAdapter(PlaywrightAdapter):
                 break
             if brake.observe(_titles_of(rows[before:])):   # 与 httpx 路径同口径，见那边注释
                 self.coverage_stop_reason = "repetition_brake"
+                # url 是站点 JS 自己发的 posts 请求，查询串带 _signature，不进 CI 日志。
                 logger.info("%s: 重复度刹车 —— 连续 %d 条没有新角色，停在 %d/%s 条 url=%s",
-                            self.name, brake.stall_rows, len(rows), total, url)
+                            self.name, brake.stall_rows, len(rows), total, redact_urls(url))
                 break
             if not _should_continue(before, len(rows), chunk, total, self._PAGE_SIZE):
                 break

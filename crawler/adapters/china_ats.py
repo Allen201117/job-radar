@@ -28,7 +28,7 @@ import httpx
 
 import normalizer
 from .base import (DEFAULT_LIST_CAP, PageResult, RawJob, RepetitionBrake, exc_brief,
-                   paginate_all, resolve_detail_cap, resolve_list_cap, resolve_page_cap)
+                   paginate_all, redact_urls, resolve_detail_cap, resolve_list_cap, resolve_page_cap)
 from .playwright_base import PlaywrightAdapter
 
 _log = logging.getLogger(__name__)
@@ -158,14 +158,18 @@ _MOKA_CITY_RE = re.compile(r"[一-龥]{2,}(?:省|市|区)")
 
 
 def _first_line(exc: BaseException, limit: int = 240) -> str:
-    """异常的类型 + 首行信息（Playwright 报错动辄几十行 call log，只留能定位问题的那一行）。"""
-    text = str(exc).strip().splitlines()
-    head = text[0] if text else ""
-    for line in text[1:]:
+    """异常的类型 + 首行信息（Playwright 报错动辄几十行 call log，只留能定位问题的那一行）。
+    首行走 base.exc_brief（URL 脱敏、绝不抛）；点击超时再把 call log 里点名挡住按钮的那一行接上。"""
+    head = exc_brief(exc, limit)
+    try:
+        rest = str(exc).strip().splitlines()[1:]
+    except Exception:  # noqa: BLE001 —— 跑在 except 分支里，摘要失败不能再抛
+        rest = []
+    for line in rest:
         if "intercepts pointer events" in line:   # 点名挡住按钮的元素，比首行更有用
-            head = f"{head} | {line.strip()}"
+            head = f"{head} | {redact_urls(line.strip(), limit + 1000)}"
             break
-    return f"{type(exc).__name__}: {head}"[:limit]
+    return head[:limit]
 
 
 def _parse_moka_card(text: str):
@@ -308,8 +312,8 @@ class MokaAdapter(PlaywrightAdapter):
             try:
                 state, cards = self._open_route(page, current_url + route)
             except Exception as e:  # noqa: BLE001 —— 看不清就不下结论
-                _log.warning("moka campus alias portal %s%s not readable: %s: %s",
-                             current_url, route, type(e).__name__, e)
+                _log.warning("moka campus alias portal %s%s not readable: %s",
+                             current_url, route, exc_brief(e))   # Playwright 报错后面是几十行 call log
                 continue
             if cards or state == "closed":
                 break

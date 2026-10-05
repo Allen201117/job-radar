@@ -7,7 +7,7 @@ import httpx
 from typing import List
 
 import normalizer
-from .base import BaseAdapter, PageResult, RawJob, paginate_all
+from .base import BaseAdapter, PageResult, RawJob, exc_brief, paginate_all
 
 
 class AppleAdapter(BaseAdapter):
@@ -74,7 +74,7 @@ class AppleAdapter(BaseAdapter):
                     if page == 1:
                         raise
                     last_exc = e
-                    print(f"    apple page {page} failed ({type(e).__name__}: {e}); retry", flush=True)
+                    print(f"    apple page {page} failed ({exc_brief(e)}); retry", flush=True)
                     continue
                 if result.items or page == 1:
                     return result

@@ -17,7 +17,7 @@ from urllib.parse import quote
 import httpx
 
 import normalizer
-from .base import RawJob
+from .base import RawJob, exc_brief
 from .playwright_base import PlaywrightAdapter, _UA
 
 
@@ -211,7 +211,7 @@ def collect_bytedance_track(
         try:
             page = fetch_page(str(recruitment_id), int(offset), int(limit), category_id, city_code)
         except Exception as exc:
-            return BytedancePage(ok=False, error=f"{type(exc).__name__}: {exc}")
+            return BytedancePage(ok=False, error=exc_brief(exc))
         if not isinstance(page, BytedancePage):
             return BytedancePage(ok=False, error="invalid page object")
         page.count = _as_count(page.count)
@@ -450,7 +450,7 @@ class BytedanceAdapter(PlaywrightAdapter):
                     resp.raise_for_status()
                 payload = resp.json()
             except Exception as exc:
-                return BytedancePage(ok=False, error=f"{type(exc).__name__}: {exc}")
+                return BytedancePage(ok=False, error=exc_brief(exc))
 
             data = (payload or {}).get("data") if isinstance(payload, dict) else None
             if not isinstance(data, dict):

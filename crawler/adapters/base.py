@@ -190,6 +190,13 @@ _URL_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s'\"@]+@")
 _URL_QUERY_RE = re.compile(r"(https?://[^\s'\"?]*)\?[^\s'\"]*")   # 路径可含 #：hash 路由的查询串也抹
 
 
+def redact_urls(text: str, max_len: int = 1200) -> str:
+    """抹掉文本里 URL 的 userinfo 与查询串（exc_brief 同口径）。先截到 max_len 再跑正则：
+    对「a.a.a.…」这种超长单行它是平方级（不限长 8 万字符实测 12s）。"""
+    text = _URL_USERINFO_RE.sub(r"\1***@", text[:max_len])
+    return _URL_QUERY_RE.sub(r"\1?…", text)
+
+
 def exc_brief(exc: BaseException, limit: int = 200) -> str:
     """把吞掉的异常压成一行「类名: 首行信息」，给「第 N 页抓取失败，保留已抓」这类告警用。
 
@@ -208,9 +215,7 @@ def exc_brief(exc: BaseException, limit: int = 200) -> str:
     except Exception:  # noqa: BLE001 —— 摘要失败不能把「尽力而为」变成整源失败
         text = ""
     lines = text.strip().splitlines()
-    head = lines[0].strip()[: limit + 1000] if lines else ""
-    head = _URL_USERINFO_RE.sub(r"\1***@", head)
-    head = _URL_QUERY_RE.sub(r"\1?…", head)
+    head = redact_urls(lines[0].strip(), limit + 1000) if lines else ""
     name = type(exc).__name__
     return (f"{name}: {head}" if head else name)[:limit]
 
