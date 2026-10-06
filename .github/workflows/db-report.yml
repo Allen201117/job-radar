@@ -16,7 +16,7 @@ on:
 
 jobs:
   report:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30   # 只读报告；防 runner 挂起白等默认 6h
     steps:
       - uses: actions/checkout@v4

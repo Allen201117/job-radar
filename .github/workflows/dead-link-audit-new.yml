@@ -22,7 +22,7 @@ on:
 
 jobs:
   audit-new:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40   # 300 岗 × ~3s ≈ 15min；远低于 GH 6h
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

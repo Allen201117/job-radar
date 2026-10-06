@@ -31,7 +31,7 @@ on:
 jobs:
   audit:
     if: github.event_name != 'schedule' || github.event.schedule == '0 22 * * *'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 150  # 1200 岗 × 慢 SPA ~6s ≈ 120min；给渲染与网络抖动留余量
     strategy:
       fail-fast: false
@@ -75,7 +75,7 @@ jobs:
 
   must_apply_audit:
     if: github.event_name == 'schedule' && github.event.schedule == '30 3,15 * * *'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45   # 400 岗 × ~3s ≈ 20min；给浏览器安装和网络抖动留余量
     strategy:
       fail-fast: false

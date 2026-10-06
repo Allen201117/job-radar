@@ -48,7 +48,7 @@ concurrency:
 jobs:
   # 发信闸门：决定这一轮要不要发、什么时候发（见文件头）。只读库，不写任何东西。
   gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     outputs:
       proceed: ${{ steps.gate.outputs.proceed }}
@@ -84,7 +84,7 @@ jobs:
     # 体检这一轮失败也照发：晨报会把「今天没查到」逐条点名，不发才是真的瞎。
     # gate 说今天已发过（proceed=false）→ 体检与发信都跳过。
     if: ${{ !cancelled() && needs.gate.outputs.proceed == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}

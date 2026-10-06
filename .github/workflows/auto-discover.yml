@@ -31,7 +31,7 @@ on:
 
 jobs:
   discover:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 手动大 cap 补缺口时 probe 家数可能远超每日 80（seed 按日固定 → 同日重触发会重探同一批，
     # 所以补缺口要靠「一轮拉大 cap」而不是多轮），给足时间预算。
     timeout-minutes: 50

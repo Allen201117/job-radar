@@ -13,7 +13,7 @@ on:
 
 jobs:
   fetch:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 首跑含 slug 域名核验 + 官网图标探测（逐个抓首页）会久一些；核验通过的域名落库，后续跑直接复用不再核验。
     timeout-minutes: 180
     env:

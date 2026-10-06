@@ -44,7 +44,7 @@ concurrency:
 
 jobs:
   probe:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -69,7 +69,7 @@ jobs:
   verify:
     needs: probe
     if: ${{ github.event_name == 'schedule' || github.event.inputs.apply == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 层2 可能跑 moka 浏览器 adapter（2-5min/源）；12 个 ≈ 25-60min，留足余量。
     timeout-minutes: 90
     env:

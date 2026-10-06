@@ -7,7 +7,7 @@ on:
 
 jobs:
   migrate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60   # 大表 DDL 留余量；防 runner 挂起白等默认 6h
     steps:
       - uses: actions/checkout@v4

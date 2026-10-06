@@ -41,7 +41,7 @@ jobs:
   # 分片计划：只读 Supabase 的 sources + crawl_runs（近 7 晚），按预计耗时装箱，产物交给各片。
   # 失败也不挡抓取：各片发现 plan 没成功就**一起**退回按源数装箱（全员一致，不会漏/重）。
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -81,7 +81,7 @@ jobs:
       fail-fast: false  # 一片失败不取消其余片（各片独立，单片挂了其余照常覆盖）
       matrix:
         shard: [0, 1, 2, 3, 4, 5]  # 6 片并行；列表长度与上方 SHARD_COUNT 必须一致
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 触顶=提前失败留日志而非被 GitHub 6h 硬杀静默 cancel。单片耗时以 plan job 的步骤摘要为准；
     # 国聘那片的下限就是国聘一队的串行耗时（2026-09 实测线程池 91~134min），装箱救不了它，预计过 170 会打 warning。
     timeout-minutes: 180
@@ -135,7 +135,7 @@ jobs:
   guard:
     needs: enrich
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}

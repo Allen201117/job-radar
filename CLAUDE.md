@@ -466,6 +466,13 @@ python3 run.py --source apple         # 或 siemens / baidu / jd
 ⚠️ **crawler 单测带 ImportError 的「通过」不算数（2026-09-24 立）**：本机默认 python3 是 Homebrew 3.14、没装 `postgrest` / `psycopg2`，直接跑是 2,349 个 + 89 个 ImportError，真实全集 3,263 个——而此前**没有任何 CI 跑单测**，这 89 个一直被当「本机环境问题」放过。现在 push main / PR 由 `unit-tests.yml` 跑前两件（Python 3.11 + Node 22，各带「真跑了 ≥1000 个」下限防假绿）；本机要跑全用 `uv venv -p 3.11` + `uv pip install -r crawler/requirements.txt`。
 ⚠️ 在 `.claude/worktrees/*` 里跑 `next lint` 会因「主仓 + worktree 两份 .eslintrc.json / package-lock.json」报 plugin 冲突直接退出 1——这是环境问题不是代码问题；改用 `npx next lint --dir lib --dir app --dir components`，或 push 后立刻查 Vercel 部署状态兜底（`gh api repos/<owner>/<repo>/deployments` + `/statuses`）。
 
+🚫 **CI 的 Python 包与 runner 镜像已锁定版本，别改回「自动装最新」（2026-10-06 立）**：
+❌ 现象：10-03 selectolax 发 1.0、删了旧解析器，crawler 依赖只写 `>=` 下限 → CI 当天装上新版，所有爬虫 workflow 启动即 ImportError，停 22 小时，期间没有一行代码改动。
+✅ 防：`crawler/constraints.txt` 锁全部 Python 包（含间接依赖，取自 CI 实装、与 `uv pip compile` 逐条一致），经 requirements.txt 首行 `-c constraints.txt` 生效（pip、uv 都实测按它解析）；
+`runs-on` 一律 `ubuntu-24.04`（CI 注解原文：ubuntu-latest 自 2026-10-19 起迁到 Ubuntu 26，actions/runner-images#14748）。
+加 / 升依赖 = 两个文件一起改，push 后 unit-tests 用新版本跑全量；升系统镜像先单独验一条 workflow 再整体换。守门：`tests/ci-dependency-pinning.test.js`。
+⚠️ **没锁的**（出事先看这些）：Python / Node 的补丁版本（`python-version: "3.11"`）、actions 的 `@v4/@v5`、`apt-get install postgresql-client`、两条 backfill workflow 里 `npm install "pg@^8…"`（`^` 只封大版本）。
+
 ## 目录结构
 
 ```

@@ -1,0 +1,51 @@
+# crawler 依赖锁定版本（含间接依赖），经 requirements.txt 第一行的 `-c constraints.txt` 生效。
+# 为什么要锁：requirements.txt 只写下限，CI 每次都装当天最新版。10-03 selectolax 出 1.0、删了旧解析器，
+#   所有爬虫 workflow 一启动就报错，停了 22 小时。锁住以后，上游发新版不会自己装进来。
+# 来源：2026-10-06 daily-job-crawl（Linux / Python 3.11，全绿）实际装上的 43 个包；
+#   与 `uv pip compile crawler/requirements.txt --python-version 3.11 --python-platform x86_64-unknown-linux-gnu` 逐条一致。
+# 升级：改这里的版本号（新增直接依赖要同时加进来）→ push 后 unit-tests 会用新版本把全量单测跑一遍。
+#   跨大版本先对拍再放开，做法见 selectolax 迁 Lexbor 那次（commit 6e993f88）。
+# Windows 专用的 tzdata 不在这里（CI 不装它），保持不锁。
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.2
+cryptography==50.0.2
+deprecation==2.1.0
+greenlet==3.5.6
+h11==0.16.0
+h2==4.4.1
+hpack==4.2.0
+httpcore==1.0.9
+httpx==0.28.1
+hyperframe==6.1.0
+idna==3.20
+multidict==7.0.0
+packaging==26.3
+pdfminer.six==20260107
+pdfplumber==0.11.10
+Pillow==12.3.0
+playwright==1.63.0
+postgrest==2.32.0
+propcache==0.5.4
+psycopg2-binary==2.9.13
+pycparser==3.0
+pydantic-core==2.46.5
+pydantic==2.13.5
+pyee==13.0.1
+pyjwt==2.15.1
+pypdfium2==5.14.0
+python-dotenv==1.2.4
+PyYAML==6.0.3
+realtime==2.32.0
+selectolax==1.0.0
+storage3==2.32.0
+strenum==0.4.15
+supabase-auth==2.32.0
+supabase-functions==2.32.0
+supabase==2.32.0
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+websockets==15.0.1
+yarl==1.25.1

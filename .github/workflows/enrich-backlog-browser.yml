@@ -21,7 +21,7 @@ on:
 
 jobs:
   drain-moka:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90   # 渲染慢；1500 岗 × ~3s ≈ 75min，留余量。远低于 6h
     strategy:
       fail-fast: false

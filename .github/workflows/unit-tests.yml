@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   node:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -43,7 +43,7 @@ jobs:
           if [ "${n:-0}" -lt 1000 ]; then echo "::error::只跑了 ${n:-0} 个 node 测试（下限 1000），测试发现可能坏了"; exit 1; fi
 
   crawler:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4

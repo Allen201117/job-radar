@@ -45,7 +45,7 @@ jobs:
   # 刻意做成独立的轻量 job（不 checkout 依赖、不装 chromium，整轮 ~10 秒）——
   # 判「不该跑」的轮次不该花 2-3 分钟装环境。crawler/campus_lane_gate.py 因此只用标准库。
   gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       due: ${{ steps.check.outputs.due }}
@@ -66,7 +66,7 @@ jobs:
   campus-lane:
     needs: gate
     if: needs.gate.outputs.due == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 车道只抓几十个源；给 50min 是为了容纳开闸当轮的「加急重抓」第二遍（可能上千岗要 upsert）。
     timeout-minutes: 50
     env:

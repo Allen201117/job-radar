@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
 jobs:
   dump:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Install pg client 17 (PGDG)

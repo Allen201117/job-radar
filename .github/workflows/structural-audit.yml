@@ -54,7 +54,7 @@ concurrency:
 
 jobs:
   audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     # 刻意不给 issues: write —— 下面那步只是「重新量一遍老告警」，绝不能开 issue。
     # 少给这个权限 = 就算哪天 OPS_WATCHDOG_APPLY 被误开，它也开不出 issue 来。

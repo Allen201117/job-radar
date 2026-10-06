@@ -27,7 +27,7 @@ on:
 
 jobs:
   funnel:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -98,7 +98,7 @@ jobs:
     # if: always() 保证 P1 失败时 P2 仍处理存量队列——它不依赖 P1 本轮是否成功。
     needs: funnel
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

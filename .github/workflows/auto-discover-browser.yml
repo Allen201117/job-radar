@@ -25,7 +25,7 @@ on:
 
 jobs:
   discover-browser:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # confirm 每家 1-3min；手动补缺口会调高 confirm_cap，给足预算（默认档仍只确认 15 家）。
     timeout-minutes: 90
     env:
