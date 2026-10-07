@@ -39,7 +39,7 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     value: "radancy",
     label: "Radancy / TalentBrew（通用 ATS · 外企）",
     origin: "foreign",
-    hint: "填站点自己渲染的按地区搜索页（如 careers.{company}.com/en/search-jobs/China/...）；适配器用 ?p=N 翻页并直接取详情链接",
+    hint: "填站点地图（如 careers.{company}.com/en/sitemap.xml）；搜索页被 robots 禁止，适配器按来源地区粗筛后逐个读详情页",
   },
   { value: "tencent", label: "腾讯", origin: "domestic" },
   { value: "tencent_campus", label: "腾讯 校招 / 实习（join.qq.com）", origin: "domestic" },

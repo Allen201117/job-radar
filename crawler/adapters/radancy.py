@@ -1,75 +1,139 @@
-"""Radancy / TalentBrew 招聘门户通用适配器（SSR 搜索页，纯 httpx）。
+"""Radancy / TalentBrew 招聘门户适配器（纯 httpx）：站点地图 → 按地区粗筛 → 逐岗详情页。
 
-欧莱雅 2026-10-05 前后从 Avature 迁到 TalentBrew：旧 Avature 地址 301 到首页，
-``avature`` 适配器报「首页未解析到岗位卡」。TalentBrew 的搜索页本身就是 SSR：
-``<section id="search-results" data-total-results data-total-pages data-records-per-page>``
-+ ``li.search-results-list__item > a.search-results-list__job-link[href=/en/job/...]``，
-翻页就是同一路径加 ``?p=N``。
+欧莱雅 2026-10-05 前后从 Avature 迁到 TalentBrew，旧 Avature 地址一律 301 到官网首页。
 
-source_url 必须是站点自己渲染的「按地区」搜索页（如中国国家级 location 路径
-``/en/search-jobs/China/3456/2/1814991/35/105/50/2``），服务端已按地区收窄；
-适配器只额外拦「能确证在所需地区之外」的岗（同 avature facet 源的口径）。
+🚫 **搜索页不能抓**：TalentBrew 站点的 robots.txt 一律 ``Disallow: /search-jobs``（欧莱雅还禁了
+``/location/`` ``/category/`` ``/employment/``）。本 adapter 第一版走的就是搜索页，2026-10-07 上线首轮
+被 run.py 的 robots 门挡下记 skipped。站点**允许**的是 robots 里自己声明的 sitemap.xml 和 ``/<lang>/job/``
+详情页，所以 source_url 填站点地图（例 ``https://careers.loreal.com/en/sitemap.xml``）。
+
+站点地图只有链接没有地点，链接形如 ``/en/job/<城市>/<标题>/<org>/<岗位 id>``，于是分两步：
+  1. 粗筛（零请求）：链接里的城市能认出国家且在本源 regions 里 → 候选；城市认不出、但本源要 CN 且
+     标题段含汉字 → 也是候选（「昌吉」「承德」这类不在词表里的中国城市靠它兜住）。
+  2. 逐个打开候选的详情页，读 ``application/ld+json`` 的 JobPosting：标题 / 地点 / 正文都取这里，
+     **地点必须过 regions 才收**——粗筛只决定开哪些页，不决定收哪些岗（台湾岗的标题也是汉字）。
+  2026-10-07 全集对拍（1,694 个岗逐个开详情页取 addressCountry 作标准答案）：中国 326，粗筛候选 326，
+  漏 0、多 0；每轮约 326 次详情请求，换来的是真标题和完整正文（不再是无正文的薄卡）。
+  ⚠️ 已知盲区：regions 不含 CN 的源，城市认不出的岗一律不开（否则欧莱雅每轮要开 1,100+ 个页）。
+
+站点地图不给分地区总数 → reported_total 记 None（诚实盲区）；有候选的详情没取到 / 候选撞上限时
+fetch_complete=False。详情 404 = 岗位在两次请求之间下线，跳过，不算没抓全。
 """
+import html as html_lib
 import json
+import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
-from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from html_dom import HTMLParser
 
+import geo
 import normalizer
-from .base import BaseAdapter, PageResult, RawJob, paginate_all
+from .base import DEFAULT_LIST_CAP, BaseAdapter, RawJob, resolve_list_cap
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/140.0 Safari/537.36")
+_LOC_RE = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>")
+_LD_RE = re.compile(r'<script type="application/ld\+json">(.*?)</script>', re.S)
+_CJK_RE = re.compile(r"[一-鿿]")
 
 
-def _int_attr(node, name: str) -> Optional[int]:
-    try:
-        return int(node.attrs.get(name) or "")
-    except (TypeError, ValueError):
+class _Gone(Exception):
+    """详情页 404：岗位在读站点地图之后下线了。"""
+
+
+def job_url_parts(url: str):
+    """``/<lang>/job/<城市>/<标题>/<org>/<id>`` → (城市, 标题)，已 URL 解码；不是岗位链接返回 None。"""
+    segments = [s for s in urlsplit(url).path.split("/") if s]
+    if len(segments) < 6 or segments[1] != "job":
         return None
+    return unquote(segments[2]), unquote(segments[3])
 
 
-def _results_meta(html: str):
-    """(总岗位数, 总页数, 每页条数)；页面没有 search-results 容器时全为 None。"""
-    section = HTMLParser(html or "").css_first("section#search-results")
-    if section is None:
-        return None, None, None
-    total = _int_attr(section, "data-total-job-results")
-    if total is None:
-        total = _int_attr(section, "data-total-results")
-    return total, _int_attr(section, "data-total-pages"), _int_attr(section, "data-records-per-page")
+def sitemap_job_urls(xml: str) -> List[str]:
+    seen, urls = set(), []
+    for loc in _LOC_RE.findall(xml or ""):
+        url = html_lib.unescape(loc)
+        if job_url_parts(url) and url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
+def is_candidate(url: str, regions) -> bool:
+    """粗筛：只决定开不开详情页；收不收以详情页的地点为准。"""
+    parts = job_url_parts(url)
+    if not parts:
+        return False
+    city, title = parts
+    wanted = normalizer.source_regions(regions)
+    code = geo.derive_country_code(city.replace("-", " "))
+    if code is not None:
+        return code in wanted
+    return "CN" in wanted and bool(_CJK_RE.search(title))
+
+
+def parse_detail(html: str) -> Optional[dict]:
+    """详情页 ld+json 的 JobPosting → {title, location, summary, posted_at, country_code}；没有返回 None。"""
+    for block in _LD_RE.findall(html or ""):
+        try:
+            data = json.loads(block)
+        except ValueError:
+            continue
+        if not (isinstance(data, dict) and data.get("@type") == "JobPosting" and data.get("title")):
+            continue
+        places = data.get("jobLocation") or []
+        if isinstance(places, dict):
+            places = [places]
+        locations, countries = [], []
+        for place in places:
+            address = (place or {}).get("address") or {}
+            parts = []
+            for key in ("addressLocality", "addressRegion", "addressCountry"):
+                value = str(address.get(key) or "").strip()
+                if value and value not in parts:
+                    parts.append(value)
+            if parts:
+                locations.append(", ".join(parts))
+            if address.get("addressCountry"):
+                countries.append(str(address["addressCountry"]).strip())
+        description = data.get("description") or ""
+        summary = HTMLParser(html_lib.unescape(str(description))).text(separator=" ", strip=True)
+        country_code = geo.derive_country_code(countries[0]) if len(set(countries)) == 1 else None
+        return {
+            "title": html_lib.unescape(str(data["title"])).strip(),
+            "location": " / ".join(locations) or None,
+            "summary": re.sub(r"\s+", " ", summary).strip() or None,
+            "posted_at": data.get("datePosted") or None,
+            "country_code": country_code,
+        }
+    return None
 
 
 class RadancyAdapter(BaseAdapter):
     name = "radancy"
-    MAX_PAGES = 200
+    DETAIL_WORKERS = 2
 
     def _client(self, **kwargs):
         return httpx.Client(**kwargs)
 
-    @staticmethod
-    def _page_url(source_url: str, page: int) -> str:
-        parts = urlsplit(source_url)
-        params = dict(parse_qsl(parts.query, keep_blank_values=True))
-        params["p"] = str(page)
-        return urlunsplit((parts.scheme, parts.netloc, parts.path,
-                           urlencode(params), parts.fragment))
-
     def fetch(self, source_url: str) -> str:
         self.reported_total = None
         self.fetch_complete = False
-        headers = {"User-Agent": _UA, "Accept": "text/html,*/*", "Accept-Language": "en,zh-CN;q=0.8"}
-        pages: List[dict] = []
-
+        regions = getattr(self, "regions", None)
+        headers = {"User-Agent": _UA, "Accept": "text/html,application/xml,*/*",
+                   "Accept-Language": "en,zh-CN;q=0.8"}
         with self._client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
-            def get_page(url: str):
+            def get(url: str):
                 last = None
                 for attempt in range(3):
                     response = client.get(url)
                     status = getattr(response, "status_code", 200)
+                    if status == 404:
+                        raise _Gone(url)
                     if status not in (403, 429) and status < 500:
                         response.raise_for_status()
                         return response
@@ -78,78 +142,58 @@ class RadancyAdapter(BaseAdapter):
                         time.sleep(1.0 * (attempt + 1))
                 last.raise_for_status()
 
-            first_url = self._page_url(source_url, 1)
-            first = get_page(first_url)
-            first_jobs = self._parse_cards(first.text, str(getattr(first, "url", first_url)))
-            if not first_jobs:
-                # 旧地址被 301 到首页时就会走到这里：必须记 failed，不许安静返 0 条。
-                raise RuntimeError("radancy: 搜索页未解析到岗位卡（地址可能已失效或被重定向到首页）")
-            _, _, per_page = _results_meta(first.text)
-            page_size = per_page or len(first_jobs)
-            cached = {1: first}
+            urls = sitemap_job_urls(get(source_url).text)
+            if not urls:
+                raise RuntimeError("radancy: 站点地图里没有任何岗位链接（地址可能已失效）")
+            candidates = [u for u in urls if is_candidate(u, regions)]
+            cap = resolve_list_cap(DEFAULT_LIST_CAP)
+            capped = len(candidates) > cap
+            candidates = candidates[:cap]
 
-            def fetch_page(page: int) -> PageResult:
-                response = cached.pop(page, None)
-                url = self._page_url(source_url, page)
-                if response is None:
-                    response = get_page(url)
-                page_url = str(getattr(response, "url", url))
-                jobs = self._parse_cards(response.text, page_url)
-                if jobs:
-                    pages.append({"url": page_url, "html": response.text})
-                total, total_pages, _ = _results_meta(response.text)
-                return PageResult(items=[j.jd_url for j in jobs], total=total, total_pages=total_pages)
+            def detail(url: str):
+                try:
+                    return url, parse_detail(get(url).text), None
+                except _Gone:
+                    return url, None, "gone"
+                except Exception as exc:  # noqa: BLE001 — 单岗失败不拖垮整源，记入没抓全
+                    return url, None, f"{type(exc).__name__}"
 
-            _, total, complete = paginate_all(
-                fetch_page, page_size=page_size, first_page=1,
-                max_pages=self.MAX_PAGES, delay_seconds=0.5,
-                label=f"radancy:{urlsplit(source_url).netloc}",
-            )
+            with ThreadPoolExecutor(self.DETAIL_WORKERS) as pool:
+                results = list(pool.map(detail, candidates))
 
-        self.reported_total = total
-        self.fetch_complete = bool(complete)
-        return json.dumps({"_pages": pages}, ensure_ascii=False)
+        jobs, failed = [], 0
+        for url, info, error in results:
+            if error == "gone":
+                continue
+            if error or info is None:
+                failed += 1
+                continue
+            jobs.append({"jd_url": url, **info})
+        if candidates and not jobs and failed:
+            raise RuntimeError(f"radancy: {len(candidates)} 个候选岗的详情页一个都没取到")
+        if failed:
+            print(f"[radancy] {failed}/{len(candidates)} 个候选岗详情没取到，本轮记为没抓全")
+        self.fetch_complete = not capped and failed == 0
+        return json.dumps({"_jobs": jobs}, ensure_ascii=False)
 
     def parse(self, html: str) -> List[RawJob]:
         try:
             envelope = json.loads(html)
         except (json.JSONDecodeError, TypeError):
-            envelope = None
-        if isinstance(envelope, dict) and "_pages" in envelope:
-            merged = {}
-            for page in envelope.get("_pages") or []:
-                for job in self._parse_cards(page.get("html", ""), page.get("url")):
-                    merged.setdefault(job.jd_url, job)
-            return self._in_regions(list(merged.values()))
-        return self._in_regions(self._parse_cards(html, None))
-
-    def _in_regions(self, jobs: List[RawJob]) -> List[RawJob]:
-        """只丢「能确证在所需地区之外」的岗；识别不出国家 = 证据不足，保留（服务端地区过滤是权威）。"""
+            return []
         regions = getattr(self, "regions", None)
-        kept = []
-        for job in jobs:
-            if (normalizer.location_in_source_regions(job.location, regions)
-                    or normalizer.derive_country_code(job.location) is None):
-                kept.append(job)
-        return kept
-
-    @staticmethod
-    def _parse_cards(html: str, page_url=None) -> List[RawJob]:
-        jobs: List[RawJob] = []
-        base = str(page_url or "")
-        for link in HTMLParser(html or "").css("a.search-results-list__job-link[href]"):
-            href = link.attrs.get("href", "")
-            if "/job/" not in href:
-                continue
-            title_el = link.css_first(".search-results-list__job-title")
-            loc_el = link.css_first(".job-location")
-            title = (title_el.text(strip=True) if title_el else "")
-            if not title:
+        jobs = []
+        for item in (envelope or {}).get("_jobs") or []:
+            # 粗筛只决定开哪些页；台湾岗标题也是汉字，地点不在 regions 里的一律不收。
+            if not normalizer.location_in_source_regions(item.get("location"), regions):
                 continue
             jobs.append(RawJob(
                 company="",   # 由 run.py 按 source 的公司名写入
-                title=title,
-                location=(loc_el.text(strip=True) if loc_el else "") or None,
-                jd_url=urljoin(base or "https://localhost/", href),
+                title=item["title"],
+                location=item.get("location"),
+                summary=item.get("summary"),
+                posted_at=item.get("posted_at"),
+                country_code=item.get("country_code"),
+                jd_url=item["jd_url"],
             ))
         return jobs

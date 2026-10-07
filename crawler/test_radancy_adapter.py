@@ -1,39 +1,40 @@
 import json
-import os
-import re
 import unittest
-from unittest import mock
 
 import httpx
 
-from adapters.radancy import RadancyAdapter
+from adapters.radancy import RadancyAdapter, is_candidate, job_url_parts, parse_detail, sitemap_job_urls
 
-SOURCE = "https://careers.loreal.com/en/search-jobs/China/3456/2/1814991/35/105/50/2"
-FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "radancy_loreal_search_p1.html")
+SITEMAP = "https://careers.loreal.com/en/sitemap.xml"
+BASE = "https://careers.loreal.com/en/job"
+
+CN_CITY = f"{BASE}/shanghai/%e7%be%8e%e5%ae%b9%e9%a1%be%e9%97%ae-%e5%85%b0%e8%94%bb/3456/1"   # 美容顾问-兰蔻
+CN_CJK = f"{BASE}/changji/%e7%be%8e%e5%ae%b9%e9%a1%be%e9%97%ae/3456/2"                       # 城市不在词表，标题是汉字
+TW_CITY = f"{BASE}/taipei/%e7%be%8e%e5%ae%b9%e9%a1%be%e5%95%8f/3456/3"                       # 台湾：城市就判出 TW
+TW_HIDDEN = f"{BASE}/xinyi/%e7%be%8e%e5%ae%b9%e9%a1%be%e5%95%8f/3456/4"                      # 城市认不出 + 汉字标题，详情页说台湾
+US_CITY = f"{BASE}/new-york/brand-manager/3456/5"
+UNKNOWN_EN = f"{BASE}/libramont/technicien/3456/6"
 
 
-def _fixture() -> str:
-    with open(FIXTURE, encoding="utf-8") as fh:
-        return fh.read()
+def _sitemap(urls):
+    body = "".join(f"<url><loc>{u}</loc></url>" for u in urls)
+    return ('<?xml version="1.0" encoding="utf-8"?><urlset><url><loc>https://careers.loreal.com</loc></url>'
+            f'<url><loc>https://careers.loreal.com/en/category/retail-jobs/3456/1/1</loc></url>{body}</urlset>')
 
 
-def _page(ids, total, total_pages, per_page=2, city="Shanghai", country="China"):
-    cards = "".join(
-        f'<li class="search-results-list__item"><a class="search-results-list__job-link" '
-        f'href="/en/job/{city.lower()}/job-{i}/3456/{i}" data-job-id="{i}">'
-        f'<h3 class="search-results-list__job-title">Job &amp; {i}</h3>'
-        f'<span class="search-results-list__job-info job-location">{city}, {city}, {country}</span></a></li>'
-        for i in ids
-    )
-    return (f'<section id="search-results" data-total-results="{total}" data-total-job-results="{total}" '
-            f'data-total-pages="{total_pages}" data-records-per-page="{per_page}"></section>'
-            f'<ul id="search-results-jobs">{cards}</ul>')
+def _detail(title, city, region, country, description="<p>岗位职责 &amp; 要求</p>"):
+    ld = {"@context": "https://schema.org", "@type": "JobPosting", "title": title,
+          "description": description, "datePosted": "2026-10-01",
+          "jobLocation": [{"@type": "Place", "address": {"@type": "PostalAddress", "addressLocality": city,
+                                                         "addressRegion": region, "addressCountry": country}}]}
+    return (f'<html><script type="application/ld+json">{{"@type":"Organization"}}</script>'
+            f'<script type="application/ld+json">{json.dumps(ld, ensure_ascii=False)}</script></html>')
 
 
 class FakeClient:
-    """按 ?p=N 返回预置页；值为异常实例则抛出。"""
-    def __init__(self, pages, **kwargs):
-        self.pages = pages
+    """按完整 URL 返回预置响应：str = 200 正文，int = 状态码，异常实例则抛出。"""
+    def __init__(self, routes):
+        self.routes = routes
         self.requested = []
 
     def __enter__(self):
@@ -43,106 +44,112 @@ class FakeClient:
         return False
 
     def get(self, url):
-        page = int(re.search(r"[?&]p=(\d+)", url).group(1))
-        self.requested.append(page)
-        body = self.pages.get(page, _page([], 0, 0))
+        self.requested.append(url)
+        body = self.routes.get(url, 404)
         if isinstance(body, Exception):
             raise body
-        return httpx.Response(200, text=body, request=httpx.Request("GET", url))
+        request = httpx.Request("GET", url)
+        if isinstance(body, int):
+            return httpx.Response(body, text="", request=request)
+        return httpx.Response(200, text=body, request=request)
 
 
-def _adapter(pages):
+def _adapter(routes, regions=("CN",)):
     ad = RadancyAdapter()
     ad.timeout = 5
-    client = FakeClient(pages)
+    ad.regions = list(regions)
+    client = FakeClient(routes)
     ad._client = lambda **kw: client
     ad._fake = client
     return ad
 
 
-class RadancyParseTest(unittest.TestCase):
-    def test_parse_real_fixture(self):
-        jobs = RadancyAdapter().parse(_fixture())
-        self.assertEqual(len(jobs), 4)
-        first = jobs[0]
-        self.assertTrue(first.title)
-        self.assertEqual(first.location, "Shanghai, Shanghai Municipality, China")
-        self.assertTrue(first.jd_url.startswith("https://localhost/en/job/shanghai/") or
-                        first.jd_url.startswith("/en/job/"))
+class RadancyPureTest(unittest.TestCase):
+    def test_job_url_parts_decodes_city_and_title(self):
+        self.assertEqual(job_url_parts(CN_CITY), ("shanghai", "美容顾问-兰蔻"))
+        self.assertIsNone(job_url_parts("https://careers.loreal.com/en/category/retail-jobs/3456/1/1"))
 
-    def test_parse_absolutizes_with_page_url(self):
-        jobs = RadancyAdapter()._parse_cards(_fixture(), SOURCE + "?p=1")
-        self.assertTrue(all(j.jd_url.startswith("https://careers.loreal.com/en/job/") for j in jobs))
-        self.assertEqual(len({j.jd_url for j in jobs}), 4)
+    def test_sitemap_keeps_only_job_urls_deduped(self):
+        urls = sitemap_job_urls(_sitemap([CN_CITY, US_CITY, CN_CITY]))
+        self.assertEqual(urls, [CN_CITY, US_CITY])
 
-    def test_results_meta(self):
-        from adapters.radancy import _results_meta
-        self.assertEqual(_results_meta(_fixture()), (326, 22, 15))
-        self.assertEqual(_results_meta("<html>home</html>"), (None, None, None))
+    def test_candidate_filter_both_directions(self):
+        self.assertTrue(is_candidate(CN_CITY, ["CN"]))
+        self.assertTrue(is_candidate(CN_CJK, ["CN"]))       # 城市不在词表的中国岗靠汉字标题兜住
+        self.assertFalse(is_candidate(TW_CITY, ["CN"]))     # 台湾城市直接排除，不开页
+        self.assertFalse(is_candidate(US_CITY, ["CN"]))
+        self.assertFalse(is_candidate(UNKNOWN_EN, ["CN"]))
+        self.assertTrue(is_candidate(US_CITY, ["US"]))
+        self.assertFalse(is_candidate(CN_CJK, ["US"]))      # 汉字兜底只给要 CN 的源
 
-    def test_foreign_country_is_dropped_unknown_kept(self):
-        ad = RadancyAdapter()
-        ad.regions = ["CN"]
-        html = (_page([1], 3, 1, city="Shanghai") +
-                _page([2], 3, 1, city="New York", country="United States") +
-                _page([3], 3, 1, city="Dunhua", country="China"))
-        jobs = ad.parse(html)
-        self.assertEqual(sorted(j.title for j in jobs), ["Job & 1", "Job & 3"])
+    def test_parse_detail_reads_json_ld(self):
+        info = parse_detail(_detail("美容顾问-兰蔻", "Shanghai", "Shanghai Shi", "China"))
+        self.assertEqual(info["title"], "美容顾问-兰蔻")
+        self.assertEqual(info["location"], "Shanghai, Shanghai Shi, China")
+        self.assertEqual(info["summary"], "岗位职责 & 要求")
+        self.assertEqual(info["country_code"], "CN")
+        self.assertEqual(info["posted_at"], "2026-10-01")
+        self.assertIsNone(parse_detail("<html>no ld</html>"))
 
 
 class RadancyFetchTest(unittest.TestCase):
-    def setUp(self):
-        p = mock.patch("adapters.base.time.sleep")
-        p.start()
-        self.addCleanup(p.stop)
+    def _routes(self, **overrides):
+        routes = {
+            SITEMAP: _sitemap([CN_CITY, CN_CJK, TW_CITY, TW_HIDDEN, US_CITY, UNKNOWN_EN]),
+            CN_CITY: _detail("美容顾问-兰蔻", "Shanghai", "Shanghai Shi", "China"),
+            CN_CJK: _detail("美容顾问", "Changji", "Xinjiang", "China"),
+            TW_HIDDEN: _detail("美容顧問", "Taipei", "Taipei City", "Taiwan"),
+        }
+        routes.update(overrides)
+        return routes
 
-    def test_paginates_to_total_and_marks_complete(self):
-        ad = _adapter({1: _page([1, 2], 5, 3), 2: _page([3, 4], 5, 3), 3: _page([5], 5, 3)})
-        jobs = ad.parse(ad.fetch(SOURCE))
-        self.assertEqual([j.title for j in jobs], [f"Job & {i}" for i in range(1, 6)])
-        self.assertEqual(ad.reported_total, 5)
+    def test_end_to_end_keeps_only_confirmed_china_jobs(self):
+        ad = _adapter(self._routes())
+        jobs = ad.parse(ad.fetch(SITEMAP))
+        self.assertEqual(sorted(j.jd_url for j in jobs), sorted([CN_CITY, CN_CJK]))
         self.assertTrue(ad.fetch_complete)
-        self.assertEqual(ad._fake.requested, [1, 2, 3])   # 首页复用缓存，不重复请求
+        self.assertIsNone(ad.reported_total)   # 站点地图不给分地区总数：诚实盲区
+        opened = set(ad._fake.requested) - {SITEMAP}
+        self.assertEqual(opened, {CN_CITY, CN_CJK, TW_HIDDEN})   # 美国 / 英文标题的未知城市不开页
+        job = next(j for j in jobs if j.jd_url == CN_CITY)
+        self.assertEqual(job.location, "Shanghai, Shanghai Shi, China")
+        self.assertEqual(job.summary, "岗位职责 & 要求")
 
-    def test_short_page_does_not_end_pagination_early(self):
-        # 第 2 页只回 1 条（限流/瞬时短页），但总数/总页数表明还有第 3 页。
-        ad = _adapter({1: _page([1, 2], 5, 3), 2: _page([3], 5, 3), 3: _page([4, 5], 5, 3)})
-        jobs = ad.parse(ad.fetch(SOURCE))
-        self.assertEqual(len(jobs), 5)
-        self.assertEqual(ad._fake.requested, [1, 2, 3])
+    def test_never_requests_robots_disallowed_search_pages(self):
+        ad = _adapter(self._routes())
+        ad.parse(ad.fetch(SITEMAP))
+        self.assertFalse([u for u in ad._fake.requested if "/search-jobs" in u])
 
-    def test_later_page_failure_keeps_partial_and_marks_incomplete(self):
-        ad = _adapter({1: _page([1, 2], 6, 3), 2: httpx.ConnectError("boom")})
-        jobs = ad.parse(ad.fetch(SOURCE))
-        self.assertEqual(len(jobs), 2)
-        self.assertEqual(ad.reported_total, 6)
+    def test_detail_failure_skips_job_and_marks_incomplete(self):
+        ad = _adapter(self._routes(**{CN_CJK: httpx.ConnectTimeout("boom")}))
+        jobs = ad.parse(ad.fetch(SITEMAP))
+        self.assertEqual([j.jd_url for j in jobs], [CN_CITY])
         self.assertFalse(ad.fetch_complete)
 
-    def test_first_page_without_cards_raises(self):
-        ad = _adapter({1: "<html><body>home page</body></html>"})
+    def test_detail_404_is_gone_not_incomplete(self):
+        ad = _adapter(self._routes(**{CN_CJK: 404}))
+        jobs = ad.parse(ad.fetch(SITEMAP))
+        self.assertEqual([j.jd_url for j in jobs], [CN_CITY])
+        self.assertTrue(ad.fetch_complete)
+
+    def test_sitemap_without_jobs_raises(self):
+        ad = _adapter({SITEMAP: _sitemap([])})
         with self.assertRaises(RuntimeError):
-            ad.fetch(SOURCE)
+            ad.fetch(SITEMAP)
 
-    def test_http_error_on_first_page_raises(self):
-        ad = RadancyAdapter()
-        ad.timeout = 5
+    def test_all_details_failing_raises(self):
+        ad = _adapter(self._routes(**{CN_CITY: 500, CN_CJK: 500, TW_HIDDEN: 500}))
+        with self.assertRaises(RuntimeError):
+            ad.fetch(SITEMAP)
 
-        class Resp404(FakeClient):
-            def get(self, url):
-                return httpx.Response(404, text="x", request=httpx.Request("GET", url))
-        ad._client = lambda **kw: Resp404({})
-        with self.assertRaises(httpx.HTTPStatusError):
-            ad.fetch(SOURCE)
-
-    def test_respects_max_pages(self):
-        ad = _adapter({i: _page([2 * i - 1, 2 * i], 100, 50) for i in range(1, 6)})
-        ad.MAX_PAGES = 2
-        jobs = ad.parse(ad.fetch(SOURCE))
-        self.assertEqual(len(jobs), 4)
+    def test_candidates_over_list_cap_mark_incomplete(self):
+        import os
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"CRAWL_MAX_JOBS": "1"}):
+            ad = _adapter(self._routes())
+            jobs = ad.parse(ad.fetch(SITEMAP))
+        self.assertEqual(len(jobs), 1)
         self.assertFalse(ad.fetch_complete)
-
-    def test_page_url_keeps_existing_query(self):
-        self.assertEqual(RadancyAdapter._page_url(SOURCE + "?x=1", 3), SOURCE + "?x=1&p=3")
 
 
 if __name__ == "__main__":
