@@ -619,6 +619,25 @@ def _detail_avature(row, src):
     return _main_text(r.text)
 
 
+def _detail_radancy(row, src):
+    # Radancy/TalentBrew 详情页 SSR：正文在 <script type="application/ld+json"> 的 JobPosting.description（HTML 片段）。
+    # 不存在的岗位 id 返 404（"Custom Job Error"），由共享 _raise_if_gone 判死；
+    # 其它非 2xx 一律当瞬时失败返回空，绝不判死。
+    r = httpx.get(row["jd_url"], headers=UA, timeout=TIMEOUT, follow_redirects=True)
+    _raise_if_gone(r)
+    if r.status_code >= 300:
+        return ""
+    for block in re.findall(r'<script type="application/ld\+json">(.*?)</script>', r.text, re.S):
+        try:
+            data = json.loads(block)
+        except ValueError:
+            continue
+        if isinstance(data, dict) and data.get("@type") == "JobPosting" and data.get("description"):
+            markup = html_lib.unescape(str(data["description"]))
+            return HTMLParser(markup).text(separator=" ", strip=True)
+    return ""
+
+
 # 保留旧私有符号，既有 Siemens 测试/第三方脚本仍可调用；新接线统一使用通用函数。
 _detail_siemens = _detail_avature
 
@@ -1392,6 +1411,7 @@ ENRICH_REGISTRY = {
     # 欧莱雅 Avature live 验证不存在 JobDetail 为 404，由共享 _raise_if_gone 判死；
     # Siemens 的特殊 403 + 错误页分支仍保留，且只有命中文案才会判死。
     "avature": _detail_avature,
+    "radancy": _detail_radancy,   # 欧莱雅 2026-10 迁 TalentBrew：ld+json 正文 + 404 判死
     "successfactors": _detail_successfactors,  # SF CSB 详情 SSR：正则抽 jobdescription span（多数租户有；ZF 类无正文租户返空）
     "google": _detail_google,
     "sf_express": _detail_sf_express,

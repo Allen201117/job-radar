@@ -57,9 +57,10 @@ jobs:
         # 2026-09-23 北森（beisen，11.7 万 active 岗，库里最大的一族）：详情接口 Status=2 判死，
         # 全集对拍 + 北森前端代码 + 真浏览器三方印证，见 crawler/enrich._detail_beisen。
         # 它量大（每轮上限 5 万岗），另有「本轮判死 ≥50% 即熔断」兜底（enrich_backlog.EXPIRE_RATIO_GUARD）。
+        # 2026-10-07 radancy（欧莱雅迁 TalentBrew 后的 adapter）：404 判死，见 crawler/enrich._detail_radancy。
         # 「注册表 ⊆ 本 matrix」的契约断言在 crawler/test_state_bank_liveness.py。
         adapter: [wt, hotjob, workday, oracle, eightfold, smartrecruiters, greenhouse, lever,
-                  amazon, apple, meituan, microsoft, sf_express, tencent, vivo, siemens, avature, successfactors, google,
+                  amazon, apple, meituan, microsoft, sf_express, tencent, vivo, siemens, avature, radancy, successfactors, google,
                   huawei, jd, antgroup, haier, ashby, mihoyo, tencent_music,
                   iguopin, pinduoduo, meituan_campus, chnenergy,
                   spdb, icbc, ccb, bankcomm, cmcc,

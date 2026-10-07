@@ -27,6 +27,7 @@ from adapters.hikvision import HikvisionAdapter
 from adapters.iguopin import IguopinAdapter
 from adapters.siemens import SiemensAdapter
 from adapters.avature import AvatureAdapter
+from adapters.radancy import RadancyAdapter
 from adapters.tencent import TencentAdapter
 from adapters.alibaba_campus_portal import AlibabaCampusPortalAdapter
 from adapters.bilibili_campus import BilibiliCampusAdapter
@@ -133,6 +134,7 @@ ADAPTERS = {
     "iguopin": IguopinAdapter(),  # 国聘央企/国企公开职位搜索 API
     "siemens": SiemensAdapter(),
     "avature": AvatureAdapter(),  # Avature SearchJobs SSR 通用层（详情链接直接取卡片 href）
+    "radancy": RadancyAdapter(),  # Radancy/TalentBrew 搜索页 SSR 通用层（欧莱雅 2026-10 迁入）
     "tencent": TencentAdapter(),
     # 腾讯校招独立域名 join.qq.com（careers.tencent.com 的 attrId=2 只有 16 个海外岗）
     "tencent_campus": TencentCampusAdapter(),
@@ -256,7 +258,7 @@ _HTTPX_SAFE_ADAPTERS = {
     "oracle", "amazon", "phenom", "microsoft", "hotjob", "wt",
     "netease", "oppo", "xiaohongshu", "alibaba", "alibaba_campus", "huawei", "ctrip",
     "meituan", "meituan_campus", "kuaishou_campus", "bilibili", "pinduoduo", "vivo", "sf_express", "lenovo",  # 已逐一核实为纯 httpx fetch
-    "tencent_music", "antgroup", "mihoyo", "avature", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree", "tonghuashun",  # 公开接口/SSR，纯 httpx
+    "tencent_music", "antgroup", "mihoyo", "avature", "radancy", "gllue", "cnstaff", "midea", "cmb", "cmbc", "gree", "tonghuashun",  # 公开接口/SSR，纯 httpx
     "zto", "zto_campus",  # 中通：列表+详情均为公开 JSON，零浏览器
     # 顺丰 / 美的 校招门户：列表即全文（无逐岗富化），纯 httpx、无共享状态（2026-09-18 live）
     "sf_express_campus", "midea_campus",

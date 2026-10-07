@@ -36,7 +36,7 @@ jobs:
       # 按 adapter 一片，shard 间互不重叠（各 drain 自己 adapter 的 backlog）。
       matrix:
         adapter: [hotjob, wt, workday, oracle, eightfold, smartrecruiters, successfactors, greenhouse, lever,
-                  amazon, microsoft, siemens, avature, google, tencent, vivo, huawei,
+                  amazon, microsoft, siemens, avature, radancy, google, tencent, vivo, huawei,
                   jd, antgroup, haier, ashby, mihoyo, tencent_music,
                   iguopin, pinduoduo]
         # meituan_campus 不进本矩阵：_detail_meituan 是 liveness-only（正文列表自带、detail 恒空），

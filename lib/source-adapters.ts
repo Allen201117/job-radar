@@ -35,6 +35,12 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     origin: "foreign",
     hint: "填公司 Avature SearchJobs 地址，保留服务端地区 facet（如 careers.{company}.com/.../SearchJobs?...）；适配器按首页实际卡片数翻页并直接取详情链接",
   },
+  {
+    value: "radancy",
+    label: "Radancy / TalentBrew（通用 ATS · 外企）",
+    origin: "foreign",
+    hint: "填站点自己渲染的按地区搜索页（如 careers.{company}.com/en/search-jobs/China/...）；适配器用 ?p=N 翻页并直接取详情链接",
+  },
   { value: "tencent", label: "腾讯", origin: "domestic" },
   { value: "tencent_campus", label: "腾讯 校招 / 实习（join.qq.com）", origin: "domestic" },
   { value: "huawei_campus", label: "华为 校招 / 实习（career.huawei.com 新站）", origin: "domestic" },
