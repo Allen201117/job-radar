@@ -20,6 +20,9 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     href（各租户路径形态不同，禁止正则猜）；source_url 的服务端地区 facet 必须保留。
                          #     ⚠️ 地区后置过滤分两档：facet 源（DROP_UNKNOWN_LOCATION=False）只丢「能确证在境外」的岗，
                          #     Siemens 靠 search=China 全文收窄不可信故保持「地点存疑即丢」——详见 avature._in_regions。
+                         #   radancy.py = Radancy/TalentBrew（欧莱雅 2026-10-05 从 Avature 迁来）：sitemap.xml → 按链接城市/
+                         #     中文标题粗筛 → 逐岗详情页 ld+json。🚫 **TalentBrew 的 robots 一律禁 /search-jobs**：第一版抓搜索页，
+                         #     本机试跑全绿、上线首轮被 robots 门挡成 skipped——接外企门户先读对方 robots.txt，再选入口。
                          #   gllue.py = Gllue Next.js SSR 通用层（龙湖等自有域）：?page= 1-based 10 条/页，
                          #     正文只在详情页（列表页没有），逐岗抓、走 resolve_detail_cap 由快/重档决定抓不抓。
                          #   cnstaff.py = 聘客 cnstaff 通用层：POST /api/{tenant}/joblist.json（form `jt=0`）零鉴权，
