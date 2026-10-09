@@ -370,5 +370,6 @@
   "mannercoffee.zhiye.com": "https://mannercoffee.zhiye.com/campus/detail",
   "absen.zhiye.com": {
     "ssr": true
-  }
+  },
+  "51talk.zhiye.com": "https://51talk.zhiye.com/social/detail"
 }
