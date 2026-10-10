@@ -172,9 +172,14 @@ export async function GET(request: NextRequest) {
   //    结果照旧落在 discovery_runs 台账里（成功 / 失败 / 被节流都有记录）。
   const jobCount = jobRows?.length || 0;
   if (jobCount > 0 && !storedHasAny) {
+    // 派发与占位一律用**画像里的规范名**，不用查询词原文。
+    // 用原文的后果（2026-10-10 实测踩到）：查「星巴克」命中的是画像「星巴克 Starbucks」，占位却按
+    // 「星巴克」另建了一行空画像；之后再查「星巴克」精确命中这行空的，候选名里没有真正的公司名，
+    // 一个岗位都取不到 —— 抽屉从「有 2 条洞察」变成「暂无洞察」。
+    const enrichCompany = profileLight?.company ?? company;
     after(async () => {
       try {
-        await maybeDispatchInsightEnrich({ userId: user.id, company, jobCount, storedHasAny });
+        await maybeDispatchInsightEnrich({ userId: user.id, company: enrichCompany, jobCount, storedHasAny });
       } catch (e) {
         console.error("[insights] 现查派发异常", (e as Error).message);
       }

@@ -349,6 +349,9 @@ test("洞察接口：互不依赖的读并行，现查派发不挡响应", () =>
     /const \[fullProfileRes, jobRows, itemsRes, firstParty, recruitmentCycles\] = await Promise\.all\(\[/,
   );
   assert.match(route, /after\(async \(\) => \{\s*try \{\s*await maybeDispatchInsightEnrich\(/);
+  // 占位 / 派发用画像的规范名：用查询词原文会另建一行空画像，反过来挡住真画像（线上实测踩到过）。
+  assert.match(route, /const enrichCompany = profileLight\?\.company \?\? company;/);
+  assert.match(route, /maybeDispatchInsightEnrich\(\{ userId: user\.id, company: enrichCompany,/);
   assert.equal(
     /const enrichNow = await maybeDispatchInsightEnrich/.test(route),
     false,
