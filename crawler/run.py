@@ -177,7 +177,7 @@ ADAPTERS = {
     "company_spa": CompanySpaAdapter(),
     "feishu": FeishuGenericAdapter(),  # 飞书招聘数据驱动通用层（国内版 Workday）：host 从 source_url 解析
     "hotjob": HotJobAdapter(),  # HotJob / wecruit 通用层：TCL 等国内企业公开招聘站
-    "wt": WtAdapter(),  # 老版 WinTalent：伊利/中广核/中国电信/现代等,直连 position/list JSON,零浏览器
+    "wt": WtAdapter(),  # 老版 WinTalent：伊利/中广核/现代等,直连 position/list JSON,零浏览器
     "netease": NeteaseAdapter(),  # 网易自建门户：hr.163.com queryPage 公开接口,零浏览器
     "oppo": OppoAdapter(),  # OPPO 校招门户：careers.oppo.com openapi 公开接口,零浏览器
     "xiaohongshu": XiaohongshuAdapter(),  # 小红书自建门户：job.xiaohongshu.com pageQueryPosition,零浏览器

@@ -132,7 +132,7 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     value: "wt",
     label: "WinTalent / wt（通用 ATS · 本土老版）",
     origin: "domestic",
-    hint: "填公司名 + wt 入口地址（{子域}.hotjob.cn/wt/{BRAND}/web/index，伊利/中广核/中国电信/现代等），直连 position/list JSON，crawl_method 选 http",
+    hint: "填公司名 + wt 入口地址（{子域}.hotjob.cn/wt/{BRAND}/web/index，伊利/中广核/现代等；公司名以门户自报为准，别按 BRAND 代号猜），直连 position/list JSON，crawl_method 选 http",
   },
   {
     value: "company_spa",

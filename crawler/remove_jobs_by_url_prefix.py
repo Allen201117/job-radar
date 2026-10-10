@@ -10,6 +10,13 @@ liveness-sweep 只判「对方关闭」，在招的重复岗会一直 active、�
 
 护栏：默认 dry-run；--apply 必须 --url-prefix 点名门户 **且** --company 精确点名；只翻 status='active' 的行；参数绑定。
 
+🚫 配套的 sources 迁移生效后别马上 --apply，先等在飞的抓取轮过完这条源（2026-10-10 踩）：
+❌ 迁移 311 停用 wt/CT 源，紧接着标了 207 行 removed；1 分钟后这 207 行全变回 active。
+✅ 根因：run.py 的源清单是整轮开跑时一次读进去的。迁移生效前 2 分钟有一轮手动触发的 daily-job-crawl 已经读完清单，
+   它抓到这条源时用的还是旧配置（enabled=true），upsert 把 removed 翻回 active —— removed 本来就是「重抓可复活」。
+✅ 防：--apply 前 `gh run list --status in_progress`，有创建时间早于迁移生效的抓取轮（daily-job-crawl / campus-crawl /
+   enrich-crawl）就等这条源在 crawl_runs 里落了那一轮的终态再跑；跑完隔几分钟回读一次计数，别只看脚本自己报的数。
+
 --only-twins-under <保留门户前缀>（规则 H 的处置口径）：只标「在保留门户下有同一个 `#` 片段（hash 路由的岗位 id，
 如 moka 的 `#/job/<uuid>`）且那行还在招」的行，只在影子门户出现的岗不动。没有 `#` 片段的行一律不算孪生（宁可不动）。
 两个前缀不许互相包含，否则会拿自己当自己的孪生。
