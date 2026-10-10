@@ -94,3 +94,47 @@ test("initialAnnouncementView 与浏览器在无筛选+最新发布时算出的�
   assert.equal(view.postings.length, pageSize, "只下发一页");
   assert.equal(F.initialAnnouncementView(pool, TODAY).postings.length, pool.length, "不足一页时全给");
 });
+
+// 2026-10-10 线上实测：455 张公告里 87 张卡片写「地区未标注」，地区下拉却没有这一项——
+// 这批公告按地区怎么筛都筛不到；下拉各项之和（365）也因此对不上总数。
+test("地区判不出的公告在下拉里单列一项、排最后，各项之和等于总数", () => {
+  const pool = [
+    ...POOL,
+    mk({ title: "某集团公开招聘公告", region: null, employerType: "央国企", deadline: "2026-10-30" }),
+    mk({ title: "某研究所招聘启事", region: null, employerType: "科研院所", deadline: "2026-10-30" }),
+  ];
+  const facets = F.buildFacets(pool, F.EMPTY_FILTERS, TODAY);
+  assert.deepEqual(facets.regions.at(-1), { value: F.UNKNOWN_REGION, count: 2 });
+  assert.equal(F.UNKNOWN_REGION, "地区未标注", "下拉这一项的名字要与卡片上的文案一字不差");
+  assert.equal(facets.regions.reduce((sum, r) => sum + r.count, 0), pool.length);
+  // 没有地区未知的公告时不凭空多出一项
+  assert.ok(!F.buildFacets(POOL, F.EMPTY_FILTERS, TODAY).regions.some((r) => r.value === F.UNKNOWN_REGION));
+  // 单位类型那一维不加「未标注」项（卡片上没有对应文案）：各项之和只数有单位类型的
+  const withType = [...pool, mk({ title: "无类型公告", region: "北京市", employerType: null, deadline: "2026-10-30" })];
+  const typeFacets = F.buildFacets(withType, F.EMPTY_FILTERS, TODAY).employerTypes;
+  assert.equal(typeFacets.reduce((sum, e) => sum + e.count, 0), withType.length - 1);
+
+  const only = pool.filter((p) => F.matchesFilters(p, { ...F.EMPTY_FILTERS, region: F.UNKNOWN_REGION }, TODAY));
+  assert.deepEqual(only.map((p) => p.title), ["某集团公开招聘公告", "某研究所招聘启事"]);
+  // 反方向：选了具体地区时，地区未知的不混进来
+  assert.equal(pool.filter((p) => F.matchesFilters(p, { ...F.EMPTY_FILTERS, region: "北京市" }, TODAY)).length, 2);
+  // 选中「地区未标注」后，别的地区的计数照样给得出来（分面忽略本维度自身的选择）
+  const picked = F.buildFacets(pool, { ...F.EMPTY_FILTERS, region: F.UNKNOWN_REGION }, TODAY);
+  assert.equal(Object.fromEntries(picked.regions.map((r) => [r.value, r.count]))["北京市"], 2);
+});
+
+// 国聘约四成公告写「招满即止」，登记的结束日只是上限。照原样写「报名截止 12/31」= 告诉用户还有两个多月。
+test("招满即止的公告不写成「报名截止 X」", () => {
+  const chip = (deadline, deadlineText) => F.deadlineChip({ deadline, deadlineText }, TODAY);
+  assert.deepEqual(chip("2026-12-31", "招满即止"), { tone: "amber", text: "招满即止，尽早报名 · 最晚 2026/12/31" });
+  assert.equal(chip("2026-12-31", "报满即止").text, "招满即止，尽早报名 · 最晚 2026/12/31");
+  assert.deepEqual(chip("2026-09-20", "招满即止"), { tone: "rose", text: "招满即止 · 最晚还剩 2 天（2026/9/20）" });
+  assert.deepEqual(chip(TODAY, "招满即止"), { tone: "rose", text: "招满即止 · 最晚今天 2026/9/18" });
+  assert.deepEqual(chip(null, "招满即止"), { tone: "amber", text: "招满即止，尽早报名" });
+  // 反方向：有固定截止日的公告文案一个字都不变
+  assert.deepEqual(chip("2026-12-31", "2026-09-01 至 2026-12-31"), { tone: "amber", text: "报名截止 2026/12/31" });
+  assert.deepEqual(chip("2026-09-20", "2026-09-01 至 2026-09-20"), { tone: "rose", text: "还剩 2 天 · 2026/9/20 截止" });
+  assert.deepEqual(chip(TODAY, null), { tone: "rose", text: "今天 2026/9/18 截止报名" });
+  assert.deepEqual(chip(null, "9月18日-9月24日"), { tone: "neutral", text: "报名时间：9月18日-9月24日" });
+  assert.deepEqual(chip(null, null), { tone: "neutral", text: "报名时间以公告为准" });
+});

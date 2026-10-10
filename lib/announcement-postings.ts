@@ -88,6 +88,8 @@ export function titleMentionsPlace(title: string, name: string): boolean {
 }
 
 // 只补标题自己明确写出的省/市；识别不到就诚实展示「地区未标注」。
+// ⚠️ 一律落到**省级**：库里的 region 全是省级写法（各省人社厅那批天然是省，国聘那批取的也是省级码），
+//   这里若把「武汉」写成「武汉市」，它在地区下拉里既不属于「湖北省」、自己又凑不成一项。
 const TITLE_REGIONS: Array<[string, string]> = [
   ["北京市", "北京市"], ["北京", "北京市"], ["天津市", "天津市"], ["天津", "天津市"],
   ["上海市", "上海市"], ["上海", "上海市"], ["重庆市", "重庆市"], ["重庆", "重庆市"],
@@ -96,10 +98,18 @@ const TITLE_REGIONS: Array<[string, string]> = [
   ["福建", "福建省"], ["江西", "江西省"], ["山东", "山东省"], ["河南", "河南省"],
   ["湖北", "湖北省"], ["湖南", "湖南省"], ["广东", "广东省"], ["海南", "海南省"],
   ["四川", "四川省"], ["贵州", "贵州省"], ["云南", "云南省"], ["陕西", "陕西省"],
-  ["甘肃", "甘肃省"], ["青海", "青海省"], ["大连", "大连市"], ["杭州", "杭州市"], ["广州", "广州市"],
-  ["深圳", "深圳市"], ["南京", "南京市"], ["武汉", "武汉市"], ["成都", "成都市"],
-  ["西安", "西安市"], ["郑州", "郑州市"], ["长沙", "长沙市"],
+  ["甘肃", "甘肃省"], ["青海", "青海省"], ["大连", "辽宁省"], ["杭州", "浙江省"], ["广州", "广东省"],
+  ["深圳", "广东省"], ["南京", "江苏省"], ["武汉", "湖北省"], ["成都", "四川省"],
+  ["西安", "陕西省"], ["郑州", "河南省"], ["长沙", "湖南省"],
 ];
+
+/**
+ * 「招满即止 / 报满即止」：没有固定截止日。国聘对这类公告登记的结束日只是上限
+ * （见 crawler/announcements/iguopin.py 的 _window_of），卡片不能把它写成「报名截止 X」。
+ */
+export function isRollingDeadline(deadlineText: string | null | undefined): boolean {
+  return /满即止|满为止/.test(deadlineText || "");
+}
 
 export function inferAnnouncementRegion(title: string): string | null {
   for (const [name, region] of TITLE_REGIONS) {
@@ -130,7 +140,9 @@ export function toAnnouncementPosting(
     sourcePortal: String(row.source_portal ?? row.sourcePortal ?? ""),
     sourceUrl,
     title,
-    region: (row.region as string) ?? null,
+    // 地区只在这里定一次：库里有就用库里的，没有才看标题。卡片与筛选器读的是同一个值——
+    // 原先卡片自己再按标题补一遍、筛选器只认库里的，于是卡片写着「重庆市」的公告按重庆筛不到（2026-10-10 实测 3 条）。
+    region: (row.region as string) || inferAnnouncementRegion(title),
     employerType: (row.employer_type ?? row.employerType ?? null) as string | null,
     audience: isAudience(audienceRaw) ? audienceRaw : "unknown",
     publishedAt: (row.published_at ?? row.publishedAt ?? null) as string | null,
