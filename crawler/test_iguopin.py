@@ -135,6 +135,46 @@ class IguopinAdapterTest(unittest.TestCase):
         self.assertEqual((short, gid), (None, ""))
         children.assert_not_called()
 
+    def test_sub_group_whose_name_merely_starts_with_the_token_is_not_the_anchor(self):
+        """2026-10-10 实测：南方电网两条源都锚到了「南方电网数字电网集团有限公司」（南网旗下的一个二级集团，
+        在国聘上自己是自己的集团），于是只放行它一家，鼎和财产保险那 105 个岗从 09-21 起再没被刷新过。
+        简称「以 token 开头」不够，必须**就是** token 这家本身。"""
+        rows = [_job("a", "南方电网数字电网集团有限公司", "cid-digital"),
+                _job("b", "鼎和财产保险股份有限公司", "cid-dinghe")]
+        info = {"cid-digital": ("g-digital", "南方电网数字电网集团有限公司"),
+                "cid-dinghe": ("g-csg", "南方电网")}
+        adapter = IguopinAdapter()
+        with mock.patch.object(IguopinAdapter, "_group_info", side_effect=lambda cid, _h: info[cid]), \
+             mock.patch.object(IguopinAdapter, "_group_children", return_value=[]):
+            short, gid = adapter._expand_group_children(rows, {}, tokens=["南方电网"])
+        self.assertEqual((short, gid), ("南方电网", "g-csg"))
+
+    def test_branch_offices_never_become_the_group(self):
+        """招商银行各分行在国聘上都是「自己是自己的集团」，简称就是分行全名。把佛山分行当成集团，
+        其它分行全被 group_id 拒掉（同批还有 中国平安→平安产险莆田中支、中公教育→北京中公教育科技）。
+        没有哪家是 token 本身 → 不展开，回到按名字核。"""
+        rows = [_job("a", "招商银行股份有限公司佛山分行", "cid-fs"),
+                _job("b", "招商银行股份有限公司东莞分行", "cid-dg")]
+        info = {"cid-fs": ("cid-fs", "招商银行股份有限公司佛山分行"),
+                "cid-dg": ("cid-dg", "招商银行股份有限公司东莞分行")}
+        adapter = IguopinAdapter()
+        with mock.patch.object(IguopinAdapter, "_group_info", side_effect=lambda cid, _h: info[cid]), \
+             mock.patch.object(IguopinAdapter, "_group_children", return_value=[]) as children:
+            short, gid = adapter._expand_group_children(rows, {}, tokens=["招商银行"])
+        self.assertEqual((short, gid), (None, ""))
+        children.assert_not_called()
+
+    def test_short_names_that_are_the_token_itself_still_anchor(self):
+        """收紧不能误伤：地名前缀 + token（中国中铁 / 中铁）、token + 公司后缀（中远海运集团 / 中远海运）都算本身。"""
+        for short, token in (("中国中铁", "中铁"), ("中远海运集团", "中远海运"), ("中国电建集团", "中国电建"),
+                             ("恒力石化", "恒力石化"), ("比亚迪股份有限公司", "比亚迪")):
+            with self.subTest(short=short):
+                adapter = IguopinAdapter()
+                with mock.patch.object(IguopinAdapter, "_group_info", return_value=("g", short)), \
+                     mock.patch.object(IguopinAdapter, "_group_children", return_value=[]):
+                    got = adapter._expand_group_children([_job("a", "某子公司", "cid")], {}, tokens=[token])
+                self.assertEqual(got, (short, "g"))
+
     def test_full_name_gate_only_allows_corporate_suffix_remainder(self):
         self.assertTrue(_full_name_is_same_entity("中国海洋石油集团有限公司", "中国海洋石油"))
         self.assertTrue(_full_name_is_same_entity("中国能源建设股份有限公司", "中国能源建设"))

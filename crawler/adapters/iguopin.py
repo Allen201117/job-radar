@@ -195,20 +195,24 @@ class IguopinAdapter(BaseAdapter):
         排序：同一个「华润置地」源，社招排序第一行碰巧是华润的公司，加上 nature=应届生 后第一行变成
         中铝瑞闽 → 集团被认成「中国铝业」→ 整源 40 家中铝子公司挂到华润置地名下。同批实测还有
         百胜中国→中国联通、中海油→国机集团、京东方→「宁波吉德电器（京东方向）」。
-        判据只有一条：**集团简称本身必须过核名**（`company_name_matches(集团简称, match 或 keyword)`）。
+        判据只有一条：**集团（简称或全称）必须就是 match / keyword 这家本身**（`_full_name_is_same_entity`）。
         不能拿锚点行自己的名字当判据——「国网国际融资租赁」名字里没有「国家电网」却是真子公司，
         「中国建筑技术集团」名字以「中国建筑」开头却属于中国建研院：名字像不像和东家是谁是两回事。
-        所以按顺序试前几行（各自去查一次集团），第一个集团简称对得上的才当锚点，都对不上就不展开。
-        简称对不上时再看**集团全称**（`group_name`，国聘公司主页接口自带），但全称的判据更严：
-        去掉 token 之后**只能剩公司后缀词**（集团/股份/有限/责任/公司/控股）。中海油：「中国海洋石油集团有限公司」
-        − keyword「中国海洋石油」= 「集团有限公司」✓；中国能建：「中国能源建设股份有限公司」✓；
+        所以按顺序试前几行（各自去查一次集团），第一个对得上的才当锚点，都对不上就不展开。
+        「就是本身」= token 在开头（允许地名前缀），去掉 token 之后**只能剩公司后缀词**（集团/股份/有限/责任/公司/控股）。
+        中海油：「中国海洋石油集团有限公司」− keyword「中国海洋石油」= 「集团有限公司」✓；中国中铁 = 地名「中国」+ 中铁 ✓；
         而「中国建筑科学研究院有限公司」− 「中国建筑」= 「科学研究院有限公司」✗ —— 建研院不是中国建筑，
         2026-09-17 第一版全称回退用 company_name_matches 就把它又放了回去（社招源对拍当场抓到）。
+        ⚠️ 简称也必须用这把尺，不能只要求「以 token 开头」（2026-10-10 立）：国聘上很多二级集团 / 分支机构
+        自己就是自己的集团，简称就是它的全名。当天 28 条有集团门的源里 12 条锚在这种单位上——
+        南方电网→「南方电网数字电网集团有限公司」、中国平安→「平安产险莆田中支」、招商银行→「…佛山分行」、
+        国家电网→「国网数科控股公司」、中国中冶→「中冶建筑研究总院有限公司」——整条源只放行那一家，
+        真集团的子公司全被 group_id 拒掉（南方电网的鼎和财产保险 105 个岗自 09-21 起再没刷新过）。
         """
         tokens = [str(t or "").strip() for t in (tokens or ()) if str(t or "").strip()]
 
-        def _passes(name: str) -> bool:
-            return (not tokens) or any(company_name_matches(name, tok) for tok in tokens)
+        def _is_source_group(*names: str) -> bool:
+            return (not tokens) or any(_full_name_is_same_entity(name, tok) for name in names if name for tok in tokens)
 
         candidates: List[str] = []
         for row in rows:
@@ -225,7 +229,7 @@ class IguopinAdapter(BaseAdapter):
                 self._last_group_name = ""
                 gid, short = self._group_info(cid, headers)
                 full = getattr(self, "_last_group_name", "") or ""
-                if gid and short and (_passes(short) or (full and any(_full_name_is_same_entity(full, t) for t in tokens))):
+                if gid and short and _is_source_group(short, full):
                     group_id, group_short_name = gid, short
                     break
                 print(f"[iguopin] 集团「{short}」/「{full}」与 {tokens} 对不上，换下一个锚点")
