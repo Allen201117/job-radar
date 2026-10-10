@@ -29,9 +29,12 @@ company 由 sources.company 兜底（BRAND 仅用于路由，不当公司名，�
 
 直连 httpx（无头浏览器非必需），返回 PlaywrightAdapter.parse 可消费的 _intercepted 信封。
 """
+import calendar
 import json
 import re
-from typing import List, Optional
+from datetime import date, datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
+from typing import Iterator, List, Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -57,6 +60,28 @@ def _first(post: dict, keys) -> str:
         if isinstance(v, (int, float)) and not isinstance(v, bool):
             return str(v)
     return ""
+
+
+_BEIJING = timezone(timedelta(hours=8))
+
+
+def _server_day(resp) -> str:
+    """这次请求落在对方服务器的哪一天（北京日期）。取响应头 Date，拿不到才退回本机时钟。"""
+    try:
+        when = parsedate_to_datetime(resp.headers.get("date") or "")
+    except (TypeError, ValueError):
+        when = None
+    return (when or datetime.now(timezone.utc)).astimezone(_BEIJING).date().isoformat()
+
+
+def _plus_months(day: date, months: int) -> Iterator[date]:
+    """day 加 months 个月。月末有两种算法（截到月底 / 溢出到下月），对方用哪种没法在非月末验证，两种都给。"""
+    years, month0 = divmod(day.month - 1 + months, 12)
+    first = date(day.year + years, month0 + 1, 1)
+    last = calendar.monthrange(first.year, first.month)[1]
+    yield first.replace(day=min(day.day, last))
+    if day.day > last:
+        yield first + timedelta(days=day.day - 1)
 
 
 class WtAdapter(PlaywrightAdapter):
@@ -138,6 +163,7 @@ class WtAdapter(PlaywrightAdapter):
                     if not isinstance(payload, dict):
                         raise ValueError("wt: position/list returned non-object payload")
                     rows = payload.get("postList") or []
+                    fetched_on = _server_day(resp)
                     kept = []
                     for r in rows:
                         if not isinstance(r, dict):
@@ -149,6 +175,8 @@ class WtAdapter(PlaywrightAdapter):
                             continue
                         # 标记本批的 recruitType，供 _map 拼稳定详情链（详情页要 recruitType）。
                         r["_wtRecruitType"] = rt
+                        # 请求日：_deadline 判「endDate 是不是相对请求日算出来的」要用。
+                        r["_wtFetchedOn"] = fetched_on
                         if pid:
                             seen_rts[pid] = r["_wtRecruitTypes"] = [rt]
                         kept.append(r)
@@ -244,6 +272,43 @@ class WtAdapter(PlaywrightAdapter):
             return False
         return not self._EMPTY_BODY.sub("", summary or "")
 
+    # ⛔ endDate 大多不是截止日，判不出是真截止日的一律不写（2026-10-10 立）。
+    # ❌ 现象：直接把 endDate 写成 deadline，岗位卡显示「截止 当天」；哪天没被列表抓到，次日就成了
+    #    「截止日已过仍在架」。库里 wt 在招 16,775 行，2,465 行的截止日就是抓取当天、832 行已过去。
+    # ✅ 根因：isLongTermRelease=0 是「长期发布」，endDate 只是系统填的数——没设的岗回「请求当天」，
+    #    其余是 3000-01-01 / 发布日+12 个月 / 远未来占位 / 早已过去的日期。依据三方印证：
+    #    ① 同平台新版门户（hotjob adapter）的前端代码 `0 === longTermRelease ? "长期发布" : format(endDate)`，
+    #       真渲染 3 个详情页逐个对上（=0 写「长期发布」，=1 写「2026-10-22 23:59:59下线」）；
+    #    ② 两个接口都能查到的 2,361 个岗，两边的标记逐个相同；wt 回「当天」的 577 个，新版接口回的是
+    #       每晚续期的「+7 天」，没有一个日期相同；
+    #    ③ 库里更早存下、今天仍在列的行（当时存的就是请求那天）：157 行里 155 行今天变成了今天、
+    #       2 行改成了别的日期，没有一行保持原值；固定日期 / 3000 / 已过去的 1,020 行里 1,019 行没变。
+    #    =0 的岗里 590 个 endDate 已过去仍在列（4 个租户各开 1 个详情页，都渲染出岗位和「立即申请」）；
+    #    =1 的 841 个里没有一个是过去的。
+    # ⚠️ isLongTermRelease=1 也不全是真的：841 个里 535 个是「请求当天 + N 个月」（N 实测 0/1/3/6/11），
+    #    同样跟着请求日走（库里旧值对今天 14/14 不同），而同一个岗在新版接口里是另一个固定日期
+    #    （22/22 不同）—— 真截止日 wt 接口不给，只能不写。其余 306 个里新版接口也查得到的 90 个逐个相同。
+    # ⚠️ 没写不等于库里清掉：deadline 在 jobs_db._PRESERVE_IF_EMPTY 里，新值为空时保留旧值。
+    #    所以这里漏判一次，假日期就留在库里不再被纠正 → 锚点放宽到请求日与前一天、月数 0~12。
+    _ROLLING_MONTHS = range(0, 13)
+
+    @classmethod
+    def _deadline(cls, post: dict) -> Optional[str]:
+        if str(post.get("isLongTermRelease")).strip() != "1":
+            return None
+        iso = normalizer.coerce_iso_date(post.get("endDate"))
+        try:
+            end = date.fromisoformat(iso or "")
+            fetched_on = date.fromisoformat(str(post.get("_wtFetchedOn") or ""))
+        except ValueError:
+            # 截止日不是合法日期，或不知道是哪天请求的（判不了滚动窗口）→ 不写。
+            return None
+        for anchor in (fetched_on, fetched_on - timedelta(days=1)):
+            for months in cls._ROLLING_MONTHS:
+                if end in _plus_months(anchor, months):
+                    return None
+        return iso
+
     def _map(self, post: dict) -> Optional[RawJob]:
         if not isinstance(post, dict):
             return None
@@ -289,5 +354,5 @@ class WtAdapter(PlaywrightAdapter):
                        or normalizer.coerce_iso_date(post.get("publishDate"))),
             education=_first(post, ("education", "educationName")) or None,
             experience=_first(post, ("workYears", "workYearName", "workExperience")) or None,
-            deadline=normalizer.coerce_iso_date(post.get("endDate")),
+            deadline=self._deadline(post),
         )

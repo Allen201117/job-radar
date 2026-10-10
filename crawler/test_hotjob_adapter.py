@@ -105,6 +105,49 @@ class TestHotJobAdapter(unittest.TestCase):
         self.assertTrue(ok, reason)
 
 
+class TestHotJobDeadline(unittest.TestCase):
+    """endDate 只有 longTermRelease == 1 时才是截止日（2026-10-10 立）。
+
+    依据是平台自己的前端：`0 === longTermRelease ? "长期发布" : format(endDate)`（「下线时间」那一栏）。
+    当天全量 147 个源 20,626 个岗：longTermRelease=0 的 17,655 个里 endDate 是 3000-01-01 7,191 /
+    已过去却仍在列 749（最早 2019 年）/ 550 天以外的占位 2,832 / 550 天以内的未来日期 6,883
+    （其中 3,075 个是每晚 02:10 前后续成「+7 天」的滚动值）；longTermRelease=1 的 2,971 个没有一个是过去的日期。
+    """
+
+    def setUp(self):
+        self.a = HotJobAdapter()
+        self.a._bind_source("https://wecruit.hotjob.cn/SU64893571bef57c16d356b99e/pb/social.html")
+
+    def _deadline(self, end, flag):
+        post = {"postId": "p1", "postName": "某岗", "endDate": end}
+        if flag is not None:
+            post["longTermRelease"] = flag
+        return self.a._map(post).deadline
+
+    def test_long_term_post_never_gets_a_deadline(self):
+        for end in ("3000-01-01 23:59:59",   # 占位
+                    "2026-10-17 02:11:46",   # 每晚续 7 天的滚动值：08-26 存的是 09-02，10-10 再问是 10-17
+                    "2027-10-09 23:59:59",   # 发布日 + 12 个月；官网页面写的是「长期发布」
+                    "2079-11-30 23:59:59",   # 远未来占位
+                    "2023-06-26 23:59:59"):  # 三年前，详情页照样有「立即投递」
+            self.assertIsNone(self._deadline(end, 0), end)
+
+    def test_post_with_offline_time_keeps_its_date(self):
+        # 官网页面原文：「2026-10-22 23:59:59下线」
+        self.assertEqual(self._deadline("2026-10-22 23:59:59", 1), "2026-10-22")
+        self.assertEqual(self._deadline("2026-12-15 12:59:00", "1"), "2026-12-15")
+
+    def test_missing_or_unknown_flag_means_no_deadline(self):
+        """判不出就不写：缺字段 / 取值不认识，一律当成没有截止日。"""
+        self.assertIsNone(self._deadline("2026-10-22 23:59:59", None))
+        self.assertIsNone(self._deadline("2026-10-22 23:59:59", 2))
+        self.assertIsNone(self._deadline("2026-10-22 23:59:59", True))
+
+    def test_unparseable_end_date_is_dropped(self):
+        self.assertIsNone(self._deadline("", 1))
+        self.assertIsNone(self._deadline(None, 1))
+
+
 class _FakeResp:
     def __init__(self, payload):
         self._p = payload
