@@ -1,4 +1,4 @@
--- 310 — 纠正张冠李戴：www.hotjob.cn/wt/CT 是「财通证券」不是「中国电信」（2026-10-10 查实）
+-- 310 — 纠正张冠李戴：www.hotjob.cn/wt/CT 是「财通证券」不是「中国电信」（2026-10-10 查实，创始人同日同意处置）
 --
 -- 现象：sources 里 company='中国电信'、adapter_name='wt'、source_url='https://www.hotjob.cn/wt/CT/web/index'
 --   的源（迁移 105，2026-06-09 按 probe 探活结果 seed）一直在出岗，香港库该前缀下 215 个 active 岗全挂「中国电信」。
