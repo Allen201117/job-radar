@@ -294,3 +294,40 @@ export function useAsyncAction<TArgs extends unknown[], TResult>(
 
   return { run, status, error, reset, pending: status === "pending" };
 }
+
+/**
+ * 「边打字边生效」的输入框（改一个字就触发搜索 / 筛选）专用：中文输入法组词期间不往上报值。
+ *
+ * 不处理的话，用拼音打「腾讯」时 React 的 onChange 会把 t / te / ten / teng… 逐个报上去，
+ * 停顿超过防抖时间就拿「teng」去搜 —— 列表闪成骨架屏或「没有匹配」，再被真正的词盖回来；
+ * 搜索埋点里还会多出一批必然 0 结果的拼音查询。
+ *
+ * 用法：把返回值展开到 input 上（value / onChange / onCompositionStart / onCompositionEnd）。
+ * 组词期间输入框显示的是本地草稿，compositionend 时才把定稿的词交给 commit。
+ */
+export function useImeValue(value: string, commit: (next: string) => void) {
+  const [draft, setDraft] = useState(value);
+  const composing = useRef(false);
+  const saved = useRef(commit);
+  saved.current = commit;
+
+  // 外部改了值（清空筛选、点 chip 删除…）→ 跟上；组词期间不跟，否则会打断输入法。
+  useEffect(() => {
+    if (!composing.current) setDraft(value);
+  }, [value]);
+
+  return {
+    value: draft,
+    onChange: (event: { target: { value: string } }) => {
+      setDraft(event.target.value);
+      if (!composing.current) saved.current(event.target.value);
+    },
+    onCompositionStart: () => {
+      composing.current = true;
+    },
+    onCompositionEnd: (event: { currentTarget: { value: string } }) => {
+      composing.current = false;
+      saved.current(event.currentTarget.value);
+    },
+  };
+}

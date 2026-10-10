@@ -104,6 +104,8 @@ export async function fetchCompanyInsights(
   const promise = (async (): Promise<CompanyInsightResponse> => {
     try {
       const res = await fetch(`/api/insights?company=${encodeURIComponent(company)}`);
+      // 4xx / 5xx 是「没取到」，不是「这家公司没有洞察」：抛到下面的 catch 统一标成 fetch_failed。
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as CompanyInsightResponse;
       // 后端可能只返回部分维度键，这里补齐空数组，前端无需判空
       const normalized: CompanyInsightResponse = {
@@ -127,7 +129,9 @@ export async function fetchCompanyInsights(
         query: company,
         dimensions: EMPTY_DIMENSIONS(),
         first_party: EMPTY_FIRST_PARTY(),
-        failure_reason: "insight_unverified",
+        // 不能复用 insight_unverified：那会让抽屉把「网络断了」说成「该公司暂无经核实的洞察」，
+        // 用户分不清是真没有还是没取到，也没处重试。
+        failure_reason: "fetch_failed",
         recruitment_cycles: [],
         error: (e as Error).message,
       };

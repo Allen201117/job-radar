@@ -91,6 +91,7 @@ export default function ResumeProfilePanel() {
   const [parseDiagnostics, setParseDiagnostics] = useState<Record<string, unknown> | null>(null);
   const [saved, setSaved] = useState<any | null>(null);
   const [loadingSaved, setLoadingSaved] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [llmReady, setLlmReady] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -99,6 +100,7 @@ export default function ResumeProfilePanel() {
 
   async function loadSaved() {
     setLoadingSaved(true);
+    setLoadFailed(false);
     try {
       const resp = await fetch("/api/resume");
       const data = await resp.json();
@@ -106,8 +108,11 @@ export default function ResumeProfilePanel() {
       if (data.llm) {
         setLlmReady(Boolean(data.llm.configured));
       }
-    } catch {
-      /* 静默 */
+      if (!resp.ok || data.ok === false) setLoadFailed(true);
+    } catch (e) {
+      // 不能静默：读取失败时下面会落到「还没有简历画像」，传过简历的用户会以为画像丢了。
+      console.error("[resume] 画像加载失败", (e as Error).message);
+      setLoadFailed(true);
     } finally {
       setLoadingSaved(false);
     }
@@ -135,9 +140,13 @@ export default function ResumeProfilePanel() {
       setResumeId(data.resume_id || null);
       setParseDiagnostics(data.diagnostics || null);
       setStep("preview");
+      // 降级原因（llm_failed:402、供应商返回体…）是给运维看的，只进控制台，不摆到用户面前。
+      if (data.source === "rule") {
+        console.warn("[resume] AI 解析降级为规则草稿", data.llm_error || "", data.llm_detail || "");
+      }
       setMessage(
         data.source === "rule"
-          ? `AI 解析暂不可用（原因：${data.llm_error ||"未知"}${data.llm_detail ?"｜"+ data.llm_detail :""}），已用规则给出草稿，请核对补全后再保存。`
+          ? "AI 解析暂时不可用，已先按规则生成一份草稿，请核对补全后再保存。"
           : "AI 已解析，请核对 / 编辑后点「确认保存」。",
       );
       // 规则降级不是失败，但也不该说「AI 解析完成」——成功态如实说是草稿。
@@ -350,8 +359,7 @@ export default function ResumeProfilePanel() {
 
             {llmReady === false && (
               <p className="rounded-xl border border-tone-amber-border bg-[#fbf2d8] dark:bg-[#e0b15a]/[0.15] px-3 py-2 text-xs text-tone-amber-fg">
-                未检测到 SILICONFLOW_API_KEY，AI 解析会降级为规则草稿。请在 Vercel → Settings →
-                Environment Variables 添加（勾 Production，禁加 NEXT_PUBLIC_ 前缀），保存后 Redeploy。
+                AI 解析暂时不可用，现在上传会先按规则生成一份草稿，需要你多核对几处。
               </p>
             )}
             {llmReady === true && (
@@ -373,6 +381,17 @@ export default function ResumeProfilePanel() {
               <p className="text-sm ink-3">加载画像中…</p>
             ) : saved ? (
               <SavedSummary profile={saved} />
+            ) : loadFailed ? (
+              <p className="text-sm text-tone-rose-fg">
+                简历画像没加载出来，可能是网络不稳。
+                <button
+                  type="button"
+                  onClick={() => void loadSaved()}
+                  className="ml-1 font-semibold underline underline-offset-2 hover:opacity-80"
+                >
+                  重试
+                </button>
+              </p>
             ) : (
               <p className="text-sm ink-3">还没有简历画像，先上传或粘贴简历开始。</p>
             )}

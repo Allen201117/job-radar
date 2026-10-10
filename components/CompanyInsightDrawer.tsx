@@ -122,10 +122,16 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
   const [submitOpen, setSubmitOpen] = useState(false);
   const [submitWasOpened, setSubmitWasOpened] = useState(false);
   const panelRef = useRef<HTMLElement>(null);
+  // 「没取到」时的重试计数：失败响应不进缓存（见 lib/insight-client），加一就会真的重新请求。
+  const [retryTick, setRetryTick] = useState(0);
+
+  // 打开事件单独记：重试不是又一次「打开抽屉」，不能跟着取数 effect 重复打点。
+  useEffect(() => {
+    if (open) track("insight_drawer_open");
+  }, [open, company]);
 
   useEffect(() => {
     if (!open) return;
-    track("insight_drawer_open");
     let alive = true;
     setLoading(true);
     fetchCompanyInsights(company)
@@ -138,7 +144,7 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
     return () => {
       alive = false;
     };
-  }, [open, company]);
+  }, [open, company, retryTick]);
 
   // 打开时锁滚动 + 支持 Esc 关闭
   // 锁滚动 + ESC 关闭收编进组件库（改造前这段逻辑在 6 个组件里各写了一份）。
@@ -155,6 +161,8 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
   if (!open || typeof document === "undefined") return null;
 
   const dims = data?.dimensions;
+  // 网络 / 服务端失败（lib/insight-client 标的 fetch_failed）≠ 这家公司没有洞察。
+  const fetchFailed = data?.failure_reason === "fetch_failed";
   const firstParty = data?.first_party;
   const firstPartyVisible = Boolean(firstParty?.visible && firstParty.items.length > 0);
   const totalItems = dims
@@ -209,6 +217,7 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
             <button
               type="button"
               onClick={onClose}
+              aria-label="关闭洞察"
               className="shrink-0 rounded-full bg-black/[0.05] p-2 ink-2 transition hover:bg-black/[0.08] hover:opacity-80 dark:bg-white/[0.05] dark:hover:bg-white/[0.08]"
             >
               <X size={18} weight="bold" />
@@ -235,13 +244,26 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
             <InsightDrawerSkeleton />
           )}
 
-          {!loading && totalItems === 0 && !(data?.recruitment_cycles?.length) && (
+          {!loading && fetchFailed && (
+            <div className="rounded-xl border border-tone-rose-border bg-tone-rose-bg p-5 text-[15px] leading-7 text-tone-rose-fg">
+              洞察没加载出来，可能是网络不稳。
+              <button
+                type="button"
+                onClick={() => setRetryTick((n) => n + 1)}
+                className="ml-1 font-semibold underline underline-offset-2 hover:opacity-80"
+              >
+                重试
+              </button>
+            </div>
+          )}
+
+          {!loading && !fetchFailed && totalItems === 0 && !(data?.recruitment_cycles?.length) && (
             <div className="rounded-xl border border-black/[0.06] bg-white/55 p-5 text-[15px] leading-7 ink-2 dark:border-white/[0.1] dark:bg-white/[0.05]">
               {failureMessage(data?.failure_reason)}
             </div>
           )}
 
-          {!loading && data && (
+          {!loading && data && !fetchFailed && (
             <FirstPartySection
               company={data?.company?.display_name || data?.company?.company || company}
               aggregate={data.first_party}
@@ -251,11 +273,13 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
                 setSubmitWasOpened(true);
                 setSubmitOpen((v) => !v);
               }}
-              onSubmitted={() => setSubmitOpen(false)}
+              // 提交成功后**不收起**：表单自己会换成「已提交，审核后匿名展示」，
+              // 一收起这句就被 hidden 藏掉，用户点完「提交」什么反馈都看不到。
+              onSubmitted={() => {}}
             />
           )}
 
-          {!loading && data && (
+          {!loading && data && !fetchFailed && (
             <RecruitmentTimeline cycles={data.recruitment_cycles || []} />
           )}
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ArrowSquareOut, CircleNotch, Scales, X, XCircle } from "@phosphor-icons/react";
 import { recruitmentCategory } from "@/lib/china-keyword-expansion";
@@ -18,7 +18,7 @@ import { matchTier } from "@/lib/scoring";
 import type { MatchReason, ScoredJob } from "@/lib/types";
 import { cleanSummary, cn, freshnessLabel } from "@/lib/utils";
 import CompanyLogo from "@/components/CompanyLogo";
-import { useBodyScrollLock, useEscapeKey } from "@/lib/ui/hooks";
+import { useBodyScrollLock, useEscapeKey, useFocusTrap } from "@/lib/ui/hooks";
 import { INSIGHT_CHIP_TONE_CLASS as CHIP_TONE } from "@/lib/insight-chip-format";
 import { buttonVariants } from "@/components/ui";
 
@@ -146,6 +146,9 @@ export default function SavedCompare({
 
   useBodyScrollLock(open);
   useEscapeKey(onClose, open);
+  // 全屏对比层盖住了整页，Tab 却还能走到背后的卡片上（线上实测打开后焦点不在层内）。
+  const panelRef = useRef<HTMLElement>(null);
+  useFocusTrap(panelRef, open);
 
   useEffect(() => {
     if (!open) return;
@@ -248,6 +251,8 @@ export default function SavedCompare({
         className="absolute inset-0 bg-[#1a1714]/40 backdrop-blur-sm dark:bg-black/60"
       />
       <section
+        ref={panelRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label="岗位对比决策桌"

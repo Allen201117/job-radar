@@ -89,3 +89,20 @@ test("init 克隆，不改动原 sections", () => {
   s.sections.main.push(opp("x"));
   assert.deepEqual(ids(orig.main), ["a"]);
 });
+
+// 顶栏切求职范围后服务端换了一批机会：旧队列连同 pending / toast 一起作废。
+test("reset 换成新一批，不带走上一批的 pending / toast", () => {
+  let s = initTodayState(sections(["a", "b"]));
+  s = todayReducer(s, { type: "removeOptimistic", jobId: "a", action: "saved" });
+  assert.ok(s.pending["a"]);
+  assert.ok(s.toast);
+  s = todayReducer(s, { type: "reset", sections: sections(["x", "y", "z"]) });
+  assert.deepEqual(ids(s.sections.main), ["x", "y", "z"]);
+  assert.deepEqual(s.pending, {});
+  assert.deepEqual(s.undoing, {});
+  assert.equal(s.toast, null);
+  // 上一批的回滚 / 落定事件晚到，不能把旧卡插进新队列
+  s = todayReducer(s, { type: "removeRollback", jobId: "a" });
+  s = todayReducer(s, { type: "finalizeRemove", jobId: "a" });
+  assert.deepEqual(ids(s.sections.main), ["x", "y", "z"]);
+});

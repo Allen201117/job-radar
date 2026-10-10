@@ -86,6 +86,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
     loading,
     loadingMore,
     error,
+    moreFailed,
     hasMore,
     loadMore,
     refresh,
@@ -125,6 +126,16 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
     if (jobScope !== "domestic") return;
     setFilters((f) => (f.region ? { ...f, region: "" } : f));
   }, [jobScope, setFilters]);
+
+  // 顶栏切了「求职范围」→ 服务端按新范围出结果，但筛选条件本身没变，搜索不会自己重跑。
+  // 不补这一次，toast 说「已切换到海外岗位」，列表却还是上一个范围的（2026-10-10 线上实测：
+  // 海外下 0 条，切回国内 7 秒后仍是 0 条，要手动点「重新搜索」才回到 604 条）。
+  const searchedScopeRef = useRef(jobScope);
+  useEffect(() => {
+    if (searchedScopeRef.current === jobScope) return;
+    searchedScopeRef.current = jobScope;
+    refresh();
+  }, [jobScope, refresh]);
 
   // P3 on-demand 富化：给当下看到的薄卡即时补 JD 正文。
   const [summaryOverlay, setSummaryOverlay] = useState<Record<string, string>>({});
@@ -207,7 +218,13 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
   }
 
   function broadenFilters() {
-    updateFilters((f) => ({ ...f, city: "", jobType: "", keyword: "" }));
+    // 先松最常卡住人的三项。这三项本来就是空的（0 条来自学历 / 公司 / 发布时间等）时，
+    // 只清它们等于什么都没做 —— 按钮点了没反应；这时改为清空全部条件。
+    if (filters.city || filters.jobType || filters.keyword) {
+      updateFilters((f) => ({ ...f, city: "", jobType: "", keyword: "" }));
+    } else {
+      clearAllWithUrl();
+    }
     setOnlyNew(false);
   }
 
@@ -355,7 +372,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
         </button>
         {loading && <div className="jr-scan mt-2.5 h-1 w-full rounded-full" aria-hidden="true" />}
       </div>
-      {error && (
+      {error && !moreFailed && (
         <p className="t-body-sm rounded-2xl border border-[#e7b4a0] dark:border-[#7a392e]/[0.60] bg-[#fbe9e2] dark:bg-[#3a201a] px-3.5 py-2.5 text-[#9a4a32] dark:text-[#e6a99f]">
           {error}
         </p>
@@ -432,7 +449,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
                   放宽筛选条件
                 </button>
                 <Link
-                  href="/me"
+                  href="/me#watch-companies"
                   className={buttonVariants({ variant: "soft", size: "sm" })}
                 >
                   添加关注公司
@@ -444,7 +461,12 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
         )}
       </div>
       {hasMore && (
-        <div className="flex justify-center pt-1">
+        <div className="flex flex-col items-center gap-2 pt-1">
+          {moreFailed && (
+            <p role="status" className="t-caption text-tone-rose-fg">
+              这一页没加载出来，再点一次试试。
+            </p>
+          )}
           <button
             type="button"
             onClick={loadMore}

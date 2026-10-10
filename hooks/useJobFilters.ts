@@ -54,6 +54,8 @@ type ServerState = {
   loading: boolean;
   loadingMore: boolean;
   error: string | null;
+  /** 失败的是「加载更多」而不是重搜：错误要贴着那颗按钮说，页面顶部的错误条此时在视口外。 */
+  moreFailed: boolean;
 };
 
 type UseJobFiltersArgs = {
@@ -103,6 +105,7 @@ export function useJobFilters({
     loading: true,
     loadingMore: false,
     error: null,
+    moreFailed: false,
   });
 
   // 单调请求号：晚到的旧请求结果一律丢弃，避免竞态把新搜索覆盖回旧结果。
@@ -118,7 +121,7 @@ export function useJobFilters({
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-    setServer((s) => ({ ...s, loading: !more, loadingMore: more, error: null }));
+    setServer((s) => ({ ...s, loading: !more, loadingMore: more, error: null, moreFailed: false }));
     const startedAt = Date.now();
     try {
       const resp = await fetch(
@@ -128,11 +131,14 @@ export function useJobFilters({
       const data = await resp.json();
       if (myReq !== reqRef.current) return; // 已被更新的搜索取代
       if (!data?.ok) {
+        // 服务端原话可能是数据库报错（canceling statement due to statement timeout…），只进控制台。
+        console.error("[jobs] 岗位搜索失败", data?.error);
         setServer((s) => ({
           ...s,
           loading: false,
           loadingMore: false,
-          error: data?.error || "搜索失败",
+          error: "搜索失败，请重试",
+          moreFailed: more,
         }));
         return;
       }
@@ -161,6 +167,7 @@ export function useJobFilters({
         loading: false,
         loadingMore: false,
         error: null,
+        moreFailed: false,
       }));
     } catch (error) {
       // 主动取消时，新请求已经接管 loading；旧请求若擅自收尾会把加载态闪成失败或空闲。
@@ -172,6 +179,7 @@ export function useJobFilters({
         loading: false,
         loadingMore: false,
         error: "搜索失败，请重试",
+        moreFailed: more,
       }));
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
@@ -266,6 +274,7 @@ export function useJobFilters({
     loading: server.loading,
     loadingMore: server.loadingMore,
     error: server.error,
+    moreFailed: server.moreFailed,
     hasMore,
     loadMore,
     refresh,

@@ -1,11 +1,11 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChatCircleDots, X } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
-import { useBodyScrollLock, useEscapeKey } from "@/lib/ui/hooks";
+import { useBodyScrollLock, useEscapeKey, useFocusTrap } from "@/lib/ui/hooks";
 
 // 用户反馈群二维码：微信群码会定期失效，换群时只需替换 public/ 下这张图。
 const QR_SRC = "/wechat-group-qr.png";
@@ -19,6 +19,9 @@ export default function FeedbackButton() {
 
   useBodyScrollLock(open);
   useEscapeKey(() => setOpen(false), open);
+  // 弹窗盖住整页时 Tab 仍能走到背后的页面上（线上实测打开后焦点不在弹窗内）。
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, open && mounted);
 
   return (
     <>
@@ -50,6 +53,8 @@ export default function FeedbackButton() {
             onClick={() => setOpen(false)}
           >
             <div
+              ref={dialogRef}
+              tabIndex={-1}
               role="dialog"
               aria-modal="true"
               aria-labelledby="feedback-dialog-title"

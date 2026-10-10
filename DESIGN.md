@@ -202,7 +202,8 @@ pages are translated (avoid a half-translated illusion).
 `DropdownMenu` · `AlertDialog`（替掉 `window.confirm`）
 
 Hooks：`useBodyScrollLock` · `useEscapeKey` · `useFocusTrap` · `useClickOutside` ·
-`useAnchoredPosition` · `useClipboard` · `useAsyncAction`
+`useAnchoredPosition` · `useClipboard` · `useAsyncAction` · `useImeValue`
+（「边打边搜」的输入框必须用它：中文输入法组词期间不上报，否则会拿拼音片段去搜）
 
 ### 哪些用了第三方，为什么
 

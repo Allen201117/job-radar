@@ -62,7 +62,7 @@ function GoalPrompt({ jobCount }: { jobCount: number }) {
           设置求职目标
         </Link>
         <Link
-          href="/preferences#resume"
+          href="/me#resume"
           onClick={() => track("radar_popular_cta", { target: "resume", job_count: jobCount })}
           className={cn(buttonVariants({ variant: "soft", size: "sm" }), "inline-flex items-center justify-center whitespace-nowrap")}
         >

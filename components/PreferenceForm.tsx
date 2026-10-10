@@ -8,7 +8,7 @@ import { PREFERENCES_SAVED_EVENT, track } from "@/lib/track";
 import { normalizeCompany } from "@/lib/company-normalize";
 import TagInput from "./TagInput";
 import SaveToast, { type SaveState } from "@/components/SaveToast";
-import { Buildings, CaretDown, CheckCircle, SlidersHorizontal } from "@phosphor-icons/react";
+import { Buildings, CaretDown, SlidersHorizontal } from "@phosphor-icons/react";
 
 type Coverage = { company: string; status: string; matched_sources: number; resolution_note?: string | null };
 
@@ -25,6 +25,7 @@ export default function PreferenceForm() {
   const [coverage, setCoverage] = useState<Coverage[]>([]);
   const [coverageAvailable, setCoverageAvailable] = useState(true);
   const [message, setMessage] = useState("");
+  const [loadFailed, setLoadFailed] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveErr, setSaveErr] = useState("");
   // 方向词疑似写错（如「信货」）：保存时服务端问过库才给（见 app/api/preferences roleSpellingHints），
@@ -45,10 +46,12 @@ export default function PreferenceForm() {
   }, []);
 
   async function loadPrefs() {
+    setMessage("");
+    setLoadFailed(false);
     try {
       const resp = await fetch("/api/preferences");
       if (resp.status === 401) {
-        setMessage("请先登录。");
+        setMessage("登录已过期，请刷新页面重新登录。");
         return;
       }
       const data = await resp.json();
@@ -57,12 +60,25 @@ export default function PreferenceForm() {
         setCoverage(Array.isArray(data.coverage) ? data.coverage : []);
         setCoverageAvailable(data.coverage_available !== false);
       } else {
-        setMessage("加载失败：" + (data?.error || "未知错误"));
+        // 服务端 / 浏览器的原话（Failed to fetch、错误码）只进控制台，不拿给用户看。
+        console.error("[preferences] 加载失败", data?.error);
+        setMessage("求职目标没加载出来。");
+        setLoadFailed(true);
       }
     } catch (e) {
-      setMessage("加载失败：" + (e as Error).message);
+      console.error("[preferences] 加载失败", (e as Error).message);
+      setMessage("求职目标没加载出来，可能是网络不稳。");
+      setLoadFailed(true);
     }
   }
+
+  // 从空状态的「添加关注公司」跳过来（/me#watch-companies）：表单是取数后才渲染的，
+  // 浏览器自带的锚点定位那时找不到目标，等表单出来后补滚一次。
+  const prefsReady = prefs !== null;
+  useEffect(() => {
+    if (!prefsReady || window.location.hash !== "#watch-companies") return;
+    document.getElementById("watch-companies")?.scrollIntoView({ block: "start" });
+  }, [prefsReady]);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -122,7 +138,8 @@ export default function PreferenceForm() {
         setSaveState("error");
       }
     } catch (err) {
-      setSaveErr("保存失败：" + (err as Error).message);
+      console.error("[preferences] 保存失败", (err as Error).message);
+      setSaveErr("保存失败，请重试。");
       setSaveState("error");
     }
   }
@@ -179,7 +196,16 @@ export default function PreferenceForm() {
   if (!prefs) {
     return (
       <div className="surface p-5 text-sm ink-2">
-        {message || "加载中..."}
+        {message || "加载中…"}
+        {loadFailed && (
+          <button
+            type="button"
+            onClick={() => void loadPrefs()}
+            className="ml-2 font-semibold underline underline-offset-2 hover:opacity-80"
+          >
+            重试
+          </button>
+        )}
       </div>
     );
   }
@@ -248,7 +274,7 @@ export default function PreferenceForm() {
       </section>
 
       {/* §10.1 关注公司：保存后立即出现状态，不等待抓取 */}
-      <div className="rounded-2xl border border-black/[0.07] bg-white/45 p-4 dark:border-white/[0.1] dark:bg-white/[0.04]">
+      <div id="watch-companies" className="scroll-mt-20 rounded-2xl border border-black/[0.07] bg-white/45 p-4 dark:border-white/[0.1] dark:bg-white/[0.04]">
         <div className="flex items-center gap-2">
           <Buildings size={18} weight="fill" className="ink-2" aria-hidden="true" />
           <h3 className="text-sm font-semibold">关注公司</h3>
@@ -391,9 +417,10 @@ export default function PreferenceForm() {
         </div>
       )}
 
+      {/* message 现在只承载「重新加载没成功」这一类（登录过期 / 没加载出来），一律按错误样式显示。
+          旧实现靠文案里有没有「失败」二字选颜色，「请先登录」因此被配上了蓝底对勾。 */}
       {message && (
-        <p className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm ${message.includes("失败") ?"border-tone-rose-border bg-tone-rose-bg text-tone-rose-fg":"border-[#bcd2ed] dark:border-[#7fb2e8]/[0.30] bg-[#e8f1fc] dark:bg-[#7fb2e8]/[0.15] text-[#2f6299] dark:text-[#7fb2e8]"}`}>
-          {!message.includes("失败") && <CheckCircle size={16} weight="fill" aria-hidden="true" />}
+        <p className="inline-flex items-center gap-2 rounded-full border border-tone-rose-border bg-tone-rose-bg px-3 py-2 text-sm text-tone-rose-fg">
           {message}
         </p>
       )}

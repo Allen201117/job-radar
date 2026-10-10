@@ -73,8 +73,10 @@ export default function CampusAllJobs({
     loading,
     loadingMore,
     error,
+    moreFailed,
     hasMore,
     loadMore,
+    refresh,
   } = useJobFilters({
     officialJobs: [],
     onlyNew: false,
@@ -94,6 +96,14 @@ export default function CampusAllJobs({
     if (jobScope !== "domestic") return;
     setFilters((f) => (f.region ? { ...f, region: "" } : f));
   }, [jobScope, setFilters]);
+
+  // 顶栏切了「求职范围」→ 筛选条件没变、搜索不会自己重跑，列表会停在上一个范围（与 /jobs 同一处理）。
+  const searchedScopeRef = useRef(jobScope);
+  useEffect(() => {
+    if (searchedScopeRef.current === jobScope) return;
+    searchedScopeRef.current = jobScope;
+    refresh();
+  }, [jobScope, refresh]);
 
   // ⚠️ 清空按钮不能用 hook 自带的 clearAll —— 那会把 jobType 清成「全部」，专区静默混进社招岗。
   // 三条泄漏路径的另外两条（筛选控件、已选 chip）由 JobFilters 的 lockedJobType 堵。
@@ -213,15 +223,22 @@ export default function CampusAllJobs({
         </div>
       </div>
 
-      {error && (
-        <p className="t-body-sm rounded-2xl border border-tone-rose-border bg-tone-rose-bg px-3.5 py-2.5 text-tone-rose-fg">
+      {error && !moreFailed && (
+        <p className="t-body-sm flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl border border-tone-rose-border bg-tone-rose-bg px-3.5 py-2.5 text-tone-rose-fg">
           {error}
+          <button type="button" onClick={refresh} className="font-semibold underline underline-offset-2 hover:opacity-80">
+            重试
+          </button>
         </p>
       )}
 
       <div className="space-y-3">
         {loading ? (
           <JobListSkeleton count={3} />
+        ) : visibleJobs.length === 0 && error && !moreFailed ? (
+          // 搜索没成功 ≠ 没有岗位：上面已经报错并给了重试，这里不能再配一句「没有匹配的校招岗位」，
+          // 更不能递一颗会清掉他筛选条件的「放宽筛选条件」。
+          null
         ) : visibleJobs.length === 0 ? (
           <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] bg-white/45 px-6 py-14 text-center dark:border-white/[0.1] dark:bg-white/[0.05]">
             <h2 className="t-h2 ink-1">没有匹配的{mode === "campus" ? "校招" : "实习"}岗位</h2>
@@ -252,7 +269,12 @@ export default function CampusAllJobs({
       </div>
 
       {hasMore && !loading && (
-        <div className="flex justify-center pt-1">
+        <div className="flex flex-col items-center gap-2 pt-1">
+          {moreFailed && (
+            <p role="status" className="t-caption text-tone-rose-fg">
+              这一页没加载出来，再点一次试试。
+            </p>
+          )}
           <button
             type="button"
             onClick={loadMore}

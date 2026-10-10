@@ -55,6 +55,7 @@ import type {
 } from "@/lib/opportunities/types";
 import { IGNORE_REASONS } from "@/lib/opportunities/feedback";
 import { cleanSummary, cn, freshnessLabel } from "@/lib/utils";
+import { useClickOutside, useEscapeKey } from "@/lib/ui/hooks";
 import { buttonVariants, badgeVariants } from "@/components/ui";
 
 interface Props {
@@ -98,12 +99,12 @@ function relatedReasonLabel(m?: FilterMatch): string | null {
 // 信号 chip 配色：关键提醒醒目（暖橙），STILL_OPEN 绿（仍在招），CLOSED_OR_STALE 灰。
 const SIGNAL_STYLE: Record<OpportunitySignalType, string> = {
   STILL_OPEN: "border-tone-green-border bg-[#eef6e0] text-[#4d6b2f] dark:bg-[#a3d06a]/20 dark:text-[#d2f0ad]",
-  OPEN_UNVERIFIED: "border-[#e4d1a8] bg-[#f8efd9] text-[#8a6a2a] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/12 dark:text-[#e0b15a]",
-  DEADLINE_SOON: "border-[#f0d9a8] bg-[#fbf1de] text-[#9a6a1f] dark:border-[#e8b87f]/30 dark:bg-[#e8b87f]/12 dark:text-[#e8b87f]",
+  OPEN_UNVERIFIED: "border-[#e4d1a8] bg-[#f8efd9] text-[#8a6a2a] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/[0.12]dark:text-[#e0b15a]",
+  DEADLINE_SOON: "border-[#f0d9a8] bg-[#fbf1de] text-[#9a6a1f] dark:border-[#e8b87f]/30 dark:bg-[#e8b87f]/[0.12]dark:text-[#e8b87f]",
   CLOSED_OR_STALE: "border-black/[0.08] bg-[#f0ece2] ink-2 dark:border-white/10 dark:bg-white/[0.08]",
-  CAMPUS_WINDOW: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/12 dark:text-[#7fb2e8]",
-  NEWLY_DISCOVERED: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/12 dark:text-[#7fb2e8]",
-  COMPANY_MOMENTUM: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/12 dark:text-[#7fb2e8]",
+  CAMPUS_WINDOW: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/[0.12]dark:text-[#7fb2e8]",
+  NEWLY_DISCOVERED: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/[0.12]dark:text-[#7fb2e8]",
+  COMPANY_MOMENTUM: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/[0.12]dark:text-[#7fb2e8]",
 };
 
 // 关键结构性字段（招聘类型 / 岗位类型 / 城市 / 学历 / 经验 / 薪资 / 截止）的标签配色。
@@ -212,6 +213,21 @@ export default function JobCard({
   const [reasonOpen, setReasonOpen] = useState(false);
   // 次要操作（复制链接 / 标记投递 / 不适合）收进「更多」面板：卡片默认只露 2 个主动作，功能一个不少。
   const [moreOpen, setMoreOpen] = useState(false);
+  // 「更多」与原因面板长得像浮层菜单，就得按菜单的规矩收：点卡片外、按 ESC 都关。
+  // 此前只能再点一次「更多」才关，连开几张卡的菜单会同时挂着（2026-10-10 线上实测 2 个并存）。
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const panelOpen = moreOpen || reasonOpen;
+  const closePanels = () => {
+    setMoreOpen(false);
+    setReasonOpen(false);
+  };
+  useClickOutside(actionsRef, closePanels, panelOpen);
+  useEscapeKey(() => {
+    // 焦点若停在面板里的某一项上，面板卸载后会掉到 body；还给「更多」按钮。
+    const inPanel = actionsRef.current?.contains(document.activeElement);
+    closePanels();
+    if (inPanel) actionsRef.current?.querySelector<HTMLElement>("[aria-expanded]")?.focus();
+  }, panelOpen);
   const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(false);
   // 洞察按钮点击前预告状态：null=未知/加载中，real>0=有实录，derived=有岗位聚合派生。
@@ -720,7 +736,7 @@ export default function JobCard({
 
         {/* 只露 2 个主动作（官网详情 / 收藏），其余收进「更多」——功能一个不少，只是不再占 5 行高度。
             移动端：官网详情整宽 + 收藏·更多并排一行；桌面端（lg）回到右侧竖排。 */}
-        <div className="flex shrink-0 flex-col gap-2 lg:w-36">
+        <div ref={actionsRef} className="flex shrink-0 flex-col gap-2 lg:w-36">
           <button
             type="button"
             onClick={handleView}

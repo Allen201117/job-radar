@@ -228,7 +228,8 @@ export default function RegisterModal({
         if (e.target === e.currentTarget && !loading) onClose();
       }}
     >
-      <div className="rise relative w-full max-w-[440px] overflow-hidden rounded-[1.6rem] border border-black/[0.06] dark:border-white/[0.1] bg-[#faf7f1] dark:bg-[#1c1813] shadow-[0_40px_90px_-30px_rgba(40,34,28,0.55)]">
+      {/* 不挂焦点陷阱：各步骤的输入框靠 autoFocus 抢首焦，陷阱会把焦点先放到右上角的「关闭」上。 */}
+      <div role="dialog" aria-modal="true" aria-label="注册" className="rise relative w-full max-w-[440px] overflow-hidden rounded-[1.6rem] border border-black/[0.06] dark:border-white/[0.1] bg-[#faf7f1] dark:bg-[#1c1813] shadow-[0_40px_90px_-30px_rgba(40,34,28,0.55)]">
         {/* 关闭 */}
         <button
           type="button"

@@ -361,7 +361,7 @@ function LoginForm() {
             </h1>
           </div>
 
-          <div className="rounded-[1.6rem] border border-black/[0.06] dark:border-white/[0.1] bg-white/72 dark:bg-white/[0.05] p-7 shadow-[0_30px_70px_-30px_rgba(40,34,28,0.4)] backdrop-blur-sm sm:p-8">
+          <div className="rounded-[1.6rem] border border-black/[0.06] dark:border-white/[0.1] bg-white/[0.72] dark:bg-white/[0.05] p-7 shadow-[0_30px_70px_-30px_rgba(40,34,28,0.4)] backdrop-blur-sm sm:p-8">
             <div className="flex items-center gap-2.5">
               <BrandMark tile={30} icon={19} wordSize={18} />
             </div>
@@ -380,6 +380,7 @@ function LoginForm() {
                   <input
                     id="email"
                     type="email"
+                    autoComplete="email"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -403,6 +404,7 @@ function LoginForm() {
                   <input
                     id="password"
                     type="password"
+                    autoComplete="current-password"
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -442,6 +444,7 @@ function LoginForm() {
                   <input
                     id="forgot-email"
                     type="email"
+                    autoComplete="email"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -511,6 +514,7 @@ function LoginForm() {
                   <input
                     id="new-password"
                     type="password"
+                    autoComplete="new-password"
                     required
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
@@ -525,6 +529,7 @@ function LoginForm() {
                   <input
                     id="confirm-password"
                     type="password"
+                    autoComplete="new-password"
                     required
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}

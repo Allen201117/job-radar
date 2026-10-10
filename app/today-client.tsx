@@ -93,7 +93,7 @@ export function OnboardingPanel({
           设置求职目标
         </Link>
         <Link
-          href="/preferences#resume"
+          href="/me#resume"
           className={cn(buttonVariants({ variant: "soft", size: "md" }), "inline-flex items-center justify-center")}
         >
           上传简历生成画像
@@ -159,8 +159,30 @@ function EmptyQueue({
         <Link href="/jobs" className={buttonVariants({ variant: "soft", size: "sm" })}>
           搜索完整岗位库
         </Link>
-        <Link href="/me" className={buttonVariants({ variant: "soft", size: "sm" })}>
+        {/* 带锚点：此前和「调整求职目标」都落在 /me 顶部，两颗按钮看着是两件事、点完是同一个地方。 */}
+        <Link href="/me#watch-companies" className={buttonVariants({ variant: "soft", size: "sm" })}>
           添加关注公司
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+// 今天这批是用户自己处理完的（收藏 / 投递 / 不适合），不是「没有对口机会」。
+// 两种 0 必须分开说：把刚处理完的人打发成「你的条件太窄」，既不对也挺气人。
+function AllHandled() {
+  return (
+    <div className="rounded-[1.5rem] border border-dashed border-black/[0.12] bg-white/45 px-6 py-14 text-center dark:border-white/[0.1] dark:bg-white/[0.05]">
+      <h2 className="t-h2 ink-1">今天的机会都处理完了</h2>
+      <p className="t-body-sm mx-auto mt-2 max-w-md text-pretty ink-2">
+        收藏和标记投递的岗位都在「收藏」「投递记录」里。有新的对口岗位会排到这里；想现在接着看，可以去岗位库搜。
+      </p>
+      <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
+        <Link href="/saved" className={buttonVariants({ variant: "soft", size: "sm" })}>
+          看看收藏
+        </Link>
+        <Link href="/jobs" className={buttonVariants({ variant: "soft", size: "sm" })}>
+          搜索完整岗位库
         </Link>
       </div>
     </div>
@@ -180,6 +202,14 @@ export default function TodayClient({
 }) {
   const [state, dispatch] = useReducer(todayReducer, feed.sections, initTodayState);
   const [deadIds, setDeadIds] = useState<Set<string>>(new Set());
+  // 动作没落库（接口失败）的提示。JobCard 自己的行内报错这里看不到：卡片在乐观移除时已经卸载，
+  // 回滚后挂回来的是一张新卡 —— 不单独提示的话，用户只看到卡片消失又悄悄回来。
+  const [actionFailed, setActionFailed] = useState(false);
+  useEffect(() => {
+    if (!actionFailed) return;
+    const t = setTimeout(() => setActionFailed(false), 3000);
+    return () => clearTimeout(t);
+  }, [actionFailed]);
 
   const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const openedRef = useRef(false);
@@ -200,6 +230,19 @@ export default function TodayClient({
       map.clear();
     };
   }, []);
+
+  // 服务端换了一批机会（顶栏切「求职范围」后 router.refresh）→ 队列跟着换。
+  // useReducer 的初值只在挂载时读一次，不同步的话页面上半截是新范围的说明、下半截还是旧范围的卡片
+  // （2026-10-10 线上实测：切到海外后说明写「4 个海外岗排在最前」，列表仍是原来那 30 个国内岗）。
+  // 用 generated_at 而不是 feed 对象引用判断：同一份结果的重渲染不该清掉正在进行的撤销。
+  const feedStampRef = useRef(feed.generated_at);
+  useEffect(() => {
+    if (feedStampRef.current === feed.generated_at) return;
+    feedStampRef.current = feed.generated_at;
+    for (const t of Array.from(timers.current.values())) clearTimeout(t);
+    timers.current.clear();
+    dispatch({ type: "reset", sections: feed.sections });
+  }, [feed]);
 
   // 首渲后记录「上次打开」+ radar_open（Strict Mode 下 ref 去重）
   useEffect(() => {
@@ -268,6 +311,11 @@ export default function TodayClient({
     }
   }
 
+  // 落库结果：成功不用再说一遍（乐观移除时已经弹了「已收藏 · 撤销」），失败必须说。
+  function handleActionResult({ ok }: { ok: boolean }) {
+    if (!ok) setActionFailed(true);
+  }
+
   async function undo() {
     const t = state.toast;
     if (!t || t.undoFailed) return;
@@ -298,8 +346,49 @@ export default function TodayClient({
   const visibleCounts = ORDER.map((k) => displayItemsFor(k).filter((o) => !deadIds.has(o.job.id)).length);
   const total = visibleCounts.reduce((a, b) => a + b, 0);
 
+  // 提示条要在「还有卡」和「卡清空了」两种页面上都在：此前它只写在有卡的那个 return 里，
+  // 处理完最后一张卡时整页换成空状态，「已收藏 · 撤销」跟着一起没了，撤销无从点起。
+  const toastNode = actionFailed ? (
+    <div className="above-mobile-nav fixed inset-x-0 z-50 flex justify-center px-4">
+      <div
+        role="status"
+        aria-live="polite"
+        className="t-body-sm rounded-full border border-tone-rose-border bg-tone-rose-bg px-4 py-2.5 text-tone-rose-fg shadow-lg"
+      >
+        操作失败，已恢复原状态
+      </div>
+    </div>
+  ) : state.toast ? (
+    <div className="above-mobile-nav fixed inset-x-0 z-50 flex justify-center px-4">
+      <div className="t-body-sm flex items-center gap-3 rounded-full border border-black/[0.1] bg-[#1a1714] px-4 py-2.5 text-[#f7f1e6] shadow-lg dark:bg-[#f3ecdf] dark:text-[#16130f]">
+        {state.toast.undoFailed ? (
+          <span>撤销失败，已重新移出</span>
+        ) : (
+          <>
+            <span>{state.toast.action ? ACTION_LABEL[state.toast.action] : "已处理"}</span>
+            <button type="button" onClick={undo} className="t-label text-[#f7f1e6] underline underline-offset-2 hover:opacity-80 dark:text-[#16130f]">
+              撤销
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  ) : null;
+
   if (total === 0) {
-    return <EmptyQueue counts={feed.counts} widening={emptyWidening} criteria={criteria} />;
+    // 服务端给过卡、现在队列里一张不剩 = 用户自己处理完的；被实时复核隐藏的不算（那些还在队列里）。
+    const served = ORDER.reduce((n, k) => n + feed.sections[k].length, 0) + feed.sections.waiting.length;
+    const remaining = ORDER.reduce((n, k) => n + displayItemsFor(k).length, 0);
+    return (
+      <>
+        {served > 0 && remaining === 0 ? (
+          <AllHandled />
+        ) : (
+          <EmptyQueue counts={feed.counts} widening={emptyWidening} criteria={criteria} />
+        )}
+        {toastNode}
+      </>
+    );
   }
 
   return (
@@ -336,6 +425,7 @@ export default function TodayClient({
                   opportunitySignals={visibleOpportunitySignals(opp)}
                   opportunityCheckedAgeHours={checkedAgeHours(opp.lastCheckedAt)}
                   onActionChange={handleActionChange}
+                  onActionResult={handleActionResult}
                 />
               ))}
             </div>
@@ -343,22 +433,7 @@ export default function TodayClient({
         );
       })}
 
-      {state.toast && (
-        <div className="above-mobile-nav fixed inset-x-0 z-50 flex justify-center px-4">
-          <div className="t-body-sm flex items-center gap-3 rounded-full border border-black/[0.1] bg-[#1a1714] px-4 py-2.5 text-[#f7f1e6] shadow-lg dark:bg-[#f3ecdf] dark:text-[#16130f]">
-            {state.toast.undoFailed ? (
-              <span>撤销失败，已重新移出</span>
-            ) : (
-              <>
-                <span>{state.toast.action ? ACTION_LABEL[state.toast.action] : "已处理"}</span>
-                <button type="button" onClick={undo} className="t-label text-[#f7f1e6] underline underline-offset-2 hover:opacity-80 dark:text-[#16130f]">
-                  撤销
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-      )}
+      {toastNode}
     </div>
   );
 }

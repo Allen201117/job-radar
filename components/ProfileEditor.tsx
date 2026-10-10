@@ -10,6 +10,8 @@ export default function ProfileEditor({ email }: { email?: string }) {
   const [displayName, setDisplayName] = useState("");
   const [bio, setBio] = useState("");
   const [loading, setLoading] = useState(true);
+  // 已有资料没读回来：此时表单是空的，放行保存就是拿空值把昵称 / 签名覆盖掉（服务端是整行 upsert）。
+  const [loadFailed, setLoadFailed] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("idle");
 
   useEffect(() => {
@@ -18,15 +20,18 @@ export default function ProfileEditor({ email }: { email?: string }) {
 
   async function load() {
     setLoading(true);
+    setLoadFailed(false);
     try {
       const resp = await fetch("/api/profile");
       const data = await resp.json();
-      if (data.ok && data.profile) {
+      if (!resp.ok || !data.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+      if (data.profile) {
         setDisplayName(data.profile.display_name || "");
         setBio(data.profile.bio || "");
       }
-    } catch {
-      /* 静默：保留空表单 */
+    } catch (e) {
+      console.error("[profile] 资料加载失败", (e as Error).message);
+      setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -34,6 +39,7 @@ export default function ProfileEditor({ email }: { email?: string }) {
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
+    if (loading || loadFailed) return;
     setSaveState("saving");
     try {
       const resp = await fetch("/api/profile", {
@@ -92,9 +98,22 @@ export default function ProfileEditor({ email }: { email?: string }) {
 
         {email && <p className="text-xs ink-3">登录邮箱：{email}</p>}
 
+        {loadFailed && (
+          <p className="rounded-xl border border-tone-rose-border bg-tone-rose-bg px-3 py-2 text-xs text-tone-rose-fg">
+            已有资料没加载出来，先别保存，以免把原来的昵称和签名覆盖成空。
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="ml-1 font-semibold underline underline-offset-2 hover:opacity-80"
+            >
+              重新加载
+            </button>
+          </p>
+        )}
+
         <button
           type="submit"
-          disabled={saveState === "saving"}
+          disabled={saveState === "saving" || loading || loadFailed}
           className="btn-ink"
         >
           <FloppyDisk size={16} weight="bold" aria-hidden="true" />

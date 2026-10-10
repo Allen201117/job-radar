@@ -25,7 +25,7 @@ import {
   SlidersHorizontal,
   X,
 } from "@phosphor-icons/react";
-import { useBodyScrollLock, useEscapeKey, useFocusTrap } from "@/lib/ui/hooks";
+import { useBodyScrollLock, useEscapeKey, useFocusTrap, useImeValue } from "@/lib/ui/hooks";
 import { Segmented } from "@/components/ui";
 
 interface Props {
@@ -109,7 +109,13 @@ export default function JobFilters({
   const set = (key: keyof Filters, value: Filters[keyof Filters]) => {
     onChange({ ...filters, [key]: value });
   };
+  // 一次改多项必须走这个：连着调两次 set() 用的是同一份旧 filters，后一次会把前一次盖回去。
+  const patch = (next: Partial<Filters>) => {
+    onChange({ ...filters, ...next });
+  };
   const togglePopover = (name: PopoverName) => setActivePopover((current) => (current === name ? null : name));
+  // 移动端关键词框是「边打边搜」：拼音组词期间不上报，否则会拿「chanpin」去搜一轮。
+  const mobileKeyword = useImeValue(filters.keyword, (value) => set("keyword", value));
 
   const activeChips = collectActiveChips(filters, overseas, lockedJobType);
   const allFiltersCount = countPanelFilters(filters, overseas);
@@ -118,11 +124,11 @@ export default function JobFilters({
     <section aria-label="岗位筛选" className="space-y-2">
       <div className="sticky top-14 z-30 -mx-1 border-b border-black/[0.08] bg-[#f4efe6]/95 px-1 py-2.5 dark:border-white/[0.1] dark:bg-[#16130f]/95">
         <div className="hidden items-center gap-2 overflow-x-auto scrollbar-hide lg:flex">
-          <FilterField label="城市" value={compactMultiValue(filters.city)} active={Boolean(filters.city)} open={activePopover === "city"} onToggle={() => togglePopover("city")} icon={<MapPin size={15} weight="fill" aria-hidden="true" />} onClose={() => setActivePopover(null)}><MultiValueEditor value={filters.city} onChange={(value) => set("city", value)} ariaLabel="城市，可多选" placeholder="输入城市后按回车" /></FilterField>
+          <FilterField label="城市" value={compactMultiValue(filters.city)} active={Boolean(filters.city)} open={activePopover === "city"} onToggle={() => togglePopover("city")} icon={<MapPin size={15} weight="fill" aria-hidden="true" />} onClose={() => setActivePopover(null)}><MultiValueEditor value={filters.city} onChange={(value) => set("city", value)} ariaLabel="城市，可多选" placeholder="输入城市后按回车" autoFocus /></FilterField>
           {!lockedJobType && <RecruitmentType value={filters.jobType} onChange={(value) => set("jobType", value)} />}
-          <FilterField label="岗位方向" value={compactMultiValue([filters.jobFunction, filters.jobRole].filter(Boolean).join(","))} active={Boolean(filters.jobFunction || filters.jobRole)} open={activePopover === "jobFunction"} onToggle={() => togglePopover("jobFunction")} onClose={() => setActivePopover(null)}><FunctionPicker functionValue={filters.jobFunction} roleValue={filters.jobRole} onChangeFunction={(value) => set("jobFunction", value)} onChangeRole={(value) => set("jobRole", value)} /></FilterField>
+          <FilterField label="岗位方向" value={compactMultiValue([filters.jobFunction, filters.jobRole].filter(Boolean).join(","))} active={Boolean(filters.jobFunction || filters.jobRole)} open={activePopover === "jobFunction"} onToggle={() => togglePopover("jobFunction")} onClose={() => setActivePopover(null)}><FunctionPicker functionValue={filters.jobFunction} roleValue={filters.jobRole} onChangeFunction={(value) => set("jobFunction", value)} onChangeRole={(value) => set("jobRole", value)} onClear={() => patch({ jobFunction: "", jobRole: "" })} /></FilterField>
           <FilterField label="经验" value={labelFor(experienceOptions, filters.experience)} active={Boolean(filters.experience)} open={activePopover === "experience"} onToggle={() => togglePopover("experience")} onClose={() => setActivePopover(null)}><PillGroup options={experienceOptions} value={filters.experience} onChange={(value) => set("experience", value)} ariaLabel="工作经验" /></FilterField>
-          <FilterField label="关键词" value={compactMultiValue(filters.keyword)} active={Boolean(filters.keyword)} open={activePopover === "keyword"} onToggle={() => togglePopover("keyword")} icon={<MagnifyingGlass size={15} weight="bold" aria-hidden="true" />} onClose={() => setActivePopover(null)}><MultiValueEditor value={filters.keyword} onChange={(value) => set("keyword", value)} ariaLabel="关键词，可多选" placeholder="输入关键词后按回车" /></FilterField>
+          <FilterField label="关键词" value={compactMultiValue(filters.keyword)} active={Boolean(filters.keyword)} open={activePopover === "keyword"} onToggle={() => togglePopover("keyword")} icon={<MagnifyingGlass size={15} weight="bold" aria-hidden="true" />} onClose={() => setActivePopover(null)}><MultiValueEditor value={filters.keyword} onChange={(value) => set("keyword", value)} ariaLabel="关键词，可多选" placeholder="输入关键词后按回车" autoFocus /></FilterField>
           <FilterField label="公司" value={filters.company} active={Boolean(filters.company)} open={activePopover === "company"} onToggle={() => togglePopover("company")} icon={<Buildings size={15} weight="fill" aria-hidden="true" />} onClose={() => setActivePopover(null)}><CompanyPicker value={filters.company} onChange={(value) => set("company", value)} companies={companies} /></FilterField>
           <Segmented ariaLabel="岗位排序" size="xs" value={filters.sortBy} onChange={(value) => set("sortBy", value)} options={[{ value: "match", label: "匹配" }, { value: "newest", label: "最新" }]} className="shrink-0" />
           <button type="button" onClick={openPanel} className={cn(buttonBase, buttonIdle, "relative shrink-0")} aria-haspopup="dialog">
@@ -135,7 +141,7 @@ export default function JobFilters({
         <div className="flex items-center gap-2 lg:hidden">
           <label className="flex min-w-0 flex-1 items-center gap-2 rounded-full border border-black/[0.1] bg-white/65 px-3 py-2 dark:border-white/[0.12] dark:bg-white/[0.06]">
             <MagnifyingGlass size={17} weight="bold" className="ink-3 shrink-0" aria-hidden="true" />
-            <input value={filters.keyword} onChange={(event) => set("keyword", event.target.value)} aria-label="关键词" placeholder="关键词……" className="t-body-sm min-w-0 flex-1 bg-transparent outline-none placeholder:ink-4" />
+            <input {...mobileKeyword} aria-label="关键词" placeholder="关键词……" className="t-body-sm min-w-0 flex-1 bg-transparent outline-none placeholder:ink-4" />
           </label>
           <button type="button" onClick={openPanel} className={cn(buttonBase, buttonIdle, "relative shrink-0")} aria-haspopup="dialog">
             <Funnel size={16} weight="fill" aria-hidden="true" />
@@ -153,6 +159,7 @@ export default function JobFilters({
         filters={filters}
         onClose={() => setPanelOrigin(null)}
         onChange={set}
+        onPatch={patch}
         onClearAll={onClearAll}
         companies={companies}
         resultTotalText={resultTotalText}
@@ -218,7 +225,12 @@ function Popover({
       setPos({ left, top: a.bottom + 6 });
     };
     place();
-    const onKeyDown = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      onClose();
+      // 弹层里的输入框打开即聚焦，弹层一卸载焦点就掉到 body；键盘用户得从页首重新 Tab，所以还给触发按钮。
+      anchorRef.current?.querySelector<HTMLElement>("button")?.focus();
+    };
     const onPointerDown = (event: PointerEvent) => {
       if (ref.current && !ref.current.contains(event.target as Node)) onClose();
     };
@@ -283,7 +295,7 @@ function FilterField({
   );
 }
 
-function MultiValueEditor({ value, onChange, placeholder, ariaLabel }: { value: string; onChange: (value: string) => void; placeholder: string; ariaLabel: string }) {
+function MultiValueEditor({ value, onChange, placeholder, ariaLabel, autoFocus = false }: { value: string; onChange: (value: string) => void; placeholder: string; ariaLabel: string; autoFocus?: boolean }) {
   const [draft, setDraft] = useState("");
   const chips = splitMultiValue(value);
   const commit = (raw: string) => {
@@ -301,7 +313,7 @@ function MultiValueEditor({ value, onChange, placeholder, ariaLabel }: { value: 
         if (event.nativeEvent.isComposing) return;
         if (event.key === "Enter" || event.key === ",") { event.preventDefault(); commit(draft); }
         if (event.key === "Backspace" && !draft && chips.length) onChange(chips.slice(0, -1).join(","));
-      }} aria-label={ariaLabel} placeholder={chips.length ? "" : placeholder} className="t-body-sm min-w-40 flex-1 bg-transparent px-1 py-1 outline-none placeholder:ink-4" />
+      }} aria-label={ariaLabel} autoFocus={autoFocus} placeholder={chips.length ? "再加一个，回车确认" : placeholder} className="t-body-sm min-w-40 flex-1 bg-transparent px-1 py-1 outline-none placeholder:ink-4" />
     </div>
   );
 }
@@ -326,11 +338,14 @@ function FunctionPicker({
   roleValue,
   onChangeFunction,
   onChangeRole,
+  onClear,
 }: {
   functionValue: string;
   roleValue: string;
   onChangeFunction: (value: string) => void;
   onChangeRole: (value: string) => void;
+  /** 「清空」要同时清一级和二级，必须由调用方一次改完（见 JobFilters 的 patch）。 */
+  onClear: () => void;
 }) {
   const selectedFunctions = splitMultiValue(functionValue);
   const selectedRoles = splitMultiValue(roleValue);
@@ -352,10 +367,9 @@ function FunctionPicker({
         <p className="t-h3">岗位方向</p>
         <button
           type="button"
-          onClick={() => {
-            onChangeFunction("");
-            onChangeRole("");
-          }}
+          // 不能在这里连调 onChangeFunction("") + onChangeRole("")：两次都基于同一份旧筛选，
+          // 后一次把前一次盖回去 —— 二级清掉了、勾着的「全部研发」还在，筛选根本没变。
+          onClick={onClear}
           className="t-label ink-3 hover:ink-1"
         >
           清空
@@ -458,14 +472,16 @@ function CompanyTierPicker({ value, onChange }: { value: string; onChange: (valu
 }
 
 function CompanyPicker({ value, onChange, companies }: { value: string; onChange: (value: string) => void; companies: string[] }) {
-  return <div className="space-y-2"><label className="t-h3" htmlFor="job-company-filter">公司</label><input id="job-company-filter" value={value} onChange={(event) => onChange(event.target.value)} list="job-company-options" placeholder="输入公司名称" className="t-body-sm w-full rounded-xl border border-black/[0.1] bg-white/60 px-3 py-2.5 outline-none focus:border-[#1a1714]/45 dark:border-white/[0.12] dark:bg-white/[0.05] dark:focus:border-[#f3ecdf]/45" /><datalist id="job-company-options">{companies.map((company) => <option key={company} value={company} />)}</datalist></div>;
+  // 公司框「边打边搜」：拼音组词期间不上报，否则打「腾讯」会先拿 teng 搜一轮。
+  const ime = useImeValue(value, onChange);
+  return <div className="space-y-2"><label className="t-h3" htmlFor="job-company-filter">公司</label><input id="job-company-filter" {...ime} list="job-company-options" placeholder="输入公司名称" className="t-body-sm w-full rounded-xl border border-black/[0.1] bg-white/60 px-3 py-2.5 outline-none focus:border-[#1a1714]/45 dark:border-white/[0.12] dark:bg-white/[0.05] dark:focus:border-[#f3ecdf]/45" /><datalist id="job-company-options">{companies.map((company) => <option key={company} value={company} />)}</datalist></div>;
 }
 
 function SelectedChips({ chips, onClearAll, onClearOne }: { chips: ActiveChip[]; onClearAll: () => void; onClearOne: (key: keyof Filters, value?: string) => void }) {
   return <div className="flex items-center gap-2 overflow-x-auto px-1 pb-1 scrollbar-hide" aria-label="已选筛选条件"><div className="flex min-w-max gap-1.5">{chips.map((chip) => <button key={chip.id} type="button" onClick={() => onClearOne(chip.key, chip.value)} className="chip ink-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a1714]/30 dark:focus-visible:ring-[#f3ecdf]/35"><X size={13} weight="bold" aria-hidden="true" />{chip.label}</button>)}</div><button type="button" onClick={onClearAll} className="t-label ink-3 ml-auto shrink-0 px-2 py-1 hover:ink-1">清空全部</button></div>;
 }
 
-function AllFiltersPanel({ origin, filters, onChange, onClearAll, onClose, companies, resultTotalText, overseas, lockedJobType = false }: { origin: PanelOrigin | null; filters: Filters; onChange: (key: keyof Filters, value: Filters[keyof Filters]) => void; onClearAll: () => void; onClose: () => void; companies: string[]; resultTotalText: string; overseas: boolean; lockedJobType?: boolean }) {
+function AllFiltersPanel({ origin, filters, onChange, onPatch, onClearAll, onClose, companies, resultTotalText, overseas, lockedJobType = false }: { origin: PanelOrigin | null; filters: Filters; onChange: (key: keyof Filters, value: Filters[keyof Filters]) => void; onPatch: (next: Partial<Filters>) => void; onClearAll: () => void; onClose: () => void; companies: string[]; resultTotalText: string; overseas: boolean; lockedJobType?: boolean }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const open = origin !== null;
   useEscapeKey(onClose, open);
@@ -482,7 +498,7 @@ function AllFiltersPanel({ origin, filters, onChange, onClearAll, onClose, compa
     "--fy": `${Math.round(origin.y + origin.h / 2 - window.innerHeight / 2)}px`,
     "--fs": "0.28",
   } as CSSProperties;
-  return <div className="job-filter-backdrop fixed inset-0 z-50 flex items-end bg-[#1a1714]/45 p-0 backdrop-blur-[3px] dark:bg-black/65 lg:items-center lg:justify-center lg:p-6" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={panelRef} role="dialog" aria-modal="true" aria-label="筛选" tabIndex={-1} style={growStyle} className="job-filter-panel flex h-[85dvh] w-full flex-col rounded-t-3xl bg-[#f4efe6] shadow-2xl outline-none dark:bg-[#16130f] lg:h-auto lg:max-h-[82vh] lg:w-[40rem] lg:rounded-3xl" onMouseDown={(event) => event.stopPropagation()}><div className="flex items-center justify-between border-b border-black/[0.08] px-5 py-4 dark:border-white/[0.1]"><h2 className="t-h2">筛选</h2><button type="button" onClick={onClose} aria-label="关闭筛选" className="grid size-9 place-items-center rounded-full ink-3 hover:bg-black/[0.06] hover:ink-1 dark:hover:bg-white/[0.1]"><X size={18} weight="bold" aria-hidden="true" /></button></div><div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5"><div className="space-y-3 lg:hidden"><PanelTitle>基础条件</PanelTitle><MultiValueEditor value={filters.city} onChange={(value) => onChange("city", value)} ariaLabel="城市，可多选" placeholder="城市，可多选" />{!lockedJobType && <RecruitmentType value={filters.jobType} onChange={(value) => onChange("jobType", value)} />}<FunctionPicker functionValue={filters.jobFunction} roleValue={filters.jobRole} onChangeFunction={(value) => onChange("jobFunction", value)} onChangeRole={(value) => onChange("jobRole", value)} /><MultiValueEditor value={filters.keyword} onChange={(value) => onChange("keyword", value)} ariaLabel="关键词，可多选" placeholder="关键词，可多选" /><CompanyPicker value={filters.company} onChange={(value) => onChange("company", value)} companies={companies} /></div><div className="space-y-3"><PanelTitle>岗位要求</PanelTitle><PillField label="学历" options={EDUCATION.map((item) => ({ value: item === "不限" ? "" : item, label: item }))} value={filters.education} onChange={(value) => onChange("education", value)} /><PillField label="经验" options={lockedJobType ? CAMPUS_EXPERIENCE : EXPERIENCE} value={filters.experience} onChange={(value) => onChange("experience", value)} /></div><div className="space-y-3"><PanelTitle>岗位新鲜度</PanelTitle><PillField label="发布时间" options={POSTED_WITHIN} value={filters.postedWithin} onChange={(value) => onChange("postedWithin", value)} /><Toggle label="仅新岗位" checked={filters.showNewOnly} onChange={(value) => onChange("showNewOnly", value)} /></div><div className="space-y-3"><PanelTitle>公司</PanelTitle><PillField label="资本来源" options={ORIGINS.map((item) => ({ value: item === "全部" ? "" : item, label: item }))} value={filters.capitalOrigin} onChange={(value) => onChange("capitalOrigin", value)} /><CompanyTierPicker value={filters.companyTier} onChange={(value) => onChange("companyTier", value)} /></div>{overseas && <div className="space-y-3"><PanelTitle>海外</PanelTitle><PillField label="目标地区" options={REGIONS} value={filters.region} onChange={(value) => onChange("region", value)} /><Toggle label="仅显示提供 Sponsorship 的岗位" checked={filters.sponsorshipOnly} onChange={(value) => onChange("sponsorshipOnly", value)} /></div>}<div className="space-y-3"><PanelTitle>展示</PanelTitle><Toggle label="仅显示公开薪资的岗位" checked={filters.salaryOnly} onChange={(value) => onChange("salaryOnly", value)} /><Toggle label="显示已忽略" checked={filters.showIgnored} onChange={(value) => onChange("showIgnored", value)} /><Toggle label="显示已投递" checked={filters.showApplied} onChange={(value) => onChange("showApplied", value)} /><PillField label="排序" options={[{ value: "match", label: "按匹配度" }, { value: "newest", label: "按发布时间" }]} value={filters.sortBy} onChange={(value) => onChange("sortBy", value as Filters["sortBy"])} /></div></div><div className="flex items-center gap-3 border-t border-black/[0.08] bg-[#f4efe6] px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] dark:border-white/[0.1] dark:bg-[#16130f]"><button type="button" onClick={onClearAll} className="t-label ink-3 shrink-0 px-2 py-2 hover:ink-1">重置全部</button><button type="button" onClick={onClose} className="btn-ink-sm min-w-0 flex-1"><span>查看</span><span className="t-num">{resultTotalText}</span><span>个岗位</span></button></div></div></div>;
+  return <div className="job-filter-backdrop fixed inset-0 z-50 flex items-end bg-[#1a1714]/45 p-0 backdrop-blur-[3px] dark:bg-black/65 lg:items-center lg:justify-center lg:p-6" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div ref={panelRef} role="dialog" aria-modal="true" aria-label="筛选" tabIndex={-1} style={growStyle} className="job-filter-panel flex h-[85dvh] w-full flex-col rounded-t-3xl bg-[#f4efe6] shadow-2xl outline-none dark:bg-[#16130f] lg:h-auto lg:max-h-[82vh] lg:w-[40rem] lg:rounded-3xl" onMouseDown={(event) => event.stopPropagation()}><div className="flex items-center justify-between border-b border-black/[0.08] px-5 py-4 dark:border-white/[0.1]"><h2 className="t-h2">筛选</h2><button type="button" onClick={onClose} aria-label="关闭筛选" className="grid size-9 place-items-center rounded-full ink-3 hover:bg-black/[0.06] hover:ink-1 dark:hover:bg-white/[0.1]"><X size={18} weight="bold" aria-hidden="true" /></button></div><div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5"><div className="space-y-3 lg:hidden"><PanelTitle>基础条件</PanelTitle><MultiValueEditor value={filters.city} onChange={(value) => onChange("city", value)} ariaLabel="城市，可多选" placeholder="城市，可多选" />{!lockedJobType && <RecruitmentType value={filters.jobType} onChange={(value) => onChange("jobType", value)} />}<FunctionPicker functionValue={filters.jobFunction} roleValue={filters.jobRole} onChangeFunction={(value) => onChange("jobFunction", value)} onChangeRole={(value) => onChange("jobRole", value)} onClear={() => onPatch({ jobFunction: "", jobRole: "" })} /><MultiValueEditor value={filters.keyword} onChange={(value) => onChange("keyword", value)} ariaLabel="关键词，可多选" placeholder="关键词，可多选" /><CompanyPicker value={filters.company} onChange={(value) => onChange("company", value)} companies={companies} /></div><div className="space-y-3"><PanelTitle>岗位要求</PanelTitle><PillField label="学历" options={EDUCATION.map((item) => ({ value: item === "不限" ? "" : item, label: item }))} value={filters.education} onChange={(value) => onChange("education", value)} /><PillField label="经验" options={lockedJobType ? CAMPUS_EXPERIENCE : EXPERIENCE} value={filters.experience} onChange={(value) => onChange("experience", value)} /></div><div className="space-y-3"><PanelTitle>岗位新鲜度</PanelTitle><PillField label="发布时间" options={POSTED_WITHIN} value={filters.postedWithin} onChange={(value) => onChange("postedWithin", value)} /><Toggle label="仅新岗位" checked={filters.showNewOnly} onChange={(value) => onChange("showNewOnly", value)} /></div><div className="space-y-3"><PanelTitle>公司</PanelTitle><PillField label="资本来源" options={ORIGINS.map((item) => ({ value: item === "全部" ? "" : item, label: item }))} value={filters.capitalOrigin} onChange={(value) => onChange("capitalOrigin", value)} /><CompanyTierPicker value={filters.companyTier} onChange={(value) => onChange("companyTier", value)} /></div>{overseas && <div className="space-y-3"><PanelTitle>海外</PanelTitle><PillField label="目标地区" options={REGIONS} value={filters.region} onChange={(value) => onChange("region", value)} /><Toggle label="仅显示提供 Sponsorship 的岗位" checked={filters.sponsorshipOnly} onChange={(value) => onChange("sponsorshipOnly", value)} /></div>}<div className="space-y-3"><PanelTitle>展示</PanelTitle><Toggle label="仅显示公开薪资的岗位" checked={filters.salaryOnly} onChange={(value) => onChange("salaryOnly", value)} /><Toggle label="显示已忽略" checked={filters.showIgnored} onChange={(value) => onChange("showIgnored", value)} /><Toggle label="显示已投递" checked={filters.showApplied} onChange={(value) => onChange("showApplied", value)} /><PillField label="排序" options={[{ value: "match", label: "按匹配度" }, { value: "newest", label: "按发布时间" }]} value={filters.sortBy} onChange={(value) => onChange("sortBy", value as Filters["sortBy"])} /></div></div><div className="flex items-center gap-3 border-t border-black/[0.08] bg-[#f4efe6] px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] dark:border-white/[0.1] dark:bg-[#16130f]"><button type="button" onClick={onClearAll} className="t-label ink-3 shrink-0 px-2 py-2 hover:ink-1">重置全部</button><button type="button" onClick={onClose} className="btn-ink-sm min-w-0 flex-1"><span>查看</span><span className="t-num">{resultTotalText}</span><span>个岗位</span></button></div></div></div>;
 }
 
 function PanelTitle({ children }: { children: ReactNode }) { return <h3 className="t-h3">{children}</h3>; }

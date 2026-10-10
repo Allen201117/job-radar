@@ -33,7 +33,8 @@ function errorText(error: string): string {
     invalid_topic: "请选择分享主题。",
     invalid_dimension: "分享主题暂不可提交。",
   };
-  return map[error] || error || "提交失败";
+  // 不在表里的是服务端 / 数据库原话（Unauthorized、约束名…），不拿给用户看。
+  return map[error] || "提交失败，请稍后重试。";
 }
 
 export default function InsightSubmitForm({ company, onSubmitted }: Props) {
@@ -88,7 +89,8 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
-        setError(errorText(data.error));
+        if (data?.error) console.error("[insight-submit] 服务端拒绝", data.error);
+        setError(res.status === 401 ? "登录已过期，请刷新页面重新登录后再提交。" : errorText(data.error));
         return;
       }
       setSent(true);
@@ -96,7 +98,8 @@ export default function InsightSubmitForm({ company, onSubmitted }: Props) {
       setConsent(false);
       onSubmitted?.();
     } catch (err) {
-      setError((err as Error).message || "提交失败");
+      console.error("[insight-submit] 提交失败", (err as Error).message);
+      setError("网络异常，没提交上，请重试。");
     } finally {
       setSaving(false);
     }

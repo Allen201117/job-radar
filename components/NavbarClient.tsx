@@ -119,6 +119,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
 
   useBodyScrollLock(menuOpen);
   useEscapeKey(() => setMenuOpen(false), menuOpen);
+  useEscapeKey(() => setAcctOpen(false), acctOpen);
 
   async function handleLogout() {
     if (loggingOut) return;
@@ -157,6 +158,8 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
     } catch (e) {
       console.error("[navbar] failed to update job scope:", (e as Error).message);
       setJobScope(previous);
+      // 开关已经先翻过去了；只悄悄翻回来，用户看到的是「点了没反应」。
+      setScopeToast("切换失败，请重试");
     } finally {
       setScopeSaving(false);
     }
@@ -267,7 +270,7 @@ export default function NavbarClient({ initialEmail }: { initialEmail: string | 
                     onClick={() => setAcctOpen(false)}
                     className="fixed inset-0 z-30 cursor-default"
                   />
-                  <div className="absolute right-0 z-40 mt-2 w-52 rounded-2xl border border-black/[0.08] bg-[#f4efe6]/98 p-1 shadow-lg backdrop-blur-xl dark:border-white/[0.12] dark:bg-[#16130f]/[0.98]">
+                  <div className="absolute right-0 z-40 mt-2 w-52 rounded-2xl border border-black/[0.08] bg-[#f4efe6]/[0.98] p-1 shadow-lg backdrop-blur-xl dark:border-white/[0.12] dark:bg-[#16130f]/[0.98]">
                     <div className="mb-1 border-b border-black/[0.06] px-3 pb-2 pt-1.5 dark:border-white/[0.08]">
                       <p className="truncate text-sm font-semibold ink-1">{username}</p>
                       <p className="truncate text-xs ink-3">{email}</p>

@@ -27,7 +27,7 @@ import {
 import { formatDateLabel } from "@/lib/relative-time";
 import type { InsightAssertion, InsightItemView } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { useEscapeKey } from "@/lib/ui/hooks";
+import { useEscapeKey, useImeValue } from "@/lib/ui/hooks";
 import { buttonVariants } from "@/components/ui";
 
 type Props = {
@@ -134,7 +134,12 @@ export default function InsightsClient({
         // 失败不许静默：用户改了筛选却什么都没变，会以为「就是没有数据」。
         setError("筛选没加载出来，请重试");
       } finally {
-        append ? setLoadingMore(false) : setLoading(false);
+        // 被新请求取代（abort）的旧请求不许收尾：新请求还在跑，这里把 loading 置回 false，
+        // 「正在筛选…」会提前消失，闪出一屏「没有公司同时满足」。
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+          append ? setLoadingMore(false) : setLoading(false);
+        }
       }
     },
     [],
@@ -166,6 +171,8 @@ export default function InsightsClient({
   );
 
   const set = (patch: Partial<Filters>) => setFilters((prev) => ({ ...prev, ...patch }));
+  // 搜索框「边打边搜」：拼音组词期间不上报，否则打「腾讯」会先拿 teng 搜一轮、闪一屏空结果。
+  const searchInput = useImeValue(filters.q, (value) => set({ q: value }));
   const hasMore = subjects.length < total;
   const searchMiss = Boolean(filters.q.trim());
 
@@ -174,7 +181,7 @@ export default function InsightsClient({
       <PromiseLegend />
 
       {/* 筛选条：吸顶横条，与 /jobs 同形态（不做展开/收起手风琴，见 CLAUDE.md 筛选器规约） */}
-      <div className="sticky top-[3.75rem] z-20 -mx-4 mb-5 border-y border-black/[0.06] bg-[#f4efe6]/92 px-4 py-2.5 backdrop-blur dark:border-white/[0.08] dark:bg-[#17140f]/92">
+      <div className="sticky top-[3.75rem] z-20 -mx-4 mb-5 border-y border-black/[0.06] bg-[#f4efe6]/[0.92] px-4 py-2.5 backdrop-blur dark:border-white/[0.08] dark:bg-[#17140f]/[0.92]">
         <div className="flex flex-wrap items-center gap-2">
           <label className="relative">
             <MagnifyingGlass
@@ -182,8 +189,8 @@ export default function InsightsClient({
               className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 ink-4"
             />
             <input
-              value={filters.q}
-              onChange={(e) => set({ q: e.target.value })}
+              {...searchInput}
+              aria-label="搜公司或业务线"
               placeholder="搜公司或业务线"
               className="w-52 rounded-full border border-black/[0.08] bg-white/70 py-1.5 pl-8 pr-3 t-label ink-1 outline-none transition focus:border-[#3f7cc0]/40 dark:border-white/[0.1] dark:bg-white/[0.06]"
             />
@@ -475,10 +482,15 @@ function SubjectCard({
   // 关闭时保留已挂载的表单，因此按 Esc 收起不会丢掉尚未提交的内容。
   useEscapeKey(() => setContribute(false), contribute);
 
-  async function toggle() {
+  function toggle() {
     const next = !open;
     setOpen(next);
     if (!next || items || loading) return;
+    void loadItems();
+  }
+
+  // 取数单独成函数：失败后的「重试」只该重新取，不能再走 toggle —— 那会把刚展开的面板收起来。
+  async function loadItems() {
     setLoading(true);
     setFailed(false);
     try {
@@ -624,13 +636,13 @@ function SubjectCard({
           {failed && (
             <p className="t-body-sm text-[#9c4a33] dark:text-[#e8b0a0]">
               没加载出来，
-              <button type="button" onClick={toggle} className="underline underline-offset-2">
+              <button type="button" onClick={() => void loadItems()} className="underline underline-offset-2">
                 点这里重试
               </button>
             </p>
           )}
           {items && items.length === 0 && (
-            <p className="t-body-sm ink-3">这个主体目前没有能过校验门的条目。</p>
+            <p className="t-body-sm ink-3">这里暂时还没有经过核实、可以展示的内容。</p>
           )}
           {items && items.length > 0 && (
             <ul className="grid gap-3">

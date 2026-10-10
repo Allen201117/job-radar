@@ -32,7 +32,8 @@ export type TodayEvent =
   | { type: "undoOptimistic"; jobId: string } // 点撤销 → 乐观恢复
   | { type: "undoCommit"; jobId: string } // 撤销 API 成功
   | { type: "undoRollback"; jobId: string } // 撤销 API 失败 → 重新移出
-  | { type: "dismissToast" }; // 关闭 toast（撤销失败提示等自动消失）
+  | { type: "dismissToast" } // 关闭 toast（撤销失败提示等自动消失）
+  | { type: "reset"; sections: FeedSections }; // 服务端换了一批机会（切求职范围后刷新）→ 整个队列换新
 
 function cloneSections(s: FeedSections): FeedSections {
   return { critical: [...s.critical], main: [...s.main], explore: [...s.explore], momentum: [...s.momentum], waiting: [...s.waiting] };
@@ -124,6 +125,10 @@ export function todayReducer(state: TodayState, ev: TodayEvent): TodayState {
     }
     case "dismissToast": {
       return state.toast ? { ...state, toast: null } : state;
+    }
+    case "reset": {
+      // 旧队列的 pending / undoing / toast 都指着上一批的岗位，留着只会把上一批的卡插回新队列。
+      return initTodayState(ev.sections);
     }
     default:
       return state;

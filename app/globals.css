@@ -1127,8 +1127,11 @@
 }
 @media (max-width: 1080px) { .lp-floats { --cs: 0.8; } }
 @media (max-width: 920px) { .lp-floats { --cs: 0.72; } }
-@media (max-width: 780px) { .lp-floats { --cs: 0.64; } }
-@media (max-width: 600px) { .lp-floats { display: none; } }
+/* 860px 以下整组隐藏。原来到 600px 才隐藏、780px 以下只是再缩一档（0.64），但缩小救不了重叠：
+   2026-10-10 线上逐宽度实测（610~1920px 共 30 档，量卡片外框与文字行框的交叠）——610~840px 四张卡
+   全部压在标题或「覆盖 Apple · 字节…」那行字上（780px 时最多压进 111px），860px 起才干净。
+   平板竖屏（768 / 820 / 834）和半屏窗口都落在这个区间里。 */
+@media (max-width: 860px) { .lp-floats { display: none; } }
 
 @media (prefers-reduced-motion: reduce) {
   .radar-ring, .lp-marquee-track { animation: none; }
