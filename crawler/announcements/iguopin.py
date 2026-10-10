@@ -86,6 +86,10 @@ _MAX_REQUEST_ERRORS = 3
 _LINK_CHECK_BUDGET_SECONDS = float(os.environ.get("IGUOPIN_LINK_CHECK_BUDGET", "480"))
 _LINK_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 _LINK_WORKERS = 8
+# 存量复验（recheck_unseen）每轮最多打多少次请求。一行 1~2 次 → 每轮 30~60 行；连同取数那 32 次仍远低于限流线。
+_RECHECK_REQUESTS = int(os.environ.get("IGUOPIN_RECHECK_REQUESTS", "60"))
+# 离国聘登记的结束日不超过这么多天的不复验：它们马上会自己过期，预算留给会挂很久的（多是招满即止）。
+_RECHECK_MIN_DAYS_LEFT = 7
 _SECRET = "cu4&dYe*feF8t$E9m"   # 前端硬编码常量；不是账号密钥，换了会 code!=200 直接报错
 _BUCKET = 180                    # 3 分钟时间桶
 _BEIJING = timezone(timedelta(hours=8))
@@ -234,6 +238,71 @@ def collect_in_window(call, max_requests: int | None = None, pause: float | None
         key = status_name.get(it.get("apply_status"), f"状态{it.get('apply_status')}")
         stats["by_status"][key] = stats["by_status"].get(key, 0) + 1
     return list(seen.values()), stats
+
+
+def _empty_recheck() -> dict:
+    return {"alive": [], "closed": [], "unknown": [], "requests": 0, "stopped": None}
+
+
+def recheck_unseen(call, rows: list[dict], max_requests: int | None = None, pause: float | None = None) -> dict:
+    """库里在展示、但本轮各格都没取到的国聘行，逐条按标题搜一次，问国聘它现在是什么状态。
+
+    为什么需要：取数那一步每格只拿得到前 100 条，「这一轮没看到」不等于「对方撤了」，所以不能按缺席下架；
+    而公司提前结束报名后，我们库里那行会一直挂到国聘原先登记的结束日——招满即止的多登记在 11~12 月，
+    能白挂两个月。过期公告比死链更伤，得有一条能下架它的路。
+
+    判据（2026-10-10 实测 6 条、两个方向全对；搜一个不可能命中的词返回 0 条，说明搜索词确实生效）：
+      · 带「在报名期」(1,2) 搜到同一个入口链接 → 还在报 → alive（只盖时间戳）
+      · 上面没搜到，且带「结束报名」(4) 搜到**链接和标题都相同**的 → 国聘明说已结束 → closed（下架）
+      · 两边都没搜到 → unknown（标题被改了 / 被删了 / 搜索没命中），不动，只记「查过了」好让轮转往下走
+    判活只比链接（宽）、判死要链接 + 标题 + 发布日都对上（严）：宁可漏判不可错杀。发布日这一道防的是
+    「同一个入口、同一个标题分批重发」——上一批结束了、这一批还在报，只比链接和标题会把在报的那行下掉。
+    任何错误都当场收工（含接口回了没见过的形状：复验是附带的活，不许拖垮主流程），已经判完的照常返回；
+    出错时正在查的那一行记成 unknown 排到队尾，否则它每轮都堵在最前面、后面的永远轮不到。
+    """
+    budget = _RECHECK_REQUESTS if max_requests is None else max_requests
+    gap = _PAUSE_SECONDS if pause is None else pause
+    out = _empty_recheck()
+    current = None      # 正在查、还没判完的那一行
+
+    def ask(body: dict) -> list[dict]:
+        if gap:
+            time.sleep(gap)
+        out["requests"] += 1
+        return call(body) or []
+
+    def same_announcement(it: dict, row: dict, title: str) -> bool:
+        if (it.get("apply_url") or "").strip() != row["source_url"] or (it.get("title") or "").strip() != title:
+            return False
+        published, theirs = str(row.get("published_at") or "")[:10], _window_of(it)[2]
+        return not published or (theirs is not None and theirs.isoformat() == published)
+
+    try:
+        for row in rows:
+            url, title = row["source_url"], (row.get("title") or "").strip()
+            if not title:
+                continue
+            if out["requests"] + 2 > budget:      # 一行最多 2 次；不够就不开这一行，别留半截判断
+                out["stopped"] = "budget"
+                break
+            current = row["id"]
+            if any((it.get("apply_url") or "").strip() == url
+                   for it in ask({"keywords": title, "apply_status": [s for s, _ in _IN_WINDOW_STATUS]})):
+                out["alive"].append(current)
+            elif any(same_announcement(it, row, title) for it in ask({"keywords": title, "apply_status": [4]})):
+                out["closed"].append(current)
+            else:
+                out["unknown"].append(current)
+            current = None
+    except IguopinApiError as exc:
+        out["stopped"] = f"api_rejected:{exc.code}"
+    except httpx.HTTPError as exc:
+        out["stopped"] = f"network:{type(exc).__name__}"
+    except Exception as exc:  # noqa: BLE001
+        out["stopped"] = f"error:{type(exc).__name__}"
+    if current is not None:
+        out["unknown"].append(current)
+    return out
 
 
 _SOCIETY_OPEN = re.compile(r"(面向社会|社会公开招聘|社会公开招募)")
@@ -415,11 +484,20 @@ def _incomplete(stats: dict) -> int:
     return stats["request_errors"] + bool(stats["api_rejected"]) + bool(stats["budget_exhausted"])
 
 
-def _known_active_urls(sb) -> set[str]:
-    """库里正在展示的国聘入口。⚠️ 行数已过千，必须分页取（PostgREST 单次 1000 行静默截断）。"""
-    rows = db.fetch_all_rows(lambda: sb.table("announcement_postings").select("source_url")
+def _active_rows(sb) -> list[dict]:
+    """库里正在展示的国聘行。⚠️ 行数已过千，必须分页取（PostgREST 单次 1000 行静默截断）。"""
+    return db.fetch_all_rows(lambda: sb.table("announcement_postings")
+                             .select("id, source_url, title, published_at, deadline, last_checked_at")
                              .eq("source_portal", PORTAL_KEY).eq("status", "active"))
-    return {r["source_url"] for r in rows}
+
+
+def _recheck_queue(active: list[dict], seen_urls: set[str], today: date) -> list[dict]:
+    """本轮该复验谁：没在任何一格里出现、且离登记的结束日还远的，最久没确认过的排前面。"""
+    def days_left(row: dict) -> int:
+        deadline = _parse_dt(row.get("deadline"))
+        return (deadline - today).days if deadline else 10 ** 6
+    stale = [r for r in active if r["source_url"] not in seen_urls and days_left(r) > _RECHECK_MIN_DAYS_LEFT]
+    return sorted(stale, key=lambda r: (r.get("last_checked_at") or "", r["id"]))
 
 
 def _other_portal_urls(sb) -> set[str]:
@@ -455,7 +533,8 @@ def harvest(sb, dry_run: bool = False, today: date | None = None, check_links: b
             raise RuntimeError("iguopin 列表返回 0 条——形态或签名可能已变（不静默放过）")
 
         # 库里已经在展示的入口不重复点：每轮几百上千条逐个 GET 既慢也没必要（存量行重点一次也改变不了它的状态）。
-        known = _known_active_urls(sb) if persist else set()
+        active = _active_rows(sb) if persist else []
+        known = {r["source_url"] for r in active}
         owned_elsewhere = _other_portal_urls(sb) if persist else set()
         # 点新入口有总时限：首轮有上千个新入口，境外 runner 连不上的站每个要等到超时，不封顶会把整个 job 拖到
         # 被取消——而写库在最后，被取消 = 一条都没进，下一轮从头再来。超时没点到的**这一轮不入库**（不是放行），
@@ -501,6 +580,7 @@ def harvest(sb, dry_run: bool = False, today: date | None = None, check_links: b
                 "deadline": deadline.isoformat() if deadline else None,
                 "deadline_text": deadline_text,
                 "status": "active",
+                "expire_reason": None,      # 以前被下架过、现在国聘又挂出来的：复活时把旧的下架原因清掉
                 "verdict": "ok",
                 "last_seen_at": _now_iso(),
                 "last_checked_at": _now_iso(),
@@ -515,8 +595,19 @@ def harvest(sb, dry_run: bool = False, today: date | None = None, check_links: b
                 else:
                     drops[reason] = drops.get(reason, 0) + 1
 
-    # 同一个 apply_url 可能挂着多条公告（实测有重复），source_url 是唯一键 → 先本地去重再 upsert
-    deduped = {r["source_url"]: r for r in rows}
+        # 存量复验。取数那一步刚被接口拒过就别再去问了；seen_urls 用的是接口回的全部条目（过不过我们的门都算见到）。
+        seen_urls = {(it.get("apply_url") or "").strip() for it in items}
+        queue = _recheck_queue(active, seen_urls, today)
+        recheck = recheck_unseen(fetch_list, queue) if queue and not stats["api_rejected"] else _empty_recheck()
+
+    # 同一个 apply_url 可能挂着多份公告（如集团的招聘门户首页，一轮 45 条），而 source_url 是唯一键 → 只能留一条。
+    # 留哪条必须是确定的：原先「谁排后面留谁」，接口顺序一变卡片标题就跟着换。现在留登记结束日最晚的（这个入口
+    # 只要还有一份在报就该挂着），并列再按标题定序。
+    deduped: dict[str, dict] = {}
+    for r in rows:
+        kept = deduped.get(r["source_url"])
+        if kept is None or (r["deadline"] or "", r["title"]) > (kept["deadline"] or "", kept["title"]):
+            deduped[r["source_url"]] = r
     if len(deduped) < len(rows):
         drops["duplicate_url"] = len(rows) - len(deduped)
     final = list(deduped.values())
@@ -524,11 +615,24 @@ def harvest(sb, dry_run: bool = False, today: date | None = None, check_links: b
     if persist:
         for chunk in _chunks(final, 500):
             sb.table("announcement_postings").upsert(chunk, on_conflict="source_url").execute()
+        now = _now_iso()
+        for ids, change in (
+            (recheck["alive"], {"last_seen_at": now, "last_checked_at": now}),
+            (recheck["closed"], {"status": "expired", "expire_reason": "iguopin_closed",
+                                 "last_checked_at": now, "updated_at": now}),
+            (recheck["unknown"], {"last_checked_at": now}),
+        ):
+            for chunk in _chunks(ids, 100):
+                (sb.table("announcement_postings").update(change).in_("id", chunk)
+                 .eq("source_portal", PORTAL_KEY).eq("status", "active").execute())
 
     metrics = {"fetched": len(items), "kept": len(final), "drops": drops,
                "with_deadline": sum(1 for r in final if r["deadline"]),
                "rolling": sum(1 for r in final if _ROLLING.search(r["deadline_text"] or "")),
                "new_urls": sum(1 for r in final if r["source_url"] not in known),
+               "recheck": {"queued": len(queue), "alive": len(recheck["alive"]), "closed": len(recheck["closed"]),
+                           "unknown": len(recheck["unknown"]), "requests": recheck["requests"],
+                           "stopped": recheck["stopped"]},
                **stats}
     incomplete = _incomplete(stats)
     if stats["api_rejected"]:
@@ -537,6 +641,9 @@ def harvest(sb, dry_run: bool = False, today: date | None = None, check_links: b
     if stats["budget_exhausted"]:
         print(f"::warning::[announce-iguopin] 请求预算 {stats['requests']} 次用完，还有格子没查——"
               f"多半是国聘新增了分类（{stats['new_category_codes']}），把 IGUOPIN_MAX_REQUESTS 与分类表对一下")
+    if recheck["stopped"] and recheck["stopped"] != "budget":
+        print(f"::warning::[announce-iguopin] 存量复验中途停了（{recheck['stopped']}），本轮只查了 "
+              f"{len(recheck['alive']) + len(recheck['closed']) + len(recheck['unknown'])} 行")
     if drops.get("link_check_deferred"):
         print(f"::warning::[announce-iguopin] {drops['link_check_deferred']} 个新入口没在 "
               f"{_LINK_CHECK_BUDGET_SECONDS:.0f} 秒内点完，本轮没入库，留给下一轮")
@@ -559,6 +666,9 @@ def main() -> int:
     print(f"[announce-iguopin] 请求 {m['requests']} 次 / 拉到 {m['fetched']}（{m['by_status']}）/ 入库 {m['kept']} "
           f"/ 其中新入口 {m['new_urls']} / 带截止日 {m['with_deadline']} / 招满即止 {m['rolling']}")
     print(f"[announce-iguopin] 丢弃原因：{m['drops']}")
+    r = m["recheck"]
+    print(f"[announce-iguopin] 存量复验：本轮没见到且离结束日还远的 {r['queued']} 行，查了 {r['requests']} 次 → "
+          f"还在报 {r['alive']} / 国聘已标结束、下架 {r['closed']} / 没搜到 {r['unknown']}")
     if m["capped_cells"]:
         print(f"[announce-iguopin] 回满 100 条、没取全的格子（{len(m['capped_cells'])}）：{m['capped_cells']}")
     if m["new_category_codes"]:

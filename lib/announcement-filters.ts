@@ -191,43 +191,124 @@ export function sortPostings<T extends AnnouncementCard>(
     });
     return out;
   }
-  out.sort((a, b) => (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""));
+  // 发布日是 ISO 日期串，直接比字符就是比日期；不用 localeCompare（每次比较都要走一遍排序规则，上千条时白费）。
+  out.sort((a, b) => {
+    const pa = a.publishedAt ?? "";
+    const pb = b.publishedAt ?? "";
+    return pa === pb ? 0 : pa < pb ? 1 : -1;
+  });
   return out;
 }
 
 /** 列表一页多少条：服务端首屏只渲染这么多，「加载更多」每次再加这么多。 */
 export const ANNOUNCEMENT_PAGE_SIZE = 40;
 
-/** 首屏（无筛选、按最新发布）要画的一切——服务端算好下发，浏览器不必先拿到全量才能画首屏。 */
-export interface InitialAnnouncementView {
-  /** 首屏那一页（与客户端「无筛选 + 最新发布」时 `visible.slice(0, 页大小)` 逐条相同）。 */
+/** 一次查询：筛选 + 排序 + 取哪一段。 */
+export interface AnnouncementQuery {
+  filters: AnnouncementFilters;
+  sort: SortKey;
+  offset: number;
+  limit: number;
+  /**
+   * 翻页游标：上一页最后一张卡的入口链接。给了就从它后面接着取，找不到它（那条刚下架）才退回 offset。
+   * 只用 offset 的话，两次请求之间前面有公告下架（每天 0 点过截止日的会下掉一批），后面的就整体前移、被跳过去。
+   */
+  after: string | null;
+}
+
+/**
+ * 一次查询的结果。首屏（随页面下发）和之后每次筛选 / 翻页（/api/programs/postings）是**同一个函数**算的、
+ * 同一个形状——否则会出现「首屏写 474 条、一点筛选变 471」。
+ */
+export interface AnnouncementResult {
+  /** 当前筛选 + 排序下的第 [offset, offset + limit) 条。 */
   postings: AnnouncementCard[];
-  /** 无筛选时的分面计数（同一个 buildFacets、同一份全量，所以与全量到货后客户端自己算的一致）。 */
-  facets: AnnouncementFacets;
-  /** 全量条数。 */
+  /** 当前筛选下一共几条。 */
   total: number;
+  /** 不筛选时一共几条。 */
+  allTotal: number;
+  /** 当前筛选下的分面计数（各维度忽略自身的选择，见文件头）。 */
+  facets: AnnouncementFacets;
   /** 截止日未知的条数（「N 天内截止」的说明文案用）。 */
   unknownDeadlineCount: number;
 }
 
-/**
- * ⚠️ 首屏数字与全量到货后的数字必须是**同一套函数**算出来的，否则会出现「首屏写 474 条、一点筛选变 471」。
- * 所以这里不另写计数，只把客户端在无筛选状态下会做的事原样在服务端做一遍（契约测试钉着逐项相等）。
- */
+/** 首屏那一份的类型名，留给页面与旧引用。 */
+export type InitialAnnouncementView = AnnouncementResult;
+
+export function queryAnnouncements(
+  postings: readonly AnnouncementCard[],
+  query: AnnouncementQuery,
+  today: string,
+): AnnouncementResult {
+  const visible = sortPostings(
+    postings.filter((p) => matchesFilters(p, query.filters, today)),
+    query.sort,
+    today,
+  );
+  const cursor = query.after ? visible.findIndex((p) => p.sourceUrl === query.after) : -1;
+  const start = cursor >= 0 ? cursor + 1 : query.offset;
+  return {
+    postings: visible.slice(start, start + query.limit),
+    total: visible.length,
+    allTotal: postings.length,
+    facets: buildFacets(postings, query.filters, today),
+    unknownDeadlineCount: postings.filter((p) => !p.deadline).length,
+  };
+}
+
+/** 首屏：无筛选、最新发布的第一页。 */
 export function initialAnnouncementView(
   postings: readonly AnnouncementCard[],
   today: string,
   pageSize: number = ANNOUNCEMENT_PAGE_SIZE,
-): InitialAnnouncementView {
-  const visible = sortPostings(
-    postings.filter((p) => matchesFilters(p, EMPTY_FILTERS, today)),
-    "newest",
+): AnnouncementResult {
+  return queryAnnouncements(
+    postings,
+    { filters: EMPTY_FILTERS, sort: "newest", offset: 0, limit: pageSize, after: null },
     today,
   );
+}
+
+/** 单次最多要多少条：挡住手写 URL 把全量一次拖走。 */
+const MAX_QUERY_LIMIT = 200;
+/** 搜索词最长多少字：再长也只是白扫一遍。 */
+const MAX_QUERY_TEXT = 80;
+
+/** 查询 → 查询串（浏览器发请求用）。默认值不写进去，所以「无筛选 + 最新发布」的串是固定的。 */
+export function announcementQueryParams(query: AnnouncementQuery): URLSearchParams {
+  const params = new URLSearchParams();
+  const { filters } = query;
+  if (filters.region) params.set("region", filters.region);
+  if (filters.employerType) params.set("type", filters.employerType);
+  if (filters.audience !== "all") params.set("audience", filters.audience);
+  if (filters.closingWithinDays !== null) params.set("closing", String(filters.closingWithinDays));
+  if (filters.q.trim()) params.set("q", filters.q.trim().slice(0, MAX_QUERY_TEXT));
+  if (query.sort !== "newest") params.set("sort", query.sort);
+  if (query.offset > 0) params.set("offset", String(query.offset));
+  if (query.after) params.set("after", query.after);
+  params.set("limit", String(query.limit));
+  return params;
+}
+
+/** 查询串 → 查询（接口用）。任何认不出 / 越界的取值都回到默认，不报错——接口不该因为一个怪参数整个挂掉。 */
+export function parseAnnouncementQuery(params: URLSearchParams): AnnouncementQuery {
+  const int = (key: string, fallback: number, min: number, max: number): number => {
+    const n = Number.parseInt(params.get(key) ?? "", 10);
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+  };
+  const audience = params.get("audience");
   return {
-    postings: visible.slice(0, pageSize),
-    facets: buildFacets(postings, EMPTY_FILTERS, today),
-    total: visible.length,
-    unknownDeadlineCount: postings.filter((p) => !p.deadline).length,
+    filters: {
+      region: params.get("region") || null,
+      employerType: params.get("type") || null,
+      audience: audience === "fresh_grad" || audience === "experienced" ? audience : "all",
+      closingWithinDays: params.has("closing") ? int("closing", CLOSING_SOON_DAYS, 0, 365) : null,
+      q: (params.get("q") ?? "").slice(0, MAX_QUERY_TEXT),
+    },
+    sort: params.get("sort") === "closing" ? "closing" : "newest",
+    offset: int("offset", 0, 0, 1_000_000),
+    limit: int("limit", ANNOUNCEMENT_PAGE_SIZE, 1, MAX_QUERY_LIMIT),
+    after: params.get("after") || null,
   };
 }

@@ -138,3 +138,76 @@ test("招满即止的公告不写成「报名截止 X」", () => {
   assert.deepEqual(chip(null, "9月18日-9月24日"), { tone: "neutral", text: "报名时间：9月18日-9月24日" });
   assert.deepEqual(chip(null, null), { tone: "neutral", text: "报名时间以公告为准" });
 });
+
+// 2026-10-10：筛选 / 排序 / 翻页挪到服务端。首屏与接口必须是同一个函数，否则数字两套。
+test("queryAnnouncements：一页一页取，拼起来就是整份筛选结果，计数与分面不随翻页变", () => {
+  const pool = [];
+  for (let i = 0; i < 95; i += 1) {
+    pool.push(mk({
+      id: `p${i}`, title: `公告${i}`, region: i % 3 === 0 ? "北京市" : i % 3 === 1 ? "上海市" : null,
+      employerType: i % 2 ? "高校" : "央企", audience: i % 4 === 0 ? "fresh_grad" : "unknown",
+      deadline: i % 5 === 0 ? null : `2026-10-${String(1 + (i % 28)).padStart(2, "0")}`,
+      publishedAt: `2026-09-${String(1 + (i % 17)).padStart(2, "0")}`,
+    }));
+  }
+  for (const [filters, sort] of [
+    [F.EMPTY_FILTERS, "newest"],
+    [{ ...F.EMPTY_FILTERS, region: "北京市" }, "closing"],
+    [{ ...F.EMPTY_FILTERS, region: F.UNKNOWN_REGION, employerType: "高校" }, "newest"],
+    [{ ...F.EMPTY_FILTERS, q: "公告1", audience: "fresh_grad" }, "closing"],
+  ]) {
+    const whole = F.sortPostings(pool.filter((p) => F.matchesFilters(p, filters, TODAY)), sort, TODAY);
+    const pages = [];
+    for (let offset = 0; ; offset += 40) {
+      const r = F.queryAnnouncements(pool, { filters, sort, offset, limit: 40, after: null }, TODAY);
+      assert.equal(r.total, whole.length);
+      assert.equal(r.allTotal, pool.length);
+      assert.deepEqual(r.facets, F.buildFacets(pool, filters, TODAY));
+      pages.push(...r.postings);
+      if (r.postings.length < 40) break;
+    }
+    assert.deepEqual(pages.map((p) => p.id), whole.map((p) => p.id));
+  }
+  // 首屏 = 无筛选、最新发布的第一页（页面随 HTML 下发的就是它）
+  assert.deepEqual(F.initialAnnouncementView(pool, TODAY),
+    F.queryAnnouncements(pool, { filters: F.EMPTY_FILTERS, sort: "newest", offset: 0, limit: F.ANNOUNCEMENT_PAGE_SIZE, after: null }, TODAY));
+
+  // 翻页游标：两次请求之间，已经画出来的前 40 条里有 3 条下架了。
+  // 只按条数（offset=40）接着取 → 后面的整体前移 3 位，有 3 条被跳过；带上「最后一张卡是谁」就一条不漏。
+  const q = { filters: F.EMPTY_FILTERS, sort: "newest", limit: 40 };
+  const first = F.queryAnnouncements(pool, { ...q, offset: 0, after: null }, TODAY).postings;
+  const gone = new Set([first[3].id, first[10].id, first[20].id]);
+  const shrunk = pool.filter((p) => !gone.has(p.id));
+  const expected = F.sortPostings(shrunk, "newest", TODAY).filter((p) => !first.some((f) => f.id === p.id)).map((p) => p.id);
+  const byOffset = F.queryAnnouncements(shrunk, { ...q, offset: 40, after: null }, TODAY).postings.map((p) => p.id);
+  const byCursor = F.queryAnnouncements(shrunk, { ...q, offset: 40, after: first.at(-1).sourceUrl }, TODAY).postings.map((p) => p.id);
+  assert.deepEqual(byCursor, expected.slice(0, 40), "游标：从最后一张卡后面接着取，一条不漏");
+  assert.notDeepEqual(byOffset, expected.slice(0, 40), "对照组：只按条数取确实会跳过 3 条");
+  // 游标那条自己也下架了 → 退回按条数取，不报错、不返回空
+  const fallback = F.queryAnnouncements(shrunk, { ...q, offset: 40, after: "https://gov.cn/不存在" }, TODAY).postings.map((p) => p.id);
+  assert.deepEqual(fallback, byOffset);
+});
+
+test("查询串两端互转：浏览器拼的，接口解析出来一字不差；怪参数回默认、不报错", () => {
+  const q = {
+    filters: { region: "地区未标注", employerType: "地方国企", audience: "experienced", closingWithinDays: 7, q: "招聘 公告" },
+    sort: "closing", offset: 80, limit: 40, after: "https://hr.example.cn/notice/?id=1&x=招聘#/detail",
+  };
+  const round = F.parseAnnouncementQuery(new URLSearchParams(F.announcementQueryParams(q).toString()));
+  assert.deepEqual(round, q);
+  // 无筛选时的查询串是固定的（浏览器靠它判断「回到了首屏那一组条件」）
+  const pristine = { filters: F.EMPTY_FILTERS, sort: "newest", offset: 0, limit: 40, after: null };
+  assert.equal(F.announcementQueryParams(pristine).toString(), "limit=40");
+  assert.deepEqual(F.parseAnnouncementQuery(new URLSearchParams("limit=40")), pristine);
+  // 只有空格的搜索词不算条件
+  assert.equal(F.announcementQueryParams({ ...pristine, filters: { ...F.EMPTY_FILTERS, q: "   " } }).toString(), "limit=40");
+  // 怪参数：回默认；数字夹在范围里；搜索词截断
+  const odd = F.parseAnnouncementQuery(new URLSearchParams(
+    `audience=hacker&sort=random&offset=-5&limit=999999&closing=abc&q=${"长".repeat(500)}`));
+  assert.equal(odd.filters.audience, "all");
+  assert.equal(odd.sort, "newest");
+  assert.equal(odd.offset, 0);
+  assert.equal(odd.limit, 200, "单次最多 200 条：挡住手写 URL 把全量一次拖走");
+  assert.equal(odd.filters.closingWithinDays, 7);
+  assert.equal(odd.filters.q.length, 80);
+});
