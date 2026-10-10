@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { randomUUID } from "crypto";
 import { requireAdmin, requireUser } from "@/lib/apiAuth";
 import discoveryDispatch from "@/lib/discovery-dispatch";
@@ -79,83 +79,75 @@ export async function GET(request: NextRequest) {
     );
   }
   const profileLight = findCompanyProfile(profilesLight, company);
-  // 轻列只够做归一化匹配；抽屉还要展示 industry / founded_year / hq_location 等全列字段，
-  // 命中后按 id 单行补取（主键读，零成本），未命中或读失败则回落轻列。
-  let profile: CompanyProfile | null = profileLight;
-  if (profileLight) {
-    const { data: fullProfile, error: fullError } = await supabase
-      .from("company_profiles")
-      .select("*")
-      .eq("id", profileLight.id)
-      .maybeSingle();
-    if (fullError) {
-      console.warn("[insights] 补取画像全列失败，回落轻列", fullError.message);
-    } else if (fullProfile) {
-      profile = fullProfile as CompanyProfile;
-    }
-  }
 
-  // 2) Tier1 派生：从自有 jobs 直接算事实洞察（无需画像，保证 100% 覆盖）。
-  //    匹配候选 = 查询词 + 画像 company/aliases；限 active，cap 3000 行足够代表性聚合。
+  // 2) 匹配候选 = 查询词 + 画像 company/aliases。只用轻列里就有的两项，
+  //    这样下面五路读都不必排在「补取画像全列」后面。
   const candidates = Array.from(
     new Set(
-      profile ? [profile.company, ...(profile.aliases || []), company] : [company],
+      profileLight
+        ? [profileLight.company, ...(profileLight.aliases || []), company]
+        : [company],
     ),
   );
-  // jobs 已迁自建香港 PG：配了 env 走 jobs-store（按 company 取 active），否则 Supabase 兜底。
-  let jobRows: any[] | null = null;
-  if (jobsStoreEnabled()) {
-    try {
-      jobRows = await activeJobsByCompanies(candidates, 3000);
-    } catch (e) {
-      console.error("[insights] 读取香港库 jobs（派生）失败", (e as Error).message);
-      jobRows = null; // 异常 → Supabase 兜底
-    }
+
+  // 3) 五路读互不依赖 → 并行。
+  //    2026-10-10 线上实测（单请求、同一条链路上 /api/preferences 基线 ~600ms）：改前这五步 + 现查派发
+  //    是一条接一条串行的，腾讯 2.26 / 2.34s、美团 3.26s、小红书 2.39s —— 用户每点开一次洞察抽屉都要
+  //    对着骨架屏等 2~3 秒。函数在香港、Supabase 在悉尼，每多串一步就多一趟跨区往返。
+  const today = new Date().toISOString().slice(0, 10);
+  const [fullProfileRes, jobRows, itemsRes, firstParty, recruitmentCycles] = await Promise.all([
+    // 轻列只够做归一化匹配；抽屉还要展示 industry / founded_year / hq_location 等全列字段，
+    // 命中后按 id 单行补取（主键读），未命中或读失败则回落轻列。
+    profileLight
+      ? supabase.from("company_profiles").select("*").eq("id", profileLight.id).maybeSingle()
+      : null,
+    // Tier1 派生用的在招岗位（无需画像，保证 100% 覆盖）；限 active，cap 3000 行足够代表性聚合。
+    loadDeriveJobRows(supabase, candidates),
+    // 存储型洞察（仅当有画像）。
+    profileLight
+      ? supabase
+          .from("insight_items")
+          .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
+          .eq("company_id", profileLight.id)
+          .eq("status", "active")
+          // 排除「数据层」两类 origin（共用 lib/insight-bundle 的 DATA_LAYER_ORIGINS）：
+          //   · derived —— 抽屉的第一方数字由下面 deriveCompanyInsights 读时算，而
+          //     crawler/bu_signals.py 把同一批指标物化进 insight_items 供洞察库按指标筛选。
+          //     两者同源，不排除就会在抽屉里把同一个数字显示两遍。
+          //     （后续若把抽屉也切成读物化行，删掉这一行并同时去掉读时派生，不要两者都留。）
+          //   · official_filing —— 年报数字（在职员工数 / 技术人员占比 / 人均薪酬）。
+          //     2026-09-07 创始人定：这类「年报里写着、自己查一下就有」的不算信息差，
+          //     洞察库撤了之后抽屉也一并撤，两个面共用同一份名单。
+          .not("origin", "in", DATA_LAYER_ORIGINS_FILTER)
+      : null,
+    loadFirstPartyInsights(candidates),
+    // 招聘周期观测（校招洞察 P2）：仅 verified 且未过期，新表唯一源，不与 insight_items timing 混同。
+    profileLight ? loadRecruitmentCycles(profileLight.id, today) : [],
+  ]);
+
+  let profile: CompanyProfile | null = profileLight;
+  if (fullProfileRes?.error) {
+    console.warn("[insights] 补取画像全列失败，回落轻列", fullProfileRes.error.message);
+  } else if (fullProfileRes?.data) {
+    profile = fullProfileRes.data as CompanyProfile;
   }
-  if (jobRows === null) {
-    const { data, error: jobError } = await supabase
-      .from("jobs")
-      .select(
-        "company,title,location,job_type,salary_text,posted_at,first_seen_at,last_seen_at,status",
-      )
-      .in("company", candidates)
-      .eq("status", "active")
-      .limit(3000);
-    if (jobError) {
-      console.error("[insights] 读取 jobs（派生）失败", jobError.message);
-    }
-    jobRows = data || [];
-  }
+
   const derived = deriveCompanyInsights((jobRows || []) as Job[], new Date(), {
     headcountBand: profile?.headcount_band ?? null,
   });
 
-  // 3) 存储型洞察（仅当有画像）：过校验门 + 分组（共享 insight-bundle）。
+  // 过校验门 + 分组（共享 insight-bundle）。
   let storedDims = emptyDimensions();
   let evaluations: ReturnType<typeof groupGatedInsights>["evaluations"] = [];
-  if (profile) {
-    const { data: items, error: itemError } = await supabase
-      .from("insight_items")
-      .select(`${ITEM_COLUMNS}, insight_item_sources(insight_sources(*))`)
-      .eq("company_id", profile.id)
-      .eq("status", "active")
-      // 排除「数据层」两类 origin（共用 lib/insight-bundle 的 DATA_LAYER_ORIGINS）：
-      //   · derived —— 抽屉的第一方数字由上面 deriveCompanyInsights 读时算，而
-      //     crawler/bu_signals.py 把同一批指标物化进 insight_items 供洞察库按指标筛选。
-      //     两者同源，不排除就会在抽屉里把同一个数字显示两遍。
-      //     （后续若把抽屉也切成读物化行，删掉这一行并同时去掉读时派生，不要两者都留。）
-      //   · official_filing —— 年报数字（在职员工数 / 技术人员占比 / 人均薪酬）。
-      //     2026-09-07 创始人定：这类「年报里写着、自己查一下就有」的不算信息差，
-      //     洞察库撤了之后抽屉也一并撤，两个面共用同一份名单。
-      .not("origin", "in", DATA_LAYER_ORIGINS_FILTER);
-    if (itemError) {
-      console.error("[insights] 读取 insight_items 失败", itemError.message);
+  if (itemsRes) {
+    if (itemsRes.error) {
+      console.error("[insights] 读取 insight_items 失败", itemsRes.error.message);
       return NextResponse.json(
-        { ok: false, error: itemError.message },
+        { ok: false, error: itemsRes.error.message },
         { status: 500 },
       );
     }
-    const grouped = groupGatedInsights((items || []) as any[], new Date());
+    const grouped = groupGatedInsights((itemsRes.data || []) as any[], new Date());
     storedDims = grouped.dimensions;
     evaluations = grouped.evaluations;
   }
@@ -168,30 +160,19 @@ export async function GET(request: NextRequest) {
   }
   const hasAny = INSIGHT_DIMENSIONS.some((dim) => dimensions[dim].length > 0);
 
-  // 5) 现查快车道：用户主动点开、有真实在招岗位、但没有新鲜存储型洞察时，非阻塞触发单公司富化。
-  const enrichNow = await maybeDispatchInsightEnrich({
-    userId: user.id,
-    company,
-    jobCount: jobRows?.length || 0,
-    storedHasAny,
-  });
-  const firstParty = await loadFirstPartyInsights(candidates);
-
-  // 6) 招聘周期观测（校招洞察 P2）：仅 verified 且未过期，新表唯一源，不与 insight_items timing 混同。
-  let recruitmentCycles: any[] = [];
-  if (profile) {
-    const today = new Date().toISOString().slice(0, 10);
-    const { data: cycleRows } = await createServiceClient()
-      .from("recruitment_cycle_observations")
-      .select(
-        "id, grad_class, season, batch, event, time_expr_type, value_text, month_start, month_end, confidence, evidence_url, evidence_excerpt, valid_until",
-      )
-      .eq("company_id", profile.id)
-      .eq("verify_status", "verified")
-      .or(`valid_until.is.null,valid_until.gte.${today}`)
-      .order("season")
-      .order("month_start");
-    recruitmentCycles = cycleRows || [];
+  // 5) 现查快车道：用户主动点开、有真实在招岗位、但没有新鲜存储型洞察时，触发单公司富化。
+  //    挪到响应之后跑：它要读节流台账、写一行台账、再调一次 GitHub（超时 10s），而它的返回值
+  //    没有任何调用方在读（全仓无 enrich_now 的消费者）—— 此前却让用户陪着等完才看到抽屉内容。
+  //    结果照旧落在 discovery_runs 台账里（成功 / 失败 / 被节流都有记录）。
+  const jobCount = jobRows?.length || 0;
+  if (jobCount > 0 && !storedHasAny) {
+    after(async () => {
+      try {
+        await maybeDispatchInsightEnrich({ userId: user.id, company, jobCount, storedHasAny });
+      } catch (e) {
+        console.error("[insights] 现查派发异常", (e as Error).message);
+      }
+    });
   }
 
   return NextResponse.json({
@@ -201,10 +182,46 @@ export async function GET(request: NextRequest) {
     dimensions,
     // 有任何可展示条目（含派生）→ 无失败；否则沿用存储项的 bundle 级判定
     failure_reason: hasAny ? null : resolveInsightFailure(evaluations),
-    enrich_now: enrichNow,
     first_party: firstParty,
     recruitment_cycles: recruitmentCycles,
   });
+}
+
+// jobs 已迁自建香港 PG：配了 env 走 jobs-store（按 company 取 active），异常或未配则 Supabase 兜底。
+async function loadDeriveJobRows(supabase: any, candidates: string[]): Promise<any[]> {
+  if (jobsStoreEnabled()) {
+    try {
+      return await activeJobsByCompanies(candidates, 3000);
+    } catch (e) {
+      console.error("[insights] 读取香港库 jobs（派生）失败", (e as Error).message);
+    }
+  }
+  const { data, error: jobError } = await supabase
+    .from("jobs")
+    .select(
+      "company,title,location,job_type,salary_text,posted_at,first_seen_at,last_seen_at,status",
+    )
+    .in("company", candidates)
+    .eq("status", "active")
+    .limit(3000);
+  if (jobError) {
+    console.error("[insights] 读取 jobs（派生）失败", jobError.message);
+  }
+  return data || [];
+}
+
+async function loadRecruitmentCycles(companyId: string, today: string): Promise<any[]> {
+  const { data: cycleRows } = await createServiceClient()
+    .from("recruitment_cycle_observations")
+    .select(
+      "id, grad_class, season, batch, event, time_expr_type, value_text, month_start, month_end, confidence, evidence_url, evidence_excerpt, valid_until",
+    )
+    .eq("company_id", companyId)
+    .eq("verify_status", "verified")
+    .or(`valid_until.is.null,valid_until.gte.${today}`)
+    .order("season")
+    .order("month_start");
+  return cycleRows || [];
 }
 
 function emptyFirstParty(): FirstPartyAggregate {

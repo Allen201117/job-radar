@@ -52,6 +52,13 @@ function loadRoute(relativePath, mocks = {}) {
     "next/server": {
       NextRequest: class NextRequest {},
       NextResponse: { json: jsonResponse },
+      // after()：线上是「响应发出之后再跑」。测试里放到下一个微任务，并把句柄挂出来供需要的用例 await。
+      after(fn) {
+        const run = Promise.resolve().then(fn);
+        routeMocks["next/server"].__afterTasks.push(run);
+        run.catch(() => {});
+      },
+      __afterTasks: [],
     },
     // 路由里的缓存失效调用（revalidateTag/revalidatePath）在 Next 请求上下文之外会抛；
     // 测试只关心业务顺序与返回值，这里默认给空实现，测试可按需覆盖。

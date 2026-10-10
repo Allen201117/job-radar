@@ -237,3 +237,22 @@ test("落地页漂浮卡在会压字的宽度下整组隐藏", () => {
   assert.match(globalsCss, /@media \(max-width: 860px\) \{ \.lp-floats \{ display: none; \} \}/);
   assert.equal(/@media \(max-width: 600px\) \{ \.lp-floats \{ display: none; \} \}/.test(globalsCss), false);
 });
+
+// ───────────────────────── 洞察抽屉等待时间 ─────────────────────────
+
+// 现象（线上单请求实测）：点开洞察抽屉要对着骨架屏等 2~3 秒（腾讯 2.26 / 2.34s、美团 3.26s），
+// 而同一条链路上最轻的登录接口只要 ~0.6s。根因是接口里五步读 + 一次现查派发全是串行的，
+// 函数在香港、Supabase 在悉尼，每多串一步就多一趟跨区往返。
+test("洞察接口：互不依赖的读并行，现查派发不挡响应", () => {
+  const route = read("app/api/insights/route.ts");
+  assert.match(
+    route,
+    /const \[fullProfileRes, jobRows, itemsRes, firstParty, recruitmentCycles\] = await Promise\.all\(\[/,
+  );
+  assert.match(route, /after\(async \(\) => \{\s*try \{\s*await maybeDispatchInsightEnrich\(/);
+  assert.equal(
+    /const enrichNow = await maybeDispatchInsightEnrich/.test(route),
+    false,
+    "派发要读台账、写台账、再调 GitHub（超时 10s），不许再放回响应路径上",
+  );
+});
