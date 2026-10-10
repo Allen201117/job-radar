@@ -687,6 +687,31 @@ checks:
     calibrated: false
     why: 本来想用它衡量「点开是死岗」的比例，但实测全表 79%（23/29）都是 unknown（探不出结果）、且这条埋点 9 月 4 日后再没上报过——这个指标现在测不出真实死链率。改成全量窗口是因为 7 天窗口里这条埋点常年是空的，天天报「没查到」没有意义。上限故意设成 1.01，不让它触发告警——它还不到能报警的程度。
     action: 不要据此下结论；死链治理仍以 job-radar-clickable-job-criterion 的 last_seen_at 口径为准
+
+  # 2026-10-10 加。台账实测（discovery_runs，mode=insight_enrich，自 07-25 起全部 12 行）：
+  # 09-03 起 6 次派发全是 dispatch_failed（GitHub 回 401 Bad credentials），其中 10-10 那 2 次是走查时
+  # 量接口耗时触发的；此前没有任何检查看这张台账里的「派发失败」（看门狗规则 C 只管 queued 超时）。
+  - id: exp.insight_enrich_dispatch_failed_7d
+    name: 用户点开洞察触发的「现查」近 7 天有几次没派出去
+    layer: experience
+    db: supabase
+    owner: app/api/insights/route.ts
+    sql: >
+      select count(*) from discovery_runs
+      where mode = 'insight_enrich' and failure_reason = 'dispatch_failed'
+        and created_at >= now() - interval '7 days'
+    detail_sql: >
+      select ('现查没派出去：' || coalesce(company, '未知公司')) as title, id::text as key
+      from discovery_runs
+      where mode = 'insight_enrich' and failure_reason = 'dispatch_failed'
+        and created_at >= now() - interval '7 days'
+      order by created_at desc
+    normal: "== 0"
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 用户点开一家「有在招岗位、但还没有整理好洞察」的公司时，网站会通知后台去现查这家公司。2026 年 10 月 10 日走查才发现，这一步从 9 月 3 日起次次失败（网站手里的通行证失效了，对方回的是「凭证无效」），五个多星期没有任何地方报出来。这条检查专门盯它。
+    action: 把这条转给 Claude，让它查最近一次失败的原因；如果是通行证失效，需要你重新生成一把，更新到网站的部署设置里
   # ===== 链路层 =====
   # 每条对应一个「带 schedule cron 的定时 workflow」，回答的问题只有一个：
   # 「它在该出现的窗口里留下运行记录了吗」——不是「它跑对了没」（那是上面数据层的事）。
