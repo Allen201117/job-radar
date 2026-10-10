@@ -422,6 +422,21 @@ def _known_active_urls(sb) -> set[str]:
     return {r["source_url"] for r in rows}
 
 
+def _other_portal_urls(sb) -> set[str]:
+    """别的来源（各省人社栏目）已经收录过的入口链接，不论现在是否在展示。
+
+    🚫 国聘这一路遇到这些链接必须让路（2026-10-10 首轮真跑后逐行对库抓到）：
+    ❌ `source_url` 是全表唯一键，而国聘给的入口有时就是各省栏目里同一篇公告的官方链接。量从 100 条涨到
+       1,500 条后，一轮就有 14 行各省来源的公告被 upsert 覆盖成国聘的：3 行地区变成未知（国聘的地理编码
+       过不了交叉验证），且 source_portal 一变，这些行就脱离了 verify 的每日正文复验。
+    ✅ 那一路是官方源头 + 正文级判断，比国聘转述的结构化字段可信 → 它有的（哪怕已被它下架）国聘都不碰。
+       下架的也算：正文里写着报名已关的公告，不能因为国聘还挂着「正在报名」就复活。
+    """
+    rows = db.fetch_all_rows(lambda: sb.table("announcement_postings").select("source_url")
+                             .neq("source_portal", PORTAL_KEY))
+    return {r["source_url"] for r in rows}
+
+
 def _chunks(seq: list, size: int):
     for i in range(0, len(seq), size):
         yield seq[i:i + size]
@@ -441,6 +456,7 @@ def harvest(sb, dry_run: bool = False, today: date | None = None, check_links: b
 
         # 库里已经在展示的入口不重复点：每轮几百上千条逐个 GET 既慢也没必要（存量行重点一次也改变不了它的状态）。
         known = _known_active_urls(sb) if persist else set()
+        owned_elsewhere = _other_portal_urls(sb) if persist else set()
         # 点新入口有总时限：首轮有上千个新入口，境外 runner 连不上的站每个要等到超时，不封顶会把整个 job 拖到
         # 被取消——而写库在最后，被取消 = 一条都没进，下一轮从头再来。超时没点到的**这一轮不入库**（不是放行），
         # 下一轮它们仍是新入口、接着点。即将截止的排前面：正在报名的晚一天进来无妨，它们晚一天可能就过期了。
@@ -464,6 +480,8 @@ def harvest(sb, dry_run: bool = False, today: date | None = None, check_links: b
             host = urlparse(url).netloc
             if any(b in host for b in _BANNED_HOSTS):
                 return None, "banned_platform"   # 智联 / 前程无忧 / 中华英才 —— 第三方平台红线
+            if url in owned_elsewhere:
+                return None, "owned_by_other_portal"   # 各省官方栏目已收录同一个链接：不覆盖（见 _other_portal_urls）
             deadline, deadline_text, published = _window_of(item)
             if deadline and deadline < today:
                 return None, "deadline_passed"   # 国聘自己登记的结束日已过：招满即止的也一样不收

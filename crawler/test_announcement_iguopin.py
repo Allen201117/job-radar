@@ -319,6 +319,47 @@ class TestHarvestGates(unittest.TestCase):
         self.assertEqual([r["source_url"] for r in m["rows"]], ["https://hr.example.cn/notice/1"])
         self.assertEqual(m["drops"], {"deadline_passed": 2})
 
+    def test_never_overwrites_rows_owned_by_another_portal(self):
+        """回归（2026-10-10 首轮真跑后对库抓到）：source_url 是全表唯一键，国聘给的入口有时就是各省栏目里
+        同一篇公告的官方链接。照常 upsert 会把那一行覆盖成国聘的——一轮 14 行，3 行地区因此变成未知。"""
+        class _FakeSb:
+            def __init__(self):
+                self.upserted, self.conflict = [], None
+
+            def table(self, _name):
+                return self
+
+            def upsert(self, rows, on_conflict=None):
+                self.upserted.extend(rows)
+                self.conflict = on_conflict
+                return self
+
+            def execute(self):
+                return self
+
+        sb, ledger, checked = _FakeSb(), [], []
+        orig = (iguopin._known_active_urls, iguopin._other_portal_urls, iguopin._link_alive,
+                iguopin.ops_runs.record_ops_run, iguopin._PAUSE_SECONDS)
+        iguopin._known_active_urls = lambda _sb: {"https://hr.example.cn/notice/1"}
+        iguopin._other_portal_urls = lambda _sb: {"https://hr.example.cn/notice/2"}
+        iguopin._link_alive = lambda _client, url: checked.append(url) or True
+        # 存副本：真实的台账是调用那一刻就序列化的，harvest 之后往同一个 dict 里加的 rows 不会进台账
+        iguopin.ops_runs.record_ops_run = lambda _sb, module, metrics, **kw: ledger.append((module, dict(metrics), kw))
+        iguopin._PAUSE_SECONDS = 0
+        try:
+            m = iguopin.harvest(sb, today=self.TODAY, call=_FakeApi({(1, "11q4iQX"): [_item(1, 1), _item(2, 1), _item(3, 1)]}))
+        finally:
+            (iguopin._known_active_urls, iguopin._other_portal_urls, iguopin._link_alive,
+             iguopin.ops_runs.record_ops_run, iguopin._PAUSE_SECONDS) = orig
+        self.assertEqual(m["drops"], {"owned_by_other_portal": 1})
+        self.assertEqual(sorted(r["source_url"] for r in sb.upserted),
+                         ["https://hr.example.cn/notice/1", "https://hr.example.cn/notice/3"])
+        self.assertEqual(sb.conflict, "source_url")
+        self.assertEqual(checked, ["https://hr.example.cn/notice/3"], "已在展示的入口不重复点，别的来源的根本不碰")
+        self.assertEqual(m["new_urls"], 1)
+        self.assertEqual((ledger[0][0], ledger[0][2]["status"]), ("announcement_iguopin", "success"))
+        self.assertNotIn("rows", ledger[0][1], "台账里不塞整批入库行")
+
     def test_link_check_has_a_time_budget_and_defers_instead_of_waving_through(self):
         """首轮有上千个新入口；境外 runner 上每个连不上的站要等到超时。没有总时限 = job 被取消、一条都没写进去。
         时限到了还没点到的**不入库**（留给下一轮），不是不点就放行。即将截止的排在前面先点。"""

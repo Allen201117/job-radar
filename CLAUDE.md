@@ -605,6 +605,9 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
   ⚠️ 约四成公告写「招满即止」，`apply_end_time` 对它们只是上限（多填在 11~12 月）：deadline 照存、`deadline_text`
      存国聘原话，卡片据此写「招满即止 · 最晚 X」而不是「报名截止 X」。别改成「按发布日 45 天 TTL 过期」——试过，
      当场丢掉 173 条还在报的（8 月开、招满即止的 2027 届校招）。
+  ⚠️ `source_url` 是全表唯一键，国聘给的入口有时就是各省栏目里同一篇公告的官方链接 → 国聘这一路遇到别的来源
+     已有的链接（含已下架的）一律让路（`_other_portal_urls`）。首轮真跑后对库抓到：没这道门时 14 行各省公告被
+     覆盖成国聘的，3 行地区变未知，且脱离了每日正文复验。
   ⚠️ 量上来之后读侧 `lib/announcement-postings-store.ts` 分页取、上限 3000 条（缓存单条 2MB 的约束），
      体检项 `exp.programs_announcements_near_read_cap` 盯着；真不够时把筛选挪到服务端，别再抬数。
   ⚠️ 它的前端路由表里**没有** detail 路由，别去猜 `/detail?id=`（会被 SPA 打回首页）。
