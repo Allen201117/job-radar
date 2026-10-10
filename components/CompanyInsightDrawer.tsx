@@ -273,9 +273,6 @@ export default function CompanyInsightDrawer({ company, open, onClose }: Props) 
                 setSubmitWasOpened(true);
                 setSubmitOpen((v) => !v);
               }}
-              // 提交成功后**不收起**：表单自己会换成「已提交，审核后匿名展示」，
-              // 一收起这句就被 hidden 藏掉，用户点完「提交」什么反馈都看不到。
-              onSubmitted={() => {}}
             />
           )}
 
@@ -339,14 +336,12 @@ function FirstPartySection({
   submitOpen,
   submitWasOpened,
   onToggleSubmit,
-  onSubmitted,
 }: {
   company: string;
   aggregate: FirstPartyAggregate;
   submitOpen: boolean;
   submitWasOpened: boolean;
   onToggleSubmit: () => void;
-  onSubmitted: () => void;
 }) {
   const count = aggregate?.summary?.count || 0;
   const visible = Boolean(aggregate?.visible && aggregate.items.length > 0);
@@ -386,7 +381,9 @@ function FirstPartySection({
 
       {submitWasOpened && (
         <div className="mt-3.5" hidden={!submitOpen} aria-hidden={!submitOpen}>
-          <InsightSubmitForm company={company} onSubmitted={onSubmitted} />
+          {/* 提交成功后**不收起**：表单自己会换成「已提交，审核后匿名展示」。此前这里传了个回调把它
+              收起来，那句话跟着被 hidden 藏掉，用户点完「提交」什么反馈都看不到。 */}
+          <InsightSubmitForm company={company} />
         </div>
       )}
     </section>

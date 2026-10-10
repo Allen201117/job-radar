@@ -73,6 +73,32 @@ test("透明度扫描的正则确实能命中写错的写法", () => {
   assert.deepEqual(found("bg-white/70"), [70]);
 });
 
+// 现象（审查发现，就出在修上面那条的时候）：把 `/12` 改成 `/[0.12]` 时后面的空格被吃掉，
+// `dark:bg-[#e0b15a]/[0.12]dark:text-[#e0b15a]` 粘成一个类名 —— 两个 dark 类都不生效，
+// 而上面的透明度扫描只认 `/NN`，看不见这种写法。
+test("方括号透明度后面不能直接粘着下一个类", () => {
+  const glued = /\/\[[0-9.]+\][A-Za-z]/;
+  const hits = [];
+  const walk = (dir) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (ent.name === "node_modules" || ent.name.startsWith(".")) continue;
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) walk(full);
+      else if (/\.(tsx|ts|jsx|js)$/.test(ent.name)) {
+        fs.readFileSync(full, "utf8")
+          .split("\n")
+          .forEach((line, i) => {
+            if (glued.test(line)) hits.push(`${path.relative(ROOT, full).replace(/\\/g, "/")}:${i + 1}`);
+          });
+      }
+    }
+  };
+  for (const dir of ["app", "components", "lib"]) walk(path.join(ROOT, dir));
+  assert.deepEqual(hits, [], "这些行的类名粘在一起了，补空格：\n" + hits.join("\n"));
+  assert.equal(glued.test("dark:bg-[#e0b15a]/[0.12]dark:text-[#e0b15a]"), true);
+  assert.equal(glued.test("dark:bg-[#e0b15a]/[0.12] dark:text-[#e0b15a]"), false);
+});
+
 // ───────────────────────── 岗位卡「更多」菜单 ─────────────────────────
 
 // 现象：点开「更多」后按 ESC、点卡片外都关不掉，只能再点一次「更多」；连开两张卡，两个菜单同时挂着。
@@ -120,7 +146,7 @@ test("边打边搜的三个输入框都走 useImeValue", () => {
 
 // 现象：处理完最后一张卡，整页换成「今天暂时没有新的对口机会」，「已收藏 · 撤销」跟着一起消失。
 test("推荐页的提示条在有卡 / 无卡两种页面上都渲染", () => {
-  assert.match(todayClient, /const toastNode = /);
+  assert.match(todayClient, /const toastNode =/);
   assert.equal((todayClient.match(/\{toastNode\}/g) || []).length, 2);
   assert.match(todayClient, /<AllHandled \/>/, "自己处理完的 0 和「没有对口机会」的 0 要分开说");
 });
@@ -128,14 +154,32 @@ test("推荐页的提示条在有卡 / 无卡两种页面上都渲染", () => {
 // 现象：动作接口失败时卡片消失又悄悄回来，没有任何说明。
 test("推荐页的动作失败要说出来", () => {
   assert.match(todayClient, /onActionResult=\{handleActionResult\}/);
-  assert.match(todayClient, /操作失败，已恢复原状态/);
+  // 文案走全站唯一那份（components/ActionToast 的 jobActionToastText），不在这里另写一句。
+  assert.match(todayClient, /\{jobActionToastText\(null, false\)\}/);
+});
+
+// 失败提示和另一张卡的「撤销」条要能同时看见：A 卡失败的 3 秒里用户可能刚收藏了 B 卡。
+test("推荐页：失败提示与撤销条叠放，不是二选一", () => {
+  assert.match(todayClient, /actionFailed \|\| state\.toast \? \(/);
+  assert.match(todayClient, /flex flex-col items-center gap-2 px-4/);
+  assert.equal(/const toastNode = actionFailed \? \(/.test(todayClient), false);
+});
+
+// 现象（审查发现）：切范围触发的刷新在请求开头就读了操作记录；刷新途中刚点的收藏还没落库，
+// 新 feed 里仍带着那张卡，重置队列时会把它「复活」成没处理过的样子。
+test("推荐页：重置队列时滤掉本次会话已处理的岗", () => {
+  assert.match(todayClient, /const actedRef = useRef<Set<string>>\(new Set\(\)\);/);
+  assert.match(todayClient, /actedRef\.current\.add\(jobId\);/);
+  assert.match(todayClient, /list\.filter\(\(o\) => !acted\.has\(o\.job\.id\)\)/);
+  // 回滚 / 撤销成功后要放回去，否则那张卡再也回不来
+  assert.equal((todayClient.match(/actedRef\.current\.delete\(jobId\);/g) || []).length, 2);
 });
 
 // 现象（线上实测）：顶栏切到「海外」，页面上方的说明已经写着「4 个海外岗排在最前」，
 // 下面仍是原来那 30 个国内岗 —— useReducer 的初值只在挂载时读一次。
 test("推荐页：服务端换了一批机会，队列跟着重置", () => {
   assert.match(todayClient, /feedStampRef\.current === feed\.generated_at/);
-  assert.match(todayClient, /dispatch\(\{ type: "reset", sections: feed\.sections \}\)/);
+  assert.match(todayClient, /dispatch\(\{\s*type: "reset",\s*sections: \{/);
 });
 
 // ───────────────────────── 求职范围 ─────────────────────────
@@ -236,6 +280,61 @@ test("求职目标加载失败：中文说明 + 重试，不显示 Failed to fet
 test("落地页漂浮卡在会压字的宽度下整组隐藏", () => {
   assert.match(globalsCss, /@media \(max-width: 860px\) \{ \.lp-floats \{ display: none; \} \}/);
   assert.equal(/@media \(max-width: 600px\) \{ \.lp-floats \{ display: none; \} \}/.test(globalsCss), false);
+});
+
+// ───────────────────────── 第二轮：审查与校招 / 公告 / 洞察走查 ─────────────────────────
+
+// 现象（审查发现）：「加载更多」和「重新筛选」共用一个 abortRef、会互相取代；被取代的那个不收尾，
+// 它的旗就永远复不了位 —— 按钮卡在 disabled 的「加载中…」，或者页面一直写着「正在筛选…」。
+test("洞察库：入口同时管 loading / loadingMore 两个旗", () => {
+  const fn = insightsClient.slice(insightsClient.indexOf("const load = useCallback("), insightsClient.indexOf("useEffect(() => {\n    if (firstRender.current)"));
+  assert.match(fn, /setLoading\(!append\);\s*setLoadingMore\(append\);/);
+  assert.match(fn, /abortRef\.current = null;\s*setLoading\(false\);\s*setLoadingMore\(false\);/);
+});
+
+// 现象（审查发现）：ESC 关弹层时同步把焦点移回按钮，输入框先收到 blur，把没回车的草稿当成条件提交了。
+test("筛选弹层 ESC：等弹层卸载后再还焦点，不提交草稿", () => {
+  assert.match(jobFilters, /window\.setTimeout\(\(\) => trigger\?\.focus\(\), 0\);/);
+});
+
+// 输入法不发 compositionend 的情况（安卓打英文、失焦时）要有兜底，同值不重复上报。
+test("useImeValue：失焦兜底 + 同值不重复上报", () => {
+  const hooks = read("lib/ui/hooks.ts");
+  const fn = hooks.slice(hooks.indexOf("export function useImeValue("));
+  assert.match(fn, /onBlur: \(event: \{ currentTarget: \{ value: string \} \}\) => \{\s*composing\.current = false;\s*push\(event\.currentTarget\.value\);/);
+  assert.match(fn, /if \(next !== latest\.current\) saved\.current\(next\);/);
+});
+
+// 现象（线上实测）：校招页头写「1401 个匹配 · 已展示 1000」，翻到第 1000 个按钮就没了，也不说还有；
+// 「42+ · 还有更多，可继续加载」的页面上根本没有加载按钮。
+test("撞取数上限：说法和「能不能继续加载」对得上，到底了要说明还有没列出的", () => {
+  assert.match(jobsClient, /capped && hasMore \? "还有更多，可继续加载" : ""/);
+  assert.match(campusAllJobs, /capped && hasMore \? "还有更多，可继续加载" : ""/);
+  for (const [name, src] of [["jobs-client", jobsClient], ["campus-all-jobs", campusAllJobs]]) {
+    assert.match(src, /\{!hasMore && !loading && capped && displayJobs\.length > 0 &&/, name);
+    // 真实总数已知且已全部取回时不说话；被实时复核藏掉的失效岗不算「没列出来」。
+    assert.match(src, /\(exactTotal == null \|\| exactTotal > displayJobs\.length\) && \(/, name);
+    assert.match(src, /符合条件的共 \$\{exactTotal\} 个，这里列出了最靠前的/, name);
+  }
+});
+
+// 现象（线上实测）：筛选弹窗底部「查看 0 个岗位」挂了 2.4 秒才变成「查看 1000+ 个岗位」。
+test("筛选弹窗的计数按钮：新结果回来前显示「正在筛选…」", () => {
+  assert.match(jobFilters, /\{resultPending \? <span>正在筛选…<\/span> : </);
+  assert.match(jobsClient, /resultPending=\{loading\}/);
+  assert.match(campusAllJobs, /resultPending=\{loading\}/);
+});
+
+// 现象（线上实测）：学历选「博士」，前 60 张卡里 36 张只要求本科 —— 这是「我的学历够得着」的语义
+// （创始人拍板），但页面上一个字没说。
+test("学历筛选说明它是「我的学历」", () => {
+  assert.match(jobFilters, /<PillField label="学历" hint="选你自己的学历：/);
+});
+
+test("岗位库 / 对比层：没取到不冒充「没有」", () => {
+  assert.match(jobsClient, /displayJobs\.length === 0 && !\(error && !moreFailed\) &&/);
+  const compare = read("components/SavedCompare.tsx");
+  assert.match(compare, /failure_reason === "fetch_failed"/);
 });
 
 // ───────────────────────── 洞察抽屉等待时间 ─────────────────────────

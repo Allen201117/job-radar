@@ -99,12 +99,12 @@ function relatedReasonLabel(m?: FilterMatch): string | null {
 // 信号 chip 配色：关键提醒醒目（暖橙），STILL_OPEN 绿（仍在招），CLOSED_OR_STALE 灰。
 const SIGNAL_STYLE: Record<OpportunitySignalType, string> = {
   STILL_OPEN: "border-tone-green-border bg-[#eef6e0] text-[#4d6b2f] dark:bg-[#a3d06a]/20 dark:text-[#d2f0ad]",
-  OPEN_UNVERIFIED: "border-[#e4d1a8] bg-[#f8efd9] text-[#8a6a2a] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/[0.12]dark:text-[#e0b15a]",
-  DEADLINE_SOON: "border-[#f0d9a8] bg-[#fbf1de] text-[#9a6a1f] dark:border-[#e8b87f]/30 dark:bg-[#e8b87f]/[0.12]dark:text-[#e8b87f]",
+  OPEN_UNVERIFIED: "border-[#e4d1a8] bg-[#f8efd9] text-[#8a6a2a] dark:border-[#e0b15a]/30 dark:bg-[#e0b15a]/[0.12] dark:text-[#e0b15a]",
+  DEADLINE_SOON: "border-[#f0d9a8] bg-[#fbf1de] text-[#9a6a1f] dark:border-[#e8b87f]/30 dark:bg-[#e8b87f]/[0.12] dark:text-[#e8b87f]",
   CLOSED_OR_STALE: "border-black/[0.08] bg-[#f0ece2] ink-2 dark:border-white/10 dark:bg-white/[0.08]",
-  CAMPUS_WINDOW: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/[0.12]dark:text-[#7fb2e8]",
-  NEWLY_DISCOVERED: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/[0.12]dark:text-[#7fb2e8]",
-  COMPANY_MOMENTUM: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/[0.12]dark:text-[#7fb2e8]",
+  CAMPUS_WINDOW: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/[0.12] dark:text-[#7fb2e8]",
+  NEWLY_DISCOVERED: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/[0.12] dark:text-[#7fb2e8]",
+  COMPANY_MOMENTUM: "border-[#cfe0f5] bg-[#e8f1fc] text-[#2f6299] dark:border-[#7fb2e8]/30 dark:bg-[#7fb2e8]/[0.12] dark:text-[#7fb2e8]",
 };
 
 // 关键结构性字段（招聘类型 / 岗位类型 / 城市 / 学历 / 经验 / 薪资 / 截止）的标签配色。

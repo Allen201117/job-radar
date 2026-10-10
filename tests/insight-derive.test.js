@@ -140,6 +140,25 @@ test("deriveHiring 概括在招规模/城市/方向（排除非 active）", () =
   assert.match(v.content, /北京/);
 });
 
+// 调用方只取前 N 行做样本、且取满了：N 是取数上限，不是这家公司的在招岗位数。
+// 现象（2026-10-10 走查）：字节跳动在招 2 万多个，抽屉里写「本平台当前收录 3000 个在招岗位」。
+test("deriveHiring：样本取满上限时写「N+」并说明是按样本统计", () => {
+  const jobs = [
+    j({ status: "active", location: "北京", title: "后端工程师" }),
+    j({ status: "active", location: "北京·海淀", title: "前端工程师" }),
+    j({ status: "active", location: "上海", title: "产品经理" }),
+  ];
+  const capped = D.deriveHiring(jobs, NOW_ISO, { sampleCapped: true });
+  assert.match(capped.content, /本平台当前收录 3\+ 个在招岗位（以下按其中 3 个统计）/);
+  // 反方向：没取满时一个字都不许多
+  const exact = D.deriveHiring(jobs, NOW_ISO, { sampleCapped: false });
+  assert.match(exact.content, /本平台当前收录 3 个在招岗位，/);
+  assert.equal(/\+ 个在招岗位/.test(exact.content), false);
+  // 聚合入口要把这个开关传下去
+  const all = D.deriveCompanyInsights(jobs, new Date(NOW_ISO), { sampleCapped: true });
+  assert.match(all.hiring[0].content, /3\+ 个在招岗位/);
+});
+
 test("deriveHiring 不足阈值返回 null", () => {
   assert.equal(D.deriveHiring([j(), j()], NOW_ISO), null);
 });

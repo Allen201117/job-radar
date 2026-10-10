@@ -31,6 +31,11 @@ import type {
 } from "@/lib/types";
 
 export const runtime = "nodejs";
+// 现查派发在响应之后跑（after），其中调 GitHub 最长等 10s。不显式给时限的话，函数可能在
+// 「台账已写 queued、还没回写 failed」之间被杀，那家公司会被冷却期白挡 6 小时。
+export const maxDuration = 30;
+// 派生统计最多取这么多行在招岗位做样本；取满了就说明真实数量不止这些（见 deriveHiring 的 sampleCapped）。
+const DERIVE_JOB_CAP = 3000;
 
 const { buildWorkflowDispatchRequest, resolveDispatchConfig, isDispatchAccepted } =
   discoveryDispatch as any;
@@ -134,6 +139,7 @@ export async function GET(request: NextRequest) {
 
   const derived = deriveCompanyInsights((jobRows || []) as Job[], new Date(), {
     headcountBand: profile?.headcount_band ?? null,
+    sampleCapped: (jobRows?.length || 0) >= DERIVE_JOB_CAP,
   });
 
   // 过校验门 + 分组（共享 insight-bundle）。
@@ -191,7 +197,7 @@ export async function GET(request: NextRequest) {
 async function loadDeriveJobRows(supabase: any, candidates: string[]): Promise<any[]> {
   if (jobsStoreEnabled()) {
     try {
-      return await activeJobsByCompanies(candidates, 3000);
+      return await activeJobsByCompanies(candidates, DERIVE_JOB_CAP);
     } catch (e) {
       console.error("[insights] 读取香港库 jobs（派生）失败", (e as Error).message);
     }
@@ -203,7 +209,7 @@ async function loadDeriveJobRows(supabase: any, candidates: string[]): Promise<a
     )
     .in("company", candidates)
     .eq("status", "active")
-    .limit(3000);
+    .limit(DERIVE_JOB_CAP);
   if (jobError) {
     console.error("[insights] 读取 jobs（派生）失败", jobError.message);
   }

@@ -310,6 +310,13 @@ export function useImeValue(value: string, commit: (next: string) => void) {
   const composing = useRef(false);
   const saved = useRef(commit);
   saved.current = commit;
+  const latest = useRef(value);
+  latest.current = value;
+  // 同值不重复上报：Safari 在 compositionend 之后还会补一次非组词的 input，值相同；
+  // 上层每次上报都会生成新的筛选对象并重搜一遍，这里拦掉。
+  const push = (next: string) => {
+    if (next !== latest.current) saved.current(next);
+  };
 
   // 外部改了值（清空筛选、点 chip 删除…）→ 跟上；组词期间不跟，否则会打断输入法。
   useEffect(() => {
@@ -320,14 +327,20 @@ export function useImeValue(value: string, commit: (next: string) => void) {
     value: draft,
     onChange: (event: { target: { value: string } }) => {
       setDraft(event.target.value);
-      if (!composing.current) saved.current(event.target.value);
+      if (!composing.current) push(event.target.value);
     },
     onCompositionStart: () => {
       composing.current = true;
     },
     onCompositionEnd: (event: { currentTarget: { value: string } }) => {
       composing.current = false;
-      saved.current(event.currentTarget.value);
+      push(event.currentTarget.value);
+    },
+    // 失焦兜底：有的输入法（安卓 Gboard 打英文、部分输入法在失焦时）不发 compositionend，
+    // 标志会卡在「组词中」，之后既不上报也不再跟随外部值。失焦时一律视为定稿。
+    onBlur: (event: { currentTarget: { value: string } }) => {
+      composing.current = false;
+      push(event.currentTarget.value);
     },
   };
 }

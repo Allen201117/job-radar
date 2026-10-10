@@ -3,6 +3,7 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import Link from "next/link";
 import JobCard from "@/components/JobCard";
+import { jobActionToastText } from "@/components/ActionToast";
 import { track } from "@/lib/track";
 import type { ScoredJob } from "@/lib/types";
 import type { Opportunity, OpportunityFeed, OpportunitySignal } from "@/lib/opportunities/types";
@@ -212,6 +213,9 @@ export default function TodayClient({
   }, [actionFailed]);
 
   const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // 本次会话里已处理（收藏 / 投递 / 不适合）的岗。切求职范围触发的刷新在请求开头就读了操作记录，
+  // 刷新途中刚点的那一下还没落库 —— 新 feed 里仍带着这张卡，不滤掉它会在重置后「复活」。
+  const actedRef = useRef<Set<string>>(new Set());
   const openedRef = useRef(false);
   const livenessRequested = useRef<Set<string>>(new Set());
 
@@ -241,7 +245,19 @@ export default function TodayClient({
     feedStampRef.current = feed.generated_at;
     for (const t of Array.from(timers.current.values())) clearTimeout(t);
     timers.current.clear();
-    dispatch({ type: "reset", sections: feed.sections });
+    const acted = actedRef.current;
+    const keep = (list: Opportunity[]) => (acted.size ? list.filter((o) => !acted.has(o.job.id)) : list);
+    const s = feed.sections;
+    dispatch({
+      type: "reset",
+      sections: {
+        critical: keep(s.critical),
+        main: keep(s.main),
+        explore: keep(s.explore),
+        momentum: keep(s.momentum),
+        waiting: keep(s.waiting),
+      },
+    });
   }, [feed]);
 
   // 首渲后记录「上次打开」+ radar_open（Strict Mode 下 ref 去重）
@@ -296,6 +312,7 @@ export default function TodayClient({
   // JobCard 乐观回调：非空动作 → 乐观移除 + 5s 后落定；null（正向 API 失败）→ 还原（reducer 保证可靠移除/还原）
   function handleActionChange(jobId: string, action: PrimaryAction | null) {
     if (action !== null) {
+      actedRef.current.add(jobId);
       dispatch({ type: "removeOptimistic", jobId, action });
       clearTimer(jobId);
       timers.current.set(
@@ -306,6 +323,7 @@ export default function TodayClient({
         }, TOAST_MS),
       );
     } else {
+      actedRef.current.delete(jobId);
       clearTimer(jobId);
       dispatch({ type: "removeRollback", jobId });
     }
@@ -330,6 +348,7 @@ export default function TodayClient({
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       dispatch({ type: "undoCommit", jobId });
+      actedRef.current.delete(jobId);
       // 撤销成功后才记事件（失败不记成功，P0-4 同口径）
       track("opportunity_undo", { previous_action: t.action, surface: "today" });
     } catch {
@@ -348,32 +367,35 @@ export default function TodayClient({
 
   // 提示条要在「还有卡」和「卡清空了」两种页面上都在：此前它只写在有卡的那个 return 里，
   // 处理完最后一张卡时整页换成空状态，「已收藏 · 撤销」跟着一起没了，撤销无从点起。
-  const toastNode = actionFailed ? (
-    <div className="above-mobile-nav fixed inset-x-0 z-50 flex justify-center px-4">
-      <div
-        role="status"
-        aria-live="polite"
-        className="t-body-sm rounded-full border border-tone-rose-border bg-tone-rose-bg px-4 py-2.5 text-tone-rose-fg shadow-lg"
-      >
-        操作失败，已恢复原状态
-      </div>
-    </div>
-  ) : state.toast ? (
-    <div className="above-mobile-nav fixed inset-x-0 z-50 flex justify-center px-4">
-      <div className="t-body-sm flex items-center gap-3 rounded-full border border-black/[0.1] bg-[#1a1714] px-4 py-2.5 text-[#f7f1e6] shadow-lg dark:bg-[#f3ecdf] dark:text-[#16130f]">
-        {state.toast.undoFailed ? (
-          <span>撤销失败，已重新移出</span>
-        ) : (
-          <>
-            <span>{state.toast.action ? ACTION_LABEL[state.toast.action] : "已处理"}</span>
-            <button type="button" onClick={undo} className="t-label text-[#f7f1e6] underline underline-offset-2 hover:opacity-80 dark:text-[#16130f]">
-              撤销
-            </button>
-          </>
+  // 两条提示叠放而不是二选一：A 卡失败的那 3 秒里用户可能刚收藏了 B 卡，B 的「撤销」不能被盖住。
+  const toastNode =
+    actionFailed || state.toast ? (
+      <div className="above-mobile-nav fixed inset-x-0 z-50 flex flex-col items-center gap-2 px-4">
+        {actionFailed && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="t-body-sm rounded-full border border-tone-rose-border bg-tone-rose-bg px-4 py-2.5 text-tone-rose-fg shadow-lg"
+          >
+            {jobActionToastText(null, false)}
+          </div>
+        )}
+        {state.toast && (
+          <div className="t-body-sm flex items-center gap-3 rounded-full border border-black/[0.1] bg-[#1a1714] px-4 py-2.5 text-[#f7f1e6] shadow-lg dark:bg-[#f3ecdf] dark:text-[#16130f]">
+            {state.toast.undoFailed ? (
+              <span>撤销失败，已重新移出</span>
+            ) : (
+              <>
+                <span>{state.toast.action ? ACTION_LABEL[state.toast.action] : "已处理"}</span>
+                <button type="button" onClick={undo} className="t-label text-[#f7f1e6] underline underline-offset-2 hover:opacity-80 dark:text-[#16130f]">
+                  撤销
+                </button>
+              </>
+            )}
+          </div>
         )}
       </div>
-    </div>
-  ) : null;
+    ) : null;
 
   if (total === 0) {
     // 服务端给过卡、现在队列里一张不剩 = 用户自己处理完的；被实时复核隐藏的不算（那些还在队列里）。

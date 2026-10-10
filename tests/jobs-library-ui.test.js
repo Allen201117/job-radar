@@ -10,7 +10,10 @@ test("空结果不保留加载更多入口", () => {
   const hook = read("hooks/useJobFilters.ts");
   const client = read("app/jobs/jobs-client.tsx");
   assert.match(hook, /server\.total > 0 && server\.jobs\.length < server\.total/);
-  assert.match(client, /capped && total > 0 \? "还有更多，可继续加载"/);
+  // 原先钉的是 `capped && total > 0`。2026-10-10 线上实测它还不够：撞上限但这一批已全部列出时
+  // （页头「42+ · 还有更多，可继续加载」），页面上并没有加载按钮。改成跟着 hasMore 走 ——
+  // hasMore 本身就要求 total > 0，所以「空结果不说还有更多」这条原意仍然成立，只是更严。
+  assert.match(client, /capped && hasMore \? "还有更多，可继续加载"/);
 });
 
 test("排序在筛选条直接可见，校招锁定时经验只给应届选项", () => {

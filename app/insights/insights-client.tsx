@@ -117,7 +117,10 @@ export default function InsightsClient({
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
-      append ? setLoadingMore(true) : setLoading(true);
+      // 入口同时管两个旗（与 useJobFilters.runSearch 一致）：「加载更多」和「重新筛选」共用一个
+      // abortRef、会互相取代，被取代的那个不再收尾，所以它的旗必须由接手的新请求在这里复位。
+      setLoading(!append);
+      setLoadingMore(append);
       setError("");
       try {
         const res = await fetch(`/api/insights/library?${toQuery(next, nextPage)}`, {
@@ -138,7 +141,8 @@ export default function InsightsClient({
         // 「正在筛选…」会提前消失，闪出一屏「没有公司同时满足」。
         if (abortRef.current === controller) {
           abortRef.current = null;
-          append ? setLoadingMore(false) : setLoading(false);
+          setLoading(false);
+          setLoadingMore(false);
         }
       }
     },

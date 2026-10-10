@@ -258,7 +258,8 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
     : [];
   const searchMetaParts = [
     ...matchCountParts,
-    capped && total > 0 ? "还有更多，可继续加载" : "",
+    // 只有真能点「加载更多」时才这么说：撞上限但这一批已全部列出时，页面上并没有加载按钮。
+    capped && hasMore ? "还有更多，可继续加载" : "",
   ].filter(Boolean);
 
   return (
@@ -271,6 +272,7 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
         onClearOne={clearOneWithUrl}
         companies={companies}
         resultTotalText={matchTotal.text}
+        resultPending={loading}
         jobScope={jobScope}
       />
 
@@ -375,6 +377,9 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
       {error && !moreFailed && (
         <p className="t-body-sm rounded-2xl border border-[#e7b4a0] dark:border-[#7a392e]/[0.60] bg-[#fbe9e2] dark:bg-[#3a201a] px-3.5 py-2.5 text-[#9a4a32] dark:text-[#e6a99f]">
           {error}
+          <button type="button" onClick={refresh} className="ml-2 font-semibold underline underline-offset-2 hover:opacity-80">
+            重试
+          </button>
         </p>
       )}
       <div className="space-y-3">
@@ -414,7 +419,9 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
             </Fragment>
           );
         })}
-        {displayJobs.length === 0 &&
+        {/* 搜索没成功 ≠ 没有岗位：上面已经报错并给了重试，这里不再配一句「没有匹配的岗位」，
+            更不递一颗会清掉筛选条件的「放宽筛选条件」（与校招全部岗同一处理）。 */}
+        {displayJobs.length === 0 && !(error && !moreFailed) &&
           (officialJobs.length > 0 && (filters.city || filters.jobType) ? (
             <div className="rounded-[1.5rem] border border-dashed border-tone-amber-border bg-[#fbf2d8] dark:bg-[#e0b15a]/[0.15] px-6 py-10 text-center">
               <h2 className="t-h2 ink-1">
@@ -460,6 +467,17 @@ export default function JobsClient({ initialJobs, initialTotal, initialFilters, 
           </>
         )}
       </div>
+      {/* 撞了取数上限、这一批又已全部列出：没有「加载更多」可点，必须说清还有没列出来的，
+          否则页头写着 1401 个、翻到第 1000 个就悄悄到底了（2026-10-10 线上实测）。 */}
+      {!hasMore && !loading && capped && displayJobs.length > 0 &&
+        (exactTotal == null || exactTotal > displayJobs.length) && (
+        <p className="t-caption text-center ink-3">
+          {exactTotal != null
+            ? `符合条件的共 ${exactTotal} 个，这里列出了最靠前的 ${displayJobs.length} 个。`
+            : `这里列出了最靠前的 ${displayJobs.length} 个，符合条件的可能不止这些。`}
+          再加一两个筛选条件，就能看到没列出来的。
+        </p>
+      )}
       {hasMore && (
         <div className="flex flex-col items-center gap-2 pt-1">
           {moreFailed && (

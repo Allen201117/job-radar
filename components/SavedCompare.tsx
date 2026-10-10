@@ -229,6 +229,10 @@ export default function SavedCompare({
     }
     const chip = hiringSignalChip(state.data);
     const comp = compensationSummary(state.data);
+    // 没取到（网络 / 服务端失败）不能说成「暂无洞察」。失败结果不进缓存，重新打开对比会再取一次。
+    if (state.data?.failure_reason === "fetch_failed") {
+      return <span className={MUTED}>洞察没加载出来，关掉对比重开可再试</span>;
+    }
     if (!chip && !comp) return <span className={MUTED}>暂无洞察</span>;
     return (
       <div className="space-y-2">

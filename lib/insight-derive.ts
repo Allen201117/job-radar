@@ -346,7 +346,8 @@ function hiringSignalSentence(sig: HiringSignal): string {
 export function deriveHiring(
   jobs: Job[],
   nowIso: string,
-  opts: { headcountBand?: string | null; trendPct?: number | null } = {},
+  // sampleCapped：调用方只取了前 N 行做样本、且取满了 —— 真实在招数不止 active.length。
+  opts: { headcountBand?: string | null; trendPct?: number | null; sampleCapped?: boolean } = {},
 ): InsightItemView | null {
   const active = jobs.filter((jb) => jb.status === "active");
   if (active.length < HIRING_MIN_SAMPLE) return null;
@@ -371,7 +372,12 @@ export function deriveHiring(
   const fnStr = functions.length ? `热门方向 ${functions.map((f) => f.key).join("、")}` : "";
   const trendStr = trend !== null ? `近一月收录岗位环比 ${trend > 0 ? "+" : ""}${trend}%` : "";
   const tail = [cityStr, fnStr, trendStr].filter(Boolean).join("，");
-  const content = `本平台当前收录 ${active.length} 个在招岗位${tail ? "，" + tail : ""}。${hiringSignalSentence(signal)}。`;
+  // 样本取满上限时写「N+」并说明下面是按样本算的：字节跳动在招 2 万多个，抽屉里却写着
+  // 「当前收录 3000 个在招岗位」—— 那是取数上限，不是它的岗位数（2026-10-10 走查发现）。
+  const countStr = opts.sampleCapped
+    ? `${active.length}+ 个在招岗位（以下按其中 ${active.length} 个统计）`
+    : `${active.length} 个在招岗位`;
+  const content = `本平台当前收录 ${countStr}${tail ? "，" + tail : ""}。${hiringSignalSentence(signal)}。`;
 
   // 经验分布（≥DIST_MIN_SAMPLE 个岗有 experience 字段才输出）
   const expBuckets = active.map((jb) => bucketExperience(jb.experience)).filter(Boolean) as string[];
@@ -433,7 +439,7 @@ export function deriveHiring(
 export function deriveCompanyInsights(
   jobs: Job[],
   now: Date = new Date(),
-  opts: { headcountBand?: string | null } = {},
+  opts: { headcountBand?: string | null; sampleCapped?: boolean } = {},
 ): Partial<Record<InsightDimension, InsightItemView[]>> {
   const nowIso = now.toISOString();
   const out: Partial<Record<InsightDimension, InsightItemView[]>> = {};

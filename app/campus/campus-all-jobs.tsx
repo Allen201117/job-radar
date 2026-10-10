@@ -186,6 +186,7 @@ export default function CampusAllJobs({
         onClearOne={clearOneKeepingMode}
         companies={companies}
         resultTotalText={matchTotal.text}
+        resultPending={loading}
         jobScope={jobScope}
         lockedJobType
       />
@@ -215,7 +216,7 @@ export default function CampusAllJobs({
               </div>
               {(breakdown.length > 0 || capped) && (
                 <p className="t-caption mt-0.5 ink-3">
-                  {[...breakdown, capped ? "还有更多，可继续加载" : ""].filter(Boolean).join("·")}
+                  {[...breakdown, capped && hasMore ? "还有更多，可继续加载" : ""].filter(Boolean).join("·")}
                 </p>
               )}
             </>
@@ -268,6 +269,16 @@ export default function CampusAllJobs({
         )}
       </div>
 
+      {/* 撞了取数上限、这一批又已全部列出：没有「加载更多」可点，必须说清还有没列出来的（与 /jobs 同一处理）。 */}
+      {!hasMore && !loading && capped && displayJobs.length > 0 &&
+        (exactTotal == null || exactTotal > displayJobs.length) && (
+        <p className="t-caption text-center ink-3">
+          {exactTotal != null
+            ? `符合条件的共 ${exactTotal} 个，这里列出了最靠前的 ${displayJobs.length} 个。`
+            : `这里列出了最靠前的 ${displayJobs.length} 个，符合条件的可能不止这些。`}
+          再加一两个筛选条件，就能看到没列出来的。
+        </p>
+      )}
       {hasMore && !loading && (
         <div className="flex flex-col items-center gap-2 pt-1">
           {moreFailed && (
