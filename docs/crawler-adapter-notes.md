@@ -53,6 +53,13 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     ⚠️ 「这个域名回壳页」≠「旧接口没了」：同一天 `www.hotjob.cn/wt/xyzq/` 下列表接口照常回 94 岗
                          #     （详情页是微信版，电脑上点「立即申请」只弹「您还未登录」）；41 个启用的 wt 源里另有 12 个
                          #     首页已跳到新门户、旧接口仍通。
+                         #   hotjob 一个租户可以开多个套件、每个套件只发布一个渠道（2026-10-10 中国电信国际，迁移 313）：
+                         #     同一个 companyId 下 6 个套件——社招发布在「招聘官网」套件、校招发布在「校招职位列表」套件，另有
+                         #     只放介绍页的套件和两个手机版套件（suite/config 的 templateNum=mc，拼 /pb/ 页面必然「官网不存在」；
+                         #     seed 时登记的正是手机版，两条源因此被门 1 拦了一个多月）。listPosition 对每个套件都回同一份全量岗位，
+                         #     所以「渠道被门拦下」只说明**这个套件**没发布它，不说明这家公司没开。被门 1 / 门 2 拦住的源先找兄弟套件：
+                         #     门户导航逐项点一遍 + 读各套件 suite/config 的 config 里出现的其它 `SU…` 链接，逐个跑 should_skip，
+                         #     过门的再真抓 + 真渲染。recruitType=13（「公开招聘」，页面 key 叫 overseas）adapter 不认，没有接。
                          #   gllue.py = Gllue Next.js SSR 通用层（龙湖等自有域）：?page= 1-based 10 条/页，
                          #     正文只在详情页（列表页没有），逐岗抓、走 resolve_detail_cap 由快/重档决定抓不抓。
                          #   cnstaff.py = 聘客 cnstaff 通用层：POST /api/{tenant}/joblist.json（form `jt=0`）零鉴权，
