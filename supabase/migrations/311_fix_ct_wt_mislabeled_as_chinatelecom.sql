@@ -1,4 +1,4 @@
--- 310 — 纠正张冠李戴：www.hotjob.cn/wt/CT 是「财通证券」不是「中国电信」（2026-10-10 查实，创始人同日同意处置）
+-- 311 — 纠正张冠李戴：www.hotjob.cn/wt/CT 是「财通证券」不是「中国电信」（2026-10-10 查实，创始人同日同意处置）
 --
 -- 现象：sources 里 company='中国电信'、adapter_name='wt'、source_url='https://www.hotjob.cn/wt/CT/web/index'
 --   的源（迁移 105，2026-06-09 按 probe 探活结果 seed）一直在出岗，香港库该前缀下 215 个 active 岗全挂「中国电信」。
@@ -31,7 +31,7 @@
 
 update sources
    set enabled = false,
-       notes = coalesce(notes, '') || E'\n\n' || $md$2026-10-10 停用：BRAND 代号 CT 是财通证券，不是中国电信。首页 302 到 wecruit SU60613f74…（租户自报 companyName=财通证券），列表 215 个岗的 orgName 是财通证券及其子公司 / 分支机构，postId 与财通门户 215 个 externalKey 一一对应、标题逐字相同。财通证券的岗由 hotjob 源提供（迁移 277 社招 / 校招 + 迁移 310 实习）。中国电信自己的招聘站是 job.chinatelecom.com.cn/wt/TELE（集团官网校招公告原文给的地址），未接。$md$
+       notes = coalesce(notes, '') || E'\n\n' || $md$2026-10-10 停用：BRAND 代号 CT 是财通证券，不是中国电信。首页 302 到 wecruit SU60613f74…（租户自报 companyName=财通证券），列表 215 个岗的 orgName 是财通证券及其子公司 / 分支机构，postId 与财通门户 215 个 externalKey 一一对应、标题逐字相同。财通证券的岗由 hotjob 源提供（迁移 277 社招 / 校招 + 迁移 311 实习）。中国电信自己的招聘站是 job.chinatelecom.com.cn/wt/TELE（集团官网校招公告原文给的地址），未接。$md$
  where source_url = 'https://www.hotjob.cn/wt/CT/web/index'
    and company = '中国电信'
    and enabled;
