@@ -1,3 +1,6 @@
+import contextlib
+import io
+import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
@@ -225,3 +228,208 @@ class WritePlanTest(unittest.TestCase):
     def test_derived_rows_expire_so_a_stalled_pipeline_stops_showing_numbers(self):
         rows, _ = S.plan_subject_rows(self.SUBJECT, "c1", [self._metric()], [], "now", 14)
         self.assertTrue(rows[0]["valid_until"])
+
+
+class ZeroJobCompanyTest(unittest.TestCase):
+    """公司一个在招岗都没有时，旧的派生条目也要退役——与在招岗 1~9 个时同一个处置。
+
+    旧实现在 `if not jobs: continue` 处整家跳过，走不到 plan_subject_rows 的退役分支：
+    源被停用 / 岗位整批下架 / 挂错名纠正之后，按那批岗算出来的条目还 active 到 valid_until。
+    """
+
+    COMPANY = {"id": "sub-co", "company_id": "c1", "kind": "company", "name": "某公司"}
+    BU = {"id": "sub-bu", "company_id": "c1", "kind": "business_unit", "name": "飞书"}
+    NAMES = {"c1": ["某公司"]}
+    EXISTING = {
+        "sub-co": [
+            {"id": "co-a", "subject_id": "sub-co", "metric_key": "city_share", "status": "active"},
+            {"id": "co-b", "subject_id": "sub-co", "metric_key": "bucket_share", "status": "active"},
+            {"id": "co-old", "subject_id": "sub-co", "metric_key": "salary_range_k", "status": "retired"},
+        ],
+        "sub-bu": [
+            {"id": "bu-a", "subject_id": "sub-bu", "metric_key": "bu_job_count", "status": "active"},
+        ],
+    }
+
+    def _run_main(self, argv, *, jobs, subjects=None, names=None, existing=None, write_error=None):
+        """真跑 main()，只把读写库的边界换掉。返回 (写库调用, 台账调用, 屏幕输出)。"""
+        subjects = [self.COMPANY, self.BU] if subjects is None else subjects
+
+        def fake_write(sb, rows, retire, now, batch=200):
+            if write_error:
+                raise write_error
+            return len(rows), len(retire)
+
+        out = io.StringIO()
+        with contextlib.ExitStack() as stack:
+            patch = lambda target, name, **kw: stack.enter_context(  # noqa: E731
+                mock.patch.object(target, name, **kw))
+            patch(sys, "argv", new=["bu_signals.py", *argv])
+            patch(S.db, "get_supabase", return_value=mock.MagicMock())
+            patch(S, "fetch_subjects", return_value=subjects)
+            patch(S, "fetch_company_names", return_value=self.NAMES if names is None else names)
+            patch(S, "fetch_existing_items",
+                  return_value=self.EXISTING if existing is None else existing)
+            patch(S, "fetch_snapshots", return_value={})
+            patch(S.jobs_db, "get_conn", return_value=mock.MagicMock())
+            patch(S, "fetch_jobs_for_company", side_effect=jobs)
+            patch(S.job_function, "classify_titles", side_effect=lambda ts: [None] * len(list(ts)))
+            write = patch(S, "write_rows", side_effect=fake_write)
+            patch(S, "record_snapshots", side_effect=lambda sb, snaps, batch=200: len(snaps))
+            record = patch(S.ops_runs, "record_ops_run")
+            stack.enter_context(contextlib.redirect_stdout(out))
+            S.main()
+        return write, record, out.getvalue()
+
+    @staticmethod
+    def _retired(write):
+        return sorted(rid for call in write.call_args_list for rid in call.args[2])
+
+    @staticmethod
+    def _upserted(write):
+        return [row for call in write.call_args_list for row in call.args[1]]
+
+    @staticmethod
+    def _ledger(record):
+        return record.call_args.args[2]
+
+    def test_zero_jobs_retires_every_active_item_of_every_subject(self):
+        write, record, _ = self._run_main([], jobs=lambda conn, names: [])
+        # 公司主体 + 业务线主体的 active 条目都退役；本来就 retired 的那条不重复写。
+        self.assertEqual(self._retired(write), ["bu-a", "co-a", "co-b"])
+        self.assertEqual(self._upserted(write), [])
+        ledger = self._ledger(record)
+        self.assertEqual(ledger["items_retired"], 3)
+        self.assertEqual(ledger["zero_job_items_retired"], 3)
+        self.assertEqual(ledger["companies_zero_jobs"], 1)
+        self.assertEqual(ledger["failed"], 0)
+
+    def test_fetch_failure_is_not_treated_as_zero_jobs(self):
+        def boom(conn, names):
+            raise RuntimeError("statement timeout")
+
+        write, record, _ = self._run_main([], jobs=boom)
+        # 「没取到」不是「取到 0 个」：一条都不许退役，并且要记一次失败。
+        self.assertEqual(self._retired(write), [])
+        ledger = self._ledger(record)
+        self.assertEqual(ledger["failed"], 1)
+        self.assertEqual(ledger["items_retired"], 0)
+        self.assertEqual(ledger["companies_zero_jobs"], 0)
+
+    def test_zero_jobs_with_nothing_active_writes_nothing(self):
+        existing = {"sub-co": [{"id": "co-old", "subject_id": "sub-co",
+                                "metric_key": "city_share", "status": "retired"}]}
+        write, record, _ = self._run_main([], jobs=lambda conn, names: [], existing=existing)
+        self.assertEqual(self._retired(write), [])
+        self.assertEqual(self._ledger(record)["companies_zero_jobs"], 1)
+
+    def test_dry_run_reports_the_plan_and_writes_nothing(self):
+        write, record, printed = self._run_main(["--dry-run"], jobs=lambda conn, names: [])
+        write.assert_not_called()
+        record.assert_not_called()
+        self.assertIn("某公司", printed)
+        self.assertIn("3 条", printed)
+
+    def test_dry_run_says_zero_out_loud_when_nothing_would_be_retired(self):
+        # 「没有要退役的」也要明说，不能靠「没打印」让人去猜。
+        write, _, printed = self._run_main(["--dry-run"], jobs=lambda conn, names: [], existing={})
+        write.assert_not_called()
+        self.assertIn("1 家公司 0 个在招岗", printed)
+        self.assertIn("共 0 条", printed)
+
+    def test_failed_retirement_write_is_counted_and_still_reaches_the_ledger(self):
+        write, record, printed = self._run_main(
+            [], jobs=lambda conn, names: [], write_error=RuntimeError("503"))
+        write.assert_called_once()
+        ledger = self._ledger(record)
+        self.assertEqual(ledger["failed"], 1)
+        self.assertEqual(ledger["items_retired"], 0)
+        self.assertEqual(ledger["zero_job_items_retired"], 0)
+        self.assertIn("退役失败", printed)
+
+    def test_company_with_jobs_next_to_a_zero_job_company_is_untouched(self):
+        other = {"id": "sub-ok", "company_id": "c2", "kind": "company", "name": "另一家"}
+        existing = {**self.EXISTING, "sub-ok": [
+            {"id": "ok-a", "subject_id": "sub-ok", "metric_key": "hiring_volume_30d",
+             "status": "active"}]}
+        fresh = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        by_name = {"某公司": [], "另一家": [job(first_seen_at=fresh) for _ in range(S.MIN_COMPANY)]}
+        write, record, _ = self._run_main(
+            [], jobs=lambda conn, names: by_name[names[0]],
+            subjects=[self.COMPANY, self.BU, other],
+            names={"c1": ["某公司"], "c2": ["另一家"]}, existing=existing)
+        # 两个方向各看一次：0 岗那家全退役；有岗那家照常重算，它的旧条目原地更新、不被退役。
+        self.assertEqual(self._retired(write), ["bu-a", "co-a", "co-b"])
+        upserted = self._upserted(write)
+        self.assertTrue(upserted)
+        self.assertEqual({row["subject_id"] for row in upserted}, {"sub-ok"})
+        self.assertIn("ok-a", {row["id"] for row in upserted})
+        ledger = self._ledger(record)
+        self.assertEqual(ledger["companies_scanned"], 2)
+        self.assertEqual(ledger["companies_zero_jobs"], 1)
+
+    def test_single_company_run_is_not_held_back_by_the_ratio(self):
+        # 手动只跑一家（--company）而那一家正好 0 岗：这正是要退役的用法。
+        write, _, _ = self._run_main(["--company", "某公司"], jobs=lambda conn, names: [])
+        self.assertEqual(self._retired(write), ["bu-a", "co-a", "co-b"])
+
+    def _fleet(self, *, dead, gone, healthy):
+        """造一批公司：dead=0 岗且早就没有条目；gone=0 岗但还挂着条目；healthy=有岗有条目。"""
+        subjects, names, existing, jobs_by_name = [], {}, {}, {}
+        fresh = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        for kind, count in (("dead", dead), ("gone", gone), ("healthy", healthy)):
+            for i in range(count):
+                key = f"{kind}{i}"
+                subjects.append({"id": f"s-{key}", "company_id": f"c-{key}",
+                                 "kind": "company", "name": key})
+                names[f"c-{key}"] = [key]
+                if kind != "dead":
+                    existing[f"s-{key}"] = [{"id": f"item-{key}", "subject_id": f"s-{key}",
+                                             "metric_key": "hiring_volume_30d", "status": "active"}]
+                jobs_by_name[key] = ([job(first_seen_at=fresh) for _ in range(S.MIN_COMPANY)]
+                                     if kind == "healthy" else [])
+        return dict(subjects=subjects, names=names, existing=existing,
+                    jobs=lambda conn, names: jobs_by_name[names[0]])
+
+    def test_most_item_holding_companies_reading_zero_blocks_the_retirement(self):
+        # 挂着条目的 25 家里 20 家同时读出 0 岗：更像岗位库本身出了问题，不是它们真的都不招了。
+        # 30 家早就没条目的 0 岗公司不进分母——算进去就成了 20/55，闸门形同虚设。
+        write, record, printed = self._run_main([], **self._fleet(dead=30, gone=20, healthy=5))
+        self.assertEqual(self._retired(write), [])
+        # 有岗的那 5 家照常重算，不受牵连。
+        self.assertEqual(len({row["subject_id"] for row in self._upserted(write)}), 5)
+        ledger = self._ledger(record)
+        self.assertEqual(ledger["zero_job_retire_blocked"], 20)
+        self.assertEqual(ledger["items_retired"], 0)
+        # 台账必须是 failed：看门狗只认 failed，记成 partial 等于没人知道闸门拦过。
+        self.assertEqual(record.call_args.kwargs["status"], "failed")
+        self.assertIn("::warning::", printed)
+
+    def test_long_dead_profiles_do_not_trip_the_gate(self):
+        # 0 岗公司的主体没人清，只增不减。拿「0 岗公司 / 全部公司」当比例会一路爬到 50% 误拦
+        #（这里 32/52 = 62%）；真正异常的是「昨天还有条目、今天读出 0 岗」的占比（2/22）。
+        write, record, _ = self._run_main([], **self._fleet(dead=30, gone=2, healthy=20))
+        self.assertEqual(self._retired(write), ["item-gone0", "item-gone1"])
+        ledger = self._ledger(record)
+        self.assertEqual(ledger["zero_job_retire_blocked"], 0)
+        self.assertEqual(ledger["companies_zero_jobs"], 32)
+        self.assertEqual(record.call_args.kwargs["status"], "success")
+
+    def test_blocked_dry_run_still_lists_what_would_have_been_retired(self):
+        # 闸门拦下时，人要靠这份名单判断是不是误报。
+        write, _, printed = self._run_main(
+            ["--dry-run"], **self._fleet(dead=0, gone=20, healthy=5))
+        write.assert_not_called()
+        self.assertIn("gone0", printed)
+        self.assertIn("::warning::", printed)
+
+    def test_guard_thresholds(self):
+        # 2026-10-10 真库：挂着派生条目的 1,129 家里 6 家读出 0 岗（0.5%）。
+        self.assertTrue(S.zero_job_retire_allowed(6, 1129))
+        self.assertFalse(S.zero_job_retire_allowed(1129, 1129))
+        # 恰好一半放行，多一家就拦。
+        self.assertTrue(S.zero_job_retire_allowed(10, 20))
+        self.assertFalse(S.zero_job_retire_allowed(11, 20))
+        # 不到 ZERO_JOB_GUARD_MIN_COMPANIES 家不看比例（手动跑一家 / 小批量）。
+        self.assertTrue(S.zero_job_retire_allowed(1, 1))
+        self.assertTrue(S.zero_job_retire_allowed(0, 0))
