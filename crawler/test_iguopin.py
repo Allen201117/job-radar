@@ -37,6 +37,9 @@ def _job(job_id, company_name, company_id):
 class IguopinAdapterTest(unittest.TestCase):
     def setUp(self):
         reset_process_caches()
+        sleeper = mock.patch("adapters.iguopin.time.sleep")   # 主页接口失败会退避重试，单测不真等
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
 
     def test_parse_verified_detail_job(self):
         fixture = Path(__file__).with_name("fixtures") / "iguopin_list.json"
@@ -193,9 +196,12 @@ class IguopinAdapterTest(unittest.TestCase):
 
         def fake_get(url, **kwargs):
             if "company/index/v1/home" in url:
-                self.assertEqual(kwargs["params"], {"company_id": "child-root"})
+                # 三家都要答：2026-10-10 前这里只答 child-root、另两家一问就炸，
+                # 而测试照样绿 —— 因为「问不到 → 放行」。这个夹具自己就踩在那个口子上。
+                cid = kwargs["params"]["company_id"]
+                self.assertIn(cid, {"child-root", "child-js", "child-hb"})
                 return _Response({"code": 200, "data": {"company_info": {
-                    "id": "child-root", "group_id": "group-grid", "group_short_name": "国家电网",
+                    "id": cid, "group_id": "group-grid", "group_short_name": "国家电网",
                 }}})
             if "children-list" in url:
                 self.assertEqual(kwargs["params"], {"company_id": "group-grid"})
@@ -281,7 +287,10 @@ class IguopinAdapterTest(unittest.TestCase):
             rows.append(child)
             return "中国石油", "grp-cnpc"
 
-        def fake_get(_url, **kwargs):
+        def fake_get(url, **kwargs):
+            if "company/index/v1/home" in url:      # 两家都是中国石油集团成员（国聘口径）
+                cid = kwargs["params"]["company_id"]
+                return _Response({"code": 200, "data": {"company_info": {"id": cid, "group_id": "grp-cnpc"}}})
             job_id = kwargs["params"]["id"]
             row = {"root": root, "child": child}[job_id]
             return _Response({"code": 200, "data": {**row, "contents": row["contents"]}})
@@ -346,6 +355,9 @@ class ProcessCacheTest(unittest.TestCase):
 
     def setUp(self):
         reset_process_caches()
+        sleeper = mock.patch("adapters.iguopin.time.sleep")
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
 
     def _fetch(self, url, rows, *, group_id="grp", seen_home=None, seen_detail=None):
         def fake_post(_url, **_kwargs):
@@ -419,6 +431,28 @@ class ProcessCacheTest(unittest.TestCase):
         self.assertEqual(adapter._company_group_id("c1", {}), "")
         self.assertEqual(adapter._company_group_id("c1", {}), "")
         self.assertEqual(calls, ["c1"])
+
+    def test_anchor_lookup_and_membership_lookup_agree_on_the_group(self):
+        """「这家公司的集团是谁」只有一份实现（group_id_of）。旧写法里定锚那一跳对「央企(集团)」一律写自己的 id，
+        归属门那一跳却以 group_id 为准 —— 国聘上真有 classify 是集团、group_id 却指着别人的公司，
+        同一家的结论取决于先被谁问到，锚在它身上还会给上级集团的子公司贴它的简称。"""
+        info = {"id": "c1", "name": "某集团有限公司", "short_name": "某集团", "classify_cn": "央企(集团)",
+                "group_id": "g-parent", "group_name": "上级集团有限公司", "group_short_name": "上级集团"}
+        with mock.patch("adapters.iguopin.httpx.get",
+                        return_value=_Response({"code": 200, "data": {"company_info": info}})):
+            adapter = IguopinAdapter()
+            self.assertEqual(adapter._fetch_company_group_id("c1", {}), "g-parent")
+            self.assertEqual(adapter._group_info("c1", {}), ("g-parent", "上级集团"))
+            self.assertEqual(adapter._company_group_id("c1", {}), "g-parent", "定锚顺手灌的缓存也得是同一个答案")
+
+    def test_group_root_without_group_id_is_its_own_group(self):
+        info = {"id": "c1", "name": "中国远洋海运集团有限公司", "short_name": "中远海运集团",
+                "classify_cn": "央企(集团)", "group_id": ""}
+        with mock.patch("adapters.iguopin.httpx.get",
+                        return_value=_Response({"code": 200, "data": {"company_info": info}})):
+            adapter = IguopinAdapter()
+            self.assertEqual(adapter._group_info("c1", {}), ("c1", "中远海运集团"))
+            self.assertEqual(adapter._fetch_company_group_id("c1", {}), "c1")
 
     def test_prefetch_does_not_add_requests_for_rows_already_known(self):
         """预热只是把「本来就要问的那批」并发问掉，不许多问一次。"""

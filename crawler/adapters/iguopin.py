@@ -24,6 +24,7 @@ import json
 import os
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 from urllib.parse import parse_qs, unquote, urlparse
@@ -45,6 +46,24 @@ _GROUP_CHILD_CAP = 60
 _GROUP_ANCHOR_TRIES = 5   # 最多拿前 5 个不同公司去问集团；模糊搜索的头几行就够定锚，再多是白烧
 _GROUP_CHILD_PAGE_CAP = 2
 _DETAIL_WORKERS = 3
+
+# 公司主页接口（归属核验的唯一依据）会失败，而且不少见。2026-10-10 实测：约 10 秒后回 HTTP 503，
+# 单发 4 次里 1~2 次、3 并发连打同一家 40 次里 16 次、批量复核 609 家时 55 / 1,269 次。
+# → 单次失败不能当结论，重试；重试用尽仍问不到 = 「本轮核不了」，那一行**不写**（见 _GroupGate）。
+_HOME_TRIES = 3
+_HOME_RETRY_SLEEP = 1.0   # 秒，第 n 次重试前等 n 倍；失败本身已经让对方喘了 10 秒，不必更长
+# 国聘的明确答复「未找到对应企业或该企业审核不通过或异常」。这是**定论**不是抖动：每次问都是它。
+_HOME_NOT_FOUND_CODES = frozenset({2204})
+# 一条源里核不了的公司占到这个比例 = 主页接口这一轮整体不可用 → 整源记 failed、库里一行不动。
+# 取 50% 与仓库里其它「本轮结果不可信就整轮放弃」的闸同档（enrich_backlog.EXPIRE_RATIO_GUARD、
+# sweep_absent_jobs 的 max_expire_fraction、announcements/verify 的下架比例闸）。
+_UNVERIFIED_ABORT_RATIO = 0.5
+# 并发预热按这么多家一批来问；**整整一批一家都没问到** = 接口这会儿不可用，当场放弃这条源。
+# 接口大面积失败时每家要白等 3×10 秒，一条源两三百家全问完再放弃就是几十分钟，而国聘几十条源同主机
+# 一队串行跑在同一个分片里。单家重试后仍失败的概率实测约 6%，连续 24 家全失败只可能是接口挂了。
+# ⚠️ 预热阶段不许看「问不到的占比」：它只问进程级缓存里没有的公司，后面的源里剩下的恰恰是
+# 上一条源没问到的那几家，比例天然偏高（118 家已缓存 + 2 家问不到 会被算成 2/2）。比例只在全体公司上算。
+_PREFETCH_CHUNK = 24
 
 # 「这家公司在国聘口径下属于哪个集团」是**全局事实**，与是哪条源问的无关 → 进程级缓存。
 # 为什么值得：单源实测（中国建筑校招源，2026-09-17）墙钟 106s 里 **56.6s（53%）花在 251 次
@@ -103,6 +122,7 @@ class IguopinAdapter(BaseAdapter):
 
         self.reported_total = None
         self.fetch_complete = False
+        self.coverage_stop_reason = None   # 同一实例被复用时（probe / 单测），上一条源的停因不许带到这一条
         headers = {
             "User-Agent": self.user_agent,
             "Accept": "application/json",
@@ -126,8 +146,10 @@ class IguopinAdapter(BaseAdapter):
         # 即使没配 match，集团展开进来的行也要过归属核验——旁路必须堵死。
         if match or group_ok:
             if group_ok:
-                self._prefetch_group_ids(rows, headers)
+                self._prefetch_group_ids(rows, group_ok, keyword)
             rows[:] = [row for row in rows if _row_passes_match(row, match, group_ok)]
+            if group_ok:
+                self._account_unverified(group_ok, keyword)
         # 归属核验只有 fetch 做得了（要联网查国聘的集团口径），parse 里没有这个能力。
         # 打个标把结论带下去，否则 parse 的那道复查会按「名字核名」把真子公司再毙一次
         # （鼎和财产保险/国网江苏 名字里都不含集团名）。
@@ -254,16 +276,18 @@ class IguopinAdapter(BaseAdapter):
                 _GROUP_ID_CACHE[cid] = found
         return found
 
-    def _prefetch_group_ids(self, rows, headers: dict) -> None:
-        """把本源要问的 company_id 先并发灌进 `_GROUP_ID_CACHE`，再走串行的逐行核验。
+    def _prefetch_group_ids(self, rows, gate: "_GroupGate", keyword: str = "") -> None:
+        """把本源要问的 company_id 先并发问掉，再走串行的逐行核验。
 
         为什么要这一步：核验本身必须逐行串行（判据要按行用），但**取事实**可以并发。
         实测（中国建筑校招源）251 次 company home 串行 56.6s，是单源墙钟 106s 的 53%。
         并发度沿用 `_DETAIL_WORKERS`（逐岗详情同样对 gp-api 开 3 路，是已在线上跑了两个月的档位），
-        **不额外抬高对国聘的并发**。"""
+        **不额外抬高对国聘的并发**。
+        结论记在 `gate` 上（含「本轮核不了」）：问不到的公司不许在逐行核验时再串行重问一遍 ——
+        主页接口失败一次要等约 10 秒，重试已经在 `_company_home` 里做过了。"""
         seen, todo = set(), []
         for row in rows or []:
-            cid = str((row or {}).get("company_id") or "").strip() if isinstance(row, dict) else ""
+            cid = _row_company_id(row)
             if not cid or cid in seen:
                 continue
             seen.add(cid)
@@ -274,51 +298,76 @@ class IguopinAdapter(BaseAdapter):
         if not todo:
             return
         with ThreadPoolExecutor(max_workers=_DETAIL_WORKERS) as executor:
-            list(executor.map(lambda cid: self._company_group_id(cid, headers), todo))
+            for start in range(0, len(todo), _PREFETCH_CHUNK):
+                chunk = todo[start:start + _PREFETCH_CHUNK]
+                verdicts = list(executor.map(gate.verdict, chunk))
+                if len(chunk) == _PREFETCH_CHUNK and all(verdict is None for verdict in verdicts):
+                    raise RuntimeError(f"iguopin 归属核验：连续 {_PREFETCH_CHUNK} 家公司的集团在国聘都问不到"
+                                       f"（公司主页接口不可用），整源放弃本轮（keyword={keyword}）")
+
+    def _company_home(self, company_id: str, headers: dict) -> dict:
+        """问国聘「这家公司是谁」。三种结果，调用方必须分开处理：
+          · company_info（dict，非空）= 问到了；
+          · {} = 国聘明确答复没有这家公司（`_HOME_NOT_FOUND_CODES`），或答复里公司信息是空的（定论）；
+          · 抛异常 = 重试用尽仍问不到。**它不是任何一种答复**，不许当成「有」也不许当成「没有」。
+        重试的理由见 `_HOME_TRIES` 的注释。"""
+        last: Exception = RuntimeError("iguopin company home: not attempted")
+        for attempt in range(_HOME_TRIES):
+            if attempt:
+                time.sleep(_HOME_RETRY_SLEEP * attempt)
+            try:
+                response = httpx.get(_COMPANY_HOME_API, params={"company_id": company_id},
+                                     headers=headers, timeout=self.timeout, follow_redirects=True)
+                response.raise_for_status()
+                body = response.json() or {}
+                code = body.get("code")
+                if code in _HOME_NOT_FOUND_CODES:
+                    return {}
+                info = (body.get("data") or {}).get("company_info") if code == 200 else None
+                if isinstance(info, dict):
+                    return info
+                last = ValueError(f"iguopin company home response missing company_info (code={code})")
+            except Exception as exc:  # noqa: BLE001 —— 503 / 超时 / 非 JSON 一律重试
+                last = exc
+        raise last
 
     def _fetch_company_group_id(self, company_id: str, headers: dict):
         try:
-            response = httpx.get(_COMPANY_HOME_API, params={"company_id": company_id},
-                                 headers=headers, timeout=self.timeout, follow_redirects=True)
-            response.raise_for_status()
-            body = response.json() or {}
-            if body.get("code") != 200:
-                return None
-            info = (body.get("data") or {}).get("company_info")
-            if not isinstance(info, dict):
-                return None
-            own_id = str(info.get("id") or company_id).strip()
-            group_id = str(info.get("group_id") or "").strip()
-            if not group_id and info.get("classify_cn") == "央企(集团)":
-                group_id = own_id      # 集团本体，自己就是自己的集团
-            return group_id            # 可能是 ""，那是「无集团」的定论
+            info = self._company_home(company_id, headers)
         except Exception:
-            return None
+            return None                # 问不到 ≠ 没有集团；由 _GroupGate 记成「本轮核不了」
+        return group_id_of(info, company_id)   # 可能是 ""，那是「无集团」的定论
 
-    def _group_membership_checker(self, group_id: str, headers: dict):
-        """返回 `ok(row) -> bool`：这条岗的公司在**国聘自己的口径**下是否真属于本集团。
+    def _group_membership_checker(self, group_id: str, headers: dict) -> "_GroupGate":
+        """返回 `gate(row) -> bool`：这条岗的公司在**国聘自己的口径**下是否真属于本集团。
 
         判据是 group_id，不是名字——名字核不住：鼎和财产保险是南方电网真子公司、
         名字里却没有「南方电网」；反过来「中国（海南）改革发展研究院」名字里有「海南」，
         被「海南电网有限责任公司」这个关键词搜了回来，实际是民营企业。
-        按 company_id 缓存，一家公司只查一次（本地缓存 + 进程级 `_GROUP_ID_CACHE`：
+        一家公司只查一次（gate 自己记本轮结论 + 进程级 `_GROUP_ID_CACHE`：
         同一集团的社招源与校招源问的是同一批公司，45 条源跑在同一个进程里，跨源复用是白捡的）。
-
-        失败语义：查到「无集团」→ **拒**（定论）；请求失败 → 放行（暂时不知道，下轮重查，
-        宁可多留一条待发现的错归属，也不因为对方接口抖一下就丢掉整源真岗）。
+        失败语义见 `_GroupGate`。
         """
-        cache: dict = {}
+        return _GroupGate(group_id, lambda cid: self._company_group_id(cid, headers))
 
-        def ok(row) -> bool:
-            cid = str((row or {}).get("company_id") or "").strip()
-            if not cid:
-                return True
-            if cid not in cache:
-                found = self._company_group_id(cid, headers)
-                cache[cid] = True if found is None else (str(found) == str(group_id))
-            return cache[cid]
-
-        return ok
+    def _account_unverified(self, gate: "_GroupGate", keyword: str) -> None:
+        """核不了的行已经被 gate 拦下（没写）。这里只负责**让这件事看得见**（此时 gate 已看过全体公司）：
+          · 核不了的占到一半 → 抛错，整源记 failed、库里一行不动。主页接口整体不可用时，
+            「放行全部」是 2026-10-10 那次事故，「安静地写剩下几条还报 success」是绿灯零产出；
+          · 少数核不了 → 本轮记「没写全」（停因进 crawl_runs），其余行照常入库。"""
+        unverified, checked = len(gate.unverified), len(gate.checked)
+        if not unverified:
+            return
+        note = (f"iguopin 归属核验：{unverified}/{checked} 家公司的集团在国聘问不到"
+                f"（公司主页接口重试 {_HOME_TRIES} 次仍失败，或行里没有公司 id），这些公司的岗本轮不写")
+        if unverified >= checked * _UNVERIFIED_ABORT_RATIO:
+            raise RuntimeError(f"{note}；核不了的占比过高，整源放弃本轮（keyword={keyword}）")
+        print(f"::warning::[iguopin] keyword={keyword} {note}")
+        if self.fetch_complete:
+            # 只在「列表本来翻完了」时改写：分页自己没翻完的轮次保持原状，
+            # 否则 ops_watchdog 规则 G 会按这个停因把一个真缺口从榜上摘走。
+            self.fetch_complete = False
+            self.coverage_stop_reason = "attribution_unverified"
 
     def _group_info(self, company_id: str, headers: dict):
         """定锚：这家公司的集团 id / 简称 / 全称。同样是全局事实 → 进程级缓存
@@ -330,19 +379,15 @@ class IguopinAdapter(BaseAdapter):
         if hit is not None:
             group_id, group_short_name, self._last_group_name = hit
             return group_id, group_short_name
-        response = httpx.get(_COMPANY_HOME_API, params={"company_id": company_id}, headers=headers,
-                             timeout=self.timeout, follow_redirects=True)
-        response.raise_for_status()
-        body = response.json() or {}
-        info = (body.get("data") or {}).get("company_info") if body.get("code") == 200 else None
-        if not isinstance(info, dict):
+        info = self._company_home(company_id, headers)   # 带重试；问不到会抛，由调用方回退到不展开
+        if not info:
             raise ValueError("iguopin company home response missing company_info")
 
-        own_id = str(info.get("id") or company_id).strip()
-        group_id = str(info.get("group_id") or "").strip()
-        if not group_id and info.get("classify_cn") == "央企(集团)":
-            group_id = own_id
-        if group_id == own_id or info.get("classify_cn") == "央企(集团)":
+        group_id = group_id_of(info, company_id)
+        # 集团 id 和集团名必须指同一个实体：自己就是自己的集团 → 用自己的名字，否则用上级集团的名字。
+        # （旧写法只要 classify 是「央企(集团)」就用自己的名字，哪怕 group_id 指着别人 ——
+        #   国聘上真有这种公司，锚在它身上会给上级集团的所有子公司贴它的简称。）
+        if group_id == str(info.get("id") or company_id).strip():
             group_short_name = _text(info.get("short_name"))
             self._last_group_name = _text(info.get("name"))
         else:
@@ -350,12 +395,10 @@ class IguopinAdapter(BaseAdapter):
             self._last_group_name = _text(info.get("group_name"))
         if not group_id or not group_short_name:
             raise ValueError("iguopin company home response missing group metadata")
-        # 定锚这一跳问的也是 company home，结论与 `_company_group_id` 同口径 → 顺手灌进缓存。
-        # 每条源最多试 5 个锚点，45 条源就是最多 225 次可以省掉的重复请求。
-        own_group = own_id if info.get("classify_cn") == "央企(集团)" else \
-            str(info.get("group_id") or "").strip()
+        # 定锚这一跳问的也是 company home，结论与 `_company_group_id` 同口径（同一个 group_id_of）
+        # → 顺手灌进缓存。每条源最多试 5 个锚点，45 条源就是最多 225 次可以省掉的重复请求。
         with _GROUP_ID_LOCK:
-            _GROUP_ID_CACHE[cid] = own_group
+            _GROUP_ID_CACHE[cid] = group_id
             _GROUP_INFO_CACHE[cid] = (group_id, group_short_name, self._last_group_name)
         return group_id, group_short_name
 
@@ -457,6 +500,63 @@ class IguopinAdapter(BaseAdapter):
                 deadline=_text(row.get("end_time")),
             ))
         return out
+
+
+def group_id_of(info: dict, company_id: str = "") -> str:
+    """国聘公司主页答复 → 这家公司的集团 id。"" = 没有集团（含国聘不认这家公司）。
+    adapter 的归属门、定锚和存量复核工具共用这一份，三处口径不许分叉。"""
+    if not info:
+        return ""
+    group_id = str(info.get("group_id") or "").strip()
+    if not group_id and info.get("classify_cn") == "央企(集团)":
+        return str(info.get("id") or company_id).strip()   # 集团本体，自己就是自己的集团
+    return group_id
+
+
+def _row_company_id(row) -> str:
+    return str(row.get("company_id") or "").strip() if isinstance(row, dict) else ""
+
+
+class _GroupGate:
+    """一条集团源本轮的归属门：`gate(row)` 只在国聘**明确说**这家公司属于本集团时放行。
+
+    一家公司的结论有三种，语义必须分开（混成两种就是事故）：
+      · True  = 国聘说它的 group_id 就是本集团 → 放行；
+      · False = 国聘说它属于别的集团 / 自己就是自己的集团 / 国聘不认这家公司 → **定论，拒**；
+      · None  = 问不到（重试用尽），或这一行根本没带 company_id → **本轮不写**，记进 `unverified`，
+                下一轮重查。结论不进进程级缓存，但同一轮里不重问。
+
+    🚫 None 不许放行（2026-10-10 立）。旧实现是「请求失败 → 放行，下轮重查」，理由是别因为对方接口
+    抖一下丢掉整源真岗。实测它丢不掉真岗（不写 ≠ 删，库里已有的行不动），却真的把假岗放了进来：
+    「中国人民解放军空军（中国石油）」65 岗、「赞比亚谦比希湿法冶炼有限公司（比亚迪股份有限公司）」……
+    当天全量复核 609 家 / 4,199 岗：42 家 / 178 岗挂错，其中 164 岗是 10-09、10-10 两晚进来的；
+    拿旧代码真跑一条源（中国石油），放行的 43 行里 40 行是「问不到」放进来的。而且「下轮重查」救不回来：
+    下一轮查成功了只是这一行不再被刷新，已经写进去的旧行没有任何机制撤掉。
+    归属是红线：核不了的就不写，宁可这一轮少几行。
+    """
+
+    def __init__(self, group_id: str, lookup_group_id):
+        self._group_id = str(group_id)
+        self._lookup_group_id = lookup_group_id     # cid -> "xxx" / ""（无集团，定论）/ None（问不到）
+        self._verdicts: dict = {}
+
+    def verdict(self, company_id: str) -> Optional[bool]:
+        cid = str(company_id or "").strip()
+        if cid not in self._verdicts:
+            found = self._lookup_group_id(cid) if cid else None
+            self._verdicts[cid] = None if found is None else (str(found) == self._group_id)
+        return self._verdicts[cid]
+
+    def __call__(self, row) -> bool:
+        return self.verdict(_row_company_id(row)) is True
+
+    @property
+    def checked(self) -> set:
+        return set(self._verdicts)
+
+    @property
+    def unverified(self) -> set:
+        return {cid for cid, verdict in self._verdicts.items() if verdict is None}
 
 
 def _company_keyword(source_url: str) -> str:
