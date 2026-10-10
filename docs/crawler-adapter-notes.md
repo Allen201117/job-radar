@@ -28,6 +28,13 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     endDate 是系统填的数（wt 回请求当天、hotjob 每晚续成 +7 天、3000-01-01、发布日+12 个月、早已过去的日期）。
                          #     wt 的 == 1 里还有一类「请求当天 + N 个月」的滚动值，同样不写。依据与计数在两个 adapter 的 `_deadline` 注释里。
                          #     ⚠️ deadline 在 `_PRESERVE_IF_EMPTY` 里：adapter 不写 ≠ 库里清掉，存量假日期要另行清理。
+                         #   hotjob.py 的列表翻页（2026-10-10）：🚫 **第 1 页不听我们传的 pageSize**——回多少条一页、自报的 totalPage
+                         #     按哪种页长算都由对方定，同一租户不同时刻还会变（当天实测 1 / 10 / 12 / 15 / 20 / 50）。旧写法每页按 20 要、
+                         #     又认第 1 页的 totalPage：页长 <20 时第 1、2 页之间断档（财通证券校招 72 → 64），页长 50 时翻到四成就停
+                         #     （广西柳工社招 489 → 200），都记抓全。现行：第 1 页的 totalPage 不认；断档按第 1 页自报页长补一页；
+                         #     分母读 dataCount，去重后不够就不记抓全。147 个启用源改前改后对拍：62 个源 +887 个岗、0 个源少拿。
+                         #     没治的一种（第 1 页连口径都不同，迪卡侬校招）与「别让后面各页跟着第 1 页的页长翻」的反例在
+                         #     `fetch` / `_fill_first_page_gap` 注释里。
                          #   gllue.py = Gllue Next.js SSR 通用层（龙湖等自有域）：?page= 1-based 10 条/页，
                          #     正文只在详情页（列表页没有），逐岗抓、走 resolve_detail_cap 由快/重档决定抓不抓。
                          #   cnstaff.py = 聘客 cnstaff 通用层：POST /api/{tenant}/joblist.json（form `jt=0`）零鉴权，

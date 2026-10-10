@@ -101,8 +101,9 @@ class ReportedTotalTest(unittest.TestCase):
         self.assertTrue(adapter.fetch_complete)
 
     def test_hotjob_ignores_total_page_product_and_completes_on_short_page(self):
+        # 第 1 页自报的 totalPage 不采信（2026-10-10，见 HotJobAdapter.fetch），「一页就装完」认它的 dataCount。
         pages = [
-            {"data": {"pageForm": {"totalPage": 1, "pageData": [
+            {"data": {"pageForm": {"totalPage": 1, "dataCount": 1, "pageData": [
                 {"postId": "p1", "postName": "Role 1"}
             ]}}}
         ]
