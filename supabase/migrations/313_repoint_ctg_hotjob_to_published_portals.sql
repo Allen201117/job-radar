@@ -26,8 +26,9 @@
 -- ② HotJobAdapter 真跑 should_skip → fetch → parse → validate_job_quality → normalize：
 --    社招 44/44、校招 5/5，fetch_complete=True，质量门淘汰 0，正文 ≥60 字 49/49，jd_url 无重复。
 -- ③ 浏览器真渲染：social.html「在招职位44个」、school.html「在招职位5个」，与抓到的条数相同；
---    详情页社招开 7 条（香港 2 / 深圳 / 北京 / 新加坡 / 阿联酋 / 「马来西亚、深圳市」）、校招 5 条全开，
---    12/12 渲染出岗位本身 + 「立即投递」。反向：旧套件列表页 + 详情页「官网不存在」；
+--    详情页社招 44 条、校招 5 条全部渲染出岗位本身 + 「立即投递」（社招 7 条 + 校招 5 条逐个打开看全文，
+--    社招其余 37 条在门户页里用同源 iframe 渲染、等标题和按钮出现；假岗位号对照组 15 秒渲染不出来）。
+--    反向：旧套件列表页 + 详情页「官网不存在」；
 --    SU66dff1b8… 的 school.html / interns.html「内部处理中，请稍后再试」、校招岗详情页一直「正在加载中」。
 -- ④ 地区（regions 保持 {CN} 不改；hotjob adapter 不按 regions 丢岗，范围由每个岗的地点判）：
 --    社招 44 = 国内 34（大陆 15 / 香港 19）+ 海外 10（新加坡 5 / 日本 3 / 阿联酋 1 / 埃及 1）；校招 5 个全在香港（国内）。
@@ -47,7 +48,7 @@
 
 update public.sources
    set source_url = 'https://wecruit.hotjob.cn/SU66dff1b81eb8056010bb9626/pb/social.html',
-       notes      = '2026-10-10 由手机版套件 SU66e002f3…（电脑版页面显示「官网不存在」）改指对外发布的「电信国际招聘官网」社招渠道；官网首页轮播图链到这个门户。租户自报 companyName=中国电信国际有限公司。live：44/44，fetch_complete=True；浏览器验证列表页 + 7 条详情页。'
+       notes      = '2026-10-10 由手机版套件 SU66e002f3…（电脑版页面显示「官网不存在」）改指对外发布的「电信国际招聘官网」社招渠道；官网首页轮播图链到这个门户。租户自报 companyName=中国电信国际有限公司。live：44/44，fetch_complete=True；浏览器验证列表页 + 44 条详情页。'
  where id = 'aae8c97d-3b4f-44c3-96a2-15b06f289800'
    and source_url = 'https://wecruit.hotjob.cn/SU66e002f31eb8056010bbc32d/pb/social.html';
 
