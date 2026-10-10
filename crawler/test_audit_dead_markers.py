@@ -68,6 +68,15 @@ class TestDeadMarkerPrecision(unittest.TestCase):
                 "现在申请 返回职位列表 收藏 ©2026 百胜中国 京ICP备05051632号-16")
         self.assertEqual(verdict(text, "海口肯德基餐厅楼面经理"), "alive")
 
+    def test_segmented_title_is_looked_up_by_its_first_segment(self):
+        # 入库保留完整标题后（2026-10-10），页面把岗位名和业务线分两行渲染也得认得出标题：
+        # 整串前 8 个字是「AI产品设计师 」（带尾随空格），页面上没有 → 页脚的「已结束」就会把在招岗判死。
+        text = "AI产品设计师\n飞书设计\n岗位职责：负责设计系统。\n页脚：2025 校园宣讲活动已结束。"
+        self.assertEqual(verdict(text, "AI产品设计师 - 飞书设计"), "alive")
+        # 与截断时代的标题同一个结论（两个方向都要一样）。
+        for page_text in (text, "很抱歉，页面不见了。错误代码 404。" + "返回首页" * 10):
+            self.assertEqual(verdict(page_text, "AI产品设计师 - 飞书设计"), verdict(page_text, "AI产品设计师"))
+
     def test_weak_marker_without_title_is_dead(self):
         # 标题不在场 + 弱信号 → 仍判死（真 404 页的典型形态）
         text = "很抱歉，页面不见了。" + "错误代码 404。" + "返回首页" * 10

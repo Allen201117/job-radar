@@ -39,6 +39,16 @@ MIN_DIST = 10             # 分布类（城市/职能/类型/学历）至少这�
 MIN_SALARY = 10           # 薪资中位数：明写薪资的岗位至少这么多个
 MIN_TREND = 10            # 趋势两期各自的最小样本
 
+# ── 0 岗退役的闸门 ────────────────────────────────────────────────────────
+# 比的是「名下还挂着 active 派生条目的公司里，有多少家这一轮读出 0 岗」
+#（2026-10-10 真库：1,129 家里 6 家，0.5%）。过半 = 更像岗位库本身出了问题，这一轮不按 0 岗
+# 退役，台账记 failed。
+# ⚠️ 分母不能用「全部公司」：0 岗公司的主体没人清、只增不减（同日 1,349 家里已有 99 家），
+#    那个比例会自己慢慢爬到 50%，最后把正常的退役也拦下。
+ZERO_JOB_RETIRE_MAX_SHARE = 0.5
+# 挂着条目的公司不到这么多家就不看比例：手动只跑一家（--company）而它正好 0 岗，是要退役的正常用法。
+ZERO_JOB_GUARD_MIN_COMPANIES = 20
+
 # 岗位表里要用到的列。刻意不取 summary：390k 行 × 400 字 ≈ 150MB，而派生层一个字都用不到。
 JOB_COLUMNS = (
     "title", "location", "experience", "education", "salary_text",
@@ -398,6 +408,20 @@ def plan_subject_rows(subject, company_id, metrics, existing_rows, now_iso, vali
     return rows, retire_ids
 
 
+def holds_active_items(company_subjects, existing_items) -> bool:
+    """这家公司名下（任一主体）还有没有 active 的派生条目。"""
+    return any(row.get("status") == "active"
+               for subject in company_subjects
+               for row in existing_items.get(subject["id"], []))
+
+
+def zero_job_retire_allowed(retiring: int, holding: int) -> bool:
+    """挂着条目的 holding 家公司里有 retiring 家读出 0 岗：这个占比还正常吗。"""
+    if holding < ZERO_JOB_GUARD_MIN_COMPANIES:
+        return True
+    return retiring / holding <= ZERO_JOB_RETIRE_MAX_SHARE
+
+
 def write_rows(supabase, rows: list[dict], retire_ids: list[str], now_iso: str,
                batch: int = 200) -> tuple[int, int]:
     """按批写。冲突目标是主键 id：已有行原地更新，新行插入。"""
@@ -483,15 +507,20 @@ def main():
         company_ids = company_ids[:args.limit]
 
     all_subject_ids = [s["id"] for cid in company_ids for s in by_company[cid]]
-    existing_items = {} if args.dry_run else fetch_existing_items(supabase, all_subject_ids)
+    # dry-run 也读已有条目（只读）：不读就数不出「0 岗公司还挂着多少条」。
+    existing_items = fetch_existing_items(supabase, all_subject_ids)
     since = (now - timedelta(days=100)).date().isoformat()
     snapshots = {} if args.dry_run else fetch_snapshots(supabase, all_subject_ids, since)
 
     metrics_count = {
         "companies_scanned": 0, "subjects_scanned": 0, "subjects_with_metrics": 0,
         "items_written": 0, "items_retired": 0,
+        "companies_zero_jobs": 0, "zero_job_items_retired": 0, "zero_job_retire_blocked": 0,
         "snapshots": 0, "failed": 0,
     }
+    # 0 岗公司要退役的条目先攒着，整轮跑完、知道占比正不正常之后再一起写（见 ZERO_JOB_RETIRE_MAX_SHARE）。
+    zero_job_plans: list[tuple[str, list[str]]] = []
+    holding_companies = 0
     conn = jobs_db.get_conn()
     try:
         for company_id in company_ids:
@@ -500,7 +529,21 @@ def main():
             try:
                 jobs = fetch_jobs_for_company(conn, names_by_company[company_id])
                 metrics_count["companies_scanned"] += 1
+                holding_companies += holds_active_items(company_subjects, existing_items)
                 if not jobs:
+                    # 走到这里 = 取数成功且确实 0 行；取数抛错落进下面的 except，不会被当成 0 岗。
+                    # ❌ 旧实现在这里整家跳过，走不到 plan_subject_rows 的退役分支（在招岗 1~9 个
+                    #    的公司却走得到）：源被停用 / 岗位整批下架 / 挂错名被纠正之后，按那批岗算出来
+                    #    的条目还 active 到 valid_until。
+                    metrics_count["companies_zero_jobs"] += 1
+                    retire_ids = [
+                        rid for subject in company_subjects
+                        for rid in plan_subject_rows(
+                            subject, company_id, [], existing_items.get(subject["id"], []),
+                            _now_iso(), args.valid_days)[1]
+                    ]
+                    if retire_ids:
+                        zero_job_plans.append((display, retire_ids))
                     continue
                 fns = job_function.classify_titles([j.get("title") for j in jobs])
                 fns = None if all(f is None for f in fns) else fns
@@ -565,12 +608,36 @@ def main():
     finally:
         conn.close()
 
+    zero_ids = [rid for _, ids in zero_job_plans for rid in ids]
+    blocked = not zero_job_retire_allowed(len(zero_job_plans), holding_companies)
+    if args.dry_run or not blocked:
+        # 闸门拦下时 dry-run 也照列：人要靠这份名单判断是不是误报。
+        for display, ids in zero_job_plans:
+            print(f"{display}：0 个在招岗，退役名下 {len(ids)} 条派生条目")
+    if blocked:
+        metrics_count["zero_job_retire_blocked"] = len(zero_ids)
+        print(f"::warning::挂着派生条目的 {holding_companies} 家公司里 {len(zero_job_plans)} 家读出 "
+              f"0 个在招岗，超过 {ZERO_JOB_RETIRE_MAX_SHARE:.0%}，更像岗位库本身出了问题；"
+              f"{len(zero_ids)} 条派生条目这一轮不退役。", flush=True)
+    elif args.dry_run:
+        print(f"dry-run：{metrics_count['companies_zero_jobs']} 家公司 0 个在招岗，其中 "
+              f"{len(zero_job_plans)} 家还挂着派生条目，共 {len(zero_ids)} 条会被退役（未写库）。")
+    elif zero_ids:
+        try:
+            _, retired = write_rows(supabase, [], zero_ids, _now_iso())
+            metrics_count["items_retired"] += retired
+            metrics_count["zero_job_items_retired"] = retired
+        except Exception as exc:  # noqa: BLE001 —— 退役没写成要看得见，不能当成跑完了
+            metrics_count["failed"] += 1
+            print(f"⚠️ 0 岗公司的派生条目退役失败：{type(exc).__name__}: {exc}", flush=True)
+
     print("完成：" + "，".join(f"{k}={v}" for k, v in metrics_count.items()))
     if args.dry_run:
         return
     ops_runs.record_ops_run(
         supabase, "bu_signals", metrics_count,
-        status=ops_runs.status_from_counts(
+        # 闸门拦过的这一轮直接记 failed：看门狗只数 failed，按下面的算法它只会落到 partial。
+        status="failed" if blocked else ops_runs.status_from_counts(
             metrics_count["subjects_with_metrics"], metrics_count["failed"]
         ),
         started_at=started_at, finished_at=_now_iso(),

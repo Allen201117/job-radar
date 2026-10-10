@@ -179,16 +179,89 @@ def strip_nul(value):
     return value.replace("\x00", "") if "\x00" in value else value
 
 
-def clean_title(title: str) -> str:
-    """清洗岗位标题：去首尾空白、去多余空格、去尾部 " - 地点" 后缀。
+# 标题里的「 - 」分隔：连字符两侧都有空白才算（紧贴写法是中文「部门-角色-方向」的紧凑复合标题，从不拆）。
+_TITLE_SEP_RE = re.compile(r"\s+[-–—]\s+")
+_TITLE_TAIL_WORD_SPLIT_RE = re.compile(r"[^0-9a-z一-鿿]+")
+_TITLE_TAIL_CJK_RE = re.compile(r"[一-鿿]")
+_TITLE_TAIL_ADMIN_SUFFIX_RE = re.compile(r"(?:特别行政区|自治区|自治州|省|市)$")
+# 方位词单独成段时是销售大区（"Territory Account Executive - South"），不是地点——哪怕地点字段里
+# 恰好有这个词（"South San Francisco, CA"）。
+_TITLE_TAIL_COMPASS_WORDS = frozenset({
+    "north", "south", "east", "west", "central", "northern", "southern", "eastern", "western",
+    "northeast", "northwest", "southeast", "southwest", "midwest",
+})
+_TITLE_OPEN_BRACKETS = "(（[【"
+_TITLE_CLOSE_BRACKETS = ")）]】"
 
-    仅当连字符两侧都有空白时才截断（英文 "Title - City" 写法），
-    避免误伤中文 "部门-角色-方向" 这类紧凑复合标题。
+
+def _title_tail_repeats_location(tail: str, locations) -> bool:
+    """标题尾段是不是只在重复这个岗自己的地点字段：尾段的**每个词**都得在地点里找得到。
+
+    西文按整词比（"CA" 要地点里真有 "CA"，不做州名换算）；中文去掉 省/市 这类后缀后按子串比
+    （「上海」对得上「上海市-浦东新区」「中国上海」）。任何一个词对不上就不算——
+    "Shanghai (Hybrid)"、"North America"、「上海研发中心」都留在标题里。
+    尾段整段是 CITY_ALIASES 的键时再按别名比一次（标题写 Singapore、地点字段给的是「新加坡」）。
+    """
+    loc_text = " ".join(loc for loc in locations if loc).lower()
+    if not loc_text:
+        return False
+    alias = CITY_ALIASES.get(tail.strip().lower())
+    if alias and alias.lower() in loc_text:
+        return True
+    words = [w for w in _TITLE_TAIL_WORD_SPLIT_RE.split(tail.lower()) if w]
+    if not words or all(w in _TITLE_TAIL_COMPASS_WORDS for w in words):
+        return False
+    loc_words = set(_TITLE_TAIL_WORD_SPLIT_RE.split(loc_text))
+    for word in words:
+        if _TITLE_TAIL_CJK_RE.search(word):
+            core = _TITLE_TAIL_ADMIN_SUFFIX_RE.sub("", word)
+            if word not in loc_text and (len(core) < 2 or core not in loc_text):
+                return False
+        elif word not in loc_words:
+            return False
+    return True
+
+
+def title_first_segment(title: Optional[str]) -> str:
+    """「 - 」分段标题的第一段；不分段就是整条（去首尾空白）。"""
+    return _TITLE_SEP_RE.split((title or "").strip(), maxsplit=1)[0]
+
+
+def clean_title(title: str, *locations: Optional[str]) -> str:
+    """清洗岗位标题：去首尾空白、去多余空格；尾部的 " - 地点" 只在**与该岗的地点字段重复**时才去掉。
+
+    locations = 这个岗自己的地点（adapter 原文 + clean_location 之后的，哪个对得上都算）。不传就什么都不截。
+
+    🚫 别退回「见到 " - " 就把后面全截掉」（2026-10-10 之前的写法 `re.sub(r"\\s+[-–—]\\s+.*$", "", t)`）：
+    ❌ 财通证券「杭州金城路证券营业部 - 副总经理」「… - 财富顾问」「… - 业务副总经理」入库后三行都叫
+       「杭州金城路证券营业部」；Greenhouse「Software Engineer - Computer Vision」只剩「Software Engineer」；
+       「Machine Learning Researcher - Intern」丢了 Intern，而招聘类型的实习判定只认标题。
+    ✅ 根因：那条正则只看分隔符、不看截掉的是什么。live 实测见 crawler/test_normalizer.py 的
+       CleanTitleTailTest 文件头——被它截掉的绝大多数不是地点，是岗位名 / 方向 / 团队。
+    ✅ 现行判据不猜「这像不像地名」，只问「这段信息地点字段里是不是已经有了」：有 = 截掉零损失；
+       没有（方向、团队、销售大区、地点字段没给）= 一律保留。从尾部逐段判，遇到第一段不是地点就停，
+       所以「Engineer - Payments - Shanghai」留下「Engineer - Payments」，第一段永远不动。
+       括号里的「 - 」不是分段："Software Engineer (Remote - US)" 从那里截会留下半个括号，整条保留。
+    地点字段为空时保留尾巴还有个用处：normalize 里的标题城市兜底（location_or_title_city）读得到它。
+    ⚠️ 标题保留完整之后，读标题的地方要认得「 - 」后面是业务线不是岗位名：职能分类与方向认领在
+       lib/china-keyword-expansion.js 的 _titleLeadSegment（Python 镜像 china_keyword_expansion._title_lead_segment），
+       死链巡检去页面里找标题用 audit_dead_links._title_key。新增读标题的判定逻辑时照此处理。
     """
     t = strip_nul(title).strip()
     t = re.sub(r"\s+", " ", t)
-    t = re.sub(r"\s+[-–—]\s+.*$", "", t).strip()
-    return t
+    while True:
+        last = None
+        for last in _TITLE_SEP_RE.finditer(t):
+            pass
+        if last is None:
+            return t
+        tail = t[last.end():]
+        closes = sum(tail.count(ch) for ch in _TITLE_CLOSE_BRACKETS)
+        if closes > sum(tail.count(ch) for ch in _TITLE_OPEN_BRACKETS):
+            return t
+        if not _title_tail_repeats_location(tail, locations):
+            return t
+        t = t[:last.start()]
 
 
 def clean_location(location: Optional[str]) -> Optional[str]:
@@ -321,8 +394,8 @@ def make_content_hash(title: str, location: Optional[str], summary: Optional[str
 
 
 def normalize(raw: RawJob, *, source_id: str, company: str, regions=None) -> dict:
-    title = clean_title(raw.title)
     location = clean_location(raw.location)
+    title = clean_title(raw.title, raw.location, location)
     full_summary = clean_summary(raw.summary)
     salary = clean_salary(raw.salary_text)
     job_type = (

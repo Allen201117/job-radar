@@ -405,11 +405,65 @@ def _is_latin_title(text):
     return not re.search(r"[一-龥]", text)
 
 
+# 「 - 」分段（连字符两侧都有空白）的标题：岗位名在第一段，后面是业务线 / 团队 / 方向。
+# 与 JS 的 TITLE_SPACED_DASH / TITLE_ORG_UNIT_HEAD / _firstSpacedDash / _titleLeadWithFunction 逐条同口径
+# （理由与 live 数字写在 JS 那边；改一边必须改另一边）。
+_TITLE_SPACED_DASH = re.compile(r"\s[-–—]\s")
+_TITLE_ORG_UNIT_HEAD = re.compile(
+    r"(?:营业部|事业部|事业群|分公司|子公司|支行|分行|研究院|实验室|中心|部门|(?<!干)部|组|团队"
+    r"|\b(?:department|dept|division))$"
+)
+_TITLE_OPEN_BRACKETS = "(（[【"
+_TITLE_CLOSE_BRACKETS = ")）]】"
+
+
+def _first_spaced_dash(raw) -> int:
+    """第一个不在括号里的「 - 」的位置；没有返回 -1。"""
+    depth = 0
+    scanned = 0
+    pos = 0
+    while True:
+        m = _TITLE_SPACED_DASH.search(raw, pos)
+        if not m:
+            return -1
+        for ch in raw[scanned:m.start()]:
+            if ch in _TITLE_OPEN_BRACKETS:
+                depth += 1
+            elif ch in _TITLE_CLOSE_BRACKETS and depth > 0:
+                depth -= 1
+        scanned = m.start()
+        if depth == 0:
+            return m.start()
+        pos = m.start() + 1
+
+
+def _title_lead_with_function(raw):
+    """分段标题的主干与它的职能（入参须已 normalize_for_match）。没有主干可取时返回 (整串, None)。"""
+    dash = _first_spaced_dash(raw)
+    if dash > 0:
+        head = raw[:dash].strip()
+        if head and not _TITLE_ORG_UNIT_HEAD.search(head):
+            fn = _classify_title_segment(head)
+            if fn != "其他":
+                return head, fn
+    return raw, None
+
+
+def _title_lead_segment(raw) -> str:
+    return _title_lead_with_function(raw)[0]
+
+
 def _classify_job_title_base_function(title="") -> str:
     """对应 JS classifyJobTitleFunction 的基础标题分类层。"""
     raw = normalize_for_match(title)
     if not raw:
         return "其他"
+    lead, fn = _title_lead_with_function(raw)
+    return fn or _classify_title_segment(lead)
+
+
+def _classify_title_segment(raw) -> str:
+    """不分段地判一段标题（入参须已 normalize_for_match）。"""
     if _is_latin_title(raw) and "," in raw:
         head = raw.split(",", 1)[0].strip()
         if head:
@@ -447,9 +501,13 @@ def _strip_body_recruit_meta(summary):
 
 def _title_function_without_recruit_event(title=""):
     """剥掉招聘活动标签后重判：None 表示标题里没有可剥的活动标签。"""
-    raw = normalize_for_match(title)
-    if not raw:
+    full = normalize_for_match(title)
+    if not full:
         return "其他"
+    # 分段标题只在主干上剥；主干整个就是活动标签（剥完不剩字）才看整串。同 JS。
+    lead = _title_lead_segment(full)
+    lead_is_role = lead != full and re.sub(r"[\s\d届年级]+", "", _RECRUIT_EVENT_LABEL.sub(" ", lead)) != ""
+    raw = lead if lead_is_role else full
     without_event = _RECRUIT_EVENT_LABEL.sub(" ", raw).strip()
     if without_event == raw:
         return None
@@ -587,18 +645,20 @@ def _title_claimed_by_rival_group(title, query) -> bool:
     if not title_text:
         return False
 
-    def hits_title(index):
-        return any(contains_term(title_text, term) for term in CHINA_KEYWORD_GROUPS[index])
+    def hits(index, text):
+        return any(contains_term(text, term) for term in CHINA_KEYWORD_GROUPS[index])
 
+    # 查询自己的方向看完整标题；别的方向来认领只看主干（「 - 」后面的团队 / 业务线名不算）。同 JS。
     for index in query_groups:
-        if index not in GENERIC_ANCHOR_GROUP_INDEXES and hits_title(index):
+        if index not in GENERIC_ANCHOR_GROUP_INDEXES and hits(index, title_text):
             return False
+    lead_text = _title_lead_segment(title_text)
     for index in range(len(CHINA_KEYWORD_GROUPS)):
         if index in query_groups or index in GENERIC_ANCHOR_GROUP_INDEXES:
             continue
         if not KEYWORD_GROUP_FUNCTIONS[index]:
             continue
-        if hits_title(index):
+        if hits(index, lead_text):
             return True
     return False
 

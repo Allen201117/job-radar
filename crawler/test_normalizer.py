@@ -390,3 +390,131 @@ class TaiwanRejectionTests(unittest.TestCase):
             with self.subTest(location=location):
                 ok, reason = normalizer.validate_job_quality(self._job(location), "https://example.com/jobs")
                 self.assertTrue(ok, f"{location} 被误杀: {reason}")
+
+
+class CleanTitleTailTest(unittest.TestCase):
+    """标题里「 - 」后面那一段：只有和这个岗自己的地点字段重复才截，其余一律保留。
+
+    用例全部取自 2026-10-10 live 抓到的 adapter 出口原始标题。那一轮量的是 966 个源、281,084 个岗
+    （库里存的是截断后的标题，量不出来，只能从 adapter 出口量；Moka / 国聘 / 比亚迪等要开浏览器或逐岗核验的源没量）：
+      · 旧规则（见到「 - 」就把后面全截掉）动了 27,833 个标题（9.90%）。截掉的那一段按「是不是与该岗地点字段对得上 /
+        是不是地名词」独立打标：岗位名 · 方向 · 团队 25,386（91.2%），地点 2,043（7.3%），实习 · 编号这类 404（1.5%）。
+      · 不同的岗被洗成同一个名字：旧规则 15,327 个岗，新规则 718 个（剩下的是同岗多地、只差末尾城市）。
+      · 新旧对拍，两个方向：不该截的保住 25,785；与地点字段重复的照旧截掉 759；像地点但没截的 1,284
+        （845 是销售大区 / Remote / Hybrid 这类地点字段里没有的信息，439 是同一个地方写法不同——主要是州缩写对全称）；
+        旧规则不动、新规则却动了的 0。
+    拿这批原始标题重量的方法：逐源跑 adapter.fetch + parse（CRAWL_DETAIL_CAP=0），对每个 RawJob 比
+    旧正则、clean_title(title, raw.location, clean_location(raw.location)) 与原文三者。
+    """
+
+    def test_role_after_separator_survives(self):
+        # 财通证券：改前三行入库后都叫「杭州金城路证券营业部」。
+        titles = [
+            "杭州金城路证券营业部 - 副总经理",
+            "杭州金城路证券营业部 - 财富顾问",
+            "杭州金城路证券营业部 - 业务副总经理",
+        ]
+        cleaned = [normalizer.clean_title(t, "杭州市", "杭州") for t in titles]
+        self.assertEqual(cleaned, titles)
+        self.assertEqual(len(set(cleaned)), 3)
+
+    def test_team_direction_and_meta_tails_are_kept(self):
+        for title, location in (
+            ("Software Engineer - Computer Vision", "San Mateo, CA United States"),
+            ("算法架构工程师 - 训练框架方向", "北京"),
+            ("AI产品设计师 - 飞书设计", "北京"),
+            ("Agent研发工程师 - 抖音用户增长", "北京"),
+            ("Machine Learning Researcher - Intern", "New York"),
+            ("Tech Ops Engineer II - AMZ10364799", "Florence, Kentucky, United States"),
+            ("Retail - Lead Store Advisor（WUHAN SKP）", "Wuhan"),
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(normalizer.clean_title(title, location, normalizer.clean_location(location)), title)
+
+    def test_tail_repeating_the_location_field_is_dropped(self):
+        for title, location, expected in (
+            ("Customer Success Manager - Boston", "Boston, Massachusetts, USA", "Customer Success Manager"),
+            ("Sales Engineer - UK", "Remote - UK", "Sales Engineer"),
+            ("Field Calibration Technician - Remote", "Remote United States", "Field Calibration Technician"),
+            ("Sr. Manager, Medical Education-AMI Programs - Irvine, CA", "Irvine, CA, United States",
+             "Sr. Manager, Medical Education-AMI Programs"),
+            ("软件工程师 - 上海", "上海市-浦东新区", "软件工程师"),
+            ("软件工程师 - 上海市", "上海", "软件工程师"),
+            ("销售经理 — 北京/上海", "北京、上海", "销售经理"),
+            # 标题写英文、地点字段给中文：靠 CITY_ALIASES 对上。
+            ("Site Reliability Engineer - Singapore", "新加坡", "Site Reliability Engineer"),
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(
+                    normalizer.clean_title(title, location, normalizer.clean_location(location)), expected)
+
+    def test_only_trailing_location_segments_go(self):
+        for title, location, expected in (
+            ("Staff Frontend Engineer - UI Platform - Seattle", "Seattle, Washington",
+             "Staff Frontend Engineer - UI Platform"),
+            ("招聘专员（外包） - 产研 - 北京", "北京", "招聘专员（外包） - 产研"),
+            ("Engineer - Shanghai - China", "Shanghai, China", "Engineer"),
+            # 地点在中间：后面还有内容，不动。
+            ("Engineer - Shanghai - Payments", "Shanghai", "Engineer - Shanghai - Payments"),
+            # 第一段永远留着，哪怕它自己就是个地名。
+            ("上海 - 软件工程师", "上海", "上海 - 软件工程师"),
+            ("Shanghai - Beijing", "Shanghai, Beijing", "Shanghai"),
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(
+                    normalizer.clean_title(title, location, normalizer.clean_location(location)), expected)
+
+    def test_place_like_tail_not_in_location_field_is_kept(self):
+        # 销售大区 / 驻地 / 办公方式：地点字段里没有这条信息，截掉就丢了。
+        for title, location in (
+            ("Territory Account Executive - West", "United States"),
+            ("Clinical Account Executive, Multiple Myeloma - Austin, TX", "Remote United States"),
+            ("Sr. Client Account Manager (Growth) - Greater China Region", "Singapore, SG"),
+            ("Software Engineer - Shanghai (Hybrid)", "Shanghai"),
+            ("激光雷达算法专家 - 上海/北京", "上海"),
+            # 州缩写不换算：地点写的是全称，尾巴留着（只是好不好看的问题）。
+            ("Area Manager - Tracy, CA", "Tracy, California, United States"),
+            # 西文按整词比，不做子串。
+            ("Designer - Art", "Stuttgart, Germany"),
+            # 方位词是销售大区，哪怕地点字段里恰好有这个词。
+            ("Territory Account Executive - South", "South San Francisco, CA"),
+            ("Enterprise Account Executive - East", "East Hanover, NJ"),
+            # 括号里的「 - 」不是分段：从那里截会留下半个括号。
+            ("Software Engineer (Remote - US)", "Remote, US"),
+            ("Point72 Academy Investment Analyst Program (2027 – HK)", "HK"),
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(normalizer.clean_title(title, location, normalizer.clean_location(location)), title)
+
+    def test_without_location_nothing_is_dropped(self):
+        self.assertEqual(normalizer.clean_title("有机合成研究员 - 西安"), "有机合成研究员 - 西安")
+        self.assertEqual(normalizer.clean_title("Engineer - Shanghai", None, None), "Engineer - Shanghai")
+        self.assertEqual(normalizer.clean_title("Engineer - Shanghai", "", None), "Engineer - Shanghai")
+
+    def test_whitespace_and_compact_hyphens(self):
+        self.assertEqual(normalizer.clean_title("  部门-角色-方向  ", "北京"), "部门-角色-方向")
+        self.assertEqual(normalizer.clean_title("营业部   -   副总经理", "杭州"), "营业部 - 副总经理")
+        self.assertEqual(normalizer.clean_title("软件工程师-上海", "上海"), "软件工程师-上海")
+
+    def _normalize(self, title, location):
+        raw = RawJob(company="测试公司", title=title, location=location,
+                     jd_url="https://example.com/job/123")
+        return normalizer.normalize(raw, source_id="s1", company="测试公司")
+
+    def test_normalize_keeps_distinct_roles_distinct(self):
+        a = self._normalize("杭州金城路证券营业部 - 副总经理", "杭州市")
+        b = self._normalize("杭州金城路证券营业部 - 财富顾问", "杭州市")
+        self.assertEqual(a["title"], "杭州金城路证券营业部 - 副总经理")
+        self.assertNotEqual(a["title"], b["title"])
+        self.assertNotEqual(a["content_hash"], b["content_hash"])
+
+    def test_normalize_sees_intern_written_after_the_separator(self):
+        # 招聘类型的实习判定只认标题：尾巴被截掉时这类岗会被当成社招。
+        job = self._normalize("Machine Learning Researcher - Intern", "New York")
+        self.assertEqual(job["job_type"], "实习")
+
+    def test_normalize_title_city_fallback_reads_kept_tail(self):
+        # 地点字段为空时尾巴留在标题里，标题城市兜底才认得出来。
+        job = self._normalize("有机合成研究员 - 西安", None)
+        self.assertEqual(job["title"], "有机合成研究员 - 西安")
+        self.assertEqual(job["location"], "西安")

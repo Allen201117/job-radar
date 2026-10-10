@@ -522,3 +522,47 @@ class UncoveredResidualParityTest(unittest.TestCase):
     def test_new_synonym_groups(self):
         self.assertIn("英语", self.flat("英文"))
         self.assertIn("视觉设计", self.flat("美工"))
+
+
+class SegmentedTitleTest(unittest.TestCase):
+    """「岗位名 - 业务线」分段标题：与 tests/classify-job-function.test.js 末尾同批用例（2026-10-10）。"""
+
+    def test_lead_segment_decides_function(self):
+        for title, expected in (
+            ("Agent研发工程师 - 抖音用户增长", "研发"),
+            ("资深安全研发工程师（客户端方向） - 安全与风控", "研发"),
+            ("标准运营 - 内容质量与数据服务平台", "运营"),
+            ("增长策略产品经理（投放方向） - TikTok用户增长", "产品"),
+            ("广告算法工程师 - 国际化广告创意与品牌", "研发"),
+            ("Software Engineer - Growth & Monetization", "研发"),
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(cke.classify_job_function(title), expected)
+
+    def test_falls_back_to_whole_title(self):
+        for title, expected in (
+            # 第一段判不出职能
+            ("小米汽车 - 自动驾驶- 行车（城区）产品经理 - 实习", "产品"),
+            ("Machine Learning - Compiler Engineer , AWS Neuron", "研发"),
+            # 第一段是部门 / 机构名
+            ("技术中心 - BI数据产品经理", "产品"),
+            ("技术中心 - 高级视觉设计师（库街区）", "设计"),
+            ("技术部 - 销售工程师", "销售"),
+            # 括号里的「 - 」不是分段
+            ("Product Manager (Growth - Payments)", "产品"),
+            ("数据分析师（风控 - 反欺诈）", "数据"),
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(cke.classify_job_function(title), expected)
+
+    def test_recruit_event_label_is_stripped_on_the_lead_segment(self):
+        self.assertEqual(cke.classify_job_function("校园招聘专员 - 研发中心"), "职能")
+        self.assertEqual(cke.classify_job_function("2027 届校园招聘 - 后台开发工程师"), "研发")
+
+    def test_rival_claim_reads_lead_segment_only(self):
+        body = "负责机器学习平台的研发"
+        self.assertTrue(cke.job_matches("Software Engineer - AI Compute Infrastructure", body, "机器学习"))
+        self.assertEqual(
+            cke.job_matches("Software Engineer - AI Compute Infrastructure", body, "机器学习"),
+            cke.job_matches("Software Engineer", body, "机器学习"),
+        )
