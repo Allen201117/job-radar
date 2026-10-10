@@ -210,7 +210,10 @@ class StructuredFieldExtractionTests(unittest.TestCase):
         # 月日补零成 ISO：前端只认 YYYY-MM-DD，不补零的真截止日一直显示不出来。
         self.assertEqual(normalizer.extract_deadline("投递截止：2026年6月30日"), "2026-06-30")
         self.assertEqual(normalizer.extract_deadline("长期有效，欢迎随时投递"), "长期有效")
-        self.assertEqual(normalizer.extract_deadline("rolling basis"), "长期有效")
+        self.assertEqual(
+            normalizer.extract_deadline("Applications are reviewed on a rolling basis."), "长期有效")
+        # 同一句里没有招聘类词的 rolling basis 说的可能是奖金、项目、入职时间。
+        self.assertIsNone(normalizer.extract_deadline("rolling basis"))
         self.assertIsNone(normalizer.extract_deadline("岗位职责：写代码"))
 
     def test_deadline_shared_cases(self):
@@ -219,6 +222,8 @@ class StructuredFieldExtractionTests(unittest.TestCase):
         2026-10-10 香港库全集：全库 30,507 行「长期有效」里，库里正文真写着「长期有效 / 长期招聘」的
         只有 43 行，其余几乎都是英文 JD 福利条款里的 long-term / rolling 触发的；「截至 + 日期」多是
         年龄、工龄的计算基准日或公司介绍里的统计时点，不是投递截止日。
+        同日复核：正文含这两个中文词的在招岗 55 行里，是招聘声明的只有 3 行（其余是「建立长期有效合作关系」
+        一类）——所以中文也要看前后文；带 src 的用例是这次逐条看过的库内正文与官网全文。
         """
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "..", "tests", "fixtures", "deadline-text-cases.json")
