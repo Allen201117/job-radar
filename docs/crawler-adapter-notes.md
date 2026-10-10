@@ -23,6 +23,11 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #   radancy.py = Radancy/TalentBrew（欧莱雅 2026-10-05 从 Avature 迁来）：sitemap.xml → 按链接城市/
                          #     中文标题粗筛 → 逐岗详情页 ld+json。🚫 **TalentBrew 的 robots 一律禁 /search-jobs**：第一版抓搜索页，
                          #     本机试跑全绿、上线首轮被 robots 门挡成 skipped——接外企门户先读对方 robots.txt，再选入口。
+                         #   wt.py / hotjob.py 的截止日（2026-10-10）：🚫 **列表里的 endDate 大多不是截止日**。只有「长期发布」标记
+                         #     （wt `isLongTermRelease` / hotjob `longTermRelease`）== 1 才是官网显示的「下线时间」；== 0 时官网写「长期发布」，
+                         #     endDate 是系统填的数（wt 回请求当天、hotjob 每晚续成 +7 天、3000-01-01、发布日+12 个月、早已过去的日期）。
+                         #     wt 的 == 1 里还有一类「请求当天 + N 个月」的滚动值，同样不写。依据与计数在两个 adapter 的 `_deadline` 注释里。
+                         #     ⚠️ deadline 在 `_PRESERVE_IF_EMPTY` 里：adapter 不写 ≠ 库里清掉，存量假日期要另行清理。
                          #   gllue.py = Gllue Next.js SSR 通用层（龙湖等自有域）：?page= 1-based 10 条/页，
                          #     正文只在详情页（列表页没有），逐岗抓、走 resolve_detail_cap 由快/重档决定抓不抓。
                          #   cnstaff.py = 聘客 cnstaff 通用层：POST /api/{tenant}/joblist.json（form `jt=0`）零鉴权，

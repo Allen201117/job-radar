@@ -135,7 +135,71 @@ class WtSchoolEntryGateTest(unittest.TestCase):
         self.assertEqual(self.a._skipped_school_entries, 1)
 
 
+class WtDeadlineTest(unittest.TestCase):
+    """endDate 只有在 isLongTermRelease == 1 且不是滚动窗口时才是截止日（2026-10-10 立）。
+
+    当天全量 39 个租户 16,594 个岗：isLongTermRelease=0 的 15,753 个，endDate 分别是 3000-01-01
+    6,827 / 请求当天 2,470 / 已过去却仍在列 590 / 550 天以外的占位 1,902 / 550 天以内的未来日期 3,964
+    （多数是发布日 + 12 个月）；平台自己的前端对这一类一律显示「长期发布」，不显示日期。
+    """
+
+    def setUp(self):
+        self.a = WtAdapter()
+        self.a.company_name = "测试公司"
+        self.a._bind_source("https://test.hotjob.cn/wt/test/web/index")
+
+    def _deadline(self, end, flag=1, fetched_on="2026-10-10", **extra):
+        post = {"postId": "1", "postName": "某岗", "endDate": end,
+                "_wtFetchedOn": fetched_on, **extra}
+        if flag is not None:
+            post["isLongTermRelease"] = flag
+        return self.a._map(post).deadline
+
+    def test_long_term_post_never_gets_a_deadline(self):
+        for end in ("2026-10-10",      # 请求当天（库里同一个岗 09-18 存的是 09-18，10-10 再问变成 10-10）
+                    "3000-01-01",      # 占位
+                    "2027-10-09",      # 发布日 + 12 个月
+                    "2030-12-31",      # 远未来占位
+                    "2023-06-26",      # 三年前，岗位照样在列、详情页照样能投
+                    "2026-12-11"):     # 看着像真日期，官网页面照样写「长期发布」
+            self.assertIsNone(self._deadline(end, flag=0, publishDate="2026-10-09"), end)
+
+    def test_post_with_offline_time_keeps_it(self):
+        self.assertEqual(self._deadline("2026-10-31"), "2026-10-31")
+        self.assertEqual(self._deadline("2026-12-31", flag="1"), "2026-12-31")
+
+    def test_missing_or_unknown_flag_means_no_deadline(self):
+        """判不出就不写：缺字段 / 取值不认识，一律当成没有截止日。"""
+        self.assertIsNone(self._deadline("2026-10-31", flag=None))
+        self.assertIsNone(self._deadline("2026-10-31", flag=2))
+        self.assertIsNone(self._deadline("2026-10-31", flag=True))
+
+    def test_rolling_window_is_not_a_deadline(self):
+        """isLongTermRelease=1 的岗里 535/841 个的 endDate 是「请求当天 + N 个月」，跟着请求日走：
+        库里 09-18 存的值与 10-10 再问到的值 14/14 不同；同一个岗在新版接口里是另一个固定日期。"""
+        for end in ("2026-10-10", "2026-11-10", "2027-01-10", "2027-04-10", "2027-10-10"):
+            self.assertIsNone(self._deadline(end), end)
+        # 请求日的前一天也算锚点：接口若有缓存 / 跨零点，值会停在前一天那一档。
+        self.assertIsNone(self._deadline("2027-01-09"))
+        # 不是整月偏移的照常保留。
+        self.assertEqual(self._deadline("2027-01-11"), "2027-01-11")
+        self.assertEqual(self._deadline("2027-01-08"), "2027-01-08")
+
+    def test_rolling_window_at_month_end(self):
+        """月末加月有两种算法（截到月底 / 溢出到下月），两种都算滚动窗口。"""
+        self.assertIsNone(self._deadline("2027-02-28", fetched_on="2026-11-30"))
+        self.assertIsNone(self._deadline("2027-03-02", fetched_on="2026-11-30"))
+        self.assertEqual(self._deadline("2027-03-05", fetched_on="2026-11-30"), "2027-03-05")
+
+    def test_unparseable_end_date_is_dropped(self):
+        self.assertIsNone(self._deadline(""))
+        self.assertIsNone(self._deadline(None))
+        self.assertIsNone(self._deadline("长期"))
+
+
 class _FakeResp:
+    headers = {}
+
     def __init__(self, payload):
         self._p = payload
 
@@ -163,6 +227,29 @@ class _FakeClient:
         rows = self.pages.get((params["recruitType"], params["page"]), [])
         total = sum(len(v) for (rt, _), v in self.pages.items() if rt == params["recruitType"])
         return _FakeResp({"postList": [dict(r) for r in rows], "rowCount": total})
+
+
+class WtFetchDayTest(unittest.TestCase):
+    """滚动窗口是相对「对方服务器的今天」算的 → 请求日取响应头 Date（换成北京日期），不取本机时钟。"""
+
+    def test_fetch_stamps_rows_with_server_day_in_beijing(self):
+        import adapters.wt as wt
+        _FakeClient.pages = {(2, 1): [
+            {"postId": "R", "postName": "滚动岗", "isLongTermRelease": 1, "endDate": "2027-01-10"},
+            {"postId": "F", "postName": "定日岗", "isLongTermRelease": 1, "endDate": "2026-12-31"},
+        ]}
+        orig_client, orig_headers = wt.httpx.Client, _FakeResp.headers
+        wt.httpx.Client = _FakeClient
+        # 格林尼治 10-09 17:30 = 北京 10-10 01:30：按 UTC 日期算会把 2027-01-10 当成真截止日放行。
+        _FakeResp.headers = {"date": "Fri, 09 Oct 2026 17:30:00 GMT"}
+        try:
+            a = WtAdapter()
+            a.company_name = "测试公司"
+            by = {j.title: j for j in a.parse(a.fetch("https://test.hotjob.cn/wt/test/web/index"))}
+        finally:
+            wt.httpx.Client, _FakeResp.headers = orig_client, orig_headers
+        self.assertIsNone(by["滚动岗"].deadline)
+        self.assertEqual(by["定日岗"].deadline, "2026-12-31")
 
 
 class WtCrossChannelDedupeTest(unittest.TestCase):

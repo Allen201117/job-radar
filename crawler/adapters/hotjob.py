@@ -241,6 +241,24 @@ class HotJobAdapter(PlaywrightAdapter):
             if data.get("serviceCondition"):
                 p["serviceCondition"] = data["serviceCondition"]
 
+    # ⛔ endDate 只有 longTermRelease == 1 时才是截止日，判不出的一律不写（2026-10-10 立）。
+    # ❌ 现象：直接把 endDate 写成 deadline → 库里 622 行在招岗「截止日已过」，当天却都还在官网列表里，
+    #    日期最早到 2019 年。
+    # ✅ 根因：平台自己的前端是 `0 === longTermRelease ? "长期发布" : format(endDate)`（「下线时间」一栏）。
+    #    =0 的岗 endDate 只是系统填的数：3000-01-01 / 发布日+12 个月 / 远未来占位 / 早已过去的日期，
+    #    以及每晚 02:10 前后被续成「当时 + 7 天」的滚动值（库里更早存下、今天仍在列的 78 行逐行变了）。
+    #    真渲染 3 个详情页逐个对上：=0 且 endDate 为 2027-09-10 / 3000-01-01 的写「长期发布」，
+    #    =1 的写「2026-10-22 23:59:59下线」；另一个 =0 且 endDate 在 2023 年的详情页照样有「立即投递」。
+    #    当天全量 20,626 个岗：=0 的 17,655 个里 749 个 endDate 已过去仍在列；=1 的 2,971 个没有一个是过去的，
+    #    库里更早存下、今天仍在列的 =1 行 109 行里 108 行日期没变。
+    # ⚠️ 没写不等于库里清掉：deadline 在 jobs_db._PRESERVE_IF_EMPTY 里，新值为空时保留旧值
+    #    （岗位从「指定下线时间」改回「长期发布」后，旧日期会留在库里）。
+    @staticmethod
+    def _deadline(post: dict) -> Optional[str]:
+        if str(post.get("longTermRelease")).strip() != "1":
+            return None
+        return normalizer.coerce_iso_date(post.get("endDate"))
+
     def _map(self, post: dict) -> Optional[RawJob]:
         if not isinstance(post, dict):
             return None
@@ -263,5 +281,5 @@ class HotJobAdapter(PlaywrightAdapter):
             posted_at=normalizer.pick_publish_date(post) or normalizer.coerce_iso_date(post.get("publishDate")),
             education=post.get("educationName") or post.get("educationStr") or post.get("education") or None,
             experience=post.get("workYearName") or post.get("workExperience") or None,
-            deadline=normalizer.coerce_iso_date(post.get("endDate")),
+            deadline=self._deadline(post),
         )

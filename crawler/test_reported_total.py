@@ -13,6 +13,8 @@ from adapters.wt import WtAdapter
 
 
 class _FakeResponse:
+    headers = {}   # wt adapter 读响应头 Date 定「请求日」
+
     def __init__(self, payload=None, text=""):
         self._payload = payload if payload is not None else {}
         self.text = text
