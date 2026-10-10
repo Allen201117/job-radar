@@ -54,6 +54,45 @@ test("标题地区按中文词边界补充，不能把五大连池错认成大�
   assert.equal(A.inferAnnouncementRegion("某单位公开招聘公告"), null);
 });
 
+// 2026-10-10 线上实测：卡片自己按标题补地区、筛选器只认库里的字段——两套口径。
+// 3 张卡片写着地区却按该地区筛不到（重庆下拉 25、卡片 26），「武汉市」「杭州市」在下拉里根本没有。
+test("地区只在读侧定一次：库里没有才按标题补，且一律落到省级", () => {
+  assert.equal(A.toAnnouncementPosting(row({ region: null, title: "重庆市合川区消防救援支队招聘公告" })).region, "重庆市");
+  assert.equal(A.toAnnouncementPosting(row({ region: null, title: "武汉市某单位公开招聘公告" })).region, "湖北省");
+  assert.equal(A.toAnnouncementPosting(row({ region: "", title: "杭州某研究院招聘启事" })).region, "浙江省");
+  // 库里有值就不看标题（抓取端做过交叉验证，比标题子串可靠）
+  assert.equal(A.toAnnouncementPosting(row({ region: "全国", title: "北京市某单位公开招聘公告" })).region, "全国");
+  // 判不出就是 null，不硬凑
+  assert.equal(A.toAnnouncementPosting(row({ region: null, title: "五大连池风景区公开招聘公告" })).region, null);
+  // 标题补出来的地区必须都是省级写法，否则下拉里会多出「杭州市」这种凑不成一项的散户
+  for (const city of ["大连", "杭州", "广州", "深圳", "南京", "武汉", "成都", "西安", "郑州", "长沙"]) {
+    assert.match(A.inferAnnouncementRegion(`${city}某单位公开招聘公告`), /(省|北京市|天津市|上海市|重庆市)$/, city);
+  }
+  const client = require("node:fs").readFileSync(path.join(__dirname, "..", "app", "programs", "announcements-client.tsx"), "utf8");
+  assert.doesNotMatch(client, /inferAnnouncementRegion/, "卡片不许再自己另推一遍地区：筛选器读不到它推的值");
+});
+
+test("招满即止 / 报满即止 认得出来，日期区间不误认", () => {
+  assert.equal(A.isRollingDeadline("招满即止"), true);
+  assert.equal(A.isRollingDeadline("报满即止"), true);
+  assert.equal(A.isRollingDeadline("2026-09-28 至 2026-10-10"), false);
+  assert.equal(A.isRollingDeadline(null), false);
+});
+
+// 2026-10-10：在展示的公告从 455 条涨到约 1,500 条。PostgREST 单次最多回 1000 行、超出是静默截断。
+test("公告取数分页取、翻页排序以 id 收尾、上限留在缓存单条 2MB 以内", () => {
+  const store = require("node:fs").readFileSync(path.join(__dirname, "..", "lib", "announcement-postings-store.ts"), "utf8");
+  assert.match(store, /fetchAllPages</, "不分页 = 超过 1000 行的部分悄悄没了（复用 lib/supabase-paginate，它自己有行为测试）");
+  assert.match(store, /if \(from >= MAX_ROWS\) return \{ data: \[\], error: null \}/, "上限要夹在分页回调里，否则会一路翻到底");
+  assert.match(store, /\.range\(from, Math\.min\(to, MAX_ROWS - 1\)\)/);
+  assert.match(store, /return toAnnouncementPostings\(fetched\)/, "后面的页出错时用已取到的，别让整块公告区消失");
+  assert.match(store, /\.order\("published_at"[\s\S]{0,200}?\.order\("id"/, "翻页边界落在同一天发布的并列块里会重复 / 漏行");
+  const max = Number(/const MAX_ROWS = (\d+);/.exec(store)[1]);
+  assert.ok(max >= 2000, "国聘一轮就有 1,200+ 条在报名期的公告");
+  assert.ok(max * 545 < 2 * 1024 * 1024, "实测每条 472 字节，算上缓存序列化的转义约 545；超过 2MB 缓存写不进去，每个请求都会重取一遍");
+  assert.match(store, /console\.error\([\s\S]{0,80}读取上限/, "撞上限必须留下痕迹，不许静默截断");
+});
+
 test("公告页首屏限量加载、文案说明搜索范围和未知截止日", () => {
   const fs = require("node:fs");
   const source = fs.readFileSync(path.join(__dirname, "..", "app", "programs", "announcements-client.tsx"), "utf8");

@@ -15,14 +15,15 @@ import {
 import { Badge, Button, EmptyState, Popover, Segmented, Spinner, buttonVariants } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { formatDateLabel } from "@/lib/relative-time";
-import { AUDIENCE_LABEL, inferAnnouncementRegion, type AnnouncementCard } from "@/lib/announcement-postings";
+import { AUDIENCE_LABEL, type AnnouncementCard } from "@/lib/announcement-postings";
 import {
   ANNOUNCEMENT_PAGE_SIZE,
   CLOSING_SOON_DAYS,
   EMPTY_FILTERS,
+  UNKNOWN_REGION,
   activeFilterCount,
   buildFacets,
-  daysUntilDeadline,
+  deadlineChip,
   matchesFilters,
   sortPostings,
   type AnnouncementFilters,
@@ -254,7 +255,7 @@ export default function AnnouncementsClient({
         <div className="mt-5">
           <EmptyState
             title="没有符合条件的公告"
-            description="换个地区或放宽条件试试——公告每天从各省人社厅官网抓取并复验，报名已截止的会自动下架。"
+            description="换个地区或放宽条件试试——公告每天从各省人社厅官网和国聘收录，过了报名截止日的会自动下架。"
           />
         </div>
       ) : (
@@ -366,20 +367,6 @@ function FacetOption({
   );
 }
 
-/** 报名截止的展示文案 + 紧迫度色。 */
-function deadlineChip(posting: AnnouncementCard, today: string) {
-  const left = daysUntilDeadline(posting.deadline, today);
-  if (left === null) {
-    return posting.deadlineText
-      ? { tone: "neutral" as const, text: `报名时间：${posting.deadlineText}` }
-      : { tone: "neutral" as const, text: "报名时间以公告为准" };
-  }
-  const date = formatDateLabel(posting.deadline);
-  if (left <= 0) return { tone: "rose" as const, text: `今天 ${date} 截止报名` };
-  if (left <= CLOSING_SOON_DAYS) return { tone: "rose" as const, text: `还剩 ${left} 天 · ${date} 截止` };
-  return { tone: "amber" as const, text: `报名截止 ${date}` };
-}
-
 const CHIP_TONE = {
   rose: "border-tone-rose-border bg-tone-rose-bg text-tone-rose-fg",
   amber: "border-tone-amber-border bg-tone-amber-bg text-tone-amber-fg",
@@ -390,16 +377,16 @@ const CHIP_TONE = {
 function PostingCard({ posting, today }: { posting: AnnouncementCard; today: string }) {
   const audience = AUDIENCE_LABEL[posting.audience];
   const chip = deadlineChip(posting, today);
-  const region = posting.region ?? inferAnnouncementRegion(posting.title);
   return (
     <li className="surface surface-hover flex h-full flex-col p-5">
       <div className="flex flex-wrap items-center gap-2">
-        {region ? (
+        {/* 地区由读侧定好（库里的值，没有才按标题补），与筛选器读的是同一个字段——这里别再自己另推一遍。 */}
+        {posting.region ? (
           <Badge tone="neutral" size="xs">
             <MapPin size={11} weight="fill" aria-hidden className="mr-0.5 inline shrink-0" />
-            {region}
+            {posting.region}
           </Badge>
-        ) : <Badge tone="neutral" size="xs">地区未标注</Badge>}
+        ) : <Badge tone="neutral" size="xs">{UNKNOWN_REGION}</Badge>}
         {audience ? (
           <Badge tone={posting.audience === "experienced" ? "neutral" : "green"} size="xs">
             {audience}
