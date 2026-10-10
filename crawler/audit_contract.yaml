@@ -712,6 +712,20 @@ checks:
     calibrated: false
     why: 用户点开一家「有在招岗位、但还没有整理好洞察」的公司时，网站会通知后台去现查这家公司。2026 年 10 月 10 日走查才发现，这一步从 9 月 3 日起次次失败（网站手里的通行证失效了，对方回的是「凭证无效」），五个多星期没有任何地方报出来。这条检查专门盯它。
     action: 把这条转给 Claude，让它查最近一次失败的原因；如果是通行证失效，需要你重新生成一把，更新到网站的部署设置里
+
+  - id: exp.programs_announcements_near_read_cap
+    name: 公告制招聘页面正在展示的公告有多少条（页面最多装 3000 条）
+    layer: experience
+    db: supabase
+    owner: lib/announcement-postings-store.ts
+    sql: >
+      select count(*) from announcement_postings where status = 'active'
+    normal: "< 2500"
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 公告制招聘页面一次最多读 3000 条公告，超过的部分不会报错，只是最早发布的那批悄悄看不见了。2026 年 10 月 10 日把国聘那一路从「只收马上截止的 100 条」改成「在报名期内的按分类都收」之后，在展示的公告从 455 条涨到 1500 条左右，往后还会涨。这条检查在快到上限时提前提醒，2500 这个数是按上限留出余量定的，不是从历史数据算出来的。
+    action: 把这条转给 Claude，让它把公告页的筛选和翻页改到服务器上做（那样就没有 3000 条的上限了）
   # ===== 链路层 =====
   # 每条对应一个「带 schedule cron 的定时 workflow」，回答的问题只有一个：
   # 「它在该出现的窗口里留下运行记录了吗」——不是「它跑对了没」（那是上面数据层的事）。

@@ -159,7 +159,10 @@ class WtAdapter(PlaywrightAdapter):
                     resp = client.get(api, params={
                         "brandCode": 1, "recruitType": rt, "page": page})
                     resp.raise_for_status()
-                    payload = resp.json()
+                    try:
+                        payload = resp.json()
+                    except ValueError:
+                        raise RuntimeError(self._non_json_reason(client, resp)) from None
                     if not isinstance(payload, dict):
                         raise ValueError("wt: position/list returned non-object payload")
                     rows = payload.get("postList") or []
@@ -220,6 +223,30 @@ class WtAdapter(PlaywrightAdapter):
             and not budget_exhausted
         )
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
+
+    # 新版门户壳页自己发的请求：按域名问「这个租户现在的招聘官网在哪」。
+    _SLD_API = "/wecruit/common/getSLD"
+
+    def _non_json_reason(self, client, resp) -> str:
+        """列表接口回的不是 JSON 时，把原因写进报错（2026-10-10 立）。照样抛错记 failed，只是说清楚。
+
+        ❌ 兴业证券 10-08 起连续 8 轮 failed，crawl_runs 里只有 `JSONDecodeError: Expecting value…`，
+           看不出是租户搬了家：xyzq.hotjob.cn 被改绑成新版门户的壳页，任何路径（列表接口、详情页）
+           都回同一份 HTML，壳页再问 getSLD 拿到新门户地址去跳转。
+        ✅ 认出壳页就照它的问法问一次，把新门户地址带进报错；问不到也说明回的是壳页。
+        ⚠️ 「这个域名回壳页」不等于「旧接口没了」：同一天 www.hotjob.cn/wt/xyzq/ 下的列表接口照常
+           回 94 个岗。该换新门户（hotjob adapter）还是换主机，看对方官网现在链到哪。
+        """
+        text = resp.text or ""
+        where = f"(brand={self._brand} host={self._host})"
+        if self._SLD_API not in text:
+            return f"wt: position/list returned non-JSON {where}: {' '.join(text[:80].split())}"
+        try:
+            sld = client.post(f"{self._origin}{self._SLD_API}", data={"sld": self._host}).json()
+            moved_to = ((sld.get("data") or {}).get("linkData") or {}).get("link") or "getSLD gave no link"
+        except Exception as exc:
+            moved_to = f"getSLD failed: {type(exc).__name__}"
+        return f"wt: host now serves the new wecruit portal shell instead of position/list {where} -> {moved_to}"
 
     # PlaywrightAdapter._extract_posts 的 posts_keys 含 'postList'？没有——这里覆盖 parse 用的提取，
     # 直接在 _map 前由 _extract_posts 命中。posts_keys 未含 postList，故显式加上。

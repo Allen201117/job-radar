@@ -178,7 +178,7 @@ export default async function ProgramsPage() {
 
                 {postings.length > 0 ? (
                   <div className="mt-7">
-                    <h3 className="t-label ink-3 mb-2.5">每天从各省官方人事考试/人社网站收录 · 只保留还在报名期内的</h3>
+                    <h3 className="t-label ink-3 mb-2.5">每天从各省官方人事考试/人社网站和国聘（国资委央企招聘平台）收录 · 只保留还在报名期内的</h3>
                     {/* 只下发首屏那一页 + 服务端算好的分面；全量由客户端挂载后从 /api/programs/postings 取
                         （原先整块塞进 props，占 HTML 的 252KB / 572KB，而首屏只画 40 张卡）。 */}
                     <AnnouncementsClient

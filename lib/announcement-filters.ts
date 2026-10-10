@@ -3,7 +3,8 @@
 //
 // ⚠️ 分面计数刻意**排除该维度自身**（选了「北京市」之后，地区那一栏仍按其余条件给出全部省份的计数），
 //   否则用户选完一个地区就再也看不到别的地区有多少 —— 换地区要先清空，是最常见的筛选器手感问题。
-import type { AnnouncementAudience, AnnouncementCard } from "./announcement-postings";
+import { isRollingDeadline, type AnnouncementAudience, type AnnouncementCard } from "./announcement-postings";
+import { formatDateLabel } from "./relative-time";
 
 export type AudienceFilter = "all" | "fresh_grad" | "experienced";
 export type SortKey = "newest" | "closing";
@@ -28,6 +29,12 @@ export const EMPTY_FILTERS: AnnouncementFilters = {
 /** 「即将截止」的天数阈值。7 天 = 一周内要动手的，正是用户最需要被提醒的那批。 */
 export const CLOSING_SOON_DAYS = 7;
 
+/**
+ * 地区判不出来的公告在筛选器里的那一项（同时是卡片上的文案）。
+ * 没有这一项时，这批公告按地区怎么筛都筛不到（2026-10-10 线上 455 张里 87 张），只能靠不筛地区才看得见。
+ */
+export const UNKNOWN_REGION = "地区未标注";
+
 export interface Facet {
   value: string;
   count: number;
@@ -48,12 +55,36 @@ export function daysUntilDeadline(deadline: string | null, today: string): numbe
   return Math.round(ms / 86_400_000);
 }
 
+/** 卡片上那条报名时间提示：文案 + 紧迫度色。 */
+export function deadlineChip(
+  posting: Pick<AnnouncementCard, "deadline" | "deadlineText">,
+  today: string,
+): { tone: "rose" | "amber" | "neutral"; text: string } {
+  const left = daysUntilDeadline(posting.deadline, today);
+  const date = formatDateLabel(posting.deadline);
+  // 招满即止：对方登记的结束日只是上限。写成「报名截止 12/31」等于告诉人不急，实际是越早投越好。
+  if (isRollingDeadline(posting.deadlineText)) {
+    if (left === null) return { tone: "amber", text: "招满即止，尽早报名" };
+    if (left <= 0) return { tone: "rose", text: `招满即止 · 最晚今天 ${date}` };
+    if (left <= CLOSING_SOON_DAYS) return { tone: "rose", text: `招满即止 · 最晚还剩 ${left} 天（${date}）` };
+    return { tone: "amber", text: `招满即止，尽早报名 · 最晚 ${date}` };
+  }
+  if (left === null) {
+    return posting.deadlineText
+      ? { tone: "neutral", text: `报名时间：${posting.deadlineText}` }
+      : { tone: "neutral", text: "报名时间以公告为准" };
+  }
+  if (left <= 0) return { tone: "rose", text: `今天 ${date} 截止报名` };
+  if (left <= CLOSING_SOON_DAYS) return { tone: "rose", text: `还剩 ${left} 天 · ${date} 截止` };
+  return { tone: "amber", text: `报名截止 ${date}` };
+}
+
 export function matchesFilters(
   p: AnnouncementCard,
   f: AnnouncementFilters,
   today: string,
 ): boolean {
-  if (f.region && p.region !== f.region) return false;
+  if (f.region && (p.region || UNKNOWN_REGION) !== f.region) return false;
   if (f.employerType && p.employerType !== f.employerType) return false;
   if (!audienceMatches(p.audience, f.audience)) return false;
   if (f.closingWithinDays !== null) {
@@ -78,15 +109,23 @@ function facetsFor(
 ): Facet[] {
   const relaxed = { ...f, [dimension]: null } as AnnouncementFilters;
   const counts = new Map<string, number>();
+  let unknown = 0;
   for (const p of postings) {
     if (!matchesFilters(p, relaxed, today)) continue;
     const v = p[dimension];
-    if (!v) continue;
+    if (!v) {
+      unknown += 1;
+      continue;
+    }
     counts.set(v, (counts.get(v) ?? 0) + 1);
   }
-  return [...counts.entries()]
+  const facets = [...counts.entries()]
     .map(([value, count]) => ({ value, count }))
     .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value, "zh-Hans-CN"));
+  // 地区判不出的单列一项、固定排最后（它不是一个地方，不该按数量挤到前排）。
+  // 这样各项计数之和 = 当前条件下的公告总数，对得上账。单位类型不加：那一维为空的没有对应的卡片文案。
+  if (dimension === "region" && unknown > 0) facets.push({ value: UNKNOWN_REGION, count: unknown });
+  return facets;
 }
 
 export interface AnnouncementFacets {
@@ -140,9 +179,11 @@ export function sortPostings<T extends AnnouncementCard>(
   const out = [...postings];
   if (sort === "closing") {
     // 最快截止在前；截止日未知的一律沉底（不知道就不该插队催人）。
+    // 天数每条只算一次：量上千之后，在比较函数里现算是每次筛选多跑几万次日期解析。
+    const left = new Map(out.map((p) => [p, daysUntilDeadline(p.deadline, today)]));
     out.sort((a, b) => {
-      const da = daysUntilDeadline(a.deadline, today);
-      const db = daysUntilDeadline(b.deadline, today);
+      const da = left.get(a) ?? null;
+      const db = left.get(b) ?? null;
       if (da === null && db === null) return 0;
       if (da === null) return 1;
       if (db === null) return -1;

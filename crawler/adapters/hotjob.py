@@ -18,6 +18,7 @@ recruitType 数值映射经各页 JS bundle（social.js / school.js / interns.js
 POST /wecruit/common/getSLD（sld={host}）解析出 linkData.link 再取，sources 直接登记带 suiteKey 的 pb 页。
 """
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 from urllib.parse import urlparse
@@ -25,8 +26,10 @@ from urllib.parse import urlparse
 import httpx
 
 import normalizer
-from .base import PageResult, RawJob, paginate_all, resolve_detail_cap
+from .base import PageResult, RawJob, exc_brief, paginate_all, resolve_detail_cap
 from .playwright_base import PlaywrightAdapter
+
+logger = logging.getLogger(__name__)
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -34,6 +37,20 @@ def _int_or_none(value) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _page_form(payload: dict) -> dict:
+    return (payload.get("data") or {}).get("pageForm") or {}
+
+
+def _post_id(post) -> str:
+    return str(post.get("postId") or post.get("id") or "").strip() if isinstance(post, dict) else ""
+
+
+def _fits_one_page(page_form: dict, row_count: int) -> bool:
+    """这一页自报的 dataCount 说「全在这一页里了」。"""
+    count = _int_or_none(page_form.get("dataCount"))
+    return count is not None and count <= row_count
 
 
 class HotJobAdapter(PlaywrightAdapter):
@@ -131,6 +148,14 @@ class HotJobAdapter(PlaywrightAdapter):
         自愈：租户日后重开站点 / 发布该渠道，探测自然放行，无需人工改库。
         探测本身失败（网络/限流）一律放行 —— 宁可漏判不可错杀。
         """
+        return self._gate(source_url)[0]
+
+    def _gate(self, source_url: str):
+        """两道门的判定本体。返回 (跳过原因或 None, 两道门是否都真探到了答复)。
+
+        should_skip 只用前一个：探测失败一律放行。后一个给「据此改库」的调用方（migrate_wt_rows_to_wecruit）：
+        没探到答复时「没说跳过」不等于「渠道发布了」。
+        """
         self._bind_source(source_url)
 
         # 门 1：门户存在吗（租户级）
@@ -142,7 +167,7 @@ class HotJobAdapter(PlaywrightAdapter):
                 return (
                     "wecruit portal does not exist (suite/config has no site settings): "
                     "pages show 官网不存在 — jd_url unusable"
-                )
+                ), True
 
         # 门 2：本渠道发布了吗（渠道级）
         payload = self._probe_json(
@@ -152,8 +177,8 @@ class HotJobAdapter(PlaywrightAdapter):
             return (
                 f"wecruit channel not published (recruitType={self._recruit_type}): "
                 "search/condition returned no data — portal pages hang, jd_url unusable"
-            )
-        return None
+            ), True
+        return None, isinstance(cfg, dict) and isinstance(payload, dict)
 
     def fetch(self, source_url: str) -> str:
         """直连公开 listPosition 接口逐页拉取（无浏览器），返回 parse() 可消费的 _intercepted 信封。"""
@@ -169,45 +194,115 @@ class HotJobAdapter(PlaywrightAdapter):
             "Referer": self.list_urls[0],
             "Origin": self._origin,
         }
-        # 翻页参数是 currentPage（pageIndex/pageNo 均被忽略，恒回第 1 页）；pageSize 服务端封顶 20。
+        # 翻页参数是 currentPage（pageIndex/pageNo 均被忽略，恒回第 1 页）；pageSize 第 2 页起听我们的、封顶 20。
+        #
+        # ⚠️ 第 1 页不听我们传的 pageSize（2026-10-10 立）：回多少条一页、自报的 totalPage 按哪种页长算，
+        #    都由对方定，同一个租户不同时刻还会变（当天实测有 1 / 10 / 12 / 15 / 20 / 50 六种）。所以：
+        #    · 第 1 页自报的 totalPage 不采信，从第 2 页的响应起才认（那是按我们要的 20 条一页算的）。
+        #      ❌ 中国物流集团社招第 1 页回 50 条一页、totalPage=3，旧逻辑按 20 条一页翻 3 页就停：
+        #         115 个岗拿到 60 个还记抓全（同一轮广西柳工 489 → 200、335 → 140）。
+        #    · 第 1 页不足 20 条一页时，第 1、2 页之间有断档，由 _fill_first_page_gap 补。
+        #    · 「本页不足一页 = 末页」对这个接口不成立（第 1 页 12 条不代表后面没有）→ 传 page_size=1
+        #      关掉 paginate_all 的短页收尾，靠第 2 页起的 totalPage / 空页收尾。
+        #    📊 全部 147 个启用源改前改后背靠背各跑一遍（只抓列表）：62 个源多拿到 887 个岗、没有一个源少拿；
+        #       改前有 61 个源拿到的岗少于自报总数却记抓全。
         collected: List[dict] = []
+        seen: set = set()   # 已收下的岗位 id
         with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=headers) as client:
-            def fetch_page(current_page: int) -> PageResult:
+            def post_page(current_page: int, page_size: int) -> dict:
                 resp = client.post(api, data={
                     "recruitType": self._recruit_type,
                     "currentPage": current_page,
-                    "pageSize": self.api_page_size,
+                    "pageSize": page_size,
                 })
                 resp.raise_for_status()
-                payload = resp.json()
-                collected.append(payload)
-                page_form = (payload.get("data") or {}).get("pageForm") or {}
+                return resp.json()
+
+            def keep(payload: dict, at: Optional[int] = None) -> list:
+                """收下一页：别的页已经给过的岗就地去掉，放进 collected（at = 插在第几个）。
+                返回这一页原有的全部行——翻页收尾要看整页，整页都是重复的也不等于翻到头了。"""
+                page_form = _page_form(payload)
                 rows = page_form.get("pageData") or []
+                fresh = []
+                for row in rows:
+                    post_id = _post_id(row)
+                    if post_id and post_id in seen:
+                        continue
+                    if post_id:
+                        seen.add(post_id)
+                    fresh.append(row)
+                page_form["pageData"] = fresh
+                collected.insert(len(collected) if at is None else at, payload)
+                return rows
+
+            def fetch_page(current_page: int) -> PageResult:
+                payload = post_page(current_page, self.api_page_size)
+                page_form = _page_form(payload)
+                rows = keep(payload)
                 total = _int_or_none(page_form.get("total"))
                 if total is None:
                     total = _int_or_none(page_form.get("totalCount"))
                 if total is None:
                     total = _int_or_none(page_form.get("count"))
-                return PageResult(
-                    items=rows,
-                    total=total,
-                    total_pages=_int_or_none(page_form.get("totalPage")),
-                )
+                if current_page > 1:
+                    total_pages = _int_or_none(page_form.get("totalPage"))
+                else:
+                    # 第 1 页自报的 totalPage 不采信；只有它自己的 dataCount 说「这一页就装完了」才就此收尾。
+                    total_pages = 1 if _fits_one_page(page_form, len(rows)) else None
+                return PageResult(items=rows, total=total, total_pages=total_pages)
 
-            posts, total, complete = paginate_all(
+            _, total, complete = paginate_all(
                 fetch_page,
-                page_size=self.api_page_size,
+                page_size=1,
                 first_page=1,
                 max_pages=self.api_max_pages,
                 logger=None,
                 label=f"hotjob:{self._suite_key}",
             )
-            self.reported_total = total
-            self.fetch_complete = complete
+            gap_filled = self._fill_first_page_gap(post_page, keep, collected[0])
+            posts = [row for payload in collected for row in _page_form(payload).get("pageData") or []]
+            # 分母取各页自报 dataCount 的最大值；抓完按去重后的岗位数对它，不够就不记抓全。
+            counts = [c for c in (_int_or_none(_page_form(payload).get("dataCount")) for payload in collected)
+                      if c is not None]
+            if counts:
+                self.reported_total = max(counts)
+            else:
+                self.reported_total = max(total, len(seen)) if total is not None else None
+            self.fetch_complete = (
+                complete and gap_filled
+                and (self.reported_total is None or len(seen) >= self.reported_total))
             # 列表无 JD 正文（workContent/serviceCondition 全空 → summary 空）；逐岗调 listPositionDetail
             # 补正文（复用同一带 Referer/Origin 的 client）。capped；单岗失败该岗无摘要、不影响入库。
             self._enrich_details(client, [p for p in posts if isinstance(p, dict)])
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
+
+    def _fill_first_page_gap(self, post_page, keep, first_payload) -> bool:
+        """补上第 1 页和第 2 页之间的断档：补回来的页经 keep 收在第 1 页后面。返回 False = 没补成。
+
+        ❌ 每页都按 20 要：财通证券校招第 1 页只回 12 条（自报 pageSize=12；新会话连打 4 次、
+           传 20 / 15 / 10 / 不传，回的都是 12），第 2 页按 20 条一页算从第 21 条起 → 第 13~20 条
+           谁都没取到，64/72 却记抓全。兴业证券校招第 1 页回 15 的那几轮 42 → 37。
+        ✅ 第 1 页不足 20 条一页时，按它自报的页长把第 2 页（页长很小时到凑满 20 条为止）再要一遍，
+           正好盖住断档，与第 2 页重叠的行去掉。按 20 条一页的各页照旧要、只多这一两个请求，拿到的岗只多不少。
+        🚫 别改成「后面各页都跟着第 1 页的页长翻」：页数上限按页数记，页一变小，大租户反而翻不完
+           （同一天对拍：TCL / 特变电工社招 1,192 → 720，亿纬锂能 1,108 → 900）。
+        ⚠️ 没治的：第 1 页偶尔连口径都不同（迪卡侬校招有一轮第 1 页自报 dataCount=380、15 条一页，
+           一小时后同一请求是 712、20 条一页；那 712 行的 externalKey 去重正好 380）。那种时候第 1 页的行
+           与后面各页可能不是同一份列表，这里只做到按 dataCount 的最大值如实记「没抓全」。
+        """
+        first = _page_form(first_payload)
+        row_count = len(first.get("pageData") or [])
+        served = _int_or_none(first.get("pageSize")) or 0
+        if not 0 < served < self.api_page_size or row_count < served or _fits_one_page(first, row_count):
+            return True   # 第 1 页不比 20 条一页短 / 没装满（后面没有了）/ 一页就装完了：没有断档
+        fill_pages = -(-self.api_page_size // served)   # 向上取整：按第 1 页的页长，前 20 条占几页
+        try:
+            for page in range(2, fill_pages + 1):
+                keep(post_page(page, served), at=page - 1)
+        except Exception as exc:
+            logger.warning("hotjob:%s: 第 1 页断档没补成（%s）", self._suite_key, exc_brief(exc))
+            return False
+        return True
 
     def _enrich_details(self, client, posts):
         """逐岗 POST listPositionDetail 补 workContent/serviceCondition（列表接口没有，详情才有），

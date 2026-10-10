@@ -326,5 +326,119 @@ class TestHotJobChannelGate(unittest.TestCase):
         self.assertIsNone(self.a.should_skip(self.url))
 
 
+class _ListServer:
+    """照 2026-10-10 实测的平台行为回放 listPosition：第 1 页每页几条由对方定（first_page_size），
+    不听请求里的 pageSize；第 2 页起听请求的 pageSize。每个响应的 totalPage 按它自己的页长算。"""
+    total, first_page_size, fail_gap = 72, 12, False
+    requests = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def post(self, url, data=None, **kwargs):
+        cls = type(self)
+        if "postId" in data:   # 逐岗详情
+            return _FakeResp({"data": {"workContent": "正文-" + data["postId"]}})
+        page, asked = int(data["currentPage"]), int(data["pageSize"])
+        cls.requests.append((page, asked))
+        if cls.fail_gap and page > 1 and asked != 20:
+            raise OSError("connection reset")
+        size = cls.first_page_size if page == 1 else asked
+        rows = [{"postId": f"p{i}", "postName": f"岗{i}"}
+                for i in range((page - 1) * size, min(page * size, cls.total))]
+        return _FakeResp({"data": {"pageForm": {
+            "pageData": rows, "pageSize": size, "currentPage": page, "dataCount": cls.total,
+            "totalPage": -(-cls.total // size)}}})
+
+
+class TestHotJobFirstPage(unittest.TestCase):
+    """第 1 页回多少条一页、totalPage 按哪种页长算都由对方定，不听我们传的 pageSize（2026-10-10 立）。
+
+    live：财通证券校招第 1 页恒回 12 条（传 20 / 15 / 10 / 不传都一样），第 2 页从第 21 条起 →
+    第 13~20 条取不到，72 个岗拿到 64 个还记抓全；中国物流集团社招第 1 页回 50 条一页、totalPage=3，
+    按 20 条一页翻 3 页就停，115 个岗拿到 60 个还记抓全。"""
+
+    def _fetch(self, detail_cap="0", **server):
+        _ListServer.total, _ListServer.first_page_size, _ListServer.fail_gap = 72, 12, False
+        for key, value in server.items():
+            setattr(_ListServer, key, value)
+        _ListServer.requests = []
+        orig_client, orig_cap = hotjob_mod.httpx.Client, os.environ.get("CRAWL_DETAIL_CAP")
+        hotjob_mod.httpx.Client = _ListServer
+        os.environ["CRAWL_DETAIL_CAP"] = detail_cap   # "0" = 只测列表翻页
+        try:
+            a = HotJobAdapter()
+            raw = a.fetch("https://wecruit.hotjob.cn/SU60613f74bef57c36adc66d0b/pb/school.html")
+        finally:
+            hotjob_mod.httpx.Client = orig_client
+            if orig_cap is None:
+                del os.environ["CRAWL_DETAIL_CAP"]
+            else:
+                os.environ["CRAWL_DETAIL_CAP"] = orig_cap
+        rows = [r for payload in json.loads(raw)["_intercepted"]
+                for r in payload["data"]["pageForm"]["pageData"]]
+        return a, rows
+
+    def test_gap_between_first_and_second_page_is_filled(self):
+        a, rows = self._fetch()
+        ids = [r["postId"] for r in rows]
+        self.assertEqual(set(ids), {f"p{i}" for i in range(72)}, "第 13~20 条不能断档")
+        self.assertEqual(len(ids), 72, "补的那页与第 2 页重叠的 4 条（第 21~24 条）在信封里只能有一份")
+        self.assertEqual(a.reported_total, 72)
+        self.assertTrue(a.fetch_complete)
+
+    def test_original_requests_are_kept_and_only_the_fill_is_added(self):
+        """按 20 条一页的各页照旧要、只在后面多补一页 → 拿到的岗只多不少（大租户不会因页变小而翻不完）。"""
+        self._fetch()
+        self.assertEqual(_ListServer.requests, [(1, 20), (2, 20), (3, 20), (4, 20), (2, 12)])
+
+    def test_tiny_first_page_needs_several_fill_pages(self):
+        a, rows = self._fetch(total=50, first_page_size=6)
+        self.assertEqual([r for r in _ListServer.requests if r[1] == 6], [(2, 6), (3, 6), (4, 6)])
+        self.assertEqual(len({r["postId"] for r in rows}), 50)
+        self.assertEqual(len(rows), 50)
+        self.assertTrue(a.fetch_complete)
+
+    def test_first_page_total_page_is_not_trusted(self):
+        """第 1 页被回成 50 条一页时自报 totalPage=3；按它停，20 条一页只翻到第 60 条。"""
+        a, rows = self._fetch(total=115, first_page_size=50)
+        self.assertEqual(_ListServer.requests, [(page, 20) for page in range(1, 7)], "没有断档，不多发请求")
+        self.assertEqual(len({r["postId"] for r in rows}), 115)
+        self.assertEqual(a.reported_total, 115)
+        self.assertTrue(a.fetch_complete)
+
+    def test_no_fill_request_when_there_is_no_gap(self):
+        cases = {"按 20 条一页回": dict(total=42, first_page_size=20),
+                 "一页没装满": dict(total=9, first_page_size=12),
+                 "一页正好装满": dict(total=12, first_page_size=12)}
+        for name, server in cases.items():
+            with self.subTest(name):
+                a, rows = self._fetch(**server)
+                self.assertTrue(all(asked == 20 for _, asked in _ListServer.requests))
+                if server["total"] <= server["first_page_size"]:
+                    self.assertEqual(_ListServer.requests, [(1, 20)], "一页装完的源不该多发请求")
+                self.assertEqual(len(rows), server["total"])
+                self.assertEqual(a.reported_total, server["total"])
+                self.assertTrue(a.fetch_complete)
+
+    def test_unfilled_gap_is_not_reported_as_complete(self):
+        """补的那页没要到：照样交出已拿到的岗，但去重后不够 dataCount → 不许记抓全。"""
+        a, rows = self._fetch(fail_gap=True)
+        self.assertEqual(len(rows), 64)
+        self.assertEqual(a.reported_total, 72)
+        self.assertFalse(a.fetch_complete)
+
+    def test_filled_rows_get_their_detail_text_like_first_page_rows(self):
+        """逐岗补正文只补前 N 个：补回来的第 13~20 条排在第 1 页后面，不能总被挤到名额外。"""
+        _, rows = self._fetch(detail_cap="20")
+        self.assertEqual({r["postId"] for r in rows if r.get("workContent")}, {f"p{i}" for i in range(20)})
+
+
 if __name__ == "__main__":
     unittest.main()
