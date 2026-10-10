@@ -314,11 +314,45 @@ def drain_one_company(sb, company, t3=False):
         res = enrich_company_t3(sb, profile)
         return {"wrote": 1 if res == "wrote" else 0,
                 "empty": 1 if res == "empty" else 0,
-                "err": 1 if res == "err" else 0}
+                "err": 1 if res == "err" else 0,
+                "noquota": 1 if res == "noquota" else 0}
     res = enrich_company(sb, profile)
     return {"ok": 1 if res == "ok" else 0,
             "noface": 1 if res == "noface" else 0,
             "err": 1 if res == "err" else 0}
+
+
+def note_insight_enrich_outcome(sb, company, outcome):
+    """把单公司现查这一步的真实结果记进它那条 queued 台账的 diagnostics（收尾时会并进终态）。
+
+    为什么要单独记：workflow 的收尾只知道「步骤没报错」，于是开跑就撞额度、一个主题都没查的那一单
+    也被记成 success（2026-10-10 实测：优衣库，日志写「额度不足，本轮零主题」，台账却是 success）。
+    绿灯 ≠ 有产出。写失败只打日志：它是旁证，不能反过来把现查本身打挂。
+    """
+    try:
+        rows = (
+            sb.table("discovery_runs")
+            .select("id,diagnostics")
+            .eq("mode", "insight_enrich")
+            .eq("company", (company or "").strip())
+            .eq("status", "queued")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        ) or []
+        if not rows:
+            return False
+        merged = {**(rows[0].get("diagnostics") or {}), "t3_outcome": outcome}
+        sb.table("discovery_runs").update({"diagnostics": merged}).eq("id", rows[0]["id"]).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"[insight-enrich] 记录现查结果失败（不影响主流程）: {type(exc).__name__}")
+        return False
+
+
+# noquota 有两种来源：搜索额度触到预留线，或当天的 LLM 调用日顶已到（enrich_company_t3 里两处 break）。
+NO_QUOTA_MESSAGE = "当天的搜索额度或模型调用额度已用完，这次没有查；这家公司已排到下一批定时补充的最前面"
 
 
 def finish_insight_enrich_run(sb, company, status, diagnostics=None):
@@ -348,6 +382,17 @@ def finish_insight_enrich_run(sb, company, status, diagnostics=None):
         "error_message": None if status == "success" else str(merged.get("error") or "workflow failed")[:500],
         "diagnostics": merged,
     }
+    # 步骤没报错但一个主题都没查（开跑就撞额度）→ 记 skipped / no_quota，不许记 success。
+    # 它不是失败（没坏任何东西，下一批会优先补），也不是成功（什么都没产出）。
+    if status == "success" and merged.get("t3_outcome") == "noquota":
+        update["status"] = "skipped"
+        update["failure_reason"] = "no_quota"
+        update["error_message"] = NO_QUOTA_MESSAGE
+    # 步骤没让 workflow 变红、但这一单自己报了 err（画像取不到 / 主题中途抛错）→ 同样不是成功。
+    elif status == "success" and merged.get("t3_outcome") == "err":
+        update["status"] = "failed"
+        update["failure_reason"] = "enrich_error"
+        update["error_message"] = "现查过程中出错，没有产出；详见当次 workflow 日志"
     sb.table("discovery_runs").update(update).eq("id", rows[0]["id"]).execute()
     return True
 
@@ -530,6 +575,9 @@ def write_experience(sb, company_id, claim, sources, judge, status, dimension="c
 
 
 DEMAND_WINDOW_DAYS = 30
+# 现查请求在队列里保持「最前」多少天。补上之后 t3_checked_at 会被盖戳、自然出队，
+# 所以这个窗口只管「一直没轮到」的公司别被永久置顶。
+ENRICH_REQUEST_WINDOW_DAYS = 14
 
 
 def fetch_t3_queue(sb, limit):
@@ -571,6 +619,23 @@ def fetch_t3_queue(sb, limit):
         ]
     except Exception as exc:  # noqa: BLE001
         print(f"[t3] 读 job_actions 需求信号失败，本轮按无需求排序: {type(exc).__name__}")
+    # 现查信号（2026-10-10）：用户点开某家公司的洞察、网站为它派过现查的，排在所有公司最前。
+    # 现查白天基本拿不到搜索额度（全天 42 次里 25 次留给校招链，定时批次一早就把其余的用完，
+    # 实测 10-10 北京时间 14 点只剩 4 次）——那一单只能记 no_quota。它真正能兑现的地方就是这里：
+    # 下一批定时补充先补这些公司。取不到就当没有，绝不阻断。
+    requested = set()
+    try:
+        since_req = (datetime.now(timezone.utc) - timedelta(days=ENRICH_REQUEST_WINDOW_DAYS)).isoformat()
+        requested = {
+            str(item.get("company") or "").strip()
+            for item in db.fetch_all_rows(
+                lambda: sb.table("discovery_runs").select("company")
+                .eq("mode", "insight_enrich").gte("created_at", since_req)
+            )
+            if item.get("company")
+        }
+    except Exception as exc:  # noqa: BLE001
+        print(f"[t3] 读现查台账失败，本轮不按现查信号排序: {type(exc).__name__}")
     try:
         conn = jobs_db.get_conn()
         counts = jobs_db.fetch_all(
@@ -600,7 +665,8 @@ def fetch_t3_queue(sb, limit):
         # 裸子串会把「京东方」算成「京东」，那是本仓库立过碑的红线。
         must_apply_names = must_apply.all_names()
         rows.sort(key=lambda row: (
-            0 if demand_counts.get(str(row.get("company") or ""), 0) > 0 else 1,   # 用户真在看的公司最前
+            0 if str(row.get("company") or "").strip() in requested else 1,       # 用户点名要查的公司最前
+            0 if demand_counts.get(str(row.get("company") or ""), 0) > 0 else 1,   # 用户真在看的公司其次
             0 if must_apply.resolve_owner(str(row.get("company") or ""), must_apply_names) else 1,
             -demand_counts.get(str(row.get("company") or ""), 0),
             -active_counts.get(str(row.get("company") or ""), 0),
@@ -733,7 +799,8 @@ def enrich_company_t3(sb, profile):
                 }).eq("id", profile["id"]).execute()
                 return "err"
             print(f"  [t3] {profile['company']}: 额度不足，本轮零主题，不推进复核时间")
-            return "empty"
+            # 单独一个返回值：和「查了、确实没结果」的 empty 混在一起，台账就分不出这单到底查没查。
+            return "noquota"
         sb.table("company_profiles").update({"t3_checked_at": _now()}).eq("id", profile["id"]).execute()
     except Exception:
         try:
@@ -797,7 +864,7 @@ def drain_t3(sb, limit=0):
     cap = remaining if not limit else min(remaining, limit)
     rows = fetch_t3_queue(sb, cap)
     print(f"T3 队列（notable·待富化）取 {len(rows)} 家（额度封顶 {cap}）")
-    stat = {"wrote": 0, "empty": 0, "err": 0}
+    stat = {"wrote": 0, "empty": 0, "err": 0, "noquota": 0}
     GATE_STATS["off_topic_blocked"] = 0
     GATE_STATS["rerouted"] = 0
     for p in rows:
@@ -852,7 +919,15 @@ def main():
     E.reset_llm_health()
     if args.t3:
         stat = drain_one_company(sb, args.company, t3=True) if args.company else drain_t3(sb, limit=args.limit)
-        checked = stat["wrote"] + stat["empty"] + stat["err"]
+        if args.company:
+            # 现查：把这一步的真实结果写进台账，收尾时据此决定记 success 还是 skipped/no_quota。
+            outcome = next((k for k in ("wrote", "noquota", "err", "empty") if stat.get(k)), "empty")
+            note_insight_enrich_outcome(sb, args.company, outcome)
+        # noquota 必须计入 checked：它以前混在 empty 里，「轮到了很多家、却一家都没产出」靠
+        # checked>0 且产出为 0 被看门狗规则 A 报出来（比如 LLM 日顶到了，每家第一个主题就 break）。
+        # 单独拆出来之后如果不加回去，那种日子 checked=0，会被读成「队列是空的」而不报警。
+        no_quota = stat.get("noquota", 0)
+        checked = stat["wrote"] + stat["empty"] + stat["err"] + no_quota
         ops_runs.record_ops_run(
             sb,
             "insight_backlog",
@@ -860,6 +935,7 @@ def main():
                 "checked": checked,
                 "companies_enriched": stat["wrote"],
                 "failed": stat["err"],
+                "no_quota": no_quota,   # 轮到了但撞额度、一个主题都没查的公司数
                 "mode": "experience",
                 # 库存量趋势：只有它能回答「洞察库到底在不在长」（见 count_active_added 注释）。
                 "active_added_7d": count_active_added(sb),

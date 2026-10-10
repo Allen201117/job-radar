@@ -28,7 +28,7 @@ import {
 } from "@/lib/apply-programs";
 import AnnouncementsClient from "./announcements-client";
 
-export const metadata = { title: "公告制招聘 · 求职雷达" };
+export const metadata = { title: "公告制招聘 · 职达 JobRadar" };
 
 // 为什么单独一个入口：有一类招聘**客观上不存在「一岗一页」** —— 事业单位/体制内多为公告制
 // （一条公告 = 批量岗位 + 报名截止日，官网没有逐个岗位的详情页），中通校招是「蓝天计划」项目制投递。
@@ -179,8 +179,8 @@ export default async function ProgramsPage() {
                 {postings.length > 0 ? (
                   <div className="mt-7">
                     <h3 className="t-label ink-3 mb-2.5">每天从各省官方人事考试/人社网站和国聘（国资委央企招聘平台）收录 · 只保留还在报名期内的</h3>
-                    {/* 只下发首屏那一页 + 服务端算好的分面；全量由客户端挂载后从 /api/programs/postings 取
-                        （原先整块塞进 props，占 HTML 的 252KB / 572KB，而首屏只画 40 张卡）。 */}
+                    {/* 只下发首屏那一页 + 服务端算好的分面；之后的筛选 / 排序 / 翻页由 /api/programs/postings 按条件
+                        一页一页给（同一个 queryAnnouncements 算的），浏览器不拿全量。 */}
                     <AnnouncementsClient
                       initial={initialAnnouncementView(postings.map(toAnnouncementCard), today)}
                       today={today}

@@ -121,6 +121,8 @@ export function inferAnnouncementRegion(title: string): string | null {
 /** DB 行 → 展示模型。只放行 active + 未过报名截止日 + 入口是 http(s) 的官方公告。 */
 export function toAnnouncementPosting(
   row: Record<string, unknown> | null | undefined,
+  // 「今天」由调用方算一次传进来：它每次调用都要新建一个 Intl 日期格式化器，逐行各算一遍在几千行时就是每次请求白等。
+  today: string = todayInDisplayZone(),
 ): AnnouncementPosting | null {
   if (!row) return null;
   const title = String(row.title ?? "").trim();
@@ -132,7 +134,7 @@ export function toAnnouncementPosting(
   if (status !== "active") return null;
   if (!/^https?:\/\//i.test(sourceUrl)) return null;
   // 过报名截止日的不展示（deadline 为空 = 未知，仍展示，靠 TTL 过期治理下架）。
-  if (deadline && deadline < todayInDisplayZone()) return null;
+  if (deadline && deadline < today) return null;
 
   const audienceRaw = row.audience;
   return {
@@ -181,8 +183,9 @@ function dateHint(publishedAt: string | null): string | null {
 export function toAnnouncementPostings(rows: unknown): AnnouncementPosting[] {
   if (!Array.isArray(rows)) return [];
   const kept = new Map<string, { posting: AnnouncementPosting; index: number }>();
+  const today = todayInDisplayZone();
   for (const [index, raw] of rows.entries()) {
-    const posting = toAnnouncementPosting(raw as Record<string, unknown>);
+    const posting = toAnnouncementPosting(raw as Record<string, unknown>, today);
     if (!posting) continue;
     const key = `${normalizeTitle(posting.title)}|${posting.publishedAt ?? ""}`;
     const previous = kept.get(key);

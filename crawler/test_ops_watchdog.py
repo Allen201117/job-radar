@@ -640,6 +640,23 @@ class CoverageShortfallRuleTest(unittest.TestCase):
         self.assertIn("少 480（停因：点「下一页」失败）", finding["evidence"][1])
         self.assertNotIn("按设计刹停", " ".join(finding["evidence"]))
 
+    def test_iguopin_unverified_attribution_is_listed_apart_not_as_a_gap(self):
+        """国聘「归属没核上」的轮次 coverage_complete 也是 False，但它的 reported_total 是搜索接口的
+        封顶数（最多 400），入库数本来就先过归属门 —— 按「自报 − 入库」算，每条国聘源都会顶着 200+ 的假缺口进榜。"""
+        sources = {**self.SOURCES, "s6": {"id": "s6", "adapter_name": "iguopin", "company": "中国石油",
+                                          "enabled": True}}
+        rows = [self._row("s6", 400, 43, stop_reason="attribution_unverified")]
+        self.assertEqual(W.evaluate_coverage_shortfall(rows, sources), [])
+
+        rows += [self._row("s1", 5643, 600)]
+        [finding] = W.evaluate_coverage_shortfall(rows, sources)
+        self.assertIn("1 个源", finding["summary"])
+        self.assertIn("5043", finding["summary"])      # 只有奇瑞的缺口，国聘那 357 不计入
+        joined = " ".join(finding["evidence"])
+        self.assertNotIn("中国石油（iguopin）：官网自报", joined)
+        self.assertIn("另有 1 个国聘源有公司的集团归属没核上", joined)
+        self.assertIn("中国石油", joined)
+
     WOAIWOJIA = {"id": "s5", "adapter_name": "beisen", "company": "我爱我家", "enabled": True,
                  "source_url": "https://5i5j.zhiye.com/campus"}
 
