@@ -80,27 +80,29 @@ test("招满即止 / 报满即止 认得出来，日期区间不误认", () => {
 });
 
 // 2026-10-10：在展示的公告从 455 条涨到约 1,500 条。PostgREST 单次最多回 1000 行、超出是静默截断。
-test("公告取数分页取、翻页排序以 id 收尾、上限留在缓存单条 2MB 以内", () => {
+// 2026-10-10：在展示的公告从 455 条涨到约 1,500 条并会继续累积。两个静默的坑：
+// PostgREST 单次最多回 1000 行（超出悄悄没了）；Next 数据缓存单条约 2MB（超了写不进去，每个请求都重取）。
+test("公告取数按页取、按页缓存、翻页排序以 id 收尾", () => {
   const store = require("node:fs").readFileSync(path.join(__dirname, "..", "lib", "announcement-postings-store.ts"), "utf8");
-  assert.match(store, /fetchAllPages</, "不分页 = 超过 1000 行的部分悄悄没了（复用 lib/supabase-paginate，它自己有行为测试）");
-  assert.match(store, /if \(from >= MAX_ROWS\) return \{ data: \[\], error: null \}/, "上限要夹在分页回调里，否则会一路翻到底");
-  assert.match(store, /\.range\(from, Math\.min\(to, MAX_ROWS - 1\)\)/);
-  assert.match(store, /return toAnnouncementPostings\(fetched\)/, "后面的页出错时用已取到的，别让整块公告区消失");
+  assert.match(store, /\.range\(index \* PAGE_SIZE, \(index \+ 1\) \* PAGE_SIZE - 1\)/, "不分页 = 超过 1000 行的部分悄悄没了");
+  assert.match(store, /requestSafeCache\(\s*async \(_bucket: number, index: number\)/, "一页一个缓存条目：整表缓存成一条会撞 2MB");
   assert.match(store, /\.order\("published_at"[\s\S]{0,200}?\.order\("id"/, "翻页边界落在同一天发布的并列块里会重复 / 漏行");
-  const max = Number(/const MAX_ROWS = (\d+);/.exec(store)[1]);
-  assert.ok(max >= 2000, "国聘一轮就有 1,200+ 条在报名期的公告");
-  assert.ok(max * 545 < 2 * 1024 * 1024, "实测每条 472 字节，算上缓存序列化的转义约 545；超过 2MB 缓存写不进去，每个请求都会重取一遍");
-  assert.match(store, /console\.error\([\s\S]{0,80}读取上限/, "撞上限必须留下痕迹，不许静默截断");
+  assert.match(store, /if \(error\) throw new Error\(error\.message\)/, "出错要抛：返回空会把「没取到」缓存 10 分钟");
+  assert.match(store, /catch \(e\) \{[\s\S]{0,400}?break;/, "后面的页出错时用已取到的，别让整块公告区消失");
+  const pages = Number(/const MAX_PAGES = (\d+);/.exec(store)[1]);
+  assert.ok(pages >= 5, "在报名期的公告有几千条，别把保险丝定得比供给还低");
+  assert.match(store, /console\.error\([\s\S]{0,120}读取上限/, "撞上限必须留下痕迹，不许静默截断");
+  // 每页 1000 行 × 实测约 545 字节 ≈ 0.5MB，离单条 2MB 远
+  assert.ok(1000 * 545 < 2 * 1024 * 1024);
 });
 
-test("公告页首屏限量加载、文案说明搜索范围和未知截止日", () => {
+test("公告页一次只画一页、文案说明搜索范围和未知截止日", () => {
   const fs = require("node:fs");
   const source = fs.readFileSync(path.join(__dirname, "..", "app", "programs", "announcements-client.tsx"), "utf8");
-  // 页大小挪进 lib：服务端要按同一个数切首屏那一页（从 "use client" 文件里拿不到常量值）。
+  // 页大小在 lib：服务端首屏、接口、浏览器三处按同一个数切页。
   const F = loadTs(path.join(__dirname, "..", "lib", "announcement-filters.ts"));
   assert.equal(F.ANNOUNCEMENT_PAGE_SIZE, 40);
-  assert.match(source, /const INITIAL_VISIBLE_COUNT = ANNOUNCEMENT_PAGE_SIZE/);
-  assert.match(source, /visible\.slice\(0, shownCount\)/);
+  assert.match(source, /limit: ANNOUNCEMENT_PAGE_SIZE/);
   assert.match(source, /加载更多/);
   assert.match(source, /可搜：标题、地区、单位类型/);
   assert.match(source, /截止日待确认的/);
@@ -129,10 +131,20 @@ test("/programs 首屏不下发全量公告，全量走要登录、读同一份�
   const route = read("app", "api", "programs", "postings", "route.ts");
   assert.match(route, /await requireUser\(\)/, "页面要登录，接口不另开匿名出口");
   assert.match(route, /getAnnouncementPostings\(\)/, "必须读页面同一个跨实例缓存，不新增未缓存的查询");
-  assert.match(route, /postings\.map\(toAnnouncementCard\)/);
 
+  assert.match(route, /parseAnnouncementQuery\(new URL\(request\.url\)\.searchParams\)/);
+  assert.match(route, /queryAnnouncements\(postings\.map\(toAnnouncementCard\), query, todayInDisplayZone\(\)\)/,
+    "接口与首屏必须是同一个函数算的，数字才不会两套");
+
+  // 2026-10-10：筛选 / 排序 / 翻页挪到服务端。浏览器不再拿全量（1,500 条时那一份已有 570KB）。
   const client = read("app", "programs", "announcements-client.tsx");
-  assert.match(client, /fetch\("\/api\/programs\/postings"/);
-  // 全量没到时，筛选后的数字给不出来就不写——不许拿首屏（无筛选）的计数冒充
-  assert.match(client, /all \? buildFacets\(all, filters, today\) : pristine \? initial\.facets : null/);
+  assert.match(client, /fetch\(`\/api\/programs\/postings\?\$\{params\.toString\(\)\}`/);
+  assert.doesNotMatch(client, /buildFacets|matchesFilters|sortPostings/, "筛选别又挪回浏览器里算");
+  // 新条件的结果没回来时，计数给不出来就不写——不许拿上一组条件的数字冒充
+  assert.match(client, /const facets = settled \? result\.facets : null/);
+  assert.match(client, /const visibleCount = settled \? result\.total : null/);
+  // 回到无筛选状态直接用随页面下发的首屏，不再请求
+  assert.match(client, /if \(wantKey === PRISTINE_KEY\) \{\s*setShown\(\(cur\) => [^\n]*\{ key: PRISTINE_KEY, result: initial \}\)\);\s*return;/);
+  // 翻页带游标（最后一张卡是谁），不只带条数：两次请求之间前面有公告下架时不跳过后面的
+  assert.match(client, /params\.set\("after", shownSoFar\[shownSoFar\.length - 1\]\.sourceUrl\)/);
 });

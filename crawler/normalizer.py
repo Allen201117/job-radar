@@ -2,7 +2,7 @@ import hashlib
 import html
 import json
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 from urllib.parse import parse_qsl, urlparse
 
@@ -497,21 +497,112 @@ def extract_education(text: Optional[str]) -> Optional[str]:
     return None
 
 
+# ⛔ 正文里的「截止 / 截至 + 日期」多数不是投递截止日，判不出的一律不抽（2026-10-10 立）。
+# ❌ 现象：一汽 16 个岗的正文写「以上时间计算截至2026年6月1日」（工龄基准日），被抽成截止日 2026-6-1；
+#    全库 30,507 行「长期有效」里，库里正文真写着「长期有效 / 长期招聘」的只有 43 行，其余几乎都是
+#    英文 JD 里的 long-term（福利条款）/ rolling（Rolling Forecast）触发的。
+# ✅ 判据：① 「长期有效」只认明确的说法，不认裸的 long term / rolling；
+#    ② 日期前（同一句、往前 14 个字）出现资格条件词 → 它算的是年龄 / 工龄的时点，跳过；
+#    ③ 「截止 / 截至」必须带报名类前缀，或紧跟「日期 / 时间」——裸的「截至2022年9月30日，用户数已达…」
+#       是统计时点；deadline 这个词本身指向够明确，不要求前缀。
+#    同一套资格条件词在 announcements/deadline.py 立过一次（公告正文的同一种误抽）。
+# ⚠️ 与前端 lib/job-fields.ts 的 extractDeadline 同口径，两端共读 tests/fixtures/deadline-text-cases.json。
+# 📌 同日补两处（先在 15,666 段真实正文上与上面这版逐条对拍：库里正文能触发旧规则的 3,094 个在招岗 +
+#    greenhouse / ashby / lever 95 个源重拉的 12,451 段未截断正文 + 逐岗取回的 121 段官网全文）：
+#    ① 中文「长期有效 / 长期招聘」也要看前后文。上面写「库里正文真写着的只有 43 行」，没往下看它们写的是什么：
+#       同日复核库里正文含这两个词的在招岗 55 行，是招聘声明的只有 3 行，其余 52 行是「建立长期有效合作关系」
+#       「以长期招聘为目的的公关活动」一类。现在只认：后接「岗位 / 职位」、括号里单独一句、后接「招满即止 /
+#       欢迎投递」、主语是岗位 / 招聘且到句末、「截止日期：/ 招聘时间：」这类标签之后。rolling basis 同一句要有招聘类词
+#       （全文里 71 处，3 处说的是实习生入职时间、项目确认）。全文重放：旧规则标 2,939 行 → 招聘声明 81 行。
+#    ② 「截止 + 报名类词 + 时间 / 日期」也算（「本岗位截止投递时间为2026年10月31日」）：五矿 13 个岗正文这么写，
+#       与平台自己给的下线时间逐个相同（13/13），是真截止日，上一版从正文抽不到。
+#       （这 13 行库里的值是平台给的、不靠正文，所以这一处当前不改变库里任何一行。）
+#    两端逐字一致靠三件事：正则都带 re.A（\b、\d、忽略大小写按 ASCII 算，和 JS 一样——否则全角数字的日期
+#    Python 认、JS 不认）；年份只收 2000–2100（JS 的 Date.UTC 把 0–99 年当成 19xx，3000-01-01 这类占位也顺带挡掉）；
+#    JS 那边先做和 _strip_html 一样的预处理。
+_OPEN_ENDED_CN = re.compile(r"长期(?:有效|招聘)")
+_OPEN_ENDED_CN_TAIL = re.compile(r"[，,、；; ]{0,2}(?:招满即止|招满为止|欢迎(?:随时)?(?:投递|应聘|报名)|随时投递)")
+_OPEN_ENDED_CN_SUBJECT = re.compile(r"(?:岗位|职位|招聘(?:信息|公告|启事|需求)?)(?:为|是|属|系|均为|[：:])? ?$")
+_OPEN_ENDED_CN_END = re.compile(r"中?(?:$|[ ，,。.；;！!、）)】\]])")
+_OPEN_ENDED_CN_LABEL = re.compile(
+    r"(?:截止日期|截止时间|(?:招聘|岗位|职位)有效期|招聘期限|招聘时间|招聘周期|报名时间|投递时间|申请时间)"
+    r"(?:为|是|[：:】\]])? ?$")
+# 括号前是证件 / 合同：「持有教师资格证（长期有效）」说的是证，不是岗位。
+_OPEN_ENDED_CN_NOT_POSTING = re.compile(r"(?:证|证书|证件|执照|驾照|护照|签证|合同|协议|资质|资格)$")
+_OPEN_ENDED_EN = re.compile(r"until filled|rolling (?:basis|applications?|admissions?)", re.I | re.A)
+# hire / hiring 才是招聘动作；hires / hired 多是「新员工」（New hires start on a rolling basis 说的是入职）。
+_HIRING_EN = re.compile(
+    r"applicat|appl(?:y|ies|ied|ying)\b|resumes?\b|candidates?\b|recruit|\bhir(?:e|ing)\b|interview|admission",
+    re.I | re.A)
+_EN_SENTENCE_END = ".!?;。；！？"
+_DEADLINE_CANDIDATE = re.compile(
+    r"(截止|截至|deadline)([^0-9]{0,8})(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})", re.I | re.A)
+_DEADLINE_QUALIFY = re.compile(
+    r"计算|有效期|年龄|周岁|学历|学位|工作经[历验]|工作年限|工龄|服务期|户籍|缴费|资格审查|毕业|出生")
+_DEADLINE_APPLY = re.compile(r"报名|投递|申请|应聘|网申|简历|招聘|招募")
+_DEADLINE_LOOKBACK = 14
+_SENTENCE_BREAK = re.compile(r"[。；;！!？?\n]")
+
+
+def _same_sentence(base: str, start: int, end: int) -> str:
+    """命中处所在的那一句：往前 80 字、往后 40 字，各自到最近的句末标点为止。"""
+    before = base[max(0, start - 80):start]
+    before = before[max(before.rfind(ch) for ch in _EN_SENTENCE_END) + 1:]
+    after = base[end:end + 40]
+    cuts = [i for i in (after.find(ch) for ch in _EN_SENTENCE_END) if i >= 0]
+    return before + " " + (after[:min(cuts)] if cuts else after)
+
+
+def _declares_open_ended(base: str) -> bool:
+    """正文是不是在声明「这个岗长期招聘 / 招满为止」，而不是碰巧用了这几个词。"""
+    for m in _OPEN_ENDED_CN.finditer(base):
+        before, after = base[max(0, m.start() - 8):m.start()], base[m.end():m.end() + 10]
+        if before.endswith("中"):
+            continue  # 中长期招聘规划
+        if after.startswith(("岗位", "职位")) and _OPEN_ENDED_CN_END.match(after[2:]):
+            return True  # 长期招聘岗位）——后面还接着「的简历筛选」就是招聘岗的工作内容
+        lead = before.rstrip(" ")
+        opener, closer = lead[-1:], after.lstrip(" ")[:1]
+        if (opener and opener in "（(【[" and closer and closer in "）)】]"
+                and not _OPEN_ENDED_CN_NOT_POSTING.search(lead[:-1])):
+            return True  # （长期有效）
+        if _OPEN_ENDED_CN_TAIL.match(after):
+            return True
+        if _OPEN_ENDED_CN_SUBJECT.search(before) and _OPEN_ENDED_CN_END.match(after):
+            return True
+        if _OPEN_ENDED_CN_LABEL.search(before):
+            return True
+    for m in _OPEN_ENDED_EN.finditer(base):
+        if not m.group(0).lower().endswith("basis"):
+            return True  # until filled / rolling applications / rolling admissions
+        if _HIRING_EN.search(_same_sentence(base, m.start(), m.end())):
+            return True
+    return False
+
+
 def extract_deadline(text: Optional[str]) -> Optional[str]:
     """从完整 JD 抽取投递截止（ISO 日期 或 '长期有效'）；抽不到返回 None。"""
     base = _strip_html(text)
     if not base:
         return None
-    if re.search(r"长期有效|长期招聘|long[\s-]?term|rolling|until filled", base, re.I):
+    if _declares_open_ended(base):
         return "长期有效"
-    m = re.search(
-        r"(?:截止|截至|申请截止|投递截止|deadline)[^0-9]{0,8}(\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2})",
-        base, re.I,
-    )
-    if m:
-        d = re.sub(r"[年月]", "-", m.group(1))
-        d = re.sub(r"[./]", "-", d)
-        return re.sub(r"-+$", "", d)
+    for m in _DEADLINE_CANDIDATE.finditer(base):
+        before = _SENTENCE_BREAK.split(base[max(0, m.start() - _DEADLINE_LOOKBACK):m.start()])[-1]
+        if _DEADLINE_QUALIFY.search(before):
+            continue
+        gap = m.group(2)
+        applied = _DEADLINE_APPLY.match(gap)   # 截止投递时间为… → 去掉报名类词后同样要紧跟「时间 / 日期」
+        label = gap[applied.end():] if applied else gap
+        if m.group(1).lower() != "deadline" and not (
+                _DEADLINE_APPLY.search(before) or label.startswith(("日期", "时间"))):
+            continue
+        if not 2000 <= int(m.group(3)) <= 2100:
+            continue   # 3000-01-01 这类占位、年份抄错的 → 不是能投的截止日
+        try:
+            return date(int(m.group(3)), int(m.group(4)), int(m.group(5))).isoformat()
+        except ValueError:
+            continue   # 13 月 / 40 日这类 → 当作没抽到，接着找下一处
     return None
 
 

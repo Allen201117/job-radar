@@ -325,6 +325,8 @@ class WtAdapter(PlaywrightAdapter):
     #    （22/22 不同）—— 真截止日 wt 接口不给，只能不写。其余 306 个里新版接口也查得到的 90 个逐个相同。
     # ⚠️ 没写不等于库里清掉：deadline 在 jobs_db._PRESERVE_IF_EMPTY 里，新值为空时保留旧值。
     #    所以这里漏判一次，假日期就留在库里不再被纠正 → 锚点放宽到请求日与前一天、月数 0~12。
+    #    =0（长期发布）另外带 deadline_absent=True，由 run.py 5d 清掉库里的旧日期；=1 的滚动值是
+    #    「判不出」不是「没有」，不带——不然撞上锚点那两天会把库里的真截止日清掉、次日再写回来。
     _ROLLING_MONTHS = range(0, 13)
 
     @classmethod
@@ -390,4 +392,5 @@ class WtAdapter(PlaywrightAdapter):
             education=_first(post, ("education", "educationName")) or None,
             experience=_first(post, ("workYears", "workYearName", "workExperience")) or None,
             deadline=self._deadline(post),
+            deadline_absent=str(post.get("isLongTermRelease")).strip() == "0",
         )

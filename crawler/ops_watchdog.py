@@ -860,11 +860,18 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
     shortfalls = []
     braked = []   # 任务B：RepetitionBrake 按设计刹停（同岗×N门店），不是「我们自己停在半路」
     capped = []   # 撞单源条数上限、且创始人已接受这个取舍的源（COVERAGE_CAP_ACCEPTED_HOSTS）
+    unverified = []   # 国聘：有公司的集团归属本轮没核上，那部分没写（adapters/iguopin._GroupGate）
     for sid, (_started, row) in latest.items():
         source = sources_by_id.get(sid)
         if not source or not source.get("enabled", True):
             continue
         if row.get("coverage_complete") is not False:   # None（不可判定）和 True 都不算
+            continue
+        # 国聘「归属没核上」不是少翻页：它的 reported_total 是搜索接口的封顶数（最多 400），
+        # 而入库数本来就要先过归属门，「自报 − 入库」量出来的不是这次少写的行。
+        # 必须排在缺口门槛之前单列，否则每条国聘源都会顶着一个 200+ 的假缺口进榜。
+        if row.get("coverage_stop_reason") == "attribution_unverified":
+            unverified.append(source.get("company") or sid)
             continue
         reported = _num(row.get("reported_total")) or 0
         found = _num(row.get("jobs_found")) or 0
@@ -896,6 +903,9 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
         if capped:
             print(f"  [watchdog] 规则 G：本轮 {len(capped)} 个源撞单源条数上限（已接受），"
                   f"不计入缺口：{'、'.join(x['company'] for x in capped[:10])}")
+        if unverified:
+            print(f"  [watchdog] 规则 G：本轮 {len(unverified)} 个国聘源有公司的集团归属没核上（那部分没写），"
+                  f"不计入缺口：{'、'.join(unverified[:10])}")
         return []
     shortfalls.sort(key=lambda x: -x["gap"])
     grand = sum(x["gap"] for x in shortfalls)
@@ -928,6 +938,11 @@ def evaluate_coverage_shortfall(crawl_rows, sources_by_id,
         evidence.append(
             f"另有 {len(capped)} 个源撞单源条数上限、已接受这个取舍（少 {sum(x['gap'] for x in capped)} 个岗），"
             "不计入上面的缺口：" + "、".join(x["company"] for x in capped[:5])
+        )
+    if unverified:
+        evidence.append(
+            f"另有 {len(unverified)} 个国聘源有公司的集团归属没核上（国聘公司主页接口问不到，那部分本轮没写，"
+            "不是少翻页），不计入上面的缺口：" + "、".join(unverified[:5])
         )
     return [{
         "rule": "G",

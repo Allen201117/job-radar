@@ -106,3 +106,29 @@ test("reset 换成新一批，不带走上一批的 pending / toast", () => {
   s = todayReducer(s, { type: "finalizeRemove", jobId: "a" });
   assert.deepEqual(ids(s.sections.main), ["x", "y", "z"]);
 });
+
+// 提示条 5 秒到点、但动作请求还没回来：只收提示条，不许丢掉回滚所需的位置信息。
+// 否则请求第 6 秒才失败时，卡片回不来，页面却提示「已恢复原状态」。
+test("expireToast 只收提示条，pending 留着；随后失败仍能回到原位", () => {
+  let s = initTodayState(sections(["a", "b", "c"]));
+  s = todayReducer(s, { type: "removeOptimistic", jobId: "b", action: "saved" });
+  s = todayReducer(s, { type: "expireToast", jobId: "b" });
+  assert.equal(s.toast, null);
+  assert.ok(s.pending["b"], "pending 必须还在");
+  assert.deepEqual(ids(s.sections.main), ["a", "c"]);
+  s = todayReducer(s, { type: "removeRollback", jobId: "b" });
+  assert.deepEqual(ids(s.sections.main), ["a", "b", "c"]);
+  assert.equal(s.pending["b"], undefined);
+});
+
+test("expireToast 不碰别的岗的提示条；随后成功照常落定", () => {
+  let s = initTodayState(sections(["a", "b"]));
+  s = todayReducer(s, { type: "removeOptimistic", jobId: "a", action: "saved" });
+  s = todayReducer(s, { type: "removeOptimistic", jobId: "b", action: "ignored" }); // 提示条现在是 b 的
+  s = todayReducer(s, { type: "expireToast", jobId: "a" });
+  assert.equal(s.toast.jobId, "b");
+  s = todayReducer(s, { type: "finalizeRemove", jobId: "a" });
+  assert.equal(s.pending["a"], undefined);
+  assert.ok(s.pending["b"]);
+  assert.deepEqual(ids(s.sections.main), []);
+});

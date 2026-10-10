@@ -19,7 +19,7 @@ import {
 } from "@/lib/insight-library";
 import InsightsClient from "./insights-client";
 
-export const metadata = { title: "洞察库 · 求职雷达" };
+export const metadata = { title: "洞察库 · 职达 JobRadar" };
 
 export default async function InsightsPage({
   searchParams,

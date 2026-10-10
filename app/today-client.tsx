@@ -216,6 +216,15 @@ export default function TodayClient({
   // 本次会话里已处理（收藏 / 投递 / 不适合）的岗。切求职范围触发的刷新在请求开头就读了操作记录，
   // 刷新途中刚点的那一下还没落库 —— 新 feed 里仍带着这张卡，不滤掉它会在重置后「复活」。
   const actedRef = useRef<Set<string>>(new Set());
+  // 三本小账，都是为了「动作请求的结果回来时，队列该不该动、怎么动」：
+  //   inflight  每张卡还有几个动作请求在路上（计数而不是有 / 无：撤销后重新操作时会同时有两个）。
+  //   removed   本页已乐观移除、结果还没定的岗。
+  //   awaiting  提示条 5 秒已到点、但请求还没回来的岗 —— 落定留给结果回来那一刻。
+  // 提示条到点就直接「落定」会丢掉回滚所需的位置信息：请求第 6 秒才失败时，卡片回不来、
+  // 页面却提示「已恢复原状态」，而数据库里其实什么都没存上。
+  const inflightRef = useRef<Map<string, number>>(new Map());
+  const removedRef = useRef<Set<string>>(new Set());
+  const awaitingResultRef = useRef<Set<string>>(new Set());
   const openedRef = useRef(false);
   const livenessRequested = useRef<Set<string>>(new Set());
 
@@ -245,6 +254,8 @@ export default function TodayClient({
     feedStampRef.current = feed.generated_at;
     for (const t of Array.from(timers.current.values())) clearTimeout(t);
     timers.current.clear();
+    awaitingResultRef.current.clear();
+    removedRef.current.clear();
     const acted = actedRef.current;
     const keep = (list: Opportunity[]) => (acted.size ? list.filter((o) => !acted.has(o.job.id)) : list);
     const s = feed.sections;
@@ -311,27 +322,55 @@ export default function TodayClient({
 
   // JobCard 乐观回调：非空动作 → 乐观移除 + 5s 后落定；null（正向 API 失败）→ 还原（reducer 保证可靠移除/还原）
   function handleActionChange(jobId: string, action: PrimaryAction | null) {
-    if (action !== null) {
-      actedRef.current.add(jobId);
-      dispatch({ type: "removeOptimistic", jobId, action });
-      clearTimer(jobId);
-      timers.current.set(
-        jobId,
-        setTimeout(() => {
-          timers.current.delete(jobId);
+    // JobCard 在请求失败时会再调一次 onActionChange(原来的动作) 通知回滚。回滚统一放在
+    // handleActionResult 里做（那里明确知道 ok=false）：在这里按「非空 = 又一次乐观移除」处理的话，
+    // 原动作非空的卡（关键提醒区里已收藏的岗）失败后不是回来，而是被再「移除」一次并提示「已收藏」。
+    if (removedRef.current.has(jobId)) return;
+    // 空动作且没有待定的移除 = 在卡片上取消了已有动作（如取消收藏）：卡片留在原地，队列无事可做。
+    if (action === null) return;
+    removedRef.current.add(jobId);
+    actedRef.current.add(jobId);
+    inflightRef.current.set(jobId, (inflightRef.current.get(jobId) ?? 0) + 1);
+    dispatch({ type: "removeOptimistic", jobId, action });
+    clearTimer(jobId);
+    timers.current.set(
+      jobId,
+      setTimeout(() => {
+        timers.current.delete(jobId);
+        if ((inflightRef.current.get(jobId) ?? 0) > 0) {
+          // 请求还在路上：只把提示条收掉，落定留给 handleActionResult。
+          awaitingResultRef.current.add(jobId);
+          dispatch({ type: "expireToast", jobId });
+        } else {
+          removedRef.current.delete(jobId);
           dispatch({ type: "finalizeRemove", jobId });
-        }, TOAST_MS),
-      );
-    } else {
-      actedRef.current.delete(jobId);
-      clearTimer(jobId);
-      dispatch({ type: "removeRollback", jobId });
-    }
+        }
+      }, TOAST_MS),
+    );
   }
 
-  // 落库结果：成功不用再说一遍（乐观移除时已经弹了「已收藏 · 撤销」），失败必须说。
-  function handleActionResult({ ok }: { ok: boolean }) {
-    if (!ok) setActionFailed(true);
+  // 落库结果：成功不用再说一遍（乐观移除时已经弹了「已收藏 · 撤销」），失败在这里回滚并说出来。
+  function handleActionResult({ jobId, ok }: { jobId: string; ok: boolean }) {
+    const left = Math.max(0, (inflightRef.current.get(jobId) ?? 0) - 1);
+    if (left > 0) inflightRef.current.set(jobId, left);
+    else inflightRef.current.delete(jobId);
+    // 没有待定的移除（已撤销 / 只是在卡片上取消了动作）→ 队列没什么可做的，卡片自己会显示行内报错。
+    if (!removedRef.current.has(jobId)) return;
+    // 还有更晚发出的请求在路上（撤销后又操作了一次）→ 这是前一个请求的结果，已被那次撤销作废。
+    if (left > 0) return;
+    if (!ok) {
+      removedRef.current.delete(jobId);
+      actedRef.current.delete(jobId);
+      awaitingResultRef.current.delete(jobId);
+      clearTimer(jobId);
+      dispatch({ type: "removeRollback", jobId });
+      setActionFailed(true);
+      return;
+    }
+    if (awaitingResultRef.current.delete(jobId)) {
+      removedRef.current.delete(jobId);
+      dispatch({ type: "finalizeRemove", jobId });
+    }
   }
 
   async function undo() {
@@ -339,6 +378,9 @@ export default function TodayClient({
     if (!t || t.undoFailed) return;
     const jobId = t.jobId;
     clearTimer(jobId);
+    // 卡片回到队列里了：之后晚到的那个请求结果不该再动它。
+    removedRef.current.delete(jobId);
+    awaitingResultRef.current.delete(jobId);
     dispatch({ type: "undoOptimistic", jobId });
     try {
       const resp = await fetch(`/api/job-actions/${jobId}`, {
