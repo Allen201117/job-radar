@@ -35,6 +35,7 @@ import jobs_db
 import must_apply
 import ops_runs
 from adapters.playwright_base import install_dialog_guard as _install_dialog_guard
+from normalizer import title_first_segment
 from playwright.sync_api import sync_playwright
 
 
@@ -374,6 +375,16 @@ def fetch_browser_liveness(sb, limit, shard="0/1", host_filter=None, jobs_conn=N
     return [r for i, r in enumerate(rows) if i % n == k][:limit]
 
 
+def _title_key(title):
+    """去页面里找的那一小段标题：「 - 」分段标题只取第一段的前 8 个字。
+
+    🚫 别改回整串的前 8 个字。2026-10-10 起入库保留完整标题（normalizer.clean_title 不再把「 - 」之后
+    截掉），「AI产品设计师 - 飞书设计」整串取前 8 个字是带着尾随空格的「AI产品设计师 」——页面只要没把
+    两段用一模一样的空格连字符接在一起渲染，就成了标题不在场，再碰上页脚一句「已结束」就被判死、
+    次日永久删除。只取第一段 = 与截断时代用的是同一个 key，判定逐条不变。"""
+    return title_first_segment(title)[:8]
+
+
 def classify(page, title):
     """渲染后判活死。顺序是设计的一部分：强信号 → （标题不在场时才看）弱信号 → 标题在场=alive。
 
@@ -384,7 +395,7 @@ def classify(page, title):
     except Exception:
         text = ""
     low = text.lower()
-    key = (title or "").strip()[:8]
+    key = _title_key(title)
     title_present = bool(key) and key in text
 
     for m in DEAD_MARKERS_STRONG:

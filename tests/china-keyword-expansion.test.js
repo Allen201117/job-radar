@@ -305,6 +305,27 @@ test("角色簇门不误杀：查询自己的角色词在标题里 → 照常 ex
   }
 });
 
+// 2026-10-10 起爬虫入库保留完整标题（此前「 - 」之后整段被截掉）。下面是 live 抓到的字节标题：
+// 认领若看整串，末尾团队名里的「数据工程」「安全」会把标题判给别的角色簇，截断时代精确匹配的岗被拒。
+test("角色簇门：「 - 」后面的业务线 / 团队名不参与认领（与括号限定语同理）", () => {
+  const job = (title) => ({ title, company: "某公司", summary: null });
+  for (const [query, title] of [
+    ["数据分析", "大模型数据挖掘实习生 - 模型数据工程"],
+    ["AI 数据产品经理", "AI数据平台产品实习生 - 模型数据工程"],
+    ["AI 产品经理", "LLM/VLM模型训练产品实习生 - AI数据与安全"],
+  ]) {
+    assert.equal(keywordMatchTier(job(title), query), "exact", `${query} 应精确匹配 ${title}`);
+    assert.equal(keywordMatchTier(job(title.split(" - ")[0]), query), "exact", "与截断时代同结论");
+  }
+  // 反方向：主干自己的角色词照常认领，尾巴救不了它。
+  for (const [query, title] of [
+    ["AI 产品经理", "AI产品运营 - 抖音电商"],
+    ["数据分析师", "大数据开发负责人 - 数据平台"],
+  ]) {
+    assert.notEqual(keywordMatchTier(job(title), query), "exact", `${query} 不该精确匹配 ${title}`);
+  }
+});
+
 test("领域锚点表只许放领域词：角色词进表会让对应角色簇失去认领能力", () => {
   const { GROUP_DOMAIN_ANCHORS } = require("../lib/china-keyword-expansion");
   // 「设计」「运营」「销售」「全栈」「大数据」是角色词，正是它们把上面那些岗认领走的。
