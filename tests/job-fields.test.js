@@ -34,8 +34,27 @@ test("extractEducation handles unrestricted and unknown education", () => {
 });
 
 test("extractDeadline normalizes Chinese deadline dates", () => {
-  assert.equal(F.extractDeadline("申请截止：2026年7月31日"), "2026-7-31");
+  // 月日补零成 ISO：cleanDeadlineText 只认 YYYY-MM-DD，不补零的真截止日一直显示不出来。
+  assert.equal(F.extractDeadline("申请截止：2026年7月31日"), "2026-07-31");
   assert.equal(F.extractDeadline("投递截止 2026/08/01"), "2026-08-01");
+});
+
+test("extractDeadline 与爬虫端 normalizer.extract_deadline 共读同一份用例", () => {
+  // Python 侧断言在 crawler/test_normalizer.py（test_deadline_shared_cases）。
+  const { cases } = require("./fixtures/deadline-text-cases.json");
+  assert.ok(cases.length >= 25);
+  for (const c of cases) {
+    assert.equal(F.extractDeadline(c.text), c.expect ?? "未知", c.text);
+  }
+});
+
+test("extractDeadline 的资格条件词只在同一句里才算数", () => {
+  assert.equal(F.extractDeadline("年龄计算至今。报名截止2026年9月25日"), "2026-09-25");
+});
+
+test("正文抽出的真截止日能过 cleanDeadlineText 显示出来", () => {
+  const now = new Date("2026-10-10T04:00:00Z");
+  assert.equal(F.cleanDeadlineText(F.extractDeadline("报名截止：2026年11月5日"), now), "2026-11-05");
 });
 
 test("extractDeadline handles rolling and empty deadlines", () => {

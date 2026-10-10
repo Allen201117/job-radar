@@ -20,13 +20,32 @@ export function extractEducation(text?: string | null): string {
   return "未知";
 }
 
+// ⛔ 正文里的「截止 / 截至 + 日期」多数不是投递截止日，判不出的一律不抽（2026-10-10 立）。
+// 与爬虫端 crawler/normalizer.py 的 extract_deadline 同口径，依据与计数写在那边；
+// 两端共读 tests/fixtures/deadline-text-cases.json，改一边必须同改另一边。
+const OPEN_ENDED = /长期有效|长期招聘|until filled|rolling\s+(?:basis|applications?|admissions?)/i;
+const DEADLINE_CANDIDATE = /(截止|截至|deadline)([^0-9]{0,8})(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})/gi;
+// 日期前（同一句、往前 14 个字）出现这些词 → 它算的是年龄 / 工龄的时点，不是投递窗口。
+const DEADLINE_QUALIFY = /计算|有效期|年龄|周岁|学历|学位|工作经[历验]|工作年限|工龄|服务期|户籍|缴费|资格审查|毕业|出生/;
+const DEADLINE_APPLY = /报名|投递|申请|应聘|网申|简历|招聘|招募/;
+const DEADLINE_LOOKBACK = 14;
+const SENTENCE_BREAK = /[。；;！!？?\n]/;
+
 export function extractDeadline(text?: string | null): string {
   if (!text) return "未知";
-  if (/长期有效|长期招聘|long[\s-]?term|rolling|until filled/i.test(text)) return "长期有效";
-  const m = text.match(
-    /(?:截止|截至|申请截止|投递截止|deadline)[^0-9]{0,8}(\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2})/i,
-  );
-  if (m) return m[1].replace(/[年月]/g, "-").replace(/[./]/g, "-").replace(/-+$/, "");
+  if (OPEN_ENDED.test(text)) return "长期有效";
+  for (const m of text.matchAll(DEADLINE_CANDIDATE)) {
+    const start = m.index ?? 0;
+    const before = text.slice(Math.max(0, start - DEADLINE_LOOKBACK), start).split(SENTENCE_BREAK).pop() ?? "";
+    if (DEADLINE_QUALIFY.test(before)) continue;
+    // 「截止 / 截至」必须带报名类前缀，或紧跟「日期 / 时间」；deadline 这个词本身指向够明确。
+    if (m[1].toLowerCase() !== "deadline" && !(DEADLINE_APPLY.test(before) || /^(?:日期|时间)/.test(m[2]))) continue;
+    const [y, mo, d] = [Number(m[3]), Number(m[4]), Number(m[5])];
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    // 13 月 / 40 日这类 → 当作没抽到，接着找下一处。
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) continue;
+    return dt.toISOString().slice(0, 10);
+  }
   return "未知";
 }
 

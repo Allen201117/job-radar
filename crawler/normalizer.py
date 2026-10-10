@@ -2,7 +2,7 @@ import hashlib
 import html
 import json
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 from urllib.parse import parse_qsl, urlparse
 
@@ -497,21 +497,44 @@ def extract_education(text: Optional[str]) -> Optional[str]:
     return None
 
 
+# ⛔ 正文里的「截止 / 截至 + 日期」多数不是投递截止日，判不出的一律不抽（2026-10-10 立）。
+# ❌ 现象：一汽 16 个岗的正文写「以上时间计算截至2026年6月1日」（工龄基准日），被抽成截止日 2026-6-1；
+#    全库 30,507 行「长期有效」里，库里正文真写着「长期有效 / 长期招聘」的只有 43 行，其余几乎都是
+#    英文 JD 里的 long-term（福利条款）/ rolling（Rolling Forecast）触发的。
+# ✅ 判据：① 「长期有效」只认明确的说法，不认裸的 long term / rolling；
+#    ② 日期前（同一句、往前 14 个字）出现资格条件词 → 它算的是年龄 / 工龄的时点，跳过；
+#    ③ 「截止 / 截至」必须带报名类前缀，或紧跟「日期 / 时间」——裸的「截至2022年9月30日，用户数已达…」
+#       是统计时点；deadline 这个词本身指向够明确，不要求前缀。
+#    同一套资格条件词在 announcements/deadline.py 立过一次（公告正文的同一种误抽）。
+# ⚠️ 与前端 lib/job-fields.ts 的 extractDeadline 同口径，两端共读 tests/fixtures/deadline-text-cases.json。
+_OPEN_ENDED = re.compile(r"长期有效|长期招聘|until filled|rolling\s+(?:basis|applications?|admissions?)", re.I)
+_DEADLINE_CANDIDATE = re.compile(
+    r"(截止|截至|deadline)([^0-9]{0,8})(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})", re.I)
+_DEADLINE_QUALIFY = re.compile(
+    r"计算|有效期|年龄|周岁|学历|学位|工作经[历验]|工作年限|工龄|服务期|户籍|缴费|资格审查|毕业|出生")
+_DEADLINE_APPLY = re.compile(r"报名|投递|申请|应聘|网申|简历|招聘|招募")
+_DEADLINE_LOOKBACK = 14
+_SENTENCE_BREAK = re.compile(r"[。；;！!？?\n]")
+
+
 def extract_deadline(text: Optional[str]) -> Optional[str]:
     """从完整 JD 抽取投递截止（ISO 日期 或 '长期有效'）；抽不到返回 None。"""
     base = _strip_html(text)
     if not base:
         return None
-    if re.search(r"长期有效|长期招聘|long[\s-]?term|rolling|until filled", base, re.I):
+    if _OPEN_ENDED.search(base):
         return "长期有效"
-    m = re.search(
-        r"(?:截止|截至|申请截止|投递截止|deadline)[^0-9]{0,8}(\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2})",
-        base, re.I,
-    )
-    if m:
-        d = re.sub(r"[年月]", "-", m.group(1))
-        d = re.sub(r"[./]", "-", d)
-        return re.sub(r"-+$", "", d)
+    for m in _DEADLINE_CANDIDATE.finditer(base):
+        before = _SENTENCE_BREAK.split(base[max(0, m.start() - _DEADLINE_LOOKBACK):m.start()])[-1]
+        if _DEADLINE_QUALIFY.search(before):
+            continue
+        if m.group(1).lower() != "deadline" and not (
+                _DEADLINE_APPLY.search(before) or m.group(2).startswith(("日期", "时间"))):
+            continue
+        try:
+            return date(int(m.group(3)), int(m.group(4)), int(m.group(5))).isoformat()
+        except ValueError:
+            continue   # 13 月 / 40 日这类 → 当作没抽到，接着找下一处
     return None
 
 

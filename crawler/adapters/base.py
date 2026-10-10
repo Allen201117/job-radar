@@ -170,6 +170,10 @@ class RawJob:
     experience: Optional[str] = None   # 经验要求；adapter 可直填，否则由 normalizer 从全文抽取
     education: Optional[str] = None     # 学历要求；同上
     deadline: Optional[str] = None      # 投递截止；同上
+    # 对方**明确**这个岗没有截止日（如 wt / hotjob 的「长期发布」）。它和 deadline=None 不是一回事：
+    # None 只是「这次没拿到 / 判不出」，写库时保留旧值（jobs_db._PRESERVE_IF_EMPTY）；
+    # 这个为 True 才允许清掉库里的旧截止日（run.py 5d → jobs_db.clear_deadlines）。判不出就留 False。
+    deadline_absent: bool = False
     # 对方 ATS 在结构化字段里**自报**的国家（ISO-3166 alpha-2），不是从地点文本猜的。
     # 只在地点文本判不出国家、job_scope 只能按 source.regions 猜的时候才生效（normalizer.normalize），
     # 地点能判出国家时一律以地点为准。没有就留 None。目前只有 workday 填（detail 的 alpha2Code）。
