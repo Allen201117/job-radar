@@ -43,6 +43,9 @@
 -- ⚠️ 顺序：先把香港库里「旧套件链接 + 岗位号仍在门户列表里」的 removed 行换成新门户链接（社招 18 行 / 校招 1 行，
 --    只换 jd_url / apply_url 里的套件号），再合本迁移——这样首轮抓取按 canonical 命中旧行、复活成 active 并保留
 --    6~8 月的首见时间；反过来这 19 个岗会以新行入库、首见时间变成今天。其余 23 行（岗位已不在列表）保持 removed 不动。
+--    存量已于 2026-10-11 按此顺序处理（创始人同意）：一个事务里改 19 行，回读 19/19 的 jd_url / apply_url /
+--    canonical 都在新门户链接上、状态仍是 removed、首见时间（06-15 ~ 08-24）未变、无重复 canonical；
+--    旧套件链接剩 23 行。没有任何 job_actions 指向这 42 行。
 -- 可逆：source_url / company / notes 改回原值即可。幂等：id + 旧 source_url 双重限定，重复执行无副作用。
 -- 不写 board 列（generated）；segment / industry / industry_group / ownership / regions 不动。
 
