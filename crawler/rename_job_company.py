@@ -11,6 +11,10 @@ sources.company 改对之后，jobs.company 在 jobs_db._UPDATE_COLS 里、**下
   · 参数一律绑定，不拼字符串。
 不动 status / last_seen_at 等任何其它列；不区分 status（expired 行也一并改名，purge 删它时名字是对的）。
 
+🚫 sources.company 的迁移生效后别马上 --apply，先等在飞的抓取轮过完这条源（2026-10-10 踩，迁移 312）：
+   迁移生效前已经读完源清单的那一轮抓取，会拿旧公司名把刚改好的行写回去（85 行改完 1 分钟后 84 行变回旧名）。
+   判法与防法同 remove_jobs_by_url_prefix.py 模块注释里那块碑。
+
 用法：
     python3 crawler/rename_job_company.py --url-prefix https://x.hotjob.cn/SUxxx/ --from 旧名 --to 新名            # dry-run
     python3 crawler/rename_job_company.py --url-prefix https://x.hotjob.cn/SUxxx/ --from 旧名 --to 新名 --apply    # 真写
