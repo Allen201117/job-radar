@@ -28,7 +28,7 @@ import {
 } from "@/lib/apply-programs";
 import AnnouncementsClient from "./announcements-client";
 
-export const metadata = { title: "公告制招聘 · 求职雷达" };
+export const metadata = { title: "公告制招聘 · 职达 JobRadar" };
 
 // 为什么单独一个入口：有一类招聘**客观上不存在「一岗一页」** —— 事业单位/体制内多为公告制
 // （一条公告 = 批量岗位 + 报名截止日，官网没有逐个岗位的详情页），中通校招是「蓝天计划」项目制投递。

@@ -127,8 +127,10 @@ export function useClickOutside(
       if (ignore?.current?.contains(target)) return;
       saved.current();
     };
-    window.addEventListener("pointerdown", onPointerDown);
-    return () => window.removeEventListener("pointerdown", onPointerDown);
+    // 捕获阶段监听：筛选条上的按钮会在冒泡阶段 stopPropagation（为了自己的「点触发按钮能关」），
+    // 冒泡阶段的监听收不到这些点击 —— 卡片的「更多」菜单开着时去点筛选条，菜单会留在那儿。
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => window.removeEventListener("pointerdown", onPointerDown, true);
   }, [containerRef, ignore, active]);
 }
 

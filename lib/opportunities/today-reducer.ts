@@ -33,6 +33,7 @@ export type TodayEvent =
   | { type: "undoCommit"; jobId: string } // 撤销 API 成功
   | { type: "undoRollback"; jobId: string } // 撤销 API 失败 → 重新移出
   | { type: "dismissToast" } // 关闭 toast（撤销失败提示等自动消失）
+  | { type: "expireToast"; jobId: string } // 提示条到点但请求还没回来：只收提示，pending 留着等结果
   | { type: "reset"; sections: FeedSections }; // 服务端换了一批机会（切求职范围后刷新）→ 整个队列换新
 
 function cloneSections(s: FeedSections): FeedSections {
@@ -125,6 +126,10 @@ export function todayReducer(state: TodayState, ev: TodayEvent): TodayState {
     }
     case "dismissToast": {
       return state.toast ? { ...state, toast: null } : state;
+    }
+    case "expireToast": {
+      // 与 finalizeRemove 的区别：不动 pending。请求稍后失败时 removeRollback 还得靠它把卡片放回原位。
+      return state.toast?.jobId === ev.jobId ? { ...state, toast: null } : state;
     }
     case "reset": {
       // 旧队列的 pending / undoing / toast 都指着上一批的岗位，留着只会把上一批的卡插回新队列。

@@ -216,6 +216,11 @@ export default function TodayClient({
   // 本次会话里已处理（收藏 / 投递 / 不适合）的岗。切求职范围触发的刷新在请求开头就读了操作记录，
   // 刷新途中刚点的那一下还没落库 —— 新 feed 里仍带着这张卡，不滤掉它会在重置后「复活」。
   const actedRef = useRef<Set<string>>(new Set());
+  // 动作请求还没回来的岗 / 提示条已到点但请求还没回来的岗。
+  // 提示条 5 秒到点就「落定」会丢掉回滚所需的位置信息：请求第 6 秒才失败时，卡片回不来、
+  // 页面却提示「已恢复原状态」，而数据库里其实什么都没存上。
+  const inflightRef = useRef<Set<string>>(new Set());
+  const awaitingResultRef = useRef<Set<string>>(new Set());
   const openedRef = useRef(false);
   const livenessRequested = useRef<Set<string>>(new Set());
 
@@ -245,6 +250,7 @@ export default function TodayClient({
     feedStampRef.current = feed.generated_at;
     for (const t of Array.from(timers.current.values())) clearTimeout(t);
     timers.current.clear();
+    awaitingResultRef.current.clear();
     const acted = actedRef.current;
     const keep = (list: Opportunity[]) => (acted.size ? list.filter((o) => !acted.has(o.job.id)) : list);
     const s = feed.sections;
@@ -313,13 +319,20 @@ export default function TodayClient({
   function handleActionChange(jobId: string, action: PrimaryAction | null) {
     if (action !== null) {
       actedRef.current.add(jobId);
+      inflightRef.current.add(jobId);
       dispatch({ type: "removeOptimistic", jobId, action });
       clearTimer(jobId);
       timers.current.set(
         jobId,
         setTimeout(() => {
           timers.current.delete(jobId);
-          dispatch({ type: "finalizeRemove", jobId });
+          if (inflightRef.current.has(jobId)) {
+            // 请求还在路上：只把提示条收掉，落定留给 handleActionResult。
+            awaitingResultRef.current.add(jobId);
+            dispatch({ type: "expireToast", jobId });
+          } else {
+            dispatch({ type: "finalizeRemove", jobId });
+          }
         }, TOAST_MS),
       );
     } else {
@@ -330,8 +343,15 @@ export default function TodayClient({
   }
 
   // 落库结果：成功不用再说一遍（乐观移除时已经弹了「已收藏 · 撤销」），失败必须说。
-  function handleActionResult({ ok }: { ok: boolean }) {
-    if (!ok) setActionFailed(true);
+  // JobCard 失败时先调 onActionChange(回滚) 再调这里，所以走到这儿卡片已经放回原位了。
+  function handleActionResult({ jobId, ok }: { jobId: string; ok: boolean }) {
+    inflightRef.current.delete(jobId);
+    const waited = awaitingResultRef.current.delete(jobId);
+    if (!ok) {
+      setActionFailed(true);
+      return;
+    }
+    if (waited) dispatch({ type: "finalizeRemove", jobId });
   }
 
   async function undo() {

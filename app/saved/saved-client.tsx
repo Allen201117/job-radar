@@ -116,7 +116,7 @@ export default function SavedClient({
         <div className="flex flex-col gap-2 rounded-[1.1rem] border border-black/[0.06] bg-white/45 px-4 py-3 text-sm ink-2 sm:flex-row sm:items-center sm:justify-between dark:border-white/[0.1] dark:bg-white/[0.05]">
           <span className="inline-flex items-center gap-2">
             <Scales size={15} weight="bold" className="text-tone-sky-fg" aria-hidden="true" />
-            选择 2-4 个岗位后，可打开对比决策桌横向查看匹配度、薪资和风险。
+            选 2~4 个岗位，可以并排对比匹配度、薪资和风险。
           </span>
         </div>
       )}
