@@ -375,6 +375,26 @@ def retire_posted_before(conn, source_id, cutoff_date) -> int:
         return cur.rowcount
 
 
+def clear_deadlines(conn, jd_urls) -> int:
+    """把这些岗在库里的截止日清掉，返回受影响行数。只给「对方明确没有截止日」的岗用
+    （RawJob.deadline_absent，见 adapters/base.py）。
+
+    为什么要单独一步：deadline 在 _PRESERVE_IF_EMPTY 里，upsert 时新值为空会保留旧值——那是为了不让
+    一次瘦 payload 抹掉更完整的正文里抽出的截止日；代价是 adapter 永远撤不回一个旧值。wt / hotjob
+    2026-10-10 手工清掉的 41,605 行假截止日就是这么攒出来的。
+    只动 active 行（走 canonical 的 active 唯一索引）；下架行日后复活，下一轮抓取再清。
+    平时没有旧值可清，`deadline is not null` 让它是 0 行更新。"""
+    canons = sorted({canonicalize_jd_url(u) for u in jd_urls if u})
+    if not canons:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            "update jobs set deadline = null where status = 'active' and deadline is not null "
+            "and canonical_jd_url = any(%s)",
+            (canons,))
+        return cur.rowcount
+
+
 def record_job_events(conn, events) -> int:
     """best-effort 批量插 job_events（event_key 幂等 → on conflict do nothing）。
     写失败只 warning、返回 0，**绝不抛**（事件失败不许影响 jobs upsert，02 spec §5.3）。"""

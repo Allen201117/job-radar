@@ -27,7 +27,13 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     （wt `isLongTermRelease` / hotjob `longTermRelease`）== 1 才是官网显示的「下线时间」；== 0 时官网写「长期发布」，
                          #     endDate 是系统填的数（wt 回请求当天、hotjob 每晚续成 +7 天、3000-01-01、发布日+12 个月、早已过去的日期）。
                          #     wt 的 == 1 里还有一类「请求当天 + N 个月」的滚动值，同样不写。依据与计数在两个 adapter 的 `_deadline` 注释里。
-                         #     ⚠️ deadline 在 `_PRESERVE_IF_EMPTY` 里：adapter 不写 ≠ 库里清掉，存量假日期要另行清理。
+                         #     ⚠️ deadline 在 `_PRESERVE_IF_EMPTY` 里：adapter 不写 ≠ 库里清掉。所以标记 == 0 的岗另带
+                         #     `RawJob.deadline_absent=True`，抓完由 run.py 5d → `jobs_db.clear_deadlines` 清掉库里的旧值；
+                         #     标记缺失、wt 的滚动值是「判不出」，不带（带了会在撞日期的那两天把真截止日清掉再写回）。
+                         #   正文兜底抽截止日（normalizer.extract_deadline，前端 lib/job-fields.extractDeadline 同口径，2026-10-10 收紧）：
+                         #     🚫 「截至 + 日期」多是年龄 / 工龄的计算基准日或统计时点；英文 JD 的 long-term / rolling 不是「长期有效」
+                         #     （全库 30,507 行这个标记里库内正文真写着的只有 43 行）。现在要带报名类前缀或紧跟「日期 / 时间」才认，
+                         #     两端共读 tests/fixtures/deadline-text-cases.json。
                          #   hotjob.py 的列表翻页（2026-10-10）：🚫 **第 1 页不听我们传的 pageSize**——回多少条一页、自报的 totalPage
                          #     按哪种页长算都由对方定，同一租户不同时刻还会变（当天实测 1 / 10 / 12 / 15 / 20 / 50）。旧写法每页按 20 要、
                          #     又认第 1 页的 totalPage：页长 <20 时第 1、2 页之间断档（财通证券校招 72 → 64），页长 50 时翻到四成就停

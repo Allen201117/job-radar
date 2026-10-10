@@ -37,6 +37,9 @@ def _job(job_id, company_name, company_id):
 class IguopinAdapterTest(unittest.TestCase):
     def setUp(self):
         reset_process_caches()
+        sleeper = mock.patch("adapters.iguopin.time.sleep")   # 主页接口失败会退避重试，单测不真等
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
 
     def test_parse_verified_detail_job(self):
         fixture = Path(__file__).with_name("fixtures") / "iguopin_list.json"
@@ -132,6 +135,46 @@ class IguopinAdapterTest(unittest.TestCase):
         self.assertEqual((short, gid), (None, ""))
         children.assert_not_called()
 
+    def test_sub_group_whose_name_merely_starts_with_the_token_is_not_the_anchor(self):
+        """2026-10-10 实测：南方电网两条源都锚到了「南方电网数字电网集团有限公司」（南网旗下的一个二级集团，
+        在国聘上自己是自己的集团），于是只放行它一家，鼎和财产保险那 105 个岗从 09-21 起再没被刷新过。
+        简称「以 token 开头」不够，必须**就是** token 这家本身。"""
+        rows = [_job("a", "南方电网数字电网集团有限公司", "cid-digital"),
+                _job("b", "鼎和财产保险股份有限公司", "cid-dinghe")]
+        info = {"cid-digital": ("g-digital", "南方电网数字电网集团有限公司"),
+                "cid-dinghe": ("g-csg", "南方电网")}
+        adapter = IguopinAdapter()
+        with mock.patch.object(IguopinAdapter, "_group_info", side_effect=lambda cid, _h: info[cid]), \
+             mock.patch.object(IguopinAdapter, "_group_children", return_value=[]):
+            short, gid = adapter._expand_group_children(rows, {}, tokens=["南方电网"])
+        self.assertEqual((short, gid), ("南方电网", "g-csg"))
+
+    def test_branch_offices_never_become_the_group(self):
+        """招商银行各分行在国聘上都是「自己是自己的集团」，简称就是分行全名。把佛山分行当成集团，
+        其它分行全被 group_id 拒掉（同批还有 中国平安→平安产险莆田中支、中公教育→北京中公教育科技）。
+        没有哪家是 token 本身 → 不展开，回到按名字核。"""
+        rows = [_job("a", "招商银行股份有限公司佛山分行", "cid-fs"),
+                _job("b", "招商银行股份有限公司东莞分行", "cid-dg")]
+        info = {"cid-fs": ("cid-fs", "招商银行股份有限公司佛山分行"),
+                "cid-dg": ("cid-dg", "招商银行股份有限公司东莞分行")}
+        adapter = IguopinAdapter()
+        with mock.patch.object(IguopinAdapter, "_group_info", side_effect=lambda cid, _h: info[cid]), \
+             mock.patch.object(IguopinAdapter, "_group_children", return_value=[]) as children:
+            short, gid = adapter._expand_group_children(rows, {}, tokens=["招商银行"])
+        self.assertEqual((short, gid), (None, ""))
+        children.assert_not_called()
+
+    def test_short_names_that_are_the_token_itself_still_anchor(self):
+        """收紧不能误伤：地名前缀 + token（中国中铁 / 中铁）、token + 公司后缀（中远海运集团 / 中远海运）都算本身。"""
+        for short, token in (("中国中铁", "中铁"), ("中远海运集团", "中远海运"), ("中国电建集团", "中国电建"),
+                             ("恒力石化", "恒力石化"), ("比亚迪股份有限公司", "比亚迪")):
+            with self.subTest(short=short):
+                adapter = IguopinAdapter()
+                with mock.patch.object(IguopinAdapter, "_group_info", return_value=("g", short)), \
+                     mock.patch.object(IguopinAdapter, "_group_children", return_value=[]):
+                    got = adapter._expand_group_children([_job("a", "某子公司", "cid")], {}, tokens=[token])
+                self.assertEqual(got, (short, "g"))
+
     def test_full_name_gate_only_allows_corporate_suffix_remainder(self):
         self.assertTrue(_full_name_is_same_entity("中国海洋石油集团有限公司", "中国海洋石油"))
         self.assertTrue(_full_name_is_same_entity("中国能源建设股份有限公司", "中国能源建设"))
@@ -193,9 +236,12 @@ class IguopinAdapterTest(unittest.TestCase):
 
         def fake_get(url, **kwargs):
             if "company/index/v1/home" in url:
-                self.assertEqual(kwargs["params"], {"company_id": "child-root"})
+                # 三家都要答：2026-10-10 前这里只答 child-root、另两家一问就炸，
+                # 而测试照样绿 —— 因为「问不到 → 放行」。这个夹具自己就踩在那个口子上。
+                cid = kwargs["params"]["company_id"]
+                self.assertIn(cid, {"child-root", "child-js", "child-hb"})
                 return _Response({"code": 200, "data": {"company_info": {
-                    "id": "child-root", "group_id": "group-grid", "group_short_name": "国家电网",
+                    "id": cid, "group_id": "group-grid", "group_short_name": "国家电网",
                 }}})
             if "children-list" in url:
                 self.assertEqual(kwargs["params"], {"company_id": "group-grid"})
@@ -281,7 +327,10 @@ class IguopinAdapterTest(unittest.TestCase):
             rows.append(child)
             return "中国石油", "grp-cnpc"
 
-        def fake_get(_url, **kwargs):
+        def fake_get(url, **kwargs):
+            if "company/index/v1/home" in url:      # 两家都是中国石油集团成员（国聘口径）
+                cid = kwargs["params"]["company_id"]
+                return _Response({"code": 200, "data": {"company_info": {"id": cid, "group_id": "grp-cnpc"}}})
             job_id = kwargs["params"]["id"]
             row = {"root": root, "child": child}[job_id]
             return _Response({"code": 200, "data": {**row, "contents": row["contents"]}})
@@ -346,6 +395,9 @@ class ProcessCacheTest(unittest.TestCase):
 
     def setUp(self):
         reset_process_caches()
+        sleeper = mock.patch("adapters.iguopin.time.sleep")
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
 
     def _fetch(self, url, rows, *, group_id="grp", seen_home=None, seen_detail=None):
         def fake_post(_url, **_kwargs):
@@ -419,6 +471,28 @@ class ProcessCacheTest(unittest.TestCase):
         self.assertEqual(adapter._company_group_id("c1", {}), "")
         self.assertEqual(adapter._company_group_id("c1", {}), "")
         self.assertEqual(calls, ["c1"])
+
+    def test_anchor_lookup_and_membership_lookup_agree_on_the_group(self):
+        """「这家公司的集团是谁」只有一份实现（group_id_of）。旧写法里定锚那一跳对「央企(集团)」一律写自己的 id，
+        归属门那一跳却以 group_id 为准 —— 国聘上真有 classify 是集团、group_id 却指着别人的公司，
+        同一家的结论取决于先被谁问到，锚在它身上还会给上级集团的子公司贴它的简称。"""
+        info = {"id": "c1", "name": "某集团有限公司", "short_name": "某集团", "classify_cn": "央企(集团)",
+                "group_id": "g-parent", "group_name": "上级集团有限公司", "group_short_name": "上级集团"}
+        with mock.patch("adapters.iguopin.httpx.get",
+                        return_value=_Response({"code": 200, "data": {"company_info": info}})):
+            adapter = IguopinAdapter()
+            self.assertEqual(adapter._fetch_company_group_id("c1", {}), "g-parent")
+            self.assertEqual(adapter._group_info("c1", {}), ("g-parent", "上级集团"))
+            self.assertEqual(adapter._company_group_id("c1", {}), "g-parent", "定锚顺手灌的缓存也得是同一个答案")
+
+    def test_group_root_without_group_id_is_its_own_group(self):
+        info = {"id": "c1", "name": "中国远洋海运集团有限公司", "short_name": "中远海运集团",
+                "classify_cn": "央企(集团)", "group_id": ""}
+        with mock.patch("adapters.iguopin.httpx.get",
+                        return_value=_Response({"code": 200, "data": {"company_info": info}})):
+            adapter = IguopinAdapter()
+            self.assertEqual(adapter._group_info("c1", {}), ("c1", "中远海运集团"))
+            self.assertEqual(adapter._fetch_company_group_id("c1", {}), "c1")
 
     def test_prefetch_does_not_add_requests_for_rows_already_known(self):
         """预热只是把「本来就要问的那批」并发问掉，不许多问一次。"""

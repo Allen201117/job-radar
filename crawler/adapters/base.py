@@ -170,6 +170,10 @@ class RawJob:
     experience: Optional[str] = None   # 经验要求；adapter 可直填，否则由 normalizer 从全文抽取
     education: Optional[str] = None     # 学历要求；同上
     deadline: Optional[str] = None      # 投递截止；同上
+    # 对方**明确**这个岗没有截止日（如 wt / hotjob 的「长期发布」）。它和 deadline=None 不是一回事：
+    # None 只是「这次没拿到 / 判不出」，写库时保留旧值（jobs_db._PRESERVE_IF_EMPTY）；
+    # 这个为 True 才允许清掉库里的旧截止日（run.py 5d → jobs_db.clear_deadlines）。判不出就留 False。
+    deadline_absent: bool = False
     # 对方 ATS 在结构化字段里**自报**的国家（ISO-3166 alpha-2），不是从地点文本猜的。
     # 只在地点文本判不出国家、job_scope 只能按 source.regions 猜的时候才生效（normalizer.normalize），
     # 地点能判出国家时一律以地点为准。没有就留 None。目前只有 workday 填（detail 的 alpha2Code）。
@@ -333,6 +337,7 @@ class BaseAdapter:
     #   "list_cap"          撞 resolve_list_cap 的单源条数上限（计入缺口，正文标注——抬不抬是取舍）
     #   "page_click_failed" 浏览器翻页点「下一页」失败（计入缺口，修 adapter）
     #   "page_no_new_rows"  翻到的下一页全是已见过的岗（翻页参数没生效；计入缺口，修 adapter）
+    #   "attribution_unverified"  国聘：有公司的集团归属本轮没核上，那部分没写（规则 G 单列、不计入缺口）
     # 规则 G 的人话标签在 ops_watchdog.COVERAGE_STOP_LABELS，加取值两边一起加。
     coverage_stop_reason: Optional[str] = None
 
