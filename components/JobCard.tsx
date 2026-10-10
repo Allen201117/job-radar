@@ -357,9 +357,11 @@ export default function JobCard({
     void callActionApi("ignored", prev, code);
   }
 
+  // 打开官网这件事交给 <a target="_blank"> 自己做（照样瞬开，质量校验**不放在点击路径**——历史教训：
+  // 同步核验门已废）。这里只管埋点与后台核验。
+  // 2026-10-10 前是 <button> + window.open：右键「在新标签页打开」、中键、复制链接地址全都用不了，
+  // 想连开几个岗位对比着看的人只能一个个点。
   function handleView() {
-    // 直接跳官网，瞬间打开——质量校验**不放在点击路径**（历史教训：同步核验门已废）。
-    window.open(job.jd_url, "_blank", "noopener,noreferrer");
     if (isOpportunity) {
       track("opportunity_click", { job_id: job.id, tier: opportunityTier ?? null, surface: "today" });
       // 点击有效率埋点（01 spec §5）：记录点开那刻的核验年龄/新鲜度。
@@ -374,6 +376,11 @@ export default function JobCard({
       void fetch(`/api/jobs/${job.id}/liveness`, { method: "POST", keepalive: true }).catch(() => {});
     } else track("job_click", { job_id: job.id });
     void fetch(`/api/job-actions/${job.id}/view`, { method: "POST" }).catch(() => {});
+  }
+
+  // 中键点击同样是「打开官网」，照样记一次（左键走 onClick；右键菜单打开的记不到，属已知少计）。
+  function handleAuxView(event: { button: number }) {
+    if (event.button === 1) handleView();
   }
 
   async function copyJobLink() {
@@ -518,13 +525,18 @@ export default function JobCard({
     >
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
-          <button
-            type="button"
+          <a
+            href={job.jd_url}
+            target="_blank"
+            rel="noopener noreferrer"
             onClick={handleView}
-            className="t-h1 block max-w-full text-left ink-1 transition-colors hover:text-[#2f8a63] dark:hover:text-[#6cc99e]"
+            onAuxClick={handleAuxView}
+            // w-fit：<a class="block"> 会撑满整行（原来的 <button> 是按内容收缩的），不收回来的话
+            // 点标题右边的空白也会跳去官网。
+            className="t-h1 block w-fit max-w-full text-left ink-1 transition-colors hover:text-[#2f8a63] dark:hover:text-[#6cc99e]"
           >
             <span className="text-balance">{job.title}</span>
-          </button>
+          </a>
           <div className="mt-1.5 flex items-center gap-2">
             <CompanyLogo company={job.company} size={26} />
             <p className="t-h3 min-w-0 truncate ink-2">
@@ -737,14 +749,17 @@ export default function JobCard({
         {/* 只露 2 个主动作（官网详情 / 收藏），其余收进「更多」——功能一个不少，只是不再占 5 行高度。
             移动端：官网详情整宽 + 收藏·更多并排一行；桌面端（lg）回到右侧竖排。 */}
         <div ref={actionsRef} className="flex shrink-0 flex-col gap-2 lg:w-36">
-          <button
-            type="button"
+          <a
+            href={job.jd_url}
+            target="_blank"
+            rel="noopener noreferrer"
             onClick={handleView}
+            onAuxClick={handleAuxView}
             className={cn(buttonVariants({ variant: "ink", size: "sm" }), "inline-flex min-h-11 items-center justify-center gap-2 active:scale-[0.98] lg:min-h-0 lg:py-2")}
           >
             官网详情
             <ArrowSquareOut size={16} weight="bold" aria-hidden="true" />
-          </button>
+          </a>
           <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
             <ActionButton
               active={currentAction === "saved"}

@@ -346,8 +346,9 @@ class HotJobAdapter(PlaywrightAdapter):
     #    =1 的写「2026-10-22 23:59:59下线」；另一个 =0 且 endDate 在 2023 年的详情页照样有「立即投递」。
     #    当天全量 20,626 个岗：=0 的 17,655 个里 749 个 endDate 已过去仍在列；=1 的 2,971 个没有一个是过去的，
     #    库里更早存下、今天仍在列的 =1 行 109 行里 108 行日期没变。
-    # ⚠️ 没写不等于库里清掉：deadline 在 jobs_db._PRESERVE_IF_EMPTY 里，新值为空时保留旧值
-    #    （岗位从「指定下线时间」改回「长期发布」后，旧日期会留在库里）。
+    # ⚠️ 没写不等于库里清掉：deadline 在 jobs_db._PRESERVE_IF_EMPTY 里，新值为空时保留旧值。
+    #    所以 =0（官网明写「长期发布」）另外带 deadline_absent=True，由 run.py 5d 清掉库里的旧日期
+    #    ——岗位从「指定下线时间」改回「长期发布」就靠它撤回。标记缺失 / 不认识 = 判不出，不写也不清。
     @staticmethod
     def _deadline(post: dict) -> Optional[str]:
         if str(post.get("longTermRelease")).strip() != "1":
@@ -377,4 +378,5 @@ class HotJobAdapter(PlaywrightAdapter):
             education=post.get("educationName") or post.get("educationStr") or post.get("education") or None,
             experience=post.get("workYearName") or post.get("workExperience") or None,
             deadline=self._deadline(post),
+            deadline_absent=str(post.get("longTermRelease")).strip() == "0",
         )

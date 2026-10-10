@@ -347,11 +347,151 @@ class TestWorker(unittest.TestCase):
              mock.patch.object(B.jobs_db, "get_conn", return_value=object()), \
              mock.patch.object(B.jobs_db, "fetch_all", fetch_all), \
              mock.patch.object(B.db, "fetch_all_rows",
-                               side_effect=[store["_canned_company_profiles"], [{"job_id": "j1"}, {"job_id": "j2"}]]):
+                               side_effect=[store["_canned_company_profiles"], [{"job_id": "j1"}, {"job_id": "j2"}], []]):
             rows = B.fetch_t3_queue(FakeSB(store), limit=2)
         self.assertEqual([row["company"] for row in rows], ["冷门公司", "大户公司"])
         # 需求 id 作为第一个绑定参数传进同一条 SQL（不多打一次库）
         self.assertEqual(fetch_all.call_args.args[2][0], ["j1", "j2"])
+
+    def test_fetch_t3_queue_puts_enrich_requested_companies_before_everything(self):
+        """用户点开洞察、网站为它派过现查的公司排最前——压过「有人看过岗位」和「在招岗多」。
+
+        现查白天基本拿不到搜索额度，那一单只能记 no_quota；它能兑现的地方就是下一批定时补充先补它。
+        """
+        profiles = [
+            {"id": "a", "company": "有人看的公司", "aliases": [], "t3_fail_count": 0},
+            {"id": "b", "company": "大户公司", "aliases": [], "t3_fail_count": 0},
+            {"id": "c", "company": "被点名的公司", "aliases": [], "t3_fail_count": 0},
+        ]
+        fetch_all = mock.Mock(return_value=[
+            {"company": "有人看的公司", "active_count": 5, "demand_count": 4},
+            {"company": "大户公司", "active_count": 900, "demand_count": 0},
+            {"company": "被点名的公司", "active_count": 1, "demand_count": 0},
+        ])
+        with mock.patch.object(B.jobs_db, "enabled", return_value=True), \
+             mock.patch.object(B.jobs_db, "get_conn", return_value=object()), \
+             mock.patch.object(B.jobs_db, "fetch_all", fetch_all), \
+             mock.patch.object(B.db, "fetch_all_rows",
+                               side_effect=[profiles, [{"job_id": "j1"}], [{"company": " 被点名的公司 "}]]):
+            rows = B.fetch_t3_queue(FakeSB({}), limit=3)
+        self.assertEqual([row["company"] for row in rows], ["被点名的公司", "有人看的公司", "大户公司"])
+
+    def test_fetch_t3_queue_survives_enrich_ledger_read_failure(self):
+        """现查台账读不到 → 当没有这个信号，照常按原规则排，绝不让整条队列挂掉。"""
+        profiles = [
+            {"id": "a", "company": "小公司", "aliases": [], "t3_fail_count": 0},
+            {"id": "b", "company": "大公司", "aliases": [], "t3_fail_count": 0},
+        ]
+        fetch_all = mock.Mock(return_value=[
+            {"company": "小公司", "active_count": 1, "demand_count": 0},
+            {"company": "大公司", "active_count": 9, "demand_count": 0},
+        ])
+        with mock.patch.object(B.jobs_db, "enabled", return_value=True), \
+             mock.patch.object(B.jobs_db, "get_conn", return_value=object()), \
+             mock.patch.object(B.jobs_db, "fetch_all", fetch_all), \
+             mock.patch.object(B.db, "fetch_all_rows",
+                               side_effect=[profiles, [], RuntimeError("ledger down")]):
+            rows = B.fetch_t3_queue(FakeSB({}), limit=2)
+        self.assertEqual([row["company"] for row in rows], ["大公司", "小公司"])
+
+    def test_finish_insight_enrich_run_records_no_quota_as_skipped_not_success(self):
+        """步骤没报错但一个主题都没查（开跑就撞额度）→ 台账记 skipped / no_quota，不许记 success。
+
+        2026-10-10 实测：优衣库那一单日志写「额度不足，本轮零主题」，台账却是 success —— 绿灯零产出。
+        """
+        store = {"_canned_discovery_runs": [{
+            "id": "run-9", "diagnostics": {"company": "测试集团", "t3_outcome": "noquota"},
+        }]}
+        self.assertTrue(B.finish_insight_enrich_run(
+            FakeSB(store), "测试集团", "success", {"workflow": "workflow completed"},
+        ))
+        _filters, payload = store["discovery_runs_updates"][0]
+        self.assertEqual(payload["status"], "skipped")
+        self.assertEqual(payload["failure_reason"], "no_quota")
+        self.assertEqual(payload["error_message"], B.NO_QUOTA_MESSAGE)
+        self.assertEqual(payload["diagnostics"]["t3_outcome"], "noquota")
+
+    def test_finish_insight_enrich_run_keeps_success_when_topics_were_searched(self):
+        """反方向：真查过的（写出了内容，或查了确实没结果）仍然是 success，不能被误降级。"""
+        for outcome in ("wrote", "empty"):
+            store = {"_canned_discovery_runs": [{
+                "id": "run-1", "diagnostics": {"company": "测试集团", "t3_outcome": outcome},
+            }]}
+            B.finish_insight_enrich_run(FakeSB(store), "测试集团", "success", {"workflow": "ok"})
+            _filters, payload = store["discovery_runs_updates"][0]
+            self.assertEqual(payload["status"], "success", outcome)
+            self.assertIsNone(payload["failure_reason"], outcome)
+
+    def test_finish_insight_enrich_run_failed_stays_failed_even_with_no_quota_note(self):
+        """步骤真报错了就是 failed，不因为之前记过 noquota 而被改成 skipped。"""
+        store = {"_canned_discovery_runs": [{
+            "id": "run-2", "diagnostics": {"company": "测试集团", "t3_outcome": "noquota"},
+        }]}
+        B.finish_insight_enrich_run(FakeSB(store), "测试集团", "failed", {"error": "boom"})
+        _filters, payload = store["discovery_runs_updates"][0]
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["failure_reason"], "workflow_failed")
+
+    def test_note_insight_enrich_outcome_merges_into_queued_row(self):
+        store = {"_canned_discovery_runs": [{
+            "id": "run-3", "diagnostics": {"company": "测试集团", "source": "insights_enrich_now"},
+        }]}
+        self.assertTrue(B.note_insight_enrich_outcome(FakeSB(store), "测试集团", "noquota"))
+        filters, payload = store["discovery_runs_updates"][0]
+        self.assertEqual(filters["id"], "run-3")
+        self.assertEqual(payload["diagnostics"]["t3_outcome"], "noquota")
+        self.assertEqual(payload["diagnostics"]["source"], "insights_enrich_now")  # 原有内容不丢
+        self.assertNotIn("status", payload)  # 只记旁证，终态由收尾那一步写
+
+    def test_note_insight_enrich_outcome_without_queued_row_is_a_noop(self):
+        store = {}
+        self.assertFalse(B.note_insight_enrich_outcome(FakeSB(store), "没有台账的公司", "wrote"))
+        self.assertNotIn("discovery_runs_updates", store)
+
+    def test_finish_insight_enrich_run_records_step_error_as_failed(self):
+        """现查这一步自己报了 err（画像取不到 / 主题抛错）但 workflow 没变红 → 台账记 failed，不是 success。"""
+        store = {"_canned_discovery_runs": [{
+            "id": "run-4", "diagnostics": {"company": "测试集团", "t3_outcome": "err"},
+        }]}
+        B.finish_insight_enrich_run(FakeSB(store), "测试集团", "success", {"workflow": "workflow completed"})
+        _filters, payload = store["discovery_runs_updates"][0]
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["failure_reason"], "enrich_error")
+
+    def test_t3_main_counts_noquota_as_checked_and_reports_it(self):
+        """批量 drain 整批撞额度：noquota 计入 checked 并单独进 metrics。
+
+        它以前混在 empty 里，靠「checked>0 且产出为 0」被看门狗报出来；拆出来后不加回去，
+        那种日子 checked=0，会被读成「队列是空的」——绿灯零产出。
+        """
+        recorded = {}
+
+        def fake_record(sb, module, metrics, **kw):
+            recorded["module"], recorded["metrics"] = module, metrics
+
+        argv = ["insight_backlog.py", "--t3"]
+        env = {"SUPABASE_URL": "http://x", "SUPABASE_SERVICE_ROLE_KEY": "k"}
+        with mock.patch.object(B.sys, "argv", argv), \
+             mock.patch.dict(B.os.environ, env), \
+             mock.patch.object(B.db, "get_supabase", return_value=FakeSB({})), \
+             mock.patch.object(B, "drain_t3", return_value={"wrote": 0, "empty": 0, "err": 0, "noquota": 7}), \
+             mock.patch.object(B, "count_active_added", return_value=0), \
+             mock.patch.object(B.ops_runs, "record_ops_run", side_effect=fake_record), \
+             mock.patch.object(B.E, "record_usage_ops_run"), \
+             mock.patch.object(B.E, "reset_llm_health"), \
+             mock.patch.object(B, "_llm_health_gate"):
+            B.main()
+        self.assertEqual(recorded["module"], "insight_backlog")
+        self.assertEqual(recorded["metrics"]["checked"], 7)
+        self.assertEqual(recorded["metrics"]["no_quota"], 7)
+        self.assertEqual(recorded["metrics"]["companies_enriched"], 0)
+
+    def test_drain_one_company_reports_noquota_separately(self):
+        """单公司现查撞额度：noquota 单独计数，empty / err 都不许顶替它。"""
+        with mock.patch.object(B, "fetch_one_company", return_value={"id": "c1", "company": "测试集团", "aliases": []}), \
+             mock.patch.object(B, "enrich_company_t3", return_value="noquota"):
+            stat = B.drain_one_company(FakeSB({}), "测试集团", t3=True)
+        self.assertEqual(stat, {"wrote": 0, "empty": 0, "err": 0, "noquota": 1})
 
     def test_fetch_t3_queue_falls_back_to_existing_order_without_jobs_db(self):
         store = {"_canned_company_profiles": [
@@ -585,7 +725,9 @@ class TestT3(unittest.TestCase):
         B._ROUTER.remaining_above_reserve = lambda sb: 0
         store = {}
         res = B.enrich_company_t3(FakeSB(store), {"id": "c-zero", "company": "零额度公司", "aliases": []})
-        self.assertEqual(res, "empty")
+        # 2026-10-10：零主题且原因是额度 → 单独返回 noquota，不再和「查了没结果」共用 empty，
+        # 现查台账靠它区分「没查」和「查了没有」。下面「不盖戳」的原断言不变。
+        self.assertEqual(res, "noquota")
         advanced = [payload for _f, payload in store.get("company_profiles_updates", [])
                     if "t3_checked_at" in payload]
         self.assertEqual(advanced, [], "零主题这轮不得推进 t3_checked_at")

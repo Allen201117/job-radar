@@ -108,6 +108,13 @@ def cap_summary_for_storage(summary):
     return text[: max(0, SUMMARY_STORAGE_LIMIT - 3)].rstrip() + "..."
 
 
+def _urls_confirmed_without_deadline(raw_jobs, job_batch):
+    """对方明确没有截止日、且正文里也没抽到截止日的岗的 jd_url（两个列表逐项对应）。
+    正文明写了报名截止的不算：那个日期已经在 job_batch 里，照常写库。"""
+    return [job["jd_url"] for raw, job in zip(raw_jobs, job_batch)
+            if raw.deadline_absent and not job.get("deadline")]
+
+
 def _source_regions(source):
     raw = source.get("regions") if isinstance(source, dict) else None
     if not raw:
@@ -598,6 +605,17 @@ def _process_one_source(source, supabase) -> dict:
                     print(f"    [policy-age] removed={n_retired} posted_before={retire_before}")
             except Exception as e:  # 下架失败绝不影响抓取主流程
                 print(f"    [policy-age] 跳过(异常不阻断): {type(e).__name__}: {e}")
+
+        # 5d. 对方明确「这个岗没有截止日」（wt / hotjob 的长期发布）：清掉库里留着的旧截止日。
+        #     upsert 对空截止日是「保留旧值」，不补这一步，岗位改回长期发布后旧日期永远留在库里。
+        no_deadline_urls = _urls_confirmed_without_deadline(valid_jobs, job_batch)
+        if no_deadline_urls and jobs_db.enabled():
+            try:
+                n_cleared = jobs_db.clear_deadlines(_get_thread_jobs_conn(), no_deadline_urls)
+                if n_cleared:
+                    print(f"    [deadline] cleared={n_cleared} confirmed_absent={len(no_deadline_urls)}")
+            except Exception as e:  # 清理失败绝不影响抓取主流程
+                print(f"    [deadline] 跳过(异常不阻断): {type(e).__name__}: {e}")
 
         # 6. update source timestamp
         db.update_source_timestamp(supabase, source_id)

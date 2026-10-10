@@ -1,3 +1,5 @@
+import json
+import os
 import unittest
 
 import normalizer
@@ -205,10 +207,31 @@ class StructuredFieldExtractionTests(unittest.TestCase):
 
     def test_deadline(self):
         self.assertEqual(normalizer.extract_deadline("申请截止2026-06-30"), "2026-06-30")
-        self.assertEqual(normalizer.extract_deadline("投递截止：2026年6月30日"), "2026-6-30")
+        # 月日补零成 ISO：前端只认 YYYY-MM-DD，不补零的真截止日一直显示不出来。
+        self.assertEqual(normalizer.extract_deadline("投递截止：2026年6月30日"), "2026-06-30")
         self.assertEqual(normalizer.extract_deadline("长期有效，欢迎随时投递"), "长期有效")
         self.assertEqual(normalizer.extract_deadline("rolling basis"), "长期有效")
         self.assertIsNone(normalizer.extract_deadline("岗位职责：写代码"))
+
+    def test_deadline_shared_cases(self):
+        """与前端 lib/job-fields.extractDeadline 共读同一份用例（JS 侧断言在 tests/job-fields.test.js）。
+
+        2026-10-10 香港库全集：全库 30,507 行「长期有效」里，库里正文真写着「长期有效 / 长期招聘」的
+        只有 43 行，其余几乎都是英文 JD 福利条款里的 long-term / rolling 触发的；「截至 + 日期」多是
+        年龄、工龄的计算基准日或公司介绍里的统计时点，不是投递截止日。
+        """
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "..", "tests", "fixtures", "deadline-text-cases.json")
+        with open(path, encoding="utf-8") as f:
+            cases = json.load(f)["cases"]
+        self.assertGreaterEqual(len(cases), 25)
+        for case in cases:
+            self.assertEqual(normalizer.extract_deadline(case["text"]), case["expect"], case["text"])
+
+    def test_deadline_look_back_stops_at_sentence_boundary(self):
+        """资格条件词只在**同一句**里才算数：上一句讲年龄计算，不该连累下一句的报名截止。"""
+        self.assertEqual(
+            normalizer.extract_deadline("年龄计算至今。报名截止2026年9月25日"), "2026-09-25")
 
     def test_all_none_on_empty(self):
         for fn in (normalizer.extract_experience, normalizer.extract_education, normalizer.extract_deadline):

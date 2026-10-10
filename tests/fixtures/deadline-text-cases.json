@@ -1,0 +1,36 @@
+{
+  "_comment": "从岗位正文抽「投递截止日 / 长期招聘」的共享用例：crawler/normalizer.extract_deadline 与 lib/job-fields.extractDeadline 共读同一份。expect 为 null = 抽不到（Python 返回 None，JS 返回「未知」）。带 src 的是 2026-10-10 香港库里真实出现过的正文。",
+  "cases": [
+    { "text": "申请截止：2026年7月31日", "expect": "2026-07-31" },
+    { "text": "投递截止 2026/08/01", "expect": "2026-08-01" },
+    { "text": "申请截止2026-06-30", "expect": "2026-06-30" },
+    { "text": "持有预算员证、注册造价师资格证优先。 招聘截止日期2027年04月09日", "expect": "2027-04-09", "src": "beisen" },
+    { "text": "报名截止时间为2026年10月31日24时", "expect": "2026-10-31" },
+    { "text": "简历投递截止日期：2026.11.5", "expect": "2026-11-05" },
+    { "text": "网申截至2026年10月20日，逾期不候", "expect": "2026-10-20" },
+    { "text": "截止日期：2026-12-01", "expect": "2026-12-01" },
+    { "text": "Application deadline: 2026-11-30", "expect": "2026-11-30" },
+    { "text": "居住证有效期计算截止时间为2026年12月31日。报名截止时间：2026年9月25日", "expect": "2026-09-25" },
+
+    { "text": "工作经历：相关工作经历满36个月及以上 注：以上时间计算截至2026年6月1日。", "expect": null, "src": "wt 中国一汽，16 行被抽成 2026-6-1" },
+    { "text": "（三）截至2026年6月30日，博士不超过33周岁、硕士不超过28周岁者优先录用。", "expect": null, "src": "beisen" },
+    { "text": "截至2022年9月30日，阿里健康医疗服务板块服务的慢病用户人数已达到730万", "expect": null, "src": "company_spa" },
+    { "text": "年龄35周岁以下（截止2026年6月1日）", "expect": null },
+    { "text": "工作经历计算截止时间为2026年9月30日", "expect": null },
+    { "text": "截止2025年12月31日，公司累计装机量超过10万台", "expect": null },
+    { "text": "报名截止：2026年13月40日", "expect": null },
+
+    { "text": "长期招聘，招满即止", "expect": "长期有效" },
+    { "text": "长期有效，欢迎随时投递", "expect": "长期有效" },
+    { "text": "Rolling applications accepted", "expect": "长期有效" },
+    { "text": "Applications are reviewed on a rolling basis.", "expect": "长期有效" },
+    { "text": "This position is open until filled.", "expect": "长期有效" },
+
+    { "text": "保材料CTB 成套, 满足产能规划,结合长期产能规划追踪材料long term 供应状况", "expect": null, "src": "wt 立讯精密，被标成长期有效" },
+    { "text": "协助CFO制定中长期财务战略规划、年度预算及滚动预测（Rolling Forecast）。", "expect": null, "src": "wt TCL，被标成长期有效" },
+    { "text": "We offer long-term disability insurance and long term incentives.", "expect": null },
+    { "text": "请尽快投递", "expect": null },
+    { "text": "岗位职责：写代码", "expect": null },
+    { "text": "", "expect": null }
+  ]
+}

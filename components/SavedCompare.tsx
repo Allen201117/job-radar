@@ -259,7 +259,7 @@ export default function SavedCompare({
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
-        aria-label="岗位对比决策桌"
+        aria-label="岗位对比"
         className="relative flex h-full w-full flex-col bg-[#f4efe6] ink-1 shadow-2xl dark:bg-[#16130f]"
       >
         <header className="border-b border-black/[0.06] bg-gradient-to-b from-white/70 to-transparent px-4 pb-4 pt-5 sm:px-6 dark:border-white/[0.1] dark:from-white/[0.05]">
@@ -267,7 +267,7 @@ export default function SavedCompare({
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-sm ink-3">
                 <Scales size={17} weight="bold" aria-hidden="true" />
-                对比决策桌
+                岗位对比
               </div>
               <h2 className="mt-1 text-2xl font-semibold leading-tight">并排看关键决策信息</h2>
               <p className="mt-1 text-xs ink-3">已选 {jobs.length}/4，关闭后选择状态会保留。</p>

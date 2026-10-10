@@ -358,3 +358,63 @@ test("洞察接口：互不依赖的读并行，现查派发不挡响应", () =>
     "派发要读台账、写台账、再调 GitHub（超时 10s），不许再放回响应路径上",
   );
 });
+
+// ───────────────────────── 收尾批次（2026-10-10）─────────────────────────
+
+// 现象（线上走查）：卡片上一个 <a> 都没有，「官网详情」和标题都是 <button> + window.open ——
+// 右键「在新标签页打开」、中键、复制链接地址全都用不了。
+test("岗位卡的标题和「官网详情」是真链接，埋点仍在", () => {
+  const anchors = jobCard.match(/<a\s+href=\{job\.jd_url\}\s+target="_blank"\s+rel="noopener noreferrer"\s+onClick=\{handleView\}\s+onAuxClick=\{handleAuxView\}/g) || [];
+  assert.equal(anchors.length, 2, "标题 + 官网详情，两处");
+  assert.equal(/window\.open\(job\.jd_url/.test(jobCard), false, "打开官网交给链接自己，不再 window.open");
+  // 埋点与后台核验没有被顺手删掉
+  const fn = jobCard.slice(jobCard.indexOf("function handleView()"), jobCard.indexOf("function handleAuxView("));
+  assert.match(fn, /track\("opportunity_official_opened"/);
+  assert.match(fn, /track\("job_click"/);
+  assert.match(fn, /\/api\/job-actions\/\$\{job\.id\}\/view/);
+  assert.match(jobCard, /if \(event\.button === 1\) handleView\(\);/);
+});
+
+// 现象（审查发现）：筛选条的按钮在冒泡阶段 stopPropagation，冒泡阶段的「点外面关闭」收不到 ——
+// 卡片「更多」菜单开着时去点筛选条，菜单留在那儿。
+test("useClickOutside 在捕获阶段监听", () => {
+  const hooks = read("lib/ui/hooks.ts");
+  const fn = hooks.slice(hooks.indexOf("export function useClickOutside("), hooks.indexOf("export type AnchorAlign"));
+  assert.match(fn, /window\.addEventListener\("pointerdown", onPointerDown, true\);/);
+  assert.match(fn, /window\.removeEventListener\("pointerdown", onPointerDown, true\);/);
+});
+
+// 现象（读码确证）：提示条 5 秒到点就落定；动作请求第 6 秒才失败时卡片回不来，页面却说「已恢复原状态」。
+test("推荐页：请求没回来之前不落定乐观移除", () => {
+  assert.match(todayClient, /if \(\(inflightRef\.current\.get\(jobId\) \?\? 0\) > 0\) \{[\s\S]*?dispatch\(\{ type: "expireToast", jobId \}\);/);
+  assert.match(todayClient, /function handleActionResult\(\{ jobId, ok \}: \{ jobId: string; ok: boolean \}\)/);
+  assert.match(todayClient, /if \(awaitingResultRef\.current\.delete\(jobId\)\) \{\s*removedRef\.current\.delete\(jobId\);\s*dispatch\(\{ type: "finalizeRemove", jobId \}\);/);
+});
+
+// 现象（审查发现）：JobCard 失败时会再调一次 onActionChange(原来的动作)。原动作非空的卡（关键提醒区里
+// 已收藏的岗）失败后，旧实现把这次通知当成「又一次乐观移除」—— 卡片不回来，还提示「已收藏」。
+test("推荐页：失败回滚在结果回调里做，不把 JobCard 的回滚通知当成新动作", () => {
+  const change = todayClient.slice(todayClient.indexOf("function handleActionChange("), todayClient.indexOf("function handleActionResult("));
+  assert.match(change, /if \(removedRef\.current\.has\(jobId\)\) return;/);
+  assert.equal(/removeRollback/.test(change), false, "回滚不在 onActionChange 里做");
+  const result = todayClient.slice(todayClient.indexOf("function handleActionResult("), todayClient.indexOf("async function undo("));
+  assert.match(result, /if \(!ok\) \{[\s\S]*?dispatch\(\{ type: "removeRollback", jobId \}\);\s*setActionFailed\(true\);/);
+  // 撤销后重新操作：前一个请求的晚到结果不许动现在这次移除
+  assert.match(result, /if \(left > 0\) return;/);
+  // 撤销把卡放回队列后，晚到的结果不再碰它
+  const undo = todayClient.slice(todayClient.indexOf("async function undo("), todayClient.indexOf("function displayItemsFor("));
+  assert.match(undo, /removedRef\.current\.delete\(jobId\);/);
+});
+
+// 现象（读码确证）：误点「标记投递」后，「投递记录」页没有任何移除入口（推荐页的撤销只有 5 秒）。
+test("投递记录可以移除，且要先确认（整行删除，进展补不回来）", () => {
+  const applied = read("app/applied/applied-client.tsx");
+  assert.match(applied, /移除记录/);
+  assert.match(applied, /确定移除/);
+  assert.match(applied, /移除后进展也会一起清掉/);
+  assert.match(applied, /method: "PUT",[\s\S]*?body: JSON\.stringify\(\{ action: null \}\)/);
+  assert.match(applied, /移除失败，请重试/);
+  // 失败不许当成功：只有接口确认 ok 才把卡片拿掉
+  const fn = applied.slice(applied.indexOf("async function removeRecord"), applied.indexOf("return (\n    <div>"));
+  assert.ok(fn.indexOf("throw new Error") < fn.indexOf("setRemoved("), "先判失败，再移除");
+});

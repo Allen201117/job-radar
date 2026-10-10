@@ -4,6 +4,7 @@
 // 每张卡一排阶段切换（已投递→笔试→面试→Offer→已结束），乐观更新 + 失败回滚；
 // 顶部漏斗小结让用户一眼看到自己的求职管道，不用回 Excel 记进展。
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ArrowSquareOut, MapPin } from "@phosphor-icons/react";
 import { formatDateLabel } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
@@ -43,12 +44,44 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
     Object.fromEntries(items.map((it) => [it.jobId, normalizeStage(it.stage)])),
   );
   const [failedId, setFailedId] = useState<string | null>(null);
+  // 移除投递记录：误点了「标记投递」的岗，此前在这一页没有任何出口（推荐页的撤销只有 5 秒）。
+  // 两步确认而不是「先删再给撤销」：服务端是整行删除，进展阶段会一起没，撤销补不回来。
+  const router = useRouter();
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [removed, setRemoved] = useState<Set<string>>(new Set());
+  const [removeFailedId, setRemoveFailedId] = useState<string | null>(null);
+  const shown = useMemo(() => items.filter((it) => !removed.has(it.jobId)), [items, removed]);
 
   const funnel = useMemo(() => {
     const counts: Record<Stage, number> = { applied: 0, assessment: 0, interview: 0, offer: 0, closed: 0 };
-    for (const it of items) counts[stages[it.jobId] ?? "applied"] += 1;
+    for (const it of shown) counts[stages[it.jobId] ?? "applied"] += 1;
     return counts;
-  }, [items, stages]);
+  }, [shown, stages]);
+
+  async function removeRecord(jobId: string) {
+    if (removingId) return;
+    setRemovingId(jobId);
+    setRemoveFailedId(null);
+    try {
+      const resp = await fetch(`/api/job-actions/${jobId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: null }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+      setRemoved((prev) => new Set(prev).add(jobId));
+      // 只收自己这张卡的确认条：请求在路上时用户可能已经点开了另一张卡的。
+      setConfirmingId((cur) => (cur === jobId ? null : cur));
+      router.refresh(); // 页头的条数是服务端渲染的
+    } catch (e) {
+      console.error("[applied] 移除投递记录失败", (e as Error).message);
+      setRemoveFailedId(jobId);
+    } finally {
+      setRemovingId(null);
+    }
+  }
 
   async function setStage(jobId: string, next: Stage) {
     const prev = stages[jobId] ?? "applied";
@@ -70,7 +103,7 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
 
   return (
     <div>
-      {items.length > 1 && (
+      {shown.length > 1 && (
         <div className="mb-4 flex flex-wrap items-center gap-2 text-[13px] ink-2">
           <span className="font-medium">你的求职管道：</span>
           {FUNNEL_STAGES.map((s) => (
@@ -89,8 +122,12 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
         </div>
       )}
 
+      {shown.length === 0 && items.length > 0 && (
+        // 最后一条刚被移除、服务端的空状态页还没刷回来的那一小段，别留一片空白。
+        <p className="surface p-5 t-body-sm ink-2">这里已经没有投递记录了。</p>
+      )}
       <div className="space-y-3">
-        {items.map((item) => {
+        {shown.map((item) => {
           const cur = stages[item.jobId] ?? "applied";
           return (
             <div key={item.jobId} className="surface surface-hover p-5 ink-1">
@@ -149,6 +186,47 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
                 {failedId === item.jobId && (
                   <span className="text-xs text-tone-rose-fg">保存失败，已还原，请重试</span>
                 )}
+                <span className="ml-auto inline-flex flex-wrap items-center gap-2 text-xs">
+                  {confirmingId === item.jobId ? (
+                    <>
+                      <span className="ink-2">移除后进展也会一起清掉</span>
+                      <button
+                        type="button"
+                        onClick={() => void removeRecord(item.jobId)}
+                        // 任意一张卡在移除中都禁用：removeRecord 一次只放行一个请求，不禁用的话点了没反应。
+                        disabled={removingId !== null}
+                        className="rounded-full border border-tone-rose-border bg-tone-rose-bg px-3 py-1.5 font-semibold text-tone-rose-fg transition hover:opacity-80 disabled:opacity-50"
+                      >
+                        {removingId === item.jobId ? "移除中…" : "确定移除"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConfirmingId(null);
+                          setRemoveFailedId(null);
+                        }}
+                        disabled={removingId === item.jobId}
+                        className="rounded-full px-2 py-1.5 font-medium ink-3 transition hover:opacity-80 disabled:opacity-50"
+                      >
+                        取消
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setConfirmingId(item.jobId);
+                        setRemoveFailedId(null);
+                      }}
+                      className="rounded-full px-2 py-1.5 font-medium ink-3 underline-offset-2 transition hover:underline"
+                    >
+                      移除记录
+                    </button>
+                  )}
+                  {removeFailedId === item.jobId && (
+                    <span className="text-tone-rose-fg">移除失败，请重试</span>
+                  )}
+                </span>
               </div>
             </div>
           );

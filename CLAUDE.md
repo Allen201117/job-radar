@@ -69,7 +69,7 @@ Next.js 15.5.18 App Router + React 18 + TS + Tailwind；Supabase（Auth / Postgr
      - ⚠️ **`total` 的语义不许改**（= 可翻页条数）：真实总数塞进 `total` 会让 `hasMore` 判断失真，「加载更多」永远点不完。真实总数只走 `exactTotal`、只用于展示。
      - ⚠️ 新增筛选项**必须**在 `lib/job-filter.ts` 的 `SQL_PUSHED_FILTER_KEYS` / `JS_ONLY_FILTER_KEYS` / `NON_FILTERING_FILTER_KEYS` 三张表里显式归类，否则 `tests/ux-hardening-contract.test.js` 直接红（fail-safe：漏归类只会退回「N+」，不会给错数字）。
    - **失活治理靠探活、且必须确认真的在跑**：active 一度膨胀到 ~13 万 → enrich/sweep 取工作队列的 `status='active' ORDER BY …` 查询撞 service_role ~8s statement_timeout **静默失败**（db-report 实测 87% 岗 `enrich_checked_at=NULL` 从未探活、死岗下架不掉 = 恶性循环）。已加 source 前导部分索引（150 summary-drain / 151 liveness-sweep）让队列查询走索引脱离超时。`liveness-sweep.yml`（只探活不抓列表、不回潮假 active；**2026-06-20 起每日 08:00 UTC 定时跑**，max-parallel:4 护住 HK `max_connections=100`）+ `dead-link-audit.yml`（浏览器 SPA 源：beisen/moka/feishu **及 nio/xiaomi/xpeng_feishu 变体 + 自建大厂 SPA byd/kuaishou/bytedance/google**，每日定时）真跑，并以 `db-report.yml` 复核 `never_liveness_checked` 持续下降。**⚠️ 死岗反复回潮的更深真因（2026-06-20 修，commit 01728ee）= list 重抓的 upsert 把 sweep 判死的 `expired` 刷回 active、并抹掉 `enrich_checked_at`（巡检按 nulls first 轮转 → 被抹的岗反复插队、sweep 永远追不上，89% never-checked 真因）→ status 走 `CASE` 黏住 expired、`_UPDATE_COLS` 移除 enrich 簿记（jobs_db.py + write.ts 同口径）。改 upsert 务必保住此不变量。**
-   - **失活校验全部放在「不挡用户」的层，绝不放点击路径（2026-06-21 定，踩坑后修正）**：⚠️ 曾把实时探活放进点击门（`/api/jobs/go` 服务端探完再 302）——云函数冷启动 + 跨区连香港库 + 跨区探外网叠加，**实测点击要 5-8s，体验很差，已废弃并删除**。教训：**质量校验是后台/异步的事，不能卡在用户点击这一下**。现行设计 = **点击直跳官网（瞬开，JobCard/applied 直接 `window.open(jd_url)`）** + 两层离线/异步校验把死岗挤掉：
+   - **失活校验全部放在「不挡用户」的层，绝不放点击路径（2026-06-21 定，踩坑后修正）**：⚠️ 曾把实时探活放进点击门（`/api/jobs/go` 服务端探完再 302）——云函数冷启动 + 跨区连香港库 + 跨区探外网叠加，**实测点击要 5-8s，体验很差，已废弃并删除**。教训：**质量校验是后台/异步的事，不能卡在用户点击这一下**。现行设计 = **点击直跳官网（瞬开；JobCard 的标题 /「官网详情」和 applied 的「查看官网」都是 `<a target="_blank">` 真链接。📌 纠错 2026-10-10：此处原写「JobCard/applied 直接 `window.open(jd_url)`」，JobCard 当天改成了真链接——`<button>` + `window.open` 让右键新标签打开、中键、复制链接地址都用不了；埋点与后台核验仍挂在点击上）** + 两层离线/异步校验把死岗挤掉：
      - **② 展示时校验（非阻塞）**：看板（Today/Jobs）加载后**异步**批量探活当下可见岗（`POST /api/jobs/liveness-check` → `lib/liveness-client.js`，复刻 enrich.py 的 wt `req_state=9501`/hotjob `state=1017`/workday 404，封顶 2.5s、并发 6、跳过 24h 内刚探过的、`hasSessionCookie` 廉价判登录态不走 getUser）；死的标 expired + 当场从看板隐藏（deadIds 过滤渲染），活的盖 `enrich_checked_at`。看板先渲染、不被它阻塞；它只让死岗随后悄悄消失。
      - **③ 后台 sweep / 浏览器审计**：大盘卫生主力（见上）。
      - 残留：岗在「加载后→点击前」那几秒死掉、或 SPA 源死岗 ② 没覆盖 → 偶发一次快速 404（可接受，远好过每次点击等数秒）。`lib/liveness-client.js` + 写助手 `markJobExpiredById`/`touchJobCheckedById` 仍由 ② 复用。
@@ -953,6 +953,13 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
 把预留的那份真正用掉。设 0 = 回到旧行为。
 ⚠️ **别指望靠调 cron 先后解决**——那只会把饿死的换成另一条链。
 ⚠️ 以后再加吃搜索额度的链，先想清楚它是「贪心方」还是「被预留方」，别默认 `remaining()`。
+⚠️ **「现查」（用户点开洞察 → 网站派单公司富化）是第三个消费者，白天基本拿不到额度（2026-10-10 实测）**：
+全天通用搜索额度实际只有 42 次（tavily 32 + serper 10，`search_usage` 近 8 天只有这两家有用量），其中 25 次是校招预留；
+定时批次被 GitHub 推迟到 UTC 00 点后才跑，一早就把预留线以上的用完——10-10 北京时间 14 点通用额度只剩 4 次，
+那一单日志写「额度不足，本轮零主题」，台账却记 success。现行口径：单公司 T3 零主题且原因是额度 → 返回 `noquota`，
+台账记 `skipped / no_quota`（`insight_backlog.finish_insight_enrich_run`）；兑现方式是 `fetch_t3_queue` 把近 14 天
+被现查点名的公司排在队列最前（`noquota` 也可能来自 LLM 调用日顶，不只搜索额度）。
+**查「现查为什么没产出」按台账 `failure_reason` 分流：`dispatch_failed` = 派发没出去，查 Vercel 上的派发密钥（2026-09-03~10-10 就是它，GitHub 回 401；换完密钥要重新部署才生效）；`no_quota` = 派出去了但没额度，查 `search_usage` / `llm_usage` 当天用量。**
 
 ## LLM 成本纪律（2026-08-27 成本审计后立）
 
