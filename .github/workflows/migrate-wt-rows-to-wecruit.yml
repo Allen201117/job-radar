@@ -1,0 +1,53 @@
+name: migrate-wt-rows-to-wecruit
+
+# wt 租户换到新版 wecruit 门户后，把存量 active 行的 jd_url 逐岗换成新门户的详情链接
+# （按「wt postId = wecruit externalKey」对号，canonical 由触发器重算）。首例 2026-10-10 兴业证券。
+# 手动触发、默认 dry-run。取舍与护栏见 crawler/migrate_wt_rows_to_wecruit.py 的模块注释。
+# ⚠️ 顺序：先 apply 本工作流，再把 sources 换成 hotjob adapter 的迁移合进 main——
+#    反过来，新 adapter 的第一轮抓取会按新链接插一批新行（同一个岗两张卡、首见时间从头算）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      company:
+        description: "精确公司名，与旧前缀同时成立才动"
+        required: true
+      wt_prefix:
+        description: "旧版 jd_url 前缀，如 https://xyzq.hotjob.cn/wt/xyzq/"
+        required: true
+      portals:
+        description: "新门户渠道页，空格分隔（…/SU…/pb/social.html school.html interns.html）"
+        required: true
+      apply:
+        description: "true = 真的写库；留空/false = 只 dry-run 报数"
+        required: false
+        default: "false"
+
+jobs:
+  migrate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30   # 逐行改、每行一次往返；被掐断了重跑即可（改完的行不再命中）
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: crawler/requirements.txt
+      - run: pip install -r crawler/requirements.txt
+
+      - name: Migrate wt rows to wecruit detail links
+        env:
+          JOBS_DATABASE_URL: ${{ secrets.JOBS_DATABASE_URL }}
+          JOBS_DATABASE_SSL_CA: ${{ secrets.JOBS_DATABASE_SSL_CA }}
+          JOBS_DATABASE_TLS_SERVERNAME: ${{ secrets.JOBS_DATABASE_TLS_SERVERNAME }}
+          COMPANY: ${{ github.event.inputs.company }}
+          WT_PREFIX: ${{ github.event.inputs.wt_prefix }}
+          PORTALS: ${{ github.event.inputs.portals }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          set -euo pipefail
+          args=(--company "$COMPANY" --wt-prefix "$WT_PREFIX")
+          for portal in $PORTALS; do args+=(--portal "$portal"); done
+          if [ "$APPLY" = "true" ]; then args+=(--apply); fi
+          python3 crawler/migrate_wt_rows_to_wecruit.py "${args[@]}"

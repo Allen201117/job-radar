@@ -307,5 +307,82 @@ class WtCrossChannelDedupeTest(unittest.TestCase):
         self.assertEqual(_.reported_total, 11)   # 10 + 11 = 21，减去 10 个重复
 
 
+# 2026-10-10 xyzq.hotjob.cn 任何路径都回的那份壳页（节选：只留判据用到的那句）。
+_SHELL_HTML = """<!DOCTYPE html><html><head><title>招聘官网</title></head><body><iframe id="iframeCon" src="">
+</iframe></body><script>ajax('POST', `${location.origin}/wecruit/common/getSLD`, `sld=${location.host}`,
+function (res) { document.getElementById('iframeCon').setAttribute('src', res.data.linkData.link); });</script></html>"""
+
+
+class _HtmlResp:
+    headers = {}
+
+    def __init__(self, text):
+        self.text = text
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+
+class _MovedClient(_FakeClient):
+    """列表接口回 HTML；getSLD 按 sld_reply 回（None = 这次请求本身失败）。"""
+    html = _SHELL_HTML
+    sld_reply = None
+    posted = []
+
+    def get(self, url, params=None):
+        return _HtmlResp(self.html)
+
+    def post(self, url, data=None):
+        type(self).posted.append((url, dict(data or {})))
+        if self.sld_reply is None:
+            raise OSError("connection reset")
+        return _FakeResp(self.sld_reply)
+
+
+class WtNonJsonListTest(unittest.TestCase):
+    """列表接口回的不是 JSON：照样记 failed，但报错要说清原因（2026-10-10 立）。
+
+    兴业证券 10-08 起连续 8 轮 failed，error_message 只有 `JSONDecodeError: Expecting value…`——
+    租户域名被改绑成新版门户的壳页，这句话里一个字都看不出来。"""
+
+    def _fetch_error(self, html, sld_reply):
+        import adapters.wt as wt
+        _MovedClient.html, _MovedClient.sld_reply, _MovedClient.posted = html, sld_reply, []
+        orig = wt.httpx.Client
+        wt.httpx.Client = _MovedClient
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                WtAdapter().fetch("https://xyzq.hotjob.cn/wt/xyzq/web/index")
+        finally:
+            wt.httpx.Client = orig
+        return str(ctx.exception)
+
+    def test_portal_shell_names_where_the_tenant_moved(self):
+        new_home = "https://xyzq.hotjob.cn/SU68fb2499b7da1347a9dd852c/pb/index.html"
+        msg = self._fetch_error(_SHELL_HTML, {"state": "200", "data": {"linkData": {"link": new_home}}})
+        self.assertIn("new wecruit portal shell", msg)
+        self.assertIn(new_home, msg)
+        self.assertIn("host=xyzq.hotjob.cn", msg)
+        # 问法与壳页自己的一致：同源 POST，sld = 域名。
+        self.assertEqual(_MovedClient.posted,
+                         [("https://xyzq.hotjob.cn/wecruit/common/getSLD", {"sld": "xyzq.hotjob.cn"})])
+
+    def test_shell_is_still_reported_when_the_lookup_fails_or_is_empty(self):
+        self.assertIn("getSLD failed: OSError", self._fetch_error(_SHELL_HTML, None))
+        self.assertIn("getSLD gave no link",
+                      self._fetch_error(_SHELL_HTML, {"state": "1001", "msg": "企业信息不存在"}))
+
+    def test_other_non_json_is_not_called_a_move(self):
+        """不是壳页的 HTML（限流页 / 报错页）不许说成「租户搬家」，也不去问 getSLD。"""
+        msg = self._fetch_error("<html><body>Too  Many\nRequests</body></html>", None)
+        self.assertIn("returned non-JSON", msg)
+        self.assertIn("Too Many Requests", msg)
+        self.assertNotIn("portal shell", msg)
+        self.assertEqual(_MovedClient.posted, [])
+
+
 if __name__ == "__main__":
     unittest.main()

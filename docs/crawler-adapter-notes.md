@@ -35,6 +35,13 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #     分母读 dataCount，去重后不够就不记抓全。147 个启用源改前改后对拍：62 个源 +887 个岗、0 个源少拿。
                          #     没治的一种（第 1 页连口径都不同，迪卡侬校招）与「别让后面各页跟着第 1 页的页长翻」的反例在
                          #     `fetch` / `_fill_first_page_gap` 注释里。
+                         #   wt 租户换新版门户（2026-10-10 兴业证券）：对方把 `{brand}.hotjob.cn` 改绑成新门户壳页后，旧接口回 HTML、
+                         #     库里的旧链接打开落在门户首页。报错现在会写出新门户地址（`wt._non_json_reason`）。处置顺序：先跑
+                         #     migrate-wt-rows-to-wecruit 把存量 jd_url 按「wt postId = wecruit externalKey」逐岗换成新门户链接，
+                         #     再合 sources 迁移——反过来同一个岗会存出两行。新门户没发布的渠道（页面停在「内部处理中」）不换、不入库。
+                         #     ⚠️ 「这个域名回壳页」≠「旧接口没了」：同一天 `www.hotjob.cn/wt/xyzq/` 下列表接口照常回 94 岗
+                         #     （详情页是微信版，电脑上点「立即申请」只弹「您还未登录」）；41 个启用的 wt 源里另有 12 个
+                         #     首页已跳到新门户、旧接口仍通。
                          #   gllue.py = Gllue Next.js SSR 通用层（龙湖等自有域）：?page= 1-based 10 条/页，
                          #     正文只在详情页（列表页没有），逐岗抓、走 resolve_detail_cap 由快/重档决定抓不抓。
                          #   cnstaff.py = 聘客 cnstaff 通用层：POST /api/{tenant}/joblist.json（form `jt=0`）零鉴权，
