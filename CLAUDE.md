@@ -934,7 +934,8 @@ huawei / huawei_campus / xiaohongshu 现在都是这个写法，新增多渠道 
 定时批次被 GitHub 推迟到 UTC 00 点后才跑，一早就把预留线以上的用完——10-10 北京时间 14 点通用额度只剩 4 次，
 那一单日志写「额度不足，本轮零主题」，台账却记 success。现行口径：单公司 T3 零主题且原因是额度 → 返回 `noquota`，
 台账记 `skipped / no_quota`（`insight_backlog.finish_insight_enrich_run`）；兑现方式是 `fetch_t3_queue` 把近 14 天
-被现查点名的公司排在队列最前。**查「现查为什么没产出」先看 `search_usage` 当天用量，别先怀疑派发密钥。**
+被现查点名的公司排在队列最前（`noquota` 也可能来自 LLM 调用日顶，不只搜索额度）。
+**查「现查为什么没产出」按台账 `failure_reason` 分流：`dispatch_failed` = 派发没出去，查 Vercel 上的派发密钥（2026-09-03~10-10 就是它，GitHub 回 401；换完密钥要重新部署才生效）；`no_quota` = 派出去了但没额度，查 `search_usage` / `llm_usage` 当天用量。**
 
 ## LLM 成本纪律（2026-08-27 成本审计后立）
 

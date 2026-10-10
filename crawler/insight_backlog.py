@@ -351,7 +351,8 @@ def note_insight_enrich_outcome(sb, company, outcome):
         return False
 
 
-NO_QUOTA_MESSAGE = "搜索额度已用到预留线，这次没有查；这家公司已排到下一批定时补充的最前面"
+# noquota 有两种来源：搜索额度触到预留线，或当天的 LLM 调用日顶已到（enrich_company_t3 里两处 break）。
+NO_QUOTA_MESSAGE = "当天的搜索额度或模型调用额度已用完，这次没有查；这家公司已排到下一批定时补充的最前面"
 
 
 def finish_insight_enrich_run(sb, company, status, diagnostics=None):
@@ -387,6 +388,11 @@ def finish_insight_enrich_run(sb, company, status, diagnostics=None):
         update["status"] = "skipped"
         update["failure_reason"] = "no_quota"
         update["error_message"] = NO_QUOTA_MESSAGE
+    # 步骤没让 workflow 变红、但这一单自己报了 err（画像取不到 / 主题中途抛错）→ 同样不是成功。
+    elif status == "success" and merged.get("t3_outcome") == "err":
+        update["status"] = "failed"
+        update["failure_reason"] = "enrich_error"
+        update["error_message"] = "现查过程中出错，没有产出；详见当次 workflow 日志"
     sb.table("discovery_runs").update(update).eq("id", rows[0]["id"]).execute()
     return True
 
@@ -917,7 +923,11 @@ def main():
             # 现查：把这一步的真实结果写进台账，收尾时据此决定记 success 还是 skipped/no_quota。
             outcome = next((k for k in ("wrote", "noquota", "err", "empty") if stat.get(k)), "empty")
             note_insight_enrich_outcome(sb, args.company, outcome)
-        checked = stat["wrote"] + stat["empty"] + stat["err"]
+        # noquota 必须计入 checked：它以前混在 empty 里，「轮到了很多家、却一家都没产出」靠
+        # checked>0 且产出为 0 被看门狗规则 A 报出来（比如 LLM 日顶到了，每家第一个主题就 break）。
+        # 单独拆出来之后如果不加回去，那种日子 checked=0，会被读成「队列是空的」而不报警。
+        no_quota = stat.get("noquota", 0)
+        checked = stat["wrote"] + stat["empty"] + stat["err"] + no_quota
         ops_runs.record_ops_run(
             sb,
             "insight_backlog",
@@ -925,6 +935,7 @@ def main():
                 "checked": checked,
                 "companies_enriched": stat["wrote"],
                 "failed": stat["err"],
+                "no_quota": no_quota,   # 轮到了但撞额度、一个主题都没查的公司数
                 "mode": "experience",
                 # 库存量趋势：只有它能回答「洞察库到底在不在长」（见 count_active_added 注释）。
                 "active_added_7d": count_active_added(sb),

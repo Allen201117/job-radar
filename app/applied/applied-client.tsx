@@ -72,7 +72,8 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
       setRemoved((prev) => new Set(prev).add(jobId));
-      setConfirmingId(null);
+      // 只收自己这张卡的确认条：请求在路上时用户可能已经点开了另一张卡的。
+      setConfirmingId((cur) => (cur === jobId ? null : cur));
       router.refresh(); // 页头的条数是服务端渲染的
     } catch (e) {
       console.error("[applied] 移除投递记录失败", (e as Error).message);
@@ -121,6 +122,10 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
         </div>
       )}
 
+      {shown.length === 0 && items.length > 0 && (
+        // 最后一条刚被移除、服务端的空状态页还没刷回来的那一小段，别留一片空白。
+        <p className="surface p-5 t-body-sm ink-2">这里已经没有投递记录了。</p>
+      )}
       <div className="space-y-3">
         {shown.map((item) => {
           const cur = stages[item.jobId] ?? "applied";
@@ -188,7 +193,8 @@ export default function AppliedClient({ items }: { items: AppliedItem[] }) {
                       <button
                         type="button"
                         onClick={() => void removeRecord(item.jobId)}
-                        disabled={removingId === item.jobId}
+                        // 任意一张卡在移除中都禁用：removeRecord 一次只放行一个请求，不禁用的话点了没反应。
+                        disabled={removingId !== null}
                         className="rounded-full border border-tone-rose-border bg-tone-rose-bg px-3 py-1.5 font-semibold text-tone-rose-fg transition hover:opacity-80 disabled:opacity-50"
                       >
                         {removingId === item.jobId ? "移除中…" : "确定移除"}

@@ -531,7 +531,9 @@ export default function JobCard({
             rel="noopener noreferrer"
             onClick={handleView}
             onAuxClick={handleAuxView}
-            className="t-h1 block max-w-full text-left ink-1 transition-colors hover:text-[#2f8a63] dark:hover:text-[#6cc99e]"
+            // w-fit：<a class="block"> 会撑满整行（原来的 <button> 是按内容收缩的），不收回来的话
+            // 点标题右边的空白也会跳去官网。
+            className="t-h1 block w-fit max-w-full text-left ink-1 transition-colors hover:text-[#2f8a63] dark:hover:text-[#6cc99e]"
           >
             <span className="text-balance">{job.title}</span>
           </a>

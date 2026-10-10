@@ -448,6 +448,44 @@ class TestWorker(unittest.TestCase):
         self.assertFalse(B.note_insight_enrich_outcome(FakeSB(store), "没有台账的公司", "wrote"))
         self.assertNotIn("discovery_runs_updates", store)
 
+    def test_finish_insight_enrich_run_records_step_error_as_failed(self):
+        """现查这一步自己报了 err（画像取不到 / 主题抛错）但 workflow 没变红 → 台账记 failed，不是 success。"""
+        store = {"_canned_discovery_runs": [{
+            "id": "run-4", "diagnostics": {"company": "测试集团", "t3_outcome": "err"},
+        }]}
+        B.finish_insight_enrich_run(FakeSB(store), "测试集团", "success", {"workflow": "workflow completed"})
+        _filters, payload = store["discovery_runs_updates"][0]
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["failure_reason"], "enrich_error")
+
+    def test_t3_main_counts_noquota_as_checked_and_reports_it(self):
+        """批量 drain 整批撞额度：noquota 计入 checked 并单独进 metrics。
+
+        它以前混在 empty 里，靠「checked>0 且产出为 0」被看门狗报出来；拆出来后不加回去，
+        那种日子 checked=0，会被读成「队列是空的」——绿灯零产出。
+        """
+        recorded = {}
+
+        def fake_record(sb, module, metrics, **kw):
+            recorded["module"], recorded["metrics"] = module, metrics
+
+        argv = ["insight_backlog.py", "--t3"]
+        env = {"SUPABASE_URL": "http://x", "SUPABASE_SERVICE_ROLE_KEY": "k"}
+        with mock.patch.object(B.sys, "argv", argv), \
+             mock.patch.dict(B.os.environ, env), \
+             mock.patch.object(B.db, "get_supabase", return_value=FakeSB({})), \
+             mock.patch.object(B, "drain_t3", return_value={"wrote": 0, "empty": 0, "err": 0, "noquota": 7}), \
+             mock.patch.object(B, "count_active_added", return_value=0), \
+             mock.patch.object(B.ops_runs, "record_ops_run", side_effect=fake_record), \
+             mock.patch.object(B.E, "record_usage_ops_run"), \
+             mock.patch.object(B.E, "reset_llm_health"), \
+             mock.patch.object(B, "_llm_health_gate"):
+            B.main()
+        self.assertEqual(recorded["module"], "insight_backlog")
+        self.assertEqual(recorded["metrics"]["checked"], 7)
+        self.assertEqual(recorded["metrics"]["no_quota"], 7)
+        self.assertEqual(recorded["metrics"]["companies_enriched"], 0)
+
     def test_drain_one_company_reports_noquota_separately(self):
         """单公司现查撞额度：noquota 单独计数，empty / err 都不许顶替它。"""
         with mock.patch.object(B, "fetch_one_company", return_value={"id": "c1", "company": "测试集团", "aliases": []}), \

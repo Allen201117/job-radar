@@ -386,9 +386,24 @@ test("useClickOutside 在捕获阶段监听", () => {
 
 // 现象（读码确证）：提示条 5 秒到点就落定；动作请求第 6 秒才失败时卡片回不来，页面却说「已恢复原状态」。
 test("推荐页：请求没回来之前不落定乐观移除", () => {
-  assert.match(todayClient, /if \(inflightRef\.current\.has\(jobId\)\) \{[\s\S]*?dispatch\(\{ type: "expireToast", jobId \}\);/);
+  assert.match(todayClient, /if \(\(inflightRef\.current\.get\(jobId\) \?\? 0\) > 0\) \{[\s\S]*?dispatch\(\{ type: "expireToast", jobId \}\);/);
   assert.match(todayClient, /function handleActionResult\(\{ jobId, ok \}: \{ jobId: string; ok: boolean \}\)/);
-  assert.match(todayClient, /if \(waited\) dispatch\(\{ type: "finalizeRemove", jobId \}\);/);
+  assert.match(todayClient, /if \(awaitingResultRef\.current\.delete\(jobId\)\) \{\s*removedRef\.current\.delete\(jobId\);\s*dispatch\(\{ type: "finalizeRemove", jobId \}\);/);
+});
+
+// 现象（审查发现）：JobCard 失败时会再调一次 onActionChange(原来的动作)。原动作非空的卡（关键提醒区里
+// 已收藏的岗）失败后，旧实现把这次通知当成「又一次乐观移除」—— 卡片不回来，还提示「已收藏」。
+test("推荐页：失败回滚在结果回调里做，不把 JobCard 的回滚通知当成新动作", () => {
+  const change = todayClient.slice(todayClient.indexOf("function handleActionChange("), todayClient.indexOf("function handleActionResult("));
+  assert.match(change, /if \(removedRef\.current\.has\(jobId\)\) return;/);
+  assert.equal(/removeRollback/.test(change), false, "回滚不在 onActionChange 里做");
+  const result = todayClient.slice(todayClient.indexOf("function handleActionResult("), todayClient.indexOf("async function undo("));
+  assert.match(result, /if \(!ok\) \{[\s\S]*?dispatch\(\{ type: "removeRollback", jobId \}\);\s*setActionFailed\(true\);/);
+  // 撤销后重新操作：前一个请求的晚到结果不许动现在这次移除
+  assert.match(result, /if \(left > 0\) return;/);
+  // 撤销把卡放回队列后，晚到的结果不再碰它
+  const undo = todayClient.slice(todayClient.indexOf("async function undo("), todayClient.indexOf("function displayItemsFor("));
+  assert.match(undo, /removedRef\.current\.delete\(jobId\);/);
 });
 
 // 现象（读码确证）：误点「标记投递」后，「投递记录」页没有任何移除入口（推荐页的撤销只有 5 秒）。
