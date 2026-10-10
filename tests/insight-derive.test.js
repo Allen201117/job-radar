@@ -2,26 +2,13 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
-const ts = require("typescript");
+const { loadTs } = require("./_load-ts");
 
-// 仿 tests/insight-verification.test.js：读 .ts 源码即时转译为 CommonJS 再执行（import type 被擦除）
-function loadTsModule(relPath) {
-  const sourcePath = path.join(__dirname, "..", relPath);
-  const source = fs.readFileSync(sourcePath, "utf8");
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2020,
-      esModuleInterop: true,
-    },
-  }).outputText;
-  const module = { exports: {} };
-  const fn = new Function("exports", "require", "module", "__filename", "__dirname", compiled);
-  fn(module.exports, require, module, sourcePath, path.dirname(sourcePath));
-  return module.exports;
-}
-
-const D = loadTsModule(path.join("lib", "insight-derive.ts"));
+// insight-derive 运行时 import 了岗位库的职能分类器（./china-keyword-expansion），
+// 要用会按源文件所在目录解析相对 import 的加载器。
+const DERIVE_PATH = path.join(__dirname, "..", "lib", "insight-derive.ts");
+const D = loadTs(DERIVE_PATH);
+const { classifyJobFunction } = require("../lib/china-keyword-expansion.js");
 
 const NOW = new Date("2026-06-15T00:00:00.000Z");
 const NOW_ISO = NOW.toISOString();
@@ -69,6 +56,77 @@ test("classifyRecruitment 按关键词归三桶（保守：无明确关键词 = 
   assert.equal(D.classifyRecruitment("社招", "高级后端工程师"), "social");
   assert.equal(D.classifyRecruitment(null, "Software Engineer Intern"), "intern");
   assert.equal(D.classifyRecruitment(null, "资深产品经理"), "unknown");
+});
+
+// 回归（2026-10-11）：旧正则 /实习|intern|internship/ 是裸子串，Internal / International / Internals
+// 全算实习 —— 进了抽屉的「类型」占比与「实习集中在 X 月」。用例全部取自库里 / live 抓到的真实标题。
+test("classifyRecruitment：intern 只认整词，Internal / International / Internals 不是实习", () => {
+  for (const title of [
+    "Senior Analyst - Internal Audit",
+    "Software Developer - Internal Compute Frameworks (Python)",
+    "Principal Software Engineer - Query Engine, Database Internals - Elasticsearch",
+    "Internal Auditor - APAC Regulatory & Financial Operations",
+    "Warehouse and Logistics Manager - International",
+    "International Legal Counsel",
+    "Senior Manager, International Marketing, Migraine Prevention",
+    "Product Designer, Internal Tools",
+    "Network Development Engineer II, AWS Internet Edge",
+    "Internal", // 大陆集团真有岗位标题就叫这个
+  ]) {
+    assert.notEqual(D.classifyRecruitment(null, title), "intern", title);
+  }
+  // 不是实习之后要落到它真正的桶，而不是一律 unknown：这条靠 Graduate 判校招。
+  assert.equal(
+    D.classifyRecruitment(null, "Internal Control Business Partner Graduate (Internal Control) - 2027 Start"),
+    "campus",
+  );
+  // job_type 同一条规则：部门 / 类别名里的 Internal 不是实习（西门子的 job_type 就叫 Internal Services）。
+  assert.notEqual(D.classifyRecruitment("Internal Services", "(SSLS) GA Specialist 总务专员 闵行"), "intern");
+});
+
+// 反方向：收紧之后真实习一个都不许漏（单复数 / internship / 贴着汉字、标点的写法）。
+test("classifyRecruitment：整词收紧后真实习写法照旧判实习", () => {
+  for (const title of [
+    "IATD AE Lab Testing Summer Intern",
+    "Machine Learning Researcher - Intern",
+    "Internship",
+    "Engineering Summer Interns 2027",
+    "Boeing Summer 2027 Internship Program (Paid)",
+    "Business, Marketing & Creative Masters Internships",
+    "商务intern", // 贴着汉字：JS 的 \b 认，这类岗不能丢
+    "后端开发工程师（TripoStudio核心Intern）",
+    "数据分析实习生",
+    "Internal Audit Intern", // 构造：两个词同时出现时以整词 Intern 为准
+  ]) {
+    assert.equal(D.classifyRecruitment(null, title), "intern", title);
+  }
+  // job_type 自报（库里含 intern 的 job_type 只有 Intern 与 Internal Services 两种取值）
+  assert.equal(D.classifyRecruitment("Intern", "Data Analyst"), "intern");
+  assert.equal(D.classifyRecruitment("项目实习", "Project Intern_Compliance team(J19369)"), "intern");
+  // 已知边界：下划线 / 数字在正则里算词字符，Intern_Compliance、Intern3D 单看标题不认（上一行靠的是 job_type 的「实习」）。
+  // 与岗位库的整词正则是同一个边界；全库这种写法 3 行，都另写了「实习」二字。要放宽就两处一起放。
+  assert.equal(D.classifyRecruitment(null, "Project Intern_Compliance team(J19369)"), "unknown");
+});
+
+// 判实习的整词正则在岗位库（china-keyword-expansion）里也有一份。两处各改各的 = 抽屉与岗位库筛选对同一个岗说法不同。
+test("实习整词正则与岗位库是同一条", () => {
+  const WORD = String.raw`\bintern(?:ship)?s?\b`;
+  assert.ok(fs.readFileSync(DERIVE_PATH, "utf8").includes(`/实习|${WORD}/`), "insight-derive 的实习正则变了");
+  const lib = fs.readFileSync(path.join(__dirname, "..", "lib", "china-keyword-expansion.js"), "utf8");
+  assert.ok(lib.includes(`/实习|${WORD}/i`), "岗位库 sourceDeclaredCategory 的实习正则变了，这里要跟着核一遍");
+});
+
+test("deriveHiring：标题里的 Internal / International 不得进「实习」占比", () => {
+  const jobs = [
+    j({ job_type: null, title: "Senior Analyst - Internal Audit" }),
+    j({ job_type: null, title: "International Legal Counsel" }),
+    j({ job_type: null, title: "Senior Software Engineer - Database Engine Internals" }),
+    j({ job_type: "社招", title: "后端工程师" }),
+  ];
+  const v = D.deriveHiring(jobs, NOW_ISO);
+  assert.equal(v.payload.mix.intern, 0);
+  assert.equal(v.payload.bucket_share.intern, 0);
+  assert.equal(v.payload.bucket_share.social, 100);
 });
 
 test("parseSalaryText 只解析明示月薪区间；歧义/无值返回 null", () => {
@@ -157,6 +215,84 @@ test("deriveHiring：样本取满上限时写「N+」并说明是按样本统计
   // 聚合入口要把这个开关传下去
   const all = D.deriveCompanyInsights(jobs, new Date(NOW_ISO), { sampleCapped: true });
   assert.match(all.hiring[0].content, /3\+ 个在招岗位/);
+});
+
+// 「热门方向」此前用本文件私有的 8 条正则、按顺序取第一个命中：`\bai\b` 排最前、「工程师」算研发。
+// 2026-10-11 全库 441,589 个在招岗对拍：AI产品经理算成算法（2,608）、机械 / 电气工程师算成研发（21,395）、
+// 销售工程师算成研发（1,209）、一半的岗（217,781）判不出方向；1,445 家公司里 679 家的第一方向因此不同。
+// 现在与洞察库的职能分布、岗位库筛选共用同一个分类器。
+test("deriveHiring 热门方向：按岗位名判，不被 AI / 工程师 这类词带偏", () => {
+  const titles = [
+    "AI产品经理", "AI产品经理-抖音电商", "产品经理",
+    "产品运营", "产品运营经理",
+    "机械工程师", "高级机械工程师",
+    "销售工程师",
+  ];
+  const v = D.deriveHiring(titles.map((title) => j({ title })), NOW_ISO);
+  assert.deepEqual(v.payload.top_functions, [
+    { key: "产品", count: 3 },
+    { key: "生产制造", count: 2 },
+    { key: "运营", count: 2 },
+  ]);
+  assert.match(v.content, /热门方向 产品、生产制造、运营/);
+});
+
+// 旧规则在这两个标题上的错法：`\bai\b` 排最前 →「产品经理 - AI平台」算成算法；「研发」排在运营前 →
+// 「增长运营 - 研发效能」算成研发。⚠️ 这条只钉这两个标题，不代表「 - 」后面的尾巴一律不算数——
+// 分段标题怎么判归分类器管，见下一条。
+test("deriveHiring 热门方向：「产品经理 - AI平台」是产品、「增长运营 - 研发效能」是运营", () => {
+  const jobs = [
+    j({ title: "产品经理 - AI平台" }),
+    j({ title: "增长运营 - 研发效能" }),
+    j({ title: "增长运营 - 研发效能" }),
+  ];
+  const v = D.deriveHiring(jobs, NOW_ISO);
+  assert.deepEqual(v.payload.top_functions, [
+    { key: "运营", count: 2 },
+    { key: "产品", count: 1 },
+  ]);
+});
+
+// 契约：洞察派生不许再有自己的职能词表。岗位库的分类器怎么判，这里就怎么数
+// （判不出 =「其他」不进热门方向）。期望值故意用分类器现算：它改规则，这里自动跟上。
+// 例：「Agent研发工程师 - 抖音用户增长」「Software Engineer - Growth」眼下分类器按最靠后命中判成运营，
+// 等它的「分段标题先看第一段」上线就是研发 —— 两种情况下这条都该过，抽屉都不该另判一遍。
+test("deriveHiring 热门方向 = 岗位库分类器逐岗判完后的前三名", () => {
+  const titles = [
+    "后端工程师", "Senior Sales Engineer", "客户经理", "柜员", "结构工程师", "算法工程师",
+    "Machine Learning Engineer", "财务分析", "Agent研发工程师 - 抖音用户增长", "Software Engineer - Growth",
+    "置业顾问", "2027届管培生", "Internal Auditor - APAC Regulatory & Financial Operations",
+  ];
+  const counts = new Map();
+  for (const title of titles) {
+    const fn = classifyJobFunction({ title });
+    if (fn !== "其他") counts.set(fn, (counts.get(fn) || 0) + 1);
+  }
+  assert.ok(counts.size >= 4, "用例退化了：要有被挤出前三的方向，才验得出「取的是前三名」");
+  const expected = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+    .slice(0, 3)
+    .map(([key, count]) => ({ key, count }));
+  const v = D.deriveHiring(titles.map((title) => j({ title })), NOW_ISO);
+  assert.deepEqual(v.payload.top_functions, expected);
+});
+
+// 并列时谁排前、谁被挤出前三，不许看行的先后：线上取数没有 order by，行序 = 堆物理顺序，
+// 岗位一被改写就变 —— 同一家公司刷新两次，「热门方向」「主要城市」的第三名会换人。
+test("deriveHiring 热门方向 / 城市：并列时结果与行的先后无关", () => {
+  const rows = [
+    j({ title: "产品经理", location: "杭州" }),
+    j({ title: "后端工程师", location: "北京" }),
+    j({ title: "销售工程师", location: "上海" }),
+    j({ title: "柜员", location: "成都" }),
+  ];
+  const a = D.deriveHiring(rows, NOW_ISO).payload;
+  const b = D.deriveHiring([...rows].reverse(), NOW_ISO).payload;
+  assert.deepEqual(a.top_functions, b.top_functions);
+  assert.deepEqual(a.top_cities, b.top_cities);
+  // 并列按名称的码点升序定序（不用 localeCompare：它随运行环境的 ICU 版本变）。
+  assert.deepEqual(a.top_functions.map((f) => f.key), ["产品", "研发", "金融业务"]);
+  assert.deepEqual(a.top_cities.map((c) => c.key), ["上海", "北京", "成都"]);
 });
 
 test("deriveHiring 不足阈值返回 null", () => {
