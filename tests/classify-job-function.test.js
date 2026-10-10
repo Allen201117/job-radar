@@ -534,3 +534,71 @@ test("化学 / 药物合成类研究员归研发，真生产岗与 AI 的「合�
   assert.equal(classifyJobFunction({ title: "合成数据研究员" }), "其他");
   assert.equal(classifyJobFunction({ title: "语音合成算法工程师" }), "研发");
 });
+
+test("「岗位名 - 业务线」分段标题：先看第一段，末尾的业务线名不把职能带偏", () => {
+  // 2026-10-10 起爬虫入库保留完整标题（此前会把第一个「 - 」之后整段截掉）。
+  // 下面每条都取自 live 抓到的原始标题；注释里是不加这条规则时「最靠后命中」给出的错判。
+  assert.equal(classifyJobFunction({ title: "Agent研发工程师 - 抖音用户增长" }), "研发"); // → 运营
+  assert.equal(classifyJobFunction({ title: "资深安全研发工程师（客户端方向） - 安全与风控" }), "研发"); // → 金融业务
+  assert.equal(classifyJobFunction({ title: "标准运营 - 内容质量与数据服务平台" }), "运营"); // → 生产制造
+  assert.equal(classifyJobFunction({ title: "增长策略产品经理（投放方向） - TikTok用户增长" }), "产品"); // → 运营
+  assert.equal(classifyJobFunction({ title: "广告算法工程师 - 国际化广告创意与品牌" }), "研发"); // → 市场
+  assert.equal(classifyJobFunction({ title: "Software Engineer - Growth & Monetization" }), "研发"); // → 运营
+  // 结论与截断时代的标题逐条相同（第一段判得出职能时）。
+  for (const title of [
+    "AI产品设计师 - 飞书设计",
+    "数据科学家（审核系统） - TikTok",
+    "Senior Product Manager - Technical, Amazon Key",
+    "招聘专员（外包） - 产研",
+  ]) {
+    const head = title.split(" - ")[0];
+    assert.equal(classifyJobFunction({ title }), classifyJobFunction({ title: head }), title);
+  }
+});
+
+test("分段标题第一段判不出职能时退回整串（部门 / 领域写在前面）", () => {
+  assert.equal(classifyJobFunction({ title: "小米汽车 - 自动驾驶- 行车（城区）产品经理 - 实习" }), "产品");
+  assert.equal(classifyJobFunction({ title: "Machine Learning - Compiler Engineer , AWS Neuron" }), "研发");
+  assert.equal(classifyJobFunction({ title: "美团无人机 - 商业分析实习生" }), "数据");
+  assert.equal(classifyJobFunction({ title: "服务管培生 - 物流服务类" }), "供应链");
+});
+
+test("分段标题第一段是部门 / 机构名：岗位名在后面，不拿部门名判职能", () => {
+  // live 标题。截断时代这些岗入库后只剩部门名，职能是按「技术中心」「用户运营部」判的。
+  assert.equal(classifyJobFunction({ title: "技术中心 - BI数据产品经理" }), "产品"); // 库洛，旧 = 研发
+  assert.equal(classifyJobFunction({ title: "技术中心 - 高级视觉设计师（库街区）" }), "设计"); // 旧 = 研发
+  assert.equal(classifyJobFunction({ title: "用户运营部 - 销售效能SM/M/AM（P）(J30389)" }), "销售"); // 信达，旧 = 运营
+  assert.equal(classifyJobFunction({ title: "技术部 - 销售工程师" }), "销售");
+  // 「干部」不是部门：第一段判不出时才退回整串。
+  assert.equal(classifyJobFunction({ title: "储备干部 - 生产方向" }), "生产制造");
+  // 英文只认 department / division；team 是岗位名后面的修饰，第一段照常作数。
+  assert.equal(
+    classifyJobFunction({ title: "Client Service Executive, Hong Kong Team - Private Banking" }),
+    "客服服务",
+  );
+});
+
+test("括号里的「 - 」不是分段", () => {
+  // 在那里切开，第一段带着半个括号，Growth / 风控 反而成了最靠后命中（运营 / 金融业务）。
+  assert.equal(classifyJobFunction({ title: "Product Manager (Growth - Payments)" }), "产品");
+  assert.equal(classifyJobFunction({ title: "数据分析师（风控 - 反欺诈）" }), "数据");
+  assert.equal(classifyJobFunction({ title: "信息安全担当（安全运营工程师 - 检测&响应）(J14392)" }), "研发"); // 优衣库
+  // 括号闭合之后的「 - 」照常分段。
+  assert.equal(classifyJobFunction({ title: "数据科学家（审核系统） - TikTok用户增长" }), "数据");
+});
+
+test("分段标题的招聘活动标签只在主干上剥", () => {
+  // 主干剥完还剩「专员」= 主干自己是岗位名，「 - 」后面的部门无权把它改判成研发。
+  assert.equal(classifyJobFunction({ title: "校园招聘专员 - 研发中心" }), "职能");
+  assert.equal(classifyJobFunction({ title: "校园招聘专员 - 研发中心" }), classifyJobFunction({ title: "校园招聘专员" }));
+  // 主干整个就是活动标签：真实角色写在后面，看整串。
+  assert.equal(classifyJobFunction({ title: "2027 届校园招聘 - 后台开发工程师" }), "研发");
+});
+
+test("紧贴的连字符不算分段：「部门-角色」仍按最靠后命中", () => {
+  assert.equal(
+    classifyJobFunction({ title: "外运华东-水集事业部-物流分公司市场销售部销售代表" }),
+    "销售",
+  );
+  assert.equal(classifyJobFunction({ title: "市场部-后端开发工程师" }), "研发");
+});

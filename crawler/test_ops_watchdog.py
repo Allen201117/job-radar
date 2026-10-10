@@ -924,7 +924,7 @@ class DuplicatePortalTest(unittest.TestCase):
         self.assertEqual(evaluate_duplicate_portals({
             "1": {"company": "长城汽车", "enabled": True, "adapter_name": "wt",
                   "source_url": "https://gwm.hotjob.cn/wt/GWM/web/index"},
-            "2": {"company": "中国电信", "enabled": True, "adapter_name": "wt",
+            "2": {"company": "财通证券", "enabled": True, "adapter_name": "wt",
                   "source_url": "https://www.hotjob.cn/wt/CT/web/index"}}), [])
 
     def test_wt_same_brand_two_entrances_is_flagged(self):

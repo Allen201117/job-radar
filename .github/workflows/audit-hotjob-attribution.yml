@@ -1,7 +1,8 @@
 name: audit-hotjob-attribution
 
 # 复核 enabled 的 wecruit（hotjob）源：sources.company 与租户自报 suite/config.companyName 对不上就打 ::warning::。
-# 只读，不写库。起因见 crawler/audit_hotjob_attribution.py 模块注释（248 精雕/京东、274 特变/领益两次张冠李戴）。
+# 老版 wt 源同样复核（2026-10-10 加）：门户自报 = 首页跳到的新版门户的 suite/config / 落地页 title，列表 orgName 作佐证。
+# 只读，不写库。起因见 crawler/audit_hotjob_attribution.py 模块注释（248 精雕/京东、274 特变/领益、311 财通/中国电信、312 金科/晶科）。
 # 本机 LibreSSL 连不上 hotjob.cn，所以在 runner 上跑。手动触发 + 每周一次。
 
 on:

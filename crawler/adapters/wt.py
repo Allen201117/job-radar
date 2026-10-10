@@ -1,8 +1,16 @@
 """老版 WinTalent（wt）招聘站通用适配器（直连公开 position/list JSON 接口，零浏览器）。
 
 矿脉：一批知名大企业仍用 hotjob.cn 的**老版 wt**（区别于已攻克的新版 wecruit）：
-伊利(yili) / 中信证券(SEC) / 中广核(CGN) / 中国电信(CT) / 中化(Sinochem) / 现代汽车(HMGC) 等。
+伊利(yili) / 中广核(CGN) / 中化(Sinochem) / 现代汽车(HMGC) 等。
 入口形如 `{host}.hotjob.cn/wt/{BRAND}/web/index`（302→`CompXXXPageindex` 落地页）。
+
+🚫 BRAND 代号不能拿来猜公司名（2026-10-10 立）。这里原先列着「中信证券(SEC) / 中国电信(CT)」，两个都是按字母猜的：
+❌ `www.hotjob.cn/wt/CT` 是财通证券（首页 302 到财通的新版门户，租户自报 companyName=财通证券，列表 orgName
+   是「财通证券 / 分支机构」），迁移 105 把它记成中国电信，215 个岗挂错名四个月；中国电信自己的站是
+   `job.chinatelecom.com.cn/wt/TELE`（集团官网校招公告原文写的地址）。`jks.hotjob.cn/wt/JKS` 是金科服务不是晶科能源。
+   `wt/SEC` 的发布机构是「上海第一机床厂有限公司 / 核电设备 / 数科公司」，不是中信证券（库里没接它）。
+✅ 接 wt 源时公司名只认门户自报：首页跳到的新版门户的 suite/config.companyName、落地页 <title>、列表 orgName。
+   存量每周由 audit_hotjob_attribution.audit_wt 复核。
 
 可行性已 live 验证（两道闸门均过）：
   闸门①（列表 XHR）：wt 列表页 JS 公开 GET `{origin}/wt/{BRAND}/web/json/position/list`

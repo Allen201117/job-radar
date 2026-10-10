@@ -230,3 +230,23 @@ class ProfileProvisionTest(unittest.TestCase):
         # 富化队列按 insight_checked_at nulls first 取活；留空会让长尾插队抢 LLM/搜索预算
         rows = B.plan_new_profiles({"A公司"}, 1, {"A公司": 5})
         self.assertTrue(rows[0]["insight_checked_at"])
+
+
+class SegmentedTitleNoiseTest(unittest.TestCase):
+    """入库保留完整标题（2026-10-10）后新冒出来的两类假业务线：学历前缀、校招场次。
+
+    拿 live 抓到的 966 个源的原始标题预演，新标题比旧标题多抽出 63 个业务线、少 0 个；
+    多出来的绝大多数是字节的真业务线（TikTok研发 / 芯片研发 / 飞书商业化 / 火山引擎…），下面这几个不是。
+    """
+
+    def test_degree_prefix_and_campus_session_are_noise(self):
+        for token in ("博士", "硕士", "本科", "“大城市”专场"):
+            with self.subTest(token=token):
+                self.assertTrue(B.is_noise(token), token)
+
+    def test_real_business_units_after_spaced_dash_survive(self):
+        self.assertIn("飞书商业化", B.extract_candidates("渠道城市经理（杭州） - 飞书商业化"))
+        # 学历词只做全等判断：「博士后工作站」这种含学历词的真部门名不受影响。
+        for token in ("飞书商业化", "芯片研发", "TikTok研发", "火山引擎", "博士后工作站"):
+            with self.subTest(token=token):
+                self.assertFalse(B.is_noise(token), token)
