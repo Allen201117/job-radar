@@ -207,7 +207,7 @@ app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse�
 
 | 组件 | 在哪 | 干什么 |
 |---|---|---|
-| 期望清单 | `crawler/audit_contract.yaml`（90 条：数据 14 / 体验 22 / 链路 37 / 老告警桥接 17；原写 85 条是 09-19 上线时的数，09-23 复核更正为 87；10-04 加规则 Q 时实数已是 89、加完 90；10-10 体验层再加「现查派发失败」「公告页读取上限」两条，实数 92；10-11 数据层加「公司画像撞名」两条，实数 94） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
+| 期望清单 | `crawler/audit_contract.yaml`（90 条：数据 14 / 体验 22 / 链路 37 / 老告警桥接 17；原写 85 条是 09-19 上线时的数，09-23 复核更正为 87；10-04 加规则 Q 时实数已是 89、加完 90；10-10 体验层再加「现查派发失败」「公告页读取上限」两条，实数 92；10-11 数据层加「公司画像撞名」两条，实数 94；同日再加「公司名带渠道后缀」两条（招聘来源 / 在招岗各一条），实数 96） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
 | 执行器 | `crawler/audit_runner.py` + `structural-audit.yml`（每日北京 08:50） | 逐条量，写 `audit_results`（Supabase，迁移 281/282）；`unique(check_id, run_date)` 一天一行 = 趋势表。可选 `detail_sql` 列出「具体是哪几处」进 `detail.findings`，晨报 ⑤⑦ 据此点名；它失败不改数值与判定 |
 | 覆盖率差集 | `crawler/audit_coverage.py` + `audit_exemptions.yaml` | 左边**自动枚举**（带 cron 的 workflow / 写 ops_runs 的模块 / jobs 表列 / 走查指标），减去有期望的；上线时 68 条 → 现 14 条（全是 jobs 列） |
 | 老告警桥接 | `ops_watchdog.py` 的 `publish_audit_bridge` | 16 条规则**判定与阈值一字未动**，只把每条的命中数 + 明细写进同一张表（`detail.findings[].title` 与 issue 标题逐字一致） |
@@ -571,6 +571,15 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
   ⚠️ 合并画像：`insight_subjects` / `insight_items` 对画像是级联删，必须同一事务里先改挂后删；括号里挂错集团的国聘残留只删不登记别名。动之前的行留在 `archive.merge_20261011_*`。
   ⚠️ 名字按别名归到画像之后，下游凡是「拿清单名 / 岗位公司名去比画像正名」的地方都要跟着认别名
   （校招周期链路的「已有时间线」判断、搜索富化排队的在招数，都是代码审查才查出来的）。全集清单与逐表行数：`docs/reviews/2026-10-11-insight-duplicate-profiles.md`。
+  📌 **源名不带招聘渠道后缀（2026-10-11，迁移 320，上面那批重复画像的上游）**：❌ 53 条源叫「X 校招」「X 实习」，岗位公司名照抄 →
+  岗位卡、公司筛选里出现「TCL 校招」；后缀还有两成是错的（这些名字下 11,246 个在招岗里 2,391 个逐岗分类是社招，北森一个租户的列表社招校招一起返回）。
+  ✅ 根因：全是迁移里手写的（2026-06 探活批次 46 条 + 09 月 7 条），代码不拼后缀。✅ 防：渠道只由 `sources.board` 与逐岗分类表达；
+  新迁移由 `scripts/check-migrations.sh` 在应用前拦、网页加源由 `validateSourceInput` 拦、每日体检 `sources.name_with_channel_suffix` / `jobs.company_with_channel_suffix`（都正常 0）。
+  分类器里「公司名带校招 / 实习就判校招 / 实习」那一层同日拆掉（当时带这类名字的 12,107 个在招岗逐行对拍，改判 0）。
+  ⚠️ 批量改 `jobs.company` 之前先知道：`company` 是招聘类型分类的输入，改名的行分类会被库里的触发器清空等重算 →
+  用 `rename-job-company.yml` 的 `map_file` 模式（先数唯一键撞行、改名与留底同一条语句、先 `rehearse` 真执行后回滚），跑完立刻手动触发 `backfill-recruitment-category`。
+  ⚠️ 「中文 + 英文尾巴」的源名刻意没统一：要动 8.4 万个在招岗、55 个名字的必投匹配会失效（海外清单的模式全是英文名），
+  数字见 `docs/reviews/2026-10-11-source-name-channel-suffix.md` §5。
 - 检索额度是**全局共享**的（见「搜索额度是全局共享的」一节）；千帆免费额度 50/天，耗尽时设 `BAIDU_QIANFAN_SEARCH_DISABLED=true`，**不要反复点「发现」或跑 5-query live 验证**。
 
 ## 四层「搜索/刷新」必须区分（高频踩坑点）
