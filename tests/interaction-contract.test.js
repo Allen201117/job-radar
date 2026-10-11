@@ -346,7 +346,7 @@ test("洞察接口：互不依赖的读并行，现查派发不挡响应", () =>
   const route = read("app/api/insights/route.ts");
   assert.match(
     route,
-    /const \[fullProfileRes, jobRows, itemsRes, firstParty, recruitmentCycles\] = await Promise\.all\(\[/,
+    /const \[fullProfileRes, jobFacets, itemsRes, firstParty, recruitmentCycles\] = await Promise\.all\(\[/,
   );
   assert.match(route, /after\(async \(\) => \{\s*try \{\s*await maybeDispatchInsightEnrich\(/);
   // 占位 / 派发用画像的规范名：用查询词原文会另建一行空画像，反过来挡住真画像（线上实测踩到过）。
