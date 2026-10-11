@@ -168,6 +168,60 @@ class OwnershipConsistencyTest(unittest.TestCase):
         self.assertEqual(buckets["电商"], [])
 
 
+class OwnedJobCompaniesTest(unittest.TestCase):
+    """取岗的归属与 bu_extract 同一套：每个岗位公司名只归一个画像。
+
+    2026-10-11 真库：字节跳动的别名里有「抖音」，而「抖音」另有画像。旧实现按「正名 + 别名」取岗，
+    字节跳动被算成 28,632 岗，bu_extract 给它的主体记的是 20,177——差的正是 jobs.company='抖音' 那批。
+    """
+
+    PROFILES = [
+        {"id": "bd", "company": "字节跳动", "aliases": ["字节", "抖音"]},
+        {"id": "dy", "company": "抖音", "aliases": []},
+        {"id": "zh", "company": "知乎", "aliases": ["知乎 Zhihu"]},
+        {"id": "gcl", "company": "协鑫集团", "aliases": []},
+    ]
+    ACTIVE = [{"company": c} for c in ("字节跳动", "抖音", "知乎 Zhihu", "协鑫", "没有画像的公司")]
+
+    def _owned(self):
+        with mock.patch.object(S.db, "fetch_all_rows", return_value=self.PROFILES),              mock.patch.object(S.jobs_db, "fetch_all", return_value=self.ACTIVE):
+            return S.fetch_owned_job_companies(mock.MagicMock(), mock.MagicMock())
+
+    def test_a_name_that_is_another_profiles_own_name_is_not_double_counted(self):
+        owned = self._owned()
+        self.assertEqual(owned["bd"], ["字节跳动"])
+        self.assertEqual(owned["dy"], ["抖音"])
+
+    def test_alias_and_normalized_names_still_count(self):
+        owned = self._owned()
+        self.assertEqual(owned["zh"], ["知乎 Zhihu"])     # 别名精确
+        self.assertEqual(owned["gcl"], ["协鑫"])           # 归一名唯一（bu_extract 同口径）
+
+    def test_every_job_company_has_at_most_one_owner(self):
+        owned = self._owned()
+        flat = [name for names in owned.values() for name in names]
+        self.assertEqual(len(flat), len(set(flat)))
+        self.assertNotIn("没有画像的公司", flat)
+
+    def test_no_owned_names_means_no_query(self):
+        conn = mock.MagicMock()
+        with mock.patch.object(S.jobs_db, "fetch_all") as fetch_all:
+            self.assertEqual(S.fetch_jobs_for_company(conn, []), [])
+        fetch_all.assert_not_called()
+
+    def test_main_fetches_jobs_by_owned_names_not_by_aliases(self):
+        """main() 真正拿去取岗的是归属结果；画像别名里多出来的名字不许再被拿去取岗。"""
+        seen = []
+
+        def jobs(conn, names):
+            seen.append(list(names))
+            return []
+
+        runner = ZeroJobCompanyTest()
+        runner._run_main([], jobs=jobs, names={"c1": ["某公司", "别家的正名"]}, owned={"c1": ["某公司"]})
+        self.assertEqual(seen, [["某公司"]])
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -251,7 +305,8 @@ class ZeroJobCompanyTest(unittest.TestCase):
         ],
     }
 
-    def _run_main(self, argv, *, jobs, subjects=None, names=None, existing=None, write_error=None):
+    def _run_main(self, argv, *, jobs, subjects=None, names=None, existing=None, write_error=None,
+                  owned=None):
         """真跑 main()，只把读写库的边界换掉。返回 (写库调用, 台账调用, 屏幕输出)。"""
         subjects = [self.COMPANY, self.BU] if subjects is None else subjects
 
@@ -268,6 +323,9 @@ class ZeroJobCompanyTest(unittest.TestCase):
             patch(S.db, "get_supabase", return_value=mock.MagicMock())
             patch(S, "fetch_subjects", return_value=subjects)
             patch(S, "fetch_company_names", return_value=self.NAMES if names is None else names)
+            # 取岗按「归这家画像的岗位公司名」，不按别名（见 fetch_owned_job_companies）。
+            patch(S, "fetch_owned_job_companies",
+                  return_value=dict(self.NAMES if names is None else names) if owned is None else owned)
             patch(S, "fetch_existing_items",
                   return_value=self.EXISTING if existing is None else existing)
             patch(S, "fetch_snapshots", return_value={})

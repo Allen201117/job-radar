@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/apiAuth";
 import { createServiceClient } from "@/lib/supabaseService";
 import { validateSourceInput } from "@/lib/source-adapters";
+import { ensureCompanyProfile } from "@/lib/insight-profile-store";
 
 export const runtime = "nodejs";
 
@@ -40,11 +41,13 @@ export async function POST(request: NextRequest) {
   // 同步给该公司建 / 标记画像占位 → 入职业洞察 T2 富化队列（insight_checked_at=null，CI worker 会查 Wikidata 回填）。
   // best-effort：失败不阻断加源（洞察是增益层，不能拖累核心加源流程）。
   const companyName = (result.value as { company?: string }).company;
+  // 这家公司已有画像（新源名是它的别名）就只重新排队，不另建一个画像——见 lib/insight-profile-store。
   if (companyName) {
-    const { error: profErr } = await service
-      .from("company_profiles")
-      .upsert({ company: companyName, insight_checked_at: null }, { onConflict: "company" });
-    if (profErr) console.error("[sources] 洞察入队失败(忽略)", profErr.message);
+    try {
+      await ensureCompanyProfile(service, companyName, { insight_checked_at: null });
+    } catch (e) {
+      console.error("[sources] 洞察入队失败(忽略)", (e as Error).message);
+    }
   }
 
   return NextResponse.json({ ok: true, source: row });

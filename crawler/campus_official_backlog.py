@@ -18,7 +18,8 @@ from datetime import datetime, timezone
 import db
 import must_apply
 import ops_runs
-from campus_cycle_backlog import current_cohort, _existing_status_by_key, fetch_covered_company_names
+from campus_cycle_backlog import (current_cohort, _existing_status_by_key, fetch_covered_company_names,
+                                   must_apply_names)
 from campus_official_extract import build_official_messages, parse_precise_claims
 from campus_official_pages import official_campus_urls, fetch_first_with_signal
 from insight_backlog import fetch_one_company
@@ -141,7 +142,8 @@ def main():
         results = [drain_official_one(sb, args.company, now)]
     else:
         by_industry = must_apply.by_industry()
-        covered = fetch_covered_company_names(sb)  # 已有 verified 时间线的公司本轮不重复（含精确日期）
+        # 已有 verified 时间线的公司本轮不重复（含精确日期）；清单名是画像别名时也要认得出
+        covered = fetch_covered_company_names(sb, must_apply_names(by_industry))
         seen, targets = set(), []
         for _ind, companies in (by_industry or {}).items():
             for entry in (companies or []):

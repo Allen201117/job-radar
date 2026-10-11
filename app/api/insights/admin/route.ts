@@ -12,6 +12,7 @@ import {
 } from "@/lib/insight-verification";
 import { INSIGHT_DIMENSIONS, ITEM_COLUMNS, flattenSources } from "@/lib/insight-bundle";
 import { normalizeIndustry } from "@/lib/industries";
+import { ensureCompanyProfile } from "@/lib/insight-profile-store";
 import type { InsightItem, InsightSource } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -235,8 +236,13 @@ export async function POST(request: NextRequest) {
 
   // 公司行业标签：提供则 upsert（仅 industry，不动 display_name/aliases；为空不改）。
   const industry = normalizeIndustry(body.industry);
+  let profileId: string | null = null;
   if (industry) {
-    await service.from("company_profiles").upsert({ company, industry }, { onConflict: "company" });
+    try {
+      profileId = (await ensureCompanyProfile(service, company, { industry })).id;
+    } catch (e) {
+      console.error("[insights-admin] 写行业标签失败(忽略)", (e as Error).message);
+    }
   }
 
   if (body.id) {
@@ -262,20 +268,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, item_id: body.id });
   }
 
-  // 新增：upsert 公司画像 → 插入条目 → 来源。
-  const { data: companyRow, error: companyError } = await service
-    .from("company_profiles")
-    .upsert({ company }, { onConflict: "company" })
-    .select("id")
-    .single();
-  if (companyError) {
-    console.error("[insights-admin] upsert 公司画像失败", companyError.message);
-    return NextResponse.json({ ok: false, error: companyError.message }, { status: 500 });
+  // 新增：取公司画像（按正名 + 别名找，没有才建）→ 插入条目 → 来源。
+  let companyId: string;
+  try {
+    // 上面写行业标签时已经取到画像就直接用，不再整表读一遍。
+    companyId = profileId ?? (await ensureCompanyProfile(service, company)).id;
+  } catch (e) {
+    const message = (e as Error).message;
+    console.error("[insights-admin] 取公司画像失败", message);
+    return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 
   const { data: itemRow, error: insertError } = await service
     .from("insight_items")
-    .insert({ company_id: companyRow.id, ...itemFields })
+    .insert({ company_id: companyId, ...itemFields })
     .select("id")
     .single();
   if (insertError) {
