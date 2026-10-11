@@ -18,7 +18,7 @@ on:
         required: false
         default: ""
       twin_key:
-        description: "认孪生看哪一段：hash=# 片段（moka 等）/ jobadid=北森 jobAdId / title=标题一字不差（须带招聘编号）"
+        description: "认孪生看哪一段：hash=# 片段（moka 等）/ jobadid=北森 jobAdId / title=标题一字不差（须带招聘编号）/ postid=hotjob postId"
         required: false
         default: "hash"
       apply:

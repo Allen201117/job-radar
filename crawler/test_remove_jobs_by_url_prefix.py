@@ -151,6 +151,12 @@ class TwinKeyTest(unittest.TestCase):
         self.assertIn("coalesce(title, '') <> ''", sql)
         self.assertIn("select coalesce(k.title, '') from jobs k where k.status = 'active'", sql)
 
+    def test_postid_key_compares_hotjob_post_ids_on_both_sides(self):
+        sql = self._sql("postid")
+        self.assertIn("substring(jd_url from '[?&]postId=([0-9A-Za-z]+)')", sql)
+        self.assertIn("substring(k.jd_url from '[?&]postId=([0-9A-Za-z]+)')", sql)
+        self.assertIn("<> ''", sql, "取不到岗位号的行不许算孪生")
+
     def test_parse_args_twin_key(self):
         base = ["--company", "x", "--url-prefix", "https://tjsemi.zhiye.com/"]
         with self.assertRaises(SystemExit):   # 不给保留门户时 twin-key 没意义，别让人以为生效了
