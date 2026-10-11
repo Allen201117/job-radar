@@ -22,6 +22,17 @@ import ops_runs
 
 
 DEFAULT_MIN_JOBS = 20
+
+# ── 0 岗公司对账的闸门 ────────────────────────────────────────────────────
+# 比的是「卡面还有数可丢的公司里，有多少家这一轮一个在招岗都没归到」
+#（2026-10-11 真库首轮：1,349 家里 100 家，7.4%；归零之后它们退出分子和分母，日常是个位数）。
+# 过半 = 更像岗位库本身出了问题（读到空表 / 大面积误下架），这一轮不归零，台账记 failed。
+# ⚠️ 分母不能用「全部有主体的公司」：归零过的公司只增不减，那个比例会自己慢慢爬上去，
+#    最后把正常的归零也拦下。
+ZERO_JOB_MAX_SHARE = 0.5
+# 不到这么多家就不看比例：小样本上比例没有意义。
+ZERO_JOB_GUARD_MIN_COMPANIES = 20
+
 _WRAPPERS = "【】[]《》"
 _JOB_ID_RE = re.compile(r"[（(]\s*J\d+\s*[）)]", re.IGNORECASE)
 _BRACKET_RE = re.compile(r"【([^】]{2,12})】|\[([^\]]{2,12})\]")
@@ -369,6 +380,66 @@ def plan_subject_changes(company_data: dict, existing_rows: list[dict]):
     return plan
 
 
+def _zero_job_action(row: dict):
+    """所属公司这一轮一个在招岗都没归到时，这一行怎么处置：'zero' / 'retire' / None（不动）。"""
+    if row.get("status") != "active":
+        return None  # rejected / retired 都是治理结论，不归这条链改。
+    if row.get("kind") == "company":
+        # 只归零、不退役：公司级的官方事实 / 公开说法都挂在公司主体上，退役它等于整家从洞察库消失。
+        return "zero" if int(row.get("job_count") or 0) != 0 else None
+    if row.get("kind") == "business_unit" and row.get("origin") == "derived_title":
+        return "retire"  # 与有岗公司同一条规矩：标题里扫不到了才退役，且只退役标题抽取的。
+    return None
+
+
+def zero_job_holding_companies(existing_rows: list[dict], known_company_ids: set) -> set:
+    """闸门的分母：名下还有主体可归零 / 可退役的公司（见 ZERO_JOB_MAX_SHARE）。"""
+    return {
+        row["company_id"] for row in (existing_rows or [])
+        if row.get("company_id") in known_company_ids and _zero_job_action(row)
+    }
+
+
+def plan_zero_job_changes(existing_rows: list[dict], matched_company_ids: set,
+                          known_company_ids: set) -> dict:
+    """有 active 主体、但这一轮一个在招岗都没归到的公司：公司主体归零，标题抽取的业务线退役。
+
+    ❌ plan_subject_changes 只遍历「有在招岗」的公司。一家公司的岗全部下架 / 被改名之后，它不再
+       出现在 company_data 里，公司主体的 job_count 就永远停在最后一次有岗时的值——洞察库卡面
+       写「在招 236 个岗位」，实际 0 个（2026-10-10 真库 100 家）。
+
+    ``matched_company_ids``：这一轮按本模块自己的归属（resolve_profile：精确名优先、归一名兜底）
+    归到过岗位的公司全集。⚠️ 必须是**全量扫描**的结果——--company / --limit 只处理了一部分公司，
+    没扫到的不能当成 0 岗，调用方在那两种模式下不许调这个函数。
+    ``known_company_ids``：画像读到了的公司。画像没读到 = 这一轮根本没法归属，「没归到」不等于「0 岗」。
+    """
+    plan = {"zero": [], "retire": [], "company_ids": []}
+    touched, seen_ids = set(), set()
+    for row in existing_rows or []:
+        company_id = row.get("company_id")
+        if (not company_id or company_id in matched_company_ids
+                or company_id not in known_company_ids):
+            continue
+        action = _zero_job_action(row)
+        # 同一行出现两次（分页读的时候表在变）只算一次，否则名单和计数都会翻倍。
+        if not action or row.get("id") in seen_ids:
+            continue
+        seen_ids.add(row.get("id"))
+        plan[action].append({"id": row.get("id"), "company_id": company_id,
+                             "name": row.get("name"),
+                             "job_count": int(row.get("job_count") or 0)})
+        touched.add(company_id)
+    plan["company_ids"] = sorted(touched)
+    return plan
+
+
+def zero_job_reconcile_allowed(zero_companies: int, holding_companies: int) -> bool:
+    """名下还有数的 holding 家公司里有 zero 家读出 0 岗：这个占比还正常吗。"""
+    if holding_companies < ZERO_JOB_GUARD_MIN_COMPANIES:
+        return True
+    return zero_companies / holding_companies <= ZERO_JOB_MAX_SHARE
+
+
 def plan_new_profiles(unmatched: set, min_jobs: int, counts: dict) -> list[dict]:
     """给「有足够在招岗但还没有画像」的公司准备画像行（纯函数，便于单测）。
 
@@ -446,6 +517,62 @@ def apply_plan(supabase, plan: dict, now: str):
     return inserted, updated, retired
 
 
+def apply_zero_job_plan(supabase, plan: dict, now: str, batch: int = 200, done: dict | None = None):
+    """写 0 岗公司的对账结果，返回（归零的公司主体数, 退役的业务线数）。
+
+    归零不碰 status / last_seen_at：last_seen_at 的含义是「上次看到它有岗」，归零那一刻不是。
+    两条 update 都只动仍然 active 的行：读计划到写库之间隔着整轮有岗公司的对账，后台可能刚把
+    某条判成 rejected，不能把治理结论盖回去。
+
+    数的是库里**真被改到**的行（update 回来的行），不是计划里的行数。``done`` 传一个 dict 进来，
+    中途抛错时调用方照样拿得到已经写成的部分——台账不能把「写了一半」记成 0。
+    """
+    done = {} if done is None else done
+    payloads = {
+        "zero": {"job_count": 0, "updated_at": now},
+        "retire": {"status": "retired", "job_count": 0, "updated_at": now},
+    }
+    for action, payload in payloads.items():
+        done.setdefault(action, 0)
+        ids = [row["id"] for row in plan.get(action) or []]
+        for start in range(0, len(ids), batch):
+            result = (supabase.table("insight_subjects").update(payload)
+                      .in_("id", ids[start:start + batch]).eq("status", "active").execute())
+            done[action] += len(result.data or [])
+    return done["zero"], done["retire"]
+
+
+# 闸门拦下时名单只列这么多行：读到空表那种情况会是上千家，全列只是刷屏。
+_ZERO_JOB_BLOCKED_PREVIEW = 30
+
+
+def _print_zero_job_plan(plan: dict, company_names: dict, *, zero_companies: int,
+                         holding: int, blocked: bool, dry_run: bool):
+    by_company = defaultdict(lambda: {"zero": [], "retire": []})
+    for action in ("zero", "retire"):
+        for row in plan[action]:
+            by_company[row["company_id"]][action].append(row)
+    company_ids = plan["company_ids"][:_ZERO_JOB_BLOCKED_PREVIEW] if blocked else plan["company_ids"]
+    for company_id in company_ids:
+        parts = [f"公司主体在招数 {row['job_count']} → 0" for row in by_company[company_id]["zero"]]
+        retire = by_company[company_id]["retire"]
+        if retire:
+            parts.append("退役业务线 " + "、".join(f"{row['name']}({row['job_count']})" for row in retire))
+        print(f"{company_names.get(company_id, company_id)}：0 个在招岗，" + "；".join(parts))
+    if len(company_ids) < len(plan["company_ids"]):
+        print(f"……其余 {len(plan['company_ids']) - len(company_ids)} 家略。")
+    old_total = sum(row["job_count"] for row in plan["zero"])
+    summary = (f"{zero_companies} 家公司 0 个在招岗，其中 {len(plan['company_ids'])} 家名下还有数："
+               f"公司主体归零 {len(plan['zero'])} 个（旧数合计 {old_total}），"
+               f"退役业务线 {len(plan['retire'])} 个")
+    if blocked:
+        print(f"::warning::{summary}——名下还有数的 {holding} 家公司里占了 "
+              f"{len(plan['company_ids']) / max(1, holding):.0%}，超过 {ZERO_JOB_MAX_SHARE:.0%}，"
+              "更像岗位库本身出了问题；这一轮不归零、不退役。", flush=True)
+    else:
+        print(("dry-run：" if dry_run else "") + summary + ("（未写库）。" if dry_run else "。"))
+
+
 def _print_company(item):
     pairs = sorted((item.get("kept") or {}).items(), key=lambda pair: (-pair[1], pair[0]))
     print(f"{item['company']}：active={item['job_count']} candidates={item['candidate_total']} kept={len(pairs)}")
@@ -475,6 +602,7 @@ def main():
     supabase = db.get_supabase()
     profiles = db.fetch_all_rows(lambda: supabase.table("company_profiles").select("id,company,aliases"))
     profile_index = build_profile_index(profiles)
+    # 取数抛错会直接中止整轮，下面一行都不写：「没取到」不能被当成「取到 0 个岗」。
     job_rows = fetch_active_jobs(args.company)
     company_data, unmatched = collect_company_data(job_rows, profile_index, min_jobs)
 
@@ -498,12 +626,38 @@ def main():
     if unmatched:
         print(f"跳过 {len(unmatched)} 家未匹配 company_profiles 的公司"
               f"（在招岗 < {profile_min_jobs}，不值得单独建画像）。")
+
+    # dry-run 也读已有主体（只读）：不读就数不出「会归零 / 退役多少」。
+    existing = fetch_existing_subjects(supabase)
+    zero_plan = {"zero": [], "retire": [], "company_ids": []}
+    zero_companies, zero_blocked = 0, False
+    full_scan = not (args.company or args.limit)
+    if not full_scan:
+        print("本轮只处理了一部分公司（--company / --limit），不做 0 岗对账：没扫到的公司不能当成 0 岗。")
+    else:
+        company_names = {pid: str(profile.get("company") or "")
+                         for pid, profile in profile_index[2].items()}
+        known_company_ids = set(company_names)
+        # 全量扫描时 company_data 没被 --company / --limit 裁过，就是「这一轮归到过岗位的公司」全集。
+        matched_company_ids = set(company_data)
+        active_company_ids = {row["company_id"] for row in existing
+                              if row.get("status") == "active" and row.get("company_id")}
+        unknown = active_company_ids - known_company_ids
+        if unknown:
+            print(f"⚠️ {len(unknown)} 家公司有 active 主体但画像没读到，这一轮不对账它们。", flush=True)
+        zero_plan = plan_zero_job_changes(existing, matched_company_ids, known_company_ids)
+        zero_companies = len((active_company_ids & known_company_ids) - matched_company_ids)
+        holding = len(zero_job_holding_companies(existing, known_company_ids))
+        zero_blocked = not zero_job_reconcile_allowed(len(zero_plan["company_ids"]), holding)
+        _print_zero_job_plan(zero_plan, company_names, zero_companies=zero_companies,
+                             holding=holding, blocked=zero_blocked, dry_run=args.dry_run)
     if args.dry_run:
         print("dry-run：未写 insight_subjects 或 ops_runs。")
         return
 
-    existing = fetch_existing_subjects(supabase)
     metrics = {
+        # 这一轮读到的 active 岗行数：闸门拦下或数字异常时，靠它分清是读到了全库还是半个库。
+        "jobs_scanned": len(job_rows),
         "companies_scanned": 0,
         "candidates_total": 0,
         "kept": 0,
@@ -513,6 +667,14 @@ def main():
         "rejected_skipped": 0,
         "failed": 0,
     }
+    if full_scan:
+        # 只处理了一部分公司的那种跑法不记这四个键：没量过不等于 0。
+        metrics.update({
+            "companies_zero_jobs": zero_companies,
+            "zero_job_zeroed": 0,
+            "zero_job_retired": 0,
+            "zero_job_blocked": 0,
+        })
     now = _now_iso()
     for company_id, item in sorted(company_data.items(), key=lambda pair: pair[1]["company"]):
         metrics["companies_scanned"] += 1
@@ -530,9 +692,25 @@ def main():
             metrics["failed"] += 1
             print(f"⚠️ {item['company']} 写入失败，已跳过继续：{type(exc).__name__}")
 
+    if zero_blocked:
+        metrics["zero_job_blocked"] = len(zero_plan["zero"]) + len(zero_plan["retire"])
+    elif zero_plan["zero"] or zero_plan["retire"]:
+        done = {"zero": 0, "retire": 0}
+        try:
+            apply_zero_job_plan(supabase, zero_plan, now, done=done)
+        except Exception as exc:  # 没写成要看得见，不能当成跑完了；没写成的部分下一轮会重新进计划。
+            metrics["failed"] += 1
+            print(f"⚠️ 0 岗公司的主体归零失败（已写成：归零 {done['zero']} 个、退役 {done['retire']} 个）："
+                  f"{type(exc).__name__}: {exc}", flush=True)
+        metrics["zero_job_zeroed"] = done["zero"]
+        metrics["zero_job_retired"] = done["retire"]
+        metrics["retired"] += done["retire"]
+
     ops_runs.record_ops_run(
         supabase, "bu_extract", metrics,
-        status=ops_runs.status_from_counts(metrics["companies_scanned"], metrics["failed"]),
+        # 闸门拦过的这一轮直接记 failed：按下面的算法它是 success，拦过这件事就没人知道。
+        status="failed" if zero_blocked else ops_runs.status_from_counts(
+            metrics["companies_scanned"], metrics["failed"]),
         started_at=started_at, finished_at=_now_iso(),
     )
     print("完成：" + "，".join(f"{key}={value}" for key, value in metrics.items()))
