@@ -1195,6 +1195,39 @@ def is_rejected_location(location: Optional[str]) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# 整段就是一个地名（2026-10-11 加）。
+#
+# 给 adapter 在「一排没标注类型的字段」里认出哪个是地点用：Moka 岗位卡的字段行是
+# 「部门 | 职位性质 | 职能类别 | 地点」，出现哪几项、什么顺序各租户不同，只能按内容认。
+# derive_country_code 干不了这个活——它是「串里**含有**地名就给国家码」：
+# 「广东大区」「上海战区」「河南省公司」「中国区生产运营管理部」全都判 CN，拿它挑字段，部门名会被当成地点。
+# 这里要求**整段**等于一个地名：大陆省级 / 地级（裸名或带行政后缀）、港澳、境外中文地名、词表里的英文地名。
+# 区县不在词表里（「黄浦区」「昆山市」单独出现不认），要不要按上下级关系放行由调用方定。
+# 只有爬虫侧在用，lib/geo.js 没有镜像。
+# ---------------------------------------------------------------------------
+_place_name_tokens = None
+
+
+def is_place_name(segment: Optional[str]) -> bool:
+    global _place_name_tokens
+    seg = str(segment or "").strip()
+    if not seg:
+        return False
+    if seg in _CN_ADMIN_NAME_SET:
+        # 「东方」「朝阳」「阿里」这几个裸写多半不是地名（理由见 TITLE_CITY_SUFFIX_ONLY_NAMES），带后缀才认。
+        return seg not in _TITLE_CITY_SUFFIX_ONLY_SET
+    if _CN_ADMIN_RE.fullmatch(seg):
+        return True
+    if _place_name_tokens is None:
+        # 惰性建表：_COUNTRY_TOKENS 的 US 一项要到模块加载完才齐（州名 / 城市名是后 extend 的）。
+        tokens = {token.lower() for group in _COUNTRY_TOKENS.values() for token in group}
+        for _code, places in _STRICT_CJK_PLACE_SETS:
+            tokens |= places
+        _place_name_tokens = frozenset(tokens)
+    return seg.lower() in _place_name_tokens
+
+
+# ---------------------------------------------------------------------------
 # 省级归属：岗位 location 落在哪几个省级行政区（2026-09-23 加）。
 # ⚠️ 与 lib/geo.js 的 locationProvinces 逐条同口径；映射本体 lib/cn-province-prefectures.json 两端共读，
 #    逐条用例在 tests/fixtures/cn-location-provinces.json 两端共测。规则与每条规则对应的实测反例见
