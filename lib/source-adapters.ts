@@ -451,11 +451,20 @@ export interface SourceValidation {
 }
 
 // 校验 + 归一化「添加源」表单输入。地址必须是 http(s) 链接，避免误填搜索/导航页时无法抓取。
+// 源名末尾的招聘渠道后缀（「TCL 校招」「云尖信息 实习」）。岗位公司名直接抄源名，后缀会跟着出现在岗位卡和公司筛选里，
+// 还曾让同一家公司在洞察库长出几个画像；渠道由 sources.board 与逐岗分类表达（迁移 320 把存量 55 条改回来了）。
+// 与 lib/insight-profile-resolve.ts、crawler/bu_extract.py 的同名规则逐字相同（tests/source-adapters.test.js 对拍）。
+// 本文件被测试用单文件转译加载，所以不从那边 import。
+const CHANNEL_SUFFIX_RE = /\s+(?:校招|实习|社招)$/;
+
 export function validateSourceInput(input: SourceInput): SourceValidation {
   const errors: Record<string, string> = {};
 
   const company = typeof input.company === "string" ? input.company.trim() : "";
   if (!company) errors.company = "公司名不能为空";
+  else if (CHANNEL_SUFFIX_RE.test(company)) {
+    errors.company = `公司名不要带「校招 / 实习 / 社招」后缀，直接写「${company.replace(CHANNEL_SUFFIX_RE, "")}」——招聘渠道会按招聘源地址自动识别`;
+  }
 
   const sourceUrl = typeof input.source_url === "string" ? input.source_url.trim() : "";
   if (!sourceUrl) {

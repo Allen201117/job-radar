@@ -123,6 +123,20 @@ create table if not exists job_closures (
 create index if not exists job_closures_closed_at_idx on job_closures (closed_at desc);
 create index if not exists job_closures_reopened_idx on job_closures (reopened_at desc) where reopened_at is not null;
 
+-- ── 批量改公司名的留底（2026-10-11）──
+-- crawler/rename_job_company.py --map-file 在改名的同一个事务里先把 (岗位 id, 旧名, 新名) 记进来；
+-- 回滚 = 照这张表改回去（SQL 在那个脚本的模块注释里）。第一批：源名去渠道后缀（Supabase 迁移 320）。
+-- 脚本自己也会 create if not exists（不必为这张独立小表跑整份 schema），两处 DDL 逐字相同，
+-- crawler/test_rename_job_company.py 对拍。⚠️ 不对 jobs 做外键：改过名的岗日后会被 purge 删掉。
+create table if not exists job_company_renames (
+  job_id      uuid        not null,
+  old_company text        not null,
+  new_company text        not null,
+  batch       text        not null,
+  renamed_at  timestamptz not null default now(),
+  primary key (job_id, batch)
+);
+
 -- ── /today 召回快照（2026-09-23）──
 -- 为什么需要它：/today 的召回 SQL 要把方向 / 城市 / 职能各层 GIN 命中的几万行全部回表才排得出前 1,800，
 -- jobs 堆 1.1GB 远大于 512MB 缓存，冷态单次 2~6s（50 个真实画像实测，EXPLAIN read 最多 5.7 万块）。
