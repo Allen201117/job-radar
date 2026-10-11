@@ -5,6 +5,7 @@ import discoveryDispatch from "@/lib/discovery-dispatch";
 import insightEnrichNow from "@/lib/insight-enrich-now";
 import { createServiceClient } from "@/lib/supabaseService";
 import { findCompanyProfile } from "@/lib/insight-match";
+import { ensureCompanyProfile } from "@/lib/insight-profile-store";
 import { evaluateInsight, resolveInsightFailure } from "@/lib/insight-verification";
 import {
   INSIGHT_DIMENSIONS,
@@ -302,9 +303,9 @@ async function maybeDispatchInsightEnrich({
   }
 
   try {
-    await service
-      .from("company_profiles")
-      .upsert({ company, insight_checked_at: null }, { onConflict: "company" });
+    // company 多数时候已是画像规范名（见调用处 enrichCompany）；归属门没认出来时是查询词原文，
+    // 那也要先按正名 + 别名找一遍再建——这里读的是现表，不是 10 分钟前的画像缓存。
+    await ensureCompanyProfile(service, company, { insight_checked_at: null });
   } catch (e) {
     console.error("[insights] 现查画像占位失败（不影响展示）", (e as Error).message);
   }
@@ -470,22 +471,21 @@ export async function POST(request: NextRequest) {
 
   const service = createServiceClient();
 
-  // upsert 公司画像
-  const { data: companyRow, error: companyError } = await service
-    .from("company_profiles")
-    .upsert({ company }, { onConflict: "company" })
-    .select("id")
-    .single();
-  if (companyError) {
-    console.error("[insights] upsert company_profiles 失败", companyError.message);
-    return NextResponse.json({ ok: false, error: companyError.message }, { status: 500 });
+  // 取公司画像（按正名 + 别名找，没有才建——见 lib/insight-profile-store）
+  let companyId: string;
+  try {
+    companyId = (await ensureCompanyProfile(service, company)).id;
+  } catch (e) {
+    const message = (e as Error).message;
+    console.error("[insights] 取公司画像失败", message);
+    return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 
   // 插入条目
   const { data: itemRow, error: insertError } = await service
     .from("insight_items")
     .insert({
-      company_id: companyRow.id,
+      company_id: companyId,
       dimension,
       grade,
       title: draftItem.title,

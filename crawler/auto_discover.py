@@ -26,6 +26,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+import company_profile_resolve
 import db
 import ops_runs
 import discover_domestic as dd
@@ -404,10 +405,10 @@ def insert_source(sb, row):
         pass
     resolve_watch_requests(sb, row["company"], source_id)
     try:
-        sb.table("company_profiles").upsert(
-            {"company": row["company"], "insight_checked_at": None}, on_conflict="company").execute()
-    except Exception:
-        pass
+        # 这家公司已有画像（新源名是它的别名）就只重新排队，不另建一个画像。
+        company_profile_resolve.ensure_profile(sb, row["company"], requeue=True)
+    except Exception as exc:  # noqa: BLE001 — 洞察排队是增益步骤，失败不能拖垮扩源；但要留痕
+        print(f"[auto_discover] {row['company']} 洞察画像排队失败（忽略）: {type(exc).__name__}")
 
 
 def main():

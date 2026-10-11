@@ -148,6 +148,7 @@ test("insights admin returns 403 through the shared requireAdmin guard", async (
         error: jsonResponse({ ok: false, error: "forbidden" }, { status: 403 }),
       }),
     },
+    "@/lib/insight-profile-store": { ensureCompanyProfile: async () => ({ id: "c", company: "c", created: false }) },
     "@/lib/supabaseService": {
       createServiceClient: () => ({ from: () => resolvedQuery() }),
     },

@@ -158,6 +158,24 @@ def normalize_company(value: str) -> str:
     return text
 
 
+# 源名末尾的招聘渠道后缀。同一家公司的社招 / 校招 / 实习各一条源时，源名（进而岗位公司名）被写成
+# 「云尖信息」「云尖信息 校招」「云尖信息 实习」——后缀是渠道，不是公司名的一部分。
+# 2026-10-11 全库对拍：以它结尾的画像 57 个，逐个核过全部与不带后缀的那个是同一家（多数同一个招聘门户）。
+# ⚠️ 必须有空白隔开才算后缀：「实习僧」「XX校招网」这类名字本身带这两个字的不动。
+_CHANNEL_SUFFIX_RE = re.compile(r"\s+(?:校招|实习|社招)$")
+
+
+def profile_name_key(value: str) -> str:
+    """「这个名字归哪个画像」用的归一键：先去掉招聘渠道后缀，再走 normalize_company。
+
+    网站侧同口径：lib/insight-profile-resolve.ts 的 profileNameKey。
+    刻意不折叠「中文 + 英文尾巴」（知乎 / 知乎 Zhihu）：那样会把「沃尔沃 Volvo Cars」「沃尔沃 Volvo Group」
+    这种同名不同公司的也并掉；英文尾巴的重复靠别名登记 + 每日体检点名，由人判。
+    """
+    name = _CHANNEL_SUFFIX_RE.sub("", str(value or "").strip())
+    return normalize_company(name)
+
+
 def extract_candidates(title: str) -> list[str]:
     """从一个岗位标题抽三种业务线候选，保留首次出现顺序。
 
@@ -270,7 +288,7 @@ def build_profile_index(profiles: list[dict]):
                 continue
             if name != company:
                 exact.setdefault(name, profile)
-            key = normalize_company(name)
+            key = profile_name_key(name)
             if key:
                 normalized[key].append(profile)
     unique_normalized = {
@@ -282,7 +300,7 @@ def build_profile_index(profiles: list[dict]):
 
 def resolve_profile(company: str, exact: dict, normalized: dict):
     name = str(company or "").strip()
-    return exact.get(name) or normalized.get(normalize_company(name))
+    return exact.get(name) or normalized.get(profile_name_key(name))
 
 
 def collect_company_data(job_rows: list[dict], profile_index, min_jobs: int):
@@ -453,11 +471,18 @@ def plan_new_profiles(unmatched: set, min_jobs: int, counts: dict) -> list[dict]
     覆盖率要补，富化优先级不能动。
     """
     now = _now_iso()
-    return [
-        {"company": name, "insight_checked_at": now}
-        for name in sorted(unmatched)
-        if int(counts.get(name, 0)) >= int(min_jobs)
-    ]
+    rows, seen_keys = [], set()
+    # 同一批里归一键相同的（「X」和「X 校招」都还没有画像）只建排在前面的那个；
+    # 另一个下一轮按归一键就认到它了。两个都建，这家公司当场又是两个画像。
+    for name in sorted(unmatched):
+        if int(counts.get(name, 0)) < int(min_jobs):
+            continue
+        key = profile_name_key(name)
+        if key and key in seen_keys:
+            continue
+        seen_keys.add(key)
+        rows.append({"company": name, "insight_checked_at": now})
+    return rows
 
 
 def create_profiles(supabase, rows: list[dict], batch: int = 200) -> int:

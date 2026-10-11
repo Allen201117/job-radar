@@ -16,6 +16,7 @@ import random
 import sys
 from datetime import datetime, timezone
 
+import company_profile_resolve
 import db
 import must_apply
 import ops_runs
@@ -75,21 +76,38 @@ def select_cycle_targets(must_apply_by_industry, covered_company_names, cap, see
     return (priority + rest)[:max(0, int(cap or 0))]
 
 
-def fetch_covered_company_names(sb):
+def must_apply_names(by_industry) -> list[str]:
+    """必投清单里的公司名（清单自己的写法，可能是画像的别名）。"""
+    return [
+        (entry.get("name") or "").strip()
+        for companies in (by_industry or {}).values()
+        for entry in (companies or [])
+        if isinstance(entry, dict) and (entry.get("name") or "").strip()
+    ]
+
+
+def fetch_covered_company_names(sb, candidates=()):
     """已有 ≥1 条 verified 校招时间线记录的公司名集合（幂等：这些公司本轮不再重复挑选）。
+
+    集合里有三种名字：已覆盖画像的正名、它们的别名、以及 candidates 里按归属规则归到这些画像的名字。
+    ❌ 只放正名的话：清单写「中通」、时间线挂在画像「中通快递」上（fetch_one_company 按别名找到的就是它），
+       「中通」永远判不出已覆盖，每轮都被重新挑中，白花搜索和大模型额度，且不报错。
     ⚠️ 分页拉全量（同项目其它队列查询惯例）：该表会随时间增长，避免将来撞 PostgREST 1000 行硬顶。"""
     verified_rows = db.fetch_all_rows(
         lambda: sb.table("recruitment_cycle_observations").select("company_id").eq("verify_status", "verified"))
-    ids = sorted({r.get("company_id") for r in verified_rows if r.get("company_id")})
+    ids = {r.get("company_id") for r in verified_rows if r.get("company_id")}
     if not ids:
         return set()
+    index = company_profile_resolve.load_index(sb)
     names = set()
-    for i in range(0, len(ids), 200):
-        chunk = ids[i:i + 200]
-        rows = sb.table("company_profiles").select("id,company").in_("id", chunk).execute().data or []
-        for r in rows:
-            if r.get("company"):
-                names.add(r["company"])
+    for profile_id, profile in index[2].items():
+        if profile_id in ids:
+            names.update(str(n).strip() for n in [profile.get("company"), *(profile.get("aliases") or [])] if n)
+    for name in candidates or ():
+        hit = company_profile_resolve.resolve(name, index)
+        if hit and hit.get("id") in ids:
+            names.add(str(name).strip())
+    names.discard("")
     return names
 
 
@@ -264,7 +282,7 @@ def main():
         results = [drain_one_company(sb, args.company)]
     else:
         by_industry = must_apply.by_industry()
-        covered = fetch_covered_company_names(sb)
+        covered = fetch_covered_company_names(sb, must_apply_names(by_industry))
         seed = int(datetime.now(timezone.utc).strftime("%Y%m%d"))
         targets = select_cycle_targets(by_industry, covered, args.limit, seed=seed)
         print(f"[campus_cycle_backlog] 已覆盖(verified)={len(covered)} 家 → 本轮目标 {len(targets)} 家")
