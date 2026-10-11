@@ -1298,3 +1298,73 @@ def location_provinces(location: Optional[str]) -> list:
         if province and province not in out:
             out.append(province)
     return out
+
+
+# ---------------------------------------------------------------------------
+# 地点串里写了哪几个省级 / 地级地名（2026-10-11 加）。给 normalizer.clean_location 判「多地并列」用：
+# 「北京市 广东·深圳市 上海市」是三个地方，「广东省,深圳市,南山区」是一个。只有爬虫侧在用，lib/geo.js 没有镜像。
+#
+# 与 _segment_province 的差别：那边每段只要第一个地名所在的省，这里要**每一个**地名和它出现的位置。
+# 认法偏严——多认一个城市 = 把岗位推给不在那里的人，少认一个只是维持改前的样子：
+#   · 起点同 _segment_province：段首，或紧跟在 省/市/州/盟/区/县/旗/国 后面；尾巴上的三条守卫也相同
+#     （「大连市-中山区」的中山、「兴安县」、「南京东路」都不是那个地级市）。
+#   · 省名后面紧贴本省城市也认（「江苏南京」「广东深圳」），紧贴别省的不认。
+#   · 裸写多半不是地名的那几个名字（朝阳 / 东方 / 阿里…）要带「市 / 州 / 地区」后缀，或者前面刚写过它的省
+#     （「辽宁·朝阳」）：「北京-朝阳」的朝阳是区。
+# ---------------------------------------------------------------------------
+def _place_tail_blocked(name: str, rest: str, county_collisions) -> bool:
+    if rest.startswith("区") and not rest.startswith("区域"):
+        return True
+    if rest.startswith("县") and name in county_collisions:
+        return True
+    return bool(_STREET_AFTER_PLACE_RE.match(rest))
+
+
+def cn_place_province(name: Optional[str]) -> Optional[str]:
+    """省级 / 地级短名 → 所在省（直辖市、港澳是它自己）；不在表里返回 None。"""
+    return _load_province_index()[0].get(name)
+
+
+# 地级名后面的行政后缀（可带民族限定）：「阿坝藏族羌族自治州」「阿里地区」「兴安盟」「保定市」。
+_PLACE_WRITTEN_TAIL_RE = re.compile(_ETHNIC_QUALIFIER + "(?:自治州|地区|市|盟|州)")
+
+
+def location_cn_places(location: Optional[str]) -> list:
+    """[(出现位置, 短名, 所在省, 是不是省级, 原文写法)]，按出现位置排；直辖市与港澳按城市算（不是省级）。
+
+    原文写法 = 短名 + 紧跟的行政后缀（「保定市」「阿里地区」「阿坝藏族羌族自治州」），没带后缀就是短名本身；省级只给短名。
+    """
+    place_province, by_head, county_collisions, provinces = _load_province_index()
+    text = str(location or "")
+    hits = []
+    last_province = None            # 上一个认出来的地名如果是省，记下它（给「辽宁·朝阳」这种写法用）
+    start = 0
+    for sep in list(_SEGMENT_SPLIT_RE.finditer(text)) + [None]:
+        seg = text[start:sep.start()] if sep else text[start:]
+        base, start = start, (sep.end() if sep else len(text))
+        i, glued = 0, None          # glued = 刚认出的省名正紧贴在当前位置前面
+        while i < len(seg):
+            at_boundary = i == 0 or seg[i - 1] in _PLACE_BOUNDARY_BEFORE
+            name = None
+            if at_boundary or glued:
+                name = next((n for n in by_head.get(seg[i], ()) if seg.startswith(n, i)), None)
+            if name is not None:
+                rest = seg[i + len(name):]
+                province = place_province[name]
+                # 「吉林市」是城市：省、市同名时带「市」的不是省（否则旁边写着长春，它就被当成长春的上级吞掉）。
+                is_province = name in provinces and not rest.startswith("市")
+                after_own_province = not is_province and province in (glued, last_province)
+                if (_place_tail_blocked(name, rest, county_collisions)
+                        or (not at_boundary and not after_own_province)
+                        or (name in _TITLE_CITY_SUFFIX_ONLY_SET and not rest.startswith(TITLE_CITY_SUFFIXES)
+                            and not after_own_province)):
+                    name = None
+            if name is None:
+                glued = None
+                i += 1
+                continue
+            tail = None if is_province else _PLACE_WRITTEN_TAIL_RE.match(rest)
+            hits.append((base + i, name, province, is_province, name + (tail.group(0) if tail else "")))
+            i += len(name)
+            last_province = glued = province if is_province else None
+    return hits
