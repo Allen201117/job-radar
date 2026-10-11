@@ -545,10 +545,15 @@ function SubjectCard({
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 t-caption ink-3">
             <span>{subject.kind === "company" ? "公司" : "业务线"}</span>
             {subject.industry && <span>{subject.industry}</span>}
-            <Link href={jobsHref} className="inline-flex items-center gap-1 text-tone-sky-fg hover:underline">
-              在招 {subject.job_count} 个岗位
-              <ArrowSquareOut size={12} />
-            </Link>
+            {/* 在招数为 0 时整行不显示，不写「在招 0 个岗位」：0 只说明岗位库里这个名字下没归到岗，
+                分不清「这家真不招了」和「岗挂在另一个名字的画像下」（2026-10-11 真库：看得见的 16 张
+                0 岗卡里 8 张是后者）。链接也一起收掉——它按名字包含筛，会筛出别的画像的岗。 */}
+            {subject.job_count > 0 && (
+              <Link href={jobsHref} className="inline-flex items-center gap-1 text-tone-sky-fg hover:underline">
+                在招 {subject.job_count} 个岗位
+                <ArrowSquareOut size={12} />
+              </Link>
+            )}
             {subject.last_verified_at && (
               <span className="ink-4">最近核实：{formatDateLabel(subject.last_verified_at)}</span>
             )}
