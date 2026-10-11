@@ -59,7 +59,8 @@ test("classifyRecruitment 按关键词归三桶（保守：无明确关键词 = 
 });
 
 // 回归（2026-10-11）：旧正则 /实习|intern|internship/ 是裸子串，Internal / International / Internals
-// 全算实习 —— 进了抽屉的「类型」占比与「实习集中在 X 月」。用例全部取自库里 / live 抓到的真实标题。
+// 全算实习 —— 进了抽屉的「类型」占比与当时的「实习集中在 X 月」（后一句同日已不再写，见下方「招聘节奏」一组）。
+// 用例全部取自库里 / live 抓到的真实标题。
 test("classifyRecruitment：intern 只认整词，Internal / International / Internals 不是实习", () => {
   for (const title of [
     "Senior Analyst - Internal Audit",
@@ -204,12 +205,13 @@ test("deriveHiring：全是兜底社招时不输出占比（没有一个岗判�
 });
 
 test("deriveTiming 与占比用同一个三桶：认列，兜底社招的月份不算", () => {
-  const months = ["01", "02", "03", "04", "05", "06", "07", "08"];
+  // 发布日都落在 NOW（2026-06-15）往前 12 个月内：招聘节奏只看这一段（见下方「招聘节奏」一组用例）
+  const months = ["2025-07", "2025-08", "2025-11", "2025-12", "2026-01", "2026-02", "2026-03", "2026-04"];
   const jobs = [
     // 列判校招、关键词判不出
-    ...["09", "09", "09", "10"].map((m) => col("校招", true, { job_type: null, title: "硬件工程师", posted_at: `2026-${m}-05T00:00:00Z` })),
+    ...["09", "09", "09", "10"].map((m) => col("校招", true, { job_type: null, title: "硬件工程师", posted_at: `2025-${m}-05T00:00:00Z` })),
     // 兜底社招铺满 8 个月：要是算进去就是「社招全年滚动」
-    ...months.map((m) => col("社招", false, { job_type: null, title: "Store Team Member", posted_at: `2026-${m}-05T00:00:00Z` })),
+    ...months.map((ym) => col("社招", false, { job_type: null, title: "Store Team Member", posted_at: `${ym}-05T00:00:00Z` })),
   ];
   const v = D.deriveTiming(jobs, NOW_ISO);
   assert.match(v.content, /校招集中在 9、10 月/);
@@ -264,17 +266,18 @@ test("deriveSalaryBand 不足阈值返回 null", () => {
   assert.equal(D.deriveSalaryBand([j({ salary_text: "15-25K" })], NOW_ISO), null);
 });
 
+// ── 招聘节奏（2026-10-11 创始人选定：只认公司写的发布日 + 近 12 个月；社招 / 实习不写「集中在某月」）──
+// NOW = 2026-06-15，所以「近 12 个月」= 2025-06-15 ~ 2026-06-15。
+const posted = (jobType, ymd, over = {}) => j({ job_type: jobType, posted_at: `${ymd}T04:00:00Z`, ...over });
+const timingText = (jobs) => {
+  const v = D.deriveTiming(jobs, NOW_ISO);
+  return v ? v.content : null;
+};
+
 test("deriveTiming 概括校招峰值月 + 社招全年滚动", () => {
   const jobs = [
-    j({ job_type: "校招", posted_at: "2026-08-05T00:00:00Z" }),
-    j({ job_type: "校招", posted_at: "2026-09-05T00:00:00Z" }),
-    j({ job_type: "校招", posted_at: "2026-08-20T00:00:00Z" }),
-    j({ job_type: "社招", posted_at: "2026-01-05T00:00:00Z" }),
-    j({ job_type: "社招", posted_at: "2026-03-05T00:00:00Z" }),
-    j({ job_type: "社招", posted_at: "2026-04-05T00:00:00Z" }),
-    j({ job_type: "社招", posted_at: "2026-07-05T00:00:00Z" }),
-    j({ job_type: "社招", posted_at: "2026-10-05T00:00:00Z" }),
-    j({ job_type: "社招", posted_at: "2026-12-05T00:00:00Z" }),
+    posted("校招", "2025-08-05"), posted("校招", "2025-09-05"), posted("校招", "2025-08-20"),
+    ...["2025-07", "2025-10", "2025-12", "2026-01", "2026-03", "2026-04"].map((ym) => posted("社招", `${ym}-05`)),
   ];
   const v = D.deriveTiming(jobs, NOW_ISO);
   assert.ok(v);
@@ -284,7 +287,110 @@ test("deriveTiming 概括校招峰值月 + 社招全年滚动", () => {
 });
 
 test("deriveTiming 不足阈值返回 null", () => {
-  assert.equal(D.deriveTiming([j({ posted_at: "2026-08-01T00:00:00Z" })], NOW_ISO), null);
+  assert.equal(D.deriveTiming([posted("校招", "2025-08-01")], NOW_ISO), null);
+});
+
+test("招聘节奏：没有发布日的岗不参与，不拿我们第一次抓到它的日子充数", () => {
+  // 2026-10-11 全库 441,074 个在招岗里 250,773 个没有发布日；旧实现退回 first_seen_at，而我们最早的抓取记录是
+  // 2026-06-14 —— 这些岗的月份只可能是 6~10 月，写出来的是「我们哪个月接入 / 抓到的」。
+  const crawlOnly = Array.from({ length: 8 }, (_, i) =>
+    j({ job_type: "校招", posted_at: null, first_seen_at: `2026-0${(i % 2) + 4}-10T00:00:00Z` }));
+  assert.equal(timingText(crawlOnly), null, "8 个校招岗全没有发布日 → 不出卡");
+  // 混进带发布日的：只按带发布日的那几个算，首抓月份（4、5 月）不得出现
+  const mixed = [...crawlOnly.slice(0, 2), ...Array.from({ length: 5 }, () => posted("校招", "2025-09-03"))];
+  assert.match(timingText(mixed), /校招集中在 9 月/);
+  assert.doesNotMatch(timingText(mixed), /[45] 月|、/);
+});
+
+test("招聘节奏：社招、实习不写「集中在某月」（幸存者偏差回归）", () => {
+  // 已关闭的岗每天被物理删除，能读到的只有还在招的 → 越早的月份剩得越少，「峰值月」只是在复述最近挂出的岗多。
+  // 同日实测：有这句话的 593 家里 566 家峰值月全在 6~10 月；同一批岗换成我们的首抓日再写一遍，句子一样的只有 24%。
+  const social = ["2026-04-02", "2026-04-09", "2026-05-06", "2026-05-13", "2026-05-20", "2026-05-27"].map((d) => posted("社招", d));
+  assert.equal(timingText(social), null, "社招只有 4、5 两个月 → 不写「集中在 4、5 月」，也没有别的可写");
+  const intern = ["2026-03-02", "2026-03-09", "2026-03-16", "2026-04-06", "2026-04-13"].map((d) => posted("实习", d));
+  assert.equal(timingText(intern), null, "实习不写「集中在某月」");
+  // 有校招段时卡照出，但里面不带社招 / 实习的「集中」
+  const withCampus = [...social, ...intern, ...Array.from({ length: 4 }, () => posted("校招", "2025-09-10"))];
+  assert.match(timingText(withCampus), /校招集中在 9 月/);
+  assert.doesNotMatch(timingText(withCampus), /社招|实习/);
+});
+
+test("招聘节奏：实习铺满全年也不写（只有社招有「全年滚动」）", () => {
+  const intern = ["2025-07", "2025-08", "2025-10", "2025-12", "2026-02", "2026-04"].map((ym) => posted("实习", `${ym}-08`));
+  assert.equal(timingText(intern), null);
+});
+
+test("招聘节奏：只看近 12 个月发布的岗，更早的不算月份也不算「滚动」", () => {
+  // 万达：61 个校招岗里 46 个是 2023 年发的，旧实现不分年份照样算进「9、11 月」。
+  const stale = [
+    ...Array.from({ length: 5 }, () => posted("校招", "2023-11-05")),
+    ...Array.from({ length: 5 }, () => posted("校招", "2025-09-05")),
+    posted("校招", "2025-10-05"),
+  ];
+  assert.match(timingText(stale), /校招集中在 9、10 月/);
+  assert.doesNotMatch(timingText(stale), /11/);
+  // 「全年滚动」要的是近 12 个月里的 6 个不同月份：3 个近的 + 3 个两年前的不算（每月 2 个岗，样本够数）
+  const rolling = (yms) => timingText(yms.flatMap((ym) => [posted("社招", `${ym}-05`), posted("社招", `${ym}-20`)]));
+  assert.equal(rolling(["2026-01", "2026-02", "2026-03", "2024-04", "2024-05", "2024-06"]), null);
+  assert.match(rolling(["2026-01", "2026-02", "2026-03", "2025-10", "2025-11", "2025-12"]), /社招全年滚动/);
+  // 窗口两端：正好 365 天前的算，再早一天不算；写在未来的发布日不算
+  const edge = (iso) => D.deriveTiming(Array.from({ length: 5 }, () => j({ job_type: "校招", posted_at: iso })), NOW_ISO);
+  assert.ok(edge("2025-06-15T00:00:00.000Z"));
+  assert.equal(edge("2025-06-14T23:59:59.000Z"), null);
+  assert.equal(edge("2026-06-16T00:00:00.000Z"), null);
+  // 「现在」解析不出来时窗口不能整个失效（那样所有年份的岗都会放行）
+  assert.equal(D.deriveTiming(Array.from({ length: 5 }, () => posted("校招", "2023-09-05")), "not-a-date"), null);
+});
+
+test("招聘节奏：校招岗里带发布日的不到一半就不写（不挑着算）", () => {
+  // 腾讯：451 个校招岗只有 18 个带发布日，按这 18 个写出来会是「集中在 1、7 月」—— 拿一小撮代表全部。
+  const dated = (n) => Array.from({ length: n }, () => posted("校招", "2025-08-05"));
+  const undated = (n) => Array.from({ length: n }, () => j({ job_type: "校招", posted_at: null }));
+  assert.equal(timingText([...dated(5), ...undated(6)]), null, "5/11 不到一半");
+  assert.match(timingText([...dated(5), ...undated(5)]), /校招集中在 8 月/, "正好一半就写");
+  // 分母是「判成校招的在招岗」，别的桶没发布日不影响它
+  const socialUndated = Array.from({ length: 30 }, () => j({ job_type: "社招", posted_at: null }));
+  assert.match(timingText([...dated(5), ...socialUndated]), /校招集中在 8 月/);
+});
+
+test("招聘节奏：月份按北京时间取（库里的发布日存的是北京零点）", () => {
+  // 2026-10-11 实测：带发布日的 190,159 个岗里 183,522 个存成北京零点；其中 4,930 个是当月 1 号 —— 按 UTC 取月份
+  // 会把「9 月 1 日发布」算成 8 月，而校招正好爱在 1 号开。
+  const sep1 = Array.from({ length: 5 }, () => j({ job_type: "校招", posted_at: "2025-08-31T16:00:00.000Z" }));
+  assert.match(timingText(sep1), /校招集中在 9 月/);
+});
+
+test("招聘节奏：写出的岗数与样本量 = 撑起这句话的岗，不含没用上的", () => {
+  const jobs = [
+    ...Array.from({ length: 4 }, () => posted("校招", "2025-09-05")),
+    // 下面这些都不进任何一段：实习、判不出类型的、没发布日的、12 个月以前的
+    ...Array.from({ length: 3 }, () => posted("实习", "2026-03-05")),
+    ...Array.from({ length: 2 }, () => posted(null, "2026-03-05", { title: "Store Team Member" })),
+    j({ job_type: "校招", posted_at: null }),
+    posted("校招", "2023-09-05"),
+  ];
+  const v = D.deriveTiming(jobs, NOW_ISO);
+  assert.equal(v.content, "据本平台 4 个带发布日期的在招岗位（近 12 个月内发布）：校招集中在 9 月。");
+  assert.equal(v.sample_size, 4);
+  assert.equal(v.payload.sample_n, 4);
+});
+
+test("招聘节奏：整张卡的最低样本数的是带发布日的岗", () => {
+  // 4 个带发布日 + 50 个不带：旧实现按 54 个「有日期」放行，现在不够 5 个
+  const jobs = [
+    ...Array.from({ length: 4 }, () => posted("校招", "2025-09-05")),
+    ...Array.from({ length: 50 }, () => j({ job_type: "社招", posted_at: null })),
+  ];
+  assert.equal(timingText(jobs), null);
+});
+
+test("招聘节奏的实现里不再读 first_seen_at，也不再有社招 / 实习的「集中在」", () => {
+  const src = fs.readFileSync(DERIVE_PATH, "utf8");
+  const start = src.indexOf("export function deriveTiming(");
+  const body = src.slice(start, src.indexOf("\n}\n", start));
+  assert.equal(body.includes("first_seen_at"), false, "招聘节奏又在用首次抓取日了");
+  assert.equal(/\$\{[^}]*\}集中在/.test(body), false, "「集中在」只许校招一段写死，不许按桶名拼");
+  assert.equal((body.match(/集中在/g) || []).length, 1);
 });
 
 test("deriveHiring 概括在招规模/城市/方向（排除非 active）", () => {
