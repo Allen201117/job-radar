@@ -239,6 +239,12 @@ export const SOURCE_ADAPTERS: AdapterOption[] = [
     hint: "填「比亚迪」+ 社招列表页，公开列表后由浏览器批量生成前端加密详情 URL，crawl_method 选 playwright",
   },
   {
+    value: "byd_campus",
+    label: "比亚迪 校招 / 实习（自建门户 · 本土）",
+    origin: "domestic",
+    hint: "填「比亚迪」+ https://job.byd.com/portal/pc/#/school/schoolPositionList，按校招页的投递入口取应届生 + 实习生岗位（不是社招接口换渠道码），详情 URL 同样由浏览器生成，crawl_method 选 playwright",
+  },
+  {
     value: "sf_express",
     label: "顺丰（自建门户 · 本土）",
     origin: "domestic",
