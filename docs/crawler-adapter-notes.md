@@ -360,6 +360,29 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       URL `xz.duoyi.com` 没有任何 campus 令牌，走 URL 规则 board 会判成 social → campus-crawl 车道
                          #       整条漏掉；迁移 276 把它钉进 classify_source_board 规则②。
                          #     summary【任职要求】在【岗位职责】前（届别硬信号在要求段，同 sf_express_campus 量出的结论）。
+                         #   byd.py = 比亚迪社招 job.byd.com（自建 Vue SPA）。列表 queryList / 详情 queryDetail 是公开 JSON，
+                         #     但详情**页面**链接里的岗位 id 被官方路由整段 AES 加密（stringifyQuery / parseQuery 成对）→ adapter
+                         #     打开官方页面、让它的路由批量生成链接，不自己算密文。2026-10-11 全集实测（库里 7,481 个在招岗）：
+                         #     🚫 **链接只能用 `route.fullPath` 拼，不能用 `route.href`**：href 要过 Vue Router 的 cleanPath，
+                         #       把连续的 `/` 压成一个；密文是 base64，约 1.3% 的岗密文里恰好有 `//` → 链接少一个字符，
+                         #       官方页面解不出 id，打开是空壳（页面自己的 queryDetail 回 code=4005）。存量 96 条坏链接，
+                         #       其中 32 条当天还在官网列表里。现在每条链接生成后再用官方路由解回去，id 对不上的不出。
+                         #       我们自己的清洗 / canonical（Python、JS 两端）都不动 `#` 后面，`//` 原样保留（实测）。
+                         #     🚫 **撤岗后的详情页是空壳，没有任何文案**：不渲染岗位名、不渲染正文，也没有「已下线 / 停止招聘」，
+                         #       正文恒 208 字（导航 + 页脚）。浏览器巡检的 classify() 对它只能判 suspect（375 个真渲染样本里
+                         #       300 个已撤岗全判 suspect、0 个判 dead）→ 每天巡、从不下架，攒了 5,429 个已撤岗（最早 6 月）。
+                         #       既不是「文案没收进 DEAD_MARKERS」，也不是浦发那种「撤了照样渲染正文」，是第三种。
+                         #     queryDetail 对「已撤岗」与「从没有过的 id」回的是同一个东西：200 + code=0 + 字段全空的骨架
+                         #       （只有 collectionStatus 有值；没有任何状态字段）。在招岗回带同一个 id + 岗位名，有值字段 10~13 个。
+                         #       全集对拍：不在列表 5,429 → 空骨架 5,429；在列表 2,052 → 在招 2,052；两个方向反例 0；
+                         #       300 个伪 id（含真 id ±1~7 的邻居）全是空骨架。非数字 / 超 int64 的 id 回 code=4005，不判死。
+                         #     列表是全集：`pageNum` 是行偏移不是页码；去重后凑不齐自报 total 就抛错（翻页途中有岗撤下会少一条，
+                         #       宁可这轮失败）。列表里省市皆空的行（当天 26 条）在 parse 被地点门挡掉，从不入库。
+                         #     撤岗核验 = `crawler/byd_liveness.py`（+ `byd-liveness.yml`，手动触发、默认 dry-run）：
+                         #       「不在本轮全量列表」且「详情两轮都回空骨架」才下架；逐岗探之前、每探 500 个之后都过阳性 / 阴性对照；
+                         #       另有四道整轮作废的闸（链接解不出 id / 上一轮的岗大面积缺席 / 不在列表却读到在招的太多 / 判死占比）。
+                         #       不开 list-absence：它认的是「这轮没被写库」，列表里有、却被后面清洗挡掉的行同样没被写库。
+                         #     zpType：00251 = 社会招聘（本 adapter 只抓它）；00252 当天自报 15,582 条，是哪个板块没查，别当成社招全集。
                          #   ⚠️ platform_fingerprint 三处路由扩展（2026-09-18，起因：漏斗把「入口找到了、却被拦在路由门外」
                          #     归类后发现 `adapter_source_url_unroutable` 绝大多数**不是**「平台认得出但没 adapter」，而是两类）：
                          #     ① hotjob 租户首页 `/{SU…}/pb/index.html`（或裸 `/pb/`）→ 映射到 `pb/social.html`。官网「加入我们」

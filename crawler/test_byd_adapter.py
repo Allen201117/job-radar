@@ -1,9 +1,12 @@
 import json
 import os
+import subprocess
 import unittest
+from unittest import mock
 
 import httpx
 
+from adapters import byd as byd_module
 from adapters.byd import BydAdapter, _list_offsets
 
 
@@ -91,6 +94,126 @@ class BydAdapterTest(unittest.TestCase):
         self.assertEqual(jobs[0].title, "店端服务顾问")
         self.assertEqual(jobs[0].job_type, "汽车事业群")
         self.assertEqual(jobs[0].posted_at, "2026-06-05")
+
+
+_BASE = "https://job.byd.com/portal/pc/#/social/socialPositionDetails?"
+
+
+class BydDetailUrlTest(unittest.TestCase):
+    """详情链接里的密文是 base64，会带 '//'；Vue Router 的 href 会把它压成 '/'，链接就打不开了。"""
+
+    def test_link_is_built_from_full_path_not_href(self):
+        # href 只许用来取 '#' 之前的路由 base（那一段没有密文）；密文那一段必须来自 fullPath。
+        self.assertIn("resolved.route.fullPath", byd_module._BUILD_DETAIL_URLS_JS)
+        self.assertIn("resolved.href.split('#')[0]", byd_module._BUILD_DETAIL_URLS_JS)
+        self.assertEqual(byd_module._BUILD_DETAIL_URLS_JS.count(".href"), 2)   # 上面那一处 + new URL(...).href
+
+    def test_only_links_that_decode_back_to_the_same_id_are_kept(self):
+        good = _BASE + "at2n3bDPdyn4h4S2Reo8FJW+Tg//qdaRyw9mX6SJu1o="   # 实测的带 '//' 密文，原样保留
+        urls = byd_module._verified_detail_urls([
+            ["2097132362952380417", good, "2097132362952380417"],
+            ["2096769889925652481", _BASE + "x", None],                     # 官方路由解不回来
+            ["2084078594987974657", _BASE + "y", "2084"],                   # 解回来不是同一个 id
+        ])
+        self.assertEqual(urls, {"2097132362952380417": good})
+
+    def test_link_with_another_prefix_is_dropped(self):
+        # 官网哪天换了路由 base：一条都不出 → fetch 报错，而不是 parse 安静丢光、记成功 0 岗
+        urls = byd_module._verified_detail_urls([
+            ["2097132362952380417", "https://job.byd.com/portal/pc#/social/socialPositionDetails?abc=",
+             "2097132362952380417"]])
+        self.assertEqual(urls, {})
+
+    def test_fetch_is_not_complete_when_a_row_has_no_verified_link(self):
+        rows = [{"id": "1", "positionName": "岗位1", "province": "广东省", "city": "深圳市"},
+                {"id": "2", "positionName": "岗位2", "province": "广东省", "city": "深圳市"}]
+
+        class _Stub(BydAdapter):
+            urls = {}
+
+            def _fetch_list_rows(self, client):
+                self.reported_total = len(rows)
+                return rows
+
+            def _generate_detail_urls(self, source_url, job_ids):
+                return self.urls
+
+            def _fetch_details(self, client, job_ids):
+                return {}
+
+        with mock.patch.object(byd_module.httpx, "Client", mock.MagicMock()):
+            full = _Stub()
+            full.urls = {"1": _BASE + "a", "2": _BASE + "b"}
+            self.assertEqual(len(json.loads(full.fetch("https://job.byd.com/portal/pc/"))["jobs"]), 2)
+            self.assertTrue(full.fetch_complete)
+
+            partial = _Stub()
+            partial.urls = {"1": _BASE + "a"}            # 列表翻全了，但 2 号岗没拿到验过的链接
+            self.assertEqual(len(json.loads(partial.fetch("https://job.byd.com/portal/pc/"))["jobs"]), 1)
+            self.assertFalse(partial.fetch_complete)
+
+    def test_absence_liveness_stays_off(self):
+        # 撤岗走 byd_liveness（不在全量列表 + 详情空骨架）；list-absence 认的是「这轮没写库」，不是一回事。
+        self.assertFalse(BydAdapter.supports_absence_liveness)
+
+
+# 用一个假的 Vue Router 在 node 里真跑那两段页面脚本。假路由照搬真路由与这件事有关的三个行为：
+# stringifyQuery / parseQuery 是一对严格互逆的映射（这里用查表代替 AES）；fullPath 原样带密文；
+# href 要过 cleanPath（把 '//' 压成 '/'，一遍、不重叠——'///' 压完还剩 '//'）。
+_ROUTER_STUB = """
+let raw = '';
+process.stdin.on('data', c => raw += c).on('end', () => {
+  const {table, src, input} = JSON.parse(raw);
+  const rev = Object.fromEntries(Object.entries(table).map(([id, token]) => [token, id]));
+  const clean = p => p.split('//').join('/');
+  const router = {resolve(to) {
+    if (typeof to === 'string') {
+      const id = rev[to.split('?')[1]];
+      return {route: {fullPath: to, query: id ? {id} : {}}, href: clean('/portal/pc' + '/' + '#' + to)};
+    }
+    const fullPath = to.path + '?' + table[to.query.id];
+    return {route: {fullPath, query: to.query}, href: clean('/portal/pc' + '/' + '#' + fullPath)};
+  }};
+  global.document = {querySelector: () => ({__vue__: {$router: router}})};
+  global.location = {origin: 'https://job.byd.com'};
+  console.log(JSON.stringify(eval('(' + src + ')')(input)));
+});
+"""
+_A, _B, _C = "2097132362952380417", "2084078591028551682", "2096769889925652481"
+_D, _E, _F = "2053673516951162882", "2080113349814685698", "2057644312329453569"
+_TOKENS = {_A: "aaaa+bb//cccc=", _B: "dddd/eeee+ffff=", _C: "gg//hh//ii=",
+           _D: "x//y/z=", _E: "x/y//z=",          # 两个不同的岗，坏链接压完是同一个串
+           _F: "p///q=", "2084": "short="}
+
+
+def _run_page_script(src, items):
+    result = subprocess.run(["node", "-e", _ROUTER_STUB], check=True, capture_output=True, text=True, encoding="utf-8",
+                            input=json.dumps({"table": _TOKENS, "src": src, "input": items}))
+    return json.loads(result.stdout)
+
+
+class BydPageScriptTest(unittest.TestCase):
+    def test_built_links_keep_double_slash_and_decode_back(self):
+        out = _run_page_script(byd_module._BUILD_DETAIL_URLS_JS, [_A, _B, _C])
+        self.assertEqual(out, [[i, _BASE + _TOKENS[i], i] for i in (_A, _B, _C)])
+        self.assertEqual(byd_module._verified_detail_urls(out), {i: _BASE + _TOKENS[i] for i in (_A, _B, _C)})
+
+    def test_decode_good_links(self):
+        out = _run_page_script(byd_module._DECODE_DETAIL_URLS_JS, [_TOKENS[_B], _TOKENS[_A]])
+        self.assertEqual(out, [[_TOKENS[_B], _B, None], [_TOKENS[_A], _A, None]])
+
+    def test_decode_repairs_collapsed_links(self):
+        out = _run_page_script(byd_module._DECODE_DETAIL_URLS_JS, ["aaaa+bb/cccc=", "gg/hh/ii=", "p//q="])
+        self.assertEqual(out, [["aaaa+bb/cccc=", _A, _TOKENS[_A]],     # 一处 '//' 被压
+                               ["gg/hh/ii=", _C, _TOKENS[_C]],         # 两处都被压
+                               ["p//q=", _F, _TOKENS[_F]]])            # '///' 被压成 '//'
+
+    def test_decode_refuses_to_guess(self):
+        out = _run_page_script(byd_module._DECODE_DETAIL_URLS_JS, ["x/y/z=", "short=", "garbage", "no/such/token="])
+        self.assertEqual(out, [["x/y/z=", None, None],            # 补回去有两个岗都说得通 → 不认
+                               ["short=", None, None],            # 解出来的不是 15~20 位数字
+                               ["garbage", None, None],
+                               ["no/such/token=", None, None]])
 
 
 class BydFetchDetailsTest(unittest.TestCase):
