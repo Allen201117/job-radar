@@ -45,6 +45,43 @@ class JobTypeEnglishSignalsTest(unittest.TestCase):
                     ("实习", "暑期实习", "日常实习"),
                 )
 
+    def test_intern_glued_to_cjk_is_still_a_whole_word(self):
+        """贴着汉字写的 intern 也是整词：「商务intern」「…核心Intern）」。
+
+        Python 的 \\b 默认按 Unicode 判词字符，汉字算「词」，「务」和 i 之间没有边界 → 这类标题此前不认；
+        JS 那边的 \\b 只认 ASCII 字母数字下划线，同一个标题是认的（lib/china-keyword-expansion.js 的
+        hasInternSignal、lib/insight-derive.ts 的 INTERN_RE）。2026-10-11 全库在招岗对拍，两端判法不同的
+        一共 6 个，全是实习岗（下面前 5 条是原标题；库里的招聘类型列由 JS 算，一直是对的，
+        错的是这里写进 job_type 的值和 discovery 的后置过滤）。
+        """
+        cases = [
+            "商务intern",
+            "探索一组intern",
+            "直播运营intern",
+            "后端开发工程师（TripoStudio核心Intern）",
+            "社交媒体运营（海外Intern）",
+            "算法Interns招聘",
+        ]
+        for title in cases:
+            with self.subTest(title=title):
+                self.assertEqual(normalizer.extract_job_type(title, None), "实习")
+
+    def test_cjk_neighbours_do_not_loosen_the_word_boundary(self):
+        """反方向：贴着汉字不等于放宽成子串，internal / international 贴着汉字照样不是实习。"""
+        cases = [
+            "集团Internal审计经理",
+            "国际International业务拓展",
+            "Internet产品运营",
+            "内审（Internal Audit）",
+            "Intern3D建模师",  # 数字算词字符，与 JS 同口径：单看这个词不认
+        ]
+        for title in cases:
+            with self.subTest(title=title):
+                self.assertNotIn(
+                    normalizer.extract_job_type(title, None),
+                    ("实习", "暑期实习", "日常实习"),
+                )
+
     def test_real_intern_still_detected(self):
         """收紧不能误伤真实习岗。"""
         cases = [

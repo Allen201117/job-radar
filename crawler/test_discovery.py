@@ -209,6 +209,18 @@ class JobTypeStrictnessTest(unittest.TestCase):
         self.assertEqual(discovery.recruitment_category(_job(title="算法工程师", summary="推荐", job_type="社招")), "社招")
         self.assertEqual(discovery.recruitment_category(_job(title="算法工程师", summary="推荐", job_type="")), "社招")
 
+    def test_recruitment_category_intern_is_a_whole_word(self):
+        # 贴着汉字写的 intern 是实习（JS 那边一直认；Python 的 \b 默认把汉字当词字符，此前不认）
+        self.assertEqual(discovery.recruitment_category(_job(title="商务intern", summary="", job_type="")), "实习")
+        # 源给的 job_type 是英文实习写法
+        self.assertEqual(discovery.recruitment_category(_job(title="Analyst", summary="", job_type="Intern")), "实习")
+        self.assertEqual(discovery.recruitment_category(_job(title="Analyst", summary="", job_type="Internship")), "实习")
+        # 反方向：job_type 里的 Internal 不是实习（全库 job_type 含 intern 的取值只有 Intern 与 Internal Services 两种）
+        self.assertEqual(
+            discovery.recruitment_category(_job(title="Facilities Coordinator", summary="", job_type="Internal Services")),
+            "社招",
+        )
+
     def test_job_matches_type(self):
         intern = _job(title="数据分析实习生", job_type="实习")
         social = _job(title="数据分析师", job_type="社招")

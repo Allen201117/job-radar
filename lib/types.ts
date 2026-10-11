@@ -7,6 +7,9 @@ export interface Job {
   country_code?: string | null;
   job_scope?: string | null;
   job_type: string | null;
+  // 岗位库的招聘类型物化列（香港库 jobs）：社招 / 校招 / 实习，NULL = 还没算；explicit = 有没有明确依据。
+  recruitment_category?: string | null;
+  recruitment_explicit?: boolean | null;
   grad_class?: number | null;
   summary: string | null;
   sponsorship_signal?: "available" | "none" | "unknown" | string | null;

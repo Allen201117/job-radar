@@ -1,6 +1,15 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 const { loadRoute, loadTsModule, resolvedQuery } = require("./route-test-utils");
+
+// 洞察路由要用 jobs-store 的两份列清单。真模块连着 pg（server-only），这里把常量原值从源码里读出来喂给桩，不手抄一份。
+const JOBS_READ_SRC = fs.readFileSync(path.join(__dirname, "..", "lib", "jobs-store", "read.ts"), "utf8");
+const INSIGHT_DERIVE_COLUMNS = /export const INSIGHT_DERIVE_COLUMNS =\s*"([^"]+)"/.exec(JOBS_READ_SRC)[1];
+const INSIGHT_DERIVE_COLUMNS_NOT_IN_SUPABASE = JSON.parse(
+  /export const INSIGHT_DERIVE_COLUMNS_NOT_IN_SUPABASE = (\[[^\]]*\])/.exec(JOBS_READ_SRC)[1],
+);
 
 const USER = { id: "user-1", email: "user@example.com" };
 const ADMIN = { id: "admin-1", email: "admin@example.com" };
@@ -105,6 +114,8 @@ function insightRouteMocks(service, supabase) {
     "@/lib/jobs-store/read": {
       jobsStoreEnabled: () => false,
       activeJobsByCompanies: async () => [],
+      INSIGHT_DERIVE_COLUMNS,
+      INSIGHT_DERIVE_COLUMNS_NOT_IN_SUPABASE,
     },
     "@/lib/insight-availability-cache": {
       // 让 getCachedCompanyProfilesLight 委托给传入的 supabase mock（与旧 supabase.from 语义一致）
@@ -245,6 +256,34 @@ test("admin submissions API approves with moderation metadata", async () => {
   assert.equal(updated.moderation.reviewer_id, ADMIN.id);
   assert.equal(updated.moderation.reason, "ok");
   assert.deepEqual(filters, [["eq", "id", "sub-1"]]);
+});
+
+test("GET /api/insights：Supabase 兜底取数带齐派生要读的列，但不带那张表没有的招聘类型两列", async () => {
+  // 那张表没有 recruitment_category / recruitment_explicit：select 里带上任何一个，PostgREST 整条报 42703，
+  // 兜底一行都取不到（香港库不可用时抽屉的派生统计全空）。
+  let jobsQuery = null;
+  const supabase = {
+    from(table) {
+      const query = chain({ data: [], error: null });
+      if (table === "jobs") jobsQuery = query;
+      return query;
+    },
+  };
+  const service = { from: () => chain({ data: [], error: null }) };
+  const route = loadRoute("app/api/insights/route.ts", insightRouteMocks(service, supabase));
+
+  const response = await route.GET({ nextUrl: new URL("http://localhost/api/insights?company=acme") });
+
+  assert.equal(response.status, 200);
+  assert.ok(jobsQuery, "桩里香港库是关的，应该走到 Supabase 兜底");
+  const cols = jobsQuery.calls.find((call) => call[0] === "select")[1].split(",");
+  for (const c of ["company", "title", "job_type", "posted_at", "first_seen_at", "status", "experience", "education"]) {
+    assert.ok(cols.includes(c), "兜底取数少了 " + c);
+  }
+  assert.equal(cols.includes("recruitment_category"), false);
+  assert.equal(cols.includes("recruitment_explicit"), false);
+  // 清单里确实有这两列（香港库那条路要取），兜底只是把它们去掉
+  assert.ok(INSIGHT_DERIVE_COLUMNS.includes("recruitment_category"));
 });
 
 test("GET /api/insights returns anonymized first-party aggregate after the threshold", async () => {

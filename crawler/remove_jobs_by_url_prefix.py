@@ -27,6 +27,9 @@ liveness-sweep 只判「对方关闭」，在招的重复岗会一直 active、�
   · title：标题一字不差。只给「两个不同租户各发一份同一个招聘需求」用——两边 id 不同，标题里都带同一个
     招聘编号（上实集团门户 vs 上海医药门户：`上海医药2027技术工培生(J12541)`，150 个在招里 117 个）。
     ⚠️ 标题里没有编号的租户别用它：同名不同岗会被当成孪生。
+  · postid：新版 hotjob / wecruit 的岗位号在 `?postId=<24 位十六进制>` 里、没有 `#`。同一个套件挂在平台域名
+    wecruit.hotjob.cn 和租户自己绑的品牌域名（如 atl.hotjob.cn）上时两边岗位号相同，jd_url 只差域名
+    （2026-10-11 实测宁德新能源：校招 52/52、实习 9/9，标题与地点逐个相同）。老版 wt 门户的 `postIdsAry=` 不认。
 
 用法：
     python3 crawler/remove_jobs_by_url_prefix.py --url-prefix https://tbea.hotjob.cn/wt/TBEA/ --company 新疆特变电工集团
@@ -66,6 +69,7 @@ _TWIN_KEYS = {
     "hash": "split_part({c}jd_url, '#', 2)",
     "jobadid": "lower(coalesce(substring({c}jd_url from 'jobAdId=([0-9A-Za-z-]+)'), ''))",
     "title": "coalesce({c}title, '')",
+    "postid": "coalesce(substring({c}jd_url from '[?&]postId=([0-9A-Za-z]+)'), '')",
 }
 
 
@@ -104,7 +108,8 @@ def parse_args(argv=None):
     ap.add_argument("--company", required=True, help="精确公司名，与前缀同时成立才动")
     ap.add_argument("--only-twins-under", help="保留门户的 jd_url 前缀：只标在它下面有在招孪生行的（见模块注释）")
     ap.add_argument("--twin-key", choices=sorted(_TWIN_KEYS), default="hash",
-                    help="认孪生看哪一段：hash=`#` 片段 / jobadid=北森 jobAdId / title=标题一字不差（见模块注释）")
+                    help="认孪生看哪一段：hash=`#` 片段 / jobadid=北森 jobAdId / title=标题一字不差 / "
+                         "postid=hotjob postId（见模块注释）")
     ap.add_argument("--apply", action="store_true", help="真的写库（默认只 dry-run 报数）")
     args = ap.parse_args(argv)
     for flag, value in (("--url-prefix", args.url_prefix), ("--only-twins-under", args.only_twins_under)):
