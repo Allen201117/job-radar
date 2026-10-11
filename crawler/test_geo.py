@@ -828,3 +828,39 @@ class TitleCityLocationTest(unittest.TestCase):
         for title in ("有机合成研究员-西安", "博士管培生-连云港/苏州", "售前工程师-黔西南州"):
             with self.subTest(title=title):
                 self.assertEqual(derive_country_code(geo.title_city_location(title)), "CN")
+
+
+class IsPlaceNameTest(unittest.TestCase):
+    """整段就是地名（2026-10-11 加）：adapter 在一排没标注类型的字段里认「哪个是地点」用。
+    与 derive_country_code 的差别就在「整段」——后者看到串里含地名就给国家码，部门名会被当成地点。"""
+
+    def test_whole_segment_places(self):
+        for seg in ("上海", "上海市", "河南省", "山西", "内蒙古自治区", "延边朝鲜族自治州", "乌鲁木齐市",
+                    "香港", "澳门", "新加坡", "美国", "马来西亚", "东京都", "Shenzhen", "guangdong", "Hong Kong"):
+            with self.subTest(seg=seg):
+                self.assertTrue(geo.is_place_name(seg))
+
+    def test_names_that_only_contain_a_place_are_not_places(self):
+        # 全部取自 2026-10-11 香港库里被 Moka 卡片解析当成地点写进 location 的部门名 / 职能类别。
+        for seg in ("广东大区", "山东区域", "上海战区", "河南省公司", "中国区生产运营管理部", "华北区域",
+                    "全职市场类", "发行市场类", "海外区域", "微医天津", "徐州重型机械有限公司", "China Sales"):
+            with self.subTest(seg=seg):
+                self.assertFalse(geo.is_place_name(seg))
+        # 对照：derive_country_code 对这种串给得出国家码，所以拿它挑不了字段。
+        self.assertEqual(derive_country_code("广东大区"), "CN")
+
+    def test_counties_and_districts_are_not_in_the_vocabulary(self):
+        # 区县单独出现不认（「黄浦区」「昆山市」），要不要按上级放行由调用方定。
+        for seg in ("黄浦区", "昆山市", "滨江区"):
+            with self.subTest(seg=seg):
+                self.assertFalse(geo.is_place_name(seg))
+
+    def test_ambiguous_bare_names_need_a_suffix(self):
+        for bare, suffixed in (("东方", "东方市"), ("朝阳", "朝阳市"), ("阿里", "阿里地区")):
+            with self.subTest(bare=bare):
+                self.assertFalse(geo.is_place_name(bare))
+                self.assertTrue(geo.is_place_name(suffixed))
+
+    def test_empty(self):
+        self.assertFalse(geo.is_place_name(None))
+        self.assertFalse(geo.is_place_name("  "))

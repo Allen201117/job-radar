@@ -27,6 +27,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 import httpx
 
 import normalizer
+from geo import TITLE_CITY_PROVINCE_NAMES, is_place_name
 from .base import (DEFAULT_LIST_CAP, PageResult, RawJob, RepetitionBrake, exc_brief,
                    paginate_all, redact_urls, resolve_detail_cap, resolve_list_cap, resolve_page_cap)
 from .playwright_base import PlaywrightAdapter
@@ -152,9 +153,43 @@ class ChinaSpaAdapter(PlaywrightAdapter):
         )
 
 
-_MOKA_FLAGS = ("火热招聘", "急", "热", "新", "HOT", "NEW", "hot", "new")
-_MOKA_NOISE = ("全职", "兼职", "实习", "|", "立即投递", "在招职位", "分享")
-_MOKA_CITY_RE = re.compile(r"[一-龥]{2,}(?:省|市|区)")
+# 角标（「急」这类小标签）。新版卡片里它单独成行，文字各租户自己定：2026-10-11 的 DOM 抽样里出现过
+# 急 / 热 / HOT / Hot / 热招。认不全也不要紧——有发布日期行的卡另有不靠词表的判据，见 _split_moka_title。
+_MOKA_FLAGS = ("火热招聘", "热招", "急", "热", "新", "HOT", "NEW", "Hot", "New", "hot", "new")
+# 老版卡片的角标粘在标题前面（'急客户端c++研发'）。实测只有「急」（96 张老版卡的 DOM 抽样全是它），「火热招聘」是早年的写法。
+# 🚫 不许把「热」「新」放进来：标题自己就以它们开头的岗多得多（热管理工程师 / 新媒体运营 / 新能源…）。
+#    改前四个字都剥、且不分新老版，同日 38,789 张卡里有 424 张标题因此不对（多数是被剥掉了第一个字）。
+_MOKA_GLUED_FLAGS = ("火热招聘", "急")
+# 卡片上的发布日期行：新版「发布于 2026-10-09」、英文门户「Posted on 2026-10-10」、老版「发布时间：2026-05-20」。
+_MOKA_NEW_PUBLISHED_PREFIXES = ("发布于", "Posted on")
+_MOKA_PUBLISHED_RE = re.compile(r"(?:发布于|发布时间[:：]?|Posted on)\s*\d")
+_MOKA_FIELD_SEP = "|"
+_CJK_RE = re.compile(r"[一-鿿]")
+# 老版卡片标题后面最多几行（标签行 + 地点行；发布时间行不算）。实测带「发布时间」行的 824 张老版卡全部 ≤2 行。
+_MOKA_OLD_LAYOUT_MAX_LINES = 2
+# 地点多于 3 个时 Moka 只列前 3 个，后面跟「等5个地点」（老版写成「 等13个地点」）。
+_MOKA_MORE_PLACES_RE = re.compile(r"\s*等\s*\d+\s*个地点$")
+# 「省·市·区」里词表外的下级（区县 / 县级市）：前面有认得的上级才放行，见 _is_moka_place。
+_MOKA_SUB_PLACE_RE = re.compile(r"[一-鿿]{1,9}(?:自治州|自治县|自治旗|地区|新区|市|区|县|州|盟|旗)")
+# 第一级不会是区 / 县 / 旗（自治区、特别行政区除外）：「广东区」「浙江区」是销售大区，is_place_name 却会认（名字 + 行政后缀）。
+_MOKA_DISTRICT_HEAD_RE = re.compile(r"(?<!自治)(?<!行政)[区县旗]$")
+# 说不到城市的地点，整行只有它们时当作没写：
+#   · 只写到国家一级的本国地点（「中国」，同日 1,212 张卡）、只写了省名的（「湖北」）——读侧「地点非空且对不上目标城市」
+#     是硬拒（lib/opportunities/eligibility.ts locationState），写进去会把这个岗从填了城市的用户那里藏掉，
+#     还会盖掉标题里更准的城市（正泰校招标题写「…-黄冈」，卡片地点只写「湖北」）。
+#     带「省」字的写法（「河南省」）改前就在写，这次不动；与标题兜底「只写到省不填」同一个理由（geo.title_city_location ③）。
+#   · 「海外其他」：Moka 自己的「其它境外」选项，说不出是哪国。
+_MOKA_OTHER_OVERSEAS = "海外其他"
+# ⚠️「台湾省」不在此列：它必须照常写出去，才会被出口的台湾红线拒收（normalizer.validate_job_quality）。
+_MOKA_VAGUE_PLACES = frozenset({"中国", "全国", "china", "prc", "cn", "greater china", _MOKA_OTHER_OVERSEAS,
+                                *(name for name in TITLE_CITY_PROVINCE_NAMES if not name.startswith("台湾"))})
+# 多地并列的地点行（「北京市 广东·深圳市 上海市」）入库清洗时会被 normalizer.normalize_city 按别名表折成
+# **其中一个**城市（上例 →「北京」），另外两个城市的用户在今日推荐里就看不到这个岗了（读侧地点对不上是硬拒）；
+# 不写地点它至少还是「城市未知」，标题里带城市的还能由标题兜底成「深圳/上海/北京」。
+# 所以多地行只在清洗不丢城市时才写（行里没有别名表里的城市 → 原样入库，每个城市都匹配得上）。
+# 例外：12 字以内的多地行改前一直在写、也一直被折成一个城市（同日 668 张卡）。改成不写会让它们在按城市筛选时
+# 一个城市都搜不到，两头都有代价，所以这次不动这批岗的可见性；治本要改清洗那一步。
+_MOKA_LEGACY_MULTI_PLACE_CHARS = 12
 
 
 def _first_line(exc: BaseException, limit: int = 240) -> str:
@@ -172,35 +207,171 @@ def _first_line(exc: BaseException, limit: int = 240) -> str:
     return head[:limit]
 
 
+def _split_moka_title(lines: List[str]):
+    """卡片各行 → (标题, 标题之后的行, 角标是不是单独成行)。
+
+    新版卡片的角标单独一行、下一行才是标题。除了认已知的角标文字，还有一条不靠词表的判据：
+    标题后面紧跟的就是发布日期行，所以「第三行才是发布日期」说明第一行是角标（富途校招的角标写的是「Hot」）。
+    """
+    badge_line = len(lines) > 1 and (
+        lines[0] in _MOKA_FLAGS
+        or (len(lines) > 2 and lines[2].startswith(_MOKA_NEW_PUBLISHED_PREFIXES)
+            and not lines[1].startswith(_MOKA_NEW_PUBLISHED_PREFIXES)))
+    if badge_line:
+        return lines[1], lines[2:], True
+    return lines[0], lines[1:], False
+
+
+def _has_new_date_line(rest: List[str]) -> bool:
+    """标题后面第一行是不是新版的发布日期行（「发布于 …」/「Posted on …」）——有它就一定是新版卡片。"""
+    return bool(rest) and rest[0].startswith(_MOKA_NEW_PUBLISHED_PREFIXES)
+
+
+def _moka_card_fields(rest: List[str]):
+    """标题之后的行里，哪些是卡片字段（薪资 / 部门 / 职位性质 / 职能类别 / 地点），正文一行都不要。
+    返回 (字段行, 卡片上有没有字段标记, 紧跟在字段区下面的那一行)。
+
+    新版卡片：字段之间是单独一行「|」，带省略提示的字段渲染两遍（连着两行相同），最后一个字段后面
+    紧跟正文。所以一行算字段，当且仅当它「重复了两行」「后面是 |」「前面是 |」三者占一；字段后面不再是
+    「|」= 字段区到此为止。字段区下面那一行多数门户是正文，但有的门户在那里单独放一行地点
+    （福瑞泰克「上海市 浙江·杭州市」、阳光电源校招「合肥」），所以把它一并交回去，由调用方看它是不是地名。
+    老版卡片没有这些标记：标题后面只有「标签行 + 地点行」（发布时间在最后、卡片上没有正文），两行都算。
+    两种都不是（新版但没配置任何字段，标题后面直接是正文 / 投递说明）→ 没有字段。正文里的短行不许当字段：
+    「招聘城市 / 北京 / 上海 / 广州」逐行列城市的正文，会被读成只在最后那个城市。
+    """
+    new_layout = _has_new_date_line(rest)
+    rest = [ln for ln in rest if not _MOKA_PUBLISHED_RE.match(ln)]
+    fields: List[str] = []
+    i, after_sep = 0, False
+    while i < len(rest):
+        if rest[i] == _MOKA_FIELD_SEP:
+            i, after_sep = i + 1, True
+            continue
+        doubled = i + 1 < len(rest) and rest[i + 1] == rest[i]
+        nxt = i + (2 if doubled else 1)
+        sep_follows = nxt < len(rest) and rest[nxt] == _MOKA_FIELD_SEP
+        if not (doubled or sep_follows or after_sep):
+            break
+        fields.append(rest[i])
+        if not sep_follows:
+            return fields, True, (rest[nxt] if nxt < len(rest) else None)
+        i, after_sep = nxt, False
+    if fields:
+        return fields, True, None
+    if new_layout or len(rest) > _MOKA_OLD_LAYOUT_MAX_LINES:
+        return [], False, None
+    return rest, False, None
+
+
+def _is_moka_place(place: str) -> bool:
+    """一个地点：「四川·成都市」「上海市」「上海市·黄浦区」「香港」「中国香港」「新加坡」。
+
+    第一级必须整段是认得的地名（is_place_name），后面的下级可以是词表外的区县。
+    不认第一级 = 不认整个地点：「华北区域」「广东大区」「河南省公司」「上海战区」都卡在这里。
+    """
+    if place == _MOKA_OTHER_OVERSEAS:
+        return True
+    head, *subs = place.split("·")
+    if head.startswith("中国") and len(head) > 2:
+        head = head[2:]                   # 老版把港澳写成「中国香港」
+    if not is_place_name(head) or _MOKA_DISTRICT_HEAD_RE.search(head):
+        return False
+    return all(is_place_name(s) or _MOKA_SUB_PLACE_RE.fullmatch(s) for s in subs)
+
+
+def _latin_places(text: str) -> Optional[List[str]]:
+    """英文门户的地点行 → 逐个地点；不是地点行返回 None。
+
+    「Shenzhen, Guangdong」是一个地点（城市, 省），「Hong Kong Shenzhen, Guangdong」是两个：
+    逗号连着的算同一个地点，只隔空格的算下一个。每个词都得落在英文地名里（「hong kong」这种多词地名按最长的认）。
+    """
+    low = text.lower()
+    if re.sub(r"[a-z.'\s,-]", "", low):
+        return None                       # 有数字 / & / 其它符号：「R&D」不是地点
+    words = list(re.finditer(r"[a-z][a-z.'-]*", low))
+    places: List[str] = []
+    i, prev_end = 0, 0
+    while i < len(words):
+        for size in (3, 2, 1):            # 「salt lake city」「hong kong」「shenzhen」
+            if i + size > len(words):
+                continue
+            name = low[words[i].start():words[i + size - 1].end()]
+            if is_place_name(re.sub(r"\s+", " ", name)):
+                break
+        else:
+            return None
+        if places and "," in low[prev_end:words[i].start()]:
+            places[-1] += ", " + name
+        else:
+            places.append(name)
+        prev_end = words[i + size - 1].end()
+        i += size
+    return places or None
+
+
+def _moka_places(line: str) -> Optional[List[str]]:
+    """整行是地点字段 → 逐个地点；不是 → None。多个地点用空格并列（「吉林·长春市 辽宁·沈阳市」）。
+
+    按内容认、不按字眼认：带「区 / 市」字样的部门名、职能类别比比皆是（「华北区域」「发行市场类」「全职市场类」）。
+    整行说不到城市的（「中国」「湖北」「海外其他」）也返回 None，理由见 _MOKA_VAGUE_PLACES。
+    """
+    if not _CJK_RE.search(line):
+        places = _latin_places(line)
+    else:
+        places = _MOKA_MORE_PLACES_RE.sub("", line).split()
+        if not all(_is_moka_place(p) for p in places):
+            return None
+    if not places or all(p.lower() in _MOKA_VAGUE_PLACES for p in places):
+        return None
+    return places
+
+
+def _survives_location_cleaning(line: str, places: List[str]) -> bool:
+    """这一行地点写进库之后，页面上列的每个城市是不是都还匹配得上。"""
+    if _MOKA_MORE_PLACES_RE.search(line):
+        # 「…等8个地点」只列了前 3 个，没列出来的城市不知道是哪几个：写进去，那几个城市的用户就被硬拒了。
+        return False
+    if len(places) == 1 and _CJK_RE.search(line):
+        return True                       # 单个地点：折成城市名正是清洗该做的（「四川·成都市」→「成都」）
+    # 以下是多地并列（或英文行，逗号写法分不清是「城市, 省」还是两个城市，一并按命中的别名城市数判）。
+    low = line.lower()
+    alias_cities = {city for alias, city in normalizer.CITY_ALIASES.items() if alias.lower() in low}
+    if len(alias_cities) <= 1 and len({normalizer.clean_location(p) for p in places}) == 1:
+        return True                       # 几个地点其实是同一个城市
+    if normalizer.clean_location(line) == re.sub(r"\s+", " ", line).strip():
+        return True                       # 行里没有别名表里的城市：整行原样入库
+    return len(line) <= _MOKA_LEGACY_MULTI_PLACE_CHARS
+
+
 def _parse_moka_card(text: str):
     """从 Moka 岗位卡 innerText（含换行）解析 (location, title)。
 
-    各租户卡片排版不一，但统一规律：标题在首行（首行若是「急/火热招聘」等角标则取次行，
-    或角标粘连在标题前时剥掉）；城市是后续带 省/市/区 的短行（'上海市'/'广东·珠海市'/'上海市·黄浦区'）。
+    标题在首行；首行是角标（「急」「热招」「Hot」）时取次行，老版卡片角标粘在标题前面时剥掉。
+    地点 = 字段行里整行是地名的那一个（见 _moka_card_fields / _moka_places）；卡片上没有地点字段就是 None，
+    不去正文里找——正文里带「市 / 区」的短句（「进行市场调查和分析；」）曾被当成地点写进库。
     """
     lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
     if not lines:
         return None, ""
-    # 标题：首行；首行是纯角标时取次行
-    if lines[0] in _MOKA_FLAGS:
-        title = lines[1] if len(lines) > 1 else ""
-        rest = lines[2:]
-    else:
-        title = lines[0]
-        rest = lines[1:]
-    # 剥掉粘连在标题前的角标（如 '急客户端c++研发' / '火热招聘中学…'）
-    for f in ("火热招聘", "急", "热", "新"):
-        if title.startswith(f) and len(title) > len(f):
-            title = title[len(f):].strip()
-            break
-    # 城市：后续行里首个「带 省/市/区 的短行」（跳过日期/类型/噪声）
+    title, rest, badge_on_own_line = _split_moka_title(lines)
+    fields, marked, below_fields = _moka_card_fields(rest)
+    # 粘连的角标只在老版卡片上剥：新版（有字段标记 / 有「发布于」行）的角标一定单独成行，标题开头的字是标题自己的。
+    if not (badge_on_own_line or marked or _has_new_date_line(rest)):
+        for f in _MOKA_GLUED_FLAGS:
+            if title.startswith(f) and len(title) > len(f):
+                title = title[len(f):].strip()
+                break
+    # 新版卡片的地点是字段区最后一段，只看它：前面的段即使整段是地名也是部门（微医的部门就叫「三明」「山东」）。
+    # 最后一段不是地点时，再看字段区下面那一行（有的门户把地点单独放在那儿；别的门户那里是正文，正文不会整行是地名）。
+    # 老版卡片没有字段标记，两行都看、取最后一个整行是地名的。
+    candidates = fields[-1:] if marked else fields
+    if marked and below_fields and not _moka_places(candidates[0]):
+        candidates = [below_fields]
     location = None
-    for ln in rest:
-        if ln.startswith("发布") or ln in _MOKA_NOISE:
-            continue
-        if len(ln) <= 12 and _MOKA_CITY_RE.search(ln):
-            location = ln
-            break
+    for field in candidates:
+        places = _moka_places(field)
+        if places:
+            location = field if _survives_location_cleaning(field, places) else None
     return location, title
 
 
@@ -333,7 +504,7 @@ class MokaAdapter(PlaywrightAdapter):
             pass
 
     def _collect_all_pages(self, page) -> List[dict]:
-        """从当前已渲染的列表路由翻页累加全量岗位卡，按 href 去重。
+        """从当前已渲染的列表路由翻页累加全量岗位卡，按 href 去重（同一个 href 留文字更全的那张）。
 
         逐次点「sd-Pagination 下一页」直到：无该按钮（单页租户不渲染分页器）/
         按钮 disabled（末页）/ 连续无新卡 / 触达页数封顶。
@@ -350,15 +521,27 @@ class MokaAdapter(PlaywrightAdapter):
         for attempt in range(self._page_cap or resolve_page_cap(self._PAGE_ROWS, self._MAX_JOBS)):
             cards = page.eval_on_selector_all("a[href*='#/job/']", self._cards_js)
             before = len(union)
+            upgraded = False
             for c in cards:
                 href = c.get("href") or ""
-                if href and href not in union:
+                if not href:
+                    continue
+                seen = union.get(href)
+                if seen is None:
                     union[href] = c
+                elif len(c.get("text") or "") > len(seen.get("text") or ""):
+                    # 同一个岗在页面上有两种链接：列表里的完整卡片，和右栏「最新职位」里只有标题的一行（每页都在）。
+                    # 右栏的岗不在第 1 页列表里时，先收到的是只有标题的那个；等翻到它所在的页，完整卡片要顶替它，
+                    # 否则这个岗的地点字段就丢了（2026-10-11 实测：改前 65 个多页门户里 35 个、共 206 张卡只剩标题）。
+                    union[href] = c
+                    upgraded = True
             # 只数「真翻到了新一页」：点了没翻过去的那几轮不算。旧写法每轮都 +1，
             # 卡在第 5 页的 6 页租户会数成 7 页 ≥ 总页数 → 判成抓全，缺口从告警里消失。
-            if attempt == 0 or len(union) > before:
+            # 「顶替了右栏那张」也是翻到新一页的证据：末页的岗若全在右栏里出现过，只看新增会少数一页。
+            progressed = len(union) > before or upgraded
+            if attempt == 0 or progressed:
                 pages_done += 1
-            no_growth = no_growth + 1 if len(union) == before else 0
+            no_growth = 0 if progressed else no_growth + 1
             if no_growth >= 2:  # 连续两页零新增 → 停（防呆）
                 stop_cause, stop_detail = "page_no_new_rows", f"点了「下一页」连续 {no_growth} 次，岗位卡没变"
                 break
