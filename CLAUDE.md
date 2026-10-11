@@ -207,7 +207,7 @@ app-route 模板把同一个 promise 既交给 waitUntil 又交给 sendResponse�
 
 | 组件 | 在哪 | 干什么 |
 |---|---|---|
-| 期望清单 | `crawler/audit_contract.yaml`（90 条：数据 14 / 体验 22 / 链路 37 / 老告警桥接 17；原写 85 条是 09-19 上线时的数，09-23 复核更正为 87；10-04 加规则 Q 时实数已是 89、加完 90；10-10 体验层再加「现查派发失败」「公告页读取上限」两条，实数 92） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
+| 期望清单 | `crawler/audit_contract.yaml`（90 条：数据 14 / 体验 22 / 链路 37 / 老告警桥接 17；原写 85 条是 09-19 上线时的数，09-23 复核更正为 87；10-04 加规则 Q 时实数已是 89、加完 90；10-10 体验层再加「现查派发失败」「公告页读取上限」两条，实数 92；10-11 数据层加「公司画像撞名」两条，实数 94） | 每条声明 `normal`；`name/why/action` 是**人话**，晨报直接念 |
 | 执行器 | `crawler/audit_runner.py` + `structural-audit.yml`（每日北京 08:50） | 逐条量，写 `audit_results`（Supabase，迁移 281/282）；`unique(check_id, run_date)` 一天一行 = 趋势表。可选 `detail_sql` 列出「具体是哪几处」进 `detail.findings`，晨报 ⑤⑦ 据此点名；它失败不改数值与判定 |
 | 覆盖率差集 | `crawler/audit_coverage.py` + `audit_exemptions.yaml` | 左边**自动枚举**（带 cron 的 workflow / 写 ops_runs 的模块 / jobs 表列 / 走查指标），减去有期望的；上线时 68 条 → 现 14 条（全是 jobs 列） |
 | 老告警桥接 | `ops_watchdog.py` 的 `publish_audit_bridge` | 16 条规则**判定与阈值一字未动**，只把每条的命中数 + 明细写进同一张表（`detail.findings[].title` 与 issue 标题逐字一致） |
@@ -558,6 +558,19 @@ tests/                   # node --test 单测（*.test.js）；crawler 侧 unitt
   公司装饰词/地名（腾讯科技（北京）✓、中国银行深圳分行 ✓；京东方 ✗、腾讯音乐 ✗、京东物流 ✗）。子公司归集团画像靠
   `company_profiles.aliases` 显式登记，不靠子串猜——归属准确性高于一切。撤回/下架接口现会 `revalidateTag("insight-library")`，
   管理员端同步清本会话抽屉缓存（I5 残差）。
+- **🚫 建公司画像只有一个入口：先认别名，没有才建（2026-10-11 立，迁移 317）**：
+  ❌ 136 家公司各有 2~5 个画像（知乎 / 知乎 Zhihu、云尖信息 / 云尖信息 校招、腾讯音乐 / 腾讯音乐 TME）：说法挂在没有岗位的画像上、岗位挂在没有说法的画像上，
+  17 家在洞察库里一张带说法的卡都出不来；3,793 个在招岗点开抽屉打开的不是有内容的那个画像。
+  ✅ 根因：建画像的入口只按正名去重（`upsert on conflict company`），而同一家公司的源叫「X」「X 校招」「X 英文名」——主因是源名写法，`bu_extract --create-profiles` 只贡献了 5 个。
+  ✅ 防：爬虫侧 `crawler/company_profile_resolve.py`、网站侧 `lib/insight-profile-store.ts`；归属规则只有 `bu_extract.build_profile_index / resolve_profile` 一份
+  （正名 → 别名 → 归一名唯一，归一名先去「 校招 / 实习 / 社招」后缀），两端共用夹具 `tests/fixtures/profile-resolve-cases.json`，契约测试禁止别处直接往 `company_profiles` 写新行。
+  `bu_signals` 取岗用同一套归属（此前按「正名 + 别名」取，别名撞到别家正名时同一批岗两边各算一遍）。
+  每日体检 `insights.profile_same_name_pairs`（正常 0）/ `insights.profile_same_normalized_name_pairs`（正常 ≤1）。
+  ⚠️ 「中文 + 英文尾巴」刻意不自动并：「沃尔沃 Volvo Cars」「沃尔沃 Volvo Group」是两家公司；这一类靠别名登记 + 体检点名，由人判。
+  判「是不是同一家」最硬的证据是两个画像的源指向同一个招聘门户，不是名字像。
+  ⚠️ 合并画像：`insight_subjects` / `insight_items` 对画像是级联删，必须同一事务里先改挂后删；括号里挂错集团的国聘残留只删不登记别名。动之前的行留在 `archive.merge_20261011_*`。
+  ⚠️ 名字按别名归到画像之后，下游凡是「拿清单名 / 岗位公司名去比画像正名」的地方都要跟着认别名
+  （校招周期链路的「已有时间线」判断、搜索富化排队的在招数，都是代码审查才查出来的）。全集清单与逐表行数：`docs/reviews/2026-10-11-insight-duplicate-profiles.md`。
 - 检索额度是**全局共享**的（见「搜索额度是全局共享的」一节）；千帆免费额度 50/天，耗尽时设 `BAIDU_QIANFAN_SEARCH_DISABLED=true`，**不要反复点「发现」或跑 5-query live 验证**。
 
 ## 四层「搜索/刷新」必须区分（高频踩坑点）
