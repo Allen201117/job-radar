@@ -67,7 +67,7 @@ from adapters.bilibili import BilibiliAdapter
 from adapters.pinduoduo import PinduoduoAdapter
 from adapters.vivo import VivoAdapter
 from adapters.lenovo import LenovoAdapter
-from adapters.byd import BydAdapter
+from adapters.byd import BydAdapter, BydCampusAdapter
 from adapters.sf_express import SfExpressAdapter
 from adapters.sf_express_campus import SfExpressCampusAdapter
 from adapters.tencent_music import TencentMusicAdapter
@@ -94,6 +94,9 @@ from adapters.gree import GreeAdapter
 
 
 SUMMARY_STORAGE_LIMIT = int(os.environ.get("JOB_SUMMARY_STORAGE_LIMIT", "500") or "500")
+# 声明了 supports_absence_liveness、但按缺席下架还只许 dry-run 的 adapter（env LIVENESS_ABSENCE_OBSERVE 可整体覆盖）。
+# byd_campus 2026-10-11 新接：还没见过「列表里消失的岗在官网上是什么样」，先看几晚 dry-run 数字。
+ABSENCE_OBSERVE_DEFAULT = "beisen,byd_campus"
 
 
 def cap_summary_for_storage(summary):
@@ -201,6 +204,8 @@ ADAPTERS = {
     "vivo": VivoAdapter(),  # vivo 社招门户：portal/page 公开接口,零浏览器
     "lenovo": LenovoAdapter(),  # 联想校招门户：jobBase/list 公开接口,零浏览器（2026-09-09 live）
     "byd": BydAdapter(),  # 比亚迪社招：公开列表 + 浏览器批量生成前端加密详情 URL
+    # 比亚迪校招是官网的另一套接口（schoolPortal/*，按投递入口取），不是社招接口换渠道码（见 adapters/byd.py）。
+    "byd_campus": BydCampusAdapter(),
     "sf_express": SfExpressAdapter(),  # 顺丰社招：SearchJob.do 公开接口,零浏览器
     # 顺丰校招是**另一个站另一套 id 空间**（crs-pub.sf-express.com/api/web/position/query），
     # 与 hr.sf-express.com 的社招接口不通用（2026-09-18 live）。
@@ -252,6 +257,7 @@ DOMESTIC_ADAPTERS = {
     "lixiang_campus",  # 理想汽车校招/实习（2026-09-09 live 核实逐岗详情页，零浏览器）
     "sf_express_campus", "midea_campus",  # 顺丰 / 美的 校招门户（2026-09-18 live，零浏览器）
     "duoyi", "duoyi_campus",  # 多益网络 社招 / 校招官网（2026-09-18 live，列表即全文，零浏览器）
+    "byd_campus",  # 比亚迪校招门户（浏览器档：详情 URL 由官网路由生成，同 byd）
 }
 
 
@@ -582,11 +588,11 @@ def _process_one_source(source, supabase) -> dict:
 
         # 5b. list-absence 探活（仅 HK 库 + adapter 抓全 + 显式支持）：本次全量列表缺席的 active 岗 → 下架。
         #     env LIVENESS_ABSENCE_APPLY=true 才落库；但 LIVENESS_ABSENCE_OBSERVE 里的 adapter 强制 dry-run
-        #     （新接入的源先观察占比，确认列表只返在招岗、不误杀，再从 observe 名单移除开 apply）。默认 beisen 观察。
+        #     （新接入的源先观察占比，确认列表只返在招岗、不误杀，再从 observe 名单移除开 apply）。默认名单见 ABSENCE_OBSERVE_DEFAULT。
         if (cutoff is not None and getattr(adapter, "supports_absence_liveness", False)
                 and getattr(adapter, "fetch_complete", False)):
             try:
-                _observe = {x.strip() for x in os.environ.get("LIVENESS_ABSENCE_OBSERVE", "beisen").split(",") if x.strip()}
+                _observe = {x.strip() for x in os.environ.get("LIVENESS_ABSENCE_OBSERVE", ABSENCE_OBSERVE_DEFAULT).split(",") if x.strip()}
                 apply_absence = (os.environ.get("LIVENESS_ABSENCE_APPLY", "").lower() in ("1", "true", "yes")
                                  and adapter_name not in _observe)
                 ab = jobs_db.sweep_absent_jobs(_get_thread_jobs_conn(), source_id, cutoff, apply=apply_absence)

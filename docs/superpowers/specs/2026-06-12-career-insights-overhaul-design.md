@@ -91,6 +91,8 @@
 | **hiring 招聘动态**（新 dimension）| active 岗位计数 + 职能 Top（title 聚类）+ 校/社占比 + 城市 Top（location）+ 趋势（近 30/60/90d `first_seen_at` 环比）→ 全部塞 `payload` | fact | `platform_aggregate` |
 | **compensation_intensity 薪资带**（复用，新增 fact 子类）| 解析 `salary_text` 聚合出区间分布（如「公开岗位薪资带 15–30K·样本 N 条」），**只发岗位明示的，不推断** | fact | `platform_aggregate` |
 
+> 📌 更正（2026-10-11，创始人选定）：上表 timing 一行的算法「`posted_at`/`first_seen_at` 按月 × 三桶直方图」已不成立。在招岗 57% 没有发布日、退回用的是我们的首次抓取日（最早 2026-06-14，月份只可能是 6~10 月）；已关闭的岗每天被物理删除，越早的月份剩得越少。现行：只用公司写了发布日、且近 12 个月内发布的在招岗（月份按北京时间取）；只写「校招集中在 X、Y 月」（校招岗里带发布日的过半才写）和「社招全年滚动」，社招 / 实习不再写「集中在某月」。数字与取舍见 `deriveTiming` 上方的注释。
+
 > 薪资 fact-band-from-postings 是合规金矿：薪资来自**公司自己挂出的官方岗位**，非社区爆料，零名誉权 / PIPL 风险，却正好命中用户最想看的维度。
 
 ### 4.3 物化方式

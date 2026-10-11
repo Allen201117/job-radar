@@ -300,6 +300,39 @@ crawler/                 # adapters/{base,playwright_base,apple,siemens,baidu,jd
                          #       列表外 84 个 id 全是 status=2(73)/0(9)/500(2)，无一 status=1。
                          #     诚实边界：实习通道 `staffGroup=C` 与 `positionType=consulting` / `specialCategory=1`
                          #       当日实测均 total=0 ——「现在返 0」不等于「顺丰没有实习」（见 CLAUDE.md 那条碑）。
+                         #   byd.py = 比亚迪 job.byd.com：社招（`byd`）+ **校招**（`byd_campus`，2026-10-11 接入）两个类，都要起浏览器。
+                         #     ⚠️ 校招是官网的另一套接口，不是社招接口换渠道码。社招页调 position/queryList（zpType=00251）；
+                         #       校招页调 postEntryConfig/list（投递入口）→ schoolPortal/queryPositionList → schoolPortal/queryPosition。
+                         #       position/queryList 换成 zpType=00252 也有返回、自报 15,582 条，但官网没有任何页面这样调它
+                         #       （app.js + 65 个懒加载分块全扫过，传给它的只有 00251 社招 / 00254 技工）：11,972 条 planYear=2024、
+                         #       全部建于 2024-06；3,606 条是 2027 届的内部需求条目（relatedCode X 开头，正文是带「工作经验：3年以上…」
+                         #       一栏的岗位族模板）。校招页当天自报「在招职位 (384)」。
+                         #     接口怎么读出来的：路由表在 static/js/app.<hash>.js（/school/schoolPositionList、schoolPositionDetail），
+                         #       各页面是懒加载分块（分块名 → hash 的两张表内联在 portal/pc/ 的 HTML 里，前一张是 css、后一张才是 js）。
+                         #     一行 = 校招列表里的一个岗（一个详情页）。详情接口回 positionInfoList：这个岗下面的「岗位方向 × 部门意向」，
+                         #       各有各的工作职责 / 职位要求 / 学历码（最多见过 72 组），页面要先选方向和部门才显示正文。
+                         #       → summary 把方向、部门、地点、学历排最前，正文按出现顺序接在后面；同一段正文只写一遍。
+                         #     入口：应届生 384 + 实习生 2（2026-10-11）。「博士生」65、「外派专项」26 是应届生按学历 / 是否外派筛出的
+                         #       子集（逐 id 对过全在 384 里）→ adapter 按「届别 + 招聘性质」去重，abroad / degree 留空取全集。
+                         #       招聘性质码（字典 0085）：008501 应届生 / 008502 实习生；008503 校园大使 / 008504 储干当天没有入口，不认识的不抓。
+                         #     job_type 按渠道填：应届生「{届别}届校招」（详情页给这类岗挂「应届生」「2027届」标签）、实习生「实习」（页面不挂届别）、
+                         #       社招「社招」。社招原先填部门名：normalizer 见它不是招聘类型就用正文重推（有「应届」→ 校招），
+                         #       不带正文的抓取又写回部门名，同一行来回变。
+                         #     ⚠️ 详情 URL 的查询串是前端加密的（密钥 12 字节，不是标准 AES 长度，标准库算不出）→ 让页面自己的 Vue Router 生成。
+                         #       **取 route.fullPath，不取 href**：href 过 vue-router 的 cleanPath，把密文里的 `//` 压成 `/`，那条链接打开是空白页
+                         #       （页面解不出 id，连详情接口都不调）。出现概率约 1.5%：校招 386 条里 6 条；社招一直在写这种坏链接，
+                         #       2026-10-11 库里在招 7,481 条有 96 条（密文长度 43 / 42，正常是 44）。生成后再用页面自己的 parseQuery
+                         #       解一遍，解回同一个 id 才给 URL。
+                         #     live（2026-10-11，本机 Chrome）：386 岗，质量门 386/386，详情页 386/386 真渲染标题一致；
+                         #       真实 normalize + JS 分类器：校招 384 / 实习 2 / 社招 0，届别 2027 = 384。1,625 组方向正文里写「N 年以上经验」的只有 1 组。
+                         #     下架：`supports_absence_liveness=True`（列表 = 页面「在招职位」全集，逐入口核对 totalCount；列表里有一个岗写不进库就不算抓全），
+                         #       但只打印 dry-run 数字：这条源只在带浏览器的重档跑，那里没开 LIVENESS_ABSENCE_APPLY，`run.ABSENCE_OBSERVE_DEFAULT` 里也有它。
+                         #       还没见过「从列表里消失的岗在官网上是什么样」。开落库前先想清：某个入口被关掉时它的岗整批算缺席（实习生入口只有 2 个岗，
+                         #       50% 安全闸拦不住）；入口全关（校招季结束）时 adapter 回 0 岗记 empty，走不到按缺席下架，存量行不会自动下架。
+                         #     宁可报错不记空：入口接口业务码非 0 / 开关值不认识、列表自报有岗却一行都认不出、列表有行却一行都映射不出岗位、
+                         #       重档要补正文却一个详情都没取到 —— 都抛错记 failed。只有「入口全关 / 入口下 0 个岗」才是 0 岗 empty。
+                         #     没填的：posted_at（页面上那个日期叫「更新于」）；多地岗的 location 只取第一个城市（114 个岗是多地）。
+                         #     `/school/schoolInternRecruitment` 不是岗位列表：是一份 Word 实习生招聘简章渲染出来的静态页 + 登录后投递按钮。
                          #   midea_campus.py = 美的**校招**门户 careers.midea.com 自建 iHR（2026-09-18 接入，纯 httpx）。
                          #     ⚠️ 与社招 midea.py 两套 host：社招 recruit.midea.com（form-encoded），
                          #       校招 careers.midea.com（JSON，**先取在跑招聘项目、再逐项目取岗位**）。

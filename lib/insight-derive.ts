@@ -24,6 +24,10 @@ export const SIGNAL_NO_PCT_BELOW = 10;
 
 // 内部用别名（保持代码可读）
 const TIMING_MIN_SAMPLE = 5;
+// 招聘节奏只看近这么多天内发布的岗；校招段要写，判成校招的在招岗里带发布日的至少占这个比例（见 deriveTiming）。
+// 改天数要同时改 deriveTiming 文案里写死的「近 12 个月内发布」。
+const TIMING_WINDOW_DAYS = 365;
+const TIMING_CAMPUS_MIN_COVERAGE = 0.5;
 // 基础招聘卡（count + hiring_signal）门槛低，3 条岗即可出卡（计数是事实，不是分布）。
 // 分布类统计（经验/学历分布）另有 DIST_MIN_SAMPLE 门（见 spec §1.5 「公司级分布类 n≥10」）。
 const HIRING_MIN_SAMPLE = 3;
@@ -159,10 +163,11 @@ export function parseSalaryText(raw: string | null): { minK: number; maxK: numbe
 
 // ---- 内部工具（不导出，由派生函数复用） ----
 
-function monthOf(iso: string | null): number | null {
-  if (!iso) return null;
-  const m = new Date(iso).getUTCMonth() + 1;
-  return Number.isNaN(m) ? null : m;
+// 发布日落在几月，按北京时间取：岗位库里的发布日是「北京时间的哪一天」。
+// 2026-10-11 实测带发布日的 190,159 个在招岗里 183,522 个存成北京零点（= 前一天 UTC 16:00），其中 4,930 个是当月 1 号
+// —— 按 UTC 取月份会把「9 月 1 日发布」算成 8 月，而校招恰好常在 1 号开。
+function beijingMonth(ms: number): number {
+  return new Date(ms + 8 * 3_600_000).getUTCMonth() + 1;
 }
 
 function yyyymm(iso: string): string {
@@ -245,42 +250,76 @@ function peakMonths(months: number[]): number[] {
     .sort((a, b) => a - b);
 }
 
-// 招聘节奏（timing, fact）：按三桶聚合发布月份（posted_at 缺则用 first_seen_at 代理）。
+// 招聘节奏（timing, fact）：只用「公司自己写了发布日、且在近 12 个月内发布」的在招岗。
+// 能写的只有两句：「校招集中在 X、Y 月」和「社招全年滚动」。2026-10-11 创始人选定，改之前先读完下面这段。
+//
+// ❌ 此前是「三桶各取发布月份的前两名；发布日缺了就用我们第一次抓到它的日子（first_seen_at）顶上」。
+//    同日香港库 441,074 个在招岗 / 1,720 家公司全量核对（分桶按 recruitBucket）：
+//    ① 250,773 个岗（56.9%）没有发布日，用的是我们的首抓日；而我们最早的抓取记录是 2026-06-14，
+//       这些岗的月份只可能是 6~10 月。717 家公司一个发布日都没有。
+//    ② 首抓日当不了发布日：对同时有两个日期的公司，同一批岗各写一遍句子，完全一样的只有
+//       社招 14%（61/441）、校招 56%（256/457）、实习 26%（42/161）。
+//    ③ 已关闭的岗每天被物理删除（33 天删了 177,068 个；9 月第 2~4 周首见的岗到这天已有 21~27% 不在），
+//       能读到的只有还在招的 —— 越早的月份剩得越少，和下面 F4 那段是同一个机制。
+//       「社招集中在某月」775 家里 578 家社招岗一个发布日都没有；有发布日的 197 家里 169 家峰值月全在 6~10 月，
+//       有峰值落在这 5 个月之外的 28 家（17 家不到 10 个岗；同一个峰值月在两个年份都出现的只有 7 家）。
+//    ④ 月份不分年：万达 61 个校招岗里 46 个是 2023 年发的，照样算进「集中在 9、11 月」。
+// ✅ 现在：
+//    · 没有发布日的岗不参与；整张卡的最低样本（TIMING_MIN_SAMPLE）也只数带发布日的。
+//    · 只看近 12 个月发布的（TIMING_WINDOW_DAYS），写在未来的发布日不算。
+//    · 社招、实习不写「集中在某月」。社招在这 12 个月里有 ≥6 个不同月份放过岗才写「全年滚动」
+//      —— 删除只会让月份变少，所以这句只会少说、不会多说。
+//    · 校招段保留：近 12 个月带发布日的校招岗 80% 是 8、9 月发的、社招 40%，不是单纯「近期的岗多」。
+//      但判成校招的在招岗里带发布日的不到一半就不写（TIMING_CAMPUS_MIN_COVERAGE）：
+//      腾讯 451 个校招岗只有 18 个带发布日，按这 18 个写出来会是「集中在 1、7 月」，拿一小撮代表全部。
+//    同日 18:16 快照用真实函数全库重放（1,720 家，改前 → 改后）：有这张卡的 1,304 → 462 家；校招段 825 → 350
+//    （其中月份变了 26 家）；「社招全年滚动」223 → 195；没有一家多出原来没有的段。
+// ⚠️ 校招那句说的是「现在还在招的这一批是哪个月发的」，不是每年的规律：到春招季它会自己变成春招批的月份。
+// ⚠️ 前两名月份没有门槛（沿用原规则，创始人这次没选加）：兴业银行校招 9 月 383 个、4 月 1 个，写的是「4、9 月」。
+//    同日 350 个校招段里 137 个写了两个月，其中 76 个第二个月不到第一个月的 1/4；3 个前两月合计不到一半（长城汽车 12 个月都有）。
+// ⚠️ 想恢复「社招集中在某月」，只能等有了不受删除影响的逐月新增记录并攒够一整年（company_hiring_monthly 表
+//    建了但至今 0 行，没有任何代码写它；insight_subject_daily 从 2026-09-03 起、只记在招总数）。
+//    别再从在招岗的日期里算，更别把首抓日请回来（那样 11 月起约 176 家会因为「我们抓满了 6 个自然月」被写成全年滚动）。
+// ⚠️ 取数最多 3000 行且没有排序（见 /api/insights 的 DERIVE_JOB_CAP）：在招超过 3000 的 20 家是按其中一部分算的。
 export function deriveTiming(jobs: Job[], nowIso: string): InsightItemView | null {
-  const dated = jobs.filter((jb) => jb.posted_at || jb.first_seen_at);
-  if (dated.length < TIMING_MIN_SAMPLE) return null;
+  const nowMs = new Date(nowIso).getTime();
+  const sinceMs = nowMs - TIMING_WINDOW_DAYS * 86_400_000;
 
-  const byBucket: Record<"campus" | "intern" | "social", number[]> = {
-    campus: [], intern: [], social: [],
-  };
-  for (const jb of dated) {
+  const campusMonths: number[] = [];
+  const socialMonths: number[] = [];
+  let campusTotal = 0; // 判成校招的在招岗（带不带发布日都算）：覆盖率的分母
+  let dated = 0; // 带发布日且落在窗内的岗（不分桶）
+  for (const jb of jobs) {
     const b = recruitBucket(jb);
-    if (b === "unknown") continue;
-    const mo = monthOf(jb.posted_at || jb.first_seen_at);
-    if (mo) byBucket[b].push(mo);
+    if (b === "campus") campusTotal++;
+    const t = jb.posted_at ? new Date(jb.posted_at).getTime() : NaN;
+    if (!(t >= sinceMs && t <= nowMs)) continue; // 写成「不在窗内就跳过」：日期解析不出来（NaN）也落在这一支
+    dated++;
+    if (b === "campus") campusMonths.push(beijingMonth(t));
+    else if (b === "social") socialMonths.push(beijingMonth(t));
   }
+  if (dated < TIMING_MIN_SAMPLE) return null;
 
-  const LABEL: Record<"campus" | "intern" | "social", string> = {
-    campus: "校招", intern: "实习", social: "社招",
-  };
   const parts: string[] = [];
-  (["campus", "intern", "social"] as const).forEach((b) => {
-    const months = byBucket[b];
-    if (months.length < 3) return; // 单桶样本不足不下结论
-    if (b === "social" && new Set(months).size >= 6) {
-      parts.push("社招全年滚动");
-      return;
-    }
-    parts.push(`${LABEL[b]}集中在 ${peakMonths(months).join("、")} 月`);
-  });
+  let basis = 0; // 撑起写出来那几句的岗数（没用上的桶不算）
+  // 校招不足 3 个不下结论
+  if (campusMonths.length >= 3 && campusMonths.length >= campusTotal * TIMING_CAMPUS_MIN_COVERAGE) {
+    parts.push(`校招集中在 ${peakMonths(campusMonths).join("、")} 月`);
+    basis += campusMonths.length;
+  }
+  if (new Set(socialMonths).size >= 6) {
+    parts.push("社招全年滚动");
+    basis += socialMonths.length;
+  }
   if (parts.length === 0) return null;
 
-  const content = `据本平台 ${dated.length} 个在招岗位的发布时间聚合：${parts.join("；")}。`;
+  const content = `据本平台 ${basis} 个带发布日期的在招岗位（近 12 个月内发布）：${parts.join("；")}。`;
   return makeDerivedView({
     dimension: "timing",
     title: "招聘节奏 · 据在招岗位",
     content,
     time_window: `截至 ${yyyymm(nowIso)}`,
+    sample_size: basis,
     nowIso,
   });
 }

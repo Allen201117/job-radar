@@ -603,7 +603,7 @@
   {"company": "海天味业", "cn": "海天味业", "slugs": ["haday", "haitianweiye"], "industry": "食品"},
   {"company": "农夫山泉", "cn": "农夫山泉", "slugs": ["nongfu", "nongfuspring"], "industry": "食品饮料"},
   {"company": "元气森林", "cn": "元气森林", "slugs": ["genki", "yuanqisenlin"], "industry": "食品饮料"},
-  {"company": "东鹏饮料", "cn": "东鹏", "slugs": ["dongpeng", "dongpengbeverage"], "industry": "食品饮料"},
+  {"company": "东鹏饮料", "cn": "东鹏饮料", "slugs": ["dongpengbeverage"], "industry": "食品饮料"},
   {"company": "伊利股份", "cn": "伊利", "slugs": ["yili", "yili-careers"], "industry": "食品"},
   {"company": "蒙牛乳业", "cn": "蒙牛", "slugs": ["mengniu", "mengniudairy"], "industry": "食品"},
   {"company": "光明乳业", "cn": "光明", "slugs": ["brightdairy", "guangming"], "industry": "食品"},
