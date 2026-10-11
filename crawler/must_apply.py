@@ -52,6 +52,77 @@ def company_patterns(entry) -> list[str]:
     return out
 
 
+def company_excludes(entry) -> list[str]:
+    """`excludes`：名字里有这家的模式、但**不是这家**的写法（ILIKE 模式，与 `pattern` 同语义）。
+
+    ❌ 品牌名本身就短，模式收不窄：`%吉利%` 要认「吉利汽车」「浙江吉利控股集团」，也就吃掉了「吉利德 Gilead」；
+       `%新东方%` 吃掉「连云港新东方国际货柜码头有限公司（中远海运集团）」。
+    ❌ 「名字末尾括号写了别的集团就按括号归」这条通用规则不能用：蒙牛的全称括号写着中粮集团，
+       实体就是蒙牛本身，按括号走会把它的岗从蒙牛名下拿走（crawler/test_must_apply_owner.py 钉着）。
+    ✅ 逐条登记。只在**归属判定**（resolve_owner）里生效；`match_company_against_patterns` 是
+       「像不像」的粗筛（探活 / 选源优先级），不认排除。与 lib/must-apply-owner.ts 同口径。
+    """
+    if not isinstance(entry, dict):
+        return []
+    out = []
+    for raw in entry.get("excludes") or []:
+        pattern = raw.strip() if isinstance(raw, str) else ""
+        if pattern and pattern not in out:
+            out.append(pattern)
+    return out
+
+
+def exclude_tokens(entry) -> list[str]:
+    """`excludes` 去掉 `%`、小写后的 token，gap_census 建归属索引时也用。"""
+    return [t for t in (p.replace("%", "").strip().lower() for p in company_excludes(entry)) if t]
+
+
+def _buckets(scope=None) -> list:
+    """按范围取清单（不给就是国内 + 海外）。只读用得到的那份，不把两份都读一遍再挑。"""
+    if scope == "domestic":
+        return [by_industry()]
+    if scope == "overseas":
+        return [overseas_by_industry()]
+    return [by_industry(), overseas_by_industry()]
+
+
+def excludes_by_owner(scope=None) -> dict:
+    """{清单规范名: [排除 token（小写、去 `%`）]}；`scope` 不给就是国内 + 海外合并。"""
+    buckets = _buckets(scope)
+    out = {}
+    for bucket in buckets:
+        for _industry, entries in (bucket or {}).items():
+            for entry in entries or []:
+                name = str(entry.get("name") or "").strip() if isinstance(entry, dict) else ""
+                tokens = exclude_tokens(entry)
+                if name and tokens:
+                    merged = out.setdefault(name, [])
+                    merged.extend(t for t in tokens if t not in merged)
+    return out
+
+
+def name_hits_excludes(company_name, tokens) -> bool:
+    low = str(company_name or "").strip().lower()
+    return bool(low) and any(_token_in_name(token, low) for token in tokens or ())
+
+
+def is_excluded(owner, company_name, excludes=None) -> bool:
+    """库里这个名字是不是被 `owner` 这条清单点名排除了。`excludes` 不给就现读清单。"""
+    table = excludes if excludes is not None else excludes_by_owner()
+    return name_hits_excludes(company_name, table.get(str(owner or "").strip()))
+
+
+class _NameList(list):
+    """`all_names()` 的返回值：普通列表 + `.excludes`，resolve_owner 据此认排除。
+
+    ⚠️ 拿它去 `sorted()` / 切片 / `list()` 得到的是裸列表，排除信息就丢了——要变形先取 `.excludes`。
+    """
+
+
+class _OwnerIndex(dict):
+    """`owner_index()` 的返回值：普通字典 + `.excludes`。变形前同样要先取 `.excludes`。"""
+
+
 def _unique_patterns(rows):
     """按首次出现顺序提取有效 ILIKE 模式（含别名）。"""
     out, seen = [], set()
@@ -176,11 +247,15 @@ def resolve_owner(company_name: str, names) -> str:
     # names 可以是「清单名列表」（老调用方，token 即归属名），也可以是 owner_index() 那种
     # 「{库里可能出现的名字片段: 清单规范名}」映射（别名感知）。两者共用同一条「最长者胜」规则。
     items = names.items() if isinstance(names, dict) else [(n, n) for n in (names or [])]
+    # 排除信息挂在 all_names() / owner_index() 的返回值上；调用方自己拼的裸列表没有，行为不变。
+    excludes = getattr(names, "excludes", None) or {}
     best_token, best_owner = "", ""
     for raw, owner in items:
         token = str(raw or "").strip()
         if token and _token_in_name(token.lower(), low) and len(token) > len(best_token):
-            best_token, best_owner = token, str(owner or "").strip()
+            owner = str(owner or "").strip()
+            if not name_hits_excludes(low, excludes.get(owner)):
+                best_token, best_owner = token, owner
     return best_owner
 
 
@@ -241,10 +316,9 @@ def owner_index(scope=None) -> dict:
     海外那条的规范名，否则归属会随清单读取顺序漂。要「英文名 → 中文清单名」这种跨语言
     归属，就明确传 `scope="domestic"`（只在那份清单的命名空间里判）。
     """
-    buckets = {"domestic": [by_industry()], "overseas": [overseas_by_industry()]}.get(
-        scope, [by_industry(), overseas_by_industry()]
-    )
-    index = {}
+    buckets = _buckets(scope)
+    index = _OwnerIndex()
+    index.excludes = excludes_by_owner(scope)
     for bucket in buckets:
         for _industry, entries in (bucket or {}).items():
             for entry in entries or []:
@@ -268,7 +342,8 @@ def owner_index(scope=None) -> dict:
 
 def all_names() -> list:
     """必投清单里全部公司规范名（国内 + 海外），供 resolve_owner / sources_for 用。"""
-    seen, names = set(), []
+    seen, names = set(), _NameList()
+    names.excludes = excludes_by_owner()
     for bucket in (by_industry(), overseas_by_industry()):
         for _industry, entries in (bucket or {}).items():
             for entry in entries or []:

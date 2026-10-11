@@ -8,8 +8,10 @@
 // 折叠逻辑，取数在 lib/jobs-store/read.ts 的 getCampusFreshStats。彻底解法是物化派生字段（重构项目）。
 //
 // ⚠️ 归属规则必须与 getCampusZone / getCampusCompanyJobs / 分面计数**逐字一致**：
-//    list 里第一个 pattern 命中（不区分大小写子串）者得（%腾讯音乐% 排在 %腾讯% 前，所以
-//    「腾讯音乐 TME」归前者不归后者）。这是第四处用到该规则，任一处漂移都会让卡面计数对不上列表。
+//    对全量清单判、最长的模式独占（lib/must-apply-owner.ts）——「腾讯音乐 TME」归 %腾讯音乐% 不归 %腾讯%，
+//    与用户选没选传媒行业无关。这是第四处用到该规则，任一处漂移都会让卡面计数对不上列表。
+
+import { mustApplyOwnerPicker } from "./must-apply-owner";
 
 export type CampusStatRow = {
   company: string | null;
@@ -30,11 +32,10 @@ export function aggregateCampusFreshStats(
 ): Map<string, CampusFreshStat> {
   const byPattern = new Map<string, CampusFreshStat>();
   for (const c of list) byPattern.set(c.pattern, { campusTotal: 0, internTotal: 0, lastSeenAtMs: null });
+  // 归属与 getCampusZone / 抽屉用同一个函数：对全量清单判，最长的模式独占（京东方不再算进京东）。
+  const pickOwner = mustApplyOwnerPicker(list);
   for (const r of rows) {
-    const companyLower = String(r.company || "").toLowerCase();
-    if (!companyLower) continue;
-    // 第一个命中的 pattern 得（与 getCampusZone 同序同规则）；patterns 是人工策展的互异公司名。
-    const owner = list.find((c) => companyLower.includes(c.pattern.replace(/%/g, "").toLowerCase()));
+    const owner = pickOwner(r.company);
     if (!owner) continue;
     const agg = byPattern.get(owner.pattern);
     if (!agg) continue;

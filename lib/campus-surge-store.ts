@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabaseService";
+import { mustApplyOwnerPicker } from "@/lib/must-apply-owner";
 
 // 「刚开正式批」读侧：取近 N 天判定为开闸（surge）的快照，按必投清单公司归位（key=pattern）。
 //
@@ -34,12 +35,15 @@ export async function getRecentCampusSurges(
     return out;
   }
 
+  const pickOwner = mustApplyOwnerPicker(list);
   for (const c of list) {
     const needle = c.pattern.replace(/%/g, "").toLowerCase();
     if (!needle) continue;
     // 已按 captured_at 倒序，find 命中的即该公司最近一次开闸。
-    // 匹配用 sources.company 含 pattern 关键词（与 campus-sources.ts 的归位口径一致）。
-    const row = (data || []).find((r: any) => String(r.company || "").toLowerCase().includes(needle));
+    // 与 campus-sources.ts 同口径：候选按模式子串取，归属再走独占（京东方的开闸不再挂到京东卡上）。
+    const row = (data || []).find(
+      (r: any) => String(r.company || "").toLowerCase().includes(needle) && pickOwner(r.company)?.pattern === c.pattern,
+    );
     if (!row) continue;
     const atMs = Date.parse(row.captured_at);
     if (Number.isNaN(atMs)) continue;

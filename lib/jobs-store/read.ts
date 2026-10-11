@@ -28,7 +28,8 @@ import {
 } from "@/lib/campus-facets";
 import { classifyJobFunction } from "@/lib/china-keyword-expansion";
 import { buildTsquery } from "@/lib/job-search";
-import { mustApplyPatterns, mustApplyUnion, type MustApplyCompany } from "@/lib/must-apply-list";
+import { mustApplyUnion, type MustApplyCompany } from "@/lib/must-apply-list";
+import { mustApplyOwnerPicker, mustApplyOwnerResolver } from "@/lib/must-apply-owner";
 import { requestSafeCache } from "@/lib/request-safe-cache";
 
 export { ilikeMatcher } from "@/lib/ilike-matcher";
@@ -236,8 +237,8 @@ function brandRollupRules(): BrandRollupRule[] {
  * 结果**逐字节等价**（已用同一 MVCC 快照 live 对拍 1051 家公司，0 差异）：
  * 主聚合里非匹配公司的 rollup 计数本来就全是 0，computeMustApplyCoverage 按 pattern 跨公司求和，
  * 少加一堆 0 不改变结果；每条规则的归属判定仍由 SQL 里原样保留的 ilike 谓词决定，
- * JS 只负责挑「要把哪些公司名送进这条查询」，且用的是与 computeMustApplyCoverage 同一个
- * `ilikeMatcher`（宁可多送几家，也不会漏——多送的公司 rollup 算出来也是 0）。
+ * JS 只负责挑「要把哪些公司名送进这条查询」，用 `ilikeMatcher` 按母公司模式的子串挑
+ * （宁可多送几家，也不会漏——多送的公司 rollup 算出来也是 0）。
  */
 function brandRollupQuery(rules: BrandRollupRule[], companies: string[]): { sql: string; params: unknown[] } {
   const params: unknown[] = [companies];
@@ -282,7 +283,7 @@ function brandRollupQuery(rules: BrandRollupRule[], companies: string[]): { sql:
   };
 }
 
-/** 主聚合已返回的公司里，挑出可能属于某个父公司门户的（与 computeMustApplyCoverage 同一套 ILIKE 语义）。 */
+/** 主聚合已返回的公司里，挑出可能属于某个父公司门户的（ILIKE 语义的子串；直接归属另走独占规则，见 computeMustApplyCoverage）。 */
 function parentPortalCompanies(rules: BrandRollupRule[], companies: Array<string | null>): string[] {
   if (!rules.length) return [];
   const matchers = rules.map((rule) => ilikeMatcher(rule.parentPattern));
@@ -448,7 +449,7 @@ export async function getCompanyActiveAggregates(): Promise<CompanyActiveAggrega
 /**
  * 北极星指标：「必投清单健康覆盖」逐家统计（admin 运营看板）。
  * healthy 谓词与 count_valid_active_jobs() 字节级同口径（active + btrim(summary)≥60）。
- * 先聚合公司，再在 Node 内按 ILIKE 语义匹配，避免每条清单都扫描 active jobs。
+ * 先聚合公司，再在 Node 内按独占归属（lib/must-apply-owner.ts）分到各条清单，避免每条清单都扫描 active jobs。
  */
 export async function getMustApplyCoverage(
   list: MustApplyCompany[],
@@ -468,9 +469,9 @@ export async function getCampusSupplyInputs(
   scope: JobScopeKey = "domestic",
 ): Promise<Array<{ company: string; campusJobs: number; internJobs: number; socialJobs: number }>> {
   const aggregates = await getCompanyActiveAggregates();
-  return list.map(({ name, pattern, aliases }) => {
-    const matchers = mustApplyPatterns({ pattern, aliases }).map(ilikeMatcher);
-    const matches = (company: string) => matchers.some((matched) => matched(company));
+  const ownerOf = mustApplyOwnerResolver(scope, list);
+  return list.map(({ name }) => {
+    const matches = (company: string) => ownerOf(company) === name;
     return aggregates.reduce(
       (total, c) => {
         if (!c.company || !matches(c.company)) return total;
@@ -491,17 +492,21 @@ export async function getCampusSupplyInputs(
  * 2026-09-05 之前两份清单共用不分 scope 的合计，于是海外清单的星巴克显示 1,920 个健康岗
  * （实际全是中国门店岗）、国内清单的松下显示 226 个（实际 18,318 个岗全在海外）。
  * 创始人拍板加过滤：口径变更影响国内 1 家、海外 31 家（见 commit）。
+ *
+ * 📌 2026-10-11 起按「独占归属」数（lib/must-apply-owner.ts，与缺口台账同一份规则）：
+ * 改前是裸子串、一个公司名命中两条清单就各算一遍——海外 ABB 显示 6,600 个健康岗（实际 4 个，
+ * 其余是 AbbVie、雅培），国内京东里混着京东方 1,032 个、京东物流 / 京东科技又被数了第二遍。
  */
 export function computeMustApplyCoverage(
   list: MustApplyCompany[],
   aggregates: CompanyActiveAggregate[],
   scope: JobScopeKey = "domestic",
 ): MustApplyCoverageRow[] {
-  return list.map(({ name, pattern, aliases, parentPattern, brandTokens }) => {
-    // 别名一并参与匹配（壳牌=Shell / 大陆集团=Continental）：库里明明有源有岗、
-    // 北极星却显示 0，会驱动人去重复补源。一行公司命中任一模式只计一次，不会重复累加。
-    const matchers = mustApplyPatterns({ pattern, aliases }).map(ilikeMatcher);
-    const matches = (company: string) => matchers.some((matched) => matched(company));
+  const ownerOf = mustApplyOwnerResolver(scope, list);
+  return list.map(({ name, pattern, parentPattern, brandTokens }) => {
+    // 别名一并参与归属（壳牌=Shell / 大陆集团=Continental）：库里明明有源有岗、
+    // 北极星却显示 0，会驱动人去重复补源。
+    const matches = (company: string) => ownerOf(company) === name;
     const otherScope: JobScopeKey = scope === "domestic" ? "overseas" : "domestic";
     const otherScopeHealthy = aggregates.reduce((sum, company) => (
       company.company && matches(company.company) && company.byScope
@@ -828,7 +833,7 @@ export const CAMPUS_ZONE_ROW_LEVEL_SQL = `
  * 校招专区：按必投清单公司聚合校招/实习岗。
  * SQL 先按公司 + 校招关键词粗筛（见 resolveActiveCompanyNames / CAMPUS_PREFILTER_SQL）再 group by，
  * JS（lib/campus-zone.foldCampusZone）用 campusAdmission 判桶、按归属折叠成每家公司的分面组。
- * 公司归属在 JS 端按 pattern 子串匹配回填（第一个命中者得）。短 TTL 缓存降同实例重复读取；
+ * 公司名先按 pattern 子串取回候选，归属在 JS 端对全量清单判、最长的模式独占（lib/must-apply-owner.ts）。短 TTL 缓存降同实例重复读取；
  * 跨请求复用由调用方（app/campus/page.tsx 的 unstable_cache）负责。
  */
 // ⚠️ 职能分面此前的「第二阶段按需补正文再现算」已于 2026-09-15 移除：职能改读物化列 jobs.job_function
@@ -866,7 +871,7 @@ export async function getCampusZone(list: Array<{ name: string; pattern: string 
         ])
       : [[], []];
     const tFetched = Date.now();
-    const value = foldCampusZone(list, aggregate, rowLevel);
+    const value = foldCampusZone(list, aggregate, rowLevel, mustApplyOwnerPicker(list));
     logCampusTiming("campus-zone", {
       companies: names.length,
       rows: aggregate.length + rowLevel.length,
@@ -977,7 +982,7 @@ async function computeCampusFreshStats(
  * 页面本身只下发筛选/计数用的**聚合分面**（见 app/campus/page.tsx），一行岗位都不下发，
  * 所以展开时必须回库取。与 getCampusZone 共用同一套判定，逐条对齐：
  *   · 同一份粗筛 SQL（CAMPUS_PREFILTER_SQL）
- *   · 同一条归属规则（list 里第一个 pattern 命中者得，`腾讯音乐 TME` 归 %腾讯音乐% 不归 %腾讯%）
+ *   · 同一条归属规则（对全量清单判、最长的模式独占（lib/must-apply-owner.ts），`腾讯音乐 TME` 归 %腾讯音乐% 不归 %腾讯%）
  *   · 同一道准入门（campusAdmission + isCurrentSeasonGradClass）
  * 任一处漂移都会让卡面计数与展开列表对不上，改动务必两边同步。
  *
@@ -1062,11 +1067,11 @@ export async function getCampusCompanyJobs(
   // 归属 + 届别门；NULL-category 行留到后面补正文判桶（极少）。
   const owned: any[] = [];
   const needSummary: any[] = [];
+  // 归属与 getCampusZone 用同一个函数（lib/must-apply-owner.ts）：对全量清单判，最长的模式独占。
+  const pickOwner = mustApplyOwnerPicker(list);
   for (const r of light) {
     if (!r.id || !r.company) continue;
-    const companyLower = String(r.company).toLowerCase();
-    // 归属规则与 getCampusZone 逐字一致：list 里第一个 pattern 命中者得。
-    const owner = list.find((c) => companyLower.includes(c.pattern.replace(/%/g, "").toLowerCase()));
+    const owner = pickOwner(r.company);
     if (!owner || owner.pattern !== target.pattern) continue;
     if (!isCurrentSeasonGradClass(r.grad_class)) continue;
     if (r.recruitment_category == null) needSummary.push(r);
