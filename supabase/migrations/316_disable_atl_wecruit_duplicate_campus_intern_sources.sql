@@ -1,7 +1,12 @@
 -- 316 — 宁德新能源（ATL）：校招 / 实习各登记了两条源（同一个套件挂在两个域名上），停用 wecruit.hotjob.cn 那两条
 --
--- ⚠️ 草稿：等创始人同意后才合 main（push main 即由 migrate.yml 应用到 Supabase）。合完按文末「顺序」处理香港库存量行。
---    前缀取 316：写的时候 314、315 已被另外两个还没合的本地分支占用；合之前再 `ls supabase/migrations` 确认没撞。
+-- 已执行（2026-10-11，创始人同意）：迁移 10:29 UTC 生效（UPDATE 1 + UPDATE 1，回读两条源 enabled=false）；当时没有抓取轮在飞。
+--    存量 10:31~10:32 UTC 经 remove-jobs-by-url-prefix 处理：dry-run 52 / 9，真写 52 / 9。回读香港库：
+--    wecruit.hotjob.cn 校招 52、实习 9 都是 removed；atl.hotjob.cn 校招 52、实习 9 仍是 active。
+--    线上搜索接口按公司「宁德新能源」回 61 个岗、全在 atl.hotjob.cn、岗位号无重复；另外两个带后缀的公司名回 0。
+--    生效后的第一轮抓取（daily-job-crawl 10:33 UTC 开跑）：保留的两条源 success 52/52、1/1，停用的两条没有抓取记录，
+--    wecruit.hotjob.cn 那 61 行仍是 removed。
+--    没做的：指向 wecruit.hotjob.cn 行的 saved 1 条 / ignored 1 条用户操作本打算改指到保留行，写库被权限拦下，待处理。
 --
 -- 现象：香港 jobs 库里宁德新能源的校招 52 个岗、实习 9 个岗各有两行 active（61 对、122 行），一行公司名「宁德新能源」、
 --       另一行「宁德新能源 ATL 校招」/「宁德新能源 ATL 实习」——用户看到两张卡，同一家公司在库里是三个公司名。

@@ -20,6 +20,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 
+import company_profile_resolve
 import db
 import insight_engine as E
 import jobs_db
@@ -84,10 +85,9 @@ def seed_from_sources(sb):
     srcs = db.fetch_all_rows(
         lambda: sb.table("sources").select("company").eq("enabled", True))
     companies = sorted({(s.get("company") or "").strip() for s in srcs if (s.get("company") or "").strip()})
-    existing = db.fetch_all_rows(
-        lambda: sb.table("company_profiles").select("company"))
-    have = {(c.get("company") or "").strip() for c in existing}
-    todo = [c for c in companies if c not in have]
+    # 「有没有画像」按正名 + 别名判（company_profile_resolve），不只比正名：
+    # 源名是某个画像的别名（知乎 Zhihu → 知乎、云尖信息 校招 → 云尖信息）时不许再建一个。
+    todo = company_profile_resolve.unresolved(companies, company_profile_resolve.load_index(sb))
     for i in range(0, len(todo), 100):
         chunk = [{"company": c} for c in todo[i:i + 100]]
         if chunk:
@@ -297,12 +297,8 @@ def fetch_one_company(sb, company):
     if not name:
         return None
     cols = "id,company,aliases,insight_fail_count,t3_fail_count"
-    rows = (sb.table("company_profiles").select(cols).eq("company", name).limit(1).execute().data) or []
-    if rows:
-        return rows[0]
-    sb.table("company_profiles").upsert({"company": name}, on_conflict="company").execute()
-    rows = (sb.table("company_profiles").select(cols).eq("company", name).limit(1).execute().data) or []
-    return rows[0] if rows else None
+    # name 可能是别名（必投清单写「腾讯音乐」、画像叫「腾讯音乐 TME」）：先按正名 + 别名找，找不到才建。
+    return company_profile_resolve.ensure_profile(sb, name, cols)
 
 
 def drain_one_company(sb, company, t3=False):
@@ -637,6 +633,15 @@ def fetch_t3_queue(sb, limit):
     except Exception as exc:  # noqa: BLE001
         print(f"[t3] 读现查台账失败，本轮不按现查信号排序: {type(exc).__name__}")
     try:
+        # 岗位公司名 → 画像正名：正名先占，别名后补。只按正名数的话，岗位挂在别名下的画像
+        # （画像叫「知乎」、岗位公司名是「知乎 Zhihu」）在招数和需求数都是 0，会被排到队尾。
+        owner = {}
+        for row in rows:
+            owner.setdefault(str(row.get("company") or "").strip(), str(row.get("company") or ""))
+        for row in rows:
+            for alias in row.get("aliases") or []:
+                owner.setdefault(str(alias or "").strip(), str(row.get("company") or ""))
+        owner.pop("", None)
         conn = jobs_db.get_conn()
         counts = jobs_db.fetch_all(
             conn,
@@ -648,16 +653,15 @@ def fetch_t3_queue(sb, limit):
             where status = 'active' and company = any(%s)
             group by 1
             """,
-            (demand_job_ids, [str(row.get("company") or "") for row in rows]),
+            (demand_job_ids, list(owner)),
         )
-        active_counts = {
-            str(item.get("company") or ""): int(item.get("active_count") or 0)
-            for item in counts
-        }
-        demand_counts = {
-            str(item.get("company") or ""): int(item.get("demand_count") or 0)
-            for item in counts
-        }
+        active_counts, demand_counts = {}, {}
+        for item in counts:
+            company = owner.get(str(item.get("company") or "").strip())
+            if not company:
+                continue
+            active_counts[company] = active_counts.get(company, 0) + int(item.get("active_count") or 0)
+            demand_counts[company] = demand_counts.get(company, 0) + int(item.get("demand_count") or 0)
         # ⚠️ 必投清单公司**排在最前**（2026-09-04）：洞察库现在只放信息差，而信息差
         # 全靠这条链产出；搜索额度是硬瓶颈（实测每天只够 ~20 家），所以额度必须先花在
         # 用户真正会投的公司上，而不是按在招岗多寡排——在招岗最多的常常是央企批量岗。

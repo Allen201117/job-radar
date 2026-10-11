@@ -274,6 +274,109 @@ checks:
     why: 同一家公司在 Moka 上常有好几个招聘入口（不同届别、老入口和新入口、公司自己的域名）。我们给其中两个入口各建了一条来源时，同一个岗位会在库里出现两份，用户会刷到两张一模一样的卡。9 月 23 日一次清掉了 299 份这样的重复，而原来的告警一份都没报出来——它是按网址长相判的。这条直接数「同一个岗位出现了几份」。东方财富两个校招入口共用 1 个岗位是有意保留的，所以正常上限是 1。
     action: 把这条转给 Claude，让它按点名的两个入口处理：是同一批岗位就停掉一条来源、清掉多出来的那份；本来就是两场不同的招聘（比如不同届别）就登记成已知例外
 
+  # ===== 洞察库公司画像（db: supabase）=====
+  # 2026-10-11 加。全库对拍：1,511 个画像里 136 家公司各有 2~5 个画像，根因是每个建画像的入口只按正名去重。
+  # 合并并堵住入口（crawler/company_profile_resolve.py、lib/insight-profile-store.ts）之后，这两条盯着它别再长回来。
+  # 合并前真库实测（2026-10-11）：第一条 6（字节跳动 / 抖音、大疆 / 大疆创新、京东 / 京东集团、苹果中国 / Apple、
+  # 海尔智家 / 海尔，外加阿里巴巴与蚂蚁集团都登记了别名「蚂蚁」），合并后应为 0。
+  # 「== 0」是结构上该成立的，不是按历史拍的阈值。
+  - id: insights.profile_same_name_pairs
+    name: 洞察库里有几对公司画像用了同一个名字
+    layer: data
+    db: supabase
+    owner: crawler/company_profile_resolve.py
+    sql: >
+      with n as (
+        select id, btrim(company) as name from company_profiles
+        union
+        select p.id, btrim(a) from company_profiles p, unnest(coalesce(p.aliases, '{}')) as a
+        where btrim(a) <> ''
+      )
+      select count(*) from (
+        select a.id, b.id from n a join n b on a.name = b.name and a.id < b.id group by a.id, b.id
+      ) t
+    detail_sql: >
+      with n as (
+        select id, btrim(company) as name from company_profiles
+        union
+        select p.id, btrim(a) from company_profiles p, unnest(coalesce(p.aliases, '{}')) as a
+        where btrim(a) <> ''
+      )
+      select format('「%s」和「%s」都登记了「%s」这个名字', pa.company, pb.company, min(a.name)) as title,
+             a.id::text || ' | ' || b.id::text as key
+      from n a join n b on a.name = b.name and a.id < b.id
+      join company_profiles pa on pa.id = a.id join company_profiles pb on pb.id = b.id
+      group by a.id, b.id, pa.company, pb.company
+      order by pa.company, pb.company limit 30
+    normal: "== 0"
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 洞察库一家公司只该有一个画像，同一家公司的各种叫法登记成它的别名。两个画像用了同一个名字（一个的别名恰好是另一个的正名）时，这个名字下的岗位会被两边各算一遍，洞察也会分散到两个画像上，其中一个往往出不来卡。2026 年 10 月 11 日清过一次，当时有 136 家公司是这样的。
+    action: 把这条转给 Claude，让它按点名的两个画像判断：是同一家就合并成一个，不是同一家就把撞上的那个别名去掉
+
+  # 比上一条宽：名字先去掉招聘渠道后缀（「X 校招」「X 实习」）和中文名后面的英文尾巴（「知乎 Zhihu」），
+  # 再去掉公司后缀，剩下的一样就点名。前两步里只有「渠道后缀」被写进了自动归属
+  # （crawler/bu_extract.profile_name_key）；英文尾巴没有——「沃尔沃 Volvo Cars」和「沃尔沃 Volvo Group」
+  # 是两家公司，自动并会并错，所以这一步只点名、由人判。这一对就是下面 normal 上限 1 的来由。
+  # 合并前真库实测 173，合并后 1（就是沃尔沃这一对）。
+  - id: insights.profile_same_normalized_name_pairs
+    name: 洞察库里有几对公司画像只差后缀或英文尾巴
+    layer: data
+    db: supabase
+    owner: crawler/company_profile_resolve.py
+    sql: >
+      with n as (
+        select id, btrim(company) as name from company_profiles
+        union
+        select p.id, btrim(a) from company_profiles p, unnest(coalesce(p.aliases, '{}')) as a
+        where btrim(a) <> ''
+      ), b as (
+        select id, regexp_replace(regexp_replace(name, '\s+(校招|实习|社招)$', ''),
+                 '^([一-鿿][^A-Za-z]*?)\s+[A-Za-z0-9][A-Za-z0-9 .&''+-]*$', '\1') as base
+        from n
+      ), k as (
+        select distinct id, coalesce(nullif(regexp_replace(
+                 lower(regexp_replace(normalize(base, NFKC), '\s+', '', 'g')),
+                 '(股份有限公司|有限公司|集团|控股|中国|china)+$', ''), ''),
+               lower(regexp_replace(normalize(base, NFKC), '\s+', '', 'g'))) as key
+        from b
+      )
+      select count(*) from (
+        select a.id, b.id from k a join k b on a.key = b.key and a.id < b.id group by a.id, b.id
+      ) t
+    detail_sql: >
+      with n as (
+        select id, btrim(company) as name from company_profiles
+        union
+        select p.id, btrim(a) from company_profiles p, unnest(coalesce(p.aliases, '{}')) as a
+        where btrim(a) <> ''
+      ), b as (
+        select id, regexp_replace(regexp_replace(name, '\s+(校招|实习|社招)$', ''),
+                 '^([一-鿿][^A-Za-z]*?)\s+[A-Za-z0-9][A-Za-z0-9 .&''+-]*$', '\1') as base
+        from n
+      ), k as (
+        select distinct id, coalesce(nullif(regexp_replace(
+                 lower(regexp_replace(normalize(base, NFKC), '\s+', '', 'g')),
+                 '(股份有限公司|有限公司|集团|控股|中国|china)+$', ''), ''),
+               lower(regexp_replace(normalize(base, NFKC), '\s+', '', 'g'))) as key
+        from b
+      )
+      select format('「%s」和「%s」去掉后缀和英文尾巴后是同一个名字%s', pa.company, pb.company,
+                    case when pa.company like '沃尔沃 Volvo%' and pb.company like '沃尔沃 Volvo%'
+                         then '（已知是两家公司）' else '' end) as title,
+             a.id::text || ' | ' || b.id::text as key
+      from k a join k b on a.key = b.key and a.id < b.id
+      join company_profiles pa on pa.id = a.id join company_profiles pb on pb.id = b.id
+      group by a.id, b.id, pa.company, pb.company
+      order by (pa.company like '沃尔沃 Volvo%' and pb.company like '沃尔沃 Volvo%'), pa.company, pb.company limit 30
+    normal: "<= 1"
+    severity: warn
+    covers: []
+    calibrated: false
+    why: 两个画像的名字去掉「校招 / 实习」、去掉中文名后面的英文、再去掉「集团」「有限公司」这类后缀之后一样（比如「知乎」和「知乎 Zhihu」、「京东」和「京东集团」），多半是同一家公司建了两个画像：洞察会分散到两边，其中一个往往出不来卡。也可能真是两家公司——沃尔沃汽车和沃尔沃集团就是，这一对是已知的，所以正常上限是 1。2026 年 10 月 11 日清过一次，当时有 173 对。
+    action: 把这条转给 Claude，让它按点名的两个画像判断：是同一家就合并，不是同一家就登记成已知例外
+
   # ===== 体验层 =====
   # 全部 db: supabase（events / job_actions / auth.users / ops_runs 都在 Supabase）。
   # 口径统一「昨天全天（Asia/Shanghai）」；SQL 已在真库跑通，实测值写在各条注释里

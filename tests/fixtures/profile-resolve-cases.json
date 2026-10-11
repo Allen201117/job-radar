@@ -1,0 +1,262 @@
+{
+  "_说明": "「公司名 → 公司画像」两端共用夹具：crawler/bu_extract.py（build_profile_index / resolve_profile）与 lib/insight-profile-resolve.ts 必须给出同一个答案。profiles 的顺序有意义（按 id 排）。",
+  "profiles": [
+    {
+      "id": "p01",
+      "company": "字节跳动",
+      "aliases": [
+        "字节",
+        "ByteDance",
+        "抖音"
+      ]
+    },
+    {
+      "id": "p02",
+      "company": "抖音",
+      "aliases": []
+    },
+    {
+      "id": "p03",
+      "company": "知乎",
+      "aliases": [
+        "知乎 Zhihu"
+      ]
+    },
+    {
+      "id": "p04",
+      "company": "云尖信息",
+      "aliases": [
+        "云尖信息 校招",
+        "云尖信息 实习"
+      ]
+    },
+    {
+      "id": "p05",
+      "company": "万达集团",
+      "aliases": []
+    },
+    {
+      "id": "p06",
+      "company": "大华集团",
+      "aliases": []
+    },
+    {
+      "id": "p07",
+      "company": "大华股份 Dahua",
+      "aliases": [
+        "浙江大华技术"
+      ]
+    },
+    {
+      "id": "p08",
+      "company": "海天",
+      "aliases": []
+    },
+    {
+      "id": "p09",
+      "company": "海天集团",
+      "aliases": []
+    },
+    {
+      "id": "p10",
+      "company": "Apple",
+      "aliases": [
+        "苹果中国",
+        "苹果"
+      ]
+    },
+    {
+      "id": "p11",
+      "company": "甲公司",
+      "aliases": [
+        "共用别名"
+      ]
+    },
+    {
+      "id": "p12",
+      "company": "乙公司",
+      "aliases": [
+        "共用别名"
+      ]
+    },
+    {
+      "id": "",
+      "company": "没有编号的行",
+      "aliases": []
+    },
+    {
+      "id": "p13",
+      "company": "  ",
+      "aliases": [
+        "只有别名没有正名"
+      ]
+    },
+    {
+      "id": "p14",
+      "company": "某新公司",
+      "aliases": []
+    },
+    {
+      "id": "p15",
+      "company": "只有校招源 校招",
+      "aliases": []
+    },
+    {
+      "id": "p16",
+      "company": "实习僧",
+      "aliases": []
+    },
+    {
+      "id": "p17",
+      "company": "沃尔沃 Volvo Cars",
+      "aliases": []
+    },
+    {
+      "id": "p18",
+      "company": "沃尔沃 Volvo Group",
+      "aliases": []
+    }
+  ],
+  "cases": [
+    {
+      "name": "字节跳动",
+      "expect": "p01",
+      "why": "正名精确"
+    },
+    {
+      "name": "抖音",
+      "expect": "p02",
+      "why": "正名优先于别名：字节跳动的别名里也有「抖音」，但「抖音」自己是另一个画像的正名"
+    },
+    {
+      "name": "ByteDance",
+      "expect": "p01",
+      "why": "别名精确"
+    },
+    {
+      "name": "知乎 Zhihu",
+      "expect": "p03",
+      "why": "别名精确（源名带英文尾巴）"
+    },
+    {
+      "name": "  云尖信息 校招  ",
+      "expect": "p04",
+      "why": "别名精确，首尾空白不算"
+    },
+    {
+      "name": "万达控股集团",
+      "expect": "p05",
+      "why": "归一名唯一：去掉「集团」「控股」后只有一个画像叫这个"
+    },
+    {
+      "name": "大华",
+      "expect": "p06",
+      "why": "归一名唯一：「大华股份 Dahua」归一后不是「大华」"
+    },
+    {
+      "name": "浙江大华技术",
+      "expect": "p07",
+      "why": "别名精确"
+    },
+    {
+      "name": "海天控股",
+      "expect": null,
+      "why": "归一名不唯一（海天 / 海天集团 两个画像都归一成「海天」）→ 不猜"
+    },
+    {
+      "name": "海天",
+      "expect": "p08",
+      "why": "归一名不唯一时，正名精确仍然命中"
+    },
+    {
+      "name": "APPLE",
+      "expect": "p10",
+      "why": "归一名不分大小写"
+    },
+    {
+      "name": "苹果",
+      "expect": "p10",
+      "why": "别名精确"
+    },
+    {
+      "name": "共用别名",
+      "expect": "p11",
+      "why": "两个画像登记了同一个别名：排在前面的得"
+    },
+    {
+      "name": "没有编号的行",
+      "expect": null,
+      "why": "没有 id 的行不进索引"
+    },
+    {
+      "name": "只有别名没有正名",
+      "expect": null,
+      "why": "正名为空的行不进索引"
+    },
+    {
+      "name": "京东方",
+      "expect": null,
+      "why": "库里没有"
+    },
+    {
+      "name": "字节跳动科技",
+      "expect": null,
+      "why": "不做子串匹配"
+    },
+    {
+      "name": "",
+      "expect": null,
+      "why": "空名字"
+    },
+    {
+      "name": "某新公司 校招",
+      "expect": "p14",
+      "why": "招聘渠道后缀不是公司名：归到不带后缀的那个画像"
+    },
+    {
+      "name": "某新公司  实习",
+      "expect": "p14",
+      "why": "同上，后缀前多个空白也算"
+    },
+    {
+      "name": "只有校招源",
+      "expect": "p15",
+      "why": "反方向：画像先按带后缀的名字建了，不带后缀的名字后到，也归它"
+    },
+    {
+      "name": "只有校招源 实习",
+      "expect": "p15",
+      "why": "两个带不同渠道后缀的名字是同一家"
+    },
+    {
+      "name": "云尖信息 社招",
+      "expect": "p04",
+      "why": "正名与两个别名去掉后缀都是同一个画像，归一名仍唯一"
+    },
+    {
+      "name": "某新公司校招",
+      "expect": null,
+      "why": "没有空白隔开的不算渠道后缀"
+    },
+    {
+      "name": "实习僧",
+      "expect": "p16",
+      "why": "名字本身带「实习」两个字的不动"
+    },
+    {
+      "name": "实习",
+      "expect": null,
+      "why": "只有后缀没有公司名"
+    },
+    {
+      "name": "沃尔沃",
+      "expect": null,
+      "why": "不折叠英文尾巴：两家都叫沃尔沃的不同公司，不猜"
+    },
+    {
+      "name": "某新公司 Mou",
+      "expect": null,
+      "why": "不折叠英文尾巴（靠别名登记 + 每日体检点名，由人判）"
+    }
+  ]
+}

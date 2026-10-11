@@ -26,6 +26,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import bu_extract
+import company_profile_resolve
 import db
 import job_function
 import jobs_db
@@ -313,7 +314,8 @@ def fetch_subjects(supabase) -> list[dict]:
 
 
 def fetch_company_names(supabase) -> dict:
-    """company_profiles.id → 用于匹配 jobs.company 的名字集合（正名 + 别名）。"""
+    """company_profiles.id → [正名, *别名]。只用来取展示名和按 --company 选公司；
+    **取岗不用它**，取岗用 fetch_owned_job_companies（见那里的说明）。"""
     out = {}
     for row in db.fetch_all_rows(
         lambda: supabase.table("company_profiles").select("id,company,aliases")
@@ -326,9 +328,31 @@ def fetch_company_names(supabase) -> dict:
     return out
 
 
+def fetch_owned_job_companies(supabase, conn) -> dict:
+    """company_profiles.id → 归它的岗位公司名（jobs.company 原文）。每个岗位公司名只归一个画像。
+
+    ❌ 旧实现按「正名 + 别名」直接 `company = any(...)` 取岗：一个画像的别名恰好是另一个画像的正名时，
+       同一批岗两边各算一遍。2026-10-11 实测字节跳动（别名含「抖音」，而「抖音」另有画像）被算成
+       28,632 岗，bu_extract 给它的主体记的是 20,177——卡面在招数和按它算出来的城市 / 职能占比不是同一批岗。
+    ✅ 归属不另写一份：用 bu_extract 给岗位认画像的那一套（正名精确 → 别名精确 → 归一名唯一），
+       先把在招的岗位公司名逐个判给一个画像，再按名字取岗。两个模块从此数的是同一批岗。
+    """
+    index = company_profile_resolve.load_index(supabase)
+    owned: dict[str, list[str]] = {}
+    for row in jobs_db.fetch_all(
+        conn, "select company from jobs where status = 'active' group by company", ()
+    ):
+        profile = company_profile_resolve.resolve(row.get("company"), index)
+        if profile:
+            owned.setdefault(profile["id"], []).append(row["company"])
+    return owned
+
+
 def fetch_jobs_for_company(conn, names: list[str]) -> list[dict]:
     """一次取一家公司的在招岗位。按公司分批而不是一次拉全库：
     39 万行 × 7 列常驻内存没有必要，且一家公司出错不该拖垮整轮。"""
+    if not names:
+        return []
     sql = (
         f"select {', '.join(JOB_COLUMNS)} from jobs "
         "where status = 'active' and company = any(%s)"
@@ -523,11 +547,13 @@ def main():
     holding_companies = 0
     conn = jobs_db.get_conn()
     try:
+        # 归属取不到就整轮失败（抛出去）：退回按别名取岗会悄悄回到「一批岗两边各算一遍」。
+        owned = fetch_owned_job_companies(supabase, conn)
         for company_id in company_ids:
             company_subjects = by_company[company_id]
             display = names_by_company[company_id][0]
             try:
-                jobs = fetch_jobs_for_company(conn, names_by_company[company_id])
+                jobs = fetch_jobs_for_company(conn, owned.get(company_id, []))
                 metrics_count["companies_scanned"] += 1
                 holding_companies += holds_active_items(company_subjects, existing_items)
                 if not jobs:

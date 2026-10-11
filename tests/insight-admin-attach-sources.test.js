@@ -73,6 +73,10 @@ function loadAdminRoute(service) {
   return loadRoute("app/api/insights/admin/route.ts", {
     "@/lib/apiAuth": { requireAdmin: async () => ({ user: ADMIN }) },
     "@/lib/supabaseService": { createServiceClient: () => service },
+    // 建画像的公共入口：真实实现要整表读画像，这里的假客户端不支持，按「已有画像」短路。
+    "@/lib/insight-profile-store": {
+      ensureCompanyProfile: async () => ({ id: "company-1", company: "测试公司", created: false }),
+    },
     "@/lib/insight-verification": {
       evaluateInsight: () => ({ displayable: true, failure_reason: null }),
       passesDeidentifiedGate: () => true,
