@@ -53,10 +53,23 @@ test("P1-D: url 拼音路径 + 源名信号补全校招/实习（治 59% 空 job
   assert.equal(recruitmentCategory({ title: "电气工程师", jd_url: "https://x.com/zp/xiaozhao/9" }), "校招");
   // jd_url 英文路径（已支持，回归确认）
   assert.equal(recruitmentCategory({ title: "软件工程师", jd_url: "https://x.com/campus/job/1" }), "校招");
-  // 源/公司名显式标注（如库里的"华润电力 CR Power 校招"）
-  assert.equal(recruitmentCategory({ title: "电气工程师", company: "华润电力 CR Power 校招" }), "校招");
   // 回归：普通公司/岗位不被误判
   assert.equal(recruitmentCategory({ title: "后端开发", company: "字节跳动" }), "社招");
+});
+
+test("公司名不是招聘类型信号（2026-10-11 拆层6）：名字里带「校招 / 实习」也不改判，也不算「类型明确」", () => {
+  // 原层6 会把这三行判成 校招 / 实习 / 实习。源名已不带渠道后缀（迁移 320），公司名里再出现这两个字只会是公司自己的名字。
+  for (const company of ["华润电力 CR Power 校招", "TCL 实习", "实习僧", "神州信息—AI实习生", "某某校园招聘服务有限公司"]) {
+    assert.equal(recruitmentCategory({ title: "电气工程师", company }), "社招", company);
+    assert.equal(hasExplicitRecruitmentType({ title: "电气工程师", company }), false, company);
+  }
+  // 反方向：别的层照常起作用，公司名带不带这两个字结果一样
+  for (const company of ["TCL", "TCL 校招"]) {
+    const url = "https://wecruit.hotjob.cn/SUx/pb/posDetail.html?postId=1&postType=campus";
+    assert.equal(recruitmentCategory({ title: "硬件工程师", company, jd_url: url }), "校招");
+    assert.equal(recruitmentCategory({ title: "硬件工程师实习生", company }), "实习");
+    assert.equal(hasExplicitRecruitmentType({ title: "硬件工程师", company, jd_url: url }), true);
+  }
 });
 
 test("硬门：明确要求 ≥2 年经验 → 强制社招（治『社招要3年经验却被标校招』）", () => {

@@ -19,12 +19,17 @@
 import argparse
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 import normalizer  # noqa: E402
 from run import ADAPTERS  # noqa: E402
+
+# 源名末尾的招聘渠道后缀。与 bu_extract._CHANNEL_SUFFIX_RE、lib/source-adapters.ts 逐字相同
+# （tests/source-adapters.test.js 对拍四处）。这里只用来拒绝往迁移里写带后缀的源名，见 emit_sql。
+_CHANNEL_SUFFIX_RE = re.compile(r"\s+(?:校招|实习|社招)$")
 
 # httpx 类（无需浏览器，探活便宜）
 _HTTPX_ADAPTERS = {
@@ -397,6 +402,11 @@ def emit_sql(prefix: str, passed: list):
         f"-- {prefix} — 扩源（探活器 probe.py live 探活通过，仅含真返回岗位的源）",
         "-- 带 segment(模块)+industry(行业)。Idempotent: guarded by source_url.\n",
     ]
+    # 候选清单里的公司名原样进迁移、再原样成为岗位公司名。2026-06 的探活批次就是这么把「X 校招」「X 实习」
+    # 写进 46 条源的（迁移 320 改回来了）。渠道由 sources.board 按 (adapter, url) 自动识别，不写进公司名。
+    bad = [c["company"] for c in passed if _CHANNEL_SUFFIX_RE.search(str(c.get("company") or "").strip())]
+    if bad:
+        raise ValueError(f"候选公司名带招聘渠道后缀，去掉「校招 / 实习 / 社招」再出迁移：{bad}")
     for c in passed:
         cn = c.get("_china", 0)
         cn_txt = f"在华 {cn} 岗" if cn else f"{c['_valid']} 岗"
