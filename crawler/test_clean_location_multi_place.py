@@ -5,6 +5,7 @@ Moka「市 省·市」），不是编的。改前这些串被 normalize_city 按
 """
 import unittest
 
+import geo
 import normalizer
 from adapters.base import RawJob
 
@@ -78,10 +79,34 @@ class MultiPlaceLocationTest(unittest.TestCase):
         for raw in ("北京市 广东·深圳市 上海市", "吉林·长春市 辽宁·沈阳市", "长春市、大庆市、哈尔滨市、吉林市",
                     "成都市,拉萨市,阿里地区,阿坝藏族羌族自治州,海南藏族自治州,兴安盟", "北京市,河北省",
                     "天津市-东丽区,惠州市,珠海市", "Hong Kong Shenzhen, Guangdong", "中国香港 新加坡 山东·青岛市",
-                    "辽宁省朝阳市、北京市", "广东省·深圳市", "厦门市-思明区", "全国多地"):
+                    "辽宁省朝阳市、北京市", "辽宁·朝阳 北京市", "广东省·深圳市", "厦门市-思明区", "全国多地"):
             with self.subTest(raw=raw):
                 once = normalizer.clean_location(raw)
                 self.assertEqual(normalizer.clean_location(once), once)
+
+    def test_bare_ambiguous_name_after_its_province_keeps_the_province(self):
+        # 「朝阳」裸写只在前面刚写过辽宁时才认；写出去也得带着省，否则再清洗一遍它就认不回来了。
+        once = normalizer.clean_location("辽宁·朝阳 北京市")
+        self.assertEqual(once, "辽宁朝阳/北京")
+        self.assertEqual(normalizer.clean_location(once), once)
+        self.assertEqual(normalizer.clean_location("北京市-朝阳 上海市"), "北京/上海")   # 这个朝阳是北京的区
+
+    def test_street_or_landmark_named_after_a_city_is_not_a_second_place(self):
+        # 门牌地址里的地名：「中山园路」「广安门」「南京西路 / Nanjing Xi Lu」。
+        for raw, expected in (
+            ("上海市徐汇区中山园路、北京市", "上海/北京"),
+            ("北京市西城区广安门,上海市", "北京/上海"),
+            ("上海市中山公园 北京市", "上海/北京"),
+            ("1266 Nanjing Xi Lu, Shanghai", "上海"),
+            ("Guangzhou Dadao, Shenzhen / Shanghai", "深圳/上海"),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(normalizer.clean_location(raw), expected)
+
+    def test_city_after_an_autonomous_region_name_is_still_found(self):
+        self.assertEqual(normalizer.clean_location("广西壮族自治区南宁市、广东省深圳市"), "南宁/深圳")
+        self.assertEqual(normalizer.clean_location("新疆维吾尔自治区乌鲁木齐市,北京市"), "乌鲁木齐市/北京")
+        self.assertEqual(normalizer.clean_location("中国上海、中国香港"), "上海/香港")
 
     def test_jilin_city_is_a_city_not_the_province(self):
         # 吉林省与吉林市同名：带「市」的是城市。当成省的话，旁边有长春（本省城市）它就被当作上下级吞掉。
@@ -128,6 +153,34 @@ class MultiPlaceLocationTest(unittest.TestCase):
             with self.subTest(raw=raw):
                 old_city = normalizer.normalize_city(raw)
                 self.assertIn(old_city, normalizer.clean_location(raw).split("/"))
+
+
+class LocationCnPlacesTest(unittest.TestCase):
+    """geo.location_cn_places：认哪些、不认哪些（多认一个城市 = 把岗位推给不在那里的人）。"""
+
+    def _names(self, text):
+        return [(name, written) for _pos, name, _province, _is_province, written in geo.location_cn_places(text)]
+
+    def test_recognised_with_the_form_it_was_written_in(self):
+        self.assertEqual(self._names("广东省深圳市南山区"), [("广东", "广东"), ("深圳", "深圳市")])
+        self.assertEqual(self._names("江苏南京"), [("江苏", "江苏"), ("南京", "南京")])
+        self.assertEqual(self._names("辽宁·朝阳"), [("辽宁", "辽宁"), ("朝阳", "辽宁朝阳")])
+        self.assertEqual(self._names("阿坝藏族羌族自治州"), [("阿坝", "阿坝藏族羌族自治州")])
+        self.assertEqual(self._names("吉林省吉林市"), [("吉林", "吉林"), ("吉林", "吉林市")])
+
+    def test_not_recognised(self):
+        for text, expected in (
+            ("江苏济南", ["江苏"]),               # 省名紧贴别省的城市
+            ("兴安县", []),                       # 广西的县，不是内蒙古兴安盟
+            ("南京东路", []),
+            ("大连市-中山区", ["大连"]),
+            ("北京·朝阳", ["北京"]),
+            ("辽宁·沈阳 朝阳", ["辽宁", "沈阳"]),   # 省名隔了一个城市之后，裸写的朝阳不再算它的
+            ("上海市徐汇区中山园路", ["上海"]),
+            ("苏州市昆山市", ["苏州"]),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual([name for name, _ in self._names(text)], expected)
 
 
 class MultiPlaceNormalizeTest(unittest.TestCase):

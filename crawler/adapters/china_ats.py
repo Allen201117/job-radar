@@ -183,11 +183,6 @@ _MOKA_OTHER_OVERSEAS = "海外其他"
 # ⚠️「台湾省」不在此列：它必须照常写出去，才会被出口的台湾红线拒收（normalizer.validate_job_quality）。
 _MOKA_VAGUE_PLACES = frozenset({"中国", "全国", "china", "prc", "cn", "greater china", _MOKA_OTHER_OVERSEAS,
                                 *(name for name in TITLE_CITY_PROVINCE_NAMES if not name.startswith("台湾"))})
-# 多地并列的地点行（「北京市 广东·深圳市 上海市」）只在入库清洗不丢地点时才写：读侧地点对不上是硬拒，
-# 丢掉的那个城市的用户在今日推荐里就看不到这个岗；不写地点它至少还是「城市未知」，标题里带城市的还能由标题兜底。
-# 清洗（normalizer.clean_location）2026-10-11 起逐个城市折成「北京/深圳/上海」，所以国内城市并列的行都能写了；
-# 仍然不写的是「等N个地点」的截断行，和清洗会弄丢其中某个国内城市的行。
-# 判断见 _survives_location_cleaning：它直接问清洗的结果，不自己另猜一遍。
 
 
 def _first_line(exc: BaseException, limit: int = 240) -> str:
@@ -325,7 +320,13 @@ def _moka_places(line: str) -> Optional[List[str]]:
 
 
 def _survives_location_cleaning(line: str, places: List[str]) -> bool:
-    """这一行地点写进库之后，页面上列的每个地点是不是都还匹配得上。"""
+    """这一行地点写进库之后，页面上列的每个国内城市是不是都还匹配得上。
+
+    多地并列的地点行（「北京市 广东·深圳市 上海市」）只在入库清洗不丢城市时才写：读侧地点对不上是硬拒，
+    丢掉的那个城市的用户在今日推荐里就看不到这个岗；不写地点它至少还是「城市未知」，标题里带城市的还能由标题兜底。
+    清洗（normalizer.clean_location）2026-10-11 起逐个城市折成「北京/深圳/上海」，所以国内城市并列的行都能写了；
+    仍然不写的是「等N个地点」的截断行，和清洗会弄丢其中某个国内城市的行。这里直接问清洗的结果，不自己另猜一遍。
+    """
     if _MOKA_MORE_PLACES_RE.search(line):
         # 「…等8个地点」只列了前 3 个，没列出来的城市不知道是哪几个：写进去，那几个城市的用户就被硬拒了。
         return False
@@ -335,17 +336,17 @@ def _survives_location_cleaning(line: str, places: List[str]) -> bool:
     cleaned = normalizer.clean_location(line)
     if cleaned == re.sub(r"\s+", " ", line).strip():
         return True                       # 行里没有别名表里的城市：整行原样入库
-    kept = normalizer.location_place_keys(cleaned)
-    any_kept = False
+    # 整行一起认、再和清洗结果比：省和它自己的城市并列（「广东 广东·深圳市」）时，省是被城市盖住的上级，
+    # 逐个地点单独认会把它当成一个丢了的地点。
+    if not normalizer.location_place_keys(cleaned).issuperset(normalizer.location_place_keys(line)):
+        return False                      # 清洗把行里的某个城市弄丢了（折错城市的那类，见 clean_location）
+    any_named = False
     for place in places:
-        named = normalizer.location_place_keys(place)
-        if named:
-            if not kept.issuperset(named):
-                return False              # 清洗把这个城市弄丢了
-            any_kept = True
+        if normalizer.location_place_keys(place):
+            any_named = True
         elif not _beyond_location_column(place):
             return False
-    return any_kept
+    return any_named
 
 
 def _beyond_location_column(place: str) -> bool:

@@ -275,12 +275,13 @@ _LATIN_CITY_ALIASES = {
     alias: city for alias, city in CITY_ALIASES.items()
     if alias.isascii() and city not in _NON_PLACE_ALIAS_TARGETS
 }
-# 拼音按整词认（"xian" 不认 "Xiangyang"），后面跟着 Road / Rd / Street… 的是路名不是城市
-# （workday live：上海的门牌地址「…, West, Nanjing, Road, …」）。多认一个城市是把岗位推给不在那里的人，
-# 所以比 normalize_city 的子串严。
+# 拼音按整词认（"xian" 不认 "Xiangyang"），后面跟着 Road / Rd / Street / Lu / Dadao… 的是路名不是城市
+# （workday live：上海的门牌地址「…, West, Nanjing, Road, …」；拼音写法「Nanjing Xi Lu」）。
+# 多认一个城市是把岗位推给不在那里的人，所以比 normalize_city 的子串严。
 _LATIN_CITY_RE = re.compile(
     r"(?<![a-z])(?:" + "|".join(re.escape(a) for a in sorted(_LATIN_CITY_ALIASES, key=len, reverse=True)) + r")(?![a-z])"
-    r"(?!(?:[\s,]+(?:east|west|north|south|middle|central|e|w|n|s))?[\s,]+(?:road|rd|street|st|avenue|ave|boulevard|blvd|lu)(?![a-z]))"
+    r"(?!(?:[\s,]+(?:east|west|north|south|middle|central|e|w|n|s|dong|xi|nan|bei|zhong))?"
+    r"[\s,]+(?:road|rd|street|st|avenue|ave|boulevard|blvd|lu|dadao|jie|dajie)(?![a-z]))"
 )
 # 别名表里、省-地级映射表外的中文城市（新加坡）。
 _OFF_GAZETTEER_CITIES = tuple(sorted({
@@ -398,6 +399,10 @@ def join_places(names) -> Optional[str]:
     if not seen:
         return None
     if len(seen) == 1:
+        return seen[0]
+    # 每个名字要么清洗认得出，要么至少判得出国家：都不是的（部门名、台湾词表刻意不收的裸「台中」）
+    # 在「列表里没有别名表城市 → 清洗原样保留」的情况下会原样进库。
+    if not all(location_place_keys(name) or derive_country_code(name) for name in seen):
         return seen[0]
     joined = "、".join(seen)
     if not keeps_every_place(joined, seen):

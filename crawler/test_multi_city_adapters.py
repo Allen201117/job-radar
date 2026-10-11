@@ -49,6 +49,12 @@ class JoinPlacesTest(unittest.TestCase):
         self.assertEqual(normalizer.join_places(["北京", "香港"]), "北京、香港")
         self.assertEqual(normalizer.join_places(["上海", "新加坡"]), "上海、新加坡")
 
+    def test_falls_back_when_a_name_is_neither_a_known_place_nor_a_known_country(self):
+        # 列表里都不是别名表城市时清洗是原样保留，认不出的词会原样进库：裸写的「台中」（台湾词表刻意不收）、部门名。
+        self.assertEqual(normalizer.join_places(["保定", "台中"]), "保定")
+        self.assertEqual(normalizer.join_places(["保定", "研发中心"]), "保定")
+        self.assertEqual(normalizer.join_places(["廊坊", "乌兰察布", "中卫"]), "廊坊、乌兰察布、中卫")
+
     def test_city_name_with_a_trailing_word_still_counts_as_that_city(self):
         # 腾讯校招的写法「深圳总部 北京 上海」：段首是城市名就认。
         self.assertEqual(normalizer.clean_location(normalizer.join_places(["深圳总部", "北京", "上海"])), "深圳/北京/上海")

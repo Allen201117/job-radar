@@ -403,8 +403,21 @@ function locationMatchesTarget(jobLocation: string | null | undefined, target: s
   // （cityMatchTokens）。2026-10-11 前这里比的是 normalizeChinaCity(location) === normalizeChinaCity(target)：
   // location 列了多个城市（「北京/深圳/上海」）时 normalizeChinaCity 只挑别名表里最靠前的那个，其余城市拿不到这 20 分。
   // 城市群目标（长三角…）维持改前口径，只认上面的字面命中。
-  if ((expandChinaCityTargets(rawTarget) as string[]).length !== 1) return false;
-  return (cityMatchTokens(rawTarget) as string[]).some((token) => hay.includes(token));
+  const tokens = cityTargetTokens(rawTarget);
+  return tokens ? tokens.some((token) => hay.includes(token)) : false;
+}
+
+// 目标城市 → 它的全部别名词（城市群目标是 null）。纯函数、按原词缓存：scoreJob 对每个岗位的每个目标都要问一遍，
+// 而 cityMatchTokens 每次都扫整张别名表。
+const cityTokenCache = new Map<string, string[] | null>();
+function cityTargetTokens(rawTarget: string): string[] | null {
+  let tokens = cityTokenCache.get(rawTarget);
+  if (tokens === undefined) {
+    tokens = (expandChinaCityTargets(rawTarget) as string[]).length === 1 ? (cityMatchTokens(rawTarget) as string[]) : null;
+    if (cityTokenCache.size > 500) cityTokenCache.clear();
+    cityTokenCache.set(rawTarget, tokens);
+  }
+  return tokens;
 }
 
 function uniqueStrings(values: string[]): string[] {

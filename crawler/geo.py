@@ -1271,6 +1271,15 @@ def cn_province_prefectures():
     return _load_province_index()[3]
 
 
+def _place_tail_blocked(name: str, rest: str, county_collisions) -> bool:
+    """地级名后面跟着这些就不是那个地级市：区（「中山区」，「区域」除外）、与外省地级名重名的县、路 / 街。"""
+    if rest.startswith("区") and not rest.startswith("区域"):
+        return True
+    if rest.startswith("县") and name in county_collisions:
+        return True
+    return bool(_STREET_AFTER_PLACE_RE.match(rest))
+
+
 def _segment_province(seg: str):
     place_province, by_head, county_collisions, _ = _load_province_index()
     for i in range(len(seg)):
@@ -1279,12 +1288,7 @@ def _segment_province(seg: str):
         name = next((n for n in by_head.get(seg[i], ()) if seg.startswith(n, i)), None)
         if name is None:
             continue
-        rest = seg[i + len(name):]
-        if rest.startswith("区") and not rest.startswith("区域"):
-            continue
-        if rest.startswith("县") and name in county_collisions:
-            continue
-        if _STREET_AFTER_PLACE_RE.match(rest):
+        if _place_tail_blocked(name, seg[i + len(name):], county_collisions):
             continue
         return place_province[name]
     return None
@@ -1306,18 +1310,15 @@ def location_provinces(location: Optional[str]) -> list:
 #
 # 与 _segment_province 的差别：那边每段只要第一个地名所在的省，这里要**每一个**地名和它出现的位置。
 # 认法偏严——多认一个城市 = 把岗位推给不在那里的人，少认一个只是维持改前的样子：
-#   · 起点同 _segment_province：段首，或紧跟在 省/市/州/盟/区/县/旗/国 后面；尾巴上的三条守卫也相同
+#   · 起点比 _segment_province 窄：段首，或紧跟在「省 / 自治区 / 特别行政区 / 国」后面（「广东省深圳市」「中国上海」）。
+#     市 / 区 / 县后面的不认——那里出现的地级名几乎都是门牌地址（「上海市徐汇区中山园路」「北京市西城区广安门」
+#     「上海市中山公园」），不是并列的第二个城市。尾巴上的三条守卫与 _segment_province 是同一份
 #     （「大连市-中山区」的中山、「兴安县」、「南京东路」都不是那个地级市）。
 #   · 省名后面紧贴本省城市也认（「江苏南京」「广东深圳」），紧贴别省的不认。
 #   · 裸写多半不是地名的那几个名字（朝阳 / 东方 / 阿里…）要带「市 / 州 / 地区」后缀，或者前面刚写过它的省
 #     （「辽宁·朝阳」）：「北京-朝阳」的朝阳是区。
 # ---------------------------------------------------------------------------
-def _place_tail_blocked(name: str, rest: str, county_collisions) -> bool:
-    if rest.startswith("区") and not rest.startswith("区域"):
-        return True
-    if rest.startswith("县") and name in county_collisions:
-        return True
-    return bool(_STREET_AFTER_PLACE_RE.match(rest))
+_PLACE_START_AFTER = ("省", "自治区", "特别行政区", "国")
 
 
 def cn_place_province(name: Optional[str]) -> Optional[str]:
@@ -1344,7 +1345,7 @@ def location_cn_places(location: Optional[str]) -> list:
         base, start = start, (sep.end() if sep else len(text))
         i, glued = 0, None          # glued = 刚认出的省名正紧贴在当前位置前面
         while i < len(seg):
-            at_boundary = i == 0 or seg[i - 1] in _PLACE_BOUNDARY_BEFORE
+            at_boundary = i == 0 or seg.endswith(_PLACE_START_AFTER, 0, i)
             name = None
             if at_boundary or glued:
                 name = next((n for n in by_head.get(seg[i], ()) if seg.startswith(n, i)), None)
@@ -1364,7 +1365,10 @@ def location_cn_places(location: Optional[str]) -> list:
                 i += 1
                 continue
             tail = None if is_province else _PLACE_WRITTEN_TAIL_RE.match(rest)
-            hits.append((base + i, name, province, is_province, name + (tail.group(0) if tail else "")))
+            written = name + (tail.group(0) if tail else "")
+            if name in _TITLE_CITY_SUFFIX_ONLY_SET and not tail:
+                written = province + name     # 「辽宁·朝阳」→ 辽宁朝阳：裸写的朝阳离了省名就认不回来
+            hits.append((base + i, name, province, is_province, written))
             i += len(name)
             last_province = glued = province if is_province else None
     return hits

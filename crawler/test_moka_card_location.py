@@ -201,6 +201,13 @@ class MokaMultiPlaceTest(unittest.TestCase):
                 self.assertEqual(self._location(line), line)
                 self.assertEqual(normalizer.clean_location(line), stored)
 
+    def test_province_listed_next_to_its_own_city_does_not_block_the_line(self):
+        # 「广东 广东·深圳市」：清洗把省当成深圳的上级吞掉是对的，不算丢了一个地点（12 字以内的这类行改前也一直在写）。
+        for line, stored in (("广东 广东·深圳市", "深圳"), ("湖北 湖北·武汉市 上海市", "武汉/上海")):
+            with self.subTest(line=line):
+                self.assertEqual(self._location(line), line)
+                self.assertEqual(normalizer.clean_location(line), stored)
+
     def test_not_written_when_cleaning_would_lose_a_listed_city(self):
         # 清洗把「牡丹江市·西安区」折成西安（折错的存量问题，见 normalizer.clean_location）：这时沈阳、牡丹江都不在结果里。
         line = "黑龙江·牡丹江市·西安区 辽宁·沈阳市"
