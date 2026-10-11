@@ -1,6 +1,6 @@
 -- 314 — 被两道门拦下的 19 条 hotjob 源逐家复核：登记错套件的改指已发布的套件，对方关站 / 只剩手机版的停用并换源
 --
--- ⚠️ 草稿：等创始人同意后才合 main（push main 即由 migrate.yml 应用到 Supabase）。合之前先按文末「顺序」处理香港库存量行。
+-- 创始人 2026-10-11 同意。⚠️ 合 main 之前必须先按文末「顺序」处理香港库存量行（push main 即由 migrate.yml 应用到 Supabase）。
 --
 -- 现象：这 19 条启用中的源最近一轮 crawl_runs 都是 skipped，error_message 是
 --       「wecruit portal does not exist」（门 1，12 条）或「wecruit channel not published」（门 2，7 条），多数已持续一个多月。
@@ -62,12 +62,15 @@
 -- ④ 库里没有任何行已经在这些新地址下（香港库按套件号 / 门户前缀查，0 行）。
 --
 -- ── 顺序（存量在香港 jobs 库，都不是本迁移能做的）──
--- 1) 先把香港库里「这些源名下 + removed + 旧套件链接 + 岗位号今天仍在新列表里」的行换成新套件号
---    （只换 jd_url / apply_url 里的套件号）：中信 154、凌志 73+12、和睦家 222+11、赢家 38、ATL 144、歌尔 365、荣耀 362，
---    共 1,381 行。真库试算（事务回滚）：1,381 行全部仍符合条件，换完不撞任何已有链接。
+-- 1) 先把香港库里这些源名下的 removed 行换成新套件号（只换 jd_url / apply_url 里的套件号），走
+--    rewrite-jd-url-prefix 工作流的 status=removed（按「公司 + 旧前缀」圈行，9 组）：
+--    中信 164、凌志 73 + 校招 13、和睦家 236 + 校招 11、赢家 40、宁德新能源 148、歌尔 410、荣耀 411，共 1,506 行；
+--    其中 1,381 行的岗位号今天仍在新列表里，另外 125 行的岗已不在列表（换完仍是 removed、没人看得见）。
+--    CI dry-run（2026-10-11）：9 组行数如上、冲突 0；圈到的都是要换的那个渠道
+--    （宁德新能源同名同前缀下的校招 / 实习行都是 active，不在范围内）。
 --    这样首轮抓取按 canonical 命中旧行、翻回 active 并保留 6~8 月的首见时间；反过来这些岗会以新行入库、首见时间变成当天。
---    其余 removed 行（岗位已不在列表）不动。
--- 2) 新城控股校招名下还有 1 行 active（末见 2026-09-09，链接现在打开是「系统正在维护中」）：标 removed。
+-- 2) 新城控股校招名下还有 1 行 active（末见 2026-09-09，链接现在打开是「系统正在维护中」）：
+--    走 remove-jobs-by-url-prefix 工作流标 removed（dry-run：1 行）。
 -- 3) 再合本迁移。合之前看一眼有没有正在跑的抓取轮；合完回读每条源的 crawl_runs。
 -- 可逆：source_url / company / enabled / notes 改回原值、删掉新增的 5 行即可。幂等：update 都是 id + 旧值双重限定，
 -- insert 带 not exists。不写 board 列（generated）；segment / industry / industry_group / ownership / regions 不动。
