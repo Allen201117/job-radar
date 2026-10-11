@@ -41,6 +41,10 @@ test("工作经验：已解析年限按区间匹配，解析不出只可进入�
   assert.equal(matchesExperienceBand(job({ title: "行政专员", experience: "经验不限" }), "0-3"), false);
   assert.equal(matchesExperienceBand(job({ title: "行政专员", experience: "经验不限" }), "fresh"), true);
   assert.equal(matchesExperienceBand(job({ experience: "10年以上经验" }), "10+"), true);
+  // 年限写成中文数字的岗（全库约 8,100 个）此前读不出年限，一律落进「应届无经验」
+  const cn = job({ title: "区域销售", summary: "三年以上医疗器械销售经验" });
+  assert.equal(matchesExperienceBand(cn, "3-5"), true);
+  assert.equal(matchesExperienceBand(cn, "fresh"), false);
 });
 
 test("发布时间：空值与窗口外岗位不通过，窗口内岗位通过", () => {
