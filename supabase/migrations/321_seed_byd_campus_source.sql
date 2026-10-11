@@ -1,4 +1,4 @@
--- 320 — 比亚迪校招门户：job.byd.com「校园招聘」（应届生 + 实习生），adapter = byd_campus
+-- 321 — 比亚迪校招门户：job.byd.com「校园招聘」（应届生 + 实习生），adapter = byd_campus
 --
 -- 为什么：比亚迪在库里只有社招那一条源（#/social/socialMainPageSocial）和国聘一条，必投缺口台账
 -- campus_channel = missing、campus_jobs_recent = 0。官网校招首页自己写着「比亚迪2027届全球校园招聘正式启动！」
