@@ -551,6 +551,19 @@ test("两个展示面用同一份 label + basis，不许任一处把依据拼回
   }
 });
 
+test("卡面在招数为 0 时不显示「在招 N 个岗位」这一行", () => {
+  // 0 只说明岗位库里这个名字下没归到岗，分不清「真不招了」和「岗挂在另一个名字的画像下」，
+  // 所以不许写「在招 0 个岗位」（创始人 2026-10-11 定）。
+  const src = fs.readFileSync(path.join(__dirname, "..", "app", "insights", "insights-client.tsx"), "utf8");
+  const flat = src.replace(/\s/g, "");
+  assert.ok(
+    flat.includes("{subject.job_count>0&&(<Linkhref={jobsHref}"),
+    "「在招 N 个岗位」的链接必须包在 subject.job_count > 0 的条件里",
+  );
+  // 整个文件里这句文案只许出现在那一个条件分支内。
+  assert.equal(src.split("在招 {subject.job_count} 个岗位").length - 1, 1);
+});
+
 test("主题标签同样只有类型名：档位取值不许进标签", () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "app", "insights", "insights-client.tsx"), "utf8");
   // 档位取值（准时下班 / 996 …）来自 GRADE_LABEL；页面一旦引它就是又拼回标签了。
