@@ -384,5 +384,67 @@ class WtProbeCompanyVerifyTest(unittest.TestCase):
         self.assertIn("伊利招聘官网", r["note"])
 
 
+def _feishu_home(title="", tenant="", keywords="", description=""):
+    """飞书门户首页的最小形状（取自真实页面：<title> 可以没有，租户名在内嵌 JSON 里）。"""
+    head = f"<title>{title}</title>" if title else ""
+    return (f'<!doctype html><html><head>{head}'
+            f'<meta name="description" content="{description}">'
+            f'<meta name="keywords" content="{keywords}"></head><body><script>'
+            f'window.__DATA__={{"tenant_name":"{tenant}","website_info":{{"id":"1","path":"society"}}}}'
+            f'</script></body></html>')
+
+
+def _feishu_routes(home_html, job_titles):
+    posts = {"data": {"job_post_list": [{"id": str(i), "title": t} for i, t in enumerate(job_titles)]}}
+    return ({"https://bytedance.jobs.feishu.cn/": _FakeJsonOrHtmlResp(text=home_html)},
+            {"https://bytedance.jobs.feishu.cn/api/v1/search/job/posts": _FakeJsonOrHtmlResp(json_payload=posts)})
+
+
+class FeishuProbeIdentityTest(unittest.TestCase):
+    """飞书门户的公司名只认门户自报（<title> / 租户名 / keywords），不认岗位标题和宣传语。
+
+    2026-10-11 实录：候选「抖音」+ slug bytedance 探到字节跳动的门户。门户首页没有 <title>，旧判据退到
+    「岗位标题含公司名」——字节的岗位标题带业务线名（「…-抖音生活服务」），于是放行，字节跳动的 8,351 个在招岗
+    挂成「抖音」入库。全部 137 条飞书源对拍：只认门户自报后被挡掉的只有这一条。"""
+
+    BYTEDANCE_HOME = _feishu_home(
+        tenant="ByteDance",
+        keywords="字节跳动招聘官网、字节跳动招聘、字节跳动社招",
+        description="字节跳动在全球推出了多款有影响力的产品，包括今日头条、抖音、西瓜视频、飞书等。")
+    BYTEDANCE_JOBS = ["良率工程师（存算与AI） - 芯片研发", "独立端变现产品经理-抖音生活服务", "区域运营-抖音生活服务"]
+
+    def _probe(self, cn, home=None, jobs=None):
+        get_routes, post_routes = _feishu_routes(home or self.BYTEDANCE_HOME, jobs or self.BYTEDANCE_JOBS)
+        with _patched_hotjob_client(get_routes=get_routes, post_routes=post_routes):
+            return dd.feishu_probe("bytedance", cn)
+
+    def test_product_name_in_job_titles_does_not_verify(self):
+        r = self._probe("抖音")
+        self.assertEqual(r["count"], 3)
+        self.assertFalse(r["verified"])
+        self.assertIn("ByteDance", r["note"])
+
+    def test_product_name_in_description_does_not_verify(self):
+        """宣传语会点名旗下产品；岗位标题不含产品名时也不许靠它放行。"""
+        r = self._probe("西瓜视频", jobs=["财务控制治理专家（上海）"])
+        self.assertFalse(r["verified"])
+
+    def test_keywords_verify_the_tenant_itself(self):
+        """租户名是英文（ByteDance）、<title> 没有时，keywords 里的中文自报名算数。"""
+        self.assertTrue(self._probe("字节跳动")["verified"])
+
+    def test_tenant_name_verifies_when_title_is_a_slogan(self):
+        home = _feishu_home(title="一起做教育的梦想家和冒险家", tenant="洋葱学园", keywords="")
+        self.assertTrue(self._probe("洋葱学园", home=home, jobs=["测试开发工程师（智课）"])["verified"])
+
+    def test_portal_title_still_verifies(self):
+        home = _feishu_home(title="加入蔚来", tenant="NIO", keywords="")
+        self.assertTrue(self._probe("蔚来", home=home, jobs=["电池工程师"])["verified"])
+
+    def test_unverified_hit_never_becomes_an_insert(self):
+        r = self._probe("抖音")
+        self.assertEqual(dd.to_passed([{**r, "company": "抖音", "industry": ""}]), [])
+
+
 if __name__ == "__main__":
     unittest.main()
