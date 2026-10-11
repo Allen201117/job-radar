@@ -3,6 +3,7 @@ const assert = require("node:assert");
 const {
   recruitmentCategory,
   hasExplicitRecruitmentType,
+  _minRequiredExperienceYears,
 } = require("../lib/china-keyword-expansion");
 
 test("recruitmentCategory 三桶穷尽分类（实习 / 校招 / 社招）", () => {
@@ -362,4 +363,127 @@ test("渠道自报的实习只让位给「写明数字年限」的经验要求�
   assert.strictEqual(recruitmentCategory({ title: "Senior Analyst", jd_url: "https://x.com/campus/1" }), "社招");
   // 写明数字年限的仍然推翻渠道声明
   assert.strictEqual(recruitmentCategory({ title: "Product Operation Manager", jd_url: wecruit, summary: "5+ years of experience in product operations." }), "社招");
+});
+
+test("按学历分档、应届占一档的写法不豁免经验门：仍判社招（2026-10-11 创始人定，三桶不动）", () => {
+  // 全库实测 1,974 岗 / 14 家，比亚迪 1,957：挂在比亚迪自己的社招渠道里（校招是另一个渠道代码），1,236 岗本科应届投不了，
+  // 近 3 天还在官网列表的只有 241。这批岗的 job_type=校招 是入库时从正文「应届」推出来的，不是对方自报——
+  // 松开经验门、交给后面的层裁决，同模板的岗会按最后一次抓取带没带正文分到两边（1,577 校招 / 380 社招）。
+  const byd = "https://job.byd.com/portal/pc/#/social/socialPositionDetails?p=abc";
+  for (const summary of [
+    "学历要求：大专\n工作经验：应届硕士生/本科2年/大专3年以上相关工作经验",
+    "工作经验：应届本科生/大专2年以上相关工作经验",
+    "工作经验：大专3年以上；本科2年以上；硕士应届生",
+    "工作经验：应届博士/硕士2年/本科5年以上储能相关工作经验",
+  ]) {
+    assert.strictEqual(
+      recruitmentCategory({ title: "高级机械工程师", job_type: "校招", jd_url: byd, experience: "应届/不限", summary }),
+      "社招",
+      summary,
+    );
+  }
+  // 同句并列但不分档的写法同理（「经验为主，应届可放宽」，全库 146 岗 / 61 家）
+  assert.strictEqual(
+    recruitmentCategory({ title: "研究员", job_type: "校招", summary: "有2年以上的相关工作经验，特别突出的应届毕业生也可以考虑" }),
+    "社招",
+  );
+});
+
+test("年限读数：en dash 区间读下限、两位数年份不是年限、上限写法不是下限", () => {
+  const years = _minRequiredExperienceYears;
+  // ① 区间分隔符是 en dash / em dash / 全角波浪号时，原来只认出后半截（「1–3年」读成 3）
+  assert.strictEqual(years("1–3年互联网产品相关经验"), 1);
+  assert.strictEqual(years("具备1～2年门店服务经验者优先考虑"), 1);
+  assert.strictEqual(years("具有1—2年行政服务相关工作经验"), 1);
+  assert.strictEqual(years("3–5年高性能计算研发经验"), 3);
+  // ② 两位数年份缩写（四位数年份 2026-09-18 已挡，见上面「2026年应届生」的注释）
+  assert.strictEqual(years("硕士及以上学历，26、27年毕业应届生或1年工作经验的职场新锐均可"), 1);
+  assert.strictEqual(years("相关岗位工作经验优先；毕业时间在23年7月至26年7月往届生和应届生"), null);
+  // ③ 上限：只有上限、没有别的下限 → 0
+  assert.strictEqual(years("应届生或2年以内工作经验"), 0);
+  assert.strictEqual(years("应届毕业生或正式工作经验≤2年"), 0);
+  assert.strictEqual(years("应届毕业生至3年工作经验"), 0);
+  assert.strictEqual(years("工作经验3年以内，优秀校招应届生亦可"), 0);
+  assert.strictEqual(years("工作经验：2年以下薪酬绩效工作经验"), 0);
+  // 上限后面还有真下限 → 认后面那个
+  assert.strictEqual(years("本科及以上学历，毕业5年内。2、1年以上团队管理经验"), 1);
+  // 🚫 门：N≥3 的上限、前后没有应届 / 毕业 / 在校 / 往届字样 → 照旧读成 N（宁可漏判校招）
+  assert.strictEqual(years("5年以内人力资源从业经验，年龄30以内"), 5);
+  assert.strictEqual(years("能独立管理200头以上母猪场，5年内相关工作经验"), 5);
+  // 🚫 长得像上限、其实不是
+  assert.strictEqual(years("至少5年以内衣/母婴/家居等相关行业运营经验"), 5); // 至少 5 年 + 内衣
+  assert.strictEqual(years("不少于3年相关工作经验"), 3); // 不少于 = 下限
+  assert.strictEqual(years("工作经验不得少于2年"), 2); // 「不」和「少于」之间隔了一个字
+  assert.strictEqual(years("不能低于3年工作经验，应届生勿扰"), 3);
+  assert.strictEqual(years("3年内容运营经验"), 3); // 内容
+  assert.strictEqual(years("5年内部审计工作经验"), 5); // 内部
+  // 🚫 长得像年份缩写、其实是年限：后面的「应届 / 毕业」是工作内容
+  assert.strictEqual(years("有2年以上应届生培养经验"), 2);
+  assert.strictEqual(years("3年以上毕业生招聘经验"), 3);
+  assert.strictEqual(years("具有3年应届生招聘经验"), 3);
+});
+
+test("年限读错不再把写明应届 / 届别的岗强制判成社招（全库 社招→校招 31 行，反方向 0）", () => {
+  const campusUrl = "https://x.com/campus/job/1";
+  // 年份缩写：先导智能「2027届校招」管培生、正大「毕业时间在23年7月至26年7月」
+  assert.strictEqual(
+    recruitmentCategory({
+      title: "集团战略管培生-采购（2027届校招）",
+      job_type: "校园招聘",
+      jd_url: "https://x.zhiye.com/social/detail?jobAdId=1",
+      summary: "【任职要求】1、硕士及以上学历，26、27年毕业应届生或1年以内工作经验的职场新锐均可",
+    }),
+    "校招",
+  );
+  assert.strictEqual(
+    recruitmentCategory({
+      title: "销售储备干部",
+      job_type: "校招",
+      summary: "2.有销售相关岗位工作经验优先；3.热爱营销工作。4.毕业时间在23年7月至26年7月往届生和应届生",
+    }),
+    "校招",
+  );
+  // 上限 + 应届字样
+  for (const summary of [
+    "1.本科及以上学历2.应届生或2年以内工作经验，具有相关物流行业销售经验者优先",
+    "1、应届毕业生至3年工作经验，具备数据/商业分析相关教育背景或工作经验",
+    "2.工作经验3年以内，优秀校招应届生亦可",
+    "3、应届毕业生或正式工作经验≤2年（养殖/农牧领域从业者优先）",
+  ]) {
+    assert.strictEqual(recruitmentCategory({ title: "运营专员", job_type: "校招", summary }), "校招", summary);
+  }
+  // 校招门户里 N≤2 的上限（没有应届字样）
+  assert.strictEqual(
+    recruitmentCategory({ title: "绩效管理专员", jd_url: campusUrl, summary: "【任职要求】1.工作经验：2年以下薪酬绩效工作经验" }),
+    "校招",
+  );
+  // en dash 区间读下限；下限 ≥2 的区间照旧强制社招
+  assert.strictEqual(
+    recruitmentCategory({ title: "直播专项策略运营", job_type: "校招", summary: "1–3年左右数据分析/策略相关经验，或优秀应届毕业生" }),
+    "校招",
+  );
+  assert.strictEqual(
+    recruitmentCategory({ title: "售后前台", jd_url: campusUrl, summary: "工作经验：具备1～2年门店服务经验者优先考虑。" }),
+    "校招",
+  );
+  assert.strictEqual(recruitmentCategory({ title: "算法工程师", job_type: "校招", summary: "3–5年推荐算法相关经验" }), "社招");
+  // 没有别的信号时只是不再算「明确类型」，仍兜底社招
+  assert.strictEqual(recruitmentCategory({ title: "售后前台", summary: "具备1～2年门店服务经验者优先考虑" }), "社招");
+  assert.strictEqual(hasExplicitRecruitmentType({ title: "售后前台", summary: "具备1～2年门店服务经验者优先考虑" }), false);
+
+  // 🚫 反方向必须守住：不设「N≤2 或有应届字样」这道门，下面两个真社招会被放进校招（全库实测就是这两行）
+  assert.strictEqual(
+    recruitmentCategory({ title: "HRBP", job_type: "校招", summary: "1、本科及以上学历，专业不限；2、5年以内人力资源从业经验，年龄30以内" }),
+    "社招",
+  );
+  assert.strictEqual(
+    recruitmentCategory({ title: "场长", jd_url: campusUrl, summary: "能独立管理200头以上母猪场，5年内相关工作经验。" }),
+    "社招",
+  );
+  // 长得像上限的下限照旧强制社招
+  assert.strictEqual(
+    recruitmentCategory({ title: "品类运营", job_type: "校招", summary: "1、至少5年以内衣/母婴/家居/配饰/服装等相关行业运营经验" }),
+    "社招",
+  );
+  assert.strictEqual(recruitmentCategory({ title: "审计专员", job_type: "校招", summary: "不少于3年相关工作经验" }), "社招");
 });
