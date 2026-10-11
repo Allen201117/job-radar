@@ -403,8 +403,8 @@ function legacyRecruitmentSuperset(jobType: string): string {
       // 老版 wt 的平台渠道常量（recruitmentCategory 层4 认 recruitType=1 → 校招；12 是实习，下面排除）。
       // 超集只许放宽：job_type 不带标签的 wt 校招行（2026-09-18 实测 83 行）在列为 NULL 期间也要捞到。
       " or jd_url ~* '[?&]recruitType=1(?![0-9])'" +
-      " or (coalesce(title,'')||' '||coalesce(summary,'')) ~* '(应届|[0-9]{2,4}届|校园招聘|校招|管培生|管理培训生|留学生专项|new\\s?grads?|university\\s+graduate|entry[-\\s]?level|campus\\s?(recruit|hiring)|graduate\\s+program)'" +
-      " or company ~* '(校招|校园招聘)')" +
+      // 公司名不在超集里（2026-10-11 与 recruitmentCategory 的层6 一起拆）：分类器不再认公司名，超集跟着去掉才不多捞。
+      " or (coalesce(title,'')||' '||coalesce(summary,'')) ~* '(应届|[0-9]{2,4}届|校园招聘|校招|管培生|管理培训生|留学生专项|new\\s?grads?|university\\s+graduate|entry[-\\s]?level|campus\\s?(recruit|hiring)|graduate\\s+program)')" +
       " and (job_type is null or job_type !~* '(社招|社会招聘|全职|experienced|professional|full.?time)')" +
       // 排除实习：带实习信号的行在 recruitmentCategory 里只会落到 实习（层1 标题 / 层2b 渠道）或 社招（层2 经验门），
       // 绝不可能再被判成校招，所以从校招超集里剔掉是安全的。

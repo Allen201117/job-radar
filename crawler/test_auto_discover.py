@@ -359,6 +359,19 @@ class CuratedTargetsFileTest(unittest.TestCase):
             self.assertFalse(dd._verify("大华（集团）有限公司 - 校园招聘", t["cn"]), t)
             self.assertTrue(dd._verify("浙江大华技术股份有限公司", t["cn"]), t)
 
+    def test_dongpeng_beverage_target_rejects_dongpeng_holdings_portal(self):
+        # 迁移 318：北森租户 dongpeng 是「广东东鹏控股股份有限公司」（瓷砖卫浴，003012），曾因清单 cn='东鹏' 的
+        # 标题核验放行而被记成「东鹏饮料」（605499，另一家公司）。标题取自对方门户 live 页面。
+        # 源改名后库里不再有叫「东鹏饮料」的源：这一行不改，扩源会判「库里缺这家」，把同一个租户以原名插回来
+        # （北森候选是 /social 与 /campus 两个地址，库里只占了 /campus 与 /social/jobs）。
+        import discover_domestic as dd
+        targets = [t for t in ad.load_curated_targets() if "东鹏" in t["company"]]
+        self.assertGreaterEqual(len(targets), 1)
+        for t in targets:
+            self.assertFalse(dd._verify("广东东鹏控股股份有限公司", t["cn"]), t)
+            self.assertTrue(dd._verify("东鹏饮料（集团）股份有限公司", t["cn"]), t)
+            self.assertNotIn("dongpeng", t["slugs"], t)
+
     def test_must_apply_targets_win_dedup_and_get_separate_marker(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)

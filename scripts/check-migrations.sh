@@ -75,8 +75,31 @@ done <<EOF
 $dups
 EOF
 
+# ③ 新迁移不得写带招聘渠道后缀的公司名（「X 校招」「X 实习」「X 社招」）。
+#    渠道看 sources.board 与逐岗分类，不写进公司名：岗位公司名直接抄源名，后缀会跟着出现在岗位卡、公司筛选里，
+#    还让同一家公司在洞察库长出几个画像（迁移 317）。迁移 320 把存量 55 条改回来了，这里防它再长出来。
+#    判据 = 非注释行里有「以空白 + 校招/实习/社招 结尾」的 SQL 字符串字面量。只查前缀 > 基线的文件（历史文件不动）。
+#    确实需要写出旧名的（比如清理别名），在那一行行尾加注释 -- allow-channel-suffix。
+CHANNEL_SUFFIX_BASELINE=320
+while IFS= read -r name; do
+  [ -z "$name" ] && continue
+  prefix="${name%%_*}"
+  case "$prefix" in '' | *[!0-9]*) continue ;; esac   # 非数字前缀已在 ① 报过
+  [ "$((10#$prefix))" -gt "$CHANNEL_SUFFIX_BASELINE" ] || continue
+  hits="$(grep -nE "'[^']*[[:space:]](校招|实习|社招)'" "$MIG_DIR/$name" \
+            | grep -vE '^[0-9]+:[[:space:]]*--' \
+            | grep -v 'allow-channel-suffix' || true)"
+  if [ -n "$hits" ]; then
+    echo "ERROR: $name 里有带渠道后缀的名字（公司名不写「校招 / 实习 / 社招」，渠道看 board）："
+    printf '%s\n' "$hits" | sed 's/^/         /'
+    fail=1
+  fi
+done <<EOF
+$names
+EOF
+
 if [ "$fail" -ne 0 ]; then
-  echo "[check-migrations] 失败：迁移前缀有问题（见上）。"
+  echo "[check-migrations] 失败：迁移文件有问题（见上）。"
   exit 1
 fi
-echo "[check-migrations] 通过：$(printf '%s\n' "$names" | grep -c .) 个迁移文件，前缀纯数字、无新增重复。"
+echo "[check-migrations] 通过：$(printf '%s\n' "$names" | grep -c .) 个迁移文件，前缀纯数字、无新增重复、新文件没有带渠道后缀的公司名。"
