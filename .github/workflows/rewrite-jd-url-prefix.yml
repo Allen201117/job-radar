@@ -18,6 +18,10 @@ on:
       company:
         description: "精确公司名，与前缀同时成立才动"
         required: true
+      status:
+        description: "只动这种状态的行：active（默认）/ removed（源被门拦下期间下架的存量，见脚本模块注释）"
+        required: false
+        default: "active"
       apply:
         description: "true = 真的写库；留空/false = 只 dry-run 报数"
         required: false
@@ -44,9 +48,10 @@ jobs:
           FROM_PREFIX: ${{ github.event.inputs.from_prefix }}
           TO_PREFIX: ${{ github.event.inputs.to_prefix }}
           COMPANY: ${{ github.event.inputs.company }}
+          STATUS: ${{ github.event.inputs.status }}
           APPLY: ${{ github.event.inputs.apply }}
         run: |
           set -euo pipefail
-          args=(--from-prefix "$FROM_PREFIX" --to-prefix "$TO_PREFIX" --company "$COMPANY")
+          args=(--from-prefix "$FROM_PREFIX" --to-prefix "$TO_PREFIX" --company "$COMPANY" --status "${STATUS:-active}")
           if [ "$APPLY" = "true" ]; then args+=(--apply); fi
           python3 crawler/rewrite_jd_url_prefix.py "${args[@]}"

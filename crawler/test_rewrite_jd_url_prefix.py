@@ -50,12 +50,24 @@ class RunTest(unittest.TestCase):
         self.assertEqual(rw.run(cur, FROM, TO, "长安汽车 Changan", apply=True), (412, 3, 412))
         sql, params = cur.executed[-1]
         self.assertTrue(sql.startswith("update jobs j set jd_url ="))
-        self.assertIn("where j.status = 'active' and j.company = %(company)s and j.jd_url like %(pattern)s", sql)
+        self.assertIn("where j.status = %(status)s and j.company = %(company)s and j.jd_url like %(pattern)s", sql)
         self.assertIn("and not (exists", sql, "冲突行必须跳过，不能让整批撞唯一索引回滚")
         self.assertIn("public.canonicalize_jd_url(", sql, "冲突要按改完后的 canonical 判，和唯一索引同口径")
         self.assertIn("k.status = 'active' and k.id <> j.id", sql)
         self.assertEqual(params, {"from": FROM, "to": TO, "company": "长安汽车 Changan",
-                                  "pattern": like_prefix(FROM)})
+                                  "pattern": like_prefix(FROM), "status": "active"})
+
+    def test_removed_rows_are_only_touched_when_asked(self):
+        """--status removed：只改 removed 行（源被门拦下期间下架的存量，换完下一轮重抓按 canonical 命中、翻回 active）。
+        计数与改写两步都按同一个 status 圈行；别的 active 行占着同一个 canonical 的照样跳过。"""
+        old, new = "https://wecruit.hotjob.cn/SU621d83d4bef57c221e5c9d8c/pb/", "https://wecruit.hotjob.cn/SU621d903fbef57c221e5ca37f/pb/"
+        cur = FakeCursor(164, 0)
+        self.assertEqual(rw.run(cur, old, new, "中信银行信用卡中心", apply=True, status="removed"), (164, 0, 164))
+        for sql, params in cur.executed:
+            self.assertEqual(params["status"], "removed")
+            self.assertIn("j.status = %(status)s", sql)
+            self.assertNotIn("j.status = 'active'", sql, "圈行的状态必须走绑定参数，不能写死")
+        self.assertIn("k.status = 'active' and k.id <> j.id", cur.executed[-1][0])
 
     def test_nothing_to_do_does_not_write(self):
         cur = FakeCursor(0, 2)
@@ -74,6 +86,14 @@ class ParseArgsTest(unittest.TestCase):
     def test_valid(self):
         a = rw.parse_args(self._args(FROM, TO))
         self.assertFalse(a.apply)
+        self.assertEqual(a.status, "active", "不带 --status 时行为不变：只动 active")
+
+    def test_status_only_accepts_active_or_removed(self):
+        """expired 是逐岗探活确认撤岗的行（次日被永久删除），不许拿来换链接。"""
+        self.assertEqual(rw.parse_args(self._args(FROM, TO) + ["--status", "removed"]).status, "removed")
+        for bad in ("expired", "all", ""):
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                rw.parse_args(self._args(FROM, TO) + ["--status", bad])
 
     def test_rejects_non_https_or_bare_host(self):
         for frm, to in (("http://changan.zhiye.com/jobs/zwxq", TO), (FROM, "https://")):

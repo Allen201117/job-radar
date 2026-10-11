@@ -10,9 +10,18 @@
 改写 = 把前缀 from 换成 to，其余原样保留（jobAdId、query 都不动）；apply_url 以 from 开头的一并换。
 canonical_jd_url 由表上的触发器（before update of jd_url）自动重算，不用管。
 
+--status removed（2026-10-11 加，hotjob 源登记错套件那一批）：改的是 removed 行而不是 active 行。
+  源被 adapter 的门拦下期间，名下的行是按「页面打不开」标成 removed 的；把源改指到已发布的套件之前，先把这些行的
+  链接换成新套件号，下一轮重抓才会按 canonical 命中旧行、翻回 active 并保留首见时间——否则同一批岗以新行入库，
+  首见时间变成当天（被当成新岗）。中国电信国际（迁移 313）先这么做过：首轮抓取 updated 18 + 1，正是换过链接的 19 行。
+  ⚠️ 圈的是「公司 + 前缀」下全部 removed 行，包括岗位已经不在新列表里的：那些行换完仍是 removed、没人看得见，
+  对方哪天重新发布同一个岗位号时能接上历史。同一个公司名 + 前缀下若混着别的渠道的 removed 行，会被一起换，
+  执行前先按渠道数一遍。expired 行（探活确认撤岗、次日永久删除）不许换。
+
 护栏（同 remove_jobs_by_url_prefix / rename_job_company 的规矩）：
   · 默认 dry-run 只报数；--apply 才写。
-  · 必须 --from-prefix / --to-prefix 两个完整 https 前缀 + --company 精确点名，只动 status='active'。
+  · 必须 --from-prefix / --to-prefix 两个完整 https 前缀 + --company 精确点名，只动一种状态的行
+    （默认 active；--status removed 时只动 removed）。
   · to 不许以 from 开头（否则重跑会一直往后拼，不幂等）；两者不许相同。
   · 冲突跳过、不报错回滚：改完的链接若已有**别的 active 行**占着同一个 canonical（唯一索引），
     或已有同公司+标题+地点+新链接的行（表级唯一约束），这行不改，报数给人看。
@@ -44,7 +53,7 @@ _CONFLICT = f"""
 
 _SCOPE = """
       from jobs j
-     where j.status = 'active'
+     where j.status = %(status)s
        and j.company = %(company)s
        and j.jd_url like %(pattern)s
 """
@@ -61,21 +70,24 @@ _UPDATE_SQL = f"""
            apply_url = case when j.apply_url like %(pattern)s
                             then %(to)s || substr(j.apply_url, char_length(%(from)s) + 1)
                             else j.apply_url end
-     where j.status = 'active'
+     where j.status = %(status)s
        and j.company = %(company)s
        and j.jd_url like %(pattern)s
        and not {_CONFLICT}
 """
 
 
-def params_for(from_prefix, to_prefix, company):
+STATUSES = ("active", "removed")
+
+
+def params_for(from_prefix, to_prefix, company, status="active"):
     return {"from": from_prefix, "to": to_prefix, "company": company,
-            "pattern": like_prefix(from_prefix)}
+            "pattern": like_prefix(from_prefix), "status": status}
 
 
-def run(cur, from_prefix, to_prefix, company, apply=False):
+def run(cur, from_prefix, to_prefix, company, apply=False, status="active"):
     """返回 (可改行数, 冲突跳过行数, 实际改动行数或 None)。"""
-    params = params_for(from_prefix, to_prefix, company)
+    params = params_for(from_prefix, to_prefix, company, status)
     cur.execute(_COUNT_SQL, params)
     planned, conflicts = cur.fetchone()
     if not apply or not planned:
@@ -91,6 +103,8 @@ def parse_args(argv=None):
     ap.add_argument("--from-prefix", required=True, help="要换掉的 jd_url 前缀（完整 https 前缀）")
     ap.add_argument("--to-prefix", required=True, help="换成的 jd_url 前缀（完整 https 前缀）")
     ap.add_argument("--company", required=True, help="精确公司名，与前缀同时成立才动")
+    ap.add_argument("--status", choices=STATUSES, default="active",
+                    help="只动这种状态的行（默认 active；removed = 源被门拦下期间下架的存量，见模块注释）")
     ap.add_argument("--apply", action="store_true", help="真的写库（默认只 dry-run 报数）")
     args = ap.parse_args(argv)
     for flag, value in (("--from-prefix", args.from_prefix), ("--to-prefix", args.to_prefix)):
@@ -112,14 +126,14 @@ def main(argv=None):
     try:
         with conn.cursor() as cur:
             planned, conflicts, updated = run(cur, args.from_prefix, args.to_prefix,
-                                              args.company, apply=args.apply)
+                                              args.company, apply=args.apply, status=args.status)
     finally:
         conn.close()
-    head = f"前缀 {args.from_prefix} → {args.to_prefix}（company='{args.company}'）"
+    head = f"前缀 {args.from_prefix} → {args.to_prefix}（company='{args.company}'，{args.status} 行）"
     if conflicts:
         print(f"{head}：{conflicts} 行改完会与已有行冲突，跳过不动（请人工看一眼）")
     if not planned:
-        print(f"{head}：没有可改的 active 行 —— 无事可做")
+        print(f"{head}：没有可改的 {args.status} 行 —— 无事可做")
         return 0
     if args.apply:
         print(f"{head}：已改 {updated} 行")
