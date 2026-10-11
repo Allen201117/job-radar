@@ -271,10 +271,30 @@ class HotJobAdapter(PlaywrightAdapter):
             self.fetch_complete = (
                 complete and gap_filled
                 and (self.reported_total is None or len(seen) >= self.reported_total))
+            foreign = sum(1 for p in posts if self._is_foreign_row(p))
+            if foreign:
+                logger.warning("hotjob:%s: 列表 %d 行里有 %d 行是别的套件发布的（currentSuiteKey 不是本套件），不入库",
+                               self._suite_key, len(posts), foreign)
             # 列表无 JD 正文（workContent/serviceCondition 全空 → summary 空）；逐岗调 listPositionDetail
             # 补正文（复用同一带 Referer/Origin 的 client）。capped；单岗失败该岗无摘要、不影响入库。
             self._enrich_details(client, [p for p in posts if isinstance(p, dict)])
         return json.dumps({"_intercepted": collected}, ensure_ascii=False)
+
+    # 🚫 列表行自报的 currentSuiteKey 不是本源套件的，不入库（2026-10-11 立）。
+    # ❌ 现象：和睦家电脑版套件的校招列表 34 行，其中 23 行是母集团「新风天域」另一个租户的套件发布的
+    #    （currentSuiteKey 指向它，页面「业务单元」一栏写新风天域集团）。按本源套件拼的详情页 23/23 显示
+    #    「该职位招聘已经关闭」，而两道门、质量门全过；其中 7 行还是别家公司的岗（易得康 / 顾连医疗 /
+    #    柏盛健康 / 集团总部），照单全收既是死链又挂错公司。
+    # ✅ 根因：门户自己的列表页点这些行，开的是 /{currentSuiteKey}/pb/posDetail.html，不是本套件的详情页。
+    #    这些行归发布它的那个套件：要接就给那个套件单独登记一条源（公司名取它自己的 suite/config.companyName）。
+    # 📊 上线前全部 150 个启用源只抓列表：过门的 129 个源 19,725 行（2 个源撞 60 页上限没翻完），
+    #    currentSuiteKey 全部等于本源套件 → 对现有源没有影响。
+    # ⚠️ 字段缺失 / 为空 = 判不出，照旧入库（宁可漏判不可错杀）。fetch 的抓全判定仍按列表全部行数算。
+    def _is_foreign_row(self, post) -> bool:
+        if not isinstance(post, dict) or not self._suite_key:
+            return False
+        key = str(post.get("currentSuiteKey") or "").strip()
+        return bool(key) and key.removeprefix("SU") != self._suite_key.removeprefix("SU")
 
     def _fill_first_page_gap(self, post_page, keep, first_payload) -> bool:
         """补上第 1 页和第 2 页之间的断档：补回来的页经 keep 收在第 1 页后面。返回 False = 没补成。
@@ -314,7 +334,8 @@ class HotJobAdapter(PlaywrightAdapter):
         for p in posts:
             if len(targets) >= cap:
                 break
-            if isinstance(p, dict) and str(p.get("postId") or p.get("id") or "").strip():
+            if (isinstance(p, dict) and str(p.get("postId") or p.get("id") or "").strip()
+                    and not self._is_foreign_row(p)):
                 targets.append(p)
         if not targets:
             return
@@ -356,7 +377,7 @@ class HotJobAdapter(PlaywrightAdapter):
         return normalizer.coerce_iso_date(post.get("endDate"))
 
     def _map(self, post: dict) -> Optional[RawJob]:
-        if not isinstance(post, dict):
+        if not isinstance(post, dict) or self._is_foreign_row(post):
             return None
         post_id = str(post.get("postId") or post.get("id") or "").strip()
         title = str(post.get("postName") or post.get("title") or "").strip()
