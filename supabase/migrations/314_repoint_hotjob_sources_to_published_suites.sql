@@ -27,7 +27,7 @@
 -- ── B. 对方换了平台 / 只剩手机版（5 条停用 + 1 条新增替代源）──
 --   新城控股 ×3：套件已被对方关闭——suite/config 回「该官网已关闭，无法继续访问!」，页面显示「系统正在维护中」。
 --     官网 seazen.com.cn/join/「我要应聘」现在指向 Moka（app.mokahr.com/social-recruitment/seazen/168435，页面写 49 个在招）。
---     Moka 源没有放进本迁移：本机没有 Playwright 浏览器，moka adapter 的端到端试抓没跑成，只用浏览器看过页面。
+--     Moka 的社招 / 校招两条源由迁移 315 另行接入（那边做了 moka adapter 的端到端试抓，已先于本迁移上线）。
 --   光启技术 ×2：这个租户在新版平台上只找到手机版套件（templateNum=mc）；电脑版是老版门户
 --     kuangchi.hotjob.cn/wt/kuangchi（title「光启集团招聘官网」，列表发布机构「光启技术股份有限公司」等 4 个）。
 --     两边岗位名逐个相同（社招 42 / 校招 12；老版门户上校招栏那 12 个岗位号都在社招栏里）。换成一条 wt 源。
@@ -72,6 +72,9 @@
 -- 2) 新城控股校招名下还有 1 行 active（末见 2026-09-09，链接现在打开是「系统正在维护中」）：
 --    走 remove-jobs-by-url-prefix 工作流标 removed（dry-run：1 行）。
 -- 3) 再合本迁移。合之前看一眼有没有正在跑的抓取轮；合完回读每条源的 crawl_runs。
+--    存量两步已于 2026-10-11 按此顺序做完（创始人同意）：9 个换链接任务共改 1,506 行、下架任务标 1 行；回读——
+--    旧前缀下这 9 个公司名已没有 removed 行（宁德新能源只剩 active 的校招 52 / 实习 9），新前缀下 1,506 行全是
+--    removed、apply_url 与 canonical 都跟着换了、没有重复 canonical、首见时间仍是 06-15 ~ 09-04；新城旧套件下 0 行 active。
 -- 可逆：source_url / company / enabled / notes 改回原值、删掉新增的 5 行即可。幂等：update 都是 id + 旧值双重限定，
 -- insert 带 not exists。不写 board 列（generated）；segment / industry / industry_group / ownership / regions 不动。
 
@@ -149,7 +152,7 @@ update public.sources
 -- ── B. 对方关站 / 只剩手机版：停用 ──
 update public.sources
    set enabled = false,
-       notes   = '2026-10-11 停用：对方已关闭这个套件（suite/config 回「该官网已关闭」，页面「系统正在维护中」）；官网「我要应聘」现指向 Moka app.mokahr.com/social-recruitment/seazen/168435，尚未接入。原备注：' || coalesce(notes, '')
+       notes   = '2026-10-11 停用：对方已关闭这个套件（suite/config 回「该官网已关闭」，页面「系统正在维护中」）；官网「我要应聘」现指向 Moka，已由迁移 315 接入 Moka 源。原备注：' || coalesce(notes, '')
  where id in ('e159e189-064a-477c-beaf-6aa992889c35',
               '38f87e02-7ab5-4015-a507-b842b37214e1',
               '1f74eb7a-a1ae-433d-b04c-8940fdd38845')
