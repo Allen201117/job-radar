@@ -440,5 +440,89 @@ class TestHotJobFirstPage(unittest.TestCase):
         self.assertEqual({r["postId"] for r in rows if r.get("workContent")}, {f"p{i}" for i in range(20)})
 
 
+class _SharedListServer(_ListServer):
+    """和睦家电脑版套件校招列表的形状：34 行里 11 行是本套件发布的，另外 23 行的 currentSuiteKey
+    指向另一个租户（新风天域集团）的套件。列表行里的套件号不带 SU 前缀。"""
+    own_key, foreign_key, own_rows = "61274d270dcad4106f13e9e1", "66b188951c240e4f7f8eac8c", 11
+
+    def post(self, url, data=None, **kwargs):
+        resp = super().post(url, data=data, **kwargs)
+        if "postId" not in data:
+            for row in resp.json()["data"]["pageForm"]["pageData"]:
+                mine = int(row["postId"][1:]) < self.own_rows
+                row["currentSuiteKey"] = self.own_key if mine else self.foreign_key
+        return resp
+
+
+class TestHotJobForeignSuiteRows(unittest.TestCase):
+    """列表行自报的 currentSuiteKey 不是本源套件 = 别的套件发布的岗，不入库（2026-10-11 立）。
+
+    live：和睦家校招 34 行里 23 行属于新风天域集团的套件，按本源套件拼的详情页 23/23 显示
+    「该职位招聘已经关闭」；门户自己的列表页点这些行，开的是 /{currentSuiteKey}/pb/posDetail.html。"""
+
+    URL = "https://wecruit.hotjob.cn/SU61274d270dcad4106f13e9e1/pb/school.html"
+
+    def setUp(self):
+        self.a = HotJobAdapter()
+        self.a._bind_source(self.URL)
+
+    def _post(self, suite_key, post_id="p1"):
+        post = {"postId": post_id, "postName": "管理培训生"}
+        if suite_key is not None:
+            post["currentSuiteKey"] = suite_key
+        return post
+
+    def test_row_published_by_another_suite_is_not_mapped(self):
+        self.assertIsNone(self.a._map(self._post("66b188951c240e4f7f8eac8c")))
+        self.assertIsNone(self.a._map(self._post("SU66b188951c240e4f7f8eac8c")))
+
+    def test_own_suite_key_matches_with_or_without_su_prefix(self):
+        for key in ("61274d270dcad4106f13e9e1", "SU61274d270dcad4106f13e9e1"):
+            self.assertIsNotNone(self.a._map(self._post(key)), key)
+
+    def test_row_without_suite_key_is_kept(self):
+        """字段缺失 / 为空 = 判不出，照旧入库（宁可漏判不可错杀）。"""
+        for key in (None, "", "  "):
+            self.assertIsNotNone(self.a._map(self._post(key)), repr(key))
+
+    def test_parse_drops_only_the_foreign_rows(self):
+        payload = {"data": {"pageForm": {"pageData": [
+            self._post("61274d270dcad4106f13e9e1", "own"),
+            self._post("66b188951c240e4f7f8eac8c", "foreign"),
+            self._post(None, "unknown"),
+        ]}}}
+        jobs = self.a.parse(json.dumps({"_intercepted": [payload]}))
+        self.assertEqual([j.jd_url.split("postId=")[1].split("&")[0] for j in jobs], ["own", "unknown"])
+
+    def test_foreign_rows_spend_no_detail_requests(self):
+        posts = [self._post("66b188951c240e4f7f8eac8c", "foreign"), self._post("61274d270dcad4106f13e9e1", "own")]
+        client = _FakeClient({"own": {"data": {"workContent": "正文"}}})
+        self.a._DETAIL_CAP = 1   # 名额只有 1 个：不能被别的套件的行占掉
+        self.a._enrich_details(client, posts)
+        self.assertEqual([d["postId"] for _, d in client.calls], ["own"])
+
+    def test_fetch_still_counts_every_listed_row(self):
+        """抓全判定按列表全部行数算：少入库 23 行不能把这一轮说成「没抓全」，也不能把它们从信封里抹掉。"""
+        _ListServer.total, _ListServer.first_page_size, _ListServer.fail_gap = 34, 20, False
+        _ListServer.requests = []
+        orig_client, orig_cap = hotjob_mod.httpx.Client, os.environ.pop("CRAWL_DETAIL_CAP", None)
+        hotjob_mod.httpx.Client = _SharedListServer
+        try:
+            a = HotJobAdapter()
+            raw = a.fetch(self.URL)
+        finally:
+            hotjob_mod.httpx.Client = orig_client
+            if orig_cap is not None:
+                os.environ["CRAWL_DETAIL_CAP"] = orig_cap
+        rows = [r for payload in json.loads(raw)["_intercepted"]
+                for r in payload["data"]["pageForm"]["pageData"]]
+        self.assertEqual(len(rows), 34)
+        self.assertEqual(a.reported_total, 34)
+        self.assertTrue(a.fetch_complete)
+        self.assertEqual({r["postId"] for r in rows if r.get("workContent")}, {f"p{i}" for i in range(11)})
+        self.assertEqual({j.jd_url.split("postId=")[1].split("&")[0] for j in a.parse(raw)},
+                         {f"p{i}" for i in range(11)})
+
+
 if __name__ == "__main__":
     unittest.main()
