@@ -20,7 +20,12 @@ import {
   type FirstPartyAggregate,
   type InsightSubmissionRow,
 } from "@/lib/insight-submission";
-import { jobsStoreEnabled, activeJobsByCompanies } from "@/lib/jobs-store/read";
+import {
+  jobsStoreEnabled,
+  activeJobsByCompanies,
+  INSIGHT_DERIVE_COLUMNS,
+  INSIGHT_DERIVE_COLUMNS_NOT_IN_SUPABASE,
+} from "@/lib/jobs-store/read";
 import { getCachedCompanyProfilesLight } from "@/lib/insight-availability-cache";
 import type {
   CompanyProfile,
@@ -36,6 +41,12 @@ export const runtime = "nodejs";
 export const maxDuration = 30;
 // 派生统计最多取这么多行在招岗位做样本；取满了就说明真实数量不止这些（见 deriveHiring 的 sampleCapped）。
 const DERIVE_JOB_CAP = 3000;
+// Supabase 兜底取数的列 = 香港库那份清单去掉兜底表没有的列。
+// 此前这里手抄了一串列名，漏了 experience / education —— 兜底路径上经验 / 学历分布静默算不出来。
+const SUPABASE_DERIVE_COLUMNS = INSIGHT_DERIVE_COLUMNS.split(",")
+  .map((c) => c.trim())
+  .filter((c) => !INSIGHT_DERIVE_COLUMNS_NOT_IN_SUPABASE.includes(c))
+  .join(",");
 
 const { buildWorkflowDispatchRequest, resolveDispatchConfig, isDispatchAccepted } =
   discoveryDispatch as any;
@@ -209,9 +220,7 @@ async function loadDeriveJobRows(supabase: any, candidates: string[]): Promise<a
   }
   const { data, error: jobError } = await supabase
     .from("jobs")
-    .select(
-      "company,title,location,job_type,salary_text,posted_at,first_seen_at,last_seen_at,status",
-    )
+    .select(SUPABASE_DERIVE_COLUMNS)
     .in("company", candidates)
     .eq("status", "active")
     .limit(DERIVE_JOB_CAP);

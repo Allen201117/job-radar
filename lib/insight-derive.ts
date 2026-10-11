@@ -4,6 +4,7 @@
 // 读时在 /api/insights 调用，产出 InsightItemView[]，与存储型洞察同形展示。
 // 设计见 docs/superpowers/specs/2026-06-12-career-insights-overhaul-design.md §4。
 // ============================================================
+import { classifyJobFunction } from "./china-keyword-expansion";
 import type { InsightDimension, InsightItemView, Job } from "./types";
 
 export type RecruitBucket = "campus" | "intern" | "social" | "unknown";
@@ -78,13 +79,58 @@ export function bucketEducation(text: string | null): string | null {
   return null;
 }
 
-// 与 crawler/normalizer.py 三桶同口径：实习 → 校招/应届 → 社招；都不命中 = unknown（不臆测）
+// intern 必须整词。与 china-keyword-expansion 的 sourceDeclaredCategory 是同一条正则（那边带 /i，这里先转了小写；
+// hasInternSignal 另认 url 里的拼音 shixi，这里只看 job_type + 标题，用不上）。tests/insight-derive.test.js 钉着两处不漂。
+// ⚠️ 下划线 / 数字算词字符："Intern_Compliance"、"Intern3D" 单看这一个词不认（全库 3 行，都另写了「实习」）。
+// ❌ 原来是裸子串 /实习|intern|internship/：2026-10-11 全库 441,589 个在招岗里把 593 个（122 家公司）算成实习
+//    —— 按词计 International 357、Internal 236、Internet 10（一个标题可同时含两个；"Senior Analyst - Internal Audit"）；
+//    99 家公司抽屉里的「类型」占比因此不同，28 家的「实习」全是假的。反方向：写了整词 intern / 实习 却没判实习的 0 个；
+//    这 593 个再按库里的招聘类型列 + 学生类字样（student / co-op / 培训生…）全量筛一遍，3 个算得上学生 / 实习岗
+//    （强生 "Internal Communications Co-op"、西门子 "Strategic Student Program"、迪卡侬实习源的
+//    "Internal Communications Specialist"）—— 旧规则是靠 Internal 碰巧算对的，现在落 unknown。
+const INTERN_RE = /实习|\bintern(?:ship)?s?\b/;
+
+// 关键词判法：只看 job_type + 标题，实习 → 校招/应届 → 社招；都不命中 = unknown（不臆测）。
+// 只给 recruitBucket 当「列还没算出来」时的退路用，三桶的正主是岗位库那一列。
+// 📌 纠错（2026-10-11）：此处原写「与 crawler/normalizer.py 三桶同口径」，不成立。normalizer 里没有三桶函数
+//    （extract_job_type 判的是细分类型）；岗位库的三桶是 china-keyword-expansion 的 recruitmentCategory。
 export function classifyRecruitment(jobType: string | null, title: string | null): RecruitBucket {
   const t = `${jobType || ""} ${title || ""}`.toLowerCase();
-  if (/实习|intern|internship/.test(t)) return "intern";
+  if (INTERN_RE.test(t)) return "intern";
   if (/校招|校园招聘|应届|campus|graduate|new\s?grad/.test(t)) return "campus";
   if (/社招|社会招聘|experienced|professional/.test(t)) return "social";
   return "unknown";
+}
+
+// 抽屉里的招聘类型三桶：认岗位库物化的那一列（jobs.recruitment_category，七层判定，还看经验年限、url 渠道）。
+//   · 列判校招 / 实习 → 照列；
+//   · 列判社招且有依据（recruitment_explicit = true）→ 社招；
+//   · 列判社招但只是兜底（没有任何标记、默认社招）→ unknown，不进占比的分母（2026-10-11 创始人选定）；
+//   · 列为空（刚入库 / 依据变了等重算；或走 Supabase 兜底表，那张表没有这两列）→ 退回关键词判法。
+//
+// ❌ 此前占比与招聘节奏直接用关键词判法。2026-10-11 全库 441,123 个在招岗（在招 ≥3 的公司 1,450 家）对拍，
+//    关键词判法 × 列：判不出而列判校招 23,606（大多靠校招门户 url，这里取不到 url）、列判实习 204、
+//    列判有依据的社招 116,351；判校招而列判社招 2,221；判实习而列判社招 38（实习频道里挂的蓝领社招岗）。
+//    后果：137 家没有「类型」这一行，470 家的百分比是按不到一半的在招岗算的，103 家只写「实习 100%」
+//    （岚图 1,389 个在招岗里判得出 2 个，写的是「校招 50%·实习 50%」）。
+//    改后「类型」行会变的 700 家（新出现 131 / 文字变 569 / 消失 0）：社招占比升 475 家降 50 家、
+//    校招升 154 降 318、实习升 9 降 360；「招聘节奏」那句话变 546 家（新出现 203 / 文字变 343）。
+// ⚠️ 比亚迪从「校招 100%」变成「社招 99%·校招 1%」：它有 1,587 个岗来源标校招、链接在社招门户、正文写
+//    「应届硕士生 / 本科 2 年 / 大专 3 年以上相关工作经验」，列按经验门判了社招。这类岗算不算校招归分类器定，这里跟列走。
+// ⚠️ 「有依据」是岗位库的定义（来源填了 job_type 就算，哪怕填的是职能），不等于「写明了招聘类型」：
+//    同日快照里有依据的社招 254,367 个，其中 60,026 个是这种。兜底社招 73,943 个全部没有 job_type，集中在
+//    外企 ATS（Target 4,105 个在招岗里 3,603 个是兜底）—— 这些公司的占比只在剩下的岗里算，实习 / 校招偏高。
+//    改后仍有 6 家没有这一行、140 家按不到一半的在招岗算。
+// ⚠️ 夜间物化的同名指标（crawler/bu_signals.py 的 bucket_share，洞察库用）读同一列，但兜底社招也算社招：
+//    同一家公司两处的数字可以不同（同日 89 家差 10 个百分点以上、25 家占比最高的类别不同）。
+//    要统一得两边一起定，别只改一边。
+export function recruitBucket(
+  jb: Pick<Job, "job_type" | "title" | "recruitment_category" | "recruitment_explicit">,
+): RecruitBucket {
+  if (jb.recruitment_category === "校招") return "campus";
+  if (jb.recruitment_category === "实习") return "intern";
+  if (jb.recruitment_category === "社招") return jb.recruitment_explicit === true ? "social" : "unknown";
+  return classifyRecruitment(jb.job_type, jb.title);
 }
 
 // 解析岗位薪资文本为「月薪 K」区间。仅解析明示区间（k/千 或 4–6 位元）；
@@ -208,7 +254,7 @@ export function deriveTiming(jobs: Job[], nowIso: string): InsightItemView | nul
     campus: [], intern: [], social: [],
   };
   for (const jb of dated) {
-    const b = classifyRecruitment(jb.job_type, jb.title);
+    const b = recruitBucket(jb);
     if (b === "unknown") continue;
     const mo = monthOf(jb.posted_at || jb.first_seen_at);
     if (mo) byBucket[b].push(mo);
@@ -239,12 +285,14 @@ export function deriveTiming(jobs: Job[], nowIso: string): InsightItemView | nul
   });
 }
 
-// 频次 Top-n（key→count），用于热门城市/方向
+// 频次 Top-n（key→count），用于热门城市/方向。
+// 并列按 key 的码点升序定序：取数没有 order by（行序 = 堆物理顺序，岗位一被改写就变），只按 count 排的话
+// 并列的几个谁被截在前 n 之外随行序变，同一家公司刷新两次第三名会换人。
 function topN(keys: string[], n: number): Array<{ key: string; count: number }> {
   const freq = new Map<string, number>();
   for (const k of keys) freq.set(k, (freq.get(k) || 0) + 1);
   return Array.from(freq.entries())
-    .sort((a, b) => b[1] - a[1])
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
     .slice(0, n)
     .map(([key, count]) => ({ key, count }));
 }
@@ -257,21 +305,26 @@ function cityOf(location: string | null): string | null {
   return city || null;
 }
 
-// 粗粒度职能归类（算法在「研发」之前判，避免「算法工程师」落到研发）
-const FUNCTION_RULES: Array<[RegExp, string]> = [
-  [/算法|machine\s?learning|\bml\b|\bai\b|nlp|\bcv\b|数据科学|data\s?scien/i, "算法/AI"],
-  [/前端|后端|全栈|开发|工程师|研发|software|engineer|backend|frontend|测试|\bqa\b|运维|\bsre\b|devops/i, "研发"],
-  [/产品经理|产品|product\s?manager|\bpm\b/i, "产品"],
-  [/设计|design|\bux\b|\bui\b|交互/i, "设计"],
-  [/运营|operation/i, "运营"],
-  [/市场|marketing|品牌|公关|增长|growth/i, "市场"],
-  [/销售|sales|商务|\bbd\b/i, "销售"],
-  [/人力|\bhr\b|招聘|财务|法务|行政|finance|legal/i, "职能"],
-];
-function coarseFunction(title: string | null): string | null {
+// 职能归类：用岗位库的分类器，只喂标题。这里不许再有自己的词表。
+// 逐岗判法与夜间物化的同名指标相同（crawler/bu_signals.py 的 function_share → scripts/classify-job-function.js）；
+// 聚合不同：那边把判不出的「其他」也算进分布，这里的热门方向不含「其他」—— 两处的排名 / 占比不必逐位相等。
+//
+// ❌ 此前是一张私有的 8 条正则表、按顺序取第一个命中（`\bai\b` 排最前、「工程师」算研发）。
+//    2026-10-11 全库 441,589 个在招岗逐条对拍（改前 → 现在）：算法/AI → 产品 2,608（「AI产品经理」）、
+//    研发 → 生产制造 21,395（机械 / 电气工程师）、研发 → 销售 1,209（销售工程师）、判不出方向 217,781 → 115,723；
+//    在招 ≥3 的 1,445 家公司里 679 家的第一方向不同（比亚迪 研发 → 生产制造、汇丰 研发 → 金融业务）。
+//    反方向也有：算法/AI → 判不出 2,668（"Machine Learning Researcher" 这类英文研究岗）、销售 → 判不出 1,152（商务专员）。
+//    「算法/AI」不再是单独一桶，并进研发（岗位库的 17 个职能桶里没有它）。
+// ❌ 按顺序取第一个命中还会被「岗位名 - 业务线」的尾巴带偏（「产品经理 - AI平台」算成算法）。爬虫 2026-10-11 起
+//    入库保留完整标题（此前「 - 」后面整段截掉，当天实测库里这种标题还是 0 条，随列表重抓陆续出现）。
+//    拿 live 抓到的 27,069 个带「 - 」的原始标题对拍（截断时代的判法 → 完整标题的判法）：旧规则改判 2,639 个；
+//    分类器的「分段标题先看第一段」（_titleLeadSegment）下，原本判得出职能的只改判 9 个。
+//    分段标题怎么判归分类器，这里不另写一份。
+// ⚠️ 不读物化列 jobs.job_function：那一列带正文兜底（给卡片徽标 / 筛选用），做分布统计会把正文里的套话词算进来
+//    —— 同日对拍两者有 39,479 岗不一致，几乎全是列靠正文多判出来的（其中「市场」12,692 岗），136 家公司的第一方向因此不同。
+function titleFunction(title: string | null): string | null {
   if (!title) return null;
-  for (const [re, label] of FUNCTION_RULES) if (re.test(title)) return label;
-  return "其他";
+  return classifyJobFunction({ title });
 }
 
 // 🚫 这里**不能**用 first_seen_at 在当前 active 岗上算「近 30 天环比」（2026-09-08 删除，修 F4）。
@@ -358,12 +411,12 @@ export function deriveHiring(
   );
   const functions = topN(
     active
-      .map((jb) => coarseFunction(jb.title))
+      .map((jb) => titleFunction(jb.title))
       .filter((x): x is string => Boolean(x) && x !== "其他"),
     3,
   );
   const mix = { campus: 0, intern: 0, social: 0, unknown: 0 };
-  for (const jb of active) mix[classifyRecruitment(jb.job_type, jb.title)]++;
+  for (const jb of active) mix[recruitBucket(jb)]++;
   // 趋势只接受外部注入的快照派生值；本函数手里只有「当前 active」，算不出无偏趋势（见上方 F4 注释）。
   const trend = typeof opts.trendPct === "number" ? opts.trendPct : null;
   const signal = classifyHiringSignal(active.length, trend, opts.headcountBand);
@@ -393,7 +446,7 @@ export function deriveHiring(
       ? Object.fromEntries(topN(eduBuckets, 5).map(({ key, count }) => [key, count]))
       : undefined;
 
-  // 校招/实习/社招占比（仅含非 unknown 的桶，避免「unknown=40%」误导）
+  // 校招/实习/社招占比（仅含非 unknown 的桶，避免「unknown=40%」误导；unknown = 兜底社招，见 recruitBucket）
   const knownTotal = mix.campus + mix.intern + mix.social;
   const bucket_share: Record<string, number> | undefined =
     knownTotal > 0

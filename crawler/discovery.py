@@ -187,7 +187,8 @@ def recruitment_category(raw: RawJob) -> str:
     if specific in _CAMPUS_TYPES:
         return "校招"
     low = specific.lower()
-    if "实习" in specific or "intern" in low:
+    # 整词：specific 可能是源给的 job_type 原值，裸子串会把 "Internal Services" 判成实习。
+    if "实习" in specific or normalizer.INTERN_WORD_RE.search(specific):
         return "实习"
     if any(k in specific for k in ("校招", "校园", "应届", "毕业生", "管培", "管理培训生", "留学生")) or \
             any(k in low for k in ("campus", "new grad", "graduate", "overseas student")):
