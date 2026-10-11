@@ -442,6 +442,13 @@ def normalize(raw: RawJob, *, source_id: str, company: str, regions=None) -> dic
     }.items()}
 
 
+# 整词 intern / internship(s)。re.ASCII 让 \b 只认 ASCII 字母数字下划线 —— 与 JS 那边同一条正则的语义一致
+# （lib/china-keyword-expansion.js 的 hasInternSignal）。不带它时 Python 把汉字也当词字符，「商务intern」里
+# 「务」和 i 之间没有边界，整条不命中。2026-10-11 全库在招岗对拍：两端判法不同的 6 个（猿辅导 4、VAST 1、
+# 启元机器人 1），全是实习岗；internal / international 贴着汉字照样不命中（见 test_job_type_en）。
+INTERN_WORD_RE = re.compile(r"\bintern(?:ship)?s?\b", re.I | re.A)
+
+
 def extract_job_type(title: str, summary: Optional[str] = None) -> Optional[str]:
     """从标题和摘要中推断岗位类型。"""
     text = f"{title} {summary or ''}".lower()
@@ -456,7 +463,7 @@ def extract_job_type(title: str, summary: Optional[str] = None) -> Optional[str]
     #      见 recruitmentCategory 层1「实习自报最权威」）。
     # 取舍：宁可漏判「标题没写但正文写明」的少数实习岗，也不能把社招错标成实习。
     # 读时侧 recruitmentCategory 还有 url 门户层可以兜底。
-    if "实习" in title_text or re.search(r"\bintern(?:ship)?s?\b", title_text, re.I):
+    if "实习" in title_text or INTERN_WORD_RE.search(title_text):
         if "暑期实习" in text or re.search(r"summer(?:\s+\d{4})?\s+intern(ship)?s?\b", text, re.I):
             return "暑期实习"
         if any(w in text for w in ("日常实习", "daily intern", "off-cycle intern")):
