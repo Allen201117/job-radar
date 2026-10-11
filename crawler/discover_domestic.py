@@ -97,6 +97,19 @@ def _verify(title_or_text: str, cn: str) -> bool:
 
 
 # ───────────────────────── feishu ─────────────────────────
+_FEISHU_TENANT_RE = re.compile(r'"tenant_name":"([^"]*)"')
+_FEISHU_KEYWORDS_RE = re.compile(r'<meta[^>]+name="keywords"[^>]+content="([^"]*)"', re.I)
+
+
+def _feishu_self_report(html: str):
+    """飞书门户首页自报的身份：(<title>, 租户名, meta keywords)，取不到的项为空串。
+
+    ⚠️ 不收 meta description：那是宣传语，会点名旗下产品（字节跳动的写着「今日头条、抖音、西瓜视频、飞书」）。"""
+    tenant = _FEISHU_TENANT_RE.search(html or "")
+    keywords = _FEISHU_KEYWORDS_RE.search(html or "")
+    return _title(html), (tenant.group(1) if tenant else ""), (keywords.group(1) if keywords else "")
+
+
 def feishu_probe(slug: str, cn: str):
     """GET 租户 + POST posts。返回 dict 或 None。"""
     host = f"{slug}.jobs.feishu.cn"
@@ -105,7 +118,7 @@ def feishu_probe(slug: str, cn: str):
             r = cli.get(f"https://{host}/")
             if r.status_code != 200:
                 return None  # 404 = 非飞书客户
-            portal_title = _title(r.text)
+            portal_title, tenant_name, keywords = _feishu_self_report(r.text)
             # posts API（host 级，与 portal 无关）
             body = {"keyword": "", "limit": 20, "offset": 0, "job_category_id_list": [],
                     "tag_id_list": [], "location_code_list": [], "subject_id_list": [],
@@ -118,12 +131,17 @@ def feishu_probe(slug: str, cn: str):
     except Exception as e:
         return {"err": f"{type(e).__name__}"}
     titles = [str(p.get("title") or "") for p in posts][:5]
-    # title-verify：门户标题或岗位文本含公司名（飞书岗位含 city/部门，公司名常不在岗位标题里，
-    # 故以门户标题为主判据）
-    verified = _verify(portal_title, cn) or any(_verify(t, cn) for t in titles)
-    return {"platform": "feishu", "host": host, "count": len(posts),
-            "portal_title": portal_title, "titles": titles, "verified": verified,
-            "url": f"https://{host}/index/position"}
+    # 核名只认门户自报（<title> / 租户名 / keywords），不认岗位标题（2026-10-11 立）：
+    # ❌ 候选「抖音」+ slug bytedance 探到字节跳动的门户，首页没有 <title>，旧判据退到「岗位标题含公司名」，
+    #    字节的岗位标题带业务线名（「…-抖音生活服务」）→ 放行，字节跳动的 8,351 个在招岗挂成「抖音」入库。
+    # 全部 137 条飞书源对拍：改后被挡掉的只有那一条；另有 4 条门户标题是口号的源改由租户名认出。
+    verified = any(_verify(text, cn) for text in (portal_title, tenant_name, keywords))
+    result = {"platform": "feishu", "host": host, "count": len(posts),
+              "portal_title": portal_title, "tenant_name": tenant_name, "titles": titles,
+              "verified": verified, "url": f"https://{host}/index/position"}
+    if not verified:
+        result["note"] = f"portal self-report mismatch: title={portal_title!r} tenant={tenant_name!r}"
+    return result
 
 
 # ───────────────────────── hotjob / wt ─────────────────────────

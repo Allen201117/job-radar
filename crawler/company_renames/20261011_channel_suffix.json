@@ -1,0 +1,210 @@
+{
+  "batch": "20261011_channel_suffix",
+  "note": "源名去渠道后缀（迁移 320）之后，把存量岗位的公司名改成同一个名字。清单 = 2026-10-11 香港库里全部带渠道字样的岗位公司名。",
+  "renames": [
+    {
+      "from": "TCL 实习",
+      "to": "TCL"
+    },
+    {
+      "from": "TCL 校招",
+      "to": "TCL"
+    },
+    {
+      "from": "东风汽车 DFMC 实习",
+      "to": "东风汽车 DFMC"
+    },
+    {
+      "from": "东风汽车 DFMC 校招",
+      "to": "东风汽车 DFMC"
+    },
+    {
+      "from": "中国中化 ChemChina 实习",
+      "to": "中国中化 ChemChina"
+    },
+    {
+      "from": "中国中化 ChemChina 校招",
+      "to": "中国中化 ChemChina"
+    },
+    {
+      "from": "中国交建 校招",
+      "to": "中国交建"
+    },
+    {
+      "from": "中国人民保险 校招",
+      "to": "中国人民保险"
+    },
+    {
+      "from": "中国物流集团 校招",
+      "to": "中国物流集团"
+    },
+    {
+      "from": "中国电信国际 校招",
+      "to": "中国电信国际"
+    },
+    {
+      "from": "云南白药 YNBY 实习",
+      "to": "云南白药 YNBY"
+    },
+    {
+      "from": "云南白药 YNBY 校招",
+      "to": "云南白药 YNBY"
+    },
+    {
+      "from": "云尖信息 实习",
+      "to": "云尖信息"
+    },
+    {
+      "from": "亿纬锂能 校招",
+      "to": "亿纬锂能"
+    },
+    {
+      "from": "先声药业 Simcere 实习",
+      "to": "先声药业 Simcere"
+    },
+    {
+      "from": "先声药业 Simcere 校招",
+      "to": "先声药业 Simcere"
+    },
+    {
+      "from": "光启技术 校招",
+      "to": "光启技术"
+    },
+    {
+      "from": "创维 Skyworth 校招",
+      "to": "创维 Skyworth"
+    },
+    {
+      "from": "华夏银行 HXB 校招",
+      "to": "华夏银行 HXB"
+    },
+    {
+      "from": "华润电力 CR Power 校招",
+      "to": "华润电力 CR Power"
+    },
+    {
+      "from": "和睦家医疗 实习",
+      "to": "和睦家医疗"
+    },
+    {
+      "from": "国投证券 SDIC 实习",
+      "to": "国投证券 SDIC"
+    },
+    {
+      "from": "国投证券 SDIC 校招",
+      "to": "国投证券 SDIC"
+    },
+    {
+      "from": "地平线 Horizon Robotics 实习",
+      "to": "地平线 Horizon Robotics"
+    },
+    {
+      "from": "地平线 Horizon Robotics 校招",
+      "to": "地平线 Horizon Robotics"
+    },
+    {
+      "from": "宁德新能源 ATL 实习",
+      "to": "宁德新能源 ATL"
+    },
+    {
+      "from": "宁德新能源 ATL 校招",
+      "to": "宁德新能源 ATL"
+    },
+    {
+      "from": "完美世界 校招",
+      "to": "完美世界"
+    },
+    {
+      "from": "广发证券 GF 实习",
+      "to": "广发证券 GF"
+    },
+    {
+      "from": "广发证券 GF 校招",
+      "to": "广发证券 GF"
+    },
+    {
+      "from": "广西柳工 LiuGong 校招",
+      "to": "广西柳工 LiuGong"
+    },
+    {
+      "from": "开源证券 Kysec 实习",
+      "to": "开源证券 Kysec"
+    },
+    {
+      "from": "开源证券 Kysec 校招",
+      "to": "开源证券 Kysec"
+    },
+    {
+      "from": "招商证券 CMS 实习",
+      "to": "招商证券 CMS"
+    },
+    {
+      "from": "招商证券 CMS 校招",
+      "to": "招商证券 CMS"
+    },
+    {
+      "from": "新城控股 Seazen 实习",
+      "to": "新城控股 Seazen"
+    },
+    {
+      "from": "新城控股 Seazen 校招",
+      "to": "新城控股 Seazen"
+    },
+    {
+      "from": "新疆特变电工集团 实习",
+      "to": "新疆特变电工集团"
+    },
+    {
+      "from": "新疆特变电工集团 校招",
+      "to": "新疆特变电工集团"
+    },
+    {
+      "from": "易方达基金 实习",
+      "to": "易方达基金"
+    },
+    {
+      "from": "易方达基金 校招",
+      "to": "易方达基金"
+    },
+    {
+      "from": "曙光信息产业 校招",
+      "to": "曙光信息产业"
+    },
+    {
+      "from": "歌尔股份 GoerTek 实习",
+      "to": "歌尔股份 GoerTek"
+    },
+    {
+      "from": "歌尔股份 GoerTek 校招",
+      "to": "歌尔股份 GoerTek"
+    },
+    {
+      "from": "神州信息—AI实习生",
+      "to": "神州信息"
+    },
+    {
+      "from": "苏州凌志软件 校招",
+      "to": "苏州凌志软件"
+    },
+    {
+      "from": "荣耀 Honor 实习",
+      "to": "荣耀 Honor"
+    },
+    {
+      "from": "豪迈集团—职能实习生",
+      "to": "豪迈集团"
+    },
+    {
+      "from": "迪卡侬中国 Decathlon 实习",
+      "to": "迪卡侬中国 Decathlon"
+    },
+    {
+      "from": "迪卡侬中国 Decathlon 校招",
+      "to": "迪卡侬中国 Decathlon"
+    },
+    {
+      "from": "隆基绿能 LONGi 校招",
+      "to": "隆基绿能 LONGi"
+    }
+  ]
+}
