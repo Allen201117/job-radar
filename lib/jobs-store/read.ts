@@ -666,13 +666,18 @@ export async function jobsByUrls(urls: string[], activeOnly = false): Promise<an
   );
 }
 
-// 洞察派生（lib/insight-derive.ts）实际读的列：逐个属性访问核过，只有这 9 个 + company。
+// 洞察派生（lib/insight-derive.ts）实际读的列：逐个属性访问核过，只有这 11 个 + company。
 // 此前这里取的是全量 JOB_COLUMNS（含整段职位描述 summary），大公司一次要搬 3000 行正文回函数 ——
 // 用户点开洞察抽屉等的 2~3 秒大半花在这上面，而统计一个字都不读正文。
 // ⚠️ 给 insight-derive 加新维度、要读新的列时，必须同步加到这里，否则那一列恒为 undefined、
 //    新维度静默算不出来（tests/insight-derive-columns.test.js 会拦）。
 export const INSIGHT_DERIVE_COLUMNS =
-  "company, title, location, job_type, salary_text, posted_at, first_seen_at, status, experience, education";
+  "company, title, location, job_type, salary_text, posted_at, first_seen_at, status, experience, education, recruitment_category, recruitment_explicit";
+
+// 上面清单里，Supabase 那张兜底 jobs 表没有的列（它停在切库之前的结构；2026-10-11 实测 select 这两列报 42703）。
+// 兜底取数（app/api/insights/route.ts）要去掉它们，否则整条 select 报错、一行都取不到；
+// 派生遇到没有这两列的行会退回关键词判法（insight-derive 的 recruitBucket）。
+export const INSIGHT_DERIVE_COLUMNS_NOT_IN_SUPABASE = ["recruitment_category", "recruitment_explicit"];
 
 /** 按 company 批量取 active 岗（insights Tier1 派生：聚合某公司在招岗算事实洞察）。只取派生用到的列。 */
 export async function activeJobsByCompanies(companies: string[], limit: number): Promise<any[]> {

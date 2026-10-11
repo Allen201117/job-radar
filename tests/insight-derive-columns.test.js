@@ -39,6 +39,24 @@ test("取数列表里没有派生用不到的列（尤其不带正文）", () =>
   assert.equal(selectedColumns().includes("summary"), false);
 });
 
+test("Supabase 兜底取数 = 同一份列清单去掉那张表没有的列", () => {
+  // 那张表停在切库之前的结构，没有招聘类型两列：带上它们整条 select 报 42703，兜底一行都取不到。
+  const m = /export const INSIGHT_DERIVE_COLUMNS_NOT_IN_SUPABASE = \[([^\]]*)\]/.exec(store);
+  assert.ok(m, "找不到 INSIGHT_DERIVE_COLUMNS_NOT_IN_SUPABASE");
+  const absent = m[1].split(",").map((c) => c.trim().replace(/["']/g, "")).filter(Boolean).sort();
+  assert.deepEqual(absent, ["recruitment_category", "recruitment_explicit"]);
+  const selected = selectedColumns();
+  for (const c of absent) assert.ok(selected.includes(c), c + " 不在取数列表里，这张名单成了摆设");
+
+  // 兜底那条 select 用派生出来的清单，不手抄列名（手抄的那份漏过 experience / education）
+  const route = read("app/api/insights/route.ts");
+  assert.match(route, /INSIGHT_DERIVE_COLUMNS_NOT_IN_SUPABASE\.includes\(/);
+  const fn = route.slice(route.indexOf("async function loadDeriveJobRows"));
+  const body = fn.slice(0, fn.indexOf("\n}\n"));
+  assert.match(body, /\.select\(SUPABASE_DERIVE_COLUMNS\)/);
+  assert.equal(/\.select\(\s*["'`]/.test(body), false, "兜底 select 里又手抄了列名");
+});
+
 test("洞察派生的取数走窄列，不再用全量 JOB_COLUMNS", () => {
   const fn = store.slice(store.indexOf("export async function activeJobsByCompanies"));
   const body = fn.slice(0, fn.indexOf("\n}\n"));
